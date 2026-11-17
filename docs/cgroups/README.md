@@ -1,8 +1,8 @@
-# cgroup と namespace {#cgroups-namespaces}
+# cgroupとnamespace {#cgroups-namespaces}
 
 > コンテナを支えるリソース制御と隔離のプリミティブ
 
-## cgroup と namespace が行うこと {#what-cgroups-and-namespaces-do}
+## cgroupとnamespaceが行うこと {#what-cgroups-and-namespaces-do}
 
 **cgroup（control group）** は、プロセスのグループが *どれだけ* リソースを使えるかを制限する:
 
@@ -19,7 +19,7 @@
 - ホスト名とドメイン名（UTS namespace）
 - ユーザー/グループID（user namespace）
 
-この2つを組み合わせてコンテナの隔離が実現される。Docker、Kubernetes の Pod、systemd のサービスはこれらのプリミティブの上に構築されている。
+この2つを組み合わせてコンテナの隔離が実現される。Docker、KubernetesのPod、systemdのサービスはこれらのプリミティブの上に構築されている。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -38,14 +38,14 @@
 
 | ページ | 扱う内容 |
 |------|----------------|
-| [cgroup v2 のアーキテクチャ](cgroup-v2.md) | 階層、コントローラ、struct cgroup |
-| [リソースコントローラ](cgroup-controllers.md) | cpu、memory、io、pids の各コントローラの詳細 |
-| [namespace](namespaces.md) | 全8種類の namespace、clone/unshare/setns |
-| [コンテナの隔離](container-isolation.md) | namespace と cgroup を組み合わせてコンテナを実現する方法 |
-| [io コントローラ](io-cgroup.md) | blkio、io.weight、io.max、io.latency、BFQ |
-| [cgroup BPF プログラム](cgroup-bpf.md) | eBPF のアタッチタイプ、デバイスポリシー、ネットワークフィルタリング |
-| [systemd と cgroup の統合](systemd-cgroups.md) | slice、scope、service、委譲 |
-| [事件簿](war-stories.md) | OOM ループ、CFS スロットリング、v1→v2 移行の苦労 |
+| [cgroup v2のアーキテクチャ](cgroup-v2.md) | 階層、コントローラ、struct cgroup |
+| [リソースコントローラ](cgroup-controllers.md) | cpu、memory、io、pidsの各コントローラの詳細 |
+| [namespace](namespaces.md) | 全8種類のnamespace、clone/unshare/setns |
+| [コンテナの隔離](container-isolation.md) | namespaceとcgroupを組み合わせてコンテナを実現する方法 |
+| [ioコントローラ](io-cgroup.md) | blkio、io.weight、io.max、io.latency、BFQ |
+| [cgroup BPFプログラム](cgroup-bpf.md) | eBPFのアタッチタイプ、デバイスポリシー、ネットワークフィルタリング |
+| [systemdとcgroupの統合](systemd-cgroups.md) | slice、scope、service、委譲 |
+| [事件簿](war-stories.md) | OOMループ、CFSスロットリング、v1→v2移行の苦労 |
 
 ## クイックリファレンス {#quick-reference}
 

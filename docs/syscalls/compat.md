@@ -100,7 +100,7 @@ struct old_timespec32 {
 `old_timespec32` は8バイトではなく4バイトでアラインされ、32ビットコンパイラが生成するレイアウトと一致する。
 これが、32ビットの `clock_gettime()` が64ビットのハンドラを共有できない根本的な理由である。
 
-## compat_ptr() と ptr_to_compat() {#compat_ptr-and-ptr_to_compat}
+## compat_ptr() とptr_to_compat() {#compat_ptr-and-ptr_to_compat}
 
 `compat_ptr()` は、`compat_uptr_t`（u32）をゼロ拡張してカーネルの `void __user *` に変換する。
 

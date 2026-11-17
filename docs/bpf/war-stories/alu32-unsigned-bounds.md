@@ -12,7 +12,7 @@ CVSS
 :   7.0 HIGH（`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`、NVDの一次評価）。セカンダリ評価者としてのZDIによる評価は8.8 HIGH（`CVSS:3.0/AV:L/AC:L/PR:L/UI:N/S:C/C:H/I:H/A:H`）
 
 修正バージョン
-:   [`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36)、メインライン v5.13-rc1
+:   [`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36)、メインラインv5.13-rc1
 
 エクスプロイトツール
 :   Exploit-DBには登録なし。NVDには`Exploit`タグの付いた参照はない
@@ -22,7 +22,7 @@ CVSS
 
 *[事件簿: BPF verifierのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244)（"bpf: Verifier, do explicit ALU32 bounds tracking"、v5.7-rc1）以降、verifier内のすべてのスカラーレジスタは*2組*の数値境界を持つ。64ビットの`{s,u}{min,max}_value`と、下位半分を表す別個の32ビットの`{s,u}32_{min,max}_value`である。
 

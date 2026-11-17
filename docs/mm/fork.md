@@ -874,7 +874,7 @@ echo 0 > /proc/sys/vm/unprivileged_userfaultfd
 
 - [コピーオンライト](cow.md) - COWの仕組みとエッジケースの詳細
 - [プロセスのアドレス空間](mmap.md) - VMAの構造と管理
-- [仮想 vs 物理 vs 常駐](virtual-physical-resident.md) - メモリのメトリクスを理解する
+- [仮想vs物理vs常駐](virtual-physical-resident.md) - メモリのメトリクスを理解する
 
 ### 外部資料 {#external-resources}
 

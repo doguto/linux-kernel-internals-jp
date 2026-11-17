@@ -15,7 +15,7 @@ CVSS
 :   [`581738a681b6`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=581738a681b6faae5725c2555439189ca81c0f1f)（v5.5）、5.4-stableにバックポート
 
 修正
-:   [`f2d67fec0b43`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2d67fec0b43edce8c416101cdc52e71145b5fef)、メインライン v5.7-rc1。stable 5.6.1、5.5.14、5.4.29
+:   [`f2d67fec0b43`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2d67fec0b43edce8c416101cdc52e71145b5fef)、メインラインv5.7-rc1。stable 5.6.1、5.5.14、5.4.29
 
 エクスプロイトツール
 :   Exploit-DBのエントリはない。NVDは後のoss-security投稿に`Exploit`タグを付けている

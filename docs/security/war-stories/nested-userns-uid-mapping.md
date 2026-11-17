@@ -25,7 +25,7 @@ CVSS
 
 *[事件簿: LinuxセキュリティのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 user namespaceのIDマッピングは、エクステント（extent）の小さな配列である。各エクステントは3つ組 — namespace内の開始ID、*親*namespaceでの対応する開始ID、そして個数 — であり、すべての`make_kuid()`/`from_kuid()`変換はこの配列を走査する。[User Namespaceとuidマッピング](../user-namespaces.md)では`/proc/<pid>/uid_map`がどのように書き込まれ、2つの方向が何を意味するかを扱い、[クレデンシャルとUser Namespace](../credentials.md)では`struct cred`の中で`kuid_t`がどこに位置するかを扱っている。要するに、互いに逆方向の2種類のルックアップがある:
 
@@ -98,7 +98,7 @@ static int sort_idmaps(struct uid_gid_map *map)
 
 修正前、`sort_idmaps()`はこのループの**前に**実行され、ループは`new_map.forward`だけを走査していた。
 
-## トリガー {#the-trigger}
+## きっかけ {#the-trigger}
 
 `map->reverse`は変換前に取られた`map->forward`の`kmemdup()`であり、変換ループはforward側のコピーしか書き換えなかったため、reverse配列の`lower_first`フィールドには親namespaceのIDがずっと残り続けた。`map_id_up()` — カーネルIDからnamespace内IDへの方向 — はその配列を検索し、カーネルIDを古い親namespaceの値と比較する。
 
@@ -209,7 +209,7 @@ cat /proc/sys/user/max_user_namespaces    # 0なら汎用的にブロック
 ls -l /usr/bin/newuidmap                  # 複数IDの1段目マップを与えるsetuidヘルパー
 ```
 
-## 得られた教訓 {#what-it-taught-us}
+## 教訓 {#what-it-taught-us}
 
 **コピーは守り続けなければならない約束である。** `kmemdup()`が作った2つ目の配列は、元の配列が変わるまでのほんの数行の間だけ正しかった。性能改善のために派生表現 — ソート済みの複製、キャッシュされたインデックス、逆引きマップ — を導入するたびに、「この2つは一致している」という不変条件は保守上の義務となり、型システムはそれを助けてくれない。元データが確定した後、*最後に*派生させるほうが、2つのものを同期させ続けるより安上がりである。
 

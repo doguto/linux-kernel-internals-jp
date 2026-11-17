@@ -8,7 +8,7 @@ x86アーキテクチャの複雑さ（数十年にわたる後方互換性、�
 
 ## 事例1: データベースワークロードにおけるKPTIの性能リグレッション {#case-1-kpti-performance-regression-on-database-workloads}
 
-### 以前の状態 {#before-state}
+### 事前の状態 {#before-state}
 
 2018年1月にKPTI（Kernel Page Table Isolation）がLinux 4.15で出荷されたとき、それは急いで投入しなければならない緊急のMeltdown修正だった。緩和策は正しく効果的だったが、その性能への影響はリリース前に十分に把握されていなかった。
 
@@ -76,7 +76,7 @@ time (for i in $(seq 100000); do true; done)
 
 ## 事例2: マルチソケットシステムにおけるTSCのドリフト {#case-2-tsc-drift-on-multi-socket-systems}
 
-### 以前の状態 {#before-state_1}
+### 事前の状態 {#before-state_1}
 
 **TSC**（Time Stamp Counter）は、一定のレートでインクリメントされるx86のレジスタである（最近のCPUでは、CPUID leaf 0x80000007で示される「invariant TSC」）。タイムスタンプを取得する最も安価な方法であり、カーネル呼び出しのオーバーヘッドなしに`RDTSC`命令1つで済む。
 
@@ -182,7 +182,7 @@ echo hpet > /sys/devices/system/clocksource/clocksource0/current_clocksource
 
 ## 事例3: IntelのSYSRET正規アドレスバグ（CVE-2012-0217） {#case-3-intel-sysret-canonical-address-bug-cve-2012-0217}
 
-### 以前の状態 {#before-state_2}
+### 事前の状態 {#before-state_2}
 
 `SYSRET`（具体的には64ビットの`SYSRETQ`で、`SYSCALL`に対応する高速な復帰命令）は、`RCX`から`RIP`を、`R11`から`RFLAGS`を復元し、コードセグメントをリング3に設定することでユーザー空間に戻る。カーネルが`SYSRET`を実行する時点では、ユーザーの`RSP`は*すでに*復元され、`swapgs`でユーザーの`GS.base`も復元されている。つまりCPUはユーザー空間まであと命令1つという状態にありながら、形式上はまだCPL 0にいる。
 
@@ -253,7 +253,7 @@ grep -n "SYSRET\|non_canonical\|swapgs_restore" \
 
 ## 事例4: Spectre v2のretpolineがBPF JITの間接呼び出しを破った件 {#case-4-spectre-v2-retpoline-breaking-bpf-jit-indirect-calls}
 
-### 以前の状態 {#before-state_3}
+### 事前の状態 {#before-state_3}
 
 BPF JITコンパイラ（`arch/x86/net/bpf_jit_comp.c`）は、BPFバイトコードを実行時にネイティブのx86-64機械語に変換する。BPFヘルパー関数の呼び出しは間接呼び出しとしてコンパイルされる。つまりJITは関数ポインタを介して呼び出すコードを出力する。
 
@@ -326,7 +326,7 @@ JITコンパイラは緩和策の話の中で特別なケースである。コ�
 
 ## 事例5: 初期のHaswell CPUでINVPCIDが使えなかった件 {#case-5-invpcid-not-available-on-early-haswell-cpus}
 
-### 以前の状態 {#before-state_4}
+### 事前の状態 {#before-state_4}
 
 PCID（Process-Context Identifiers）はIntel Sandy Bridge（2011年）で導入され、TLBがプロセス識別子でタグ付けされたエントリをキャッシュできるようにして、コンテキストスイッチ時のTLB全体のフラッシュを回避する。KPTIのPCID最適化（Linux 4.15）は、Meltdown緩和に必要なデュアルPGDのCR3切り替えのオーバーヘッドを減らすためにPCIDを使う。
 

@@ -216,7 +216,7 @@ cat /proc/<pid>/status | grep VmRSS
 
 v6.2カーネルの変更履歴を調べると、コミット [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1)（"mm: convert mm's rss stats into percpu_counter"）に直接行き着いた。このコミットはスレッドごとのRSSバッチ処理モデルを変更した。
 
-**v6.2以前**: 各スレッドは私的なRSSカウンタを持ち、そのフラッシュしきい値は `TASK_RSS_EVENTS_THRESH`（64ページ = 256KB）だった。スレッドのカウンタがしきい値を超えると、`mm_struct` ごとのアトミックカウンタにフラッシュされた。任意の時点での最大誤差は `nr_threads × 64 pages` だった。5スレッドのプロセスなら 5 × 64 × 4KB = 1.25MB。小さく、上限がある。
+**v6.2以前**: 各スレッドは私的なRSSカウンタを持ち、そのフラッシュしきい値は `TASK_RSS_EVENTS_THRESH`（64ページ = 256KB）だった。スレッドのカウンタがしきい値を超えると、`mm_struct` ごとのアトミックカウンタにフラッシュされた。任意の時点での最大誤差は `nr_threads × 64 pages` だった。5スレッドのプロセスなら5 × 64 × 4KB = 1.25MB。小さく、上限がある。
 
 **v6.2以後**: このコミットは、RSSをカーネル標準のCPUごとの近似カウンタ基盤である `percpu_counter` を使うように変換した。`percpu_counter` はCPUごとのバッチを保持し、バッチがあふれるとグローバルな合計にフラッシュする。`percpu_counter` のバッチサイズはCPU数に応じて大きくなる。250 CPUのマシンでは、最大誤差はおよそ `nr_cpus × batch_size × nr_counters` になる。コミットメッセージはこのスケーリングを認めている:
 
@@ -234,8 +234,8 @@ v6.2以後、OOM killer全体と `/proc` のRSS報告で使われる `get_mm_cou
 
 `oom_badness()` のOOM killerパスは、犠牲プロセスを選ぶ際に `get_mm_counter()` を使って各プロセスのRSSを読んでいた。250 CPUのサーバーでは:
 
-- プロセスA（真のメモリ大食い）: 実際のRSS 2GB、報告値 1.7GB
-- プロセスB（小さなサービス）: 実際のRSS 100MB、報告値 650MB
+- プロセスA（真のメモリ大食い）: 実際のRSS 2GB、報告値1.7GB
+- プロセスB（小さなサービス）: 実際のRSS 100MB、報告値650MB
 
 OOM killerはプロセスBをkillする。プロセスAは動き続け、すぐに再びOOMを引き起こす。システムは無実のサービスをkillし続けるOOMループに入る。
 

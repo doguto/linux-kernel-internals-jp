@@ -254,7 +254,7 @@ cat /proc/zoneinfo | grep -E "pages free|min|low|high"
 sysctl vm.min_free_kbytes=65536
 ```
 
-**ゾーンのフォールバック**: あるゾーンが枯渇すると、割り当ては NORMAL → DMA32 → DMA の順に他のゾーンへフォールバックする（上位のゾーンが優先される）。
+**ゾーンのフォールバック**: あるゾーンが枯渇すると、割り当てはNORMAL → DMA32 → DMAの順に他のゾーンへフォールバックする（上位のゾーンが優先される）。
 
 ### struct free_area {#struct-free_area}
 

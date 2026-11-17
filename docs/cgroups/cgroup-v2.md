@@ -1,40 +1,40 @@
-# cgroup v2 のアーキテクチャ {#cgroup-v2-architecture}
+# cgroup v2のアーキテクチャ {#cgroup-v2-architecture}
 
 > 統一されたリソース制御の階層
 
-## なぜ cgroup v2 が存在するのか {#why-cgroup-v2-exists}
+## なぜcgroup v2が存在するのか {#why-cgroup-v2-exists}
 
 ### cgroup v1: コントローラごとに1つの階層 {#cgroup-v1-one-hierarchy-per-controller}
 
 cgroup v1（Linux 2.6.24、2008年） [(LWN)](https://lwn.net/Articles/236437/) では、各リソースコントローラ（`cpu`、`memory`、`blkio`、`cpuset` など）がそれぞれ独立した階層を持つことができた。プロセス1234を、CPUのアカウンティングのためには `/sys/fs/cgroup/cpu/webserver/` に、メモリ制限のためには `/sys/fs/cgroup/memory/tier-a/` に置くことができ、それらは完全に独立したツリーだった。
 
-これは柔軟に聞こえるが、根本的な問題を生んだ。**コントローラ間で「プロセスがどのグループに属するか」の共通の定義がなかった**のである。`cpu` コントローラはタスクをある見方で捉え、`memory` は別の見方で捉え、`blkio` はまた独自の見方を持っていた。systemd やコンテナランタイムが、CPU *と* メモリ *と* I/O の制限を持つ一貫した「単位」（コンテナやサービス）を作ろうとすると、複数の階層の中に並行して位置を保持し、それらを手作業で同期させ続けなければならなかった。
+これは柔軟に聞こえるが、根本的な問題を生んだ。**コントローラ間で「プロセスがどのグループに属するか」の共通の定義がなかった**のである。`cpu` コントローラはタスクをある見方で捉え、`memory` は別の見方で捉え、`blkio` はまた独自の見方を持っていた。systemdやコンテナランタイムが、CPU *と* メモリ *と* I/Oの制限を持つ一貫した「単位」（コンテナやサービス）を作ろうとすると、複数の階層の中に並行して位置を保持し、それらを手作業で同期させ続けなければならなかった。
 
-この問題を象徴的に示したのが、ライトバックの帰属の問題である。プロセスがファイルに書き込むと、ディスクへの実際のI/Oは後でカーネルのワーカースレッド（`kworker`）から行われる。v1 では、`blkio` コントローラはこのI/Oを、ページをダーティにしたプロセスではなく `kworker` に課金していた。グループへの所属に関する統一された概念がなければ、これを修正する方法はなかった。`memory` コントローラと `blkio` コントローラが、ダーティページをどの cgroup が所有するかについて合意する必要があったのである。
+この問題を象徴的に示したのが、ライトバックの帰属の問題である。プロセスがファイルに書き込むと、ディスクへの実際のI/Oは後でカーネルのワーカースレッド（`kworker`）から行われる。v1では、`blkio` コントローラはこのI/Oを、ページをダーティにしたプロセスではなく `kworker` に課金していた。グループへの所属に関する統一された概念がなければ、これを修正する方法はなかった。`memory` コントローラと `blkio` コントローラが、ダーティページをどのcgroupが所有するかについて合意する必要があったのである。
 
 ### cgroup v2: 統一階層 {#cgroup-v2-unified-hierarchy}
 
-Tejun Heo は、単一のツリーを中心に cgroup v2 を設計した（Linux 4.5、2016年にマージ） [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8) [(LWN)](https://lwn.net/Articles/679786/)。すべてのコントローラが同じ階層の上で動作する。プロセスはちょうど1つの cgroup に属し、すべてのコントローラがその cgroup に適用される。
+Tejun Heoは、単一のツリーを中心にcgroup v2を設計した（Linux 4.5、2016年にマージ） [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8) [(LWN)](https://lwn.net/Articles/679786/)。すべてのコントローラが同じ階層の上で動作する。プロセスはちょうど1つのcgroupに属し、すべてのコントローラがそのcgroupに適用される。
 
-これにより、適切なライトバックの帰属が可能になった。`memory` と `io` の両コントローラが同じ階層を共有するので、ダーティページが `kworker` によってフラッシュされる場合でも、正しい cgroup に帰属させることができる。
+これにより、適切なライトバックの帰属が可能になった。`memory` と `io` の両コントローラが同じ階層を共有するので、ダーティページが `kworker` によってフラッシュされる場合でも、正しいcgroupに帰属させることができる。
 
-「内部プロセスなし」のルール（cgroup はプロセスと子の cgroup を同時に持てない）は、明快な委譲のセマンティクスを強制する。コンテナランタイムはあるサブツリーを所有し、そのサブツリー内に子の cgroup を作成できる。親の cgroup にいるプロセスが、子のリソースアカウンティングに誤って干渉することはない。
+「内部プロセスなし」のルール（cgroupはプロセスと子のcgroupを同時に持てない）は、明快な委譲のセマンティクスを強制する。コンテナランタイムはあるサブツリーを所有し、そのサブツリー内に子のcgroupを作成できる。親のcgroupにいるプロセスが、子のリソースアカウンティングに誤って干渉することはない。
 
-## cgroup v1 と v2 の比較 {#cgroup-v1-vs-v2}
+## cgroup v1とv2の比較 {#cgroup-v1-vs-v2}
 
 | 機能 | v1 | v2 |
 |---------|----|----|
 | 階層 | コントローラごとに1つ | 単一の統一階層 |
-| コントローラのアタッチ | 任意の cgroup | 親で有効にする必要がある |
+| コントローラのアタッチ | 任意のcgroup | 親で有効にする必要がある |
 | スレッドかプロセスか | スレッド単位の制御 | プロセス単位（スレッドモードはオプトイン） |
-| 委譲 | 複雑な ACL | 明快なサブツリー委譲 |
-| BPF との統合 | 限定的 | cgroup BPF プログラム |
+| 委譲 | 複雑なACL | 明快なサブツリー委譲 |
+| BPFとの統合 | 限定的 | cgroup BPFプログラム |
 
-cgroup v2（統一階層）は 4.5 でマージされ [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8)、現在では現代的なディストリビューションのデフォルトになっている。ほとんどのサブシステムは v2 のみをサポートする。
+cgroup v2（統一階層）は4.5でマージされ [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8)、現在では現代的なディストリビューションのデフォルトになっている。ほとんどのサブシステムはv2のみをサポートする。
 
 ## 単一の階層 {#the-single-hierarchy}
 
-cgroup v2 のすべてのリソースは、`/sys/fs/cgroup` にある単一のファイルシステムにぶら下がっている:
+cgroup v2のすべてのリソースは、`/sys/fs/cgroup` にある単一のファイルシステムにぶら下がっている:
 
 ```
 /sys/fs/cgroup/                    ← root cgroup
@@ -92,7 +92,7 @@ struct cgroup {
 
 ### struct cgroup_subsys_state（CSS） {#struct-cgroup_subsys_state-css}
 
-各コントローラは、CSS を介して cgroup ごとの状態をアタッチする:
+各コントローラは、CSSを介してcgroupごとの状態をアタッチする:
 
 ```c
 struct cgroup_subsys_state {
@@ -111,7 +111,7 @@ struct cgroup_subsys_state {
 };
 ```
 
-コントローラ（cpu、memory、io など）は、最初のフィールドとして `cgroup_subsys_state` を埋め込む:
+コントローラ（cpu、memory、ioなど）は、最初のフィールドとして `cgroup_subsys_state` を埋め込む:
 
 ```c
 /* mm/memcontrol.c */
@@ -187,11 +187,11 @@ echo "+cpu +memory" > /sys/fs/cgroup/myapp/cgroup.subtree_control
 echo $$ > /sys/fs/cgroup/myapp/cgroup.procs
 ```
 
-**内部プロセスなしの制約**: v2 では、cgroup はプロセスと子の cgroup を同時に持つことができない。プロセスを直接持てるのは、リーフ cgroup（子を持たない cgroup）とルート cgroup だけである。
+**内部プロセスなしの制約**: v2では、cgroupはプロセスと子のcgroupを同時に持つことができない。プロセスを直接持てるのは、リーフcgroup（子を持たないcgroup）とルートcgroupだけである。
 
-## css_set: タスクと cgroup のリンク {#css_set-the-task-to-cgroup-link}
+## css_set: タスクとcgroupのリンク {#css_set-the-task-to-cgroup-link}
 
-各タスクは `css_set` へのポインタを持ち、`css_set` はアクティブなコントローラごとに1つの CSS への参照を保持する:
+各タスクは `css_set` へのポインタを持ち、`css_set` はアクティブなコントローラごとに1つのCSSへの参照を保持する:
 
 ```c
 struct css_set {
@@ -216,9 +216,9 @@ struct css_set {
 };
 ```
 
-CSS セットは共有される。2つのタスクがまったく同じ cgroup の組（コントローラごとに1つ）に属しているなら、それらは `css_set` を共有する。これにより css_set オブジェクトの数を少なく保てる。
+CSSセットは共有される。2つのタスクがまったく同じcgroupの組（コントローラごとに1つ）に属しているなら、それらは `css_set` を共有する。これによりcss_setオブジェクトの数を少なく保てる。
 
-## cgroup 間でのプロセスの移動 {#moving-processes-between-cgroups}
+## cgroup間でのプロセスの移動 {#moving-processes-between-cgroups}
 
 ```bash
 # PID のプロセスを cgroup に移動する
@@ -237,7 +237,7 @@ cgroup_attach_task()
           css->ss->attach(tset)        /* コントローラに通知 */
 ```
 
-## cgroup.events と通知 {#cgroupevents-and-notifications}
+## cgroup.eventsと通知 {#cgroupevents-and-notifications}
 
 ```bash
 # cgroup が空/非空に遷移するのを監視する
@@ -249,7 +249,7 @@ cat /sys/fs/cgroup/myapp/cgroup.events
 inotifywait -e modify /sys/fs/cgroup/myapp/cgroup.events
 ```
 
-## cgroup 上の BPF プログラム {#bpf-programs-on-cgroups}
+## cgroup上のBPFプログラム {#bpf-programs-on-cgroups}
 
 ```bash
 # BPF プログラムを cgroup にアタッチする（例: ネットワークフィルタ）
@@ -267,17 +267,17 @@ int cgroup_filter(struct __sk_buff *skb)
 }
 ```
 
-cgroup でサポートされる BPF のアタッチタイプ:
+cgroupでサポートされるBPFのアタッチタイプ:
 
 - `BPF_CGROUP_INET_INGRESS` / `BPF_CGROUP_INET_EGRESS`
 - `BPF_CGROUP_INET_SOCK_CREATE` / `BPF_CGROUP_SOCK_OPS`
 - `BPF_CGROUP_DEVICE` — デバイスアクセス制御
-- `BPF_CGROUP_SYSCTL` — sysctl の読み書きの制御
+- `BPF_CGROUP_SYSCTL` — sysctlの読み書きの制御
 - `BPF_CGROUP_INET4_CONNECT` / `BPF_CGROUP_INET6_CONNECT`
 - `BPF_CGROUP_INET4_BIND` / `BPF_CGROUP_INET6_BIND`
 
 ## 参考文献 {#further-reading}
 
-- [リソースコントローラ](cgroup-controllers.md) — cpu、memory、io、pids の詳細
-- [コンテナの隔離](container-isolation.md) — cgroup と namespace の組み合わせ方
+- [リソースコントローラ](cgroup-controllers.md) — cpu、memory、io、pidsの詳細
+- [コンテナの隔離](container-isolation.md) — cgroupとnamespaceの組み合わせ方
 - `Documentation/admin-guide/cgroup-v2.rst` — 包括的なカーネルドキュメント

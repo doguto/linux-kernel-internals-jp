@@ -48,7 +48,7 @@ Linuxのauditサブシステムは、セキュリティに関係するイベン�
 `AUDIT_PATH`、`AUDIT_SOCKADDR` などの型のレコードを、同じソケットを通じて `auditd` に
 送り返す。
 
-## カーネル内のフック: audit_syscall_entry() と audit_syscall_exit() {#in-kernel-hooks-audit_syscall_entry-and-audit_syscall_exit}
+## カーネル内のフック: audit_syscall_entry() とaudit_syscall_exit() {#in-kernel-hooks-audit_syscall_entry-and-audit_syscall_exit}
 
 auditサブシステムへの2つの主要なエントリポイントは、汎用の
 syscall境界コードから呼ばれる。
@@ -122,7 +122,7 @@ struct audit_context {
 コンテキストの構造体自体が解放されるのはタスクの終了時だけであり、
 `audit_free()`/`audit_free_context()` を介して行われる。
 
-## 2つのフィルタ段階: audit_filter_task() と audit_filter_syscall() {#two-filter-stages-audit_filter_task-and-audit_filter_syscall}
+## 2つのフィルタ段階: audit_filter_task() とaudit_filter_syscall() {#two-filter-stages-audit_filter_task-and-audit_filter_syscall}
 
 ルールのマッチングは1段階ではなく、2つの別々の段階で行われる。
 

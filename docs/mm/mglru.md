@@ -132,7 +132,7 @@ static bool lru_gen_test_recent(struct lruvec *lruvec, bool file,
 | アクセスの追跡 | active/inactive間の昇格 | PTEのaccessedビットの走査 |
 | ワーキングセットの検出 | refault距離による近似 | 世代ごとのBloomフィルタ |
 | ストリーミング読み込み | activeリストを汚染する | 一度きりのアクセスは古い世代に留まる |
-| メモリオーバーヘッド | folioごとに2つの list_head | 世代カウンタ + Bloomフィルタ |
+| メモリオーバーヘッド | folioごとに2つのlist_head | 世代カウンタ + Bloomフィルタ |
 
 ## 設定 {#configuration}
 

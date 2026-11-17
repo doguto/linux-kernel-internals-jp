@@ -19,7 +19,7 @@ CVSS
 
 *[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 `iptables`/`ip6tables`/`arptables`のルールセットはユーザー空間で構築され、`setsockopt()`を介してカーネルに渡される。64ビットカーネルでは、32ビットのユーザー空間ツール（compatモード）は**compat**レイアウトでルールを提出し、カーネルは使用前にそれをネイティブの64ビット構造体に変換しなければならない。この変換は`translate_compat_table()`（`net/ipv4/netfilter/ip_tables.c`、`net/ipv6/netfilter/ip6_tables.c`、`net/ipv4/netfilter/arp_tables.c`のそれぞれにある）で行われ、ネイティブレイアウト用のサイズの新しいバッファを割り当ててから、`net/netfilter/x_tables.c`の`xt_compat_match_from_user()` / `xt_compat_target_from_user()`を呼び出して、各match/targetエントリをそこにコピーして展開する。
 

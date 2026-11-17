@@ -1,10 +1,10 @@
 # CMA（Contiguous Memory Allocator） {#cma-contiguous-memory-allocator}
 
-> 二役をこなす予約領域: 普段は通常のページ、必要なときには DMA バッファ
+> 二役をこなす予約領域: 普段は通常のページ、必要なときにはDMAバッファ
 
-## CMA とは何か {#what-is-cma}
+## CMAとは何か {#what-is-cma}
 
-CMA は、ブート時に物理メモリの領域を予約しておき、デバイスが必要とするときにその領域を回収して大きな連続割り当てに使えるようにする仕組みである。重要なのは、これらの予約ページが無駄にならないという点である。デバイスドライバが連続バッファを要求するまでは、予約ページは通常の移動可能な割り当て（ページキャッシュ、匿名メモリ）に使われ、要求が来た時点でページが移動（マイグレーション）され、領域がドライバに渡される。
+CMAは、ブート時に物理メモリの領域を予約しておき、デバイスが必要とするときにその領域を回収して大きな連続割り当てに使えるようにする仕組みである。重要なのは、これらの予約ページが無駄にならないという点である。デバイスドライバが連続バッファを要求するまでは、予約ページは通常の移動可能な割り当て（ページキャッシュ、匿名メモリ）に使われ、要求が来た時点でページが移動（マイグレーション）され、領域がドライバに渡される。
 
 ```
 CMA 領域（アイドル時）:
@@ -26,38 +26,38 @@ CMA 領域（デバイスに割り当て済み）:
 └────────────────────────────────────────────────────────────────┘
 ```
 
-## なぜ CMA が存在するのか {#why-cma-exists}
+## なぜCMAが存在するのか {#why-cma-exists}
 
 ### 問題 {#the-problem}
 
-DMA デバイスは、物理的に連続したメモリを必要とすることが多い。CPU と違い、多くのデバイスはページテーブルを使って散在する物理ページを連続したアドレス範囲にリマップすることができない。フレームをキャプチャするカメラ、フレームバッファをスキャンアウトするディスプレイコントローラ、ジャンボパケットを送信するネットワークカードは、いずれも単一の連続した物理バッファを必要としうる。
+DMAデバイスは、物理的に連続したメモリを必要とすることが多い。CPUと違い、多くのデバイスはページテーブルを使って散在する物理ページを連続したアドレス範囲にリマップすることができない。フレームをキャプチャするカメラ、フレームバッファをスキャンアウトするディスプレイコントローラ、ジャンボパケットを送信するネットワークカードは、いずれも単一の連続した物理バッファを必要としうる。
 
-起動直後のシステムでは、大きな連続割り当ては簡単に成功する。しかし何日も稼働した後では、物理メモリが断片化する — 空きページが、長期間残る割り当ての間に散らばってしまう。何ギガバイトも空いていても、連続した8MB のバッファの割り当てが失敗することがある。
+起動直後のシステムでは、大きな連続割り当ては簡単に成功する。しかし何日も稼働した後では、物理メモリが断片化する — 空きページが、長期間残る割り当ての間に散らばってしまう。何ギガバイトも空いていても、連続した8MBのバッファの割り当てが失敗することがある。
 
 ### 以前の解決策とその欠点 {#previous-solutions-and-their-downsides}
 
-CMA 以前は、選択肢は貧弱だった:
+CMA以前は、選択肢は貧弱だった:
 
 | 手法 | 欠点 |
 |----------|----------|
 | ブート時の予約（`memblock_reserve`） | メモリが排他的に確保され、デバイスがアイドルのときは無駄になる |
 | 実行時の高次 `alloc_pages` | 断片化した状態では失敗する |
 | 割り当て前のコンパクション | 低速で、非常に大きなバッファには信頼できない |
-| IOMMU によるリマップ | すべてのプラットフォームに IOMMU があるわけではない。複雑さとレイテンシが増す |
+| IOMMUによるリマップ | すべてのプラットフォームにIOMMUがあるわけではない。複雑さとレイテンシが増す |
 
-ブート時の予約という手法は、RAM が乏しい組み込みデバイス（スマートフォン、セットトップボックス）では特に無駄が多かった。1日に数分しか使わないカメラのために64MB を予約し、そのメモリがシステムの他の部分から使えなくなる、ということが起こりうる。
+ブート時の予約という手法は、RAMが乏しい組み込みデバイス（スマートフォン、セットトップボックス）では特に無駄が多かった。1日に数分しか使わないカメラのために64MBを予約し、そのメモリがシステムの他の部分から使えなくなる、ということが起こりうる。
 
-### CMA の着想 {#cmas-insight}
+### CMAの着想 {#cmas-insight}
 
-CMA は、信頼性と無駄の間のトレードオフを解消する。ブート時に領域を予約する（連続した空間が利用可能であることを保証する）一方で、それまでの間は移動可能な割り当てにその空間を使わせる。デバイスがメモリを必要とすると、CMA は移動可能なページを移動させて、連続した領域を引き渡す。
+CMAは、信頼性と無駄の間のトレードオフを解消する。ブート時に領域を予約する（連続した空間が利用可能であることを保証する）一方で、それまでの間は移動可能な割り当てにその空間を使わせる。デバイスがメモリを必要とすると、CMAは移動可能なページを移動させて、連続した領域を引き渡す。
 
-この二重利用の設計は、Samsung の ARM ベースのモバイルデバイスにとって特に重要だった。限られた RAM と、DMA に依存する多数の周辺機器（カメラ、ディスプレイ、コーデック）のせいで、デバイスドライバの要求とアプリケーションのメモリの間に絶えず緊張関係が生じていたからである。
+この二重利用の設計は、SamsungのARMベースのモバイルデバイスにとって特に重要だった。限られたRAMと、DMAに依存する多数の周辺機器（カメラ、ディスプレイ、コーデック）のせいで、デバイスドライバの要求とアプリケーションのメモリの間に絶えず緊張関係が生じていたからである。
 
-## CMA の仕組み {#how-cma-works}
+## CMAの仕組み {#how-cma-works}
 
 ### 二重利用の設計 {#the-dual-use-design}
 
-CMA 領域は `ZONE_NORMAL`（アーキテクチャによっては `ZONE_DMA`/`ZONE_DMA32`）の中に存在する。buddy アロケータは CMA ページを特別なマイグレートタイプ `MIGRATE_CMA` として扱う。
+CMA領域は `ZONE_NORMAL`（アーキテクチャによっては `ZONE_DMA`/`ZONE_DMA32`）の中に存在する。buddyアロケータはCMAページを特別なマイグレートタイプ `MIGRATE_CMA` として扱う。
 
 ```
 CMA ありのゾーンレイアウト:
@@ -74,8 +74,8 @@ CMA ありのゾーンレイアウト:
 
 `MIGRATE_CMA` ページのルール:
 
-1. **移動可能な割り当ては CMA ページを自由に使える。** ページアロケータは `MIGRATE_MOVABLE` の要求を処理する際、CMA の pageblock にフォールバックする。
-2. **移動不可能な割り当てと回収可能な割り当ては CMA ページを使えない。** これは極めて重要である — 移動不可能なカーネルの割り当てが CMA 領域に置かれてしまうと、その領域は二度と完全には回収できなくなる。
+1. **移動可能な割り当てはCMAページを自由に使える。** ページアロケータは `MIGRATE_MOVABLE` の要求を処理する際、CMAのpageblockにフォールバックする。
+2. **移動不可能な割り当てと回収可能な割り当てはCMAページを使えない。** これは極めて重要である — 移動不可能なカーネルの割り当てがCMA領域に置かれてしまうと、その領域は二度と完全には回収できなくなる。
 3. **ドライバが `cma_alloc()` を呼ぶと、要求された範囲内のすべての移動可能なページが移動される。** カーネルはコンパクションと同じページマイグレーションの仕組みを使う。
 
 ### 割り当てパス {#allocation-path}
@@ -107,11 +107,11 @@ alloc_contig_range(start, end, MIGRATE_CMA, ...)
         └─── 連続したページを呼び出し元に返す
 ```
 
-マイグレーションが失敗した場合（例: ページが I/O のためにピン留めされている場合）、`cma_alloc()` は CMA 領域内の別の範囲で再試行する。完全に空けられる範囲が見つかるか諦めるまで、ビットマップで追跡されるチャンク単位で領域をスキャンする。
+マイグレーションが失敗した場合（例: ページがI/Oのためにピン留めされている場合）、`cma_alloc()` はCMA領域内の別の範囲で再試行する。完全に空けられる範囲が見つかるか諦めるまで、ビットマップで追跡されるチャンク単位で領域をスキャンする。
 
-### CMA のビットマップ {#the-cma-bitmap}
+### CMAのビットマップ {#the-cma-bitmap}
 
-各 CMA 領域は、割り当て状態をビットマップで追跡する。各ビットはページのブロックを表す（粒度は `CONFIG_CMA_ALIGNMENT` で設定され、デフォルトは order-8、4KB ページで1MB）:
+各CMA領域は、割り当て状態をビットマップで追跡する。各ビットはページのブロックを表す（粒度は `CONFIG_CMA_ALIGNMENT` で設定され、デフォルトはorder-8、4KBページで1MB）:
 
 ```c
 struct cma {
@@ -128,17 +128,17 @@ struct cma {
 
 ### ページアロケータとの相互作用 {#interaction-with-the-page-allocator}
 
-CMA は、CMA と同時に導入された `MIGRATE_CMA` マイグレートタイプを通じて buddy アロケータと統合されている。主な相互作用は次のとおり:
+CMAは、CMAと同時に導入された `MIGRATE_CMA` マイグレートタイプを通じてbuddyアロケータと統合されている。主な相互作用は次のとおり:
 
-- **フォールバックの挙動**: buddy アロケータは、`MIGRATE_MOVABLE` の要求を移動可能なフリーリストから満たせない場合、`MIGRATE_CMA` ページにフォールバックする。これにより、通常の運用中に CMA 領域が移動可能なページで埋まっていく。
-- **奪取の防止**: アロケータは、`MIGRATE_UNMOVABLE` や `MIGRATE_RECLAIMABLE` の要求のために CMA の pageblock を奪うことは決してない。この保証は `mm/page_alloc.c` の `__rmqueue_fallback()` で強制されている。
-- **コンパクションによる考慮**: コンパクションは実行時に CMA 領域を理解しており、そのマイグレートタイプを尊重する。CMA ページはコンパクションのマイグレーションスキャナの移動先になりうる（ページを CMA 領域 *へ* 移動できる）が、CMA ページが移動不可能なタイプに変更されることはない。
+- **フォールバックの挙動**: buddyアロケータは、`MIGRATE_MOVABLE` の要求を移動可能なフリーリストから満たせない場合、`MIGRATE_CMA` ページにフォールバックする。これにより、通常の運用中にCMA領域が移動可能なページで埋まっていく。
+- **奪取の防止**: アロケータは、`MIGRATE_UNMOVABLE` や `MIGRATE_RECLAIMABLE` の要求のためにCMAのpageblockを奪うことは決してない。この保証は `mm/page_alloc.c` の `__rmqueue_fallback()` で強制されている。
+- **コンパクションによる考慮**: コンパクションは実行時にCMA領域を理解しており、そのマイグレートタイプを尊重する。CMAページはコンパクションのマイグレーションスキャナの移動先になりうる（ページをCMA領域 *へ* 移動できる）が、CMAページが移動不可能なタイプに変更されることはない。
 
 ## 設定 {#configuration}
 
 ### カーネルコマンドライン {#kernel-command-line}
 
-CMA を設定する最も簡単な方法:
+CMAを設定する最も簡単な方法:
 
 ```bash
 # デフォルトのグローバル CMA 領域として256MB を予約
@@ -148,11 +148,11 @@ cma=256M
 cma=256M@0x40000000
 ```
 
-`cma=` パラメータはデフォルトの CMA 領域のサイズを設定する。この領域は、専用の CMA 領域を持たないすべてのデバイスによって使われる。
+`cma=` パラメータはデフォルトのCMA領域のサイズを設定する。この領域は、専用のCMA領域を持たないすべてのデバイスによって使われる。
 
 ### Device Tree（ARM/組み込み） {#device-tree-armembedded}
 
-組み込みプラットフォームでは、通常 Device Tree で CMA 領域を定義する:
+組み込みプラットフォームでは、通常Device TreeでCMA領域を定義する:
 
 ```dts
 reserved-memory {
@@ -181,7 +181,7 @@ camera@0 {
 };
 ```
 
-静的な予約ではなく CMA にしているのは `reusable` プロパティである。`reusable` がなければ、その領域は排他的に予約され、移動可能な割り当てには使えなくなる。
+静的な予約ではなくCMAにしているのは `reusable` プロパティである。`reusable` がなければ、その領域は排他的に予約され、移動可能な割り当てには使えなくなる。
 
 ### カーネル設定オプション {#kernel-config-options}
 
@@ -195,13 +195,13 @@ CONFIG_CMA_ALIGNMENT=8          # 最小アラインメント（order）。デ�
 CONFIG_DMA_CMA=y                # DMA の連続アロケータのバックエンドとして CMA を使う
 ```
 
-`CONFIG_CMA_SIZE_MBYTES` は、`cma=` ブートパラメータが与えられないときのデフォルトサイズを設定する。`CONFIG_CMA_SIZE_PERCENTAGE` は、CMA を RAM サイズに応じてスケーリングする別の方法を提供する。2つの値のうち大きいほうが採用される。
+`CONFIG_CMA_SIZE_MBYTES` は、`cma=` ブートパラメータが与えられないときのデフォルトサイズを設定する。`CONFIG_CMA_SIZE_PERCENTAGE` は、CMAをRAMサイズに応じてスケーリングする別の方法を提供する。2つの値のうち大きいほうが採用される。
 
-## ドライバから CMA を使う {#using-cma-from-drivers}
+## ドライバからCMAを使う {#using-cma-from-drivers}
 
 ### DMA API（推奨） {#the-dma-api-recommended}
 
-ほとんどのドライバは DMA API を使うべきである。DMA API は CMA からの割り当てを透過的に扱う:
+ほとんどのドライバはDMA APIを使うべきである。DMA APIはCMAからの割り当てを透過的に扱う:
 
 ```c
 #include <linux/dma-mapping.h>
@@ -213,9 +213,9 @@ void *vaddr = dma_alloc_coherent(dev, size, &dma_handle, GFP_KERNEL);
 dma_free_coherent(dev, size, vaddr, dma_handle);
 ```
 
-DMA サブシステムは `dma_alloc_from_contiguous()` を介して CMA を呼び出し、これは内部で `cma_alloc()` に対応付けられる。デバイスの CMA 領域は、Device Tree の `memory-region` プロパティ、またはデフォルトのグローバル CMA 領域に基づいて選ばれる。
+DMAサブシステムは `dma_alloc_from_contiguous()` を介してCMAを呼び出し、これは内部で `cma_alloc()` に対応付けられる。デバイスのCMA領域は、Device Treeの `memory-region` プロパティ、またはデフォルトのグローバルCMA領域に基づいて選ばれる。
 
-### CMA API の直接利用（まれ） {#direct-cma-api-rare}
+### CMA APIの直接利用（まれ） {#direct-cma-api-rare}
 
 直接制御が必要なサブシステム向け:
 
@@ -229,7 +229,7 @@ struct page *page = cma_alloc(cma, count, align, no_warn);
 cma_release(cma, page, count);
 ```
 
-`cma_release()` の後、ページは `MIGRATE_CMA` ページとして buddy アロケータに戻り、再び移動可能な割り当てに使えるようになる。
+`cma_release()` の後、ページは `MIGRATE_CMA` ページとしてbuddyアロケータに戻り、再び移動可能な割り当てに使えるようになる。
 
 ## 監視 {#monitoring}
 
@@ -241,9 +241,9 @@ CmaTotal:        262144 kB    # CMA の予約総量
 CmaFree:         245760 kB    # デバイスに割り当てられていない CMA ページ
 ```
 
-`CmaFree` は、CMA 領域のうち現在デバイスドライバが保持していない量を示す。これらのページは移動可能な割り当て（ページキャッシュ、匿名メモリ）に使われている可能性が高いが、デバイスが必要とするときには回収できる。
+`CmaFree` は、CMA領域のうち現在デバイスドライバが保持していない量を示す。これらのページは移動可能な割り当て（ページキャッシュ、匿名メモリ）に使われている可能性が高いが、デバイスが必要とするときには回収できる。
 
-`CmaTotal` と `CmaFree` はそれぞれ `MemTotal` と `MemFree` に含まれていることに注意。システムから見て、CMA メモリが「消えている」わけではない。
+`CmaTotal` と `CmaFree` はそれぞれ `MemTotal` と `MemFree` に含まれていることに注意。システムから見て、CMAメモリが「消えている」わけではない。
 
 ### debugfs（CONFIG_CMA_DEBUGFS） {#debugfs-config_cma_debugfs}
 
@@ -264,14 +264,14 @@ $ cat /sys/kernel/debug/cma/cma-reserved/maxchunk
 65536        # 最大の連続空きチャンク（ページ単位）
 ```
 
-`alloc` ファイルは書き込み可能であり、テスト割り当てを発生させて CMA が動作していることを確認できる:
+`alloc` ファイルは書き込み可能であり、テスト割り当てを発生させてCMAが動作していることを確認できる:
 
 ```bash
 # CMA 領域から1024ページ（4MB）をテスト割り当てする
 echo 1024 > /sys/kernel/debug/cma/cma-reserved/alloc
 ```
 
-### vmstat カウンタ {#vmstat-counters}
+### vmstatカウンタ {#vmstat-counters}
 
 ```bash
 $ grep cma /proc/vmstat
@@ -279,7 +279,7 @@ cma_alloc_success 42
 cma_alloc_fail 0
 ```
 
-これらのカウンタ（v5.19 で追加）は、すべての CMA 領域にわたる CMA 割り当ての結果を追跡する。
+これらのカウンタ（v5.19で追加）は、すべてのCMA領域にわたるCMA割り当ての結果を追跡する。
 
 ## 試してみる {#try-it-yourself}
 
@@ -307,67 +307,67 @@ ls /proc/device-tree/reserved-memory/ 2>/dev/null
 
 ## 歴史 {#history}
 
-### Samsung での開発 {#development-at-samsung}
+### Samsungでの開発 {#development-at-samsung}
 
-CMA は Samsung Electronics の Marek Szyprowski によって開発された。動機は ARM モバイルプラットフォーム（Samsung の Exynos SoC など）から来ている。そこでは複数の周辺機器 — カメラ、ディスプレイコントローラ、マルチメディアコーデック、GPU — がいずれも大きな連続バッファを必要としていたが、システムには静的な予約に割ける RAM が限られていた。
+CMAはSamsung ElectronicsのMarek Szyprowskiによって開発された。動機はARMモバイルプラットフォーム（SamsungのExynos SoCなど）から来ている。そこでは複数の周辺機器 — カメラ、ディスプレイコントローラ、マルチメディアコーデック、GPU — がいずれも大きな連続バッファを必要としていたが、システムには静的な予約に割けるRAMが限られていた。
 
 この機能は、マージされるまでにパッチシリーズの複数のリビジョンにわたって広範なレビューを受けた。
 
-### v3.5 でマージ（2012年） {#merged-in-v35-2012}
+### v3.5でマージ（2012年） {#merged-in-v35-2012}
 
 **コミット**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e)（"drivers: add Contiguous Memory Allocator"）
 
 **作者**: Marek Szyprowski
 
-最初のマージには、CMA アロケータの中核と DMA サブシステムとの統合が含まれていた。
+最初のマージには、CMAアロケータの中核とDMAサブシステムとの統合が含まれていた。
 
-**LWN の記事**: [A deep dive into CMA](https://lwn.net/Articles/486301/) -- 設計の根拠とレビューの過程を論じている。
+**LWNの記事**: [A deep dive into CMA](https://lwn.net/Articles/486301/) -- 設計の根拠とレビューの過程を論じている。
 
-### MIGRATE_CMA タイプ（v3.5、2012年） {#migrate_cma-type-v35-2012}
+### MIGRATE_CMAタイプ（v3.5、2012年） {#migrate_cma-type-v35-2012}
 
 **コミット**: [47118af076f6](https://git.kernel.org/linus/47118af076f6)（"mm: mmzone: MIGRATE_CMA migration type added"）
 
 **作者**: Marek Szyprowski
 
-buddy アロケータに `MIGRATE_CMA` マイグレートタイプを追加した。これにより、CMA ページが移動可能な割り当てに使われつつ、移動不可能な割り当てが CMA 領域に置かれるのを防ぐという二重利用の設計が可能になった。
+buddyアロケータに `MIGRATE_CMA` マイグレートタイプを追加した。これにより、CMAページが移動可能な割り当てに使われつつ、移動不可能な割り当てがCMA領域に置かれるのを防ぐという二重利用の設計が可能になった。
 
-### デバイスごとの CMA 領域（v3.17、2014年） {#per-device-cma-areas-v317-2014}
+### デバイスごとのCMA領域（v3.17、2014年） {#per-device-cma-areas-v317-2014}
 
 **コミット**: [c1f733aaf1e1](https://git.kernel.org/linus/c1f733aaf1e1)（"drivers: of: add initialization code for dma-reserved-memory"）
 
-Device Tree の `memory-region` プロパティのサポートで、個々のデバイスがグローバルな領域を共有するのではなく、専用の CMA 領域を持てるようになった。
+Device Treeの `memory-region` プロパティのサポートで、個々のデバイスがグローバルな領域を共有するのではなく、専用のCMA領域を持てるようになった。
 
-### CMA の debugfs（v4.1、2015年） {#cma-debugfs-v41-2015}
+### CMAのdebugfs（v4.1、2015年） {#cma-debugfs-v41-2015}
 
 **コミット**: [28b24c1fc8c4](https://git.kernel.org/linus/28b24c1fc8c4)（"mm: cma: debugfs interface"）
 
 **作者**: Sasha Levin
 
-CMA を監視するための debugfs インターフェースが追加され、運用者が CMA 領域の使用状況を把握できるようになった。
+CMAを監視するためのdebugfsインターフェースが追加され、運用者がCMA領域の使用状況を把握できるようになった。
 
 ## 主要なソースファイル {#key-source-files}
 
 | ファイル | 説明 |
 |------|-------------|
-| [`mm/cma.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.c) | CMA アロケータの中核: `cma_alloc()`、`cma_release()`、ビットマップ管理 |
-| [`mm/cma.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.h) | CMA の内部ヘッダ（`struct cma` の定義） |
-| [`include/linux/cma.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cma.h) | ドライバ向けの公開 CMA API |
-| [`mm/cma_debug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma_debug.c) | CMA 領域の debugfs インターフェース |
-| [`kernel/dma/contiguous.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/contiguous.c) | DMA サブシステムとの統合: `dma_alloc_from_contiguous()` |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `MIGRATE_CMA` のフォールバックロジックを持つ buddy アロケータ |
+| [`mm/cma.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.c) | CMAアロケータの中核: `cma_alloc()`、`cma_release()`、ビットマップ管理 |
+| [`mm/cma.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.h) | CMAの内部ヘッダ（`struct cma` の定義） |
+| [`include/linux/cma.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cma.h) | ドライバ向けの公開CMA API |
+| [`mm/cma_debug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma_debug.c) | CMA領域のdebugfsインターフェース |
+| [`kernel/dma/contiguous.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/contiguous.c) | DMAサブシステムとの統合: `dma_alloc_from_contiguous()` |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `MIGRATE_CMA` のフォールバックロジックを持つbuddyアロケータ |
 | [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) | `cma_alloc()` の間に使われるページ範囲の隔離 |
 
 ## よくある問題 {#common-issues}
 
-### CMA 割り当ての失敗 {#cma-allocation-failures}
+### CMA割り当ての失敗 {#cma-allocation-failures}
 
-**症状**: `cma_alloc_fail` のカウントが増える、ドライバの probe が失敗する、dmesg に DMA 割り当てエラーが出る。
+**症状**: `cma_alloc_fail` のカウントが増える、ドライバのprobeが失敗する、dmesgにDMA割り当てエラーが出る。
 
 **よくある原因**:
 
-- **CMA 領域内のピン留めされたページ**: I/O 中のページや `get_user_pages()` で保持されているページは移動できない。これは CMA 割り当て失敗の最も一般的な原因である。長期間のピン留めと CMA の移動可能性がなぜ根本的に相容れないのかについては、[Getting User Pages (GUP)](gup.md#foll_longterm-the-pin-that-fights-the-whole-memory-manager) を参照。
-- **CMA 領域が小さすぎる**: 領域は、単一の最大の連続割り当てに加えて、他のデバイスからの同時割り当ても収容できなければならない。
-- **CMA 内の断片化**: さまざまなサイズのデバイス割り当てが確保・解放を繰り返すと、CMA のビットマップ自体が断片化しうる（CMA 領域内の外部断片化）。
+- **CMA領域内のピン留めされたページ**: I/O中のページや `get_user_pages()` で保持されているページは移動できない。これはCMA割り当て失敗の最も一般的な原因である。長期間のピン留めとCMAの移動可能性がなぜ根本的に相容れないのかについては、[Getting User Pages (GUP)](gup.md#foll_longterm-the-pin-that-fights-the-whole-memory-manager) を参照。
+- **CMA領域が小さすぎる**: 領域は、単一の最大の連続割り当てに加えて、他のデバイスからの同時割り当ても収容できなければならない。
+- **CMA内の断片化**: さまざまなサイズのデバイス割り当てが確保・解放を繰り返すと、CMAのビットマップ自体が断片化しうる（CMA領域内の外部断片化）。
 
 **診断**:
 
@@ -384,32 +384,32 @@ cat /sys/kernel/debug/cma/*/used
 cat /sys/kernel/debug/cma/*/maxchunk
 ```
 
-### CMA メモリが現れない {#cma-memory-not-appearing}
+### CMAメモリが現れない {#cma-memory-not-appearing}
 
 `/proc/meminfo` の `CmaTotal` が0の場合:
 
 - カーネル設定で `CONFIG_CMA=y` と `CONFIG_DMA_CMA=y` になっていることを確認する
 - `cma=` ブートパラメータがあること、または `CONFIG_CMA_SIZE_MBYTES` が非ゼロであることを確認する
-- Device Tree のプラットフォームでは、reserved-memory ノードに `compatible = "shared-dma-pool"` と `reusable` プロパティがあることを確認する
+- Device Treeのプラットフォームでは、reserved-memoryノードに `compatible = "shared-dma-pool"` と `reusable` プロパティがあることを確認する
 
 ## 参考資料 {#references}
 
 - [LWN: A deep dive into CMA](https://lwn.net/Articles/486301/) - マージウィンドウ時の設計に関する議論
-- [LWN: CMA and compaction](https://lwn.net/Articles/684611/) - CMA とコンパクションの相互作用
-- [LWN: Contiguous memory allocation for drivers](https://lwn.net/Articles/396657/) - 初期の CMA の提案
-- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) - ドライバが DMA メモリをどう割り当てるべきか
-- [contiguous-memory](contiguous-memory.md) - CMA が解決する断片化の問題
-- [compaction](compaction.md) - CMA が依存するページマイグレーションの仕組み
-- [page-allocator](page-allocator.md) - buddy アロケータとマイグレートタイプ
+- [LWN: CMA and compaction](https://lwn.net/Articles/684611/) - CMAとコンパクションの相互作用
+- [LWN: Contiguous memory allocation for drivers](https://lwn.net/Articles/396657/) - 初期のCMAの提案
+- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) - ドライバがDMAメモリをどう割り当てるべきか
+- [contiguous-memory](contiguous-memory.md) - CMAが解決する断片化の問題
+- [compaction](compaction.md) - CMAが依存するページマイグレーションの仕組み
+- [page-allocator](page-allocator.md) - buddyアロケータとマイグレートタイプ
 
 ## 参考文献 {#further-reading}
 
-- [LWN: A deep dive into CMA](https://lwn.net/Articles/486301/) — 設計の根拠と、v3.5（2012年）で CMA がマージされるまでの長いレビュー過程
-- [LWN: Contiguous memory allocation for drivers](https://lwn.net/Articles/396657/) — 最終的な設計の動機となった初期の CMA の提案（2010年）
-- [LWN: CMA and compaction](https://lwn.net/Articles/684611/) — CMA のマイグレーションとメモリコンパクションの相互作用（2016年）
-- [`Documentation/admin-guide/mm/dma-api-howto.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/dma-api-howto.rst) — CMA を使うパスを含め、ドライバが DMA メモリをどう割り当てるべきかを扱うカーネルドキュメント
-- [`mm/cma.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.c) — CMA アロケータの中核: ビットマップ管理、`cma_alloc()`、`cma_release()`
+- [LWN: A deep dive into CMA](https://lwn.net/Articles/486301/) — 設計の根拠と、v3.5（2012年）でCMAがマージされるまでの長いレビュー過程
+- [LWN: Contiguous memory allocation for drivers](https://lwn.net/Articles/396657/) — 最終的な設計の動機となった初期のCMAの提案（2010年）
+- [LWN: CMA and compaction](https://lwn.net/Articles/684611/) — CMAのマイグレーションとメモリコンパクションの相互作用（2016年）
+- [`Documentation/admin-guide/mm/dma-api-howto.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/dma-api-howto.rst) — CMAを使うパスを含め、ドライバがDMAメモリをどう割り当てるべきかを扱うカーネルドキュメント
+- [`mm/cma.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/cma.c) — CMAアロケータの中核: ビットマップ管理、`cma_alloc()`、`cma_release()`
 - [`kernel/dma/contiguous.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/contiguous.c) — `dma_alloc_coherent()` と `cma_alloc()` の橋渡し
-- [DMA Memory Allocation](dma.md) — ドライバが透過的に CMA に到達するために使う DMA API
-- [contiguous-memory](contiguous-memory.md) — CMA が解決するために設計された断片化の問題
-- [memory-reservation](memory-reservation.md) — ブート時に memblock を介して CMA 領域が物理メモリからどう切り出されるか
+- [DMA Memory Allocation](dma.md) — ドライバが透過的にCMAに到達するために使うDMA API
+- [contiguous-memory](contiguous-memory.md) — CMAが解決するために設計された断片化の問題
+- [memory-reservation](memory-reservation.md) — ブート時にmemblockを介してCMA領域が物理メモリからどう切り出されるか

@@ -43,7 +43,7 @@ raw spinlockを保持したまま `schedule()` を呼ぶことは文書化され
 
 ## 解決 {#resolution}
 
-`d33d26036a02`（"rtmutex: Drop rt_mutex::wait_lock before scheduling"）は、`WARN()` と留め置きループの直前に `raw_spin_unlock_irq(&lock->wait_lock)` を追加する。スリープしうる処理の後ではなく、前にロックを解放するのである。Thomas GleixnerがLinusへのプルリクエストで書いた修正の要約は、バグを率直に述べている。"The deadlock detection code drops into an infinite scheduling loop while still holding rt_mutex::wait_lock, which rightfully triggers a 'scheduling in atomic' warning. Unlock it before that."（訳: デッドロック検出コードは rt_mutex::wait_lock を保持したまま無限のスケジューリングループに入っており、当然ながら「scheduling in atomic」警告を引き起こす。その前にアンロックする。）投稿されたパッチでは当初、アンロックは `WARN()` の*後*に置かれていた。Gleixnerはマージの際にそれを前に移し、警告自体もアトミックコンテキストから発火しないようにした。
+`d33d26036a02`（"rtmutex: Drop rt_mutex::wait_lock before scheduling"）は、`WARN()` と留め置きループの直前に `raw_spin_unlock_irq(&lock->wait_lock)` を追加する。スリープしうる処理の後ではなく、前にロックを解放するのである。Thomas GleixnerがLinusへのプルリクエストで書いた修正の要約は、バグを率直に述べている。"The deadlock detection code drops into an infinite scheduling loop while still holding rt_mutex::wait_lock, which rightfully triggers a 'scheduling in atomic' warning. Unlock it before that."（訳: デッドロック検出コードはrt_mutex::wait_lockを保持したまま無限のスケジューリングループに入っており、当然ながら「scheduling in atomic」警告を引き起こす。その前にアンロックする。）投稿されたパッチでは当初、アンロックは `WARN()` の*後*に置かれていた。Gleixnerはマージの際にそれを前に移し、警告自体もアトミックコンテキストから発火しないようにした。
 
 ## 教訓 {#what-it-taught-us}
 

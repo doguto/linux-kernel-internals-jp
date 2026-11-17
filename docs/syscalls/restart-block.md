@@ -232,7 +232,7 @@ SYSCALL_DEFINE0(restart_syscall)
 
 | 再開コード | 例 | ハンドラが実行された場合 | ハンドラが実行されない場合 |
 |---|---|---|---|
-| `ERESTARTSYS` | `read`、`write`、`accept`、`connect`、`waitpid`、`select`（短い待ち） | EINTR（SA_RESTART があれば再開） | 常に再開 |
+| `ERESTARTSYS` | `read`、`write`、`accept`、`connect`、`waitpid`、`select`（短い待ち） | EINTR（SA_RESTARTがあれば再開） | 常に再開 |
 | `ERESTARTNOINTR` | ページフォールト中に入る待ち状態、一部の内部的な待ち | 常に再開 | 常に再開 |
 | `ERESTARTNOHAND` | `pause`、`sigsuspend`、`epoll_wait`（シグナルマスクの変更を伴う） | 常にEINTR | 常に再開 |
 | `ERESTART_RESTARTBLOCK` | `nanosleep`、`clock_nanosleep`、`poll`、`ppoll`、`select`（タイムアウト付き）、`futex`（FUTEX_WAIT） | 常にEINTR | `restart_syscall()` を介して再開 |

@@ -239,7 +239,7 @@ Dockerは2つのフラグでスワップの制御を公開している。
 | フラグ | 効果 |
 |------|--------|
 | `--memory=1g` | `memory.max = 1G`を設定する |
-| `--memory-swap=2g` | RAM+スワップの**合算**制限を2Gに設定する（つまりRAM 1G + スワップ 1G） |
+| `--memory-swap=2g` | RAM+スワップの**合算**制限を2Gに設定する（つまりRAM 1G + スワップ1G） |
 | `--memory-swap=-1` | スワップ無制限 |
 | `--memory-swap=<value equal to --memory>` | スワップなし（memsw制限 = RAM制限） |
 

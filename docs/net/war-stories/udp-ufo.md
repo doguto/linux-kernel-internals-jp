@@ -22,7 +22,7 @@ CVSS
 
 *[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 パスMTUより大きいUDPデータグラムは、`MSG_MORE`を使って段階的に構築できる。カーネルが実際に送信する前に、複数の`send()`呼び出しにわたってデータを追加していくのである。下位のNICがUFO（`NETIF_F_UFO`、UDP向けのスキャッタギャザーによるセグメンテーションオフロード）を提供しているかどうかに応じて、`net/ipv4/ip_output.c`の`__ip_append_data()`（およびそのIPv6版である`net/ipv6/ip6_output.c`の`__ip6_append_data()`）は、送信SKBを構築するための2つのパスのうち1つを選ぶ。1つは`ip_ufo_append_data()`を介するUFOパスで、フラグメンテーションをNIC/ソフトウェアGSOに委ねた単一のGSO SKBを構築する。もう1つは通常のフラグメンテーションパスで、データを自らMTUサイズのSKBに分割し、その過程で各フラグメントの`copy`長を計算する。
 

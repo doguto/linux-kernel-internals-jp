@@ -1,8 +1,8 @@
-# cgroup v2 のリソースコントローラ {#cgroup-v2-resource-controllers}
+# cgroup v2のリソースコントローラ {#cgroup-v2-resource-controllers}
 
 > CPU、メモリ、I/O、プロセス数の制御
 
-## cpu コントローラ {#cpu-controller}
+## cpuコントローラ {#cpu-controller}
 
 CPU帯域の割り当てを制御する。
 
@@ -32,7 +32,7 @@ cat /sys/fs/cgroup/myapp/cpu.stat
 # throttled_usec 12345      ← スロットリングされた時間の合計
 ```
 
-### cpu.max の内部動作 {#how-cpumax-works-internally}
+### cpu.maxの内部動作 {#how-cpumax-works-internally}
 
 ```c
 /* kernel/sched/core.c: スケジューラが帯域を確認する */
@@ -58,11 +58,11 @@ struct cfs_bandwidth {
 };
 ```
 
-cfs_rq がクォータを使い切ると、`throttled_cfs_rq` に追加されてランキューから外され、周期タイマーが発火して `runtime` が補充されるまでそのままになる。
+cfs_rqがクォータを使い切ると、`throttled_cfs_rq` に追加されてランキューから外され、周期タイマーが発火して `runtime` が補充されるまでそのままになる。
 
-### cpu.weight と EEVDF {#cpuweight-and-eevdf}
+### cpu.weightとEEVDF {#cpuweight-and-eevdf}
 
-`cpu.weight` は EEVDF スケジューラの `se.weight` に対応する。重み200のプロセスは、両方が実行可能なとき、重み100のプロセスの2倍のCPU配分を得る。
+`cpu.weight` はEEVDFスケジューラの `se.weight` に対応する。重み200のプロセスは、両方が実行可能なとき、重み100のプロセスの2倍のCPU配分を得る。
 
 ```c
 /* 変換: cpu.weight → スケジューラの重み */
@@ -74,7 +74,7 @@ static u32 sched_weight_from_cgroup(unsigned long cgroup_weight)
 }
 ```
 
-## memory コントローラ {#memory-controller}
+## memoryコントローラ {#memory-controller}
 
 メモリ使用量を制御する。アカウンティングのオーバーヘッドのため、最も複雑なコントローラである。
 
@@ -112,7 +112,7 @@ cat /sys/fs/cgroup/myapp/memory.events
 
 ### memory.high: 回収によるスロットリング {#memoryhigh-the-reclaim-throttle}
 
-`memory.high` は、kill する代わりに回収を引き起こすソフトな制限である:
+`memory.high` は、killする代わりに回収を引き起こすソフトな制限である:
 
 ```c
 /* mm/memcontrol.c: mem_cgroup_handle_over_high() */
@@ -162,7 +162,7 @@ mem_cgroup_charge(page, mm, gfp)
       → if over max: try to reclaim → if still over: OOM
 ```
 
-### memory.min と memory.low: 保護 {#memorymin-and-memorylow-protection}
+### memory.minとmemory.low: 保護 {#memorymin-and-memorylow-protection}
 
 ```bash
 # この cgroup のために少なくとも 256MB を確保する（これ以下には決して回収しない）
@@ -172,9 +172,9 @@ echo "256M" > /sys/fs/cgroup/myapp/memory.min
 echo "256M" > /sys/fs/cgroup/myapp/memory.low
 ```
 
-## io コントローラ {#io-controller}
+## ioコントローラ {#io-controller}
 
-BFQ または mq-deadline スケジューラとの統合により、ブロックI/Oの帯域とIOPSを制御する。
+BFQまたはmq-deadlineスケジューラとの統合により、ブロックI/Oの帯域とIOPSを制御する。
 
 ### インターフェースファイル {#interface-files_2}
 
@@ -196,9 +196,9 @@ cat /sys/fs/cgroup/myapp/io.pressure
 # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
 ```
 
-### io.max の仕組み {#how-iomax-works}
+### io.maxの仕組み {#how-iomax-works}
 
-io コントローラはブロック層のスロットリングパスを使う:
+ioコントローラはブロック層のスロットリングパスを使う:
 
 ```c
 /* block/blk-cgroup.c: スロットリング用の blkcg_policy_ops */
@@ -216,7 +216,7 @@ blk_throtl_bio(bio)
   → if over limit: queue bio in tg, schedule timer to dispatch later
 ```
 
-## pids コントローラ {#pids-controller}
+## pidsコントローラ {#pids-controller}
 
 プロセスとスレッドの総数を制限する。
 
@@ -234,7 +234,7 @@ cat /sys/fs/cgroup/myapp/pids.events
 # max 3  ← pids.max によって fork() が拒否された回数
 ```
 
-### pids.max の強制方法 {#how-pidsmax-is-enforced}
+### pids.maxの強制方法 {#how-pidsmax-is-enforced}
 
 ```c
 /* kernel/fork.c: copy_process() */
@@ -249,7 +249,7 @@ static struct task_struct *copy_process(...)
 }
 ```
 
-## cpuset コントローラ {#cpuset-controller}
+## cpusetコントローラ {#cpuset-controller}
 
 プロセスを特定のCPUとNUMAノードに固定する:
 
@@ -264,7 +264,7 @@ echo "0" > /sys/fs/cgroup/myapp/cpuset.mems
 echo 1 > /sys/fs/cgroup/myapp/cpuset.cpus.exclusive
 ```
 
-## cgroup のリソース使用量の監視 {#monitoring-cgroup-resource-usage}
+## cgroupのリソース使用量の監視 {#monitoring-cgroup-resource-usage}
 
 ```bash
 # CPU の圧力（PSI — Pressure Stall Information）
@@ -284,7 +284,7 @@ cat /sys/fs/cgroup/myapp/cpu.stat
 cat /sys/fs/cgroup/myapp/memory.current
 ```
 
-## rootless コンテナのための委譲 {#delegation-for-rootless-containers}
+## rootlessコンテナのための委譲 {#delegation-for-rootless-containers}
 
 ```bash
 # 非特権ユーザーにサブツリーの所有権を与える
@@ -302,7 +302,7 @@ mount -o remount,nsdelegate /sys/fs/cgroup
 
 ## 参考文献 {#further-reading}
 
-- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — 階層とコアのデータ構造
-- [メモリ cgroup](../mm/memcg.md) — memcg のアカウンティングの詳細
+- [cgroup v2のアーキテクチャ](cgroup-v2.md) — 階層とコアのデータ構造
+- [メモリcgroup](../mm/memcg.md) — memcgのアカウンティングの詳細
 - [PSI](../mm/psi.md) — Pressure Stall Information
 - `Documentation/admin-guide/cgroup-v2.rst` — コントローラの完全なリファレンス

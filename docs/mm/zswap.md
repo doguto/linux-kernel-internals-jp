@@ -490,7 +490,7 @@ graph TD
 
 ## 性能上のトレードオフ {#performance-tradeoffs}
 
-### CPU vs. メモリ vs. I/O {#cpu-vs-memory-vs-io}
+### CPU vs. メモリvs. I/O {#cpu-vs-memory-vs-io}
 
 ```
 Low compression ratio (data is random, already compressed):
@@ -593,7 +593,7 @@ CPUホットプラグのコールバック（`zswap_cpu_comp_prepare` / `zswap_c
 
 - [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — zswapの完全な実装: 格納、ロード、ライトバック、シュリンカ、プール管理、debugfsカウンタ
 - `Documentation/admin-guide/mm/zswap.rst` — チューニング可能なパラメータ、cgroupによる制御、可観測性を扱うアップストリームの管理者ガイド
-- [swap](swap.md) — スワップアーキテクチャの概要。zram やディスクスワップと並んで、zswapがスワップスタック全体の中でどう位置付けられるかを含む
+- [swap](swap.md) — スワップアーキテクチャの概要。zramやディスクスワップと並んで、zswapがスワップスタック全体の中でどう位置付けられるかを含む
 - [swap-thrashing](swap-thrashing.md) — zswapやzramを有効にして圧縮pageをRAMに保持することで、I/O起因のスラッシングをどう減らせるか
 - [slab](slab.md) — zswapが可変サイズの圧縮オブジェクトを高密度に格納するために内部で使うzsmallocアロケータ
 - [zswap: compressed swap caching](https://lwn.net/Articles/537422/) （LWN, 2013）— v3.11でマージされた当時の、Seth JenningsによるzswapパッチについてのLWNの記事

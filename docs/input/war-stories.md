@@ -7,7 +7,7 @@
 ## 詳細解説 {#deep-dives}
 
 ### [初期化されないHIDレポートバッファによるカーネルメモリリーク](war-stories/uninitialized-report-buffer-leak.md) {#the-uninitialized-hid-report-buffer-kernel-memory-leak}
-**2024年10月（CVE公開は2024年11月）· CVE-2024-50302 · CISA Known Exploited Vulnerabilities カタログ**
+**2024年10月（CVE公開は2024年11月）· CVE-2024-50302 · CISA Known Exploited Vulnerabilitiesカタログ**
 1語の修正（`kmalloc` は `kzalloc` であるべきだった）で、ヒープのリークが塞がれた。Googleは、このリークがフォレンジック機器メーカーのハードウェアが携帯電話のロック解除チェーンで使った複数のゼロデイの1つであった可能性が高いと評価しており、その経緯はAmnesty InternationalのSecurity Labが文書化している。
 
 ### [2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同](war-stories/hid-validate-values-type-confusion.md) {#the-hid_validate_values-type-confusion-that-a-2014-bug-fix-introduced}
@@ -18,7 +18,7 @@
 
 ### ケース1: Bluetooth HIDPのアイドルタイマーの競合 — CVE-2023-54120 {#case-1-the-bluetooth-hidp-idle-timer-race-cve-2023-54120}
 
-`net/bluetooth/hidp/core.c` のセッション破棄処理は、接続のアイドルタイムアウト用タイマーを `del_timer()` で停止していた。これは非同期であり、タイマーを保留中タイマーのリストから外すが、別のCPUですでに実行中のコールバックの完了は待たない。問題のウィンドウはこうである。`hidp_idle_timeout()` が別の場所ですでに実行中の間に `hidp_del_timer()` が走り、破棄処理はそのまま `hidp_session_put()` に進んでセッションを解放する。するとまだ実行中のタイマーコールバックが、解放済みメモリに触れる。NVDのkernel.org由来のスコアでは CVSS 3.1 8.8（HIGH）と評価されている。
+`net/bluetooth/hidp/core.c` のセッション破棄処理は、接続のアイドルタイムアウト用タイマーを `del_timer()` で停止していた。これは非同期であり、タイマーを保留中タイマーのリストから外すが、別のCPUですでに実行中のコールバックの完了は待たない。問題のウィンドウはこうである。`hidp_idle_timeout()` が別の場所ですでに実行中の間に `hidp_del_timer()` が走り、破棄処理はそのまま `hidp_session_put()` に進んでセッションを解放する。するとまだ実行中のタイマーコールバックが、解放済みメモリに触れる。NVDのkernel.org由来のスコアではCVSS 3.1 8.8（HIGH）と評価されている。
 
 修正（[`c95930abd687`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c95930abd687fcd1aa040dc4fe90dff947916460)、Min Li、2023年3月）は1行の変更である。`del_timer(&session->timer)` → `del_timer_sync(&session->timer)` とし、実行中のコールバックが実際に完了するまでブロックしてから戻るようにした。[NVD: CVE-2023-54120](https://nvd.nist.gov/vuln/detail/CVE-2023-54120)。
 
@@ -34,7 +34,7 @@ syzbotが見つけた一括のバグである。14個の独立したHIDフォー
 
 修正（[`d9d4b1e46d95`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d9d4b1e46d9543a82c23f6df03f4ad697dab361b)、Alan Stern、2019年10月）は、14個のドライバすべてで `list_first_entry()` 呼び出しの前に明示的な `if (list_empty(&hid->inputs)) { hid_err(...); return -ENODEV; }` ガードを追加した。[NVD: CVE-2019-19532](https://nvd.nist.gov/vuln/detail/CVE-2019-19532)。
 
-### ケース4: GTCOタブレットドライバ、同じ関数、2年足らずを隔てた2つのバグ — CVE-2017-16643 と CVE-2019-13631 {#case-4-the-gtco-tablet-driver-the-same-function-two-bugs-under-two-years-apart-cve-2017-16643-and-cve-2019-13631}
+### ケース4: GTCOタブレットドライバ、同じ関数、2年足らずを隔てた2つのバグ — CVE-2017-16643とCVE-2019-13631 {#case-4-the-gtco-tablet-driver-the-same-function-two-bugs-under-two-years-apart-cve-2017-16643-and-cve-2019-13631}
 
 GTCOデジタイザ/タブレットドライバ（`drivers/input/tablet/gtco.c`）の `parse_hid_report_descriptor()` は、デバイスが提供するHIDレポートディスクリプタを1バイトずつ走査する。この同じ関数に、メカニズムの上では無関係な2つの別々のバグがあった。
 

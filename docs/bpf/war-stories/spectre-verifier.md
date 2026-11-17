@@ -12,7 +12,7 @@ CVSS
 :   4.7 MEDIUM（`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N`、NVDの主評価）
 
 修正
-:   [`9183671af6db`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9183671af6dbf60a1219371d4ed73e23f43b49db)、メインライン v5.13-rc7。stable 5.12.13および5.10.46
+:   [`9183671af6db`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9183671af6dbf60a1219371d4ed73e23f43b49db)、メインラインv5.13-rc7。stable 5.12.13および5.10.46
 
 エクスプロイトツール
 :   複数の概念実証（PoC）が`security@kernel.org`に非公開で送られた。NVDの参照リストは公開のoss-security投稿に`Exploit`タグを付け、公開PoCリポジトリへリンクしている。Exploit-DBのエントリはない

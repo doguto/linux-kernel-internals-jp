@@ -53,7 +53,7 @@ aio_suspend(list, 1, NULL);
 - ワーカースレッドとの間を行き来するコンテキストスイッチ
 - カーネルのバイパスはない — スレッドごとに依然としてカーネルを経由する
 
-## Linuxカーネル AIO {#linux-kernel-aio}
+## LinuxカーネルAIO {#linux-kernel-aio}
 
 Linuxは2.6でネイティブな非同期I/O（`io_submit`、`io_getevents`）を追加した。POSIX AIOと異なり、これはカーネル内で動作し、スレッドを使わない。
 

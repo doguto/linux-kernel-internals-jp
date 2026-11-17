@@ -10,7 +10,7 @@ perfイベントサブシステムはIngo MolnárとPeter Zijlstraによって�
 - **ソフトウェアカウンタ**: ページフォールト、コンテキストスイッチ、CPUマイグレーション
 - **tracepoint**: カーネルの静的イベント
 - **動的イベント**: kprobe、uprobe、BPF
-- **サンプリング**: 統計的プロファイリングのため、Nイベントごとに PC／スタックを記録する
+- **サンプリング**: 統計的プロファイリングのため、NイベントごとにPC／スタックを記録する
 
 ## perf_event_openシステムコール {#perf_event_open-syscall}
 

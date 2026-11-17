@@ -12,7 +12,7 @@ CVSS
 :   7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`、NVDの一次評価）。Ubuntuのセカンダリ評価も7.8だが、ベクトルが異なる（`AC:H`、`S:C`）
 
 修正バージョン
-:   [`049c4e13714e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=049c4e13714ecbca567b4d5f6d563f05d431c80e)、メインライン v5.13-rc4。stable 5.12.4、5.11.21、5.10.37
+:   [`049c4e13714e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=049c4e13714ecbca567b4d5f6d563f05d431c80e)、メインラインv5.13-rc4。stable 5.12.4、5.11.21、5.10.37
 
 エクスプロイトツール
 :   あり — NVDは、公開されたPacket Stormのエントリ"Linux eBPF ALU32 32-bit Invalid Bounds Tracking Local Privilege Escalation"に`Exploit`タグを付けている。Exploit-DBのエントリはない
@@ -22,7 +22,7 @@ CVSS
 
 *[事件簿: BPF verifierのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244)（"bpf: Verifier, do explicit ALU32 bounds tracking"、v5.7-rc1）以降、verifierは算術演算とビット演算のALU操作を2回シミュレートする。1回は64ビットの境界に対して、もう1回は別個の32ビットの`{s,u}32_{min,max}_value`境界に対してである。ビット演算の場合、これは2つの並行した関数ファミリーを意味する。`scalar_min_max_and()` / `scalar_min_max_or()` / `scalar_min_max_xor()`と、それらの`scalar32_`版である。
 

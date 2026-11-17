@@ -1,6 +1,6 @@
 # コンテナ隔離の内部 {#container-isolation-internals}
 
-> Docker、Kubernetes、コンテナランタイムが namespace と cgroup をどう使うか
+> Docker、Kubernetes、コンテナランタイムがnamespaceとcgroupをどう使うか
 
 ## カーネルから見たコンテナとは何か {#what-a-container-is-kernel-side}
 
@@ -8,7 +8,7 @@
 
 1. 一連の **namespace**（システムリソースの隔離されたビュー）の中に存在する
 2. **cgroup**（リソース制限）によって管理される
-3. **ファイルシステムのルート**を持つ（mount namespace + chroot/pivot_root による）
+3. **ファイルシステムのルート**を持つ（mount namespace + chroot/pivot_rootによる）
 4. 必要に応じて **seccomp**（システムコールのフィルタリング）と **LSM**（AppArmor/SELinux）によって制限される
 
 「コンテナ」というカーネルオブジェクトは存在しない。既存のプリミティブの組み合わせである。
@@ -101,7 +101,7 @@ mount("sysfs", "/sys", "sysfs", 0, NULL);
 mount("tmpfs", "/dev", "tmpfs", 0, NULL);
 ```
 
-## ネットワークの設定: veth ペア {#network-setup-veth-pairs}
+## ネットワークの設定: vethペア {#network-setup-veth-pairs}
 
 コンテナのネットワークは仮想イーサネットのペアを使う:
 
@@ -131,9 +131,9 @@ ip netns exec <container_pid> ip addr add 172.17.0.2/16 dev eth0
 ip netns exec <container_pid> ip route add default via 172.17.0.1
 ```
 
-## cgroup namespace: コンテナから見た cgroup {#cgroup-namespace-containers-view-of-cgroups}
+## cgroup namespace: コンテナから見たcgroup {#cgroup-namespace-containers-view-of-cgroups}
 
-cgroup namespace がなければ、コンテナからホストの cgroup 階層全体が見えてしまう。`CLONE_NEWCGROUP` を使うと:
+cgroup namespaceがなければ、コンテナからホストのcgroup階層全体が見えてしまう。`CLONE_NEWCGROUP` を使うと:
 
 ```bash
 # ホストからの見え方:
@@ -147,11 +147,11 @@ cat /proc/1/cgroup  # コンテナ内から
 # コンテナ内の /sys/fs/cgroup/ には自身のサブツリーだけが見える
 ```
 
-cgroup namespace はコンテナの cgroup をルートのように見せるので、コンテナ内の `systemd` からはホストの階層が見えない。
+cgroup namespaceはコンテナのcgroupをルートのように見せるので、コンテナ内の `systemd` からはホストの階層が見えない。
 
-## user namespace: rootless コンテナ {#user-namespace-rootless-containers}
+## user namespace: rootlessコンテナ {#user-namespace-rootless-containers}
 
-rootless コンテナ（Docker rootless、Podman）は、完全に非特権ユーザーとして動作する:
+rootlessコンテナ（Docker rootless、Podman）は、完全に非特権ユーザーとして動作する:
 
 ```
 Host:     uid=1000 (user)
@@ -175,11 +175,11 @@ podman run --rm -it ubuntu bash
 # /etc/shadow へのアクセスやモジュールのロードなどはできない
 ```
 
-user namespace は、他のすべての種類の namespace を非特権で作成することも可能にする。user namespace は Linux 3.9 で非特権ユーザーからも完全に機能するようになった [(LWN)](https://lwn.net/Articles/532593/)。
+user namespaceは、他のすべての種類のnamespaceを非特権で作成することも可能にする。user namespaceはLinux 3.9で非特権ユーザーからも完全に機能するようになった [(LWN)](https://lwn.net/Articles/532593/)。
 
 ## seccomp: システムコールのフィルタリング {#seccomp-syscall-filtering}
 
-seccomp は、コンテナが発行できるシステムコールを制限する:
+seccompは、コンテナが発行できるシステムコールを制限する:
 
 ```c
 /* seccomp フィルタをインストールする（システムコール引数に対する BPF プログラム） */
@@ -204,11 +204,11 @@ struct sock_fprog prog = {
 prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog);
 ```
 
-Docker のデフォルトの seccomp プロファイルは、約40個のシステムコール（`keyctl`、`kexec_load`、`perf_event_open`、`ptrace` など）をブロックする。
+Dockerのデフォルトのseccompプロファイルは、約40個のシステムコール（`keyctl`、`kexec_load`、`perf_event_open`、`ptrace` など）をブロックする。
 
-## OCI ランタイム仕様 {#oci-runtime-spec}
+## OCIランタイム仕様 {#oci-runtime-spec}
 
-Open Container Initiative（OCI）のランタイム仕様は、コンテナランタイム（runc、crun、kata）が行うべきことを定義する。仕様は JSON ファイル（`config.json`）である:
+Open Container Initiative（OCI）のランタイム仕様は、コンテナランタイム（runc、crun、kata）が行うべきことを定義する。仕様はJSONファイル（`config.json`）である:
 
 ```json
 {
@@ -272,8 +272,8 @@ capsh --decode=00000000a80425fb
 
 ## 参考文献 {#further-reading}
 
-- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — リソース制御の内部
-- [リソースコントローラ](cgroup-controllers.md) — cpu、memory、io の制限
-- [namespace](namespaces.md) — 全8種類の namespace の詳細
-- [BPF/eBPF](../bpf/README.md) — seccomp-bpf と cgroup BPF プログラム
-- `runc` のソースコード — OCI コンテナランタイムのリファレンス実装
+- [cgroup v2のアーキテクチャ](cgroup-v2.md) — リソース制御の内部
+- [リソースコントローラ](cgroup-controllers.md) — cpu、memory、ioの制限
+- [namespace](namespaces.md) — 全8種類のnamespaceの詳細
+- [BPF/eBPF](../bpf/README.md) — seccomp-bpfとcgroup BPFプログラム
+- `runc` のソースコード — OCIコンテナランタイムのリファレンス実装

@@ -1,22 +1,22 @@
-# cgroup BPF プログラム {#cgroup-bpf-programs}
+# cgroup BPFプログラム {#cgroup-bpf-programs}
 
-> ネットワークポリシー、デバイス制御、リソースアカウンティングのために eBPF プログラムを cgroup にアタッチする
+> ネットワークポリシー、デバイス制御、リソースアカウンティングのためにeBPFプログラムをcgroupにアタッチする
 
 ## 概要 {#overview}
 
-BPF プログラムは cgroup ディレクトリにアタッチでき、その cgroup とその子孫に属するすべてのプロセスに対して実行される。これにより、カーネルにパッチを当てたりカーネルモジュールを書いたりせずに、プログラム可能な cgroup 単位のポリシーを実現できる。cgroup BPF プログラムは、明確に定義されたフックポイント（ソケットの作成、パケットの到着、デバイスノードのオープンなど）でカーネル内で実行され、何をすべきかを決定する。
+BPFプログラムはcgroupディレクトリにアタッチでき、そのcgroupとその子孫に属するすべてのプロセスに対して実行される。これにより、カーネルにパッチを当てたりカーネルモジュールを書いたりせずに、プログラム可能なcgroup単位のポリシーを実現できる。cgroup BPFプログラムは、明確に定義されたフックポイント（ソケットの作成、パケットの到着、デバイスノードのオープンなど）でカーネル内で実行され、何をすべきかを決定する。
 
-従来の cgroup コントローラ（固定されたインターフェースファイルの集合を公開する）とは異なり、cgroup BPF では、検証済みでサンドボックス化されたプログラムで任意のポリシーを表現できる。同じ仕組みが、Kubernetes の NetworkPolicy の強制、コンテナのデバイスのホワイトリスト、サービスごとの TCP チューニングを支えている。
+従来のcgroupコントローラ（固定されたインターフェースファイルの集合を公開する）とは異なり、cgroup BPFでは、検証済みでサンドボックス化されたプログラムで任意のポリシーを表現できる。同じ仕組みが、KubernetesのNetworkPolicyの強制、コンテナのデバイスのホワイトリスト、サービスごとのTCPチューニングを支えている。
 
 ## アタッチタイプ {#attach-types}
 
-アタッチタイプは `include/uapi/linux/bpf.h` で `enum bpf_attach_type` として定義されている。cgroup に関連するものは次のとおりである:
+アタッチタイプは `include/uapi/linux/bpf.h` で `enum bpf_attach_type` として定義されている。cgroupに関連するものは次のとおりである:
 
 ### ネットワークパケットのフィルタリング {#network-packet-filtering}
 
 `BPF_CGROUP_INET_INGRESS` / `BPF_CGROUP_INET_EGRESS`
 
-cgroup 内のプロセスが所有するソケットが送受信するすべての IPv4/IPv6 パケットに対して呼ばれる。プログラムは `__sk_buff` コンテキストを受け取り、次を返す:
+cgroup内のプロセスが所有するソケットが送受信するすべてのIPv4/IPv6パケットに対して呼ばれる。プログラムは `__sk_buff` コンテキストを受け取り、次を返す:
 
 - `1` — パケットを通す
 - `0` — パケットを破棄する
@@ -44,7 +44,7 @@ int block_internal(struct __sk_buff *skb)
 
 `BPF_CGROUP_INET_SOCK_CREATE`
 
-cgroup 内のプロセスが `socket()` を呼び出したときに呼ばれる。プログラムは `struct bpf_sock` を受け取り、`0` を返すことでソケットの作成を拒否できる:
+cgroup内のプロセスが `socket()` を呼び出したときに呼ばれる。プログラムは `struct bpf_sock` を受け取り、`0` を返すことでソケットの作成を拒否できる:
 
 ```c
 SEC("cgroup/sock_create")
@@ -57,13 +57,13 @@ int restrict_raw_sockets(struct bpf_sock *sk)
 }
 ```
 
-これは `socket()` に対する seccomp のフィルタリングよりも軽量である。BPF プログラムは、システムコールの引数をデコードしなくてもソケットのメタデータにアクセスできるからである。
+これは `socket()` に対するseccompのフィルタリングよりも軽量である。BPFプログラムは、システムコールの引数をデコードしなくてもソケットのメタデータにアクセスできるからである。
 
-### TCP のライフサイクルフック {#tcp-lifecycle-hooks}
+### TCPのライフサイクルフック {#tcp-lifecycle-hooks}
 
 `BPF_CGROUP_SOCK_OPS`
 
-TCP のライフサイクルにおける複数のイベント（コネクション確立、タイムアウト、再送、RTO の変化）で呼ばれ、cgroup ごとにソケットオプションを照会・設定できる。プログラムは `struct bpf_sock_ops` を受け取る:
+TCPのライフサイクルにおける複数のイベント（コネクション確立、タイムアウト、再送、RTOの変化）で呼ばれ、cgroupごとにソケットオプションを照会・設定できる。プログラムは `struct bpf_sock_ops` を受け取る:
 
 ```c
 SEC("sockops")
@@ -85,13 +85,13 @@ int set_buffer_sizes(struct bpf_sock_ops *skops)
 }
 ```
 
-これをサービスの cgroup にアタッチすると、ホスト上の全プロセスに影響するグローバルな `sysctl` の値に触れることなく、そのサービスが開くすべてのソケットに TCP チューニングを適用できる。
+これをサービスのcgroupにアタッチすると、ホスト上の全プロセスに影響するグローバルな `sysctl` の値に触れることなく、そのサービスが開くすべてのソケットにTCPチューニングを適用できる。
 
 ### デバイスアクセス制御 {#device-access-control}
 
 `BPF_CGROUP_DEVICE`
 
-cgroup 内のプロセスがデバイスノードを `open()`、`mknod()`、`access()` しようとしたときに呼ばれる。プログラムは、デバイスの major/minor と要求されたアクセス種別（`BPF_DEVCG_ACC_READ`、`BPF_DEVCG_ACC_WRITE`、`BPF_DEVCG_ACC_MKNOD`）を記述した `struct bpf_cgroup_dev_ctx` を受け取り、許可なら `1`、拒否なら `0` を返す:
+cgroup内のプロセスがデバイスノードを `open()`、`mknod()`、`access()` しようとしたときに呼ばれる。プログラムは、デバイスのmajor/minorと要求されたアクセス種別（`BPF_DEVCG_ACC_READ`、`BPF_DEVCG_ACC_WRITE`、`BPF_DEVCG_ACC_MKNOD`）を記述した `struct bpf_cgroup_dev_ctx` を受け取り、許可なら `1`、拒否なら `0` を返す:
 
 ```c
 SEC("cgroup/dev")
@@ -107,13 +107,13 @@ int device_policy(struct bpf_cgroup_dev_ctx *ctx)
 }
 ```
 
-`BPF_CGROUP_DEVICE` は、レガシーな cgroup v1 の `devices` コントローラを cgroup v2 で置き換えるものである。v1 のコントローラは `devices.allow` / `devices.deny` ファイルを公開していたが、cgroup v2 では `devices` コントローラが完全に廃止され、代わりに `BPF_CGROUP_DEVICE` に依存している。runc のようなコンテナランタイムは、OCI 仕様の `linux.resources.devices` リストから `BPF_CGROUP_DEVICE` プログラムを生成してロードする。
+`BPF_CGROUP_DEVICE` は、レガシーなcgroup v1の `devices` コントローラをcgroup v2で置き換えるものである。v1のコントローラは `devices.allow` / `devices.deny` ファイルを公開していたが、cgroup v2では `devices` コントローラが完全に廃止され、代わりに `BPF_CGROUP_DEVICE` に依存している。runcのようなコンテナランタイムは、OCI仕様の `linux.resources.devices` リストから `BPF_CGROUP_DEVICE` プログラムを生成してロードする。
 
-### sysctl の傍受 {#sysctl-interception}
+### sysctlの傍受 {#sysctl-interception}
 
 `BPF_CGROUP_SYSCTL`
 
-プロセスが `/proc/sys` 配下の sysctl を読み書きしたときに呼ばれる。プログラムは `struct bpf_sysctl` を受け取り、値を検査・変更したり、操作を拒否したりできる:
+プロセスが `/proc/sys` 配下のsysctlを読み書きしたときに呼ばれる。プログラムは `struct bpf_sysctl` を受け取り、値を検査・変更したり、操作を拒否したりできる:
 
 ```c
 SEC("cgroup/sysctl")
@@ -132,7 +132,7 @@ int sysctl_filter(struct bpf_sysctl *ctx)
 
 `BPF_CGROUP_GETSOCKOPT` / `BPF_CGROUP_SETSOCKOPT`
 
-`getsockopt(2)` や `setsockopt(2)` が発行されたときに呼ばれる。プログラムは、アプリケーションから見えるオプション値を上書きしたり（cgroup ごとのデフォルト値を返すのに便利）、特定のソケットオプションを完全にブロックしたりできる。
+`getsockopt(2)` や `setsockopt(2)` が発行されたときに呼ばれる。プログラムは、アプリケーションから見えるオプション値を上書きしたり（cgroupごとのデフォルト値を返すのに便利）、特定のソケットオプションを完全にブロックしたりできる。
 
 ## アタッチフラグ {#attach-flags}
 
@@ -140,11 +140,11 @@ int sysctl_filter(struct bpf_sysctl *ctx)
 
 | フラグ | 意味 |
 |------|---------|
-| （なし / `0`） | 排他: アタッチタイプごとに cgroup あたり1つのプログラムのみ。子の cgroup は継承するが上書きできない |
-| `BPF_F_ALLOW_OVERRIDE` | 子の cgroup がこのプログラムを自身のプログラムで置き換えられる |
+| （なし / `0`） | 排他: アタッチタイプごとにcgroupあたり1つのプログラムのみ。子のcgroupは継承するが上書きできない |
+| `BPF_F_ALLOW_OVERRIDE` | 子のcgroupがこのプログラムを自身のプログラムで置き換えられる |
 | `BPF_F_ALLOW_MULTI` | 複数のプログラムをアタッチできる。親と子の両方のプログラムが実行される（親が先） |
 
-実際に最もよく使われるのは `BPF_F_ALLOW_MULTI` である。ルート cgroup にプラットフォームレベルのポリシーを置き、子の cgroup にコンテナごとの細かな調整を置いて、両方を実行させることができる。
+実際に最もよく使われるのは `BPF_F_ALLOW_MULTI` である。ルートcgroupにプラットフォームレベルのポリシーを置き、子のcgroupにコンテナごとの細かな調整を置いて、両方を実行させることができる。
 
 ## システムコールのインターフェース {#the-syscall-interface}
 
@@ -168,11 +168,11 @@ attr.query.attach_type = BPF_CGROUP_INET_EGRESS;
 bpf(BPF_PROG_QUERY, &attr, sizeof(attr));
 ```
 
-`libbpf` を使う場合、より高レベルの API は `bpf_prog_attach()` / `bpf_prog_detach()` である。
+`libbpf` を使う場合、より高レベルのAPIは `bpf_prog_attach()` / `bpf_prog_detach()` である。
 
-## 実践例: コンテナごとの egress レート制限 {#practical-example-per-container-egress-rate-limiting}
+## 実践例: コンテナごとのegressレート制限 {#practical-example-per-container-egress-rate-limiting}
 
-cgroup BPF は組み込みのレートリミッタを提供しない（それはブロックI/Oなら `io` コントローラ、ネットワークなら TC の役目である）。定石は、`BPF_CGROUP_INET_EGRESS` プログラムと、コンテナの `veth` インターフェース上の TC `qdisc`（例: `tbf` や `fq`）を組み合わせることである:
+cgroup BPFは組み込みのレートリミッタを提供しない（それはブロックI/Oなら `io` コントローラ、ネットワークならTCの役目である）。定石は、`BPF_CGROUP_INET_EGRESS` プログラムと、コンテナの `veth` インターフェース上のTC `qdisc`（例: `tbf` や `fq`）を組み合わせることである:
 
 ```bash
 # 1. コンテナ用の veth ペアを作成する
@@ -188,9 +188,9 @@ bpftool cgroup attach /sys/fs/cgroup/containers/c1/ egress \
     pinned /sys/fs/bpf/mark_egress allow_multi
 ```
 
-BPF プログラム自体は `bpf_skb_store_bytes()` を使うか、`skb->mark` にコンテナIDを設定する。そして TC の flower/u32 分類器がそのマークにマッチして、コンテナごとの `tbf` qdisc を適用する。
+BPFプログラム自体は `bpf_skb_store_bytes()` を使うか、`skb->mark` にコンテナIDを設定する。そしてTCのflower/u32分類器がそのマークにマッチして、コンテナごとの `tbf` qdiscを適用する。
 
-純粋に BPF だけで実現する方法としては、`BPF_MAP_TYPE_ARRAY` で（アトミック操作を使って）独自のトークンバケットを実装し、バケットが空のときにパケットを破棄することで、`BPF_CGROUP_INET_EGRESS` フックから直接パケットのレートを制限できる。
+純粋にBPFだけで実現する方法としては、`BPF_MAP_TYPE_ARRAY` で（アトミック操作を使って）独自のトークンバケットを実装し、バケットが空のときにパケットを破棄することで、`BPF_CGROUP_INET_EGRESS` フックから直接パケットのレートを制限できる。
 
 ## アタッチされたプログラムの調査 {#inspecting-attached-programs}
 
@@ -208,11 +208,11 @@ bpftool cgroup show /sys/fs/cgroup/
 # 43       device          multi           device_policy
 ```
 
-`bpftool cgroup tree` は階層を再帰的にたどり、アタッチされたすべてのプログラムをID、名前、フラグとともに一覧表示する。特定のプログラムのバイトコード、マップ、BTF 情報を調べるには `bpftool prog show id 42` を使う。
+`bpftool cgroup tree` は階層を再帰的にたどり、アタッチされたすべてのプログラムをID、名前、フラグとともに一覧表示する。特定のプログラムのバイトコード、マップ、BTF情報を調べるには `bpftool prog show id 42` を使う。
 
 ## カーネルでの実装 {#kernel-implementation}
 
-カーネルは、ネットワーク、ソケット、デバイスの各サブシステムのホットパスから cgroup BPF プログラムを実行する。内部のエントリポイントには `__cgroup_bpf_run_filter_*()` 系の関数（ダブルアンダースコアのプレフィックス）が使われ、これらは `include/linux/bpf-cgroup.h` で定義され、`BPF_CGROUP_RUN_PROG_*` ラッパーマクロを介して呼び出される:
+カーネルは、ネットワーク、ソケット、デバイスの各サブシステムのホットパスからcgroup BPFプログラムを実行する。内部のエントリポイントには `__cgroup_bpf_run_filter_*()` 系の関数（ダブルアンダースコアのプレフィックス）が使われ、これらは `include/linux/bpf-cgroup.h` で定義され、`BPF_CGROUP_RUN_PROG_*` ラッパーマクロを介して呼び出される:
 
 ```c
 /* include/linux/bpf-cgroup.h（シグネチャは簡略化） */
@@ -255,15 +255,15 @@ struct cgroup_bpf {
 };
 ```
 
-プログラムがアタッチされると、（`__cgroup_bpf_attach()` から呼ばれる）`update_effective_progs()` がルートから対象の cgroup までをたどり、その cgroup とすべての子孫の `effective[]` プログラム配列を再構築する。`cgroup_bpf_inherit()` は別の関数で、cgroup の作成時にのみ呼ばれ、親から継承したプログラムをコピーする。ホットパスでは `BPF_PROG_RUN_ARRAY()` を介して `effective[]` を参照するだけであり、実行時に階層をたどることはない。
+プログラムがアタッチされると、（`__cgroup_bpf_attach()` から呼ばれる）`update_effective_progs()` がルートから対象のcgroupまでをたどり、そのcgroupとすべての子孫の `effective[]` プログラム配列を再構築する。`cgroup_bpf_inherit()` は別の関数で、cgroupの作成時にのみ呼ばれ、親から継承したプログラムをコピーする。ホットパスでは `BPF_PROG_RUN_ARRAY()` を介して `effective[]` を参照するだけであり、実行時に階層をたどることはない。
 
 ## 参考文献 {#further-reading}
 
-- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — `struct cgroup` と統一階層
-- [コンテナの隔離](container-isolation.md) — BPF のデバイスポリシーが seccomp やケーパビリティとどう組み合わさるか
-- [BPF ネットワーキング（TC、cgroup、sockmap）](../bpf/bpf-networking.md) — cgroup BPF と併用する TC ベースのレート制限
-- [BPF ベリファイア](../bpf/bpf-verifier.md) — BPF プログラムがアタッチ前にどのように安全性検査を受けるか
+- [cgroup v2のアーキテクチャ](cgroup-v2.md) — `struct cgroup` と統一階層
+- [コンテナの隔離](container-isolation.md) — BPFのデバイスポリシーがseccompやケーパビリティとどう組み合わさるか
+- [BPFネットワーキング（TC、cgroup、sockmap）](../bpf/bpf-networking.md) — cgroup BPFと併用するTCベースのレート制限
+- [BPFベリファイア](../bpf/bpf-verifier.md) — BPFプログラムがアタッチ前にどのように安全性検査を受けるか
 - `kernel/bpf/cgroup.c` — アタッチ/デタッチ/実行の実装
 - `include/uapi/linux/bpf.h` — `enum bpf_attach_type` とすべての `BPF_CGROUP_*` 定数
-- `tools/bpf/bpftool/cgroup.c` — bpftool の cgroup サブコマンドの実装
+- `tools/bpf/bpftool/cgroup.c` — bpftoolのcgroupサブコマンドの実装
 - `Documentation/bpf/prog_cgroup_skb.rst` — アップストリームのドキュメント

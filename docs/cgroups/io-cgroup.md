@@ -1,10 +1,10 @@
-# io cgroup コントローラ {#io-cgroup-controller}
+# io cgroupコントローラ {#io-cgroup-controller}
 
 > ブロックI/O帯域のスロットリング、重みベースのスケジューリング、レイテンシSLA
 
 ## 概要 {#overview}
 
-cgroup v2 の `io` コントローラは、プロセスのブロックI/Oリソースを管理する。次の機能を提供する:
+cgroup v2の `io` コントローラは、プロセスのブロックI/Oリソースを管理する。次の機能を提供する:
 
 - **io.max**: ハードなレート制限（バイト/秒、IOPS）
 - **io.weight**: 比例配分スケジューリング（WFQ）
@@ -74,7 +74,7 @@ static void tg_dispatch_one_bio(struct throtl_grp *tg, bool rw)
 
 ## io.weight: 比例配分スケジューリング {#ioweight-proportional-scheduling}
 
-BFQ I/Oスケジューラが必要である（Kyber は重みをサポートせず、mq-deadline と none もサポートしない）:
+BFQ I/Oスケジューラが必要である（Kyberは重みをサポートせず、mq-deadlineとnoneもサポートしない）:
 
 ```bash
 # 重みを設定（1-10000、デフォルト 100）:
@@ -91,7 +91,7 @@ echo "default 100" >> /sys/fs/cgroup/high-prio/io.weight  # その他はデフ�
 # normal は帯域の 100/(200+50+100) = 29% を得る
 ```
 
-### BFQ の重みベースのスケジューリング {#bfq-weight-based-scheduling}
+### BFQの重みベースのスケジューリング {#bfq-weight-based-scheduling}
 
 BFQ（Budget Fair Queuing）は、重みベースの公平性を実装する比例配分型のI/Oスケジューラである:
 
@@ -114,7 +114,7 @@ static void bfq_pd_init(struct blkg_policy_data *pd)
 
 ## io.latency: レイテンシSLA {#iolatency-latency-sla}
 
-`io.latency` はレイテンシベースのI/O保護を提供する。Linux 4.19 で Josef Bacik によって導入された [(commit)](https://git.kernel.org/linus/d70675121546c35feaceebf7ed9caed8716640f3) [(LWN)](https://lwn.net/Articles/758963/)。cgroup のレイテンシが目標値を超えると、コントローラは競合する cgroup をスロットリングする:
+`io.latency` はレイテンシベースのI/O保護を提供する。Linux 4.19でJosef Bacikによって導入された [(commit)](https://git.kernel.org/linus/d70675121546c35feaceebf7ed9caed8716640f3) [(LWN)](https://lwn.net/Articles/758963/)。cgroupのレイテンシが目標値を超えると、コントローラは競合するcgroupをスロットリングする:
 
 ```bash
 # cgroup の目標レイテンシを設定:
@@ -134,7 +134,7 @@ cat /sys/fs/cgroup/important/io.stat
 # dbytes=discard バイト数（TRIM/DISCARD 操作）
 ```
 
-### io.latency の仕組み {#how-iolatency-works}
+### io.latencyの仕組み {#how-iolatency-works}
 
 ```c
 /* block/blk-iolatency.c */
@@ -184,7 +184,7 @@ cat /sys/fs/cgroup/mycgroup/io.stat
 
 ## ライトバックの帰属 {#writeback-attribution}
 
-ダーティページのライトバックは、そのページをダーティにした cgroup に帰属させることができる:
+ダーティページのライトバックは、そのページをダーティにしたcgroupに帰属させることができる:
 
 ```bash
 # ライトバックの統計を確認:
@@ -203,7 +203,7 @@ echo "8:0 wbps=10485760" > /sys/fs/cgroup/mycgroup/io.max  # ライトバック�
 
 ## コンテナのI/O隔離 {#container-io-isolation}
 
-Docker/containerd は、コンテナの隔離に io.max と io.weight を使う:
+Docker/containerdは、コンテナの隔離にio.maxとio.weightを使う:
 
 ```bash
 # Docker: デバイスの読み込みレートを設定
@@ -221,10 +221,10 @@ docker run --blkio-weight 500 my-image   # 500/1000 = デフォルトの 0.5 倍
 
 ## 参考文献 {#further-reading}
 
-- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — cgroup v2 の階層とコントローラ
-- [リソースコントローラ](cgroup-controllers.md) — memory、cpu、io の各コントローラ
-- [I/Oスケジューラ](../block/io-schedulers.md) — io.weight が使う BFQ スケジューラ
-- [NVMe ドライバ](../block/nvme.md) — io コントローラの下にあるブロックデバイス
-- `block/blk-throttle.c` — io.max のスロットリング実装
-- `block/blk-iolatency.c` — io.latency の実装
-- `block/bfq-iosched.c` — 重みをサポートする BFQ I/Oスケジューラ
+- [cgroup v2のアーキテクチャ](cgroup-v2.md) — cgroup v2の階層とコントローラ
+- [リソースコントローラ](cgroup-controllers.md) — memory、cpu、ioの各コントローラ
+- [I/Oスケジューラ](../block/io-schedulers.md) — io.weightが使うBFQスケジューラ
+- [NVMeドライバ](../block/nvme.md) — ioコントローラの下にあるブロックデバイス
+- `block/blk-throttle.c` — io.maxのスロットリング実装
+- `block/blk-iolatency.c` — io.latencyの実装
+- `block/bfq-iosched.c` — 重みをサポートするBFQ I/Oスケジューラ

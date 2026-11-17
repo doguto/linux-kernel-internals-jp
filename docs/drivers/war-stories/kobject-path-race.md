@@ -25,7 +25,7 @@ CVSS
 
 *[事件簿: デバイスドライバ](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 カーネルがユーザー空間に送るすべてのuevent（`add`、`remove`、`change`、`move`）は`DEVPATH`フィールドを持つ。これはsysfsツリーにおけるデバイスの位置で、例えば`/devices/pci0000:00/.../net/eth0`のようなものである。`udevd`/`systemd-udevd`はこの文字列を`/sys`と連結して、イベントがどのsysfsノードを指しているかを正確に知り、さらに属性を読み、命名規則や権限規則を適用し、対応する`/dev`ノードを作成する。`kobject_get_path()`はこの文字列を、kobjectの`parent`チェーンをルートまでたどることで構築するが、それを2つの別々のパスで行う。`get_kobj_path_length()`はチェーンを1回たどり、すべての祖先について`strlen(kobject_name(parent)) + 1`を合計して、必要なバッファサイズを正確に計算する。続いて`kobject_get_path()`がちょうどそのサイズのバッファを割り当てて`fill_kobj_path()`を呼び出し、これが*同じ*チェーンをもう一度たどって、各祖先の名前を右から左へバッファに書き込む。2つのパスをまたいでロックを保持するものは何もない。コードは、チェーンとその中のすべての名前が2つのパスの間で変わらないことを信頼している。
 
@@ -161,4 +161,4 @@ Write of size 7 at addr ff1100090573d1fd by task kworker/28:1/673
 - [git.kernel.org: 3bb2a01caa81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3bb2a01caa813d3a1845d378bbe4169ef280d394) — "kobject: Fix slab-out-of-bounds in fill_kobj_path()"。修正コミットで、コミットメッセージに競合の全体図とKASANレポートを含む
 - [lore.kernel.org: v2パッチスレッド](https://lore.kernel.org/r/20221220012143.52141-1-wanghai38@huawei.com/) — Wang Haiの投稿と、Michal Swiatkowski / Greg Kroah-Hartmanとの議論
 - [NVD: CVE-2023-45863](https://nvd.nist.gov/vuln/detail/CVE-2023-45863) — CVEレコード。CVSS 3.1 6.4 MEDIUM、2023年10月14日公開
-- [Debian LTSアドバイザリ DLA-3710-1](https://lists.debian.org/debian-lts-announce/2024/01/msg00004.html) — この欠陥についての独立した説明
+- [Debian LTSアドバイザリDLA-3710-1](https://lists.debian.org/debian-lts-announce/2024/01/msg00004.html) — この欠陥についての独立した説明

@@ -11,7 +11,7 @@
 
 元の `stat()` syscall（および `time()`、`select()`、`utime()` など多数）は、タイムスタンプを
 `time_t` として格納していた。これは32ビットアーキテクチャでは符号付き32ビット整数である。32ビットの `time_t` は
-**2038年1月19日 03:14:07 UTC** にオーバーフローする。その瞬間、値は大きな負の数に折り返し、
+**2038年1月19日03:14:07 UTC** にオーバーフローする。その瞬間、値は大きな負の数に折り返し、
 1901年の時刻を表すことになる。
 
 ### カーネルが行ったこと {#what-the-kernel-did}
@@ -320,6 +320,6 @@ Linux 5.16（2022年1月にアップストリームでリリース）はsyscall�
 ## 外部参考資料 {#external-references}
 
 - [git.kernel.org: a528d35e8bfc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f) — "statx: Add a system call to make enhanced file info available"、David Howells、Linux 4.11向けにマージ（fs/stat.c）
-- [git.kernel.org: 3075d9da0b4c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3075d9da0b4ccc88959db30de80ebd11d2dde175) — "Use ERESTART_RESTARTBLOCK if poll() is interrupted by a signal"。EINTRの話の中心にある `poll()` についての主張の根拠となる fs/select.c の変更（Linux 2.6.24向けにマージ）
-- [カーネルドキュメント: ktime accessors](https://docs.kernel.org/core-api/timekeeping.html) — "Deprecated time interfaces" の節: "all interfaces returning a 'struct timeval' or 'struct timespec' have been replaced because the tv_sec member overflows in year 2038 on 32-bit architectures"（訳: 'struct timeval' や 'struct timespec' を返すインターフェースはすべて置き換えられた。32ビットアーキテクチャでは tv_sec メンバーが2038年にオーバーフローするためである）
+- [git.kernel.org: 3075d9da0b4c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3075d9da0b4ccc88959db30de80ebd11d2dde175) — "Use ERESTART_RESTARTBLOCK if poll() is interrupted by a signal"。EINTRの話の中心にある `poll()` についての主張の根拠となるfs/select.cの変更（Linux 2.6.24向けにマージ）
+- [カーネルドキュメント: ktime accessors](https://docs.kernel.org/core-api/timekeeping.html) — "Deprecated time interfaces" の節: "all interfaces returning a 'struct timeval' or 'struct timespec' have been replaced because the tv_sec member overflows in year 2038 on 32-bit architectures"（訳: 'struct timeval' や 'struct timespec' を返すインターフェースはすべて置き換えられた。32ビットアーキテクチャではtv_secメンバーが2038年にオーバーフローするためである）
 - [カーネルドキュメント: Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — syscallの番号付けについてのアップストリームのガイダンス（"these numbers are liable to be changed if there are conflicts in the relevant merge window"）と、新しいsyscallよりもioctl/sysfsなどのインターフェースを優先すべきことについて

@@ -1,8 +1,8 @@
-# Linux の namespace {#linux-namespaces}
+# Linuxのnamespace {#linux-namespaces}
 
 > プロセスから見えるものを隔離する
 
-## 8種類の namespace {#the-eight-namespace-types}
+## 8種類のnamespace {#the-eight-namespace-types}
 
 | namespace | フラグ | 隔離するもの | カーネル |
 |-----------|------|----------|--------|
@@ -12,12 +12,12 @@
 | PID | `CLONE_NEWPID` | プロセスID | 2.6.24 [(LWN)](https://lwn.net/Articles/259217/) |
 | Network | `CLONE_NEWNET` | ネットワークインターフェース、ルーティング、ソケット | 2.6.24 |
 | User | `CLONE_NEWUSER` | ユーザー/グループID | 3.9（完成） [(LWN)](https://lwn.net/Articles/532593/) |
-| Cgroup | `CLONE_NEWCGROUP` | cgroup ルートのビュー | 4.6 |
-| Time | `CLONE_NEWTIME` | CLOCK_MONOTONIC、CLOCK_BOOTTIME のオフセット | 5.6 |
+| Cgroup | `CLONE_NEWCGROUP` | cgroupルートのビュー | 4.6 |
+| Time | `CLONE_NEWTIME` | CLOCK_MONOTONIC、CLOCK_BOOTTIMEのオフセット | 5.6 |
 
-## namespace の作成 {#creating-namespaces}
+## namespaceの作成 {#creating-namespaces}
 
-### clone() — 新しい namespace の中に子を作成する {#clone-create-child-in-new-namespace}
+### clone() — 新しいnamespaceの中に子を作成する {#clone-create-child-in-new-namespace}
 
 ```c
 #define _GNU_SOURCE
@@ -45,7 +45,7 @@ int main(void)
 }
 ```
 
-### unshare() — 現在のプロセスが新しい namespace に入る {#unshare-current-process-enters-new-namespace}
+### unshare() — 現在のプロセスが新しいnamespaceに入る {#unshare-current-process-enters-new-namespace}
 
 ```c
 /* 共有している namespace から切り離す */
@@ -61,7 +61,7 @@ unshare --pid --mount --fork --mount-proc bash
 # これで隔離された PID+mount namespace に入り、ps にはこの bash のサブツリーだけが表示される
 ```
 
-### setns() — 既存の namespace に参加する {#setns-join-an-existing-namespace}
+### setns() — 既存のnamespaceに参加する {#setns-join-an-existing-namespace}
 
 ```c
 #include <fcntl.h>
@@ -79,9 +79,9 @@ close(nsfd);
 nsenter --target <pid> --mount --pid --net -- bash
 ```
 
-## struct nsproxy: タスクの namespace の集合 {#struct-nsproxy-the-tasks-namespace-set}
+## struct nsproxy: タスクのnamespaceの集合 {#struct-nsproxy-the-tasks-namespace-set}
 
-各タスクは、自身の namespace の集合への参照を保持する:
+各タスクは、自身のnamespaceの集合への参照を保持する:
 
 ```c
 /* include/linux/nsproxy.h */
@@ -101,11 +101,11 @@ struct nsproxy {
 struct nsproxy *nsproxy;
 ```
 
-すべての namespace を共有するプロセスは、同じ `nsproxy` を指す（参照カウント）。いずれかの namespace が分岐すると、新しい nsproxy が割り当てられる。
+すべてのnamespaceを共有するプロセスは、同じ `nsproxy` を指す（参照カウント）。いずれかのnamespaceが分岐すると、新しいnsproxyが割り当てられる。
 
 ## PID namespace {#pid-namespace}
 
-PID namespace は Linux 2.6.24 で導入された [(LWN)](https://lwn.net/Articles/259217/)。各 PID namespace は1から始まる独自の番号付けを持つ。1つのプロセスは、namespace ごとに異なる PID を持つ:
+PID namespaceはLinux 2.6.24で導入された [(LWN)](https://lwn.net/Articles/259217/)。各PID namespaceは1から始まる独自の番号付けを持つ。1つのプロセスは、namespaceごとに異なるPIDを持つ:
 
 ```
 Host PID namespace:        pid=1234 (systemd), pid=5678 (container init)
@@ -129,7 +129,7 @@ struct pid_namespace {
 };
 ```
 
-PID namespace における PID 1 は init である。これが終了すると、その namespace 内のすべてのプロセスが kill される。
+PID namespaceにおけるPID 1はinitである。これが終了すると、そのnamespace内のすべてのプロセスがkillされる。
 
 ```bash
 # PID の対応を確認する
@@ -139,7 +139,7 @@ cat /proc/1234/status | grep NSpid
 
 ## mount namespace {#mount-namespace}
 
-mount namespace（Linux 2.4.19、2002年）は、カーネルに最初に追加された namespace の種類である。そのため、フラグは `CLONE_NEWMNT` のような名前ではなく、汎用的な `CLONE_NEWNS` になっている。各 mount namespace はマウントツリーの独自のコピーを持つ。ある namespace での変更は他に影響しない。
+mount namespace（Linux 2.4.19、2002年）は、カーネルに最初に追加されたnamespaceの種類である。そのため、フラグは `CLONE_NEWMNT` のような名前ではなく、汎用的な `CLONE_NEWNS` になっている。各mount namespaceはマウントツリーの独自のコピーを持つ。あるnamespaceでの変更は他に影響しない。
 
 ```c
 /* fs/namespace.c */
@@ -180,11 +180,11 @@ mount --make-unbindable /mnt
 
 ## network namespace {#network-namespace}
 
-各 network namespace は、次のものを独自に持つ:
+各network namespaceは、次のものを独自に持つ:
 
-- ネットワークインターフェース（ただしループバックは namespace ごとに別々）
+- ネットワークインターフェース（ただしループバックはnamespaceごとに別々）
 - IPルーティングテーブル
-- Netfilter のルール（iptables）
+- Netfilterのルール（iptables）
 - ソケットテーブル
 - `/proc/net/` のビュー
 
@@ -245,7 +245,7 @@ ls /var/run/netns/
 
 ## user namespace {#user-namespace}
 
-user namespace は、Linux 3.9 で Eric W. Biederman によって機能的に完成し、非特権ユーザーから使えるようになった [(commit)](https://git.kernel.org/linus/94f2f14234178f118545a0be60a6371ddeb229b7) [(LWN)](https://lwn.net/Articles/532593/)。user namespace は内側と外側の間で UID/GID をマップする:
+user namespaceは、Linux 3.9でEric W. Biedermanによって機能的に完成し、非特権ユーザーから使えるようになった [(commit)](https://git.kernel.org/linus/94f2f14234178f118545a0be60a6371ddeb229b7) [(LWN)](https://lwn.net/Articles/532593/)。user namespaceは内側と外側の間でUID/GIDをマップする:
 
 ```c
 /* kernel/user_namespace.c */
@@ -292,14 +292,14 @@ echo "0 1000 10" > /proc/<pid>/uid_map
 # 内側の UID 0-9 が外側の UID 1000-1009 にマップされる
 ```
 
-重要な性質は、プロセスが user namespace の中では UID 0（root）でありながら、その外側では何の特権も持たない、という点である。これにより rootless コンテナが可能になる。
+重要な性質は、プロセスがuser namespaceの中ではUID 0（root）でありながら、その外側では何の特権も持たない、という点である。これによりrootlessコンテナが可能になる。
 
 ### ケーパビリティの範囲 {#capability-scope}
 
-user namespace 内のケーパビリティは、その namespace とその子孫が所有するリソースに対してのみ特権を与える。user namespace 内の root は次のことができない:
+user namespace内のケーパビリティは、そのnamespaceとその子孫が所有するリソースに対してのみ特権を与える。user namespace内のrootは次のことができない:
 
 - カーネルモジュールのロード
-- namespace 外のカーネルパラメータの変更
+- namespace外のカーネルパラメータの変更
 - ホスト上の他のユーザーが所有するファイルの読み取り
 
 ## UTS namespace {#uts-namespace}
@@ -320,9 +320,9 @@ struct uts_namespace {
 };
 ```
 
-## namespace のファイルディスクリプタ {#namespace-file-descriptors}
+## namespaceのファイルディスクリプタ {#namespace-file-descriptors}
 
-namespace は、次のいずれかが成り立つ限り存続する:
+namespaceは、次のいずれかが成り立つ限り存続する:
 1. プロセスがその中にいる、または
 2. ファイルディスクリプタが開かれている、または
 3. `/proc/<pid>/ns/<type>` や `/var/run/netns/` へのバインドマウントがある
@@ -334,7 +334,7 @@ mount --bind /proc/<pid>/ns/net /var/run/netns/myns
 # これで、作成したプロセスが終了した後も myns は存続する
 ```
 
-## namespace の観察 {#observing-namespaces}
+## namespaceの観察 {#observing-namespaces}
 
 ```bash
 # 全プロセスの namespace ID を確認する（一致 = 共有）
@@ -357,7 +357,7 @@ lsns -t net
 
 ## 参考文献 {#further-reading}
 
-- [コンテナの隔離](container-isolation.md) — namespace と cgroup の組み合わせ方
-- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — 隔離を補完するリソース制御
-- `man 7 namespaces` — 全種類の namespace についてのカーネルドキュメント
+- [コンテナの隔離](container-isolation.md) — namespaceとcgroupの組み合わせ方
+- [cgroup v2のアーキテクチャ](cgroup-v2.md) — 隔離を補完するリソース制御
+- `man 7 namespaces` — 全種類のnamespaceについてのカーネルドキュメント
 - `man 2 clone`、`man 2 unshare`、`man 2 setns`

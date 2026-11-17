@@ -9,7 +9,7 @@
 :   Daniel Borkmann
 
 マージ先
-:   [`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5)、メインライン v5.13-rc4
+:   [`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5)、メインラインv5.13-rc4
 
 仕組み
 :   `CONFIG_BPF_UNPRIV_DEFAULT_OFF`
@@ -85,7 +85,7 @@ BPFの非特権安全性という目標は、verifierが敵対的なプログラ
 
 この変更が具体的に何で*ない*かに注意してほしい。非特権BPFを削除するものではなく、既存の無効化スイッチを永続的にするものでもない。デフォルトを変え、スイッチを双方向にするものである。
 
-`CONFIG_BPF_UNPRIV_DEFAULT_OFF`オプション自体は、当初はビルドする側がオプトインしなければならないものだった。このパッチがマージされた時点では`kernel/bpf/Kconfig`に`default`が付いておらず、configで明示的に有効にしない限りオフのままだった。それは5か月後に変わった。[`8a03e56b253e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204)（"bpf: Disallow unprivileged bpf by default"、Pawan Gupta、2021年10月29日、メインライン v5.16）がこのオプションに`default y`を追加した。明示的に「多くのディストリビューションがすでに適用しているものと同期するため」である。v5.16以降、非特権BPFが無効（値2）であることは、上書きしないすべてのカーネルにとってアップストリームのデフォルト*そのもの*であり、単にディストリビュータがその上に重ねた選択ではない。
+`CONFIG_BPF_UNPRIV_DEFAULT_OFF`オプション自体は、当初はビルドする側がオプトインしなければならないものだった。このパッチがマージされた時点では`kernel/bpf/Kconfig`に`default`が付いておらず、configで明示的に有効にしない限りオフのままだった。それは5か月後に変わった。[`8a03e56b253e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204)（"bpf: Disallow unprivileged bpf by default"、Pawan Gupta、2021年10月29日、メインラインv5.16）がこのオプションに`default y`を追加した。明示的に「多くのディストリビューションがすでに適用しているものと同期するため」である。v5.16以降、非特権BPFが無効（値2）であることは、上書きしないすべてのカーネルにとってアップストリームのデフォルト*そのもの*であり、単にディストリビュータがその上に重ねた選択ではない。
 
 ## 解決 {#resolution}
 

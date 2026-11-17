@@ -15,7 +15,7 @@ struct page *pages = alloc_pages(GFP_KERNEL, 10);  // order 10 = 4MB (1024 pages
 void *buf = kmalloc(4 * 1024 * 1024, GFP_KERNEL);
 ```
 
-*注: [`MAX_PAGE_ORDER`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) はほとんどの構成で通常10（4KBページで4MB）である。`kmalloc()` には個別のサイズ上限はなく、大きな要求は内部で高次（high-order）ページ割り当てになる（mm/slub.c の `__kmalloc_large_noprof()` を参照）。*
+*注: [`MAX_PAGE_ORDER`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) はほとんどの構成で通常10（4KBページで4MB）である。`kmalloc()` には個別のサイズ上限はなく、大きな要求は内部で高次（high-order）ページ割り当てになる（mm/slub.cの `__kmalloc_large_noprof()` を参照）。*
 
 答えは**外部断片化**である。空きメモリは存在するが、連続した塊になっていないのだ。
 

@@ -15,7 +15,7 @@ CVSS
 :   [`484611357c19`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=484611357c19f9e19ef742ebef4505a07d243cc9)（"bpf: allow access into map value arrays"、v4.9）
 
 修正バージョン
-:   [`95a762e2c8c9`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95a762e2c8c942780948091f8f2a4f32fce1ac6f)、メインライン v4.15-rc5
+:   [`95a762e2c8c9`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95a762e2c8c942780948091f8f2a4f32fce1ac6f)、メインラインv4.15-rc5
 
 エクスプロイトツール
 :   あり — Exploit-DBに3件のエントリがあり、[Metasploitモジュール](https://www.exploit-db.com/exploits/45058)を含む
@@ -25,7 +25,7 @@ CVSS
 
 *[事件簿: BPF verifierのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 BPF命令セットには2つのクラスのALU操作がある。64ビットのレジスタ全体に作用する`BPF_ALU64`と、下位32ビットに作用し上位をゼロで埋める`BPF_ALU`である。どちらのクラスにも32ビット即値オペランドを取る`MOV`があり、その2つは実行時に異なる振る舞いをする。
 

@@ -98,7 +98,7 @@ cat /proc/zoneinfo | grep -A 20 "zone   Normal"
 
 ## 段階2: バックグラウンド回収（kswapd） {#stage-2-background-reclaim-kswapd}
 
-空きページが low ウォーターマークを下回ると、`kswapd` が起床し、バックグラウンドでページを回収する。
+空きページがlowウォーターマークを下回ると、`kswapd` が起床し、バックグラウンドでページを回収する。
 
 ### kswapdの仕組み {#kswapd-mechanics}
 
@@ -174,7 +174,7 @@ sysctl vm.swappiness=10  # スワップを最小化
 
 ## 段階3: 直接回収 {#stage-3-direct-reclaim}
 
-kswapdが追いつかず、空きページが min ウォーターマークを下回ると、割り当てを行うプロセス自身がページの回収を手伝わなければならない。
+kswapdが追いつかず、空きページがminウォーターマークを下回ると、割り当てを行うプロセス自身がページの回収を手伝わなければならない。
 
 ### 割り当ての低速パス {#the-allocation-slowpath}
 
@@ -708,7 +708,7 @@ Habetsは[oom_pardonパッチ](https://lwn.net/Articles/104145/)を投稿し、�
 
 > *"How about a sysctl that does 'for the love of kbaek, don't ever kill these processes when OOM. If nothing else can be killed, I'd rather you panic.' Examples for this list would be /usr/bin/vlock and /usr/X11R6/bin/xlock."*
 
-（訳: 「頼むから、OOM時にこれらのプロセスだけは絶対に殺さないでくれ。他に殺せるものがないなら、むしろパニックしてくれ」というsysctlはどうだろう。このリストの例としては /usr/bin/vlock や /usr/X11R6/bin/xlock がある。）
+（訳: 「頼むから、OOM時にこれらのプロセスだけは絶対に殺さないでくれ。他に殺せるものがないなら、むしろパニックしてくれ」というsysctlはどうだろう。このリストの例としては /usr/bin/vlockや /usr/X11R6/bin/xlockがある。）
 
 #### コミュニティの反応 {#community-response}
 
@@ -716,7 +716,7 @@ Habetsは[oom_pardonパッチ](https://lwn.net/Articles/104145/)を投稿し、�
 
 > *"The rest of us just turn on 'no overcommit' in /proc/sys. That way we get told before takeoff that there isn't enough memory instead."*
 
-（訳: 我々は /proc/sys で「オーバーコミットなし」を有効にしている。そうすれば、離陸前にメモリが足りないと教えてもらえる。）
+（訳: 我々は /proc/sysで「オーバーコミットなし」を有効にしている。そうすれば、離陸前にメモリが足りないと教えてもらえる。）
 
 Andries Brouwerは印象的な[たとえ話](https://lwn.net/Articles/104179/)を披露した。
 
@@ -874,7 +874,7 @@ Red HatのChris Murphyは、Fedora 32で[earlyoomをデフォルトで有効に�
 
 > *"With this patch and min_filelist_kbytes set to 50000, there is very little block layer activity during low memory. The system stays responsive under low memory and browser tab switching is fast."*
 
-（訳: このパッチを適用し min_filelist_kbytes を50000に設定すると、低メモリ時のブロック層の活動はごくわずかになる。システムは低メモリ下でも応答性を保ち、ブラウザのタブ切り替えも速い。）
+（訳: このパッチを適用しmin_filelist_kbytesを50000に設定すると、低メモリ時のブロック層の活動はごくわずかになる。システムは低メモリ下でも応答性を保ち、ブラウザのタブ切り替えも速い。）
 
 ChromeOSは同様のファイル保護パッチを10年近く使ってきたが、それらはアップストリームにマージされていない。
 
@@ -941,7 +941,7 @@ Hiroyukiはヒューリスティックを用いた[フォーク爆弾キラー](
 
 > *"The process number controller is used to allow a cgroup hierarchy to stop any new tasks from being fork()'d or clone()'d after a certain limit is reached. Since it is trivial to hit the task limit without hitting any kmemcg limits in place, PIDs are a fundamental resource."*
 
-（訳: プロセス数コントローラは、一定の上限に達した後、cgroup階層が新しいタスクの fork() や clone() を止められるようにするために使われる。設定済みのkmemcgの上限に達することなくタスク数の上限に達するのは容易なので、PIDは基本的な資源である。）
+（訳: プロセス数コントローラは、一定の上限に達した後、cgroup階層が新しいタスクのfork() やclone() を止められるようにするために使われる。設定済みのkmemcgの上限に達することなくタスク数の上限に達するのは容易なので、PIDは基本的な資源である。）
 
 **コミット**: [49b786ea146f](https://git.kernel.org/linus/49b786ea146f)（"cgroup: add pids controller"）
 
@@ -969,7 +969,7 @@ Tetsuo Handa（mmap_semのデッドロックを発見したのと同じ開発者
 
 > *"A deadlock could occur in the Out of Memory (OOM) killer. A process could trigger this deadlock by consuming a large amount of memory, and then causing request_module() to be called."*
 
-（訳: Out of Memory（OOM）killerでデッドロックが発生する可能性があった。プロセスは大量のメモリを消費し、その後 request_module() を呼び出させることで、このデッドロックを引き起こせた。）
+（訳: Out of Memory（OOM）killerでデッドロックが発生する可能性があった。プロセスは大量のメモリを消費し、その後request_module() を呼び出させることで、このデッドロックを引き起こせた。）
 
 攻撃パターン:
 1. 大量のメモリを割り当ててOOM状態を引き起こす

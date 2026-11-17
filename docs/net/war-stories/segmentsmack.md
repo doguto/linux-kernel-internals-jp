@@ -12,7 +12,7 @@ CVSS
 :   7.5 HIGH
 
 修正バージョン
-:   4.9.116、4.14.59、4.17.11、メインライン 4.18
+:   4.9.116、4.14.59、4.17.11、メインライン4.18
 
 エクスプロイトツール
 :   公開されたものはない — 文書化されたトラフィックパターンが攻撃のすべてである
@@ -22,7 +22,7 @@ CVSS
 
 *[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## 発生前の状態 {#before-state}
+## 事前の状態 {#before-state}
 
 TCPセグメントが順序外で到着すると、カーネルはそれをソケットごとの順序外（OFO）キューに保持する。これはシーケンス番号をキーとするrbtree（`tp->out_of_order_queue`。コミット[`9f5afeae5152`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9f5afeae51526b3ad7b7cb21ee8b145ce6ea7a7a) "tcp: use an RB tree for ooo receive queue"で導入）であり、後から来たセグメントをおよそO(log n)時間で挿入し、既存の範囲とマージできる。Eric Dumazetは2016年9月にYaogong Wangに代わって[この変換を投稿した](https://lore.kernel.org/netdev/1473284968.15733.8.camel@edumazet-glaptop3.roam.corp.google.com/)。それに続くレビューは完全に正しさについてであり、攻撃対象領域についてではなかった。Ilpo Järvinenは特に、ストリーム破損のテストが行われたかどうかを尋ね（"This kind of changes have some potential to cause some corruption to the stream content"（訳: この種の変更は、ストリームの内容に何らかの破損を引き起こす可能性がある））、Dumazetは最大10%のパケットロスのもとでGoogleの実際のフロントエンドでテストしたと答えた。そのスレッドの誰も、到着のロス率だけでなく*順序*を操作できる敵対者が新しいツリーに何をしうるかを考えなかった。それこそが、2年後にSegmentSmackがやって来た角度である。メモリ逼迫時には、関連する2つのルーチンがこのキューを管理する。
 
