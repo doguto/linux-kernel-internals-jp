@@ -1,5 +1,7 @@
 site_name: Linux Kernel Internals 日本語版
 site_description: Linuxカーネルの内部構造、設計判断、コントリビュートの道のりに関するドキュメント（kernel-internals.org の非公式日本語訳）
+site_url: https://doguto.github.io/linux-kernel-internals-jp/
+repo_url: https://github.com/doguto/linux-kernel-internals-jp
 copyright: '原文 <a href="https://kernel-internals.org/">kernel-internals.org</a>（<a href="https://github.com/laveeshb/linux-kernel-internals">laveeshb/linux-kernel-internals</a>）を翻訳。ドキュメントは <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja">CC BY-SA 4.0</a>、コード片は GPL-2.0 で提供される。'
 
 theme:

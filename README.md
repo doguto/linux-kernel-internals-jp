@@ -1,32 +1,29 @@
-# Linux Kernel Internals
+# Linux Kernel Internals 日本語版
 
-A community hub for understanding the Linux kernel — documentation and discussions about design decisions, internals, and the journey of contributing. Where docs.kernel.org explains *what* the kernel does, this site focuses on *why* it's designed that way: the trade-offs, the failed alternatives, and the LKML debates behind them.
+[kernel-internals.org](https://kernel-internals.org/)（[laveeshb/linux-kernel-internals](https://github.com/laveeshb/linux-kernel-internals)）の非公式日本語訳。
 
-**[View the documentation](https://kernel-internals.org/)**
+Linuxカーネルの各サブシステムについて、*何を*しているかだけでなく、*なぜ*そう設計されているのか（トレードオフ、採用されなかった代替案、その背後にあるLKMLでの議論）を解説するドキュメント群である。
 
-## What's inside
+**[日本語版サイトを見る](https://doguto.github.io/linux-kernel-internals-jp/)**
 
-Documentation spanning every major subsystem, with sourced citations (kernel commits, LWN, lore) and end-to-end "life of a ..." walkthroughs. Mirrors the site's own nav structure:
+## 翻訳について
 
-| Area | Sections |
-|------|----------|
-| Foundations | [Kernel internals](docs/kernel/) · [Architecture](docs/arch/) (x86-64, arm64: page tables, syscall entry, Spectre/Meltdown) · [Syscalls](docs/syscalls/) · [Time & timers](docs/time/) · [Modules](docs/modules/) |
-| Memory | [Memory management](docs/mm/) (allocators, reclaim, MGLRU, DAMON, CXL tiering, folios, THP…) · [IOMMU](docs/iommu/) |
-| Scheduling & concurrency | [Scheduler](docs/sched/) (EEVDF, deadline, EAS…) · [Locking & RCU](docs/locking/) · [Interrupts](docs/interrupts/) · [IPC](docs/ipc/) |
-| Storage & I/O | [VFS](docs/vfs/) · [Filesystems](docs/filesystems/) · [Block layer](docs/block/) · [I/O paths](docs/io/) · [io_uring](docs/io-uring/) |
-| Devices & drivers | [Device drivers](docs/drivers/) · [USB](docs/usb/) · [GPU/DRM](docs/drm/) · [Sound/ALSA](docs/alsa/) · [Input/HID](docs/input/) · [TTY/serial](docs/tty/) |
-| Networking & BPF | [Network stack](docs/net/) (XDP, AF_XDP, kTLS, netfilter, namespaces…) · [BPF/eBPF](docs/bpf/) |
-| Isolation & security | [Security](docs/security/) (SELinux, Landlock, seccomp…) · [Cgroups & namespaces](docs/cgroups/) · [Virtualization/KVM](docs/virtualization/) · [Crypto](docs/crypto/) · [Livepatch](docs/livepatch/) |
-| Observability | [Tracing](docs/tracing/) · [Debugging](docs/debugging/) · [Power management](docs/power/) |
+- 原文: [laveeshb/linux-kernel-internals@6ee74a0](https://github.com/laveeshb/linux-kernel-internals/commit/6ee74a0b2e5f49c75d107ac4935369f73a004546) 時点の内容を翻訳している。
+- 訳語・表記の方針は [TRANSLATION_GUIDE.md](TRANSLATION_GUIDE.md) を参照。
+- 見出しのアンカー（`{#slug}`）は原文の英語のまま固定しており、原文と同じ `#fragment` でリンクできる。
+- 誤訳・改善案は Issue / Pull Request で歓迎する。内容そのものの誤りは原文リポジトリへ報告してほしい。
 
-## Quick Links
+## ローカルでのビルド
 
-- [Contributing Guide](docs/contributing.md) - Get started as a contributor
-- [GitHub Discussions](../../discussions) - Questions and conversations
-- [Issues](../../issues) - Suggest topics or report problems
+```bash
+pip install -r requirements.txt
+mkdocs serve
+```
 
-## License
+## ライセンス
 
-- Documentation: [CC BY-SA 4.0](LICENSE-CC-BY-SA-4.0)
-- Code snippets: [GPL-2.0](LICENSE-GPL-2.0)
-- Tux logo: Larry Ewing (original), Simon Budig (SVG)
+原文と同じく以下のライセンスで提供する。
+
+- ドキュメント: [CC BY-SA 4.0](LICENSE-CC-BY-SA-4.0)（原著作者: laveeshb および linux-kernel-internals のコントリビュータ。本リポジトリは翻訳による改変を含む）
+- コード片: [GPL-2.0](LICENSE-GPL-2.0)
+- Tux ロゴ: Larry Ewing（原画）、Simon Budig（SVG）
