@@ -1,46 +1,46 @@
 # CFS: Completely Fair Scheduler {#cfs-completely-fair-scheduler}
 
-> Virtual runtime, weighted fairness, and the red-black tree
+> 仮想実行時間、重み付き公平性、そして赤黒木
 
-## What CFS guarantees {#what-cfs-guarantees}
+## CFSが保証するもの {#what-cfs-guarantees}
 
-CFS gives every task an equal share of CPU time, weighted by its priority. A process at nice -5 gets roughly 3x more CPU than a process at nice +5 — and that ratio holds even when the system is overloaded.
+CFSは、すべてのタスクに、優先度で重み付けされた等しいCPU時間の取り分を与える。nice -5のプロセスは、nice +5のプロセスのおよそ3倍のCPUを得る。この比率はシステムが過負荷のときでも保たれる。
 
-The "completely fair" property: if you run N tasks of equal priority, each gets exactly 1/N of the CPU, regardless of when they were created, when they last ran, or how long they've been sleeping.
+「完全に公平」という性質とは、同じ優先度のタスクをN個実行すると、いつ作成されたか、最後にいつ実行されたか、どれだけスリープしていたかにかかわらず、それぞれがちょうどCPUの1/Nを得るということである。
 
-## Virtual runtime {#virtual-runtime}
+## 仮想実行時間 {#virtual-runtime}
 
-The central concept is **vruntime**: a measure of how much CPU time a task has consumed, scaled by its weight.
+中心となる概念は**vruntime**である。これは、タスクが消費したCPU時間を、その重みでスケールした尺度である。
 
 ```
 vruntime += (real time elapsed) × (NICE_0_WEIGHT / task weight)
 ```
 
-A high-weight task (nice -20) advances vruntime slowly — it gets more real CPU time per unit of virtual time. A low-weight task (nice +19) advances vruntime quickly.
+重みの大きいタスク（nice -20）はvruntimeがゆっくり進む。仮想時間の単位あたりに、より多くの実際のCPU時間を得る。重みの小さいタスク（nice +19）はvruntimeが速く進む。
 
-The scheduler always picks the task with the **smallest vruntime**. Combined with weight-based scaling, this achieves weighted fairness automatically.
+スケジューラは常に**vruntimeが最小の**タスクを選ぶ。重みに基づくスケーリングと組み合わせることで、これは自動的に重み付き公平性を実現する。
 
-### An example {#an-example}
+### 例 {#an-example}
 
-Three tasks: A (nice -5, weight 3121), B (nice 0, weight 1024), C (nice +5, weight 335).
+3つのタスク: A（nice -5、重み3121）、B（nice 0、重み1024）、C（nice +5、重み335）。
 
-Total weight = 4480. Ideal CPU shares:
+重みの合計 = 4480。理想的なCPUの取り分:
 
 - A: 3121/4480 = 69.7%
 - B: 1024/4480 = 22.9%
 - C:  335/4480 =  7.5%
 
-CFS achieves this by making vruntime advance at different rates:
+CFSは、vruntimeを異なる速さで進めることでこれを実現する:
 
-- A's vruntime grows at `1024/3121` of real time (~0.33x)
-- B's vruntime grows at `1024/1024` of real time (1.0x)
-- C's vruntime grows at `1024/335` of real time (~3.1x)
+- Aのvruntimeは実時間の`1024/3121`（約0.33倍）で増える
+- Bのvruntimeは実時間の`1024/1024`（1.0倍）で増える
+- Cのvruntimeは実時間の`1024/335`（約3.1倍）で増える
 
-After 1 second of real time, all three tasks will have similar vruntimes — but A ran for ~697ms, B for ~229ms, C for ~75ms.
+実時間で1秒経つと、3つのタスクはすべて似たようなvruntimeになるが、Aは約697ms、Bは約229ms、Cは約75ms実行している。
 
-## Weights and nice values {#weights-and-nice-values}
+## 重みとnice値 {#weights-and-nice-values}
 
-Nice-to-weight mapping is a fixed table in the kernel:
+niceから重みへの対応は、カーネル内の固定テーブルである:
 
 ```c
 // kernel/sched/core.c
@@ -56,55 +56,55 @@ const int sched_prio_to_weight[40] = {
 };
 ```
 
-Each step is ~1.25x. A task at nice -1 gets ~25% more CPU than nice 0. At nice -20 vs nice +19, the ratio is 88761/15 ≈ 5917x — nearly a 6000:1 difference. The 1.25x ratio was chosen so that a `nice +1` change causes a ~10% throughput difference — see the [table definition commit](https://git.kernel.org/linus/20f9cd8e0e3b2c11b3fb576a88e8e5aef3c91a13) and comments in `kernel/sched/core.c`.
+各段階は約1.25倍である。nice -1のタスクは、nice 0より約25%多くのCPUを得る。nice -20とnice +19では比率は88761/15 ≈ 5917倍で、ほぼ6000:1の差になる。1.25倍という比率は、`nice +1`の変更でスループットに約10%の差が出るように選ばれた。[テーブルを定義したコミット](https://git.kernel.org/linus/20f9cd8e0e3b2c11b3fb576a88e8e5aef3c91a13)と`kernel/sched/core.c`のコメントを参照のこと。
 
-## Data structures {#data-structures}
+## データ構造 {#data-structures}
 
 ### struct sched_entity {#struct-sched_entity}
 
-Every task that CFS manages is tracked through `struct sched_entity`, embedded in `task_struct`:
+CFSが管理するすべてのタスクは、`task_struct`に埋め込まれた`struct sched_entity`を通じて追跡される:
 
 ```c
 // include/linux/sched.h
 struct sched_entity {
-    struct load_weight  load;             // weight (from nice value)
-    u64                 vruntime;         // virtual runtime
-    u64                 exec_start;       // wall time when last updated
-    u64                 sum_exec_runtime; // total real CPU time consumed
-    u64                 deadline;         // EEVDF virtual deadline
-    u64                 slice;            // EEVDF time slice
-    u64                 vlag;             // EEVDF lag
+    struct load_weight  load;             // 重み（nice値から）
+    u64                 vruntime;         // 仮想実行時間
+    u64                 exec_start;       // 最後に更新されたときの実時間
+    u64                 sum_exec_runtime; // 消費した実際のCPU時間の合計
+    u64                 deadline;         // EEVDFの仮想デッドライン
+    u64                 slice;            // EEVDFのタイムスライス
+    u64                 vlag;             // EEVDFのlag
     // ...
-    struct rb_node      run_node;         // position in cfs_rq RB-tree
+    struct rb_node      run_node;         // cfs_rqの赤黒木内の位置
     struct list_head    group_node;
-    unsigned int        on_rq;            // currently queued?
+    unsigned int        on_rq;            // 現在キューに入っているか？
     // ...
 };
 ```
 
 ### struct cfs_rq {#struct-cfs_rq}
 
-Each CPU has one CFS runqueue:
+各CPUは1つのCFSランキューを持つ:
 
 ```c
 // kernel/sched/sched.h
 struct cfs_rq {
-    struct rb_root_cached tasks_timeline; // RB-tree of runnable tasks
-    struct sched_entity  *curr;           // currently running entity
-    struct sched_entity  *next;           // buddy hint (wakeup preemption)
-    unsigned int          nr_queued;      // number of runnable tasks
-    s64                   avg_vruntime;   // weighted vruntime sum (for eligibility)
+    struct rb_root_cached tasks_timeline; // 実行可能なタスクの赤黒木
+    struct sched_entity  *curr;           // 現在実行中のエンティティ
+    struct sched_entity  *next;           // buddyのヒント（起床時プリエンプション）
+    unsigned int          nr_queued;      // 実行可能なタスクの数
+    s64                   avg_vruntime;   // 重み付きvruntimeの合計（適格性の判定用）
     // ...
 };
 ```
 
-`tasks_timeline` is an `rb_root_cached` — a red-black tree that also caches a pointer to the leftmost (minimum vruntime) node, making `O(1)` access to the next task to run.
+`tasks_timeline`は`rb_root_cached`である。これは最左（最小vruntime）のノードへのポインタもキャッシュする赤黒木であり、次に実行するタスクへ`O(1)`でアクセスできる。
 
-## Core functions {#core-functions}
+## 中核となる関数 {#core-functions}
 
 ### update_curr() {#update_curr}
 
-Called on every timer tick and context switch for the running task:
+実行中のタスクについて、タイマーティックとコンテキストスイッチのたびに呼び出される:
 
 ```c
 // kernel/sched/fair.c
@@ -125,29 +125,29 @@ static void update_curr(struct cfs_rq *cfs_rq)
     curr->sum_exec_runtime += delta_exec;
     curr->vruntime += calc_delta_fair(delta_exec, curr);
 
-    // update_deadline() and avg_vruntime maintenance omitted
+    // update_deadline()とavg_vruntimeの維持は省略
 }
 ```
 
 ### enqueue_entity() / dequeue_entity() {#enqueue_entity-dequeue_entity}
 
-When a task wakes up or blocks:
+タスクが起床またはブロックしたとき:
 
 ```c
-// kernel/sched/fair.c (simplified)
+// kernel/sched/fair.c（簡略化）
 static void enqueue_entity(struct cfs_rq *cfs_rq,
                             struct sched_entity *se, int flags)
 {
-    // Place the entity in the RB-tree
+    // エンティティを赤黒木に配置する
     __enqueue_entity(cfs_rq, se);
     se->on_rq = 1;
-    // Update load tracking, avg_vruntime, etc.
+    // 負荷追跡、avg_vruntimeなどを更新する
 }
 
 static bool dequeue_entity(struct cfs_rq *cfs_rq,
                              struct sched_entity *se, int flags)
 {
-    // Remove from RB-tree
+    // 赤黒木から取り除く
     __dequeue_entity(cfs_rq, se);
     se->on_rq = 0;
     return true;
@@ -156,7 +156,7 @@ static bool dequeue_entity(struct cfs_rq *cfs_rq,
 
 ### pick_next_entity() {#pick_next_entity}
 
-Selects the next task to run — since 6.6 ([`147f3efaa241`](https://git.kernel.org/linus/147f3efaa24182a21706bca15eab2f3f4630b5fe), [`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c)), this delegates to EEVDF:
+次に実行するタスクを選ぶ。6.6以降（[`147f3efaa241`](https://git.kernel.org/linus/147f3efaa24182a21706bca15eab2f3f4630b5fe)、[`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c)）、これはEEVDFに委譲されている:
 
 ```c
 // kernel/sched/fair.c
@@ -167,7 +167,7 @@ pick_next_entity(struct rq *rq, struct cfs_rq *cfs_rq)
 }
 ```
 
-## The scheduling timeline {#the-scheduling-timeline}
+## スケジューリングのタイムライン {#the-scheduling-timeline}
 
 ```mermaid
 sequenceDiagram
@@ -176,24 +176,24 @@ sequenceDiagram
     participant CFS as fair_sched_class
     participant RB as RB-tree
 
-    Timer->>Sched: tick → task_tick_fair()
-    Sched->>CFS: update_curr() — advance vruntime
-    CFS->>CFS: check if curr should be preempted
-    CFS-->>Sched: set TIF_NEED_RESCHED if yes
+    Timer->>Sched: ティック → task_tick_fair()
+    Sched->>CFS: update_curr() — vruntimeを進める
+    CFS->>CFS: currをプリエンプトすべきかチェック
+    CFS-->>Sched: そうならTIF_NEED_RESCHEDをセット
 
-    Note over Sched: Later, at preemption point...
+    Note over Sched: 後で、プリエンプションポイントにて...
 
-    Sched->>CFS: put_prev_task() — dequeue or requeue curr
+    Sched->>CFS: put_prev_task() — currをデキューまたは再キュー
     Sched->>CFS: pick_next_task() → pick_eevdf()
-    CFS->>RB: find earliest-deadline eligible task
-    RB-->>CFS: next sched_entity
+    CFS->>RB: デッドラインが最も早い適格なタスクを探す
+    RB-->>CFS: 次のsched_entity
     CFS-->>Sched: task_struct *next
     Sched->>Sched: context_switch(prev, next)
 ```
 
-## Group scheduling {#group-scheduling}
+## グループスケジューリング {#group-scheduling}
 
-CFS supports hierarchical scheduling via cgroups. When `CONFIG_FAIR_GROUP_SCHED` is enabled, the RB-tree contains not just tasks but also **group scheduling entities** — virtual entities representing cgroups.
+CFSはcgroupを通じた階層的なスケジューリングをサポートする。`CONFIG_FAIR_GROUP_SCHED`が有効な場合、赤黒木にはタスクだけでなく、cgroupを表す仮想的なエンティティである**グループスケジューリングエンティティ**も含まれる。
 
 ```
 CPU
@@ -205,34 +205,34 @@ CPU
     └── task D
 ```
 
-Each group gets a share of CPU time as a single entity, then distributes it among its members. This allows setting CPU shares per container without each container's tasks competing directly with others.
+各グループは1つのエンティティとしてCPU時間の取り分を得て、それをメンバー間で配分する。これにより、各コンテナのタスクが他のコンテナのタスクと直接競合することなく、コンテナごとにCPUの取り分を設定できる。
 
-## Viewing CFS state {#viewing-cfs-state}
+## CFSの状態を見る {#viewing-cfs-state}
 
 ```bash
-# Per-task scheduler info
+# タスクごとのスケジューラ情報
 cat /proc/$PID/sched
-# Shows: vruntime, exec_start, sum_exec_runtime, prio, etc.
+# 表示内容: vruntime、exec_start、sum_exec_runtime、prioなど
 
-# System-wide CFS stats per CPU
+# CPUごとのシステム全体のCFS統計
 cat /proc/schedstat
 
-# Detailed task scheduler info via perf
+# perfによる詳細なタスクのスケジューラ情報
 perf sched record ./workload
 perf sched latency
 ```
 
-## Common misconceptions {#common-misconceptions}
+## よくある誤解 {#common-misconceptions}
 
-**"CFS gives equal CPU to all tasks"** — No. Equal CPU to tasks of equal *priority*. Nice values determine the ratio.
+**「CFSはすべてのタスクに等しいCPUを与える」** — 違う。等しいCPUが与えられるのは、*優先度*が等しいタスク同士である。比率はnice値によって決まる。
 
-**"A task sleeping for a long time will get a CPU burst when it wakes up"** — Partially. The task's vruntime is placed at `avg_vruntime - half_slice` when it wakes, so it runs soon but doesn't monopolize the CPU.
+**「長時間スリープしていたタスクは、起床したときにCPUのバーストを得る」** — 部分的には正しい。起床時にタスクのvruntimeは`avg_vruntime - half_slice`に配置されるので、すぐに実行されるが、CPUを独占することはない。
 
-**"CFS is still the scheduler in modern kernels"** — The `fair_sched_class` is, yes. But `pick_next_entity()` now calls `pick_eevdf()` instead of the old leftmost-node logic. EEVDF replaced the selection mechanism inside CFS in kernel 6.6.
+**「現代のカーネルでもスケジューラはCFSである」** — `fair_sched_class`はそのとおりである。しかし、`pick_next_entity()`は現在、古い最左ノードのロジックではなく`pick_eevdf()`を呼び出す。カーネル6.6で、EEVDFがCFS内部の選択の仕組みを置き換えた。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [EEVDF Scheduler](eevdf.md) — The selection algorithm that replaced CFS's leftmost-node approach
-- [Scheduler Classes](scheduler-classes.md) — Where CFS fits in the class hierarchy
-- [Runqueues](runqueues.md) — The per-CPU `struct rq` that contains `struct cfs_rq`
-- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — Source (14,000+ lines)
+- [EEVDFスケジューラ](eevdf.md) — CFSの最左ノード方式を置き換えた選択アルゴリズム
+- [スケジューラクラス](scheduler-classes.md) — クラス階層におけるCFSの位置
+- [ランキュー](runqueues.md) — `struct cfs_rq`を含むCPUごとの`struct rq`
+- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — ソース（14,000行以上）

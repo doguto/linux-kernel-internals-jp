@@ -1,59 +1,59 @@
-# Power Management War Stories {#power-management-war-stories}
+# 電源管理の事件簿 {#power-management-war-stories}
 
-> Suspend regressions, thermal throttle storms, and runtime PM deadlocks
+> サスペンドのリグレッション、サーマルスロットリングの嵐、ランタイムPMのデッドロック
 
-Power management is among the most regression-prone areas of the kernel. The state machines are complex, the hardware is diverse, and bugs are often timing- or platform-dependent.
+電源管理は、カーネルの中でも最もリグレッションが起きやすい領域の1つである。状態機械は複雑で、ハードウェアは多種多様であり、バグはタイミングやプラットフォームに依存することが多い。
 
-!!! note "How these are written"
-    These aren't write-ups of a single named incident tied to one commit or CVE — they illustrate real, recurring failure patterns instead. The dated LWN citations in Further Reading verify the underlying mechanisms each incident relies on (the `dev_pm_ops` runtime callbacks, the thermal governor, the RAPL powercap interface) — they aren't citations for the incidents themselves. See the [BPF](../bpf/war-stories.md), [scheduler](../sched/war-stories.md), or [interrupts](../interrupts/war-stories.md) war-stories pages for the site's usual format: specific, datable incidents, most (though not all — see [wake_wide()](../sched/war-stories/wake-wide-heuristic.md)) tied to a fix commit or CVE.
+!!! note "これらの記事の書き方について"
+    ここに挙げるのは、1つのコミットやCVEに結びついた特定の名前付きインシデントの記録ではなく、実際に繰り返し起きている失敗パターンを例示したものである。参考文献にある日付付きのLWNの引用は、各インシデントが前提とする仕組み（`dev_pm_ops`のランタイムコールバック、サーマルガバナ、RAPLのpowercapインターフェース）を裏付けるものであり、インシデントそのものの出典ではない。このサイトの通常の形式、すなわち日付を特定できる具体的なインシデントで、その大半が（すべてではない — [wake_wide()](../sched/war-stories/wake-wide-heuristic.md)を参照）修正コミットやCVEに結びついているものについては、[BPF](../bpf/war-stories.md)、[スケジューラ](../sched/war-stories.md)、[割り込み](../interrupts/war-stories.md)の事件簿ページを参照のこと。
 
 ---
 
-## 1. The suspend regression from a missing PM callback {#1-the-suspend-regression-from-a-missing-pm-callback}
+## 1. PMコールバックの欠落によるサスペンドのリグレッション {#1-the-suspend-regression-from-a-missing-pm-callback}
 
-### Setup {#setup}
+### 状況 {#setup}
 
-A PCIe NIC driver was submitted upstream. The driver implemented `probe`, `remove`, and the data path, but its `dev_pm_ops` structure was empty — no `suspend` or `resume` callbacks:
+あるPCIe NICドライバがアップストリームに投稿された。このドライバは`probe`、`remove`、データパスを実装していたが、`dev_pm_ops`構造体は空で、`suspend`や`resume`のコールバックがなかった。
 
 ```c
 static const struct dev_pm_ops mynic_pm_ops = {
-    /* nothing here */
+    /* ここには何もない */
 };
 ```
 
-The driver worked perfectly on the submitter's test machine, which did not use suspend.
+このドライバは、サスペンドを使わない投稿者のテストマシンでは完璧に動作していた。
 
-### What happened {#what-happened}
+### 何が起きたか {#what-happened}
 
-On a laptop running the driver:
+このドライバを動かすノートパソコンで:
 
-1. User closes lid. Systemd calls `echo mem > /sys/power/state`.
-2. PM core calls `dpm_suspend()`, which walks the device list. For each device, `device_suspend()` (`drivers/base/power/main.c`) picks the *first* non-NULL `dev_pm_ops` it finds, checking `pm_domain`, `type`, `class`, then `bus`, and only falling back to the driver's own `dev_pm_ops` if none of those provide a callback. For a PCI device, `dev->bus->pm` is `pci_dev_pm_ops` (`drivers/pci/pci-driver.c`, wired in via the `PCI_PM_OPS_PTR` macro) — non-NULL on any `CONFIG_PM` build — so this device's suspend goes through `pci_pm_suspend()` regardless of what `mynic_pm_ops` contains.
-3. Inside `pci_pm_suspend()`, the bus-level code checks the *driver's* callback itself: `if (pm->suspend) { pm->suspend(dev); ... }`. Since `mynic_pm_ops.suspend` is NULL, that block is simply skipped — no driver code runs — but `pci_pm_suspend()` still returns 0 and the generic PCI suspend machinery proceeds.
-4. `pci_pm_suspend_noirq()` still runs unconditionally later in the same suspend sequence: it calls `pci_save_state()` and puts the device into D3, exactly as it would for a driver with a real `suspend` callback. That call saves the *generic PCI config-space* state (BARs, command register, MSI/MSI-X config) — it has no idea about the NIC's private hardware state, because saving that is the driver's job, and the driver's callback never ran. The PCIe host controller is properly suspended and powers down the bus.
-5. On resume, coming back from D3cold implies what the PCIe spec (r6.0 §6.6.1) calls a **Conventional Reset** — specifically a Fundamental Reset, the variant a power-on transition triggers, as opposed to a software-initiated Hot Reset (a bridge's Secondary Bus Reset bit, §6.6.1). Before any config-space access is retried after a reset, PCI core code (`pci_dev_wait()`, `drivers/pci/pci.c`) polls with an exponential backoff starting immediately, not after a fixed delay — `PCI_RESET_WAIT` (1000ms) is the point past which it starts logging that it's still waiting, not a pre-reset pause. By the time this resume path reaches the driver, the device has already passed that check and is answering config-space reads normally.
-6. Generic PCI *config space* (the standard PCI header — BARs, command register — plus the MSI/MSI-X capability structures) is restored by the bus-level resume path. The NIC's own private, driver-owned MMIO registers behind those BARs came out of the Fundamental Reset at their power-on-default values — typically all-zero, not the values they held before suspend. The driver was never told this happened (its `resume` callback never ran either), so its in-memory bookkeeping — where it believes the DMA ring head currently is, which descriptors are in flight — is now stale relative to hardware that has silently gone back to a blank slate.
-7. The driver's interrupt handler acts on that stale bookkeeping: it accesses a DMA ring head pointer register expecting to find the in-flight state it remembers, but the hardware has no memory of any of it. Depending on the driver, this either reads back a value that doesn't match what was expected, or drives the ring logic into a state the driver's own consistency checks weren't written to tolerate. The driver interprets the mismatch as a fatal hardware error and calls `BUG()`.
+1. ユーザーが蓋を閉じる。systemdが`echo mem > /sys/power/state`を呼ぶ。
+2. PMコアが`dpm_suspend()`を呼び、デバイスリストを走査する。各デバイスについて、`device_suspend()`（`drivers/base/power/main.c`）は、`pm_domain`、`type`、`class`、`bus`の順に確認して最初に見つかったNULLでない`dev_pm_ops`を選び、どれもコールバックを提供しない場合にのみドライバ自身の`dev_pm_ops`にフォールバックする。PCIデバイスの場合、`dev->bus->pm`は`pci_dev_pm_ops`（`drivers/pci/pci-driver.c`。`PCI_PM_OPS_PTR`マクロで接続される）であり、`CONFIG_PM`が有効なビルドでは常にNULLではない。そのため、このデバイスのサスペンドは`mynic_pm_ops`の中身にかかわらず`pci_pm_suspend()`を通る。
+3. `pci_pm_suspend()`の中で、バスレベルのコードは*ドライバの*コールバック自体を確認する: `if (pm->suspend) { pm->suspend(dev); ... }`。`mynic_pm_ops.suspend`はNULLなので、このブロックは単に飛ばされ、ドライバのコードは何も実行されない。しかし`pci_pm_suspend()`はそれでも0を返し、汎用のPCIサスペンド処理は先に進む。
+4. 同じサスペンドの手順の後のほうで、`pci_pm_suspend_noirq()`は無条件に実行される。これは`pci_save_state()`を呼び、実際の`suspend`コールバックを持つドライバの場合とまったく同じようにデバイスをD3に移行させる。この呼び出しが保存するのは*汎用のPCIコンフィグ空間*の状態（BAR、コマンドレジスタ、MSI/MSI-Xの設定）である。NICのプライベートなハードウェア状態については何も知らない。それを保存するのはドライバの仕事であり、ドライバのコールバックは一度も実行されていないからである。PCIeホストコントローラは正しくサスペンドされ、バスの電源を落とす。
+5. レジューム時、D3coldからの復帰は、PCIe仕様（r6.0 §6.6.1）で**Conventional Reset**と呼ばれるものを意味する。具体的には、ソフトウェアが開始するHot Reset（ブリッジのSecondary Bus Resetビット、§6.6.1）ではなく、電源投入の遷移が引き起こす種類であるFundamental Resetである。リセット後にコンフィグ空間へのアクセスを再試行する前に、PCIコアのコード（`pci_dev_wait()`、`drivers/pci/pci.c`）は固定の遅延を置くのではなく、直ちに指数バックオフでポーリングを始める。`PCI_RESET_WAIT`（1000ms）は、まだ待っていることをログに出し始める時点であって、リセット前の待機時間ではない。このレジュームパスがドライバに到達する頃には、デバイスはすでにそのチェックを通過しており、コンフィグ空間の読み取りに正常に応答している。
+6. 汎用の*PCIコンフィグ空間*（標準のPCIヘッダ — BAR、コマンドレジスタ — とMSI/MSI-Xのケーパビリティ構造体）は、バスレベルのレジュームパスによって復元される。一方、それらのBARの背後にある、ドライバが所有するNIC固有のプライベートなMMIOレジスタは、Fundamental Resetの結果、電源投入時のデフォルト値になっている。通常はすべてゼロであり、サスペンド前に保持していた値ではない。ドライバにはこのことが一切知らされていない（`resume`コールバックも実行されていない）ため、メモリ上の管理情報 — DMAリングの先頭が現在どこにあると思っているか、どのディスクリプタが処理中か — は、黙って白紙に戻ってしまったハードウェアに対して古いものになっている。
+7. ドライバの割り込みハンドラは、その古い管理情報に基づいて動作する。記憶している処理中の状態があるものと期待してDMAリングの先頭ポインタレジスタにアクセスするが、ハードウェアはそのことを何も覚えていない。ドライバによっては、期待と一致しない値を読み戻すか、ドライバ自身の整合性チェックが想定していない状態にリングのロジックを追い込む。ドライバはこの不一致を致命的なハードウェアエラーと解釈し、`BUG()`を呼ぶ。
 
-### Diagnosis {#diagnosis}
+### 診断 {#diagnosis}
 
-The call trace from the kernel panic pointed into the NIC driver's interrupt handler. Enabling `CONFIG_PM_DEBUG` and `CONFIG_PM_SLEEP_DEBUG` added logging that showed the device was not going through its suspend path. Comparing against a working driver revealed the missing PM callbacks.
+カーネルパニックのコールトレースは、NICドライバの割り込みハンドラを指していた。`CONFIG_PM_DEBUG`と`CONFIG_PM_SLEEP_DEBUG`を有効にすると追加のログが出力され、デバイスが自身のサスペンドパスを通っていないことがわかった。正常に動作するドライバと比較したところ、PMコールバックの欠落が判明した。
 
-### Fix {#fix}
+### 修正 {#fix}
 
 ```c
 static int mynic_suspend(struct device *dev)
 {
     struct mynic_priv *priv = dev_get_drvdata(dev);
 
-    /* Stop DMA and interrupts */
+    /* DMAと割り込みを止める */
     mynic_disable_irq(priv);
     mynic_stop_dma(priv);
 
-    /* Save registers that survive power-off */
+    /* 電源断を越えて保持すべきレジスタを保存する */
     mynic_save_state(priv);
 
-    /* Let the PCI core handle PCI config space save + D3 transition */
+    /* PCIコンフィグ空間の保存とD3への遷移はPCIコアに任せる */
     return 0;
 }
 
@@ -68,24 +68,24 @@ static int mynic_resume(struct device *dev)
     return 0;
 }
 
-/* DEFINE_SIMPLE_DEV_PM_OPS fills system sleep callbacks (suspend/resume/
-   freeze/thaw/poweroff/restore) with the same pair of functions. Runtime
-   PM callbacks need SET_RUNTIME_PM_OPS. (The older SIMPLE_DEV_PM_OPS macro
-   does the same thing but is deprecated in favor of this one.) */
+/* DEFINE_SIMPLE_DEV_PM_OPSは、システムスリープのコールバック（suspend/resume/
+   freeze/thaw/poweroff/restore）を同じ関数のペアで埋める。Runtime
+   PMのコールバックにはSET_RUNTIME_PM_OPSが必要である。（古いSIMPLE_DEV_PM_OPS
+   マクロも同じことをするが、こちらを使うよう非推奨になっている。） */
 static DEFINE_SIMPLE_DEV_PM_OPS(mynic_pm_ops, mynic_suspend, mynic_resume);
 ```
 
-`DEFINE_SIMPLE_DEV_PM_OPS` (defined in `include/linux/pm.h`) is a convenience macro that fills the system sleep callbacks (`suspend`, `resume`, `freeze`, `thaw`, `poweroff`, `restore`) with the same pair of functions. Note: it does **not** wire up runtime PM callbacks (`runtime_suspend`, `runtime_resume`) — those require `SET_RUNTIME_PM_OPS` separately.
+`DEFINE_SIMPLE_DEV_PM_OPS`（`include/linux/pm.h`で定義）は、システムスリープのコールバック（`suspend`、`resume`、`freeze`、`thaw`、`poweroff`、`restore`）を同じ関数のペアで埋める便利なマクロである。注意: これはruntime PMのコールバック（`runtime_suspend`、`runtime_resume`）は**接続しない**。それらには別途`SET_RUNTIME_PM_OPS`が必要である。
 
-**Lesson**: an absent callback is not a safe default for devices with hardware state. Use `CONFIG_PM_DEBUG` during development; test with `echo mem > /sys/power/state` before submitting any driver.
+**教訓**: ハードウェア状態を持つデバイスにとって、コールバックがないことは安全なデフォルトではない。開発中は`CONFIG_PM_DEBUG`を使い、ドライバを投稿する前に`echo mem > /sys/power/state`でテストすること。
 
 ---
 
-## 2. The runtime PM deadlock {#2-the-runtime-pm-deadlock}
+## 2. ランタイムPMのデッドロック {#2-the-runtime-pm-deadlock}
 
-### Setup {#setup_1}
+### 状況 {#setup_1}
 
-A driver for an I2C-attached touch controller used Runtime PM. Because the handler needs to issue an I2C transfer — which may sleep — the driver registered it as a threaded IRQ handler: `request_threaded_irq(irq, NULL, touch_irq, IRQF_ONESHOT, "mytouch", priv)`. That runs `touch_irq` in its own kernel thread (named `irq/N-mytouch`), which is normal process context and is allowed to sleep. The handler read coordinates from the device and queued events:
+I2C接続のタッチコントローラ用のドライバがRuntime PMを使っていた。ハンドラはスリープしうるI2C転送を発行する必要があるため、ドライバはそれをスレッド化IRQハンドラとして登録した: `request_threaded_irq(irq, NULL, touch_irq, IRQF_ONESHOT, "mytouch", priv)`。これにより`touch_irq`は専用のカーネルスレッド（`irq/N-mytouch`という名前）で実行される。これは通常のプロセスコンテキストであり、スリープが許される。ハンドラはデバイスから座標を読み取り、イベントをキューに入れていた。
 
 ```c
 static irqreturn_t touch_irq(int irq, void *data)
@@ -94,10 +94,10 @@ static irqreturn_t touch_irq(int irq, void *data)
 
     spin_lock(&priv->lock);
 
-    /* Wake the device if it is runtime-suspended */
-    pm_runtime_get_sync(priv->dev);   /* BUG: may sleep while holding spinlock */
+    /* デバイスがランタイムサスペンド中なら起こす */
+    pm_runtime_get_sync(priv->dev);   /* バグ: spinlockを保持したままスリープしうる */
 
-    read_touch_registers(priv);       /* I2C transfer */
+    read_touch_registers(priv);       /* I2C転送 */
     queue_event(priv);
 
     pm_runtime_put(priv->dev);
@@ -106,13 +106,13 @@ static irqreturn_t touch_irq(int irq, void *data)
 }
 ```
 
-### What happened {#what-happened_1}
+### 何が起きたか {#what-happened_1}
 
-`pm_runtime_get_sync()` increments the usage counter. If the device is already active, it returns immediately. But if `runtime_status == RPM_SUSPENDED`, it calls the driver's `->runtime_resume()` callback, which performs an I2C transfer to bring the hardware out of low power. I2C transfers may sleep (they wait for bus transactions to complete) — and so does `read_touch_registers()` itself a few lines later, regardless of runtime PM state.
+`pm_runtime_get_sync()`は使用カウンタをインクリメントする。デバイスが既にアクティブなら、すぐに戻る。しかし`runtime_status == RPM_SUSPENDED`であれば、ドライバの`->runtime_resume()`コールバックを呼び、それがハードウェアを低電力状態から戻すためにI2C転送を行う。I2C転送はスリープしうる（バストランザクションの完了を待つ）。そして数行後の`read_touch_registers()`自体も、runtime PMの状態にかかわらずスリープしうる。
 
-Running inside the `irq/N-mytouch` thread, sleeping would ordinarily be fine here. The bug is the `spin_lock(&priv->lock)` wrapped around the whole sequence: `spin_lock()` disables preemption no matter what context calls it, and sleeping requires preemption to be enabled so the scheduler can run another task. The result is a BUG splat from `might_sleep()` (`CONFIG_DEBUG_ATOMIC_SLEEP`), or worse, a silent deadlock.
+`irq/N-mytouch`スレッドの中で実行されているので、本来ならここでスリープしても問題ない。バグは、この一連の処理全体を囲む`spin_lock(&priv->lock)`にある。`spin_lock()`はどのコンテキストから呼ばれてもプリエンプションを無効にし、スリープするにはスケジューラが別のタスクを実行できるようプリエンプションが有効になっている必要がある。結果として、`might_sleep()`（`CONFIG_DEBUG_ATOMIC_SLEEP`）によるBUGの出力、さらに悪ければ無言のデッドロックが起きる。
 
-With `CONFIG_DEBUG_ATOMIC_SLEEP` enabled, `might_sleep()` caught it immediately:
+`CONFIG_DEBUG_ATOMIC_SLEEP`を有効にしていたため、`might_sleep()`がこれを直ちに捕捉した。
 
 ```
 BUG: sleeping function called from invalid context at kernel/locking/mutex.c:580
@@ -128,20 +128,20 @@ Call Trace:
   touch_irq
 ```
 
-### Fix {#fix_1}
+### 修正 {#fix_1}
 
-The defining bug is not "the wrong PM call" — it's that `spin_lock(&priv->lock)` is held across a sequence that includes an I2C transfer, and I2C transfers always may sleep. Both correct fixes below get the sleeping work (the PM resume *and* `read_touch_registers()`) completely outside any spinlock's critical section.
+本質的なバグは「間違ったPM呼び出し」ではない。I2C転送を含む一連の処理にわたって`spin_lock(&priv->lock)`が保持されていることであり、I2C転送は常にスリープしうる。以下の正しい修正はどちらも、スリープする処理（PMのレジューム*と*`read_touch_registers()`）を、いかなるspinlockのクリティカルセクションからも完全に外に出す。
 
-**Option A** — defer everything sleepable to a workqueue; the spinlock now only ever protects a plain flag:
+**選択肢A** — スリープしうる処理をすべてworkqueueに先送りする。spinlockが保護するのは単純なフラグだけになる。
 
 ```c
 static irqreturn_t touch_irq(int irq, void *data)
 {
     struct touch_priv *priv = data;
 
-    /* Runs in the irq/N-mytouch thread, but keep this handler itself
-     * non-sleeping and hand off the I2C work — nothing here needs
-     * priv->lock to be held across a sleep. */
+    /* irq/N-mytouchスレッドで実行されるが、このハンドラ自体は
+     * スリープしないようにしてI2Cの処理を引き渡す — ここでは
+     * スリープをまたいでpriv->lockを保持する必要はない。 */
     spin_lock(&priv->lock);
     priv->irq_pending = true;
     spin_unlock(&priv->lock);
@@ -154,10 +154,10 @@ static void touch_irq_work(struct work_struct *work)
 {
     struct touch_priv *priv = container_of(work, struct touch_priv, irq_work);
 
-    /* Workqueue context: sleeping is fine. pm_runtime_get_sync() and
-     * read_touch_registers() both run with no spinlock held. */
+    /* workqueueコンテキスト: スリープしてよい。pm_runtime_get_sync()と
+     * read_touch_registers()はどちらもspinlockを保持せずに実行される。 */
     pm_runtime_get_sync(priv->dev);
-    read_touch_registers(priv);        /* I2C transfer */
+    read_touch_registers(priv);        /* I2C転送 */
 
     spin_lock(&priv->lock);
     queue_event(priv);
@@ -168,20 +168,20 @@ static void touch_irq_work(struct work_struct *work)
 }
 ```
 
-**Option B** — since `touch_irq` already runs in the sleepable `irq/N-mytouch` thread, replace the spinlock with a mutex instead of working around it; nothing here needs to be atomic:
+**選択肢B** — `touch_irq`は既にスリープ可能な`irq/N-mytouch`スレッドで実行されているので、spinlockを回避するのではなくmutexに置き換える。ここではアトミックである必要のあるものは何もない。
 
 ```c
 static irqreturn_t touch_irq(int irq, void *data)
 {
     struct touch_priv *priv = data;
 
-    /* priv->data_mutex (a struct mutex) replaces the spinlock that used
-     * to protect this data. Sleeping under a mutex is fine, so the PM
-     * resume and the I2C transfer can stay in line here. */
+    /* priv->data_mutex（struct mutex）が、以前このデータを保護していた
+     * spinlockを置き換える。mutexの下でのスリープは問題ないので、PMの
+     * レジュームとI2C転送はここにインラインのまま置ける。 */
     mutex_lock(&priv->data_mutex);
 
     pm_runtime_get_sync(priv->dev);
-    read_touch_registers(priv);        /* I2C transfer — fine under a mutex */
+    read_touch_registers(priv);        /* I2C転送 — mutexの下なら問題ない */
     queue_event(priv);
     pm_runtime_put(priv->dev);
 
@@ -190,19 +190,19 @@ static irqreturn_t touch_irq(int irq, void *data)
 }
 ```
 
-Option B only works because `touch_irq` never runs from hardirq or softirq context — if this handler could also be invoked from an atomic context elsewhere, the mutex would be just as broken as the original spinlock, and Option A's deferral would be the only safe choice.
+選択肢Bが成り立つのは、`touch_irq`がhardirqやsoftirqのコンテキストから実行されることが決してないからにすぎない。このハンドラが他の場所でアトミックコンテキストから呼ばれる可能性があるなら、mutexも元のspinlockと同様に壊れており、選択肢Aの先送りだけが安全な選択となる。
 
-**Lesson**: `pm_runtime_get_sync()` — and any I2C/SPI/regmap access — is a potentially sleeping function. It must never run with a spinlock held, from raw hardirq context, or from any other atomic context. Threaded IRQ handlers are allowed to sleep, but taking a spinlock inside one throws that away; protect data touched alongside a sleeping call with a mutex, or defer the sleeping work to a workqueue and keep the spinlock scoped to non-sleeping bookkeeping only. Use `pm_runtime_get_if_active()` when you're genuinely stuck in atomic context and cannot restructure.
+**教訓**: `pm_runtime_get_sync()` — およびあらゆるI2C/SPI/regmapアクセス — はスリープする可能性のある関数である。spinlockを保持したまま、生のhardirqコンテキストから、あるいはその他のアトミックコンテキストから実行してはならない。スレッド化IRQハンドラはスリープを許されるが、その中でspinlockを取るとその利点を捨てることになる。スリープする呼び出しと一緒に触れるデータはmutexで保護するか、スリープする処理をworkqueueに先送りしてspinlockの範囲をスリープしない管理処理だけに限定すること。アトミックコンテキストから本当に抜け出せず、構造を変えられない場合には`pm_runtime_get_if_active()`を使う。
 
 ---
 
-## 3. The thermal throttle storm {#3-the-thermal-throttle-storm}
+## 3. サーマルスロットリングの嵐 {#3-the-thermal-throttle-storm}
 
-### Setup {#setup_2}
+### 状況 {#setup_2}
 
-A mobile SoC benchmark suite ran a sustained CPU-bound workload. The device had a single thermal zone covering the CPU cluster, with the `step_wise` governor and two cooling devices: CPU frequency (via cpufreq cooling) and a passive notification.
+モバイルSoCのベンチマークスイートが、持続的なCPUバウンドのワークロードを実行した。デバイスにはCPUクラスタをカバーする単一のサーマルゾーンがあり、`step_wise`ガバナと2つの冷却デバイス、すなわちCPU周波数（cpufreq cooling経由）とパッシブ通知を持っていた。
 
-### What happened {#what-happened_2}
+### 何が起きたか {#what-happened_2}
 
 ```
 t=0s:   CPU at 2.4 GHz, temperature rising
@@ -217,51 +217,51 @@ t=30s:  CPU at 200 MHz (minimum), temperature has barely moved
         Benchmark reports 8% of expected throughput
 ```
 
-`step_wise`'s `get_target_state()` raises `cooling_state` by one step (`cur_state + 1`, clamped to the cooling device's upper limit) on every evaluation where the trend is `THERMAL_TREND_RAISING`, and lowers it by one step as the zone cools. The governor does iterate every cooling device bound to a trip point in the zone — it is not limited to a single device — but the CPU frequency device was the *only* actor bound to this thermal zone. It had no knowledge of the GPU or display, which were together dissipating more power than the CPU, because neither had been registered as a cooling device anywhere in this zone. Stepping the CPU down helped very little because the CPU was not the primary heat source.
+`step_wise`の`get_target_state()`は、傾向が`THERMAL_TREND_RAISING`である評価のたびに`cooling_state`を1段階上げ（`cur_state + 1`。冷却デバイスの上限でクランプされる）、ゾーンが冷えるにつれて1段階ずつ下げる。ガバナはゾーン内のトリップポイントに結び付けられたすべての冷却デバイスを順に処理する（単一のデバイスに限定されてはいない）が、このサーマルゾーンに結び付けられたアクターはCPU周波数デバイス*だけ*だった。GPUとディスプレイは合わせてCPUより多くの電力を消費していたが、どちらもこのゾーンのどこにも冷却デバイスとして登録されていなかったため、ガバナはそれらについて何も知らなかった。CPUが主な熱源ではなかったため、CPUの周波数を下げてもほとんど効果がなかった。
 
-Additionally, `step_wise` has no integral term: each evaluation period takes exactly one fixed step in the direction the trend indicates, regardless of how far above the trip point the temperature is or how long it has stayed there. That fixed step size is why the CPU cooling state kept ratcheting down every couple of seconds in the timeline above, all the way to the floor, without ever converging on a state that held the temperature steady.
+さらに、`step_wise`には積分項がない。温度がトリップポイントをどれだけ上回っているか、どれだけ長くその状態が続いているかにかかわらず、各評価周期で傾向が示す方向にちょうど1つの固定ステップだけ進む。この固定のステップ幅こそが、上のタイムラインでCPUの冷却状態が数秒ごとに下限まで段階的に下がり続け、温度を安定させる状態に一度も収束しなかった理由である。
 
-### Fix {#fix_2}
+### 修正 {#fix_2}
 
-**Switch to `power_allocator`**: the Intelligent Power Allocation (IPA) governor uses a PID controller and manages all cooling devices in a thermal zone jointly. It asks each cooling device for its power consumption and redistributes a total budget:
+**`power_allocator`に切り替える**: Intelligent Power Allocation（IPA）ガバナはPIDコントローラを使い、サーマルゾーン内のすべての冷却デバイスをまとめて管理する。各冷却デバイスに消費電力を問い合わせ、全体の予算を再配分する。
 
 ```bash
 echo power_allocator > /sys/class/thermal/thermal_zone0/policy
 
-# Total sustainable power budget (mW); tune per device
+# 持続可能な電力の総予算（mW）。デバイスごとに調整する
 echo 4000 > /sys/class/thermal/thermal_zone0/sustainable_power
 
-# PID gains (tune for thermal mass of the device)
-echo 500 > /sys/class/thermal/thermal_zone0/k_po   # overshoot gain
-echo 500 > /sys/class/thermal/thermal_zone0/k_pu   # undershoot gain
-echo 0   > /sys/class/thermal/thermal_zone0/k_d    # derivative
+# PIDのゲイン（デバイスの熱容量に合わせて調整する）
+echo 500 > /sys/class/thermal/thermal_zone0/k_po   # オーバーシュートゲイン
+echo 500 > /sys/class/thermal/thermal_zone0/k_pu   # アンダーシュートゲイン
+echo 0   > /sys/class/thermal/thermal_zone0/k_d    # 微分
 ```
 
-**Register GPU and display as cooling devices** in the same thermal zone. With all actors managed, the governor can reduce display brightness and GPU frequency alongside CPU frequency — preventing the situation where only the smallest heat source is throttled.
+**GPUとディスプレイを同じサーマルゾーンの冷却デバイスとして登録する**。すべてのアクターが管理されていれば、ガバナはCPU周波数と並行してディスプレイの輝度やGPU周波数を下げることができ、最小の熱源だけがスロットリングされるという状況を防げる。
 
-**Add earlier passive trip points**: if the trip point fires at 85°C but the thermal mass means the temperature keeps climbing for another 5 seconds, the governor is always behind. Moving the passive trip to 75°C gives the controller more lead time.
+**より早いパッシブトリップポイントを追加する**: トリップポイントが85°Cで発火しても、熱容量のせいで温度がさらに5秒間上がり続けるなら、ガバナは常に後手に回る。パッシブトリップを75°Cに移せば、コントローラにより多くの猶予ができる。
 
-**Lesson**: `step_wise` is appropriate for simple, well-isolated thermal zones. For SoCs with multiple interacting heat sources, `power_allocator` with all actors registered provides closed-loop control. Thermal engineering and software must be co-designed.
+**教訓**: `step_wise`は、単純でよく分離されたサーマルゾーンに適している。相互に影響する複数の熱源を持つSoCでは、すべてのアクターを登録した`power_allocator`が閉ループ制御を提供する。熱設計とソフトウェアは協調して設計しなければならない。
 
 ---
 
-## 4. The RAPL power limit surprise {#4-the-rapl-power-limit-surprise}
+## 4. RAPL電力制限の思わぬ落とし穴 {#4-the-rapl-power-limit-surprise}
 
-### Setup {#setup_3}
+### 状況 {#setup_3}
 
-A cloud operator deployed new servers and, to enforce per-server power budgets for billing, set RAPL long-term power limits via the powercap sysfs interface:
+あるクラウド事業者が新しいサーバーを導入し、課金のためにサーバーごとの電力予算を強制する目的で、powercapのsysfsインターフェースを通じてRAPLの長期電力制限を設定した。
 
 ```bash
-# Set package 0 total power limit to 150 W
+# パッケージ0の総電力制限を150 Wに設定する
 echo 150000000 > /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
-# "enabled" is a zone-level attribute (shared by all constraints in the
-# zone), not per-constraint — there is no constraint_0_enabled file.
+# "enabled"はゾーン単位の属性（ゾーン内のすべての制約で共有される）であり、
+# 制約ごとではない — constraint_0_enabledというファイルは存在しない。
 echo 1 > /sys/class/powercap/intel-rapl:0/enabled
 ```
 
-### What happened {#what-happened_3}
+### 何が起きたか {#what-happened_3}
 
-The workload was a mixed read-heavy database: moderate CPU compute, high memory bandwidth. Monitoring showed:
+ワークロードは読み込み中心の混合データベースで、CPU演算は中程度、メモリ帯域幅は高かった。監視では次のように見えた。
 
 ```
 CPU utilization:  35%
@@ -269,24 +269,24 @@ Memory bandwidth: 85 GB/s  (high)
 Server throughput: 30% of baseline
 ```
 
-The database team suspected a kernel regression. Extensive profiling showed the CPUs were frequently stalling on memory reads — not because DRAM was slow, but because DRAM accesses were being *artificially throttled*. With the DRAM RAPL limit briefly raised on a test box, the same workload drew roughly 45 W of sustained DRAM power to hit full bandwidth. Back at the default limit, the RAPL DRAM domain power limit was being hit:
+データベースチームはカーネルのリグレッションを疑った。大規模なプロファイリングの結果、CPUはメモリ読み込みで頻繁にストールしていることがわかった。DRAMが遅いからではなく、DRAMアクセスが*人為的にスロットリングされていた*からである。テスト機でDRAMのRAPL制限を一時的に引き上げると、同じワークロードは全帯域幅を出すために持続的に約45 WのDRAM電力を消費した。デフォルトの制限に戻すと、RAPLのDRAMドメインの電力制限に達していた。
 
 ```bash
-# Read energy counters on two domains over 1 second
+# 2つのドメインのエネルギーカウンタを1秒間読む
 cat /sys/class/powercap/intel-rapl:0:1/name
 # "dram"
-# (energy_uj was incrementing at a rate corresponding to ~20 W — right at
-#  the DRAM domain's cap, well below the ~45 W the workload wanted to draw)
+# （energy_ujは約20 Wに相当するレートで増加していた — DRAMドメインの上限
+#  ちょうどであり、ワークロードが消費しようとした約45 Wを大きく下回っていた）
 ```
 
-The problem: the operator had set a package-level power limit of 150 W. The DRAM domain, though, is metered and capped independently of the package domain — it is a separate RAPL domain with its own energy counter and constraint, not a slice carved out of the package's power budget. It had simply been left at its platform-configured default of approximately 20 W. The high-bandwidth workload was driving DRAM power well past that separate 20 W limit, so the hardware throttled memory controller throughput to hold it there — regardless of how much headroom remained under the 150 W package cap.
+問題はこうである。事業者はパッケージレベルで150 Wの電力制限を設定していた。しかしDRAMドメインは、パッケージドメインとは独立して計測され、上限が設けられている。DRAMドメインは独自のエネルギーカウンタと制約を持つ別のRAPLドメインであり、パッケージの電力予算から切り出された一部ではない。そしてDRAMドメインは、プラットフォームで設定された約20 Wのデフォルトのまま放置されていた。高帯域幅のワークロードはDRAMの電力をその別個の20 W制限を大きく超えるまで押し上げようとしていたため、ハードウェアはそこに留めるためにメモリコントローラのスループットをスロットリングした。150 Wのパッケージ上限にどれだけ余裕があるかとは無関係にである。
 
-Setting the package limit did not change the DRAM domain's limit. The operator had not realized the domain was capped independently.
+パッケージの制限を設定しても、DRAMドメインの制限は変わらなかった。事業者は、このドメインが独立して上限を設けられていることに気づいていなかった。
 
-### Fix {#fix_3}
+### 修正 {#fix_3}
 
 ```bash
-# Enumerate all zones and their current limits
+# すべてのゾーンと現在の制限を列挙する
 for zone in /sys/class/powercap/intel-rapl:*/; do
     name=$(cat "$zone/name" 2>/dev/null)
     limit=$(cat "$zone/constraint_0_power_limit_uw" 2>/dev/null)
@@ -295,46 +295,46 @@ done
 # package-0: 150000000 µW
 # core:      (not capped)
 # uncore:    (not capped)
-# dram:      20000000 µW   ← this was the bottleneck
+# dram:      20000000 µW   ← これがボトルネックだった
 
-# Raise DRAM domain limit above the workload's ~45 W demand
+# DRAMドメインの制限を、ワークロードの約45 Wの需要より上に引き上げる
 echo 50000000 > /sys/class/powercap/intel-rapl:0:1/constraint_0_power_limit_uw
 ```
 
-After raising the DRAM limit to 50 W — above the workload's ~45 W demand — memory bandwidth throttling disappeared and throughput returned to baseline, still well within the 150 W package budget because the CPU cores were only at 35% load.
+DRAMの制限をワークロードの約45 Wの需要を上回る50 Wに引き上げると、メモリ帯域幅のスロットリングは消え、スループットはベースラインに戻った。CPUコアの負荷は35%にすぎなかったため、それでも150 Wのパッケージ予算の範囲内に十分収まっていた。
 
-**Lesson**: RAPL domain limits are set and enforced independently of one another. Before setting power caps, enumerate all domains with `for zone in /sys/class/powercap/intel-rapl:*/; do cat $zone/name $zone/constraint_0_power_limit_uw; done` and understand which domain is the actual bottleneck (note the colon in the glob — `intel-rapl*` without it would also match the `intel-rapl` control-type directory itself, not just its zones). Monitor `energy_uj` on all domains during workload characterization.
+**教訓**: RAPLのドメイン制限は互いに独立して設定・強制される。電力上限を設定する前に、`for zone in /sys/class/powercap/intel-rapl:*/; do cat $zone/name $zone/constraint_0_power_limit_uw; done`ですべてのドメインを列挙し、実際のボトルネックがどのドメインかを把握すること（globにコロンがあることに注意。コロンのない`intel-rapl*`は、ゾーンだけでなく`intel-rapl`コントロールタイプのディレクトリ自体にも一致してしまう）。ワークロードの特性評価の際には、すべてのドメインの`energy_uj`を監視すること。
 
 ---
 
-## 5. The S2idle wakeup source mystery {#5-the-s2idle-wakeup-source-mystery}
+## 5. S2idleのウェイクアップソースの謎 {#5-the-s2idle-wakeup-source-mystery}
 
-### Setup {#setup_4}
+### 状況 {#setup_4}
 
-A laptop was deployed with S2idle (suspend-to-idle, `echo s2idle > /sys/power/mem_sleep`) as the default sleep mode. Users reported the laptop woke up approximately 30 seconds after being closed, every time, regardless of whether anything was plugged in.
+あるノートパソコンが、S2idle（suspend-to-idle、`echo s2idle > /sys/power/mem_sleep`）をデフォルトのスリープモードとして配備された。ユーザーからは、何かが接続されているかどうかにかかわらず、蓋を閉じてから約30秒後に毎回ノートパソコンが起きてしまうと報告された。
 
-### Diagnosis {#diagnosis_1}
+### 診断 {#diagnosis_1}
 
 ```bash
-# Observe dmesg immediately after a premature wake
+# 早すぎる起床の直後にdmesgを観察する
 dmesg | grep -i "wakeup\|wake\|resume" | tail -20
 # PM: Waking up from sleep state 'freeze'
 # PM: resume from suspend-to-idle
-# (no device name in the message — firmware-level wakeup)
+# （メッセージにデバイス名がない — ファームウェアレベルのウェイクアップ）
 
-# Check wakeup_sources for recent activity
-# Columns (drivers/base/power/wakeup.c, print_wakeup_source_stats()):
+# wakeup_sourcesで最近の活動を確認する
+# 列（drivers/base/power/wakeup.c、print_wakeup_source_stats()）:
 # name  active_count  event_count  wakeup_count  expire_count  active_since
 # total_time  max_time  last_change  prevent_suspend_time
 cat /sys/kernel/debug/wakeup_sources | sort -k4 -rn | head -10
 # name                active_count  event_count  wakeup_count  ...
 # i2c-touchpad        47            47            47           ...
-# (wakeup_count matches the number of lid-close sleep attempts)
+# （wakeup_countが、蓋を閉じてスリープを試みた回数と一致する）
 ```
 
-`event_count` (`include/linux/pm_wakeup.h`) counts every wakeup event a source reports, unconditionally. `wakeup_count` is narrower — `wakeup_source_report_event()` (`drivers/base/power/wakeup.c`) only increments it when `events_check_enabled` is set. That flag isn't tied to suspend happening at all; it's set by `pm_save_wakeup_count()`, the function behind the userspace `/sys/power/wakeup_count` protocol — a caller (systemd, in the usual case) writes the current registered-event count there before requesting suspend, and the kernel only arms `wakeup_count` tracking if nothing changed in the meantime. In this trace, that protocol was in play, so both counters climbed together here: the I2C touchpad's `wakeup_count` (and `event_count`) each incremented by 1 for every lid close. The touchpad's firmware was generating spurious interrupt assertions during idle — even with the lid closed and no finger contact.
+`event_count`（`include/linux/pm_wakeup.h`）は、ソースが報告するすべてのウェイクアップイベントを無条件に数える。`wakeup_count`はそれより狭く、`wakeup_source_report_event()`（`drivers/base/power/wakeup.c`）は`events_check_enabled`がセットされているときにのみこれをインクリメントする。このフラグはサスペンドが起きることとはまったく結びついていない。これをセットするのは`pm_save_wakeup_count()`であり、ユーザー空間の`/sys/power/wakeup_count`プロトコルの背後にある関数である。呼び出し側（通常はsystemd）はサスペンドを要求する前に現在の登録済みイベント数をそこに書き込み、カーネルはその間に何も変化していなかった場合にのみ`wakeup_count`の追跡を有効にする。このトレースではそのプロトコルが使われていたため、ここでは両方のカウンタが一緒に増えていった。I2Cタッチパッドの`wakeup_count`（と`event_count`）は、蓋を閉じるたびにそれぞれ1ずつ増えていた。タッチパッドのファームウェアは、蓋が閉じていて指が触れていない状態でも、アイドル中に偽の割り込みアサートを発生させていた。
 
-Confirming via `ftrace`:
+`ftrace`で確認する。
 
 ```bash
 echo 1 > /sys/kernel/debug/tracing/events/power/wakeup_source_activate/enable
@@ -342,66 +342,66 @@ cat /sys/kernel/debug/tracing/trace_pipe
 # wakeup_source_activate: i2c-touchpad state=0x1
 ```
 
-(The tracepoint's format string is `"%s state=0x%lx"` — bare source name, no `name=` prefix. `state` is `combined_event_count` (`drivers/base/power/wakeup.c`), a single word packing two counters together — registered events in the high bits, events currently in progress in the low bits — not a plain in-progress count on its own; `state=0x1` here means one event has been registered and none are (yet) in progress.)
+（このtracepointのフォーマット文字列は`"%s state=0x%lx"`であり、ソース名がそのまま出て、`name=`という接頭辞はない。`state`は`combined_event_count`（`drivers/base/power/wakeup.c`）であり、2つのカウンタを1ワードに詰め込んだもの — 上位ビットに登録済みイベント、下位ビットに現在処理中のイベント — であって、単独の処理中カウントではない。ここでの`state=0x1`は、1つのイベントが登録され、処理中のものは（まだ）ないことを意味する。）
 
-The wakeup fired from the I2C touchpad device, which had `wakeup` capability enabled by default in the ACPI tables.
+ウェイクアップはI2Cタッチパッドデバイスから発生していた。このデバイスはACPIテーブルでデフォルトで`wakeup`ケーパビリティが有効になっていた。
 
-### Fix {#fix_4}
+### 修正 {#fix_4}
 
-**Immediate workaround** — disable the wakeup capability for this device:
+**当面の回避策** — このデバイスのウェイクアップケーパビリティを無効にする。
 
 ```bash
-# Identify the I2C device path
+# I2Cデバイスのパスを特定する
 ls /sys/bus/i2c/devices/
 # i2c-0  i2c-1  i2c-2  ...
 
-# Find the touchpad
+# タッチパッドを見つける
 grep -r "ELAN\|i2c-hid\|touchpad" /sys/bus/i2c/devices/*/name 2>/dev/null
 # /sys/bus/i2c/devices/i2c-2/name: ELAN0001:00
 
-# Disable wakeup for this device
+# このデバイスのウェイクアップを無効にする
 echo disabled > /sys/bus/i2c/devices/i2c-2/power/wakeup
 
-# Persist across reboots via udev rule
+# udevルールで再起動後も維持する
 echo 'ACTION=="add", SUBSYSTEM=="i2c", ATTR{name}=="ELAN0001:00", \
   ATTR{power/wakeup}="disabled"' > /etc/udev/rules.d/99-touchpad-wakeup.rules
 ```
 
-**How the sysfs workaround actually silences it** — `drivers/hid/i2c-hid/i2c-hid-core.c`'s `i2c_hid_core_suspend()` puts the device into the low-power `I2C_HID_PWR_SLEEP` state (unless the driver carries the `I2C_HID_QUIRK_NO_SLEEP_ON_SUSPEND` quirk) and calls `disable_irq()` on the client's IRQ line, but only calls `i2c_hid_core_power_down()` — a full, driver-specific power cutoff — when `device_may_wakeup()` returns false for the device. Disabling wakeup via `power/wakeup` in sysfs is exactly what makes `device_may_wakeup()` return false, so it routes the touchpad through the full power-down path on every suspend, which is what actually stops the spurious firmware-level IRQ assertions — not just a "do nothing" flag.
+**sysfsによる回避策が実際にどう効くのか** — `drivers/hid/i2c-hid/i2c-hid-core.c`の`i2c_hid_core_suspend()`は、デバイスを低電力の`I2C_HID_PWR_SLEEP`状態にし（ドライバが`I2C_HID_QUIRK_NO_SLEEP_ON_SUSPEND` quirkを持っていない限り）、クライアントのIRQラインに対して`disable_irq()`を呼ぶ。しかし、ドライバ固有の完全な電源遮断である`i2c_hid_core_power_down()`を呼ぶのは、そのデバイスについて`device_may_wakeup()`がfalseを返す場合だけである。sysfsの`power/wakeup`でウェイクアップを無効にすることは、まさに`device_may_wakeup()`にfalseを返させることであり、それによってタッチパッドはサスペンドのたびに完全な電源断のパスを通るようになる。これこそがファームウェアレベルの偽のIRQアサートを実際に止めるものであり、単なる「何もしない」フラグではない。
 
-**Lesson**: S2idle wakeup debugging always starts at `/sys/kernel/debug/wakeup_sources`. Sort by `wakeup_count` or `active_count` to find the culprit. The `wakeup_source_activate` ftrace event identifies the exact source. After finding the device, either disable its wakeup capability via sysfs or fix the driver to silence the hardware during idle.
+**教訓**: S2idleのウェイクアップのデバッグは、常に`/sys/kernel/debug/wakeup_sources`から始まる。`wakeup_count`または`active_count`でソートして犯人を見つける。`wakeup_source_activate`のftraceイベントが正確なソースを特定する。デバイスを見つけたら、sysfsでそのウェイクアップケーパビリティを無効にするか、アイドル中にハードウェアを静かにさせるようドライバを修正する。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `device_suspend()`'s callback-selection order (`pm_domain` → `type` → `class` → `bus` → driver `pm`) and `dpm_run_callback()`'s `if (!cb) return 0;`; for a PCI device `dev->bus->pm` is always set, so this particular skip never fires — Case 1
-- [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `DEFINE_SIMPLE_DEV_PM_OPS()` (the current macro; `SIMPLE_DEV_PM_OPS()` is now deprecated but equivalent) and `SET_RUNTIME_PM_OPS()`, Case 1's fix
-- [drivers/pci/pci-driver.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci-driver.c) — `pci_pm_suspend()`, the bus-level `dev_pm_ops` that wraps a driver's own callbacks and still performs PCI config-space save and the D3 transition, Case 1
-- [include/linux/pm_runtime.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_runtime.h) and [drivers/base/power/runtime.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/runtime.c) — `pm_runtime_get_sync()` (may sleep) versus `pm_runtime_get_if_active()` (never sleeps, tri-valued return — see [Runtime PM](runtime-pm.md#runtime-pm-in-interrupt-context)), Case 2
-- [drivers/thermal/gov_step_wise.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_step_wise.c) and [drivers/thermal/gov_power_allocator.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_power_allocator.c) — the single-step throttling logic versus the PID controller, Case 3
-- [drivers/powercap/intel_rapl_common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_common.c) — `rapl_domain_names[]` (`"package"`, `"core"`, `"uncore"`, `"dram"`), the independent sub-domains behind Case 4
-- [drivers/base/power/wakeup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/wakeup.c) — `print_wakeup_source_stats()`, the column layout of `/sys/kernel/debug/wakeup_sources`, and the `wakeup_source_activate` tracepoint, Case 5
-- [drivers/hid/i2c-hid/i2c-hid-core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/hid/i2c-hid/i2c-hid-core.c) — `i2c_hid_core_suspend()`, which powers the device down via `i2c_hid_core_power_down()` only when `device_may_wakeup()` is false, Case 5
+- [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `device_suspend()`のコールバック選択順序（`pm_domain` → `type` → `class` → `bus` → ドライバの`pm`）と、`dpm_run_callback()`の`if (!cb) return 0;`。PCIデバイスでは`dev->bus->pm`が常に設定されているため、この特定のスキップは決して発生しない — 事例1
+- [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `DEFINE_SIMPLE_DEV_PM_OPS()`（現行のマクロ。`SIMPLE_DEV_PM_OPS()`は現在非推奨だが同等）と`SET_RUNTIME_PM_OPS()`。事例1の修正
+- [drivers/pci/pci-driver.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci-driver.c) — `pci_pm_suspend()`。ドライバ自身のコールバックをラップし、それでもPCIコンフィグ空間の保存とD3への遷移を行うバスレベルの`dev_pm_ops` — 事例1
+- [include/linux/pm_runtime.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_runtime.h)と[drivers/base/power/runtime.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/runtime.c) — `pm_runtime_get_sync()`（スリープしうる）と`pm_runtime_get_if_active()`（決してスリープせず、3値を返す — [Runtime PM](runtime-pm.md#runtime-pm-in-interrupt-context)を参照）— 事例2
+- [drivers/thermal/gov_step_wise.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_step_wise.c)と[drivers/thermal/gov_power_allocator.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_power_allocator.c) — 1段階ずつのスロットリングロジックとPIDコントローラ — 事例3
+- [drivers/powercap/intel_rapl_common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_common.c) — `rapl_domain_names[]`（`"package"`、`"core"`、`"uncore"`、`"dram"`）。事例4の背後にある独立したサブドメイン
+- [drivers/base/power/wakeup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/wakeup.c) — `print_wakeup_source_stats()`、`/sys/kernel/debug/wakeup_sources`の列の配置、および`wakeup_source_activate` tracepoint — 事例5
+- [drivers/hid/i2c-hid/i2c-hid-core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/hid/i2c-hid/i2c-hid-core.c) — `i2c_hid_core_suspend()`。`device_may_wakeup()`がfalseの場合にのみ`i2c_hid_core_power_down()`でデバイスの電源を落とす — 事例5
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Runtime PM](runtime-pm.md) — usage counting, callbacks, atomic context restrictions
-- [System Suspend](suspend.md) — PM notifiers, freeze sequence, wakeup sources
-- [Thermal Management](thermal.md) — step_wise vs power_allocator governors
-- [Power Capping and RAPL](power-capping.md) — RAPL domain enumeration and limits
+- [Runtime PM](runtime-pm.md) — 使用カウント、コールバック、アトミックコンテキストでの制約
+- [システムサスペンド](suspend.md) — PM notifier、フリーズの手順、ウェイクアップソース
+- [熱管理](thermal.md) — step_wiseガバナとpower_allocatorガバナ
+- [パワーキャッピングとRAPL](power-capping.md) — RAPLドメインの列挙と制限
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Runtime power management](https://lwn.net/Articles/347573/) (August 19, 2009) — the original `runtime_suspend`/`runtime_resume`/`runtime_idle` additions to `dev_pm_ops`, behind Case 2
-- [The power allocator thermal governor](https://lwn.net/Articles/602517/) (June 17, 2014) — the PID-controller design that Case 3's fix switches to
-- [Power Capping Framework and RAPL Driver](https://lwn.net/Articles/567620/) (September 19, 2013) — the original powercap-framework and intel-rapl driver submission, the uniform sysfs interface behind Case 4
+- [Runtime power management](https://lwn.net/Articles/347573/)（2009年8月19日） — `dev_pm_ops`への最初の`runtime_suspend`/`runtime_resume`/`runtime_idle`の追加。事例2の背景
+- [The power allocator thermal governor](https://lwn.net/Articles/602517/)（2014年6月17日） — 事例3の修正で切り替え先となるPIDコントローラの設計
+- [Power Capping Framework and RAPL Driver](https://lwn.net/Articles/567620/)（2013年9月19日） — 最初のpowercapフレームワークとintel-raplドライバの投稿。事例4の背後にある統一的なsysfsインターフェース
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Runtime Power Management Framework for I/O Devices](https://docs.kernel.org/power/runtime_pm.html) — canonical Runtime PM documentation and function return-value reference, Case 2
-- [Basic PM Debugging](https://docs.kernel.org/power/basic-pm-debugging.html) — `/sys/power/pm_test`, `CONFIG_PM_DEBUG`, and the driver-isolation technique from Case 1's diagnosis
-- [Power Capping Framework](https://docs.kernel.org/power/powercap/powercap.html) — the `constraint_N_power_limit_uw`/`enabled` sysfs ABI and the zone hierarchy behind Case 4
-- [System Sleep States](https://docs.kernel.org/admin-guide/pm/sleep-states.html) — suspend-to-idle (`s2idle`), `/sys/power/mem_sleep`, and wakeup-capable devices, Case 5
+- [Runtime Power Management Framework for I/O Devices](https://docs.kernel.org/power/runtime_pm.html) — Runtime PMの正式なドキュメントと関数の戻り値のリファレンス — 事例2
+- [Basic PM Debugging](https://docs.kernel.org/power/basic-pm-debugging.html) — `/sys/power/pm_test`、`CONFIG_PM_DEBUG`、および事例1の診断で使ったドライバ切り分けの手法
+- [Power Capping Framework](https://docs.kernel.org/power/powercap/powercap.html) — `constraint_N_power_limit_uw`/`enabled`のsysfs ABIと、事例4の背後にあるゾーン階層
+- [System Sleep States](https://docs.kernel.org/admin-guide/pm/sleep-states.html) — suspend-to-idle（`s2idle`）、`/sys/power/mem_sleep`、およびウェイクアップ可能なデバイス — 事例5
