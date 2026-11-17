@@ -1,8 +1,8 @@
-# Platform Drivers
+# Platform Drivers {#platform-drivers}
 
 > The most common driver pattern for embedded and SoC devices
 
-## What platform devices are
+## What platform devices are {#what-platform-devices-are}
 
 Platform devices are devices that are not discoverable by hardware (unlike PCI or USB). The `platform_device` / `platform_driver` abstraction is part of the Linux driver model that shipped with Linux 2.6.0; a good overview is Jonathan Corbet's 2011 LWN article [(LWN)](https://lwn.net/Articles/448499/). Devices are instantiated via:
 
@@ -12,7 +12,7 @@ Platform devices are devices that are not discoverable by hardware (unlike PCI o
 
 Examples: UARTs, I2C controllers, GPIO controllers, clocks — hardware that's wired onto the SoC and can't be dynamically probed.
 
-## struct platform_driver
+## struct platform_driver {#struct-platform_driver}
 
 ```c
 /* include/linux/platform_device.h */
@@ -40,7 +40,7 @@ struct platform_device {
 };
 ```
 
-## A minimal platform driver
+## A minimal platform driver {#a-minimal-platform-driver}
 
 ```c
 /* drivers/mydriver/mydriver.c */
@@ -157,7 +157,7 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Example Author <author@example.com>");
 ```
 
-## devm_: automatic resource management
+## devm_: automatic resource management {#devm_-automatic-resource-management}
 
 `devm_` (device-managed) functions bind resource lifetime to a `struct device`. When the device is unbound (removed), all `devm_` resources are freed in reverse registration order.
 
@@ -193,7 +193,7 @@ devm_add_action(&dev, my_cleanup_fn, my_data);
 devm_add_action_or_reset(&dev, my_cleanup_fn, my_data);
 ```
 
-### Why devm_ matters
+### Why devm_ matters {#why-devm_-matters}
 
 ```c
 /* Without devm: error paths are a nightmare */
@@ -232,7 +232,7 @@ static int probe(struct platform_device *pdev)
 }
 ```
 
-## Device tree binding
+## Device tree binding {#device-tree-binding}
 
 The device tree describes hardware topology. Each node with a `compatible` property can be matched by a driver:
 
@@ -255,7 +255,7 @@ The device tree describes hardware topology. Each node with a `compatible` prope
 
 The platform bus automatically creates a `platform_device` from this node when the kernel boots. The driver's `of_match_table` is compared against `compatible`.
 
-### Reading device tree properties
+### Reading device tree properties {#reading-device-tree-properties}
 
 ```c
 static int mydev_probe(struct platform_device *pdev)
@@ -281,7 +281,7 @@ static int mydev_probe(struct platform_device *pdev)
 }
 ```
 
-## Deferring probe
+## Deferring probe {#deferring-probe}
 
 If a resource isn't ready yet (e.g., a clock driver hasn't probed yet):
 
@@ -299,7 +299,7 @@ static int mydev_probe(struct platform_device *pdev)
 
 `-EPROBE_DEFER` tells the probe infrastructure to retry this driver once any other driver finishes probing.
 
-## Observing platform devices
+## Observing platform devices {#observing-platform-devices}
 
 ```bash
 # List platform devices
@@ -320,7 +320,7 @@ echo mydev.0 > /sys/bus/platform/drivers/mydev/bind
 dmesg | grep mydev
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Linux Device Model](device-model.md) — struct device, bus, driver internals
 - [Character and Misc Devices](chardev.md) — Exposing devices via /dev

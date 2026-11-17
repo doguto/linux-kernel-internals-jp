@@ -1,8 +1,8 @@
-# ARM64 Boot Sequence
+# ARM64 Boot Sequence {#arm64-boot-sequence}
 
 > From reset vector to start_kernel: head.S, page table setup, and MMU enable
 
-## Overview
+## Overview {#overview}
 
 When power is applied to an ARM64 system, the CPU starts executing at the reset vector with the MMU disabled, in the highest exception level supported by the hardware.
 
@@ -34,7 +34,7 @@ EL1 (Kernel) → arch/arm64/kernel/head.S
                └─ b start_kernel  (C code)
 ```
 
-## head.S: the entry point
+## head.S: the entry point {#heads-the-entry-point}
 
 ```asm
 /* arch/arm64/kernel/head.S */
@@ -75,7 +75,7 @@ SYM_CODE_START(primary_entry)
 SYM_CODE_END(primary_entry)
 ```
 
-## Exception level setup
+## Exception level setup {#exception-level-setup}
 
 ```c
 /* arch/arm64/kernel/head.S */
@@ -116,7 +116,7 @@ SYM_FUNC_START_LOCAL(el2_setup)
 SYM_FUNC_END(el2_setup)
 ```
 
-## Early page tables
+## Early page tables {#early-page-tables}
 
 Before the MMU is enabled, the kernel creates minimal page tables mapping:
 1. The kernel itself (identity map for the boot path)
@@ -149,7 +149,7 @@ SYM_FUNC_START_LOCAL(__create_page_tables)
 SYM_FUNC_END(__create_page_tables)
 ```
 
-## CPU setup: enabling the MMU
+## CPU setup: enabling the MMU {#cpu-setup-enabling-the-mmu}
 
 ```asm
 /* arch/arm64/kernel/head.S */
@@ -205,7 +205,7 @@ SYM_FUNC_START_LOCAL(__enable_mmu)
 SYM_FUNC_END(__enable_mmu)
 ```
 
-## After MMU enable: __primary_switched
+## After MMU enable: __primary_switched {#after-mmu-enable-_primaryswitched}
 
 ```asm
 SYM_FUNC_START_LOCAL(__primary_switched)
@@ -237,7 +237,7 @@ SYM_FUNC_START_LOCAL(__primary_switched)
 SYM_FUNC_END(__primary_switched)
 ```
 
-## SMP secondary CPU boot
+## SMP secondary CPU boot {#smp-secondary-cpu-boot}
 
 Secondary CPUs start at `secondary_entry` after being released by the primary:
 
@@ -272,7 +272,7 @@ void secondary_start_kernel(void)
 }
 ```
 
-## Observing the boot
+## Observing the boot {#observing-the-boot}
 
 ```bash
 # See kernel boot messages:
@@ -300,7 +300,7 @@ dmesg | grep "CPU features"
 cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ARM64 Exception Model](exception-model.md) — EL0-EL3, exception entry/exit
 - [ARM64 Memory Model](memory-model.md) — TTBR0/TTBR1, page table format

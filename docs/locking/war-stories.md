@@ -1,30 +1,30 @@
-# War Stories: Locking and Synchronization Bugs
+# War Stories: Locking and Synchronization Bugs {#war-stories-locking-and-synchronization-bugs}
 
 > Three CVEs and one origin story, all from the same corner of the kernel — rt_mutex and PI-futexes, the priority-inheritance machinery that keeps a high-priority task from starving behind a low-priority lock holder, and the three separate ways getting that machinery's bookkeeping wrong has gone badly
 
 All three CVEs here live in the same subsystem — priority-inheritance futexes and the rt_mutex they're built on. Two of the three are the mirror image of each other: rt_mutex has to keep several pieces of state (a userspace futex word, `pi_state`, the mutex's own owner field) consistent across code paths that don't all touch every piece at once, and one bug left that state inconsistent after an unhandled fault while the other missed a precondition check its sibling function already had. The third CVE is a different kind of mistake entirely — a lock-discipline violation, not a state-consistency one. The fourth page isn't a bug at all: it's why any of this machinery exists.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix (or, for the origin story, the original merge) landed in mainline — newest first.
 
-### [The Deadlock Detector That Scheduled While Atomic](war-stories/rtmutex-deadlock-detector-atomic-sleep.md)
+### [The Deadlock Detector That Scheduled While Atomic](war-stories/rtmutex-deadlock-detector-atomic-sleep.md) {#the-deadlock-detector-that-scheduled-while-atomic}
 **Linux 6.11 (September 2024) · CVE-2024-46829**
 rt_mutex's own cycle detector confirmed a genuine deadlock and responded by warning and then looping forever calling `schedule()` — while still holding the raw spinlock every other waiter on the same lock needed to make progress.
 
-### [The PI-Futex Fixup That Had No Answer for a Permanent Fault](war-stories/pi-futex-fixup-owner-uaf.md)
+### [The PI-Futex Fixup That Had No Answer for a Permanent Fault](war-stories/pi-futex-fixup-owner-uaf.md) {#the-pi-futex-fixup-that-had-no-answer-for-a-permanent-fault}
 **Linux 5.11 (February 2021) · CVE-2021-3347**
 When the kernel couldn't write a new owner's TID back into a PI futex word, it gave up without reconciling its own rt_mutex and pi_state — and a subsequent unlock on that mismatch corrupted a waiter structure still resident on another task's kernel stack.
 
-### [Towelroot: The Missing Check on the Requeuer's Half of the Pair](war-stories/towelroot-futex-requeue.md)
+### [Towelroot: The Missing Check on the Requeuer's Half of the Pair](war-stories/towelroot-futex-requeue.md) {#towelroot-the-missing-check-on-the-requeuers-half-of-the-pair}
 **Linux 3.15 (June 2014) · CVE-2014-3153**
 `futex_requeue()` never checked that a PI-requeue's source and destination were different futexes — the identical check on the sibling function, added two years earlier for an unrelated crash, hadn't been enough to catch it.
 
-### [The PI-Mutex Origin Story](war-stories/pi-mutex-origin.md)
+### [The PI-Mutex Origin Story](war-stories/pi-mutex-origin.md) {#the-pi-mutex-origin-story}
 **Linux 2.6.18 (September 2006) · not a CVE**
 A low-priority lock holder can be starved by a medium-priority task that has nothing to do with the lock at all — priority-inheritance mutexes exist because a plain mutex has no way to stop this, and it took a blunt public objection from Linus Torvalds before the kernel carried a mainline implementation anyway.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | Deadlock detector | PI-futex fixup | Towelroot | PI-mutex origin |
 |---------|:---:|:---:|:---:|:---:|
@@ -42,7 +42,7 @@ A low-priority lock holder can be starved by a medium-priority task that has not
 
 **None of the three CVEs here have a public exploit tool except Towelroot — and Towelroot's is one of the most consequential local root exploits the kernel has ever shipped.** Read alongside [the origin story](war-stories/pi-mutex-origin.md), there's a certain irony: the mechanism Torvalds worried was "your system is broken anyway" territory became, about eight years later, the exact subsystem whose bookkeeping mistakes produced the highest-impact bug on this page.
 
-## See also
+## See also {#see-also}
 
 - [Locking Overview](README.md) — spinlocks, mutexes, rt_mutex, and RCU
 - [VFS War Stories](../vfs/war-stories.md) — a comparable set of local-privilege CVEs from a different subsystem, useful for contrasting root-cause shapes

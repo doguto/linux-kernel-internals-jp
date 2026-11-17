@@ -1,8 +1,8 @@
-# request_irq and free_irq
+# request_irq and free_irq {#requestirq-and-freeirq}
 
 > Registering interrupt handlers with the kernel
 
-## The basic API
+## The basic API {#the-basic-api}
 
 ```c
 #include <linux/interrupt.h>
@@ -25,13 +25,13 @@ int devm_request_irq(struct device *dev, unsigned int irq,
                      const char *name, void *dev_id);
 ```
 
-## Why this API has barely changed while everything under it has
+## Why this API has barely changed while everything under it has {#why-this-api-has-barely-changed-while-everything-under-it-has}
 
 `request_irq()`'s shape has been almost untouched since the early 2.6 series, even as the hardware it sits on top of went through IOAPIC, MSI, MSI-X, per-CPU vectors, and (on other architectures) entirely different controller families like ARM's GIC. That stability isn't an accident or a case of the API being frozen in amber — it's the direct payoff of the `irq_desc`/flow-handler/`irq_chip` separation covered on the [Interrupt Handling Overview](interrupts.md#the-irq_desc-lookup) page: because a driver's handler only ever talks to a Linux IRQ number, and everything controller-specific lives behind `irq_chip` ops the driver never touches, an entirely new interrupt controller can be plugged into the kernel without any existing driver's `request_irq()` call needing to change.
 
 The one real change to the handler signature itself is its third argument. Through Linux 2.6.18, a handler was `irqreturn_t (*)(int, void *, struct pt_regs *)` — the raw register state at the moment of interrupt was passed to every handler, "just in case." (The `irq_handler_t` typedef itself arrived just before this: a separate, immediately-preceding commit in the same October 2006 series, "IRQ: Typedef the IRQ handler function type", introduced the name for whatever the handler signature happened to be at that point.) David Howells's [*"IRQ: Maintain regs pointer globally rather than passing to IRQ handlers"*](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7d12e780e003f93433d49ce78cfedf4b4c52adc5) (October 2006) then dropped the `pt_regs` argument for 2.6.19 (confirmed via tag-diff: present at v2.6.18, gone at v2.6.19), leaving today's `irqreturn_t (*)(int, void *)`. Almost nothing actually used `regs` (the commit's own message names the real consumers: `profile_tick()` for profiling and `update_process_times()` for user-vs-kernel CPU time accounting — the kind of thing that surfaces in `/proc/stat` and per-process `/proc/<pid>/stat`, not `/proc/interrupts` — and both could get at the current register state through `get_irq_regs()` instead), and passing a live pointer into every handler was a standing invitation to misuse it for something other than its original diagnostic purpose. Removing an argument nobody needed, once there was an equally capable alternative for the handful of callers who did, is the kind of API cleanup that's much easier to justify than to reverse — which is presumably why, two decades on, it's still the only breaking change this signature has ever had.
 
-## Handler return values
+## Handler return values {#handler-return-values}
 
 ```c
 typedef irqreturn_t (*irq_handler_t)(int irq, void *dev_id);
@@ -45,7 +45,7 @@ typedef irqreturn_t (*irq_handler_t)(int irq, void *dev_id);
 - Return `IRQ_HANDLED` when you've handled it
 - Return `IRQ_WAKE_THREAD` to wake the threaded handler (see [Threaded IRQs](threaded-irq.md))
 
-## IRQF flags
+## IRQF flags {#irqf-flags}
 
 ```c
 /* Trigger type (usually already configured by firmware/devicetree) */
@@ -70,7 +70,7 @@ IRQF_NOBALANCING      /* exclude from IRQ balancing */
 IRQF_PERCPU           /* per-CPU interrupt */
 ```
 
-## A minimal driver example
+## A minimal driver example {#a-minimal-driver-example}
 
 ```c
 #include <linux/interrupt.h>
@@ -127,7 +127,7 @@ static int my_driver_probe(struct platform_device *pdev)
 }
 ```
 
-## Shared IRQs
+## Shared IRQs {#shared-irqs}
 
 On legacy systems (e.g., PCI INTx), multiple devices share a single IRQ line. Each registers with `IRQF_SHARED`:
 
@@ -147,7 +147,7 @@ Requirements for shared IRQs:
 2. `dev_id` must be unique (typically the device struct pointer)
 3. Each handler must be able to determine if it was its device
 
-## disable_irq / enable_irq
+## disable_irq / enable_irq {#disableirq-enableirq}
 
 ```c
 /* Disable an IRQ and wait for any running handler to complete */
@@ -166,7 +166,7 @@ enable_irq(irq);   /* depth=0, now enabled */
 
 `disable_irq()` increments `irq_desc->depth`. The IRQ is physically disabled when `depth` goes from 0 to 1 (first disable call) and re-enabled when it returns to 0 (last enable call).
 
-## synchronize_irq
+## synchronize_irq {#synchronize_irq}
 
 `free_irq()` already calls `synchronize_irq()` internally before returning, so any in-flight handlers are guaranteed complete when `free_irq()` returns:
 
@@ -177,7 +177,7 @@ free_irq(dev->irq, dev);
 
 `devm_request_irq()` handles this automatically at device removal, so prefer it over manual `request_irq()` + `free_irq()`.
 
-## Getting the IRQ number
+## Getting the IRQ number {#getting-the-irq-number}
 
 ```c
 /* From platform resources */
@@ -193,7 +193,7 @@ irq = pci_irq_vector(pdev, 0);  /* MSI or legacy */
 irq = gpiod_to_irq(gpio);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [IRQ Descriptor and irq_chip](irq-desc.md) — What's registered under the hood
 - [Threaded IRQs](threaded-irq.md) — Moving work out of hardirq context

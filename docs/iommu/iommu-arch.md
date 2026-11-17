@@ -1,10 +1,10 @@
-# IOMMU Architecture
+# IOMMU Architecture {#iommu-architecture}
 
 > Intel VT-d, AMD-Vi, iommu_domain, and device passthrough
 
-## Hardware implementations
+## Hardware implementations {#hardware-implementations}
 
-### Intel VT-d (Virtualization Technology for Directed I/O)
+### Intel VT-d (Virtualization Technology for Directed I/O) {#intel-vt-d-virtualization-technology-for-directed-io}
 
 Intel VT-d places a remapping hardware unit (DMAR unit) on the root complex. Each DMAR unit manages a segment of the PCIe bus:
 
@@ -36,7 +36,7 @@ struct intel_iommu {
 };
 ```
 
-### AMD-Vi (AMD I/O Virtualization)
+### AMD-Vi (AMD I/O Virtualization) {#amd-vi-amd-io-virtualization}
 
 AMD uses a single system-wide Device Table (indexed by 16-bit device ID = bus+dev+fn). Each entry points to the device's page table and control flags:
 
@@ -58,11 +58,11 @@ struct dev_table_entry {
  *   (interrupt remapping fields are in data[2] of the 256-bit entry) */
 ```
 
-## The IOMMU subsystem
+## The IOMMU subsystem {#the-iommu-subsystem}
 
 The kernel abstracts both implementations behind a common API in `drivers/iommu/`.
 
-### struct iommu_domain
+### struct iommu_domain {#struct-iommu_domain}
 
 An `iommu_domain` represents an isolated address space. One or more devices are attached to a domain; they share the same IOVA→PA translation.
 
@@ -96,7 +96,7 @@ struct iommu_domain_ops {
 };
 ```
 
-### Domain types
+### Domain types {#domain-types}
 
 ```c
 /* IOMMU_DOMAIN_BLOCKED: all access denied (default) */
@@ -108,7 +108,7 @@ struct iommu_domain_ops {
 
 For normal DMA: `IOMMU_DOMAIN_DMA` — the kernel's DMA API manages IOVA allocation and mapping automatically.
 
-## IOMMU groups
+## IOMMU groups {#iommu-groups}
 
 An IOMMU group is the smallest set of devices that the IOMMU can isolate from each other. Devices in the same group must share a domain — you cannot give them independent address spaces.
 
@@ -130,7 +130,7 @@ ls /sys/kernel/iommu_groups/12/devices/
 # 0000:01:00.1   (GPU HDMI audio)
 ```
 
-## VFIO: device passthrough to VMs
+## VFIO: device passthrough to VMs {#vfio-device-passthrough-to-vms}
 
 VFIO (Virtual Function I/O) uses the IOMMU to safely pass a physical device to a VM (KVM) or userspace driver.
 
@@ -150,7 +150,7 @@ IOMMU page tables
 physical device
 ```
 
-### VFIO usage
+### VFIO usage {#vfio-usage}
 
 ```c
 /* Userspace VFIO API */
@@ -183,7 +183,7 @@ ioctl(container, VFIO_IOMMU_MAP_DMA, &dma_map);
 /* The IOMMU prevents the device from accessing other host memory */
 ```
 
-## SR-IOV: virtual functions
+## SR-IOV: virtual functions {#sr-iov-virtual-functions}
 
 SR-IOV (Single Root I/O Virtualization) creates multiple PCIe **virtual functions** (VFs) from a single physical function (PF). Each VF gets its own PCIe configuration space and can be independently assigned to a VM.
 
@@ -201,7 +201,7 @@ echo "0000:01:10.0" > /sys/bus/pci/devices/0000:01:10.0/driver/unbind
 echo "8086 154c" > /sys/bus/pci/drivers/vfio-pci/new_id
 ```
 
-## IOMMU TLB management
+## IOMMU TLB management {#iommu-tlb-management}
 
 The IOMMU has its own TLB (IOTLB) that caches IOVA→PA translations. After unmapping, the kernel must flush the IOTLB:
 
@@ -241,7 +241,7 @@ static inline void iommu_iotlb_sync(struct iommu_domain *domain,
 
 Deferred flushing (flush queue) amortizes IOTLB invalidation cost by batching unmap operations.
 
-## Observing the IOMMU
+## Observing the IOMMU {#observing-the-iommu}
 
 ```bash
 # DMAR faults (device violated IOMMU policy)
@@ -262,9 +262,9 @@ cat /sys/kernel/debug/iommu/iova
 modprobe vfio-pci
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/iommu.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/iommu.h) — `struct iommu_domain`, `struct iommu_domain_ops`, the `IOMMU_DOMAIN_*` type constants, and the `iommu_iotlb_gather_add_page()`/`iommu_iotlb_sync()` inline helpers
 - [drivers/iommu/iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iommu.c) — `iommu_group_alloc()` and the rest of IOMMU group/domain management
@@ -272,7 +272,7 @@ modprobe vfio-pci
 - [drivers/iommu/amd/amd_iommu_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/amd/amd_iommu_types.h) — `struct dev_table_entry`: the AMD-Vi per-device-ID table entry
 - [Documentation/ABI/testing/sysfs-kernel-iommu_groups](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ABI/testing/sysfs-kernel-iommu_groups) — the `/sys/kernel/iommu_groups/` ABI referenced in this page's group examples
 
-### Related pages
+### Related pages {#related-pages}
 
 - [DMA API](dma-api.md) — kernel driver DMA programming built on top of the domain/group model described here
 - [IOVA Allocator](iova-allocator.md) — how `alloc_iova()`/`free_iova()` manage the address space inside an `IOMMU_DOMAIN_DMA` domain
@@ -284,10 +284,10 @@ modprobe vfio-pci
 - [Memory Management: DMA](../mm/dma.md) — DMA zones, SWIOTLB, and device coherency
 - [Memory Management: Device Coherency](../mm/device-coherency.md) — cache coherency rules for DMA-capable devices
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Jonathan Corbet's coverage of Alex Williamson's VFIO framework, explaining why "any device can access any memory regions made available to any other devices in the same group" and how groups became the unit of ownership for passthrough (January 3, 2012)
 
-### External
+### External {#external}
 
 - [x86 IOMMU Support](https://docs.kernel.org/arch/x86/iommu.html) — official kernel documentation on DMAR/IVRS ACPI tables, the `intel_iommu=igfx_off`/`iommu=pt` boot options, and fault-reporting formats for both vendors

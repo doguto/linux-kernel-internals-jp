@@ -1,8 +1,8 @@
-# IOVA Allocator
+# IOVA Allocator {#iova-allocator}
 
 > How the kernel manages I/O virtual address space
 
-## What is IOVA space?
+## What is IOVA space? {#what-is-iova-space}
 
 Every device attached to an IOMMU domain has its own I/O virtual address space. When a driver calls `dma_map_single()` or `dma_map_sg()`, the DMA-IOMMU layer must carve out a range of I/O virtual addresses (IOVAs), create a mapping in the IOMMU page tables for that range, and return the IOVA to the driver. When the transfer completes and the driver unmaps, those addresses must be returned to the pool.
 
@@ -10,9 +10,9 @@ At high packet or I/O rates this allocation and free cycle is on the fast path. 
 
 The allocator lives in `drivers/iommu/iova.c`, with types declared in `include/linux/iova.h`.
 
-## Core data structures
+## Core data structures {#core-data-structures}
 
-### struct iova_domain
+### struct iova_domain {#struct-iova_domain}
 
 ```c
 /* include/linux/iova.h */
@@ -33,7 +33,7 @@ struct iova_domain {
 
 The domain covers the entire IOVA address space available to a group of devices. The `granule` is typically 4 KB (one page), meaning IOVAs are allocated in page-sized units. The rbtree tracks allocated ranges so the allocator can find holes.
 
-### struct iova
+### struct iova {#struct-iova}
 
 ```c
 /* include/linux/iova.h */
@@ -46,9 +46,9 @@ struct iova {
 
 Each allocated range is represented as a `struct iova` embedded in the rbtree. `pfn_lo` and `pfn_hi` are IOVA PFNs (IOVA >> PAGE_SHIFT).
 
-## Allocation and free call paths
+## Allocation and free call paths {#allocation-and-free-call-paths}
 
-### alloc_iova()
+### alloc_iova() {#alloc_iova}
 
 ```c
 /* drivers/iommu/iova.c */
@@ -64,7 +64,7 @@ The allocation is top-down for an important reason: keeping low IOVA space (belo
 
 This is a simplification, though: even a device with a 64-bit DMA mask doesn't get a high IOVA on its very first allocation. For PCI devices, `iommu_dma_alloc_iova()` tries the 32-bit range *first* — a SAC-before-DAC compatibility workaround, gated by the per-device `pci_32bit_workaround` flag (`struct dev_iommu`) — and only falls back to the full address range once that 32-bit attempt fails. See the next section for the real allocation logic.
 
-### free_iova()
+### free_iova() {#free_iova}
 
 ```c
 /* drivers/iommu/iova.c */
@@ -73,7 +73,7 @@ void free_iova(struct iova_domain *iovad, unsigned long pfn);
 
 Removes the node from the rbtree and updates the cached hint. With the spinlock, this is serialized — at high rate, this becomes a bottleneck. The per-CPU rcache exists to avoid this path entirely for common sizes.
 
-### The DMA-IOMMU wrapper
+### The DMA-IOMMU wrapper {#the-dma-iommu-wrapper}
 
 In practice, drivers don't call `alloc_iova()` directly. The DMA-IOMMU layer calls `iommu_dma_alloc_iova()`, which — for a PCI device that hasn't yet been proven to need the full address range — tries the 32-bit region first, and only calls into the general path (still via the per-CPU rcache, falling back to `alloc_iova()` on a miss) once that's exhausted:
 
@@ -110,11 +110,11 @@ done:
 
 `pci_32bit_workaround` starts `true` for every PCI device (unless the `iommu.forcedac` boot parameter disables it) and latches to `false` — permanently, for that device — the first time the 32-bit range can't satisfy a request. The comment in the real source is explicit about why this still matters on modern hardware: "the original SAC vs. DAC reasoning loses relevance with PCIe, but enough hardware and firmware bugs are still lurking out there that it's safest not to venture into the 64-bit space until necessary."
 
-## Per-CPU IOVA caches (rcache)
+## Per-CPU IOVA caches (rcache) {#per-cpu-iova-caches-rcache}
 
 The magazine-style per-CPU cache is the key to keeping IOVA allocation off the rbtree lock on the fast path.
 
-### struct iova_rcache and struct iova_cpu_rcache
+### struct iova_rcache and struct iova_cpu_rcache {#struct-iovarcache-and-struct-iovacpu_rcache}
 
 ```c
 /* drivers/iommu/iova.c — these are all internal to iova.c, not exposed
@@ -153,7 +153,7 @@ frees depot magazines down to `num_online_cpus()` — the depot is not an unboun
 
 `IOVA_RANGE_CACHE_MAX_SIZE` is defined as 6 in recent kernels, giving 6 size classes. Each size class manages IOVAs of a specific power-of-two page count (1, 2, 4, 8, 16, 32 pages), covering the most common DMA buffer sizes for network and NVMe workloads.
 
-### How the magazine cache works
+### How the magazine cache works {#how-the-magazine-cache-works}
 
 The design is inspired by the Slab magazine allocator (Bonwick & Adams, 2001):
 
@@ -178,7 +178,7 @@ The critical property: on the normal alloc/free cycle, no spinlock contention wi
 
 **Performance note:** The rcache is what makes 10 Gbps+ NICs viable on IOMMU-enabled systems. Without it, every packet's DMA map would acquire the global rbtree spinlock. A single-threaded 25 Gbps small-packet workload can issue over 3 million `dma_map_single()` calls per second; the rcache absorbs this with no cross-CPU synchronization in the common case.
 
-## IOVA flush queues (struct iova_fq)
+## IOVA flush queues (struct iova_fq) {#iova-flush-queues-struct-iova_fq}
 
 Flush queues decouple IOVA freeing from IOTLB invalidation. Unmapping a DMA range requires both freeing the IOVA and flushing the IOMMU TLB. IOTLB flushes are expensive — on Intel VT-d they require a write to the DMAR registers and may stall the bus.
 
@@ -229,7 +229,7 @@ static void iommu_dma_free_iova(struct iommu_domain *domain, dma_addr_t iova,
 }
 ```
 
-## The 32-bit DMA limit
+## The 32-bit DMA limit {#the-32-bit-dma-limit}
 
 Many legacy and embedded devices have 32-bit DMA address registers. On a system with > 4 GB of RAM, the IOMMU must ensure those devices receive IOVAs below 4 GB — physical memory above 4 GB is fine, but the IOVA the device sees must fit in 32 bits.
 
@@ -248,7 +248,7 @@ When a driver calls `dma_set_mask(dev, DMA_BIT_MASK(32))`, subsequent allocation
 
 The consequence: on a system with many 32-bit devices, the low IOVA range becomes contested. Large 64-bit-capable devices should explicitly call `dma_set_mask(dev, DMA_BIT_MASK(64))` to allow allocation from the unconstrained high range, leaving low IOVAs for those that truly need them.
 
-## Impact on DMA performance
+## Impact on DMA performance {#impact-on-dma-performance}
 
 IOVA allocation shows up in profiles in two ways:
 
@@ -273,7 +273,7 @@ cat /sys/kernel/tracing/trace
 
 A common tuning mistake for high-throughput drivers: using `dma_map_single()` per-packet instead of `dma_map_sg()` with batched scatter-gather entries. `dma_map_sg()` coalesces contiguous pages and issues fewer IOVA allocations, reducing both allocator pressure and the number of IOMMU page table entries that must be flushed.
 
-## Source files
+## Source files {#source-files}
 
 | File | Role |
 |------|------|
@@ -282,15 +282,15 @@ A common tuning mistake for high-throughput drivers: using `dma_map_single()` pe
 | `drivers/iommu/dma-iommu.c` | DMA-IOMMU glue: calls into iova.c from DMA API |
 | `drivers/iommu/iommu.c` | `iommu_iotlb_gather` accumulation and sync |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/iommu/iova.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iova.c) — `alloc_iova()`, `free_iova()`, the rbtree allocator, and the per-CPU rcache/magazine implementation
 - [include/linux/iova.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/iova.h) — `struct iova_domain` and `struct iova` definitions
 - [drivers/iommu/dma-iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/dma-iommu.c) — `iommu_dma_alloc_iova()` / `iommu_dma_free_iova()`, and the flush-queue (`struct iova_fq`) implementation
 
-### Related pages
+### Related pages {#related-pages}
 
 - [DMA API](dma-api.md) — `dma_map_single`, `dma_map_sg`, swiotlb
 - [IOMMU Architecture](iommu-arch.md) — IOMMU domains, IOTLB flush mechanics

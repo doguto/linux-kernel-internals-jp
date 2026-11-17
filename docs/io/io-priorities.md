@@ -1,8 +1,8 @@
-# I/O Priorities
+# I/O Priorities {#io-priorities}
 
 > `ioprio_set()`, priority classes, cgroup I/O weight, and how the block scheduler uses priorities
 
-## What I/O priority means
+## What I/O priority means {#what-io-priority-means}
 
 CPU scheduling has hard preemption: a higher-priority task can evict a lower-priority task from the CPU mid-instruction. I/O priority is weaker — it is **advisory**. The block scheduler tries to honor it but makes no hard guarantees except for the RT class on BFQ.
 
@@ -20,7 +20,7 @@ What priority does *not* affect:
 
 ---
 
-## ioprio_set() and ioprio_get()
+## ioprio_set() and ioprio_get() {#ioprioset-and-ioprioget}
 
 There is no glibc wrapper; these are raw syscalls.
 
@@ -40,7 +40,7 @@ int class = IOPRIO_PRIO_CLASS(prio);   /* extract class */
 int level = IOPRIO_PRIO_DATA(prio);    /* extract level */
 ```
 
-### Target selectors
+### Target selectors {#target-selectors}
 
 | Constant | Meaning |
 |---|---|
@@ -48,7 +48,7 @@ int level = IOPRIO_PRIO_DATA(prio);    /* extract level */
 | `IOPRIO_WHO_PGRP` | All processes in a process group |
 | `IOPRIO_WHO_USER` | All processes owned by a UID |
 
-### Priority classes
+### Priority classes {#priority-classes}
 
 ```c
 /* include/uapi/linux/ioprio.h */
@@ -58,7 +58,7 @@ int level = IOPRIO_PRIO_DATA(prio);    /* extract level */
 #define IOPRIO_CLASS_IDLE  3   /* idle: only when nothing else is pending */
 ```
 
-### Building a priority value
+### Building a priority value {#building-a-priority-value}
 
 ```c
 /* Encode class and level into a single u16 */
@@ -73,7 +73,7 @@ IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0)  /* IDLE (level ignored) */
 
 Priority levels within RT and BE run from **0 (highest) to 7 (lowest)**. The IDLE class has no meaningful level.
 
-### The ionice command
+### The ionice command {#the-ionice-command}
 
 `ionice` is the userspace wrapper around these syscalls:
 
@@ -96,9 +96,9 @@ ionice -c 2 -n 0 bash -c 'exec your-critical-job'
 
 ---
 
-## Priority classes in detail
+## Priority classes in detail {#priority-classes-in-detail}
 
-### RT (Real-time)
+### RT (Real-time) {#rt-real-time}
 
 RT is the highest priority class. The block scheduler (BFQ or mq-deadline) dispatches RT requests before any BE or IDLE request in the same queue.
 
@@ -114,7 +114,7 @@ ionice -c 1 -n 0 -p $(pgrep jackd)
 
 Under BFQ, RT queues are served in a separate budget round before any BE queue gets a turn. Under mq-deadline, RT requests are placed on a high-priority FIFO that is drained before BE and IDLE FIFOs.
 
-### BE (Best-effort)
+### BE (Best-effort) {#be-best-effort}
 
 BE is the default class for every process. If no explicit `ioprio_set()` has been called, the process is in `IOPRIO_CLASS_BE` with a level derived from its CPU nice value:
 
@@ -128,7 +128,7 @@ So `nice 0` → BE level 4 (the midpoint), `nice -20` → BE level 0, `nice 19` 
 - BFQ allocates bandwidth proportionally: a process at level 0 gets more sectors per round than one at level 7
 - CFQ (removed in Linux 5.0) ordered BE processes strictly within the class; BFQ uses a weighted fair queue
 
-### IDLE
+### IDLE {#idle}
 
 IDLE class processes are served only when no RT or BE I/O is pending. This makes them ideal for background workloads that should not compete with foreground I/O at all.
 
@@ -147,7 +147,7 @@ The IDLE class is implemented in BFQ by checking whether any RT or BE `bfq_queue
 
 ---
 
-## How priority flows through the kernel
+## How priority flows through the kernel {#how-priority-flows-through-the-kernel}
 
 A priority set with `ioprio_set()` must travel from `task_struct` all the way to the block scheduler. Here is the full path:
 
@@ -171,7 +171,7 @@ Scheduler (BFQ) enqueue
   → weight within BE class derived from ioprio level
 ```
 
-### get_current_ioprio()
+### get_current_ioprio() {#getcurrentioprio}
 
 ```c
 /* include/linux/ioprio.h */
@@ -197,7 +197,7 @@ static inline int __get_task_ioprio(struct task_struct *p)
 
 If the process has an `io_context` with an explicit ioprio set via `ioprio_set()`, that value is used. Otherwise the ioprio is derived from the CPU nice value, keeping the two scheduling dimensions loosely coupled.
 
-### bio->bi_ioprio assignment
+### bio->bi_ioprio assignment {#bio-bi_ioprio-assignment}
 
 ```c
 /* block/blk-core.c — a bio inherits ioprio from the submitting task */
@@ -214,11 +214,11 @@ For direct I/O the bio carries the originating kiocb's `ki_ioprio` (copied when 
 
 ---
 
-## cgroup v2 I/O weight
+## cgroup v2 I/O weight {#cgroup-v2-io-weight}
 
 With **cgroup v2**, I/O priorities are administered per-cgroup rather than per-process. The cgroup hierarchy overrides or supplements individual `task_struct->ioprio` values.
 
-### io.weight
+### io.weight {#ioweight}
 
 ```bash
 # Set I/O weight for a cgroup (range 1–10000, default 100)
@@ -240,7 +240,7 @@ echo "50"  > /sys/fs/cgroup/background/io.weight
 
 `io.weight` is **not** translated into a per-task ioprio level — it is a separate, proportional mechanism. The value (1–10000, default 100) is consumed directly by the block I/O controller (BFQ, or the `blk-iocost` cost model that backs `io.weight` on other schedulers) to divide device bandwidth among sibling cgroups in proportion to their weights: a cgroup with weight 200 gets roughly twice the share of one with weight 100. Per-task `ioprio` (via `ionice`) and per-cgroup `io.weight` are independent knobs — the former orders requests within BFQ's priority classes, the latter partitions bandwidth between cgroups.
 
-### io.bfq.weight
+### io.bfq.weight {#iobfqweight}
 
 BFQ exposes its own weight interface directly:
 
@@ -259,7 +259,7 @@ cat /sys/fs/cgroup/myapp/io.bfq.weight
 
 `io.bfq.weight` maps directly into BFQ's internal weight without the intermediate conversion that `io.weight` applies.
 
-### Moving a process into a cgroup
+### Moving a process into a cgroup {#moving-a-process-into-a-cgroup}
 
 ```bash
 # Create a cgroup
@@ -276,7 +276,7 @@ echo $PID > /sys/fs/cgroup/background/cgroup.procs
 
 ---
 
-## io.latency: latency targeting
+## io.latency: latency targeting {#iolatency-latency-targeting}
 
 `io.latency` lets a cgroup declare a target I/O latency. BFQ monitors whether the cgroup meets its target and boosts its weight temporarily when latency exceeds the threshold.
 
@@ -295,7 +295,7 @@ echo "8:16 5000" >> /sys/fs/cgroup/db/io.latency  # 5ms for sdb
 
 The latency is specified in **microseconds**.
 
-### How io.latency works with BFQ
+### How io.latency works with BFQ {#how-iolatency-works-with-bfq}
 
 ```
 Cgroup submits I/O request
@@ -334,7 +334,7 @@ Now if the backup causes database latency to spike above 5ms, BFQ will throttle 
 
 ---
 
-## BFQ: Budget Fair Queueing
+## BFQ: Budget Fair Queueing {#bfq-budget-fair-queueing}
 
 BFQ is the scheduler that most fully honors ioprio and cgroup I/O weights. It is the default on many desktop and general-purpose Linux systems.
 
@@ -347,7 +347,7 @@ cat /sys/block/sda/queue/scheduler
 echo bfq > /sys/block/sda/queue/scheduler
 ```
 
-### Per-process queues
+### Per-process queues {#per-process-queues}
 
 BFQ maintains a `bfq_queue` for each process (or cgroup entity):
 
@@ -367,7 +367,7 @@ struct bfq_queue {
 
 Each `bfq_queue` is served for at most `max_budget` sectors per activation; when the budget is exhausted (or times out), BFQ moves on to the next queue. `max_budget` itself is auto-tuned by BFQ (starting from `bfq_default_max_budget`, 16K sectors) — it is *not* derived from the ioprio level. What the ioprio level controls is the queue's **weight**, which sets its share of disk time in BFQ's proportional-share (WF2Q+) scheduler.
 
-### From ioprio level to weight
+### From ioprio level to weight {#from-ioprio-level-to-weight}
 
 ```
 weight ← ioprio level  (block/bfq-wf2q.c):
@@ -382,25 +382,25 @@ weight ← ioprio level  (block/bfq-wf2q.c):
 
 A process at BE level 0 therefore carries 8× the weight of one at BE level 7 (80 vs 10), and receives a correspondingly larger share of the device.
 
-### Priority class ordering
+### Priority class ordering {#priority-class-ordering}
 
 BFQ enforces a strict class hierarchy: RT before BE before IDLE. This ordering is not a simple `if` ladder — it falls out of BFQ's hierarchical scheduler. `bfq_select_queue()` (in `block/bfq-iosched.c`) picks the next queue to serve by walking BFQ's service-tree hierarchy via `bfq_get_next_queue()`, and that hierarchy is ordered by class: an RT queue with pending I/O is always chosen before any BE queue, and BE queues before IDLE. Within the BE class, queues are served in weighted-fair order according to their per-queue weights (derived from the ioprio level).
 
-### Soft real-time detection
+### Soft real-time detection {#soft-real-time-detection}
 
 BFQ heuristically detects **interactive** applications (web browsers, text editors) by observing short bursts of I/O separated by idle periods (think time above a threshold). Such queues are temporarily boosted even while in the BE class — the "soft real-time" promotion. Internally this is implemented as **weight raising**: BFQ multiplies the queue's weight by a coefficient (`bfqq->wr_coeff > 1`) for a bounded interval, so a boosted queue is scheduled ahead of ordinary BE queues. Queues flagged as part of a "large burst" of process creation (`bfq_bfqq_in_large_burst()`) are excluded, since a storm of short-lived processes is not the interactive pattern the heuristic targets.
 
-### Seeky detection
+### Seeky detection {#seeky-detection}
 
 BFQ tracks whether a queue submits **sequential** or **random** (seeky) I/O, classifying a queue as seeky via the `BFQQ_SEEKY()` macro when its average seek distance is large. Seeky queues are budgeted differently: because random I/O cannot make good use of a long, uninterrupted service slot, BFQ caps their budget so a seeky queue cannot hold the device while doing little useful work. This protects sequential workloads — which benefit from sustained access — from being starved by a random-access queue.
 
-### io_uring and BFQ
+### io_uring and BFQ {#io_uring-and-bfq}
 
 io_uring can confuse BFQ's per-process model when application-level queuing is used. With SQPOLL or fixed files, multiple processes may submit I/O through a single io_uring context. BFQ sees a single queue rather than per-process queues, potentially undermining per-process weight differentiation. For cgroup-based isolation, `io.weight` is more reliable than per-process ioprio when io_uring is in use.
 
 ---
 
-## mq-deadline: simpler priority support
+## mq-deadline: simpler priority support {#mq-deadline-simpler-priority-support}
 
 `mq-deadline` is the default scheduler for NVMe and SCSI devices on many systems. Its priority support is simpler than BFQ's — ordering only, no bandwidth proportioning.
 
@@ -410,7 +410,7 @@ cat /sys/block/nvme0n1/queue/scheduler
 # [mq-deadline] none bfq
 ```
 
-### How mq-deadline handles ioprio
+### How mq-deadline handles ioprio {#how-mq-deadline-handles-ioprio}
 
 mq-deadline maintains separate FIFO queues per priority class:
 
@@ -452,9 +452,9 @@ cat /sys/block/sda/queue/iosched/prio_aging_expire  # ms before low-prio ages up
 
 ---
 
-## ionice in practice
+## ionice in practice {#ionice-in-practice}
 
-### Background maintenance jobs
+### Background maintenance jobs {#background-maintenance-jobs}
 
 ```bash
 # Filesystem backup — IDLE class, no impact on foreground I/O
@@ -470,7 +470,7 @@ ionice -c 3 btrfs balance start -dusage=50 /
 ionice -c 3 find /var/log -name '*.log' -size +100M -exec gzip {} \;
 ```
 
-### Interactive and database I/O
+### Interactive and database I/O {#interactive-and-database-io}
 
 ```bash
 # High-priority database backup (needs CAP_SYS_ADMIN for RT)
@@ -484,7 +484,7 @@ ionice -p $(pgrep mysqld)
 # best-effort: prio 4
 ```
 
-### Adjusting a running process
+### Adjusting a running process {#adjusting-a-running-process}
 
 ```bash
 # Lower a running process's I/O priority without restarting it
@@ -496,7 +496,7 @@ ionice -p $PID             # verify
 ionice -c 2 -n 0 -p $BACKUP_PID
 ```
 
-### Scripting with ioprio_set directly
+### Scripting with ioprio_set directly {#scripting-with-ioprio_set-directly}
 
 ```c
 #include <sys/syscall.h>
@@ -524,11 +524,11 @@ int main(void)
 
 ---
 
-## Priority inversion
+## Priority inversion {#priority-inversion}
 
 A subtle hazard in the I/O stack: a high-priority process can be blocked waiting for a low-priority process to release a resource.
 
-### Page lock contention
+### Page lock contention {#page-lock-contention}
 
 ```
 High-priority process:   wants to read page at offset X
@@ -542,11 +542,11 @@ Low-priority process:    holds PG_locked (doing writeback or readahead)
 
 This is a form of priority inversion in the page cache layer. The I/O scheduler cannot help because the high-priority process is not blocked *at the scheduler* — it is blocked on a page lock above the scheduler.
 
-### inode and filesystem locks
+### inode and filesystem locks {#inode-and-filesystem-locks}
 
 Similarly, if a low-priority process holds `inode->i_rwsem` during a truncate or write, a high-priority process wanting to read the same file will block for the duration, regardless of its ioprio.
 
-### Partial mitigation: IOCB_NOWAIT
+### Partial mitigation: IOCB_NOWAIT {#partial-mitigation-iocb_nowait}
 
 `IOCB_NOWAIT` tells the filesystem and block layer to return `-EAGAIN` rather than blocking if any lock or resource is not immediately available:
 
@@ -562,13 +562,13 @@ if (ret == -EAGAIN) {
 
 io_uring uses `IOCB_NOWAIT` by default for all non-blocking operations, falling back to a worker thread only when `-EAGAIN` is returned. This avoids priority inversion at the cost of a worker thread for the slow path.
 
-### cgroup io.latency as a compensating mechanism
+### cgroup io.latency as a compensating mechanism {#cgroup-iolatency-as-a-compensating-mechanism}
 
 `io.latency` can help indirectly. It is implemented by the **blk-iolatency** controller (independent of BFQ): you set a target latency for a protected cgroup, and when that cgroup's observed latency exceeds the target, the controller throttles the *competing* cgroups — reducing their allowed I/O depth — until the protected cgroup recovers. It cannot undo a lock-based inversion, but by squeezing lower-priority I/O it keeps a latency-sensitive cgroup's delays bounded. This is a containment mechanism, not prevention.
 
 ---
 
-## Kernel data structures summary
+## Kernel data structures summary {#kernel-data-structures-summary}
 
 ```
 task_struct
@@ -592,7 +592,7 @@ struct bfq_queue
 
 ---
 
-## Choosing the right mechanism
+## Choosing the right mechanism {#choosing-the-right-mechanism}
 
 | Scenario | Recommended approach |
 |---|---|
@@ -606,7 +606,7 @@ struct bfq_queue
 
 ---
 
-## Observing I/O priorities in action
+## Observing I/O priorities in action {#observing-io-priorities-in-action}
 
 ```bash
 # See ioprio for all threads of a process
@@ -632,7 +632,7 @@ cat /sys/fs/cgroup/myapp/io.stat  # BFQ per-cgroup statistics
 
 ---
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Contents |
 |---|---|
@@ -647,7 +647,7 @@ cat /sys/fs/cgroup/myapp/io.stat  # BFQ per-cgroup statistics
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [I/O Schedulers](../block/io-schedulers.md) — BFQ, mq-deadline, none, Kyber
 - [blk-mq](../block/blk-mq.md) — multi-queue block layer, request lifecycle

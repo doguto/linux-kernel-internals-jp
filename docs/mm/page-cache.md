@@ -1,8 +1,8 @@
-# Page Cache
+# Page Cache {#page-cache}
 
 > Caching file data in memory
 
-## What Is the Page Cache?
+## What Is the Page Cache? {#what-is-the-page-cache}
 
 The page cache keeps recently accessed file data in RAM. When you read a file, the data stays in memory - subsequent reads come from RAM instead of disk.
 
@@ -18,9 +18,9 @@ Application ──► Kernel ──► Page Cache (fast, ~100ns)
                            (storage not touched)
 ```
 
-## Why Page Cache?
+## Why Page Cache? {#why-page-cache}
 
-### The Speed Gap
+### The Speed Gap {#the-speed-gap}
 
 | Storage | Latency | Bandwidth |
 |---------|---------|-----------|
@@ -33,16 +33,16 @@ Application ──► Kernel ──► Page Cache (fast, ~100ns)
 
 RAM is 1000-100,000x faster than storage. Caching exploits temporal locality - recently accessed data is likely to be accessed again.
 
-### Benefits
+### Benefits {#benefits}
 
 - **Read performance**: Hot data served from RAM
 - **Write buffering**: Writes batched, not synchronous
 - **Shared data**: Multiple processes share cached pages
 - **Memory efficiency**: Unused RAM becomes cache
 
-## How It Works
+## How It Works {#how-it-works}
 
-### Reading Files
+### Reading Files {#reading-files}
 
 ```
 read(fd, buf, 4096)
@@ -65,7 +65,7 @@ Add to page cache
 Copy to user buffer
 ```
 
-### Writing Files
+### Writing Files {#writing-files}
 
 ```
 write(fd, buf, 4096)
@@ -88,7 +88,7 @@ Writeback thread flushes to disk
 
 Writes return immediately - data is in cache, marked dirty. Background writeback handles actual disk I/O.
 
-### The address_space Structure
+### The address_space Structure {#the-address_space-structure}
 
 Each file (inode) has an `address_space` managing its cached pages:
 
@@ -104,9 +104,9 @@ struct address_space {
 
 Pages are indexed by file offset in the XArray, enabling fast lookup.
 
-## Dirty Pages and Writeback
+## Dirty Pages and Writeback {#dirty-pages-and-writeback}
 
-### Dirty Page Lifecycle
+### Dirty Page Lifecycle {#dirty-page-lifecycle}
 
 ```
 Clean page ──► write() ──► Dirty page ──► writeback ──► Clean page
@@ -115,7 +115,7 @@ Clean page ──► write() ──► Dirty page ──► writeback ──► 
                      Tracked in dirty lists
 ```
 
-### Writeback Triggers
+### Writeback Triggers {#writeback-triggers}
 
 | Trigger | When |
 |---------|------|
@@ -125,7 +125,7 @@ Clean page ──► write() ──► Dirty page ──► writeback ──► 
 | Dirty threshold | Too many dirty pages system-wide |
 | Dirty age | Page dirty longer than `dirty_expire_centisecs` |
 
-### Dirty Page Limits
+### Dirty Page Limits {#dirty-page-limits}
 
 Defaults defined in [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c); tunables documented in the [vm sysctl docs](https://docs.kernel.org/admin-guide/sysctl/vm.html):
 
@@ -146,7 +146,7 @@ cat /proc/sys/vm/dirty_writeback_centisecs
 # 500 (5s) - writeback thread wakes this often
 ```
 
-### Writeback Threads
+### Writeback Threads {#writeback-threads}
 
 ```bash
 # Per-device writeback threads
@@ -154,9 +154,9 @@ ps aux | grep writeback
 # kworker/u8:0+flush-8:0   (for device 8:0)
 ```
 
-## Reading Strategies
+## Reading Strategies {#reading-strategies}
 
-### Readahead
+### Readahead {#readahead}
 
 The kernel predicts sequential access and reads ahead:
 
@@ -182,7 +182,7 @@ cat /sys/block/sda/queue/read_ahead_kb
 echo 256 > /sys/block/sda/queue/read_ahead_kb
 ```
 
-### mmap vs read()
+### mmap vs read() {#mmap-vs-read}
 
 | Method | Mechanism | Best For |
 |--------|-----------|----------|
@@ -200,9 +200,9 @@ void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
 /* Reads are zero-copy, but writes get a private copy */
 ```
 
-## Memory Pressure
+## Memory Pressure {#memory-pressure}
 
-### Page Cache as "Free" Memory
+### Page Cache as "Free" Memory {#page-cache-as-free-memory}
 
 Linux uses "free" RAM for page cache. When applications need memory:
 
@@ -218,7 +218,7 @@ cat /proc/meminfo | grep -E "MemFree|Cached|Buffers|Available"
 # MemAvailable: 9876543 kB  (free + reclaimable cache)
 ```
 
-### Drop Caches (Testing Only)
+### Drop Caches (Testing Only) {#drop-caches-testing-only}
 
 ```bash
 # Drop clean caches (for benchmarking)
@@ -229,9 +229,9 @@ echo 3 > /proc/sys/vm/drop_caches
 # 3 = both
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### System-Wide Cache Statistics
+### System-Wide Cache Statistics {#system-wide-cache-statistics}
 
 ```bash
 # Disk I/O counters (not direct cache hit/miss - includes readahead, direct I/O)
@@ -249,7 +249,7 @@ cat /proc/meminfo | grep -E "Cached|Buffers|Dirty|Writeback"
 
 Note: Linux doesn't expose a direct "cache hit ratio" counter. High pgpgin with low Cached growth suggests cache pressure.
 
-### Per-File Cache Status
+### Per-File Cache Status {#per-file-cache-status}
 
 ```bash
 # Check if file is cached (using vmtouch or fincore)
@@ -261,7 +261,7 @@ vmtouch -v /path/to/file
 fincore /path/to/file
 ```
 
-### Tracing
+### Tracing {#tracing}
 
 ```bash
 # Trace page cache events
@@ -270,21 +270,21 @@ echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_dirty_page/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Origins (1990s)
+### Origins (1990s) {#origins-1990s}
 
 Page cache has existed since early Linux. Originally separate from the "buffer cache" (for block devices).
 
-### Unified Page Cache (v2.4, 2001)
+### Unified Page Cache (v2.4, 2001) {#unified-page-cache-v24-2001}
 
 Buffer cache merged into page cache. All file I/O goes through one cache.
 
-### Radix Tree (v2.6)
+### Radix Tree (v2.6) {#radix-tree-v26}
 
 Pages indexed in radix tree for fast lookup by file offset.
 
-### XArray (v4.20, 2018)
+### XArray (v4.20, 2018) {#xarray-v420-2018}
 
 **Commit**: [a28334862993](https://git.kernel.org/linus/a28334862993) ("page cache: Finish XArray conversion") | [LKML](https://lore.kernel.org/lkml/20180611140639.17215-1-willy@infradead.org/)
 
@@ -292,7 +292,7 @@ Pages indexed in radix tree for fast lookup by file offset.
 
 Radix tree replaced with XArray - cleaner API, same performance.
 
-### Folios (v5.16, 2022)
+### Folios (v5.16, 2022) {#folios-v516-2022}
 
 **Commit**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210430180740.2707166-1-willy@infradead.org/)
 
@@ -300,7 +300,7 @@ Radix tree replaced with XArray - cleaner API, same performance.
 
 Folios represent one or more contiguous pages as a single unit. This abstraction reduces overhead for huge pages in the page cache and eliminates confusion about whether a function operates on a head page or any page.
 
-## Direct I/O (Bypassing Cache)
+## Direct I/O (Bypassing Cache) {#direct-io-bypassing-cache}
 
 Some applications bypass page cache entirely:
 
@@ -322,9 +322,9 @@ int fd = open("file", O_RDWR | O_DIRECT);
 - No write buffering
 - Application must handle caching
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Cache Thrashing
+### Cache Thrashing {#cache-thrashing}
 
 Working set larger than available RAM.
 
@@ -336,7 +336,7 @@ Working set larger than available RAM.
 - Reduce working set
 - Use O_DIRECT for some workloads
 
-### Dirty Page Buildup
+### Dirty Page Buildup {#dirty-page-buildup}
 
 Too many dirty pages causing write stalls.
 
@@ -348,7 +348,7 @@ Too many dirty pages causing write stalls.
 - Faster storage
 - Reduce write rate
 
-### Readahead Mismatch
+### Readahead Mismatch {#readahead-mismatch}
 
 Sequential readahead hurts random workloads.
 
@@ -358,9 +358,9 @@ Sequential readahead hurts random workloads.
 - Reduce `read_ahead_kb`
 - Use `madvise(MADV_RANDOM)` for mmap
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -368,13 +368,13 @@ Sequential readahead hurts random workloads.
 | [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | Readahead logic |
 | [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | Dirty page handling |
 
-### Related
+### Related {#related}
 
 - [reclaim](reclaim.md) - How cache pages are reclaimed
 - [mmap](mmap.md) - Memory-mapped file I/O
 - [swap](swap.md) - When anonymous pages go to disk
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) — page cache core: `filemap_read()`, `filemap_fault()`, `add_to_page_cache_lru()`, and the address_space operations
 - [mm/readahead.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) — readahead logic: sequential detection, window sizing, and `page_cache_async_ra()`

@@ -1,4 +1,4 @@
-# Scheduling & Concurrency
+# Scheduling & Concurrency {#scheduling-concurrency}
 
 How the kernel shares CPUs among competing tasks and keeps concurrent code correct.
 

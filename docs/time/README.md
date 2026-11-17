@@ -1,8 +1,8 @@
-# Time Subsystem
+# Time Subsystem {#time-subsystem}
 
 > Timekeeping, clocksources, and timers in the Linux kernel
 
-## The time stack
+## The time stack {#the-time-stack}
 
 ```
 User space
@@ -30,7 +30,7 @@ User space
                              NOHZ idle                   (on clockevent IRQ)
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -42,7 +42,7 @@ User space
 | [Time Namespaces](time-namespaces.md) | CLONE_NEWTIME, CLOCK_MONOTONIC isolation, CRIU use case |
 | [War Stories](war-stories.md) | TSC drift, leap second thundering herd, timer_delete vs timer_delete_sync race, jiffies wraparound |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Available clocksources (current in brackets)

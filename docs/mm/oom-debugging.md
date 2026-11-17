@@ -1,12 +1,12 @@
-# OOM scenarios and debugging guide
+# OOM scenarios and debugging guide {#oom-scenarios-and-debugging-guide}
 
 > Practical playbook for preventing, detecting, and diagnosing out-of-memory kills
 
 This is the hands-on companion to [Running out of memory](oom.md), which covers the kernel internals. This page focuses on what to do in practice.
 
-## Preventing OOM
+## Preventing OOM {#preventing-oom}
 
-### Size memory for your workload
+### Size memory for your workload {#size-memory-for-your-workload}
 
 ```bash
 # Baseline: check current usage and headroom
@@ -22,7 +22,7 @@ awk '/Rss:/ {sum += $2} END {print sum/1024, "MB"}' /proc/[0-9]*/smaps_rollup 2>
 
 Rule of thumb: keep `MemAvailable` above 10-15% of `MemTotal` during peak load. If it regularly drops below that, add RAM or reduce workload.
 
-### Add swap
+### Add swap {#add-swap}
 
 Running without swap is the single most common cause of unnecessary OOM kills. Even a small swap gives the kernel a pressure valve for cold anonymous pages.
 
@@ -47,7 +47,7 @@ sysctl vm.swappiness=30
 
 See [What happens during swapping](swapping.md) for details on how the kernel uses swap.
 
-### Set cgroup memory limits
+### Set cgroup memory limits {#set-cgroup-memory-limits}
 
 Cgroup limits contain runaway processes before they pressure the entire system. See [Memory Cgroups](memcg.md) for the full picture.
 
@@ -64,7 +64,7 @@ echo 1800M > /sys/fs/cgroup/myservice/memory.high
 
 `memory.high` is a soft throttle -- the kernel slows allocations before hitting the hard `memory.max` limit. Always set both.
 
-### Tune watermarks
+### Tune watermarks {#tune-watermarks}
 
 ```bash
 # Give kswapd more room to work (default is often too small for servers)
@@ -74,11 +74,11 @@ sysctl vm.watermark_scale_factor=50 # 0.5% of zone memory per step
 
 See the watermark discussion in [Running out of memory](oom.md#stage-1-watermarks-and-pressure-detection).
 
-## Detecting approaching OOM
+## Detecting approaching OOM {#detecting-approaching-oom}
 
 Catching memory pressure before OOM fires is far better than debugging after the fact.
 
-### Monitor PSI (Pressure Stall Information)
+### Monitor PSI (Pressure Stall Information) {#monitor-psi-pressure-stall-information}
 
 PSI (available since kernel 4.20) is the best single metric for memory pressure.
 
@@ -111,7 +111,7 @@ Operational guidelines (these are heuristics, not kernel-defined limits — tune
 # See kernel docs: Documentation/accounting/psi.rst
 ```
 
-### Track MemAvailable
+### Track MemAvailable {#track-memavailable}
 
 ```bash
 # One-liner: log MemAvailable every 10 seconds
@@ -126,7 +126,7 @@ awk '/MemTotal/ {total=$2} /MemAvailable/ {avail=$2}
      END {pct=avail*100/total; if (pct < 5) print "WARNING: MemAvailable at " pct "%"}' /proc/meminfo
 ```
 
-### Watch vmstat counters
+### Watch vmstat counters {#watch-vmstat-counters}
 
 ```bash
 # Real-time view (1-second interval)
@@ -150,9 +150,9 @@ watch -n 1 'grep -E "allocstall|pgscan_direct|pgsteal|oom_kill" /proc/vmstat'
 
 If `allocstall` is rising, the system is under memory pressure and headed toward OOM.
 
-## Analyzing OOM after the fact
+## Analyzing OOM after the fact {#analyzing-oom-after-the-fact}
 
-### Reading the OOM kill log
+### Reading the OOM kill log {#reading-the-oom-kill-log}
 
 ```bash
 # Find OOM events in kernel log
@@ -189,7 +189,7 @@ Key fields to check:
 !!! tip "order > 0 kills"
     If `order` is greater than 0, the system may not actually be out of memory -- it could be a fragmentation issue. Check if `MemAvailable` was still reasonable in the Mem-Info dump. See [Compaction](compaction.md) for details.
 
-### Correlate with monitoring
+### Correlate with monitoring {#correlate-with-monitoring}
 
 The OOM log only captures a snapshot. Correlate with external monitoring to understand the trend:
 
@@ -212,9 +212,9 @@ Questions to answer:
 3. **Was memory steadily growing (leak) or did it spike?** Correlate with your time-series monitoring.
 4. **Which process was actually consuming memory?** The killed process is the largest, not necessarily the leaker.
 
-## Common misconfigurations
+## Common misconfigurations {#common-misconfigurations}
 
-### No swap
+### No swap {#no-swap}
 
 Without swap, anonymous pages (heap, stack) cannot be reclaimed at all. The kernel can only reclaim page cache, and once that is exhausted, OOM is immediate.
 
@@ -226,7 +226,7 @@ swapon --show
 
 Even SSDs benefit from swap. The kernel preferentially swaps cold pages that haven't been touched in minutes or hours.
 
-### Too many OOM-protected processes
+### Too many OOM-protected processes {#too-many-oom-protected-processes}
 
 Setting `oom_score_adj=-1000` on multiple processes leaves the OOM killer with no good victims.
 
@@ -243,7 +243,7 @@ done
 
 If the only killable processes are tiny (low RSS), the OOM killer may loop without freeing enough memory, or the system may hang. Protect only the one or two truly critical processes (e.g., database, init).
 
-### Cgroup limits too tight
+### Cgroup limits too tight {#cgroup-limits-too-tight}
 
 A cgroup limit that matches normal usage with no headroom causes OOM kills during minor spikes.
 
@@ -259,7 +259,7 @@ cat /sys/fs/cgroup/myservice/memory.events | grep high
 
 Set `memory.max` at least 20-30% above typical peak usage. Use `memory.high` at the actual target to get throttling (graceful slowdown) rather than kills.
 
-### Overcommit misconfiguration
+### Overcommit misconfiguration {#overcommit-misconfiguration}
 
 ```bash
 # Check overcommit policy
@@ -273,9 +273,9 @@ cat /proc/sys/vm/overcommit_ratio  # Used with mode 2 (percentage of RAM)
 
 See [Memory Overcommit](overcommit.md) for the full explanation.
 
-## Testing OOM handling
+## Testing OOM handling {#testing-oom-handling}
 
-### stress-ng: controlled memory pressure
+### stress-ng: controlled memory pressure {#stress-ng-controlled-memory-pressure}
 
 ```bash
 # Allocate 90% of available memory across 4 workers
@@ -288,7 +288,7 @@ stress-ng --vm 2 --vm-bytes 120% --vm-keep --timeout 30s
 stress-ng --vm 1 --vm-bytes 50% --vm-method all --vm-keep --timeout 120s
 ```
 
-### Cgroup-based controlled OOM
+### Cgroup-based controlled OOM {#cgroup-based-controlled-oom}
 
 Test OOM within a cgroup without risking the host:
 
@@ -309,7 +309,7 @@ echo $$ > /sys/fs/cgroup/cgroup.procs
 rmdir /sys/fs/cgroup/oom-test
 ```
 
-### oom_score_adj manipulation
+### oom_score_adj manipulation {#oomscoreadj-manipulation}
 
 ```bash
 # Make a specific process the OOM target
@@ -321,7 +321,7 @@ for pid in $(pgrep -x myapp); do
 done
 ```
 
-### Verify your application handles OOM gracefully
+### Verify your application handles OOM gracefully {#verify-your-application-handles-oom-gracefully}
 
 ```bash
 # Check if a process restarted after OOM (systemd)
@@ -332,9 +332,9 @@ systemctl status myservice
 systemctl show myservice | grep Restart=
 ```
 
-## Userspace OOM handlers
+## Userspace OOM handlers {#userspace-oom-handlers}
 
-### systemd-oomd
+### systemd-oomd {#systemd-oomd}
 
 `systemd-oomd` (introduced in [systemd 247](https://github.com/systemd/systemd/blob/v247/NEWS), stabilized in [248](https://github.com/systemd/systemd/blob/v248/NEWS)) kills processes based on PSI pressure and swap usage before the kernel OOM killer fires. It acts earlier and more predictably.
 
@@ -365,7 +365,7 @@ How it differs from the kernel OOM killer:
 | Victim selection | Highest `oom_score` | Highest memory usage in cgroup |
 | Configuration | `/proc/*/oom_score_adj` | Unit file directives |
 
-### Other userspace handlers
+### Other userspace handlers {#other-userspace-handlers}
 
 **earlyoom** -- lightweight daemon, popular on desktops:
 
@@ -378,15 +378,15 @@ earlyoom -m 5 -s 5    # Kill at 5% memory and 5% swap remaining
 
 **nohang** -- more configurable alternative to earlyoom, supports PSI triggers and custom actions per-process.
 
-### When to use userspace OOM handlers
+### When to use userspace OOM handlers {#when-to-use-userspace-oom-handlers}
 
 - Desktops/workstations: earlyoom or systemd-oomd prevent the system from becoming unresponsive.
 - Container hosts: systemd-oomd with per-slice policies gives predictable behavior.
 - Servers with critical services: userspace handlers can make smarter kill decisions than the kernel.
 
-## Quick reference
+## Quick reference {#quick-reference}
 
-### One-page diagnostic checklist
+### One-page diagnostic checklist {#one-page-diagnostic-checklist}
 
 ```bash
 # 1. Is swap available?
@@ -419,7 +419,7 @@ done
 grep "^-1000$" /proc/*/oom_score_adj 2>/dev/null | head -20
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Running out of memory](oom.md) -- kernel OOM internals (watermarks, reclaim stages, OOM killer scoring)
 - [Memory Cgroups](memcg.md) -- cgroup memory limits and accounting

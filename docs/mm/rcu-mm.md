@@ -1,8 +1,8 @@
-# RCU in Memory Management
+# RCU in Memory Management {#rcu-in-memory-management}
 
 > How Read-Copy-Update lets page faults find VMAs without taking a lock
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -18,7 +18,7 @@
 
 ---
 
-## Why RCU in memory management
+## Why RCU in memory management {#why-rcu-in-memory-management}
 
 Every process's virtual address space is a collection of VMAs (Virtual Memory Areas) stored in the maple tree at `mm->mm_mt`. Every page fault needs to find the right VMA for the faulting address before it can install a page table entry. Until Linux 6.4 this lookup always required taking `mmap_lock` for read.
 
@@ -30,7 +30,7 @@ RCU (Read-Copy-Update) breaks this bottleneck. The maple tree is RCU-safe — it
 
 ---
 
-## RCU basics
+## RCU basics {#rcu-basics}
 
 RCU is a synchronisation mechanism optimised for read-heavy workloads. The core contract:
 
@@ -55,9 +55,9 @@ The key insight is that `synchronize_rcu()` can take milliseconds — readers ac
 
 ---
 
-## VMA lookup under RCU
+## VMA lookup under RCU {#vma-lookup-under-rcu}
 
-### The maple tree is RCU-safe
+### The maple tree is RCU-safe {#the-maple-tree-is-rcu-safe}
 
 The maple tree (`mm->mm_mt`) stores VMAs keyed on address range. When a VMA is removed or a tree node is replaced, the old node is not freed immediately. Instead, `ma_free_rcu()` in `lib/maple_tree.c` calls `kfree_rcu(node, rcu)`, which defers the free until after a grace period:
 
@@ -72,7 +72,7 @@ static void ma_free_rcu(struct maple_node *node)
 
 Readers holding `rcu_read_lock()` can therefore walk tree nodes safely — any node they see is guaranteed to remain allocated (though not necessarily in the tree) until after the read section ends.
 
-### `lock_vma_under_rcu()`
+### `lock_vma_under_rcu()` {#lockvmaunder_rcu}
 
 `lock_vma_under_rcu()` in `mm/mmap_lock.c` is the fast-path VMA lookup used by page faults since v6.4. It combines an RCU read section for the maple tree walk with a per-VMA reference count to stabilise the found VMA:
 
@@ -117,7 +117,7 @@ inval:
 !!! note "IMPORTANT: `vma_start_read()` may release the RCU lock on failure"
     The comment in the source is explicit: when `vma_start_read()` returns an error, it has already called `rcu_read_unlock()`. Callers must not call `rcu_read_unlock()` again in error paths after `vma_start_read()` fails. This asymmetry is a common source of confusion when reading the code.
 
-### `vma_start_read()`
+### `vma_start_read()` {#vmastartread}
 
 `vma_start_read()` (also in `mm/mmap_lock.c`) is the per-VMA read lock acquisition. It uses `vm_lock_seq` and `mm_lock_seq` to detect whether the VMA is currently being written:
 
@@ -159,7 +159,7 @@ The logic:
 
 For the full per-VMA lock state machine and the write-side (`vma_end_write_all()`), see [Per-VMA Locks](per-vma-locks.md).
 
-### The page fault fast path (x86)
+### The page fault fast path (x86) {#the-page-fault-fast-path-x86}
 
 The architecture fault handler in `arch/x86/mm/fault.c` tries the RCU path first:
 
@@ -186,9 +186,9 @@ The `FAULT_FLAG_VMA_LOCK` flag tells `handle_mm_fault()` which lock is held. ARM
 
 ---
 
-## `struct vm_area_struct` and RCU
+## `struct vm_area_struct` and RCU {#struct-vmareastruct-and-rcu}
 
-### Allocation: `SLAB_TYPESAFE_BY_RCU`
+### Allocation: `SLAB_TYPESAFE_BY_RCU` {#allocation-slabtypesafeby_rcu}
 
 `vm_area_struct` objects are allocated from a dedicated slab cache (`vm_area_cachep`) created in `mm/vma_init.c`:
 
@@ -224,7 +224,7 @@ void vm_area_free(struct vm_area_struct *vma)
 
 The slab, not the caller, handles the grace period.
 
-### Fields accessible under RCU (before `vma_start_read()`)
+### Fields accessible under RCU (before `vma_start_read()`) {#fields-accessible-under-rcu-before-vmastartread}
 
 The comment in `include/linux/mm_types.h` at the `struct vm_area_struct` definition states:
 
@@ -250,9 +250,9 @@ Fields that are **not** safe without a successful `vma_start_read()` (per-VMA re
 
 ---
 
-## Page table walks under RCU
+## Page table walks under RCU {#page-table-walks-under-rcu}
 
-### `follow_page_mask()` and `vma_pgtable_walk_begin()`
+### `follow_page_mask()` and `vma_pgtable_walk_begin()` {#followpagemask-and-vmapgtablewalk_begin}
 
 `follow_page_mask()` in `mm/gup.c` looks up a physical page for a user virtual address (used by `get_user_pages()` and friends). It wraps the page table walk with:
 
@@ -289,7 +289,7 @@ void vma_pgtable_walk_end(struct vm_area_struct *vma)
 
 For normal (non-hugetlb) VMAs these are no-ops; the protection comes from the page table lock (`pte_offset_map_lock()`) and the fact that page table pages are reference-counted via `mm->pgtables_bytes` tracking in `mm_inc_nr_ptes()` / `mm_dec_nr_ptes()`.
 
-### Page table page lifetime
+### Page table page lifetime {#page-table-page-lifetime}
 
 Page table pages (the physical pages that *hold* PTEs) are tracked by:
 
@@ -303,11 +303,11 @@ RCU alone does not protect page table pages from being freed. The layered design
 
 ---
 
-## MMU notifiers and SRCU
+## MMU notifiers and SRCU {#mmu-notifiers-and-srcu}
 
 MMU notifiers allow subsystems like KVM and RDMA to be informed when the kernel is about to invalidate page table entries. KVM uses this to flush guest physical → host virtual mappings whenever the host tears down or remaps a region.
 
-### The notifier list uses SRCU, not plain RCU
+### The notifier list uses SRCU, not plain RCU {#the-notifier-list-uses-srcu-not-plain-rcu}
 
 The mmu notifier list in `mm/mmu_notifier.c` uses **SRCU (Sleepable RCU)** rather than classic RCU. The key difference: SRCU permits sleeping inside the read-side critical section, which notifier callbacks (like KVM's TLB flush path) may need.
 
@@ -334,7 +334,7 @@ int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 
 The iteration uses `hlist_for_each_entry_rcu()`, which is safe because notifier registrations and unregistrations modify the list under `mmap_write_lock()` + SRCU synchronisation. Readers only need `srcu_read_lock()`.
 
-### `mmu_notifier_get()` and `mmu_notifier_put()`
+### `mmu_notifier_get()` and `mmu_notifier_put()` {#mmunotifierget-and-mmunotifierput}
 
 ```c
 /* include/linux/mmu_notifier.h */
@@ -353,17 +353,17 @@ void mmu_notifier_put(struct mmu_notifier *subscription);
 
 `mmu_notifier_get()` requires `mmap_write_lock` — registration modifies the notifier list and must be serialised. `mmu_notifier_put()` uses SRCU to defer the final cleanup until all in-progress `invalidate_range_start` callbacks have completed.
 
-### Why this matters for KVM
+### Why this matters for KVM {#why-this-matters-for-kvm}
 
 Without SRCU, KVM's invalidation callback would have to complete without sleeping, which is impractical for cross-hypervisor TLB flushes or IPI-based shootdowns that need to synchronize with vCPU threads. SRCU allows KVM to sleep inside `invalidate_range_start()` while still being protected against concurrent list modification.
 
 ---
 
-## Folio and page cache RCU
+## Folio and page cache RCU {#folio-and-page-cache-rcu}
 
 The page cache maps file offsets to folios (contiguous groups of pages) using an XArray (`mapping->i_pages`). The XArray is internally RCU-safe: its `xa_head` pointer is `__rcu`-annotated and node slots are RCU-protected.
 
-### RCU lookups in `filemap.c`
+### RCU lookups in `filemap.c` {#rcu-lookups-in-filemapc}
 
 Several functions iterate the page cache under `rcu_read_lock()` and use `folio_try_get()` to atomically acquire a reference before the RCU section ends:
 
@@ -403,15 +403,15 @@ The pattern is:
 
 `filemap_get_folio()` (single-folio lookup) ultimately calls `filemap_get_entry()` which uses the same `rcu_read_lock()` + `folio_try_get()` + `xas_reload()` sequence.
 
-### Why not just a spinlock?
+### Why not just a spinlock? {#why-not-just-a-spinlock}
 
 The page cache is read far more often than it is modified. Under load, a spinlock on every lookup would bounce the cache line across CPUs. RCU with `folio_try_get()` allows all CPUs to read the XArray concurrently, at the cost of slightly more complex retry logic on the rare occasions a folio is being evicted simultaneously.
 
 ---
 
-## Grace period costs
+## Grace period costs {#grace-period-costs}
 
-### `synchronize_rcu()` is slow
+### `synchronize_rcu()` is slow {#synchronize_rcu-is-slow}
 
 `synchronize_rcu()` blocks until every CPU has passed through a quiescent state (a point where no RCU read section is active on that CPU). On a large NUMA system this can take several milliseconds.
 
@@ -424,7 +424,7 @@ Memory management code avoids synchronous grace periods on performance-critical 
 | MMU notifier unregister | `synchronize_srcu(&srcu)` | Must ensure all in-flight callbacks are done before freeing the notifier |
 | `mmap_write_unlock()` | Calls `vma_end_write_all()` → `mm_lock_seqcount_end()` | Invalidates all per-VMA read locks by incrementing `mm_lock_seq`; no grace period needed |
 
-### The hidden cost in `mmap_write_lock()`
+### The hidden cost in `mmap_write_lock()` {#the-hidden-cost-in-mmapwritelock}
 
 When `mmap_write_lock()` acquires the write side of `mmap_lock`, it does *not* itself wait for an RCU grace period — but the write lock will block until all current `mmap_read_lock()` holders release, and those read holders may themselves be sitting inside `rcu_read_lock()` sections in the fault path. Effectively, the write lock waits for in-progress fault handling to complete.
 
@@ -432,9 +432,9 @@ When `mmap_write_unlock()` is called, it calls `vma_end_write_all()` which incre
 
 ---
 
-## Debugging RCU issues in mm
+## Debugging RCU issues in mm {#debugging-rcu-issues-in-mm}
 
-### `CONFIG_PROVE_RCU`
+### `CONFIG_PROVE_RCU` {#configprovercu}
 
 Enable `CONFIG_PROVE_RCU` (implied by `CONFIG_PROVE_LOCKING`) to get lockdep coverage of RCU usage. With this option, `RCU_LOCKDEP_WARN()` calls emit warnings when RCU-annotated pointers are accessed outside a valid RCU read section.
 
@@ -448,15 +448,15 @@ RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
 RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu read lock held");
 ```
 
-### `lockdep_assert_in_rcu_read_lock()`
+### `lockdep_assert_in_rcu_read_lock()` {#lockdepassertinrcuread_lock}
 
 `include/linux/rcupdate.h` defines `lockdep_assert_in_rcu_read_lock()` (requires `CONFIG_PROVE_RCU`), which triggers a warning if called outside an RCU read section. Use this in new code that assumes RCU protection.
 
-### Sparse and `__rcu` annotations
+### Sparse and `__rcu` annotations {#sparse-and-__rcu-annotations}
 
 Pointer fields that are RCU-protected are annotated `__rcu` in their declarations (e.g., `void __rcu *xa_head` in `struct xarray`). Building with `sparse` (`make C=1`) will warn if such a pointer is dereferenced without `rcu_dereference()`.
 
-### Common bugs in mm RCU code
+### Common bugs in mm RCU code {#common-bugs-in-mm-rcu-code}
 
 **Sleeping inside `rcu_read_lock()`.**
 Classic RCU does not permit sleeping. In the page fault path, `lock_vma_under_rcu()` holds `rcu_read_lock()` only for the maple tree walk — it releases it before calling `handle_mm_fault()`. If a code path acquires `rcu_read_lock()` and then calls something that can sleep (memory allocation, file I/O, a mutex), `CONFIG_PROVE_RCU` will fire.
@@ -477,7 +477,7 @@ Because slab objects can be reused after a grace period, a reader that obtains a
 
 ---
 
-## Putting it together: a read fault on a normal VMA
+## Putting it together: a read fault on a normal VMA {#putting-it-together-a-read-fault-on-a-normal-vma}
 
 ```
 User thread takes a page fault
@@ -501,33 +501,33 @@ No `mmap_lock` is taken in the common case. The VMA tree walk, the VMA stability
 
 ---
 
-## See also
+## See also {#see-also}
 
 - [Per-VMA Locks](per-vma-locks.md) — detailed coverage of `vm_lock_seq`, `vm_refcnt`, and the write-side protocol
 - [Maple Tree](maple-tree.md) — the RCU-safe B-tree that stores VMAs
 - [Page Tables](page-tables.md) — PTE locking, `pte_offset_map_lock()`, and page table page lifetime
 - [Page Cache](page-cache.md) — XArray-based folio storage and the broader file-backed fault path
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `mmap_write_lock()` / `mmap_write_unlock()` and `vma_end_write_all()` that bumps `mm_lock_seq`
 - [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()` and `vma_start_read()` implementations
 - [include/linux/rcupdate.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/rcupdate.h) — `rcu_read_lock()`, `rcu_dereference()`, `call_rcu()`, `kfree_rcu()`, `synchronize_rcu()`
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/RCU/whatisRCU.rst`](https://docs.kernel.org/RCU/whatisRCU.html) — the authoritative introduction to RCU semantics and the read-copy-update contract
 - [`Documentation/RCU/rcu_dereference.rst`](https://docs.kernel.org/RCU/rcu_dereference.html) — rules for safely dereferencing RCU-protected pointers
 - [`Documentation/RCU/Design/Requirements/Requirements.rst` — Sleepable RCU](https://docs.kernel.org/RCU/Design/Requirements/Requirements.html#sleepable-rcu) — when and why to use sleepable RCU (as used by MMU notifiers)
 
-### Related pages
+### Related pages {#related-pages}
 
 - [../locking/rcu.md](../locking/rcu.md) — general RCU concepts, quiescent states, and grace period mechanics
 - [per-vma-locks.md](per-vma-locks.md) — the per-VMA locking layer that sits above the RCU VMA lookup
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: What is RCU, fundamentally?](https://lwn.net/Articles/262464/) — Paul McKenney's definitive series on RCU design
 - [LWN: RCU usage in the Linux kernel](https://lwn.net/Articles/573424/) — survey of how subsystems use RCU, including memory management patterns

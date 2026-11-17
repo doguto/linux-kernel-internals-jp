@@ -1,8 +1,8 @@
-# KLP State: Custom Consistency Checks
+# KLP State: Custom Consistency Checks {#klp-state-custom-consistency-checks}
 
 > The klp_state API for patches that need more than stack scanning
 
-## The problem with stack scanning alone
+## The problem with stack scanning alone {#the-problem-with-stack-scanning-alone}
 
 The standard KLP consistency model — scanning every task's stack and waiting
 until no task is executing the old function — is sufficient for most patches.
@@ -28,7 +28,7 @@ In all of these cases, the patch author needs a way to run custom logic at
 the moment of transition — logic that the kernel cannot infer automatically.
 The `klp_state` API, added in Linux 5.5, provides exactly that.
 
-## struct klp_state
+## struct klp_state {#struct-klp_state}
 
 ```c
 /* include/linux/livepatch.h */
@@ -54,7 +54,7 @@ static struct klp_state my_states[] = {
 The `data` pointer is available for the patch author to store any per-state
 information needed during the transition.
 
-## Attaching states to a patch
+## Attaching states to a patch {#attaching-states-to-a-patch}
 
 The `states` array is a field of `struct klp_patch`:
 
@@ -80,7 +80,7 @@ static struct klp_patch my_patch = {
 };
 ```
 
-## Transition callbacks in struct klp_object
+## Transition callbacks in struct klp_object {#transition-callbacks-in-struct-klp_object}
 
 The hooks where custom consistency logic runs are declared per-object in
 `struct klp_object`:
@@ -131,7 +131,7 @@ The call order during a reverse transition (disabling a patch):
    succeeded: `klp_pre_patch_callback()` records that in the
    `post_unpatch_enabled` flag (`kernel/livepatch/core.h`).
 
-## klp_get_state() and klp_get_prev_state()
+## klp_get_state() and klp_get_prev_state() {#klpgetstate-and-klpgetprev_state}
 
 Two helpers provide access to state data from within the callbacks:
 
@@ -164,7 +164,7 @@ stricter: it reads the global `klp_transition_patch` and opens with
 therefore only be called while a transition is actually in progress — in
 practice, from inside the callbacks, and not from patched code at runtime.
 
-## Example: switching a subsystem from a spinlock to a mutex
+## Example: switching a subsystem from a spinlock to a mutex {#example-switching-a-subsystem-from-a-spinlock-to-a-mutex}
 
 Consider a subsystem whose shared table is protected by `subsys_spinlock`. A
 patch wants a `mutex` instead, so the critical section can sleep. The two lock
@@ -394,7 +394,7 @@ If `pre_patch_subsys` returns a non-zero value — for example, because
 `klp_enable_patch()` propagates that error to `insmod` and no hooks are
 installed. The system stays on the old code path with no partial state.
 
-## klp_state and cumulative patches
+## klp_state and cumulative patches {#klp_state-and-cumulative-patches}
 
 When a cumulative patch replaces an earlier patch that also used `klp_state`,
 the new patch can inherit the previous patch's state data via
@@ -480,7 +480,7 @@ immediately — `pre_patch_v2()` above is never called, and `insmod` fails
 outright. The patch's own callbacks have no say in the decision; they only
 run once the kernel has already confirmed compatibility.
 
-## Observing state
+## Observing state {#observing-state}
 
 There is no sysfs file that exposes `klp_state` data. The state is internal to
 the patch module. To observe transition progress use the standard sysfs files:
@@ -521,26 +521,26 @@ status and `dmesg` will contain a line like:
 livepatch: pre-patch callback failed for object 'vmlinux'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_state`, `struct klp_object`, `struct klp_patch`, and the `klp_get_state()`/`klp_get_prev_state()` declarations
 - [include/linux/livepatch_external.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch_external.h) — `struct klp_callbacks`: the `pre_patch`/`post_patch`/`pre_unpatch`/`post_unpatch` hook table
 - [kernel/livepatch/state.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/state.c) — `klp_get_state()` and `klp_get_prev_state()` implementations, plus the automatic version-compatibility check (`klp_is_patch_compatible()`) run when a patch is loaded
 - [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `klp_enable_patch()`: where `pre_patch` is invoked before the ftrace hooks are installed, and how a non-zero return aborts the transition
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KLP Consistency Model](klp-consistency.md) — stack scanning, per-task state, forced transitions
 - [Cumulative Patches and Atomic Replace](klp-cumulative.md) — `.replace=true`, `klp_get_prev_state()` in context
 - [Kernel Live Patching](klp.md) — `struct klp_func`, `struct klp_patch`, ftrace redirection
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Live patching for CPU vulnerabilities](https://lwn.net/Articles/775264/) — Nicolai Stange's account of the L1TF/KPTI live patches, which had to flip global page-table semantics mid-transition using exactly the pre/post-patch callback pattern this page describes
 
-### External
+### External {#external}
 
 - [System State Changes — The Linux Kernel documentation](https://docs.kernel.org/livepatch/system-state.html) — upstream documentation for the `klp_state` API and its version-compatibility rules
 - [(Un)patching Callbacks — The Linux Kernel documentation](https://docs.kernel.org/livepatch/callbacks.html) — upstream documentation for `pre_patch`/`post_patch`/`pre_unpatch`/`post_unpatch` semantics and use cases

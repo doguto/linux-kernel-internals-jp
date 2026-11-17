@@ -1,8 +1,8 @@
-# Workqueue Internals
+# Workqueue Internals {#workqueue-internals}
 
 > cmwq architecture, worker pools, work item lifecycle, and NUMA affinity
 
-## Why workqueues exist
+## Why workqueues exist {#why-workqueues-exist}
 
 Interrupt handlers (hardirq and softirq) run atomically — they cannot sleep or block. Work that needs to sleep, acquire mutexes, or do I/O must be deferred. Workqueues provide a kernel thread pool that can run this deferred work in process context.
 
@@ -16,7 +16,7 @@ Interrupt fires:
                     → can mutex_lock(), kmalloc(GFP_KERNEL), etc.
 ```
 
-## Concurrency-Managed Workqueues (cmwq)
+## Concurrency-Managed Workqueues (cmwq) {#concurrency-managed-workqueues-cmwq}
 
 Since Linux 2.6.36, workqueues use **cmwq** — introduced by Tejun Heo [(LWN)](https://lwn.net/Articles/394084/) — a unified worker pool that automatically manages concurrency:
 
@@ -32,7 +32,7 @@ After cmwq (shared worker pool):
   All workqueues share the pool → far fewer threads
 ```
 
-### Worker pool types
+### Worker pool types {#worker-pool-types}
 
 ```c
 /* kernel/workqueue.c */
@@ -49,7 +49,7 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(struct worker_pool [NR_STD_WORKER_POOLS],
 static DEFINE_HASHTABLE(unbound_pool_hash, UNBOUND_POOL_HASH_ORDER);
 ```
 
-## Creating workqueues
+## Creating workqueues {#creating-workqueues}
 
 ```c
 #include <linux/workqueue.h>
@@ -89,7 +89,7 @@ WQ_SYSFS            /* expose workqueue attributes in /sys/bus/workqueue */
 /* Last arg: max_active = max concurrent work items per CPU (0 = default=256) */
 ```
 
-## Work items
+## Work items {#work-items}
 
 ```c
 /* Declare and initialize work: */
@@ -118,7 +118,7 @@ flush_work(&my_work);             /* blocks until this work item finishes */
 flush_workqueue(wq);              /* blocks until all items in wq finish */
 ```
 
-## Delayed work
+## Delayed work {#delayed-work}
 
 ```c
 struct delayed_work my_dwork;
@@ -135,7 +135,7 @@ cancel_delayed_work(&my_dwork);
 cancel_delayed_work_sync(&my_dwork);
 ```
 
-## struct work_struct internals
+## struct work_struct internals {#struct-work_struct-internals}
 
 ```c
 struct work_struct {
@@ -154,7 +154,7 @@ struct work_struct {
 /* bits [WORK_STRUCT_FLAG_BITS..]: pointer to pool_workqueue or last pool */
 ```
 
-## Worker pool and concurrency management
+## Worker pool and concurrency management {#worker-pool-and-concurrency-management}
 
 ```c
 struct worker_pool {
@@ -190,7 +190,7 @@ struct worker_pool {
 };
 ```
 
-### Concurrency management algorithm
+### Concurrency management algorithm {#concurrency-management-algorithm}
 
 cmwq maintains exactly enough workers to keep the CPU busy:
 
@@ -234,7 +234,7 @@ static bool keep_working(struct worker_pool *pool)
 }
 ```
 
-## Workqueue attributes and NUMA affinity
+## Workqueue attributes and NUMA affinity {#workqueue-attributes-and-numa-affinity}
 
 ```c
 /* Get/set workqueue attributes (WQ_UNBOUND only): */
@@ -252,7 +252,7 @@ free_workqueue_attrs(attrs);
    This ensures cache-hot data stays on the same node. */
 ```
 
-## Workqueue debugging
+## Workqueue debugging {#workqueue-debugging}
 
 ```bash
 # Show all workqueues and their stats:
@@ -292,7 +292,7 @@ kprobe:process_one_work {
 echo 60 > /sys/module/workqueue/parameters/watchdog_thresh
 ```
 
-## WQ_MEM_RECLAIM and rescue workers
+## WQ_MEM_RECLAIM and rescue workers {#wqmemreclaim-and-rescue-workers}
 
 ```c
 /*
@@ -308,7 +308,7 @@ echo 60 > /sys/module/workqueue/parameters/watchdog_thresh
 wq = alloc_workqueue("writeback", WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Workqueues](workqueues.md) — API reference and basic usage
 - [Softirq and Tasklets](softirq.md) — lighter-weight deferral (no sleep)

@@ -1,10 +1,10 @@
-# NUMA Topology Discovery: ACPI SRAT and SLIT
+# NUMA Topology Discovery: ACPI SRAT and SLIT {#numa-topology-discovery-acpi-srat-and-slit}
 
 > How the kernel reads firmware tables to learn which memory belongs to which node — and how far apart those nodes are
 
 On NUMA systems, the kernel cannot detect the physical memory topology on its own. It relies on firmware to describe which CPUs and memory ranges share a proximity domain and how far apart those domains are from each other. On x86 and ARM64 platforms this information lives in two ACPI tables: the **SRAT** (System Resource Affinity Table) and the **SLIT** (System Locality Information Table).
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -14,7 +14,7 @@ On NUMA systems, the kernel cannot detect the physical memory topology on its ow
 | [`mm/numa_memblks.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) | `numa_add_memblk()`, `numa_set_distance()`, NUMA distance table |
 | [`include/acpi/actbl3.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) | SRAT and SLIT C struct definitions |
 
-## What Are SRAT and SLIT?
+## What Are SRAT and SLIT? {#what-are-srat-and-slit}
 
 SRAT and SLIT are ACPI firmware tables that together describe the physical memory topology of a NUMA system.
 
@@ -37,11 +37,11 @@ SLIT distances:
   PXM 1 → PXM 1: 10 (local)          node_distance(1,1) = 10
 ```
 
-## SRAT Table Format
+## SRAT Table Format {#srat-table-format}
 
 The SRAT is a variable-length ACPI table. It starts with a standard header followed by a sequence of subtable entries, each describing one CPU or one memory range.
 
-### Table Header
+### Table Header {#table-header}
 
 ```c
 /* include/acpi/actbl3.h */
@@ -54,7 +54,7 @@ struct acpi_table_srat {
 
 The `header.revision` field is significant: SRAT revision 1 uses only the low 8 bits of `proximity_domain` in CPU affinity entries. Revision 2 and later use the full 32-bit value.
 
-### Memory Affinity Subtable
+### Memory Affinity Subtable {#memory-affinity-subtable}
 
 Each memory range gets one `acpi_srat_mem_affinity` entry:
 
@@ -80,7 +80,7 @@ struct acpi_srat_mem_affinity {
 
 The kernel skips any entry where `ACPI_SRAT_MEM_ENABLED` is not set. Hot-pluggable ranges are registered with memblock as hotplug regions so the memory hotplug subsystem can manage them correctly.
 
-### CPU Affinity Subtables
+### CPU Affinity Subtables {#cpu-affinity-subtables}
 
 Two subtable types handle CPUs depending on whether the system uses the legacy local APIC or x2APIC:
 
@@ -112,7 +112,7 @@ struct acpi_srat_x2apic_cpu_affinity {
 
 ARM64 systems use `acpi_srat_gicc_affinity` (SRAT type 3) instead of the APIC-based structures.
 
-## SLIT Table Format
+## SLIT Table Format {#slit-table-format}
 
 The SLIT encodes the relative memory access latency between every pair of proximity domains as a flat byte matrix:
 
@@ -141,9 +141,9 @@ Defined reference values (from `include/linux/topology.h`):
 
 The diagonal (`i == j`) must always be `LOCAL_DISTANCE` (10). Off-diagonal values must be strictly greater than 10. The kernel validates this in `slit_valid()` before using the table — if the SLIT fails validation it is silently discarded and default distances are used.
 
-## Kernel Parsing Path
+## Kernel Parsing Path {#kernel-parsing-path}
 
-### Entry Points
+### Entry Points {#entry-points}
 
 On x86, NUMA initialization is orchestrated from `x86_numa_init()` in `arch/x86/mm/numa.c`. It tries each initialization method in order until one succeeds:
 
@@ -159,7 +159,7 @@ x86_numa_init()
   └─ numa_init(dummy_numa_init)           [last resort: single node 0]
 ```
 
-### SRAT Parsing in acpi_numa_init()
+### SRAT Parsing in acpi_numa_init() {#srat-parsing-in-acpinumainit}
 
 `acpi_numa_init()` in `drivers/acpi/numa/srat.c` drives the full SRAT/SLIT parsing sequence:
 
@@ -191,7 +191,7 @@ int __init acpi_numa_init(void)
 }
 ```
 
-### CPU Entry Processing
+### CPU Entry Processing {#cpu-entry-processing}
 
 For each CPU affinity subtable, `acpi_numa_processor_affinity_init()` (in `arch/x86/mm/srat.c`) is called:
 
@@ -200,7 +200,7 @@ For each CPU affinity subtable, `acpi_numa_processor_affinity_init()` (in `arch/
 3. Call `acpi_map_pxm_to_node(pxm)` to get or allocate a Linux node number for this PXM.
 4. Record the APIC ID → node mapping in `__apicid_to_node[]`.
 
-### Memory Entry Processing
+### Memory Entry Processing {#memory-entry-processing}
 
 For each memory affinity subtable, `acpi_parse_memory_affinity()` is called:
 
@@ -210,7 +210,7 @@ For each memory affinity subtable, `acpi_parse_memory_affinity()` is called:
 4. Call `acpi_map_pxm_to_node(pxm)` to get the Linux node number.
 5. Call `numa_add_memblk(node, start, end)` to register the range.
 
-### PXM to Node Mapping
+### PXM to Node Mapping {#pxm-to-node-mapping}
 
 The mapping between firmware PXM values and Linux node numbers is maintained by two arrays in `drivers/acpi/numa/srat.c`:
 
@@ -228,7 +228,7 @@ int node_to_pxm(int node);  /* Returns PXM_INVAL if no mapping */
 
 `acpi_map_pxm_to_node(pxm)` is the internal function that allocates a new node number the first time a PXM is encountered. It uses `first_unset_node(nodes_found_map)` to find the next available slot. This is how sparse PXM values (e.g., PXMs 0, 5, 100) get compacted into consecutive Linux node numbers (0, 1, 2).
 
-### SLIT Parsing
+### SLIT Parsing {#slit-parsing}
 
 `acpi_parse_slit()` iterates over the SLIT matrix after SRAT parsing is complete, so that all PXM→node mappings are already established:
 
@@ -251,17 +251,17 @@ for (i = 0; i < slit->locality_count; i++) {
 
 PXMs that appear in the SLIT but have no corresponding SRAT entry (no CPUs or memory) are silently skipped.
 
-## From Proximity Domains to the Memory Subsystem
+## From Proximity Domains to the Memory Subsystem {#from-proximity-domains-to-the-memory-subsystem}
 
 After SRAT parsing, the topology information is held in two structures that feed into the rest of the kernel.
 
-### numa_memblks and memblock
+### numa_memblks and memblock {#numa_memblks-and-memblock}
 
 `numa_add_memblk()` records `[start, end)` → `node` mappings in an internal `numa_meminfo` structure (in `mm/numa_memblks.c`). Later, `numa_memblks_init()` calls `memblock_set_node()` to tag every `memblock.memory` region with its NUMA node number. This is how the buddy allocator's per-node free lists are populated correctly at boot.
 
 See [memblock: The Boot-Time Memory Allocator](memblock.md) for how `memblock` tracks these regions and hands them to the buddy allocator.
 
-### NUMA Distance Matrix
+### NUMA Distance Matrix {#numa-distance-matrix}
 
 `numa_set_distance(from, to, distance)` writes into a flat `u8` array allocated from memblock:
 
@@ -289,7 +289,7 @@ buddy allocator      scheduler / page alloc
 per-node free lists  fallback node selection
 ```
 
-## Common Firmware Bugs
+## Common Firmware Bugs {#common-firmware-bugs}
 
 !!! warning "Broken SRAT: memory silently assigned to node 0"
     If the SRAT is missing memory entries, the kernel falls through to `numa_fill_memblks()`, which assigns unclaimed physical ranges to node 0. On a 4-socket system this means all 3 remote nodes' memory appears as node 0. The system boots but NUMA is completely broken: no remote memory is accessible from the correct node, and `numactl -H` will show a single huge node.
@@ -315,9 +315,9 @@ per-node free lists  fallback node selection
 !!! warning "SRAT revision mismatch"
     SRAT revision 1 packs the proximity domain into only the low 8 bits of the `proximity_domain_lo` field of CPU affinity entries. Starting with revision 2, the full 32-bit `proximity_domain` is used. Firmware that sets `header.revision = 1` but writes 32-bit PXMs will have its high bits silently masked off (`pxm &= 0xff`). CPUs and memory that share a PXM > 255 will appear to belong to PXM `pxm & 0xff`, breaking node assignments.
 
-## Validating NUMA Topology
+## Validating NUMA Topology {#validating-numa-topology}
 
-### Runtime Tools
+### Runtime Tools {#runtime-tools}
 
 ```bash
 # Show node sizes, CPUs per node, and the distance matrix
@@ -341,7 +341,7 @@ cat /sys/devices/system/node/node0/distance
 # 10 21   (distance from node 0 to node 0, then node 0 to node 1)
 ```
 
-### Boot Log
+### Boot Log {#boot-log}
 
 During early boot, the ACPI NUMA code logs each SRAT entry it accepts:
 
@@ -354,7 +354,7 @@ dmesg | grep -i "SRAT"
 
 Missing expected nodes here is a clear sign of a broken SRAT.
 
-### Decoding the Raw Tables
+### Decoding the Raw Tables {#decoding-the-raw-tables}
 
 For deep inspection, decode the raw ACPI tables with the standard toolchain:
 
@@ -372,7 +372,7 @@ iasl -d SLIT.dat
 grep -i "hot" SRAT.dsl
 ```
 
-## Non-ACPI Systems
+## Non-ACPI Systems {#non-acpi-systems}
 
 ACPI-based SRAT/SLIT parsing is used on x86 and ARM64. Other platforms discover NUMA topology differently:
 
@@ -392,9 +392,9 @@ static int __init dummy_numa_init(void)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/acpi/numa/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/numa/srat.c) — `acpi_numa_init()`, `acpi_parse_slit()`, PXM-to-node mapping tables
 - [arch/x86/mm/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/srat.c) — x86 entry point `x86_acpi_numa_init()` and APIC-affinity callbacks
@@ -402,16 +402,16 @@ static int __init dummy_numa_init(void)
 - [mm/numa_memblks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) — `numa_add_memblk()`, `numa_set_distance()`, and the runtime `numa_distance[]` matrix
 - [include/acpi/actbl3.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) — C struct definitions for `acpi_table_srat`, `acpi_srat_mem_affinity`, `acpi_table_slit`
 
-### ACPI specification
+### ACPI specification {#acpi-specification}
 
 - [ACPI Specification (latest)](https://uefi.org/specifications) — Chapter 5 (ACPI Software Programming Model) covers the SRAT (section 5.2.16) and SLIT (section 5.2.17) table formats in authoritative detail
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [NUMA topology initialization](https://lwn.net/Articles/568950/) — how ACPI tables feed into the kernel's NUMA node model at boot
 - [Memory hotplug and NUMA](https://lwn.net/Articles/523874/) — how hotplug memory regions from SRAT interact with the memory hotplug subsystem
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Memory Management](numa.md) — overview of NUMA policies, automatic balancing, and memory tiering
 - [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how the `numa_distance[]` matrix built from SLIT is used at runtime by the scheduler and allocator

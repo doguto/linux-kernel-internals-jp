@@ -1,8 +1,8 @@
-# Thermal Management: Thermal Zones and Cooling
+# Thermal Management: Thermal Zones and Cooling {#thermal-management-thermal-zones-and-cooling}
 
 > Linux thermal framework, trip points, cooling devices, and thermal governors
 
-## Overview
+## Overview {#overview}
 
 Modern SoCs and CPUs generate heat. Without thermal management, they would throttle or shut down unexpectedly. The Linux thermal framework provides a structured way to:
 1. **Monitor** temperatures via thermal zones
@@ -16,7 +16,7 @@ Hardware sensor → thermal zone → governor → cooling device
                           trip points: warning/critical/throttle
 ```
 
-## Thermal zones
+## Thermal zones {#thermal-zones}
 
 A **thermal zone** represents a sensor and its associated policy:
 
@@ -41,7 +41,7 @@ done
 # critical: 105000m°C ← emergency shutdown at 105°C
 ```
 
-### Kernel structures
+### Kernel structures {#kernel-structures}
 
 ```c
 /* drivers/thermal/thermal_core.h — struct thermal_zone_device is private to
@@ -81,7 +81,7 @@ enum thermal_trip_type {
 };
 ```
 
-## Registering a thermal zone (driver)
+## Registering a thermal zone (driver) {#registering-a-thermal-zone-driver}
 
 ```c
 /* Driver: register a temperature sensor as a thermal zone */
@@ -118,7 +118,7 @@ struct thermal_zone_device *tzd = thermal_zone_device_register_with_trips(
 thermal_zone_device_enable(tzd);
 ```
 
-## Cooling devices
+## Cooling devices {#cooling-devices}
 
 ```c
 /* A cooling device can reduce power: e.g., CPU frequency */
@@ -151,11 +151,11 @@ cat /sys/class/thermal/cooling_device0/max_state  # e.g., 3 (4 levels)
 cat /sys/class/thermal/cooling_device0/cur_state  # current level (0=off)
 ```
 
-## Thermal governors
+## Thermal governors {#thermal-governors}
 
 The governor decides **when** to activate cooling and **how much**:
 
-### step_wise (default on many platforms)
+### step_wise (default on many platforms) {#step_wise-default-on-many-platforms}
 
 Raises cooling level by 1 when temperature exceeds a trip point, lowers by 1 when below:
 
@@ -164,7 +164,7 @@ temp rising:  trip reached → cooling_state++
 temp falling: temp < (trip - hysteresis) → cooling_state--
 ```
 
-### power_allocator (IPA — Intelligent Power Allocation)
+### power_allocator (IPA — Intelligent Power Allocation) {#power_allocator-ipa-intelligent-power-allocation}
 
 A PID controller that distributes a power budget across cooling devices:
 
@@ -192,7 +192,7 @@ echo 10   > /sys/class/thermal/thermal_zone0/k_i   # integral gain
 echo 0    > /sys/class/thermal/thermal_zone0/k_d   # derivative gain
 ```
 
-### user_space
+### user_space {#user_space}
 
 Delegates decisions to a userspace daemon (e.g., thermald):
 
@@ -202,7 +202,7 @@ echo user_space > /sys/class/thermal/thermal_zone0/policy
 echo 1 > /sys/class/thermal/cooling_device0/cur_state
 ```
 
-## ACPI thermal zones
+## ACPI thermal zones {#acpi-thermal-zones}
 
 On x86, ACPI defines thermal zones in DSDT/SSDT:
 
@@ -219,7 +219,7 @@ iasl -d dsdt.dat            # produces dsdt.dsl (ASL source)
 grep -A 20 "ThermalZone" dsdt.dsl
 ```
 
-## Fan control
+## Fan control {#fan-control}
 
 ```bash
 # Fan cooling devices:
@@ -245,7 +245,7 @@ cat /sys/class/hwmon/hwmon0/pwm1_enable
 echo 2 > /sys/class/hwmon/hwmon0/pwm1_enable  # auto mode
 ```
 
-## Observability and debugging
+## Observability and debugging {#observability-and-debugging}
 
 ```bash
 # Watch thermal zones in real time:
@@ -288,7 +288,7 @@ rdmsr -p0 0x19c   # IA32_THERM_STATUS (per-core)
 rdmsr -p0 0x1b1   # IA32_PACKAGE_THERM_STATUS: same bit layout, package-wide
 ```
 
-## ARM thermal: SCMI and TF-A
+## ARM thermal: SCMI and TF-A {#arm-thermal-scmi-and-tf-a}
 
 On ARM SoCs, temperature management often involves the firmware:
 
@@ -304,9 +304,9 @@ cat /sys/class/thermal/thermal_zone*/type
 # Linux gets temperature via SCMI protocol to secure world
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/thermal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/thermal.h) — `struct thermal_trip`, `struct thermal_zone_device_ops`, and `thermal_zone_device_register_with_trips()` — the actual registration API (the older `thermal_zone_device_register()` no longer exists)
 - [drivers/thermal/thermal_core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_core.h) — the real, subsystem-private `struct thermal_zone_device` layout (it is not in `include/linux/thermal.h`; drivers only ever hold an opaque pointer)
@@ -316,18 +316,18 @@ cat /sys/class/thermal/thermal_zone*/type
 - [drivers/thermal/thermal_trace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_trace.h) — the `thermal_temperature` and `thermal_zone_trip` tracepoint field definitions
 - [arch/x86/include/asm/msr-index.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/msr-index.h) — `MSR_IA32_THERM_STATUS` (0x19c, per-core) vs `MSR_IA32_PACKAGE_THERM_STATUS` (0x1b1), both with PROCHOT at bit 0
 
-### Related pages
+### Related pages {#related-pages}
 
 - [cpufreq and P-states](cpufreq.md) — CPU frequency scaling (thermal cooling device)
 - [cpuidle](cpuidle.md) — C-states reduce power to prevent thermal issues
 - [Runtime PM](runtime-pm.md) — device power management
 - [Device Tree](../drivers/device-tree.md) — thermal zones defined in DTS on ARM
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The power allocator thermal governor](https://lwn.net/Articles/602517/) (June 17, 2014) — the PID-controller design and multi-actor power budgeting behind `power_allocator`/IPA
 
-### External
+### External {#external}
 
 - [Generic Thermal Sysfs driver How To](https://docs.kernel.org/driver-api/thermal/sysfs-api.html) — the thermal zone and cooling device registration API and full sysfs ABI (trip points, `policy`, `mode`)
 - [Power allocator governor tunables](https://docs.kernel.org/driver-api/thermal/power_allocator.html) — what `k_po`, `k_pu`, `k_d`, and `sustainable_power` actually control

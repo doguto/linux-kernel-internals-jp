@@ -1,8 +1,8 @@
-# Kernel TLS (kTLS)
+# Kernel TLS (kTLS) {#kernel-tls-ktls}
 
 > In-kernel TLS record layer for zero-copy HTTPS
 
-## The problem kTLS solves
+## The problem kTLS solves {#the-problem-ktls-solves}
 
 Traditionally, TLS runs entirely in userspace (OpenSSL):
 
@@ -28,7 +28,7 @@ Benefits:
 - NIC TLS offload: kernel can push crypto to hardware
 - Lower CPU usage for TLS-heavy workloads (nginx, envoy)
 
-## ULP: Upper Layer Protocol
+## ULP: Upper Layer Protocol {#ulp-upper-layer-protocol}
 
 kTLS is implemented as a ULP (Upper Layer Protocol) — a socket layer that intercepts send/receive between the application and TCP:
 
@@ -45,7 +45,7 @@ TCP layer
 NIC
 ```
 
-## Setting up kTLS
+## Setting up kTLS {#setting-up-ktls}
 
 kTLS setup is done after the TLS handshake completes (e.g., via OpenSSL):
 
@@ -81,7 +81,7 @@ sendfile(sockfd, file_fd, NULL, file_size);
 /* ↑ Zero-copy: file pages → NIC with TLS encryption, no userspace copy */
 ```
 
-## Supported cipher suites
+## Supported cipher suites {#supported-cipher-suites}
 
 ```c
 /* include/uapi/linux/tls.h */
@@ -94,7 +94,7 @@ TLS_1_2_VERSION
 TLS_1_3_VERSION
 ```
 
-## kTLS in the kernel
+## kTLS in the kernel {#ktls-in-the-kernel}
 
 ```c
 /* net/tls/tls_sw.c: TLS software implementation */
@@ -132,7 +132,7 @@ static int tls_push_record(struct sock *sk, int flags, unsigned char record_type
 }
 ```
 
-## NIC TLS offload
+## NIC TLS offload {#nic-tls-offload}
 
 For hardware that supports TLS offload, kTLS can push crypto to the NIC:
 
@@ -168,7 +168,7 @@ ethtool -k eth0 | grep tls
 # tls-hw-rx-offload: on
 ```
 
-## Zero-copy sendfile for HTTPS
+## Zero-copy sendfile for HTTPS {#zero-copy-sendfile-for-https}
 
 The primary use case for kTLS is zero-copy file serving:
 
@@ -206,7 +206,7 @@ disk → page cache → sendfile() → kTLS encrypt → NIC
         (1 copy, or 0 with DMA)
 ```
 
-## RX path: in-kernel decrypt
+## RX path: in-kernel decrypt {#rx-path-in-kernel-decrypt}
 
 When `TLS_RX` is configured, reads are decrypted in the kernel:
 
@@ -224,7 +224,7 @@ recvmsg(sockfd, &msg, 0);
 /* CMSG with SOL_TLS, TLS_GET_RECORD_TYPE: check for alerts, handshake msgs */
 ```
 
-## Observing kTLS
+## Observing kTLS {#observing-ktls}
 
 ```bash
 # Check if kTLS is active on a socket
@@ -245,7 +245,7 @@ ss -tinH --tcp state established
 # nginx.conf: ssl_sendfile on;  (uses sendfile with kTLS)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [TCP Implementation](tcp.md) — socket layer kTLS integrates with
 - [Network Device and NAPI](napi.md) — NIC TLS offload reception

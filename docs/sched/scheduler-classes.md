@@ -1,10 +1,10 @@
-# Scheduler Classes
+# Scheduler Classes {#scheduler-classes}
 
 > How Linux layers five scheduling policies into a single framework
 
-## Why a vtable hierarchy?
+## Why a vtable hierarchy? {#why-a-vtable-hierarchy}
 
-### Before sched_class: one monolithic scheduler
+### Before sched_class: one monolithic scheduler {#before-sched_class-one-monolithic-scheduler}
 
 The Linux 2.4 scheduler and the early 2.6 O(1) scheduler (Ingo Molnár, 2003) handled real-time and normal tasks in one function with conditional logic: if the task has a real-time priority, put it in a priority-indexed bitmap; otherwise, calculate a dynamic priority from the nice value and recent sleep/run history.
 
@@ -12,7 +12,7 @@ The Linux 2.4 scheduler and the early 2.6 O(1) scheduler (Ingo Molnár, 2003) ha
 
 This worked but coupled fundamentally different scheduling algorithms into one blob. SCHED_FIFO and SCHED_RR have simple rules: run until block or preemption by higher-priority RT. Normal tasks need complex fairness heuristics. The more the scheduler tried to handle both, the harder it was to reason about either.
 
-### CFS and the vtable design (Linux 2.6.23, 2007)
+### CFS and the vtable design (Linux 2.6.23, 2007) {#cfs-and-the-vtable-design-linux-2623-2007}
 
 When Ingo Molnár replaced the O(1) scheduler with CFS, he also introduced `struct sched_class` as an abstraction layer. The motivation was explicit: CFS uses a red-black tree ordered by virtual runtime — a data structure that makes no sense for RT tasks. RT tasks use a priority bitmap — a data structure irrelevant to fair scheduling. The two algorithms needed different data structures, different enqueue/dequeue logic, and different pick-next semantics.
 
@@ -33,7 +33,7 @@ The `stop` class (for CPU migration threads) shows another benefit: it needs to 
 
 **stop class commit**: [`34f971f6f798`](https://git.kernel.org/linus/34f971f6f7988be4d014eec3e3526bee6d007ffa) — `sched: Create special class for stop/migrate work` (Peter Zijlstra, merged into v2.6.37, October 2010).
 
-### The fast path optimization
+### The fast path optimization {#the-fast-path-optimization}
 
 The one concession to performance is that the `for_each_class()` loop is bypassed when all tasks are in the `fair` class (the common case on desktop/server systems):
 
@@ -45,7 +45,7 @@ if (likely(!sched_class_above(prev->sched_class, &fair_sched_class) &&
 
 On systems with no RT or deadline tasks, the overhead of calling three vtable functions that return NULL is eliminated.
 
-## The layered model
+## The layered model {#the-layered-model}
 
 Linux doesn't have one scheduler — it has five, each handling a different class of tasks. They're stacked by priority: when the kernel picks the next task to run, it asks each class in turn, from highest to lowest, until one has a task ready.
 
@@ -68,7 +68,7 @@ A CPU running a deadline task will never run a fair task until the deadline task
 
 Since Linux 6.12 there's a sixth class alongside these five: [sched_ext](sched-ext.md) (`ext_sched_class`), which lets a BPF program supply scheduling policy instead of a class compiled into the kernel.
 
-## struct sched_class
+## struct sched_class {#struct-sched_class}
 
 Each scheduler class implements a common interface defined in `kernel/sched/sched.h`:
 
@@ -106,7 +106,7 @@ Key callbacks:
 | `prio_changed` | Task's priority changed (e.g., `nice()`) |
 | `update_curr` | Update the current task's accounting |
 
-## Class registration
+## Class registration {#class-registration}
 
 Each class is registered using the `DEFINE_SCHED_CLASS` macro, which places the struct in a special linker section with a defined ordering:
 
@@ -128,9 +128,9 @@ Classes are ordered in the section from highest to lowest priority. The `for_eac
          class++)
 ```
 
-## The five classes
+## The five classes {#the-five-classes}
 
-### 1. stop (`stop_sched_class`)
+### 1. stop (`stop_sched_class`) {#1-stop-stopschedclass}
 
 **File**: `kernel/sched/stop_task.c` | **Introduced**: [`34f971f6f798`](https://git.kernel.org/linus/34f971f6f7988be4d014eec3e3526bee6d007ffa) (Peter Zijlstra, v2.6.37)
 
@@ -148,7 +148,7 @@ DEFINE_SCHED_CLASS(stop) = {
 };
 ```
 
-### 2. deadline (`dl_sched_class`)
+### 2. deadline (`dl_sched_class`) {#2-deadline-dlschedclass}
 
 **File**: `kernel/sched/deadline.c` | **Introduced**: [`aab03e05e8f7`](https://git.kernel.org/linus/aab03e05e8f7e26f51dee792beddcb5cca9215a5) (Dario Faggioli, Juri Lelli et al., v3.14)
 
@@ -167,7 +167,7 @@ sched_setattr(0, &attr, 0);
 
 The kernel enforces admission control: it rejects `SCHED_DEADLINE` tasks if accepting them would make the system infeasible (total utilization would exceed 1.0 per CPU).
 
-### 3. rt (`rt_sched_class`)
+### 3. rt (`rt_sched_class`) {#3-rt-rtschedclass}
 
 **File**: `kernel/sched/rt.c`
 
@@ -186,7 +186,7 @@ sched_setscheduler(pid, SCHED_FIFO, &param);
 
 **Danger**: An RT task that never sleeps will starve all normal tasks. The kernel protects against this with `rt_throttle`: by default, RT tasks can use at most 95% of CPU time per 1-second window (`/proc/sys/kernel/sched_rt_runtime_us` and `sched_rt_period_us`).
 
-### 4. fair (`fair_sched_class`)
+### 4. fair (`fair_sched_class`) {#4-fair-fairschedclass}
 
 **File**: `kernel/sched/fair.c`
 
@@ -200,7 +200,7 @@ The fair class handles three policies:
 
 This is where CFS and EEVDF live. See [CFS](cfs.md) and [EEVDF](eevdf.md) for details.
 
-### 5. idle (`idle_sched_class`)
+### 5. idle (`idle_sched_class`) {#5-idle-idleschedclass}
 
 **File**: `kernel/sched/idle.c`
 
@@ -222,7 +222,7 @@ DEFINE_SCHED_CLASS(idle) = {
 };
 ```
 
-## Task policy and class mapping
+## Task policy and class mapping {#task-policy-and-class-mapping}
 
 A task's scheduling policy is stored in `task_struct->policy`. The class pointer is cached in `task_struct->sched_class`:
 
@@ -238,7 +238,7 @@ A task's scheduling policy is stored in `task_struct->policy`. The class pointer
 
 Setting a task's policy via `sched_setscheduler()` or `sched_setattr()` also updates `task_struct->sched_class` to point to the corresponding class struct.
 
-## How pick_next_task works
+## How pick_next_task works {#how-picknexttask-works}
 
 The core scheduling function walks the class hierarchy:
 
@@ -266,7 +266,7 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 
 The fast path is significant: on systems running only normal tasks (the common case), the kernel skips straight to `fair_sched_class` without checking stop, deadline, and rt first.
 
-## Priority ranges
+## Priority ranges {#priority-ranges}
 
 ```
 Policy          Priority range   Nice range   Who can set
@@ -279,7 +279,7 @@ SCHED_BATCH     0                -20 to +19   any user
 SCHED_IDLE      0                n/a          CAP_SYS_NICE
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Scheduler Evolution](scheduler-evolution.md) — Why we have this design
 - [CFS](cfs.md) — The fair class in depth

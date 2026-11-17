@@ -1,14 +1,14 @@
-# Mutex and rt_mutex
+# Mutex and rt_mutex {#mutex-and-rt_mutex}
 
 > Sleeping locks for process context — the right tool when your critical section can block
 
-## What is a mutex?
+## What is a mutex? {#what-is-a-mutex}
 
 A mutex (mutual exclusion lock) is a sleeping lock. When a thread can't acquire a mutex, it goes to sleep and is woken up when the lock becomes available. This is unlike a spinlock, which busy-waits.
 
 Because acquiring a mutex may sleep, mutexes can only be used in **process context** — never in interrupt handlers, softirqs, or tasklets.
 
-## The mutex structure
+## The mutex structure {#the-mutex-structure}
 
 ```c
 /* include/linux/mutex_types.h */
@@ -32,7 +32,7 @@ The `owner` field packs the owner pointer and status flags into a single atomic:
 
 The task pointer is stored in `owner & ~MUTEX_FLAGS` (safe because `task_struct` is aligned to at least 8 bytes, so the low 3 bits are always zero).
 
-## Basic API
+## Basic API {#basic-api}
 
 ```c
 #include <linux/mutex.h>
@@ -69,7 +69,7 @@ if (mutex_trylock(&my_mutex)) {
 mutex_is_locked(&my_mutex);
 ```
 
-## Three acquisition strategies
+## Three acquisition strategies {#three-acquisition-strategies}
 
 When `mutex_lock()` is called and the lock is held, the kernel tries three strategies in order:
 
@@ -94,7 +94,7 @@ When `mutex_lock()` is called and the lock is held, the kernel tries three strat
 
 This three-phase approach avoids sleeping when the lock will be released quickly (the common case on loaded multiprocessor systems).
 
-## Strict semantics
+## Strict semantics {#strict-semantics}
 
 Mutexes enforce strict ownership rules that spinlocks do not:
 
@@ -113,7 +113,7 @@ mutex_lock(&m);
 mutex_lock(&m);  /* DEADLOCK */
 ```
 
-## rt_mutex: priority-inheritance mutex
+## rt_mutex: priority-inheritance mutex {#rt_mutex-priority-inheritance-mutex}
 
 On PREEMPT_RT kernels, `spinlock_t` is implemented via `struct rt_mutex` so that high-priority RT tasks can preempt the lock holder. `struct rt_mutex` is also available directly for cases where priority inheritance is explicitly needed.
 
@@ -142,7 +142,7 @@ With rt_mutex:
 
 See [Priority Inversion & PI Mutexes](../sched/pi-mutexes.md) for the full story.
 
-## Choosing between mutex and spinlock
+## Choosing between mutex and spinlock {#choosing-between-mutex-and-spinlock}
 
 ```
 Use mutex when:
@@ -157,9 +157,9 @@ Use spinlock when:
   ✓ You need IRQ protection (spin_lock_irqsave)
 ```
 
-## Design history
+## Design history {#design-history}
 
-### Semaphores (pre-2.6.16)
+### Semaphores (pre-2.6.16) {#semaphores-pre-2616}
 
 Before `struct mutex` existed, the standard sleeping lock in the kernel was `struct semaphore`. A semaphore has a count — `down()` decrements it and sleeps if the count reaches zero; `up()` increments it and wakes a waiter.
 
@@ -172,7 +172,7 @@ The problem with using a counting semaphore as a mutex: because `up()` can be ca
 
 Ingo Molnár introduced `struct mutex` in Linux 2.6.16 (2006) with explicit single-owner semantics — [`6053ee3b32e3`](https://git.kernel.org/linus/6053ee3b32e3437e8c1e72687850f436e779bd49), announced at [LWN](https://lwn.net/Articles/164802/). Mutexes are semantically stricter than semaphores, which enables all the above. Kernel code was gradually migrated from `struct semaphore` to `struct mutex` over the following years. New code should always use `struct mutex` unless a counting semaphore is genuinely needed.
 
-### The Big Kernel Lock (BKL)
+### The Big Kernel Lock (BKL) {#the-big-kernel-lock-bkl}
 
 The BKL (`lock_kernel()` / `unlock_kernel()`) was a single global recursive spinlock introduced in Linux 2.0 to make the kernel SMP-safe quickly. The approach: wrap large subsystems in one coarse lock rather than converting every data structure to fine-grained locking.
 
@@ -185,13 +185,13 @@ Subsystem by subsystem, developers replaced BKL sections with proper per-subsyst
 - Remaining network drivers, sound: converted ~2011–2013
 - BKL removed entirely in Linux 2.6.39 (May 2011) — [`4ba8216cd905`](https://git.kernel.org/linus/4ba8216cd90560bc402f52076f64d8546e8aefcb) by Arnd Bergmann ("BKL: That's all, folks") — [LWN background](https://lwn.net/Articles/384855/)
 
-### PREEMPT_RT and rt_mutex
+### PREEMPT_RT and rt_mutex {#preemptrt-and-rtmutex}
 
 On `CONFIG_PREEMPT_RT` kernels (used in real-time Linux deployments), `spinlock_t` itself is implemented on top of `rt_mutex`. Spinlocks become sleeping locks that can be preempted by higher-priority RT tasks, with full priority inheritance. The priority ceiling is correct even in nested lock scenarios through PI chain walking.
 
 This means: on a PREEMPT_RT system, nearly all kernel locking uses the same priority-inheritance machinery, making priority inversion virtually impossible — at the cost of some throughput compared to the bare-spinlock model.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Spinlock and raw_spinlock](spinlock.md) — The busy-wait alternative
 - [Lockdep](lockdep.md) — Detecting deadlocks and lock ordering violations

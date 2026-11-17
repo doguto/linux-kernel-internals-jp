@@ -1,14 +1,14 @@
-# NTP and Clock Discipline
+# NTP and Clock Discipline {#ntp-and-clock-discipline}
 
 > How the kernel adjusts the clock: adjtimex, PLL/FLL, and TAI offset
 
-## The problem
+## The problem {#the-problem}
 
 A hardware oscillator drifts. Without correction, the system clock deviates from UTC by seconds per day. The goal of clock discipline is to steer the clock toward an external reference (GPS, NTP server, PPS signal) continuously and smoothly, without stepping the clock backwards or creating discontinuities that confuse applications.
 
 The Linux kernel implements this through a control loop in `kernel/time/ntp.c`, driven by `adjtimex()` calls from userspace daemons (`ntpd`, `chrony`).
 
-## PLL and FLL modes
+## PLL and FLL modes {#pll-and-fll-modes}
 
 The kernel supports two adjustment strategies:
 
@@ -18,7 +18,7 @@ The kernel supports two adjustment strategies:
 
 `STA_PLL` is what enables offset discipline at all — `ntp_update_offset()` returns immediately if it isn't set. `STA_FLL` doesn't work independently of it; set alongside `STA_PLL`, it biases the correction FLL's way when the update interval is long enough (see `ntp_update_offset_fll()`'s `MINSEC`/`MAXSEC` checks below). The daemon sets these bits in `timex.status` when calling `adjtimex()`.
 
-## adjtimex()
+## adjtimex() {#adjtimex}
 
 `adjtimex()` is the kernel's time discipline interface. The syscall entry point (`SYSCALL_DEFINE1(adjtimex, ...)`) and its underlying `do_adjtimex()` live in `kernel/time/time.c` and `kernel/time/timekeeping.c` respectively; `kernel/time/ntp.c` holds the PLL/FLL math itself (`ntp_adjtimex()`, `ntp_update_frequency()`) that `do_adjtimex()` calls into:
 
@@ -77,7 +77,7 @@ Important `modes` flags:
 | `ADJ_SETOFFSET` | Step the clock by adding `time` (not `offset`) to the current time (used by chrony for large corrections) |
 | `ADJ_NANO` | Interpret `offset` in nanoseconds (otherwise microseconds) |
 
-### clock_adjtime()
+### clock_adjtime() {#clock_adjtime}
 
 `clock_adjtime()` is the modern, POSIX-compatible variant that takes a `clockid_t`:
 
@@ -87,7 +87,7 @@ int clock_adjtime(clockid_t clk_id, struct timex *txc);
 
 `chrony` prefers `clock_adjtime(CLOCK_REALTIME, ...)` over the older `adjtimex()`; the two are equivalent for `CLOCK_REALTIME` (`do_clock_adjtime()` in `kernel/time/posix-timers.c` just dispatches to the same `.clock_adj` handler `adjtimex()` reaches). `clock_adjtime()` doesn't extend this to `CLOCK_TAI`, though — `clock_tai`'s `k_clock` struct has no `.clock_adj` handler at all, so calling it with `CLOCK_TAI` returns `-EOPNOTSUPP`. The TAI offset is set through `CLOCK_REALTIME` with `ADJ_TAI`, as shown below.
 
-## The NTP state machine
+## The NTP state machine {#the-ntp-state-machine}
 
 The `status` field in `struct timex` drives a state machine:
 
@@ -105,7 +105,7 @@ STA_PPSFREQ | STA_PPSTIME   ← PPS-disciplined (highest accuracy)
 
 `STA_UNSYNC` is set by the kernel when it has not received a valid time update recently. A userspace daemon clears `STA_UNSYNC` when it starts locking to a reference. The return value of `adjtimex()` reports the current sync state as `TIME_OK`, `TIME_INS`, `TIME_DEL`, `TIME_OOP`, `TIME_WAIT`, or `TIME_ERROR`.
 
-## ntp_tick_length()
+## ntp_tick_length() {#ntpticklength}
 
 On every tick, `timekeeping_adjust()` and `__timekeeping_advance()` (both in `kernel/time/timekeeping.c`) call into the NTP code to retrieve the correction to apply:
 
@@ -115,7 +115,7 @@ u64 ntp_tick_length(unsigned int tkid);
 
 This function takes a timekeeper ID (`tkid`) and returns the tick length to add, incorporating the current PLL/FLL frequency correction — but not in plain nanoseconds: the value is scaled left by `NTP_SCALE_SHIFT` (32 bits), i.e. `ns << 32`, the same fixed-point representation `struct timekeeper`'s own `ntp_tick`/`ntp_error` fields use (its `tkr_mono.xtime_nsec` accumulator uses a different, clocksource-specific `shift` instead). The base value before scaling is `NSEC_PER_SEC / HZ`; the PLL/FLL correction (`ntp_update_frequency()`, `kernel/time/ntp.c`) shifts it slightly up or down each time the sysadmin or synchronization daemon adjusts frequency.
 
-## Leap seconds
+## Leap seconds {#leap-seconds}
 
 A leap second is a one-second adjustment inserted (or deleted) at the end of a UTC day to keep UTC aligned with UT1 (Earth rotation). The kernel handles leap seconds through `adjtimex()` status flags:
 
@@ -135,7 +135,7 @@ When `STA_INS` is set, at the UTC midnight boundary the kernel (`second_overflow
 !!! warning "Leap second bugs"
     See the [War Stories](war-stories.md#the-leap-second-thundering-herd-2012) page for the 2012 leap second incident in which a kernel bug caused CPU saturation across Linux servers worldwide when the leap second was inserted.
 
-## TAI offset
+## TAI offset {#tai-offset}
 
 TAI (International Atomic Time) is ahead of UTC by an integer number of seconds equal to the cumulative count of inserted leap seconds. As of 2024, TAI − UTC = 37 seconds.
 
@@ -157,13 +157,13 @@ struct timex txc = {
 adjtimex(&txc);
 ```
 
-## The 11-minute mode (RTC sync)
+## The 11-minute mode (RTC sync) {#the-11-minute-mode-rtc-sync}
 
 When the clock is synchronized (`STA_UNSYNC` is clear), the kernel periodically writes the current time to the hardware RTC every 11 minutes. This is implemented in `sync_hw_clock()` (called from a work queue) and ensures that the RTC — which has no NTP correction — stays close to UTC across reboots. The function was renamed from `sync_cmos_clock()` to `sync_hw_clock()` to reflect that it supports modern RTC class devices as well as legacy CMOS/RTC hardware.
 
 The 11-minute interval is hardcoded (`SYNC_PERIOD_NS`, `kernel/time/ntp.c`) and not configurable. `sync_hw_clock()` has no VM-specific check — it simply tries `update_persistent_clock64()` (the legacy CMOS path) and then `update_rtc()` (the modern RTC-class path) in turn, and stops rearming its own timer once both return `-ENODEV`. That's not permanent: `ntp_notify_cmos_timer()` re-queues the sync work the next time `adjtimex()` reports the clock as synced, so a guest that later gets an RTC (or a later `adjtimex()` call) can trigger another attempt. In practice `-ENODEV` from both paths is most often seen on a VM with no RTC device exposed to the guest, but the logic itself is just "no RTC of either kind was found right now," not a virtualization check.
 
-## ntpd / chrony workflow
+## ntpd / chrony workflow {#ntpd-chrony-workflow}
 
 A time synchronization daemon:
 
@@ -178,7 +178,7 @@ A time synchronization daemon:
 - Supports hardware timestamping via `SO_TIMESTAMPING` for sub-microsecond accuracy with a PPS or PTP source.
 - Tracks multiple reference sources and weights them by jitter and distance.
 
-## Checking synchronization status
+## Checking synchronization status {#checking-synchronization-status}
 
 ```bash
 # Show current timex state (from util-linux)
@@ -207,9 +207,9 @@ int state = adjtimex(&tx);
 
 The `STA_UNSYNC` bit being clear (zero) indicates the kernel considers the clock synchronized. `timedatectl` displays this as "NTP synchronized: yes".
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/time/ntp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/ntp.c) — the PLL/FLL time discipline control loop, leap-second state machine, `ntp_tick_length()`, and `sync_hw_clock()`
 - [kernel/time/time.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/time.c) — the `adjtimex()`/`adjtimex_time32()` syscall entry points
@@ -217,25 +217,25 @@ The `STA_UNSYNC` bit being clear (zero) indicates the kernel considers the clock
 - [include/uapi/linux/timex.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/timex.h) — user-space definitions for `struct timex`, `ADJ_*` modes, `STA_*` status flags, and `TIME_*` return codes
 - [include/linux/timex.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timex.h) — internal kernel timex operations, scaled ppm conversions, and PPS interface hooks
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — system call interface for reading and tuning kernel timekeeping parameters
 - [`clock_adjtime(2)`](https://man7.org/linux/man-pages/man2/clock_adjtime.2.html) — POSIX clock-specific adjustment syscall; only `CLOCK_REALTIME` has a `.clock_adj` handler in mainline (`kernel/time/posix-timers.c`), so `CLOCK_TAI` returns `-EOPNOTSUPP` as noted above
 - [`adjtime(3)`](https://man7.org/linux/man-pages/man3/adjtime.3.html) — legacy C library interface for gradual clock slewing
 - [`timedatectl(1)`](https://man7.org/linux/man-pages/man1/timedatectl.1.html) — systemd utility for querying NTP synchronization status and system clock settings
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Timekeeping and Clocksources](timekeeping.md) — timekeeper architecture, `struct timekeeper`, and hardware counter integration
 - [Clocksource and Clockevent Drivers](clocksource.md) — hardware counter calibration and frequency multiplier math
 - [Time Subsystem War Stories](war-stories.md) — real-world leap second bugs and clocksource watchdog false positives
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [ptp: IEEE 1588 hardware clock support](https://lwn.net/Articles/421436/) — Richard Cochran's patch series, December 2010, covered in LWN's kernel patches digest: introduces the `clock_adjtime()` syscall and the `ADJ_SETOFFSET` mode bit alongside PTP hardware clock support
 - [The leap second bug](https://lwn.net/Articles/504657/) — Jonathan Corbet, July 2012: analysis of the 2012 kernel leap-second livelock and resolution
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — kernel documentation on timekeeping, NTP discipline, and hardware clock synchronization
 - [RFC 5905: Network Time Protocol Protocol and Algorithm Specification](https://datatracker.ietf.org/doc/html/rfc5905) — authoritative specification of the NTPv4 on-wire protocol and clock discipline algorithm

@@ -1,8 +1,8 @@
-# Life of a file read
+# Life of a file read {#life-of-a-file-read}
 
 > Tracing a read() syscall through the page cache
 
-## What happens when you read a file?
+## What happens when you read a file? {#what-happens-when-you-read-a-file}
 
 When a program reads a file, the data rarely comes directly from disk. The kernel maintains a **page cache** - a cache of file data in memory. Most reads are satisfied from this cache without touching the disk at all.
 
@@ -28,11 +28,11 @@ flowchart TD
 
 The key insight: **the page cache makes most reads fast**. Once the kernel detects a sequential pattern, it [prefetches pages asynchronously](https://lwn.net/Articles/888715/) so that most subsequent reads are served from cache rather than disk. In steady state, readahead can achieve cache hit rates [above 90%](https://lwn.net/Articles/155510/) for sequential workloads.
 
-## The page cache
+## The page cache {#the-page-cache}
 
 The page cache is the kernel's cache of file contents. Every file read goes through it.
 
-### Why cache file data?
+### Why cache file data? {#why-cache-file-data}
 
 | Operation | Latency |
 |-----------|---------|
@@ -44,7 +44,7 @@ The page cache is the kernel's cache of file contents. Every file read goes thro
 
 Even with fast SSDs, memory is orders of magnitude faster. The page cache exploits temporal locality - data read once is likely to be read again soon.
 
-### Page cache organization
+### Page cache organization {#page-cache-organization}
 
 Each open file has an `address_space` that manages its cached pages:
 
@@ -87,7 +87,7 @@ flowchart LR
     end
 ```
 
-## Stage 1: System call entry
+## Stage 1: System call entry {#stage-1-system-call-entry}
 
 A user program calls `read()`:
 
@@ -109,7 +109,7 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 }
 ```
 
-### From fd to file
+### From fd to file {#from-fd-to-file}
 
 The kernel translates the file descriptor to a `struct file`:
 
@@ -136,7 +136,7 @@ struct file {
 };
 ```
 
-## Stage 2: VFS read dispatch
+## Stage 2: VFS read dispatch {#stage-2-vfs-read-dispatch}
 
 `vfs_read()` calls the file system's read implementation:
 
@@ -176,7 +176,7 @@ ssize_t generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 }
 ```
 
-## Stage 3: Page cache lookup
+## Stage 3: Page cache lookup {#stage-3-page-cache-lookup}
 
 The core of file reading is [`filemap_read()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c):
 
@@ -212,7 +212,7 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 }
 ```
 
-### The xarray lookup
+### The xarray lookup {#the-xarray-lookup}
 
 Finding a page in the cache uses the xarray (evolved from radix tree):
 
@@ -244,7 +244,7 @@ struct folio *__filemap_get_folio(struct address_space *mapping,
 
 The lookup is effectively `O(1)` for practical file sizes - [`xarray`](https://docs.kernel.org/core-api/xarray.html) is a radix tree with bounded height, not a balanced tree, so performance doesn't degrade with more pages.
 
-## Stage 4: Cache hit (fast path)
+## Stage 4: Cache hit (fast path) {#stage-4-cache-hit-fast-path}
 
 When the page is in cache and up-to-date, reading is fast (order-of-magnitude estimates; actual latency depends on CPU and workload):
 
@@ -261,7 +261,7 @@ flowchart TD
 
 No disk I/O, no waiting, just memory copies.
 
-### The copy to userspace
+### The copy to userspace {#the-copy-to-userspace}
 
 ```c
 // Copy from kernel page to user buffer
@@ -276,7 +276,7 @@ size_t copy_folio_to_iter(struct folio *folio, size_t offset,
 
 This is the primary cost of cached reads - copying data from kernel memory to user memory.
 
-## Stage 5: Cache miss (slow path)
+## Stage 5: Cache miss (slow path) {#stage-5-cache-miss-slow-path}
 
 When the page isn't in cache, the kernel must read from disk:
 
@@ -297,7 +297,7 @@ static struct folio *page_cache_sync_readahead(...)
 }
 ```
 
-### I/O submission
+### I/O submission {#io-submission}
 
 The actual disk read goes through the file system and block layer:
 
@@ -316,7 +316,7 @@ flowchart TD
 
 The process blocks until I/O completes (unless using async I/O).
 
-### Waiting for I/O
+### Waiting for I/O {#waiting-for-io}
 
 ```c
 // Block until page is ready
@@ -329,7 +329,7 @@ if (!folio_test_uptodate(folio)) {
 }
 ```
 
-## Stage 6: Readahead
+## Stage 6: Readahead {#stage-6-readahead}
 
 The kernel doesn't just read the requested page - it reads ahead, predicting you'll want subsequent pages:
 
@@ -353,7 +353,7 @@ flowchart TD
     end
 ```
 
-### Readahead algorithm
+### Readahead algorithm {#readahead-algorithm}
 
 The kernel uses an adaptive readahead algorithm:
 
@@ -379,7 +379,7 @@ void page_cache_sync_readahead(struct address_space *mapping,
 }
 ```
 
-### Readahead state
+### Readahead state {#readahead-state}
 
 Each file has readahead state tracking its access pattern:
 
@@ -394,7 +394,7 @@ struct file_ra_state {
 };
 ```
 
-### Tuning readahead
+### Tuning readahead {#tuning-readahead}
 
 ```bash
 # View default readahead size (in 512-byte sectors)
@@ -408,7 +408,7 @@ posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);  // Hint: sequential
 posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);      // Hint: random
 ```
 
-## mmap vs read
+## mmap vs read {#mmap-vs-read}
 
 There's another way to read files - memory-mapping with `mmap()`:
 
@@ -446,7 +446,7 @@ flowchart BT
 
 See [page cache](page-cache.md) and [process address space](mmap.md) for details.
 
-## Direct I/O
+## Direct I/O {#direct-io}
 
 Sometimes you want to bypass the page cache entirely:
 
@@ -469,7 +469,7 @@ read(fd, aligned_buffer, size);
 - Buffer must be aligned (typically 512 bytes or 4KB)
 - Offset and size often must be aligned too
 
-## The complete picture
+## The complete picture {#the-complete-picture}
 
 Here's the full flow for a `read()` call:
 
@@ -493,9 +493,9 @@ flowchart TD
     K --> L["return bytes_read"]
 ```
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Watch cache hit ratio
+### Watch cache hit ratio {#watch-cache-hit-ratio}
 
 ```bash
 # Clear the page cache (requires root)
@@ -510,7 +510,7 @@ cat /proc/vmstat | grep -E "pgpg|pgfault"
 # pgpgout - pages written to disk
 ```
 
-### Compare cached vs uncached reads
+### Compare cached vs uncached reads {#compare-cached-vs-uncached-reads}
 
 ```bash
 # First read (cold cache)
@@ -522,7 +522,7 @@ time cat /path/to/large/file > /dev/null
 # The second read should be much faster
 ```
 
-### Monitor readahead
+### Monitor readahead {#monitor-readahead}
 
 ```bash
 # Watch readahead activity
@@ -533,7 +533,7 @@ echo 1 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_add_to_page_cache/e
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### View cache contents for a file
+### View cache contents for a file {#view-cache-contents-for-a-file}
 
 ```bash
 # Using fincore (part of util-linux)
@@ -545,7 +545,7 @@ fincore /path/to/file
 vmtouch -v /path/to/file
 ```
 
-### Test direct I/O
+### Test direct I/O {#test-direct-io}
 
 ```bash
 # Read with direct I/O (bypasses cache)
@@ -558,7 +558,7 @@ dd if=/path/to/file of=/dev/null bs=4096
 # for cached data
 ```
 
-### Observe page cache size
+### Observe page cache size {#observe-page-cache-size}
 
 ```bash
 # Current cache usage
@@ -571,7 +571,7 @@ watch -n 1 'cat /proc/meminfo | grep -E "Cached|Buffers"'
 cat /path/to/large/file > /dev/null
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -581,9 +581,9 @@ cat /path/to/large/file > /dev/null
 | [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | struct address_space, file operations |
 | [`include/linux/pagemap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pagemap.h) | Page cache APIs |
 
-## History
+## History {#history}
 
-### Page cache evolution
+### Page cache evolution {#page-cache-evolution}
 
 **Early Linux**: Simple page cache with manual readahead.
 
@@ -599,7 +599,7 @@ cat /path/to/large/file > /dev/null
 
 In the flow above, `filemap_get_folio()` uses the `xarray` to look up cached pages by file offset. The `xarray` provides better cache utilization than the radix tree it replaced, speeding up the cache hit path.
 
-### Folio conversion (v5.16+)
+### Folio conversion (v5.16+) {#folio-conversion-v516}
 
 In the flow above, functions like `filemap_get_folio()` and `filemap_read()` work with `struct folio` rather than raw `struct page`:
 
@@ -610,19 +610,19 @@ In the flow above, functions like `filemap_get_folio()` and `filemap_read()` wor
 - **What it enables**: The page cache can now store large folios (e.g., 64KB or larger) for files, reducing metadata overhead and improving I/O efficiency for large sequential reads
 - **In our flow**: When `read()` triggers a cache miss, `filemap_alloc_folio()` may allocate a large folio, and readahead fills it with multiple pages worth of file data in a single I/O operation
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 The page cache and read path involve complex interactions between filesystems, memory management, and I/O. Bugs here cause data corruption, stale reads, or crashes.
 
 ---
 
-### Case 1: filemap_fault() race conditions
+### Case 1: filemap_fault() race conditions {#case-1-filemap_fault-race-conditions}
 
-#### What happened
+#### What happened {#what-happened}
 
 The `filemap_fault()` function handles page faults for memory-mapped files. Race conditions between invalidation and fault handling have caused multiple bugs.
 
-#### The bug
+#### The bug {#the-bug}
 
 From [kernel discussions](https://linux.kernel.narkive.com/8lKSc68j/potential-fix-to-filemap-fault):
 
@@ -634,7 +634,7 @@ If Thread B truncates the file while Thread A is faulting in a page, Thread A mi
 
 > *"We see a blank page from time to time, when we should be seeing valid data."*
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 Applications using mmap'd files (databases, VMs, etc.) could see:
 
@@ -642,7 +642,7 @@ Applications using mmap'd files (databases, VMs, etc.) could see:
 - Blank pages
 - Crashes on invalid access
 
-#### Mitigations
+#### Mitigations {#mitigations}
 
 - Proper page lock ordering between fault and truncate paths
 - `page_mkwrite()` coordination for writable mappings
@@ -650,13 +650,13 @@ Applications using mmap'd files (databases, VMs, etc.) could see:
 
 ---
 
-### Case 2: 9p read corruption (2025)
+### Case 2: 9p read corruption (2025) {#case-2-9p-read-corruption-2025}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 [Recent LKML discussion](https://lkml.org/lkml/2025/12/19/689) documented read corruption with 9p filesystem and mmapped content.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 The 9p filesystem's splice implementation had a bug where page pinning during data transfer could race with page cache operations, causing:
 
@@ -664,7 +664,7 @@ The 9p filesystem's splice implementation had a bug where page pinning during da
 - Data appearing in wrong file positions
 - Silent corruption without errors
 
-#### Why this matters
+#### Why this matters {#why-this-matters}
 
 Any filesystem implementing custom I/O paths (splice, direct I/O, io_uring) must coordinate carefully with the page cache. Bugs in this coordination are difficult to detect because:
 
@@ -674,13 +674,13 @@ Any filesystem implementing custom I/O paths (splice, direct I/O, io_uring) must
 
 ---
 
-### Case 3: Poisoned page cache data loss
+### Case 3: Poisoned page cache data loss {#case-3-poisoned-page-cache-data-loss}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 When a hardware memory error (hwpoison) affects a page cache page, the kernel must handle it carefully to avoid silent data loss.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 From [kernel patch discussion](https://www.spinics.net/lists/linux-fsdevel/msg204546.html):
 
@@ -693,7 +693,7 @@ If a page in the page cache gets a hardware error:
 
 For tmpfs/shmem, there's no backing store to recover from - the data is simply lost.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 Hardware errors in RAM used for page cache could cause:
 
@@ -701,7 +701,7 @@ Hardware errors in RAM used for page cache could cause:
 - Lost user data
 - Inconsistent filesystem state
 
-#### Mitigation
+#### Mitigation {#mitigation}
 
 The patches ensure:
 
@@ -711,13 +711,13 @@ The patches ensure:
 
 ---
 
-### Case 4: Readahead window explosion
+### Case 4: Readahead window explosion {#case-4-readahead-window-explosion}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 The adaptive readahead algorithm tries to predict access patterns. Bugs in the heuristics can cause excessive I/O.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 If readahead incorrectly predicts sequential access:
 1. Kernel reads many pages ahead
@@ -726,13 +726,13 @@ If readahead incorrectly predicts sequential access:
 4. Application triggers more I/O for the evicted pages
 5. System thrashes despite available memory
 
-#### Historical examples
+#### Historical examples {#historical-examples}
 
 - **Random access on large files**: Readahead assumes sequential, wastes bandwidth
 - **Multiple streams**: Readahead doesn't track per-reader state well (improved in recent kernels)
 - **SSD vs HDD**: Optimal readahead differs; default often wrong
 
-#### Tuning
+#### Tuning {#tuning}
 
 ```bash
 # Check default readahead (KB)
@@ -748,13 +748,13 @@ posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
 
 ---
 
-### Case 5: Page cache coherency with direct I/O
+### Case 5: Page cache coherency with direct I/O {#case-5-page-cache-coherency-with-direct-io}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 Applications mixing buffered I/O (page cache) and direct I/O can see stale data.
 
-#### The bug
+#### The bug {#the-bug_4}
 
 ```c
 // Thread A: buffered write
@@ -768,7 +768,7 @@ pread(fd_dio, buf, 4, 0);  // Might see old data!
 // Direct I/O reads from disk, sees old data
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 Databases often use:
 
@@ -777,7 +777,7 @@ Databases often use:
 
 If not carefully coordinated, one subsystem sees stale data from the other.
 
-#### Mitigation
+#### Mitigation {#mitigation_1}
 
 ```c
 // Before direct read, flush buffered writes
@@ -792,13 +792,13 @@ posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 
 ---
 
-### Case 6: BDI (Backing Device Info) writeback bugs
+### Case 6: BDI (Backing Device Info) writeback bugs {#case-6-bdi-backing-device-info-writeback-bugs}
 
-#### What happened
+#### What happened {#what-happened_5}
 
 The BDI tracks per-device writeback state. Bugs in BDI handling have caused writeback stalls and data loss.
 
-#### The bug
+#### The bug {#the-bug_5}
 
 From a [kernel BUG report](https://access.redhat.com/solutions/5773601):
 
@@ -809,7 +809,7 @@ When a device is removed while dirty pages exist:
 2. Writeback worker still references it
 3. Use-after-free → crash
 
-#### Why this matters
+#### Why this matters {#why-this-matters_1}
 
 Hot-pluggable storage (USB, SATA hotplug, NVMe hot remove) must coordinate with the page cache. The page cache may hold dirty data for the device, and removing the device without proper synchronization causes:
 
@@ -819,7 +819,7 @@ Hot-pluggable storage (USB, SATA hotplug, NVMe hot remove) must coordinate with 
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Root Cause | Impact | Prevention |
 |-----|------------|--------|------------|
@@ -832,16 +832,16 @@ Hot-pluggable storage (USB, SATA hotplug, NVMe hot remove) must coordinate with 
 
 The common thread: **the page cache is a critical performance optimization that adds complexity**. Any operation that bypasses, invalidates, or races with the cache is a potential bug site.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Page cache](page-cache.md) - Page cache internals
 - [Life of a malloc](life-of-malloc.md) - Contrast with anonymous memory
 - [Life of a page](life-of-page.md) - Page lifecycle including cache pages
 - [Process address space](mmap.md) - mmap alternative to read()
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Readahead: the theory](https://lwn.net/Articles/155510/) (2005) - Readahead concepts
 - [The XArray data structure](https://lwn.net/Articles/745073/) (2017) - Radix tree replacement

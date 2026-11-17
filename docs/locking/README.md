@@ -1,8 +1,8 @@
-# Locking and Synchronization
+# Locking and Synchronization {#locking-and-synchronization}
 
 > How the Linux kernel serializes concurrent access to shared data
 
-## Why locking matters
+## Why locking matters {#why-locking-matters}
 
 Linux runs on systems with hundreds of CPUs, all sharing kernel data structures. Without synchronization, two CPUs could simultaneously modify a linked list — corrupting its pointers, losing entries, or looping forever. Locking prevents this.
 
@@ -18,26 +18,26 @@ The kernel provides a rich set of primitives, each with different performance ch
 | RCU | No (readers) | Yes (readers) | Read-heavy, pointer-based data |
 | `seqlock_t` | No | Yes | Small data, writers must not starve |
 
-## Contents
+## Contents {#contents}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 - [Spinlock and raw_spinlock](spinlock.md) — The atomic building block
 - [Mutex and rt_mutex](mutex.md) — Sleeping locks for process context
 - [rwlock and rwsem](rwlock-rwsem.md) — Reader-writer locking
 - [RCU (Read-Copy-Update)](rcu.md) — Lock-free reads via grace periods
 - [Seqlock](seqlock.md) — Sequence counters for small frequently-read data
 
-### Advanced
+### Advanced {#advanced}
 - [Atomic operations and memory barriers](atomics.md) — The primitives beneath the primitives
 - [Per-CPU variables](percpu.md) — Eliminating shared state entirely
 - [Lockdep](lockdep.md) — The kernel's lock validator
 - [Lock contention debugging](lock-debugging.md) — Diagnosing lock hotspots
 - [Futex internals](futex.md) — How userspace locking works
 
-### War stories
+### War stories {#war-stories}
 - [War Stories](war-stories.md) — three CVEs and one origin story from rt_mutex and PI-futexes
 
-## The hierarchy: what can nest inside what
+## The hierarchy: what can nest inside what {#the-hierarchy-what-can-nest-inside-what}
 
 ```
 Hardware interrupts (NMI)

@@ -1,4 +1,4 @@
-# Storage & I/O
+# Storage & I/O {#storage-io}
 
 The path data takes from an application's read or write down to a physical device — and the layers that make it general and fast.
 

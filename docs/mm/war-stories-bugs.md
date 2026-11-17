@@ -1,4 +1,4 @@
-# War Stories: mm Bug Incident Narratives
+# War Stories: mm Bug Incident Narratives {#war-stories-mm-bug-incident-narratives}
 
 > Three production bugs that revealed deep design problems in the Linux memory manager — told from the moment operators noticed something was wrong through the investigation, fix, and design lessons that followed
 
@@ -14,11 +14,11 @@ The three bugs were chosen to cover different parts of the subsystem and differe
 
 ---
 
-## Bug 1: zone_reclaim_mode — The NUMA Reclaim Policy That Destroyed Performance by Default
+## Bug 1: zone_reclaim_mode — The NUMA Reclaim Policy That Destroyed Performance by Default {#bug-1-zonereclaimmode-the-numa-reclaim-policy-that-destroyed-performance-by-default}
 
 *Introduced approximately v2.6.16 (2006). Disabled by default in v3.16 (2014). Commit: [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753).*
 
-### The symptom
+### The symptom {#the-symptom}
 
 Operators running databases, web servers, and in-memory caches on NUMA hardware — typically two- or four-socket x86 servers — noticed that their applications ran significantly slower than expected. The symptoms were inconsistent: some servers were fine, others on identical hardware were not. Performance could drop by 50% or more on the affected machines without any obvious cause.
 
@@ -26,7 +26,7 @@ The slowdown did not correlate with CPU saturation, network latency, or disk I/O
 
 A careful operator inspecting `/proc/vmstat` would find elevated counts for `zone_reclaim_failed` — a counter that incremented every time the kernel tried to reclaim memory from the local NUMA node and failed. The reclaim was failing because there was nothing to reclaim locally: the workload's active pages were spread across both NUMA nodes, but `zone_reclaim_mode` was forcing the allocator to repeatedly try (and fail) to satisfy allocations from a single node before spilling to the other.
 
-### Investigation
+### Investigation {#investigation}
 
 The investigation path was difficult because the slowdown was not obviously memory-related from the application side. A process accessing remote NUMA memory experiences higher latency on every memory access, which manifests as reduced throughput across the board — slower queries, higher latency, less IPC — with no single bottleneck visible in top-level tools.
 
@@ -52,7 +52,7 @@ cat /proc/sys/vm/zone_reclaim_mode
 
 Setting it to zero immediately recovered performance, which confirmed the diagnosis. The fix was one sysctl away, but only for those who knew it existed.
 
-### Root cause
+### Root cause {#root-cause}
 
 `zone_reclaim_mode` was introduced when NUMA systems were predominantly found in HPC clusters. The workloads on those machines were carefully partitioned: each NUMA node ran a distinct slice of a distributed computation, and cross-node memory access was genuinely expensive and to be avoided. When memory on a node became tight, the correct behavior was to reclaim local pages rather than spill to a remote node — the remote-access penalty was worse than the reclaim cost.
 
@@ -70,7 +70,7 @@ The Mel Gorman commit message that finally disabled the default put it plainly (
 
 > *"zone_reclaim_mode causes processes to prefer reclaiming memory from local node instead of spilling over to other nodes. This made sense initially when NUMA machines were almost exclusively HPC and the workload was partitioned into nodes. The NUMA penalties were sufficiently high to justify reclaiming the memory. On current machines and workloads it is often the case that zone_reclaim_mode destroys performance but not all users know how to detect this."*
 
-### The fix
+### The fix {#the-fix}
 
 The immediate fix was runtime: setting `vm.zone_reclaim_mode=0` disabled the local-first reclaim policy and allowed the allocator to spill to remote nodes freely. Performance recovered immediately on affected systems.
 
@@ -84,7 +84,7 @@ The structural fix was commit [4f9b16a64753](https://git.kernel.org/linus/4f9b16
 
 A companion commit, [6b187d0260b6](https://git.kernel.org/linus/6b187d0260b6), refined the heuristic for when zone_reclaim should even be considered: it is now only auto-enabled if the NUMA node distance exceeds a threshold (`RECLAIM_DISTANCE`, typically 30), meaning nodes that are truly remote (not just on different sockets but with reasonable interconnect) still benefit from the policy.
 
-### Design lesson
+### Design lesson {#design-lesson}
 
 **Default behavior must match the majority workload, not the historical workload.** Zone_reclaim_mode made sense when it was introduced because the machines it ran on were nearly all HPC clusters with partitioned workloads. By the time NUMA servers were everywhere, the default was wrong for most users — but it remained on for years because those who needed to disable it had to know about an obscure sysctl.
 
@@ -101,11 +101,11 @@ A companion commit, [6b187d0260b6](https://git.kernel.org/linus/6b187d0260b6), r
 
 ---
 
-## Bug 2: THP's Compound Page Locking Overhead Broke Hugetlbfs AIO
+## Bug 2: THP's Compound Page Locking Overhead Broke Hugetlbfs AIO {#bug-2-thps-compound-page-locking-overhead-broke-hugetlbfs-aio}
 
 *Introduced with THP in v2.6.38 (2011). Fixed in v3.12 (2013). Commit: [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8).*
 
-### The symptom
+### The symptom {#the-symptom_1}
 
 Oracle database administrators benchmarking I/O performance on Linux noticed a sharp regression after upgrading kernels. Using Oracle's `orion` I/O benchmark tool — a standard tool for characterizing storage performance under database I/O patterns — they measured read throughput from flash storage into hugetlbfs-backed buffers. The numbers from the commit message are precise:
 
@@ -118,7 +118,7 @@ The 1MB workload lost 33% throughput. The 64KB workload lost 41%. Neither was re
 
 This was not a THP workload. The benchmark was using `shmget()` with `SHM_HUGETLB` to allocate traditional hugetlbfs pages — a mechanism that predates THP by many years. The application had not changed. The storage had not changed. Only the kernel had changed.
 
-### Investigation
+### Investigation {#investigation_1}
 
 The investigation was done by Khalid Aziz at Oracle. The key tool was `perf top`, which revealed the root cause immediately:
 
@@ -138,7 +138,7 @@ The answer was in what THP added to the compound page handling path. When THP wa
 
 This locking was necessary for transparent huge pages, which can be split under concurrent access. But it was applied to **all** compound pages — including traditional hugetlbfs pages, which cannot be split. Hugetlbfs pages are allocated from a preallocated pool and have a fixed size for their entire lifetime. There is no split operation. The lock was pure overhead.
 
-### Root cause
+### Root cause {#root-cause_1}
 
 The code path before THP: `get_page()` on a compound page tail incremented the head page's reference count atomically. Fast, no locking.
 
@@ -148,7 +148,7 @@ The same pattern applied to `put_compound_page()`: releasing a reference to a co
 
 On a benchmark doing I/O at hundreds of thousands of requests per second, with each I/O acquiring and releasing a page reference, this overhead compounded. The compound page lock became a hot spot. `perf top` showed it clearly; the diagnosis from there was straightforward.
 
-### The fix
+### The fix {#the-fix_1}
 
 Commit [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8) by Khalid Aziz, merged in v3.12 (November 2013), added a fast path that bypasses the split-protection locking for hugetlbfs pages. Hugetlbfs pages are identified by `PageHuge()`, which is set at allocation time and never cleared. If a compound page has `PageHuge()` set, it cannot be a transparent huge page, and therefore cannot be split. The lock is not needed.
 
@@ -172,7 +172,7 @@ static void __get_page_tail(struct page *page)
 
 The result was immediate: 1MB read throughput recovered to 8,371 MB/s (versus the pre-THP baseline of 8,384 MB/s — effectively full recovery). 64KB throughput improved from 4,251 MB/s to 6,510 MB/s, a 53% improvement, though still below the pre-THP baseline — indicating additional overhead remained elsewhere in the 64KB path.
 
-### Design lesson
+### Design lesson {#design-lesson_1}
 
 **Optimizations for a new feature must not add overhead to unrelated code paths.** THP's compound page split protection was necessary and correct for transparent huge pages. Applying it to all compound pages was a natural but incorrect generalization. The assumption was that the locking path was "fast enough" — but at hundreds of thousands of operations per second, even a small per-operation overhead accumulates into a major throughput regression.
 
@@ -187,11 +187,11 @@ The result was immediate: 1MB read throughput recovered to 8,371 MB/s (versus th
 
 ---
 
-## Bug 3: RSS Percpu Counter Inaccuracy and Wrong OOM Victims
+## Bug 3: RSS Percpu Counter Inaccuracy and Wrong OOM Victims {#bug-3-rss-percpu-counter-inaccuracy-and-wrong-oom-victims}
 
 *RSS conversion introduced in v6.2 (February 2023), commit [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1). Inaccuracy fixed in 2026, commit [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b).*
 
-### The symptom
+### The symptom {#the-symptom_2}
 
 After upgrading to a Linux v6.2 or later kernel, engineering teams running production services on large-core-count machines began seeing two categories of anomalous behavior.
 
@@ -201,7 +201,7 @@ The second, more serious: when the system did reach an OOM condition, the kernel
 
 Both symptoms appeared after the v6.2 kernel upgrade and disappeared when reverting to v5.x. The upgrade was the only change.
 
-### Investigation
+### Investigation {#investigation_2}
 
 The investigation began with the monitoring anomaly. The watchdog was reading `/proc/<pid>/status`:
 
@@ -226,7 +226,7 @@ The intent was to reduce lock contention on the per-`mm_struct` counter in highl
 
 On a 250-CPU machine, the error margin grew from bounded kilobytes to potentially gigabytes. A single process could appear to have RSS several hundred megabytes different from its actual resident set size. The commit noted that readers like OOM killer and memory reclaim "are not performance critical and should be ok with slow read" — but it did not implement a precise read path, leaving them using the fast (inaccurate) counter.
 
-### Root cause
+### Root cause {#root-cause_2}
 
 The `percpu_counter` infrastructure is designed for statistics where approximate values are sufficient: page counts, network packet counters, event rates. The `percpu_counter_read()` function returns the approximate value immediately. `percpu_counter_sum()` returns the precise value but is slow because it must sum across all per-CPU slots.
 
@@ -241,7 +241,7 @@ The OOM killer kills Process B. Process A continues running and immediately trig
 
 The bug report from Sweet Tea Dorminy, as quoted in the fix commit, described exactly this scenario occurring in production.
 
-### The fix
+### The fix {#the-fix_2}
 
 Commit [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b) (January 2026) introduced `get_mm_counter_sum()`, which calls `percpu_counter_sum()` instead of `percpu_counter_read()` for contexts where accuracy matters. The OOM killer's victim selection, its console dump output, and the OOM reaper's progress reporting were all converted to use the precise version.
 
@@ -261,7 +261,7 @@ points += get_mm_counter_sum(p->mm, MM_ANONPAGES) +
 
 The fix also addressed the same inaccuracy in the RSS values printed to the kernel log when an OOM kill occurs — previously, the logged RSS could be wildly wrong on large machines, making post-mortem analysis misleading.
 
-### Design lesson
+### Design lesson {#design-lesson_2}
 
 **Approximate counters are not interchangeable with exact counters in decision-making paths.** The `percpu_counter` infrastructure is deliberately approximate — that is its purpose. Converting an RSS counter to use it is an appropriate optimization for hot paths where exact values are not needed. The mistake was not providing a precise read path and ensuring that all callers requiring accuracy used it. The comment in the original commit ("OOM killer and memory reclaim are not performance critical and should be ok with slow read") identified the right concern but was not translated into code.
 
@@ -286,7 +286,7 @@ The fix also addressed the same inaccuracy in the RSS values printed to the kern
 
 ---
 
-## Summary: What These Bugs Have in Common
+## Summary: What These Bugs Have in Common {#summary-what-these-bugs-have-in-common}
 
 All three bugs share a structural pattern that appears repeatedly in mm development:
 
@@ -318,7 +318,7 @@ The recurring theme: **an optimization correct in one context becomes harmful in
     # Large discrepancy on many-core systems indicates the percpu inaccuracy
     ```
 
-## See also
+## See also {#see-also}
 
 - [thp.md](thp.md) — THP configuration, defrag modes, and khugepaged tuning
 - [oom.md](oom.md) — OOM killer mechanics, deadlocks, and the OOM reaper
@@ -327,7 +327,7 @@ The recurring theme: **an optimization correct in one context becomes harmful in
 - [numa.md](numa.md) — NUMA memory policy and the zone_reclaim design
 - [reclaim.md](reclaim.md) — How kswapd and direct reclaim work
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Reading an OOM log](reading-oom-log.md) — how to parse the dmesg output from a real OOM event, including the task table and scoring fields discussed in Bug 3
 - [/proc/vmstat reference](proc-vmstat.md) — `zone_reclaim_failed` and other counters relevant to diagnosing Bug 1

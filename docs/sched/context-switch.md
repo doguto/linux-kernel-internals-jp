@@ -1,8 +1,8 @@
-# Life of a Context Switch
+# Life of a Context Switch {#life-of-a-context-switch}
 
 > What happens inside `__schedule()` from preemption to resumption
 
-## The big picture
+## The big picture {#the-big-picture}
 
 A context switch moves the CPU from running one task to running another. It's triggered thousands of times per second and must be as fast as possible — yet it involves locking, memory barrier ordering, architecture-specific register saving, and careful pointer gymnastics to safely hand off execution.
 
@@ -20,7 +20,7 @@ flowchart TB
     A --> B --> C --> D --> E --> F --> G --> H
 ```
 
-## How a task gets marked for rescheduling
+## How a task gets marked for rescheduling {#how-a-task-gets-marked-for-rescheduling}
 
 Before a context switch can happen, something must decide the current task should give up the CPU. This sets `TIF_NEED_RESCHED` on the current task:
 
@@ -46,7 +46,7 @@ Common triggers:
 - **Explicit yield** (`sched_yield()`): task voluntarily gives up the CPU
 - **Priority change**: task's priority lowered below a runnable task
 
-## Voluntary vs involuntary switches
+## Voluntary vs involuntary switches {#voluntary-vs-involuntary-switches}
 
 The kernel tracks two types of context switches per task:
 
@@ -69,7 +69,7 @@ cat /proc/$PID/status | grep ctxt
 
 A high involuntary count relative to voluntary means the task is being preempted frequently — it always has work to do but keeps losing the CPU to other tasks.
 
-## Schedule modes
+## Schedule modes {#schedule-modes}
 
 `__schedule()` is called with a mode that determines what triggered it:
 
@@ -83,7 +83,7 @@ A high involuntary count relative to voluntary means the task is being preempted
 
 This affects two things: which counter is incremented (`nvcsw` vs `nivcsw`) and whether the task's state is consulted before dequeuing.
 
-## Inside __schedule()
+## Inside __schedule() {#inside-__schedule}
 
 ```c
 // kernel/sched/core.c (simplified)
@@ -141,7 +141,7 @@ static void __sched notrace __schedule(int sched_mode)
 }
 ```
 
-## context_switch()
+## context_switch() {#context_switch}
 
 Once `next` is selected, `context_switch()` does the actual switch:
 
@@ -176,13 +176,13 @@ static __always_inline struct rq *context_switch(struct rq *rq, struct task_stru
 }
 ```
 
-### The memory switch
+### The memory switch {#the-memory-switch}
 
 For a user-space task, `switch_mm_irqs_off()` installs the new task's page tables. On x86-64 with PCID, this is a CR3 write with the PCID bits set — the TLB is not fully flushed if the PCID is still cached.
 
 For a kernel thread (no `mm`), it borrows the previous task's `active_mm` via lazy TLB: the page tables aren't switched, but the kernel thread is told "don't expect any user-space TLB entries to be valid."
 
-### switch_to(): the assembly heart
+### switch_to(): the assembly heart {#switch_to-the-assembly-heart}
 
 `switch_to()` is architecture-specific. On x86-64:
 
@@ -227,7 +227,7 @@ __switch_to_asm:
 
 After `switch_to()` returns, the CPU is running on `next`'s stack with `next`'s saved registers. From the perspective of the code after `switch_to()`, "the current task" is now `next`.
 
-### The prev pointer puzzle
+### The prev pointer puzzle {#the-prev-pointer-puzzle}
 
 ```c
 switch_to(prev, next, prev);
@@ -240,7 +240,7 @@ The third argument to `switch_to` receives the **last task** that ran on this CP
 - But what if `next` was previously on a different CPU? When it ran there, some other task was scheduled out
 - The `last` variable gives the code after `switch_to()` the right `prev` to pass to `finish_task_switch()`
 
-## finish_task_switch()
+## finish_task_switch() {#finishtaskswitch}
 
 `finish_task_switch()` runs in the *new* task's context, cleaning up after the task that was just switched out:
 
@@ -275,7 +275,7 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 
 The key ordering: `prev->on_cpu = 0` is set with release semantics before the lock is dropped. Any CPU trying to wake `prev` spins on `on_cpu` — this ensures `prev` is fully off the CPU before a wakeup can re-enqueue it.
 
-## The full timeline
+## The full timeline {#the-full-timeline}
 
 ```mermaid
 sequenceDiagram
@@ -299,7 +299,7 @@ sequenceDiagram
     NextTask->>CPU: Resume executing next's code
 ```
 
-## Measuring context switch cost
+## Measuring context switch cost {#measuring-context-switch-cost}
 
 ```bash
 # Count context switches system-wide
@@ -320,7 +320,7 @@ trace-cmd record -e sched:sched_switch sleep 5
 trace-cmd report | head -50
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Runqueues](runqueues.md) — `struct rq`, `pick_next_task()`, and `__schedule()` structure
 - [Scheduler Classes](scheduler-classes.md) — Which class provides the `next` task

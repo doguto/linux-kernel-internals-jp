@@ -1,8 +1,8 @@
-# hrtimers
+# hrtimers {#hrtimers}
 
 > High-resolution timers: nanosecond-precision kernel timers
 
-## The two timer systems
+## The two timer systems {#the-two-timer-systems}
 
 Linux has two timer implementations:
 
@@ -13,7 +13,7 @@ Linux has two timer implementations:
 
 The classic wheel is O(1) but coarse. hrtimers use a sorted red-black tree; the soonest expiry is at the tree minimum and programs the hardware clockevent directly.
 
-## struct hrtimer
+## struct hrtimer {#struct-hrtimer}
 
 ```c
 /* include/linux/hrtimer_types.h */
@@ -31,7 +31,7 @@ struct hrtimer {
 
 ```
 
-## Clock bases
+## Clock bases {#clock-bases}
 
 Each CPU has separate timer queues per clock ID:
 
@@ -49,9 +49,9 @@ HRTIMER_BASE_TAI_SOFT         /* CLOCK_TAI, softirq delivery */
 
 Hard delivery timers fire directly in the hardirq context of the clockevent interrupt (lowest latency); soft delivery timers fire in softirq context (slightly higher latency but avoids running at hard-IRQ level).
 
-## Using hrtimers
+## Using hrtimers {#using-hrtimers}
 
-### Kernel driver example
+### Kernel driver example {#kernel-driver-example}
 
 ```c
 #include <linux/hrtimer.h>
@@ -97,7 +97,7 @@ static void mydev_remove(struct platform_device *pdev)
 }
 ```
 
-### Timer modes
+### Timer modes {#timer-modes}
 
 ```c
 /* Absolute: fire at specific time */
@@ -113,7 +113,7 @@ hrtimer_start(&timer, ns_to_ktime(5000000), HRTIMER_MODE_REL_PINNED);
 hrtimer_start(&timer, ns_to_ktime(5000000), HRTIMER_MODE_REL_SOFT);
 ```
 
-## High-resolution mode
+## High-resolution mode {#high-resolution-mode}
 
 On boot, the kernel operates in **low-resolution mode** where timer interrupts fire at HZ rate (100–1000/s). When the first hrtimer device is detected, the system switches to **high-resolution mode**:
 
@@ -148,7 +148,7 @@ dmesg | grep "high resolution"
 # Switched to high resolution mode on CPU 0
 ```
 
-## NOHZ: tickless operation
+## NOHZ: tickless operation {#nohz-tickless-operation}
 
 With `CONFIG_NO_HZ_IDLE` (default), when all runqueue tasks sleep and no hrtimers are pending soon, the tick stops entirely:
 
@@ -173,7 +173,7 @@ dmesg | grep nohz
 cat /proc/stat | awk 'NR>1 && /cpu[0-9]/ {print $1, "idle:", $5}'
 ```
 
-## Timer slack
+## Timer slack {#timer-slack}
 
 `nanosleep` and similar calls can be coalesced with nearby wakeups to reduce power consumption. The kernel applies a **slack** — allowed slippage past the requested time:
 
@@ -192,7 +192,7 @@ The default slack is a fixed constant (`.timer_slack_ns = 50000` in `init/init_t
 cat /proc/<pid>/timerslack_ns
 ```
 
-## hrtimer vs timer_list
+## hrtimer vs timer_list {#hrtimer-vs-timer_list}
 
 When to use each:
 
@@ -204,7 +204,7 @@ When to use each:
 | Real-time audio/video pacing | `hrtimer` with `HRTIMER_MODE_ABS` |
 | Watchdog timers | `timer_list` |
 
-## Observing hrtimers
+## Observing hrtimers {#observing-hrtimers}
 
 ```bash
 # All active hrtimers in the system
@@ -224,9 +224,9 @@ cat /sys/kernel/tracing/trace_pipe
 # kworker/0:1 [000] hrtimer_start: hrtimer=0xffff... function=tick_sched_timer expires=...
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/hrtimer.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hrtimer.h) — public hrtimer API: `hrtimer_setup()`, `hrtimer_start()`, `hrtimer_cancel()`, and `hrtimer_forward_now()`
 - [include/linux/hrtimer_defs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hrtimer_defs.h) — `struct hrtimer_cpu_base` (see [include/linux/hrtimer_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hrtimer_types.h) for `struct hrtimer` and [include/linux/hrtimer.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hrtimer.h) for the `HRTIMER_MODE_*` flags)
@@ -234,25 +234,25 @@ cat /sys/kernel/tracing/trace_pipe
 - [kernel/time/tick-sched.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/tick-sched.c) — scheduler tick emulation via `sched_timer` hrtimer and NOHZ idle/full tick suppression
 - [lib/timerqueue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/timerqueue.c) — augmented red-black tree operations (`timerqueue_add()`, `timerqueue_del()`) keeping the earliest timer cached
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`nanosleep(2)`](https://man7.org/linux/man-pages/man2/nanosleep.2.html) — high-resolution sleep syscall implemented on top of kernel hrtimers
 - [`clock_nanosleep(2)`](https://man7.org/linux/man-pages/man2/clock_nanosleep.2.html) — clock-selectable sleep supporting `TIMER_ABSTIME` and timer slack coalescing
 - [`prctl(2)`](https://man7.org/linux/man-pages/man2/prctl.2.html) — `PR_SET_TIMERSLACK` and `PR_GET_TIMERSLACK` for configuring per-thread timer coalescing slack
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Timekeeping and Clocksources](timekeeping.md) — timekeeping architecture, clock IDs, and time offset conversions
 - [POSIX Timers and timerfd](posix-timers.md) — user-space timer APIs (`timer_create()`, `timerfd`) backed by kernel hrtimers
 - [The Timer Wheel](timer-wheel.md) — low-resolution `timer_list` wheel comparison and selection guide
 - [EEVDF Scheduler](../sched/eevdf.md) — CPU scheduler tick driven by an hrtimer in high-resolution mode
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The high-resolution timer API](https://lwn.net/Articles/167897/) — Jonathan Corbet, January 2006: the design and integration of Thomas Gleixner's hrtimer subsystem
 - [hrtimer: Provide softirq context hrtimers](https://lwn.net/Articles/732536/) — Anna-Maria Gleixner, Aug 31, 2017: splitting hardirq vs softirq timer expiry handling for low-latency RT safety
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — core API documentation for the kernel timekeeping and timer infrastructure
 - [High-resolution timers subsystem](https://docs.kernel.org/timers/hrtimers.html) — design documentation and architecture of high-resolution timer queues

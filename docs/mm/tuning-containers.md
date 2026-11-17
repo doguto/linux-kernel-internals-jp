@@ -1,14 +1,14 @@
-# Tuning Memory for Containers
+# Tuning Memory for Containers {#tuning-memory-for-containers}
 
 > Getting container memory limits right -- and debugging when they're wrong
 
-## Why Container Memory Is Different
+## Why Container Memory Is Different {#why-container-memory-is-different}
 
 On a bare-metal server, all processes share a single pool of memory managed by the kernel. Containers change this model fundamentally: each container gets its own memory boundary enforced by the kernel's **cgroup memory controller**. Understanding how that controller works is the difference between a stable production deployment and mysterious OOM kills at 3 AM.
 
 This page focuses on **cgroup v2**, which is the [recommended cgroup version](https://lwn.net/Articles/679786/) for all new deployments (declared production-ready in kernel v4.5). If you're still on cgroup v1, the concepts are similar but the interface files differ. See [Memory Cgroups](memcg.md) for v1 vs v2 differences.
 
-## The Four Memory Knobs
+## The Four Memory Knobs {#the-four-memory-knobs}
 
 The cgroup v2 memory controller exposes four files that control how much memory a group of processes can use. They form a hierarchy from hard enforcement to soft protection:
 
@@ -31,7 +31,7 @@ The cgroup v2 memory controller exposes four files that control how much memory 
 | [`memory.low`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Soft protection | Memory below this is protected from reclaim (best-effort) | `0` |
 | [`memory.min`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Hard protection | Memory below this is never reclaimed | `0` |
 
-### memory.max: The Hard Limit
+### memory.max: The Hard Limit {#memorymax-the-hard-limit}
 
 When a cgroup's memory usage reaches `memory.max`, the kernel tries reclaim within that cgroup. If reclaim fails to free enough memory, the cgroup OOM killer is invoked and a process within the cgroup is killed. The host system is unaffected -- this is a cgroup-scoped OOM, not a global one.
 
@@ -42,7 +42,7 @@ echo 1G > /sys/fs/cgroup/mycontainer/memory.max
 
 This is the wall your container cannot climb over. It exists to prevent a single container from starving the rest of the system.
 
-### memory.high: The Soft Limit
+### memory.high: The Soft Limit {#memoryhigh-the-soft-limit}
 
 `memory.high` is more nuanced. When usage exceeds this threshold, the kernel does not kill anything. Instead, it aggressively reclaims memory from the cgroup and **throttles** allocating processes -- they're put to sleep until the reclaim frees enough pages.
 
@@ -57,7 +57,7 @@ Why have both? Because `memory.high` creates back-pressure. Instead of running a
 !!! tip "Think of it like a speed limit vs a cliff"
     `memory.high` is a speed limit sign -- you slow down when you hit it. `memory.max` is the edge of a cliff -- you go over it and you're dead.
 
-### memory.low and memory.min: Protection Guarantees
+### memory.low and memory.min: Protection Guarantees {#memorylow-and-memorymin-protection-guarantees}
 
 These knobs work in the opposite direction. Instead of limiting how much memory a cgroup can use, they guarantee how much it gets to keep during system-wide memory pressure.
 
@@ -80,7 +80,7 @@ parent (memory.min: 4GB)
 ├── child-b (memory.min: 2GB)  <- effective: ~1.6GB (2/5 of 4GB)
 ```
 
-## Why Containers See Wrong Memory Numbers
+## Why Containers See Wrong Memory Numbers {#why-containers-see-wrong-memory-numbers}
 
 Run `free` inside a typical container and you'll see the **host's** total memory, not the container's limit:
 
@@ -93,7 +93,7 @@ Mem:           62Gi        45Gi        17Gi    # <- This is the HOST's memory!
 
 This happens because `/proc/meminfo` is a global file that reports system-wide memory. The container's cgroup limit exists only in the cgroup filesystem, not in `/proc`. Many applications (especially JVMs, databases, and language runtimes) read `/proc/meminfo` to auto-tune themselves. When they see 62GB of total memory instead of 1GB, they allocate far too much and get OOM-killed.
 
-### The Solutions
+### The Solutions {#the-solutions}
 
 **LXCFS**: A FUSE filesystem that intercepts reads to `/proc/meminfo`, `/proc/cpuinfo`, and other files, returning cgroup-aware values instead. [LXCFS](https://linuxcontainers.org/lxcfs/) mounts over `/proc` inside the container so existing tools work without modification.
 
@@ -109,9 +109,9 @@ java -XX:+UnlockExperimentalVMOptions -XX:+UseCGroupMemoryLimitForHeap -jar app.
 
 **cgroup-aware tools**: Modern versions of `systemd-cgtop`, `cadvisor`, and `kubectl top` read from the cgroup filesystem directly rather than `/proc/meminfo`.
 
-## Common Problems
+## Common Problems {#common-problems}
 
-### Container OOM When Host Has Free Memory
+### Container OOM When Host Has Free Memory {#container-oom-when-host-has-free-memory}
 
 This is the most frequently misdiagnosed container problem. The host shows 17GB free, but your container just got killed.
 
@@ -132,7 +132,7 @@ cat /sys/fs/cgroup/mycontainer/memory.events
 - Optimize the application's memory usage
 - Allow swap with `memory.swap.max` to give a buffer
 
-### Page Cache Counting Against the Limit
+### Page Cache Counting Against the Limit {#page-cache-counting-against-the-limit}
 
 In cgroup v2, **page cache is charged to the cgroup that read the file**. This catches many people off guard. A container that reads large files will have its page cache counted against its memory limit, even though the kernel can reclaim that cache at any time.
 
@@ -145,7 +145,7 @@ cat /sys/fs/cgroup/mycontainer/memory.stat | grep -E '^(anon|file) '
 
 The cache is reclaimable, so it won't cause OOM by itself. But it does cause `memory.high` throttling if the combined usage exceeds the soft limit. If this is a problem, size `memory.high` with page cache headroom in mind.
 
-### Slow Container Start Under Memory Pressure
+### Slow Container Start Under Memory Pressure {#slow-container-start-under-memory-pressure}
 
 If a container starts slowly, it might be because `memory.high` is set too close to actual usage. Every allocation triggers reclaim and throttling. Check `memory.pressure` to confirm:
 
@@ -157,7 +157,7 @@ cat /sys/fs/cgroup/mycontainer/memory.pressure
 
 If these numbers are high, your container is spending significant time waiting for memory.
 
-## Kubernetes: Requests vs Limits
+## Kubernetes: Requests vs Limits {#kubernetes-requests-vs-limits}
 
 Kubernetes exposes two memory settings per container, and they map directly to cgroup knobs:
 
@@ -175,7 +175,7 @@ resources:
     memory: "1Gi"     # Hard ceiling; OOM kill above this
 ```
 
-### How QoS Classes Affect Memory
+### How QoS Classes Affect Memory {#how-qos-classes-affect-memory}
 
 Kubernetes assigns Quality of Service classes based on requests and limits:
 
@@ -196,7 +196,7 @@ Node (16GB)
 !!! warning "Set requests even if you don't set limits"
     Without a `requests.memory`, your pod is BestEffort class and will be the first to be evicted when the node runs low on memory. Always set at least requests.
 
-## Docker: --memory and --memory-reservation
+## Docker: --memory and --memory-reservation {#docker-memory-and-memory-reservation}
 
 Docker exposes container memory settings through command-line flags:
 
@@ -222,9 +222,9 @@ docker run -d \
 !!! warning "Docker --memory-swap semantics"
     `--memory-swap` sets the **combined** memory + swap limit, not just swap. So `--memory=1g --memory-swap=2g` means 1GB RAM + 1GB swap. Set `--memory-swap=-1` for unlimited swap.
 
-## Monitoring Container Memory
+## Monitoring Container Memory {#monitoring-container-memory}
 
-### Key Files
+### Key Files {#key-files}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
@@ -257,7 +257,7 @@ cat $CGROUP/memory.events
 # oom_group_kill 0            # group OOM kills
 ```
 
-### Pressure Stall Information (PSI)
+### Pressure Stall Information (PSI) {#pressure-stall-information-psi}
 
 PSI gives you the most actionable signal about whether a container is memory-constrained:
 
@@ -279,7 +279,7 @@ echo "some 50000 1000000" > $CGROUP/memory.pressure
 # Trigger when "some" exceeds 50ms per 1s window
 ```
 
-## Swap in Containers
+## Swap in Containers {#swap-in-containers}
 
 By default in cgroup v2, swap is allowed up to whatever the system provides. You can control this per-cgroup:
 
@@ -294,13 +294,13 @@ echo 500M > /sys/fs/cgroup/mycontainer/memory.swap.max
 cat /sys/fs/cgroup/mycontainer/memory.swap.current
 ```
 
-### Why Allow Swap in Containers?
+### Why Allow Swap in Containers? {#why-allow-swap-in-containers}
 
 The conventional wisdom of "disable swap for containers" comes from cgroup v1 where swap accounting was expensive and unreliable. In cgroup v2, swap accounting is efficient and well-integrated.
 
 Swap provides a buffer between "memory.high throttling" and "memory.max OOM kill". Without swap, a sudden spike in memory usage goes directly to OOM. With swap, the spike gets absorbed into swap, giving you time to detect and react.
 
-### memory.zswap.max (v5.19+)
+### memory.zswap.max (v5.19+) {#memoryzswapmax-v519}
 
 [zswap](https://docs.kernel.org/admin-guide/mm/zswap.html) compresses pages in memory before writing them to swap. The `memory.zswap.max` file limits how much compressed data a cgroup can store in the zswap pool:
 
@@ -314,9 +314,9 @@ cat /sys/fs/cgroup/mycontainer/memory.zswap.current
 
 This prevents a single container from filling the entire zswap pool and forcing other containers' pages to be written to slow disk swap. The per-cgroup zswap limit was introduced in [commit f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25) ("zswap: memcg accounting").
 
-## Best Practices
+## Best Practices {#best-practices}
 
-### Sizing Limits
+### Sizing Limits {#sizing-limits}
 
 1. **Profile first**: Run your application under realistic load and observe `memory.peak` (or `memory.max_usage_in_bytes` on v1). Set `memory.max` to 1.25-1.5x the observed peak.
 
@@ -332,7 +332,7 @@ This prevents a single container from filling the entire zswap pool and forcing 
 
 4. **Use memory.low for critical services**: If a container must not be reclaimed (e.g., database buffer pool), set `memory.low` or `memory.min`.
 
-### Handling OOM Gracefully
+### Handling OOM Gracefully {#handling-oom-gracefully}
 
 **Use `memory.oom.group`** ([commit 3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca), "mm, oom: introduce memory.oom.group"): When a container OOM occurs, the default behavior kills a single process. For multi-process containers (e.g., a web server with workers), killing one process often leaves the container in a broken state. `memory.oom.group` kills all processes in the cgroup together, ensuring a clean restart.
 
@@ -352,7 +352,7 @@ docker run --restart=always --memory=1g myimage
 
 **Monitor `memory.events`**: Set up alerts on the `oom` and `oom_kill` counters. An increasing count means the limit is too low or the application has a leak.
 
-### A Complete Production Setup
+### A Complete Production Setup {#a-complete-production-setup}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
@@ -373,9 +373,9 @@ echo 512M > $CGROUP/memory.swap.max
 echo 1 > $CGROUP/memory.oom.group
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Observe memory.high Throttling
+### Observe memory.high Throttling {#observe-memoryhigh-throttling}
 
 ```bash
 # Create a cgroup with a low soft limit
@@ -398,7 +398,7 @@ for i in range(80):
 # and gets killed around 100MB (memory.max)
 ```
 
-### Compare memory.low Protection
+### Compare memory.low Protection {#compare-memorylow-protection}
 
 ```bash
 # Create parent and two children
@@ -417,7 +417,7 @@ echo 100M | sudo tee /sys/fs/cgroup/parent/protected/memory.low
 # when the parent approaches its 200M limit
 ```
 
-### Monitor a Docker Container's Memory
+### Monitor a Docker Container's Memory {#monitor-a-docker-containers-memory}
 
 ```bash
 # Start a container
@@ -441,15 +441,15 @@ watch -n 1 "echo '--- usage ---' && \
 docker rm -f memtest
 ```
 
-## History
+## History {#history}
 
-### memory.high Throttling (v4.0+, stable in v4.5)
+### memory.high Throttling (v4.0+, stable in v4.5) {#memoryhigh-throttling-v40-stable-in-v45}
 
 **Author**: Johannes Weiner
 
 The `memory.high` knob was added as part of the cgroup v2 memory controller in v4.0 ([commit 241994ed8649](https://git.kernel.org/linus/241994ed8649)), but cgroup v2 was experimental until v4.5 when it was [declared production-ready](https://lwn.net/Articles/679786/). The soft-limit throttling model — where processes are slowed down instead of killed — made container memory management much more predictable.
 
-### memory.oom.group (v4.19, 2018)
+### memory.oom.group (v4.19, 2018) {#memoryoomgroup-v419-2018}
 
 **Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group")
 
@@ -457,7 +457,7 @@ The `memory.high` knob was added as part of the cgroup v2 memory controller in v
 
 Allowed killing all processes in a cgroup together on OOM, which is essential for container-based deployments where partial kills leave broken state.
 
-### Per-cgroup PSI (v4.20, 2018)
+### Per-cgroup PSI (v4.20, 2018) {#per-cgroup-psi-v420-2018}
 
 **Commit**: [eb414681d5a0](https://git.kernel.org/linus/eb414681d5a0) ("psi: pressure stall information for CPU, memory, and IO") | [LWN](https://lwn.net/Articles/759658/)
 
@@ -465,7 +465,7 @@ Allowed killing all processes in a cgroup together on OOM, which is essential fo
 
 Enabled fine-grained pressure monitoring per cgroup, replacing the crude `memory.failcnt` counter from v1.
 
-### memory.reclaim (v5.19, 2022)
+### memory.reclaim (v5.19, 2022) {#memoryreclaim-v519-2022}
 
 **Commit**: [94968384dde1](https://git.kernel.org/linus/94968384dde1) ("memcg: introduce per-memcg reclaim interface") | [LWN](https://lwn.net/Articles/894849/)
 
@@ -473,9 +473,9 @@ Enabled fine-grained pressure monitoring per cgroup, replacing the crude `memory
 
 Proactive reclaim: allows userspace to trigger reclaim within a cgroup without waiting for memory pressure. Used by Meta and Google for pre-emptive memory management.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -483,19 +483,19 @@ Proactive reclaim: allows userspace to trigger reclaim within a cgroup without w
 | [`mm/vmpressure.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmpressure.c) | Memory pressure notifications |
 | [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | Pressure Stall Information |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - Authoritative cgroup v2 reference
 - [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) - zswap documentation
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Controlling memory with cgroup v2](https://lwn.net/Articles/662925/) - memory.high design and motivation
 - [PSI - Pressure Stall Information](https://lwn.net/Articles/759658/) - per-cgroup pressure tracking
 - [User-space OOM handling](https://lwn.net/Articles/894849/) - memory.reclaim and proactive management
 - [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) - cgroup v2 reaching production readiness
 
-### Related
+### Related {#related}
 
 - [Memory Cgroups](memcg.md) - Detailed memcg internals and v1 vs v2
 - [Running out of memory](oom.md) - The global OOM kill path
@@ -503,7 +503,7 @@ Proactive reclaim: allows userspace to trigger reclaim within a cgroup without w
 - [Swap](swap.md) - Swap subsystem internals
 - [Glossary](glossary.md) - cgroup, OOM, PSI definitions
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Container Memory Limits](container-memory-limits.md) — the full sequence from `memory.high` throttling through cgroup OOM kill and recovery
 - [memory.stat Field Reference](memory-stat.md) — every field in `/sys/fs/cgroup/*/memory.stat` explained, with diagnostic recipes

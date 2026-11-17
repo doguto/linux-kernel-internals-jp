@@ -1,8 +1,8 @@
-# ARM64 Exception Model
+# ARM64 Exception Model {#arm64-exception-model}
 
 > Exception levels, interrupt handling, and the GIC
 
-## Exception Levels
+## Exception Levels {#exception-levels}
 
 ARM64 defines four exception levels (EL0-EL3), roughly analogous to x86 protection rings but more hierarchical:
 
@@ -25,7 +25,7 @@ Key properties:
 
 The Linux kernel runs at EL1 normally, but with VHE (Virtualization Host Extension, ARMv8.1+) KVM runs the host kernel at EL2 directly (EL2 registers are made to look like EL1 registers via VHE). Without VHE, a small EL2 stub handles world-switching while the host kernel stays at EL1. Guests always run at EL1/EL0.
 
-## Exception types
+## Exception types {#exception-types}
 
 ARM64 has four categories of exceptions:
 
@@ -36,7 +36,7 @@ ARM64 has four categories of exceptions:
 | **FIQ** | Fast interrupt (high priority, typically routed to EL3) | Secure world interrupts |
 | **SError** | Asynchronous system error | Bus errors, DRAM ECC |
 
-## Exception vectors: VBAR_EL1
+## Exception vectors: VBAR_EL1 {#exception-vectors-vbar_el1}
 
 When an exception occurs, the CPU jumps to an entry in the **vector table**, pointed to by `VBAR_EL1` (Vector Base Address Register for EL1):
 
@@ -58,7 +58,7 @@ VBAR_EL1 base
   ...
 ```
 
-### Linux vector table
+### Linux vector table {#linux-vector-table}
 
 ```asm
 /* arch/arm64/kernel/entry.S */
@@ -86,7 +86,7 @@ SYM_CODE_START(vectors)
 SYM_CODE_END(vectors)
 ```
 
-## Syndrome registers: ESR_EL1
+## Syndrome registers: ESR_EL1 {#syndrome-registers-esr_el1}
 
 When a synchronous exception occurs, `ESR_EL1` (Exception Syndrome Register) identifies the cause:
 
@@ -112,7 +112,7 @@ When a synchronous exception occurs, `ESR_EL1` (Exception Syndrome Register) ide
 /* For data aborts, ISS includes: DFSC (fault status code), WnR (write), SRT (register) */
 ```
 
-### Fault status codes (DFSC)
+### Fault status codes (DFSC) {#fault-status-codes-dfsc}
 
 ```c
 /* Data fault status codes in ESR_EL1.ISS.DFSC */
@@ -127,7 +127,7 @@ When a synchronous exception occurs, `ESR_EL1` (Exception Syndrome Register) ide
 /* 0b00 = level 0 (PGD), 0b01 = level 1, 0b10 = level 2, 0b11 = level 3 (PTE) */
 ```
 
-### Linux fault handling
+### Linux fault handling {#linux-fault-handling}
 
 ```c
 /* arch/arm64/mm/fault.c */
@@ -154,7 +154,7 @@ static const struct fault_info fault_info[] = {
 };
 ```
 
-## Syscall entry (SVC)
+## Syscall entry (SVC) {#syscall-entry-svc}
 
 On ARM64, system calls use the `SVC #0` instruction (Supervisor Call):
 
@@ -200,7 +200,7 @@ static void el0_svc_common(struct pt_regs *regs, int scno,
 
 The syscall number is in `x8`, arguments in `x0-x5`, and the return value goes into `x0`.
 
-## GIC: Generic Interrupt Controller
+## GIC: Generic Interrupt Controller {#gic-generic-interrupt-controller}
 
 ARM systems use the GIC (Generic Interrupt Controller) for interrupt management, not the x86 APIC.
 
@@ -214,7 +214,7 @@ Peripheral ──► GIC Distributor (shared)
                           IRQ line to CPU core
 ```
 
-### GIC interrupt types
+### GIC interrupt types {#gic-interrupt-types}
 
 ```c
 /* GIC interrupt IDs */
@@ -224,7 +224,7 @@ Peripheral ──► GIC Distributor (shared)
 /* 8192+:  LPI (Locality-specific Peripheral Interrupts) — MSI for PCIe */
 ```
 
-### Linux GIC driver
+### Linux GIC driver {#linux-gic-driver}
 
 ```c
 /* drivers/irqchip/irq-gic-v3.c */
@@ -247,7 +247,7 @@ static void gic_eoi_irq(struct irq_data *d)
 }
 ```
 
-### IPIs on ARM64
+### IPIs on ARM64 {#ipis-on-arm64}
 
 ARM64 IPIs (for TLB shootdown, function calls, rescheduling) use GIC SGIs:
 
@@ -266,7 +266,7 @@ void arch_send_call_function_ipi_mask(const struct cpumask *mask)
 /* smp_cross_call → GIC SGI → IPI_RESCHEDULE/IPI_CALL_FUNC handler */
 ```
 
-## System registers
+## System registers {#system-registers}
 
 ARM64 system registers are accessed with `MRS`/`MSR` instructions:
 
@@ -294,7 +294,7 @@ u64 cntvct = read_sysreg(cntvct_el0);   /* virtual counter */
 write_sysreg(ttbr0_val, ttbr0_el1);     /* page table base */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Memory Model](memory-model.md) — ARM64 weak ordering and barriers
 - [Memory Management: page tables](../../mm/page-tables.md) — ARM64 page table format

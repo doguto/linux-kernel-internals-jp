@@ -1,8 +1,8 @@
-# Tasklets
+# Tasklets {#tasklets}
 
 > Serialized, per-CPU deferred work built on softirqs
 
-## What are tasklets?
+## What are tasklets? {#what-are-tasklets}
 
 Tasklets are a driver-accessible deferral mechanism built on top of softirqs (`TASKLET_SOFTIRQ` and `HI_SOFTIRQ`). They provide two properties that raw softirqs don't:
 
@@ -11,7 +11,7 @@ Tasklets are a driver-accessible deferral mechanism built on top of softirqs (`T
 
 Tasklets cannot sleep (they run in softirq context). For deferred work that needs to sleep, use [workqueues](workqueues.md).
 
-## The tasklet_struct
+## The tasklet_struct {#the-tasklet_struct}
 
 ```c
 /* include/linux/interrupt.h */
@@ -30,7 +30,7 @@ struct tasklet_struct {
 
 `use_callback` and the `func`/`callback` union are themselves part of the 5.9 security-motivated rework covered below — before that patch set, `.func` was the only signature and `.data` was the only way to pass it context.
 
-## API
+## API {#api}
 
 ```c
 #include <linux/interrupt.h>
@@ -62,7 +62,7 @@ tasklet_enable(&my_tasklet);    /* re-enable, schedule if was pending */
 tasklet_kill(&my_tasklet);
 ```
 
-## from_tasklet: accessing device context
+## from_tasklet: accessing device context {#from_tasklet-accessing-device-context}
 
 The modern callback receives a `struct tasklet_struct *`. Use `from_tasklet()` to get the containing device struct:
 
@@ -93,7 +93,7 @@ static irqreturn_t my_irq_handler(int irq, void *data)
 }
 ```
 
-## Serialization guarantee
+## Serialization guarantee {#serialization-guarantee}
 
 If `tasklet_schedule()` is called while the tasklet is already running on another CPU, the tasklet will run again after it finishes. But it will never run concurrently:
 
@@ -107,7 +107,7 @@ After CPU 0 finishes: sees SCHED bit, runs tasklet again
 
 This is the key advantage over raw softirqs, where the same handler can run on multiple CPUs simultaneously.
 
-## The deprecation nobody planned to start, then couldn't finish
+## The deprecation nobody planned to start, then couldn't finish {#the-deprecation-nobody-planned-to-start-then-couldnt-finish}
 
 Tasklets have existed since the 2.3 development series, essentially unchanged in shape while every other deferred-work mechanism around them evolved. The deprecation comment now sitting in `include/linux/interrupt.h` — *"This API is deprecated. Please consider using threaded IRQs instead"* — first appeared for Linux 5.9 (2020), and it started as a side effect of a patch nobody expected to be controversial.
 
@@ -145,7 +145,7 @@ static void my_rx_work(struct work_struct *work)
 schedule_work(&dev->rx_work);
 ```
 
-## Observing tasklet activity
+## Observing tasklet activity {#observing-tasklet-activity}
 
 ```bash
 # Tasklet softirq counts
@@ -157,7 +157,7 @@ cat /proc/softirqs | grep -E "TASKLET|HI"
 # Consider migrating to workqueues if causing scheduling issues
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Softirqs](softirq.md) — What tasklets are built on
 - [Workqueues](workqueues.md) — The recommended modern alternative

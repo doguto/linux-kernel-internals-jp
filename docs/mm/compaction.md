@@ -1,8 +1,8 @@
-# Memory Compaction
+# Memory Compaction {#memory-compaction}
 
 > Defragmenting physical memory for large allocations
 
-## What Is Compaction?
+## What Is Compaction? {#what-is-compaction}
 
 Memory compaction moves pages to create contiguous free regions. Over time, free memory becomes fragmented - scattered in small pieces throughout physical memory. Compaction consolidates these fragments.
 
@@ -20,9 +20,9 @@ After Compaction:
   Contiguous free region created
 ```
 
-## Why Compaction?
+## Why Compaction? {#why-compaction}
 
-### The Fragmentation Problem
+### The Fragmentation Problem {#the-fragmentation-problem}
 
 The buddy allocator needs physically contiguous pages for high-order allocations:
 
@@ -35,7 +35,7 @@ The buddy allocator needs physically contiguous pages for high-order allocations
 
 After running for days/weeks, a system may have plenty of free memory but no contiguous regions for high-order allocations.
 
-### Before Compaction
+### Before Compaction {#before-compaction}
 
 Prior to compaction, high-order allocation failures were common:
 
@@ -45,9 +45,9 @@ Prior to compaction, high-order allocation failures were common:
 
 The only solutions were rebooting or reserving memory at boot.
 
-## How Compaction Works
+## How Compaction Works {#how-compaction-works}
 
-### The Algorithm
+### The Algorithm {#the-algorithm}
 
 Compaction uses two scanners moving toward each other:
 
@@ -71,7 +71,7 @@ Zone start                                              Zone end
 3. **Migration**: Move pages from migration scanner to free scanner locations
 4. **Result**: Free space consolidated at one end
 
-### Page Mobility
+### Page Mobility {#page-mobility}
 
 Not all pages can be moved:
 
@@ -83,9 +83,9 @@ Not all pages can be moved:
 
 Compaction only works with movable pages. Unmovable pages create permanent fragmentation.
 
-## Compaction Triggers
+## Compaction Triggers {#compaction-triggers}
 
-### 1. Direct Compaction (Synchronous)
+### 1. Direct Compaction (Synchronous) {#1-direct-compaction-synchronous}
 
 When a high-order allocation fails, the allocating process runs compaction:
 
@@ -102,7 +102,7 @@ alloc_pages(order=9)  /* 2MB for THP */
     Retry allocation
 ```
 
-### 2. kcompactd (Asynchronous)
+### 2. kcompactd (Asynchronous) {#2-kcompactd-asynchronous}
 
 Background kernel thread that compacts proactively:
 
@@ -118,7 +118,7 @@ Woken when:
 - High-order allocations are failing
 - Explicitly triggered
 
-### 3. Manual Trigger
+### 3. Manual Trigger {#3-manual-trigger}
 
 ```bash
 # Trigger compaction on all nodes
@@ -128,9 +128,9 @@ echo 1 > /proc/sys/vm/compact_memory
 echo 1 > /sys/devices/system/node/node0/compact
 ```
 
-## Configuration
+## Configuration {#configuration}
 
-### Proactive Compaction (v5.9+)
+### Proactive Compaction (v5.9+) {#proactive-compaction-v59}
 
 Compacts in the background before allocations need it:
 
@@ -143,7 +143,7 @@ echo 20 > /proc/sys/vm/compaction_proactiveness
 # Lower = less CPU usage, more direct compaction
 ```
 
-### Compaction Behavior
+### Compaction Behavior {#compaction-behavior}
 
 ```bash
 # Fragmentation index threshold for compaction
@@ -156,9 +156,9 @@ cat /proc/sys/vm/extfrag_threshold
 cat /sys/kernel/debug/extfrag/extfrag_index
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### Compaction Statistics
+### Compaction Statistics {#compaction-statistics}
 
 ```bash
 cat /proc/vmstat | grep compact
@@ -170,7 +170,7 @@ cat /proc/vmstat | grep compact
 # compact_success          - Successful compactions
 ```
 
-### Fragmentation Index
+### Fragmentation Index {#fragmentation-index}
 
 ```bash
 # Per-order fragmentation (0.0 = no fragmentation, 1.0 = severe)
@@ -182,7 +182,7 @@ cat /sys/kernel/debug/extfrag/extfrag_index
 #     index 0.0 0.0 0.0 0.0 0.1 0.2 0.4 0.6 0.8 0.9 1.0
 ```
 
-### Tracing
+### Tracing {#tracing}
 
 ```bash
 # Trace compaction events
@@ -191,9 +191,9 @@ echo 1 > /sys/kernel/debug/tracing/events/compaction/mm_compaction_end/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Introduction (v2.6.35, 2010)
+### Introduction (v2.6.35, 2010) {#introduction-v2635-2010}
 
 **Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
@@ -201,7 +201,7 @@ cat /sys/kernel/debug/tracing/trace_pipe
 
 Initial compaction implementation to support THP and reduce high-order allocation failures.
 
-### kcompactd (v4.6, 2016)
+### kcompactd (v4.6, 2016) {#kcompactd-v46-2016}
 
 **Commit**: [698b1b30642f](https://git.kernel.org/linus/698b1b30642f) ("mm, compaction: introduce kcompactd") | [LKML](https://lore.kernel.org/lkml/1454938691-2197-1-git-send-email-vbabka@suse.cz/)
 
@@ -209,7 +209,7 @@ Initial compaction implementation to support THP and reduce high-order allocatio
 
 Background compaction daemon, similar to kswapd for reclaim.
 
-### Proactive Compaction (v5.9, 2020)
+### Proactive Compaction (v5.9, 2020) {#proactive-compaction-v59-2020}
 
 **Commit**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
 
@@ -217,7 +217,7 @@ Background compaction daemon, similar to kswapd for reclaim.
 
 Compact proactively based on fragmentation levels, reducing direct compaction stalls.
 
-## Compaction vs Reclaim
+## Compaction vs Reclaim {#compaction-vs-reclaim}
 
 Both run under memory pressure, but serve different purposes:
 
@@ -230,9 +230,9 @@ Both run under memory pressure, but serve different purposes:
 
 They often work together: reclaim frees pages, compaction arranges them.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Direct Compaction Stalls
+### Direct Compaction Stalls {#direct-compaction-stalls}
 
 Processes blocked waiting for compaction.
 
@@ -244,7 +244,7 @@ Processes blocked waiting for compaction.
 - Tune `compaction_proactiveness`
 - Reduce high-order allocations
 
-### Compaction Failures
+### Compaction Failures {#compaction-failures}
 
 Can't create contiguous regions.
 
@@ -261,7 +261,7 @@ Can't create contiguous regions.
 - Increase movable zone size
 - Consider memory hotplug for isolation
 
-### High CPU from kcompactd
+### High CPU from kcompactd {#high-cpu-from-kcompactd}
 
 Background compaction consuming CPU.
 
@@ -272,23 +272,23 @@ Background compaction consuming CPU.
 - Reduce `compaction_proactiveness`
 - Accept more direct compaction instead
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Compaction implementation |
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Compaction triggers |
 
-### Related
+### Related {#related}
 
 - [page-allocator](page-allocator.md) - Buddy system, migrate types
 - [thp](thp.md) - Primary consumer of compaction
 - [reclaim](reclaim.md) - Works alongside compaction
 - [contiguous-memory](contiguous-memory.md) - Why contiguous allocations fail and solutions
 
-## Further reading
+## Further reading {#further-reading}
 
 - [page-allocator.md](page-allocator.md) — Buddy allocator migrate types (`MIGRATE_MOVABLE`, `MIGRATE_UNMOVABLE`) that determine what compaction can move
 - [thp.md](thp.md) — Transparent huge pages: the primary driver for compaction; requires order-9 contiguous physical pages

@@ -1,8 +1,8 @@
-# VFIO: Virtual Function I/O and Device Passthrough
+# VFIO: Virtual Function I/O and Device Passthrough {#vfio-virtual-function-io-and-device-passthrough}
 
 > IOMMU groups, DMA remapping, and direct PCI device access from userspace/VMs
 
-## What is VFIO?
+## What is VFIO? {#what-is-vfio}
 
 VFIO (Virtual Function I/O) provides a secure mechanism to expose PCI devices directly to userspace processes or VMs, bypassing the kernel driver. A guest VM with VFIO passthrough can access the device at near-native speed:
 
@@ -24,7 +24,7 @@ With VFIO passthrough:
 
 **Two API generations**: everything through the "Userspace VFIO API" section below describes the original group/container model (`/dev/vfio/vfio` + `/dev/vfio/<group_id>`). It's still the default-enabled, majority-used path — `CONFIG_VFIO_GROUP`'s own help text calls it "the traditional model ... used by the majority of userspace applications and drivers." But the kernel's own documentation is explicit that it's a legacy interface being superseded: "Eventually the vfio_iommu_type1 driver, as well as the legacy vfio container and group model is intended to be deprecated," in favor of a newer device-cdev + IOMMUFD model — covered after the classic walkthrough below.
 
-## IOMMU groups
+## IOMMU groups {#iommu-groups}
 
 An IOMMU group is the smallest set of devices that must be isolated together for DMA safety. Devices in the same PCIe hierarchy that can peer-DMA to each other form a group:
 
@@ -48,7 +48,7 @@ ls /sys/kernel/iommu_groups/15/devices/
 # (or left to vfio-pci stub driver)
 ```
 
-## VFIO architecture
+## VFIO architecture {#vfio-architecture}
 
 ```
 Userspace (QEMU/application)
@@ -64,7 +64,7 @@ PCIe device BAR access (MMIO mapped to guest/userspace)
 DMA: guest GPA → IOMMU → host HPA (remapped per container)
 ```
 
-### Key objects
+### Key objects {#key-objects}
 
 ```c
 /* 1. Container: an IOMMU address space (shared by multiple groups) */
@@ -77,7 +77,7 @@ DMA: guest GPA → IOMMU → host HPA (remapped per container)
 /*    fd = ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, "0000:03:00.0") */
 ```
 
-## Setting up VFIO passthrough
+## Setting up VFIO passthrough {#setting-up-vfio-passthrough}
 
 ```bash
 # Step 1: Enable IOMMU in boot parameters (/etc/default/grub):
@@ -105,7 +105,7 @@ ls /sys/kernel/iommu_groups/15/devices/
 # All devices in group must be bound to vfio-pci (or no driver)
 ```
 
-## QEMU device passthrough
+## QEMU device passthrough {#qemu-device-passthrough}
 
 ```bash
 # Pass an NVIDIA GPU to a VM:
@@ -125,7 +125,7 @@ qemu-system-x86_64 \
     ...
 ```
 
-## Userspace VFIO API
+## Userspace VFIO API {#userspace-vfio-api}
 
 Applications (not just VMs) can use VFIO directly for device access:
 
@@ -179,7 +179,7 @@ void *mmio = mmap(NULL, reg.size, PROT_READ|PROT_WRITE,
 /* Now: read/write directly to mmio like a kernel driver would */
 ```
 
-## The newer model: device cdev + IOMMUFD
+## The newer model: device cdev + IOMMUFD {#the-newer-model-device-cdev-iommufd}
 
 The classic model above ties DMA isolation to IOMMU *groups*: to get a device fd you first open its group. The newer model drops that requirement — with `CONFIG_VFIO_DEVICE_CDEV=y`, a device fd is acquired directly:
 
@@ -195,7 +195,7 @@ The device cdev only works with IOMMUFD, not the legacy container: instead of `V
 
 `iommufd` also opens the door to features the legacy `vfio_iommu_type1` driver never supported, like nested IOMMU page tables (an IOMMU-level analog of nested EPT) and PASID-based sub-device isolation.
 
-## SR-IOV: Virtual Functions
+## SR-IOV: Virtual Functions {#sr-iov-virtual-functions}
 
 SR-IOV (Single Root I/O Virtualization) allows one physical device to appear as multiple virtual functions (VFs):
 
@@ -217,7 +217,7 @@ echo 0000:03:00.1 > /sys/bus/pci/drivers/vfio-pci/bind
 ip link set eth0 vf 0 mac 52:54:00:01:02:03 vlan 100 rate 1000
 ```
 
-## Mediated devices (mdev)
+## Mediated devices (mdev) {#mediated-devices-mdev}
 
 Some devices support mediated passthrough — the host driver slices the device and presents virtual sub-devices:
 
@@ -236,7 +236,7 @@ qemu-system-x86_64 \
     -device vfio-pci,sysfsdev=/sys/bus/mdev/devices/83b8f4f2-...
 ```
 
-## VFIO kernel internals
+## VFIO kernel internals {#vfio-kernel-internals}
 
 ```c
 /* Simplified — real definitions are split across drivers/vfio/vfio.h,
@@ -270,7 +270,7 @@ struct vfio_pci_core_device {
 };
 ```
 
-### DMA mapping path
+### DMA mapping path {#dma-mapping-path}
 
 ```c
 /* When userspace calls VFIO_IOMMU_MAP_DMA, vfio_iommu_type1.c's
@@ -291,7 +291,7 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
 }
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Check IOMMU is active:
@@ -311,9 +311,9 @@ cat /sys/kernel/debug/iommu/intel/dmar_translation_struct 2>/dev/null | head -20
 perf stat -e dmar0/iotlb_lookup/,dmar0/iotlb_hit/ -a sleep 5
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — VFIO core: device registration (`vfio_register_group_dev()`), ioctl/mmap/read/write file ops, and subsystem module init (group and container ioctl dispatch live in `group.c`/`container.c`)
 - [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group` definition (`struct vfio_container` is only forward-declared here)
@@ -325,18 +325,18 @@ perf stat -e dmar0/iotlb_lookup/,dmar0/iotlb_hit/ -a sleep 5
 - [drivers/iommu/intel/perfmon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/intel/perfmon.c) — Intel IOMMU PerfMon: the per-DMAR-unit (`dmar0`, `dmar1`, ...) perf PMU and its `iotlb_lookup`/`iotlb_hit` events
 - [drivers/vfio/vfio_main.c: `VFIO_DEVICE_BIND_IOMMUFD` handling](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — the device-cdev security model that replaces group/container ownership
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KVM Architecture](kvm-arch.md) — VM exits and VMCS
 - [Memory Virtualization](kvm-memory.md) — EPT and shadow paging
 - [IOMMU Architecture](../iommu/iommu-arch.md) — IOMMU hardware and DMA API
 - [PCI Drivers](../drivers/pci-driver.md) — How PCI drivers work before VFIO
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Jonathan Corbet's coverage of Alex Williamson's VFIO framework and IOMMU-group-based device assignment (January 3, 2012)
 
-### External
+### External {#external}
 
 - [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — official kernel documentation for the VFIO framework: the classic container/group/device model, the newer device-cdev model, and the IOMMUFD relationship, including the deprecation note quoted above
 - [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — official documentation for the mdev framework covered in this page's mediated-devices section

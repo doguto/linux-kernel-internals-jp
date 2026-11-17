@@ -1,8 +1,8 @@
-# Buffered I/O
+# Buffered I/O {#buffered-io}
 
 > How `read()` and `write()` flow through VFS, the page cache, and back
 
-## What buffered I/O means
+## What buffered I/O means {#what-buffered-io-means}
 
 By default every `read()` and `write()` on a regular file goes through the **page cache**: a region of DRAM managed by the kernel that caches file data as 4 KB pages (or larger folios; `struct folio` was introduced in Linux 5.16 but large folios in the file page cache required Linux 6.1+). The kernel satisfies reads from these cached pages and accumulates writes in dirty pages before flushing them to storage asynchronously.
 
@@ -17,7 +17,7 @@ write() → VFS → page cache → mark dirty → return to userspace
 
 This is why `write()` returns before data hits the disk, and why repeated reads of the same file are fast.
 
-## The syscall path into the kernel
+## The syscall path into the kernel {#the-syscall-path-into-the-kernel}
 
 Starting from userspace, a `read()` or `write()` on a regular file follows this chain:
 
@@ -54,7 +54,7 @@ struct kiocb {
 };
 ```
 
-## Page cache structure
+## Page cache structure {#page-cache-structure}
 
 Every inode that holds file data has an embedded `address_space` that owns its cached pages:
 
@@ -116,7 +116,7 @@ struct address_space_operations {
 /* write_begin/write_end signatures use struct folio since Linux 6.12 */
 ```
 
-## Read path
+## Read path {#read-path}
 
 `generic_file_read_iter` delegates to `filemap_read` for buffered I/O:
 
@@ -159,11 +159,11 @@ out:
 }
 ```
 
-### Cache hit
+### Cache hit {#cache-hit}
 
 If the requested page index is present in `i_pages` and has `PG_uptodate` set, `filemap_read` copies directly from the folio to the user buffer. No I/O is issued and the call returns without sleeping.
 
-### Cache miss
+### Cache miss {#cache-miss}
 
 When a lookup in `i_pages` returns nothing for an index, the kernel must populate the folio:
 
@@ -184,7 +184,7 @@ The folio is held locked (`PG_locked`) while I/O is in flight. Any other reader 
 
 Read-ahead runs in parallel: `page_cache_async_ra` and `ondemand_readahead` speculatively fill the cache ahead of the current read position to hide latency. The readahead window starts small and grows geometrically until it hits `ra->ra_pages`.
 
-## Write path
+## Write path {#write-path}
 
 `generic_file_write_iter` handles locking and sync semantics, then calls `generic_perform_write` for the actual work:
 
@@ -241,7 +241,7 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 
 `write_begin` and `write_end` are the two hooks that let each filesystem manage block allocation and journaling around the copy. For ext4 in `data=ordered` mode, `write_begin` pins journal credits and `write_end` calls `ext4_journal_stop()` to release the journal handle — this does not trigger a commit. The transaction commits later, at fsync time or when the transaction fills. The data ordering constraint (data written before its metadata is committed) is enforced at writeback time, not by `write_end`.
 
-## Dirty page lifecycle
+## Dirty page lifecycle {#dirty-page-lifecycle}
 
 Once `write_end` marks a page dirty the kernel tracks it for writeback. The state machine for a folio is:
 
@@ -261,7 +261,7 @@ Once `write_end` marks a page dirty the kernel tracks it for writeback. The stat
 [clean, uptodate]       ← back to steady state
 ```
 
-### How a page becomes dirty
+### How a page becomes dirty {#how-a-page-becomes-dirty}
 
 The call chain has two distinct layers. `folio_mark_dirty` is the public API that
 dispatches through `a_ops->dirty_folio`. `filemap_dirty_folio` is the default
@@ -313,7 +313,7 @@ The kernel enforces two dirty-throttle limits (expressed as percentages of memor
 
 `/proc/sys/vm/dirty_writeback_centisecs` controls how often `wb_workfn` (the per-BDI writeback worker) wakes up to flush pages that have been dirty longer than `dirty_expire_centisecs`.
 
-### Writeback
+### Writeback {#writeback}
 
 ```c
 /* fs/fs-writeback.c */
@@ -338,7 +338,7 @@ static long writeback_sb_inodes(struct super_block *sb,
 
 After a bio completes, the block layer calls the end I/O handler which calls `folio_end_writeback`, clearing `PG_writeback` and waking any waiters.
 
-## Buffer heads
+## Buffer heads {#buffer-heads}
 
 Before folios and `iomap`, block-mapped files tracked per-block I/O state with `struct buffer_head`:
 
@@ -380,7 +380,7 @@ struct iomap {
 
 With iomap, `a_ops->write_begin` is implemented by `iomap_write_begin`, which calls the filesystem's `iomap_ops->iomap_begin` to get a single `struct iomap` covering the write range, then uses that to set up the folio — no buffer heads involved.
 
-## O_SYNC and fsync
+## O_SYNC and fsync {#o_sync-and-fsync}
 
 `write()` with buffered I/O returns as soon as data lands in the page cache. To get durability guarantees:
 
@@ -401,7 +401,7 @@ fdatasync(fd);
 
 When `O_SYNC` is set, `generic_file_write_iter` calls `generic_write_sync` after `generic_perform_write`, which calls `vfs_fsync_range` to force writeback and wait for it before returning to userspace.
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Role |
 |------|------|
@@ -415,7 +415,7 @@ When `O_SYNC` is set, `generic_file_write_iter` calls `generic_write_sync` after
 | `fs/iomap/buffered-io.c` | iomap `write_begin`/`write_end`, iomap writepage |
 | `mm/readahead.c` | `ondemand_readahead`, readahead window management |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Async I/O evolution](async-io.md) — POSIX AIO and io_uring, including how io_uring handles buffered I/O asynchronously
 - [Direct I/O](direct-io.md) — bypassing the page cache with O_DIRECT

@@ -1,8 +1,8 @@
-# Buffered I/O vs Direct I/O
+# Buffered I/O vs Direct I/O {#buffered-io-vs-direct-io}
 
 > When does bypassing the page cache help, and when does it hurt?
 
-## The choice
+## The choice {#the-choice}
 
 Every read and write on Linux takes one of two paths to storage:
 
@@ -24,7 +24,7 @@ The choice between them is one of the most impactful I/O decisions in systems pr
 
 ---
 
-## What the page cache does
+## What the page cache does {#what-the-page-cache-does}
 
 The page cache is an in-kernel cache of recently accessed file data. It serves four purposes:
 
@@ -50,9 +50,9 @@ These four properties make the page cache valuable for many workloads — and ir
 
 ---
 
-## When buffered I/O wins
+## When buffered I/O wins {#when-buffered-io-wins}
 
-### Repeated reads of the same data
+### Repeated reads of the same data {#repeated-reads-of-the-same-data}
 
 The page cache amortizes the cost of storage access across many reads. If a file is read by multiple processes, or the same file region is read repeatedly, the cache delivers the data without touching storage.
 
@@ -65,7 +65,7 @@ Cache miss: application → page cache → storage → page cache → return in 
 100× repeated reads: cache saves 99 storage accesses
 ```
 
-### Write bursts that exceed device throughput
+### Write bursts that exceed device throughput {#write-bursts-that-exceed-device-throughput}
 
 Buffered writes return immediately to the application. The page cache absorbs a write burst even if the storage device cannot keep up with the burst rate. The writeback subsystem smooths the burst into sustained writes at the device's capacity.
 
@@ -79,7 +79,7 @@ Direct I/O: application blocks until device absorbs each write at 500MB/s
 
 For workloads that produce data in bursts (log writers, event streams, checkpoints), buffered writes reduce write() latency and improve application throughput.
 
-### Sequential reads with readahead
+### Sequential reads with readahead {#sequential-reads-with-readahead}
 
 The kernel's readahead algorithm detects sequential access patterns and prefetches ahead of the current position. For a process reading a large file sequentially, readahead keeps the device busy and data ready before it is requested, hiding storage latency.
 
@@ -91,7 +91,7 @@ cat /sys/block/sda/queue/read_ahead_kb   # current readahead window
 
 Buffered sequential reads can achieve device-saturating throughput without the application explicitly managing parallelism, because readahead handles it.
 
-### Small files, many files
+### Small files, many files {#small-files-many-files}
 
 Opening and reading many small files is more efficient with buffered I/O. Small files may fit entirely in the page cache after the first access. Subsequent accesses (e.g., re-reading a config file on every request) are served from memory.
 
@@ -99,9 +99,9 @@ With O_DIRECT, every read goes to storage regardless of cache state.
 
 ---
 
-## When direct I/O wins
+## When direct I/O wins {#when-direct-io-wins}
 
-### Application has its own cache
+### Application has its own cache {#application-has-its-own-cache}
 
 Databases (PostgreSQL shared buffers, MySQL InnoDB buffer pool, Oracle SGA) maintain their own application-level caches that are smarter than the page cache for their access patterns. They know which pages are hot, manage eviction explicitly, and can pre-warm caches on startup.
 
@@ -125,7 +125,7 @@ With O_DIRECT:
 
 O_DIRECT allows the application to manage caching with full knowledge of access patterns, without wasting RAM on a kernel cache for the same data.
 
-### Streaming single-pass reads
+### Streaming single-pass reads {#streaming-single-pass-reads}
 
 A backup process, video transcoder, or ETL pipeline that reads data once and never revisits it gets no benefit from caching — but it does cause harm by evicting other processes' working sets from the page cache.
 
@@ -141,7 +141,7 @@ A backup process, video transcoder, or ETL pipeline that reads data once and nev
 
 `POSIX_FADV_DONTNEED` provides a middle ground: use buffered I/O (and get readahead benefits), but advise the kernel to drop the pages after they have been processed.
 
-### Predictable write latency requirements
+### Predictable write latency requirements {#predictable-write-latency-requirements}
 
 Buffered writes return immediately but the actual storage write happens at an unknown time in the future. If an application needs to know when data is on storage (for crash safety or durability guarantees), it must call `fsync()` — which blocks until all dirty pages are flushed.
 
@@ -162,7 +162,7 @@ fdatasync(fd);  /* Now it's on storage. But this was a second call. */
 
 ---
 
-## Constraints of direct I/O
+## Constraints of direct I/O {#constraints-of-direct-io}
 
 O_DIRECT has requirements that buffered I/O does not:
 
@@ -190,7 +190,7 @@ If any of these requirements is violated, `read()` or `write()` returns `EINVAL`
 
 ---
 
-## Quantitative comparison
+## Quantitative comparison {#quantitative-comparison}
 
 | Scenario | Buffered I/O | Direct I/O |
 |---|---|---|
@@ -204,7 +204,7 @@ If any of these requirements is violated, `read()` or `write()` returns `EINVAL`
 
 ---
 
-## Decision guide
+## Decision guide {#decision-guide}
 
 ```
 Does the application manage its own cache? (database, key-value store)
@@ -229,7 +229,7 @@ Is there a risk of mixing O_DIRECT and buffered I/O on the same file?
 
 ---
 
-## Using `posix_fadvise` as a middle ground
+## Using `posix_fadvise` as a middle ground {#using-posix_fadvise-as-a-middle-ground}
 
 For workloads that benefit from some page cache features (readahead) but not others (long-term caching), `posix_fadvise` allows fine-grained control without `O_DIRECT` alignment requirements:
 
@@ -251,7 +251,7 @@ posix_fadvise(fd, processed_offset, processed_length, POSIX_FADV_DONTNEED);
 
 ---
 
-## Related pages
+## Related pages {#related-pages}
 
 - [Buffered I/O and the Page Cache](buffered-io.md) — page cache internals
 - [Direct I/O](direct-io.md) — O_DIRECT kernel path

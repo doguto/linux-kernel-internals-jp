@@ -1,8 +1,8 @@
-# bio and request structures
+# bio and request structures {#bio-and-request-structures}
 
 > The objects that describe I/O operations in the block layer
 
-## struct bio: the submission unit
+## struct bio: the submission unit {#struct-bio-the-submission-unit}
 
 A `bio` (Block I/O) is the fundamental I/O descriptor. It describes a scatter-gather I/O operation: one or more physical memory segments mapped to contiguous sectors on a block device.
 
@@ -24,7 +24,7 @@ struct bio {
 };
 ```
 
-### struct bio_vec: one scatter-gather segment
+### struct bio_vec: one scatter-gather segment {#struct-bio_vec-one-scatter-gather-segment}
 
 ```c
 /* include/linux/bvec.h */
@@ -46,7 +46,7 @@ bio->bi_io_vec:
 All map to contiguous sectors on disk.
 ```
 
-### bio_vec iteration
+### bio_vec iteration {#bio_vec-iteration}
 
 ```c
 /* Iterate over all segments in a bio */
@@ -60,7 +60,7 @@ bio_for_each_segment(bvec, bio, iter) {
 }
 ```
 
-## bio operations (bi_opf)
+## bio operations (bi_opf) {#bio-operations-bi_opf}
 
 ```c
 /* Operation types */
@@ -82,7 +82,7 @@ REQ_PREFLUSH  /* issue flush before this write */
 REQ_RAHEAD    /* read-ahead, can be dropped under pressure */
 ```
 
-## Allocating and submitting a bio
+## Allocating and submitting a bio {#allocating-and-submitting-a-bio}
 
 ```c
 #include <linux/bio.h>
@@ -110,7 +110,7 @@ static void my_bio_complete(struct bio *bio)
 }
 ```
 
-## struct request: the scheduled unit
+## struct request: the scheduled unit {#struct-request-the-scheduled-unit}
 
 While `bio` is the submission unit from the filesystem, `struct request` is what the I/O scheduler works with. Multiple bios can be **merged** into a single request if they are adjacent on disk:
 
@@ -130,7 +130,7 @@ struct request {
 };
 ```
 
-### Bio merging
+### Bio merging {#bio-merging}
 
 The I/O scheduler tries to merge adjacent bios into one request before dispatch:
 
@@ -150,7 +150,7 @@ Merging is constrained by hardware limits:
 - `queue->limits.max_segments` — maximum scatter-gather segments
 - `queue->limits.max_segment_size` — maximum bytes per segment
 
-## bio splitting
+## bio splitting {#bio-splitting}
 
 When a bio exceeds hardware limits, the block layer splits it:
 
@@ -164,7 +164,7 @@ submit_bio(bio);
 
 Splitting is transparent to the filesystem — the completion callback fires only when all sub-bios complete.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Block Layer Overview](block-overview.md) — Where bios fit in the stack
 - [blk-mq](blk-mq.md) — How requests are dispatched to hardware

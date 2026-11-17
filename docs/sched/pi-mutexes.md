@@ -1,8 +1,8 @@
-# Priority Inversion and PI Mutexes
+# Priority Inversion and PI Mutexes {#priority-inversion-and-pi-mutexes}
 
 > The classic real-time locking problem and Linux's solution
 
-## The priority inversion problem
+## The priority inversion problem {#the-priority-inversion-problem}
 
 Priority inversion occurs when a high-priority task is blocked waiting for a resource held by a low-priority task, and a medium-priority task prevents the low-priority task from running. Result: the high-priority task waits behind the medium-priority task indefinitely — priority is effectively inverted.
 
@@ -24,7 +24,7 @@ Timeline:
 
 This is not theoretical. The Mars Pathfinder mission (1997) experienced priority inversion that caused periodic system resets until engineers uploaded a fix to enable priority inheritance on the affected mutex. ([Mike Jones, "What Really Happened on Mars?", 1997](https://www.cs.cornell.edu/courses/cs614/1999sp/papers/pathfinder.html))
 
-## Priority inheritance: the solution
+## Priority inheritance: the solution {#priority-inheritance-the-solution}
 
 When task H blocks on a mutex held by L, the kernel temporarily boosts L's priority to H's level. This ensures L can preempt M and release the mutex quickly.
 
@@ -39,7 +39,7 @@ After PI boost:
         M runs after H
 ```
 
-## rt_mutex: the PI-aware lock
+## rt_mutex: the PI-aware lock {#rt_mutex-the-pi-aware-lock}
 
 Linux provides `rt_mutex` in `kernel/locking/rtmutex.c` for PI-capable locking:
 
@@ -54,7 +54,7 @@ struct rt_mutex_base {
 
 Waiters are stored in a **priority-ordered RB-tree**, not a FIFO queue. The highest-priority waiter is at the root and determines the owner's boosted priority.
 
-## Priority tracking in task_struct
+## Priority tracking in task_struct {#priority-tracking-in-task_struct}
 
 ```c
 // include/linux/sched.h (CONFIG_RT_MUTEXES)
@@ -69,7 +69,7 @@ struct task_struct {
 
 `pi_waiters` is an RB-tree of tasks waiting on locks held by this task. `pi_top_task` caches the highest-priority waiter for quick access.
 
-## The boost mechanism
+## The boost mechanism {#the-boost-mechanism}
 
 When task H tries to acquire a mutex held by L:
 
@@ -113,7 +113,7 @@ static int rt_mutex_adjust_prio_chain(struct task_struct *task,
 }
 ```
 
-### Chained priority inheritance
+### Chained priority inheritance {#chained-priority-inheritance}
 
 PI must handle chains:
 
@@ -126,7 +126,7 @@ M2 waits on lock_2 held by L
 
 The chain walk handles this transitively. The kernel limits chain depth to prevent O(n) worst-case paths from DoS-ing the system.
 
-## The boost application: rt_mutex_setprio()
+## The boost application: rt_mutex_setprio() {#the-boost-application-rtmutexsetprio}
 
 ```c
 // kernel/sched/core.c
@@ -147,7 +147,7 @@ void rt_mutex_setprio(struct task_struct *p, struct task_struct *pi_task)
 
 The boosted task runs with the PI task's priority — it gets scheduled exactly as if it were that high-priority task, until it releases the lock.
 
-## Unboost on lock release
+## Unboost on lock release {#unboost-on-lock-release}
 
 When L releases the mutex:
 
@@ -172,7 +172,7 @@ static void mark_wakeup_next_waiter(struct rt_wake_q_head *wqh,
 }
 ```
 
-## Userspace rt_mutex: PTHREAD_PRIO_INHERIT
+## Userspace rt_mutex: PTHREAD_PRIO_INHERIT {#userspace-rtmutex-pthreadprio_inherit}
 
 The POSIX pthread mutex protocol `PTHREAD_PRIO_INHERIT` uses the kernel's `rt_mutex` infrastructure:
 
@@ -190,7 +190,7 @@ On Linux, `PTHREAD_PRIO_INHERIT` mutexes are backed by a futex with the `FUTEX_L
 strace -e futex ./my_rt_app 2>&1 | grep FUTEX_LOCK_PI
 ```
 
-## PI mutex vs regular mutex
+## PI mutex vs regular mutex {#pi-mutex-vs-regular-mutex}
 
 | Property | pthread_mutex (default) | pthread_mutex (PRIO_INHERIT) |
 |----------|------------------------|------------------------------|
@@ -201,7 +201,7 @@ strace -e futex ./my_rt_app 2>&1 | grep FUTEX_LOCK_PI
 
 For pure RT applications where all threads are the same priority, regular mutexes are fine. PI mutexes are needed when RT tasks share resources with non-RT tasks.
 
-## SCHED_DEADLINE and PI
+## SCHED_DEADLINE and PI {#sched_deadline-and-pi}
 
 `SCHED_DEADLINE` tasks can also experience priority inversion. When a DL task blocks on an rt_mutex held by a normal or RT task, the owner is boosted to run with a virtual DL entity borrowed from the DL task:
 
@@ -215,13 +215,13 @@ static inline bool is_dl_boosted(struct sched_dl_entity *dl_se)
 
 The boosted task temporarily runs under SCHED_DEADLINE semantics, ensuring it can preempt any RT task and release the lock before the DL task's deadline.
 
-## The PREEMPT_RT extension
+## The PREEMPT_RT extension {#the-preempt_rt-extension}
 
 The full `PREEMPT_RT` patchset converts most kernel spinlocks to rt_mutexes, extending PI to nearly all kernel locking. This allows full preemption of kernel code and eliminates most sources of unbounded latency — at the cost of more complex locking and slightly higher overhead.
 
 As of kernel 6.x, large parts of PREEMPT_RT are upstream. `CONFIG_PREEMPT_RT` can be selected on supported architectures.
 
-## Observing PI
+## Observing PI {#observing-pi}
 
 ```bash
 # See tasks blocked on rt_mutex (shown in wchan)
@@ -236,7 +236,7 @@ trace-cmd record -e rtmutex:rtmutex_acquire \
 perf stat -e rtmutex:rtmutex_acquire -a sleep 10
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [RT Scheduler](rt-scheduler.md) — SCHED_FIFO/RR and why PI matters for RT tasks
 - [SCHED_DEADLINE](deadline.md) — How DL interacts with PI locking

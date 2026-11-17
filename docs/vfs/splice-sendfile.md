@@ -1,8 +1,8 @@
-# splice, sendfile, and copy_file_range
+# splice, sendfile, and copy_file_range {#splice-sendfile-and-copyfilerange}
 
 > Zero-copy data transfer between file descriptors
 
-## The problem: data movement overhead
+## The problem: data movement overhead {#the-problem-data-movement-overhead}
 
 Normal `read()` + `write()` copies data through userspace:
 
@@ -14,7 +14,7 @@ Disk → kernel page cache → [copy] → userspace buffer → [copy] → kernel
 
 For large data transfers (serving files over HTTP, piping data between processes), these copies are wasteful. Linux provides several zero-copy alternatives.
 
-## sendfile: file-to-socket zero-copy
+## sendfile: file-to-socket zero-copy {#sendfile-file-to-socket-zero-copy}
 
 `sendfile()` was introduced in Linux 2.2 [(man page)](https://www.man7.org/linux/man-pages/man2/sendfile.2.html) and sends a file directly to a socket without copying through userspace:
 
@@ -39,14 +39,14 @@ Disk → page cache → [DMA] → NIC (with scatter-gather DMA)
     No copy through socket buffer (with NIC scatter-gather)
 ```
 
-### sendfile limitations
+### sendfile limitations {#sendfile-limitations}
 
 - `out_fd` must be a socket (or pipe on some kernels)
 - `in_fd` must support `mmap`-like operations (regular files, not sockets)
 - Does not work for file-to-file copies
 - Requires NIC scatter-gather for true zero-copy; otherwise one kernel→kernel copy
 
-## splice: pipe-based zero-copy
+## splice: pipe-based zero-copy {#splice-pipe-based-zero-copy}
 
 `splice()` was introduced in Linux 2.6.17 by Jens Axboe [(commit)](https://git.kernel.org/linus/5274f052e7b3dbd81935772eb551dfd0325dfa9d) [(LWN)](https://lwn.net/Articles/178199/), based on an earlier concept by Larry McVoy. It moves data between a pipe and a file descriptor using page references — no data copying:
 
@@ -74,7 +74,7 @@ splice(file_fd, &file_offset, pipefd[1], NULL, len, SPLICE_F_MOVE);
 splice(pipefd[0], NULL, sock_fd, NULL, len, SPLICE_F_MOVE | SPLICE_F_MORE);
 ```
 
-### tee: duplicate pipe data
+### tee: duplicate pipe data {#tee-duplicate-pipe-data}
 
 `tee()` duplicates data between two pipes without consuming from the source:
 
@@ -96,7 +96,7 @@ splice(log_pipe[0], NULL, logfile_fd, NULL, len, 0);
 splice(fwd_pipe[0], NULL, socket_fd, NULL, len, 0);
 ```
 
-## copy_file_range: kernel-side file copy
+## copy_file_range: kernel-side file copy {#copyfilerange-kernel-side-file-copy}
 
 `copy_file_range()` copies between two files without touching userspace. On modern filesystems it can use **server-side copy** (e.g., NFS, SMB, Btrfs reflinking):
 
@@ -116,7 +116,7 @@ off_t off_in = 0, off_out = 0;
 copy_file_range(src, &off_in, dst, &off_out, file_size, 0);
 ```
 
-### Btrfs reflink
+### Btrfs reflink {#btrfs-reflink}
 
 On Btrfs (and XFS with reflink), `copy_file_range` does a **reflink** — the destination shares the same extents as the source with copy-on-write semantics:
 
@@ -138,9 +138,9 @@ cp --reflink=always src.dat dst.dat   # fails if not supported
 cp --reflink=auto   src.dat dst.dat   # falls back to copy if needed
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### sendfile kernel path
+### sendfile kernel path {#sendfile-kernel-path}
 
 ```c
 /* fs/read_write.c */
@@ -165,7 +165,7 @@ static ssize_t do_sendfile(struct file *out_file, struct file *in_file, loff_t *
 }
 ```
 
-### splice kernel path
+### splice kernel path {#splice-kernel-path}
 
 ```c
 /* fs/splice.c */
@@ -196,7 +196,7 @@ struct pipe_buffer {
 };
 ```
 
-### copy_file_range kernel path
+### copy_file_range kernel path {#copyfilerange-kernel-path}
 
 ```c
 /* fs/read_write.c */
@@ -224,7 +224,7 @@ static ssize_t btrfs_copy_file_range(...)
 }
 ```
 
-## Comparison
+## Comparison {#comparison}
 
 | API | Zero-copy? | Use case | Kernel → userspace copy |
 |-----|-----------|----------|------------------------|
@@ -235,7 +235,7 @@ static ssize_t btrfs_copy_file_range(...)
 | `copy_file_range()` | Yes (reflink) | File → file | 0 copies (reflink) |
 | `mmap()` + `write()` | Partial | File → socket | 1 copy (page → SKB) |
 
-## Performance tips
+## Performance tips {#performance-tips}
 
 ```bash
 # Verify sendfile is used (strace a file server):
@@ -268,7 +268,7 @@ io_uring_prep_splice(sqe,
 io_uring_submit(&ring);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [File Operations](file-ops.md) — read/write VFS path
 - [Page Cache](../mm/page-cache.md) — page references in splice

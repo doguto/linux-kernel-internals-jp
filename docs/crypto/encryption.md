@@ -1,8 +1,8 @@
-# dm-crypt and fscrypt
+# dm-crypt and fscrypt {#dm-crypt-and-fscrypt}
 
 > Block-level and file-level encryption in Linux
 
-## Two encryption layers
+## Two encryption layers {#two-encryption-layers}
 
 Linux provides encryption at two levels:
 
@@ -13,7 +13,7 @@ Linux provides encryption at two levels:
 
 dm-crypt is transparent to the filesystem; fscrypt is transparent to applications but per-file.
 
-## dm-crypt: block-level encryption
+## dm-crypt: block-level encryption {#dm-crypt-block-level-encryption}
 
 dm-crypt is a device mapper target that transparently encrypts reads and writes using the kernel crypto API.
 
@@ -26,7 +26,7 @@ Application → read/write /dev/mapper/myvolume
                          /dev/sda2 (ciphertext on disk)
 ```
 
-### LUKS: Linux Unified Key Setup
+### LUKS: Linux Unified Key Setup {#luks-linux-unified-key-setup}
 
 LUKS is the standard format for dm-crypt volumes. It stores encrypted key material in a header, allowing multiple passphrases to unlock the same volume:
 
@@ -48,7 +48,7 @@ umount /mnt/secure
 cryptsetup luksClose myvolume
 ```
 
-### dm-crypt internals
+### dm-crypt internals {#dm-crypt-internals}
 
 ```c
 /* drivers/md/dm-crypt.c */
@@ -97,7 +97,7 @@ struct dm_crypt_io {
 };
 ```
 
-### AES-XTS: why not CBC?
+### AES-XTS: why not CBC? {#aes-xts-why-not-cbc}
 
 dm-crypt uses AES-XTS (XEX-based tweaked-codebook mode with ciphertext stealing) rather than AES-CBC for disk encryption:
 
@@ -112,7 +112,7 @@ For each 16-byte block i in the sector:
   tweak_{i+1}   = GF(2^128) multiplication of tweak_i
 ```
 
-### IV generation
+### IV generation {#iv-generation}
 
 dm-crypt supports several IV modes:
 
@@ -130,7 +130,7 @@ dm-crypt supports several IV modes:
 /* "aes-xts-plain64" — sector number as 64-bit LE integer */
 ```
 
-## dm-integrity: authenticated block storage
+## dm-integrity: authenticated block storage {#dm-integrity-authenticated-block-storage}
 
 dm-integrity adds a per-sector checksum to detect data corruption:
 
@@ -141,7 +141,7 @@ cryptsetup open --type integrity /dev/sda2 myintegrity
 cryptsetup luksFormat --integrity hmac-sha256 /dev/sda2
 ```
 
-## fscrypt: filesystem-level encryption
+## fscrypt: filesystem-level encryption {#fscrypt-filesystem-level-encryption}
 
 fscrypt is built into ext4, f2fs, and ubifs. It encrypts file contents and filenames, with keys stored in the kernel keyring.
 
@@ -159,7 +159,7 @@ Reading a file:
   → return plaintext
 ```
 
-### Setting up fscrypt
+### Setting up fscrypt {#setting-up-fscrypt}
 
 ```bash
 # Requires CONFIG_FS_ENCRYPTION=y and an fscrypt-capable filesystem
@@ -180,7 +180,7 @@ fscryptctl set-policy 0123456789abcdef0123456789abcdef /mnt/myfs/private/
 # filenames appear as ciphertext, content unreadable
 ```
 
-### Key hierarchy
+### Key hierarchy {#key-hierarchy}
 
 fscrypt derives per-file keys from the master key using HKDF-SHA512:
 
@@ -198,7 +198,7 @@ Encrypted content
 
 The nonce stored in the inode is unique per file, ensuring different keys for files with identical content.
 
-### fscrypt policies
+### fscrypt policies {#fscrypt-policies}
 
 ```c
 /* include/uapi/linux/fscrypt.h */
@@ -219,7 +219,7 @@ FSCRYPT_MODE_AES_128_CBC   /* legacy */
 FSCRYPT_MODE_ADIANTUM      /* for low-power devices (no AES-NI) */
 ```
 
-### fscrypt in the kernel
+### fscrypt in the kernel {#fscrypt-in-the-kernel}
 
 ```c
 /* fs/crypto/crypto.c */
@@ -248,7 +248,7 @@ int fscrypt_decrypt_pagecache_blocks(struct folio *folio, size_t len,
 }
 ```
 
-## Kernel keyring integration
+## Kernel keyring integration {#kernel-keyring-integration}
 
 Both dm-crypt (via cryptsetup) and fscrypt store key material in the kernel keyring:
 
@@ -279,7 +279,7 @@ memcpy(master_key, ukp->data, ukp->datalen);
 key_put(key);
 ```
 
-## Observing encryption
+## Observing encryption {#observing-encryption}
 
 ```bash
 # dm-crypt status
@@ -310,21 +310,21 @@ cryptsetup benchmark
 cat /sys/block/dm-0/stat
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/md/dm-crypt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/md/dm-crypt.c) — `struct crypt_config`, `crypt_map()`, and the per-CPU cipher/IV setup
 - [fs/crypto/crypto.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/crypto/crypto.c) — `fscrypt_decrypt_pagecache_blocks()`
 - [include/uapi/linux/fscrypt.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/fscrypt.h) — `struct fscrypt_policy_v2` and the `FSCRYPT_MODE_*` constants
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`cryptsetup(8)`](https://man.archlinux.org/man/cryptsetup.8.en) — LUKS/dm-crypt volume management
 - [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — keyring command-line tool (`add`, `show`, `new_session`, ...)
 - [`keyrings(7)`](https://man7.org/linux/man-pages/man7/keyrings.7.html) — the in-kernel key management facility
 
-### Related pages
+### Related pages {#related-pages}
 
 - [dm-crypt: Block-Level Encryption](../security/dm-crypt.md) — deeper dive into LUKS2's on-disk format, key derivation, and the kernel-side `crypt_map()` I/O path
 - [fscrypt: Per-File Encryption](../security/fscrypt.md) — deeper dive into the key hierarchy, the `FS_IOC_*` ioctl API, and inline encryption hardware
@@ -333,12 +333,12 @@ cat /sys/block/dm-0/stat
 - [crypto_engine: Hardware Offload Framework](crypto-engine.md) — how hardware crypto accelerators plug in beneath callers like dm-crypt
 - [Random Number Generation](rng.md) — where key material (`/dev/urandom`, `get_random_bytes()`) comes from
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Ext4 encryption](https://lwn.net/Articles/639427/) — Jonathan Corbet, April 8, 2015 — the original per-file encryption design that became fscrypt
 - [Adiantum: encryption for the low end](https://lwn.net/Articles/776721/) — Jake Edge, January 16, 2019 — the `FSCRYPT_MODE_ADIANTUM` cipher for devices without AES-NI
 
-### External
+### External {#external}
 
 - [Documentation/filesystems/fscrypt.rst](https://docs.kernel.org/filesystems/fscrypt.html) — the kernel's own fscrypt design and threat-model documentation
 - [Documentation/admin-guide/device-mapper/dm-crypt.rst](https://docs.kernel.org/admin-guide/device-mapper/dm-crypt.html) — the kernel's own dm-crypt target documentation

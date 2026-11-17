@@ -1,8 +1,8 @@
-# What Happens When You connect()
+# What Happens When You connect() {#what-happens-when-you-connect}
 
 > The TCP three-way handshake from a kernel perspective
 
-## Overview
+## Overview {#overview}
 
 When a client calls `connect()`, the kernel initiates a TCP three-way handshake. The call may block until the connection is established (or timeout/error). The full sequence:
 
@@ -32,7 +32,7 @@ tcp_rcv_synsent_state_process()              │
   │                                     accept() returns new socket
 ```
 
-## Phase 1: connect() syscall → tcp_v4_connect()
+## Phase 1: connect() syscall → tcp_v4_connect() {#phase-1-connect-syscall-tcpv4connect}
 
 ```c
 // Userspace
@@ -49,7 +49,7 @@ connect()
       → sk->sk_prot->connect()  = tcp_v4_connect()
 ```
 
-## Phase 2: tcp_v4_connect()
+## Phase 2: tcp_v4_connect() {#phase-2-tcpv4connect}
 
 ```c
 // net/ipv4/tcp_ipv4.c:222
@@ -78,7 +78,7 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 }
 ```
 
-## Phase 3: tcp_connect() — sending the SYN
+## Phase 3: tcp_connect() — sending the SYN {#phase-3-tcp_connect-sending-the-syn}
 
 ```c
 // net/ipv4/tcp_output.c:4296
@@ -116,7 +116,7 @@ SYN options set in the SYN packet:
 - **SACK_PERM**: we support Selective ACK
 - **Timestamp**: for RTT measurement and PAWS (Protection Against Wrapped Sequences)
 
-## Phase 4: Server processes SYN → tcp_rcv_state_process()
+## Phase 4: Server processes SYN → tcp_rcv_state_process() {#phase-4-server-processes-syn-tcprcvstate_process}
 
 On the server side:
 
@@ -145,7 +145,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 
 The server creates a **request socket** (`struct request_sock`) — a lightweight half-open connection entry. The full `struct sock` is only allocated when the third ACK arrives.
 
-## Phase 5: Client processes SYN-ACK → ESTABLISHED
+## Phase 5: Client processes SYN-ACK → ESTABLISHED {#phase-5-client-processes-syn-ack-established}
 
 ```c
 // net/ipv4/tcp_input.c
@@ -181,7 +181,7 @@ static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb, .
 
 `connect()` unblocks and returns 0.
 
-## Phase 6: Server processes ACK → accept() returns
+## Phase 6: Server processes ACK → accept() returns {#phase-6-server-processes-ack-accept-returns}
 
 ```c
 // Server receives the final ACK:
@@ -200,7 +200,7 @@ accept(listenfd, &addr, &addrlen)
       → dequeue and return new sock
 ```
 
-## SYN backlog and accept queue
+## SYN backlog and accept queue {#syn-backlog-and-accept-queue}
 
 The server maintains two queues:
 
@@ -229,7 +229,7 @@ listen(fd, backlog);  # capped at somaxconn
 
 A full accept queue → new ACKs are dropped → client retries (appears as connection slowness, not error). A full SYN queue → SYN cookies or SYN drop.
 
-## SYN cookies
+## SYN cookies {#syn-cookies}
 
 Under SYN flood attack, the SYN queue fills. SYN cookies encode connection state in the ISN, avoiding SYN queue entries:
 
@@ -240,7 +240,7 @@ cat /proc/sys/net/ipv4/tcp_syncookies  # 1 = enabled (default)
 
 With SYN cookies, the server doesn't create a request_sock on SYN receipt. Instead, it encodes the connection parameters in the SYN-ACK's sequence number. When the ACK arrives with the valid cookie, the connection is established without ever having been in the SYN queue.
 
-## Ephemeral port selection
+## Ephemeral port selection {#ephemeral-port-selection}
 
 ```bash
 # Range for ephemeral (outbound) ports
@@ -254,7 +254,7 @@ ss -tn | wc -l
 echo "1024 65535" > /proc/sys/net/ipv4/ip_local_port_range
 ```
 
-## Observing the connection
+## Observing the connection {#observing-the-connection}
 
 ```bash
 # See connections in all TCP states
@@ -271,7 +271,7 @@ trace-cmd record -e tcp:tcp_rcv_state_process \
                  sleep 5
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Life of a Packet (transmit)](life-of-packet-tx.md) — How the SYN packet is transmitted
 - [Life of a Packet (receive)](life-of-packet-rx.md) — How the SYN-ACK is received

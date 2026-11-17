@@ -1,12 +1,12 @@
-# Kernel Oops Analysis
+# Kernel Oops Analysis {#kernel-oops-analysis}
 
 > Reading oops output, decoding addresses, and finding the bug
 
-## What is a kernel oops?
+## What is a kernel oops? {#what-is-a-kernel-oops}
 
 A **kernel oops** is a non-fatal kernel error — the kernel detected an inconsistency (usually a NULL pointer dereference, bad memory access, or BUG()) but can keep running (though the offending task is killed). A **kernel panic** is a fatal oops or a situation where the kernel cannot safely continue.
 
-## Anatomy of an oops message
+## Anatomy of an oops message {#anatomy-of-an-oops-message}
 
 ```
 [  123.456789] BUG: kernel NULL pointer dereference, address: 0000000000000018
@@ -41,7 +41,7 @@ The error code `0000`:
 - `RIP: 0010:` — instruction pointer, `0010` = kernel code segment
 - `mydriver_write+0x34/0xb0` — function + offset / function size
 
-### Taint flags
+### Taint flags {#taint-flags}
 
 ```
 G — all loaded modules are GPL-compatible (no proprietary modules)
@@ -59,7 +59,7 @@ I — workaround for a bug in platform firmware applied
 K — live patched
 ```
 
-## Register dump
+## Register dump {#register-dump}
 
 ```
 [  123.456797] RSP: 0018:ffffc900012c7d28 EFLAGS: 00010246
@@ -82,7 +82,7 @@ Key registers for diagnosis:
 
 **The offset trick**: `CR2 = 0x18 = 24`. A struct member at offset 24 from a NULL pointer. Count struct fields to identify which member was accessed.
 
-## Stack trace
+## Stack trace {#stack-trace}
 
 ```
 [  123.456806] Call Trace:
@@ -98,7 +98,7 @@ Key registers for diagnosis:
 
 Read from top (most recent) to bottom (oldest call). The crash happened in `mydriver_write` at offset `0x34` within the function.
 
-## addr2line: finding the source line
+## addr2line: finding the source line {#addr2line-finding-the-source-line}
 
 Given the faulting address, find the exact source line:
 
@@ -117,7 +117,7 @@ addr2line -e mydriver.ko 0x34   # offset within the module
 # /path/to/mydriver.c:245
 ```
 
-## decode_stacktrace.sh
+## decode_stacktrace.sh {#decode_stacktracesh}
 
 The kernel ships a script that resolves all addresses in a stack trace:
 
@@ -131,7 +131,7 @@ The kernel ships a script that resolves all addresses in a stack trace:
 
 Output resolves each `function+0xNN/0xNN` to `function (file.c:line)`.
 
-## objdump: disassembling around the crash
+## objdump: disassembling around the crash {#objdump-disassembling-around-the-crash}
 
 ```bash
 # Disassemble the function that crashed
@@ -154,9 +154,9 @@ The crash was at offset `0x34` in `mydriver_write`:
 
 This tells us: `%rax` was NULL, and the code tried to read member at offset 0x18 from it.
 
-## Common oops patterns
+## Common oops patterns {#common-oops-patterns}
 
-### NULL pointer dereference
+### NULL pointer dereference {#null-pointer-dereference}
 
 ```
 BUG: kernel NULL pointer dereference, address: 0000000000000018
@@ -177,7 +177,7 @@ struct mydev {
 /* Reading offset 0x18 = reading mydev->refcount from a NULL mydev* */
 ```
 
-### Use-after-free
+### Use-after-free {#use-after-free}
 
 ```
 BUG: KASAN: slab-use-after-free in mydriver_read+0x45/0x100
@@ -192,7 +192,7 @@ Allocated by task 1234:
 
 KASAN shows exactly where the memory was allocated and freed — invaluable for race conditions.
 
-### Stack overflow
+### Stack overflow {#stack-overflow}
 
 With `CONFIG_VMAP_STACK` (the default), kernel stacks are allocated with an unmapped guard page on either side, so overrunning one faults immediately instead of silently corrupting whatever memory follows it. `handle_stack_overflow()` (`arch/x86/kernel/traps.c`) catches that fault and reports it, then calls `die("stack guard page", regs, 0)` to produce a normal oops:
 
@@ -203,7 +203,7 @@ Oops: stack guard page: 0000 [#1] SMP NOPTI
 
 The stack type ("IRQ", "task", ...) comes from `stack_type_name()`; a task stack overflow reads "task stack guard page was hit" instead. Kernel stacks are typically 8-16KB. Deep recursion (e.g., deep VFS recursion with overlayfs) can overflow them.
 
-### Soft lockup
+### Soft lockup {#soft-lockup}
 
 ```
 watchdog: BUG: soft lockup - CPU#3 stuck for 22s! [kworker/3:1:5678]
@@ -216,7 +216,7 @@ Call Trace:
 
 The CPU hasn't scheduled in 20+ seconds. Usually: holding a spinlock too long, or a tight loop without `cond_resched()`.
 
-### RCU stall
+### RCU stall {#rcu-stall}
 
 ```
 rcu: INFO: rcu_sched self-detected stall on CPU
@@ -226,7 +226,7 @@ rcu:     (t=21012 jiffies g=4989 q=157 ncpus=4)
 
 An RCU read-side critical section has been held for too long, or the RCU grace period is stalled. Often caused by holding a lock while preemption is disabled for an extended time.
 
-## BUG() and WARN()
+## BUG() and WARN() {#bug-and-warn}
 
 ```c
 /* In kernel code: force an oops at a specific point */
@@ -241,7 +241,7 @@ WARN_ONCE(condition, fmt);
 
 `WARN` is useful for detecting unexpected conditions without crashing the system. Check `dmesg` for `WARNING:` lines even if the system seems fine.
 
-## netconsole: capture oops over the network
+## netconsole: capture oops over the network {#netconsole-capture-oops-over-the-network}
 
 For headless servers where you can't see the serial console:
 
@@ -262,21 +262,21 @@ echo 00:11:22:33:44:55 > /sys/kernel/config/netconsole/target1/remote_mac
 echo 1                > /sys/kernel/config/netconsole/target1/enabled
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/include/asm/trap_pf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/trap_pf.h) — the `X86_PF_*` bit definitions behind the page-fault `error_code` breakdown (bit 0 = not-present/protection, bit 1 = read/write, bit 2 = kernel/user)
 - [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — the `taint_flags[]` table: the authoritative letter-to-flag mapping behind the `Tainted:` line (see [tainted-kernels.rst](https://docs.kernel.org/admin-guide/tainted-kernels.html), cited below, for the human-readable meaning of each flag)
 - [scripts/decode_stacktrace.sh](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/decode_stacktrace.sh) — resolves `function+0xNN/0xNN` entries in a captured oops to `function (file.c:line)`
 - [Documentation/networking/netconsole.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/networking/netconsole.rst) — the `netconsole=` module parameter format and the configfs-based dynamic reconfiguration interface (`dev_name`, `local_ip`, `remote_ip`, `remote_mac`, `enabled`, ...)
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`addr2line(1)`](https://man7.org/linux/man-pages/man1/addr2line.1.html) — converts addresses (or `function+offset`) into file names and line numbers
 - [`objdump(1)`](https://man7.org/linux/man-pages/man1/objdump.1.html) — disassembles object files; used here with `--start-address`/`--stop-address` to inspect the faulting instruction
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Panic and Oops](../kernel/panic-oops.md) — the kernel-side code path: `die()`, `oops_begin()`/`oops_end()`, ORC unwinding, and `panic()`
 - [kdump and crash](kdump.md) — automated crash dump collection
@@ -285,6 +285,6 @@ echo 1                > /sys/kernel/config/netconsole/target1/enabled
 - [Memory Management: KFENCE](../mm/kfence.md) — lightweight production memory checking
 - [Tracing: kprobes](../tracing/kprobes-tracepoints.md) — probing without crashing
 
-### External
+### External {#external}
 
 - [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — full taint flag reference with official descriptions for every letter

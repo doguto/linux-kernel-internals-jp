@@ -1,8 +1,8 @@
-# Kernel Same-page Merging (KSM)
+# Kernel Same-page Merging (KSM) {#kernel-same-page-merging-ksm}
 
 > Deduplicating identical memory pages
 
-## What Is KSM?
+## What Is KSM? {#what-is-ksm}
 
 KSM scans memory for pages with identical content and merges them into a single copy-on-write (COW) page. When multiple processes have the same data in memory, KSM saves RAM by keeping only one copy.
 
@@ -29,9 +29,9 @@ Process A          Process B          Process C
    1 page = 4KB (saved 8KB)
 ```
 
-## Why KSM?
+## Why KSM? {#why-ksm}
 
-### The Virtualization Use Case
+### The Virtualization Use Case {#the-virtualization-use-case}
 
 KSM was designed for virtual machines. Multiple VMs often run identical operating systems:
 
@@ -44,7 +44,7 @@ KSM was designed for virtual machines. Multiple VMs often run identical operatin
 Without KSM: 10 VMs × 2GB = 20GB RAM
 With KSM: Shared pages reduce to ~8GB (varies by workload)
 
-### Beyond VMs
+### Beyond VMs {#beyond-vms}
 
 KSM also helps:
 
@@ -52,9 +52,9 @@ KSM also helps:
 - Multiple instances of the same application
 - Fork-heavy workloads
 
-## How KSM Works
+## How KSM Works {#how-ksm-works}
 
-### The ksmd Daemon
+### The ksmd Daemon {#the-ksmd-daemon}
 
 A kernel thread (`ksmd`) continuously scans memory:
 
@@ -72,7 +72,7 @@ ksmd loop:
     └── Sleep, repeat
 ```
 
-### Two-Tree Structure
+### Two-Tree Structure {#two-tree-structure}
 
 KSM uses two red-black trees:
 
@@ -105,7 +105,7 @@ Add to unstable tree                              │
       └───────────────────────────────────────────┘
 ```
 
-### Copy-on-Write
+### Copy-on-Write {#copy-on-write}
 
 Merged pages are marked COW. If any process writes to the page:
 
@@ -114,9 +114,9 @@ Merged pages are marked COW. If any process writes to the page:
 3. Writer gets private copy
 4. Other processes keep shared page
 
-## Enabling KSM
+## Enabling KSM {#enabling-ksm}
 
-### For Applications
+### For Applications {#for-applications}
 
 Applications must explicitly mark memory for KSM scanning:
 
@@ -133,11 +133,11 @@ madvise(ptr, size, MADV_MERGEABLE);
 madvise(ptr, size, MADV_UNMERGEABLE);
 ```
 
-### For QEMU/KVM
+### For QEMU/KVM {#for-qemukvm}
 
 QEMU enables KSM for guest memory by default (can be disabled with `-machine mem-merge=off`).
 
-### System-Wide Control
+### System-Wide Control {#system-wide-control}
 
 ```bash
 # Enable/disable ksmd
@@ -149,9 +149,9 @@ echo 2 > /sys/kernel/mm/ksm/run   # Stop and unmerge all
 cat /sys/kernel/mm/ksm/run
 ```
 
-## Configuration
+## Configuration {#configuration}
 
-### Scan Rate
+### Scan Rate {#scan-rate}
 
 Defaults documented in the [KSM admin guide](https://docs.kernel.org/admin-guide/mm/ksm.html):
 
@@ -167,7 +167,7 @@ echo 20 > /sys/kernel/mm/ksm/sleep_millisecs  # Default: 20
 
 Higher `pages_to_scan` + lower `sleep_millisecs` = faster merging but more CPU.
 
-### Merge Behavior
+### Merge Behavior {#merge-behavior}
 
 ```bash
 # Merge pages across NUMA nodes? (0=no, 1=yes)
@@ -180,9 +180,9 @@ cat /sys/kernel/mm/ksm/max_page_sharing
 # Limits how many processes share one page
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### KSM Statistics
+### KSM Statistics {#ksm-statistics}
 
 ```bash
 # Pages currently shared (deduplicated)
@@ -203,7 +203,7 @@ cat /sys/kernel/mm/ksm/pages_volatile
 cat /sys/kernel/mm/ksm/full_scans
 ```
 
-### Calculating Savings
+### Calculating Savings {#calculating-savings}
 
 ```bash
 #!/bin/bash
@@ -213,7 +213,7 @@ saved=$(( (sharing - shared) * 4 ))  # KB saved
 echo "KSM saving: ${saved} KB"
 ```
 
-### Per-Process KSM Usage
+### Per-Process KSM Usage {#per-process-ksm-usage}
 
 ```bash
 # Pages merged for a process
@@ -223,9 +223,9 @@ cat /proc/<pid>/ksm_merging_pages
 cat /proc/<pid>/ksm_stat
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Introduction (v2.6.32, 2009)
+### Introduction (v2.6.32, 2009) {#introduction-v2632-2009}
 
 **Commit**: [f8af4da3b4c1](https://git.kernel.org/linus/f8af4da3b4c1) ("ksm: the mm interface to ksm")
 
@@ -235,7 +235,7 @@ cat /proc/<pid>/ksm_stat
 
 Originally developed for KVM to reduce memory footprint of virtual machines.
 
-### NUMA Awareness (v3.9, 2013)
+### NUMA Awareness (v3.9, 2013) {#numa-awareness-v39-2013}
 
 **Commit**: [90bd6fd31c80](https://git.kernel.org/linus/90bd6fd31c80) ("ksm: allow trees per NUMA node") | [LKML](https://lore.kernel.org/all/alpine.LNX.2.00.1302111410290.1174@eggly.anvils/)
 
@@ -243,7 +243,7 @@ Originally developed for KVM to reduce memory footprint of virtual machines.
 
 Added `merge_across_nodes` option to prevent cross-node sharing that hurts NUMA locality.
 
-### Per-Process Statistics (v6.1, 2022)
+### Per-Process Statistics (v6.1, 2022) {#per-process-statistics-v61-2022}
 
 **Commit**: [cb4df4cae4f2](https://git.kernel.org/linus/cb4df4cae4f2) ("ksm: count allocated ksm rmap_items for each process") | [LKML](https://lore.kernel.org/linux-mm/20220822053653.204150-1-xu.xin16@zte.com.cn/)
 
@@ -251,9 +251,9 @@ Added `merge_across_nodes` option to prevent cross-node sharing that hurts NUMA 
 
 Added `/proc/<pid>/ksm_stat` for per-process memory savings tracking.
 
-## Trade-offs
+## Trade-offs {#trade-offs}
 
-### Benefits
+### Benefits {#benefits}
 
 | Benefit | Impact |
 |---------|--------|
@@ -261,7 +261,7 @@ Added `/proc/<pid>/ksm_stat` for per-process memory savings tracking.
 | Higher VM density | More VMs per host |
 | Overcommit | Safely run more than physical RAM |
 
-### Costs
+### Costs {#costs}
 
 | Cost | Impact |
 |------|--------|
@@ -270,7 +270,7 @@ Added `/proc/<pid>/ksm_stat` for per-process memory savings tracking.
 | Latency | COW adds latency to first write |
 | Security | Side-channel attacks possible (timing) |
 
-### Security Considerations
+### Security Considerations {#security-considerations}
 
 KSM can leak information through timing side-channels ([CVE-2021-3714](https://www.ndss-symposium.org/wp-content/uploads/2022-81-paper.pdf)):
 
@@ -281,9 +281,9 @@ KSM can leak information through timing side-channels ([CVE-2021-3714](https://w
 
 [Red Hat recommends disabling KSM](https://docs.redhat.com/en/documentation/red_hat_openstack_platform/17.1/html/hardening_red_hat_openstack_platform/assembly_hardening-infrastructure-and-virtualization_security_and_hardening) in multi-tenant environments (public clouds). The kernel defaults KSM to off (`/sys/kernel/mm/ksm/run` = 0); applications must explicitly opt in via `MADV_MERGEABLE`.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### High CPU Usage
+### High CPU Usage {#high-cpu-usage}
 
 ksmd consuming too much CPU.
 
@@ -295,7 +295,7 @@ ksmd consuming too much CPU.
 - Increase `sleep_millisecs`
 - Disable if savings are minimal
 
-### Low Merge Rate
+### Low Merge Rate {#low-merge-rate}
 
 Few pages being merged.
 
@@ -307,7 +307,7 @@ Few pages being merged.
 - Scan rate too slow
 - Memory not marked `MADV_MERGEABLE`
 
-### NUMA Performance Issues
+### NUMA Performance Issues {#numa-performance-issues}
 
 Cross-node merging hurting performance.
 
@@ -318,7 +318,7 @@ Cross-node merging hurting performance.
 echo 0 > /sys/kernel/mm/ksm/merge_across_nodes
 ```
 
-## KSM vs Other Deduplication
+## KSM vs Other Deduplication {#ksm-vs-other-deduplication}
 
 | Method | Scope | Overhead | Use Case |
 |--------|-------|----------|----------|
@@ -327,31 +327,31 @@ echo 0 > /sys/kernel/mm/ksm/merge_across_nodes
 | Filesystem dedup | Disk | I/O for scanning | Storage efficiency |
 | COW filesystems | Disk, snapshots | Metadata overhead | Backups, clones |
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/ksm.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/ksm.c) | KSM implementation |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/ksm.rst`](https://docs.kernel.org/admin-guide/mm/ksm.html)
 
-### Mailing List Discussions
+### Mailing List Discussions {#mailing-list-discussions}
 
 - [Original KSM patch series](https://lore.kernel.org/lkml/1247851850-4298-8-git-send-email-ieidus@redhat.com/) - Izik Eidus's July 2009 submission
 - [KSM NUMA trees and page migration](https://lore.kernel.org/all/alpine.LNX.2.00.1302111410290.1174@eggly.anvils/T/) - Hugh Dickins's 2013 NUMA awareness patches
 
-### Related
+### Related {#related}
 
 - [reclaim](reclaim.md) - Memory pressure interaction
 - [numa](numa.md) - Cross-node merging considerations
 - [thp](thp.md) - KSM doesn't merge huge pages
 - [cow](cow.md) - COW behavior when KSM-merged pages are written
 
-## Further reading
+## Further reading {#further-reading}
 
 - `Documentation/admin-guide/mm/ksm.rst` — the kernel admin guide covering `ksmd` configuration, sysfs knobs, `MADV_MERGEABLE` / `MADV_UNMERGEABLE`, the stable/unstable tree model, and monitoring counters; rendered at [docs.kernel.org](https://docs.kernel.org/admin-guide/mm/ksm.html)
 - [mm/ksm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/ksm.c) — the full KSM implementation: the two red-black trees, `ksmd` scan loop, page hashing, COW-page replacement, and NUMA-aware tree management

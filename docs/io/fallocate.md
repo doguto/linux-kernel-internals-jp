@@ -1,8 +1,8 @@
-# fallocate and File Space Management
+# fallocate and File Space Management {#fallocate-and-file-space-management}
 
 > Reserving disk blocks without writing data: avoiding ENOSPC, fragmentation, and sparse-file surprises
 
-## The problem with `write()`-based preallocation
+## The problem with `write()`-based preallocation {#the-problem-with-write-based-preallocation}
 
 The traditional way to guarantee space for a file before filling it is to write zeros:
 
@@ -33,7 +33,7 @@ fallocate(mode=0):
   write(data) → fills already-allocated blocks (no allocation at write time)
 ```
 
-## `fallocate()` system call
+## `fallocate()` system call {#fallocate-system-call}
 
 ```c
 #include <fcntl.h>
@@ -58,7 +58,7 @@ Returns 0 on success, -1 on error. Errors include:
 
 The flag constants live in `include/uapi/linux/falloc.h`; the VFS dispatch is in `fs/fallocate.c`.
 
-## Modes overview
+## Modes overview {#modes-overview}
 
 | Mode | Constant | Effect |
 |------|----------|--------|
@@ -72,7 +72,7 @@ The flag constants live in `include/uapi/linux/falloc.h`; the VFS dispatch is in
 
 `FALLOC_FL_PUNCH_HOLE` must always be combined with `FALLOC_FL_KEEP_SIZE`; the kernel rejects `FALLOC_FL_PUNCH_HOLE` alone with `EINVAL`.
 
-## Default allocation (mode = 0)
+## Default allocation (mode = 0) {#default-allocation-mode-0}
 
 ```c
 /* Preallocate a 512 MiB file */
@@ -88,7 +88,7 @@ After this call:
 - Reading unwritten regions returns zeros, but no I/O is required: the filesystem marks the extents as allocated-but-unwritten.
 - Subsequent `write()` calls into the range never need to allocate new blocks and cannot fail with `ENOSPC` for that range.
 
-### Effect on `st_size` vs `st_blocks`
+### Effect on `st_size` vs `st_blocks` {#effect-on-stsize-vs-stblocks}
 
 ```
 Before fallocate:
@@ -104,7 +104,7 @@ After fallocate(fd, FALLOC_FL_KEEP_SIZE, 0, 512MiB):
   st_blocks = 1048576     (blocks still allocated)
 ```
 
-### Sparse file detection: `du` vs `ls`
+### Sparse file detection: `du` vs `ls` {#sparse-file-detection-du-vs-ls}
 
 `ls -l` reports `st_size` (logical size). `du` reports `st_blocks` (physical allocation). A sparse file shows a large `ls -l` size but a small `du` result:
 
@@ -120,7 +120,7 @@ ls -lh preallocated.bin    # 1.0G
 du -sh preallocated.bin    # 1.1G  (actual disk usage)
 ```
 
-### Filesystem-specific behavior
+### Filesystem-specific behavior {#filesystem-specific-behavior}
 
 **ext4**: Uses extent preallocation (`ext4_fallocate` in `fs/ext4/extents.c`). Creates unwritten extents — the extent tree marks the range as `EXT_UNWRITTEN`. Reads from unwritten extents return zeros without disk I/O. On the first write to a block, the extent is converted to written.
 
@@ -130,7 +130,7 @@ du -sh preallocated.bin    # 1.1G  (actual disk usage)
 
 **tmpfs**: Supports `fallocate` for in-memory files; blocks are DRAM pages. Hole punching is also supported.
 
-## `FALLOC_FL_KEEP_SIZE`: preallocate without extending
+## `FALLOC_FL_KEEP_SIZE`: preallocate without extending {#fallocflkeep_size-preallocate-without-extending}
 
 This mode allocates physical blocks but leaves `st_size` unchanged. It is the canonical pattern for write-ahead log (WAL) preallocation:
 
@@ -161,7 +161,7 @@ int preallocate_wal_segment(const char *path, size_t segment_size)
 
 Why keep size at zero? The consuming process (the WAL applier) must not see the file as having data until the WAL writer says so. `st_size` is the authoritative "how much data is here" signal; `st_blocks` is a storage-layer detail.
 
-## `FALLOC_FL_PUNCH_HOLE`: reclaiming space within a file
+## `FALLOC_FL_PUNCH_HOLE`: reclaiming space within a file {#fallocflpunch_hole-reclaiming-space-within-a-file}
 
 Hole punching deallocates blocks in the middle of a file without changing `st_size`. The punched region becomes a sparse hole: reads return zeros, but no disk blocks are consumed.
 
@@ -179,7 +179,7 @@ int punch_hole(int fd, off_t offset, off_t len)
 }
 ```
 
-### Use cases
+### Use cases {#use-cases}
 
 **Log rotation**: Rather than unlinking and recreating a log file (which breaks open file descriptors held by other processes), punch the consumed region:
 
@@ -193,7 +193,7 @@ punch_hole(log_fd, 0, consumed_offset);
 
 **Large media files**: Video editing tools can punch holes over deleted frame ranges, reclaiming space while keeping the file structure intact.
 
-### Iterating holes with `SEEK_HOLE` / `SEEK_DATA`
+### Iterating holes with `SEEK_HOLE` / `SEEK_DATA` {#iterating-holes-with-seekhole-seekdata}
 
 After punching holes, use `lseek(2)` with `SEEK_HOLE` and `SEEK_DATA` to find the boundaries of data and sparse regions:
 
@@ -243,7 +243,7 @@ void print_extents(int fd, off_t file_size)
 
 `SEEK_HOLE` and `SEEK_DATA` were standardized in POSIX 2013 and are supported on ext4, XFS, btrfs, and tmpfs. On filesystems that do not support them, `SEEK_HOLE` returns `st_size` (the whole file appears to be data).
 
-## `FALLOC_FL_ZERO_RANGE`: zeroing without punching
+## `FALLOC_FL_ZERO_RANGE`: zeroing without punching {#fallocflzero_range-zeroing-without-punching}
 
 `FALLOC_FL_ZERO_RANGE` zeros a region of a file efficiently. Unlike punch-hole, the blocks remain allocated. Unlike writing zeros through `write()`, the filesystem may implement this as metadata-only if the region aligns to block boundaries:
 
@@ -257,7 +257,7 @@ fallocate(fd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, offset, len);
 
 On ext4 and XFS, aligned zero-range requests convert written extents to unwritten extents in the extent tree — the same representation as freshly preallocated blocks. No actual zero bytes are written to disk; the filesystem's read path synthesizes them. For unaligned edges, partial blocks are read, zeroed, and written back.
 
-## `FALLOC_FL_COLLAPSE_RANGE`: removing a file section
+## `FALLOC_FL_COLLAPSE_RANGE`: removing a file section {#fallocflcollapse_range-removing-a-file-section}
 
 `FALLOC_FL_COLLAPSE_RANGE` removes `len` bytes starting at `offset` from a file, shifting all subsequent data down. No hole is left: the file shrinks by `len` bytes. Both `offset` and `len` must be multiples of the filesystem block size.
 
@@ -268,7 +268,7 @@ fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 4UL << 20, 1UL << 20);
 
 This is useful for in-place log compaction: rather than copying the remaining data into a new file, collapse the consumed head. Supported on ext4 (since 3.15) and XFS (since 3.15). btrfs does not support it.
 
-## `FALLOC_FL_INSERT_RANGE`: inserting space
+## `FALLOC_FL_INSERT_RANGE`: inserting space {#fallocflinsert_range-inserting-space}
 
 The inverse of collapse: `FALLOC_FL_INSERT_RANGE` inserts `len` zero bytes at `offset`, shifting subsequent data up. The file grows by `len`. Both values must be block-size aligned.
 
@@ -279,7 +279,7 @@ fallocate(fd, FALLOC_FL_INSERT_RANGE, 2UL << 20, 512UL << 10);
 
 Supported on ext4 (since 4.1) and XFS (since 4.1). Rarely used in practice.
 
-## `FALLOC_FL_UNSHARE_RANGE`: breaking reflink sharing
+## `FALLOC_FL_UNSHARE_RANGE`: breaking reflink sharing {#fallocflunshare_range-breaking-reflink-sharing}
 
 On copy-on-write filesystems that support reflinks (btrfs, XFS), `cp --reflink` creates a file that shares extent tree entries with the original. A write to either file triggers copy-on-write to a new extent.
 
@@ -300,7 +300,7 @@ This is useful before intensive random writes to a reflinked file: without unsha
 
 See [Copy-on-write filesystems](#copy-on-write-filesystems-btrfs-and-xfs) below for the broader context.
 
-## `posix_fallocate()`: the POSIX fallback
+## `posix_fallocate()`: the POSIX fallback {#posix_fallocate-the-posix-fallback}
 
 ```c
 #include <fcntl.h>
@@ -327,7 +327,7 @@ int posix_fallocate(int fd, off_t offset, off_t len)
 
 The fallback is correct but slow and still subject to ENOSPC mid-write. Prefer calling `fallocate(2)` directly and handling `EOPNOTSUPP` yourself when you care about performance.
 
-## `ftruncate()` vs `fallocate()`
+## `ftruncate()` vs `fallocate()` {#ftruncate-vs-fallocate}
 
 `ftruncate(fd, new_size)` and `fallocate(fd, 0, 0, new_size)` both extend a file to `new_size`, but they do fundamentally different things:
 
@@ -353,9 +353,9 @@ fallocate(fd, 0, 0, 1UL << 30);
 
 When shrinking, both `ftruncate(fd, smaller_size)` and `fallocate(fd, 0, 0, smaller_size)` truncate the file. Use `ftruncate` for truncation — `fallocate` is not documented for shrinking below the current size, and behavior is filesystem-dependent.
 
-## Practical use cases with code
+## Practical use cases with code {#practical-use-cases-with-code}
 
-### 1. Download file reservation
+### 1. Download file reservation {#1-download-file-reservation}
 
 Preallocate the full file size before a download begins to guarantee space and avoid fragmentation:
 
@@ -393,7 +393,7 @@ int create_download_file(const char *path, off_t expected_size)
 }
 ```
 
-### 2. WAL/journal preallocation (PostgreSQL pattern)
+### 2. WAL/journal preallocation (PostgreSQL pattern) {#2-waljournal-preallocation-postgresql-pattern}
 
 ```c
 #include <fcntl.h>
@@ -421,7 +421,7 @@ int preallocate_wal(const char *path, size_t wal_segment_size)
 }
 ```
 
-### 3. Log file rotation with hole punching
+### 3. Log file rotation with hole punching {#3-log-file-rotation-with-hole-punching}
 
 ```c
 #include <fcntl.h>
@@ -451,7 +451,7 @@ int reclaim_consumed_log(int fd, off_t consumed_up_to)
 }
 ```
 
-### 4. Sparse file creation and hole inspection
+### 4. Sparse file creation and hole inspection {#4-sparse-file-creation-and-hole-inspection}
 
 ```c
 #include <fcntl.h>
@@ -505,7 +505,7 @@ int main(void)
  */
 ```
 
-## Filesystem support matrix
+## Filesystem support matrix {#filesystem-support-matrix}
 
 | Mode | ext4 | XFS | btrfs | tmpfs | NFS | CIFS |
 |------|------|-----|-------|-------|-----|------|
@@ -532,9 +532,9 @@ if (ret == -1 && errno == EOPNOTSUPP) {
 }
 ```
 
-## Copy-on-write filesystems: btrfs and XFS
+## Copy-on-write filesystems: btrfs and XFS {#copy-on-write-filesystems-btrfs-and-xfs}
 
-### Reflinks and `cp --reflink`
+### Reflinks and `cp --reflink` {#reflinks-and-cp-reflink}
 
 btrfs and XFS support *reflinks*: a file copy that shares extent tree entries with the original. A `cp --reflink` is nearly instant and uses no additional disk space until one of the files is modified:
 
@@ -547,7 +547,7 @@ du -sh original.bin copy.bin   # both show ~1GiB but share the blocks
 
 When a reflinked block is written, the filesystem performs copy-on-write: the writing process gets a new private extent, and the other file's extent remains unchanged.
 
-### `copy_file_range` and kernel-side reflinks
+### `copy_file_range` and kernel-side reflinks {#copyfilerange-and-kernel-side-reflinks}
 
 `copy_file_range(2)` asks the kernel to copy a range between files. On reflink-capable filesystems, the kernel may satisfy this as a metadata-only clone operation rather than copying bytes:
 
@@ -563,7 +563,7 @@ ssize_t copy_file_range(int fd_in, loff_t *off_in,
 
 For block-aligned ranges on XFS or btrfs with matching block sizes, this becomes a reflink clone — O(extents), effectively constant for single-extent files, but scales with extent count for heavily fragmented files. For other cases it falls back to a read/write loop.
 
-### Fragmentation over time with COW
+### Fragmentation over time with COW {#fragmentation-over-time-with-cow}
 
 COW filesystems accumulate fragmentation for frequently overwritten files. Each overwrite creates a new extent; the extent tree grows; sequential reads become random I/O. `FALLOC_FL_UNSHARE_RANGE` is one tool to combat this: it consolidates shared extents into a single contiguous private allocation.
 
@@ -579,7 +579,7 @@ chattr +C database.db
 
 With `+C` (nodatacow), `fallocate` and `write` behave more like they do on ext4: in-place updates without per-block copy-on-write.
 
-### Detecting extent sharing
+### Detecting extent sharing {#detecting-extent-sharing}
 
 On XFS and btrfs, the `FIEMAP` ioctl with the `FIEMAP_EXTENT_SHARED` flag indicates shared extents:
 
@@ -612,7 +612,7 @@ int has_shared_extents(int fd)
 }
 ```
 
-## Kernel internals
+## Kernel internals {#kernel-internals}
 
 The VFS entry point for `fallocate` is `vfs_fallocate()` in `fs/fallocate.c`:
 
@@ -679,7 +679,7 @@ The flags constant definitions are in `include/uapi/linux/falloc.h`:
 #define FALLOC_FL_UNSHARE_RANGE  0x40
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Buffered I/O and the Page Cache](buffered-io.md) — page cache interaction with preallocated extents
 - [Direct I/O](direct-io.md) — bypassing the page cache for O_DIRECT writes into preallocated ranges

@@ -1,8 +1,8 @@
-# TCP Congestion Control
+# TCP Congestion Control {#tcp-congestion-control}
 
 > How the kernel decides how fast to send: CUBIC, BBR, and the cc_ops interface
 
-## What congestion control does
+## What congestion control does {#what-congestion-control-does}
 
 TCP congestion control governs the **congestion window (cwnd)** — the maximum number of unacknowledged bytes in flight:
 
@@ -19,7 +19,7 @@ The congestion controller runs on the sender and responds to:
 - **Loss detected**: decrease cwnd (congestion)
 - **ECN (Explicit Congestion Notification)**: decrease cwnd before loss
 
-## struct tcp_congestion_ops: the cc interface
+## struct tcp_congestion_ops: the cc interface {#struct-tcpcongestionops-the-cc-interface}
 
 All congestion control algorithms implement this interface:
 
@@ -50,7 +50,7 @@ struct tcp_congestion_ops {
 };
 ```
 
-### Registering an algorithm
+### Registering an algorithm {#registering-an-algorithm}
 
 ```c
 /* net/ipv4/tcp_cubic.c */
@@ -73,7 +73,7 @@ static int __init cubictcp_register(void)
 }
 ```
 
-### Per-socket congestion control data
+### Per-socket congestion control data {#per-socket-congestion-control-data}
 
 Each socket has `ICSK_CA_PRIV_SIZE` bytes (128 bytes = 16 × u64) for algorithm-specific state:
 
@@ -82,7 +82,7 @@ struct tcp_sock *tp = tcp_sk(sk);
 struct bictcp *ca = inet_csk_ca(sk);  /* points to icsk_ca_priv */
 ```
 
-## TCP Reno: the baseline
+## TCP Reno: the baseline {#tcp-reno-the-baseline}
 
 Reno is the simplest correct algorithm, required by all TCP implementations:
 
@@ -125,7 +125,7 @@ void tcp_reno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 }
 ```
 
-## CUBIC: the Linux default
+## CUBIC: the Linux default {#cubic-the-linux-default}
 
 CUBIC replaces the linear increase of Reno with a **cubic function** of time since the last congestion event. This allows much faster window growth at high bandwidth-delay products.
 
@@ -196,7 +196,7 @@ static void bictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 }
 ```
 
-### HyStart++: safe slow start exit
+### HyStart++: safe slow start exit {#hystart-safe-slow-start-exit}
 
 CUBIC uses HyStart to exit slow start before actual loss:
 
@@ -208,7 +208,7 @@ CUBIC uses HyStart to exit slow start before actual loss:
 sysctl net.ipv4.tcp_cubic_hystart
 ```
 
-## BBR: bandwidth-based congestion control
+## BBR: bandwidth-based congestion control {#bbr-bandwidth-based-congestion-control}
 
 BBR (Bottleneck Bandwidth and Round-trip propagation time) takes a fundamentally different approach: instead of reacting to **loss**, it estimates **bandwidth** and **RTT** to set the sending rate directly.
 
@@ -264,7 +264,7 @@ struct bbr {
 };
 ```
 
-### BBR pacing
+### BBR pacing {#bbr-pacing}
 
 BBR uses **pacing** (spreading packets evenly over time) rather than bursting:
 
@@ -291,7 +291,7 @@ tc qdisc add dev eth0 root fq
 sysctl -w net.ipv4.tcp_congestion_control=bbr
 ```
 
-## BBR vs CUBIC
+## BBR vs CUBIC {#bbr-vs-cubic}
 
 | Aspect | CUBIC | BBR |
 |--------|-------|-----|
@@ -303,7 +303,7 @@ sysctl -w net.ipv4.tcp_congestion_control=bbr
 | Latency | Higher (queue) | Lower (targets min RTT) |
 | Kernel version | 2.6.19 default | 4.9 |
 
-## Selecting and observing congestion control
+## Selecting and observing congestion control {#selecting-and-observing-congestion-control}
 
 ```bash
 # System default
@@ -333,7 +333,7 @@ ss -tni | grep -A2 bbr
 #  bw:1.23Gbps pacing_rate:1.50Gbps
 ```
 
-## ECN: explicit congestion notification
+## ECN: explicit congestion notification {#ecn-explicit-congestion-notification}
 
 ECN allows routers to signal congestion via IP header bits before dropping:
 
@@ -354,7 +354,7 @@ sysctl -w net.ipv4.tcp_ecn=1  # enable if both ends support it
 # 0: disabled, 1: enable ECN (initiates in SYN), 2: accept ECN but don't initiate
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [TCP Implementation](tcp.md) — TCP socket state machine, fast retransmit
 - [Network Buffer Tuning](net-buffer-tuning.md) — tuning cwnd initial values

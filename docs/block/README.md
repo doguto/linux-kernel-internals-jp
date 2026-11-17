@@ -1,8 +1,8 @@
-# Block Layer
+# Block Layer {#block-layer}
 
 > How the kernel moves storage I/O from the filesystem down to the device — and merges, reorders, and schedules it along the way
 
-## Getting Started
+## Getting Started {#getting-started}
 
 The block layer sits between the parts of the kernel that *produce* storage I/O — filesystems, the page cache's writeback path, swap, and direct-I/O submitters — and the drivers that talk to actual devices (NVMe, SCSI, virtio-blk, ...). Its job is to turn a stream of `bio` submissions into an efficient sequence of device requests: merging adjacent I/O, batching submissions, applying an I/O scheduler, and mapping work onto a device's hardware queues.
 
@@ -18,16 +18,16 @@ Device driver: NVMe · SCSI · virtio-blk · ...
 Storage hardware
 ```
 
-### A brief history: why blk-mq
+### A brief history: why blk-mq {#a-brief-history-why-blk-mq}
 
 The original block layer used a single request queue per device, protected by a single lock — fine for a rotational disk doing a few hundred IOPS, but a scaling wall for SSDs doing millions. The multi-queue block layer (`blk-mq`) was introduced in Linux 3.13 to fix this ([`320ae51feed5`](https://git.kernel.org/linus/320ae51feed5), "blk-mq: new multi-queue block IO queueing mechanism"): each CPU gets its own software queue that maps onto the device's hardware queues, removing the shared lock. Drivers migrated over the following years, until blk-mq became the *only* path: the legacy single-queue I/O schedulers (CFQ, deadline) were removed in Linux 5.0 ([`f382fb0bcef4`](https://git.kernel.org/linus/f382fb0bcef4), "block: remove legacy IO schedulers"), and the old request path went with them. Every block driver today is blk-mq.
 
-### Prerequisites
+### Prerequisites {#prerequisites}
 
 - **C and basic OS concepts** — the kernel is in C; be comfortable with the ideas of drivers, DMA, and the kernel/userspace boundary.
 - **The page cache and writeback** help, since most block I/O originates there — see [page cache](../mm/page-cache.md) and [page cache and writeback](../io/page-cache-writeback.md).
 
-### Getting the source
+### Getting the source {#getting-the-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
@@ -36,11 +36,11 @@ cd linux
 
 The relevant directories are `block/` (core, blk-mq, schedulers), `drivers/nvme/`, `drivers/scsi/`, and `drivers/block/` (virtio-blk, loop, `null_blk`).
 
-### Experimenting
+### Experimenting {#experimenting}
 
 `null_blk` is the easiest way to exercise the block layer without hardware — it presents a configurable in-memory block device. `blktests` is the block-layer test suite, and `fio` is the standard tool for generating and measuring I/O patterns.
 
-### Suggested reading order
+### Suggested reading order {#suggested-reading-order}
 
 1. **[Block Layer Overview](block-overview.md)** — the key structures and the submission path end to end
 2. **[Life of a Block I/O](life-of-block-io.md)** — one I/O traced from `submit_bio()` down to the device and back
@@ -53,7 +53,7 @@ The relevant directories are `block/` (core, blk-mq, schedulers), `drivers/nvme/
 9. **[Observability](block-observability.md)** — seeing what the block layer is doing, from counters to blktrace
 10. **[War Stories](war-stories.md)** — real block-layer bugs and what they taught
 
-### What you'll learn
+### What you'll learn {#what-youll-learn}
 
 | Textbook idea | Linux reality |
 |---|---|
@@ -62,7 +62,7 @@ The relevant directories are `block/` (core, blk-mq, schedulers), `drivers/nvme/
 | "The I/O scheduler makes things faster" | On fast SSDs the best scheduler is often *none*; scheduling mainly bounds latency and enforces fairness ([schedulers](io-schedulers.md)) |
 | "`write()` goes to disk" | It usually goes to the [page cache](../io/page-cache-writeback.md); the block layer only sees it later, during writeback |
 
-## Documentation
+## Documentation {#documentation}
 
 | Document | What you'll learn |
 |---|---|
@@ -77,7 +77,7 @@ The relevant directories are `block/` (core, blk-mq, schedulers), `drivers/nvme/
 | [Observability](block-observability.md) | `/proc/diskstats`, `blktrace`, and BPF for block I/O |
 | [War Stories](war-stories.md) | Real block-layer incidents and their lessons |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: block layer](https://docs.kernel.org/block/index.html) — the authoritative reference for the block subsystem
 - [`320ae51feed5`](https://git.kernel.org/linus/320ae51feed5) — the introduction of blk-mq (Linux 3.13)

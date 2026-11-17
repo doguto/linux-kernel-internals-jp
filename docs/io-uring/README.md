@@ -1,12 +1,12 @@
-# io_uring
+# io_uring {#io_uring}
 
 > True async I/O for everything — files, sockets, pipes, and more, without a syscall per operation
 
-## Getting Started
+## Getting Started {#getting-started}
 
 This documentation explains how io_uring works — not just the API, but the design decisions behind the ring layout, the trade-offs that shaped it, and the real-world patterns used in databases, storage engines, and network servers.
 
-### Prerequisites
+### Prerequisites {#prerequisites}
 
 This documentation assumes familiarity with:
 
@@ -16,7 +16,7 @@ This documentation assumes familiarity with:
 
 If you've used `epoll` or `libaio`, you have a good foundation. If not, understanding blocking vs. non-blocking I/O is enough to start.
 
-### Getting the Kernel Source
+### Getting the Kernel Source {#getting-the-kernel-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
@@ -25,7 +25,7 @@ cd linux
 
 The io_uring implementation lives in `io_uring/` (~25,000 lines). The public ABI is in `include/uapi/linux/io_uring.h`.
 
-### Suggested Reading Order
+### Suggested Reading Order {#suggested-reading-order}
 
 **Start here:**
 
@@ -48,7 +48,7 @@ The io_uring implementation lives in `io_uring/` (~25,000 lines). The public ABI
 8. **[Security](security.md)** — privilege requirements, attack surface, seccomp filtering
 9. **[War Stories](war-stories.md)** — real bugs, CVEs, and lessons from production
 
-### What You'll Learn
+### What You'll Learn {#what-youll-learn}
 
 | Textbook Concept | Linux Reality |
 |------------------|---------------|
@@ -58,7 +58,7 @@ The io_uring implementation lives in `io_uring/` (~25,000 lines). The public ABI
 | "io_uring is just for servers" | Databases (RocksDB, ScyllaDB), storage engines, and game engines all use io_uring for file I/O |
 | "zero-copy means no CPU" | [Fixed buffers](fixed-buffers.md) eliminate data copies between userspace and kernel, but DMA setup and completion interrupts still consume CPU |
 
-### What Makes This Different
+### What Makes This Different {#what-makes-this-different}
 
 - **Real commits**: Every claim links to actual kernel commits
 - **Real bugs**: Learn from what broke and why
@@ -68,7 +68,7 @@ The io_uring implementation lives in `io_uring/` (~25,000 lines). The public ABI
 
 ---
 
-## What io_uring Is
+## What io_uring Is {#what-io_uring-is}
 
 io_uring was introduced in Linux 5.1 (May 2019) by Jens Axboe. It is a kernel interface for asynchronous I/O built around two lock-free rings in shared memory:
 
@@ -92,7 +92,7 @@ Userspace                          Kernel
                                complete → post CQE
 ```
 
-### How io_uring Differs from epoll and POSIX AIO
+### How io_uring Differs from epoll and POSIX AIO {#how-io_uring-differs-from-epoll-and-posix-aio}
 
 **epoll** is a readiness notification mechanism — it tells you when a file descriptor *can* be read without blocking. You still need a second syscall to actually transfer data. It cannot be used for regular file I/O because files are always "ready".
 
@@ -114,9 +114,9 @@ Userspace                          Kernel
 
 ---
 
-## Documentation
+## Documentation {#documentation}
 
-### Core Reading
+### Core Reading {#core-reading}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -124,7 +124,7 @@ Userspace                          Kernel
 | [life-of-request](life-of-request.md) | End-to-end trace of a single read: SQE submission, kernel dispatch, CQE posting |
 | [io-uring-ops](io-uring-ops.md) | Opcode table, per-operation flags and semantics, cancellation |
 
-### Advanced Topics
+### Advanced Topics {#advanced-topics}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -132,7 +132,7 @@ Userspace                          Kernel
 | [multishot-ops](multishot-ops.md) | One SQE generating many CQEs: multishot accept, recv, and poll |
 | [networking](networking.md) | High-throughput accept loops, zero-copy TCP send, recv with buffer selection |
 
-### Comparison and Security
+### Comparison and Security {#comparison-and-security}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -142,7 +142,7 @@ Userspace                          Kernel
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 If you want to read the actual kernel code:
 
@@ -158,7 +158,7 @@ If you want to read the actual kernel code:
 
 ---
 
-## Quick Reference
+## Quick Reference {#quick-reference}
 
 A minimal io_uring read loop using liburing:
 
@@ -205,7 +205,7 @@ Compile with:
 gcc -o example example.c -luring
 ```
 
-### Key Patterns
+### Key Patterns {#key-patterns}
 
 **SQPOLL (zero-syscall I/O):**
 
@@ -235,34 +235,34 @@ io_uring_submit(&ring);
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Papers and Posts by Jens Axboe
+### Papers and Posts by Jens Axboe {#papers-and-posts-by-jens-axboe}
 
 - Axboe, [*Efficient IO with io_uring*](https://kernel.dk/io_uring.pdf) (2019) — the original design paper; explains the ring layout, SQPOLL, and fixed buffers
 - Axboe, [*Lord of the io_uring*](https://unixism.net/loti/) — a practical guide with worked examples (hosted by Shuveb Hussain)
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [*The rapid growth of io_uring*](https://lwn.net/Articles/810414/) (2020) — early overview of capabilities and design rationale
 - [*Ringing in a new asynchronous I/O API*](https://lwn.net/Articles/776703/) (2019) — how it compares to existing async interfaces
 - [*Operations restrictions for io_uring*](https://lwn.net/Articles/826053/) (2020) — security model and seccomp interaction
 
-### Userspace Library
+### Userspace Library {#userspace-library}
 
 - [liburing on GitHub](https://github.com/axboe/liburing) — the standard userspace library; includes examples and wrappers for every opcode
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`include/uapi/linux/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/io_uring.h) — the definitive ABI reference
 
-### Textbooks and Background
+### Textbooks and Background {#textbooks-and-background}
 
 - Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) — Ch. 13 (Block I/O), background on the I/O stack io_uring builds on
 - Stevens & Rago, [*Advanced Programming in the UNIX Environment*](https://www.oreilly.com/library/view/advanced-programming-in/9780321638014/) — Ch. 14 (Advanced I/O), for understanding the pre-io_uring landscape
 
 ---
 
-## Appendix
+## Appendix {#appendix}
 
 - **[Glossary](../mm/glossary.md)** — Terminology reference (SQE, CQE, SQPOLL, io-wq, fixed buffer, multishot)

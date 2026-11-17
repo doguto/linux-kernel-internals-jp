@@ -1,8 +1,8 @@
-# Virtual Filesystem (VFS)
+# Virtual Filesystem (VFS) {#virtual-filesystem-vfs}
 
 > The kernel's filesystem abstraction layer
 
-## What is VFS?
+## What is VFS? {#what-is-vfs}
 
 The Virtual Filesystem Switch (VFS) is an abstraction layer that allows the kernel to support many different filesystems (ext4, btrfs, tmpfs, procfs, NFS...) through a common interface. When your program calls `read()`, it goes through VFS, which dispatches to the appropriate filesystem implementation.
 
@@ -12,7 +12,7 @@ VFS makes the following possible:
 - Files can be accessed across mounted filesystems transparently
 - Filesystems can be developed as kernel modules
 
-## The four VFS objects
+## The four VFS objects {#the-four-vfs-objects}
 
 VFS defines four core objects:
 
@@ -32,17 +32,17 @@ Each has an associated operations table (vtable) that the filesystem must implem
 | Dentry | `struct dentry_operations` |
 | File | `struct file_operations` |
 
-## Contents
+## Contents {#contents}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 - [VFS Objects: superblock, inode, dentry, file](vfs-objects.md) — The four core objects in detail
 - [Path Resolution](namei.md) — How `/usr/bin/bash` becomes an inode
 - [File Operations](file-ops.md) — The file_operations vtable and open/read/write
 - [Filesystem Registration and Mounting](mounting.md) — How filesystems plug into VFS
 
-### Lifecycle
+### Lifecycle {#lifecycle}
 - [Life of a write() syscall](life-of-write.md) — From write() to disk
 - [Dentry and Inode Caches](dcache-icache.md) — Caching for performance
 
-### War stories
+### War stories {#war-stories}
 - [War Stories](war-stories.md) — four CVEs from the dentry cache, `seq_file`, and OverlayFS's copy-up path

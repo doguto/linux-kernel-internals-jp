@@ -1,8 +1,8 @@
-# Kernel Hardening: KASLR, Stack Protectors, and Spectre Mitigations
+# Kernel Hardening: KASLR, Stack Protectors, and Spectre Mitigations {#kernel-hardening-kaslr-stack-protectors-and-spectre-mitigations}
 
 > Defense-in-depth: making exploitation harder after a vulnerability is found
 
-## Defense layers
+## Defense layers {#defense-layers}
 
 Modern Linux implements multiple hardening techniques at different levels:
 
@@ -13,7 +13,7 @@ Runtime:             ASLR (userspace), seccomp, namespaces, SELinux
 CPU microcode:       Spectre/Meltdown mitigations, IBRS, STIBP
 ```
 
-## KASLR: Kernel Address Space Layout Randomization
+## KASLR: Kernel Address Space Layout Randomization {#kaslr-kernel-address-space-layout-randomization}
 
 KASLR randomizes where the kernel and its modules are loaded in memory, making it harder for an attacker to use known kernel addresses in exploits:
 
@@ -53,7 +53,7 @@ echo 2 > /proc/sys/kernel/kptr_restrict      # hide kernel pointers from all
 echo 1 > /proc/sys/kernel/dmesg_restrict     # require CAP_SYSLOG for dmesg
 ```
 
-## Stack canaries (stack-protector)
+## Stack canaries (stack-protector) {#stack-canaries-stack-protector}
 
 Compiler-inserted canaries detect stack buffer overflows before return:
 
@@ -91,7 +91,7 @@ dmesg | grep "stack-protector"
 # If a corruption is detected: kernel panic with function address
 ```
 
-## SMEP and SMAP (Intel x86)
+## SMEP and SMAP (Intel x86) {#smep-and-smap-intel-x86}
 
 **SMEP** (Supervisor Mode Execution Prevention): prevents kernel from executing userspace code pages.
 **SMAP** (Supervisor Mode Access Prevention): prevents kernel from accessing userspace memory unexpectedly.
@@ -113,7 +113,7 @@ grep CONFIG_X86_SMAP /boot/config-$(uname -r)
 # PXN (Privileged Execute Never) = SMEP
 ```
 
-## HARDENED_USERCOPY
+## HARDENED_USERCOPY {#hardened_usercopy}
 
 Prevents kernel bugs that could copy too much data to/from userspace:
 
@@ -128,7 +128,7 @@ CONFIG_HARDENED_USERCOPY=y
 # usercopy: Kernel memory overwrite attempt detected to slab ... size=xxx ...
 ```
 
-## FORTIFY_SOURCE
+## FORTIFY_SOURCE {#fortify_source}
 
 Compiler-inserted bounds checking for common string/memory functions:
 
@@ -150,9 +150,9 @@ static inline void *memcpy(void *dst, const void *src, size_t len)
 }
 ```
 
-## Spectre and Meltdown mitigations
+## Spectre and Meltdown mitigations {#spectre-and-meltdown-mitigations}
 
-### Meltdown (CVE-2017-5754)
+### Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
 Meltdown allows userspace to read kernel memory via speculative execution. Mitigated by **KPTI** (Kernel Page-Table Isolation):
 
@@ -171,7 +171,7 @@ grep pcid /proc/cpuinfo | head -1
 # flags: ... pcid ...  ← TLB tagged by address space, no flush needed
 ```
 
-### Spectre v1 (CVE-2017-5753): Bounds Check Bypass
+### Spectre v1 (CVE-2017-5753): Bounds Check Bypass {#spectre-v1-cve-2017-5753-bounds-check-bypass}
 
 ```c
 /* Vulnerable pattern (Spectre v1): */
@@ -185,7 +185,7 @@ index = array_index_nospec(index, array_size);
 return array[index];
 ```
 
-### Spectre v2 (CVE-2017-5715): Branch Target Injection
+### Spectre v2 (CVE-2017-5715): Branch Target Injection {#spectre-v2-cve-2017-5715-branch-target-injection}
 
 ```bash
 # Mitigation: Retpoline (return trampoline)
@@ -203,7 +203,7 @@ grep ibpb /proc/cpuinfo   # ibpb in flags
 cat /sys/kernel/debug/x86/ibpb_enabled  # 0/1
 ```
 
-### MDS/TAA mitigations
+### MDS/TAA mitigations {#mdstaa-mitigations}
 
 ```bash
 # Check all CPU vulnerability status:
@@ -223,7 +223,7 @@ cat /sys/devices/system/cpu/vulnerabilities/*
 # or: nospectre_v1 nospectre_v2 nopti mds=off
 ```
 
-## CFI: Control Flow Integrity
+## CFI: Control Flow Integrity {#cfi-control-flow-integrity}
 
 **Clang CFI** (CONFIG_CFI_CLANG) prevents control-flow hijacking by verifying indirect call targets at runtime:
 
@@ -247,7 +247,7 @@ grep CONFIG_CFI_CLANG /boot/config-$(uname -r)
 # Android uses CFI for all kernel modules
 ```
 
-## Hardening configuration checklist
+## Hardening configuration checklist {#hardening-configuration-checklist}
 
 ```bash
 # Key security config options to verify:
@@ -264,7 +264,7 @@ cat /sys/devices/system/cpu/vulnerabilities/*  # all should say "Mitigation"
 grep kaslr_offset /proc/kallsyms               # should require root
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LSM Framework](lsm.md) — SELinux/AppArmor security policy
 - [Credentials](credentials.md) — privilege model that hardening protects

@@ -1,8 +1,8 @@
-# SRCU: Sleepable RCU
+# SRCU: Sleepable RCU {#srcu-sleepable-rcu}
 
 > RCU for read-side critical sections that may block or sleep
 
-## The problem with classic RCU
+## The problem with classic RCU {#the-problem-with-classic-rcu}
 
 Classic RCU (`rcu_read_lock`) has one key constraint: **no sleeping**. The reader must stay in its critical section without blocking:
 
@@ -18,7 +18,7 @@ This rules out many use cases: VFS operations (may take a lock), I/O, memory all
 
 **SRCU** (Sleepable RCU) allows sleeping inside the read-side critical section. The trade-off: SRCU is more expensive than classic RCU (per-CPU counters instead of quiescent state detection).
 
-## SRCU usage
+## SRCU usage {#srcu-usage}
 
 ```c
 #include <linux/srcu.h>
@@ -50,7 +50,7 @@ kfree(old);
 call_srcu(&my_srcu, &old->rcu, my_free_callback);
 ```
 
-## struct srcu_struct
+## struct srcu_struct {#struct-srcu_struct}
 
 ```c
 /* include/linux/srcu.h */
@@ -74,7 +74,7 @@ struct srcu_struct {
 };
 ```
 
-### Per-CPU counters: the key difference
+### Per-CPU counters: the key difference {#per-cpu-counters-the-key-difference}
 
 Classic RCU tracks quiescent states globally. SRCU uses per-CPU counters that readers increment/decrement:
 
@@ -91,7 +91,7 @@ srcu_read_unlock(sp, idx)
 
 A grace period completes when `srcu_lock_count[old_idx] == srcu_unlock_count[old_idx]` across all CPUs — meaning all readers that started before the grace period have finished.
 
-## Expedited SRCU
+## Expedited SRCU {#expedited-srcu}
 
 `synchronize_srcu_expedited()` shortens the grace period by actively polling CPUs:
 
@@ -102,7 +102,7 @@ synchronize_srcu_expedited(&my_srcu);
 
 Use for infrequent, latency-critical updates where waiting is unacceptable.
 
-## SRCU vs classic RCU
+## SRCU vs classic RCU {#srcu-vs-classic-rcu}
 
 | Feature | RCU | SRCU |
 |---------|-----|------|
@@ -113,7 +113,7 @@ Use for infrequent, latency-critical updates where waiting is unacceptable.
 | Typical use | Lock-free data structures | VFS, notifiers, module unload |
 | `call_rcu` equivalent | Yes | `call_srcu` |
 
-## Real-world uses of SRCU
+## Real-world uses of SRCU {#real-world-uses-of-srcu}
 
 **VFS path lookup**: The kernel uses SRCU for namespaces where locks might be needed during the read-side:
 
@@ -137,7 +137,7 @@ int path_mount(const char *dev_name, struct path *path, ...)
 
 **Module unload**: SRCU allows holding a reference to a module while sleeping, preventing the module from being unloaded mid-operation.
 
-## Observing SRCU
+## Observing SRCU {#observing-srcu}
 
 ```bash
 # SRCU grace period statistics
@@ -152,7 +152,7 @@ dmesg | grep "SRCU stall"
 # echo 1 > /sys/kernel/debug/rcu/rcu_urgent_qs
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [RCU](rcu.md) — classic RCU for non-sleeping read-side
 - [Mutex](mutex.md) — blocking mutual exclusion

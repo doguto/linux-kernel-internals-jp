@@ -1,8 +1,8 @@
-# BPF/eBPF
+# BPF/eBPF {#bpfebpf}
 
 > Safe, programmable hooks into the Linux kernel
 
-## What is eBPF?
+## What is eBPF? {#what-is-ebpf}
 
 eBPF (extended Berkeley Packet Filter) lets you run sandboxed programs in the kernel without writing kernel modules. Programs are:
 
@@ -35,7 +35,7 @@ Userspace                          Kernel
  Attach to hook
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -50,7 +50,7 @@ Userspace                          Kernel
 | [BPF Networking](bpf-networking.md) | TC, cgroup hooks, sockmap |
 | [War Stories](war-stories.md) | Verifier CVEs, Spectre in BPF, and why unprivileged BPF was turned off by default |
 
-## Quick orientation
+## Quick orientation {#quick-orientation}
 
 **Where BPF hooks in:**
 

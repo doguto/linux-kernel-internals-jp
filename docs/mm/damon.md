@@ -1,8 +1,8 @@
-# DAMON: Data Access Monitoring
+# DAMON: Data Access Monitoring {#damon-data-access-monitoring}
 
 > A lightweight, accurate, and scalable kernel framework for observing how memory is accessed — and acting on that knowledge
 
-## What Is DAMON?
+## What Is DAMON? {#what-is-damon}
 
 DAMON (Data Access MONitoring) is a kernel subsystem that tracks how frequently each memory region is accessed at runtime. It is **not** a reclaim policy on its own. Instead, it is a monitoring framework that produces access-frequency data which other subsystems — most importantly DAMOS (DAMON-based Operation Schemes) — can act on.
 
@@ -27,9 +27,9 @@ which regions are truly cold.         │  targets cold regions        │
 
 ---
 
-## Core Concepts
+## Core Concepts {#core-concepts}
 
-### Regions: The Unit of Monitoring
+### Regions: The Unit of Monitoring {#regions-the-unit-of-monitoring}
 
 DAMON divides a monitoring target's address space into a list of `struct damon_region` objects. Each region represents a contiguous address range `[ar.start, ar.end)` and carries:
 
@@ -40,7 +40,7 @@ DAMON divides a monitoring target's address space into a list of `struct damon_r
 
 For virtual address monitoring (`DAMON_OPS_VADDR`), DAMON initialises regions from the process's VMAs. For physical address monitoring (`DAMON_OPS_PADDR`), regions are initialised to cover the target physical address range.
 
-### Sampling: Catching Accesses
+### Sampling: Catching Accesses {#sampling-catching-accesses}
 
 Every `sample_interval` microseconds (field `damon_attrs.sample_interval`), the kdamond thread:
 
@@ -50,7 +50,7 @@ Every `sample_interval` microseconds (field `damon_attrs.sample_interval`), the 
 
 The default `sample_interval` is 5,000 µs (5 ms).
 
-### Aggregation: Building the Picture
+### Aggregation: Building the Picture {#aggregation-building-the-picture}
 
 Every `aggr_interval` microseconds (`damon_attrs.aggr_interval`), DAMON:
 
@@ -61,7 +61,7 @@ Every `aggr_interval` microseconds (`damon_attrs.aggr_interval`), DAMON:
 
 The default `aggr_interval` is 100,000 µs (100 ms), meaning each reported `nr_accesses` value represents accesses observed over the last 20 sampling intervals (`100 ms / 5 ms`).
 
-### Adaptive Region Sizing
+### Adaptive Region Sizing {#adaptive-region-sizing}
 
 DAMON maintains `damon_attrs.min_nr_regions` and `damon_attrs.max_nr_regions` bounds (defaults: 10 and 1,000). After each aggregation it adjusts regions:
 
@@ -73,7 +73,7 @@ This keeps the total region count within bounds while concentrating resolution w
 !!! tip "Minimum region size"
     `DAMON_MIN_REGION_SZ` is `PAGE_SIZE`. No region can be smaller than one page. The field `damon_ctx.min_region_sz` stores this lower bound.
 
-### Intervals Auto-tuning
+### Intervals Auto-tuning {#intervals-auto-tuning}
 
 DAMON can automatically tune `sample_interval` and `aggr_interval` together. The goal is expressed as a `struct damon_intervals_goal`:
 
@@ -88,7 +88,7 @@ If `aggrs` is zero, auto-tuning is disabled. Via sysfs, these fields appear unde
 
 ---
 
-## Architecture
+## Architecture {#architecture}
 
 ```mermaid
 graph TD
@@ -110,7 +110,7 @@ graph TD
     M -->|action| N[DAMOS_PAGEOUT\nDAMOS_LRU_PRIO\nDAMOS_MIGRATE_COLD\n...]
 ```
 
-### The `damon_ctx` Structure
+### The `damon_ctx` Structure {#the-damon_ctx-structure}
 
 Every monitoring session is anchored by a `struct damon_ctx` (`include/linux/damon.h`):
 
@@ -127,7 +127,7 @@ struct damon_ctx {
 };
 ```
 
-### The kdamond Thread
+### The kdamond Thread {#the-kdamond-thread}
 
 Each `damon_ctx` gets exactly one kernel thread — kdamond. Its main loop (in `mm/damon/core.c`) runs as:
 
@@ -147,7 +147,7 @@ while (!should_stop):
 
 The thread is started by `damon_start()` and stopped by `damon_stop()`. While running, all external access to `damon_ctx` internals must go through `damon_call()` or `damos_walk()` to serialize with the kdamond loop.
 
-### Operations Sets (`damon_operations`)
+### Operations Sets (`damon_operations`) {#operations-sets-damon_operations}
 
 DAMON separates the monitoring algorithm from address-space specifics via `struct damon_operations`:
 
@@ -182,7 +182,7 @@ Both `vaddr` and `paddr` use the page idle flag (`PAGE_IDLE_FLAG`) to detect acc
 
 ---
 
-## DAMOS: Data Access Monitoring-based Operation Schemes
+## DAMOS: Data Access Monitoring-based Operation Schemes {#damos-data-access-monitoring-based-operation-schemes}
 
 DAMOS is the policy engine layered on top of DAMON's monitoring data. A DAMOS scheme (`struct damos`) specifies:
 
@@ -191,7 +191,7 @@ DAMOS is the policy engine layered on top of DAMON's monitoring data. A DAMOS sc
 3. How aggressively to act (quota)
 4. Under what system conditions to activate (watermarks)
 
-### Access Pattern
+### Access Pattern {#access-pattern}
 
 `struct damos_access_pattern` selects regions whose metrics fall within all of these ranges:
 
@@ -203,7 +203,7 @@ DAMOS is the policy engine layered on top of DAMON's monitoring data. A DAMOS sc
 
 A cold region that has never been accessed since DAMON started would have `nr_accesses == 0` and a large `age`. A frequently-accessed hot region has high `nr_accesses` and resets its `age` often.
 
-### Actions
+### Actions {#actions}
 
 The `enum damos_action` values and their effects:
 
@@ -223,7 +223,7 @@ The `enum damos_action` values and their effects:
 !!! warning "DAMOS_PAGEOUT does not demote"
     `DAMOS_PAGEOUT` reclaims pages to swap. It does **not** demote to a slower NUMA tier. For tiered-memory demotion use `DAMOS_MIGRATE_COLD`.
 
-### Quotas
+### Quotas {#quotas}
 
 Without limits, DAMOS could apply its action to gigabytes of memory per second. `struct damos_quota` rate-limits it:
 
@@ -239,7 +239,7 @@ Without limits, DAMOS could apply its action to gigabytes of memory per second. 
 
 When a quota is reached, DAMON stops applying the action for the remainder of the `reset_interval` and increments `damos_stat.qt_exceeds`.
 
-#### Quota Auto-tuning with Goals
+#### Quota Auto-tuning with Goals {#quota-auto-tuning-with-goals}
 
 Instead of (or in addition to) hard `ms`/`sz` caps, DAMOS can auto-tune the effective quota using a feedback loop. Goals are expressed as `struct damos_quota_goal` objects. Available goal metrics (`enum damos_quota_goal_metric`):
 
@@ -256,7 +256,7 @@ Instead of (or in addition to) hard `ms`/`sz` caps, DAMOS can auto-tune the effe
 
 DAMOS increases or decreases the effective quota so that the observed metric value converges toward `target_value`.
 
-### Watermarks
+### Watermarks {#watermarks}
 
 `struct damos_watermarks` controls whether a scheme is active based on a system-level metric:
 
@@ -270,7 +270,7 @@ DAMOS increases or decreases the effective quota so that the observed metric val
 
 When all schemes of a context are inactive (watermarks not met), kdamond stops monitoring and only polls the watermarks — greatly reducing overhead.
 
-### DAMOS Filters
+### DAMOS Filters {#damos-filters}
 
 Before applying an action to a region, DAMOS can test individual pages within the region against filters (`struct damos_filter`). Filter types (`enum damos_filter_type`):
 
@@ -292,11 +292,11 @@ Each filter has a `matching` bool (apply to matching pages vs. non-matching) and
 
 ---
 
-## The sysfs Interface
+## The sysfs Interface {#the-sysfs-interface}
 
 `CONFIG_DAMON_SYSFS` exposes the full DAMON API under `/sys/kernel/mm/damon/admin/`. All monitoring is controlled by reading and writing files in this hierarchy.
 
-### Directory Tree
+### Directory Tree {#directory-tree}
 
 ```
 /sys/kernel/mm/damon/admin/
@@ -412,7 +412,7 @@ Each filter has a `matching` bool (apply to matching pages vs. non-matching) and
                                 └── sz_filter_passed
 ```
 
-### kdamond State Commands
+### kdamond State Commands {#kdamond-state-commands}
 
 Write one of these strings to `kdamonds/0/state`:
 
@@ -431,9 +431,9 @@ Write one of these strings to `kdamonds/0/state`:
 
 ---
 
-## Practical Examples
+## Practical Examples {#practical-examples}
 
-### 1. Proactive Reclaim: Page Out Cold Pages
+### 1. Proactive Reclaim: Page Out Cold Pages {#1-proactive-reclaim-page-out-cold-pages}
 
 This example sets up a physical-address DAMOS scheme that pages out memory regions not accessed for approximately 120 seconds. It mirrors what `CONFIG_DAMON_RECLAIM` does internally.
 
@@ -506,7 +506,7 @@ echo "Bytes applied:   $(cat $STATS/sz_applied)"
 echo "Quota exceeded:  $(cat $STATS/qt_exceeds)"
 ```
 
-### 2. Working Set Estimation: Count Accesses by Region
+### 2. Working Set Estimation: Count Accesses by Region {#2-working-set-estimation-count-accesses-by-region}
 
 Use `DAMOS_STAT` to observe which regions are hot without taking any action:
 
@@ -546,7 +546,7 @@ for dir in $SCHEME/tried_regions/[0-9]*/; do
 done
 ```
 
-### 3. Memory Tiering: Demote Cold Pages to Slow NUMA Memory
+### 3. Memory Tiering: Demote Cold Pages to Slow NUMA Memory {#3-memory-tiering-demote-cold-pages-to-slow-numa-memory}
 
 For systems with CXL-attached memory or slow NUMA nodes, use `DAMOS_MIGRATE_COLD` to demote cold pages:
 
@@ -585,9 +585,9 @@ echo on > $ADMIN/kdamonds/0/state
 
 ---
 
-## Built-in DAMOS Modules
+## Built-in DAMOS Modules {#built-in-damos-modules}
 
-### CONFIG_DAMON_RECLAIM
+### CONFIG_DAMON_RECLAIM {#configdamonreclaim}
 
 `DAMON_RECLAIM` (`mm/damon/reclaim.c`) is a prebuilt kernel module that runs a `DAMOS_PAGEOUT` scheme against the physical address space. It is designed for proactive, lightweight reclaim under mild memory pressure, complementing `kswapd`'s reactive scanning.
 
@@ -622,7 +622,7 @@ echo Y > /sys/module/damon_reclaim/parameters/commit_inputs
 !!! warning "When to use DAMON_RECLAIM vs. direct sysfs configuration"
     `DAMON_RECLAIM` is a coarse-grained knob for system-wide proactive reclaim. If you need fine-grained control — per-cgroup targeting, custom watermarks, multiple schemes, or migration rather than swap — configure DAMON directly via the sysfs interface.
 
-### CONFIG_DAMON_LRU_SORT
+### CONFIG_DAMON_LRU_SORT {#configdamonlru_sort}
 
 `DAMON_LRU_SORT` (`mm/damon/lru_sort.c`) uses two DAMOS schemes to influence the LRU lists before `kswapd` sees them: hot pages are prioritized (`DAMOS_LRU_PRIO`) and cold pages are deprioritized (`DAMOS_LRU_DEPRIO`). This makes subsequent kswapd reclaim more precise without bypassing the LRU machinery.
 
@@ -636,7 +636,7 @@ Key module parameters (`/sys/module/damon_lru_sort/parameters/`):
 | `active_mem_bp` | 0 (disabled) | Auto-tune to achieve this active/total LRU ratio |
 | `autotune_monitoring_intervals` | `N` | Automatically tune sample/aggr intervals |
 
-### CONFIG_DAMON_STAT
+### CONFIG_DAMON_STAT {#configdamonstat}
 
 `DAMON_STAT` (`mm/damon/stat.c`) runs DAMON against the physical address space and exposes aggregated access statistics as simple metrics, useful for observability without taking any memory management action.
 
@@ -646,7 +646,7 @@ Key module parameters (`/sys/module/damon_lru_sort/parameters/`):
 
 ---
 
-## DAMON and MGLRU
+## DAMON and MGLRU {#damon-and-mglru}
 
 DAMON and Multi-Generational LRU (MGLRU) both track memory access patterns, but at different granularities and for different purposes:
 
@@ -666,7 +666,7 @@ They complement each other: MGLRU efficiently orders pages for reclaim within th
 
 ---
 
-## Performance Overhead
+## Performance Overhead {#performance-overhead}
 
 DAMON's overhead is primarily controlled by three parameters:
 
@@ -688,7 +688,7 @@ Typical configurations achieve well under 1% CPU overhead. The `DAMON_RECLAIM` d
 
 ---
 
-## Kernel Configuration
+## Kernel Configuration {#kernel-configuration}
 
 | Config option | Description | Depends on |
 |---|---|---|
@@ -706,7 +706,7 @@ Typical configurations achieve well under 1% CPU overhead. The `DAMON_RECLAIM` d
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Role |
 |---|---|
@@ -724,20 +724,20 @@ Typical configurations achieve well under 1% CPU overhead. The `DAMON_RECLAIM` d
 | `mm/damon/modules-common.c` | Shared helpers for the built-in modules |
 | `mm/damon/Kconfig` | All `CONFIG_DAMON_*` options |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - `Documentation/admin-guide/mm/damon/` — administrator guide covering DAMON concepts, the sysfs interface, DAMOS scheme configuration, and the built-in modules (`DAMON_RECLAIM`, `DAMON_LRU_SORT`, `DAMON_STAT`)
 - `Documentation/mm/damon/design.rst` — design document describing the adaptive region-based sampling algorithm, the monitoring operations abstraction, and the DAMOS engine
 - [mm/damon/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/damon) — full DAMON implementation: core sampling loop, virtual and physical address ops, sysfs interface, and built-in scheme modules
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Memory-management optimization with DAMON](https://lwn.net/Articles/812707/) — Jonathan Corbet's overview of DAMON's design and access-monitoring approach (2020)
 - [Using DAMON for proactive reclaim](https://lwn.net/Articles/863753/) — how `DAMON_RECLAIM` was developed and evaluated against `kswapd`-only reclaim (2021)
 
-### Related docs
+### Related docs {#related-docs}
 
 - [reclaim.md](reclaim.md) — page reclaim; DAMON_RECLAIM targets cold pages identified by DAMON rather than relying solely on LRU age
 - [psi.md](psi.md) — pressure stall information; DAMON_RECLAIM can auto-tune its quota using PSI memory pressure as feedback

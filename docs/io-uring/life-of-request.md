@@ -1,8 +1,8 @@
-# Life of an io_uring request
+# Life of an io_uring request {#life-of-an-io_uring-request}
 
 > Tracing a single read from SQE submission to CQE completion
 
-## What happens when you submit an io_uring read?
+## What happens when you submit an io_uring read? {#what-happens-when-you-submit-an-io_uring-read}
 
 When a program submits a read via io_uring, it writes a Submission Queue Entry (SQE) into a shared-memory ring, then optionally calls `io_uring_enter(2)` to hand control to the kernel. The kernel picks up the SQE, attempts to execute the read immediately (the inline fast path), and if that would block, offloads the work to an io-wq worker thread. Either way, when the read finishes the kernel writes a Completion Queue Entry (CQE) into the completion ring, and userspace reaps it.
 
@@ -30,9 +30,9 @@ flowchart TD
 
 The key insight: **io_uring decouples submission from completion**. The application never blocks inside the syscall waiting for a disk read to finish. It submits, does other work, and harvests completions when it is ready.
 
-## Preparing the SQE
+## Preparing the SQE {#preparing-the-sqe}
 
-### struct io_uring_sqe field layout
+### struct io_uring_sqe field layout {#struct-iouringsqe-field-layout}
 
 The SQE is a 64-byte structure defined in `include/uapi/linux/io_uring.h`:
 
@@ -74,7 +74,7 @@ struct io_uring_sqe {
 
 For a read operation, the meaningful fields are: `opcode`, `fd`, `off`, `addr`, `len`, `rw_flags`, and `user_data`.
 
-### What io_uring_prep_read sets
+### What io_uring_prep_read sets {#what-iouringprep_read-sets}
 
 liburing's `io_uring_prep_read()` is a thin wrapper that sets those fields:
 
@@ -107,7 +107,7 @@ static inline void io_uring_prep_rw(int op,
 
 After returning, the caller sets `sqe->user_data` to a correlation tag — typically a pointer to an application-level request struct or a monotonic counter — so it can match the CQE back to the right operation.
 
-### user_data for request correlation
+### user_data for request correlation {#user_data-for-request-correlation}
 
 `user_data` is the only field the kernel copies unchanged from SQE to CQE. Nothing inside the kernel interprets it; it is purely a cookie for the application:
 
@@ -128,7 +128,7 @@ io_uring_wait_cqe(&ring, &cqe);
 struct my_request *completed = (struct my_request *)(uintptr_t) cqe->user_data;
 ```
 
-### SQE flags
+### SQE flags {#sqe-flags}
 
 The `flags` byte controls request-level behaviours independent of the opcode:
 
@@ -142,7 +142,7 @@ The `flags` byte controls request-level behaviours independent of the opcode:
 | `IOSQE_BUFFER_SELECT` | Let the kernel pick a buffer from a registered buffer group (`buf_group`) |
 | `IOSQE_CQE_SKIP_SUCCESS` | Do not post a CQE if the operation succeeds (useful in linked chains) |
 
-### The SQ ring as a producer-consumer queue
+### The SQ ring as a producer-consumer queue {#the-sq-ring-as-a-producer-consumer-queue}
 
 The SQ ring is a pair of monotonically-increasing head and tail counters in shared memory. Userspace is the sole producer; the kernel is the sole consumer:
 
@@ -159,9 +159,9 @@ SQ ring in shared memory:
 
 Userspace publishes the SQE with a store-release on `sq_ring->tail`; the kernel reads it with a load-acquire. No locks are taken on the hot path.
 
-## Submission — entering the kernel
+## Submission — entering the kernel {#submission-entering-the-kernel}
 
-### io_uring_enter(2)
+### io_uring_enter(2) {#iouringenter2}
 
 After advancing the SQ tail, the application calls:
 
@@ -185,7 +185,7 @@ int io_uring_enter(unsigned int fd,
 io_uring_enter(ring_fd, 4, 1, IORING_ENTER_GETEVENTS, NULL, 0);
 ```
 
-### Kernel entry point
+### Kernel entry point {#kernel-entry-point}
 
 The syscall lands in `io_uring/io_uring.c`:
 
@@ -209,7 +209,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 }
 ```
 
-### io_submit_sqes → io_queue_sqe → io_issue_sqe
+### io_submit_sqes → io_queue_sqe → io_issue_sqe {#iosubmitsqes-ioqueuesqe-ioissuesqe}
 
 `io_submit_sqes()` loops over `to_submit` entries, calling `io_queue_sqe()` for each, which in turn calls `io_issue_sqe()`:
 
@@ -240,7 +240,7 @@ static void io_queue_sqe(struct io_ring_ctx *ctx, struct io_kiocb *req)
 
 `IO_URING_F_NONBLOCK` tells the per-opcode handler to use `IOCB_NOWAIT` semantics: if the operation would block, return `-EAGAIN` immediately rather than sleeping. That `-EAGAIN` is the signal to fall back to io-wq.
 
-### The SQPOLL path (no syscall required)
+### The SQPOLL path (no syscall required) {#the-sqpoll-path-no-syscall-required}
 
 With `IORING_SETUP_SQPOLL`, `io_uring_setup()` creates a kernel thread (`io_sq_data`) that polls the SQ ring in a tight loop. Userspace simply writes the SQE and advances `sq_ring->tail`; the kernel thread sees it without any syscall:
 
@@ -269,9 +269,9 @@ static int io_sq_thread(void *data)
 
 Userspace must check `sq_ring->flags & IORING_SQ_NEED_WAKEUP` after each batch; if the bit is set, it must call `io_uring_enter()` with `IORING_ENTER_SQ_WAKEUP` to wake the kernel thread.
 
-## Request dispatch — the inline fast path
+## Request dispatch — the inline fast path {#request-dispatch-the-inline-fast-path}
 
-### io_read in io_uring/rw.c
+### io_read in io_uring/rw.c {#ioread-in-iouringrwc}
 
 For `IORING_OP_READ`, `io_issue_sqe()` calls the `io_read` handler in `io_uring/rw.c`:
 
@@ -313,7 +313,7 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
 
 `call_read_iter()` calls `file->f_op->read_iter()`, which routes to the same `generic_file_read_iter()` path a plain `read(2)` would take — including the page cache lookup.
 
-### Conditions for staying on the inline fast path
+### Conditions for staying on the inline fast path {#conditions-for-staying-on-the-inline-fast-path}
 
 The operation stays inline (no io-wq) when:
 
@@ -336,9 +336,9 @@ flowchart TD
     G --> H["io_queue_async()\nio_wq_enqueue(req)"]
 ```
 
-## Request dispatch — the io-wq async path
+## Request dispatch — the io-wq async path {#request-dispatch-the-io-wq-async-path}
 
-### When inline fails
+### When inline fails {#when-inline-fails}
 
 The inline attempt returns `-EAGAIN` when:
 
@@ -347,7 +347,7 @@ The inline attempt returns `-EAGAIN` when:
 - The filesystem itself returns `-EAGAIN` because it is holding a lock that would sleep (e.g., during certain ext4 journal operations).
 - The SQE has `IOSQE_ASYNC` set, forcing async unconditionally.
 
-### Enqueuing to io-wq
+### Enqueuing to io-wq {#enqueuing-to-io-wq}
 
 When `io_issue_sqe()` gets `-EAGAIN` back from the opcode handler, it calls into `io_uring/io_uring.c`:
 
@@ -383,7 +383,7 @@ void io_wq_enqueue(struct io_wq *wq, struct io_wq_work *work)
 }
 ```
 
-### The io-wq thread pool
+### The io-wq thread pool {#the-io-wq-thread-pool}
 
 io-wq maintains two classes of workers:
 
@@ -394,7 +394,7 @@ io-wq maintains two classes of workers:
 
 Workers are created lazily and reaped after a configurable idle timeout. The maximum number of bounded workers can be tuned with `io_uring_register(IORING_REGISTER_IOWQ_MAX_WORKERS)`.
 
-### Credential inheritance
+### Credential inheritance {#credential-inheritance}
 
 Each io-wq worker inherits the credentials of the task that submitted the request (`req->creds`), set during `io_init_req()`:
 
@@ -411,9 +411,9 @@ static void io_init_req(struct io_ring_ctx *ctx,
 
 The worker calls `override_creds(req->creds)` before executing the request, ensuring file permission checks see the submitting task's uid/gid, not the worker's.
 
-## Execution in io-wq
+## Execution in io-wq {#execution-in-io-wq}
 
-### The worker executes the same io_read path
+### The worker executes the same io_read path {#the-worker-executes-the-same-io_read-path}
 
 The io-wq worker calls back into the same opcode dispatch table, this time without `IO_URING_F_NONBLOCK`:
 
@@ -436,7 +436,7 @@ static void io_worker_handle_work(struct io_worker *worker,
 
 This calls `io_read()` again. This time `IOCB_NOWAIT` is not set in the kiocb, so `call_read_iter()` is free to block.
 
-### The page fault path
+### The page fault path {#the-page-fault-path}
 
 If the page is not in the page cache, `filemap_read()` calls into the readahead engine and then blocks on `folio_wait_locked()` until the disk I/O completes:
 
@@ -466,13 +466,13 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 
 The io-wq worker sleeps inside `folio_wait_locked()`. The block layer completes the I/O, wakes the folio's waitqueue, and the worker resumes and copies the data.
 
-### O_DIRECT in io-wq
+### O_DIRECT in io-wq {#o_direct-in-io-wq}
 
 For `O_DIRECT` files, `generic_file_read_iter()` bypasses the page cache entirely and calls `mapping_direct_IO()`, which builds a `bio` and submits it to the block layer. The worker blocks on the bio completion. This is the dominant path for high-performance database workloads using io_uring.
 
-## Completion — posting the CQE
+## Completion — posting the CQE {#completion-posting-the-cqe}
 
-### io_req_complete_post
+### io_req_complete_post {#ioreqcomplete_post}
 
 When `io_read()` finishes (inline or in io-wq), it calls `io_req_complete_post()`:
 
@@ -493,7 +493,7 @@ void io_req_complete_post(struct io_kiocb *req, s32 res)
 }
 ```
 
-### io_fill_cqe_req
+### io_fill_cqe_req {#iofillcqe_req}
 
 This writes the CQE into the ring:
 
@@ -519,7 +519,7 @@ static bool io_fill_cqe_req(struct io_ring_ctx *ctx,
 }
 ```
 
-### io_commit_cqring — the store-release
+### io_commit_cqring — the store-release {#iocommitcqring-the-store-release}
 
 After writing the CQE fields, `io_commit_cqring()` advances the CQ tail with a store-release, making the entry visible to userspace:
 
@@ -531,7 +531,7 @@ static void io_commit_cqring(struct io_ring_ctx *ctx)
 }
 ```
 
-### The CQ ring as a producer-consumer queue
+### The CQ ring as a producer-consumer queue {#the-cq-ring-as-a-producer-consumer-queue}
 
 The CQ ring is the mirror image of the SQ ring. The kernel is the sole producer; userspace is the sole consumer:
 
@@ -547,7 +547,7 @@ CQ ring in shared memory:
 
 If userspace is too slow and the CQ ring fills up, the kernel increments `cq_ring->overflow` (the "CQ overflow" counter). With `IORING_SETUP_CQ_NODROP` (implied by `IORING_FEAT_NODROP` on supported kernels), overflowed CQEs are buffered internally and drained when space becomes available.
 
-### IORING_CQE_F_MORE for multishot operations
+### IORING_CQE_F_MORE for multishot operations {#ioringcqef_more-for-multishot-operations}
 
 For multishot operations (e.g., `IORING_OP_RECV` with `IORING_RECV_MULTISHOT`), the kernel may post multiple CQEs from a single SQE. As long as the operation is still active, each CQE has `IORING_CQE_F_MORE` set in `cqe->flags`. When the final CQE arrives (due to error or explicit cancellation), `IORING_CQE_F_MORE` is clear.
 
@@ -559,9 +559,9 @@ struct io_uring_cqe {
 };
 ```
 
-## Reaping the CQE
+## Reaping the CQE {#reaping-the-cqe}
 
-### io_uring_peek_cqe and io_uring_wait_cqe
+### io_uring_peek_cqe and io_uring_wait_cqe {#iouringpeekcqe-and-iouringwaitcqe}
 
 liburing provides two primitives for harvesting completions:
 
@@ -593,7 +593,7 @@ static inline int io_uring_peek_cqe(struct io_uring *ring,
 
 `io_uring_wait_cqe()` falls back to `io_uring_enter()` with `IORING_ENTER_GETEVENTS` and `min_complete=1` if the ring is empty, putting the task to sleep until the kernel posts a CQE.
 
-### io_uring_cqe_seen — advancing the CQ head
+### io_uring_cqe_seen — advancing the CQ head {#iouringcqe_seen-advancing-the-cq-head}
 
 After processing a CQE, the application must call `io_uring_cqe_seen()` to mark it consumed:
 
@@ -611,7 +611,7 @@ static inline void io_uring_cqe_seen(struct io_uring *ring,
 
 The store-release ensures the kernel does not overwrite the CQE slot before userspace has read it.
 
-### Waiting with a timeout
+### Waiting with a timeout {#waiting-with-a-timeout}
 
 To avoid blocking indefinitely, pass a `__kernel_timespec` via `IORING_ENTER_EXT_ARG`:
 
@@ -629,7 +629,7 @@ io_uring_enter(ring_fd, 0, 1,
 
 Or use liburing's `io_uring_wait_cqe_timeout()`, which wraps this.
 
-## The zero-syscall path — SQPOLL in depth
+## The zero-syscall path — SQPOLL in depth {#the-zero-syscall-path-sqpoll-in-depth}
 
 With `IORING_SETUP_SQPOLL`, the entire submit-and-complete cycle can run without any syscall:
 
@@ -671,9 +671,9 @@ liburing's `io_uring_submit()` performs this check automatically.
 
 **When SQPOLL does not help**: bursty workloads with long idle periods between bursts. The SQPOLL thread wastes CPU spinning if submissions are infrequent. In that case, regular `io_uring_enter()` submission is more appropriate.
 
-## Key data structures
+## Key data structures {#key-data-structures}
 
-### struct io_ring_ctx — the kernel-side ring context
+### struct io_ring_ctx — the kernel-side ring context {#struct-ioringctx-the-kernel-side-ring-context}
 
 `struct io_ring_ctx` is allocated once per `io_uring_setup()` call and anchors all kernel-side state:
 
@@ -714,7 +714,7 @@ struct io_ring_ctx {
 };
 ```
 
-### struct io_kiocb — the kernel-side request
+### struct io_kiocb — the kernel-side request {#struct-io_kiocb-the-kernel-side-request}
 
 Each submitted SQE is represented internally as a `struct io_kiocb` ("kiocb" because it embeds a `struct kiocb` for VFS integration):
 
@@ -754,7 +754,7 @@ struct io_kiocb {
 };
 ```
 
-### Relationship between structures
+### Relationship between structures {#relationship-between-structures}
 
 ```mermaid
 flowchart LR
@@ -781,9 +781,9 @@ flowchart LR
 
 `struct io_kiocb` lives in a slab cache managed by the ring context. It is allocated at submission time, lives through the entire request lifetime (inline or io-wq), and is freed after `io_fill_cqe_req()` returns.
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### strace an io_uring program
+### strace an io_uring program {#strace-an-io_uring-program}
 
 ```bash
 # Build a minimal io_uring read program (with liburing)
@@ -802,7 +802,7 @@ strace -e trace=io_uring_setup,io_uring_enter,io_uring_register ./your-program
 
 With SQPOLL enabled, you will see `io_uring_setup` and the initial mmaps, but no `io_uring_enter` for individual operations.
 
-### /proc/PID/fdinfo/\<ring_fd\>
+### /proc/PID/fdinfo/\<ring_fd\> {#procpidfdinfo}
 
 The kernel exposes ring state via fdinfo:
 
@@ -828,7 +828,7 @@ cat /proc/$(pgrep your-program)/fdinfo/3
 
 A non-zero `cq_overflow` means CQEs were posted faster than userspace consumed them — the most common cause of missed completions.
 
-### ftrace io_uring tracepoints
+### ftrace io_uring tracepoints {#ftrace-io_uring-tracepoints}
 
 The kernel has a full set of tracepoints for io_uring activity:
 
@@ -866,7 +866,7 @@ io_uring_complete:     ring 0xffff... req 0xffff... user_data=0x1 res=4096 cflag
 
 A `io_uring_queue_async_work` line between submit and complete means the request hit the io-wq path (the page was not in cache or the device blocked). Absence of that line means the inline fast path was taken.
 
-### Measure inline vs async split
+### Measure inline vs async split {#measure-inline-vs-async-split}
 
 ```bash
 # Count how often requests go async
@@ -879,7 +879,7 @@ perf stat -e 'io_uring:io_uring_queue_async_work' \
 # A warm-cache workload should show close to 0% async.
 ```
 
-### Inspect io-wq worker count
+### Inspect io-wq worker count {#inspect-io-wq-worker-count}
 
 ```bash
 # While a workload is running, check how many io-wq workers exist
@@ -891,7 +891,7 @@ ps -eLf | grep iou-wrk
 
 io-wq worker threads appear as `iou-wrk-<ring_pid>` in `ps` output. Under a heavy parallel read workload against cold storage you may see several; under a cached workload you should see none (all completions are inline).
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What it contains |
 |------|-----------------|
@@ -903,19 +903,19 @@ io-wq worker threads appear as `iou-wrk-<ring_pid>` in `ps` output. Under a heav
 | [`include/uapi/linux/io_uring.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/io_uring.h) | ABI: `struct io_uring_sqe`, `struct io_uring_cqe`, `IORING_*` constants |
 | [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | `filemap_read()`, `filemap_get_folio()` — executed by io-wq workers |
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 The io_uring request path is complex: it crosses the userspace/kernel boundary, involves shared mutable memory, a thread pool, and touches the VFS. Several categories of bugs have emerged.
 
 ---
 
-### Case 1: Inline completion and CQ ring overflow
+### Case 1: Inline completion and CQ ring overflow {#case-1-inline-completion-and-cq-ring-overflow}
 
-#### What happened
+#### What happened {#what-happened}
 
 If userspace is slow to consume CQEs, the CQ ring can fill up. On kernels without `IORING_FEAT_NODROP`, the kernel would silently drop CQEs that did not fit, incrementing the overflow counter. Requests completed successfully in the kernel, but userspace never saw the result.
 
-#### The bug
+#### The bug {#the-bug}
 
 Without `IORING_FEAT_NODROP`, a program that submits faster than it reaps will silently lose completions:
 
@@ -926,7 +926,7 @@ for (int i = 0; i < 1000; i++)
 /* If CQ ring (default 2x SQ entries) fills up, completions are dropped */
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 Any application that submits bursts of requests and reaps lazily must either:
 
@@ -934,19 +934,19 @@ Any application that submits bursts of requests and reaps lazily must either:
 - Interleave reaping with submission, or
 - Rely on `IORING_FEAT_NODROP` (available since kernel 5.5), which buffers overflowed CQEs internally.
 
-#### Mitigation
+#### Mitigation {#mitigation}
 
 Check `io_uring_params.features & IORING_FEAT_NODROP` at setup time. On older kernels, monitor `cq_overflow` in `/proc/PID/fdinfo/<ring_fd>` and alert if it is non-zero.
 
 ---
 
-### Case 2: Fixed file table races during unregistration
+### Case 2: Fixed file table races during unregistration {#case-2-fixed-file-table-races-during-unregistration}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 When userspace registers a file table with `io_uring_register(IORING_REGISTER_FILES)` and then unregisters while requests using those files are still in-flight (via io-wq), there is a window where the file pointer can be freed while the worker is still holding it.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 The kernel uses reference counting on `io_rsrc_data` to keep the file table alive until all in-flight requests complete. Bugs in the reference counting have caused use-after-free in the fixed file path:
 
@@ -956,23 +956,23 @@ io_uring_register(ring_fd, IORING_UNREGISTER_FILES, NULL, 0);
 /* Worker thread may still be executing with the just-freed file table */
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 Use-after-free in kernel code typically means exploitable privilege escalation or kernel crash. Several CVEs have been filed against io_uring's resource management code.
 
-#### Mitigation
+#### Mitigation {#mitigation_1}
 
 Always drain in-flight requests (`io_uring_register(IORING_REGISTER_SYNC_CANCEL)` or submit a barrier SQE with `IOSQE_IO_DRAIN`) before unregistering resources.
 
 ---
 
-### Case 3: SQPOLL CPU pinning and missed wakeups
+### Case 3: SQPOLL CPU pinning and missed wakeups {#case-3-sqpoll-cpu-pinning-and-missed-wakeups}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 When `IORING_SETUP_SQ_AFF` is set, the SQPOLL thread is pinned to a specific CPU. If that CPU goes offline (CPU hotplug), the SQPOLL thread stalls and the ring stops processing new SQEs — without any error to userspace.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 The SQPOLL thread uses `kthread_bind()` to pin to the requested CPU. If the CPU goes offline after setup:
 1. The SQPOLL thread is migrated off (or blocked) by the hotplug code.
@@ -980,19 +980,19 @@ The SQPOLL thread uses `kthread_bind()` to pin to the requested CPU. If the CPU 
 3. Userspace keeps writing SQEs that are never consumed.
 4. No CQEs are ever posted.
 
-#### Mitigation
+#### Mitigation {#mitigation_2}
 
 Avoid `IORING_SETUP_SQ_AFF` in environments with CPU hotplug (cloud VMs with vCPU resizing, containers with CPU pinning). If you must pin, monitor `sq_head` and `sq_tail` in fdinfo: if `tail - head` grows without bound, the SQPOLL thread has stalled.
 
 ---
 
-### Case 4: Credential confusion in personality-switched requests
+### Case 4: Credential confusion in personality-switched requests {#case-4-credential-confusion-in-personality-switched-requests}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 io_uring allows submitting requests under a different credential set via `personality` in the SQE combined with `io_uring_register(IORING_REGISTER_PERSONALITY)`. A bug could allow a less-privileged credential to be promoted to a more-privileged one if the personality index was not validated correctly.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 ```c
 sqe->personality = some_index;  /* which credential set to use */
@@ -1000,23 +1000,23 @@ sqe->personality = some_index;  /* which credential set to use */
 
 If `some_index` is out of bounds or maps to the wrong credential set due to a race during personality unregistration, the worker thread calls `override_creds()` with the wrong creds. In the worst case, a request executes with elevated privileges.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 Privilege escalation. Several security audits of io_uring have focused specifically on the personality mechanism, leading to tighter bounds checking and reference counting fixes.
 
-#### Mitigation
+#### Mitigation {#mitigation_3}
 
 Keep personality usage to a minimum; do not share ring file descriptors across trust boundaries. See [`io_uring/security.md`](security.md) in this documentation for the full threat model.
 
 ---
 
-### Case 5: io-wq worker count unbounded growth
+### Case 5: io-wq worker count unbounded growth {#case-5-io-wq-worker-count-unbounded-growth}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 If requests arrive faster than io-wq workers can complete them, and the per-ring worker limit is set too high (or not set), the kernel spawns many threads, exhausting the system's PID space or memory.
 
-#### The bug
+#### The bug {#the-bug_4}
 
 ```c
 /* No limit on workers — catastrophic under pathological workloads */
@@ -1025,7 +1025,7 @@ If requests arrive faster than io-wq workers can complete them, and the per-ring
 
 Under a workload that intentionally blocks many io-wq workers (e.g., many O_DIRECT reads to a very slow device), a buggy application can DoS the machine.
 
-#### Mitigation
+#### Mitigation {#mitigation_4}
 
 Set an explicit worker cap during setup:
 
@@ -1037,7 +1037,7 @@ io_uring_register(ring_fd, IORING_REGISTER_IOWQ_MAX_WORKERS,
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Root Cause | Impact | Prevention |
 |-----|------------|--------|------------|
@@ -1049,9 +1049,9 @@ io_uring_register(ring_fd, IORING_REGISTER_IOWQ_MAX_WORKERS,
 
 The common thread: **io_uring's performance comes from eliminating synchronization on the hot path, but that same design makes races and resource lifetime bugs harder to detect**. Careful use of the registration and cancellation APIs is essential for correctness.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [io_uring Architecture and Rings](io-uring-arch.md) — Ring layout, `io_uring_setup`, SQE/CQE structs
 - [Operations and Advanced Features](io-uring-ops.md) — Full opcode list, SQPOLL, fixed buffers, linked requests
@@ -1060,7 +1060,7 @@ The common thread: **io_uring's performance comes from eliminating synchronizati
 - [Security](security.md) — io_uring threat model and hardening
 - [Life of a file read](../mm/life-of-read.md) — The page cache path that io-wq workers traverse
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Ringing in a new asynchronous I/O API](https://lwn.net/Articles/776703/) (2019) — Original io_uring introduction by Jonathan Corbet
 - [The rapid growth of io_uring](https://lwn.net/Articles/810414/) (2020) — Feature expansion through 5.6

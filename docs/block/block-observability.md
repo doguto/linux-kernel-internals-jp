@@ -1,10 +1,10 @@
-# Block Layer Observability
+# Block Layer Observability {#block-layer-observability}
 
 > Seeing what the block layer is doing — from cheap aggregate counters up to per-request tracing
 
 Block I/O problems — a slow database, a stalling desktop, a saturated disk — are usually invisible at the application level, which only sees "the write took a long time." The block layer offers three levels of visibility to find out *why*: always-on aggregate counters, on-demand per-request tracing, and programmable tracepoints.
 
-## Level 1: aggregate counters
+## Level 1: aggregate counters {#level-1-aggregate-counters}
 
 Every block device exports cumulative counters through `/proc/diskstats` (and per-device `/sys/block/<dev>/stat`). Each line carries, among other fields: reads completed, reads merged, sectors read, milliseconds spent reading, the same four for writes, I/Os currently in flight, and total milliseconds the device has had I/O in progress.
 
@@ -19,7 +19,7 @@ iostat -x 1 /dev/nvme0n1
 - **`aqu-sz`** — average queue depth (how many I/Os were outstanding). Little's Law ties it to await × throughput.
 - **`%util`** — the fraction of time the device had at least one I/O in flight. On a single spinning disk, near 100% means saturated; on an NVMe device with many independent hardware queues, `%util` can read 100% while the device is far from its limit, so it is *not* a saturation signal for parallel devices. (Older `svctm` was removed for this same reason — it was misleading on modern hardware.)
 
-## Level 2: per-request tracing — blktrace
+## Level 2: per-request tracing — blktrace {#level-2-per-request-tracing-blktrace}
 
 When the aggregates say "await is high" but not *where* the time went, `blktrace` records an event for **every stage of every request**. `blkparse` renders the trace, and each line is tagged with an action letter — the stages a request passes through on its way down, exactly as traced in [Life of a Block I/O](life-of-block-io.md):
 
@@ -38,7 +38,7 @@ blktrace -d /dev/nvme0n1 -o - | blkparse -i -
 
 `btt` (block trace timeline) post-processes a capture into a latency breakdown by stage — most usefully **Q2D** (time from queue to dispatch: how long the block layer/scheduler held the I/O) versus **D2C** (dispatch to completion: time actually at the device). That single split answers the most common question: *is the latency in the kernel or in the hardware?*
 
-## Level 3: programmable tracing — tracepoints and BPF
+## Level 3: programmable tracing — tracepoints and BPF {#level-3-programmable-tracing-tracepoints-and-bpf}
 
 The same stages are exposed as static tracepoints — `block:block_rq_issue`, `block:block_rq_complete`, `block:block_bio_queue`, `block:block_rq_insert` — which any BPF tool can attach to without a full capture. The BCC / bpftrace suite turns them into focused answers:
 
@@ -54,7 +54,7 @@ biolatency -D 1
 bpftrace -e 'tracepoint:block:block_rq_complete { @[args->dev] = avg(nsecs); }'
 ```
 
-## Putting it together
+## Putting it together {#putting-it-together}
 
 A practical diagnosis flow:
 
@@ -62,7 +62,7 @@ A practical diagnosis flow:
 2. If it looks upstream, **`blktrace | btt`** and compare **Q2D vs D2C**. Large Q2D means the block layer is holding the I/O — check the [I/O scheduler](io-schedulers.md) and any [cgroup I/O throttling](blk-cgroup.md). Large D2C means the device (or its firmware) is the bottleneck.
 3. To attribute latency to *processes*, reach for **`biosnoop`** / **`biotop`**.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: procfs `diskstats`](https://docs.kernel.org/admin-guide/iostats.html) — the definitive field-by-field reference
 - [I/O Schedulers](io-schedulers.md) — where Q2D latency comes from

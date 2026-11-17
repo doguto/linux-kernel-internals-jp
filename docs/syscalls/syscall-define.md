@@ -1,8 +1,8 @@
-# SYSCALL_DEFINE and Dispatch
+# SYSCALL_DEFINE and Dispatch {#syscall_define-and-dispatch}
 
 > How syscalls are defined in C and wired into the dispatch table
 
-## SYSCALL_DEFINE macro
+## SYSCALL_DEFINE macro {#syscall_define-macro}
 
 Every syscall in the kernel is defined using a macro that:
 1. Creates a function with the right signature (`asmlinkage`)
@@ -28,7 +28,7 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr,
 
 The `__user` annotation marks pointers that point into userspace (not kernel memory). The sparse tool uses this to catch missing `copy_from_user` calls.
 
-### What SYSCALL_DEFINE expands to
+### What SYSCALL_DEFINE expands to {#what-syscall_define-expands-to}
 
 ```c
 /* SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf, size_t, count)
@@ -59,7 +59,7 @@ static long __do_sys_write(unsigned int fd, const char __user *buf, size_t count
  * audit hooks are wired in separately (see Syscall Auditing) */
 ```
 
-### Full example: sys_write
+### Full example: sys_write {#full-example-sys_write}
 
 ```c
 /* fs/read_write.c */
@@ -93,9 +93,9 @@ Note the `ksys_write()` wrapper: it allows calling the syscall logic from within
 
 `CLASS(fd_pos, f)(fd)` replaced the older `struct fd f = fdget_pos(fd); ... fdput_pos(f);` pattern: it's a scope-based cleanup guard (`DEFINE_CLASS`-generated) that calls `fdput_pos()` automatically when `f` goes out of scope, so every return path releases the reference without an explicit call. `fd_empty(f)`/`fd_file(f)` are the accessors for the guarded fd, replacing direct `f.file` access.
 
-## The syscall table
+## The syscall table {#the-syscall-table}
 
-### 64-bit: arch/x86/entry/syscalls/syscall_64.tbl
+### 64-bit: arch/x86/entry/syscalls/syscall_64.tbl {#64-bit-archx86entrysyscallssyscall_64tbl}
 
 ```
 # <number>  <abi>   <name>         <entry point>
@@ -127,7 +127,7 @@ const sys_call_ptr_t sys_call_table[] = {
 
 `sys_call_table[]` is no longer how dispatch actually happens — real dispatch (`do_syscall_64()` in the same file) goes through `x64_sys_call()`, a `switch` statement built from the same `<asm/syscalls_64.h>` include (`case nr: return __x64_##sym(regs);`). This replaced an indexed call through the function-pointer array specifically to avoid an *indirect* call: as [the commit that made the change](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2) explains, a `switch` lets the compiler emit conditional branches instead, and a misprediction there only speculatively runs the *wrong syscall* — a bounded, harmless outcome — rather than an indirect call mispredicting to attacker-influenced code. The array itself is kept only because `kernel/trace/trace_syscalls.c` still wants each syscall's address.
 
-### Architecture-independent: include/uapi/asm-generic/unistd.h
+### Architecture-independent: include/uapi/asm-generic/unistd.h {#architecture-independent-includeuapiasm-genericunistdh}
 
 For architectures without their own syscall tables:
 
@@ -140,7 +140,7 @@ __SYSCALL(__NR_io_destroy, sys_io_destroy)
 ...
 ```
 
-## Syscall ABI stability
+## Syscall ABI stability {#syscall-abi-stability}
 
 Once a syscall is merged, its number and argument semantics are **never changed**. This is a hard kernel rule: user-space must not break.
 
@@ -156,7 +156,7 @@ For new features, the kernel adds new syscalls rather than extend old ones in in
 - `open()` → `openat()` → `openat2()` (added `how` struct)
 - `read()` → `pread64()`, `readv()`, `preadv()`, `preadv2()`
 
-## struct-based syscalls (modern pattern)
+## struct-based syscalls (modern pattern) {#struct-based-syscalls-modern-pattern}
 
 The modern approach passes arguments in a struct, allowing future extension without new syscalls:
 
@@ -193,7 +193,7 @@ Two distinct structs are involved, easy to conflate because both are visible her
 
 — then copies the validated fields across into the `struct kernel_clone_args` the rest of the clone path uses.
 
-## 32-bit compat syscalls
+## 32-bit compat syscalls {#32-bit-compat-syscalls}
 
 64-bit kernels support 32-bit userspace binaries. Where argument layout or size actually differs between ABIs, `COMPAT_SYSCALL_DEFINEx()` defines a separate compat entry point. But that's only needed when it's needed — `mmap2` is a useful counter-example: it doesn't need a compat variant at all, because its arguments are already the same width and meaning on every ABI:
 
@@ -211,7 +211,7 @@ SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
 
 There's no separate `ia32_sys_call_table` symbol — `arch/x86/entry/syscall_32.c` mirrors `syscall_64.c`'s pattern exactly: a vestigial `sys_call_table[]` array (only built for pure 32-bit kernels, kept for tracing) alongside the real dispatcher, `ia32_sys_call()`, another `switch` statement built from `<asm/syscalls_32.h>`.
 
-## Syscall tracing and audit
+## Syscall tracing and audit {#syscall-tracing-and-audit}
 
 The SYSCALL_DEFINE macro automatically generates tracepoints:
 
@@ -237,7 +237,7 @@ auditctl -a always,exit -F arch=b64 -S open,openat -F uid=1000
 ausearch -k access
 ```
 
-## Slow path vs fast path
+## Slow path vs fast path {#slow-path-vs-fast-path}
 
 Some syscalls go through a "slow path" that handles signals, scheduling, restart:
 
@@ -270,9 +270,9 @@ static unsigned long __exit_to_user_mode_loop(struct pt_regs *regs,
 
 This is why syscalls are preemption and signal delivery points — the kernel checks thread-info work flags on every syscall return. The real flag set also includes `_TIF_UPROBE` (pending uprobe callback) and `_TIF_PATCH_PENDING` (livepatch transition), each with their own handler in the loop.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — `SYSCALL_DEFINEx()`/`__SYSCALL_DEFINEx()` macro definitions and the `__MAP()` argument-marshaling machinery
 - [arch/x86/include/asm/syscall_wrapper.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/syscall_wrapper.h) — x86's override of `__SYSCALL_DEFINEx()`: decodes `pt_regs` into the `__x64_sys_*()`/`__ia32_sys_*()` stubs
@@ -288,12 +288,12 @@ This is why syscalls are preemption and signal delivery points — the kernel ch
 - [commit 1e3ad78334a6](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2) — "x86/syscall: Don't force use of indirect calls for system calls", the change and its stated Spectre-mitigation rationale
 - [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`/`__exit_to_user_mode_loop()`: the slow-path signal/reschedule/uprobe/livepatch checks on syscall return
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — overview of Linux system calls and the wrapper-function naming convention
 - [`strace(1)`](https://man7.org/linux/man-pages/man1/strace.1.html) — user-space syscall tracing via `ptrace`, as used in this page's tracing example
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — Hardware mechanism and entry assembly
 - [Adding a new syscall](adding-syscall.md) — Step-by-step guide
@@ -302,10 +302,10 @@ This is why syscalls are preemption and signal delivery points — the kernel ch
 - [Syscall Auditing](audit.md) — the Linux Audit subsystem referenced in the tracing/audit section
 - [Syscall Restart Mechanisms](restart-block.md) — how the slow path's signal handling leads to `ERESTARTSYS`/`restart_syscall()`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — David Drysdale, LWN.net (2014); walks through `SYSCALL_DEFINEn()`, using `read()`'s `fs/read_write.c` definition as the example
 
-### External
+### External {#external}
 
 - [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — the kernel's official process guide (`Documentation/process/adding-syscalls.rst`)

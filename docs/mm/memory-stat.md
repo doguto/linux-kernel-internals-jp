@@ -1,8 +1,8 @@
-# memory.stat Field Reference
+# memory.stat Field Reference {#memorystat-field-reference}
 
 > A complete field-by-field breakdown of /sys/fs/cgroup/*/memory.stat (cgroup v2)
 
-## What is memory.stat?
+## What is memory.stat? {#what-is-memorystat}
 
 `/sys/fs/cgroup/<cgroup>/memory.stat` is the most detailed memory accounting file the kernel exposes for a cgroup. It is produced by `memory_stat_show()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c), which reads from the cgroup's per-cpu stat counters and formats them as name/value pairs.
 
@@ -16,7 +16,7 @@ The authoritative source for field definitions is [`Documentation/admin-guide/cg
 
 ---
 
-## A Note on Hierarchical vs. Flat Accounting
+## A Note on Hierarchical vs. Flat Accounting {#a-note-on-hierarchical-vs-flat-accounting}
 
 Every field in `memory.stat` reports the **hierarchical total** — the sum of the cgroup itself plus all its descendant cgroups. There is no flat/local-only variant exposed through this file.
 
@@ -38,15 +38,15 @@ local = parent_stat_field - sum(child_stat_fields)
 
 ---
 
-## Field Groups
+## Field Groups {#field-groups}
 
-### Anonymous Memory
+### Anonymous Memory {#anonymous-memory}
 
 Anonymous pages are not backed by a file. They back heap allocations, stack growth, and `mmap(MAP_ANONYMOUS)` regions.
 
 ---
 
-#### `anon`
+#### `anon` {#anon}
 
 **What it counts**: Bytes of anonymous memory currently resident in RAM — heap, stack, anonymous `mmap()` regions, and `MAP_PRIVATE` copy-on-write pages that have been dirtied.
 
@@ -63,7 +63,7 @@ grep '^anon ' /sys/fs/cgroup/mycontainer/memory.stat
 
 ---
 
-#### `anon_thp`
+#### `anon_thp` {#anon_thp}
 
 **What it counts**: Bytes of anonymous memory backed by Transparent Huge Pages (THP). This is a subset of `anon`.
 
@@ -75,7 +75,7 @@ grep '^anon ' /sys/fs/cgroup/mycontainer/memory.stat
 
 ---
 
-#### `shmem`
+#### `shmem` {#shmem}
 
 **What it counts**: Bytes of shared memory (`shmget`, `shm_open`, tmpfs) and `mmap(MAP_SHARED)` pages of anonymous files, currently resident in RAM. Also includes `/dev/shm` usage.
 
@@ -90,13 +90,13 @@ grep '^anon ' /sys/fs/cgroup/mycontainer/memory.stat
 
 ---
 
-### File-Backed Memory (Page Cache)
+### File-Backed Memory (Page Cache) {#file-backed-memory-page-cache}
 
 File-backed pages are backed by files on disk. They can be reclaimed without writing to swap — either discarded (if clean) or flushed to disk (if dirty).
 
 ---
 
-#### `file`
+#### `file` {#file}
 
 **What it counts**: Bytes of file-backed memory currently in the page cache and attributed to this cgroup — clean and dirty pages for regular files, `mmap(MAP_SHARED)` file mappings, and read-ahead pages.
 
@@ -117,7 +117,7 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-#### `file_mapped`
+#### `file_mapped` {#file_mapped}
 
 **What it counts**: Bytes of file-backed pages that are currently mapped into at least one process's virtual address space (i.e., they are in a VMA). This is a subset of `file`.
 
@@ -129,7 +129,7 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-#### `file_dirty`
+#### `file_dirty` {#file_dirty}
 
 **What it counts**: Bytes of file-backed pages that have been modified but not yet written to disk.
 
@@ -141,7 +141,7 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-#### `file_writeback`
+#### `file_writeback` {#file_writeback}
 
 **What it counts**: Bytes of file-backed pages currently being written back to disk by `flush` kernel threads.
 
@@ -153,7 +153,7 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-#### `shmem_thp`
+#### `shmem_thp` {#shmem_thp}
 
 **What it counts**: Bytes of shared memory (`shmem` / tmpfs) backed by Transparent Huge Pages. Subset of `shmem`.
 
@@ -165,7 +165,7 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-#### `file_thp`
+#### `file_thp` {#file_thp}
 
 **What it counts**: Bytes of file-backed pages backed by Transparent Huge Pages (read-only file THP, introduced for non-anonymous mappings). Subset of `file`.
 
@@ -177,13 +177,13 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 ---
 
-### Kernel Memory
+### Kernel Memory {#kernel-memory}
 
 Kernel memory is allocated by kernel code on behalf of cgroup processes — slab objects, page tables, kernel stacks, socket buffers. In cgroup v2, kernel memory is charged to the cgroup by default ([background: new slab memory controller](https://lwn.net/Articles/798605/)).
 
 ---
 
-#### `kernel`
+#### `kernel` {#kernel}
 
 **What it counts**: Total bytes of kernel memory attributed to this cgroup: the sum of `kernel_stack`, `pagetables`, `percpu`, `sec_pagetables`, and slab memory (`slab_reclaimable` + `slab_unreclaimable`). Note: socket buffers (`sock`) are tracked separately and are **not** included in this total.
 
@@ -196,7 +196,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `kernel_stack`
+#### `kernel_stack` {#kernel_stack}
 
 **What it counts**: Bytes of kernel stacks for tasks in this cgroup. Each task has a kernel stack (typically 8 KiB on x86-64, or 16 KiB when `KASAN` is enabled).
 
@@ -208,7 +208,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `pagetables`
+#### `pagetables` {#pagetables}
 
 **What it counts**: Bytes of page table memory for processes in this cgroup. Page tables translate virtual addresses to physical addresses and are allocated by the kernel as a process's VMA expands.
 
@@ -220,7 +220,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `sec_pagetables`
+#### `sec_pagetables` {#sec_pagetables}
 
 **What it counts**: Bytes of secondary page tables (e.g., shadow page tables for KVM guests, IOMMU page tables for device I/O virtualization) attributed to this cgroup.
 
@@ -232,7 +232,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `percpu`
+#### `percpu` {#percpu}
 
 **What it counts**: Bytes of per-cpu kernel memory allocated by kernel code running on behalf of processes in this cgroup.
 
@@ -242,7 +242,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `sock`
+#### `sock` {#sock}
 
 **What it counts**: Bytes of memory allocated for network socket buffers (send and receive buffers, sk_buff structures) for sockets owned by processes in this cgroup.
 
@@ -254,7 +254,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `slab_reclaimable`
+#### `slab_reclaimable` {#slab_reclaimable}
 
 **What it counts**: Bytes of reclaimable kernel slab memory charged to this cgroup — primarily `dentry` (directory entry cache) and `inode_cache` objects that the kernel can free under memory pressure via `shrink_slab()`.
 
@@ -266,7 +266,7 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-#### `slab_unreclaimable`
+#### `slab_unreclaimable` {#slab_unreclaimable}
 
 **What it counts**: Bytes of unreclaimable kernel slab memory charged to this cgroup — kernel objects that cannot be freed until the process explicitly releases them (e.g., `task_struct`, `mm_struct`, open file descriptors, network connections, `struct socket`).
 
@@ -278,13 +278,13 @@ Kernel memory is allocated by kernel code on behalf of cgroup processes — slab
 
 ---
 
-### Swap
+### Swap {#swap}
 
 Swap fields appear only when swap is available to the cgroup (`memory.swap.max` is not zero and the host has swap configured).
 
 ---
 
-#### `swapcached`
+#### `swapcached` {#swapcached}
 
 **What it counts**: Bytes of anonymous memory that is simultaneously in swap and in RAM (i.e., it was swapped out, then faulted back in but not yet removed from the swap device). These pages are counted in both `anon` and `swapcached`.
 
@@ -296,13 +296,13 @@ Swap fields appear only when swap is available to the cgroup (`memory.swap.max` 
 
 ---
 
-### Reclaim Events
+### Reclaim Events {#reclaim-events}
 
 These are monotonically increasing event counters. They do not measure current state — they record things that have happened since the cgroup was created.
 
 ---
 
-#### `pgfault`
+#### `pgfault` {#pgfault}
 
 **What it counts**: Total number of minor page faults in this cgroup — faults that were satisfied without disk I/O (page was in RAM, just not mapped: e.g., copy-on-write, accessing a page that was in page cache).
 
@@ -314,7 +314,7 @@ These are monotonically increasing event counters. They do not measure current s
 
 ---
 
-#### `pgmajfault`
+#### `pgmajfault` {#pgmajfault}
 
 **What it counts**: Total number of major page faults — faults that required disk I/O to satisfy (page was not in RAM and had to be read from disk or swap).
 
@@ -334,7 +334,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pgrefill`
+#### `pgrefill` {#pgrefill}
 
 **What it counts**: Number of pages scanned during LRU refill — pages moved from the active LRU list to the inactive list during reclaim. Each page moved counts as one event.
 
@@ -346,7 +346,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pgscan`
+#### `pgscan` {#pgscan}
 
 **What it counts**: Number of pages scanned by the page reclaim code while looking for pages to free — both from direct reclaim (triggered by process allocations) and from kswapd (background reclaim daemon).
 
@@ -358,7 +358,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pgsteal`
+#### `pgsteal` {#pgsteal}
 
 **What it counts**: Number of pages actually reclaimed (freed or swapped out) by the page reclaim code. Always less than or equal to `pgscan` — some pages scanned cannot be reclaimed immediately (dirty, locked, referenced).
 
@@ -370,7 +370,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pgactivate`
+#### `pgactivate` {#pgactivate}
 
 **What it counts**: Number of pages promoted from the inactive LRU list to the active LRU list because they were accessed again before eviction.
 
@@ -382,7 +382,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pgdeactivate`
+#### `pgdeactivate` {#pgdeactivate}
 
 **What it counts**: Number of pages moved from the active LRU to the inactive LRU, making them eligible for reclaim. This is the opposite of `pgactivate`.
 
@@ -394,7 +394,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `pglazyfreed`
+#### `pglazyfreed` {#pglazyfreed}
 
 **What it counts**: Number of anonymous pages reclaimed via the "lazy free" path — pages freed without writeback because they were associated with a process that exited (the pages were in swap, the in-memory copy was discarded).
 
@@ -406,7 +406,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `thp_fault_alloc`
+#### `thp_fault_alloc` {#thpfaultalloc}
 
 **What it counts**: Number of Transparent Huge Page 2 MiB allocations that succeeded on page fault (i.e., a huge page was allocated for an anonymous mapping when the process touched a new region).
 
@@ -416,7 +416,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `thp_collapse_alloc`
+#### `thp_collapse_alloc` {#thpcollapsealloc}
 
 **What it counts**: Number of times `khugepaged` successfully collapsed multiple 4 KiB pages into a single 2 MiB huge page for this cgroup.
 
@@ -426,13 +426,13 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-### Memory Protection
+### Memory Protection {#memory-protection}
 
 These fields reflect the protection configuration and whether it is taking effect.
 
 ---
 
-#### `workingset_refault_anon`
+#### `workingset_refault_anon` {#workingsetrefaultanon}
 
 **What it counts**: Number of anonymous pages that were faulted back in after being evicted from RAM (refaulted). Incremented when a page that was previously swapped out is accessed again.
 
@@ -444,7 +444,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_refault_file`
+#### `workingset_refault_file` {#workingsetrefaultfile}
 
 **What it counts**: Number of file-backed pages that were faulted back in after being evicted from the page cache.
 
@@ -456,7 +456,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_activate_anon`
+#### `workingset_activate_anon` {#workingsetactivateanon}
 
 **What it counts**: Number of anonymous refaulted pages that were immediately promoted to the active LRU after refault, because they were deemed part of the working set.
 
@@ -468,7 +468,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_activate_file`
+#### `workingset_activate_file` {#workingsetactivatefile}
 
 **What it counts**: Number of file-backed refaulted pages promoted to the active LRU after refault.
 
@@ -480,7 +480,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_restore_anon`
+#### `workingset_restore_anon` {#workingsetrestoreanon}
 
 **What it counts**: Number of anonymous pages that were "restored" from eviction — they were promoted to the active list before the refault shadow expired (meaning they faulted back in quickly enough to be recognized as active).
 
@@ -490,7 +490,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_restore_file`
+#### `workingset_restore_file` {#workingsetrestorefile}
 
 **What it counts**: Number of file-backed pages restored (promoted active before shadow expiry).
 
@@ -500,7 +500,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-#### `workingset_nodereclaim`
+#### `workingset_nodereclaim` {#workingset_nodereclaim}
 
 **What it counts**: Number of times a node's reclaim was avoided because the workingset was recognized as active. This counter records when the refault distance detection machinery decided a page's shadow indicated it was in the active working set.
 
@@ -512,7 +512,7 @@ These fields reflect the protection configuration and whether it is taking effec
 
 ---
 
-## Worked Example: Accounting Identity
+## Worked Example: Accounting Identity {#worked-example-accounting-identity}
 
 `memory.current` should equal the sum of resident memory types. The exact relationship, as documented in [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html):
 
@@ -522,7 +522,7 @@ memory.current ≈ anon + file + kernel + swapcached + sock + (children's contri
 
 In practice, due to per-cpu counter batching and timing, `memory.current` may differ slightly from the sum of `memory.stat` fields at any instant. This is expected — the kernel batches counter updates in `mod_lruvec_state()` to avoid cache-line contention on hot paths.
 
-### Example snapshot
+### Example snapshot {#example-snapshot}
 
 ```bash
 $ cat /sys/fs/cgroup/myapp/memory.stat
@@ -559,7 +559,7 @@ Accounting:
 
 The ~330 KiB gap is from `percpu` counters and batching delay — well within normal. `workingset_refault_file` at 123,456 events indicates this container has experienced file cache eviction and refaults, suggesting `memory.high` may be set too tight for its I/O working set.
 
-### What memory.stat does not include
+### What memory.stat does not include {#what-memorystat-does-not-include}
 
 | Item | Why it is absent |
 |------|-----------------|
@@ -570,7 +570,7 @@ The ~330 KiB gap is from `percpu` counters and batching delay — well within no
 
 ---
 
-## Quick Reference Table
+## Quick Reference Table {#quick-reference-table}
 
 | Field | Type | Reclaimable? | Kernel counter |
 |-------|------|-------------|----------------|
@@ -612,9 +612,9 @@ The ~330 KiB gap is from `percpu` counters and batching delay — well within no
 
 ---
 
-## Diagnostic Recipes
+## Diagnostic Recipes {#diagnostic-recipes}
 
-### Is the container memory limit set too tight for its file cache?
+### Is the container memory limit set too tight for its file cache? {#is-the-container-memory-limit-set-too-tight-for-its-file-cache}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -628,7 +628,7 @@ echo "memory.high: $(( HIGH / 1048576 )) MiB"
 # If REFAULT is high and FILE is near HIGH, raise memory.high to give cache more room
 ```
 
-### Is slab growth hiding a kernel resource leak?
+### Is slab growth hiding a kernel resource leak? {#is-slab-growth-hiding-a-kernel-resource-leak}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -645,7 +645,7 @@ echo "unexplained: $(( (CURRENT - ANON - FILE - SLAB_U) / 1048576 )) MiB"
 # Large unexplained gap or rising slab_unreclaimable = potential kernel leak
 ```
 
-### Is the container actively thrashing?
+### Is the container actively thrashing? {#is-the-container-actively-thrashing}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -664,7 +664,7 @@ echo "pgmajfault: $MAJFAULT"
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevance |
 |------|-----------|
@@ -677,7 +677,7 @@ echo "pgmajfault: $MAJFAULT"
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [Memory Cgroups](memcg.md) — What is charged to a cgroup and how
 - [Tuning Containers](tuning-containers.md) — Using memory.stat data to size memory.high and memory.max

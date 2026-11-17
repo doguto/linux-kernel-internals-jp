@@ -1,8 +1,8 @@
-# File Operations and the file struct
+# File Operations and the file struct {#file-operations-and-the-file-struct}
 
 > How open(), read(), write(), and close() work in VFS
 
-## The file_operations vtable
+## The file_operations vtable {#the-file_operations-vtable}
 
 Every open file has a `struct file` with an `f_op` pointer to the filesystem's `file_operations`. VFS calls through this vtable for all I/O operations [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/vfs.html):
 
@@ -26,7 +26,7 @@ struct file_operations {
 
 Filesystems typically only implement a subset. For fields left NULL, VFS uses generic fallbacks (e.g., `generic_file_read_iter`, `noop_llseek`).
 
-## open(): from syscall to struct file
+## open(): from syscall to struct file {#open-from-syscall-to-struct-file}
 
 The `open(2)` system call is documented in the Linux man pages [(man page)](https://man7.org/linux/man-pages/man2/open.2.html). `O_DIRECT`, which bypasses the page cache, was added in Linux 2.4.10 [(man page)](https://man7.org/linux/man-pages/man2/open.2.html).
 
@@ -51,7 +51,7 @@ SYSCALL_DEFINE3(open, ...) → do_sys_open()
 
 The `f_op->open()` call is the filesystem's chance to set up `file->private_data` (e.g., for /proc files that generate content dynamically).
 
-## read(): the syscall path
+## read(): the syscall path {#read-the-syscall-path}
 
 ```c
 /* read(fd, buf, count) */
@@ -83,7 +83,7 @@ For regular files, `read_iter` calls `generic_file_read_iter()`, which:
 2. If cached: copy pages to userspace (`copy_to_user`)
 3. If not cached: trigger `readahead` → `mapping->a_ops->read_folio()` → disk I/O → wait → copy
 
-## write(): dirty pages and writeback
+## write(): dirty pages and writeback {#write-dirty-pages-and-writeback}
 
 ```c
 /* write(fd, buf, count) */
@@ -107,7 +107,7 @@ Data is only guaranteed on disk after:
 - The writeback daemon flushes (typically after 30 seconds or when memory pressure is high; controlled by `dirty_expire_centisecs`)
 - The filesystem's `sync_fs()` is called
 
-## llseek(): updating the file position
+## llseek(): updating the file position {#llseek-updating-the-file-position}
 
 ```c
 loff_t vfs_llseek(struct file *file, loff_t offset, int whence)
@@ -131,7 +131,7 @@ loff_t generic_file_llseek(struct file *file, loff_t offset, int whence)
 }
 ```
 
-## mmap(): mapping the file into address space
+## mmap(): mapping the file into address space {#mmap-mapping-the-file-into-address-space}
 
 ```c
 /* mmap(NULL, len, PROT_READ, MAP_SHARED, fd, offset) */
@@ -151,7 +151,7 @@ int generic_file_mmap(struct file *file, struct vm_area_struct *vma)
 
 The actual pages aren't faulted in until accessed. Each fault calls `filemap_fault()` which reads from the page cache (or disk).
 
-## release(): last close
+## release(): last close {#release-last-close}
 
 `f_op->release()` is called when the last file descriptor pointing to a `struct file` is closed. Note: `close()` doesn't immediately call `release()` — it decrements the reference count, and `release()` is called only when it reaches zero.
 
@@ -170,7 +170,7 @@ __close_fd() → filp_close()
 - `flush()`: called on every `close()` — some filesystems use this for error checking (NFS flushing dirty data)
 - `release()`: called only when the last reference to the `struct file` is dropped (e.g., after all `dup()`'d fds are closed)
 
-## fsync(): forcing data to disk
+## fsync(): forcing data to disk {#fsync-forcing-data-to-disk}
 
 ```c
 int vfs_fsync(struct file *file, int datasync)
@@ -183,7 +183,7 @@ int vfs_fsync(struct file *file, int datasync)
    datasync=1: flush data + size metadata only (fdatasync) */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — The four VFS structures
 - [Life of a write() syscall](life-of-write.md) — End-to-end write path

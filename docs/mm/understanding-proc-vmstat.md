@@ -1,10 +1,10 @@
-# Understanding /proc/vmstat
+# Understanding /proc/vmstat {#understanding-procvmstat}
 
 > Practical guide to using kernel memory management counters
 
 *This is a scenario-based diagnostic guide. For a field-by-field reference, see [/proc/vmstat reference](proc-vmstat.md).*
 
-## What Is /proc/vmstat?
+## What Is /proc/vmstat? {#what-is-procvmstat}
 
 `/proc/vmstat` is a pseudo-file that exposes the kernel's internal memory management counters. Every time the kernel allocates a page, reclaims memory, swaps, compacts, or handles a fault, it increments a counter. `/proc/vmstat` lets you read all of them.
 
@@ -33,11 +33,11 @@ pgsteal_direct 1134567
 
 The file lives in [`mm/vmstat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmstat.c) and aggregates per-CPU counters across all nodes and zones.
 
-## The Critical Distinction: Gauges vs Counters
+## The Critical Distinction: Gauges vs Counters {#the-critical-distinction-gauges-vs-counters}
 
 This is the single most important thing to understand about `/proc/vmstat`. There are two fundamentally different types of values:
 
-### Gauges (`nr_*`) — Current State
+### Gauges (`nr_*`) — Current State {#gauges-nr_-current-state}
 
 Gauges report the **current** value. They go up and down. Reading them once gives you useful information.
 
@@ -49,7 +49,7 @@ nr_slab_reclaimable 56789  ← Right now, 56789 slab pages can be reclaimed
 
 Think of a gauge like a thermometer: you read it and you know the temperature *right now*.
 
-### Counters (`pg*`, `pswp*`, `thp_*`, etc.) — Monotonic Since Boot
+### Counters (`pg*`, `pswp*`, `thp_*`, etc.) — Monotonic Since Boot {#counters-pg-pswp-thp_-etc-monotonic-since-boot}
 
 Counters report the **cumulative total** since the system booted. They only go up. A single reading tells you almost nothing — you need **two readings and a time delta** to compute a rate.
 
@@ -78,9 +78,9 @@ Gauges (nr_*)              Counters (pg*, pswp*, thp_*, etc.)
 !!! warning "The most common mistake"
     Seeing `pgmajfault 50000` and panicking. That is 50,000 major faults **since boot** — possibly weeks ago. What matters is the *rate*: how many per second right now?
 
-## Key Counters by Scenario
+## Key Counters by Scenario {#key-counters-by-scenario}
 
-### Memory Pressure
+### Memory Pressure {#memory-pressure}
 
 When you suspect the system is under memory pressure, these are the counters to watch:
 
@@ -100,7 +100,7 @@ When you suspect the system is under memory pressure, these are the counters to 
 - A rising `pgscan_direct` rate means [direct reclaim](reclaim.md) is active — kswapd can't keep up.
 - Compare `pgscan_kswapd` vs `pgscan_direct`. In a healthy system, almost all scanning is done by kswapd. If direct reclaim dominates, you have a problem.
 
-### Swap Activity
+### Swap Activity {#swap-activity}
 
 | Counter | Type | What It Means |
 |---------|------|---------------|
@@ -114,7 +114,7 @@ When you suspect the system is under memory pressure, these are the counters to 
 - A sustained `pswpin` rate means the system is swapping pages **back in** — the pages it evicted are being used again. This is the painful case: it means the working set doesn't fit in RAM.
 - High `pswpin` + high `pswpout` simultaneously = **swap thrashing**. The system is moving the same pages back and forth.
 
-### Reclaim Efficiency
+### Reclaim Efficiency {#reclaim-efficiency}
 
 | Counter | Type | What It Means |
 |---------|------|---------------|
@@ -140,7 +140,7 @@ These thresholds are operational heuristics, not kernel-defined values. Treat th
 !!! note "Why low efficiency matters"
     Low reclaim efficiency means the kernel is doing a lot of work (scanning LRU lists, checking page flags, taking locks) for little gain. This wastes CPU and increases allocation latency.
 
-### THP (Transparent Huge Pages) Health
+### THP (Transparent Huge Pages) Health {#thp-transparent-huge-pages-health}
 
 | Counter | Type | What It Means |
 |---------|------|---------------|
@@ -156,7 +156,7 @@ These thresholds are operational heuristics, not kernel-defined values. Treat th
 - Rising `thp_split_page` means THPs are being broken up — possibly due to partial munmap or memory pressure.
 - If `thp_collapse_alloc_failed` is rising, khugepaged is trying to promote 4KB pages to THPs but failing.
 
-### Compaction Health
+### Compaction Health {#compaction-health}
 
 | Counter | Type | What It Means |
 |---------|------|---------------|
@@ -172,7 +172,7 @@ These thresholds are operational heuristics, not kernel-defined values. Treat th
 - The failure rate `compact_fail / (compact_fail + compact_success)` tells you how often compaction works. High failure rate means memory is too fragmented.
 - A high `compact_migrate_scanned` rate with high `compact_fail` means the kernel is doing expensive work (scanning, migrating pages) without producing contiguous blocks.
 
-## Computing Rates from Counter Deltas
+## Computing Rates from Counter Deltas {#computing-rates-from-counter-deltas}
 
 Since counters are monotonic, you need two samples and a time interval to compute a rate:
 
@@ -180,7 +180,7 @@ Since counters are monotonic, you need two samples and a time interval to comput
 rate = (value_t2 - value_t1) / (t2 - t1)
 ```
 
-### Manual two-sample method
+### Manual two-sample method {#manual-two-sample-method}
 
 ```bash
 # Sample 1
@@ -197,7 +197,7 @@ V2=$(awk '/^pgmajfault / {print $2}' /proc/vmstat)
 echo "Major faults/sec: $(( (V2 - V1) / (T2 - T1) ))"
 ```
 
-### Watch multiple counters over time
+### Watch multiple counters over time {#watch-multiple-counters-over-time}
 
 ```bash
 # Print key counters every 5 seconds with deltas
@@ -242,9 +242,9 @@ while true; do
 done
 ```
 
-## Integration with Common Tools
+## Integration with Common Tools {#integration-with-common-tools}
 
-### vmstat command
+### vmstat command {#vmstat-command}
 
 The `vmstat` command (from procps-ng) already reads `/proc/vmstat` internally, but it shows a simplified, aggregated view:
 
@@ -263,7 +263,7 @@ procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
 
 `vmstat` is good for a quick overview. `/proc/vmstat` gives you the full picture — including counters like `allocstall_*`, `pgscan_direct`, and THP stats that `vmstat` doesn't expose.
 
-### sar (sysstat)
+### sar (sysstat) {#sar-sysstat}
 
 `sar` collects and reports `/proc/vmstat` data over time:
 
@@ -289,7 +289,7 @@ sar -B -f /var/log/sa/sa28
 !!! tip "sar for historical analysis"
     If you have `sysstat` installed and the `sa1`/`sa2` collectors running, `sar` lets you look back at past memory pressure events. This is invaluable for post-incident analysis.
 
-### Monitoring systems (Prometheus, Grafana, etc.)
+### Monitoring systems (Prometheus, Grafana, etc.) {#monitoring-systems-prometheus-grafana-etc}
 
 Node Exporter (Prometheus) exposes `/proc/vmstat` counters directly under the `node_vmstat_*` metric family:
 
@@ -321,9 +321,9 @@ rate(node_vmstat_thp_fault_fallback[5m])
 rate(node_vmstat_pgscan_direct[5m]) > 1000
 ```
 
-## Practical One-Liners
+## Practical One-Liners {#practical-one-liners}
 
-### Is the system under memory pressure right now?
+### Is the system under memory pressure right now? {#is-the-system-under-memory-pressure-right-now}
 
 ```bash
 # Check if direct reclaim or allocation stalls are happening
@@ -333,7 +333,7 @@ grep -E '^(allocstall|pgscan_direct)' /proc/vmstat
 
 If `allocstall_*` values are increasing between reads, processes are stalling on memory.
 
-### Is the system swap-thrashing?
+### Is the system swap-thrashing? {#is-the-system-swap-thrashing}
 
 ```bash
 # Watch swap in/out rates (pages/sec)
@@ -342,7 +342,7 @@ watch -n1 "grep -E '^(pswpin|pswpout)' /proc/vmstat"
 
 Both increasing together means pages are being evicted and faulted back repeatedly.
 
-### How efficient is page reclaim?
+### How efficient is page reclaim? {#how-efficient-is-page-reclaim}
 
 ```bash
 # Reclaim efficiency snapshot
@@ -358,7 +358,7 @@ END {
 }' /proc/vmstat
 ```
 
-### Are THPs working or falling back?
+### Are THPs working or falling back? {#are-thps-working-or-falling-back}
 
 ```bash
 awk '
@@ -372,7 +372,7 @@ END {
 }' /proc/vmstat
 ```
 
-### Quick memory pressure dashboard
+### Quick memory pressure dashboard {#quick-memory-pressure-dashboard}
 
 ```bash
 # One-shot summary of key indicators
@@ -389,7 +389,7 @@ awk '
 ' /proc/vmstat
 ```
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [Page Reclaim](reclaim.md) — how the kernel decides which pages to free
 - [What happens during swapping](swapping.md) — the swap-out and swap-in paths

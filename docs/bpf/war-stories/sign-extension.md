@@ -1,4 +1,4 @@
-# Sign Extension in `check_alu_op()`
+# Sign Extension in `check_alu_op()` {#sign-extension-in-checkaluop}
 
 > CVE-2017-16995 — the verifier sign-extended a 32-bit immediate that the machine zero-extends, so its model of the register and the register itself disagreed from the very first instruction
 
@@ -25,7 +25,7 @@ Actively exploited
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 The BPF instruction set has two classes of ALU operation: `BPF_ALU64`, which works on the full 64-bit register, and `BPF_ALU`, which works on the low 32 bits and zero-fills the top. Both classes have a `MOV` with a 32-bit immediate operand, and the two behave differently at run time:
 
@@ -42,7 +42,7 @@ __mark_reg_known(regs + insn->dst_reg, insn->imm);
 
 `__mark_reg_known()` takes a `u64`. Passing a negative `s32` to it promotes with sign extension. So for *both* instruction classes, the verifier recorded the sign-extended value.
 
-## The trigger
+## The trigger {#the-trigger}
 
 For `BPF_ALU64` that is correct. For `BPF_ALU` it is not.
 
@@ -54,7 +54,7 @@ Jann Horn's fix states the distinction and nothing more, because nothing more is
 
 The verifier's entire safety argument rests on its per-register value model matching the machine. Here the two diverge at the point where a constant is loaded — the simplest instruction in the language, and the one every subsequent bounds inference is built on top of.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 NVD's description is the conventional summary — "allows local users to cause a denial of service (memory corruption) or possibly have unspecified other impact by leveraging incorrect sign extension." Horn's own [oss-security posting](https://www.openwall.com/lists/oss-security/2017/12/21/2) on December 21, 2017 is blunter about the class: "A few BPF verifier bugs in the Linux kernel, most of which can be used for controlled memory corruption, have been fixed over the last days."
 
@@ -74,7 +74,7 @@ The reachability caveat is in the fix commit itself:
 
 The bug was introduced in v4.9 by [`484611357c19`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=484611357c19f9e19ef742ebef4505a07d243cc9) ("bpf: allow access into map value arrays", Josef Bacik, September 2016) — but, per the fix commit, only became exploitable by unprivileged users starting with v4.14, which is what turned a verifier defect into a privilege escalation.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 **A signed field and an unsigned parameter, with an implicit promotion in between.** `insn->imm` is signed; `__mark_reg_known()` takes `u64`. The conversion is legal C, silent, and correct for exactly one of the two callers. No warning fires, because nothing is wrong at the language level — the code says precisely what it means, and what it means is right half the time.
 
@@ -82,7 +82,7 @@ The bug was introduced in v4.9 by [`484611357c19`](https://git.kernel.org/pub/sc
 
 **It was one of eight.** Horn's December 2017 oss-security post is a single message enumerating eight distinct verifier bugs found in one pass, each with its own fix commit. Alongside this one: incorrect signed bounds for `BPF_RSH`; incorrect tracking of register size truncation (CVE-2017-16996); 32-bit ALU op verification operating on 64-bit numbers while the interpreter and JIT do 32-bit arithmetic; a missing error return in `check_stack_boundary()`; missing strict alignment checks for stack pointers; branch pruning when a scalar is replaced with a pointer; and a set of integer overflows in offset arithmetic. The sign-extension bug is not an isolated slip. It is one sample from a subsystem whose arithmetic model had not yet been audited by anyone with an adversarial mindset — and Project Zero was the first to do so systematically.
 
-## Resolution
+## Resolution {#resolution}
 
 The fix is an if/else:
 
@@ -113,7 +113,7 @@ The patch reached at least a third revision, and the only revision change the co
 
 What did change, structurally, is that this batch marks the point where the verifier's arithmetic became a security-reviewed surface rather than a correctness-reviewed one. The run of bounds-tracking CVEs documented across the rest of this series — [2020](jmp32-bounds.md), [2021](alu32-bitwise-bounds.md), [2021 again](alu32-unsigned-bounds.md) — all sit downstream of that shift.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Where a specification defines two behaviors, the implementation needs two branches — and the type system will not remind you.** The BPF instruction set is explicit that `BPF_ALU` zero-pads and `BPF_ALU64` sign-extends. The verifier had one code path. The bug is not subtle once stated; it is invisible in review because the offending line reads exactly like correct code.
 
@@ -126,7 +126,7 @@ What did change, structurally, is that this batch marks the point where the veri
 !!! warning "Pattern to watch for"
     Audit every place a decoder, interpreter, or verifier handles a family of opcodes through shared code. For each field the opcode family varies over — operand width, signedness, addressing mode, endianness — confirm there is either a branch or a proof that the behavior is genuinely identical. The dangerous shape is a single statement that is correct for the majority case and silently wrong for a minority one, since it will read as correct in every review. Separately, treat `s32`-into-`u64` argument passing as a review flag in any code whose job is to model run-time values.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — how the verifier models register values and why a wrong constant poisons everything downstream
 - [Architecture & Program Types](../bpf-overview.md) — the eBPF instruction format and register model this bug's `MOV` sits in
@@ -134,7 +134,7 @@ What did change, structurally, is that this batch marks the point where the veri
 - [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — the sysctl this bug's exploitability depended on
 - [Kernel Hardening](../../security/kernel-hardening.md) — the mitigation layer that local privilege escalations like this one have to get through
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2017-16995](https://nvd.nist.gov/vuln/detail/CVE-2017-16995) — CVSS 7.8 HIGH, published December 27, 2017
 - [git.kernel.org: 95a762e2c8c9](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=95a762e2c8c942780948091f8f2a4f32fce1ac6f) — "bpf: fix incorrect sign extension in check_alu_op()", the fix (7 insertions, 1 deletion)

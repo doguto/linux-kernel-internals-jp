@@ -1,8 +1,8 @@
-# Shared Virtual Addressing
+# Shared Virtual Addressing {#shared-virtual-addressing}
 
 > PASID-based SVA for accelerators and smart NICs
 
-## The problem SVA solves
+## The problem SVA solves {#the-problem-sva-solves}
 
 In classic IOMMU DMA, a device operates in its own I/O virtual address space (IOVA space). When a driver wants a device to access a user-space buffer, the kernel must:
 
@@ -16,7 +16,7 @@ For an accelerator that processes many small user-space operations (Intel DSA sc
 
 **Shared Virtual Addressing (SVA)** lets a device share the same virtual address space as a user process. The device can directly use the process's virtual addresses — no IOVA translation layer, no pinning at submission time. The IOMMU enforces isolation by keying every device transaction with a **PASID** that identifies which process's page tables to use.
 
-## PASID: Process Address Space ID
+## PASID: Process Address Space ID {#pasid-process-address-space-id}
 
 PASID is a 20-bit PCIe TLP prefix field defined in the PCIe specification. When a device issues a DMA read or write, it can tag the transaction with a PASID value. The IOMMU uses this tag to select the correct page table for address translation:
 
@@ -38,11 +38,11 @@ Without SVA, all device transactions for a given IOMMU domain use a single page 
 
 PASID values 0 through 2^20−1 (just over one million) are available. In practice, the kernel allocates PASIDs from a global ID space using `iommu_alloc_global_pasid()` (drivers/iommu/iommu.c, kernel 6.1+).
 
-## PCIe capability requirements
+## PCIe capability requirements {#pcie-capability-requirements}
 
 SVA depends on three PCIe capabilities working together:
 
-### ATS (Address Translation Services)
+### ATS (Address Translation Services) {#ats-address-translation-services}
 
 ATS allows a device to cache IOVA-to-physical translations in a device-side TLB (the ATC — Address Translation Cache). Under SVA the device sends translation requests upstream; the IOMMU responds with the physical address, which the device caches for future accesses to the same virtual page.
 
@@ -56,7 +56,7 @@ lspci -vvv -s 0000:01:00.0 | grep "Address Translation"
 #   ATSCtl: Enable+, Smallest Translation Unit: 0
 ```
 
-### PRI (Page Request Interface)
+### PRI (Page Request Interface) {#pri-page-request-interface}
 
 Without SVA, the kernel pre-faults all pages before submitting work to a device. With SVA, the device can encounter a page fault (page not present, swapped out, or not yet faulted in) mid-transaction. PRI allows the device to send a **Page Request** upstream, asking the IOMMU/CPU to resolve the fault and signal when the page is ready.
 
@@ -64,7 +64,7 @@ The IOMMU delivers the page request to the kernel's IOMMU page fault handler. Th
 
 PRI requires ATS. Not all hardware supports PRI; on hardware without PRI, SVA can still work if the driver pre-faults all pages before submission (removing the benefit of on-demand paging).
 
-### ACS (Access Control Services)
+### ACS (Access Control Services) {#acs-access-control-services}
 
 ACS prevents PCIe peer-to-peer transactions from bypassing the IOMMU. Without ACS, a device could DMA to another device's memory without going through the IOMMU, defeating isolation. ACS is a prerequisite for IOMMU group isolation, which is itself a prerequisite for SVA safety.
 
@@ -76,7 +76,7 @@ lspci -vvv -s 0000:00:1c.0 | grep "Access Control"
 #   ACSCtl: SrcValid+ TransBlk+ ReqRedir+ CmpltRedir+ UpstreamFwd- EgressCtrl- DirectTrans-
 ```
 
-## io_pgtable_ops: the page table abstraction
+## io_pgtable_ops: the page table abstraction {#iopgtableops-the-page-table-abstraction}
 
 Different IOMMU hardware uses different page table formats. Intel VT-d uses its own multi-level page tables; AMD-Vi uses a different format; ARM SMMU v3 supports both its native format and the ARM64 CPU page table format (which is what makes SVA efficient on ARM — the device literally walks the same tables as the CPU).
 
@@ -102,7 +102,7 @@ struct io_pgtable_ops {
 
 `io_pgtable_ops` is what classic, kernel-managed domains use — it's the abstraction `alloc_io_pgtable_ops()` returns when the IOMMU driver walks and populates its own page tables. **SVA domains never allocate an `io_pgtable_ops` instance at all**: instead of the IOMMU maintaining a separate table, hardware is pointed directly at the process's *existing* CPU page tables. The ARM SMMU v3 implementation (`drivers/iommu/arm/arm-smmu-v3/`) does this via a Context Descriptor (CD) table: the stream table entry points to the CD table, and each CD entry (indexed by PASID) holds the TTBR equivalent that points to the process's `pgd`. Intel's implementation (`drivers/iommu/intel/svm.c`) creates a PASID entry in the DMAR PASID table pointing at first-level page tables (FLPTR in scalable mode) — `intel_pasid_setup_first_level()` programs it with `__pa(mm->pgd)`, the same physical address the CPU's own CR3 register would hold for that process, without the IOMMU reading CR3 itself.
 
-## The Linux SVA API (kernel 5.2+)
+## The Linux SVA API (kernel 5.2+) {#the-linux-sva-api-kernel-52}
 
 The `iommu_sva` API, introduced in Linux 5.2 (`iommu_sva_bind_device()`/`iommu_sva_unbind_device()`/`iommu_sva_get_pasid()`), provides three operations:
 
@@ -133,7 +133,7 @@ void iommu_sva_unbind_device(struct iommu_sva *handle);
 u32 iommu_sva_get_pasid(struct iommu_sva *handle);
 ```
 
-### Typical driver flow
+### Typical driver flow {#typical-driver-flow}
 
 ```c
 /* In a character device's open or ioctl handler */
@@ -160,7 +160,7 @@ writel(pasid, dev->bar + DEV_PASID_REG);
 iommu_sva_unbind_device(sva_handle);
 ```
 
-## mm_struct to PASID table: the kernel flow
+## mm_struct to PASID table: the kernel flow {#mm_struct-to-pasid-table-the-kernel-flow}
 
 When `iommu_sva_bind_device()` is called:
 
@@ -181,9 +181,9 @@ mm_struct
                                  └── iommu_domain (PASID entry points here)
 ```
 
-## Use cases
+## Use cases {#use-cases}
 
-### Intel DSA (Data Streaming Accelerator)
+### Intel DSA (Data Streaming Accelerator) {#intel-dsa-data-streaming-accelerator}
 
 DSA (available on Intel Sapphire Rapids and later) performs memory copy, fill, CRC, and compare operations. With SVA, a user-space library (Intel's `idxd` userspace driver, used by DPDK and SPDK) can submit descriptors containing virtual addresses. DSA reads from and writes to user virtual addresses without the kernel needing to pin or map anything:
 
@@ -199,15 +199,15 @@ struct dsa_hw_desc desc = {
 /* Submitted to DSA work queue; device uses PASID to resolve addresses */
 ```
 
-### ARM SMMU v3 with SVA
+### ARM SMMU v3 with SVA {#arm-smmu-v3-with-sva}
 
 ARM SMMUv3 with SVA support (`CONFIG_ARM_SMMU_V3_SVA`) can share ARM64 page tables directly with the SMMU. Because the SMMU natively speaks the ARM64 page table format, setting up SVA is setting a pointer in the Stream Table — no format translation needed.
 
-### GPU compute (ROCm/CUDA)
+### GPU compute (ROCm/CUDA) {#gpu-compute-rocmcuda}
 
 GPU compute workloads (ROCm on AMD GPUs, some CUDA configurations) benefit from SVA for unified memory: the GPU and CPU share a virtual address space, with the IOMMU enforcing access control per-process. Page faults on the GPU side are handled by the kernel's IOMMU fault handler, which brings in the page and signals the GPU to retry.
 
-## Limitations
+## Limitations {#limitations}
 
 - **Hardware support required**: SVA needs IOMMU hardware with PASID table support (Intel VT-d with PASID capability, AMD-Vi with PASID support, ARM SMMUv3 with CD tables).
 - **PRI is optional but important**: Without PRI, all pages must be pre-faulted before device submission — eliminating on-demand paging but still allowing virtual address reuse.
@@ -229,7 +229,7 @@ grep CONFIG_IOMMU_SVA /boot/config-$(uname -r)
 # CONFIG_IOMMU_SVA=y
 ```
 
-## Source files
+## Source files {#source-files}
 
 | File | Role |
 |------|------|
@@ -240,9 +240,9 @@ grep CONFIG_IOMMU_SVA /boot/config-$(uname -r)
 | `include/linux/iommu.h` | `iommu_sva`, `iommu_sva_bind_device()` declarations |
 | `include/linux/io-pgtable.h` | `io_pgtable_ops` abstraction |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/iommu/iommu-sva.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iommu-sva.c) — `iommu_sva_bind_device()`, `iommu_sva_unbind_device()`, `iommu_sva_get_pasid()`, and the SVA I/O-page-fault handler
 - [drivers/iommu/iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iommu.c) — `iommu_alloc_global_pasid()` / `iommu_free_global_pasid()`: global PASID allocation, folded in here from the now-removed `ioasid.c`
@@ -250,17 +250,17 @@ grep CONFIG_IOMMU_SVA /boot/config-$(uname -r)
 - [drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/arm/arm-smmu-v3/arm-smmu-v3-sva.c) — ARM SMMUv3 SVA: `arm_smmu_sva_set_dev_pasid()` and Context Descriptor programming from `mm->pgd`
 - [include/linux/iommu.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/iommu.h) — `struct iommu_sva` and the `iommu_sva_bind_device()` family of declarations
 
-### Related pages
+### Related pages {#related-pages}
 
 - [IOMMU Architecture](iommu-arch.md) — IOMMU domains, groups, and the VT-d/AMD-Vi hardware SVA builds on
 - [DMA API](dma-api.md) — the pin-and-map path SVA is designed to avoid
 - [VFIO Internals](vfio-internals.md) — device passthrough: pin+map into a container, a different isolation model from SVA's PASID-tagged sharing
 - [IOMMU War Stories](war-stories.md) — Case 4, "SVA page fault storm from an accelerator"
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [5.7 Merge window part 1](https://lwn.net/Articles/816313/) — Jonathan Corbet, April 3, 2020; covers the merge of the "unified user-space access-intended accelerator framework" (uacce), a generic driver framework (used by HiSilicon's accelerators) for exposing SVA-backed devices to user space
 
-### External
+### External {#external}
 
 - [Documentation/arch/x86/sva.rst](https://docs.kernel.org/arch/x86/sva.html) — the kernel's own SVA/PASID/ENQCMD documentation: PASID life-cycle, the `IA32_PASID` MSR, and the PCIe ATS/PRI background

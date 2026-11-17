@@ -1,8 +1,8 @@
-# Completions and Wait Queues
+# Completions and Wait Queues {#completions-and-wait-queues}
 
 > Blocking synchronization: sleeping until an event occurs
 
-## struct completion
+## struct completion {#struct-completion}
 
 `completion` is a simple one-shot synchronization primitive: one thread waits, another signals when done. It's simpler and safer than using `wait_queue_head_t` directly for this common pattern.
 
@@ -24,7 +24,7 @@ complete(&c);
 /* After complete(), one waiter is woken */
 ```
 
-### Completion variants
+### Completion variants {#completion-variants}
 
 ```c
 /* Timed wait: return 0 on timeout, 1 on completion */
@@ -55,7 +55,7 @@ if (completion_done(&c)) {
 }
 ```
 
-### Completion with try_wait
+### Completion with try_wait {#completion-with-try_wait}
 
 ```c
 /* Non-blocking check: acquire if already signaled */
@@ -66,7 +66,7 @@ if (try_wait_for_completion(&c)) {
 }
 ```
 
-## struct wait_queue_head_t
+## struct wait_queue_head_t {#struct-waitqueuehead_t}
 
 `wait_queue_head_t` is the lower-level primitive that `completion` builds on. It supports:
 
@@ -85,7 +85,7 @@ wait_queue_head_t wq;
 init_waitqueue_head(&wq);
 ```
 
-## wait_event: the standard pattern
+## wait_event: the standard pattern {#wait_event-the-standard-pattern}
 
 `wait_event` combines the wait with a condition check:
 
@@ -132,7 +132,7 @@ finish_wait(&wq, &__wait);
 
 This correctly handles races: if the condition becomes true between the check and `schedule()`, the wake_up will have set the task state back to TASK_RUNNING.
 
-## Custom wait: prepare_to_wait / finish_wait
+## Custom wait: prepare_to_wait / finish_wait {#custom-wait-preparetowait-finish_wait}
 
 For more complex patterns:
 
@@ -154,7 +154,7 @@ while (!condition) {
 finish_wait(&wq, &wait);
 ```
 
-## Exclusive waiters
+## Exclusive waiters {#exclusive-waiters}
 
 Exclusive waiters are woken one at a time (thundering herd prevention):
 
@@ -168,7 +168,7 @@ wake_up(&wq);
 
 Used for accept() on TCP listen sockets: only one of many waiting accept() calls needs to be woken when a connection arrives.
 
-## poll/select/epoll integration
+## poll/select/epoll integration {#pollselectepoll-integration}
 
 Drivers implement `poll` (or `->poll` in file_operations) using wait queues:
 
@@ -202,7 +202,7 @@ void mydev_data_arrived(struct mydev *dev)
 
 `poll_wait` adds the wait queue to the poll table so that epoll monitors it. When `wake_up` fires, epoll wakes the calling process.
 
-## wait_queue_entry: custom callbacks
+## wait_queue_entry: custom callbacks {#waitqueueentry-custom-callbacks}
 
 Advanced use: add a custom function to call on wakeup:
 
@@ -232,9 +232,9 @@ add_wait_queue(&wq, &wqe);
 remove_wait_queue(&wq, &wqe);
 ```
 
-## Common patterns
+## Common patterns {#common-patterns}
 
-### Producer/consumer with wait queue
+### Producer/consumer with wait queue {#producerconsumer-with-wait-queue}
 
 ```c
 struct ring_buffer {
@@ -281,7 +281,7 @@ int rb_write(struct ring_buffer *rb, const u8 *buf, size_t len)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [SRCU](srcu.md) — sleepable RCU with read-side blocking
 - [Mutex](mutex.md) — sleeping mutual exclusion

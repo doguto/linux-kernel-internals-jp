@@ -1,8 +1,8 @@
-# crypto_engine: Hardware Offload Framework
+# crypto_engine: Hardware Offload Framework {#crypto_engine-hardware-offload-framework}
 
 > How hardware crypto accelerators plug into the kernel
 
-## The problem crypto_engine solves
+## The problem crypto_engine solves {#the-problem-crypto_engine-solves}
 
 Hardware crypto accelerators — STM32 CRYP, Allwinner CE, Marvell CESA, Intel QAT — all share
 the same fundamental I/O model: you program a DMA descriptor, the hardware processes it
@@ -44,7 +44,7 @@ Caller (IPsec, dm-crypt, TLS)
   Caller's completion callback
 ```
 
-## struct crypto_engine
+## struct crypto_engine {#struct-crypto_engine}
 
 Defined in the driver-internal header `include/crypto/internal/engine.h` (not the public
 `include/crypto/engine.h`):
@@ -77,7 +77,7 @@ to hardware — not a generic workqueue. Most drivers allocate one engine per ha
 or one per device if the hardware is single-channel. There is no batching callback on this
 struct; see "Batching" below.
 
-## Driver callbacks: crypto_engine_op
+## Driver callbacks: crypto_engine_op {#driver-callbacks-cryptoengineop}
 
 Each algorithm registered with crypto_engine provides a `struct crypto_engine_op`:
 
@@ -100,7 +100,7 @@ struct crypto_engine_op {
 > `do_one_request`. The refactor to today's model — `do_one_request` only, wrapped in
 > per-type structs like `skcipher_engine_alg` — landed between 6.5 and 6.6.
 
-## Algorithm registration: skcipher_engine_alg
+## Algorithm registration: skcipher_engine_alg {#algorithm-registration-skcipherenginealg}
 
 The engine op is embedded in the algorithm descriptor struct, not in a per-transform context
 struct. For example, `struct skcipher_engine_alg` wraps `struct skcipher_alg` with an
@@ -119,9 +119,9 @@ The same pattern applies for AEAD (`struct aead_engine_alg`), ahash
 engine op inside the algorithm descriptor and register with the engine-aware helpers (e.g.,
 `crypto_engine_register_skcipher()`) rather than the plain crypto API helpers.
 
-## How a driver uses crypto_engine
+## How a driver uses crypto_engine {#how-a-driver-uses-crypto_engine}
 
-### Step 1: allocate and start the engine in probe
+### Step 1: allocate and start the engine in probe {#step-1-allocate-and-start-the-engine-in-probe}
 
 ```c
 /* drivers/crypto/mydrv.c */
@@ -170,7 +170,7 @@ static int mydrv_remove(struct platform_device *pdev)
 }
 ```
 
-### Step 2: register algorithms via crypto_engine helpers
+### Step 2: register algorithms via crypto_engine helpers {#step-2-register-algorithms-via-crypto_engine-helpers}
 
 Instead of `crypto_register_skcipher()`, use the engine-aware wrapper:
 
@@ -206,7 +206,7 @@ static struct skcipher_engine_alg mydrv_aes_algs[] = {
 ret = crypto_engine_register_skcipher(&mydrv_aes_algs[0]);
 ```
 
-### Step 3: the encrypt/decrypt entry points enqueue the request
+### Step 3: the encrypt/decrypt entry points enqueue the request {#step-3-the-encryptdecrypt-entry-points-enqueue-the-request}
 
 ```c
 /* Called by the crypto API when a caller does crypto_skcipher_encrypt() */
@@ -230,7 +230,7 @@ static int mydrv_aes_decrypt(struct skcipher_request *req)
 }
 ```
 
-### Step 4: do_one_request programs the hardware
+### Step 4: do_one_request programs the hardware {#step-4-doonerequest-programs-the-hardware}
 
 ```c
 static int mydrv_do_one_request(struct crypto_engine *engine, void *areq)
@@ -262,7 +262,7 @@ static int mydrv_do_one_request(struct crypto_engine *engine, void *areq)
 }
 ```
 
-### Step 5: complete from the interrupt handler
+### Step 5: complete from the interrupt handler {#step-5-complete-from-the-interrupt-handler}
 
 ```c
 static irqreturn_t mydrv_irq(int irq, void *dev_id)
@@ -294,7 +294,7 @@ static irqreturn_t mydrv_irq(int irq, void *dev_id)
 `crypto_finalize_skcipher_request()` (and equivalents for AEAD, ahash, akcipher) invokes
 the request's completion callback, then kicks the engine to pump the next queued request.
 
-## The fallback pattern
+## The fallback pattern {#the-fallback-pattern}
 
 Hardware accelerators often have limitations: they may not support all key sizes, all modes,
 or may be unavailable (e.g., during suspend). The standard pattern is to keep a software
@@ -375,7 +375,7 @@ static int mydrv_aes_encrypt(struct skcipher_request *req)
 The same pattern applies to AEAD (`struct aead_engine_alg`, `crypto_finalize_aead_request()`),
 ahash, and akcipher.
 
-## Retry support
+## Retry support {#retry-support}
 
 When `engine->retry_support = true`, `crypto_pump_requests()` in `crypto/crypto_engine.c`
 handles a `do_one_request()` failure differently depending on the error:
@@ -392,7 +392,7 @@ handles a `do_one_request()` failure differently depending on the error:
 Without retry support (or on any non-`-ENOSPC` error), a hardware failure causes the request
 to fail immediately with an error back to the caller.
 
-## Batching
+## Batching {#batching}
 
 There is no batching callback in `crypto_engine` — `struct crypto_engine` has no
 `do_batch_requests`-style hook, and `crypto_pump_requests()` always dispatches exactly one
@@ -400,7 +400,7 @@ request per `do_one_request()` call. Hardware capable of submitting several requ
 single DMA pass (e.g., QAT) implements its own batching outside of `crypto_engine`, or
 processes requests one at a time through it regardless.
 
-## crypto_engine vs. writing directly to the crypto API
+## crypto_engine vs. writing directly to the crypto API {#crypto_engine-vs-writing-directly-to-the-crypto-api}
 
 | Scenario | Use crypto_engine | Write directly |
 |---|---|---|
@@ -411,7 +411,7 @@ processes requests one at a time through it regardless.
 | SIMD-accelerated (AES-NI, ARM CE) | No | Yes (use kernel_fpu_begin) |
 | PCIe offload card with its own scheduler | Optional | Sometimes better |
 
-## Real driver examples
+## Real driver examples {#real-driver-examples}
 
 | Driver | Source | Notable pattern |
 |---|---|---|
@@ -420,7 +420,7 @@ processes requests one at a time through it regardless.
 | marvell/cesa | `drivers/crypto/marvell/cesa/` | Does *not* use `crypto_engine` — its own TDMA-chain-based queueing |
 | bcm2835 | `drivers/crypto/bcm/cipher.c` | Does *not* use `crypto_engine` — submits via the mailbox (mbox) framework to the SPU coprocessor |
 
-## Observing crypto_engine
+## Observing crypto_engine {#observing-crypto_engine}
 
 ```bash
 # See which algorithms are ASYNC (hardware-backed)
@@ -440,22 +440,22 @@ modprobe tcrypt mode=0
 # This exercises all registered algorithms including hardware ones
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [crypto/crypto_engine.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/crypto_engine.c) — the engine implementation: `crypto_pump_requests()`, the retry/backlog logic, and the `crypto_engine_register_*()` helpers
 - [include/crypto/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/engine.h) — the public API: `struct crypto_engine_op`, the `*_engine_alg` wrapper structs, `crypto_transfer_*_request_to_engine()`, `crypto_finalize_*_request()`
 - [include/crypto/internal/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/internal/engine.h) — the actual `struct crypto_engine` definition (driver-internal header)
 - [Documentation/crypto/crypto_engine.rst](https://docs.kernel.org/crypto/crypto_engine.html) — kernel documentation; note it still describes the older `enginectx`/`prepare_cipher_request` design and has not been updated for the `crypto_engine_op`/`do_one_request` model in current code
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Crypto API](crypto-api.md) — SKCIPHER, AEAD, ahash interfaces that `crypto_engine` sits underneath
 - [dm-crypt and fscrypt](encryption.md) — consumers of hardware crypto
 - [Crypto War Stories](war-stories.md) — incident 5 covers a hardware accelerator silently corrupting ciphertext and the fallback pattern used to work around it
 - [Memory Management: DMA](../mm/dma.md) — scatter-gather and DMA mapping used by `do_one_request()` implementations
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Asynchronous crypto](https://lwn.net/Articles/109475/) (November 3, 2004) — the original design discussion for queueing crypto requests to hardware accelerators with async completion callbacks; the conceptual ancestor of the `-EINPROGRESS` / completion-callback model `crypto_engine` implements

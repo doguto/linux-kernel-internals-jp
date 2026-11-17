@@ -1,8 +1,8 @@
-# Threaded IRQs
+# Threaded IRQs {#threaded-irqs}
 
 > Moving interrupt work into process context for longer processing
 
-## The problem with hardirq handlers
+## The problem with hardirq handlers {#the-problem-with-hardirq-handlers}
 
 Hardware interrupt handlers (hardirq) run with interrupts disabled on the current CPU. This means:
 
@@ -15,7 +15,7 @@ For complex devices (I2C buses, SPI controllers, touchscreens), the interrupt ha
 
 **Threaded IRQs** were introduced in Linux 2.6.30 by Thomas Gleixner [(commit)](https://git.kernel.org/linus/3aa551c9b4c40018f0e261a178e3d25478dc04a9) [(LWN)](https://lwn.net/Articles/302043/) and solve this by moving the heavy lifting to a dedicated kernel thread that runs in process context.
 
-## Where this actually came from
+## Where this actually came from {#where-this-actually-came-from}
 
 Mainline didn't invent threaded interrupt handling from scratch in 2009 — it imported an idea the out-of-tree [PREEMPT_RT](../locking/preempt-rt.md) patch set had already been relying on for years. LWN's coverage of the original proposal is explicit about this: *"In the realtime tree, nearly all drivers were mass converted to use threads"* — because PREEMPT_RT's whole premise depends on nothing running with interrupts fully disabled for long, so RT builds had no choice but to move hardirq work into schedulable, preemptible threads ([LWN](https://lwn.net/Articles/302043/), Jake Edge, October 8 2008).
 
@@ -23,7 +23,7 @@ What Gleixner proposed for mainline was narrower and more conservative than the 
 
 The same article notes the anticipated payoff went beyond latency: *"Threaded handlers will also help the debuggability of the kernel and may eventually lead to the removal of tasklets from Linux."* That connection is exactly why [tasklets are now deprecated in favor of threaded IRQs](tasklets.md#the-deprecation-nobody-planned-to-start-then-couldnt-finish) — the 2008 proposal was already naming the mechanism that would eventually make tasklets removable, over a decade before the removal push actually started.
 
-## request_threaded_irq
+## request_threaded_irq {#requestthreadedirq}
 
 ```c
 int request_threaded_irq(unsigned int irq,
@@ -41,7 +41,7 @@ When a threaded IRQ fires:
    - May sleep, take mutexes, do I2C reads, etc.
    - `IRQF_ONESHOT` keeps the IRQ line masked until `thread_fn` returns
 
-## The IRQF_ONESHOT requirement
+## The IRQF_ONESHOT requirement {#the-irqf_oneshot-requirement}
 
 For threaded IRQs with level-triggered interrupts, you **must** use `IRQF_ONESHOT`. Here's why:
 
@@ -62,7 +62,7 @@ request_threaded_irq(irq, primary_handler, thread_fn,
                      IRQF_ONESHOT | IRQF_TRIGGER_LOW, "my-device", dev);
 ```
 
-## A complete threaded IRQ example
+## A complete threaded IRQ example {#a-complete-threaded-irq-example}
 
 ```c
 /* Primary handler: runs in hardirq context */
@@ -110,7 +110,7 @@ static int my_probe(struct i2c_client *client)
 }
 ```
 
-## NULL primary handler
+## NULL primary handler {#null-primary-handler}
 
 If all the work can go to the thread and you don't need to make a "is this my interrupt?" decision in hardirq context, you can pass `NULL` as the primary handler:
 
@@ -122,7 +122,7 @@ request_threaded_irq(irq, NULL, my_thread_fn,
 
 The kernel's default primary handler acknowledges the interrupt and wakes the thread.
 
-## The IRQ thread
+## The IRQ thread {#the-irq-thread}
 
 The kernel creates one kernel thread per threaded IRQ, named `irq/N-name` where N is the IRQ number:
 
@@ -143,7 +143,7 @@ IRQ threads can have their priority adjusted:
 chrt -f -p 90 $(pgrep -f "irq/45")
 ```
 
-## When to use threaded IRQs
+## When to use threaded IRQs {#when-to-use-threaded-irqs}
 
 ```
 Use threaded IRQs when:
@@ -158,7 +158,7 @@ Keep in hardirq when:
   ✓ Hard real-time requirements (avoid thread scheduling latency)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [request_irq and free_irq](request-irq.md) — The non-threaded version
 - [Workqueues](workqueues.md) — Another way to defer work to process context

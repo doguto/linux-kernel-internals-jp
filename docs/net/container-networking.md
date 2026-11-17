@@ -1,8 +1,8 @@
-# Container Networking
+# Container Networking {#container-networking}
 
 > How Docker, Kubernetes, and container runtimes implement network isolation
 
-## The building blocks
+## The building blocks {#the-building-blocks}
 
 Container networking is built from three Linux primitives:
 
@@ -21,7 +21,7 @@ Host network namespace                 Container namespace
 └─────────────────────────┘
 ```
 
-## veth pairs
+## veth pairs {#veth-pairs}
 
 A veth pair is two virtual interfaces connected back-to-back. Packets sent to one end emerge from the other:
 
@@ -43,7 +43,7 @@ nsenter -t <container_pid> -n ip link set veth1 up
 nsenter -t <container_pid> -n ip route add default via 10.0.0.1
 ```
 
-### veth in the kernel
+### veth in the kernel {#veth-in-the-kernel}
 
 ```c
 /* drivers/net/veth.c */
@@ -76,7 +76,7 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 
 No actual hardware involved — packets cross from one namespace to another via `netif_rx()`.
 
-## Linux bridge
+## Linux bridge {#linux-bridge}
 
 The bridge acts as a software L2 switch. veth host-side interfaces are attached as bridge ports:
 
@@ -94,7 +94,7 @@ ip link set veth2 master docker0
 # and through the host's routing table
 ```
 
-### Bridge forwarding
+### Bridge forwarding {#bridge-forwarding}
 
 ```c
 /* net/bridge/br_forward.c */
@@ -116,7 +116,7 @@ void br_forward(const struct net_bridge_port *to, struct sk_buff *skb,
 
 The bridge maintains a MAC→port forwarding database (FDB), learning from incoming packets. `bridge fdb show` displays it.
 
-## NAT / masquerade
+## NAT / masquerade {#nat-masquerade}
 
 Containers need to reach the internet. The host NATs outgoing traffic:
 
@@ -135,7 +135,7 @@ When container `172.17.0.2` sends to `8.8.8.8`:
 4. Source IP rewritten to host IP
 5. Reply comes back to host IP → conntrack → translated back → forwarded to container
 
-## Port publishing
+## Port publishing {#port-publishing}
 
 ```bash
 # Docker: map host port 8080 → container port 80
@@ -146,7 +146,7 @@ iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination 172.1
 iptables -t filter -A DOCKER -d 172.17.0.2 -p tcp --dport 80 -j ACCEPT
 ```
 
-## Overlay networks (VXLAN)
+## Overlay networks (VXLAN) {#overlay-networks-vxlan}
 
 For multi-host container networking (Kubernetes, Docker Swarm), overlay networks encapsulate container traffic in UDP/VXLAN:
 
@@ -176,7 +176,7 @@ ip addr add 192.168.0.1/24 dev vxlan0
 ip route add 192.168.0.2/32 via 10.0.0.2 dev vxlan0
 ```
 
-### VXLAN in the kernel
+### VXLAN in the kernel {#vxlan-in-the-kernel}
 
 ```c
 /* drivers/net/vxlan/vxlan_core.c */
@@ -195,7 +195,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 ```
 
-## Network policies (iptables vs eBPF)
+## Network policies (iptables vs eBPF) {#network-policies-iptables-vs-ebpf}
 
 Traditional container firewalling uses iptables rules inserted by the runtime. For thousands of pods, this becomes a bottleneck (O(n) rule traversal):
 
@@ -211,7 +211,7 @@ bpf_redirect_map(&cilium_lb4_backends, backend_id, 0)
 
 Cilium and other eBPF-based CNI plugins (Calico with eBPF, Flannel with VXLAN-on-eBPF) replace iptables with BPF maps — constant-time lookups regardless of rule count.
 
-## Observing container networking
+## Observing container networking {#observing-container-networking}
 
 ```bash
 # List all network namespaces
@@ -246,7 +246,7 @@ ip -s link show veth0
 ip -s link show vxlan0
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Netfilter Architecture](netfilter.md) — iptables/nftables hooks
 - [Connection Tracking](conntrack.md) — NAT state tracking

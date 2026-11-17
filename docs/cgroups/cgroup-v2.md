@@ -1,10 +1,10 @@
-# Cgroup v2 Architecture
+# Cgroup v2 Architecture {#cgroup-v2-architecture}
 
 > The unified resource control hierarchy
 
-## Why cgroup v2 exists
+## Why cgroup v2 exists {#why-cgroup-v2-exists}
 
-### Cgroup v1: one hierarchy per controller
+### Cgroup v1: one hierarchy per controller {#cgroup-v1-one-hierarchy-per-controller}
 
 Cgroups v1 (Linux 2.6.24, 2008) [(LWN)](https://lwn.net/Articles/236437/) let each resource controller (`cpu`, `memory`, `blkio`, `cpuset`, etc.) have its own independent hierarchy. You could put process 1234 in `/sys/fs/cgroup/cpu/webserver/` for CPU accounting and `/sys/fs/cgroup/memory/tier-a/` for memory limits — they were completely independent trees.
 
@@ -12,7 +12,7 @@ This sounded flexible but created a fundamental problem: **the controllers had n
 
 The writeback attribution problem crystallized the issue: when a process writes to a file, the actual I/O to disk happens later from a kernel worker thread (`kworker`). In v1, the `blkio` controller charged this I/O to the `kworker`, not the process that dirtied the page. There was no way to fix this without a unified notion of group membership — the `memory` controller and `blkio` controller needed to agree on which cgroup owns a dirty page.
 
-### Cgroup v2: unified hierarchy
+### Cgroup v2: unified hierarchy {#cgroup-v2-unified-hierarchy}
 
 Tejun Heo designed cgroup v2 (merged in Linux 4.5, 2016) [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8) [(LWN)](https://lwn.net/Articles/679786/) around a single tree. All controllers operate on the same hierarchy. A process is in exactly one cgroup, and all controllers apply to that cgroup.
 
@@ -20,7 +20,7 @@ This made proper writeback attribution possible: since both `memory` and `io` co
 
 The "no internal process" rule (a cgroup cannot hold both processes and child cgroups) enforces clean delegation semantics. A container runtime owns a subtree; it can create child cgroups within that subtree. A process in the parent cgroup can't accidentally interfere with the resource accounting of children.
 
-## Cgroup v1 vs v2
+## Cgroup v1 vs v2 {#cgroup-v1-vs-v2}
 
 | Feature | v1 | v2 |
 |---------|----|----|
@@ -32,7 +32,7 @@ The "no internal process" rule (a cgroup cannot hold both processes and child cg
 
 Cgroup v2 (unified hierarchy) was merged in 4.5 [(commit)](https://git.kernel.org/linus/34a9304a96d6351c2d35dcdc9293258378fc0bd8) and is now the default on modern distros. Most subsystems support only v2.
 
-## The single hierarchy
+## The single hierarchy {#the-single-hierarchy}
 
 All cgroup v2 resources hang off a single filesystem at `/sys/fs/cgroup`:
 
@@ -54,9 +54,9 @@ All cgroup v2 resources hang off a single filesystem at `/sys/fs/cgroup`:
         └── session-1.scope/
 ```
 
-## Key data structures
+## Key data structures {#key-data-structures}
 
-### struct cgroup
+### struct cgroup {#struct-cgroup}
 
 ```c
 /* kernel/cgroup/cgroup-internal.h */
@@ -90,7 +90,7 @@ struct cgroup {
 };
 ```
 
-### struct cgroup_subsys_state (CSS)
+### struct cgroup_subsys_state (CSS) {#struct-cgroupsubsysstate-css}
 
 Each controller attaches per-cgroup state via a CSS:
 
@@ -128,7 +128,7 @@ struct mem_cgroup {
 struct mem_cgroup *memcg = container_of(css, struct mem_cgroup, css);
 ```
 
-### struct cgroup_subsys
+### struct cgroup_subsys {#struct-cgroup_subsys}
 
 Each controller registers itself:
 
@@ -165,7 +165,7 @@ struct cgroup_subsys {
 };
 ```
 
-## Enabling controllers
+## Enabling controllers {#enabling-controllers}
 
 Controllers must be explicitly enabled in the subtree:
 
@@ -189,7 +189,7 @@ echo $$ > /sys/fs/cgroup/myapp/cgroup.procs
 
 **No Internal Process Constraint**: in v2, a cgroup cannot hold both processes and child cgroups. Only leaf cgroups (cgroups with no children) and the root cgroup can hold processes directly.
 
-## css_set: the task-to-cgroup link
+## css_set: the task-to-cgroup link {#css_set-the-task-to-cgroup-link}
 
 Each task has a pointer to a `css_set`, which holds references to one CSS per active controller:
 
@@ -218,7 +218,7 @@ struct css_set {
 
 CSS sets are shared: if two tasks are in exactly the same set of cgroups (one per controller), they share a `css_set`. This keeps the number of css_set objects small.
 
-## Moving processes between cgroups
+## Moving processes between cgroups {#moving-processes-between-cgroups}
 
 ```bash
 # Move process PID to a cgroup
@@ -237,7 +237,7 @@ cgroup_attach_task()
           css->ss->attach(tset)        /* notify controller */
 ```
 
-## cgroup.events and notifications
+## cgroup.events and notifications {#cgroupevents-and-notifications}
 
 ```bash
 # Monitor cgroup for empty/non-empty transitions
@@ -249,7 +249,7 @@ cat /sys/fs/cgroup/myapp/cgroup.events
 inotifywait -e modify /sys/fs/cgroup/myapp/cgroup.events
 ```
 
-## BPF programs on cgroups
+## BPF programs on cgroups {#bpf-programs-on-cgroups}
 
 ```bash
 # Attach a BPF program to a cgroup (e.g., network filter)
@@ -276,7 +276,7 @@ Supported BPF attach types on cgroups:
 - `BPF_CGROUP_INET4_CONNECT` / `BPF_CGROUP_INET6_CONNECT`
 - `BPF_CGROUP_INET4_BIND` / `BPF_CGROUP_INET6_BIND`
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Resource Controllers](cgroup-controllers.md) — cpu, memory, io, pids in detail
 - [Container Isolation](container-isolation.md) — How cgroups combine with namespaces

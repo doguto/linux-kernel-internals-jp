@@ -1,8 +1,8 @@
-# I/O Bandwidth: Measurement and Optimization
+# I/O Bandwidth: Measurement and Optimization {#io-bandwidth-measurement-and-optimization}
 
 > How to measure actual I/O bandwidth, where the limits come from, and how to approach them
 
-## What limits I/O bandwidth?
+## What limits I/O bandwidth? {#what-limits-io-bandwidth}
 
 I/O bandwidth — bytes per second moving between storage and memory — is bounded by the weakest link in the chain:
 
@@ -25,9 +25,9 @@ In practice, the limit is often not the hardware interface but the software path
 
 ---
 
-## Measuring device bandwidth
+## Measuring device bandwidth {#measuring-device-bandwidth}
 
-### `fio`: the authoritative benchmark
+### `fio`: the authoritative benchmark {#fio-the-authoritative-benchmark}
 
 ```bash
 # Sequential read throughput (O_DIRECT, bypass page cache)
@@ -74,7 +74,7 @@ for bs in 4k 16k 64k 256k 1M 4M; do
 done
 ```
 
-### `dd`: quick sequential measurement
+### `dd`: quick sequential measurement {#dd-quick-sequential-measurement}
 
 ```bash
 # Read throughput (O_DIRECT, from device)
@@ -87,7 +87,7 @@ dd if=/dev/zero of=/dev/nvme0n1 bs=1M count=4096 oflag=direct 2>&1 | tail -1
 
 `dd` is not a reliable benchmark (single-threaded, no queue depth control), but it is fast and available everywhere.
 
-### `/proc/diskstats` for live throughput
+### `/proc/diskstats` for live throughput {#procdiskstats-for-live-throughput}
 
 ```bash
 # Live read/write throughput in MB/s
@@ -103,7 +103,7 @@ BEGIN { getline line1 < "/proc/diskstats"; close("/proc/diskstats") }
 
 ---
 
-## The CPU bottleneck in I/O bandwidth
+## The CPU bottleneck in I/O bandwidth {#the-cpu-bottleneck-in-io-bandwidth}
 
 On modern NVMe devices (5–7 GB/s), the storage device is often not the bottleneck — the CPU is. Moving data between the device and memory requires:
 
@@ -151,7 +151,7 @@ nvme set-feature /dev/nvme0 -f 8 -v 0x0064  # aggregate 100 entries or 1ms
 
 ---
 
-## Queue depth and parallelism
+## Queue depth and parallelism {#queue-depth-and-parallelism}
 
 For sequential I/O, bandwidth scales with queue depth — up to the device's internal parallelism limit:
 
@@ -182,7 +182,7 @@ The relationship is: `IOPS = queue_depth / latency`; multiply by block size for 
 
 ---
 
-## Memory bandwidth as a ceiling
+## Memory bandwidth as a ceiling {#memory-bandwidth-as-a-ceiling}
 
 For large sequential I/O, data must move between the device and DRAM. The DRAM bandwidth imposes an absolute ceiling:
 
@@ -204,7 +204,7 @@ When building high-bandwidth storage systems (NVMe-oF, large RAID arrays), DRAM 
 
 ---
 
-## Filesystem overhead on bandwidth
+## Filesystem overhead on bandwidth {#filesystem-overhead-on-bandwidth}
 
 A raw block device delivers its rated bandwidth. A filesystem on top adds overhead:
 
@@ -230,7 +230,7 @@ For buffered I/O (through page cache), the page cache adds a copy but also enabl
 
 ---
 
-## Monitoring bandwidth in production
+## Monitoring bandwidth in production {#monitoring-bandwidth-in-production}
 
 ```bash
 # iostat: simplest monitoring
@@ -265,7 +265,7 @@ done
 
 ---
 
-## Quick reference: bandwidth characteristics by storage type
+## Quick reference: bandwidth characteristics by storage type {#quick-reference-bandwidth-characteristics-by-storage-type}
 
 | Storage | Seq Read | Seq Write | Notes |
 |---------|----------|-----------|-------|
@@ -279,7 +279,7 @@ done
 
 ---
 
-## Related pages
+## Related pages {#related-pages}
 
 - [Tuning I/O for Streaming Workloads](tuning-streaming.md) — maximizing sequential throughput
 - [I/O Polling (HIPRI and IOPOLL)](io-polling.md) — eliminating interrupt overhead

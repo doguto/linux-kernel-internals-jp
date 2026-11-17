@@ -1,8 +1,8 @@
-# nftables vs iptables
+# nftables vs iptables {#nftables-vs-iptables}
 
 > The two Linux packet filtering frontends: differences, migration, and coexistence
 
-## The relationship to Netfilter
+## The relationship to Netfilter {#the-relationship-to-netfilter}
 
 Both `iptables` and `nftables` are **userspace tools** that install rules into the kernel's Netfilter framework. The difference is in which kernel module processes those rules:
 
@@ -11,7 +11,7 @@ Both `iptables` and `nftables` are **userspace tools** that install rules into t
 
 The underlying hook mechanism is the same. What changes is how rules are represented, matched, and applied.
 
-## Why nftables was created
+## Why nftables was created {#why-nftables-was-created}
 
 iptables accumulated significant technical debt:
 
@@ -22,9 +22,9 @@ iptables accumulated significant technical debt:
 
 nftables (merged in Linux 3.13) solves all of these with a single unified framework.
 
-## Side-by-side comparison
+## Side-by-side comparison {#side-by-side-comparison}
 
-### Basic syntax
+### Basic syntax {#basic-syntax}
 
 ```bash
 # iptables: block SSH from a specific IP
@@ -34,7 +34,7 @@ iptables -A INPUT -s 10.0.0.5 -p tcp --dport 22 -j DROP
 nft add rule inet filter input ip saddr 10.0.0.5 tcp dport 22 drop
 ```
 
-### Tables and chains
+### Tables and chains {#tables-and-chains}
 
 ```bash
 # iptables: implicit tables (filter, nat, mangle, raw, security)
@@ -50,7 +50,7 @@ nft add chain inet myfilter input { type filter hook input priority 0\; policy a
 # mangle table  → type filter (type route is only for re-routing at OUTPUT hook)
 ```
 
-### Rule listing
+### Rule listing {#rule-listing}
 
 ```bash
 # iptables
@@ -63,7 +63,7 @@ nft list table inet filter  # specific table
 nft list chain inet filter input  # specific chain
 ```
 
-### Counters
+### Counters {#counters}
 
 ```bash
 # iptables: counters per rule (packets, bytes)
@@ -75,7 +75,7 @@ nft add rule inet filter input ip protocol tcp counter
 nft list ruleset  # shows counter values inline
 ```
 
-## Set-based matching
+## Set-based matching {#set-based-matching}
 
 This is where nftables shines — efficient matching against large sets:
 
@@ -103,7 +103,7 @@ nft add element inet filter client_policy { 10.0.0.1 : accept, 10.0.0.2 : drop }
 nft add rule inet filter input ip saddr vmap @client_policy
 ```
 
-## Atomic rule updates
+## Atomic rule updates {#atomic-rule-updates}
 
 ```bash
 # iptables: non-atomic — race window between flush and reload
@@ -124,7 +124,7 @@ table inet filter {
 }
 ```
 
-## NAT with nftables
+## NAT with nftables {#nat-with-nftables}
 
 ```bash
 # DNAT: redirect port 80 to internal server
@@ -136,7 +136,7 @@ nft add rule ip nat prerouting tcp dport 80 dnat to 192.168.1.10:8080
 nft add rule ip nat postrouting oifname "eth0" masquerade
 ```
 
-## Conntrack integration
+## Conntrack integration {#conntrack-integration}
 
 ```bash
 # iptables: -m conntrack (or -m state)
@@ -150,7 +150,7 @@ nft add rule inet filter input ct state invalid drop
 nft add rule inet filter input ct mark 0x1 accept
 ```
 
-## Priority values
+## Priority values {#priority-values}
 
 ```bash
 # Hook priorities determine order when multiple rules/tables are at same hook
@@ -170,7 +170,7 @@ nft add chain inet myapp input { type filter hook input priority -50\; }
 # This chain runs before standard filter rules
 ```
 
-## Coexistence and migration
+## Coexistence and migration {#coexistence-and-migration}
 
 iptables and nftables can coexist on a system, but `iptables-nft` (available in modern distros) wraps iptables syntax while using the `nf_tables` backend:
 
@@ -188,7 +188,7 @@ iptables-translate -A INPUT -p tcp --dport 22 -j ACCEPT
 iptables-restore-translate -f /etc/iptables/rules.v4 > /etc/nftables.conf
 ```
 
-## Debugging and logging
+## Debugging and logging {#debugging-and-logging}
 
 ```bash
 # nftables: log matching packets
@@ -207,7 +207,7 @@ nft monitor trace
 iptables -A INPUT -p tcp --dport 22 -j LOG --log-prefix "SSH: " --log-level 4
 ```
 
-## Performance comparison
+## Performance comparison {#performance-comparison}
 
 For simple cases (small rulesets), performance is similar. For large rulesets:
 
@@ -224,7 +224,7 @@ For simple cases (small rulesets), performance is similar. For large rulesets:
 # - eBPF socket filters
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Netfilter Architecture](netfilter.md) — The hook framework underlying both tools
 - [Connection Tracking](conntrack.md) — The conntrack module both tools use

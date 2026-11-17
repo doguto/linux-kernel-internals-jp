@@ -1,8 +1,8 @@
-# What Happens When a Container Hits Its Memory Limit
+# What Happens When a Container Hits Its Memory Limit {#what-happens-when-a-container-hits-its-memory-limit}
 
 > The full sequence from normal operation to OOM kill and recovery
 
-## The Story in Brief
+## The Story in Brief {#the-story-in-brief}
 
 A container's memory limit is not a wall that appears without warning. The kernel's cgroup memory controller imposes a graduated series of interventions before killing anything: soft throttling at `memory.high`, escalating reclaim pressure, PSI signals visible to observability tooling, and finally — only if all else fails — a cgroup-scoped OOM kill that is entirely separate from the global OOM killer.
 
@@ -27,7 +27,7 @@ This page follows that path step by step. See [Memory Cgroups](memcg.md) for how
 
 ---
 
-## Stage 1: Normal Operation (below memory.high)
+## Stage 1: Normal Operation (below memory.high) {#stage-1-normal-operation-below-memoryhigh}
 
 While `memory.current` stays below `memory.high`, the cgroup memory controller is effectively invisible to running processes. Allocations succeed at normal speed; kswapd runs at the system level for global pressure; no per-cgroup throttling occurs.
 
@@ -47,11 +47,11 @@ The PSI file at `$CGROUP/memory.pressure` will show all zeros during this stage 
 
 ---
 
-## Stage 2: Approaching memory.high — Throttling Begins
+## Stage 2: Approaching memory.high — Throttling Begins {#stage-2-approaching-memoryhigh-throttling-begins}
 
 When an allocation would push `memory.current` past `memory.high`, the kernel enters `mem_cgroup_handle_over_high()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c). This function is called from the task's return-to-userspace path (not from the charge function directly — the `over_high` check is deferred to avoid reclaiming on every allocation).
 
-### The throttling mechanism
+### The throttling mechanism {#the-throttling-mechanism}
 
 `mem_cgroup_handle_over_high()` does two things:
 
@@ -62,7 +62,7 @@ When an allocation would push `memory.current` past `memory.high`, the kernel en
 !!! note "The throttling is per-process, not per-cgroup"
     Each process that allocates while the cgroup is over `memory.high` incurs its own sleep. A single-threaded application serializes its own allocations naturally. A massively multi-threaded application may have many threads sleeping simultaneously.
 
-### What you observe externally
+### What you observe externally {#what-you-observe-externally}
 
 From outside the container, the process appears to be using CPU less efficiently — its runnable time increases while it blocks inside the kernel. PSI begins to register:
 
@@ -90,7 +90,7 @@ cat $CGROUP/memory.events
 
 ---
 
-## Stage 3: Sustained Throttling — Reclaim, PSI, and Feedback
+## Stage 3: Sustained Throttling — Reclaim, PSI, and Feedback {#stage-3-sustained-throttling-reclaim-psi-and-feedback}
 
 If the workload continues to allocate faster than reclaim can free pages, `memory.current` remains near or above `memory.high` for an extended period. The system enters a self-balancing loop:
 
@@ -110,7 +110,7 @@ mem_cgroup_handle_over_high()
 
 `try_to_free_mem_cgroup_pages()` calls `shrink_lruvec()` in [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) which walks the cgroup's LRU lists in priority order: inactive file cache first (cheapest to reclaim), then active file cache, then — if no reclaimable file pages remain — anonymous pages (which may require swap I/O).
 
-### What gets reclaimed and in what order
+### What gets reclaimed and in what order {#what-gets-reclaimed-and-in-what-order}
 
 | Page type | Reclaimable? | Notes |
 |-----------|-------------|-------|
@@ -123,7 +123,7 @@ mem_cgroup_handle_over_high()
 | Shared memory (tmpfs, shmem) | Yes | Charged to cgroup that faulted it in |
 | Kernel slab (kmem) | Partially | Reclaimable dentries and inodes via `shrink_slab()` |
 
-### PSI pressure builds
+### PSI pressure builds {#psi-pressure-builds}
 
 As reclaim consumes CPU time and swap I/O delays resume of throttled tasks, PSI pressure accumulates:
 
@@ -137,7 +137,7 @@ A `full` value above zero means there were moments when every task in the cgroup
 
 PSI is the foundation of proactive memory management tools like Meta's [`oomd`](https://facebookincubator.github.io/oomd/) and systemd-oomd, which monitor `memory.pressure` and kill workloads before the kernel OOM killer fires. See [PSI](psi.md) for how to set up a `memory.pressure` notification trigger.
 
-### memory.reclaim for proactive relief
+### memory.reclaim for proactive relief {#memoryreclaim-for-proactive-relief}
 
 If you detect rising `high` counts or PSI pressure through monitoring, you can manually trigger proactive reclaim without waiting for the kernel to throttle processes:
 
@@ -150,11 +150,11 @@ This was introduced in [commit 94968384dde1](https://git.kernel.org/linus/949683
 
 ---
 
-## Stage 4: Exceeding memory.max — Cgroup OOM
+## Stage 4: Exceeding memory.max — Cgroup OOM {#stage-4-exceeding-memorymax-cgroup-oom}
 
 If reclaim from the throttle path cannot keep `memory.current` below `memory.high`, and usage continues to rise until it reaches `memory.max`, the kernel invokes a different path: the cgroup OOM killer.
 
-### Entry point: mem_cgroup_out_of_memory()
+### Entry point: mem_cgroup_out_of_memory() {#entry-point-memcgroupoutofmemory}
 
 When an allocation fails after exhausting cgroup reclaim, `mem_cgroup_oom()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) is called. It:
 
@@ -162,7 +162,7 @@ When an allocation fails after exhausting cgroup reclaim, `mem_cgroup_oom()` in 
 2. `select_bad_process()` is called with the cgroup constraint, so it only considers tasks within the target cgroup.
 3. After the victim is selected, `oom_kill_process()` calls `mem_cgroup_get_oom_group()` to check whether `memory.oom.group` is set — if so, the entire cgroup subtree is killed, not just the victim.
 
-### How cgroup OOM differs from global OOM
+### How cgroup OOM differs from global OOM {#how-cgroup-oom-differs-from-global-oom}
 
 | | Global OOM | Cgroup OOM |
 |-|-----------|-----------|
@@ -174,7 +174,7 @@ When an allocation fails after exhausting cgroup reclaim, `mem_cgroup_oom()` in 
 | **Memory dump** | Full zone/node Mem-Info | Cgroup memory stats via `mem_cgroup_print_oom_meminfo()` |
 | **Other containers affected** | Potentially | No — completely isolated |
 
-### The OOM kill sequence
+### The OOM kill sequence {#the-oom-kill-sequence}
 
 ```mermaid
 flowchart TD
@@ -189,7 +189,7 @@ flowchart TD
     A --> B --> C --> D --> E --> F --> G
 ```
 
-### What dmesg shows for a cgroup OOM
+### What dmesg shows for a cgroup OOM {#what-dmesg-shows-for-a-cgroup-oom}
 
 ```
 [  891.112245] Memory cgroup out of memory: Killed process 12001 (myapp) \
@@ -206,7 +206,7 @@ Key differences from a global OOM log:
 
 See [Reading an OOM log](reading-oom-log.md) for a full annotated breakdown of these fields.
 
-### memory.oom.group: kill the whole container at once
+### memory.oom.group: kill the whole container at once {#memoryoomgroup-kill-the-whole-container-at-once}
 
 By default, the OOM killer selects a single process within the cgroup. For multi-process containers (web servers with worker pools, sidecars, etc.), killing one process often leaves the rest in a broken state.
 
@@ -225,7 +225,7 @@ Tasks in /myapp.slice/myapp.service are going to be killed due to memory.oom.gro
 !!! warning "oom.group and nested cgroups"
     When `memory.oom.group` is set on an ancestor, all tasks in all descendant cgroups are killed, not just the cgroup that triggered the OOM. Design your cgroup hierarchy accordingly if you have mixed-criticality workloads sharing a parent.
 
-### memory.events after an OOM
+### memory.events after an OOM {#memoryevents-after-an-oom}
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.events
@@ -241,7 +241,7 @@ cat /sys/fs/cgroup/mycontainer/memory.events
 
 ---
 
-## Stage 5: Recovery After OOM Kill
+## Stage 5: Recovery After OOM Kill {#stage-5-recovery-after-oom-kill}
 
 When the victim process exits, its pages are freed back to the cgroup. The sequence:
 
@@ -251,7 +251,7 @@ When the victim process exits, its pages are freed back to the cgroup. The seque
 4. Each page is unmapped and freed via `release_pages()`, which calls `mem_cgroup_uncharge()` (which takes a `struct folio *` in current kernels) to subtract from the cgroup's counter.
 5. `memory.current` drops. If it falls below `memory.max`, further allocations can succeed.
 
-### Will the container recover automatically?
+### Will the container recover automatically? {#will-the-container-recover-automatically}
 
 It depends on what was killed and what the container runtime does:
 
@@ -269,7 +269,7 @@ watch -n 5 "cat /sys/fs/cgroup/mycontainer/memory.events | grep oom"
 # Most production setups poll memory.events at a fixed interval via their metrics agent
 ```
 
-### The memory.events oom_kill counter does not reset
+### The memory.events oom_kill counter does not reset {#the-memoryevents-oom_kill-counter-does-not-reset}
 
 `memory.events` counters are monotonically increasing since the cgroup was created. They do not reset when an OOM kill occurs or when the container restarts (as long as the cgroup is reused). Some orchestrators recreate the cgroup on restart, giving you a fresh baseline. Others reuse it. Check which behavior your runtime uses before building alerting on absolute event counts.
 
@@ -278,7 +278,7 @@ watch -n 5 "cat /sys/fs/cgroup/mycontainer/memory.events | grep oom"
 
 ---
 
-## The Full Sequence at a Glance
+## The Full Sequence at a Glance {#the-full-sequence-at-a-glance}
 
 ```
 memory.current (grows ───────────────────────────────────────────────►)
@@ -297,7 +297,7 @@ memory.current (grows ───────────────────�
 
 ---
 
-## Practical Configuration
+## Practical Configuration {#practical-configuration}
 
 The gap between `memory.high` and `memory.max` is the throttle zone. A well-configured container reaches `memory.high` under load, gets throttled and reclaimed back, and never reaches `memory.max`. This design is explained in [Tuning Containers](tuning-containers.md).
 
@@ -325,7 +325,7 @@ echo 512M > $CGROUP/memory.swap.max
 
 ---
 
-## Key Kernel Functions (mm/memcontrol.c)
+## Key Kernel Functions (mm/memcontrol.c) {#key-kernel-functions-mmmemcontrolc}
 
 | Function | What it does |
 |----------|-------------|
@@ -339,7 +339,7 @@ echo 512M > $CGROUP/memory.swap.max
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [Memory Cgroups](memcg.md) — How the accounting works and what is charged
 - [Tuning Containers](tuning-containers.md) — How to set memory.high, memory.max, and memory.min correctly

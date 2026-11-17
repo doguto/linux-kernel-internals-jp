@@ -1,12 +1,12 @@
-# Scheduler
+# Scheduler {#scheduler}
 
 > How Linux decides which task runs next
 
 The Linux scheduler is responsible for deciding which task runs on each CPU at any given moment. It balances competing requirements: fairness between tasks, low latency for interactive work, high throughput for batch jobs, and determinism for real-time processes.
 
-## Structure of this section
+## Structure of this section {#structure-of-this-section}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 - [Scheduler Evolution](scheduler-evolution.md) — From O(1) to CFS to EEVDF
 - [Scheduler Classes](scheduler-classes.md) — The five scheduling policies and how they're layered
 - [CFS: Completely Fair Scheduler](cfs.md) — vruntime, the red-black tree, and weighted fairness
@@ -14,34 +14,34 @@ The Linux scheduler is responsible for deciding which task runs on each CPU at a
 - [sched_ext (BPF Scheduling)](sched-ext.md) — The sixth scheduler class: BPF-programmable policy, merged in 6.12
 - [Runqueues and Task Selection](runqueues.md) — Per-CPU runqueues and how tasks are picked
 
-### Lifecycle
+### Lifecycle {#lifecycle}
 - [Life of a Context Switch](context-switch.md) — What happens inside `__schedule()`
 - [What Happens When a Process Wakes Up](wakeup.md) — Wakeup path and scheduler placement
 - [What Happens When You fork()](sched-fork.md) — How new tasks enter the scheduler
 
-### Real-Time
+### Real-Time {#real-time}
 - [RT Scheduler](rt-scheduler.md) — SCHED_FIFO, SCHED_RR, and the RT runqueue
 - [SCHED_DEADLINE](deadline.md) — CBS and admission control
 - [Priority Inversion and PI Mutexes](pi-mutexes.md) — The problem and the solution
 
-### Resource Control
+### Resource Control {#resource-control}
 - [CPU cgroup v1 vs v2](cpu-cgroup.md) — shares, quota, and the hierarchy difference
 - [CPU Bandwidth Control](cpu-bandwidth.md) — CFS bandwidth throttling
 - [cpuset](cpuset.md) — CPU and NUMA node affinity via cgroups
 
-### Topology
+### Topology {#topology}
 - [Scheduler Domains and Load Balancing](sched-domains.md) — SMT, LLC, NUMA hierarchy
 - [CPU Affinity and Pinning](cpu-affinity.md) — taskset, sched_setaffinity, and when to use them
 
-### Debugging
+### Debugging {#debugging}
 - [Understanding /proc/schedstat](schedstat.md) — Per-CPU and per-task scheduler statistics
 - [Tracing the Scheduler](sched-tracing.md) — ftrace, perf sched, and scheduler events
 - [Tuning for Latency vs Throughput](sched-tuning.md) — sysctl knobs and their trade-offs
 
-### War Stories
+### War Stories {#war-stories}
 - [Scheduler War Stories](war-stories.md) — Real CVEs, performance regressions, and one unresolved heuristic tension
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What it does |
 |------|-------------|

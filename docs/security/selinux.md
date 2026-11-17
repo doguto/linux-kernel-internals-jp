@@ -1,8 +1,8 @@
-# SELinux: Mandatory Access Control
+# SELinux: Mandatory Access Control {#selinux-mandatory-access-control}
 
 > Security contexts, AVC cache, type enforcement policy, and audit2allow
 
-## What is SELinux?
+## What is SELinux? {#what-is-selinux}
 
 SELinux (Security-Enhanced Linux) implements **Mandatory Access Control (MAC)**: access decisions are made by a central security policy, not by object owners. Even root cannot override the policy without explicit permission.
 
@@ -19,7 +19,7 @@ SELinux MAC:
 
 SELinux was developed by the NSA, open-sourced in December 2000, and merged into Linux 2.6.0-test3 (August 2003). It is built on the **LSM (Linux Security Module)** framework. Every security-sensitive kernel operation calls an LSM hook which SELinux intercepts.
 
-## Security contexts
+## Security contexts {#security-contexts}
 
 Every process and file has a **security context** (also called label):
 
@@ -54,7 +54,7 @@ runcon -t httpd_t /bin/bash    # run shell as httpd_t
 seinfo -t | grep httpd    # all httpd types
 ```
 
-## Access Vector Cache (AVC)
+## Access Vector Cache (AVC) {#access-vector-cache-avc}
 
 Every access check goes through the **AVC** (Access Vector Cache). The AVC is a hash table that caches recent allow/deny decisions:
 
@@ -99,7 +99,7 @@ cat /sys/fs/selinux/avc/cache_threshold
 # 512 (entries)
 ```
 
-## Type Enforcement (TE) policy
+## Type Enforcement (TE) policy {#type-enforcement-te-policy}
 
 The most important policy mechanism. Rules grant access between types:
 
@@ -120,7 +120,7 @@ allow httpd_t http_port_t:tcp_socket { name_bind };
 allow httpd_t mysqld_port_t:tcp_socket name_connect;
 ```
 
-### Policy source files
+### Policy source files {#policy-source-files}
 
 ```bash
 # Policy is compiled from .te (type enforcement) files:
@@ -139,7 +139,7 @@ sesearch --allow -s httpd_t -c file /etc/selinux/targeted/policy/policy.33
 sesearch --allow -t httpd_content_t /etc/selinux/targeted/policy/policy.33
 ```
 
-## File context labeling
+## File context labeling {#file-context-labeling}
 
 ```bash
 # Default contexts come from file_contexts files:
@@ -160,7 +160,7 @@ matchpathcon /var/www/html/index.html
 # /var/www/html/index.html system_u:object_r:httpd_content_t:s0
 ```
 
-## Audit and audit2allow
+## Audit and audit2allow {#audit-and-audit2allow}
 
 When SELinux denies an access, it logs to the audit log:
 
@@ -185,7 +185,7 @@ audit2allow -a
 # allow httpd_t mysqld_port_t:tcp_socket name_connect;
 ```
 
-## Boolean switches
+## Boolean switches {#boolean-switches}
 
 Booleans allow tunable policy without recompiling:
 
@@ -206,7 +206,7 @@ setsebool -P httpd_unified on          # allow httpd to read any httpd type
 setsebool -P httpd_enable_homedirs on  # allow ~user/public_html
 ```
 
-## SELinux modes
+## SELinux modes {#selinux-modes}
 
 ```bash
 # Check current mode:
@@ -227,7 +227,7 @@ semanage permissive -a httpd_t   # httpd_t in permissive mode
 semanage permissive -d httpd_t   # remove permissive
 ```
 
-## selinuxfs: kernel interface
+## selinuxfs: kernel interface {#selinuxfs-kernel-interface}
 
 ```bash
 # SELinux exposes its interface via selinuxfs:
@@ -248,7 +248,7 @@ cat /sys/fs/selinux/policyvers
 # 33
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
 ```c
 /* security/selinux/hooks.c */
@@ -273,7 +273,7 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LSM Framework](lsm.md) — the security hook infrastructure SELinux uses
 - [Capabilities](capabilities.md) — SELinux and capabilities interact

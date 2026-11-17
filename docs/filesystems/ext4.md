@@ -1,8 +1,8 @@
-# ext4
+# ext4 {#ext4}
 
 > The default Linux filesystem: journaled, extent-based, battle-tested. Developed by Theodore Ts'o, Andreas Dilger, Alex Tomas, and others; merged as stable in Linux 2.6.28.
 
-## On-disk layout
+## On-disk layout {#on-disk-layout}
 
 An ext4 filesystem is divided into **block groups**. Each block group contains:
 
@@ -29,7 +29,7 @@ dumpe2fs /dev/sda1 | head -80
 # Journal inode:            8
 ```
 
-## The ext4 superblock
+## The ext4 superblock {#the-ext4-superblock}
 
 ```c
 /* fs/ext4/ext4.h */
@@ -58,7 +58,7 @@ struct ext4_super_block {
 };
 ```
 
-## The ext4 inode
+## The ext4 inode {#the-ext4-inode}
 
 ```c
 struct ext4_inode {
@@ -89,7 +89,7 @@ struct ext4_inode {
 };
 ```
 
-## Extent tree: efficient large file representation
+## Extent tree: efficient large file representation {#extent-tree-efficient-large-file-representation}
 
 ext4 uses extents (contiguous block runs) instead of the old indirect block maps. Extents were introduced by Alex Tomas [(commit)](https://git.kernel.org/linus/a86c61812637c7dd0c57e29880cffd477b62f2e7):
 
@@ -130,11 +130,11 @@ Benefits over old indirect maps:
 - Sequential reads are contiguous on disk → fast
 - Reduces inode tree depth for large files
 
-## Journaling with jbd2
+## Journaling with jbd2 {#journaling-with-jbd2}
 
 ext4 uses the Journal Block Device (jbd2) for crash consistency:
 
-### Write modes
+### Write modes {#write-modes}
 
 | Mode | journaled | Data safety | Performance |
 |------|-----------|-------------|-------------|
@@ -151,7 +151,7 @@ tune2fs -l /dev/sda1 | grep "Default mount options"
 mount -o data=journal /dev/sda1 /mnt
 ```
 
-### Journal structure (jbd2)
+### Journal structure (jbd2) {#journal-structure-jbd2}
 
 ```c
 /* fs/jbd2/journal.c */
@@ -181,7 +181,7 @@ struct journal_s {              /* journal_t */
 };
 ```
 
-### Transaction flow
+### Transaction flow {#transaction-flow}
 
 ```
 1. jbd2_journal_start(): begin transaction
@@ -205,7 +205,7 @@ struct journal_s {              /* journal_t */
 6. On crash: journal replay restores consistency
 ```
 
-## Delayed allocation (delalloc)
+## Delayed allocation (delalloc) {#delayed-allocation-delalloc}
 
 ext4 delays block allocation until actual writeback:
 
@@ -227,7 +227,7 @@ Benefits:
 - Large sequential writes get contiguous blocks (better for extent efficiency)
 - Reduces journal pressure (allocations batched)
 
-## Online features
+## Online features {#online-features}
 
 ```bash
 # Online resize (grow filesystem)
@@ -248,7 +248,7 @@ mount -o commit=60 /dev/sda1 /mnt  # commit every 60s (less safe, faster)
 tune2fs -O inline_data /dev/sda1
 ```
 
-## Key ext4 statistics
+## Key ext4 statistics {#key-ext4-statistics}
 
 ```bash
 # ext4 stats via debugfs
@@ -267,7 +267,7 @@ cat /sys/kernel/tracing/trace_pipe
 cat /proc/fs/ext4/sda1/mb_groups  # buddy allocator per-group state
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [tmpfs and ramfs](tmpfs.md) — Memory-backed alternative
 - [btrfs](btrfs.md) — Copy-on-Write alternative

@@ -1,8 +1,8 @@
-# User Namespaces and Credential Mapping
+# User Namespaces and Credential Mapping {#user-namespaces-and-credential-mapping}
 
 > uid/gid mapping, capability sets, and the privilege model for containers
 
-## What user namespaces provide
+## What user namespaces provide {#what-user-namespaces-provide}
 
 A user namespace maps user and group IDs between a process's view and the host system. Inside the namespace, a process can have uid 0 (root) while being mapped to an unprivileged uid on the host.
 
@@ -15,7 +15,7 @@ Host system:           Container (user namespace):
   uid=1001-65535     ←→  uid=1-64535
 ```
 
-## Creating a user namespace
+## Creating a user namespace {#creating-a-user-namespace}
 
 ```c
 #include <sched.h>
@@ -32,7 +32,7 @@ pid_t pid = clone(child_func, stack_top,
 
 After `clone(CLONE_NEWUSER)`, the child process has a new user namespace but **no uid/gid mapping yet**. All operations requiring privileges fail until the parent writes the mapping.
 
-## uid_map and gid_map
+## uid_map and gid_map {#uidmap-and-gidmap}
 
 ```bash
 # From the parent (after fork):
@@ -48,7 +48,7 @@ echo "0 1000 1" > /proc/<pid>/uid_map    # root maps to host 1000
 echo "1 100000 65534" >> ...             # uid 1-65534 maps to host 100000-165533
 ```
 
-### newuidmap / newgidmap
+### newuidmap / newgidmap {#newuidmap-newgidmap}
 
 For unprivileged users to write mappings beyond the single-entry restriction, the `newuidmap` setuid helper is used:
 
@@ -67,7 +67,7 @@ podman run --rm alpine id
 # (on host, process runs as alice with uid 1000)
 ```
 
-### /etc/subuid and /etc/subgid
+### /etc/subuid and /etc/subgid {#etcsubuid-and-etcsubgid}
 
 ```bash
 # View subordinate ID ranges allocated for a user:
@@ -80,7 +80,7 @@ usermod --add-subuids 200000-265535 charlie
 usermod --add-subgids 200000-265535 charlie
 ```
 
-## Capabilities in user namespaces
+## Capabilities in user namespaces {#capabilities-in-user-namespaces}
 
 Within a new user namespace, a process starts with a **full set of capabilities** — but only within that namespace:
 
@@ -100,7 +100,7 @@ CAP_CHOWN        /* chown to any uid in the mapping */
 /* Anything requiring global system access */
 ```
 
-### struct cred
+### struct cred {#struct-cred}
 
 ```c
 /* include/linux/cred.h */
@@ -132,7 +132,7 @@ struct cred {
 } __randomize_layout;
 ```
 
-### Capability sets
+### Capability sets {#capability-sets}
 
 ```
 cap_permitted:   maximum capabilities the process can have
@@ -142,7 +142,7 @@ cap_bset:        bounding set: caps can never exceed this
 cap_ambient:     ambient: automatically inherited without execve magic
 ```
 
-### Checking capabilities
+### Checking capabilities {#checking-capabilities}
 
 ```c
 /* kernel/capability.c */
@@ -159,7 +159,7 @@ bool capable(int cap)
 
 When a process calls `capable(CAP_NET_ADMIN)`, the kernel checks the capability against `init_user_ns` — the system-wide root namespace. This means `capable()` only returns true for processes with real host root capabilities. For namespace-scoped checks (e.g., does this process have CAP_NET_ADMIN in the namespace that owns a given network device?), the kernel uses `ns_capable(ns, cap)` instead.
 
-## kuid_t and uid remapping in the kernel
+## kuid_t and uid remapping in the kernel {#kuid_t-and-uid-remapping-in-the-kernel}
 
 The kernel uses `kuid_t` (kernel UID) throughout to avoid confusion between namespaced and host UIDs:
 
@@ -188,9 +188,9 @@ uid_t from_kuid(struct user_namespace *to, kuid_t uid)
 /* File's st_uid = from_kuid(task->user_ns, file->kuid) = 0 (shown as 0 in ns) */
 ```
 
-## User namespace security boundaries
+## User namespace security boundaries {#user-namespace-security-boundaries}
 
-### What a user namespace CANNOT do
+### What a user namespace CANNOT do {#what-a-user-namespace-cannot-do}
 
 Even with root inside a user namespace, a process cannot:
 
@@ -203,7 +203,7 @@ Even with root inside a user namespace, a process cannot:
 ✗ Access files owned by unmapped uids (/proc, /sys with root ownership)
 ```
 
-### Nested user namespaces
+### Nested user namespaces {#nested-user-namespaces}
 
 User namespaces can be nested (up to 32 levels):
 
@@ -214,7 +214,7 @@ init_user_ns (uid 0 = system root)
         (capabilities are scoped to each level)
 ```
 
-## Practical: rootless containers
+## Practical: rootless containers {#practical-rootless-containers}
 
 ```bash
 # Run rootless container with Podman (no sudo needed):
@@ -240,7 +240,7 @@ cat /proc/$(pgrep -f "podman.*fedora")/status | grep Cap
 # CapBnd: 000001ffffffffff
 ```
 
-## Security considerations
+## Security considerations {#security-considerations}
 
 ```bash
 # CVE-2022-0185: heap overflow in fs context, exploitable via user ns
@@ -263,7 +263,7 @@ echo 1 > /proc/sys/user/max_user_namespaces          # allow max 1
 echo 1 > /proc/sys/kernel/apparmor_restrict_unprivileged_userns
 ```
 
-## Observing user namespace activity
+## Observing user namespace activity {#observing-user-namespace-activity}
 
 ```bash
 # Show user namespace hierarchy:
@@ -293,7 +293,7 @@ strace -e clone,unshare,setns podman run ...
 # clone(... CLONE_NEWUSER|CLONE_NEWPID|CLONE_NEWNS|CLONE_NEWNET ...)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Credentials](credentials.md) — struct cred, privilege model
 - [Capabilities](capabilities.md) — capability sets and checks

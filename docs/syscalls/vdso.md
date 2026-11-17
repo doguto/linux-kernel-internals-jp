@@ -1,8 +1,8 @@
-# vDSO and Virtual System Calls
+# vDSO and Virtual System Calls {#vdso-and-virtual-system-calls}
 
 > Kernel-accelerated clock reads and other fast-path syscalls without ring transitions
 
-## The problem: syscall overhead for time
+## The problem: syscall overhead for time {#the-problem-syscall-overhead-for-time}
 
 `clock_gettime(CLOCK_MONOTONIC, &ts)` is one of the most frequently called functions in a typical server
 process. High-frequency timers, latency histograms, and O(1) scheduling decisions all call it in tight
@@ -12,7 +12,7 @@ transition, KPTI CR3 switch, and pipeline flush — plus any microarchitectural 
 For a process calling `clock_gettime()` a million times per second, that overhead alone consumes 100–200 ms
 of CPU time per second purely on privilege transitions. The kernel solves this with the **vDSO**.
 
-## What the vDSO is
+## What the vDSO is {#what-the-vdso-is}
 
 The vDSO (virtual Dynamic Shared Object) is a small ELF shared library that the kernel builds into the kernel
 image and maps into every process's address space at `execve()` time. It is visible in `/proc/self/maps`:
@@ -41,7 +41,7 @@ objdump -T /lib/x86_64-linux-gnu/vdso.so.1 2>/dev/null
 glibc resolves these symbols at startup from the `AT_SYSINFO_EHDR` auxiliary vector entry and uses them
 in place of the real syscall wrappers.
 
-## The vvar page: shared kernel data
+## The vvar page: shared kernel data {#the-vvar-page-shared-kernel-data}
 
 Adjacent to the vDSO mapping is the **vvar** page — a read-only page mapped into every process that the
 kernel updates with current timekeeping state:
@@ -55,7 +55,7 @@ The vvar page is mapped read-only in userspace but read-write in the kernel. The
 `[vvar]`; the kernel timer interrupt writes to it. No ring transition is needed because reading a
 mapped page is a plain memory access.
 
-## struct vdso_time_data and struct vdso_clock
+## struct vdso_time_data and struct vdso_clock {#struct-vdsotimedata-and-struct-vdso_clock}
 
 There is no single combined `struct vdso_data` in current kernels. The vvar page is `struct vdso_time_data`,
 and the per-clocksource seqlock state it holds an array of is `struct vdso_clock` — both defined in
@@ -101,7 +101,7 @@ counterpart) — `clock_data[CS_BASES]` is what used to be a single embedded seq
 before the vdso_clock/vdso_time_data split separated "per-clocksource state that gets its own seqlock" from
 "page-wide data updated once."
 
-## The seqlock pattern
+## The seqlock pattern {#the-seqlock-pattern}
 
 Because the kernel updates the vvar page from timer interrupt context (and possibly from multiple CPUs),
 the vDSO must handle concurrent reads. It uses a **seqlock** — a lockless read-side protocol — scoped to
@@ -179,7 +179,7 @@ is odd (a writer holds the lock). `vdso_read_retry()` reads the counter again an
 changed, meaning a kernel update happened mid-read and the values are inconsistent. The loop retries until
 a clean read completes — in practice, zero or one retries.
 
-## TSC to wall-clock conversion
+## TSC to wall-clock conversion {#tsc-to-wall-clock-conversion}
 
 `vdso_get_timestamp()` calls `vdso_calc_ns()` to do the nanosecond conversion — a multiply-and-shift
 formula that avoids division:
@@ -197,7 +197,7 @@ The kernel updates `cycle_last`, `mult`, `shift`, and `basetime` on every NTP ad
 timer interrupt (via `update_vsyscall()` in `kernel/time/vsyscall.c`), holding the seqlock write side
 during the update.
 
-## Which clocks are vDSO-accelerated
+## Which clocks are vDSO-accelerated {#which-clocks-are-vdso-accelerated}
 
 | Clock ID | vDSO-accelerated | Notes |
 |----------|-----------------|-------|
@@ -213,7 +213,7 @@ during the update.
 Coarse clocks skip the TSC read entirely; they return the pre-computed `basetime` directly (resolution is
 one jiffy, ~1–4 ms). This makes them even cheaper than the TSC-based clocks.
 
-## VDSO_CLOCKMODE_NONE: fallback to real syscall
+## VDSO_CLOCKMODE_NONE: fallback to real syscall {#vdsoclockmodenone-fallback-to-real-syscall}
 
 If the TSC is not reliable — for example, after live VM migration (the TSC may jump), during CPU hotplug,
 or when the kernel detects TSC instability — the kernel sets `clock_mode` to `VDSO_CLOCKMODE_NONE`. The
@@ -235,7 +235,7 @@ This fallback is transparent to the caller — the function signature and return
 `VDSO_CLOCKMODE_NONE` can also be triggered manually by writing to
 `/sys/devices/system/clocksource/clocksource0/current_clocksource` to switch away from the TSC.
 
-## getcpu() in the vDSO
+## getcpu() in the vDSO {#getcpu-in-the-vdso}
 
 `getcpu(cpu, node, NULL)` returns the current CPU and NUMA node without a syscall. On x86-64,
 `__vdso_getcpu()` delegates to `vdso_read_cpunode()` (`arch/x86/include/asm/segment.h`), which defaults to
@@ -270,7 +270,7 @@ static inline void vdso_read_cpunode(unsigned *cpu, unsigned *node)
 }
 ```
 
-## Debugging vDSO issues
+## Debugging vDSO issues {#debugging-vdso-issues}
 
 **strace always shows clock_gettime as a real syscall**: strace injects ptrace, which sets
 `SYSCALL_WORK_SYSCALL_TRACE` on the tracee. This causes the kernel to intercept the `syscall` instruction path, but
@@ -309,7 +309,7 @@ printf("vDSO ELF at: 0x%lx\n", vdso_addr);
 # p *((struct vdso_time_data *)vdso_data_ptr)
 ```
 
-## vsyscall: legacy fixed-address interface (x86-64 only)
+## vsyscall: legacy fixed-address interface (x86-64 only) {#vsyscall-legacy-fixed-address-interface-x86-64-only}
 
 Before the vDSO, x86-64 had the **vsyscall** page: code mapped at the fixed address `0xffffffffff600000`
 that implemented `gettimeofday`, `time`, and `getcpu`. Because the address was fixed, it was trivially
@@ -331,7 +331,7 @@ cat /proc/self/maps | grep vsyscall
 Only very old binaries (pre-2012 glibc, or statically linked against ancient libc) use the vsyscall page.
 All modern software uses the vDSO exclusively.
 
-## arm64 vDSO
+## arm64 vDSO {#arm64-vdso}
 
 arm64 has its own vDSO at `arch/arm64/kernel/vdso/`. The mechanism is identical — a vvar page with the same
 `struct vdso_time_data`/`struct vdso_clock` layout, a seqlock, and the same TSC-equivalent using the ARM
@@ -344,9 +344,9 @@ generic timer (`CNTVCT_EL0` counter register). The key difference:
 The shared vDSO library code in `lib/vdso/gettimeofday.c` is compiled for both x86-64 and arm64; only the
 hardware counter read (`__arch_get_hw_counter`) is architecture-specific.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/vdso/datapage.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/vdso/datapage.h) — `struct vdso_clock` and `struct vdso_time_data`: the current vvar layout, replacing an older single combined `struct vdso_data`
 - [include/vdso/helpers.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/vdso/helpers.h) — `vdso_read_begin()` / `vdso_read_retry()`: the seqlock read-side helpers
@@ -358,7 +358,7 @@ hardware counter read (`__arch_get_hw_counter`) is architecture-specific.
 - [kernel/time/vsyscall.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/vsyscall.c) — `update_vsyscall()`: the kernel-side vvar update on every timer tick
 - [arch/arm64/kernel/vdso](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/vdso) — arm64 vDSO implementation
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — overview of the vDSO mechanism and `AT_SYSINFO_EHDR` discovery
 - [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — the syscall the vDSO accelerates
@@ -366,18 +366,18 @@ hardware counter read (`__arch_get_hw_counter`) is architecture-specific.
 - [`getcpu(2)`](https://man7.org/linux/man-pages/man2/getcpu.2.html) — NOTES section documents the vDSO-backed fast path
 - [`getauxval(3)`](https://man7.org/linux/man-pages/man3/getauxval.3.html) — `AT_SYSINFO_EHDR`, used to locate the vDSO at process start
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — KPTI and the cost of ring transitions
 - [vDSO: Virtual Dynamic Shared Object](../mm/vdso.md) — companion mm-side page on vDSO mapping and per-architecture function tables
 - [Timekeeping and Clocksources](../time/timekeeping.md) — TSC, clocksource, and NTP background behind the vvar update
 - [Time Namespaces](../time/time-namespaces.md) — the `timens_offset` mechanism referenced in the vvar layout
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [On vsyscalls and the vDSO](https://lwn.net/Articles/446528/) — the security case for retiring the fixed-address vsyscall page in favor of the vDSO
 - [Implementing virtual system calls](https://lwn.net/Articles/615809/) — how `__vdso_gettimeofday()` and `__vdso_clock_gettime()` work, and how to add new vDSO functions
 
-### External
+### External {#external}
 
 - [Kernel boot parameters: `vdso=` and `vsyscall=`](https://docs.kernel.org/admin-guide/kernel-parameters.html) — official documentation for the `vdso=0` and `vsyscall={emulate,xonly,none}` boot options

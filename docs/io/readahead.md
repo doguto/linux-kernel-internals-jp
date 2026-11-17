@@ -1,8 +1,8 @@
-# Readahead
+# Readahead {#readahead}
 
 > Prefetching pages into the page cache before a process requests them
 
-## What is readahead?
+## What is readahead? {#what-is-readahead}
 
 When a process reads a file sequentially, each `read()` that misses the page cache incurs a block I/O wait. Readahead eliminates this latency by predicting which pages will be needed soon and issuing I/O for them **before** the process requests them — ideally so the pages are already warm in the page cache by the time the process gets there.
 
@@ -14,7 +14,7 @@ Key properties:
 - The kernel tracks a **readahead window** — a contiguous range of pages to prefetch — per open file description.
 - The window grows on confirmed sequential access and shrinks (or is disabled) when random access is detected.
 
-## `struct file_ra_state`
+## `struct file_ra_state` {#struct-filerastate}
 
 Every `struct file` carries a `file_ra_state` that records the readahead window for that open file description.
 
@@ -41,11 +41,11 @@ struct file_ra_state {
 
 `ra_pages` is initialised from the backing device's `queue/read_ahead_kb` setting (divided by page size). `POSIX_FADV_SEQUENTIAL` doubles it; `POSIX_FADV_RANDOM` sets it to zero.
 
-## Synchronous readahead
+## Synchronous readahead {#synchronous-readahead}
 
 Synchronous readahead happens **on the critical path** of `read()`. When the VFS services a `read()` call, it calls into the readahead machinery before (or while) reading the requested page. The result: I/O for pages beyond the requested one is submitted before the process blocks waiting for the requested page.
 
-### Call path
+### Call path {#call-path}
 
 ```
 read()
@@ -58,7 +58,7 @@ read()
               → page_cache_ra_unbounded()
 ```
 
-### `page_cache_ra_unbounded()`
+### `page_cache_ra_unbounded()` {#pagecachera_unbounded}
 
 `page_cache_ra_unbounded()` is the low-level workhorse. It:
 
@@ -93,17 +93,17 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
 }
 ```
 
-### `ondemand_readahead()`
+### `ondemand_readahead()` {#ondemand_readahead}
 
 `ondemand_readahead()` is a `static` internal function (not a public API) that sits above `do_page_cache_ra()` and decides **how many pages** to read. It implements the window-growth heuristic and sequential-detection logic described in the next section.
 
 > **Note:** In Linux 6.6+, `ondemand_readahead()` was renamed to `page_cache_ra_order()` as part of the large-folio readahead refactor.
 
-## Async readahead
+## Async readahead {#async-readahead}
 
 Async readahead prefetches the **next** window in the background while the process is still consuming the current one, so there is no stall at the window boundary.
 
-### The readahead marker page
+### The readahead marker page {#the-readahead-marker-page}
 
 When `page_cache_ra_unbounded()` submits a window, it sets the `PG_readahead` flag on exactly one page — the first page of the lookahead zone, at index `start + size - async_size`. When `filemap_read()` encounters this page already uptodate, it calls `page_cache_async_ra()` — which calls `ondemand_readahead()` again for the next window — without waiting for the current read to finish.
 
@@ -134,11 +134,11 @@ void page_cache_async_ra(struct readahead_control *ractl,
 }
 ```
 
-## Adaptive readahead
+## Adaptive readahead {#adaptive-readahead}
 
 The kernel does not use a fixed window size. `ondemand_readahead()` grows and shrinks `ra->size` based on observed access patterns.
 
-### Sequential detection
+### Sequential detection {#sequential-detection}
 
 A read is considered sequential if:
 
@@ -147,7 +147,7 @@ A read is considered sequential if:
 
 If neither condition holds, the access is treated as **random** and the window is reset to a small initial size (typically 2 pages) rather than zero — so the kernel probes whether sequential access might resume.
 
-### Window growth
+### Window growth {#window-growth}
 
 On each sequential confirmation, the window roughly doubles until it hits `ra->ra_pages`:
 
@@ -165,7 +165,7 @@ ra->async_size = ra->size / 2;   /* fire async prefetch halfway through */
 
 `async_size` is set to roughly half the window so the async prefetch fires early enough that I/O completes before the process reaches the end of the window.
 
-### State machine summary
+### State machine summary {#state-machine-summary}
 
 ```
 First read on file
@@ -184,7 +184,7 @@ POSIX_FADV_RANDOM or ra_pages == 0
   → readahead fully disabled
 ```
 
-## `posix_fadvise()` hints
+## `posix_fadvise()` hints {#posix_fadvise-hints}
 
 `posix_fadvise()` lets an application tell the kernel about its intended access pattern, adjusting the readahead behaviour without changing the read API.
 
@@ -203,26 +203,26 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 | `POSIX_FADV_DONTNEED` | Drop pages in range from the page cache |
 | `POSIX_FADV_NOREUSE` | Hint that pages will not be reused (advisory, limited kernel support) |
 
-### `POSIX_FADV_SEQUENTIAL`
+### `POSIX_FADV_SEQUENTIAL` {#posixfadvsequential}
 
 Doubles `ra->ra_pages` relative to the BDI default — calling it twice does not quadruple the window. Useful for applications that stream a file from start to finish and want larger prefetch windows to hide I/O latency.
 
-### `POSIX_FADV_RANDOM`
+### `POSIX_FADV_RANDOM` {#posixfadvrandom}
 
 Sets `ra->ra_pages = 0`. The kernel skips all readahead logic for this file descriptor. Every page fault or `read()` that misses the cache will fetch exactly the requested page(s) — no more. Appropriate for databases doing their own I/O scheduling or workloads with truly random access patterns where prefetched pages would be evicted before use.
 
-### `POSIX_FADV_WILLNEED`
+### `POSIX_FADV_WILLNEED` {#posixfadvwillneed}
 
 Schedules immediate readahead for the specified range regardless of the current access pattern. The call returns before the I/O completes (it is non-blocking). Useful for:
 
 - Preloading a file before starting a sequential scan
 - Warming the cache during an idle period before a latency-sensitive operation
 
-### `POSIX_FADV_DONTNEED`
+### `POSIX_FADV_DONTNEED` {#posixfadvdontneed}
 
 Drops clean pages in the range from the page cache. Useful for streaming applications that read a file once and want to avoid polluting the cache (similar to `O_DIRECT` but without the alignment restrictions).
 
-### C example
+### C example {#c-example}
 
 ```c
 #include <fcntl.h>
@@ -269,7 +269,7 @@ int main(void)
 }
 ```
 
-## `madvise()` equivalents for mmap
+## `madvise()` equivalents for mmap {#madvise-equivalents-for-mmap}
 
 For memory-mapped files, `posix_fadvise()` does not apply. Use `madvise()` instead:
 
@@ -300,9 +300,9 @@ madvise(addr, length, MADV_DONTNEED);
 
 `MADV_SEQUENTIAL` also instructs the kernel's page-fault handler to drop pages **behind** the current fault point more aggressively, reducing memory pressure for streaming workloads.
 
-## Practical tuning
+## Practical tuning {#practical-tuning}
 
-### `/sys/block/<dev>/queue/read_ahead_kb`
+### `/sys/block/<dev>/queue/read_ahead_kb` {#sysblockqueuereadaheadkb}
 
 The per-device readahead size sets the default `ra_pages` for all files on that device:
 
@@ -320,7 +320,7 @@ echo 16 > /sys/block/sda/queue/read_ahead_kb
 
 `POSIX_FADV_SEQUENTIAL` doubles this per-fd value; `POSIX_FADV_RANDOM` zeroes it. The sysfs knob is the global baseline.
 
-### Effect on database workloads
+### Effect on database workloads {#effect-on-database-workloads}
 
 Most databases (PostgreSQL, MySQL InnoDB, RocksDB) open data files with either `O_DIRECT` or explicit `POSIX_FADV_RANDOM`:
 
@@ -331,11 +331,11 @@ For a database running **buffered I/O without fadvise hints**, a large `read_ahe
 
 Conversely, for **sequential workloads** — log shipping, backup streams, analytics full-table scans — a large readahead window (512 KB – 4 MB) keeps the I/O pipeline full and eliminates stalls.
 
-### NVMe considerations
+### NVMe considerations {#nvme-considerations}
 
 On NVMe, I/O latency is low enough (50–200 µs) that readahead is less critical for moderate sequential reads. However, because NVMe queues are deep (1024+ commands), submitting a large readahead window early still helps saturate bandwidth. The default `read_ahead_kb` for NVMe devices is typically 128 KB; tuning to 512 KB or higher can improve throughput for bulk sequential workloads.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Buffered I/O](buffered-io.md) — page cache, `filemap_read()`, writeback
 - [Direct I/O](direct-io.md) — bypassing the page cache and readahead

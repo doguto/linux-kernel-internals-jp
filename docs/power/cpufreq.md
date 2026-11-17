@@ -1,8 +1,8 @@
-# cpufreq: CPU Frequency Scaling
+# cpufreq: CPU Frequency Scaling {#cpufreq-cpu-frequency-scaling}
 
 > P-states, governors, and hardware-coordinated frequency management
 
-## Why CPU frequency scaling?
+## Why CPU frequency scaling? {#why-cpu-frequency-scaling}
 
 Modern CPUs can run at different voltage-frequency operating points called **P-states** (performance states). Lower frequency = lower voltage = less power. The kernel's cpufreq subsystem selects the operating point based on current load.
 
@@ -14,7 +14,7 @@ P2:             2.5 GHz, 1.0V
 Pn (minimum):   0.8 GHz, 0.7V  — idle, minimal power
 ```
 
-## Architecture
+## Architecture {#architecture}
 
 ```
 cpufreq core (drivers/cpufreq/cpufreq.c)
@@ -26,7 +26,7 @@ cpufreq core (drivers/cpufreq/cpufreq.c)
             programs the actual hardware MSRs / ACPI commands
 ```
 
-## struct cpufreq_policy
+## struct cpufreq_policy {#struct-cpufreq_policy}
 
 ```c
 /* include/linux/cpufreq.h */
@@ -60,11 +60,11 @@ struct cpufreq_policy {
 };
 ```
 
-## Governors
+## Governors {#governors}
 
 A governor observes CPU utilization and selects a target frequency.
 
-### schedutil (recommended, 4.7+)
+### schedutil (recommended, 4.7+) {#schedutil-recommended-47}
 
 schedutil integrates with the scheduler's per-CPU utilization tracking. It's called directly from the scheduler path when utilization changes — no polling needed.
 
@@ -123,7 +123,7 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 }
 ```
 
-### ondemand
+### ondemand {#ondemand}
 
 Polls CPU idle time periodically, scales frequency proportionally to non-idle fraction. The sampling interval is not a fixed 10ms: it defaults to `max(2 * tick_period, 1.5 * transition_latency)` (falling back to 1ms if the driver reports no transition latency) — see `cpufreq_policy_transition_delay_us()` in `drivers/cpufreq/cpufreq.c` and the default computed in `drivers/cpufreq/cpufreq_governor.c`. It's tunable at runtime via the governor's `sampling_rate` sysfs file:
 
@@ -133,7 +133,7 @@ target_freq = max_freq * (non_idle_time / sample_time)
 
 Slower to react than schedutil (polling vs event-driven), but simpler and still widely used.
 
-### performance / powersave
+### performance / powersave {#performance-powersave}
 
 Static governors: always select the maximum (performance) or minimum (powersave) frequency in the policy range. No utilization sampling at all.
 
@@ -145,9 +145,9 @@ echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governo
 echo powersave | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 ```
 
-## cpufreq drivers
+## cpufreq drivers {#cpufreq-drivers}
 
-### acpi-cpufreq
+### acpi-cpufreq {#acpi-cpufreq}
 
 Uses ACPI _PCT (Performance Control) and _PSS (Performance Supported States) objects to enumerate and switch P-states. The OS writes to MSR_IA32_PERF_CTL:
 
@@ -168,7 +168,7 @@ static void drv_write(struct acpi_cpufreq_data *data,
 }
 ```
 
-### intel_pstate
+### intel_pstate {#intel_pstate}
 
 Intel's native driver for Sandy Bridge and later. It bypasses the traditional governor hierarchy for CPUs with HWP (Hardware P-state control, Broadwell+):
 
@@ -208,7 +208,7 @@ static void intel_pstate_hwp_set(unsigned int cpu)
 
 There's no `HWP_DESIRED_PERF` field set here: leaving the MSR's desired-performance bits at 0 tells the hardware to autonomously pick between `HWP_MIN_PERF` and `HWP_MAX_PERF`.
 
-#### Energy Performance Preference (EPP)
+#### Energy Performance Preference (EPP) {#energy-performance-preference-epp}
 
 EPP is a hint to the hardware about the performance/power tradeoff:
 
@@ -227,11 +227,11 @@ cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
 echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
 ```
 
-### ARM / cppc_cpufreq
+### ARM / cppc_cpufreq {#arm-cppc_cpufreq}
 
 ARM servers use ACPI CPPC (Collaborative Processor Performance Control) for firmware-assisted frequency scaling. Similar to HWP: the OS writes desired performance, firmware adjusts clocks.
 
-## Frequency QoS (Quality of Service)
+## Frequency QoS (Quality of Service) {#frequency-qos-quality-of-service}
 
 Devices and drivers can impose constraints on CPU frequency via the frequency QoS API:
 
@@ -249,7 +249,7 @@ freq_qos_remove_request(&req);
 
 Constraints from multiple requestors are combined (highest min / lowest max wins).
 
-## C-states: idle power
+## C-states: idle power {#c-states-idle-power}
 
 Separate from P-states, C-states are CPU idle states (when there's no work):
 
@@ -293,7 +293,7 @@ os.close(fd)
 "
 ```
 
-## Observing cpufreq
+## Observing cpufreq {#observing-cpufreq}
 
 ```bash
 # Current frequencies (all CPUs)
@@ -319,9 +319,9 @@ cat /sys/kernel/tracing/trace_pipe
 # kworker/0:1-42 [000] cpu_frequency: state=2400000 cpu_id=0
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/cpufreq.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpufreq.h) — `struct cpufreq_policy`, `struct cpufreq_driver`, and the governor registration API
 - [drivers/cpufreq/cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cpufreq.c) — the cpufreq core: policy lifecycle, sysfs, driver/governor registration
@@ -331,18 +331,18 @@ cat /sys/kernel/tracing/trace_pipe
 - [drivers/cpufreq/cppc_cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cppc_cpufreq.c) — ACPI CPPC driver used on ARM servers
 - [include/linux/pm_qos.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_qos.h) — `freq_qos_add_request()` / `freq_qos_remove_request()` and `struct freq_qos_request`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [cpuidle: CPU C-states](cpuidle.md) — the idle-time counterpart to cpufreq's active-time scaling
 - [Runtime PM](runtime-pm.md) — device-level power management
 - [System Suspend](suspend.md) — system-wide power states
 - [Scheduler: EEVDF](../sched/eevdf.md) — schedutil reads utilization straight from the scheduler's per-CPU tracking
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Improvements in CPU frequency management](https://lwn.net/Articles/682391/) — covers the 4.7-cycle work that introduced the schedutil governor and its scheduler integration
 
-### External
+### External {#external}
 
 - [Documentation/admin-guide/pm/cpufreq.rst](https://docs.kernel.org/admin-guide/pm/cpufreq.html) — upstream CPUFreq subsystem admin guide: governors, drivers, sysfs interface
 - [Documentation/admin-guide/pm/intel_pstate.rst](https://docs.kernel.org/admin-guide/pm/intel_pstate.html) — `intel_pstate` driver details: active/passive mode, HWP, EPP

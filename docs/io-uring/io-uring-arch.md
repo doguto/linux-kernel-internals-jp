@@ -1,8 +1,8 @@
-# io_uring Architecture and Rings
+# io_uring Architecture and Rings {#io_uring-architecture-and-rings}
 
 > Shared memory rings, SQEs, and CQEs
 
-## The problem io_uring solves
+## The problem io_uring solves {#the-problem-io_uring-solves}
 
 Traditional I/O interfaces:
 
@@ -13,7 +13,7 @@ Traditional I/O interfaces:
 
 io_uring's solution: **two lock-free rings in shared memory**. Userspace writes to the Submission Queue; the kernel posts results to the Completion Queue. No per-operation syscall needed (especially with SQPOLL).
 
-## io_uring_setup
+## io_uring_setup {#iouringsetup}
 
 ```c
 #include <linux/io_uring.h>
@@ -52,7 +52,7 @@ struct io_uring_sqe *sqes = mmap(NULL,
     ring_fd, IORING_OFF_SQES);
 ```
 
-## Ring layout
+## Ring layout {#ring-layout}
 
 ```
 SQ ring (at IORING_OFF_SQ_RING):
@@ -82,7 +82,7 @@ CQ ring (at IORING_OFF_CQ_RING):
   └─────────────────────────────────────────┘
 ```
 
-## struct io_uring_sqe
+## struct io_uring_sqe {#struct-iouringsqe}
 
 The Submission Queue Entry describes one I/O operation:
 
@@ -152,7 +152,7 @@ struct io_uring_sqe {
 };
 ```
 
-## struct io_uring_cqe
+## struct io_uring_cqe {#struct-iouringcqe}
 
 The Completion Queue Entry carries the result:
 
@@ -172,7 +172,7 @@ struct io_uring_cqe {
 - `IORING_OP_ACCEPT`: new fd, or -errno
 - `IORING_OP_CONNECT`: 0 on success, or -errno
 
-## Submission flow
+## Submission flow {#submission-flow}
 
 ```
 1. Get an SQE slot:
@@ -195,7 +195,7 @@ struct io_uring_cqe {
    /* with SQPOLL: skip this — kernel polls automatically */
 ```
 
-## Completion harvesting
+## Completion harvesting {#completion-harvesting}
 
 ```
 1. Check if new CQEs available:
@@ -211,7 +211,7 @@ struct io_uring_cqe {
    smp_store_release(&cq_ring->head, cq_ring->head + 1)
 ```
 
-## io_uring_enter: the syscall
+## io_uring_enter: the syscall {#iouringenter-the-syscall}
 
 ```c
 int io_uring_enter(unsigned int fd,    /* ring fd */
@@ -224,7 +224,7 @@ int io_uring_enter(unsigned int fd,    /* ring fd */
 
 With batching, a single `io_uring_enter` can submit many operations and wait for many completions. This amortizes the syscall overhead across all concurrent I/O.
 
-## Kernel side: struct io_ring_ctx
+## Kernel side: struct io_ring_ctx {#kernel-side-struct-ioringctx}
 
 ```c
 /* io_uring/io_uring.h */
@@ -255,7 +255,7 @@ struct io_ring_ctx {
 };
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Operations and Advanced Features](io-uring-ops.md) — Supported ops, SQPOLL, fixed buffers
 - [BPF](../bpf/README.md) — io_uring + BPF programs

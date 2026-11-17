@@ -1,8 +1,8 @@
-# BPF Maps
+# BPF Maps {#bpf-maps}
 
 > The data structures that connect BPF programs to each other and to userspace
 
-## What BPF maps are
+## What BPF maps are {#what-bpf-maps-are}
 
 BPF maps are key-value stores accessible from both BPF programs (via helpers) and userspace (via the bpf() syscall). They are the primary mechanism for:
 
@@ -19,7 +19,7 @@ bpf_map_update_elem(&map, &key, &val, BPF_ANY)
 bpf_map_delete_elem(&map, &key)  bpf(BPF_MAP_DELETE_ELEM, ...)
 ```
 
-## Creating a map
+## Creating a map {#creating-a-map}
 
 ```c
 /* From BPF program (using libbpf macros) */
@@ -40,9 +40,9 @@ union bpf_attr attr = {
 int map_fd = bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
 ```
 
-## Map types
+## Map types {#map-types}
 
-### BPF_MAP_TYPE_HASH
+### BPF_MAP_TYPE_HASH {#bpfmaptype_hash}
 
 Generic hash map with arbitrary key/value sizes.
 
@@ -66,7 +66,7 @@ Update flags:
 
 Internals: uses a lock-based hash table, `htab_elem` per entry. Supports concurrent access from multiple CPUs.
 
-### BPF_MAP_TYPE_ARRAY
+### BPF_MAP_TYPE_ARRAY {#bpfmaptype_array}
 
 Fixed-size array indexed by u32. Pre-allocated, no dynamic memory during runtime. Value must be zeroed (no deletion).
 
@@ -85,7 +85,7 @@ if (val)
     __sync_fetch_and_add(val, 1);  /* atomic increment */
 ```
 
-### BPF_MAP_TYPE_PERCPU_HASH / BPF_MAP_TYPE_PERCPU_ARRAY
+### BPF_MAP_TYPE_PERCPU_HASH / BPF_MAP_TYPE_PERCPU_ARRAY {#bpfmaptypepercpuhash-bpfmaptypepercpuarray}
 
 One value per CPU — eliminates atomic operations for per-CPU counters:
 
@@ -113,7 +113,7 @@ for (int i = 0; i < nr_cpus; i++)
     total += values[i];
 ```
 
-### BPF_MAP_TYPE_RINGBUF
+### BPF_MAP_TYPE_RINGBUF {#bpfmaptype_ringbuf}
 
 The preferred mechanism for sending variable-length events from BPF to userspace (replaces perf_event_output for most use cases).
 
@@ -171,7 +171,7 @@ Why ringbuf over perf_event output:
 - No copy — userspace reads directly from the ring memory
 - Variable-size entries
 
-### BPF_MAP_TYPE_LRU_HASH
+### BPF_MAP_TYPE_LRU_HASH {#bpfmaptypelruhash}
 
 Hash map with LRU eviction when full. Useful for tracking connections without explicit cleanup:
 
@@ -185,7 +185,7 @@ struct {
 /* Automatically evicts least recently used entries */
 ```
 
-### BPF_MAP_TYPE_PROG_ARRAY
+### BPF_MAP_TYPE_PROG_ARRAY {#bpfmaptypeprogarray}
 
 Array of BPF program file descriptors for tail calls. Enables program chaining without growing the stack:
 
@@ -206,7 +206,7 @@ bpf_tail_call(ctx, &jump_table, index);
 
 Tail calls don't increase the call stack depth. They replace the current program. Max chain length: 33.
 
-### BPF_MAP_TYPE_HASH_OF_MAPS / BPF_MAP_TYPE_ARRAY_OF_MAPS
+### BPF_MAP_TYPE_HASH_OF_MAPS / BPF_MAP_TYPE_ARRAY_OF_MAPS {#bpfmaptypehashofmaps-bpfmaptypearrayofmaps}
 
 Map-in-map: values are other map file descriptors. Useful for per-CPU or per-namespace map isolation:
 
@@ -221,7 +221,7 @@ struct {
 } per_netns_stats SEC(".maps");
 ```
 
-### BPF_MAP_TYPE_SOCKMAP / BPF_MAP_TYPE_SOCKHASH
+### BPF_MAP_TYPE_SOCKMAP / BPF_MAP_TYPE_SOCKHASH {#bpfmaptypesockmap-bpfmaptypesockhash}
 
 Stores references to sockets. Used for socket redirection in the sk_msg and sk_skb program types:
 
@@ -230,7 +230,7 @@ Stores references to sockets. Used for socket redirection in the sk_msg and sk_s
 bpf_msg_redirect_map(msg, &sock_map, key, 0);
 ```
 
-## Map operations summary
+## Map operations summary {#map-operations-summary}
 
 | Operation | BPF helper | Userspace syscall |
 |-----------|-----------|-------------------|
@@ -240,7 +240,7 @@ bpf_msg_redirect_map(msg, &sock_map, key, 0);
 | Iterate | — (not from BPF) | `BPF_MAP_GET_NEXT_KEY` |
 | Batch ops | — | `BPF_MAP_LOOKUP_BATCH` |
 
-## Map pinning (persistence)
+## Map pinning (persistence) {#map-pinning-persistence}
 
 By default, a map lives as long as its file descriptor is open. Pin it to `/sys/fs/bpf/` to make it survive process exit:
 
@@ -265,7 +265,7 @@ int map_fd = bpf(BPF_OBJ_GET, &(union bpf_attr){
 }, sizeof(union bpf_attr));
 ```
 
-## Map limits and memory
+## Map limits and memory {#map-limits-and-memory}
 
 ```bash
 # Check map memory usage
@@ -283,7 +283,7 @@ ulimit -l  # RLIMIT_MEMLOCK
 
 Memory accounting: maps are charged to `memlock` rlimit of the creating process (unless `BPF_F_MMAPABLE` or newer accounting).
 
-## Atomic operations in maps
+## Atomic operations in maps {#atomic-operations-in-maps}
 
 For per-CPU-free atomic updates in hash/array maps:
 
@@ -301,7 +301,7 @@ if (val)
 
 For high-frequency counters, prefer `BPF_MAP_TYPE_PERCPU_ARRAY` to avoid atomics entirely.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Verifier](bpf-verifier.md) — How map access is safety-checked
 - [libbpf and Skeletons](libbpf.md) — Convenient map access from userspace

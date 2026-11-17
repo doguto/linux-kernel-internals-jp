@@ -1,8 +1,8 @@
-# sched_ext: BPF-Programmable Scheduling
+# sched_ext: BPF-Programmable Scheduling {#sched_ext-bpf-programmable-scheduling}
 
 > How a standing "no" to pluggable schedulers became a "yes" in Linux 6.12
 
-## What it is
+## What it is {#what-it-is}
 
 `sched_ext` (SCX) is a sixth [scheduler class](scheduler-classes.md). Unlike the others, its scheduling policy isn't compiled into the kernel — it's a BPF program, loaded and unloaded from userspace like any other BPF object. Writing a new CPU scheduler for Linux no longer requires patching and rebuilding the kernel; it means writing a BPF program against a fixed set of callbacks and loading it.
 
@@ -10,7 +10,7 @@ It isn't a peer of `fair`, `rt`, and `deadline` in priority, though: the kernel'
 
 `kernel/sched/ext.c` is absent from the Linux v6.11 tag and present in v6.12, confirming the class merged in **Linux 6.12** (November 2024).
 
-## A standing "no"
+## A standing "no" {#a-standing-no}
 
 Loadable, pluggable scheduling policy is not a new idea — it's one Linus Torvalds had rejected before. When Tejun Heo first posted the sched_ext patch set (co-written with David Vernet, Josh Don, and Barret Rhoden), scheduler maintainer Peter Zijlstra's response was blunt:
 
@@ -20,7 +20,7 @@ Loadable, pluggable scheduling policy is not a new idea — it's one Linus Torva
 
 That single sentence carries the whole prior history: this wasn't the first attempt at pluggable scheduling, and every previous one had been turned down by Torvalds himself. The objection wasn't really about BPF — it was about the scheduler, of all subsystems, being opened up to third-party policy at all. A misbehaving scheduler doesn't crash a program; it can wedge the entire machine.
 
-## The 2024 override
+## The 2024 override {#the-2024-override}
 
 Despite that, Torvalds decided to merge it anyway — over the scheduler maintainer's own objection. LWN reported in June 2024 that he'd made his decision and would override the scheduler maintainer to merge it, quoting Torvalds' own reasoning directly:
 
@@ -30,7 +30,7 @@ Torvalds is explicit that this was a "(private)" discussion, not a formal agenda
 
 The override didn't stick on the first try, either. Torvalds' announcement above named 6.11 as the target, but [LWN's coverage of the actual 6.11 merge window](https://lwn.net/Articles/982605/) tells a different story: "After that came a strongly worded discussion about whether that step was justified, or whether sched_ext needed more work first... sched_ext was not merged for 6.11." The override triggered real, substantive pushback, not a routine slip — `kernel/sched/ext.c` didn't land until the following cycle, 6.12, in November 2024.
 
-## How it actually works
+## How it actually works {#how-it-actually-works}
 
 A BPF scheduler is a `struct sched_ext_ops` instance — a set of callbacks the kernel invokes at each point in a task's scheduling lifecycle. The real struct, defined in `kernel/sched/ext.c`, includes (among others):
 
@@ -59,7 +59,7 @@ struct sched_ext_ops {
 
 The lifecycle for a single wakeup: `select_cpu()` picks a target CPU (this is where a scheduler might implement its own idle-CPU search), `enqueue()` places the task somewhere the scheduler chooses, and `dispatch()` is called whenever a CPU's local dispatch queue runs empty — including when the previously-running task's time slice ran out but it's still runnable, not only when the CPU is truly idle. A scheduler doesn't manage its own run queue data structure from scratch — it moves tasks between **dispatch queues (DSQs)**, `struct scx_dispatch_q` in the kernel. A DSQ isn't strictly a FIFO or a priority queue; per the kernel's own documentation, a single DSQ "can operate as both a FIFO and a priority queue" at once, with vtime-ordered entries (`scx_bpf_dispatch_vtime()`) always consumed after plain FIFO ones. Every CPU has its own built-in **local DSQ** (`SCX_DSQ_LOCAL`) that it always runs tasks from, plus a single built-in **global DSQ** (`SCX_DSQ_GLOBAL`) shared by all CPUs as a default landing spot; a scheduler is free to create additional DSQs for per-cgroup or other custom queuing, which get "consumed" into a CPU's local DSQ to actually run.
 
-## The safety model
+## The safety model {#the-safety-model}
 
 Letting a BPF program make scheduling decisions is only tenable if a broken one can't hang the machine. Two independent mechanisms enforce that:
 
@@ -86,17 +86,17 @@ A stall doesn't trigger an immediate, synchronous flip to CFS — `scx_ops_error
 
 There's also a manual escape hatch that doesn't depend on the watchdog or the verifier at all: pressing the `SysRq-S` key sequence aborts the running BPF scheduler and reverts every task to CFS immediately, the same as a detected stall or scheduler-triggered error. A companion `SysRq-D` dumps sched_ext's internal debug state without terminating the scheduler, for diagnosing a problem without losing it.
 
-## Real-world adoption
+## Real-world adoption {#real-world-adoption}
 
 At the 2024 Linux Plumbers Conference, Tejun Heo described real deployments, not hypotheticals: `scx_layered` was already running on **over one million machines**, delivering measurable performance gains; `scx_lavd` was headed for shipment on Valve's **Steam Deck**; and `scx_bpfland` was showing promising results for general desktop use. By late 2024, sched_ext support was shipping in CachyOS, Arch Linux, Ubuntu, Fedora, Nix, and openSUSE — on those distributions, trying a different scheduler is a package install and a command, not a kernel rebuild.
 
-## Where it's heading
+## Where it's heading {#where-its-heading}
 
 Heo's own framing of the future work is **composability**: letting multiple BPF schedulers cooperate instead of one program owning every decision. The stated goal is for one scheduler to focus on time-slice policy while another handles load balancing or partitioning, and eventually for schedulers to stack down the cgroup hierarchy — a different scheduler responsible for each level.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 Links pinned to the **v6.12** tag — several of these names have since been renamed (e.g. `scx_ops_bypass()` → `scx_bypass()`, `scx_ops_disable_workfn()` → `scx_disable_workfn()`, both first appearing at v6.16), so a HEAD-tracking link would show different names than described above.
 
@@ -105,7 +105,7 @@ Links pinned to the **v6.12** tag — several of these names have since been ren
 - [Documentation/scheduler/sched-ext.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/scheduler/sched-ext.rst?h=v6.12) — the kernel's own design document: DSQ semantics, the FIFO-and-priority-queue behavior, and the three conditions that abort a BPF scheduler
 - [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h?h=v6.12) — `SCHED_DATA`, the linker-enforced scheduler class ordering (`stop → dl → rt → fair → ext → idle`)
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The extensible scheduler class](https://lwn.net/Articles/922405/) (February 2023) — Jonathan Corbet's review of the second posted version, including Zijlstra's "I hate all of this" response to the first
 - [Extensible scheduler class to be merged for 6.11](https://lwn.net/Articles/978007/) (June 2024) — Torvalds' override announcement, in his own words
@@ -114,11 +114,11 @@ Links pinned to the **v6.12** tag — several of these names have since been ren
 - [The 2023 Kernel Maintainers Summit](https://lwn.net/Articles/951847/) (November 2023) — LWN's published coverage of the summit's actual agenda, which does not list sched_ext
 - [Sched_ext at LPC 2024](https://lwn.net/Articles/991205/) — real deployment numbers (scx_layered, scx_lavd/Steam Deck) and the composability roadmap
 
-### Mailing list
+### Mailing list {#mailing-list}
 
 - [Peter Zijlstra's "I hate all of this" reply](https://lwn.net/ml/linux-kernel/Y5b2btWFJeEfTyJg@hirez.programming.kicks-ass.net/) — via LWN's own mailing-list mirror, his response to the first posted version of the patch set
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Scheduler Classes](scheduler-classes.md) — how sched_ext fits alongside the other five classes
 - [EEVDF](eevdf.md) — where a task's scheduler class resolves to once sched_ext is disabled

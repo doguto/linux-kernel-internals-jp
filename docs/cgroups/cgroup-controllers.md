@@ -1,12 +1,12 @@
-# Cgroup v2 Resource Controllers
+# Cgroup v2 Resource Controllers {#cgroup-v2-resource-controllers}
 
 > Controlling CPU, memory, I/O, and process count
 
-## cpu controller
+## cpu controller {#cpu-controller}
 
 Controls CPU bandwidth allocation.
 
-### Interface files
+### Interface files {#interface-files}
 
 ```bash
 # CPU time weight (relative, default 100, range 1–10000)
@@ -32,7 +32,7 @@ cat /sys/fs/cgroup/myapp/cpu.stat
 # throttled_usec 12345      ← total throttled time
 ```
 
-### How cpu.max works internally
+### How cpu.max works internally {#how-cpumax-works-internally}
 
 ```c
 /* kernel/sched/core.c: scheduler checks bandwidth */
@@ -60,7 +60,7 @@ struct cfs_bandwidth {
 
 When a cfs_rq runs out of quota, it's added to `throttled_cfs_rq` and pulled off the runqueue until the period timer fires to refill `runtime`.
 
-### cpu.weight and EEVDF
+### cpu.weight and EEVDF {#cpuweight-and-eevdf}
 
 `cpu.weight` maps to the EEVDF scheduler's `se.weight`. A process with weight 200 gets twice the CPU share of a weight-100 process when both are runnable.
 
@@ -74,11 +74,11 @@ static u32 sched_weight_from_cgroup(unsigned long cgroup_weight)
 }
 ```
 
-## memory controller
+## memory controller {#memory-controller}
 
 Controls memory usage. The most complex controller due to accounting overhead.
 
-### Interface files
+### Interface files {#interface-files_1}
 
 ```bash
 # Hard memory limit (OOM kill when exceeded)
@@ -110,7 +110,7 @@ cat /sys/fs/cgroup/myapp/memory.events
 # oom_group_kill 0
 ```
 
-### memory.high: the reclaim throttle
+### memory.high: the reclaim throttle {#memoryhigh-the-reclaim-throttle}
 
 `memory.high` is a soft limit that triggers reclaim instead of killing:
 
@@ -135,7 +135,7 @@ void mem_cgroup_handle_over_high(gfp_t gfp_mask)
 }
 ```
 
-### Page accounting
+### Page accounting {#page-accounting}
 
 Each page is charged to one `mem_cgroup` via `page_counter`:
 
@@ -162,7 +162,7 @@ mem_cgroup_charge(page, mm, gfp)
       → if over max: try to reclaim → if still over: OOM
 ```
 
-### memory.min and memory.low: protection
+### memory.min and memory.low: protection {#memorymin-and-memorylow-protection}
 
 ```bash
 # Reserve at least 256MB for this cgroup (never reclaim below this)
@@ -172,11 +172,11 @@ echo "256M" > /sys/fs/cgroup/myapp/memory.min
 echo "256M" > /sys/fs/cgroup/myapp/memory.low
 ```
 
-## io controller
+## io controller {#io-controller}
 
 Controls block I/O bandwidth and IOPS using BFQ or mq-deadline scheduler integration.
 
-### Interface files
+### Interface files {#interface-files_2}
 
 ```bash
 # Relative weight for I/O scheduler (default 100, range 1–10000)
@@ -196,7 +196,7 @@ cat /sys/fs/cgroup/myapp/io.pressure
 # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
 ```
 
-### How io.max works
+### How io.max works {#how-iomax-works}
 
 The io controller uses the block layer's throttle path:
 
@@ -216,11 +216,11 @@ blk_throtl_bio(bio)
   → if over limit: queue bio in tg, schedule timer to dispatch later
 ```
 
-## pids controller
+## pids controller {#pids-controller}
 
 Limits the total number of processes and threads.
 
-### Interface files
+### Interface files {#interface-files_3}
 
 ```bash
 # Limit to 100 processes/threads total
@@ -234,7 +234,7 @@ cat /sys/fs/cgroup/myapp/pids.events
 # max 3  ← times fork() was rejected due to pids.max
 ```
 
-### How pids.max is enforced
+### How pids.max is enforced {#how-pidsmax-is-enforced}
 
 ```c
 /* kernel/fork.c: copy_process() */
@@ -249,7 +249,7 @@ static struct task_struct *copy_process(...)
 }
 ```
 
-## cpuset controller
+## cpuset controller {#cpuset-controller}
 
 Pins processes to specific CPUs and NUMA nodes:
 
@@ -264,7 +264,7 @@ echo "0" > /sys/fs/cgroup/myapp/cpuset.mems
 echo 1 > /sys/fs/cgroup/myapp/cpuset.cpus.exclusive
 ```
 
-## Monitoring cgroup resource usage
+## Monitoring cgroup resource usage {#monitoring-cgroup-resource-usage}
 
 ```bash
 # CPU pressure (PSI — Pressure Stall Information)
@@ -284,7 +284,7 @@ cat /sys/fs/cgroup/myapp/cpu.stat
 cat /sys/fs/cgroup/myapp/memory.current
 ```
 
-## Delegation for rootless containers
+## Delegation for rootless containers {#delegation-for-rootless-containers}
 
 ```bash
 # Grant unprivileged user ownership of a subtree
@@ -300,7 +300,7 @@ mount -o remount,nsdelegate /sys/fs/cgroup
 # Now: tasks in a namespace can only control their subtree
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Cgroup v2 Architecture](cgroup-v2.md) — Hierarchy and core data structures
 - [Memory Cgroups](../mm/memcg.md) — Deep dive into memcg accounting

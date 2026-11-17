@@ -1,8 +1,8 @@
-# Time Subsystem War Stories
+# Time Subsystem War Stories {#time-subsystem-war-stories}
 
 > TSC instability, clocksource watchdog, leap seconds, and timer bugs
 
-## TSC drift on multi-socket systems
+## TSC drift on multi-socket systems {#tsc-drift-on-multi-socket-systems}
 
 Early x86 NUMA systems (pre-Nehalem era) had a fundamental problem: each socket contained its own oscillator, and the TSCs (Time Stamp Counters) across sockets were not synchronized to a common reference. The TSC on socket 0 might increment slightly faster than the TSC on socket 1. The difference was small — typically tens of microseconds per second — but it accumulated.
 
@@ -30,7 +30,7 @@ cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 dmesg | grep -i 'clocksource.*unstable\|tsc.*watchdog'
 ```
 
-## The leap second thundering herd (2012)
+## The leap second thundering herd (2012) {#the-leap-second-thundering-herd-2012}
 
 On June 30, 2012, at 23:59:59 UTC, a leap second was inserted. Linux servers worldwide experienced CPU saturation simultaneously — not from load, but from a kernel bug.
 
@@ -58,7 +58,7 @@ Root cause: the leap second handling hrtimers were never notified of the clock s
 
 This incident led to widespread adoption of `CLOCK_TAI` for applications that need a monotonically increasing real-time clock — TAI has no leap seconds and never jumps.
 
-## The clocksource watchdog false positive
+## The clocksource watchdog false positive {#the-clocksource-watchdog-false-positive}
 
 A production Kubernetes cluster on KVM hypervisors started showing erratic `clock_gettime()` behavior. Processes observed `CLOCK_MONOTONIC` advancing far too slowly — with a resolution of 1 millisecond instead of the expected 1 nanosecond. `dmesg` on affected guest VMs showed:
 
@@ -95,7 +95,7 @@ echo kvm-clock > /sys/devices/system/clocksource/clocksource0/current_clocksourc
 
 `kvm-clock` is the correct clocksource for KVM guests. It uses a shared memory page (the `pvclock` page) written by the hypervisor, and accounts for steal time — time during which the guest vCPU was not scheduled. The kernel uses it by default when running under KVM if the hypervisor exposes it.
 
-## timer_delete vs timer_delete_sync race
+## timer_delete vs timer_delete_sync race {#timerdelete-vs-timerdelete_sync-race}
 
 A network driver registered a timer to retransmit a packet if an acknowledgment did not arrive within a timeout. The timer callback read fields from the driver's `struct device_state`. During driver teardown, the cleanup function called `timer_delete()` and then `kfree(state)`:
 
@@ -142,7 +142,7 @@ This prevents a re-arm race where the callback arms the timer again before `time
 
 LOCKDEP will warn about `timer_delete_sync()` called from softirq context (it cannot sleep to wait). In that case, use `timer_delete()` and defer the `kfree()` to a work queue, or use RCU to protect the data structure.
 
-## The 32-bit jiffies wraparound
+## The 32-bit jiffies wraparound {#the-32-bit-jiffies-wraparound}
 
 A storage driver implemented a command timeout:
 
@@ -205,9 +205,9 @@ The full family of macros in `include/linux/jiffies.h`:
 
 On 64-bit kernels, `jiffies` is a 64-bit value and `jiffies_64` provides the full 64-bit counter directly. Overflow takes hundreds of millions of years, making it a non-issue — but the wraparound-safe macros remain correct and should be used regardless for clarity and portability.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/time/clocksource.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/clocksource.c) — `clocksource_watchdog()` stability verification, `CLOCK_SOURCE_UNSTABLE` marking, and retry threshold logic
 - [kernel/time/timekeeping.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping.c) — `second_overflow()` and leap-second state transitions, preventing timer rearm loops
@@ -216,25 +216,25 @@ On 64-bit kernels, `jiffies` is a 64-bit value and `jiffies_64` provides the ful
 - [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — `tsc_init()`, invariant TSC CPUID validation, and `mark_tsc_unstable()`
 - [arch/x86/kernel/kvmclock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/kvmclock.c) — paravirtualized `kvm-clock` clocksource integration for guest timekeeping
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — monotonic and realtime clock querying semantics
 - [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — leap second insertion flags (`STA_INS`, `STA_DEL`) and status reporting
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Clocksource and Clockevent Drivers](clocksource.md) — hardware clocksources, watchdog verification, and rating hierarchy
 - [Timekeeping and Clocksources](timekeeping.md) — timekeeping architecture, leap seconds, and vDSO fast paths
 - [The Timer Wheel](timer-wheel.md) — timer lifecycle, `timer_delete_sync()`, and jiffies arithmetic
 - [NTP and Clock Discipline](ntp.md) — PLL synchronization, leap seconds, and chrony/ntpd smearing
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The leap second bug](https://lwn.net/Articles/504657/) — Jonathan Corbet, July 2012: in-depth postmortem of the 2012 leap second hrtimer livelock
 - [The trouble with the TSC](https://lwn.net/Articles/388188/) — Jake Edge, May 2010: invariant TSC guarantees, frequency scaling drift, and watchdog verification
 - [Reinventing the timer wheel](https://lwn.net/Articles/646950/) — Jonathan Corbet, June 2015: redesigning the timer wheel and improving timer cancellation guarantees
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — core kernel documentation for timekeeping and timer subsystems
 - [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — `tsc=reliable`, `clocksource=`, and `no_hpet` parameter reference

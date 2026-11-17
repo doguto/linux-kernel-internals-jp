@@ -1,8 +1,8 @@
-# CPU cgroup: v1 vs v2
+# CPU cgroup: v1 vs v2 {#cpu-cgroup-v1-vs-v2}
 
 > Controlling CPU allocation with cgroups — shares, weights, and bandwidth
 
-## What CPU cgroups control
+## What CPU cgroups control {#what-cpu-cgroups-control}
 
 CPU cgroups give you two independent controls:
 
@@ -11,7 +11,7 @@ CPU cgroups give you two independent controls:
 
 These are orthogonal. A group with high weight still gets throttled if it hits its bandwidth limit.
 
-## The interface difference
+## The interface difference {#the-interface-difference}
 
 cgroup v1 and v2 expose the same underlying mechanisms with different interfaces:
 
@@ -22,7 +22,7 @@ cgroup v1 and v2 expose the same underlying mechanisms with different interfaces
 | Bandwidth period | `cpu.cfs_period_us` | `cpu.max` (second field) | 100000 µs |
 | Stats | `cpuacct.stat` + `cpu.stat` | `cpu.stat` | — |
 
-### Weight: shares vs weight
+### Weight: shares vs weight {#weight-shares-vs-weight}
 
 v1 `cpu.shares` and v2 `cpu.weight` differ in scale but map to the same kernel concept:
 
@@ -46,7 +46,7 @@ echo 200 > /sys/fs/cgroup/groupA/cpu.weight
 echo 100 > /sys/fs/cgroup/groupB/cpu.weight
 ```
 
-### Bandwidth: quota/period vs cpu.max
+### Bandwidth: quota/period vs cpu.max {#bandwidth-quotaperiod-vs-cpumax}
 
 v1 exposes quota and period as separate files; v2 combines them:
 
@@ -61,9 +61,9 @@ echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max
 # "max 100000" means unlimited (default)
 ```
 
-## The kernel structures
+## The kernel structures {#the-kernel-structures}
 
-### struct task_group
+### struct task_group {#struct-task_group}
 
 Every cgroup maps to a `task_group` in the kernel:
 
@@ -90,7 +90,7 @@ struct task_group {
 
 Each CPU has its own `sched_entity` representing the group in that CPU's CFS runqueue. This allows the group to be scheduled as a single unit relative to other groups and tasks on that CPU, then internally distribute time among its members.
 
-### struct cfs_bandwidth
+### struct cfs_bandwidth {#struct-cfs_bandwidth}
 
 ```c
 // kernel/sched/sched.h
@@ -113,7 +113,7 @@ struct cfs_bandwidth {
 };
 ```
 
-## How bandwidth throttling works
+## How bandwidth throttling works {#how-bandwidth-throttling-works}
 
 ```mermaid
 flowchart TB
@@ -130,7 +130,7 @@ flowchart TB
     C -->|Yes| D --> E --> F --> G --> A
 ```
 
-### Distribution to CPUs
+### Distribution to CPUs {#distribution-to-cpus}
 
 The global `cfs_b->runtime` budget is distributed to individual CPUs in slices:
 
@@ -147,7 +147,7 @@ static void assign_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 
 A CPU grabs a 5ms slice from the global pool. When the slice runs out, it requests another. If the global pool is exhausted (quota used up for this period), the CPU is throttled.
 
-### Viewing throttling stats
+### Viewing throttling stats {#viewing-throttling-stats}
 
 ```bash
 # Per-group bandwidth stats
@@ -162,7 +162,7 @@ cat /sys/fs/cgroup/mygroup/cpu.stat
 watch -n 1 'cat /sys/fs/cgroup/mycontainer/cpu.stat | grep throttled'
 ```
 
-## Group scheduling hierarchy
+## Group scheduling hierarchy {#group-scheduling-hierarchy}
 
 With `CONFIG_FAIR_GROUP_SCHED`, CFS builds a two-level hierarchy:
 
@@ -181,7 +181,7 @@ Group A gets 2000/(2000+1000) = 67% of CPU. Within A, task1 gets 2/3 and task2 g
 
 This nesting allows containers to have isolated CPU allocations while tasks within a container compete fairly among themselves.
 
-## v1 vs v2: key behavioral differences
+## v1 vs v2: key behavioral differences {#v1-vs-v2-key-behavioral-differences}
 
 **Hierarchical bandwidth (v2 only)**: In v2, a child cgroup's effective quota is the minimum of its own quota and its ancestors' quotas. In v1, cgroup bandwidth is per-cgroup, not inherited.
 
@@ -189,9 +189,9 @@ This nesting allows containers to have isolated CPU allocations while tasks with
 
 **Weight range**: v1 shares: 2–262144. v2 weight: 1–10000. The effective range is the same proportionally.
 
-## Practical examples
+## Practical examples {#practical-examples}
 
-### Container CPU limits (v2)
+### Container CPU limits (v2) {#container-cpu-limits-v2}
 
 ```bash
 # Create a cgroup for a container
@@ -207,7 +207,7 @@ echo 200 > /sys/fs/cgroup/containers/mycontainer/cpu.weight
 echo $PID > /sys/fs/cgroup/containers/mycontainer/cgroup.procs
 ```
 
-### Detecting CPU throttling
+### Detecting CPU throttling {#detecting-cpu-throttling}
 
 ```bash
 # Check if your container is being throttled
@@ -218,7 +218,7 @@ cat /sys/fs/cgroup/$(cat /proc/self/cgroup | grep cpu | cut -d: -f3)/cpu.stat | 
 cat /sys/fs/cgroup/cpu/$(cat /proc/self/cgroup | grep ^7 | cut -d: -f3)/cpu.stat
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [CPU Bandwidth Control](cpu-bandwidth.md) — Deep dive into CFS bandwidth mechanics
 - [cpuset](cpuset.md) — Restricting which CPUs and NUMA nodes a cgroup can use

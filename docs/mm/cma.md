@@ -1,8 +1,8 @@
-# CMA (Contiguous Memory Allocator)
+# CMA (Contiguous Memory Allocator) {#cma-contiguous-memory-allocator}
 
 > Reserved regions that serve double duty: normal pages by day, DMA buffers on demand
 
-## What Is CMA?
+## What Is CMA? {#what-is-cma}
 
 CMA reserves regions of physical memory at boot that can be reclaimed for large contiguous allocations when devices need them. The key insight is that these reserved pages are not wasted -- they serve normal movable allocations (page cache, anonymous memory) until a device driver requests a contiguous buffer, at which point the pages are migrated out and the region is handed to the driver.
 
@@ -26,15 +26,15 @@ CMA region (allocated to device):
 └────────────────────────────────────────────────────────────────┘
 ```
 
-## Why CMA Exists
+## Why CMA Exists {#why-cma-exists}
 
-### The Problem
+### The Problem {#the-problem}
 
 DMA devices often need physically contiguous memory. Unlike CPUs, many devices cannot use page tables to remap scattered physical pages into a contiguous address range. A camera capturing a frame, a display controller scanning out a framebuffer, or a network card sending a jumbo packet may all need a single contiguous physical buffer.
 
 On a freshly booted system, large contiguous allocations succeed easily. But after days of uptime, physical memory becomes fragmented -- free pages are scattered between persistent allocations. Even with gigabytes free, allocating a contiguous 8MB buffer can fail.
 
-### Previous Solutions and Their Downsides
+### Previous Solutions and Their Downsides {#previous-solutions-and-their-downsides}
 
 Before CMA, the options were poor:
 
@@ -47,15 +47,15 @@ Before CMA, the options were poor:
 
 The boot-time reservation approach was especially wasteful on embedded devices (phones, set-top boxes) where RAM is scarce. A device might reserve 64MB for a camera that is used for a few minutes a day, leaving that memory unavailable for the rest of the system.
 
-### CMA's Insight
+### CMA's Insight {#cmas-insight}
 
 CMA eliminates the tradeoff between reliability and waste. It reserves regions at boot (guaranteeing contiguous space is available) but allows movable allocations to use that space in the meantime. When a device needs the memory, CMA migrates the movable pages out and hands over the contiguous region.
 
 This dual-use design was particularly important for ARM-based mobile devices at Samsung, where limited RAM and many DMA-dependent peripherals (camera, display, codec) created constant tension between device driver needs and application memory.
 
-## How CMA Works
+## How CMA Works {#how-cma-works}
 
-### The Dual-Use Design
+### The Dual-Use Design {#the-dual-use-design}
 
 CMA regions live within `ZONE_NORMAL` (or `ZONE_DMA`/`ZONE_DMA32` depending on architecture). The buddy allocator treats CMA pages as a special migrate type: `MIGRATE_CMA`.
 
@@ -78,7 +78,7 @@ The rules for `MIGRATE_CMA` pages:
 2. **Unmovable and reclaimable allocations cannot use CMA pages.** This is critical -- if an unmovable kernel allocation landed in a CMA region, the region could never be fully reclaimed.
 3. **When a driver calls `cma_alloc()`, all movable pages in the requested range are migrated out.** The kernel uses the same page migration machinery as compaction.
 
-### Allocation Path
+### Allocation Path {#allocation-path}
 
 When a driver needs contiguous memory (typically through `dma_alloc_coherent()`):
 
@@ -109,7 +109,7 @@ alloc_contig_range(start, end, MIGRATE_CMA, ...)
 
 If migration fails (e.g., a page is pinned for I/O), `cma_alloc()` retries with a different range within the CMA region. It scans through the region in bitmap-tracked chunks until it finds a range that can be fully cleared, or gives up.
 
-### The CMA Bitmap
+### The CMA Bitmap {#the-cma-bitmap}
 
 Each CMA region tracks allocation state with a bitmap. Each bit represents a block of pages (the granularity is set by `CONFIG_CMA_ALIGNMENT`, defaulting to order-8 or 1MB with 4KB pages):
 
@@ -126,7 +126,7 @@ struct cma {
 
 The bitmap tracks which chunks are currently allocated to devices. Pages not marked as allocated in the bitmap are available for movable use by the rest of the system.
 
-### Interaction with the Page Allocator
+### Interaction with the Page Allocator {#interaction-with-the-page-allocator}
 
 CMA integrates with the buddy allocator through the `MIGRATE_CMA` migrate type, introduced alongside CMA. Key interactions:
 
@@ -134,9 +134,9 @@ CMA integrates with the buddy allocator through the `MIGRATE_CMA` migrate type, 
 - **Steal prevention**: The allocator never steals CMA pageblocks for `MIGRATE_UNMOVABLE` or `MIGRATE_RECLAIMABLE` requests. This guarantee is enforced in `__rmqueue_fallback()` in `mm/page_alloc.c`.
 - **Compaction awareness**: When compaction runs, it understands CMA regions and respects their migrate type. CMA pages can be targets for the compaction migration scanner (pages can be moved *into* CMA regions), but CMA pages won't be changed to unmovable types.
 
-## Configuration
+## Configuration {#configuration}
 
-### Kernel Command Line
+### Kernel Command Line {#kernel-command-line}
 
 The simplest way to set up CMA:
 
@@ -150,7 +150,7 @@ cma=256M@0x40000000
 
 The `cma=` parameter sets the size of the default CMA area, which is used by any device that does not have a dedicated CMA region.
 
-### Device Tree (ARM/embedded)
+### Device Tree (ARM/embedded) {#device-tree-armembedded}
 
 Embedded platforms typically define CMA regions in the device tree:
 
@@ -183,7 +183,7 @@ camera@0 {
 
 The `reusable` property is what makes it CMA rather than a static reservation. Without `reusable`, the region would be exclusively reserved and not available for movable allocations.
 
-### Kernel Config Options
+### Kernel Config Options {#kernel-config-options}
 
 ```
 CONFIG_CMA=y                    # Enable CMA support
@@ -197,9 +197,9 @@ CONFIG_DMA_CMA=y                # Use CMA as the DMA contiguous allocator backen
 
 `CONFIG_CMA_SIZE_MBYTES` sets the default size when no `cma=` boot parameter is given. `CONFIG_CMA_SIZE_PERCENTAGE` provides an alternative way to scale CMA with RAM size. The larger of the two values wins.
 
-## Using CMA from Drivers
+## Using CMA from Drivers {#using-cma-from-drivers}
 
-### The DMA API (Recommended)
+### The DMA API (Recommended) {#the-dma-api-recommended}
 
 Most drivers should use the DMA API, which handles CMA allocation transparently:
 
@@ -215,7 +215,7 @@ dma_free_coherent(dev, size, vaddr, dma_handle);
 
 The DMA subsystem calls into CMA via `dma_alloc_from_contiguous()`, which maps to `cma_alloc()` internally. The device's CMA region is selected based on its `memory-region` device tree property, or the default global CMA area.
 
-### Direct CMA API (Rare)
+### Direct CMA API (Rare) {#direct-cma-api-rare}
 
 For subsystems that need direct control:
 
@@ -231,9 +231,9 @@ cma_release(cma, page, count);
 
 After `cma_release()`, the pages return to the buddy allocator as `MIGRATE_CMA` pages and can once again serve movable allocations.
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### /proc/meminfo
+### /proc/meminfo {#procmeminfo}
 
 ```bash
 $ grep Cma /proc/meminfo
@@ -245,7 +245,7 @@ CmaFree:         245760 kB    # CMA pages not allocated to devices
 
 Note that `CmaTotal` and `CmaFree` are included in `MemTotal` and `MemFree` respectively -- CMA memory is not "missing" from the system's perspective.
 
-### debugfs (CONFIG_CMA_DEBUGFS)
+### debugfs (CONFIG_CMA_DEBUGFS) {#debugfs-configcmadebugfs}
 
 ```bash
 $ ls /sys/kernel/debug/cma/
@@ -271,7 +271,7 @@ The `alloc` file is writable -- you can trigger a test allocation to verify CMA 
 echo 1024 > /sys/kernel/debug/cma/cma-reserved/alloc
 ```
 
-### vmstat Counters
+### vmstat Counters {#vmstat-counters}
 
 ```bash
 $ grep cma /proc/vmstat
@@ -281,7 +281,7 @@ cma_alloc_fail 0
 
 These counters (added in v5.19) track CMA allocation outcomes across all CMA regions.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # Check if CMA is enabled and how much is reserved
@@ -305,15 +305,15 @@ cat /proc/buddyinfo
 ls /proc/device-tree/reserved-memory/ 2>/dev/null
 ```
 
-## History
+## History {#history}
 
-### Development at Samsung
+### Development at Samsung {#development-at-samsung}
 
 CMA was developed by Marek Szyprowski at Samsung Electronics. The motivation came from ARM mobile platforms (like Samsung's Exynos SoCs) where multiple peripherals -- cameras, display controllers, multimedia codecs, and GPU -- all needed large contiguous buffers but the system had limited RAM to spare for static reservations.
 
 The feature went through extensive review over multiple revisions of the patch series before being merged.
 
-### Merged in v3.5 (2012)
+### Merged in v3.5 (2012) {#merged-in-v35-2012}
 
 **Commit**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
 
@@ -323,7 +323,7 @@ The initial merge included the core CMA allocator and its integration with the D
 
 **LWN coverage**: [A deep dive into CMA](https://lwn.net/Articles/486301/) -- discusses the design rationale and review process.
 
-### MIGRATE_CMA Type (v3.5, 2012)
+### MIGRATE_CMA Type (v3.5, 2012) {#migrate_cma-type-v35-2012}
 
 **Commit**: [47118af076f6](https://git.kernel.org/linus/47118af076f6) ("mm: mmzone: MIGRATE_CMA migration type added")
 
@@ -331,13 +331,13 @@ The initial merge included the core CMA allocator and its integration with the D
 
 Added the `MIGRATE_CMA` migrate type to the buddy allocator, enabling the dual-use design where CMA pages serve movable allocations while preventing unmovable ones from landing in CMA regions.
 
-### Per-device CMA Areas (v3.17, 2014)
+### Per-device CMA Areas (v3.17, 2014) {#per-device-cma-areas-v317-2014}
 
 **Commit**: [c1f733aaf1e1](https://git.kernel.org/linus/c1f733aaf1e1) ("drivers: of: add initialization code for dma-reserved-memory")
 
 The device tree `memory-region` property support, allowing individual devices to have their own dedicated CMA regions rather than sharing the global one.
 
-### CMA debugfs (v4.1, 2015)
+### CMA debugfs (v4.1, 2015) {#cma-debugfs-v41-2015}
 
 **Commit**: [28b24c1fc8c4](https://git.kernel.org/linus/28b24c1fc8c4) ("mm: cma: debugfs interface")
 
@@ -345,7 +345,7 @@ The device tree `memory-region` property support, allowing individual devices to
 
 The debugfs interface for monitoring CMA was added, giving operators visibility into CMA region usage.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -357,9 +357,9 @@ The debugfs interface for monitoring CMA was added, giving operators visibility 
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Buddy allocator with `MIGRATE_CMA` fallback logic |
 | [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) | Page range isolation used during `cma_alloc()` |
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### CMA Allocation Failures
+### CMA Allocation Failures {#cma-allocation-failures}
 
 **Symptoms**: `cma_alloc_fail` count increasing, driver probe failures, DMA allocation errors in dmesg.
 
@@ -384,7 +384,7 @@ cat /sys/kernel/debug/cma/*/used
 cat /sys/kernel/debug/cma/*/maxchunk
 ```
 
-### CMA Memory Not Appearing
+### CMA Memory Not Appearing {#cma-memory-not-appearing}
 
 If `CmaTotal` is 0 in `/proc/meminfo`:
 
@@ -392,7 +392,7 @@ If `CmaTotal` is 0 in `/proc/meminfo`:
 - Check that the `cma=` boot parameter is present, or that `CONFIG_CMA_SIZE_MBYTES` is nonzero
 - On device tree platforms, verify the reserved-memory node has `compatible = "shared-dma-pool"` and the `reusable` property
 
-## References
+## References {#references}
 
 - [LWN: A deep dive into CMA](https://lwn.net/Articles/486301/) - Design discussion from the merge window
 - [LWN: CMA and compaction](https://lwn.net/Articles/684611/) - Interaction between CMA and compaction
@@ -402,7 +402,7 @@ If `CmaTotal` is 0 in `/proc/meminfo`:
 - [compaction](compaction.md) - The page migration machinery CMA relies on
 - [page-allocator](page-allocator.md) - Buddy allocator and migrate types
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LWN: A deep dive into CMA](https://lwn.net/Articles/486301/) — design rationale and the long review process before CMA merged in v3.5 (2012)
 - [LWN: Contiguous memory allocation for drivers](https://lwn.net/Articles/396657/) — the early CMA proposal that motivated the final design (2010)

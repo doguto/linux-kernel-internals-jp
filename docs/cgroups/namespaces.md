@@ -1,8 +1,8 @@
-# Linux Namespaces
+# Linux Namespaces {#linux-namespaces}
 
 > Isolating what processes can see
 
-## The eight namespace types
+## The eight namespace types {#the-eight-namespace-types}
 
 | Namespace | Flag | Isolates | Kernel |
 |-----------|------|----------|--------|
@@ -15,9 +15,9 @@
 | Cgroup | `CLONE_NEWCGROUP` | Cgroup root view | 4.6 |
 | Time | `CLONE_NEWTIME` | CLOCK_MONOTONIC, CLOCK_BOOTTIME offsets | 5.6 |
 
-## Creating namespaces
+## Creating namespaces {#creating-namespaces}
 
-### clone() — create child in new namespace
+### clone() — create child in new namespace {#clone-create-child-in-new-namespace}
 
 ```c
 #define _GNU_SOURCE
@@ -45,7 +45,7 @@ int main(void)
 }
 ```
 
-### unshare() — current process enters new namespace
+### unshare() — current process enters new namespace {#unshare-current-process-enters-new-namespace}
 
 ```c
 /* Detach from shared namespaces */
@@ -61,7 +61,7 @@ unshare --pid --mount --fork --mount-proc bash
 # Now in isolated PID+mount namespace, ps shows only this bash subtree
 ```
 
-### setns() — join an existing namespace
+### setns() — join an existing namespace {#setns-join-an-existing-namespace}
 
 ```c
 #include <fcntl.h>
@@ -79,7 +79,7 @@ close(nsfd);
 nsenter --target <pid> --mount --pid --net -- bash
 ```
 
-## struct nsproxy: the task's namespace set
+## struct nsproxy: the task's namespace set {#struct-nsproxy-the-tasks-namespace-set}
 
 Each task holds a reference to its namespace set:
 
@@ -103,7 +103,7 @@ struct nsproxy *nsproxy;
 
 Processes that share all namespaces point to the same `nsproxy` (refcount). When any namespace diverges, a new nsproxy is allocated.
 
-## PID namespace
+## PID namespace {#pid-namespace}
 
 PID namespaces were introduced in Linux 2.6.24 [(LWN)](https://lwn.net/Articles/259217/). Each PID namespace has its own numbering starting from 1. A process has different PIDs in different namespaces:
 
@@ -137,7 +137,7 @@ cat /proc/1234/status | grep NSpid
 # NSpid:  5678   1    ← host PID 5678 = PID 1 in container's namespace
 ```
 
-## Mount namespace
+## Mount namespace {#mount-namespace}
 
 Mount namespaces (Linux 2.4.19, 2002) were the first namespace type added to the kernel — which is why the flag is the generic `CLONE_NEWNS` rather than something like `CLONE_NEWMNT`. Each mount namespace has its own copy of the mount tree. Changes in one don't affect others.
 
@@ -162,7 +162,7 @@ unshare --mount --pid --fork --mount-proc bash
 # Host sees the old /proc
 ```
 
-### Mount propagation types
+### Mount propagation types {#mount-propagation-types}
 
 ```bash
 # Shared: mounts propagate to peers
@@ -178,7 +178,7 @@ mount --make-slave /mnt
 mount --make-unbindable /mnt
 ```
 
-## Network namespace
+## Network namespace {#network-namespace}
 
 Each network namespace has its own:
 
@@ -243,7 +243,7 @@ ip netns list
 ls /var/run/netns/
 ```
 
-## User namespace
+## User namespace {#user-namespace}
 
 User namespaces were made functionally complete and usable by unprivileged users in Linux 3.9 by Eric W. Biederman [(commit)](https://git.kernel.org/linus/94f2f14234178f118545a0be60a6371ddeb229b7) [(LWN)](https://lwn.net/Articles/532593/). User namespaces map UIDs/GIDs between inside and outside:
 
@@ -294,7 +294,7 @@ echo "0 1000 10" > /proc/<pid>/uid_map
 
 The key property: a process can be UID 0 (root) inside a user namespace but have no privilege outside it. This enables rootless containers.
 
-### Capability scope
+### Capability scope {#capability-scope}
 
 Capabilities in a user namespace only grant privilege over resources owned by that namespace and its descendants. Root in a user namespace cannot:
 
@@ -302,7 +302,7 @@ Capabilities in a user namespace only grant privilege over resources owned by th
 - Modify kernel parameters outside the namespace
 - Read files owned by other users on the host
 
-## UTS namespace
+## UTS namespace {#uts-namespace}
 
 ```bash
 # Isolate hostname
@@ -320,7 +320,7 @@ struct uts_namespace {
 };
 ```
 
-## Namespace file descriptors
+## Namespace file descriptors {#namespace-file-descriptors}
 
 Namespaces are persistent as long as:
 1. A process is in them, OR
@@ -334,7 +334,7 @@ mount --bind /proc/<pid>/ns/net /var/run/netns/myns
 # Now myns persists even after the creating process exits
 ```
 
-## Observing namespaces
+## Observing namespaces {#observing-namespaces}
 
 ```bash
 # See namespace IDs for all processes (matching = shared)
@@ -355,7 +355,7 @@ ls -la /proc/self/ns/
 lsns -t net
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Container Isolation](container-isolation.md) — How namespaces and cgroups combine
 - [Cgroup v2 Architecture](cgroup-v2.md) — Resource control complement to isolation

@@ -1,4 +1,4 @@
-# Spectre and Meltdown
+# Spectre and Meltdown {#spectre-and-meltdown}
 
 > Hardware vulnerabilities, kernel mitigations, and performance impact
 
@@ -6,7 +6,7 @@ In January 2018, the coordinated disclosure of Meltdown and Spectre fundamentall
 
 ---
 
-## Background: speculative execution and cache side channels
+## Background: speculative execution and cache side channels {#background-speculative-execution-and-cache-side-channels}
 
 Modern CPUs execute instructions speculatively — they predict branches and execute ahead of confirmed program flow. If the prediction is wrong, the speculatively executed results are discarded. The problem: **side effects in the cache are not discarded**.
 
@@ -20,9 +20,9 @@ This is called a **Flush+Reload** or **Prime+Probe** attack. All major speculati
 
 ---
 
-## Meltdown (CVE-2017-5754)
+## Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability}
 
 Meltdown exploits a race between speculative execution and permission checks. On vulnerable Intel CPUs (and some ARM), the CPU speculatively executes memory reads from kernel addresses even in user mode, **before** the permission check that would generate a #PF (Page Fault, vector 14) fault.
 
@@ -40,7 +40,7 @@ Attack sequence:
 
 **Affected hardware**: Most Intel CPUs from ~2010 to ~2018 (before Coffee Lake Refresh). AMD CPUs are generally not affected. ARM Cortex-A75 is affected.
 
-### Mitigation: KPTI
+### Mitigation: KPTI {#mitigation-kpti}
 
 KPTI (Kernel Page Table Isolation) prevents the attack by ensuring that kernel addresses are simply **not mapped** in the page table while the CPU is running user code. If the kernel address is not in the page table, speculative reads produce a TLB miss (not a cached value), defeating the side channel.
 
@@ -54,9 +54,9 @@ cat /sys/devices/system/cpu/vulnerabilities/meltdown
 
 ---
 
-## Spectre v1 (CVE-2017-5753): bounds check bypass
+## Spectre v1 (CVE-2017-5753): bounds check bypass {#spectre-v1-cve-2017-5753-bounds-check-bypass}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_1}
 
 Spectre v1 exploits speculative execution past a bounds check. The attacker trains the branch predictor to expect the branch to be taken, then causes a check to fail — but speculative execution has already read out-of-bounds data.
 
@@ -74,7 +74,7 @@ The attacker trains the branch predictor by calling the function many times with
 
 **Affected hardware**: All CPUs with branch prediction — essentially every modern CPU.
 
-### Mitigations
+### Mitigations {#mitigations}
 
 **array_index_nospec()**: The primary in-kernel mitigation. It masks the index to zero if the bounds check fails, even speculatively:
 
@@ -133,9 +133,9 @@ if (likely(unr < NR_syscalls)) {
 
 ---
 
-## Spectre v2 (CVE-2017-5715): branch target injection
+## Spectre v2 (CVE-2017-5715): branch target injection {#spectre-v2-cve-2017-5715-branch-target-injection}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_2}
 
 Spectre v2 targets the **indirect branch predictor** (the BTB: Branch Target Buffer). An attacker can poison the BTB so that a victim's indirect call or jump speculatively executes attacker-controlled code.
 
@@ -148,7 +148,7 @@ This works across processes (same CPU core) and in some configurations across pr
 
 **Affected hardware**: All modern CPUs with indirect branch prediction.
 
-### Mitigation 1: Retpoline
+### Mitigation 1: Retpoline {#mitigation-1-retpoline}
 
 **Retpoline** (return trampoline) is a software technique that replaces indirect calls and jumps with a sequence that defeats branch prediction for the target:
 
@@ -175,7 +175,7 @@ The CPU's return-address predictor (the RSB: Return Stack Buffer) predicts that 
 
 The kernel is compiled with `-mindirect-branch=thunk-extern` (GCC 7.3+) to replace all indirect calls/jumps with retpoline thunks. The thunks are defined in `arch/x86/lib/retpoline.S`.
 
-### Mitigation 2: eIBRS (Enhanced IBRS)
+### Mitigation 2: eIBRS (Enhanced IBRS) {#mitigation-2-eibrs-enhanced-ibrs}
 
 Newer Intel CPUs (Ice Lake and later) implement **eIBRS** (Enhanced Indirect Branch Restricted Speculation), a hardware mitigation. When `IA32_SPEC_CTRL.IBRS = 1` is set once at boot, the CPU continuously prevents cross-privilege BTB pollution — no retpoline needed.
 
@@ -188,7 +188,7 @@ dmesg | grep -i "retpoline\|eibrs\|ibrs"
 # "Spectre v2 : Mitigation: Enhanced / Automatic IBRS"
 ```
 
-### Mitigation 3: IBRS (plain)
+### Mitigation 3: IBRS (plain) {#mitigation-3-ibrs-plain}
 
 Plain **IBRS** (Indirect Branch Restricted Speculation) restricts cross-privilege BTB pollution, but must be re-enabled on every kernel entry (cleared on exit to avoid performance impact). It is slower than retpoline on CPUs without eIBRS.
 
@@ -203,18 +203,18 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 
 ---
 
-## IBRS, IBPB, and STIBP: the three MSR-based controls
+## IBRS, IBPB, and STIBP: the three MSR-based controls {#ibrs-ibpb-and-stibp-the-three-msr-based-controls}
 
 These three controls operate via `IA32_SPEC_CTRL` MSR (`0x48`) and `IA32_PRED_CMD` MSR (`0x49`):
 
-### IBRS (Indirect Branch Restricted Speculation)
+### IBRS (Indirect Branch Restricted Speculation) {#ibrs-indirect-branch-restricted-speculation}
 
 - Bit 0 of `IA32_SPEC_CTRL`
 - When set: indirect branches in lower privilege levels (user) cannot influence speculative execution targets in higher privilege levels (kernel)
 - Performance cost: measurable on older implementations
 - eIBRS: always-on hardware version, no performance cost on modern Intel
 
-### IBPB (Indirect Branch Predictor Barrier)
+### IBPB (Indirect Branch Predictor Barrier) {#ibpb-indirect-branch-predictor-barrier}
 
 - Writing 1 to bit 0 of `IA32_PRED_CMD` flushes the indirect branch predictor state
 - Used on context switch between processes: prevents process A's BTB state from influencing process B
@@ -229,7 +229,7 @@ static inline void indirect_branch_prediction_barrier(void)
 }
 ```
 
-### STIBP (Single Thread Indirect Branch Predictors)
+### STIBP (Single Thread Indirect Branch Predictors) {#stibp-single-thread-indirect-branch-predictors}
 
 - Bit 1 of `IA32_SPEC_CTRL`
 - Prevents sibling hyperthreads from influencing each other's indirect branch prediction
@@ -244,13 +244,13 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 
 ---
 
-## Spectre v4 (CVE-2018-3639): Speculative Store Bypass
+## Spectre v4 (CVE-2018-3639): Speculative Store Bypass {#spectre-v4-cve-2018-3639-speculative-store-bypass}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_3}
 
 The CPU may speculate that a load's address does not conflict with a recent store and bypass the store's value — reading stale data from cache or memory instead of the just-written value. An attacker can exploit this to read values that should have been overwritten.
 
-### Mitigation: SSBD
+### Mitigation: SSBD {#mitigation-ssbd}
 
 **SSBD** (Speculative Store Bypass Disable) sets bit 2 of `IA32_SPEC_CTRL` to disable speculative store bypass globally:
 
@@ -288,7 +288,7 @@ cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass
 
 ---
 
-## MDS: Microarchitectural Data Sampling (CVE-2018-12130, etc.)
+## MDS: Microarchitectural Data Sampling (CVE-2018-12130, etc.) {#mds-microarchitectural-data-sampling-cve-2018-12130-etc}
 
 MDS is a family of vulnerabilities that allow leaking data from CPU internal buffers (line fill buffer, store buffer, load ports) to an attacker on the same physical CPU core.
 
@@ -299,7 +299,7 @@ Variants:
 - **MSBDS** (CVE-2018-12126): Microarchitectural Store Buffer Data Sampling (Fallout)
 - **MDSUM** (CVE-2019-11091): Microarchitectural Data Sampling Uncacheable Memory
 
-### Mitigation: VERW
+### Mitigation: VERW {#mitigation-verw}
 
 The `VERW` instruction (originally for segment verification) was repurposed on affected Intel CPUs to flush the relevant microarchitectural buffers as a side effect when executed just before transitioning from kernel to user mode or entering a guest VM.
 
@@ -333,7 +333,7 @@ cat /sys/devices/system/cpu/vulnerabilities/mds
 
 ---
 
-## Performance impact
+## Performance impact {#performance-impact}
 
 The mitigations impose measurable overhead, concentrated in syscall-heavy and context-switch-heavy workloads:
 
@@ -375,11 +375,11 @@ dmesg | grep -E "Spectre|Meltdown|MDS|retpoline|IBRS|IBPB|STIBP|VERW"
 
 ---
 
-## Mitigation control
+## Mitigation control {#mitigation-control}
 
 The kernel provides several ways to control mitigations:
 
-### Boot parameters
+### Boot parameters {#boot-parameters}
 
 ```bash
 # Disable all mitigations (dangerous! only for benchmarking in isolated environments)
@@ -399,7 +399,7 @@ spec_store_bypass_disable=off  # disable SSBD
 mds=off                  # disable MDS mitigation
 ```
 
-### Runtime control (per-process)
+### Runtime control (per-process) {#runtime-control-per-process}
 
 ```c
 /* Spectre v4 / SSBD — user can request mitigation for their process */
@@ -407,7 +407,7 @@ prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_STORE_BYPASS, PR_SPEC_DISABLE, 0, 0);
 prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_INDIRECT_BRANCH, PR_SPEC_DISABLE, 0, 0);
 ```
 
-### Observing all mitigations at once
+### Observing all mitigations at once {#observing-all-mitigations-at-once}
 
 ```bash
 grep . /sys/devices/system/cpu/vulnerabilities/*
@@ -427,7 +427,7 @@ grep . /sys/devices/system/cpu/vulnerabilities/*
 
 ---
 
-## Timeline
+## Timeline {#timeline}
 
 | Date | Event |
 |------|-------|
@@ -442,21 +442,21 @@ grep . /sys/devices/system/cpu/vulnerabilities/*
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [Spectre Side Channels](https://docs.kernel.org/admin-guide/hw-vuln/spectre.html) — the kernel's own admin-facing documentation of variants and mitigation controls
 - [arch/x86/kernel/cpu/bugs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/bugs.c) — where every mitigation is selected and reported
 - [meltdownattack.com](https://meltdownattack.com/) — the original Meltdown and Spectre papers
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Spectre and Meltdown on ARM64](../arm64/spectre-meltdown.md) — the same vulnerabilities through arm64's lens
 - [x86-64 Page Tables](page-tables.md) — KPTI mechanics: dual PGDs, PCID
 - [Kernel Hardening](../../security/kernel-hardening.md) — the broader mitigation landscape
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — the disclosure week, explained calmly
 - [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — the KASLR defense that turned out to stop Meltdown

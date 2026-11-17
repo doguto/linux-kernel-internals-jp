@@ -1,14 +1,14 @@
-# CFS: Completely Fair Scheduler
+# CFS: Completely Fair Scheduler {#cfs-completely-fair-scheduler}
 
 > Virtual runtime, weighted fairness, and the red-black tree
 
-## What CFS guarantees
+## What CFS guarantees {#what-cfs-guarantees}
 
 CFS gives every task an equal share of CPU time, weighted by its priority. A process at nice -5 gets roughly 3x more CPU than a process at nice +5 — and that ratio holds even when the system is overloaded.
 
 The "completely fair" property: if you run N tasks of equal priority, each gets exactly 1/N of the CPU, regardless of when they were created, when they last ran, or how long they've been sleeping.
 
-## Virtual runtime
+## Virtual runtime {#virtual-runtime}
 
 The central concept is **vruntime**: a measure of how much CPU time a task has consumed, scaled by its weight.
 
@@ -20,7 +20,7 @@ A high-weight task (nice -20) advances vruntime slowly — it gets more real CPU
 
 The scheduler always picks the task with the **smallest vruntime**. Combined with weight-based scaling, this achieves weighted fairness automatically.
 
-### An example
+### An example {#an-example}
 
 Three tasks: A (nice -5, weight 3121), B (nice 0, weight 1024), C (nice +5, weight 335).
 
@@ -38,7 +38,7 @@ CFS achieves this by making vruntime advance at different rates:
 
 After 1 second of real time, all three tasks will have similar vruntimes — but A ran for ~697ms, B for ~229ms, C for ~75ms.
 
-## Weights and nice values
+## Weights and nice values {#weights-and-nice-values}
 
 Nice-to-weight mapping is a fixed table in the kernel:
 
@@ -58,9 +58,9 @@ const int sched_prio_to_weight[40] = {
 
 Each step is ~1.25x. A task at nice -1 gets ~25% more CPU than nice 0. At nice -20 vs nice +19, the ratio is 88761/15 ≈ 5917x — nearly a 6000:1 difference. The 1.25x ratio was chosen so that a `nice +1` change causes a ~10% throughput difference — see the [table definition commit](https://git.kernel.org/linus/20f9cd8e0e3b2c11b3fb576a88e8e5aef3c91a13) and comments in `kernel/sched/core.c`.
 
-## Data structures
+## Data structures {#data-structures}
 
-### struct sched_entity
+### struct sched_entity {#struct-sched_entity}
 
 Every task that CFS manages is tracked through `struct sched_entity`, embedded in `task_struct`:
 
@@ -82,7 +82,7 @@ struct sched_entity {
 };
 ```
 
-### struct cfs_rq
+### struct cfs_rq {#struct-cfs_rq}
 
 Each CPU has one CFS runqueue:
 
@@ -100,9 +100,9 @@ struct cfs_rq {
 
 `tasks_timeline` is an `rb_root_cached` — a red-black tree that also caches a pointer to the leftmost (minimum vruntime) node, making `O(1)` access to the next task to run.
 
-## Core functions
+## Core functions {#core-functions}
 
-### update_curr()
+### update_curr() {#update_curr}
 
 Called on every timer tick and context switch for the running task:
 
@@ -129,7 +129,7 @@ static void update_curr(struct cfs_rq *cfs_rq)
 }
 ```
 
-### enqueue_entity() / dequeue_entity()
+### enqueue_entity() / dequeue_entity() {#enqueueentity-dequeueentity}
 
 When a task wakes up or blocks:
 
@@ -154,7 +154,7 @@ static bool dequeue_entity(struct cfs_rq *cfs_rq,
 }
 ```
 
-### pick_next_entity()
+### pick_next_entity() {#picknextentity}
 
 Selects the next task to run — since 6.6 ([`147f3efaa241`](https://git.kernel.org/linus/147f3efaa24182a21706bca15eab2f3f4630b5fe), [`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c)), this delegates to EEVDF:
 
@@ -167,7 +167,7 @@ pick_next_entity(struct rq *rq, struct cfs_rq *cfs_rq)
 }
 ```
 
-## The scheduling timeline
+## The scheduling timeline {#the-scheduling-timeline}
 
 ```mermaid
 sequenceDiagram
@@ -191,7 +191,7 @@ sequenceDiagram
     Sched->>Sched: context_switch(prev, next)
 ```
 
-## Group scheduling
+## Group scheduling {#group-scheduling}
 
 CFS supports hierarchical scheduling via cgroups. When `CONFIG_FAIR_GROUP_SCHED` is enabled, the RB-tree contains not just tasks but also **group scheduling entities** — virtual entities representing cgroups.
 
@@ -207,7 +207,7 @@ CPU
 
 Each group gets a share of CPU time as a single entity, then distributes it among its members. This allows setting CPU shares per container without each container's tasks competing directly with others.
 
-## Viewing CFS state
+## Viewing CFS state {#viewing-cfs-state}
 
 ```bash
 # Per-task scheduler info
@@ -222,7 +222,7 @@ perf sched record ./workload
 perf sched latency
 ```
 
-## Common misconceptions
+## Common misconceptions {#common-misconceptions}
 
 **"CFS gives equal CPU to all tasks"** — No. Equal CPU to tasks of equal *priority*. Nice values determine the ratio.
 
@@ -230,7 +230,7 @@ perf sched latency
 
 **"CFS is still the scheduler in modern kernels"** — The `fair_sched_class` is, yes. But `pick_next_entity()` now calls `pick_eevdf()` instead of the old leftmost-node logic. EEVDF replaced the selection mechanism inside CFS in kernel 6.6.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [EEVDF Scheduler](eevdf.md) — The selection algorithm that replaced CFS's leftmost-node approach
 - [Scheduler Classes](scheduler-classes.md) — Where CFS fits in the class hierarchy

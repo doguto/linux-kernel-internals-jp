@@ -1,8 +1,8 @@
-# Tuning I/O Performance for Storage-Heavy Workloads
+# Tuning I/O Performance for Storage-Heavy Workloads {#tuning-io-performance-for-storage-heavy-workloads}
 
 > Understanding what the kernel does with your I/O — and where the defaults get out of the way
 
-## Why I/O Tuning Requires a Workload Model
+## Why I/O Tuning Requires a Workload Model {#why-io-tuning-requires-a-workload-model}
 
 A web server, an OLTP database, a time-series ingest pipeline, and a backup job all use the same block layer, but they need entirely different configurations. Before touching a single sysctl:
 
@@ -12,9 +12,9 @@ A web server, an OLTP database, a time-series ingest pipeline, and a backup job 
 
 Tuning without a workload model is guessing. The sections below first explain how to characterize your workload, then give concrete knobs for each workload shape.
 
-## Understanding Your Workload First
+## Understanding Your Workload First {#understanding-your-workload-first}
 
-### The Four Axes
+### The Four Axes {#the-four-axes}
 
 Every I/O workload lives somewhere in this four-dimensional space:
 
@@ -38,7 +38,7 @@ Common workload archetypes:
 | Object storage | Mixed random + sequential | Throughput | 32–256 |
 | WAL / redo log | Sequential write | Latency (fsync) | 1–4 |
 
-### Quick Profiling with iostat
+### Quick Profiling with iostat {#quick-profiling-with-iostat}
 
 `iostat` from the `sysstat` package is the first tool to reach for. It reads from `/proc/diskstats`, which the block layer updates on every I/O completion.
 
@@ -60,7 +60,7 @@ What to look for:
 - High `r_await` (>5ms for SSD, >20ms for HDD) with low `%util` often means the I/O scheduler is adding queuing overhead.
 - High `aqu-sz` on NVMe with `%util` well below 100% is expected — NVMe devices have deep internal queues and parallelize freely.
 
-### Profiling with fio
+### Profiling with fio {#profiling-with-fio}
 
 `fio` lets you issue controlled, reproducible workloads and measure the device's raw capability before applying any application load.
 
@@ -94,7 +94,7 @@ fio --name=seqread-baseline \
 !!! warning "Run against a block device, not a file, for device characterization"
     Running `fio` against a file goes through the filesystem and page cache, which adds variability. For baseline device measurement, use the raw block device (`/dev/nvme0n1`). Only switch to files when characterizing filesystem overhead.
 
-### Deep Tracing with blktrace
+### Deep Tracing with blktrace {#deep-tracing-with-blktrace}
 
 When `iostat` shows a problem but not its cause, `blktrace` records every event the block layer sees per request: queue insertion, merge, dispatch to driver, completion.
 
@@ -116,7 +116,7 @@ btt -i /tmp/sda-trace.blktrace.*
 
 If `Q2D` is large relative to `Q2C`, the software queues are adding latency and scheduler tuning will help. If `D2C` dominates, the device itself is the bottleneck.
 
-### The Benchmark-Before-You-Tune Principle
+### The Benchmark-Before-You-Tune Principle {#the-benchmark-before-you-tune-principle}
 
 Record baseline numbers before changing anything. After each change, re-run the same benchmark with the same parameters. A change that improves 99th-percentile latency while reducing throughput may or may not be an improvement depending on your workload — you need both numbers to decide.
 
@@ -141,11 +141,11 @@ fio --name=rand4k-qd32 --filename=$DEVICE --rw=randread \
     | awk -F';' '{printf "rand4k-qd32: IOPS=%s lat_p99=%sµs lat_p999=%sµs\n",$49,$83,$84}'
 ```
 
-## I/O Scheduler Selection
+## I/O Scheduler Selection {#io-scheduler-selection}
 
 The I/O scheduler sits between the block layer's request queue and the device driver. On modern kernels, all schedulers run under the multi-queue block layer (`blk-mq`), which maps software queues to hardware dispatch queues.
 
-### Checking and Setting the Scheduler
+### Checking and Setting the Scheduler {#checking-and-setting-the-scheduler}
 
 ```bash
 # Show the active scheduler and available options for a device
@@ -173,7 +173,7 @@ udevadm control --reload-rules
 udevadm trigger --type=devices --action=change
 ```
 
-### none (Passthrough)
+### none (Passthrough) {#none-passthrough}
 
 `none` disables reordering entirely. Requests are dispatched to the device in submission order. This is the right choice for NVMe because:
 
@@ -185,7 +185,7 @@ udevadm trigger --type=devices --action=change
 echo none > /sys/block/nvme0n1/queue/scheduler
 ```
 
-### mq-deadline
+### mq-deadline {#mq-deadline}
 
 `mq-deadline` assigns an expiry deadline to each request and guarantees it is dispatched before the deadline. It also batches reads separately from writes, preventing writes from starving reads.
 
@@ -210,7 +210,7 @@ echo 1 > /sys/block/sda/queue/iosched/writes_starved
 
 For a database WAL disk (SATA SSD), lowering `read_expire` and `write_expire` reduces tail latency at the cost of some reordering efficiency.
 
-### kyber
+### kyber {#kyber}
 
 `kyber` is a latency-targeting scheduler designed for fast SSDs. It maintains separate queues for reads and synchronous writes, and adjusts dispatch rates dynamically to hit a configurable latency target.
 
@@ -226,7 +226,7 @@ echo 2000000 > /sys/block/sda/queue/iosched/write_lat_nsec
 
 Kyber works well when your SSD has relatively consistent device latency. If the device itself has high latency variance (common with cheaper consumer SSDs under write pressure), kyber's feedback loop may oscillate. In that case, `mq-deadline` with explicit expiry times is more predictable.
 
-### bfq (Budget Fair Queuing)
+### bfq (Budget Fair Queuing) {#bfq-budget-fair-queuing}
 
 `bfq` is a proportional-share scheduler that tracks per-process I/O budgets. It is designed for desktop/interactive use where fairness between multiple processes matters more than raw throughput.
 
@@ -243,7 +243,7 @@ echo "100" > /sys/fs/cgroup/databases/io.bfq.weight
 echo "10"  > /sys/fs/cgroup/backups/io.bfq.weight
 ```
 
-### Scheduler Effect on Latency Distribution
+### Scheduler Effect on Latency Distribution {#scheduler-effect-on-latency-distribution}
 
 The scheduler choice primarily affects latency distribution (p99, p999), not median latency. A well-tuned `none` on NVMe may show:
 
@@ -263,11 +263,11 @@ p999:          110µs   (better — expiry prevents starvation)
 
 This trade-off — slightly higher median for better tail latency — is usually correct for databases where p99 connects to user-visible latency.
 
-## Queue Depth Tuning
+## Queue Depth Tuning {#queue-depth-tuning}
 
 Queue depth controls how many I/O requests can be in flight simultaneously. Too shallow and you underutilize the device; too deep and you increase per-request queuing latency.
 
-### Software Queue Depth: nr_requests
+### Software Queue Depth: nr_requests {#software-queue-depth-nr_requests}
 
 `nr_requests` sets the maximum number of requests per software queue before back-pressure is applied to submitters.
 
@@ -285,7 +285,7 @@ echo 32 > /sys/block/nvme0n1/queue/nr_requests
 
 For NVMe devices that can sustain hundreds of thousands of IOPS, increasing `nr_requests` allows the kernel to buffer more requests for the device's internal scheduler. For SATA SSDs with much lower IOPS ceilings, the default is usually sufficient.
 
-### Hardware Queue Count: nr_hw_queues
+### Hardware Queue Count: nr_hw_queues {#hardware-queue-count-nrhwqueues}
 
 NVMe devices expose multiple hardware submission queues. The kernel maps software queues to hardware queues, ideally one-to-one with CPU cores or NUMA nodes.
 
@@ -305,7 +305,7 @@ If `nr_hw_queues` is less than the number of CPU cores, multiple CPUs share a ha
 grep nvme /proc/interrupts | head -20
 ```
 
-### Finding the Saturation Point with fio
+### Finding the Saturation Point with fio {#finding-the-saturation-point-with-fio}
 
 The optimal queue depth is where IOPS peak without significantly increasing per-request latency. Find it by sweeping `iodepth`:
 
@@ -343,7 +343,7 @@ qd=128   iops=542000   lat_p99=290 µs    ← IOPS plateau, latency rising fast
 
 For OLTP databases, choose the queue depth where IOPS are still growing but latency is still acceptable for your SLA (p99 < 1ms is a common target).
 
-### io_uring with Deep Queues
+### io_uring with Deep Queues {#io_uring-with-deep-queues}
 
 `io_uring` is the modern async I/O interface that avoids the overhead of per-syscall context switches. It shines at high queue depths because multiple I/O requests can be submitted in a single `io_uring_enter()` call.
 
@@ -377,11 +377,11 @@ fio --name=libaio_deep \
 
 At queue depths above 32, `io_uring` typically shows 10–20% higher IOPS than `libaio` due to reduced syscall overhead and better CPU cache behavior from batched completions.
 
-## Readahead Tuning
+## Readahead Tuning {#readahead-tuning}
 
 The kernel's readahead mechanism (described in detail in [readahead](readahead.md)) prefetches pages into the page cache before they are explicitly requested. The default `read_ahead_kb` is set per device and represents the maximum bytes to prefetch in a single window.
 
-### Checking and Setting read_ahead_kb
+### Checking and Setting read_ahead_kb {#checking-and-setting-readaheadkb}
 
 ```bash
 # Check current value
@@ -397,7 +397,7 @@ echo 4096 > /sys/block/sda/queue/read_ahead_kb   # streaming workload on HDD
 echo 16   > /sys/block/nvme0n1/queue/read_ahead_kb # database random I/O on NVMe
 ```
 
-### When to Reduce Readahead
+### When to Reduce Readahead {#when-to-reduce-readahead}
 
 **Random I/O workloads** — Database index scans access random 8–16KB pages. Readahead prefetches adjacent pages that are never read, wasting page cache space and generating unnecessary I/O. For a PostgreSQL server, set:
 
@@ -408,7 +408,7 @@ echo 16 > /sys/block/nvme0n1/queue/read_ahead_kb
 
 **Devices with their own cache** — NVMe drives with large DRAM caches already perform internal prefetching. The kernel's readahead on top of the drive's prefetch doubles the work.
 
-### When to Increase Readahead
+### When to Increase Readahead {#when-to-increase-readahead}
 
 **Sequential streaming** — Log ingestion pipelines, video transcoding, and backup jobs read large files sequentially. Larger readahead windows reduce the frequency of actual I/O by filling the page cache further ahead:
 
@@ -419,7 +419,7 @@ echo 8192 > /sys/block/sda/queue/read_ahead_kb   # 8MB window
 
 **Network-attached storage** — On high-latency block devices (iSCSI, NBD), even a small sequential access pattern benefits from aggressive readahead because round-trip latency dominates.
 
-### Per-File Readahead with fadvise
+### Per-File Readahead with fadvise {#per-file-readahead-with-fadvise}
 
 Applications can advise the kernel about their access pattern without changing system-wide settings. The kernel uses these hints to adjust the readahead window for the specific file description:
 
@@ -443,11 +443,11 @@ posix_fadvise(fd, offset, length, POSIX_FADV_DONTNEED);
 
 PostgreSQL uses `POSIX_FADV_DONTNEED` after sequential scans to prevent the page cache from being flooded with scan data that will not be reused, protecting the buffer pool pages used by index lookups.
 
-## Dirty Writeback Tuning
+## Dirty Writeback Tuning {#dirty-writeback-tuning}
 
 Dirty page writeback controls how quickly the kernel flushes modified page cache pages to disk. The same tunables were covered from the memory perspective in [tuning databases](../mm/tuning-databases.md); this section looks at the I/O implications.
 
-### The Writeback Tunables
+### The Writeback Tunables {#the-writeback-tunables}
 
 ```bash
 # Current values
@@ -466,7 +466,7 @@ sysctl vm.dirty_ratio vm.dirty_background_ratio \
 - **`dirty_expire_centisecs`**: Pages older than this are eligible for writeback even if the ratio thresholds are not met. Useful for bursty write workloads that produce many dirty pages quickly.
 - **`dirty_writeback_centisecs`**: How often the per-device writeback threads wake to check for pages to flush.
 
-### Tuning for Latency-Sensitive Workloads
+### Tuning for Latency-Sensitive Workloads {#tuning-for-latency-sensitive-workloads}
 
 The write-stall problem: on a 256GB server with `dirty_ratio=20`, up to 51GB of dirty data can accumulate before writers stall. When a checkpoint or sync event triggers a large flush, the resulting I/O storm saturates the device and stalls WAL writes.
 
@@ -493,7 +493,7 @@ EOF
 !!! tip "Byte limits override ratio limits"
     When both `dirty_background_bytes` and `dirty_background_ratio` are set, the byte limit takes effect and the ratio is ignored. Use byte limits on servers with more than 64GB RAM where percentage-based thresholds become too large to be meaningful.
 
-### Tuning for Write-Heavy Throughput
+### Tuning for Write-Heavy Throughput {#tuning-for-write-heavy-throughput}
 
 For bulk-ingest pipelines where throughput matters more than latency:
 
@@ -508,7 +508,7 @@ EOF
 
 Larger thresholds allow writes to coalesce in the page cache and get flushed in larger sequential batches, which is more efficient for HDDs and benefits from writeback merging even on SSDs.
 
-### Per-Device Writeback Throttling with cgroup v2
+### Per-Device Writeback Throttling with cgroup v2 {#per-device-writeback-throttling-with-cgroup-v2}
 
 For mixed-workload servers, `io.max` in cgroup v2 allows per-device I/O rate limits independent of the system-wide dirty ratios:
 
@@ -525,11 +525,11 @@ cat /sys/fs/cgroup/backups/io.max
 
 This prevents a backup job from saturating the device and affecting database write latency, without touching global dirty ratio settings.
 
-## O_DIRECT vs Buffered I/O
+## O_DIRECT vs Buffered I/O {#o_direct-vs-buffered-io}
 
 The choice between `O_DIRECT` and buffered I/O is one of the most consequential decisions for database I/O performance.
 
-### The Double-Buffering Problem
+### The Double-Buffering Problem {#the-double-buffering-problem}
 
 A database with a 32GB buffer pool and buffered I/O uses memory twice: the database buffers data in its own pool, and the OS page cache holds a second copy of the same pages. On a 128GB server, this can mean 64GB consumed by two copies of the same data.
 
@@ -554,7 +554,7 @@ O_DIRECT with database:
 Total: ~45GB used, 83GB available
 ```
 
-### When Databases Should Use O_DIRECT
+### When Databases Should Use O_DIRECT {#when-databases-should-use-o_direct}
 
 **PostgreSQL** uses buffered I/O by default for data files but recommends `O_DIRECT`-equivalent behavior. Setting `effective_io_concurrency` and using `pg_prewarm` with direct I/O is the standard approach. For WAL, PostgreSQL's `wal_sync_method = open_datasync` uses `O_DIRECT | O_SYNC`.
 
@@ -569,7 +569,7 @@ innodb_flush_method = O_DIRECT        # O_DIRECT for data files
 
 **Oracle** enables `O_DIRECT` by default for datafiles when the filesystem supports it.
 
-### Alignment Requirements
+### Alignment Requirements {#alignment-requirements}
 
 `O_DIRECT` imposes alignment requirements on the buffer address, file offset, and transfer size. All three must be aligned to the logical block size of the device (typically 512 bytes for SATA, 4096 bytes for NVMe with 4Kn format). Violating alignment returns `EINVAL`.
 
@@ -591,7 +591,7 @@ void *buf;
 posix_memalign(&buf, 4096, IO_SIZE);   // 4096-byte aligned, IO_SIZE multiple of 4096
 ```
 
-### Benchmarking O_DIRECT with fio
+### Benchmarking O_DIRECT with fio {#benchmarking-o_direct-with-fio}
 
 ```bash
 # Compare buffered vs O_DIRECT for random 4K reads
@@ -610,7 +610,7 @@ fio --name=odirect-randread \
     --lat_percentiles=1
 ```
 
-### Downsides of O_DIRECT
+### Downsides of O_DIRECT {#downsides-of-o_direct}
 
 - **No readahead**: The kernel cannot prefetch adjacent pages because `O_DIRECT` bypasses the page cache entirely. Applications that mix sequential and random access in the same process may lose readahead benefits for the sequential portions.
 - **No page cache sharing**: If the same file is read by multiple processes (e.g., multiple PostgreSQL backends reading the same heap page), buffered I/O lets them share the cached page. `O_DIRECT` forces each process to go to the device independently unless the database manages its own shared buffer.
@@ -618,11 +618,11 @@ fio --name=odirect-randread \
 
 For files accessed by exactly one process with its own buffer management (a database's data files), the benefits outweigh the costs. For files shared across processes or accessed sequentially without a cache (log files, temp files), buffered I/O is usually better.
 
-## NVMe-Specific Tuning
+## NVMe-Specific Tuning {#nvme-specific-tuning}
 
 NVMe devices are qualitatively different from SATA in ways that affect how the kernel should interact with them.
 
-### IRQ Affinity for NVMe Completion Queues
+### IRQ Affinity for NVMe Completion Queues {#irq-affinity-for-nvme-completion-queues}
 
 Each NVMe hardware queue has a dedicated MSI-X interrupt. When a request completes, the NVMe controller raises this interrupt and the kernel's IRQ handler processes the completion. If this IRQ handler runs on a different CPU than the one that submitted the request, the completion data (including the result buffer) must cross CPU caches.
 
@@ -642,7 +642,7 @@ echo 2 > /proc/irq/36/smp_affinity_list
 
 For large NVMe deployments, CPU pinning reduces cross-NUMA cache misses on completion and can measurably improve p99 latency.
 
-### io_poll: Busy-Polling Without IRQs
+### io_poll: Busy-Polling Without IRQs {#io_poll-busy-polling-without-irqs}
 
 For ultra-low latency applications, `io_uring` with `IORING_SETUP_IOPOLL` (io_poll mode) avoids the IRQ path entirely. Instead of waiting for the NVMe controller to raise an interrupt, the kernel busy-polls the NVMe completion queue register.
 
@@ -684,7 +684,7 @@ io_poll is only worthwhile when:
 - Latency SLA is below 100µs.
 - Queue depth is low (1–4); at high queue depths, the IRQ path amortizes overhead across more requests.
 
-### nomerges for NVMe
+### nomerges for NVMe {#nomerges-for-nvme}
 
 The block layer's merge logic combines adjacent requests into a single larger I/O to reduce IOPS. This is valuable for slow HDDs but counterproductive for NVMe where the device can handle hundreds of thousands of individual IOPS natively:
 
@@ -701,7 +701,7 @@ echo 2 > /sys/block/nvme0n1/queue/nomerges
 
 Disabling merges reduces latency by eliminating the time the block layer spends searching the merge tree. The effect is measurable at high IOPS (>100K IOPS), where merge-tree lookups can become a bottleneck.
 
-### nvme-tcp Latency
+### nvme-tcp Latency {#nvme-tcp-latency}
 
 For NVMe-oF (NVMe over Fabrics) using TCP transport, additional tuning is needed at the network layer:
 
@@ -717,11 +717,11 @@ sysctl -w net.core.rmem_max=134217728     # 128MB receive buffer
 sysctl -w net.core.wmem_max=134217728     # 128MB send buffer
 ```
 
-## Filesystem Choices for I/O
+## Filesystem Choices for I/O {#filesystem-choices-for-io}
 
 The filesystem layer sits above the block device and adds metadata operations, journaling, and extent management overhead to every I/O path.
 
-### XFS
+### XFS {#xfs}
 
 XFS is the best choice for storage-heavy workloads on large files:
 
@@ -741,7 +741,7 @@ mkfs.xfs -f \
 mount -o noatime,nodiratime,logbufs=8,logbsize=256k /dev/nvme0n1p1 /var/lib/postgresql
 ```
 
-### ext4
+### ext4 {#ext4}
 
 ext4 is a solid general-purpose choice with wide tooling support:
 
@@ -755,7 +755,7 @@ mkfs.ext4 -E lazy_itable_init=0,lazy_journal_init=0 \
 mount -o noatime,nodiratime,data=ordered,barrier=1 /dev/sda1 /var/lib/mysql
 ```
 
-### btrfs
+### btrfs {#btrfs}
 
 btrfs is generally not recommended for random-write database workloads. Its copy-on-write (CoW) design means that overwriting a page always writes to a new location, generating significantly more I/O and fragmentation than in-place-write filesystems:
 
@@ -767,7 +767,7 @@ CoW write (btrfs):            one 4KB write → read old block, write new block,
 
 btrfs does have legitimate uses: incremental snapshots for backup pipelines, RAID integration, and checksumming for integrity-critical workloads. But for raw I/O performance with random writes, use XFS or ext4.
 
-### Mount Options That Matter
+### Mount Options That Matter {#mount-options-that-matter}
 
 **`noatime` / `nodiratime`**: By default, the kernel updates the `atime` (access time) of every file and directory on every read. This turns every read into a potential write (to update the inode). `noatime` disables this entirely; `nodiratime` disables it only for directories.
 
@@ -812,11 +812,11 @@ mount -o noatime,nobarrier /dev/nvme0n1p1 /var/lib/postgresql
 mount -o noatime,data=writeback /dev/nvme1n1p1 /var/lib/postgresql/pg_wal
 ```
 
-## HDD-Specific Tuning
+## HDD-Specific Tuning {#hdd-specific-tuning}
 
 Spinning disks have fundamentally different performance characteristics that require different tuning strategies.
 
-### Detecting Rotational Media
+### Detecting Rotational Media {#detecting-rotational-media}
 
 ```bash
 # 1 = rotational (HDD), 0 = non-rotational (SSD/NVMe)
@@ -827,7 +827,7 @@ cat /sys/block/sda/queue/rotational
 lsblk -d -o NAME,ROTA,SCHED,RA,NR_HW_QUEUES
 ```
 
-### Scheduler Selection for HDDs
+### Scheduler Selection for HDDs {#scheduler-selection-for-hdds}
 
 For HDDs, the scheduler's reordering decisions directly affect throughput because the drive must physically seek between tracks. Use `bfq` for mixed workloads or `mq-deadline` for latency-sensitive single-workload databases:
 
@@ -841,7 +841,7 @@ echo 8192 > /sys/block/sda/queue/iosched/max_budget
 echo 100 > /sys/block/sda/queue/iosched/slice_idle_us
 ```
 
-### NCQ (Native Command Queuing) Depth
+### NCQ (Native Command Queuing) Depth {#ncq-native-command-queuing-depth}
 
 Modern HDDs support NCQ, which allows the drive to reorder up to 32 commands internally for optimal seek scheduling. Ensure NCQ is enabled and set the queue depth to use it:
 
@@ -857,7 +857,7 @@ echo 32 > /sys/block/sda/device/queue_depth
 dmesg | grep -i "ncq\|queue depth"
 ```
 
-### Large Readahead for HDDs
+### Large Readahead for HDDs {#large-readahead-for-hdds}
 
 On HDDs, a sequential read that triggers a seek is expensive (~5ms). Large readahead amortizes the seek cost over many pages:
 
@@ -866,7 +866,7 @@ On HDDs, a sequential read that triggers a seek is expensive (~5ms). Large reada
 echo 16384 > /sys/block/sda/queue/read_ahead_kb
 ```
 
-### Avoiding Mixed Random I/O on HDDs
+### Avoiding Mixed Random I/O on HDDs {#avoiding-mixed-random-io-on-hdds}
 
 A single HDD handling both random OLTP reads and sequential backup writes will perform poorly at both — the seek head cannot simultaneously optimize for both patterns. Use separate physical devices or at minimum separate disk arms.
 
@@ -878,7 +878,7 @@ echo "8:0 100" > /sys/fs/cgroup/databases/io.bfq.weight
 echo "8:0 10"  > /sys/fs/cgroup/backups/io.bfq.weight
 ```
 
-### HDD Checklist
+### HDD Checklist {#hdd-checklist}
 
 ```bash
 #!/bin/bash
@@ -896,11 +896,11 @@ echo "nr_requests: $(cat /sys/block/$DEVICE/queue/nr_requests)"
 hdparm -W /dev/$DEVICE 2>/dev/null | grep "write-caching"
 ```
 
-## Benchmarking Methodology
+## Benchmarking Methodology {#benchmarking-methodology}
 
 A benchmark that produces misleading results is worse than no benchmark — it leads to tuning changes that hurt performance in production.
 
-### Common Mistakes
+### Common Mistakes {#common-mistakes}
 
 1. **Not running long enough** — Storage devices have write caches. A 5-second benchmark will run entirely in the drive's DRAM cache and show unrealistically high throughput. Run for at least 60 seconds for SSDs, 120 seconds for HDDs.
 
@@ -914,7 +914,7 @@ A benchmark that produces misleading results is worse than no benchmark — it l
 
 6. **Not matching the access pattern** — Random read IOPS and sequential read throughput are different numbers. Benchmark the pattern that matches your workload.
 
-### fio Job Files
+### fio Job Files {#fio-job-files}
 
 Using fio job files instead of command-line flags ensures reproducibility and makes it easy to share benchmark configurations:
 
@@ -998,7 +998,7 @@ iodepth=16
 numjobs=4
 ```
 
-### Interpreting fio Output
+### Interpreting fio Output {#interpreting-fio-output}
 
 ```
 Jobs: 4 (f=4): [r(4)][100.0%][r=1824MiB/s,w=0KiB/s][r=466k,w=0 IOPS][eta 00m:00s]
@@ -1023,7 +1023,7 @@ Key metrics to record:
 
 `group_reporting=1` aggregates results across all jobs into a single summary, which makes it easier to compare runs. Without it, you get one block of output per job.
 
-### Warming the Cache
+### Warming the Cache {#warming-the-cache}
 
 For benchmarks that include a cache-warm phase (simulating a server that has been running for hours):
 
@@ -1045,9 +1045,9 @@ fio actual-workload.fio
 
 For `O_DIRECT` benchmarks, the page cache is bypassed, but the device's internal DRAM cache still needs warming. Use `--ramp_time=30` to let the device cache fill before measuring.
 
-## Practical Configuration Examples
+## Practical Configuration Examples {#practical-configuration-examples}
 
-### Dedicated NVMe Database Server
+### Dedicated NVMe Database Server {#dedicated-nvme-database-server}
 
 A complete I/O configuration for a server running PostgreSQL on NVMe:
 
@@ -1092,7 +1092,7 @@ vm.dirty_writeback_centisecs = 200
 EOF
 ```
 
-### HDD Data Warehouse Server
+### HDD Data Warehouse Server {#hdd-data-warehouse-server}
 
 For sequential-heavy analytics on HDDs:
 
@@ -1118,7 +1118,7 @@ sysctl -w vm.dirty_ratio=40
 echo "HDD data warehouse tuning applied to $HDD_DEV"
 ```
 
-## Monitoring I/O Health
+## Monitoring I/O Health {#monitoring-io-health}
 
 ```bash
 #!/bin/bash
@@ -1146,7 +1146,7 @@ echo "=== Block Layer Errors ==="
 dmesg --since "1 hour ago" 2>/dev/null | grep -iE "blk_|io error|medium error|ata.*error" | tail -10
 ```
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [docs.kernel.org: block layer documentation](https://docs.kernel.org/block/index.html) — Kernel documentation for the block subsystem, schedulers, and blk-mq
 - [docs.kernel.org: admin-guide sysctl vm](https://docs.kernel.org/admin-guide/sysctl/vm.html) — Full reference for `vm.*` tunables including dirty writeback

@@ -1,30 +1,30 @@
-# War Stories: VFS Bugs and Regressions
+# War Stories: VFS Bugs and Regressions {#war-stories-vfs-bugs-and-regressions}
 
 > Four CVEs from the dentry cache, `seq_file`, and OverlayFS — a livelock in the generic tree walker, an integer truncation seven years in the making, and two variants of the same OverlayFS copy-up trusting something it shouldn't have
 
 Unlike [GPU/DRM's incident record](../drm/war-stories.md), every incident here is a CVE — VFS sits directly on a security boundary: it's the layer that decides what an unprivileged process can read, write, or become. Two of the four involve OverlayFS's copy-up path specifically, and both stem from the same underlying shape of mistake: copy-up acted on a value — a UID, a capability xattr — that needed a security-relevant check on the way out, and either the check silently didn't run at all, or it ran but nobody confirmed it actually succeeded.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix landed in mainline — newest first.
 
-### [OverlayFS: The Copy-Up That Trusted an Unmapped UID](war-stories/overlayfs-uid-confusion.md)
+### [OverlayFS: The Copy-Up That Trusted an Unmapped UID](war-stories/overlayfs-uid-confusion.md) {#overlayfs-the-copy-up-that-trusted-an-unmapped-uid}
 **Linux 6.2 (February 2023) · CVE-2023-0386**
 Copy-up read a lower file's UID/GID through the mounter's namespace mapping and took the result at face value — never checking whether the mapping had actually succeeded or silently collapsed to the ambiguous overflow value every unmapped ID shares.
 
-### [Sequoia: The seq_file Size-Truncation Overflow](war-stories/sequoia-seq-file-overflow.md)
+### [Sequoia: The seq_file Size-Truncation Overflow](war-stories/sequoia-seq-file-overflow.md) {#sequoia-the-seq_file-size-truncation-overflow}
 **Disclosed July 2021, fixed in Linux 5.14 · CVE-2021-33909**
 A `size_t` buffer size, silently narrowed to a 32-bit `int` since the day `dentry_path()` was written, stayed unreachable until an unrelated 2014 fix made it possible to grow a buffer large enough to trigger it — and then sat unreachable-in-practice for seven more years until someone went looking, turning "make a very long directory path" into an exact, attacker-chosen out-of-bounds write.
 
-### [OverlayFS: The Capability Check That Only One Caller Made](war-stories/overlayfs-capability-bypass.md)
+### [OverlayFS: The Capability Check That Only One Caller Made](war-stories/overlayfs-capability-bypass.md) {#overlayfs-the-capability-check-that-only-one-caller-made}
 **Fixed December 2020, shipped in Linux 5.11 (February 2021) · CVE-2021-3493**
 The permission check for setting a namespaced capability xattr lived in the `setxattr(2)` syscall handler instead of the generic `vfs_setxattr()` every filesystem is supposed to trust — so OverlayFS's copy-up path, which calls the latter directly, skipped it entirely.
 
-### [The Dentry-Cache Walk Livelock](war-stories/dentry-cache-livelock.md)
+### [The Dentry-Cache Walk Livelock](war-stories/dentry-cache-livelock.md) {#the-dentry-cache-walk-livelock}
 **Linux 3.19 (February 2015) · CVE-2014-8559**
 `d_walk()`'s rename-detection restart couldn't tell "a rename happened" from "a sibling got killed," so a concurrent dentry prune could make the walker deadlock against itself and hang every rename on the machine.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | UID confusion | Sequoia | Capability bypass | Dentry livelock |
 |---------|:---:|:---:|:---:|:---:|
@@ -45,7 +45,7 @@ The permission check for setting a namespaced capability xattr lived in the `set
 
 **Every incident here is a local-privilege or local-denial-of-service bug, not a remote one.** VFS's CVE history reflects what the layer actually guards: not the network-facing attack surface [BPF](../bpf/war-stories.md) or [networking](../net/war-stories.md) deal with, but the boundary between what one unprivileged local user can do versus what they can trick the kernel into doing on their behalf.
 
-## See also
+## See also {#see-also}
 
 - [VFS Overview](README.md) — the dentry cache, path resolution, and the generic superblock/inode/dentry/file objects every incident here operates on
 - [Security: LSMs, Capabilities, and Seccomp](../security/README.md) — the capability and permission-check machinery two of these incidents bypassed

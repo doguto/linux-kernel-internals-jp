@@ -1,4 +1,4 @@
-# The msm GPU Recovery/Shrinker Deadlock
+# The msm GPU Recovery/Shrinker Deadlock {#the-msm-gpu-recoveryshrinker-deadlock}
 
 > A hung-GPU recovery worker allocated memory while holding the very lock the job-running thread needed, and that allocation triggered a shrinker that waited on the fences the stuck job would have signaled
 
@@ -18,17 +18,17 @@ Not a CVE
 
 *Part of [War Stories: GPU/DRM Bugs and Regressions](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 [Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) documents the cross-driver `dma_fence` signaling contract: because `dma_fence` waits are load-bearing all the way down into memory reclaim — the page allocator itself can end up waiting on a GPU fence to make forward progress — code that could block a fence signal "must not take a `dma_resv` lock, must not allocate with `GFP_KERNEL`, and must not allocate with `GFP_NOFS`/`GFP_NOIO` either," in that page's words. This incident is a variant of the same hazard one level removed: not an allocation directly on the signaling path, but an allocation made while holding a lock the signaling thread itself needed.
 
 msm's GPU hangcheck mechanism detects a stuck ring by comparing the fence the GPU last completed against the fence it was last asked to submit. When hangcheck fires, a recovery worker takes `gpu->lock`, captures a crash-state dump for debugging, and attempts to reset and restart the ring.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Capturing that crash-state dump calls `kvmalloc_node()` to allocate the dump buffer — a plain kernel allocation, made while still holding `gpu->lock`. Under enough memory pressure, that allocation entered direct reclaim, which invoked msm's own GEM shrinker (`msm_gem_shrinker_scan()`), which in turn called `drm_gem_lru_scan()` → `active_purge()`, which waits on `dma_resv_wait_timeout()` for outstanding fences to signal before it can reclaim their pages.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 Sergey Senozhatsky's fix commit quotes the actual symptom directly from a device stuck in this state — repeated hangcheck firings that never resolved:
 
@@ -82,15 +82,15 @@ recover_worker+0x1c0/0x638
 
 The cycle closes exactly the way the `dma_fence` contract warns against: the job thread needed `gpu->lock` to make progress and signal its fence; the recovery worker held `gpu->lock` and needed that same fence (via the shrinker's reclaim wait) to finish its allocation and release the lock. Neither side could proceed. "So no one can make any further progress," in the commit's own words.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The crash-dump allocation was ordinary code, written without any thought to `dma_fence` or reclaim, because on its face `msm_gpu_crashstate_capture()` has nothing to do with fences — it's diagnostic tooling, not the fast path. The danger was entirely in what that allocation could transitively trigger under memory pressure: reclaim, into the GPU's own shrinker, into a fence wait — while the allocating thread's own held lock was exactly what the thread that would signal that fence needed to proceed. Nothing about the allocation call site looks unsafe in isolation; the hazard is only visible in the reachable call graph under load, which is why the cross-driver `dma_fence` contract calls out reclaim-adjacent allocation explicitly rather than leaving it to be rediscovered per driver.
 
-## Resolution
+## Resolution {#resolution}
 
 `4625fe5bbdac` ("drm: gpu: msm: forbid mem reclaim from reset") forbids the recover/fault worker from entering memory reclaim while holding `gpu->lock`, breaking the cycle at the allocation rather than at the locking or the shrinker. Reviewed by Rob Clark, msm's maintainer.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A lock held across an allocation can create a `dma_fence` deadlock even when the allocating code never touches a fence directly.** `msm_gpu_crashstate_capture()` doesn't call any `dma_fence` API. The deadlock came from what its allocation could trigger — reclaim, into the driver's own shrinker — while the lock it ran under blocked the one thread that could have unblocked that reclaim by signaling its fence.
 
@@ -99,12 +99,12 @@ The crash-dump allocation was ordinary code, written without any thought to `dma
 !!! warning "Pattern to watch for"
     Any allocation made while holding a lock that a job-completion or fence-signaling path also needs is a potential reclaim-triggered deadlock, even if the allocating code has no direct connection to fences. Trace what the allocation can transitively trigger (shrinkers, reclaim, other drivers' GEM/TTM shrinkers) under memory pressure, not just what it does in the common case.
 
-## See also
+## See also {#see-also}
 
 - [Command Submission, `dma_fence`, and the GPU Scheduler](../command-submission.md) — the `dma_fence` cross-driver signaling contract this bug violated
 - [GEM Buffer Objects and dma-buf Sharing](../gem-dmabuf.md) — GEM shrinkers and the `dma_resv` fence lists they interact with
 - [The Xe TDR Recovery Regression Chain](xe-tdr-recovery-regression.md) — a different driver's recovery-path bug, in the same TDR/hangcheck family
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: 4625fe5bbdac](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4625fe5bbdaccd45be274c30ff0a42e30d4e38cf) — "drm: gpu: msm: forbid mem reclaim from reset," including both hung-task traces

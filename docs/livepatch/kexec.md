@@ -1,8 +1,8 @@
-# kexec
+# kexec {#kexec}
 
 > Boot a new kernel from within a running kernel, without hardware reset
 
-## What kexec does
+## What kexec does {#what-kexec-does}
 
 `kexec` loads a new kernel into memory and jumps to it directly, bypassing BIOS/UEFI POST and the bootloader:
 
@@ -18,7 +18,7 @@ Primary uses:
 2. **kdump**: crash kernel boots capture kernel to save vmcore
 3. **A/B kernel updates**: atomically switch to a new kernel
 
-## kexec_load syscall
+## kexec_load syscall {#kexec_load-syscall}
 
 ```c
 /* kernel/kexec.c */
@@ -43,7 +43,7 @@ struct kexec_segment {
 };
 ```
 
-### kexec_file_load: signature-verified loading
+### kexec_file_load: signature-verified loading {#kexecfileload-signature-verified-loading}
 
 `kexec_file_load` takes a file descriptor instead of raw memory segments, enabling kernel image signature verification:
 
@@ -58,7 +58,7 @@ int kexec_file_load(int kernel_fd,      /* open("/boot/vmlinuz", O_RDONLY) */
 
 If `CONFIG_KEXEC_SIG=y`, the kernel image must be signed with a trusted key — useful for Secure Boot compatibility.
 
-## Machine kexec: the jump
+## Machine kexec: the jump {#machine-kexec-the-jump}
 
 When `kexec -e` is run, `machine_kexec()` performs the actual handoff:
 
@@ -102,7 +102,7 @@ void machine_kexec(struct kimage *image)
 }
 ```
 
-## kimage: the loaded kernel
+## kimage: the loaded kernel {#kimage-the-loaded-kernel}
 
 ```c
 /* include/linux/kexec.h */
@@ -133,7 +133,7 @@ struct kimage {
 };
 ```
 
-## kdump integration
+## kdump integration {#kdump-integration}
 
 kdump uses kexec to boot a capture kernel when the primary kernel crashes:
 
@@ -171,7 +171,7 @@ cat /sys/kernel/kexec_loaded
 # 0 = no normal kexec kernel loaded
 ```
 
-## kexec userspace tool
+## kexec userspace tool {#kexec-userspace-tool}
 
 ```bash
 # Load a kernel for kexec reboot
@@ -200,9 +200,9 @@ kexec -p /boot/vmlinuz-crash \
 kexec -p -u
 ```
 
-## kexec in the kernel
+## kexec in the kernel {#kexec-in-the-kernel}
 
-### Shutdown sequence
+### Shutdown sequence {#shutdown-sequence}
 
 ```c
 /* kernel/kexec_core.c */
@@ -258,7 +258,7 @@ int kernel_kexec(void)
 }
 ```
 
-### Preserving EFI runtime services
+### Preserving EFI runtime services {#preserving-efi-runtime-services}
 
 ```c
 /* For EFI systems: preserve EFI runtime memory */
@@ -268,7 +268,7 @@ if (efi_enabled(EFI_RUNTIME_SERVICES)) {
 }
 ```
 
-## Observing kexec
+## Observing kexec {#observing-kexec}
 
 ```bash
 # Check kexec support in kernel
@@ -297,9 +297,9 @@ time systemctl kexec
 time reboot
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/kexec.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kexec.c) — `SYSCALL_DEFINE4(kexec_load, ...)`: the segment-list-based load syscall
 - [kernel/kexec_file.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kexec_file.c) — `SYSCALL_DEFINE5(kexec_file_load, ...)` and the `CONFIG_KEXEC_SIG` signature-verification path
@@ -307,22 +307,22 @@ time reboot
 - [include/linux/kexec.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kexec.h) — `struct kimage` and `struct kexec_segment` definitions
 - [arch/x86/kernel/machine_kexec_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/machine_kexec_64.c) — `machine_kexec()`: the actual handoff to the new kernel on x86-64
 
-### Man pages
+### Man pages {#man-pages}
 
 - [kexec_load(2)](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — covers both the `kexec_load()` and `kexec_file_load()` syscalls
 - [kexec(8)](https://man7.org/linux/man-pages/man8/kexec.8.html) — the userspace `kexec-tools` command: `-l`/`-p`/`-e`/`-u` options
 
-### Related pages
+### Related pages {#related-pages}
 
 - [kdump and crash](../debugging/kdump.md) — crash dump collection using kexec
 - [Kernel Live Patching](klp.md) — avoiding reboots entirely
 - [Power Management: System Suspend](../power/suspend.md) — the `freeze_processes()`/`dpm_suspend_start()` device-suspend sequence that `CONFIG_KEXEC_JUMP`'s preserve-context path reuses from the hibernation code path
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [kexec: A new system call to allow in kernel loading](https://lwn.net/Articles/574400/) — the original RFC introducing `kexec_file_load()` with its kernel-fd/initrd-fd design
 - [Reworking kexec for signatures](https://lwn.net/Articles/603116/) — why `kexec_file_load()` exists: restricting kexec to signed kernels, and its relationship to Secure Boot
 
-### External
+### External {#external}
 
 - [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — official kdump setup guide covering `crashkernel=` sizing and the `irqpoll`/`nr_cpus=1`/`reset_devices` boot options used when loading the capture kernel

@@ -1,8 +1,8 @@
-# XFS: High-Performance Journaling Filesystem
+# XFS: High-Performance Journaling Filesystem {#xfs-high-performance-journaling-filesystem}
 
 > Allocation groups, B-tree index structures, delayed allocation, and online repair
 
-## Why XFS?
+## Why XFS? {#why-xfs}
 
 XFS was originally developed at SGI for IRIX in 1993, then ported to Linux by Steve Lord and the SGI team; it was merged into the mainline kernel in Linux 2.5.36 (2002). It excels at:
 
@@ -23,7 +23,7 @@ XFS was originally developed at SGI for IRIX in 1993, then ported to Linux by St
 | Quotas | Yes | Yes | Yes |
 | Realtime section | No | Yes | No |
 
-## Allocation Groups
+## Allocation Groups {#allocation-groups}
 
 XFS divides the filesystem into **Allocation Groups (AGs)**. Each AG manages its own inodes, free space, and B-trees independently:
 
@@ -60,9 +60,9 @@ xfs_info /dev/sda1
 # realtime =none         extsz=4096   blocks=0, rtextents=0
 ```
 
-## B-tree structures
+## B-tree structures {#b-tree-structures}
 
-### Free space B-trees (bnobt and cntbt)
+### Free space B-trees (bnobt and cntbt) {#free-space-b-trees-bnobt-and-cntbt}
 
 Two B-trees track free space, allowing O(log n) allocation:
 
@@ -90,7 +90,7 @@ xfs_db -c 'ag 0' -c 'agf' -c 'print' /dev/sda1
 # freeblks = 5234567
 ```
 
-### Inode B-tree (inobt) and free inode B-tree (finobt)
+### Inode B-tree (inobt) and free inode B-tree (finobt) {#inode-b-tree-inobt-and-free-inode-b-tree-finobt}
 
 ```c
 /* Inode chunk record: 64 inodes per chunk */
@@ -105,7 +105,7 @@ struct xfs_inobt_rec {
 /* finobt allows O(log n) free inode lookup instead of scanning inobt */
 ```
 
-### Reverse mapping B-tree (rmapbt)
+### Reverse mapping B-tree (rmapbt) {#reverse-mapping-b-tree-rmapbt}
 
 Introduced in Linux 4.8. Every allocated block is back-referenced to its owner:
 
@@ -121,7 +121,7 @@ struct xfs_rmap_rec {
 
 rmapbt enables: online repair (find which inode owns a corrupt block), online scrub, and reflink COW tracking.
 
-## Inode format
+## Inode format {#inode-format}
 
 XFS inodes are 512 bytes (configurable to 256 or 2048):
 
@@ -153,7 +153,7 @@ struct xfs_dinode {
 /* XFS_DINODE_FMT_BTREE:  B-tree rooted in inode (many extents) */
 ```
 
-### Extent format
+### Extent format {#extent-format}
 
 XFS stores extents in a compact 128-bit format:
 
@@ -169,7 +169,7 @@ XFS stores extents in a compact 128-bit format:
 
 Up to ~20 extents fit inline in the inode. Beyond that, a B-tree (bmbt) is rooted in the inode.
 
-## Delayed allocation
+## Delayed allocation {#delayed-allocation}
 
 XFS uses **delayed allocation** to improve write performance. Instead of allocating disk blocks immediately on write, XFS reserves space in memory and delays the actual allocation until writeback:
 
@@ -206,7 +206,7 @@ xfs_db -c 'freesp -s' /dev/sda1
 xfs_fsr /dev/sda1       # filesystem reorganizer
 ```
 
-## XFS journal (xlog)
+## XFS journal (xlog) {#xfs-journal-xlog}
 
 XFS uses its own journaling (xlog), separate from JBD2:
 
@@ -223,7 +223,7 @@ On crash recovery:
   xlog_recover() replays committed transactions since last checkpoint
 ```
 
-### Committed Item List (CIL)
+### Committed Item List (CIL) {#committed-item-list-cil}
 
 The CIL is XFS's equivalent of JBD2's running transaction, but with delayed flushing. Delayed logging (log intent items) was designed and implemented by Dave Chinner:
 
@@ -244,7 +244,7 @@ xfs_info /dev/sda1 | grep log
 # Journal: 51200 * 4096 = 200MB internal log
 ```
 
-## Online repair (XFS 5.19+)
+## Online repair (XFS 5.19+) {#online-repair-xfs-519}
 
 A unique XFS feature: repair the filesystem while it is mounted:
 
@@ -267,7 +267,7 @@ xfs_repair /dev/sda1
 
 Scrub works by cross-referencing B-trees: the rmapbt knows every allocated block, so the scrubber can verify that every block referenced by the extent B-tree is also in the rmapbt.
 
-## Quotas
+## Quotas {#quotas}
 
 ```bash
 # Enable quota at mount:
@@ -289,7 +289,7 @@ echo "100:Project One" >> /etc/projid
 xfs_quota -x -c 'project -s 100' /data  # assign directory to project
 ```
 
-## Performance tuning
+## Performance tuning {#performance-tuning}
 
 ```bash
 # Optimal mkfs for a specific workload:
@@ -311,7 +311,7 @@ mkfs.xfs -d su=64k,sw=4 /dev/md0
 # su=stripe unit (64K), sw=stripe width (4 disks)
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # XFS statistics:
@@ -336,7 +336,7 @@ df -i /data
 xfs_db -c 'freesp -d' /dev/sda1
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ext4 Journaling (JBD2)](ext4-journal.md) — alternative journaling approach
 - [Btrfs](btrfs.md) — CoW filesystem comparison

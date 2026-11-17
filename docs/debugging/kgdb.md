@@ -1,8 +1,8 @@
-# KGDB: Kernel GDB Debugger
+# KGDB: Kernel GDB Debugger {#kgdb-kernel-gdb-debugger}
 
 > Live debugging of a running kernel with GDB
 
-## Overview
+## Overview {#overview}
 
 KGDB allows debugging a live kernel using GDB as the front-end. The kernel halts at breakpoints and exposes a GDB remote protocol stub over a serial port. A second machine (or a VM host) runs GDB.
 
@@ -19,7 +19,7 @@ Host machine (running GDB)
 
 For single-machine debugging, KGDB over a VM's virtual serial port is the most practical setup.
 
-## Kernel configuration
+## Kernel configuration {#kernel-configuration}
 
 ```bash
 # Required kernel config options:
@@ -31,9 +31,9 @@ CONFIG_DEBUG_INFO=y            # symbol information in vmlinux
 CONFIG_GDB_SCRIPTS=y           # GDB python scripts for kernel types
 ```
 
-## Setting up the connection
+## Setting up the connection {#setting-up-the-connection}
 
-### Over serial (physical or VM)
+### Over serial (physical or VM) {#over-serial-physical-or-vm}
 
 ```bash
 # Target: configure kgdb to use serial port ttyS0 at 115200 baud
@@ -62,7 +62,7 @@ gdb vmlinux
 # (gdb) ...
 ```
 
-### There is no network transport in mainline
+### There is no network transport in mainline {#there-is-no-network-transport-in-mainline}
 
 Mainline kgdb has no Ethernet/UDP I/O backend — `kgdboc` (serial) is the only transport, confirmed by the
 complete file list for KGDB/KDB in the kernel's own `MAINTAINERS` entry (`Documentation/process/debugging/kgdb.rst`,
@@ -79,7 +79,7 @@ feature.
 
 For serial-attached debugging, `kgdboc` is the only transport, and it's what the rest of this page covers.
 
-## Basic GDB commands for kernel debugging
+## Basic GDB commands for kernel debugging {#basic-gdb-commands-for-kernel-debugging}
 
 Once connected:
 
@@ -118,7 +118,7 @@ Once connected:
 (gdb) finish                 # run until function return
 ```
 
-## Breakpoints
+## Breakpoints {#breakpoints}
 
 ```
 # Software breakpoint (INT3 on x86)
@@ -143,7 +143,7 @@ Once connected:
 (gdb) delete 2
 ```
 
-## GDB scripts for kernel
+## GDB scripts for kernel {#gdb-scripts-for-kernel}
 
 The kernel ships Python-based GDB scripts (`scripts/gdb/`) that add kernel-specific commands:
 
@@ -166,7 +166,7 @@ The kernel ships Python-based GDB scripts (`scripts/gdb/`) that add kernel-speci
 (gdb) $container_of(ptr, "struct task_struct", "mm")
 ```
 
-## Debugging a kernel module
+## Debugging a kernel module {#debugging-a-kernel-module}
 
 Modules are loaded at runtime at unknown addresses. You must load their symbols into GDB:
 
@@ -188,7 +188,7 @@ cat /sys/module/mymodule/sections/.data
 (gdb) lx-symbols /lib/modules/$(uname -r)/
 ```
 
-## KDB: the built-in kernel debugger
+## KDB: the built-in kernel debugger {#kdb-the-built-in-kernel-debugger}
 
 KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entirely on the target, without needing a second machine:
 
@@ -209,9 +209,9 @@ KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entir
 [0]kdb> lsmod                      # list modules
 ```
 
-## Common debugging scenarios
+## Common debugging scenarios {#common-debugging-scenarios}
 
-### Debugging a kernel oops
+### Debugging a kernel oops {#debugging-a-kernel-oops}
 
 ```bash
 # After an oops, the system may or may not be still running
@@ -222,7 +222,7 @@ KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entir
 (gdb) list         # show source around crash point
 ```
 
-### Race condition debugging
+### Race condition debugging {#race-condition-debugging}
 
 ```bash
 # Breakpoint with a counter (hit on 100th call)
@@ -230,7 +230,7 @@ KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entir
 (gdb) ignore 1 99        # skip first 99 hits
 ```
 
-### Inspecting scheduler state
+### Inspecting scheduler state {#inspecting-scheduler-state}
 
 ```bash
 (gdb) break __schedule
@@ -241,9 +241,9 @@ KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entir
 (gdb) p $lx_per_cpu("runqueues", 0)  # runqueue
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [Documentation/process/debugging/kgdb.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/process/debugging/kgdb.rst) — the canonical kgdb/kdb documentation: config options, `kgdboc` syntax, and the kdb command reference (note: this file lived at `Documentation/dev-tools/kgdb.rst` in older trees; it was relocated to `Documentation/process/debugging/`)
 - [kernel/debug/debug_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/debug/debug_core.c) — the debug core shared by both kgdb and kdb: exception entry and breakpoint handling
@@ -252,19 +252,19 @@ KDB (`CONFIG_KGDB_KDB=y`) provides a simpler text-based debugger that runs entir
 - [drivers/tty/serial/kgdboc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/kgdboc.c) — the `kgdboc` I/O driver that binds kgdb to a serial console
 - [scripts/gdb/vmlinux-gdb.py](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/gdb/vmlinux-gdb.py) — entry point that loads the `lx-*` GDB helper commands (`lx-ps`, `lx-dmesg`, `lx-lsmod`, `lx-symbols`, ...) and convenience functions (`$lx_current()`, `$lx_per_cpu()`, `$container_of()`) from `scripts/gdb/linux/`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [kdump and crash](kdump.md) — post-mortem crash analysis
 - [Oops analysis](oops-analysis.md) — decoding oops without a debugger
 - [Kernel Modules](../modules/module-basics.md) — loading module debug symbols
 - [Tracing: ftrace](../tracing/ftrace.md) — lighter-weight alternative to breakpoints
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Bringing kgdb into 2.6](https://lwn.net/Articles/70465/) (2004) — the early, contested push to get kgdb merged, over Linus Torvalds's historical resistance to in-tree debuggers
 - [Merging kdb and kgdb](https://lwn.net/Articles/374633/) (2010) — Jason Wessel's work to unify the kdb shell and kgdb's gdb-remote stub around a common debug core, extending kdb beyond x86
 
-### External
+### External {#external}
 
 - [Using kgdb, kdb and the kernel debugger internals](https://docs.kernel.org/process/debugging/kgdb.html) — docs.kernel.org rendering of the canonical documentation
 - [GDB kernel debugging](https://docs.kernel.org/process/debugging/gdb-kernel-debugging.html) — docs.kernel.org page on the `scripts/gdb/` Python helpers and convenience functions

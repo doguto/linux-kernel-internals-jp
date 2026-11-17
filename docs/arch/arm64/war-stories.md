@@ -1,4 +1,4 @@
-# ARM64 War Stories
+# ARM64 War Stories {#arm64-war-stories}
 
 > Cache coherency bugs, TLB shootdown ordering, BTI enforcement, and SVE context corruption
 
@@ -9,15 +9,15 @@ Each story follows a real bug class rooted in ARM64 architecture specifics — w
 
 ---
 
-## 1. The SVE Context Switch Bug
+## 1. The SVE Context Switch Bug {#1-the-sve-context-switch-bug}
 
-### Setup
+### Setup {#setup}
 
 A storage driver was optimized to use SIMD to accelerate CRC32 checksums on data blocks during I/O completion. The developer correctly called `kernel_neon_begin()` and `kernel_neon_end()` in the checksum path — or so they thought. A refactoring pass moved some of the checksum logic into a helper function called from a workqueue. In that helper, `kernel_neon_begin()` was present, but an early-return error path skipped `kernel_neon_end()`.
 
 The kernel was running on an ARMv8.2 platform with SVE support. Several userspace threads were using SVE for BLAS routines in a scientific computing workload, and the storage driver's checksum work ran on the same CPUs under heavy load.
 
-### What Happened
+### What Happened {#what-happened}
 
 On a heavily loaded system, kworker threads doing checksum work would occasionally corrupt seemingly unrelated local state a few calls later — a garbled local variable, or in the worst cases a corrupted return address leading to a crash with a backtrace that made no sense. The corruption was silent at the point it happened and only surfaced later, in different code entirely.
 
@@ -74,7 +74,7 @@ out:
 }
 ```
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 The bug was silent and non-deterministic, and the corruption surfaced far from its cause. Diagnosis steps:
 
@@ -83,28 +83,28 @@ The bug was silent and non-deterministic, and the corruption surfaced far from i
 3. **Tracing**: add `ftrace` hooks around `kernel_neon_begin()`/`kernel_neon_end()` to log call sites and their `state` pointers; a `begin` whose `state` address never shows up in a matching `end` on the same task is the smoking gun.
 4. **KASAN/stack-protector signal**: since the corrupted memory is a reused stack slot, a stack-protector canary failure or a KASAN stack-out-of-bounds report in a completely unrelated function on the same kworker is consistent with this bug — don't assume the crash site is the bug site.
 
-### Fix
+### Fix {#fix}
 
 Ensure every kernel code path that calls `kernel_neon_begin()` has a matching `kernel_neon_end()` on all exit paths, using the same `state` buffer on both calls. A common pattern is the `goto out` idiom shown above. If the NEON usage can fail partway through, keep `kernel_neon_end()` in a single cleanup label.
 
 Kernel NEON use guarded this way is preemptible on non-`PREEMPT_RT` kernels — that's the reason a caller-provided buffer is required in process/softirq context in the first place. Don't assume preemption is held off for the whole region between `kernel_neon_begin()` and `kernel_neon_end()`; the only thing briefly held off is the internal bookkeeping update inside those two calls themselves.
 
-### Lesson
+### Lesson {#lesson}
 
 ARM64's context-switchable kernel-mode NEON state makes kernel NEON use both efficient and preemptible, but the correctness contract is strict: `kernel_neon_begin()` and `kernel_neon_end()` must be perfectly paired, using the same caller-owned buffer. Missing a `kernel_neon_end()` doesn't fail immediately — it leaves a dangling pointer in `current->thread.kernel_fpsimd_state` that only causes damage on the next context switch, and the damage lands wherever the stack happens to be reused, not at the site of the bug. Code review must treat these pairs as carefully as mutex lock/unlock — more so, since the failure mode here is a wild write, not a deadlock.
 
 ---
 
-## 2. The Missing DSB Before TLBI
+## 2. The Missing DSB Before TLBI {#2-the-missing-dsb-before-tlbi}
 
 !!! note "This one is now historical"
     As of Linux 6.16, `set_pte()` itself calls `queue_pte_barriers()`/`emit_pte_barriers()` — `dsb(ishst); isb();` — automatically for any valid, non-user PTE (confirmed by tag-diff: absent in `arch/arm64/include/asm/pgtable.h` at v6.15, present at v6.16). The specific bug below, reached through the ordinary `set_pte()` helper the driver uses, cannot happen on a 6.16+ kernel. It's included because the underlying ordering rule is still real and still binds any code that bypasses `set_pte()` — a driver-maintained page-table format for an IOMMU or accelerator with its own PTE layout, for instance — and because the "why did this only show up on a 16-core server" reasoning below hasn't changed.
 
-### Setup
+### Setup {#setup_1}
 
 A driver for a custom DMA remapping engine maintained its own set of page table entries to map device-visible buffers into a restricted VA space, predating Linux 6.16's automatic PTE barrier batching. When a buffer was replaced, the driver updated the PTE, then called `flush_tlb_range()` to shoot down stale TLB entries on all CPUs. The code was written by an engineer with x86 experience and tested on a single-core development board before being deployed to a 16-core ARM64 server.
 
-### What Happened
+### What Happened {#what-happened_1}
 
 On the 16-core system, about once every few hours, a CPU would take a fault on an address that should have been remapped. The fault was a translation fault at the new VA — the MMU page table walker was fetching a stale PTE that pointed to the old physical page, which had already been freed.
 
@@ -156,30 +156,30 @@ Why did it work on x86? x86 uses **Total Store Order (TSO)**: all store operatio
 
 Why did it work on a single core? With one CPU, there is no other MMU walker to race with. The local TLB invalidate sees the updated PTE from the local store buffer.
 
-### Diagnosis
+### Diagnosis {#diagnosis_1}
 
 1. **Intermittent translation faults** at addresses that should be valid; `dmesg` shows `do_page_fault` for kernel addresses.
 2. The fault VA matches a recently remapped region, and the physical address in the stale PTE matches the old mapping.
 3. Narrow down by adding `dsb(ishst)` as a diagnostic and observing that the fault rate drops to zero.
 4. Review all driver PTE-update paths against the ARM ARM (Architecture Reference Manual) required sequence for "break-before-make" and PTE updates.
 
-### Fix
+### Fix {#fix_1}
 
 Insert `dsb(ishst)` between PTE writes and any TLBI or `flush_tlb_*` call. In most cases, drivers should not be manipulating PTEs directly — using the kernel's `remap_pfn_range()`, `vm_insert_page()`, or `io_remap_pfn_range()` handles barriers correctly, and as of Linux 6.16 even a direct `set_pte()` call handles this specific ordering automatically. If a driver maintains its own page-table format entirely outside the generic `set_pte()`/`pte_t` machinery — an IOMMU or accelerator with a private table layout — none of that automatic handling applies, and the full ARM64 sequence must still be followed explicitly.
 
-### Lesson
+### Lesson {#lesson_1}
 
 The ARM64 memory model requires explicit store barriers before TLB invalidates. Code ported from x86 or tested only on uniprocessor systems will appear to work, then fail under load on multi-core ARM64. The `dsb(ishst)` before TLBI is not a performance hint — it is architecturally required for correctness, for any page-table format the generic kernel PTE helpers don't already cover.
 
 ---
 
-## 3. The Cache Coherency Trap: DMA from a Non-Coherent Device
+## 3. The Cache Coherency Trap: DMA from a Non-Coherent Device {#3-the-cache-coherency-trap-dma-from-a-non-coherent-device}
 
-### Setup
+### Setup {#setup_2}
 
 An embedded SoC (a custom ARM64 board for industrial control) had a PCIe endpoint with a proprietary DMA engine. Unlike commodity PCIe cards, whose reads and writes are ordinarily kept coherent because the root complex snoops the CPU caches on their behalf (with a device able to opt out per-transaction via the PCIe "No Snoop" TLP attribute), this DMA engine accessed DRAM directly through the SoC's bus fabric — bypassing that snooping path entirely. The SoC datasheet documented this, but the driver author assumed that "PCIe = cache coherent" and wrote the driver accordingly.
 
-### What Happened
+### What Happened {#what-happened_2}
 
 The driver allocated a transmit buffer with `kmalloc()`, filled it with packet data, then programmed the DMA engine to read the buffer and transmit it over the custom fabric link. The device would occasionally transmit zeros or stale data instead of the intended packet contents.
 
@@ -237,7 +237,7 @@ buf = dma_alloc_coherent(dev->dev, size, &dma_addr, GFP_KERNEL);
 
 Whether a device requires explicit cache management depends on `dev->dma_coherent` (set from DT or ACPI describing the platform's coherency fabric) or the presence of an IOMMU that provides snooping. On platforms with a fully coherent interconnect, `dma_map_single()` is a no-op for cache management; on non-coherent platforms it does the necessary `dc cvac` sequence.
 
-### Diagnosis
+### Diagnosis {#diagnosis_2}
 
 1. Device transmits wrong data — zeros, old values, or garbage — not random corruption.
 2. The bug is **consistent at low speed** (cache lines always flushed before the race) and **worse under load** (cache lines less likely to have been evicted naturally).
@@ -245,23 +245,23 @@ Whether a device requires explicit cache management depends on `dev->dma_coheren
 4. Check the SoC TRM (Technical Reference Manual) and Linux DTS for `dma-coherent` property on the device node.
 5. Audit all `virt_to_phys()` calls in the driver — any direct physical address use that bypasses `dma_map_*` is a red flag on a non-coherent platform.
 
-### Fix
+### Fix {#fix_2}
 
 Replace all direct `virt_to_phys()` + register programming with the DMA API (`dma_map_single()` / `dma_unmap_single()` or `dma_alloc_coherent()`). Ensure the device node in the DTS does **not** have `dma-coherent` unless the hardware actually supports it. For descriptor rings and control structures, use `dma_alloc_coherent()`.
 
-### Lesson
+### Lesson {#lesson_2}
 
 Cache coherency is not guaranteed for all DMA-capable devices, even on sophisticated SoCs. The Linux DMA API exists precisely to abstract the coherency requirement: it is a no-op on coherent platforms and does the right cache operations on non-coherent ones. Using `virt_to_phys()` directly instead of `dma_map_single()` is always wrong in a portable driver — it fails silently on non-coherent hardware.
 
 ---
 
-## 4. The BTI Enforcement Crash in a JIT Compiler
+## 4. The BTI Enforcement Crash in a JIT Compiler {#4-the-bti-enforcement-crash-in-a-jit-compiler}
 
-### Setup
+### Setup {#setup_3}
 
 A language runtime embedded in a container orchestration agent generated native ARM64 code at runtime to evaluate policy expressions. The JIT deliberately mapped its generated code with `mmap(PROT_READ | PROT_EXEC | PROT_BTI)` — opting the pages into BTI (Branch Target Identification) enforcement on purpose, for the security benefit of blocking arbitrary indirect-branch landing points into JIT-emitted code. The system was a modern ARM64 server running a distribution kernel compiled with BTI support.
 
-### What Happened
+### What Happened {#what-happened_3}
 
 The runtime crashed with a signal. `dmesg` showed:
 
@@ -321,7 +321,7 @@ The encoding of `BTI c` is `0xd503245f` (a hint-space instruction). `BTI j` is `
 
 BTI enforcement is a per-page property, not a whole-process one: it only applies to pages explicitly mapped as "Guarded Pages" (`PTE_GP`), which the kernel sets when a mapping is created or changed with `PROT_BTI` — either directly via `mmap()`/`mprotect()`, as this JIT does, or automatically for the main executable and its shared libraries when the ELF `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` note is present and the whole binary was built BTI-aware. A JIT that maps its generated code with plain `PROT_READ | PROT_EXEC` (no `PROT_BTI`) gets no BTI enforcement on that memory at all, regardless of whether the calling binary itself is BTI-enabled — enforcement follows the target page, not the caller. This JIT asked for that enforcement deliberately, which is exactly what exposed the missing landing pad.
 
-### Diagnosis
+### Diagnosis {#diagnosis_3}
 
 1. The crash backtrace points to the instruction immediately after `blr xN` where `xN` holds the JIT code address.
 2. Decode the ESR_EL1 from the signal info or `dmesg`: `EC=0x0D` (`ESR_ELx_EC_BTI`), reported by the kernel's `esr_class_str[]` table as `"BTI"`. This raises `SIGILL` with `si_code` `ILL_ILLOPC` (`do_el0_bti()`, `arch/arm64/kernel/traps.c`) — not a segmentation fault, even though the trigger is a branch-target check.
@@ -329,7 +329,7 @@ BTI enforcement is a per-page property, not a whole-process one: it only applies
 4. Confirm the JIT pages are Guarded: `grep -E '^VmFlags.*\bbt\b' /proc/$(pidof agent)/smaps` (the kernel's smaps `VmFlags` token for `VM_ARM64_BTI` is the two-letter `bt`, not the string "BTI") or check `/proc/cpuinfo` for `bti` in the Features line to confirm CPU support.
 5. Verify the binary's BTI note: `readelf -n /usr/bin/agent`.
 
-### Fix
+### Fix {#fix_3}
 
 The JIT emitter must emit `BTI c` as the very first instruction of every function entry point that may be reached via an indirect call (`blr`). For jump tables and indirect `br` targets, emit `BTI j` instead. The change is a single-word addition to the function prologue emitter.
 
@@ -337,24 +337,24 @@ If a JIT targets a mixed environment (some callers may be BTI-unaware), `BTI jc`
 
 A JIT that instead starts out mapping its code with plain `PROT_READ | PROT_EXEC` can opt into the same enforcement later with `mprotect(buf, size, PROT_READ | PROT_EXEC | PROT_BTI)` (Linux 5.8+) — worth doing deliberately for the security benefit, but only once every code-generation path actually emits the required landing pads first.
 
-### Lesson
+### Lesson {#lesson_3}
 
 BTI is a forward-edge CFI (Control Flow Integrity) mechanism baked into ARMv8.5, and it's enforced per-page, not per-process: only memory explicitly mapped `PROT_BTI` (or, in the common case, a BTI-aware executable's own code and its shared libraries) gets landing-pad checks on indirect branches into it. A JIT that opts its generated code into that enforcement gets a real security benefit — but every code-generation path must then emit `BTI c` / `BTI j` preambles, including runtime-generated code, eBPF back-ends, and FFI stubs. This is a one-instruction-per-function-entry fix, but it requires the JIT to actually know about the BTI ABI before it turns enforcement on.
 
 ---
 
-## 5. The Erratum Workaround with the Wrong MIDR Range
+## 5. The Erratum Workaround with the Wrong MIDR Range {#5-the-erratum-workaround-with-the-wrong-midr-range}
 
 !!! note "Deliberately generic hardware"
     This case uses a placeholder core name and part number rather than a real ARM design, specifically so the erratum, MIDR value, and revision range below don't get mapped back onto any real, documented silicon erratum — the mechanism (a MIDR revision range in `arm64_errata[]`) is completely generic and doesn't depend on which real core it's protecting.
 
-### Setup
+### Setup {#setup_4}
 
 A SoC vendor licensed an ARM Cortex-family core (referred to here as "MyCore," since the specific real core doesn't matter to the bug). Revision r0p2 of the core had an erratum: under specific conditions, a spurious event in the memory pipeline could generate a fault for an address that was not actually being accessed, causing a kernel oops. The upstream kernel fix applied a workaround via an implementation-defined register when the erratum was detected.
 
 A downstream vendor kernel team backported this fix. The erratum workaround was conditional on the MIDR_EL1 value — it should apply to r0p0, r0p1, and r0p2 of the affected core. However, the backport had a transcription error: the revision range in the errata table covered only r0p0 and r0p1.
 
-### What Happened
+### What Happened {#what-happened_4}
 
 Production devices, which shipped with r0p2 silicon, hit spurious kernel faults under memory pressure. The fault address was always unmapped, the fault was non-reproducible from userspace, and it appeared deep in `do_page_fault` on a kernel address that was provably mapped.
 
@@ -401,7 +401,7 @@ cat /sys/devices/system/cpu/cpu0/regs/identification/midr_el1
 
 Reading the low 32 bits, `410FFFF2`, against the bit layout above: implementer `0x41` (ARM), variant `0x0` (r0), architecture `0xf` (ARMv8), part number `0xfff` (this core's placeholder part number), revision `0x2` (p2). The revision field (`bits[3:0]`) read as `2` (p2), but the erratum table's range only went to `1` (p1) — a one-off error.
 
-### Diagnosis
+### Diagnosis {#diagnosis_4}
 
 1. **Spurious kernel faults** on an address that is mapped; fault is non-deterministic and load-dependent.
 2. Check whether the erratum workaround boot message appears: `dmesg | grep -i erratum`. (The kernel's own `.desc` strings for these entries say "ARM erratum ...", not "workaround" — grepping for "workaround" alone won't find it.)
@@ -409,7 +409,7 @@ Reading the low 32 bits, `410FFFF2`, against the bit layout above: implementer `
 4. Cross-reference the silicon revision against the errata table in the kernel source. Check `arch/arm64/kernel/cpu_errata.c` (or the vendor equivalent) for the MIDR range.
 5. Confirm by patching the range to include r0p2, reboot, and verify the workaround message appears and spurious faults cease.
 
-### Fix
+### Fix {#fix_4}
 
 Widen the MIDR revision range to include all affected silicon revisions. After the fix, verify with a production r0p2 device that the boot message appears. Add a comment referencing the errata ID and the affected revision range explicitly so future backports are easier to audit:
 
@@ -422,13 +422,13 @@ static const struct midr_range affected_range[] = {
 };
 ```
 
-### Lesson
+### Lesson {#lesson_4}
 
 Errata workarounds are safety-critical: an off-by-one in a MIDR revision range silently leaves devices unprotected. Every backport of an erratum fix must be validated against the actual silicon revision deployed in the target hardware. Reading `midr_el1` from sysfs is a one-line check that should be part of any bringup checklist. Boot-time messages confirming erratum activation are a valuable diagnostic signal — their absence is a warning.
 
 ---
 
-## Summary
+## Summary {#summary}
 
 | # | Bug | Root cause | Detection method | ARM64-specific? |
 |---|-----|-----------|-----------------|----------------|
@@ -440,7 +440,7 @@ Errata workarounds are safety-critical: an off-by-one in a MIDR revision range s
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [Exception Model](exception-model.md) — EL0-EL3, ESR_EL1 syndrome decoding, SCTLR_EL1 control bits
 - [Memory Model](memory-model.md) — Weak ordering, DSB/ISB/DMB barriers, load-acquire/store-release

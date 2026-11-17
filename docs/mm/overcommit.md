@@ -1,14 +1,14 @@
-# Memory Overcommit: Why It's the Only Sane Default
+# Memory Overcommit: Why It's the Only Sane Default {#memory-overcommit-why-its-the-only-sane-default}
 
 > The real question isn't "why overcommit" - it's "why would you NOT overcommit"
 
-## The Real Question
+## The Real Question {#the-real-question}
 
 You have 8GB of RAM. A program calls `malloc(16GB)`. Should the kernel refuse?
 
 On most Linux systems (with default settings), this allocation is allowed. But the question isn't "why does Linux do this crazy thing?" The question is: **what's the alternative?**
 
-## Without Overcommit, fork() Breaks
+## Without Overcommit, fork() Breaks {#without-overcommit-fork-breaks}
 
 The answer starts with `fork()` and [copy-on-write](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) (COW).
 
@@ -23,7 +23,7 @@ Once you accept overcommit for fork(), extending it to general allocations is a 
 2. Memory-mapped files don't require RAM for unread pages
 3. Programs that reserve-then-use (like JVMs) don't waste memory
 
-## The fork() Example
+## The fork() Example {#the-fork-example}
 
 Consider `fork()`:
 
@@ -45,7 +45,7 @@ With copy-on-write and overcommit:
 - `exec()` replaces address space before any copy happens
 - Actual memory needed: ~4GB (not 8GB)
 
-## How Overcommit Works
+## How Overcommit Works {#how-overcommit-works}
 
 When a process requests memory via `mmap()` or `brk()` (the actual syscalls - `malloc()` is a userspace wrapper that calls these), the kernel:
 
@@ -75,11 +75,11 @@ mmap(1GB)            First write to page
                     └─────────────┘
 ```
 
-## Overcommit Modes
+## Overcommit Modes {#overcommit-modes}
 
 Linux provides three modes via `/proc/sys/vm/overcommit_memory`:
 
-### Mode 0: Heuristic (Default)
+### Mode 0: Heuristic (Default) {#mode-0-heuristic-default}
 
 ```bash
 $ cat /proc/sys/vm/overcommit_memory
@@ -94,7 +94,7 @@ $ cat /proc/sys/vm/overcommit_memory
 
 The heuristic is implemented in `__vm_enough_memory()` ([mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c)). It considers total RAM, swap, hugetlb reservations, admin/user reserves, and existing commitments. The simplified rule: reject if obviously excessive, allow if plausibly satisfiable.
 
-### Mode 1: Always Overcommit
+### Mode 1: Always Overcommit {#mode-1-always-overcommit}
 
 ```bash
 $ echo 1 > /proc/sys/vm/overcommit_memory
@@ -106,7 +106,7 @@ $ echo 1 > /proc/sys/vm/overcommit_memory
 - Useful for sparse arrays, memory-mapped files
 - Dangerous if programs actually touch what they allocate
 
-### Mode 2: Strict Accounting
+### Mode 2: Strict Accounting {#mode-2-strict-accounting}
 
 ```bash
 $ echo 2 > /proc/sys/vm/overcommit_memory
@@ -142,7 +142,7 @@ CommitLimit:    6291456 kB
 Committed_AS:   2145678 kB
 ```
 
-## When Overcommit Fails: The OOM Killer
+## When Overcommit Fails: The OOM Killer {#when-overcommit-fails-the-oom-killer}
 
 If programs actually use more memory than available, someone must die:
 
@@ -181,7 +181,7 @@ $ cat /proc/<pid>/oom_score
 $ echo -500 > /proc/<pid>/oom_score_adj
 ```
 
-## Why Not Just Disable Overcommit?
+## Why Not Just Disable Overcommit? {#why-not-just-disable-overcommit}
 
 Strict mode (mode 2) sounds safer. Why isn't it default?
 
@@ -219,20 +219,20 @@ java -Xmx8g -jar app.jar
 # Actual usage might be 500MB
 ```
 
-## The Trade-off
+## The Trade-off {#the-trade-off}
 
 | Approach | Pros | Cons |
 |----------|------|------|
 | Overcommit (default) | More programs run, `fork()` works, sparse structures | OOM killer may strike |
 | Strict (mode 2) | Predictable failures | Wastes memory, `fork()` heavy, breaks sparse usage |
 
-## Historical Context
+## Historical Context {#historical-context}
 
-### Before Linux: Traditional Unix
+### Before Linux: Traditional Unix {#before-linux-traditional-unix}
 
 Early Unix systems (1970s-80s) typically used **strict memory accounting**. When you called `malloc()`, the system checked if physical memory (or swap) was available. This was simpler but wasteful - memory reserved but unused by one process couldn't be used by others.
 
-### Linux's Aggressive Approach (1990s)
+### Linux's Aggressive Approach (1990s) {#linuxs-aggressive-approach-1990s}
 
 Linux chose a different path from the start. Linus Torvalds favored **optimistic allocation** - let programs allocate freely, deal with shortages when they actually occur. This matched how programs really behave: they often allocate more than they use.
 
@@ -241,7 +241,7 @@ Why this made sense:
 2. **`fork()`/`exec()` pattern** - The dominant Unix pattern, benefits enormously from COW + overcommit
 3. **Sparse usage is common** - Real programs don't touch all allocated memory
 
-### The OOM Killer (1998)
+### The OOM Killer (1998) {#the-oom-killer-1998}
 
 The inevitable consequence of optimistic allocation: sometimes the bet fails. Rik van Riel created the OOM killer in [**August 1998**](https://lwn.net/1998/0903/a/oom.html) (Linux 2.1.x development series, see [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c)) to handle this:
 
@@ -256,7 +256,7 @@ The OOM killer was controversial from day one. But the alternatives are worse:
 
 Option (c) is the least bad. That's engineering reality.
 
-### Evolution of Overcommit Controls
+### Evolution of Overcommit Controls {#evolution-of-overcommit-controls}
 
 - **Linux 2.4**: Formalized `vm.overcommit_memory` sysctl (modes 0, 1, 2)
 - **Linux 2.6**: Added `vm.overcommit_ratio` for strict mode tuning
@@ -265,7 +265,7 @@ Option (c) is the least bad. That's engineering reality.
 - **Linux 4.6 (2016)**: OOM reaper introduced ([commit aac4536355](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=aac453635549)) - reclaims memory from OOM victims faster
 - **Linux 4.19 (2018)**: `cgroup`-aware OOM killer ([commit 3d8b38eb81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3d8b38eb81ca)) - can kill entire `cgroup` as a unit
 
-## Recommendations
+## Recommendations {#recommendations}
 
 **For most workloads:** Keep default (mode 0)
 
@@ -287,7 +287,7 @@ echo 2 > /proc/sys/vm/overcommit_memory
 echo 80 > /proc/sys/vm/overcommit_ratio
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # Check current mode
@@ -305,25 +305,25 @@ done | sort -rn | head -10
 dmesg -w | grep -i oom
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — calls `__vm_enough_memory()` during `mmap()` and `brk()` to enforce overcommit policy
 - [mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c) — `__vm_enough_memory()` heuristic (mode 0) and `vm_commit_limit()` calculation (mode 2)
 - [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()`: how victims are scored and selected
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/mm/overcommit-accounting.rst`](https://docs.kernel.org/mm/overcommit-accounting.html) — official explanation of the three modes and commit limit formula
 - [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) — sysctl knobs: `overcommit_memory`, `overcommit_ratio`, `overcommit_kbytes`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [oom.md](oom.md) — OOM killer scoring, `oom_score_adj`, and cgroup-aware OOM
 - [mmap.md](mmap.md) — VMA creation and demand paging: why address space is cheap
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Toward better OOM handling](https://lwn.net/Articles/391222/) — David Rientjes's 2010 OOM killer rewrite at Google
 - [LWN: The OOM killer](https://lwn.net/Articles/317814/) — deep dive into victim selection heuristics

@@ -1,8 +1,8 @@
-# RCU (Read-Copy-Update)
+# RCU (Read-Copy-Update) {#rcu-read-copy-update}
 
 > Lock-free reads through grace periods — the highest-performance synchronization in the kernel
 
-## The core idea
+## The core idea {#the-core-idea}
 
 RCU was added to Linux in kernel 2.5.43 (October 2002) by Dipankar Sarma (IBM) and Paul E. McKenney — confirmed in ["What is RCU, Fundamentally?"](https://lwn.net/Articles/262464/) (McKenney & Walpole, LWN 2007): *"RCU added to the Linux kernel in October 2002."*
 
@@ -28,7 +28,7 @@ Reader algorithm:
 
 The critical property: **readers pay almost nothing**. On non-preemptible kernels, `rcu_read_lock()` is literally a compiler barrier with preemption disabled — no atomic operations, no cache line bouncing.
 
-## The grace period
+## The grace period {#the-grace-period}
 
 A **grace period** is the time the writer waits after publishing the new pointer before freeing the old one. A grace period ends when every CPU has passed through a **quiescent state** — a point where no RCU read-side critical section can be in progress.
 
@@ -49,7 +49,7 @@ CPU 2:                                    [context switch]
 
 On a non-preemptible kernel, a grace period completes when every CPU has scheduled at least once. This is why context switches are RCU quiescent states.
 
-## API
+## API {#api}
 
 ```c
 #include <linux/rcupdate.h>
@@ -80,7 +80,7 @@ static void my_free_callback(struct rcu_head *head)
 }
 ```
 
-### Embedding rcu_head
+### Embedding rcu_head {#embedding-rcu_head}
 
 Any object freed via RCU must embed `struct rcu_head`:
 
@@ -107,7 +107,7 @@ kfree(old);
 call_rcu(&old->rcu, my_free_callback);
 ```
 
-### kfree_rcu shorthand
+### kfree_rcu shorthand {#kfree_rcu-shorthand}
 
 For objects that just need `kfree()` after a grace period, `kfree_rcu()` is a shorthand that avoids writing a callback:
 
@@ -119,7 +119,7 @@ kfree_rcu(old_data, rcu);  /* 'rcu' is the rcu_head field name */
 kfree_rcu(old_data);
 ```
 
-## A complete example: RCU-protected lookup table
+## A complete example: RCU-protected lookup table {#a-complete-example-rcu-protected-lookup-table}
 
 ```c
 /* Global pointer, updated rarely */
@@ -159,7 +159,7 @@ int update_config(int new_timeout)
 }
 ```
 
-## RCU-protected lists
+## RCU-protected lists {#rcu-protected-lists}
 
 The kernel provides `rculist.h` for linked lists:
 
@@ -186,7 +186,7 @@ list_for_each_entry_rcu(entry, &my_list, list) {
 rcu_read_unlock();
 ```
 
-## RCU flavors
+## RCU flavors {#rcu-flavors}
 
 There are three main RCU flavors for different contexts:
 
@@ -198,7 +198,7 @@ There are three main RCU flavors for different contexts:
 
 Since Linux 5.0, all three are unified — `synchronize_rcu()` waits for all three simultaneously.
 
-## SRCU: sleepable RCU
+## SRCU: sleepable RCU {#srcu-sleepable-rcu}
 
 Standard RCU read-side critical sections cannot sleep. SRCU (Sleepable RCU) lifts this restriction at the cost of higher read-side overhead:
 
@@ -218,7 +218,7 @@ synchronize_srcu(&my_srcu);
 
 SRCU is used where readers need to sleep, such as notifier chains, filesystem operations, and BPF program invocation.
 
-## When to use RCU
+## When to use RCU {#when-to-use-rcu}
 
 ```
 RCU is ideal when:
@@ -233,7 +233,7 @@ RCU is not suited for:
   ✗ Small per-CPU data (use per-CPU variables instead)
 ```
 
-## Tree RCU: grace period detection mechanism
+## Tree RCU: grace period detection mechanism {#tree-rcu-grace-period-detection-mechanism}
 
 `synchronize_rcu()` on a real system can't simply "wait for every CPU to context switch" — it would block the caller indefinitely on a loaded system. Tree RCU solves this with an efficient hierarchical algorithm:
 
@@ -250,7 +250,7 @@ Each node tracks:
   qsmaskinit: initial value at grace period start
 ```
 
-### Grace period phases
+### Grace period phases {#grace-period-phases}
 
 ```c
 /* kernel/rcu/tree.c */
@@ -279,7 +279,7 @@ static void rcu_gp_cleanup(void)
 }
 ```
 
-### Expedited grace periods
+### Expedited grace periods {#expedited-grace-periods}
 
 `synchronize_rcu_expedited()` forces a fast grace period by sending IPIs to all CPUs to make them immediately report a quiescent state:
 
@@ -293,7 +293,7 @@ synchronize_rcu_expedited();
    - Expedited GP: after a threshold of synchronize_rcu() callers queue up */
 ```
 
-### TASKS RCU
+### TASKS RCU {#tasks-rcu}
 
 For "tasks" (non-atomic, can-sleep contexts), Tasks RCU tracks quiescent states differently:
 
@@ -306,7 +306,7 @@ call_rcu_tasks(&rcu_head, callback);
 /* Used by: BPF, ftrace, live patching */
 ```
 
-## RCU torture testing
+## RCU torture testing {#rcu-torture-testing}
 
 The kernel includes an extensive RCU stress test:
 
@@ -324,7 +324,7 @@ modprobe rcuscale perf_type="rcu"
 dmesg | grep "rcuscale"
 ```
 
-## RCU in the kernel: key usage sites
+## RCU in the kernel: key usage sites {#rcu-in-the-kernel-key-usage-sites}
 
 ```c
 /* Routing table lookup (hot path): */
@@ -349,7 +349,7 @@ rcu_read_unlock();
 uid = current_uid();  /* uses rcu_read_lock internally */
 ```
 
-## Debugging RCU
+## Debugging RCU {#debugging-rcu}
 
 ```bash
 # Check for RCU stalls (CPUs stuck in read-side critical section):
@@ -368,7 +368,7 @@ kprobe:synchronize_rcu { @[kstack] = count(); }' &
 # Shows who is calling synchronize_rcu (the expensive operation)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [RCU in Memory Management](../mm/rcu-mm.md) — How RCU is used in the mm subsystem
 - [Spinlock](spinlock.md) — For write-heavy short critical sections

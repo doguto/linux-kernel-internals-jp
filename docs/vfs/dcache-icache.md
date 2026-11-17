@@ -1,12 +1,12 @@
-# Dentry and Inode Caches
+# Dentry and Inode Caches {#dentry-and-inode-caches}
 
 > How VFS caches filesystem lookups for performance
 
-## Why three separate caches?
+## Why three separate caches? {#why-three-separate-caches}
 
 Linux maintains three distinct caches for filesystem data: the **dentry cache** (path lookups), the **inode cache** (file metadata), and the **page cache** (file contents). Understanding why they're separate — rather than one unified cache — explains many VFS design decisions.
 
-### Different data, different access patterns
+### Different data, different access patterns {#different-data-different-access-patterns}
 
 | Cache | What it stores | Typical size | Access pattern |
 |-------|---------------|-------------|----------------|
@@ -16,7 +16,7 @@ Linux maintains three distinct caches for filesystem data: the **dentry cache** 
 
 A `stat()` call needs dentry + inode but no page cache pages. A `read()` needs all three. An `ls -l` in a large directory needs many dentries and inodes but few or no page cache pages. Unifying the caches would require storing vastly different-sized objects in one structure, defeating slab allocation efficiency.
 
-### Why cache "file not found"?
+### Why cache "file not found"? {#why-cache-file-not-found}
 
 The dcache stores **negative dentries**: entries where the lookup returned ENOENT. This seems wasteful — why cache a failure?
 
@@ -24,11 +24,11 @@ Compilers generate negative lookups constantly. A C compiler searching for `<std
 
 Negative dentries are evicted under memory pressure just like positive ones, and they're invalidated immediately when the file is created (`d_instantiate()` replaces the negative dentry).
 
-### Why caches are essential
+### Why caches are essential {#why-caches-are-essential}
 
 Without caching, every path component lookup would require a disk read to find the directory entry. On a system doing thousands of `open()` calls per second, that would be catastrophically slow. VFS caches path lookups in the **dentry cache (dcache)** and stores open inodes in the **inode cache (icache)**.
 
-## The dentry cache (dcache)
+## The dentry cache (dcache) {#the-dentry-cache-dcache}
 
 The dcache is a hash table mapping `(parent_dentry, name) → dentry`. Once a path component is looked up, its dentry is cached so subsequent lookups skip the filesystem:
 
@@ -46,7 +46,7 @@ Second lookup of "/usr/bin/bash":
   "bash" → hit (entire path resolved from cache, no disk I/O)
 ```
 
-### Dentry states
+### Dentry states {#dentry-states}
 
 ```
 In-use (d_lockref.count > 0):
@@ -62,7 +62,7 @@ Negative (d_inode == NULL):
   Avoids repeated filesystem lookups for non-existent files.
 ```
 
-### dcache operations
+### dcache operations {#dcache-operations}
 
 Linux 2.6.38 added an RCU-based lock-free fast path for dcache lookups, contributed by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/). Most path lookups now complete without acquiring any lock or modifying any reference count; a seqlock on each dentry detects concurrent modifications and triggers a fallback to the slower reference-counted walk only when needed.
 
@@ -87,7 +87,7 @@ d_invalidate(dentry);
 d_mountpoint(dentry);
 ```
 
-### dcache size and statistics
+### dcache size and statistics {#dcache-size-and-statistics}
 
 ```bash
 # Current dcache size
@@ -103,7 +103,7 @@ cat /proc/slabinfo | grep dentry
 echo 1000000 > /proc/sys/fs/dentry-state  # not directly writable; tuned via vfs_cache_pressure
 ```
 
-### vfs_cache_pressure
+### vfs_cache_pressure {#vfscachepressure}
 
 Controls how aggressively the kernel reclaims dcache and icache under memory pressure:
 
@@ -118,11 +118,11 @@ echo 200 > /proc/sys/vm/vfs_cache_pressure
 echo 50 > /proc/sys/vm/vfs_cache_pressure
 ```
 
-## The inode cache (icache)
+## The inode cache (icache) {#the-inode-cache-icache}
 
 When a dentry's inode is loaded from disk (or created), it's stored in the inode cache. The inode stays in cache as long as it's referenced (either by a dentry or an open file).
 
-### Inode states
+### Inode states {#inode-states}
 
 ```
 In-use: referenced by at least one dentry or open file
@@ -135,7 +135,7 @@ Unreferenced: no dentries, no open files
   On the inode LRU list, eligible for eviction
 ```
 
-### Inode lifecycle
+### Inode lifecycle {#inode-lifecycle}
 
 ```c
 /* Allocate a new inode (called by filesystem) */
@@ -173,7 +173,7 @@ iput(inode)
     }
 ```
 
-### Eviction
+### Eviction {#eviction}
 
 When memory is low, the kernel calls `prune_icache()` to free unused inodes:
 
@@ -191,7 +191,7 @@ static long super_cache_scan(struct shrinker *shrink,
 
 Before an inode is freed, `evict_inode()` is called. For ext4, this writes back dirty data and releases journal resources.
 
-## Cache statistics
+## Cache statistics {#cache-statistics}
 
 ```bash
 # Slab allocator stats (incl. dentry and inode caches)
@@ -207,7 +207,7 @@ cat /proc/meminfo | grep -E "Slab|SReclaimable|SUnreclaim"
 vmstat -m | grep -E "dentry|inode"
 ```
 
-## Forcing cache drop (for testing)
+## Forcing cache drop (for testing) {#forcing-cache-drop-for-testing}
 
 ```bash
 # Drop all caches (pagecache + dcache + icache) — don't use in production
@@ -222,7 +222,7 @@ echo 1 > /proc/sys/vm/drop_caches
 
 This is useful for benchmarking to ensure you're measuring cold-cache performance. It doesn't free any dirty pages (they would be flushed first anyway).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — What dentries and inodes are
 - [Path Resolution](namei.md) — How the dcache is used during lookup

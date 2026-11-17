@@ -1,8 +1,8 @@
-# Block Layer Overview
+# Block Layer Overview {#block-layer-overview}
 
 > Key structures and the I/O submission path
 
-## Key data structures
+## Key data structures {#key-data-structures}
 
 The block layer uses three key structures:
 
@@ -16,7 +16,7 @@ gendisk                    ← represents the whole disk (/dev/sda)
         └── blk_mq_tag_set ← hardware queue mapping (blk-mq)
 ```
 
-### struct gendisk
+### struct gendisk {#struct-gendisk}
 
 `gendisk` represents a physical disk or virtual block device:
 
@@ -36,7 +36,7 @@ struct gendisk {
 };
 ```
 
-### struct block_device
+### struct block_device {#struct-block_device}
 
 One `block_device` per partition (or whole disk). This is what filesystems use:
 
@@ -52,7 +52,7 @@ struct block_device {
 };
 ```
 
-### struct request_queue
+### struct request_queue {#struct-request_queue}
 
 The `request_queue` is the central object for I/O management:
 
@@ -67,7 +67,7 @@ struct request_queue {
 };
 ```
 
-## The submit_bio() path
+## The submit_bio() path {#the-submit_bio-path}
 
 ```c
 /* Filesystem or direct I/O: */
@@ -92,7 +92,7 @@ blk_mq_submit_bio(bio)    ← blk-mq path (all modern drivers)
           → hardware command submission
 ```
 
-## /proc and /sys for block devices
+## /proc and /sys for block devices {#proc-and-sys-for-block-devices}
 
 ```bash
 # List block devices
@@ -120,7 +120,7 @@ cat /sys/block/sda/queue/rotational         # 1=HDD, 0=SSD/NVMe
 cat /sys/block/sda/queue/logical_block_size # typically 512 or 4096
 ```
 
-## I/O plug and unplug
+## I/O plug and unplug {#io-plug-and-unplug}
 
 For throughput, the block layer "plugs" the queue briefly to accumulate requests before submitting:
 
@@ -140,7 +140,7 @@ blk_finish_plug(&plug);
 
 This is analogous to TCP's Nagle algorithm: batching small operations into larger ones.
 
-## I/O schedulers and the NVMe problem
+## I/O schedulers and the NVMe problem {#io-schedulers-and-the-nvme-problem}
 
 The `elevator_queue` in `request_queue` is optional. The I/O scheduler sits between bio submission and hardware dispatch, reordering and merging requests. For HDDs this was essential — an elevator scheduler could turn random writes into sequential I/O, doubling throughput by reducing seek time.
 
@@ -154,7 +154,7 @@ NVMe devices therefore use the `none` scheduler by default. The scheduler infras
 
 The full story of how this led to the blk-mq redesign is in [blk-mq](blk-mq.md).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [bio and request structures](bio-request.md) — The I/O descriptor objects
 - [blk-mq](blk-mq.md) — The modern multi-queue dispatch mechanism

@@ -1,8 +1,8 @@
-# Runtime PM
+# Runtime PM {#runtime-pm}
 
 > Device-level power management: suspending idle devices while the system runs
 
-## What is Runtime PM?
+## What is Runtime PM? {#what-is-runtime-pm}
 
 Runtime PM allows individual devices to enter low-power states while the rest of the system continues running. A GPU can be powered off when no display is attached; a USB device can be suspended when idle; a PCIe NIC can cut power to its PHY between bursts.
 
@@ -15,7 +15,7 @@ System running (S0)
 └── NIC:  [active]
 ```
 
-## PM callbacks: struct dev_pm_ops
+## PM callbacks: struct dev_pm_ops {#pm-callbacks-struct-devpmops}
 
 Every driver can register power management callbacks:
 
@@ -61,7 +61,7 @@ static struct platform_driver mydriver = {
 };
 ```
 
-## Usage counting: get and put
+## Usage counting: get and put {#usage-counting-get-and-put}
 
 The core of Runtime PM is a **usage counter**. The device stays active while the counter is > 0; it may be suspended when it reaches 0.
 
@@ -95,7 +95,7 @@ The difference between `pm_runtime_put` variants:
 | `pm_runtime_put_autosuspend` | Queues a suspend after the autosuspend delay if count reaches 0 |
 | `pm_runtime_put_noidle` | Decrements but does not trigger suspend |
 
-## Autosuspend
+## Autosuspend {#autosuspend}
 
 Autosuspend adds a configurable delay before suspension. This prevents thrashing when a device is briefly idle between bursts of activity:
 
@@ -122,7 +122,7 @@ cat /sys/bus/usb/devices/1-1/power/autosuspend_delay_ms
 echo 1000 | sudo tee /sys/bus/usb/devices/1-1/power/autosuspend_delay_ms
 ```
 
-## Runtime PM state machine
+## Runtime PM state machine {#runtime-pm-state-machine}
 
 There is no `RPM_IDLE` status — idle is a *callback*, not a status the
 device parks in. The device remains `RPM_ACTIVE` the entire time its
@@ -164,7 +164,7 @@ The real states (`enum rpm_status` in `include/linux/pm.h`) are
 `RPM_INVALID`, `RPM_ACTIVE`, `RPM_RESUMING`, `RPM_SUSPENDED`,
 `RPM_SUSPENDING`, and `RPM_BLOCKED`.
 
-### The idle callback
+### The idle callback {#the-idle-callback}
 
 The idle callback is called when usage count reaches 0. It decides whether to actually suspend:
 
@@ -183,7 +183,7 @@ static int mydriver_runtime_idle(struct device *dev)
 }
 ```
 
-## struct device power fields
+## struct device power fields {#struct-device-power-fields}
 
 ```c
 /* include/linux/pm.h — abridged; the real struct has ~55 fields */
@@ -210,7 +210,7 @@ struct dev_pm_info {
 };
 ```
 
-## Power domains
+## Power domains {#power-domains}
 
 A power domain is a hardware block that can be independently powered off. Multiple devices may share a domain — the domain stays on until all devices in it are suspended.
 
@@ -242,7 +242,7 @@ struct generic_pm_domain {
 };
 ```
 
-### genpd usage (ARM SoC example)
+### genpd usage (ARM SoC example) {#genpd-usage-arm-soc-example}
 
 ```c
 /* SoC power domain setup (in platform code or device tree) */
@@ -259,7 +259,7 @@ pm_genpd_add_device(&gpu_pd, &gpu_dev);
    power_off() is called automatically */
 ```
 
-## Runtime PM in interrupt context
+## Runtime PM in interrupt context {#runtime-pm-in-interrupt-context}
 
 `pm_runtime_get_sync` may sleep (to wait for resume). This is not allowed in interrupt context. Use the non-blocking variant:
 
@@ -282,7 +282,7 @@ pm_runtime_put(dev);
 return IRQ_HANDLED;
 ```
 
-## Observing Runtime PM
+## Observing Runtime PM {#observing-runtime-pm}
 
 ```bash
 # Runtime PM status for all PCI devices
@@ -310,9 +310,9 @@ cat /sys/kernel/tracing/trace_pipe
 sudo powertop --html=powertop.html
 ```
 
-## Common pitfalls
+## Common pitfalls {#common-pitfalls}
 
-### Forgetting pm_runtime_enable
+### Forgetting pm_runtime_enable {#forgetting-pmruntimeenable}
 
 ```c
 /* WRONG: runtime PM is disabled by default */
@@ -328,7 +328,7 @@ static int mydriver_probe(struct platform_device *pdev)
  * and returns -EACCES. */
 ```
 
-### Not balancing get/put
+### Not balancing get/put {#not-balancing-getput}
 
 ```c
 /* WRONG: skipping put on error path */
@@ -352,7 +352,7 @@ static int mydriver_do_io(struct device *dev)
 }
 ```
 
-### Calling get_sync in atomic context
+### Calling get_sync in atomic context {#calling-get_sync-in-atomic-context}
 
 ```c
 /* WRONG: pm_runtime_get_sync may sleep */
@@ -360,9 +360,9 @@ spin_lock_irqsave(&lock, flags);
 pm_runtime_get_sync(dev);  /* may sleep! BUG */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `struct dev_pm_ops`, `struct dev_pm_info`, and the `SET_RUNTIME_PM_OPS()`/`SET_SYSTEM_SLEEP_PM_OPS()` macros
 - [include/linux/pm_runtime.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_runtime.h) — the `pm_runtime_get*()`/`pm_runtime_put*()` inline wrappers and autosuspend helpers
@@ -370,17 +370,17 @@ pm_runtime_get_sync(dev);  /* may sleep! BUG */
 - [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain` and `enum gpd_status`
 - [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — `pm_genpd_add_device()` and the genpd core (moved here from `drivers/base/power/domain.c` during the driver-core reorganization)
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Power Domains and genpd](power-domains.md) — full treatment of `struct generic_pm_domain`, governors, and the devicetree binding
 - [cpufreq](cpufreq.md) — CPU-level frequency/voltage scaling
 - [System Suspend](suspend.md) — system-wide sleep states
 - [Device Drivers: platform driver](../drivers/platform-driver.md) — devm_ and probe flow
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Runtime power management](https://lwn.net/Articles/347573/) — Jonathan Corbet, August 19, 2009; Rafael Wysocki's original runtime PM patch set and the `runtime_suspend`/`runtime_resume`/`runtime_idle` callbacks described above
 
-### External
+### External {#external}
 
 - [Documentation/power/runtime_pm.rst](https://docs.kernel.org/power/runtime_pm.html) — upstream reference for the runtime PM API, usage-count rules, and locking

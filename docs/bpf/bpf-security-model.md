@@ -1,12 +1,12 @@
-# BPF Security Model
+# BPF Security Model {#bpf-security-model}
 
 > Capabilities, the unprivileged-BPF knob, and BPF as a security module
 
-## Two different security questions
+## Two different security questions {#two-different-security-questions}
 
 [The verifier](bpf-verifier.md) answers one question: *given that a program is allowed to load, will it behave safely?* This page answers a different one: *who is allowed to load a program in the first place, and what can a BPF program itself be trusted to enforce?* The two are related — the whole point of a sound verifier is that the answer to the second question can be "more people than just root" — but they're separate mechanisms, and the [BPF war stories](war-stories.md) page documents the kernel gradually losing confidence that the verifier alone was strong enough, which is why the capability and sysctl layer below exists at all.
 
-## The capability model
+## The capability model {#the-capability-model}
 
 Loading a BPF program or creating a BPF map goes through the same central check, `bpf_token_capable()`, defined in `kernel/bpf/token.c` (only declared in `include/linux/bpf.h`):
 
@@ -32,11 +32,11 @@ bool bpf_token_capable(const struct bpf_token *token, int cap)
 
 `CAP_SYS_ADMIN` is always an accepted fallback for any specific BPF capability check — a process with `CAP_SYS_ADMIN` doesn't additionally need `CAP_BPF`. `CAP_BPF` itself is the specific, narrower capability, added in Linux 5.8 (confirmed absent from `include/uapi/linux/capability.h` at the v5.7 tag, present at v5.8) specifically so BPF program loading and map creation no longer required the much broader `CAP_SYS_ADMIN`. `CAP_PERFMON` is checked separately for the riskier verifier relaxations — `bpf_allow_ptr_leaks()`, `bpf_allow_uninit_stack()`, and bypassing the Spectre v1/v4 mitigations (`bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`), all declared right next to `bpf_token_capable()` in `include/linux/bpf.h`. Without a token, the check falls back to `init_user_ns` and behaves like a plain `capable()` check; with one, it's evaluated against the token's own user namespace, plus an additional LSM veto via `security_bpf_token_capable()`.
 
-### BPF tokens: delegating capabilities into a namespace
+### BPF tokens: delegating capabilities into a namespace {#bpf-tokens-delegating-capabilities-into-a-namespace}
 
 The `token` argument above isn't decorative. `kernel/bpf/token.c` (confirmed absent at v6.8, present at v6.9) lets a process holding real capabilities on the host mount a `bpffs` instance with `delegate_cmds=`, `delegate_maps=`, `delegate_progs=`, and `delegate_attachs=` options (`kernel/bpf/inode.c`), then hand a file descriptor for that mount to an unprivileged process in a different user namespace — a container, for instance. That process calls `bpf()` with `BPF_TOKEN_CREATE` to mint a token from the fd, and passes the token on subsequent `BPF_MAP_CREATE`/`BPF_PROG_LOAD` calls. Before the ordinary capability check runs, `bpf_token_get_from_fd()`, `bpf_token_allow_cmd()`, `bpf_token_allow_prog_type()`, and `bpf_token_allow_map_type()` (all `kernel/bpf/token.c`) gate whether the token covers the specific command, program type, or map type being requested. It's the mechanism that makes "a container can load *this specific* XDP program without being root" possible without loosening the mounter's own trust boundary.
 
-## `unprivileged_bpf_disabled`: three states, not two
+## `unprivileged_bpf_disabled`: three states, not two {#unprivilegedbpfdisabled-three-states-not-two}
 
 The `kernel.unprivileged_bpf_disabled` sysctl (`kernel/bpf/syscall.c`) gates whether a process without `CAP_BPF` can create BPF maps or load BPF programs at all — both `map_create_alloc()` (called from `map_create()`, the `BPF_MAP_CREATE` handler, checking `sysctl_unprivileged_bpf_disabled && !bpf_token_capable(token, CAP_BPF)`) and `bpf_prog_load()` (checking `sysctl_unprivileged_bpf_disabled && !bpf_cap`) refuse outright if it's true. `map_create_alloc()` is a recent split of the map-creation path — on older kernels the equivalent check sits directly in `map_create()`. But the value isn't a boolean; there are three states, and the difference between two of them matters:
 
@@ -54,7 +54,7 @@ This isn't a hypothetical distinction. Two separate commits are involved: `08389
 
 Writing to the sysctl at all requires `CAP_SYS_ADMIN`, regardless of the current or target value.
 
-## What unprivileged BPF can still do
+## What unprivileged BPF can still do {#what-unprivileged-bpf-can-still-do}
 
 On a kernel that still allows unprivileged BPF (`unprivileged_bpf_disabled` at 0 — not the shipped-upstream default since 5.16, but still common on kernels built without `CONFIG_BPF_UNPRIV_DEFAULT_OFF`, or with the sysctl explicitly re-enabled), a process without `CAP_BPF` is restricted well beyond what the verifier alone would allow:
 
@@ -65,7 +65,7 @@ On a kernel that still allows unprivileged BPF (`unprivileged_bpf_disabled` at 0
 
 None of this is enforced by the verifier's safety proof — it's a separate, capability-gated policy layered on top of it, and it's the layer that actually changed in response to the verifier CVEs on the [war stories page](war-stories.md).
 
-## BPF as a security module: BPF LSM
+## BPF as a security module: BPF LSM {#bpf-as-a-security-module-bpf-lsm}
 
 Everything above is about controlling who can load BPF. BPF LSM inverts the relationship: it lets a BPF program *become* part of the kernel's own access-control decision, attached directly to [LSM](../security/lsm.md) hooks.
 
@@ -88,9 +88,9 @@ Each `bpf_lsm_<hookname>()` stub is registered as an attachable BTF function (`B
 
 Loading an LSM-attached BPF program is still gated by the ordinary capability rules above, not a separate, more permissive path: `BPF_PROG_TYPE_LSM` isn't one of the two program types unprivileged loading allows, so it requires `CAP_BPF`, on top of `CONFIG_BPF_LSM` being built in at all — and because `BPF_PROG_TYPE_LSM` is also one of the program types `is_perfmon_prog_type()` (`kernel/bpf/syscall.c`) covers, loading one requires `CAP_PERFMON` as well. BPF LSM changes what a *sufficiently privileged* BPF program is allowed to influence, not who's allowed to load one.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/bpf/syscall.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/syscall.c) — `bpf_unpriv_handler()`, the `unprivileged_bpf_disabled` sysctl table entry, and the capability checks in program/map creation
 - [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — the `bpf_token_capable()` declaration, `bpf_allow_ptr_leaks()`, `bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`
@@ -100,7 +100,7 @@ Loading an LSM-attached BPF program is still gated by the ordinary capability ru
 - [kernel/bpf/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/Kconfig) — `CONFIG_BPF_LSM` and its dependencies
 - [include/uapi/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf.h) — `BPF_PROG_TYPE_LSM`, `BPF_LSM_MAC`, `BPF_LSM_CGROUP`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [BPF Verifier](bpf-verifier.md) — the safety proof this page's capability layer sits on top of
 - [War Stories](war-stories.md) — why the capability model exists: verifier CVEs and the 2021 unprivileged-BPF-off-by-default change

@@ -1,8 +1,8 @@
-# System Calls
+# System Calls {#system-calls}
 
 > The contract between userspace and the kernel
 
-## What system calls are
+## What system calls are {#what-system-calls-are}
 
 A system call is a controlled entry point into the kernel. It:
 
@@ -33,7 +33,7 @@ glibc: write(fd, buf, len)
   │  return rax (bytes written, or -errno)
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -47,7 +47,7 @@ glibc: write(fd, buf, len)
 | [Syscall Restart Mechanisms](restart-block.md) | ERESTARTSYS, ERESTART_RESTARTBLOCK, restart_block, restart_syscall() |
 | [Syscall War Stories](war-stories.md) | Real bugs, ABI breaks, and lessons from the syscall interface |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # List all syscalls with numbers

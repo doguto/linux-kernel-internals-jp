@@ -1,4 +1,4 @@
-# Getting User Pages (GUP)
+# Getting User Pages (GUP) {#getting-user-pages-gup}
 
 > `get_user_pages()` vs `pin_user_pages()`, FOLL_LONGTERM, fast GUP, and why pinning fights copy-on-write and page migration
 
@@ -8,7 +8,7 @@ This page is about the *why*: why GUP has to exist, why it was split into two AP
 
 ---
 
-## The problem GUP solves
+## The problem GUP solves {#the-problem-gup-solves}
 
 A user virtual address is a *lease*, not a deed. The page it names can be, at almost any moment:
 
@@ -37,7 +37,7 @@ The caller-supplied `gup_flags` (`FOLL_WRITE`, `FOLL_LONGTERM`, …) encode inte
 
 ---
 
-## get vs pin: two APIs that look identical and mean opposite things
+## get vs pin: two APIs that look identical and mean opposite things {#get-vs-pin-two-apis-that-look-identical-and-mean-opposite-things}
 
 Since Linux 5.6 there are two families that appear interchangeable:
 
@@ -62,7 +62,7 @@ The bias scheme is a pragmatic hack — on a huge compound page the count was sh
 
 ---
 
-## FOLL_LONGTERM: the pin that fights the whole memory manager
+## FOLL_LONGTERM: the pin that fights the whole memory manager {#foll_longterm-the-pin-that-fights-the-whole-memory-manager}
 
 A short pin is a nuisance; a *long* pin is a structural problem. `FOLL_LONGTERM` marks a pin that may last seconds, minutes, or the lifetime of an RDMA registration — and an indefinitely unmovable page is at war with two subsystems designed around the assumption that any page can be relocated:
 
@@ -73,7 +73,7 @@ The kernel's answer is **migrate-before-pin**: a `FOLL_LONGTERM` request first t
 
 ---
 
-## Fast GUP: walking page tables without the locks
+## Fast GUP: walking page tables without the locks {#fast-gup-walking-page-tables-without-the-locks}
 
 The straightforward GUP path takes `mmap_lock` and walks the page tables under it. For a high-IOPS direct-I/O or io_uring workload doing millions of pins per second, that lock and the full walk are pure overhead ([io_uring fixed buffers](../io-uring/fixed-buffers.md) exists precisely to amortize it away). So there is a **lockless fast path**, `get_user_pages_fast()` / `pin_user_pages_fast()` — Nick Piggin's original x86 work in 2.6.27 ([LWN: Toward better direct I/O scalability](https://lwn.net/Articles/275808/)):
 
@@ -84,7 +84,7 @@ This is a textbook lockless-read pattern: optimistic, verify-after, fall back on
 
 ---
 
-## Why GUP is a bug magnet: the copy-on-write collision
+## Why GUP is a bug magnet: the copy-on-write collision {#why-gup-is-a-bug-magnet-the-copy-on-write-collision}
 
 Almost every notorious GUP bug is the same shape: **a page was pinned for one purpose while copy-on-write changed what that page *means*.** Two canonical examples (told in full in [Copy-on-Write](cow.md) and the [CVE case studies](war-stories-cves.md)):
 
@@ -95,7 +95,7 @@ The deep fix was architectural, not a patch: the `FOLL_PIN` split and `PG_anon_e
 
 ---
 
-## The caller taxonomy
+## The caller taxonomy {#the-caller-taxonomy}
 
 The [kernel documentation](https://docs.kernel.org/core-api/pin_user_pages.html) classifies GUP callers into cases, which is the fastest way to choose the right call:
 
@@ -111,7 +111,7 @@ You never pass `FOLL_PIN` yourself — it is internal to GUP and "should not app
 
 ---
 
-## Observing pins
+## Observing pins {#observing-pins}
 
 ```bash
 # VmPin = pages pinned unmovable; drivers that account long-term pins
@@ -135,7 +135,7 @@ dmesg | grep -iE "alloc_contig|cma:.*fail|migrat"
 
 ---
 
-## Common issues
+## Common issues {#common-issues}
 
 **"CMA allocation failed" under memory pressure.** Almost always a page in the CMA region is pinned by an in-flight `get_user_pages()`/DMA and cannot be migrated out. The fix is upstream in the driver (use bounce buffers, or don't long-term-pin CMA pages), not in tuning.
 
@@ -145,7 +145,7 @@ dmesg | grep -iE "alloc_contig|cma:.*fail|migrat"
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 | Change | Linux version | Why it matters here |
 |--------|--------------|---------------------|
@@ -159,15 +159,15 @@ dmesg | grep -iE "alloc_contig|cma:.*fail|migrat"
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [Documentation/core-api/pin_user_pages.rst](https://docs.kernel.org/core-api/pin_user_pages.html) — the authoritative contract: FOLL_GET vs FOLL_PIN, the caller cases, the counting bias
 - [mm/gup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c) — `get_user_pages*`, `pin_user_pages*`, `follow_page_mask()`, and the `gup_fast` lockless walk
 - [include/linux/mm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h) — the `FOLL_*` flag definitions
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Copy-on-Write](cow.md) — the GUP/COW interaction in full, and `PG_anon_exclusive`
 - [CVE Case Studies](war-stories-cves.md) — Dirty COW and the FOLL_PIN redesign as incident history
@@ -177,7 +177,7 @@ dmesg | grep -iE "alloc_contig|cma:.*fail|migrat"
 - [RCU in Memory Management](rcu-mm.md) — the lockless page-table walk fast GUP relies on
 - [The Kernel Address Space](kernel-address-space.md) — where the pages GUP returns actually live (the direct map)
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Explicit pinning of user-space pages](https://lwn.net/Articles/807108/) — John Hubbard introduces `pin_user_pages()` and the counting bias
 - [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) — Vlastimil Babka on the pin-vs-COW data-leak class

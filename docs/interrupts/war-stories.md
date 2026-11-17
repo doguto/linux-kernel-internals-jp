@@ -1,30 +1,30 @@
-# War Stories: Interrupt and IRQ-Affinity Bugs
+# War Stories: Interrupt and IRQ-Affinity Bugs {#war-stories-interrupt-and-irq-affinity-bugs}
 
 > Four incidents in the machinery that decides which CPU handles an interrupt and cleans up after it moves — two CVEs, one two-year silent-failure gap, and one use-after-free in a rarely-exercised notifier path that took two separate fixes to fully close
 
 Interrupt affinity is deceptively simple from the outside — "run this interrupt's handler on that CPU" — and genuinely intricate underneath, because changing it safely means coordinating in-flight interrupt delivery, per-CPU vector allocation, CPU hotplug, and (for drivers that want to know) an asynchronous notification callback, all without ever leaving a window where the same interrupt could be handled twice or a resource freed while something still points at it. Every incident below lives in that coordination layer, not in interrupt handling itself.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix landed in mainline — newest first.
 
-### [The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order](war-stories/vector-leak-cpu-offline.md)
+### [The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order](war-stories/vector-leak-cpu-offline.md) {#the-vector-leak-that-needed-two-cpus-to-go-offline-in-the-wrong-order}
 **Linux 6.10 (July 2024) · CVE-2024-31076**
 A deferred interrupt-affinity change and a CPU hot-unplug, interleaved in one specific rare order, meant one x86 interrupt vector was never returned to `vector_matrix` — a slow leak, one vector at a time, on systems that offline and re-online CPUs routinely.
 
-### [The IPI Verifier That Trusted Its Own Caller](war-stories/ipi-send-verify-null-deref.md)
+### [The IPI Verifier That Trusted Its Own Caller](war-stories/ipi-send-verify-null-deref.md) {#the-ipi-verifier-that-trusted-its-own-caller}
 **Linux 6.3 (April 2023) · CVE-2023-53332**
 `ipi_send_verify()` dereferenced its `irq_data` parameter before checking whether that parameter was `NULL` — an invalid IPI interrupt number turned a clean error return into a kernel oops.
 
-### [The Warning That Vector Space Was Silently Breaking Affinity](war-stories/vector-exhaustion-silent-affinity-break.md)
+### [The Warning That Vector Space Was Silently Breaking Affinity](war-stories/vector-exhaustion-silent-affinity-break.md) {#the-warning-that-vector-space-was-silently-breaking-affinity}
 **Linux 5.4 (November 2019) · not a CVE**
 When every CPU in a reserved affinity mask had exhausted its 202 assignable interrupt vectors, activating the interrupt silently widened the mask with no log message — for about two years, an administrator had no way to learn their affinity request had been quietly overruled.
 
-### [The Affinity Notifier That Outlived Its Own Reference Count](war-stories/affinity-notifier-uaf.md)
+### [The Affinity Notifier That Outlived Its Own Reference Count](war-stories/affinity-notifier-uaf.md) {#the-affinity-notifier-that-outlived-its-own-reference-count}
 **Linux 5.2 (July 2019) · not a CVE**
 Replacing an affinity-change notifier dropped the old one's reference count without checking whether its callback was still sitting in a workqueue — a use-after-free waiting for a very specific timing window to be hit.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | Vector leak (CPU offline) | IPI verifier NULL deref | Vector exhaustion warning | Affinity-notifier UAF |
 |---------|:---:|:---:|:---:|:---:|
@@ -42,7 +42,7 @@ Replacing an affinity-change notifier dropped the old one's reference count with
 
 **Only one of the four incidents here — the vector-exhaustion warning — isn't a "wrong behavior" bug at all.** The silent CPU-set fallback it made visible was arguably correct behavior; the gap was purely that nothing told an administrator it had happened. It's the only incident on this page whose fix is a single diagnostic line rather than a change to what the kernel actually does.
 
-## See also
+## See also {#see-also}
 
 - [Interrupt Handling Overview](interrupts.md) — the top/bottom-half split and execution contexts these bugs assume
 - [IRQ Affinity and CPU Isolation](irq-affinity.md) — the affinity-configuration interface three of the four incidents involve directly

@@ -1,30 +1,30 @@
-# War Stories: Device Drivers
+# War Stories: Device Drivers {#war-stories-device-drivers}
 
 > Two CVEs, one multi-year default-rollout saga, and the origin story behind it all — every page here lives in the driver core and its supporting kobject/sysfs infrastructure (`drivers/base/`, `lib/kobject.c`), the code that decides when a device is ready to be probed and how its identity is exposed to userspace, rather than in any individual hardware driver
 
 The driver core sits underneath every bus-specific and hardware-specific driver in the kernel, and these four incidents show two different ways it can go wrong. Two pages — the uevent deadlock and the kobject path race — are about the same narrow problem: safely reading and rendering a device's identity (`dev->driver`, a kobject's name) while that identity can change out from under the reader. The other two are about a completely different axis: *when* a device is allowed to probe at all, relative to whatever it depends on. The deferred-probe origin story explains why that axis exists in the first place; the fw_devlink saga is what happened when the kernel tried to make dependency-aware probing the default behavior for everyone, automatically, without every driver having to ask for it.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix (or, for the origin story, the original merge) landed in mainline — newest first.
 
-### [The uevent_show() Fix That Deadlocked Driver Detach](war-stories/uevent-show-deadlock.md)
+### [The uevent_show() Fix That Deadlocked Driver Detach](war-stories/uevent-show-deadlock.md) {#the-uevent_show-fix-that-deadlocked-driver-detach}
 **Linux 6.11 (September 2024) · CVE-2024-44952 (rejected)**
 A 2024 fix for a real `dev->driver` NULL-pointer race added `device_lock()` to a sysfs read path, recreating a deadlock against driver detach that lockdep couldn't see — `device_lock()` is deliberately exempted from lockdep's cycle detector, and only CXL's own local lockdep key ever caught it.
 
-### [The kobject Path Race That Needed a Retry, Not a Lock](war-stories/kobject-path-race.md)
+### [The kobject Path Race That Needed a Retry, Not a Lock](war-stories/kobject-path-race.md) {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
 **Linux 6.3 (April 2023) · CVE-2023-45863**
 `kobject_get_path()` measured a sysfs path's length in one unsynchronized pass and filled the buffer in a second — a concurrent network-interface rename between the two passes could grow a name enough to overflow the undersized buffer, a bug that sat in the kernel's git history since its very first tag in 2005.
 
-### [fw_devlink=on: The Default That Broke Boot Twice Before It Stuck](war-stories/fw-devlink-boot-breaking.md)
+### [fw_devlink=on: The Default That Broke Boot Twice Before It Stuck](war-stories/fw-devlink-boot-breaking.md) {#fw_devlinkon-the-default-that-broke-boot-twice-before-it-stuck}
 **Linux 5.13 (June 2021) · not a CVE**
 Enabling automatic probe-order enforcement from firmware-described device graphs by default broke boot on multiple platforms twice in three months — and the revert commit's own "for 5.12" framing turned out to be moot, since Linux 5.12 shipped with the old default the entire time.
 
-### [The Deferred-Probe Origin Story](war-stories/deferred-probe-origin.md)
+### [The Deferred-Probe Origin Story](war-stories/deferred-probe-origin.md) {#the-deferred-probe-origin-story}
 **Linux 3.4 (May 2012) · not a CVE**
 An OLPC laptop's camera driver — really three separate devices — failed to initialize built-in but worked fine as a module, because the kernel's static built-in link order had no way to express that one device depended on another being ready first.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | uevent deadlock | kobject path race | fw_devlink saga | deferred-probe origin |
 |---------|:---:|:---:|:---:|:---:|
@@ -42,7 +42,7 @@ An OLPC laptop's camera driver — really three separate devices — failed to i
 
 **Only one of these four is a rejected CVE, and it's rejected for administrative reasons, not because the underlying deadlock wasn't real.** The lockdep splat behind CVE-2024-44952 is a genuine, reproducible AB-BA deadlock on real CXL hardware; the CVE record itself gives no bug-specific rationale for withdrawal, consistent with the kernel CVE team's general practice of assigning CVE numbers to nearly any bugfix and occasionally un-assigning them administratively afterward.
 
-## See also
+## See also {#see-also}
 
 - [Linux Device Model](device-model.md) — `struct device`, buses, drivers, and classes, the framework every page here operates inside
 - [Device Tree](device-tree.md) — the firmware description format fw_devlink parses to build its dependency graph, and that decades later gave deferred-probe's `-EPROBE_DEFER` an automatic trigger it didn't originally have

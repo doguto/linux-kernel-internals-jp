@@ -1,8 +1,8 @@
-# UDP Socket Internals
+# UDP Socket Internals {#udp-socket-internals}
 
 > struct udp_sock, sendmsg/recvmsg paths, UDP segmentation offload, and multicast
 
-## UDP in the kernel
+## UDP in the kernel {#udp-in-the-kernel}
 
 UDP is connectionless: there is no handshake, no retransmission, no flow control. The kernel's job is minimal — add a UDP header and hand the packet to IP.
 
@@ -21,7 +21,7 @@ Application:
     IP layer → routing → Ethernet → wire
 ```
 
-## struct udp_sock
+## struct udp_sock {#struct-udp_sock}
 
 ```c
 /* include/linux/udp.h */
@@ -52,9 +52,9 @@ struct udp_sock {
 };
 ```
 
-## UDP send path
+## UDP send path {#udp-send-path}
 
-### udp_sendmsg
+### udp_sendmsg {#udp_sendmsg}
 
 ```c
 /* net/ipv4/udp.c */
@@ -103,7 +103,7 @@ int udp_sendmsg(struct sock *sk, struct msghdr *msg, size_t len)
 }
 ```
 
-### UDP corking (MSG_MORE)
+### UDP corking (MSG_MORE) {#udp-corking-msg_more}
 
 ```c
 /* Corking: accumulate data before sending (like TCP_CORK) */
@@ -116,9 +116,9 @@ sendmsg(fd, &msg2, MSG_MORE);  /* buffered */
 sendmsg(fd, &msg3, 0);         /* flush: all three sent in one UDP packet */
 ```
 
-## UDP receive path
+## UDP receive path {#udp-receive-path}
 
-### Incoming packet routing
+### Incoming packet routing {#incoming-packet-routing}
 
 ```c
 /* net/ipv4/udp.c */
@@ -150,7 +150,7 @@ static int __udp4_lib_rcv(struct sk_buff *skb, struct udp_table *udptable,
 }
 ```
 
-### Delivering to socket receive queue
+### Delivering to socket receive queue {#delivering-to-socket-receive-queue}
 
 ```c
 static int udp_queue_rcv_one_skb(struct sock *sk, struct sk_buff *skb)
@@ -193,7 +193,7 @@ int udp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, ...)
 }
 ```
 
-## UDP socket hash table
+## UDP socket hash table {#udp-socket-hash-table}
 
 ```c
 /* Sockets are stored in a hash table keyed by local port: */
@@ -210,7 +210,7 @@ struct udp_table {
 /* 3. If multiple match, prefer connected sockets (4-tuple match) */
 ```
 
-## UDP GSO (Generic Segmentation Offload)
+## UDP GSO (Generic Segmentation Offload) {#udp-gso-generic-segmentation-offload}
 
 For high-throughput UDP (e.g., QUIC, game servers), UDP GSO allows sending multiple UDP payloads in one syscall:
 
@@ -245,7 +245,7 @@ sendmsg(fd, &msg, 0);
 /* Kernel sends 10 separate UDP packets, one syscall! */
 ```
 
-### UDP GRO (Generic Receive Offload)
+### UDP GRO (Generic Receive Offload) {#udp-gro-generic-receive-offload}
 
 ```c
 /* Enable UDP GRO on receive: */
@@ -268,7 +268,7 @@ for (struct cmsghdr *cm = CMSG_FIRSTHDR(&msg); cm;
 }
 ```
 
-## Multicast
+## Multicast {#multicast}
 
 ```c
 /* Join a multicast group: */
@@ -295,7 +295,7 @@ struct sockaddr_in dest = {
 sendto(fd, data, len, 0, (struct sockaddr *)&dest, sizeof(dest));
 ```
 
-### Kernel multicast delivery
+### Kernel multicast delivery {#kernel-multicast-delivery}
 
 ```c
 /* net/ipv4/udp.c: deliver to multiple sockets in multicast group */
@@ -317,7 +317,7 @@ static int __udp4_lib_mcast_deliver(struct net *net, struct sk_buff *skb,
 }
 ```
 
-## UDP performance tuning
+## UDP performance tuning {#udp-performance-tuning}
 
 ```bash
 # Increase receive buffer (reduces drops under load):
@@ -346,7 +346,7 @@ tracepoint:udp:udp_fail_queue_rcv_skb {
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [TCP](tcp.md) — connection-oriented transport
 - [Socket Layer](socket-layer.md) — socket() create, bind, sendmsg

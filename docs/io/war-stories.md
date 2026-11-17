@@ -1,4 +1,4 @@
-# War Stories: I/O Bugs, Regressions, and Data Loss Incidents
+# War Stories: I/O Bugs, Regressions, and Data Loss Incidents {#war-stories-io-bugs-regressions-and-data-loss-incidents}
 
 > Real incidents from Linux I/O subsystem history — what broke, why, and what the kernel learned
 
@@ -8,9 +8,9 @@ This page documents five well-known I/O incidents drawn from public kernel commi
 
 ---
 
-## Case 1: ext4 `data=writeback` and stale data exposure after a crash
+## Case 1: ext4 `data=writeback` and stale data exposure after a crash {#case-1-ext4-datawriteback-and-stale-data-exposure-after-a-crash}
 
-### Before state
+### Before state {#before-state}
 
 ext4 inherited from ext3 three journaling modes that trade durability for performance:
 
@@ -22,13 +22,13 @@ In `data=ordered` mode, the kernel enforces an ordering: data blocks go to disk,
 
 `data=writeback` was offered as a performance option. For workloads that did their own internal durability management (databases, certain log-structured applications), the overhead of the ordered flush was unnecessary. The assumption was that callers using `data=writeback` understood the trade-off.
 
-### The change
+### The change {#the-change}
 
 The trigger was not a single kernel change but a configuration choice made by system administrators and distributions seeking better write throughput. The mount option `data=writeback` was sometimes recommended in performance guides, particularly for ext4 on servers with battery-backed write caches, where the assumption was that the hardware ensured ordering.
 
 The combination that caused data exposure: truncating a file (or overwriting it by truncating and rewriting) followed by a crash before the new data was flushed, but after the journal metadata commit.
 
-### Observed regression
+### Observed regression {#observed-regression}
 
 After a crash and journal recovery, users found that files contained **stale data** — data that had previously belonged to a different file, or to an earlier version of the same file, rather than the newly written data or zeros.
 
@@ -41,7 +41,7 @@ The scenario:
 
 The result was that opening a recovered file could expose data from a previously deleted file — a security and data integrity problem. This behavior was documented in the ext4 documentation and in LWN's coverage of ext4 journaling modes.
 
-### Why it happened
+### Why it happened {#why-it-happened}
 
 The root cause is the decoupling of metadata journaling from data writeback in `data=writeback` mode. ext4's journal guarantees metadata consistency: after recovery, the filesystem structure is coherent. But metadata consistency does not imply data integrity — it only means the pointers are valid, not that the pointed-to data is what the application wrote.
 
@@ -55,7 +55,7 @@ The unwritten data issue is specific to block reuse: a newly allocated block inh
 
 The ext4 documentation is explicit about this: "`data=writeback` mode does not maintain data ordering and is known to lead to stale data exposure after a crash." But this warning was not always read before enabling the option.
 
-### Resolution
+### Resolution {#resolution}
 
 The resolution for users was to not use `data=writeback` unless the workload was specifically designed for it (i.e., the application maintained its own write ordering and durability, as a database does with `fsync`). The default `data=ordered` mode does not have this vulnerability.
 
@@ -77,7 +77,7 @@ mount -o data=writeback /dev/sdX /mnt
 
 Some distributions removed `data=writeback` from their tuning guides after the exposure pattern became widely understood. The ext4 development team also documented the interaction clearly in `Documentation/filesystems/ext4/` in the kernel source tree.
 
-### What it taught us
+### What it taught us {#what-it-taught-us}
 
 **"Metadata consistency" is not "data integrity."** A journaled filesystem can guarantee that the filesystem structure is coherent after recovery without guaranteeing that the data in files is what the application wrote. These are different properties, and conflating them leads to dangerous configurations.
 
@@ -102,9 +102,9 @@ Some distributions removed `data=writeback` from their tuning guides after the e
 
 ---
 
-## Case 2: `O_DIRECT` and buffered I/O coherency — mixing modes corrupts reads
+## Case 2: `O_DIRECT` and buffered I/O coherency — mixing modes corrupts reads {#case-2-o_direct-and-buffered-io-coherency-mixing-modes-corrupts-reads}
 
-### Before state
+### Before state {#before-state_1}
 
 Linux provides two I/O paths to the same file:
 
@@ -113,13 +113,13 @@ Linux provides two I/O paths to the same file:
 
 The correct mental model for the page cache is that it is a coherent cache: any read should see the most recently written data, regardless of how that data was written. Under the buffered I/O path alone this is guaranteed — everyone shares the same in-memory pages.
 
-### The change
+### The change {#the-change_1}
 
 The problem arises when *both* paths are active simultaneously on the same file. This happens in practice: a database uses `O_DIRECT` for its own I/O, but a backup tool, monitoring agent, or `rsync` opens the same file without `O_DIRECT`, reading through the page cache.
 
 The expectation of users encountering this situation was reasonable: surely the kernel would ensure that a buffered read of a file returns the data that was most recently written, regardless of which path wrote it?
 
-### Observed regression
+### Observed regression {#observed-regression_1}
 
 When an `O_DIRECT` write was followed by a buffered read of the same file region, the buffered read could return **stale data** — the content of the page cache from before the `O_DIRECT` write, not the freshly written data.
 
@@ -139,7 +139,7 @@ The `open(2)` man page documents this explicitly:
 
 But "undefined" was often interpreted as a theoretical concern rather than a routine production hazard, especially when tools like backup agents and database engines operated on the same files.
 
-### Why it happened
+### Why it happened {#why-it-happened_1}
 
 The fundamental issue is that `O_DIRECT` writes are invisible to the page cache. From the page cache's perspective, the data at a given offset is what it last cached — it has no knowledge of an `O_DIRECT` write that went around it.
 
@@ -159,7 +159,7 @@ This is a classic TOCTOU (time-of-check-to-time-of-use) race: the invalidation a
 
 The problem was acknowledged in the kernel, in glibc documentation, and in database documentation. PostgreSQL's documentation explicitly warned users not to mix buffered and direct I/O on database files. The `open(2)` man page on Linux carried the "undefined behavior" note precisely because the kernel developers recognized the race was not fully closed.
 
-### Resolution
+### Resolution {#resolution_1}
 
 The correct resolution for applications is to avoid mixing `O_DIRECT` and buffered I/O on the same file. In practice this means:
 
@@ -182,7 +182,7 @@ int fd_buffered = open("dbfile", O_RDONLY);  /* page cache path */
 
 Modern Linux (v5.x and later) made further improvements to the `O_DIRECT` invalidation path to shrink the race window, but the fundamental advice remains: do not mix modes on the same file.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_1}
 
 **"Undefined behavior" in system call documentation is a real warning, not a theoretical footnote.** When the `open(2)` man page says mixing `O_DIRECT` and buffered I/O produces undefined results, it means there is a real race that the kernel cannot fully close without sacrificing the performance properties that make `O_DIRECT` valuable.
 
@@ -207,9 +207,9 @@ Modern Linux (v5.x and later) made further improvements to the `O_DIRECT` invali
 
 ---
 
-## Case 3: `fsync()` after `rename()` is not enough — losing files after a crash
+## Case 3: `fsync()` after `rename()` is not enough — losing files after a crash {#case-3-fsync-after-rename-is-not-enough-losing-files-after-a-crash}
 
-### Before state
+### Before state {#before-state_2}
 
 The canonical pattern for safely overwriting a file in a crash-safe manner is the "write to temp, then rename" idiom:
 
@@ -226,13 +226,13 @@ The intent is to ensure that either the old `file` or the new `file` is visible 
 
 This pattern was used by SQLite (in its journal mode), PostgreSQL (for WAL segment renaming and configuration file updates), many text editors, and countless other applications that needed to update files safely.
 
-### The change
+### The change {#the-change_2}
 
 The problem was not a kernel regression. It was a gap between what programmers believed `fsync()` + `rename()` guaranteed and what it actually guaranteed on Linux.
 
 The missing step: after `rename()`, the **parent directory** must also be `fsync()`'d.
 
-### Observed regression
+### Observed regression {#observed-regression_2}
 
 After a crash, the file `file.tmp` had been durably written (because `fsync(fd)` was called), and the `rename()` had completed in-memory — but after journal recovery, the directory entry pointing to `file` had vanished. The directory still showed the old state, as if the rename had never happened.
 
@@ -240,7 +240,7 @@ Applications that used this pattern for configuration updates could find their c
 
 The problem was extensively documented by the database community and became one of the most well-known POSIX `fsync` subtleties. Ted Ts'o (an ext4 maintainer) and the PostgreSQL and SQLite developers wrote about it publicly. It also appears in Dan Luu's survey of file system correctness and in the Russ Cox analysis of file system behavior.
 
-### Why it happened
+### Why it happened {#why-it-happened_2}
 
 On Linux, `fsync(fd)` flushes the file's data and inode to disk. It does **not** flush the parent directory.
 
@@ -273,7 +273,7 @@ close(dir_fd);
 
 The directory `fsync()` ensures that the rename's modification to the directory pages is on disk before the application considers the operation complete.
 
-### Resolution
+### Resolution {#resolution_2}
 
 **SQLite** (versions 3.7.x and later) added directory `fsync()` to its unix VFS layer after this issue was reported and analyzed. The `PRAGMA fullfsync` and the default unix sync behavior were updated to fsync the directory after rename operations involving WAL files and rollback journals.
 
@@ -299,7 +299,7 @@ sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
 /* Still need: fsync(fd) for inode, fsync(dir_fd) for directory entry */
 ```
 
-### What it taught us
+### What it taught us {#what-it-taught-us_2}
 
 **`rename()` atomicity is in-memory atomicity, not durability.** The rename syscall is atomic in the sense that no other process will see a partially-renamed state — but it is not durable until the directory's pages are flushed to disk.
 
@@ -324,9 +324,9 @@ sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
 
 ---
 
-## Case 4: Dirty throttling writeback stalls — write latency spikes from balance_dirty_pages
+## Case 4: Dirty throttling writeback stalls — write latency spikes from balance_dirty_pages {#case-4-dirty-throttling-writeback-stalls-write-latency-spikes-from-balancedirtypages}
 
-### Before state
+### Before state {#before-state_3}
 
 The Linux dirty page throttling mechanism exists to prevent applications from writing data to the page cache faster than the kernel can flush it to storage. Without throttling, an application could dirty all available memory in seconds, leaving the kernel with no clean pages to allocate and causing sudden, catastrophic I/O bursts.
 
@@ -334,7 +334,7 @@ The mechanism works by tracking the total amount of dirty data system-wide and p
 
 Before v3.1, the throttling logic applied a per-process pause when the dirty ratio exceeded a threshold. The pause was relatively crude: processes were either running or sleeping, with limited gradation between the two.
 
-### The change
+### The change {#the-change_3}
 
 In Linux v3.1, Fengguang Wu introduced a substantially reworked dirty throttling algorithm (sometimes called "smoothed dirty throttling" or "bdi-based throttling"). The goal was to make throttling more proportional and fair: instead of a binary sleep/run decision, processes should be slowed to match the throughput of the underlying storage device, with pauses scaled to the degree of exceedance.
 
@@ -342,7 +342,7 @@ The new algorithm tracked per-BDI (backing device info) write bandwidth, estimat
 
 This change was covered in detail in LWN articles on the dirty throttling rework (see [LWN: Flushing out pdflush](https://lwn.net/Articles/326552/) for background, and the v3.1 changelog).
 
-### Observed regression
+### Observed regression {#observed-regression_3}
 
 After v3.1, several production workloads reported **write latency spikes** — individual `write()` calls that normally completed in microseconds now took tens or hundreds of milliseconds. The spikes were intermittent and correlated with periods of high write activity.
 
@@ -354,7 +354,7 @@ The pattern had two distinct manifestations:
 
 These regressions were reported on LKML by database operators and application developers, and Fengguang Wu and other mm developers issued a series of fixes in v3.2 through v3.10 to address the stall cases.
 
-### Why it happened
+### Why it happened {#why-it-happened_3}
 
 The bandwidth estimation in `bdi_dirty_limit()` and the throttle computation in `balance_dirty_pages()` relied on an exponentially weighted moving average of observed writeback throughput. The averaging window and the reaction to sudden changes in write rate created instability:
 
@@ -380,7 +380,7 @@ The issue was that the throttling algorithm was reactive: it measured what the d
 
 The per-process sleep in `balance_dirty_pages()` is in `mm/page-writeback.c`. The sleep is implemented via `io_schedule_timeout()`, which puts the process into the `TASK_KILLABLE` sleep state and does not return until the timeout expires or the process is killed — there is no early wakeup based on the device becoming available.
 
-### Resolution
+### Resolution {#resolution_3}
 
 Fengguang Wu and the mm team issued multiple patches across v3.2–v3.10 to address the stall cases:
 
@@ -421,7 +421,7 @@ cat /sys/kernel/debug/tracing/trace_pipe
 # Look for: balance_dirty_pages: ... paused=<N>ms ...
 ```
 
-### What it taught us
+### What it taught us {#what-it-taught-us_3}
 
 **Feedback-control algorithms are sensitive to idle periods.** An estimator that measures throughput during active periods and extrapolates to predict future capacity will fail when the system transitions from idle to active. The measurement during idle (zero throughput) is not representative of capacity.
 
@@ -450,9 +450,9 @@ cat /sys/kernel/debug/tracing/trace_pipe
 
 ---
 
-## Case 5: The `sendfile()` and `splice()` stall — zero-copy I/O and pipe buffer deadlocks
+## Case 5: The `sendfile()` and `splice()` stall — zero-copy I/O and pipe buffer deadlocks {#case-5-the-sendfile-and-splice-stall-zero-copy-io-and-pipe-buffer-deadlocks}
 
-### Before state
+### Before state {#before-state_4}
 
 `sendfile(2)` and `splice(2)` are zero-copy I/O system calls that allow data to be transferred between file descriptors without copying it through userspace. Their primary use case is efficient file serving (HTTP servers like nginx and Apache) and data pipelines.
 
@@ -473,7 +473,7 @@ sendfile() / splice():
 
 Both calls were heavily used in high-throughput file serving and are critical to the performance of nginx, Apache, and various proxy servers.
 
-### The change
+### The change {#the-change_4}
 
 The pipe buffer implementation that backs `splice()` uses a fixed-size ring of buffer entries (`PIPE_DEF_BUFFERS = 16` entries by default). Each entry can reference a page from the page cache. When the ring is full and the reader has not consumed any entries, the writer blocks.
 
@@ -485,7 +485,7 @@ The interaction that caused production incidents was not a single kernel change 
 
 In certain kernel versions (particularly in the v2.6.x series through early v3.x), the interaction between `splice()`'s pipe buffer blocking and locks held on the source file could produce deadlocks or very long stalls.
 
-### Observed regression
+### Observed regression {#observed-regression_4}
 
 Production reports from file servers and content delivery systems described two failure patterns:
 
@@ -497,7 +497,7 @@ These were reported in nginx bug trackers, Apache mailing lists, and LKML discus
 
 A related and well-documented issue was the interaction between `splice()` and files that had pages under writeback. In some kernel versions, splicing a page that was currently being written back (dirty → writeback state transition) could cause `splice()` to block on the page lock in `wait_on_page_writeback()`, producing unexpected latency for operations that were supposed to be zero-copy reads.
 
-### Why it happened
+### Why it happened {#why-it-happened_4}
 
 The `splice()` implementation in `fs/splice.c` involves several distinct lock acquisitions and blocking points:
 
@@ -519,7 +519,7 @@ Additionally, the `sendfile()` implementation on older kernels used a temporary 
 
 The zero-copy page reference mechanism in `splice()` meant that spliced pages were "pinned" in the page cache until the pipe buffer entry was consumed. Under high load, this could exhaust the pipe buffer (PIPE_BUF_FLAG_* limits) and cause all further splice operations on those files to block until the consumer drained its end.
 
-### Resolution
+### Resolution {#resolution_4}
 
 Several improvements addressed these issues across kernel versions:
 
@@ -561,7 +561,7 @@ cat /proc/sys/fs/pipe-max-size
 
 The `sendfile_max_chunk` configuration (nginx-specific) limits how much data is transferred per `sendfile()` syscall, allowing the event loop to regain control and drain pipe buffers between chunks.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_4}
 
 **Zero-copy is not zero-blocking.** `sendfile()` and `splice()` eliminate memory copies, but they do not eliminate the need to acquire locks and wait for page states. A path that blocks on `wait_on_page_writeback()` in the middle of a "zero-copy" operation is still a blocking operation from the caller's perspective.
 
@@ -593,7 +593,7 @@ The `sendfile_max_chunk` configuration (nginx-specific) limits how much data is 
 
 ---
 
-## Common threads
+## Common threads {#common-threads}
 
 These five incidents share structural patterns that recur across the I/O stack:
 
@@ -611,7 +611,7 @@ A second theme is **coherency across abstraction boundaries**: the page cache is
 
 ---
 
-## See also
+## See also {#see-also}
 
 - [Page Cache Writeback](page-cache-writeback.md) — How dirty pages are flushed, throttling thresholds, and BDI bandwidth estimation
 - [Direct I/O](direct-io.md) — O_DIRECT alignment requirements, DIO path, and mmap comparison
@@ -623,7 +623,7 @@ A second theme is **coherency across abstraction boundaries**: the page cache is
 
 ---
 
-## External references
+## External references {#external-references}
 
 - [LWN: Flushing out pdflush](https://lwn.net/Articles/326552/) — Background on writeback thread design leading to the dirty throttling rework
 - [LWN: When writeback goes wrong](https://lwn.net/Articles/384093/) — Direct reclaim recursing into filesystem writeback and overflowing the kernel stack
@@ -640,7 +640,7 @@ A second theme is **coherency across abstraction boundaries**: the page cache is
 - [fs/ext4/inode.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ext4/inode.c) — ext4 writepage and ordered/writeback mode handling
 - [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) — balance_dirty_pages() and dirty throttling implementation
 
-## Further reading
+## Further reading {#further-reading}
 
 - [war-stories-regressions.md](../mm/war-stories-regressions.md) — Memory management regressions: THP compaction stalls, NUMA balancing overhead, khugepaged CPU storms, and swap readahead mismatch; the same "optimization correct in theory, wrong for this workload" pattern applies to I/O
 - [Tuning storage I/O](tuning-storage.md) — Practical guidance for dirty ratio tuning, O_DIRECT configuration, and sendfile/splice tuning for production workloads

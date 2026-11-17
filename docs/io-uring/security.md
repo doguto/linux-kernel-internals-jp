@@ -1,8 +1,8 @@
-# io_uring Security and Hardening
+# io_uring Security and Hardening {#io_uring-security-and-hardening}
 
 > Attack surface, seccomp bypass, CVEs, and production lockdown
 
-## The attack surface
+## The attack surface {#the-attack-surface}
 
 io_uring executes async operations from a kernel worker thread pool called **io-wq**. When an operation cannot complete inline (blocking read, file open, etc.), the kernel queues it to an io-wq thread. That thread runs with the credentials of the submitting task — the same UID, GID, capabilities, and open file table — but it runs **outside the normal syscall path**.
 
@@ -15,7 +15,7 @@ This matters because every kernel security hook designed around the syscall boun
 
 The io-wq path through `io_uring/io-wq.c` and the core submission machinery in `io_uring/io_uring.c` form a large, complex state machine. Subtle lifetime bugs and type confusions in that state machine have been the source of several privilege-escalation CVEs.
 
-## seccomp and io_uring
+## seccomp and io_uring {#seccomp-and-io_uring}
 
 A process can install a strict seccomp filter that allows almost no syscalls, then use io_uring to perform those same operations asynchronously. The kernel does not re-evaluate the submitting process's seccomp policy when an io-wq thread executes the work.
 
@@ -37,7 +37,7 @@ Userspace (seccomp: deny openat) ──► io_uring_enter ──► SQE: IORING_
 
 The practical consequence: **seccomp alone is not a sufficient sandbox for processes that have access to an io_uring file descriptor**. Android, Chrome OS, and gVisor all respond to this by disabling `io_uring_setup` outright in their seccomp policies (see below).
 
-## Restrictions added over time
+## Restrictions added over time {#restrictions-added-over-time}
 
 The kernel has progressively tightened io_uring's privilege boundaries:
 
@@ -50,7 +50,7 @@ The kernel has progressively tightened io_uring's privilege boundaries:
 
 `IORING_SETUP_DEFER_TASKRUN` is particularly useful for sandboxed contexts: no io-wq threads are spawned for deferred completions, keeping all execution on the known, filterable userspace thread.
 
-## `IORING_REGISTER_RESTRICTIONS`
+## `IORING_REGISTER_RESTRICTIONS` {#ioringregisterrestrictions}
 
 After setting up a ring, a privileged component can **lock it down** before handing the ring fd to an untrusted component. The `IORING_REGISTER_RESTRICTIONS` registration call (`io_uring_register(2)`) accepts an array of `struct io_uring_restriction` entries. Once applied, restrictions are permanent for the lifetime of the ring — they cannot be removed.
 
@@ -65,7 +65,7 @@ Restriction types:
 
 The implementation lives in `io_uring/rsrc.c` (resource registration) and `io_uring/io_uring.c` (`io_uring_register` dispatch and restriction enforcement).
 
-### Example: handing a restricted ring to an untrusted component
+### Example: handing a restricted ring to an untrusted component {#example-handing-a-restricted-ring-to-an-untrusted-component}
 
 ```c
 #include <linux/io_uring.h>
@@ -135,7 +135,7 @@ int setup_restricted_ring(unsigned sq_entries)
 
 After `IORING_REGISTER_RESTRICTIONS` is applied, the kernel checks each SQE against the restriction bitmap in `io_ring_ctx->restrictions` on the hot submission path. Attempts to use a disallowed opcode or flag return `-EACCES`.
 
-## CVEs and kernel hardening
+## CVEs and kernel hardening {#cves-and-kernel-hardening}
 
 The complexity of the io_uring state machine — cancellation, timeouts, linked requests, fixed buffers, registered credentials — creates a large surface for subtle memory-safety bugs:
 
@@ -147,7 +147,7 @@ The complexity of the io_uring state machine — cancellation, timeouts, linked 
 
 Staying on a recent kernel is the most effective mitigation. The io_uring subsystem receives security fixes backported to stable trees, but only for a limited window.
 
-## Android, Chrome OS, and gVisor restrictions
+## Android, Chrome OS, and gVisor restrictions {#android-chrome-os-and-gvisor-restrictions}
 
 These platforms concluded that the seccomp bypass risk outweighs the performance benefit for their threat models:
 
@@ -167,7 +167,7 @@ deny confined_t self:io_uring sqpoll;
 deny io_uring override_creds,
 ```
 
-## Best practices for production
+## Best practices for production {#best-practices-for-production}
 
 **Minimize flags**
 
@@ -191,7 +191,7 @@ The `personality` field in an SQE allows operations to run under a pre-registere
 
 The kernel audit subsystem emits records for `io_uring_setup` and `io_uring_register`. In environments with auditd or a SIEM ingesting audit logs, rules on these event types surface unexpected ring creation or capability registration.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Architecture and Rings](io-uring-arch.md) — SQ/CQ layout, SQE/CQE structures
 - [Operations and Advanced Features](io-uring-ops.md) — Supported ops, SQPOLL, fixed buffers

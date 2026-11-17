@@ -1,8 +1,8 @@
-# AF_PACKET: Raw Socket Packet Capture
+# AF_PACKET: Raw Socket Packet Capture {#af_packet-raw-socket-packet-capture}
 
 > How tcpdump, Wireshark, and BPF filtering work at the packet capture layer
 
-## What is AF_PACKET?
+## What is AF_PACKET? {#what-is-af_packet}
 
 `AF_PACKET` sockets give userspace direct access to the network device's frame layer (Layer 2). Applications receive raw Ethernet frames (including headers) before the kernel's network stack processes them.
 
@@ -14,7 +14,7 @@ Used by:
 - Custom protocol implementations
 - Network intrusion detection systems
 
-## Creating an AF_PACKET socket
+## Creating an AF_PACKET socket {#creating-an-af_packet-socket}
 
 ```c
 #include <sys/socket.h>
@@ -41,7 +41,7 @@ struct packet_mreq mreq = {
 setsockopt(sock, SOL_PACKET, PACKET_ADD_MEMBERSHIP, &mreq, sizeof(mreq));
 ```
 
-## Reading packets
+## Reading packets {#reading-packets}
 
 ```c
 uint8_t buf[65536];
@@ -68,7 +68,7 @@ printf("src: %02x:%02x:%02x:%02x:%02x:%02x → "
        ntohs(eth->h_proto));
 ```
 
-## Classic BPF socket filters
+## Classic BPF socket filters {#classic-bpf-socket-filters}
 
 `tcpdump` compiles its filters to BPF bytecode and attaches them to the socket, so the kernel only copies matching packets to userspace:
 
@@ -104,7 +104,7 @@ setsockopt(sock, SOL_SOCKET, SO_ATTACH_FILTER, &fprog, sizeof(fprog));
 /* Now only TCP port 80 frames reach recvfrom() */
 ```
 
-## PACKET_MMAP: zero-copy ring buffer
+## PACKET_MMAP: zero-copy ring buffer {#packet_mmap-zero-copy-ring-buffer}
 
 For high-performance capture, `PACKET_MMAP` maps a ring buffer shared between kernel and userspace:
 
@@ -159,7 +159,7 @@ while (1) {
 }
 ```
 
-## Sending raw packets
+## Sending raw packets {#sending-raw-packets}
 
 ```c
 /* SOCK_RAW: must provide Ethernet header manually */
@@ -188,9 +188,9 @@ int dgram_sock = socket(AF_PACKET, SOCK_DGRAM, htons(ETH_P_IP));
 /* sendto() with sll_addr set to target MAC */
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### Packet socket registration
+### Packet socket registration {#packet-socket-registration}
 
 ```c
 /* net/packet/af_packet.c */
@@ -231,7 +231,7 @@ static int packet_rcv(struct sk_buff *skb, struct net_device *dev,
 }
 ```
 
-## tcpdump under the hood
+## tcpdump under the hood {#tcpdump-under-the-hood}
 
 ```bash
 # See what tcpdump does:
@@ -256,7 +256,7 @@ tcpdump -d tcp port 80
 # pcap_loop()       → poll() + mmap ring
 ```
 
-## Performance
+## Performance {#performance}
 
 ```bash
 # Check packet drops:
@@ -277,7 +277,7 @@ printf("received: %u, dropped: %u\n", stats.tp_packets, stats.tp_drops);
 # Even higher: use AF_XDP for kernel bypass
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [XDP](xdp.md) — higher-performance kernel bypass
 - [AF_XDP](af-xdp.md) — zero-copy userspace packet processing

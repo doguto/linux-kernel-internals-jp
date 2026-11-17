@@ -1,12 +1,12 @@
-# io_uring Operations and Advanced Features
+# io_uring Operations and Advanced Features {#io_uring-operations-and-advanced-features}
 
 > From basic read/write to SQPOLL and linked requests
 
-## Supported operations
+## Supported operations {#supported-operations}
 
 io_uring supports a wide range of operations, all async:
 
-### File and socket I/O
+### File and socket I/O {#file-and-socket-io}
 
 ```c
 /* Read/write (like pread64/pwrite64) */
@@ -69,7 +69,7 @@ IORING_OP_PROVIDE_BUFFERS /* register buffer pool */
 IORING_OP_REMOVE_BUFFERS
 ```
 
-## liburing: the convenience wrapper
+## liburing: the convenience wrapper {#liburing-the-convenience-wrapper}
 
 Most applications use `liburing` instead of raw syscalls:
 
@@ -88,7 +88,7 @@ io_uring_queue_init_params(256, &ring, &(struct io_uring_params){
 });
 ```
 
-### Batch example: submit multiple reads
+### Batch example: submit multiple reads {#batch-example-submit-multiple-reads}
 
 ```c
 struct io_uring_sqe *sqe;
@@ -114,7 +114,7 @@ for (int i = 0; i < 8; i++) {
 }
 ```
 
-## SQPOLL: eliminating syscalls entirely
+## SQPOLL: eliminating syscalls entirely {#sqpoll-eliminating-syscalls-entirely}
 
 With `IORING_SETUP_SQPOLL`, a dedicated kernel thread polls the SQ ring continuously. Userspace never needs to call `io_uring_enter` — it just writes SQEs and they're picked up automatically:
 
@@ -145,7 +145,7 @@ ps aux | grep io_uring-sq
 # root 1234  99.9  0.0  0  0 [io_uring-sq]
 ```
 
-## Fixed files (registered file descriptors)
+## Fixed files (registered file descriptors) {#fixed-files-registered-file-descriptors}
 
 Registering file descriptors eliminates per-operation fd lookups:
 
@@ -168,7 +168,7 @@ io_uring_unregister_files(&ring);
 
 Fixed files avoid taking a reference to the `struct file` on every operation — significant for high-IOPS workloads.
 
-## Fixed buffers (registered buffers)
+## Fixed buffers (registered buffers) {#fixed-buffers-registered-buffers}
 
 Pre-registered buffers avoid per-I/O pinning of pages:
 
@@ -191,7 +191,7 @@ io_uring_unregister_buffers(&ring);
 
 Fixed buffers are pinned in memory once at registration. Per-I/O page pinning/unpinning (which requires page table walks) is eliminated.
 
-## Linked requests
+## Linked requests {#linked-requests}
 
 Chain SQEs so that the next one only starts when the previous completes successfully:
 
@@ -215,7 +215,7 @@ io_uring_submit(&ring);
 
 For hard chains that ignore errors, use `IOSQE_IO_HARDLINK` instead.
 
-## Buffer selection: provided buffers
+## Buffer selection: provided buffers {#buffer-selection-provided-buffers}
 
 Instead of pre-assigning buffers to SQEs, let the kernel pick from a pool (useful when you don't know how many bytes will arrive):
 
@@ -251,7 +251,7 @@ io_uring_buf_ring_add(buf_ring, bufs[buf_id], BUF_SIZE, buf_id, ring_mask, 0);
 io_uring_buf_ring_advance(buf_ring, 1);
 ```
 
-## Multishot operations
+## Multishot operations {#multishot-operations}
 
 Some operations can post multiple CQEs from a single SQE:
 
@@ -279,7 +279,7 @@ while (1) {
 /* IORING_OP_POLL_ADD + IORING_POLL_ADD_MULTI flag — poll fd repeatedly */
 ```
 
-## io_uring and BPF
+## io_uring and BPF {#io_uring-and-bpf}
 
 BPF programs can be attached to io_uring operations:
 
@@ -292,7 +292,7 @@ sqe->personality = io_uring_register_personality(&ring);
 /* The SQE executes with the registered identity */
 ```
 
-## Observing io_uring
+## Observing io_uring {#observing-io_uring}
 
 ```bash
 # List io_uring instances
@@ -324,7 +324,7 @@ trace-cmd report
 bpftrace -e 'tracepoint:io_uring:io_uring_submit_sqe { printf("%s\n", comm); }'
 ```
 
-## Performance comparison
+## Performance comparison {#performance-comparison}
 
 | Interface | Setup | Per-op syscall | Max IOPS (NVMe) |
 |-----------|-------|----------------|-----------------|
@@ -333,7 +333,7 @@ bpftrace -e 'tracepoint:io_uring:io_uring_submit_sqe { printf("%s\n", comm); }'
 | io_uring (no SQPOLL) | Ring init | `io_uring_enter` (batched) | ~1.5M |
 | io_uring + SQPOLL | Ring + thread | None | ~2M+ |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Architecture and Rings](io-uring-arch.md) — Ring layout and SQE/CQE structures
 - [BPF/eBPF](../bpf/README.md) — io_uring + BPF integration

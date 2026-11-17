@@ -1,12 +1,12 @@
-# Memory Management Bugs (Kernel)
+# Memory Management Bugs (Kernel) {#memory-management-bugs-kernel}
 
 > A catalog of notable Linux kernel memory management bugs, vulnerabilities, and edge cases
 
 This index covers bugs in the Linux kernel's mm/ subsystem - security vulnerabilities, data corruption, performance regressions, and stability issues. These are real kernel bugs we analyze for educational purposes.
 
-## Quick Reference
+## Quick Reference {#quick-reference}
 
-### By Severity
+### By Severity {#by-severity}
 
 | Severity | Count | Examples |
 |----------|-------|----------|
@@ -15,7 +15,7 @@ This index covers bugs in the Linux kernel's mm/ subsystem - security vulnerabil
 | **Deadlock/hang** | 5+ | mmap_sem deadlock, OOM livelock |
 | **Performance** | 5+ | Thrashing, readahead traps |
 
-### By Year
+### By Year {#by-year}
 
 | Year | Notable Bugs |
 |------|--------------|
@@ -30,9 +30,9 @@ This index covers bugs in the Linux kernel's mm/ subsystem - security vulnerabil
 
 ---
 
-## Detailed Bug Documentation
+## Detailed Bug Documentation {#detailed-bug-documentation}
 
-### Subsystem Bug Sections
+### Subsystem Bug Sections {#subsystem-bug-sections}
 
 Detailed analysis of bugs in specific subsystems (located within each topic's documentation):
 
@@ -42,7 +42,7 @@ Detailed analysis of bugs in specific subsystems (located within each topic's do
 | [THP Bugs](../thp.md#notorious-bugs-and-edge-cases) | mm/huge_memory.c | CVE-2020-29368, khugepaged races, collapse bugs |
 | [Page Table Bugs](../page-tables.md#notorious-bugs-and-edge-cases) | arch/*/mm/ | Meltdown, Spectre, TLB flush races |
 
-### Lifecycle Document Bug Sections
+### Lifecycle Document Bug Sections {#lifecycle-document-bug-sections}
 
 The lifecycle docs contain narrative bug coverage as part of their end-to-end walkthroughs:
 
@@ -57,9 +57,9 @@ The lifecycle docs contain narrative bug coverage as part of their end-to-end wa
 
 ---
 
-## Bug Categories
+## Bug Categories {#bug-categories}
 
-### Security Vulnerabilities (CVEs)
+### Security Vulnerabilities (CVEs) {#security-vulnerabilities-cves}
 
 Bugs with assigned CVEs, typically exploitable for privilege escalation or information disclosure.
 
@@ -80,7 +80,7 @@ Bugs with assigned CVEs, typically exploitable for privilege escalation or infor
 | CVE-2009-2695 | mmap_min_addr bypass | mmap | Logic | [life-of-malloc.md](../life-of-malloc.md#case-3-mmap_min_addr-bypass-cve-2009-2695) |
 | CVE-2004-0077 | mremap disaster | mremap | Logic | [fork.md](../fork.md#case-3-the-mremap-disaster-cve-2004-0077) |
 
-### Data Corruption Bugs
+### Data Corruption Bugs {#data-corruption-bugs}
 
 Bugs causing silent data loss or corruption without security implications.
 
@@ -91,7 +91,7 @@ Bugs causing silent data loss or corruption without security implications.
 | 9p read corruption | 2025 | 9p/netfs | [life-of-read.md](../life-of-read.md#case-2-9p-read-corruption-2025) |
 | zswap races | Ongoing | zswap | [swapping.md](../swapping.md#case-2-zswap-race-conditions) |
 
-### Deadlock & Hang Bugs
+### Deadlock & Hang Bugs {#deadlock-hang-bugs}
 
 Bugs causing system hangs or unrecoverable states.
 
@@ -100,7 +100,7 @@ Bugs causing system hangs or unrecoverable states.
 | mmap_sem deadlock | 2010-2016 | OOM | [oom.md](../oom.md#case-2-the-mmap_sem-deadlock-2010-2016) |
 | Swap-over-NFS deadlock | Historical | swap/NFS | [swapping.md](../swapping.md#case-3-swap-over-nfs-instability) |
 
-### Performance Bugs
+### Performance Bugs {#performance-bugs}
 
 Bugs causing severe performance degradation.
 
@@ -112,11 +112,11 @@ Bugs causing severe performance degradation.
 
 ---
 
-## Exploitation Techniques
+## Exploitation Techniques {#exploitation-techniques}
 
 Common techniques used to exploit mm bugs:
 
-### Heap Exploitation (SLUB)
+### Heap Exploitation (SLUB) {#heap-exploitation-slub}
 
 | Technique | Description | Used In |
 |-----------|-------------|---------|
@@ -125,7 +125,7 @@ Common techniques used to exploit mm bugs:
 | **Freelist corruption** | Overwrite SLUB freelist pointers | Many heap overflows |
 | **msg_msg abuse** | Use msgsnd() for heap layout control | CVE-2021-22555 |
 
-### Race Conditions
+### Race Conditions {#race-conditions}
 
 | Technique | Description | Used In |
 |-----------|-------------|---------|
@@ -133,7 +133,7 @@ Common techniques used to exploit mm bugs:
 | **FUSE** | Control page fault timing via filesystem | Various exploits |
 | **CPU pinning** | Control which CPU runs exploit code | Race window expansion |
 
-### Side Channels
+### Side Channels {#side-channels}
 
 | Technique | Description | Used In |
 |-----------|-------------|---------|
@@ -142,9 +142,9 @@ Common techniques used to exploit mm bugs:
 
 ---
 
-## Hardening & Mitigations
+## Hardening & Mitigations {#hardening-mitigations}
 
-### Kernel Config Options
+### Kernel Config Options {#kernel-config-options}
 
 | Option | Protects Against | Performance Impact |
 |--------|------------------|-------------------|
@@ -155,7 +155,7 @@ Common techniques used to exploit mm bugs:
 | `CONFIG_PAGE_TABLE_ISOLATION` | Meltdown | 1-5% |
 | `CONFIG_RETPOLINE` | Spectre v2 | Variable |
 
-### Runtime Tunables
+### Runtime Tunables {#runtime-tunables}
 
 ```bash
 # Restrict userfaultfd (reduces race exploit surface)
@@ -170,22 +170,22 @@ echo 100 > /sys/module/kfence/parameters/sample_interval
 
 ---
 
-## External Resources
+## External Resources {#external-resources}
 
-### Research & Write-ups
+### Research & Write-ups {#research-write-ups}
 
 - [Google Project Zero](https://googleprojectzero.blogspot.com/) - Kernel vulnerability research
 - [xairy/linux-kernel-exploitation](https://github.com/xairy/linux-kernel-exploitation) - Comprehensive link collection
 - [how2heap](https://github.com/shellphish/how2heap) - Heap exploitation techniques
 
-### Disclosure Lists
+### Disclosure Lists {#disclosure-lists}
 
 - [oss-security](https://www.openwall.com/lists/oss-security/) - Public vulnerability disclosures
 - [LKML security](https://lore.kernel.org/linux-security-module/) - Kernel security discussions
 
 ---
 
-## Contributing
+## Contributing {#contributing}
 
 Found a bug not listed here? Contributions welcome:
 

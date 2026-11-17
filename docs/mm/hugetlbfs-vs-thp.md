@@ -1,8 +1,8 @@
-# Explicit hugetlbfs vs Transparent Huge Pages
+# Explicit hugetlbfs vs Transparent Huge Pages {#explicit-hugetlbfs-vs-transparent-huge-pages}
 
 > Two approaches to huge pages in Linux: one you ask for, one you get automatically
 
-## Why Huge Pages?
+## Why Huge Pages? {#why-huge-pages}
 
 Modern CPUs cache virtual-to-physical address translations in the TLB (Translation Lookaside Buffer). With standard 4KB pages, a workload touching a few gigabytes of memory needs hundreds of thousands of page table entries - far more than the TLB can hold. Every TLB miss triggers an expensive multi-level page table walk.
 
@@ -16,9 +16,9 @@ Huge pages (2MB or 1GB on x86-64) reduce TLB pressure dramatically:
 
 Linux provides two distinct mechanisms for using huge pages. They share the same hardware support (PMD-level and PUD-level page table entries) but differ fundamentally in how they are managed.
 
-## The Two Approaches
+## The Two Approaches {#the-two-approaches}
 
-### hugetlbfs: Explicit, Preallocated Huge Pages
+### hugetlbfs: Explicit, Preallocated Huge Pages {#hugetlbfs-explicit-preallocated-huge-pages}
 
 hugetlbfs is the original huge page mechanism. The administrator reserves a pool of huge pages at boot or runtime, and applications explicitly request them. Nothing happens automatically.
 
@@ -43,7 +43,7 @@ Administrator                          Application
 
 The kernel reserves these pages at allocation time, removing them from the regular page allocator entirely. They sit in a separate pool managed by [`mm/hugetlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) and cannot be used for anything else.
 
-### THP: Transparent, On-Demand Huge Pages
+### THP: Transparent, On-Demand Huge Pages {#thp-transparent-on-demand-huge-pages}
 
 Transparent Huge Pages require no application changes. The kernel automatically promotes 4KB pages to 2MB huge pages when it can, and splits them back when it must.
 
@@ -66,7 +66,7 @@ Application                            Kernel
 
 THP pages come from the regular buddy allocator. The kernel finds (or creates via compaction) contiguous 2MB-aligned regions on demand. See [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) for the core implementation.
 
-## Side-by-Side Comparison
+## Side-by-Side Comparison {#side-by-side-comparison}
 
 | Feature | hugetlbfs | THP |
 |---------|-----------|-----|
@@ -83,11 +83,11 @@ THP pages come from the regular buddy allocator. The kernel finds (or creates vi
 | **Latency predictability** | High - no compaction, no fallback | Lower - compaction stalls possible |
 | **Wasted memory risk** | Pool sits unused if not consumed | 2MB granularity can waste memory on small allocations |
 
-## When to Use hugetlbfs
+## When to Use hugetlbfs {#when-to-use-hugetlbfs}
 
 hugetlbfs is the right choice when you control the application, need guaranteed huge pages, and cannot tolerate allocation failures or latency jitter.
 
-### Databases (Oracle, PostgreSQL, MySQL)
+### Databases (Oracle, PostgreSQL, MySQL) {#databases-oracle-postgresql-mysql}
 
 Database shared buffers are long-lived, large, and heavily accessed. hugetlbfs gives them pinned huge pages that never get split or swapped:
 
@@ -99,7 +99,7 @@ huge_pages = on   # or "try" for fallback to regular pages
 
 PostgreSQL uses `mmap()` with `MAP_HUGETLB` for its shared memory segment. Oracle has used hugetlbfs since the early 2000s for its SGA (System Global Area).
 
-### DPDK and Network Packet Processing
+### DPDK and Network Packet Processing {#dpdk-and-network-packet-processing}
 
 DPDK (Data Plane Development Kit) maps packet buffers on hugetlbfs to get pinned physical memory with known addresses - critical for DMA with network hardware:
 
@@ -111,7 +111,7 @@ mount -t hugetlbfs -o pagesize=1G nodev /dev/hugepages-1G
 
 1GB pages are especially valuable here: a single TLB entry covers the entire packet buffer pool.
 
-### KVM/QEMU Virtual Machines
+### KVM/QEMU Virtual Machines {#kvmqemu-virtual-machines}
 
 VMs benefit from huge pages for guest memory - fewer TLB entries means less overhead from nested address translation (EPT/NPT):
 
@@ -122,11 +122,11 @@ qemu-system-x86_64 -m 4G \
     -mem-prealloc ...
 ```
 
-## When to Use THP
+## When to Use THP {#when-to-use-thp}
 
 THP works best for workloads where you want huge page benefits without application modifications, and can tolerate occasional fallback to 4KB pages.
 
-### General Server Workloads
+### General Server Workloads {#general-server-workloads}
 
 For applications you cannot modify or recompile, THP provides automatic benefit:
 
@@ -137,7 +137,7 @@ echo always > /sys/kernel/mm/transparent_hugepage/enabled
 
 The kernel will opportunistically use huge pages for all anonymous memory.
 
-### Applications with Large Heaps
+### Applications with Large Heaps {#applications-with-large-heaps}
 
 Java, Python, and other managed-runtime applications benefit from THP without any code changes. The JVM in particular sees significant gains from reduced TLB pressure on large heaps.
 
@@ -148,7 +148,7 @@ For fine-grained control without modifying the application:
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-### KVM (Transparent Mode)
+### KVM (Transparent Mode) {#kvm-transparent-mode}
 
 THP was originally designed for KVM. From the initial THP commit [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f):
 
@@ -156,11 +156,11 @@ THP was originally designed for KVM. From the initial THP commit [71e3aac0724f](
 
 VMs get huge pages automatically for guest memory without reserving a hugetlbfs pool.
 
-## When to Disable THP
+## When to Disable THP {#when-to-disable-thp}
 
 Some workloads perform worse with THP. The core issue is that THP adds background work (compaction, khugepaged scanning, page splitting) that can cause unpredictable latency.
 
-### Latency-Sensitive Applications (Redis, Memcached)
+### Latency-Sensitive Applications (Redis, Memcached) {#latency-sensitive-applications-redis-memcached}
 
 In-memory stores that serve requests in microseconds can see multi-millisecond stalls when the kernel runs memory compaction to satisfy a huge page allocation:
 
@@ -172,11 +172,11 @@ echo never > /sys/kernel/mm/transparent_hugepage/defrag
 
 The Redis documentation specifically calls out THP as a source of latency and memory usage issues.
 
-### Sparse Memory Access Patterns
+### Sparse Memory Access Patterns {#sparse-memory-access-patterns}
 
 Applications that allocate large regions but only touch a few bytes per 2MB region waste memory. The kernel allocates a full 2MB page even if only 4KB is used.
 
-### Real-Time and Deterministic Workloads
+### Real-Time and Deterministic Workloads {#real-time-and-deterministic-workloads}
 
 Any workload where worst-case latency matters more than throughput should disable THP. Compaction is not bounded in time:
 
@@ -186,11 +186,11 @@ echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 echo madvise > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-## Configuration
+## Configuration {#configuration}
 
-### hugetlbfs Setup
+### hugetlbfs Setup {#hugetlbfs-setup}
 
-#### Reserve the Pool
+#### Reserve the Pool {#reserve-the-pool}
 
 ```bash
 # At boot (kernel command line) - most reliable for large pools
@@ -210,7 +210,7 @@ cat /proc/meminfo | grep -i huge
 # Hugepagesize:       2048 kB
 ```
 
-#### Mount hugetlbfs
+#### Mount hugetlbfs {#mount-hugetlbfs}
 
 ```bash
 # Default 2MB page size
@@ -222,7 +222,7 @@ mount -t hugetlbfs -o pagesize=1G nodev /dev/hugepages-1G
 
 Most distributions mount the default hugetlbfs automatically via systemd.
 
-#### Use from Applications
+#### Use from Applications {#use-from-applications}
 
 ```c
 #include <sys/mman.h>
@@ -242,7 +242,7 @@ void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
                  MAP_SHARED, fd, 0);
 ```
 
-#### NUMA-Aware Pool Configuration
+#### NUMA-Aware Pool Configuration {#numa-aware-pool-configuration}
 
 ```bash
 # Reserve pages on specific NUMA nodes
@@ -250,7 +250,7 @@ echo 512 > /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepage
 echo 512 > /sys/devices/system/node/node1/hugepages/hugepages-2048kB/nr_hugepages
 ```
 
-### THP Setup
+### THP Setup {#thp-setup}
 
 ```bash
 # Global mode
@@ -272,9 +272,9 @@ echo 4096  > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
 
 See the [THP kernel docs](https://docs.kernel.org/admin-guide/mm/transhuge.html) for all tunables.
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### hugetlbfs: /proc/meminfo
+### hugetlbfs: /proc/meminfo {#hugetlbfs-procmeminfo}
 
 ```bash
 $ grep -i huge /proc/meminfo
@@ -300,7 +300,7 @@ cat /sys/devices/system/node/node0/hugepages/hugepages-2048kB/free_hugepages
 cat /sys/devices/system/node/node0/hugepages/hugepages-2048kB/nr_hugepages
 ```
 
-### THP: /sys/kernel/mm/transparent_hugepage/ and /proc/vmstat
+### THP: /sys/kernel/mm/transparent_hugepage/ and /proc/vmstat {#thp-syskernelmmtransparent_hugepage-and-procvmstat}
 
 ```bash
 $ grep thp /proc/vmstat
@@ -323,7 +323,7 @@ cat /sys/kernel/mm/transparent_hugepage/enabled
 # [always] madvise never
 ```
 
-### Quick Health Check
+### Quick Health Check {#quick-health-check}
 
 ```bash
 #!/bin/bash
@@ -339,9 +339,9 @@ echo "Allocations:"
 grep -E "thp_fault_alloc|thp_fault_fallback|thp_collapse|thp_split" /proc/vmstat
 ```
 
-## History
+## History {#history}
 
-### hugetlbfs (v2.5.36, 2002)
+### hugetlbfs (v2.5.36, 2002) {#hugetlbfs-v2536-2002}
 
 **Commit**: hugetlbfs was added during the Linux 2.5 development series (pre-git era, 2002).
 
@@ -356,7 +356,7 @@ Key milestones in hugetlbfs evolution:
 - **v2.6.32 (2009)**: `MAP_HUGETLB` added as an mmap flag, allowing huge page mappings without a hugetlbfs mount point; commit [e5ff2159a434](https://git.kernel.org/linus/e5ff2159a434) adds a usage example
 - **v3.8 (2013)**: Commit [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) ("mm: support more pagesizes for MAP_HUGETLB/SHM_HUGETLB") - encode page size in mmap flags (enabling 1GB pages via `MAP_HUGE_1GB`)
 
-### THP (v2.6.38, 2011)
+### THP (v2.6.38, 2011) {#thp-v2638-2011}
 
 **Commit**: [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f) ("thp: transparent hugepage core")
 
@@ -373,7 +373,7 @@ Key milestones in THP evolution:
 - **v5.4 (2019)**: Improved defrag modes (`defer+madvise`)
 - **v6.8 (2024)**: Commit [19eaf44954df](https://git.kernel.org/linus/19eaf44954df) ("mm: thp: support allocation of anonymous multi-size THP") - multi-size THP (mTHP) enabling page sizes between 4KB and 2MB (Ryan Roberts)
 
-### The Design Tension
+### The Design Tension {#the-design-tension}
 
 hugetlbfs and THP represent a classic systems design trade-off: **explicit control vs automatic optimization**.
 
@@ -383,7 +383,7 @@ THP removes the operational burden but introduces unpredictability. The kernel m
 
 Neither approach is going away. The kernel development community continues to improve both - hugetlbfs gets better NUMA support and accounting, while THP gets finer granularity (mTHP) and better heuristics.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # === hugetlbfs ===
@@ -431,9 +431,9 @@ grep thp_collapse /proc/vmstat
 # The counter should increase as khugepaged collapses pages
 ```
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -442,12 +442,12 @@ grep thp_collapse /proc/vmstat
 | [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) | THP core implementation |
 | [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | THP collapse daemon |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/hugetlbpage.rst`](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) - hugetlbfs admin guide
 - [`Documentation/admin-guide/mm/transhuge.rst`](https://docs.kernel.org/admin-guide/mm/transhuge.html) - THP admin guide
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Huge pages part 1: Introduction](https://lwn.net/Articles/374424/) (2010) - Overview of huge pages in Linux
 - [Huge pages part 2: Interfaces](https://lwn.net/Articles/375096/) (2010) - hugetlbfs and libhugetlbfs
@@ -455,7 +455,7 @@ grep thp_collapse /proc/vmstat
 - [Transparent huge pages](https://lwn.net/Articles/423584/) (2011) - THP design and introduction
 - [Multi-size THP](https://lwn.net/Articles/937239/) (2023) - mTHP motivation and design
 
-### Related
+### Related {#related}
 
 - [Transparent Huge Pages](thp.md) - Deep dive on THP internals, bugs, and tuning
 - [Compaction](compaction.md) - Memory defragmentation that THP depends on
@@ -463,7 +463,7 @@ grep thp_collapse /proc/vmstat
 - [NUMA](numa.md) - Per-node huge page pools and THP NUMA interactions
 - [Page Tables](page-tables.md) - PMD-level and PUD-level huge page mappings
 
-## Further reading
+## Further reading {#further-reading}
 
 - [thp.md](thp.md) — deep dive on THP internals: the `khugepaged` daemon, fault-based allocation, defrag modes, COW race bugs, and NUMA interaction
 - [hugepages-1gb.md](hugepages-1gb.md) — 1GB PUD-level huge pages: why runtime allocation almost always fails, per-node reservation, and workloads (databases, DPDK, HPC) where the extra 512x TLB gain is worth the operational cost

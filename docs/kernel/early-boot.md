@@ -1,8 +1,8 @@
-# Early Boot and start_kernel()
+# Early Boot and start_kernel() {#early-boot-and-start_kernel}
 
 > Subsystem initialization order, initcalls, and `__init` sections
 
-## Overview
+## Overview {#overview}
 
 After the bootloader decompresses the kernel and the architecture-specific assembly entry point (`startup_64` on x86-64, `primary_entry` on arm64) sets up the bare minimum — early page tables, a valid stack, and a GDT — control passes to `start_kernel()` in `init/main.c`. This is the C entry point, and every subsystem in the kernel traces its initialization back to a call made directly or indirectly from this function.
 
@@ -10,7 +10,7 @@ After the bootloader decompresses the kernel and the architecture-specific assem
 
 ---
 
-## start_kernel(): the initialization sequence
+## start_kernel(): the initialization sequence {#start_kernel-the-initialization-sequence}
 
 The following is the initialization order as it appears in `init/main.c` (Linux 6.x). Not every call is listed — only the ones that matter for understanding the system.
 
@@ -61,7 +61,7 @@ start_kernel()
 
 `build_all_zonelists(NULL)` and (the renamed) `page_alloc_init_cpuhp()` are no longer called directly from `start_kernel()` at all — both moved inside `mm_core_init()` (step [13]), alongside `kmem_cache_init()`.
 
-### Key steps explained
+### Key steps explained {#key-steps-explained}
 
 **[1] `set_task_stack_end_magic(&init_task)`**
 
@@ -182,7 +182,7 @@ The last call in `start_kernel()`. Creates kernel threads and enters the idle lo
 
 ---
 
-## rest_init(): spawning PID 1 and PID 2
+## rest_init(): spawning PID 1 and PID 2 {#rest_init-spawning-pid-1-and-pid-2}
 
 ```c
 /* init/main.c */
@@ -247,7 +247,7 @@ static noinline void __ref __noreturn rest_init(void)
 
 ---
 
-## Initcall levels
+## Initcall levels {#initcall-levels}
 
 Built-in kernel subsystems register initialization functions using initcall macros. These functions are called by `do_initcalls()` in `kernel_init()`, after `start_kernel()` has completed. The levels define ordering:
 
@@ -267,7 +267,7 @@ Built-in kernel subsystems register initialization functions using initcall macr
 | `device_initcall_sync(fn)` | 6s | |
 | `late_initcall(fn)` | 7 | After all devices initialized |
 
-### How it works
+### How it works {#how-it-works}
 
 Each macro (e.g. `core_initcall(fn)`) expands through a chain: `__define_initcall(fn, id)` → `___define_initcall(fn, id, .initcall##id)` → `__unique_initcall(fn, id, __sec, __iid)` → `____define_initcall(...)`, the layer that actually emits the section entry:
 
@@ -346,9 +346,9 @@ The initcall return value matters: a non-zero return causes a `pr_warn` message 
 
 ---
 
-## `__init` and `__exit` sections
+## `__init` and `__exit` sections {#init-and-exit-sections}
 
-### `__init`
+### `__init` {#__init}
 
 Functions annotated with `__init` are placed in the `.init.text` ELF section. After `do_initcalls()` completes and the init process starts, the kernel frees the entire `.init.text` and `.init.data` sections:
 
@@ -385,11 +385,11 @@ static int __init my_init(void)
 /* Calling saved_fn after boot → use-after-free, oops */
 ```
 
-### `__exit`
+### `__exit` {#__exit}
 
 Functions annotated with `__exit` are placed in `.exit.text`. For built-in code (not a loadable module), the `.exit.text` section is discarded at link time — the linker does not include it in the final image because built-in code can never be unloaded. For loadable modules, `.exit.text` is kept and called when the module is removed.
 
-### Data sections
+### Data sections {#data-sections}
 
 | Annotation | Section | Freed after boot? |
 |-----------|---------|------------------|
@@ -399,15 +399,15 @@ Functions annotated with `__exit` are placed in `.exit.text`. For built-in code 
 | `__exit` | `.exit.text` | Discarded (built-in) / kept (module) |
 | `__exitdata` | `.exit.data` | Same |
 
-### Size savings
+### Size savings {#size-savings}
 
 The `__init` mechanism recovers a meaningful amount of memory. On a typical x86-64 kernel the init sections total 1–3 MB. On memory-constrained embedded systems this matters significantly.
 
 ---
 
-## Observing boot order
+## Observing boot order {#observing-boot-order}
 
-### dmesg with timestamps
+### dmesg with timestamps {#dmesg-with-timestamps}
 
 ```bash
 dmesg -T          # human-readable timestamps
@@ -415,7 +415,7 @@ dmesg --color     # colored output by level
 dmesg | head -50  # first 50 lines (arch init, version, memory map)
 ```
 
-### initcall_debug boot parameter
+### initcall_debug boot parameter {#initcall_debug-boot-parameter}
 
 Add `initcall_debug` to the kernel command line (in GRUB: `linux ... initcall_debug`). The kernel will print every initcall with its execution time:
 
@@ -428,7 +428,7 @@ initcall ahci_init+0x0/0x28 returned 0 after 87 usecs
 
 The number after `@` is the CPU on which the initcall ran.
 
-### /proc/kallsyms
+### /proc/kallsyms {#prockallsyms}
 
 ```bash
 # See registered initcall symbols in section order:
@@ -437,7 +437,7 @@ grep '__initcall_' /proc/kallsyms | head -20
 
 These symbols correspond to the function pointer entries placed in `.initcall*.init` sections.
 
-### Tracing with ftrace
+### Tracing with ftrace {#tracing-with-ftrace}
 
 ```bash
 # Trace all calls made during boot (requires early ftrace setup)
@@ -448,9 +448,9 @@ cat /sys/kernel/debug/tracing/trace | grep 'do_one_initcall'
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `start_kernel()`, `rest_init()`, `kernel_init()`, and `do_initcalls()`
 - [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — the `__init`/`__exit` section macros and the `early_initcall()` … `late_initcall()` level macros
@@ -468,7 +468,7 @@ cat /sys/kernel/debug/tracing/trace | grep 'do_one_initcall'
 - [kernel/printk/printk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk.c) — `console_init()`
 - [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h) — `INIT_CALLS`/`INIT_CALLS_LEVEL`, the linker macros that lay out `.initcall*.init` sections in level order
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Boot Parameters](boot-params.md) — how `early_param` and `__setup` are parsed
 - [Module Init and Initcalls](initcalls-modules.md) — the module side of `module_init()`
@@ -478,7 +478,7 @@ cat /sys/kernel/debug/tracing/trace | grep 'do_one_initcall'
 - [Runqueues and Task Selection](../sched/runqueues.md) — the per-CPU `struct rq` that `sched_init()` allocates
 - [RCU (Read-Copy-Update)](../locking/rcu.md) — what becomes safe to use after `rcu_init()`
 
-### External
+### External {#external}
 
 - [The Linux/x86 Boot Protocol](https://docs.kernel.org/arch/x86/boot.html) — the boot loader/kernel handoff that precedes `startup_64`
 - [Kernel Parameters: `initcall_debug`](https://docs.kernel.org/admin-guide/kernel-parameters.html) — official description of the boot parameter covered in "Observing boot order"

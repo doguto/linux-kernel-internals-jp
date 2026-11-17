@@ -1,4 +1,4 @@
-# I/O Observability
+# I/O Observability {#io-observability}
 
 > Observing and debugging I/O behavior with /proc, iostat, blktrace, ftrace, and perf
 
@@ -6,7 +6,7 @@ The Linux kernel exposes I/O activity through several overlapping layers: pseudo
 
 ---
 
-## /proc/diskstats
+## /proc/diskstats {#procdiskstats}
 
 `/proc/diskstats` is the canonical source of per-device I/O statistics. Every tool that reports disk throughput or latency — `iostat`, `sar`, `dstat`, Prometheus `node_exporter` — reads this file and computes deltas.
 
@@ -21,7 +21,7 @@ $ cat /proc/diskstats
 
 The format is: major minor name [field1 ... fieldN], where N is kernel-version dependent: 11 fields pre-4.18, 15 fields from 4.18 (discard stats added), 17 fields from 5.5 (flush stats added).
 
-### Field-by-field reference
+### Field-by-field reference {#field-by-field-reference}
 
 | # | Field | Type | Description |
 |---|-------|------|-------------|
@@ -46,7 +46,7 @@ The format is: major minor name [field1 ... fieldN], where N is kernel-version d
 !!! note "Kernel version availability"
     The field count is kernel-version dependent: 17 fields on Linux 5.5+; 15 fields on 4.18–5.4 (fields 16–17 flush stats not yet present); 11 fields pre-4.18 (fields 12–17 discard and flush stats not yet present). Tools that parse diskstats must handle variable column counts.
 
-### Interpreting "I/Os in progress" (field 9)
+### Interpreting "I/Os in progress" (field 9) {#interpreting-ios-in-progress-field-9}
 
 Field 9 is the device queue depth at the instant you read the file. It reflects I/Os that have been issued to the driver but whose completion interrupt has not yet been processed.
 
@@ -54,7 +54,7 @@ Field 9 is the device queue depth at the instant you read the file. It reflects 
 - **NVMe**: NVMe devices expose multiple hardware queues (often one per CPU). `iostat` reports an aggregate across all queues, so `avgqu-sz` of 16 on a 16-queue NVMe device is not saturation — it may just mean one pending I/O per queue.
 - **A value of 0** despite high throughput means I/Os complete quickly; the sample just happened to hit a quiet moment. Use `avgqu-sz` from `iostat` for a time-averaged view.
 
-### How iostat is built on diskstats
+### How iostat is built on diskstats {#how-iostat-is-built-on-diskstats}
 
 `iostat` reads `/proc/diskstats` twice (at time T1 and T2) and computes:
 
@@ -71,7 +71,7 @@ The source is in the `sysstat` package, [`iostat.c`](https://github.com/sysstat/
 
 ---
 
-## iostat -x Output
+## iostat -x Output {#iostat-x-output}
 
 `iostat -x` (extended statistics) is the most common first tool for I/O diagnosis. Run it with an interval to get deltas rather than averages since boot:
 
@@ -81,7 +81,7 @@ iostat -x -d sda 5   # 5-second intervals, sda only
 iostat -xz 1         # suppress devices with zero activity
 ```
 
-### Realistic example output
+### Realistic example output {#realistic-example-output}
 
 ```
 Device            r/s     rkB/s   rrqm/s  %rrqm r_await rareq-sz     w/s     wkB/s   wrqm/s  %wrqm w_await wareq-sz     d/s     dkB/s   drqm/s  %drqm d_await dareq-sz     f/s f_await  aqu-sz  %util
@@ -89,7 +89,7 @@ nvme0n1        182.00  46081.00     0.00   0.00    0.22   253.2    94.00  24318.
 sda              2.00    128.00    14.00  87.50    4.31    64.0   118.00   7432.00   243.00  67.32   42.18    63.0    0.00      0.00     0.00   0.00    0.00      0.0    0.00    0.00    4.98  87.40
 ```
 
-### Field explanations
+### Field explanations {#field-explanations}
 
 | Field | Meaning |
 |-------|---------|
@@ -103,7 +103,7 @@ sda              2.00    128.00    14.00  87.50    4.31    64.0   118.00   7432.
 | `%util` | Percentage of the interval during which the device had at least one I/O in flight (from diskstats field 10). **This is not CPU utilization** — it is device busy time. |
 | `svctm` | **Deprecated and removed in recent sysstat.** Was estimated service time = `%util / (r/s + w/s)`. The estimate was unreliable for SSDs and devices with internal parallelism; do not use it. |
 
-### Identifying saturation
+### Identifying saturation {#identifying-saturation}
 
 `%util` approaching 100% on a **spinning disk** means the device is saturated — it is busy essentially all the time and cannot absorb more I/O without increasing latency. Paired signals:
 
@@ -121,13 +121,13 @@ On **NVMe and SSDs**, `%util` of 100% does not necessarily mean saturation becau
 
 ---
 
-## /proc/sys/vm/ Writeback Parameters
+## /proc/sys/vm/ Writeback Parameters {#procsysvm-writeback-parameters}
 
 The VM's dirty writeback system controls when modified pages are flushed from the page cache to storage. Tuning these parameters affects write latency consistency and throughput. All values live in `/proc/sys/vm/` and are settable via `sysctl`.
 
 **Source**: [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c).
 
-### dirty_ratio and dirty_bytes
+### dirty_ratio and dirty_bytes {#dirtyratio-and-dirtybytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_ratio
@@ -147,7 +147,7 @@ $ cat /proc/sys/vm/dirty_bytes
 sysctl vm.dirty_bytes=1073741824
 ```
 
-### dirty_background_ratio and dirty_background_bytes
+### dirty_background_ratio and dirty_background_bytes {#dirtybackgroundratio-and-dirtybackgroundbytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_background_ratio
@@ -167,7 +167,7 @@ dirty_background_ratio < dirty_ratio
 
 A wide gap between the two values creates a large zone in which dirty data accumulates without application throttling. A narrow gap means writeback starts sooner and the system stays closer to zero dirty pages.
 
-### dirty_writeback_centisecs
+### dirty_writeback_centisecs {#dirtywritebackcentisecs}
 
 ```bash
 $ cat /proc/sys/vm/dirty_writeback_centisecs
@@ -178,7 +178,7 @@ The interval (in centiseconds, i.e. hundredths of a second) at which the `wb_wor
 
 Setting this to 0 disables periodic writeback entirely (not recommended for most workloads). Reducing it (e.g., 100 = 1 second) causes more frequent smaller writeback bursts, which can improve latency consistency at the cost of slightly more background I/O.
 
-### dirty_expire_centisecs
+### dirty_expire_centisecs {#dirtyexpirecentisecs}
 
 ```bash
 $ cat /proc/sys/vm/dirty_expire_centisecs
@@ -189,7 +189,7 @@ How long (in centiseconds) a dirty page can stay in the page cache before writeb
 
 Pages that have been dirty longer than this value are eligible for writeback on the next `dirty_writeback_centisecs` wakeup. Reducing this value causes the kernel to flush pages more aggressively as they age, keeping the dirty window smaller.
 
-### Checking if writeback is keeping up
+### Checking if writeback is keeping up {#checking-if-writeback-is-keeping-up}
 
 ```bash
 # Current dirty and writeback page counts (pages × 4 KiB = bytes)
@@ -219,7 +219,7 @@ done
 
 ---
 
-## /sys/class/bdi/
+## /sys/class/bdi/ {#sysclassbdi}
 
 The BDI (Backing Device Info) subsystem tracks per-device writeback state. Each block device (and network filesystem mount) has an entry under `/sys/class/bdi/`.
 
@@ -234,7 +234,7 @@ avg_read_bandwidth  dirty    max_bytes       max_ratio     read_ahead_kb
 avg_write_bandwidth  error   max_prop_frac   min_bytes     stable_pages_required
 ```
 
-### Key files
+### Key files {#key-files}
 
 **`read_ahead_kb`** — the per-device readahead window in KiB. The kernel's readahead algorithm reads ahead this many bytes past the current I/O position when sequential access is detected. Default is typically 128 KiB, but the kernel adjusts this dynamically based on access patterns. For large sequential reads (database backups, streaming), increasing this value reduces the number of I/O requests at the cost of reading data that may not be needed.
 
@@ -262,7 +262,7 @@ echo 30 > /sys/class/bdi/8:0/max_ratio
 cat /sys/class/bdi/*/stable_pages_required
 ```
 
-### bdi_stat counters
+### bdi_stat counters {#bdi_stat-counters}
 
 The per-BDI counters are exposed indirectly through `/proc/vmstat` fields prefixed with `nr_` (e.g., `nr_dirty`, `nr_writeback`). The BDI-level counters track:
 
@@ -274,7 +274,7 @@ These can be observed via `bpftrace` against the `writeback` tracepoint group, w
 
 ---
 
-## blktrace and blkparse
+## blktrace and blkparse {#blktrace-and-blkparse}
 
 `blktrace` captures every event in the block layer for a device and writes binary trace data. `blkparse` decodes it. Together they let you trace the lifecycle of individual I/O requests — from the moment they are queued to when they complete.
 
@@ -282,7 +282,7 @@ These can be observed via `bpftrace` against the `writeback` tracepoint group, w
 
 **Source**: [`kernel/trace/blktrace.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/blktrace.c) (in-kernel tracing infrastructure); [`include/uapi/linux/blktrace_api.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/blktrace_api.h) (the `BLK_TA_*` action codes); [`blktrace` documentation](https://git.kernel.org/pub/scm/linux/kernel/git/axboe/blktrace.git/tree/doc) (usage guide, man pages).
 
-### Recording a trace
+### Recording a trace {#recording-a-trace}
 
 ```bash
 # Record all block events on /dev/sda for 10 seconds
@@ -297,7 +297,7 @@ blkparse -i /tmp/sda_trace -o /tmp/sda_trace.txt
 blktrace -d /dev/sda -o - | blkparse -i -
 ```
 
-### Block layer actions (the action codes)
+### Block layer actions (the action codes) {#block-layer-actions-the-action-codes}
 
 Each trace event has an action code indicating where in the block stack the event occurred. The key codes:
 
@@ -317,7 +317,7 @@ Each trace event has an action code indicating where in the block stack the even
 | `A` | Remap | Request was remapped (e.g., from a device mapper device to the underlying device). |
 | `R` | Requeue | Request was requeued (returned from driver to block layer for retry). |
 
-### Sample blkparse output
+### Sample blkparse output {#sample-blkparse-output}
 
 ```
   8,0    3        1     0.000000000   693  Q   W 4456448 + 256 [kworker/u8:2]
@@ -331,7 +331,7 @@ Columns: `device  cpu  sequence  timestamp(s)  pid  action  rwbs  sector + nr_se
 
 The `rwbs` field encodes the I/O type: `R`=read, `W`=write, `D`=discard, `F`=flush, `S`=sync, `N`=none, `A`=readahead.
 
-### Measuring I/O latency with blkparse
+### Measuring I/O latency with blkparse {#measuring-io-latency-with-blkparse}
 
 The latency of a single I/O request is the time from `D` (dispatch to driver) to `C` (complete). The time from `Q` (queue) to `C` includes scheduler queuing time.
 
@@ -352,7 +352,7 @@ blkparse -i /tmp/sda_trace -f "%T %a %S\n" | \
   }'
 ```
 
-### btt — block trace toolkit
+### btt — block trace toolkit {#btt-block-trace-toolkit}
 
 `btt` is a companion tool that parses `blktrace` binary data and produces structured latency breakdowns:
 
@@ -372,7 +372,7 @@ btt -i /tmp/trace.bin
 
 On a healthy system, `I2D` (scheduler queuing) should be small and `D2C` should match the device's advertised latency. High `I2D` means the I/O scheduler is delaying dispatch to batch requests — this can be intentional (for HDDs) or problematic (for latency-sensitive NVMe workloads).
 
-### blkiomon
+### blkiomon {#blkiomon}
 
 `blkiomon` provides online I/O monitoring from a blktrace stream, without writing to disk:
 
@@ -383,11 +383,11 @@ blktrace -d /dev/nvme0n1 -o - | blkiomon -I 5 -
 
 ---
 
-## ftrace I/O Tracepoints
+## ftrace I/O Tracepoints {#ftrace-io-tracepoints}
 
 The `block` and `writeback` tracepoint groups expose the same events as `blktrace` but through the standard ftrace infrastructure. This allows them to be combined with other kernel tracepoints, filtered by PID or CPU, and consumed by `perf` or `bpftrace`.
 
-### Finding available tracepoints
+### Finding available tracepoints {#finding-available-tracepoints}
 
 ```bash
 ls /sys/kernel/debug/tracing/events/block/
@@ -398,7 +398,7 @@ ls /sys/kernel/debug/tracing/events/filemap/
 perf list 'block:*' 'writeback:*' 'filemap:*'
 ```
 
-### Enabling with ftrace
+### Enabling with ftrace {#enabling-with-ftrace}
 
 ```bash
 # Enable the entire writeback group
@@ -412,7 +412,7 @@ echo 0 > /sys/kernel/debug/tracing/events/writeback/enable
 echo > /sys/kernel/debug/tracing/trace
 ```
 
-### block:block_rq_issue and block:block_rq_complete
+### block:block_rq_issue and block:block_rq_complete {#blockblockrqissue-and-blockblockrqcomplete}
 
 `block_rq_issue` fires when a request is dispatched to the device driver (the `D` event in blktrace). `block_rq_complete` fires on completion (the `C` event).
 
@@ -444,7 +444,7 @@ tracepoint:block:block_rq_complete
 interval:s:10 { print(@latency_us); clear(@latency_us); }'
 ```
 
-### writeback:writeback_single_inode
+### writeback:writeback_single_inode {#writebackwritebacksingleinode}
 
 Fires when the writeback code processes the dirty pages of a single inode. This is the per-inode view of writeback activity.
 
@@ -478,7 +478,7 @@ If a specific inode number keeps appearing, translate it to a path:
 find / -inum <inode_number> 2>/dev/null
 ```
 
-### writeback:global_dirty_state
+### writeback:global_dirty_state {#writebackglobaldirtystate}
 
 Fires periodically from `balance_dirty_pages()` in the writeback throttling code. Provides a snapshot of the global dirty page state including the current limit calculations.
 
@@ -502,7 +502,7 @@ cat /sys/kernel/debug/tracing/trace_pipe
 
 This tracepoint is invaluable for understanding whether `dirty_ratio`/`dirty_background_ratio` tuning is having the intended effect. Watch `nr_dirty` relative to `dirty_thresh` — if they are consistently close, processes are being throttled.
 
-### writeback:writeback_writepage
+### writeback:writeback_writepage {#writebackwriteback_writepage}
 
 Fires for each page written via `write_cache_pages()`. Very high frequency — enable only briefly on targeted inodes using a filter:
 
@@ -512,7 +512,7 @@ echo 'name == "sda"' > /sys/kernel/debug/tracing/events/writeback/writeback_writ
 echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_writepage/enable
 ```
 
-### filemap:mm_filemap_add_to_page_cache
+### filemap:mm_filemap_add_to_page_cache {#filemapmmfilemapaddtopage_cache}
 
 Fires when a page is added to the page cache — either on a read fault that brings a page in from storage, or when a file is first mmap'd or read.
 
@@ -527,7 +527,7 @@ tracepoint:filemap:mm_filemap_add_to_page_cache {
 interval:s:1 { print(@add); clear(@add); }'
 ```
 
-### filemap:mm_filemap_delete_from_page_cache
+### filemap:mm_filemap_delete_from_page_cache {#filemapmmfilemapdeletefrompage_cache}
 
 Fires when a page is evicted from the page cache — either due to memory reclaim, explicit `fadvise(POSIX_FADV_DONTNEED)`, or file truncation.
 
@@ -548,11 +548,11 @@ High eviction rates (`mm_filemap_delete_from_page_cache`) combined with high maj
 
 ---
 
-## perf for I/O
+## perf for I/O {#perf-for-io}
 
 `perf` can record, count, and sample block layer tracepoints with low overhead. It is particularly useful for attributing I/O to specific processes and call stacks.
 
-### Counting block events
+### Counting block events {#counting-block-events}
 
 ```bash
 # Count all block events for 10 seconds system-wide
@@ -568,7 +568,7 @@ perf stat -e 'block:block_rq_issue,block:block_rq_complete,block:block_bio_queue
 
 The difference between `block_bio_queue` and `block_rq_issue` is the number of bios that were merged — they entered the block layer but were absorbed into existing requests.
 
-### Recording with call stacks
+### Recording with call stacks {#recording-with-call-stacks}
 
 ```bash
 # Record block completions with kernel+user stacks for 30 seconds
@@ -585,7 +585,7 @@ perf script | head -50
 # kworker/u8:2   693 [003] 12345.678901: block:block_rq_complete: 8,0 W () 4456448 + 256 [0]
 ```
 
-### Finding writeback hotspots with perf top
+### Finding writeback hotspots with perf top {#finding-writeback-hotspots-with-perf-top}
 
 ```bash
 # Live view of functions spending time in writeback
@@ -595,7 +595,7 @@ perf top -e block:block_rq_issue --sort comm,dso,symbol
 perf top -p $(pgrep -d, kworker) -e cycles
 ```
 
-### Counting writeback tracepoints
+### Counting writeback tracepoints {#counting-writeback-tracepoints}
 
 ```bash
 # Writeback activity summary over 60 seconds
@@ -603,7 +603,7 @@ perf stat -e 'writeback:writeback_single_inode,writeback:global_dirty_state,writ
            -a -- sleep 60
 ```
 
-### perf with bpftrace for I/O attribution
+### perf with bpftrace for I/O attribution {#perf-with-bpftrace-for-io-attribution}
 
 ```bash
 # Top processes by write I/O bytes (using block tracepoints)
@@ -616,7 +616,7 @@ interval:s:10 { print(@bytes, 10); clear(@bytes); }'
 
 ---
 
-## /proc/PID/io
+## /proc/PID/io {#procpidio}
 
 Every process has an `/proc/PID/io` file that accounts for its I/O activity since the process started. This is distinct from `/proc/diskstats` — it attributes I/O to individual processes rather than devices.
 
@@ -633,7 +633,7 @@ write_bytes: 3748103168
 cancelled_write_bytes: 104857600
 ```
 
-### Field-by-field reference
+### Field-by-field reference {#field-by-field-reference_1}
 
 | Field | Description |
 |-------|-------------|
@@ -645,7 +645,7 @@ cancelled_write_bytes: 104857600
 | `write_bytes` | Bytes written to storage via writeback. Pages written from this process's dirty footprint that were flushed to disk. |
 | `cancelled_write_bytes` | Bytes of writeback that were "cancelled" — dirty pages that were freed without being written, typically because the process truncated or deleted a file before its dirty pages were flushed. In the example, 100 MiB of writes were avoided. |
 
-### Key distinctions
+### Key distinctions {#key-distinctions}
 
 **`wchar` vs `write_bytes`**: `wchar` counts bytes passed to `write()`. `write_bytes` counts bytes that actually hit storage. The gap between them is the amount of write I/O absorbed by the page cache (writes that will eventually be flushed by writeback, or that were cancelled). A process with `wchar = 10 GiB` and `write_bytes = 500 MiB` is heavily buffered — 95% of its writes stayed in cache.
 
@@ -653,7 +653,7 @@ cancelled_write_bytes: 104857600
 
 **`cancelled_write_bytes` can reduce storage pressure**: A database that writes to a temporary file and then unlinks it before flushing may have large `wchar` but significant `cancelled_write_bytes`, meaning the actual storage traffic was much lower.
 
-### Using /proc/PID/io for diagnosis
+### Using /proc/PID/io for diagnosis {#using-procpidio-for-diagnosis}
 
 ```bash
 # Snapshot I/O for a process
@@ -669,7 +669,7 @@ paste <(echo "$a") <(echo "$b") | \
   awk '{split($1,k,":");split($2,v,":");printf "%s: %d/s\n", k[1], (v[2]-$2)/5}'
 ```
 
-### iotop
+### iotop {#iotop}
 
 `iotop` reads `/proc/PID/io` for all processes and displays a sorted live view:
 
@@ -683,13 +683,13 @@ The `DISK READ` and `DISK WRITE` columns in `iotop` come from deltas of `read_by
 
 ---
 
-## Pressure Stall Information (PSI)
+## Pressure Stall Information (PSI) {#pressure-stall-information-psi}
 
 PSI measures the fraction of time that tasks are stalled waiting for I/O. Unlike utilization metrics (which measure device busyness), PSI measures **application impact** — the actual time workloads spent waiting.
 
 **Source**: [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c). Requires `CONFIG_PSI=y` (enabled by default since 5.2).
 
-### /proc/pressure/io
+### /proc/pressure/io {#procpressureio}
 
 ```bash
 $ cat /proc/pressure/io
@@ -705,7 +705,7 @@ full avg10=0.00 avg60=0.00 avg300=0.00 total=8241033
 
 **`total`**: Cumulative microseconds spent in the stall state since boot. Useful for computing deltas.
 
-### Interpreting PSI values
+### Interpreting PSI values {#interpreting-psi-values}
 
 | Value | Meaning |
 |-------|---------|
@@ -717,7 +717,7 @@ full avg10=0.00 avg60=0.00 avg300=0.00 total=8241033
 
 The difference between `some` and `full` is informative: a large `some` with near-zero `full` means I/O affects some tasks but others can still make progress. `full` approaching `some` means the I/O stall is affecting essentially all activity.
 
-### cgroup io.pressure
+### cgroup io.pressure {#cgroup-iopressure}
 
 In a cgroup v2 hierarchy, each cgroup exposes its own I/O pressure:
 
@@ -729,11 +729,11 @@ full avg10=0.00 avg60=0.00 avg300=0.00 total=29341
 
 This lets you attribute I/O pressure to specific services without system-wide instrumentation. A high `some` value in a specific cgroup while the system-level `some` is low indicates that service is I/O-bound relative to its peers.
 
-### Integrating with systemd-oomd
+### Integrating with systemd-oomd {#integrating-with-systemd-oomd}
 
 `systemd-oomd` monitors PSI values and can kill cgroups that exceed configurable pressure thresholds. Its configuration (`/etc/systemd/oomd.conf`) uses `DefaultMemoryPressureLimit=` and `DefaultMemoryPressureDurationSec=` — note these are memory PSI settings, but the same mechanism applies to I/O via cgroup resource control.
 
-### Setting up PSI alerts
+### Setting up PSI alerts {#setting-up-psi-alerts}
 
 ```bash
 # Alert when I/O stall exceeds 5% over 10 seconds (using kernel PSI notifications)
@@ -753,9 +753,9 @@ For production use, tools like Prometheus `node_exporter` (version 1.1+) expose 
 
 ---
 
-## Practical Debugging Scenarios
+## Practical Debugging Scenarios {#practical-debugging-scenarios}
 
-### Scenario 1: "My disk is 100% utilised but latency is low"
+### Scenario 1: "My disk is 100% utilised but latency is low" {#scenario-1-my-disk-is-100-utilised-but-latency-is-low}
 
 **Symptom**: `iostat -x` shows `%util=100` on an NVMe device but `r_await` and `w_await` are well under 1 ms. Application performance is normal.
 
@@ -780,7 +780,7 @@ ls /sys/block/nvme0n1/mq/
 
 **Resolution**: `%util` is not the right saturation metric for NVMe. Use `await` (ideally `r_await` and `w_await`) to assess whether latency is degrading. Add capacity or reduce I/O only if `await` is rising above your SLA threshold.
 
-### Scenario 2: "Write latency spikes every 30 seconds"
+### Scenario 2: "Write latency spikes every 30 seconds" {#scenario-2-write-latency-spikes-every-30-seconds}
 
 **Symptom**: Application write latency is normally 1–2 ms but spikes to 50–200 ms at regular ~30-second intervals, then recovers.
 
@@ -816,7 +816,7 @@ iostat -x 1 | grep -E "Device|nvme|sda"
 3. Use `sync` or `fsync` with appropriate granularity in the application to control flush timing explicitly.
 4. Use I/O scheduling: `blk-mq` with the `kyber` scheduler can prioritize foreground reads over writeback.
 
-### Scenario 3: "Reads are slow but disk shows no reads"
+### Scenario 3: "Reads are slow but disk shows no reads" {#scenario-3-reads-are-slow-but-disk-shows-no-reads}
 
 **Symptom**: Application read latency is high. `iostat` shows near-zero read throughput. `/proc/vmstat` shows elevated `pgmajfault`. The machine has low free memory.
 
@@ -849,7 +849,7 @@ echo 0 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_delete_from_page_ca
 - Use cgroup v2 memory limits to prevent other workloads from evicting the shared cache.
 - Add memory, or move the competing workload to a different machine.
 
-### Scenario 4: "A process is doing more I/O than expected"
+### Scenario 4: "A process is doing more I/O than expected" {#scenario-4-a-process-is-doing-more-io-than-expected}
 
 **Symptom**: `iotop` shows a specific process writing many MB/s. Application logs do not explain it. The volume of I/O is much higher than the expected logical write rate.
 
@@ -898,7 +898,7 @@ done
 
 ---
 
-## Quick Reference: Tool Selection
+## Quick Reference: Tool Selection {#quick-reference-tool-selection}
 
 | Question | Tool |
 |----------|------|
@@ -915,7 +915,7 @@ done
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -932,22 +932,22 @@ done
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/block/stat.rst`](https://docs.kernel.org/block/stat.html) — official documentation for `/proc/diskstats` and `/sys/block/<dev>/stat` fields
 - [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html) — all `vm.*` sysctl parameters including dirty writeback tuning
 - [`Documentation/accounting/psi.rst`](https://docs.kernel.org/accounting/psi.html) — PSI design, interpretation, and notification interface
 
-### Related pages
+### Related pages {#related-pages}
 
 - [page-cache-writeback.md](page-cache-writeback.md) — how dirty pages are managed and flushed
 - [buffered-io.md](buffered-io.md) — the full buffered write path from `write()` to storage
 - [readahead.md](readahead.md) — how the kernel prefetches pages and how to tune readahead
 - [direct-io.md](direct-io.md) — O_DIRECT I/O: bypassing the page cache and its trade-offs
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Tracking pressure-stall information](https://lwn.net/Articles/759781/) — design and motivation for PSI
 - [LWN: The io.weight I/O-bandwidth controller](https://lwn.net/Articles/792256/) — cgroup v2 I/O-bandwidth controller

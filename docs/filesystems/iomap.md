@@ -1,10 +1,10 @@
-# iomap: the Extent-Based I/O Framework
+# iomap: the Extent-Based I/O Framework {#iomap-the-extent-based-io-framework}
 
 > The modern, filesystem-agnostic layer that maps file offsets to device blocks and drives buffered, direct, and DAX I/O over them — what it is, what it replaced, and why
 
 For most of Linux's history, the generic code that turned a `read()` or `write()` into block I/O was built on the **`buffer_head`**: one small descriptor per filesystem block. iomap is the framework that replaced it, and it is now the shared I/O engine under XFS, gfs2, zonefs, and the direct-I/O path of ext4 and btrfs (plus ext4's DAX path). Understanding iomap is understanding how a modern Linux filesystem actually moves data.
 
-## The problem with `buffer_head`
+## The problem with `buffer_head` {#the-problem-with-buffer_head}
 
 A `buffer_head` describes the mapping and state of a **single** filesystem block (typically 4 KiB). That granularity is the whole problem:
 
@@ -12,7 +12,7 @@ A `buffer_head` describes the mapping and state of a **single** filesystem block
 - **No notion of an extent.** Modern filesystems (XFS, ext4, btrfs) store files as **extents** — "these 40,000 blocks are contiguous on disk." The `buffer_head` model can't express that; it re-derives the mapping one block at a time.
 - **Tangled state.** `buffer_head` mixed the block *mapping* with page dirtiness/writeback state and locking, making the generic paths hard to reason about and hard to make concurrent.
 
-## The core idea: describe a mapping, not a block
+## The core idea: describe a mapping, not a block {#the-core-idea-describe-a-mapping-not-a-block}
 
 iomap's central structure, `struct iomap`, describes an arbitrarily large **contiguous mapping** of a file range to a device range in a single object — offset, length, the device block address, the backing device, and a **type**:
 
@@ -26,7 +26,7 @@ iomap's central structure, `struct iomap`, describes an arbitrarily large **cont
 
 One `struct iomap` can cover megabytes, so the generic code asks the filesystem for a mapping *once* and then processes the whole range.
 
-## How it works: `iomap_begin` and the iteration loop
+## How it works: `iomap_begin` and the iteration loop {#how-it-works-iomap_begin-and-the-iteration-loop}
 
 The division of labor is the point. The filesystem provides just two callbacks in a `struct iomap_ops`:
 
@@ -43,7 +43,7 @@ On top of the iterator, iomap provides the full set of high-level operations, so
 - **DAX** — direct-access I/O to persistent memory, bypassing the page cache.
 - **`FIEMAP`, `SEEK_HOLE`/`SEEK_DATA`, swapfile activation** — all fall out of the same "ask the fs for the mapping" model.
 
-## History and adoption
+## History and adoption {#history-and-adoption}
 
 iomap was introduced in 2016 by Christoph Hellwig ([`ae259a9c8593`](https://git.kernel.org/linus/ae259a9c8593) "fs: introduce iomap infrastructure", Linux 4.8), initially to give XFS a clean `SEEK_HOLE`/`FIEMAP` and direct-I/O path. It proved general enough that the code was later split into its own subsystem directory ([`1c230208f53d`](https://git.kernel.org/linus/1c230208f53d) "iomap: start moving code to fs/iomap/"), and filesystems migrated their paths onto it:
 
@@ -54,7 +54,7 @@ iomap was introduced in 2016 by Christoph Hellwig ([`ae259a9c8593`](https://git.
 
 iomap was also **converted to folios early**, and — crucially — its generic paths were already centralized in `fs/iomap/` rather than duplicated behind per-filesystem `buffer_head` code. That is why the kernel's folio conversion advanced first through the iomap-based filesystems: there was one place to convert, not one per filesystem.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: iomap design](https://docs.kernel.org/filesystems/iomap/design.html) — the data model and the theory of operation
 - [Kernel docs: iomap operations](https://docs.kernel.org/filesystems/iomap/operations.html) — the buffered, direct, DAX, and writeback APIs

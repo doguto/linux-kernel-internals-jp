@@ -1,8 +1,8 @@
-# Page Cache Writeback
+# Page Cache Writeback {#page-cache-writeback}
 
 > How the kernel flushes dirty pages to storage, and what controls the timing
 
-## What writeback is
+## What writeback is {#what-writeback-is}
 
 When a process calls `write()`, the kernel copies data into **page cache** pages and marks them **dirty** — modified in memory but not yet on disk. At some later point the kernel must flush these dirty pages to storage. That process is called **writeback**.
 
@@ -22,7 +22,7 @@ Writeback sits at the intersection of two competing pressures:
 
 The kernel balances these by limiting how much of RAM can be dirty at any time, and by proactively flushing dirty pages in the background.
 
-## Writeback threads: `bdi_writeback`
+## Writeback threads: `bdi_writeback` {#writeback-threads-bdi_writeback}
 
 Each block device has an associated **backing device info** (`struct bdi_writeback`) that owns the writeback state for all filesystems on that device. A per-BDI kernel worker thread (`wb_workfn`) runs the actual flush work.
 
@@ -95,15 +95,15 @@ ls /sys/class/bdi/
 cat /sys/class/bdi/8:0/stats
 ```
 
-## Dirty throttling
+## Dirty throttling {#dirty-throttling}
 
 The kernel imposes two thresholds — expressed as a percentage of available memory — to control how much dirty data can accumulate.
 
-### `dirty_background_ratio` (default: 10%)
+### `dirty_background_ratio` (default: 10%) {#dirtybackgroundratio-default-10}
 
 The **soft limit**. When dirty pages exceed this fraction of memory, the background flusher (`wb_workfn`) is woken up to start writing. Processes writing new data are not stalled — writeback runs concurrently.
 
-### `dirty_ratio` (default: 20%)
+### `dirty_ratio` (default: 20%) {#dirty_ratio-default-20}
 
 The **hard limit**. When dirty pages hit this fraction of memory, the kernel throttles the writing process directly: `balance_dirty_pages()` stalls the process (via `io_schedule_timeout()`, putting it in `TASK_UNINTERRUPTIBLE` D-state) until enough dirty pages have been flushed. This is sometimes called **direct reclaim throttling** or **dirty throttling**. Throttled writers appear in D-state (uninterruptible sleep waiting for I/O), which is why `vmstat` reports them under `b` (blocked).
 
@@ -115,7 +115,7 @@ The **hard limit**. When dirty pages hit this fraction of memory, the kernel thr
                    wakes up    (process stalls)
 ```
 
-### `/proc/sys/vm/` parameters
+### `/proc/sys/vm/` parameters {#procsysvm-parameters}
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
@@ -166,23 +166,23 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 }
 ```
 
-## When writeback triggers
+## When writeback triggers {#when-writeback-triggers}
 
 Writeback fires from four distinct sources:
 
-### 1. Periodic (timer-based)
+### 1. Periodic (timer-based) {#1-periodic-timer-based}
 
 Every `dirty_writeback_centisecs` centiseconds, the per-BDI delayed work item fires `wb_workfn`. It flushes pages older than `dirty_expire_centisecs`. This is the normal steady-state path for most workloads.
 
-### 2. Soft limit crossed
+### 2. Soft limit crossed {#2-soft-limit-crossed}
 
 When dirty pages exceed `dirty_background_ratio`, `wb_start_background_writeback()` is called from `balance_dirty_pages()`, waking the flusher immediately without stalling the writer.
 
-### 3. Memory pressure (kswapd)
+### 3. Memory pressure (kswapd) {#3-memory-pressure-kswapd}
 
 When `kswapd` tries to reclaim pages, it cannot reclaim dirty pages without writing them first. It calls `wakeup_flusher_threads()` to ask writeback to flush dirty pages so they become reclaimable. If background writeback is too slow, `kswapd` itself may write pages directly.
 
-### 4. Explicit sync calls
+### 4. Explicit sync calls {#4-explicit-sync-calls}
 
 `sync()`, `fsync()`, and `fdatasync()` inject a `wb_writeback_work` item directly into the BDI's work queue, bypassing the periodic timer entirely.
 
@@ -200,7 +200,7 @@ When `kswapd` tries to reclaim pages, it cannot reclaim dirty pages without writ
                     writeback_inodes_wb()
 ```
 
-## The writeback path
+## The writeback path {#the-writeback-path}
 
 Once `wb_workfn` is running, the call chain proceeds down through the VFS and into the filesystem:
 
@@ -251,7 +251,7 @@ struct writeback_control {
 };
 ```
 
-## `fsync()` vs `fdatasync()` vs `sync()`
+## `fsync()` vs `fdatasync()` vs `sync()` {#fsync-vs-fdatasync-vs-sync}
 
 These three calls are often confused. They differ in scope and in what metadata they guarantee:
 
@@ -302,11 +302,11 @@ static int do_fsync(unsigned int fd, int datasync)
 }
 ```
 
-## Write barriers and persistence
+## Write barriers and persistence {#write-barriers-and-persistence}
 
 Even after `fsync()` returns, durability depends on the storage device honouring write ordering. The kernel uses **write barriers** to communicate ordering requirements to the block layer.
 
-### `O_SYNC` and `O_DSYNC`
+### `O_SYNC` and `O_DSYNC` {#osync-and-odsync}
 
 Opening a file with `O_SYNC` makes every `write()` behave like `write()` + `fsync()` — the call does not return until data and metadata have been flushed to durable storage.
 
@@ -324,7 +324,7 @@ write(fd, buf, len);  /* data durable; inode mtime may not be */
 
 These flags set `IOCB_SYNC` / `IOCB_DSYNC` on the in-kernel `kiocb`, which the filesystem checks after completing the write to decide whether to call `vfs_fsync_range()` inline.
 
-### Flush cache commands
+### Flush cache commands {#flush-cache-commands}
 
 The block layer translates write barrier requirements into storage commands:
 
@@ -344,7 +344,7 @@ cat /sys/block/nvme0n1/queue/fua   # 1 = supported
 hdparm -W /dev/sda                 # 0 = disabled, 1 = enabled
 ```
 
-### Ordering guarantees summary
+### Ordering guarantees summary {#ordering-guarantees-summary}
 
 ```
 O_SYNC write:
@@ -366,7 +366,7 @@ fdatasync():
 
 If a drive has a volatile write cache and write cache is enabled, data written without `O_SYNC`/`fsync()` can be lost on power failure even after `write()` returns — it may still be sitting in the drive's DRAM.
 
-## Observing writeback
+## Observing writeback {#observing-writeback}
 
 ```bash
 # Real-time dirty page stats:
@@ -386,7 +386,7 @@ vmstat 1
 iostat -x 1
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Buffered I/O](buffered-io.md) — how the page cache works and how dirty pages are created
 - [Direct I/O](direct-io.md) — bypassing the page cache and writeback entirely

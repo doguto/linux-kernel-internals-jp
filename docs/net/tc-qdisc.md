@@ -1,8 +1,8 @@
-# TC (Traffic Control) and qdisc
+# TC (Traffic Control) and qdisc {#tc-traffic-control-and-qdisc}
 
 > How the kernel shapes, schedules, and polices outbound traffic
 
-## What TC does
+## What TC does {#what-tc-does}
 
 Traffic Control (TC) is the kernel's framework for controlling packet transmission. It sits between `dev_queue_xmit()` and the NIC driver, and handles:
 
@@ -13,7 +13,7 @@ Traffic Control (TC) is the kernel's framework for controlling packet transmissi
 
 TC only controls **egress** (outbound) by default. Ingress shaping requires redirect tricks (IFB device).
 
-## The qdisc hierarchy
+## The qdisc hierarchy {#the-qdisc-hierarchy}
 
 Every network device has a root **qdisc** (queuing discipline). When a packet is transmitted, it goes through the qdisc before reaching the driver:
 
@@ -36,7 +36,7 @@ root qdisc (HTB)
     └── leaf qdisc (sfq)
 ```
 
-## Viewing current qdisc
+## Viewing current qdisc {#viewing-current-qdisc}
 
 ```bash
 # Show qdisc on an interface
@@ -52,9 +52,9 @@ tc class show dev eth0
 tc filter show dev eth0
 ```
 
-## Common qdiscs
+## Common qdiscs {#common-qdiscs}
 
-### pfifo_fast (default)
+### pfifo_fast (default) {#pfifo_fast-default}
 
 Three priority bands (0=high, 1=med, 2=low) based on the packet's DSCP/TOS field. Simple FIFO within each band. No rate limiting.
 
@@ -64,7 +64,7 @@ tc qdisc show dev eth0
 # qdisc pfifo_fast 0: root refcnt 2 bands 3 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
 ```
 
-### fq_codel (modern default on Linux desktops)
+### fq_codel (modern default on Linux desktops) {#fq_codel-modern-default-on-linux-desktops}
 
 **Fair Queueing + Controlled Delay (CoDel)**. Combines fair per-flow scheduling with active queue management (AQM) to reduce bufferbloat:
 
@@ -82,7 +82,7 @@ Parameters:
 - `flows`: number of hash buckets for fair queueing (default 1024)
 - `ecn`: mark packets instead of dropping when possible
 
-### fq (Fair Queue — default for BBR)
+### fq (Fair Queue — default for BBR) {#fq-fair-queue-default-for-bbr}
 
 Per-flow fair queuing with pacing. Allows each flow to specify its desired send rate. Required for TCP BBR congestion control's accurate pacing:
 
@@ -94,7 +94,7 @@ echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
 tc qdisc replace dev eth0 root fq  # fq enables accurate rate pacing
 ```
 
-### TBF (Token Bucket Filter)
+### TBF (Token Bucket Filter) {#tbf-token-bucket-filter}
 
 Rate-limits traffic to a specific bandwidth with burst allowance:
 
@@ -108,7 +108,7 @@ tc qdisc add dev eth0 root tbf rate 1mbit burst 10k latency 50ms
 #   latency: maximum queuing latency (used to calculate queue size)
 ```
 
-### HTB (Hierarchical Token Bucket)
+### HTB (Hierarchical Token Bucket) {#htb-hierarchical-token-bucket}
 
 The standard choice for multi-class rate limiting. Supports a hierarchy of classes with guaranteed and ceiling rates:
 
@@ -130,7 +130,7 @@ tc qdisc add dev eth0 parent 1:30 handle 30: fq_codel
 
 When class 1:10 uses less than 80Mbit, its unused bandwidth can be borrowed by 1:20 and 1:30, up to their ceiling (100Mbit).
 
-## TC filters: classifying packets
+## TC filters: classifying packets {#tc-filters-classifying-packets}
 
 Filters determine which class a packet goes to:
 
@@ -151,7 +151,7 @@ tc filter add dev eth0 parent 1: protocol ip prio 3 \
 tc filter add dev eth0 parent 1: bpf obj tc_prog.o sec tc flowid 1:10
 ```
 
-## TC eBPF (TC-BPF)
+## TC eBPF (TC-BPF) {#tc-ebpf-tc-bpf}
 
 eBPF programs can be attached to TC as classifiers or actions. Unlike XDP, TC-BPF runs **after `sk_buff` allocation**, enabling full packet modification:
 
@@ -180,7 +180,7 @@ TC-BPF verdicts:
 - `TC_ACT_SHOT` (= 2): drop
 - `TC_ACT_REDIRECT` (= 7): redirect to another interface
 
-## Ingress shaping with IFB
+## Ingress shaping with IFB {#ingress-shaping-with-ifb}
 
 TC only shapes egress natively. For ingress shaping:
 
@@ -198,7 +198,7 @@ tc filter add dev eth0 parent ffff: protocol all u32 \
 tc qdisc add dev ifb0 root tbf rate 10mbit burst 20k latency 100ms
 ```
 
-## netem: network emulation
+## netem: network emulation {#netem-network-emulation}
 
 `netem` adds artificial delay, jitter, packet loss, and corruption — useful for testing:
 
@@ -216,7 +216,7 @@ tc qdisc add dev eth0 root netem delay 50ms loss 1% corrupt 0.1%
 tc qdisc del dev eth0 root
 ```
 
-## Statistics
+## Statistics {#statistics}
 
 ```bash
 # Show qdisc statistics
@@ -233,7 +233,7 @@ tc -s class show dev eth0
 watch -n 1 'tc -s qdisc show dev eth0'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [XDP](xdp.md) — Pre-stack packet processing (higher performance than TC for drops)
 - [AF_XDP Sockets](af-xdp.md) — Userspace packet I/O without full kernel bypass

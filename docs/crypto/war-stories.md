@@ -1,4 +1,4 @@
-# Crypto War Stories
+# Crypto War Stories {#crypto-war-stories}
 
 > Real incidents: timing attacks, IV reuse, key leaks, and broken RNG
 
@@ -7,16 +7,16 @@ structure: the problem, how it was diagnosed, the root cause in kernel internals
 
 ---
 
-## 1. IV reuse in dm-crypt with plain IV mode
+## 1. IV reuse in dm-crypt with plain IV mode {#1-iv-reuse-in-dm-crypt-with-plain-iv-mode}
 
-### Problem
+### Problem {#problem}
 
 A system administrator configured a dm-crypt volume using the legacy `aes-cbc-plain` cipher
 specification. After deploying it to a fleet of servers, a security review found that an
 attacker with read access to the raw block device could determine when two sectors contained
 identical plaintext.
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 The cipher specification was:
 
@@ -60,7 +60,7 @@ cryptsetup status myvolume
 # cipher: aes-cbc-plain    ← vulnerable
 ```
 
-### Root cause
+### Root cause {#root-cause}
 
 `aes-cbc-plain` was the historical default in older cryptsetup versions. It was superseded by
 `aes-cbc-essiv:sha256` (which derives the IV as `AES_encrypt(SHA256(volume_key), sector_num)`,
@@ -70,7 +70,7 @@ tweakable block cipher mode that does not have CBC's IV-reuse vulnerability).
 The "plain" suffix means: the IV is the literal sector number, no derivation. The "plain64"
 suffix uses a 64-bit sector number, fixing the original plain's 32-bit overflow issue.
 
-### Fix
+### Fix {#fix}
 
 Migrate to AES-XTS, which eliminates the IV-reuse problem by design:
 
@@ -95,16 +95,16 @@ mathematically independent even for identical plaintext sectors.
 
 ---
 
-## 2. Timing side-channel in MAC verification: crypto_memneq
+## 2. Timing side-channel in MAC verification: crypto_memneq {#2-timing-side-channel-in-mac-verification-crypto_memneq}
 
-### Problem
+### Problem {#problem_1}
 
 A kernel module implementing a custom authentication protocol compared authentication
 tags using `memcmp()`. Under carefully crafted network inputs, an attacker on the local
 network was able to distinguish valid from invalid authentication tags by measuring response
 latency with microsecond precision.
 
-### Diagnosis
+### Diagnosis {#diagnosis_1}
 
 The vulnerable code:
 
@@ -123,7 +123,7 @@ allowing a timing oracle attack to reconstruct the expected tag one byte at a ti
 This is the same class of vulnerability as the 2013 Lucky13 TLS attack and various HMAC
 verification bugs.
 
-### Root cause
+### Root cause {#root-cause_1}
 
 `memcmp()` is defined to return after the first difference — this is correct for general
 use, but wrong for secret comparison. The compiler is also free to optimize comparison code
@@ -174,7 +174,7 @@ it from proving the loop could exit early. Combined with the exported dispatcher
 `__crypto_memneq()` being `noinline` (preventing the caller's optimization context from
 affecting the comparison), the function maintains its constant-time property.
 
-### Fix
+### Fix {#fix_1}
 
 Replace all `memcmp()` calls in authentication paths with `crypto_memneq()`:
 
@@ -194,16 +194,16 @@ constructs that handle this correctly.
 
 ---
 
-## 3. getrandom() blocking at boot: services hang waiting for entropy
+## 3. getrandom() blocking at boot: services hang waiting for entropy {#3-getrandom-blocking-at-boot-services-hang-waiting-for-entropy}
 
-### Problem
+### Problem {#problem_2}
 
 A fleet of KVM virtual machines running a custom Linux-based appliance exhibited a
 reproducible hang during boot: `sshd` took 60–90 seconds to start, systemd journal showed
 services timing out, and the boot would eventually continue but with a severely delayed
 network stack.
 
-### Diagnosis
+### Diagnosis {#diagnosis_2}
 
 The symptom was traced to `getrandom()` blocking:
 
@@ -243,7 +243,7 @@ The VM was:
 - `systemd-random-seed.service` was loading the seed file too late in the boot sequence
   (after `network.target`, which itself needed `sshd` which needed getrandom...)
 
-### Root cause
+### Root cause {#root-cause_2}
 
 Circular dependency in boot:
 ```
@@ -258,7 +258,7 @@ network.target
 On virtual machines, interrupt jitter is low (the hypervisor delivers predictable timer
 interrupts). Without virtio-rng, the kernel collects entropy very slowly.
 
-### Fix
+### Fix {#fix_2}
 
 Three independent fixes, applied together for defense in depth:
 
@@ -303,15 +303,15 @@ dmesg | grep "crng init done"
 
 ---
 
-## 4. Kernel keyring leak via /proc
+## 4. Kernel keyring leak via /proc {#4-kernel-keyring-leak-via-proc}
 
-### Problem
+### Problem {#problem_3}
 
 A security audit found that a non-privileged process could enumerate key descriptions
 from other users' keyrings by reading `/proc/keys`. The concern was: could this leak
 sensitive information about key existence or purpose?
 
-### Diagnosis
+### Diagnosis {#diagnosis_3}
 
 ```bash
 # Any process can read /proc/keys
@@ -327,7 +327,7 @@ The key _description_ (name) is visible to all processes that can read `/proc/ke
 if they cannot read the payload. This is by design — `/proc/keys` shows all keys in the
 system but is filtered by the calling process's `view` permission.
 
-### Root cause
+### Root cause {#root-cause_3}
 
 `/proc/keys` is implemented in `security/keys/proc.c`. The kernel calls `key_task_permission()`
 for each key, with the `KEY_NEED_VIEW` permission bit:
@@ -377,7 +377,7 @@ keyctl setperm <serial> 0x3f3f3f01  # other can "view" — bug!
 Or the application used a key _description_ that exposed sensitive information (e.g., the
 description contained a hostname or database name).
 
-### Root cause (continued): logon keys prevent this
+### Root cause (continued): logon keys prevent this {#root-cause-continued-logon-keys-prevent-this}
 
 Keys of type `"logon"` cannot be read even by the owning process — the `.read` callback
 returns `-EPERM`. This is why fscrypt and cryptsetup use logon keys for actual key material:
@@ -395,7 +395,7 @@ keyctl print 1234abcd
 # keyctl_read_alloc: Permission denied
 ```
 
-### Fix
+### Fix {#fix_3}
 
 1. **Use logon keys for sensitive material** — applications that store secrets in the
    keyring should use `"logon"` type so the payload is never readable from userspace.
@@ -415,16 +415,16 @@ keyctl setperm <serial> 0x3f3f0000  # possessor and user only; group and other: 
 
 ---
 
-## 5. Hardware accelerator returning wrong results: silent ciphertext corruption
+## 5. Hardware accelerator returning wrong results: silent ciphertext corruption {#5-hardware-accelerator-returning-wrong-results-silent-ciphertext-corruption}
 
-### Problem
+### Problem {#problem_4}
 
 A server using an Intel QuickAssist Technology (QAT) accelerator for AES-GCM encryption in
 a TLS proxy began producing authentication failures on approximately 0.01% of requests.
 Application logs showed intermittent `-EBADMSG` from the kernel AEAD decrypt path. The
 failures were random in timing and not reproducible with specific inputs.
 
-### Diagnosis
+### Diagnosis {#diagnosis_4}
 
 The proxy was using the `qat` kernel driver which registers a high-priority AES-GCM
 implementation:
@@ -450,7 +450,7 @@ rmmod intel_qat
 The root cause was a firmware bug in a specific QAT revision that incorrectly handled
 scatter-gather lists spanning a 4GB physical address boundary.
 
-### Root cause: CRYPTO_ALG_TESTED and the self-test framework
+### Root cause: CRYPTO_ALG_TESTED and the self-test framework {#root-cause-cryptoalgtested-and-the-self-test-framework}
 
 The kernel's crypto subsystem has a mandatory self-test framework (`crypto/testmgr.c`) that
 runs known-answer tests on every registered algorithm before it is marked usable. An
@@ -492,7 +492,7 @@ vectors) but failed on real workloads with large scatter-gather lists crossing a
 boundaries. The self-test framework caught algorithm-level bugs, but this was a
 hardware bug that only manifested with specific DMA layouts.
 
-### Fix
+### Fix {#fix_4}
 
 **Immediate**: disable the QAT for AES-GCM by reducing its priority or unloading the driver.
 
@@ -541,7 +541,7 @@ validate hardware with workload-realistic test patterns before relying on new ac
 
 ---
 
-## Summary: lessons from the field
+## Summary: lessons from the field {#summary-lessons-from-the-field}
 
 | Incident | Core mistake | Correct approach |
 |---|---|---|
@@ -551,9 +551,9 @@ validate hardware with workload-realistic test patterns before relying on new ac
 | Keyring description leak | Sensitive data in key description | Opaque descriptions + logon key type |
 | Hardware silent corruption | Trusted self-tests as sufficient validation | DMA boundary checks + fallback |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/md/dm-crypt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/md/dm-crypt.c) — `crypt_iv_plain_gen()` and `crypt_iv_essiv_gen()`, the IV generators behind Case 1's plain-IV watermarking issue
 - [include/crypto/utils.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/utils.h) and [lib/crypto/memneq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/crypto/memneq.c) — `crypto_memneq()`/`__crypto_memneq()`, the constant-time comparison behind Case 2
@@ -564,14 +564,14 @@ validate hardware with workload-realistic test patterns before relying on new ac
 - [include/linux/crypto.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/crypto.h) — `CRYPTO_ALG_TESTED` (`0x00000400`), the self-test gate behind Case 5
 - [crypto/testmgr.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/testmgr.c) and [crypto/tcrypt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/tcrypt.c) — the mandatory self-test framework and the standalone stress-test module referenced in Case 5's fix
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`cryptsetup(8)`](https://man7.org/linux/man-pages/man8/cryptsetup.8.html) — the LUKS/dm-crypt command-line tool used throughout Case 1
 - [`getrandom(2)`](https://man7.org/linux/man-pages/man2/getrandom.2.html) — documents the blocking-until-seeded behavior behind Case 3
 - [`random(4)`](https://man7.org/linux/man-pages/man4/random.4.html) — `/dev/random` vs `/dev/urandom`, entropy pool initialization, and why `getrandom(2)` is recommended during early boot
 - [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — `setperm`, `print`, and the view/read/write/search/link/setattr permission bits used in Case 4
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Crypto API](crypto-api.md) — AEAD, SKCIPHER, the algorithm registration model
 - [dm-crypt and fscrypt](encryption.md) — IV modes and cipher choices
@@ -579,12 +579,12 @@ validate hardware with workload-realistic test patterns before relying on new ac
 - [crypto_engine](crypto-engine.md) — the fallback pattern for hardware drivers
 - [Random Number Generation](rng.md) — entropy at boot
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Constant-time instructions and processor optimizations](https://lwn.net/Articles/921511/) (February 2023) — timing side channels and the tension between constant-time code and CPU-level optimizations, directly behind Case 2
 - [FIPS-compliant random numbers for the kernel](https://lwn.net/Articles/877607/) (December 2021) — the debate over faster boot-time entropy collection, the broader context behind Case 3
 
-### External
+### External {#external}
 
 - [Kernel documentation: dm-crypt](https://docs.kernel.org/admin-guide/device-mapper/dm-crypt.html) — the `cipher-chainmode-ivmode[:ivopts]` specification format, including `aes-cbc-essiv:sha256` and `aes-xts-plain64`, behind Case 1
 - [Kernel documentation: hw_random](https://docs.kernel.org/admin-guide/hw_random.html) — the `/dev/hwrng` framework that hardware RNG drivers (including virtio-rng) feed, behind Case 3's fix

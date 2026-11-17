@@ -1,8 +1,8 @@
-# NUMA Effects on Memory Reclaim
+# NUMA Effects on Memory Reclaim {#numa-effects-on-memory-reclaim}
 
 > How per-node watermarks, per-node kswapd threads, and NUMA balancing interact to shape memory reclaim on multi-socket systems — and what can go wrong when a remote node is under pressure.
 
-## Background: NUMA memory is node-local
+## Background: NUMA memory is node-local {#background-numa-memory-is-node-local}
 
 On a NUMA system each physical CPU socket (a **node**) owns a bank of memory. The kernel represents each node as a `pg_data_t` (also called `pgdat`). Each `pgdat` contains one or more zones (`struct zone`), and each zone maintains its own watermark thresholds.
 
@@ -23,7 +23,7 @@ There is **one kswapd kernel thread per node**, not one for the whole system. Re
 
 ---
 
-## Per-node watermarks
+## Per-node watermarks {#per-node-watermarks}
 
 Every `struct zone` stores its own watermark array:
 
@@ -71,9 +71,9 @@ Because each zone on each node has its own watermarks, **Node 1 can be at `WMARK
 
 ---
 
-## Per-node kswapd
+## Per-node kswapd {#per-node-kswapd}
 
-### One thread per pgdat
+### One thread per pgdat {#one-thread-per-pgdat}
 
 `kswapd_run()` creates one kernel thread per node at boot:
 
@@ -92,7 +92,7 @@ void __meminit kswapd_run(int nid)
 
 Each thread is pinned to its node (`kthread_create_on_node`) so allocations made by kswapd itself come from the correct local pool. The `pgdat` pointer stored in `pg_data_t::kswapd` is that node's thread handle.
 
-### How kswapd wakes up
+### How kswapd wakes up {#how-kswapd-wakes-up}
 
 `wakeup_kswapd()` is called from the page allocator (`mm/page_alloc.c`) whenever an allocation is attempted against a zone whose free pages are below `WMARK_LOW`:
 
@@ -112,7 +112,7 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 
 Only the **zone's owning node's kswapd** is woken. A shortage on Node 1 does not automatically wake kswapd on Node 0.
 
-### What balance_pgdat does
+### What balance_pgdat does {#what-balance_pgdat-does}
 
 Once woken, the kswapd thread calls `balance_pgdat()`:
 
@@ -140,7 +140,7 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 
 kswapd reclaims until every zone on **its own node** is above `WMARK_HIGH`. It has no obligation to reclaim from a remote node, and it does not look at the remote node's watermarks.
 
-### kswapd vs direct reclaim
+### kswapd vs direct reclaim {#kswapd-vs-direct-reclaim}
 
 | | kswapd (background) | Direct reclaim |
 |---|---|---|
@@ -155,9 +155,9 @@ kswapd reclaims until every zone on **its own node** is above `WMARK_HIGH`. It h
 
 ---
 
-## NUMA balancing and its interaction with reclaim
+## NUMA balancing and its interaction with reclaim {#numa-balancing-and-its-interaction-with-reclaim}
 
-### How NUMA hint faults work
+### How NUMA hint faults work {#how-numa-hint-faults-work}
 
 When `CONFIG_NUMA_BALANCING` is on, the kernel periodically scans a task's VMA with `task_numa_work()` (in `kernel/sched/fair.c`), installing PROT_NONE PTEs on pages whose placement it wants to evaluate. The next access to such a page traps as a page fault and reaches `do_numa_page()` in `mm/memory.c`.
 
@@ -190,7 +190,7 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 
 The same pattern applies to transparent huge pages, handled in `mm/huge_memory.c`.
 
-### The promotion path vs the reclaim path
+### The promotion path vs the reclaim path {#the-promotion-path-vs-the-reclaim-path}
 
 When a remote page is accessed:
 
@@ -218,15 +218,15 @@ Pages that cannot be migrated (for example because Node 0 is low on memory itsel
 
 This is the core tension: **the reclaim path and the promotion path compete**. A page that kswapd1 reclaims to relieve Node 1's pressure may be one that NUMA balancing was about to promote to Node 0 for better locality.
 
-### WMARK_PROMO and memory tiering
+### WMARK_PROMO and memory tiering {#wmark_promo-and-memory-tiering}
 
 When `sysctl_numa_balancing_mode` has `NUMA_BALANCING_MEMORY_TIERING` set (used for CXL/persistent memory tiers), `pgdat_balanced()` uses `promo_wmark_pages(zone)` instead of `high_wmark_pages(zone)` as its target. This reserves more headroom on the faster tier so promotions from slower memory can proceed without immediately triggering reclaim.
 
 ---
 
-## zone_reclaim_mode
+## zone_reclaim_mode {#zonereclaimmode}
 
-### What it was
+### What it was {#what-it-was}
 
 `vm.zone_reclaim_mode` (kernel variable: `node_reclaim_mode`) is a sysctl that, when non-zero, causes the page allocator to attempt local reclaim **before** falling back to a remote node's memory. It was intended for workloads where NUMA locality is more important than the cache-spill cost of forced reclaim.
 
@@ -261,7 +261,7 @@ ret = node_reclaim(zone->zone_pgdat, gfp_mask, order);
 
 `zone_allows_reclaim()` enforces a NUMA distance gate: reclaim is only attempted if the target zone's node is within `node_reclaim_distance` of the preferred zone's node (default: `RECLAIM_DISTANCE = 30` in `include/linux/topology.h`). This prevents the allocator from doing expensive local reclaim to avoid a remote node that is actually close by.
 
-### Why it caused latency problems
+### Why it caused latency problems {#why-it-caused-latency-problems}
 
 Forcing local reclaim before remote allocation means:
 
@@ -271,7 +271,7 @@ Forcing local reclaim before remote allocation means:
 
 For general-purpose workloads — including most databases and in-memory caches — the loss of warm cache pages exceeds any benefit from avoiding the NUMA penalty of a remote access.
 
-### Current state
+### Current state {#current-state}
 
 `zone_reclaim_mode` is **disabled by default** (zero). The kernel documentation (`Documentation/admin-guide/sysctl/vm.rst`) explicitly states:
 
@@ -284,7 +284,7 @@ It remains useful only for tightly partitioned HPC or NUMA-aware real-time workl
 
 ---
 
-## Remote memory pressure causing local reclaim
+## Remote memory pressure causing local reclaim {#remote-memory-pressure-causing-local-reclaim}
 
 Consider a two-node system where Node 1's allocations are exhausting local memory:
 
@@ -309,9 +309,9 @@ This is not a bug — it is the correct behavior for general-purpose workloads. 
 
 ---
 
-## Observing per-node reclaim
+## Observing per-node reclaim {#observing-per-node-reclaim}
 
-### /proc/vmstat
+### /proc/vmstat {#procvmstat}
 
 `/proc/vmstat` reports system-wide counters. The most relevant for reclaim:
 
@@ -335,7 +335,7 @@ Key fields (string names from `mm/vmstat.c`):
 
 `zone_reclaim_success` and `zone_reclaim_failed` are non-zero only when `zone_reclaim_mode != 0`.
 
-### Per-node vmstat
+### Per-node vmstat {#per-node-vmstat}
 
 Each node exposes its own vmstat counters through sysfs:
 
@@ -351,7 +351,7 @@ cat /sys/devices/system/node/node1/vmstat
 
 Comparing `pgsteal_kswapd` between nodes reveals which node is bearing the reclaim burden. A large asymmetry often indicates a memory placement problem.
 
-### NUMA allocation counters
+### NUMA allocation counters {#numa-allocation-counters}
 
 ```bash
 numastat          # per-node hit/miss counters (reads /sys/devices/system/node/nodeN/numastat)
@@ -371,7 +371,7 @@ The relevant per-node counters in `/sys/devices/system/node/nodeN/numastat`:
 
 A rising `numa_miss` on Node 1 alongside active kswapd reclaim on Node 1 is the canonical sign that Node 1 is memory-pressured and falling back to remote allocation.
 
-### NUMA balancing counters
+### NUMA balancing counters {#numa-balancing-counters}
 
 ```bash
 grep numa /proc/vmstat
@@ -387,9 +387,9 @@ A low `numa_pages_migrated` / `numa_hint_faults` ratio means most hint faults ar
 
 ---
 
-## Tuning
+## Tuning {#tuning}
 
-### MPOL_INTERLEAVE to reduce per-node hotspots
+### MPOL_INTERLEAVE to reduce per-node hotspots {#mpol_interleave-to-reduce-per-node-hotspots}
 
 When a large shared-memory dataset (e.g., a database buffer pool, a shared queue) is allocated entirely on one node, any memory pressure on that node will evict parts of that dataset. Interleaving spreads the allocation — and the pressure — across all nodes:
 
@@ -408,7 +408,7 @@ numactl --interleave=all ./my_application
 
 The tradeoff: individual accesses will sometimes be remote, increasing average latency. This is usually worthwhile when the dataset is too large to fit on one node or when multiple NUMA-local processes all need the same data.
 
-### Transparent huge pages and NUMA
+### Transparent huge pages and NUMA {#transparent-huge-pages-and-numa}
 
 THP allocation is always attempted from the local node first. If the local node cannot satisfy a 2MB contiguous allocation but a remote node can, the kernel falls back to a remote allocation or to a base-page allocation — it does not split the THP request across nodes. Under local memory pressure, kswapd's compaction (`kcompactd`) runs to create the contiguous free range, but this compaction is also per-node.
 
@@ -420,7 +420,7 @@ For applications that mix NUMA pinning with THP:
 !!!tip
     If kswapd on one node is consistently more active than others while the overall system has free memory, the first thing to check is whether a single process or shared segment is concentrating its allocations on that node. `numastat -p <pid>` shows how a process's virtual mappings distribute across nodes.
 
-### Adjusting node_reclaim_distance
+### Adjusting node_reclaim_distance {#adjusting-nodereclaimdistance}
 
 On AMD EPYC or similar multi-die platforms where 2-hop NUMA distance is reported as 32 (above the default `RECLAIM_DISTANCE` of 30), the kernel may refuse to do local reclaim across the intra-socket fabric even though those accesses are relatively fast. The distance threshold can be tuned:
 
@@ -428,7 +428,7 @@ The `node_reclaim_distance` variable in `mm/page_alloc.c` defaults to `RECLAIM_D
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | What it contains |
 |---|---|
@@ -444,26 +444,26 @@ The `node_reclaim_distance` variable in `mm/page_alloc.c` defaults to `RECLAIM_D
 | `mm/vmstat.c` | Counter string names (`pgsteal_kswapd`, `numa_hit`, `numa_miss`, `zone_reclaim_success`, etc.) |
 | `kernel/sched/fair.c` | `task_numa_work()` — NUMA hint PTE scanner |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `kswapd()`, `kswapd_run()`, `balance_pgdat()`, `pgdat_balanced()`, `wakeup_kswapd()`, `node_reclaim()`, `node_reclaim_mode`
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `get_page_from_freelist()`, `zone_allows_reclaim()`, `node_reclaim_distance`, and fallback zonelist traversal
 - [mm/memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) — `do_numa_page()` and `numa_migrate_check()`: the NUMA hint fault path that drives page migration
 - [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()` and `migrate_misplaced_folio_prepare()`
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - `Documentation/admin-guide/sysctl/vm.rst` — documents `zone_reclaim_mode`, `min_free_kbytes`, and related reclaim knobs ([rendered](https://docs.kernel.org/admin-guide/sysctl/vm.html))
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Per-node reclaim and kswapd](https://lwn.net/Articles/461294/) — analysis of per-node kswapd wakeup logic and the interaction between nodes under memory pressure
 - [NUMA balancing and page migration](https://lwn.net/Articles/568870/) — how hint faults, migration decisions, and the promotion path work in automatic NUMA balancing
 - [Zone reclaim mode considered harmful](https://lwn.net/Articles/432224/) — the case for disabling `zone_reclaim_mode` on general-purpose workloads
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Memory Management](numa.md) — NUMA overview, memory policies, automatic balancing, and monitoring
 - [Zone Reclaim Policy](zone-reclaim.md) — `vm.zone_reclaim_mode`, watermark boosting, and DMA zone pressure in detail

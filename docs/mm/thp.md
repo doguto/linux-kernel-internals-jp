@@ -1,8 +1,8 @@
-# Transparent Huge Pages (THP)
+# Transparent Huge Pages (THP) {#transparent-huge-pages-thp}
 
 > Automatic huge page allocation without application changes
 
-## What Is THP?
+## What Is THP? {#what-is-thp}
 
 Transparent Huge Pages automatically promotes regular 4KB pages to 2MB huge pages when possible. Unlike hugetlbfs, THP requires no application modifications - the kernel handles everything transparently.
 
@@ -15,9 +15,9 @@ Without THP:                    With THP:
    512 TLB entries needed         1 TLB entry needed
 ```
 
-## From hugetlbfs to THP
+## From hugetlbfs to THP {#from-hugetlbfs-to-thp}
 
-### The original huge page interface (hugetlbfs, Linux 2.6)
+### The original huge page interface (hugetlbfs, Linux 2.6) {#the-original-huge-page-interface-hugetlbfs-linux-26}
 
 Hardware huge pages (2MB on x86-64) have been available since the Pentium Pro. Linux exposed them through `hugetlbfs`: a special filesystem where files backed by huge pages could be `mmap()`'d with `MAP_HUGETLB`.
 
@@ -25,7 +25,7 @@ The problem was operational: huge pages had to be reserved at boot time (or via 
 
 If the pool was too small, applications fell back to 4KB pages. If it was too large, the pre-reserved memory sat idle. And it was entirely opt-in — the thousands of applications that didn't explicitly request huge pages got no benefit, even if their working sets were large enough to benefit dramatically.
 
-### Transparent Huge Pages (Linux 2.6.38, 2011)
+### Transparent Huge Pages (Linux 2.6.38, 2011) {#transparent-huge-pages-linux-2638-2011}
 
 Andrea Arcangeli designed THP to deliver huge page performance to applications without any changes. The kernel itself decides when to allocate a 2MB huge page in place of 512 4KB pages, based on alignment, availability, and the `transparent_hugepage` policy.
 
@@ -35,9 +35,9 @@ The compaction challenge made THP complex to tune. Physical memory fragments ove
 
 The `transparent_hugepage=defer` mode (Linux 4.14+) tries to allocate huge pages at fault time but defers compaction to `khugepaged`, avoiding synchronous compaction latency in the application's hot path. Per-process control via `MADV_HUGEPAGE` / `MADV_NOHUGEPAGE` lets performance-sensitive applications opt in while others use 4KB pages.
 
-## Why THP?
+## Why THP? {#why-thp}
 
-### The TLB Problem
+### The TLB Problem {#the-tlb-problem}
 
 The TLB (Translation Lookaside Buffer) caches virtual-to-physical address translations in a [multi-level hierarchy](https://lwn.net/Articles/379748/).
 
@@ -51,7 +51,7 @@ On modern x86-64, the L1 dTLB holds 64-96 entries and the L2 (STLB) holds 1024-3
 
 Large workloads constantly evict TLB entries, causing expensive page table walks.
 
-### Huge Pages as Solution
+### Huge Pages as Solution {#huge-pages-as-solution}
 
 2MB pages reduce TLB pressure by 512x:
 
@@ -61,9 +61,9 @@ Large workloads constantly evict TLB entries, causing expensive page table walks
 | 2MB | 512 | 512 |
 | 1GB | 1 | 1 |
 
-## How THP Works
+## How THP Works {#how-thp-works}
 
-### Two Allocation Paths
+### Two Allocation Paths {#two-allocation-paths}
 
 **1. Fault-based (synchronous)**
 
@@ -98,9 +98,9 @@ Find 512 contiguous 4KB pages?
     └── No: Skip, try again later
 ```
 
-## Configuration
+## Configuration {#configuration}
 
-### Global Settings
+### Global Settings {#global-settings}
 
 ```bash
 # View current mode
@@ -114,7 +114,7 @@ cat /sys/kernel/mm/transparent_hugepage/enabled
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-### Defrag Settings
+### Defrag Settings {#defrag-settings}
 
 ```bash
 # When to defragment memory for huge pages
@@ -128,7 +128,7 @@ cat /sys/kernel/mm/transparent_hugepage/defrag
 # never         - Never defrag for THP
 ```
 
-### Per-Process Control
+### Per-Process Control {#per-process-control}
 
 ```c
 #include <sys/mman.h>
@@ -143,7 +143,7 @@ madvise(ptr, size, MADV_HUGEPAGE);
 madvise(ptr, size, MADV_NOHUGEPAGE);
 ```
 
-### khugepaged Tuning
+### khugepaged Tuning {#khugepaged-tuning}
 
 ```bash
 # Scan interval (milliseconds)
@@ -161,9 +161,9 @@ cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none
 
 (See [THP kernel docs](https://docs.kernel.org/admin-guide/mm/transhuge.html) for all tunables.)
 
-## THP and Specific Workloads
+## THP and Specific Workloads {#thp-and-specific-workloads}
 
-### Databases
+### Databases {#databases}
 
 Databases often benefit from THP but can suffer from:
 
@@ -172,7 +172,7 @@ Databases often benefit from THP but can suffer from:
 
 Many databases recommend `madvise` mode with explicit huge page requests.
 
-### Virtual Machines (KVM)
+### Virtual Machines (KVM) {#virtual-machines-kvm}
 
 THP was originally designed for KVM:
 
@@ -181,7 +181,7 @@ From commit [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f):
 
 VMs benefit significantly from reduced TLB pressure on nested page tables.
 
-### Redis/Memcached
+### Redis/Memcached {#redismemcached}
 
 In-memory stores can see latency spikes from THP defragmentation. Many recommend:
 ```bash
@@ -190,7 +190,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 Or use `madvise` mode with application-level control.
 
-## THP vs hugetlbfs
+## THP vs hugetlbfs {#thp-vs-hugetlbfs}
 
 | Feature | THP | hugetlbfs |
 |---------|-----|-----------|
@@ -201,9 +201,9 @@ Or use `madvise` mode with application-level control.
 | Fragmentation risk | Higher | Lower |
 | Overcommit | Yes | No |
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### System-Wide Statistics
+### System-Wide Statistics {#system-wide-statistics}
 
 ```bash
 # THP statistics
@@ -220,7 +220,7 @@ cat /proc/vmstat | grep thp
 # thp_split_page         - Huge pages split back to 4KB
 ```
 
-### Per-Process
+### Per-Process {#per-process}
 
 ```bash
 # Huge page usage for a process
@@ -231,7 +231,7 @@ cat /proc/<pid>/smaps | grep -i huge
 cat /proc/<pid>/smaps_rollup | grep AnonHugePages
 ```
 
-### Tracing
+### Tracing {#tracing}
 
 ```bash
 # Trace THP events
@@ -240,9 +240,9 @@ echo 1 > /sys/kernel/debug/tracing/events/huge_memory/mm_collapse_huge_page/enab
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## History
+## History {#history}
 
-### THP Introduction (v2.6.38, 2011)
+### THP Introduction (v2.6.38, 2011) {#thp-introduction-v2638-2011}
 
 **Commit**: [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f) ("thp: transparent hugepage core")
 
@@ -252,7 +252,7 @@ cat /sys/kernel/debug/tracing/trace_pipe
 
 Initial THP implementation for anonymous memory.
 
-### THP Swap Support (v4.13, 2017)
+### THP Swap Support (v4.13, 2017) {#thp-swap-support-v413-2017}
 
 **Commit**: [38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8) ("mm, THP, swap: delay splitting THP during swap out") | [LKML](https://lore.kernel.org/lkml/20170724051840.2309-1-ying.huang@intel.com/)
 
@@ -260,7 +260,7 @@ Initial THP implementation for anonymous memory.
 
 THP pages can now be swapped as a unit without splitting first, improving swap performance.
 
-### Multi-Size THP (v6.10, 2024)
+### Multi-Size THP (v6.10, 2024) {#multi-size-thp-v610-2024}
 
 **Commit**: [19eaf44954df](https://git.kernel.org/linus/19eaf44954df) ("mm: thp: support allocation of anonymous multi-size THP") | [LKML](https://lore.kernel.org/linux-mm/20231204102027.57185-1-ryan.roberts@arm.com/)
 
@@ -268,9 +268,9 @@ THP pages can now be swapped as a unit without splitting first, improving swap p
 
 Enables THP at sizes between 4KB and 2MB (e.g., 16KB, 64KB), providing more flexibility for workloads where 2MB is too large.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Latency Spikes
+### Latency Spikes {#latency-spikes}
 
 THP defragmentation can cause allocation stalls.
 
@@ -282,7 +282,7 @@ THP defragmentation can cause allocation stalls.
 - Set `enabled=madvise` and control per-region
 - Disable THP for latency-critical apps
 
-### Memory Bloat
+### Memory Bloat {#memory-bloat}
 
 Small allocations rounded up to 2MB.
 
@@ -295,7 +295,7 @@ Small allocations rounded up to 2MB.
 - Use `madvise` mode
 - Tune application allocation patterns
 
-### khugepaged CPU Usage
+### khugepaged CPU Usage {#khugepaged-cpu-usage}
 
 khugepaged consuming too much CPU.
 
@@ -306,21 +306,21 @@ khugepaged consuming too much CPU.
 - Increase `scan_sleep_millisecs`
 - Reduce `pages_to_scan`
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 THP involves complex operations - collapsing pages, splitting huge pages, handling faults - all while processes continue running. The complexity has led to numerous race conditions and data corruption bugs.
 
-### Case 1: THP COW race (CVE-2020-29368)
+### Case 1: THP COW race (CVE-2020-29368) {#case-1-thp-cow-race-cve-2020-29368}
 
-#### What happened
+#### What happened {#what-happened}
 
 Jann Horn (Google Project Zero) discovered that the copy-on-write implementation for THP could grant unintended write access due to a race condition in mapcount checking.
 
-#### The bug
+#### The bug {#the-bug}
 
 When splitting a huge PMD during a COW fault, the kernel checks if the page is shared by examining `mapcount`. But this check races with other operations - another thread can map the same page between the check and the page table modification.
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) ("mm: thp: make the THP mapcount atomic against __split_huge_pmd_locked()")
 
@@ -328,13 +328,13 @@ When splitting a huge PMD during a COW fault, the kernel checks if the page is s
 
 ---
 
-### Case 2: khugepaged collapse races
+### Case 2: khugepaged collapse races {#case-2-khugepaged-collapse-races}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 The khugepaged daemon scans memory looking for 512 contiguous 4KB pages to collapse into a 2MB huge page. This background operation races with application activity.
 
-#### The bug class
+#### The bug class {#the-bug-class}
 
 Multiple bugs have been found in khugepaged collapse:
 
@@ -342,7 +342,7 @@ Multiple bugs have been found in khugepaged collapse:
 - Race with munmap
 - Race with madvise(MADV_DONTNEED)
 
-#### Mitigations in modern kernels
+#### Mitigations in modern kernels {#mitigations-in-modern-kernels}
 
 - Better locking protocols between khugepaged and fault paths
 - Page lock held during critical sections
@@ -350,17 +350,17 @@ Multiple bugs have been found in khugepaged collapse:
 
 ---
 
-### Case 3: khugepaged CPU storms
+### Case 3: khugepaged CPU storms {#case-3-khugepaged-cpu-storms}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 Under certain conditions, khugepaged can consume excessive CPU time, impacting application performance.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 khugepaged continuously scans for collapsible pages. When conditions prevent collapse but appear promising (e.g., 500 of 512 pages present), it keeps retrying wastefully.
 
-#### Tuning
+#### Tuning {#tuning}
 
 ```bash
 # Reduce scan frequency
@@ -372,33 +372,33 @@ echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag
 
 ---
 
-### Case 4: THP split failures
+### Case 4: THP split failures {#case-4-thp-split-failures}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 When a huge page needs to be split (e.g., for partial munmap), the split can fail, leaving the system in an unexpected state.
 
-#### The bug class
+#### The bug class {#the-bug-class_1}
 
 Splitting requires allocating 511 additional page descriptors and updating all PTEs. Failure scenarios include memory exhaustion and inability to freeze the page.
 
-#### Mitigations
+#### Mitigations {#mitigations}
 
 Modern kernels handle split failures more gracefully with retry logic and fallback paths.
 
 ---
 
-### Case 5: THP and NUMA balancing conflicts
+### Case 5: THP and NUMA balancing conflicts {#case-5-thp-and-numa-balancing-conflicts}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 THP interacts poorly with NUMA balancing, which tries to move pages closer to the CPUs accessing them.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 NUMA balancing marks pages inaccessible to catch faults and migrate. With 2MB THP, any access to any 4KB within triggers migration of the entire 2MB, causing thrashing between nodes.
 
-#### Tuning
+#### Tuning {#tuning_1}
 
 ```bash
 # Disable NUMA balancing (if THP is more valuable)
@@ -410,7 +410,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Root Cause | Impact |
 |-----|------|------------|--------|
@@ -422,32 +422,32 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 **The pattern**: THP bugs stem from concurrent operations on the same memory. The optimization requires complex coordination that is difficult to get right.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) | THP core implementation |
 | [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | Collapse daemon |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/transhuge.rst`](https://docs.kernel.org/admin-guide/mm/transhuge.html)
 
-### Mailing List Discussions
+### Mailing List Discussions {#mailing-list-discussions}
 
 - [THP defrag behavior](https://lore.kernel.org/patchwork/patch/745411/) - Discussion on MADV_HUGEPAGE stalling semantics and Mel Gorman's intent for "defer" mode
 - [Node-local hugepage allocations](https://lore.kernel.org/lkml/20181206045917.GG23332@shao2-debian/) - 2018 discussion on THP gfp handling and remote allocations
 
-### Related
+### Related {#related}
 
 - [page-tables](page-tables.md) - PMD-level huge page mapping
 - [compaction](compaction.md) - Memory defragmentation for THP
 - [reclaim](reclaim.md) - THP and memory pressure
 - [Bug Index](bugs/README.md) - Index of all mm kernel bugs
 
-## Further reading
+## Further reading {#further-reading}
 
 - `Documentation/admin-guide/mm/transhuge.rst` — the authoritative kernel admin guide covering all sysfs tunables, defrag modes, and monitoring counters; rendered at [docs.kernel.org](https://docs.kernel.org/admin-guide/mm/transhuge.html)
 - [mm/huge_memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) — THP core: fault-time allocation, PMD-level mapping, COW splitting, and `MADV_HUGEPAGE` / `MADV_COLLAPSE` handling

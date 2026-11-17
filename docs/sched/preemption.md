@@ -1,8 +1,8 @@
-# Linux Preemption Model
+# Linux Preemption Model {#linux-preemption-model}
 
 > When can the kernel be preempted? Voluntary, full, and PREEMPT_RT
 
-## What is preemption?
+## What is preemption? {#what-is-preemption}
 
 **Preemption** means stopping the currently running task to run a higher-priority task. Linux has several preemption models, selected at build time via Kconfig:
 
@@ -15,7 +15,7 @@ CONFIG_PREEMPT_RT          — Real-time: preempt almost everywhere
 
 The model affects **latency** (how quickly high-priority tasks run) vs **throughput** (overall system efficiency).
 
-## preempt_count: the preemption gate
+## preempt_count: the preemption gate {#preempt_count-the-preemption-gate}
 
 Every task has a `preempt_count` field in its thread_info. Preemption is disabled when this is nonzero:
 
@@ -41,7 +41,7 @@ preempt_disable_notrace();
 preempt_enable_notrace();
 ```
 
-### preempt_count contexts
+### preempt_count contexts {#preempt_count-contexts}
 
 ```c
 /* Am I in interrupt context? */
@@ -55,7 +55,7 @@ in_atomic()       /* preempt_count != 0 */
 /* Note: this includes hardirq, softirq, spinlock, and preempt_disable */
 ```
 
-## CONFIG_PREEMPT_NONE: server model
+## CONFIG_PREEMPT_NONE: server model {#configpreemptnone-server-model}
 
 No preemption except at explicit `schedule()` calls. A kernel code path runs until it voluntarily yields:
 
@@ -71,7 +71,7 @@ High-priority task runs
 **Throughput**: highest (no unnecessary context switches)
 **Use case**: servers, batch workloads (HPC, databases)
 
-## CONFIG_PREEMPT_VOLUNTARY: desktop model
+## CONFIG_PREEMPT_VOLUNTARY: desktop model {#configpreemptvoluntary-desktop-model}
 
 Adds explicit preemption points (`might_sleep()`, `cond_resched()`) at strategic locations in long kernel loops:
 
@@ -97,7 +97,7 @@ static void __sched_yield(void)
 **Latency**: tens of milliseconds
 **Use case**: desktop systems
 
-## CONFIG_PREEMPT: full preemption
+## CONFIG_PREEMPT: full preemption {#config_preempt-full-preemption}
 
 The kernel can be preempted at any point where `preempt_count == 0`, not just at explicit yield points. When `TIF_NEED_RESCHED` is set, the task is preempted at the next preemption window:
 
@@ -134,7 +134,7 @@ asmlinkage __visible void __sched preempt_schedule_irq(void)
 **Latency**: hundreds of microseconds
 **Use case**: desktop, embedded, audio systems
 
-## CONFIG_PREEMPT_RT: real-time
+## CONFIG_PREEMPT_RT: real-time {#configpreemptrt-real-time}
 
 PREEMPT_RT (fully merged in 6.12 for all architectures — [merge commit `baeb9a7d8b60`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=baeb9a7d8b60b021d907127509c44507539c15e5), [LWN](https://lwn.net/Articles/989212/)) converts almost all spinlocks to sleeping mutexes, allowing preemption even while holding a "spinlock":
 
@@ -148,7 +148,7 @@ Non-RT:                          RT:
   for lock holder to finish       lock holder immediately
 ```
 
-### What changes in PREEMPT_RT
+### What changes in PREEMPT_RT {#what-changes-in-preempt_rt}
 
 ```c
 /* Most spinlocks become rt_mutex under PREEMPT_RT: */
@@ -167,7 +167,7 @@ raw_spin_lock(&raw_lock);   /* never sleeps, even in RT */
 /* In-kernel timers fire from hrtimer softirq thread (preemptible) */
 ```
 
-### Priority inversion prevention
+### Priority inversion prevention {#priority-inversion-prevention}
 
 PREEMPT_RT enables the **priority inheritance** mechanism for RT mutexes:
 
@@ -186,7 +186,7 @@ Low-prio task holds lock → High-prio RT task waits
 
 See [Priority Inversion and PI Mutexes](pi-mutexes.md) for details.
 
-### PREEMPT_RT latency
+### PREEMPT_RT latency {#preempt_rt-latency}
 
 ```
 CONFIG_PREEMPT_NONE:       ~1-100ms worst-case
@@ -195,9 +195,9 @@ CONFIG_PREEMPT:            ~100-1000µs
 CONFIG_PREEMPT_RT:         ~10-100µs (with proper tuning)
 ```
 
-## preempt_disable in practice
+## preempt_disable in practice {#preempt_disable-in-practice}
 
-### Spinlocks implicitly disable preemption
+### Spinlocks implicitly disable preemption {#spinlocks-implicitly-disable-preemption}
 
 ```c
 spinlock_t lock;
@@ -213,7 +213,7 @@ spin_unlock(&lock);
 /* If TIF_NEED_RESCHED: schedule() called here */
 ```
 
-### Per-CPU operations require preemption disabled
+### Per-CPU operations require preemption disabled {#per-cpu-operations-require-preemption-disabled}
 
 ```c
 /* Per-CPU variables are only safe when preemption is disabled */
@@ -227,7 +227,7 @@ preempt_enable();
 this_cpu_inc(my_per_cpu_counter);  /* always safe: implicitly disables preempt */
 ```
 
-### Checking context in a driver
+### Checking context in a driver {#checking-context-in-a-driver}
 
 ```c
 void my_function(void) {
@@ -246,7 +246,7 @@ void my_function(void) {
 }
 ```
 
-## might_sleep: debugging sleeping in atomic context
+## might_sleep: debugging sleeping in atomic context {#might_sleep-debugging-sleeping-in-atomic-context}
 
 ```c
 /* include/linux/kernel.h */
@@ -269,7 +269,7 @@ void __might_sleep(const char *file, int line)
 
 This is why you get "BUG: sleeping function called from invalid context" when you accidentally call `mutex_lock()` from an interrupt handler.
 
-## Checking the preemption model
+## Checking the preemption model {#checking-the-preemption-model}
 
 ```bash
 # See which preemption model is active
@@ -289,7 +289,7 @@ echo preemptirqsoff > /sys/kernel/debug/tracing/current_tracer
 cat /sys/kernel/debug/tracing/trace | head -50
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Context Switch](context-switch.md) — what schedule() does
 - [What Happens When a Process Wakes Up](wakeup.md) — TIF_NEED_RESCHED setting

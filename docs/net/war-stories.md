@@ -1,4 +1,4 @@
-# War Stories: Network Stack Bugs and CVEs
+# War Stories: Network Stack Bugs and CVEs {#war-stories-network-stack-bugs-and-cves}
 
 > Real vulnerabilities and production incidents from Linux networking history — what broke, why, and what the kernel learned
 
@@ -6,39 +6,39 @@ The network stack sits at a trust boundary that most of the kernel doesn't have 
 
 Each incident below has its own page: root-cause analysis grounded in the actual patches, plus the real mailing-list discussion behind each fix — alternatives considered, trade-offs debated, and in a few cases genuinely notable process failures. Three are remote (reachable over the network with no local access); the other four are local — three of them reachable through capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`) that are routinely granted to unprivileged processes inside user namespaces, and one through nothing more than an ordinary `sendmsg()` sequence. That capability angle is itself a recurring theme in how "local" bugs in this subsystem became "container escape" bugs.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by disclosure date — newest first.
 
-### [The net/sched act_api Filter-Delete Race](war-stories/act-api-uaf.md)
+### [The net/sched act_api Filter-Delete Race](war-stories/act-api-uaf.md) {#the-netsched-act_api-filter-delete-race}
 **Fixed May–June 2026, disclosed June 2026, independent 0-day write-up July 2026 · CVE-2026-53264 · CVSS 7.8 (Linux kernel CNA) / 7.0 (Red Hat)**
 A 2017 comment correctly reasoned that one reader path was RCU-safe and never checked whether a future one would be — a 2023 scalability fix added exactly that reader, unnoticed, and the resulting race sat live for over two years until an OpenAI researcher reported it through normal channels shortly before a scheduled exploit competition, while a STAR Labs intern independently found the same bug and built a working exploit for it as a 0-day for that same competition, using AI to help build the local-root exploit chain — learning of the upstream report only afterward, by their own account.
 
-### [Netfilter x_tables Heap Overflow](war-stories/netfilter-xtables.md)
+### [Netfilter x_tables Heap Overflow](war-stories/netfilter-xtables.md) {#netfilter-x_tables-heap-overflow}
 **Fixed April 2021, disclosed July 2021 · CVE-2021-22555 · CVSS 8.3 (Google) / 7.8 (NVD)**
 A 15-year-old bounds-check gap, sitting unanswered in a syzbot report for 8 months, became "Turning \x00\x00 into 10000$" and a real Kubernetes pod escape once someone built an exploit chain for it. Still being actively exploited as of late 2025, per CISA's KEV catalog.
 
-### [The TCP SACK Panic](war-stories/sack-panic.md)
+### [The TCP SACK Panic](war-stories/sack-panic.md) {#the-tcp-sack-panic}
 **June 2019 · CVE-2019-11477/78/79 · CVSS 7.5 (all three)**
 A remote peer could crash any Linux TCP endpoint by overflowing a 16-bit segment counter with a crafted sequence of SACK blocks. The fix itself then collided with legitimate high-throughput and small-buffer workloads twice more before it stopped causing production stalls.
 
-### [SegmentSmack](war-stories/segmentsmack.md)
+### [SegmentSmack](war-stories/segmentsmack.md) {#segmentsmack}
 **August 2018 · CVE-2018-5390 · CVSS 7.5**
 Tiny, deliberately-scattered out-of-order TCP segments could pin a CPU core at 100% with roughly 2 kilopackets/second of traffic. The public disclosure process became its own controversy, chronicled in detail on LWN.
 
-### [UDP Fragmentation-Offload Path-Switch Corruption](war-stories/udp-ufo.md)
+### [UDP Fragmentation-Offload Path-Switch Corruption](war-stories/udp-ufo.md) {#udp-fragmentation-offload-path-switch-corruption}
 **August 2017 · CVE-2017-1000112 · CVSS 7.0**
 Two `send()` calls building the same datagram could disagree about which code path was building it, twelve years after the bug was introduced. Embargo-disclosed and fixed in one week.
 
-### [AF_PACKET TPACKET_V3 Privilege Escalation](war-stories/af-packet.md)
+### [AF_PACKET TPACKET_V3 Privilege Escalation](war-stories/af-packet.md) {#afpacket-tpacketv3-privilege-escalation}
 **March 2017 · CVE-2017-7308 · CVSS 7.8**
 A single `(int)` cast around an unsigned subtraction defeated a ring-buffer bounds check — found by syzkaller, turned into local root by Project Zero.
 
-### [The TCP Challenge-ACK Side Channel](war-stories/challenge-ack.md)
+### [The TCP Challenge-ACK Side Channel](war-stories/challenge-ack.md) {#the-tcp-challenge-ack-side-channel}
 **August 2016 · CVE-2016-5696 · CVSS 4.8**
 A global rate-limit counter, meant purely as an internal implementation detail, let an off-path attacker infer TCP sequence numbers by watching how much of the shared quota a victim connection consumed.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | act_api race | Netfilter x_tables | SACK panic | SegmentSmack | UFO path-switch | AF_PACKET | Challenge-ACK |
 |---------|:------------:|:-------------------:|:----------:|:-------------:|:-----------------:|:----------:|:--------------:|
@@ -58,7 +58,7 @@ A working exploit and confirmed real-world exploitation are not the same thing, 
 
 The two DoS bugs (SACK panic, SegmentSmack) never got a dedicated exploit tool at all — a crafted packet sequence *is* the entire attack, nothing to weaponize — but they show a different kind of impact evidence: each triggered a wide wave of downstream vendor advisories (Cisco, Oracle, F5, VMware, Siemens, and roughly two dozen others for SACK panic alone), including dedicated industrial-control-system advisories from Siemens and CISA/ICS-CERT. "No exploit tool" and "no real consequence" are not the same claim either — the scale of who had to patch is its own evidence of reach, even without a confirmed in-the-wild attack.
 
-## See also
+## See also {#see-also}
 
 - [TCP Implementation](tcp.md) — SACK, the retransmit queue, and the receive path involved in the SACK panic, SegmentSmack, and Challenge-ACK cases
 - [TCP Congestion Control](tcp-congestion.md) — how MSS and segment sizing interact with the send path

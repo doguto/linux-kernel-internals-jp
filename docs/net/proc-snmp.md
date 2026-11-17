@@ -1,8 +1,8 @@
-# Understanding /proc/net/snmp and netstat
+# Understanding /proc/net/snmp and netstat {#understanding-procnetsnmp-and-netstat}
 
 > Protocol-level counters for diagnosing TCP, UDP, and IP issues
 
-## /proc/net/snmp
+## /proc/net/snmp {#procnetsnmp}
 
 `/proc/net/snmp` exposes MIB (Management Information Base) counters from the SNMP RFC. Each counter tells you about a specific protocol event at the IP, TCP, or UDP level.
 
@@ -18,7 +18,7 @@ cat /proc/net/snmp
 # Udp: 12345 0 0 23456 ...
 ```
 
-## Key IP counters
+## Key IP counters {#key-ip-counters}
 
 ```bash
 # Extract IP stats
@@ -46,7 +46,7 @@ paste <(head -1 /proc/net/snmp | tr ' ' '\n') \
       <(sed -n '2p' /proc/net/snmp | tr ' ' '\n') | grep -v "^Ip"
 ```
 
-## Key TCP counters
+## Key TCP counters {#key-tcp-counters}
 
 ```bash
 # Extract TCP stats with labels (using python for clarity)
@@ -89,7 +89,7 @@ print(f'OutSegs: {tcp[\"OutSegs\"]}')
 "
 ```
 
-## Key UDP counters
+## Key UDP counters {#key-udp-counters}
 
 | Counter | What it means |
 |---------|---------------|
@@ -102,7 +102,7 @@ print(f'OutSegs: {tcp[\"OutSegs\"]}')
 
 High `NoPorts` means something is sending to UDP ports with no listener. High `RcvbufErrors` means applications aren't reading fast enough.
 
-## /proc/net/netstat: extended TCP stats
+## /proc/net/netstat: extended TCP stats {#procnetnetstat-extended-tcp-stats}
 
 More detailed TCP counters (not in SNMP MIB):
 
@@ -143,7 +143,7 @@ awk "/^TcpExt:/ && NR==1 {
 }" /proc/net/netstat) | grep -v "^0"'
 ```
 
-## netstat (the tool)
+## netstat (the tool) {#netstat-the-tool}
 
 `netstat` reads from `/proc/net/` and presents counters in a readable format:
 
@@ -163,9 +163,9 @@ netstat -tnl
 
 `netstat` is deprecated in favor of `ss` for connection listing, but `netstat -s` remains useful for statistics.
 
-## Diagnosing with counters: common issues
+## Diagnosing with counters: common issues {#diagnosing-with-counters-common-issues}
 
-### Packet loss
+### Packet loss {#packet-loss}
 
 ```bash
 # Rising RetransSegs indicates loss
@@ -175,7 +175,7 @@ watch -n 5 'cat /proc/net/snmp | grep ^Tcp | awk "NR==2 {print \"Retrans:\", \$1
 ethtool -S eth0 | grep -i drop
 ```
 
-### Accept queue overflow
+### Accept queue overflow {#accept-queue-overflow}
 
 ```bash
 # ListenOverflows: connections dropped because backlog was full
@@ -185,7 +185,7 @@ netstat -s | grep "listen"
 #   increase /proc/sys/net/core/somaxconn
 ```
 
-### SYN flood detection
+### SYN flood detection {#syn-flood-detection}
 
 ```bash
 # SyncookiesSent > 0 means SYN queue was full
@@ -194,7 +194,7 @@ netstat -s | grep "syncookies"
 ss -tn state syn-recv | wc -l
 ```
 
-### UDP buffer drops
+### UDP buffer drops {#udp-buffer-drops}
 
 ```bash
 # RcvbufErrors: application not reading fast enough
@@ -202,7 +202,7 @@ netstat -s | grep "receive buffer"
 # Fix: increase socket buffer (SO_RCVBUF) or increase read frequency
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Network Debugging with ss and ip](net-debugging.md) — Per-connection inspection
 - [Network Tracing](net-tracing.md) — Event-based debugging

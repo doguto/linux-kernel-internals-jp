@@ -1,8 +1,8 @@
-# VFIO Internals
+# VFIO Internals {#vfio-internals}
 
 > Device passthrough: containers, groups, mdev, and KVM integration
 
-## Overview
+## Overview {#overview}
 
 VFIO (Virtual Function I/O) is the kernel framework for safely exposing physical devices to userspace processes or virtual machines. It uses the IOMMU to enforce memory access isolation while giving the userspace driver (or hypervisor) direct access to device MMIO, interrupts, and DMA.
 
@@ -14,7 +14,7 @@ The three primary use cases are:
 
 VFIO source lives in `drivers/vfio/` with headers in `include/linux/vfio.h`.
 
-## Container → group → device hierarchy
+## Container → group → device hierarchy {#container-group-device-hierarchy}
 
 ```
 /dev/vfio/vfio          (VFIO container)
@@ -33,7 +33,7 @@ VFIO source lives in `drivers/vfio/` with headers in `include/linux/vfio.h`.
 
 **Device**: the individual PCI function. Once the group is in a container, the device fd allows MMIO region mapping, interrupt setup, and device reset.
 
-## Core data structures
+## Core data structures {#core-data-structures}
 
 ```c
 /* include/linux/vfio.h */
@@ -71,11 +71,11 @@ struct vfio_container {
 
 The `vfio_device_ops` structure defines per-device operations (`open_device`/`close_device`, read, write, ioctl for MMIO/interrupt/reset).
 
-## IOMMU type1 backend
+## IOMMU type1 backend {#iommu-type1-backend}
 
 The most common IOMMU backend is `vfio_iommu_type1` (`drivers/vfio/vfio_iommu_type1.c`). It handles x86 systems with Intel VT-d or AMD-Vi, and arm64 systems with ARM SMMU.
 
-### DMA mapping: pinning and mapping
+### DMA mapping: pinning and mapping {#dma-mapping-pinning-and-mapping}
 
 When QEMU calls `VFIO_IOMMU_MAP_DMA`, the kernel must:
 
@@ -108,7 +108,7 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
 
 The `pin_user_pages_remote()` call (introduced in kernel 5.6 to replace `get_user_pages_remote()` for DMA pinning) increments the page refcount and marks pages as pinned, preventing them from being swapped or moved while the device may be accessing them.
 
-### The DMA map rb-tree
+### The DMA map rb-tree {#the-dma-map-rb-tree}
 
 All active DMA mappings are tracked in a red-black tree, keyed and searched for overlap by IOVA (`vfio_find_dma()`) — not a radix tree or the kernel's interval-tree API. This allows the kernel to:
 
@@ -142,7 +142,7 @@ struct vfio_dma {
 };
 ```
 
-### IOMMU backend variants
+### IOMMU backend variants {#iommu-backend-variants}
 
 | Backend | Where used | Notes |
 |---------|-----------|-------|
@@ -152,7 +152,7 @@ struct vfio_dma {
 
 `vfio-noiommu` exists for development boards and embedded systems without an IOMMU. It provides the VFIO userspace API but offers no isolation — the device can DMA anywhere. It is a compile-time option and prints a warning in dmesg.
 
-## MSI/MSI-X interrupt delivery
+## MSI/MSI-X interrupt delivery {#msimsi-x-interrupt-delivery}
 
 One of the most complex parts of VFIO is delivering device interrupts to the VM without userspace round-trips. The full path for MSI delivery:
 
@@ -175,7 +175,7 @@ KVM in-kernel irqchip (APIC emulation)
 vCPU interrupt injection → guest ISR
 ```
 
-### vfio_irq_ctx and eventfd
+### vfio_irq_ctx and eventfd {#vfioirqctx-and-eventfd}
 
 ```c
 /* drivers/vfio/pci/vfio_pci_intrs.c */
@@ -192,7 +192,7 @@ struct vfio_pci_irq_ctx {
 
 When QEMU sets up interrupts via `VFIO_DEVICE_SET_IRQS`, VFIO creates an `eventfd` for each MSI vector. The device's MSI handler calls `eventfd_signal(ctx->trigger)`, which wakes any waiter on the eventfd.
 
-### irqfd: the fast path
+### irqfd: the fast path {#irqfd-the-fast-path}
 
 The key optimization is `irqfd` — KVM's mechanism for injecting interrupts from an eventfd without returning to userspace:
 
@@ -214,11 +214,11 @@ No userspace is involved in steps 2–3. The guest sees its interrupt within mic
 
 For legacy INTx interrupts, the path is slower: VFIO uses `irqfd` plus a resample mechanism to handle level-triggered semantics.
 
-## mdev: Mediated Devices
+## mdev: Mediated Devices {#mdev-mediated-devices}
 
 mdev allows a physical device with internal resources (GPU compute engines, NIC queues, crypto engines) to be partitioned into multiple independent virtual devices, each assignable to a different VM.
 
-### Architecture (kernel 5.x)
+### Architecture (kernel 5.x) {#architecture-kernel-5x}
 
 ```c
 /* include/linux/mdev.h — current struct shape; the mdev_parent_ops-based
@@ -256,7 +256,7 @@ ls /sys/bus/mdev/devices/
 # $UUID
 ```
 
-### struct vfio_device_ops (kernel 5.19+)
+### struct vfio_device_ops (kernel 5.19+) {#struct-vfiodeviceops-kernel-519}
 
 In Linux 5.19, the older `mdev_parent_ops` interface was consolidated into `struct vfio_device_ops` (commit `6b42f491e17c`, "vfio/mdev: Remove mdev_parent_ops"). Physical device drivers that support mdev now implement `vfio_device_ops` directly:
 
@@ -299,11 +299,11 @@ The `bind_iommufd`/`attach_ioas` pair (and their PASID-scoped variants) are the 
 
 **Intel GVT-g** (Intel integrated GPU virtualization, `drivers/gpu/drm/i915/gvt/`) and **nvidia vGPU** implement their own `vfio_device_ops`. The mdev device appears to QEMU as a standard VFIO device, so no QEMU changes are needed — QEMU just opens `/dev/vfio/<group>` and operates normally.
 
-### mdev isolation model
+### mdev isolation model {#mdev-isolation-model}
 
 mdev devices in the same physical function share one IOMMU group (the PF's group). They therefore share one IOMMU domain. The isolation between vGPU instances is enforced by the physical device's own hardware (GPU MMU, NIC queue isolation) — not by separate IOMMU domains. This is weaker than full device passthrough, and the security model depends entirely on the correctness of the PF driver's virtual device implementation.
 
-## Complete VM passthrough: QEMU → KVM flow
+## Complete VM passthrough: QEMU → KVM flow {#complete-vm-passthrough-qemu-kvm-flow}
 
 ```
 QEMU process
@@ -330,7 +330,7 @@ Runtime:
   Device MSI:    Device → IOMMU interrupt remap → host IRQ → irqfd → vCPU
 ```
 
-### VFIO_IOMMU_MAP_DMA in detail
+### VFIO_IOMMU_MAP_DMA in detail {#vfioiommumap_dma-in-detail}
 
 QEMU maps all guest RAM into the IOMMU domain at guest startup. For a 4 GB guest:
 
@@ -347,7 +347,7 @@ ioctl(container, VFIO_IOMMU_MAP_DMA, &dma_map);
 
 The kernel walks all 4 GB of QEMU's VA range, pins the pages, and creates IOMMU page table entries mapping IOVA 0..4GB → host physical pages. After this, the assigned device can DMA to guest physical addresses directly — the IOMMU translates them to the correct host pages.
 
-## Security model
+## Security model {#security-model}
 
 The IOMMU group is the security boundary. Devices in the same group share an IOMMU domain — they can DMA to each other without IOMMU enforcement. VFIO enforces:
 
@@ -370,7 +370,7 @@ ls /sys/kernel/iommu_groups/12/devices/
 # If more than one device: both must be passed through together
 ```
 
-## Observing VFIO
+## Observing VFIO {#observing-vfio}
 
 ```bash
 # VFIO devices and groups
@@ -393,7 +393,7 @@ echo 1 > /sys/kernel/tracing/events/iommu/enable
 grep vfio /proc/interrupts
 ```
 
-## Source files
+## Source files {#source-files}
 
 | File | Role |
 |------|------|
@@ -406,9 +406,9 @@ grep vfio /proc/interrupts
 | `include/linux/vfio.h` | All VFIO struct and ioctl definitions |
 | `include/uapi/linux/vfio.h` | Userspace-visible ioctl API |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — `vfio_register_group_dev()` and core device/group/container lifecycle
 - [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group` (private to the VFIO core, not `include/linux/vfio.h`)
@@ -419,11 +419,11 @@ grep vfio /proc/interrupts
 - [drivers/vfio/mdev/mdev_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/mdev/mdev_core.c) — `mdev_register_parent()` and the mediated-device bus core
 - [virt/kvm/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/eventfd.c) — `irqfd`: a workqueue calls `kvm_set_irq()` when the bound eventfd fires
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`ioctl(2)`](https://man7.org/linux/man-pages/man2/ioctl.2.html) — every VFIO container/group/device operation (`VFIO_SET_IOMMU`, `VFIO_IOMMU_MAP_DMA`, `VFIO_DEVICE_SET_IRQS`, …) is an ioctl on a `/dev/vfio` file descriptor
 
-### Related pages
+### Related pages {#related-pages}
 
 - [IOMMU Architecture](iommu-arch.md) — IOMMU domains, groups, SR-IOV
 - [IOVA Allocator](iova-allocator.md) — the in-kernel IOVA allocator used by `dma_map_*()`; VFIO's type1 backend bypasses it, since userspace supplies the IOVA directly in `VFIO_IOMMU_MAP_DMA`
@@ -431,11 +431,11 @@ grep vfio /proc/interrupts
 - [VFIO: Virtual Function I/O and Device Passthrough](../virtualization/vfio.md) — the same subsystem from a setup/operations angle: QEMU passthrough, SR-IOV, mdev walkthrough
 - [Getting User Pages (GUP)](../mm/gup.md) — `pin_user_pages_remote()`, the page-pinning primitive behind VFIO's DMA mapping path
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Jonathan Corbet's original coverage of the VFIO framework and IOMMU-group-based device assignment (January 3, 2012)
 
-### External
+### External {#external}
 
 - [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — official kernel documentation for the container/group/device model and userspace API
 - [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — official documentation for the mdev framework

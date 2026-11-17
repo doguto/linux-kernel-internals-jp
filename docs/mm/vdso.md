@@ -1,8 +1,8 @@
-# vDSO: Virtual Dynamic Shared Object
+# vDSO: Virtual Dynamic Shared Object {#vdso-virtual-dynamic-shared-object}
 
 > Syscalls without entering the kernel: gettimeofday at userspace speed
 
-## The problem
+## The problem {#the-problem}
 
 Every system call requires a mode switch: user → kernel → user. For `gettimeofday()`, this means:
 
@@ -12,7 +12,7 @@ Every system call requires a mode switch: user → kernel → user. For `gettime
 
 For high-frequency time queries (trading systems, profilers, game loops), this round-trip costs ~100-300ns. The vDSO eliminates it.
 
-## What is the vDSO?
+## What is the vDSO? {#what-is-the-vdso}
 
 The vDSO (virtual dynamic shared object) is a small shared library that the kernel **maps into every process address space** automatically. It contains a few time-related functions implemented as pure userspace code that read from a kernel-maintained shared memory region — no syscall needed.
 
@@ -27,7 +27,7 @@ objcopy --dump-section .text=/tmp/vdso.so [vdso] /dev/null 2>/dev/null
 dd if=/proc/self/mem bs=4096 count=1 skip=$((0x7fff12345000/4096)) > /tmp/vdso.so
 ```
 
-## Functions in the vDSO
+## Functions in the vDSO {#functions-in-the-vdso}
 
 ```c
 /* The vDSO exports these symbols (x86-64): */
@@ -41,7 +41,7 @@ __vdso_getcpu()           /* getcpu() — current CPU/NUMA node   — fast */
 /* glibc wraps all of these to use vDSO automatically */
 ```
 
-## The vdso_data shared page
+## The vdso_data shared page {#the-vdso_data-shared-page}
 
 The kernel maintains a **vvar** (vDSO variable) page that is:
 
@@ -79,7 +79,7 @@ extern struct vdso_data _vdso_data[CS_BASES];  /* in vmlinux */
 /* Mapped to [vvar] page in each process */
 ```
 
-## The seqlock pattern
+## The seqlock pattern {#the-seqlock-pattern}
 
 The kernel updates `vdso_data` while user code reads it concurrently. A **seqlock** ensures consistent reads:
 
@@ -138,7 +138,7 @@ do_hres(const struct vdso_data *vd, clockid_t clk, struct __kernel_timespec *ts)
 
 The retry loop is the key: if the kernel updated `vdso_data` during our read (seq changed), we retry. Typically 0 retries.
 
-## AT_SYSINFO_EHDR: finding the vDSO
+## AT_SYSINFO_EHDR: finding the vDSO {#atsysinfoehdr-finding-the-vdso}
 
 The kernel passes the vDSO address via the ELF auxiliary vector:
 
@@ -172,7 +172,7 @@ while (read(fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
 }
 ```
 
-## vDSO fallback to syscall
+## vDSO fallback to syscall {#vdso-fallback-to-syscall}
 
 If the vDSO can't provide the answer (e.g., clock is not TSC-based, or it's a non-monotonic clock), it falls back to a real syscall:
 
@@ -207,7 +207,7 @@ notrace int __vdso_clock_gettime(clockid_t clock, struct __kernel_timespec *ts)
 }
 ```
 
-## Performance comparison
+## Performance comparison {#performance-comparison}
 
 ```c
 /* Benchmark: syscall vs vDSO vs rdtsc */
@@ -234,7 +234,7 @@ LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0  # doesn't work anymore
 strace -c -e gettimeofday myprogram  # will show 0 if vDSO is working
 ```
 
-## vDSO on other architectures
+## vDSO on other architectures {#vdso-on-other-architectures}
 
 The vDSO is architecture-specific:
 
@@ -258,7 +258,7 @@ dd if=/proc/self/mem of=/tmp/vdso.so bs=4096 count=1 \
 nm /tmp/vdso.so
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Timekeeping and Clocksources](../time/timekeeping.md) — how the kernel maintains time
 - [Process Address Space](mmap.md) — vDSO VMA in process maps

@@ -1,8 +1,8 @@
-# POSIX Timers and timerfd
+# POSIX Timers and timerfd {#posix-timers-and-timerfd}
 
 > User-facing timer APIs: timer_create, clock_nanosleep, and timerfd
 
-## POSIX timer APIs
+## POSIX timer APIs {#posix-timer-apis}
 
 POSIX defines a portable timer interface built on arbitrary clock IDs:
 
@@ -33,7 +33,7 @@ timer_gettime(timerid, &cur);
 timer_delete(timerid);
 ```
 
-### Notification modes
+### Notification modes {#notification-modes}
 
 ```c
 /* sigev_notify options: */
@@ -56,7 +56,7 @@ sev._sigev_un._tid          = gettid();  /* specific thread */
 sev.sigev_notify = SIGEV_NONE;
 ```
 
-## clock_nanosleep
+## clock_nanosleep {#clock_nanosleep}
 
 `clock_nanosleep` suspends the calling thread until an absolute or relative time:
 
@@ -83,7 +83,7 @@ clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &abs, NULL);
 
 The absolute form is important for precise periodic loops — avoids drift from relative sleep accumulation.
 
-### Precise periodic loop
+### Precise periodic loop {#precise-periodic-loop}
 
 ```c
 /* Common pattern: audio/video callback at fixed period */
@@ -107,7 +107,7 @@ static void run_periodic(long period_ns)
 }
 ```
 
-## timerfd
+## timerfd {#timerfd}
 
 `timerfd_create` returns a file descriptor that becomes readable when the timer expires. This enables integrating timers with `epoll` and `select` — no signals needed.
 
@@ -147,7 +147,7 @@ while (1) {
 }
 ```
 
-### timerfd_settime flags
+### timerfd_settime flags {#timerfd_settime-flags}
 
 ```c
 /* Absolute time */
@@ -158,9 +158,9 @@ timerfd_settime(tfd, TFD_TIMER_ABSTIME | TFD_TIMER_CANCEL_ON_SET, &its, NULL);
 /* Returns ECANCELED on read after clock was set */
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### POSIX timers in the kernel
+### POSIX timers in the kernel {#posix-timers-in-the-kernel}
 
 ```c
 /* include/linux/posix-timers.h */
@@ -207,7 +207,7 @@ struct k_itimer {
 
 Each `timer_create()` allocates a `k_itimer` backed by an `hrtimer`. When the hrtimer fires, it queues the signal.
 
-### timerfd in the kernel
+### timerfd in the kernel {#timerfd-in-the-kernel}
 
 ```c
 /* fs/timerfd.c */
@@ -239,7 +239,7 @@ static enum hrtimer_restart timerfd_tmrproc(struct hrtimer *htmr)
 }
 ```
 
-## Overruns
+## Overruns {#overruns}
 
 When a periodic timer fires faster than you consume it, expirations accumulate:
 
@@ -263,7 +263,7 @@ Overruns happen when:
 - System is loaded; scheduling latency > period
 - Thread was blocked (sleeping, waiting for I/O)
 
-## Choosing the right API
+## Choosing the right API {#choosing-the-right-api}
 
 | Scenario | Use |
 |----------|-----|
@@ -274,7 +274,7 @@ Overruns happen when:
 | Timeout on I/O | `timerfd` + `epoll` |
 | Kernel driver timer | `hrtimer` |
 
-## Observing POSIX timers
+## Observing POSIX timers {#observing-posix-timers}
 
 ```bash
 # Active timers for a process
@@ -295,16 +295,16 @@ echo 1 > /sys/kernel/tracing/events/timer/hrtimer_start/enable
 echo 1 > /sys/kernel/tracing/events/syscalls/sys_enter_timer_settime/enable
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/posix-timers.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/posix-timers.h) — definition of `struct k_itimer`, `struct k_clock` operations table, and reference counting helpers
 - [kernel/time/posix-timers.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/posix-timers.c) — `timer_create()`, `timer_settime()`, `timer_delete()`, and overrun calculation
 - [kernel/time/posix-cpu-timers.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/posix-cpu-timers.c) — per-process and per-thread CPU time clock handlers (`CLOCK_PROCESS_CPUTIME_ID`, `CLOCK_THREAD_CPUTIME_ID`)
 - [fs/timerfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/timerfd.c) — file descriptor timer implementation (`timerfd_create()`, `timerfd_settime()`, `timerfd_read_iter()`), epoll polling integration, and cancel-on-set logic
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`timer_create(2)`](https://man7.org/linux/man-pages/man2/timer_create.2.html) — create a POSIX per-process timer with signal or thread notification
 - [`timer_settime(2)`](https://man7.org/linux/man-pages/man2/timer_settime.2.html) — arm, disarm, and inspect POSIX per-process timer intervals
@@ -313,18 +313,18 @@ echo 1 > /sys/kernel/tracing/events/syscalls/sys_enter_timer_settime/enable
 - [`timerfd_create(2)`](https://man7.org/linux/man-pages/man2/timerfd_create.2.html) — timers that notify via file descriptor events selectable by epoll/poll/select
 - [`clock_nanosleep(2)`](https://man7.org/linux/man-pages/man2/clock_nanosleep.2.html) — high-resolution sleep with clock specification and absolute wake deadlines
 
-### Related pages
+### Related pages {#related-pages}
 
 - [High-Resolution Timers (hrtimers)](hrtimers.md) — the nanosecond-resolution timer subsystem underlying POSIX timers and timerfd
 - [Timekeeping and Clocksources](timekeeping.md) — POSIX clock IDs (`CLOCK_REALTIME`, `CLOCK_MONOTONIC`, `CLOCK_BOOTTIME`, `CLOCK_TAI`)
 - [Signals and Signal Handling](../ipc/signals.md) — queueing and dispatching real-time signals via `struct sigqueue`
 - [io_uring Operations](../io-uring/io-uring-ops.md) — ring-based asynchronous timeouts via `IORING_OP_TIMEOUT`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The new timerfd() API](https://lwn.net/Articles/251413/) — Jonathan Corbet, Sept 25, 2007: the design and API of `timerfd_create()`
 - [posix-timers: Cure inconsistencies and the SIG_IGN mess](https://lwn.net/Articles/977822/) — Thomas Gleixner, June 2024: a correctness fix removing the SIG_IGN self-rearm/throttle workaround, spanning `posix-timers.c`, `posix-cpu-timers.c`, and `kernel/signal.c`
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — kernel documentation covering POSIX clocks and timers

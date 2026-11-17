@@ -1,8 +1,8 @@
-# The Evolution of Linux
+# The Evolution of Linux {#the-evolution-of-linux}
 
 > From a hobby project to running the world's infrastructure
 
-## Visual Timeline
+## Visual Timeline {#visual-timeline}
 
 ```mermaid
 flowchart LR
@@ -14,7 +14,7 @@ flowchart LR
     A --> B --> C --> D --> E
 ```
 
-## Timeline at a Glance
+## Timeline at a Glance {#timeline-at-a-glance}
 
 | Year | Event | Kernel Impact |
 |------|-------|---------------|
@@ -35,9 +35,9 @@ flowchart LR
 
 ---
 
-## 1991-1994: The Beginning
+## 1991-1994: The Beginning {#1991-1994-the-beginning}
 
-### The Announcement (August 25, 1991)
+### The Announcement (August 25, 1991) {#the-announcement-august-25-1991}
 
 Linus Torvalds, a 21-year-old student at University of Helsinki, [posted to `comp.os.minix`](https://www.cs.cmu.edu/~awb/linux.history.html):
 
@@ -50,7 +50,7 @@ He was frustrated that MINIX (Andrew Tanenbaum's teaching OS) couldn't be freely
 - Minimal filesystem support
 - Only ran on `i386`
 
-### The GPL Decision (1992)
+### The GPL Decision (1992) {#the-gpl-decision-1992}
 
 Originally under a restrictive license, Torvalds switched to [GPL](https://www.gnu.org/licenses/old-licenses/gpl-2.0.html) in February 1992. This was pivotal - it meant:
 
@@ -58,7 +58,7 @@ Originally under a restrictive license, Torvalds switched to [GPL](https://www.g
 - Improvements had to be shared back
 - Companies couldn't make proprietary forks
 
-### The Tanenbaum Debate (January 1992)
+### The Tanenbaum Debate (January 1992) {#the-tanenbaum-debate-january-1992}
 
 Andrew Tanenbaum [declared "Linux is obsolete"](https://www.oreilly.com/openbook/opensources/book/appa.html), arguing:
 
@@ -68,7 +68,7 @@ Andrew Tanenbaum [declared "Linux is obsolete"](https://www.oreilly.com/openbook
 
 Torvalds defended the pragmatic choice: monolithic was simpler, faster, and actually worked. History sided with Torvalds - Linux runs everywhere while pure microkernels remain niche.
 
-### v1.0 (March 1994)
+### v1.0 (March 1994) {#v10-march-1994}
 
 After 3 years of development, [Linux 1.0](https://cdn.kernel.org/pub/linux/kernel/v1.0/) was released. It supported:
 
@@ -79,9 +79,9 @@ After 3 years of development, [Linux 1.0](https://cdn.kernel.org/pub/linux/kerne
 
 ---
 
-## 1996-2000: Growing Up
+## 1996-2000: Growing Up {#1996-2000-growing-up}
 
-### v2.0: SMP Support (1996)
+### v2.0: SMP Support (1996) {#v20-smp-support-1996}
 
 **The need**: Multi-processor systems were becoming affordable.
 
@@ -93,7 +93,7 @@ After 3 years of development, [Linux 1.0](https://cdn.kernel.org/pub/linux/kerne
 
 The `BKL` was a single global lock - simple but limited scalability. It took years to eliminate completely. The ["kill the BKL" effort](https://lore.kernel.org/all/alpine.LFD.1.10.0805141452330.3019@woody.linux-foundation.org/T/) began in 2008, and was finally [removed in v2.6.39](https://lore.kernel.org/all/1295993854-4971-1-git-send-email-arnd@arndb.de/T/) (2011).
 
-### Enterprise Interest Begins
+### Enterprise Interest Begins {#enterprise-interest-begins}
 
 By late 1990s, companies noticed Linux:
 
@@ -103,7 +103,7 @@ By late 1990s, companies noticed Linux:
 
 **Why?** Free OS that ran on commodity hardware. No licensing fees. Source access for debugging.
 
-### v2.2: Enterprise Features (1999)
+### v2.2: Enterprise Features (1999) {#v22-enterprise-features-1999}
 
 - Support for more RAM (`2GB`+)
 - Improved networking stack
@@ -112,9 +112,9 @@ By late 1990s, companies noticed Linux:
 
 ---
 
-## 2001-2007: Enterprise Dominance
+## 2001-2007: Enterprise Dominance {#2001-2007-enterprise-dominance}
 
-### v2.4: Production Ready (2001)
+### v2.4: Production Ready (2001) {#v24-production-ready-2001}
 
 The kernel that convinced enterprises:
 
@@ -125,7 +125,7 @@ The kernel that convinced enterprises:
 
 **IBM's all-in**: IBM ported Linux to their mainframes (S/390) in 2000, proving it could scale up as well as down.
 
-### The SCO Lawsuit (2003-2007)
+### The SCO Lawsuit (2003-2007) {#the-sco-lawsuit-2003-2007}
 
 [SCO Group sued IBM](https://en.wikipedia.org/wiki/SCO_Group,_Inc._v._International_Business_Machines_Corp.) claiming Linux contained stolen Unix code. The lawsuit:
 
@@ -137,7 +137,7 @@ The [Groklaw](https://en.wikipedia.org/wiki/SCO%E2%80%93Linux_disputes) website 
 
 Result: Stronger processes for tracking code provenance, [Developer Certificate of Origin (DCO)](https://docs.kernel.org/process/submitting-patches.html#sign-your-work-the-developer-s-certificate-of-origin).
 
-### v2.6: The Scalability Kernel (2003)
+### v2.6: The Scalability Kernel (2003) {#v26-the-scalability-kernel-2003}
 
 Major rewrite with:
 
@@ -148,7 +148,7 @@ Major rewrite with:
 
 This kernel could scale from embedded to enterprise.
 
-### Git Created (2005)
+### Git Created (2005) {#git-created-2005}
 
 Kernel development outgrew BitKeeper (proprietary). Torvalds [announced the need for a replacement](https://lore.kernel.org/all/Pine.LNX.4.58.0504060800280.2215@ppc970.osdl.org/) and wrote Git in weeks. Impact:
 
@@ -159,9 +159,9 @@ Kernel development outgrew BitKeeper (proprietary). Torvalds [announced the need
 
 ---
 
-## 2007-2012: Mobile and Cloud
+## 2007-2012: Mobile and Cloud {#2007-2012-mobile-and-cloud}
 
-### Android Announced (November 2007)
+### Android Announced (November 2007) {#android-announced-november-2007}
 
 [Google's mobile OS](https://www.openhandsetalliance.com/press_110507.html), built on Linux kernel. Required:
 
@@ -172,7 +172,7 @@ Kernel development outgrew BitKeeper (proprietary). Torvalds [announced the need
 
 Some Android patches took years to upstream, others remain Android-specific.
 
-### Containers Foundation (2006-2008)
+### Containers Foundation (2006-2008) {#containers-foundation-2006-2008}
 
 Cloud computing needed lightweight virtualization:
 
@@ -181,7 +181,7 @@ Cloud computing needed lightweight virtualization:
 
 These became the foundation for Docker (2013) and modern container orchestration.
 
-### v2.6.28-v2.6.39: Rapid Evolution
+### v2.6.28-v2.6.39: Rapid Evolution {#v2628-v2639-rapid-evolution}
 
 The 2.6.x series lasted until 2011, with rapid feature additions:
 
@@ -192,13 +192,13 @@ The 2.6.x series lasted until 2011, with rapid feature additions:
 
 ---
 
-## 2011-2017: Maturity
+## 2011-2017: Maturity {#2011-2017-maturity}
 
-### v3.0 (2011)
+### v3.0 (2011) {#v30-2011}
 
 Not a major technical change - Torvalds [changed versioning](https://lwn.net/Articles/452531/) for the 20th anniversary: *"it's simply a way to drop an inconvenient numbering system in honor of twenty years of Linux."*
 
-### Supercomputer Dominance
+### Supercomputer Dominance {#supercomputer-dominance}
 
 Linux share of [TOP500 supercomputers](https://www.top500.org/statistics/details/osfam/1):
 
@@ -209,11 +209,11 @@ Linux share of [TOP500 supercomputers](https://www.top500.org/statistics/details
 
 **Why?** Custom hardware support, no licensing costs, source access for optimization.
 
-### Systemd Adoption (2010-2015)
+### Systemd Adoption (2010-2015) {#systemd-adoption-2010-2015}
 
 Not kernel, but significant: [systemd](https://systemd.io/) replaced SysVinit across major distributions. Controversial but became standard. Kernel added features to support it (`cgroups v2`, unified hierarchy).
 
-### Real-time Improvements (`PREEMPT_RT`)
+### Real-time Improvements (`PREEMPT_RT`) {#real-time-improvements-preempt_rt}
 
 Gradual merging of real-time patches:
 
@@ -225,9 +225,9 @@ Enabling Linux in industrial and automotive applications.
 
 ---
 
-## 2017-Present: Security and Scale
+## 2017-Present: Security and Scale {#2017-present-security-and-scale}
 
-### Meltdown/Spectre (2018)
+### Meltdown/Spectre (2018) {#meltdownspectre-2018}
 
 [CPU vulnerabilities](https://meltdownattack.com/) requiring kernel-level mitigations:
 
@@ -237,7 +237,7 @@ Enabling Linux in industrial and automotive applications.
 
 Performance impact: 5-30% for some workloads. Led to hardware/software co-design conversations.
 
-### Extended BPF (eBPF)
+### Extended BPF (eBPF) {#extended-bpf-ebpf}
 
 [Extended BPF (eBPF)](https://lore.kernel.org/netdev/1395404418-25376-9-git-send-email-dborkman@redhat.com/) transformed from packet filtering to:
 
@@ -248,7 +248,7 @@ Performance impact: 5-30% for some workloads. Led to hardware/software co-design
 
 Safe, JIT-compiled programs running in kernel space with verifier guarantees.
 
-### Rust in Kernel (2022-)
+### Rust in Kernel (2022-) {#rust-in-kernel-2022-}
 
 **Commit**: [8aebac82933f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8aebac82933ff1a7c8eede18cab11e1115e2062b) (v6.1)
 
@@ -262,30 +262,30 @@ Starting with drivers, expanding gradually.
 
 ---
 
-## How the Kernel Adapted
+## How the Kernel Adapted {#how-the-kernel-adapted}
 
-### Scaling Down (Embedded/Mobile)
+### Scaling Down (Embedded/Mobile) {#scaling-down-embeddedmobile}
 
 - Tickless kernel (`CONFIG_NO_HZ`)
 - Memory compaction
 - Kernel size reduction options
 - Power management frameworks
 
-### Scaling Up (Servers/Supercomputers)
+### Scaling Up (Servers/Supercomputers) {#scaling-up-serverssupercomputers}
 
 - NUMA awareness throughout
 - Lock-free data structures where possible
 - Per-CPU data
 - RCU (Read-Copy-Update) for scalable reads
 
-### Scaling Out (Cloud/Containers)
+### Scaling Out (Cloud/Containers) {#scaling-out-cloudcontainers}
 
 - Namespace isolation
 - `cgroups v2` for resource control
 - Overlay filesystems
 - `seccomp` for syscall filtering
 
-### Hardware Diversity
+### Hardware Diversity {#hardware-diversity}
 
 | Platform | First Support | Key Challenges |
 |----------|---------------|----------------|
@@ -299,9 +299,9 @@ CPU architectures are only part of the story — buses, network hardware, and bo
 
 ---
 
-## Governance Evolution
+## Governance Evolution {#governance-evolution}
 
-### The Maintainer Model
+### The Maintainer Model {#the-maintainer-model}
 
 Linux uses a hierarchical [maintainer model](https://docs.kernel.org/process/maintainer-netdev.html):
 
@@ -310,22 +310,22 @@ Linux uses a hierarchical [maintainer model](https://docs.kernel.org/process/mai
 - Lieutenants collect subsystem work
 - Torvalds makes final decisions for mainline
 
-### Development Statistics (2023)
+### Development Statistics (2023) {#development-statistics-2023}
 
 - ~14,000 contributors per release
 - ~10,000 patches per release
 - ~8 week release cycle
 - 30+ million lines of code
 
-### Code of Conduct (2018)
+### Code of Conduct (2018) {#code-of-conduct-2018}
 
 After years of often harsh communication, Linux adopted a [Code of Conduct](https://docs.kernel.org/process/code-of-conduct.html). Cultural shift toward more inclusive community.
 
 ---
 
-## Key Lessons
+## Key Lessons {#key-lessons}
 
-### Why Linux Won
+### Why Linux Won {#why-linux-won}
 
 1. **GPL**: Required sharing improvements
 2. **Pragmatism**: Working code over theoretical purity
@@ -333,7 +333,7 @@ After years of often harsh communication, Linux adopted a [Code of Conduct](http
 4. **Corporate adoption**: Enterprise money funded development
 5. **Modularity**: Could adapt to wildly different use cases
 
-### What Changed Over Time
+### What Changed Over Time {#what-changed-over-time}
 
 | Early Linux | Modern Linux |
 |-------------|--------------|
@@ -346,24 +346,24 @@ After years of often harsh communication, Linux adopted a [Code of Conduct](http
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Primary Sources
+### Primary Sources {#primary-sources}
 - [Linux History](https://www.cs.cmu.edu/~awb/linux.history.html) - Original announcements
 - [Tanenbaum-Torvalds Debate](https://www.oreilly.com/openbook/opensources/book/appa.html) - Microkernel vs monolithic
 - [kernel.org](https://kernel.org/) - Official source
 - [Kernel Archives](https://cdn.kernel.org/pub/linux/kernel/) - All historical releases
 - [LWN.net Kernel Index](https://lwn.net/Kernel/Index/) - Comprehensive kernel news archive
 
-### Official Documentation
+### Official Documentation {#official-documentation}
 - [Kernel Development Process](https://docs.kernel.org/process/) - How patches get in
 - [Submitting Patches](https://docs.kernel.org/process/submitting-patches.html) - DCO and contribution guide
 - [Maintainers File](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/MAINTAINERS) - Who maintains what
 
-### Books
+### Books {#books}
 - "Just for Fun" - Torvalds autobiography
 - "Rebel Code" - Glyn Moody
 - "The Cathedral and the Bazaar" - [Eric Raymond](http://www.catb.org/~esr/writings/cathedral-bazaar/)
 
-### Related Documentation
+### Related Documentation {#related-documentation}
 - [Back to main documentation](index.md)

@@ -1,8 +1,8 @@
-# Device Memory Coherency and Cache Management
+# Device Memory Coherency and Cache Management {#device-memory-coherency-and-cache-management}
 
 > CPUs cache aggressively; DMA devices do not. Bridging that gap correctly is the difference between a working driver and one that corrupts data silently.
 
-## The Cache Coherency Problem
+## The Cache Coherency Problem {#the-cache-coherency-problem}
 
 Modern CPUs do not access RAM on every load and store. Instead, they fill cache lines from RAM and operate on those cached copies. Writes may sit in L1 or L2 cache for microseconds before being flushed to RAM. This is invisible to software running purely on the CPU — two cores share the same physical memory and their caches snoop each other.
 
@@ -28,17 +28,17 @@ DMA-capable devices break this assumption. A device performing DMA reads and wri
 
 These bugs are intermittent, load-dependent, and architecture-specific. On x86 they are invisible. On non-coherent ARM they cause real corruption.
 
-## Coherent vs Non-Coherent Systems
+## Coherent vs Non-Coherent Systems {#coherent-vs-non-coherent-systems}
 
 Whether hardware enforces coherency between CPU caches and DMA devices depends on the platform's memory interconnect.
 
-### x86: Hardware-Enforced Coherency
+### x86: Hardware-Enforced Coherency {#x86-hardware-enforced-coherency}
 
 On x86, PCIe DMA transactions snoop the CPU caches. When a device reads from a physical address, the CPU cache controller intercepts the transaction and supplies the most recent data — even if it has not yet been written back to RAM. When a device writes, the corresponding CPU cache lines are invalidated automatically.
 
 The result: on x86, software never needs to flush or invalidate CPU caches for DMA correctness. `dma_map_single()` and `dma_sync_*` functions are no-ops at the cache level on x86.
 
-### ARM64: Optional Coherency
+### ARM64: Optional Coherency {#arm64-optional-coherency}
 
 ARM64 coherency depends on the System-on-Chip design:
 
@@ -60,7 +60,7 @@ Non-coherent platform (some ARM64 SoCs):
   CPU core         DMA device
 ```
 
-### Key Source Files
+### Key Source Files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -72,7 +72,7 @@ Non-coherent platform (some ARM64 SoCs):
 | [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c) | `ioremap()`, `ioremap_wc()`, `ioremap_uc()` implementations |
 | [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) | PAT memory type management: WB, WC, UC-, WT |
 
-## DMA Coherent Allocation
+## DMA Coherent Allocation {#dma-coherent-allocation}
 
 `dma_alloc_coherent()` allocates a buffer that is guaranteed coherent between the CPU and the device for its entire lifetime. No cache flushes are ever needed when accessing it.
 
@@ -112,11 +112,11 @@ static inline void *dma_alloc_coherent(struct device *dev, size_t size,
 
 Avoid `dma_alloc_coherent()` for large data buffers (packet payloads, disk read buffers) that the CPU will access heavily. On non-coherent systems, uncached memory access for large transfers is significantly slower than cached memory with explicit sync operations.
 
-## DMA Streaming Mappings
+## DMA Streaming Mappings {#dma-streaming-mappings}
 
 Streaming mappings are used for buffers allocated by normal kernel means (`kmalloc`, `__get_free_pages`, `vmalloc` is **not** supported) that need to be temporarily handed to a device. Unlike coherent allocations, these buffers are normally cacheable; the DMA API performs cache maintenance only when needed.
 
-### Ownership Model
+### Ownership Model {#ownership-model}
 
 Streaming mappings enforce a strict ownership model: **a buffer belongs either to the CPU or to the device — never both at the same time.**
 
@@ -130,7 +130,7 @@ Device owns buffer → dma_unmap_single() → CPU owns buffer
 
 While the device owns the buffer (between map and unmap), the CPU must not read or write it. Violating this rule causes corruption on non-coherent platforms.
 
-### dma_map_single() / dma_unmap_single()
+### dma_map_single() / dma_unmap_single() {#dmamapsingle-dmaunmapsingle}
 
 ```c
 /* Map a virtually contiguous buffer */
@@ -166,7 +166,7 @@ dev_kfree_skb(skb);
 !!! warning "Always check `dma_mapping_error()`"
     `dma_map_single()` can fail (IOMMU exhaustion, device address range overflow). Always check the return value with `dma_mapping_error(dev, addr)`. Using `DMA_MAPPING_ERROR` as a device address causes a hardware fault or silent corruption.
 
-### dma_map_page()
+### dma_map_page() {#dmamappage}
 
 ```c
 dma_addr_t dma_map_page(struct device *dev, struct page *page,
@@ -179,7 +179,7 @@ void dma_unmap_page(struct device *dev, dma_addr_t addr,
 
 Used when the buffer is described by a `struct page` rather than a virtual address. Common in network drivers receiving into page-based skb fragments.
 
-### dma_map_sg() / dma_unmap_sg()
+### dma_map_sg() / dma_unmap_sg() {#dmamapsg-dmaunmapsg}
 
 ```c
 unsigned int dma_map_sg(struct device *dev, struct scatterlist *sg,
@@ -193,7 +193,7 @@ Maps a scatter-gather list of physically discontiguous pages as a single DMA ope
 
 `dma_map_sg()` returns the number of DMA segments — which may be fewer than `nents` if the IOMMU merged adjacent entries.
 
-## dma_sync_*: Partial Ownership Transfers
+## dma_sync_*: Partial Ownership Transfers {#dmasync-partial-ownership-transfers}
 
 Full unmap and remap on every access is expensive. `dma_sync_*` functions allow the CPU to temporarily reclaim ownership of a mapped buffer without unmapping it. This is the right pattern for high-performance descriptor rings.
 
@@ -212,7 +212,7 @@ void dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
                              int nelems, enum dma_data_direction dir);
 ```
 
-### Ownership Protocol with sync
+### Ownership Protocol with sync {#ownership-protocol-with-sync}
 
 ```
 Initial state: CPU owns buffer
@@ -227,7 +227,7 @@ dma_sync_single_for_device(...)   → Device owns buffer again
 dma_unmap_single(...)             → CPU owns buffer, mapping torn down
 ```
 
-### RX Ring Pattern
+### RX Ring Pattern {#rx-ring-pattern}
 
 A receive ring holds N pre-mapped buffers. The device writes into the current head; the driver reads completed entries from the tail.
 
@@ -262,7 +262,7 @@ void rx_interrupt(struct device *dev)
 }
 ```
 
-### Direction Values
+### Direction Values {#direction-values}
 
 From [`include/linux/dma-direction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-direction.h):
 
@@ -275,13 +275,13 @@ enum dma_data_direction {
 };
 ```
 
-## Cache Attributes and ioremap for MMIO
+## Cache Attributes and ioremap for MMIO {#cache-attributes-and-ioremap-for-mmio}
 
 Device registers (MMIO) must never be accessed through a cached mapping. A CPU that caches a write to a control register may delay it indefinitely; a cached read may return a stale value rather than querying the device.
 
 The `ioremap` family maps physical MMIO regions into the kernel's virtual address space with appropriate cache attributes. On x86, these mappings use the **PAT (Page Attribute Table)** to encode the memory type directly in the page table entry.
 
-### ioremap Variants (x86)
+### ioremap Variants (x86) {#ioremap-variants-x86}
 
 From [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c):
 
@@ -312,7 +312,7 @@ void iounmap(volatile void __iomem *addr);
 
 Write-combining (`ioremap_wc`) is particularly important for framebuffers and other bulk write destinations. The CPU batches writes into a write-combining buffer and flushes them as a burst, dramatically reducing PCIe transactions compared to individual uncached writes.
 
-### ioremap_np: Non-Posted Writes
+### ioremap_np: Non-Posted Writes {#ioremap_np-non-posted-writes}
 
 ```c
 /* Non-posted writes: CPU waits for write completion acknowledgment */
@@ -321,7 +321,7 @@ void __iomem *ioremap_np(phys_addr_t offset, size_t size);
 
 From [`include/asm-generic/io.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/io.h): `ioremap_np()` requests stricter non-posted write semantics — the CPU stalls until the device acknowledges the write. This guarantees ordering between a register write and subsequent reads. Not all architectures implement it; portable drivers should fall back to `ioremap()` if `ioremap_np()` returns `NULL`.
 
-### PAT Memory Types on x86
+### PAT Memory Types on x86 {#pat-memory-types-on-x86}
 
 x86 PAT supports four memory types relevant to MMIO (from [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c)):
 
@@ -334,7 +334,7 @@ _PAGE_CACHE_MODE_WT       Write-through
 
 PAT encodes the memory type in bits of the page table entry (PWT, PCD, PAT bit). The kernel manages this through `ioremap_change_attr()`, which calls `_set_memory_uc()`, `_set_memory_wc()`, etc., to update the PTE and flush the TLB.
 
-## ARM64 Cache Operations for DMA
+## ARM64 Cache Operations for DMA {#arm64-cache-operations-for-dma}
 
 On non-coherent ARM64 platforms, the DMA mapping layer performs explicit cache maintenance. The call chain for `dma_map_single()` on a non-coherent device, from [`kernel/dma/direct.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.h) and [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c):
 
@@ -383,7 +383,7 @@ extern void dcache_clean_inval_poc(unsigned long start, unsigned long end);
 
 On coherent ARM64 platforms (where `dev->dma_coherent` is true), `arch_sync_dma_for_device()` and `arch_sync_dma_for_cpu()` are not called — the hardware handles it transparently, matching x86 behavior.
 
-## The IOMMU and Coherency
+## The IOMMU and Coherency {#the-iommu-and-coherency}
 
 The IOMMU translates device DMA addresses (I/O virtual addresses) into physical addresses. It enables address space isolation — a device can only access memory the kernel has explicitly mapped into its I/O page tables.
 
@@ -393,7 +393,7 @@ The one exception: some IOMMUs on ARM SoCs are placed on the coherent interconne
 
 For IOMMU address translation and memory protection, see [DMA Memory Allocation](dma.md).
 
-## Common Bugs
+## Common Bugs {#common-bugs}
 
 !!! warning "Accessing a mapped buffer from the CPU"
     Calling `dma_map_single()` transfers ownership to the device. Any CPU read or write to that buffer before `dma_unmap_single()` (or `dma_sync_single_for_cpu()`) is undefined behavior. On coherent x86 the bug is invisible; on non-coherent ARM64 the CPU reads stale cache or the device reads stale RAM.
@@ -440,7 +440,7 @@ For IOMMU address translation and memory protection, see [DMA Memory Allocation]
     }
     ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — the canonical reference for `dma_alloc_coherent()`, `dma_map_*()`, and `dma_sync_*()` semantics
 - [`Documentation/core-api/dma-api.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api.rst) — kernel source for the DMA API documentation including ownership rules and direction values

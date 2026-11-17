@@ -1,8 +1,8 @@
-# What Happens When a Process Wakes Up
+# What Happens When a Process Wakes Up {#what-happens-when-a-process-wakes-up}
 
 > From `wake_up_process()` to running on a CPU
 
-## Overview
+## Overview {#overview}
 
 A process wakes up when something it was waiting for becomes available — a lock is released, data arrives on a socket, a timer fires, or a signal is delivered. The wakeup path must transition the task from sleeping to runnable, place it on the right CPU, and potentially preempt whatever is currently running there.
 
@@ -21,7 +21,7 @@ flowchart TB
     A --> B --> C --> D --> E --> F --> G --> H --> I
 ```
 
-## Task states
+## Task states {#task-states}
 
 Before diving in, the relevant sleeping states:
 
@@ -36,7 +36,7 @@ Before diving in, the relevant sleeping states:
 
 `wake_up_process()` uses `TASK_NORMAL = TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE` and will wake either.
 
-## Entry: wake_up_process()
+## Entry: wake_up_process() {#entry-wakeupprocess}
 
 ```c
 // kernel/sched/core.c
@@ -55,7 +55,7 @@ The kernel has several `wake_up_*` variants depending on which sleep states to w
 | `wake_up(x)` | `TASK_NORMAL` (via wait queue) |
 | `wake_up_all(x)` | All tasks on a wait queue |
 
-## try_to_wake_up()
+## try_to_wake_up() {#trytowake_up}
 
 The core wakeup function:
 
@@ -109,7 +109,7 @@ unlock:
 }
 ```
 
-### The on_cpu spin
+### The on_cpu spin {#the-on_cpu-spin}
 
 ```c
 smp_cond_load_acquire(&p->on_cpu, !VAL);
@@ -117,7 +117,7 @@ smp_cond_load_acquire(&p->on_cpu, !VAL);
 
 If the task is still executing on another CPU (in the middle of `__schedule()` or running), `smp_cond_load_acquire` spins until `p->on_cpu` becomes 0. `finish_task_switch()` clears it with `smp_store_release()` after the task is fully off the CPU. This prevents placing the task on a new runqueue while it's still executing somewhere.
 
-## CPU selection: select_task_rq()
+## CPU selection: select_task_rq() {#cpu-selection-selecttaskrq}
 
 The scheduler must decide which CPU to place the woken task on. For `SCHED_NORMAL` tasks, `select_task_rq_fair()` makes this decision:
 
@@ -149,7 +149,7 @@ int select_task_rq(struct task_struct *p, int cpu, int wake_flags)
 #define WF_MIGRATED     0x20  // task was migrated to new CPU
 ```
 
-## Enqueuing: ttwu_queue() and activate_task()
+## Enqueuing: ttwu_queue() and activate_task() {#enqueuing-ttwuqueue-and-activatetask}
 
 ```c
 // kernel/sched/core.c
@@ -181,7 +181,7 @@ static void ttwu_do_activate(struct rq *rq, struct task_struct *p,
 
 `activate_task()` calls `p->sched_class->enqueue_task()`. For fair tasks this puts the task into the CFS RB-tree with a vruntime adjusted for how long it slept (via `place_entity()`).
 
-### Vruntime placement on wakeup
+### Vruntime placement on wakeup {#vruntime-placement-on-wakeup}
 
 A task that slept for a long time has a stale (low) vruntime. If it returned to the RB-tree at that old vruntime, it could monopolize the CPU catching up. Instead, `place_entity()` places the waking task at approximately `avg_vruntime - half_slice`:
 
@@ -193,7 +193,7 @@ A wakes, placed at: 300 - half_slice ≈ 297
 
 A gets to run soon (it's near the front) but doesn't starve B and C (it's not so far back that it needs to run for 200ms straight to "catch up").
 
-## Preemption check: wakeup_preempt()
+## Preemption check: wakeup_preempt() {#preemption-check-wakeup_preempt}
 
 After enqueueing, the scheduler checks whether the newly runnable task should preempt whatever is currently running on the target CPU:
 
@@ -210,7 +210,7 @@ For `fair_sched_class`, `wakeup_preempt_fair()` checks whether the woken task's 
 
 The target CPU won't preempt immediately — it sets the flag and waits for the next preemption point (interrupt exit, syscall return, or explicit `schedule()` call).
 
-## Cross-CPU wakeup
+## Cross-CPU wakeup {#cross-cpu-wakeup}
 
 When waking a task on a different CPU:
 
@@ -234,7 +234,7 @@ sequenceDiagram
 
 The waker enqueues the task and sets TIF_NEED_RESCHED on the target CPU using an inter-processor interrupt (IPI) if needed via `smp_send_reschedule()`.
 
-## Wait queues
+## Wait queues {#wait-queues}
 
 Most kernel code doesn't call `wake_up_process()` directly — it uses **wait queues**:
 
@@ -250,7 +250,7 @@ wait_event_interruptible(wq, cond);  // TASK_INTERRUPTIBLE
 
 Wait queues serialize access to the condition variable, ensuring that wakeups aren't lost between when the condition is checked and when the task sleeps.
 
-## Observing wakeups
+## Observing wakeups {#observing-wakeups}
 
 ```bash
 # Wakeup latency: time from wakeup to first execution
@@ -269,7 +269,7 @@ cat /proc/$PID/schedstat
 # Fields: cpu_time, runqueue_wait, timeslices_run
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Life of a Context Switch](context-switch.md) — What happens after TIF_NEED_RESCHED is set
 - [CFS](cfs.md) — How vruntime is adjusted on wakeup via `place_entity()`

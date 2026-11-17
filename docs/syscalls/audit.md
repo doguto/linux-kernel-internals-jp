@@ -1,8 +1,8 @@
-# Syscall Auditing
+# Syscall Auditing {#syscall-auditing}
 
 > The Linux Audit subsystem: recording who called what and when
 
-## What the audit subsystem does
+## What the audit subsystem does {#what-the-audit-subsystem-does}
 
 The Linux audit subsystem records security-relevant events and makes them
 available to a userspace daemon (`auditd`) for logging, filtering, and analysis.
@@ -21,7 +21,7 @@ For each audited syscall, the kernel records:
 Records are written by the kernel before the syscall returns to userspace. The
 audited process cannot suppress or alter them.
 
-## Architecture
+## Architecture {#architecture}
 
 ```
    kernel                          userspace
@@ -48,7 +48,7 @@ via `auditctl`, which sends netlink messages of type `AUDIT_ADD_RULE` and
 `AUDIT_PATH`, `AUDIT_SOCKADDR`, and others back to `auditd` over the same
 socket.
 
-## In-kernel hooks: audit_syscall_entry() and audit_syscall_exit()
+## In-kernel hooks: audit_syscall_entry() and audit_syscall_exit() {#in-kernel-hooks-auditsyscallentry-and-auditsyscallexit}
 
 The two main entry points into the audit subsystem are called from the generic
 syscall boundary code:
@@ -75,7 +75,7 @@ common case (see the next section). Only a task that a task-level rule
 explicitly disables, or a system where audit has never been enabled at all,
 skips this entirely.
 
-## struct audit_context
+## struct audit_context {#struct-audit_context}
 
 Each task that is being audited carries an `audit_context` for the duration of
 a syscall. The context accumulates all information about the syscall and the
@@ -125,7 +125,7 @@ back to the baseline `state`, leaving the context ready for the task's next
 syscall. The context struct itself is only freed at task exit, via
 `audit_free()`/`audit_free_context()`.
 
-## Two filter stages: audit_filter_task() and audit_filter_syscall()
+## Two filter stages: audit_filter_task() and audit_filter_syscall() {#two-filter-stages-auditfiltertask-and-auditfiltersyscall}
 
 Rule matching happens in two separate stages, not one:
 
@@ -181,7 +181,7 @@ happened for nothing if `audit_filter_syscall()` finds no match — but that
 bookkeeping is far cheaper than assembling and emitting a full record, which
 is what stage 2 actually gates.
 
-## The in-kernel audit logging API
+## The in-kernel audit logging API {#the-in-kernel-audit-logging-api}
 
 Other kernel subsystems — LSMs, filesystem hooks, device drivers — emit audit
 records using the same three-function API:
@@ -226,7 +226,7 @@ hand-rolled format call — `audit_log_task_info()` (`kernel/audit.c`) is a
 shared helper that appends the full process-identity block, reused by every
 record type that needs "who did this," not just `AUDIT_SYSCALL`.
 
-## Auxiliary records
+## Auxiliary records {#auxiliary-records}
 
 A single syscall often generates more than one audit record. The `AUDIT_SYSCALL`
 record is emitted first; then one or more auxiliary records are appended in the
@@ -251,9 +251,9 @@ capture site itself.
 All records for one syscall share the same `msg=audit(timestamp:serial)` field.
 `ausearch` and `aureport` group them by serial when presenting output.
 
-## Userspace interface
+## Userspace interface {#userspace-interface}
 
-### Adding rules with auditctl
+### Adding rules with auditctl {#adding-rules-with-auditctl}
 
 ```bash
 # Watch all openat calls by uid 1000
@@ -274,7 +274,7 @@ auditctl -l
 auditctl -e 2
 ```
 
-### Searching logs with ausearch
+### Searching logs with ausearch {#searching-logs-with-ausearch}
 
 ```bash
 # Find events tagged with a key
@@ -290,7 +290,7 @@ ausearch -x /usr/bin/sudo -i
 ausearch -f /etc/shadow -i
 ```
 
-### Summary reports with aureport
+### Summary reports with aureport {#summary-reports-with-aureport}
 
 ```bash
 # Overall summary
@@ -306,7 +306,7 @@ aureport -au
 aureport --failed
 ```
 
-### Persistent rules
+### Persistent rules {#persistent-rules}
 
 Rules written to `/etc/audit/rules.d/*.rules` are loaded by `augenrules` at
 boot and passed to `auditctl -R`:
@@ -322,7 +322,7 @@ boot and passed to `auditctl -R`:
 disk space limits, and what to do when the disk is full (`suspend`, `halt`, or
 `keep_logs`).
 
-## Performance: the fast-path and audit_dummy_context()
+## Performance: the fast-path and audit_dummy_context() {#performance-the-fast-path-and-auditdummycontext}
 
 Audit is designed to have near-zero cost for tasks and syscalls that are not
 being audited.
@@ -371,9 +371,9 @@ When the backlog fills, new records are either dropped (with a
 `audit: backlog limit exceeded` kernel message) or the kernel waits, depending
 on the `backlog_wait_time` setting.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/audit.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/audit.h) — the public `audit_syscall_entry()`/`audit_syscall_exit()`/`audit_inode()` inline wrappers, which call the real `__audit_syscall_entry()`/`__audit_syscall_exit()`/`__audit_inode()` only when a context is present, plus `audit_dummy_context()`
 - [kernel/auditsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/auditsc.c) — `__audit_syscall_entry()`, `__audit_syscall_exit()`, and `__audit_inode()` (the real implementations behind the inline wrappers), plus `audit_alloc()`, `audit_filter_task()`, `audit_filter_syscall()`, and `__audit_filter_op()`: the two-stage rule-matching path
@@ -381,20 +381,20 @@ on the `backlog_wait_time` setting.
 - [kernel/audit.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/audit.c) — the `NETLINK_AUDIT` socket, `audit_log_start()`/`audit_log_format()`/`audit_log_end()`, and `audit_backlog_limit` handling
 - [include/linux/entry-common.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/entry-common.h) — `syscall_enter_from_user_mode()` and `syscall_exit_to_user_mode()`, where `audit_syscall_entry()`/`audit_syscall_exit()` are actually invoked, gated on the `SYSCALL_WORK_SYSCALL_AUDIT` flag
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`auditctl(8)`](https://man7.org/linux/man-pages/man8/auditctl.8.html) — utility for loading, listing, and deleting kernel audit rules
 - [`ausearch(8)`](https://man7.org/linux/man-pages/man8/ausearch.8.html) — searching audit logs by key, syscall, executable, or file
 - [`aureport(8)`](https://man7.org/linux/man-pages/man8/aureport.8.html) — summary reports over audit logs
 - [`auditd.conf(5)`](https://man7.org/linux/man-pages/man5/auditd.conf.5.html) — audit daemon configuration: log path, rotation, and disk-full behavior
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — `syscall_enter_from_user_mode()` and `syscall_exit_to_user_mode()` where the audit hooks are called
 - [Linux Audit Subsystem](../security/audit.md) — broader audit coverage including IMA, PAM integration, and file watch rules
 - [LSM Framework](../security/lsm.md) — the LSM hook framework; its SELinux subsection covers reading SELinux's own AVC-denial audit records via `ausearch -m AVC`
 - [seccomp BPF](../security/seccomp.md) — seccomp denials appear in the audit log
 
-### External
+### External {#external}
 
 - [docs.kernel.org: Core kernel API — audit functions](https://docs.kernel.org/core-api/kernel-api.html#c.audit_log_start) — kernel-doc reference for `audit_log_start()`, `audit_log_format()`, `audit_log_end()`, `__audit_syscall_entry()`, and `__audit_syscall_exit()`

@@ -1,18 +1,18 @@
-# systemd and Cgroup Integration
+# systemd and Cgroup Integration {#systemd-and-cgroup-integration}
 
 > How systemd manages the cgroup hierarchy: slices, scopes, services, and delegation
 
-## Overview
+## Overview {#overview}
 
 systemd is the cgroup manager on nearly every modern Linux distribution. Since systemd 232 (2016), systemd assumes exclusive ownership of the cgroup v2 hierarchy: it creates sub-trees for every unit, writes resource limits to the appropriate interface files, and enforces the rule that only one userspace agent manages a given subtree. No other tool should write to `/sys/fs/cgroup` directly unless systemd has explicitly delegated that subtree.
 
 This arrangement solves a problem that plagued cgroup v1: multiple managers (Docker, LXC, Kubernetes, systemd itself) competing to write the same cgroup files, often overwriting each other's settings.
 
-## Unit types and their cgroup mapping
+## Unit types and their cgroup mapping {#unit-types-and-their-cgroup-mapping}
 
 systemd exposes three unit types that map to cgroups:
 
-### Service units (`.service`)
+### Service units (`.service`) {#service-units-service}
 
 A long-running daemon. systemd creates a cgroup at `system.slice/<name>.service/` and moves the daemon's processes into it at start time.
 
@@ -27,13 +27,13 @@ A long-running daemon. systemd creates a cgroup at `system.slice/<name>.service/
 
 The cgroup is created when the service starts and removed (after a drain) when it stops. If the service crashes and restarts, the same cgroup path is reused.
 
-### Scope units (`.scope`)
+### Scope units (`.scope`) {#scope-units-scope}
 
 A group of externally-started processes registered with systemd via D-Bus (`org.freedesktop.systemd1.Manager.StartTransientUnit`). Container runtimes use scopes to register containers they start themselves. The cgroup path is `user.slice/user-<uid>.slice/<name>.scope/` for user scopes.
 
 Unlike services, systemd does not start or stop processes in a scope — it only creates the cgroup and tracks it. The runtime that registered the scope is responsible for the processes.
 
-### Slice units (`.slice`)
+### Slice units (`.slice`) {#slice-units-slice}
 
 Hierarchical grouping containers for services and scopes. A slice does not hold processes directly; it holds child slices, services, and scopes. Its cgroup provides a resource envelope shared by all children.
 
@@ -43,7 +43,7 @@ The default slices are:
 - `user.slice` — all user sessions
 - `machine.slice` — VMs and containers managed by `systemd-machined`
 
-## The default cgroup layout
+## The default cgroup layout {#the-default-cgroup-layout}
 
 ```
 /sys/fs/cgroup/
@@ -72,7 +72,7 @@ The default slices are:
 
 systemd ensures the `system.slice` and `user.slice` always exist and that `cgroup.subtree_control` is populated with the controllers listed in `DefaultCPUAccounting=`, `DefaultMemoryAccounting=`, etc. in `/etc/systemd/system.conf`.
 
-## Resource limits in unit files
+## Resource limits in unit files {#resource-limits-in-unit-files}
 
 Unit file properties map directly to cgroup v2 interface files:
 
@@ -109,7 +109,7 @@ AllowedMemoryNodes=0  # cpuset.mems = "0"
 
 When systemd writes these, it uses `sd_bus_call_method()` over D-Bus for live changes, and then writes directly to the cgroup interface files during unit startup via the internal `cg_set_attribute()` helper (in `src/basic/cgroup-util.c` of the systemd source).
 
-## Live property changes
+## Live property changes {#live-property-changes}
 
 `systemctl set-property` applies a resource change to a running unit without restarting it:
 
@@ -136,7 +136,7 @@ The `--runtime` flag applies the change only until next reboot (no `.conf` file 
 systemctl set-property --runtime nginx.service MemoryMax=256M
 ```
 
-## Delegation
+## Delegation {#delegation}
 
 When `Delegate=yes` is set in a unit file, systemd marks the service's cgroup as delegated. systemd will still create the cgroup and set top-level limits, but it will not recurse into the subtree — it will not touch `cgroup.subtree_control` or any files below the delegation point. The service itself is responsible for managing its own sub-hierarchy.
 
@@ -172,7 +172,7 @@ echo "100"  > /sys/fs/cgroup/system.slice/containerd.service/abc123/pids.max
 echo $CONTAINER_PID > /sys/fs/cgroup/system.slice/containerd.service/abc123/cgroup.procs
 ```
 
-## Transient units
+## Transient units {#transient-units}
 
 `systemd-run` creates a transient scope or service cgroup on the fly without writing a unit file:
 
@@ -195,7 +195,7 @@ systemd-cgls /sys/fs/cgroup/myslice.slice/
 
 Transient units are registered via `org.freedesktop.systemd1.Manager.StartTransientUnit` over D-Bus. The unit and its cgroup are removed automatically when the process exits.
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Show the full cgroup tree annotated with systemd unit names:
@@ -231,7 +231,7 @@ cat /sys/fs/cgroup/system.slice/nginx.service/memory.current
 cat /sys/fs/cgroup/system.slice/nginx.service/io.stat
 ```
 
-## How systemd enables controllers
+## How systemd enables controllers {#how-systemd-enables-controllers}
 
 systemd reads `/proc/cgroups` to discover available controllers and uses `cgroup.subtree_control` to propagate them down the hierarchy. The `DefaultCPUAccounting=yes` / `DefaultMemoryAccounting=yes` / `DefaultIOAccounting=yes` knobs in `/etc/systemd/system.conf` control which controllers systemd enables globally.
 
@@ -246,7 +246,7 @@ cat /sys/fs/cgroup/system.slice/cgroup.subtree_control
 
 If a controller is not listed in `cgroup.subtree_control` at the relevant level, interface files like `memory.max` won't exist in the child cgroup — a common source of confusion when controllers are disabled by default.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Cgroup v2 Architecture](cgroup-v2.md) — unified hierarchy, struct cgroup, subtree_control
 - [Resource Controllers](cgroup-controllers.md) — cpu, memory, io, pids interface files in detail

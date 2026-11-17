@@ -1,8 +1,8 @@
-# Tuning Memory for Databases
+# Tuning Memory for Databases {#tuning-memory-for-databases}
 
 > Why databases fight the kernel's defaults, and how to fix it
 
-## Why Databases Need Special Memory Tuning
+## Why Databases Need Special Memory Tuning {#why-databases-need-special-memory-tuning}
 
 A general-purpose Linux kernel is tuned for a mix of workloads: compiling code, serving web pages, running containers. Databases break nearly every assumption those defaults are built on.
 
@@ -27,19 +27,19 @@ General-purpose workload:              Database workload:
 
 The rest of this page walks through the kernel tunables that address each of these problems, with practical examples for PostgreSQL, MySQL/MariaDB, and Redis.
 
-## Huge Pages for Shared Buffers
+## Huge Pages for Shared Buffers {#huge-pages-for-shared-buffers}
 
-### The Problem
+### The Problem {#the-problem}
 
 A 32GB shared buffer pool backed by 4KB pages means 8,388,608 page table entries. Every TLB miss during a buffer pool lookup triggers a multi-level page table walk. On a busy OLTP system, TLB misses on the shared buffer become a measurable overhead.
 
 Huge pages (2MB) reduce the page table entry count by 512x. For a 32GB buffer pool, that is 16,384 entries instead of 8 million.
 
-### hugetlbfs: Static Huge Pages
+### hugetlbfs: Static Huge Pages {#hugetlbfs-static-huge-pages}
 
 Unlike [THP](thp.md), hugetlbfs pages are pre-allocated at boot and never fragmented or reclaimed. This is exactly what databases want: guaranteed, stable huge page backing for their shared buffers.
 
-#### Reserve Huge Pages
+#### Reserve Huge Pages {#reserve-huge-pages}
 
 ```bash
 # Reserve 16384 huge pages (32GB with 2MB pages)
@@ -61,7 +61,7 @@ cat /proc/meminfo | grep -i huge
 
 The kernel's hugetlb subsystem is implemented in [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c). The `set_max_huge_pages()` function handles the reservation logic and will attempt compaction if contiguous memory is not immediately available.
 
-#### PostgreSQL with hugetlbfs
+#### PostgreSQL with hugetlbfs {#postgresql-with-hugetlbfs}
 
 PostgreSQL uses System V shared memory or `mmap` for its shared buffers. The `huge_pages` GUC parameter was introduced in PostgreSQL 9.4 ([release notes](https://www.postgresql.org/docs/9.4/release-9-4.html)).
 
@@ -88,7 +88,7 @@ sysctl --system
 
 When `huge_pages = on`, PostgreSQL calls `shmget()` with `SHM_HUGETLB` (or uses `mmap` with `MAP_HUGETLB` in newer versions). If the kernel cannot satisfy the request from the hugetlb pool, PostgreSQL refuses to start, which is the correct behavior: you want to know at startup, not discover degraded performance later.
 
-#### Oracle with hugetlbfs
+#### Oracle with hugetlbfs {#oracle-with-hugetlbfs}
 
 Oracle's SGA (System Global Area) benefits enormously from huge pages. Oracle calls this "HugePages" in its documentation and it has been a best practice since Oracle 11g.
 
@@ -108,7 +108,7 @@ echo 33000 > /proc/sys/vm/nr_hugepages
 #    - memlock limits are set
 ```
 
-#### MySQL/InnoDB with hugetlbfs
+#### MySQL/InnoDB with hugetlbfs {#mysqlinnodb-with-hugetlbfs}
 
 ```bash
 # 1. Reserve huge pages for the InnoDB buffer pool
@@ -129,11 +129,11 @@ echo 25000 > /proc/sys/vm/nr_hugepages
 cat /proc/$(pidof mysqld)/status | grep HugetlbPages
 ```
 
-## THP: Why Databases Often Disable It
+## THP: Why Databases Often Disable It {#thp-why-databases-often-disable-it}
 
 [Transparent Huge Pages](thp.md) sound like they solve the same problem as hugetlbfs, but the "transparent" part is where the trouble starts.
 
-### The Compaction Problem
+### The Compaction Problem {#the-compaction-problem}
 
 When THP is enabled, the kernel runs `khugepaged` to collapse 4KB pages into 2MB huge pages. To do this, it must find or create 2MB-aligned contiguous free regions. This triggers [compaction](compaction.md) -- moving pages around in physical memory to defragment it.
 
@@ -168,7 +168,7 @@ This is documented in many database vendor guides. MongoDB, Redis, and Oracle al
 
 The compaction code lives in [mm/compaction.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c). The `compact_zone()` function is where stalls occur -- it migrates pages while holding the zone lock, and cannot be interrupted mid-migration.
 
-### Disabling THP
+### Disabling THP {#disabling-thp}
 
 ```bash
 # Disable immediately (runtime)
@@ -186,13 +186,13 @@ cat /sys/kernel/mm/transparent_hugepage/enabled
 !!! note "THP madvise mode"
     Setting THP to `madvise` instead of `never` allows applications to opt-in to THP via `madvise(MADV_HUGEPAGE)` while keeping the default behavior as 4KB pages. This can be a reasonable middle ground on systems running mixed workloads, but most database-dedicated servers use `never` for simplicity.
 
-### When THP Might Be Acceptable
+### When THP Might Be Acceptable {#when-thp-might-be-acceptable}
 
 THP is not universally bad. Analytical/OLAP databases that perform large sequential scans over column stores may benefit from THP because their access patterns align with huge page boundaries. The issue is specifically with random-access OLTP workloads where compaction latency is unpredictable.
 
-## vm.swappiness
+## vm.swappiness {#vmswappiness}
 
-### Why Databases Set This Low
+### Why Databases Set This Low {#why-databases-set-this-low}
 
 `vm.swappiness` controls how aggressively the kernel reclaims anonymous pages (process memory) versus file-backed pages (page cache). The value ranges from 0 to 200, with the default at 60.
 
@@ -215,9 +215,9 @@ Setting `vm.swappiness = 0` tells the kernel to avoid swapping anonymous pages u
 !!! info "Databases that manage their own cache"
     PostgreSQL, MySQL, and Oracle all have their own buffer management with LRU eviction, write-behind, and prefetching. They are better at managing their hot set than the kernel's generic LRU. Keeping `vm.swappiness` low lets the database's own cache management do its job without the kernel second-guessing it.
 
-## vm.dirty_ratio and vm.dirty_background_ratio
+## vm.dirty_ratio and vm.dirty_background_ratio {#vmdirtyratio-and-vmdirtybackground_ratio}
 
-### The Write-Ahead Log Pattern
+### The Write-Ahead Log Pattern {#the-write-ahead-log-pattern}
 
 Databases use write-ahead logging (WAL): every data modification is first written sequentially to a log file, then `fsync()`'d. The actual data files are written asynchronously later (checkpointing). This creates two distinct I/O patterns:
 
@@ -238,7 +238,7 @@ The kernel's dirty page writeback is controlled by two ratios:
 
 The writeback logic is in [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c). The `balance_dirty_pages()` function is where processes get throttled when dirty pages exceed the threshold.
 
-### Why the Defaults Hurt Databases
+### Why the Defaults Hurt Databases {#why-the-defaults-hurt-databases}
 
 On a 128GB server, 20% means 25GB of dirty pages can accumulate before processes stall. When a checkpoint flushes 25GB of dirty data at once, it creates a thundering herd of I/O that saturates the disk and stalls WAL writes.
 
@@ -267,9 +267,9 @@ Lowering these values causes the kernel to write back dirty pages more frequentl
 !!! tip "Byte values vs ratios"
     On large-memory servers (256GB+), even 3% is ~8GB of dirty data. Using `vm.dirty_background_bytes` and `vm.dirty_bytes` gives you absolute control regardless of total RAM. The byte values override the ratio values when both are set.
 
-## NUMA Pinning
+## NUMA Pinning {#numa-pinning}
 
-### The Problem with Database Shared Buffers on NUMA
+### The Problem with Database Shared Buffers on NUMA {#the-problem-with-database-shared-buffers-on-numa}
 
 On a [NUMA](numa.md) system, the default memory allocation policy is "local allocation" -- memory is allocated on the node where the requesting CPU runs. For a database shared buffer pool, this means:
 
@@ -285,7 +285,7 @@ Node 0 (CPUs 0-15)           Node 1 (CPUs 16-31)
 
 If PostgreSQL's postmaster starts on Node 0 and allocates shared buffers there, every backend running on Node 1 pays the cross-node latency penalty for every buffer pool access. Since the buffer pool is the most frequently accessed data structure in a database, this is devastating for throughput.
 
-### numactl --interleave
+### numactl --interleave {#numactl-interleave}
 
 The fix is to interleave the shared buffer allocation across all NUMA nodes so that, on average, each CPU has equal local/remote access:
 
@@ -305,7 +305,7 @@ Interleaving distributes pages round-robin across nodes. No single CPU gets opti
 
 Linux 6.3 introduced NUMA memory balancing improvements (see [LWN: NUMA balancing gets some tweaks](https://lwn.net/Articles/920920/)) that can automatically migrate pages toward their accessing CPUs. However, for large shared buffers accessed by many CPUs, interleaving remains the recommended approach because automatic balancing cannot satisfy all accessors simultaneously.
 
-### Verifying NUMA Distribution
+### Verifying NUMA Distribution {#verifying-numa-distribution}
 
 ```bash
 # Check per-node memory usage for a process
@@ -320,9 +320,9 @@ numastat $(pidof postgres) 2>/dev/null || numastat -p $(pidof postgres)
 # If you see heavy skew (90%+ on one node), interleaving is not working
 ```
 
-## vm.overcommit_memory
+## vm.overcommit_memory {#vmovercommit_memory}
 
-### Why Strict Overcommit for Databases
+### Why Strict Overcommit for Databases {#why-strict-overcommit-for-databases}
 
 As described in [Memory Overcommit](overcommit.md), Linux defaults to heuristic overcommit (mode 0). This is fine for general workloads, but databases have a specific problem: they allocate large shared buffers at startup and expect that memory to be available for the lifetime of the process.
 
@@ -352,9 +352,9 @@ The accounting logic is in [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kern
 !!! warning "Commit accounting and fork()"
     A PostgreSQL server with 32GB `shared_buffers` and 200 connections may show a `Committed_AS` much larger than actual RAM usage because each forked backend inherits the parent's address space in the commit accounting. Set `overcommit_ratio` conservatively and monitor `Committed_AS` vs `CommitLimit`.
 
-## vm.zone_reclaim_mode
+## vm.zone_reclaim_mode {#vmzonereclaimmode}
 
-### Why Databases Should Disable Zone Reclaim
+### Why Databases Should Disable Zone Reclaim {#why-databases-should-disable-zone-reclaim}
 
 On NUMA systems, `vm.zone_reclaim_mode` controls whether the kernel tries to reclaim memory from the local node before falling back to remote nodes. When enabled, the kernel may evict page cache or even swap out pages from the local zone rather than allocate from a remote node.
 
@@ -377,9 +377,9 @@ cat /proc/sys/vm/zone_reclaim_mode
 # Should be: 0
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### Key /proc/meminfo Fields
+### Key /proc/meminfo Fields {#key-procmeminfo-fields}
 
 ```bash
 # Essential fields for database workloads
@@ -398,7 +398,7 @@ cat /proc/meminfo | grep -E \
 | `HugePages_Free` | Unused huge pages | Should drop after database starts, stay stable |
 | `Committed_AS` | Total committed address space | Approaching `CommitLimit` means new allocations will fail (mode 2) |
 
-### Key /proc/vmstat Fields
+### Key /proc/vmstat Fields {#key-procvmstat-fields}
 
 ```bash
 # Real-time monitoring of reclaim and compaction
@@ -416,7 +416,7 @@ watch -n 1 'cat /proc/vmstat | grep -E \
 | `thp_fault_fallback` | THP allocations that fell back to 4KB | Indicates fragmentation if THP is enabled |
 | `numa_hit` / `numa_miss` | Local vs remote NUMA allocations | High `numa_miss` = memory policy misconfiguration |
 
-### A Practical Monitoring Script
+### A Practical Monitoring Script {#a-practical-monitoring-script}
 
 ```bash
 #!/bin/bash
@@ -453,9 +453,9 @@ echo "Enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
 echo "Defrag:  $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
 ```
 
-## Practical Examples
+## Practical Examples {#practical-examples}
 
-### PostgreSQL
+### PostgreSQL {#postgresql}
 
 A complete sysctl and configuration for a 128GB server dedicated to PostgreSQL:
 
@@ -505,7 +505,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/defrag
 # transparent_hugepage=never
 ```
 
-### MySQL / MariaDB
+### MySQL / MariaDB {#mysql-mariadb}
 
 A complete configuration for a 64GB server dedicated to MySQL:
 
@@ -547,7 +547,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-### Redis
+### Redis {#redis}
 
 Redis is single-threaded (per shard) and keeps its entire dataset in anonymous memory. Its tuning needs are different from disk-based databases but the memory management concerns overlap.
 
@@ -581,9 +581,9 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Check Your Current Settings
+### Check Your Current Settings {#check-your-current-settings}
 
 ```bash
 # Display all relevant sysctl values at once
@@ -595,7 +595,7 @@ echo ""
 echo "THP enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
 ```
 
-### Observe Swap Behavior Under Memory Pressure
+### Observe Swap Behavior Under Memory Pressure {#observe-swap-behavior-under-memory-pressure}
 
 ```bash
 # Terminal 1: Monitor swap activity
@@ -607,7 +607,7 @@ stress-ng --vm 2 --vm-bytes 80% --timeout 30s
 # Compare behavior with vm.swappiness=60 vs vm.swappiness=1
 ```
 
-### Measure NUMA Effects
+### Measure NUMA Effects {#measure-numa-effects}
 
 ```bash
 # Allocate memory on a specific node vs interleaved
@@ -619,7 +619,7 @@ numactl --interleave=all -- stress-ng --vm 1 --vm-bytes 1G --timeout 10s --metri
 numastat -p $(pidof postgres)
 ```
 
-### Watch Dirty Page Writeback
+### Watch Dirty Page Writeback {#watch-dirty-page-writeback}
 
 ```bash
 # Terminal 1: Watch dirty page count
@@ -632,7 +632,7 @@ dd if=/dev/zero of=/tmp/testfile bs=1M count=2048 conv=fdatasync
 # then writeback kicks in, and how they are capped at dirty_ratio
 ```
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [docs.kernel.org: vm.overcommit_memory](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) - Kernel documentation for all vm sysctl tunables
 - [docs.kernel.org: hugetlbpage](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) - Kernel documentation for huge page configuration

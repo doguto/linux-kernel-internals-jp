@@ -1,8 +1,8 @@
-# NUMA Memory Management
+# NUMA Memory Management {#numa-memory-management}
 
 > Managing memory across multiple nodes
 
-## What Is NUMA?
+## What Is NUMA? {#what-is-numa}
 
 NUMA (Non-Uniform Memory Access) describes systems where memory access time depends on which CPU accesses which memory. Each CPU has "local" memory (fast) and "remote" memory (slower).
 
@@ -26,13 +26,13 @@ CPU 0 accessing Node 1 memory: ~130-150ns (1.5-1.7x slower, varies by platform)
 (measured with Intel MLC; see Lameter, "NUMA: An Overview", ACM Queue 2013)
 ```
 
-## Why NUMA Matters
+## Why NUMA Matters {#why-numa-matters}
 
-### The Scalability Problem
+### The Scalability Problem {#the-scalability-problem}
 
 As systems grew beyond 4-8 CPUs, a single memory bus became a bottleneck. Every CPU competed for the same memory bandwidth.
 
-### NUMA as Solution
+### NUMA as Solution {#numa-as-solution}
 
 NUMA divides memory into nodes, each with dedicated bandwidth. Local access is fast; remote access crosses an interconnect but the system scales.
 
@@ -42,9 +42,9 @@ NUMA divides memory into nodes, each with dedicated bandwidth. Local access is f
 | NUMA (2 nodes) | 8-32 | 2x bandwidth |
 | NUMA (8 nodes) | 32-128+ | 8x bandwidth |
 
-## Linux NUMA Support
+## Linux NUMA Support {#linux-numa-support}
 
-### Topology Discovery
+### Topology Discovery {#topology-discovery}
 
 Linux discovers NUMA topology from firmware (ACPI SRAT/SLIT tables):
 
@@ -64,7 +64,7 @@ numactl --hardware
 
 The distance matrix shows relative access latency (10 = local, higher = remote).
 
-### Default Allocation Policy
+### Default Allocation Policy {#default-allocation-policy}
 
 By default, Linux allocates memory from the node where the task is running ("local allocation"):
 
@@ -73,11 +73,11 @@ By default, Linux allocates memory from the node where the task is running ("loc
 void *ptr = malloc(size);  /* Goes to local node */
 ```
 
-## Memory Policies
+## Memory Policies {#memory-policies}
 
 Linux provides fine-grained control over NUMA placement via memory policies.
 
-### Policy Types
+### Policy Types {#policy-types}
 
 | Policy | Behavior |
 |--------|----------|
@@ -87,7 +87,7 @@ Linux provides fine-grained control over NUMA placement via memory policies.
 | `MPOL_INTERLEAVE` | Round-robin across specified nodes |
 | `MPOL_LOCAL` | Always allocate from local node |
 
-### Setting Policies
+### Setting Policies {#setting-policies}
 
 **Process-wide (set_mempolicy)**:
 ```c
@@ -118,7 +118,7 @@ numactl --cpunodebind=0 --membind=0 ./myapp
 numactl --interleave=all ./myapp
 ```
 
-### When to Use Each Policy
+### When to Use Each Policy {#when-to-use-each-policy}
 
 | Use Case | Recommended Policy |
 |----------|-------------------|
@@ -128,11 +128,11 @@ numactl --interleave=all ./myapp
 | Large shared buffers | `MPOL_INTERLEAVE` |
 | Database buffer pools | `MPOL_BIND` or `MPOL_INTERLEAVE` |
 
-## Automatic NUMA Balancing
+## Automatic NUMA Balancing {#automatic-numa-balancing}
 
 Since v3.8, Linux can automatically migrate pages to be closer to the CPUs accessing them.
 
-### How It Works
+### How It Works {#how-it-works}
 
 1. Kernel periodically unmaps pages (marks PTEs as "NUMA hint faults")
 2. When accessed, a NUMA hint fault occurs
@@ -155,7 +155,7 @@ Page on Node 0, accessed by CPU on Node 1
     Future accesses are local (fast)
 ```
 
-### Configuration
+### Configuration {#configuration}
 
 ```bash
 # Enable/disable NUMA balancing
@@ -168,7 +168,7 @@ cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # Max time between scans
 # Kernel adjusts scan rate within these bounds based on migration activity
 ```
 
-### Trade-offs
+### Trade-offs {#trade-offs}
 
 **Benefits**:
 
@@ -182,7 +182,7 @@ cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # Max time between scans
 - Migration overhead
 - Can fight with explicit policies
 
-## Memory Tiering (CXL Era)
+## Memory Tiering (CXL Era) {#memory-tiering-cxl-era}
 
 Modern systems add new memory tiers via CXL (Compute Express Link):
 
@@ -203,9 +203,9 @@ Linux treats CXL memory as additional NUMA nodes with higher distances. The kern
 cat /sys/devices/virtual/memory_tiering/memory_tier*/nodelist
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### Per-Node Statistics
+### Per-Node Statistics {#per-node-statistics}
 
 ```bash
 # Memory per node
@@ -221,7 +221,7 @@ cat /proc/vmstat | grep numa
 # numa_other      - Non-local allocations
 ```
 
-### Per-Process NUMA Map
+### Per-Process NUMA Map {#per-process-numa-map}
 
 ```bash
 # Show which nodes hold a process's pages
@@ -232,13 +232,13 @@ cat /proc/<pid>/numa_maps
 # 7f8a2000 interleave:0-1 anon=512 N0=256 N1=256
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Early NUMA (v2.5-2.6, 2003-2004)
+### Early NUMA (v2.5-2.6, 2003-2004) {#early-numa-v25-26-2003-2004}
 
 Basic NUMA support added by SGI, IBM and others for their large systems. Memory policies ([`set_mempolicy`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html), `mbind`) [introduced by Andi Kleen](https://lwn.net/Articles/79100/) (see also [Kleen's NUMA API paper](https://halobates.de/numaapi3.pdf)). The mempolicy code predates git history (included in initial v2.6.12 import).
 
-### cpusets Integration (v2.6.16, 2005)
+### cpusets Integration (v2.6.16, 2005) {#cpusets-integration-v2616-2005}
 
 **Commit**: [68860ec10bcc](https://git.kernel.org/linus/68860ec10bcc) ("cpusets: automatic numa mempolicy rebinding")
 
@@ -248,7 +248,7 @@ Basic NUMA support added by SGI, IBM and others for their large systems. Memory 
 
 cpusets allowed constraining processes to specific nodes, enabling NUMA-aware container isolation.
 
-### Automatic NUMA Balancing (v3.8, 2013)
+### Automatic NUMA Balancing (v3.8, 2013) {#automatic-numa-balancing-v38-2013}
 
 **Merge**: [3d59eebc5e13](https://git.kernel.org/linus/3d59eebc5e13) ("Merge tag 'balancenuma-v11'")
 
@@ -258,7 +258,7 @@ cpusets allowed constraining processes to specific nodes, enabling NUMA-aware co
 
 Kernel-level automatic page migration based on access patterns.
 
-### Memory Tiering (v5.18+, 2022)
+### Memory Tiering (v5.18+, 2022) {#memory-tiering-v518-2022}
 
 **Commit**: [c574bbe91703](https://git.kernel.org/linus/c574bbe91703) ("NUMA balancing: optimize page placement for memory tiering system") | [LKML](https://lore.kernel.org/linux-mm/20220128082751.593478-1-ying.huang@intel.com/)
 
@@ -266,9 +266,9 @@ Kernel-level automatic page migration based on access patterns.
 
 Support for heterogeneous memory (CXL, persistent memory) as additional NUMA tiers with automatic promotion/demotion. Further refined in v6.1 with explicit memory tier framework ([992bf77591cb](https://git.kernel.org/linus/992bf77591cb)).
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Remote Memory Pressure
+### Remote Memory Pressure {#remote-memory-pressure}
 
 Allocations forced to remote nodes due to local exhaustion.
 
@@ -280,7 +280,7 @@ Allocations forced to remote nodes due to local exhaustion.
 - Use `MPOL_INTERLEAVE` for large allocations
 - Reserve memory on each node
 
-### NUMA Balancing Overhead
+### NUMA Balancing Overhead {#numa-balancing-overhead}
 
 Excessive migration and fault handling.
 
@@ -292,7 +292,7 @@ Excessive migration and fault handling.
 - Tune scan rates
 - Use explicit memory policies
 
-### Unbalanced Node Usage
+### Unbalanced Node Usage {#unbalanced-node-usage}
 
 One node exhausted while others have free memory.
 
@@ -303,9 +303,9 @@ One node exhausted while others have free memory.
 - Use `MPOL_INTERLEAVE` for large allocations
 - Improve workload distribution
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -313,46 +313,46 @@ One node exhausted while others have free memory.
 | [`kernel/sched/fair.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) | NUMA balancing in scheduler |
 | [`mm/migrate.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) | Page migration |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/numa_memory_policy.rst`](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
 
-### Mailing List Discussions
+### Mailing List Discussions {#mailing-list-discussions}
 
 - [Automatic NUMA Balancing V3 (RFC)](https://lore.kernel.org/linux-mm/20121116160852.GA4302@gmail.com/t/) - Mel Gorman's 2012 RFC laying out the four-stage design
 - [NUMA balancing sysctls documentation](https://lore.kernel.org/lkml/1373065742-9753-2-git-send-email-mgorman@suse.de/) - July 2013 patch series
 
-### Related
+### Related {#related}
 
 - [page-allocator](page-allocator.md) - Per-node zones
 - [reclaim](reclaim.md) - Per-node reclaim
 - [glossary](glossary.md) - NUMA terminology
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `set_mempolicy()`, `mbind()`, `MPOL_BIND`, `MPOL_INTERLEAVE`, and the full memory policy implementation
 - [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — automatic NUMA balancing: `task_numa_work()`, `task_numa_fault()`, `task_numa_migrate()`
 - [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()` and the page migration engine
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation_1}
 
 - `Documentation/admin-guide/mm/numa_memory_policy.rst` — official reference for memory policy modes, `set_mempolicy(2)`, `mbind(2)`, and numactl integration ([rendered](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html))
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`numactl(8)`](https://man7.org/linux/man-pages/man8/numactl.8.html) — command-line interface for CPU and memory node binding
 - [`set_mempolicy(2)`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html) — process-wide NUMA memory policy
 - [`mbind(2)`](https://man7.org/linux/man-pages/man2/mbind.2.html) — per-region NUMA memory policy
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [NUMA in a hurry](https://lwn.net/Articles/486858/) — overview of NUMA concepts and the Linux memory policy API
 - [Automatic NUMA balancing](https://lwn.net/Articles/568870/) — design and implementation of the kernel's automatic page migration (v3.8)
 - [Memory tiering and CXL](https://lwn.net/Articles/898766/) — how CXL expands the NUMA node model with explicit memory tiers
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Topology Discovery: ACPI SRAT and SLIT](numa-acpi-srat.md) — how firmware tables are parsed to build the node topology
 - [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how the kernel quantifies and uses inter-node distances

@@ -1,8 +1,8 @@
-# CPU Affinity
+# CPU Affinity {#cpu-affinity}
 
 > Per-task CPU pinning: sched_setaffinity() and how it interacts with cpusets
 
-## What CPU affinity controls
+## What CPU affinity controls {#what-cpu-affinity-controls}
 
 CPU affinity lets a task (or an admin) restrict which CPUs a specific task may run on. Unlike cpuset — which applies to an entire cgroup — affinity is **per-task**.
 
@@ -13,7 +13,7 @@ Common uses:
 - **Benchmarking**: Eliminate CPU-to-CPU variation by pinning to one core
 - **Real-time**: Reserve cores for latency-sensitive tasks
 
-## The syscall
+## The syscall {#the-syscall}
 
 ```c
 // Restrict a task to specific CPUs
@@ -37,9 +37,9 @@ taskset -p $PID
 # → pid 1234's current affinity mask: f  (CPUs 0-3 on a 4-core system)
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### The syscall path
+### The syscall path {#the-syscall-path}
 
 ```c
 // kernel/sched/syscalls.c:1256
@@ -54,7 +54,7 @@ SYSCALL_DEFINE3(sched_setaffinity, pid_t, pid, unsigned int, len,
 
 `sched_setaffinity()` validates the mask, checks permissions, and calls `__sched_setaffinity()` which calls `set_cpus_allowed_ptr()`.
 
-### Affinity fields in task_struct
+### Affinity fields in task_struct {#affinity-fields-in-task_struct}
 
 ```c
 // include/linux/sched.h
@@ -73,7 +73,7 @@ struct task_struct {
 - During temporary CPU restriction (e.g., migration helpers), `cpus_ptr` may point elsewhere.
 - `user_cpus_ptr` tracks the user's requested mask, separate from any cpuset-imposed restrictions.
 
-### Reading back affinity
+### Reading back affinity {#reading-back-affinity}
 
 ```c
 // kernel/sched/syscalls.c:1275
@@ -87,7 +87,7 @@ long sched_getaffinity(pid_t pid, struct cpumask *mask)
 
 The returned mask is always intersected with `cpu_active_mask` — offline CPUs are excluded even if they're in `cpus_mask`.
 
-## Affinity and cpuset intersection
+## Affinity and cpuset intersection {#affinity-and-cpuset-intersection}
 
 When a task is in a cpuset, the effective affinity is:
 
@@ -110,7 +110,7 @@ The kernel stores both masks separately:
 
 This separation lets the kernel recompute the effective mask if the cpuset changes, without losing the user's original intent.
 
-## Migration: what happens when affinity changes
+## Migration: what happens when affinity changes {#migration-what-happens-when-affinity-changes}
 
 When `set_cpus_allowed_ptr()` is called:
 
@@ -123,7 +123,7 @@ When `set_cpus_allowed_ptr()` is called:
 perf stat -e migrations ./my_program
 ```
 
-## Kernel threads and affinity
+## Kernel threads and affinity {#kernel-threads-and-affinity}
 
 Kernel threads start with affinity set to all online CPUs (`cpu_all_mask`). You can restrict them:
 
@@ -134,7 +134,7 @@ taskset -cp 0 $(pgrep "kworker/0:1")
 
 Some kernel threads explicitly set their own affinity (e.g., interrupt threads, per-CPU kthreads) and resist external changes. Check `/proc/PID/status` for `Cpus_allowed`.
 
-## NUMA-aware affinity
+## NUMA-aware affinity {#numa-aware-affinity}
 
 On NUMA systems, pinning to specific CPUs also affects memory allocation:
 
@@ -148,7 +148,7 @@ numactl --cpunodebind=1 --membind=1 ./my_program
 
 `numactl` combines CPU affinity (`sched_setaffinity`) with NUMA memory policy (`set_mempolicy`). For NUMA-sensitive workloads, setting both is essential — pinning CPUs without pinning memory can still result in remote memory accesses.
 
-## Checking affinity in /proc
+## Checking affinity in /proc {#checking-affinity-in-proc}
 
 ```bash
 # CPU affinity as a hex bitmask
@@ -163,7 +163,7 @@ for tid in /proc/$PID/task/*/; do
 done
 ```
 
-## Affinity vs cpuset vs scheduling domains
+## Affinity vs cpuset vs scheduling domains {#affinity-vs-cpuset-vs-scheduling-domains}
 
 | Mechanism | Granularity | Scope | Hard limit? |
 |-----------|-------------|-------|-------------|
@@ -172,7 +172,7 @@ done
 | Sched domains | Global | Topology levels | No — affects load balancing preferences |
 | `nice`/priority | Per-task | CPU time share | No — just affects scheduling preference |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [cpuset](cpuset.md) — Group-level CPU restriction; intersects with per-task affinity
 - [Scheduling Domains](sched-domains.md) — How load balancing respects topology

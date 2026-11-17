@@ -1,10 +1,10 @@
-# Page Poisoning and Memory Zeroing
+# Page Poisoning and Memory Zeroing {#page-poisoning-and-memory-zeroing}
 
 > Catching use-after-free bugs and enforcing memory hygiene with kernel poisoning mechanisms
 
 The Linux kernel provides several overlapping mechanisms for filling memory with known patterns before or after use. Some are purely for debugging (catching bugs), others are for security (preventing data leakage). Understanding which tool to reach for requires knowing how they differ.
 
-## Overview
+## Overview {#overview}
 
 | Mechanism | Layer | Pattern | Goal | Config |
 |-----------|-------|---------|------|--------|
@@ -14,9 +14,9 @@ The Linux kernel provides several overlapping mechanisms for filling memory with
 
 These are independent mechanisms. They can be combined, though some combinations are redundant (e.g., enabling both `CONFIG_PAGE_POISONING` and `init_on_free=1` zeros the same pages twice).
 
-## CONFIG_PAGE_POISONING: Debug Poisoning
+## CONFIG_PAGE_POISONING: Debug Poisoning {#configpagepoisoning-debug-poisoning}
 
-### What It Does
+### What It Does {#what-it-does}
 
 `CONFIG_PAGE_POISONING` causes the page allocator to fill pages with a known byte pattern when they are freed, then verify that pattern has not been disturbed when the page is next allocated.
 
@@ -51,13 +51,13 @@ Page lifecycle with CONFIG_PAGE_POISONING:
   └────────────────────────────┘
 ```
 
-### How It Catches Use-After-Free
+### How It Catches Use-After-Free {#how-it-catches-use-after-free}
 
 When code writes to a freed page, it overwrites some `0xAA` bytes. The next time that page is allocated, the verification scan finds bytes that do not match `0xAA` and reports the corruption.
 
 The catch is timing: the write can happen anytime between the free and the next allocation. If the page is quickly recycled, the window is small. If the page sits on the free list for a while (e.g., under low allocation pressure), longer-lived writes are also detected.
 
-### Enabling It
+### Enabling It {#enabling-it}
 
 ```
 # Kernel config
@@ -74,13 +74,13 @@ page_poison=on
 page_poison=off
 ```
 
-### Performance Cost
+### Performance Cost {#performance-cost}
 
 Page poisoning adds a full page write on every free and a full page read (verify) plus write (zero) on every allocation. For order-0 pages (4KB on x86), this is two extra memory operations per allocation cycle. For high-order pages (e.g., 2MB huge pages), the cost scales linearly with page size.
 
 In practice, the overhead is measurable but workload-dependent. Allocation-heavy workloads (e.g., network-intensive, frequent small allocations) see higher overhead than workloads that allocate once at startup. This tool is suitable for development kernels and CI, not production.
 
-### Reading a Page Poisoning Report
+### Reading a Page Poisoning Report {#reading-a-page-poisoning-report}
 
 When the verification detects a corrupted byte, the kernel emits a message like:
 
@@ -112,7 +112,7 @@ Call Trace:
 !!! tip "Combining with KASAN"
     `CONFIG_PAGE_POISONING` and KASAN serve complementary roles. KASAN (see [KASAN](kasan.md)) catches the write at the moment it happens (with a precise stack trace). Page poisoning catches it at the next allocation, which is simpler to enable but gives you less information about the culprit. Run both together in a debug build for maximum coverage.
 
-### When to Use It
+### When to Use It {#when-to-use-it}
 
 Use `CONFIG_PAGE_POISONING` when:
 
@@ -120,9 +120,9 @@ Use `CONFIG_PAGE_POISONING` when:
 - You want a simple, compiler-independent check (unlike KASAN, no special compiler flags needed)
 - You are running a VM or low-performance system where KASAN's overhead is too high
 
-## init_on_alloc and init_on_free: Security Zeroing
+## init_on_alloc and init_on_free: Security Zeroing {#initonalloc-and-initonfree-security-zeroing}
 
-### What They Do
+### What They Do {#what-they-do}
 
 Introduced in Linux v5.3, `init_on_alloc` and `init_on_free` are **security features**, not debugging tools. Their purpose is to prevent sensitive kernel data from leaking into new allocations.
 
@@ -149,7 +149,7 @@ init_on_alloc=1 (simpler, slightly different guarantee):
 
 `init_on_free` gives the stronger security guarantee: it ensures data is erased at the moment of release, even if the memory is never reallocated (e.g., freed kernel buffers that sit idle).
 
-### How It Differs from Debug Poisoning
+### How It Differs from Debug Poisoning {#how-it-differs-from-debug-poisoning}
 
 | Aspect | `CONFIG_PAGE_POISONING` | `init_on_alloc/free` |
 |--------|------------------------|---------------------|
@@ -162,7 +162,7 @@ init_on_alloc=1 (simpler, slightly different guarantee):
 
 The key distinction: `0xAA` patterns are useless for security (an attacker can simply look for `0xAA` bytes and know the memory is not sensitive) but useful for debugging (a write of any other value is detectable). Zeroing is useful for security but invisible to debugging (a zero write to a freed page looks the same as the expected zero pattern).
 
-### Enabling It
+### Enabling It {#enabling-it_1}
 
 ```bash
 # Boot parameters (no recompilation needed)
@@ -180,7 +180,7 @@ CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
 CONFIG_INIT_ON_FREE_DEFAULT_ON=y
 ```
 
-### Performance Cost
+### Performance Cost {#performance-cost_1}
 
 The v5.3 commit message measured the overhead on kernel compilation (a CPU-and-allocation-intensive workload):
 
@@ -192,15 +192,15 @@ The v5.3 commit message measured the overhead on kernel compilation (a CPU-and-a
 !!! note
     If `CONFIG_PAGE_POISONING` is also enabled, `init_on_free` and page poisoning both run on free. The kernel does not deduplicate them automatically; you may zero pages twice. Disable one if you enable the other for production-like performance testing.
 
-### When to Use It
+### When to Use It {#when-to-use-it_1}
 
 - **Security-sensitive kernels**: Enable `init_on_free=1` to comply with security hardening guides (e.g., KSPP recommendations)
 - **Containers and multi-tenant workloads**: Prevent tenant A's freed memory from being readable by tenant B after reallocation
 - **Not a debugging tool**: If you are trying to catch a use-after-free, use KASAN or `CONFIG_PAGE_POISONING` instead
 
-## slub_debug Poisoning: Slab-Level Debugging
+## slub_debug Poisoning: Slab-Level Debugging {#slub_debug-poisoning-slab-level-debugging}
 
-### What It Does
+### What It Does {#what-it-does_1}
 
 `CONFIG_PAGE_POISONING` operates at the page allocator level and catches bugs involving raw page allocations. Most kernel allocations go through the slab allocator (`kmalloc`, `kmem_cache_alloc`), which carves pages into smaller objects. For those, you need slab-level poisoning.
 
@@ -208,7 +208,7 @@ SLUB (the default slab allocator since v2.6.23) has built-in debug support contr
 
 The implementation is in [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c).
 
-### The Poison Patterns
+### The Poison Patterns {#the-poison-patterns}
 
 SLUB poisoning uses two distinct byte values (defined in [`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h)):
 
@@ -231,7 +231,7 @@ SLUB object layout with poisoning (P flag) and redzones (Z flag):
 
 The `0x6b` value (`k` in ASCII) is a recognizable signature in memory dumps, making it easy to spot freed slab memory in crash analysis tools like `crash(8)`.
 
-### Enabling SLUB Poisoning
+### Enabling SLUB Poisoning {#enabling-slub-poisoning}
 
 ```bash
 # Enable for all slab caches
@@ -263,7 +263,7 @@ cat /sys/kernel/slab/kmalloc-64/poison
 
 Require `CONFIG_SLUB_DEBUG=y` in the kernel config (typically enabled in debug kernels automatically).
 
-### How It Catches Slab Use-After-Free
+### How It Catches Slab Use-After-Free {#how-it-catches-slab-use-after-free}
 
 When code writes to a freed slab object, it overwrites some `0x6b` bytes. The next time an object is taken from that slab, SLUB's `check_object()` function scans the body for bytes that are not `0x6b`. If found, it reports a poison corruption:
 
@@ -296,7 +296,7 @@ Call Trace:
 3. `Allocated in` / `Freed in` — SLUB tracks the last allocation and free site (requires the `U` flag in `slub_debug`)
 4. The call trace shows who triggered the check (the next allocator), not who did the write
 
-### When to Use It
+### When to Use It {#when-to-use-it_2}
 
 Use `slub_debug=P` when:
 
@@ -307,7 +307,7 @@ Use `slub_debug=P` when:
 !!! warning "Performance impact"
     `slub_debug=FZPU` applied to all caches can slow down a system by 5–10x on allocation-heavy workloads. If performance matters, target only the suspect cache with `slub_debug=P,cache_name`.
 
-## Choosing the Right Tool
+## Choosing the Right Tool {#choosing-the-right-tool}
 
 ```
 Use-after-free suspicion
@@ -321,7 +321,7 @@ Use-after-free suspicion
     └── init_on_free=1
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -331,13 +331,13 @@ Use-after-free suspicion
 | [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | `init_on_alloc` / `init_on_free` hooks for the slab layer |
 | [`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) | Poison byte constants: `POISON_FREE` (`0x6b`), `POISON_END` (`0xa5`) |
 
-## History
+## History {#history}
 
-### CONFIG_PAGE_POISONING
+### CONFIG_PAGE_POISONING {#configpagepoisoning}
 
 Page poisoning predates systematic git history tracking. The `PAGE_POISONING` config option and `0xAA` pattern have been present in the kernel for many years as a debugging aid; the current `mm/page_poison.c` file consolidates the logic that was previously scattered across `mm/page_alloc.c`.
 
-### init_on_alloc / init_on_free (v5.3, 2019)
+### init_on_alloc / init_on_free (v5.3, 2019) {#initonalloc-initonfree-v53-2019}
 
 **Commit**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6) ("mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options")
 **Author**: Alexander Potapenko
@@ -345,11 +345,11 @@ Page poisoning predates systematic git history tracking. The `PAGE_POISONING` co
 
 Motivated by a class of information disclosure vulnerabilities where kernel memory from one context was reused in another without being cleared. The patch was part of a broader push to make the kernel's memory lifecycle safer by default, aligned with the Kernel Self Protection Project (KSPP).
 
-### slub_debug Poisoning
+### slub_debug Poisoning {#slub_debug-poisoning}
 
 SLUB was introduced in v2.6.23 (2007) as a replacement for SLAB. The `P` (poisoning) flag and `0x6b`/`0xa5` patterns were part of SLUB's debug infrastructure from the beginning, carrying forward conventions from the older SLAB allocator. The sysfs interface at `/sys/kernel/slab/<cache>/poison` enables per-cache control without rebooting.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/page_poison.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) — `CONFIG_PAGE_POISONING` implementation: `kernel_poison_pages()` fills freed pages with `0xAA` and `kernel_unpoison_pages()` verifies the pattern on allocation
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — page allocator hooks that invoke both page poisoning and the `init_on_alloc`/`init_on_free` security zeroing paths

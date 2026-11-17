@@ -1,4 +1,4 @@
-# ALU32 Bitwise Bounds Tracking
+# ALU32 Bitwise Bounds Tracking {#alu32-bitwise-bounds-tracking}
 
 > CVE-2021-3490 — a comment that checked a 32-bit condition and relied on a 64-bit guarantee
 
@@ -22,7 +22,7 @@ Actively exploited
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 After [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244) ("bpf: Verifier, do explicit ALU32 bounds tracking", v5.7-rc1), the verifier simulates the arithmetic and bitwise ALU operations twice: once over the 64-bit bounds, once over the separate 32-bit `{s,u}32_{min,max}_value` bounds. For the bitwise ops that means two parallel families of functions — `scalar_min_max_and()` / `scalar_min_max_or()` / `scalar_min_max_xor()`, and their `scalar32_` counterparts.
 
@@ -42,7 +42,7 @@ A near-identical comment and the same early return appear in `scalar32_min_max_o
 
 That commit's own review is where the CVE's exact precondition got examined and declared safe. Alexei Starovoitov [asked directly](https://lore.kernel.org/all/20200826015836.2rlfvhoznylkabp6@ast-mbp.dhcp.thefacebook.com/), quoting the same `if (src_known && dst_known) return;` line this page is about: "why? I've looked at `_and()` and `_or()` variants that do the same and couldn't quite remember why it's ok to do so." Song's [reply](https://lore.kernel.org/all/f2056e3c-e300-6fa0-8b8e-fa19ed5580bd@fb.com/) was candid, and unsure: "Yes, I copied what `_and()` and `_or()` did. What I thought is if both known, 64bit `scalar_min_max_xor()` handled this and did not go through the approximation below... John, could you confirm?" John Fastabend then [walked through the exact register state](https://lore.kernel.org/all/5f46dcd8c0156_50e8208f4@john-XPS-13-9370.notmuch/) this CVE would later exploit — a constant subregister inside a non-constant 64-bit register — and concluded it was fine, because the generic post-pass "will use the `var_off`, previously updated. The 32-bit bounds are then updated using this `var_off` so they are correct even if less precise than we might expect." He was describing `__update_reg32_bounds()`, the same tighten-only function this page's "The trigger" section explains — and he was wrong. That function can only tighten: it pulled the maximum down to the correct value and left the stale minimum standing, which is precisely the `u32_min_value=1, u32_max_value=0` state CVE-2021-3490 exploited. He did write the promised test — [`99d4def4d085`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=99d4def4d08507474b250dad6345d14715a4726b) ("bpf: Add AND verifier test case where 32bit and 64bit bounds differ") landed a month later with a "check known subreg with unknown reg" case in `verifier/and.c`. It asserted that the program loaded and returned 0, not that the resulting bounds were self-consistent, so it exercised the vulnerable path for seven months without detecting it.
 
-## The trigger
+## The trigger {#the-trigger}
 
 The shortcut's premise does not survive contact with the function it defers to.
 
@@ -65,7 +65,7 @@ The verifier trace in the commit shows the wreckage:
 
 `u32_min_value=1` with `u32_max_value=0`. The correct answer is 0 for all four, since `0x1 & 0x2 == 0` in 32-bit space.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 A register whose minimum exceeds its maximum describes an empty set — a state no real value can be in, which means every subsequent inference the verifier draws from it is unconstrained by reality.
 
@@ -79,7 +79,7 @@ A working local-privilege-escalation exploit is public: NVD's reference list car
 
 Cascardo's announcement includes one detail that materially limited blast radius: "There has been no backport to any upstream LTS kernel." That is about backports: 5.10 is itself a long-term series and carried the bug natively (hence the 5.10.37 fix above), but the `and`/`or` variants were introduced in 5.7-rc1 and the `xor` variant in 5.10-rc1, so the older 4.19 and 5.4 long-term series never received these commits at all.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 **A comment asserting an invariant is not an invariant.** "Assuming `scalar64_min_max_and` will be called so its safe to skip updating register for known 32-bit case" is a claim about a *different function's* behavior, written in this function, checked by nobody. It was very nearly true — for fully-known registers, which is the common case — and the case where it was false is a register that is constant in one half and unknown in the other, which is exactly the state a hostile program can construct on purpose.
 
@@ -94,7 +94,7 @@ Fixes: 2921c90d4718 ("bpf: Fix a verifier failure with xor")
 
 Five months separate them, and the second one is a fix that propagated the first one's bug into a new call site.
 
-## Resolution
+## Resolution {#resolution}
 
 [`049c4e13714e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=049c4e13714ecbca567b4d5f6d563f05d431c80e) ("bpf: Fix alu32 const subreg bound tracking on bitwise operations", Daniel Borkmann) deletes the assumption instead of trying to make it true. The same change is applied to all three functions:
 
@@ -115,7 +115,7 @@ The patch carries `Reviewed-by: John Fastabend` and `Acked-by: Alexei Starovoito
 
 The fix reached mainline in v5.13-rc4 and the 5.12.4, 5.11.21, and 5.10.37 stable releases.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Precondition mismatches between a caller and its delegate are a silent bug class.** This function checked a 32-bit condition and relied on a function that acts on a 64-bit condition. Neither is wrong in isolation. The bug lives entirely in the space between them, which no single-function review would surface — and which no test would catch either, unless someone thought to construct a register that is constant in one half and unknown in the other.
 
@@ -126,7 +126,7 @@ The fix reached mainline in v5.13-rc4 and the 5.12.4, 5.11.21, and 5.10.37 stabl
 !!! warning "Pattern to watch for"
     When you find two parallel implementations of the same logic over different widths, signedness, or representations — a 32-bit and a 64-bit path, a fast path and a slow path, a cached and an uncached variant — read the *early returns* first, not the bodies. Early returns are where one implementation delegates to the other, and delegation is where preconditions silently differ. Then check whether any downstream state can end up self-contradictory (`min > max`, `end < start`, `count > capacity`) and, if so, assert it rather than relying on all producers being correct.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — register bounds tracking, tnums, and how ALU operations are simulated
 - [The 32-Bit Unsigned Bounds Propagation Bug](alu32-unsigned-bounds.md) — the other 2021 CVE against the same introducing commit, reported by the same researcher and fixed two and a half weeks earlier
@@ -134,7 +134,7 @@ The fix reached mainline in v5.13-rc4 and the 5.12.4, 5.11.21, and 5.10.37 stabl
 - [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — posted the same day this CVE was announced
 - [Security War Stories](../../security/war-stories.md) — where the same embargo-then-announce disclosure pattern shows up repeatedly
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2021-3490](https://nvd.nist.gov/vuln/detail/CVE-2021-3490) — CVSS 7.8 HIGH, published June 4, 2021; the description names both introducing commits and all three stable releases
 - [git.kernel.org: 049c4e13714e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=049c4e13714ecbca567b4d5f6d563f05d431c80e) — "bpf: Fix alu32 const subreg bound tracking on bitwise operations", the fix, with before/after verifier traces

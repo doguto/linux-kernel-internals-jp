@@ -1,8 +1,8 @@
-# ftrace: Function Tracer
+# ftrace: Function Tracer {#ftrace-function-tracer}
 
 > The kernel's built-in function tracing infrastructure
 
-## What ftrace is
+## What ftrace is {#what-ftrace-is}
 
 ftrace is the kernel's main tracing framework, accessible via tracefs at `/sys/kernel/tracing/`. Created by Steven Rostedt and introduced in Linux 2.6.27 [(commit)](https://git.kernel.org/linus/16444a8a40d4c7b4f6de34af0cae1f76a4f6c901) [(LWN)](https://lwn.net/Articles/290277/), it:
 
@@ -11,7 +11,7 @@ ftrace is the kernel's main tracing framework, accessible via tracefs at `/sys/k
 - Provides a ring buffer for low-overhead event collection
 - Is the backend for BPF `fentry`/`fexit` (Linux 5.5) [(commit)](https://git.kernel.org/linus/fec56f5890d93fc2ed74166c397dc186b1c25951), kprobes, and tracepoints
 
-## tracefs interface
+## tracefs interface {#tracefs-interface}
 
 tracefs was introduced as a standalone filesystem in Linux 4.1 [(commit)](https://git.kernel.org/linus/4282d60689d4f21b40692029080440cc58e8a17d).
 
@@ -49,7 +49,7 @@ mount -t tracefs tracefs /sys/kernel/tracing
 └── snapshot                 # freeze a snapshot of the ring buffer
 ```
 
-## Function tracer
+## Function tracer {#function-tracer}
 
 ```bash
 # Trace all function calls
@@ -76,7 +76,7 @@ echo "schedule" >> /sys/kernel/tracing/set_ftrace_filter
 echo "" > /sys/kernel/tracing/set_ftrace_filter
 ```
 
-## Function graph tracer
+## Function graph tracer {#function-graph-tracer}
 
 Shows call hierarchy and execution time. Added by Frédéric Weisbecker in Linux 2.6.29 [(commit)](https://git.kernel.org/linus/15e6cb3673ea6277999642802406a764b49391b0).
 
@@ -97,7 +97,7 @@ cat /sys/kernel/tracing/trace
 #  0  |            |            filemap_read() {
 ```
 
-## How ftrace instruments functions
+## How ftrace instruments functions {#how-ftrace-instruments-functions}
 
 When `CONFIG_DYNAMIC_FTRACE=y` and `CONFIG_HAVE_FENTRY=y`, the compiler inserts a call to `__fentry__` (or `mcount`) at the start of every traceable function:
 
@@ -120,7 +120,7 @@ func:
 
 Since Linux 5.x with `CONFIG_HAVE_FENTRY`, the compiler uses `__fentry__` (called before the function prologue saves registers) rather than `mcount`, which makes the hook faster and allows reliable stack unwinding.
 
-## Ring buffer
+## Ring buffer {#ring-buffer}
 
 ftrace uses a lockless per-CPU ring buffer (`kernel/trace/ring_buffer.c`):
 
@@ -154,7 +154,7 @@ cat /sys/kernel/tracing/buffer_size_kb
 echo 65536 > /sys/kernel/tracing/buffer_size_kb
 ```
 
-## Dynamic events: kprobe_events and uprobe_events
+## Dynamic events: kprobe_events and uprobe_events {#dynamic-events-kprobeevents-and-uprobeevents}
 
 ```bash
 # Add a kprobe on tcp_sendmsg: print first argument (sk)
@@ -174,7 +174,7 @@ echo 'r:my_ret tcp_sendmsg retval=$retval' > /sys/kernel/tracing/kprobe_events
 echo 'p:myapp /usr/bin/myapp:0x1234 arg1=%di' > /sys/kernel/tracing/uprobe_events
 ```
 
-## Event tracing: tracepoints
+## Event tracing: tracepoints {#event-tracing-tracepoints}
 
 ```bash
 # List available tracepoint events
@@ -204,7 +204,7 @@ cat /sys/kernel/tracing/events/syscalls/sys_enter_read/format
 #     field:size_t count;                  offset:32; size:8; signed:0;
 ```
 
-## trace-cmd: the ftrace frontend
+## trace-cmd: the ftrace frontend {#trace-cmd-the-ftrace-frontend}
 
 ```bash
 # Record syscalls for 5 seconds
@@ -226,7 +226,7 @@ trace-cmd stream -e sched:sched_switch
 kernelshark trace.dat
 ```
 
-## trace instances: non-interfering sessions
+## trace instances: non-interfering sessions {#trace-instances-non-interfering-sessions}
 
 ```bash
 # Create a private instance (doesn't affect the global trace)
@@ -244,7 +244,7 @@ cat /sys/kernel/tracing/instances/myinstance/trace_pipe &
 rmdir /sys/kernel/tracing/instances/myinstance  # cleanup
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kprobes and Tracepoints](kprobes-tracepoints.md) — Dynamic and static event hooks
 - [perf Events](perf-events.md) — Hardware PMU and sampling

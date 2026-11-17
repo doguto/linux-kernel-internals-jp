@@ -1,8 +1,8 @@
-# Network Namespaces
+# Network Namespaces {#network-namespaces}
 
 > Per-namespace network stacks, device migration, and container networking isolation
 
-## What network namespaces provide
+## What network namespaces provide {#what-network-namespaces-provide}
 
 Each **network namespace** has its own:
 
@@ -22,7 +22,7 @@ iptables: (container rules)           iptables: (container rules)
 # Completely isolated — no visibility between namespaces
 ```
 
-## Creating and using network namespaces
+## Creating and using network namespaces {#creating-and-using-network-namespaces}
 
 ```bash
 # Create a named network namespace:
@@ -49,7 +49,7 @@ ip netns exec myns ip addr add 127.0.0.1/8 dev lo
 ip netns del myns
 ```
 
-## veth pairs: connecting namespaces
+## veth pairs: connecting namespaces {#veth-pairs-connecting-namespaces}
 
 ```bash
 # Create a veth pair:
@@ -70,7 +70,7 @@ ping 10.0.0.2      # host → namespace
 ip netns exec myns ping 10.0.0.1  # namespace → host
 ```
 
-## Kernel internals: struct net
+## Kernel internals: struct net {#kernel-internals-struct-net}
 
 ```c
 /* include/net/net_namespace.h */
@@ -125,7 +125,7 @@ static inline struct net *sock_net(const struct sock *sk)
 }
 ```
 
-## Namespace lifecycle
+## Namespace lifecycle {#namespace-lifecycle}
 
 ```c
 /* Creating a new network namespace (clone_newnet): */
@@ -154,7 +154,7 @@ static void cleanup_net(struct work_struct *work)
 }
 ```
 
-### pernet_operations: subsystem hooks
+### pernet_operations: subsystem hooks {#pernet_operations-subsystem-hooks}
 
 Every subsystem that has per-namespace state registers cleanup/init hooks:
 
@@ -180,7 +180,7 @@ static struct pernet_operations fib_net_ops = {
 register_pernet_subsys(&fib_net_ops);
 ```
 
-## Moving network devices between namespaces
+## Moving network devices between namespaces {#moving-network-devices-between-namespaces}
 
 ```bash
 # Move a physical/virtual device to a namespace:
@@ -205,7 +205,7 @@ int dev_change_net_namespace(struct net_device *dev,
 }
 ```
 
-## ip netns exec implementation
+## ip netns exec implementation {#ip-netns-exec-implementation}
 
 ```bash
 # ip netns exec myns COMMAND
@@ -222,7 +222,7 @@ setns(ns_fd, CLONE_NEWNET);   /* join the network namespace */
 execv(argv[0], argv);
 ```
 
-## Network namespace statistics
+## Network namespace statistics {#network-namespace-statistics}
 
 ```bash
 # Per-namespace network stats:
@@ -243,7 +243,7 @@ ip netns list-id
 # nsid 0 (iproute2 id for init_net as seen from current ns)
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Check network namespace of a process:
@@ -263,7 +263,7 @@ kprobe:setup_net
 { printf("new net ns: pid=%d, comm=%s\n", pid, comm); }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Container Isolation](../cgroups/container-isolation.md) — namespaces in containers
 - [Namespaces](../cgroups/namespaces.md) — all Linux namespaces overview

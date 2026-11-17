@@ -1,8 +1,8 @@
-# Memory Virtualization
+# Memory Virtualization {#memory-virtualization}
 
 > EPT, shadow paging, balloon driver, and huge pages for KVM guests
 
-## Two layers of address translation
+## Two layers of address translation {#two-layers-of-address-translation}
 
 A guest OS thinks it controls physical memory. It doesn't — it controls *guest physical addresses* (GPA), which KVM translates to *host physical addresses* (HPA) using a second page table layer.
 
@@ -14,11 +14,11 @@ Without hardware:  two separate walks, merged by software (shadow paging)
 With EPT/NPT:      hardware does a 2D walk automatically
 ```
 
-## Extended Page Tables (EPT / NPT)
+## Extended Page Tables (EPT / NPT) {#extended-page-tables-ept-npt}
 
 Intel EPT (Extended Page Tables) and AMD NPT (Nested Page Tables) are the hardware mechanisms for GPA→HPA translation. They eliminate the need for shadow page tables on modern hardware.
 
-### EPT page walk
+### EPT page walk {#ept-page-walk}
 
 The CPU walks both GCR3 (guest CR3) and the EPT pointer (EPTP) simultaneously:
 
@@ -30,7 +30,7 @@ Guest CR3 → PML4 → PDPT → PD → PT → GPA
 
 For a 4-level guest walking a 4-level EPT, the hardware may touch up to 24 page table entries in the worst case (4 guest + 4×4 EPT walks).
 
-### struct kvm_mmu
+### struct kvm_mmu {#struct-kvm_mmu}
 
 ```c
 /* Simplified — arch/x86/include/asm/kvm_host.h; several callback and
@@ -55,7 +55,7 @@ struct kvm_mmu {
 };
 ```
 
-### EPT violation handling
+### EPT violation handling {#ept-violation-handling}
 
 When a guest accesses memory with no EPT entry, the CPU triggers an EPT violation VM exit:
 
@@ -114,7 +114,7 @@ emulate:
 }
 ```
 
-### struct kvm_mmu_page (shadow pages)
+### struct kvm_mmu_page (shadow pages) {#struct-kvmmmupage-shadow-pages}
 
 KVM tracks EPT/shadow pages via `struct kvm_mmu_page`. One struct per page table page:
 
@@ -149,7 +149,7 @@ struct kvm_mmu_page {
 };
 ```
 
-## Shadow paging (without EPT)
+## Shadow paging (without EPT) {#shadow-paging-without-ept}
 
 On older hardware without EPT, KVM maintains **shadow page tables** that directly map GVA→HPA. The guest's CR3 points to the shadow page table, not its own.
 
@@ -160,7 +160,7 @@ Guest's own PT ──────────────┘
 (GVA → GPA, never loaded)
 ```
 
-### The write-protection trap
+### The write-protection trap {#the-write-protection-trap}
 
 Shadow paging requires KVM to intercept every guest write to a page table:
 
@@ -171,7 +171,7 @@ Shadow paging requires KVM to intercept every guest write to a page table:
 
 This is costly for page-table-heavy workloads. EPT avoids this entirely.
 
-## Memory slots
+## Memory slots {#memory-slots}
 
 KVM maps guest physical memory in *slots* — contiguous GPA ranges backed by host userspace memory:
 
@@ -200,7 +200,7 @@ A slot can be:
 - **ROM**: read-only (bios, option ROM)
 - **MMIO**: no backing — triggers `KVM_EXIT_MMIO` on access
 
-## Dirty page tracking
+## Dirty page tracking {#dirty-page-tracking}
 
 KVM can track which guest pages have been modified (used by live migration):
 
@@ -221,7 +221,7 @@ struct kvm_dirty_log log = {
 ioctl(vm_fd, KVM_GET_DIRTY_LOG, &log);
 ```
 
-### Dirty ring (5.11+)
+### Dirty ring (5.11+) {#dirty-ring-511}
 
 The dirty ring is a faster alternative that avoids the bitmap scan:
 
@@ -244,7 +244,7 @@ struct kvm_dirty_gfn {
 
 The VMM polls the ring, processes dirty GFNs, and resets them. No bitmap scan needed — much faster for high-write-rate guests.
 
-## Balloon driver
+## Balloon driver {#balloon-driver}
 
 The balloon driver is a paravirtual mechanism for the host to reclaim memory from a guest without the guest noticing page table manipulations.
 
@@ -266,7 +266,7 @@ Host (KVM)              Guest (virtio-balloon driver)
     │                              │ release pages back to guest allocator
 ```
 
-### Balloon stats
+### Balloon stats {#balloon-stats}
 
 The guest can also report memory statistics to the host:
 
@@ -305,11 +305,11 @@ static unsigned int update_balloon_stats(struct virtio_balloon *vb)
 
 The host uses these stats to make inflation/deflation decisions intelligently (e.g., don't inflate if guest has no free memory).
 
-## Huge pages for guests
+## Huge pages for guests {#huge-pages-for-guests}
 
 Using huge pages in the EPT improves TLB efficiency. KVM can map a 2MB or 1GB GPA range with a single EPT entry.
 
-### Transparent huge pages (THP) for guest memory
+### Transparent huge pages (THP) for guest memory {#transparent-huge-pages-thp-for-guest-memory}
 
 QEMU typically allocates guest RAM with `mmap(MAP_ANONYMOUS)`. With THP enabled, the host kernel may promote guest pages to huge pages automatically, and KVM will use 2MB EPT entries:
 
@@ -322,7 +322,7 @@ grep -i huge /proc/$(pgrep qemu)/smaps | head
 # AnonHugePages: 1234567 kB
 ```
 
-### hugetlbfs-backed guest memory
+### hugetlbfs-backed guest memory {#hugetlbfs-backed-guest-memory}
 
 For guaranteed huge pages with no THP pressure, QEMU can use hugetlbfs:
 
@@ -340,7 +340,7 @@ qemu-system-x86_64 \
 
 When EPT maps these, every 2MB of guest physical memory uses one EPT leaf entry instead of 512. Fewer TLB misses → better guest performance for memory-intensive workloads.
 
-### KVM large page handling
+### KVM large page handling {#kvm-large-page-handling}
 
 ```c
 /* arch/x86/kvm/mmu/mmu.c — kvm_mmu_hugepage_adjust(), simplified.
@@ -375,7 +375,7 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 }
 ```
 
-## Observing guest memory
+## Observing guest memory {#observing-guest-memory}
 
 ```bash
 # There's no dedicated "ept_violations" file (see kvm_vcpu_stats_desc[] in
@@ -402,7 +402,7 @@ cat /sys/module/kvm_intel/parameters/ept
 modprobe kvm_intel ept=0
 ```
 
-## KVM dirty logging for live migration
+## KVM dirty logging for live migration {#kvm-dirty-logging-for-live-migration}
 
 Live migration must transfer guest memory to the destination. KVM's dirty logging tracks which pages were written since the last iteration:
 
@@ -440,7 +440,7 @@ ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty);
 
 The EPT hardware's dirty bit (EPT PTE bit 9) is cleared when KVM resets the bitmap. Next write access causes an EPT violation → KVM marks page dirty and re-enables the dirty bit.
 
-### KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2
+### KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 {#kvmcapmanualdirtylog_protect2}
 
 A two-phase protocol for very large VMs that avoids races:
 
@@ -452,7 +452,7 @@ ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty);
 ioctl(vm_fd, KVM_CLEAR_DIRTY_LOG, &clear);
 ```
 
-## Memory overcommit and KSM
+## Memory overcommit and KSM {#memory-overcommit-and-ksm}
 
 ```bash
 # KSM (Kernel Samepage Merging): merge identical pages across VMs
@@ -474,9 +474,9 @@ cat /sys/kernel/mm/ksm/pages_unshared   # not mergeable
 # Used by libvirt/QEMU to over-provision RAM across VMs
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/include/asm/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/kvm_host.h) — `struct kvm_mmu`: the per-vCPU MMU context (`root` — a `struct kvm_mmu_root_info` holding the root HPA — `page_fault` handler, `root_role`)
 - [arch/x86/kvm/mmu/mmu_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu_internal.h) — `struct kvm_mmu_page`: one struct per shadow/EPT page-table page, including the reverse-map `parent_ptes`
@@ -487,7 +487,7 @@ cat /sys/kernel/mm/ksm/pages_unshared   # not mergeable
 - [include/linux/kvm_dirty_ring.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_dirty_ring.h) — `struct kvm_dirty_ring`: the per-vCPU dirty-GFN ring buffer (5.11+)
 - [drivers/virtio/virtio_balloon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_balloon.c) — `update_balloon_stats()`: guest memory statistics reported to the host
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KVM Architecture](kvm-arch.md) — /dev/kvm API, vCPU run loop
 - [virtio](virtio.md) — paravirtual I/O: virtqueues, virtio-net, virtio-blk
@@ -496,11 +496,11 @@ cat /sys/kernel/mm/ksm/pages_unshared   # not mergeable
 - [Memory Management: page tables](../mm/page-tables.md) — host-side page tables
 - [Memory Management: THP](../mm/thp.md) — huge page promotion KVM uses
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [KVM: Dirty ring interface](https://lwn.net/Articles/833784/) — Peter Xu's patch posting introducing the per-vCPU dirty-ring alternative to the dirty bitmap
 
-### External
+### External {#external}
 
 - [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — memory slot ioctls (`KVM_SET_USER_MEMORY_REGION`), dirty logging (`KVM_GET_DIRTY_LOG`, `KVM_CLEAR_DIRTY_LOG`), and the dirty-ring capability
 - [Kernel Samepage Merging](https://docs.kernel.org/admin-guide/mm/ksm.html) — the `/sys/kernel/mm/ksm/` sysfs knobs and how KSM deduplicates identical guest pages

@@ -1,14 +1,14 @@
-# Line Disciplines, termios, and Pseudo-Terminals
+# Line Disciplines, termios, and Pseudo-Terminals {#line-disciplines-termios-and-pseudo-terminals}
 
 > The interpreter that sits between a UART (or a pty) and a shell: turning raw bytes into edited lines, Ctrl-C into SIGINT, and background writes into SIGTTOU
 
-## The problem: raw bytes are not what a shell wants to read
+## The problem: raw bytes are not what a shell wants to read {#the-problem-raw-bytes-are-not-what-a-shell-wants-to-read}
 
 A serial port or a pty driver's only job is moving bytes: bytes arrive from the wire (or from the other half of a pty pair) and bytes go out. Nothing at that layer knows what a backspace means, whether Ctrl-C should kill the foreground program, or whether the process calling `read()` is even allowed to have this input right now because it's running in the background. If every terminal-using program had to reimplement line editing, signal generation, and job-control policy on top of raw device bytes, every shell and every `readline`-alike would duplicate the same few hundred lines of finicky code — and disagree on the details.
 
 Linux's tty layer solves this by inserting a **line discipline** between the low-level driver and the reading/writing process. A line discipline is a pluggable protocol handler: the driver hands it raw bytes as they arrive, and it hands processed bytes to `read()` — and, going the other way, it can transform what a process `write()`s before handing it to the driver. The most heavily used one by a wide margin is **N_TTY**, the default discipline that implements ordinary interactive terminal behavior: canonical line editing, echo, and signal generation. This page is mostly about N_TTY, plus the two mechanisms that sit right next to it — `termios`, the structure a process uses to configure N_TTY's behavior, and job control, the process-group bookkeeping that decides who's allowed to read and write a given terminal at all. It closes with pseudo-terminals (ptys), the master/slave device pairs that make N_TTY and job control apply to network logins and terminal emulators, not just physical serial ports.
 
-## Line disciplines: `struct tty_ldisc_ops`
+## Line disciplines: `struct tty_ldisc_ops` {#line-disciplines-struct-ttyldiscops}
 
 A line discipline registers a `struct tty_ldisc_ops` (`include/linux/tty_ldisc.h`) with `tty_register_ldisc()`. The struct's own kernel-doc comment draws a line through the middle of the callback list: some hooks are called "from above" (the process doing `read()`/`write()`/`ioctl()` on the tty), others "from below" (the tty driver feeding in hardware-received bytes):
 
@@ -86,7 +86,7 @@ static struct tty_ldisc_ops n_tty_ops = {
 };
 ```
 
-### It's not the only line discipline
+### It's not the only line discipline {#its-not-the-only-line-discipline}
 
 `include/uapi/linux/tty.h` reserves 31 `N_*` numbers, and `ioctl(fd, TIOCSETD, &ldisc_num)` is how a process swaps a tty's discipline at runtime — that's exactly how old-school PPP and SLIP worked: a userspace daemon (`pppd`, `slattach`) opened a serial port as an ordinary tty, ran `TIOCSETD` to switch it from N_TTY to **N_PPP** or **N_SLIP**, and from that point every byte on the wire was framed PPP/SLIP traffic instead of terminal input — no more line editing, no more Ctrl-C, just a byte pipe with its own framing:
 
@@ -107,7 +107,7 @@ static struct tty_ldisc_ops n_tty_ops = {
 
 Most of the rest of that list is the same trick applied to other framed protocols riding on a UART: N_HCI decodes a Bluetooth controller's HCI packets, N_GSM0710 multiplexes a single serial port into multiple logical channels for a GSM modem, N_CAN327 talks to a cheap ELM327 OBD-II adapter. None of them are what a human types at — they're all "steal the tty's byte stream for a non-terminal protocol," and N_TTY is what's back in place the moment nothing more specialized has claimed the line. The rest of this page is entirely about N_TTY.
 
-## Canonical vs. raw mode
+## Canonical vs. raw mode {#canonical-vs-raw-mode}
 
 N_TTY's most visible job is deciding how much editing happens before a `read()` returns data, and that's governed by a single bit: `ICANON` in `c_lflag`.
 
@@ -135,7 +135,7 @@ static void eraser(u8 c, const struct tty_struct *tty)
 
 In non-canonical mode, two more `c_cc[]` slots change meaning entirely: `VMIN` and `VTIME` control how `read()` blocks. `VMIN` is the minimum number of bytes to satisfy a read; `VTIME` is a timeout in tenths of a second. The four combinations (both zero, only `VMIN`, only `VTIME`, both nonzero) give four distinct blocking behaviors, documented in full in `termios(3)`.
 
-## `termios`: the configuration surface
+## `termios`: the configuration surface {#termios-the-configuration-surface}
 
 Every open tty has a `struct ktermios` (`tty->termios`), and userspace reads/writes it via `tcgetattr(3)`/`tcsetattr(3)`, which are thin wrappers around the `TCGETS`/`TCSETS`-family ioctls. The kernel UAPI struct — `struct termios`, the one `tcgetattr()` actually fills — and the kernel-internal `struct ktermios` share the same field layout on modern Linux (`ktermios` additionally carries explicit `c_ispeed`/`c_ospeed` fields rather than packing speed into `c_cflag`):
 
@@ -213,7 +213,7 @@ The `c_cc[]` array (`NCCS` = 19 slots) is where the special characters live — 
 
 `include/linux/tty.h` defines the macros the kernel itself uses to read these — `INTR_CHAR(tty)` expands to `tty->termios.c_cc[VINTR]`, and so on for every entry above. On Linux, `VMIN`/`VTIME` and `VEOF`/`VEOL` are four distinct, non-overlapping indices (4, 5, 6, 11, per the table above) — they only take on `VMIN`/`VTIME` *meaning* in non-canonical mode, but the slots themselves are never reused. (SPARC's `termbits.h` is a historical outlier that literally `#define`s `VMIN VEOF` and `VTIME VEOL`, inherited from older Unix layouts — that's a SPARC peculiarity, not a general Linux/glibc rule.)
 
-## Signal generation: how Ctrl-C becomes SIGINT
+## Signal generation: how Ctrl-C becomes SIGINT {#signal-generation-how-ctrl-c-becomes-sigint}
 
 When `ISIG` is set in `c_lflag` (the default), N_TTY watches every incoming byte for three special characters and turns each into a signal instead of passing it through as data. `n_tty_receive_char_special()` is where that dispatch happens, checked before any of the ordinary line-editing logic runs — though `n_tty_receive_char_special()` itself checks `I_IXON`-driven software flow control (`Ctrl-S`/`Ctrl-Q`) first, and only reaches the `ISIG` block below if that doesn't consume the byte:
 
@@ -249,11 +249,11 @@ static void __isig(int sig, struct tty_struct *tty)
 
 `tty_get_pgrp()` returns a reference to `tty->ctrl.pgrp` — the tty's foreground process group, covered next — and `kill_pgrp()` delivers the signal to every process in that group, which is why Ctrl-C in a shell reaches the whole foreground pipeline (`sort | uniq | less`, say) and not just one process. This is entirely N_TTY's own logic — nothing about `ISIG` or signal generation lives in the generic tty core; a different line discipline is free to not do this at all (and PPP/SLIP-family disciplines don't, since `Ctrl-C` on a byte stream carrying framed network traffic would be nonsensical).
 
-## Job control: who's allowed to read and write
+## Job control: who's allowed to read and write {#job-control-whos-allowed-to-read-and-write}
 
 `ISIG` explains how a foreground process gets signaled; job control is the layer above that decides *which* process group counts as foreground in the first place, and what happens to everyone else.
 
-### `tty_struct`'s control fields
+### `tty_struct`'s control fields {#tty_structs-control-fields}
 
 The relevant state lives in `struct tty_struct` under a small `ctrl` sub-struct, alongside its own spinlock:
 
@@ -270,7 +270,7 @@ struct {
 
 `ctrl.pgrp` is the terminal's current foreground process group; `ctrl.session` is the session this tty is the controlling terminal *for*. Both are `struct pid *`, not raw pids, and both are protected by `ctrl.lock` for writers (readers can get away with holding just one of `ctrl.lock` or the tty's broader `legacy_mutex`, per the struct's kernel-doc). `tty_get_pgrp(tty)` is the accessor `isig()` used above; `tty_jobctrl.c` has the corresponding setter path, `tiocspgrp()`, reached through the `TIOCSPGRP` ioctl.
 
-### Becoming a controlling terminal
+### Becoming a controlling terminal {#becoming-a-controlling-terminal}
 
 A tty becomes a session's controlling terminal one of two ways: implicitly, when a session leader with no controlling tty opens a tty device that doesn't already have a controlling session (handled in `tty_open_proc_set_tty()`, called from `tty_open()`); or explicitly, via the `TIOCSCTTY` ioctl, `tiocsctty()`:
 
@@ -306,7 +306,7 @@ static int tiocsctty(struct tty_struct *tty, struct file *file, int arg)
 
 This is exactly the sequence `setsid()` + `open()` + `TIOCSCTTY` performs — it's the standard idiom terminal emulators, `sshd`, and `screen`/`tmux` all use when handing a freshly opened pty slave to a new session: `setsid()` first, to detach from any inherited controlling terminal and become a session leader with none, then open the slave and issue `TIOCSCTTY` to claim it. `proc_set_tty()` records the tty's new pgrp/session as the caller's current process group and session (via `task_pgrp(current)`/`task_session(current)`), and separately sets `current->signal->tty` — the process's own pointer back to its controlling terminal.
 
-### SIGTTIN and SIGTTOU
+### SIGTTIN and SIGTTOU {#sigttin-and-sigttou}
 
 Once a session has a controlling tty with a foreground `ctrl.pgrp`, any process in a *background* group that tries to `read()` from — or, depending on `TOSTOP`, `write()` to — that terminal gets stopped rather than allowed to proceed. The mechanism is `__tty_check_change()`, whose doc comment states the policy directly:
 
@@ -359,11 +359,11 @@ static int job_control(struct tty_struct *tty, struct file *file)
 
 and the exported `tty_check_change()` — always `SIGTTOU` — is what the write path and a handful of tty-state-changing ioctls (`TIOCSETD`, break-related ioctls, `TIOCSPGRP`) call before proceeding. The upshot: a background job's `read()` blocks its whole process group with `SIGTTIN` (which, by default, stops the group — that's what makes a backgrounded `cat` freeze instead of erroring out the moment it tries to read stdin), and — only if `TOSTOP` is set in `c_lflag` — the same happens to `write()` via `SIGTTOU`. Without `TOSTOP`, background writes are allowed through, which is the usual reason a backgrounded build's stray log lines can still interleave with your shell prompt.
 
-## Pseudo-terminals: ptys
+## Pseudo-terminals: ptys {#pseudo-terminals-ptys}
 
 Everything above assumes a process is talking to a real terminal device. Almost nothing running today actually is — an SSH session, a terminal emulator window, `tmux`, `expect` scripts, and container runtimes' `-t` flag are all built on **pseudo-terminals**, where "the hardware" on one end is just another process.
 
-### Master and slave, sharing one link
+### Master and slave, sharing one link {#master-and-slave-sharing-one-link}
 
 A pty is a *pair* of `tty_struct`s that reference each other directly through the `link` field already visible in `struct tty_struct` above (`struct tty_struct *link;` — "link to another pty (master → slave and vice versa)"). `pty_common_install()` in `drivers/tty/pty.c` is where that pairing is actually built, on first open of the master:
 
@@ -426,7 +426,7 @@ static int pty_signal(struct tty_struct *tty, int sig)
 }
 ```
 
-### `/dev/ptmx` and `/dev/pts/N`: the Unix98 interface
+### `/dev/ptmx` and `/dev/pts/N`: the Unix98 interface {#devptmx-and-devptsn-the-unix98-interface}
 
 The interface every modern program uses is the Unix98 pty model: a single multiplexing device, `/dev/ptmx`, plus a `devpts` virtual filesystem that exposes each allocated slave as `/dev/pts/N`. Opening `/dev/ptmx` (`ptmx_open()` in `drivers/tty/pty.c`) allocates a fresh master/slave pair, picks an unused index via `devpts_new_index()`, and creates the matching `/dev/pts/N` entry through `devpts_pty_new()` — no pre-existing device node to search for, unlike the legacy BSD-style `/dev/ptyXX`/`/dev/ttyXX` pairs this replaced.
 
@@ -439,7 +439,7 @@ From userspace, the canonical sequence is four calls, and glibc's `openpty()` is
 
 Once unlocked, opening the returned slave path gives an ordinary tty file descriptor with N_TTY running on it. From there, the process that opened the slave typically `setsid()`s and issues `TIOCSCTTY` on it — which is exactly how every terminal emulator (`xterm`, a GUI terminal, `tmux`) and every `sshd` session sets up its child shell: the shell's controlling terminal is a pty *slave*, and the emulator or `sshd` process holds the *master* end, translating between "what the user's mouse/keyboard/network socket produces" and "what a real terminal would have sent."
 
-## Diagrams
+## Diagrams {#diagrams}
 
 Keystroke to foreground `read()`, on a real serial line:
 
@@ -500,9 +500,9 @@ Pty master/slave pair, terminal emulator + shell:
              └─────────────── userspace I/O ───────────────────────┘
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`include/linux/tty.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct` (including `ctrl.pgrp`/`ctrl.session`), the `c_cc[]` accessor macros (`INTR_CHAR()`, `ERASE_CHAR()`, ...), the `L_*`/`I_*`/`O_*`/`C_*` flag-test macros
 - [`include/linux/tty_ldisc.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_ldisc.h) — `struct tty_ldisc_ops`, `struct tty_ldisc`
@@ -512,18 +512,18 @@ Pty master/slave pair, terminal emulator + shell:
 - [`drivers/tty/pty.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — `pty_common_install()`, `pty_write()`, `pty_signal()`, `ptmx_open()`, the legacy-BSD vs. Unix98 driver setup
 - [`drivers/tty/tty_jobctrl.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_jobctrl.c) — `tiocsctty()`, `__tty_check_change()`, `tiocgpgrp()`/`tiocspgrp()`, `disassociate_ctty()`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — the full `struct termios` field reference, every `c_cc[]` special character, canonical/non-canonical `VMIN`/`VTIME` semantics
 - [`ioctl_tty(2)`](https://man7.org/linux/man-pages/man2/ioctl_tty.2.html) — the terminal/job-control ioctls (`TIOCSCTTY`, `TIOCGPGRP`/`TIOCSPGRP`, `TIOCGSID`, `TIOCSIG`); this page superseded the older `tty_ioctl(4)` name in the man-pages project
 - [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — the master/slave model, `/dev/ptmx` + `/dev/pts/N`, `posix_openpt()`/`grantpt()`/`unlockpt()`, and the legacy BSD-style interface
 
-### Related pages
+### Related pages {#related-pages}
 
 - [TTY and Serial Subsystem](README.md) — the driver/`tty_struct`/`tty_port` layers this page's line discipline and job-control machinery sit on top of
 - [Serial Drivers and UARTs](serial.md) — the hardware-facing side that feeds bytes into the line discipline this page describes
 - [TTY/Serial War Stories](war-stories.md) — incidents from the line discipline, job control, and pty code covered here
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Containers, pseudo TTYs, and backward compatibility](https://lwn.net/Articles/688809/) — the legacy BSD `/dev/ptyXX`/`/dev/ttyXX` pty model versus the Unix98 `/dev/ptmx`+`devpts` replacement, and why the old singleton assumptions still cause trouble in containers

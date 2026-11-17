@@ -1,8 +1,8 @@
-# Process Address Space
+# Process Address Space {#process-address-space}
 
 > How Linux manages virtual memory for processes
 
-## What Is the Process Address Space?
+## What Is the Process Address Space? {#what-is-the-process-address-space}
 
 Each process has its own virtual address space - a private view of memory that the kernel maps to physical memory. This isolation means processes can't access each other's memory (without explicit sharing).
 
@@ -28,11 +28,11 @@ Process A's View              Process B's View
 Same virtual addresses, different physical memory
 ```
 
-## Virtual Memory Areas (VMAs)
+## Virtual Memory Areas (VMAs) {#virtual-memory-areas-vmas}
 
 The address space is divided into regions called VMAs. Each VMA describes a contiguous range with consistent properties.
 
-### VMA Structure
+### VMA Structure {#vma-structure}
 
 ```c
 struct vm_area_struct {
@@ -47,7 +47,7 @@ struct vm_area_struct {
 };
 ```
 
-### VMA Types
+### VMA Types {#vma-types}
 
 | Type | vm_file | Description |
 |------|---------|-------------|
@@ -55,7 +55,7 @@ struct vm_area_struct {
 | File-backed | Set | mmap'd files, executables, libraries |
 | Shared | Set + VM_SHARED | Shared memory regions |
 
-### Viewing VMAs
+### Viewing VMAs {#viewing-vmas}
 
 ```bash
 # View process memory map
@@ -74,11 +74,11 @@ cat /proc/<pid>/maps
 cat /proc/<pid>/smaps
 ```
 
-## The mmap() System Call
+## The mmap() System Call {#the-mmap-system-call}
 
 `mmap()` creates new VMAs - it's how processes request virtual memory.
 
-### Basic Usage
+### Basic Usage {#basic-usage}
 
 ```c
 #include <sys/mman.h>
@@ -96,7 +96,7 @@ void *ptr = mmap(NULL, size, PROT_READ,
 munmap(ptr, size);
 ```
 
-### mmap Flags
+### mmap Flags {#mmap-flags}
 
 | Flag | Description |
 |------|-------------|
@@ -108,7 +108,7 @@ munmap(ptr, size);
 | `MAP_HUGETLB` | Use huge pages |
 | `MAP_LOCKED` | Lock in RAM (like mlock) |
 
-### Protection Flags
+### Protection Flags {#protection-flags}
 
 | Flag | Description |
 |------|-------------|
@@ -117,9 +117,9 @@ munmap(ptr, size);
 | `PROT_EXEC` | Pages can be executed |
 | `PROT_NONE` | Pages cannot be accessed |
 
-## Address Space Layout
+## Address Space Layout {#address-space-layout}
 
-### Traditional Layout (32-bit)
+### Traditional Layout (32-bit) {#traditional-layout-32-bit}
 
 ```
 ┌──────────────────┐ 0xFFFFFFFF (4GB)
@@ -141,7 +141,7 @@ munmap(ptr, size);
 └──────────────────┘ 0x08048000
 ```
 
-### Modern Layout (64-bit with ASLR)
+### Modern Layout (64-bit with ASLR) {#modern-layout-64-bit-with-aslr}
 
 ```
 ┌──────────────────┐ 0xFFFFFFFFFFFFFFFF
@@ -162,7 +162,7 @@ munmap(ptr, size);
 └──────────────────┘ 0x0
 ```
 
-### ASLR (Address Space Layout Randomization)
+### ASLR (Address Space Layout Randomization) {#aslr-address-space-layout-randomization}
 
 ASLR randomizes memory layout to make exploits harder:
 
@@ -176,9 +176,9 @@ cat /proc/sys/kernel/randomize_va_space
 
 See [kernel sysctl docs](https://docs.kernel.org/admin-guide/sysctl/kernel.html) and [x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html) for details.
 
-## Memory Management Structures
+## Memory Management Structures {#memory-management-structures}
 
-### mm_struct
+### mm_struct {#mm_struct}
 
 Each address space is described by one `mm_struct` (threads within a process share the same mm_struct via `CLONE_VM`):
 
@@ -198,7 +198,7 @@ struct mm_struct {
 };
 ```
 
-### VMA Organization
+### VMA Organization {#vma-organization}
 
 VMAs were stored in a red-black tree until v6.1, then switched to a maple tree for better performance:
 
@@ -213,7 +213,7 @@ Pre-v6.1: Red-Black Tree     v6.1+: Maple Tree
 
 **Commit**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) ("mm: start tracking VMAs with maple tree") | [LKML](https://lore.kernel.org/linux-mm/20220822150128.1562046-1-Liam.Howlett@oracle.com/)
 
-## Demand Paging
+## Demand Paging {#demand-paging}
 
 Pages aren't allocated until accessed. This is called demand paging or lazy allocation.
 
@@ -236,7 +236,7 @@ First access:
 └───────────────────────┘
 ```
 
-### Fault Types
+### Fault Types {#fault-types}
 
 | Fault | Cause | Resolution |
 |-------|-------|------------|
@@ -244,7 +244,7 @@ First access:
 | Major | Page not in memory | Read from file/swap |
 | Invalid | Bad access (SIGSEGV) | Kill process |
 
-## Copy-on-Write (COW)
+## Copy-on-Write (COW) {#copy-on-write-cow}
 
 When `fork()` creates a child, pages are shared until written:
 
@@ -268,9 +268,9 @@ This makes `fork()` fast - page tables are duplicated (pointing to the same phys
 
 See [Copy-on-Write explainer](cow.md) for edge cases, performance implications, and when COW breaks.
 
-## Common Operations
+## Common Operations {#common-operations}
 
-### brk/sbrk (Heap)
+### brk/sbrk (Heap) {#brksbrk-heap}
 
 ```c
 /* Expand heap */
@@ -280,7 +280,7 @@ brk(old_brk + 4096);  /* Add 4KB to heap */
 /* malloc typically uses mmap for large allocations */
 ```
 
-### mprotect (Change Permissions)
+### mprotect (Change Permissions) {#mprotect-change-permissions}
 
 ```c
 /* Make region read-only */
@@ -290,7 +290,7 @@ mprotect(ptr, size, PROT_READ);
 mprotect(ptr, size, PROT_READ | PROT_EXEC);
 ```
 
-### mlock (Pin in RAM)
+### mlock (Pin in RAM) {#mlock-pin-in-ram}
 
 ```c
 /* Prevent page from being swapped */
@@ -303,24 +303,24 @@ munlock(ptr, size);
 mlockall(MCL_CURRENT | MCL_FUTURE);
 ```
 
-### mremap (Resize Mapping)
+### mremap (Resize Mapping) {#mremap-resize-mapping}
 
 ```c
 /* Grow or shrink a mapping */
 void *new_ptr = mremap(ptr, old_size, new_size, MREMAP_MAYMOVE);
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Original Design (1991)
+### Original Design (1991) {#original-design-1991}
 
 Simple linear list of VMAs. Worked for small address spaces.
 
-### Red-Black Tree (v2.4.10, 2001)
+### Red-Black Tree (v2.4.10, 2001) {#red-black-tree-v2410-2001}
 
 VMA lookup changed from O(n) to O(log n) using [rb-tree](https://docs.kernel.org/core-api/rbtree.html) (implemented by Andrea Arcangeli, predates git history).
 
-### Maple Tree (v6.1, 2022)
+### Maple Tree (v6.1, 2022) {#maple-tree-v61-2022}
 
 **Commit**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) ("mm: start tracking VMAs with maple tree") | [LKML](https://lore.kernel.org/linux-mm/20220906194824.2110408-9-Liam.Howlett@oracle.com/)
 
@@ -328,7 +328,7 @@ VMA lookup changed from O(n) to O(log n) using [rb-tree](https://docs.kernel.org
 
 Replaced rb-tree with maple tree for better cache behavior and RCU-safe lookups.
 
-### Per-VMA Locks (v6.4, 2023)
+### Per-VMA Locks (v6.4, 2023) {#per-vma-locks-v64-2023}
 
 **Commit**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) ("mm: add per-VMA lock and helper functions to control it") | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
 
@@ -336,9 +336,9 @@ Replaced rb-tree with maple tree for better cache behavior and RCU-safe lookups.
 
 Fine-grained locking per VMA instead of mmap_lock for entire mm, improving scalability for page fault handling.
 
-## Debugging
+## Debugging {#debugging}
 
-### /proc Interface
+### /proc Interface {#proc-interface}
 
 ```bash
 # Memory map
@@ -359,7 +359,7 @@ cat /proc/<pid>/status | grep -i vm
 # VmStk:  Stack
 ```
 
-### Tracing
+### Tracing {#tracing}
 
 ```bash
 # Trace mmap calls
@@ -369,9 +369,9 @@ strace -e mmap,munmap,mprotect ./program
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Virtual Memory Exhaustion
+### Virtual Memory Exhaustion {#virtual-memory-exhaustion}
 
 Process hits `TASK_SIZE` limit or [`vm.max_map_count`](https://docs.kernel.org/admin-guide/sysctl/vm.html).
 
@@ -381,21 +381,21 @@ cat /proc/sys/vm/max_map_count
 echo 65530 > /proc/sys/vm/max_map_count
 ```
 
-### Memory Fragmentation
+### Memory Fragmentation {#memory-fragmentation}
 
 Many small mappings prevent large allocations.
 
 **Solution**: Use larger mappings, reduce mmap/munmap churn.
 
-### mmap_lock Contention
+### mmap_lock Contention {#mmap_lock-contention}
 
 Multiple threads fighting for mm->mmap_lock.
 
 **Solution**: Upgrade to v6.4+ for per-VMA locks, or reduce mmap operations.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -403,36 +403,36 @@ Multiple threads fighting for mm->mmap_lock.
 | [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | Page fault handling |
 | [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct, vm_area_struct |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/mm/process_addrs.rst`](https://docs.kernel.org/mm/process_addrs.html)
 
-### Related
+### Related {#related}
 
 - [page-tables](page-tables.md) - How VMAs are backed by page tables
 - [reclaim](reclaim.md) - Anonymous vs file-backed page handling
 - [thp](thp.md) - Huge pages in VMAs
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `do_mmap()`, `mmap_region()`, VMA merging and splitting
 - [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — VMA lifecycle helpers: `do_brk_flags()`, `vma_merge()`, `vma_expand()`
 - [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `struct mm_struct` and `struct vm_area_struct` definitions
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation_1}
 
 - [`Documentation/admin-guide/mm/concepts.rst`](https://docs.kernel.org/admin-guide/mm/concepts.html) — official overview of VMAs, demand paging, and the process address space
 - [`Documentation/arch/x86/x86_64/mm.rst`](https://docs.kernel.org/arch/x86/x86_64/mm.html) — authoritative x86_64 virtual memory map
 
-### Related pages
+### Related pages {#related-pages}
 
 - [page-fault.md](page-fault.md) — what happens after a VMA is found: page fault handling and PTE installation
 - [per-vma-locks.md](per-vma-locks.md) — how Linux 6.4 reduced mmap_lock contention with per-VMA locking
 - [brk-vs-mmap.md](brk-vs-mmap.md) — when allocators choose `brk()` vs `mmap()` and why
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Virtual Memory I — address spaces](https://lwn.net/Articles/829812/) — introductory series on Linux virtual memory
 - [LWN: The maple tree](https://lwn.net/Articles/894061/) — the RCU-safe B-tree that replaced the VMA red-black tree in v6.1

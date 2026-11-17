@@ -1,10 +1,10 @@
-# Filesystem War Stories
+# Filesystem War Stories {#filesystem-war-stories}
 
 > Four incidents where a filesystem behaved *exactly as designed* and still lost data, handed out root, or introduced a new bug while repairing an existing one — and what the kernel changed in response
 
 Filesystems fail in instructive ways. Most of the bugs below aren't sloppy code so much as a design decision colliding with reality — an optimization that widened a crash window, a container feature that trusted the wrong metadata, a RAID layer with no atomicity for its own updates. The fourth is the plainer kind of bug, a stale pointer captured one line too early — but it only exists because repairing a live, mounted filesystem's own metadata is itself a relatively new and structurally tricky feature. They map directly onto the concepts in [crash consistency](crash-consistency.md), [overlayfs](overlayfs.md), [btrfs](btrfs.md), and [XFS](xfs.md).
 
-## 1. ext4 and the empty files: delayed allocation meets `O_PONIES` (2009)
+## 1. ext4 and the empty files: delayed allocation meets `O_PONIES` (2009) {#1-ext4-and-the-empty-files-delayed-allocation-meets-o_ponies-2009}
 
 When ext4 became a default, users upgrading from ext3 started reporting a shocking symptom: after a crash or hard power-off, recently-saved files — KDE config, session state, whole dotfiles — came back **zero length**. Data that "had been saved" was simply gone.
 
@@ -14,7 +14,7 @@ The famous LKML thread that followed was, in effect, a fight over whether applic
 
 **Lesson:** the gap between what the standard promises and what applications *assume* is where data goes to die. A correct optimization that changes observable timing is a compatibility break. See [crash consistency](crash-consistency.md) for why `fsync()` remains the only real guarantee.
 
-## 2. overlayfs copy-up and a path to root: CVE-2023-0386 (2023)
+## 2. overlayfs copy-up and a path to root: CVE-2023-0386 (2023) {#2-overlayfs-copy-up-and-a-path-to-root-cve-2023-0386-2023}
 
 [overlayfs](overlayfs.md) implements containers' layered images: a read-only lower layer, a writable upper layer, and **copy-up** — the first write to a lower-layer file copies it into the upper layer, preserving its metadata, including the setuid bit.
 
@@ -24,7 +24,7 @@ The fix makes copy-up **verify the uid/gid actually map** into the mounter's nam
 
 **Lesson:** a filesystem that faithfully preserves metadata is a security boundary when one of its layers is attacker-controlled. Trusting uid/gid from a FUSE-backed lower layer meant trusting the attacker; the union filesystem must re-validate identity at the moment it crosses a privilege boundary.
 
-## 3. The btrfs RAID5/6 write hole
+## 3. The btrfs RAID5/6 write hole {#3-the-btrfs-raid56-write-hole}
 
 [btrfs](btrfs.md) is copy-on-write and checksums everything, which normally makes it exceptionally crash-safe. Its parity RAID (RAID5/RAID6) is the glaring exception, and the reason is structural.
 
@@ -32,7 +32,7 @@ A RAID5 stripe is several data blocks plus one parity block computed across them
 
 **Lesson:** crash consistency is not a property of "the filesystem" as a whole — each subsystem needs its own atomicity story. btrfs solved it for the tree and for single-device writes, but the parity-RAID stripe update sits *outside* that mechanism, so all the CoW guarantees above it don't reach it.
 
-## 4. CVE-2025-68784: repairing a filesystem's own reallocating buffer out from under itself
+## 4. CVE-2025-68784: repairing a filesystem's own reallocating buffer out from under itself {#4-cve-2025-68784-repairing-a-filesystems-own-reallocating-buffer-out-from-under-itself}
 
 XFS's [online repair](xfs.md#online-repair-xfs-519) can salvage extended-attribute values from metadata it otherwise judges too damaged to trust — `xrep_xattr_salvage_remote_attr()` reads a remote (out-of-line) attribute value out of a corrupt leaf block and copies whatever's recoverable into a scratch buffer, `ab->value`, so it can be reinserted once the attribute structure itself is rebuilt.
 
@@ -42,7 +42,7 @@ The fix ([`5990fd756943`](https://git.kernel.org/linus/5990fd756943) "xfs: fix a
 
 **Lesson:** a pointer captured into a struct literal at declaration time is a snapshot, not a live reference — if anything between that declaration and the struct's use can reallocate the thing it points at, the snapshot is stale the moment the reallocation happens. This is the same class of bug as capturing a `container_of()` result across a lock you drop and reacquire: correct at the instant it was taken, wrong by the time it's used.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Crash Consistency and Recovery](crash-consistency.md) — journaling vs CoW, and why `fsync()` is the only durability contract
 - [overlayfs](overlayfs.md) · [btrfs](btrfs.md) · [FUSE](fuse.md) · [XFS](xfs.md) — the subsystems these incidents live in

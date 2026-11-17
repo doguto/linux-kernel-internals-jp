@@ -1,8 +1,8 @@
-# NVMe Driver
+# NVMe Driver {#nvme-driver}
 
 > PCIe SSD architecture, submission/completion queues, and blk-mq integration
 
-## NVMe overview
+## NVMe overview {#nvme-overview}
 
 NVMe (Non-Volatile Memory Express) is the protocol for PCIe-attached SSDs. The NVMe 1.0 specification was ratified in March 2011; the Linux kernel driver first appeared in Linux 3.3 (March 2012), written by Matthew Wilcox (Intel) — [`b60503ba432b`](https://git.kernel.org/linus/b60503ba432b16fc84442a84e29a7aad2c0c363d). It's designed for low latency and high parallelism:
 
@@ -15,9 +15,9 @@ Key differences from SATA/SAS:
   NVMe latency: ~100µs (vs ~100ms HDD, ~1ms SATA SSD)
 ```
 
-## NVMe queue architecture
+## NVMe queue architecture {#nvme-queue-architecture}
 
-### Admin queue and I/O queues
+### Admin queue and I/O queues {#admin-queue-and-io-queues}
 
 ```
 NVMe controller
@@ -41,7 +41,7 @@ Completion Queue (CQ):
   CPU reads completions, advances CQ head doorbell
 ```
 
-### NVMe submission queue entry (SQE)
+### NVMe submission queue entry (SQE) {#nvme-submission-queue-entry-sqe}
 
 ```c
 /* include/linux/nvme.h */
@@ -73,7 +73,7 @@ struct nvme_rw_command {
 };
 ```
 
-### NVMe completion queue entry (CQE)
+### NVMe completion queue entry (CQE) {#nvme-completion-queue-entry-cqe}
 
 ```c
 struct nvme_completion {
@@ -89,7 +89,7 @@ struct nvme_completion {
 
 The **phase tag** allows polling for completions without a separate "entries used" counter: the CPU flips the expected phase bit on each CQ wrap.
 
-## Linux NVMe driver: struct nvme_dev
+## Linux NVMe driver: struct nvme_dev {#linux-nvme-driver-struct-nvme_dev}
 
 ```c
 /* drivers/nvme/host/pci.c */
@@ -128,7 +128,7 @@ struct nvme_queue {
 };
 ```
 
-## blk-mq integration
+## blk-mq integration {#blk-mq-integration}
 
 The NVMe driver hooks into the block layer's `blk-mq` (multi-queue) framework:
 
@@ -154,7 +154,7 @@ static const struct blk_mq_ops nvme_mq_ops = {
 };
 ```
 
-### nvme_queue_rq: submitting a request
+### nvme_queue_rq: submitting a request {#nvmequeuerq-submitting-a-request}
 
 ```c
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -201,7 +201,7 @@ static void nvme_submit_cmd(struct nvme_queue *nvmeq,
 }
 ```
 
-### nvme_irq: processing completions
+### nvme_irq: processing completions {#nvme_irq-processing-completions}
 
 ```c
 static irqreturn_t nvme_irq(int irq, void *data)
@@ -240,7 +240,7 @@ static blk_status_t nvme_process_cq(struct nvme_queue *nvmeq)
 }
 ```
 
-## NVMe namespaces
+## NVMe namespaces {#nvme-namespaces}
 
 NVMe uses "namespaces" to divide the SSD into logical units (like LUNs in SCSI):
 
@@ -266,7 +266,7 @@ nvme id-ns /dev/nvme0n1
 # lbads: 9           # logical block size = 2^9 = 512B (or 12 = 4096B)
 ```
 
-## NVMe polling (no-IRQ path)
+## NVMe polling (no-IRQ path) {#nvme-polling-no-irq-path}
 
 For ultra-low latency, NVMe can use **polling** instead of interrupts:
 
@@ -284,7 +284,7 @@ io_uring_queue_init_params(128, &ring, &params);
 
 With polling, the completion interrupt is disabled; the kernel busy-polls the CQ after submission. Latency can drop from ~100µs to ~15-20µs for NVMe SSDs.
 
-## Observing NVMe
+## Observing NVMe {#observing-nvme}
 
 ```bash
 # NVMe statistics
@@ -318,7 +318,7 @@ tracepoint:block:block_rq_complete
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [blk-mq (Multi-Queue)](blk-mq.md) — the block multiqueue framework NVMe uses
 - [bio and request structures](bio-request.md) — struct request NVMe processes

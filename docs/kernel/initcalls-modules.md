@@ -1,8 +1,8 @@
-# Module Init and Initcalls
+# Module Init and Initcalls {#module-init-and-initcalls}
 
 > How kernel modules and built-in subsystems initialize
 
-## `module_init()` and `module_exit()`
+## `module_init()` and `module_exit()` {#moduleinit-and-moduleexit}
 
 Every kernel module or built-in subsystem declares its initialization and cleanup functions using two macros:
 
@@ -27,7 +27,7 @@ module_init(mydriver_init);
 module_exit(mydriver_exit);
 ```
 
-### What these macros expand to
+### What these macros expand to {#what-these-macros-expand-to}
 
 For a **loadable module** (`.ko` file), `module_init()` creates an alias:
 
@@ -60,7 +60,7 @@ places the function pointer in the `.initcall6.init` ELF section, called by `do_
 
 ---
 
-## `struct module`
+## `struct module` {#struct-module}
 
 Every loaded module is represented by a `struct module` allocated in module memory:
 
@@ -114,7 +114,7 @@ Module states (`enum module_state`):
 
 ---
 
-## Module loading flow
+## Module loading flow {#module-loading-flow}
 
 The kernel exposes two syscalls for loading modules:
 
@@ -123,7 +123,7 @@ The kernel exposes two syscalls for loading modules:
 
 `insmod` uses `init_module`; `modprobe` uses `finit_module`.
 
-### `load_module()`: step by step
+### `load_module()`: step by step {#load_module-step-by-step}
 
 `load_module()` in `kernel/module/main.c` does the heavy lifting:
 
@@ -180,13 +180,13 @@ load_module()
          module freed, error returned to userspace
 ```
 
-### Module memory layout
+### Module memory layout {#module-memory-layout}
 
 Module code is loaded into a special virtual address range distinct from the main kernel text. On x86-64 this is in the range `0xffffffffc0000000` and above (the module space). The separation ensures that a module cannot be confused with core kernel code in stack traces and makes it easier to deallocate module memory on unload.
 
 ---
 
-## Module unloading
+## Module unloading {#module-unloading}
 
 ```
 rmmod mydriver
@@ -220,7 +220,7 @@ Modules cannot be unloaded while any code is executing in them (tracked by `refc
 
 ---
 
-## Symbol export
+## Symbol export {#symbol-export}
 
 Only explicitly exported symbols are accessible to loadable modules. Both macros funnel into the same underlying `__EXPORT_SYMBOL()`, differing only in the license string each entry carries:
 
@@ -266,7 +266,7 @@ nm mydriver.ko | grep ' U '  # U = undefined (imported)
 
 ---
 
-## Module parameters during load
+## Module parameters during load {#module-parameters-during-load}
 
 ```c
 /* In the module source: */
@@ -293,7 +293,7 @@ The `module_param()` macro registers a `struct kernel_param` in the `.data..para
 
 ---
 
-## Module dependencies
+## Module dependencies {#module-dependencies}
 
 `modprobe` (from the `kmod` package) handles dependency resolution. The dependency database is built by `depmod`:
 
@@ -322,7 +322,7 @@ modprobe -r e1000e
 
 ---
 
-## /sys/module/ and /proc/modules
+## /sys/module/ and /proc/modules {#sysmodule-and-procmodules}
 
 ```bash
 # List all loaded modules with size and reference count:
@@ -350,7 +350,7 @@ cat /sys/module/e1000e/sections/.text
 
 ---
 
-## Module signing
+## Module signing {#module-signing}
 
 `CONFIG_MODULE_SIG` enables cryptographic signature verification on module load. The kernel embeds a public key; modules are signed with the corresponding private key during the build.
 
@@ -379,7 +379,7 @@ against its built-in public key, at load time.
 
 ---
 
-## Initcall debugging
+## Initcall debugging {#initcall-debugging}
 
 ```bash
 # Boot with initcall_debug to see every initcall and its duration:
@@ -405,9 +405,9 @@ kprobe:do_init_module {
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `module_init()` / `module_exit()` macros and the `struct module` definition
 - [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — the initcall level macros (`early_initcall()` through `late_initcall()`) and `__define_initcall()`
@@ -416,7 +416,7 @@ kprobe:do_init_module {
 - [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()` and `EXPORT_SYMBOL_GPL()`
 - [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — the current `struct kernel_symbol` definition and the `__ksymtab` boundary symbols
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — loads a module from a userspace buffer
 - [`finit_module(2)`](https://man7.org/linux/man-pages/man2/finit_module.2.html) — loads a module from a file descriptor; added in Linux 3.8
@@ -424,19 +424,19 @@ kprobe:do_init_module {
 - [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — dependency-aware module loading/removal
 - [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — builds `modules.dep` from each module's undefined symbols
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Early Boot and start_kernel()](early-boot.md) — the initcall levels and `do_initcalls()`
 - [Kernel Modules](../modules/README.md) — writing and building out-of-tree modules
 - [Module Signing](../modules/module-signing.md) — key generation and signing workflow
 - [Parameters, Symbols, and Kconfig](../modules/module-params.md) — `module_param()` in depth
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Enforcement (or not) for module-specific exported symbols](https://lwn.net/Articles/1029492/) — the debate over restricting exports to a named set of in-tree modules; the macro discussed was proposed as `EXPORT_SYMBOL_GPL_FOR_MODULES()` and merged as `EXPORT_SYMBOL_FOR_MODULES()`, dropping the `GPL_` (see the Kernel source entry above)
 - [LWN: The proper use of EXPORT_SYMBOL_GPL()](https://lwn.net/Articles/769471/) — how maintainers decide when an exported symbol should be GPL-only
 
-### External
+### External {#external}
 
 - [Kernel module signing facility](https://docs.kernel.org/admin-guide/module-signing.html) — `CONFIG_MODULE_SIG`, key generation, and `scripts/sign-file`
 - [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — kbuild mechanics for out-of-tree modules

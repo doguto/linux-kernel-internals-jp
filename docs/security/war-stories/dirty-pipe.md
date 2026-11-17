@@ -1,4 +1,4 @@
-# Dirty Pipe
+# Dirty Pipe {#dirty-pipe}
 
 > CVE-2022-0847 — one missing `buf->flags = 0;` let any user who could *read* a file overwrite it in the page cache, including immutable files, read-only btrfs snapshots, and read-only mounts
 
@@ -28,13 +28,13 @@ Actively exploited
 
 *Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
 
-## What happened
+## What happened {#what-happened}
 
 A missing initializer — `buf->flags = 0;` — sat dormant for four years in a pair of `lib/iov_iter.c` functions that hand-populate pipe buffers, before an unrelated, well-reasoned refactor turned it into one of the most severe local-privilege-escalation bugs in the kernel's history: CVE-2022-0847, exploitable with no capabilities and no write permission at all.
 
 A hosting company's engineer found it while investigating what looked like ordinary data corruption in customer log files, not while hunting for kernel bugs — and once he understood the mechanism, turning it into a working exploit took five syscalls in a fixed order, no race and no privileges required.
 
-## How it was found
+## How it was found {#how-it-was-found}
 
 For nearly a year, nobody knew this was a security bug — the first support ticket landed April 29, 2021, and the corruption wasn't identified as a kernel bug until February 19, 2022. Kellermann's own account of the mystery runs through the usual hardware suspects before that: "Is this caused by flaky hardware? Bad RAM? Bad storage? Cosmic rays?"
 
@@ -55,7 +55,7 @@ Kellermann's minimal reproducer is two small programs: one that loops `write(1, 
 
 His initial read was that this required a concurrent privileged writer and depended on winning a race. Once he understood the actual mechanism, the hole widened enormously: no writer, no race, arbitrary data at almost arbitrary offsets in any file the attacker can read. `/etc/passwd`, a setuid binary, `authorized_keys` — anything.
 
-## The impact
+## The impact {#the-impact}
 
 One property of the overwrite makes it especially nasty operationally: it never marks the page dirty, so writeback never runs. The change is live for every process that reads the file, and it evaporates on reboot or reclaim without ever touching the disk. Kellermann's understated note — "This allows interesting attacks without leaving a trace on hard disk" — describes an incident that leaves no forensic artifact in the filesystem.
 
@@ -67,7 +67,7 @@ Exploitation in the wild followed quickly and is well documented:
 
 The rough analogy is CVE-2016-5195, Dirty COW, which Kellermann invokes in the name — but he is explicit that this one "is easier to exploit," and it is: Dirty COW needed a race window, this needs five syscalls in a fixed order.
 
-## How the code was vulnerable
+## How the code was vulnerable {#how-the-code-was-vulnerable}
 
 To see how that gap produced all of that, start with how pipes actually work. A Linux pipe is a ring of `struct pipe_buffer` entries, each pointing at a page. See [Pipes and FIFOs](../../ipc/pipes.md) for the ring mechanics and [splice, sendfile, and Zero-Copy](../../io/splice-sendfile.md) for how `splice()` moves pages into that ring without copying.
 
@@ -120,7 +120,7 @@ The two excerpts taken from the vulnerable functions both stop just one statemen
 
 From 2016 to 2020 this was a latent, inert bug. Every flag that existed at the time (`PIPE_BUF_FLAG_LRU`, `_ATOMIC`, `_GIFT`, `_PACKET`) was, in Kellermann's words, "rather boring," and the merge decision was being read out of `ops`, which *was* initialized. The uninitialized field simply didn't matter yet.
 
-## The trigger
+## The trigger {#the-trigger}
 
 `f6dd975583bd` made it matter, by moving the merge decision onto the one field these two functions forgot to write. A stale `PIPE_BUF_FLAG_CAN_MERGE` bit inherited from a recycled ring slot now told `pipe_write()` that a page-cache page was safe to append to.
 
@@ -136,7 +136,7 @@ The exploit's own comment on the `open()` call — `open(path, O_RDONLY); // yes
 
 As Kellermann put it: it "not only works without write permissions, it also works with immutable files, on read-only btrfs snapshots and on read-only mounts (including CD-ROM mounts). That is because the page cache is always writable (by the kernel), and writing to a pipe never checks any permissions."
 
-## Why it went unnoticed
+## Why it went unnoticed {#why-it-went-unnoticed}
 
 The proximate cause is two missing initializers. The interesting cause is *why nobody noticed them for six years*.
 
@@ -150,7 +150,7 @@ The proximate cause is two missing initializers. The interesting cause is *why n
 
 Five minutes later, [Szeredi posted a second fix](https://lore.kernel.org/linux-fsdevel/20170216164902.GC30656@veci.piliscsaba.szeredi.hu/): a near-identical one-line fix for `splice_to_pipe()`, whose commit message notes the uninitialized flags "appears to have been there from the introduction of the splice syscall" — i.e. since 2006. Two callers of the same pattern got audited and patched on the same day; the two in `lib/iov_iter.c`, written by the same 2016 conversion, did not. At the time it made no difference. Three years later it made all the difference.
 
-## How it was fixed
+## How it was fixed {#how-it-was-fixed}
 
 The fix, [`9d2231c5d74e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9d2231c5d74e13b2a0546fee6737ee4446017903) ("lib/iov_iter: initialize \"flags\" in new pipe_buffer", Max Kellermann), is two lines:
 
@@ -198,7 +198,7 @@ There is no meaningful runtime mitigation. `splice()` and `pipe()` are unprivile
 uname -r
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Refactoring where a decision reads its answer from silently re-scopes which initializers are load-bearing.** `f6dd975583bd` was a good cleanup: it deleted two identical ops vectors and made the code shorter and clearer. Its only defect was invisible from its own diff — that moving the merge decision from `ops` to `flags` promoted a long-dormant missing initializer in another subsystem into a privilege escalation. When a check changes which struct member it consults, every site that constructs that struct by hand becomes newly relevant, including the ones the refactor never touched.
 
@@ -211,7 +211,7 @@ uname -r
 !!! warning "Pattern to watch for"
     Audit any code that builds a kernel struct by assigning members one at a time out of a long-lived, recycled pool — pipe buffer rings, skb control blocks, request structures, per-CPU caches. An omitted member there does not read as zero; it reads as whatever the previous user left, and if an attacker controlled the previous user, the "uninitialized" value is attacker-chosen. Prefer designated initializers (`*buf = (struct pipe_buffer){ ... };`) or an explicit memset over field-by-field assignment, and treat every `Fixes:`-tagged uninitialized-field patch as a prompt to grep for the same pattern in sibling call sites rather than as a closed ticket.
 
-## See also
+## See also {#see-also}
 
 - [Linux Capabilities](../capabilities.md) — the privilege model this bug bypassed entirely; unlike most local escalations, Dirty Pipe required no capability at all, only read access
 - [Kernel Hardening](../kernel-hardening.md) — why exploit mitigations (KASLR, stack protectors) offer nothing against a bug that needs no memory corruption
@@ -221,7 +221,7 @@ uname -r
 - [splice, sendfile, and Zero-Copy](../../io/splice-sendfile.md) — how `splice()` puts page-cache references into a pipe
 - [Page Cache](../../mm/page-cache.md) — why an overwritten page that is never marked dirty leaves no on-disk trace
 
-## External references
+## External references {#external-references}
 
 - [The Dirty Pipe Vulnerability](https://dirtypipe.cm4all.com/) — Max Kellermann's disclosure writeup: the primary source for the mechanism, the year-long corruption investigation, the proof-of-concept exploit, and the timeline
 - [NVD: CVE-2022-0847](https://nvd.nist.gov/vuln/detail/CVE-2022-0847) — CVE record, CVSS 7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`), published March 10, 2022; confirms the CISA KEV listing, added April 25, 2022, remediation due May 16, 2022

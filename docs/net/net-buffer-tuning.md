@@ -1,8 +1,8 @@
-# Network Buffer Tuning
+# Network Buffer Tuning {#network-buffer-tuning}
 
 > Tuning socket buffers, ring buffers, and backpressure for high-throughput networking
 
-## The buffer hierarchy
+## The buffer hierarchy {#the-buffer-hierarchy}
 
 Network data flows through several buffering layers, each of which can be a bottleneck:
 
@@ -30,9 +30,9 @@ Socket receive buffer (sk->sk_receive_queue)
 Application
 ```
 
-## Socket buffer tuning
+## Socket buffer tuning {#socket-buffer-tuning}
 
-### TCP auto-tuning
+### TCP auto-tuning {#tcp-auto-tuning}
 
 By default, TCP auto-tunes socket buffers based on observed bandwidth-delay product:
 
@@ -50,7 +50,7 @@ echo "4096 87380 67108864" > /proc/sys/net/ipv4/tcp_rmem
 echo "4096 65536 67108864" > /proc/sys/net/ipv4/tcp_wmem
 ```
 
-### Manual buffer sizing
+### Manual buffer sizing {#manual-buffer-sizing}
 
 ```bash
 # Global maximum (setsockopt cannot exceed this)
@@ -70,7 +70,7 @@ getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &actual, &len);
 # actual = 2 × requested (kernel doubles for bookkeeping)
 ```
 
-### UDP buffer sizing
+### UDP buffer sizing {#udp-buffer-sizing}
 
 UDP has no flow control — if the application reads slowly, packets are dropped:
 
@@ -84,7 +84,7 @@ int buf_size = 25 * 1024 * 1024;
 setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
 ```
 
-## NIC ring buffer tuning
+## NIC ring buffer tuning {#nic-ring-buffer-tuning}
 
 The NIC maintains DMA ring buffers for TX and RX. If they fill up, packets are dropped before they reach the kernel:
 
@@ -111,7 +111,7 @@ ethtool -S eth0 | grep -i "drop\|miss\|discard"
 # rx_missed_errors: number of packets NIC dropped because RX ring was full
 ```
 
-## Softnet backlog
+## Softnet backlog {#softnet-backlog}
 
 The kernel's per-CPU receive backlog (`sd->input_pkt_queue`) sits between NAPI and protocol processing. If it fills, packets are dropped:
 
@@ -127,7 +127,7 @@ cat /proc/net/softnet_stat
 # format: total dropped time_squeeze 0 0 0 0 0 0 cpu_collision received_rps flow_limit_count
 ```
 
-### softnet_stat columns explained
+### softnet_stat columns explained {#softnet_stat-columns-explained}
 
 ```bash
 # Show per-CPU softnet stats with labels
@@ -143,7 +143,7 @@ awk 'BEGIN{OFS="\t"; print "CPU","total","dropped","time_squeeze"}
 | time_squeeze | poll() ran out of budget | Increase `netdev_budget` |
 | cpu_collision | Multiple CPUs contending for CPU queue | Enable RPS/RSS |
 
-## TCP memory pressure
+## TCP memory pressure {#tcp-memory-pressure}
 
 The kernel limits total memory used by TCP sockets:
 
@@ -161,9 +161,9 @@ cat /proc/net/sockstat | grep TCP
 echo "768432 1024576 1536864" > /proc/sys/net/ipv4/tcp_mem
 ```
 
-## Diagnosing buffer issues
+## Diagnosing buffer issues {#diagnosing-buffer-issues}
 
-### RX bottleneck (application reads slowly)
+### RX bottleneck (application reads slowly) {#rx-bottleneck-application-reads-slowly}
 
 ```bash
 # Large Recv-Q in ss means data is waiting for the application
@@ -177,7 +177,7 @@ netstat -s | grep "receive buffer"
 # "X packets pruned from receive queue because of socket buffer overrun"
 ```
 
-### TX bottleneck (send buffer full)
+### TX bottleneck (send buffer full) {#tx-bottleneck-send-buffer-full}
 
 ```bash
 # Large Send-Q means data is waiting to be sent (network slow or receiver window full)
@@ -187,7 +187,7 @@ ss -tn | awk '$3 > 0'
 netstat -s | grep "zero window"
 ```
 
-### NIC ring buffer drops
+### NIC ring buffer drops {#nic-ring-buffer-drops}
 
 ```bash
 # Check for NIC-level drops
@@ -195,7 +195,7 @@ ethtool -S eth0 | grep -i drop
 watch -n 5 'ethtool -S eth0 | grep -i "drop\|miss" | awk "$2>0"'
 ```
 
-### qdisc drops (TX queue too small)
+### qdisc drops (TX queue too small) {#qdisc-drops-tx-queue-too-small}
 
 ```bash
 # Check qdisc drops
@@ -206,7 +206,7 @@ tc -s qdisc show dev eth0
 ip link set dev eth0 txqueuelen 10000  # default 1000
 ```
 
-## Complete performance checklist
+## Complete performance checklist {#complete-performance-checklist}
 
 For high-throughput servers (10G+):
 
@@ -236,7 +236,7 @@ ethtool -k eth0 | grep -E "scatter-gather|tcp-segmentation|generic-segmentation|
 # All should be "on" for throughput; disable for latency/debug
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Understanding /proc/net/snmp](proc-snmp.md) — Counters that reflect these drops
 - [Network Tracing](net-tracing.md) — How to diagnose drop location

@@ -1,4 +1,4 @@
-# Spectre and Meltdown on ARM64
+# Spectre and Meltdown on ARM64 {#spectre-and-meltdown-on-arm64}
 
 > Speculative execution vulnerabilities and mitigations
 
@@ -6,7 +6,7 @@ ARM64 has a distinct vulnerability profile from x86. Most ARM64 CPUs are **not**
 
 ---
 
-## Summary table
+## Summary table {#summary-table}
 
 | Vulnerability | CVE | Affected ARM64 hardware | Primary mitigation | KPTI needed? |
 |---------------|-----|-------------------------|--------------------|--------------|
@@ -18,7 +18,7 @@ ARM64 has a distinct vulnerability profile from x86. Most ARM64 CPUs are **not**
 
 ---
 
-## Background: speculative execution and cache side channels
+## Background: speculative execution and cache side channels {#background-speculative-execution-and-cache-side-channels}
 
 Modern CPUs execute instructions speculatively — they predict which branch will be taken and execute ahead of confirmed program flow. If the prediction is wrong, the speculatively executed results are discarded. The problem: **side effects in the cache are not discarded**.
 
@@ -35,9 +35,9 @@ ARM64's **weakly ordered** memory model (see [Memory Model](memory-model.md)) me
 
 ---
 
-## Meltdown (CVE-2017-5754)
+## Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
-### Why most ARM64 is not affected
+### Why most ARM64 is not affected {#why-most-arm64-is-not-affected}
 
 Meltdown on x86 works because the CPU speculatively reads a kernel address from user mode, and the value becomes transiently visible in a register before the permission fault is raised. This depends on TSO-like behavior where a speculative load can produce a value that propagates to later instructions.
 
@@ -45,7 +45,7 @@ ARM64's weak memory model does not generally permit this. On most ARM64 microarc
 
 **Exception: Cortex-A75.** ARM confirmed that the Cortex-A75 is susceptible to a Meltdown-equivalent, where a speculatively loaded kernel byte can influence the cache state before the permission abort is taken.
 
-### Mitigation: KPTI (Cortex-A75 only)
+### Mitigation: KPTI (Cortex-A75 only) {#mitigation-kpti-cortex-a75-only}
 
 KPTI (Kernel Page Table Isolation) separates the page tables used in user mode from those used in kernel mode, so that kernel addresses are not mapped while EL0 code is running. A speculative read of an unmapped address produces a TLB miss rather than a cached value, breaking the side channel.
 
@@ -61,9 +61,9 @@ On the vast majority of ARM64 hardware — AWS Graviton, Apple Silicon, Qualcomm
 
 ---
 
-## Spectre v1 (CVE-2017-5753): bounds check bypass
+## Spectre v1 (CVE-2017-5753): bounds check bypass {#spectre-v1-cve-2017-5753-bounds-check-bypass}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability}
 
 Spectre v1 exploits speculative execution past a bounds check. An attacker trains the branch predictor so it predicts "branch taken" for a conditional bounds check, then submits an out-of-bounds index. The CPU speculatively executes the load using the bad index and encodes the result in the cache.
 
@@ -82,7 +82,7 @@ if (index < array_size) {
 
 Spectre v1 affects **all** CPUs with branch prediction, including every ARM64 implementation.
 
-### Mitigation: array_index_nospec()
+### Mitigation: array_index_nospec() {#mitigation-arrayindexnospec}
 
 The primary in-kernel mitigation uses `array_index_nospec()` from `include/linux/nospec.h`. This macro computes a mask that is all-ones when the index is in range and all-zeros otherwise, without using a conditional branch that the CPU can speculate around.
 
@@ -130,7 +130,7 @@ if (index < array_size) {
 }
 ```
 
-### Speculation barrier
+### Speculation barrier {#speculation-barrier}
 
 In paths where `array_index_nospec()` is not applicable, `__nospeculation_barrier()` (mapped to the ARM64 `CSDB` — Consumption of Speculative Data Barrier, or `ISB` on older cores) can be inserted to prevent the CPU from forwarding speculatively loaded values into subsequent instructions.
 
@@ -141,9 +141,9 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v1
 
 ---
 
-## Spectre v2 (CVE-2017-5715): branch target injection
+## Spectre v2 (CVE-2017-5715): branch target injection {#spectre-v2-cve-2017-5715-branch-target-injection}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_1}
 
 Spectre v2 targets the **indirect branch predictor** (Branch Target Buffer, BTB). An attacker running at EL0 can poison BTB entries so that when the kernel executes an indirect branch (function pointer call, virtual dispatch), the CPU speculatively jumps to an attacker-chosen gadget and encodes data in the cache.
 
@@ -157,7 +157,7 @@ Attack sequence:
 4. Rollback — but cache is warm
 ```
 
-### Mitigation 1: CSV2 (architectural guarantee)
+### Mitigation 1: CSV2 (architectural guarantee) {#mitigation-1-csv2-architectural-guarantee}
 
 **CSV2** (Cache Speculation Variant 2) is an architectural feature bit in `ID_AA64PFR0_EL1`. When CSV2=1, the CPU implementation guarantees that branch prediction state is **not shared across exception levels or security domains**. A user-mode attacker cannot poison the BTB entries used by EL1.
 
@@ -170,13 +170,13 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 # "Vulnerable"                     — no mitigation available
 ```
 
-### Mitigation 2: IBPB via SMCCC firmware calls
+### Mitigation 2: IBPB via SMCCC firmware calls {#mitigation-2-ibpb-via-smccc-firmware-calls}
 
 Some ARM64 implementations expose an IBPB-equivalent (Indirect Branch Predictor Barrier) through firmware using the SMCCC (ARM SMC Calling Convention) interface. The kernel calls into EL3 firmware on privilege transitions to flush branch predictor state.
 
 The kernel detects this capability via the SMCCC `ARCH_WORKAROUND_1` and `ARCH_WORKAROUND_2` function IDs and, where available, inserts firmware calls at EL0→EL1 transitions.
 
-### Mitigation 3: Return trampolines (ARM64 retpoline equivalent)
+### Mitigation 3: Return trampolines (ARM64 retpoline equivalent) {#mitigation-3-return-trampolines-arm64-retpoline-equivalent}
 
 ARM64 does not have the x86 RSB (Return Stack Buffer) retpoline trick, but the kernel uses **speculation-safe call sequences** for indirect branches on cores that require software mitigation. These rely on inserting an `SB` (Speculation Barrier, ARMv8.0-SB) or `ISB` after return-like sequences to prevent the CPU from speculating past the branch resolution point.
 
@@ -184,9 +184,9 @@ The kernel's `call_via_r*` trampolines in entry paths use these barriers to prev
 
 ---
 
-## Spectre-BHB (CVE-2022-23960): Branch History Buffer injection
+## Spectre-BHB (CVE-2022-23960): Branch History Buffer injection {#spectre-bhb-cve-2022-23960-branch-history-buffer-injection}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_2}
 
 Spectre-BHB (Branch History Buffer) is a more severe refinement of Spectre v2 that was disclosed in March 2022. The **Branch History Buffer** (BHB) influences the prediction of indirect branches — not just the BTB entry, but the selector into the BTB. An attacker who poisons the BHB can redirect indirect branch prediction in the victim even on cores that implement CSV2.
 
@@ -198,11 +198,11 @@ This affects a wide range of ARM cores:
 - Neoverse N1 (used in AWS Graviton2), Neoverse V1 (used in AWS Graviton3), Neoverse N2 (used in AWS Graviton4)
 - Various other implementations (see ARM's official errata list)
 
-### Mitigation 1: CSV2_3 (architectural isolation)
+### Mitigation 1: CSV2_3 (architectural isolation) {#mitigation-1-csv2_3-architectural-isolation}
 
 **CSV2_3** is an extension of CSV2 (encoded in `ID_AA64PFR0_EL1`) that additionally guarantees BHB isolation between security domains. CPUs with CSV2_3=1 require no software BHB mitigation.
 
-### Mitigation 2: CLRBHB instruction (ARMv8.9 / Cortex-X3 and later)
+### Mitigation 2: CLRBHB instruction (ARMv8.9 / Cortex-X3 and later) {#mitigation-2-clrbhb-instruction-armv89-cortex-x3-and-later}
 
 **CLRBHB** is a new instruction introduced in ARMv8.9 that explicitly clears the Branch History Buffer. The Linux kernel inserts `CLRBHB` in the exception entry path at EL0→EL1 transitions, so that user-mode BHB state cannot influence kernel indirect branch prediction.
 
@@ -214,7 +214,7 @@ This affects a wide range of ARM cores:
 
 The `ISB` after `CLRBHB` is necessary to ensure the BHB clear takes effect before any subsequent indirect branches are predicted.
 
-### Mitigation 3: BHB clearing loop (firmware-specified)
+### Mitigation 3: BHB clearing loop (firmware-specified) {#mitigation-3-bhb-clearing-loop-firmware-specified}
 
 For cores that do not have `CLRBHB` or `ECBHB`, the kernel executes a **branch-heavy loop** to overwrite BHB history with benign entries. The number of loop iterations is specified per-CPU model by the firmware (via a SMCCC call or CPU-specific data in the kernel) because it depends on the BHB depth of that particular microarchitecture.
 
@@ -234,11 +234,11 @@ For cores that do not have `CLRBHB` or `ECBHB`, the kernel executes a **branch-h
 
 This sequence is inserted at every EL0→EL1 exception entry (system call, IRQ, fault) on affected cores, which means there is a small but measurable cost on every kernel entry on these CPUs.
 
-### Mitigation 4: ECBHB (hardware automatic clearing)
+### Mitigation 4: ECBHB (hardware automatic clearing) {#mitigation-4-ecbhb-hardware-automatic-clearing}
 
 Some newer ARM cores set the **ECBHB** bit in `ID_AA64MMFR1_EL1`. When ECBHB=1, the CPU hardware automatically clears the BHB on exception entry from a lower EL. No software BHB clearing sequence is required. The kernel checks this bit and skips the loop or `CLRBHB` sequence if it is set.
 
-### Checking for BHB mitigation
+### Checking for BHB mitigation {#checking-for-bhb-mitigation}
 
 ```bash
 cat /sys/devices/system/cpu/vulnerabilities/spec_rstack_overflow
@@ -252,9 +252,9 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 
 ---
 
-## Spectre v4 / Speculative Store Bypass (CVE-2018-3639)
+## Spectre v4 / Speculative Store Bypass (CVE-2018-3639) {#spectre-v4-speculative-store-bypass-cve-2018-3639}
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_3}
 
 The CPU may speculate that a load does not alias with a recent outstanding store (because address disambiguation is expensive). If the speculation is wrong, the load returns a **stale value** from cache or memory rather than the just-written value.
 
@@ -263,7 +263,7 @@ An attacker can exploit this by:
 2. Causing the CPU to speculatively load a different (attacker-controlled) value from the same address, before the write is complete
 3. Using the stale value as an array index to encode it in the cache
 
-### Mitigation: SSBS register bit
+### Mitigation: SSBS register bit {#mitigation-ssbs-register-bit}
 
 ARM64 CPUs that support mitigation expose the **SSBS** (Speculative Store Bypass Safe) bit in `PSTATE`. Setting `SSBS=0` instructs the CPU to disable speculative store bypass, preventing the attack. The system register is accessed via `MSR SSBS, Xn` / `MRS Xn, SSBS` (the register is named `SSBS`, not `SSBS_EL1`).
 
@@ -290,7 +290,7 @@ cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass
 
 ---
 
-## MTE and speculation
+## MTE and speculation {#mte-and-speculation}
 
 ARM64's Memory Tagging Extension (MTE, ARMv8.5-A) associates a 4-bit tag with each 16-byte granule of memory. A load or store that uses a pointer whose tag does not match the allocation tag raises a fault.
 
@@ -300,7 +300,7 @@ MTE is primarily a memory safety and bug-detection feature. See the kernel's doc
 
 ---
 
-## Checking vulnerability status
+## Checking vulnerability status {#checking-vulnerability-status}
 
 ```bash
 # Print all vulnerability statuses at once
@@ -320,7 +320,7 @@ On most modern ARM64 hardware the output is encouraging: Meltdown is not relevan
 
 ---
 
-## Kernel code locations
+## Kernel code locations {#kernel-code-locations}
 
 The ARM64 spectre mitigations are spread across several files:
 
@@ -333,7 +333,7 @@ The ARM64 spectre mitigations are spread across several files:
 | `include/linux/nospec.h` | Architecture-independent `array_index_nospec()` macro |
 | `arch/arm64/mm/mmu.c` | `arm64_kernel_use_ng_mappings()` — KPTI decision for Cortex-A75 |
 
-### BHB clearing in entry.S
+### BHB clearing in entry.S {#bhb-clearing-in-entrys}
 
 The `entry.S` exception entry macro conditionally applies the BHB mitigation based on a per-CPU capability flag set at boot. The alternatives patching mechanism (`alternative_if` / `alternative_else`) selects the right sequence at runtime without adding a branch to the common path on unaffected hardware:
 
@@ -356,7 +356,7 @@ This pattern means that CPUs with ECBHB or CSV2_3 execute the original `nop` ins
 
 ---
 
-## Comparison with x86
+## Comparison with x86 {#comparison-with-x86}
 
 | Aspect | x86 | ARM64 |
 |--------|-----|-------|
@@ -372,7 +372,7 @@ A key architectural difference: on ARM64 most hardware mitigations are expressed
 
 ---
 
-## Mitigation boot parameters
+## Mitigation boot parameters {#mitigation-boot-parameters}
 
 ```bash
 # Disable all mitigations (dangerous — isolated benchmarking only)
@@ -390,7 +390,7 @@ nopti                   # disable KPTI (no effect on non-A75 anyway)
 
 ---
 
-## Performance considerations
+## Performance considerations {#performance-considerations}
 
 Because most ARM64 systems either have hardware-level isolation or require only a short entry-path sequence, the performance impact of ARM64 spectre mitigations is generally **lower** than on x86:
 
@@ -408,7 +408,7 @@ On recent hardware (Graviton3, Apple M-series, Cortex-X3+) CSV2_3 or ECBHB cover
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Spectre and Meltdown on x86](../x86/spectre-meltdown.md) — x86 perspective: KPTI, retpoline, eIBRS, IBRS/IBPB/STIBP, MDS/VERW
 - [ARM64 Exception Model](exception-model.md) — EL0-EL3 transitions, VBAR_EL1, exception entry paths where BHB clearing is inserted

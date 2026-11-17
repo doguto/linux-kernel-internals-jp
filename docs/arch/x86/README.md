@@ -1,8 +1,8 @@
-# x86-64 Architecture
+# x86-64 Architecture {#x86-64-architecture}
 
 > Real mode, protected mode, long mode — and everything the kernel does to keep it all running
 
-## Why x86-64 internals matter
+## Why x86-64 internals matter {#why-x86-64-internals-matter}
 
 x86-64 is the architecture that runs the overwhelming majority of Linux servers, desktops, and cloud infrastructure. Understanding its internals is essential for:
 
@@ -15,7 +15,7 @@ The x86-64 architecture carries 40 years of backward compatibility — from real
 
 ---
 
-## Mode transitions at boot
+## Mode transitions at boot {#mode-transitions-at-boot}
 
 ```mermaid
 graph LR
@@ -35,7 +35,7 @@ UEFI boot skips the real mode steps entirely — the firmware hands off to the k
 
 ---
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -49,7 +49,7 @@ UEFI boot skips the real mode steps entirely — the firmware hands off to the k
 
 ---
 
-## Suggested reading order
+## Suggested reading order {#suggested-reading-order}
 
 **If you are new to x86-64 kernel internals:**
 
@@ -65,7 +65,7 @@ UEFI boot skips the real mode steps entirely — the firmware hands off to the k
 
 ---
 
-## Quick reference: key x86-64 registers
+## Quick reference: key x86-64 registers {#quick-reference-key-x86-64-registers}
 
 | Register | Width | Purpose |
 |----------|-------|---------|
@@ -85,7 +85,7 @@ UEFI boot skips the real mode steps entirely — the firmware hands off to the k
 | `LSTAR` | MSR 0xC0000082 | 64-bit SYSCALL target RIP — points to `entry_SYSCALL_64` |
 | `SFMASK` | MSR 0xC0000084 | RFLAGS bits to clear on SYSCALL entry |
 
-### Checking register values at runtime
+### Checking register values at runtime {#checking-register-values-at-runtime}
 
 ```bash
 # Read a MSR (requires msr kernel module or root)
@@ -104,7 +104,7 @@ dmesg | grep -i "cr4\|SMEP\|SMAP"
 
 ---
 
-## Key source locations
+## Key source locations {#key-source-locations}
 
 | Path | Description |
 |------|-------------|

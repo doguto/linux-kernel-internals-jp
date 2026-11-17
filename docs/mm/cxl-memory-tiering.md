@@ -1,8 +1,8 @@
-# CXL Memory and Kernel Memory Tiering
+# CXL Memory and Kernel Memory Tiering {#cxl-memory-and-kernel-memory-tiering}
 
 > Expanding past DRAM limits with CXL and the kernel's memory tier framework
 
-## CXL memory as a NUMA node
+## CXL memory as a NUMA node {#cxl-memory-as-a-numa-node}
 
 Compute Express Link (CXL) is a high-speed cache-coherent interconnect built on PCIe that allows memory expansion cards to be attached to a CPU. From the operating system's perspective, CXL memory appears as a **NUMA node with no CPUs** — a memory-only node with higher access latency than local DRAM.
 
@@ -32,9 +32,9 @@ static int cxl_region_calculate_adistance(struct notifier_block *nb,
 
 `mt_perf_to_adistance()` converts the hardware performance coordinates into an abstract distance value that the memory tier framework uses to assign the node to a tier.
 
-## The memory tier framework
+## The memory tier framework {#the-memory-tier-framework}
 
-### Abstract distance
+### Abstract distance {#abstract-distance}
 
 The kernel represents memory speed as an **abstract distance** — a dimensionless integer where smaller means faster. Regular DRAM has a reference abstract distance defined by `MEMTIER_ADISTANCE_DRAM`:
 
@@ -49,7 +49,7 @@ The kernel represents memory speed as an **abstract distance** — a dimensionle
 
 Each `memory_tier` covers a range of abstract distance values of width `MEMTIER_CHUNK_SIZE` (128). Devices whose abstract distance falls in the same 128-unit window are grouped into the same tier. A smaller `adistance_start` means a higher (faster) tier.
 
-### Tier assignment
+### Tier assignment {#tier-assignment}
 
 A NUMA node is assigned to a tier through `struct memory_dev_type`:
 
@@ -66,7 +66,7 @@ struct memory_dev_type {
 
 At boot, `memory_tier_init()` places all online nodes into a default tier using `default_dram_type`. When a CXL region activates, its driver registers an adistance notifier (`register_mt_adistance_algorithm()`). The framework then calls the notifier chain, the CXL driver reports the CXL region's adistance, and `find_create_memory_tier()` either places the node in an existing tier or creates a new one.
 
-### Sysfs representation
+### Sysfs representation {#sysfs-representation}
 
 Memory tiers are visible under:
 
@@ -87,7 +87,7 @@ On a system with local DRAM (node 0) and a CXL expansion node (node 1), you migh
 !!! note "The tier numbering is derived from abstract distance, not from insertion order"
     Two systems with the same hardware topology will have the same tier numbers because they are computed from the performance coordinates, not assigned sequentially.
 
-### Demotion target topology
+### Demotion target topology {#demotion-target-topology}
 
 The framework builds a `node_demotion[]` array that maps each NUMA node to its preferred demotion target. Given three nodes:
 
@@ -107,11 +107,11 @@ The demotion paths would be:
 
 `node_is_toptier()` returns true for nodes in tiers at or above `top_tier_adistance`. Top-tier nodes are never demoted to.
 
-## Page demotion: kswapd driving the slow path
+## Page demotion: kswapd driving the slow path {#page-demotion-kswapd-driving-the-slow-path}
 
 When the kernel reclaims memory under memory pressure, it prefers to **demote** cold pages from fast to slow memory rather than swap them to disk. This is implemented in `mm/vmscan.c`.
 
-### When demotion fires
+### When demotion fires {#when-demotion-fires}
 
 The key predicate is `can_demote()` in `mm/vmscan.c`:
 
@@ -139,7 +139,7 @@ The kernel prefers demotion to swapping because accessing demoted memory is typi
     ```
     It defaults to disabled. Write `1` to enable. Without this, kswapd will swap to disk (or zswap) rather than demote to CXL.
 
-### vmstat counters for demotion
+### vmstat counters for demotion {#vmstat-counters-for-demotion}
 
 `/proc/vmstat` tracks demotion events by initiator:
 
@@ -150,7 +150,7 @@ The kernel prefers demotion to swapping because accessing demoted memory is typi
 | `pgdemote_khugepaged` | Pages demoted during khugepaged split |
 | `pgdemote_proactive` | Pages demoted by proactive reclaim |
 
-## Page promotion: NUMA balancing driving the fast path
+## Page promotion: NUMA balancing driving the fast path {#page-promotion-numa-balancing-driving-the-fast-path}
 
 **Promotion** is the reverse: moving a hot page from slow memory (CXL) to fast memory (DRAM). The mechanism is NUMA balancing.
 
@@ -166,7 +166,7 @@ extern int sysctl_numa_balancing_mode;
 
 When `NUMA_BALANCING_MEMORY_TIERING` is active, the `folio_use_access_time()` function repurposes the folio's `_last_cpupid` field to record page access time instead of the last CPU/PID. This lets the balancer identify hot pages in slow memory based on access recency rather than CPU affinity alone.
 
-### vmstat counters for promotion
+### vmstat counters for promotion {#vmstat-counters-for-promotion}
 
 | Counter | Meaning |
 |---------|---------|
@@ -174,7 +174,7 @@ When `NUMA_BALANCING_MEMORY_TIERING` is active, the `folio_use_access_time()` fu
 | `pgpromote_candidate` | Pages identified as candidates for promotion |
 | `pgpromote_candidate_nrl` | Candidates skipped (not recently local) |
 
-## DAMON integration for cold-page demotion
+## DAMON integration for cold-page demotion {#damon-integration-for-cold-page-demotion}
 
 DAMON (Data Access MONitor) can be used to identify cold pages in fast memory and demote them proactively, before memory pressure forces kswapd to act.
 
@@ -201,9 +201,9 @@ A DAMON scheme configured with `DAMOS_MIGRATE_COLD` and a target that includes C
 
 See the [DAMON documentation](damon.md) for details on configuring DAMON schemes via `/sys/kernel/mm/damon/`.
 
-## Configuration
+## Configuration {#configuration}
 
-### Automatic with CXL hardware
+### Automatic with CXL hardware {#automatic-with-cxl-hardware}
 
 On a system where the BIOS provides valid HMAT or CDAT tables and the CXL driver is loaded, the memory tier framework configures itself automatically at boot:
 
@@ -214,7 +214,7 @@ On a system where the BIOS provides valid HMAT or CDAT tables and the CXL driver
 
 No manual configuration is needed beyond enabling demotion and the desired NUMA balancing mode.
 
-### Sysctl knobs
+### Sysctl knobs {#sysctl-knobs}
 
 ```
 /proc/sys/kernel/numa/demotion_enabled
@@ -226,7 +226,7 @@ Enable or disable demotion (0/1). Defaults to 0 (disabled).
 ```
 Bitmap controlling NUMA balancing behavior. Set bit 1 (`value |= 2`) to enable memory tiering mode alongside normal NUMA balancing.
 
-### numactl for manual placement
+### numactl for manual placement {#numactl-for-manual-placement}
 
 On systems without automatic CXL tier setup, or for testing, `numactl` can bind allocations to specific nodes:
 
@@ -238,9 +238,9 @@ numactl --preferred=0 --membind=0,1 ./my_process
 numactl --membind=1 ./my_process
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### /proc/vmstat
+### /proc/vmstat {#procvmstat}
 
 The demotion and promotion counters described above are available in `/proc/vmstat` and via `sar`, `vmstat`, or `perf stat`:
 
@@ -250,7 +250,7 @@ watch -n 1 'grep -E "pgdemote|pgpromote" /proc/vmstat'
 
 A healthy tiered-memory system under light pressure shows steady `pgdemote_kswapd` activity moving cold pages to CXL, and occasional `pgpromote_success` events when NUMA balancing moves hot pages back to DRAM.
 
-### Tier membership
+### Tier membership {#tier-membership}
 
 ```bash
 cat /sys/devices/virtual/memory_tiering/memory_tier*/nodelist
@@ -258,11 +258,11 @@ cat /sys/devices/virtual/memory_tiering/memory_tier*/nodelist
 
 Shows which NUMA nodes belong to which tier.
 
-### Tracepoints
+### Tracepoints {#tracepoints}
 
 `mm/vmscan.c` does not currently have dedicated tiering tracepoints, but the standard `mm_migrate_pages` tracepoint (`include/trace/events/migrate.h`) fires for every demotion migration and reports the migration mode and reason.
 
-## Current limitations
+## Current limitations {#current-limitations}
 
 **Automatic CXL node detection requires firmware cooperation.** If HMAT or CDAT data is absent or incorrect, the CXL node may land in the same tier as DRAM and demotion will not occur. Check `dmesg` for messages from the CXL driver and memory tier framework at boot.
 
@@ -275,7 +275,7 @@ Shows which NUMA nodes belong to which tier.
 !!! note "This area is actively developed"
     Memory tiering, CXL support, and the interaction between DAMON, kswapd, and NUMA balancing are actively changing across kernel versions. Always check the kernel version's changelog when relying on specific behaviors described here.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: CXL](https://docs.kernel.org/driver-api/cxl/index.html) — official kernel documentation for the CXL subsystem including memory region activation and CDAT parsing
 - [`Documentation/driver-api/cxl/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/driver-api/cxl) — kernel source documentation for CXL memory regions, allocation, and reclaim behavior

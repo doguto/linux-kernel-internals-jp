@@ -1,8 +1,8 @@
-# Syscall Restart Mechanisms
+# Syscall Restart Mechanisms {#syscall-restart-mechanisms}
 
 > How interrupted syscalls restart transparently — ERESTARTSYS, ERESTART_RESTARTBLOCK, and restart_syscall()
 
-## The problem
+## The problem {#the-problem}
 
 A process calls `read()` on a slow device. The kernel blocks the task,
 waiting for data. While it is blocked, a signal arrives: a `SIGCHLD` from a
@@ -20,7 +20,7 @@ Three outcomes are possible:
 Which outcome occurs depends on which restart code the syscall returns, and on
 whether the signal handler was installed with `SA_RESTART`.
 
-## The four restart codes
+## The four restart codes {#the-four-restart-codes}
 
 These are special negative error values, all below `-MAX_ERRNO` (defined as
 4096). Because they are outside the normal error range, they never reach
@@ -46,7 +46,7 @@ As negative values in `regs->ax` after a syscall returns:
 `EINTR` (-4) is not a restart code. It is the ordinary error returned to
 userspace when the kernel has decided the syscall should not restart.
 
-## How the signal path uses restart codes
+## How the signal path uses restart codes {#how-the-signal-path-uses-restart-codes}
 
 After a signal handler returns, the architecture signal code calls
 `arch_do_signal_or_restart()` (x86: `arch/x86/kernel/signal.c`). It inspects
@@ -111,7 +111,7 @@ number to re-dispatch through, native or compat.
 When a signal handler IS delivered, `handle_signal()` converts
 `ERESTART_RESTARTBLOCK` to `-EINTR` instead (see the switch above).
 
-## struct restart_block
+## struct restart_block {#struct-restart_block}
 
 `struct restart_block` is embedded directly in `struct task_struct`
 (`include/linux/sched.h`). It stores the restart function and all arguments
@@ -160,7 +160,7 @@ There is one `restart_block` per task, reused across interrupted syscalls.
 Before returning `ERESTART_RESTARTBLOCK`, the syscall fills in `fn` and the
 appropriate union member with the adjusted arguments.
 
-## restart_syscall(): the re-entry point
+## restart_syscall(): the re-entry point {#restart_syscall-the-re-entry-point}
 
 `restart_syscall()` is a real syscall — syscall number `__NR_restart_syscall`
 (219 on x86-64). It has no arguments; it reads everything it needs from
@@ -184,7 +184,7 @@ Userspace never sees `__NR_restart_syscall` in normal operation. It appears in
 `strace` output as `restart_syscall()` when a `nanosleep`, `poll`, `select`, or
 `futex_wait` is restarted after signal delivery.
 
-## nanosleep() restart: a complete walkthrough
+## nanosleep() restart: a complete walkthrough {#nanosleep-restart-a-complete-walkthrough}
 
 ```
 1.  Userspace calls nanosleep({.tv_sec=5, .tv_nsec=0}, &rem)
@@ -229,7 +229,7 @@ The userspace process sees the original `nanosleep()` call eventually return
 0 — it is unaware of the restart. The `rem` pointer is updated with the time
 remaining at each interruption, in case the program inspects it.
 
-## Which syscalls use which mechanism
+## Which syscalls use which mechanism {#which-syscalls-use-which-mechanism}
 
 | Restart code | Examples | When handler runs | When no handler runs |
 |---|---|---|---|
@@ -247,9 +247,9 @@ with `SA_RESTART` and expecting that `nanosleep()` will restart — it will not;
 it will return `-EINTR`. Without a handler, it restarts via `restart_syscall()`
 with the remaining time, not the original duration.
 
-## Debugging restarts
+## Debugging restarts {#debugging-restarts}
 
-### strace
+### strace {#strace}
 
 `strace` shows `restart_syscall()` explicitly whenever a restarted syscall
 is invoked:
@@ -261,7 +261,7 @@ rt_sigreturn()                               = 0
 restart_syscall(<... resuming interrupted nanosleep ...>) = 0
 ```
 
-### perf trace
+### perf trace {#perf-trace}
 
 `perf trace` records syscall entry and exit events including restarts:
 
@@ -270,7 +270,7 @@ restart_syscall(<... resuming interrupted nanosleep ...>) = 0
 perf trace -p <pid> 2>&1 | grep -E 'restart|nanosleep|poll'
 ```
 
-### /proc/pid/syscall
+### /proc/pid/syscall {#procpidsyscall}
 
 `/proc/<pid>/syscall` shows the syscall a task is currently blocked in. If it
 reads `219` (on x86-64), the task is inside `restart_syscall()`:
@@ -281,9 +281,9 @@ cat /proc/$(pgrep myapp)/syscall
 # ^219 = __NR_restart_syscall
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`, `ERESTARTNOINTR`, `ERESTARTNOHAND`, `ERESTART_RESTARTBLOCK` definitions
 - [include/linux/restart_block.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/restart_block.h) — `struct restart_block` definition, including the `futex`, `nanosleep`, and `poll` union members
@@ -293,18 +293,18 @@ cat /proc/$(pgrep myapp)/syscall
 - [arch/x86/kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal.c) — `handle_signal()` and `arch_do_signal_or_restart()`: where the `ERESTART*` codes in `regs->ax` are inspected and dispatched; `get_nr_restart_syscall()`: picks the correct restart syscall number (native, `__NR_ia32_restart_syscall` for 32-bit compat, or x32) based on `restart_block.arch_data`
 - [kernel/time/hrtimer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/hrtimer.c) — `hrtimer_nanosleep_restart()`: the restart handler `nanosleep()`/`clock_nanosleep()` register in `restart_block.fn`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`signal(7)`](https://man7.org/linux/man-pages/man7/signal.7.html) — see "Interruption of system calls and library functions by signal handlers" for the userspace-visible effects of `SA_RESTART`
 - [`restart_syscall(2)`](https://man7.org/linux/man-pages/man2/restart_syscall.2.html) — the syscall this page's walkthrough dispatches into; note its "no manual invocation" behavior
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — `syscall_exit_to_user_mode()`, signal path, `pt_regs`
 - [Signals](../ipc/signals.md) — signal delivery, `sigaction`, `SA_RESTART`
 - [Futex Internals](../locking/futex.md) — `FUTEX_WAIT`/`FUTEX_WAKE` mechanics and futex key hashing; this page's `restart_block.futex` member stores the arguments needed to resume a `FUTEX_WAIT` interrupted by a signal
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [A new system call restart mechanism](https://lwn.net/Articles/17744/) (2002) — Jonathan Corbet on why the restart-block mechanism was added: `nanosleep()` needs to restart with an *adjusted* (remaining) duration, not the original one, which a plain `-ERESTARTSYS` retry-from-scratch can't express
 - [\[braindump\]\[RFC\] signals and syscall restarts](https://lwn.net/Articles/528935/) (2012) — Al Viro's detailed technical notes on `ERESTARTSYS`/`ERESTARTNOINTR`/`SA_RESTART` semantics and the ways architecture signal-delivery code has gotten them wrong

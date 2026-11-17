@@ -1,4 +1,4 @@
-# Spectre in the BPF Verifier
+# Spectre in the BPF Verifier {#spectre-in-the-bpf-verifier}
 
 > CVE-2021-33624 — the verifier only walks paths that can actually execute, so it never saw the path the branch predictor would take
 
@@ -22,7 +22,7 @@ Actively exploited
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 The BPF verifier's job is to prove, before a program is allowed to run, that it cannot touch memory it shouldn't. It does that by [abstract interpretation](../bpf-verifier.md): walking every control-flow path the program could take and tracking, per register, what the value could be on that path.
 
@@ -41,7 +41,7 @@ return array->value + array->elem_size * (index & array->index_mask);
 
 That is: it fixes the *array index* shape of Spectre v1. It says nothing about the verifier's own model of which code is reachable.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Three and a half years later, that gap was the bug.
 
@@ -65,7 +65,7 @@ Line 3 runs only if `r0 == 0`. Line 5 runs only if `r0 == 1`. The two are mutual
 
 The catch is line 1: a load engineered to miss cache. Rather than stall, the CPU predicts both branches and runs ahead — and if it predicts fall-through for both, it speculatively executes exactly the pair of instructions the verifier proved could never co-occur.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 Mistraining two mutually exclusive branches sounds impossible, and the commit message addresses that head-on. Branch prediction is not value-based; it is history-based, keyed by a hash of the branch address into the CPU's pattern history table (PHT). So the attacker trains *different, non-exclusive* branches in user space, placed at addresses that collide with the BPF program's branches in the PHT:
 
@@ -81,7 +81,7 @@ Corbet also noted the thing that makes BPF a uniquely attractive Spectre target:
 
 Per LWN, multiple proofs-of-concept were sent to `security@kernel.org` when the problem was reported, and some of them did not require the branch-predictor training step at all.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The verifier's soundness argument has always been about the architectural machine: *for every execution the ISA permits, the program is safe*. Speculation adds executions the ISA does not permit.
 
@@ -91,7 +91,7 @@ Put differently: the 2018 fix hardened the values the verifier tracked. The 2021
 
 There is a second, quieter contributing factor visible in the same era's patches. Speculation defenses in BPF are bolted on as a series of specific countermeasures — index masking ([`b2157399cc98`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b2157399cc9898260d6031c5bfe45fe137c1fbe7)), pointer-arithmetic sanitation, and, a month before this fix, [`801c6058d14a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=801c6058d14a82179a7ee17a4b532cac6fad067f) ("bpf: Fix leakage of uninitialized bpf stack under speculation", also reported by Piotr Krysiuk), which closed a window where speculative pointer arithmetic could walk intermediate offsets and read the 512-byte BPF stack before the program had written it. Each is correct; none of them is a general argument, so each new shape of the attack needs a new countermeasure.
 
-## Resolution
+## Resolution {#resolution}
 
 The fix inverts the verifier's handling of provably-untaken branches. Instead of discarding them, it pushes them onto the verification stack, explicitly marked as speculative:
 
@@ -133,7 +133,7 @@ The cost is accepted openly. LWN:
 
 The fix reached mainline in v5.13-rc7 and, per LWN, the 5.12.13 and 5.10.46 stable updates — but not, at the time of writing of that article, any earlier stable series. The older LTS branches got it two months later, and it wasn't a single patch: Ovidiu Panait manually backported the whole fix stack, [six patches for 5.4](https://lore.kernel.org/all/20210805155343.3618696-1-ovidiu.panait@windriver.com/) and four for 4.19, posting each to the bpf list for a sanity check ("the fixes were manually adjusted to apply to 5.4, so copying bpf@ to see if there are any concerns") before Greg Kroah-Hartman queued them.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A soundness proof is only sound in the machine model it assumes.** The verifier proves properties about a machine that executes instructions in program order according to the ISA. Real CPUs are not that machine, and every place the verifier says "this cannot happen" is a place where the difference between the two machines becomes an attack surface. Path reachability turned out to be one; it is unlikely to be the last.
 
@@ -144,7 +144,7 @@ The fix reached mainline in v5.13-rc7 and, per LWN, the 5.12.13 and 5.10.46 stab
 !!! warning "Pattern to watch for"
     Any static analysis that *prunes* branches it can prove unreachable is making a claim about the architectural machine, not the speculative one. When you find such a pruning step in security-relevant code — a verifier, a JIT, a sandbox policy compiler — ask what happens if that branch executes anyway. Also audit for the inverse of the 2018 fix: countermeasures that harden *values* (masking, clamping, saturation) do nothing about a *path* the analyzer never explored, and vice versa.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — path exploration, register state tracking, and dead-code elimination, all of which this bug lives inside
 - [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — the hardening response that landed in the same release cycle
@@ -152,7 +152,7 @@ The fix reached mainline in v5.13-rc7 and, per LWN, the 5.12.13 and 5.10.46 stab
 - [Kernel Hardening](../../security/kernel-hardening.md) — the broader mitigation landscape this sits in
 - [BPF Maps](../bpf-maps.md) — array maps, whose index handling the 2018 masking fix rewrote
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2021-33624](https://nvd.nist.gov/vuln/detail/CVE-2021-33624) — CVSS 4.7 MEDIUM (`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:N/A:N`), published June 23, 2021
 - [git.kernel.org: 9183671af6db](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9183671af6dbf60a1219371d4ed73e23f43b49db) — "bpf: Fix leakage under speculation on mispredicted branches", the fix, including both crafted programs and the rejected alternative design

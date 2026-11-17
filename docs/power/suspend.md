@@ -1,8 +1,8 @@
-# System Suspend and Hibernate
+# System Suspend and Hibernate {#system-suspend-and-hibernate}
 
 > System-wide power states: suspend-to-RAM, hibernate, and the PM state machine
 
-## Sleep states
+## Sleep states {#sleep-states}
 
 Linux supports multiple system-level sleep states, described by ACPI S-states and the kernel's internal model:
 
@@ -22,7 +22,7 @@ cat /sys/power/state
 echo mem | sudo tee /sys/power/state
 ```
 
-## The suspend state machine
+## The suspend state machine {#the-suspend-state-machine}
 
 ```
 /sys/power/state write "mem"
@@ -62,7 +62,7 @@ kernel/power/suspend.c: pm_suspend()
                Thaw processes
 ```
 
-## PM notifiers
+## PM notifiers {#pm-notifiers}
 
 Notifiers allow subsystems to react to suspend/resume events:
 
@@ -104,7 +104,7 @@ register_pm_notifier(&mysubsys_pm_nb);
 unregister_pm_notifier(&mysubsys_pm_nb);
 ```
 
-## Device suspend callbacks
+## Device suspend callbacks {#device-suspend-callbacks}
 
 The full driver PM callback sequence for system suspend:
 
@@ -122,7 +122,7 @@ dpm_complete()     → driver .complete()         (post-resume cleanup)
 
 For most drivers, only `.suspend` and `.resume` need implementation. The `_noirq` and `_late/_early` variants are for hardware that requires very late/early access.
 
-### Minimal suspend implementation
+### Minimal suspend implementation {#minimal-suspend-implementation}
 
 ```c
 static int mydriver_suspend(struct device *dev)
@@ -170,7 +170,7 @@ static const struct dev_pm_ops mydriver_pm_ops = {
 };
 ```
 
-## Wakeup sources
+## Wakeup sources {#wakeup-sources}
 
 A **wakeup source** is a hardware event that can wake the system from sleep. Common wakeup sources: keyboard, touchpad, NIC (Wake-on-LAN), RTC alarm, USB.
 
@@ -204,7 +204,7 @@ static int mydriver_resume(struct device *dev)
 }
 ```
 
-### Wakeup source tracking
+### Wakeup source tracking {#wakeup-source-tracking}
 
 ```c
 #include <linux/pm_wakeup.h>
@@ -250,7 +250,7 @@ cat /proc/interrupts | grep -i wake
 cat /sys/power/pm_wakeup_irq
 ```
 
-## Hibernate (suspend-to-disk)
+## Hibernate (suspend-to-disk) {#hibernate-suspend-to-disk}
 
 Hibernation saves the entire memory image to disk, then powers off. On resume, the image is read back and execution continues exactly where it left off.
 
@@ -258,7 +258,7 @@ Hibernation saves the entire memory image to disk, then powers off. On resume, t
 echo disk | sudo tee /sys/power/state
 ```
 
-### Hibernate state machine
+### Hibernate state machine {#hibernate-state-machine}
 
 ```
 1. Freeze processes
@@ -275,7 +275,7 @@ echo disk | sudo tee /sys/power/state
 9. Resume execution at hibernation point
 ```
 
-### Configuring hibernate destination
+### Configuring hibernate destination {#configuring-hibernate-destination}
 
 ```bash
 # Use a specific swap partition
@@ -295,7 +295,7 @@ echo /dev/sda1 | sudo tee /sys/power/resume  # partition containing the swap fil
 cat /sys/power/resume
 ```
 
-## Freeze (s2idle / S0ix)
+## Freeze (s2idle / S0ix) {#freeze-s2idle-s0ix}
 
 Modern laptops use **s2idle** (suspend-to-idle, sometimes called S0ix or "connected standby"). Unlike S3, the CPU stays in a very shallow sleep state, allowing:
 
@@ -314,7 +314,7 @@ cat /sys/power/mem_sleep
 # s2idle [deep]   (brackets = current selection)
 ```
 
-## Diagnosing suspend failures
+## Diagnosing suspend failures {#diagnosing-suspend-failures}
 
 ```bash
 # Verbose suspend logging
@@ -356,9 +356,9 @@ echo mem | sudo tee /sys/power/state
 # Ctrl-C background cat, examine /tmp/suspend_trace
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/power/suspend.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/suspend.c) — `pm_suspend()`, `enter_state()`, `suspend_devices_and_enter()`: the S1-S3/s2idle entry path
 - [kernel/power/hibernate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/hibernate.c) — `hibernate()`, `hibernation_restore()`, and the `/sys/power/resume`/`resume_offset` attributes
@@ -367,20 +367,20 @@ echo mem | sudo tee /sys/power/state
 - [include/linux/pm_wakeup.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_wakeup.h) — `struct wakeup_source`, `device_init_wakeup()`, `device_may_wakeup()`
 - [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `dpm_prepare()`/`dpm_suspend()`/`dpm_suspend_late()`/`dpm_suspend_noirq()` and their resume-side counterparts
 
-### Related pages
+### Related pages {#related-pages}
 
 - [cpufreq](cpufreq.md) — CPU frequency scaling
 - [Runtime PM](runtime-pm.md) — device-level power management
 - [Device Drivers: platform driver](../drivers/platform-driver.md) — dev_pm_ops integration
 - [Interrupts: Timers](../interrupts/timers.md) — `timer_list`, `hrtimer`, and the clocksource machinery timekeeping across suspend/resume depends on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [A new suspend/hibernate infrastructure](https://lwn.net/Articles/274008/) — Jonathan Corbet, March 19, 2008; Rafael Wysocki's rework separating the suspend and hibernation device callback paths
 - [PM / Sleep: Introduce new phases of device suspend/resume](https://lwn.net/Articles/475730/) — Rafael Wysocki's linux-pm patch series (posted January 16, 2012; archived by LWN as a mailing-list thread, not a staff-written article) that added the `.suspend_late`/`.resume_early` phases described above. The `_noirq` phases already existed by the time of the 2008 rework above; this series did not introduce them.
 - [Waking systems from suspend](https://lwn.net/Articles/429925/) — John Stultz, March 2, 2011; the alarmtimer subsystem that multiplexes many userspace alarms onto a single hardware RTC alarm via a timerqueue, and the API design question of how to expose that (POSIX alarm-clock IDs like `CLOCK_REALTIME_ALARM` vs. Android's `/dev/alarm` ioctl interface)
 
-### External
+### External {#external}
 
 - [Documentation/driver-api/pm/devices.rst](https://docs.kernel.org/driver-api/pm/devices.html) — the full device suspend/resume phase model and the ordering guarantees across the device hierarchy
 - [Documentation/admin-guide/pm/sleep-states.rst](https://docs.kernel.org/admin-guide/pm/sleep-states.html) — the `freeze`/`standby`/`mem`/`disk` labels and their ACPI S-state mapping

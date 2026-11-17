@@ -1,8 +1,8 @@
-# OverlayFS
+# OverlayFS {#overlayfs}
 
 > Union mounts for container image layers. Written by Miklos Szeredi at SUSE and merged in Linux 3.18 [(commit)](https://git.kernel.org/linus/e9be9d5e76e34872f0c37d72e25bc27fe9e2c54c) [(LWN)](https://lwn.net/Articles/618140/).
 
-## What OverlayFS does
+## What OverlayFS does {#what-overlayfs-does}
 
 OverlayFS presents a merged view of two or more directory trees:
 
@@ -27,7 +27,7 @@ work (internal scratch dir, must be on same filesystem as upper):
   (used for atomic copy-up)
 ```
 
-## Mounting OverlayFS
+## Mounting OverlayFS {#mounting-overlayfs}
 
 ```bash
 # Basic two-layer overlay
@@ -47,7 +47,7 @@ mount -t overlay overlay \
     /merged
 ```
 
-## Copy-on-write (copy-up)
+## Copy-on-write (copy-up) {#copy-on-write-copy-up}
 
 When a container writes to a file from a lower layer, OverlayFS:
 1. Copies the file from lower to upper (copy-up)
@@ -63,7 +63,7 @@ Container: open("/etc/passwd", O_RDWR)
   → Lower layer unchanged (other containers unaffected)
 ```
 
-### Copy-up in the kernel
+### Copy-up in the kernel {#copy-up-in-the-kernel}
 
 ```c
 /* fs/overlayfs/copy_up.c */
@@ -102,7 +102,7 @@ static int ovl_copy_up_data(struct ovl_copy_up_ctx *c,
 
 Copy-up is atomic: the kernel writes to a temp file in `workdir`, then `rename()`s it to the final location in `upper`. If interrupted, no partial file is visible.
 
-## Whiteout files
+## Whiteout files {#whiteout-files}
 
 When a container *deletes* a file from the lower layer, OverlayFS creates a **whiteout** entry in upper — a special file that marks the file as deleted:
 
@@ -117,7 +117,7 @@ ls -la /upper/etc/
 # OverlayFS hides lower:/etc/shadow because upper:/etc/shadow is a whiteout
 ```
 
-### Opaque directories
+### Opaque directories {#opaque-directories}
 
 When a container deletes a directory and recreates it (or if a copy-up of a directory occurs), OverlayFS marks the upper directory as **opaque** — lower directory contents are hidden:
 
@@ -130,7 +130,7 @@ getfattr -n trusted.overlay.opaque /upper/etc/
 # → lower/etc/ contents completely hidden
 ```
 
-## Metacopy optimization
+## Metacopy optimization {#metacopy-optimization}
 
 **Metacopy** (`metacopy=on`) defers data copy-up until actual data write. Metadata changes (chmod, chown, xattr) only copy metadata, leaving data in lower:
 
@@ -148,7 +148,7 @@ mount -t overlay overlay \
 
 This dramatically reduces copy-up cost for permission changes.
 
-## Docker's overlay2 driver
+## Docker's overlay2 driver {#dockers-overlay2-driver}
 
 Docker uses OverlayFS as its default storage driver (`overlay2`) — replacing AUFS as the default for most Linux distributions:
 
@@ -172,7 +172,7 @@ docker inspect <container> | jq '.[].GraphDriver.Data'
 # }
 ```
 
-### Layer sharing
+### Layer sharing {#layer-sharing}
 
 The power of OverlayFS for containers: multiple containers with the same base image share the lower layers:
 
@@ -188,9 +188,9 @@ Container A:                Container B:
 
 Changes in Container A don't affect Container B — each has its own upper layer.
 
-## OverlayFS internals
+## OverlayFS internals {#overlayfs-internals}
 
-### struct ovl_entry
+### struct ovl_entry {#struct-ovl_entry}
 
 ```c
 /* fs/overlayfs/ovl_entry.h */
@@ -220,7 +220,7 @@ struct ovl_inode {
 };
 ```
 
-### Lookup: merging directory entries
+### Lookup: merging directory entries {#lookup-merging-directory-entries}
 
 ```c
 /* fs/overlayfs/dir.c */
@@ -251,7 +251,7 @@ static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
 }
 ```
 
-## Performance considerations
+## Performance considerations {#performance-considerations}
 
 ```bash
 # Copy-up latency: first write to a large file triggers full copy
@@ -270,7 +270,7 @@ cat /proc/fs/overlayfs/features  # supported features
 df -i /var/lib/docker
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Container Networking](../net/container-networking.md) — network side of containers
 - [Cgroups: Container Isolation](../cgroups/container-isolation.md) — full container setup

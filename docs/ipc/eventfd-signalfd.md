@@ -1,8 +1,8 @@
-# eventfd and signalfd
+# eventfd and signalfd {#eventfd-and-signalfd}
 
 > Event notification and signal delivery through file descriptors
 
-## eventfd: a counter you can poll
+## eventfd: a counter you can poll {#eventfd-a-counter-you-can-poll}
 
 `eventfd` creates a file descriptor backed by a kernel counter. It's used for:
 
@@ -18,7 +18,7 @@ int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 /* EFD_SEMAPHORE: semaphore mode (see below) */
 ```
 
-### Writing (signaling)
+### Writing (signaling) {#writing-signaling}
 
 Writing an 8-byte `uint64_t` adds to the counter:
 
@@ -34,7 +34,7 @@ write(efd, &value, sizeof(value));  /* counter += 5 */
 /* write blocks (or returns EAGAIN with EFD_NONBLOCK) when at max, it does not saturate */
 ```
 
-### Reading (consuming)
+### Reading (consuming) {#reading-consuming}
 
 Reading an 8-byte `uint64_t` returns the current counter and resets it to 0:
 
@@ -46,7 +46,7 @@ ssize_t n = read(efd, &count, sizeof(count));
 /* EFD_NONBLOCK: returns EAGAIN if counter == 0 */
 ```
 
-### EFD_SEMAPHORE mode
+### EFD_SEMAPHORE mode {#efd_semaphore-mode}
 
 With `EFD_SEMAPHORE`, each `read()` decrements by 1 and returns 1 (not the full count):
 
@@ -62,7 +62,7 @@ read(efd, &val, 8);  /* val=1, counter=0 */
 read(efd, &val, 8);  /* EAGAIN: counter==0 */
 ```
 
-### epoll integration
+### epoll integration {#epoll-integration}
 
 The key feature: `eventfd` integrates with `epoll` so you can wake a sleeping event loop:
 
@@ -88,7 +88,7 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-### Typical uses
+### Typical uses {#typical-uses}
 
 **Thread pool wakeup**: Instead of a mutex+condvar, use eventfd with a work queue:
 
@@ -121,7 +121,7 @@ io_uring_register_eventfd(ring, efd);
 /* Now epoll_wait on efd wakes when CQEs are available */
 ```
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation}
 
 ```c
 /* fs/eventfd.c */
@@ -211,7 +211,7 @@ static ssize_t eventfd_read(struct kiocb *iocb, struct iov_iter *to)
 }
 ```
 
-## signalfd: receive signals via file descriptor
+## signalfd: receive signals via file descriptor {#signalfd-receive-signals-via-file-descriptor}
 
 Normally, signals interrupt the current execution at unpredictable points. `signalfd` delivers signals as readable data on a file descriptor, making signal handling compatible with `epoll`-driven event loops.
 
@@ -240,7 +240,7 @@ if (n == sizeof(ssi)) {
 }
 ```
 
-### signalfd_siginfo fields
+### signalfd_siginfo fields {#signalfd_siginfo-fields}
 
 ```c
 struct signalfd_siginfo {
@@ -264,7 +264,7 @@ struct signalfd_siginfo {
 };
 ```
 
-### epoll with signalfd
+### epoll with signalfd {#epoll-with-signalfd}
 
 The canonical pattern for a single-threaded server handling both I/O and signals:
 
@@ -308,7 +308,7 @@ while (running) {
 }
 ```
 
-### signalfd vs traditional signal handling
+### signalfd vs traditional signal handling {#signalfd-vs-traditional-signal-handling}
 
 | Approach | Thread-safe | epoll-compatible | Signal info |
 |----------|------------|-----------------|-------------|
@@ -319,7 +319,7 @@ while (running) {
 
 The **self-pipe trick** (write a byte to a pipe in the signal handler, read from the other end in the event loop) was the traditional solution. `signalfd` replaces it cleanly.
 
-### signalfd update
+### signalfd update {#signalfd-update}
 
 Pass an existing sfd to update its mask:
 
@@ -329,7 +329,7 @@ sigaddset(&mask, SIGUSR2);
 signalfd(sfd, &mask, 0);  /* first arg is existing fd */
 ```
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation_1}
 
 ```c
 /* fs/signalfd.c — real function uses .read_iter, not the classic
@@ -370,7 +370,7 @@ static ssize_t signalfd_read_iter(struct kiocb *iocb, struct iov_iter *to)
 
 `dequeue_signal()` itself takes exactly three arguments — `(sigset_t *mask, kernel_siginfo_t *info, enum pid_type *type)` — with no explicit `current` argument (it operates on the caller's own pending signals). There is no `copy_siginfo_to_user_sighand()` anywhere in the kernel; the real translation to the userspace `struct signalfd_siginfo` layout is done by `signalfd_copyinfo()`, which maps fields via a `siginfo_layout()` switch.
 
-## timerfd: pollable timers
+## timerfd: pollable timers {#timerfd-pollable-timers}
 
 `timerfd` (covered in [POSIX Timers](../time/posix-timers.md)) follows the same pattern — a file descriptor that becomes readable when a timer fires. Combined with eventfd and signalfd, it enables a complete event loop without threads:
 
@@ -383,21 +383,21 @@ epoll_ctl(epfd, EPOLL_CTL_ADD, sock_fd,  &ev_socket);
 /* One epoll_wait handles timers + signals + events + I/O */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `do_eventfd()`, `eventfd_read()`/`eventfd_write()`, and the `eventfd_signal_mask()` in-kernel signaling entry point
 - [fs/signalfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/signalfd.c) — `signalfd_read_iter()`, `signalfd_copyinfo()`, and `do_signalfd4()`
 - [include/uapi/linux/eventfd.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/eventfd.h) — `EFD_SEMAPHORE`/`EFD_CLOEXEC`/`EFD_NONBLOCK` flag definitions
 - [include/uapi/linux/signalfd.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/signalfd.h) — the `signalfd_siginfo` struct layout
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — counter semantics, `EFD_SEMAPHORE`, and the `ULLONG_MAX - 1` blocking/EAGAIN ceiling
 - [`signalfd(2)`](https://man7.org/linux/man-pages/man2/signalfd.2.html) — `signalfd_siginfo` fields and the epoll+`fork()` caveat
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Signals](signals.md) — the traditional signal delivery path `signalfd` replaces
 - [epoll Internals](../net/epoll.md) — the event loop eventfd/signalfd are designed to integrate with

@@ -1,8 +1,8 @@
-# uprobes and USDT: Userspace Dynamic Tracing
+# uprobes and USDT: Userspace Dynamic Tracing {#uprobes-and-usdt-userspace-dynamic-tracing}
 
 > Attaching BPF programs to userspace functions and static tracepoints
 
-## uprobes: dynamic userspace instrumentation
+## uprobes: dynamic userspace instrumentation {#uprobes-dynamic-userspace-instrumentation}
 
 A **uprobe** is the userspace equivalent of a kprobe, introduced in Linux 3.5 by Srikar Dronamraju (IBM) [(commit)](https://git.kernel.org/linus/2b144498350860b6ee9dc57ff27a93ad488de5dc) — it instruments any instruction address in a userspace binary by:
 1. Finding the address in the binary
@@ -15,7 +15,7 @@ uprobe on malloc() in libc:
   CPU cost:    ~100-500ns per hit (much higher than kprobes due to user/kernel transition)
 ```
 
-## Attaching uprobes with bpftrace
+## Attaching uprobes with bpftrace {#attaching-uprobes-with-bpftrace}
 
 ```bash
 # Trace malloc() calls in any process:
@@ -48,7 +48,7 @@ bpftrace -e 'uprobe:/usr/bin/nginx:0x12345  # specific offset
 { printf("hit offset 0x12345\n"); }'
 ```
 
-## uprobes with libbpf
+## uprobes with libbpf {#uprobes-with-libbpf}
 
 ```c
 /* uprobe_example.bpf.c */
@@ -101,7 +101,7 @@ int main(void)
 }
 ```
 
-## USDT: User Statically Defined Tracepoints
+## USDT: User Statically Defined Tracepoints {#usdt-user-statically-defined-tracepoints}
 
 USDT tracepoints are **static** instrumentation points added by application developers. Unlike uprobes (which can attach to any instruction), USDTs are intentionally placed at meaningful locations:
 
@@ -127,7 +127,7 @@ void process_request(struct request *req)
 /* Completely zero-overhead when no tool is attached */
 ```
 
-### Finding USDT probes
+### Finding USDT probes {#finding-usdt-probes}
 
 ```bash
 # List all USDT probes in a binary:
@@ -152,7 +152,7 @@ bpftrace -l 'usdt:/usr/bin/python3:*'
 tplist -l /usr/bin/python3
 ```
 
-## USDT with bpftrace: Python function tracing
+## USDT with bpftrace: Python function tracing {#usdt-with-bpftrace-python-function-tracing}
 
 ```bash
 # Trace Python function calls:
@@ -183,7 +183,7 @@ usdt:/usr/bin/python3:python:function__return
 }'
 ```
 
-## PostgreSQL USDT probes
+## PostgreSQL USDT probes {#postgresql-usdt-probes}
 
 ```bash
 # PostgreSQL has rich USDT support:
@@ -212,7 +212,7 @@ usdt:/usr/lib/postgresql/14/bin/postgres:postgresql:query__done
 }'
 ```
 
-## Node.js USDT probes
+## Node.js USDT probes {#nodejs-usdt-probes}
 
 ```bash
 # Node.js built with --with-dtrace:
@@ -232,7 +232,7 @@ usdt:/usr/bin/node:node:http__server__request
 }'
 ```
 
-## uprobe overhead vs tracepoints
+## uprobe overhead vs tracepoints {#uprobe-overhead-vs-tracepoints}
 
 ```
 Instrumentation overhead comparison:
@@ -250,7 +250,7 @@ Production considerations:
   - Limit uprobe attachment to < 1% of execution time paths
 ```
 
-## uprobe kernel internals
+## uprobe kernel internals {#uprobe-kernel-internals}
 
 ```c
 /* kernel/events/uprobes.c */
@@ -278,7 +278,7 @@ void uprobe_notify_resume(struct pt_regs *regs)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kprobes and Tracepoints](kprobes-tracepoints.md) — kernel-side dynamic probing
 - [BPF Maps](../bpf/bpf-maps.md) — sharing data between BPF programs

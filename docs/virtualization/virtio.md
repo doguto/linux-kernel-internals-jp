@@ -1,8 +1,8 @@
-# virtio
+# virtio {#virtio}
 
 > Paravirtualized I/O for KVM guests
 
-## Why paravirtualization?
+## Why paravirtualization? {#why-paravirtualization}
 
 Emulating real hardware (e.g., Intel e1000 NIC, IDE disk) inside QEMU works but is slow: every device register access by the guest causes a VM exit, QEMU decodes the access, updates emulated state, and returns. This happens thousands of times per packet.
 
@@ -18,7 +18,7 @@ virtio path:
   Host processes batch → notifies guest
 ```
 
-## virtio architecture
+## virtio architecture {#virtio-architecture}
 
 ```
 Guest kernel                          Host (QEMU / vhost)
@@ -38,7 +38,7 @@ Guest kernel                          Host (QEMU / vhost)
 └────────────────────────────┘        └────────────────────────────┘
 ```
 
-## The virtqueue / vring
+## The virtqueue / vring {#the-virtqueue-vring}
 
 A virtqueue is a split ring buffer with three regions in shared memory:
 
@@ -75,7 +75,7 @@ struct vring_used {
 
 This is the **split ring** layout — three separate regions (descriptor table, avail ring, used ring), the classic/default virtqueue format. Negotiating `VIRTIO_F_RING_PACKED` (see feature bits below) switches to the **packed ring** layout instead: a single combined ring of `struct vring_packed_desc` entries that fold descriptor, availability, and completion state into one cache-line-friendly structure, avoiding the split layout's three-region indirection.
 
-### virtqueue lifecycle
+### virtqueue lifecycle {#virtqueue-lifecycle}
 
 ```
 Guest (driver side):                   Host (device side):
@@ -109,7 +109,7 @@ Guest (driver side):                   Host (device side):
    }
 ```
 
-### Descriptor chaining
+### Descriptor chaining {#descriptor-chaining}
 
 Large buffers (e.g., a 64KB network packet with header + payload) can be represented as a chain:
 
@@ -120,7 +120,7 @@ desc[1]: payload  → flags = WRITE, next = 0  (end of chain)
 
 The host reads desc[0], follows `next` to desc[1], processes both as one logical buffer.
 
-## virtio-net
+## virtio-net {#virtio-net}
 
 ```c
 /* drivers/net/virtio_net.c */
@@ -162,7 +162,7 @@ static int xmit_skb(struct send_queue *sq, struct sk_buff *skb)
 
 The real `xmit_skb()` (which now also takes an `orphan` flag) doesn't hand-roll the checksum/GSO logic shown above inline — that's factored into the `virtio_net_hdr_from_skb()` helper (`include/linux/virtio_net.h`), which is what actually sets `VIRTIO_NET_HDR_F_NEEDS_CSUM`/`csum_start`/`csum_offset` when `skb->ip_summed == CHECKSUM_PARTIAL`, and fills in GSO fields when the skb is a GSO packet. The real function also picks from several header variants depending on negotiated features — plain `struct virtio_net_hdr`, the mergeable-rx-buffers variant below, or (for the newer hash/tunnel offloads) `struct virtio_net_hdr_v1_hash_tunnel` — and enqueues through a `virtnet_add_outbuf()` wrapper rather than calling `virtqueue_add_outbuf()` directly. The sketch above keeps the core idea — prepend a header, let the skb's own checksum/GSO state drive it, hand the buffer to the ring — without the header-variant dispatch and TX batching logic.
 
-### virtio-net header
+### virtio-net header {#virtio-net-header}
 
 ```c
 /* include/uapi/linux/virtio_net.h */
@@ -185,7 +185,7 @@ struct virtio_net_hdr_mrg_rxbuf {
 
 These 16-bit fields are `__virtio16`, not a fixed-endian type — virtio's wire byte order depends on which VIRTIO_F_VERSION_1 mode was negotiated (modern devices are always little-endian; legacy ones use the guest's native order), so the header itself can't commit to `__le16` at the type level. This header lets the host/guest negotiate hardware offloads: checksum, segmentation (TSO), receive-side coalescing (LRO).
 
-## virtio-blk
+## virtio-blk {#virtio-blk}
 
 ```c
 /* include/uapi/linux/virtio_blk.h */
@@ -201,14 +201,14 @@ struct virtio_blk_outhdr {
    [2] status byte              (device-writable: VIRTIO_BLK_S_OK=0, S_IOERR=1, S_UNSUPP=2) */
 ```
 
-### Why virtio-blk is fast
+### Why virtio-blk is fast {#why-virtio-blk-is-fast}
 
 - One virtqueue per vCPU (multi-queue support)
 - Guest batches multiple requests before kicking
 - Host processes full batch, posts all completions
 - With `VIRTIO_BLK_F_FLUSH`: explicit flush ordering
 
-## Feature negotiation
+## Feature negotiation {#feature-negotiation}
 
 virtio devices negotiate features before use:
 
@@ -244,7 +244,7 @@ VIRTIO_BLK_F_DISCARD       /* TRIM/discard support */
 VIRTIO_BLK_F_WRITE_ZEROES  /* write-zeroes command */
 ```
 
-## vhost-net: kernel-space acceleration
+## vhost-net: kernel-space acceleration {#vhost-net-kernel-space-acceleration}
 
 vhost-net moves the virtio-net backend from QEMU userspace into the kernel, eliminating the QEMU → host kernel round trip for each packet.
 
@@ -258,7 +258,7 @@ With vhost-net:
   reads vring → writes to TAP directly (no QEMU in data path)
 ```
 
-### vhost kernel internals
+### vhost kernel internals {#vhost-kernel-internals}
 
 ```c
 /* drivers/vhost/net.c */
@@ -299,7 +299,7 @@ static void vhost_worker_tx_sketch(struct vhost_net *net, struct vhost_virtqueue
 
 `struct vhost_dev` used to own a single `struct task_struct *worker` directly; it's since been refactored so a device can register multiple workers (`worker_xa`, keyed for cases like per-vq worker assignment), created via `vhost_task_create()` rather than a raw kthread — the worker's `comm` is still `vhost-<owner-pid>`, so `pgrep vhost` (further down) still finds it.
 
-### vhost-user: userspace vhost
+### vhost-user: userspace vhost {#vhost-user-userspace-vhost}
 
 vhost-user moves the backend to a separate userspace process (e.g., DPDK, OVS) using a Unix socket for control and shared memory for the rings:
 
@@ -311,7 +311,7 @@ Guest (KVM) ──► vring (shared memory) ◄── vhost-user process (DPDK/O
 
 Used by Open vSwitch + DPDK for line-rate switching without kernel involvement.
 
-## virtio-mmio vs PCI transport
+## virtio-mmio vs PCI transport {#virtio-mmio-vs-pci-transport}
 
 virtio devices are exposed over two transports:
 
@@ -331,7 +331,7 @@ cat /proc/device-tree/virtio_mmio@*/compatible
 # virtio,mmio
 ```
 
-## Observing virtio performance
+## Observing virtio performance {#observing-virtio-performance}
 
 ```bash
 # In guest: virtio-net stats
@@ -357,9 +357,9 @@ perf top -p $(pgrep vhost)
 # (VRING_AVAIL_F_NO_INTERRUPT tells host not to interrupt guest)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/virtio/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio) — the virtio core bus: device registration and feature negotiation (`virtio_add_status()`)
 - [drivers/virtio/virtio_ring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_ring.c) — `virtqueue_add_outbuf()` and `virtqueue_kick()`: the split- and packed-ring implementation behind the vring diagrams above
@@ -372,17 +372,17 @@ perf top -p $(pgrep vhost)
 - [drivers/vhost/net.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/net.c) — the vhost-net kernel backend: `struct vhost_net`, `handle_tx()` dispatching to `handle_tx_copy()`/`handle_tx_zerocopy()`
 - [drivers/vhost/vhost.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/vhost.h) — `struct vhost_dev`: the generic vhost core shared by vhost-net, vhost-scsi, and vhost-vsock
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KVM Architecture](kvm-arch.md) — VM exits, hypercalls
 - [Memory Virtualization](kvm-memory.md) — EPT, balloon driver
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [An API for virtual I/O: virtio](https://lwn.net/Articles/239238/) — LWN's 2007 coverage of Rusty Russell's introduction of virtio: the `add_buf()`/`sync()`/`get_buf()` operations vector that became the virtqueue, and worked examples from the block and network drivers
 - [Standardizing virtio](https://lwn.net/Articles/580186/) — Jonathan Corbet, 2014: why virtio moved to OASIS standardization and what changed in the 1.0 specification (mandatory version feature bit, fixed little-endian byte order, flexible virtqueue memory layout)
 
-### External
+### External {#external}
 
 - [Virtual I/O Device (VIRTIO) Version 1.2](https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html) — the OASIS committee specification: split and packed virtqueue formats, device types (net, block, and others), and the PCI/MMIO/CCW transports
 - [Virtio on Linux](https://docs.kernel.org/driver-api/virtio/virtio.html) — kernel documentation for the virtio subsystem: the core bus, virtqueues, and transport drivers

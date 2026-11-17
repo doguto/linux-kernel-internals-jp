@@ -1,10 +1,10 @@
-# URBs and the Four Transfer Types
+# URBs and the Four Transfer Types {#urbs-and-the-four-transfer-types}
 
 > The URB is the single unit of USB data movement — how it's built, submitted, and completed, and how its shape changes for each of the four transfer types
 
 Every byte a USB driver moves rides in a **URB** (USB Request Block). It is the USB analogue of the block layer's [`bio`](../block/bio-request.md): a self-contained I/O request that a driver hands to the core, which schedules it on the bus and reports completion asynchronously through a callback. Understanding the URB lifecycle is most of understanding how to write a USB driver.
 
-## Anatomy of a URB
+## Anatomy of a URB {#anatomy-of-a-urb}
 
 ```c
 struct urb {
@@ -25,7 +25,7 @@ struct urb {
 
 The **pipe** encodes the whole target in one integer — device, endpoint number, direction, and transfer type — built with helpers like `usb_sndbulkpipe(dev, ep)` (host→device bulk) or `usb_rcvintpipe(dev, ep)` (device→host interrupt). "snd/rcv" are always from the *host's* point of view.
 
-## The lifecycle
+## The lifecycle {#the-lifecycle}
 
 ```c
 urb = usb_alloc_urb(0, GFP_KERNEL);                 /* 1. allocate       */
@@ -47,23 +47,23 @@ Two things about step 4 matter. The completion callback runs in **atomic (interr
 
 For one-shot transfers where blocking is fine, usbcore provides synchronous wrappers that build, submit, and wait internally: **`usb_control_msg()`**, **`usb_bulk_msg()`**, **`usb_interrupt_msg()`**.
 
-## The four transfer types
+## The four transfer types {#the-four-transfer-types}
 
 The endpoint's type (from its [descriptor](enumeration.md)) determines how the core schedules the URB and what guarantees it gets.
 
-### Control — setup, configuration, small commands
+### Control — setup, configuration, small commands {#control-setup-configuration-small-commands}
 
 Control transfers are the only *bidirectional* type and the only one guaranteed to exist (endpoint 0). Each has up to three stages: a **SETUP** packet (an 8-byte request), an optional **DATA** stage, and a **STATUS** handshake. All enumeration and most "send this device a command" operations are control transfers, usually issued via `usb_control_msg()`.
 
-### Bulk — large, reliable, whenever-there's-room
+### Bulk — large, reliable, whenever-there's-room {#bulk-large-reliable-whenever-theres-room}
 
 Bulk transfers are error-checked and retried (reliable delivery) but get **no timing or bandwidth guarantee** — the host schedules them only in bandwidth left over after the periodic types. Ideal for "move a lot of data, correctly, eventually": mass storage, printers, bulk network adapters.
 
-### Interrupt — small, bounded latency, host-polled
+### Interrupt — small, bounded latency, host-polled {#interrupt-small-bounded-latency-host-polled}
 
 Despite the name, nothing interrupts the host. The device declares a desired polling interval (`bInterval`); the host **polls** the endpoint at least that often and the device answers "nothing new" or hands over a small payload. This bounds worst-case latency, which is what a keyboard or mouse needs. Drivers keep one interrupt URB perpetually in flight, resubmitting it from the completion callback.
 
-### Isochronous — guaranteed bandwidth, no retransmission
+### Isochronous — guaranteed bandwidth, no retransmission {#isochronous-guaranteed-bandwidth-no-retransmission}
 
 Isochronous transfers reserve **guaranteed bandwidth** at configuration time and deliver on a fixed schedule, but are **never retried** — a corrupted or late packet is simply lost. That is the correct trade for streaming audio and video, where a stale frame is worthless and re-sending it would only break timing. An isochronous URB carries *many* packets at once (`number_of_packets`, each described by an `iso_frame_desc[]` entry with its own status and length), because scheduling one URB per frame would be far too much overhead.
 
@@ -74,13 +74,13 @@ Isochronous transfers reserve **guaranteed bandwidth** at configuration time and
 | Interrupt | yes | bounded latency | reserved (small) | HID |
 | Isochronous | **no** | fixed schedule | **reserved** | audio, video |
 
-## Bandwidth, DMA, and errors
+## Bandwidth, DMA, and errors {#bandwidth-dma-and-errors}
 
 - **Bandwidth reservation.** The two periodic types (interrupt and isochronous) reserve bus bandwidth when an interface or alternate setting is selected. If the bus can't satisfy the request, `SET_INTERFACE`/`usb_submit_urb` **fails** rather than silently degrading — which is why a webcam may refuse a high-resolution alt-setting on a crowded bus.
 - **DMA.** `transfer_buffer` must be DMA-addressable; the HCD maps it for the [DMA engine](../mm/dma.md). For hot paths, `usb_alloc_coherent()` hands back a buffer that's already mapped.
 - **Errors** arrive as a negative `urb->status`: `-EPIPE` (endpoint **stalled/halted** — cleared with `usb_clear_halt()`), `-EOVERFLOW` (**babble**: device sent more than the endpoint's max packet), `-ENOENT`/`-ECONNRESET` (URB was killed/unlinked), `-ESHUTDOWN` (the device was disconnected).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: USB Request Block (URB)](https://docs.kernel.org/driver-api/usb/URB.html) — the authoritative URB lifecycle reference
 - [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — the submit/complete interface

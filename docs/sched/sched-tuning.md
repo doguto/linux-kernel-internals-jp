@@ -1,8 +1,8 @@
-# Scheduler Tuning
+# Scheduler Tuning {#scheduler-tuning}
 
 > sysctl knobs, SCHED_FEAT flags, and common tuning patterns
 
-## Scheduler sysctls
+## Scheduler sysctls {#scheduler-sysctls}
 
 All scheduler tuning knobs live under `/proc/sys/kernel/`:
 
@@ -10,7 +10,7 @@ All scheduler tuning knobs live under `/proc/sys/kernel/`:
 ls /proc/sys/kernel/sched_*
 ```
 
-### Core timing knobs
+### Core timing knobs {#core-timing-knobs}
 
 ```bash
 # Minimum scheduling granularity (ns)
@@ -31,7 +31,7 @@ cat /proc/sys/kernel/sched_wakeup_granularity_ns
 
 The relationship: `sched_latency_ns ≥ nr_runnable × sched_min_granularity_ns` ensures each runnable task gets at least one slice per latency period.
 
-### Migration and balancing
+### Migration and balancing {#migration-and-balancing}
 
 ```bash
 # Task migration cost (ns)
@@ -50,7 +50,7 @@ cat /proc/sys/kernel/sched_nr_migrate
 cat /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
-### RT throttling
+### RT throttling {#rt-throttling}
 
 ```bash
 # RT task period (µs): how often RT tasks' quota is refreshed
@@ -63,7 +63,7 @@ cat /proc/sys/kernel/sched_rt_period_us
 cat /proc/sys/kernel/sched_rt_runtime_us
 ```
 
-### Schedstat
+### Schedstat {#schedstat}
 
 ```bash
 # Enable per-task scheduling statistics (slight overhead)
@@ -71,7 +71,7 @@ cat /proc/sys/kernel/sched_rt_runtime_us
 echo 1 > /proc/sys/kernel/sched_schedstats
 ```
 
-## SCHED_FEAT: compile-time feature toggles
+## SCHED_FEAT: compile-time feature toggles {#sched_feat-compile-time-feature-toggles}
 
 `SCHED_FEAT` flags are booleans controlling specific scheduler behaviors. In a kernel with `CONFIG_SCHED_DEBUG`, they can be toggled at runtime:
 
@@ -100,9 +100,9 @@ Key features:
 | `TTWU_QUEUE` | arch | Queue cross-CPU wakeups (reduces IPI storms) |
 | `RT_RUNTIME_SHARE` | on | Allow RT tasks to borrow runtime from sibling CPUs |
 
-## Common tuning scenarios
+## Common tuning scenarios {#common-tuning-scenarios}
 
-### Latency-sensitive workloads (network, trading, audio)
+### Latency-sensitive workloads (network, trading, audio) {#latency-sensitive-workloads-network-trading-audio}
 
 ```bash
 # Reduce minimum granularity: tasks get smaller slices, lower max latency
@@ -116,7 +116,7 @@ echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns  # 500µs (default 1m
 echo 250000 > /proc/sys/kernel/sched_migration_cost_ns      # 250µs (default 500µs)
 ```
 
-### Throughput-oriented workloads (batch processing, HPC)
+### Throughput-oriented workloads (batch processing, HPC) {#throughput-oriented-workloads-batch-processing-hpc}
 
 ```bash
 # Increase minimum granularity: tasks run longer before preemption
@@ -129,7 +129,7 @@ echo 5000000 > /proc/sys/kernel/sched_migration_cost_ns    # 5ms
 echo 64 > /proc/sys/kernel/sched_nr_migrate
 ```
 
-### Real-time workloads (SCHED_FIFO/RR tasks)
+### Real-time workloads (SCHED_FIFO/RR tasks) {#real-time-workloads-sched_fiforr-tasks}
 
 ```bash
 # Ensure RT tasks get priority over CFS (default: 95%)
@@ -145,7 +145,7 @@ echo 950000 > /sys/fs/cgroup/rt_group/cpu.rt_runtime_us   # runtime in µs
 echo 1000000 > /sys/fs/cgroup/rt_group/cpu.rt_period_us   # period in µs
 ```
 
-### Container/cgroup isolation
+### Container/cgroup isolation {#containercgroup-isolation}
 
 ```bash
 # Give a container 2 CPUs (200ms quota / 100ms period)
@@ -155,7 +155,7 @@ echo "200000 100000" > /sys/fs/cgroup/containers/myapp/cpu.max
 echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 1ms (default 5ms)
 ```
 
-## CPU isolation for RT/low-latency
+## CPU isolation for RT/low-latency {#cpu-isolation-for-rtlow-latency}
 
 For truly latency-sensitive tasks, isolate CPUs from the kernel scheduler entirely:
 
@@ -173,7 +173,7 @@ cat /sys/devices/system/cpu/nohz_full # → 4-7
 
 `isolcpus` removes CPUs from the load balancer. `nohz_full` disables the scheduler tick on those CPUs (tasks run without periodic interruption). `rcu_nocbs` offloads RCU callbacks to other CPUs.
 
-## Diagnosing tuning effects
+## Diagnosing tuning effects {#diagnosing-tuning-effects}
 
 ```bash
 # Measure scheduling latency before and after
@@ -189,7 +189,7 @@ runqlen 10  # from BCC toolkit, sample every 10ms
 watch -n 1 'cat /sys/fs/cgroup/myapp/cpu.stat | grep throttled'
 ```
 
-## Observability checklist
+## Observability checklist {#observability-checklist}
 
 Before tuning, establish a baseline:
 
@@ -199,7 +199,7 @@ Before tuning, establish a baseline:
 4. **RT task monopolizing CPU?** → `htop` or `perf top` showing high RT%
 5. **NUMA inefficiency?** → `numastat`, `perf stat -e cache-misses`
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Scheduler Statistics](schedstat.md) — What to measure before tuning
 - [Scheduler Tracing](sched-tracing.md) — Real-time observation tools

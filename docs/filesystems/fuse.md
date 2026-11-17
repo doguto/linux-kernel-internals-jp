@@ -1,10 +1,10 @@
-# FUSE: Filesystems in Userspace
+# FUSE: Filesystems in Userspace {#fuse-filesystems-in-userspace}
 
 > How the kernel lets an *ordinary program* implement a filesystem — the request/response protocol over `/dev/fuse`, why it costs what it costs, and how virtiofs and io_uring change the math
 
 Everything else in this section is kernel code: ext4, XFS, and btrfs are compiled into the kernel and run in kernel context. FUSE is the exception that makes the rest possible to sidestep — it lets a filesystem be implemented by a normal userspace process. sshfs, s3fs, gluster's client, `ntfs-3g`, GNOME's gvfs, AppImage, and rclone's mount all work this way. The trade is flexibility (write a filesystem in any language, with no kernel code and no reboot) against a performance cost that comes directly from the architecture.
 
-## The architecture: a kernel driver that forwards to a daemon
+## The architecture: a kernel driver that forwards to a daemon {#the-architecture-a-kernel-driver-that-forwards-to-a-daemon}
 
 FUSE is two halves that talk through a device:
 
@@ -27,7 +27,7 @@ They communicate through the character device **`/dev/fuse`**. When a process do
 
 Each request carries an opcode (`FUSE_LOOKUP`, `FUSE_OPEN`, `FUSE_READ`, `FUSE_WRITE`, `FUSE_GETATTR`, …) and its arguments; the protocol is versioned and negotiated at mount via a `FUSE_INIT` handshake.
 
-## Why it costs what it costs
+## Why it costs what it costs {#why-it-costs-what-it-costs}
 
 A single `read()` that a native filesystem answers with a page-cache hit becomes, under FUSE, a round trip out to userspace and back:
 
@@ -37,18 +37,18 @@ A single `read()` that a native filesystem answers with a page-cache hit becomes
 
 FUSE mitigates rather than eliminates this. The kernel side caches aggressively — dentries, attributes, and page data are cached with negotiated timeouts, so repeated lookups and cached reads never leave the kernel. Writeback caching batches dirty data. `max_pages` and readahead let one request move up to a megabyte at a time. But the fundamental "cross to userspace for a cache miss" cost is inherent to the model, which is why FUSE filesystems trail native ones on metadata-heavy and small-I/O workloads.
 
-## Security: unprivileged mounts
+## Security: unprivileged mounts {#security-unprivileged-mounts}
 
 Because a FUSE daemon is untrusted userspace serving filesystem responses to other processes, mounting one was historically privileged. The kernel gained support for **fully unprivileged FUSE mounts inside user namespaces** ([`4ad769f3c346`](https://git.kernel.org/linus/4ad769f3c346) "fuse: Allow fully unprivileged mounts"), which is what lets rootless containers and sandboxes mount FUSE filesystems safely — the kernel restricts what such a mount can do (e.g. `allow_other` is confined to the mounting namespace) so a malicious daemon can't attack processes outside its own domain.
 
-## Beyond the classic model
+## Beyond the classic model {#beyond-the-classic-model}
 
 Two developments attack FUSE's central cost — the userspace round trip:
 
 - **virtiofs** applies the FUSE protocol to a different problem: sharing a host directory into a virtual machine. Instead of `/dev/fuse`, requests travel over a **virtio** transport to a device the host services, giving VMs a shared filesystem with near-native semantics and, via DAX, the ability to map host page cache directly. See the kernel's [virtiofs documentation](https://docs.kernel.org/filesystems/virtiofs.html) ([`a62a8ef9d97d`](https://git.kernel.org/linus/a62a8ef9d97d) "virtio-fs: add virtiofs filesystem").
 - **FUSE over io_uring** replaces the read/write-on-`/dev/fuse` request loop with shared ring buffers, so the kernel and daemon exchange requests and replies with far fewer syscalls and context switches, and can keep a request serviced on the same CPU. See [FUSE-over-io-uring](https://docs.kernel.org/filesystems/fuse/fuse-io-uring.html). (For the ring mechanism itself, see [io_uring](../io-uring/README.md).)
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: FUSE](https://docs.kernel.org/filesystems/fuse/fuse.html) — the protocol and the design rationale
 - [Kernel docs: virtiofs](https://docs.kernel.org/filesystems/virtiofs.html) — FUSE protocol over virtio for VMs

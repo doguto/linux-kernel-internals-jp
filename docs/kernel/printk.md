@@ -1,8 +1,8 @@
-# printk: Kernel Logging Internals
+# printk: Kernel Logging Internals {#printk-kernel-logging-internals}
 
 > The kernel's logging system: log buffer, rate limiting, dev_printk, and dmesg
 
-## The printk API
+## The printk API {#the-printk-api}
 
 ```c
 /* Basic usage: */
@@ -29,7 +29,7 @@ dev_dbg(&pdev->dev, "IRQ status: 0x%08x\n", status);
 angle brackets shown in a formatted `dmesg` line — those are dmesg's own rendering of the `<level>` prefix
 after it parses the SOH-prefixed loglevel byte back out of the message.
 
-## Log levels and console
+## Log levels and console {#log-levels-and-console}
 
 ```c
 /*
@@ -56,7 +56,7 @@ cat /proc/sys/kernel/printk
 echo 8 > /proc/sys/kernel/printk
 ```
 
-## Circular log buffer
+## Circular log buffer {#circular-log-buffer}
 
 ```c
 /*
@@ -93,7 +93,7 @@ not yet the common case.
  */
 ```
 
-## printk flow
+## printk flow {#printk-flow}
 
 ```c
 /* kernel/printk/printk.c — simplified; the real function also handles
@@ -121,7 +121,7 @@ asmlinkage int vprintk_emit(int facility, int level,
 }
 ```
 
-## Reading kernel logs
+## Reading kernel logs {#reading-kernel-logs}
 
 ```bash
 # dmesg: reads /dev/kmsg
@@ -142,7 +142,7 @@ journalctl -k -b-1         # previous boot kernel messages
 journalctl -k -p err       # kernel errors
 ```
 
-## Rate limiting
+## Rate limiting {#rate-limiting}
 
 ```c
 /* Avoid log flooding: */
@@ -162,7 +162,7 @@ if (__ratelimit(&my_rs))
     pr_warn("...");
 ```
 
-## pr_fmt: module prefix
+## pr_fmt: module prefix {#pr_fmt-module-prefix}
 
 ```c
 /* At the top of the source file: */
@@ -173,7 +173,7 @@ pr_info("driver loaded\n");
 /* Output: "my_module: driver loaded" */
 ```
 
-## Dynamic debug
+## Dynamic debug {#dynamic-debug}
 
 ```bash
 # dev_dbg() and pr_debug() are no-ops unless dynamically enabled:
@@ -194,7 +194,7 @@ cat /sys/kernel/debug/dynamic_debug/control | grep "e1000"
 # dyndbg="module e1000 +p"
 ```
 
-## pstore: persist messages across reboot
+## pstore: persist messages across reboot {#pstore-persist-messages-across-reboot}
 
 ```bash
 # If CONFIG_PSTORE enabled (EFI vars, RAM, MTD):
@@ -206,7 +206,7 @@ cat /sys/fs/pstore/dmesg-ramoops-0
 # Useful for debugging early boot crashes or panic storms
 ```
 
-## Observing printk
+## Observing printk {#observing-printk}
 
 ```bash
 # Trace all printk calls:
@@ -220,9 +220,9 @@ kprobe:vprintk_emit {
 # Solution: use async console (ASYNC_CONSOLE) or pstore
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/printk/printk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk.c) — `vprintk_emit()`, `wake_up_klogd()`, `console_flush_all()`: the core implementation
 - [kernel/printk/printk_ringbuffer.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk_ringbuffer.h) — `struct printk_info`, `struct printk_ringbuffer`, `prb_reserve()`/`prb_commit()`: the lock-free ring buffer
@@ -230,24 +230,24 @@ kprobe:vprintk_emit {
 - [include/linux/ratelimit_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ratelimit_types.h) — `DEFINE_RATELIMIT_STATE()` and `__ratelimit()`: the rate-limiting primitives
 - [include/linux/dev_printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dev_printk.h) — `dev_err()`, `dev_info()`, `dev_warn()`, `dev_dbg()`: the device-aware wrappers
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`dmesg(1)`](https://man7.org/linux/man-pages/man1/dmesg.1.html) — reading and filtering the kernel log, including `-T`, `-w`, `-l`, `--clear`
 - [`syslog(2)`](https://man7.org/linux/man-pages/man2/syslog.2.html) — the syscall behind `dmesg`/`klogctl`, and the console-loglevel semantics exposed via `/proc/sys/kernel/printk`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Oops Analysis](../debugging/oops-analysis.md) — reading kernel crash output
 - [kdump](../debugging/kdump.md) — kernel crash dumps
 - [Dynamic Debug](../modules/dynamic-debug.md) — full treatment of `pr_debug()`/`dev_dbg()` and the `dynamic_debug/control` command language
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Reimplementing printk()](https://lwn.net/Articles/780556/) — John Ogness's lockless ring-buffer redesign that the current `printk_ringbuffer` implements
 - [Why printk() is so complicated (and how to fix it)](https://lwn.net/Articles/800946/) — the tension between console output, log levels, and reliability that shapes the current design
 - [Keeping printk() under control](https://lwn.net/Articles/66091/) — the original `printk_ratelimit()` mechanism
 
-### External
+### External {#external}
 
 - [Message logging with printk](https://docs.kernel.org/core-api/printk-basics.html) — the `pr_*()` macros, `KERN_*` log levels, and `pr_fmt()`
 - [dynamic-debug-howto](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — full command language and flag reference for `/sys/kernel/debug/dynamic_debug/control`

@@ -1,8 +1,8 @@
-# sk_buff: The Network Buffer
+# sk_buff: The Network Buffer {#sk_buff-the-network-buffer}
 
 > The central data structure of the Linux network stack
 
-## What sk_buff is
+## What sk_buff is {#what-sk_buff-is}
 
 `struct sk_buff` (socket buffer) is how the kernel represents a network packet. Every packet — from the moment it arrives from hardware to the moment it's delivered to a socket — lives in an `sk_buff`.
 
@@ -12,7 +12,7 @@ The structure has two parts:
 
 Understanding `sk_buff` is fundamental to understanding the entire network stack, since every layer operates on it.
 
-## Memory layout
+## Memory layout {#memory-layout}
 
 ```
 sk_buff metadata:
@@ -41,7 +41,7 @@ As headers are consumed (pop up the stack):
 
 The `headroom` is reserved space before `data` — lower layers (ethernet, IP) push their headers into headroom as the packet goes down the stack. This avoids copying.
 
-## struct sk_buff key fields
+## struct sk_buff key fields {#struct-sk_buff-key-fields}
 
 ```c
 // include/linux/skbuff.h
@@ -89,7 +89,7 @@ struct sk_buff {
 };
 ```
 
-## Data pointer manipulation
+## Data pointer manipulation {#data-pointer-manipulation}
 
 ```c
 // Push data onto the front (add a header going down the stack)
@@ -118,7 +118,7 @@ void *skb_put(struct sk_buff *skb, unsigned int len)
 }
 ```
 
-## Header access macros
+## Header access macros {#header-access-macros}
 
 ```c
 // Get pointer to L2/L3/L4 headers
@@ -142,7 +142,7 @@ struct iphdr *iph = ip_hdr(skb);
 __be32 dst = iph->daddr;
 ```
 
-## The cb[] scratch area
+## The cb[] scratch area {#the-cb-scratch-area}
 
 Each layer has 48 bytes of private storage in `cb[]`. This is a critical design — it avoids separate allocations for per-layer metadata:
 
@@ -165,7 +165,7 @@ struct tcp_skb_cb {
 TCP_SKB_CB(skb)->seq = tcp_seq;
 ```
 
-## Cloning and sharing
+## Cloning and sharing {#cloning-and-sharing}
 
 `skb_clone()` creates a new `sk_buff` that shares the same data buffer. The `cloned` bit is set on both. Useful for sending the same packet to multiple consumers (e.g., packet sockets + forwarding):
 
@@ -177,7 +177,7 @@ struct sk_buff *clone = skb_clone(skb, GFP_ATOMIC);
 
 `skb_copy()` creates a full independent copy.
 
-## Fragmented packets (scatter-gather)
+## Fragmented packets (scatter-gather) {#fragmented-packets-scatter-gather}
 
 For large packets (e.g., TCP offload), data may span multiple pages:
 
@@ -199,7 +199,7 @@ struct skb_shared_info {
 
 Functions like `skb_linearize()` collapse paged data into the linear portion when a driver doesn't support scatter-gather.
 
-## Allocation and freeing
+## Allocation and freeing {#allocation-and-freeing}
 
 ```c
 // Allocate a new sk_buff with headroom for headers
@@ -217,9 +217,9 @@ void consume_skb(struct sk_buff *skb);
 
 `truesize` is charged to the socket's receive buffer (`sk->sk_rmem_alloc`). If the socket buffer fills up, new packets are dropped.
 
-## Why this design?
+## Why this design? {#why-this-design}
 
-### The linear + paged split
+### The linear + paged split {#the-linear-paged-split}
 
 Early sk_buff implementations stored packet data in a single contiguous `kmalloc()` buffer. This worked fine until NICs gained scatter-gather DMA capability in the early 2000s.
 
@@ -232,7 +232,7 @@ The solution was the linear + fragment model:
 
 TCP Segmentation Offload (TSO, ~2002) solidified this: a NIC capable of TSO can take a single large buffer (e.g., 64KB) and split it into MTU-sized Ethernet frames. The kernel sends one sk_buff with the full TCP payload in the paged fragment area; the NIC handles fragmentation. Without paged fragments, the kernel would have had to pre-fragment everything in software.
 
-### Why `skb_shared_info` lives at `skb->end`
+### Why `skb_shared_info` lives at `skb->end` {#why-skbsharedinfo-lives-at-skb-end}
 
 ```c
 /* net/core/skbuff.c: skb data layout */
@@ -251,13 +251,13 @@ static inline struct skb_shared_info *skb_shinfo(const struct sk_buff *skb)
 
 Placing `skb_shared_info` immediately after the linear data buffer (at `skb->end`) avoids a separate heap allocation for the fragment array. The linear buffer and the fragment metadata are allocated together in one `kmalloc()` call. This matters for the hot path: every received packet allocates an sk_buff, and reducing that to one allocation saves significant overhead at high packet rates.
 
-### Cloning and the reference-counted design
+### Cloning and the reference-counted design {#cloning-and-the-reference-counted-design}
 
 `skb_clone()` creates a new sk_buff header that shares the same data buffer. This enables sending the same packet to multiple consumers — a packet socket listener and the normal forwarding path can both "have" the same sk_buff without copying the packet data.
 
 The `cloned` bit signals that the data buffer is shared; any layer that wants to modify headers must call `skb_unshare()` or `pskb_expand_head()` to get its own copy first. This copy-on-write discipline prevents one subsystem from corrupting data that another is reading.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Socket Layer Overview](socket-layer.md) — How sk_buff connects to sockets
 - [Network Device and NAPI](napi.md) — How sk_buffs are allocated during receive

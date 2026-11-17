@@ -1,4 +1,4 @@
-# Devices & Drivers
+# Devices & Drivers {#devices-drivers}
 
 How the kernel discovers hardware, binds drivers to it, and exposes the big device classes — buses, peripherals, and the frameworks that make them look uniform to user space.
 

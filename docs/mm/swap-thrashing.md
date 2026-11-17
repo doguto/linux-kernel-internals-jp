@@ -1,8 +1,8 @@
-# Detecting and preventing swap thrashing
+# Detecting and preventing swap thrashing {#detecting-and-preventing-swap-thrashing}
 
 > When the system spends more time swapping than doing useful work
 
-## What is swap thrashing?
+## What is swap thrashing? {#what-is-swap-thrashing}
 
 Swap thrashing occurs when the system's working set (pages actively in use) exceeds available RAM, forcing the kernel to continuously swap pages in and out. Each page fault triggers disk I/O to bring a page back, but bringing it in evicts another page that will be needed soon. The system becomes unresponsive because it spends most of its time moving pages between RAM and disk instead of running application code.
 
@@ -22,9 +22,9 @@ Thrashing:
 
 The key distinction: normal [swapping](swapping.md) moves cold pages to disk infrequently. Thrashing moves hot pages back and forth continuously.
 
-## How to detect it
+## How to detect it {#how-to-detect-it}
 
-### vmstat: swap in/out rates
+### vmstat: swap in/out rates {#vmstat-swap-inout-rates}
 
 ```bash
 $ vmstat 1
@@ -38,7 +38,7 @@ procs -----------memory---------- ---swap-- -----io----
 - **b** column: many blocked processes waiting on I/O
 - **r** column: runnable processes piling up
 
-### /proc/vmstat counters
+### /proc/vmstat counters {#procvmstat-counters}
 
 ```bash
 $ grep -E 'pswpin|pswpout|pgmajfault' /proc/vmstat
@@ -49,7 +49,7 @@ pgmajfault 934102
 
 Watch these over time. Rapidly increasing `pswpin` and `pswpout` together means pages are being swapped in both directions. High `pgmajfault` (major page faults) confirms pages are being faulted from disk.
 
-### PSI: Pressure Stall Information (v4.20+)
+### PSI: Pressure Stall Information (v4.20+) {#psi-pressure-stall-information-v420}
 
 ```bash
 $ cat /proc/pressure/memory
@@ -63,7 +63,7 @@ full avg10=32.00 avg60=25.88 avg300=14.22 total=62345678
 !!! warning
     Rising `full avg10` indicates all tasks are simultaneously stalled on memory — no productive work is happening. Any sustained `full` pressure warrants investigation. The [PSI documentation](psi.md) describes how to use PSI triggers to act on these signals programmatically.
 
-### Per-cgroup memory pressure
+### Per-cgroup memory pressure {#per-cgroup-memory-pressure}
 
 ```bash
 $ cat /sys/fs/cgroup/myapp/memory.pressure
@@ -73,7 +73,7 @@ full avg10=55.00 avg60=41.30 avg300=28.50 total=31234567
 
 This isolates pressure to a specific workload, which is how `systemd-oomd` detects thrashing at the cgroup level. See [Memory Cgroups](memcg.md) for more on cgroup memory controls.
 
-## Why it happens
+## Why it happens {#why-it-happens}
 
 | Cause | What's going on |
 |-------|----------------|
@@ -83,13 +83,13 @@ This isolates pressure to a specific workload, which is how `systemd-oomd` detec
 | Memory leak | A process slowly consumes all RAM, pushing everything else into swap. |
 | Too many cgroups with soft limits | Multiple cgroups competing for the same memory, each reclaiming from the others. |
 
-## How to fix it
+## How to fix it {#how-to-fix-it}
 
-### 1. Add RAM or reduce the working set
+### 1. Add RAM or reduce the working set {#1-add-ram-or-reduce-the-working-set}
 
 The only real fix for a working set that exceeds RAM is to either add memory or run fewer/smaller workloads.
 
-### 2. Tune vm.swappiness
+### 2. Tune vm.swappiness {#2-tune-vmswappiness}
 
 ```bash
 # Check current value (default is 60)
@@ -102,7 +102,7 @@ $ sysctl -w vm.swappiness=10
 
 Lower values make the kernel prefer dropping file-backed pages (page cache) over swapping anonymous pages. This helps when thrashing is caused by the kernel being too eager to swap. See [Swap](swap.md) for details on how swappiness affects reclaim decisions.
 
-### 3. Use zswap or zram
+### 3. Use zswap or zram {#3-use-zswap-or-zram}
 
 Compressed swap keeps pages in RAM (compressed) instead of writing to disk, dramatically reducing I/O:
 
@@ -122,7 +122,7 @@ $ swapon -p 100 /dev/zram0
 
 zswap/zram can achieve 2-3x compression, effectively expanding usable memory without disk I/O.
 
-### 4. Set cgroup memory limits
+### 4. Set cgroup memory limits {#4-set-cgroup-memory-limits}
 
 Hard limits prevent a single workload from causing system-wide thrashing:
 
@@ -136,7 +136,7 @@ $ echo 3G > /sys/fs/cgroup/myapp/memory.high
 
 `memory.high` triggers throttling and reclaim before hitting the hard limit, providing back-pressure to the application. See [Memory Cgroups](memcg.md).
 
-## The thrashing livelock problem
+## The thrashing livelock problem {#the-thrashing-livelock-problem}
 
 Before kernel v4.20, the system had no good mechanism to detect thrashing at scale. The kernel would:
 
@@ -149,9 +149,9 @@ The system would stay alive but make no forward progress -- a **livelock**. The 
 
 The core problem: the [reclaim](reclaim.md) path had no way to measure whether its work was useful. It could reclaim pages, but couldn't tell that those same pages were being faulted back immediately.
 
-## Modern solutions
+## Modern solutions {#modern-solutions}
 
-### PSI-based OOM (systemd-oomd)
+### PSI-based OOM (systemd-oomd) {#psi-based-oom-systemd-oomd}
 
 Kernel v4.20 introduced [Pressure Stall Information (PSI)](https://docs.kernel.org/accounting/psi.html), which measures the actual impact of resource contention on running tasks. `systemd-oomd` uses PSI to detect thrashing and kill workloads proactively:
 
@@ -175,7 +175,7 @@ $ systemctl status systemd-oomd
 $ cat /etc/systemd/oomd.conf
 ```
 
-### MGLRU: better page aging (v6.1+)
+### MGLRU: better page aging (v6.1+) {#mglru-better-page-aging-v61}
 
 [Multi-Gen LRU (MGLRU)](https://docs.kernel.org/mm/multigen_lru.html) replaces the traditional active/inactive LRU with multiple generations, providing more accurate page age tracking. This reduces thrashing by making better eviction decisions -- the kernel is less likely to evict a page that will be needed soon.
 
@@ -186,7 +186,7 @@ $ cat /sys/kernel/mm/lru_gen/enabled
 
 MGLRU is particularly effective for workloads with large working sets that just barely fit in memory, where the old LRU would thrash but MGLRU correctly identifies the coldest pages.
 
-## Quick diagnostic checklist
+## Quick diagnostic checklist {#quick-diagnostic-checklist}
 
 ```bash
 # 1. Is the system thrashing right now?
@@ -211,7 +211,7 @@ find /sys/fs/cgroup -name memory.pressure \
   -exec sh -c 'echo "=== $1 ==="; cat "$1"' _ {} \;
 ```
 
-## See also
+## See also {#see-also}
 
 - [Swap](swap.md) -- swap architecture and configuration
 - [What happens during swapping](swapping.md) -- the page-level swap in/out lifecycle
@@ -219,7 +219,7 @@ find /sys/fs/cgroup -name memory.pressure \
 - [Running out of memory](oom.md) -- what happens when reclaim and swap both fail
 - [Memory Cgroups](memcg.md) -- isolating and limiting workload memory
 
-## Further reading
+## Further reading {#further-reading}
 
 - [swap](swap.md) — swap architecture, swappiness tuning, and swap types including zswap and zram
 - [reclaim](reclaim.md) — how the kernel selects pages for eviction and the LRU lists that drive reclaim decisions

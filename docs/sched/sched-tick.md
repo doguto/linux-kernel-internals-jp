@@ -1,8 +1,8 @@
-# The Scheduling Tick
+# The Scheduling Tick {#the-scheduling-tick}
 
 > How the kernel drives time-based scheduling: jiffies, HZ, and NOHZ
 
-## The periodic tick
+## The periodic tick {#the-periodic-tick}
 
 The kernel runs a periodic timer interrupt (the "tick") at a rate of `HZ` times per second. The tick drives:
 
@@ -45,7 +45,7 @@ void update_process_times(int user_tick)
 }
 ```
 
-## HZ: the tick rate
+## HZ: the tick rate {#hz-the-tick-rate}
 
 `HZ` is a compile-time constant:
 
@@ -73,7 +73,7 @@ zcat /proc/config.gz | grep "^CONFIG_HZ="
 cat /proc/uptime   # seconds since boot = jiffies/HZ
 ```
 
-## jiffies: coarse-grained time
+## jiffies: coarse-grained time {#jiffies-coarse-grained-time}
 
 `jiffies` is a 64-bit counter incremented every tick:
 
@@ -98,7 +98,7 @@ unsigned long elapsed_ms = jiffies_to_msecs(jiffies - start);
 
 `jiffies` wraps around after `ULONG_MAX / HZ` seconds (~497 days on 32-bit, irrelevant on 64-bit). The `time_after`/`time_before` macros use subtraction to handle wraparound correctly.
 
-## scheduler_tick: preemption check
+## scheduler_tick: preemption check {#scheduler_tick-preemption-check}
 
 ```c
 /* kernel/sched/core.c */
@@ -163,7 +163,7 @@ static void check_preempt_tick(struct cfs_rq *cfs_rq, struct sched_entity *curr)
 }
 ```
 
-## NOHZ idle: stopping the tick when idle
+## NOHZ idle: stopping the tick when idle {#nohz-idle-stopping-the-tick-when-idle}
 
 When a CPU is idle, there's no need to fire the tick interrupt. **NOHZ idle** (CONFIG_NO_HZ_IDLE, enabled by default) suppresses the tick when the CPU is idle:
 
@@ -196,7 +196,7 @@ void tick_nohz_idle_exit(void)
 }
 ```
 
-## NOHZ full: tickless for running tasks
+## NOHZ full: tickless for running tasks {#nohz-full-tickless-for-running-tasks}
 
 **NOHZ full** (CONFIG_NO_HZ_FULL) goes further — it suppresses the tick even when a single task is running on a CPU:
 
@@ -237,7 +237,7 @@ NOHZ full CPUs receive a tick "kick" from CPU 0 when:
 - RCU needs a quiescent state
 - Timers expire
 
-## Tick device and clockevents
+## Tick device and clockevents {#tick-device-and-clockevents}
 
 The tick is driven by a **clock event device** — a hardware timer that can be programmed to fire at a specific time:
 
@@ -278,7 +278,7 @@ cat /sys/bus/clockevents/devices/*/name
 # tsc-deadline (TSC with deadline mode — most efficient)
 ```
 
-## Accounting overhead
+## Accounting overhead {#accounting-overhead}
 
 ```bash
 # See scheduler tick statistics
@@ -292,7 +292,7 @@ perf stat -e cycles:k -C 0 sleep 1 | grep cycles
 grep "^LOC:" /proc/interrupts  # "Local timer interrupts"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Preemption Model](preemption.md) — TIF_NEED_RESCHED and preemption contexts
 - [CFS](cfs.md) — vruntime, sched_slice, ideal_runtime

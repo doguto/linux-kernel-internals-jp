@@ -3,27 +3,27 @@ hide:
   - navigation
 ---
 
-# Linux Kernel Internals
+# Linux Kernel Internals {#linux-kernel-internals}
 
 A community hub for understanding the Linux kernel — documentation and discussions about design decisions, internals, and the journey of contributing.
 
-## What This Is
+## What This Is {#what-this-is}
 
 **Documentation**: Deep dives into kernel subsystems, explaining *why* things work the way they do, not just the APIs.
 
 **Discussion**: A place to ask questions, share discoveries, and help each other understand the kernel.
 
-## Why?
+## Why? {#why}
 
 The kernel has extensive API documentation, but understanding the *rationale* requires digging through mailing list archives, scattered articles, and tribal knowledge. We're building a more accessible resource.
 
-## Documentation
+## Documentation {#documentation}
 
-### General
+### General {#general}
 
 - [Linux Evolution](linux-evolution.md) — from hobby project to world infrastructure
 
-### Subsystems
+### Subsystems {#subsystems}
 
 **Foundations**
 
@@ -78,17 +78,17 @@ The kernel has extensive API documentation, but understanding the *rationale* re
 - [Debugging (debugging/)](debugging/README.md) — tools and techniques for diagnosing kernel problems
 - [Power Management (power/)](power/README.md) — suspend, resume, cpufreq, and idle states
 
-## Community
+## Community {#community}
 
 - [Contributing Guide](contributing.md) to get started as a contributor
 - [GitHub Discussions](https://github.com/laveeshb/linux-kernel-internals/discussions) for questions and conversations
 - [GitHub Issues](https://github.com/laveeshb/linux-kernel-internals/issues) to suggest topics or report problems
 
-## Disclaimer
+## Disclaimer {#disclaimer}
 
 This is a community learning resource, not a definitive reference. The Linux kernel is complex and constantly evolving. While we strive for accuracy and link to primary sources (commits, LKML), errors may exist. When in doubt, consult the [official kernel documentation](https://docs.kernel.org/) and source code. Contributions and corrections are welcome.
 
-## License
+## License {#license}
 
 - Documentation: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
 - Code snippets: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)

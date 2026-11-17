@@ -1,14 +1,14 @@
-# The ALSA PCM Data Path: Ring Buffer, Periods, hw_params, and mmap
+# The ALSA PCM Data Path: Ring Buffer, Periods, hw_params, and mmap {#the-alsa-pcm-data-path-ring-buffer-periods-hw_params-and-mmap}
 
 > One ring buffer shared between a driver's DMA engine and userspace, two pointers that track how full it is, and one interrupt that keeps both sides honest
 
-## The problem: getting audio samples across a driver boundary, continuously
+## The problem: getting audio samples across a driver boundary, continuously {#the-problem-getting-audio-samples-across-a-driver-boundary-continuously}
 
 A sound card doesn't ask for data once — it wants a steady stream of samples arriving (or leaving) at exactly its sample rate, forever, for as long as playback or capture runs. Userspace doesn't work that way: it wakes up, does other things, and comes back later to top up a buffer. Something has to reconcile a hardware DMA engine that consumes or produces samples in fixed lockstep with a scheduler-driven process that fills or drains a buffer in bursts, without either side ever finding the buffer empty (an underrun, an audible glitch) or unread (an overrun, dropped samples).
 
 ALSA's answer is `snd_pcm` — the PCM ("Pulse-Code Modulation") layer that every sound driver, from a USB headset to an HDMI codec to a hardware DSP, implements against. It is one ring buffer per stream direction, a fixed division of that buffer into **periods** that set the interrupt granularity, and two positions — `hw_ptr` and `appl_ptr` — that respectively track how far the hardware has gotten and how far the application has gotten. This page covers the mechanics: the structures a driver and userspace actually touch (`struct snd_pcm_substream`, `struct snd_pcm_runtime`), how a period size and buffer size get negotiated, how userspace gets a zero-copy `mmap()`'d view of the buffer, and how a driver's interrupt handler drives the whole thing forward.
 
-## `struct snd_pcm_substream` and `struct snd_pcm_runtime`
+## `struct snd_pcm_substream` and `struct snd_pcm_runtime` {#struct-sndpcmsubstream-and-struct-sndpcmruntime}
 
 A `struct snd_pcm` is a sound card's PCM device — "device 0," say, a card's default audio device — and it can expose a playback direction, a capture direction, or both, each as a `struct snd_pcm_str`. Opening a device's playback or capture direction gets a process a `struct snd_pcm_substream` (`include/sound/pcm.h`), one per concurrently-open stream:
 
@@ -132,7 +132,7 @@ struct snd_pcm_runtime {
 
 `runtime->private_data` is a driver-owned pointer — most drivers stash a small per-stream struct there (timer state, DMA channel handle, whatever the hardware backend needs) via `.open`, and free it via `.close`. `runtime->hw` (a `struct snd_pcm_hardware`) is the capability description a driver hands back at open time; `runtime->status`/`runtime->control` are the two mmap'd structs that carry `hw_ptr` and `appl_ptr` to userspace, covered in the mmap section below.
 
-## The ring buffer model: periods and frames
+## The ring buffer model: periods and frames {#the-ring-buffer-model-periods-and-frames}
 
 The DMA buffer (`runtime->dma_area`, sized `runtime->dma_bytes`) is a single, contiguous ring. Data is measured in **frames** — one sample per channel, so a frame for 16-bit stereo is 4 bytes; for 24-bit 6-channel it depends on which 24-bit *format* is in use — 18 bytes for the tightly-packed `S24_3LE` (3 bytes/sample), but 24 bytes for the far more common `S24_LE` (which stores the 24-bit value in the low three bytes of a 4-byte container). (`S24_LE`/`S24_3LE` are distinct entries in `SNDRV_PCM_FORMAT_*`, not variants of a single format's `subformat` field — `subformat` is a separate, mostly-unused hw_params dimension of its own, see `SNDRV_PCM_SUBFORMAT_*`.) Frame count itself is independent of format and channel count, which is what lets the rest of the PCM core reason about buffer position without caring what's actually in the bytes.
 
@@ -145,9 +145,9 @@ The size of a period is a direct latency/overhead tradeoff, and it's the central
 
 `buffer_size` itself, independent of how it's divided into periods, sets the outer bound: for playback it's how much audio can be queued before `write()` blocks or an `mmap()`'d ring fills up; for capture it's how long the hardware can keep producing data before an unread buffer overflows. A driver constrains both dimensions via `struct snd_pcm_hardware`, and userspace negotiates a specific point inside those constraints during `hw_params` — the next section.
 
-## hw_params negotiation
+## hw_params negotiation {#hw_params-negotiation}
 
-### The driver's declared capability: `struct snd_pcm_hardware`
+### The driver's declared capability: `struct snd_pcm_hardware` {#the-drivers-declared-capability-struct-sndpcmhardware}
 
 At `.open` time, a driver fills in `runtime->hw` with what its hardware can actually do:
 
@@ -173,7 +173,7 @@ struct snd_pcm_hardware {
 
 `info` carries capability flags like `SNDRV_PCM_INFO_MMAP` (can this stream be `mmap()`'d at all — see below) and `SNDRV_PCM_INFO_INTERLEAVED`/`NONINTERLEAVED` (channel layout in the buffer). `rates`/`formats` are bitmasks (`SNDRV_PCM_RATE_44100`, `SNDRV_PCM_FMTBIT_S16_LE`, and so on); `rate_min`/`rate_max`/`channels_min`/`channels_max` bound the continuous ranges. Drivers can additionally register `hw_constraints` rules (`snd_pcm_hw_constraint_*()`) for relationships the flat `snd_pcm_hardware` struct can't express — e.g., "this channel count is only valid at these specific rates."
 
-### The negotiation itself: refine, then commit
+### The negotiation itself: refine, then commit {#the-negotiation-itself-refine-then-commit}
 
 Userspace's ALSA-lib layer (`snd_pcm_hw_params()` in libasound, not to be confused with the kernel-side function of the same name) works by iteratively narrowing a `struct snd_pcm_hw_params` — a fixed-size array of masks (for enum-like parameters: access mode, format, subformat) and intervals (for ranged parameters: rate, channels, period size, periods, buffer size), indexed by parameter IDs like `SNDRV_PCM_HW_PARAM_ACCESS`, `SNDRV_PCM_HW_PARAM_FORMAT`, `SNDRV_PCM_HW_PARAM_RATE`, `SNDRV_PCM_HW_PARAM_PERIOD_SIZE`, `SNDRV_PCM_HW_PARAM_PERIODS`, `SNDRV_PCM_HW_PARAM_BUFFER_SIZE`, and so on. Each round trip is `SNDRV_PCM_IOCTL_HW_REFINE`, which lands on `snd_pcm_hw_refine()` (`sound/core/pcm_native.c`):
 
@@ -234,11 +234,11 @@ while (runtime->boundary * 2 <= LONG_MAX - runtime->buffer_size)
 
 The stream moves from `SNDRV_PCM_STATE_OPEN` to `SNDRV_PCM_STATE_SETUP`. `boundary` deserves a note: it's not the buffer size — it's the largest power-of-two multiple of `buffer_size` that still fits comfortably below `LONG_MAX` (the doubling loop above), and it's the modulus `hw_ptr` and `appl_ptr` wrap around at (not `buffer_size` itself), which is what lets the core distinguish "the buffer has wrapped N times" from "the pointers are equal" while still doing simple arithmetic on them.
 
-### sw_params: policy, not capability
+### sw_params: policy, not capability {#sw_params-policy-not-capability}
 
 Where `hw_params` describes what the hardware supports, `SNDRV_PCM_IOCTL_SW_PARAMS` (`struct snd_pcm_sw_params`, handled by `snd_pcm_sw_params()`) tunes how the *core* behaves around that hardware — when to auto-start the stream (`start_threshold`, minimum `hw_avail` frames queued before playback starts automatically), when to auto-stop on underrun (`stop_threshold`), and `avail_min`, the minimum available-frame count that triggers a `poll()`/`select()` wakeup — the knob that determines how eagerly a period-driven interrupt actually wakes a blocked userspace process versus letting more accumulate first. `silence_threshold`/`silence_size` are a related but distinct pair: they don't wait for an underrun to fire — `snd_pcm_playback_silence()` (`sound/core/pcm_lib.c`) runs on every hw_ptr update and proactively writes silence into the buffer *ahead* of `hw_ptr`, up to `silence_size` frames, whenever the gap between `hw_ptr` and `appl_ptr` (the "noise distance," i.e. how much real, not-yet-overwritten data is still queued) drops below `silence_threshold`. That keeps the hardware from ever reading stale/garbage samples if userspace falls behind, independent of whether an actual xrun has happened yet.
 
-## The mmap path: a zero-copy view of the ring buffer
+## The mmap path: a zero-copy view of the ring buffer {#the-mmap-path-a-zero-copy-view-of-the-ring-buffer}
 
 For drivers advertising `SNDRV_PCM_INFO_MMAP`, userspace can skip `read()`/`write()` entirely and `mmap()` the ring buffer directly, writing (or reading) sample frames in place. The kernel side is `snd_pcm_mmap_data()` (`sound/core/pcm_native.c`), reached through the PCM device's `mmap` file operation once it's determined the requested offset isn't the status/control page (see below):
 
@@ -290,7 +290,7 @@ int snd_pcm_mmap_data(struct snd_pcm_substream *substream, struct file *file,
 
 It rejects mixing `mmap()` with the interleaved/noninterleaved `read`/`write` access modes (a stream picks one access model at `hw_params` time and sticks to it), bounds-checks the requested VMA against the actual DMA buffer size, and then either calls the driver's own `.mmap` op or falls back to `snd_pcm_lib_default_mmap()`, which either maps the buffer's pages directly (for a `dma_alloc_coherent()`-backed buffer this is often a straight `remap_pfn_range()`-style mapping via `snd_dma_buffer_mmap()`) or installs a page-fault handler (`snd_pcm_mmap_data_fault()`) that resolves individual pages on demand — the path a driver without a linear kernel-virtual DMA mapping takes, calling `substream->ops->page()` per fault.
 
-### The other two mmap regions: status and control
+### The other two mmap regions: status and control {#the-other-two-mmap-regions-status-and-control}
 
 The ring buffer itself is one of three things a PCM file descriptor can be `mmap()`'d for. The other two are fixed-offset, fixed-size structures — `SNDRV_PCM_MMAP_OFFSET_STATUS`/`_CONTROL` — that carry the position pointers, so userspace never needs an ioctl round trip just to check "how much room is left." The uapi header's "base" struct tags are actually `struct __snd_pcm_mmap_status`/`__snd_pcm_mmap_control`, a simplified 32-bit-timestamp layout with 6 and 2 fields respectively. But `include/uapi/sound/asound.h` defines `__SND_STRUCT_TIME64` whenever `__KERNEL__` is set, and under that macro it renames the larger `*64` variants — `struct __snd_pcm_mmap_status64`/`__snd_pcm_mmap_control64` — to the plain names `snd_pcm_mmap_status`/`snd_pcm_mmap_control` via `#define`. So in-kernel (and for y2038-safe 64-bit userspace), those plain names actually resolve to the bigger, padded structs, and `runtime->status`/`runtime->control` point at these, not the smaller ones:
 
@@ -322,7 +322,7 @@ struct snd_pcm_mmap_control {
 
 `runtime->status` and `runtime->control` in `struct snd_pcm_runtime` point at these same structures — the kernel and userspace's mmap'd view are the same memory. `hw_ptr` is written only by the kernel (updated from the driver's `.pointer` callback, see the next section); `appl_ptr` is written by userspace (or, for non-mmap `read()`/`write()` streams, by the kernel on the application's behalf) to say how far it has consumed or produced.
 
-### `appl_ptr` and `hw_ptr`: producer and consumer position
+### `appl_ptr` and `hw_ptr`: producer and consumer position {#applptr-and-hwptr-producer-and-consumer-position}
 
 Both are frame offsets that increase monotonically and wrap at `runtime->boundary`, not at `buffer_size` — the actual position within the ring is `pointer % buffer_size`, but keeping the counters unwrapped past the buffer size is what lets the core tell "the hardware is 1.5 buffers ahead of where it started" from "the hardware is exactly one buffer position ahead," which distinguishes a healthy running stream from one that silently wrapped an extra time. For playback: `hw_ptr` is how far the hardware has *consumed* (played) into the buffer; `appl_ptr` is how far userspace has *written*. The gap between them is exactly the queued-but-not-yet-played data, computed in `snd_pcm_playback_avail()` (`include/sound/pcm.h`) as the inverse — free space still available to write:
 
@@ -341,7 +341,7 @@ static inline snd_pcm_uframes_t snd_pcm_playback_avail(struct snd_pcm_runtime *r
 
 For capture the relationship inverts: `hw_ptr` is how far the hardware has *produced* (captured), `appl_ptr` is how far userspace has *read*, and `snd_pcm_capture_avail()` is simply `hw_ptr - appl_ptr` (mod boundary) — the amount of freshly captured, not-yet-read data. In both directions, the two pointers are only ever allowed to differ by at most `buffer_size` frames; hitting that limit without the consumer catching up is exactly an xrun (an underrun for playback, an overrun for capture).
 
-## Ring buffer diagram
+## Ring buffer diagram {#ring-buffer-diagram}
 
 ```
                      buffer_size = period_size * periods  (here: 4 periods)
@@ -370,7 +370,7 @@ For capture the relationship inverts: `hw_ptr` is how far the hardware has *prod
   One IRQ per period boundary crossed -> snd_pcm_period_elapsed()
 ```
 
-## The interrupt-driven update: `snd_pcm_period_elapsed()`
+## The interrupt-driven update: `snd_pcm_period_elapsed()` {#the-interrupt-driven-update-sndpcmperiod_elapsed}
 
 The driver side of the loop is: an IRQ fires when the DMA engine finishes a period, and the driver's handler calls `snd_pcm_period_elapsed()` (`sound/core/pcm_lib.c`):
 
@@ -421,7 +421,7 @@ Note the contract this puts on a driver's `.pointer` callback: it returns a raw 
 
 Once the position is updated, `snd_pcm_update_hw_ptr0()` itself hands off to `snd_pcm_update_state()`, which is what actually wakes anything sleeping on `runtime->sleep`/`runtime->tsleep` (a blocked `read()`/`write()`, or a `poll()` past `avail_min`) once enough frames are available; back up in `snd_pcm_period_elapsed_under_stream_lock()`, and if `CONFIG_SND_PCM_TIMER` is enabled, it also ticks the PCM's associated ALSA timer for anything subscribed to period-elapsed events that way. This is also the exact point where XRUN and DRAIN handling live: if `.pointer` reports `SNDRV_PCM_POS_XRUN`, `__snd_pcm_xrun()` transitions the stream to `SNDRV_PCM_STATE_XRUN` right here, in interrupt context, and userspace finds out the next time it touches the stream.
 
-## Driver-side callback ops: `struct snd_pcm_ops`
+## Driver-side callback ops: `struct snd_pcm_ops` {#driver-side-callback-ops-struct-sndpcmops}
 
 Everything a driver plugs into the PCM core funnels through one vtable, `substream->ops`:
 
@@ -464,7 +464,7 @@ The core ones for the data path itself:
 - **`.copy`/`.fill_silence`/`.page`** — only needed when a driver can't expose a plain linear kernel-mapped DMA buffer (scattered pages, hardware-specific transfer requirements); most drivers leave these unset and let the core's default linear-buffer path (`memcpy`-based `read`/`write`, direct mmap) handle it.
 - **`.mmap`** — override the default buffer mmap logic (`snd_pcm_lib_default_mmap()`) entirely; most drivers with ordinary DMA-coherent memory leave this NULL.
 
-## Worked example: `sound/drivers/dummy.c`'s systimer backend
+## Worked example: `sound/drivers/dummy.c`'s systimer backend {#worked-example-sounddriversdummycs-systimer-backend}
 
 `sound/drivers/dummy.c` implements a PCM device with no real hardware at all — it exists to test and demonstrate the ALSA PCM core in isolation, which makes it a clean, real, in-tree example of a minimal `.pointer`/`.trigger` implementation rather than a real DMA-driven one. It has two selectable backends for "hardware progress" — a `jiffies`-driven system timer and (if `CONFIG_HIGH_RES_TIMERS` is enabled) an `hrtimer`; the systimer one is simpler to read as a first example.
 
@@ -598,9 +598,9 @@ else
 
 So out of the box, with `fake_buffer` at its default of 1, `dummy.c` actually loads the *nine*-entry `dummy_pcm_ops_no_buf` — because with no real DMA-backed buffer to hand out, it has to implement `.copy`/`.fill_silence`/`.page` itself to shuttle sample data. The plain six-entry `dummy_pcm_ops` above is the minimal-vtable illustration and is what a driver with a real linear DMA buffer would use, but it's only what `dummy.c` itself falls back to when loaded with `fake_buffer=0`. A real hardware driver's `.pointer` reads a DMA position register instead of a jiffies-derived fraction, and its `.trigger` toggles an actual DMA-start bit instead of arming a software timer, but the shape — advance a position, notice period boundaries, call `snd_pcm_period_elapsed()` from whatever interrupt source stands in for "hardware made progress" — is identical.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`include/sound/pcm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/pcm.h) — `struct snd_pcm_substream`, `struct snd_pcm_runtime`, `struct snd_pcm_hardware`, `struct snd_pcm_ops`
 - [`include/uapi/sound/asound.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/sound/asound.h) — the uAPI structs: `snd_pcm_hw_params`, `snd_pcm_sw_params`, `snd_pcm_mmap_status`, `snd_pcm_mmap_control`, ioctl numbers
@@ -608,12 +608,12 @@ So out of the box, with `fake_buffer` at its default of 1, `dummy.c` actually lo
 - [`sound/core/pcm_lib.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/pcm_lib.c) — `snd_pcm_period_elapsed()`, `snd_pcm_update_hw_ptr0()`, hw_params constraint machinery
 - [`sound/drivers/dummy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/drivers/dummy.c) — the worked-example driver above: a complete, minimal `snd_pcm_ops` implementation
 
-### Related pages
+### Related pages {#related-pages}
 
 - [ALSA: the Sound Subsystem](README.md) — where the PCM layer sits in the card/device model
 - [ALSA War Stories](war-stories.md) — Case 1: the `hw_params`/`hw_free` race (CVE-2022-1048) that this page's negotiation and locking machinery shipped without a critical section wide enough to cover
 
-### External
+### External {#external}
 
 - [Writing an ALSA Driver: PCM Interface](https://docs.kernel.org/sound/kernel-api/writing-an-alsa-driver.html#pcm-interface) — the canonical driver-author's guide to `snd_pcm_runtime`, periods, and every `snd_pcm_ops` callback
 - [ALSA PCM Timestamping](https://docs.kernel.org/sound/designs/timestamping.html) — how `hw_ptr` updates relate to the timestamps reported alongside `SNDRV_PCM_IOCTL_STATUS`/`SYNC_PTR`

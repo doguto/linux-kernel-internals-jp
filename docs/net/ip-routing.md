@@ -1,8 +1,8 @@
-# IP Routing
+# IP Routing {#ip-routing}
 
 > How the kernel decides where packets go: routing tables, lookups, and the FIB
 
-## What routing does
+## What routing does {#what-routing-does}
 
 For every packet — inbound or outbound — the kernel asks: "where should this go?" The routing subsystem answers:
 
@@ -12,7 +12,7 @@ For every packet — inbound or outbound — the kernel asks: "where should this
 
 The answer comes from the **FIB (Forwarding Information Base)** — the kernel's routing table.
 
-## The routing tables
+## The routing tables {#the-routing-tables}
 
 Linux supports multiple routing tables (for policy routing):
 
@@ -34,7 +34,7 @@ ip route add 10.0.0.0/8 via 192.168.1.254 dev eth0
 ip rule show
 ```
 
-## FIB internals: LC-trie
+## FIB internals: LC-trie {#fib-internals-lc-trie}
 
 The kernel implements the FIB as an **LC-trie** (Level Compressed trie, a.k.a. Patricia trie) for efficient longest-prefix matching:
 
@@ -72,7 +72,7 @@ int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
 }
 ```
 
-## Route lookup: ip_route_input_noref()
+## Route lookup: ip_route_input_noref() {#route-lookup-iprouteinput_noref}
 
 On receive, routing is called from `ip_rcv_finish()`:
 
@@ -98,7 +98,7 @@ int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
 }
 ```
 
-## Route cache: dst_entry
+## Route cache: dst_entry {#route-cache-dst_entry}
 
 Routing decisions are cached in `struct dst_entry`:
 
@@ -126,7 +126,7 @@ if (!rt) {
 }
 ```
 
-## Policy routing
+## Policy routing {#policy-routing}
 
 Linux supports multiple routing tables and **rules** that select which table to use:
 
@@ -150,7 +150,7 @@ Rules can match on:
 - Firewall mark (`fwmark`)
 - TOS/DSCP field
 
-## ECMP: Equal Cost Multipath
+## ECMP: Equal Cost Multipath {#ecmp-equal-cost-multipath}
 
 Multiple routes to the same destination with equal metric = ECMP:
 
@@ -171,7 +171,7 @@ cat /proc/sys/net/ipv4/fib_multipath_hash_policy
 # 2 = L3+L4
 ```
 
-## Neighbor subsystem: ARP
+## Neighbor subsystem: ARP {#neighbor-subsystem-arp}
 
 IP routing resolves to a next-hop IP, but transmission requires a MAC address. The **neighbor subsystem** maps IP → MAC via ARP:
 
@@ -213,7 +213,7 @@ ip neigh flush dev eth0
 cat /proc/sys/net/ipv4/neigh/default/gc_stale_time  # default: 60s
 ```
 
-## Diagnosing routing issues
+## Diagnosing routing issues {#diagnosing-routing-issues}
 
 ```bash
 # Simulate routing decision
@@ -234,7 +234,7 @@ cat /proc/net/fib_triestat
 netstat -s | grep "destination unreachable"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Life of a Packet (receive)](life-of-packet-rx.md) — Where routing fits in ip_rcv_finish
 - [Life of a Packet (transmit)](life-of-packet-tx.md) — Where ip_queue_xmit uses routing

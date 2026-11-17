@@ -1,14 +1,14 @@
-# Hierarchical Memory Limits
+# Hierarchical Memory Limits {#hierarchical-memory-limits}
 
 > How memory limits and protections propagate through the cgroup v2 tree
 
-## The Problem with Flat Limits
+## The Problem with Flat Limits {#the-problem-with-flat-limits}
 
 A single cgroup limit is easy to reason about: set `memory.max`, and the kernel enforces it. But real deployments are not flat. A Kubernetes node has system services, kubelet, and hundreds of pods. A container runtime has a parent cgroup for the entire runtime, child cgroups per container, and grandchild cgroups per process group. When limits are set at every level, the rules for how they interact matter enormously.
 
 cgroup v2 defines a clear model: limits cascade downward and protections are distributed proportionally. This page explains exactly how that works.
 
-## The Four Knobs, Revisited
+## The Four Knobs, Revisited {#the-four-knobs-revisited}
 
 cgroup v2 exposes four memory control files. Two are **limits** (caps on consumption), and two are **protections** (guarantees against reclaim):
 
@@ -21,7 +21,7 @@ cgroup v2 exposes four memory control files. Two are **limits** (caps on consump
 
 The hierarchy rules for limits and protections are different, and understanding that difference is the key to this page.
 
-## How Limits Cascade: The Effective Limit
+## How Limits Cascade: The Effective Limit {#how-limits-cascade-the-effective-limit}
 
 For `memory.max` and `memory.high`, a child cgroup's **effective limit** is the minimum of its own setting and its parent's remaining headroom. The kernel does not silently override a child's setting; instead, enforcement happens at every level independently.
 
@@ -49,13 +49,13 @@ Charge path for a page allocation (simplified):
     → if any ancestor is at limit: enter reclaim / OOM
 ```
 
-## How Protections Are Distributed
+## How Protections Are Distributed {#how-protections-are-distributed}
 
 Protection (`memory.min` and `memory.low`) works differently from limits. When a child's protection is considered during global reclaim, the kernel must compute the **effective protection** — the amount the child can actually keep, given what the parent can guarantee.
 
 The calculation is defined in `mem_cgroup_calculate_protection()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c). The kernel documentation at [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) describes the model as follows: a child's effective protection is the minimum of its own configured protection and the parent's protection, distributed proportionally when the sum of children's protections exceeds the parent's.
 
-### The Proportional Distribution Formula
+### The Proportional Distribution Formula {#the-proportional-distribution-formula}
 
 When the sum of sibling protections exceeds the parent's protection, each child receives a proportional share:
 
@@ -82,7 +82,7 @@ Sum of children = 5G, parent protection = 4G. Since 5G > 4G, each child gets a p
 
 If the sum of children's protections is ≤ the parent's protection, each child gets its full configured value.
 
-## A Three-Level Hierarchy: System → Service → Container
+## A Three-Level Hierarchy: System → Service → Container {#a-three-level-hierarchy-system-service-container}
 
 Here is a concrete example with three levels. The system has 16G of RAM, a `system.slice` cgroup for all services, a `myapp.service` cgroup for a single application, and `worker` and `sidecar` containers inside it.
 
@@ -93,7 +93,7 @@ system.slice   (memory.max = 12G, memory.min = 2G)
     └── sidecar    (memory.max = 2G,  memory.min = 1G)
 ```
 
-### Enforcing limits from this hierarchy
+### Enforcing limits from this hierarchy {#enforcing-limits-from-this-hierarchy}
 
 ```
 system.slice:   effective max = 12G
@@ -104,7 +104,7 @@ sidecar:        effective max = min(2G, 8G)   = 2G
 
 If `worker` uses 6G and `sidecar` tries to allocate 3G, `sidecar` will be throttled at its own 2G `memory.max`, not at the parent level. But if `worker` uses 6G and `sidecar` uses 2G (8G total), `myapp.service` has no more headroom — any further allocation from either child triggers reclaim at the `myapp.service` level.
 
-### Protection distribution from this hierarchy
+### Protection distribution from this hierarchy {#protection-distribution-from-this-hierarchy}
 
 ```
 myapp.service:  memory.min = 3G
@@ -123,7 +123,7 @@ If the sum equaled the parent exactly, no proportional scaling is needed. Now su
   sidecar effective protection = 3G × (2G/4G) = 1.5G
 ```
 
-### What happens when a child exceeds its limit but the parent has headroom
+### What happens when a child exceeds its limit but the parent has headroom {#what-happens-when-a-child-exceeds-its-limit-but-the-parent-has-headroom}
 
 The parent having headroom does not prevent a child's `memory.max` from triggering. A child at its own limit is throttled or OOM-killed even if the parent still has free capacity. The cgroup hierarchy enforces limits at every level independently — a child cannot "borrow" from the parent's unused headroom.
 
@@ -137,7 +137,7 @@ worker's OOM killer, even though myapp.service has 5G free.
 
 To allow a child to use the parent's headroom, either raise the child's limit or remove it entirely (set `memory.max = max`).
 
-## Hierarchical Counters in memory.stat
+## Hierarchical Counters in memory.stat {#hierarchical-counters-in-memorystat}
 
 In cgroup v2, **all** `memory.stat` fields are hierarchical — they include the full subtree (the cgroup itself plus all descendants). This is unlike cgroup v1 where some fields were per-cgroup only.
 
@@ -163,7 +163,7 @@ echo $((parent - worker - sidecar))  # local usage only
 
 The `memory.stat` file itself contains key fields whose scope is always the hierarchical subtree in cgroup v2. The documentation in [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) notes that `memory.stat` values "account for the entire subtree."
 
-### Key memory.stat fields and their meaning
+### Key memory.stat fields and their meaning {#key-memorystat-fields-and-their-meaning}
 
 ```bash
 cat /sys/fs/cgroup/myapp.service/worker/memory.stat
@@ -196,7 +196,7 @@ workingset_refault_anon 0    # anonymous pages re-faulted after reclaim
 workingset_refault_file 64   # file pages re-faulted after reclaim
 ```
 
-## Watching Hierarchical Limits with memory.events
+## Watching Hierarchical Limits with memory.events {#watching-hierarchical-limits-with-memoryevents}
 
 Each cgroup has a `memory.events` file. In cgroup v2, there is also `memory.events.local` for events attributed only to that cgroup (not its children).
 
@@ -217,7 +217,7 @@ cat /sys/fs/cgroup/myapp.service/memory.events.local
 
 `memory.events.local` was introduced alongside the hierarchical event propagation model. See [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) for the full field list.
 
-## Setting Up a Three-Level Hierarchy
+## Setting Up a Three-Level Hierarchy {#setting-up-a-three-level-hierarchy}
 
 ```bash
 # Create the hierarchy
@@ -250,9 +250,9 @@ for cg in myapp.service myapp.service/worker myapp.service/sidecar; do
 done
 ```
 
-## Common Mistakes
+## Common Mistakes {#common-mistakes}
 
-### Setting child protections larger than the parent
+### Setting child protections larger than the parent {#setting-child-protections-larger-than-the-parent}
 
 ```
 parent: memory.min = 1G
@@ -263,15 +263,15 @@ sum = 1.2G > 1G
 
 This is allowed, but each child's effective protection is scaled down to 500M. The kernel will not warn you. Audit child protections relative to parent protections to ensure your guarantees are real.
 
-### Assuming parent headroom is available to children
+### Assuming parent headroom is available to children {#assuming-parent-headroom-is-available-to-children}
 
 A child cgroup that has been given `memory.max = 1G` will be OOM-killed at 1G even if its parent cgroup has 10G of free capacity. The limit is per-cgroup, not "available within parent."
 
-### Forgetting that memory.current is hierarchical
+### Forgetting that memory.current is hierarchical {#forgetting-that-memorycurrent-is-hierarchical}
 
 If a parent cgroup's `memory.current` equals its `memory.max`, the parent is at its limit even if no individual child is at its limit. The combined usage of all children has reached the parent's cap.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevant functions |
 |------|--------------------|
@@ -279,45 +279,45 @@ If a parent cgroup's `memory.current` equals its `memory.max`, the parent is at 
 | [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`, `mem_cgroup_protection()` inline |
 | [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) | Authoritative description of the distribution model |
 
-## History
+## History {#history}
 
-### cgroup v2 Memory Controller (v4.5, 2016)
+### cgroup v2 Memory Controller (v4.5, 2016) {#cgroup-v2-memory-controller-v45-2016}
 
 The cgroup v2 memory controller, including the hierarchical protection model, was declared production-ready in v4.5 ([commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)). The proportional protection model replaced the simpler v1 approach and was specifically designed for multi-tenant workloads. See [LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/).
 
-### memory.low and memory.min (v4.18, 2018)
+### memory.low and memory.min (v4.18, 2018) {#memorylow-and-memorymin-v418-2018}
 
 `memory.low` (best-effort protection) and `memory.min` (hard protection) were introduced as part of the memory protection model described in [LWN: Putting cgroup memory protection back together](https://lwn.net/Articles/762472/). The `mem_cgroup_calculate_protection()` function implementing the proportional distribution calculation was developed by Tejun Heo and Roman Gushchin.
 
-### memory.events.local
+### memory.events.local {#memoryeventslocal}
 
 `memory.events.local` was added to distinguish per-cgroup events from hierarchical events, allowing operators to determine whether a parent cgroup's OOM event was caused by a child or its own processes. See [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) for the version it was introduced.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory controller: limit enforcement, protection calculation |
 | [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg struct and API |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — authoritative cgroup v2 reference, including the protection distribution model
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — cgroup v2 reaching production readiness
 - [Putting cgroup memory protection back together](https://lwn.net/Articles/762472/) — memory.low and memory.min design
 
-### Related
+### Related {#related}
 
 - [Memory Cgroups](memcg.md) — memcg fundamentals and v1 vs v2
 - [Tuning memory for containers](tuning-containers.md) — practical limit-setting guide
 - [memory.stat reference](memory-stat.md) — all memory.stat fields explained
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `mem_cgroup_calculate_protection()` for the proportional protection formula; `try_charge()` for the limit-enforcement walk up the cgroup tree; `mem_cgroup_margin()` for headroom calculation
 - `Documentation/admin-guide/cgroup-v2.rst` — the canonical description of how effective limits and protections are computed when child and parent settings interact, including the proportional distribution model

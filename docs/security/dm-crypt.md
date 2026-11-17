@@ -1,8 +1,8 @@
-# dm-crypt: Block-Level Encryption
+# dm-crypt: Block-Level Encryption {#dm-crypt-block-level-encryption}
 
 > Device mapper encryption target, LUKS2 key management, and AES-XTS
 
-## Architecture
+## Architecture {#architecture}
 
 dm-crypt sits in the device mapper stack, transparently encrypting/decrypting all I/O between the filesystem and the block device:
 
@@ -25,7 +25,7 @@ dmsetup table /dev/mapper/cryptroot
 # sectors:    cipher           key          IV mode
 ```
 
-## LUKS2 on-disk format
+## LUKS2 on-disk format {#luks2-on-disk-format}
 
 LUKS (**L**inux **U**nified **K**ey **S**etup) is the standard format for dm-crypt headers. LUKS2 (since kernel 4.12 / cryptsetup 2.0):
 
@@ -54,7 +54,7 @@ LUKS2 on-disk layout:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Key derivation (PBKDF2/Argon2)
+### Key derivation (PBKDF2/Argon2) {#key-derivation-pbkdf2argon2}
 
 ```
 User passphrase
@@ -67,7 +67,7 @@ Master key (256-bit for AES-256-XTS)
 
 Argon2id (LUKS2 default) is memory-hard — defeating GPU brute-force attacks.
 
-## cryptsetup: LUKS management
+## cryptsetup: LUKS management {#cryptsetup-luks-management}
 
 ```bash
 # Create LUKS2 container:
@@ -122,7 +122,7 @@ cryptsetup open /dev/sda1 mydev --key-file /root/keyfile
 cryptsetup luksKillSlot /dev/sda1 1   # remove slot 1
 ```
 
-## dm-crypt kernel target
+## dm-crypt kernel target {#dm-crypt-kernel-target}
 
 The kernel-side implementation is in `drivers/md/dm-crypt.c`:
 
@@ -158,7 +158,7 @@ struct crypt_config {
 };
 ```
 
-### Encryption path (write)
+### Encryption path (write) {#encryption-path-write}
 
 ```c
 /* dm-crypt intercepts every bio: */
@@ -193,7 +193,7 @@ static void kcryptd_crypt_write_io_submit(struct crypt_io *io, int async)
 }
 ```
 
-### IV modes
+### IV modes {#iv-modes}
 
 ```
 plain64:   IV = sector_number (64-bit)
@@ -211,7 +211,7 @@ aes-xts-plain64 (recommended):
            Standard for disk encryption (IEEE P1619)
 ```
 
-## Performance
+## Performance {#performance}
 
 ```bash
 # Benchmark cipher options:
@@ -239,7 +239,7 @@ fio --filename=/dev/sda1 --direct=1 --rw=read --bs=128k \
 # With AES-NI: typically < 5% overhead
 ```
 
-## /etc/crypttab: persistent configuration
+## /etc/crypttab: persistent configuration {#etccrypttab-persistent-configuration}
 
 ```bash
 # /etc/crypttab format: name device keyfile options
@@ -258,7 +258,7 @@ blkid /dev/sda1 | grep UUID
 cryptroot   UUID=abc123-...   none   luks
 ```
 
-## LUKS vs plain dm-crypt
+## LUKS vs plain dm-crypt {#luks-vs-plain-dm-crypt}
 
 ```bash
 # Plain dm-crypt (no LUKS header, no key management):
@@ -272,7 +272,7 @@ cryptsetup open --type plain \
 # But: can't add multiple keys, no integrity checking
 ```
 
-## dm-integrity: authentication
+## dm-integrity: authentication {#dm-integrity-authentication}
 
 dm-crypt provides confidentiality but not integrity. dm-integrity adds authentication tags:
 
@@ -291,7 +291,7 @@ cryptsetup luksFormat --type luks2 \
 # Adds HMAC tag per 512-byte sector → detects tampering
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # dm-crypt stats:
@@ -323,7 +323,7 @@ kretprobe:kcryptd_crypt_write_convert /@start[tid]/
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Btrfs](../filesystems/btrfs.md) — commonly used filesystem on top of dm-crypt
 - [ext4 Journaling](../filesystems/ext4-journal.md) — filesystem below dm-crypt

@@ -1,10 +1,10 @@
-# Contributing to Linux Kernel Internals
+# Contributing to Linux Kernel Internals {#contributing-to-linux-kernel-internals}
 
 > **Reading this on the website?** Head to the [GitHub repository](https://github.com/laveeshb/linux-kernel-internals) to contribute, open issues, or join discussions.
 
 Thank you for your interest in contributing! This project aims to document Linux kernel internals in an accessible, engaging way.
 
-## Project Philosophy
+## Project Philosophy {#project-philosophy}
 
 This is **not** another reference documenting what the Linux kernel looks like today. The official [kernel documentation](https://docs.kernel.org/) already does that well.
 
@@ -17,9 +17,9 @@ Instead, we focus on:
 
 When writing, don't just explain *what* the code does - help readers understand the reasoning behind design decisions, the historical context, and how things changed over kernel versions. Link to commits, mailing list discussions, and conference talks that capture these decisions.
 
-## How to Contribute
+## How to Contribute {#how-to-contribute}
 
-### Finding Work
+### Finding Work {#finding-work}
 
 Browse [open issues](https://github.com/laveeshb/linux-kernel-internals/issues) and filter by [labels](https://github.com/laveeshb/linux-kernel-internals/labels):
 
@@ -32,7 +32,7 @@ Browse [open issues](https://github.com/laveeshb/linux-kernel-internals/issues) 
 
 Look for `good first issue` if you're new to the project.
 
-### Workflow
+### Workflow {#workflow}
 
 1. **Fork** the repository
 2. **Create a branch** from `main` (e.g., `add-kasan-docs`)
@@ -41,22 +41,22 @@ Look for `good first issue` if you're new to the project.
 5. **Submit a PR** with a clear description
 6. **Address feedback** from reviewers
 
-### Pull Request Requirements
+### Pull Request Requirements {#pull-request-requirements}
 
 - PRs require **1 approval** before merging
 - Keep PRs focused on a single topic
 - Link to the relevant issue (e.g., "Closes #42")
 
-## Writing Style Guide
+## Writing Style Guide {#writing-style-guide}
 
-### Voice and Tone
+### Voice and Tone {#voice-and-tone}
 
 - **Accessible but accurate** - Explain complex topics clearly without sacrificing correctness
 - **Teach, don't just document** - Help readers understand *why*, not just *what*
 - **Use active voice** - "The kernel allocates pages" not "Pages are allocated by the kernel"
 - **Be concise** - Avoid filler words and unnecessary jargon
 
-### Document Structure
+### Document Structure {#document-structure}
 
 Every document should follow this general structure:
 
@@ -90,7 +90,7 @@ When features were added, why decisions were made.
 Links to kernel docs, LWN articles, relevant commits.
 ```
 
-### Formatting Conventions
+### Formatting Conventions {#formatting-conventions}
 
 **Headers**
 
@@ -130,7 +130,7 @@ graph LR
     B --> C[Kernel]
 ```
 
-### Content Guidelines
+### Content Guidelines {#content-guidelines}
 
 **Do include:**
 
@@ -149,7 +149,7 @@ graph LR
 - Marketing language or hype
 - Commercial sources (vendor blogs, product documentation, sponsored content)
 
-### Sourcing Claims
+### Sourcing Claims {#sourcing-claims}
 
 Every claim, opinion, or technical statement should be backed by verifiable sources:
 
@@ -177,7 +177,7 @@ The buddy allocator coalesces free blocks to reduce fragmentation
 [commit abc123](https://git.kernel.org/...)).
 ```
 
-### Linking to Kernel Source
+### Linking to Kernel Source {#linking-to-kernel-source}
 
 When referencing kernel code:
 
@@ -191,7 +191,7 @@ The [`alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/l
 function is the primary interface...
 ```
 
-### Referencing Commits
+### Referencing Commits {#referencing-commits}
 
 When a feature was introduced or changed, link to the commit:
 
@@ -201,16 +201,16 @@ This was introduced in kernel 5.18
 "mm: add feature X").
 ```
 
-## Technical Accuracy
+## Technical Accuracy {#technical-accuracy}
 
-### Verification
+### Verification {#verification}
 
 - Test commands before including them
 - Verify kernel version information
 - Cross-reference with official kernel documentation
 - When unsure, note it: "As of kernel 6.x..." or "This may vary by configuration"
 
-### Review Process
+### Review Process {#review-process}
 
 Reviewers will check for:
 
@@ -220,9 +220,9 @@ Reviewers will check for:
 - Working code examples
 - Proper linking and references
 
-## Local Development
+## Local Development {#local-development}
 
-### Setup
+### Setup {#setup}
 
 ```bash
 # Clone your fork
@@ -240,11 +240,11 @@ pip install mkdocs mkdocs-material
 mkdocs serve
 ```
 
-### Preview
+### Preview {#preview}
 
 Open `http://127.0.0.1:8000` to preview your changes. The server auto-reloads on file changes.
 
-### Build
+### Build {#build}
 
 ```bash
 mkdocs build
@@ -252,7 +252,7 @@ mkdocs build
 
 Check for warnings in the build output.
 
-## Commit Messages
+## Commit Messages {#commit-messages}
 
 Write clear, descriptive commit messages:
 
@@ -276,12 +276,12 @@ Add KASAN documentation
 - Use vague messages like "Update docs"
 - Include unrelated changes in one commit
 
-## Questions?
+## Questions? {#questions}
 
 - Open a [Discussion](https://github.com/laveeshb/linux-kernel-internals/discussions) for questions
 - File an [Issue](https://github.com/laveeshb/linux-kernel-internals/issues) for bugs or suggestions
 
-## License
+## License {#license}
 
 By contributing, you agree that your contributions will be licensed under the same dual license as the project:
 

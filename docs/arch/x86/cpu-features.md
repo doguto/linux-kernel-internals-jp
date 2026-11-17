@@ -1,4 +1,4 @@
-# x86 CPU Features and Alternatives
+# x86 CPU Features and Alternatives {#x86-cpu-features-and-alternatives}
 
 > CPUID, feature flags, alternative patching, and hardware capabilities
 
@@ -6,7 +6,7 @@ The kernel must run on CPUs spanning decades of x86 evolution — from early Pen
 
 ---
 
-## CPUID: querying CPU capabilities
+## CPUID: querying CPU capabilities {#cpuid-querying-cpu-capabilities}
 
 `CPUID` is the x86 instruction for enumerating CPU capabilities. The caller loads a **leaf number** into `EAX` (and sometimes a subleaf into `ECX`) before executing `CPUID`. The CPU returns capability bits in `EAX`, `EBX`, `ECX`, and `EDX`.
 
@@ -70,7 +70,7 @@ static inline void cpuid_count(unsigned int op, int count,
 
 ---
 
-## x86_capability[]: the kernel's feature bitmask
+## x86_capability[]: the kernel's feature bitmask {#x86_capability-the-kernels-feature-bitmask}
 
 After parsing all CPUID leaves, the kernel stores CPU features in the `x86_capability` array inside `struct cpuinfo_x86`:
 
@@ -125,11 +125,11 @@ extern struct cpuinfo_x86 boot_cpu_data;
 
 ---
 
-## Three ways to check CPU features
+## Three ways to check CPU features {#three-ways-to-check-cpu-features}
 
 The kernel provides three macros for checking features, with different performance characteristics:
 
-### 1. cpu_has(): runtime check
+### 1. cpu_has(): runtime check {#1-cpu_has-runtime-check}
 
 ```c
 /* arch/x86/include/asm/cpufeature.h */
@@ -143,7 +143,7 @@ if (cpu_has(&boot_cpu_data, X86_FEATURE_PCID)) {
 
 `cpu_has()` is a runtime check — it reads from the `x86_capability` array. Use this when you need to check a specific CPU (not just the boot CPU), or in early boot before alternatives are patched.
 
-### 2. boot_cpu_has(): boot-time check
+### 2. boot_cpu_has(): boot-time check {#2-bootcpuhas-boot-time-check}
 
 ```c
 #define boot_cpu_has(bit) cpu_has(&boot_cpu_data, bit)
@@ -155,7 +155,7 @@ if (boot_cpu_has(X86_FEATURE_PCID))
 
 `boot_cpu_has()` checks the boot CPU's feature flags. Used for one-time setup decisions during boot. These calls are not patched by the alternatives mechanism.
 
-### 3. static_cpu_has(): compile-time patched
+### 3. static_cpu_has(): compile-time patched {#3-staticcpuhas-compile-time-patched}
 
 ```c
 #define static_cpu_has(bit) __static_cpu_has(bit)
@@ -179,11 +179,11 @@ After patching, the check becomes a single unconditional branch — zero overhea
 
 ---
 
-## Alternative patching
+## Alternative patching {#alternative-patching}
 
 The **alternative** mechanism allows the kernel to ship with safe, conservative code and then patch in optimized instruction sequences at boot time based on the actual CPU capabilities.
 
-### The ALTERNATIVE macro
+### The ALTERNATIVE macro {#the-alternative-macro}
 
 ```c
 /* arch/x86/include/asm/alternative.h */
@@ -205,7 +205,7 @@ The **alternative** mechanism allows the kernel to ship with safe, conservative 
 
 The default instruction (`orig_insn`) is emitted inline in the `.text` section. The replacement instruction (`alt_insn`) is placed in `.altinstr_replacement`. A descriptor (`struct alt_instr`) is placed in `.altinstructions` to describe the patching.
 
-### struct alt_instr
+### struct alt_instr {#struct-alt_instr}
 
 ```c
 /* arch/x86/include/asm/alternative.h */
@@ -218,7 +218,7 @@ struct alt_instr {
 };
 ```
 
-### apply_alternatives() at boot
+### apply_alternatives() at boot {#apply_alternatives-at-boot}
 
 ```c
 /* arch/x86/kernel/alternative.c */
@@ -244,7 +244,7 @@ void __init_or_module apply_alternatives(struct alt_instr *start,
 
 `apply_alternatives()` is called during `start_kernel()` via `alternative_instructions()`. It iterates the `.altinstructions` section and patches each instruction in place using `text_poke_early()` (which temporarily makes `.text` writable).
 
-### Real examples of alternative use
+### Real examples of alternative use {#real-examples-of-alternative-use}
 
 ```c
 /* LOCK prefix: present on SMP, patched out to NOP on uniprocessor (UP) kernels */
@@ -259,7 +259,7 @@ ALTERNATIVE("", "lfence", X86_FEATURE_LFENCE_RDTSC)
 
 ---
 
-## CPU bug flags: x86_bugs[]
+## CPU bug flags: x86_bugs[] {#cpu-bug-flags-x86_bugs}
 
 In addition to feature flags, the kernel maintains a set of **bug flags** in the upper `NBUGINTS` words of `x86_capability[]`. These are set during early CPU detection to indicate that a CPU requires a mitigation:
 
@@ -316,9 +316,9 @@ void __init check_bugs(void)
 
 ---
 
-## Key CPU features in the kernel
+## Key CPU features in the kernel {#key-cpu-features-in-the-kernel}
 
-### X86_FEATURE_FSGSBASE
+### X86_FEATURE_FSGSBASE {#x86featurefsgsbase}
 
 Adds `RDFSBASE`, `WRFSBASE`, `RDGSBASE`, `WRGSBASE` instructions — fast reads and writes of the FS and GS segment base registers without going through the MSR interface.
 
@@ -327,7 +327,7 @@ Adds `RDFSBASE`, `WRFSBASE`, `RDGSBASE`, `WRGSBASE` instructions — fast reads 
 
 The kernel enables FSGSBASE (sets `CR4.FSGSBASE`) if the CPU supports it. Support was added in **Linux 5.9**.
 
-### X86_FEATURE_INVPCID
+### X86_FEATURE_INVPCID {#x86featureinvpcid}
 
 `INVPCID` (Invalidate Process-Context Identifier) instruction: selectively invalidate TLB entries by PCID and virtual address, or flush all non-global entries for a specific PCID.
 
@@ -335,25 +335,25 @@ Without INVPCID, PCID flushing requires writing CR3 (which flushes all TLB entri
 
 Some early Haswell CPUs support PCID but not INVPCID — the kernel detects this and falls back to CR3-based flushing.
 
-### X86_FEATURE_PKU
+### X86_FEATURE_PKU {#x86featurepku}
 
 **Protection Keys for Userspace (PKU)**: allows user-space code to mark memory regions with a 4-bit "protection key." The `PKRU` register controls access rights (read/write disable) for each of the 16 possible keys, without requiring a syscall or page table modification.
 
 Useful for isolating sensitive data within a process (e.g., OpenSSL's private keys). Kernel support added in **Linux 4.6**.
 
-### X86_FEATURE_UMIP
+### X86_FEATURE_UMIP {#x86featureumip}
 
 **User-Mode Instruction Prevention**: when `CR4.UMIP = 1`, executing `SGDT`, `SIDT`, `SLDT`, `SMSW`, or `STR` in ring 3 generates a #GP instead of returning hardware descriptor table addresses.
 
 Prevents user processes from learning the addresses of IDT, GDT, and LDT — useful for defeating ASLR bypasses. Linux enables UMIP automatically when available.
 
-### X86_FEATURE_RDRAND
+### X86_FEATURE_RDRAND {#x86featurerdrand}
 
 `RDRAND` instruction: hardware random number generator that returns cryptographically random values. The kernel uses it as an entropy source for `/dev/random` and friends. Note: `RDRAND` alone is not trusted as the sole entropy source in the kernel (a bug in Intel's implementation of `RDRAND` was discovered on some Ivy Bridge systems returning constant values).
 
 ---
 
-## Observing CPU features
+## Observing CPU features {#observing-cpu-features}
 
 ```bash
 # Feature flags as detected by the kernel (same as CPUID output, filtered)
@@ -388,7 +388,7 @@ dmesg | grep -i pcid
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 | Feature | Linux version | Notes |
 |---------|--------------|-------|
@@ -401,16 +401,16 @@ dmesg | grep -i pcid
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [arch/x86/include/asm/cpufeatures.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/cpufeatures.h) — the full feature-bit vocabulary (`X86_FEATURE_*`)
 - [arch/x86/kernel/cpu/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/common.c) — `get_cpu_cap()` and boot-time detection
 - [arch/x86/kernel/alternative.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/alternative.c) — the runtime patching engine behind `ALTERNATIVE`
 - [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) — Vol. 2A documents every CPUID leaf
 
-### Related pages
+### Related pages {#related-pages}
 
 - [ARM64 CPU Features](../arm64/cpu-features.md) — the system-register equivalent of CPUID, and arm64's alternatives engine
 - [Kernel Hardening](../../security/kernel-hardening.md) — mitigations selected via these feature/bug bits

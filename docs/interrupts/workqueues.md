@@ -1,14 +1,14 @@
-# Workqueues
+# Workqueues {#workqueues}
 
 > Process-context deferred work — the right choice for most drivers
 
-## What are workqueues?
+## What are workqueues? {#what-are-workqueues}
 
 Workqueues are the most flexible deferred work mechanism in the kernel. Unlike softirqs and tasklets, workqueue handlers run in **process context** — they can sleep, take mutexes, do memory allocation with `GFP_KERNEL`, and perform any operation that's valid in a kernel thread.
 
 The kernel automatically manages a pool of worker threads. Each work item is queued and run when a worker becomes available.
 
-## Work items and initialization
+## Work items and initialization {#work-items-and-initialization}
 
 ```c
 #include <linux/workqueue.h>
@@ -41,7 +41,7 @@ INIT_WORK(&dev->work, my_work_handler);
 INIT_DELAYED_WORK(&dev->dwork, my_delayed_work_handler);
 ```
 
-## Scheduling work
+## Scheduling work {#scheduling-work}
 
 ```c
 /* Queue on the system workqueue (runs as soon as worker is free) */
@@ -60,7 +60,7 @@ cancel_work_sync(&dev->work);
 
 `schedule_work()` is idempotent: if the work is already pending, calling it again does nothing. The work will run exactly once.
 
-## System workqueues
+## System workqueues {#system-workqueues}
 
 The kernel provides several pre-built workqueues for different priorities and behaviors:
 
@@ -80,7 +80,7 @@ queue_delayed_work(system_wq, &dev->dwork, delay);
 
 For most drivers, `system_wq` (accessed via `schedule_work()`) is the right choice.
 
-## Creating a private workqueue
+## Creating a private workqueue {#creating-a-private-workqueue}
 
 For work that needs specific concurrency control or isolation from system work:
 
@@ -107,7 +107,7 @@ drain_workqueue(wq);
 destroy_workqueue(wq);
 ```
 
-## WQ flags
+## WQ flags {#wq-flags}
 
 | Flag | Meaning |
 |------|---------|
@@ -117,7 +117,7 @@ destroy_workqueue(wq);
 | `WQ_FREEZABLE` | Work freezes during system suspend |
 | `WQ_SYSFS` | Expose workqueue in `/sys/bus/workqueue/devices/` |
 
-## Concurrency-managed workqueues (cmwq)
+## Concurrency-managed workqueues (cmwq) {#concurrency-managed-workqueues-cmwq}
 
 Since Linux 2.6.36, the kernel uses **concurrency-managed workqueues** (cmwq), introduced by Tejun Heo [(LWN)](https://lwn.net/Articles/394084/). Instead of one thread per CPU, the kernel maintains a pool of workers and dynamically creates/destroys threads based on demand.
 
@@ -137,7 +137,7 @@ When Worker B wakes:
 
 This avoids both CPU underutilization (when workers sleep) and thread explosion (cmwq reuses workers intelligently).
 
-## flush_work vs cancel_work
+## flush_work vs cancel_work {#flushwork-vs-cancelwork}
 
 ```c
 /* Wait for a specific work item to finish */
@@ -164,7 +164,7 @@ static void my_driver_remove(struct platform_device *pdev)
 }
 ```
 
-## Observing workqueue activity
+## Observing workqueue activity {#observing-workqueue-activity}
 
 ```bash
 # List workqueues and worker thread counts
@@ -180,7 +180,7 @@ ps aux | grep kworker
 cat /proc/sys/kernel/watchdog_thresh
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Softirqs](softirq.md) — Lower-level, non-sleeping deferred work
 - [Tasklets](tasklets.md) — Simpler but deprecated, non-sleeping

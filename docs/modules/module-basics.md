@@ -1,8 +1,8 @@
-# Writing and Loading Kernel Modules
+# Writing and Loading Kernel Modules {#writing-and-loading-kernel-modules}
 
 > The lifecycle of a kernel module from source to running code
 
-## A minimal kernel module
+## A minimal kernel module {#a-minimal-kernel-module}
 
 ```c
 /* hello.c */
@@ -62,7 +62,7 @@ dmesg | tail -3
 # [12346.789] Goodbye, kernel!
 ```
 
-## Module lifecycle
+## Module lifecycle {#module-lifecycle}
 
 ```
 insmod/modprobe                                rmmod
@@ -91,7 +91,7 @@ load_module()                                  delete_module()
         └── return -errno: module unloaded immediately
 ```
 
-## Module sections
+## Module sections {#module-sections}
 
 A module `.ko` file is an ELF with special sections:
 
@@ -108,7 +108,7 @@ objdump -h hello.ko | grep -E "(\.init|\.exit|\.text|\.data|\.rodata|__param|\.m
 
 The `__init` attribute marks functions that should be freed after the module init runs (saving memory). Similarly `__exit` code can be discarded on permanent modules.
 
-## /proc/modules
+## /proc/modules {#procmodules}
 
 ```bash
 lsmod
@@ -127,7 +127,7 @@ cat /proc/modules
 cat /lib/modules/$(uname -r)/modules.dep | grep e1000e
 ```
 
-## The module struct in the kernel
+## The module struct in the kernel {#the-module-struct-in-the-kernel}
 
 ```c
 /* include/linux/module.h */
@@ -184,7 +184,7 @@ struct module {
 };
 ```
 
-## pr_* logging
+## pr_* logging {#pr_-logging}
 
 ```c
 /* Logging macros (prefer these over printk directly): */
@@ -211,7 +211,7 @@ pr_info_ratelimited("too many events\n");
 pr_debug("This only shows when enabled dynamically\n");
 ```
 
-## Module signing
+## Module signing {#module-signing}
 
 Modern kernels can enforce that modules are signed by a trusted key:
 
@@ -233,7 +233,7 @@ modinfo hello.ko | grep sig
 # module.sig_enforce=1   — require signature (any unsigned module is rejected)
 ```
 
-## Module debugging
+## Module debugging {#module-debugging}
 
 ```bash
 # Dynamic debug: enable pr_debug() for a module
@@ -268,9 +268,9 @@ gdb vmlinux
 (gdb) list hello_exit
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — the loader core: `load_module()`, `layout_sections()`, `do_init_module()` (which calls the module's `init` function), and `free_module()` on the unload path
 - [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module` itself, plus the `module_init()`/`module_exit()` and `MODULE_LICENSE()`/`MODULE_AUTHOR()`/`MODULE_DESCRIPTION()`/`MODULE_VERSION()` macros used by the hello-world example
@@ -279,7 +279,7 @@ gdb vmlinux
 - [kernel/module/procfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/procfs.c) — generates the `/proc/modules` line format: name, size, refcount, dependency list, `Live`/`Loading`/`Unloading` state, base address, and taint flags
 - [include/linux/printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/printk.h) — the `pr_emerg()` … `pr_debug()` family and `pr_info_ratelimited()`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`insmod(8)`](https://man7.org/linux/man-pages/man8/insmod.8.html) — the "trivial program to insert a module"; points readers at `modprobe(8)`, which is what handles module dependencies
 - [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — unloading, and why `-f`/`--force` needs `CONFIG_MODULE_FORCE_UNLOAD`
@@ -288,7 +288,7 @@ gdb vmlinux
 - [`lsmod(8)`](https://man7.org/linux/man-pages/man8/lsmod.8.html) — the formatted view of `/proc/modules` shown above
 - [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — builds the `modules.dep` file that `modprobe` reads
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Module Loading Internals](module-loading-internals.md) — what `load_module()` actually does between the ELF arriving and `init` being called
 - [Parameters, Symbols, and Kconfig](module-params.md) — `module_param()` and `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`
@@ -298,12 +298,12 @@ gdb vmlinux
 - [Platform Drivers](../drivers/platform-driver.md) — most drivers are modules
 - [BPF Verifier](../bpf/bpf-verifier.md) — how the kernel admits untrusted extension code without the `.ko` load path: static verification instead of signature and symbol checks
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — Jonathan Corbet, November 2024: why `MODULE_LICENSE("GPL")` is a load-bearing declaration rather than a formality, covering the GPLv3-declared-as-GPL dispute and per-module symbol export namespaces
 - [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — Jonathan Corbet, June 2023: how memory for module text is allocated, and the work replacing `module_alloc()` with a shared executable-memory allocator
 
-### External
+### External {#external}
 
 - [Building External Modules — The Linux Kernel documentation](https://docs.kernel.org/kbuild/modules.html) — the upstream reference for the `obj-m` and `make -C $KDIR M=$PWD modules` pattern used in the Makefile above
 - [Kernel module signing facility — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/module-signing.html) — `scripts/sign-file`, `module.sig_enforce=1`, and `CONFIG_MODULE_SIG_FORCE`

@@ -1,8 +1,8 @@
-# x86 Exception and Interrupt Handling
+# x86 Exception and Interrupt Handling {#x86-exception-and-interrupt-handling}
 
 > IDT, exception entry, hardware exceptions, and the page fault handler path
 
-## x86 exception fundamentals
+## x86 exception fundamentals {#x86-exception-fundamentals}
 
 On x86, all exceptions and interrupts are delivered via the **Interrupt Descriptor Table (IDT)**. The IDT has 256 entries:
 
@@ -25,7 +25,7 @@ Type= 0xE = interrupt gate (clears IF), 0xF = trap gate (keeps IF)
 
 Entries 0-31 are reserved for CPU exceptions. Entries 32-255 are for external interrupts and software traps (syscalls use int 0x80 historically, or SYSCALL instruction on x86-64).
 
-## CPU exception vectors
+## CPU exception vectors {#cpu-exception-vectors}
 
 | Vector | Mnemonic | Name | Error code | Fault/Trap/Abort |
 |--------|----------|------|------------|-----------------|
@@ -53,7 +53,7 @@ Entries 0-31 are reserved for CPU exceptions. Entries 32-255 are for external in
 **Trap**: saved CS:RIP points to the instruction after the trap.
 **Abort**: unrecoverable; saved state may be corrupted.
 
-## IDT initialization
+## IDT initialization {#idt-initialization}
 
 ```c
 /* arch/x86/kernel/idt.c */
@@ -88,7 +88,7 @@ void __init idt_setup_early_traps(void)
 
 The `LIDT` instruction loads the IDT register (IDTR) with the base address and limit of the IDT table.
 
-## Exception entry: hardware behavior
+## Exception entry: hardware behavior {#exception-entry-hardware-behavior}
 
 When the CPU delivers an exception to ring 0 (from ring 3 userspace):
 
@@ -114,7 +114,7 @@ For ring-0 → ring-0 exceptions (kernel taking a fault):
 - On x86-64, SS/RSP are **always** pushed even for same-privilege exceptions (unlike 32-bit x86)
 - Still pushes SS/RSP/RFLAGS/CS/RIP and error code (if applicable)
 
-## Exception entry assembly (x86-64)
+## Exception entry assembly (x86-64) {#exception-entry-assembly-x86-64}
 
 Linux uses `DEFINE_IDTENTRY_*` macros to generate exception entry stubs:
 
@@ -158,7 +158,7 @@ DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 }
 ```
 
-## struct pt_regs
+## struct pt_regs {#struct-pt_regs}
 
 All exception handlers receive a `struct pt_regs` that captures the full register state:
 
@@ -186,7 +186,7 @@ struct pt_regs {
 
 The entry assembly (`arch/x86/entry/entry_64.S`) saves all registers to build this structure before calling the C handler.
 
-## Task State Segment (TSS)
+## Task State Segment (TSS) {#task-state-segment-tss}
 
 The TSS is critical for stack switching on exception delivery:
 
@@ -215,11 +215,11 @@ struct x86_hw_tss {
 | #MC (machine check) | IST3 | Hardware may be completely broken |
 | #DB (debug) | IST4 | Can fire in weird contexts |
 
-## Page fault handler (#PF)
+## Page fault handler (#PF) {#page-fault-handler-pf}
 
 The page fault is the most important exception in a running system:
 
-### Error code bits
+### Error code bits {#error-code-bits}
 
 ```
 #PF error code:
@@ -232,7 +232,7 @@ The page fault is the most important exception in a running system:
   bit 6: SGX — SGX-related fault
 ```
 
-### Handler entry
+### Handler entry {#handler-entry}
 
 ```c
 /* arch/x86/mm/fault.c */
@@ -263,7 +263,7 @@ DEFINE_IDTENTRY_RAW_ERRORCODE(exc_page_fault)
 }
 ```
 
-### Fault classification
+### Fault classification {#fault-classification}
 
 ```c
 static noinline void
@@ -281,7 +281,7 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 }
 ```
 
-### User address fault path
+### User address fault path {#user-address-fault-path}
 
 ```c
 static inline void
@@ -346,7 +346,7 @@ done:
 }
 ```
 
-### Kernel address fault path
+### Kernel address fault path {#kernel-address-fault-path}
 
 ```c
 static noinline void
@@ -372,7 +372,7 @@ do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
 }
 ```
 
-## Exception fixup table
+## Exception fixup table {#exception-fixup-table}
 
 The kernel's exception fixup table maps faulting instruction addresses to recovery code. Used for `copy_from_user`/`copy_to_user`:
 
@@ -399,7 +399,7 @@ unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
 }
 ```
 
-## NMI handling
+## NMI handling {#nmi-handling}
 
 Non-Maskable Interrupts cannot be masked with `cli`. They require careful handling because they can interrupt *any* code including interrupt handlers:
 
@@ -442,7 +442,7 @@ NMIs are used for:
 - kdump NMI shootdown (crash on one CPU, NMI all others)
 - Kernel watchdog (`CONFIG_HARDLOCKUP_DETECTOR`)
 
-## SYSCALL/SYSRET (fast system call)
+## SYSCALL/SYSRET (fast system call) {#syscallsysret-fast-system-call}
 
 Modern x86-64 uses the `SYSCALL` instruction instead of `int 0x80`:
 
@@ -479,7 +479,7 @@ SYM_CODE_START(entry_SYSCALL_64)
     /* ... save remaining regs, call do_syscall_64() ... */
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Count exceptions per type (perf)
@@ -517,7 +517,7 @@ print(f'#PF handler: {addr:#x}')
 cat /proc/interrupts | head -5
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ARM64 Exception Model](../arm64/exception-model.md) — equivalent AArch64 mechanisms
 - [Page Fault Handler](../../mm/page-fault.md) — handle_mm_fault and VMA resolution

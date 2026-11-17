@@ -1,4 +1,4 @@
-# Reclaim Throttling and Balancing
+# Reclaim Throttling and Balancing {#reclaim-throttling-and-balancing}
 
 > How the kernel slows down allocators when reclaim can't keep up
 
@@ -9,7 +9,7 @@ kernel solves both problems with throttling — temporarily pausing allocating
 processes to let reclaim make progress, and coordinating between kswapd and
 direct reclaimers to balance the load.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevant functions |
 |------|--------------------|
@@ -20,7 +20,7 @@ direct reclaimers to balance the load.
 
 ---
 
-## Why Throttling Exists
+## Why Throttling Exists {#why-throttling-exists}
 
 Without throttling, an application that allocates memory rapidly could cycle
 continuously through direct reclaim, consuming entire CPU cores in an attempt
@@ -58,7 +58,7 @@ wait_queue_head_t pfmemalloc_wait;
 
 ---
 
-## Direct Reclaim vs. kswapd
+## Direct Reclaim vs. kswapd {#direct-reclaim-vs-kswapd}
 
 The kernel has two reclaim actors:
 
@@ -97,7 +97,7 @@ may be throttled there.
 
 ---
 
-## `reclaim_throttle()` — Core Sleep Function
+## `reclaim_throttle()` — Core Sleep Function {#reclaim_throttle-core-sleep-function}
 
 `reclaim_throttle()` in `mm/vmscan.c` is the single function through which
 all non-pfmemalloc throttling passes:
@@ -136,7 +136,7 @@ kswapd when it clears the congested state.
 
 ---
 
-## `throttle_direct_reclaim()` — pfmemalloc Reserve Throttle
+## `throttle_direct_reclaim()` — pfmemalloc Reserve Throttle {#throttledirectreclaim-pfmemalloc-reserve-throttle}
 
 This is a separate throttle path with a different purpose. The kernel reserves
 a portion of low-zone pages (`pfmemalloc` reserves) for network stack
@@ -183,7 +183,7 @@ Each throttle event increments the `PGSCAN_DIRECT_THROTTLE` vmstat counter
 
 ---
 
-## `consider_reclaim_throttle()` — No-Progress Throttle
+## `consider_reclaim_throttle()` — No-Progress Throttle {#considerreclaimthrottle-no-progress-throttle}
 
 After each `shrink_zones()` pass during direct reclaim,
 `consider_reclaim_throttle()` evaluates whether throttling is warranted:
@@ -203,9 +203,9 @@ static void consider_reclaim_throttle(pg_data_t *pgdat,
 
 ---
 
-## Memory Cgroup Throttling — the `memory.high` Path
+## Memory Cgroup Throttling — the `memory.high` Path {#memory-cgroup-throttling-the-memoryhigh-path}
 
-### The Proportional Delay
+### The Proportional Delay {#the-proportional-delay}
 
 cgroup v2's `memory.high` is a soft limit. Exceeding it does not immediately
 kill or hard-stop the cgroup. Instead, the exceeding process is slowed down
@@ -239,7 +239,7 @@ that is over its `memory.high` limit. After up to `MAX_RECLAIM_RETRIES` (16)
 attempts at reclaim, if usage is still above the limit,
 `calculate_high_delay()` computes a sleep duration.
 
-### The Delay Formula
+### The Delay Formula {#the-delay-formula}
 
 The penalty is calculated by `calculate_high_delay()`:
 
@@ -279,9 +279,9 @@ just runs very slowly.
 
 ---
 
-## Write Throttling and Reclaim Stalls
+## Write Throttling and Reclaim Stalls {#write-throttling-and-reclaim-stalls}
 
-### `PGDAT_WRITEBACK` and the Writeback Throttle
+### `PGDAT_WRITEBACK` and the Writeback Throttle {#pgdat_writeback-and-the-writeback-throttle}
 
 When `shrink_node()` finds that every page it examined is under writeback
 (`sc->nr.writeback == sc->nr.taken`), it sets the `PGDAT_WRITEBACK` flag on
@@ -299,7 +299,7 @@ reclaim_throttle(pgdat, VMSCAN_THROTTLE_WRITEBACK);
 This sleeps for up to 100 ms or until `__acct_reclaim_writeback()` wakes the
 queue after enough pages complete writeback.
 
-### `LRUVEC_NODE_CONGESTED` and `VMSCAN_THROTTLE_CONGESTED`
+### `LRUVEC_NODE_CONGESTED` and `VMSCAN_THROTTLE_CONGESTED` {#lruvecnodecongested-and-vmscanthrottlecongested}
 
 If all dirty pages scanned are both dirty and congested
 (`sc->nr.dirty == sc->nr.congested`), the node is marked congested via
@@ -314,7 +314,7 @@ kswapd itself is not throttled here — it is free to keep scanning since
 stalling kswapd would stop all reclaim progress. Only user-context direct
 reclaimers sleep.
 
-### `balance_dirty_pages()` — the Upstream Throttle
+### `balance_dirty_pages()` — the Upstream Throttle {#balancedirtypages-the-upstream-throttle}
 
 The write-throttle path in `mm/page-writeback.c` is the primary mechanism
 for slowing down processes that dirty pages faster than writeback can drain
@@ -328,9 +328,9 @@ bandwidth-proportionality of the normal dirty throttle.
 
 ---
 
-## Fair Reclaim Under Pressure
+## Fair Reclaim Under Pressure {#fair-reclaim-under-pressure}
 
-### Reclaim Priority and the Cgroup Hierarchy
+### Reclaim Priority and the Cgroup Hierarchy {#reclaim-priority-and-the-cgroup-hierarchy}
 
 When multiple cgroups are all under memory pressure, the kernel does not
 simply reclaim from the cgroup with the most memory. `shrink_node_memcgs()`
@@ -344,7 +344,7 @@ pressure increases. At each priority level, the scan visits a fraction
 `1 >> priority` of each LRU list. Lower priorities scan larger fractions —
 priority 0 scans the entire list.
 
-### Cgroup Hierarchy Walk in `reclaim_high()`
+### Cgroup Hierarchy Walk in `reclaim_high()` {#cgroup-hierarchy-walk-in-reclaim_high}
 
 For `memory.high` enforcement, `reclaim_high()` does not just reclaim from
 the directly exceeding cgroup. It walks up to the root via
@@ -367,7 +367,7 @@ determine the penalty magnitude.
 
 ---
 
-## `balance_pgdat()` — kswapd Node Balancing
+## `balance_pgdat()` — kswapd Node Balancing {#balance_pgdat-kswapd-node-balancing}
 
 kswapd's main loop calls `balance_pgdat()` to reclaim pages on a node until
 at least one zone is balanced. A zone is balanced when its free pages pass
@@ -393,9 +393,9 @@ forced to wait until kswapd has fully balanced the node.
 
 ---
 
-## Observing Throttling
+## Observing Throttling {#observing-throttling}
 
-### PSI — the Most Direct Signal
+### PSI — the Most Direct Signal {#psi-the-most-direct-signal}
 
 Pressure Stall Information captures exactly the phenomenon throttling
 addresses: tasks stalled waiting for memory. See [PSI](psi.md) for a full
@@ -413,7 +413,7 @@ cat /proc/pressure/memory
 Rising `full` memory pressure is a reliable indicator that throttling is
 active and the system cannot reclaim fast enough.
 
-### `/proc/vmstat` Counters
+### `/proc/vmstat` Counters {#procvmstat-counters}
 
 ```bash
 grep -E 'pgscan|pgsteal|allocstall|throttle' /proc/vmstat
@@ -449,9 +449,9 @@ grep -E 'pgscan|pgsteal|allocstall|throttle' /proc/vmstat
 
 ---
 
-## Tuning
+## Tuning {#tuning}
 
-### `vm.swappiness`
+### `vm.swappiness` {#vmswappiness}
 
 Controls the relative cost the kernel assigns to reclaiming anonymous
 (swap-backed) pages versus file-backed pages. The internal variable is
@@ -481,7 +481,7 @@ sysctl -w vm.swappiness=10
 echo "vm.swappiness = 10" >> /etc/sysctl.d/99-memory.conf
 ```
 
-### `vm.vfs_cache_pressure`
+### `vm.vfs_cache_pressure` {#vmvfscachepressure}
 
 Governs how aggressively the kernel reclaims dentries and inodes (VFS slab
 caches) relative to page cache. The internal variable is
@@ -499,7 +499,7 @@ sysctl vm.vfs_cache_pressure
 sysctl -w vm.vfs_cache_pressure=50
 ```
 
-### `vm.dirty_ratio` and `vm.dirty_background_ratio`
+### `vm.dirty_ratio` and `vm.dirty_background_ratio` {#vmdirtyratio-and-vmdirtybackground_ratio}
 
 These control when `balance_dirty_pages()` — the primary write throttle —
 activates. They directly affect whether reclaim encounters pages under
@@ -526,7 +526,7 @@ sysctl -w vm.dirty_bytes=4294967296              # 4 GB
 
 ---
 
-## Putting It Together: A Pressure Escalation Sequence
+## Putting It Together: A Pressure Escalation Sequence {#putting-it-together-a-pressure-escalation-sequence}
 
 ```
 1. Allocation demand rises; kswapd wakes and runs balance_pgdat().
@@ -559,7 +559,7 @@ At step 3 and beyond, PSI `memory.full` pressure rises. Monitoring this
 sequence via `/proc/vmstat` counter deltas and PSI gives an accurate picture
 of which throttle stage the system has reached and how long it spends there.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `reclaim_throttle()`, `throttle_direct_reclaim()`, `consider_reclaim_throttle()`, `balance_pgdat()`, `allow_direct_reclaim()`, and `pgdat_balanced()` — the complete throttling and kswapd balancing implementation
 - [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `__mem_cgroup_handle_over_high()`, `reclaim_high()`, `calculate_high_delay()`, `mem_find_max_overage()`, and `swap_find_max_overage()` — the `memory.high` proportional penalty path

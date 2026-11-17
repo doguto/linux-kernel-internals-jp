@@ -1,8 +1,8 @@
-# Live Patching and kexec
+# Live Patching and kexec {#live-patching-and-kexec}
 
 > Updating a running kernel without rebooting
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -14,7 +14,7 @@
 | [kexec](kexec.md) | kexec_load, machine_kexec, kdump integration, fast reboot |
 | [War Stories](war-stories.md) | Stuck transitions, shadow variable leaks, compat syscall misses, `old_sympos` ambiguity, missing `.replace` |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Check if live patching is supported

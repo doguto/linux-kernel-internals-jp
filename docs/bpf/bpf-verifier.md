@@ -1,8 +1,8 @@
-# BPF Verifier
+# BPF Verifier {#bpf-verifier}
 
 > How the kernel proves BPF programs are safe before running them
 
-## What the verifier does
+## What the verifier does {#what-the-verifier-does}
 
 Every BPF program must pass the verifier before it can run. The verifier statically analyzes the bytecode and proves:
 
@@ -14,9 +14,9 @@ Every BPF program must pass the verifier before it can run. The verifier statica
 
 The verifier performs this analysis in `kernel/bpf/verifier.c` (~30,000 lines). It was introduced alongside eBPF in Linux 3.18 by Alexei Starovoitov. [(commit)](https://git.kernel.org/linus/17a5267067f3c372fec9ffb798d6eaba6b5e6a4c)
 
-## Two phases of verification
+## Two phases of verification {#two-phases-of-verification}
 
-### Phase 1: CFG analysis (dead code elimination)
+### Phase 1: CFG analysis (dead code elimination) {#phase-1-cfg-analysis-dead-code-elimination}
 
 ```
 bpf_check()
@@ -29,7 +29,7 @@ bpf_check()
 
 The CFG check marks all reachable instructions. Dead code (unreachable) is rejected.
 
-### Phase 2: Abstract interpretation (type and bounds tracking)
+### Phase 2: Abstract interpretation (type and bounds tracking) {#phase-2-abstract-interpretation-type-and-bounds-tracking}
 
 ```
 bpf_check()
@@ -41,7 +41,7 @@ bpf_check()
       → explore all branches (must verify both sides of conditional)
 ```
 
-## Register state tracking
+## Register state tracking {#register-state-tracking}
 
 The verifier tracks the type and bounds of every register at every program point:
 
@@ -76,7 +76,7 @@ enum bpf_reg_type {
 };
 ```
 
-## Pointer safety: the NULL check requirement
+## Pointer safety: the NULL check requirement {#pointer-safety-the-null-check-requirement}
 
 The most common verifier rejection is using a pointer without checking for NULL:
 
@@ -112,7 +112,7 @@ int good_prog(struct pt_regs *ctx)
 
 After the NULL check, `count` transitions from `PTR_TO_MAP_VALUE_OR_NULL` to `PTR_TO_MAP_VALUE` — the verifier tracks this state split across the two branches.
 
-## Bounds checking for packet access
+## Bounds checking for packet access {#bounds-checking-for-packet-access}
 
 XDP and TC programs must prove every packet access is in-bounds:
 
@@ -144,7 +144,7 @@ int parse_http(struct xdp_md *ctx)
 
 The verifier tracks `PTR_TO_PACKET` offsets and validates that arithmetic stays within `[data, data_end)`.
 
-## Stack usage
+## Stack usage {#stack-usage}
 
 BPF programs have a fixed 512-byte stack. The verifier tracks which stack slots are initialized:
 
@@ -166,7 +166,7 @@ int trace_open(struct pt_regs *ctx)
 
 Passing an uninitialized stack slot to a helper that reads it is a verifier error.
 
-## Bounded loops (since 5.3)
+## Bounded loops (since 5.3) {#bounded-loops-since-53}
 
 Before 5.3, all loops were forbidden. Now the verifier allows loops if it can prove a bound:
 
@@ -194,7 +194,7 @@ for (u32 i = 0; i < n; i++) { /* now bounded */ }
 
 The verifier limits loop iterations to prevent exponential state explosion during analysis.
 
-## Complexity limit
+## Complexity limit {#complexity-limit}
 
 The verifier tracks program states (register + stack snapshot at each instruction). To prevent DoS via complex programs:
 
@@ -214,7 +214,7 @@ Strategies to reduce complexity:
 - Split into tail calls (each program has its own limit)
 - Use `bpf_loop()` instead of unrolled loops
 
-## Reading verifier output
+## Reading verifier output {#reading-verifier-output}
 
 Request the verifier log when loading fails:
 
@@ -245,7 +245,7 @@ Sample verifier output for a type error:
 ; R0 is PTR_TO_MAP_VALUE but write at offset 0 for u64 needs range check
 ```
 
-## Privileged vs unprivileged BPF
+## Privileged vs unprivileged BPF {#privileged-vs-unprivileged-bpf}
 
 Unprivileged BPF (`CAP_BPF` not set) is heavily restricted:
 
@@ -269,7 +269,7 @@ sysctl kernel.unprivileged_bpf_disabled
 
 See [BPF Security Model](bpf-security-model.md) for the full three-state breakdown and the capability model behind it.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Maps](bpf-maps.md) — What map access patterns the verifier allows
 - [BTF and CO-RE](btf-core.md) — How BTF helps the verifier with type info

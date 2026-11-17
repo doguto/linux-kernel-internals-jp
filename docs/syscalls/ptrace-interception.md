@@ -1,8 +1,8 @@
-# ptrace and Syscall Interception
+# ptrace and Syscall Interception {#ptrace-and-syscall-interception}
 
 > How strace, debuggers, and seccomp-notify intercept syscalls
 
-## ptrace overview
+## ptrace overview {#ptrace-overview}
 
 `ptrace(2)` is the kernel mechanism that powers debuggers (`gdb`), tracers (`strace`), and system call
 supervisors. It lets one process (the tracer) inspect and modify the register state and memory of another
@@ -24,7 +24,7 @@ After attachment, the tracee enters a **ptrace-stop** when it hits a watched eve
 fork, clone). In ptrace-stop, the tracee is paused and the tracer can call `waitpid()` to collect the stop
 reason, then inspect or modify state before resuming.
 
-## PTRACE_SYSCALL: how strace works
+## PTRACE_SYSCALL: how strace works {#ptrace_syscall-how-strace-works}
 
 ```c
 /* Resume the tracee, but stop again at the next syscall entry or exit */
@@ -49,7 +49,7 @@ ptrace(PTRACE_SYSCALL, pid, NULL, NULL)  /* resume to next entry-stop */
 Because `strace` calls `waitpid()` twice per syscall, tracing doubles the number of context switches and is
 costly. A traced process can be 100x slower on syscall-heavy workloads.
 
-## Syscall-stops: entry and exit
+## Syscall-stops: entry and exit {#syscall-stops-entry-and-exit}
 
 The kernel notifies ptrace of syscall boundaries via two functions declared as `static inline` in
 `include/linux/ptrace.h` (both call into the shared `ptrace_report_syscall()` helper):
@@ -60,7 +60,7 @@ The kernel notifies ptrace of syscall boundaries via two functions declared as `
 `ptrace_report_syscall()` calls `ptrace_notify()`, which sets the tracee's stop code to `(SIGTRAP | 0x80)` (the high bit
 distinguishes a syscall-stop from a plain signal-stop) and sends `SIGCHLD` to the tracer.
 
-## Reading and modifying syscall args
+## Reading and modifying syscall args {#reading-and-modifying-syscall-args}
 
 At entry-stop, the syscall arguments are in `pt_regs`:
 
@@ -93,7 +93,7 @@ number skips dispatch entirely, leaving `regs->ax` exactly as the tracer set it.
 mechanism for injecting a return value or no-op'ing a syscall via ptrace: set `orig_rax = -1` and set
 `rax` to whatever return value you want the traced process to see.
 
-## SYSCALL_WORK_SYSCALL_TRACE
+## SYSCALL_WORK_SYSCALL_TRACE {#syscallworksyscall_trace}
 
 The flag that triggers ptrace syscall-stops is `SYSCALL_WORK_SYSCALL_TRACE` in the task's
 `thread_info.syscall_work`. It is set by `ptrace_resume()` when a `PTRACE_SYSCALL` request is issued
@@ -128,7 +128,7 @@ static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned l
 The same work-flags mechanism also carries `SYSCALL_WORK_SECCOMP` (for seccomp filtering) and
 `SYSCALL_WORK_SYSCALL_AUDIT` (for the audit subsystem), so all three can coexist.
 
-## PTRACE_GET_SYSCALL_INFO (Linux 5.3)
+## PTRACE_GET_SYSCALL_INFO (Linux 5.3) {#ptracegetsyscall_info-linux-53}
 
 Before Linux 5.3, tracers had to call `PTRACE_GETREGS` and infer the stop type from the waitpid status.
 Linux 5.3 added `PTRACE_GET_SYSCALL_INFO` (commit `201766a20e30f982ccfe36bebfad9602c3ff574a`), which returns a structured description:
@@ -170,7 +170,7 @@ if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
 
 This is the interface used by modern `strace` (5.1+) instead of `PTRACE_GETREGS`.
 
-## ptrace events: PTRACE_O_TRACEFORK and friends
+## ptrace events: PTRACE_O_TRACEFORK and friends {#ptrace-events-ptraceotracefork-and-friends}
 
 The tracer can request events beyond syscall-stops by setting ptrace options:
 
@@ -189,13 +189,13 @@ When one of these events fires, `waitpid()` returns a status where
 `PTRACE_EVENT_FORK`. The tracer can then call `ptrace(PTRACE_GETEVENTMSG, pid, NULL, &msg)` to retrieve
 the new child's PID.
 
-## seccomp-notify: a modern alternative to ptrace
+## seccomp-notify: a modern alternative to ptrace {#seccomp-notify-a-modern-alternative-to-ptrace}
 
 `SECCOMP_RET_USER_NOTIF` (added in Linux 5.0, `include/uapi/linux/seccomp.h`) lets a privileged supervisor
 intercept syscalls without the overhead of ptrace. Instead of stopping the tracee and waking the tracer, the
 kernel sends a notification to a file descriptor, and the tracee sleeps until the supervisor replies.
 
-### Installing the filter
+### Installing the filter {#installing-the-filter}
 
 ```c
 /* In the process to be supervised (or before exec) */
@@ -207,7 +207,7 @@ int notif_fd = seccomp(SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER
 The BPF program returns `SECCOMP_RET_USER_NOTIF` for syscalls to intercept and `SECCOMP_RET_ALLOW` for
 everything else.
 
-### Receiving and responding to notifications
+### Receiving and responding to notifications {#receiving-and-responding-to-notifications}
 
 ```c
 /* include/uapi/linux/seccomp.h */
@@ -244,13 +244,13 @@ avoids the two context switches per syscall that ptrace requires.
 Container managers such as `bubblewrap` and `systemd`'s `RootDirectory=` sandboxing use seccomp-notify to
 implement syscall emulation (e.g., faking `mount()` for unprivileged containers).
 
-### SECCOMP_USER_NOTIF_FLAG_CONTINUE
+### SECCOMP_USER_NOTIF_FLAG_CONTINUE {#seccompusernotifflagcontinue}
 
 If the supervisor sets `SECCOMP_USER_NOTIF_FLAG_CONTINUE` in `resp.flags`, the kernel executes the syscall
 normally instead of injecting a return value. This is used when the supervisor just wants to log the call
 without blocking it.
 
-## perf syscall tracing
+## perf syscall tracing {#perf-syscall-tracing}
 
 ```bash
 # Raw syscall tracepoints (all syscalls, entry only)
@@ -268,7 +268,7 @@ perf stat -e 'syscalls:sys_enter_*' -- ls 2>&1 | head -20
 symbolically. Both are standard ftrace tracepoints, defined by the `SYSCALL_METADATA` macro that
 `SYSCALL_DEFINE` emits.
 
-## eBPF tracepoints for syscalls
+## eBPF tracepoints for syscalls {#ebpf-tracepoints-for-syscalls}
 
 BPF programs can attach to syscall tracepoints using libbpf:
 
@@ -303,7 +303,7 @@ int trace_openat_exit(struct trace_event_raw_sys_exit *ctx)
 }
 ```
 
-## ftrace: tracing syscall handler functions
+## ftrace: tracing syscall handler functions {#ftrace-tracing-syscall-handler-functions}
 
 ```bash
 # Trace the sys_openat function via function tracer
@@ -327,9 +327,9 @@ echo function_graph > /sys/kernel/tracing/current_tracer
 echo __x64_sys_openat > /sys/kernel/tracing/set_graph_function
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ptrace.h) — `ptrace_report_syscall_permit_entry()`, `ptrace_report_syscall_exit()`, and the shared `ptrace_report_syscall()` helper that calls `ptrace_notify()`
 - [include/linux/entry-common.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/entry-common.h) — `syscall_trace_enter()`, `syscall_enter_from_user_mode_work()`, and `syscall_exit_to_user_mode_work()`, which check `SYSCALL_WORK_SYSCALL_TRACE` and drive ptrace, seccomp, and audit in sequence
@@ -339,18 +339,18 @@ echo __x64_sys_openat > /sys/kernel/tracing/set_graph_function
 - [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()`/`do_syscall_x64()`: how a tracer-modified `orig_rax` is dispatched (or skipped)
 - Commit [`201766a20e30f982ccfe36bebfad9602c3ff574a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=201766a20e30f982ccfe36bebfad9602c3ff574a) ("ptrace: add PTRACE_GET_SYSCALL_INFO request") — landed in the Linux 5.3 merge window
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`ptrace(2)`](https://man7.org/linux/man-pages/man2/ptrace.2.html) — full interface reference: syscall-stop, `PTRACE_SETOPTIONS`, `PTRACE_O_TRACESYSGOOD`, `PTRACE_GET_SYSCALL_INFO`
 - [`seccomp(2)`](https://man7.org/linux/man-pages/man2/seccomp.2.html) — `SECCOMP_SET_MODE_FILTER`, `SECCOMP_FILTER_FLAG_NEW_LISTENER`, `SECCOMP_RET_USER_NOTIF`
 - [`seccomp_unotify(2)`](https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html) — the user-space notification protocol: `SECCOMP_IOCTL_NOTIF_RECV`/`SEND`, `struct seccomp_notif`/`seccomp_notif_resp`, `SECCOMP_USER_NOTIF_FLAG_CONTINUE`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — `entry_SYSCALL_64`, `pt_regs`, and the `do_syscall_64()` dispatch this page's tracer hooks run inside
 - [SYSCALL_DEFINE and Dispatch](syscall-define.md) — how `SYSCALL_DEFINE` wires a syscall into the dispatch table
 - [Syscall Auditing](audit.md) — `SYSCALL_WORK_SYSCALL_AUDIT` and the audit subsystem's own entry/exit hooks
 
-### External
+### External {#external}
 
 - [seccomp BPF (SECCOMP_MODE_FILTER)](https://docs.kernel.org/userspace-api/seccomp_filter.html) — kernel documentation for `SECCOMP_RET_USER_NOTIF`, the notification structs, and the ioctl protocol

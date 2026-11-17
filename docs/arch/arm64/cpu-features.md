@@ -1,8 +1,8 @@
-# ARM64 CPU Features
+# ARM64 CPU Features {#arm64-cpu-features}
 
 > Feature detection, alternatives patching, hwcaps, and errata workarounds
 
-## Overview
+## Overview {#overview}
 
 ARM64 (AArch64) implements a rich system for discovering CPU capabilities at
 runtime and transparently patching the kernel image to exploit them. Three
@@ -29,9 +29,9 @@ The kernel code lives primarily in:
 
 ---
 
-## Feature Detection at Boot
+## Feature Detection at Boot {#feature-detection-at-boot}
 
-### ID Registers
+### ID Registers {#id-registers}
 
 ARM64 exposes CPU capabilities through a family of system registers readable
 at EL1. The kernel reads these during `setup_cpu_features()` (called from
@@ -74,7 +74,7 @@ MIDR_EL1 layout
  [3:0]   Revision     (minor revision)
 ```
 
-### Capability Accumulation Across CPUs
+### Capability Accumulation Across CPUs {#capability-accumulation-across-cpus}
 
 On SMP systems the feature intersection must be computed across all CPUs.
 Each secondary CPU calls `check_local_cpu_capabilities()` on bringup. The
@@ -102,7 +102,7 @@ in `arch/arm64/include/asm/cpucaps.h`.
 
 ---
 
-## struct arm64_cpu_capabilities
+## struct arm64_cpu_capabilities {#struct-arm64cpucapabilities}
 
 Every ARM64 feature or erratum is described by a single entry in
 `struct arm64_cpu_capabilities` (`arch/arm64/include/asm/cpufeature.h`):
@@ -153,9 +153,9 @@ static const struct arm64_cpu_capabilities arm64_errata[];
 
 ---
 
-## Checking Capabilities at Runtime
+## Checking Capabilities at Runtime {#checking-capabilities-at-runtime}
 
-### System-wide: cpus_have_cap()
+### System-wide: cpus_have_cap() {#system-wide-cpushavecap}
 
 ```c
 /* arch/arm64/include/asm/cpufeature.h */
@@ -173,7 +173,7 @@ if (cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
     use_lse_path();
 ```
 
-### Per-CPU: this_cpu_has_cap()
+### Per-CPU: this_cpu_has_cap() {#per-cpu-thiscpuhas_cap}
 
 ```c
 static inline bool this_cpu_has_cap(unsigned int cap)
@@ -186,7 +186,7 @@ static inline bool this_cpu_has_cap(unsigned int cap)
 
 Used when a feature may not be uniform across all CPUs (e.g., SSBS, FPMR).
 
-### Static keys: cpus_have_const_cap()
+### Static keys: cpus_have_const_cap() {#static-keys-cpushaveconst_cap}
 
 For extremely hot paths, capabilities are also backed by `static_key_false`
 entries so the check compiles down to a single NOP that is patched to a branch
@@ -199,9 +199,9 @@ if (cpus_have_const_cap(ARM64_HAS_LSE_ATOMICS)) { … }
 
 ---
 
-## Alternatives Patching
+## Alternatives Patching {#alternatives-patching}
 
-### How It Works
+### How It Works {#how-it-works}
 
 The alternatives mechanism allows the kernel to ship one binary that runs
 correctly on all ARMv8 CPUs and is then optimized for the actual hardware at
@@ -216,7 +216,7 @@ boot time. The scheme:
 4. Cache maintenance (`__flush_icache_range()`) makes the new instructions
    visible to the instruction stream.
 
-### Assembly Macros
+### Assembly Macros {#assembly-macros}
 
 ```asm
 /* arch/arm64/include/asm/alternative.h */
@@ -245,7 +245,7 @@ In C code the `alternative()` macro wraps inline assembly:
 asm volatile(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_1542419));
 ```
 
-### Example: LSE Atomics (LDXR/STXR → CAS)
+### Example: LSE Atomics (LDXR/STXR → CAS) {#example-lse-atomics-ldxrstxr-cas}
 
 Before patching, `atomic_add()` on ARM64 contains an LL/SC loop:
 
@@ -269,7 +269,7 @@ The capability index `ARM64_HAS_LSE_ATOMICS` is defined in
 `arch/arm64/include/asm/cpucaps.h` and its detection entry in
 `arm64_features[]` checks `ID_AA64ISAR0_EL1.Atomic` >= 2.
 
-### apply_alternatives_all()
+### apply_alternatives_all() {#applyalternativesall}
 
 ```c
 /* arch/arm64/kernel/alternative.c */
@@ -293,7 +293,7 @@ Secondary CPUs also call `apply_alternatives_this_cpu()` to apply
 
 ---
 
-## HWCAP: Userspace Feature Exposure
+## HWCAP: Userspace Feature Exposure {#hwcap-userspace-feature-exposure}
 
 Detected features are advertised to userspace through two mechanisms:
 
@@ -302,7 +302,7 @@ Detected features are advertised to userspace through two mechanisms:
 - **`/proc/cpuinfo`** — the `Features:` line lists the same capabilities as
   human-readable strings.
 
-### HWCAP Constants
+### HWCAP Constants {#hwcap-constants}
 
 Defined in `arch/arm64/include/uapi/asm/hwcap.h`:
 
@@ -356,7 +356,7 @@ Selected `AT_HWCAP2` constants (in `hwcap.h` as `HWCAP2_*`):
 | `HWCAP2_MTE3` | MTE asymmetric fault reporting |
 | `HWCAP2_SME` | Scalable Matrix Extension |
 
-### Reading HWCAPs from Userspace
+### Reading HWCAPs from Userspace {#reading-hwcaps-from-userspace}
 
 ```c
 #include <sys/auxv.h>
@@ -375,13 +375,13 @@ if (hwcap2 & HWCAP2_BTI)
 
 ---
 
-## SVE — Scalable Vector Extension
+## SVE — Scalable Vector Extension {#sve-scalable-vector-extension}
 
 SVE (ARMv8.2+) introduces vector registers of variable width: 128 to 2048
 bits in 128-bit increments. Unlike NEON, the vector length is not fixed at
 ISA design time but is implementation-defined and can be configured per-task.
 
-### Vector Length Management
+### Vector Length Management {#vector-length-management}
 
 ```c
 /* arch/arm64/kernel/fpsimd.c */
@@ -405,7 +405,7 @@ bits). The system-wide default VL is readable from
 threads, not an upper bound; the true maximum is reported by
 `prctl(PR_SVE_GET_VL)` after setting the VL to an arbitrarily large value).
 
-### Lazy State Save
+### Lazy State Save {#lazy-state-save}
 
 SVE register state is saved and restored lazily:
 
@@ -423,7 +423,7 @@ SVE register state is saved and restored lazily:
 #define TIF_SVE_VL_INHERIT 24 /* Inherit SVE VL across exec */
 ```
 
-### Kernel SVE Use
+### Kernel SVE Use {#kernel-sve-use}
 
 Kernel code that uses SVE (e.g., accelerated crypto) must explicitly enable
 the FP/SVE access trap:
@@ -436,7 +436,7 @@ kernel_neon_end();     /* restores state, re-enables preemption */
 
 ---
 
-## BTI — Branch Target Identification
+## BTI — Branch Target Identification {#bti-branch-target-identification}
 
 BTI is an ARMv8.5 control-flow integrity feature. When enabled for userspace
 (`SCTLR_EL1.BT0 = 1`) or kernel (`SCTLR_EL1.BT1 = 1`), any indirect branch
@@ -445,7 +445,7 @@ a paired `BL`/`BLRAAZ` that implies a call target). Landing anywhere else
 raises a Branch Target Exception. The kernel sets `BT0` to enforce BTI for
 user processes; `BT1` controls enforcement in kernel code.
 
-### ELF Marking
+### ELF Marking {#elf-marking}
 
 Binaries opt in via a GNU property note:
 
@@ -457,7 +457,7 @@ The dynamic linker (`ld.so`) reads this note. The kernel checks it at `execve()`
 `arch/arm64/kernel/process.c` and sets `SCTLR_EL1.BT0` for the process if
 the property is present, enabling BTI enforcement for userspace code.
 
-### Interaction with JIT and Signal Handlers
+### Interaction with JIT and Signal Handlers {#interaction-with-jit-and-signal-handlers}
 
 JIT compilers must emit `BTI c` (call target) or `BTI j` (jump target)
 landing pads. The kernel signal return trampoline
@@ -466,7 +466,7 @@ it from user trampolines.
 
 ---
 
-## MTE — Memory Tagging Extension
+## MTE — Memory Tagging Extension {#mte-memory-tagging-extension}
 
 MTE (ARMv8.5+) implements hardware-assisted memory safety by associating a
 4-bit **allocation tag** with every 16-byte **granule** of tagged memory, and
@@ -477,7 +477,7 @@ On every load or store the hardware compares the pointer's logical tag with
 the memory granule's allocation tag. A mismatch either raises a synchronous
 fault or is recorded asynchronously, depending on the TCR_EL1 mode selected.
 
-### Kernel API
+### Kernel API {#kernel-api}
 
 ```c
 /* Enable MTE for the calling process */
@@ -492,7 +492,7 @@ void *p = mmap(NULL, size, PROT_READ | PROT_WRITE | PROT_MTE,
 
 The flag `PROT_MTE` is `arch/arm64/include/uapi/asm/mman.h`.
 
-### Modes
+### Modes {#modes}
 
 | Mode | SCTLR_EL1.TCF0 | Behavior |
 |------|---------------|---------|
@@ -505,13 +505,13 @@ actually written; the kernel handles tag inheritance in `copy_user_highpage()`.
 
 ---
 
-## Errata Workarounds
+## Errata Workarounds {#errata-workarounds}
 
 CPU errata (hardware bugs) are handled through the same `arm64_cpu_capabilities`
 infrastructure, but stored in `arm64_errata[]`
 (`arch/arm64/kernel/cpu_errata.c`).
 
-### MIDR-Based Matching
+### MIDR-Based Matching {#midr-based-matching}
 
 Each errata entry uses `MIDR_CPU_VAR_REV()` or `MIDR_ALL_VERSIONS()` to
 match affected CPU revisions:
@@ -530,7 +530,7 @@ match affected CPU revisions:
 `MIDR_CORTEX_A53` is `0x410FD030`. The range `(variant=0, rev_min=0,
 rev_max=4)` matches r0p0 through r0p4.
 
-### Workaround Mechanisms
+### Workaround Mechanisms {#workaround-mechanisms}
 
 | Mechanism | When Used |
 |-----------|----------|
@@ -539,7 +539,7 @@ rev_max=4)` matches r0p0 through r0p4.
 | Kconfig option | Compile-time: inserts barriers unconditionally |
 | Linker flag | Build-time: e.g., `--fix-cortex-a53-843419` |
 
-### Selected Errata
+### Selected Errata {#selected-errata}
 
 | Erratum | CPU | Description | Workaround |
 |---------|-----|-------------|-----------|
@@ -554,9 +554,9 @@ Kconfig symbols and do not add overhead on unaffected hardware.
 
 ---
 
-## Observability
+## Observability {#observability}
 
-### /proc/cpuinfo
+### /proc/cpuinfo {#proccpuinfo}
 
 ```bash
 $ cat /proc/cpuinfo | grep -E "CPU implementer|CPU architecture|CPU variant|CPU part|CPU revision|Features"
@@ -571,7 +571,7 @@ Features        : fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp \
                   asimdhp cpuid asimdrdm lrcpc dcpop asimddp ssbs
 ```
 
-### sysfs ID Registers
+### sysfs ID Registers {#sysfs-id-registers}
 
 Linux 5.11+ exposes raw ID register values under sysfs (gated by
 `CONFIG_ARM64_CPUIDLE` build config and `ID_AA64DFR0_EL1.PMSVer` capability checks):
@@ -582,7 +582,7 @@ $ grep . /sys/devices/system/cpu/cpu0/regs/identification/*
 /sys/devices/system/cpu/cpu0/regs/identification/revidr_el1:0x00000000
 ```
 
-### Checking Active hwcaps Programmatically
+### Checking Active hwcaps Programmatically {#checking-active-hwcaps-programmatically}
 
 ```c
 #include <sys/auxv.h>
@@ -601,7 +601,7 @@ int main(void) {
 }
 ```
 
-### Kernel Capability Bitmap (debug)
+### Kernel Capability Bitmap (debug) {#kernel-capability-bitmap-debug}
 
 The full capability bitmap is not directly exported, but you can infer the
 active set from the `Features:` line and by reading
@@ -613,7 +613,7 @@ up) `boot_cpu_has(ARM64_HAS_LSE_ATOMICS)` is used instead.
 
 ---
 
-## Boot-Time Flow Summary
+## Boot-Time Flow Summary {#boot-time-flow-summary}
 
 ```
 start_kernel()
@@ -632,7 +632,7 @@ start_kernel()
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - `arch/arm64/include/asm/cpufeature.h` — full `struct arm64_cpu_capabilities`
   definition and all `ARM64_CPUCAP_*` type flags

@@ -1,4 +1,4 @@
-# MDS: The Mitigation That Flushed the Buffers Too Early
+# MDS: The Mitigation That Flushed the Buffers Too Early {#mds-the-mitigation-that-flushed-the-buffers-too-early}
 
 > CVE-2018-12130 — KVM's original defense against Microarchitectural Data Sampling flushed CPU buffers with VERW several instructions before actually entering the guest, and every register spill and stack push in between was itself a memory access that could refill those buffers with fresh host data — a gap that sat unexamined for five years until a routine hardening pass closed it as a side effect
 
@@ -22,29 +22,29 @@ Actively exploited
 
 *Part of [War Stories: Virtualization (KVM) Bugs and Escapes](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 MDS — Microarchitectural Data Sampling — covers a family of related CPU flaws (MSBDS/CVE-2018-12126, MFBDS/CVE-2018-12130, MLPDS/CVE-2018-12127, MDSUM/CVE-2019-11091) in which, per the kernel's own documentation, "processors write data into temporary microarchitectural structures (buffers)" during ordinary store, load, and L1-refill operations, and that data can be speculatively sampled by other code before it's overwritten. The `VERW` instruction, repurposed for this mitigation, clears those buffers as a side effect. The kernel's fix was to execute `VERW` at the two boundaries where trust changes: on return to userspace, and — the case that matters here — immediately before a VM entry, so a guest can't sample whatever host data was left in the buffers by the host code that ran just before it.
 
-## The trigger
+## The trigger {#the-trigger}
 
 `650b68a0622f9` ("x86/kvm/vmx: Add MDS protection when L1D Flush is not active", committed under embargo in March 2019, first shipping in Linux 5.2) added the guest-entry VERW call as an ordinary C function invocation, `mds_clear_cpu_buffers()`, inside `__vmx_vcpu_run()` — immediately before the large inline `asm()` block that does the actual register save/restore and VMLAUNCH/VMRESUME. Immediately before, at the source level, is not the same as immediately before at the machine-code level: between that call and the actual VM-entry instruction sat an unknown quantity of compiler-generated code, plus the asm block's own "store host registers" prologue — which, quite literally, pushes registers onto the stack. Every one of those is a memory write. And per the kernel's own description of the vulnerability class, a memory write is exactly the kind of operation that populates the microarchitectural fill buffers MDS targets.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The practical consequence: VERW cleans the buffers, and then whatever ordinary memory traffic the compiler and the asm block's own register-save prologue generate — a pushed `%rbp` is one concrete example visible in the actual prologue — can refill them with fresh host data, all before the CPU actually hands control to the guest. A guest exploiting MFBDS after that point would be sampling *newly*-buffered host data, not the pre-flush contents VERW was supposed to have cleared. Five years later, `43fb862de8f62` ("KVM/VMX: Move VERW closer to VMentry for MDS mitigation", February 2024) described the risk in exactly these terms: "After VERW, any memory access like register push onto stack may put host data in MDS affected CPU buffers. A guest can then use MDS to sample host data. Although likelihood of secrets surviving in registers at current VERW callsite is less, but it can't be ruled out." The fix moved the buffer-clear into the hand-written assembly stub itself, as a `CLEAR_CPU_BUFFERS` macro inserted right after the guest's RAX is loaded and immediately before the branch to VMLAUNCH or VMRESUME — with no further C-level calls, spills, or memory writes physically possible in between.
 
 An even later commit, `e6ff1d61de51e` (November 2025, Sean Christopherson), reworking a related MMIO-specific mitigation, states the history plainly and puts a name on what had actually happened: "the flaw goes back to the introduction of the MDS mitigation. The MDS mitigation was inadvertently fixed by commit 43fb862de8f6 ... but previous kernels that flush CPU buffers in vmx_vcpu_enter_exit() are affected (though it's unlikely the flaw is meaningfully exploitable even older kernels)." The word "inadvertently" is doing real work there — the 2024 commit's authors were hardening the callsite against a *theoretical* concern they could articulate but hadn't traced back to the original 2019 design, and it took a third developer, over a year later, working on an adjacent piece of the same code, to recognize that the 2024 change had already closed a genuine, if likely low-severity, gap in the original fix.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The original 2019 mitigation was written under real time pressure — MDS was one of four CVEs disclosed together, across a 23-commit series covering documentation, sysfs reporting, command-line controls, and mitigations for both userspace and KVM simultaneously. Placing the VERW call as an ordinary C function invocation was the natural, mechanically simplest way to add the mitigation to existing C code; nobody involved in that specific patch appears to have reasoned explicitly about exactly how many bytes of compiler-generated code separated that call from the real VM-entry instruction, or audited what those bytes actually did. The gap wasn't a rejected tradeoff — it was a question nobody in the room had asked yet, closed only when a 2024 hardening pass on this same MDS callsite happened to move the code for a related but distinct concern, and only recognized as having fixed this specific gap by a third developer working on adjacent code a year later still.
 
-## Resolution
+## Resolution {#resolution}
 
 `43fb862de8f62` deletes the MDS-specific `mds_clear_cpu_buffers()` branch from `vmx_vcpu_enter_exit()` in `vmx.c`, and inserts a `CLEAR_CPU_BUFFERS` macro — a raw, alternative-patched `VERW` — directly into the `__vmx_vcpu_run` assembly routine in `vmenter.S`, positioned as the last instruction before the branch that executes VMLAUNCH or VMRESUME. By that point every guest register is already loaded into its GPR, and nothing further touches memory before the CPU commits to entering the guest — closing the MDS window entirely rather than merely narrowing it. A separate `mds_clear_cpu_buffers()` call for the unrelated MMIO Stale Data mitigation remained in `vmx_vcpu_enter_exit()`, still at the C level, with the same early-timing gap. `e6ff1d61de51e`, in late 2025, closed that one too: it moved the related MMIO Stale Data buffer-clear into the same assembly location via a shared `ALTERNATIVE_2` block, both consolidating the mitigations' code paths and, per its own commit message, fixing "a mostly-benign flaw where KVM wouldn't do any clearing/flushing" under one specific combination of mitigation settings — a second, smaller gap in the same neighborhood, found while cleaning up the first.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A security mitigation added under deadline pressure, correct in its stated goal, can still leave an unexamined gap in exactly how it's wired into the surrounding code.** The 2019 fix did add VERW at guest entry, as intended — it just didn't verify that nothing could touch memory between the flush and the entry it was protecting.
 
@@ -53,13 +53,13 @@ The original 2019 mitigation was written under real time pressure — MDS was on
 !!! warning "Pattern to watch for"
     When a security-critical instruction (a cache flush, a buffer clear, a permission check) needs to be "the last thing that happens" before a trust boundary is crossed, verify that placement at the assembly level, not just the C level — a compiler is free to insert spills, stack adjustments, and other memory traffic between a C statement and the machine instruction that logically follows it, and any of that traffic can undo the guarantee the security instruction was supposed to provide.
 
-## See also
+## See also {#see-also}
 
 - [L1TF: When a Not-Present Page Table Entry Wasn't Not-Present Enough](l1tf-foreshadow-vmm.md) — a sibling speculative-execution mitigation in the same KVM VM-entry path, with its own SMT-sharing caveat
 - [KVM Architecture](../kvm-arch.md) — VM entry/exit and the `vmlaunch`/`vmresume` boundary this mitigation protects
 - [The rt_mutex Deadlock Detector's Atomic-Sleep Bug](../../locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md) — a comparable case of code placement, not logic, being the actual defect
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: 650b68a0622f9](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=650b68a0622f933444a6d66936abb3103029413b) — "x86/kvm/vmx: Add MDS protection when L1D Flush is not active," the original 2019 mitigation
 - [git.kernel.org: 43fb862de8f62](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=43fb862de8f628c5db5e96831c915b9aebf62d33) — "KVM/VMX: Move VERW closer to VMentry for MDS mitigation," the 2024 fix

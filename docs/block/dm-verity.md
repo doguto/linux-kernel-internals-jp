@@ -1,8 +1,8 @@
-# Device Mapper: dm-verity and Integrity Checking
+# Device Mapper: dm-verity and Integrity Checking {#device-mapper-dm-verity-and-integrity-checking}
 
 > Merkle tree verification of block device data for Android and ChromeOS
 
-## What is dm-verity?
+## What is dm-verity? {#what-is-dm-verity}
 
 dm-verity provides **transparent integrity checking** of a block device using a Merkle (hash) tree. Every read is verified against pre-computed hashes. If data is tampered with, the kernel returns an error or panics.
 
@@ -17,7 +17,7 @@ Without dm-verity: read block → use data (no check)
 With dm-verity:    read block → hash block → compare with Merkle tree → use data
 ```
 
-## Merkle tree structure
+## Merkle tree structure {#merkle-tree-structure}
 
 ```
 Data blocks:        [B0][B1][B2][B3][B4][B5][B6][B7]
@@ -38,7 +38,7 @@ On read of B3:
 
 The root hash is stored outside the block device (in the kernel command line, TPM, or signed partition table).
 
-## dm-verity on-disk layout
+## dm-verity on-disk layout {#dm-verity-on-disk-layout}
 
 ```
 dm-verity device:
@@ -56,7 +56,7 @@ dm-verity device:
 
 The hash tree can be on the same device (after the data) or on a separate device.
 
-## Setting up dm-verity
+## Setting up dm-verity {#setting-up-dm-verity}
 
 ```bash
 # Step 1: Format a block device with dm-verity:
@@ -85,7 +85,7 @@ veritysetup verify /dev/sdb1 /dev/sdc1 1234567890abcdef...
 # Verification successful.
 ```
 
-## Kernel dm-verity implementation
+## Kernel dm-verity implementation {#kernel-dm-verity-implementation}
 
 ```c
 /* drivers/md/dm-verity-target.c */
@@ -137,7 +137,7 @@ static int verity_verify_io(struct dm_verity_io *io)
 }
 ```
 
-### Error modes
+### Error modes {#error-modes}
 
 ```c
 enum verity_mode {
@@ -148,7 +148,7 @@ enum verity_mode {
 };
 ```
 
-## dm-verity in Android
+## dm-verity in Android {#dm-verity-in-android}
 
 Android uses dm-verity for the `/system` partition since Android 4.4 (KitKat):
 
@@ -175,7 +175,7 @@ adb shell dmctl table system
 # 0 ...: verity 1 /dev/block/sda1 /dev/block/sda2 4096 4096 ...
 ```
 
-## dm-verity with fec (Forward Error Correction)
+## dm-verity with fec (Forward Error Correction) {#dm-verity-with-fec-forward-error-correction}
 
 ```bash
 # Enable FEC: can correct up to N corrupted bytes without failing:
@@ -188,7 +188,7 @@ veritysetup open --fec-device=/dev/sdc2 /dev/sdb1 verified /dev/sdc1 \
     <root_hash>
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Check dm-verity corruption stats:
@@ -206,7 +206,7 @@ cat /sys/module/dm_verity/parameters/error_behavior
 # EIO
 ```
 
-## dm-thin: thin provisioning
+## dm-thin: thin provisioning {#dm-thin-thin-provisioning}
 
 Another important device mapper target — thin provisioning allows creating virtual block devices larger than physical storage:
 
@@ -227,7 +227,7 @@ dmsetup message pool 0 "create_snap 1 0"   # snap ID 1, origin ID 0
 dmsetup create snap0 --table "0 2097152 thin /dev/mapper/pool 1"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [dm-crypt](../security/dm-crypt.md) — dm-crypt stacks well with dm-verity
 - [NVMe Driver](nvme.md) — block device dm-verity protects

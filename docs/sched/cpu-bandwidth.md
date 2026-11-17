@@ -1,8 +1,8 @@
-# CPU Bandwidth Control
+# CPU Bandwidth Control {#cpu-bandwidth-control}
 
 > CFS bandwidth throttling: how the kernel enforces hard CPU limits
 
-## What bandwidth control does
+## What bandwidth control does {#what-bandwidth-control-does}
 
 CPU weight (shares) controls the *proportion* of CPU a group gets when the system is busy. Bandwidth control caps the *absolute* amount — a group set to 50% will be throttled to 50% even if the other 99% of CPU is idle.
 
@@ -12,7 +12,7 @@ This matters for:
 - **Multi-tenant isolation**: Prevent one tenant from starving others
 - **Resource accounting**: Know exactly how much CPU a container is using
 
-## How it's configured
+## How it's configured {#how-its-configured}
 
 ```bash
 # v2 interface (unified)
@@ -29,7 +29,7 @@ echo 100000 > /sys/fs/cgroup/cpu/mygroup/cpu.cfs_period_us
 
 The **bandwidth** is `quota / period`. For a quota of 200ms and period of 100ms, the group can use 2 CPUs concurrently (200% utilization). The quota is a wall-clock budget, not per-CPU.
 
-## The bandwidth pool: struct cfs_bandwidth
+## The bandwidth pool: struct cfs_bandwidth {#the-bandwidth-pool-struct-cfs_bandwidth}
 
 Each cgroup has one global `cfs_bandwidth` pool:
 
@@ -54,7 +54,7 @@ struct cfs_bandwidth {
 
 At the start of each period, `runtime` is reset to `quota`. As tasks run, `runtime` drains. When `runtime` hits zero, all CPUs running tasks from this group are throttled.
 
-## Distribution: pool → per-CPU slice
+## Distribution: pool → per-CPU slice {#distribution-pool-per-cpu-slice}
 
 Tasks don't drain the global pool directly. Instead, each CPU grabs a **slice** from the pool when needed:
 
@@ -81,7 +81,7 @@ flowchart LR
 
 When a CPU's local runtime runs out, it calls `assign_cfs_rq_runtime()` to grab another slice. If the pool is empty, the CPU is throttled.
 
-### assign_cfs_rq_runtime()
+### assign_cfs_rq_runtime() {#assigncfsrq_runtime}
 
 ```c
 // kernel/sched/fair.c
@@ -95,7 +95,7 @@ static void assign_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 }
 ```
 
-## Throttling: throttle_cfs_rq()
+## Throttling: throttle_cfs_rq() {#throttling-throttlecfsrq}
 
 When a CPU's local runtime drains to zero and the global pool is empty:
 
@@ -118,7 +118,7 @@ static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 
 After throttling, the group's `sched_entity` is removed from the parent runqueue. `pick_next_task()` will never select a task from this group until it's unthrottled.
 
-## Refill: the period timer
+## Refill: the period timer {#refill-the-period-timer}
 
 At the end of each period, `period_timer` fires and refills the pool:
 
@@ -148,7 +148,7 @@ static void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 }
 ```
 
-## Burst: absorbing transient spikes
+## Burst: absorbing transient spikes {#burst-absorbing-transient-spikes}
 
 `cpu.max.burst` (v2) / `cpu.cfs_burst_us` (v1) allows a group to temporarily exceed its quota by consuming saved-up credit:
 
@@ -160,7 +160,7 @@ echo "20000"        > /sys/fs/cgroup/mygroup/cpu.max.burst  # burst (separate fi
 
 This helps workloads with bursty behavior (startup, GC pauses) avoid throttling while still maintaining average rate limits.
 
-## Slack timer: batching unthrottles
+## Slack timer: batching unthrottles {#slack-timer-batching-unthrottles}
 
 Unthrottling each CPU individually as soon as runtime becomes available would cause many small lock acquisitions. The **slack timer** batches unthrottles:
 
@@ -172,9 +172,9 @@ Unthrottling each CPU individually as soon as runtime becomes available would ca
 
 This reduces lock contention on `cfs_b->lock` at the cost of up to 5ms extra throttle time.
 
-## Diagnosing throttling
+## Diagnosing throttling {#diagnosing-throttling}
 
-### Reading cpu.stat
+### Reading cpu.stat {#reading-cpustat}
 
 ```bash
 cat /sys/fs/cgroup/mygroup/cpu.stat
@@ -187,7 +187,7 @@ burst_usec      15000  # total burst time (15ms)
 
 A high `nr_throttled / nr_periods` ratio (say, >10%) indicates the quota is too low for the workload.
 
-### Tracing bandwidth events
+### Tracing bandwidth events {#tracing-bandwidth-events}
 
 ```bash
 # Trace throttle/unthrottle events
@@ -197,7 +197,7 @@ trace-cmd record -e sched:sched_stat_throttled \
 trace-cmd report
 ```
 
-### Common causes of unexpected throttling
+### Common causes of unexpected throttling {#common-causes-of-unexpected-throttling}
 
 **Multi-threaded workloads**: If a group has 4 threads all running simultaneously, they collectively consume 4x the per-thread rate. A quota of 100ms/100ms = 100% is only 1 CPU — 4 threads will consume it in 25ms and be throttled for 75ms.
 
@@ -210,7 +210,7 @@ echo "200000 100000" > /sys/fs/cgroup/mygroup/cpu.max
 
 **Short-lived bursts**: Tasks that do heavy work for 50ms then sleep will hit throttling during the heavy phase. Burst budget can absorb this.
 
-## Bandwidth slice tuning
+## Bandwidth slice tuning {#bandwidth-slice-tuning}
 
 The default 5ms slice is a trade-off between:
 
@@ -225,7 +225,7 @@ cat /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [CPU cgroup v1 vs v2](cpu-cgroup.md) — The cgroup interface for bandwidth and weight
 - [cpuset](cpuset.md) — Restrict which CPUs bandwidth is counted against

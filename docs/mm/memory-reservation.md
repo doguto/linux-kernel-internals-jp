@@ -1,8 +1,8 @@
-# Kernel Memory Reservation Mechanisms
+# Kernel Memory Reservation Mechanisms {#kernel-memory-reservation-mechanisms}
 
 > Not all physical RAM is yours to use — the kernel, firmware, and hardware carve out regions long before user space ever runs
 
-## Why reservations exist
+## Why reservations exist {#why-reservations-exist}
 
 Physical memory is not a flat, uniformly available resource. By the time the kernel reaches `start_kernel()`, several parties have already laid claim to portions of the physical address space:
 
@@ -32,11 +32,11 @@ The buddy allocator, which manages all general-purpose page allocation, can only
 
 ---
 
-## memblock reservations
+## memblock reservations {#memblock-reservations}
 
 memblock is the kernel's boot-time memory manager. It maintains two flat arrays of `struct memblock_region`: one for all available physical memory (`memblock.memory`) and one for reserved regions (`memblock.reserved`). When `memblock_free_all()` is called late in `mm_init()`, only pages that appear in `memblock.memory` but *not* in `memblock.reserved` are released to the buddy allocator. Everything else stays off-limits.
 
-### memblock_reserve()
+### memblock_reserve() {#memblock_reserve}
 
 The primary reservation function is a thin inline wrapper in `include/linux/memblock.h`:
 
@@ -60,7 +60,7 @@ static __always_inline int memblock_reserve_kern(phys_addr_t base, phys_addr_t s
 
 All internal memblock allocations automatically set `MEMBLOCK_RSRV_KERN`.
 
-### memblock_phys_alloc()
+### memblock_phys_alloc() {#memblockphysalloc}
 
 Before the buddy allocator is available, the kernel must allocate memory for its own data structures (page tables, `struct page` arrays, zone structures). `memblock_phys_alloc()` satisfies these requests and returns a physical address:
 
@@ -74,7 +74,7 @@ static __always_inline phys_addr_t memblock_phys_alloc(phys_addr_t size,
 
 The call both allocates and implicitly marks the region reserved via `__memblock_reserve()` with `MEMBLOCK_RSRV_KERN`. A mapped virtual-address variant, `memblock_alloc()`, is also widely used for kernel data structure initialization.
 
-### memblock_mark_nomap()
+### memblock_mark_nomap() {#memblockmarknomap}
 
 A reserved region still gets struct pages allocated for it and is covered by the kernel direct map by default. `memblock_mark_nomap()` goes further by setting the `MEMBLOCK_NOMAP` flag, which prevents the region from being included in the kernel's direct physical mapping altogether:
 
@@ -87,7 +87,7 @@ int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
 
 Regions marked `MEMBLOCK_NOMAP` are still covered by the memory map (struct pages exist and are `PageReserved()`), but the kernel has no linear-map virtual address for them. This is used for device memory ranges or persistent memory that requires special mapping treatment. As the comment in `include/linux/memblock.h` states: *"don't add to kernel direct mapping and treat as reserved in the memory map."*
 
-### memblock flags summary
+### memblock flags summary {#memblock-flags-summary}
 
 | Flag | Meaning |
 |---|---|
@@ -101,11 +101,11 @@ Regions marked `MEMBLOCK_NOMAP` are still covered by the memory map (struct page
 
 ---
 
-## What gets reserved at boot on x86
+## What gets reserved at boot on x86 {#what-gets-reserved-at-boot-on-x86}
 
 `setup_arch()` in `arch/x86/kernel/setup.c` orchestrates all physical memory reservations for x86. The sequence matters — later stages depend on earlier reservations already being in place.
 
-### Phase 1: early_reserve_memory()
+### Phase 1: early_reserve_memory() {#phase-1-earlyreservememory}
 
 Called before `e820__memory_setup()` adds any RAM to `memblock.memory`, so nothing gets allocated on top of these regions:
 
@@ -143,7 +143,7 @@ static void __init early_reserve_memory(void)
 memblock_reserve(bios_start, 0x100000 - bios_start);
 ```
 
-### Phase 2: e820 and EFI memory map processing
+### Phase 2: e820 and EFI memory map processing {#phase-2-e820-and-efi-memory-map-processing}
 
 `e820__memory_setup()` reads the firmware's physical memory map (BIOS e820 or EFI memory map) and constructs the authoritative picture of what is RAM, what is reserved, and what is absent. Regions typed `E820_TYPE_RAM` are subsequently added to `memblock.memory` by `e820__memblock_setup()`.
 
@@ -153,7 +153,7 @@ On EFI systems, `efi_memblock_x86_reserve_range()` reserves the EFI memory map t
 memblock_reserve(pmap, efi.memmap.nr_map * efi.memmap.desc_size);
 ```
 
-### Phase 3: post-e820 reservations
+### Phase 3: post-e820 reservations {#phase-3-post-e820-reservations}
 
 After `e820__memblock_setup()`, the full memory topology is known and further reservations are made:
 
@@ -164,7 +164,7 @@ After `e820__memblock_setup()`, the full memory topology is known and further re
 - **CMA:** `dma_contiguous_reserve()` carves out the CMA region (see [CMA reservations](#cma-reservations) below).
 - **crashkernel:** `arch_reserve_crashkernel()` reserves the kdump region (see [crashkernel reservation](#crashkernel-reservation) below).
 
-### Reading the reservation log
+### Reading the reservation log {#reading-the-reservation-log}
 
 The kernel logs all memblock reservations at early boot. A typical x86 dmesg contains:
 
@@ -185,9 +185,9 @@ The kernel logs all memblock reservations at early boot. A typical x86 dmesg con
 
 ---
 
-## The reserved memory map
+## The reserved memory map {#the-reserved-memory-map}
 
-### /proc/iomem
+### /proc/iomem {#prociomem}
 
 `/proc/iomem` is the canonical view of the kernel resource tree — a hierarchical record of every claimed physical address range. Every reservation that calls `insert_resource()` or `request_resource()` appears here:
 
@@ -219,7 +219,7 @@ Fields to note:
 - `Reserved` — firmware-reserved areas the kernel does not use
 - `PCI Bus` — memory-mapped I/O ranges claimed by PCI
 
-### /sys/kernel/debug/memblock/reserved
+### /sys/kernel/debug/memblock/reserved {#syskerneldebugmemblockreserved}
 
 When `CONFIG_DEBUG_FS` is enabled, `memblock_init_debugfs()` in `mm/memblock.c` registers debugfs entries:
 
@@ -249,11 +249,11 @@ static int __init memblock_init_debugfs(void)
 
 ---
 
-## crashkernel reservation
+## crashkernel reservation {#crashkernel-reservation}
 
 The `crashkernel=` kernel command line parameter reserves a contiguous region of physical memory at boot that is handed over to a secondary "capture kernel" when the running kernel panics. This is the foundation of kdump.
 
-### How it works
+### How it works {#how-it-works}
 
 `arch_reserve_crashkernel()` in `arch/x86/kernel/setup.c` parses the command line and delegates to `reserve_crashkernel_generic()` in `kernel/crash_reserve.c`:
 
@@ -288,7 +288,7 @@ insert_resource(&iomem_resource, &crashk_res);
 
 The reserved memory is removed from the running kernel's linear map so it cannot be accidentally written. `kexec_load()` places the capture kernel image and initrd inside this region; on panic, `crash_kexec()` jumps into it.
 
-### Syntax options
+### Syntax options {#syntax-options}
 
 | Syntax | Meaning |
 |---|---|
@@ -301,7 +301,7 @@ The reserved memory is removed from the running kernel's linear map so it cannot
 !!! tip
     On x86-64, if the initial low-memory search fails, the kernel automatically retries in high memory and allocates a small `crashk_low_res` region below 4 GB to satisfy DMA-capable hardware in the capture kernel.
 
-### Timing
+### Timing {#timing}
 
 Note in `setup_arch()` that `arch_reserve_crashkernel()` is called *after* `initmem_init()` (which parses ACPI SRAT) so that the reservation avoids hotpluggable memory regions:
 
@@ -318,7 +318,7 @@ arch_reserve_crashkernel();
 
 ---
 
-## CMA reservations
+## CMA reservations {#cma-reservations}
 
 CMA (Contiguous Memory Allocator) carves out a physically contiguous region at boot, but unlike a hard reservation it remains productive: the kernel places movable pages (page cache, anonymous memory) in the CMA region during normal operation. When a device driver requests a large contiguous DMA buffer, the kernel migrates those movable pages out and hands the now-empty contiguous range to the driver.
 
@@ -328,7 +328,7 @@ See [CMA](cma.md) for full coverage of the CMA lifecycle, `dma_contiguous_reserv
 
 ---
 
-## Runtime reservations
+## Runtime reservations {#runtime-reservations}
 
 Once `memblock_free_all()` hands unreserved pages to the buddy allocator, the reservation landscape changes fundamentally. There is **no runtime equivalent of `memblock_reserve()`** for arbitrary physical ranges — the memblock arrays may have been freed, and the buddy allocator has no concept of marking an arbitrary range as off-limits after initialization.
 
@@ -344,13 +344,13 @@ Calling `alloc_pages()` removes the pages from the free pool. As long as the ker
 !!! warning
     There is no way to "reserve" a specific physical address at runtime. If a driver or subsystem needs a particular physical range, it must be reserved at boot time via `memblock_reserve()` from an `early_param` handler or architecture setup code, or mapped through a mechanism like persistent memory (pmem) that uses `MEMBLOCK_NOMAP`.
 
-### Memory hotplug
+### Memory hotplug {#memory-hotplug}
 
 The one mechanism that changes the physical memory available to the buddy allocator at runtime is memory hotplug: adding new DIMM slots or removing existing ones on capable hardware. This extends (or shrinks) `memblock.memory` and the buddy allocator's managed range. See the memory hotplug documentation for details on `add_memory()`, `remove_memory()`, and the `MEMBLOCK_HOTPLUG` flag.
 
 ---
 
-## ZONE_MOVABLE and movable_node
+## ZONE_MOVABLE and movable_node {#zonemovable-and-movablenode}
 
 Beyond hard reservations, the kernel supports a softer form of memory isolation: ensuring that a zone or an entire NUMA node's memory is placed in `ZONE_MOVABLE`. Pages in `ZONE_MOVABLE` can only be satisfied by movable allocations, which guarantees they can be migrated out, making the zone suitable for memory offlining and hotplug.
 
@@ -378,7 +378,7 @@ zone_movable_pfn[nid] = min(usable_startpfn, zone_movable_pfn[nid]);
 
 ---
 
-## Summary: reservation mechanisms at a glance
+## Summary: reservation mechanisms at a glance {#summary-reservation-mechanisms-at-a-glance}
 
 ```
 Boot time                          Runtime
@@ -407,7 +407,7 @@ Visible in:
   dmesg | grep -i reserved
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — covers `MEMBLOCK_HOTPLUG` regions, `movable_node`, and how reservations interact with runtime memory add/remove
 - [`Documentation/admin-guide/mm/memory-hotplug.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/memory-hotplug.rst) — `kernelcore=` and `movablecore=` parameters that shape the ZONE_MOVABLE split at boot

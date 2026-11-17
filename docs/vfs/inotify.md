@@ -1,8 +1,8 @@
-# inotify and fanotify
+# inotify and fanotify {#inotify-and-fanotify}
 
 > Filesystem event notification: watching files and directories for changes
 
-## inotify: file/directory watch API
+## inotify: file/directory watch API {#inotify-filedirectory-watch-api}
 
 `inotify` provides notifications when files or directories change. It was introduced in Linux 2.6.13 by Robert Love, based on earlier work by John McCutchan [(commit)](https://git.kernel.org/linus/0eeca28300df110bd6ed54b31193c83b87921443) [(LWN)](https://lwn.net/Articles/104343/), replacing the older **dnotify** mechanism which had a directory-only, signal-based interface. It's used by file managers, build systems, editors, and container runtimes.
 
@@ -36,7 +36,7 @@ inotify_rm_watch(ifd, wd);
 close(ifd);
 ```
 
-### Event masks
+### Event masks {#event-masks}
 
 ```c
 /* Watch events (what to watch for) */
@@ -71,7 +71,7 @@ IN_ONESHOT      /* Remove watch after first event */
 IN_ONLYDIR      /* Only watch if path is a directory */
 ```
 
-### Rename detection with cookie
+### Rename detection with cookie {#rename-detection-with-cookie}
 
 `IN_MOVED_FROM` and `IN_MOVED_TO` events for the same rename share a `cookie` value:
 
@@ -89,7 +89,7 @@ int wd_dst = inotify_add_watch(ifd, "/dst", IN_MOVE);
 
 If only one side is watched, you get an `IN_MOVED_FROM` or `IN_MOVED_TO` without the matching pair — detect cross-directory renames that way.
 
-### inotify limits
+### inotify limits {#inotify-limits}
 
 ```bash
 # Maximum number of inotify instances per user
@@ -105,14 +105,14 @@ cat /proc/sys/fs/inotify/max_queued_events   # default: 16384
 echo 524288 | sudo tee /proc/sys/fs/inotify/max_user_watches
 ```
 
-### inotify limitations
+### inotify limitations {#inotify-limitations}
 
 - **Recursive watching**: inotify does not watch subdirectories automatically — you must add a watch for each directory
 - **No event for the watcher itself**: if the watched directory is deleted, you get `IN_DELETE_SELF` but cannot watch the replacement
 - **Network filesystems**: inotify may not work on NFS, CIFS (depends on server support)
 - **Overflow loses events**: `IN_Q_OVERFLOW` tells you events were dropped but not which ones
 
-## fanotify: filesystem-wide event notification
+## fanotify: filesystem-wide event notification {#fanotify-filesystem-wide-event-notification}
 
 `fanotify` was introduced in Linux 2.6.36 by Eric Paris at Red Hat [(commit)](https://git.kernel.org/linus/ff0b16a9850e8a240ad59e10b0a1291a8fcf7cbc) and fully enabled in Linux 2.6.37. It is a superset of inotify with additional capabilities:
 
@@ -159,7 +159,7 @@ for (struct fanotify_event_metadata *m = buf;
 }
 ```
 
-### fanotify permission events
+### fanotify permission events {#fanotify-permission-events}
 
 ```c
 /* Permission events: intercept and allow/deny access */
@@ -188,7 +188,7 @@ close(ev.fd);
 
 `FAN_CLASS_CONTENT` (for `FAN_OPEN_PERM` etc.) requires `CAP_SYS_ADMIN`. This is how antivirus software (like ClamAV's `clamonacc`) implements on-access scanning on Linux.
 
-### fanotify mark types (5.1+)
+### fanotify mark types (5.1+) {#fanotify-mark-types-51}
 
 ```c
 /* Mark an individual filesystem object (5.1+) */
@@ -202,7 +202,7 @@ fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
 int fan = fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID, 0);
 ```
 
-## Kernel implementation: fsnotify
+## Kernel implementation: fsnotify {#kernel-implementation-fsnotify}
 
 Both `inotify` and `fanotify` are built on top of `fsnotify`, a generic filesystem notification framework:
 
@@ -256,7 +256,7 @@ int fsnotify(struct inode *inode, __u32 mask, const void *data, int data_type,
 /* security_inode_rename → fsnotify_rename */
 ```
 
-### VFS hook points
+### VFS hook points {#vfs-hook-points}
 
 ```c
 /* fs/attr.c */
@@ -281,9 +281,9 @@ int vfs_rename(...)
 }
 ```
 
-## Practical patterns
+## Practical patterns {#practical-patterns}
 
-### Watch a directory recursively (userspace workaround)
+### Watch a directory recursively (userspace workaround) {#watch-a-directory-recursively-userspace-workaround}
 
 ```c
 /* inotify has no recursive mode — must add watches manually */
@@ -306,7 +306,7 @@ void watch_recursive(int ifd, const char *path) {
 /* When IN_CREATE | IN_ISDIR arrives: add a new watch for the new subdir */
 ```
 
-### Using epoll with inotify
+### Using epoll with inotify {#using-epoll-with-inotify}
 
 ```c
 /* inotify fd integrates with epoll */
@@ -327,7 +327,7 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-## inotify vs fanotify
+## inotify vs fanotify {#inotify-vs-fanotify}
 
 | Feature | inotify | fanotify |
 |---------|---------|---------|
@@ -340,7 +340,7 @@ for (int i = 0; i < n; i++) {
 | Rename tracking | Cookie-based | FAN_RENAME (5.17+) |
 | Typical use | Build systems, editors | AV scanning, audit |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — inodes and dentries that receive events
 - [File Operations](file-ops.md) — VFS hooks that trigger fsnotify

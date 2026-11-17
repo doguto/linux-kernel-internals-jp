@@ -1,8 +1,8 @@
-# EEVDF Scheduler
+# EEVDF Scheduler {#eevdf-scheduler}
 
 > Earliest Eligible Virtual Deadline First: adding latency guarantees to fairness
 
-## The problem with CFS
+## The problem with CFS {#the-problem-with-cfs}
 
 CFS selects the task with the smallest `vruntime`. This is fair but not deadline-aware.
 
@@ -10,7 +10,7 @@ Consider a task that just woke from I/O. Its vruntime may be behind the pack, so
 
 EEVDF fixes this by replacing CFS's "minimum vruntime" selection with **"earliest deadline among eligible tasks"**.
 
-## Background
+## Background {#background}
 
 EEVDF is based on the 1995 technical report ["Earliest Eligible Virtual Deadline First: A Flexible and Accurate Mechanism for Proportional Share Resource Allocation"](https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=805acf7726282721504c8f00575d91ebfd750564) by Ion Stoica and Hussein Abdel-Wahab (William & Mary).
 
@@ -21,9 +21,9 @@ It was implemented for Linux by Peter Zijlstra (Intel) and merged in kernel 6.6 
 - [`147f3efaa241`](https://git.kernel.org/linus/147f3efaa24182a21706bca15eab2f3f4630b5fe) — `sched/fair: Implement an EEVDF-like scheduling algorithm`
 - [`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c) — `sched/fair: Commit to EEVDF` (makes EEVDF unconditional in `pick_next_entity`)
 
-## Two concepts: eligibility and virtual deadline
+## Two concepts: eligibility and virtual deadline {#two-concepts-eligibility-and-virtual-deadline}
 
-### Eligibility
+### Eligibility {#eligibility}
 
 A task is **eligible** if it hasn't consumed more than its fair share of CPU up to the current virtual time. Informally: a task that has been running too much is ineligible and shouldn't preempt others.
 
@@ -44,7 +44,7 @@ static bool vruntime_eligible(struct cfs_rq *cfs_rq, u64 vruntime)
 
 A task is eligible if its `vruntime` is at or behind the weighted average vruntime of the runqueue.
 
-### Virtual deadline
+### Virtual deadline {#virtual-deadline}
 
 Each task has a `deadline` — the virtual time by which it should have run. When a task is placed on the runqueue, its deadline is set as:
 
@@ -57,7 +57,7 @@ This means: "I want to run for `slice` worth of virtual time starting from my cu
 
 A task with a short `slice` gets an early deadline and runs sooner. A task with a long `slice` gets a later deadline and may wait.
 
-## The new fields in sched_entity
+## The new fields in sched_entity {#the-new-fields-in-sched_entity}
 
 EEVDF added several fields to `struct sched_entity` (in `include/linux/sched.h`):
 
@@ -72,13 +72,13 @@ struct sched_entity {
 };
 ```
 
-### vlag
+### vlag {#vlag}
 
 `vlag` tracks the task's lag relative to the ideal fair-share schedule. Positive lag means the task is behind its ideal share (hasn't gotten enough CPU); negative lag means it's ahead.
 
 When a task wakes up, `vlag` is used to place its `vruntime` appropriately — preventing sleeping tasks from either starving (getting nothing) or bursting (monopolizing CPU after a long sleep).
 
-## Selection: __pick_eevdf()
+## Selection: __pick_eevdf() {#selection-_pickeevdf}
 
 The core selection function:
 
@@ -120,9 +120,9 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
 
 The algorithm walks the RB-tree, finds all eligible tasks, and returns the one with the earliest (smallest) deadline. Non-eligible tasks are skipped. The tree traversal is pruned using cached `min_deadline` subtree values for efficiency.
 
-## How EEVDF improves latency
+## How EEVDF improves latency {#how-eevdf-improves-latency}
 
-### Scenario: batch + interactive task
+### Scenario: batch + interactive task {#scenario-batch-interactive-task}
 
 With CFS (simplified):
 ```
@@ -142,7 +142,7 @@ Network: ░░░░░░░░████░░░░░░░░░░░�
 
 The network task has an early deadline (small requested slice) and is eligible (just woke). EEVDF schedules it immediately without waiting for vruntime to drift.
 
-## Time slice and sched_base_slice_ns
+## Time slice and sched_base_slice_ns {#time-slice-and-schedbaseslice_ns}
 
 When EEVDF was merged in 6.6, the old `sched_latency_ns` / `sched_min_granularity_ns` tunables were deprecated in favor of `sched_base_slice_ns` ([`e4ec3318a17f`](https://git.kernel.org/linus/e4ec3318a17f5dcf11bc23b2d2c1da4c1c5bb507), Peter Zijlstra); the sysctls still exist but `sched_base_slice_ns` is now the primary knob. The base time slice is now controlled by a single knob:
 
@@ -155,7 +155,7 @@ Each task's `slice` is set to `sched_base_slice_ns` scaled by the task's weight 
 
 Applications can request a specific latency hint via `sched_setattr()` with `SCHED_FLAG_UTIL_CLAMP_MIN`/`SCHED_FLAG_UTIL_CLAMP_MAX` for frequency scaling, but direct slice control from userspace is not yet exposed.
 
-## Comparing CFS and EEVDF selection
+## Comparing CFS and EEVDF selection {#comparing-cfs-and-eevdf-selection}
 
 | Aspect | CFS | EEVDF |
 |--------|-----|-------|
@@ -166,13 +166,13 @@ Applications can request a specific latency hint via `sched_setattr()` with `SCH
 | Worst-case selection | O(1) (leftmost node) | O(log n) (tree walk, pruned) |
 | Time slice | Implicit, from latency target | Explicit (`se->slice`) |
 
-## What didn't change
+## What didn't change {#what-didnt-change}
 
 EEVDF replaced the *selection* inside `fair_sched_class` — the vruntime machinery, weight calculations, group scheduling, load balancing, and enqueue/dequeue paths are largely unchanged. The `sched_prio_to_weight` table, `calc_delta_fair()`, `update_curr()`, and cgroup integration all remain from CFS.
 
 This means EEVDF is an evolution of CFS, not a replacement. The name "CFS" is increasingly a misnomer for what's actually EEVDF — but the `fair_sched_class` still carries the name.
 
-## Checking EEVDF behavior
+## Checking EEVDF behavior {#checking-eevdf-behavior}
 
 ```bash
 # Per-task sched info (includes vruntime, deadline, slice)
@@ -187,7 +187,7 @@ trace-cmd record -e sched:sched_switch -e sched:sched_wakeup ./workload
 trace-cmd report
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [CFS](cfs.md) — The vruntime foundation that EEVDF builds on
 - [Runqueues](runqueues.md) — The per-CPU context EEVDF runs within

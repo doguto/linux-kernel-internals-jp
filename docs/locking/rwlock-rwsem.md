@@ -1,8 +1,8 @@
-# rwlock and rwsem
+# rwlock and rwsem {#rwlock-and-rwsem}
 
 > Reader-writer locking — concurrent reads, exclusive writes
 
-## The reader-writer pattern
+## The reader-writer pattern {#the-reader-writer-pattern}
 
 Many kernel data structures are read far more often than they are written. A plain spinlock or mutex serializes all access, even concurrent reads that don't conflict. Reader-writer locks allow multiple simultaneous readers while ensuring writers have exclusive access:
 
@@ -19,7 +19,7 @@ The kernel provides two reader-writer primitives:
 | `rwlock_t` | No (spinlock) | Yes | Interrupt context, short critical sections |
 | `rw_semaphore` | Yes (sleeping) | No | Process context, longer critical sections |
 
-## rwlock_t: the spinning variant
+## rwlock_t: the spinning variant {#rwlock_t-the-spinning-variant}
 
 `rwlock_t` is a reader-writer spinlock. Readers and writers both spin rather than sleep.
 
@@ -56,7 +56,7 @@ read_unlock_bh(&my_rwlock);
 
 On PREEMPT_RT kernels, `rwlock_t` is implemented with `rwbase_rt` (sleeping), just like `spinlock_t` maps to `rt_mutex`.
 
-## rw_semaphore: the sleeping variant
+## rw_semaphore: the sleeping variant {#rw_semaphore-the-sleeping-variant}
 
 `rw_semaphore` is the sleeping counterpart to `rwlock_t`. Contended waiters go to sleep rather than spinning (after a brief optimistic spin phase, like mutex).
 
@@ -79,7 +79,7 @@ count & RWSEM_WRITER_LOCKED     → held by writer (bit 0)
 count >> RWSEM_READER_SHIFT     → number of active readers
 ```
 
-### API
+### API {#api}
 
 ```c
 #include <linux/rwsem.h>
@@ -116,7 +116,7 @@ downgrade_write(&my_rwsem);    /* demote exclusive → shared */
 up_read(&my_rwsem);
 ```
 
-### downgrade_write
+### downgrade_write {#downgrade_write}
 
 `downgrade_write()` atomically converts a write lock to a read lock. It's used when a writer has finished the write phase and wants to continue reading, while allowing other readers in:
 
@@ -128,7 +128,7 @@ downgrade_write(&mm->mmap_lock);
 up_read(&mm->mmap_lock);
 ```
 
-## Writer starvation
+## Writer starvation {#writer-starvation}
 
 A critical problem with naïve reader-writer locks: if readers arrive continuously, a writer may never get the lock. Linux's rwsem prevents this by queuing writers — once a writer is waiting, new readers are also queued (they don't jump ahead of the waiting writer).
 
@@ -141,7 +141,7 @@ Timeline:
   W1 releases → R2 gets lock
 ```
 
-## When to use rwlock vs rwsem vs plain mutex/spinlock
+## When to use rwlock vs rwsem vs plain mutex/spinlock {#when-to-use-rwlock-vs-rwsem-vs-plain-mutexspinlock}
 
 ```
 rwlock_t:
@@ -159,7 +159,7 @@ and reads are long enough to matter, rwsem is a win.
 The mm subsystem uses it heavily (mm->mmap_lock).
 ```
 
-## Real-world usage: mmap_lock
+## Real-world usage: mmap_lock {#real-world-usage-mmap_lock}
 
 The VMA list in each process is protected by `mm->mmap_lock` (an `rw_semaphore`):
 
@@ -178,7 +178,7 @@ mmap_write_unlock(mm);   /* = up_write(&mm->mmap_lock) */
 
 This allows multiple threads in the same process to take page faults concurrently, while mmap/munmap operations are serialized.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Spinlock and raw_spinlock](spinlock.md) — The plain spinlock
 - [RCU](rcu.md) — Even more concurrent reads (no reader-side locking at all)

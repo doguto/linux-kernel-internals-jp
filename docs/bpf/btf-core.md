@@ -1,8 +1,8 @@
-# BTF and CO-RE
+# BTF and CO-RE {#btf-and-co-re}
 
 > Writing BPF programs that run across different kernel versions
 
-## The problem BTF solves
+## The problem BTF solves {#the-problem-btf-solves}
 
 Kernel data structures change between versions. A BPF program compiled against kernel 5.15 might access `struct task_struct` at the wrong offsets on kernel 6.1 if the struct was reorganized.
 
@@ -10,7 +10,7 @@ Before BTF/CO-RE, BPF programs were compiled with kernel headers from a specific
 
 **CO-RE** (Compile Once, Run Everywhere), developed by Andrii Nakryiko, lets you compile a BPF program once and have it work on any kernel version ≥ 5.8 that has BTF.
 
-## BTF: BPF Type Format
+## BTF: BPF Type Format {#btf-bpf-type-format}
 
 BTF is a compact type information format stored in a special ELF section (`.BTF`) and loaded into the kernel alongside BPF programs. It was introduced in Linux 4.18 by Martin KaFai Lau. [(commit)](https://git.kernel.org/linus/69b693f0aefa0ed521e8bd02260523b5ae446ad7)
 
@@ -23,7 +23,7 @@ ls /sys/kernel/btf/vmlinux
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 ```
 
-### BTF type encoding
+### BTF type encoding {#btf-type-encoding}
 
 ```c
 /* BTF represents types as a sequence of type descriptors */
@@ -57,7 +57,7 @@ The kernel loads BTF via `BTF_LOAD` bpf() command and uses it:
 - For bpftool/libbpf: to pretty-print map values and program contexts
 - For BPF iterators and kfuncs: function signatures
 
-## vmlinux.h: all kernel types in one header
+## vmlinux.h: all kernel types in one header {#vmlinuxh-all-kernel-types-in-one-header}
 
 Instead of including individual kernel headers, CO-RE programs typically use a generated `vmlinux.h`:
 
@@ -79,7 +79,7 @@ This single header contains every struct, union, enum, and typedef in the runnin
 #include <bpf/bpf_core_read.h> /* CO-RE macros */
 ```
 
-## CO-RE field access
+## CO-RE field access {#co-re-field-access}
 
 The key CO-RE mechanism is `BPF_CORE_READ`, which records relocations that libbpf patches at load time:
 
@@ -111,7 +111,7 @@ int trace_open(struct pt_regs *ctx)
 2. Looks up the actual offset of `task_struct.pid` in that kernel
 3. Patches the instruction with the correct offset
 
-### CO-RE read variants
+### CO-RE read variants {#co-re-read-variants}
 
 ```c
 /* Basic read */
@@ -135,7 +135,7 @@ bpf_core_type_exists(struct foo)
 bpf_core_field_size(ptr->field)
 ```
 
-### CO-RE for enum values
+### CO-RE for enum values {#co-re-for-enum-values}
 
 Enum values can also change between kernels. CO-RE handles this:
 
@@ -148,7 +148,7 @@ else
     state = BPF_CORE_READ(task, __state);  /* renamed in 5.14 */
 ```
 
-## Kernel version checks at load time
+## Kernel version checks at load time {#kernel-version-checks-at-load-time}
 
 For features that were added or removed:
 
@@ -169,7 +169,7 @@ int my_prog(struct pt_regs *ctx)
 
 The `extern ... __kconfig` syntax reads values from `/proc/config.gz` or `Kconfig` symbols, also resolved by libbpf at load time.
 
-## BTF-based tracing: fentry/fexit
+## BTF-based tracing: fentry/fexit {#btf-based-tracing-fentryfexit}
 
 BTF enables a more efficient alternative to kprobes — `fentry` and `fexit` programs:
 
@@ -203,7 +203,7 @@ int BPF_PROG(trace_tcp_sendmsg_ret,
 
 `fentry`/`fexit` use trampolines — direct calls into the BPF JIT code — and are 10–100x lower overhead than kprobes.
 
-## BTF in maps: typed map values
+## BTF in maps: typed map values {#btf-in-maps-typed-map-values}
 
 With BTF, map values can be self-describing:
 
@@ -231,7 +231,7 @@ bpftool map dump id 42
 # }]
 ```
 
-## Observing BTF
+## Observing BTF {#observing-btf}
 
 ```bash
 # List all BTF objects loaded in the kernel
@@ -251,7 +251,7 @@ bpftool prog list
 bpftool btf dump id <btf_id>
 ```
 
-## Writing portable BPF programs: checklist
+## Writing portable BPF programs: checklist {#writing-portable-bpf-programs-checklist}
 
 1. Use `vmlinux.h` instead of kernel headers
 2. Use `BPF_CORE_READ()` for all kernel struct field accesses
@@ -272,7 +272,7 @@ llvm-readelf --sections my_prog.bpf.o | grep BTF
 # .BTF.ext     PROGBITS  ...  (line number info for verifier)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [libbpf and Skeletons](libbpf.md) — Using CO-RE with libbpf's load workflow
 - [BPF Verifier](bpf-verifier.md) — How BTF improves verifier type checking

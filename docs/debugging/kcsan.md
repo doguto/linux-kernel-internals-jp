@@ -1,8 +1,8 @@
-# KCSAN: Kernel Concurrency Sanitizer
+# KCSAN: Kernel Concurrency Sanitizer {#kcsan-kernel-concurrency-sanitizer}
 
 > Data race detection using watchpoints and the Linux Kernel Memory Model
 
-## What is a data race?
+## What is a data race? {#what-is-a-data-race}
 
 A **data race** occurs when two threads access the same memory location concurrently, at least one access is a write, and there's no synchronization between them:
 
@@ -15,7 +15,7 @@ x++;                    y = x;     /* data race! */
 
 Data races are undefined behavior in C11 and cause subtle bugs — compilers can miscompile racing code in unexpected ways, and hardware CPUs may reorder or coalesce the accesses.
 
-## How KCSAN works
+## How KCSAN works {#how-kcsan-works}
 
 KCSAN uses **software watchpoints** to detect racing accesses:
 
@@ -32,7 +32,7 @@ Thread 2 read from &x (during the delay):
 
 This is a probabilistic approach — not all races are detected, but it finds real races in practice without false positives (compared to shadow memory approaches).
 
-## Configuration
+## Configuration {#configuration}
 
 ```bash
 # Kconfig options (all but one are the real defaults once CONFIG_KCSAN=y):
@@ -47,7 +47,7 @@ CONFIG_KCSAN_REPORT_RACE_UNKNOWN_ORIGIN=y  # report even without second stack (d
 # Build: set CONFIG_KCSAN=y in .config, then build normally
 ```
 
-## Reading KCSAN reports
+## Reading KCSAN reports {#reading-kcsan-reports}
 
 ```
 ==================================================================
@@ -77,7 +77,7 @@ Key fields:
 - **value changed**: shows the write that caused the race
 - **two call stacks**: one for each racing access
 
-## Annotation: intentional benign races
+## Annotation: intentional benign races {#annotation-intentional-benign-races}
 
 Some kernel code intentionally reads a variable without synchronization as a hint/optimization. These must be annotated to silence KCSAN:
 
@@ -98,7 +98,7 @@ void __no_kcsan my_racy_function(void)
 }
 ```
 
-## Atomic operations and KCSAN
+## Atomic operations and KCSAN {#atomic-operations-and-kcsan}
 
 Atomic operations are not races:
 
@@ -113,7 +113,7 @@ old = smp_load_acquire(&ptr);
 smp_store_release(&ptr, new);
 ```
 
-## Linux Kernel Memory Model (LKMM)
+## Linux Kernel Memory Model (LKMM) {#linux-kernel-memory-model-lkmm}
 
 KCSAN is designed to enforce the **Linux Kernel Memory Model**, which defines the formal semantics of concurrent kernel code:
 
@@ -152,7 +152,7 @@ int reader(void)
 }
 ```
 
-## KCSAN vs other sanitizers
+## KCSAN vs other sanitizers {#kcsan-vs-other-sanitizers}
 
 | | KCSAN | KASAN | ThreadSanitizer |
 |---|-------|-------|-----------------|
@@ -162,7 +162,7 @@ int reader(void)
 | False positives | Very few | None | Some |
 | Context | Kernel only | Kernel only | Userspace |
 
-## syzkaller integration
+## syzkaller integration {#syzkaller-integration}
 
 syzkaller (kernel fuzzer) combined with KCSAN finds races in new syscall paths:
 
@@ -174,7 +174,7 @@ syzkaller (kernel fuzzer) combined with KCSAN finds races in new syscall paths:
 # KCSAN watchpoints detect races between concurrent syscall invocations
 ```
 
-## Debugging a reported race
+## Debugging a reported race {#debugging-a-reported-race}
 
 ```bash
 # 1. Capture the race:
@@ -207,9 +207,9 @@ echo 100 > /sys/module/kcsan/parameters/udelay_task  # raise the max delay to 10
 # No new race reports for the same location
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/kcsan/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/core.c) — the watchpoint-based race detection engine
 - [kernel/kcsan/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcsan/report.c) — report formatting: the two racing call stacks and the "value changed" line
@@ -220,7 +220,7 @@ echo 100 > /sys/module/kcsan/parameters/udelay_task  # raise the max delay to 10
 - [Documentation/dev-tools/kcsan.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kcsan.rst) — official KCSAN documentation
 - [tools/memory-model/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/memory-model/) — Linux Kernel Memory Model (LKMM) formal specification
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KASAN](../mm/kasan.md) — memory error detection (use-after-free, OOB)
 - [KFENCE](../mm/kfence.md) — lightweight sampling memory error detector
@@ -228,11 +228,11 @@ echo 100 > /sys/module/kcsan/parameters/udelay_task  # raise the max delay to 10
 - [RCU](../locking/rcu.md) — RCU is a race-free read-mostly pattern
 - [Spinlock](../locking/spinlock.md) — spinlocks prevent races
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Finding race conditions with KCSAN](https://lwn.net/Articles/802128/) — Jonathan Corbet's introduction to KCSAN shortly after it was announced (October 2019, ahead of its eventual merge in 5.8)
 - [Concurrency bugs should fear the big bad data-race detector](https://lwn.net/Articles/816850/) — a joint writeup by the KCSAN and Linux Kernel Memory Model developers on how the two projects fit together (April 2020)
 
-### External
+### External {#external}
 
 - [docs.kernel.org: Kernel Concurrency Sanitizer (KCSAN)](https://docs.kernel.org/dev-tools/kcsan.html) — rendered official documentation, including the debugfs interface and tuning parameters

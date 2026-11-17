@@ -1,8 +1,8 @@
-# memblock: The Boot-Time Memory Allocator
+# memblock: The Boot-Time Memory Allocator {#memblock-the-boot-time-memory-allocator}
 
 > Before the buddy system can manage memory, something has to manage memory first
 
-## What is memblock?
+## What is memblock? {#what-is-memblock}
 
 memblock is the kernel's early boot-time memory allocator. It tracks which physical memory regions exist and which are already reserved, allowing the kernel to allocate memory during the earliest stages of boot -- long before the buddy allocator (page allocator) is initialized.
 
@@ -17,7 +17,7 @@ int memblock_reserve(phys_addr_t base, phys_addr_t size);
 void *memblock_alloc(phys_addr_t size, phys_addr_t align);
 ```
 
-## The Chicken-and-Egg Problem
+## The Chicken-and-Egg Problem {#the-chicken-and-egg-problem}
 
 The buddy allocator is the kernel's primary physical memory manager at runtime. But setting it up requires memory:
 
@@ -55,9 +55,9 @@ Boot sequence:
   7. memblock is done (memory can be freed if not needed)
 ```
 
-## How memblock Works
+## How memblock Works {#how-memblock-works}
 
-### Two Arrays: memory and reserved
+### Two Arrays: memory and reserved {#two-arrays-memory-and-reserved}
 
 The core data structure is simple. memblock maintains two collections of regions:
 
@@ -111,7 +111,7 @@ kernel  DTB                  initrd
 Free = memory minus reserved
 ```
 
-### Region Merging
+### Region Merging {#region-merging}
 
 When adjacent or overlapping regions are added, memblock automatically merges them. This keeps the arrays compact:
 
@@ -121,7 +121,7 @@ memblock_add(1GB, 1GB)  -> memory: [0, 2GB]     (merged)
 memblock_add(3GB, 1GB)  -> memory: [0, 2GB], [3GB, 4GB]  (gap, no merge)
 ```
 
-### Static Bootstrap
+### Static Bootstrap {#static-bootstrap}
 
 The initial region arrays are statically allocated:
 
@@ -132,9 +132,9 @@ static struct memblock_region memblock_reserved_init_regions[INIT_MEMBLOCK_RESER
 
 `INIT_MEMBLOCK_REGIONS` defaults to 128. If more regions are needed, memblock doubles the array using `memblock_double_array()`, which allocates new space from memblock itself -- a neat self-referential trick that works because the old array remains valid until the copy is complete.
 
-## Key APIs
+## Key APIs {#key-apis}
 
-### Adding and Removing Memory
+### Adding and Removing Memory {#adding-and-removing-memory}
 
 ```c
 /* Tell memblock about physical memory regions (called by arch code) */
@@ -153,7 +153,7 @@ int memblock_phys_free(phys_addr_t base, phys_addr_t size);
 int memblock_mark_nomap(phys_addr_t base, phys_addr_t size);
 ```
 
-### Allocating Memory
+### Allocating Memory {#allocating-memory}
 
 ```c
 /* Allocate aligned memory (most common) */
@@ -170,7 +170,7 @@ phys_addr_t memblock_phys_alloc(phys_addr_t size, phys_addr_t align);
 
 `memblock_alloc()` does two things: finds a free physical region and maps it into the kernel's virtual address space (via `memblock_alloc_internal()` which calls `memblock_alloc_range_nid()` then `memblock_reserve()` on the result). The returned pointer is a kernel virtual address ready to use.
 
-### Querying Memory
+### Querying Memory {#querying-memory}
 
 ```c
 /* Is this address in a reserved region? */
@@ -186,11 +186,11 @@ phys_addr_t memblock_phys_mem_size(void);
 for_each_free_mem_range(i, nid, flags, &start, &end, NULL)
 ```
 
-## Memory Discovery: Device Tree and ACPI
+## Memory Discovery: Device Tree and ACPI {#memory-discovery-device-tree-and-acpi}
 
 memblock does not discover memory on its own. Architecture-specific code populates it using firmware information.
 
-### Device Tree (ARM, RISC-V, PowerPC, etc.)
+### Device Tree (ARM, RISC-V, PowerPC, etc.) {#device-tree-arm-risc-v-powerpc-etc}
 
 On device-tree platforms, the `/memory` nodes describe physical RAM:
 
@@ -205,14 +205,14 @@ On device-tree platforms, the `/memory` nodes describe physical RAM:
 
 The kernel's early DT scanning code (`early_init_dt_scan_memory()` in [`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c)) parses these nodes and calls `memblock_add()` for each region. Reserved memory nodes (`/reserved-memory`) result in `memblock_reserve()` calls.
 
-### ACPI (x86, ARM servers)
+### ACPI (x86, ARM servers) {#acpi-x86-arm-servers}
 
 On ACPI systems, the firmware provides memory maps through different mechanisms:
 
 - **x86**: The BIOS/UEFI provides an **e820 memory map** -- a table of address ranges with types (usable, reserved, ACPI reclaimable, etc.). The function `e820__memblock_setup()` in [`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) translates e820 entries into `memblock_add()` and `memblock_reserve()` calls.
 - **ARM64 with ACPI**: Uses EFI memory map entries, processed by `efi_init()`.
 
-### The Pattern
+### The Pattern {#the-pattern}
 
 Regardless of platform, the flow is the same:
 
@@ -230,7 +230,7 @@ memblock_reserve() for reserved regions
 memblock has complete picture of physical memory
 ```
 
-## The Handoff to the Buddy Allocator
+## The Handoff to the Buddy Allocator {#the-handoff-to-the-buddy-allocator}
 
 Once the kernel has used memblock to set up all the data structures the buddy allocator needs, memblock's job is nearly done. The handoff happens through `memblock_free_all()`:
 
@@ -259,9 +259,9 @@ memblock_free_all() walkthrough:
   Result: buddy free lists populated, system ready for normal allocation
 ```
 
-## History and Evolution
+## History and Evolution {#history-and-evolution}
 
-### bootmem: The Original Approach (Linux 2.4 through early 3.x)
+### bootmem: The Original Approach (Linux 2.4 through early 3.x) {#bootmem-the-original-approach-linux-24-through-early-3x}
 
 Before memblock, the kernel used a **bitmap-based** boot allocator called `bootmem`. Each bit represented one physical page: 1 = allocated, 0 = free.
 
@@ -272,7 +272,7 @@ The problems with bootmem:
 - **No NUMA awareness**: The original bootmem had no concept of memory nodes
 - **Fragile**: The bitmap itself needed to live somewhere in memory, creating another bootstrap problem
 
-### The Rise of memblock (Logical Memory Blocks)
+### The Rise of memblock (Logical Memory Blocks) {#the-rise-of-memblock-logical-memory-blocks}
 
 memblock's predecessor was called **lmb** (Logical Memory Blocks), used on PowerPC. It tracked memory as a list of regions rather than a per-page bitmap -- far more efficient when memory is mostly contiguous.
 
@@ -282,7 +282,7 @@ memblock's predecessor was called **lmb** (Logical Memory Blocks), used on Power
 
 Yinghai Lu renamed lmb to memblock and began extending it for use on x86. The rename was the first step in making it architecture-independent.
 
-### memblock Replaces bootmem
+### memblock Replaces bootmem {#memblock-replaces-bootmem}
 
 Over several kernel releases, architectures migrated from bootmem to memblock:
 
@@ -300,7 +300,7 @@ The final removal of bootmem happened when all architectures had been converted:
 
 This was a significant cleanup -- the bootmem code had accumulated decades of workarounds and special cases.
 
-### Recent Improvements
+### Recent Improvements {#recent-improvements}
 
 **Commit**: [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) ("memblock: introduce memblock_phys_free()")
 **Kernel**: v6.1 (2022)
@@ -308,9 +308,9 @@ This was a significant cleanup -- the bootmem code had accumulated decades of wo
 
 Part of a broader effort to clean up early memory management and reduce the use of `memblock_free()` which had confusing semantics (it freed from the reserved list, not the memory list).
 
-## Observing memblock
+## Observing memblock {#observing-memblock}
 
-### debugfs Interface
+### debugfs Interface {#debugfs-interface}
 
 If `CONFIG_ARCH_KEEP_MEMBLOCK` is enabled, you can inspect the memblock state after boot:
 
@@ -326,7 +326,7 @@ cat /sys/kernel/debug/memblock/reserved
 #    1: 0x0000000100000000..0x00000004ffffffff (16384 MB)
 ```
 
-### Early Boot Messages
+### Early Boot Messages {#early-boot-messages}
 
 memblock logs its activity to dmesg during early boot. Look for lines with the `memblock` prefix:
 
@@ -346,7 +346,7 @@ For more verbose output, pass `memblock=debug` on the kernel command line. This 
 linux /vmlinuz memblock=debug ...
 ```
 
-### e820 Table (x86)
+### e820 Table (x86) {#e820-table-x86}
 
 On x86 systems, you can see the firmware memory map that feeds into memblock:
 
@@ -360,9 +360,9 @@ dmesg | grep e820
 # BIOS-e820: [mem 0x0000000000100000-0x000000003fffffff] usable
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Inspect memblock Regions
+### Inspect memblock Regions {#inspect-memblock-regions}
 
 ```bash
 # Check if your kernel preserves memblock data
@@ -376,7 +376,7 @@ cat /sys/kernel/debug/memblock/reserved
 wc -l < /sys/kernel/debug/memblock/memory
 ```
 
-### Trace the Boot Memory Setup
+### Trace the Boot Memory Setup {#trace-the-boot-memory-setup}
 
 ```bash
 # See how firmware reported memory to the kernel
@@ -387,7 +387,7 @@ dmesg | grep -E "(e820|memblock|Memory:)"
 #          (X kernel code, Y rwdata, Z rodata, W init, V bss, ...)
 ```
 
-### Enable Verbose memblock Logging
+### Enable Verbose memblock Logging {#enable-verbose-memblock-logging}
 
 ```bash
 # Add to kernel command line (requires reboot)
@@ -399,7 +399,7 @@ sudo update-grub
 dmesg | grep memblock | head -50
 ```
 
-### Compare memblock with Runtime View
+### Compare memblock with Runtime View {#compare-memblock-with-runtime-view}
 
 ```bash
 # memblock's view (boot time, if preserved)
@@ -412,9 +412,9 @@ cat /proc/buddyinfo
 grep MemTotal /proc/meminfo
 ```
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
-### struct memblock (Global State)
+### struct memblock (Global State) {#struct-memblock-global-state}
 
 The entire memblock state lives in a single global variable:
 
@@ -437,7 +437,7 @@ struct memblock memblock __initdata_memblock = {
 
 The `__initdata_memblock` annotation means this data is either `__initdata` (freed after boot) or `__meminitdata` (kept for memory hotplug), depending on `CONFIG_ARCH_KEEP_MEMBLOCK`.
 
-### memblock_flags
+### memblock_flags {#memblock_flags}
 
 ```c
 enum memblock_flags {
@@ -449,9 +449,9 @@ enum memblock_flags {
 };
 ```
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -460,7 +460,7 @@ enum memblock_flags {
 | [`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c) | Device tree memory scanning |
 | [`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) | x86 e820 to memblock translation |
 
-### Key Commits
+### Key Commits {#key-commits}
 
 | Commit | Kernel | Description |
 |--------|--------|-------------|
@@ -469,18 +469,18 @@ enum memblock_flags {
 | [355c45affca7](https://git.kernel.org/linus/355c45affca7114ab510e296a5b7012943aeea17) | v4.20 | Remove bootmem allocator implementation |
 | [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) | v6.1 | Introduce memblock_phys_free() |
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [A quick history of early-boot memory allocators](https://lwn.net/Articles/382559/) -- Coverage of the lmb-to-memblock rename and rationale
 - [Improvements to memblock](https://lwn.net/Articles/761215/) -- Mike Rapoport's work cleaning up the early memory allocator
 
-### Related
+### Related {#related}
 
 - [page-allocator](page-allocator.md) - The buddy allocator that memblock hands off to
 - [overview](overview.md) - How memblock fits in the allocator hierarchy
 - [numa](numa.md) - NUMA-aware memblock allocation
 
-## Further reading
+## Further reading {#further-reading}
 
 - [page-allocator.md](page-allocator.md) — The buddy allocator that takes over from memblock after `memblock_free_all()`
 - [boot-page-tables.md](boot-page-tables.md) — Early page table setup that relies on memblock for its memory allocations

@@ -1,11 +1,11 @@
-# x86_64 Boot Page Table Setup
+# x86_64 Boot Page Table Setup {#x86_64-boot-page-table-setup}
 
 > How the Linux kernel builds its own address space from scratch on x86_64 — from the first assembly instructions through the direct physical map, KASLR, and 5-level paging
 
 !!! note "Architecture scope"
     This page covers x86_64 exclusively. ARM64, RISC-V, and other architectures have different boot paging sequences. For the generic page table abstraction that Linux uses across architectures, see [Page Tables](page-tables.md).
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Role |
 |------|------|
@@ -23,7 +23,7 @@
 
 ---
 
-## The Boot Paging Problem
+## The Boot Paging Problem {#the-boot-paging-problem}
 
 When the kernel first receives control at `startup_64` in `arch/x86/kernel/head_64.S`, the CPU is already in 64-bit long mode — but the page tables are not the kernel's own. The bootloader or UEFI firmware created a temporary identity mapping (virtual address == physical address) that covers enough memory to load and decompress the kernel image, but no more.
 
@@ -40,9 +40,9 @@ The challenge is that much of this must happen before the allocator exists, befo
 
 ---
 
-## Early Boot Page Tables in head_64.S
+## Early Boot Page Tables in head_64.S {#early-boot-page-tables-in-head_64s}
 
-### The Static Arrays
+### The Static Arrays {#the-static-arrays}
 
 `arch/x86/kernel/head_64.S` declares several page table arrays in the `.data` and `__INITDATA` sections. These are the only page tables available from the very first instruction:
 
@@ -88,7 +88,7 @@ extern pgd_t init_top_pgt[];
 
 A pool of 64 scratch PMD tables (`early_dynamic_pgts[EARLY_DYNAMIC_PAGE_TABLES]`) is declared alongside these. `__startup_64()` carves from this pool to build the temporary identity mapping.
 
-### What `__startup_64()` Does
+### What `__startup_64()` Does {#what-_startup64-does}
 
 The first C function to run is `__startup_64()` in `arch/x86/boot/startup/map_kernel.c`. It is called from `startup_64` before `CR3` is loaded with the kernel's own tables.
 
@@ -112,7 +112,7 @@ Because the kernel may be loaded at a different physical address than it was com
 
 6. **Validate `level2_kernel_pgt`** — pages before the kernel text and after `_end` have `_PAGE_PRESENT` cleared so speculative accesses cannot reach reserved memory.
 
-### The Two-Stage CR3 Switch
+### The Two-Stage CR3 Switch {#the-two-stage-cr3-switch}
 
 ```
 startup_64 entry
@@ -134,11 +134,11 @@ startup_64 entry
 
 ---
 
-## The x86_64 Virtual Memory Layout
+## The x86_64 Virtual Memory Layout {#the-x86_64-virtual-memory-layout}
 
 x86_64 splits the 64-bit address space at the canonical boundary. The 4-level (48-bit) layout is the baseline; 5-level (57-bit) is described in the next section.
 
-### 4-Level Paging (48-bit virtual addresses)
+### 4-Level Paging (48-bit virtual addresses) {#4-level-paging-48-bit-virtual-addresses}
 
 The constants below are from `arch/x86/include/asm/page_64_types.h` and `arch/x86/include/asm/pgtable_64_types.h`. KASLR can shift `page_offset_base`, `vmalloc_base`, and `vmemmap_base` within their ranges (see [KASLR](#kaslr-kernel-address-space-layout-randomization) below).
 
@@ -191,7 +191,7 @@ Key constants from source:
 
 ---
 
-## `init_mem_mapping()` — Building the Direct Physical Map
+## `init_mem_mapping()` — Building the Direct Physical Map {#initmemmapping-building-the-direct-physical-map}
 
 The direct physical map is what lets the kernel address any byte of RAM with a simple pointer arithmetic offset from `page_offset_base`. Without it, the kernel could only access the memory covered by the static `level2_kernel_pgt` PMDs — roughly 1 GB around the kernel image.
 
@@ -234,17 +234,17 @@ After `init_mem_mapping()` returns, `swapper_pg_dir` (which is `init_top_pgt`) h
 
 ---
 
-## KASLR: Kernel Address Space Layout Randomization
+## KASLR: Kernel Address Space Layout Randomization {#kaslr-kernel-address-space-layout-randomization}
 
 KASLR on x86_64 has two independent components:
 
-### 1. Physical KASLR — image placement
+### 1. Physical KASLR — image placement {#1-physical-kaslr-image-placement}
 
 This happens during decompression, long before the main kernel runs. `arch/x86/boot/compressed/kaslr.c` scans the firmware memory map (e820 or EFI memmap), collects candidate 2 MB-aligned slots where the kernel image fits, and picks one using `kaslr_get_random_long("Physical")`. The chosen offset is stored in `boot_params` and consumed by `__startup_64()` as the `p2v_offset` argument.
 
 Physical KASLR is controlled by `CONFIG_RANDOMIZE_BASE` and disabled at runtime by passing `nokaslr` on the kernel command line.
 
-### 2. Memory layout KASLR — virtual region randomization
+### 2. Memory layout KASLR — virtual region randomization {#2-memory-layout-kaslr-virtual-region-randomization}
 
 After the kernel image is running, `kernel_randomize_memory()` in `arch/x86/mm/kaslr.c` randomizes the virtual base addresses of the three major kernel memory regions:
 
@@ -298,11 +298,11 @@ Memory layout KASLR is controlled by `CONFIG_RANDOMIZE_MEMORY` and is disabled w
 
 ---
 
-## 5-Level Paging (LA57)
+## 5-Level Paging (LA57) {#5-level-paging-la57}
 
 x86_64 CPUs that support the LA57 feature bit expose 57-bit virtual addresses using a fifth level of page tables. The kernel option is `CONFIG_X86_5LEVEL`.
 
-### Detection and Activation
+### Detection and Activation {#detection-and-activation}
 
 5-level paging is detected and activated during decompression. The decompressor sets `CR4.LA57` if the CPU supports it and the kernel is built with `CONFIG_X86_5LEVEL`. By the time `startup_64` runs, either LA57 is already in effect or it is not.
 
@@ -325,7 +325,7 @@ static inline bool check_la57_support(void)
 
 The global variable `__pgtable_l5_enabled` (declared in `arch/x86/include/asm/pgtable_64_types.h`) is then used by the `pgtable_l5_enabled()` inline throughout the rest of boot. After early boot, the normal kernel uses `cpu_feature_enabled(X86_FEATURE_LA57)` instead.
 
-### Structural Difference
+### Structural Difference {#structural-difference}
 
 In 4-level mode the P4D level is **folded** — the PGD entry points directly to a PUD. In 5-level mode P4D is real:
 
@@ -345,7 +345,7 @@ if (la57) {
 }
 ```
 
-### Virtual Layout Changes
+### Virtual Layout Changes {#virtual-layout-changes}
 
 With 57-bit addresses, the layout shifts dramatically. From `Documentation/arch/x86/x86_64/mm.rst`:
 
@@ -360,9 +360,9 @@ The `VMALLOC_SIZE_TB_L5` constant is 12,800 (TB), compared to `VMALLOC_SIZE_TB_L
 
 ---
 
-## Finalizing Page Tables: `paging_init()` and Beyond
+## Finalizing Page Tables: `paging_init()` and Beyond {#finalizing-page-tables-paging_init-and-beyond}
 
-### Call Sequence in `setup_arch()`
+### Call Sequence in `setup_arch()` {#call-sequence-in-setup_arch}
 
 The page table lifecycle in `setup_arch()` (`arch/x86/kernel/setup.c`) proceeds as:
 
@@ -385,7 +385,7 @@ setup_arch()
 
 After `x86_init.paging.pagetable_init()` returns, `setup_arch()` continues with KASAN initialization (`kasan_init()`), after which the permanent page tables are in place.
 
-### `mem_init()` — Handing Off to the Buddy Allocator
+### `mem_init()` — Handing Off to the Buddy Allocator {#mem_init-handing-off-to-the-buddy-allocator}
 
 `mem_init()` (`arch/x86/mm/init_64.c:1368`) is called from `mm_core_init()` in `init/main.c`. At this point `memblock_free_all()` has already transferred all unreserved memory to the buddy allocator. `mem_init()` itself:
 
@@ -393,7 +393,7 @@ After `x86_init.paging.pagetable_init()` returns, `setup_arch()` continues with 
 - Calls `register_page_bootmem_info()` to register memmap pages for memory hotplug tracking
 - Marks `after_bootmem` to end early-boot allocations
 
-### Permanent vs. Early Tables
+### Permanent vs. Early Tables {#permanent-vs-early-tables}
 
 | Table | Lifetime | Purpose |
 |-------|----------|---------|
@@ -404,9 +404,9 @@ After `x86_init.paging.pagetable_init()` returns, `setup_arch()` continues with 
 
 ---
 
-## Debugging Boot Page Tables
+## Debugging Boot Page Tables {#debugging-boot-page-tables}
 
-### `CONFIG_PTDUMP_DEBUGFS`
+### `CONFIG_PTDUMP_DEBUGFS` {#configptdumpdebugfs}
 
 When `CONFIG_PTDUMP_DEBUGFS=y`, the kernel registers debugfs files under `/sys/kernel/debug/page_tables/` (implemented in `arch/x86/mm/debug_pagetables.c`):
 
@@ -419,7 +419,7 @@ When `CONFIG_PTDUMP_DEBUGFS=y`, the kernel registers debugfs files under `/sys/k
 
 Reading `kernel` calls `ptdump_walk_pgd_level_debugfs()` and walks `init_top_pgt`, printing every mapped range with the permission bits (RW, NX, Global, etc.) and the page size (4K, 2M, 1G) used.
 
-### W+X Check
+### W+X Check {#wx-check}
 
 After `mark_rodata_ro()` finalizes the permission bits, the kernel checks that no page is simultaneously writable and executable. The result is logged to dmesg:
 
@@ -436,7 +436,7 @@ x86/mm: Checked W+X mappings: FAILED, N W+X pages found.
 
 This is implemented in `arch/x86/mm/dump_pagetables.c`.
 
-### Other Useful Interfaces
+### Other Useful Interfaces {#other-useful-interfaces}
 
 ```bash
 # Physical memory regions from firmware (e820 map)
@@ -454,7 +454,7 @@ grep . /sys/devices/system/cpu/cpu0/cpufreq/../topology/physical_package_id
 grep la57 /proc/cpuinfo
 ```
 
-### Boot Parameters
+### Boot Parameters {#boot-parameters}
 
 | Parameter | Effect |
 |-----------|--------|
@@ -464,7 +464,7 @@ grep la57 /proc/cpuinfo
 
 ---
 
-## Summary
+## Summary {#summary}
 
 The x86_64 boot paging sequence moves through distinct phases, each unlocking more of the system:
 
@@ -500,26 +500,26 @@ mem_init() → memblock_free_all()
      Boot page table setup complete
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/kernel/head_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/head_64.S) — `startup_64` entry point; static `early_top_pgt`, `init_top_pgt`, and `level3_kernel_pgt` declarations
 - [arch/x86/boot/startup/map_kernel.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/boot/startup/map_kernel.c) — `__startup_64()`: first C code; fixes physical addresses and builds identity map
 - [arch/x86/mm/init.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/init.c) — `init_mem_mapping()`, `memory_map_top_down()`, `memory_map_bottom_up()`
 - [arch/x86/mm/kaslr.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/kaslr.c) — `kernel_randomize_memory()`: randomizes direct map, vmalloc, and vmemmap base addresses
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/arch/x86/boot.rst`](https://docs.kernel.org/arch/x86/boot.html) — x86 boot protocol: what state the bootloader must establish before jumping to the kernel
 - [`Documentation/arch/x86/x86_64/mm.rst`](https://docs.kernel.org/arch/x86/x86_64/mm.html) — authoritative virtual memory map for 4-level and 5-level paging with exact address ranges
 
-### Related pages
+### Related pages {#related-pages}
 
 - [page-tables.md](page-tables.md) — the generic Linux page-table abstraction (PGD/P4D/PUD/PMD/PTE) that the boot tables slot into
 - [memblock.md](memblock.md) — the early allocator that provides memory for page table pages before the buddy allocator is ready
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Five-level page tables](https://lwn.net/Articles/717293/) — introduction to LA57 and the 57-bit address space extension
 - [LWN: KASLR for the kernel's virtual address space](https://lwn.net/Articles/569635/) — memory-layout KASLR: motivation, entropy sources, and trade-offs

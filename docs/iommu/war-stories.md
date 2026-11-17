@@ -1,4 +1,4 @@
-# IOMMU War Stories
+# IOMMU War Stories {#iommu-war-stories}
 
 > Real incidents: DMA faults, group isolation failures, and performance surprises
 
@@ -6,9 +6,9 @@ These are representative real-world incidents that follow recognizable patterns 
 
 ---
 
-## 1. DMAR fault storm from a misbehaving NIC
+## 1. DMAR fault storm from a misbehaving NIC {#1-dmar-fault-storm-from-a-misbehaving-nic}
 
-### Problem
+### Problem {#problem}
 
 A server running a 10GbE NIC driver starts logging thousands of lines per second:
 
@@ -23,7 +23,7 @@ DMAR: [DMA Write] Request device [02:00.0] fault addr 7fa800002000
 
 The NIC is sending (DMA write) to addresses that the IOMMU has no mapping for, or has mapped read-only. Network throughput drops to zero. The fault storm fills the kernel log ring buffer, displacing other messages.
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 The fault address `7fa800000000` is in the 64-bit IOVA space. The first step is to check whether the mapping even exists:
 
@@ -57,13 +57,13 @@ dmesg | grep "DMA-API"
 # DMA-API: device 0000:02:00.0 mapping error: wrong direction
 ```
 
-### Root cause
+### Root cause {#root-cause}
 
 A bug in the NIC driver's hot-path buffer refill code: receive descriptors were being mapped with `DMA_TO_DEVICE` instead of `DMA_FROM_DEVICE`. Without IOMMU, this was silent — physical addresses work regardless of the direction argument. With IOMMU active, the kernel creates a read-only IOMMU mapping for `DMA_TO_DEVICE`. The NIC tries to DMA-write received packet data into the buffer, the IOMMU blocks it, and a fault fires for every packet.
 
 The bug was latent for years because test environments lacked IOMMU enabled.
 
-### Fix
+### Fix {#fix}
 
 ```c
 /* Driver fix: change map direction for receive buffers */
@@ -90,9 +90,9 @@ GRUB_CMDLINE_LINUX="intel_iommu=on iommu=pt"
 
 ---
 
-## 2. IOVA allocator as a perf bottleneck
+## 2. IOVA allocator as a perf bottleneck {#2-iova-allocator-as-a-perf-bottleneck}
 
-### Problem
+### Problem {#problem_1}
 
 A team upgrades their server from 10 GbE to 25 GbE. The NIC driver is the same codebase, just a faster link. They expect near-linear throughput scaling; instead, at high packet rates (small UDP packets, ~20 Mpps), CPU utilization for packet processing increases sharply. A `perf top` session shows:
 
@@ -107,7 +107,7 @@ Overhead  Symbol
 
 Over 29% of CPU is in IOVA allocation and mapping. The NIC driver uses `dma_map_single()` / `dma_map_page()` per packet, issuing one IOVA allocation per receive and transmit descriptor.
 
-### Diagnosis
+### Diagnosis {#diagnosis_1}
 
 ```bash
 # Confirm IOMMU is active (not passthrough)
@@ -127,7 +127,7 @@ The perf callgraph shows `alloc_iova` being called from `iommu_dma_map_phys` →
 
 Why is the rcache exhausted? The rcache holds freed IOVAs of matching sizes. With 2 KB receive buffers, the allocator uses the 1-page size class. But if the driver is allocating faster than it frees (in-flight descriptors exceed the rcache magazine size of 127), the rcache runs dry and falls through to the locked rbtree path.
 
-### Fix
+### Fix {#fix_1}
 
 **Step 1: Switch to scatter-gather DMA batching.**
 
@@ -159,9 +159,9 @@ The rcache covers allocations of 1, 2, 4, 8, 16, and 32 pages. If the NIC uses j
 
 ---
 
-## 3. IOMMU group blocking VFIO passthrough
+## 3. IOMMU group blocking VFIO passthrough {#3-iommu-group-blocking-vfio-passthrough}
 
-### Problem
+### Problem {#problem_2}
 
 A user wants to pass their discrete GPU (`0000:01:00.0`) to a VM for GPU compute workloads. They follow the standard VFIO bind procedure:
 
@@ -182,7 +182,7 @@ qemu-system-x86_64: -device vfio-pci,host=01:00.0: \
 
 The GPU's HDMI audio function (`01:00.1`) is in the same IOMMU group and is still bound to `snd_hda_intel`.
 
-### Diagnosis
+### Diagnosis {#diagnosis_2}
 
 ```bash
 # See all devices in the group
@@ -200,7 +200,7 @@ The GPU and its audio function are multi-function devices on the same PCIe slot.
 
 VFIO enforces that the entire group must be assigned together. You cannot give the GPU to VM1 and the audio to VM2, or leave the audio in the host while passing the GPU to a VM.
 
-### Options
+### Options {#options}
 
 **Option 1 (correct and safe): pass both devices to the VM.**
 
@@ -233,9 +233,9 @@ Server-grade PCIe switches and root complexes (EPYC, Xeon Scalable) often suppor
 
 ---
 
-## 4. SVA page fault storm from an accelerator
+## 4. SVA page fault storm from an accelerator {#4-sva-page-fault-storm-from-an-accelerator}
 
-### Problem
+### Problem {#problem_3}
 
 A team deploys Intel DSA (Data Streaming Accelerator) with SVA enabled for user-space copy offload. The application submits thousands of memory copy descriptors using process virtual addresses. Initially it works. Under load, the system slows dramatically and `dmesg` shows:
 
@@ -246,7 +246,7 @@ IOMMU: dmar1: PRQ overflow cleared
 
 Application throughput drops by 80%. CPU utilization for interrupt handling spikes. Note: PRI/PRQ overflow handling lives entirely in the IOMMU driver (`drivers/iommu/intel/prq.c`) — the accelerator driver itself (`idxd`) never prints anything about the page-request queue; the `pr_info_ratelimited()` calls above are tagged by `iommu->name` (e.g. `dmar1`), not by the accelerator's PCI address.
 
-### Diagnosis
+### Diagnosis {#diagnosis_3}
 
 The accelerator is encountering page faults mid-operation and sending Page Requests (PRI) to the IOMMU. The IOMMU delivers these to the kernel's IOMMU page fault handler, which must:
 
@@ -274,7 +274,7 @@ Root causes in this case:
 1. **Lazy allocation**: the application calls `mmap()` but does not touch all pages before submission. DSA encounters not-present PTEs on first access.
 2. **THP splitting**: the kernel initially backed the buffer with 2 MB huge pages, but memory pressure caused them to split into 4 KB pages mid-workload, invalidating the device's ATC entries and generating a flood of re-faults.
 
-### Mitigation
+### Mitigation {#mitigation}
 
 **Pre-fault pages before submission:**
 
@@ -302,9 +302,9 @@ For the hottest copy paths, pre-register buffers with the kernel and pin them fo
 
 ---
 
-## 5. swiotlb exhaustion under IOMMU
+## 5. swiotlb exhaustion under IOMMU {#5-swiotlb-exhaustion-under-iommu}
 
-### Problem
+### Problem {#problem_4}
 
 A server runs a mix of workloads: mostly 64-bit NVMe SSDs, but also a legacy RAID controller with a 32-bit DMA mask. The system has 256 GB of RAM. Under heavy I/O load, the RAID controller starts failing DMA allocations:
 
@@ -322,7 +322,7 @@ software IO TLB: mapped [mem 0x...] (64MB)
 
 The swiotlb pool is 64 MB and is exhausted.
 
-### Diagnosis
+### Diagnosis {#diagnosis_4}
 
 The RAID controller (`0000:04:00.0`) has a 32-bit DMA mask. The system RAM is mostly above 4 GB. With IOMMU enabled, the kernel allocates IOVAs below 4 GB for this device. But there is a subtlety:
 
@@ -352,7 +352,7 @@ done
 
 The problem: several devices (the RAID controller, a legacy USB controller, an old network card) all have 32-bit DMA masks. They share the 32-bit IOVA region. Under load, the NVMe drivers (64-bit) are not consuming 32-bit IOVA space, but the RAID driver sends large requests that fragment the low IOVA space, causing allocation failures. The kernel falls back to swiotlb for failed IOVA allocations, and the 64 MB swiotlb pool (the default) fills up quickly with 128 KB RAID I/O requests.
 
-### Fix
+### Fix {#fix_2}
 
 **Increase the swiotlb pool size** (kernel command line):
 
@@ -397,7 +397,7 @@ echo "$USED / $TOTAL"
 
 ---
 
-## Common patterns
+## Common patterns {#common-patterns}
 
 | Symptom | First tool | Likely cause |
 |---------|-----------|-------------|
@@ -407,9 +407,9 @@ echo "$USED / $TOTAL"
 | DSA/accelerator stall with PRI overflow | `dmesg \| grep "page request"`, iommu tracepoints | Pages not pre-faulted; THP splitting; PRI queue too small |
 | `DMA: Out of SW-IOMMU space` | `cat /sys/kernel/debug/swiotlb/io_tlb_used` | swiotlb pool exhausted; 32-bit device with large allocations |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/iommu/intel/dmar.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/intel/dmar.c) — `dmar_fault_do_one()` and the `dma_remap_fault_reasons[]` table (reason 5 = "PTE Write access is not set", reason 6 = "PTE Read access is not set") behind Case 1's DMAR fault codes
 - [kernel/dma/debug.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/debug.c) — the `CONFIG_DMA_API_DEBUG` instrumentation framework referenced in Case 1
@@ -423,12 +423,12 @@ echo "$USED / $TOTAL"
 - [mm/madvise.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/madvise.c) — `MADV_POPULATE_WRITE` and `MADV_NOHUGEPAGE`, the mitigations used in Case 4
 - [kernel/dma/swiotlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c) — the swiotlb bounce-buffer pool and its `io_tlb_used`/`io_tlb_nslabs` debugfs counters behind Case 5
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`madvise(2)`](https://man7.org/linux/man-pages/man2/madvise.2.html) — documents `MADV_POPULATE_WRITE` (since Linux 5.14) and `MADV_NOHUGEPAGE`, used in Case 4
 - [`lspci(8)`](https://man7.org/linux/man-pages/man8/lspci.8.html) — the PCI topology tool used to check ACS capability in Case 3
 
-### Related pages
+### Related pages {#related-pages}
 
 - [IOMMU Architecture](iommu-arch.md) — IOMMU domains, IOTLB, DMAR fault registers
 - [DMA API](dma-api.md) — `dma_map_single`, scatter-gather, swiotlb internals
@@ -436,14 +436,14 @@ echo "$USED / $TOTAL"
 - [SVA](sva.md) — PASID, PRI page fault handling
 - [VFIO Internals](vfio-internals.md) — IOMMU groups, security model
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Kernel Summit 2006: DMA and IOMMU issues](https://lwn.net/Articles/191931/) (July 19, 2006) — early discussion of scatter-gather batching (`dma_map_sg()`) to reduce per-mapping overhead, the same principle behind Case 2's fix
 - [Driver API: sleeping poll(), exclusive I/O memory, and DMA API debugging](https://lwn.net/Articles/308426/) (November 24, 2008) — covers the `CONFIG_DMA_API_DEBUG` framework used to catch direction mismatches in Case 1
 - [Safe device assignment with VFIO](https://lwn.net/Articles/474088/) (January 3, 2012) — explains why IOMMU groups exist and why every device in a group must be bound to the same driver, the mechanism behind Case 3
 - [A security fix briefly breaks DMA](https://lwn.net/Articles/889593/) (April 1, 2022) — swiotlb bounce-buffer mechanics and the tension between security assumptions and driver behavior, background for Case 5
 
-### External
+### External {#external}
 
 - [Kernel documentation: DMA API](https://docs.kernel.org/core-api/dma-api.html) and [DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) — `dma_map_single()` and the `DMA_TO_DEVICE`/`DMA_FROM_DEVICE` direction flags at the center of Case 1
 - [Kernel documentation: VFIO](https://docs.kernel.org/driver-api/vfio.html) — the "group is viable" check (every device in the group must be bound to vfio) behind Case 3

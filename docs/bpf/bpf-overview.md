@@ -1,10 +1,10 @@
-# BPF Architecture and Program Types
+# BPF Architecture and Program Types {#bpf-architecture-and-program-types}
 
 > How eBPF programs are loaded, verified, and attached to kernel hooks
 
-## From cBPF to eBPF
+## From cBPF to eBPF {#from-cbpf-to-ebpf}
 
-### Classic BPF (1993–2014)
+### Classic BPF (1993–2014) {#classic-bpf-19932014}
 
 BPF was not originally a Linux invention. It came from a paper by Steven McCanne and Van Jacobson at Lawrence Berkeley Laboratory presented at USENIX Winter 1993: *"The BSD Packet Filter: A New Architecture for User-level Packet Capture."* [(paper)](https://www.tcpdump.org/papers/bpf-usenix93.pdf)
 
@@ -12,7 +12,7 @@ The original BPF was a small virtual machine with two 32-bit registers (`A` and 
 
 That was its entire purpose. The implementation lived almost entirely in `net/core/filter.c`.
 
-### The problem with cBPF
+### The problem with cBPF {#the-problem-with-cbpf}
 
 As Linux kernel development accelerated in the 2000s and 2010s, multiple subsystems needed a way to let userspace express policies in the kernel without giving userspace arbitrary kernel code execution:
 
@@ -22,7 +22,7 @@ As Linux kernel development accelerated in the 2000s and 2010s, multiple subsyst
 
 Kernel modules could do all this, but they're dangerous: a buggy module panics the kernel, they require CAP_SYS_MODULE, and they're tied to a specific kernel version. There was no way to safely run "untrusted" kernel code.
 
-### eBPF (Linux 3.18, 2014)
+### eBPF (Linux 3.18, 2014) {#ebpf-linux-318-2014}
 
 Alexei Starovoitov and Daniel Borkmann rewrote the BPF virtual machine from scratch. The new design — retroactively called eBPF (extended BPF) [(commit)](https://git.kernel.org/linus/99c55f7d47c0dc6fc64729f37bf435abf43f4c60) [(LWN)](https://lwn.net/Articles/603983/) — kept backward compatibility with cBPF socket filters (they are auto-translated) but was otherwise a new architecture:
 
@@ -42,7 +42,7 @@ The **map** abstraction solved the shared-state problem: BPF programs could accu
 
 The answer to "why not a kernel module?" is now concrete: a BPF program that passes the verifier cannot crash the kernel, can be loaded without `CAP_SYS_MODULE`, and is JIT-compiled to near-native speed.
 
-## The bpf() syscall
+## The bpf() syscall {#the-bpf-syscall}
 
 Everything in eBPF flows through a single syscall:
 
@@ -69,7 +69,7 @@ BPF_LINK_UPDATE
 BTF_LOAD           /* load BTF type information */
 ```
 
-## Loading a program
+## Loading a program {#loading-a-program}
 
 ```c
 /* kernel/bpf/syscall.c: bpf_prog_load() */
@@ -102,7 +102,7 @@ bpf_prog_load()
   → anon_inode_getfd("bpf-prog")  /* return file descriptor */
 ```
 
-## struct bpf_prog
+## struct bpf_prog {#struct-bpf_prog}
 
 The central kernel object for a loaded BPF program:
 
@@ -142,7 +142,7 @@ struct bpf_prog {
 };
 ```
 
-## BPF instruction set
+## BPF instruction set {#bpf-instruction-set}
 
 eBPF has 11 64-bit registers (r0–r10) and a fixed-size instruction format:
 
@@ -164,7 +164,7 @@ Register conventions:
 - `r6`–`r9` — callee-saved registers
 - `r10` — frame pointer (read-only)
 
-## Program types
+## Program types {#program-types}
 
 Each program type has a specific context struct and allowed helpers:
 
@@ -204,7 +204,7 @@ enum bpf_prog_type {
 };
 ```
 
-### Tracing programs in detail
+### Tracing programs in detail {#tracing-programs-in-detail}
 
 ```c
 /* fentry: attaches to function entry, no overhead of kprobes */
@@ -235,7 +235,7 @@ int kprobe_tcp_sendmsg(struct pt_regs *ctx)
 }
 ```
 
-### XDP program
+### XDP program {#xdp-program}
 
 ```c
 /* Minimal XDP program */
@@ -271,7 +271,7 @@ XDP return codes:
 - `XDP_TX` — send back out the same interface
 - `XDP_REDIRECT` — redirect to another interface or AF_XDP socket
 
-## BPF program lifecycle
+## BPF program lifecycle {#bpf-program-lifecycle}
 
 ```
 Load: bpf(BPF_PROG_LOAD)  → prog_fd (refcount=1)
@@ -295,7 +295,7 @@ BPF links (`BPF_LINK_CREATE`) are preferred over legacy attach methods because:
 - Links survive the original loader process exiting (if pinned)
 - Atomic program replacement via `BPF_LINK_UPDATE`
 
-## Helper functions
+## Helper functions {#helper-functions}
 
 BPF programs can't call arbitrary kernel functions — they use a whitelisted set of helpers:
 
@@ -330,7 +330,7 @@ bpf_ringbuf_output(map, data, size, flags)
 
 Each helper is assigned a stable number; new helpers get new numbers and never change existing ones for ABI stability.
 
-## Observing BPF programs
+## Observing BPF programs {#observing-bpf-programs}
 
 ```bash
 # List all loaded BPF programs
@@ -353,7 +353,7 @@ bpftool prog profile id 42 duration 5 cycles instructions
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Maps](bpf-maps.md) — Sharing data between BPF and userspace
 - [BPF Verifier](bpf-verifier.md) — How safety is enforced

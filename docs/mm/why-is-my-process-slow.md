@@ -1,12 +1,12 @@
-# Why is my process slow? (memory diagnosis)
+# Why is my process slow? (memory diagnosis) {#why-is-my-process-slow-memory-diagnosis}
 
 > A systematic troubleshooting guide for memory-related performance problems
 
-## The problem
+## The problem {#the-problem}
 
 Your process is slow, and you suspect memory. But "memory problem" is vague -- it could be swapping, reclaim pressure, NUMA effects, THP compaction stalls, or kernel slab growth eating your available memory. This guide gives you a systematic flowchart so you stop guessing and start measuring.
 
-## Decision flowchart
+## Decision flowchart {#decision-flowchart}
 
 Start here and follow the arrows. Each step either identifies the problem or sends you deeper.
 
@@ -37,7 +37,7 @@ flowchart TD
     SLAB --> SLABFIX["Kernel memory leak.<br/>See: SLUB"]
 ```
 
-## Step 1: Is it memory at all?
+## Step 1: Is it memory at all? {#step-1-is-it-memory-at-all}
 
 Before digging into memory internals, confirm that memory pressure actually exists. Since Linux 4.20 ([commit 0e94682b73bf](https://git.kernel.org/linus/0e94682b73bf)), PSI (Pressure Stall Information) tells you directly whether tasks are stalling on memory.
 
@@ -67,7 +67,7 @@ PSI is implemented in [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linu
 !!! tip "Why PSI first?"
     Traditional metrics like `MemAvailable` tell you about *supply*. PSI tells you about *impact*. A system can have low available memory and still perform fine if the working set fits in the remaining pages. Conversely, a system with "enough" free memory can still stall if reclaim is thrashing.
 
-## Step 2: Check /proc/meminfo
+## Step 2: Check /proc/meminfo {#step-2-check-procmeminfo}
 
 Once PSI confirms memory pressure, understand where the memory is going.
 
@@ -99,7 +99,7 @@ awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "Available: %.1f%%\n", a/t
 
 The `MemAvailable` estimate is calculated in [`mm/show_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/show_mem.c) (via `si_mem_available()`). It accounts for the zone watermarks, reclaimable page cache, and reclaimable slab.
 
-## Step 3: Check per-process memory
+## Step 3: Check per-process memory {#step-3-check-per-process-memory}
 
 Now find which process is the culprit.
 
@@ -139,7 +139,7 @@ The `smaps_rollup` file ([commit 493b0e9d945f](https://git.kernel.org/linus/493b
 !!! note "PSS vs RSS"
     `RSS` double-counts shared pages. If two processes share a 100MB library, both show 100MB in RSS. `PSS` divides shared pages proportionally, so each shows ~50MB. For capacity planning, `PSS` is more accurate. For "is this process the problem?", `RSS` is usually enough.
 
-## Step 4: Check /proc/vmstat for reclaim activity
+## Step 4: Check /proc/vmstat for reclaim activity {#step-4-check-procvmstat-for-reclaim-activity}
 
 This is where you identify *what the kernel is doing* about memory pressure.
 
@@ -175,7 +175,7 @@ watch -d -n1 'grep -E "pgscan_direct|allocstall|pgmajfault" /proc/vmstat'
 
 These counters are maintained in [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c). Direct reclaim happens in `__alloc_pages_direct_reclaim()` within [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c).
 
-## Step 5: Is it swapping?
+## Step 5: Is it swapping? {#step-5-is-it-swapping}
 
 Swapping is often the first suspect when a process is slow, and it is usually correct -- swap I/O is orders of magnitude slower than memory access.
 
@@ -216,7 +216,7 @@ done | sort -rn | head -20
 
 For the full lifecycle of a swapped page, see [What happens during swapping](swapping.md).
 
-## Step 6: Is it THP compaction?
+## Step 6: Is it THP compaction? {#step-6-is-it-thp-compaction}
 
 Transparent Huge Pages can cause surprise latency spikes. When a process faults on memory and the kernel tries to allocate a 2MB huge page, it may stall to compact memory.
 
@@ -253,7 +253,7 @@ The compaction code lives in [`mm/compaction.c`](https://git.kernel.org/pub/scm/
 
 For the full THP picture, see [Transparent Huge Pages](thp.md).
 
-## Step 7: Is it NUMA effects?
+## Step 7: Is it NUMA effects? {#step-7-is-it-numa-effects}
 
 On multi-socket systems, memory access latency depends on which node the memory lives on. A process running on node 0 accessing memory on node 1 pays a 30-50% latency penalty on each access.
 
@@ -294,7 +294,7 @@ The kernel's NUMA allocation policy is implemented in [`mm/mempolicy.c`](https:/
 
 For the full NUMA story, see [NUMA Memory Management](numa.md).
 
-## Step 8: Is it a kernel memory issue?
+## Step 8: Is it a kernel memory issue? {#step-8-is-it-a-kernel-memory-issue}
 
 Sometimes the problem is not user-space memory at all -- the kernel itself is consuming memory through slab caches.
 
@@ -337,7 +337,7 @@ The slab allocator is implemented in [`mm/slub.c`](https://git.kernel.org/pub/sc
 
 For the full slab story, see [Slab Allocator (SLUB)](slab.md).
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 Run this all-in-one diagnostic script to get a snapshot of your system's memory health:
 
@@ -396,7 +396,7 @@ vmstat 1
 watch -d -n1 'grep -E "pgscan_direct|allocstall|compact_stall" /proc/vmstat'
 ```
 
-## Quick reference: which metric points where
+## Quick reference: which metric points where {#quick-reference-which-metric-points-where}
 
 | Symptom | Key metric | Likely cause | Deep-dive doc |
 |---------|-----------|--------------|---------------|
@@ -409,7 +409,7 @@ watch -d -n1 'grep -E "pgscan_direct|allocstall|compact_stall" /proc/vmstat'
 | `SUnreclaim` growing | `/proc/meminfo` | Kernel slab leak | [SLUB](slab.md) |
 | Large `VmSwap` on one process | `/proc/<pid>/status` | Process swapped out | [Swapping](swapping.md) |
 
-## Kernel source reference
+## Kernel source reference {#kernel-source-reference}
 
 | File | What it contains |
 |------|-----------------|
@@ -422,7 +422,7 @@ watch -d -n1 'grep -E "pgscan_direct|allocstall|compact_stall" /proc/vmstat'
 | [`fs/proc/meminfo.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/meminfo.c) | /proc/meminfo implementation |
 | [`fs/proc/array.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/array.c) | /proc/pid/status implementation |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LWN: Tracking pressure-stall information](https://lwn.net/Articles/759658/) -- The original PSI proposal from Facebook
 - [LWN: The state of the page in 2023](https://lwn.net/Articles/943128/) -- Modern page reclaim overview

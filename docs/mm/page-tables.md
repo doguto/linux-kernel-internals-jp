@@ -1,8 +1,8 @@
-# Page Tables
+# Page Tables {#page-tables}
 
 > Mapping virtual addresses to physical memory
 
-## What Are Page Tables?
+## What Are Page Tables? {#what-are-page-tables}
 
 Page tables are hierarchical data structures that map virtual addresses (what programs see) to physical addresses (actual RAM locations). The MMU (Memory Management Unit) hardware uses them to translate every memory access.
 
@@ -14,7 +14,7 @@ Virtual Address                Physical Address
        └──────────────────────────────┘
 ```
 
-## The Five-Level Hierarchy
+## The Five-Level Hierarchy {#the-five-level-hierarchy}
 
 Linux uses a five-level page table hierarchy (since [v4.14](https://git.kernel.org/linus/77ef56e4f0fb) for x86-64, see [x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html)):
 
@@ -47,7 +47,7 @@ Linux uses a five-level page table hierarchy (since [v4.14](https://git.kernel.o
  PAGE    Physical memory page
 ```
 
-### Level Details
+### Level Details {#level-details}
 
 | Level | Type | Bits (x86-64) | Entries | Maps |
 |-------|------|---------------|---------|------|
@@ -57,7 +57,7 @@ Linux uses a five-level page table hierarchy (since [v4.14](https://git.kernel.o
 | PMD | `pmd_t` | 29-21 | 512 | 2MB |
 | PTE | `pte_t` | 20-12 | 512 | 4KB |
 
-### Address Translation (x86-64, 4-level)
+### Address Translation (x86-64, 4-level) {#address-translation-x86-64-4-level}
 
 A 48-bit virtual address breaks down as:
 
@@ -69,7 +69,7 @@ A 48-bit virtual address breaks down as:
    9 bits     9 bits     9 bits     9 bits    12 bits
 ```
 
-## Page Table Folding
+## Page Table Folding {#page-table-folding}
 
 Not all architectures need all five levels. Linux handles this through **folding** - unused levels are compile-time optimized away.
 
@@ -83,9 +83,9 @@ Not all architectures need all five levels. Linux handles this through **folding
 
 When a level is folded, functions like `p4d_offset()` become no-ops that return the input unchanged.
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
-### Per-Process Page Tables
+### Per-Process Page Tables {#per-process-page-tables}
 
 Each process has its own page tables via `mm_struct`:
 
@@ -100,7 +100,7 @@ struct mm_struct {
 
 The kernel has a single `swapper_pg_dir` for kernel mappings, shared across all processes.
 
-### Page Table Entry Format (x86-64 specific)
+### Page Table Entry Format (x86-64 specific) {#page-table-entry-format-x86-64-specific}
 
 ```
  63    62    52 51                           12 11  9 8 7 6 5 4 3 2 1 0
@@ -121,7 +121,7 @@ The kernel has a single `swapper_pg_dir` for kernel mappings, shared across all 
   └───────────────────────────────────────────────────────────────────── Execute disable
 ```
 
-## Page Faults
+## Page Faults {#page-faults}
 
 When the MMU can't translate an address, it triggers a **page fault**. The kernel handles this in `handle_mm_fault()`:
 
@@ -147,7 +147,7 @@ handle_pte_fault()
     └── do_shared_fault()  (shared mapping)
 ```
 
-### Fault Types
+### Fault Types {#fault-types}
 
 | Type | Cause | Resolution |
 |------|-------|------------|
@@ -155,11 +155,11 @@ handle_pte_fault()
 | Major | Page not in memory | Read from disk/swap |
 | Invalid | Bad address or permissions | SIGSEGV |
 
-## TLB (Translation Lookaside Buffer)
+## TLB (Translation Lookaside Buffer) {#tlb-translation-lookaside-buffer}
 
 The TLB caches recent translations. Without it, every memory access would require multiple page table lookups.
 
-### TLB Flush Operations
+### TLB Flush Operations {#tlb-flush-operations}
 
 ```c
 /* Flush single page */
@@ -174,7 +174,7 @@ flush_tlb_mm(mm);
 
 TLB flushes are expensive on SMP - they require IPIs (Inter-Processor Interrupts) to all CPUs running the affected process.
 
-## Huge Pages
+## Huge Pages {#huge-pages}
 
 Higher-level entries can map large pages directly, skipping lower levels:
 
@@ -202,29 +202,29 @@ Trade-offs:
 - Internal fragmentation
 - Allocation challenges
 
-## History
+## History {#history}
 
-### Origins (1991-1994)
+### Origins (1991-1994) {#origins-1991-1994}
 
 Early Linux on i386 used two-level page tables (PGD + PTE). The `swapper_pg_dir` was the top-level Page Global Directory, not a single flat table. The i386 hardware dictated this structure.
 
-### Three-Level (v2.3.23, 1999)
+### Three-Level (v2.3.23, 1999) {#three-level-v2323-1999}
 
 Added PMD for PAE (Physical Address Extension) on x86, enabling >4GB physical memory on 32-bit.
 
-### Four-Level (v2.6.11, 2005)
+### Four-Level (v2.6.11, 2005) {#four-level-v2611-2005}
 
 Added PUD for x86-64's 48-bit virtual address space. This predates git history (kernel moved to git at v2.6.12).
 
-### Five-Level (v4.14, 2017)
+### Five-Level (v4.14, 2017) {#five-level-v414-2017}
 
 **Commit**: [77ef56e4f0fb](https://git.kernel.org/linus/77ef56e4f0fb) ("x86: Enable 5-level paging support via CONFIG_X86_5LEVEL=y") | [LKML](https://lore.kernel.org/all/20170313055020.69655-1-kirill.shutemov@linux.intel.com/)
 
 Added P4D for 57-bit virtual addresses (128PB), needed for machines with >64TB physical memory.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### View Process Page Tables
+### View Process Page Tables {#view-process-page-tables}
 
 ```bash
 # Page table stats for a process
@@ -237,7 +237,7 @@ cat /proc/<pid>/pagemap  # Binary format
 pagemap <pid> <address>
 ```
 
-### Check TLB Flushes
+### Check TLB Flushes {#check-tlb-flushes}
 
 ```bash
 # TLB flush statistics
@@ -248,7 +248,7 @@ echo 1 > /sys/kernel/debug/tracing/events/tlb/tlb_flush/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Check Huge Page Usage
+### Check Huge Page Usage {#check-huge-page-usage}
 
 ```bash
 # System huge page stats
@@ -258,21 +258,21 @@ cat /proc/meminfo | grep -i huge
 cat /proc/<pid>/smaps | grep -i huge
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### TLB Shootdown Storms
+### TLB Shootdown Storms {#tlb-shootdown-storms}
 
 Heavy `mprotect()` or `munmap()` causes excessive IPIs.
 
 **Debug**: Check `/proc/interrupts` for TLB IPI counts.
 
-### Page Table Memory Overhead
+### Page Table Memory Overhead {#page-table-memory-overhead}
 
 Sparse address spaces waste page table memory.
 
 **Debug**: Check `PageTables` in `/proc/meminfo`.
 
-### Huge Page Allocation Failures
+### Huge Page Allocation Failures {#huge-page-allocation-failures}
 
 Can't allocate huge pages due to fragmentation.
 
@@ -282,21 +282,21 @@ Can't allocate huge pages due to fragmentation.
 - Enable THP: `/sys/kernel/mm/transparent_hugepage/enabled`
 - Compact memory: `echo 1 > /proc/sys/vm/compact_memory`
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 Page tables mediate all memory access. Bugs here range from privilege escalation to information disclosure to complete CPU security model breakdown.
 
-### Case 1: Meltdown (CVE-2017-5754)
+### Case 1: Meltdown (CVE-2017-5754) {#case-1-meltdown-cve-2017-5754}
 
-#### What happened
+#### What happened {#what-happened}
 
 In January 2018, researchers disclosed [Meltdown](https://meltdownattack.com/), a hardware vulnerability affecting Intel CPUs that allowed unprivileged processes to read kernel memory.
 
-#### The bug
+#### The bug {#the-bug}
 
 Meltdown exploits **speculative execution** combined with **cache timing**. The CPU speculatively executes an illegal kernel read, and even though it raises a fault, the cache side effects remain, leaking the data.
 
-#### The fix: KPTI
+#### The fix: KPTI {#the-fix-kpti}
 
 **Commit**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) ("x86/mm/pti: Add infrastructure for page table isolation")
 
@@ -311,19 +311,19 @@ cat /sys/devices/system/cpu/vulnerabilities/meltdown
 
 ---
 
-### Case 2: Spectre (CVE-2017-5753, CVE-2017-5715)
+### Case 2: Spectre (CVE-2017-5753, CVE-2017-5715) {#case-2-spectre-cve-2017-5753-cve-2017-5715}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 Disclosed alongside Meltdown, [Spectre](https://spectreattack.com/) exploits speculative execution to leak data from other processes or the kernel.
 
-#### Variant 1 (Bounds Check Bypass)
+#### Variant 1 (Bounds Check Bypass) {#variant-1-bounds-check-bypass}
 
 The CPU speculatively executes past bounds checks, allowing out-of-bounds reads via cache timing.
 
 **Fix**: Array index masking with `array_index_nospec()`.
 
-#### Variant 2 (Branch Target Injection)
+#### Variant 2 (Branch Target Injection) {#variant-2-branch-target-injection}
 
 Attackers poison the branch predictor to redirect speculative execution to chosen gadgets.
 
@@ -333,13 +333,13 @@ Attackers poison the branch predictor to redirect speculative execution to chose
 
 ---
 
-### Case 3: TLB flush races
+### Case 3: TLB flush races {#case-3-tlb-flush-races}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 The TLB caches page table entries. When page tables change, the TLB must be flushed. Races between changes and flushes cause security vulnerabilities.
 
-#### The bug pattern
+#### The bug pattern {#the-bug-pattern}
 
 A CPU can use stale TLB entries to access pages that should be unmapped:
 1. Page table entry cleared
@@ -347,7 +347,7 @@ A CPU can use stale TLB entries to access pages that should be unmapped:
 3. Another CPU accesses via stale TLB entry
 4. Access succeeds to freed/reallocated page
 
-#### Example: CVE-2018-18281
+#### Example: CVE-2018-18281 {#example-cve-2018-18281}
 
 The `mremap()` syscall moved page table entries but flushed TLBs too late.
 
@@ -355,13 +355,13 @@ The `mremap()` syscall moved page table entries but flushed TLBs too late.
 
 ---
 
-### Case 4: KASLR bypasses
+### Case 4: KASLR bypasses {#case-4-kaslr-bypasses}
 
-#### What is KASLR?
+#### What is KASLR? {#what-is-kaslr}
 
 Kernel Address Space Layout Randomization randomizes where the kernel is loaded, making exploits harder.
 
-#### Bypass techniques
+#### Bypass techniques {#bypass-techniques}
 
 | Technique | Method |
 |-----------|--------|
@@ -369,7 +369,7 @@ Kernel Address Space Layout Randomization randomizes where the kernel is loaded,
 | Timing side channel | Measure access times |
 | dmesg leak | Kernel addresses in logs |
 
-#### Hardening
+#### Hardening {#hardening}
 
 ```bash
 # Restrict kernel pointers
@@ -381,7 +381,7 @@ echo 1 > /proc/sys/kernel/dmesg_restrict
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Type | Mitigation |
 |-----|------|------|------------|
@@ -393,9 +393,9 @@ echo 1 > /proc/sys/kernel/dmesg_restrict
 
 **The pattern**: Page table bugs often involve timing (TLB races, speculation) or assumptions about hardware behavior that turn out to be wrong.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -403,17 +403,17 @@ echo 1 > /proc/sys/kernel/dmesg_restrict
 | [`arch/x86/include/asm/pgtable.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable.h) | x86 page table definitions |
 | [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | Page fault handling |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/mm/page_tables.rst`](https://docs.kernel.org/mm/page_tables.html)
 
-### Related
+### Related {#related}
 
 - [overview](overview.md) - Memory management overview
 - [glossary](glossary.md) - PFN, TLB, MMU definitions
 - [Bug Index](bugs/README.md) - Index of all mm kernel bugs
 
-## Further reading
+## Further reading {#further-reading}
 
 - [arch/x86/mm/pgtable.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pgtable.c) — x86-specific page table allocation, PTE manipulation helpers, and KPTI page table switching
 - [include/linux/pgtable.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pgtable.h) — architecture-independent page table API: `pgd_offset()`, `pte_present()`, `pte_mkwrite()`, and the full set of PTE flag accessors

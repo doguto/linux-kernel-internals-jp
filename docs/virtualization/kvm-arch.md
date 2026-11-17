@@ -1,8 +1,8 @@
-# KVM Architecture
+# KVM Architecture {#kvm-architecture}
 
 > How the Linux kernel becomes a type-2 hypervisor
 
-## Intel VT-x: hardware virtualization basics
+## Intel VT-x: hardware virtualization basics {#intel-vt-x-hardware-virtualization-basics}
 
 Intel VT-x adds two new CPU operating modes:
 
@@ -28,7 +28,7 @@ Host CPU (ring 0)                    VMCS
     │                          └────────────────────┘
 ```
 
-## The /dev/kvm API
+## The /dev/kvm API {#the-devkvm-api}
 
 KVM exposes its functionality through ioctls on `/dev/kvm` and on the anonymous file descriptors returned by `KVM_CREATE_VM` and `KVM_CREATE_VCPU`:
 
@@ -88,7 +88,7 @@ while (1) {
 }
 ```
 
-## VM exits and their causes
+## VM exits and their causes {#vm-exits-and-their-causes}
 
 A VM exit returns control from guest to host. Common exit reasons:
 
@@ -111,7 +111,7 @@ KVM_EXIT_AP_RESET_HOLD   /* multiprocessor boot */
 
 Frequency matters: frequent exits (like timer ticks, MMIO) are costly because they require switching CPU state. Hardware features like APICv, posted interrupts, and EPT reduce exits.
 
-## struct kvm and struct kvm_vcpu
+## struct kvm and struct kvm_vcpu {#struct-kvm-and-struct-kvm_vcpu}
 
 ```c
 /* Simplified — real struct kvm is defined in include/linux/kvm_host.h;
@@ -169,7 +169,7 @@ struct kvm_vcpu {
 };
 ```
 
-## The vCPU run loop
+## The vCPU run loop {#the-vcpu-run-loop}
 
 `kvm_arch_vcpu_ioctl_run()` — the direct handler for the `KVM_RUN` ioctl — mostly just validates state and hands off to `vcpu_run()`, which loops calling `vcpu_enter_guest()` once per guest entry/exit:
 
@@ -203,7 +203,7 @@ static int vcpu_enter_guest(struct kvm_vcpu *vcpu)
 
 `kvm_x86_call(op)` is a macro wrapping a `static_call` into `struct kvm_x86_ops` — the vendor backend (VMX or SVM) plugs in via fields like `.vcpu_run`, `.handle_exit`, and `.inject_irq`. `vcpu_run()` repeats this per-entry work in a `for (;;)` loop until the exit reason needs userspace, at which point it returns up to `kvm_arch_vcpu_ioctl_run()`.
 
-## Hypercalls: guest-to-host communication
+## Hypercalls: guest-to-host communication {#hypercalls-guest-to-host-communication}
 
 ```c
 /* Guest: issue a hypercall */
@@ -233,7 +233,7 @@ KVM_HC_SCHED_YIELD        /* yield to another vCPU */
 KVM_HC_MAP_GPA_RANGE      /* memory attribute notification */
 ```
 
-## Observing KVM
+## Observing KVM {#observing-kvm}
 
 ```bash
 # One directory per VM, named <creator-pid>-<vm-fd-name> (requires debugfs):
@@ -259,9 +259,9 @@ cat /sys/kernel/tracing/trace_pipe
 # bash-1234 [003] kvm_exit: reason EXTERNAL_INTERRUPT rip 0xffff...
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_host.h) — `struct kvm` and `struct kvm_vcpu` definitions
 - [arch/x86/kvm/x86.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/x86.c) — `kvm_arch_vcpu_ioctl_run()`, `vcpu_run()`, and `vcpu_enter_guest()`: the vCPU run loop (request handling, VM entry, exit dispatch)
@@ -270,13 +270,13 @@ cat /sys/kernel/tracing/trace_pipe
 - [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `KVM_EXIT_*` exit reason constants and the `kvm_run` ABI
 - [include/uapi/linux/kvm_para.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm_para.h) — `KVM_HC_*` hypercall numbers
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Memory Virtualization](kvm-memory.md) — EPT, shadow paging, balloon
 - [virtio](virtio.md) — I/O paravirtualization
 - [Memory Management: page tables](../mm/page-tables.md) — EPT builds on x86 paging
 
-### External
+### External {#external}
 
 - [The KVM API](https://docs.kernel.org/virt/kvm/api.html) — official ioctl reference for `/dev/kvm`: `KVM_CREATE_VM`, `KVM_CREATE_VCPU`, `KVM_SET_USER_MEMORY_REGION`, `KVM_RUN`, and the `struct kvm_run` exit-reason union
 - [KVM VCPU Requests](https://docs.kernel.org/virt/kvm/vcpu-requests.html) — the `vcpu->requests` bitmask mechanism (`kvm_check_request()`, `KVM_REQ_TLB_FLUSH`) used in the vCPU run loop

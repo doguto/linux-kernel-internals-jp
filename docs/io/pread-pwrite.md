@@ -1,8 +1,8 @@
-# pread / pwrite / preadv2 / pwritev2
+# pread / pwrite / preadv2 / pwritev2 {#pread-pwrite-preadv2-pwritev2}
 
 > Positional I/O, scatter-gather, and per-call flags: the full API from pread64 to RWF_ATOMIC
 
-## The problem with read() / write() for concurrent I/O
+## The problem with read() / write() for concurrent I/O {#the-problem-with-read-write-for-concurrent-io}
 
 `read()` and `write()` use `file->f_pos` — the file position stored in the open file description. Because an open file description is shared between all file descriptors that refer to it (after `dup`, `dup2`, `fork`, etc.), concurrent access creates a race:
 
@@ -34,7 +34,7 @@ Between those two lock acquisitions, Thread B can change `f_pos`. This is a TOCT
 
 ---
 
-## pread() / pwrite()
+## pread() / pwrite() {#pread-pwrite}
 
 ```c
 #include <unistd.h>
@@ -46,7 +46,7 @@ ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
 ```
 
-### Syscall implementation
+### Syscall implementation {#syscall-implementation}
 
 The kernel entry points are `pread64` and `pwrite64` (the `64` suffix indicates that the offset is a 64-bit `loff_t`, matching `off64_t` from glibc):
 
@@ -76,7 +76,7 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
 
 The `FMODE_PREAD` / `FMODE_PWRITE` mode flags are set for regular files and block devices. Pipes, sockets, and other non-seekable file types do not set these flags and return `ESPIPE`.
 
-### fdget vs fdget_pos — the key difference
+### fdget vs fdget_pos — the key difference {#fdget-vs-fdget_pos-the-key-difference}
 
 `read()` uses `fdget_pos()`:
 
@@ -115,7 +115,7 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 
 Because `pread()`/`pwrite()` do not touch `f_pos` and do not take `f_pos_lock`, multiple threads can issue concurrent positional reads on the same open file description without any serialization overhead.
 
-### Error cases
+### Error cases {#error-cases}
 
 ```c
 /* ESPIPE: fd is a pipe or socket */
@@ -130,7 +130,7 @@ pread(fd, buf, 4096, 1ULL << 40);   /* → 0 (EOF) if file is smaller */
 
 ---
 
-## preadv() / pwritev()
+## preadv() / pwritev() {#preadv-pwritev}
 
 `readv()` and `writev()` have had scatter-gather I/O since POSIX.1-2001, but there was no way to specify an explicit offset. Linux 2.6.30 added `preadv()` and `pwritev()` to fill this gap:
 
@@ -143,7 +143,7 @@ ssize_t pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset);
 
 These combine the offset semantics of `pread()`/`pwrite()` with the scatter-gather capability of `readv()`/`writev()`. Like the non-vectored variants, they do not touch `f_pos` and require `FMODE_PREAD`/`FMODE_PWRITE`.
 
-### Kernel path
+### Kernel path {#kernel-path}
 
 ```c
 /* fs/read_write.c */
@@ -184,7 +184,7 @@ static ssize_t do_preadv(unsigned long fd, const struct iovec __user *vec,
 
 The split of `pos` into `pos_l` and `pos_h` is a 32-bit ABI artifact: on 32-bit architectures, a 64-bit `loff_t` is passed as two 32-bit registers. On 64-bit architectures the ABI provides a single register.
 
-### Why databases use preadv
+### Why databases use preadv {#why-databases-use-preadv}
 
 A typical database page read looks like:
 
@@ -210,7 +210,7 @@ Two benefits:
 
 ---
 
-## preadv2() / pwritev2(): per-call flags
+## preadv2() / pwritev2(): per-call flags {#preadv2-pwritev2-per-call-flags}
 
 Linux 4.6 extended `preadv()`/`pwritev()` with a `flags` argument:
 
@@ -225,7 +225,7 @@ ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
 
 `flags` is of type `rwf_t` (defined as `__kernel_rwf_t`, an `int`). It allows per-call control of I/O behaviour that was previously only settable at file-open time via `O_` flags or required a separate fcntl call.
 
-### RWF_* flags
+### RWF_* flags {#rwf_-flags}
 
 | Flag | Value | Kernel version | Description |
 |------|-------|----------------|-------------|
@@ -239,7 +239,7 @@ ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
 
 Flags are defined in `include/uapi/linux/fs.h`.
 
-### How flags reach the filesystem: kiocb_set_rw_flags
+### How flags reach the filesystem: kiocb_set_rw_flags {#how-flags-reach-the-filesystem-kiocbsetrw_flags}
 
 Every I/O operation in the kernel is represented by a `struct kiocb` (kernel I/O control block). The `RWF_*` flags are translated to `IOCB_*` flags and stored in `kiocb.ki_flags`:
 
@@ -282,7 +282,7 @@ static inline int kiocb_set_rw_flags(struct kiocb *ki, rwf_t flags,
 
 Once `IOCB_*` flags are set on the `kiocb`, every layer that handles the I/O — the VFS, the filesystem (`ext4`, `xfs`), and the block layer — checks these flags to adjust behaviour. Filesystems check `iocb->ki_flags & IOCB_NOWAIT` before taking a lock that might sleep; the block layer checks `IOCB_HIPRI` to route to a polled NVMe queue.
 
-### offset = -1: use current f_pos
+### offset = -1: use current f_pos {#offset-1-use-current-f_pos}
 
 When `offset` is `-1` (cast to `off_t`), `preadv2()` / `pwritev2()` behave like `readv()` / `writev()`: the current `f_pos` is used and updated afterward. This makes it possible to use `RWF_*` flags without having an explicit offset:
 
@@ -295,7 +295,7 @@ When `offset == -1`, the syscall falls back to `fdget_pos()` and takes `f_pos_lo
 
 ---
 
-## RWF_NOWAIT in detail
+## RWF_NOWAIT in detail {#rwf_nowait-in-detail}
 
 `RWF_NOWAIT` is the most commonly used per-call flag. It asks the kernel: "complete this I/O only if you can do so without blocking. Otherwise return `EAGAIN`."
 
@@ -315,7 +315,7 @@ if (n < 0) {
 process_data(iov[0].iov_base, n);
 ```
 
-### When preadv2 with RWF_NOWAIT returns EAGAIN
+### When preadv2 with RWF_NOWAIT returns EAGAIN {#when-preadv2-with-rwf_nowait-returns-eagain}
 
 The read returns `EAGAIN` without doing any I/O in these cases:
 
@@ -331,7 +331,7 @@ The read returns `EAGAIN` without doing any I/O in these cases:
 
 Note: buffered reads rarely succeed with `RWF_NOWAIT` unless the pages are already in cache. For a workload that frequently gets `EAGAIN`, `io_uring` with `IORING_OP_READ` is more efficient since it submits true async I/O rather than polling.
 
-### The FMODE_NOWAIT gate
+### The FMODE_NOWAIT gate {#the-fmode_nowait-gate}
 
 Not all file types support `RWF_NOWAIT`. The kernel checks `FMODE_NOWAIT` on the file before honouring the flag:
 
@@ -347,7 +347,7 @@ if (flags & RWF_NOWAIT) {
 
 ---
 
-## RWF_DSYNC and RWF_SYNC
+## RWF_DSYNC and RWF_SYNC {#rwfdsync-and-rwfsync}
 
 `O_DSYNC` and `O_SYNC` are per-fd flags set at open time. They force data (and optionally metadata) to be written to stable storage before each write returns. The per-call equivalents avoid the overhead of opening the file with these flags when only some writes need durability:
 
@@ -390,7 +390,7 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
 
 ---
 
-## RWF_APPEND
+## RWF_APPEND {#rwf_append}
 
 `O_APPEND` makes all writes to an fd atomic appends: the file position is moved to EOF under the inode lock before each write, preventing two concurrent writers from overwriting each other. But `O_APPEND` is a property of the open file description — you cannot toggle it per-call without `fcntl(F_SETFL)`.
 
@@ -416,7 +416,7 @@ Implementation: `IOCB_APPEND` causes the VFS and filesystem to:
 
 This is the same code path as `O_APPEND`, just triggered by a per-call flag rather than a file mode.
 
-### RWF_NOAPPEND (Linux 6.9)
+### RWF_NOAPPEND (Linux 6.9) {#rwf_noappend-linux-69}
 
 The converse: if a file was opened with `O_APPEND`, `RWF_NOAPPEND` overrides it for a single call and writes at the given explicit `offset` instead:
 
@@ -427,7 +427,7 @@ pwritev2(fd, iov, 1, fixed_offset, RWF_NOAPPEND);
 
 ---
 
-## RWF_HIPRI: high-priority polled I/O
+## RWF_HIPRI: high-priority polled I/O {#rwf_hipri-high-priority-polled-io}
 
 NVMe drives support **polled I/O queues**: instead of waiting for a hardware interrupt when I/O completes, the CPU spins on the NVMe completion queue. This reduces latency at the cost of CPU time. `RWF_HIPRI` requests polled completion for this I/O:
 
@@ -444,7 +444,7 @@ Effective only with `O_DIRECT` — buffered I/O completion happens asynchronousl
 
 ---
 
-## RWF_ATOMIC (Linux 6.11)
+## RWF_ATOMIC (Linux 6.11) {#rwf_atomic-linux-611}
 
 Traditional disk writes have no atomicity guarantee at the hardware level: a power failure mid-write can leave a sector partially written. Databases work around this with journaling or copy-on-write. Modern storage devices (NVMe with the Atomic Write Unit feature set) can guarantee that a write of up to `N` bytes is either fully committed or not committed at all.
 
@@ -472,7 +472,7 @@ if (n < 0 && errno == EINVAL) {
 }
 ```
 
-### Requirements for RWF_ATOMIC
+### Requirements for RWF_ATOMIC {#requirements-for-rwf_atomic}
 
 - The write size must be a power of two between `stx_atomic_write_unit_min` and `stx_atomic_write_unit_max`.
 - The buffer address and file offset must be aligned to `stx_atomic_write_unit_min`.
@@ -480,7 +480,7 @@ if (n < 0 && errno == EINVAL) {
 - The filesystem must support it. XFS supports `RWF_ATOMIC` on `O_DIRECT` writes as of 6.11. ext4 support is in progress.
 - The block device must advertise the Atomic Write Unit via the NVMe or SCSI interface.
 
-### Why this matters for databases
+### Why this matters for databases {#why-this-matters-for-databases}
 
 Without `RWF_ATOMIC`:
 ```
@@ -499,11 +499,11 @@ PostgreSQL and MySQL are expected to adopt `RWF_ATOMIC` for 8 KB–16 KB page wr
 
 ---
 
-## f_pos locking internals
+## f_pos locking internals {#f_pos-locking-internals}
 
 For completeness: here is how `f_pos_lock` works in `read()` / `write()` and why `pread()` can skip it.
 
-### The lock itself
+### The lock itself {#the-lock-itself}
 
 `file->f_pos_lock` is a `mutex` embedded in `struct file`:
 
@@ -520,7 +520,7 @@ struct file {
 };
 ```
 
-### file_ppos: stream vs seekable
+### file_ppos: stream vs seekable {#file_ppos-stream-vs-seekable}
 
 Not all file types have a meaningful position. `file_ppos()` returns `NULL` for stream files (pipes, sockets) so that the lock path is skipped entirely:
 
@@ -532,7 +532,7 @@ static inline loff_t *file_ppos(struct file *file)
 }
 ```
 
-### fdget_pos / fdput_pos
+### fdget_pos / fdput_pos {#fdgetpos-fdputpos}
 
 ```c
 /* fs/read_write.c */
@@ -557,7 +557,7 @@ static inline void fdput_pos(struct fd f)
 
 The lock is only taken when `f_count > 1` (multiple fds referring to the same open file description). A file opened by a single-threaded process and not shared with `dup`/`fork` never contends on `f_pos_lock`.
 
-### Summary: when does f_pos_lock fire?
+### Summary: when does f_pos_lock fire? {#summary-when-does-fposlock-fire}
 
 | Scenario | f_pos_lock taken? |
 |---|---|
@@ -569,7 +569,7 @@ The lock is only taken when `f_count > 1` (multiple fds referring to the same op
 
 ---
 
-## io_uring equivalents
+## io_uring equivalents {#io_uring-equivalents}
 
 `io_uring` (Linux 5.1+) exposes positional I/O as first-class operations, mapping directly onto the `preadv2`/`pwritev2` semantics:
 
@@ -599,7 +599,7 @@ The main advantage of `io_uring` over `preadv2` is not the per-call flags (those
 
 ---
 
-## Performance comparison
+## Performance comparison {#performance-comparison}
 
 | Syscall | `f_pos_lock`? | Vectored? | Per-call flags? | Best use case |
 |---------|:---:|:---:|:---:|---|
@@ -620,7 +620,7 @@ For a database using multiple threads to issue random reads:
 
 ---
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Contents |
 |------|----------|
@@ -635,7 +635,7 @@ For a database using multiple threads to issue random reads:
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Vectored I/O (readv/writev)](vectored-io.md) — `struct iovec`, `iov_iter`, scatter-gather fundamentals
 - [Direct I/O](direct-io.md) — `O_DIRECT` alignment requirements; `RWF_HIPRI` requires `O_DIRECT`

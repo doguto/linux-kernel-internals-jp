@@ -1,8 +1,8 @@
-# Seqlock
+# Seqlock {#seqlock}
 
 > Sequence counters for lockless reads of small, frequently-updated data
 
-## The seqlock pattern
+## The seqlock pattern {#the-seqlock-pattern}
 
 A seqlock (sequence lock) solves a specific problem: how do you let readers access small data (like a timestamp or a counter) without taking any lock, while still detecting if a concurrent write happened?
 
@@ -25,7 +25,7 @@ Reader:
 
 This gives **zero-cost reads when there are no concurrent writes**, and cheap retries otherwise.
 
-## Two types: seqcount_t and seqlock_t
+## Two types: seqcount_t and seqlock_t {#two-types-seqcountt-and-seqlockt}
 
 ```c
 /* seqcount_t: raw counter, no writer serialization built in.
@@ -43,9 +43,9 @@ typedef struct {
 
 `seqlock_t` is the complete package for most users. `seqcount_t` is used when the writer serialization is handled by some other mechanism (e.g., a mutex).
 
-## API
+## API {#api}
 
-### seqlock_t
+### seqlock_t {#seqlock_t}
 
 ```c
 #include <linux/seqlock.h>
@@ -74,7 +74,7 @@ do {
 /* value is now consistent */
 ```
 
-### seqcount_t
+### seqcount_t {#seqcount_t}
 
 ```c
 #include <linux/seqlock.h>
@@ -97,7 +97,7 @@ do {
 } while (read_seqcount_retry(&my_seqcount, seq));
 ```
 
-## Real-world example: jiffies and time
+## Real-world example: jiffies and time {#real-world-example-jiffies-and-time}
 
 The kernel uses seqlocks extensively for time-related data that is updated on every timer tick but read from many places:
 
@@ -139,7 +139,7 @@ static inline u64 get_jiffies_64(void)
 }
 ```
 
-## Constraints
+## Constraints {#constraints}
 
 Seqlocks have important limitations:
 
@@ -163,7 +163,7 @@ Use RCU when:
   ✓ Reads must see consistent snapshots of complex structures
 ```
 
-## Seqlock vs rwlock
+## Seqlock vs rwlock {#seqlock-vs-rwlock}
 
 Both allow concurrent readers, but:
 
@@ -177,7 +177,7 @@ Both allow concurrent readers, but:
 
 Seqlock wins on read-heavy, write-rare workloads with non-pointer data.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [rwlock and rwsem](rwlock-rwsem.md) — For pointer-based data or complex structures
 - [RCU](rcu.md) — Lock-free reads for pointer-based data

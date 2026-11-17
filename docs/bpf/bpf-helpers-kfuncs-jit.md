@@ -1,10 +1,10 @@
-# Helpers, kfuncs, and the JIT
+# Helpers, kfuncs, and the JIT {#helpers-kfuncs-and-the-jit}
 
 > How a BPF program calls into the kernel, and how it actually runs once loaded
 
 [Architecture and Program Types](bpf-overview.md) covers helpers as a flat list of callable functions. This page goes one level deeper: the actual calling-convention mechanics behind that list, the newer kfunc mechanism that grew up alongside it, and how a verified program turns into the code the CPU actually executes.
 
-## Helpers: a fixed, numbered ABI
+## Helpers: a fixed, numbered ABI {#helpers-a-fixed-numbered-abi}
 
 A BPF program can't call an arbitrary kernel symbol — the compiler has no way to link against kernel code, and the verifier has no way to reason about arbitrary function bodies. Instead, the kernel exposes a fixed set of helper functions, each identified by a stable number baked into the instruction stream at compile time:
 
@@ -19,7 +19,7 @@ FN(map_delete_elem, 3, ##ctx)
 
 `bpf_map_lookup_elem()` is helper 1 — the oldest, most-used helper, from before the numbered-list convention even needed a name. A `BPF_CALL` instruction in the compiled program doesn't reference a symbol; it carries this number as an immediate operand.
 
-### The five-register calling convention
+### The five-register calling convention {#the-five-register-calling-convention}
 
 Every helper — regardless of its real signature — is called through exactly five 64-bit registers (`r1`–`r5`), because that's what a `BPF_CALL` instruction can pass. A helper implementation looks like an ordinary typed C function, but it's wrapped by a macro that generates the real, register-typed entry point:
 
@@ -42,7 +42,7 @@ Every helper — regardless of its real signature — is called through exactly 
 
 `BPF_CALL_2(bpf_map_lookup_elem, struct bpf_map *, map, void *, key)` expands to a real function taking two typed arguments (`____bpf_map_lookup_elem`), plus a second, register-typed wrapper (`bpf_map_lookup_elem`) that takes five `u64`s, casts the first two down to `struct bpf_map *`/`void *`, and calls through. The verifier and the JIT only ever see the register-typed wrapper; the typed inner function is what you actually write the helper's logic in.
 
-### Type-checking a helper call
+### Type-checking a helper call {#type-checking-a-helper-call}
 
 The verifier has to know what each helper's arguments and return value actually mean — a `u64` register might hold a map pointer, a raw integer, or a pointer the program isn't allowed to touch. That metadata lives in a separate struct, one per helper:
 
@@ -82,7 +82,7 @@ New helpers essentially don't get added anymore, though. `include/uapi/linux/bpf
 
 That's not a recent policy shift so much as the comment catching up to years of practice: helper 211 (`cgrp_storage_delete`) is still the last one in the list as of Linux 7.2 — the same as it was at 6.19, 6.12, and 6.6. Every new BPF-callable kernel function added in that window went in as a kfunc instead.
 
-## kfuncs: how new BPF functionality actually gets added now
+## kfuncs: how new BPF functionality actually gets added now {#kfuncs-how-new-bpf-functionality-actually-gets-added-now}
 
 The helper list is a single, kernel-wide enum: every helper, from every subsystem, is added to the same list, gets the same permanent ABI guarantee, and needs review from BPF maintainers even if it's only useful to one subsystem. That doesn't scale to letting individual subsystems (or even individual kernel modules) expose their own narrow, possibly-unstable functions to BPF — and, per the freeze comment above, it isn't how new functionality is added at all anymore. Kfuncs aren't a side door next to the helper ABI; they're the only supported path for extending what BPF programs can call.
 
@@ -117,7 +117,7 @@ ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &generic_kfunc_set);
 
 The `KF_*` flags (`include/linux/btf.h`) are the verifier's substitute for `bpf_func_proto`'s argument-type checking, expressed in terms kfuncs actually need: `KF_ACQUIRE` marks a function that hands back a reference the program must eventually release; `KF_RELEASE` marks the function that releases it; `KF_RET_NULL` tells the verifier the return value must be null-checked before use. Unlike a helper's permanent numeric ID, a kfunc is resolved by name through BTF at load time — and `Documentation/bpf/kfuncs.rst` is explicit that this comes with no hard stability promise at all: "A kfunc will never have any hard stability guarantees. BPF APIs cannot and will not ever hard-block a change in the kernel purely for stability reasons." Whether a given kfunc actually changes out from under callers is a case-by-case maintainer judgment call, not something a subsystem can commit to in advance — that lack of a permanent contract is the tradeoff for not needing central review to add one.
 
-## The JIT: from bytecode to native code
+## The JIT: from bytecode to native code {#the-jit-from-bytecode-to-native-code}
 
 A verified BPF program is a sequence of fixed-width instructions — safe to run, but still bytecode that needs to be dispatched one instruction at a time by an interpreter unless it's compiled to real machine code first. Linux has had a JIT for BPF since before eBPF existed: Eric Dumazet's x86-64 JIT for classic (socket-filter) BPF, covered by Jonathan Corbet on LWN in April 2011 ([LWN](https://lwn.net/Articles/437981/)) and confirmed landing in Linux **3.0** (July 2011) via tag-diff of `arch/x86/net/bpf_jit_comp.c` (absent at v2.6.39, present at v3.0). The eBPF rewrite in 2014 replaced that JIT along with everything else, but the same file and the same idea — translate the whole program to native instructions once, instead of re-interpreting it on every run — carried forward.
 
@@ -154,7 +154,7 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 
 `bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)` (declared in `include/linux/filter.h`, defined per-architecture) is the real compiler. Every supported architecture defines its own version of this same function; `arch/x86/net/bpf_jit_comp.c` alone is over 4,000 lines, translating each fixed-width BPF opcode into the corresponding x86-64 instruction sequence, including the register-allocation and calling-convention work needed to make a JITed BPF function callable like any other. An architecture that doesn't implement it at all falls back to a `__weak` stub in `kernel/bpf/core.c` that just returns the program unmodified — the interpreter path is what actually runs there. Whether the JIT is even attempted is itself gated by a sysctl, `net.core.bpf_jit_enable` (`fp->jit_requested = ebpf_jit_enabled()`), separate from the always-on-or-off decision covered next.
 
-### Choosing JIT or interpreter
+### Choosing JIT or interpreter {#choosing-jit-or-interpreter}
 
 Compilation isn't unconditional — it happens as part of finalizing a verified program, with a documented fallback if it fails:
 
@@ -187,9 +187,9 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env,
 
 The comment names a real safety property: if the architecture can't (or, with constant blinding, chooses not to) produce JITed code, the interpreter is still a fully valid fallback — normally. `jit_required` starts out set from `IS_ENABLED(CONFIG_BPF_JIT_ALWAYS_ON)`, but the verifier (`kernel/bpf/verifier.c`) also forces it on for specific program shapes the interpreter simply cannot execute at all: any program that makes a kfunc call — the kfunc mechanism above has no interpreter-side implementation — plus programs that use BPF arena maps or the `BPF_MAP_TYPE_INSN_ARRAY` map type. `CONFIG_BPF_JIT_ALWAYS_ON` is the broadest of these, removing the interpreter from the kernel outright, specifically "to avoid speculative execution of BPF instructions by the interpreter" — a Spectre-class mitigation, since an unJITed BPF program is still walked instruction-by-instruction by real (speculatable) kernel code. The kfunc/arena/insn-array cases are narrower: only programs using those specific features lose the fallback.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/filter.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/filter.h) — the `BPF_CALL_x` macro family and `bpf_int_jit_compile()`'s declaration
 - [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — `struct bpf_func_proto`, the verifier's per-helper type-checking metadata
@@ -200,11 +200,11 @@ The comment names a real safety property: if the architecture can't (or, with co
 - [kernel/bpf/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/core.c) — `__bpf_prog_select_runtime()`, the JIT-or-interpreter decision and constant-blinding fallback
 - [arch/x86/net/bpf_jit_comp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/net/bpf_jit_comp.c) — the x86-64 JIT
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [A JIT for packet filters](https://lwn.net/Articles/437981/) — Jonathan Corbet, April 2011, covering Eric Dumazet's x86-64 classic-BPF JIT ahead of its Linux 3.0 merge
 
-### Related pages
+### Related pages {#related-pages}
 
 - [BPF Architecture and Program Types](bpf-overview.md) — the helper list as used from a program, and the `bpf()` syscall's load path
 - [BPF Verifier](bpf-verifier.md) — how `bpf_func_proto` and BTF type information feed the safety proof

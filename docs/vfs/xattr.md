@@ -1,8 +1,8 @@
-# Extended Attributes (xattr)
+# Extended Attributes (xattr) {#extended-attributes-xattr}
 
 > Attaching arbitrary metadata to files and directories
 
-## What are extended attributes?
+## What are extended attributes? {#what-are-extended-attributes}
 
 Extended attributes (xattr) allow attaching name-value pairs to files and directories. They extend the traditional POSIX metadata (owner, permissions, timestamps) with arbitrary key-value data. Xattr support was introduced in Linux 2.4 [(man page)](https://www.man7.org/linux/man-pages/man2/getxattr.2.html).
 
@@ -27,7 +27,7 @@ removexattr("/path/to/file", "user.comment");
 
 There are also `l` variants (`lgetxattr`, `lsetxattr`) that don't follow symlinks, and `f` variants (`fgetxattr`, `fsetxattr`) that operate on open file descriptors.
 
-## Namespace prefixes
+## Namespace prefixes {#namespace-prefixes}
 
 Every xattr name must begin with a recognized namespace prefix:
 
@@ -38,7 +38,7 @@ Every xattr name must begin with a recognized namespace prefix:
 | `security` | `security.` | Kernel security modules (LSMs) | SELinux labels, AppArmor |
 | `trusted` | `trusted.` | CAP_SYS_ADMIN only | Container runtimes, OverlayFS |
 
-### `user` namespace
+### `user` namespace {#user-namespace}
 
 Any process with write permission on the file can set `user.*` attributes:
 
@@ -58,7 +58,7 @@ Restrictions:
 - Not supported on symlinks or device files (to prevent privilege escalation via root-owned devices)
 - Subject to filesystem quota if enabled
 
-### `security` namespace
+### `security` namespace {#security-namespace}
 
 Used by Linux Security Modules. You rarely set these directly:
 
@@ -73,7 +73,7 @@ getfattr -n security.apparmor /usr/bin/python3
 
 Setting `security.*` requires `CAP_SYS_ADMIN` or LSM-specific permissions.
 
-### `trusted` namespace
+### `trusted` namespace {#trusted-namespace}
 
 Requires `CAP_SYS_ADMIN`. Used by:
 
@@ -87,7 +87,7 @@ getfattr -n trusted.overlay.opaque /some/overlayfs/dir
 # trusted.overlay.opaque="y"
 ```
 
-### `system` namespace
+### `system` namespace {#system-namespace}
 
 Used for POSIX ACLs (NFSv4 and traditional):
 
@@ -98,7 +98,7 @@ getfattr -n system.posix_acl_access /shared/file
 # Returns binary ACL encoding
 ```
 
-## Filesystem support
+## Filesystem support {#filesystem-support}
 
 ```bash
 # Check if filesystem supports xattr
@@ -114,9 +114,9 @@ tune2fs -l /dev/sda1 | grep "Default mount options"
 # OverlayFS: delegates to upper/lower filesystem
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### xattr dispatch: struct xattr_handler
+### xattr dispatch: struct xattr_handler {#xattr-dispatch-struct-xattr_handler}
 
 Each filesystem registers handlers for each namespace:
 
@@ -153,7 +153,7 @@ static const struct xattr_handler * const ext4_xattr_handler_map[] = {
 const struct xattr_handler * const *ext4_xattr_handlers = ext4_xattr_handler_map;
 ```
 
-### VFS xattr syscall path
+### VFS xattr syscall path {#vfs-xattr-syscall-path}
 
 ```c
 /* fs/xattr.c */
@@ -179,7 +179,7 @@ int setxattr(struct mnt_idmap *idmap, struct dentry *dentry,
 }
 ```
 
-### Storage in ext4
+### Storage in ext4 {#storage-in-ext4}
 
 ext4 stores xattrs in two places:
 
@@ -206,7 +206,7 @@ debugfs -R "stat <inode_number>" /dev/sda1
 # Extended attributes stored in inode body / block
 ```
 
-## Security module integration
+## Security module integration {#security-module-integration}
 
 SELinux and other LSMs use `security.*` xattrs to label files:
 
@@ -241,7 +241,7 @@ ls -Z /etc/passwd
 restorecon -R /var/www/html/
 ```
 
-## fscrypt and xattr
+## fscrypt and xattr {#fscrypt-and-xattr}
 
 fscrypt stores its per-file encryption policy as an xattr:
 
@@ -266,7 +266,7 @@ fscryptctl get_policy /encrypted/file
 lsattr /encrypted/file | grep -o 'E'
 ```
 
-## OverlayFS whiteout and opaque markers
+## OverlayFS whiteout and opaque markers {#overlayfs-whiteout-and-opaque-markers}
 
 OverlayFS uses `trusted.*` xattrs to implement its layering:
 
@@ -289,7 +289,7 @@ int ovl_check_setxattr(struct ovl_fs *ofs, struct dentry *upperdentry,
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — inodes that store xattrs
 - [OverlayFS](../filesystems/overlayfs.md) — uses trusted.overlay.* xattrs

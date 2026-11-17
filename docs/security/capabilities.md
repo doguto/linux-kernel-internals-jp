@@ -1,14 +1,14 @@
-# Linux Capabilities
+# Linux Capabilities {#linux-capabilities}
 
 > Fine-grained privilege decomposition
 
-## The problem with root
+## The problem with root {#the-problem-with-root}
 
 Traditionally, privilege in Unix is binary: a process either has UID 0 (root, omnipotent) or it doesn't. This is too coarse — a web server needs to bind to port 80, but shouldn't have access to raw network sockets, loading kernel modules, or rebooting the system.
 
 Linux capabilities split root's power into ~40 discrete privileges that can be granted independently. Based on the withdrawn POSIX.1e draft standard; introduced in Linux 2.2 (January 1999). File capability support (allowing binaries to have capabilities without setuid) was added in Linux 2.6.24 by Serge Hallyn — [`b53767719b6c`](https://git.kernel.org/linus/b53767719b6cd8789392ea3e7e2eb7b8906898f0). See [`man 7 capabilities`](https://man7.org/linux/man-pages/man7/capabilities.7.html).
 
-## The 40 capabilities
+## The 40 capabilities {#the-40-capabilities}
 
 ```c
 /* include/uapi/linux/capability.h */
@@ -64,7 +64,7 @@ CAP_PERFMON          /* perf_event_open for tracing (5.8+) */
 CAP_CHECKPOINT_RESTORE  /* CRIU restore operations */
 ```
 
-## Capability sets
+## Capability sets {#capability-sets}
 
 Each process has **5 capability sets**:
 
@@ -93,7 +93,7 @@ Rules:
 - **Bounding**: ceiling — caps in bset can be in permitted; once dropped, cannot be regained
 - **Ambient**: automatically inherited by children and across exec (since Linux 4.3 — [`58319057b784`](https://git.kernel.org/linus/58319057b7849f6272afebf1ffeed1da70e5f68a) by Andy Lutomirski)
 
-## Checking capabilities in the kernel
+## Checking capabilities in the kernel {#checking-capabilities-in-the-kernel}
 
 ```c
 /* Anywhere in the kernel: */
@@ -111,7 +111,7 @@ if (!has_capability(task, CAP_KILL))
 
 `capable()` checks `current->cred->cap_effective`.
 
-## Viewing and modifying capabilities
+## Viewing and modifying capabilities {#viewing-and-modifying-capabilities}
 
 ```bash
 # View capabilities of current process
@@ -136,7 +136,7 @@ capsh --caps="cap_net_bind_service+eip" -- -c "/usr/sbin/nginx"
 capsh --drop=all -- -c "myprogram"
 ```
 
-## File capabilities (setcap)
+## File capabilities (setcap) {#file-capabilities-setcap}
 
 Executables can have capabilities in their extended attributes, allowing them to run with elevated privileges without setuid:
 
@@ -163,7 +163,7 @@ The `e`, `i`, `p` flags:
 - `i` = inheritable
 - `p` = permitted
 
-## Capability-based privilege dropping
+## Capability-based privilege dropping {#capability-based-privilege-dropping}
 
 A properly written daemon starts with root, acquires needed capabilities, then drops the rest:
 
@@ -196,7 +196,7 @@ static void drop_privileges(void)
 }
 ```
 
-## No-New-Privileges
+## No-New-Privileges {#no-new-privileges}
 
 `PR_SET_NO_NEW_PRIVS` prevents a process from gaining any new privileges through exec (even via setuid binaries or file capabilities):
 
@@ -212,7 +212,7 @@ prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 unshare --user bash
 ```
 
-## CAP_SYS_ADMIN: the problem capability
+## CAP_SYS_ADMIN: the problem capability {#capsysadmin-the-problem-capability}
 
 `CAP_SYS_ADMIN` is sometimes called "the new root" because it covers too many unrelated operations:
 
@@ -227,7 +227,7 @@ unshare --user bash
 
 Prefer more specific capabilities where possible. If a library says "requires CAP_SYS_ADMIN", investigate whether a narrower capability works.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LSM Framework](lsm.md) — MAC on top of capability checks
 - [seccomp BPF](seccomp.md) — Syscall-level filtering

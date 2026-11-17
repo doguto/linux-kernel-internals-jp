@@ -1,8 +1,8 @@
-# When does copy-on-write break?
+# When does copy-on-write break? {#when-does-copy-on-write-break}
 
 > COW is elegant in theory, but the edge cases will surprise you
 
-## The COW promise
+## The COW promise {#the-cow-promise}
 
 Copy-on-write (COW) is one of the kernel's most important optimizations. When you `fork()`, the child doesn't get a physical copy of the parent's memory - both processes share the same pages, marked read-only in the [page tables](page-tables.md). Only when either process writes does the kernel copy the page.
 
@@ -25,9 +25,9 @@ After fork():
 
 This is why `fork()` is fast - no copying, just page table manipulation. But when does this sharing actually break?
 
-## When COW triggers a copy
+## When COW triggers a copy {#when-cow-triggers-a-copy}
 
-### 1. Any write to a shared page
+### 1. Any write to a shared page {#1-any-write-to-a-shared-page}
 
 The obvious case. When either process writes:
 
@@ -41,7 +41,7 @@ if (pid == 0) {
 
 The write triggers a page fault, the kernel sees the page is shared, allocates a new page from the [page allocator](page-allocator.md), copies the content, and updates the faulting process's [page table](page-tables.md).
 
-### 2. Writing to a private file mapping
+### 2. Writing to a private file mapping {#2-writing-to-a-private-file-mapping}
 
 `MAP_PRIVATE` file mappings use COW too:
 
@@ -55,7 +55,7 @@ p[0] = 'x';  // COW: gets private copy
 
 The initial mapping shares pages with the [page cache](page-cache.md). Writing triggers COW, giving you a private copy that diverges from the file.
 
-### 3. KSM de-duplication (and then writing)
+### 3. KSM de-duplication (and then writing) {#3-ksm-de-duplication-and-then-writing}
 
 [KSM](ksm.md) (Kernel Same-page Merging) scans for identical pages and merges them with COW:
 
@@ -76,7 +76,7 @@ Process B: [Still sharing original]
 
 This is why VMs with identical guest OS pages can share memory - until the guest writes.
 
-### 4. `MADV_WIPEONFORK` regions after fork
+### 4. `MADV_WIPEONFORK` regions after fork {#4-madv_wipeonfork-regions-after-fork}
 
 Memory marked with `MADV_WIPEONFORK` ([added in kernel 4.14](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)) appears zeroed in the child:
 
@@ -89,9 +89,9 @@ fork();
 
 The child doesn't inherit the parent's page mappings for this region. When the child accesses the memory, it faults in fresh zero pages on demand - not immediate allocation at fork time, but the content is effectively wiped.
 
-## When COW doesn't work as expected
+## When COW doesn't work as expected {#when-cow-doesnt-work-as-expected}
 
-### Problem 1: fork() + immediate write pattern
+### Problem 1: fork() + immediate write pattern {#problem-1-fork-immediate-write-pattern}
 
 The classic anti-pattern:
 
@@ -113,7 +113,7 @@ After the child's `memset`, you have 2GB of physical memory in use, not 1GB. The
 
 *Note: `vfork()` avoids page table copying but is dangerous - the child shares the parent's stack and address space entirely. Any writes in the child corrupt the parent. Only use it if you `exec()` or `_exit()` immediately.*
 
-### Problem 2: Reading doesn't mean safe
+### Problem 2: Reading doesn't mean safe {#problem-2-reading-doesnt-mean-safe}
 
 Reading shared pages is safe... usually. But some "reads" are actually writes:
 
@@ -128,7 +128,7 @@ buffer[i]++;  // Read-modify-write = write = COW
 __sync_fetch_and_add(&buffer[i], 1);  // Still triggers COW
 ```
 
-### Problem 3: Page table overhead
+### Problem 3: Page table overhead {#problem-3-page-table-overhead}
 
 COW doesn't copy pages, but it does copy **[page tables](page-tables.md)** at fork time:
 
@@ -144,7 +144,7 @@ After fork():
 
 For processes with large sparse address spaces, page table copying during fork can be significant. This is why `vfork()` exists - it doesn't copy page tables at all.
 
-### Problem 4: COW and huge pages
+### Problem 4: COW and huge pages {#problem-4-cow-and-huge-pages}
 
 [Huge pages](thp.md) (2MB or 1GB) interact with COW in interesting ways. For anonymous THP, the kernel splits the huge page into 4KB pages before COW to avoid copying 2MB for a single-byte write:
 
@@ -164,15 +164,15 @@ Original 2MB THP (after fork, shared):
 
 This splitting behavior is the default for anonymous THP since kernel ~4.5. However, **hugetlbfs** pages (explicit huge pages via `mmap(..., MAP_HUGETLB)`) are *not* split - writing one byte to a shared 2MB hugetlbfs page does copy all 2MB.
 
-### Problem 5: GUP (get_user_pages) and COW
+### Problem 5: GUP (get_user_pages) and COW {#problem-5-gup-getuserpages-and-cow}
 
 When the kernel pins user pages for DMA (via `get_user_pages()`), COW gets complicated. The [Dirty COW vulnerability](https://dirtycow.ninja/) (CVE-2016-5195) exploited a race condition in this area.
 
 The kernel now handles this with more care, but the interaction between pinned pages and COW remains complex. See [Getting User Pages (GUP)](gup.md) for the full mechanism — get vs pin, FOLL_LONGTERM, and why pinning collides with COW — and [`mm/gup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c) for the gory details.
 
-## Performance implications
+## Performance implications {#performance-implications}
 
-### Memory bandwidth
+### Memory bandwidth {#memory-bandwidth}
 
 COW copies consume memory bandwidth. If many processes fork and write:
 
@@ -191,7 +191,7 @@ Child3                      [====]──write──[copy]
                           Memory bandwidth spike
 ```
 
-### CPU overhead
+### CPU overhead {#cpu-overhead}
 
 The COW page fault path ([`mm/memory.c:do_wp_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c)) is well-optimized but not free:
 
@@ -206,7 +206,7 @@ The COW page fault path ([`mm/memory.c:do_wp_page()`](https://git.kernel.org/pub
 
 The copy happens *before* taking the lock - this allows concurrent faults on different pages. On a hot path with many COW faults, the overhead still adds up.
 
-### TLB shootdowns
+### TLB shootdowns {#tlb-shootdowns}
 
 When a COW copy happens, the old read-only PTE must be replaced with a writable one pointing to the new page. This requires invalidating the stale TLB entry on the faulting CPU.
 
@@ -214,7 +214,7 @@ Note that after `fork()`, parent and child have *separate* address spaces (`mm_s
 
 TLB shootdowns become expensive in *multithreaded* processes where multiple CPUs share the same `mm`. If one thread COWs a page that other CPUs have cached in their TLBs, those entries must be invalidated via inter-processor interrupts (IPIs).
 
-## Monitoring COW
+## Monitoring COW {#monitoring-cow}
 
 ```bash
 # Watch for COW faults
@@ -233,15 +233,15 @@ grep -E "Private|Shared" /proc/<pid>/smaps | head -20
 # See [Virtual vs Physical vs Resident](virtual-physical-resident.md) for full smaps explanation
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Origins (pre-Linux)
+### Origins (pre-Linux) {#origins-pre-linux}
 
 The TENEX papers ([Bobrow et al., CACM 1972](https://dl.acm.org/doi/10.1145/361268.361271)) describe COW on the PDP-10, crediting its first development to the BBN-LISP system for the SDS 940 (late 1960s). The technique became widespread in Unix systems in the 1980s. Linux inherited COW from the Unix tradition when Linus Torvalds wrote the first version in 1991.
 
 *Note: The original Linux COW implementation predates git. The core logic in `mm/memory.c` has been substantially rewritten multiple times.*
 
-### The Dirty COW vulnerability (2016)
+### The Dirty COW vulnerability (2016) {#the-dirty-cow-vulnerability-2016}
 
 **CVE-2016-5195** - Fixed by [commit 19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) ("mm: remove gup_flags FOLL_WRITE games from __get_user_pages()") | [LKML (stable backport)](https://lore.kernel.org/lkml/20161019182853.224077572@linuxfoundation.org/)
 
@@ -252,7 +252,7 @@ A race condition between COW and `get_user_pages()` allowed unprivileged users t
 From the fix commit message:
 > *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago... In the meantime, the VM has become more scalable, and what used to be a purely theoretical race back then has become easier to trigger."*
 
-### FOLL_PIN and pin_user_pages() (v5.6, 2020)
+### FOLL_PIN and pin_user_pages() (v5.6, 2020) {#follpin-and-pinuser_pages-v56-2020}
 
 **Commit**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) ("mm/gup: introduce pin_user_pages*() and FOLL_PIN") | [LKML](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/)
 
@@ -265,7 +265,7 @@ Post-Dirty COW, the kernel needed a clean distinction between:
 
 This allowed the COW machinery to know when pages are pinned for DMA and handle them more carefully.
 
-### PG_anon_exclusive (v5.19, 2022)
+### PG_anon_exclusive (v5.19, 2022) {#pganonexclusive-v519-2022}
 
 **Commit**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) ("mm: remember exclusively mapped anonymous pages with PG_anon_exclusive") | [LKML](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/)
 
@@ -277,21 +277,21 @@ The definitive fix for GUP/COW races. Added a page flag to track whether an anon
 
 This replaced the "refcount > 1" heuristic with explicit exclusivity tracking, making COW behavior predictable even with pinned pages.
 
-### COW under VMA lock (v6.4+, 2023)
+### COW under VMA lock (v6.4+, 2023) {#cow-under-vma-lock-v64-2023}
 
 **Commit**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9) ("mm: call wp_page_copy() under the VMA lock") | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
 
 Part of the ongoing per-VMA lock work to improve page fault scalability. COW faults can now be handled without taking `mmap_lock` in many cases.
 
-### THP COW improvements (v6.15, 2025)
+### THP COW improvements (v6.15, 2025) {#thp-cow-improvements-v615-2025}
 
 **Commit**: [1da190f4d0a6](https://git.kernel.org/linus/1da190f4d0a6) ("mm: Copy-on-Write (COW) reuse support for PTE-mapped THP") | [LKML](https://lkml.kernel.org/r/20250303163014.1128035-14-david@redhat.com)
 
 When a THP is PTE-mapped and a COW fault occurs, the kernel can now reuse subpages that are exclusively owned rather than always copying. This reduces COW overhead for THP significantly.
 
-## Related history
+## Related history {#related-history}
 
-### MADV_WIPEONFORK (v4.14, 2017)
+### MADV_WIPEONFORK (v4.14, 2017) {#madv_wipeonfork-v414-2017}
 
 **Commit**: [d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19) ("mm,fork: introduce MADV_WIPEONFORK") | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)
 
@@ -299,22 +299,22 @@ When a THP is PTE-mapped and a COW fault occurs, the kernel can now reuse subpag
 
 Added for security-sensitive applications that need to regenerate secrets after fork (PRNG state, PKCS#11 sessions, etc.). Alternative to `MADV_DONTFORK` that preserves address space layout.
 
-## Best practices
+## Best practices {#best-practices}
 
-### For application developers
+### For application developers {#for-application-developers}
 
 1. **After fork, exec quickly** - If you're just spawning a subprocess, `exec()` before touching memory
 2. **Use `posix_spawn()` for subprocess creation** - It's safer than `fork()+exec()` and often faster
 3. **Use MAP_SHARED for truly shared data** - Don't rely on COW for data you want to share; see [mmap](mmap.md)
 4. **Avoid `vfork()` unless you know exactly what you're doing** - It's fast but dangerous (child shares parent's stack)
 
-### For kernel/driver developers
+### For kernel/driver developers {#for-kerneldriver-developers}
 
 1. **Minimize GUP usage** - Pinning pages complicates COW
 2. **Use FOLL_PIN for long-term pins** - Proper accounting helps the COW machinery
 3. **Test fork() paths** - COW bugs often manifest only after fork
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
 ```bash
 # Watch COW in action
@@ -341,22 +341,22 @@ watch -n 1 'ps -o pid,rss,vsz,comm -p <parent_pid>,<child_pid>'
 strace -f -e trace=clone,execve -o /tmp/trace.log /bin/ls
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Memory overcommit](overcommit.md) - COW enables overcommit
 - [KSM](ksm.md) - COW-based page deduplication
 - [THP](thp.md) - COW behavior with huge pages
 - [Process address space](mmap.md) - VMAs and page fault handling
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/) (2016) - Jonathan Corbet on the Dirty COW race and its fix
 - [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) (2021) - Vlastimil Babka on the GUP-pin vs. COW data-leak problem
 - [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/) (2022) - David Hildenbrand's PG_anon_exclusive solution
 
-### Key LKML threads
+### Key LKML threads {#key-lkml-threads}
 
 - [FOLL_PIN patch series](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/) - John Hubbard's v5.6 series
 - [PG_anon_exclusive series](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/) - David Hildenbrand's v5.19 series

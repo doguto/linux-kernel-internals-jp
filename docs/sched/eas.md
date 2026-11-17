@@ -1,8 +1,8 @@
-# Energy-Aware Scheduling (EAS)
+# Energy-Aware Scheduling (EAS) {#energy-aware-scheduling-eas}
 
 > Minimizing energy consumption on heterogeneous CPU topologies
 
-## Motivation
+## Motivation {#motivation}
 
 On ARM big.LITTLE and Intel hybrid (P+E core) CPUs, different cores have different performance *and* energy characteristics. EAS was originally merged in Linux 5.0 for ARM big.LITTLE by Quentin Perret (ARM) — [`732cd75b8c92`](https://git.kernel.org/linus/732cd75b8c920d3727e69957b14faa7c2d7c3b75) ([patch series](https://lore.kernel.org/lkml/20181203095628.11858-1-quentin.perret@arm.com/), [LWN](https://lwn.net/Articles/772475/)). Intel hybrid (P+E core) support was added in Linux 6.16 by Rafael J. Wysocki — [`7b010f9b9061`](https://git.kernel.org/linus/7b010f9b906107ae4e5ac626329ab818b3f0a6b6).
 
@@ -18,7 +18,7 @@ Intel Alder Lake:
 
 A compute-intensive task should run on a big/P-core. An idle background task should park on a LITTLE/E-core. EAS makes this decision based on an energy model of the hardware.
 
-## Energy model
+## Energy model {#energy-model}
 
 The energy model describes the power consumption of each CPU at different utilization levels:
 
@@ -49,7 +49,7 @@ em_dev_register_perf_domain(cpu_dev, nr_states, &em_cb, cpumask, milliwatts);
 /* em_cb.get_cost(dev, freq, cost) — optional: pre-compute cost */
 ```
 
-## CPU capacity
+## CPU capacity {#cpu-capacity}
 
 EAS models each CPU's maximum compute capacity (normalized to 1024):
 
@@ -72,7 +72,7 @@ static void update_cpu_capacity(unsigned int cpu)
 
 A LITTLE core running at 1.0 GHz vs a big core at 2.5 GHz might have capacity 400 vs 1024.
 
-## find_energy_efficient_cpu
+## find_energy_efficient_cpu {#findenergyefficient_cpu}
 
 The core EAS function selects the CPU that minimizes total system energy:
 
@@ -115,7 +115,7 @@ static int find_energy_efficient_cpu(struct task_struct *p, int prev_cpu)
 }
 ```
 
-## compute_energy
+## compute_energy {#compute_energy}
 
 Energy estimation for placing a task on a specific CPU:
 
@@ -143,7 +143,7 @@ static long compute_energy(struct em_perf_domain *pd, int cpu,
 }
 ```
 
-## Capacity-aware wakeup
+## Capacity-aware wakeup {#capacity-aware-wakeup}
 
 Before EAS runs its full energy computation, a simpler capacity check prevents placing a task on a CPU that's already saturated:
 
@@ -170,7 +170,7 @@ static inline bool cpu_overutilized(int cpu)
 
 When the system is overutilized (some CPU at 100%), EAS falls back to the regular load balancer — energy optimization doesn't help when you're already maxed out.
 
-## Schedutil + EAS interaction
+## Schedutil + EAS interaction {#schedutil-eas-interaction}
 
 EAS determines *which* CPU; schedutil determines *which frequency*:
 
@@ -188,7 +188,7 @@ cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 # ondemand   ← EAS disabled (falls back to load balancing)
 ```
 
-## Observing EAS
+## Observing EAS {#observing-eas}
 
 ```bash
 # Check if EAS is active
@@ -219,7 +219,7 @@ cat /sys/kernel/tracing/trace_pipe
 taskset -cp 0-3 <pid>  # pin to CPUs 0-3 (LITTLE cores)
 ```
 
-## big.LITTLE Linux support
+## big.LITTLE Linux support {#biglittle-linux-support}
 
 ```bash
 # Check asymmetric CPU topology
@@ -236,7 +236,7 @@ for cpu in /sys/devices/system/cpu/cpu*/; do
 done
 ```
 
-## Thermal pressure
+## Thermal pressure {#thermal-pressure}
 
 When a CPU is thermally throttled, its capacity is temporarily reduced. EAS accounts for this:
 
@@ -264,7 +264,7 @@ void arch_update_thermal_pressure(const struct cpumask *cpus,
 cat /sys/devices/system/cpu/cpu*/thermal_throttle/throttle_count
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Load Balancing](load-balancing.md) — cross-CPU task migration
 - [cpufreq: P-states](../power/cpufreq.md) — frequency selection, schedutil

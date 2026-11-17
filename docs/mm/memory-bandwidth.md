@@ -1,8 +1,8 @@
-# Memory Bandwidth Optimization
+# Memory Bandwidth Optimization {#memory-bandwidth-optimization}
 
 > When latency is not the bottleneck — maximizing throughput across NUMA nodes
 
-## The bandwidth wall
+## The bandwidth wall {#the-bandwidth-wall}
 
 Most NUMA documentation focuses on latency: keep data close to the CPU that uses it. But a different bottleneck appears in bandwidth-bound workloads — large matrix operations, streaming analytics, ML training data shuffles, in-memory caches serving millions of keys per second. These workloads do not suffer from high latency on individual accesses so much as they hit a hard ceiling on how many bytes per second a single NUMA node can deliver.
 
@@ -21,7 +21,7 @@ When all threads allocate from the same NUMA node, you get local latency but art
 !!! note "These numbers are illustrative"
     Actual bandwidth depends on your DDR generation, channel count, memory interleaving at the hardware level, and workload access pattern. Measure with `stream` on your target hardware.
 
-## Bandwidth vs latency: choosing a strategy
+## Bandwidth vs latency: choosing a strategy {#bandwidth-vs-latency-choosing-a-strategy}
 
 The right strategy depends on whether your workload is latency-bound or bandwidth-bound:
 
@@ -33,7 +33,7 @@ The right strategy depends on whether your workload is latency-bound or bandwidt
 
 The crossover point is workload-specific. A workload that repeatedly accesses a 512MB working set fits comfortably in one node's bandwidth budget. A workload that streams through 200GB of data per second does not. Profile before tuning.
 
-## MPOL_INTERLEAVE: the kernel mechanism
+## MPOL_INTERLEAVE: the kernel mechanism {#mpol_interleave-the-kernel-mechanism}
 
 `MPOL_INTERLEAVE` is Linux's primary tool for spreading memory allocations across NUMA nodes. It round-robins page allocations across a specified nodemask: page 0 goes to node 0, page 1 to node 1, and so on. Each node receives an approximately equal share of the region's physical pages.
 
@@ -61,7 +61,7 @@ For VMA-based interleaving (used by `mbind()`), `interleave_nid()` derives the t
 
 See [NUMA memory management](numa.md) for the full policy API including `MPOL_BIND`, `MPOL_PREFERRED`, and `MPOL_LOCAL`.
 
-### Applying MPOL_INTERLEAVE
+### Applying MPOL_INTERLEAVE {#applying-mpol_interleave}
 
 **Per-process (set_mempolicy)** — all subsequent allocations by this process interleave across all nodes:
 
@@ -101,7 +101,7 @@ numactl --interleave=all ./myapp
 numactl --interleave=0,1 ./myapp
 ```
 
-### When to use MPOL_INTERLEAVE
+### When to use MPOL_INTERLEAVE {#when-to-use-mpol_interleave}
 
 !!! tip "Best-fit workloads for MPOL_INTERLEAVE"
     - **Large in-memory datasets**: memcached and Redis cluster instances that serve a dataset significantly larger than one node's bandwidth budget
@@ -109,11 +109,11 @@ numactl --interleave=0,1 ./myapp
     - **ML training data loaders**: preprocessing pipelines that stream large datasets into GPU memory
     - **Analytics engines**: in-memory columnar stores (DuckDB, Spark on DRAM) performing full-table scans
 
-### MPOL_WEIGHTED_INTERLEAVE
+### MPOL_WEIGHTED_INTERLEAVE {#mpolweightedinterleave}
 
 Linux 6.9 added `MPOL_WEIGHTED_INTERLEAVE` ([commit fa3bea4e1f82](https://git.kernel.org/linus/fa3bea4e1f82)), which distributes pages proportionally rather than evenly. If node 0 has 256 GB and node 1 has 128 GB, you can weight allocations 2:1 to match available capacity. The weights are configured via `/sys/kernel/mm/mempolicy/weighted_interleave/nodeN`.
 
-## First-touch policy and its bandwidth implications
+## First-touch policy and its bandwidth implications {#first-touch-policy-and-its-bandwidth-implications}
 
 Linux uses **first-touch allocation**: the page is allocated on the NUMA node where the faulting thread is running at the time of the first write to that page. This is the most common reason deliberate interleaving fails silently.
 
@@ -159,7 +159,7 @@ spawn_workers(buf);
 
     Option 3 is the most effective for C++ programs with static or global initialization, where a single thread runs all constructors before `main()`.
 
-## Hardware prefetchers and access pattern efficiency
+## Hardware prefetchers and access pattern efficiency {#hardware-prefetchers-and-access-pattern-efficiency}
 
 The CPU's hardware prefetcher detects sequential access patterns and pre-fetches cache lines from memory before they are requested. This has direct implications for bandwidth utilization: a prefetcher-friendly access pattern saturates available bandwidth more effectively than a random one.
 
@@ -174,7 +174,7 @@ Random (pointer chase):  5–15% of peak bandwidth
 
 For anonymous memory, the kernel has no visibility into the access pattern — the hardware prefetcher operates independently. But for **file-backed pages**, the kernel's readahead mechanism provides a software analogue: it detects sequential file reads and issues speculative `page_cache_ra_unbounded()` calls to bring pages into the page cache before they are faulted in. This is effective for streaming analytics on files but not for anonymous heap allocations.
 
-### Row-major vs column-major
+### Row-major vs column-major {#row-major-vs-column-major}
 
 Matrix code is the canonical example. For a row-major C array `A[rows][cols]`:
 
@@ -195,7 +195,7 @@ The column-major loop on a 10,000×10,000 float array has a stride of 40,000 byt
 !!! tip "For bandwidth-bound matrix workloads"
     Combine `MPOL_INTERLEAVE` with row-major access patterns and 2MB huge pages. Each component addresses a different bottleneck: interleave adds aggregate bandwidth, row-major access enables prefetching, and huge pages reduce TLB overhead on large arrays.
 
-## Transparent huge pages and bandwidth
+## Transparent huge pages and bandwidth {#transparent-huge-pages-and-bandwidth}
 
 [Transparent huge pages](thp.md) reduce TLB pressure by mapping memory in 2MB blocks instead of 4KB. Fewer TLB entries means more of the CPU's memory access capacity goes to actual data transfers rather than page-table walks.
 
@@ -221,7 +221,7 @@ memset(buf, 0, size);  /* first touch: interleaved 2MB huge pages */
 
 Note: with THP enabled, khugepaged may collapse adjacent 4KB pages into a 2MB page asynchronously. The resulting huge page lands on whichever node held most of its component 4KB pages. If interleaving is done correctly at first-touch time, this should not cause problems. See [THP](thp.md) for the interaction between NUMA balancing and THP.
 
-## NUMA balancing and deliberate interleaving
+## NUMA balancing and deliberate interleaving {#numa-balancing-and-deliberate-interleaving}
 
 NUMA automatic balancing (`/proc/sys/kernel/numa_balancing`) works by periodically unmapping pages to catch access faults, then migrating pages toward the nodes that access them most. For most workloads this is beneficial. For deliberately interleaved workloads, it can silently undo your tuning by migrating all pages toward the node where the majority of threads run.
 
@@ -248,9 +248,9 @@ echo 0 > /proc/sys/kernel/numa_balancing
 
 Also note: **kernel allocations are not subject to user mempolicies**. `set_mempolicy()` and `mbind()` affect user-space virtual memory regions only. Kernel data structures (slab objects, page tables, network buffers) are allocated by the kernel's own NUMA-aware allocator and are not interleaved by user policy.
 
-## Measuring memory bandwidth
+## Measuring memory bandwidth {#measuring-memory-bandwidth}
 
-### Benchmark tools
+### Benchmark tools {#benchmark-tools}
 
 **`stream`** — the gold standard for measuring sustainable memory bandwidth:
 
@@ -279,7 +279,7 @@ numactl --interleave=all ./stream  # interleaved
 mbw 1024    # test with 1GB
 ```
 
-### Topology inspection
+### Topology inspection {#topology-inspection}
 
 ```bash
 # Inspect NUMA hardware topology
@@ -308,7 +308,7 @@ numastat -m -p <pid>
 # myapp (pid 12345)            Private           987      991     1978
 ```
 
-### Hardware performance counters
+### Hardware performance counters {#hardware-performance-counters}
 
 ```bash
 # LLC misses indicate memory traffic leaving the cache hierarchy
@@ -319,7 +319,7 @@ perf stat -e offcore_response.all_requests.l3_miss.any_snoop \
           -p <pid>
 ```
 
-### /proc/vmstat NUMA counters
+### /proc/vmstat NUMA counters {#procvmstat-numa-counters}
 
 ```bash
 cat /proc/vmstat | grep numa
@@ -339,7 +339,7 @@ The key counters (confirmed in [`mm/vmstat.c`](https://git.kernel.org/pub/scm/li
 !!! tip "Reading the counters"
     A healthy interleaved workload shows high `numa_interleave` and roughly equal `N0` and `N1` counts in `numastat -m`. A high `numa_miss` with low `numa_interleave` suggests first-touch placement is concentrating pages on one node despite your policy setting.
 
-## CXL memory and bandwidth tiering
+## CXL memory and bandwidth tiering {#cxl-memory-and-bandwidth-tiering}
 
 CXL (Compute Express Link) memory appears to Linux as additional NUMA nodes with no attached CPUs. The bandwidth of a PCIe Gen 5 x16 CXL link is lower than local DRAM (local DDR5 ≈ 150+ GB/s vs. CXL over PCIe Gen 5 x16 ≈ 64 GB/s bidirectional), but higher than NVMe. CXL is appropriate for cold data that needs fast access but does not need the full bandwidth of local DRAM.
 
@@ -347,7 +347,7 @@ For bandwidth-bound workloads, CXL nodes are generally not suitable targets for 
 
 See [CXL Memory Tiering](cxl-memory-tiering.md) for the kernel's tiering framework and how CXL nodes are assigned to tiers based on HMAT/CDAT performance data.
 
-## Decision flowchart
+## Decision flowchart {#decision-flowchart}
 
 ```
 Is your workload memory bandwidth-bound?
@@ -375,7 +375,7 @@ Is your workload memory bandwidth-bound?
         Yes → Add MADV_HUGEPAGE for TLB headroom
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -386,30 +386,30 @@ Is your workload memory bandwidth-bound?
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Where `NUMA_HIT`/`NUMA_MISS` counters are incremented |
 | [`arch/x86/mm/numa.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) | x86 NUMA topology discovery from ACPI SRAT/SLIT |
 
-## References
+## References {#references}
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/numa_memory_policy.rst`](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
 - [`Documentation/mm/numa.rst`](https://docs.kernel.org/mm/numa.html) — NUMA balancing implementation details
 
-### Mailing list discussions
+### Mailing list discussions {#mailing-list-discussions}
 
 - [MPOL_WEIGHTED_INTERLEAVE introduction](https://lore.kernel.org/linux-mm/20231117-weighted-interleave-v6-0-d1af872c78aa@quicinc.com/) — Gregory Price (Qualcomm), Nov 2023
 - [NUMA balancing and THP interaction](https://lore.kernel.org/linux-mm/20130926103049.GM19413@suse.de/) — Mel Gorman on THP NUMA migration design
 
-### External benchmarks
+### External benchmarks {#external-benchmarks}
 
 - [STREAM benchmark](https://www.cs.virginia.edu/stream/) — McCalpin, J.D., standard for memory bandwidth measurement
 
-### Related
+### Related {#related}
 
 - [NUMA memory management](numa.md) — policy API, automatic balancing, monitoring
 - [Transparent huge pages](thp.md) — THP configuration, khugepaged, TLB pressure
 - [CXL Memory Tiering](cxl-memory-tiering.md) — heterogeneous memory tiers
 - [Tuning databases](tuning-databases.md) — huge pages, THP, and latency-sensitive workloads
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: NUMA memory policy](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) — complete reference for `set_mempolicy()`, `mbind()`, and all policy modes including `MPOL_WEIGHTED_INTERLEAVE`
 - [`Documentation/admin-guide/mm/numa_memory_policy.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/numa_memory_policy.rst) — kernel source for the NUMA memory policy admin guide

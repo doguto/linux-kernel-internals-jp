@@ -1,10 +1,10 @@
-# Tracing War Stories
+# Tracing War Stories {#tracing-war-stories}
 
 > Real bugs from the observability stack — where "let users safely watch the kernel" turned out to be much harder than it sounds
 
 Tracing is a strange corner of the kernel: it exists to let code *outside* the core reach *inside* it — read arguments, run at arbitrary functions, sometimes even run user-supplied programs. That reach is exactly what makes it powerful, and exactly what makes it dangerous. Each of these stories is a place where the reach cut the wrong way.
 
-## 1. The profiler that handed out root
+## 1. The profiler that handed out root {#1-the-profiler-that-handed-out-root}
 
 **Symptom.** On essentially every distro kernel of its day, an unprivileged user could become root with a short, reliable exploit — through the performance-monitoring syscall.
 
@@ -14,7 +14,7 @@ Tracing is a strange corner of the kernel: it exists to let code *outside* the c
 
 **Lesson.** Tracing infrastructure is *privileged kernel attack surface fed by user input*. A single sign-extension slip in code meant to *observe* the system became a total compromise of it. Every value that crosses the tracing boundary is untrusted.
 
-## 2. When "provably safe" stopped being safe
+## 2. When "provably safe" stopped being safe {#2-when-provably-safe-stopped-being-safe}
 
 **Symptom.** BPF programs — which the kernel's **verifier** proves cannot crash or read out of bounds before they're allowed to run — could nonetheless be made to leak arbitrary kernel memory.
 
@@ -24,7 +24,7 @@ Tracing is a strange corner of the kernel: it exists to let code *outside* the c
 
 **Lesson.** "Provably safe" is only as strong as the machine model you prove against. When speculative execution entered the threat model, a whole class of *formally verified* programs became unsafe overnight — and the safety proof had to grow to cover the hardware's guesses, not just its commitments.
 
-## 3. Tracing the tracer
+## 3. Tracing the tracer {#3-tracing-the-tracer}
 
 **Symptom.** Enabling a tracer could lock up the machine — the tracing code, while recording an event, called a function that was *itself* being traced, which recorded another event, which called it again.
 
@@ -34,7 +34,7 @@ Tracing is a strange corner of the kernel: it exists to let code *outside* the c
 
 **Lesson.** Observation is not free of the system it observes. A tracer must be scrupulous about never tracing itself — a discipline that has to be maintained at every entry point, because a single un-guarded one turns "watch this function" into a hang.
 
-## The recurring theme
+## The recurring theme {#the-recurring-theme}
 
 All three come from the same tension: tracing must reach deep into the kernel, from a less-trusted context, without becoming a weapon or a foot-gun.
 
@@ -42,7 +42,7 @@ All three come from the same tension: tracing must reach deep into the kernel, f
 - **Safety proofs must match the real machine, speculation included** (story 2).
 - **The observer is part of the system and must not perturb — or recurse into — itself** (story 3).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [`8176cced706b`](https://git.kernel.org/linus/8176cced706b) — the CVE-2013-2094 perf fix
 - [`b2157399cc98`](https://git.kernel.org/linus/b2157399cc98) — the BPF anti-speculation change

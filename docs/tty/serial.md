@@ -1,8 +1,8 @@
-# Serial Core: One Abstraction Over Every UART
+# Serial Core: One Abstraction Over Every UART {#serial-core-one-abstraction-over-every-uart}
 
 > `drivers/tty/serial/serial_core.c` is the layer that lets a 16550 register set descended from the early-1980s 8250 and a modern SoC's memory-mapped UART both show up as `/dev/ttyS0`
 
-## The problem: a UART is not a UART
+## The problem: a UART is not a UART {#the-problem-a-uart-is-not-a-uart}
 
 Every UART chip moves bytes over a wire one bit at a time, but "every UART" is not one chip — it's a sprawl of them. The venerable 8250/16550 family (and its many register-compatible descendants) is still the most common thing to find behind a PC-style serial port or a PCIe multiport card. But almost every SoC vendor also ships its own UART IP block: Broadcom's, Freescale/NXP's `lpuart`, Qualcomm's `msm_serial`/`geni`, Samsung's, ARM's PL011, Xilinx's `uartlite`, and dozens more, each with its own register layout, its own FIFO depth, its own quirks for how modem control lines are wired (or not wired at all, on something with no RS-232 signaling at all). `drivers/tty/serial/` currently holds on the order of 70 individual per-chip driver source files (not counting the shared core files or the further ~45 files under `drivers/tty/serial/8250/` for 8250-family variants and add-in cards) for exactly this reason.
 
@@ -10,9 +10,9 @@ None of that variety should be the generic TTY layer's problem. `drivers/tty/tty
 
 `serial_core.c` is the layer in between. It defines one hardware-facing contract — `struct uart_ops`, a table of callbacks every UART driver fills in — and one registration model — `struct uart_driver` for a chip family, `struct uart_port` for one physical instance of it. Every one of those 70-odd drivers implements the same handful of callbacks; `serial_core.c` is what turns those callbacks into a generic `tty_operations` table the TTY core drives, and turns TTY-core calls (open, write, set_termios, ioctl) into the right `uart_ops` callback on the right port. A driver author who implements `.startup`, `.shutdown`, `.set_termios`, `.start_tx`, and a small handful of others gets `/dev/ttyS*` for free — line discipline handling, `termios` negotiation, `poll()`, `TIOCM*` modem-control ioctls, magic SysRq, kernel console support, all of it, without writing a line of TTY-layer code.
 
-## Core structures
+## Core structures {#core-structures}
 
-### `struct uart_ops`: the hardware contract
+### `struct uart_ops`: the hardware contract {#struct-uart_ops-the-hardware-contract}
 
 `struct uart_ops` (`include/linux/serial_core.h`) is the vtable every UART driver builds and hands to `serial_core` via `uart_port.ops`. It is the entire surface a driver has to implement to plug into the generic layer:
 
@@ -63,7 +63,7 @@ A few of these carry almost all of the day-to-day weight:
 - **`.tx_empty`** — report whether the transmit path (FIFO plus shift register) has fully drained; backs `TIOCSER_TEMT`/`tcdrain()`.
 - **`.type`/`.request_port`/`.release_port`/`.config_port`/`.verify_port`** — the `setserial`-era port-configuration and autodetection machinery: report a human-readable chip name, claim/release the I/O or MMIO region, autoprobe the exact chip variant, and validate a user-requested `struct serial_struct` change.
 
-### `struct uart_port`: one physical port
+### `struct uart_port`: one physical port {#struct-uart_port-one-physical-port}
 
 `struct uart_port` is the per-instance object — one per physical UART, allocated and filled in by the driver, one for each ttyS/ttyUL/ttyAMA/... minor number. It carries the register-access strategy, the negotiated hardware state, and a back-pointer into the generic layer:
 
@@ -160,7 +160,7 @@ A few fields worth calling out:
 - **`ops`** — the `uart_ops` vtable described above.
 - **`private_data`** — a driver-owned pointer for whatever per-instance state the callbacks need (clock handles, DMA channel, chip-specific config parsed from the device tree).
 
-### `struct uart_driver`: the registration-level object
+### `struct uart_driver`: the registration-level object {#struct-uart_driver-the-registration-level-object}
 
 Where `uart_port` is one physical port, `struct uart_driver` is the registration for an entire chip family — one per driver module, not one per instance:
 
@@ -186,9 +186,9 @@ struct uart_driver {
 
 `driver_name`/`dev_name` are the `setserial`-visible name and the `/dev` name stem (`"ttyS"`, `"ttyUL"`, ...); `nr` is the maximum number of ports this driver family will ever register — it sizes the `state` array `uart_register_driver()` allocates. `cons`, if set, wires up this driver as a kernel console (`console=ttyS0` on the kernel command line). `state` and `tty_driver` are exactly what the comment says: filled in by `serial_core`, not touched by the driver.
 
-## Bridging to the TTY layer
+## Bridging to the TTY layer {#bridging-to-the-tty-layer}
 
-### `struct uart_state`: the persistent-across-opens object
+### `struct uart_state`: the persistent-across-opens object {#struct-uart_state-the-persistent-across-opens-object}
 
 `struct uart_state` is the small object that survives across an individual `open()`/`close()` cycle — the thing `uart_driver.state[]` is an array of, one per possible port:
 
@@ -207,7 +207,7 @@ struct uart_state {
 
 `port` is a generic `struct tty_port` — the TTY-core-side object every character device with open/close/hangup semantics embeds. `uart_port` is the live hardware port currently attached to this state slot (it can be `NULL` if the driver has registered the state array via `uart_register_driver()` but a specific instance hasn't shown up yet — common on a platform where a UART is a hot-pluggable add-in card).
 
-### Registration: `uart_register_driver()` and `uart_add_one_port()`
+### Registration: `uart_register_driver()` and `uart_add_one_port()` {#registration-uartregisterdriver-and-uartaddone_port}
 
 Two calls wire everything up, and every UART driver's module init does both:
 
@@ -281,7 +281,7 @@ void uart_remove_one_port(struct uart_driver *reg, struct uart_port *port);
 
 It associates the `uart_port` the driver just filled in with `drv->state[port->line]` — the indexing convention used throughout `serial_core.c` is literally `state = drv->state + uport->line` — and, if a `tty_port_register_device()`-equivalent registration is needed, brings up the `/dev` node. (Recent kernels route the internal plumbing through a small serial-core "controller"/"port" sub-device model in `serial_ctrl.c`/`serial_port.c`, layered under `uart_add_one_port()` for power-management and device-model integration; the entry points and the `drv->state[port->line]` association a driver author needs to know are unchanged.)
 
-### How a TTY-core call reaches hardware
+### How a TTY-core call reaches hardware {#how-a-tty-core-call-reaches-hardware}
 
 Once registration is done, every `tty_operations` callback in the shared `uart_ops` table is generic serial-core logic that, at the point it needs to actually touch hardware, calls through `uport->ops`. A few concrete chains, taken directly from `serial_core.c`:
 
@@ -292,11 +292,11 @@ Once registration is done, every `tty_operations` callback in the shared `uart_o
 
 None of that logic is chip-specific; it's identical for an 8250 and for `uartlite`. These four are the most common hot-path calls, but they're far from the only ones: in practice `serial_core.c` invokes roughly two dozen distinct `uart_ops` members somewhere in its logic — `release_port`, `get_mctrl`, `tx_empty`, `stop_rx`, `start_rx`, `request_port`, `verify_port`, `type`, `shutdown`, `set_ldisc`, `send_xchar`, `pm`, `ioctl`, `flush_buffer`, `enable_ms`, `config_port`, `break_ctl`, `throttle`, `unthrottle`, and the poll hooks among them — each dispatched from the specific TTY-core or `ioctl` path that needs it.
 
-## The 8250/16550 driver: the reference UART
+## The 8250/16550 driver: the reference UART {#the-825016550-driver-the-reference-uart}
 
 `drivers/tty/serial/8250/` is the 8250/16550-compatible family driver, and it's the one every other serial driver gets measured against, for a simple historical reason: the 16550 (and its UART-compatible successors) is a register-compatible descendant of the 8250 — the chip the original 1981 PC serial port used — so this lineage is the oldest, most heavily used, and most thoroughly hardened UART driver in the tree. New chip-specific drivers routinely reuse pieces of it — `8250_omap.c`, `8250_dw.c`, `8250_pci1xxxx.c` and similar files under `drivers/tty/serial/8250/` are all thin wrappers around the shared 8250 core (`8250_port.c`) that add chip-specific DMA, clocking, or errata handling on top, rather than reimplementing the FIFO/register logic from scratch.
 
-### The register model, briefly
+### The register model, briefly {#the-register-model-briefly}
 
 A 16550-compatible UART exposes a small bank of byte-wide registers, several of which are *aliased* — the same offset means something different depending on direction and on the state of a control bit — which is exactly the sort of gnarly, chip-specific detail `struct uart_ops` exists to hide from everything above it:
 
@@ -312,7 +312,7 @@ A 16550-compatible UART exposes a small bank of byte-wide registers, several of 
 
 Offsets 0 and 1 mean something else entirely — the low and high byte of the baud-rate divisor latch (DLL/DLM) — while `LCR`'s DLAB bit is set, which is why `.set_termios` has to briefly toggle DLAB, program the divisor, then restore LCR to its normal meaning. This is the kind of bit-banging `struct uart_port.serial_in`/`serial_out` and the offset constants in `include/uapi/linux/serial_reg.h` exist to keep contained to one driver; nothing above `uart_ops` ever needs to know an `IIR` read and an `FCR` write share the same address.
 
-### `struct uart_8250_port`: 8250's `uart_port` subclass
+### `struct uart_8250_port`: 8250's `uart_port` subclass {#struct-uart8250port-8250s-uart_port-subclass}
 
 The 8250 driver's per-port object embeds a plain `uart_port` as its first member and adds 8250-specific state around it — the classic Linux "subclassing by embedding" pattern:
 
@@ -393,11 +393,11 @@ static const struct uart_ops serial8250_pops = {
 };
 ```
 
-## The interrupt-driven TX/RX path
+## The interrupt-driven TX/RX path {#the-interrupt-driven-txrx-path}
 
 This is where the abstraction pays off end to end: an interrupt fires, and a fixed, generic sequence turns raw register reads into bytes the line discipline (and eventually userspace) can read, or turns buffered write() data into register writes.
 
-### RX: hardware → `uart_insert_char()` → `tty_flip_buffer_push()`
+### RX: hardware → `uart_insert_char()` → `tty_flip_buffer_push()` {#rx-hardware-uartinsertchar-ttyflipbuffer_push}
 
 `serial8250_handle_irq_locked()` (`drivers/tty/serial/8250/8250_port.c`) is the heart of the 8250 ISR chain (reached from the registered IRQ handler `serial8250_interrupt()` via `port->handle_irq()`). On the receive side, it reads `LSR`, and if data is ready calls `serial8250_rx_chars()`:
 
@@ -472,7 +472,7 @@ void uart_insert_char(struct uart_port *port, unsigned int status,
 
 It checks the port's `ignore_status_mask` (set by `.set_termios`, from `termios` flags like `IGNPAR`/`IGNBRK`) before deciding whether the byte is worth keeping, then calls `tty_insert_flip_char()` — the generic TTY flip-buffer insert, which just queues the byte and its flag without waking anyone up yet. The driver's own loop keeps calling `uart_insert_char()` for every byte in the hardware FIFO; only once the batch is drained does it call `tty_flip_buffer_push(&port->state->port)` (`include/linux/tty_flip.h`) to hand the whole batch to the line discipline in one shot and wake any reader. Batching the wakeup this way — one `tty_flip_buffer_push()` per interrupt instead of one per byte — is a deliberate throughput choice, not an incidental one.
 
-### TX: buffered data → `uart_fifo_get()` → hardware
+### TX: buffered data → `uart_fifo_get()` → hardware {#tx-buffered-data-uartfifoget-hardware}
 
 The transmit half of the same handler runs when `LSR`'s THR-empty bit is set and the transmit-empty interrupt is enabled:
 
@@ -529,7 +529,7 @@ static inline unsigned int uart_fifo_get(struct uart_port *up,
 
 Once the FIFO empties, `.stop_tx` masks `UART_IER_THRI` back off, and the port goes idle until the next `write()` calls `__uart_start()` → `.start_tx` to unmask it again. This start/feed/stop cycle — not a byte-at-a-time round trip through the TTY core — is what lets a 16-byte-deep 16550 FIFO sustain high baud rates without an interrupt per byte.
 
-## Enumeration: how a UART gets probed
+## Enumeration: how a UART gets probed {#enumeration-how-a-uart-gets-probed}
 
 A UART is, from the device model's point of view, just another platform (or PCI, or USB, or I2C/SPI-attached) device, matched to its driver the same way any other platform driver is. For a memory-mapped SoC UART described in the device tree, that's a `struct platform_driver` with an `of_device_id` match table:
 
@@ -561,11 +561,11 @@ static struct platform_driver ulite_platform_driver = {
 
 When the kernel walks the device tree and finds a node whose `compatible` property matches one of these strings, the driver core calls `.probe()` with a `struct platform_device` carrying that node's resources — MMIO range, IRQ number, clock reference, and any vendor-specific properties (baud rate, parity, data bits, in `uartlite`'s case). ACPI-described UARTs follow the same shape with an `acpi_device_id` table instead of (or alongside) `of_device_id` — the DesignWare 8250 wrapper (`drivers/tty/serial/8250/8250_dw.c`) registers both `dw8250_of_match[]` and `dw8250_acpi_match[]` against the same `platform_driver`, so the identical driver binds whether firmware describes the port via devicetree or ACPI. There's also a separate, simpler 8250 platform driver (`drivers/tty/serial/8250/8250_platform.c`) and a devicetree-only one (`8250_of.c`) — several distinct platform drivers, all funneling into the same `serial8250_pops`/`uart_add_one_port()` core underneath. `8250_platform.c` registers legacy ISA-style ports as a plain `"serial8250"` platform device matched by name, not by its `acpi_platform_serial_table[]`; that ACPI table has only one real entry, a RISC-V generic-16550A match (`"RSCV0003"`). `.probe()`'s job is always the same regardless of firmware interface or which of these front-end drivers is involved: read the resources, fill in a `uart_port`, and call `uart_add_one_port()`.
 
-## Worked example: `drivers/tty/serial/uartlite.c`
+## Worked example: `drivers/tty/serial/uartlite.c` {#worked-example-driversttyserialuartlitec}
 
 Xilinx's `uartlite` driver is a good worked example precisely because it *isn't* 8250-compatible — no FIFO trigger levels, no aliased registers, no divisor latch (baud rate is fixed at synthesis time for this soft IP core) — just four registers (RX, TX, a status register, a control register) and a minimal `uart_ops` implementation, which makes the `serial_core` plumbing easier to see without 8250's register quirks in the way.
 
-### `.startup`/`.shutdown`
+### `.startup`/`.shutdown` {#startupshutdown}
 
 ```c
 // drivers/tty/serial/uartlite.c
@@ -605,7 +605,7 @@ static void ulite_shutdown(struct uart_port *port)
 
 `.startup` is the entire hardware bring-up: enable the clock, request the IRQ, reset both FIFOs, then enable the "interrupt enable" bit in the control register. `.shutdown` is the exact mirror. Note what's absent compared to an 8250-style driver: no baud-rate programming here, because `uartlite`'s baud rate is fixed hardware — this device's `.set_termios` (next) only ever *reports* the fixed rate back, never programs one.
 
-### `.set_termios`
+### `.set_termios` {#set_termios}
 
 ```c
 // drivers/tty/serial/uartlite.c — ulite_set_termios(), abridged
@@ -631,7 +631,7 @@ static void ulite_set_termios(struct uart_port *port,
 
 Rather than negotiate, `.set_termios` here *overwrites* whatever the caller asked for with what the hardware actually is (`pdata->baud`, and whatever parity/data-bits this synthesized core was built with), then calls `tty_termios_encode_baud_rate()` to report that back through the generic `ktermios`. `port->read_status_mask` is not something `uart_insert_char()` looks at — that helper only consults `ignore_status_mask`. `read_status_mask` is applied by the driver itself: `ulite_receive()` does `stat &= port->read_status_mask` before acting on the status bits (the 8250 driver does the equivalent with `lsr &= port->read_status_mask`), so it's this driver-side masking, not `uart_insert_char()`, that decides which status bits matter here.
 
-### Interrupt handler and the RX/TX callbacks
+### Interrupt handler and the RX/TX callbacks {#interrupt-handler-and-the-rxtx-callbacks}
 
 ```c
 // drivers/tty/serial/uartlite.c
@@ -690,7 +690,7 @@ if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
 
 Both `uart_insert_char()` and a driver's own direct `tty_insert_flip_char()` calls are legitimate, real, in-tree patterns — `uart_insert_char()` adds the `ignore_status_mask`/overrun bookkeeping most drivers want for free; a driver with simpler status semantics, like this one, sometimes just calls the TTY-layer primitive directly.
 
-### Registration
+### Registration {#registration}
 
 ```c
 // drivers/tty/serial/uartlite.c
@@ -734,7 +734,7 @@ rc = uart_add_one_port(&ulite_uart_driver, port);
 
 `uart_register_driver(&ulite_uart_driver)` runs once, from module init, before any port shows up; `uart_add_one_port()` runs once per physical port `.probe()` finds — for `uartlite`, that means once per device-tree node, since each synthesized `uartlite` core is a separate device.
 
-## The full path, hardware to userspace
+## The full path, hardware to userspace {#the-full-path-hardware-to-userspace}
 
 ```
  UART hardware (8250, uartlite, PL011, ...)
@@ -779,9 +779,9 @@ rc = uart_add_one_port(&ulite_uart_driver, port);
                     /dev/ttyS0, /dev/ttyUL0, ...
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`include/linux/serial_core.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/serial_core.h) — `struct uart_ops`, `struct uart_port`, `struct uart_driver`, `struct uart_state`, `uart_insert_char()`, `uart_fifo_get()`
 - [`drivers/tty/serial/serial_core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/serial_core.c) — `uart_register_driver()`, the shared `tty_operations`, `uart_start()`/`uart_port_startup()`/`uart_change_line_settings()`, `uart_insert_char()`
@@ -792,12 +792,12 @@ rc = uart_add_one_port(&ulite_uart_driver, port);
 - [`drivers/tty/serial/uartlite.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/uartlite.c) — the worked-example driver above
 - [`include/linux/tty_flip.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_flip.h) — `tty_insert_flip_char()`, `tty_flip_buffer_push()`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [TTY Subsystem](README.md) — the generic TTY core, `tty_struct`, and where line disciplines and drivers each fit
 - [Line Disciplines](line-disciplines.md) — what happens to a byte after `tty_flip_buffer_push()` hands it to `n_tty` or another ldisc
 - [TTY/Serial War Stories](war-stories.md) — real incidents from the layer this page describes
 
-### External
+### External {#external}
 
 - [Serial drivers](https://docs.kernel.org/driver-api/serial/driver.html) — the kernel's own driver-API reference for `uart_ops`, `uart_port`, and the helper functions serial drivers use

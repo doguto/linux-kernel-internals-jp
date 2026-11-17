@@ -1,8 +1,8 @@
-# Kernel Keyring
+# Kernel Keyring {#kernel-keyring}
 
 > Key storage, key types, keyrings, and TPM-backed keys
 
-## Overview
+## Overview {#overview}
 
 The Linux kernel keyring subsystem provides a general-purpose mechanism for storing
 cryptographic material (keys, tokens, certificates) in kernel memory with access-control
@@ -13,7 +13,7 @@ Callers interact with keyrings via the `keyctl(2)` syscall (or wrappers like `ad
 and `request_key(2)`). Subsystems such as fscrypt, NFS, IPsec, and IMA use the keyring
 internally to store keys that were installed by userspace.
 
-## struct key
+## struct key {#struct-key}
 
 Every key — including a keyring — is represented by `struct key` in `include/linux/key.h`
 (shown here without its two conditional fields: a `struct watch_list *watchers` under
@@ -77,12 +77,12 @@ struct key {
 `key_serial_t` is a 32-bit integer (the numeric ID shown by `keyctl show`). Keys are
 reference-counted; `key_get()` / `key_put()` manage the lifetime.
 
-## Key types
+## Key types {#key-types}
 
 The `struct key_type` defines how a key is instantiated, validated, read, and destroyed.
 Built-in key types:
 
-### "user" — userspace-readable bytes
+### "user" — userspace-readable bytes {#user-userspace-readable-bytes}
 
 ```c
 /* security/keys/user_defined.c */
@@ -96,7 +96,7 @@ keyctl add user mykey "hello world" @u
 keyctl pipe <serial>   # outputs payload bytes
 ```
 
-### "logon" — kernel-only, unreadable by userspace
+### "logon" — kernel-only, unreadable by userspace {#logon-kernel-only-unreadable-by-userspace}
 
 Same payload format as "user" but the key type's `.read` callback returns `-EPERM`. Designed
 for kernel consumers (fscrypt, dm-crypt) that need to store key material that must never
@@ -110,7 +110,7 @@ keyctl add logon fscrypt:abcdef0123456789 <binary_key_data> @s
 fscrypt uses logon keys in the format `fscrypt:<key_identifier>`. dm-crypt (via cryptsetup)
 uses `cryptsetup:<uuid>`.
 
-### "keyring" — a keyring is itself a key
+### "keyring" — a keyring is itself a key {#keyring-a-keyring-is-itself-a-key}
 
 A keyring holds references to other keys. When you search a keyring, the kernel traverses
 the chain recursively. The payload is an `assoc_array` of `struct key *`.
@@ -120,7 +120,7 @@ keyctl newring mykeyring @u   # create a named keyring linked to user keyring
 keyctl link <key_serial> <ring_serial>   # link key into a keyring
 ```
 
-### "encrypted" — encrypted under a master key
+### "encrypted" — encrypted under a master key {#encrypted-encrypted-under-a-master-key}
 
 Encrypted keys are stored encrypted under a "master key" (a trusted or user key). The
 plaintext never leaves kernel space:
@@ -161,7 +161,7 @@ keyctl add encrypted myenckey "load user:kmk $(cat myenckey.blob)" @u
 
 Two subtypes: `"new"` creates a fresh random key; `"load"` loads an existing encrypted blob.
 
-### "trusted" — sealed to a TPM
+### "trusted" — sealed to a TPM {#trusted-sealed-to-a-tpm}
 
 Trusted keys are generated and sealed by the TPM (Trusted Platform Module). The plaintext
 key material is never exposed to userspace — it only exists inside the TPM or in kernel
@@ -199,7 +199,7 @@ keyctl add trusted mytrustedkey "load $(xxd -p mytrustedkey.blob | tr -d '\n')" 
 keyctl add encrypted myenckey "new trusted:mytrustedkey 64" @u
 ```
 
-### "asymmetric" — public key for signature verification
+### "asymmetric" — public key for signature verification {#asymmetric-public-key-for-signature-verification}
 
 Stores an RSA or EC public key (X.509 certificate, PKCS#7). Used by IMA (Integrity
 Measurement Architecture) for file signature verification, and by the kernel module signing
@@ -214,7 +214,7 @@ evmctl import /etc/keys/ima.crt $(keyctl show @u | awk '/\.ima/ {print $1}')
 The kernel verifies the certificate chain up to a key in the system keyring
 (`.builtin_trusted_keys` or `.secondary_trusted_keys`).
 
-## Keyring hierarchy
+## Keyring hierarchy {#keyring-hierarchy}
 
 Keyrings are arranged in a hierarchy. When a key is searched, the kernel walks up the chain:
 
@@ -254,7 +254,7 @@ On `fork()`, the child inherits the parent's session and user keyrings. On `exec
 thread keyring is cleared. On `CLONE_NEWUSER`, a new user keyring is created for the new
 user namespace.
 
-## Key permissions: key_perm_t
+## Key permissions: key_perm_t {#key-permissions-keypermt}
 
 Permissions are a 32-bit value encoding four subjects × six permission bits:
 
@@ -287,7 +287,7 @@ keyctl setperm <serial> 0x3f3f0000
 #   possessor=0x3f, user=0x3f, group=0, other=0
 ```
 
-## keyctl(2) syscall
+## keyctl(2) syscall {#keyctl2-syscall}
 
 ```c
 #include <sys/types.h>
@@ -335,7 +335,7 @@ KEY_SPEC_GROUP_KEYRING     /* @g */
 KEY_SPEC_REQKEY_AUTH_KEY   /* for request_key authentication */
 ```
 
-## Shell usage
+## Shell usage {#shell-usage}
 
 ```bash
 # Add a "user" type key to the session keyring
@@ -370,7 +370,7 @@ keyctl newring myring @s
 keyctl link <key_serial> <ring_serial>
 ```
 
-## Key garbage collection
+## Key garbage collection {#key-garbage-collection}
 
 Keys are automatically collected when:
 
@@ -394,7 +394,7 @@ cat /proc/key-users
 cat /proc/keys   # all keys visible to the calling process
 ```
 
-## Kernel-side key lookup
+## Kernel-side key lookup {#kernel-side-key-lookup}
 
 Kernel subsystems use `request_key()` internally:
 
@@ -420,7 +420,7 @@ rcu_read_unlock();
 key_put(key);  /* decrement refcount */
 ```
 
-## Trusted keys with TPM: deeper look
+## Trusted keys with TPM: deeper look {#trusted-keys-with-tpm-deeper-look}
 
 Trusted keys use the TPM's key hierarchy. The TPM 2.0 flow:
 
@@ -449,7 +449,7 @@ the key cannot be instantiated. This is the mechanism behind full-disk encryptio
 auto-unlocks only when the system is in a known-good state (similar to Windows BitLocker with
 TPM-only mode).
 
-## Encrypted keys: "new" vs "load"
+## Encrypted keys: "new" vs "load" {#encrypted-keys-new-vs-load}
 
 Encrypted keys require a master key to be present in the keyring at the time of creation:
 
@@ -470,7 +470,7 @@ all in hex. The encryption uses AES-**256**-CBC with an HMAC-SHA256 integrity ch
 (32-byte, `SHA256_DIGEST_SIZE`) key from the master key via `sha256()`, and that full
 32-byte key is what's passed to `cbc(aes)` — a 128-bit key was never in the picture.
 
-## fscrypt and IMA integration
+## fscrypt and IMA integration {#fscrypt-and-ima-integration}
 
 **fscrypt** uses logon keys. When userspace calls `FS_IOC_ADD_ENCRYPTION_KEY`, the kernel:
 
@@ -491,7 +491,7 @@ all in hex. The encryption uses AES-**256**-CBC with an HMAC-SHA256 integrity ch
 keyctl padd asymmetric "" %:.ima < /etc/ima/signing_key.der
 ```
 
-## Container isolation
+## Container isolation {#container-isolation}
 
 There is no separate `struct key_namespace`. Instead, the user and user-session keyrings
 were moved directly onto the existing `struct user_namespace` (`user_keyring_register` and
@@ -512,7 +512,7 @@ anywhere in the kernel. Specifically:
 
 Container runtimes rely on the session keyring being established fresh for each container.
 
-## Observing the keyring
+## Observing the keyring {#observing-the-keyring}
 
 ```bash
 # Keys visible to the current process
@@ -533,7 +533,7 @@ keyctl show %:.ima
 keyctl search @u logon fscrypt:0123456789abcdef
 ```
 
-## Relevant source
+## Relevant source {#relevant-source}
 
 - `security/keys/` — core keyring implementation
 - `security/keys/trusted-keys/` — trusted key type (TPM 1.2 and 2.0)
@@ -543,9 +543,9 @@ keyctl search @u logon fscrypt:0123456789abcdef
 - `crypto/asymmetric_keys/` — asymmetric key type
 - `Documentation/security/keys/core.rst` — kernel documentation
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/key.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/key.h) — `struct key`, `struct key_type`, and the `KEY_POS_*`/`KEY_USR_*` permission bit definitions
 - [security/keys/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/keys) — core keyring implementation: `keyctl()` syscall dispatch (`keyctl.c`), `request_key()` (`request_key.c`), permission checks (`permission.c`)
@@ -556,7 +556,7 @@ keyctl search @u logon fscrypt:0123456789abcdef
 - [include/linux/user_namespace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/user_namespace.h) — `user_keyring_register`/`keyring_sem`, the per-user-namespace keyring fields that back container isolation
 - [security/keys/process_keys.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/keys/process_keys.c) — `lookup_user_key()`, including the unimplemented `KEY_SPEC_GROUP_KEYRING` case
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`add_key(2)`](https://man7.org/linux/man-pages/man2/add_key.2.html) — add a key to the kernel's key management facility
 - [`request_key(2)`](https://man7.org/linux/man-pages/man2/request_key.2.html) — search for a key, invoking a userspace upcall if it isn't found
@@ -564,13 +564,13 @@ keyctl search @u logon fscrypt:0123456789abcdef
 - [`keyrings(7)`](https://man7.org/linux/man-pages/man7/keyrings.7.html) — overview of the in-kernel key management and retention facility
 - [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — the keyutils command-line tool used throughout this page
 
-### Related pages
+### Related pages {#related-pages}
 
 - [dm-crypt and fscrypt](encryption.md) — how logon keys integrate with fscrypt and dm-crypt
 - [Kernel Crypto API](crypto-api.md) — the AES-CBC and HMAC-SHA256 primitives that encrypted and trusted keys build on
 - [fscrypt: Per-File Encryption](../security/fscrypt.md) — detailed walkthrough of `FS_IOC_ADD_ENCRYPTION_KEY` and how fscrypt stores its master key as a logon key
 - [User Namespaces and Credential Mapping](../security/user-namespaces.md) — the uid/gid mapping model behind the container-isolation behavior described above
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Trusted and encrypted keys](https://lwn.net/Articles/408439/) — Jake Edge, October 2010: the introduction of the "trusted" and "encrypted" key types for EVM, including TPM sealing and the AES + HMAC datablob format

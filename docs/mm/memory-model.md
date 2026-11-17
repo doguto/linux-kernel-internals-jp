@@ -1,4 +1,4 @@
-# The Physical Memory Model
+# The Physical Memory Model {#the-physical-memory-model}
 
 > How the kernel tracks every page of RAM — FLATMEM, SPARSEMEM, and vmemmap — and how `struct page` itself is being dismantled into memory descriptors
 
@@ -8,7 +8,7 @@ This page is about that abstraction: why it exists, the models the kernel has us
 
 ---
 
-## Why there's a "model" at all
+## Why there's a "model" at all {#why-theres-a-model-at-all}
 
 Two facts collide:
 
@@ -19,7 +19,7 @@ A naive "one `struct page` per PFN, indexed by PFN" array is the fast option but
 
 ---
 
-## FLATMEM: one flat array
+## FLATMEM: one flat array {#flatmem-one-flat-array}
 
 The simplest model. A single global `mem_map[]` array covers the whole PFN range:
 
@@ -33,7 +33,7 @@ One subtraction, one index — as fast as it gets. FLATMEM is correct and effici
 
 ---
 
-## DISCONTIGMEM: per-node arrays (a dead end worth knowing)
+## DISCONTIGMEM: per-node arrays (a dead end worth knowing) {#discontigmem-per-node-arrays-a-dead-end-worth-knowing}
 
 The first attempt to handle holes came from NUMA. Big NUMA machines have enormous gaps *between* nodes, so FLATMEM's single array would burn gigabytes on the inter-node void. **DISCONTIGMEM** gave each NUMA node its own `mem_map` (`pg_data_t.node_mem_map`), so only populated nodes cost memory; `pfn_to_page()` first found the owning node, then indexed within it.
 
@@ -41,7 +41,7 @@ It was superseded because it conflated two *different* problems — "which NUMA 
 
 ---
 
-## SPARSEMEM: sections
+## SPARSEMEM: sections {#sparsemem-sections}
 
 The model on essentially every modern 64-bit system. It divides the physical address space into fixed-size **sections** and gives each *present* section its own independently-allocated `struct page` sub-array:
 
@@ -61,7 +61,7 @@ That extra indirection on *every* `pfn_to_page()` — a hot path — is the pric
 
 ---
 
-## SPARSEMEM_VMEMMAP: getting O(1) back
+## SPARSEMEM_VMEMMAP: getting O(1) back {#sparsemem_vmemmap-getting-o1-back}
 
 The dominant configuration today, and the default on x86-64 and most 64-bit architectures, is a clever move that recovers FLATMEM's single-index speed *without* FLATMEM's wasted memory.
 
@@ -88,7 +88,7 @@ The historical arc — FLATMEM → DISCONTIGMEM → SPARSEMEM → vmemmap — is
 
 ---
 
-## The other half of the problem: `struct page` itself
+## The other half of the problem: `struct page` itself {#the-other-half-of-the-problem-struct-page-itself}
 
 The memory model decides *where the array is*. The other cost is *how big each element is* — and `struct page` is where the pressure now sits.
 
@@ -98,7 +98,7 @@ Worse, `struct page` is a union-of-unions that has accumulated meanings since 19
 
 ---
 
-## Where it's going: memory descriptors (memdesc)
+## Where it's going: memory descriptors (memdesc) {#where-its-going-memory-descriptors-memdesc}
 
 The long-term goal, driven by Matthew Wilcox out of the folio work, is to dismantle `struct page` entirely. In its place: an **8-byte "memory descriptor" (memdesc)** per page — a typed pointer whose low bits encode *what kind* of page this is and whose remaining bits point to a type-specific structure (a folio, a slab, a buddy record, a page-table descriptor…).
 
@@ -112,7 +112,7 @@ It's a distant end state, but a concrete one. Jonathan Corbet's [Separating memo
 
 ---
 
-## Observing the model
+## Observing the model {#observing-the-model}
 
 ```bash
 # Which memory model is this kernel built with?
@@ -136,7 +136,7 @@ sudo perf top -e cycles --sort symbol | grep -iE "pfn_to|page_to_pfn"
 
 ---
 
-## Common issues
+## Common issues {#common-issues}
 
 **"Why is ~1.5–2% of my RAM just… gone at boot?"** That's the `struct page` array (plus other per-page metadata). It scales with total RAM, not usage, and it's the tax the memory model pays. The memdesc work above is the long-term fix.
 
@@ -146,7 +146,7 @@ sudo perf top -e cycles --sort symbol | grep -iE "pfn_to|page_to_pfn"
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 | Change | Linux version | Why it matters here |
 |--------|--------------|---------------------|
@@ -159,22 +159,22 @@ sudo perf top -e cycles --sort symbol | grep -iE "pfn_to|page_to_pfn"
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [Documentation/mm/memory-model.rst](https://docs.kernel.org/mm/memory-model.html) — the authoritative description of FLATMEM and SPARSEMEM, and the `pfn_to_page()` definitions
 - [include/asm-generic/memory_model.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/memory_model.h) — the actual `pfn_to_page()`/`page_to_pfn()` macros for each model
 - [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct mem_section` and the section machinery
 
-### Related pages
+### Related pages {#related-pages}
 
 - [The Kernel Address Space](kernel-address-space.md) — where the `vmemmap` array physically lives, and how it's sized
 - [Memory Hotplug](memory-hotplug.md) — SPARSEMEM sections in action: adding and removing memory at runtime
 - [Life of a page](life-of-page.md) — the `struct page` this whole model is an array of
 - [Folio Abstraction](folio.md) — the first step of the `struct page` → memdesc transition
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Memory: the flat, the discontiguous, and the sparse](https://lwn.net/Articles/789304/) — the history of the memory models
 - [Separating memory descriptors from struct page](https://lwn.net/Articles/1073425/) — the current state of the memdesc transition

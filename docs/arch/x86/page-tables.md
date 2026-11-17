@@ -1,4 +1,4 @@
-# x86-64 Page Tables
+# x86-64 Page Tables {#x86-64-page-tables}
 
 > 4-level and 5-level paging, CR3, PCID, and KPTI
 
@@ -6,7 +6,7 @@ Virtual memory on x86-64 uses a multi-level radix tree of page tables to transla
 
 ---
 
-## 4-level paging: the standard case
+## 4-level paging: the standard case {#4-level-paging-the-standard-case}
 
 On x86-64, the default is **4-level paging** using 48-bit virtual addresses. Each virtual address is decoded as five fields:
 
@@ -44,7 +44,7 @@ The MMU caches recent translations in the **TLB** (Translation Lookaside Buffer)
 
 ---
 
-## Page table entry (PTE) bit layout
+## Page table entry (PTE) bit layout {#page-table-entry-pte-bit-layout}
 
 Each 8-byte entry in the page table uses a defined set of bits:
 
@@ -73,7 +73,7 @@ PTE (64-bit) format — applies to all levels (PGD, PUD, PMD, PTE):
                 Requires EFER.NXE = 1 (set by kernel during boot)
 ```
 
-### Kernel-side PTE manipulation
+### Kernel-side PTE manipulation {#kernel-side-pte-manipulation}
 
 The kernel provides a set of functions to read and modify PTEs safely:
 
@@ -105,7 +105,7 @@ static inline pte_t pte_wrprotect(pte_t pte) { return pte_clear_flags(pte, _PAGE
 
 ---
 
-## 5-level paging (LA57)
+## 5-level paging (LA57) {#5-level-paging-la57}
 
 5-level paging adds a fifth level called **P4D** (Page 4 Directory) above the PGD, extending the virtual address space from 48 bits to **57 bits**:
 
@@ -134,7 +134,7 @@ In kernel source, `CONFIG_X86_5LEVEL=y` enables compile-time support. At runtime
 
 ---
 
-## CR3: the page table register
+## CR3: the page table register {#cr3-the-page-table-register}
 
 `CR3` is the register that tells the MMU where the current process's top-level page table lives:
 
@@ -165,7 +165,7 @@ void switch_mm_irqs_off(struct mm_struct *prev, struct mm_struct *next,
 
 ---
 
-## Huge pages: 2MB and 1GB
+## Huge pages: 2MB and 1GB {#huge-pages-2mb-and-1gb}
 
 The `PS` bit in a non-leaf page table entry causes the hardware to treat that entry as a leaf — directly mapping a large page instead of pointing to the next table level:
 
@@ -182,7 +182,7 @@ The kernel uses 2MB huge pages for the **direct mapping** of all physical memory
 
 ---
 
-## PCID: Process-Context Identifiers
+## PCID: Process-Context Identifiers {#pcid-process-context-identifiers}
 
 Without PCID, every CR3 load (context switch) must flush the entire TLB — because the new process's virtual-to-physical mappings would otherwise collide with the old process's cached translations.
 
@@ -216,15 +216,15 @@ PCID requires the `INVPCID` instruction to invalidate individual PCID-tagged TLB
 
 ---
 
-## KPTI: Kernel Page Table Isolation
+## KPTI: Kernel Page Table Isolation {#kpti-kernel-page-table-isolation}
 
 **KPTI** (Kernel Page Table Isolation) was introduced in **Linux 4.15** (January 2018) to mitigate **Meltdown** (CVE-2017-5754).
 
-### The problem KPTI solves
+### The problem KPTI solves {#the-problem-kpti-solves}
 
 Before KPTI, the kernel's page tables were always mapped — including when running user code. This meant a user process's page table always included kernel virtual addresses (marked non-accessible via U/S=0). Meltdown exploited speculative execution to read kernel memory through these mappings before the CPU's permission check raised a #PF (Page Fault, vector 14).
 
-### The two-PGD solution
+### The two-PGD solution {#the-two-pgd-solution}
 
 KPTI maintains **two page tables per process**:
 
@@ -257,7 +257,7 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 }
 ```
 
-### CR3 switches on every kernel entry/exit
+### CR3 switches on every kernel entry/exit {#cr3-switches-on-every-kernel-entryexit}
 
 On every syscall, interrupt, or exception:
 
@@ -278,7 +278,7 @@ Kernel → User:
 
 The entry trampoline is in `arch/x86/entry/entry_64.S`. The `PAGE_TABLE_ISOLATION` config option controls KPTI.
 
-### KPTI + PCID: reducing the overhead
+### KPTI + PCID: reducing the overhead {#kpti-pcid-reducing-the-overhead}
 
 The naive KPTI implementation would flush the entire TLB on every user↔kernel transition (two CR3 loads per syscall). With PCID, the kernel assigns separate PCIDs for the user PGD and kernel PGD of each process:
 
@@ -301,7 +301,7 @@ perf stat -e tlb:tlb_flush ls
 
 ---
 
-## Kernel virtual address layout
+## Kernel virtual address layout {#kernel-virtual-address-layout}
 
 > Deep dive: [The Kernel Address Space](../../mm/kernel-address-space.md) covers each of these regions — the direct map, vmemmap, vmalloc, KASLR — and the rationale behind the layout.
 
@@ -330,7 +330,7 @@ The physmap (direct mapping) allows the kernel to access any physical page via a
 
 ---
 
-## Observing page tables
+## Observing page tables {#observing-page-tables}
 
 ```bash
 # Process virtual memory map
@@ -360,7 +360,7 @@ dmesg | grep -i "huge\|2M\|PMD"
 
 ---
 
-## Key kernel functions
+## Key kernel functions {#key-kernel-functions}
 
 | Function | File | Purpose |
 |----------|------|---------|
@@ -376,7 +376,7 @@ dmesg | grep -i "huge\|2M\|PMD"
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 | Feature | Linux version | Notes |
 |---------|--------------|-------|
@@ -389,22 +389,22 @@ dmesg | grep -i "huge\|2M\|PMD"
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [Documentation/arch/x86/x86_64/mm.rst](https://docs.kernel.org/arch/x86/x86_64/mm.html) — the canonical virtual memory layout tables
 - [arch/x86/include/asm/pgtable_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable_types.h) — every `_PAGE_*` bit defined
 - [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — CR3 switching, PCID/ASID management, KPTI CR3 assembly
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Page Tables (generic)](../../mm/page-tables.md) — the arch-independent pgd/pud/pmd/pte view
 - [x86_64 Boot Page Table Setup](../../mm/boot-page-tables.md) — how these structures are first built
 - [TLB Optimization](../../mm/tlb-optimization.md) — flush batching above the architecture layer
 - [ARM64 Page Tables](../arm64/page-tables.md) — TTBR0/TTBR1 instead of one CR3
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — the design that became KPTI, written pre-Meltdown
 - [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — Meltdown/Spectre and what they meant for the kernel

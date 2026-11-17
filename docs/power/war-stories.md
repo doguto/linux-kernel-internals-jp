@@ -1,4 +1,4 @@
-# Power Management War Stories
+# Power Management War Stories {#power-management-war-stories}
 
 > Suspend regressions, thermal throttle storms, and runtime PM deadlocks
 
@@ -9,9 +9,9 @@ Power management is among the most regression-prone areas of the kernel. The sta
 
 ---
 
-## 1. The suspend regression from a missing PM callback
+## 1. The suspend regression from a missing PM callback {#1-the-suspend-regression-from-a-missing-pm-callback}
 
-### Setup
+### Setup {#setup}
 
 A PCIe NIC driver was submitted upstream. The driver implemented `probe`, `remove`, and the data path, but its `dev_pm_ops` structure was empty — no `suspend` or `resume` callbacks:
 
@@ -23,7 +23,7 @@ static const struct dev_pm_ops mynic_pm_ops = {
 
 The driver worked perfectly on the submitter's test machine, which did not use suspend.
 
-### What happened
+### What happened {#what-happened}
 
 On a laptop running the driver:
 
@@ -35,11 +35,11 @@ On a laptop running the driver:
 6. Generic PCI *config space* (the standard PCI header — BARs, command register — plus the MSI/MSI-X capability structures) is restored by the bus-level resume path. The NIC's own private, driver-owned MMIO registers behind those BARs came out of the Fundamental Reset at their power-on-default values — typically all-zero, not the values they held before suspend. The driver was never told this happened (its `resume` callback never ran either), so its in-memory bookkeeping — where it believes the DMA ring head currently is, which descriptors are in flight — is now stale relative to hardware that has silently gone back to a blank slate.
 7. The driver's interrupt handler acts on that stale bookkeeping: it accesses a DMA ring head pointer register expecting to find the in-flight state it remembers, but the hardware has no memory of any of it. Depending on the driver, this either reads back a value that doesn't match what was expected, or drives the ring logic into a state the driver's own consistency checks weren't written to tolerate. The driver interprets the mismatch as a fatal hardware error and calls `BUG()`.
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 The call trace from the kernel panic pointed into the NIC driver's interrupt handler. Enabling `CONFIG_PM_DEBUG` and `CONFIG_PM_SLEEP_DEBUG` added logging that showed the device was not going through its suspend path. Comparing against a working driver revealed the missing PM callbacks.
 
-### Fix
+### Fix {#fix}
 
 ```c
 static int mynic_suspend(struct device *dev)
@@ -81,9 +81,9 @@ static DEFINE_SIMPLE_DEV_PM_OPS(mynic_pm_ops, mynic_suspend, mynic_resume);
 
 ---
 
-## 2. The runtime PM deadlock
+## 2. The runtime PM deadlock {#2-the-runtime-pm-deadlock}
 
-### Setup
+### Setup {#setup_1}
 
 A driver for an I2C-attached touch controller used Runtime PM. Because the handler needs to issue an I2C transfer — which may sleep — the driver registered it as a threaded IRQ handler: `request_threaded_irq(irq, NULL, touch_irq, IRQF_ONESHOT, "mytouch", priv)`. That runs `touch_irq` in its own kernel thread (named `irq/N-mytouch`), which is normal process context and is allowed to sleep. The handler read coordinates from the device and queued events:
 
@@ -106,7 +106,7 @@ static irqreturn_t touch_irq(int irq, void *data)
 }
 ```
 
-### What happened
+### What happened {#what-happened_1}
 
 `pm_runtime_get_sync()` increments the usage counter. If the device is already active, it returns immediately. But if `runtime_status == RPM_SUSPENDED`, it calls the driver's `->runtime_resume()` callback, which performs an I2C transfer to bring the hardware out of low power. I2C transfers may sleep (they wait for bus transactions to complete) — and so does `read_touch_registers()` itself a few lines later, regardless of runtime PM state.
 
@@ -128,7 +128,7 @@ Call Trace:
   touch_irq
 ```
 
-### Fix
+### Fix {#fix_1}
 
 The defining bug is not "the wrong PM call" — it's that `spin_lock(&priv->lock)` is held across a sequence that includes an I2C transfer, and I2C transfers always may sleep. Both correct fixes below get the sleeping work (the PM resume *and* `read_touch_registers()`) completely outside any spinlock's critical section.
 
@@ -196,13 +196,13 @@ Option B only works because `touch_irq` never runs from hardirq or softirq conte
 
 ---
 
-## 3. The thermal throttle storm
+## 3. The thermal throttle storm {#3-the-thermal-throttle-storm}
 
-### Setup
+### Setup {#setup_2}
 
 A mobile SoC benchmark suite ran a sustained CPU-bound workload. The device had a single thermal zone covering the CPU cluster, with the `step_wise` governor and two cooling devices: CPU frequency (via cpufreq cooling) and a passive notification.
 
-### What happened
+### What happened {#what-happened_2}
 
 ```
 t=0s:   CPU at 2.4 GHz, temperature rising
@@ -221,7 +221,7 @@ t=30s:  CPU at 200 MHz (minimum), temperature has barely moved
 
 Additionally, `step_wise` has no integral term: each evaluation period takes exactly one fixed step in the direction the trend indicates, regardless of how far above the trip point the temperature is or how long it has stayed there. That fixed step size is why the CPU cooling state kept ratcheting down every couple of seconds in the timeline above, all the way to the floor, without ever converging on a state that held the temperature steady.
 
-### Fix
+### Fix {#fix_2}
 
 **Switch to `power_allocator`**: the Intelligent Power Allocation (IPA) governor uses a PID controller and manages all cooling devices in a thermal zone jointly. It asks each cooling device for its power consumption and redistributes a total budget:
 
@@ -245,9 +245,9 @@ echo 0   > /sys/class/thermal/thermal_zone0/k_d    # derivative
 
 ---
 
-## 4. The RAPL power limit surprise
+## 4. The RAPL power limit surprise {#4-the-rapl-power-limit-surprise}
 
-### Setup
+### Setup {#setup_3}
 
 A cloud operator deployed new servers and, to enforce per-server power budgets for billing, set RAPL long-term power limits via the powercap sysfs interface:
 
@@ -259,7 +259,7 @@ echo 150000000 > /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
 echo 1 > /sys/class/powercap/intel-rapl:0/enabled
 ```
 
-### What happened
+### What happened {#what-happened_3}
 
 The workload was a mixed read-heavy database: moderate CPU compute, high memory bandwidth. Monitoring showed:
 
@@ -283,7 +283,7 @@ The problem: the operator had set a package-level power limit of 150 W. The DRAM
 
 Setting the package limit did not change the DRAM domain's limit. The operator had not realized the domain was capped independently.
 
-### Fix
+### Fix {#fix_3}
 
 ```bash
 # Enumerate all zones and their current limits
@@ -307,13 +307,13 @@ After raising the DRAM limit to 50 W — above the workload's ~45 W demand — m
 
 ---
 
-## 5. The S2idle wakeup source mystery
+## 5. The S2idle wakeup source mystery {#5-the-s2idle-wakeup-source-mystery}
 
-### Setup
+### Setup {#setup_4}
 
 A laptop was deployed with S2idle (suspend-to-idle, `echo s2idle > /sys/power/mem_sleep`) as the default sleep mode. Users reported the laptop woke up approximately 30 seconds after being closed, every time, regardless of whether anything was plugged in.
 
-### Diagnosis
+### Diagnosis {#diagnosis_1}
 
 ```bash
 # Observe dmesg immediately after a premature wake
@@ -346,7 +346,7 @@ cat /sys/kernel/debug/tracing/trace_pipe
 
 The wakeup fired from the I2C touchpad device, which had `wakeup` capability enabled by default in the ACPI tables.
 
-### Fix
+### Fix {#fix_4}
 
 **Immediate workaround** — disable the wakeup capability for this device:
 
@@ -373,9 +373,9 @@ echo 'ACTION=="add", SUBSYSTEM=="i2c", ATTR{name}=="ELAN0001:00", \
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `device_suspend()`'s callback-selection order (`pm_domain` → `type` → `class` → `bus` → driver `pm`) and `dpm_run_callback()`'s `if (!cb) return 0;`; for a PCI device `dev->bus->pm` is always set, so this particular skip never fires — Case 1
 - [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `DEFINE_SIMPLE_DEV_PM_OPS()` (the current macro; `SIMPLE_DEV_PM_OPS()` is now deprecated but equivalent) and `SET_RUNTIME_PM_OPS()`, Case 1's fix
@@ -386,20 +386,20 @@ echo 'ACTION=="add", SUBSYSTEM=="i2c", ATTR{name}=="ELAN0001:00", \
 - [drivers/base/power/wakeup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/wakeup.c) — `print_wakeup_source_stats()`, the column layout of `/sys/kernel/debug/wakeup_sources`, and the `wakeup_source_activate` tracepoint, Case 5
 - [drivers/hid/i2c-hid/i2c-hid-core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/hid/i2c-hid/i2c-hid-core.c) — `i2c_hid_core_suspend()`, which powers the device down via `i2c_hid_core_power_down()` only when `device_may_wakeup()` is false, Case 5
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Runtime PM](runtime-pm.md) — usage counting, callbacks, atomic context restrictions
 - [System Suspend](suspend.md) — PM notifiers, freeze sequence, wakeup sources
 - [Thermal Management](thermal.md) — step_wise vs power_allocator governors
 - [Power Capping and RAPL](power-capping.md) — RAPL domain enumeration and limits
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Runtime power management](https://lwn.net/Articles/347573/) (August 19, 2009) — the original `runtime_suspend`/`runtime_resume`/`runtime_idle` additions to `dev_pm_ops`, behind Case 2
 - [The power allocator thermal governor](https://lwn.net/Articles/602517/) (June 17, 2014) — the PID-controller design that Case 3's fix switches to
 - [Power Capping Framework and RAPL Driver](https://lwn.net/Articles/567620/) (September 19, 2013) — the original powercap-framework and intel-rapl driver submission, the uniform sysfs interface behind Case 4
 
-### External
+### External {#external}
 
 - [Runtime Power Management Framework for I/O Devices](https://docs.kernel.org/power/runtime_pm.html) — canonical Runtime PM documentation and function return-value reference, Case 2
 - [Basic PM Debugging](https://docs.kernel.org/power/basic-pm-debugging.html) — `/sys/power/pm_test`, `CONFIG_PM_DEBUG`, and the driver-isolation technique from Case 1's diagnosis

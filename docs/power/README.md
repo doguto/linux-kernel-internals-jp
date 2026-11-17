@@ -1,8 +1,8 @@
-# Power Management
+# Power Management {#power-management}
 
 > CPU frequency scaling, device runtime power, and system suspend in the Linux kernel
 
-## The power management stack
+## The power management stack {#the-power-management-stack}
 
 ```
 User space (udev, systemd, powertop)
@@ -25,7 +25,7 @@ cpufreq subsystem (drivers/cpufreq/)
 Hardware: ACPI P-states, HWP (Hardware P-state), C-states, ARM DVFS
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -38,7 +38,7 @@ Hardware: ACPI P-states, HWP (Hardware P-state), C-states, ARM DVFS
 | [Power Capping and RAPL](power-capping.md) | Intel RAPL, powercap framework, MSRs, ARM SCMI |
 | [War Stories](war-stories.md) | Suspend regressions, runtime PM deadlocks, thermal storms, RAPL surprises |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Current CPU frequency scaling

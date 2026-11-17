@@ -1,8 +1,8 @@
-# KASAN (Kernel Address Sanitizer)
+# KASAN (Kernel Address Sanitizer) {#kasan-kernel-address-sanitizer}
 
 > Detecting memory bugs in the kernel at runtime
 
-## What Is KASAN?
+## What Is KASAN? {#what-is-kasan}
 
 KASAN is a dynamic memory error detector for the Linux kernel ([docs.kernel.org](https://docs.kernel.org/dev-tools/kasan.html)). It detects:
 
@@ -15,9 +15,9 @@ These bugs can cause data corruption, crashes, and security vulnerabilities. Dir
 
 In Generic and SW_TAGS modes, the compiler inserts checks on every memory access to verify the accessed memory is valid. In HW_TAGS mode, the hardware performs these checks. When a violation is detected, the kernel prints a detailed report identifying the bug type, the offending access, and the allocation/deallocation history of the involved object.
 
-## How KASAN Works
+## How KASAN Works {#how-kasan-works}
 
-### The Three Modes
+### The Three Modes {#the-three-modes}
 
 KASAN has three modes, each with different trade-offs between coverage, performance, and hardware requirements:
 
@@ -27,7 +27,7 @@ KASAN has three modes, each with different trade-offs between coverage, performa
 | SW_TAGS KASAN | `CONFIG_KASAN_SW_TAGS` | Software memory tagging | Moderate | Broader testing (arm64 only) |
 | HW_TAGS KASAN | `CONFIG_KASAN_HW_TAGS` | ARM MTE hardware tagging | Low | Production-capable testing |
 
-### Generic KASAN: Shadow Memory
+### Generic KASAN: Shadow Memory {#generic-kasan-shadow-memory}
 
 Generic KASAN is the most widely used mode. It works by maintaining a **shadow memory** region that tracks the validity of every byte of kernel memory.
 
@@ -92,7 +92,7 @@ Kernel address space layout with KASAN:
 └──────────────────────────┘  Low addresses
 ```
 
-### SW_TAGS KASAN: Software Memory Tagging
+### SW_TAGS KASAN: Software Memory Tagging {#sw_tags-kasan-software-memory-tagging}
 
 Generic KASAN's overhead made it impractical for broad testing beyond dedicated CI systems. SW_TAGS KASAN trades deterministic detection for lower overhead by assigning random **tags** to memory allocations and pointers. On each access, it checks that the pointer tag matches the memory tag.
 
@@ -114,7 +114,7 @@ This relies on arm64's Top Byte Ignore (TBI) feature, which ignores the top byte
 
 When memory is freed, a new random tag is assigned to the shadow. The old pointer still carries the old tag, so any use-after-free will likely be caught (with probability 1 - 1/256 per access, since tags are 8 bits).
 
-### HW_TAGS KASAN: Hardware Memory Tagging (ARM MTE)
+### HW_TAGS KASAN: Hardware Memory Tagging (ARM MTE) {#hw_tags-kasan-hardware-memory-tagging-arm-mte}
 
 HW_TAGS KASAN uses ARM Memory Tagging Extension (MTE), available on ARMv8.5+ processors. MTE implements the same tag-checking concept entirely in hardware:
 
@@ -138,7 +138,7 @@ ARM MTE (tag in bits [59:56], defined in arch/arm64/include/asm/mte-def.h):
 
 Because the CPU performs the tag check, there are no additional instructions in the memory access path. The trade-off is a coarser tag space (4 bits = 16 possible tags, so 1/16 chance of missing a bug per access) and the requirement for MTE-capable hardware (ARMv8.5+).
 
-## What a KASAN Report Looks Like
+## What a KASAN Report Looks Like {#what-a-kasan-report-looks-like}
 
 When KASAN detects a bug, it prints a report to the kernel log. Here is a realistic example of a slab-out-of-bounds access:
 
@@ -189,9 +189,9 @@ Memory state around the buggy address:
 5. **Object details**: The object is in `kmalloc-32` (a 32-byte slab cache), and the access was 24 bytes past the end of the 32-byte allocation
 6. **Shadow memory dump**: The `^` marker points to the shadow byte corresponding to the buggy address. `fc` means KASAN redzone -- the code wrote into the padding between slab objects
 
-## Enabling KASAN
+## Enabling KASAN {#enabling-kasan}
 
-### Kernel Configuration
+### Kernel Configuration {#kernel-configuration}
 
 ```
 # Enable KASAN (pick one mode)
@@ -212,7 +212,7 @@ CONFIG_STACKTRACE=y          # Better stack traces in reports
 CONFIG_SLUB_DEBUG=y          # Enhanced slab debugging info
 ```
 
-### Build Requirements
+### Build Requirements {#build-requirements}
 
 Compiler requirements (from [`lib/Kconfig.kasan`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kasan)):
 
@@ -231,7 +231,7 @@ make defconfig
 make -j$(nproc)
 ```
 
-### Boot-Time Options
+### Boot-Time Options {#boot-time-options}
 
 ```bash
 # For HW_TAGS mode: enable/disable at boot
@@ -242,9 +242,9 @@ kasan.fault=report     # Report but don't panic (default)
 kasan.fault=panic      # Panic on first KASAN error
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Trigger a KASAN Report in QEMU
+### Trigger a KASAN Report in QEMU {#trigger-a-kasan-report-in-qemu}
 
 The kernel includes a built-in test module for KASAN:
 
@@ -259,7 +259,7 @@ modprobe kasan_test
 ./tools/testing/kunit/kunit.py run kasan
 ```
 
-### Check If KASAN Is Active
+### Check If KASAN Is Active {#check-if-kasan-is-active}
 
 ```bash
 # Check kernel config
@@ -269,14 +269,14 @@ zcat /proc/config.gz | grep KASAN
 dmesg | grep -i kasan
 ```
 
-### Read KASAN Reports
+### Read KASAN Reports {#read-kasan-reports}
 
 ```bash
 # Watch for KASAN reports in real time
 dmesg -w | grep -A 30 "BUG: KASAN"
 ```
 
-## Performance Overhead
+## Performance Overhead {#performance-overhead}
 
 | Mode | CPU Overhead | Memory Overhead | Detection Probability |
 |------|-------------|-----------------|----------------------|
@@ -288,9 +288,9 @@ dmesg -w | grep -A 30 "BUG: KASAN"
 
 Generic mode has the highest overhead but catches everything. It is the standard choice for kernel CI systems and development builds. HW_TAGS mode has low enough overhead for deployment on production hardware.
 
-## History
+## History {#history}
 
-### v4.0: Introduction (2015)
+### v4.0: Introduction (2015) {#v40-introduction-2015}
 
 **Commit**: [0b24becc8105](https://git.kernel.org/linus/0b24becc8105) ("kasan: add kernel address sanitizer infrastructure")
 
@@ -300,7 +300,7 @@ KASAN was inspired by AddressSanitizer (ASan) for userspace, created by Konstant
 
 **LWN coverage**: [The kernel address sanitizer](https://lwn.net/Articles/612153/) (2014)
 
-### v5.0: Software Tag-Based Mode (2019)
+### v5.0: Software Tag-Based Mode (2019) {#v50-software-tag-based-mode-2019}
 
 **Commit**: [2bd926b439b4](https://git.kernel.org/linus/2bd926b439b4) ("kasan: add CONFIG_KASAN_GENERIC and CONFIG_KASAN_SW_TAGS")
 
@@ -310,7 +310,7 @@ Generic KASAN's overhead made it impractical beyond dedicated CI environments. S
 
 **LWN coverage**: [Tag-based KASAN](https://lwn.net/Articles/766768/) (2018)
 
-### v5.11: Hardware Tag-Based Mode (2021)
+### v5.11: Hardware Tag-Based Mode (2021) {#v511-hardware-tag-based-mode-2021}
 
 **Commit**: [2e903b914797](https://git.kernel.org/linus/2e903b914797) ("kasan, arm64: implement HW_TAGS runtime")
 
@@ -320,17 +320,17 @@ HW_TAGS mode leverages ARM Memory Tagging Extension (MTE) to perform tag checks 
 
 **LWN coverage**: [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/) (2020)
 
-### v5.12: KASAN Boot Parameters
+### v5.12: KASAN Boot Parameters {#v512-kasan-boot-parameters}
 
 **Commit**: [3c8bc5e09bb2](https://git.kernel.org/linus/3c8bc5e09bb2) ("kasan: add boot parameters for hw tags mode")
 
 HW_TAGS mode introduced boot-time parameters (`kasan.mode`, `kasan.stacktrace`, `kasan.fault`) to allow enabling/disabling KASAN without recompilation, which is essential for production use.
 
-### Expanding Coverage
+### Expanding Coverage {#expanding-coverage}
 
 KASAN has been progressively extended to cover more kernel memory types. Stack and global variables are instrumented via the compiler in Generic mode (part of the original v4.0 implementation). vmalloc allocations were added in v5.4 ([commit 3c5c3cfb9ef4](https://git.kernel.org/linus/3c5c3cfb9ef4), Daniel Axtens).
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -345,19 +345,19 @@ KASAN has been progressively extended to cover more kernel memory types. Stack a
 | [`include/linux/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kasan.h) | KASAN public API and inline hooks |
 | [`mm/kasan/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h) | Internal KASAN definitions and shadow value constants |
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [KASAN official documentation](https://docs.kernel.org/dev-tools/kasan.html) -- comprehensive guide covering all three modes, configuration, and interpretation of reports
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [The kernel address sanitizer](https://lwn.net/Articles/612153/) -- original coverage (2014)
 - [Tag-based KASAN](https://lwn.net/Articles/766768/) -- SW_TAGS mode design (2018)
 - [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/) -- HW_TAGS mode (2020)
 
-### Related
+### Related {#related}
 
 - [slab](slab.md) -- KASAN instruments slab allocator hooks to track allocations and frees
 - [vmalloc](vmalloc.md) -- KASAN also covers vmalloc memory regions

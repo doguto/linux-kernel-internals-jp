@@ -1,8 +1,8 @@
-# Cgroups & Namespaces
+# Cgroups & Namespaces {#cgroups-namespaces}
 
 > Resource control and isolation primitives that underpin containers
 
-## What cgroups and namespaces do
+## What cgroups and namespaces do {#what-cgroups-and-namespaces-do}
 
 **Cgroups (control groups)** limit *how much* resource a group of processes can use:
 
@@ -34,7 +34,7 @@ Together they implement container isolation: Docker, Kubernetes pods, and system
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -47,7 +47,7 @@ Together they implement container isolation: Docker, Kubernetes pods, and system
 | [systemd and Cgroup Integration](systemd-cgroups.md) | Slices, scopes, services, delegation |
 | [War Stories](war-stories.md) | OOM loops, CFS throttling, v1→v2 migration pain |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Cgroup v2 filesystem

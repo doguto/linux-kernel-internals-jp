@@ -1,8 +1,8 @@
-# Why can't I allocate contiguous memory?
+# Why can't I allocate contiguous memory? {#why-cant-i-allocate-contiguous-memory}
 
 > The fragmentation problem that plagues every long-running system
 
-## The question
+## The question {#the-question}
 
 You have 4GB of free memory. You need a 4MB contiguous buffer for DMA. The allocation fails. Why?
 
@@ -19,7 +19,7 @@ void *buf = kmalloc(4 * 1024 * 1024, GFP_KERNEL);
 
 The answer is **external fragmentation** - free memory exists, but not in contiguous chunks.
 
-## Why contiguous memory matters
+## Why contiguous memory matters {#why-contiguous-memory-matters}
 
 Most kernel allocations don't need physical contiguity. Virtual memory lets you map scattered physical pages into a contiguous virtual address range (that's what `vmalloc()` does).
 
@@ -32,7 +32,7 @@ But some things genuinely need physically contiguous memory:
 | Network buffers | Some devices/paths benefit from contiguity (though many use scatter-gather) |
 | GPU memory | Graphics drivers often need large contiguous allocations |
 
-## The fragmentation problem
+## The fragmentation problem {#the-fragmentation-problem}
 
 The buddy allocator divides memory into power-of-2 blocks. After running for days or weeks, a system's memory looks like this:
 
@@ -50,7 +50,7 @@ Largest contiguous block: 3 pages (12KB)
 
 You have 56KB free but can't allocate a 16KB block. This is external fragmentation.
 
-### How it happens
+### How it happens {#how-it-happens}
 
 1. System boots with large contiguous free regions
 2. Allocations of various sizes come and go
@@ -59,7 +59,7 @@ You have 56KB free but can't allocate a 16KB block. This is external fragmentati
 
 The persistent allocations act like rocks in a stream - free memory flows around them but can't coalesce.
 
-## Migrate types: the kernel's first defense
+## Migrate types: the kernel's first defense {#migrate-types-the-kernels-first-defense}
 
 The kernel groups pages by **mobility** to reduce fragmentation:
 
@@ -88,7 +88,7 @@ This helps because:
 
 But it's not perfect. Under pressure, the allocator will "steal" pages from other migrate types, polluting movable regions with unmovable allocations.
 
-## Memory compaction: defragmentation for Linux
+## Memory compaction: defragmentation for Linux {#memory-compaction-defragmentation-for-linux}
 
 When high-order allocations fail, the kernel can try **compaction** - moving pages to create contiguous free regions.
 
@@ -108,7 +108,7 @@ Compaction was added by Mel Gorman in kernel 2.6.35 ([commit 748446bb6b5a](https
 
 See [compaction](compaction.md) for details on the algorithm.
 
-### Limitations of compaction
+### Limitations of compaction {#limitations-of-compaction}
 
 Compaction can only move **movable** pages. Unmovable pages (kernel allocations, pinned memory) are permanent obstacles:
 
@@ -123,7 +123,7 @@ Compaction can only move **movable** pages. Unmovable pages (kernel allocations,
 └───┴───┴───┴───┴───┴───┴───┴───┘
 ```
 
-## CMA: the solution for device drivers
+## CMA: the solution for device drivers {#cma-the-solution-for-device-drivers}
 
 The **Contiguous Memory Allocator** (CMA) solves the device driver problem by reserving regions that serve double duty:
 
@@ -144,7 +144,7 @@ CMA region:
 
 CMA was developed by Marek Szyprowski at Samsung and merged in kernel 3.5 ([commit c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e), 2012). See the [LWN article](https://lwn.net/Articles/486301/) for design discussion.
 
-### Using CMA
+### Using CMA {#using-cma}
 
 From a driver:
 
@@ -175,9 +175,9 @@ reserved-memory {
 };
 ```
 
-## Best practices for driver developers
+## Best practices for driver developers {#best-practices-for-driver-developers}
 
-### 1. Use the DMA API
+### 1. Use the DMA API {#1-use-the-dma-api}
 
 Don't allocate contiguous memory directly. Use `dma_alloc_coherent()` or `dma_alloc_attrs()`:
 
@@ -191,7 +191,7 @@ void *buf = kmalloc(size, GFP_KERNEL);  // May fail with large sizes
 
 The DMA API can use CMA, IOMMU remapping, or bounce buffers as appropriate.
 
-### 2. Use scatter-gather when possible
+### 2. Use scatter-gather when possible {#2-use-scatter-gather-when-possible}
 
 Many modern devices support scatter-gather DMA:
 
@@ -206,7 +206,7 @@ dma_map_sg(dev, sg, nents, direction);
 
 This eliminates the contiguous memory requirement entirely.
 
-### 3. Allocate early or use CMA
+### 3. Allocate early or use CMA {#3-allocate-early-or-use-cma}
 
 If you need large contiguous buffers:
 
@@ -214,7 +214,7 @@ If you need large contiguous buffers:
 - Use CMA regions sized for your needs
 - Allocate during driver probe, not on-demand
 
-### 4. Handle allocation failures gracefully
+### 4. Handle allocation failures gracefully {#4-handle-allocation-failures-gracefully}
 
 High-order allocations can fail. Don't use `__GFP_NOFAIL` for large allocations:
 
@@ -228,7 +228,7 @@ if (!buf)
     return -ENOMEM;
 ```
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
 ```bash
 # View fragmentation per order
@@ -252,11 +252,11 @@ echo 1 > /proc/sys/vm/compact_memory
 watch -n 1 'grep -E "compact_" /proc/vmstat'
 ```
 
-## Evolution
+## Evolution {#evolution}
 
 The kernel's approach to contiguous allocation has evolved significantly:
 
-### ZONE_MOVABLE (v2.6.23, 2007)
+### ZONE_MOVABLE (v2.6.23, 2007) {#zone_movable-v2623-2007}
 
 **Commit**: [2a1e274acf0b](https://git.kernel.org/linus/2a1e274acf0b) ("Create the ZONE_MOVABLE zone")
 
@@ -274,7 +274,7 @@ kernelcore=4G
 movablecore=8G
 ```
 
-### Migrate types (v2.6.24, 2007)
+### Migrate types (v2.6.24, 2007) {#migrate-types-v2624-2007}
 
 **Commit**: [b2a0ac8875a0](https://git.kernel.org/linus/b2a0ac8875a0) ("Split the free lists for movable and unmovable allocations")
 
@@ -284,7 +284,7 @@ movablecore=8G
 
 Split the buddy allocator free lists by page mobility. This was a less invasive alternative to ZONE_MOVABLE that works automatically without boot parameters. The two approaches complement each other.
 
-### Memory compaction (v2.6.35, 2010)
+### Memory compaction (v2.6.35, 2010) {#memory-compaction-v2635-2010}
 
 **Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
@@ -292,7 +292,7 @@ Split the buddy allocator free lists by page mobility. This was a less invasive 
 
 Active defragmentation by migrating pages. Before this, the kernel could only *prevent* fragmentation (via migrate types), not *fix* it. Compaction made THP viable on long-running systems.
 
-### CMA (v3.5, 2012)
+### CMA (v3.5, 2012) {#cma-v35-2012}
 
 **Commit**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
 
@@ -302,7 +302,7 @@ Active defragmentation by migrating pages. Before this, the kernel could only *p
 
 Solved the device driver problem by creating regions that serve double duty - used for movable pages normally, reclaimed for contiguous DMA buffers on demand. See [LWN article](https://lwn.net/Articles/486301/).
 
-### Proactive compaction (v5.9, 2020)
+### Proactive compaction (v5.9, 2020) {#proactive-compaction-v59-2020}
 
 **Commit**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
 
@@ -310,7 +310,7 @@ Solved the device driver problem by creating regions that serve double duty - us
 
 Background compaction based on fragmentation levels, reducing direct compaction stalls. Controlled via `vm.compaction_proactiveness`.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Memory compaction](compaction.md) - How compaction works
 - [Page allocator](page-allocator.md) - Buddy system and migrate types

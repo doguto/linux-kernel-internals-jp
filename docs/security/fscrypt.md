@@ -1,8 +1,8 @@
-# fscrypt: Per-File Encryption
+# fscrypt: Per-File Encryption {#fscrypt-per-file-encryption}
 
 > Key hierarchy, HKDF derivation, and transparent encryption in ext4/F2FS/Btrfs
 
-## Overview
+## Overview {#overview}
 
 fscrypt provides **per-directory** transparent encryption at the VFS layer. Unlike dm-crypt (full disk), fscrypt encrypts individual files and directories, allowing:
 
@@ -22,7 +22,7 @@ Application read()/write()
     Block device (ciphertext)
 ```
 
-## Key hierarchy
+## Key hierarchy {#key-hierarchy}
 
 fscrypt uses a two-level key hierarchy:
 
@@ -42,7 +42,7 @@ Each encrypted directory has a **policy** that records:
 - Which encryption mode (AES-256-XTS for contents, AES-256-CTS for filenames)
 - Key derivation version (v1 trusted keyring, v2 HKDF)
 
-## Setting up encryption (API v2)
+## Setting up encryption (API v2) {#setting-up-encryption-api-v2}
 
 ```bash
 # Step 1: Enable encryption on the filesystem (ext4):
@@ -64,7 +64,7 @@ fscrypt setup /dev/sda1
 fscrypt encrypt /home/user/private/ --user=user
 ```
 
-### Kernel ioctl API
+### Kernel ioctl API {#kernel-ioctl-api}
 
 ```c
 #include <linux/fscrypt.h>
@@ -98,7 +98,7 @@ ioctl(dir_fd, FS_IOC_SET_ENCRYPTION_POLICY, &policy);
 /* From now on, all new files in this directory are encrypted */
 ```
 
-## Key derivation internals
+## Key derivation internals {#key-derivation-internals}
 
 ```c
 /* fs/crypto/hkdf.c */
@@ -125,7 +125,7 @@ struct fscrypt_inode_info {
 };
 ```
 
-### IV generation (per-block)
+### IV generation (per-block) {#iv-generation-per-block}
 
 ```c
 /* For AES-256-XTS (contents encryption, default per-file key): */
@@ -143,7 +143,7 @@ struct fscrypt_inode_info {
 /* Note: FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32 uses SipHash for a 32-bit IV */
 ```
 
-## Inline encryption hardware
+## Inline encryption hardware {#inline-encryption-hardware}
 
 ```bash
 # Check for inline encryption support:
@@ -159,7 +159,7 @@ mount -o inlinecrypt /dev/nvme0n1p1 /data
 cat /proc/mounts | grep inlinecrypt
 ```
 
-## Key revocation and locking
+## Key revocation and locking {#key-revocation-and-locking}
 
 ```c
 /* Remove master key from filesystem (lock encrypted directories): */
@@ -183,7 +183,7 @@ fscrypt status /home/user/private/
 #   Key:                 unlocked (key identifier: abc123...)
 ```
 
-## fscrypt vs dm-crypt
+## fscrypt vs dm-crypt {#fscrypt-vs-dm-crypt}
 
 | | fscrypt | dm-crypt |
 |---|---------|----------|
@@ -195,7 +195,7 @@ fscrypt status /home/user/private/
 | Use case | Multi-user (Android FBE, shared laptops) | Single-user laptop, server |
 | Filesystem | ext4/F2FS/Btrfs | Any FS on top |
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Check if a file is encrypted:
@@ -218,7 +218,7 @@ dmesg | grep -E "fscrypt|crypto"
 bpftrace -e 'kprobe:fscrypt_get_encryption_info { @[comm] = count(); }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [dm-crypt](dm-crypt.md) — full-disk encryption alternative
 - [xattr](../vfs/xattr.md) — fscrypt stores policy in `trusted.fscrypt` xattr

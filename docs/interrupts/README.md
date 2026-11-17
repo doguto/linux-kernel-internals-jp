@@ -1,8 +1,8 @@
-# Interrupts and Async Processing
+# Interrupts and Async Processing {#interrupts-and-async-processing}
 
 > How hardware events reach kernel code, and how deferred work gets done
 
-## The interrupt problem
+## The interrupt problem {#the-interrupt-problem}
 
 Hardware devices need to tell the CPU that something happened — a network packet arrived, a disk read completed, a timer expired. The CPU can't poll everything constantly, so hardware uses **interrupts**: a signal that stops whatever the CPU is doing and runs an interrupt handler.
 
@@ -23,7 +23,7 @@ Bottom half            ← deferred, runs with interrupts enabled
   - May sleep (workqueues only)
 ```
 
-## Why five deferred-work mechanisms, not one
+## Why five deferred-work mechanisms, not one {#why-five-deferred-work-mechanisms-not-one}
 
 That two-half split is the easy part. The harder question — one a newcomer to this part of the kernel reasonably asks — is why there are *five* different ways to implement the "bottom half" box above (softirqs, tasklets, workqueues, threaded IRQs, timers/hrtimers), rather than one obvious answer. The short version: each one exists because an earlier mechanism turned out to be wrong for some real workload, and rather than replace the old one outright, the kernel usually kept it and added a new option alongside it. The [Softirqs](softirq.md#from-bottom-halves-to-softirqs-to-threaded-irqs) page tells that lineage in full — the original single-lock "bottom half" (BH) mechanism from Linux 2.0–2.3 serialized *all* deferred work behind one global spinlock, which became an SMP scalability wall; softirqs replaced it by letting different deferred-work types run in parallel on different CPUs; tasklets then gave drivers a softirq-like mechanism without requiring every driver author to write reentrant, per-CPU-safe code.
 
@@ -31,24 +31,24 @@ None of those three can sleep, though, and by the mid-2000s a growing set of dri
 
 None of this means the older mechanisms disappeared. Softirqs still exist because a handful of very hot paths (networking's `NET_RX_SOFTIRQ`, in particular) genuinely can't afford a thread-scheduling round trip; tasklets are still in the tree, deprecated but not removed, because a few drivers (AMD's `ccp` crypto engine, Intel's `i915` GPU driver) combine them with other mechanisms in ways that resist a one-line conversion. What you're looking at across these pages is less a single coherent design than five answers accumulated over roughly three decades, each solving the specific problem in front of its author at the time — with the out-of-tree realtime effort acting as an unusually persistent source of pressure to eventually generalize the ad hoc fix into something every driver could use.
 
-## Contents
+## Contents {#contents}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 - [Interrupt Handling Overview](interrupts.md) — From hardware to handler
 - [IRQ Descriptor and irq_chip](irq-desc.md) — The kernel's interrupt abstraction
 - [request_irq and free_irq](request-irq.md) — Registering interrupt handlers
 - [Threaded IRQs](threaded-irq.md) — Moving work out of hardirq context
 
-### Deferred Work (Bottom Halves)
+### Deferred Work (Bottom Halves) {#deferred-work-bottom-halves}
 - [Softirqs](softirq.md) — The lowest-level deferral mechanism
 - [Tasklets](tasklets.md) — Per-CPU serialized softirq consumers
 - [Workqueues](workqueues.md) — Process-context deferred work
 - [Timers and hrtimers](timers.md) — Deferred work at a specific time
 
-### War stories
+### War stories {#war-stories}
 - [War Stories](war-stories.md) — two CVEs and two long-standing bugs in the IRQ-affinity and vector-allocation machinery
 
-## Execution contexts
+## Execution contexts {#execution-contexts}
 
 Understanding which context code runs in is critical for choosing the right locking:
 

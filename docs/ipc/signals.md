@@ -1,8 +1,8 @@
-# Signals
+# Signals {#signals}
 
 > Asynchronous notifications delivered to processes
 
-## Signal basics
+## Signal basics {#signal-basics}
 
 A signal is an integer (1–64 on x86-64) sent to a process or thread. The kernel delivers it by interrupting the target process at the next opportunity (syscall return, interrupt return).
 
@@ -17,7 +17,7 @@ kill(pid, SIGTERM) →  pending bit set   →   process checks TIF_SIGPENDING
 
 Standard signals (1–31) are not queued — multiple sends before delivery collapse to one. Real-time signals (32–64, `SIGRTMIN`..`SIGRTMAX`) are queued.
 
-## Signal numbers and default actions
+## Signal numbers and default actions {#signal-numbers-and-default-actions}
 
 ```
 SIGHUP  (1)  — hangup (terminal closed) → terminate
@@ -42,7 +42,7 @@ SIGUSR2 (12) — user defined → terminate
 SIGRTMIN..SIGRTMAX (32..64) — real-time → terminate
 ```
 
-## Sending signals
+## Sending signals {#sending-signals}
 
 ```c
 /* kill: send to process or process group */
@@ -72,7 +72,7 @@ send_sig_info(SIGTERM, &info, task); /* with siginfo_t */
 kill_pgrp(pgrp, SIGTERM, 0);
 ```
 
-## Kernel signal delivery path
+## Kernel signal delivery path {#kernel-signal-delivery-path}
 
 ```c
 /* Spans three files: do_send_sig_info()/get_signal() are in kernel/signal.c
@@ -112,7 +112,7 @@ handle_signal(ksig, regs)
 
 `setup_rt_frame()` (`arch/x86/kernel/signal.c`) is itself just a dispatcher that picks the right ABI variant — for a 64-bit process it calls `x64_setup_rt_frame()` in `arch/x86/kernel/signal_64.c`, which does the actual work below. It does not push trampoline machine code onto the stack — it requires `SA_RESTORER` and writes only a pointer (`unsafe_put_user(ksig->ka.sa.sa_restorer, &frame->pretcode, ...)`) to the userspace restorer stub, which normally lives in glibc/vDSO (`__restore_rt`). After the signal handler returns, that restorer calls `rt_sigreturn`, which restores the saved `ucontext_t` (CPU registers before signal delivery) and resumes normal execution.
 
-## struct sigaction: installing handlers
+## struct sigaction: installing handlers {#struct-sigaction-installing-handlers}
 
 ```c
 #include <signal.h>
@@ -158,7 +158,7 @@ Important flags:
 - `SA_NODEFER` — don't block the signal during its own handler (reentrant)
 - `SA_RESETHAND` — reset to default after one delivery
 
-## Signal masks
+## Signal masks {#signal-masks}
 
 Each thread has a signal mask — blocked signals are not delivered until unblocked:
 
@@ -179,7 +179,7 @@ sigprocmask(SIG_SETMASK, &old_set, NULL);
 sigsuspend(&old_set);  /* replaces mask, sleeps until any signal */
 ```
 
-### Kernel data structures
+### Kernel data structures {#kernel-data-structures}
 
 ```c
 /* Per-process signal state */
@@ -205,7 +205,7 @@ struct sigpending {
 };
 ```
 
-## Real-time signals
+## Real-time signals {#real-time-signals}
 
 Real-time signals (SIGRTMIN..SIGRTMAX) differ from standard signals:
 
@@ -236,7 +236,7 @@ sigwaitinfo(&wait_set, &info);
 /* info.si_value.sival_int == 100 */
 ```
 
-## signalfd: signals as file descriptors
+## signalfd: signals as file descriptors {#signalfd-signals-as-file-descriptors}
 
 `signalfd` converts signal delivery into `read()` calls, enabling use with `epoll`:
 
@@ -266,7 +266,7 @@ if (si.ssi_signo == SIGTERM) {
 }
 ```
 
-## SIGCHLD and waitpid
+## SIGCHLD and waitpid {#sigchld-and-waitpid}
 
 `SIGCHLD` is sent to a parent when a child changes state (exits, stops, continues). The parent must call `waitpid` to reap the zombie:
 
@@ -286,9 +286,9 @@ static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `do_send_sig_info()`, `send_signal_locked()`/`__send_signal_locked()`, `complete_signal()`, `signal_wake_up_state()`, and `get_signal()`: the core signal-queuing and dequeuing implementation
 - [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`: where `TIF_SIGPENDING` is checked on the way back to userspace
@@ -298,7 +298,7 @@ static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
 - [include/linux/sched/signal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/signal.h) — `signal_struct`: per-process `shared_pending`
 - [include/linux/signal_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/signal_types.h) — `struct sigpending` definition
 
-### Man pages
+### Man pages {#man-pages}
 
 - [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html) — signal list, default dispositions, and the standard-vs-real-time queuing distinction
 - [sigaction(2)](https://man7.org/linux/man-pages/man2/sigaction.2.html) — `struct sigaction` and the `SA_*` flags
@@ -307,11 +307,11 @@ static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
 - [signalfd(2)](https://man7.org/linux/man-pages/man2/signalfd.2.html) — signals delivered as `read()`-able file descriptor events
 - [signal-safety(7)](https://man7.org/linux/man-pages/man7/signal-safety.7.html) — which functions may safely be called from a signal handler
 
-### Related pages
+### Related pages {#related-pages}
 
 - [eventfd and signalfd](eventfd-signalfd.md) — a fuller treatment of `signalfd`, including `struct signalfd_siginfo` and the `epoll` integration pattern
 - [Pipes and FIFOs](pipes.md) — `SIGPIPE` when writing to a broken pipe
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Ghosts of Unix past, part 3: Unfixable designs](https://lwn.net/Articles/414618/) — Neil Brown on why the original signal design became unfixably complicated, and how `signalfd()` sidesteps it by making delivery synchronous

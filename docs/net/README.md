@@ -1,8 +1,8 @@
-# Networking
+# Networking {#networking}
 
 > From socket() to the wire: how packets traverse the Linux network stack
 
-## The stack at a glance
+## The stack at a glance {#the-stack-at-a-glance}
 
 ```
 Application: send(fd, buf, len)
@@ -28,9 +28,9 @@ Application: send(fd, buf, len)
 
 Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read only one page.
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 
 | Page | What it covers |
 |------|----------------|
@@ -39,7 +39,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [sk_buff](sk-buff.md) | The packet data structure everything else shares |
 | [NAPI](napi.md) | Interrupt mitigation: from IRQ storm to polling |
 
-### Packet lifecycle
+### Packet lifecycle {#packet-lifecycle}
 
 | Page | What it covers |
 |------|----------------|
@@ -47,7 +47,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [Life of a Packet: TX](life-of-packet-tx.md) | Application to NIC, step by step |
 | [What Happens in connect()](connect.md) | Three-way handshake from the kernel's side |
 
-### TCP/IP
+### TCP/IP {#tcpip}
 
 | Page | What it covers |
 |------|----------------|
@@ -57,7 +57,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [IP Routing](ip-routing.md) | FIB, rules, multipath |
 | [epoll](epoll.md) | Readiness notification at scale |
 
-### Filtering & traffic control
+### Filtering & traffic control {#filtering-traffic-control}
 
 | Page | What it covers |
 |------|----------------|
@@ -66,7 +66,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [Connection Tracking](conntrack.md) | conntrack entries, NAT, helpers |
 | [Traffic Control (tc/qdisc)](tc-qdisc.md) | Queuing disciplines, shaping, fq_codel |
 
-### High performance & offload
+### High performance & offload {#high-performance-offload}
 
 | Page | What it covers |
 |------|----------------|
@@ -75,7 +75,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [kTLS](ktls.md) | TLS record processing in the kernel |
 | [Packet Sockets](packet-socket.md) | AF_PACKET, tcpdump's view of the world |
 
-### Namespaces & virtualization
+### Namespaces & virtualization {#namespaces-virtualization}
 
 | Page | What it covers |
 |------|----------------|
@@ -83,7 +83,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [Container Networking](container-networking.md) | Bridges, NAT, overlay basics |
 | [TUN/TAP](tun-tap.md) | Userspace network devices, VPNs |
 
-### Interfaces & observability
+### Interfaces & observability {#interfaces-observability}
 
 | Page | What it covers |
 |------|----------------|
@@ -93,7 +93,7 @@ Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read 
 | [Buffer Tuning](net-buffer-tuning.md) | Socket buffers, rmem/wmem, autotuning |
 | [/proc/net/snmp Reference](proc-snmp.md) | Reading the protocol counters |
 
-### War stories
+### War stories {#war-stories}
 
 | Page | What it covers |
 |------|----------------|

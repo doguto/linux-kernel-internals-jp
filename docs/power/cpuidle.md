@@ -1,8 +1,8 @@
-# cpuidle: CPU C-states and Idle Power Management
+# cpuidle: CPU C-states and Idle Power Management {#cpuidle-cpu-c-states-and-idle-power-management}
 
 > Hardware sleep states, latency/power tradeoffs, and the cpuidle governor framework
 
-## CPU C-states
+## CPU C-states {#cpu-c-states}
 
 When a CPU has no work to do, it enters a **C-state** (idle state). Each state trades deeper power savings for higher wake-up latency:
 
@@ -48,7 +48,7 @@ done
 # C6: latency=85µs power=0mW
 ```
 
-## cpuidle framework
+## cpuidle framework {#cpuidle-framework}
 
 The Linux cpuidle framework selects which C-state to enter when the CPU is idle:
 
@@ -100,7 +100,7 @@ struct cpuidle_driver {
 };
 ```
 
-### intel_idle driver
+### intel_idle driver {#intel_idle-driver}
 
 The `intel_idle` driver provides Intel-specific C-states with known latencies:
 
@@ -164,11 +164,11 @@ static __cpuidle int intel_idle(struct cpuidle_device *dev,
 }
 ```
 
-## cpuidle governors
+## cpuidle governors {#cpuidle-governors}
 
 The governor decides which C-state to enter based on expected idle duration:
 
-### ladder governor
+### ladder governor {#ladder-governor}
 
 Simple: tries to stay at or near the current state; moves up/down by comparing the *actual* residency in the last state entered against the neighboring states' exit latencies (`drivers/cpuidle/governors/ladder.c`):
 
@@ -186,7 +186,7 @@ elif last_residency < exit_latency[last_state]:
     → demote to last_state - 1  (DEMOTION_COUNT == 1, so this is immediate)
 ```
 
-### menu governor (default for tickless systems)
+### menu governor (default for tickless systems) {#menu-governor-default-for-tickless-systems}
 
 Predicts idle duration using the next timer event and historical data. As of current mainline, `menu_select()` no longer has an iowait-based correction input (an older iowaiters-aware `which_bucket()` variant was removed) -- the prediction is now purely timer- and history-driven:
 
@@ -207,7 +207,7 @@ Predicts idle duration using the next timer event and historical data. As of cur
 /* Output: selected C-state index */
 ```
 
-### TEO governor (Timer Events Oriented, Linux 5.1+)
+### TEO governor (Timer Events Oriented, Linux 5.1+) {#teo-governor-timer-events-oriented-linux-51}
 
 More accurate for modern tickless systems:
 
@@ -219,7 +219,7 @@ cat /sys/devices/system/cpu/cpuidle/current_governor
 echo teo > /sys/devices/system/cpu/cpuidle/current_governor
 ```
 
-## Disabling C-states
+## Disabling C-states {#disabling-c-states}
 
 For latency-sensitive workloads, disable deep C-states:
 
@@ -262,7 +262,7 @@ os.close(fd)
 "
 ```
 
-## Statistics and observability
+## Statistics and observability {#statistics-and-observability}
 
 ```bash
 # Per-CPU per-state time and usage:
@@ -319,7 +319,7 @@ tracepoint:power:cpu_idle /args->state == 4294967295 && @start[cpu]/
 }'
 ```
 
-## Power consumption impact
+## Power consumption impact {#power-consumption-impact}
 
 ```bash
 # Measure power with powertop:
@@ -335,9 +335,9 @@ cat /sys/class/powercap/intel-rapl:0:1/energy_uj     # uncore energy
 turbostat --show PkgWatt,PkgTmp --interval 1
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/cpuidle.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpuidle.h) — `struct cpuidle_state`, `struct cpuidle_device`, `struct cpuidle_driver`
 - [drivers/idle/intel_idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/idle/intel_idle.c) — Intel C-state driver: `skl_cstates[]` table and the `intel_idle()`/MWAIT entry path
@@ -345,17 +345,17 @@ turbostat --show PkgWatt,PkgTmp --interval 1
 - [drivers/cpuidle/governors/teo.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpuidle/governors/teo.c) — the Timer Events Oriented governor
 - [kernel/sched/idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/idle.c) — `cpuidle_idle_call()`, the idle loop that invokes the governor and driver
 
-### Related pages
+### Related pages {#related-pages}
 
 - [cpufreq and P-states](cpufreq.md) — frequency scaling (orthogonal to C-states)
 - [Real-Time Tuning](../sched/rt-tuning.md) — CPU isolation and frequency-scaling tuning for RT tasks
 - [The Scheduling Tick](../sched/sched-tick.md) — NOHZ interaction with cpuidle
 - [hrtimers](../time/hrtimers.md) — timers that interrupt idle
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: cpuidle: New timer events oriented governor for tickless systems](https://lwn.net/Articles/769571/) — Rafael Wysocki's original patch and rationale for the TEO governor, merged in Linux 5.1
 
-### External
+### External {#external}
 
 - [Documentation/admin-guide/pm/cpuidle.rst](https://docs.kernel.org/admin-guide/pm/cpuidle.html) — upstream CPUIdle subsystem admin guide: governors, drivers, the `disable` and `pm_qos_resume_latency_us` sysfs knobs

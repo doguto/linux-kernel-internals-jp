@@ -1,10 +1,10 @@
-# Trace Events and Dynamic Events
+# Trace Events and Dynamic Events {#trace-events-and-dynamic-events}
 
 > The kernel's thousands of built-in instrumentation points — how they're defined, filtered, and triggered — and how to add your own at runtime
 
 The [ring buffer](ring-buffer.md) records events; **trace events** are what fills it. The kernel ships with thousands of them, and lets you attach your own. Understanding this layer is what turns "I can run a canned trace" into "I can ask the kernel a precise question."
 
-## Static trace events: `TRACE_EVENT`
+## Static trace events: `TRACE_EVENT` {#static-trace-events-trace_event}
 
 A static trace event is an instrumentation point a kernel developer placed with the `TRACE_EVENT` macro. From one macro the kernel generates three things: the tracepoint call site, a *typed record* of the fields it captures, and a self-describing **format** so tools know how to decode it. Because they're declared deliberately and are essentially free when disabled, static events are the stable, preferred instrumentation for production.
 
@@ -30,7 +30,7 @@ Enabling one is a single write:
 echo 1 > /sys/kernel/tracing/events/sched/sched_switch/enable
 ```
 
-## Filters: decide in-kernel what's worth recording
+## Filters: decide in-kernel what's worth recording {#filters-decide-in-kernel-whats-worth-recording}
 
 The `filter` file attaches a predicate that runs **before** the event is written to the buffer. Only matching events cost anything to record — the rest are discarded at the source, which is how you trace a busy event without drowning:
 
@@ -41,7 +41,7 @@ echo 'count > 4096' > events/syscalls/sys_enter_read/filter
 
 Filters reference the event's own fields (the ones listed in `format`) and support the usual comparisons and `&&` / `||`.
 
-## Triggers: act when an event fires
+## Triggers: act when an event fires {#triggers-act-when-an-event-fires}
 
 The `trigger` file attaches an *action* to an event. Instead of just recording, the kernel can react:
 
@@ -58,7 +58,7 @@ echo 'hist:key=comm:val=count' > events/syscalls/sys_enter_read/trigger
 cat events/syscalls/sys_enter_read/hist
 ```
 
-## Dynamic events: add instrumentation at runtime
+## Dynamic events: add instrumentation at runtime {#dynamic-events-add-instrumentation-at-runtime}
 
 When no static event exists where you need one, you can create one on the fly — it then appears under `events/` and behaves exactly like a built-in event (same enable/filter/trigger/format):
 
@@ -75,7 +75,7 @@ cat trace_pipe
 
 The result is a uniform model: whether an event is a decade-old static tracepoint or one you defined a second ago with a kprobe, it enables, filters, triggers, and decodes through the same tracefs interface. See [kprobes and tracepoints](kprobes-tracepoints.md) for how the underlying probes work.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: event tracing](https://docs.kernel.org/trace/events.html) — events, filters, and triggers
 - [Kernel docs: histogram triggers](https://docs.kernel.org/trace/histogram.html) — the in-kernel `hist` aggregation

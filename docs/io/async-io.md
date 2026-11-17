@@ -1,8 +1,8 @@
-# Async I/O Evolution
+# Async I/O Evolution {#async-io-evolution}
 
 > From POSIX AIO to Linux AIO to io_uring
 
-## The problem with synchronous I/O
+## The problem with synchronous I/O {#the-problem-with-synchronous-io}
 
 Synchronous `read()`/`write()` block the calling thread until data is transferred. For high-throughput servers this means either:
 
@@ -11,7 +11,7 @@ Synchronous `read()`/`write()` block the calling thread until data is transferre
 
 The goal of async I/O: submit I/O, do other work, collect results when ready.
 
-## POSIX AIO (glibc userspace)
+## POSIX AIO (glibc userspace) {#posix-aio-glibc-userspace}
 
 POSIX AIO (`aio_read`, `aio_write`) is the standard API — but the Linux glibc implementation fakes it with threads:
 
@@ -53,7 +53,7 @@ aio_suspend(list, 1, NULL);
 - Context switches to the worker thread and back
 - No kernel bypass — still goes through the kernel per-thread
 
-## Linux Kernel AIO
+## Linux Kernel AIO {#linux-kernel-aio}
 
 Linux added native async I/O in 2.6 (`io_submit`, `io_getevents`). Unlike POSIX AIO, this runs in the kernel — no threads.
 
@@ -89,7 +89,7 @@ if (n == 1) {
 io_destroy(ctx);
 ```
 
-### Linux AIO limitations
+### Linux AIO limitations {#linux-aio-limitations}
 
 Linux AIO was designed specifically for `O_DIRECT` I/O. It has serious limitations:
 
@@ -104,7 +104,7 @@ Linux AIO was designed specifically for `O_DIRECT` I/O. It has serious limitatio
 
 The result: Linux AIO only helps databases already using `O_DIRECT`. It does not solve the general async I/O problem.
 
-### Kernel path for Linux AIO
+### Kernel path for Linux AIO {#kernel-path-for-linux-aio}
 
 ```c
 /* fs/aio.c */
@@ -135,7 +135,7 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb, ...)
 }
 ```
 
-## io_uring: solving the problem properly
+## io_uring: solving the problem properly {#io_uring-solving-the-problem-properly}
 
 `io_uring` (merged in Linux 5.1, 2019) addresses all Linux AIO limitations. It uses two shared-memory ring buffers between kernel and userspace:
 
@@ -155,7 +155,7 @@ Userspace                    Kernel
 
 No locking needed: SQ tail is written by userspace, SQ head by kernel; CQ tail by kernel, CQ head by userspace.
 
-### Basic io_uring usage
+### Basic io_uring usage {#basic-io_uring-usage}
 
 ```c
 #include <liburing.h>
@@ -179,7 +179,7 @@ io_uring_cqe_seen(&ring, cqe);
 io_uring_queue_exit(&ring);
 ```
 
-### io_uring vs Linux AIO
+### io_uring vs Linux AIO {#io_uring-vs-linux-aio}
 
 | Feature | Linux AIO | io_uring |
 |---------|-----------|---------|
@@ -194,7 +194,7 @@ io_uring_queue_exit(&ring);
 | openat/statx/unlinkat | No | Yes |
 | Zero syscalls | No | Yes (with SQPOLL) |
 
-### io_uring SQPOLL: zero-syscall I/O
+### io_uring SQPOLL: zero-syscall I/O {#io_uring-sqpoll-zero-syscall-io}
 
 With `IORING_SETUP_SQPOLL`, a kernel thread polls the SQ ring:
 
@@ -216,7 +216,7 @@ io_uring_submit(&ring);  /* may return without syscall */
 
 Useful for NVMe with polled queues (`IORING_SETUP_IOPOLL` + `IORING_SETUP_SQPOLL`): latency of 50-100µs with zero syscalls.
 
-### io_uring request chaining
+### io_uring request chaining {#io_uring-request-chaining}
 
 ```c
 /* Chain: read file → write to socket, only if read succeeds */
@@ -232,7 +232,7 @@ io_uring_submit(&ring);
 /* Kernel executes read, then send (if read succeeded) */
 ```
 
-### io_uring kernel internals
+### io_uring kernel internals {#io_uring-kernel-internals}
 
 ```c
 /* io_uring/io_uring.c */
@@ -259,7 +259,7 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
 
 io_uring first attempts the operation inline (non-blocking). If it would block, it falls back to a `io-wq` worker thread (similar to a kernel thread pool but cheaper than POSIX AIO's userspace threads).
 
-## epoll limitations for file I/O
+## epoll limitations for file I/O {#epoll-limitations-for-file-io}
 
 For completeness: `epoll` does not solve async file I/O:
 
@@ -278,7 +278,7 @@ epoll_wait(epfd, events, 10, -1);
 
 Regular files always appear ready to epoll because the VFS has no mechanism to notify when a page cache miss resolves. Only sockets and pipes have genuine readiness semantics.
 
-## Choosing the right async I/O
+## Choosing the right async I/O {#choosing-the-right-async-io}
 
 | Scenario | Recommendation |
 |----------|---------------|
@@ -289,7 +289,7 @@ Regular files always appear ready to epoll because the VFS has no mechanism to n
 | Socket-only server | epoll + non-blocking sockets |
 | Buffered file I/O, simple | Sync read/write + thread pool |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Direct I/O](direct-io.md) — O_DIRECT, alignment requirements
 - [io_uring: Architecture](../io-uring/io-uring-arch.md) — ring setup, SQE/CQE layout

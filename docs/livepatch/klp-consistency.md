@@ -1,8 +1,8 @@
-# KLP Consistency Model
+# KLP Consistency Model {#klp-consistency-model}
 
 > How the kernel ensures all tasks are in a safe state before activating a patch
 
-## The problem
+## The problem {#the-problem}
 
 Applying a live patch is not instantaneous. At the moment the patch is loaded,
 some tasks may be executing inside the old function — mid-stack, with local
@@ -15,7 +15,7 @@ only considering the patch fully active once every task has reached a safe
 point: returned from the old function, entered a freezable sleep, or reached
 the kernel's exit-to-userspace path.
 
-## Per-task patch state
+## Per-task patch state {#per-task-patch-state}
 
 Each task carries a `patch_state` field in `struct task_struct`
 (`include/linux/sched.h`). During a live patch transition the field holds one
@@ -40,7 +40,7 @@ The transition direction can be either forward (enabling a patch:
 `KLP_TRANSITION_UNPATCHED` → `KLP_TRANSITION_PATCHED`) or backward (disabling
 a patch: `KLP_TRANSITION_PATCHED` → `KLP_TRANSITION_UNPATCHED`).
 
-### How klp_update_patch_state() works
+### How klp_update_patch_state() works {#how-klpupdatepatch_state-works}
 
 `klp_update_patch_state()` is the function that moves a single task from one
 state to the next:
@@ -70,7 +70,7 @@ kernel-exit-to-userspace path (`__exit_to_user_mode_loop()` in
 `kernel/entry/common.c`) whenever `TIF_PATCH_PENDING` is set, and directly on
 every task by `klp_force_transition()` for a forced transition.
 
-## Stack checking: klp_check_stack()
+## Stack checking: klp_check_stack() {#stack-checking-klpcheckstack}
 
 `klp_update_patch_state()` does **not** run a stack check — it's an
 unconditional flag-check-and-clear. That's safe on the kernel-exit-to-userspace
@@ -219,7 +219,7 @@ the stack unwound cleanly but a to-be-patched or to-be-unpatched function was
 found on it. Either way the task is skipped for this transition round; the
 transition machinery will retry on the next workqueue invocation.
 
-## The transition workqueue
+## The transition workqueue {#the-transition-workqueue}
 
 A single work item, `klp_transition_work`, drives the transition loop:
 
@@ -277,7 +277,7 @@ void klp_try_complete_transition(void)
 
 The periodic re-check runs approximately every second (one HZ).
 
-## klp_send_signals(): nudging blocked tasks
+## klp_send_signals(): nudging blocked tasks {#klpsendsignals-nudging-blocked-tasks}
 
 `klp_send_signals()` does **not** send any POSIX signal. The actual mechanism:
 
@@ -290,7 +290,7 @@ Neither path can wake a task in `TASK_UNINTERRUPTIBLE` (D state). D-state tasks 
 every 15 seconds (every `SIGNALS_TIMEOUT`th incomplete retry round, at the
 ~1-second-per-round cadence described above) once the transition has stalled.
 
-## Patch stacking: func_stack and struct klp_ops
+## Patch stacking: func_stack and struct klp_ops {#patch-stacking-funcstack-and-struct-klpops}
 
 When multiple live patches are active at the same time, each patching the same
 function, the kernel must know which replacement is currently active. This is
@@ -329,7 +329,7 @@ This arrangement, called *patch stacking*, means patches
 do not need to be aware of each other — the stack handles ordering
 automatically.
 
-## Forced transitions
+## Forced transitions {#forced-transitions}
 
 If a transition is stuck and cannot complete (for example, a kthread that
 loops forever inside the old function), a forced transition can be triggered:
@@ -390,7 +390,7 @@ Only use forced transitions as a last resort after confirming — by reading
 `/proc/<pid>/stack` — that the affected task is not in a call path the new
 function relies upon.
 
-## klp_complete_transition(): finalizing the patch
+## klp_complete_transition(): finalizing the patch {#klpcompletetransition-finalizing-the-patch}
 
 Once every task has been transitioned, `klp_complete_transition()` is called:
 
@@ -455,7 +455,7 @@ static void klp_complete_transition(void)
 After `klp_complete_transition()` returns, the `transition` sysfs file reads
 `0` and the patch is fully active.
 
-## Observing the transition
+## Observing the transition {#observing-the-transition}
 
 ```bash
 # Is the patch still transitioning?
@@ -485,7 +485,7 @@ dmesg | grep livepatch
 # livepatch: 'mypatch': patching complete
 ```
 
-## Transition state machine
+## Transition state machine {#transition-state-machine}
 
 ```
 klp_enable_patch()  →  __klp_enable_patch()
@@ -520,28 +520,28 @@ klp_enable_patch()  →  __klp_enable_patch()
        │          touched by klp_complete_transition())
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — `klp_check_stack()`, `klp_try_complete_transition()`, `klp_update_patch_state()`, `klp_force_transition()`, and the rest of the transition state machine
 - [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_ftrace_handler()`, which walks `func_stack` to pick the active replacement, plus `klp_patch_func()`/`klp_unpatch_func()`
 - [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — the `/sys/kernel/livepatch/<patch>/{transition,force}` sysfs attributes
 - [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`, `struct klp_object`, `struct klp_patch`, and the transition-state constants
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Live Patching](klp.md) — struct klp_func/klp_patch, ftrace redirection, shadow variables
 - [Cumulative Patches and Atomic Replace](klp-cumulative.md) — patch stacking and .replace=true
 - [KLP State: Custom Consistency Checks](klp-state.md) — the `klp_state` API for changes stack scanning alone can't validate
 - [ftrace](../tracing/ftrace.md) — the ftrace hook that KLP uses
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: livepatch: consistency model](https://lwn.net/Articles/632582/) — the original 2015 design writeup for the per-task, stack-checking transition model implemented in `kernel/livepatch/transition.c`
 - [LWN: An update on live kernel patching](https://lwn.net/Articles/734765/) — 2017 status report covering the hybrid lazy-migration/stack-checking model and why the ORC unwinder was needed for reliable stack checks
 
-### External
+### External {#external}
 
 - [Kernel docs: Livepatch](https://docs.kernel.org/livepatch/livepatch.html) — upstream description of the consistency model, the `force` and `transition` sysfs files, and patch stacking via `func_stack`
 - [Kernel docs: Reliable Stacktrace](https://docs.kernel.org/livepatch/reliable-stacktrace.html) — why livepatch requires a reliable (not best-effort) stack unwinder for the stack-checking path

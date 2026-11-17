@@ -1,10 +1,10 @@
-# Block Layer War Stories
+# Block Layer War Stories {#block-layer-war-stories}
 
 > Real bugs where the block layer met the messy reality of hardware, concurrency, and stacked devices — and what each one taught
 
 The block layer's job looks simple: carry bytes between memory and a device. In practice it sits between untrusted device firmware below and a tower of stacked virtual devices above, all while I/O flows concurrently and the configuration can change underneath it. Each of these stories is a place where one of those realities bit hard.
 
-## 1. The SSD that lied about TRIM
+## 1. The SSD that lied about TRIM {#1-the-ssd-that-lied-about-trim}
 
 **Symptom.** Filesystems on certain SSDs developed silent data corruption once `discard` (TRIM) was enabled — files reading back as zeros or garbage, with no I/O errors reported.
 
@@ -14,7 +14,7 @@ The block layer's job looks simple: carry bytes between memory and a device. In 
 
 **Lesson.** "The device reports that it supports X" is a claim, not a guarantee. A storage stack that trusts firmware blindly will corrupt data; a per-device quirk/blacklist is an unglamorous but essential defense, and it never really shrinks.
 
-## 2. The page that changed mid-flight
+## 2. The page that changed mid-flight {#2-the-page-that-changed-mid-flight}
 
 **Symptom.** Sporadic, maddeningly unreproducible integrity errors on setups using **iSCSI data digests**, **DIF/DIX** protection information, or software RAID — a checksum computed over data that was correct in memory would fail to match downstream.
 
@@ -24,7 +24,7 @@ The bug was in propagation. Device-mapper did not carry `BDI_CAP_STABLE_WRITES` 
 
 **Lesson.** In a stacked block device, a correctness requirement is only as strong as its *weakest* layer. A capability that one layer silently drops on the way up breaks the entire stack — and the resulting bugs are rare and non-deterministic, the hardest kind to chase.
 
-## 3. Swapping the engine while the car is moving
+## 3. Swapping the engine while the car is moving {#3-swapping-the-engine-while-the-car-is-moving}
 
 **Symptom.** Crashes and use-after-free reports when changing a device's I/O scheduler at runtime (`echo bfq > /sys/block/sdX/queue/scheduler`) under load.
 
@@ -34,7 +34,7 @@ The bug was in propagation. Device-mapper did not carry `BDI_CAP_STABLE_WRITES` 
 
 **Lesson.** Runtime-reconfigurable subsystems — swap the scheduler, resize the queue, all while live I/O flows — are a rich seam of lifetime bugs. The fix is almost always the same shape: make the transition atomic with respect to everything that can observe it.
 
-## The recurring themes
+## The recurring themes {#the-recurring-themes}
 
 Across these very different failures, the same three pressures show up:
 
@@ -42,7 +42,7 @@ Across these very different failures, the same three pressures show up:
 - **Requirements must propagate.** Stacked devices only work if every layer honors the constraints of the layers below (story 2).
 - **Reconfiguration races the datapath.** Anything you can change at runtime can be changed *during* an I/O (story 3).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: block layer](https://docs.kernel.org/block/index.html)
 - [`6fc4d97a4987`](https://git.kernel.org/linus/6fc4d97a4987) — the first queued-TRIM blacklist entry

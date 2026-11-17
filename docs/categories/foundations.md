@@ -1,4 +1,4 @@
-# Foundations
+# Foundations {#foundations}
 
 The groundwork the rest of the kernel builds on: how it boots, meets the hardware, exposes itself to user space, and keeps time.
 

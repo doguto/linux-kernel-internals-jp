@@ -1,8 +1,8 @@
-# TUN/TAP Virtual Network Devices
+# TUN/TAP Virtual Network Devices {#tuntap-virtual-network-devices}
 
 > Userspace networking: how VPNs, QEMU, and container networks work
 
-## What are TUN and TAP?
+## What are TUN and TAP? {#what-are-tun-and-tap}
 
 TUN and TAP are virtual network devices implemented entirely in software. They let userspace programs **send and receive network traffic** by reading and writing to a file descriptor.
 
@@ -26,7 +26,7 @@ TUN/TAP:               Userspace program (VPN, VM, etc.)
 | Frames | Raw IP packets | Full Ethernet frames (with MAC) |
 | Use case | VPN tunnels (OpenVPN, WireGuard) | VM networking (QEMU), bridge |
 
-## Creating a TUN interface
+## Creating a TUN interface {#creating-a-tun-interface}
 
 ```c
 #include <linux/if_tun.h>
@@ -73,7 +73,7 @@ int tun_fd = tun_alloc(tun_name, IFF_TUN | IFF_NO_PI);
 /* ip addr add 10.0.0.1/24 dev tun0 */
 ```
 
-## Reading and writing packets
+## Reading and writing packets {#reading-and-writing-packets}
 
 ```c
 /* Reading: a packet arrived on the TUN interface */
@@ -86,7 +86,7 @@ ssize_t sent = write(tun_fd, packet, packet_len);
 /* The kernel treats this as if a packet arrived on tun0 */
 ```
 
-## Minimal VPN server implementation
+## Minimal VPN server implementation {#minimal-vpn-server-implementation}
 
 ```c
 /* Simplified: userspace VPN using TUN */
@@ -137,7 +137,7 @@ int main(void)
 }
 ```
 
-## WireGuard's virtual interface
+## WireGuard's virtual interface {#wireguards-virtual-interface}
 
 WireGuard is implemented as a kernel module that registers its own netdev type
 (`wireguard`), **not** the generic TUN driver. It manages its own net_device
@@ -156,7 +156,7 @@ ip addr add 10.0.0.2/24 dev wg0
 # Received UDP → WireGuard decrypts → appears to arrive on wg0
 ```
 
-## TAP for VM networking (QEMU)
+## TAP for VM networking (QEMU) {#tap-for-vm-networking-qemu}
 
 ```bash
 # QEMU uses TAP for full L2 networking (Ethernet frames):
@@ -178,9 +178,9 @@ qemu-system-x86_64 \
 # Can get DHCP from the LAN, communicate with other VMs via br0
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### struct tun_struct
+### struct tun_struct {#struct-tun_struct}
 
 ```c
 /* drivers/net/tun.c */
@@ -208,7 +208,7 @@ struct tun_struct {
 };
 ```
 
-### Packet flow: write to TUN fd → kernel
+### Packet flow: write to TUN fd → kernel {#packet-flow-write-to-tun-fd-kernel}
 
 ```c
 /* When userspace writes a packet to the TUN file descriptor: */
@@ -240,7 +240,7 @@ static ssize_t tun_chr_write_iter(struct kiocb *iocb, struct iov_iter *from)
 }
 ```
 
-### Packet flow: kernel → read from TUN fd
+### Packet flow: kernel → read from TUN fd {#packet-flow-kernel-read-from-tun-fd}
 
 ```c
 /* When a packet is routed to the TUN device (written to userspace): */
@@ -266,7 +266,7 @@ drop:
 }
 ```
 
-## Multiqueue TUN (for performance)
+## Multiqueue TUN (for performance) {#multiqueue-tun-for-performance}
 
 ```c
 /* Enable multiqueue to use multiple CPU queues: */
@@ -282,7 +282,7 @@ for (int i = 0; i < NUM_QUEUES; i++) {
 /* Kernel hashes packets to queues based on flow 5-tuple */
 ```
 
-## vhost: kernel-accelerated TUN for QEMU
+## vhost: kernel-accelerated TUN for QEMU {#vhost-kernel-accelerated-tun-for-qemu}
 
 For VMs, **vhost** moves the TUN packet forwarding from QEMU userspace into the kernel, eliminating context switches:
 
@@ -303,7 +303,7 @@ qemu-system-x86_64 \
     ...
 ```
 
-## Observing TUN/TAP
+## Observing TUN/TAP {#observing-tuntap}
 
 ```bash
 # List TUN/TAP interfaces:
@@ -328,7 +328,7 @@ ps aux | grep vhost
 cat /proc/$(pgrep vhost)/status
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [virtio](../virtualization/virtio.md) — paravirtual networking using TAP
 - [Network Namespaces](net-namespaces.md) — isolated network stacks with veth pairs

@@ -1,4 +1,4 @@
-# Kernel Core War Stories
+# Kernel Core War Stories {#kernel-core-war-stories}
 
 > Init ordering, boot parameter bugs, panic loops, and more
 
@@ -11,15 +11,15 @@ Each case below illustrates a fundamental property of how the kernel core works 
 
 ---
 
-## Case 1: initcall ordering bug breaking the network stack
+## Case 1: initcall ordering bug breaking the network stack {#case-1-initcall-ordering-bug-breaking-the-network-stack}
 
-### The problem
+### The problem {#the-problem}
 
 A team was integrating a new Ethernet driver into their embedded product. The driver registered a netdev and immediately called into the network core to set up some statistics infrastructure during its initialization function. On their development kernel the driver worked fine. On the production kernel — built with a slightly different Kconfig — the system hung at boot with a NULL pointer dereference in `net_device_ops`.
 
 The oops appeared during the `calling ... returned ...` initcall debug output, partway through the `core_initcall` level (level 1), before any `device_initcall` drivers had run.
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 With `initcall_debug` enabled on the production kernel, the oops trace looked like this:
 
@@ -36,7 +36,7 @@ The driver's init function was calling `mydriver_net_stats_init()`, which called
 
 Level 1 runs before level 4. The network subsystem's internal state — in particular the per-CPU softnet_data structures — had not been allocated yet. The driver was reaching into uninitialized memory.
 
-### Root cause
+### Root cause {#root-cause}
 
 The driver's registration macro read:
 
@@ -47,7 +47,7 @@ core_initcall(mydriver_core_init);
 
 It had been written as `core_initcall` because the developer confused "core" to mean "this is a core part of our system" rather than "this runs at initcall level 1, before subsystems like networking."
 
-### Fix
+### Fix {#fix}
 
 ```c
 /* CORRECT: runs at level 6, after all subsystem init */
@@ -57,15 +57,15 @@ module_init(mydriver_core_init);
 
 Moving to `device_initcall` (or equivalently `module_init`) places the driver at initcall level 6, after `subsys_initcall` level 4 where `net_dev_init()` runs. The initialization succeeded immediately.
 
-### Lesson
+### Lesson {#lesson}
 
 The initcall level names are not descriptive of what *your* code is — they describe when your code runs relative to other things. Most drivers belong at `device_initcall` (`module_init`). Use an earlier level only when you have an explicit reason to run before a specific subsystem, and verify that every subsystem you call into initializes at an earlier level. The `initcall_debug` boot parameter makes this visible at runtime.
 
 ---
 
-## Case 2: "Freeing init memory" crash due to `__init` section misuse
+## Case 2: "Freeing init memory" crash due to `__init` section misuse {#case-2-freeing-init-memory-crash-due-to-__init-section-misuse}
 
-### The problem
+### The problem {#the-problem_1}
 
 A storage driver had worked correctly for several kernel versions. After a refactoring pass, a field engineer reported that systems loaded with the driver would oops approximately 30 minutes after boot — specifically whenever the driver processed a certain type of I/O request under memory pressure. The oops showed:
 
@@ -82,7 +82,7 @@ Call Trace:
 
 `Bad page state` with `flags: reserved` is a signature of accessing memory that has been freed by `free_initmem()`.
 
-### Diagnosis
+### Diagnosis {#diagnosis_1}
 
 The `reserved` flag is set on pages that belong to the init sections. After `free_initmem()` runs, these pages are returned to the allocator and the `reserved` flag is cleared. A "Bad page state" oops on a reserved-flagged page means code was holding a pointer into init memory and tried to use it after those pages had been freed and reallocated.
 
@@ -124,11 +124,11 @@ static void my_driver_handle_io(struct request *rq)
 
 The bug was latent for the entire uptime and only triggered when certain requests arrived — making it look unrelated to the refactoring.
 
-### Root cause
+### Root cause {#root-cause_1}
 
 The refactoring had moved `decompress_init_helper` to a new file and a developer added `__init` to it, reasoning that it was "only used during initialization." This is true for the case of processing compressed firmware at probe time, but the function pointer was stored for potential later use.
 
-### Fix
+### Fix {#fix_1}
 
 Remove `__init` from any function whose pointer might be stored and called after boot:
 
@@ -143,21 +143,21 @@ static int decompress_init_helper(struct request *rq,
 
 Alternatively, if the function truly is only needed during init, do not store its pointer anywhere that persists past the init phase. Use the pointer immediately and set it to NULL afterward — but this is fragile. The safe rule is: if a function pointer is stored in a data structure with `__data` lifetime, the pointed-to function must not be `__init`.
 
-### Lesson
+### Lesson {#lesson_1}
 
 The `__init` annotation has a deceptively simple appearance. It is not just a hint to the compiler — it changes the physical page that contains the function, and that page is freed after boot. Any stored function pointer to `__init` code is a time bomb. KASAN will not catch this if the page gets reallocated to something other than slab memory. The correct detection strategies are: enabling generic KASAN (`CONFIG_KASAN_GENERIC`), which will report the invalid access if the freed init page is reclaimed as slab memory; or a compile-time/load-time audit using `init_section_contains()` to verify that no function pointer stored in persistent data points into the `.init.text` range. (`CONFIG_KASAN_VMALLOC` is not applicable here — `__init` text lives in the direct-mapped kernel image, not in vmalloc space.)
 
 ---
 
-## Case 3: panic loop — kdump not capturing the crash
+## Case 3: panic loop — kdump not capturing the crash {#case-3-panic-loop-kdump-not-capturing-the-crash}
 
-### The problem
+### The problem {#the-problem_2}
 
 A production server began exhibiting a reboot loop. The system would come up, run for a while, panic (for an unrelated reason — a buggy NIC driver under development), and then reboot without leaving a vmcore for analysis. The operations team had set up kdump for exactly this purpose: the crash kernel was configured, the `kexec -p` was run at boot time by a systemd unit, and `/proc/vmcore` was expected to appear in the crash kernel environment. Instead the system just rebooted cleanly.
 
 Without a vmcore, diagnosing the underlying NIC driver bug was nearly impossible.
 
-### Diagnosis
+### Diagnosis {#diagnosis_2}
 
 The first clue was in the crash kernel's `dmesg`, captured via serial console. The serial console logged the crash kernel's boot sequence but it ended abruptly:
 
@@ -177,7 +177,7 @@ The original kernel had 256 GB of RAM. A vmcore of a 256 GB system — even afte
 
 The crash kernel panicked, triggering `emergency_restart()`, and the system rebooted cleanly as if nothing had happened.
 
-### Root cause
+### Root cause {#root-cause_2}
 
 The `crashkernel=128M` reservation was set when the system had 16 GB of RAM and was never updated when the system was upgraded to 256 GB. The rule of thumb for `crashkernel` sizing scales with the amount of RAM in the system because:
 
@@ -187,7 +187,7 @@ The `crashkernel=128M` reservation was set when the system had 16 GB of RAM and 
 
 Total: for a 256 GB system, `crashkernel=512M` or more is appropriate.
 
-### Fix
+### Fix {#fix_2}
 
 ```bash
 # In /etc/default/grub:
@@ -208,15 +208,15 @@ echo c > /proc/sysrq-trigger
 
 `crashkernel=auto` is not a value the mainline kernel's own command-line parser understands — `kernel/crash_reserve.c` has no special case for the string "auto"; it expects a concrete size. The auto-sizing some distributions expose is done by their own userspace tooling (e.g. dracut/kdump installer scripts), which computes a size from installed RAM and writes a concrete `crashkernel=N` value into the bootloader config. Whatever size a given distribution's tooling picks, it is still a fixed reservation from the last time it ran — it does not adapt automatically if RAM is later added, which is exactly the failure mode in this case.
 
-### Lesson
+### Lesson {#lesson_2}
 
 kdump is a second kernel bootstrapped from reserved memory. That reservation must be sized for the work the crash kernel will do, which scales with the RAM of the production kernel, not a fixed value. The kdump configuration must be tested — the worst time to discover it does not work is during an actual production incident. Run periodic `echo c > /proc/sysrq-trigger` tests in a maintenance window and verify that vmcore files are produced and analyzable.
 
 ---
 
-## Case 4: boot parameter typo causing silent SMP misconfiguration
+## Case 4: boot parameter typo causing silent SMP misconfiguration {#case-4-boot-parameter-typo-causing-silent-smp-misconfiguration}
 
-### The problem
+### The problem {#the-problem_3}
 
 A sysadmin managing a fleet of QEMU virtual machines added a kernel command line parameter intended to limit each VM to 4 CPUs. The parameter was added to the VM's GRUB configuration:
 
@@ -226,7 +226,7 @@ GRUB_CMDLINE_LINUX="... mxcpus=4"
 
 The VMs booted without error. `dmesg` showed no warnings at a glance. Application performance monitoring showed the VMs were using more CPU than expected — a workload that should run on 4 CPUs was clearly using all 8 available. On investigation, `nproc` returned 8 and `/proc/cpuinfo` showed all 8 CPUs.
 
-### Diagnosis
+### Diagnosis {#diagnosis_3}
 
 The correct parameter is `maxcpus=4`, not `mxcpus=4`. The kernel does not recognize `mxcpus`, so `parse_args()` reaches its fallback handler. Since the parameter does not match any `__setup()` handler, and does not contain a `.` (which would indicate a module parameter), it is logged and passed to the init process as an environment variable:
 
@@ -238,11 +238,11 @@ dmesg | grep -i 'unknown\|mxcpus'
 
 The message is logged via `pr_notice()` (`KERN_NOTICE`, level 5) — not `KERN_WARNING` — but at a console loglevel of 4, as many distributions configure for a quiet boot (the upstream Kconfig default, `CONFIG_CONSOLE_LOGLEVEL_DEFAULT`, is actually 7), it still does not appear on the screen: only messages below the console loglevel are printed. The message goes only to the ring buffer. The SMP initialization code never saw the parameter, so all 8 CPUs came online.
 
-### Root cause
+### Root cause {#root-cause_3}
 
 The kernel's policy for unknown parameters is to pass them to the init process as environment variables, not to fail. This is intentional: some parameters are genuinely meant for the init system (e.g., `systemd.unit=emergency.target`), and the kernel cannot distinguish between "a user typo" and "a valid init parameter." The failure is silent from the kernel's perspective.
 
-### Detection
+### Detection {#detection}
 
 ```bash
 # Check for unknown parameters that were passed to userspace:
@@ -258,15 +258,15 @@ grep 'maxcpus' Documentation/admin-guide/kernel-parameters.txt
 
 Some distributions include `bootparamchk` or similar tools in their initramfs to validate command line parameters against a known-good list. For automated deployments, comparing `nproc` against the expected CPU count in a post-boot health check catches this class of error immediately.
 
-### Lesson
+### Lesson {#lesson_3}
 
 The kernel silently accepts unknown parameters — by design. A typo in a critical boot parameter produces no error, only a log message buried in hundreds of lines of dmesg output. Operational processes should verify that the expected effect occurred (check CPU count, memory limits, etc.) rather than assuming the parameter took effect. For fleet management, define the expected post-boot state in a configuration management tool and assert it.
 
 ---
 
-## Case 5: module init returning wrong error code
+## Case 5: module init returning wrong error code {#case-5-module-init-returning-wrong-error-code}
 
-### The problem
+### The problem {#the-problem_4}
 
 A driver for a custom PCIe device passed code review and was merged into the company's internal tree. During integration testing, the driver appeared to load successfully — `modprobe` returned exit code 0, `lsmod` showed the driver loaded, and the device responded to initial commands. But over the following days, sporadic memory leak reports appeared in the kernel log:
 
@@ -282,7 +282,7 @@ unreferenced object 0xffff9d4b81234500 (size 512):
 
 `kmemleak` (enabled in the debug kernel) was tracking allocations that were never freed.
 
-### Diagnosis
+### Diagnosis {#diagnosis_4}
 
 The driver's `init()` function allocated internal state, registered a character device, and registered a PCI driver. If the PCI driver registration failed (because the device was not present on some test machines), the function was supposed to clean up and return an error. Instead:
 
@@ -334,11 +334,11 @@ A return value `> 0` only triggers a warning — it does *not* fail the load. Th
 
 Subsequent access through the character device (or driver framework callbacks) reached freed memory or missing registrations. The kmemleaks came from a slightly different path: on machines where the PCI device was present but returned a transient error, `cdev_add` had registered the device but `pci_register_driver` failed. The `cdev_del` ran, but a racing process had already opened the character device, preventing the `cdev_del` from fully completing. The state allocation (`mydriver_state`) was freed while references to it still existed.
 
-### Root cause
+### Root cause {#root-cause_4}
 
 `return 1` is not a valid return code for a module init function. The kernel's convention is: 0 = success, negative errno = failure. A positive return is treated as success but is meaningless — it is neither a valid errno nor documented as a success code variant. The mistake was compounded by the half-cleanup that ran: the function freed resources but reported success, leaving the module in an impossible state.
 
-### Fix
+### Fix {#fix_3}
 
 ```c
     ret = pci_register_driver(&mydriver_pci_driver);
@@ -380,13 +380,13 @@ err_free_state:
 }
 ```
 
-### Lesson
+### Lesson {#lesson_4}
 
 Module init functions must return 0 on success or a negative errno on failure. A positive return is treated as success and the module is considered loaded, even if internal state is inconsistent. Positive values from kernel API functions (like a device minor number or a count) must not be returned directly from `init()`. The `goto`-based error path pattern (sometimes called "gotos for error handling") makes the cleanup order explicit and hard to get wrong. Tools like `kmemleak` and KASAN are invaluable for catching the resulting inconsistencies in development and CI.
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Early Boot and start_kernel()](early-boot.md) — initcall levels and ordering
 - [Module Init and Initcalls](initcalls-modules.md) — `load_module()`, error code handling
@@ -398,7 +398,7 @@ Module init functions must return 0 on success or a negative errno on failure. A
 - [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `do_one_initcall()` and the level-by-level initcall dispatch (`do_initcall_level()`), plus `unknown_bootoption()`/`print_unknown_bootoptions()` behind Case 4
 - [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `do_init_module()`: `if (ret > 0) pr_warn("%s: init suspiciously returned %d, it should follow 0/-E convention\n", ...)`, the real kernel code that would have caught Case 5's bug at load time
 
-## External references
+## External references {#external-references}
 
 - [Kernel documentation: Kdump Support](https://docs.kernel.org/admin-guide/kdump/kdump.html) — `crashkernel=` sizing syntax and guidance (e.g. `crashkernel=512M-2G:64M,2G-:128M`), the scaling-with-RAM rule behind Case 3
 - [Kernel documentation: Kernel Parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — "if it doesn't recognize a parameter and it doesn't contain a '.', the parameter gets passed to init: parameters with '=' go into init's environment" — the exact mechanism behind Case 4's silent `mxcpus=4` typo

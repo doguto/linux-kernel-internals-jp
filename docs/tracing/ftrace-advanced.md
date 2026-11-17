@@ -1,12 +1,12 @@
-# ftrace Advanced: Histograms, Triggers, and Function Tracing
+# ftrace Advanced: Histograms, Triggers, and Function Tracing {#ftrace-advanced-histograms-triggers-and-function-tracing}
 
 > Beyond basic tracing: aggregating data in-kernel without overhead
 
-## ftrace recap
+## ftrace recap {#ftrace-recap}
 
 The basic ftrace interface lives at `/sys/kernel/tracing/` (also reachable at the older `/sys/kernel/debug/tracing/`). The [ftrace basics page](ftrace.md) covers the foundational setup. This page covers advanced features: in-kernel histograms, triggers, synthetic events, and the `function_graph` tracer.
 
-## Event triggers
+## Event triggers {#event-triggers}
 
 Triggers execute actions when a tracepoint fires, without copying data to the trace buffer:
 
@@ -27,11 +27,11 @@ echo '!stacktrace if bytes_req > 1048576' > \
     events/kmem/kmalloc/trigger
 ```
 
-## Histogram triggers (hist:)
+## Histogram triggers (hist:) {#histogram-triggers-hist}
 
 Histograms aggregate event data **in the kernel**, reducing overhead compared to reading individual events:
 
-### Count by key
+### Count by key {#count-by-key}
 
 ```bash
 # Count syscalls by PID
@@ -49,7 +49,7 @@ cat events/raw_syscalls/sys_enter/hist
 # { id:        1 } hitcount:   8901  # write
 ```
 
-### Aggregate values
+### Aggregate values {#aggregate-values}
 
 ```bash
 # Sum bytes written per PID
@@ -68,7 +68,7 @@ cat events/kmem/kmalloc/hist
 # { call_site: tcp_sendmsg              } bytes_req:   524288
 ```
 
-### Two-event latency measurement
+### Two-event latency measurement {#two-event-latency-measurement}
 
 Measure time between pairs of events using `onmatch`:
 
@@ -90,7 +90,7 @@ echo 'hist:keys=lat:
     events/syscalls/sys_exit_read/trigger
 ```
 
-### Synthetic events: derived events from two sources
+### Synthetic events: derived events from two sources {#synthetic-events-derived-events-from-two-sources}
 
 ```bash
 # Create a synthetic event that fires with latency data
@@ -113,7 +113,7 @@ cat trace
 # wakeup_latency: lat=45 pid=1234 comm=myapp
 ```
 
-## function_graph tracer
+## function_graph tracer {#function_graph-tracer}
 
 `function_graph` traces both function entry and exit, showing the call tree with duration:
 
@@ -144,7 +144,7 @@ cat trace | head -30
 
 `+` = >10µs, `!` = >100µs, `#` = >1ms, `$` = >10ms
 
-### Filter to specific functions
+### Filter to specific functions {#filter-to-specific-functions}
 
 ```bash
 # Trace only VFS and ext4 functions
@@ -157,7 +157,7 @@ echo vfs_read > set_graph_function
 echo '__irq_*' > set_graph_notrace
 ```
 
-## function tracer with call graph
+## function tracer with call graph {#function-tracer-with-call-graph}
 
 The `function` tracer records every function call (very high overhead):
 
@@ -174,7 +174,7 @@ cat trace_stat/function0 | sort -k2 -n -r | head -20
 # vfs_read              12345  123456us   10.0us
 ```
 
-### Dynamic function tracing
+### Dynamic function tracing {#dynamic-function-tracing}
 
 ```bash
 # Trace all calls to a specific module's functions:
@@ -187,7 +187,7 @@ echo '*alloc*page*' > set_ftrace_filter
 cat available_filter_functions | grep 'ext4_'
 ```
 
-## Under the hood: how ftrace patches functions
+## Under the hood: how ftrace patches functions {#under-the-hood-how-ftrace-patches-functions}
 
 The reason function tracing can be switched on and off at runtime with *zero* overhead when off is that ftrace rewrites the kernel's own machine code.
 
@@ -197,7 +197,7 @@ When you enable a filter, ftrace patches the `NOP` at each selected function bac
 
 The registration side is `struct ftrace_ops` (`include/linux/ftrace.h`): a callback plus a filter hash naming which functions it wants. Crucially, many subsystems register their own `ftrace_ops` on the *same* infrastructure — the function and `function_graph` tracers, kprobes placed on function entries, [live patching](../livepatch/klp.md), and BPF `fentry`/`fexit` programs all ride the single `__fentry__` hook. That shared mechanism is why "attach something to the entry of a kernel function" is one cheap, well-worn path rather than a dozen separate hacks.
 
-## Stack tracer: find stack depth offenders
+## Stack tracer: find stack depth offenders {#stack-tracer-find-stack-depth-offenders}
 
 ```bash
 # Enable stack tracer (built as module or CONFIG_STACK_TRACER)
@@ -216,7 +216,7 @@ cat stack_max_size
 # 6560
 ```
 
-## trace-cmd: scripted ftrace
+## trace-cmd: scripted ftrace {#trace-cmd-scripted-ftrace}
 
 `trace-cmd` is a userspace wrapper that simplifies ftrace usage:
 
@@ -235,7 +235,7 @@ trace-cmd report | head -50
 kernelshark trace.dat
 ```
 
-## perf with ftrace
+## perf with ftrace {#perf-with-ftrace}
 
 ```bash
 # perf ftrace: uses ftrace under the hood
@@ -245,7 +245,7 @@ perf ftrace -G vfs_read,vfs_write ls /tmp
 perf ftrace latency -T vfs_read -- dd if=/dev/zero of=/dev/null bs=4k count=10000
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ftrace](ftrace.md) — ftrace basics and setup
 - [Kprobes and Tracepoints](kprobes-tracepoints.md) — adding tracepoints to kernel code

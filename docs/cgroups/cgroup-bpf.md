@@ -1,18 +1,18 @@
-# Cgroup BPF Programs
+# Cgroup BPF Programs {#cgroup-bpf-programs}
 
 > Attaching eBPF programs to cgroups for network policy, device control, and resource accounting
 
-## Overview
+## Overview {#overview}
 
 BPF programs can be attached to cgroup directories and run for every process in that cgroup and its descendants. This gives you programmable, per-cgroup policy without patching the kernel or writing kernel modules. A cgroup BPF program executes in the kernel at a well-defined hook point — a socket being created, a packet arriving, a device node being opened — and decides what to do.
 
 Unlike traditional cgroup controllers (which expose a fixed set of interface files), cgroup BPF lets you express arbitrary policy in a verified, sandboxed program. The same mechanism powers Kubernetes NetworkPolicy enforcement, container device whitelists, and per-service TCP tuning.
 
-## Attach types
+## Attach types {#attach-types}
 
 Attach types are defined in `include/uapi/linux/bpf.h` as `enum bpf_attach_type`. The cgroup-related ones:
 
-### Network packet filtering
+### Network packet filtering {#network-packet-filtering}
 
 `BPF_CGROUP_INET_INGRESS` / `BPF_CGROUP_INET_EGRESS`
 
@@ -40,7 +40,7 @@ int block_internal(struct __sk_buff *skb)
 }
 ```
 
-### Socket creation control
+### Socket creation control {#socket-creation-control}
 
 `BPF_CGROUP_INET_SOCK_CREATE`
 
@@ -59,7 +59,7 @@ int restrict_raw_sockets(struct bpf_sock *sk)
 
 This is lighter-weight than seccomp filtering on `socket()` because the BPF program has access to socket metadata without needing to decode syscall arguments.
 
-### TCP lifecycle hooks
+### TCP lifecycle hooks {#tcp-lifecycle-hooks}
 
 `BPF_CGROUP_SOCK_OPS`
 
@@ -87,7 +87,7 @@ int set_buffer_sizes(struct bpf_sock_ops *skops)
 
 Attaching this to a service's cgroup applies the TCP tuning to all sockets opened by that service — without touching the global `sysctl` values that affect all processes on the host.
 
-### Device access control
+### Device access control {#device-access-control}
 
 `BPF_CGROUP_DEVICE`
 
@@ -109,7 +109,7 @@ int device_policy(struct bpf_cgroup_dev_ctx *ctx)
 
 `BPF_CGROUP_DEVICE` is the cgroup v2 replacement for the legacy `devices` cgroup v1 controller. The v1 controller exposed `devices.allow` / `devices.deny` files; cgroup v2 dropped the `devices` controller entirely and relies on `BPF_CGROUP_DEVICE` instead. Container runtimes like runc generate and load a `BPF_CGROUP_DEVICE` program from the OCI spec's `linux.resources.devices` list.
 
-### Sysctl interception
+### Sysctl interception {#sysctl-interception}
 
 `BPF_CGROUP_SYSCTL`
 
@@ -128,13 +128,13 @@ int sysctl_filter(struct bpf_sysctl *ctx)
 }
 ```
 
-### Socket option interception
+### Socket option interception {#socket-option-interception}
 
 `BPF_CGROUP_GETSOCKOPT` / `BPF_CGROUP_SETSOCKOPT`
 
 Called when `getsockopt(2)` or `setsockopt(2)` is issued. The program can override the option value seen by the application (useful for returning per-cgroup defaults) or block certain socket options entirely.
 
-## Attach flags
+## Attach flags {#attach-flags}
 
 When attaching a program with `bpf(BPF_PROG_ATTACH, ...)`, the `flags` field controls the hierarchy behavior:
 
@@ -146,7 +146,7 @@ When attaching a program with `bpf(BPF_PROG_ATTACH, ...)`, the `flags` field con
 
 `BPF_F_ALLOW_MULTI` is the most common in practice — it allows a platform-level policy at the root cgroup and per-container refinements in child cgroups, with both executing.
 
-## The syscall interface
+## The syscall interface {#the-syscall-interface}
 
 ```c
 /* Attach a program to a cgroup */
@@ -170,7 +170,7 @@ bpf(BPF_PROG_QUERY, &attr, sizeof(attr));
 
 With `libbpf`, the higher-level API is `bpf_prog_attach()` / `bpf_prog_detach()`.
 
-## Practical example: per-container egress rate limiting
+## Practical example: per-container egress rate limiting {#practical-example-per-container-egress-rate-limiting}
 
 Cgroup BPF does not provide a built-in rate-limiter (that is the job of the `io` controller for block I/O, or TC for network). The pattern is to combine a `BPF_CGROUP_INET_EGRESS` program with a TC `qdisc` (e.g., `tbf` or `fq`) on the container's `veth` interface:
 
@@ -192,7 +192,7 @@ The BPF program itself uses `bpf_skb_store_bytes()` or sets `skb->mark` to a con
 
 For a purely BPF approach, a custom token-bucket implemented in a `BPF_MAP_TYPE_ARRAY` (with atomic operations) can rate-limit packets directly from the `BPF_CGROUP_INET_EGRESS` hook by dropping packets when the bucket is empty.
 
-## Inspecting attached programs
+## Inspecting attached programs {#inspecting-attached-programs}
 
 ```bash
 # Show all BPF programs attached to a cgroup subtree:
@@ -210,7 +210,7 @@ bpftool cgroup show /sys/fs/cgroup/
 
 `bpftool cgroup tree` recurses through the hierarchy and lists every attached program with its ID, name, and flags. Use `bpftool prog show id 42` to inspect a specific program's bytecode, maps, and BTF information.
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
 The kernel runs cgroup BPF programs from the hot paths of network, socket, and device subsystems. The internal entry points use the `__cgroup_bpf_run_filter_*()` family (double-underscore prefix), defined in `include/linux/bpf-cgroup.h` and invoked via `BPF_CGROUP_RUN_PROG_*` wrapper macros:
 
@@ -257,7 +257,7 @@ struct cgroup_bpf {
 
 When a program is attached, `update_effective_progs()` (called from `__cgroup_bpf_attach()`) walks from root to the target cgroup and rebuilds the `effective[]` prog arrays for the cgroup and all its descendants. `cgroup_bpf_inherit()` is a separate function called only at cgroup creation time to copy inherited programs from the parent. The hot path only dereferences `effective[]` via `BPF_PROG_RUN_ARRAY()` — there is no hierarchy walk at runtime.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Cgroup v2 Architecture](cgroup-v2.md) — `struct cgroup` and the unified hierarchy
 - [Container Isolation](container-isolation.md) — how BPF device policy fits with seccomp and capabilities

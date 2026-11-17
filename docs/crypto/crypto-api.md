@@ -1,12 +1,12 @@
-# Kernel Crypto API
+# Kernel Crypto API {#kernel-crypto-api}
 
 > Symmetric ciphers, AEAD, hash functions, and hardware acceleration
 
-## Overview
+## Overview {#overview}
 
 The Linux kernel crypto API provides a unified interface to cryptographic operations. Callers request a transform by name (e.g., `"gcm(aes)"`, `"sha256"`) and the subsystem selects the best available implementation — software fallback or hardware accelerator.
 
-## struct crypto_alg
+## struct crypto_alg {#struct-crypto_alg}
 
 Every cryptographic algorithm registers a `struct crypto_alg`:
 
@@ -45,7 +45,7 @@ struct crypto_alg {
 };
 ```
 
-## SKCIPHER: symmetric ciphers
+## SKCIPHER: symmetric ciphers {#skcipher-symmetric-ciphers}
 
 SKCIPHER (symmetric key cipher) is the API for symmetric block ciphers like AES-CBC, AES-XTS, ChaCha20:
 
@@ -87,7 +87,7 @@ skcipher_request_free(req);
 crypto_free_skcipher(tfm);
 ```
 
-### Common cipher names
+### Common cipher names {#common-cipher-names}
 
 ```
 "cbc(aes)"          AES-CBC (128/192/256 bit key)
@@ -99,7 +99,7 @@ crypto_free_skcipher(tfm);
 "ecb(aes)"          AES-ECB (avoid — deterministic)
 ```
 
-## AEAD: authenticated encryption
+## AEAD: authenticated encryption {#aead-authenticated-encryption}
 
 AEAD (Authenticated Encryption with Associated Data) provides confidentiality AND integrity in one operation. AES-GCM is the most common kernel AEAD:
 
@@ -146,7 +146,7 @@ if (ret == -EBADMSG)
     pr_err("Authentication failed — data corrupted or tampered\n");
 ```
 
-## Hash functions
+## Hash functions {#hash-functions}
 
 ```c
 #include <crypto/hash.h>
@@ -168,7 +168,7 @@ crypto_shash_digest(desc, data, datalen, digest);
 crypto_free_shash(tfm);
 ```
 
-### HMAC
+### HMAC {#hmac}
 
 ```c
 struct crypto_shash *tfm = crypto_alloc_shash("hmac(sha256)", 0, 0);
@@ -181,7 +181,7 @@ u8 mac[32];
 crypto_shash_digest(desc, message, msglen, mac);
 ```
 
-## Asynchronous (ahash) API
+## Asynchronous (ahash) API {#asynchronous-ahash-api}
 
 For large data or hardware offload, use the async hash API:
 
@@ -202,7 +202,7 @@ if (ret == -EINPROGRESS)
     wait_for_completion(&completion);  /* hardware processing */
 ```
 
-## Hardware acceleration
+## Hardware acceleration {#hardware-acceleration}
 
 The crypto subsystem automatically uses hardware accelerators when available. The `cra_priority` field determines selection:
 
@@ -224,7 +224,7 @@ cat /proc/crypto | grep -A 10 "name.*gcm"
 modprobe tcrypt mode=0
 ```
 
-### Intel AES-NI
+### Intel AES-NI {#intel-aes-ni}
 
 AES-NI adds hardware instructions for AES rounds. The kernel implementation uses them via SIMD (SSE/AVX) register operations:
 
@@ -256,7 +256,7 @@ The `crypto_simd_usable()`/fallback branch used when SIMD isn't available (e.g. 
 
 `kernel_fpu_begin()` is relatively expensive (saves ~512 bytes of SIMD state), so AES-NI is most beneficial for large buffers.
 
-## AF_ALG: userspace access to kernel crypto
+## AF_ALG: userspace access to kernel crypto {#af_alg-userspace-access-to-kernel-crypto}
 
 AF_ALG sockets expose kernel crypto to userspace. The kernel's own documentation
 ([`userspace-if.rst`](https://docs.kernel.org/crypto/userspace-if.html), cited below) is blunt
@@ -291,7 +291,7 @@ sendmsg(opfd, &msg, 0);
 recvmsg(opfd, &msg_out, 0);
 ```
 
-## Observing the crypto subsystem
+## Observing the crypto subsystem {#observing-the-crypto-subsystem}
 
 ```bash
 # All registered algorithms with priority
@@ -310,9 +310,9 @@ cat /sys/kernel/debug/qat_*/fw_counters
 perf stat -e instructions,cycles cryptsetup benchmark
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/crypto.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/crypto.h) — `struct crypto_alg`, `CRYPTO_ALG_TYPE_*`, and the `cra_*` flag bits
 - [include/crypto/skcipher.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/skcipher.h) — `crypto_alloc_skcipher()`, `skcipher_request_set_crypt()`, and the full SKCIPHER API surface
@@ -321,7 +321,7 @@ perf stat -e instructions,cycles cryptsetup benchmark
 - [arch/x86/crypto/aesni-intel_glue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/crypto/aesni-intel_glue.c) — the real AES-NI SKCIPHER implementations (`cbc_encrypt()`, `ecb_encrypt()`, the `DEFINE_GCM_ALGS()` AEAD family) and their registered `cra_priority` values
 - [Documentation/crypto/userspace-if.rst](https://docs.kernel.org/crypto/userspace-if.html) — the AF_ALG user-space interface; as of this kernel it opens with an explicit deprecation notice (see note below)
 
-### Related pages
+### Related pages {#related-pages}
 
 - [dm-crypt and fscrypt](encryption.md) — the main consumer of SKCIPHER/AEAD for storage encryption
 - [crypto_engine: Hardware Offload Framework](crypto-engine.md) — how DMA-based hardware accelerators plug into the `cra_priority` selection this page describes
@@ -329,12 +329,12 @@ perf stat -e instructions,cycles cryptsetup benchmark
 - [Random Number Generation](rng.md) — `crypto_alloc_rng()` and the DRBG algorithms exposed through this same API
 - [Crypto War Stories](war-stories.md) — IV reuse, timing side channels, and a hardware accelerator that silently corrupted AES-GCM output
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [A netlink-based user-space crypto API](https://lwn.net/Articles/410763/) — Jake Edge, October 20, 2010: Herbert Xu's original proposal for the `AF_ALG` address family covered in this page
 - [WireGuard and the crypto API](https://lwn.net/Articles/802376/) — Jake Edge, October 16, 2019: Jason Donenfeld's and Linus Torvalds's criticism of the abstract AEAD/SKCIPHER interfaces for performance-critical, compile-time-known transforms
 - [Progress in modernizing kernel cryptography](https://lwn.net/Articles/1077427/) — Joe Brockmeier, July 8, 2026: Eric Biggers on the overhead of the `struct crypto_alg`/SKCIPHER/AEAD model described on this page, and the ongoing move toward simpler `lib/crypto` library functions
 
-### External
+### External {#external}
 
 - [NIST SP 800-38D: Recommendation for Block Cipher Modes of Operation — GCM and GMAC](https://csrc.nist.gov/pubs/sp/800/38/d/final) — the specification behind `"gcm(aes)"`, including the 96-bit IV recommendation used in the AEAD example above

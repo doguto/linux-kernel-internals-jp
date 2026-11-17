@@ -1,8 +1,8 @@
-# KVM Live Migration
+# KVM Live Migration {#kvm-live-migration}
 
 > How running VMs are transferred between hosts with minimal downtime
 
-## The goal
+## The goal {#the-goal}
 
 Live migration moves a running VM from one host to another while the VM continues executing. The VM is visible on the destination before the source stops — the handoff is invisible to guest workloads (or nearly so). The target: under 100 ms of guest-perceived pause.
 
@@ -26,11 +26,11 @@ Source host                          Destination host
 └────────────────────────────┘       └────────────────────────────┘
 ```
 
-## KVM dirty page tracking
+## KVM dirty page tracking {#kvm-dirty-page-tracking}
 
 KVM provides two mechanisms to track which guest pages have been modified since the last checkpoint.
 
-### Dirty log bitmap
+### Dirty log bitmap {#dirty-log-bitmap}
 
 Enable dirty tracking per memory slot with the `KVM_MEM_LOG_DIRTY_PAGES` flag:
 
@@ -72,7 +72,7 @@ struct kvm_clear_dirty_log clear = {
 ioctl(vm_fd, KVM_CLEAR_DIRTY_LOG, &clear);
 ```
 
-### Dirty ring (KVM_CAP_DIRTY_LOG_RING, kernel 5.11)
+### Dirty ring (KVM_CAP_DIRTY_LOG_RING, kernel 5.11) {#dirty-ring-kvmcapdirtylogring-kernel-511}
 
 The ring buffer approach replaces polling a bitmap with a per-vCPU ring that records dirty GFNs in order:
 
@@ -98,9 +98,9 @@ struct kvm_dirty_gfn {
 
 The dirty ring is mmap'd from the vCPU fd at offset `KVM_DIRTY_LOG_PAGE_OFFSET * PAGE_SIZE` (a separate region from `struct kvm_run`, which is at offset 0). QEMU reads the ring as vCPU threads produce entries, avoiding the need to poll a bitmap and re-write-protect all pages.
 
-## The three migration phases in detail
+## The three migration phases in detail {#the-three-migration-phases-in-detail}
 
-### Phase 1: Iterative pre-copy
+### Phase 1: Iterative pre-copy {#phase-1-iterative-pre-copy}
 
 QEMU on the source enables dirty logging, then repeatedly:
 
@@ -117,11 +117,11 @@ Pre-copy ends when the estimated remaining transfer time drops below the target 
 
 **Auto-converge**: if the dirty rate stays high and convergence is not happening, `mig_throttle_guest_down()` (in `migration/ram.c`) calls `cpu_throttle_set()` to periodically stall the vCPU threads, ramping the throttle percentage up by `cpu-throttle-increment` each time the `throttle-trigger-threshold` ratio is exceeded, up to `max-cpu-throttle`. This ensures migration completes at the cost of temporary guest performance degradation.
 
-### Phase 2: Stop-and-copy
+### Phase 2: Stop-and-copy {#phase-2-stop-and-copy}
 
 The source VM is paused. QEMU does a final `KVM_GET_DIRTY_LOG` pass and transfers all remaining dirty pages. Then it transfers CPU state.
 
-### Phase 3: CPU state transfer
+### Phase 3: CPU state transfer {#phase-3-cpu-state-transfer}
 
 Each vCPU's register state is saved on the source and restored on the destination with a set of ioctls:
 
@@ -160,9 +160,9 @@ ioctl(vcpu_fd, KVM_SET_LAPIC, &lapic);
 /* KVM_GET_NESTED_STATE / KVM_SET_NESTED_STATE — see nested-virt.md */
 ```
 
-## Device state
+## Device state {#device-state}
 
-### QEMU-emulated devices
+### QEMU-emulated devices {#qemu-emulated-devices}
 
 QEMU serializes device state using its VMState framework. Each device registers a `VMStateDescription`:
 
@@ -187,7 +187,7 @@ static const VMStateDescription vmstate_e1000 = {
 
 `VMSTATE_*` macros encode field type, offset, and size. QEMU's migration layer iterates all registered `VMStateDescription` structures, serializes each field, and streams the result to the destination over the migration transport.
 
-### vhost kernel backends
+### vhost kernel backends {#vhost-kernel-backends}
 
 Kernel-side vhost devices (vhost-net, vhost-blk) have state that QEMU cannot serialize directly because it lives in the kernel. The key state is the virtqueue position:
 
@@ -203,7 +203,7 @@ ioctl(vhost_fd, VHOST_SET_VRING_BASE, &state);
 
 For virtio devices backed by QEMU (not vhost), the virtqueue state is captured through QEMU's own `struct VirtQueue` (not the Linux kernel's `struct virtio_device`, which is a driver-side type in an entirely different codebase) via `vmstate_virtqueue` in `hw/virtio/virtio.c`, which includes `last_avail_idx` and `used_idx`.
 
-## Post-copy migration
+## Post-copy migration {#post-copy-migration}
 
 Post-copy flips the direction: the VM starts on the destination **before** all pages are transferred. Pages not yet copied are fetched from the source on demand.
 
@@ -242,7 +242,7 @@ Trade-offs of post-copy:
 | Page fetch latency | None after resume | Yes — each uncopied page stalls the vCPU |
 | Failure sensitivity | Can abort and resume on source | Once VM starts on dest, source failure is fatal |
 
-## Migration transports
+## Migration transports {#migration-transports}
 
 QEMU supports several transport channels:
 
@@ -255,7 +255,7 @@ QEMU supports several transport channels:
 
 **multifd** (multiple file descriptors) opens N parallel channels and assigns pages to channels in round-robin. Added as an experimental feature (`x-multifd-channels`) in QEMU 2.11, it stabilized — dropping the `x-` prefix, renamed to `multifd-channels` — in QEMU 4.0. With 8 channels on a 25 Gbps link, it can saturate bandwidth that a single TCP stream cannot due to per-stream throughput limits.
 
-## Observing migration
+## Observing migration {#observing-migration}
 
 ```bash
 # QEMU monitor: start migration
@@ -294,9 +294,9 @@ watch -n1 'cat /sys/kernel/debug/kvm/*/vcpu0/pf_taken'
 perf kvm stat report --event EPT_VIOLATION
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [virt/kvm/kvm_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/kvm_main.c) — `kvm_vm_ioctl_get_dirty_log()` / `kvm_vm_ioctl_clear_dirty_log()`: the `KVM_GET_DIRTY_LOG` and `KVM_CLEAR_DIRTY_LOG` implementations
 - [virt/kvm/dirty_ring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/dirty_ring.c) — `kvm_dirty_ring_push()` / `kvm_dirty_ring_reset()`: the `KVM_CAP_DIRTY_LOG_RING` ring-buffer implementation
@@ -304,7 +304,7 @@ perf kvm stat report --event EPT_VIOLATION
 - [mm/userfaultfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/userfaultfd.c) — `handle_userfault()` and the `UFFDIO_COPY` path used by QEMU's post-copy destination to service missing-page faults
 - [drivers/vhost/vhost.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/vhost.c) — `VHOST_GET_VRING_BASE` / `VHOST_SET_VRING_BASE` ioctl handlers for saving and restoring vring indices across migration
 
-### QEMU source
+### QEMU source {#qemu-source}
 
 QEMU migration is userspace code; per site policy these link to QEMU's own canonical GitLab repository, not a GitHub mirror.
 
@@ -315,24 +315,24 @@ QEMU migration is userspace code; per site policy these link to QEMU's own canon
 - [hw/net/e1000.c](https://gitlab.com/qemu-project/qemu/-/blob/master/hw/net/e1000.c) — `vmstate_e1000`: the `VMStateDescription` example referenced on this page
 - [qapi/migration.json](https://gitlab.com/qemu-project/qemu/-/blob/master/qapi/migration.json) — `throttle-trigger-threshold`, `cpu-throttle-increment`, and `multifd-channels` parameter definitions
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`userfaultfd(2)`](https://man7.org/linux/man-pages/man2/userfaultfd.2.html) — the syscall QEMU's post-copy destination uses to register guest RAM and receive `UFFD_EVENT_PAGEFAULT`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KVM Architecture](kvm-arch.md) — KVM ioctls, `struct kvm_run`, vCPU lifecycle
 - [KVM Exit Handling](kvm-exits.md) — EPT violations and exit-reason dispatch
 - [Nested Virtualization](nested-virt.md) — `KVM_GET_NESTED_STATE` for migrating L1 hypervisors
 - [Memory Virtualization](kvm-memory.md) — EPT/NPT, dirty page tracking, the balloon driver
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Page faults in user space: MADV_USERFAULT, remap_anon_range(), and userfaultfd()](https://lwn.net/Articles/615086/) — the original 2014 design discussion; states plainly that "the primary use case here is the live migration of virtual machines running under KVM"
 - [The next steps for userfaultfd()](https://lwn.net/Articles/718198/) — follow-up on userfaultfd's evolution, reiterating that it "was originally created to help with the live migration of virtual machines between physical hosts"
 - [Blocking userfaultfd() kernel-fault handling](https://lwn.net/Articles/819834/) — discusses demand-faulting pages across the network during migration, driven by userfaultfd events
 
-### External
+### External {#external}
 
 - [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — official ioctl reference covering `KVM_GET_DIRTY_LOG`, `KVM_CLEAR_DIRTY_LOG`, and `KVM_CAP_DIRTY_LOG_RING`
 - [Userfaultfd](https://docs.kernel.org/admin-guide/mm/userfaultfd.html) — kernel admin-guide documentation for the `MISSING`-mode fault handling used in post-copy

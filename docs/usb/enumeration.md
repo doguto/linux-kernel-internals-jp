@@ -1,10 +1,10 @@
-# USB Enumeration and Descriptors
+# USB Enumeration and Descriptors {#usb-enumeration-and-descriptors}
 
 > How a device that just appeared on the wire tells the host what it is — the descriptor hierarchy, the standard control requests that read it, and the reset-address-configure dance that ends with a driver bound
 
 When a USB device is plugged in, the host knows nothing about it — not its speed, not its identity, not what it can do. **Enumeration** is the conversation over the mandatory control endpoint (endpoint 0) that turns an anonymous newly-attached device into an addressed, configured device with drivers bound to its interfaces. Everything the host learns comes from the device's **descriptors**.
 
-## The descriptor hierarchy
+## The descriptor hierarchy {#the-descriptor-hierarchy}
 
 A device describes itself as a tree of fixed-format structures (defined in the kernel in `include/uapi/linux/usb/ch9.h`, mirroring "Chapter 9" of the USB specification):
 
@@ -30,7 +30,7 @@ Device descriptor              idVendor, idProduct, bDeviceClass,
 
 Class drivers layer their own **class-specific descriptors** into this tree — for example the CDC union descriptor, or the short HID descriptor — which the class driver, not usbcore, interprets. Some class data lives *outside* the tree entirely: a HID device's actual **report descriptor** isn't packed into the configuration blob but fetched separately with a class-specific `GET_DESCRIPTOR(Report)`.
 
-## The standard control requests
+## The standard control requests {#the-standard-control-requests}
 
 Enumeration is driven entirely by **standard device requests** on endpoint 0 — an 8-byte SETUP packet the host sends, defined once for every USB device:
 
@@ -44,7 +44,7 @@ Enumeration is driven entirely by **standard device requests** on endpoint 0 —
 
 These are the same requests `usb_control_msg()` issues, and they work *before* any driver exists — endpoint 0 is the one pipe guaranteed to be present the instant a device attaches.
 
-## The sequence
+## The sequence {#the-sequence}
 
 The hub driver, not the target device, orchestrates this:
 
@@ -57,7 +57,7 @@ The hub driver, not the target device, orchestrates this:
 7. **Configure.** `SET_CONFIGURATION` activates the chosen configuration. The device's endpoints (beyond 0) now exist and are usable.
 8. **Bind.** usbcore matches each interface against registered drivers and calls the winner's `->probe()`.
 
-## How drivers match
+## How drivers match {#how-drivers-match}
 
 A USB driver advertises what it handles with a `usb_device_id` table, matched during step 8:
 
@@ -74,7 +74,7 @@ Matching on `USB_DEVICE` binds one specific product; matching on `USB_INTERFACE_
 
 The whole enumerated tree is then visible from user space under `/sys/bus/usb/devices/` and via `lsusb -v`.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [USB overview](README.md) — the stack, the device model, and the transfer types these endpoints use
 - [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — descriptors, interfaces, and driver binding

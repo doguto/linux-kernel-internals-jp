@@ -1,4 +1,4 @@
-# The net/sched act_api Filter-Delete Race
+# The net/sched act_api Filter-Delete Race {#the-netsched-act_api-filter-delete-race}
 
 > CVE-2026-53264 — a 2017 comment's reasoning about RCU safety covered every reader that existed at the time; a 2023 scalability fix quietly added the one it hadn't, and another researcher independently found the resulting bug and built a working exploit for it as a fresh 0-day, with AI speeding up the exploit development
 
@@ -22,13 +22,13 @@ Actively exploited
 
 *Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
 
-## What happened
+## What happened {#what-happened}
 
 Two people found the same bug in Linux's traffic-control code, for completely unrelated reasons, with neither working from the other's find. A security researcher at OpenAI quietly reported a use-after-free upstream through normal channels, shortly before a hacking competition in Seoul. An intern at a Singapore security firm — hunting kernel bugs with AI assistance ahead of that same competition — had independently found the identical bug on their own and built it into a full local-root exploit; by their own account, they only learned about the upstream report after the competition was over.
 
 The vulnerability, CVE-2026-53264, is a locking/RCU mismatch, not sloppy code: two separate, individually reasonable kernel changes, made years apart, quietly combined into a bug neither author had reason to anticipate — leaving a window where deleting a network filter could free memory another CPU was still about to use.
 
-## How the code was vulnerable
+## How the code was vulnerable {#how-the-code-was-vulnerable}
 
 Linux [traffic control](../tc-qdisc.md) (`tc`) actions — the `gact`, `mirred`, and similar objects a filter runs when it matches a packet — are reference-counted `struct tc_action` objects, indexed per action-type in an IDR (`idr_find(idr, index)`) so that [netlink](../netlink.md) requests can look one up by its numeric index and either attach it to a new filter or delete it. Because the IDR is walked by lookups that only take `rcu_read_lock()`, not the mutex that protects *removing* entries from it, an action's memory has to stay valid for at least one RCU grace period after it's unlinked — otherwise a concurrent reader that found the pointer just before removal can dereference (or refcount) it just after the memory is freed.
 
@@ -85,7 +85,7 @@ timeline
          : 5057e1aca011 restores RCU-deferred freeing
 ```
 
-## The race
+## The race {#the-race}
 
 The fix commit's own description lays out the race with CPU0 running `RTM_NEWTFILTER` and CPU1 running `RTM_DELTFILTER` concurrently against the same action index:
 
@@ -127,7 +127,7 @@ sequenceDiagram
 
 The 2017 comment's blind spot wasn't about being wrong — its claim was correct for the one reader path it was written about. It just never occurred to anyone that "the readers I have in mind" is a claim that needs revisiting every time a new reader gets added, which is exactly what happened in 2023.
 
-## How it was found
+## How it was found {#how-it-was-found}
 
 **The original report.** Kyle Zeng, a security researcher at OpenAI, reported the race upstream. That attribution rests on two independent sources: the fix commit's own `Reported-by`/`Tested-by` trailers (`kylebot@openai.com`), and Lee Jia Jie's write-up, which separately names "KyleBot" — Zeng's long-standing handle — as the person who had already reported the bug. Neither the commit trailers nor Lee's write-up says how Zeng found it, and there's no public report thread — consistent with a private report made directly to a maintainer, though nothing confirms that.
 
@@ -141,7 +141,7 @@ Lee's write-up, published July 27, 2026 and titled ["When AI Makes 0-Days Feel L
 
 Lee describes using AI to speed up three tasks — finding the bug itself, producing a KASAN proof-of-concept, and improving the race condition as a whole — without saying which part of that process AI actually helped most with.
 
-## The impact
+## The impact {#the-impact}
 
 The full chain went well past triggering the UAF: reclaiming the freed `tc_action` memory with an attacker-controlled `user_key_payload` object to hijack a function pointer, a stack pivot from a controlled heap buffer, and a kernel-version-specific ROP chain that overwrites [`core_pattern`](https://docs.kernel.org/admin-guide/sysctl/kernel.html#core-pattern) to gain root execution through the core-dump handler — a working local-root exploit, not just a crash.
 
@@ -151,7 +151,7 @@ Winning the underlying race got substantially faster over several iterations: na
 
 That's a different measurement from how long the finished exploit takes end-to-end: in a separate 10-run benchmark of the complete chain (a CentOS 9 desktop on an Intel i5-1235U laptop), all 10 runs succeeded, taking 10, 10, 9, 11, 11, 111, 64, 69, 47, and 10 seconds; Lee attributes the slower outliers to CPU thermal throttling.
 
-## How it was fixed
+## How it was fixed {#how-it-was-fixed}
 
 **The first attempt didn't work.** Salim's initial patch ([v1](https://ratatoskr.run/netdev/2026/05/17064743/t), posted May 30, 2026) took the same general shape as the code it was reverting to: defer the free with an explicit `call_rcu()` callback, `tcf_action_rcu_free()`, that ran the full cleanup — including `tcf_action_cleanup()` — after the grace period elapsed.
 
@@ -184,7 +184,7 @@ sequenceDiagram
 
 `net/sched/act_api.c` at the `v7.0` tag still has the unconditional `kfree(p)`; current mainline has the restored `kfree_rcu(p, tcfa_rcu)` — consistent with public reporting that pins the mainline landing to `7.1-rc7`. The fix was backported separately to each affected stable branch as seven distinct commits — `98b2e40879ab`, `18af5d2ef0c4`, `1f1b98fea6b9`, `8b136f18ac4b`, `5dd51e09020c`, `b60e9391142e`, and `91d105d2cbe0`, covering 5.10.259, 5.15.210, 6.1.176, 6.6.143, 6.12.94, 6.18.36, and 7.0.13 — each one carrying its own `[ Upstream commit 5057e1aca011... ]` tag, and the `98b2e40879ab` backport's sign-off chain ends with Sasha Levin's stable-tree sign-off, as is standard for these backports.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **An RCU-safety argument has to cover every reader path that will ever exist, not just the ones that exist when it's written.** The 2017 reasoning wasn't wrong about filter-chain traversal, and it wasn't wrong about the IDR either — *at the time*, direct IDR lookups were still mutex-protected, so no RCU-only reader existed to violate the assumption. Six years later, an unrelated scalability fix added exactly that reader, and nobody went back to check whether the 2017 comment's guarantee still held.
 
@@ -199,14 +199,14 @@ sequenceDiagram
 !!! warning "Pattern to watch for"
     Any refcounted object reachable through both an RCU-read-locked lookup (an IDR, a hash table, an RCU-protected list) and a mutex-protected removal path needs the *free itself* deferred with `call_rcu()`/`kfree_rcu()` — a lock around removal doesn't help a lookup that only ever took the RCU read lock. If a comment justifies skipping deferred freeing by saying "readers can only reach this through path X, and X is already safe," audit every other path that can reach the same object before trusting it — not just the one the comment's author had in mind. That audit isn't a one-time check, either: if a later, unrelated change adds a *new* reader path to the same object — exactly what happened here, six years on — it needs to be checked against every existing safety comment that assumed a fixed set of readers, not just reviewed for correctness on its own terms.
 
-## See also
+## See also {#see-also}
 
 - [Traffic Control and Queueing Disciplines](../tc-qdisc.md) — the `tc` filter/action architecture this bug lives in
 - [Netlink Sockets](../netlink.md) — how `RTM_NEWTFILTER`/`RTM_DELTFILTER` requests reach the kernel
 - [Network Namespaces](../net-namespaces.md) — how unprivileged user+network namespaces expose the capabilities this exploit needs
 - [AF_PACKET TPACKET_V3 Privilege Escalation](af-packet.md) — another local UAF-to-root chain in this collection, for comparison
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: 5057e1aca011](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5057e1aca011e51ef51498c940ef96f3d3e8a305) — "net/sched: act_api: use RCU with deferred freeing for action lifecycle"
 - [git.kernel.org: d7fb60b9cafb](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d7fb60b9cafb982cb2e46a267646a8dfd4f2e5da) — "net_sched: get rid of tcfa_rcu", the 2017 change this fix reverts

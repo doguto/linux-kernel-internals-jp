@@ -1,8 +1,8 @@
-# Landlock: Unprivileged Sandboxing
+# Landlock: Unprivileged Sandboxing {#landlock-unprivileged-sandboxing}
 
 > Restrict a process's filesystem and network access without root — the new Linux sandbox LSM
 
-## What is Landlock?
+## What is Landlock? {#what-is-landlock}
 
 Landlock (merged in Linux 5.13 by Mickaël Salaün — [`17ae69aba89d`](https://git.kernel.org/linus/17ae69aba89dbfa2139b7f8024b757ab3cc42f59), [LWN](https://lwn.net/Articles/859908/)) is a Linux Security Module that allows **unprivileged processes** to restrict their own access to the filesystem (since 5.13) and TCP network ports (since Linux 6.7, ABI v4). Unlike seccomp which filters syscalls, Landlock controls resource access at a semantic level.
 
@@ -13,14 +13,14 @@ Key properties:
 - **Inherited**: child processes inherit the restrictions
 - **Stacked**: rules can only be restricted, never expanded
 
-## Use cases
+## Use cases {#use-cases}
 
 - Browsers sandboxing renderer processes
 - Language runtimes restricting downloaded code
 - Security-sensitive daemons reducing attack surface
 - Container runtimes as a defense-in-depth layer
 
-## API overview
+## API overview {#api-overview}
 
 ```c
 #include <linux/landlock.h>
@@ -55,7 +55,7 @@ int ruleset_fd = syscall(SYS_landlock_create_ruleset,
                           &ruleset_attr, sizeof(ruleset_attr), 0);
 ```
 
-### Step 2: Add rules
+### Step 2: Add rules {#step-2-add-rules}
 
 ```c
 /* Allow read access to /usr: */
@@ -98,7 +98,7 @@ syscall(SYS_landlock_add_rule,
         ruleset_fd, LANDLOCK_RULE_NET_PORT, &net_attr, 0);
 ```
 
-### Step 3: Enforce
+### Step 3: Enforce {#step-3-enforce}
 
 ```c
 /* Drop ambient capabilities (needed before enforce): */
@@ -112,7 +112,7 @@ close(ruleset_fd);
 /* Any access not covered by a rule → EACCES */
 ```
 
-## Complete sandbox example
+## Complete sandbox example {#complete-sandbox-example}
 
 ```c
 #include <fcntl.h>
@@ -214,7 +214,7 @@ int sandbox_init(void)
 }
 ```
 
-## Filesystem access rights
+## Filesystem access rights {#filesystem-access-rights}
 
 ```c
 /* File access rights: */
@@ -239,9 +239,9 @@ LANDLOCK_ACCESS_NET_BIND_TCP    /* bind() a TCP socket to a port */
 LANDLOCK_ACCESS_NET_CONNECT_TCP /* connect() a TCP socket to a port */
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### LSM hook
+### LSM hook {#lsm-hook}
 
 ```c
 /* security/landlock/fs.c */
@@ -259,7 +259,7 @@ static int hook_path_link(struct dentry *old_dentry,
 }
 ```
 
-### Rule storage
+### Rule storage {#rule-storage}
 
 ```c
 /* Rules are stored in a red-black tree keyed by inode number: */
@@ -275,7 +275,7 @@ struct landlock_ruleset {
 /* - All paths under that inode get the access rights */
 ```
 
-## Landlock vs seccomp vs AppArmor
+## Landlock vs seccomp vs AppArmor {#landlock-vs-seccomp-vs-apparmor}
 
 | Feature | seccomp | Landlock | AppArmor |
 |---------|---------|----------|----------|
@@ -287,7 +287,7 @@ struct landlock_ruleset {
 | Filesystem | Via syscall | Direct FS semantic | Yes |
 | Network | Via syscall | TCP port (v4+) | Yes |
 
-## Debugging
+## Debugging {#debugging}
 
 ```bash
 # Check Landlock support:
@@ -311,7 +311,7 @@ import ctypes, os
 strace -e open,openat,write ./sandboxed_program 2>&1 | grep EACCES
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [seccomp](seccomp.md) — syscall-level filtering
 - [LSM Framework](lsm.md) — how Landlock hooks into the LSM stack

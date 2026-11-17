@@ -1,8 +1,8 @@
-# Atomic Operations and Memory Barriers
+# Atomic Operations and Memory Barriers {#atomic-operations-and-memory-barriers}
 
 > The primitives that all higher-level synchronization is built on
 
-## What problem do atomics solve?
+## What problem do atomics solve? {#what-problem-do-atomics-solve}
 
 On modern CPUs, a simple `x++` compiles to three operations: load `x`, add 1, store `x`. If two CPUs run this simultaneously, both might load the same value and one increment is lost:
 
@@ -14,7 +14,7 @@ Result: x = 6 (should be 7)
 
 Atomic operations are hardware instructions that perform a read-modify-write as a single indivisible unit. No other CPU can see an intermediate state.
 
-## atomic_t and atomic64_t
+## atomic_t and atomic64_t {#atomict-and-atomic64t}
 
 ```c
 /* include/linux/atomic.h */
@@ -53,7 +53,7 @@ atomic_xor(mask, &a);
 int old = atomic_fetch_or(mask, &a);
 ```
 
-## Compare-and-swap (cmpxchg)
+## Compare-and-swap (cmpxchg) {#compare-and-swap-cmpxchg}
 
 The most powerful atomic: atomically compare a value with expected, and swap if equal:
 
@@ -86,7 +86,7 @@ void push(struct node *node)
 }
 ```
 
-## atomic_long_t
+## atomic_long_t {#atomiclongt}
 
 `atomic_long_t` is a pointer-sized atomic, useful for 64-bit values that need to fit in a pointer on all architectures:
 
@@ -98,7 +98,7 @@ atomic_long_add(n, &v);
 atomic_long_cmpxchg(&v, old, new);
 ```
 
-## READ_ONCE and WRITE_ONCE
+## READ_ONCE and WRITE_ONCE {#readonce-and-writeonce}
 
 Two CPUs accessing a variable simultaneously is undefined behavior in C. `READ_ONCE` and `WRITE_ONCE` prevent the compiler from:
 
@@ -119,7 +119,7 @@ WRITE_ONCE(flag, 0);
 
 These are the minimum necessary for any shared variable access. They don't provide ordering guarantees between CPUs — that's what memory barriers are for.
 
-## Memory barriers
+## Memory barriers {#memory-barriers}
 
 Modern CPUs and compilers reorder memory accesses for performance. On a single CPU this is invisible, but between CPUs it can break synchronization.
 
@@ -131,7 +131,7 @@ Load-load:   CPU may reorder two loads
 Store-load:  CPU may reorder a store followed by a load (most common)
 ```
 
-### Barrier types
+### Barrier types {#barrier-types}
 
 ```c
 /* Full barrier: no reordering across this point */
@@ -150,7 +150,7 @@ smp_load_acquire(ptr);   /* load + acquire barrier */
 smp_store_release(ptr, val);  /* release barrier + store */
 ```
 
-### Acquire-Release pattern
+### Acquire-Release pattern {#acquire-release-pattern}
 
 The most common barrier pattern is acquire/release, used for passing data from producer to consumer:
 
@@ -167,7 +167,7 @@ if (smp_load_acquire(&ready)) { /* (3) check: ready=1 before reading data */
 
 The release barrier in (2) ensures (1) is ordered before (2). The acquire barrier in (3) ensures (3) is ordered before (4). Together they form a happens-before relationship.
 
-### Atomic ordering variants
+### Atomic ordering variants {#atomic-ordering-variants}
 
 Atomic operations come in four ordering flavors:
 
@@ -196,9 +196,9 @@ atomic_op();
 smp_mb__after_atomic();
 ```
 
-## Common patterns
+## Common patterns {#common-patterns}
 
-### Reference counting (atomic_t)
+### Reference counting (atomic_t) {#reference-counting-atomic_t}
 
 ```c
 /* Simpler than kref for simple cases */
@@ -213,7 +213,7 @@ void put(void) {
 
 The kernel provides `kref` (kernel reference counting) that wraps atomic operations with cleaner semantics.
 
-### Flags (atomic_t as bitfield)
+### Flags (atomic_t as bitfield) {#flags-atomic_t-as-bitfield}
 
 ```c
 #define FLAG_BUSY    0
@@ -232,7 +232,7 @@ if (atomic_fetch_andnot(BIT(FLAG_BUSY), &flags) & BIT(FLAG_BUSY)) {
 
 For per-bit atomics, the kernel also provides `set_bit()`, `clear_bit()`, `test_and_set_bit()`, etc. on `unsigned long`.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Spinlock](spinlock.md) — Built on atomics and memory barriers
 - [Per-CPU variables](percpu.md) — Avoiding atomics entirely for per-CPU data

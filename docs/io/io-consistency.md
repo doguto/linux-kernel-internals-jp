@@ -1,8 +1,8 @@
-# I/O Consistency and Ordering
+# I/O Consistency and Ordering {#io-consistency-and-ordering}
 
 > What ordering guarantees does Linux provide for reads and writes, and how do you get stronger ones?
 
-## The problem with "written to disk"
+## The problem with "written to disk" {#the-problem-with-written-to-disk}
 
 When a `write()` system call returns, the data is in the page cache. It may reach storage seconds later, or not at all before a power failure. "Written to disk" means something specific only if enforced — and the default path enforces nothing beyond eventual writeback.
 
@@ -19,7 +19,7 @@ write()     fdatasync  fdatasync +    writes          with O_DIRECT +
 
 ---
 
-## Level 1: Buffered write — no ordering, no durability
+## Level 1: Buffered write — no ordering, no durability {#level-1-buffered-write-no-ordering-no-durability}
 
 The default. `write()` copies data into the page cache and returns. The kernel will flush it to storage at some future time, subject to dirty thresholds and writeback timeouts.
 
@@ -37,7 +37,7 @@ close(fd);
 
 ---
 
-## Level 2: `O_SYNC` and `fdatasync` — per-write durability
+## Level 2: `O_SYNC` and `fdatasync` — per-write durability {#level-2-o_sync-and-fdatasync-per-write-durability}
 
 `O_SYNC` makes every `write()` synchronous: the call does not return until the data *and* associated metadata are on storage. This is the strongest per-write guarantee.
 
@@ -67,7 +67,7 @@ fsync(fd);
 
 ---
 
-## Level 3: Directory sync — ensuring new files survive crashes
+## Level 3: Directory sync — ensuring new files survive crashes {#level-3-directory-sync-ensuring-new-files-survive-crashes}
 
 After creating or renaming a file and calling `fsync(fd)`, the file's data and inode are on storage. But the directory entry pointing to the file may not be. A crash at this point can leave an orphaned inode (data on disk, no directory entry pointing to it) or a missing file.
 
@@ -107,7 +107,7 @@ Without the `fsync(dir)`, the rename is only in memory. A crash before the direc
 
 ---
 
-## Level 4: Barrier writes — ordering without full sync
+## Level 4: Barrier writes — ordering without full sync {#level-4-barrier-writes-ordering-without-full-sync}
 
 Some workloads need ordering between writes without requiring each write to be durable immediately. For example: a database needs to ensure that data pages are on storage before the corresponding log entry is written — but does not need each data page write to return synchronously.
 
@@ -136,7 +136,7 @@ int fd = open("file", O_WRONLY | O_DSYNC);
 
 ---
 
-## Write ordering and the block layer
+## Write ordering and the block layer {#write-ordering-and-the-block-layer}
 
 The kernel's block layer includes several mechanisms that affect write ordering:
 
@@ -169,7 +169,7 @@ hdparm -W0 /dev/sda  # disable (every write goes to media — very slow)
 
 ---
 
-## Ordered vs data journaling in ext4
+## Ordered vs data journaling in ext4 {#ordered-vs-data-journaling-in-ext4}
 
 ext4's journaling mode determines the ordering guarantees provided by the filesystem:
 
@@ -189,7 +189,7 @@ mount | grep ext4
 
 ---
 
-## NFS and distributed consistency
+## NFS and distributed consistency {#nfs-and-distributed-consistency}
 
 NFS adds another dimension: the client's page cache may be out of sync with the server's state, and multiple clients may have conflicting cached versions.
 
@@ -210,7 +210,7 @@ mount | grep nfs
 
 ---
 
-## Summary: consistency guarantees by mechanism
+## Summary: consistency guarantees by mechanism {#summary-consistency-guarantees-by-mechanism}
 
 | Mechanism | Data on storage | Metadata on storage | Directory entry | Ordering |
 |-----------|----------------|---------------------|-----------------|----------|
@@ -225,7 +225,7 @@ mount | grep nfs
 
 ---
 
-## Related pages
+## Related pages {#related-pages}
 
 - [fsync, fdatasync, and O_SYNC](fsync-fdatasync.md) — durability semantics in depth
 - [Buffered I/O and the Page Cache](buffered-io.md) — how buffered writes work

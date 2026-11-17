@@ -1,8 +1,8 @@
-# BPF Ring Buffer
+# BPF Ring Buffer {#bpf-ring-buffer}
 
 > Lock-free, memory-efficient event streaming from BPF programs
 
-## Why not perf event output?
+## Why not perf event output? {#why-not-perf-event-output}
 
 Before `BPF_MAP_TYPE_RINGBUF` (5.8), BPF programs streamed events to userspace via `bpf_perf_event_output`:
 
@@ -30,7 +30,7 @@ Problems with `PERF_EVENT_ARRAY`:
 - **No variable-size records**: must pre-declare event size
 - **Wakeup overhead**: `epoll_wait` requires a fd per CPU
 
-## BPF ring buffer design
+## BPF ring buffer design {#bpf-ring-buffer-design}
 
 `BPF_MAP_TYPE_RINGBUF` uses a **single shared ring buffer** across all CPUs with a lock-free design:
 
@@ -62,7 +62,7 @@ Key properties:
 - **Two-phase commit**: reserve space, fill it, then submit or discard
 - **Memory-mapped**: userspace reads directly without syscall
 
-## BPF program side
+## BPF program side {#bpf-program-side}
 
 ```c
 #include <vmlinux.h>
@@ -106,7 +106,7 @@ int trace_write_exit(struct trace_event_raw_sys_exit *ctx)
 }
 ```
 
-### bpf_ringbuf_output: one-shot alternative
+### bpf_ringbuf_output: one-shot alternative {#bpfringbufoutput-one-shot-alternative}
 
 For small, fixed-size events where reserve+submit is overkill:
 
@@ -117,7 +117,7 @@ bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
 /* (copies from stack, can't fill in-place) */
 ```
 
-### Discard on error
+### Discard on error {#discard-on-error}
 
 ```c
 e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
@@ -134,7 +134,7 @@ if (should_drop) {
 bpf_ringbuf_submit(e, 0);
 ```
 
-## Userspace consumption with libbpf
+## Userspace consumption with libbpf {#userspace-consumption-with-libbpf}
 
 ```c
 #include <bpf/libbpf.h>
@@ -168,7 +168,7 @@ int main(void)
 }
 ```
 
-### Manual mmap polling
+### Manual mmap polling {#manual-mmap-polling}
 
 Without libbpf, the ring buffer is accessed via `mmap`:
 
@@ -214,7 +214,7 @@ while (1) {
 }
 ```
 
-## BPF_MAP_TYPE_RINGBUF vs PERF_EVENT_ARRAY
+## BPF_MAP_TYPE_RINGBUF vs PERF_EVENT_ARRAY {#bpfmaptyperingbuf-vs-perfevent_array}
 
 | Feature | PERF_EVENT_ARRAY | RINGBUF |
 |---------|-----------------|---------|
@@ -227,7 +227,7 @@ while (1) {
 | Kernel version | 4.4 | 5.8 |
 | Overhead | Higher | Lower |
 
-## Wakeup control
+## Wakeup control {#wakeup-control}
 
 ```c
 /* Submit without waking userspace (batch multiple events) */
@@ -242,7 +242,7 @@ bpf_ringbuf_submit(e, 0);
 
 With `ring_buffer__poll` in libbpf, `BPF_RB_NO_WAKEUP` + a final `BPF_RB_FORCE_WAKEUP` can batch many events into a single wakeup, reducing overhead significantly.
 
-## Query available space
+## Query available space {#query-available-space}
 
 ```c
 /* Check if ring has space before allocating */
@@ -252,7 +252,7 @@ u64 cons_pos  = bpf_ringbuf_query(&rb, BPF_RB_CONS_POS);
 u64 prod_pos  = bpf_ringbuf_query(&rb, BPF_RB_PROD_POS);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Maps](bpf-maps.md) — other BPF map types
 - [BPF Architecture](bpf-overview.md) — program types overview

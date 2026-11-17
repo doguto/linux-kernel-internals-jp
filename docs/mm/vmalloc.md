@@ -1,8 +1,8 @@
-# vmalloc
+# vmalloc {#vmalloc}
 
 > Allocate virtually contiguous memory from scattered physical pages
 
-## What is vmalloc?
+## What is vmalloc? {#what-is-vmalloc}
 
 `vmalloc()` allocates memory that is contiguous in *virtual* address space but may be backed by non-contiguous physical pages. This makes it suitable for large allocations where physical contiguity isn't required. (For where the vmalloc region sits relative to the direct map and vmemmap — and why it's a separate region at all — see [The Kernel Address Space](kernel-address-space.md).)
 
@@ -11,9 +11,9 @@ void *vmalloc(unsigned long size);
 void vfree(const void *addr);
 ```
 
-## History & Evolution
+## History & Evolution {#history-evolution}
 
-### Origins (1993)
+### Origins (1993) {#origins-1993}
 
 vmalloc was added to Linux in 1993, two years after the initial release.
 
@@ -27,7 +27,7 @@ Major rework to support vmap/vunmap, Christoph Hellwig, SGI, August 2002
 
 The Hellwig rework is [documented on LWN](https://lwn.net/Articles/7473/).
 
-### v2.6.28: Major Rewrite - RBTree & Lazy TLB
+### v2.6.28: Major Rewrite - RBTree & Lazy TLB {#v2628-major-rewrite-rbtree-lazy-tlb}
 
 **Commit**: [db64fe02258f](https://git.kernel.org/linus/db64fe02258f) ("mm: rewrite vmap layer")
 **Kernel**: v2.6.28
@@ -46,7 +46,7 @@ The Hellwig rework is [documented on LWN](https://lwn.net/Articles/7473/).
 
 *Note: The commit message documents the detailed design rationale for lazy TLB flushing and RCU.*
 
-### v5.13: Huge Page Support
+### v5.13: Huge Page Support {#v513-huge-page-support}
 
 **Commit**: [121e6f3258fe](https://git.kernel.org/linus/121e6f3258fe) ("mm/vmalloc: hugepage vmalloc mappings") | [LKML](https://lore.kernel.org/linux-mm/1616036421.amjz2efujj.astroid@bobo.none/)
 **Kernel**: v5.13
@@ -63,7 +63,7 @@ The Hellwig rework is [documented on LWN](https://lwn.net/Articles/7473/).
 
 **Trade-off**: More internal fragmentation (allocating `2MB` when you need `1.1MB`), but fewer TLB entries needed.
 
-### v6.12: vrealloc Introduction
+### v6.12: vrealloc Introduction {#v612-vrealloc-introduction}
 
 **Commit**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) ("mm: vmalloc: implement vrealloc()") | [LKML](https://lore.kernel.org/linux-mm/20240717222427.2211-2-dakr@kernel.org/)
 **Kernel**: v6.12
@@ -71,7 +71,7 @@ The Hellwig rework is [documented on LWN](https://lwn.net/Articles/7473/).
 
 See [vrealloc](vrealloc.md) for detailed history.
 
-## When to Use vmalloc
+## When to Use vmalloc {#when-to-use-vmalloc}
 
 **Use vmalloc when:**
 
@@ -86,9 +86,9 @@ See [vrealloc](vrealloc.md) for detailed history.
 - DMA operations (need physical addresses)
 - Performance critical hot paths (page table overhead, potential TLB misses)
 
-## How It Works
+## How It Works {#how-it-works}
 
-### Allocation Flow
+### Allocation Flow {#allocation-flow}
 
 1. **Find virtual address range**: Search vmap_area rbtree for free space
 2. **Allocate physical pages**: Get individual pages from buddy allocator
@@ -108,14 +108,14 @@ Virtual Address Space          Physical Memory
 +---------------+              +---------------+
 ```
 
-### Free Flow (Lazy TLB)
+### Free Flow (Lazy TLB) {#free-flow-lazy-tlb}
 
 1. **Mark area for freeing**: Add to lazy free list
 2. **Don't flush TLB immediately**: Address won't be reused yet
 3. **Batch flush**: When threshold reached or `vm_unmap_aliases()` called
 4. **Return pages**: Free physical pages to buddy allocator
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
 How vmalloc tracks allocations:
 
@@ -143,7 +143,7 @@ How vmalloc tracks allocations:
               0xFFFF0000-0xFFFF3000
 ```
 
-### vm_struct
+### vm_struct {#vm_struct}
 
 Describes a vmalloc region:
 
@@ -159,7 +159,7 @@ struct vm_struct {
 };
 ```
 
-### vmap_area
+### vmap_area {#vmap_area}
 
 Tracks vmalloc address space usage:
 
@@ -173,7 +173,7 @@ struct vmap_area {
 };
 ```
 
-## Variants
+## Variants {#variants}
 
 | Function | Description | Since |
 |----------|-------------|-------|
@@ -185,15 +185,15 @@ struct vmap_area {
 | `vrealloc()` | Resize allocation | v6.12 |
 | `vfree()` | Free allocation | Original |
 
-## Design Decisions
+## Design Decisions {#design-decisions}
 
-### Why guard pages?
+### Why guard pages? {#why-guard-pages}
 
 Each vmalloc region has a guard page (unmapped) at the end. Buffer overflows hit the guard and trigger a page fault immediately, rather than silently corrupting adjacent allocations.
 
 **Commit**: The `VM_NO_GUARD` flag exists for special cases that don't want guard pages, but [bd1a8fb2d43f](https://git.kernel.org/linus/bd1a8fb2d43f) ("mm/vmalloc: don't allow VM_NO_GUARD on vmap()") restricts its use. ([LKML](https://lore.kernel.org/lkml/YUMfdA36fuyZ+%2Fxt@hirez.programming.kicks-ass.net/))
 
-### Why lazy TLB flushing?
+### Why lazy TLB flushing? {#why-lazy-tlb-flushing}
 
 TLB flushes are expensive:
 
@@ -203,27 +203,27 @@ TLB flushes are expensive:
 
 Batching multiple vunmaps into a single flush amortizes this cost. The kernel tracks `vmap_lazy_nr` and flushes when it exceeds a threshold.
 
-### Why RBTree for vmap_area?
+### Why RBTree for vmap_area? {#why-rbtree-for-vmap_area}
 
 Before v2.6.28, vmalloc used a simple linked list. As systems grew larger, linear `O(n)` searches became a bottleneck. RBTree provides `O(log n)` lookup, insertion, and deletion.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### TLB Flush Storms
+### TLB Flush Storms {#tlb-flush-storms}
 
 Under heavy vmalloc/vfree workload, lazy flushing can cause "flush storms" where many IPIs fire at once when threshold is reached.
 
-### Address Space Exhaustion
+### Address Space Exhaustion {#address-space-exhaustion}
 
 vmalloc has limited address space (`VMALLOC_START` to `VMALLOC_END`). On 32-bit systems this was often only `128MB`. Heavy users like BPF, modules, and drivers can exhaust it.
 
-### NUMA Locality
+### NUMA Locality {#numa-locality}
 
 vmalloc wasn't always NUMA-aware. Modern kernels try to allocate pages from the same node when possible via `vmalloc_node()`.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Inspect vmalloc Usage
+### Inspect vmalloc Usage {#inspect-vmalloc-usage}
 
 View all vmalloc allocations on a running system:
 
@@ -245,7 +245,7 @@ Key fields:
 - **vmalloc**: Allocation type (vs ioremap, vmap)
 - **N0=N**: NUMA node distribution
 
-### Check vmalloc Statistics
+### Check vmalloc Statistics {#check-vmalloc-statistics}
 
 ```bash
 # Total vmalloc pages in use
@@ -258,7 +258,7 @@ grep Vmalloc /proc/meminfo
 # VmallocChunk:          0 kB     (largest contiguous free block)
 ```
 
-### Run the Test Module
+### Run the Test Module {#run-the-test-module}
 
 The kernel includes `test_vmalloc` for testing vmalloc functionality:
 
@@ -277,7 +277,7 @@ virtme-ng --append 'test_vmalloc.run_test_mask=0xFFFF'
 dmesg | grep test_vmalloc
 ```
 
-### Key Code Locations
+### Key Code Locations {#key-code-locations}
 
 | Function | File:Line | What It Does |
 |----------|-----------|--------------|
@@ -289,7 +289,7 @@ dmesg | grep test_vmalloc
 
 *Note: Line numbers vary by kernel version. Search for the function name in the file.*
 
-### Write a Simple Test
+### Write a Simple Test {#write-a-simple-test}
 
 ```c
 // In a kernel module or via BPF
@@ -316,9 +316,9 @@ void test_vmalloc_basic(void)
 
 ---
 
-## References
+## References {#references}
 
-### Key Commits
+### Key Commits {#key-commits}
 | Commit | Kernel | Description |
 |--------|--------|-------------|
 | [1da177e4c3f4](https://git.kernel.org/linus/1da177e4c3f4) | [v2.6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v2.6.12) | Initial git history |
@@ -326,15 +326,15 @@ void test_vmalloc_basic(void)
 | [121e6f3258fe](https://git.kernel.org/linus/121e6f3258fe) | [v5.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v5.13) | Huge page support |
 | [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | vrealloc introduction |
 
-### Code
+### Code {#code}
 - [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) - Implementation
 - [`include/linux/vmalloc.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vmalloc.h) - API
 
-### Related
+### Related {#related}
 - [vrealloc](vrealloc.md) - Resizing allocations
 - [overview](overview.md) - Memory management overview
 
-## Further reading
+## Further reading {#further-reading}
 
 - [vrealloc.md](vrealloc.md) — `vrealloc()`, the vmalloc-based resize primitive added in v6.12
 - [slab.md](slab.md) — `kvmalloc()` tries kmalloc first and falls back to vmalloc for large allocations

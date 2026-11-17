@@ -1,8 +1,8 @@
-# Zero-copy I/O: splice, sendfile, and friends
+# Zero-copy I/O: splice, sendfile, and friends {#zero-copy-io-splice-sendfile-and-friends}
 
 > Moving data between file descriptors without touching userspace
 
-## The problem: unnecessary copies
+## The problem: unnecessary copies {#the-problem-unnecessary-copies}
 
 The naive way to serve a file over a network socket is:
 
@@ -63,7 +63,7 @@ The zero-copy path passes a **page reference** (a pointer and length) rather tha
 
 ---
 
-## `sendfile(2)` — file to socket without userspace
+## `sendfile(2)` — file to socket without userspace {#sendfile2-file-to-socket-without-userspace}
 
 `sendfile` was added in Linux 2.2 and is the simplest zero-copy interface. It transfers data from a file directly to a socket inside the kernel.
 
@@ -108,7 +108,7 @@ void serve_file(int sock_fd, const char *path)
 }
 ```
 
-### What sendfile does in the kernel
+### What sendfile does in the kernel {#what-sendfile-does-in-the-kernel}
 
 Internally `sendfile` calls `do_sendfile` in `fs/read_write.c`, which:
 
@@ -118,7 +118,7 @@ Internally `sendfile` calls `do_sendfile` in `fs/read_write.c`, which:
 
 Without NIC scatter-gather support, the kernel falls back to a single copy from page cache into a contiguous `sk_buff` — still one copy fewer than the `read+write` path.
 
-### Non-blocking sendfile
+### Non-blocking sendfile {#non-blocking-sendfile}
 
 Linux's `sendfile(2)` takes no flags argument. To get non-blocking behavior, set `O_NONBLOCK` on the output socket. When the socket buffer is full, `sendfile` returns `EAGAIN`.
 
@@ -132,7 +132,7 @@ if (ret == -1 && errno == EAGAIN) {
 }
 ```
 
-### nginx and sendfile
+### nginx and sendfile {#nginx-and-sendfile}
 
 nginx enables `sendfile` by default:
 
@@ -147,7 +147,7 @@ http {
 
 `tcp_nopush` sets `TCP_CORK` before `sendfile` so the HTTP headers and the start of the file body go out in one TCP segment, then the cork is released.
 
-### sendfile limitations
+### sendfile limitations {#sendfile-limitations}
 
 - `out_fd` must be a socket (or a pipe); file-to-file doesn't work
 - Cannot interpose a transform (compression, encryption) — those require touching the data
@@ -156,7 +156,7 @@ http {
 
 ---
 
-## `splice(2)` — the generalisation
+## `splice(2)` — the generalisation {#splice2-the-generalisation}
 
 `splice` was introduced in Linux 2.6.17 by Jens Axboe, generalising the file-to-socket case. It transfers data between any two file descriptors where **at least one is a pipe**.
 
@@ -174,7 +174,7 @@ ssize_t splice(int fd_in,  loff_t *off_in,
 - `len` — maximum bytes to move in this call
 - `flags` — `SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT`
 
-### Flags
+### Flags {#flags}
 
 | Flag | Meaning |
 |------|---------|
@@ -183,7 +183,7 @@ ssize_t splice(int fd_in,  loff_t *off_in,
 | `SPLICE_F_MORE` | More data is coming; hint for socket layer (like `MSG_MORE`) |
 | `SPLICE_F_GIFT` | Used with `vmsplice`: user pages are gifted to the kernel permanently |
 
-### File to socket via a pipe
+### File to socket via a pipe {#file-to-socket-via-a-pipe}
 
 `sendfile` can be emulated with two `splice` calls through a pipe:
 
@@ -216,7 +216,7 @@ close(pfd[0]);
 close(pfd[1]);
 ```
 
-### Valid splice combinations
+### Valid splice combinations {#valid-splice-combinations}
 
 ```
 file  → pipe  ✓   (adds page refs from page cache into pipe)
@@ -229,7 +229,7 @@ socket → pipe ✓   (drains socket receive buffer into pipe)
 
 ---
 
-## `tee(2)` — duplicating pipe data without consuming it
+## `tee(2)` — duplicating pipe data without consuming it {#tee2-duplicating-pipe-data-without-consuming-it}
 
 `tee` copies data between two pipe file descriptors without removing it from the source. Pages are shared by reference; no bytes are copied.
 
@@ -239,7 +239,7 @@ ssize_t tee(int fd_in, int fd_out, size_t len, unsigned int flags);
 
 Both `fd_in` and `fd_out` must be pipes. After `tee`, the data remains readable from `fd_in` and is also available in `fd_out`.
 
-### Log-and-forward pattern
+### Log-and-forward pattern {#log-and-forward-pattern}
 
 ```c
 /*
@@ -276,9 +276,9 @@ This is the basis of `tee(1)` in GNU coreutils — it uses `tee(2)` internally w
 
 ---
 
-## How splice works internally
+## How splice works internally {#how-splice-works-internally}
 
-### The pipe as a page-reference queue
+### The pipe as a page-reference queue {#the-pipe-as-a-page-reference-queue}
 
 The central data structure is `struct pipe_inode_info` (`include/linux/pipe_fs_i.h`), which contains a ring of `struct pipe_buffer` entries:
 
@@ -323,7 +323,7 @@ When `splice(pipe_rd, ..., sock_fd, ...)` runs, `do_splice_from` calls `sock_spl
 
 The bytes finally leave the machine when the NIC's DMA engine reads the page cache page directly, driven by the scatter-gather descriptor in the transmit ring.
 
-### splice_from_pipe and splice_to_pipe
+### splice_from_pipe and splice_to_pipe {#splicefrompipe-and-splicetopipe}
 
 The kernel exports two helpers used by filesystem and socket drivers:
 
@@ -342,7 +342,7 @@ ssize_t splice_to_pipe(struct pipe_inode_info *pipe,
 
 `splice_from_pipe` iterates over the pipe's `pipe_buffer` ring and calls the `actor` callback (e.g., `pipe_to_sendpage` for sockets, `pipe_to_file` for files) once per buffer. The actor hands the page off without copying it.
 
-### When splice must fall back to copying
+### When splice must fall back to copying {#when-splice-must-fall-back-to-copying}
 
 Not all combinations are truly zero-copy at the kernel level:
 
@@ -353,7 +353,7 @@ Not all combinations are truly zero-copy at the kernel level:
 
 ---
 
-## Comparison: sendfile vs splice vs io_uring vs MSG_ZEROCOPY
+## Comparison: sendfile vs splice vs io_uring vs MSG_ZEROCOPY {#comparison-sendfile-vs-splice-vs-iouring-vs-msgzerocopy}
 
 | Feature | `sendfile` | `splice` | `io_uring IORING_OP_SPLICE` | `MSG_ZEROCOPY` |
 |---------|-----------|---------|----------------------------|----------------|
@@ -367,7 +367,7 @@ Not all combinations are truly zero-copy at the kernel level:
 | Typical use case | Static file serving | Pipelines, log shipping | High-concurrency servers | High-throughput senders |
 | Transform possible | No | No | No | No |
 
-### io_uring splice
+### io_uring splice {#io_uring-splice}
 
 `IORING_OP_SPLICE` was added in Linux 5.7 and allows chaining splice operations asynchronously in an io_uring submission ring:
 
@@ -398,7 +398,7 @@ void submit_splice_chain(struct io_uring *ring,
 }
 ```
 
-### MSG_ZEROCOPY
+### MSG_ZEROCOPY {#msg_zerocopy}
 
 `MSG_ZEROCOPY` (Linux 4.14, `include/uapi/linux/socket.h`) is different in character: it operates on `send(2)` / `sendmsg(2)` and tells the kernel to hold the user buffer pages rather than copying them into socket buffers. The application gets a notification via the socket error queue (`SO_EE_ORIGIN_ZEROCOPY`) when the kernel is done with the pages.
 
@@ -424,7 +424,7 @@ recvmsg(sock_fd, &msg, MSG_ERRQUEUE);
 
 ---
 
-## `vmsplice(2)` — userspace memory into a pipe
+## `vmsplice(2)` — userspace memory into a pipe {#vmsplice2-userspace-memory-into-a-pipe}
 
 `vmsplice` splices userspace virtual memory into a pipe, allowing user pages to be passed to the kernel without copying.
 
@@ -439,7 +439,7 @@ ssize_t vmsplice(int fd, const struct iovec *iov,
 
 `fd` must be the write end of a pipe. Each `iovec` describes a range of the caller's virtual address space.
 
-### SPLICE_F_GIFT
+### SPLICE_F_GIFT {#splicefgift}
 
 Without `SPLICE_F_GIFT`, the kernel copies the pages before they enter the pipe (because the user might modify them before the pipe consumer reads them). With `SPLICE_F_GIFT`, the user promises not to modify or free the pages — the kernel accepts them as a gift and maps them directly into the pipe ring:
 
@@ -467,9 +467,9 @@ splice(pipe_rd, NULL, sock_fd, NULL, n, SPLICE_F_MOVE);
 
 ---
 
-## Practical patterns
+## Practical patterns {#practical-patterns}
 
-### Pattern 1: nginx-style static file serving
+### Pattern 1: nginx-style static file serving {#pattern-1-nginx-style-static-file-serving}
 
 This is the fundamental zero-copy web server loop. Real nginx uses `sendfile` directly; the splice version shown below works for any socket type:
 
@@ -520,7 +520,7 @@ int serve_static(int sock_fd, int file_fd)
 }
 ```
 
-### Pattern 2: splice-based log shipping with tee
+### Pattern 2: splice-based log shipping with tee {#pattern-2-splice-based-log-shipping-with-tee}
 
 Forward a byte stream to both a log file and a downstream service, zero-copy:
 
@@ -577,7 +577,7 @@ done:
 }
 ```
 
-### Pattern 3: pipe-stage data processing
+### Pattern 3: pipe-stage data processing {#pattern-3-pipe-stage-data-processing}
 
 When a transformation is required (e.g., prepend a header to each message), splice the data around the transform:
 
@@ -616,15 +616,15 @@ void framed_forward(int src_fd, int dst_sock)
 
 ---
 
-## When zero-copy doesn't help
+## When zero-copy doesn't help {#when-zero-copy-doesnt-help}
 
 Zero-copy is not universally beneficial. Understand the cases where it hurts or doesn't apply:
 
-### Small files
+### Small files {#small-files}
 
 `sendfile` and `splice` have per-call overhead: syscall entry, pipe buffer allocation, page reference management, and scatter-gather descriptor setup. For files smaller than roughly 64 KB, this overhead can exceed the cost of a simple `read+write` with a hot CPU cache. Static asset servers often use `sendfile` only for files above a configurable threshold.
 
-### HTTPS without kTLS
+### HTTPS without kTLS {#https-without-ktls}
 
 TLS encryption requires reading plaintext, encrypting it, and writing ciphertext. The CPU *must* touch the data. `sendfile` cannot help unless **kTLS** (`SO_TLS_TX`) is in use (Linux 4.17+). With kTLS, the kernel's TLS record layer encrypts pages on their way to the NIC, preserving zero-copy for the file-to-network segment. See [kTLS](../net/ktls.md).
 
@@ -636,25 +636,25 @@ Disk → page cache → CPU decrypt (TLS record) → socket buffer → NIC
              userspace (or kTLS) must touch every byte
 ```
 
-### Compressed content
+### Compressed content {#compressed-content}
 
 Sending gzip or Brotli-compressed files can use `sendfile` fine — the compressed bytes are already in the page cache. However, *on-the-fly compression* (as nginx does with `gzip on`) requires reading and compressing in userspace, so zero-copy provides no benefit for that path.
 
-### Content transformations
+### Content transformations {#content-transformations}
 
 Any transformation — substitution, encoding conversion, image resizing — requires touching the bytes. In those cases, the only optimisation available is to minimise extra copies (use `O_DIRECT` + `mmap` for the source, write directly to the socket buffer), not `splice` or `sendfile`.
 
-### High-frequency small sends (MSG_ZEROCOPY)
+### High-frequency small sends (MSG_ZEROCOPY) {#high-frequency-small-sends-msg_zerocopy}
 
 `MSG_ZEROCOPY` has a per-send completion notification that must be collected from the error queue. For messages smaller than ~10 KB, the synchronisation cost dominates. Benchmarks from the Linux networking team suggest the break-even point is around 10–100 KB depending on the workload.
 
-### NUMA effects
+### NUMA effects {#numa-effects}
 
 When the NIC and the page cache are on different NUMA nodes, the DMA read that the NIC performs crosses the interconnect. This is inherent to the hardware topology and not something splice can fix. For latency-sensitive paths on multi-socket systems, pin worker threads and their page allocations to the NUMA node local to the NIC.
 
 ---
 
-## `copy_file_range(2)` — server-side file copy
+## `copy_file_range(2)` — server-side file copy {#copyfilerange2-server-side-file-copy}
 
 `copy_file_range` was added in Linux 4.5. It copies bytes between two file descriptors entirely within the kernel — no userspace buffer involved.
 
@@ -669,7 +669,7 @@ ssize_t copy_file_range(int fd_in,  loff_t *off_in,
 
 `flags` is currently unused and must be 0. `off_in` and `off_out` are optional; if NULL, the file's current position is used.
 
-### The filesystem shortcut
+### The filesystem shortcut {#the-filesystem-shortcut}
 
 The kernel calls the filesystem's `copy_file_range` operation first:
 
@@ -699,7 +699,7 @@ On filesystems that implement it:
 - **SMB3** (`smb2_copychunk_range`): uses the `IOCTL FSCTL_SRV_COPYCHUNK` operation.
 - **All others**: fall back to `do_splice_direct`, which opens a temporary pipe and uses splice internally. Still zero userspace copies, but not instantaneous.
 
-### Reflink: copy-on-write file copies
+### Reflink: copy-on-write file copies {#reflink-copy-on-write-file-copies}
 
 ```
 Before copy_file_range on Btrfs:
@@ -727,11 +727,11 @@ xfs_info /mount/point | grep reflink
 # Btrfs: always supported on modern kernels
 ```
 
-### copy_file_range and cross-filesystem copies
+### copy_file_range and cross-filesystem copies {#copyfilerange-and-cross-filesystem-copies}
 
 `copy_file_range` returns `-EXDEV` when `fd_in` and `fd_out` are on different filesystems (or different mounts of the same filesystem). The kernel falls back to `do_splice_direct` in this case since Linux 5.3; earlier kernels returned the error to userspace.
 
-### Comparison with splice for file copies
+### Comparison with splice for file copies {#comparison-with-splice-for-file-copies}
 
 | | `splice` (via pipe) | `copy_file_range` |
 |--|--------------------|--------------------|
@@ -743,7 +743,7 @@ xfs_info /mount/point | grep reflink
 
 ---
 
-## Kernel source references
+## Kernel source references {#kernel-source-references}
 
 The implementation lives in two main files:
 
@@ -755,7 +755,7 @@ The implementation lives in two main files:
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Buffered I/O and the page cache](buffered-io.md) — what splice's page references point into
 - [Direct I/O](direct-io.md) — why O_DIRECT and splice don't mix well

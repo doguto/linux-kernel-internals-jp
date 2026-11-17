@@ -1,34 +1,34 @@
-# War Stories: Virtualization (KVM) Bugs and Escapes
+# War Stories: Virtualization (KVM) Bugs and Escapes {#war-stories-virtualization-kvm-bugs-and-escapes}
 
 > Five incidents spanning the whole KVM/QEMU stack — a guest-to-host escape through a device nobody configured, two speculative-execution mitigations whose exact timing turned out to matter as much as their existence, a use-after-free born from a refactor that quietly dropped an implicit invariant, and a heap overflow born from the same kind of gap in an edge case nobody had reasoned about
 
 Virtualization's trust boundary is the sharpest one this site covers: a guest is, by design, an untrusted tenant that the host must contain completely, across both the device-emulation layer (QEMU, in userspace) and the hypervisor kernel module (KVM) that gives it hardware-accelerated CPU access. The five incidents below span that entire boundary — one lives entirely in QEMU's userspace device model, two are host-kernel memory-corruption bugs (a use-after-free born from a refactor, and a heap overflow born from an edge case) that each dropped an implicit invariant, and two are CPU speculative-execution mitigations where getting the *mechanism* right wasn't enough — the exact placement and timing of the fix mattered just as much.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix landed — newest first.
 
-### [MDS: The Mitigation That Flushed the Buffers Too Early](war-stories/mds-verw-timing-gap.md)
+### [MDS: The Mitigation That Flushed the Buffers Too Early](war-stories/mds-verw-timing-gap.md) {#mds-the-mitigation-that-flushed-the-buffers-too-early}
 **Original mitigation 2019, real fix committed Feb 2024 (Linux 6.8, March 2024) · CVE-2018-12130**
 KVM's original defense against Microarchitectural Data Sampling flushed CPU buffers several instructions before actually entering the guest — and every register spill and stack push in between could refill those buffers with fresh host data. The gap sat unexamined for five years until a routine hardening pass closed it as a side effect.
 
-### [vhost: The Dirty-Log Counter That Forgot Zero-Length Descriptors](war-stories/vhost-migration-log-overflow.md)
+### [vhost: The Dirty-Log Counter That Forgot Zero-Length Descriptors](war-stories/vhost-migration-log-overflow.md) {#vhost-the-dirty-log-counter-that-forgot-zero-length-descriptors}
 **Linux 5.3 (September 2019) · CVE-2019-14835**
 Live-migration dirty-page logging assumed one log entry per descriptor could never outrun the descriptor count itself — an invariant a single guest-supplied zero-length descriptor could break, turning a routine migration into a guest-controlled kernel heap overflow.
 
-### [The Nested-VMX Refactor That Forgot One Field on the Error Path](war-stories/nested-vmx-posted-interrupt-uaf.md)
+### [The Nested-VMX Refactor That Forgot One Field on the Error Path](war-stories/nested-vmx-posted-interrupt-uaf.md) {#the-nested-vmx-refactor-that-forgot-one-field-on-the-error-path}
 **Linux 4.20 (December 2018) · CVE-2018-16882**
 Removing a trivial wrapper function restructured a posted-interrupt setup path around an early return on failure — and that early return skipped resetting a pointer that used to be reset unconditionally on every call, dangling straight into a later use-after-free.
 
-### [L1TF: When a Not-Present Page Table Entry Wasn't Not-Present Enough](war-stories/l1tf-foreshadow-vmm.md)
+### [L1TF: When a Not-Present Page Table Entry Wasn't Not-Present Enough](war-stories/l1tf-foreshadow-vmm.md) {#l1tf-when-a-not-present-page-table-entry-wasnt-not-present-enough}
 **Linux 4.19 (August 2018) · CVE-2018-3646**
 A terminal page fault on a not-present EPT entry still let the CPU speculatively forward stale L1 data-cache contents — and in a virtualized guest, that cache is shared across every sibling hyperthread on the core, host and guests alike.
 
-### [VENOM: The Floppy Controller Nobody Turned Off](war-stories/venom-fdc-overflow.md)
+### [VENOM: The Floppy Controller Nobody Turned Off](war-stories/venom-fdc-overflow.md) {#venom-the-floppy-controller-nobody-turned-off}
 **QEMU, May 2015 · CVE-2015-3456**
 QEMU's floppy disk controller emulation is instantiated for every default x86 machine type whether or not a guest has a floppy drive configured, and its command FIFO had no bounds check at all — a guest that never touched a floppy could still overflow it straight into the host's heap.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | MDS timing gap | vhost log overflow | Nested-VMX UAF | L1TF | VENOM |
 |---------|:---:|:---:|:---:|:---:|:---:|
@@ -46,7 +46,7 @@ QEMU's floppy disk controller emulation is instantiated for every default x86 ma
 
 **VENOM is the only incident here that isn't a Linux kernel bug at all.** It's included because the guest-facing trust boundary this site documents doesn't stop at KVM's kernel module — QEMU is the other half of the stack every KVM guest actually runs against, and a guest-to-host escape through QEMU's device emulation is exactly as real a break of the virtualization boundary as a bug in KVM itself.
 
-## See also
+## See also {#see-also}
 
 - [KVM Architecture](kvm-arch.md) — the `/dev/kvm` API and QEMU's role as the userspace half of the stack
 - [Nested Virtualization](nested-virt.md) — L0/L1/L2, vmcs12/vmcs02, the model behind the posted-interrupt UAF

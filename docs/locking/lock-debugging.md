@@ -1,8 +1,8 @@
-# Lock Contention Debugging
+# Lock Contention Debugging {#lock-contention-debugging}
 
 > Finding and fixing lock hotspots in the kernel
 
-## Identifying the problem
+## Identifying the problem {#identifying-the-problem}
 
 Lock contention manifests as CPUs burning time waiting rather than doing useful work. Symptoms:
 
@@ -11,7 +11,7 @@ Lock contention manifests as CPUs burning time waiting rather than doing useful 
 - `sar -u` shows high `%sys` with low actual work rate
 - `perf stat` shows many `lock:contention_begin` events
 
-## /proc/lock_stat
+## /proc/lock_stat {#proclock_stat}
 
 Requires `CONFIG_LOCK_STAT=y`. Provides per-lock-class contention statistics:
 
@@ -48,7 +48,7 @@ cat /proc/lock_stat | sort -k2 -rn | head -20
 awk '$5 > 1000' /proc/lock_stat  # waittime-max > 1ms
 ```
 
-## perf lock
+## perf lock {#perf-lock}
 
 `perf lock` traces lock events with timestamps:
 
@@ -70,7 +70,7 @@ Output:
   &mm->mmap_lock(W):      23456       1234         234567       1234567890
 ```
 
-## perf top for lock hotspots
+## perf top for lock hotspots {#perf-top-for-lock-hotspots}
 
 ```bash
 # Find which functions spend most time waiting on locks
@@ -81,7 +81,7 @@ perf record -e lock:contention_begin -ag sleep 10
 perf report --stdio
 ```
 
-## bpftrace for lock analysis
+## bpftrace for lock analysis {#bpftrace-for-lock-analysis}
 
 ```bash
 # Track lock wait time per lock and call site
@@ -120,7 +120,7 @@ interval:s:5 {
 }'
 ```
 
-## Lockdep contention tracking
+## Lockdep contention tracking {#lockdep-contention-tracking}
 
 ```bash
 # With CONFIG_LOCK_STAT and CONFIG_LOCKDEP, check /proc/lockdep_stats
@@ -132,7 +132,7 @@ cat /proc/lockdep_stats
 # softirq-safe locks:  789
 ```
 
-## ftrace: tracing specific lock points
+## ftrace: tracing specific lock points {#ftrace-tracing-specific-lock-points}
 
 ```bash
 # Trace all mutex_lock calls with stack
@@ -144,9 +144,9 @@ echo 0 > /sys/kernel/debug/tracing/tracing_on
 cat /sys/kernel/debug/tracing/trace | head -100
 ```
 
-## Common lock contention patterns and fixes
+## Common lock contention patterns and fixes {#common-lock-contention-patterns-and-fixes}
 
-### 1. Fine-grained locking
+### 1. Fine-grained locking {#1-fine-grained-locking}
 
 Replace one coarse lock with many per-bucket or per-object locks:
 
@@ -165,7 +165,7 @@ static struct hash_bucket hash_table[HASH_SIZE];
 
 The `____cacheline_aligned` attribute prevents false sharing between adjacent buckets.
 
-### 2. Read-write splitting
+### 2. Read-write splitting {#2-read-write-splitting}
 
 If most access is read-only, use rwsem or RCU:
 
@@ -182,7 +182,7 @@ val = cfg->value;
 rcu_read_unlock();
 ```
 
-### 3. Per-CPU sharding
+### 3. Per-CPU sharding {#3-per-cpu-sharding}
 
 For counters and stats, use per-CPU variables:
 
@@ -194,7 +194,7 @@ atomic_inc(&event_count);
 this_cpu_inc(event_count);
 ```
 
-### 4. Lock elision / trylock patterns
+### 4. Lock elision / trylock patterns {#4-lock-elision-trylock-patterns}
 
 In some cases, falling back to a slower path avoids contention:
 
@@ -208,7 +208,7 @@ if (!spin_trylock(&cache_lock)) {
 spin_unlock(&cache_lock);
 ```
 
-### 5. Batching
+### 5. Batching {#5-batching}
 
 Reduce lock granularity by batching multiple updates into one critical section:
 
@@ -227,7 +227,7 @@ for (item in items)
 spin_unlock(&list_lock);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Lockdep](lockdep.md) — Detecting circular dependencies
 - [Spinlock](spinlock.md) — When spinlocks make sense

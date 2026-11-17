@@ -1,6 +1,6 @@
-# Memory Management: The Story
+# Memory Management: The Story {#memory-management-the-story}
 
-## The Problem (1991)
+## The Problem (1991) {#the-problem-1991}
 
 When Linus Torvalds started Linux, he faced a fundamental question: **how do you let multiple programs share limited RAM?**
 
@@ -13,7 +13,7 @@ This document tells the story of how Linux's memory allocators evolved over 30+ 
 
 ---
 
-## The Big Picture
+## The Big Picture {#the-big-picture}
 
 How Linux memory allocators relate to each other:
 
@@ -65,9 +65,9 @@ How Linux memory allocators relate to each other:
 
 ---
 
-## Chapter 1: The Page Allocator (The Foundation)
+## Chapter 1: The Page Allocator (The Foundation) {#chapter-1-the-page-allocator-the-foundation}
 
-### The Original Problem
+### The Original Problem {#the-original-problem}
 
 Physical memory is finite. You need a way to hand out chunks of it and get them back.
 
@@ -85,7 +85,7 @@ Physical memory is finite. You need a way to hand out chunks of it and get them 
 >
 > **Why this matters for mm/**: Linux's monolithic design means memory management runs in kernel space with direct hardware access. No message-passing overhead. `kmalloc()` is a function call, not an IPC. This shaped every allocator discussed below - they optimize for this tight integration.
 
-### The Solution: Buddy System
+### The Solution: Buddy System {#the-solution-buddy-system}
 
 Linux uses a "buddy allocator" (borrowed from older systems). Here's the clever idea:
 
@@ -112,9 +112,9 @@ When they free those 2 pages, you merge them back with their "buddy":
 
 ---
 
-## Chapter 2: The Slab Allocator (v2.0, ~1996)
+## Chapter 2: The Slab Allocator (v2.0, ~1996) {#chapter-2-the-slab-allocator-v20-1996}
 
-### The Problem
+### The Problem {#the-problem}
 
 The page allocator works in page-sized chunks (`4KB`). But kernel objects are often tiny:
 
@@ -124,7 +124,7 @@ The page allocator works in page-sized chunks (`4KB`). But kernel objects are of
 
 Giving someone a whole `4KB` page for a 200-byte object wastes memory.
 
-### The Solution: Slab
+### The Solution: Slab {#the-solution-slab}
 
 The "slab allocator" (borrowed from SunOS) carves pages into fixed-size object caches:
 
@@ -138,7 +138,7 @@ Page for 600-byte objects:
 
 Each object type gets its own cache. Allocating is fast (grab from cache), freeing is fast (return to cache).
 
-### The Evolution
+### The Evolution {#the-evolution}
 
 **SLAB (Original, ~1996)**: Ported from SunOS, based on [Bonwick's 1994 USENIX paper](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf). Complex. Multiple levels of caches. Good debugging. But hard to maintain.
 
@@ -166,13 +166,13 @@ kfree(ptr);                        // Give it back
 
 ---
 
-## Chapter 3: vmalloc (1993 → Present)
+## Chapter 3: vmalloc (1993 → Present) {#chapter-3-vmalloc-1993-present}
 
-### The Problem
+### The Problem {#the-problem_1}
 
 `kmalloc` gives you *physically contiguous* memory. As the system runs, physical memory becomes fragmented. Eventually, you can't find a contiguous `1MB` chunk even if total free memory is `100MB`.
 
-### The Solution: Virtual Contiguity
+### The Solution: Virtual Contiguity {#the-solution-virtual-contiguity}
 
 What if the memory only needs to *look* contiguous to the user?
 
@@ -185,11 +185,11 @@ Virtual addresses:     Physical pages:
 
 The program sees contiguous 0xFFFF0000-0xFFFF3000, but the physical pages are scattered. This is `vmalloc()`.
 
-### The Cost
+### The Cost {#the-cost}
 
 Page tables must be set up. TLB (translation cache) entries are consumed. It's slower than kmalloc. But it can satisfy large allocations when kmalloc can't.
 
-### Major Evolution
+### Major Evolution {#major-evolution}
 
 **v2.6.28 (2008): The Scalability Crisis**
 
@@ -228,11 +228,11 @@ Page tables must be set up. TLB (translation cache) entries are consumed. It's s
 
 ---
 
-## Chapter 4: When Things Broke
+## Chapter 4: When Things Broke {#chapter-4-when-things-broke}
 
 Real bugs teach more than perfect code. Here are instructive failures:
 
-### KASAN vs vrealloc (v6.12)
+### KASAN vs vrealloc (v6.12) {#kasan-vs-vrealloc-v612}
 
 **What broke**: vrealloc reused existing memory but didn't update KASAN (memory sanitizer) annotations. Result: false-positive "use-after-free" reports.
 
@@ -240,7 +240,7 @@ Real bugs teach more than perfect code. Here are instructive failures:
 
 **Fix**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce)
 
-### The Return Value Bug (v6.13)
+### The Return Value Bug (v6.13) {#the-return-value-bug-v613}
 
 **What broke**: vrealloc was refactored to support in-place growing. The code did all the work correctly... then returned the wrong variable. Growing allocations silently fell back to the slow path.
 
@@ -250,7 +250,7 @@ Real bugs teach more than perfect code. Here are instructive failures:
 
 **Fix**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) - one line change.
 
-### Redundant Zeroing (v6.13)
+### Redundant Zeroing (v6.13) {#redundant-zeroing-v613}
 
 **What broke**: With `init_on_alloc` enabled, vrealloc was zeroing memory on both grow and shrink. But on grow, the new memory was already zeroed by the allocator.
 
@@ -260,7 +260,7 @@ Real bugs teach more than perfect code. Here are instructive failures:
 
 ---
 
-## Chapter 5: Choosing the Right Allocator
+## Chapter 5: Choosing the Right Allocator {#chapter-5-choosing-the-right-allocator}
 
 After all this history, here's the practical guidance:
 
@@ -274,9 +274,9 @@ After all this history, here's the practical guidance:
 
 ---
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Explore the Buddy Allocator
+### Explore the Buddy Allocator {#explore-the-buddy-allocator}
 
 ```bash
 # View buddy allocator state per zone
@@ -292,7 +292,7 @@ cat /proc/buddyinfo
 # Order 0 = 4KB, Order 1 = 8KB, ... Order 10 = 4MB
 ```
 
-### Explore the Slab Allocator
+### Explore the Slab Allocator {#explore-the-slab-allocator}
 
 ```bash
 # View all slab caches
@@ -312,7 +312,7 @@ slabtop
 slabtop -s c  # Sort by cache size
 ```
 
-### Check Overall Memory
+### Check Overall Memory {#check-overall-memory}
 
 ```bash
 # High-level memory overview
@@ -328,7 +328,7 @@ cat /proc/meminfo
 # VmallocUsed   - vmalloc usage
 ```
 
-### Run Kernel Memory Tests
+### Run Kernel Memory Tests {#run-kernel-memory-tests}
 
 ```bash
 # Build test modules (in kernel tree with CONFIG_TEST_* enabled)
@@ -343,7 +343,7 @@ dmesg | grep test_vmalloc
 virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 ```
 
-### Key Code Locations
+### Key Code Locations {#key-code-locations}
 
 | Subsystem | File | What to Look For |
 |-----------|------|------------------|
@@ -355,7 +355,7 @@ virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 
 ---
 
-## Timeline Summary
+## Timeline Summary {#timeline-summary}
 
 | Year | Kernel | What Happened |
 |------|--------|---------------|
@@ -371,7 +371,7 @@ virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [vmalloc](vmalloc.md) - Deep dive into virtual memory allocation
 - [vrealloc](vrealloc.md) - The full story of vmalloc resizing
@@ -379,7 +379,7 @@ virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 - [slab](slab.md) - SLUB internals
 - [glossary](glossary.md) - Terminology reference
 
-### Explainers
+### Explainers {#explainers}
 
 - [virtual-physical-resident](virtual-physical-resident.md) - VSZ vs RSS vs PSS explained
 - [overcommit](overcommit.md) - Why overcommit is the only sane default

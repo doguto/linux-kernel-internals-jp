@@ -1,8 +1,8 @@
-# blk-mq: Multi-Queue Block Layer
+# blk-mq: Multi-Queue Block Layer {#blk-mq-multi-queue-block-layer}
 
 > The modern block layer interface for high-performance storage
 
-## Why blk-mq?
+## Why blk-mq? {#why-blk-mq}
 
 Traditional block layer had a single request queue per device, protected by a global lock. This was fine for HDDs (which are sequential anyway) but became a bottleneck for NVMe SSDs that can handle millions of IOPS across multiple hardware queues.
 
@@ -12,9 +12,9 @@ blk-mq (introduced in Linux 3.13) uses:
 - **Multiple hardware queues** (mapped to NVMe queues, SCSI host adapters, etc.)
 - **Per-CPU tag allocation** for request objects
 
-## The evolution: from single queue to blk-mq
+## The evolution: from single queue to blk-mq {#the-evolution-from-single-queue-to-blk-mq}
 
-### The original block layer (Linux 2.4–2.6)
+### The original block layer (Linux 2.4–2.6) {#the-original-block-layer-linux-2426}
 
 The original block layer had one `request_queue` per device, protected by a single spinlock (`q->queue_lock`). An elevator scheduler (CFQ, deadline, anticipatory) sat inside that queue, merging and reordering requests to minimize HDD seek time.
 
@@ -28,7 +28,7 @@ Per-device request_queue
   └── hw_queue → one hardware submission path
 ```
 
-### SSDs exposed the flaw
+### SSDs exposed the flaw {#ssds-exposed-the-flaw}
 
 When SSDs arrived (~2007–2010), the entire model broke down:
 
@@ -40,7 +40,7 @@ NVMe (2011+) made this crisis acute. An NVMe controller has up to 65,535 hardwar
 
 Benchmarks on early NVMe drives showed the kernel saturating the `queue_lock` spinlock at around 700K IOPS — far below the hardware's ~1M+ IOPS capability.
 
-### blk-mq (Linux 3.13, 2014)
+### blk-mq (Linux 3.13, 2014) {#blk-mq-linux-313-2014}
 
 Jens Axboe redesigned the block layer around two key ideas — [`320ae51feed5`](https://git.kernel.org/linus/320ae51feed5c2f13664aa05a76bec198967e04d) ("blk-mq: new multi-queue block IO queueing mechanism"), [LWN](https://lwn.net/Articles/552683/):
 
@@ -57,7 +57,7 @@ After blk-mq:     N CPUs → N per-CPU queues → M hw queues (N ≫ M possible)
 
 The result: modern NVMe drives saturate at 3–7M IOPS on Linux, limited by PCIe bandwidth rather than kernel lock contention.
 
-## Two-level queue architecture
+## Two-level queue architecture {#two-level-queue-architecture}
 
 ```
 CPUs
@@ -74,7 +74,7 @@ Software Queue (blk_mq_ctx)  ← per-CPU, no contention between CPUs
     └─────────────┘   └──────────────┘
 ```
 
-### Software queues (blk_mq_ctx)
+### Software queues (blk_mq_ctx) {#software-queues-blkmqctx}
 
 One per CPU. Requests are initially queued here without any locking (each CPU has its own queue):
 
@@ -93,7 +93,7 @@ struct blk_mq_ctx {
 };
 ```
 
-### Hardware queues (blk_mq_hw_ctx)
+### Hardware queues (blk_mq_hw_ctx) {#hardware-queues-blkmqhw_ctx}
 
 One per hardware queue (NVMe namespace, virtio queue, etc.):
 
@@ -109,9 +109,9 @@ struct blk_mq_hw_ctx {
 };
 ```
 
-## Implementing a blk-mq driver
+## Implementing a blk-mq driver {#implementing-a-blk-mq-driver}
 
-### 1. Define the operations
+### 1. Define the operations {#1-define-the-operations}
 
 ```c
 static const struct blk_mq_ops my_mq_ops = {
@@ -122,7 +122,7 @@ static const struct blk_mq_ops my_mq_ops = {
 };
 ```
 
-### 2. Set up tag_set
+### 2. Set up tag_set {#2-set-up-tag_set}
 
 ```c
 struct blk_mq_tag_set tag_set;
@@ -138,7 +138,7 @@ tag_set.flags        = BLK_MQ_F_SHOULD_MERGE;
 ret = blk_mq_alloc_tag_set(&tag_set);
 ```
 
-### 3. Allocate disk
+### 3. Allocate disk {#3-allocate-disk}
 
 ```c
 struct gendisk *disk = blk_mq_alloc_disk(&tag_set, NULL, my_dev);
@@ -155,7 +155,7 @@ set_capacity(disk, total_bytes >> 9);
 add_disk(disk);
 ```
 
-### 4. queue_rq: submitting to hardware
+### 4. queue_rq: submitting to hardware {#4-queue_rq-submitting-to-hardware}
 
 ```c
 static blk_status_t my_queue_rq(struct blk_mq_hw_ctx *hctx,
@@ -185,7 +185,7 @@ static blk_status_t my_queue_rq(struct blk_mq_hw_ctx *hctx,
 }
 ```
 
-### 5. Completion from interrupt
+### 5. Completion from interrupt {#5-completion-from-interrupt}
 
 ```c
 /* Called from IRQ handler when hardware signals completion */
@@ -206,7 +206,7 @@ static void my_complete_rq(struct request *rq)
 }
 ```
 
-## Tag allocation
+## Tag allocation {#tag-allocation}
 
 Each in-flight request gets a **tag** — a small integer that uniquely identifies it while it's outstanding. The driver uses the tag to correlate completion events with requests.
 
@@ -218,7 +218,7 @@ int tag = rq->tag;    /* set by blk-mq before calling queue_rq */
 struct request *rq = blk_mq_tag_to_rq(hctx->tags, tag);
 ```
 
-## Polled I/O
+## Polled I/O {#polled-io}
 
 For ultra-low latency NVMe, spinning for completion is faster than waiting for an interrupt:
 
@@ -233,7 +233,7 @@ blk_poll(q, cookie, true);
 
 This avoids interrupt overhead (~1-2µs) at the cost of burning a CPU. Useful when latency target is under 10µs.
 
-## Observing blk-mq
+## Observing blk-mq {#observing-blk-mq}
 
 ```bash
 # Queue depth and inflight
@@ -252,7 +252,7 @@ blktrace -d /dev/nvme0n1 -o - | blkparse -i -
 iostat -x 1 /dev/nvme0n1
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [bio and request structures](bio-request.md) — What blk-mq dispatches
 - [I/O Schedulers](io-schedulers.md) — What runs before blk-mq dispatch

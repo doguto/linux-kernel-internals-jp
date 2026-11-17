@@ -1,8 +1,8 @@
-# Syscall Entry Path
+# Syscall Entry Path {#syscall-entry-path}
 
 > From the `syscall` instruction to kernel code — and back
 
-## x86-64 hardware mechanism
+## x86-64 hardware mechanism {#x86-64-hardware-mechanism}
 
 When userspace executes `syscall`:
 
@@ -14,7 +14,7 @@ The `rax` register holds the syscall number. Arguments go in: `rdi`, `rsi`, `rdx
 
 Return value comes back in `rax`. On error, the kernel negates errno and userspace glibc converts it.
 
-## entry_SYSCALL_64: the assembly entry point
+## entry_SYSCALL_64: the assembly entry point {#entrysyscall64-the-assembly-entry-point}
 
 ```asm
 /* arch/x86/entry/entry_64.S */
@@ -46,7 +46,7 @@ SYM_CODE_START(entry_SYSCALL_64)
 SYM_CODE_END(entry_SYSCALL_64)
 ```
 
-## struct pt_regs: saved register state
+## struct pt_regs: saved register state {#struct-pt_regs-saved-register-state}
 
 ```c
 /* arch/x86/include/asm/ptrace.h — field names are unprefixed
@@ -77,7 +77,7 @@ struct pt_regs {
 };
 ```
 
-## do_syscall_64: the dispatch
+## do_syscall_64: the dispatch {#dosyscall64-the-dispatch}
 
 ```c
 /* arch/x86/entry/syscall_64.c */
@@ -114,7 +114,7 @@ static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
 `do_syscall_64()` returns `bool` — its final lines (elided above) decide whether the fast `SYSRET`
 instruction is safe to use for the return to userspace, or whether the slower `IRET` path is needed.
 
-## x64_sys_call: the dispatch switch
+## x64_sys_call: the dispatch switch {#x64syscall-the-dispatch-switch}
 
 ```c
 /* arch/x86/entry/syscall_64.c */
@@ -148,7 +148,7 @@ The `syscalls_64.h` is generated from `syscall_64.tbl`:
 435        common  clone3            sys_clone3
 ```
 
-## Argument passing and copying
+## Argument passing and copying {#argument-passing-and-copying}
 
 Syscall arguments come in registers. For pointers into userspace, the kernel must **copy** them in — it can never directly dereference a userspace pointer:
 
@@ -176,7 +176,7 @@ Why mandatory copies?
 - Kernel and user address spaces are separate (KPTI)
 - Userspace can change the pointed-to memory after the check (TOCTOU)
 
-## KPTI and CR3 switching
+## KPTI and CR3 switching {#kpti-and-cr3-switching}
 
 Kernel Page Table Isolation (KPTI) prevents Meltdown by using different page tables in user mode vs kernel mode:
 
@@ -191,7 +191,7 @@ User mode:  SWITCH_TO_USER_CR3
 
 On modern CPUs with PCID support, KPTI uses Process Context IDs to avoid full TLB flushes, keeping each address space's TLB entries tagged.
 
-## The vDSO: avoiding syscalls for fast operations
+## The vDSO: avoiding syscalls for fast operations {#the-vdso-avoiding-syscalls-for-fast-operations}
 
 Some syscalls are called millions of times per second (e.g., `gettimeofday`, `clock_gettime`). The kernel exports a virtual Dynamic Shared Object (vDSO) — a small piece of code mapped into every process — that implements these without entering kernel mode:
 
@@ -245,7 +245,7 @@ Syscalls fast-pathed through the vDSO (no ring switch):
 - `clock_getres()`
 - `getcpu()`
 
-## Seccomp: restricting syscalls
+## Seccomp: restricting syscalls {#seccomp-restricting-syscalls}
 
 The seccomp filter runs on every syscall before the dispatch table:
 
@@ -268,7 +268,7 @@ if (work & SYSCALL_WORK_SECCOMP) {
 }
 ```
 
-## Signals and restarts
+## Signals and restarts {#signals-and-restarts}
 
 Some syscalls can be interrupted by signals (`EINTR`). The kernel supports automatic restart for these:
 
@@ -285,9 +285,9 @@ return -ERESTARTNOHAND;
 
 These special codes (`< -MAX_ERRNO`) never reach userspace — the signal path converts them to either `EINTR` or re-queues the syscall.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64`: the assembly syscall entry point (swapgs, `pt_regs` construction, call to `do_syscall_64`)
 - [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()` and `do_syscall_x64()`: the current dispatch path. Note: in current mainline this file (not `common.c`) is where these functions live, and dispatch itself goes through `x64_sys_call()`, a `switch` statement — `sys_call_table[]` is kept only for `kernel/trace/trace_syscalls.c`, not for dispatch
@@ -298,12 +298,12 @@ These special codes (`< -MAX_ERRNO`) never reach userspace — the signal path c
 - [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — `do_hres()`: the architecture-shared vDSO high-resolution clock read
 - [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`, `ERESTARTNOINTR`, `ERESTARTNOHAND`: the internal syscall-restart codes
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — raw syscall invocation and the x86-64 register calling convention
 - [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — the virtual dynamic shared object
 
-### Related pages
+### Related pages {#related-pages}
 
 - [SYSCALL_DEFINE and dispatch](syscall-define.md) — Defining syscalls in C
 - [Adding a new syscall](adding-syscall.md) — Practical guide for kernel contributors
@@ -311,11 +311,11 @@ These special codes (`< -MAX_ERRNO`) never reach userspace — the signal path c
 - [Syscall Restart Mechanisms](restart-block.md) — `ERESTARTSYS`, `ERESTART_RESTARTBLOCK`, and `restart_syscall()`
 - [32-bit Compat Syscalls](compat.md) — the ia32 compat layer that handles true 32-bit userspace, a conceptual sibling to `do_syscall_x32()`'s x32 path (64-bit mode, ILP32 pointers) but dispatched through its own separate entry point (`ia32_sys_call()`), not through `do_syscall_64()`/`do_syscall_x32()`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: The current state of kernel page-table isolation](https://lwn.net/Articles/741878/) — Jonathan Corbet on KPTI, the Meltdown mitigation behind the CR3 switching described on this page
 
-### External
+### External {#external}
 
 - [Kernel Entries](https://docs.kernel.org/arch/x86/entry_64.html) — the canonical kernel documentation for `arch/x86/entry/entry_64.S`, covering swapgs and the different x86-64 entry paths
 - [Page Table Isolation (PTI)](https://docs.kernel.org/arch/x86/pti.html) — the Meltdown mitigation behind the CR3 switching described on this page

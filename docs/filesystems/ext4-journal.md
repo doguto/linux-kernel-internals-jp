@@ -1,8 +1,8 @@
-# ext4 Journaling and Crash Recovery
+# ext4 Journaling and Crash Recovery {#ext4-journaling-and-crash-recovery}
 
 > JBD2 transaction lifecycle: how ext4 survives power failures
 
-## Why journaling?
+## Why journaling? {#why-journaling}
 
 Without journaling, a power failure mid-write can leave the filesystem in an inconsistent state:
 
@@ -19,7 +19,7 @@ On a 4TB filesystem: hours.
 
 With journaling, changes are written to the **journal** (a circular log) first. After crash, the kernel replays the journal in seconds.
 
-## ext4 journal modes
+## ext4 journal modes {#ext4-journal-modes}
 
 ```bash
 # Check/set journal mode at mount time:
@@ -36,11 +36,11 @@ mount -o data=journal /dev/sda1 /mnt    # most durable
 
 Default is `ordered`: metadata changes are atomic, data blocks are guaranteed to be written before the metadata that references them.
 
-## JBD2: the journaling layer
+## JBD2: the journaling layer {#jbd2-the-journaling-layer}
 
 ext4 uses JBD2 (Journaling Block Device 2) as its journaling layer. JBD2 is independent of ext4 — it could journal any block device.
 
-### Journal layout on disk
+### Journal layout on disk {#journal-layout-on-disk}
 
 ```
 Ext4 partition layout:
@@ -64,7 +64,7 @@ T1 (transaction 1):
 
 The journal superblock records `s_start` (tail) and `s_sequence` (current transaction). Recovery replays all transactions from `s_start` to the last valid commit block.
 
-### struct journal_t
+### struct journal_t {#struct-journal_t}
 
 ```c
 /* include/linux/jbd2.h */
@@ -106,7 +106,7 @@ typedef struct journal_s {
 } journal_t;
 ```
 
-### struct transaction_t
+### struct transaction_t {#struct-transaction_t}
 
 ```c
 typedef struct transaction_s {
@@ -132,9 +132,9 @@ typedef struct transaction_s {
 } transaction_t;
 ```
 
-## Transaction lifecycle
+## Transaction lifecycle {#transaction-lifecycle}
 
-### Phase 1: begin
+### Phase 1: begin {#phase-1-begin}
 
 ```c
 /* Start a transaction */
@@ -143,7 +143,7 @@ handle_t *handle = jbd2_journal_start(journal, nblocks);
 /* Returns a handle; increments t_handle_count */
 ```
 
-### Phase 2: modify buffers
+### Phase 2: modify buffers {#phase-2-modify-buffers}
 
 ```c
 /* Tell JBD2 we're about to modify a buffer (gets the journal credit): */
@@ -159,7 +159,7 @@ jbd2_journal_dirty_metadata(handle, bh);
 /* Marks bh as dirty in the transaction */
 ```
 
-### Phase 3: commit (kjournald)
+### Phase 3: commit (kjournald) {#phase-3-commit-kjournald}
 
 ```c
 /* kjournald thread (fs/jbd2/journal.c) */
@@ -187,7 +187,7 @@ Commit phases:
 6. **Checkpoint**: once the commit block is on disk, the filesystem blocks can be written in place
 7. **Free**: after checkpoint, free journal space
 
-### Phase 4: checkpoint
+### Phase 4: checkpoint {#phase-4-checkpoint}
 
 After committing, the original filesystem blocks must be written out (checkpointed) before the journal space can be reused:
 
@@ -199,7 +199,7 @@ jbd2_log_do_checkpoint(journal);
 /* After checkpoint: journal space is freed for the next transaction */
 ```
 
-## Crash recovery
+## Crash recovery {#crash-recovery}
 
 ```bash
 # View journal state
@@ -217,7 +217,7 @@ e2fsck -n /dev/sda1 2>&1 | head -20
 # ...
 ```
 
-### Kernel journal recovery
+### Kernel journal recovery {#kernel-journal-recovery}
 
 ```c
 /* fs/jbd2/recovery.c */
@@ -244,7 +244,7 @@ int jbd2_journal_recover(journal_t *journal)
 
 Recovery is **O(journal size)**, not O(filesystem size). Even a 2TB filesystem recovers in seconds because only the journal (default 128MB) is replayed.
 
-## Fast commit (ext4 5.10+)
+## Fast commit (ext4 5.10+) {#fast-commit-ext4-510}
 
 JBD2 full commits are expensive (hundreds of microseconds). **Fast commit** is an optimized path for common operations:
 
@@ -267,7 +267,7 @@ tune2fs -l /dev/sda1 | grep "Filesystem features"
 # Filesystem features: fast_commit ...
 ```
 
-## ext4 journaling vs fsync
+## ext4 journaling vs fsync {#ext4-journaling-vs-fsync}
 
 ```c
 /* Application: ensure data durability */
@@ -285,7 +285,7 @@ fd = open("file", O_WRONLY | O_SYNC);
 
 The journal only guarantees metadata consistency after crash. Data durability requires `fsync()` or `O_SYNC`.
 
-## Monitoring journal performance
+## Monitoring journal performance {#monitoring-journal-performance}
 
 ```bash
 # Journal statistics
@@ -308,7 +308,7 @@ iostat -x 1
 blktrace -d /dev/sda1 -o - | blkparse -i - | grep -v "Q  W" | head -50
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ext4](ext4.md) — ext4 architecture and disk layout
 - [Life of a write() Syscall](../vfs/life-of-write.md) — write path ending at JBD2

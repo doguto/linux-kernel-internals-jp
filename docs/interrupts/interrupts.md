@@ -1,8 +1,8 @@
-# Interrupt Handling Overview
+# Interrupt Handling Overview {#interrupt-handling-overview}
 
 > From hardware signal to kernel handler: the complete path
 
-## What happens when hardware sends an interrupt
+## What happens when hardware sends an interrupt {#what-happens-when-hardware-sends-an-interrupt}
 
 On x86, the interrupt flow:
 
@@ -26,7 +26,7 @@ irq_exit_rcu() checks if softirqs are pending
   If yes: invoke_softirq() → __do_softirq()
 ```
 
-## The IDT and interrupt vectors
+## The IDT and interrupt vectors {#the-idt-and-interrupt-vectors}
 
 The x86 Interrupt Descriptor Table (IDT) has 256 entries, each pointing to a handler:
 
@@ -39,7 +39,7 @@ Vectors 129-255: Other IPIs, local APIC, MSI
 
 Each IDT entry specifies privilege level, segment, and handler address. When an interrupt fires, the CPU indexes into the IDT to find the handler.
 
-## Interrupt entry: irq_enter and irq_exit
+## Interrupt entry: irq_enter and irq_exit {#interrupt-entry-irqenter-and-irqexit}
 
 The kernel tracks whether it's in interrupt context with per-CPU counters in `preempt_count`:
 
@@ -79,7 +79,7 @@ void irq_exit_rcu(void)
 }
 ```
 
-## The irq_desc lookup
+## The irq_desc lookup {#the-irq_desc-lookup}
 
 From the interrupt vector, the kernel finds the `irq_desc` (interrupt descriptor):
 
@@ -104,7 +104,7 @@ __visible void __irq_entry common_interrupt(struct pt_regs *regs, u64 vector)
 
 Russell King had already identified the real categories — level, edge, simple, and (later) fast-EOI — while building ARM's interrupt handling for the 2.5/2.6 development series. Thomas Gleixner generalized that split into the current `irq_desc`/flow-handler/`irq_chip` architecture across all architectures in 2005–2006 (`kernel/irq/handle.c`'s own header credits "Copyright (C) 2005-2006, Thomas Gleixner, Russell King" for that generalization, alongside the older "Copyright (C) 1992, 1998-2006 Linus Torvalds, Ingo Molnar" line for the file's original pre-genirq history — see [IRQ Descriptor and irq_chip](irq-desc.md) for the resulting structures in depth). The payoff of separating "how does this interrupt's lifecycle flow" (the flow handler) from "how do I talk to this specific piece of hardware" (the `irq_chip` ops) is exactly what makes `common_interrupt()` above so short: it doesn't need to know anything about IOAPIC, GIC, or MSI at all. That knowledge lives entirely behind `desc->handle_irq` and `desc->irq_data.chip`, which is also what makes it possible for one `common_interrupt()` to serve every interrupt-controller type a given architecture supports.
 
-## Interrupt context restrictions
+## Interrupt context restrictions {#interrupt-context-restrictions}
 
 Code running in hardirq context must follow strict rules:
 
@@ -131,7 +131,7 @@ irqreturn_t my_handler(int irq, void *dev)
 
 Hardware interrupts are disabled on the current CPU for the duration of the hardirq handler (the CPU cleared `IF` on entry). Interrupts on other CPUs are not affected.
 
-## /proc/interrupts
+## /proc/interrupts {#procinterrupts}
 
 ```bash
 cat /proc/interrupts
@@ -160,7 +160,7 @@ watch -d -n 1 'cat /proc/interrupts'
 awk 'NR>1 {for(i=2;i<=NF-2;i++) if($i+0>0) {print $0; next}}' /proc/interrupts
 ```
 
-## IRQ affinity
+## IRQ affinity {#irq-affinity}
 
 Each IRQ can be steered to specific CPUs:
 
@@ -177,7 +177,7 @@ echo "0-3" > /proc/irq/24/smp_affinity_list
 systemctl status irqbalance
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [IRQ Descriptor and irq_chip](irq-desc.md) — The irq_desc data structures
 - [request_irq and free_irq](request-irq.md) — Registering handlers

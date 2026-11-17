@@ -1,8 +1,8 @@
-# io Cgroup Controller
+# io Cgroup Controller {#io-cgroup-controller}
 
 > Block I/O bandwidth throttling, weight-based scheduling, and latency SLAs
 
-## Overview
+## Overview {#overview}
 
 The cgroup v2 `io` controller manages block I/O resources for processes. It provides:
 
@@ -21,7 +21,7 @@ cat /sys/block/sda/queue/scheduler
 # mq-deadline supports io.latency
 ```
 
-## io.max: Hard rate limits
+## io.max: Hard rate limits {#iomax-hard-rate-limits}
 
 ```bash
 # Format: MAJ:MIN rbps=N wbps=N riops=N wiops=N
@@ -43,7 +43,7 @@ cat /sys/fs/cgroup/mycgroup/io.max
 # 8:0 rbps=52428800 wbps=26214400 riops=1000 wiops=500
 ```
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation}
 
 ```c
 /* block/blk-throttle.c */
@@ -72,7 +72,7 @@ static void tg_dispatch_one_bio(struct throtl_grp *tg, bool rw)
 }
 ```
 
-## io.weight: Proportional scheduling
+## io.weight: Proportional scheduling {#ioweight-proportional-scheduling}
 
 Requires BFQ I/O scheduler (Kyber does not support weight; mq-deadline and none are also unsupported):
 
@@ -91,7 +91,7 @@ echo "default 100" >> /sys/fs/cgroup/high-prio/io.weight  # others default
 # normal gets 100/(200+50+100) = 29% of bandwidth
 ```
 
-### BFQ weight-based scheduling
+### BFQ weight-based scheduling {#bfq-weight-based-scheduling}
 
 BFQ (Budget Fair Queuing) is a proportional-share I/O scheduler that implements weight-based fairness:
 
@@ -112,7 +112,7 @@ static void bfq_pd_init(struct blkg_policy_data *pd)
 }
 ```
 
-## io.latency: Latency SLA
+## io.latency: Latency SLA {#iolatency-latency-sla}
 
 `io.latency` provides latency-based I/O protection. Introduced in Linux 4.19 by Josef Bacik [(commit)](https://git.kernel.org/linus/d70675121546c35feaceebf7ed9caed8716640f3) [(LWN)](https://lwn.net/Articles/758963/). When a cgroup's latency exceeds the target, the controller throttles competing cgroups:
 
@@ -134,7 +134,7 @@ cat /sys/fs/cgroup/important/io.stat
 # dbytes=discard bytes (TRIM/DISCARD operations)
 ```
 
-### How io.latency works
+### How io.latency works {#how-iolatency-works}
 
 ```c
 /* block/blk-iolatency.c */
@@ -166,7 +166,7 @@ static void blkcg_iolatency_done_bio(struct rq_qos *rqos, struct bio *bio)
 }
 ```
 
-## io.stat: I/O statistics
+## io.stat: I/O statistics {#iostat-io-statistics}
 
 ```bash
 # Per-device I/O stats for a cgroup:
@@ -182,7 +182,7 @@ cat /sys/fs/cgroup/mycgroup/io.stat
 # wait_usec:     total time spent waiting in queue (µs)
 ```
 
-## Writeback attribution
+## Writeback attribution {#writeback-attribution}
 
 Dirty page writeback can be attributed to the cgroup that dirtied the pages:
 
@@ -201,7 +201,7 @@ echo "8:0 wbps=10485760" > /sys/fs/cgroup/mycgroup/io.max  # throttle writeback
 /* If inode is created by a cgroup, its writeback counts against that cgroup */
 ```
 
-## Container I/O isolation
+## Container I/O isolation {#container-io-isolation}
 
 Docker/containerd use io.max and io.weight for container isolation:
 
@@ -219,7 +219,7 @@ docker run --blkio-weight 500 my-image   # 500/1000 = 0.5x default
 #     blkio.throttle.read_bps_device: "52428800"  # 50MB/s
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [cgroup v2 Architecture](cgroup-v2.md) — cgroup v2 hierarchy and controllers
 - [Resource Controllers](cgroup-controllers.md) — memory, cpu, and io controllers

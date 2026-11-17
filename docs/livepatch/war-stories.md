@@ -1,10 +1,10 @@
-# Live Patching War Stories
+# Live Patching War Stories {#live-patching-war-stories}
 
 > Real incidents, tricky edge cases, and lessons learned
 
-## 1. The stuck transition
+## 1. The stuck transition {#1-the-stuck-transition}
 
-### Scenario
+### Scenario {#scenario}
 
 A live patch was applied to a production system to fix a bug in a network
 processing function used by a kthread. The patch loaded successfully and
@@ -15,7 +15,7 @@ cat /sys/kernel/livepatch/net-fix/transition
 # 1   (still stuck after 4 hours)
 ```
 
-### Root cause
+### Root cause {#root-cause}
 
 The kthread in question ran a tight polling loop:
 
@@ -50,7 +50,7 @@ cat /proc/<kthread_pid>/stack
 # [<0>] ret_from_fork+0x22/0x30
 ```
 
-### Resolution
+### Resolution {#resolution}
 
 Two options were available:
 
@@ -81,7 +81,7 @@ Two options were available:
    rather than off `cond_resched()`, so a loop that only yields still never
    reaches `__klp_sched_try_switch()`.
 
-### Lesson
+### Lesson {#lesson}
 
 Kthreads that loop without ever sleeping are the hardest targets for live
 patching: they never return to userspace, they never enter the freezable sleep
@@ -98,9 +98,9 @@ workqueue scan tries them. Before writing a patch that covers such a function:
   explicitly patched by the new cumulative patch. It is not a tool for draining
   stacks in this scenario.
 
-## 2. Shadow variable lifecycle bug
+## 2. Shadow variable lifecycle bug {#2-shadow-variable-lifecycle-bug}
 
-### Scenario
+### Scenario {#scenario_1}
 
 A live patch added per-socket state to track a new security attribute. The
 patch allocated a shadow variable during `connect()` and read it during
@@ -115,7 +115,7 @@ grep -E '^(Slab|SReclaimable|SUnreclaim):' /proc/meminfo
 # SUnreclaim:      1109284 kB   ← ~40 MB/day, tracking connection churn
 ```
 
-### Root cause
+### Root cause {#root-cause_1}
 
 Shadow variables are stored in a global hash table, `klp_shadow_hash`,
 keyed by (object pointer, ID). The patch allocated a shadow for each new
@@ -145,7 +145,7 @@ in `kernel/livepatch/shadow.c`, and nothing ever shrinks it: the only two exits
 are `klp_shadow_free()` (one `<obj, id>` pair) and `klp_shadow_free_all()`
 (every shadow with a given `id`). Both must be called by the patch.
 
-### Detection
+### Detection {#detection}
 
 This is the awkward part: there is no `klp_shadow` slab cache to grep for.
 `kernel/livepatch/shadow.c` contains no `kmem_cache_create()` at all — every
@@ -197,7 +197,7 @@ print(counts)
 # Counter({'0x1': 41823})   ← the host had ~1200 live sockets
 ```
 
-### Resolution
+### Resolution {#resolution_1}
 
 A follow-up patch hooked the socket release path and freed the shadow:
 
@@ -216,7 +216,7 @@ static void patched_sock_release(struct socket *sock)
 }
 ```
 
-### Lesson
+### Lesson {#lesson_1}
 
 Every `klp_shadow_get_or_alloc()` must have a corresponding
 `klp_shadow_free()`. Map out the full lifecycle of the kernel object before
@@ -230,9 +230,9 @@ If the object's destructor is in a different module from where the shadow is
 created, both the creator and destructor paths must be patched together.
 See [Kernel Live Patching](klp.md) for the shadow variable API.
 
-## 3. The compat syscall miss
+## 3. The compat syscall miss {#3-the-compat-syscall-miss}
 
-### Scenario
+### Scenario {#scenario_2}
 
 A CVE was discovered in the legacy XFS-compatible space-reservation ioctls —
 `FS_IOC_RESVSP`, `FS_IOC_UNRESVSP`, and `FS_IOC_ZERO_RANGE`. A live patch was
@@ -241,7 +241,7 @@ in `fs/ioctl.c`. The vulnerability was considered remediated. Three days
 later, a security audit found that 32-bit processes on x86_64 hosts were
 still exploitable through the exact same ioctl commands.
 
-### Root cause
+### Root cause {#root-cause_2}
 
 The patch targeted only the native ioctl path. On `CONFIG_X86_64`, the 32-bit
 compat entry point, `compat_sys_ioctl()`, dispatches the equivalent
@@ -288,7 +288,7 @@ and its own copy-in routine (`include/linux/falloc.h`). Inside
 directly by `compat_ioctl_preallocate()` and never reach `do_vfs_ioctl()` →
 `file_ioctl()` → `ioctl_preallocate()`, the function the patch had hooked.
 
-### Detection
+### Detection {#detection_1}
 
 ```bash
 # Check /proc/kallsyms for the compat counterpart
@@ -300,7 +300,7 @@ grep -i preallocate /proc/kallsyms
 grep -n "compat_ioctl_preallocate\|FS_IOC_RESVSP_32" fs/ioctl.c
 ```
 
-### Resolution
+### Resolution {#resolution_2}
 
 A second patch was deployed that also hooked `compat_ioctl_preallocate()`.
 Going forward, the team added a checklist item for every ioctl-handler patch:
@@ -314,7 +314,7 @@ Going forward, the team added a checklist item for every ioctl-handler patch:
 3. Is the vulnerability present in both the native and compat parsing
    routines?
 
-### Lesson
+### Lesson {#lesson_2}
 
 For any patch targeting a function reached through `do_vfs_ioctl()` or
 `f_op->unlocked_ioctl`, check whether the same command number has a compat
@@ -325,9 +325,9 @@ compat argument layout, like `space_resv` vs. `space_resv_32` here, needs its
 own livepatch target. `grep -i <name> /proc/kallsyms` for the function's
 name family is a fast first check; the source is the definitive answer.
 
-## 4. The wrong occurrence of a duplicated symbol
+## 4. The wrong occurrence of a duplicated symbol {#4-the-wrong-occurrence-of-a-duplicated-symbol}
 
-### Scenario
+### Scenario {#scenario_3}
 
 A bug was traced to `rx_ring_refill()`, a small `static` helper in a built-in
 network driver. A live patch was written against it. The first `insmod` failed
@@ -363,7 +363,7 @@ cat /sys/kernel/livepatch/rx-fix/vmlinux/patched
 The original bug kept reproducing anyway. Worse, an unrelated wireless
 interface on the same hosts started dropping frames under load.
 
-### Root cause
+### Root cause {#root-cause_3}
 
 The patch was live, the transition had finished, and the ftrace hook was
 installed — on the wrong function. `old_sympos` selected the other driver's
@@ -412,7 +412,7 @@ is rejected, with a different message:
 So the ambiguity that fails loudly is the safe one. A wrong-but-valid
 `old_sympos` is the silent one.
 
-### Detection
+### Detection {#detection_2}
 
 `dmesg` was clean, which was itself the clue — this was not a resolution
 failure, so the question was *what* had been resolved. `old_func` is
@@ -444,7 +444,7 @@ addr2line -f -e /usr/lib/debug/lib/modules/$(uname -r)/vmlinux \
 # drivers/net/ethernet/.../rx.c:88         ← what was meant
 ```
 
-### Resolution
+### Resolution {#resolution_3}
 
 The patch was rebuilt with `.old_sympos = 2` and redeployed. The sysfs
 directory name confirmed the new target before anyone waited on behaviour:
@@ -459,7 +459,7 @@ The team then added a build-time check: for every `klp_func`, resolve
 the occurrence at the configured `old_sympos` maps back — via `addr2line` — to
 the source file the patch was written against.
 
-### Lesson
+### Lesson {#lesson_3}
 
 `old_sympos` is a 1-based index counted per object — in ascending address order
 for `vmlinux` — and getting it wrong is one of the few livepatch mistakes the
@@ -489,9 +489,9 @@ symbol table` and returns `-EINVAL`, which propagates through
 the `insmod` fails and the module never loads. There is no partially applied
 state to discover later; you simply have to patch the callers instead.
 
-## 5. The cumulative patch that forgot `.replace`
+## 5. The cumulative patch that forgot `.replace` {#5-the-cumulative-patch-that-forgot-replace}
 
-### Scenario
+### Scenario {#scenario_4}
 
 A fleet had accumulated three live patches: P1 fixing `tcp_sendmsg`, P2 fixing
 `ip_output`, and P3 fixing `nf_conntrack_in`. P2's fix was later identified as
@@ -512,7 +512,7 @@ cat /sys/kernel/livepatch/p4-cumulative/transition   # 0 — completed
 A week of throughput graphs later, the regression was still there on every
 patched host.
 
-### Root cause
+### Root cause {#root-cause_4}
 
 `.replace` had been left at its default of `false` in P4's `struct klp_patch`.
 The line that set it had been dropped in a refactor of the patch module's
@@ -557,7 +557,7 @@ buys, and only `.replace`. Upstream's own list of what atomic replace makes
 possible leads with it: "Atomically revert some functions in a previous patch
 while upgrading other functions."
 
-### Detection
+### Detection {#detection_3}
 
 The tell is that the superseded patches were all still present. After a real
 atomic replace they would not be: once the transition settles,
@@ -591,7 +591,7 @@ ls /sys/kernel/livepatch/p4-cumulative/vmlinux/
 # nf_conntrack_in,1  patched  tcp_sendmsg,1  udp_sendmsg,1
 ```
 
-### Resolution
+### Resolution {#resolution_4}
 
 P4 was rebuilt unchanged except for `.replace = true` and reloaded as P5. This
 time `klp_add_nops()` ran: it walked every function covered by P1 through P4,
@@ -611,7 +611,7 @@ ls /sys/kernel/livepatch/
 # p5-cumulative        ← the older directories are gone
 ```
 
-### Lesson
+### Lesson {#lesson_4}
 
 A patch is cumulative only because you said so. Nothing infers it from the
 patch's contents, and a missing `.replace` produces no warning at any stage.
@@ -631,9 +631,9 @@ patch's contents, and a missing `.replace` produces no warning at any stage.
 See [Cumulative Patches and Atomic Replace](klp-cumulative.md) for the full
 description of the `func_stack`, the `nop` funcs, and the atomic replace flow.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — `klp_send_signals()`, whose `wake_up_state(task, TASK_INTERRUPTIBLE)` only wakes kthreads in interruptible sleep, and `klp_try_complete_transition()`, behind Case 1
 - [kernel/livepatch/shadow.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/shadow.c) — the `klp_shadow_hash` hashtable and the `klp_shadow_get_or_alloc()`/`klp_shadow_free()` pairing that Case 2's patch got wrong
@@ -645,7 +645,7 @@ description of the `func_stack`, the `nop` funcs, and the atomic replace flow.
 - [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `ioctl_preallocate()` and the separate x86_64 `compat_ioctl_preallocate()` entry point, the two functions behind Case 3
 - [include/linux/falloc.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/falloc.h) — `struct space_resv`/`struct space_resv_32`, the native/compat layout mismatch behind Case 3
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Kernel Live Patching](klp.md) — the ftrace redirection mechanism and shadow variable API these incidents build on
 - [KLP Consistency Model](klp-consistency.md) — per-task transition states and stack checking behind Case 1
@@ -653,12 +653,12 @@ description of the `func_stack`, the `nop` funcs, and the atomic replace flow.
 - [KLP State: Custom Consistency Checks](klp-state.md) — the API for carrying state between cumulative patches, the companion problem to Case 5's callback caveat
 - [kexec](kexec.md) — reboot without a full firmware POST, an alternative to live patching when a fix requires downtime
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [livepatch: consistency model](https://lwn.net/Articles/632582/) (February 9, 2015) — the original per-task consistency model RFC and per-task transition design behind Case 1
 - [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/) (August 21, 2017) — Joe Lawrence's patch introducing `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()` and the `(obj, id)`-keyed hashtable behind Case 2
 - [livepatch: introduce atomic replace](https://lwn.net/Articles/734997/) (September 27, 2017) — the atomic replace / cumulative patch design discussed in Case 5
 
-### External
+### External {#external}
 
 - [Shadow variables](https://docs.kernel.org/livepatch/shadow-vars.html) — upstream documentation on matching a shadow variable's lifecycle to its parent object's, the rule Case 2's patch violated

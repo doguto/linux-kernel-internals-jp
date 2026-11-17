@@ -1,8 +1,8 @@
-# Life of a write
+# Life of a write {#life-of-a-write}
 
 > Tracing a write() syscall from userspace through the page cache, dirty throttling, writeback, and down to storage
 
-## What happens when you write to a file?
+## What happens when you write to a file? {#what-happens-when-you-write-to-a-file}
 
 When a program writes to a file, the data almost never goes directly to disk. Instead, the kernel copies it into a **page cache** page, marks that page **dirty**, and returns immediately. The data reaches storage later — either when the OS flushes it in the background, when memory pressure forces eviction, or when the application explicitly calls `fsync()`.
 
@@ -28,7 +28,7 @@ flowchart TD
 
 The critical insight: **write() returns before your data is durable**. This is a deliberate design choice — buffering writes in DRAM and flushing them asynchronously in large batches is orders of magnitude faster than writing every byte synchronously. But it means applications that need durability must explicitly ask for it with `fsync()` or `O_SYNC`.
 
-## Stage 1: The write() syscall entry
+## Stage 1: The write() syscall entry {#stage-1-the-write-syscall-entry}
 
 A user program calls `write()`:
 
@@ -55,7 +55,7 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 }
 ```
 
-### From syscall to VFS: ksys_write and vfs_write
+### From syscall to VFS: ksys_write and vfs_write {#from-syscall-to-vfs-ksyswrite-and-vfswrite}
 
 The syscall stub simply calls `ksys_write()`. `ksys_write()` wraps the fd resolution so the same logic can be called from kernel code without going through `SYSCALL_DEFINE`. `vfs_write()` does the permission checks and dispatches to the filesystem:
 
@@ -115,7 +115,7 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf,
 }
 ```
 
-### The kiocb and iov_iter
+### The kiocb and iov_iter {#the-kiocb-and-iov_iter}
 
 Two structs carry per-operation state through the entire write path:
 
@@ -182,7 +182,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 
 The `inode_lock()` / `inode_unlock()` wrapping `generic_perform_write` is the inode's `i_rwsem`. This serialises concurrent writers on the same file — only one write is in `generic_perform_write` at a time for buffered I/O.
 
-## Stage 2: The page cache write path
+## Stage 2: The page cache write path {#stage-2-the-page-cache-write-path}
 
 `generic_perform_write()` is the engine of the buffered write path. It loops over the write range one page at a time, calling into the filesystem for each page via the `address_space_operations` (`a_ops`) dispatch table:
 
@@ -239,7 +239,7 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 }
 ```
 
-### write_begin: preparing the page
+### write_begin: preparing the page {#write_begin-preparing-the-page}
 
 `a_ops->write_begin` is the filesystem's hook to prepare the target folio before the copy. For iomap-based filesystems, the `a_ops->write_begin` dispatch goes through the filesystem's own write_begin implementation (e.g., `ext4_write_begin`), which then calls into the iomap machinery — `iomap_write_begin()` is an internal iomap helper, not the `a_ops` callback itself. It must:
 
@@ -272,7 +272,7 @@ static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
 
 The read-on-partial-write is an important performance concern. If your application always writes 4 KB-aligned, full-page chunks, the kernel skips this extra read. Databases and write-optimised applications often align writes for exactly this reason.
 
-### copy_page_from_iter_atomic: the actual copy
+### copy_page_from_iter_atomic: the actual copy {#copypagefromiteratomic-the-actual-copy}
 
 With the page locked and uptodate, the kernel copies from the user iterator into the page:
 
@@ -291,7 +291,7 @@ size_t copy_page_from_iter_atomic(struct page *page, unsigned offset,
 }
 ```
 
-### write_end: marking the page dirty
+### write_end: marking the page dirty {#write_end-marking-the-page-dirty}
 
 `a_ops->write_end` is called after the copy. It does three things:
 
@@ -320,11 +320,11 @@ static int iomap_write_end(struct iomap_iter *iter, loff_t pos, unsigned len,
 }
 ```
 
-## Stage 3: What "dirty" means
+## Stage 3: What "dirty" means {#stage-3-what-dirty-means}
 
 Marking a page dirty is the key event that separates "data written to memory" from "data written to disk". The kernel tracks dirty pages globally, per-node, and per-cgroup.
 
-### folio_mark_dirty and SetPageDirty
+### folio_mark_dirty and SetPageDirty {#foliomarkdirty-and-setpagedirty}
 
 ```c
 // include/linux/pagemap.h / mm/page-writeback.c
@@ -388,7 +388,7 @@ bool block_dirty_folio(struct address_space *mapping, struct folio *folio)
 }
 ```
 
-### Dirty page accounting
+### Dirty page accounting {#dirty-page-accounting}
 
 `folio_account_dirtied()` increments the global and per-node dirty page counters:
 
@@ -420,7 +420,7 @@ grep -E "^Dirty:|^Writeback:" /proc/meminfo
 grep -E "nr_dirty|nr_writeback" /proc/vmstat
 ```
 
-### __mark_inode_dirty: the inode dirty list
+### __mark_inode_dirty: the inode dirty list {#_markinode_dirty-the-inode-dirty-list}
 
 Dirtying a page also marks the owning inode dirty. This is how the writeback worker knows which inodes have pages to flush:
 
@@ -449,11 +449,11 @@ void __mark_inode_dirty(struct inode *inode, int flags)
 }
 ```
 
-## Stage 4: Dirty throttling
+## Stage 4: Dirty throttling {#stage-4-dirty-throttling}
 
 Buffering writes is fast, but if writers produce dirty pages faster than writeback can flush them, memory fills up. To prevent this, every loop iteration of `generic_perform_write()` calls `balance_dirty_pages_ratelimited()`.
 
-### The two thresholds
+### The two thresholds {#the-two-thresholds}
 
 The kernel enforces two dirty-memory thresholds, both expressed as percentages of available memory:
 
@@ -483,7 +483,7 @@ stateDiagram-v2
 
 > **Note:** The `HardThrottle` state is not a single transition. `balance_dirty_pages()` loops internally — it sleeps the writer, wakes up, rechecks the dirty count, and sleeps again if the count is still above the threshold. The writer is unblocked only once dirty pages drain below the limit.
 
-### balance_dirty_pages_ratelimited
+### balance_dirty_pages_ratelimited {#balancedirtypages_ratelimited}
 
 The rate-limited wrapper avoids calling `balance_dirty_pages()` on every single write — that would be too expensive. Instead it amortizes the check:
 
@@ -502,7 +502,7 @@ void balance_dirty_pages_ratelimited(struct address_space *mapping)
 }
 ```
 
-### balance_dirty_pages: the throttling loop
+### balance_dirty_pages: the throttling loop {#balancedirtypages-the-throttling-loop}
 
 When dirty pages exceed the hard limit, `balance_dirty_pages()` calculates a sleep duration proportional to how far over the limit we are, and pauses the writer:
 
@@ -536,7 +536,7 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 }
 ```
 
-### What this looks like in production
+### What this looks like in production {#what-this-looks-like-in-production}
 
 When writes overwhelm writeback capacity, `balance_dirty_pages()` starts sleeping writers. The effects are visible:
 
@@ -556,23 +556,23 @@ grep -E "nr_dirty_threshold|nr_dirty_background_threshold" /proc/vmstat
 
 The practical production impact: a single large writer can "fill the pipe" and cause all other processes that happen to write files to stall in `balance_dirty_pages()`. This is a common source of application latency spikes on write-heavy machines. Tuning `dirty_ratio` and `dirty_background_ratio` or switching to `dirty_bytes` / `dirty_background_bytes` (which do not scale with memory size) can help.
 
-## Stage 5: When does the write actually hit storage?
+## Stage 5: When does the write actually hit storage? {#stage-5-when-does-the-write-actually-hit-storage}
 
 After `write()` returns, the data is in the page cache but not on disk. There are four ways it eventually gets there.
 
-### Path 1: Periodic writeback (every 5 seconds by default)
+### Path 1: Periodic writeback (every 5 seconds by default) {#path-1-periodic-writeback-every-5-seconds-by-default}
 
 The per-BDI writeback worker `wb_workfn` runs every `dirty_writeback_centisecs` centiseconds (default 500 = 5 s). Each run flushes dirty pages that have been dirty longer than `dirty_expire_centisecs` (default 3000 = 30 s). This is the normal path for most workloads.
 
-### Path 2: Background ratio crossed
+### Path 2: Background ratio crossed {#path-2-background-ratio-crossed}
 
 When dirty pages exceed `dirty_background_ratio`, `wb_start_background_writeback()` wakes the flusher immediately — without stalling the writer. The flusher runs concurrently with writes.
 
-### Path 3: Memory pressure
+### Path 3: Memory pressure {#path-3-memory-pressure}
 
 When `kswapd` is trying to reclaim pages for new allocations, it cannot reclaim dirty pages until they have been written back. It calls `wakeup_flusher_threads()` to accelerate writeback. If writeback is too slow, `kswapd` itself may write pages directly — this is called **direct writeback** and is a sign of memory pressure.
 
-### Path 4: Explicit sync (fsync, fdatasync, sync)
+### Path 4: Explicit sync (fsync, fdatasync, sync) {#path-4-explicit-sync-fsync-fdatasync-sync}
 
 Applications that need durability guarantees call one of the sync syscalls:
 
@@ -632,11 +632,11 @@ The filesystem fsync implementation must:
 
 After `fsync()` returns, the write is durable — even if power is lost immediately afterward.
 
-## Stage 6: The writeback path
+## Stage 6: The writeback path {#stage-6-the-writeback-path}
 
 Writeback is the process by which the kernel actually writes dirty pages to storage. It runs in the context of per-BDI worker threads, driven by `wb_workfn`.
 
-### The writeback call chain
+### The writeback call chain {#the-writeback-call-chain}
 
 ```
 wb_workfn()                               fs/fs-writeback.c
@@ -652,7 +652,7 @@ wb_workfn()                               fs/fs-writeback.c
                                                   └── block layer → driver → disk
 ```
 
-### The wb_workfn worker
+### The wb_workfn worker {#the-wb_workfn-worker}
 
 ```c
 // fs/fs-writeback.c
@@ -676,7 +676,7 @@ void wb_workfn(struct work_struct *work)
 }
 ```
 
-### writeback_sb_inodes: the per-inode loop
+### writeback_sb_inodes: the per-inode loop {#writebacksbinodes-the-per-inode-loop}
 
 ```c
 // fs/fs-writeback.c (simplified)
@@ -703,7 +703,7 @@ static long writeback_sb_inodes(struct super_block *sb,
 }
 ```
 
-### The writeback_control struct
+### The writeback_control struct {#the-writeback_control-struct}
 
 `writeback_control` is the instruction packet passed down through the call chain. It tells each layer how much to write, in what mode, and for what reason:
 
@@ -727,7 +727,7 @@ struct writeback_control {
 };
 ```
 
-### WB_REASON: why writeback was triggered
+### WB_REASON: why writeback was triggered {#wb_reason-why-writeback-was-triggered}
 
 The `wb_writeback_work` struct carries a `reason` field that records what triggered this writeback pass:
 
@@ -746,7 +746,7 @@ enum wb_reason {
 
 This is visible in writeback tracepoints — useful for diagnosing unexpected write storms.
 
-### do_writepages and a_ops->writepages
+### do_writepages and a_ops->writepages {#dowritepages-and-aops-writepages}
 
 At the bottom of the writeback call chain, `do_writepages()` calls into the filesystem:
 
@@ -781,7 +781,7 @@ folio_start_writeback(folio);     // sets PG_writeback only — does NOT clear P
 folio_end_writeback(folio);    // clears PG_writeback, wakes waiters
 ```
 
-## Stage 7: Block layer handoff
+## Stage 7: Block layer handoff {#stage-7-block-layer-handoff}
 
 When `submit_bio()` is called, control passes from the filesystem to the block layer. The write is now a `struct bio` — a description of the I/O operation:
 
@@ -799,7 +799,7 @@ struct bio {
 };
 ```
 
-### submit_bio to blk_mq_submit_bio
+### submit_bio to blk_mq_submit_bio {#submitbio-to-blkmqsubmitbio}
 
 ```c
 // block/blk-core.c
@@ -828,9 +828,9 @@ static void __submit_bio(struct bio *bio)
 
 For a deeper look at request queues, I/O schedulers, and driver dispatch, see the [block layer docs](../block/README.md).
 
-## Stage 8: Barriers and persistence guarantees
+## Stage 8: Barriers and persistence guarantees {#stage-8-barriers-and-persistence-guarantees}
 
-### O_SYNC and O_DSYNC
+### O_SYNC and O_DSYNC {#osync-and-odsync}
 
 Opening a file with `O_SYNC` makes every `write()` call synchronous — it does not return until data and metadata have been confirmed durable by the storage device. `O_DSYNC` is the data-only equivalent (like `fdatasync()` on every write):
 
@@ -854,7 +854,7 @@ if (ret > 0) {
 }
 ```
 
-### FUA vs FLUSH
+### FUA vs FLUSH {#fua-vs-flush}
 
 The block layer communicates ordering requirements to the storage device via two mechanisms:
 
@@ -875,7 +875,7 @@ cat /sys/block/sda/queue/fua        # 0 = no FUA (older SATA drives)
 hdparm -W /dev/sda                  # 1 = write cache enabled (volatile)
 ```
 
-### NVMe ordering
+### NVMe ordering {#nvme-ordering}
 
 NVMe has native support for FUA and the `Flush` command. On NVMe, `fsync()` typically maps to:
 
@@ -885,9 +885,9 @@ NVMe has native support for FUA and the `Flush` command. On NVMe, `fsync()` typi
 
 NVMe controllers are required to honour the Flush command — all preceding writes must be committed to non-volatile storage before the Flush command completes. This is the hardware guarantee that makes `fsync()` meaningful.
 
-## Stage 9: What can go wrong
+## Stage 9: What can go wrong {#stage-9-what-can-go-wrong}
 
-### The volatile write cache problem
+### The volatile write cache problem {#the-volatile-write-cache-problem}
 
 Most HDDs and many SSDs have a DRAM write cache. When the kernel issues a write, the device acknowledges it as soon as the data lands in this cache — before writing it to the platters or NAND. If power fails between the acknowledgement and the actual physical write, data is lost.
 
@@ -898,7 +898,7 @@ This means that even after `fsync()` returns successfully, data can be lost on d
 
 Enterprise HDDs and SSDs typically have battery-backed or capacitor-backed write caches, which mitigate this — the cache survives brief power loss long enough to flush to persistent storage.
 
-### Kernel buffering fooling applications
+### Kernel buffering fooling applications {#kernel-buffering-fooling-applications}
 
 A common mistake: an application writes data and calls `close()` without `fsync()`, and assumes the data is safe because `close()` succeeded. In fact, `close()` does not flush dirty pages — it merely decrements the file descriptor reference count. Dirty pages may remain in the page cache for up to 30 seconds (the `dirty_expire_centisecs` default) after `close()` returns.
 
@@ -915,7 +915,7 @@ fsync(fd);    // <-- flush data and metadata to storage
 close(fd);
 ```
 
-### fsync on a directory for rename safety
+### fsync on a directory for rename safety {#fsync-on-a-directory-for-rename-safety}
 
 Renaming a file (which is how most applications do "atomic write": write to a temp file, then rename into place) requires `fsync()` on the directory, not just the file:
 
@@ -939,7 +939,7 @@ close(dir_fd);
 
 Without the directory `fsync`, the rename's directory entry update may still be in the page cache after a crash. On reboot, neither the old nor the new name might exist, leaving the file orphaned or missing.
 
-### Page cache and direct I/O coherency
+### Page cache and direct I/O coherency {#page-cache-and-direct-io-coherency}
 
 Mixing buffered writes (which go through the page cache) with direct reads (`O_DIRECT`, which bypass the cache) can produce stale reads:
 
@@ -954,13 +954,13 @@ pread(fd_direct, buf, 9, 0); // reads from disk: old data!
 
 The kernel does not automatically flush the page cache when a direct read is issued. Applications that mix buffered and direct I/O must call `fsync()` before switching from buffered writes to direct reads.
 
-### NFS and distributed write safety
+### NFS and distributed write safety {#nfs-and-distributed-write-safety}
 
 On NFS, `write()` calls may be buffered by the NFS client. The server does not see the writes until the client flushes them. `fsync()` on an NFS client sends a `COMMIT` RPC to the server, requesting that the server flush its own buffers to stable storage. If the server crashes between the client's write and the `COMMIT`, data can be lost even if the client's `write()` returned success — this is NFS's "unstable write" behaviour.
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Trace a write with strace
+### Trace a write with strace {#trace-a-write-with-strace}
 
 ```bash
 # Trace write syscalls for a command:
@@ -970,7 +970,7 @@ strace -e trace=write,fsync,fdatasync dd if=/dev/zero of=/tmp/test bs=4096 count
 strace -T -e trace=write,fsync dd if=/dev/zero of=/tmp/test bs=4096 count=256 oflag=sync
 ```
 
-### Watch dirty pages accumulate and flush
+### Watch dirty pages accumulate and flush {#watch-dirty-pages-accumulate-and-flush}
 
 ```bash
 # Continuous monitoring of dirty/writeback pages:
@@ -982,7 +982,7 @@ dd if=/dev/zero of=/tmp/bigfile bs=1M count=512
 # Observe: Dirty: rises as writes buffer, then drops as writeback runs
 ```
 
-### Measure the cost of fsync
+### Measure the cost of fsync {#measure-the-cost-of-fsync}
 
 ```bash
 # Buffered writes only (no fsync) — fast:
@@ -995,7 +995,7 @@ time dd if=/dev/zero of=/tmp/test bs=4096 count=4096 conv=fsync
 time dd if=/dev/zero of=/tmp/test bs=4096 count=4096 oflag=sync
 ```
 
-### Watch writeback with iostat
+### Watch writeback with iostat {#watch-writeback-with-iostat}
 
 ```bash
 # Real-time I/O statistics per device (1-second intervals):
@@ -1010,7 +1010,7 @@ iostat -x 1
 # application latency spikes as balance_dirty_pages() throttles writers.
 ```
 
-### Observe the writeback worker with ftrace
+### Observe the writeback worker with ftrace {#observe-the-writeback-worker-with-ftrace}
 
 ```bash
 # Enable writeback tracepoints:
@@ -1029,7 +1029,7 @@ echo 0 > /sys/kernel/debug/tracing/events/writeback/enable
 # writeback_single_inode: dev=8:0 ino=... wrote=...
 ```
 
-### Check dirty throttling thresholds
+### Check dirty throttling thresholds {#check-dirty-throttling-thresholds}
 
 ```bash
 # Current sysctl values:
@@ -1048,7 +1048,7 @@ sudo sysctl -w vm.dirty_writeback_centisecs=100   # wake up every 1 s
 sudo sysctl -w vm.dirty_expire_centisecs=500      # flush pages older than 5 s
 ```
 
-### Monitor per-BDI writeback state
+### Monitor per-BDI writeback state {#monitor-per-bdi-writeback-state}
 
 ```bash
 # List all backing devices:
@@ -1064,7 +1064,7 @@ cat /sys/class/bdi/*/stats
 # BdiWritten:     total bytes written since boot
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -1077,9 +1077,9 @@ cat /sys/class/bdi/*/stats
 | [`include/linux/writeback.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/writeback.h) | `struct writeback_control`, `wb_reason` enum |
 | [`fs/iomap/buffered-io.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/iomap/buffered-io.c) | `iomap_write_begin`, `iomap_write_end`, `iomap_writepages` |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Page cache writeback](page-cache-writeback.md) — writeback mechanics in depth
 - [Buffered I/O](buffered-io.md) — the full read and write path through the page cache
@@ -1087,7 +1087,7 @@ cat /sys/class/bdi/*/stats
 - [Async I/O](async-io.md) — io_uring for non-blocking write submission
 - [Life of a read](../mm/life-of-read.md) — the read-side counterpart to this page
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Writeback and control groups](https://lwn.net/Articles/648292/) (2015) — per-cgroup writeback accounting
 - [Dynamic writeback throttling](https://lwn.net/Articles/405076/) (2010) — dirty throttling history

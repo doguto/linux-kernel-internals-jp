@@ -1,8 +1,8 @@
-# Kernel Modules
+# Kernel Modules {#kernel-modules}
 
 > Dynamically loadable code that extends the kernel
 
-## What kernel modules are
+## What kernel modules are {#what-kernel-modules-are}
 
 A kernel module is an ELF shared object loaded into the kernel at runtime. Modules:
 
@@ -13,7 +13,7 @@ A kernel module is an ELF shared object loaded into the kernel at runtime. Modul
 
 Most device drivers, filesystems, and network protocols ship as modules.
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -25,7 +25,7 @@ Most device drivers, filesystems, and network protocols ship as modules.
 | [Dynamic Debug](dynamic-debug.md) | pr_debug/dev_dbg, __dyndbg section, runtime control via debugfs |
 | [War Stories](war-stories.md) | CRC mismatches, signing failures, taint cascades, init use-after-free |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Load a module

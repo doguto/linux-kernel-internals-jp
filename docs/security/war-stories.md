@@ -1,4 +1,4 @@
-# War Stories: Linux Security Bugs and CVEs
+# War Stories: Linux Security Bugs and CVEs {#war-stories-linux-security-bugs-and-cves}
 
 > Real vulnerabilities from the LSM/capabilities/namespaces/ptrace territory — what broke, why, and what the kernel learned
 
@@ -10,27 +10,27 @@ There's a second recurring pattern worth calling out before the incidents themse
 
 Each incident below has its own page: root-cause analysis grounded in the actual patches, real primary sourcing (NVD, CISA's KEV catalog, Exploit-DB, and whatever mailing-list record actually exists), and a no-blame retrospective on the design decisions that made the bug possible.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by disclosure date — newest first.
 
-### [Dirty Pipe](war-stories/dirty-pipe.md)
+### [Dirty Pipe](war-stories/dirty-pipe.md) {#dirty-pipe}
 **March 2022 · CVE-2022-0847 · CVSS 7.8**
 A single missing `buf->flags = 0;`, dormant for six years across two unrelated refactors, let any user who could merely *read* a file overwrite it in the page cache instead — immutable files, read-only btrfs snapshots, and read-only mounts included, with no capability required at all. Actively exploited per CISA's KEV catalog within seven weeks of disclosure.
 
-### [The fs_context Legacy Parameter Overflow](war-stories/fscontext-overflow.md)
+### [The fs_context Legacy Parameter Overflow](war-stories/fscontext-overflow.md) {#the-fs_context-legacy-parameter-overflow}
 **January 2022 · CVE-2022-0185 · CVSS 8.4**
 A bounds check written as a subtraction instead of a sum underflowed in unsigned arithmetic, and `unshare -Urm` was all it took to reach it from an unprivileged account. One team weaponized it into a Kubernetes pod escape within days for a $31,337 bounty; a second, independent exploit targeting a different distribution followed a week later.
 
-### [Stale ptracer Credentials](war-stories/stale-ptracer-creds.md)
+### [Stale ptracer Credentials](war-stories/stale-ptracer-creds.md) {#stale-ptracer-credentials}
 **July 2019 · CVE-2019-13272 · CVSS 7.8**
 `PTRACE_TRACEME` recorded the *parent's* credentials as the tracer's rather than the requesting child's, so an unprivileged process could make its own privileged parent its ptracer, wait for that parent to drop privilege and exec something attacker-reachable, and keep the ptrace relationship's original, still-privileged authority. Weaponized against polkit's `pkexec` on twenty-odd tested distributions within a week.
 
-### [Nested User Namespace UID/GID Mapping](war-stories/nested-userns-uid-mapping.md)
+### [Nested User Namespace UID/GID Mapping](war-stories/nested-userns-uid-mapping.md) {#nested-user-namespace-uidgid-mapping}
 **November 2018 · CVE-2018-18955 · CVSS 7.0**
 A performance optimization kept two sorted copies of a namespace's ID mapping table but only translated one of them, an inconsistency invisible except two levels deep with more than five mapped ID ranges — reachable with nothing more than the setuid `newuidmap` helper from the `uidmap` package. An unprivileged process inside a nested namespace could read `/etc/shadow` on the host.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | Dirty Pipe | fs_context overflow | Stale ptracer creds | Nested userns mapping |
 |---------|:----------:|:--------------------:|:--------------------:|:-----------------------:|
@@ -51,7 +51,7 @@ The fs_context bug is the exception on almost every row, and it's exactly the ro
 
 Three of the four have been confirmed under real-world active exploitation by CISA's KEV catalog — a strikingly high fraction, compared to the one out of six on the networking page. Local privilege-escalation primitives are directly useful to an attacker who already has a foothold, in a way a remote crash usually isn't; that's a plausible reason KEV inclusion runs higher here even though every bug on this page requires local access first.
 
-## See also
+## See also {#see-also}
 
 - [LSM Framework](lsm.md) — the hook layer that sits alongside these bugs rather than in front of them: `security_ptrace_traceme()` is an LSM hook, but the decisions these bugs got wrong live in the DAC/credential/capability layers beneath it
 - [Linux Capabilities](capabilities.md) — the privilege-splitting model that `CAP_SYS_ADMIN`-in-a-namespace and privilege-dropping-then-exec both depend on being sound

@@ -1,14 +1,14 @@
-# Spinlock and raw_spinlock
+# Spinlock and raw_spinlock {#spinlock-and-raw_spinlock}
 
 > Busy-wait locks that don't sleep — the foundation of kernel synchronization
 
-## What is a spinlock?
+## What is a spinlock? {#what-is-a-spinlock}
 
 A spinlock is a lock that a thread holds by spinning in a tight loop until the lock becomes available. Unlike a mutex, it never puts the thread to sleep. This makes spinlocks usable in contexts where sleeping is forbidden — interrupt handlers, NMI handlers, and anywhere `in_interrupt()` is true.
 
 The cost: spinning wastes CPU cycles. Spinlocks should only protect very short critical sections (typically microseconds, not milliseconds).
 
-## Two spinlock types
+## Two spinlock types {#two-spinlock-types}
 
 The kernel has two types that look similar but behave differently on PREEMPT_RT kernels:
 
@@ -37,7 +37,7 @@ On a PREEMPT_RT kernel, `spinlock_t` becomes a sleeping lock (backed by `rt_mute
 
 **Rule**: use `spinlock_t` for most code. Use `raw_spinlock_t` only when you need a true spinlock even on RT kernels (e.g., the scheduler's runqueue lock, which cannot sleep because the scheduler itself is how sleeping works).
 
-## Basic API
+## Basic API {#basic-api}
 
 ```c
 #include <linux/spinlock.h>
@@ -72,7 +72,7 @@ if (spin_trylock(&my_lock)) {
 }
 ```
 
-## When to use irqsave vs plain spin_lock
+## When to use irqsave vs plain spin_lock {#when-to-use-irqsave-vs-plain-spin_lock}
 
 The rule: you need `spin_lock_irqsave()` if the same lock is acquired from both process context and an interrupt handler.
 
@@ -109,7 +109,7 @@ void update_counter(void)
 
 If the lock is only used within a single IRQ handler (or only in process context where IRQs are already off), plain `spin_lock()` is sufficient.
 
-## How it works: queued spinlocks
+## How it works: queued spinlocks {#how-it-works-queued-spinlocks}
 
 Modern x86 uses **queued spinlocks** (MCS-based, introduced in Linux 4.2 by Waiman Long — [`a33fda35e3a7`](https://git.kernel.org/linus/a33fda35e3a7655fb7df756ed67822afb5ed5e8d), [LWN](https://lwn.net/Articles/590243/)). Instead of all waiters spinning on the same variable (causing cache line bouncing), each CPU spins on its own per-CPU node:
 
@@ -133,7 +133,7 @@ MCS queue node (per-CPU):
 
 When a CPU acquires the lock it clears `locked` in the next CPU's node, causing only that waiter to stop spinning. This scales to hundreds of CPUs.
 
-## raw_spinlock API
+## raw_spinlock API {#raw_spinlock-api}
 
 `raw_spinlock_t` uses the same naming convention but with `raw_` prefix:
 
@@ -149,7 +149,7 @@ raw_spin_unlock_irqrestore(&raw_lock, flags);
 raw_spin_trylock(&raw_lock);       /* returns 1 on success */
 ```
 
-## Debugging: lockdep catches misuse
+## Debugging: lockdep catches misuse {#debugging-lockdep-catches-misuse}
 
 With `CONFIG_DEBUG_SPINLOCK` and `CONFIG_LOCKDEP`, the kernel detects:
 
@@ -166,7 +166,7 @@ spin_lock() at include/linux/spinlock.h:186
 
 See [Lockdep](lockdep.md) for full details.
 
-## Common mistakes
+## Common mistakes {#common-mistakes}
 
 ```c
 /* DON'T: hold a spinlock across sleeping calls */
@@ -190,7 +190,7 @@ if (error)
 spin_unlock(&lock);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Mutex and rt_mutex](mutex.md) — When you can afford to sleep
 - [Lockdep](lockdep.md) — How the kernel validates lock usage

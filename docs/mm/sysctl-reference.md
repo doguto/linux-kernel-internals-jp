@@ -1,4 +1,4 @@
-# Memory Sysctl Tuning Reference
+# Memory Sysctl Tuning Reference {#memory-sysctl-tuning-reference}
 
 Compact reference for all memory-related sysctls under `/proc/sys/vm/`. Each entry links to the [kernel sysctl documentation](https://docs.kernel.org/admin-guide/sysctl/vm.html).
 
@@ -16,7 +16,7 @@ sysctl --system
 
 ---
 
-## Reclaim
+## Reclaim {#reclaim}
 
 Controls how aggressively the kernel reclaims memory and manages free-page watermarks.
 
@@ -30,7 +30,7 @@ Controls how aggressively the kernel reclaims memory and manages free-page water
 
 ---
 
-## Dirty Pages
+## Dirty Pages {#dirty-pages}
 
 Controls when and how often dirty (modified) page cache is written back to disk.
 
@@ -46,7 +46,7 @@ Controls when and how often dirty (modified) page cache is written back to disk.
 
 ---
 
-## Overcommit
+## Overcommit {#overcommit}
 
 Controls the kernel's memory overcommit policy. See also [Memory Overcommit](overcommit.md).
 
@@ -58,7 +58,7 @@ Controls the kernel's memory overcommit policy. See also [Memory Overcommit](ove
 
 ---
 
-## Huge Pages
+## Huge Pages {#huge-pages}
 
 Controls static (hugetlbfs) huge page allocation. For transparent huge pages, see [THP](thp.md).
 
@@ -70,7 +70,7 @@ Controls static (hugetlbfs) huge page allocation. For transparent huge pages, se
 
 ---
 
-## NUMA
+## NUMA {#numa}
 
 Tuning knobs for Non-Uniform Memory Access systems. See also [NUMA](numa.md).
 
@@ -81,7 +81,7 @@ Tuning knobs for Non-Uniform Memory Access systems. See also [NUMA](numa.md).
 
 ---
 
-## OOM
+## OOM {#oom}
 
 Controls Out-Of-Memory killer behavior. See also [Running out of memory](oom.md).
 
@@ -93,7 +93,7 @@ Controls Out-Of-Memory killer behavior. See also [Running out of memory](oom.md)
 
 ---
 
-## Miscellaneous
+## Miscellaneous {#miscellaneous}
 
 | Sysctl | Default | Description | When to change |
 |--------|---------|-------------|----------------|
@@ -104,7 +104,7 @@ Controls Out-Of-Memory killer behavior. See also [Running out of memory](oom.md)
 
 ---
 
-## Quick Tips
+## Quick Tips {#quick-tips}
 
 - **Check current values**: `sysctl -a | grep vm.` lists every `vm.*` parameter and its value.
 - **Monitor effects**: watch `/proc/vmstat`, `/proc/meminfo`, and per-zone stats in `/proc/zoneinfo` after changing a sysctl.

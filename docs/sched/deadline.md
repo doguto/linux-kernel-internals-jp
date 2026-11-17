@@ -1,8 +1,8 @@
-# SCHED_DEADLINE
+# SCHED_DEADLINE {#sched_deadline}
 
 > Bandwidth-based real-time scheduling with admission control
 
-## What SCHED_DEADLINE provides
+## What SCHED_DEADLINE provides {#what-sched_deadline-provides}
 
 `SCHED_DEADLINE` is the highest-priority regular scheduling policy in Linux (above SCHED_FIFO/RR). Instead of a fixed priority, each task describes its computational requirements:
 
@@ -23,7 +23,7 @@ Timeline:
           deadline must be met ←------↑
 ```
 
-## Why SCHED_DEADLINE over SCHED_FIFO?
+## Why SCHED_DEADLINE over SCHED_FIFO? {#why-scheddeadline-over-schedfifo}
 
 | Property | SCHED_FIFO | SCHED_DEADLINE |
 |----------|------------|----------------|
@@ -35,9 +35,9 @@ Timeline:
 
 SCHED_DEADLINE is suitable for tasks with provable timing requirements: video encoding frames, network packet processing at a rate guarantee, industrial control loops.
 
-## Data structures
+## Data structures {#data-structures}
 
-### struct sched_dl_entity
+### struct sched_dl_entity {#struct-scheddlentity}
 
 Embedded in `task_struct`, tracks per-task deadline state:
 
@@ -62,7 +62,7 @@ struct sched_dl_entity {
 };
 ```
 
-### struct dl_rq
+### struct dl_rq {#struct-dl_rq}
 
 Per-CPU deadline runqueue:
 
@@ -83,7 +83,7 @@ struct dl_rq {
 };
 ```
 
-## Admission control
+## Admission control {#admission-control}
 
 Before a task can become `SCHED_DEADLINE`, the kernel checks whether the system can accommodate it:
 
@@ -115,9 +115,9 @@ if (sched_setattr(0, &attr, 0) < 0) {
 
 This is unlike SCHED_FIFO/RR where any number of tasks can be created regardless of system capacity.
 
-## CBS: budget enforcement and replenishment
+## CBS: budget enforcement and replenishment {#cbs-budget-enforcement-and-replenishment}
 
-### Budget exhaustion
+### Budget exhaustion {#budget-exhaustion}
 
 Each time the task runs, its remaining `runtime` decreases. When it hits zero:
 
@@ -126,7 +126,7 @@ Each time the task runs, its remaining `runtime` decreases. When it hits zero:
 3. An hrtimer (`dl_timer`) is armed for the next replenishment time
 4. The task can no longer run until replenished
 
-### Replenishment via dl_task_timer()
+### Replenishment via dl_task_timer() {#replenishment-via-dltasktimer}
 
 ```c
 // kernel/sched/deadline.c
@@ -151,7 +151,7 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
 - `dl_se->runtime = dl_se->dl_runtime` (full budget restored)
 - `dl_se->deadline += dl_se->dl_period` (absolute deadline advanced)
 
-### EDF selection
+### EDF selection {#edf-selection}
 
 Among multiple runnable DL tasks, the scheduler always picks the one with the **earliest absolute deadline** (EDF — Earliest Deadline First):
 
@@ -166,7 +166,7 @@ static struct sched_dl_entity *pick_next_dl_entity(struct dl_rq *dl_rq)
 
 The RB-tree is ordered by `deadline`, so the leftmost node always has the earliest deadline.
 
-## GRUB: reclaiming unused bandwidth
+## GRUB: reclaiming unused bandwidth {#grub-reclaiming-unused-bandwidth}
 
 A DL task that doesn't use its full budget would waste CPU time — other tasks couldn't use the reserved bandwidth. **GRUB (Greedy Reclamation of Unused Bandwidth)** solves this:
 
@@ -177,9 +177,9 @@ When a DL task is inactive (sleeping), its unused bandwidth is tracked and made 
 cat /proc/sched_debug | grep -A 5 "dl_rq"
 ```
 
-## Using SCHED_DEADLINE
+## Using SCHED_DEADLINE {#using-sched_deadline}
 
-### Setting the policy
+### Setting the policy {#setting-the-policy}
 
 ```c
 #include <linux/sched/types.h>
@@ -199,7 +199,7 @@ if (sched_setattr(0, &attr, 0) < 0)
 
 Requires `CAP_SYS_NICE`.
 
-### sched_yield() for SCHED_DEADLINE
+### sched_yield() for SCHED_DEADLINE {#schedyield-for-scheddeadline}
 
 A DL task should call `sched_yield()` when it finishes its work early. This tells the CBS that the task is done for this period and the remaining budget can be reclaimed:
 
@@ -212,7 +212,7 @@ while (1) {
 
 Without `sched_yield()`, the task runs until its budget is exhausted, wasting CPU cycles.
 
-### Constraints
+### Constraints {#constraints}
 
 - `fork()` from a `SCHED_DEADLINE` task succeeds, but the child is demoted to `SCHED_NORMAL`
 - `pthread_create()` in a DL task works, but the new thread inherits `SCHED_NORMAL`
@@ -226,13 +226,13 @@ chrt -p $PID  # shows SCHED_DEADLINE and parameters
 cat /proc/sched_debug | grep running_bw
 ```
 
-## Interaction with RT tasks
+## Interaction with RT tasks {#interaction-with-rt-tasks}
 
 `dl_sched_class` sits above `rt_sched_class` in the class hierarchy. A SCHED_DEADLINE task always preempts SCHED_FIFO/RR tasks, regardless of RT priority.
 
 If an RT task holds a mutex that a DL task needs, priority inheritance boosts the RT task's priority. SCHED_DEADLINE also has boosting support via `is_dl_boosted()` — when a DL task is boosted, its effective deadline is derived from the donor task.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [RT Scheduler](rt-scheduler.md) — SCHED_FIFO/RR, the class below DL
 - [Priority Inversion and PI Mutexes](pi-mutexes.md) — How DL interacts with locking

@@ -1,8 +1,8 @@
-# Kernel Core Internals
+# Kernel Core Internals {#kernel-core-internals}
 
 > The glue that holds every subsystem together: boot, logging, parameters, panics, and module init
 
-## What is "kernel core"?
+## What is "kernel core"? {#what-is-kernel-core}
 
 The kernel core is the collection of infrastructure that does not belong to any single subsystem but that every subsystem depends on. It lives primarily in `init/`, `kernel/`, and `arch/x86/kernel/` (and the equivalent arch directories), and it answers the question: *how does a compressed binary become a running operating system that can schedule tasks, respond to interrupts, and load drivers?*
 
@@ -18,7 +18,7 @@ This is not memory management, not the scheduler, not networking — it is the m
 
 ---
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|---------------|
@@ -31,7 +31,7 @@ This is not memory management, not the scheduler, not networking — it is the m
 
 ---
 
-## Suggested reading order
+## Suggested reading order {#suggested-reading-order}
 
 If you are new to kernel internals, read these in order:
 
@@ -44,7 +44,7 @@ If you are new to kernel internals, read these in order:
 
 ---
 
-## Kernel boot flow
+## Kernel boot flow {#kernel-boot-flow}
 
 ```
 Power on / bootloader (GRUB/EFI)
@@ -101,7 +101,7 @@ userspace init system (systemd / sysvinit)
 
 ---
 
-## Quick reference: key kernel globals
+## Quick reference: key kernel globals {#quick-reference-key-kernel-globals}
 
 | Symbol | Header | Description |
 |--------|--------|-------------|
@@ -115,7 +115,7 @@ userspace init system (systemd / sysvinit)
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel Modules](../modules/README.md) — writing and loading out-of-tree modules
 - [printk](printk.md) — logging in depth

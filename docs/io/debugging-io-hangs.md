@@ -1,8 +1,8 @@
-# Debugging I/O Hangs
+# Debugging I/O Hangs {#debugging-io-hangs}
 
 > When I/O is not just slow but completely stuck — how to identify, triage, and recover from I/O hangs in Linux
 
-## What is an I/O hang?
+## What is an I/O hang? {#what-is-an-io-hang}
 
 A process in **D state** (uninterruptible sleep) is waiting for I/O to complete. Normally this lasts microseconds to milliseconds. An I/O hang occurs when a process stays in D state for seconds, minutes, or indefinitely — typically because:
 
@@ -28,7 +28,7 @@ The kernel logs a "hung task" warning after 120 seconds by default:
 
 ---
 
-## Step 1: Identify which processes are hung
+## Step 1: Identify which processes are hung {#step-1-identify-which-processes-are-hung}
 
 ```bash
 # Find all processes in D (uninterruptible sleep)
@@ -59,7 +59,7 @@ done
 
 ---
 
-## Step 2: Get the full kernel stack
+## Step 2: Get the full kernel stack {#step-2-get-the-full-kernel-stack}
 
 ```bash
 # Requires CAP_SYS_ADMIN (root)
@@ -101,7 +101,7 @@ echo l > /proc/sysrq-trigger  # dumps all CPU stacks
 
 ---
 
-## Step 3: Check device health
+## Step 3: Check device health {#step-3-check-device-health}
 
 If processes are stuck in block I/O, check whether the device itself has stopped responding.
 
@@ -144,7 +144,7 @@ EXT4-fs error (device sda1): ext4_find_entry:1455: inode #2: comm bash: reading 
 
 ---
 
-## Step 4: Check for NFS hangs
+## Step 4: Check for NFS hangs {#step-4-check-for-nfs-hangs}
 
 NFS hangs are a common cause of D-state processes. They occur when the NFS server becomes unreachable, or when the client's connection times out.
 
@@ -179,7 +179,7 @@ umount -f /nfs/mountpoint   # force: attempt immediate unmount even with active 
 
 ---
 
-## Step 5: Check for writeback hangs
+## Step 5: Check for writeback hangs {#step-5-check-for-writeback-hangs}
 
 A writeback hang occurs when dirty pages cannot be flushed: the flusher kworker is stuck, or the device is returning errors that cause retries.
 
@@ -219,7 +219,7 @@ blkparse -i /tmp/btrace.blktrace.0 | tail -50
 
 ---
 
-## Step 6: Check for lock contention causing hangs
+## Step 6: Check for lock contention causing hangs {#step-6-check-for-lock-contention-causing-hangs}
 
 Sometimes a process appears to be doing I/O but is actually waiting for a kernel lock held by a D-state I/O waiter. This creates a chain of stuck processes.
 
@@ -256,7 +256,7 @@ interval:s:5 {
 
 ---
 
-## Step 7: Recover from a device hang without rebooting
+## Step 7: Recover from a device hang without rebooting {#step-7-recover-from-a-device-hang-without-rebooting}
 
 If a single device has hung but the system is otherwise functional, you may be able to reset the device without rebooting.
 
@@ -300,7 +300,7 @@ mdadm /dev/md0 --add /dev/sdb
 
 ---
 
-## Preventive configuration
+## Preventive configuration {#preventive-configuration}
 
 ```bash
 # Reduce hung_task timeout to get faster warnings

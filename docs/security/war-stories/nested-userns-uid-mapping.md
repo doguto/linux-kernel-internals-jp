@@ -1,4 +1,4 @@
-# Nested User Namespace UID/GID Mapping
+# Nested User Namespace UID/GID Mapping {#nested-user-namespace-uidgid-mapping}
 
 > CVE-2018-18955 — a performance optimization kept two sorted copies of the ID map, the kernel translated only one of them, and a desktop user could read `/etc/shadow`
 
@@ -25,7 +25,7 @@ Actively exploited
 
 *Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 A user namespace's identity mapping is a small array of extents. Each extent is a triple — a starting ID inside the namespace, the corresponding starting ID in the *parent* namespace, and a count — and every `make_kuid()`/`from_kuid()` conversion walks that array. [User Namespaces and uid Mapping](../user-namespaces.md) covers how `/proc/<pid>/uid_map` is written and what the two directions mean; [Credentials and User Namespaces](../credentials.md) covers where `kuid_t` sits in `struct cred`. The short version is that there are two lookups, in opposite directions:
 
@@ -96,7 +96,7 @@ The other thing to know about `map_write()` is that `lower_first` means two diff
 
 Pre-fix, `sort_idmaps()` ran **before** that loop, and the loop walked only `new_map.forward`.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Because `map->reverse` was a `kmemdup()` of `map->forward` taken before translation, and the translation loop only rewrote the forward copy, the reverse array kept parent-namespace IDs in its `lower_first` fields forever. `map_id_up()` — the kernel-ID-to-namespaced-ID direction — searches that array and compares kernel IDs against those stale parent-namespace values.
 
@@ -123,7 +123,7 @@ then, from inside `NS1`, a nested `NS2` with six extents:
 
 Reaching this needs a namespace with more than one ID mapped, which is exactly what `/etc/subuid`, `/etc/subgid` and the setuid `newuidmap`/`newgidmap` helpers hand any desktop user who has the `uidmap` package installed — a package Horn installed explicitly for his Ubuntu 18.04 test, and one the Metasploit module lists as a prerequisite. Horn's proof of concept used `newuidmap` for the first level, then wrote the six-extent map directly from inside `NS1`, where it already held namespaced `CAP_SYS_ADMIN`. NVD scores the vector `AC:H`, but the difficulty is in *finding* the shape, not in reproducing it.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 Most callers of `from_kuid()` are display code — a wrong number in `ls -l` output is a bug, not a vulnerability. `kuid_has_mapping()` is not display code. It answers "does this kernel ID exist in that namespace at all," and two access checks are built on it: `inode_owner_or_capable()` and `privileged_wrt_inode_uidgid()`. Horn's summary of the consequence:
 
@@ -142,7 +142,7 @@ That is an unprivileged local user reading the shadow file on a stock Ubuntu 18.
 
 Public tooling followed within two weeks: the Project Zero PoC was mirrored as [Exploit-DB 45886](https://www.exploit-db.com/exploits/45886) on the disclosure date, and `exploit/linux/local/nested_namespace_idmap_limit_priv_esc` (credited to Jann Horn and bcoles) landed as [Exploit-DB 45915](https://www.exploit-db.com/exploits/45915) on November 29, 2018. Despite that, the CVE has never been added to CISA's Known Exploited Vulnerabilities catalog — [NVD's record](https://nvd.nist.gov/vuln/detail/CVE-2018-18955) shows no KEV listing — no in-the-wild use has been confirmed.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The root cause is a **derived copy taken before the source was finished**. `map->reverse` was correct at the instant `kmemdup()` ran and became wrong a few lines later, when the translation loop mutated the original. Nothing in the code expressed the relationship between the two arrays, so nothing flagged that one of them had gone stale.
 
@@ -152,7 +152,7 @@ It is worth being clear that this was not unreviewed code. The 340-extent series
 
 Finally, the buggy path was almost unreachable by accident. Six or more extents is unusual; six or more extents *in a nested namespace* is unusual squared. Container runtimes that use many extents typically do so at the outermost namespace, where the parent is `init_user_ns` and the missing translation is a no-op. The bug therefore produced no functional complaints for a year — no wrong `ls` output, no broken container, nothing to bisect — until someone went looking for it deliberately.
 
-## Resolution
+## Resolution {#resolution}
 
 [`d2f007dbe7e4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d2f007dbe7e4c9583eea6eb04d60001e85c6f1bd) ("userns: also map extents in the reverse map to kernel IDs"), authored by Jann Horn on November 5, 2018, is eight lines added and four removed. It moves `sort_idmaps()` from before the translation loop to after it:
 
@@ -201,7 +201,7 @@ cat /proc/sys/user/max_user_namespaces    # 0 blocks it generically
 ls -l /usr/bin/newuidmap                  # the setuid helper that grants a >1-ID first-level map
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A copy is a promise you have to keep.** `kmemdup()` produced a second array that was correct for exactly the few lines before the original changed. Any time performance work introduces a derived representation — a sorted duplicate, a cached index, a reverse map — the invariant "these two agree" becomes a maintenance obligation that the type system will not help you with. Deriving *last*, after the source is final, is cheaper than keeping two things in sync.
 
@@ -214,14 +214,14 @@ ls -l /usr/bin/newuidmap                  # the setuid helper that grants a >1-I
 !!! warning "Pattern to watch for"
     Look for two things together: a data structure duplicated for lookup speed, and a field that is rewritten in place after that duplicate is made. Either alone is fine; combined, they mean one copy silently holds pre-transformation values. Grep for `kmemdup()`/`memcpy()` of a structure that is subsequently mutated in the same function, and ask which copy each later reader consults. On the operational side: any kernel where unprivileged user namespaces can be nested is a kernel where namespace-scoped access checks — `kuid_has_mapping()`, `inode_owner_or_capable()`, `privileged_wrt_inode_uidgid()` — are security boundaries reachable by any local user.
 
-## See also
+## See also {#see-also}
 
 - [User Namespaces and uid Mapping](../user-namespaces.md) — `uid_map`/`gid_map`, `make_kuid()`/`from_kuid()`, and the nesting model this bug exploited
 - [Credentials and User Namespaces](../credentials.md) — where `kuid_t` lives in `struct cred` and how ID translation reaches access checks
 - [Capabilities](../capabilities.md) — the capability model behind `CAP_DAC_OVERRIDE` and `CAP_SYS_ADMIN`, and how `capable()`/`ns_capable()` checks are written
 - [Netfilter x_tables Heap Overflow](../../net/war-stories/netfilter-xtables.md) — another bug whose severity came from being reachable inside an unprivileged user namespace
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2018-18955](https://nvd.nist.gov/vuln/detail/CVE-2018-18955) — CVSS 3.0 base score 7.0 HIGH, `AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`, published November 16, 2018
 - [git.kernel.org: d2f007dbe7e4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d2f007dbe7e4c9583eea6eb04d60001e85c6f1bd) — "userns: also map extents in the reverse map to kernel IDs", the fix, which self-identifies as CVE-2018-18955

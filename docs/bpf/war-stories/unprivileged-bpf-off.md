@@ -1,4 +1,4 @@
-# Unprivileged BPF Off by Default
+# Unprivileged BPF Off by Default {#unprivileged-bpf-off-by-default}
 
 > Not a CVE — the hardening response to years of them, and an admission that "safely unprivileged BPF" was a goal the subsystem had stopped pursuing
 
@@ -19,7 +19,7 @@ Context
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 BPF's original ambition included a specific, load-bearing claim: that the verifier could make it safe to let an *unprivileged* user load programs into the kernel. Every other incident in [this series](../war-stories.md) is a bug in the machinery built to honor that claim.
 
@@ -37,7 +37,7 @@ The runtime switch for it was `/proc/sys/kernel/unprivileged_bpf_disabled`, and 
 
 A partial answer had already landed a year earlier. [`2c78ee898d8f`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2c78ee898d8f10ae6fb2fa23a3fbaec96b1b7366) ("bpf: Implement CAP_BPF", merged May 2020) split the verifier's single `allow_ptr_leaks` flag into four — `allow_ptr_leaks`, `bypass_spec_v1`, `bypass_spec_v4`, `bpf_capable` — so that a process could be granted the ability to load BPF programs without also being granted the ability to bypass speculative-execution mitigations. That gave administrators a middle setting between "root" and "anyone." It did not change what happened on a machine where nobody had configured anything. Unlike the default-off knob, `CAP_BPF` got the public argument in full: [Starovoitov's original posting](https://lore.kernel.org/all/20190827205213.456318-1-ast@kernel.org/) in August 2019 drew dozens of replies, and the design was reworked over later postings before merging about eight and a half months later.
 
-## The trigger
+## The trigger {#the-trigger}
 
 The argument that produced this change is older than the change, and LWN documented it in August 2019 — nearly two years before the patch — in [Reconsidering unprivileged BPF](https://lwn.net/Articles/796328/). Corbet's framing:
 
@@ -59,7 +59,7 @@ Corbet ends the 2019 article without picking a side, but names the stakes precis
 
 Then came 2021. Within five weeks the subsystem authored fixes for [CVE-2021-31440](alu32-unsigned-bounds.md) (April 23), [CVE-2021-3490](alu32-bitwise-bounds.md) (May 10, publicly announced May 11), and [CVE-2021-33624](spectre-verifier.md) (May 28) — all reachable by an unprivileged process on a default-configured kernel.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 Borkmann posted the knob on **May 11, 2021** — the same day CVE-2021-3490 was publicly announced on oss-security.
 
@@ -67,7 +67,7 @@ It went out as a two-patch series to `bpf@vger.kernel.org`. Patch 1/2 ("bpf, kco
 
 The [thread](https://lore.kernel.org/all/f23f58765a4d59244ebd8037da7b6a6b2fb58446.1620765074.git.daniel@iogearbox.net/) drew no public replies. After two years of argument on the topic, the patch that changed the default went in without one.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The 2019 impasse is the whole explanation, and it is a design disagreement rather than a mistake.
 
@@ -79,7 +79,7 @@ Note what the change specifically is *not*: it does not remove unprivileged BPF,
 
 The `CONFIG_BPF_UNPRIV_DEFAULT_OFF` option itself started out as something a builder had to opt into — it carried no `default` in `kernel/bpf/Kconfig` when this patch merged, so it stayed off unless a config explicitly enabled it. That changed five months later: [`8a03e56b253e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204) ("bpf: Disallow unprivileged bpf by default", Pawan Gupta, October 29 2021, mainline v5.16) added `default y` to the option, explicitly "to sync with what many distros are currently applying already." From v5.16 on, unprivileged BPF being disabled (value 2) *is* the upstream default for any kernel that doesn't override it — not just a distributor's choice layered on top.
 
-## Resolution
+## Resolution {#resolution}
 
 [`08389d888287`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5) ("bpf: Add kconfig knob for disabling unpriv bpf by default", v5.13-rc4) does three things.
 
@@ -143,7 +143,7 @@ The `extra1`/`extra2` bounds change from `SYSCTL_ONE`/`SYSCTL_ONE` to `SYSCTL_ZE
 
 The commit also points at the middle path the subsystem had already built: "Either way, as an additional alternative, applications can make use of CAP_BPF that we added a while ago."
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A security guarantee nobody can hold is worse than an honest default.** The 2019 discussion is uncomfortable reading precisely because Starovoitov is not arguing that unprivileged BPF is hard; he is arguing that it is not worth doing, and that the code written to make it safe is "a lot of complex kernel code without users." Whether or not you agree, the outcome — turn it off by default, keep the capability for those who ask — is more honest than shipping a boundary the maintainers privately do not believe in.
 
@@ -161,7 +161,7 @@ The commit also points at the middle path the subsystem had already built: "Eith
 
     More generally: when a subsystem adds a hardening *option* rather than changing behavior directly, there's a window — five months, in this case — where the security work is still delegated to whoever configures the build, before (if ever) the option itself defaults on. Audit for options like this that your kernel predates or was built without, and treat any capability-splitting patch (`CAP_BPF`, `CAP_PERFMON`, `CAP_CHECKPOINT_RESTORE`) as having a matching "what happens if nobody configures anything?" question attached.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — including what the verifier does differently for privileged versus unprivileged loaders
 - [Linux Capabilities](../../security/capabilities.md) — the model `CAP_BPF` splits `bpf()` loading out of
@@ -170,7 +170,7 @@ The commit also points at the middle path the subsystem had already built: "Eith
 - [Kernel Hardening](../../security/kernel-hardening.md) — the other build-time hardening options (KASLR, stack protectors, `HARDENED_USERCOPY`) worth auditing alongside this one
 - [seccomp BPF](../../security/seccomp.md) — the classic-BPF user Lutomirski cited as a real unprivileged-BPF use case
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: 08389d888287](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08389d888287c3823f80b0216766b71e17f0aba5) — "bpf: Add kconfig knob for disabling unpriv bpf by default", the kconfig option, the three-valued sysctl, and the new handler
 - [git.kernel.org: 8a03e56b253e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=8a03e56b253e9691c90bc52ca199323d71b96204) — "bpf: Disallow unprivileged bpf by default" (Pawan Gupta, October 2021, v5.16), the commit that gave `CONFIG_BPF_UNPRIV_DEFAULT_OFF` its `default y`

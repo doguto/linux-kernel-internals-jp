@@ -1,8 +1,8 @@
-# Kernel Debugging
+# Kernel Debugging {#kernel-debugging}
 
 > Tools and techniques for debugging the Linux kernel
 
-## Debugging approaches
+## Debugging approaches {#debugging-approaches}
 
 ```
 Problem type                  Best tool
@@ -17,7 +17,7 @@ Logic bugs in drivers           dynamic debug, pr_debug
 Boot failures                   early_printk, earlyprintk=ttyS0
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -30,7 +30,7 @@ Boot failures                   early_printk, earlyprintk=ttyS0
 | [lockdep in Practice](dynamic-debug-lockdep.md) | Reading splats, annotating false positives, contention stats |
 | [War Stories](war-stories.md) | Bugs caught by KASAN, lockdep, syzkaller, kdump, and KFENCE |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Trigger an oops on demand (testing)

@@ -1,8 +1,8 @@
-# Shrinker API
+# Shrinker API {#shrinker-api}
 
 > A callback mechanism that lets subsystems participate in memory reclaim — when the kernel needs memory, it asks registered shrinkers to free their caches.
 
-## What Are Shrinkers?
+## What Are Shrinkers? {#what-are-shrinkers}
 
 The kernel maintains many in-memory caches: directory entry (dentry) caches, inode caches, DMA-buf heaps, driver-private object pools, zswap pools, and more. These caches are valuable — they avoid expensive recomputation or I/O — but they must yield memory when the system is under pressure.
 
@@ -17,7 +17,7 @@ Examples of shrinkers in the tree:
 - `fs/xfs/xfs_icache.c` — XFS inode GC shrinker
 - `mm/vmalloc.c` — vmap node shrinker
 
-## `struct shrinker`
+## `struct shrinker` {#struct-shrinker}
 
 From `include/linux/shrinker.h`:
 
@@ -62,7 +62,7 @@ struct shrinker {
 #define DEFAULT_SEEKS 2
 ```
 
-### Field guide
+### Field guide {#field-guide}
 
 | Field | Description |
 |-------|-------------|
@@ -74,7 +74,7 @@ struct shrinker {
 | `private_data` | Opaque pointer for the shrinker implementation, e.g. the `super_block *` in `fs/super.c`. |
 | `nr_deferred` | Per-node count of scan work that was calculated but not yet completed (due to `batch` rounding or contention). Carried forward to the next invocation. Managed by the core. |
 
-## `struct shrink_control`
+## `struct shrink_control` {#struct-shrink_control}
 
 The kernel passes a `struct shrink_control` to both callbacks on every invocation.
 
@@ -102,7 +102,7 @@ struct shrink_control {
 };
 ```
 
-### Field semantics
+### Field semantics {#field-semantics}
 
 **`gfp_mask`** — the allocation context that triggered reclaim. Shrinkers must respect this. If `__GFP_FS` is clear, the shrinker must not enter the filesystem (e.g., `super_cache_scan` returns `SHRINK_STOP` immediately in that case). If `__GFP_IO` is clear, avoid starting I/O.
 
@@ -114,11 +114,11 @@ struct shrink_control {
 
 **`memcg`** — the memory cgroup being targeted. Set by the core when walking per-memcg shrinkers; `NULL` for the global (root memcg) path. Only meaningful when `SHRINKER_MEMCG_AWARE` is set.
 
-## `count_objects` vs `scan_objects`
+## `count_objects` vs `scan_objects` {#countobjects-vs-scanobjects}
 
 These two callbacks implement a two-phase contract:
 
-### `count_objects` — estimate freeable capacity
+### `count_objects` — estimate freeable capacity {#count_objects-estimate-freeable-capacity}
 
 ```c
 unsigned long (*count_objects)(struct shrinker *, struct shrink_control *sc);
@@ -134,7 +134,7 @@ Return the number of objects that *could* be freed from the cache. The return va
 
 **No lock requirements.** `count_objects` must not take locks that could deadlock with reclaim. The count can be stale — the core tolerates a mismatch between `count_objects` and what `scan_objects` actually frees. This is by design: counts are used for proportional scaling, not as hard limits.
 
-### `scan_objects` — actually free objects
+### `scan_objects` — actually free objects {#scan_objects-actually-free-objects}
 
 ```c
 unsigned long (*scan_objects)(struct shrinker *, struct shrink_control *sc);
@@ -154,7 +154,7 @@ Walk your cache, free up to `sc->nr_to_scan` objects, update `sc->nr_scanned`, a
 #define SHRINK_EMPTY (~0UL - 1)
 ```
 
-## Shrinker Flags
+## Shrinker Flags {#shrinker-flags}
 
 ```c
 #define SHRINKER_NUMA_AWARE   BIT(2)
@@ -168,9 +168,9 @@ Walk your cache, free up to `sc->nr_to_scan` objects, update `sc->nr_scanned`, a
 
 **`SHRINKER_NONSLAB`** — only meaningful in combination with `SHRINKER_MEMCG_AWARE`. Marks a shrinker as managing non-slab memory. When memcg kmem accounting is disabled, non-`NONSLAB` shrinkers are skipped during per-memcg reclaim; `NONSLAB` shrinkers are always called. Used for objects like DMA-buf attachments that are not slab allocations but should still be reclaimed per-memcg.
 
-## How the Kernel Invokes Shrinkers
+## How the Kernel Invokes Shrinkers {#how-the-kernel-invokes-shrinkers}
 
-### Call path
+### Call path {#call-path}
 
 ```
 Memory pressure (allocation fails or watermark crossed)
@@ -204,7 +204,7 @@ Memory pressure (allocation fails or watermark crossed)
                                              or SHRINK_STOP returned
 ```
 
-### Priority scaling in `do_shrink_slab`
+### Priority scaling in `do_shrink_slab` {#priority-scaling-in-doshrinkslab}
 
 The `priority` parameter (from `sc->priority` in `mm/vmscan.c`) controls how aggressively the shrinker is invoked. Higher priority means more memory pressure.
 
@@ -227,15 +227,15 @@ At `priority = DEF_PRIORITY` (12, low pressure): `freeable >> 12` is tiny — th
 
 `do_shrink_slab` then calls `scan_objects` in a loop, `batch_size` objects at a time, until `total_scan` is exhausted or `SHRINK_STOP` is returned. Any work calculated but not done (due to batch rounding) is saved in `nr_deferred` and added to the next invocation.
 
-### Concurrency and locking
+### Concurrency and locking {#concurrency-and-locking}
 
 The shrinker list is protected by `shrinker_mutex` for mutation (registration/unregistration) and by RCU for iteration. Individual shrinker lookup uses `shrinker_try_get()` (a `refcount_inc_not_zero`) to hold a reference while `do_shrink_slab` runs. `shrinker_free()` calls `wait_for_completion(&shrinker->done)` to drain all in-flight references before freeing memory.
 
 This means `scan_objects` can run concurrently on different CPUs (for different nodes or memcgs). Shrinker implementations must be safe under concurrent calls.
 
-## Registration and Lifecycle
+## Registration and Lifecycle {#registration-and-lifecycle}
 
-### The three-step lifecycle
+### The three-step lifecycle {#the-three-step-lifecycle}
 
 ```c
 /* 1. Allocate and configure */
@@ -260,17 +260,17 @@ shrinker_register(shrinker);
 shrinker_free(shrinker);
 ```
 
-### `shrinker_alloc(flags, fmt, ...)`
+### `shrinker_alloc(flags, fmt, ...)` {#shrinker_allocflags-fmt}
 
 Allocates and initializes a `struct shrinker`. The `fmt` argument is a `printf`-style name used in `/sys/kernel/debug/shrinker/` (when `CONFIG_SHRINKER_DEBUG` is set). If `SHRINKER_MEMCG_AWARE` is requested but memcg is disabled at runtime, the flag is silently cleared and the shrinker falls back to non-memcg mode.
 
 Returns `NULL` on allocation failure.
 
-### `shrinker_register(shrinker)`
+### `shrinker_register(shrinker)` {#shrinker_registershrinker}
 
 Adds the shrinker to `shrinker_list`, sets `SHRINKER_REGISTERED`, and initializes `refcount` to 1 (making it visible to reclaim). Must only be called on a shrinker returned by `shrinker_alloc()`.
 
-### `shrinker_free(shrinker)`
+### `shrinker_free(shrinker)` {#shrinker_freeshrinker}
 
 Handles both unregistration and freeing in one call:
 
@@ -281,7 +281,7 @@ Handles both unregistration and freeing in one call:
 
 After `shrinker_free()` returns, it is safe to free whatever structure holds the shrinker (e.g., the `super_block`, the driver's device structure).
 
-### When to call each
+### When to call each {#when-to-call-each}
 
 | Situation | When to register | When to free |
 |-----------|-----------------|--------------|
@@ -289,7 +289,7 @@ After `shrinker_free()` returns, it is safe to free whatever structure holds the
 | Per-device cache | `probe()`, after cache is initialized | `remove()` / error path in `probe()` |
 | Per-superblock cache | `sget()` / `alloc_super()`, before mount completes | `kill_sb()` / `deactivate_super()` |
 
-## Real Example: The Superblock Shrinker
+## Real Example: The Superblock Shrinker {#real-example-the-superblock-shrinker}
 
 Every mounted filesystem gets a per-superblock shrinker covering both the dentry LRU and the inode LRU. It is set up in `alloc_super()` (`fs/super.c`):
 
@@ -315,7 +315,7 @@ shrinker_register(s->s_shrink);
 
 **`super_cache_scan`** proportionally distributes `sc->nr_to_scan` across dentries, inodes, and FS-private objects. It calls `prune_dcache_sb()` first (dentries pin inodes), then `prune_icache_sb()`, then `s_op->free_cached_objects()`. If `__GFP_FS` is not set in `sc->gfp_mask`, it returns `SHRINK_STOP` immediately to avoid re-entering a filesystem that may be holding locks.
 
-## Common Mistakes
+## Common Mistakes {#common-mistakes}
 
 !!! warning "Blocking or sleeping in `scan_objects` without checking `gfp_mask`"
     `scan_objects` can be called from direct reclaim in any context. If the caller holds a lock that your shrinker also needs, or if reclaim is happening under a filesystem lock, taking that lock again will deadlock. Always check `sc->gfp_mask` for `__GFP_FS` and `__GFP_IO` before entering the filesystem or starting I/O. Return `SHRINK_STOP` if you cannot safely proceed.
@@ -335,7 +335,7 @@ shrinker_register(s->s_shrink);
 !!! warning "Using `seeks = 0` unintentionally"
     Setting `seeks` to 0 triggers the aggressive branch in `do_shrink_slab`: `delta = freeable / 2`. This means at any priority, the shrinker requests to scan half its freeable objects in one pass. This is intentional for caches that are cheap to repopulate (no I/O), but using it by accident for an expensive cache will cause excessive eviction under pressure.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -347,7 +347,7 @@ shrinker_register(s->s_shrink);
 | [`fs/inode.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/inode.c) | `prune_icache_sb` — called by `super_cache_scan` to shrink the inode LRU |
 | [`include/linux/list_lru.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/list_lru.h) | `list_lru_init_memcg`, `list_lru_shrink_count`, `list_lru_shrink_walk` — NUMA/memcg-aware LRU used with shrinkers |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/shrinker.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c) — `shrinker_alloc()`, `shrinker_register()`, `shrinker_free()`, `do_shrink_slab()` (priority scaling and batch loop), `shrink_slab()`, and `shrink_slab_memcg()` with the per-memcg bitmap
 - [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `shrink_node()` and `shrink_lruvec()`, the reclaim entry points that call `shrink_slab()` after scanning LRU lists

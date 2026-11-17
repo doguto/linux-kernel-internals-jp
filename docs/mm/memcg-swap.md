@@ -1,16 +1,16 @@
-# Swap Accounting in Cgroups
+# Swap Accounting in Cgroups {#swap-accounting-in-cgroups}
 
 > How swap usage is tracked, limited, and monitored per cgroup
 
-## Why Per-Cgroup Swap Accounting Matters
+## Why Per-Cgroup Swap Accounting Matters {#why-per-cgroup-swap-accounting-matters}
 
 Without swap accounting, a container with a `memory.max` of 1G can page out 2G of anonymous memory to swap and effectively use 3G of memory — 1G in RAM plus 2G on disk. The cgroup limit is bypassed. Per-cgroup swap accounting closes this gap by counting swap usage separately and enforcing an independent limit.
 
 cgroup v2 tracks RAM and swap with two separate counters and two separate limits. This separation is intentional: it gives operators independent control over how much RAM a cgroup uses and how much swap it can consume.
 
-## The cgroup v2 Swap Interface
+## The cgroup v2 Swap Interface {#the-cgroup-v2-swap-interface}
 
-### memory.swap.current
+### memory.swap.current {#memoryswapcurrent}
 
 `memory.swap.current` reports the number of bytes a cgroup's anonymous pages currently occupy in swap. **This is swap-only** — pages that have been swapped out and are not currently in RAM.
 
@@ -28,7 +28,7 @@ memory.swap.current   = pages in swap (not currently in RAM) charged to this cgr
 total footprint       = memory.current + memory.swap.current
 ```
 
-### memory.swap.max
+### memory.swap.max {#memoryswapmax}
 
 `memory.swap.max` is the hard limit on swap usage. When a cgroup's `memory.swap.current` reaches this value, further swapping for that cgroup is blocked. Anonymous pages that would have been swapped out are instead reclaimed directly (if possible) or trigger OOM.
 
@@ -48,7 +48,7 @@ When `memory.swap.max = 0`, the cgroup behaves as if swap does not exist: anonym
 !!! note "memory.swap.max only limits swap pages, not memsw"
     Setting `memory.swap.max = 512M` means the cgroup can use up to 512MB of swap in addition to its `memory.max`. It does not mean the total (RAM + swap) is capped at 512MB. For a combined limit, set both `memory.max` and `memory.swap.max`.
 
-### memory.swap.high (v5.8+)
+### memory.swap.high (v5.8+) {#memoryswaphigh-v58}
 
 `memory.swap.high` is a soft limit on swap usage, analogous to `memory.high` for RAM. When `memory.swap.current` exceeds `memory.swap.high`, the kernel throttles processes in the cgroup and tries to reclaim swap (by swapping pages back in and then freeing them, or by reclaiming the freed anonymous pages).
 
@@ -68,7 +68,7 @@ If your kernel is older than v6.2, `memory.swap.high` will not exist. Check with
 ls /sys/fs/cgroup/mycontainer/memory.swap.high 2>/dev/null || echo "not available (kernel < 5.8)"
 ```
 
-### memory.swap.events (v4.18+)
+### memory.swap.events (v4.18+) {#memoryswapevents-v418}
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.swap.events
@@ -79,11 +79,11 @@ cat /sys/fs/cgroup/mycontainer/memory.swap.events
 
 This file was introduced in kernel v6.5 alongside other swap accounting improvements. On older kernels, swap events are not reported separately — swap-related OOM events appear in `memory.events`.
 
-## zswap: Compressed Swap per Cgroup
+## zswap: Compressed Swap per Cgroup {#zswap-compressed-swap-per-cgroup}
 
 [zswap](https://docs.kernel.org/admin-guide/mm/zswap.html) is an in-kernel compressed cache for swap pages. Instead of writing anonymous pages directly to disk, zswap compresses them and stores them in a pool of RAM. Pages that cannot fit in zswap are written to disk as usual. This trades CPU for reduced swap I/O.
 
-### memory.zswap.current
+### memory.zswap.current {#memoryzswapcurrent}
 
 `memory.zswap.current` reports the **compressed** bytes this cgroup is using in the zswap pool — the actual RAM consumed by the compressed data. The uncompressed logical size of the swap data is larger; `memory.zswap.current` reflects the physical RAM footprint of the compressed pages in the pool.
 
@@ -92,7 +92,7 @@ cat /sys/fs/cgroup/mycontainer/memory.zswap.current
 # 41943040   (40MB of RAM holding compressed swap pages; uncompressed equivalent may be 100MB+)
 ```
 
-### memory.zswap.max
+### memory.zswap.max {#memoryzswapmax}
 
 `memory.zswap.max` limits how much of the zswap pool this cgroup can use. Without a per-cgroup zswap limit, a single cgroup could fill the entire zswap pool and force other cgroups' pages to disk.
 
@@ -114,7 +114,7 @@ echo max > /sys/fs/cgroup/mycontainer/memory.zswap.max
 !!! note "memory.zswap.max requires zswap to be enabled system-wide"
     If zswap is not enabled (check `cat /sys/module/zswap/parameters/enabled`), `memory.zswap.current` will always be 0 and `memory.zswap.max` has no effect. See the [zswap documentation](https://docs.kernel.org/admin-guide/mm/zswap.html) for enabling zswap.
 
-## The cgroup v1 memsw Interface (Legacy)
+## The cgroup v1 memsw Interface (Legacy) {#the-cgroup-v1-memsw-interface-legacy}
 
 cgroup v1 used a different model: a combined **memory + swap** limit called `memsw`. The relevant files were:
 
@@ -125,13 +125,13 @@ cgroup v1 used a different model: a combined **memory + swap** limit called `mem
 | `memory.memsw.usage_in_bytes` | Current combined RAM + swap usage |
 | `memory.memsw.max_usage_in_bytes` | Peak combined usage |
 
-### Why memsw was problematic
+### Why memsw was problematic {#why-memsw-was-problematic}
 
 The `memsw` model had a fundamental design issue: you could not limit swap independently of RAM. If you set `memory.limit_in_bytes = 1G` and `memory.memsw.limit_in_bytes = 2G`, the cgroup could use up to 1G of RAM and 1G of swap. But you could not say "use up to 1G of RAM and up to 512MB of swap" — the two limits were coupled by the combined counter.
 
 Additionally, the combined counter had performance issues. Every swap-in required updating both `memory.usage_in_bytes` and `memory.memsw.usage_in_bytes`, and the interaction between the two limits created subtle races.
 
-### Why cgroup v2 separates them
+### Why cgroup v2 separates them {#why-cgroup-v2-separates-them}
 
 cgroup v2 replaced `memsw` with separate `memory.max` and `memory.swap.max`. This allows independent control:
 
@@ -143,7 +143,7 @@ echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max
 
 The separation also makes the semantics clearer: `memory.current` always means RAM, `memory.swap.current` always means disk swap. There is no combined counter to misinterpret.
 
-## What Happens When the Swap Limit Is Hit
+## What Happens When the Swap Limit Is Hit {#what-happens-when-the-swap-limit-is-hit}
 
 When `memory.swap.current` reaches `memory.swap.max`:
 
@@ -165,9 +165,9 @@ cat /sys/fs/cgroup/mycontainer/memory.swap.events
 # fail 0
 ```
 
-## Monitoring Swap Pressure per Cgroup
+## Monitoring Swap Pressure per Cgroup {#monitoring-swap-pressure-per-cgroup}
 
-### Basic monitoring
+### Basic monitoring {#basic-monitoring}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
@@ -186,7 +186,7 @@ swap_max=$(cat $CGROUP/memory.swap.max)
 [ "$swap_max" != "max" ] && echo "Swap usage: $((swap_current * 100 / swap_max))%"
 ```
 
-### Swap activity in memory.stat
+### Swap activity in memory.stat {#swap-activity-in-memorystat}
 
 `memory.stat` includes swap-related counters:
 
@@ -203,7 +203,7 @@ cat /sys/fs/cgroup/mycontainer/memory.stat | grep -E "^(pswp|workingset)"
 
 `pswpout` increasing means the cgroup is actively swapping out. `workingset_refault_anon` increasing means pages that were swapped out are being faulted back in — a sign of swap thrashing, where the working set does not fit in the RAM allocation.
 
-### PSI as a swap pressure signal
+### PSI as a swap pressure signal {#psi-as-a-swap-pressure-signal}
 
 Memory PSI (`memory.pressure`) captures stall time due to both RAM and swap pressure. A cgroup that is heavily swapping will show elevated PSI `some` values because processes stall waiting for swap I/O.
 
@@ -215,7 +215,7 @@ cat /sys/fs/cgroup/mycontainer/memory.pressure
 
 If `pswpin` + `pswpout` are high and PSI `some` is elevated, the cgroup is spending significant time on swap I/O. This typically means the working set is too large for the `memory.max` allocation.
 
-### Watch for swap in real time
+### Watch for swap in real time {#watch-for-swap-in-real-time}
 
 ```bash
 # Poll swap usage every second
@@ -230,9 +230,9 @@ watch -n 1 "cat /sys/fs/cgroup/mycontainer/memory.swap.current | \
     awk '{printf \"%.1f MB\n\", \$1/1024/1024}'"
 ```
 
-## Swap in Docker and Kubernetes
+## Swap in Docker and Kubernetes {#swap-in-docker-and-kubernetes}
 
-### Docker
+### Docker {#docker}
 
 Docker exposes swap control through two flags:
 
@@ -255,7 +255,7 @@ docker run -d --memory=1g --memory-swap=1536m nginx
 docker run -d --memory=1g --memory-swap=1g nginx
 ```
 
-### Kubernetes
+### Kubernetes {#kubernetes}
 
 Kubernetes memory limits map only to `memory.max` (RAM). Swap is disabled by default on Kubernetes nodes because the scheduler assumes memory requests and limits reflect only RAM.
 
@@ -266,9 +266,9 @@ The `NodeSwap` feature gate (alpha in v1.22, beta in v1.28) enables swap on Kube
 # Pod-level swap settings are not yet available in stable Kubernetes
 ```
 
-## Best Practices
+## Best Practices {#best-practices}
 
-### Deciding whether to allow swap
+### Deciding whether to allow swap {#deciding-whether-to-allow-swap}
 
 | Workload type | Swap recommendation |
 |---------------|---------------------|
@@ -277,7 +277,7 @@ The `NodeSwap` feature gate (alpha in v1.22, beta in v1.28) enables swap on Kube
 | Web servers, application servers | Allow limited swap (`memory.swap.max` = 25-50% of `memory.max`). Provides a buffer without allowing unbounded paging. |
 | Containers with memory leaks | Disable swap. Swap masks the leak — the container uses swap instead of being killed, making the problem harder to detect. |
 
-### Set memory.high to avoid reaching the swap limit
+### Set memory.high to avoid reaching the swap limit {#set-memoryhigh-to-avoid-reaching-the-swap-limit}
 
 If a cgroup has swap enabled, set `memory.high` to trigger throttling before the cgroup has consumed all its RAM. This gives the kernel a chance to reclaim page cache before resorting to swapping anonymous pages.
 
@@ -287,7 +287,7 @@ echo 1G   > /sys/fs/cgroup/mycontainer/memory.max    # OOM here
 echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max  # Swap budget
 ```
 
-### Use zswap to reduce disk I/O
+### Use zswap to reduce disk I/O {#use-zswap-to-reduce-disk-io}
 
 If your system has spare CPU capacity and swap I/O is a bottleneck, enabling zswap reduces the amount of data written to disk:
 
@@ -301,9 +301,9 @@ echo 200M > /sys/fs/cgroup/mycontainer/memory.zswap.max
 
 The default zswap pool size is a heuristic (typically 20% of total RAM — check `/sys/module/zswap/parameters/max_pool_percent`). Without per-cgroup limits, a single container can saturate the zswap pool.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Observe swap usage in a cgroup
+### Observe swap usage in a cgroup {#observe-swap-usage-in-a-cgroup}
 
 ```bash
 # Create a cgroup with limited RAM but some swap
@@ -327,7 +327,7 @@ time.sleep(10)
 watch -n 1 cat /sys/fs/cgroup/swap-test/memory.swap.current
 ```
 
-### Observe OOM when swap limit is also hit
+### Observe OOM when swap limit is also hit {#observe-oom-when-swap-limit-is-also-hit}
 
 ```bash
 sudo mkdir -p /sys/fs/cgroup/swap-oom-test
@@ -339,7 +339,7 @@ echo $$ | sudo tee /sys/fs/cgroup/swap-oom-test/cgroup.procs
 python3 -c "x = bytearray(100 * 1024 * 1024)"
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevant code |
 |------|---------------|
@@ -348,23 +348,23 @@ python3 -c "x = bytearray(100 * 1024 * 1024)"
 | [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | Swap cache management, interacts with memcg charges |
 | [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | zswap implementation including per-memcg accounting |
 
-## History
+## History {#history}
 
-### cgroup v1 memsw (v2.6.34, 2010)
+### cgroup v1 memsw (v2.6.34, 2010) {#cgroup-v1-memsw-v2634-2010}
 
 The combined memory+swap (`memsw`) interface was introduced in cgroup v1. It provided the only mechanism to limit swap per cgroup, but the combined-limit model caused confusion and the implementation had performance overhead from maintaining two coupled counters.
 
-### cgroup v2 separate swap accounting
+### cgroup v2 separate swap accounting {#cgroup-v2-separate-swap-accounting}
 
 cgroup v2 separated `memory.max` (RAM) from `memory.swap.max` (swap-only), fixing the semantic confusion of `memsw`. The separation was part of the broader cgroup v2 memory controller redesign that reached production readiness in v4.5. See [LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/).
 
-### memory.swap.high (v5.8, 2020)
+### memory.swap.high (v5.8, 2020) {#memoryswaphigh-v58-2020}
 
 **LWN**: [Cgroup swap high limit](https://lwn.net/Articles/912708/)
 
 Added a soft swap limit analogous to `memory.high` for RAM, enabling throttle-before-OOM behavior for swap as well as for RAM.
 
-### Per-cgroup zswap accounting (v5.19, 2022)
+### Per-cgroup zswap accounting (v5.19, 2022) {#per-cgroup-zswap-accounting-v519-2022}
 
 **Commit**: [f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25) ("zswap: memcg accounting")
 
@@ -372,9 +372,9 @@ Added a soft swap limit analogous to `memory.high` for RAM, enabling throttle-be
 
 Enabled `memory.zswap.current` and `memory.zswap.max`, preventing any single cgroup from monopolizing the zswap pool and causing other cgroups' pages to be written to disk.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -382,24 +382,24 @@ Enabled `memory.zswap.current` and `memory.zswap.max`, preventing any single cgr
 | [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | zswap implementation and memcg accounting |
 | [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg struct and swap counter fields |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — memory interface files, swap accounting
 - [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) — zswap documentation
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — cgroup v2 design including swap separation
 - [Cgroup swap high limit](https://lwn.net/Articles/912708/) — memory.swap.high motivation and design
 
-### Related
+### Related {#related}
 
 - [Memory Cgroups](memcg.md) — memcg fundamentals
 - [Tuning memory for containers](tuning-containers.md) — practical container memory tuning
 - [Cgroup OOM controller](memcg-oom.md) — what happens when the swap limit contributes to OOM
 - [Hierarchical memory limits](memcg-hierarchy.md) — how limits propagate through the cgroup tree
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `__mem_cgroup_try_charge_swap()` and `__mem_cgroup_uncharge_swap()` for the swap charge/uncharge paths; `memory.swap.current` and `memory.swap.max` read/write handlers
 - [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — zswap implementation including per-memcg pool accounting introduced by commit `f4840ccfca25`

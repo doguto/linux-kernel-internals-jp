@@ -1,8 +1,8 @@
-# kdump and crash
+# kdump and crash {#kdump-and-crash}
 
 > Capturing and analyzing kernel crash dumps
 
-## How kdump works
+## How kdump works {#how-kdump-works}
 
 kdump uses `kexec` to pre-load a second "capture kernel" into a reserved region of memory. When the primary kernel crashes (panic), it hands control to the capture kernel via kexec. The capture kernel boots, saves the first kernel's memory (the "vmcore") to disk, and reboots.
 
@@ -23,9 +23,9 @@ Capture kernel:
   System reboots
 ```
 
-## Setup
+## Setup {#setup}
 
-### Step 1: Reserve memory for capture kernel
+### Step 1: Reserve memory for capture kernel {#step-1-reserve-memory-for-capture-kernel}
 
 Add to kernel boot parameters:
 
@@ -50,7 +50,7 @@ dmesg | grep "crashkernel"
 # crashkernel: memory value: 0x10000000 at 0x100000000
 ```
 
-### Step 2: Install and configure kdump
+### Step 2: Install and configure kdump {#step-2-install-and-configure-kdump}
 
 ```bash
 # Debian/Ubuntu
@@ -70,7 +70,7 @@ sudo kdump-config show
 # current state:    ready to kdump
 ```
 
-### Step 3: Test kdump
+### Step 3: Test kdump {#step-3-test-kdump}
 
 ```bash
 # Force a crash to test (writes crash dump then reboots)
@@ -82,7 +82,7 @@ ls /var/crash/
 # 202601301234/  vmcore  vmcore-dmesg.txt
 ```
 
-## Analyzing a crash dump with crash
+## Analyzing a crash dump with crash {#analyzing-a-crash-dump-with-crash}
 
 The `crash` tool is the standard way to analyze vmcore files:
 
@@ -97,7 +97,7 @@ crash /usr/lib/debug/boot/vmlinux-$(uname -r) /var/crash/*/vmcore
 crash /path/to/vmlinux vmcore
 ```
 
-### crash command reference
+### crash command reference {#crash-command-reference}
 
 Once inside crash:
 
@@ -150,7 +150,7 @@ crash> log                    # kernel ring buffer from vmcore
 crash> log -m                 # include timestamp prefix
 ```
 
-### Reading the backtrace
+### Reading the backtrace {#reading-the-backtrace}
 
 ```
 crash> bt
@@ -171,7 +171,7 @@ PID: 1234   TASK: ffff888012345678  CPU: 3   COMMAND: "myapp"
 
 Each frame shows: frame number, kernel stack address, function name, source address.
 
-### Inspecting the crashing code
+### Inspecting the crashing code {#inspecting-the-crashing-code}
 
 ```
 # Find the faulting instruction
@@ -189,7 +189,7 @@ crash> sym ffffffffc0a01234
 # ffffffffc0a01234 (t) mymodule_function [mymodule]
 ```
 
-## makedumpfile
+## makedumpfile {#makedumpfile}
 
 Raw vmcore files can be very large (equal to physical RAM). `makedumpfile` compresses and filters them:
 
@@ -209,7 +209,7 @@ makedumpfile -c -d 31 /proc/vmcore /var/crash/dump
 makedumpfile --dump-dmesg /proc/vmcore dmesg.txt
 ```
 
-## pstore: persistent storage across reboots
+## pstore: persistent storage across reboots {#pstore-persistent-storage-across-reboots}
 
 For embedded systems or when full kdump is impractical, pstore saves the kernel console log and oops backtraces to persistent storage (ACPI APEI, NVRAM, MTD flash, ramoops):
 
@@ -229,7 +229,7 @@ cat /sys/fs/pstore/dmesg-ramoops-0
 rm /sys/fs/pstore/dmesg-ramoops-0
 ```
 
-## Observing panic behavior
+## Observing panic behavior {#observing-panic-behavior}
 
 ```bash
 # Control what happens on panic
@@ -249,20 +249,20 @@ echo 1 > /proc/sys/kernel/softlockup_panic
 echo 120 > /proc/sys/kernel/hung_task_timeout_secs
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic_timeout` and `panic_on_oops`: the variables behind the `kernel.panic` and `kernel.panic_on_oops` sysctl entries in `kern_panic_table[]`
 - [kernel/watchdog.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/watchdog.c) — `softlockup_panic`: the variable behind `kernel.softlockup_panic`, checked when the soft lockup watchdog fires
 - [kernel/hung_task.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/hung_task.c) — `sysctl_hung_task_timeout_secs`: backs `kernel.hung_task_timeout_secs`
 - [fs/pstore/ram.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pstore/ram.c) — `mem_address`/`mem_size` module parameters: back the `ramoops.mem_address=`/`ramoops.mem_size=` boot parameters used to reserve the ramoops region
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — documents `KEXEC_ON_CRASH`, the flag that registers a kernel image as the crash kernel loaded into the memory reserved by `crashkernel=`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Oops analysis](oops-analysis.md) — reading oops without crash tool
 - [KGDB](kgdb.md) — live kernel debugging
@@ -270,12 +270,12 @@ echo 120 > /proc/sys/kernel/hung_task_timeout_secs
 - [Memory Management: KASAN](../mm/kasan.md) — catching use-after-free before crashes
 - [Memory Management: KFENCE](../mm/kfence.md) — lightweight memory error detection
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Crash dumps with kexec](https://lwn.net/Articles/108595/) — Jonathan Corbet on the original kexec-based crash dump design (2004)
 - [Persistent storage for a kernel's "dying breath"](https://lwn.net/Articles/434821/) — Jake Edge's introduction to pstore (2011); ramoops, then a separate mechanism, was later refactored into a pstore backend, which is how it works today
 
-### External
+### External {#external}
 
 - [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — official kdump setup guide: `crashkernel=` syntax, `/proc/vmcore`, `makedumpfile` usage
 - [Ramoops oops/panic logger](https://docs.kernel.org/admin-guide/ramoops.html) — the ramoops pstore backend, including the `mem_address`/`mem_size` parameters

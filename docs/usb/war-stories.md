@@ -1,10 +1,10 @@
-# USB War Stories
+# USB War Stories {#usb-war-stories}
 
 > Six incidents that trace back to two facts: USB is a bus where an *untrusted physical device* hands the kernel complex data to parse, and USB's hot-plug model means every code path has to survive the device disappearing out from under it mid-operation
 
 USB's conveniences — self-describing devices, hot-plug, drivers auto-loaded by the IDs a device claims — cut both ways. The first three stories below are that trust being abused: a device lying about what it is, or feeding a [descriptor](enumeration.md) parser input no real device would ever send. The last three are the other side of the same coin: hot-plug means a device (or, in gadget mode, a host) can disappear mid-operation, and every code path that reaches toward it has to survive that disappearance — no malicious input required, just bad timing.
 
-## 1. BadUSB: the device that lies about what it is (2014)
+## 1. BadUSB: the device that lies about what it is (2014) {#1-badusb-the-device-that-lies-about-what-it-is-2014}
 
 USB identity is **self-asserted**. Nothing binds a device's physical form to the descriptors it presents; a flash drive says "I am mass storage" only because its firmware chooses to. BadUSB, demonstrated at Black Hat 2014, weaponized this: reflash a normal USB stick's controller so that, *in addition* to being storage, it enumerates a second interface claiming to be a **HID keyboard** — and then "types" commands into the machine the instant it's plugged in. Nothing was exploited in the kernel; the kernel did exactly what USB says to do. The vulnerability *was* the trust model.
 
@@ -12,7 +12,7 @@ There is no patch for "USB trusts devices," so the kernel's answer is **policy, 
 
 **Lesson:** when identity is self-asserted, *authentication* has to live above the bus. The kernel can't tell a real keyboard from a malicious one, so it exposes the controls for a policy layer to decide.
 
-## 2. CVE-2016-2384: a MIDI descriptor that frees twice
+## 2. CVE-2016-2384: a MIDI descriptor that frees twice {#2-cve-2016-2384-a-midi-descriptor-that-frees-twice}
 
 A device doesn't have to inject keystrokes to be dangerous — it just has to describe itself *impossibly*. CVE-2016-2384 was a **double-free** in the USB-MIDI driver (`snd-usbmidi`). When a device presented a USB-MIDI interface descriptor that the driver's setup path rejected, an error path freed the `umidi` object — and then a second cleanup path freed it again. A crafted descriptor (deliverable by any physical device, including a BadUSB one) turned that into a classic double-free, corrupting the allocator and opening the door to code execution.
 
@@ -20,7 +20,7 @@ The fix ([`07d86ca93db7`](https://git.kernel.org/linus/07d86ca93db7) "ALSA: usb-
 
 **Lesson:** a descriptor parser is an attack-surface parser. Every count, length, and endpoint number in a descriptor is attacker-controlled, and the error paths (rarely exercised by real devices) are where the bugs hide.
 
-## 3. Fuzzing the host from the device side: raw-gadget and syzkaller
+## 3. Fuzzing the host from the device side: raw-gadget and syzkaller {#3-fuzzing-the-host-from-the-device-side-raw-gadget-and-syzkaller}
 
 For most of USB's history the host stack was effectively unfuzzable — you needed real malicious hardware to test it. That changed when the kernel gained the ability to *emulate* a USB device in software: **`dummy_hcd`** presents a virtual host controller wired to a virtual device controller, and **raw-gadget** lets a userspace program drive that device side byte-by-byte, presenting *any* descriptors and responses it likes. Andrey Konovalov wired this into **syzkaller**, and the fuzzer — now able to plug a fully attacker-controlled "device" into the host stack — found **hundreds** of bugs across USB drivers: out-of-bounds reads on truncated descriptors, use-after-frees on disconnect races, missing length checks.
 
@@ -28,7 +28,7 @@ The result was a wave of systematic hardening across the USB core and drivers �
 
 **Lesson:** the reason the parsers were fragile is the reason they got fixed — for decades the only way to send the host a malformed descriptor was special hardware, so that path went untested. Making the *device* side programmable turned an un-reachable attack surface into a fuzzable one.
 
-## 4. CVE-2024-36896: unplugging a hub while sysfs is asking it a question
+## 4. CVE-2024-36896: unplugging a hub while sysfs is asking it a question {#4-cve-2024-36896-unplugging-a-hub-while-sysfs-is-asking-it-a-question}
 
 USB hubs expose per-port controls through sysfs, including a `disable` attribute (`drivers/usb/core/port.c`) that lets userspace power down a single port. Reading or writing it means walking from the port device up to the hub that owns it: `hdev = to_usb_device(dev->parent->parent)`, then `hub = usb_hub_to_struct_hub(hdev)`.
 
@@ -38,7 +38,7 @@ The fix ([`a4b46d450c49`](https://git.kernel.org/linus/a4b46d450c49) "USB: core:
 
 **Lesson:** a sysfs handler that walks a device's parent hierarchy is racing hot-unplug by construction — nothing prevents the device at the other end of that walk from being torn down between the lookup and the dereference. Where possible, reach data through a pointer that's guaranteed to outlive the lookup (like `dev->parent` here) rather than one that depends on a second object still being alive.
 
-## 5. CVE-2026-80824: usbfs frees the device, then reads through it anyway
+## 5. CVE-2026-80824: usbfs frees the device, then reads through it anyway {#5-cve-2026-80824-usbfs-frees-the-device-then-reads-through-it-anyway}
 
 `usbfs` lets userspace submit and reap USB requests (URBs) directly against `/dev/bus/usb/*` nodes, including `mmap()`-backed buffers for zero-copy transfers. When a program closes its usbfs file descriptor, `usbdev_release()` tears everything down: it calls `usb_put_dev(dev)` to drop its reference to the `struct usb_device`, then walks the list of completed async URBs and frees each one with `free_async()`.
 
@@ -50,7 +50,7 @@ The fix ([`0dd68b5d01d0`](https://git.kernel.org/linus/0dd68b5d01d0) "usb: usbfs
 
 **Lesson:** "drop the reference, then clean up what depended on it" is backwards whenever the cleanup path can read back through the object the reference was protecting. The bug had been present since the mmap-zerocopy feature was added in Linux 4.6 — a decade during which the ordering only mattered if a program disconnected mid-flight in exactly this way.
 
-## 6. CVE-2025-68282: a teardown flag closes a race its first fix didn't
+## 6. CVE-2025-68282: a teardown flag closes a race its first fix didn't {#6-cve-2025-68282-a-teardown-flag-closes-a-race-its-first-fix-didnt}
 
 USB gadget devices (the kernel acting as a USB *device* rather than a host — see [gadget internals](xhci-gadget.md)) report state changes (`configured`, `suspended`, and so on) via a `sysfs_notify()` call, deferred to a workqueue (`gadget->work`) so it doesn't run in whatever atomic context triggered the state change. `usb_del_gadget()` tears the gadget down: at some point it calls `flush_work()` to wait for any pending `gadget->work` to finish, then frees the gadget's memory.
 
@@ -60,7 +60,7 @@ The real fix ([`baeb66fbd420`](https://git.kernel.org/linus/baeb66fbd420) "usb: 
 
 **Lesson:** a use-after-free caused by "something got scheduled after we thought cleanup was done" usually needs a state check guarded by the same lock the scheduling side uses, not a reordering of when cleanup happens — reordering narrows a race, a shared guarded flag closes it. The underlying bug dated back to Linux 3.12, and even the first, incomplete fix attempt shipped over a decade after the bug was introduced.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [USB overview](README.md) — the trust model and the descriptor tree these stories abuse
 - [Kernel docs: USB authorization](https://docs.kernel.org/usb/authorization.html) — the `authorized`/`authorized_default` policy controls

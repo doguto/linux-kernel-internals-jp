@@ -1,10 +1,10 @@
-# I/O Polling: HIPRI, IOPOLL, and NOWAIT
+# I/O Polling: HIPRI, IOPOLL, and NOWAIT {#io-polling-hipri-iopoll-and-nowait}
 
 > Eliminating interrupt and thread-switch overhead for NVMe I/O — how IOCB_HIPRI, io_uring IOPOLL, and IOCB_NOWAIT work inside the kernel
 
 ---
 
-## Why polling?
+## Why polling? {#why-polling}
 
 Traditional block I/O uses interrupts. When a write or read completes, the NVMe controller asserts an MSI-X interrupt. The CPU stops what it is doing, saves state, runs the interrupt handler, posts the completion, and returns. For a spinning disk with multi-millisecond latency, this overhead is negligible. For a modern NVMe SSD with sub-100µs latency, the interrupt path starts to matter.
 
@@ -52,7 +52,7 @@ It is a poor trade for:
 - **Shared systems**: the polling core is stolen from other tenants
 - **Rotating media or slow SSDs**: latency is high enough that sleeping is always better
 
-### Interrupt path vs polling path
+### Interrupt path vs polling path {#interrupt-path-vs-polling-path}
 
 ```
 Interrupt path:
@@ -76,11 +76,11 @@ Polling path:
 
 ---
 
-## HIPRI: the kernel polling interface
+## HIPRI: the kernel polling interface {#hipri-the-kernel-polling-interface}
 
 The user-visible entry point for polling is the `RWF_HIPRI` flag on `preadv2()`/`pwritev2()`, or `IORING_SETUP_IOPOLL` on an io_uring ring. Both ultimately set `IOCB_HIPRI` in the kiocb's `ki_flags`.
 
-### Userspace API
+### Userspace API {#userspace-api}
 
 ```c
 /* preadv2/pwritev2 with RWF_HIPRI: per-call polling request */
@@ -98,7 +98,7 @@ int ring_fd = io_uring_setup(128, &params);
 
 Both require `O_DIRECT`. HIPRI on a buffered file is rejected: the block layer has no way to poll for a page cache fill.
 
-### How RWF_HIPRI becomes IOCB_HIPRI
+### How RWF_HIPRI becomes IOCB_HIPRI {#how-rwfhipri-becomes-iocbhipri}
 
 The `RWF_*` flags passed to `preadv2()` and `pwritev2()` are copied directly into `IOCB_*` flags. The values are deliberately equal:
 
@@ -131,7 +131,7 @@ static ssize_t do_iter_readv_writev(struct file *filp, struct iov_iter *iter,
 }
 ```
 
-### HIPRI flows through to the bio
+### HIPRI flows through to the bio {#hipri-flows-through-to-the-bio}
 
 Once `IOCB_HIPRI` is set on the kiocb, it propagates to the bio and then to the block-layer request:
 
@@ -163,7 +163,7 @@ Keeping poll queues interrupt-free is what makes polling safe: because no interr
 
 ---
 
-## The iopoll hook: filesystem-level polling
+## The iopoll hook: filesystem-level polling {#the-iopoll-hook-filesystem-level-polling}
 
 `file_operations` has an `iopoll` method that io_uring calls to check for completions without going to sleep:
 
@@ -177,7 +177,7 @@ struct file_operations {
 };
 ```
 
-### iocb_bio_iopoll: the common implementation
+### iocb_bio_iopoll: the common implementation {#iocbbioiopoll-the-common-implementation}
 
 Both ext4 and XFS delegate to the iomap layer, which stores the bio pointer in `kiocb->private` at submission time:
 
@@ -235,7 +235,7 @@ The `cookie` is the hardware-queue identifier recorded on the bio at submission 
 
 ---
 
-## NVMe polling: reading the completion queue directly
+## NVMe polling: reading the completion queue directly {#nvme-polling-reading-the-completion-queue-directly}
 
 NVMe controllers use a pair of rings per queue: a submission queue (SQ) that the driver writes commands into, and a completion queue (CQ) that the controller writes completions into. The driver detects new CQ entries by checking the **phase bit** — a single bit that the controller toggles on each pass through the ring.
 
@@ -270,7 +270,7 @@ static int nvme_poll(struct blk_mq_hw_ctx *hctx, struct io_comp_batch *iob)
 
 `nvme_poll_cq` walks pending CQ entries, completes each request, and updates the head pointer. The phase bit check is a single memory read — no MMIO, no PCI transaction. This is why polling is so fast: detecting completion is a load from a DMA-mapped memory region that the controller writes to.
 
-### Phase bit mechanics
+### Phase bit mechanics {#phase-bit-mechanics}
 
 ```
 CQ ring (4 entries):
@@ -289,7 +289,7 @@ On the interrupt path, the driver does the same `nvme_poll_cq()` work — but tr
 
 ---
 
-## io_uring IOPOLL mode
+## io_uring IOPOLL mode {#io_uring-iopoll-mode}
 
 io_uring's `IORING_SETUP_IOPOLL` is the highest-performance polling interface. It combines:
 
@@ -297,7 +297,7 @@ io_uring's `IORING_SETUP_IOPOLL` is the highest-performance polling interface. I
 2. Kernel-side completion polling (no interrupt, no wakeup)
 3. Optional submission-side polling (`IORING_SETUP_SQPOLL`, described below)
 
-### Setup
+### Setup {#setup}
 
 ```c
 #include <liburing.h>
@@ -319,7 +319,7 @@ struct iovec iov[1] = {{ .iov_base = buf, .iov_len = BUF_SIZE }};
 io_uring_register_buffers(&ring, iov, 1);
 ```
 
-### Submission and completion
+### Submission and completion {#submission-and-completion}
 
 ```c
 /* Submit a read using a registered (fixed) buffer */
@@ -334,7 +334,7 @@ int result = cqe->res;
 io_uring_cqe_seen(&ring, cqe);
 ```
 
-### Inside io_do_iopoll()
+### Inside io_do_iopoll() {#inside-iodoiopoll}
 
 When `io_uring_enter()` is called with `IORING_ENTER_GETEVENTS` on a IOPOLL ring, the kernel enters the poll loop:
 
@@ -408,7 +408,7 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, unsigned int min_events)
 }
 ```
 
-### Request lifecycle in IOPOLL mode
+### Request lifecycle in IOPOLL mode {#request-lifecycle-in-iopoll-mode}
 
 ```
 io_uring_submit()
@@ -431,7 +431,7 @@ io_uring_enter(IORING_ENTER_GETEVENTS)
 
 ---
 
-## SQPOLL: kernel-side submission polling
+## SQPOLL: kernel-side submission polling {#sqpoll-kernel-side-submission-polling}
 
 `IORING_SETUP_SQPOLL` is a companion feature to IOPOLL that eliminates the submission-side syscall. With SQPOLL, a dedicated kernel thread polls the SQ ring:
 
@@ -480,7 +480,7 @@ With both SQPOLL and IOPOLL enabled, the userspace application:
 3. Calls `io_uring_enter(IORING_ENTER_GETEVENTS)` to collect completions (one syscall for a batch of results)
 4. Or reads CQEs directly from the CQ ring if `IORING_FEAT_NODROP` is set
 
-### Requirements for SQPOLL + IOPOLL
+### Requirements for SQPOLL + IOPOLL {#requirements-for-sqpoll-iopoll}
 
 | Requirement | Reason |
 |-------------|--------|
@@ -492,7 +492,7 @@ With both SQPOLL and IOPOLL enabled, the userspace application:
 
 ---
 
-## IOCB_NOWAIT: fail fast instead of block
+## IOCB_NOWAIT: fail fast instead of block {#iocb_nowait-fail-fast-instead-of-block}
 
 `IOCB_NOWAIT` is conceptually different from `IOCB_HIPRI`. Rather than polling for completion, NOWAIT says: "if this I/O would have to wait for any reason, return `-EAGAIN` immediately instead."
 
@@ -507,7 +507,7 @@ if (n == -EAGAIN) {
 /* No special flag needed — it is the default io_uring behavior */
 ```
 
-### What causes NOWAIT to return EAGAIN?
+### What causes NOWAIT to return EAGAIN? {#what-causes-nowait-to-return-eagain}
 
 Any operation that would require the calling context to sleep triggers the NOWAIT fast-path:
 
@@ -538,7 +538,7 @@ if (iocb->ki_flags & IOCB_NOWAIT) {
 }
 ```
 
-### NOWAIT in io_uring's fast path
+### NOWAIT in io_uring's fast path {#nowait-in-io_urings-fast-path}
 
 io_uring's performance depends heavily on NOWAIT. Each read is first issued on the submitting task in non-blocking mode: on that initial issue io_uring sets `IOCB_NOWAIT`, so the filesystem returns `-EAGAIN` rather than sleeping.
 
@@ -569,11 +569,11 @@ The io-wq fallback is what gives io_uring the ability to handle any I/O, even wh
 
 ---
 
-## NOWAIT support by filesystem and operation
+## NOWAIT support by filesystem and operation {#nowait-support-by-filesystem-and-operation}
 
 Not all I/O types support NOWAIT equally. The support depends on what locks and resources the operation needs:
 
-### O_DIRECT I/O
+### O_DIRECT I/O {#o_direct-io}
 
 ```
 ext4 O_DIRECT read:     Full NOWAIT support
@@ -590,7 +590,7 @@ For O_DIRECT, the main failure modes are:
 - NVMe queue full (rare at normal utilization)
 - Extent map not yet in memory (XFS: extent tree may need a read)
 
-### Buffered I/O
+### Buffered I/O {#buffered-io}
 
 ```
 Buffered read, page in cache and uptodate:    NOWAIT succeeds
@@ -603,7 +603,7 @@ Buffered write, journal pressure (ext4):      NOWAIT returns EAGAIN
 
 Buffered NOWAIT reads are useful for workloads with a hot working set: if the page is in cache (common case), the read completes without any syscall overhead. On a cache miss, NOWAIT hands off to io-wq, which handles the disk read in the background.
 
-### Operation support matrix
+### Operation support matrix {#operation-support-matrix}
 
 | Filesystem | O_DIRECT read | O_DIRECT write | Buffered read | Buffered write |
 |------------|--------------|----------------|---------------|----------------|
@@ -618,7 +618,7 @@ Buffered NOWAIT reads are useful for workloads with a hot working set: if the pa
 
 ---
 
-## HIPRI vs IOPOLL vs NOWAIT: comparison
+## HIPRI vs IOPOLL vs NOWAIT: comparison {#hipri-vs-iopoll-vs-nowait-comparison}
 
 These three flags are often mentioned together but solve different problems:
 
@@ -635,7 +635,7 @@ These three flags are often mentioned together but solve different problems:
 | Requires kernel IOPOLL support in driver | Yes (nvme, io_uring, virtio-blk) | No |
 | Combined with io_uring | `IORING_SETUP_IOPOLL` | Default behavior, no flag needed |
 
-### Choosing the right mode
+### Choosing the right mode {#choosing-the-right-mode}
 
 ```
 High-performance NVMe, dedicated server, latency SLO:
@@ -655,9 +655,9 @@ Mixed read/write, NVMe, p99 matters:
 
 ---
 
-## Measuring poll effectiveness
+## Measuring poll effectiveness {#measuring-poll-effectiveness}
 
-### Check that the NVMe driver supports polling
+### Check that the NVMe driver supports polling {#check-that-the-nvme-driver-supports-polling}
 
 ```bash
 # Verify the block device has poll queues
@@ -676,7 +676,7 @@ ls /sys/block/nvme0n1/mq/
 # 0  1  2  3  ...  (one directory per hw queue)
 ```
 
-### fio benchmark: interrupt vs poll
+### fio benchmark: interrupt vs poll {#fio-benchmark-interrupt-vs-poll}
 
 ```bash
 # Baseline: O_DIRECT with interrupts (default)
@@ -706,7 +706,7 @@ fio --name=polled \
 # Compare p50, p99, p999 latency between the two runs
 ```
 
-### bpftrace: count interrupt vs poll completions
+### bpftrace: count interrupt vs poll completions {#bpftrace-count-interrupt-vs-poll-completions}
 
 ```bash
 # Count block completions by whether they came from interrupt or poll context
@@ -727,7 +727,7 @@ kprobe:io_wq_enqueue
 interval:s:5 { print(@io_wq_fallbacks); clear(@io_wq_fallbacks); }'
 ```
 
-### perf: NVMe interrupt rate
+### perf: NVMe interrupt rate {#perf-nvme-interrupt-rate}
 
 ```bash
 # Count NVMe MSI-X interrupts while fio runs
@@ -741,7 +741,7 @@ watch -n1 'grep nvme /proc/interrupts'
 # With IOPOLL active: the NVMe interrupt counter should stop incrementing
 ```
 
-### io_uring statistics
+### io_uring statistics {#io_uring-statistics}
 
 ```bash
 # io_uring exposes per-ring statistics via /proc
@@ -756,7 +756,7 @@ interval:s:1 { print(@poll_armed); print(@completed);
                clear(@poll_armed); clear(@completed); }'
 ```
 
-### Verifying NOWAIT hit rate
+### Verifying NOWAIT hit rate {#verifying-nowait-hit-rate}
 
 ```bash
 # Instrument the NOWAIT fast path and io-wq fallback
@@ -779,7 +779,7 @@ interval:s:5 {
 
 ---
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Contents |
 |------|----------|
@@ -797,7 +797,7 @@ interval:s:5 {
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Direct I/O](direct-io.md) — O_DIRECT requirement for HIPRI/IOPOLL
 - [Async I/O Evolution](async-io.md) — io_uring architecture and SQE/CQE model

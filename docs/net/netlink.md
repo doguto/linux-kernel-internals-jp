@@ -1,8 +1,8 @@
-# Netlink
+# Netlink {#netlink}
 
 > Kernel-userspace communication for network configuration tools
 
-## What is Netlink?
+## What is Netlink? {#what-is-netlink}
 
 Netlink is a socket-based IPC mechanism for communication between userspace and the kernel. It's how most network configuration tools work:
 
@@ -17,7 +17,7 @@ Netlink is a socket-based IPC mechanism for communication between userspace and 
 | `audit` | `NETLINK_AUDIT` | Audit subsystem |
 | `uevent` | `NETLINK_KOBJECT_UEVENT` | Device hotplug events |
 
-## Netlink socket basics
+## Netlink socket basics {#netlink-socket-basics}
 
 ```c
 #include <linux/netlink.h>
@@ -35,7 +35,7 @@ struct sockaddr_nl addr = {
 bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 ```
 
-## Netlink message format
+## Netlink message format {#netlink-message-format}
 
 Every Netlink message has a fixed header:
 
@@ -59,11 +59,11 @@ Common flags:
 - `NLM_F_CREATE`: create if not exists (add operations)
 - `NLM_F_EXCL`: fail if exists (add operations)
 
-## rtnetlink: network interface management
+## rtnetlink: network interface management {#rtnetlink-network-interface-management}
 
 `NETLINK_ROUTE` (rtnetlink) is used by `ip` to manage interfaces, addresses, and routes.
 
-### List all interfaces (GETLINK dump)
+### List all interfaces (GETLINK dump) {#list-all-interfaces-getlink-dump}
 
 ```c
 #include <linux/rtnetlink.h>
@@ -113,7 +113,7 @@ while (1) {
 done:;
 ```
 
-### Netlink attributes (rtattr / nlattr)
+### Netlink attributes (rtattr / nlattr) {#netlink-attributes-rtattr-nlattr}
 
 Netlink uses a TLV (Type-Length-Value) attribute format:
 
@@ -135,7 +135,7 @@ struct nlattr {
 };
 ```
 
-### RTM_NEWROUTE: add a route
+### RTM_NEWROUTE: add a route {#rtm_newroute-add-a-route}
 
 ```c
 /* Add route: 10.0.0.0/8 via 192.168.1.1 dev eth0 */
@@ -173,7 +173,7 @@ send(fd, &req, req.nlh.nlmsg_len, 0);
 /* Read ACK to confirm success */
 ```
 
-## Generic Netlink (genetlink)
+## Generic Netlink (genetlink) {#generic-netlink-genetlink}
 
 Generic Netlink is a multiplexer that allows kernel subsystems to define their own message families without using a reserved `NETLINK_*` protocol number.
 
@@ -187,7 +187,7 @@ genetlink dispatcher
     └── family "devlink"   → devlink handlers
 ```
 
-### Using libnl3
+### Using libnl3 {#using-libnl3}
 
 Most tools use `libnl3` rather than raw sockets:
 
@@ -215,7 +215,7 @@ nlmsg_free(msg);
 nl_recvmsgs_default(sock);
 ```
 
-## Kernel side: registering a genetlink family
+## Kernel side: registering a genetlink family {#kernel-side-registering-a-genetlink-family}
 
 ```c
 /* net/wireless/nl80211.c (simplified) */
@@ -254,7 +254,7 @@ static int __init nl80211_init(void)
 }
 ```
 
-## Netlink multicast: event notifications
+## Netlink multicast: event notifications {#netlink-multicast-event-notifications}
 
 Netlink multicast allows the kernel to push events to interested userspace processes:
 
@@ -275,7 +275,7 @@ bind(fd, (struct sockaddr *)&addr, sizeof(addr));
    cable plug/unplug, DHCP lease changes, etc. */
 ```
 
-### Kernel side: sending a multicast notification
+### Kernel side: sending a multicast notification {#kernel-side-sending-a-multicast-notification}
 
 ```c
 /* net/core/rtnetlink.c */
@@ -292,7 +292,7 @@ void rtmsg_ifinfo(int type, struct net_device *dev, unsigned int change,
 }
 ```
 
-## NETLINK_SOCK_DIAG: socket statistics
+## NETLINK_SOCK_DIAG: socket statistics {#netlinksockdiag-socket-statistics}
 
 Used by `ss` to list sockets faster than `/proc/net/tcp`:
 
@@ -318,7 +318,7 @@ send(fd, &request, sizeof(request), 0);
 /* Receive: one INET_DIAG_INFO per socket */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Socket Layer Overview](socket-layer.md) — AF_NETLINK socket implementation
 - [procfs and sysfs](../vfs/procfs-sysfs.md) — alternative kernel-userspace interfaces

@@ -1,8 +1,8 @@
-# Why Is the Network Stack So Complex?
+# Why Is the Network Stack So Complex? {#why-is-the-network-stack-so-complex}
 
 > A mental model for the Linux networking subsystem
 
-## The fundamental challenge
+## The fundamental challenge {#the-fundamental-challenge}
 
 Networking is not a single problem — it's dozens of layered problems that must compose cleanly:
 
@@ -14,7 +14,7 @@ Networking is not a single problem — it's dozens of layered problems that must
 
 The Linux network stack is complex because it solves all of these simultaneously, and has evolved over 30 years as each requirement was added.
 
-## The layer model
+## The layer model {#the-layer-model}
 
 The stack mirrors the OSI/IP model, but in kernel terms:
 
@@ -39,7 +39,7 @@ Hardware              NIC driver, NAPI, DMA ring buffers
 
 Each layer adds/strips headers using the same `sk_buff` structure, pushing and pulling data pointers. **No data is copied between layers** — the same buffer passes through the entire stack.
 
-## The receive path in one picture
+## The receive path in one picture {#the-receive-path-in-one-picture}
 
 ```
 NIC DMA → ring buffer
@@ -64,7 +64,7 @@ ip_rcv() → ip_rcv_finish()
               sk->sk_data_ready(sk) → wake up reader
 ```
 
-## The transmit path in one picture
+## The transmit path in one picture {#the-transmit-path-in-one-picture}
 
 ```
 write()/sendmsg()
@@ -84,17 +84,17 @@ dev_queue_xmit()
     ↓ DMA to NIC
 ```
 
-## Why multiple abstraction layers?
+## Why multiple abstraction layers? {#why-multiple-abstraction-layers}
 
-### 1. Flexibility without copying
+### 1. Flexibility without copying {#1-flexibility-without-copying}
 
 Each layer operates on the same `sk_buff`. TCP adds a TCP header by calling `skb_push()` — moving the `data` pointer back 20 bytes and writing the header there. IP does the same for its header. Ethernet does the same for its header. **Zero copies across layers** for the headers.
 
-### 2. Protocol independence
+### 2. Protocol independence {#2-protocol-independence}
 
 The socket layer doesn't know if the underlying transport is TCP or UDP. `proto_ops->sendmsg()` dispatches to the right implementation. Adding a new protocol (SCTP, QUIC in kernel, etc.) requires only implementing the right interfaces.
 
-### 3. Extensibility via hooks
+### 3. Extensibility via hooks {#3-extensibility-via-hooks}
 
 **Netfilter** provides hooks at fixed points in the IP stack (PREROUTING, INPUT, FORWARD, OUTPUT, POSTROUTING). Firewalls, NAT, connection tracking, and packet mangling all attach at these hooks — without modifying the core stack.
 
@@ -102,11 +102,11 @@ The socket layer doesn't know if the underlying transport is TCP or UDP. `proto_
 
 **eBPF socket programs** hook at the socket level for per-flow policy.
 
-### 4. NAPI for high-throughput
+### 4. NAPI for high-throughput {#4-napi-for-high-throughput}
 
 The interrupt-driven receive model doesn't scale. NAPI switches to polling under load, processing packets in batches in softirq context. GRO merges segments. RSS distributes across CPUs. All of this is layered on top of the core receive path.
 
-## Key data structures at a glance
+## Key data structures at a glance {#key-data-structures-at-a-glance}
 
 | Structure | Where | Purpose |
 |-----------|-------|---------|
@@ -119,7 +119,7 @@ The interrupt-driven receive model doesn't scale. NAPI switches to polling under
 | `struct dst_entry` | routing | Next-hop routing cache entry |
 | `struct nf_hook_ops` | netfilter | Firewall/NAT hook registration |
 
-## Complexity by design, not accident
+## Complexity by design, not accident {#complexity-by-design-not-accident}
 
 The stack's complexity reflects genuine requirements:
 
@@ -131,7 +131,7 @@ The stack's complexity reflects genuine requirements:
 
 Understanding any one part (TCP, routing, Netfilter, NAPI) is tractable. The stack as a whole is complex because it's many tractable parts that must compose perfectly.
 
-## Where to go next
+## Where to go next {#where-to-go-next}
 
 The best way to understand the stack is to follow a packet:
 
@@ -144,9 +144,9 @@ Or start with the key structures:
 - [Socket Layer Overview](socket-layer.md) — The socket/sock/proto hierarchy
 - [Network Device and NAPI](napi.md) — The receive hardware interface
 
-## Further reading
+## Further reading {#further-reading}
 
-### In this repo
+### In this repo {#in-this-repo}
 
 - [sk-buff.md](sk-buff.md) — Deep dive into the `sk_buff` structure: headroom, tailroom, clone vs copy, and GRO
 - [socket-layer.md](socket-layer.md) — The `struct socket` / `struct sock` / `struct proto` hierarchy and VFS integration
@@ -155,20 +155,20 @@ Or start with the key structures:
 - [napi.md](napi.md) — NAPI polling, GRO, and multi-queue RSS/RPS/XPS mechanics
 - [tc-qdisc.md](tc-qdisc.md) — Traffic control: qdiscs, classes, filters, and the HTB/FQ schedulers
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`net/core/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core) — Socket layer, `sk_buff` management, `dev.c` (the central TX/RX dispatch), and NAPI
 - [`net/ipv4/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv4) — IPv4 input/output, TCP, UDP, routing, and Netfilter hook sites
 - [`include/linux/skbuff.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/skbuff.h) — Complete `sk_buff` definition and the inline helpers used at every layer
 - [`include/linux/netdevice.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/netdevice.h) — `struct net_device`, `struct napi_struct`, and the `net_device_ops` vtable
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/networking/`](https://www.kernel.org/doc/html/latest/networking/index.html) — Official kernel networking docs: scaling, packet mmap, timestamping, and more
 - [`Documentation/networking/scaling.rst`](https://www.kernel.org/doc/html/latest/networking/scaling.html) — RSS, RPS, RFS, XPS, and aRFS explained with tuning guidance
 - [`Documentation/networking/kapi.rst`](https://www.kernel.org/doc/html/latest/networking/kapi.html) — Kernel networking API reference (socket buffer, device, and protocol APIs)
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Driver porting: Network drivers (2003)](https://lwn.net/Articles/30107/) — Introduces NAPI and the move away from pure interrupt-driven receive
 - [JLS2009: Generic receive offload](https://lwn.net/Articles/358910/) — How GRO merges segments in software, analogous to hardware LRO

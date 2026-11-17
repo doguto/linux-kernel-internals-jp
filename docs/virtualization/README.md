@@ -1,8 +1,8 @@
-# Virtualization: KVM
+# Virtualization: KVM {#virtualization-kvm}
 
 > Hardware-accelerated virtual machines in the Linux kernel
 
-## KVM architecture overview
+## KVM architecture overview {#kvm-architecture-overview}
 
 KVM (Kernel-based Virtual Machine) is a hypervisor built into the Linux kernel. It uses hardware virtualization extensions (Intel VT-x / AMD-V) to run virtual machines at near-native speed.
 
@@ -28,7 +28,7 @@ Host (Linux + KVM)
 └────────────────────────────────────────────────────────────┘
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -41,7 +41,7 @@ Host (Linux + KVM)
 | [Nested Virtualization](nested-virt.md) | L0/L1/L2, vmcs12, vmcs02 merge, two-level EPT |
 | [War Stories](war-stories.md) | VENOM, L1TF, a nested-VMX UAF, a vhost overflow, and the MDS mitigation's five-year timing gap |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Check KVM support

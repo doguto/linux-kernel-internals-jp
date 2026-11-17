@@ -1,8 +1,8 @@
-# Cumulative Patches and Atomic Replace
+# Cumulative Patches and Atomic Replace {#cumulative-patches-and-atomic-replace}
 
 > Stacking live patches and replacing them atomically
 
-## The accumulation problem
+## The accumulation problem {#the-accumulation-problem}
 
 In a long-running production environment, a kernel may accumulate several live
 patches over time. Patch P1 fixes a bug in `tcp_sendmsg`. Two weeks later,
@@ -18,7 +18,7 @@ get complicated: P4 must be written knowing P1 is also active.
 *Cumulative patches* solve this. A cumulative patch replaces all previous
 patches in a single atomic operation rather than layering on top of them.
 
-## struct klp_patch: the .replace flag
+## struct klp_patch: the .replace flag {#struct-klp_patch-the-replace-flag}
 
 The `.replace` field, added to `struct klp_patch` in Linux 5.1, marks a
 patch as cumulative:
@@ -48,7 +48,7 @@ applied — including functions that earlier patches touched. When
 `.replace = true`, the KLP core replaces the entire set of active patches, not
 just adds one more.
 
-## Writing a cumulative patch
+## Writing a cumulative patch {#writing-a-cumulative-patch}
 
 ```c
 /* Cumulative patch: replaces P1 (tcp_sendmsg) and P2 (ip_output) */
@@ -115,7 +115,7 @@ The "atomic" part is that the entire switch — enabling the new patch and remov
  *    patches from the func_stack */
 ```
 
-## struct klp_ops: the per-function hook
+## struct klp_ops: the per-function hook {#struct-klp_ops-the-per-function-hook}
 
 There is exactly one `struct klp_ops` for each (object, function-name) pair,
 no matter how many patches target that function:
@@ -149,7 +149,7 @@ list_del_rcu(&func->stack_node);
 If the stack becomes empty, the ftrace hook is unregistered and the original
 function resumes executing without any trampoline overhead.
 
-## Disabling a patch
+## Disabling a patch {#disabling-a-patch}
 
 Disabling a patch starts a *reverse transition*: tasks are moved from
 `KLP_TRANSITION_PATCHED` back to `KLP_TRANSITION_UNPATCHED`. The `enabled` sysfs file triggers this:
@@ -177,7 +177,7 @@ cat /sys/kernel/livepatch/mypatch/enabled
 # 0 = fully disabled
 ```
 
-## Removing a patch
+## Removing a patch {#removing-a-patch}
 
 Once a patch is disabled, its module can be unloaded. `klp_enable_patch()` is
 the primary entry point a livepatch module calls, but it is not the only
@@ -224,7 +224,7 @@ echo 0 > /sys/kernel/livepatch/mypatch/enabled
 rmmod mypatch
 ```
 
-## klp_patch lifecycle
+## klp_patch lifecycle {#klp_patch-lifecycle}
 
 `struct klp_patch` has no state enum. State is tracked via boolean fields: `patch->enabled` (bool) and `patch->forced` (bool). The lifecycle in terms of sysfs-observable state is: unloaded → `enabled=0` (loaded, not yet active) → `enabled=1, transition=1` (transitioning) → `enabled=1, transition=0` (fully active) → `enabled=0` (disabled, can unload).
 
@@ -253,7 +253,7 @@ enabled=0, transition=0 (disabled, can unload)
 (patch module unloaded; ftrace hooks were already removed when the patch was disabled)
 ```
 
-## Observing the func_stack
+## Observing the func_stack {#observing-the-func_stack}
 
 The sysfs hierarchy exposes the state of each patched object, and lists each
 patched function's directory, but a per-function `patched` file does not
@@ -280,7 +280,7 @@ cat /sys/kernel/livepatch/p1/stack_order  # 1 (older, shadowed by p2)
 cat /sys/kernel/livepatch/p2/stack_order  # 2 (newer, active)
 ```
 
-## Practical workflow with kpatch
+## Practical workflow with kpatch {#practical-workflow-with-kpatch}
 
 `kpatch` is the most widely used toolchain for building and distributing
 cumulative live patches. The standard workflow for a security patch release:
@@ -312,7 +312,7 @@ kpatch install kpatch-security-fix.ko
 systemctl enable kpatch
 ```
 
-## Cumulative patch ordering rules
+## Cumulative patch ordering rules {#cumulative-patch-ordering-rules}
 
 The ordering rule that matters most is enforced by the kernel, not by the
 operator. Only one transition may be in flight at a time, and both the enable
@@ -365,9 +365,9 @@ ls /sys/kernel/livepatch/                       # want only mypatch
 See [war stories](war-stories.md) for a real incident where a cumulative patch
 shipped without `.replace` and a superseded fix never reverted.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_patch`, `struct klp_func`, `struct klp_object`, and the `KLP_TRANSITION_IDLE`/`KLP_TRANSITION_UNPATCHED`/`KLP_TRANSITION_PATCHED` task-state constants
 - [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `klp_enable_patch()`, `klp_add_nops()`, `klp_unpatch_replaced_patches()`, `klp_module_going()` (reverts a patch on a target module being unloaded), the `if (klp_transition_patch) return -EBUSY;` guard shared by `__klp_enable_patch()`/`__klp_disable_patch()`, and a comment block documenting the full `/sys/kernel/livepatch/...` sysfs layout
@@ -376,11 +376,11 @@ shipped without `.replace` and a superseded fix never reverted.
 - [Documentation/livepatch/cumulative-patches.rst](https://docs.kernel.org/livepatch/cumulative-patches.html) — the upstream usage guide for atomic replace, including the callback and shadow-variable limitations
 - [`e1452b607c48` — livepatch: Add atomic replace](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e1452b607c48c642caf57299f4da83aa002f8533) — Jason Baron's commit (reworked/split by Petr Mladek) adding the `.replace` field to `struct klp_patch`, merged for Linux 5.1
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — module removal; the `-f`/`--force` option bypasses the in-use refcount check this page warns is dangerous — the danger applies to a still-enabled live patch just as to any in-use module
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KLP Consistency Model](klp-consistency.md) — per-task states, stack checking, forced transitions
 - [Kernel Live Patching](klp.md) — struct klp_func/klp_patch, ftrace redirection, shadow variables
@@ -388,6 +388,6 @@ shipped without `.replace` and a superseded fix never reverted.
 - [Kernel Modules](../modules/module-basics.md) — KLP modules use the standard module infrastructure
 - [War Stories](war-stories.md) — a real incident from shipping a "cumulative" patch that was missing `.replace = true`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [livepatch: Atomic replace feature](https://lwn.net/Articles/776290/) — Petr Mladek's v15 patch series introducing atomic replace, mirrored on LWN (January 9, 2019); the cover letter explains the cumulative-patch design and the problems it replaced (patch-ordering dependencies, no way to revert a single stacked patch)

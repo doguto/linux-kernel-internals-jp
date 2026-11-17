@@ -1,8 +1,8 @@
-# Per-VMA Locks
+# Per-VMA Locks {#per-vma-locks}
 
 > Eliminating the mmap_lock bottleneck in page fault handling
 
-## The mmap_lock bottleneck
+## The mmap_lock bottleneck {#the-mmap_lock-bottleneck}
 
 Every process has a single per-`mm_struct` read-write semaphore called `mmap_lock`. Historically it was the gate for nearly every operation that touches the process's virtual memory layout:
 
@@ -15,11 +15,11 @@ For multi-threaded workloads that mix frequent faults with occasional VMA modifi
 
 The `mmap_lock` is also coarse: it protects the entire VMA tree. If thread A is faulting in region X and thread B is faulting in region Y, they still contend on the same lock even though they are touching completely different VMAs.
 
-## Per-VMA lock design
+## Per-VMA lock design {#per-vma-lock-design}
 
 Per-VMA locks (merged in Linux 6.4) give each `vm_area_struct` its own lightweight lock. The page fault path tries this VMA-scoped lock first, only falling back to `mmap_lock` if the VMA is being modified concurrently.
 
-### Lock state in the VMA
+### Lock state in the VMA {#lock-state-in-the-vma}
 
 Two fields in `vm_area_struct` implement the per-VMA lock (guarded by `CONFIG_PER_VMA_LOCK`):
 
@@ -44,7 +44,7 @@ The `vm_refcnt` field encodes the reader count plus a special `VM_REFCNT_EXCLUDE
 !!! note "The sequence counter is allowed to overflow"
     The kernel comment on `vm_lock_seq` explicitly notes that overflow is acceptable. Overflow can only cause an occasional unnecessary fallback to `mmap_lock`, not a correctness failure.
 
-### The VMA lookup: maple tree + RCU
+### The VMA lookup: maple tree + RCU {#the-vma-lookup-maple-tree-rcu}
 
 VMA lookups during the fast fault path use the maple tree (`mm->mm_mt`, type `struct maple_tree`) under RCU protection. The maple tree is an RCU-safe B-tree that stores VMAs keyed by address range.
 
@@ -79,7 +79,7 @@ retry:
 
 `vma_start_read()` checks `vma->vm_lock_seq == mm->mm_lock_seq`. If they match the VMA is currently write-locked and the function returns NULL (falls back to mmap_lock). If they don't match it increments `vm_refcnt` using an acquire fence and re-checks, establishing the read lock.
 
-## The fault path
+## The fault path {#the-fault-path}
 
 `handle_mm_fault()` in `mm/memory.c` is called by architecture fault handlers with either the VMA lock or `mmap_lock` held, indicated by the `FAULT_FLAG_VMA_LOCK` flag:
 
@@ -104,7 +104,7 @@ The architecture-specific fault handler (e.g. `do_user_addr_fault()` on x86) fir
 
 If a fault handler inside `__handle_mm_fault()` determines it cannot proceed without `mmap_lock` — for example when it needs to retry after blocking I/O — it releases the VMA lock with `vma_end_read()` and returns `VM_FAULT_RETRY`. The caller then retakes `mmap_lock`.
 
-## Write-locking a VMA
+## Write-locking a VMA {#write-locking-a-vma}
 
 When a VMA must be modified (e.g. during `mprotect()`, split/merge during `mmap()`, or unmap during `munmap()`), the kernel calls `vma_start_write()`:
 
@@ -117,7 +117,7 @@ vma_start_write(vma);
 
 The protocol ensures correctness: any operation that modifies a VMA must first hold `mmap_lock` write, then call `vma_start_write()`. Fault handlers that hold a per-VMA read lock are thereby excluded from seeing partial modifications.
 
-## Operations that still require mmap_lock
+## Operations that still require mmap_lock {#operations-that-still-require-mmap_lock}
 
 Per-VMA locks only accelerate the **read** side of faults. The following operations still require `mmap_lock` for write:
 
@@ -132,7 +132,7 @@ Per-VMA locks only accelerate the **read** side of faults. The following operati
 
 `mmap_lock` for read is still used as the fallback for any fault where the per-VMA lock path fails.
 
-## Observability
+## Observability {#observability}
 
 There are no sysfs knobs for per-VMA locks — the feature is always enabled when `CONFIG_PER_VMA_LOCK=y` (which is the default in kernels >= 6.4 on supported architectures).
 
@@ -150,7 +150,7 @@ These are readable via the standard `count_vm_vma_lock_event()` infrastructure. 
 !!! tip "Diagnosing contention"
     If `VMA_LOCK_ABORT` is high relative to `VMA_LOCK_SUCCESS`, the workload is frequently faulting during VMA modifications. This is expected if the application calls `mmap()`/`munmap()` at high frequency from a thread that also takes heavy faults.
 
-## Limitations and special cases
+## Limitations and special cases {#limitations-and-special-cases}
 
 **Hugetlb faults** do not use per-VMA locks. `handle_mm_fault()` routes `VM_HUGETLB` pages through `hugetlb_fault()`, which uses its own `hugetlb_vma_lock_read()` / `hugetlb_vma_lock_write()` infrastructure — a separate locking scheme for hugetlb VMAs.
 
@@ -173,25 +173,25 @@ The reason: `FAULT_FLAG_RETRY_NOWAIT` assumes the lock is not dropped on `VM_FAU
 !!! warning "Per-VMA locks require CONFIG_PER_VMA_LOCK"
     The entire feature is compiled out if `CONFIG_PER_VMA_LOCK` is not set. On such kernels all faults go through `mmap_lock`. Most production distro kernels enable it from 6.4 onward.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/mmap_lock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmap_lock.h) — `vma_start_read()`, `vma_end_read()`, `vma_start_write()`, and the sequence-counter helpers
 - [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()`: the fast-path VMA lookup combining RCU and per-VMA locking
 - [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `vm_lock_seq`, `vm_refcnt`, and `mm_lock_seq` field definitions with their locking contracts
 
-### Kernel commits
+### Kernel commits {#kernel-commits}
 
 - [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) — Linux 6.4: "mm: add per-VMA lock and helper functions to control it" (Suren Baghdasaryan, Google)
 - [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) — Linux 6.1: maple tree VMA storage, prerequisite for scalable per-VMA locking
 
-### Related pages
+### Related pages {#related-pages}
 
 - [rcu-mm.md](rcu-mm.md) — how `SLAB_TYPESAFE_BY_RCU` and the maple tree enable the lock-free VMA lookup that per-VMA locks build on
 - [mmap.md](mmap.md) — operations that still require the coarse `mmap_lock` write side
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Per-VMA locks](https://lwn.net/Articles/906852/) — 2022 article covering the design and motivation for per-VMA locking
 - [LWN: Scalable page-fault handling](https://lwn.net/Articles/932298/) — follow-up covering the Linux 6.4 merge and benchmarks

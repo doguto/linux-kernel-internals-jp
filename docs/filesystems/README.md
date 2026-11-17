@@ -1,8 +1,8 @@
-# Filesystems
+# Filesystems {#filesystems}
 
 > How the kernel turns a flat array of disk blocks into named files with metadata — and keeps them consistent across a crash
 
-## Getting Started
+## Getting Started {#getting-started}
 
 A block device is a linear array of fixed-size sectors; a *filesystem* is the code that imposes structure on it — a hierarchy of named files, their contents, and the metadata (sizes, timestamps, permissions, block maps) that ties them together. The structure is the easy part. The hard part is keeping it *consistent* when power fails mid-write — and almost every design decision a Linux filesystem makes is, at bottom, an answer to "how do we not corrupt everything on a crash?"
 
@@ -27,7 +27,7 @@ Application: open("/data/file", O_RDONLY)
     Block device          ← NVMe, SATA, virtio-blk
 ```
 
-### The one question every filesystem answers
+### The one question every filesystem answers {#the-one-question-every-filesystem-answers}
 
 Writing a file touches several places on disk — the data blocks, the block map, the inode, the free-space bitmap. A crash *between* those writes leaves the filesystem inconsistent: an inode pointing at blocks the allocator still thinks are free, or data in blocks the inode doesn't yet reference. There are two dominant strategies:
 
@@ -36,11 +36,11 @@ Writing a file touches several places on disk — the data blocks, the block map
 
 Nearly everything else — extents, delayed allocation, snapshots, checksums — follows from committing to one of these.
 
-### Prerequisites
+### Prerequisites {#prerequisites}
 
 Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches operations to these filesystems), the [page cache](../mm/page-cache.md) (where file data lives in memory), and the [block layer](../block/README.md) (below, which carries the I/O to the device).
 
-### Suggested reading order
+### Suggested reading order {#suggested-reading-order}
 
 1. **[ext4](ext4.md)** — the default: extents, and journaling with jbd2
 2. **[ext4 Journaling Deep Dive](ext4-journal.md)** — jbd2 internals; ordered vs. journaled data modes
@@ -53,7 +53,7 @@ Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches 
 9. **[FUSE](fuse.md)** — filesystems implemented in userspace
 10. **[War Stories](war-stories.md)** — ext4's `O_PONIES` saga, an overlayfs privilege escalation, and the btrfs write hole
 
-### What you'll learn
+### What you'll learn {#what-youll-learn}
 
 | Textbook idea | Linux reality |
 |---|---|
@@ -62,7 +62,7 @@ Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches 
 | "Copy-on-write means snapshots" | CoW is a *crash-consistency* strategy first; snapshots then come cheap — a snapshot is just an old tree root kept instead of reclaimed |
 | "Deleting a file frees its space" | Only the metadata immediately; actual reclamation on SSDs involves discard/TRIM, and on CoW filesystems, reference counting |
 
-## Documentation
+## Documentation {#documentation}
 
 | Page | What it covers |
 |------|----------------|
@@ -77,7 +77,7 @@ Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches 
 | [FUSE](fuse.md) | Userspace filesystems: the `/dev/fuse` protocol and its costs |
 | [War Stories](war-stories.md) | ext4 `O_PONIES`, overlayfs CVE-2023-0386, the btrfs write hole |
 
-## Choosing a filesystem
+## Choosing a filesystem {#choosing-a-filesystem}
 
 | Filesystem | Use case | Key feature |
 |-----------|---------|-------------|
@@ -89,7 +89,7 @@ Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches 
 | squashfs | Read-only (LiveCD, containers) | Compressed, read-only |
 | erofs | Android, embedded | Compressed, fast read |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: filesystems](https://docs.kernel.org/filesystems/index.html) — per-filesystem and VFS reference
 - [VFS](../vfs/README.md) · [page cache](../mm/page-cache.md) · [block layer](../block/README.md) — the layers above and below

@@ -1,8 +1,8 @@
-# DMA API
+# DMA API {#dma-api}
 
 > Programming devices for memory access: coherent and streaming DMA
 
-## Why a DMA API?
+## Why a DMA API? {#why-a-dma-api}
 
 DMA programming is architecture-dependent:
 
@@ -13,7 +13,7 @@ DMA programming is architecture-dependent:
 
 The DMA API abstracts all of this. Device drivers use one API regardless of architecture, IOMMU presence, or device addressing limitations.
 
-## Setting up a device for DMA
+## Setting up a device for DMA {#setting-up-a-device-for-dma}
 
 Before using DMA, a driver declares the device's addressing capability:
 
@@ -30,7 +30,7 @@ if (dma_set_mask_and_coherent(dev, DMA_BIT_MASK(64))) {
 
 `DMA_BIT_MASK(n)` creates a mask of `n` bits. Setting a 32-bit mask means the device cannot DMA above 4GB — the kernel must ensure DMA buffers are allocated below 4GB.
 
-## Coherent DMA
+## Coherent DMA {#coherent-dma}
 
 Coherent (or "consistent") DMA allocates memory that is both CPU-accessible and device-accessible without explicit cache management. The CPU and device always see the same data.
 
@@ -62,11 +62,11 @@ dma_free_coherent(dev, size, cpu_addr, dma_handle);
 - ARM non-coherent: `dma_alloc_coherent` → `alloc_pages` + mark as uncached (`pgprot_noncached`)
 - No IOMMU: `dma_alloc_coherent` → `alloc_pages` restricted to DMA zone (< 4GB if 32-bit mask)
 
-## Streaming DMA (map/unmap)
+## Streaming DMA (map/unmap) {#streaming-dma-mapunmap}
 
 Streaming DMA is for existing buffers that are transferred once. The CPU writes data, hands it to the device, then takes it back.
 
-### Single buffer
+### Single buffer {#single-buffer}
 
 ```c
 /* DMA direction: */
@@ -102,7 +102,7 @@ dma_unmap_single(dev, dma_handle, size, DMA_TO_DEVICE);
 - Without IOMMU, coherent cache: mapping is a no-op (physical == device address)
 - Without IOMMU, non-coherent cache: `map` flushes CPU cache; `unmap` invalidates CPU cache
 
-### Scatter-gather
+### Scatter-gather {#scatter-gather}
 
 Real I/O often involves discontiguous memory (e.g., page-aligned skb fragments, bio pages):
 
@@ -136,7 +136,7 @@ dma_unmap_sg(dev, sg, 3, DMA_TO_DEVICE);
 
 With an IOMMU, `dma_map_sg` can coalesce adjacent pages into a single IOVA range — the device sees one contiguous buffer even though physical memory is fragmented.
 
-## IOVA allocation
+## IOVA allocation {#iova-allocation}
 
 With an IOMMU, each streaming DMA map requires an IOVA allocation:
 
@@ -176,7 +176,7 @@ dma_addr_t iommu_dma_map_phys(struct device *dev, phys_addr_t phys, size_t size,
 
 The IOVA allocator uses a red-black tree of free ranges and a cached allocator for same-size allocations.
 
-## swiotlb: bounce buffers
+## swiotlb: bounce buffers {#swiotlb-bounce-buffers}
 
 When a device cannot address certain memory (e.g., 32-bit device, memory > 4GB), the kernel must **bounce** DMA through a buffer in addressable memory:
 
@@ -232,7 +232,7 @@ cat /sys/kernel/debug/swiotlb/io_tlb_nslabs    # total slots
 cat /sys/kernel/debug/swiotlb/io_tlb_used      # currently used
 ```
 
-## DMA pools
+## DMA pools {#dma-pools}
 
 For small, frequently allocated DMA buffers (e.g., descriptor rings), use a DMA pool to avoid fragmentation:
 
@@ -259,7 +259,7 @@ dma_pool_free(pool, vaddr, dma_handle);
 dma_pool_destroy(pool);
 ```
 
-## Observing DMA
+## Observing DMA {#observing-dma}
 
 ```bash
 # DMA memory zones (for no-IOMMU systems)
@@ -281,7 +281,7 @@ cat /sys/kernel/debug/dma-api/dump
 echo 1 > /sys/kernel/tracing/events/dma/enable
 ```
 
-## Device tree DMA binding (ARM/embedded)
+## Device tree DMA binding (ARM/embedded) {#device-tree-dma-binding-armembedded}
 
 On ARM SoCs, device tree specifies DMA capabilities:
 
@@ -308,9 +308,9 @@ priv->dma_tx = dma_request_chan(dev, "tx");
 priv->dma_rx = dma_request_chan(dev, "rx");
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/dma-mapping.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) — `dma_map_single()`, `dma_alloc_coherent()`, `dma_mapping_error()`, `dma_set_mask_and_coherent()`: the API declarations used throughout this page
 - [kernel/dma/mapping.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/mapping.c) — `dma_map_sg_attrs()`, `dma_alloc_attrs()`: the core implementation that dispatches to the platform's `dma_map_ops`
@@ -319,7 +319,7 @@ priv->dma_rx = dma_request_chan(dev, "rx");
 - [mm/dmapool.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c) — `dma_pool_create_node()`, `dma_pool_alloc()`, `dma_pool_free()`: the DMA pool allocator behind `dma_pool_create()`
 - [Documentation/core-api/dma-api-howto.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api-howto.rst) — the kernel's own practical guide to when to use coherent vs. streaming mappings
 
-### Related pages
+### Related pages {#related-pages}
 
 - [IOMMU Architecture](iommu-arch.md) — `iommu_domain`, IOTLB, and the hardware DMA remapping this API relies on when an IOMMU is present
 - [IOVA Allocator](iova-allocator.md) — the rbtree/rcache allocator behind every IOMMU-backed `dma_map_single()`/`dma_map_sg()` call
@@ -328,7 +328,7 @@ priv->dma_rx = dma_request_chan(dev, "rx");
 - [Memory Management: Device Coherency](../mm/device-coherency.md) — the cache-coherency rules that govern when `dma_map_single()`/`dma_sync_*` actually need to do anything
 - [Device Drivers: PCI driver](../drivers/pci-driver.md) — `dma_alloc_coherent()`/`dma_map_single()` used in a real PCI network driver
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The trouble with 64-bit DMA](https://lwn.net/Articles/904210/) — Jonathan Corbet, August 11, 2022: why the IOMMU layer conservatively picks IOVAs below 4GB even for 64-bit-capable devices, and what went wrong when Robin Murphy tried to relax it — background for the `DMA_BIT_MASK()`/`dma_set_mask_and_coherent()` masks used in this page's setup section
 - [Noncoherent DMA mappings](https://lwn.net/Articles/855328/) — Jonathan Corbet, May 7, 2021: the `dma_alloc_noncontiguous()` API and manual cache synchronization (`dma_sync_sgtable_for_device()`/`_for_cpu()`) for non-cache-coherent architectures — background for this page's coherent-vs-streaming distinction

@@ -1,8 +1,8 @@
-# Life of a Packet (Transmit Path)
+# Life of a Packet (Transmit Path) {#life-of-a-packet-transmit-path}
 
 > From application write() to NIC DMA, step by step
 
-## Overview
+## Overview {#overview}
 
 When an application writes data to a TCP socket, the kernel turns that data into one or more IP packets and transmits them. The path from `write()` to wire:
 
@@ -27,7 +27,7 @@ driver ndo_start_xmit() DMA to NIC
 NIC transmits packet
 ```
 
-## Phase 1: tcp_sendmsg() — data from userspace
+## Phase 1: tcp_sendmsg() — data from userspace {#phase-1-tcp_sendmsg-data-from-userspace}
 
 ```c
 // net/ipv4/tcp.c:1460
@@ -62,7 +62,7 @@ int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 
 Data is held in `sk->sk_write_queue` until TCP decides to send it.
 
-## Phase 2: TCP write: tcp_write_xmit()
+## Phase 2: TCP write: tcp_write_xmit() {#phase-2-tcp-write-tcpwritexmit}
 
 TCP decides *when* to send based on:
 
@@ -94,7 +94,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, ...)
 }
 ```
 
-## Phase 3: Build TCP header — tcp_transmit_skb()
+## Phase 3: Build TCP header — tcp_transmit_skb() {#phase-3-build-tcp-header-tcptransmitskb}
 
 ```c
 // net/ipv4/tcp_output.c
@@ -127,7 +127,7 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it, 
 }
 ```
 
-## Phase 4: IP layer — ip_queue_xmit()
+## Phase 4: IP layer — ip_queue_xmit() {#phase-4-ip-layer-ipqueuexmit}
 
 ```c
 // net/ipv4/ip_output.c:546
@@ -162,7 +162,7 @@ int ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
 }
 ```
 
-## Phase 5: Netfilter OUTPUT and routing
+## Phase 5: Netfilter OUTPUT and routing {#phase-5-netfilter-output-and-routing}
 
 `dst_output()` calls `ip_output()`:
 
@@ -190,7 +190,7 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 }
 ```
 
-## Phase 6: ARP and Ethernet — neigh_output()
+## Phase 6: ARP and Ethernet — neigh_output() {#phase-6-arp-and-ethernet-neigh_output}
 
 `ip_finish_output2()` resolves the next-hop MAC address:
 
@@ -212,7 +212,7 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 
 If the ARP entry doesn't exist, an ARP request is sent and the packet is queued until the reply arrives.
 
-## Phase 7: Traffic control — dev_queue_xmit()
+## Phase 7: Traffic control — dev_queue_xmit() {#phase-7-traffic-control-devqueuexmit}
 
 ```c
 // net/core/dev.c
@@ -239,7 +239,7 @@ The qdisc can:
 - Delay packets (netem for testing)
 - Shape traffic (HTB, TBF)
 
-## Phase 8: Driver DMA — ndo_start_xmit()
+## Phase 8: Driver DMA — ndo_start_xmit() {#phase-8-driver-dma-ndostartxmit}
 
 ```c
 // Driver implementation
@@ -265,7 +265,7 @@ static netdev_tx_t my_nic_xmit(struct sk_buff *skb, struct net_device *dev)
 
 After the NIC transmits the packet, it generates a TX completion interrupt. The driver then calls `dev_consume_skb_any(skb)` to free the `sk_buff`.
 
-## TX completion and write space wakeup
+## TX completion and write space wakeup {#tx-completion-and-write-space-wakeup}
 
 ```c
 // TX completion interrupt handler
@@ -284,7 +284,7 @@ static void my_nic_tx_clean(struct my_nic_ring *ring)
 
 `netif_wake_queue()` eventually calls `sk->sk_write_space(sk)`, waking any task blocked in `sendmsg()` waiting for send buffer space.
 
-## Send buffer and backpressure
+## Send buffer and backpressure {#send-buffer-and-backpressure}
 
 The kernel won't copy more data than the send buffer allows:
 
@@ -302,7 +302,7 @@ ss -tn  # non-zero Send-Q = data in send buffer, waiting to be transmitted
 
 If `sk->sk_wmem_alloc >= sk->sk_sndbuf`, `tcp_sendmsg()` blocks until TX completions free up space.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [sk_buff](sk-buff.md) — The packet structure built in tcp_sendmsg
 - [Life of a Packet (receive)](life-of-packet-rx.md) — The inbound path

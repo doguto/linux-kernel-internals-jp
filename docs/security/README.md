@@ -1,8 +1,8 @@
-# Linux Security
+# Linux Security {#linux-security}
 
 > Privilege model, mandatory access control, and syscall filtering
 
-## Security layers
+## Security layers {#security-layers}
 
 Linux uses a layered security model:
 
@@ -23,9 +23,9 @@ Syscall entry
 
 **DAC** (file permissions, uid/gid) is always enforced. **LSM** adds Mandatory Access Control policies on top. **Capabilities** split "root privilege" into 40 discrete permissions. **seccomp** restricts which syscalls a process can make.
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
-### Access control
+### Access control {#access-control}
 
 | Page | What it covers |
 |------|----------------|
@@ -36,7 +36,7 @@ Syscall entry
 | [Credentials](credentials.md) | struct cred, uid/euid/fsuid, credential lifecycle |
 | [User Namespaces](user-namespaces.md) | Unprivileged containers and their attack surface |
 
-### Syscall & kernel hardening
+### Syscall & kernel hardening {#syscall-kernel-hardening}
 
 | Page | What it covers |
 |------|----------------|
@@ -44,14 +44,14 @@ Syscall entry
 | [Kernel Hardening](kernel-hardening.md) | Stack protector, CFI, mitigations landscape |
 | [Audit](audit.md) | The audit subsystem, rules, and its cost |
 
-### Storage encryption
+### Storage encryption {#storage-encryption}
 
 | Page | What it covers |
 |------|----------------|
 | [fscrypt](fscrypt.md) | Filesystem-level encryption (ext4/f2fs) |
 | [dm-crypt](dm-crypt.md) | Block-level encryption, LUKS |
 
-### War stories
+### War stories {#war-stories}
 
 | Page | What it covers |
 |------|----------------|

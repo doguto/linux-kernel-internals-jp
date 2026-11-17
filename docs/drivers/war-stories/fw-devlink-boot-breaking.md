@@ -1,4 +1,4 @@
-# fw_devlink=on: The Default That Broke Boot Twice Before It Stuck
+# fw_devlink=on: The Default That Broke Boot Twice Before It Stuck {#fw_devlinkon-the-default-that-broke-boot-twice-before-it-stuck}
 
 > Not a CVE — enabling automatic probe-order enforcement from firmware-described device graphs by default broke boot on multiple platforms twice in three months, forcing a full revert-and-retry cycle, and the revert commit's own "for 5.12" framing turned out to be moot: Linux 5.12 shipped with the old default the entire time, and the new one first reached users only in 5.13
 
@@ -19,7 +19,7 @@ Not a CVE
 
 *Part of [War Stories: Device Drivers](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 `fw_devlink` turns dependency information already present in firmware descriptions — Device Tree properties like `clocks`, `interrupts`, `dmas`, `power-domains`, or ACPI's `_DEP` — into real kernel `device_link`s that gate probing, not just informational metadata. `fw_devlink_parse_fwtree()` walks the firmware node tree and calls each fwnode's `add_links` operation to discover these relationships; once both ends of a discovered dependency have a `struct device`, `fw_devlink_create_devlink()` turns it into an actual link. Two flag sets control what a link means once created:
 
@@ -32,21 +32,21 @@ Under `permissive`, an inferred link only gates the supplier's `sync_state()` ca
 
 `fw_devlink_relax_cycle()` handles graphs where the inferred dependencies form a cycle: it walks the would-be consumer's own consumer chain, and if the would-be supplier is found to already depend transitively on the would-be consumer, every fw_devlink-inferred link in that cycle is downgraded to sync-state-only rather than left to deadlock probing indefinitely. The enabling commit's own message is explicit that this capability — merged just before the default flip — was the last blocker: "Cyclic dependencies in some firmware was one of the last remaining reasons fw_devlink=on couldn't be set by default. Now that cyclic dependencies don't block probing, set fw_devlink=on by default."
 
-## The trigger
+## The trigger {#the-trigger}
 
 `e590474768f1` ("driver core: Set fw_devlink=on by default", Saravana Kannan, December 18, 2020) flips the one-line default and lists the expected benefits in its own commit message: "Significantly cuts down deferred probes. Device probe is effectively attempted in graph order. Makes it much easier to load drivers as modules without having to worry about functional dependencies between modules (depmod is still needed for symbol dependencies)." It also anticipates the failure mode that in fact followed: "If this patch prevents some devices from probing, it's very likely due to the system having one or more device drivers that 'probe'/set up a device (DT node with compatible property) without creating a struct device for it."
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 That anticipated failure mode is exactly what surfaced, repeatedly, across unrelated platforms over the following two months. Renesas R-Car Gen3 boards stopped booting entirely — Geert Uytterhoeven, relaying and bisecting a report from Shimoda-san: "Shimoda-san reported that next-20210111 and later fail to boot on Renesas R-Car Gen3 platforms. No output is seen, unless earlycon is enabled. I have bisected this to commit e590474768f1cc04..." The root cause: R-Car's System Controller registers power domains from an `early_initcall()` without ever creating a `struct device` for itself, so fw_devlink saw its consumers' declared dependency on it as permanently unsatisfiable. A first fix (`2dfc564bda4a`, "soc: renesas: rcar-sysc: Mark device node OF_POPULATED after init") wasn't sufficient on its own — Geert reported R-Car Gen2/Gen3 still hanging afterward on specific configurations (`CONFIG_RCAR_DMAC=n hangs: supplier e7310000.dma-controller not ready`), requiring further follow-up.
 
 Separately, Guenter Roeck — a longtime kernel boot-CI maintainer — reported nios2 hanging under QEMU, with a bisect log pointing at the same commit, and added a detail that captures the scale of the problem better than any single-platform report could: "It may also break a variety of other boot tests, but with 115 of 430 boot tests failing in -next it is difficult to identify all culprits." Other fixes followed for other platforms in the same window: `e2c1b0ff38c9` converted i.MX's AVIC interrupt controller to `IRQCHIP_DECLARE` so fw_devlink would stop waiting for it to become a `struct device` at all ("boot issues on imx25 with fw_devlink=on that were reported by Martin"); `f265f06af194` fixed fw_devlink's handling of Device Tree's `interrupt-map` property, tested by Marek Szyprowski against Samsung Exynos hardware. Szyprowski appears as a tester across essentially the entire February 2021 hardening batch — a second major regression-reporting platform alongside R-Car and nios2.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 Every one of these regressions shared the same shape: fw_devlink's cycle-breaking logic was ready, but the more basic assumption underneath the whole mechanism — that a device referenced in a firmware description will, eventually, register a matching `struct device` — doesn't hold universally. Platform-specific controllers that configure themselves via early boot-time initcalls without ever going through the driver core's normal device-registration path are invisible to that assumption in a way no amount of cycle-detection logic addresses; fw_devlink simply waits forever for a `struct device` that is never coming. This is exactly the failure mode the enabling commit's own message predicted in the abstract — the problem was that the actual hardware matrix exercising it wasn't fully surfaced until the default had already flipped and a much wider range of real boot configurations started exercising the new code path.
 
-## Resolution
+## Resolution {#resolution}
 
 Greg Kroah-Hartman reverted the default on February 18, 2021 (`3e4c982f1ce7`), with a message that reads as a plan rather than a retreat: "While things are _almost_ there and working for almost all systems, there are still reported regressions happening, so let's revert this default for 5.12. We can bring it back in linux-next after 5.12-rc1 is out to get more testing..." Saravana Kannan's "Take II" series followed on schedule — cover letter posted March 2, 2021: "This series fixes the last few remaining issues reported when fw_devlink=on by default... As far as I know, there shouldn't have any more issues you reported that are still left unfixed after this series." [sic] `ea718c699055` re-flipped the default the same day, committed into Greg's driver-core tree on March 23, 2021.
 
@@ -56,7 +56,7 @@ That gap between "Take II" being written and actually shipping mattered in pract
 
 This time, the resolution was explicitly not a kernel-core change. Saravana Kannan ranked the available workarounds in the thread: "1. Fix the DT sent to the kernel. 2. If deferred_probe_timeout=1 doesn't break anything else, use that... 3. Geert's early boot quirk suggestion. 4. fw_devlink=permissive (least preferred because this might mask issues with fw_devlink=on in your future changes). Changing the SCMI driver itself won't help fw_devlink." Fainelli confirmed removing the stale `mboxes` phandle from the board's DT fixed it — fw_devlink was, in this case, correctly enforcing a dependency the firmware description itself asserted; the bug was in the DT, and the old permissive default had simply never been strict enough to expose it. The same underlying SMC-versus-mailbox ambiguity on Broadcom STB SCMI nodes resurfaced years later under a different trigger — an unrelated 2024 SCMI transport refactor — and was finally addressed in the driver itself by `db8f0b808886` ("firmware: arm_scmi: Give SMC transport precedence over mailbox," October 2024). That commit's own `Fixes:` tag points at the 2024 refactor, not at the 2021 fw_devlink saga, so it's best read as the same class of firmware-description ambiguity resurfacing on new terms rather than a delayed fix for this specific 2021 episode.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Flipping a default that changes probe-order semantics platform-wide exposes a long tail of individual corners a review pass can't catch in advance — one hardware platform, one bus type, one legacy compatibility string at a time.** R-Car's early-initcall power controller, i.MX's AVIC, and Broadcom's stale mailbox phandle are three unrelated instances of the same specific gap: a device the graph says should exist, but that never actually registers a `struct device`. Samsung Exynos's `interrupt-map` fix was a different kind of gap in the same rollout — a parsing bug in how fw_devlink itself resolved an interrupt supplier through DT indirection, not a missing-device case at all. Different mechanisms, same lesson: a systemwide default change surfaces whatever the review process didn't happen to exercise, and it surfaces it one platform at a time.
 
@@ -65,14 +65,14 @@ This time, the resolution was explicitly not a kernel-core change. Saravana Kann
 !!! warning "Pattern to watch for"
     When a kernel change flips a systemwide default that alters ordering or dependency enforcement, expect the real test matrix to be "every platform currently being actively tested," discovered incrementally after the flip — not the platforms exercised during review. And when tracking whether a specific fix or default change has "shipped," confirm against the actual tagged release it's an ancestor of, not the date on the commit that made the change — a fix authored and even committed to a maintainer's tree well before a release can still miss that release's merge window entirely.
 
-## See also
+## See also {#see-also}
 
 - [Linux Device Model](../device-model.md) — `struct device`, buses, and the probe/link machinery fw_devlink builds on
 - [Device Tree](../device-tree.md) — the firmware description format fw_devlink parses to discover dependencies
 - [The Deferred-Probe Origin Story](deferred-probe-origin.md) — the `-EPROBE_DEFER` retry mechanism fw_devlink's `on` mode drives automatically
 - [The uevent_show() Fix That Deadlocked Driver Detach](uevent-show-deadlock.md) — a different driver-core regression from the same subsystem, on a much shorter timescale
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: c78c31b374a6](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c78c31b374a68be79cb4a03ef5b6c187f034e903) — "Revert 'Revert...'," the 2020 re-enable of the earlier `fw_devlink=permissive` default
 - [git.kernel.org: e590474768f1](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e590474768f1cc04852190b61dec692411b22e2a) — "driver core: Set fw_devlink=on by default," the first enable

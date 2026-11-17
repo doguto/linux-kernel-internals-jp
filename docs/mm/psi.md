@@ -1,8 +1,8 @@
-# Pressure Stall Information (PSI)
+# Pressure Stall Information (PSI) {#pressure-stall-information-psi}
 
 > Quantifying resource pressure, not just utilization
 
-## What Is PSI?
+## What Is PSI? {#what-is-psi}
 
 Traditional system metrics like CPU utilization, free memory, and I/O throughput tell you how busy resources are, but they don't tell you whether workloads are actually *suffering*. A system can show 90% CPU utilization and be perfectly healthy if all tasks are making progress. Conversely, a system at 30% CPU can be in trouble if tasks are stuck waiting for memory to be reclaimed.
 
@@ -19,7 +19,7 @@ Traditional metrics:          PSI:
 "Disk is 60% busy"           "No tasks were stalled on I/O"
 ```
 
-## Three Resources Tracked
+## Three Resources Tracked {#three-resources-tracked}
 
 PSI tracks pressure across the three fundamental resources that tasks compete for:
 
@@ -36,7 +36,7 @@ cat /proc/pressure/memory
 cat /proc/pressure/io
 ```
 
-## "some" vs "full" Pressure
+## "some" vs "full" Pressure {#some-vs-full-pressure}
 
 Each pressure file reports two levels of stalling:
 
@@ -63,7 +63,7 @@ Task B:    [running][running ][stalled ][stalled ]
 !!! note
     `/proc/pressure/cpu` only reports `some`, not `full`. The reasoning: if all tasks are waiting for CPU, then no task is running, which means the CPU is idle — a contradictory state. CPU pressure means runnable tasks are competing for time, so at least one is always making progress.
 
-## Reading the Pressure Files
+## Reading the Pressure Files {#reading-the-pressure-files}
 
 Each line contains three moving averages and a cumulative total:
 
@@ -89,11 +89,11 @@ STALL_US=$((T2 - T1))
 echo "Memory stall: ${STALL_US}us over 5 seconds"
 ```
 
-## PSI Triggers: Userspace Monitoring
+## PSI Triggers: Userspace Monitoring {#psi-triggers-userspace-monitoring}
 
 Reading pressure files by polling is fine for dashboards, but for real-time resource management you need event-driven notification. PSI supports poll/epoll on pressure files, allowing userspace to set thresholds and be woken only when pressure exceeds them.
 
-### Setting Up a Trigger
+### Setting Up a Trigger {#setting-up-a-trigger}
 
 Write a trigger specification to a pressure file, then use `poll()` or `epoll()` to wait for events:
 
@@ -135,11 +135,11 @@ The trigger format is:
 
 PSI trigger support was added in v5.2 by Suren Baghdasaryan ([commit 0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf)).
 
-## PSI in Practice
+## PSI in Practice {#psi-in-practice}
 
 PSI is not just a monitoring curiosity — it is the foundation for modern out-of-memory management in production systems.
 
-### systemd-oomd
+### systemd-oomd {#systemd-oomd}
 
 [systemd-oomd](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.html) uses PSI memory pressure to decide when to kill cgroups before the kernel OOM killer triggers. It monitors `memory.pressure` for each cgroup and kills the highest-memory consumer when pressure exceeds a threshold. This replaces the blunt global OOM killer with targeted, early intervention.
 
@@ -151,17 +151,17 @@ DefaultMemoryPressureLimit=60%
 DefaultMemoryPressureDurationUSec=30s
 ```
 
-### Meta's oomd
+### Meta's oomd {#metas-oomd}
 
 Meta (Facebook) originally developed [oomd](https://github.com/facebookincubator/oomd), the PSI-based OOM daemon that inspired systemd-oomd. In Meta's fleet, PSI-based killing replaced the kernel OOM killer, providing faster response times and better decisions about what to kill. This was a primary motivation for PSI's development — Johannes Weiner built PSI to solve real fleet management problems at Meta.
 
 For more context on the problem PSI was designed to solve, see the [LWN article on tracking pressure-stall information](https://lwn.net/Articles/759658/).
 
-### Android LMKD
+### Android LMKD {#android-lmkd}
 
 Android's Low Memory Killer Daemon (LMKD) uses PSI triggers to detect memory pressure and kill background apps before the system becomes unresponsive. Android moved from the in-kernel lowmemorykiller to a PSI-based userspace approach, giving better responsiveness on memory-constrained mobile devices.
 
-### Resource Management at Scale
+### Resource Management at Scale {#resource-management-at-scale}
 
 Beyond OOM handling, PSI enables:
 
@@ -169,7 +169,7 @@ Beyond OOM handling, PSI enables:
 - **Workload placement**: Schedulers can prefer nodes with lower pressure rather than lower utilization.
 - **SLA monitoring**: Define health in terms of "how much time are tasks losing" rather than arbitrary resource thresholds.
 
-## Per-cgroup PSI
+## Per-cgroup PSI {#per-cgroup-psi}
 
 PSI is not limited to system-wide metrics. Each cgroup exposes its own pressure information via `memory.pressure`, `cpu.pressure`, and `io.pressure`:
 
@@ -195,9 +195,9 @@ write(fd, "some 50000 1000000", 19);  /* 50ms stall per 1s window */
 /* poll(fd) ... */
 ```
 
-## How the Kernel Calculates PSI
+## How the Kernel Calculates PSI {#how-the-kernel-calculates-psi}
 
-### Task State Tracking
+### Task State Tracking {#task-state-tracking}
 
 PSI works by tracking what every task is doing at any given moment. The scheduler already knows whether a task is running, sleeping, or waiting — PSI hooks into these state transitions to accumulate stall time.
 
@@ -219,7 +219,7 @@ These flags are defined in [`include/linux/psi_types.h`](https://git.kernel.org/
 
 When a task enters a stall state (e.g., it needs to reclaim memory or wait for swap I/O), the kernel calls `psi_task_change()` to record the transition. When it leaves the stall state, the transition is recorded again.
 
-### Aggregation
+### Aggregation {#aggregation}
 
 PSI tracks time at the per-CPU level, then aggregates. For each CPU, it records how much time was spent with at least one task stalled (`some`) and with all tasks stalled (`full`). These per-CPU samples are aggregated into the exponentially weighted averages you see in the pressure files.
 
@@ -236,13 +236,13 @@ Per-CPU tracking:
 
 The aggregation happens in `psi_avgs_work()`, a deferred work function that runs periodically (every 2 seconds) to update the moving averages. When userspace has registered PSI triggers, a faster polling path runs at the trigger's window granularity.
 
-### Growth-based Tracking
+### Growth-based Tracking {#growth-based-tracking}
 
 An important optimization ([commit df77430639c9](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df77430639c9)): PSI uses per-CPU "growth" counters rather than locks. Each CPU independently tracks cumulative stall time. The aggregation step reads these counters and computes the deltas, avoiding contention on hot paths.
 
-## History
+## History {#history}
 
-### Introduction (v4.20, 2018)
+### Introduction (v4.20, 2018) {#introduction-v420-2018}
 
 **Commit**: [eb414681d5a0](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0) ("psi: pressure stall information for CPU, memory, and IO")
 
@@ -250,7 +250,7 @@ An important optimization ([commit df77430639c9](https://git.kernel.org/pub/scm/
 
 PSI was merged in Linux v4.20 (December 2018). The motivation, as described in the [commit message](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0) and [LWN coverage](https://lwn.net/Articles/759658/), was that existing metrics (load average, free memory, I/O utilization) were poor indicators of whether workloads were actually affected by resource shortages. Facebook needed a metric that quantified lost work, not just resource consumption, to drive fleet-wide resource management decisions.
 
-### PSI Triggers (v5.2, 2019)
+### PSI Triggers (v5.2, 2019) {#psi-triggers-v52-2019}
 
 **Commit**: [0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf) ("psi: introduce psi monitor")
 
@@ -258,17 +258,17 @@ PSI was merged in Linux v4.20 (December 2018). The motivation, as described in t
 
 Added poll/epoll support on PSI files, enabling event-driven userspace monitoring. This was essential for making PSI practical in daemons like oomd — polling files in a loop is expensive and introduces latency.
 
-### Per-cgroup PSI (v4.20)
+### Per-cgroup PSI (v4.20) {#per-cgroup-psi-v420}
 
 Per-cgroup PSI was part of the original PSI patchset, since cgroup-level pressure was a core use case from the start.
 
-### Broader Adoption
+### Broader Adoption {#broader-adoption}
 
 - **Android**: Adopted PSI for LMKD in Android 10 (2019)
 - **systemd**: systemd-oomd [introduced in systemd v247](https://lwn.net/Articles/837034/) (2020)
 - **Meta**: Used PSI across their entire fleet for OOM prevention and workload scheduling
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -278,9 +278,9 @@ Per-cgroup PSI was part of the original PSI patchset, since cgroup-level pressur
 | [`kernel/cgroup/cgroup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/cgroup/cgroup.c) | Per-cgroup PSI file exposure |
 | [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) | Kernel documentation for PSI |
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### View System Pressure
+### View System Pressure {#view-system-pressure}
 
 ```bash
 # Check if PSI is enabled (most modern kernels have it on by default)
@@ -291,7 +291,7 @@ cat /proc/pressure/io
 
 If the files don't exist, PSI may be disabled. It can be enabled with the `psi=1` kernel boot parameter. Some distributions disable it by default for performance reasons (the overhead is minimal but nonzero).
 
-### Generate Memory Pressure and Observe
+### Generate Memory Pressure and Observe {#generate-memory-pressure-and-observe}
 
 ```bash
 # Terminal 1: Watch memory pressure
@@ -305,7 +305,7 @@ stress --vm 4 --vm-bytes $(awk '/MemAvailable/ {print int($2*0.3)"k"}' \
 
 You should see `avg10` rise for both `some` and `full` lines while memory is under pressure.
 
-### Per-cgroup Pressure Monitoring
+### Per-cgroup Pressure Monitoring {#per-cgroup-pressure-monitoring}
 
 ```bash
 # Create a memory-limited cgroup
@@ -323,7 +323,7 @@ watch -n 1 cat /sys/fs/cgroup/psi-test/memory.pressure
 python3 -c "x = bytearray(80 * 1024 * 1024)"  # 80MB in a 100MB cgroup
 ```
 
-### Using the total Counter for Precise Measurements
+### Using the total Counter for Precise Measurements {#using-the-total-counter-for-precise-measurements}
 
 ```bash
 # Measure exact stall time over a custom interval
@@ -342,7 +342,7 @@ STALL_PCT=$(echo "scale=2; $STALL_US / 10000000 * 100" | bc)
 echo "Memory stall: ${STALL_US}us (${STALL_PCT}% of 10s)"
 ```
 
-### Clean Up
+### Clean Up {#clean-up}
 
 ```bash
 # Remove test cgroup (move processes out first)
@@ -350,37 +350,37 @@ echo $$ | sudo tee /sys/fs/cgroup/cgroup.procs
 sudo rmdir /sys/fs/cgroup/psi-test
 ```
 
-## References
+## References {#references}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) — Authoritative PSI documentation
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — Original coverage of the PSI patchset (2018)
 - [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — systemd-oomd and PSI triggers
 
-### Related
+### Related {#related}
 
 - [Memory Cgroups](memcg.md) — Per-cgroup memory limits and accounting
 - [Page Reclaim](reclaim.md) — What causes memory stalls
 - [Running out of memory](oom.md) — The OOM killer that PSI helps avoid
 - [Glossary](glossary.md) — PSI, cgroup, OOM definitions
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation_1}
 
 - `Documentation/accounting/psi.rst` — complete specification of the pressure file format, trigger syntax, window constraints, and cgroup integration
 - [kernel/sched/psi.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) — core PSI implementation: per-CPU state tracking, `some`/`full` accounting, exponentially weighted averages, and trigger delivery
 
-### LWN articles
+### LWN articles {#lwn-articles_1}
 
 - [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — Tejun Heo's coverage of Johannes Weiner's original PSI patchset, explaining the motivation and the `some`/`full` distinction (2018)
 - [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — how systemd-oomd uses PSI triggers to replace the kernel OOM killer with targeted, early cgroup eviction
 
-### Related docs
+### Related docs {#related-docs}
 
 - [memcg.md](memcg.md) — per-cgroup memory limits; per-cgroup PSI files (`memory.pressure`, `cpu.pressure`, `io.pressure`) are what systemd-oomd and Android LMKD monitor
 - [oom.md](oom.md) — the kernel OOM killer; PSI-based daemons aim to intervene before the kernel needs to invoke it

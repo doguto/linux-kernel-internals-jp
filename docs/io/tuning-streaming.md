@@ -1,8 +1,8 @@
-# Tuning I/O for Streaming and High-Throughput Workloads
+# Tuning I/O for Streaming and High-Throughput Workloads {#tuning-io-for-streaming-and-high-throughput-workloads}
 
 > Maximizing sequential read and write throughput for video, backup, ETL, and data pipeline workloads
 
-## What streaming I/O looks like
+## What streaming I/O looks like {#what-streaming-io-looks-like}
 
 Streaming workloads read or write data sequentially at high rates: video encoding/decoding, backup agents, log aggregation, ETL pipelines, Kafka brokers, and Hadoop/Spark. Their I/O pattern is:
 
@@ -24,7 +24,7 @@ The kernel's default configuration already favors sequential I/O through readahe
 
 ---
 
-## Readahead: the primary lever for streaming reads
+## Readahead: the primary lever for streaming reads {#readahead-the-primary-lever-for-streaming-reads}
 
 The kernel's readahead mechanism pre-fetches data from disk ahead of the current read position. For streaming reads, aggressive readahead directly translates to throughput: the device stays busy reading while the application processes previously fetched data.
 
@@ -76,7 +76,7 @@ posix_fadvise(fd, processed_offset, chunk_size, POSIX_FADV_DONTNEED);
 
 ---
 
-## Write buffering: letting the page cache absorb bursts
+## Write buffering: letting the page cache absorb bursts {#write-buffering-letting-the-page-cache-absorb-bursts}
 
 For streaming writes, the page cache acts as a write buffer. Writes go to the page cache immediately and are flushed to storage asynchronously by writeback threads. The application can write faster than the device can absorb, up to the dirty limit.
 
@@ -105,7 +105,7 @@ echo 1000 > /proc/sys/vm/dirty_writeback_centisecs
 
 ---
 
-## Large I/O size alignment
+## Large I/O size alignment {#large-io-size-alignment}
 
 Streaming workloads should write in large, aligned chunks. The kernel can submit large sequential I/Os as a single BIO (block I/O request), maximizing device efficiency.
 
@@ -139,7 +139,7 @@ For io_uring, use vectored writes with `IORING_OP_WRITEV` to submit multiple 256
 
 ---
 
-## Bypass the page cache for single-pass streaming
+## Bypass the page cache for single-pass streaming {#bypass-the-page-cache-for-single-pass-streaming}
 
 When data will be read or written only once (backup dumps, log rotation, video encoding input), the page cache wastes RAM and evicts useful data without benefit.
 
@@ -170,7 +170,7 @@ A 100GB backup running with buffered I/O will fill the page cache with 100GB of 
 
 ---
 
-## Parallel I/O streams
+## Parallel I/O streams {#parallel-io-streams}
 
 Modern NVMe devices have multiple hardware queues and are designed for parallel I/O. A single sequential stream may not saturate the device:
 
@@ -194,7 +194,7 @@ For high-speed NVMe (7GB/s rated), a single stream may only achieve 4-5GB/s due 
 
 ---
 
-## Kafka broker I/O tuning
+## Kafka broker I/O tuning {#kafka-broker-io-tuning}
 
 Kafka is a canonical streaming workload: producers write to partition logs sequentially, consumers read from different offsets on the same logs simultaneously.
 
@@ -228,7 +228,7 @@ Kafka intentionally does not maintain its own buffer pool. Consumer reads that a
 
 ---
 
-## HDFS DataNode I/O tuning
+## HDFS DataNode I/O tuning {#hdfs-datanode-io-tuning}
 
 Hadoop DataNodes receive large blocks (128MB-256MB) from clients and write them to local storage. The pattern is sequential write followed by sequential reads from multiple clients.
 
@@ -253,7 +253,7 @@ echo 20 > /proc/sys/vm/dirty_background_ratio
 
 ---
 
-## Video streaming server I/O tuning
+## Video streaming server I/O tuning {#video-streaming-server-io-tuning}
 
 A video streaming server reads large files sequentially and sends them to clients. The working set is large (active video catalog) and access is somewhat random by file but sequential within each file.
 
@@ -276,7 +276,7 @@ posix_fadvise(fd, range_start, range_end - range_start, POSIX_FADV_WILLNEED);
 
 ---
 
-## Throughput measurement and validation
+## Throughput measurement and validation {#throughput-measurement-and-validation}
 
 ```bash
 # fio: streaming benchmark
@@ -308,7 +308,7 @@ fio --name=ra --rw=read --bs=4k --direct=0 ...      # buffered with readahead
 
 ---
 
-## Quick reference: streaming tuning by storage type
+## Quick reference: streaming tuning by storage type {#quick-reference-streaming-tuning-by-storage-type}
 
 | Setting | HDD | SATA SSD | NVMe |
 |---------|-----|----------|------|
@@ -322,7 +322,7 @@ fio --name=ra --rw=read --bs=4k --direct=0 ...      # buffered with readahead
 
 ---
 
-## Related pages
+## Related pages {#related-pages}
 
 - [Readahead](readahead.md) — how the kernel readahead algorithm works
 - [splice, sendfile, and Zero-Copy](splice-sendfile.md) — zero-copy for network streaming

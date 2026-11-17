@@ -1,8 +1,8 @@
-# Memory Tiering
+# Memory Tiering {#memory-tiering}
 
 > Managing heterogeneous memory: DRAM, CXL, PMEM, and HBM
 
-## Why memory tiering?
+## Why memory tiering? {#why-memory-tiering}
 
 Modern servers increasingly have multiple memory types with different performance characteristics:
 
@@ -19,7 +19,7 @@ The kernel must:
 3. **Promote** cold pages that become hot
 4. **Demote** hot pages that go cold (under memory pressure)
 
-## Memory tiers
+## Memory tiers {#memory-tiers}
 
 ```c
 /* include/linux/memory-tiers.h */
@@ -36,7 +36,7 @@ struct memory_tier {
 /* PMEM: adistance = PMEM_ADISTANCE  (400) */
 ```
 
-### Tier discovery
+### Tier discovery {#tier-discovery}
 
 ```bash
 # View memory tiers
@@ -58,7 +58,7 @@ numactl --hardware
 # node 2 size: 512000 MB
 ```
 
-## Page demotion
+## Page demotion {#page-demotion}
 
 When fast memory is under pressure, the kernel demotes cold pages to slow memory nodes:
 
@@ -91,7 +91,7 @@ cat /proc/vmstat | grep pgdemote
 # pgdemote_direct   678     ← pages demoted during direct reclaim
 ```
 
-## Page promotion
+## Page promotion {#page-promotion}
 
 When a page on slow memory is frequently accessed, NUMA Balancing or the tier migration daemon can promote it to fast memory:
 
@@ -105,7 +105,7 @@ static int numa_migrate_preferred(struct task_struct *p)
 }
 ```
 
-### Explicit promotion via memory_tier sysfs
+### Explicit promotion via memory_tier sysfs {#explicit-promotion-via-memory_tier-sysfs}
 
 ```bash
 # Set a page's NUMA node migration policy
@@ -121,7 +121,7 @@ numastat -p <pid>
 # 512.0   128.0   0.0     1024.0  (MB)
 ```
 
-## Tiered memory allocation
+## Tiered memory allocation {#tiered-memory-allocation}
 
 The kernel allocates from faster tiers first, falling back to slower:
 
@@ -149,7 +149,7 @@ static struct page *get_page_from_freelist(gfp_t gfp_mask, unsigned int order,
 
 The zonelist order is set by `build_zonelists()` which considers NUMA distance. With memory tiers, CXL memory at distance 300 is listed after DRAM at distance 200.
 
-## CXL (Compute Express Link) memory
+## CXL (Compute Express Link) memory {#cxl-compute-express-link-memory}
 
 CXL is a PCIe-based memory expansion standard that allows attaching DRAM at higher latency than on-package DDR:
 
@@ -167,7 +167,7 @@ cat /sys/devices/system/node/node2/memory_tier
 # memory_tier2    ← CXL assigned to tier 2
 ```
 
-## PMEM (Persistent Memory)
+## PMEM (Persistent Memory) {#pmem-persistent-memory}
 
 Optane DIMM and future persistent memory devices:
 
@@ -189,7 +189,7 @@ mount -o dax /dev/pmem0 /mnt/pmem
 # memmap=4G!4G  ← use 4G starting at 4G as PMEM (emulate with DRAM)
 ```
 
-## NUMA migration policies
+## NUMA migration policies {#numa-migration-policies}
 
 ```bash
 # System-wide NUMA migration policy
@@ -208,7 +208,7 @@ numactl --membind=2 ./myapp  # allocate from node 2 (CXL)
 cat /proc/<pid>/numa_maps | awk '{print $2}' | sort | uniq -c
 ```
 
-## Hot page detection for promotion
+## Hot page detection for promotion {#hot-page-detection-for-promotion}
 
 The kernel uses PTE access bits and page fault sampling to identify hot pages on slow tiers:
 
@@ -229,7 +229,7 @@ static int do_numa_page(struct vm_fault *vmf)
 }
 ```
 
-## Observing memory tiering
+## Observing memory tiering {#observing-memory-tiering}
 
 ```bash
 # Memory tier statistics
@@ -253,7 +253,7 @@ numastat
 perf stat -e uncore_imc/data_reads/,uncore_imc/data_writes/ -a sleep 5
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [NUMA](numa.md) — NUMA topology fundamentals
 - [CXL Memory Tiering](cxl-memory-tiering.md) — CXL-specific details

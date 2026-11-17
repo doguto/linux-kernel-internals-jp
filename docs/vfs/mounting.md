@@ -1,8 +1,8 @@
-# Filesystem Registration and Mounting
+# Filesystem Registration and Mounting {#filesystem-registration-and-mounting}
 
 > How filesystems plug into VFS and how mount() works
 
-## Registering a filesystem type
+## Registering a filesystem type {#registering-a-filesystem-type}
 
 Every filesystem must define a `file_system_type` and register it with VFS:
 
@@ -54,7 +54,7 @@ cat /proc/filesystems
 
 `nodev` means the filesystem doesn't require a block device.
 
-## The mount syscall
+## The mount syscall {#the-mount-syscall}
 
 The `mount(2)` system call attaches a filesystem to the directory tree [(man page)](https://man7.org/linux/man-pages/man2/mount.2.html).
 
@@ -79,7 +79,7 @@ SYSCALL_DEFINE5(mount, ...)
 /* The result: a new struct mount attached to the namespace's mount tree */
 ```
 
-## Mount namespace and vfsmount
+## Mount namespace and vfsmount {#mount-namespace-and-vfsmount}
 
 Each process has a **mount namespace** (`struct mnt_namespace`) containing a tree of `vfsmount` objects. Mount namespaces were introduced in Linux 2.4.19 [(man page)](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html); before that, all processes shared a single global mount table. Each `vfsmount` represents one mount point:
 
@@ -100,7 +100,7 @@ struct mount {
 
 When path resolution reaches a mountpoint dentry, `follow_mount()` switches to the mounted filesystem's root dentry, crossing into the new `vfsmount`.
 
-## /proc/mounts and /proc/self/mountinfo
+## /proc/mounts and /proc/self/mountinfo {#procmounts-and-procselfmountinfo}
 
 ```bash
 # All current mounts
@@ -117,7 +117,7 @@ cat /proc/self/mountinfo
 # mount_id parent_id maj:min root  mount_point opts peer_group fstype source
 ```
 
-## Implementing a simple in-memory filesystem
+## Implementing a simple in-memory filesystem {#implementing-a-simple-in-memory-filesystem}
 
 Here's the minimal skeleton for a new filesystem:
 
@@ -199,7 +199,7 @@ static struct file_system_type myfs_type = {
 };
 ```
 
-## bind mount and move mount
+## bind mount and move mount {#bind-mount-and-move-mount}
 
 ```bash
 # Bind mount: mount a directory at another location
@@ -212,7 +212,7 @@ mount --move /old/mountpoint /new/mountpoint
 
 Bind mounts are widely used in containers to share host directories into a container's namespace [(man page)](https://man7.org/linux/man-pages/man8/mount.8.html).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — What superblock, inode, dentry, file are
 - [Path Resolution](namei.md) — How mount points are crossed during lookup

@@ -1,8 +1,8 @@
-# Crypto Subsystem
+# Crypto Subsystem {#crypto-subsystem}
 
 > Cryptographic algorithms, kernel key management, and storage encryption
 
-## The crypto stack
+## The crypto stack {#the-crypto-stack}
 
 ```
 User space:    openssl / libgcrypt / kernel keyctl
@@ -28,7 +28,7 @@ User space:    openssl / libgcrypt / kernel keyctl
          Intel AES-NI / QAT / ARM CE
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -39,7 +39,7 @@ User space:    openssl / libgcrypt / kernel keyctl
 | [Random Number Generation](rng.md) | /dev/random, getrandom(), DRBG, hardware entropy, VM entropy |
 | [Crypto War Stories](war-stories.md) | IV reuse, timing attacks, boot entropy, keyring leaks, hardware bugs |
 
-## Reading order
+## Reading order {#reading-order}
 
 | Step | Page | Why |
 |------|------|-----|
@@ -51,7 +51,7 @@ User space:    openssl / libgcrypt / kernel keyctl
 | 6 | [Random Number Generation](rng.md) | Where cryptographic randomness comes from |
 | 7 | [Crypto War Stories](war-stories.md) | Real bugs and how the internals from above led to (or prevented) them |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # List available crypto algorithms

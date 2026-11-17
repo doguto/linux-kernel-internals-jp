@@ -1,8 +1,8 @@
-# TLB Optimization Techniques
+# TLB Optimization Techniques {#tlb-optimization-techniques}
 
 > How the Linux kernel minimizes the cost of keeping Translation Lookaside Buffers coherent across CPUs
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -13,11 +13,11 @@
 
 ---
 
-## Why the TLB Matters for Performance
+## Why the TLB Matters for Performance {#why-the-tlb-matters-for-performance}
 
 The Translation Lookaside Buffer (TLB) is a small hardware cache that stores recent virtual-to-physical address translations. Without it, every memory access would require a full page-table walk — typically three to five additional memory reads depending on the paging depth.
 
-### The Cost Difference
+### The Cost Difference {#the-cost-difference}
 
 ```
 TLB hit:   ~1  cycle    (~0.3 ns)
@@ -37,7 +37,7 @@ Processes with large virtual address spaces, many VMAs, or frequent `mmap()`/`mu
 
 ---
 
-## TLB Flush Basics
+## TLB Flush Basics {#tlb-flush-basics}
 
 The kernel must flush TLB entries whenever the underlying mapping changes in a way that could allow a CPU to observe incorrect data:
 
@@ -47,7 +47,7 @@ The kernel must flush TLB entries whenever the underlying mapping changes in a w
 
 The rule is: *flush before freeing the page, never after*.
 
-### The Three Core Flush Functions (x86)
+### The Three Core Flush Functions (x86) {#the-three-core-flush-functions-x86}
 
 These are defined in `arch/x86/include/asm/tlbflush.h`. On x86 they are all implemented as thin wrappers around the underlying `flush_tlb_mm_range()`:
 
@@ -73,7 +73,7 @@ static inline void flush_tlb_page(struct vm_area_struct *vma,
 
 For kernel mappings, `flush_tlb_kernel_range(start, end)` sends a flush to every CPU — there is no per-process scoping for kernel space.
 
-### IPIs to Remote CPUs
+### IPIs to Remote CPUs {#ipis-to-remote-cpus}
 
 When a mapping changes, every CPU that might have a cached translation must be notified. The kernel uses inter-processor interrupts (IPIs) for this: `flush_tlb_multi()` sends a `flush_tlb_func()` handler to all CPUs in the target `mm_cpumask(mm)`. Each remote CPU then executes an `INVLPG` (single page) or CR3 reload (full flush) to evict the stale entries.
 
@@ -81,11 +81,11 @@ IPI delivery has non-trivial cost: on a loaded system, round-trip latency can be
 
 ---
 
-## mmu_gather — Batched TLB Flushing
+## mmu_gather — Batched TLB Flushing {#mmu_gather-batched-tlb-flushing}
 
 Naively, unmapping N pages would require N separate TLB flushes. The kernel avoids this with `mmu_gather`, a per-operation accumulator that collects all address ranges to be flushed and delivers a single batched flush at the end.
 
-### The struct
+### The struct {#the-struct}
 
 Defined in `include/asm-generic/tlb.h`:
 
@@ -120,7 +120,7 @@ struct mmu_gather {
 };
 ```
 
-### Lifecycle
+### Lifecycle {#lifecycle}
 
 The gather lifecycle is three steps, implemented in `mm/mmu_gather.c`:
 
@@ -143,7 +143,7 @@ Finally, `dec_tlb_flush_pending()` balances the counter.
 
 For the full-mm case (`exec`, `exit`), `tlb_gather_mmu_fullmm()` sets `fullmm = 1`. This skips per-VMA range tracking — there is no point narrowing a flush that will cover the entire address space anyway. On architectures with ASIDs, `fullmm` also enables cycling to a new ASID rather than sending IPIs.
 
-### Why Batching Matters
+### Why Batching Matters {#why-batching-matters}
 
 Consider `munmap()` of a 1GB anonymous mapping (262,144 pages). Without batching:
 
@@ -157,7 +157,7 @@ With `mmu_gather`, the kernel walks all PTEs, accumulates the range `[start, sta
 
 ---
 
-## Lazy TLB Mode
+## Lazy TLB Mode {#lazy-tlb-mode}
 
 When a CPU switches from a user-space process to a kernel thread (or another process whose mm differs), it does not immediately need to flush the TLB for the previous mm — there are no user mappings to protect from a kernel thread. Flushing early wastes CPU cycles.
 
@@ -170,7 +170,7 @@ struct tlb_state_shared {
 DECLARE_PER_CPU_SHARED_ALIGNED(struct tlb_state_shared, cpu_tlbstate_shared);
 ```
 
-### Entering Lazy Mode
+### Entering Lazy Mode {#entering-lazy-mode}
 
 `enter_lazy_tlb()` is called by the scheduler when switching to a kernel thread. On x86:
 
@@ -186,7 +186,7 @@ void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 
 The CPU's bit in `mm_cpumask(mm)` **remains set** — the CPU is still in the cpumask so it will eventually receive flush IPIs — but the `is_lazy` flag tells the IPI sender it can skip sending unless page tables are being freed.
 
-### Skipping IPIs to Lazy CPUs
+### Skipping IPIs to Lazy CPUs {#skipping-ipis-to-lazy-cpus}
 
 In `native_flush_tlb_multi()` (`arch/x86/mm/tlb.c`), the IPI is sent only to CPUs that are actively running the mm:
 
@@ -207,7 +207,7 @@ When the lazy CPU next runs user code, `switch_mm_irqs_off()` resets `is_lazy` t
 
 ---
 
-## Huge Pages and TLB Coverage
+## Huge Pages and TLB Coverage {#huge-pages-and-tlb-coverage}
 
 A 2MB huge page is mapped by a single PMD-level TLB entry rather than 512 individual 4KB PTE entries. The TLB coverage per entry is 512× larger.
 
@@ -218,7 +218,7 @@ A 2MB huge page is mapped by a single PMD-level TLB entry rather than 512 indivi
 
 This is the primary performance benefit of Transparent Huge Pages (THP): reducing TLB pressure rather than reducing memory usage.
 
-### How the Kernel Tracks Huge-Page Entries
+### How the Kernel Tracks Huge-Page Entries {#how-the-kernel-tracks-huge-page-entries}
 
 `struct mmu_gather` tracks which page-table levels were cleared during an unmap operation:
 
@@ -238,15 +238,15 @@ The `vma_huge` bit in `struct mmu_gather` is set by `tlb_update_vma_flags()` whe
 
 ---
 
-## PCID — Process Context Identifiers
+## PCID — Process Context Identifiers {#pcid-process-context-identifiers}
 
 Without PCID, every context switch flushes the entire TLB (by reloading CR3 with the new page-table root). With PCID, the TLB is tagged: each entry carries the PCID of the process that created it, and the CPU can keep entries for multiple processes simultaneously. Context switches no longer require a flush — the incoming process simply starts using its own tagged entries.
 
-### PCID in the Hardware
+### PCID in the Hardware {#pcid-in-the-hardware}
 
 x86 supports up to 4096 PCIDs (12-bit field in CR3). To switch to a process *without* flushing its existing TLB entries, the kernel sets the `CR3_NOFLUSH` bit (bit 63) when writing CR3.
 
-### Linux's ASID Model
+### Linux's ASID Model {#linuxs-asid-model}
 
 Linux does not give each process a globally unique PCID. Instead it maintains a small per-CPU array of **dynamic ASIDs** (`TLB_NR_DYN_ASIDS = 6`), caching the last few processes that ran on each CPU:
 
@@ -281,9 +281,9 @@ static inline unsigned long build_cr3_noflush(pgd_t *pgd, u16 asid,
 
 If the generation has advanced (a TLB flush happened while this CPU was running another process), `need_flush = true` and a full CR3 reload (without `CR3_NOFLUSH`) evicts stale entries for that ASID.
 
-### KPTI and Doubled PCIDs
+### KPTI and Doubled PCIDs {#kpti-and-doubled-pcids}
 
-#### Why KPTI exists
+#### Why KPTI exists {#why-kpti-exists}
 
 On January 3, 2018, the Meltdown vulnerability (CVE-2017-5754) was disclosed. The root cause: for performance, Linux had always mapped the kernel's virtual address space into every process's page table. Switching from user to kernel mode (syscall, interrupt) required no CR3 reload — the kernel's virtual addresses were already reachable. This saved a TLB flush on every kernel entry and exit.
 
@@ -291,7 +291,7 @@ Meltdown showed that a user process could speculatively read kernel memory throu
 
 The cost was severe: every syscall and interrupt required two CR3 writes (one to switch to kernel page tables on entry, one to switch back on return). On a pre-PCID processor, each CR3 write flushes the entire TLB. Benchmarks showed 5–30% performance regression on syscall-heavy workloads.
 
-#### PCID made KPTI bearable
+#### PCID made KPTI bearable {#pcid-made-kpti-bearable}
 
 PCID (Process Context Identifiers) had been introduced in Linux 4.7 but barely used — there was little reason to avoid TLB flushes on context switches when all process page tables were already in memory. Meltdown changed that calculation completely.
 
@@ -301,7 +301,7 @@ Linux 4.14 enabled both KPTI and PCID together. On PCID-capable hardware (Westme
 
 When Kernel Page Table Isolation (KPTI) is active, each mm needs two PCIDs: one for user-space page tables and one for kernel-space. This halves the available PCID space to 2048 effective ASIDs (`PTI_CONSUMED_PCID_BITS = 1`).
 
-### Global ASIDs (INVLPGB)
+### Global ASIDs (INVLPGB) {#global-asids-invlpgb}
 
 On AMD processors supporting `INVLPGB` (broadcast TLB invalidation), the kernel can assign a **global ASID** to processes that are simultaneously active on four or more CPUs. A global ASID is identical on every CPU, enabling hardware-assisted remote TLB invalidation without IPIs:
 
@@ -324,11 +324,11 @@ static void consider_global_asid(struct mm_struct *mm)
 
 ---
 
-## TLB Shootdown Cost on NUMA Systems
+## TLB Shootdown Cost on NUMA Systems {#tlb-shootdown-cost-on-numa-systems}
 
 On multi-socket NUMA machines, a TLB shootdown IPI must cross inter-socket interconnects to reach remote CPUs. These cross-socket IPIs are substantially more expensive than intra-socket ones.
 
-### Cost Anatomy
+### Cost Anatomy {#cost-anatomy}
 
 A TLB shootdown for a single `munmap()` on a 64-CPU, 4-socket machine:
 
@@ -338,7 +338,7 @@ A TLB shootdown for a single `munmap()` on a 64-CPU, 4-socket machine:
 
 The `mmu_gather` batching directly amortises this cost: the number of IPIs is bounded by the number of distinct flush events, not the number of pages unmapped. Regardless of whether 1 or 1,000,000 pages are unmapped in a single `munmap()`, at most one flush IPI round-trip is needed.
 
-### `tlb_single_page_flush_ceiling`
+### `tlb_single_page_flush_ceiling` {#tlbsinglepageflushceiling}
 
 For small ranges, individual `INVLPG` instructions (one per page) are cheaper than a full flush. For larger ranges, a full flush wins. The kernel switches strategies at `tlb_single_page_flush_ceiling` pages (default: 33):
 
@@ -359,11 +359,11 @@ This threshold is tunable via `/sys/kernel/debug/x86/tlb_single_page_flush_ceili
 
 ---
 
-## Kernel TLB Pressure: vmalloc and Global Entries
+## Kernel TLB Pressure: vmalloc and Global Entries {#kernel-tlb-pressure-vmalloc-and-global-entries}
 
 Kernel virtual memory allocated via `vmalloc()` uses the global page-table region. Kernel mappings are not tagged per-process — they appear in every address space via the shared kernel PGD entries. Flushing a kernel TLB entry requires invalidating it on **every CPU**, regardless of which process is running.
 
-### `flush_tlb_kernel_range()`
+### `flush_tlb_kernel_range()` {#flushtlbkernel_range}
 
 ```c
 void flush_tlb_kernel_range(unsigned long start, unsigned long end)
@@ -373,7 +373,7 @@ This function sends a flush to every CPU on the system. On a 64-CPU machine, eve
 
 On processors with `INVLPGB`, `flush_tlb_kernel_range()` uses `invlpgb_flush_addr_nosync()` + `__tlbsync()` instead of IPIs, eliminating the per-CPU interrupt overhead.
 
-### Why vmalloc Is Expensive
+### Why vmalloc Is Expensive {#why-vmalloc-is-expensive}
 
 ```
 vmalloc() call path:
@@ -397,7 +397,7 @@ The global flush on every `vmalloc()`/`vfree()` pair makes vmalloc unsuitable fo
 
 ---
 
-## Summary: TLB Optimization Strategies
+## Summary: TLB Optimization Strategies {#summary-tlb-optimization-strategies}
 
 | Technique | Mechanism | Kernel Implementation |
 |-----------|-----------|----------------------|
@@ -409,26 +409,26 @@ The global flush on every `vmalloc()`/`vfree()` pair makes vmalloc unsuitable fo
 | Range-vs-full heuristic | Switch to full flush beyond 33 pages | `tlb_single_page_flush_ceiling`, `get_flush_tlb_info()` |
 | Avoid kernel vmalloc | No global TLB flush for slab allocs | Use `kmalloc()` instead of `vmalloc()` in hot paths |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — `flush_tlb_mm_range()`, `native_flush_tlb_multi()`, `enter_lazy_tlb()`, `switch_mm_irqs_off()`, PCID/ASID management
 - [arch/x86/include/asm/tlbflush.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/tlbflush.h) — `flush_tlb_mm()`, `flush_tlb_range()`, `flush_tlb_page()`, `struct tlb_state`
 - [include/asm-generic/tlb.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/tlb.h) — `struct mmu_gather`, `tlb_gather_mmu()`, `tlb_finish_mmu()`
 - [mm/mmu_gather.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmu_gather.c) — mmu_gather implementation: batching, range accumulation, and page freeing
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/arch/x86/tlb.rst`](https://docs.kernel.org/arch/x86/tlb.html) — x86 TLB flushing design notes: why certain shootdown paths are taken
 
-### Related pages
+### Related pages {#related-pages}
 
 - [page-tables.md](page-tables.md) — the page table hierarchy that TLB entries cache
 - [thp.md](thp.md) — how huge pages reduce TLB pressure by providing 512× larger entries
 - [boot-page-tables.md](boot-page-tables.md) — PCID activation and the early CR3 setup that initializes ASID support
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Improving page-fault scalability](https://lwn.net/Articles/741937/) — covers PCID benefits and context-switch TLB cost reduction
 - [LWN: Meltdown and Spectre, part 2](https://lwn.net/Articles/743287/) — KPTI's impact on TLB performance and the doubled-PCID workaround

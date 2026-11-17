@@ -1,8 +1,8 @@
-# Walking Page Tables Programmatically
+# Walking Page Tables Programmatically {#walking-page-tables-programmatically}
 
 > pagewalk API, apply_to_page_range, and ptdump — reading page tables from kernel code
 
-## Why walk page tables?
+## Why walk page tables? {#why-walk-page-tables}
 
 The kernel needs to inspect or modify page table entries programmatically in many contexts:
 
@@ -13,7 +13,7 @@ The kernel needs to inspect or modify page table entries programmatically in man
 - **userfaultfd**: set up write-protection on a range
 - **NUMA balancing**: scan PTEs to detect hot/cold pages across NUMA nodes
 
-## The pagewalk API
+## The pagewalk API {#the-pagewalk-api}
 
 ```c
 #include <linux/pagewalk.h>
@@ -72,7 +72,7 @@ struct mm_walk {
 };
 ```
 
-## Walk a user address range
+## Walk a user address range {#walk-a-user-address-range}
 
 ```c
 static int count_present_pte(pte_t *pte, unsigned long addr,
@@ -99,7 +99,7 @@ long count_resident_pages(struct mm_struct *mm, unsigned long start,
 }
 ```
 
-## Walk the kernel address space
+## Walk the kernel address space {#walk-the-kernel-address-space}
 
 ```c
 /* Walk kernel page tables (no mm, no VMA): */
@@ -126,7 +126,7 @@ walk_page_range_novma(&init_mm, VMALLOC_START, VMALLOC_END,
                        &kernel_walk_ops, NULL, NULL);
 ```
 
-## Modifying PTEs during the walk
+## Modifying PTEs during the walk {#modifying-ptes-during-the-walk}
 
 ```c
 /* Write-protect a range (used by userfaultfd, KVM dirty tracking): */
@@ -154,7 +154,7 @@ static int wp_pte(pte_t *pte, unsigned long addr,
 }
 ```
 
-## apply_to_page_range: set up mappings
+## apply_to_page_range: set up mappings {#applytopage_range-set-up-mappings}
 
 `apply_to_page_range` allocates page table pages as needed and calls a function on each PTE:
 
@@ -177,7 +177,7 @@ static int set_pte_fn(pte_t *pte, unsigned long addr,
 apply_to_page_range(&init_mm, vaddr, size, set_pte_fn, &phys_base);
 ```
 
-## ptdump: debugging page tables
+## ptdump: debugging page tables {#ptdump-debugging-page-tables}
 
 ```bash
 # Kernel page table dump (requires CONFIG_PTDUMP_DEBUGFS=y):
@@ -204,7 +204,7 @@ print(f'PFN: {pfn:#x}  present={present} rw={rw} user={user} NX={nx}')
 "
 ```
 
-## PTE bit manipulation functions
+## PTE bit manipulation functions {#pte-bit-manipulation-functions}
 
 ```c
 /* Read PTE properties: */
@@ -236,7 +236,7 @@ pte_t pte = pfn_pte(pfn, PAGE_SHARED);      /* user RW */
 struct page *page = pte_page(pte);           /* via pfn_to_page() */
 ```
 
-## Huge page PTEs
+## Huge page PTEs {#huge-page-ptes}
 
 ```c
 /* PMD-level huge page (2MB): */
@@ -256,7 +256,7 @@ if (pud_large(*pud)) {
 }
 ```
 
-## NUMA balancing page table scan
+## NUMA balancing page table scan {#numa-balancing-page-table-scan}
 
 The NUMA balancer uses page table walking to find pages that should be migrated:
 
@@ -282,7 +282,7 @@ static void task_numa_work(struct callback_head *work)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Page Tables](page-tables.md) — page table structure and format
 - [Page Fault Handler](page-fault.md) — how faults are resolved

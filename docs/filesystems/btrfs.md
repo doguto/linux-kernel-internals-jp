@@ -1,8 +1,8 @@
-# Btrfs: B-tree Filesystem
+# Btrfs: B-tree Filesystem {#btrfs-b-tree-filesystem}
 
 > Copy-on-write B-tree layout, snapshots, subvolumes, and RAID. Created by Chris Mason at Oracle and merged into the mainline kernel in Linux 2.6.29. See [A short history of btrfs](https://lwn.net/Articles/342892/) (LWN) for the design story.
 
-## Why Btrfs?
+## Why Btrfs? {#why-btrfs}
 
 Btrfs (B-tree filesystem) was designed to address limitations of ext4:
 
@@ -18,7 +18,7 @@ Btrfs (B-tree filesystem) was designed to address limitations of ext4:
 | Send/receive | No | Yes (incremental backups) |
 | Copy-on-write | No (uses journaling) | Data + metadata |
 
-## B-tree structure
+## B-tree structure {#b-tree-structure}
 
 Everything in Btrfs is stored in B-trees (hence "B-tree filesystem"), a design inspired by ReiserFS and ZFS concepts. There is no separate inode table or block bitmap — all metadata lives in these trees:
 
@@ -36,7 +36,7 @@ Btrfs superblock
         └── ...
 ```
 
-### B-tree node format
+### B-tree node format {#b-tree-node-format}
 
 ```c
 /* include/uapi/linux/btrfs_tree.h */
@@ -70,7 +70,7 @@ struct btrfs_item {
 /* Item data sits at end of leaf, items array at start, they grow toward center */
 ```
 
-### Keys
+### Keys {#keys}
 
 Every item in every Btrfs tree has a 3-part key:
 
@@ -87,7 +87,7 @@ Examples:
 (256, XATTR_ITEM,    name_hash)   → extended attribute
 ```
 
-## Copy-on-write semantics
+## Copy-on-write semantics {#copy-on-write-semantics}
 
 Btrfs never overwrites data in place. Every write creates new blocks:
 
@@ -120,7 +120,7 @@ Root ──→ [A]                 Root ──→ [A']  (new)
 blk1 still valid (could be shared by snapshot)
 ```
 
-## Subvolumes and snapshots
+## Subvolumes and snapshots {#subvolumes-and-snapshots}
 
 A **subvolume** is an independently rootable B-tree (its own root inode):
 
@@ -147,7 +147,7 @@ btrfs subvolume set-default 256 /data
 
 Snapshot creation is O(1) — it just copies the B-tree root pointer. Shared blocks are reference-counted in the extent tree.
 
-## Extent tree: space accounting
+## Extent tree: space accounting {#extent-tree-space-accounting}
 
 ```c
 /* Each allocated extent has a back-reference: */
@@ -178,7 +178,7 @@ btrfs filesystem usage /data
 btrfs inspect-internal dump-tree -t extent /dev/sda1 | head -50
 ```
 
-## Checksums
+## Checksums {#checksums}
 
 Btrfs checksums every data block and every metadata block:
 
@@ -207,7 +207,7 @@ btrfs scrub status /data         # check progress
  * xxhash64, sha256, or blake2b). */
 ```
 
-## Inline compression
+## Inline compression {#inline-compression}
 
 ```bash
 # Mount with compression:
@@ -226,7 +226,7 @@ compsize /data/bigfile
 # zstd        42%      420M         1.00G        1.00G
 ```
 
-## Send/receive (incremental backups)
+## Send/receive (incremental backups) {#sendreceive-incremental-backups}
 
 ```bash
 # Full backup:
@@ -242,7 +242,7 @@ btrfs send -p /data/myapp-snap-1 /data/myapp-snap-2 | btrfs receive /backup/
 btrfs send /data/myapp-snap-2 | ssh backuphost "btrfs receive /backup/"
 ```
 
-## RAID in Btrfs
+## RAID in Btrfs {#raid-in-btrfs}
 
 ```bash
 # Create RAID 1 (mirrored metadata + data):
@@ -260,7 +260,7 @@ btrfs replace start /dev/sdb /dev/sdd /data
 btrfs replace status /data
 ```
 
-## Transaction model
+## Transaction model {#transaction-model}
 
 Btrfs uses a transaction-based model without a journal:
 
@@ -284,7 +284,7 @@ btrfs_commit_transaction(trans);
 
 The superblock is written last and contains the root of the tree-of-roots. Until the superblock update, the old tree is intact — crash at any point leaves the previous transaction's state valid.
 
-## Defragmentation
+## Defragmentation {#defragmentation}
 
 CoW fragmentation builds up over time:
 
@@ -302,7 +302,7 @@ btrfs filesystem defragment -r /data/myapp
 mount -o autodefrag /dev/sda1 /data
 ```
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # Filesystem stats:
@@ -328,7 +328,7 @@ btrfs device stats /data
 bpftrace -e 'kprobe:btrfs_file_write_iter { @[comm] = count(); }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ext4 Journaling (JBD2)](ext4-journal.md) — journal-based contrast
 - [Page Cache](../mm/page-cache.md) — page cache that Btrfs CoW writes through

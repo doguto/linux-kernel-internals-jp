@@ -1,14 +1,14 @@
-# lockdep in Practice
+# lockdep in Practice {#lockdep-in-practice}
 
 > Lock dependency tracking: reading splats, annotating false positives, and hunting impossible deadlocks
 
-## Why this page exists
+## Why this page exists {#why-this-page-exists}
 
 `docs/locking/lockdep.md` covers lockdep fundamentals — what it is, how the dependency graph works, and lock classes. This page focuses on **practical debugging**: reading real splats, resolving false positives, writing correct annotations, and understanding lockdep's limits.
 
 ---
 
-## Anatomy of a lockdep splat
+## Anatomy of a lockdep splat {#anatomy-of-a-lockdep-splat}
 
 When lockdep detects a potential deadlock, it prints a `WARNING: possible circular locking dependency detected` message. Here is a fully annotated example:
 
@@ -59,7 +59,7 @@ other info that might help us debug this:              ← (5) "who else holds w
 
 ---
 
-## Lock annotations in the splat
+## Lock annotations in the splat {#lock-annotations-in-the-splat}
 
 Each lock in the splat is annotated with `{+.+.}-{3:3}`:
 
@@ -81,7 +81,7 @@ Common annotations:
 
 ---
 
-## Lock classes and `lock_class_key`
+## Lock classes and `lock_class_key` {#lock-classes-and-lockclasskey}
 
 Lockdep tracks **classes**, not instances. Every lock instance of the same type shares a class and lockdep only tracks edges between classes.
 
@@ -119,7 +119,7 @@ That `static struct lock_class_key __key` is the class key — one per call-site
 
 ---
 
-## Splitting classes to resolve false positives
+## Splitting classes to resolve false positives {#splitting-classes-to-resolve-false-positives}
 
 Sometimes lockdep reports a false positive because two instances of the same lock type have legitimately different valid orderings. The classic example is **nested directory locks** in a filesystem:
 
@@ -170,9 +170,9 @@ void init_inode(struct inode *inode, bool is_dir)
 
 ---
 
-## Runtime assertions
+## Runtime assertions {#runtime-assertions}
 
-### `lockdep_assert_held()`
+### `lockdep_assert_held()` {#lockdepassertheld}
 
 Assert that the current task holds a specific lock. Use this at the top of functions that require a lock to be held by the caller:
 
@@ -188,7 +188,7 @@ static void inode_pin_lru_isolating(struct inode *inode)
 
 If the assertion fails (lock is not held), lockdep prints a `WARNING` and a stack trace. With `CONFIG_PROVE_LOCKING=n`, the macro compiles away.
 
-### `lockdep_assert_not_held()`
+### `lockdep_assert_not_held()` {#lockdepassertnot_held}
 
 Assert a lock is **not** held. Used for functions that cannot be called under a specific lock:
 
@@ -202,7 +202,7 @@ void some_mm_operation(struct mm_struct *mm)
 }
 ```
 
-### `lockdep_assert_held_write()` / `lockdep_assert_held_read()`
+### `lockdep_assert_held_write()` / `lockdep_assert_held_read()` {#lockdepassertheldwrite-lockdepassertheldread}
 
 For rwsems, assert the specific lock mode:
 
@@ -221,7 +221,7 @@ static __must_check struct vm_area_struct *vma_merge_existing_range(
 
 ---
 
-## Implementing custom primitives with lockdep
+## Implementing custom primitives with lockdep {#implementing-custom-primitives-with-lockdep}
 
 If you write a custom locking primitive (e.g., a lock-free structure with manual memory ordering, or a per-object lock that wraps something else), you can make it visible to lockdep:
 
@@ -260,9 +260,9 @@ void my_lock_release(struct my_lock *l)
 
 ---
 
-## Suppressing false positives (use sparingly)
+## Suppressing false positives (use sparingly) {#suppressing-false-positives-use-sparingly}
 
-### `lockdep_set_novalidate_class()`
+### `lockdep_set_novalidate_class()` {#lockdepsetnovalidate_class}
 
 Mark a lock class as exempt from validation. **Avoid unless absolutely necessary** — it hides real bugs along with false positives:
 
@@ -270,7 +270,7 @@ Mark a lock class as exempt from validation. **Avoid unless absolutely necessary
 lockdep_set_novalidate_class(&my_lock);
 ```
 
-### `lockdep_off()` / `lockdep_on()`
+### `lockdep_off()` / `lockdep_on()` {#lockdepoff-lockdepon}
 
 Temporarily suspend lockdep for a code region that legitimately violates ordering (e.g., a self-test that deliberately creates a cycle):
 
@@ -284,7 +284,7 @@ These are process-local (they adjust a per-task counter). Do not use them to pap
 
 ---
 
-## Configuration
+## Configuration {#configuration}
 
 ```bash
 CONFIG_PROVE_LOCKING=y          # enables lockdep (required)
@@ -296,7 +296,7 @@ CONFIG_LOCK_STAT=y              # enables /proc/lock_stat
 
 ---
 
-## Lockdep limits
+## Lockdep limits {#lockdep-limits}
 
 Lockdep maintains a compile-time-bounded data structure. `MAX_LOCKDEP_KEYS` is a fixed cap; the others are Kconfig-tunable (`CONFIG_LOCKDEP_BITS`, `CONFIG_LOCKDEP_CHAINS_BITS`, `CONFIG_LOCKDEP_STACK_TRACE_BITS`), each defaulting to the value shown below (`MAX_STACK_TRACE_ENTRIES` defaults higher, to 2M, under `CONFIG_KASAN`):
 
@@ -327,7 +327,7 @@ If `lock-classes` is near the maximum, consider booting with a config that has f
 
 ---
 
-## Lock contention statistics
+## Lock contention statistics {#lock-contention-statistics}
 
 `CONFIG_LOCK_STAT=y` enables per-lock contention counters. Enable at runtime:
 
@@ -367,7 +367,7 @@ High `contentions` on a specific lock class points to a bottleneck. High `waitti
 
 ---
 
-## Workflow: debugging a lockdep splat
+## Workflow: debugging a lockdep splat {#workflow-debugging-a-lockdep-splat}
 
 ```bash
 # 1. Capture the full splat (it can be long):
@@ -398,9 +398,9 @@ dmesg | grep -A 80 "possible circular locking"
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/locking/lockdep.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep.c) — the validator implementation; `lock_acquire()` and `lock_release()` are the hooks that `spin_lock()`/`mutex_lock()` and friends call internally
 - [kernel/locking/lockdep_internals.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep_internals.h) — `MAX_LOCKDEP_ENTRIES`, `MAX_LOCKDEP_CHAINS`, `MAX_STACK_TRACE_ENTRIES`; on current kernels these are derived from the `CONFIG_LOCKDEP_BITS`/`CONFIG_LOCKDEP_CHAINS_BITS`/`CONFIG_LOCKDEP_STACK_TRACE_BITS` Kconfig options rather than fixed at compile time
@@ -415,19 +415,19 @@ dmesg | grep -A 80 "possible circular locking"
 - [Documentation/locking/lockdep-design.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockdep-design.rst) — lockdep's own design document
 - [Documentation/locking/lockstat.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/locking/lockstat.rst) — `/proc/lock_stat` design document
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Lockdep fundamentals](../locking/lockdep.md) — dependency graph, lock classes, basic splat reading
 - [Lock Contention Debugging](../locking/lock-debugging.md) — `/proc/lock_stat`, perf lock
 - [KASAN and KFENCE](kasan-kfence.md) — complementary memory error detectors
 - [KCSAN](kcsan.md) — data race detection
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Enhancing lockdep with crossrelease](https://lwn.net/Articles/709849/) — Byungchul Park lays out lockdep's dependency-graph fundamentals (lock classes, cycle detection) before proposing the crossrelease extension (December 2016)
 - [The dependency tracker for complex deadlock detection](https://lwn.net/Articles/1036222/) — Jonathan Corbet on DEPT, a proposed lockdep alternative; explains what lockdep does and does not catch (September 2025)
 
-### External
+### External {#external}
 
 - [docs.kernel.org: Runtime locking correctness validator](https://docs.kernel.org/locking/lockdep-design.html) — rendered version of lockdep-design.rst
 - [docs.kernel.org: Lock Statistics](https://docs.kernel.org/locking/lockstat.html) — rendered version of lockstat.rst

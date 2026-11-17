@@ -1,4 +1,4 @@
-# The jmp32 Bounds Regression
+# The jmp32 Bounds Regression {#the-jmp32-bounds-regression}
 
 > CVE-2020-8835 — a precision patch was auto-selected into a stable kernel by a machine-learning classifier that mistook it for a bug fix, and it turned out to be a privilege escalation
 
@@ -25,7 +25,7 @@ Actively exploited
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 BPF has 32-bit conditional jumps (`jmp32`, generated when LLVM is asked for `-mcpu=v3`), and in November 2019 Yonghong Song's [`581738a681b6`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=581738a681b6faae5725c2555439189ca81c0f1f) ("bpf: Provide better register bounds after jmp32 instructions") taught the verifier to learn something from them. The patch [went through review](https://lore.kernel.org/all/20191121045924.v77wb5zzfliln7ql@ast-mbp.dhcp.thefacebook.com/) on the bpf list — but Alexei Starovoitov's only comment was about the *style* of `__reg_bound_offset32()` ("may be make sense to do it as a helper?"), and his direct question to a second reviewer — "Ed, how would you simplify `__reg_bound_offset32` logic?" — went unanswered. The masking premise itself was never challenged.
 
@@ -48,7 +48,7 @@ Read the first two statements. It takes the register's 64-bit bounds, masks both
 
 At the time, this was a precision improvement, not a fix — it made the verifier accept correct programs it had been rejecting. That distinction matters for what happened next.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Masking both endpoints is only valid when the two endpoints agree on their high 32 bits.
 
@@ -71,7 +71,7 @@ Borkmann's verdict on that `var` line:
 
 The verifier now holds two statements about the same register that cannot both be true. Everything downstream inherits the contradiction.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The way this surfaced is one of the more striking things in the record: **the kernel produced a program that hung**.
 
@@ -87,7 +87,7 @@ The severe manifestation is what Manfred Paul demonstrated. The oss-security ann
 
 And the reachability, from the same announcement: "This bpf functionality is available to unprivileged users unless the `kernel.unprivileged_bpf_disabled` sysctl is set to 1." At the time, the default was 0.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 There are two distinct failures here, and only one of them is in the verifier.
 
@@ -101,7 +101,7 @@ There are two distinct failures here, and only one of them is in the verifier.
 
 So the vulnerable window was substantially wider than the feature's actual audience: a feature nobody had asked for on 5.4 shipped on 5.4 anyway.
 
-## Resolution
+## Resolution {#resolution}
 
 The chosen fix was **revert, not repair** — and the reasoning is spelled out for a stable-tree audience.
 
@@ -129,7 +129,7 @@ Alexei Starovoitov's entire public reply to the series:
 
 That is the right design, and it is also the commit named in the `Fixes:` tags of [CVE-2021-3490](alu32-bitwise-bounds.md) and [CVE-2021-31440](alu32-unsigned-bounds.md) a year later. The direct lineage runs: a precision improvement → a CVE → a revert plus a proper implementation → a better proper implementation → two more CVEs.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Automated stable-backport selection changes who is exposed to a feature's bugs.** `581738a681b6` was a correct-enough optimization for a narrow audience: people compiling BPF with `-mcpu=v3` on a recent kernel. Classifying it as a fix put it in front of everyone running 5.4. The classifier's error was not in judging the patch's quality; it was in judging its *category*, and category is what determines the blast radius.
 
@@ -142,7 +142,7 @@ That is the right design, and it is also the commit named in the `Fixes:` tags o
 !!! warning "Pattern to watch for"
     Two things to grep for. First, `min & MASK` / `max & MASK` pairs (or `(u32)`, `(s32)`, `(u16)` casts of range endpoints) where the result is used as a range — valid only when the discarded high bits are provably equal on both endpoints. Second, in your own subsystem's stable branches, look for backported commits whose upstream subject line reads like a feature or an optimization rather than a fix; automated selection is not infallible, and a feature on a long-term branch has an audience it was never reviewed against.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — tnums, register bounds, and the dead-code elimination pass that turned this bug into a hang
 - [ALU32 Bitwise Bounds Tracking](alu32-bitwise-bounds.md) — a CVE in `3f50f132d840`, the design that replaced this one's fix
@@ -150,7 +150,7 @@ That is the right design, and it is also the commit named in the `Fixes:` tags o
 - [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — the default this bug depended on, and how it changed a year later
 - [Sign Extension in `check_alu_op()`](sign-extension.md) — the same class of bug (verifier's model diverging from run-time value) a little over two years earlier
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2020-8835](https://nvd.nist.gov/vuln/detail/CVE-2020-8835) — CVSS 7.8 HIGH, published April 2, 2020; names the affected versions and the ZDI case number
 - [git.kernel.org: f2d67fec0b43](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f2d67fec0b43edce8c416101cdc52e71145b5fef) — "bpf: Undo incorrect `__reg_bound_offset32` handling", the revert, with the full reproducer walkthrough and the rejected repair

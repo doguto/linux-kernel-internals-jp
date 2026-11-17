@@ -1,8 +1,8 @@
-# Fault Injection for Memory Testing
+# Fault Injection for Memory Testing {#fault-injection-for-memory-testing}
 
 > Deliberately failing kernel allocations to exercise error-handling paths
 
-## What Is Fault Injection?
+## What Is Fault Injection? {#what-is-fault-injection}
 
 Fault injection is the practice of deliberately causing kernel operations to fail in order to test whether the error-handling paths in drivers and subsystems work correctly. The Linux kernel has a built-in fault injection framework that makes this systematic: you configure failure probability, scope, and targeting, and the kernel starts randomly failing specific operations.
 
@@ -11,9 +11,9 @@ The most common use is injection of memory allocation failures — making `kmall
 !!! tip "Why this matters"
     Error paths are notoriously undertested. A driver may have a `goto err_free` path that has never executed in practice. Fault injection exercises those paths under controlled conditions, ideally in a VM, before a real allocation failure exposes them in production.
 
-## The Fault Injection Framework
+## The Fault Injection Framework {#the-fault-injection-framework}
 
-### Kernel Configuration
+### Kernel Configuration {#kernel-configuration}
 
 ```
 # Core fault injection infrastructure
@@ -35,7 +35,7 @@ The framework's core lives in [`lib/fault-inject.c`](https://git.kernel.org/pub/
 - [`mm/failslab.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/failslab.c) — slab allocation failures
 - [`mm/fail_page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/fail_page_alloc.c) — page allocator failures
 
-### How the Framework Decides Whether to Fail
+### How the Framework Decides Whether to Fail {#how-the-framework-decides-whether-to-fail}
 
 The framework evaluates a set of configurable attributes on each call to `should_fail()`:
 
@@ -52,7 +52,7 @@ should_fail() decision logic (lib/fault-inject.c):
 
 Each of these is tunable via debugfs or per-task files.
 
-## The debugfs Interface
+## The debugfs Interface {#the-debugfs-interface}
 
 When `CONFIG_FAULT_INJECTION_DEBUG_FS=y` is enabled, each fault type exposes a directory under `/sys/kernel/debug/`:
 
@@ -81,7 +81,7 @@ When `CONFIG_FAULT_INJECTION_DEBUG_FS=y` is enabled, each fault type exposes a d
     └── verbose
 ```
 
-### Attribute Reference
+### Attribute Reference {#attribute-reference}
 
 | Attribute | Type | Meaning |
 |-----------|------|---------|
@@ -92,7 +92,7 @@ When `CONFIG_FAULT_INJECTION_DEBUG_FS=y` is enabled, each fault type exposes a d
 | `verbose` | 0, 1, 2 | `0` = no output; `1` = log each failure; `2` = log + dump stack trace |
 | `task-filter` | 0 or 1 | If `1`, only fail allocations made by tasks that have set `/proc/<pid>/make-it-fail` |
 
-### Quick-Start: Fail All Page Allocations at 10%
+### Quick-Start: Fail All Page Allocations at 10% {#quick-start-fail-all-page-allocations-at-10}
 
 ```bash
 # Mount debugfs if not already mounted
@@ -111,11 +111,11 @@ cat /sys/kernel/debug/fail_page_alloc/probability
 !!! warning
     Setting a high probability (>20%) system-wide without `task-filter` will cause rapid system instability. Use `task-filter=1` and `/proc/self/make-it-fail` for safe, targeted injection. Reserve global injection for dedicated test VMs.
 
-## Targeting Specific Processes
+## Targeting Specific Processes {#targeting-specific-processes}
 
 The coarsest injection mode (no task filter) randomly fails allocations from any kernel context, which quickly destabilizes the system. For driver testing, you almost always want to restrict injection to a specific process.
 
-### /proc/self/make-it-fail
+### /proc/self/make-it-fail {#procselfmake-it-fail}
 
 Every task has a `make-it-fail` file in `/proc`:
 
@@ -139,14 +139,14 @@ echo 1 > /proc/self/make-it-fail
 
 The `make-it-fail` flag is inherited by child processes (fork/exec), so a test script that sets it before launching a target binary will inject failures into the entire subprocess tree.
 
-### Targeting a Specific PID
+### Targeting a Specific PID {#targeting-a-specific-pid}
 
 ```bash
 # Target an already-running process
 echo 1 > /proc/<pid>/make-it-fail
 ```
 
-## Filtering by Call Site
+## Filtering by Call Site {#filtering-by-call-site}
 
 With `CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y`, you can restrict injection to allocations that pass through a specific function in the call stack. This is powerful for testing one driver without destabilizing others.
 
@@ -163,11 +163,11 @@ The stack trace filter works by reading the call stack at the point `should_fail
 
 In practice, the stack filter is most often used via the helper script provided in the kernel tree.
 
-## Practical Example: Testing kmalloc Failures in a Driver
+## Practical Example: Testing kmalloc Failures in a Driver {#practical-example-testing-kmalloc-failures-in-a-driver}
 
 The following walkthrough tests how a hypothetical driver handles `kmalloc` returning `NULL` during probe.
 
-### Setup
+### Setup {#setup}
 
 ```bash
 # Boot a test VM with:
@@ -191,7 +191,7 @@ insmod my_driver.ko
 dmesg -w
 ```
 
-### What to Look For in dmesg
+### What to Look For in dmesg {#what-to-look-for-in-dmesg}
 
 A correctly written driver will log an error and return `-ENOMEM`:
 
@@ -205,7 +205,7 @@ A buggy driver may:
 - Hang (waiting for a resource that was never acquired)
 - Succeed silently but leak memory (if the error path skips a `kfree`)
 
-### Iterating
+### Iterating {#iterating}
 
 Increase probability gradually to exercise more paths:
 
@@ -227,7 +227,7 @@ echo 1 > /sys/kernel/debug/failslab/times
 
 This is useful for bisecting: find the exact allocation failure that causes a regression.
 
-## Using the Kernel's Helper Script
+## Using the Kernel's Helper Script {#using-the-kernels-helper-script}
 
 The kernel ships a helper script that sets up fault injection for a specific command using the `FAIL_POINT` mechanism with stack trace filtering:
 
@@ -241,7 +241,7 @@ tools/testing/fault-injection/failcmd.sh --probability=20 -- modprobe my_driver
 
 This script sets up the debugfs parameters, marks the process with `make-it-fail`, runs the command, and cleans up. It is the recommended way to do targeted injection without manually managing the debugfs files. See [`tools/testing/fault-injection/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection) in the kernel source.
 
-## fail_make_request: Block I/O Failure Injection
+## fail_make_request: Block I/O Failure Injection {#failmakerequest-block-io-failure-injection}
 
 `CONFIG_FAIL_MAKE_REQUEST` injects failures at the block I/O layer (the `submit_bio()` path). This tests how filesystems and block drivers handle I/O errors, which is distinct from memory allocation failures.
 
@@ -265,7 +265,7 @@ Typical use cases:
 - Verifying RAID rebuild logic when a device reports errors
 - Testing that database write-ahead logs handle I/O failures without corruption
 
-## Fault Injection with Syzkaller
+## Fault Injection with Syzkaller {#fault-injection-with-syzkaller}
 
 [Syzkaller](https://github.com/google/syzkaller) is the kernel's primary coverage-guided fuzzer. It integrates with the fault injection framework to automatically exercise error paths that its syscall sequences trigger.
 
@@ -295,11 +295,11 @@ For fuzzing memory management specifically, the combination of `CONFIG_KASAN=y` 
 
 See [KASAN](kasan.md) and [KFENCE](kfence.md) for the sanitizers that syzkaller typically pairs with fault injection.
 
-## Stress Testing with Fault Injection
+## Stress Testing with Fault Injection {#stress-testing-with-fault-injection}
 
 For regression testing and robustness validation (as opposed to one-off debugging), running fault injection alongside a stress workload is more effective than injecting in idle conditions.
 
-### Combined Stress + Injection
+### Combined Stress + Injection {#combined-stress-injection}
 
 ```bash
 # Terminal 1: Enable slab fault injection (task-filter off — affects all)
@@ -321,7 +321,7 @@ done
 dmesg -w | grep -E "BUG|Oops|WARN|NULL pointer|general protection"
 ```
 
-### Targeted Slab Cache Injection
+### Targeted Slab Cache Injection {#targeted-slab-cache-injection}
 
 If a driver allocates from a specific named cache, restrict injection to avoid collateral damage:
 
@@ -334,13 +334,13 @@ echo 1 > /sys/kernel/debug/failslab/cache-filter
 echo 1 > /sys/kernel/slab/my_driver_cache/failslab
 ```
 
-## Kernel Documentation
+## Kernel Documentation {#kernel-documentation}
 
 The authoritative reference for the fault injection framework is:
 
 - [`Documentation/fault-injection/fault-injection.rst`](https://docs.kernel.org/fault-injection/fault-injection.html) — covers all debugfs parameters, the `make-it-fail` interface, stack trace filtering, and the `failcmd.sh` helper
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -350,7 +350,7 @@ The authoritative reference for the fault injection framework is:
 | [`include/linux/fault-inject.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fault-inject.h) | `fault_attr` struct and `should_fail()` declaration |
 | [`tools/testing/fault-injection/failcmd.sh`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection/failcmd.sh) | Helper script for per-command injection |
 
-## Quick Reference
+## Quick Reference {#quick-reference}
 
 ```bash
 # Slab injection, task-filtered (safe)
@@ -382,13 +382,13 @@ echo 0 > /sys/kernel/debug/fail_page_alloc/probability
 echo 0 > /sys/kernel/debug/fail_make_request/probability
 ```
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation_1}
 
 - [Fault injection capabilities infrastructure](https://docs.kernel.org/fault-injection/fault-injection.html) — complete reference for all parameters and interfaces
 
-### Related
+### Related {#related}
 
 - [KASAN](kasan.md) — memory error detection; pair with fault injection to catch both normal bugs and error-path bugs in one test run
 - [KFENCE](kfence.md) — low-overhead production memory safety; can run alongside fault injection in long-running stress tests

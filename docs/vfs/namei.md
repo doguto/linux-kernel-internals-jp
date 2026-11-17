@@ -1,8 +1,8 @@
-# Path Resolution (namei)
+# Path Resolution (namei) {#path-resolution-namei}
 
 > How the kernel converts a string like "/usr/bin/bash" into an inode
 
-## The challenge
+## The challenge {#the-challenge}
 
 Path resolution sounds simple: split the path on `/`, look up each component in the parent directory. But it must handle:
 
@@ -14,7 +14,7 @@ Path resolution sounds simple: split the path on `/`, look up each component in 
 
 The kernel's path resolution lives in `fs/namei.c` and is called the **namei** subsystem (from the historical Unix function name).
 
-## Entry point: filename_lookup
+## Entry point: filename_lookup {#entry-point-filename_lookup}
 
 Most VFS operations start with a path. The kernel resolves it through:
 
@@ -30,7 +30,7 @@ do_sys_open()
       → do_last()          ← handle final component (open file)
 ```
 
-## The nameidata structure
+## The nameidata structure {#the-nameidata-structure}
 
 `struct nameidata` carries state through the resolution:
 
@@ -49,7 +49,7 @@ struct nameidata {
 };
 ```
 
-## link_path_walk: the main loop
+## link_path_walk: the main loop {#linkpathwalk-the-main-loop}
 
 `link_path_walk()` iterates over path components separated by `/`:
 
@@ -87,11 +87,11 @@ static int link_path_walk(const char *name, struct nameidata *nd)
 }
 ```
 
-## walk_component: RCU-walk and ref-walk
+## walk_component: RCU-walk and ref-walk {#walk_component-rcu-walk-and-ref-walk}
 
 Each component is looked up in two stages:
 
-### Stage 1: RCU walk (lock-free, optimistic)
+### Stage 1: RCU walk (lock-free, optimistic) {#stage-1-rcu-walk-lock-free-optimistic}
 
 Linux 2.6.38 introduced RCU-walk by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/), which lets most path lookups complete without taking any lock or incrementing any reference count.
 
@@ -115,7 +115,7 @@ static struct dentry *lookup_fast(struct nameidata *nd)
 
 The RCU walk uses `d_seq` (a seqlock on each dentry) to detect concurrent modifications without taking any lock. This is the fast path — most lookups hit the dcache and return without taking a lock.
 
-### Stage 2: Ref walk (takes i_rwsem)
+### Stage 2: Ref walk (takes i_rwsem) {#stage-2-ref-walk-takes-i_rwsem}
 
 If RCU walk fails (cache miss or retry):
 
@@ -145,7 +145,7 @@ static struct dentry *lookup_slow(const struct qstr *name,
 
 `i_op->lookup()` calls into the filesystem (e.g., ext4) which reads the directory from disk, finds the entry, and associates its inode with the dentry.
 
-## Mount point crossing
+## Mount point crossing {#mount-point-crossing}
 
 When resolution hits a mount point, it silently crosses into the mounted filesystem:
 
@@ -160,7 +160,7 @@ if (d_mountpoint(dentry)) {
 
 This is why `cd /proc/net` works transparently even though `/proc` is a different filesystem from `/`.
 
-## Symlink resolution
+## Symlink resolution {#symlink-resolution}
 
 When a component is a symlink, `link_path_walk` is called recursively with the symlink's target:
 
@@ -176,7 +176,7 @@ err = link_path_walk(link, nd);
 nd->depth--;
 ```
 
-## LOOKUP flags
+## LOOKUP flags {#lookup-flags}
 
 ```c
 LOOKUP_FOLLOW    /* follow final symlink */
@@ -188,7 +188,7 @@ LOOKUP_REVAL     /* force dentry revalidation (NFS) */
 LOOKUP_RCU       /* stay in RCU walk mode if possible */
 ```
 
-## /proc/self/fd and /proc/self/fdinfo
+## /proc/self/fd and /proc/self/fdinfo {#procselffd-and-procselffdinfo}
 
 ```bash
 # Each open file has a symlink in /proc/self/fd/
@@ -204,7 +204,7 @@ readlink /proc/self/fd/0
 
 The `/proc/self/fd/N` symlinks use a special resolution path that goes through the process's file descriptor table rather than through the filesystem.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — What superblock, inode, dentry, file are
 - [Dentry and Inode Caches](dcache-icache.md) — How path lookups are cached

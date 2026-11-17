@@ -1,8 +1,8 @@
-# Per-CPU Variables
+# Per-CPU Variables {#per-cpu-variables}
 
 > Eliminating shared state by giving each CPU its own copy
 
-## The core idea
+## The core idea {#the-core-idea}
 
 Many kernel subsystems maintain per-CPU counters or state — a count of context switches, cache statistics, a runqueue pointer. The obvious approach is a global variable with a lock. But the per-CPU approach is better: give each CPU its own copy.
 
@@ -14,7 +14,7 @@ Benefits:
 
 The tradeoff: reading the system-wide total requires summing all CPUs' copies.
 
-## How it works
+## How it works {#how-it-works}
 
 The kernel allocates a contiguous per-CPU area for each CPU at boot. A per-CPU variable is an offset into this area. To access CPU N's copy, you compute `base[N] + offset`:
 
@@ -28,7 +28,7 @@ CPU 2 area:  [var_a] [var_b] [counter] [...]
                       same offset, different base address per CPU
 ```
 
-## Declaring and using per-CPU variables
+## Declaring and using per-CPU variables {#declaring-and-using-per-cpu-variables}
 
 ```c
 #include <linux/percpu.h>
@@ -59,7 +59,7 @@ The difference between `get_cpu_var` and `this_cpu_*`:
 - `get_cpu_var` disables preemption — safe even if code can be preempted
 - `this_cpu_*` does NOT disable preemption — caller must guarantee they won't migrate (e.g., already in a preemption-disabled section, or in a per-CPU context)
 
-## Accessing another CPU's data
+## Accessing another CPU's data {#accessing-another-cpus-data}
 
 ```c
 /* Read CPU N's copy (observer only, no lock needed for reading) */
@@ -71,7 +71,7 @@ int *ptr = per_cpu_ptr(&my_counter, cpu_id);
 
 For writes to another CPU's variable, you typically need either a lock or to use an IPI (inter-processor interrupt) to run code on that CPU.
 
-## Summing all CPUs
+## Summing all CPUs {#summing-all-cpus}
 
 ```c
 /* Sum a per-CPU integer across all CPUs */
@@ -84,7 +84,7 @@ for_each_possible_cpu(cpu)
 s64 sum = percpu_counter_sum(&my_percpu_counter);
 ```
 
-## percpu_counter: the ready-made solution
+## percpu_counter: the ready-made solution {#percpu_counter-the-ready-made-solution}
 
 For simple counters, `percpu_counter` provides a complete implementation that batches updates to a central counter:
 
@@ -110,7 +110,7 @@ percpu_counter_destroy(&my_counter);
 
 `percpu_counter` batches updates: each CPU accumulates up to `batch` (default 32) local changes before flushing to the global counter. This makes increments O(1) with no atomic operations in the fast path.
 
-## When NOT to use per-CPU variables
+## When NOT to use per-CPU variables {#when-not-to-use-per-cpu-variables}
 
 Per-CPU is not always the answer:
 
@@ -126,7 +126,7 @@ Don't use per-CPU when:
   ✗ The data is inherently global (a single flag, a single pointer)
 ```
 
-## Real-world usage: VM stats
+## Real-world usage: VM stats {#real-world-usage-vm-stats}
 
 The mm subsystem uses per-CPU variables for page counters:
 
@@ -158,7 +158,7 @@ DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define this_rq()   this_cpu_ptr(&runqueues)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Atomic operations](atomics.md) — When you do need synchronization
 - [Spinlock](spinlock.md) — Protecting truly shared data

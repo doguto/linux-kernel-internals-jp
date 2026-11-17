@@ -1,8 +1,8 @@
-# vrealloc
+# vrealloc {#vrealloc}
 
 > Resize vmalloc allocations
 
-## What is vrealloc?
+## What is vrealloc? {#what-is-vrealloc}
 
 `vrealloc()` resizes an existing vmalloc allocation, similar to userspace `realloc()`.
 
@@ -10,9 +10,9 @@
 void *vrealloc(const void *p, size_t size, gfp_t flags);
 ```
 
-## History & Evolution
+## History & Evolution {#history-evolution}
 
-### v6.12: Initial Implementation
+### v6.12: Initial Implementation {#v612-initial-implementation}
 
 **Commit**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) ("mm: vmalloc: implement vrealloc()")
 **Kernel**: v6.12
@@ -32,7 +32,7 @@ The existing `kvrealloc()` had inconsistent behavior compared to `krealloc()`:
 
 **Rust motivation**: The patch mentions Rust's allocator abstractions. `Vec` and `KVec` need efficient realloc for growing/shrinking - a common pattern that was inefficient without proper vrealloc.
 
-### Bug: KASAN Poisoning (v6.12)
+### Bug: KASAN Poisoning (v6.12) {#bug-kasan-poisoning-v612}
 
 **Commit**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) ("mm: fix vrealloc()'s KASAN poisoning logic")
 **Reporter**: Andrii Nakryiko (via BPF testing)
@@ -42,7 +42,7 @@ The existing `kvrealloc()` had inconsistent behavior compared to `krealloc()`:
 
 **Learning**: Memory sanitizers (KASAN) add complexity to allocation code paths. When reusing memory regions, all annotations must be updated to match new valid/invalid byte ranges.
 
-### v6.13: requested_size Tracking
+### v6.13: requested_size Tracking {#v613-requested_size-tracking}
 
 **Commit**: [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) ("mm: vmalloc: support more granular vrealloc() sizing")
 **Author**: Kees Cook
@@ -55,7 +55,7 @@ Introduced `vm_struct::requested_size` to track actual requested size separately
 
 **Bug Report that triggered this**: [lore.kernel.org](https://lore.kernel.org/all/20250408192503.6149a816@outsider.home/)
 
-### Bug: In-place Region Not Returned (v6.13)
+### Bug: In-place Region Not Returned (v6.13) {#bug-in-place-region-not-returned-v613}
 
 **Commit**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) ("mm: vmalloc: actually use the in-place vrealloc region")
 **Reporter**: Shung-Hsi Yu (SUSE)
@@ -67,7 +67,7 @@ Introduced `vm_struct::requested_size` to track actual requested size separately
 
 **Learning**: Off-by-one-style bugs in control flow. The function did all the right work, but the return statement used the wrong variable. One-line fix, big impact.
 
-### Bug: Unnecessary Zero-init on Grow (v6.13)
+### Bug: Unnecessary Zero-init on Grow (v6.13) {#bug-unnecessary-zero-init-on-grow-v613}
 
 **Commit**: [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) ("mm: vmalloc: only zero-init on vrealloc shrink")
 
@@ -75,7 +75,7 @@ Introduced `vm_struct::requested_size` to track actual requested size separately
 
 **Learning**: Understand when initialization has already happened upstream. Redundant zeroing is expensive at scale.
 
-### v6.14+: Shrink Optimization
+### v6.14+: Shrink Optimization {#v614-shrink-optimization}
 
 **Commit**: [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) ("mm/vmalloc: free pages when vrealloc() shrinks allocation")
 
@@ -90,9 +90,9 @@ Introduced `vm_struct::requested_size` to track actual requested size separately
 
 **Result**: 93% memory reduction when shrinking `256KB` -> `16KB`.
 
-## Behavior
+## Behavior {#behavior}
 
-### Shrinking
+### Shrinking {#shrinking}
 
 When shrinking (size < current):
 
@@ -100,7 +100,7 @@ When shrinking (size < current):
 - Frees unused pages (since e64f42036ef4)
 - Returns same pointer (no copy)
 
-### Growing
+### Growing {#growing}
 
 When growing (size > current):
 
@@ -108,17 +108,17 @@ When growing (size > current):
 - Otherwise: allocate new, copy, free old
 - Returns potentially new pointer
 
-## Design Decisions
+## Design Decisions {#design-decisions}
 
-### Why huge pages are skipped for shrink
+### Why huge pages are skipped for shrink {#why-huge-pages-are-skipped-for-shrink}
 
 Huge pages (order > 0) use single TLB entries covering multiple pages. Partial unmapping would require splitting the huge page, which is complex and defeats the purpose. Shrinking huge page allocations only updates metadata.
 
-### Why at least one page must remain
+### Why at least one page must remain {#why-at-least-one-page-must-remain}
 
 The first page is used for memcg accounting via `mod_memcg_page_state()`. The memcg charge is associated with the first page. Freeing all pages would lose this accounting reference.
 
-### Why no minimum threshold for shrink
+### Why no minimum threshold for shrink {#why-no-minimum-threshold-for-shrink}
 
 Early iterations considered requiring >= 4 pages to free before actually freeing. This was removed:
 
@@ -126,7 +126,7 @@ Early iterations considered requiring >= 4 pages to free before actually freeing
 - Any freed memory has value
 - Magic thresholds are hard to justify in review
 
-## Common Pitfalls
+## Common Pitfalls {#common-pitfalls}
 
 Based on bugs found in vrealloc development:
 
@@ -135,7 +135,7 @@ Based on bugs found in vrealloc development:
 3. **Redundant initialization**: Know what upstream code already initialized
 4. **Partial operations on huge pages**: Usually not possible without splitting
 
-## Testing
+## Testing {#testing}
 
 The `test_vmalloc` module includes `vrealloc_shrink_test` (id: 4096):
 
@@ -144,9 +144,9 @@ The `test_vmalloc` module includes `vrealloc_shrink_test` (id: 4096):
 virtme-ng --append 'test_vmalloc.run_test_mask=4096'
 ```
 
-## References
+## References {#references}
 
-### Commits (chronological)
+### Commits (chronological) {#commits-chronological}
 | Commit | Kernel | Description |
 |--------|--------|-------------|
 | [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | Initial implementation |
@@ -156,19 +156,19 @@ virtme-ng --append 'test_vmalloc.run_test_mask=4096'
 | [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | Fix redundant zero-init |
 | [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) | v6.14+ | Shrink optimization |
 
-### LKML Discussions
+### LKML Discussions {#lkml-discussions}
 - [Original vrealloc proposal](https://lore.kernel.org/lkml/20240704170738.3621-1-dakr@redhat.com/)
 - [KASAN bug report](https://lore.kernel.org/bpf/67450f9b.050a0220.21d33d.0004.GAE@google.com/)
 - [BPF verifier slowdown](https://lore.kernel.org/all/20250515-bpf-verifier-slowdown-vwo2meju4cgp2su5ckj@6gi6ssxbnfqg)
 
-### Code
+### Code {#code}
 - [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) - Implementation
 - [`lib/test_vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/test_vmalloc.c) - Test module
 
-### Related
+### Related {#related}
 - [vmalloc](vmalloc.md) - Parent allocator
 
-## Further reading
+## Further reading {#further-reading}
 
 - [vmalloc.md](vmalloc.md) — The parent allocator; covers vmap_area RBTree, lazy TLB flushing, and huge-page backing
 - [slab.md](slab.md) — `krealloc()` is the analogous resize primitive for slab/kmalloc allocations

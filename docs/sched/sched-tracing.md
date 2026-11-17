@@ -1,8 +1,8 @@
-# Scheduler Tracing
+# Scheduler Tracing {#scheduler-tracing}
 
 > ftrace, perf, and BPF tools for observing scheduler behavior in real time
 
-## Scheduler trace events
+## Scheduler trace events {#scheduler-trace-events}
 
 The kernel emits scheduler events through the tracepoint system (ftrace). These are defined in `include/trace/events/sched.h` and cover every significant scheduling decision.
 
@@ -22,7 +22,7 @@ Key events:
 | `sched:sched_stat_wait` | Time spent waiting on runqueue (CONFIG_SCHEDSTATS) |
 | `sched:sched_stat_iowait` | Time spent in I/O wait (CONFIG_SCHEDSTATS) |
 
-## sched_switch: the most important event
+## sched_switch: the most important event {#sched_switch-the-most-important-event}
 
 ```c
 // include/trace/events/sched.h
@@ -46,7 +46,7 @@ TRACE_EVENT(sched_switch,
 
 A `prev_state=R` means the task was preempted (involuntary switch). `prev_state=S` means it voluntarily gave up the CPU.
 
-## Recording with ftrace
+## Recording with ftrace {#recording-with-ftrace}
 
 ```bash
 # Enable specific events and record for 5 seconds
@@ -64,7 +64,7 @@ trace-cmd record -e sched:sched_switch \
                  sleep 5
 ```
 
-### Direct ftrace interface
+### Direct ftrace interface {#direct-ftrace-interface}
 
 ```bash
 # Enable events via debugfs
@@ -86,7 +86,7 @@ echo 0 > /sys/kernel/debug/tracing/events/sched/sched_switch/enable
 echo > /sys/kernel/debug/tracing/trace
 ```
 
-## perf sched: high-level scheduling analysis
+## perf sched: high-level scheduling analysis {#perf-sched-high-level-scheduling-analysis}
 
 `perf sched` records scheduling activity and produces latency reports:
 
@@ -107,7 +107,7 @@ perf sched replay
 perf sched script | head -20
 ```
 
-### perf sched latency
+### perf sched latency {#perf-sched-latency}
 
 High "Maximum delay" for a task means it was occasionally stuck waiting for the CPU for a long time. Common causes:
 
@@ -121,7 +121,7 @@ High "Maximum delay" for a task means it was occasionally stuck waiting for the 
 perf sched latency --sort max
 ```
 
-## perf stat for scheduling counters
+## perf stat for scheduling counters {#perf-stat-for-scheduling-counters}
 
 ```bash
 # Count context switches and migrations
@@ -135,7 +135,7 @@ perf stat -e sched:sched_switch,sched:sched_wakeup,sched:sched_migrate_task \
 perf stat -e sched:sched_switch -a sleep 5
 ```
 
-## BPF tracing with bpftrace
+## BPF tracing with bpftrace {#bpf-tracing-with-bpftrace}
 
 ```bash
 # Trace context switches: show who switched to whom
@@ -161,7 +161,7 @@ tracepoint:sched:sched_migrate_task {
 }'
 ```
 
-## Wakeup latency: runqlat (BCC)
+## Wakeup latency: runqlat (BCC) {#wakeup-latency-runqlat-bcc}
 
 `runqlat` (from the BCC toolkit) measures how long tasks wait in the runqueue before running:
 
@@ -188,7 +188,7 @@ runqlat -p $PID
 runqlen  # shows how many tasks are typically in the runqueue
 ```
 
-## Wakeup tracing with ftrace function graph
+## Wakeup tracing with ftrace function graph {#wakeup-tracing-with-ftrace-function-graph}
 
 To trace the full wakeup path including kernel functions:
 
@@ -212,7 +212,7 @@ echo wakeup > /sys/kernel/debug/tracing/current_tracer
 cat /sys/kernel/debug/tracing/tracing_max_latency
 ```
 
-## Reading sched_switch output
+## Reading sched_switch output {#reading-sched_switch-output}
 
 A typical `trace-cmd report` line:
 
@@ -229,7 +229,7 @@ Interpretation:
 
 If `prev_state=R`, myapp was preempted — it wanted to keep running but something higher priority took over.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Scheduler Statistics](schedstat.md) — Cumulative per-task stats in /proc
 - [Scheduler Tuning](sched-tuning.md) — Knobs that affect the behavior you're observing

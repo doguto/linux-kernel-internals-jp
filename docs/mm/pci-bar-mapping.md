@@ -1,8 +1,8 @@
-# PCI BAR Memory Mapping
+# PCI BAR Memory Mapping {#pci-bar-memory-mapping}
 
 > How the kernel discovers, claims, and maps PCI device memory regions into kernel virtual address space
 
-## What Are PCI BARs?
+## What Are PCI BARs? {#what-are-pci-bars}
 
 Every PCI and PCIe device exposes up to six **Base Address Registers** (BARs), numbered BAR0 through BAR5, in its configuration space. These registers tell the operating system where the device's memory-mapped I/O (MMIO) regions live in the physical address space.
 
@@ -19,7 +19,7 @@ BARs live at offsets `0x10` through `0x24` in the standard PCI configuration hea
 
 The maximum number of standard BARs is defined as `PCI_STD_NUM_BARS = 6` in [`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h).
 
-### How BAR Size Is Determined
+### How BAR Size Is Determined {#how-bar-size-is-determined}
 
 The firmware or OS discovers the size of a BAR region using a hardware protocol: write all-1s (`0xFFFFFFFF`) to the BAR register, read the value back, mask off the type bits, and invert. The result is the size minus one. This is called **BAR sizing** and is performed by `pci_read_bases()` in [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c), called from `pci_setup_device()` during bus enumeration.
 
@@ -31,7 +31,7 @@ Mask type bits, invert: size = 4096 bytes
 
 The device decodes only the bits it responds to; the rest read back as zero. The lower bits hold type information and are masked before the inversion.
 
-## BAR Types
+## BAR Types {#bar-types}
 
 The lower bits of each BAR register encode the region's type:
 
@@ -46,19 +46,19 @@ The lower bits of each BAR register encode the region's type:
 #define PCI_BASE_ADDRESS_MEM_PREFETCH  0x08  /* prefetchable? */
 ```
 
-### Memory BARs (`PCI_BASE_ADDRESS_SPACE_MEMORY`)
+### Memory BARs (`PCI_BASE_ADDRESS_SPACE_MEMORY`) {#memory-bars-pcibaseaddressspacememory}
 
 The common case. The BAR describes a window of physical address space that maps directly to device registers or device-local memory. CPU accesses to this window go out on the PCIe bus and reach the device. The kernel maps these regions using `ioremap()` or one of its variants.
 
-### I/O BARs (`PCI_BASE_ADDRESS_SPACE_IO`)
+### I/O BARs (`PCI_BASE_ADDRESS_SPACE_IO`) {#io-bars-pcibaseaddressspaceio}
 
 A legacy type specific to x86. The device occupies a range in the x86 I/O port address space, accessed via `inb()`/`outb()` instructions rather than normal memory loads and stores. Modern devices rarely use I/O BARs; PCIe firmware often assigns them but devices may not actually need them. `pci_iomap()` handles both types transparently.
 
-### Prefetchable BARs (`PCI_BASE_ADDRESS_MEM_PREFETCH`)
+### Prefetchable BARs (`PCI_BASE_ADDRESS_MEM_PREFETCH`) {#prefetchable-bars-pcibaseaddressmemprefetch}
 
 A memory BAR with a guarantee that reads have no side effects and the CPU or PCIe fabric can safely prefetch data and combine writes. This is set only for regions like GPU framebuffers where sequential writes benefit from write-combining. Non-prefetchable BARs must not be speculatively read -- side effects (like clearing a status register on read) would be triggered incorrectly.
 
-### 64-bit BARs (`PCI_BASE_ADDRESS_MEM_TYPE_64`)
+### 64-bit BARs (`PCI_BASE_ADDRESS_MEM_TYPE_64`) {#64-bit-bars-pcibaseaddressmemtype_64}
 
 A 64-bit memory BAR uses **two consecutive BAR slots** to store the full 64-bit base address: the lower 32 bits in BAR `n` and the upper 32 bits in BAR `n+1`. This means a device can have at most three 64-bit BARs (using all six slots in pairs), and accessing the resource via `pci_resource_start(dev, n)` gives the full 64-bit physical address correctly -- the kernel handles the two-register assembly transparently during `pci_read_bases()`.
 
@@ -70,7 +70,7 @@ BAR Layout for a device with one 64-bit BAR at BAR0:
   BAR2  [0x18]: next independent BAR (e.g., another memory region)
 ```
 
-## Linux BAR Enumeration
+## Linux BAR Enumeration {#linux-bar-enumeration}
 
 During PCI bus enumeration, the kernel calls `pci_setup_device()` → `pci_read_bases()` for every device found. This function reads and sizes all BARs, then stores the results in `dev->resource[]` -- an array of `struct resource` indexed 0 through 5 (for the standard BARs), with entry 6 reserved for the expansion ROM.
 
@@ -91,11 +91,11 @@ The flags use the `IORESOURCE_*` constants from [`include/linux/ioport.h`](https
 | `IORESOURCE_PREFETCH` | `0x00002000` | Prefetchable memory |
 | `IORESOURCE_MEM_64` | `0x00100000` | 64-bit address BAR |
 
-## Requesting and Mapping a BAR
+## Requesting and Mapping a BAR {#requesting-and-mapping-a-bar}
 
 A driver must follow three steps in order: enable the device, claim the BAR region from the kernel resource tree, and map the BAR into kernel virtual address space. All three functions live in [`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c) and [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c).
 
-### The Standard Driver Pattern
+### The Standard Driver Pattern {#the-standard-driver-pattern}
 
 ```c
 static int my_driver_probe(struct pci_dev *pdev,
@@ -148,7 +148,7 @@ static void my_driver_remove(struct pci_dev *pdev)
 }
 ```
 
-### Function Reference
+### Function Reference {#function-reference}
 
 **`pci_request_region(pdev, bar, name)`** / **`pci_request_regions(pdev, name)`**
 
@@ -166,7 +166,7 @@ The correct way to access MMIO. These functions handle any required memory barri
 
 Teardown pair for the mapping and claim. Always call them in driver `remove()`.
 
-### Managed Variant: `pcim_iomap()`
+### Managed Variant: `pcim_iomap()` {#managed-variant-pcim_iomap}
 
 For drivers that want automatic cleanup on driver detach, the devres-managed variant `pcim_iomap()` is available. It requires `pcim_enable_device()` instead of `pci_enable_device()`. The mapping is automatically released when the driver unbinds. Defined in [`drivers/pci/devres.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/devres.c).
 
@@ -181,11 +181,11 @@ if (!base)
 /* No explicit cleanup needed in remove() */
 ```
 
-## Memory Types for BAR Mappings
+## Memory Types for BAR Mappings {#memory-types-for-bar-mappings}
 
 How the CPU accesses MMIO depends on the **page attribute** applied when the virtual mapping is created. The choice has large performance implications. On x86, this is controlled by the **Page Attribute Table (PAT)**, implemented in [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c).
 
-### Uncached (UC) — Non-Prefetchable BARs
+### Uncached (UC) — Non-Prefetchable BARs {#uncached-uc-non-prefetchable-bars}
 
 `ioremap()` (called internally by `pci_iomap()`) maps the region as **UC-minus** (uncacheable, write-posted). Every read and write goes directly to the device; no data is held in any CPU cache. This is mandatory for control registers where each read may have side effects and writes must be visible to the device immediately.
 
@@ -194,7 +194,7 @@ How the CPU accesses MMIO depends on the **page attribute** applied when the vir
 void __iomem *ioremap(resource_size_t phys_addr, unsigned long size);
 ```
 
-### Write-Combining (WC) — Prefetchable BARs
+### Write-Combining (WC) — Prefetchable BARs {#write-combining-wc-prefetchable-bars}
 
 `ioremap_wc()` maps the region with **write-combining** enabled. The CPU may buffer multiple writes and send them to the device in a single burst, dramatically improving throughput for sequential writes. Reads still go to the device but there is no read prefetching. This is the correct choice for framebuffers, PCIe peer-to-peer memory, and any large, streaming-write workload.
 
@@ -213,7 +213,7 @@ void __iomem *pci_iomap_wc(struct pci_dev *dev, int bar,
 
 `pci_iomap_wc()` returns `NULL` for I/O BARs (write-combining makes no sense for port I/O) and calls `ioremap_wc()` for memory BARs.
 
-### Choosing the Right Mapping
+### Choosing the Right Mapping {#choosing-the-right-mapping}
 
 ```c
 unsigned long flags = pci_resource_flags(pdev, bar);
@@ -230,7 +230,7 @@ if (flags & IORESOURCE_PREFETCH) {
 !!! warning "Performance impact"
     Mapping a 256 MB framebuffer as UC instead of WC can reduce sequential write throughput by an order of magnitude. GPU drivers are careful to use `pci_iomap_wc()` for VRAM BARs and `pci_iomap()` for register BARs even on the same device.
 
-## IOMMU and BAR Access
+## IOMMU and BAR Access {#iommu-and-bar-access}
 
 The IOMMU translates device-issued DMA addresses (device → RAM direction). BAR accesses travel in the **opposite direction** (CPU → device) and bypass the IOMMU entirely. The CPU issues a physical memory transaction on the PCIe bus; the device responds directly.
 
@@ -244,7 +244,7 @@ MMIO (CPU → device):
 
 The IOMMU is not involved in MMIO reads or writes. However, during BAR assignment the firmware (and optionally the kernel) must ensure BAR physical addresses do not overlap with installed RAM. On x86 this is enforced by the memory map in `E820`, and the PCI subsystem checks `iomem_resource` before accepting BAR assignments.
 
-## 64-Bit BARs and Address Space Conflicts
+## 64-Bit BARs and Address Space Conflicts {#64-bit-bars-and-address-space-conflicts}
 
 On systems with more than 4 GB of RAM, 32-bit BARs (which can only describe addresses below 4 GB) can conflict with installed memory. On most modern x86 systems, firmware handles this by reserving a region below 4 GB (sometimes called the **PCI hole** or **TOLUD** -- Top Of Low Usable DRAM) where BARs are placed without conflict. However, this shrinks the effective addressable low memory.
 
@@ -264,9 +264,9 @@ Modern NVMe drives, CXL memory devices, and high-end GPUs routinely use 64-bit B
 !!! note "Firmware vs. kernel BAR assignment"
     Most x86 systems have firmware assign all BARs before the kernel boots. The kernel then reads and trusts those assignments. On embedded systems or when `pci=realloc` is passed on the kernel command line, the kernel may reassign BARs itself.
 
-## Debugging BAR Mappings
+## Debugging BAR Mappings {#debugging-bar-mappings}
 
-### `lspci -v`
+### `lspci -v` {#lspci-v}
 
 Shows all BARs assigned to a device, including their physical addresses, sizes, and types:
 
@@ -281,7 +281,7 @@ $ lspci -v -s 03:00.0
 
 The lines after the device description are the BARs. `prefetchable` indicates `IORESOURCE_PREFETCH` is set.
 
-### `/proc/iomem`
+### `/proc/iomem` {#prociomem}
 
 Shows how BARs occupy the physical address space alongside RAM and other resources:
 
@@ -298,7 +298,7 @@ f6000000-f6ffffff : 0000:03:00.0
 
 Entries are indented to show the resource hierarchy: bus window → device BAR → driver claim.
 
-### `/sys/bus/pci/devices/BBDF/resource`
+### `/sys/bus/pci/devices/BBDF/resource` {#sysbuspcidevicesbbdfresource}
 
 Each PCI device has a `resource` file showing all six BARs plus the expansion ROM, one per line, as three hex fields: start, end, flags.
 
@@ -314,7 +314,7 @@ $ cat /sys/bus/pci/devices/0000:03:00.0/resource
 
 The third column is the `IORESOURCE_*` flags. `0x200` is `IORESOURCE_MEM`; `0x2000` is `IORESOURCE_PREFETCH`; `0x100000` is `IORESOURCE_MEM_64`.
 
-### `/sys/bus/pci/devices/BBDF/resource0` through `resource5`
+### `/sys/bus/pci/devices/BBDF/resource0` through `resource5` {#sysbuspcidevicesbbdfresource0-through-resource5}
 
 These files are `mmap()`-able from userspace (when the BAR is not marked exclusive). A userspace tool can map a BAR directly without a kernel driver:
 
@@ -327,7 +327,7 @@ uint32_t val = *(volatile uint32_t *)mmio;  /* direct access from userspace */
 
 This is how tools like `nvtop` and GPU compute debuggers access device memory without a kernel driver. Note that `pci_request_regions_exclusive()` prevents this by setting `IORESOURCE_EXCLUSIVE`, blocking the sysfs mmap path.
 
-### Checking BAR assignments at boot
+### Checking BAR assignments at boot {#checking-bar-assignments-at-boot}
 
 ```bash
 # All PCI-related messages during bus enumeration
@@ -340,7 +340,7 @@ cat /sys/bus/pci/devices/0000:03:00.0/resource
 cat /proc/iomem | grep -A2 "PCI Bus"
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -357,23 +357,23 @@ cat /proc/iomem | grep -A2 "PCI Bus"
 
 ---
 
-## References
+## References {#references}
 
-### Further Reading
+### Further Reading {#further-reading}
 
 - [Kernel documentation: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — authoritative guide to MMIO access functions
 - [PCI Local Bus Specification, rev 3.0](https://pcisig.com/) — defines BAR layout, sizing protocol, and type bits
 - [LWN: PCI resource management](https://lwn.net/Articles/51834/) — early overview of how Linux manages PCI resources
 - [LWN: Write-combining mappings](https://lwn.net/Articles/252029/) — PAT and write-combining performance on x86
 
-### Related Pages
+### Related Pages {#related-pages}
 
 - [DMA Memory Allocation](dma.md) — how devices transfer data to/from RAM (distinct from MMIO)
 - [vmalloc](vmalloc.md) — kernel virtual address space that `ioremap()` carves from
 - [Page Tables](page-tables.md) — how `ioremap()` mappings appear in the kernel page table
 - [CXL Memory Tiering](cxl-memory-tiering.md) — CXL devices expose large 64-bit BARs for memory expansion
 
-## Further reading
+## Further reading {#further-reading_1}
 
 - [Kernel docs: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — authoritative guide to `ioread*`/`iowrite*`, `ioremap` variants, and MMIO access rules
 - [`Documentation/PCI/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/PCI) — kernel PCI documentation directory covering BAR assignment, error handling, and host bridge enumeration

@@ -1,8 +1,8 @@
-# USB: the Universal Serial Bus Subsystem
+# USB: the Universal Serial Bus Subsystem {#usb-the-universal-serial-bus-subsystem}
 
 > How Linux drives USB — a host-scheduled, hot-pluggable bus where the host initiates *every* transfer, devices describe themselves through descriptors, and drivers bind to interfaces rather than whole devices
 
-## Getting Started
+## Getting Started {#getting-started}
 
 USB is the bus almost every peripheral speaks: keyboards, mice, storage, webcams, network dongles, printers, phones. From the kernel's side it has three defining properties that shape the whole subsystem:
 
@@ -10,7 +10,7 @@ USB is the bus almost every peripheral speaks: keyboards, mice, storage, webcams
 - **Hot-pluggable and self-describing.** A device can appear or vanish at any moment, and when it appears it tells the host exactly what it is through a tree of **descriptors** — no static configuration, no device tree entry.
 - **Tiered-star topology.** Devices hang off hubs, hubs off other hubs, all rooted at the host controller's *root hub*. Up to 127 addresses per bus.
 
-## The three layers of the stack
+## The three layers of the stack {#the-three-layers-of-the-stack}
 
 ```
   Class / interface drivers   ← usb-storage, usbhid, cdc-acm, uvcvideo, ...
@@ -29,7 +29,7 @@ USB is the bus almost every peripheral speaks: keyboards, mice, storage, webcams
 - **usbcore** is the midlayer every device and driver goes through. It contains the **hub driver** (which detects attach/detach and drives enumeration), the USB **device model** layered on the [driver core](../drivers/device-model.md), and the **URB** engine (below). It presents a clean, controller-independent view of devices to drivers.
 - **Class/interface drivers** are what you think of as "the USB driver" for a device — `usb-storage` for flash drives, `usbhid` for keyboards, `cdc-acm` for serial adapters. Crucially, they bind to an **interface**, not the whole device.
 
-## The device model: device → configuration → interface → endpoint
+## The device model: device → configuration → interface → endpoint {#the-device-model-device-configuration-interface-endpoint}
 
 A USB device isn't a single addressable thing; it's a small tree that the device describes through descriptors:
 
@@ -45,7 +45,7 @@ Device  (idVendor, idProduct — identifies the product)
 
 The key consequence: **a driver binds to an interface, not a device.** A USB headset that is simultaneously an audio device and a HID volume control is driven by *two* different drivers bound to *two* interfaces of the *same* physical device. This is why `struct usb_driver`'s `->probe()` receives a `usb_interface`, and why matching is usually done on interface class as well as vendor/product IDs.
 
-## Endpoints and the four transfer types
+## Endpoints and the four transfer types {#endpoints-and-the-four-transfer-types}
 
 An **endpoint** is a one-directional data source or sink on the device (IN = toward host, OUT = from host). Each endpoint has exactly one of four transfer types, chosen for the data's needs:
 
@@ -58,7 +58,7 @@ An **endpoint** is a one-directional data source or sink on the device (IN = tow
 
 Endpoint 0 is special: it is the **control endpoint** every device must have, and it is how the host talks to a device *before* any driver is bound — during enumeration.
 
-## The URB: the unit of USB I/O
+## The URB: the unit of USB I/O {#the-urb-the-unit-of-usb-io}
 
 All actual data movement is expressed as a **URB** (USB Request Block) — the USB analogue of the block layer's [`bio`](../block/bio-request.md). A driver fills a URB with the target endpoint, a data buffer, and a completion callback, then submits it asynchronously:
 
@@ -71,22 +71,22 @@ static void my_complete(struct urb *urb) { /* urb->status, urb->actual_length */
 
 The URB is queued to the HCD, scheduled on the wire when the bus can carry it, and its callback runs on completion (or error, or unlink). For simple one-shot transfers, usbcore provides synchronous wrappers — `usb_control_msg()`, `usb_bulk_msg()` — that build a URB, submit it, and wait.
 
-## How a device comes to life (enumeration, in brief)
+## How a device comes to life (enumeration, in brief) {#how-a-device-comes-to-life-enumeration-in-brief}
 
 When a device is plugged in, the hub driver sees the port change, the host **resets** the port, assigns the device an **address**, and reads its descriptors over endpoint 0. It selects a configuration, and usbcore then **matches** each interface against registered drivers (by vendor/product ID or by USB class) and calls the winner's `->probe()`. The full descriptor exchange is covered in the enumeration page.
 
-## Linux as a USB *device*: gadget mode
+## Linux as a USB *device*: gadget mode {#linux-as-a-usb-device-gadget-mode}
 
 Everything above is the **host** side. Linux can also *be* a USB peripheral — a phone presenting itself as storage, an embedded board exposing a serial console or Ethernet over USB. That is the **gadget** side: a USB Device Controller (UDC) driver plus a gadget function, usually composed through configfs. It's a separate stack, covered with the host-controller page.
 
-## The rest of this section
+## The rest of this section {#the-rest-of-this-section}
 
 1. **[Enumeration and Descriptors](enumeration.md)** — how a device announces itself and gets a driver bound
 2. **[URBs and Transfer Types](urbs.md)** — the unit of USB I/O and what each of the four transfer types guarantees
 3. **[Host Controllers and Gadget Mode](xhci-gadget.md)** — inside xHCI, and Linux acting as a USB *device*
 4. **[War Stories](war-stories.md)** — BadUSB, a MIDI double-free, and fuzzing the host stack from the device side
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: USB driver API](https://docs.kernel.org/driver-api/usb/index.html) — the authoritative reference for usbcore and HCDs
 - [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — device model, interfaces, and the driver interface

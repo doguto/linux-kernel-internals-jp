@@ -1,8 +1,8 @@
-# IRQ Affinity and CPU Isolation
+# IRQ Affinity and CPU Isolation {#irq-affinity-and-cpu-isolation}
 
 > Controlling which CPUs handle interrupts for performance and latency
 
-## Why IRQ affinity matters
+## Why IRQ affinity matters {#why-irq-affinity-matters}
 
 By default, the kernel distributes interrupts across CPUs automatically (`irqbalance` daemon). For latency-sensitive or high-throughput workloads, manual affinity control lets you:
 
@@ -10,7 +10,7 @@ By default, the kernel distributes interrupts across CPUs automatically (`irqbal
 - Isolate real-time tasks from interrupt storms
 - Colocate IRQ handling with the NUMA node that owns the memory
 
-## Viewing IRQ assignments
+## Viewing IRQ assignments {#viewing-irq-assignments}
 
 ```bash
 # List all IRQs with CPU affinity and counts
@@ -30,7 +30,7 @@ cat /proc/irq/42/smp_affinity_list # human-readable (CPU list)
 # /proc/irq/42/smp_affinity_list: 0-1
 ```
 
-## Setting IRQ affinity
+## Setting IRQ affinity {#setting-irq-affinity}
 
 ```bash
 # Pin IRQ 42 to CPU 3 only
@@ -46,7 +46,7 @@ echo 0,3 > /proc/irq/42/smp_affinity_list
 echo ff > /proc/irq/42/smp_affinity      # 0xff = CPUs 0-7
 ```
 
-### High-throughput NIC: one queue per CPU
+### High-throughput NIC: one queue per CPU {#high-throughput-nic-one-queue-per-cpu}
 
 ```bash
 # Find IRQ numbers for each NIC queue
@@ -67,7 +67,7 @@ echo 1 > /sys/class/net/eth0/queues/tx-0/xps_cpus  # tx-0 → CPU 0
 echo 2 > /sys/class/net/eth0/queues/tx-1/xps_cpus  # tx-1 → CPU 1
 ```
 
-## irqbalance: automatic balancing
+## irqbalance: automatic balancing {#irqbalance-automatic-balancing}
 
 `irqbalance` is a daemon that periodically rebalances IRQs across CPUs:
 
@@ -89,7 +89,7 @@ irqbalance --debug --foreground 2>&1 | head -50
 
 For latency-sensitive workloads, stop irqbalance and set affinity manually.
 
-## Kernel API: irq_set_affinity_hint
+## Kernel API: irq_set_affinity_hint {#kernel-api-irqsetaffinity_hint}
 
 Drivers can suggest preferred CPUs for their IRQs:
 
@@ -125,11 +125,11 @@ static int mlx5_irq_set_affinity_hint(struct mlx5_irq *irq, int i)
 }
 ```
 
-## CPU isolation for real-time workloads
+## CPU isolation for real-time workloads {#cpu-isolation-for-real-time-workloads}
 
 For real-time tasks that must not be interrupted, isolate CPUs from the kernel's scheduler and interrupt balancer:
 
-### isolcpus: remove CPUs from the scheduler
+### isolcpus: remove CPUs from the scheduler {#isolcpus-remove-cpus-from-the-scheduler}
 
 ```bash
 # Boot parameter: remove CPUs 2,3 from scheduler load balancing
@@ -146,7 +146,7 @@ echo 2 > /sys/fs/cgroup/realtime/cpuset.cpus
 echo 0 > /sys/fs/cgroup/realtime/cpuset.mems
 ```
 
-### nohz_full: tickless operation
+### nohz_full: tickless operation {#nohz_full-tickless-operation}
 
 The NO_HZ (tickless idle) feature was introduced in Linux 2.6.21 by Ingo Molnár and Thomas Gleixner [(LWN)](https://lwn.net/Articles/223185/); `nohz_full` for full dynticks came later in Linux 3.10.
 
@@ -161,7 +161,7 @@ GRUB_CMDLINE_LINUX="isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3"
 watch -n1 'cat /proc/interrupts | head -5'
 ```
 
-### irq_default_affinity: exclude isolated CPUs
+### irq_default_affinity: exclude isolated CPUs {#irqdefaultaffinity-exclude-isolated-cpus}
 
 ```bash
 # Set system-wide default affinity to exclude CPUs 2,3
@@ -169,7 +169,7 @@ echo 3 > /proc/irq/default_smp_affinity  # 0x3 = CPUs 0,1 only
 # New IRQs will be placed on CPUs 0,1 by default
 ```
 
-### Full isolation example (latency-critical CPU)
+### Full isolation example (latency-critical CPU) {#full-isolation-example-latency-critical-cpu}
 
 ```bash
 #!/bin/bash
@@ -200,7 +200,7 @@ tuna --cpus=3 --isolate
 taskset -c $CPU ./realtime_task &
 ```
 
-## Monitoring interrupt distribution
+## Monitoring interrupt distribution {#monitoring-interrupt-distribution}
 
 ```bash
 # Live interrupt counts per CPU
@@ -220,7 +220,7 @@ for irq in /proc/irq/*/; do
 done
 ```
 
-## Receive Packet Steering (RPS/RFS)
+## Receive Packet Steering (RPS/RFS) {#receive-packet-steering-rpsrfs}
 
 For NICs with fewer hardware queues than CPUs, RPS steers packets to specific CPUs in software:
 
@@ -235,7 +235,7 @@ echo 4096 > /proc/sys/net/core/rps_sock_flow_entries
 
 RPS is implemented as a softirq that moves packet processing to the target CPU via IPI (inter-processor interrupt).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [IRQ Descriptor and irq_chip](irq-desc.md) — struct irq_desc internals
 - [request_irq and free_irq](request-irq.md) — IRQ handler registration

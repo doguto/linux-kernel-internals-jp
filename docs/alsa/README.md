@@ -1,18 +1,18 @@
-# ALSA: the Advanced Linux Sound Architecture
+# ALSA: the Advanced Linux Sound Architecture {#alsa-the-advanced-linux-sound-architecture}
 
 > How Linux turns a sound chip into `/dev/snd/pcmC0D0p` — one kernel-level object model shared by every sound card, with playback, mixing, and MIDI as separate, independently-numbered device files
 
-## Getting Started
+## Getting Started {#getting-started}
 
 Audio hardware looks simple from the outside — a DAC, a few mixer knobs, maybe a MIDI port — but a general-purpose OS has to support hundreds of unrelated chips (PCI, USB, and the dozens of I2S/SoC codecs found on embedded boards) behind one predictable userspace interface, while also letting more than one logical stream exist per device: playback and capture are different data paths, and a card's mixer state has to stay visible and controllable independently of whether anything is currently playing. **ALSA (Advanced Linux Sound Architecture)**, living under `sound/`, is the kernel subsystem that does this. It defines one shared object model — the *card* — and hangs everything else (PCM streams, mixer controls, MIDI ports, timers) off it as component devices with their own device-node numbering.
 
-### The problem ALSA solves
+### The problem ALSA solves {#the-problem-alsa-solves}
 
 Linux's original sound subsystem was **OSS (Open Sound System)**, built directly on the early SoundBlaster driver. OSS's API required every audio service — sample-rate and format conversion, routing, mixing multiple streams down to one device — to be implemented *inside* the kernel driver itself, because the interface gave userspace only a single, fixed-format stream per device node. By 1998 that had become a real limitation as sound hardware and use cases diversified, and growing dissatisfaction with OSS's design led Jaroslav Kysela and others to begin work on a redesigned kernel API that became ALSA — one that kept the kernel side to hardware control, buffer management, and mixer state, and pushed format conversion and mixing policy into a userspace/library layer instead. By the end of 2001, ALSA was adopted as Linux's official audio system ([LWN: "LPC: The past, present, and future of Linux audio," Jake Edge, 2009](https://lwn.net/Articles/355542/)); it was merged into the mainline kernel during the 2.5 development series in early 2002 (2.5.4–2.5.5), and became the *default* sound system, replacing OSS, in Linux 2.6 (released December 2003). The older OSS API was retained afterward only as an optional emulation layer (`snd-pcm-oss`, `snd-mixer-oss`, `snd-seq-oss`) for legacy binaries.
 
 The result is a kernel API that stays deliberately narrow: negotiate hardware parameters, move audio buffers, expose mixer controls, and route MIDI bytes. Sample-rate conversion, stream mixing, and network transparency are userspace's job — first ALSA's own `libasound` plugin chain, and on most modern desktops, an audio server (PulseAudio or PipeWire) layered on top of it.
 
-### The core object model: cards and devices
+### The core object model: cards and devices {#the-core-object-model-cards-and-devices}
 
 Every ALSA driver's job boils down to building one `struct snd_card` and attaching component objects to it. `struct snd_card` (defined in [`include/sound/core.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/core.h)) is, in the kernel documentation's own words, "the headquarters of the soundcard" — it owns the card's identity strings (`id`, `driver`, `shortname`, `longname`), a `struct list_head devices` of every component attached to it, the mixer/control state (`controls`, `controls_rwsem`, `last_numid`), the card's `/proc/asound/cardN` tree (`proc_root`), and the `card_dev` embedded `struct device` used for sysfs and driver-core registration.
 
@@ -51,7 +51,7 @@ Teardown is the mirror image: `snd_card_free()` (or, for devres-managed cards, a
   Device nodes go live under /dev/snd/*  and  /proc/asound/cardN/*
 ```
 
-### The four subsystems ALSA exposes
+### The four subsystems ALSA exposes {#the-four-subsystems-alsa-exposes}
 
 Every ALSA card is built from up to four kinds of component, each with its own kernel data structures, minor-number range, and device-node naming scheme:
 
@@ -62,7 +62,7 @@ Every ALSA card is built from up to four kinds of component, each with its own k
 
 Most consumer audio hardware only ever populates PCM and Control; MIDI and Timer devices appear on cards that actually have MIDI ports or timer-capable hardware. For SoC/embedded audio, the four subsystems above are still what gets exposed to userspace, but the driver side is usually written against **ASoC (ALSA System on Chip)**, a layer that splits a driver into a reusable *codec* driver, a *platform*/DMA driver, and a small *machine* driver that wires the two together for a specific board — covered in [ASoC](asoc.md).
 
-### Userspace-facing device nodes
+### Userspace-facing device nodes {#userspace-facing-device-nodes}
 
 Every registered component shows up as a character device under `/dev/snd/`, all sharing major number 116 (`CONFIG_SND_MAJOR`) with the card and device-within-card encoded in the minor number (`SNDRV_MINOR_CARD()`/`SNDRV_MINOR_DEVICE()` in [`include/sound/minors.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/minors.h)). That fixed `card << 5 | device` minor layout is the default; with `CONFIG_SND_DYNAMIC_MINORS` enabled, minors are instead handed out on demand from a flat range and no longer decompose this way. The naming, set with `dev_set_name()` in each subsystem's registration path, follows a fixed pattern:
 
@@ -79,7 +79,7 @@ A card with two independent audio paths (say, analog output and HDMI output) sho
 
 Almost nothing talks to these nodes directly except `libasound` (the ALSA userspace library) and audio servers. On most modern distributions, applications go through **PipeWire** (or, on older/simpler setups, **PulseAudio**), which owns the device exclusively and gives applications a mixed, format-converted, network-transparent stream instead. PipeWire's own ALSA compatibility is a plugin that intercepts `libasound` calls for the (shrinking) set of applications that still open ALSA devices directly, and it also implements a PulseAudio-compatible socket and a JACK-compatible client library for those ecosystems — the kernel ALSA nodes remain the actual bottom layer underneath all of them ([LWN: "PipeWire: The Linux audio/video bus," Ahmed S. Darwish, 2021](https://lwn.net/Articles/847412/)). This page stops at that boundary: PulseAudio/PipeWire internals are userspace, not kernel, and out of scope here.
 
-### Card and device numbering, and `/proc/asound`
+### Card and device numbering, and `/proc/asound` {#card-and-device-numbering-and-procasound}
 
 Card indices are assigned at `snd_card_new()` time (`snd_card_init()` in `sound/core/init.c`): a driver can request a specific `index` module parameter; if unset, the kernel first checks the global `slots=` module parameter for a slot reserved by that driver's module name (`module_slot_match()`), and only then falls back to the first free slot, up to `SNDRV_CARDS` cards. That index (`card->number`) is what appears in every device name — `card0`, `controlC0`, `pcmC0D0p` — and it is *not* guaranteed to match probe order across reboots unless something (a module `options` line pinning `index=`, the `slots=` array, or udev/systemd persistent-naming rules) fixes it in place.
 
@@ -88,7 +88,7 @@ Card indices are assigned at `snd_card_new()` time (`snd_card_init()` in `sound/
 - **`/proc/asound/cards`** lists every registered card, one line (plus a driver/long-name continuation line) per card, in the format `snd_card_info_read()` in `sound/core/init.c` writes: `" N [id             ]: driver - shortname"` followed by the `longname` on the next line.
 - **`/proc/asound/cardN/`** holds that card's own tree — `id`, `pcm0p/`, `pcm0c/`, etc. — with hardware parameters, buffer state, and driver-specific debug info exposed as plain-text files, which is often the fastest way to check what a driver's `hw_params` or `codec` state actually is without instrumenting the driver.
 
-### The rest of this section
+### The rest of this section {#the-rest-of-this-section}
 
 The pages that follow go deeper on each piece summarized above:
 
@@ -96,13 +96,13 @@ The pages that follow go deeper on each piece summarized above:
 - **[ASoC](asoc.md)** — the codec/platform/machine driver split used by essentially all embedded and SoC audio, and how DAPM manages power domains inside the audio path.
 - **[War Stories](war-stories.md)** — six real ALSA incidents, from a USB mixer use-after-free latent for almost 21 years to a PCM buffer locking race.
 
-### Prerequisites and neighbors
+### Prerequisites and neighbors {#prerequisites-and-neighbors}
 
 ALSA drivers are ordinary [Linux device-model](../drivers/device-model.md) citizens — most desktop/server sound cards are [PCI devices](../drivers/pci-driver.md) or USB audio-class devices, while embedded audio is almost always a [platform device](../drivers/platform-driver.md) tree assembled by ASoC. The `/dev/snd/*` nodes themselves are plain [character devices](../drivers/chardev.md) registered through the same `cdev`/`file_operations` machinery as any other driver. Reading order: this page, then [PCM](pcm.md) for the data path, then [ASoC](asoc.md) if you're working on embedded/SoC audio.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/sound/core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/core.h) — `struct snd_card`, `struct snd_device`, and the card/device registration API
 - [sound/core/init.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/init.c) — `snd_card_new()`, `snd_card_register()`, card-index assignment, `/proc/asound/cards`
@@ -113,19 +113,19 @@ ALSA drivers are ordinary [Linux device-model](../drivers/device-model.md) citiz
 - [include/sound/timer.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/timer.h) — `struct snd_timer`
 - [include/sound/minors.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/minors.h) — minor-number layout for `/dev/snd/*`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [PCM: playback and capture](pcm.md) — the data path in depth
 - [ASoC](asoc.md) — codec/platform/machine drivers for embedded audio
 - [War Stories](war-stories.md) — real incidents in the subsystems above
 - [Linux Device Model](../drivers/device-model.md) · [PCI Drivers](../drivers/pci-driver.md) · [Platform Drivers](../drivers/platform-driver.md) · [Character Devices](../drivers/chardev.md) — the driver-core layers ALSA sits on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LPC: The past, present, and future of Linux audio](https://lwn.net/Articles/355542/) — how and why ALSA replaced OSS as Linux's default sound system
 - [PipeWire: The Linux audio/video bus](https://lwn.net/Articles/847412/) — where PipeWire sits relative to ALSA, PulseAudio, and JACK
 
-### External
+### External {#external}
 
 - [Kernel docs: Writing an ALSA Driver](https://docs.kernel.org/sound/kernel-api/writing-an-alsa-driver.html) — the canonical driver-author's guide to the card/device model
 - [Kernel docs: ALSA configuration guide](https://docs.kernel.org/sound/alsa-configuration.html) — module parameters, device-file mapping, and the `/proc/asound` layout

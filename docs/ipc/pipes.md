@@ -1,8 +1,8 @@
-# Pipes and FIFOs
+# Pipes and FIFOs {#pipes-and-fifos}
 
 > Unidirectional byte stream IPC
 
-## What pipes are
+## What pipes are {#what-pipes-are}
 
 A pipe is a kernel-managed circular buffer connecting a write end to a read end. Data written by one process is read by another — no filesystem involved.
 
@@ -21,7 +21,7 @@ Properties:
 - **Atomic writes**: writes ≤ PIPE_BUF (4096) bytes are atomic (won't interleave)
 - **SIGPIPE**: write to a pipe with no readers → `SIGPIPE` + `EPIPE`
 
-## Creating pipes
+## Creating pipes {#creating-pipes}
 
 ```c
 /* Anonymous pipe: returned as two fds */
@@ -47,7 +47,7 @@ if (fork() == 0) {
 }
 ```
 
-## Kernel pipe data structures
+## Kernel pipe data structures {#kernel-pipe-data-structures}
 
 ```c
 /* include/linux/pipe_fs_i.h -- not fs/pipe.c */
@@ -97,7 +97,7 @@ struct pipe_buffer {
 
 The pipe buffer is a ring of `pipe_buffer` slots, each pointing to a page. The default capacity is 16 pages × 4096 = 65,536 bytes.
 
-## Pipe read and write paths
+## Pipe read and write paths {#pipe-read-and-write-paths}
 
 ```c
 /* Simplified pipe write path -- real function is anon_pipe_write() (fs/pipe.c) */
@@ -133,7 +133,7 @@ static ssize_t anon_pipe_write(struct kiocb *iocb, struct iov_iter *from)
 }
 ```
 
-## Changing pipe capacity
+## Changing pipe capacity {#changing-pipe-capacity}
 
 ```c
 /* Increase pipe buffer (useful for high-throughput logging) */
@@ -150,7 +150,7 @@ cat /proc/sys/fs/pipe-max-size  # default 1MB
 echo 4194304 > /proc/sys/fs/pipe-max-size  # increase to 4MB
 ```
 
-## splice: zero-copy pipe I/O
+## splice: zero-copy pipe I/O {#splice-zero-copy-pipe-io}
 
 `splice` moves data between a file descriptor and a pipe without copying to userspace:
 
@@ -172,7 +172,7 @@ splice(pipe_fd, NULL, socket_fd, NULL, file_size, 0);
 
 `splice` works by moving `pipe_buffer` page references — no data is copied — and it does this regardless of flags. `SPLICE_F_MOVE` (a hint to move pages instead of copying, mentioned in the LWN citation below since it shipped with the original 2.6.17 `splice()`) has been a no-op since Linux 2.6.21: its first implementation was buggy, so the kernel stopped acting on it, and current `fs/splice.c` contains no code that even reads the flag. It's still accepted for compatibility, but passing it changes nothing. This is how `sendfile` is implemented internally.
 
-## vmsplice: mapping userspace memory into a pipe
+## vmsplice: mapping userspace memory into a pipe {#vmsplice-mapping-userspace-memory-into-a-pipe}
 
 ```c
 /* Map userspace buffer into the pipe (gift: pipe takes ownership) */
@@ -183,7 +183,7 @@ vmsplice(pipefd[1], &iov, 1, SPLICE_F_GIFT);
 vmsplice(pipefd[1], &iov, 1, 0);
 ```
 
-## tee: duplicating pipe data
+## tee: duplicating pipe data {#tee-duplicating-pipe-data}
 
 ```c
 /* Copy data from pipe1 to pipe2 without consuming from pipe1 */
@@ -193,7 +193,7 @@ tee(pipe1_read_fd, pipe2_write_fd, count, SPLICE_F_NONBLOCK);
 
 Useful for implementing `tee(1)` (stdout → file + stdout) efficiently.
 
-## FIFOs (named pipes)
+## FIFOs (named pipes) {#fifos-named-pipes}
 
 A FIFO is a pipe accessible via the filesystem. Any process knowing the path can open it:
 
@@ -227,7 +227,7 @@ Opening rules:
 - Write-only open blocks until a reader opens (unless `O_NONBLOCK`, returns `ENXIO`)
 - Read-write open never blocks
 
-## Pipe vs socket
+## Pipe vs socket {#pipe-vs-socket}
 
 | | Pipe/FIFO | Unix socket (SOCK_STREAM) |
 |---|-----------|--------------------------|
@@ -239,7 +239,7 @@ Opening rules:
 | FD passing | No | Yes (SCM_RIGHTS) |
 | Overhead | Lower | Slightly higher |
 
-## Observing pipes
+## Observing pipes {#observing-pipes}
 
 ```bash
 # Check pipe buffer usage
@@ -261,9 +261,9 @@ cat /proc/$(pgrep myproc)/fdinfo/4
 perf trace -e splice,vmsplice -- myprocess
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [fs/pipe.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pipe.c) — pipe/FIFO read and write paths (`anon_pipe_read()`, `anon_pipe_write()`, `fifo_open()`), and `F_SETPIPE_SZ`/`F_GETPIPE_SZ` handling
 - [include/linux/pipe_fs_i.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pipe_fs_i.h) — `struct pipe_inode_info` and `struct pipe_buffer` definitions, `PIPE_DEF_BUFFERS`
@@ -271,7 +271,7 @@ perf trace -e splice,vmsplice -- myprocess
 - [include/linux/splice.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/splice.h) — the `SPLICE_F_*` flag definitions (`MOVE`, `NONBLOCK`, `MORE`, `GIFT`)
 - [Splice — The Linux Kernel documentation](https://docs.kernel.org/filesystems/splice.html) — kernel-internal splice/pipe API reference (`pipe_buffer` helpers, `splice_to_pipe()`, and friends)
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`pipe(2)`](https://man7.org/linux/man-pages/man2/pipe.2.html) — `pipe()`/`pipe2()` creation, `O_DIRECT` packet mode
 - [`pipe(7)`](https://man7.org/linux/man-pages/man7/pipe.7.html) — pipe/FIFO overview, capacity, `PIPE_BUF` atomicity
@@ -281,7 +281,7 @@ perf trace -e splice,vmsplice -- myprocess
 - [`tee(2)`](https://man7.org/linux/man-pages/man2/tee.2.html) — duplicating pipe data without consuming it
 - [`F_SETPIPE_SZ(2const)`](https://man7.org/linux/man-pages/man2/F_SETPIPE_SZ.2const.html) — changing/querying pipe capacity, rounding rules, since Linux 2.6.35
 
-### Related pages
+### Related pages {#related-pages}
 
 - [splice-sendfile.md](../vfs/splice-sendfile.md) — deeper dive into the splice/tee/sendfile kernel paths and how `sendfile()` is built on the same machinery
 - [shared-memory.md](shared-memory.md) — alternatives without byte-stream ordering
@@ -289,6 +289,6 @@ perf trace -e splice,vmsplice -- myprocess
 - [war-stories.md](war-stories.md) — "The pipe capacity surprise": a producer blocking on a full pipe during a consumer stall
 - [file-ops.md](../vfs/file-ops.md) — the `file_operations` vtable that pipe/FIFO `read_iter`/`write_iter` hook into
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Two new system calls: splice() and sync_file_range()](https://lwn.net/Articles/178199/) — Jonathan Corbet, April 3, 2006; introduces `splice()` (Jens Axboe's 2.6.17 implementation, based on an earlier proposal by Larry McVoy) and the `SPLICE_F_MOVE` flag

@@ -1,4 +1,4 @@
-# Observability
+# Observability {#observability}
 
 Tools for seeing, measuring, and tuning a running kernel.
 

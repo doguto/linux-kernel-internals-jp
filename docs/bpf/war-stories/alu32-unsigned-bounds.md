@@ -1,4 +1,4 @@
-# The 32-Bit Unsigned Bounds Propagation Bug
+# The 32-Bit Unsigned Bounds Propagation Bug {#the-32-bit-unsigned-bounds-propagation-bug}
 
 > CVE-2021-31440 — a fix landed four and a half months earlier had corrected the signed half of a two-line pattern and left the unsigned half standing
 
@@ -22,7 +22,7 @@ Actively exploited
 
 *Part of [War Stories: BPF Verifier Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 Since [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244) ("bpf: Verifier, do explicit ALU32 bounds tracking", v5.7-rc1), every scalar register in the verifier carries *two* sets of numeric bounds: the 64-bit `{s,u}{min,max}_value` and a separate 32-bit `{s,u}32_{min,max}_value` describing the low half.
 
@@ -38,7 +38,7 @@ if (__reg64_bound_u32(reg->umax_value))
 
 `__reg64_bound_u32(a)` is just `a > U32_MIN && a < U32_MAX` — "this value sits strictly inside the 32-bit range" (the strict comparisons exclude 0 and `U32_MAX` themselves).
 
-## The trigger
+## The trigger {#the-trigger}
 
 Testing each endpoint independently is the bug. The fix commit states the rule that was violated:
 
@@ -54,7 +54,7 @@ The commit shows the resulting verifier trace. After `if r2 >= 0x1` and `if w2 <
 
 `R2_w=inv1` means the verifier is now certain the register is exactly the constant 1. It is not. The bad `u32_min_value = 1` got promoted into a bad known-constant.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 From that point the verifier is reasoning about a register whose real run-time value it no longer knows. NVD's description of the CVE puts the impact plainly:
 
@@ -64,7 +64,7 @@ The two scorers disagree meaningfully on how hard that is. NVD's primary score p
 
 Unlike its sibling [CVE-2021-3490](alu32-bitwise-bounds.md), whose public exploit is catalogued on Packet Storm, no packaged public exploit for this one exists: NVD's reference list carries no `Exploit`-tagged entry, and there is no Exploit-DB entry.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 This is not the first time this exact code shape was fixed.
 
@@ -91,7 +91,7 @@ The unsigned block is right there in the diff context, immediately below the cha
 
 Both blocks trace back to the same parent commit, `3f50f132d840`, which introduced explicit ALU32 tracking in v5.7-rc1. That commit is also the `Fixes:` target of [CVE-2021-3490](alu32-bitwise-bounds.md), disclosed eighteen days after this one's fix was written. Adding a second, parallel representation of a register's value created a whole family of "keep the two in sync" obligations, and the bugs came in one at a time.
 
-## Resolution
+## Resolution {#resolution}
 
 [`10bf4e83167c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36) ("bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds", Daniel Borkmann) applies the same shape of fix to the unsigned block:
 
@@ -119,7 +119,7 @@ Before the fix the verifier believed it knew the offset precisely enough to comp
 
 The same bounds-propagation logic came back once more, publicly, six months later. In November 2021, [Starovoitov posted](https://lore.kernel.org/all/20211101222153.78759-1-alexei.starovoitov@gmail.com/) a further fix carrying `Fixes: 10bf4e83167c` — this page's fix, by name. It wasn't a security bug: "Before commit `10bf4e83167c` the umin was incorrectly ignored. The commit `10bf4e83167c` fixed the correctness issue, but pessimized propagation of 64-bit min max into 32-bit min max and corresponding var_off." A companion patch made the equivalent change on the *signed* side — that half's imprecision dated back not to this fix but a year earlier, to `3f50f132d840` itself — with a commit message explicit that its own `Fixes:` tag was only a hint: "The Fixes tag is a hint. There is no security bug here. The verifier was too conservative." The same series repaired both halves at once, once the security fix had shipped and there was time to revisit the precision it had cost.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **When a bug report names one variant, the fix's scope is every sibling in the same block.** The signed and unsigned propagation paths were adjacent, identically structured, and derived from the same commit. Fixing one and shipping is a defensible response to a bug report and an indefensible response to a bug *class*. Four and a half months and one CVE separated the two halves.
 
@@ -130,14 +130,14 @@ The same bounds-propagation logic came back once more, publicly, six months late
 !!! warning "Pattern to watch for"
     Grep for paired `if (cond_a) x = ...;` / `if (cond_b) y = ...;` blocks that jointly define a range, an extent, or a start/end pair. If narrowing one end without the other can produce a range that excludes real values, the two tests belong in one condition. And when reviewing any `Fixes:`-tagged patch, read the surrounding hunk context for a structurally identical block the patch did not touch — in this case the vulnerable code was visible, unchanged, in the trailing context immediately below the fix, in the fix's own diff.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](../bpf-verifier.md) — register bounds tracking and how the verifier reasons about scalar values
 - [ALU32 Bitwise Bounds Tracking](alu32-bitwise-bounds.md) — the other 2021 CVE against the same introducing commit, reported by the same researcher
 - [The jmp32 Bounds Regression](jmp32-bounds.md) — the 2020 CVE whose fallout produced `3f50f132d840` in the first place
 - [Unprivileged BPF Off by Default](unprivileged-bpf-off.md) — the hardening response to this run of verifier CVEs
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2021-31440](https://nvd.nist.gov/vuln/detail/CVE-2021-31440) — CVSS 7.0 HIGH (NVD) / 8.8 HIGH (ZDI), published May 21, 2021
 - [git.kernel.org: 10bf4e83167c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=10bf4e83167cc68595b85fd73bb91e8f2c086e36) — "bpf: Fix propagation of 32 bit unsigned bounds from 64 bit bounds", the fix

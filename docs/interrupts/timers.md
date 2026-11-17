@@ -1,8 +1,8 @@
-# Timers and hrtimers
+# Timers and hrtimers {#timers-and-hrtimers}
 
 > Scheduling kernel work at a specific time
 
-## Two timer subsystems
+## Two timer subsystems {#two-timer-subsystems}
 
 The kernel has two independent timer mechanisms:
 
@@ -13,7 +13,7 @@ The kernel has two independent timer mechanisms:
 | Callback context | softirq (TIMER_SOFTIRQ) | softirq or hardirq |
 | Use for | Coarse timeouts, watchdogs | High-precision, audio/video, userspace sleep |
 
-## timer_list: jiffies-based timers
+## timer_list: jiffies-based timers {#timer_list-jiffies-based-timers}
 
 `timer_list` is the traditional timer API. Timers expire on a jiffies boundary (typically 1ms–10ms depending on `HZ`).
 
@@ -27,7 +27,7 @@ struct timer_list {
 };
 ```
 
-### API
+### API {#api}
 
 ```c
 #include <linux/timer.h>
@@ -65,7 +65,7 @@ timer_delete_sync(&dev->watchdog);
 mod_timer(&dev->watchdog, jiffies + HZ);
 ```
 
-### Time conversion helpers
+### Time conversion helpers {#time-conversion-helpers}
 
 ```c
 jiffies + HZ           /* 1 second */
@@ -77,7 +77,7 @@ jiffies + usecs_to_jiffies(500)  /* 500µs */
 long remaining = timer->expires - jiffies;
 ```
 
-### The timer wheel, and why it was rebuilt in 2016
+### The timer wheel, and why it was rebuilt in 2016 {#the-timer-wheel-and-why-it-was-rebuilt-in-2016}
 
 Timers are stored in a hierarchical array structure called the **timer wheel** — but the wheel in current kernels is not the one that shipped for most of Linux's history, and the difference is itself a "why" story worth knowing.
 
@@ -96,7 +96,7 @@ each level 8× coarser than the one below, up to roughly 12 days.
 
 On each tick, the wheel advances and collects whatever's due out of *every* level whose clock has ticked over — a level-0 timer fires from level 0 at 1ms granularity, but a timer sitting in level 5 fires directly out of level 5's own bucket, at level 5's coarser granularity, once that level's clock reaches it. Nothing ever moves between levels to get there — that's the actual point of the rewrite: each level expires its own timers at its own resolution, instead of relying on a cascade step to hand coarser timers down to finer levels first. `timer_list` remains the mechanism for **timeouts**: things the kernel expects to cancel before they fire (a missing I/O completion, a missing network ACK), where being a few milliseconds late doesn't matter and where cheap insertion/removal matters more than precision. That's a different job from hrtimer's, below — hrtimer is for things that are expected to actually run, on time.
 
-## hrtimer: high-resolution timers
+## hrtimer: high-resolution timers {#hrtimer-high-resolution-timers}
 
 hrtimers were introduced in Linux 2.6.16 by Thomas Gleixner [(LWN)](https://lwn.net/Articles/167897/). They use `ktime_t` (nanosecond resolution) and a red-black tree ordered by expiry time. The closest expiry sets the hardware timer interrupt.
 
@@ -118,7 +118,7 @@ struct hrtimer {
 };
 ```
 
-### API
+### API {#api_1}
 
 ```c
 #include <linux/hrtimer.h>
@@ -161,7 +161,7 @@ hrtimer_try_to_cancel(&dev->timer);  /* cancel only if not firing */
 if (hrtimer_active(&dev->timer)) { ... }
 ```
 
-### Clock sources
+### Clock sources {#clock-sources}
 
 ```c
 CLOCK_MONOTONIC     /* always-increasing, not affected by settimeofday */
@@ -172,7 +172,7 @@ CLOCK_TAI           /* international atomic time */
 
 Use `CLOCK_MONOTONIC` for most kernel timers. Use `CLOCK_REALTIME` only when the timer must track wall-clock time.
 
-### Delivery modes
+### Delivery modes {#delivery-modes}
 
 ```c
 /* Soft mode: callback in HRTIMER_SOFTIRQ (default on non-RT) */
@@ -185,7 +185,7 @@ HRTIMER_MODE_REL_HARD
 HRTIMER_MODE_REL_PINNED
 ```
 
-## Userspace sleep: hrtimer under the hood
+## Userspace sleep: hrtimer under the hood {#userspace-sleep-hrtimer-under-the-hood}
 
 The kernel's `nanosleep()` syscall and `usleep()` in glibc are implemented via hrtimers. When a process calls `nanosleep(10ms)`:
 
@@ -206,7 +206,7 @@ cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 # tsc
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Softirqs](softirq.md) — Where TIMER_SOFTIRQ and HRTIMER_SOFTIRQ run
 - [Workqueues](workqueues.md) — For work deferred by a timer that needs to sleep

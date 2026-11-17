@@ -1,8 +1,8 @@
-# Clocksource and Clockevent Drivers
+# Clocksource and Clockevent Drivers {#clocksource-and-clockevent-drivers}
 
 > Hardware timers in the kernel: TSC, HPET, clockevents, and tick_device
 
-## Two clock abstractions
+## Two clock abstractions {#two-clock-abstractions}
 
 The kernel separates time into two concepts:
 
@@ -23,7 +23,7 @@ clocksource  →  timekeeping (clock_gettime, ktime_get)
 clockevent   →  tick device  →  scheduler tick, hrtimers, timers
 ```
 
-## struct clocksource
+## struct clocksource {#struct-clocksource}
 
 ```c
 /* include/linux/clocksource.h */
@@ -55,7 +55,7 @@ struct clocksource {
 };
 ```
 
-## TSC (Time Stamp Counter)
+## TSC (Time Stamp Counter) {#tsc-time-stamp-counter}
 
 The TSC is the primary clocksource on modern x86:
 
@@ -105,7 +105,7 @@ dmesg | grep "tsc: Detected"
 dmesg | grep tsc | grep -i "unstable\|skew\|reliable"
 ```
 
-### TSC reliability issues
+### TSC reliability issues {#tsc-reliability-issues}
 
 ```bash
 # TSC may be unreliable:
@@ -121,7 +121,7 @@ grep "constant_tsc\|nonstop_tsc" /proc/cpuinfo | head -2
 echo hpet > /sys/devices/system/clocksource/clocksource0/current_clocksource
 ```
 
-## Registering a clocksource
+## Registering a clocksource {#registering-a-clocksource}
 
 ```c
 /* For a custom hardware counter (e.g., in a SoC driver): */
@@ -145,7 +145,7 @@ clocksource_register_hz(&my_clocksource, 24000000); /* 24 MHz */
 /* Computes mult/shift from frequency */
 ```
 
-## struct clock_event_device
+## struct clock_event_device {#struct-clockeventdevice}
 
 ```c
 /* include/linux/clockchips.h */
@@ -181,7 +181,7 @@ struct clock_event_device {
 };
 ```
 
-## Local APIC timer (per-CPU clockevent)
+## Local APIC timer (per-CPU clockevent) {#local-apic-timer-per-cpu-clockevent}
 
 ```c
 /* arch/x86/kernel/apic/apic.c */
@@ -211,7 +211,7 @@ static int lapic_next_event(unsigned long delta,
 }
 ```
 
-## tick device and NOHZ
+## tick device and NOHZ {#tick-device-and-nohz}
 
 Each CPU has a **tick device** — the clockevent used for the scheduling tick:
 
@@ -243,7 +243,7 @@ cat /proc/timer_list | grep "Tick Device" | head -5
 # Requires: isolcpus + nohz_full= boot params (for RT/HPC)
 ```
 
-## Timekeeping: clocksource → wall clock
+## Timekeeping: clocksource → wall clock {#timekeeping-clocksource-wall-clock}
 
 ```c
 /* include/linux/timekeeper_internal.h */
@@ -284,7 +284,7 @@ ktime_t ktime_get(void)
 }
 ```
 
-## Observing timekeeping
+## Observing timekeeping {#observing-timekeeping}
 
 ```bash
 # Current time sources and offsets:
@@ -312,9 +312,9 @@ interval:s:1 {
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/clocksource.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clocksource.h) — definition of `struct clocksource`, the `CLOCK_SOURCE_*` flags, and frequency-to-mult/shift conversion helpers
 - [include/linux/clockchips.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clockchips.h) — `struct clock_event_device`, `CLOCK_EVT_FEAT_*` feature flags, and clockevent state accessors
@@ -324,12 +324,12 @@ interval:s:1 {
 - [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — `clocksource_tsc`, early boot calibration against PIT/HPET, and runtime instability detection
 - [arch/x86/kernel/apic/apic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/apic/apic.c) — `lapic_clockevent`, local APIC timer programming via `APIC_TMICT`, and broadcast handling
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — POSIX system call and vDSO fast-path for reading hardware clocksources
 - [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — kernel clock discipline interface for tuning frequency and phase offsets
 
-### Related pages
+### Related pages {#related-pages}
 
 - [High-Resolution Timers (hrtimers)](hrtimers.md) — high-resolution timers and scheduler tick emulation built on clockevents
 - [Timekeeping and Clocksources](timekeeping.md) — timekeeper architecture, `ktime_get()`, and wall-clock offsets
@@ -337,11 +337,11 @@ interval:s:1 {
 - [CPU Idle and C-States](../power/cpuidle.md) — dynamic tick suppression and `CLOCK_EVT_FEAT_C3STOP` broadcast timer management
 - [Real-Time Tuning](../sched/rt-tuning.md) — isolated CPUs and full tickless (`nohz_full`) operation for low-latency workloads
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Counting on the time stamp counter](https://lwn.net/Articles/209101/) — Jonathan Corbet, November 2006: the architectural introduction of the clocksource and clockevent abstractions
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — upstream kernel documentation covering the clocksource, clockevent, and timekeeper subsystems
 - [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — boot-time clock options: `clocksource=`, `tsc=reliable`, `nohz=`, and `nohz_full=`

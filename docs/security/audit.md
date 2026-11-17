@@ -1,8 +1,8 @@
-# Linux Audit Subsystem
+# Linux Audit Subsystem {#linux-audit-subsystem}
 
 > Mandatory security auditing: logging syscalls, file accesses, and user actions
 
-## What the audit subsystem does
+## What the audit subsystem does {#what-the-audit-subsystem-does}
 
 The Linux audit subsystem provides mandatory, tamper-resistant logging of security-relevant events:
 
@@ -25,7 +25,7 @@ systemctl enable auditd
 /etc/audit/auditd.conf           # daemon configuration
 ```
 
-## audit rules with auditctl
+## audit rules with auditctl {#audit-rules-with-auditctl}
 
 ```bash
 # Watch a file for reads and writes:
@@ -58,7 +58,7 @@ auditctl -D
 auditctl -e 2
 ```
 
-### Persistent rules
+### Persistent rules {#persistent-rules}
 
 ```bash
 # /etc/audit/rules.d/50-my-rules.rules
@@ -72,7 +72,7 @@ auditctl -e 2
 augenrules --load  # merges /etc/audit/rules.d/*.rules
 ```
 
-## Reading audit logs
+## Reading audit logs {#reading-audit-logs}
 
 ```bash
 # Raw format:
@@ -104,9 +104,9 @@ ausearch --start today --interpret | head -100
 ausearch --start recent -m EXECVE -i | tail -20
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### struct audit_context
+### struct audit_context {#struct-audit_context}
 
 Each syscall entry allocates (or reuses) an audit context:
 
@@ -137,7 +137,7 @@ struct audit_context {
 };
 ```
 
-### Audit record generation
+### Audit record generation {#audit-record-generation}
 
 ```c
 /* kernel/audit.c */
@@ -173,7 +173,7 @@ void __audit_syscall_exit(int success, long return_code)
 }
 ```
 
-### Audit path records
+### Audit path records {#audit-path-records}
 
 ```c
 /* fs/namei.c: called when a file path is resolved */
@@ -194,7 +194,7 @@ void audit_inode(struct filename *name, const struct dentry *dentry,
 }
 ```
 
-## Audit from userspace: audit_log_user_message
+## Audit from userspace: audit_log_user_message {#audit-from-userspace-auditloguser_message}
 
 ```c
 #include <libaudit.h>
@@ -213,7 +213,7 @@ audit_log_user_message(audit_fd, AUDIT_USER_AUTH,
 audit_close(audit_fd);
 ```
 
-## Querying audit logs programmatically
+## Querying audit logs programmatically {#querying-audit-logs-programmatically}
 
 ```bash
 # ausearch: powerful query tool
@@ -230,7 +230,7 @@ ausearch -ua 1000 -sc setuid -i
 ausearch --format enriched -i | head -50
 ```
 
-## Integrity Measurement Architecture (IMA)
+## Integrity Measurement Architecture (IMA) {#integrity-measurement-architecture-ima}
 
 IMA builds on audit to provide file integrity:
 
@@ -248,7 +248,7 @@ IMA builds on audit to provide file integrity:
 echo "measure func=FILE_MMAP mask=MAY_EXEC" >> /etc/ima/ima-policy
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LSM Framework](lsm.md) — LSM hooks that feed audit
 - [Capabilities](capabilities.md) — capability changes trigger audit events

@@ -1,8 +1,8 @@
-# PCI Drivers
+# PCI Drivers {#pci-drivers}
 
 > Writing a PCI device driver: probing, BAR mapping, and MSI-X interrupts
 
-## PCI bus overview
+## PCI bus overview {#pci-bus-overview}
 
 PCI (Peripheral Component Interconnect) is the standard bus for connecting devices to a CPU. PCIe (PCI Express) is the modern serial version, but the driver API is largely the same. The `pci_register_driver()` API and `struct pci_driver` were introduced in Linux 2.4, replacing the ad-hoc probing style of 2.2 and earlier [(Linux Device Drivers, 3rd ed., ch. 12)](https://lwn.net/Kernel/LDD3/).
 
@@ -17,7 +17,7 @@ Each PCI device has:
   - Interrupt: legacy INTx, MSI, or MSI-X
 ```
 
-## Registering a PCI driver
+## Registering a PCI driver {#registering-a-pci-driver}
 
 ```c
 #include <linux/pci.h>
@@ -58,7 +58,7 @@ module_exit(mydev_exit);
 
 The kernel calls `probe()` when a matching device is found (at boot, hot-plug, or module load).
 
-## Probe function
+## Probe function {#probe-function}
 
 ```c
 struct mydev {
@@ -148,7 +148,7 @@ static void mydev_remove(struct pci_dev *pdev)
 }
 ```
 
-## BAR mapping and MMIO access
+## BAR mapping and MMIO access {#bar-mapping-and-mmio-access}
 
 BARs (Base Address Registers) are the windows through which the CPU accesses device memory/registers:
 
@@ -182,7 +182,7 @@ setpci -s <bus:dev.fn> VENDOR_ID.w   # read vendor ID
 setpci -s <bus:dev.fn> STATUS.w      # read status register
 ```
 
-## MSI and MSI-X interrupts
+## MSI and MSI-X interrupts {#msi-and-msi-x-interrupts}
 
 Modern devices use MSI (Message Signaled Interrupts) instead of legacy edge/level INTx signals. MSI was introduced in the PCI 2.2 specification (1999); MSI-X, which allows up to 2048 independent vectors, was added in PCI 3.0 [(Wikipedia: Message Signaled Interrupts)](https://en.wikipedia.org/wiki/Message_Signaled_Interrupts):
 
@@ -190,7 +190,7 @@ Modern devices use MSI (Message Signaled Interrupts) instead of legacy edge/leve
 - **MSI**: single interrupt vector, device writes to a magic memory address
 - **MSI-X**: up to 2048 independent interrupt vectors, per-vector affinity
 
-### MSI setup (single interrupt)
+### MSI setup (single interrupt) {#msi-setup-single-interrupt}
 
 ```c
 /* Request a single MSI interrupt */
@@ -209,7 +209,7 @@ free_irq(pci_irq_vector(pdev, 0), dev);
 pci_free_irq_vectors(pdev);
 ```
 
-### MSI-X setup (multiple vectors)
+### MSI-X setup (multiple vectors) {#msi-x-setup-multiple-vectors}
 
 ```c
 #define MYDEV_NUM_QUEUES 4
@@ -251,7 +251,7 @@ static int mydev_setup_interrupts(struct mydev *dev)
 }
 ```
 
-### MSI-X interrupt handler
+### MSI-X interrupt handler {#msi-x-interrupt-handler}
 
 ```c
 static irqreturn_t mydev_queue_isr(int irq, void *data)
@@ -274,7 +274,7 @@ static irqreturn_t mydev_queue_isr(int irq, void *data)
 }
 ```
 
-## DMA with PCI
+## DMA with PCI {#dma-with-pci}
 
 ```c
 /* Allocate coherent DMA memory (CPU and device see the same data) */
@@ -298,7 +298,7 @@ dma_unmap_single(&pdev->dev, dma, skb->len, DMA_TO_DEVICE);
 /* Now safe to access skb->data */
 ```
 
-## Reading PCI configuration space from a driver
+## Reading PCI configuration space from a driver {#reading-pci-configuration-space-from-a-driver}
 
 ```c
 u16 vendor, device;
@@ -317,7 +317,7 @@ int speed = lnksta & PCI_EXP_LNKSTA_CLS;  /* link speed */
 int width = (lnksta & PCI_EXP_LNKSTA_NLW) >> 4;  /* link width */
 ```
 
-## Using devm_ helpers
+## Using devm_ helpers {#using-devm_-helpers}
 
 `devm_*` (device-managed) resources are automatically freed when the device is removed:
 
@@ -334,7 +334,7 @@ ret = devm_request_irq(&pdev->dev, irq, handler, 0, "mydev", dev);
 /* No manual cleanup needed in .remove for devm_ resources */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Linux Device Model](device-model.md) — struct device, driver binding
 - [Platform Drivers](platform-driver.md) — non-discoverable devices

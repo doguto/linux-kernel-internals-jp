@@ -1,4 +1,4 @@
-# War Stories: io_uring Bugs and Incidents
+# War Stories: io_uring Bugs and Incidents {#war-stories-io_uring-bugs-and-incidents}
 
 > Real vulnerabilities, crashes, and behavioral surprises from io_uring's first years — what broke, why, and what the kernel learned
 
@@ -10,9 +10,9 @@ These are not theoretical risks. Each caused real harm in production: privilege 
 
 ---
 
-## Case 1: CVE-2022-29582 — use-after-free in the fixed file table
+## Case 1: CVE-2022-29582 — use-after-free in the fixed file table {#case-1-cve-2022-29582-use-after-free-in-the-fixed-file-table}
 
-### Before state
+### Before state {#before-state}
 
 io_uring supports *fixed files*: the application registers an array of file descriptors with `IORING_REGISTER_FILES`, and subsequent SQEs reference them by index rather than by fd. The kernel holds a reference-counted array of `struct file *` pointers — `io_ring_ctx->file_data` — and each in-flight operation increments a reference on the relevant slot before use and decrements it on completion.
 
@@ -20,7 +20,7 @@ The registration and update path lives in `io_uring/rsrc.c`. File slots can be u
 
 Prior to the fix, the code that handled file updates under concurrent operation teardown had a race window.
 
-### The trigger
+### The trigger {#the-trigger}
 
 The vulnerability was a race between two concurrent paths:
 
@@ -31,13 +31,13 @@ The update path checked whether a slot was "in use" before replacing it, but the
 
 The result was a use-after-free on the `struct file` object. The freed object remained partially valid for long enough (the `f_op` pointer was often still readable) that the corruption was exploitable as a local privilege escalation primitive.
 
-### Observed behavior
+### Observed behavior {#observed-behavior}
 
 From a user's perspective, no error was visible during normal operation. The race was narrow but not too narrow to hit reliably: exploit tooling documented in the Qualys advisory could trigger the condition repeatedly by racing `io_uring_enter` (to drive completions) against `io_uring_register` with `IORING_REGISTER_FILES_UPDATE`.
 
 On an unpatched kernel the bug could be reached by any local user with the ability to create an io_uring ring — no special capability required. The CVSS score was 7.8 (High). The vulnerability affected kernels from the introduction of fixed files through 5.17.2, and was also present in the 5.15 LTS tree through 5.15.33.
 
-### Why it happened — kernel internals
+### Why it happened — kernel internals {#why-it-happened-kernel-internals}
 
 The lifetime of a fixed file slot had two relevant reference counts:
 
@@ -60,7 +60,7 @@ decrement slot->refcount
 
 The kernel code involved was `io_uring/rsrc.c`, specifically the fixed file registration, update, and teardown functions.
 
-### Resolution
+### Resolution {#resolution}
 
 The fix tightened the lifetime contract between the update path and the completion path. The update path was changed to use a deferred replacement: rather than immediately freeing the old file when the reference count appeared zero, it scheduled the actual `fput` through a mechanism that guaranteed all concurrent accessors had completed. The reference counting around slot borrow/release was also corrected to use appropriate atomic operations with the right ordering.
 
@@ -74,7 +74,7 @@ The fix was not backported to 5.4 LTS because the fixed-file update feature intr
 
 A detailed public exploitation analysis was published by Qualys, demonstrating full local privilege escalation to root on a default Ubuntu installation. The writeup is referenced in [Further reading](#further-reading).
 
-### What it taught us
+### What it taught us {#what-it-taught-us}
 
 **Dynamic update paths on shared kernel objects require careful synchronization.** Fixed files introduced an optimization (avoiding per-operation `fget`/`fput` overhead by pre-registering files) but the update mechanism needed to reason carefully about objects that could be in use on other threads. The pattern — "check reference count, if zero then free" — is unsafe without proper barriers and is a recurring source of UAF bugs in concurrent kernel code.
 
@@ -85,21 +85,21 @@ A detailed public exploitation analysis was published by Qualys, demonstrating f
 
 ---
 
-## Case 2: CVE-2023-2598 — integer overflow in fixed buffer registration
+## Case 2: CVE-2023-2598 — integer overflow in fixed buffer registration {#case-2-cve-2023-2598-integer-overflow-in-fixed-buffer-registration}
 
-### Before state
+### Before state {#before-state_1}
 
 io_uring supports *fixed buffers*: the application calls `io_uring_register` with `IORING_REGISTER_BUFFERS` to pre-register a set of user-space memory regions with the kernel. The kernel pins the pages, maps them into the io_uring context, and subsequent read/write operations that reference these buffers by index (`IORING_OP_READ_FIXED`, `IORING_OP_WRITE_FIXED`) can skip the per-operation `get_user_pages` overhead.
 
 The registration code in `io_uring/rsrc.c` accepts a `struct iovec` array from userspace: each entry specifies a base address and length. The kernel must compute the total number of pages that need to be pinned across all buffer entries to determine how much memory to allocate for the internal accounting structures.
 
-### The trigger
+### The trigger {#the-trigger_1}
 
 When computing the total page count across all registered buffers, the registration code summed page counts per buffer. The page count per individual buffer was calculated by dividing the buffer length by `PAGE_SIZE` (with alignment handling). The accumulation was done in a variable that was not wide enough — it could overflow when the sum of pages across all registered buffers exceeded `UINT_MAX` (on 32-bit paths) or when specific alignment edge cases were hit.
 
 An attacker could register a set of buffers whose total page count wrapped around to a small value. The kernel would then allocate an internal page accounting array sized for the small (overflowed) count, but subsequent operations would access that array as if it were sized for the true, larger count — producing an out-of-bounds write into kernel memory.
 
-### Observed behavior
+### Observed behavior {#observed-behavior_1}
 
 The bug was not externally visible during registration. `IORING_REGISTER_BUFFERS` returned success. The corruption manifested later, during operations that used the fixed buffers, when the undersized internal array was accessed past its end.
 
@@ -107,7 +107,7 @@ On an unpatched kernel, a local user could craft a set of buffer registrations w
 
 The affected kernel versions spanned from the introduction of fixed buffers (Linux 5.1) through **Linux 6.2**. The fix landed in **Linux 6.3**.
 
-### Why it happened — kernel internals
+### Why it happened — kernel internals {#why-it-happened-kernel-internals_1}
 
 The core of the overflow was in the page-counting path inside `io_sqe_buffers_register()` in `io_uring/rsrc.c`. Each buffer's page count was computed correctly in isolation, but the accumulator holding the running total was either a `u32` or was used in a context where it could wrap. The subsequent `kvmalloc` call for the internal `struct io_mapped_ubuf` array was sized based on the number of buffers (not the total page count), but the page-tracking bookkeeping array that relied on the total count was what overflowed.
 
@@ -128,7 +128,7 @@ struct page **pages = kvmalloc_array(total_pages, sizeof(*pages), GFP_KERNEL);
 
 The fix changed the accumulator to `size_t` (or equivalent unsigned long) and added an explicit overflow check that returns `-EINVAL` if the total page count would exceed `ULONG_MAX` or a configured maximum. It also added validation that each individual buffer's length does not exceed reasonable bounds before accumulation.
 
-### Resolution
+### Resolution {#resolution_1}
 
 The fix in Linux 6.3 corrected the type of the accumulator and added bounds checks that reject registration calls whose total page count exceeds a safe limit. Importantly, the check was added *before* any allocation, so a crafted registration simply returns an error rather than allocating an undersized structure.
 
@@ -136,7 +136,7 @@ The fix was backported to the 6.1 and 5.15 LTS trees. Systems running kernels be
 
 The source of the vulnerability — `io_uring/rsrc.c:io_sqe_buffers_register()` — is the same file implicated in CVE-2022-29582, highlighting that fixed resource registration paths have been a consistent source of bugs.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_1}
 
 **Integer overflow in size calculations before memory allocation is one of the most common classes of kernel vulnerability.** The pattern is well-known: if you compute `n * sizeof(T)` or `sum(sizes)` without overflow checking and then allocate based on the result, an overflow turns a large allocation intent into a small allocation with a large subsequent access. The fix is always the same: use `size_add`/`size_mul` overflow-checking helpers (or equivalent explicit checks) before any allocation whose size derives from user-supplied inputs.
 
@@ -154,9 +154,9 @@ The source of the vulnerability — `io_uring/rsrc.c:io_sqe_buffers_register()` 
 
 ---
 
-## Case 3: SQPOLL thread crash on CPU hotplug
+## Case 3: SQPOLL thread crash on CPU hotplug {#case-3-sqpoll-thread-crash-on-cpu-hotplug}
 
-### Before state
+### Before state {#before-state_2}
 
 `IORING_SETUP_SQPOLL` creates a dedicated kernel thread — the SQ polling thread — whose sole job is to poll the submission ring in a tight loop, draining SQEs without requiring the application to make `io_uring_enter` syscalls. This is the lowest-latency submission path: the application writes SQEs into the shared ring and the kernel thread picks them up within its poll interval.
 
@@ -164,7 +164,7 @@ The SQPOLL thread is bound to a CPU when the ring is created. If `IORING_SETUP_S
 
 CPU hotplug is the Linux mechanism for taking CPUs online or offline at runtime — used in cloud environments for power management, in NUMA systems for topology changes, and by hypervisors when adjusting vCPU counts for running VMs.
 
-### The trigger
+### The trigger {#the-trigger_2}
 
 When a CPU is taken offline (`CPU_DOWN` notifier chain), all threads running on that CPU must be migrated to other CPUs. The kernel's CPU hotplug infrastructure sends notifications to subsystems that have per-CPU threads or state, giving them an opportunity to migrate or quiesce before the CPU is removed from the scheduler's runqueue set.
 
@@ -172,7 +172,7 @@ io_uring's SQPOLL thread did not properly register with the CPU hotplug notifica
 
 The problem was particularly acute when `IORING_SETUP_SQ_AFF` had pinned the thread to a specific CPU: the thread had an explicit CPU affinity mask containing only the now-offline CPU, and the scheduler could not migrate it anywhere.
 
-### Observed behavior
+### Observed behavior {#observed-behavior_2}
 
 In cloud environments that perform live CPU hotplug — either for power efficiency (offline unused vCPUs) or during live migration — SQPOLL rings created before a hotplug event would start misbehaving afterward. SQEs written to the ring were not processed; the application appeared to submit work but no completions arrived. In more severe cases, a kernel panic occurred during the hotplug sequence itself when the CPU removal attempted to quiesce threads it could not migrate.
 
@@ -180,7 +180,7 @@ The issue was intermittent because it depended on SQPOLL rings being active at t
 
 The bug was reported and traced through kernel commit logs in discussions of SQPOLL robustness, and fixes were applied across the 5.x kernel series.
 
-### Why it happened — kernel internals
+### Why it happened — kernel internals {#why-it-happened-kernel-internals_2}
 
 The SQPOLL thread was created with `kthread_create_on_cpu()` or equivalent, which pins the thread to a specific CPU at creation time. The CPU affinity was set unconditionally and was not updated when that CPU went offline.
 
@@ -194,7 +194,7 @@ The fix required:
 2. In that callback, either migrating the SQPOLL thread to another CPU (by updating its affinity mask to a valid set) or — if the thread was pinned via `IORING_SETUP_SQ_AFF` to a specific CPU that is going offline — signaling an error condition to the ring and waking any blocked submitters.
 3. Ensuring that the CPU number stored in SQPOLL state structures was validated before use or updated atomically during hotplug transitions.
 
-### Resolution
+### Resolution {#resolution_2}
 
 The kernel patches that addressed SQPOLL CPU hotplug handling added io_uring to the `cpuhp_setup_state` infrastructure with appropriate prepare and cleanup callbacks. The SQPOLL thread's CPU affinity handling was also hardened: on systems where the pinned CPU goes offline, the thread migrates to the nearest available CPU rather than becoming unschedulable.
 
@@ -202,7 +202,7 @@ Applications that use `IORING_SETUP_SQ_AFF` to pin the SQPOLL thread to a specif
 
 For applications that do not strictly require a specific CPU affinity for the SQPOLL thread, omitting `IORING_SETUP_SQ_AFF` is the safer choice: the kernel assigns the thread to a CPU and manages migration automatically.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_2}
 
 **Kernel threads with CPU affinity must participate in the hotplug notifier chain.** The CPU hotplug infrastructure requires active cooperation: subsystems cannot assume that a CPU they depend on will remain online. This is a known requirement for device drivers and subsystems that maintain per-CPU state, but it was not fully handled in io_uring's initial SQPOLL implementation.
 
@@ -215,15 +215,15 @@ For applications that do not strictly require a specific CPU affinity for the SQ
 
 ---
 
-## Case 4: io_uring as a seccomp bypass — restrictions in Android, Chrome OS, and gVisor
+## Case 4: io_uring as a seccomp bypass — restrictions in Android, Chrome OS, and gVisor {#case-4-io_uring-as-a-seccomp-bypass-restrictions-in-android-chrome-os-and-gvisor}
 
-### Before state
+### Before state {#before-state_3}
 
 seccomp-bpf is the standard Linux mechanism for syscall filtering in sandboxes. A process installs a BPF program that is evaluated at the syscall entry point (`seccomp_run_filters`). For every syscall the process makes, the BPF program decides whether to allow it, return an error, or kill the process. This is the foundation of the sandbox in Chrome, Android apps, Flatpak applications, and container runtimes.
 
 The model is straightforward: work happens inside syscalls, syscalls go through the filter, the filter enforces the policy. Historically this was a sound assumption.
 
-### The trigger
+### The trigger {#the-trigger_3}
 
 io_uring broke the assumption. When a process submits an `IORING_OP_OPENAT` SQE, the kernel does not immediately open the file in the context of the submitting process's syscall. Instead, if the operation cannot complete inline, it is queued to an io-wq worker thread. That thread then calls `do_filp_open()` directly — it executes the equivalent of `openat`, but from within the kernel, not through the syscall entry path. seccomp filters are evaluated at syscall entry; they are never invoked for work performed by io-wq threads.
 
@@ -231,7 +231,7 @@ The consequence is that a process running under a strict seccomp policy that blo
 
 `IORING_SETUP_SQPOLL` makes this worse. With SQPOLL, the application does not need to call `io_uring_enter` after setup — it just writes SQEs into the shared ring memory. Since `io_uring_enter` is the one syscall that could be blocked by seccomp to prevent ring usage after setup, SQPOLL eliminates even that chokepoint. An application that sets up a ring before installing its seccomp filter (or that passes a ring fd across a trust boundary) retains full I/O capability with no syscall surface for the filter to act on.
 
-### Observed behavior
+### Observed behavior {#observed-behavior_3}
 
 The bypass was not a single incident with a single discoverer. It was noticed independently by multiple security researchers examining io_uring's interaction with sandboxing infrastructure, and was documented publicly in the Linux security community around 2022-2023.
 
@@ -241,7 +241,7 @@ The practical impact: any seccomp-based sandbox that allowed `io_uring_setup` (o
 - **Chrome OS**: renderer and GPU process sandboxes use seccomp-bpf to restrict syscalls available to potentially malicious web content. io_uring provided a path around those restrictions.
 - **gVisor**: the gVisor sentry intercepts all syscalls from guest processes to enforce its security model. io_uring's async execution model is fundamentally incompatible with sentry-level interposition — io-wq threads do not issue guest syscalls that the sentry can intercept.
 
-### Why it happened — kernel internals
+### Why it happened — kernel internals {#why-it-happened-kernel-internals_3}
 
 The seccomp model has always assumed that interesting work happens through the syscall gate. For 30 years, that assumption held: if you blocked the syscall, you blocked the capability. io_uring created a new execution path that performs equivalent work through a kernel-internal route that bypasses the gate.
 
@@ -251,7 +251,7 @@ The kernel's own documentation acknowledges the issue. There is no simple in-ker
 
 The LSM hooks added in Linux 5.12 for io_uring (`security_uring_override_creds`, `security_uring_sqpoll`, `security_uring_cmd`) help SELinux and AppArmor enforce coarser-grained policy (e.g., deny SQPOLL thread creation) but do not provide syscall-level filtering.
 
-### Resolution
+### Resolution {#resolution_3}
 
 The platforms affected chose restriction over mitigation:
 
@@ -272,7 +272,7 @@ The effective mitigation for seccomp-based sandboxes remains: **block `io_uring_
 seccomp policy rule: SCMP_SYS(io_uring_setup) -> SCMP_ACT_ERRNO(ENOSYS)
 ```
 
-### What it taught us
+### What it taught us {#what-it-taught-us_3}
 
 **New I/O models require re-examination of security abstractions, not just addition of new hooks.** seccomp worked by controlling the syscall gate. io_uring bypassed the gate entirely for async work. The correct response was not to add io_uring-specific syscall hooks on top of seccomp — it was to recognize that the security model needed updating. Android, Chrome OS, and gVisor made the pragmatic choice: if the new interface cannot be secured within the existing model, restrict access to it.
 
@@ -294,15 +294,15 @@ seccomp policy rule: SCMP_SYS(io_uring_setup) -> SCMP_ACT_ERRNO(ENOSYS)
 
 ---
 
-## Case 5: CQ ring overflow and silent completion loss
+## Case 5: CQ ring overflow and silent completion loss {#case-5-cq-ring-overflow-and-silent-completion-loss}
 
-### Before state
+### Before state {#before-state_4}
 
 io_uring's completion model is built around the CQ ring: a power-of-two circular buffer of `struct io_uring_cqe` entries (completion queue entries) mapped into both kernel and user address space. The kernel writes completions into the ring by advancing the tail pointer; the application reads them by advancing the head pointer. As long as the application reads completions at least as fast as the kernel produces them, the ring never fills.
 
 The CQ ring size is set at `io_uring_setup` time. The default is twice the SQ ring size (`cq_entries = sq_entries * 2`). Alternatively, `IORING_SETUP_CQSIZE` allows specifying a larger CQ at setup time.
 
-### The trigger
+### The trigger {#the-trigger_4}
 
 If the application does not drain the CQ ring fast enough — or if a burst of completions arrives faster than the application can read them — the ring fills. The kernel cannot write new CQEs into a full ring because it cannot advance the tail past the head.
 
@@ -313,7 +313,7 @@ This is not a hypothetical: it happens in production when:
 - A large number of linked requests (`IOSQE_IO_LINK`) complete in rapid succession.
 - A timeout or cancellation storm produces many completions simultaneously.
 
-### Observed behavior
+### Observed behavior {#observed-behavior_4}
 
 When the CQ ring fills, the kernel does not block waiting for space. Instead, it increments an overflow counter in `io_ring_ctx` and — in older kernel versions — dropped the CQE on the floor entirely. In newer versions (Linux 5.9+), the kernel attempts to cache overflowed CQEs in an internal list (`io_ring_ctx->cq_overflow_list`) and flushes them to the ring when space becomes available.
 
@@ -325,7 +325,7 @@ The consequence of the older behavior was straightforward: completions were sile
 
 The newer overflow-list behavior does not drop completions, but it introduces backpressure: the kernel will not let the application submit new SQEs while the overflow list is non-empty. New submissions return `-EBUSY` or are silently not processed until the backlog is drained. An application that does not check `io_uring_enter`'s return value or does not check for the `IORING_CQ_OVERFLOW` bit in `sq_flags` could submit work that the kernel quietly holds, mistaking a stalled ring for a normally operating one.
 
-### Why it happened — kernel internals
+### Why it happened — kernel internals {#why-it-happened-kernel-internals_4}
 
 The overflow handling went through several iterations as the kernel learned what "correct" behavior should be:
 
@@ -337,7 +337,7 @@ The overflow handling went through several iterations as the kernel learned what
 
 The root cause was a design tension: the CQ ring is a lock-free structure. The kernel writes completions by advancing the CQ tail with a store-release, and the application reads them by advancing the CQ head. There is no mutual exclusion. If the ring is full, the kernel has nowhere to write without overwriting unread entries — a destructive operation. The original implementation chose to drop rather than block (dropping is always safe for lock-free completion; blocking would require synchronization).
 
-### Resolution
+### Resolution {#resolution_4}
 
 The behavioral fix is in the kernel (5.9+), but the application-side fix requires active participation:
 
@@ -410,7 +410,7 @@ if (overflow > last_overflow) {
 }
 ```
 
-### What it taught us
+### What it taught us {#what-it-taught-us_4}
 
 **Lock-free data structures require explicit backpressure handling.** The CQ ring's lock-free design is what makes io_uring fast, but lock-free rings do not have a natural backpressure mechanism. The application must ensure it drains the ring faster than the kernel fills it, or use a larger ring. This is a design constraint that must be communicated clearly to application authors — and it was not, in io_uring's early documentation.
 
@@ -434,7 +434,7 @@ if (overflow > last_overflow) {
 
 ---
 
-## Common threads
+## Common threads {#common-threads}
 
 These five incidents share a set of structural patterns worth recognizing:
 
@@ -453,7 +453,7 @@ Bugs in io_uring tend to be discovered not through fuzzing the normal path but t
 
 ---
 
-## See also
+## See also {#see-also}
 
 - [Security and Hardening](security.md) — Attack surface, seccomp bypass, CVE overview, and lockdown patterns
 - [Architecture and Rings](io-uring-arch.md) — SQ/CQ layout, SQE/CQE structures, and the submission model
@@ -463,7 +463,7 @@ Bugs in io_uring tend to be discovered not through fuzzing the normal path but t
 
 ---
 
-## External references
+## External references {#external-references}
 
 - [CVE-2022-29582 — NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2022-29582) — Affected versions and CVSS scoring
 - [Qualys CVE-2022-29582 exploitation writeup](https://www.qualys.com/2022/05/02/cve-2022-29582/lpe-io-uring.txt) — Detailed analysis of the UAF and privilege escalation technique
@@ -474,7 +474,7 @@ Bugs in io_uring tend to be discovered not through fuzzing the normal path but t
 - [io_uring/io-wq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io-wq.c) — Worker thread pool (async execution path underlying the seccomp bypass)
 - [io_uring man page](https://man7.org/linux/man-pages/man7/io_uring.7.html) — `io_uring_params`, ring flags, and feature bits
 
-## Further reading
+## Further reading {#further-reading}
 
 - [security.md](security.md) — Full treatment of the seccomp bypass (Case 4), `IORING_REGISTER_RESTRICTIONS`, and per-platform lockdown decisions
 - [fixed-buffers.md](fixed-buffers.md) — How fixed buffer registration works and the performance trade-offs that made the CVE-2023-2598 code path attractive to attackers

@@ -1,8 +1,8 @@
-# HID: One Driver for Every Keyboard, Mouse, and Gamepad
+# HID: One Driver for Every Keyboard, Mouse, and Gamepad {#hid-one-driver-for-every-keyboard-mouse-and-gamepad}
 
 > The device carries its own datasheet: a report descriptor the kernel parses at connect time, so one generic driver handles almost anything with buttons on it
 
-## The problem: a keyboard is not a network card
+## The problem: a keyboard is not a network card {#the-problem-a-keyboard-is-not-a-network-card}
 
 A network card driver has to know its chip: which registers hold the DMA ring, how to read the link-partner's autonegotiation state, what the interrupt-cause bitmap means. That knowledge is specific to one chip family and has to be hand-written once per family. If input devices worked the same way, Linux would need a bespoke driver for every mouse, keyboard, gamepad, graphics tablet, and volume-control knob ever built — thousands of small, mostly-identical drivers differing only in which byte in a report means "left button."
 
@@ -10,7 +10,7 @@ USB's Human Interface Device class, ratified in 1996, was designed specifically 
 
 Linux's HID subsystem, rooted at `drivers/hid/`, is built around that same idea: one transport-agnostic core (`drivers/hid/hid-core.c`) that knows how to parse a report descriptor and turn raw report bytes into typed field values, one generic input-mapping layer (`drivers/hid/hid-input.c`) that turns those typed values into evdev events, and a thin per-transport shim — USB-HID, BT-HIDP, I2C-HID — that only has to know how to move bytes back and forth. A plain mouse or keyboard needs no vendor-specific driver at all: `hid-generic` matches any device the core can parse and lets the generic tables do all the work. Only devices with a broken or unusual report descriptor, or ones that want to expose something the generic mapping tables don't already know about, need one of the just over 150 small quirk drivers under `drivers/hid/`.
 
-## Report descriptors: the device's own datasheet
+## Report descriptors: the device's own datasheet {#report-descriptors-the-devices-own-datasheet}
 
 A report descriptor is a short program in a stack-based, TLV-like byte code: each **item** is one to five bytes — a one-byte prefix encoding an item *type* and *tag*, followed by zero, one, two, or four bytes of value. Items come in three types, and the parser (below) dispatches on that type:
 
@@ -81,7 +81,7 @@ End Collection
 
 Every `Input`/`Output`/`Feature` item closes out one **field**: whatever `Usage`(s), `Logical Minimum`/`Maximum`, `Report Size`, and `Report Count` are currently in effect at that point become that field's shape, and the item's own flags (`Data`/`Constant`, `Variable`/`Array`, `Absolute`/`Relative`) say how to interpret the bits. This mouse example produces a 3-byte input report: byte 0's low 3 bits are the button states (5 bits of padding above them), bytes 1 and 2 are signed relative X and Y deltas. Nothing in that shape is hardcoded into any kernel driver — it's exactly what parsing the descriptor below reconstructs.
 
-## Parsing: `hid_open_report()` and `struct hid_parser`
+## Parsing: `hid_open_report()` and `struct hid_parser` {#parsing-hidopenreport-and-struct-hid_parser}
 
 Every HID driver's `probe()` calls `hid_parse()` (a thin wrapper around `hid_open_report()`) before doing anything else:
 
@@ -175,7 +175,7 @@ while ((next = fetch_item(start, end, &item)) != NULL) {
 
 `hid_parser_global()` updates the persistent state (current Usage Page, Report Size, Report Count, ...) in `struct hid_parser`'s `global` field (and its `global_stack`, for `Push`/`Pop`); `hid_parser_local()` accumulates the Usage(s) that apply to the *next* main item; `hid_parser_main()` is where an `Input`/`Output`/`Feature`/`Collection` item actually consumes that accumulated state and allocates a `struct hid_field` (or opens/closes a `struct hid_collection`) inside the device's `struct hid_report`. By the time `hid_open_report()` returns, the entire descriptor has been turned into the object graph the rest of the subsystem operates on — no further byte-level parsing happens on the hot path of reading actual reports.
 
-## `struct hid_device` and the parsed object graph
+## `struct hid_device` and the parsed object graph {#struct-hid_device-and-the-parsed-object-graph}
 
 `struct hid_device` (`include/linux/hid.h`) is the parsed device: descriptor bytes, the report tables the parser built, transport plumbing, and the attached driver, all in one object:
 
@@ -315,7 +315,7 @@ struct hid_collection {
 };
 ```
 
-## The driver model: `struct hid_driver`
+## The driver model: `struct hid_driver` {#the-driver-model-struct-hid_driver}
 
 A HID driver — whether the catch-all `hid-generic` or a vendor-specific quirk driver — registers a `struct hid_driver`, matched against connecting devices by `.id_table` (a `struct hid_device_id` array, matched on bus/vendor/product, built with helper macros like `HID_USB_DEVICE()`, `HID_BLUETOOTH_DEVICE()`, `HID_I2C_DEVICE()` — the same struct works across transports, since matching happens above the transport layer):
 
@@ -375,7 +375,7 @@ The callbacks that matter for overriding generic report handling, in the order t
 - **`.raw_event`** — called for every incoming report, before any field extraction happens, with the raw report bytes. The escape hatch for a driver that needs to intercept a report before generic processing, or that wants to synthesize input events from bytes the generic field-extraction logic wouldn't know how to interpret at all.
 - **`.event`** — called once per extracted field *value*, after generic field extraction but before (or instead of) the generic `hidinput_hid_event()` translation to `input_event()`.
 
-## Transport layering: `struct hid_ll_driver`
+## Transport layering: `struct hid_ll_driver` {#transport-layering-struct-hidlldriver}
 
 Nothing described so far — descriptor parsing, `struct hid_device`, `hid-input.c`'s mapping — knows or cares how report bytes actually reached the kernel. That's deliberately factored out into `struct hid_ll_driver` ("low-level driver"), the interface a transport implements once and the core calls through for every device on that transport:
 
@@ -451,7 +451,7 @@ static const struct hid_ll_driver hidp_hid_driver = {
 
 The kernel's own transport documentation names all three real-world transports the abstraction was built for: "USB, I2C, Bluetooth-l2cap" at the wire level, surfaced through "USB-HID, I2C-HID, BT-HIDP" drivers (`Documentation/hid/hid-transport.rst`). I2C-HID (`drivers/hid/i2c-hid/`) is the third — common on laptop touchpads and touchscreens — using a single I2C bus transaction protocol instead of BT-HIDP's two separate L2CAP channels or USB-HID's separate control/interrupt endpoints (I2C-HID is a Microsoft-authored addition to the class, not part of the original USB HID spec). A driver author never has to care which of these actually moved a given report's bytes; `struct hid_device->ll_driver` just points at whichever one attached this device.
 
-## Mapping to evdev: `hid_map_usage()` and `hid-input.c`
+## Mapping to evdev: `hid_map_usage()` and `hid-input.c` {#mapping-to-evdev-hidmapusage-and-hid-inputc}
 
 Parsing produces `struct hid_field`s full of `struct hid_usage`s with a raw `usage->hid` code and nothing else — `usage->type`/`usage->code` are unset. Turning that into something `evdev` understands (an `EV_KEY`/`KEY_A` pair, an `EV_ABS`/`ABS_X` pair) is `hid-input.c`'s job, done once per usage at connect time in `hidinput_configure_usage()`. The mapping itself is a small, generic inline helper:
 
@@ -560,7 +560,7 @@ ret = hid_report_raw_event(hid, type, data, bufsize, size, interrupt);
 
 `hid_report_raw_event()` hands the whole report to `hid_process_report()`, which extracts each field's bit-packed value and, for every usage in the report, calls `hid_process_event()` — that's the function that actually calls `hidinput_hid_event()`, the `input_event(input, usage->type, usage->code, value)` call, using the `type`/`code` pair `hid_map_usage()` set at connect time, now finally used. Only after `hid_process_report()` has dispatched every field does `hid_report_raw_event()` call `hidinput_report_event()` — and that function does nothing more than walk `hid->inputs` and call `input_sync()` on each attached `input_dev`, the `EV_SYN`/`SYN_REPORT` fan-out that closes out the batch of events `hid_process_event()` just generated.
 
-## Worked example: `hid-petalynx.c`
+## Worked example: `hid-petalynx.c` {#worked-example-hid-petalynxc}
 
 `drivers/hid/hid-petalynx.c` is a small, real, in-tree quirk driver for the Petalynx Maxter remote control, and it happens to demonstrate both `.report_fixup` and `.input_mapping` in a little over 100 lines total. First, the descriptor bug it works around — the device's Consumer-page maximum usage value is set too low, which would make the parser reject or truncate perfectly valid usages further down the descriptor:
 
@@ -667,11 +667,11 @@ module_hid_driver(pl_driver);
 
 `.probe` here is close to the minimum any HID driver needs: `hid_parse()` (which is where `.report_fixup` actually gets invoked, inside `hid_open_report()`), then `hid_hw_start(hdev, HID_CONNECT_DEFAULT)` — the flag combination (`HID_CONNECT_HIDINPUT|HID_CONNECT_HIDRAW|HID_CONNECT_HIDDEV|HID_CONNECT_FF`) that wires the device up to evdev, `/dev/hidraw*`, the legacy hiddev interface, and force-feedback, all at once. Everything else — the report-ID lookup table, the `struct hid_field`s, the evdev device this driver never explicitly creates — is built by the generic core using the fixed-up descriptor and the driver's two callbacks.
 
-## HID-BPF: fixups without a new driver
+## HID-BPF: fixups without a new driver {#hid-bpf-fixups-without-a-new-driver}
 
 `.report_fixup` and `.input_mapping` both require writing, building, and upstreaming a kernel module — a slow path for a one-device bug fix. HID-BPF (`Documentation/hid/hid-bpf.rst`, `CONFIG_HID_BPF`) is a newer, complementary mechanism: an eBPF program, loaded from userspace at runtime, can be attached to fix up a report descriptor or intercept report events for a specific device, without a new driver ever landing in-tree. `struct hid_device`'s `bpf_rdesc`/`bpf_rsize` fields (used by `hid_open_report()`, shown above, as the actual starting point for parsing) exist precisely so a BPF descriptor fixup runs *before* any `.report_fixup` in the normal driver-matching path even gets a chance. The kernel's own HID-BPF documentation frames the motivation directly: for the common case of a driver that exists only to fix "one key or one byte" in a report descriptor, the traditional route "require[s] a kernel patch and the subsequent shepherding into a release, a long and painful process for users," where an eBPF program can instead be verified by the user and loaded directly, without waiting on a kernel release (`Documentation/hid/hid-bpf.rst`). Benjamin Tissoires proposed the mechanism upstream in 2022; the v2 cover letter of that patch series is archived on LWN ([Introduce eBPF support for HID devices](https://lwn.net/Articles/886860/)). It doesn't replace `.input_mapping`/`.raw_event` for anything stateful or complex — those still need a real driver — but for the narrow, extremely common case of "this one descriptor has a wrong byte," it's now the lower-friction option upstream generally prefers over a brand-new quirk module.
 
-## The full path, device to userspace
+## The full path, device to userspace {#the-full-path-device-to-userspace}
 
 ```
  Physical device
@@ -730,9 +730,9 @@ module_hid_driver(pl_driver);
                       directly...)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`include/linux/hid.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/linux/hid.h) — `struct hid_device`, `struct hid_driver`, `struct hid_ll_driver`, `struct hid_report`/`hid_field`/`hid_usage`/`hid_collection`, `hid_map_usage()`
 - [`include/uapi/linux/hid.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/uapi/linux/hid.h) — `enum hid_report_type` (`HID_INPUT_REPORT`/`HID_OUTPUT_REPORT`/`HID_FEATURE_REPORT`)
@@ -743,12 +743,12 @@ module_hid_driver(pl_driver);
 - [`drivers/hid/hid-petalynx.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/hid/hid-petalynx.c) — the worked-example quirk driver above
 - [`drivers/hid/hid-generic.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/hid/hid-generic.c) — the catch-all driver ordinary mice/keyboards use, with no quirk callbacks at all
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Input Subsystem: evdev and the Input Core](README.md) — the `input_dev`/`evdev` layer HID's `hid_map_usage()` and `input_event()` calls feed into
 - [Input Subsystem War Stories](war-stories.md) — incidents from the input/HID stack this page's parsing and mapping machinery sits under
 
-### External
+### External {#external}
 
 - [Introduction to HID report descriptors](https://docs.kernel.org/hid/hidintro.html) — the kernel's own tour of usage pages, usages, reports, and collections, with a worked mouse descriptor
 - [HID I/O Transport Drivers](https://docs.kernel.org/hid/hid-transport.html) — the `hid_ll_driver` contract and the USB-HID/BT-HIDP/I2C-HID transports

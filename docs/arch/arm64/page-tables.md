@@ -1,4 +1,4 @@
-# ARM64 Page Tables
+# ARM64 Page Tables {#arm64-page-tables}
 
 > TTBR0/TTBR1, translation granules, PTE format, and ASID
 
@@ -6,7 +6,7 @@ ARM64's MMU uses a two-register design to handle user and kernel address spaces 
 
 ---
 
-## Two TTBRs: user and kernel address spaces
+## Two TTBRs: user and kernel address spaces {#two-ttbrs-user-and-kernel-address-spaces}
 
 ARM64 splits the virtual address space at the midpoint using the **top bit of the virtual address**. Two translation base registers tell the MMU where to start the walk:
 
@@ -36,7 +36,7 @@ static inline void cpu_switch_mm(pgd_t *pgd, struct mm_struct *mm)
 
 ---
 
-## Translation granules
+## Translation granules {#translation-granules}
 
 The **translation granule** is the base page size. ARM64 supports three granule sizes, each changing the number of levels needed and the size of each level's table:
 
@@ -48,7 +48,7 @@ The **translation granule** is the base page size. ARM64 supports three granule 
 
 The granule is selected by `TCR_EL1.TG0` (for TTBR0) and `TCR_EL1.TG1` (for TTBR1).
 
-### 4KB granule: level coverage (48-bit VA)
+### 4KB granule: level coverage (48-bit VA) {#4kb-granule-level-coverage-48-bit-va}
 
 With a 4KB granule each page table is exactly one 4KB page containing 512 8-byte entries (9 index bits per level):
 
@@ -65,7 +65,7 @@ Page offset [11:0]     —        4 KB
 
 ---
 
-## The 4-level page table walk (48-bit VA, 4KB granule)
+## The 4-level page table walk (48-bit VA, 4KB granule) {#the-4-level-page-table-walk-48-bit-va-4kb-granule}
 
 For a 48-bit virtual address with a 4KB granule, the hardware performs a 4-level walk:
 
@@ -91,7 +91,7 @@ The MMU caches translations in the TLB, keyed on VA + ASID. On a TLB miss, the h
 
 ---
 
-## PTE format
+## PTE format {#pte-format}
 
 ARM64 descriptors are 64-bit values. The meaning of bits depends on the level and whether the entry is a **table**, **block**, or **page** descriptor.
 
@@ -120,7 +120,7 @@ ARM64 Page/Block Descriptor (64-bit):
  bits [63:59]: PBHA          — Page-Based Hardware Attributes (ARMv8.2+)
 ```
 
-### Access Permission (AP[2:1]) encoding
+### Access Permission (AP[2:1]) encoding {#access-permission-ap21-encoding}
 
 | AP[2:1] | EL1 (kernel) | EL0 (user) |
 |---|---|---|
@@ -131,7 +131,7 @@ ARM64 Page/Block Descriptor (64-bit):
 
 Linux sets `UXN` on all kernel mappings and `PXN` on all user mappings (preventing user code from being executed at EL1 and vice versa). The `AF` (Access Flag) bit: on pre-ARMv8.1 hardware it is managed by software — a PTE with AF=0 generates an Access Flag Fault on first access, which the kernel handles by setting AF=1. On ARMv8.1+ hardware with `FEAT_HAFDBS`, Linux enables hardware-managed AF (`TCR_EL1.HA=1`), so the CPU sets AF automatically without faulting. The Access Flag is used by the page reclaim path to distinguish recently-accessed pages.
 
-### ARM64 vs x86-64 PTE comparison
+### ARM64 vs x86-64 PTE comparison {#arm64-vs-x86-64-pte-comparison}
 
 | Concept | ARM64 | x86-64 |
 |---|---|---|
@@ -146,7 +146,7 @@ Linux sets `UXN` on all kernel mappings and `PXN` on all user mappings (preventi
 
 ---
 
-## Huge pages: block descriptors
+## Huge pages: block descriptors {#huge-pages-block-descriptors}
 
 ARM64 uses **block descriptors** to map large contiguous physical regions without traversing all four levels. A block descriptor at L1 or L2 has bit 1 (`type`) = 0:
 
@@ -171,7 +171,7 @@ Transparent Huge Pages (THP) and `hugetlbfs` both use 2MB block descriptors. The
 
 ---
 
-## Linux kernel page table types
+## Linux kernel page table types {#linux-kernel-page-table-types}
 
 Linux uses a generic five-level abstraction over the hardware levels. On ARM64 with 48-bit VA and 4KB granule, `p4d_t` is **folded** (a no-op alias for `pgd_t`):
 
@@ -200,11 +200,11 @@ pte_t *pte = pte_offset_map(pmd, addr);  /* maps the PTE page, returns kernel VA
 
 ---
 
-## ASID: Address Space Identifiers
+## ASID: Address Space Identifiers {#asid-address-space-identifiers}
 
 Every user-space mapping in a PTE has `nG` (not-Global) = 1. This means the TLB tags the entry with the current **ASID** (Address Space Identifier). Different processes with different ASIDs can coexist in the TLB without interference, avoiding a full TLB flush on every context switch.
 
-### ASID storage
+### ASID storage {#asid-storage}
 
 The ASID is stored in `TTBR0_EL1[63:48]` (16-bit ASID field, when `TCR_EL1.AS=1`). Each time a process is scheduled, the kernel writes both the ASID and the PGD address into `TTBR0_EL1` atomically. Kernel mappings use `nG=0` (global), so they are not tagged with an ASID and are never evicted by ASID-based TLB operations.
 
@@ -239,13 +239,13 @@ switch_mm_fastpath:
 }
 ```
 
-### ASID generation wrap
+### ASID generation wrap {#asid-generation-wrap}
 
 ARM64 supports 8-bit or 16-bit ASIDs (`TCR_EL1.AS`). Linux detects ASID width at runtime from `ID_AA64MMFR0_EL1.ASIDBits` and uses 16-bit ASIDs where available. With 16-bit ASIDs there are 65536 possible values. When they are exhausted, the kernel bumps an internal **generation counter** and flushes the entire TLB (`TLBI VMALLE1IS`), then reallocates ASIDs from scratch.
 
 ---
 
-## MAIR_EL1: Memory Attribute Indirection Register
+## MAIR_EL1: Memory Attribute Indirection Register {#mair_el1-memory-attribute-indirection-register}
 
 The `AttrIndx[2:0]` field in every PTE is an index into `MAIR_EL1`, which maps 8 attribute slots to actual memory types. This indirection allows PTE format to stay compact while supporting many memory types.
 
@@ -284,11 +284,11 @@ The constant `MAIR_EL1_SET` is built from individual `MAIR_ATTRIDX()` macros in 
 
 ---
 
-## TLB operations
+## TLB operations {#tlb-operations}
 
 ARM64 uses **broadcast TLB invalidation instructions** (`TLBI`) rather than IPIs. These instructions propagate across CPUs within a shareability domain automatically when the `IS` (Inner Shareable) suffix is used.
 
-### Key TLBI instructions
+### Key TLBI instructions {#key-tlbi-instructions}
 
 | Instruction | Invalidates | When to use |
 |---|---|---|
@@ -300,7 +300,7 @@ ARM64 uses **broadcast TLB invalidation instructions** (`TLBI`) rather than IPIs
 
 The operand `Xt` encodes the VA shifted right by 12 (page-aligned) ORed with the ASID in bits `[63:48]`.
 
-### Required TLB invalidation sequence
+### Required TLB invalidation sequence {#required-tlb-invalidation-sequence}
 
 Writing a new PTE and then invalidating the TLB must follow a strict ordering to prevent the MMU from caching a stale translation:
 
@@ -333,7 +333,7 @@ Note there is no `ISB` in `flush_tlb_page()` itself because it is only used for 
 
 ---
 
-## Stage 2 translation (KVM)
+## Stage 2 translation (KVM) {#stage-2-translation-kvm}
 
 When KVM is active, the CPU runs at EL2 and guests run at EL1/EL0. Guest virtual addresses are translated first by the **Stage 1** page tables (guest OS's own `TTBR0_EL1`/`TTBR1_EL1`) to **Intermediate Physical Addresses (IPA)**, then by **Stage 2** page tables to real **Physical Addresses (PA)**.
 
@@ -350,7 +350,7 @@ Stage 2 management in Linux lives in `arch/arm64/kvm/mmu.c`. See the [KVM Archit
 
 ---
 
-## Observing ARM64 page tables
+## Observing ARM64 page tables {#observing-arm64-page-tables}
 
 ```bash
 # Virtual address layout on ARM64
@@ -382,7 +382,7 @@ cat /sys/kernel/debug/page_tables/kernel
 
 ---
 
-## Key kernel functions and files
+## Key kernel functions and files {#key-kernel-functions-and-files}
 
 | Symbol | File | Purpose |
 |---|---|---|
@@ -402,7 +402,7 @@ cat /sys/kernel/debug/page_tables/kernel
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Memory Model](memory-model.md) — ARM64 weak memory ordering, DSB/ISB, page table barriers
 - [Exception Model](exception-model.md) — EL0–EL3, how EL2 relates to Stage 2 translation

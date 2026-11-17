@@ -1,14 +1,14 @@
-# AF_XDP Sockets
+# AF_XDP Sockets {#af_xdp-sockets}
 
 > Sending and receiving packets directly to/from userspace with zero copies
 
-## What AF_XDP is
+## What AF_XDP is {#what-af_xdp-is}
 
 AF_XDP is a socket address family that allows a userspace application to receive packets directly from an XDP program — bypassing the kernel network stack entirely for those packets. A BPF program running in XDP redirects matched packets to an AF_XDP socket, and the application reads them from a shared-memory ring buffer.
 
 This achieves near-DPDK performance while staying within the kernel security model (no kernel bypass, kernel still owns the hardware).
 
-## The architecture
+## The architecture {#the-architecture}
 
 ```
 NIC hardware → DMA → ring buffer
@@ -24,7 +24,7 @@ AF_XDP socket (xsk) → userspace application reads/writes directly
 
 No `sk_buff` is allocated. The packet DMA buffer is the same memory that userspace reads.
 
-## UMEM: the shared memory region
+## UMEM: the shared memory region {#umem-the-shared-memory-region}
 
 AF_XDP is built around **UMEM** — a userspace-allocated memory region divided into fixed-size frames that both the kernel and userspace share:
 
@@ -45,7 +45,7 @@ Four ring buffers mediate ownership of frames between kernel and userspace:
 | TX | TX: userspace sends packets | Userspace | Kernel |
 | COMPLETION | TX: kernel signals sent | Kernel | Userspace |
 
-## Setting up an AF_XDP socket
+## Setting up an AF_XDP socket {#setting-up-an-af_xdp-socket}
 
 ```c
 // 1. Create UMEM (shared memory)
@@ -92,7 +92,7 @@ struct sockaddr_xdp sxdp = {
 bind(xsk_fd, (struct sockaddr *)&sxdp, sizeof(sxdp));
 ```
 
-## Zero-copy mode
+## Zero-copy mode {#zero-copy-mode}
 
 In **zero-copy** mode (`XDP_ZEROCOPY`), the NIC DMA-writes packets directly into the UMEM frames. No data copying occurs between NIC, kernel, and userspace. Requires:
 
@@ -101,7 +101,7 @@ In **zero-copy** mode (`XDP_ZEROCOPY`), the NIC DMA-writes packets directly into
 
 In **copy mode** (`XDP_COPY`), the kernel copies packet data from its internal buffers to UMEM. Works on any NIC but adds a copy.
 
-## Receiving packets (RX loop)
+## Receiving packets (RX loop) {#receiving-packets-rx-loop}
 
 ```c
 // Fill ring with addresses of free frames (give to kernel for DMA)
@@ -130,7 +130,7 @@ for (uint32_t i = 0; i < avail; i++) {
 *rx_ring->consumer = rx_idx + avail;
 ```
 
-## The XDP program (kernel side)
+## The XDP program (kernel side) {#the-xdp-program-kernel-side}
 
 ```c
 struct {
@@ -154,7 +154,7 @@ int xdp_redirect_to_xsk(struct xdp_md *ctx)
 bpftool map update id <xskmap_id> key 0 value <xsk_fd>
 ```
 
-## libxdp / libbpf helper library
+## libxdp / libbpf helper library {#libxdp-libbpf-helper-library}
 
 For production use, `libxdp` (part of xdp-tools) and `libbpf` provide abstractions that handle the ring management, UMEM setup, and XDP program loading:
 
@@ -177,14 +177,14 @@ xsk_umem__create(&umem, umem_area, umem_size, fill_ring, comp_ring, NULL);
 xsk_socket__create(&xsk, ifname, queue_id, umem, rx_ring, tx_ring, &cfg);
 ```
 
-## Use cases
+## Use cases {#use-cases}
 
 - **Kernel bypass for application protocols**: Handle DNS/HTTP packet parsing in userspace at line rate
 - **Packet capture**: Zero-copy alternative to libpcap for high-rate captures
 - **Custom load balancers**: User-space decision logic with kernel-speed I/O
 - **Network function virtualization**: Virtual switches, firewalls without full DPDK
 
-## Further reading
+## Further reading {#further-reading}
 
 - [XDP](xdp.md) — The XDP framework that feeds AF_XDP sockets
 - [Network Device and NAPI](napi.md) — Where XDP programs hook into the driver

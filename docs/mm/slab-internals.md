@@ -1,8 +1,8 @@
-# SLUB Allocator Internals
+# SLUB Allocator Internals {#slub-allocator-internals}
 
 > struct kmem_cache, freelist mechanics, per-CPU caches, and slab debugging
 
-## Why a slab allocator?
+## Why a slab allocator? {#why-a-slab-allocator}
 
 `kmalloc` could just call the page allocator for every allocation, but that's wasteful:
 
@@ -17,7 +17,7 @@ The slab allocator solves this by:
 
 Linux uses **SLUB** (the "unqueued" slab allocator) since 2.6.23.
 
-## Architecture overview
+## Architecture overview {#architecture-overview}
 
 ```
 kmalloc(128, GFP_KERNEL)
@@ -39,7 +39,7 @@ kmalloc-128 cache (struct kmem_cache)
     Page allocator (get a new slab page)
 ```
 
-## struct kmem_cache
+## struct kmem_cache {#struct-kmem_cache}
 
 ```c
 /* include/linux/slub_def.h */
@@ -70,7 +70,7 @@ struct kmem_cache {
 };
 ```
 
-## struct kmem_cache_cpu (per-CPU fast path)
+## struct kmem_cache_cpu (per-CPU fast path) {#struct-kmemcachecpu-per-cpu-fast-path}
 
 ```c
 struct kmem_cache_cpu {
@@ -94,7 +94,7 @@ Slab page layout (objects = 128 bytes, SLUB):
 cpu_slab->freelist = &obj[0] → obj[2] → obj[3] → NULL
 ```
 
-## kmalloc path (alloc_cache_obj)
+## kmalloc path (alloc_cache_obj) {#kmalloc-path-alloccacheobj}
 
 ```c
 /* mm/slub.c (simplified) */
@@ -138,7 +138,7 @@ static __always_inline void *slab_alloc(struct kmem_cache *s,
 }
 ```
 
-## kfree path
+## kfree path {#kfree-path}
 
 ```c
 void kfree(const void *object)
@@ -178,7 +178,7 @@ static void slab_free(struct kmem_cache *s, struct slab *slab,
 }
 ```
 
-## kmem_cache_create (named caches)
+## kmem_cache_create (named caches) {#kmemcachecreate-named-caches}
 
 ```c
 /* For frequently allocated objects with a specific type: */
@@ -202,7 +202,7 @@ kmem_cache_free(my_cache, obj);
 kmem_cache_destroy(my_cache);
 ```
 
-## SLUB debugging
+## SLUB debugging {#slub-debugging}
 
 ```bash
 # Enable SLUB debugging at boot (heavy overhead!):
@@ -238,7 +238,7 @@ cat /sys/kernel/slab/kmalloc-128/object_size      # 128
 # CONFIG_KASAN=y causes SLUB to insert red zones and poison memory
 ```
 
-## Memory poisoning
+## Memory poisoning {#memory-poisoning}
 
 When `CONFIG_SLUB_DEBUG` is enabled, freed objects are poisoned:
 
@@ -252,7 +252,7 @@ On the next allocation, SLUB checks that POISON_FREE pattern is intact.
 If not: use-after-free detected, kernel dumps the offending allocation.
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [kmalloc and slab](slab.md) — user-facing API
 - [Page Allocator](page-allocator.md) — SLUB gets pages from here

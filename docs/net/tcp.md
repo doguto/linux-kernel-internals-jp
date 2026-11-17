@@ -1,8 +1,8 @@
-# TCP Implementation
+# TCP Implementation {#tcp-implementation}
 
 > How the kernel implements reliable, ordered, byte-stream delivery
 
-## TCP's guarantees
+## TCP's guarantees {#tcps-guarantees}
 
 TCP provides:
 1. **Reliability**: Lost packets are retransmitted
@@ -12,7 +12,7 @@ TCP provides:
 
 The kernel implements all four simultaneously, which is why TCP is complex.
 
-## struct tcp_sock
+## struct tcp_sock {#struct-tcp_sock}
 
 TCP state per connection is in `struct tcp_sock` (extends `struct sock`):
 
@@ -54,7 +54,7 @@ struct tcp_sock {
 };
 ```
 
-## Sequence numbers and windows
+## Sequence numbers and windows {#sequence-numbers-and-windows}
 
 ```
 Send side:
@@ -69,7 +69,7 @@ Receive side:
   rcv_nxt + rcv_wnd = advertised window limit (flow control)
 ```
 
-## Retransmission: RTO and timer
+## Retransmission: RTO and timer {#retransmission-rto-and-timer}
 
 The **Retransmission Timeout (RTO)** is calculated from RTT measurements:
 
@@ -91,7 +91,7 @@ cat /proc/net/snmp | grep ^Tcp
 # TcpRetransSegs: total retransmitted segments
 ```
 
-## Fast retransmit and SACK
+## Fast retransmit and SACK {#fast-retransmit-and-sack}
 
 When out-of-order segments arrive, the receiver sends **duplicate ACKs** (same `ack_seq` as before, with a SACK block noting what was received).
 
@@ -117,7 +117,7 @@ With **SACK (Selective ACK)**, the receiver tells the sender exactly which segme
 cat /proc/sys/net/ipv4/tcp_sack  # → 1
 ```
 
-## Congestion control framework
+## Congestion control framework {#congestion-control-framework}
 
 The kernel has a pluggable congestion control framework:
 
@@ -141,7 +141,7 @@ struct tcp_congestion_ops {
 };
 ```
 
-### Available algorithms
+### Available algorithms {#available-algorithms}
 
 ```bash
 # List available congestion control algorithms
@@ -159,7 +159,7 @@ echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
 setsockopt(fd, IPPROTO_TCP, TCP_CONGESTION, "bbr", 4);
 ```
 
-### CUBIC (default)
+### CUBIC (default) {#cubic-default}
 
 CUBIC uses the cubic function of time since last congestion event to grow the congestion window:
 
@@ -176,7 +176,7 @@ Where:
 - **Congestion avoidance**: cwnd grows per the cubic function
 - **Loss detected**: ssthresh = 0.7 × cwnd; cwnd = ssthresh
 
-### BBR (Bottleneck Bandwidth and RTT)
+### BBR (Bottleneck Bandwidth and RTT) {#bbr-bottleneck-bandwidth-and-rtt}
 
 BBR (Bottleneck Bandwidth and RTT) models the network path — bandwidth and propagation delay — rather than reacting to loss:
 
@@ -199,7 +199,7 @@ tc qdisc replace dev eth0 root fq
 echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
 ```
 
-## Flow control: receive window
+## Flow control: receive window {#flow-control-receive-window}
 
 The receiver's `rcv_wnd` tells the sender how much space remains in the receive buffer. If `rcv_wnd = 0`, the sender stops (zero window probe situation):
 
@@ -224,7 +224,7 @@ static u16 tcp_select_window(struct sock *sk)
 cat /proc/sys/net/ipv4/tcp_window_scaling  # → 1 (enabled)
 ```
 
-## Nagle algorithm and TCP_NODELAY
+## Nagle algorithm and TCP_NODELAY {#nagle-algorithm-and-tcp_nodelay}
 
 By default, TCP delays small packets hoping to coalesce them (Nagle's algorithm). For latency-sensitive applications:
 
@@ -239,7 +239,7 @@ setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
 ss -tni | grep nodelay
 ```
 
-## Key TCP sysctls
+## Key TCP sysctls {#key-tcp-sysctls}
 
 ```bash
 # Initial congestion window is not a sysctl — it's per-route:
@@ -262,7 +262,7 @@ cat /proc/sys/net/ipv4/tcp_rmem
 cat /proc/sys/net/ipv4/tcp_wmem
 ```
 
-## Inspecting TCP connections
+## Inspecting TCP connections {#inspecting-tcp-connections}
 
 ```bash
 # Detailed TCP socket info (shows congestion state, cwnd, etc.)
@@ -283,7 +283,7 @@ ss -tin | grep retrans
 netstat -s | grep -E "connection|segment|retransmit"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [TCP Congestion Control Algorithms](tcp-congestion.md) — CUBIC and BBR in depth (see below)
 - [Life of a Packet (transmit)](life-of-packet-tx.md) — How tcp_write_xmit uses cwnd

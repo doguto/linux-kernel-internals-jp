@@ -1,8 +1,8 @@
-# Network Device and NAPI
+# Network Device and NAPI {#network-device-and-napi}
 
 > How the kernel receives packets from hardware: interrupt mitigation and polling
 
-## The problem NAPI solves
+## The problem NAPI solves {#the-problem-napi-solves}
 
 Before NAPI (New API), each arriving packet triggered a hardware interrupt. At low traffic rates, this works fine. Under high load — say, 10 Gbps with 64-byte packets — the NIC fires hundreds of thousands of interrupts per second. The kernel spends more time handling interrupts than processing packets: **interrupt livelock**.
 
@@ -15,7 +15,7 @@ NAPI solves this by switching to a polling model when traffic is high:
 
 This batches work and dramatically reduces interrupt overhead at high packet rates.
 
-## struct napi_struct
+## struct napi_struct {#struct-napi_struct}
 
 Each network device (or each queue on a multi-queue NIC) has one `napi_struct`:
 
@@ -38,7 +38,7 @@ struct napi_struct {
 };
 ```
 
-## The NAPI receive flow
+## The NAPI receive flow {#the-napi-receive-flow}
 
 ```
 1. Packet arrives in NIC ring buffer
@@ -62,7 +62,7 @@ struct napi_struct {
        return budget  → more work, stay scheduled
 ```
 
-## Driver implementation pattern
+## Driver implementation pattern {#driver-implementation-pattern}
 
 ```c
 // Interrupt handler
@@ -100,7 +100,7 @@ static int my_nic_poll(struct napi_struct *napi, int budget)
 }
 ```
 
-## NAPI budget
+## NAPI budget {#napi-budget}
 
 The budget (default: 64 packets per poll call) is a fairness mechanism — one heavily-loaded NIC can't monopolize the softirq CPU. After 64 packets, the softirq handler yields and lets other work run.
 
@@ -116,7 +116,7 @@ echo 600 > /proc/sys/net/core/netdev_budget  # for high-throughput workloads
 cat /proc/sys/net/core/netdev_budget_usecs  # default: 2000 (2ms)
 ```
 
-## GRO: Generic Receive Offload
+## GRO: Generic Receive Offload {#gro-generic-receive-offload}
 
 GRO merges multiple small TCP segments into a single large `sk_buff` before passing up the stack, reducing per-packet overhead:
 
@@ -136,7 +136,7 @@ ethtool -k eth0 | grep generic-receive-offload
 ethtool -K eth0 gro off
 ```
 
-## struct net_device
+## struct net_device {#struct-net_device}
 
 ```c
 // include/linux/netdevice.h (key fields)
@@ -157,7 +157,7 @@ struct net_device {
 };
 ```
 
-## Threaded NAPI
+## Threaded NAPI {#threaded-napi}
 
 For workloads that need predictable latency, NAPI can run in a kernel thread instead of a softirq:
 
@@ -172,7 +172,7 @@ taskset -cp 4 $(pgrep "napi/eth0-0")
 
 Threaded NAPI allows the poll function to sleep (e.g., for GRO flush timers) and gives the scheduler full control over poll CPU placement.
 
-## Busy polling
+## Busy polling {#busy-polling}
 
 For ultra-low-latency applications, busy polling bypasses softirq and polls the NIC directly from user context:
 
@@ -187,7 +187,7 @@ setsockopt(fd, SOL_SOCKET, SO_BUSY_POLL, &timeout_us, sizeof(timeout_us));
 
 This trades CPU cycles for latency — the application spins polling the NIC instead of sleeping and being woken by softirq.
 
-## RPS/RFS: multi-CPU receive scaling
+## RPS/RFS: multi-CPU receive scaling {#rpsrfs-multi-cpu-receive-scaling}
 
 A single-queue NIC delivers all packets to one CPU. **RPS (Receive Packet Steering)** distributes packets across CPUs in software:
 
@@ -203,7 +203,7 @@ echo 2048  > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
 
 Modern multi-queue NICs with RSS (Receive Side Scaling) do this in hardware, distributing flows across hardware queues — one NAPI instance per queue.
 
-## Diagnosing receive performance
+## Diagnosing receive performance {#diagnosing-receive-performance}
 
 ```bash
 # RX drop counters
@@ -222,7 +222,7 @@ cat /proc/interrupts | grep eth0
 ethtool -S eth0 | grep gro
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [sk_buff](sk-buff.md) — The packet structure built during receive
 - [Life of a Packet (receive)](life-of-packet-rx.md) — Full receive path beyond NAPI

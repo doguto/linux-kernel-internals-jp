@@ -1,4 +1,4 @@
-# x86-64 Boot Sequence
+# x86-64 Boot Sequence {#x86-64-boot-sequence}
 
 > From BIOS/UEFI reset vector to start_kernel()
 
@@ -6,7 +6,7 @@ The x86-64 boot process is a journey through three CPU modes: real mode (16-bit)
 
 ---
 
-## Two boot paths
+## Two boot paths {#two-boot-paths}
 
 Modern x86-64 systems boot via one of two firmware interfaces:
 
@@ -20,9 +20,9 @@ Modern x86-64 systems boot via one of two firmware interfaces:
 
 ---
 
-## BIOS boot path
+## BIOS boot path {#bios-boot-path}
 
-### Reset vector and POST
+### Reset vector and POST {#reset-vector-and-post}
 
 On power-on, the x86-64 CPU resets to real mode and executes its first instruction at the **reset vector**: physical address `0xFFFFFFF0` (mapped to ROM). This is the top 16 bytes of the 4GB address space.
 
@@ -33,7 +33,7 @@ The BIOS firmware runs **POST** (Power-On Self Test):
 - Detects the memory map (passed to the OS via INT 0x15/E820)
 - Loads the first-stage bootloader from the boot device's MBR (first 512 bytes)
 
-### GRUB2: loading the kernel
+### GRUB2: loading the kernel {#grub2-loading-the-kernel}
 
 GRUB2 (Grand Unified Bootloader version 2) is the most common Linux bootloader on BIOS systems. After being loaded by the BIOS from the MBR:
 
@@ -67,7 +67,7 @@ struct setup_header {
 };
 ```
 
-### bzImage layout
+### bzImage layout {#bzimage-layout}
 
 The kernel is distributed as a `bzImage` (big zImage) — a self-decompressing archive:
 
@@ -92,11 +92,11 @@ bzImage on disk:
 
 ---
 
-## Real mode setup code (`arch/x86/boot/`)
+## Real mode setup code (`arch/x86/boot/`) {#real-mode-setup-code-archx86boot}
 
 The real-mode setup code runs in 16-bit mode and performs early hardware detection before switching to protected mode. Key files: `arch/x86/boot/main.c`, `arch/x86/boot/memory.c`, `arch/x86/boot/video.c`.
 
-### Memory detection: e820
+### Memory detection: e820 {#memory-detection-e820}
 
 The setup code queries the BIOS for the physical memory map using INT 0x15/E820:
 
@@ -127,7 +127,7 @@ static int detect_memory_e820(void)
 
 The resulting e820 table describes which physical memory ranges are usable RAM, reserved (ACPI, MMIO), or unusable. The kernel's memory management subsystem (`memblock`) uses this table later in boot.
 
-### Video mode setup and other detection
+### Video mode setup and other detection {#video-mode-setup-and-other-detection}
 
 The setup code also:
 
@@ -136,7 +136,7 @@ The setup code also:
 - Reads CPUID to detect CPU capabilities
 - Sets up the heap for use by the setup code itself
 
-### Switching to protected mode: enabling CR0.PE
+### Switching to protected mode: enabling CR0.PE {#switching-to-protected-mode-enabling-cr0pe}
 
 The final act of the real-mode setup code is switching to 32-bit protected mode:
 
@@ -173,9 +173,9 @@ void go_to_protected_mode(void)
 
 ---
 
-## Protected mode → long mode
+## Protected mode → long mode {#protected-mode-long-mode}
 
-### startup_32 (`arch/x86/boot/compressed/head_32.S`)
+### startup_32 (`arch/x86/boot/compressed/head_32.S`) {#startup32-archx86bootcompressedhead32s}
 
 `startup_32` runs in 32-bit protected mode. Its job:
 
@@ -216,7 +216,7 @@ movl    %eax, %cr0
 lret    /* pops cs:eip from stack, cs selects 64-bit descriptor */
 ```
 
-### startup_64 (`arch/x86/boot/compressed/head_64.S`)
+### startup_64 (`arch/x86/boot/compressed/head_64.S`) {#startup64-archx86bootcompressedhead64s}
 
 `startup_64` is the first 64-bit code. At this point:
 
@@ -229,7 +229,7 @@ lret    /* pops cs:eip from stack, cs selects 64-bit descriptor */
 2. Sets up a proper stack
 3. Calls `extract_kernel()` which calls `decompress_kernel()`
 
-### Decompression
+### Decompression {#decompression}
 
 ```c
 /* arch/x86/boot/compressed/misc.c */
@@ -252,9 +252,9 @@ The decompressor is self-contained — it includes its own copy of the decompres
 
 ---
 
-## UEFI boot path
+## UEFI boot path {#uefi-boot-path}
 
-### EFI handoff
+### EFI handoff {#efi-handoff}
 
 UEFI firmware loads the kernel image as a PE/COFF executable and calls its entry point directly. The kernel's **EFI stub** (`arch/x86/boot/compressed/efi_stub_64.S`, `drivers/firmware/efi/libstub/`) handles this:
 
@@ -293,7 +293,7 @@ efibootmgr -v               # shows boot order and entries
 
 ---
 
-## The kernel's own startup_64 (`arch/x86/kernel/head_64.S`)
+## The kernel's own startup_64 (`arch/x86/kernel/head_64.S`) {#the-kernels-own-startup64-archx86kernelhead64s}
 
 After decompression, the decompressed kernel's `startup_64` runs. This is distinct from the compressed stub's `startup_64`. It sets up the kernel's permanent page tables and core infrastructure:
 
@@ -333,7 +333,7 @@ SYM_CODE_END(startup_64)
 
 ---
 
-## x86_64_start_kernel() → start_kernel()
+## x86_64_start_kernel() → start_kernel() {#x8664startkernel-startkernel}
 
 ```c
 /* arch/x86/kernel/head64.c */
@@ -375,7 +375,7 @@ void __init x86_64_start_reservations(char *real_mode_data)
 
 `start_kernel()` (in `init/main.c`) is the first architecture-independent code: it initializes the scheduler, memory management, interrupt subsystem, and eventually starts the `init` process.
 
-### What start_kernel() initializes
+### What start_kernel() initializes {#what-start_kernel-initializes}
 
 In order (selected highlights):
 
@@ -396,7 +396,7 @@ start_kernel()
 
 ---
 
-## Key data structures
+## Key data structures {#key-data-structures}
 
 | Structure | Location | Purpose |
 |-----------|----------|---------|
@@ -407,7 +407,7 @@ start_kernel()
 
 ---
 
-## Observing the boot process
+## Observing the boot process {#observing-the-boot-process}
 
 ```bash
 # Full boot log (from GRUB through start_kernel)
@@ -439,7 +439,7 @@ systemd-analyze blame
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 - **KASLR** (Kernel Address Space Layout Randomization): introduced in Linux 3.14 for x86-64; randomizes the physical and virtual load address of the kernel at each boot. Implemented in `arch/x86/boot/compressed/kaslr.c`.
 - **5-level paging at boot**: if the CPU supports LA57 and the kernel is configured with `CONFIG_X86_5LEVEL=y`, `startup_64` sets up 5-level page tables. Introduced in Linux 4.14.
@@ -448,15 +448,15 @@ systemd-analyze blame
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [The Linux/x86 Boot Protocol](https://docs.kernel.org/arch/x86/boot.html) — the setup header, entry conventions, and protocol history
 - [arch/x86/boot/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/boot/) — the real-mode setup code walked through above
 - [arch/x86/kernel/head_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/head_64.S) — `startup_64` and early paging setup
 
-### Related pages
+### Related pages {#related-pages}
 
 - [x86_64 Boot Page Table Setup](../../mm/boot-page-tables.md) — the early page tables in depth, KASLR, 5-level enablement
 - [memblock](../../mm/memblock.md) — the boot-time memory allocator this sequence hands off to

@@ -1,12 +1,12 @@
-# Memory Management (mm/)
+# Memory Management (mm/) {#memory-management-mm}
 
 > How Linux manages the most fundamental resource: memory
 
-## Getting Started
+## Getting Started {#getting-started}
 
 This documentation explains how Linux manages memory - not just the theory, but the actual implementation decisions, trade-offs, and lessons learned over 30+ years of development.
 
-### Prerequisites
+### Prerequisites {#prerequisites}
 
 This documentation assumes familiarity with:
 
@@ -16,7 +16,7 @@ This documentation assumes familiarity with:
 
 If you've covered virtual memory and paging, that's a good foundation. See [Further Reading](#further-reading) for recommended textbooks.
 
-### Getting the Kernel Source
+### Getting the Kernel Source {#getting-the-kernel-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
@@ -25,7 +25,7 @@ cd linux
 
 For building and configuration, see [Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html).
 
-### Running Tests
+### Running Tests {#running-tests}
 
 The fastest way to test kernel changes without rebooting your machine:
 
@@ -42,7 +42,7 @@ virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 
 For comprehensive testing documentation, see [Documentation/dev-tools/testing-overview.rst](https://docs.kernel.org/dev-tools/testing-overview.html).
 
-### Suggested Reading Order
+### Suggested Reading Order {#suggested-reading-order}
 
 **Fundamentals:**
 
@@ -82,7 +82,7 @@ After the fundamentals, these trace operations through the entire stack:
 20. **[Life of a file read](life-of-read.md)** - Page cache in action
 21. **[What happens during swapping](swapping.md)** - Swap-out and swap-in
 
-### What You'll Learn
+### What You'll Learn {#what-youll-learn}
 
 | Textbook Concept | Linux Reality |
 |------------------|---------------|
@@ -95,7 +95,7 @@ After the fundamentals, these trace operations through the entire stack:
 | "Reading files hits disk" | [Page cache](life-of-read.md) means most reads are from memory |
 | "Swap is slow" | [Swap mechanics](swapping.md) - understand when and why it hurts |
 
-### What Makes This Different
+### What Makes This Different {#what-makes-this-different}
 
 - **Real commits**: Every claim links to actual kernel commits
 - **Real bugs**: Learn from what broke and why
@@ -105,9 +105,9 @@ After the fundamentals, these trace operations through the entire stack:
 
 ---
 
-## Documentation
+## Documentation {#documentation}
 
-### Core Reading
+### Core Reading {#core-reading}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -128,7 +128,7 @@ After the fundamentals, these trace operations through the entire stack:
 | [page-cache](page-cache.md) | File data caching in memory |
 | [swap](swap.md) | Extending memory to disk |
 
-### Lifecycle
+### Lifecycle {#lifecycle}
 
 Narrative walkthroughs following memory operations end-to-end:
 
@@ -141,7 +141,7 @@ Narrative walkthroughs following memory operations end-to-end:
 | [life-of-read](life-of-read.md) | How read() flows through the page cache |
 | [swapping](swapping.md) | Swap-out and swap-in mechanics in detail |
 
-### Explainers
+### Explainers {#explainers}
 
 Conceptual guides for common memory management questions:
 
@@ -153,7 +153,7 @@ Conceptual guides for common memory management questions:
 | [contiguous-memory](contiguous-memory.md) | Why large allocations fail despite free memory |
 | [cow](cow.md) | Copy-on-write edge cases and when it breaks |
 
-### Kernel Bugs & CVEs
+### Kernel Bugs & CVEs {#kernel-bugs-cves}
 
 Analysis of notable Linux kernel vulnerabilities, data corruption bugs, and edge cases:
 
@@ -166,7 +166,7 @@ Analysis of notable Linux kernel vulnerabilities, data corruption bugs, and edge
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 If you want to read the actual code:
 
@@ -190,23 +190,23 @@ If you want to read the actual code:
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Free Resources
+### Free Resources {#free-resources}
 - Bonwick, [*The Slab Allocator*](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf) (1994) - Original slab paper from USENIX
 - Gorman, [*Understanding the Linux Virtual Memory Manager*](https://www.kernel.org/doc/gorman/) - Free online book
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 - [Documentation/mm/](https://docs.kernel.org/mm/) in the kernel tree
 - [Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/) for sysadmin perspective
 
-### Textbooks
+### Textbooks {#textbooks}
 - Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) - Ch. 9-10 (Memory)
 - Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) - Ch. 3 (Memory Management)
 - Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) - Ch. 12 (Memory Management)
 
 ---
 
-## Appendix
+## Appendix {#appendix}
 
 - **[Glossary](glossary.md)** - Terminology reference

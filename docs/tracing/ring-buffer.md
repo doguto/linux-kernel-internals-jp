@@ -1,10 +1,10 @@
-# The ftrace Ring Buffer and tracefs
+# The ftrace Ring Buffer and tracefs {#the-ftrace-ring-buffer-and-tracefs}
 
 > How the kernel records millions of trace events per second — from any context, with almost no overhead — and the filesystem you steer it through
 
 Tracing has a brutal constraint: the instrumentation has to be *cheaper* than the thing it measures, and it has to work in **any** context — process, softirq, hard IRQ, even NMI — without ever taking a lock that could deadlock. A naive global, mutex-protected buffer fails on both counts. The data structure that solves it is the **ftrace ring buffer** ([`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c)), and **tracefs** is the interface you drive it through.
 
-## Per-CPU and lockless
+## Per-CPU and lockless {#per-cpu-and-lockless}
 
 Two design decisions make the buffer fast enough to leave on in production:
 
@@ -17,11 +17,11 @@ Two design decisions make the buffer fast enough to leave on in production:
 
 Because the protocol is per-CPU and lockless, it is safe for a hard IRQ — or even an NMI — to record an event *while it has interrupted another write on the same CPU*. The buffer is explicitly designed to handle these nested writes, which is exactly the property a global lock could never provide.
 
-## Sub-buffers
+## Sub-buffers {#sub-buffers}
 
 A per-CPU buffer is a ring of page-sized **sub-buffers**. Events pack tightly into the current page; when it fills, the writer advances to the next page in the ring. Because reading and writing operate on *different* pages, a consumer can lift completed pages out while the producer keeps filling new ones — no coordination on the hot path.
 
-## Two modes: flight recorder vs. lossless
+## Two modes: flight recorder vs. lossless {#two-modes-flight-recorder-vs-lossless}
 
 What happens when the buffer fills depends on the mode:
 
@@ -30,7 +30,7 @@ What happens when the buffer fills depends on the mode:
 
 Buffer size is per-CPU and set through `buffer_size_kb`; the trade is memory for history.
 
-## Reading: `trace` vs. `trace_pipe`
+## Reading: `trace` vs. `trace_pipe` {#reading-trace-vs-trace_pipe}
 
 tracefs exposes the buffer two ways, and the distinction matters:
 
@@ -38,7 +38,7 @@ tracefs exposes the buffer two ways, and the distinction matters:
 - **`trace_pipe`** — a *consuming, blocking stream*. Events are delivered as they arrive and are gone once read. This is the live-tail interface, the one to pipe into a tool.
 - **`per_cpu/cpuN/trace`** — the raw single-CPU streams, before any global merge.
 
-## tracefs: the control surface
+## tracefs: the control surface {#tracefs-the-control-surface}
 
 Everything is steered through `/sys/kernel/tracing`:
 
@@ -53,7 +53,7 @@ Everything is steered through `/sys/kernel/tracing`:
 
 `instances/` is the quietly important one: each instance is a fully separate ring buffer with its own tracer and events, so a background tracer and an ad-hoc investigation can run at once without corrupting each other's captures.
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
 ```bash
 cd /sys/kernel/tracing
@@ -71,7 +71,7 @@ echo 1 > instances/myprobe/events/block/block_rq_issue/enable
 cat instances/myprobe/trace
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: ring buffer design](https://docs.kernel.org/trace/ring-buffer-design.html) — the lockless algorithm in full
 - [`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c) — the implementation

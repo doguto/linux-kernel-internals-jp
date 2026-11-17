@@ -1,4 +1,4 @@
-# Cgroup War Stories
+# Cgroup War Stories {#cgroup-war-stories}
 
 > OOM kill storms, CPU throttling surprises, and cgroup v1 migration pain
 
@@ -6,7 +6,7 @@ These are five real categories of production incidents involving cgroups. The fa
 
 ---
 
-## 1. The CFS bandwidth thundering herd
+## 1. The CFS bandwidth thundering herd {#1-the-cfs-bandwidth-thundering-herd}
 
 **Setting**: A Kubernetes cluster with dozens of pods per node. Each pod had a CPU request/limit set in its spec, which the kubelet translated into `cpu.max` (CFS quota). The CFS period was the default: 100ms.
 
@@ -43,7 +43,7 @@ The Linux kernel 5.14 commit `(39f450ac4b06)` added `cpu.idle` to support SCHED_
 
 ---
 
-## 2. The OOM kill loop
+## 2. The OOM kill loop {#2-the-oom-kill-loop}
 
 **Setting**: A containerized Java application running inside a cgroup with `memory.max=512M`. The container was managed by a supervisor process (also inside the cgroup) that restarted the JVM on exit.
 
@@ -81,7 +81,7 @@ Option 3 — Increase `memory.max` to accommodate the spike, or configure the JV
 
 ---
 
-## 3. The cgroup v1 to v2 migration surprise
+## 3. The cgroup v1 to v2 migration surprise {#3-the-cgroup-v1-to-v2-migration-surprise}
 
 **Setting**: A company migrated their container platform from Docker 19 on Ubuntu 20.04 (cgroup v1 hybrid mode) to containerd + runc on Ubuntu 22.04 (cgroup v2 only). Existing container images, monitoring agents, and scripts all ran fine in development — but production was broken.
 
@@ -127,7 +127,7 @@ The `libcgroup` and `cgroup-tools` packages still use v1 paths by default; most 
 
 ---
 
-## 4. The pids controller and Java thread confusion
+## 4. The pids controller and Java thread confusion {#4-the-pids-controller-and-java-thread-confusion}
 
 **Setting**: A Kubernetes pod running a Java 17 application, with `resources.limits` set in the pod spec. The kubelet translated `TasksMax` to `pids.max=100` on the pod's cgroup.
 
@@ -172,7 +172,7 @@ For monitoring, alert on `pids.current / pids.max > 0.8` to catch this before pr
 
 ---
 
-## 5. The delegated cgroup race
+## 5. The delegated cgroup race {#5-the-delegated-cgroup-race}
 
 **Setting**: A container runtime using `Delegate=yes` in its systemd service unit. On container start, the runtime:
 1. Created a child cgroup under its delegated subtree
@@ -207,7 +207,7 @@ A secondary fix: keep the intermediate cgroup (before the process is moved) unde
 
 ---
 
-## Patterns across incidents
+## Patterns across incidents {#patterns-across-incidents}
 
 These five incidents share common diagnostic steps:
 
@@ -232,7 +232,7 @@ cat /sys/fs/cgroup/.../pids.current
 
 And a common principle: **cgroups enforce policy atomically within a single write, but not across multiple writes.** Set limits before adding processes. Use `memory.events` and `cpu.stat` to observe what the kernel is actually doing, not just what you configured.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Cgroup v2 Architecture](cgroup-v2.md) — unified hierarchy, subtree_control propagation
 - [Resource Controllers](cgroup-controllers.md) — cpu.max, memory.max, pids.max interface files

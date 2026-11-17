@@ -1,8 +1,8 @@
-# NUMA Distance and Inter-Socket Latency
+# NUMA Distance and Inter-Socket Latency {#numa-distance-and-inter-socket-latency}
 
 > How the kernel quantifies memory access cost across nodes — and why those numbers are not nanoseconds
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -16,7 +16,7 @@
 
 ---
 
-## NUMA distance defined
+## NUMA distance defined {#numa-distance-defined}
 
 The kernel represents the cost of crossing a NUMA interconnect as a **dimensionless integer**, not a latency in nanoseconds. Two constants set the scale, defined in `include/linux/topology.h`:
 
@@ -58,7 +58,7 @@ int __node_distance(int from, int to)
 EXPORT_SYMBOL(__node_distance);
 ```
 
-### Distances are ratios, not nanoseconds
+### Distances are ratios, not nanoseconds {#distances-are-ratios-not-nanoseconds}
 
 `LOCAL_DISTANCE = 10` does **not** mean 10 nanoseconds. The values are proportional: a distance of 20 means "roughly twice the cost of a local access". The ACPI SLIT specification defines them as relative performance ratios. A real 2-socket Intel system might show local DRAM at ~80 ns and remote DRAM at ~130 ns, but both would carry distance values of 10 and 20 respectively — the ratio 1:2 is what matters to the kernel, not the absolute measurement.
 
@@ -66,9 +66,9 @@ For the abstract distance model used by the memory tier framework (which transla
 
 ---
 
-## Where distances come from
+## Where distances come from {#where-distances-come-from}
 
-### ACPI SLIT table
+### ACPI SLIT table {#acpi-slit-table}
 
 On systems with full ACPI support, distances are provided by the **System Locality Information Table (SLIT)**. Each entry `SLIT[i][j]` gives the relative latency from node `i` to node `j`. The SLIT is the primary source for multi-socket x86 servers, ARM servers, and most hardware where inter-socket topology is non-trivial.
 
@@ -83,7 +83,7 @@ of_numa_init()          ← Device Tree (non-ACPI ARM/RISC-V via DT)
 dummy_numa_init()       ← fallback: single node, all memory in node 0
 ```
 
-### Systems without SLIT
+### Systems without SLIT {#systems-without-slit}
 
 When no SLIT is present — or when ACPI is disabled — `numa_alloc_distance()` fills the matrix with defaults:
 
@@ -97,15 +97,15 @@ for (i = 0; i < cnt; i++)
 
 Every node-pair gets distance 10 (self) or 20 (other). This is correct for a true 2-node UMA-equivalent system but will not reflect multi-hop topologies.
 
-### Emulated and VM NUMA
+### Emulated and VM NUMA {#emulated-and-vm-numa}
 
 Virtualisation hypervisors frequently expose a flat NUMA topology where all distances are 10, because the guest OS is not crossing real hardware interconnects. This causes the kernel's distance-driven decisions (zonelist ordering, NUMA balancing thresholds) to behave as if all memory is equidistant — which on a VM usually is true. See the [Common pitfalls](#common-pitfalls) section.
 
 ---
 
-## The distance matrix
+## The distance matrix {#the-distance-matrix}
 
-### Reading /sys/devices/system/node/nodeN/distance
+### Reading /sys/devices/system/node/nodeN/distance {#reading-sysdevicessystemnodenodendistance}
 
 The kernel exposes the complete row of the distance matrix for each node via sysfs. The `node_read_distance()` function in `drivers/base/node.c` iterates over all online nodes and emits `node_distance(nid, i)` for each:
 
@@ -128,7 +128,7 @@ node   0   1
   1:  21  10
 ```
 
-### 4-socket system example
+### 4-socket system example {#4-socket-system-example}
 
 A 4-socket server where nodes 0/1 share one NUMA domain and nodes 2/3 share another, with cross-domain traffic passing through two interconnect hops, might show:
 
@@ -146,19 +146,19 @@ node   0   1   2   3
 
 Reading the matrix: row is the *source* node, column is the *target* node. Entry `[0][2] = 21` means a CPU on node 0 accessing memory on node 2 has relative cost 21.
 
-### Asymmetric distances
+### Asymmetric distances {#asymmetric-distances}
 
 The SLIT specification allows asymmetric entries: `SLIT[i][j]` need not equal `SLIT[j][i]`. This can occur on certain NUMA-over-fabric configurations (e.g. coherent accelerator interconnects) where the cost of a read in one direction differs from the reverse. Linux stores and uses the full matrix without enforcing symmetry, so asymmetric firmware tables will be reflected faithfully in sysfs and in `node_distance()` calls.
 
-### Internal storage
+### Internal storage {#internal-storage}
 
 The matrix is stored as a flat `u8` array indexed as `numa_distance[from * numa_distance_cnt + to]`, allocated via `memblock` early in boot. The array is populated by `numa_set_distance()`, which rejects values outside the valid `u8` range and enforces that the diagonal entries are always `LOCAL_DISTANCE`.
 
 ---
 
-## How the kernel uses distances
+## How the kernel uses distances {#how-the-kernel-uses-distances}
 
-### Zonelist ordering (memory allocator fallback)
+### Zonelist ordering (memory allocator fallback) {#zonelist-ordering-memory-allocator-fallback}
 
 `build_zonelists()` in `mm/page_alloc.c` constructs the **fallback zonelist** — the ordered sequence of memory zones the allocator tries when the preferred node cannot satisfy a request. Nodes are sorted by their distance from the local node:
 
@@ -176,7 +176,7 @@ build_zonelists_in_node_order(pgdat, node_order, nr_nodes);
 
 `find_next_best_node()` uses `node_distance()` as the primary sort key, so nodes at distance 10 come first, then distance 21, then distance 30, and so on. The allocator will exhaust all memory on closer nodes before falling back to farther ones.
 
-### Node reclaim threshold
+### Node reclaim threshold {#node-reclaim-threshold}
 
 `RECLAIM_DISTANCE` (default 30) controls when `node_reclaim()` is restricted to nearby nodes:
 
@@ -193,7 +193,7 @@ If `node_reclaim_mode` is enabled and the distance to a candidate node exceeds `
 
 AMD EPYC systems override `node_reclaim_distance` upward because their 2-hop distance (32) is still fast enough that cross-node reclaim improves performance rather than hurting it. This is documented in the kernel comment in `topology.h`.
 
-### Scheduler: NUMA domain construction
+### Scheduler: NUMA domain construction {#scheduler-numa-domain-construction}
 
 The scheduler builds `sched_domain` hierarchy using NUMA distances. Nodes at the same distance from each other form a NUMA scheduling domain (`SD_NUMA`). `task_numa_migrate()` in `kernel/sched/fair.c` queries the distance between the task's current node and its preferred node when deciding whether to migrate:
 
@@ -208,7 +208,7 @@ taskimp = task_weight(p, env.dst_nid, dist) - taskweight;
 
 `dist` is passed into the weight calculations so that the migration benefit is scaled by how far the task would travel. A move across a high-distance link requires a larger imbalance to justify.
 
-### NUMA balancing: migration decisions
+### NUMA balancing: migration decisions {#numa-balancing-migration-decisions}
 
 `should_numa_migrate_memory()` in `kernel/sched/fair.c` decides whether a page fault on a remote page should trigger migration. For pages in slow memory tiers, the decision is based on access frequency (how recently the page was faulted) rather than distance alone. For conventional NUMA balancing, the mempolicy layer's `numa_nearest_node()` function in `mm/mempolicy.c` uses `node_distance()` to find nodes closer to the faulting CPU, and `numa_migrate_check()` in `mm/memory.c` prepares the migration:
 
@@ -221,12 +221,12 @@ Pages are directed toward the node with the smallest distance to the CPU that fa
 
 ---
 
-## Measuring actual latency
+## Measuring actual latency {#measuring-actual-latency}
 
 !!! warning "Distance values may not reflect real hardware"
     Firmware SLIT entries are populated by BIOS/firmware writers. On some platforms they are approximations, placeholders, or simply wrong. Always validate distance values against a direct latency measurement before drawing performance conclusions.
 
-### Intel MLC (Memory Latency Checker)
+### Intel MLC (Memory Latency Checker) {#intel-mlc-memory-latency-checker}
 
 Intel MLC is the industry-standard tool for measuring loaded and unloaded NUMA memory latency. It probes each node pair with configurable access patterns:
 
@@ -243,7 +243,7 @@ Intel MLC is the industry-standard tool for measuring loaded and unloaded NUMA m
 
 MLC reports latencies in nanoseconds. Compare the ratio of remote-to-local latency against the kernel's distance ratio to assess whether the SLIT is calibrated correctly.
 
-### numactl + stream
+### numactl + stream {#numactl-stream}
 
 For a quick bandwidth measurement without MLC:
 
@@ -257,7 +257,7 @@ numactl --cpunodebind=0 --membind=0 ./stream
 
 The bandwidth ratio indicates how much remote access degrades throughput. A 2-socket system with a SLIT-reported distance ratio of 2:1 will typically show a bandwidth degradation of 30–50% for remote access, not 50%, because interconnect bandwidth is often asymmetric and the bottleneck shifts to the QPI/UPI link rather than DRAM bandwidth.
 
-### perf mem
+### perf mem {#perf-mem}
 
 `perf mem` can attribute cache and DRAM misses to specific NUMA nodes using hardware performance monitoring units:
 
@@ -269,7 +269,7 @@ perf mem report --sort=mem,sym
 
 The report shows the source node (local/remote) for each memory access sample, letting you identify hot-spots with poor locality without modifying the workload.
 
-### Loaded vs idle latency
+### Loaded vs idle latency {#loaded-vs-idle-latency}
 
 Two measurements matter for different scenarios:
 
@@ -280,7 +280,7 @@ For bandwidth-bound workloads (databases, HPC), loaded latency and bandwidth sat
 
 ---
 
-## Multi-hop NUMA
+## Multi-hop NUMA {#multi-hop-numa}
 
 On systems with more than two sockets, the distance matrix encodes **hop count** across the inter-socket fabric. A 4-socket system arranged in a ring or fully connected mesh will have at most two distinct remote distances:
 
@@ -289,7 +289,7 @@ distance 20-22: one hop  (directly connected socket pair)
 distance 30-32: two hops (socket pair connected only through a third)
 ```
 
-### Identifying multi-hop topology
+### Identifying multi-hop topology {#identifying-multi-hop-topology}
 
 Read the distance matrix and look for more than two distinct values in off-diagonal entries:
 
@@ -299,7 +299,7 @@ numactl --hardware | grep -A 10 "node distances"
 
 If you see three or more distinct distance values, the system has multi-hop paths. The longest path identifies the worst-case remote access cost.
 
-### Scheduler and allocator impact
+### Scheduler and allocator impact {#scheduler-and-allocator-impact}
 
 `build_zonelists()` groups nodes into **distance tiers**: all nodes at the same distance from the local node form one tier, and the allocator exhausts one tier before proceeding to the next. On a 4-socket system with distances {10, 21, 32}, node 0's fallback order would be:
 
@@ -309,13 +309,13 @@ If you see three or more distinct distance values, the system has multi-hop path
 
 The scheduler's `SD_NUMA` domain similarly treats the first hop differently from the second: migrations within the near tier are less penalised than migrations across a two-hop boundary.
 
-### AMD EPYC multi-die topology
+### AMD EPYC multi-die topology {#amd-epyc-multi-die-topology}
 
 AMD EPYC processors expose multiple NUMA nodes per socket (one per die or per quadrant). A 2-socket EPYC system may present 4 or 8 NUMA nodes, with intra-socket distances of 12 and inter-socket distances of 32. The BIOS-provided SLIT on EPYC systems is generally accurate — AMD ships validated ACPI tables. The `node_reclaim_distance` override for EPYC (mentioned above) accounts for the fact that 32 is still fast enough to benefit from reclaim.
 
 ---
 
-## Common pitfalls
+## Common pitfalls {#common-pitfalls}
 
 !!! warning "All distances are 10: distances are likely wrong"
     If `numactl --hardware` shows every node distance as 10, the firmware is not providing a real SLIT, or the SLIT has been synthesised with all-local values. This happens in two common scenarios:
@@ -335,9 +335,9 @@ AMD EPYC processors expose multiple NUMA nodes per socket (one per die or per qu
 !!! warning "numactl may not show memory-only nodes"
     Nodes with no CPUs (e.g. CXL memory nodes, HMAT generic initiator nodes) may not appear in `numactl --hardware` output depending on the numactl version and kernel configuration. Use `ls /sys/devices/system/node/` to enumerate all nodes, including memory-only ones, and read each node's `distance` file directly.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [arch/x86/mm/numa.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) — `x86_numa_init()` and the ACPI/AMD/OF/dummy init chain that populates the distance matrix
 - [mm/numa_memblks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) — `__node_distance()`, `numa_set_distance()`, and the `numa_distance[]` flat array storage
@@ -345,12 +345,12 @@ AMD EPYC processors expose multiple NUMA nodes per socket (one per die or per qu
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `build_zonelists()` and `find_next_best_node()`: how distances drive fallback zonelist ordering
 - [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — `task_numa_migrate()` and `should_numa_migrate_memory()`: scheduler use of `node_distance()`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [NUMA distance and scheduler topology](https://lwn.net/Articles/392116/) — how the scheduler groups nodes by distance into scheduling domains
 - [Heterogeneous memory management and NUMA](https://lwn.net/Articles/756022/) — how memory tiers with different distance characteristics are handled in modern kernels
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Topology Discovery: ACPI SRAT and SLIT](numa-acpi-srat.md) — how firmware SRAT and SLIT tables are parsed to populate `numa_distance[]`
 - [NUMA Zonelist Construction and Fallback Ordering](numa-zonelist.md) — how `node_distance()` drives the page allocator's fallback node order

@@ -1,8 +1,8 @@
-# BPF Networking Programs
+# BPF Networking Programs {#bpf-networking-programs}
 
 > TC, cgroup, and socket BPF programs for network control
 
-## BPF program types for networking
+## BPF program types for networking {#bpf-program-types-for-networking}
 
 | Program type | Attach point | Can modify packet | Can drop | Use case |
 |-------------|-------------|-----------------|---------|---------|
@@ -15,7 +15,7 @@
 | `SK_MSG` | sockmap (sendmsg) | Yes | Yes | Message-level redirection |
 | `SOCKET_FILTER` | Raw socket | Read-only | Yes | Packet capture (tcpdump) |
 
-## TC BPF: traffic control programs
+## TC BPF: traffic control programs {#tc-bpf-traffic-control-programs}
 
 TC BPF programs attach to the `clsact` qdisc (classless act), which can run BPF at ingress and egress hooks before and after the network stack.
 
@@ -33,7 +33,7 @@ tc filter show dev eth0 ingress
 tc filter show dev eth0 egress
 ```
 
-### TC BPF program structure
+### TC BPF program structure {#tc-bpf-program-structure}
 
 ```c
 #include <vmlinux.h>
@@ -73,7 +73,7 @@ int tc_ingress(struct __sk_buff *skb)
 }
 ```
 
-### Packet modification with TC BPF
+### Packet modification with TC BPF {#packet-modification-with-tc-bpf}
 
 TC BPF programs can modify packets using helpers:
 
@@ -103,7 +103,7 @@ int tc_nat(struct __sk_buff *skb)
 }
 ```
 
-### TC redirect to another interface
+### TC redirect to another interface {#tc-redirect-to-another-interface}
 
 ```c
 struct {
@@ -121,11 +121,11 @@ int tc_redirect(struct __sk_buff *skb)
 }
 ```
 
-## Cgroup BPF: per-container network policy
+## Cgroup BPF: per-container network policy {#cgroup-bpf-per-container-network-policy}
 
 Cgroup BPF programs attach to a cgroup and affect all sockets/packets within that cgroup hierarchy. Used by container runtimes (Kubernetes, containerd) for network policy.
 
-### BPF_CGROUP_INET_INGRESS/EGRESS: packet filtering
+### BPF_CGROUP_INET_INGRESS/EGRESS: packet filtering {#bpfcgroupinet_ingressegress-packet-filtering}
 
 ```c
 SEC("cgroup_skb/ingress")
@@ -163,7 +163,7 @@ bpftool cgroup attach /sys/fs/cgroup/system.slice/mycontainer.scope \
 bpftool cgroup tree /sys/fs/cgroup/system.slice/
 ```
 
-### BPF_CGROUP_SOCK_OPS: TCP socket option control
+### BPF_CGROUP_SOCK_OPS: TCP socket option control {#bpfcgroupsock_ops-tcp-socket-option-control}
 
 ```c
 SEC("sockops")
@@ -192,7 +192,7 @@ int bpf_sockops(struct bpf_sock_ops *skops)
 bpftool cgroup attach /sys/fs/cgroup/myapp sock_ops pinned /sys/fs/bpf/sockops
 ```
 
-## Sockmap: socket redirection
+## Sockmap: socket redirection {#sockmap-socket-redirection}
 
 Sockmap enables redirecting data between sockets at kernel speed, without going through userspace:
 
@@ -203,7 +203,7 @@ Normal:                         Sockmap redirect:
   → Backend
 ```
 
-### sk_skb: redirect incoming data
+### sk_skb: redirect incoming data {#sk_skb-redirect-incoming-data}
 
 ```c
 struct {
@@ -239,7 +239,7 @@ bpftool prog load sk_skb.o /sys/fs/bpf/sk_skb
 bpftool map update id <sockmap_id> key 0 value <target_socket_fd>
 ```
 
-### sk_msg: intercept sendmsg
+### sk_msg: intercept sendmsg {#sk_msg-intercept-sendmsg}
 
 ```c
 struct {
@@ -266,7 +266,7 @@ int bpf_redir_proxy(struct sk_msg_md *msg)
 
 Cilium uses `sk_msg` + `sk_skb` to implement transparent service mesh data plane without a sidecar proxy in the hot path.
 
-## libbpf: attaching network programs
+## libbpf: attaching network programs {#libbpf-attaching-network-programs}
 
 ```c
 /* TC attach via libbpf */
@@ -297,7 +297,7 @@ bpf_prog_attach(bpf_program__fd(skel->progs.cgroup_ingress),
                 BPF_F_ALLOW_MULTI);  /* chain with existing programs */
 ```
 
-## Observing network BPF programs
+## Observing network BPF programs {#observing-network-bpf-programs}
 
 ```bash
 # List all BPF programs
@@ -320,7 +320,7 @@ bpftool cgroup tree
 bpftool prog show id 42 | grep run_cnt
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [XDP (eXpress Data Path)](../net/xdp.md) — BPF at driver level, introduced in Linux 4.8 [(LWN)](https://lwn.net/Articles/682538/)
 - [AF_XDP Sockets](../net/af-xdp.md) — zero-copy packet processing

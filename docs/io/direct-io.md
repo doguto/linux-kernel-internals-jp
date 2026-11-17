@@ -1,8 +1,8 @@
-# Direct I/O
+# Direct I/O {#direct-io}
 
 > O_DIRECT: bypassing the page cache for predictable I/O latency
 
-## What O_DIRECT does
+## What O_DIRECT does {#what-o_direct-does}
 
 By default, `read()` and `write()` go through the **page cache** — the kernel reads disk data into DRAM pages and serves reads from there. Writes go to dirty pages, which are flushed asynchronously.
 
@@ -18,7 +18,7 @@ O_DIRECT:
   read()  ← disk (synchronous, no page cache)
 ```
 
-## Why use O_DIRECT?
+## Why use O_DIRECT? {#why-use-o_direct}
 
 **Databases (PostgreSQL, MySQL InnoDB, Oracle)**: Databases implement their own buffer pool. Routing I/O through both the database buffer and the OS page cache wastes DRAM. O_DIRECT gives the database full control:
 
@@ -34,7 +34,7 @@ With O_DIRECT:
 
 **NUMA-aware memory**: O_DIRECT allows passing NUMA-local buffers to the kernel, avoiding cache effects across NUMA nodes.
 
-## Alignment requirements
+## Alignment requirements {#alignment-requirements}
 
 O_DIRECT has strict alignment requirements. Violating them returns `EINVAL`:
 
@@ -57,7 +57,7 @@ pread(fd, buf, 4096, 512);  /* offset=512, len=4096 → EINVAL on many FS */
 pread(fd, buf, 512, 0);     /* len=512 → may work (if blksize=512) */
 ```
 
-### Checking the required alignment
+### Checking the required alignment {#checking-the-required-alignment}
 
 ```c
 #include <sys/ioctl.h>
@@ -74,7 +74,7 @@ fstat(fd, &st);
 ioctl(fd, BLKPBSZGET, &blksz);  /* physical block size (may be 4096) */
 ```
 
-## O_DIRECT in the kernel
+## O_DIRECT in the kernel {#o_direct-in-the-kernel}
 
 ```c
 /* fs/read_write.c */
@@ -109,7 +109,7 @@ static ssize_t ext4_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 }
 ```
 
-## iomap DIO: modern direct I/O path
+## iomap DIO: modern direct I/O path {#iomap-dio-modern-direct-io-path}
 
 Since 4.10, most filesystems use the `iomap` layer for direct I/O:
 
@@ -138,7 +138,7 @@ ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 }
 ```
 
-## O_DIRECT vs mmap
+## O_DIRECT vs mmap {#o_direct-vs-mmap}
 
 | Aspect | O_DIRECT | mmap |
 |--------|----------|------|
@@ -150,7 +150,7 @@ ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 | Scatter-gather | `preadv(fd, iov, n, offset)` | Natural (pointer arithmetic) |
 | Typical use | Databases | Search engines, key-value stores |
 
-## O_DSYNC and O_SYNC: write durability
+## O_DSYNC and O_SYNC: write durability {#odsync-and-osync-write-durability}
 
 ```c
 /* O_SYNC: fsync() after every write (metadata + data durable) */
@@ -164,7 +164,7 @@ write(fd, data, len);
 fsync(fd);  /* or fdatasync(fd) for data only */
 ```
 
-## O_DIRECT performance tips
+## O_DIRECT performance tips {#o_direct-performance-tips}
 
 ```c
 /* Use io_uring with IORING_OP_READ_FIXED for best O_DIRECT performance */
@@ -178,7 +178,7 @@ io_uring_prep_read_fixed(sqe, fd, buf, BUF_SIZE, offset, 0);
 io_uring_submit(ring);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Async I/O evolution](async-io.md) — AIO, io_uring for O_DIRECT
 - [io_uring: Operations](../io-uring/io-uring-ops.md) — IORING_OP_READ_FIXED

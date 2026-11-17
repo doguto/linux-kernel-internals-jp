@@ -1,14 +1,14 @@
-# Kmemleak (Kernel Memory Leak Detector)
+# Kmemleak (Kernel Memory Leak Detector) {#kmemleak-kernel-memory-leak-detector}
 
 > Finding unreferenced kernel allocations with a garbage-collection style scan
 
-## What Is Kmemleak?
+## What Is Kmemleak? {#what-is-kmemleak}
 
 Kmemleak is a kernel subsystem that detects **memory leaks** in the kernel — allocations that are no longer referenced by any pointer but have never been freed. These are sometimes called *orphaned* allocations. They do not cause immediate crashes, but they silently consume memory that can never be reclaimed, eventually leading to exhaustion.
 
 Kmemleak is documented at [`Documentation/dev-tools/kmemleak.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst) and implemented in [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c).
 
-## How Kmemleak Differs from KASAN and KFENCE
+## How Kmemleak Differs from KASAN and KFENCE {#how-kmemleak-differs-from-kasan-and-kfence}
 
 Kmemleak, [KASAN](kasan.md), and [KFENCE](kfence.md) all guard kernel memory, but they target fundamentally different failure modes:
 
@@ -22,9 +22,9 @@ A buffer that is allocated, its only pointer is overwritten without freeing it, 
 
 Conversely, kmemleak cannot tell you that a freed pointer was accessed again. That is KASAN's domain.
 
-## How Kmemleak Works
+## How Kmemleak Works {#how-kmemleak-works}
 
-### The Gray-Coloring Algorithm
+### The Gray-Coloring Algorithm {#the-gray-coloring-algorithm}
 
 Kmemleak uses an algorithm inspired by **garbage collector tri-color marking**. Every tracked allocation is assigned one of three states:
 
@@ -41,7 +41,7 @@ At the end of a scan:
 
 The algorithm is described in the source at the top of [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c).
 
-### What Gets Scanned
+### What Gets Scanned {#what-gets-scanned}
 
 To find pointers, kmemleak scans:
 
@@ -53,13 +53,13 @@ To find pointers, kmemleak scans:
 
 Any value in any of these regions that **looks like** a pointer into a tracked allocation marks that allocation gray (reachable).
 
-### What "Looks Like a Pointer" Means
+### What "Looks Like a Pointer" Means {#what-looks-like-a-pointer-means}
 
 Kmemleak uses a conservative approach: **any word-sized value that falls within the address range of a tracked allocation is treated as a valid pointer**. This is intentionally liberal to avoid false positives.
 
 The consequence is false negatives: if the pointer is stored in a form kmemleak cannot read (e.g., XOR-obfuscated linked list pointers, packed bitfields, or offsets rather than direct pointers), kmemleak will miss it and falsely report the allocation as leaked. This is a known limitation — see [Limitations](#limitations) below.
 
-### Tracking Allocations
+### Tracking Allocations {#tracking-allocations}
 
 Kmemleak hooks into the kernel allocator by way of callbacks declared in [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h):
 
@@ -79,7 +79,7 @@ Each tracked object is represented by a `struct kmemleak_object` (defined in `mm
 - Reference count and state flags
 - Minimum number of pointer references required before declaring a leak (default 1; set via the `min_count` parameter to `kmemleak_alloc()`)
 
-### The Scan Thread
+### The Scan Thread {#the-scan-thread}
 
 A kernel thread (`kmemleak` kthread) periodically executes `kmemleak_scan()`. The scan:
 
@@ -90,9 +90,9 @@ A kernel thread (`kmemleak` kthread) periodically executes `kmemleak_scan()`. Th
 
 The scan is also triggered on demand via the debugfs interface (see [Using Kmemleak](#using-kmemleak)).
 
-## Enabling Kmemleak
+## Enabling Kmemleak {#enabling-kmemleak}
 
-### Kernel Configuration
+### Kernel Configuration {#kernel-configuration}
 
 ```
 CONFIG_DEBUG_KMEMLEAK=y
@@ -111,7 +111,7 @@ Enabling kmemleak requires `CONFIG_DEBUG_KMEMLEAK=y`. The related options are de
 !!! warning "Not for production"
     Kmemleak adds measurable memory and CPU overhead (see [Performance Overhead](#performance-overhead)). It is intended for development and debugging builds, not production deployment.
 
-### Boot Parameters
+### Boot Parameters {#boot-parameters}
 
 ```bash
 # Disable kmemleak entirely (even if compiled in)
@@ -121,7 +121,7 @@ kmemleak=off
 kmemleak=on
 ```
 
-### Verifying Kmemleak Is Active
+### Verifying Kmemleak Is Active {#verifying-kmemleak-is-active}
 
 ```bash
 # Check configuration
@@ -134,13 +134,13 @@ dmesg | grep kmemleak
 ls /sys/kernel/debug/kmemleak
 ```
 
-## Using Kmemleak
+## Using Kmemleak {#using-kmemleak}
 
-### The debugfs Interface
+### The debugfs Interface {#the-debugfs-interface}
 
 Kmemleak exposes a single file at `/sys/kernel/debug/kmemleak` that serves as both a control channel (writes) and a report interface (reads).
 
-#### Reading Reports
+#### Reading Reports {#reading-reports}
 
 ```bash
 # Trigger a scan and then read results
@@ -176,7 +176,7 @@ unreferenced object 0xffff88801a2b4c00 (size 128):
 
 The backtrace points to where the memory was allocated, which is typically where you begin the investigation. The leak itself (where the pointer was dropped) is the bug to find.
 
-#### Control Commands
+#### Control Commands {#control-commands}
 
 ```bash
 # Trigger an immediate scan
@@ -192,7 +192,7 @@ echo off > /sys/kernel/debug/kmemleak
 echo dump=0xffff88801a2b4c00 > /sys/kernel/debug/kmemleak
 ```
 
-### Workflow: Finding a Leak in a Kernel Module
+### Workflow: Finding a Leak in a Kernel Module {#workflow-finding-a-leak-in-a-kernel-module}
 
 ```bash
 # 1. Get a clean baseline before loading the module
@@ -217,7 +217,7 @@ cat /sys/kernel/debug/kmemleak
 !!! tip "Multiple scan passes"
     The first read after loading may include transient allocations. Run `echo scan > /sys/kernel/debug/kmemleak` a second or third time, waiting a few seconds between passes. Objects that persist across multiple scans are more likely to be true leaks.
 
-### Automatic Scanning
+### Automatic Scanning {#automatic-scanning}
 
 By default, kmemleak schedules automatic scans every 600 seconds (10 minutes) using a kernel thread. You can see this thread:
 
@@ -228,11 +228,11 @@ ps aux | grep kmemleak
 
 Automatic scans produce the same output as manual scans. Check `/sys/kernel/debug/kmemleak` at any time to see the accumulated results.
 
-## Annotating Allocations
+## Annotating Allocations {#annotating-allocations}
 
 Kmemleak can report false positives for allocations where the pointer is stored in a way it cannot scan — XOR-linked lists, encoded pointers, hardware descriptor rings, or deliberately long-lived allocations that the programmer knows are intentional. The API in [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h) provides annotations to suppress these reports.
 
-### kmemleak_not_leak
+### kmemleak_not_leak {#kmemleaknotleak}
 
 ```c
 #include <linux/kmemleak.h>
@@ -245,7 +245,7 @@ kmemleak_not_leak(buf);
 
 `kmemleak_not_leak(ptr)` tells kmemleak that this allocation is **intentionally not tracked** — it will not be reported even if no pointer to it is found during scanning. Use this when you know the allocation is reachable through a path kmemleak cannot see.
 
-### kmemleak_ignore
+### kmemleak_ignore {#kmemleak_ignore}
 
 ```c
 void *scratch = kmalloc(size, GFP_KERNEL);
@@ -254,7 +254,7 @@ kmemleak_ignore(scratch);
 
 `kmemleak_ignore(ptr)` suppresses reporting for this specific allocation and also suppresses scanning its contents. Use this for allocations that are truly intentional one-time allocations that are never freed (e.g., early-boot data structures that live for the kernel lifetime).
 
-### kmemleak_no_scan
+### kmemleak_no_scan {#kmemleaknoscan}
 
 ```c
 kmemleak_no_scan(ptr);
@@ -262,7 +262,7 @@ kmemleak_no_scan(ptr);
 
 `kmemleak_no_scan(ptr)` prevents kmemleak from scanning the contents of this allocation for pointers to other objects. It does not suppress leak reporting for `ptr` itself; it just stops kmemleak from using `ptr`'s contents as roots. Use this when the object contains values that look like pointers but are not (e.g., hash values, checksums, raw data buffers).
 
-### kmemleak_erase
+### kmemleak_erase {#kmemleak_erase}
 
 ```c
 kmemleak_erase(&global_ptr);
@@ -270,7 +270,7 @@ kmemleak_erase(&global_ptr);
 
 `kmemleak_erase(ptr)` explicitly removes a pointer from consideration during scanning. Use this when a pointer to an allocation has been cleared but the allocation will be freed later through a different mechanism. This prevents kmemleak from following the now-null pointer during the scan.
 
-### kmemleak_alloc / kmemleak_free (Manual Registration)
+### kmemleak_alloc / kmemleak_free (Manual Registration) {#kmemleakalloc-kmemleakfree-manual-registration}
 
 For memory that is tracked by a custom allocator rather than `kmalloc`/`vmalloc`, you can register and unregister objects manually:
 
@@ -284,7 +284,7 @@ kmemleak_free(ptr);
 
 The `min_count` parameter controls how many pointer references are required before kmemleak considers the object reachable. Setting `min_count=0` means kmemleak will never report this object regardless of references (equivalent to `kmemleak_ignore`). Setting `min_count=2` requires at least two pointer references.
 
-### Summary of Annotation Functions
+### Summary of Annotation Functions {#summary-of-annotation-functions}
 
 | Function | Effect |
 |----------|--------|
@@ -295,9 +295,9 @@ The `min_count` parameter controls how many pointer references are required befo
 | `kmemleak_alloc(ptr, size, min_count, gfp)` | Manually register an object |
 | `kmemleak_free(ptr)` | Manually unregister an object |
 
-## Limitations
+## Limitations {#limitations}
 
-### False Positives (Incorrectly Reported Leaks)
+### False Positives (Incorrectly Reported Leaks) {#false-positives-incorrectly-reported-leaks}
 
 Kmemleak reports an allocation as leaked whenever its scan finds no pointer to it. This produces false positives when the pointer exists but is hidden:
 
@@ -308,7 +308,7 @@ Kmemleak reports an allocation as leaked whenever its scan finds no pointer to i
 
 The `kmemleak_not_leak()` and `kmemleak_no_scan()` annotations exist specifically to silence these false positives in known-good code.
 
-### False Negatives (Missed Leaks)
+### False Negatives (Missed Leaks) {#false-negatives-missed-leaks}
 
 Kmemleak can fail to detect a real leak if:
 
@@ -316,7 +316,7 @@ Kmemleak can fail to detect a real leak if:
 - The allocation is freed before the scan runs (kmemleak correctly removes freed objects from tracking).
 - The allocation is below the minimum size tracked by kmemleak.
 
-### Performance Overhead
+### Performance Overhead {#performance-overhead}
 
 Kmemleak has three main sources of overhead:
 
@@ -326,7 +326,7 @@ Kmemleak has three main sources of overhead:
 
 The scan temporarily disables migration and reads every thread's stack, which can cause scheduling jitter. This makes kmemleak unsuitable for latency-sensitive workloads.
 
-### What Kmemleak Cannot Detect
+### What Kmemleak Cannot Detect {#what-kmemleak-cannot-detect}
 
 - Leaks in userspace processes (use Valgrind or AddressSanitizer for that)
 - Leaks in memory-mapped I/O regions
@@ -335,31 +335,31 @@ The scan temporarily disables migration and reads every thread's stack, which ca
 
 For OOM conditions caused by accumulation of unfreed objects, see [OOM Debugging](oom-debugging.md).
 
-## History
+## History {#history}
 
-### v2.6.28: Introduction (2008)
+### v2.6.28: Introduction (2008) {#v2628-introduction-2008}
 
 Kmemleak was introduced by Catalin Marinas (Arm Ltd) in kernel 2.6.28. The initial submission is described in the commit that added the infrastructure and the debugfs interface. The design drew on ideas from the Boehm-Demers-Weiser conservative garbage collector applied to the kernel's flat virtual address space.
 
 **LWN coverage**: [Finding kernel memory leaks](https://lwn.net/Articles/187979/) (2006) describes the early design proposals that preceded the upstream submission.
 
-### v2.6.30–v2.6.32: Stabilization
+### v2.6.30–v2.6.32: Stabilization {#v2630v2632-stabilization}
 
 Early after introduction, Catalin Marinas and other contributors addressed false-positive rates and scanning coverage, adding support for per-CPU variables and refining the gray-coloring pass.
 
-### v3.2: Early-Log Buffer
+### v3.2: Early-Log Buffer {#v32-early-log-buffer}
 
 The early-log buffer was added to capture allocations that happen before the kmemleak data structures are fully initialized (very early boot), allowing boot-time leaks to be reported once kmemleak is ready.
 
-### v4.x: Stability and Integration Improvements
+### v4.x: Stability and Integration Improvements {#v4x-stability-and-integration-improvements}
 
 Incremental improvements over the v4.x series addressed interactions with other debug infrastructure (fault injection, KASAN), reduced false-positive rates, and improved default scan interval behavior.
 
-### v5.x: SLUB Integration Improvements
+### v5.x: SLUB Integration Improvements {#v5x-slub-integration-improvements}
 
 As SLUB became the dominant slab allocator (see [Slab Allocator](slab.md)), kmemleak's hooks in [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) were refined to correctly track SLUB's internal object lifecycle, reducing false positives from SLUB's own internal allocations.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -371,17 +371,17 @@ As SLUB became the dominant slab allocator (see [Slab Allocator](slab.md)), kmem
 | [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | Calls `kmemleak_vmalloc` / `kmemleak_vfree` |
 | [`lib/Kconfig.debug`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.debug) | `CONFIG_DEBUG_KMEMLEAK` and related Kconfig options |
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [Kmemleak official documentation](https://docs.kernel.org/dev-tools/kmemleak.html) — configuration, usage, and the scanning algorithm
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Finding kernel memory leaks](https://lwn.net/Articles/187979/) — early design proposal describing the motivation and algorithm
 
-### Related
+### Related {#related}
 
 - [KASAN](kasan.md) — catches use-after-free and out-of-bounds; complementary to kmemleak
 - [KFENCE](kfence.md) — production-safe sampling detector; catches access bugs, not leaks

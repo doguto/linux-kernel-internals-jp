@@ -1,8 +1,8 @@
-# IPC: Inter-Process Communication
+# IPC: Inter-Process Communication {#ipc-inter-process-communication}
 
 > Mechanisms for processes to exchange data and coordinate
 
-## IPC mechanisms overview
+## IPC mechanisms overview {#ipc-mechanisms-overview}
 
 | Mechanism | Communication | Direction | Data size | Persistence |
 |-----------|--------------|-----------|-----------|-------------|
@@ -15,7 +15,7 @@
 | eventfd | Counter + notification | Both | 8-byte counter | Until all fds closed |
 | signalfd | Signal as fd | One-way | siginfo_t | While fd open |
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|

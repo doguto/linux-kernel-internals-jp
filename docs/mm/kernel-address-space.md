@@ -1,4 +1,4 @@
-# The Kernel Address Space
+# The Kernel Address Space {#the-kernel-address-space}
 
 > The direct map, vmemmap, vmalloc space, and KASLR — what lives in the kernel half of the address space, and why it's laid out the way it is
 
@@ -8,7 +8,7 @@ If you want the translation mechanics (how a virtual address becomes a physical 
 
 ---
 
-## The map
+## The map {#the-map}
 
 The canonical reference is [Documentation/arch/x86/x86_64/mm.rst](https://docs.kernel.org/arch/x86/x86_64/mm.html). For 4-level paging (48-bit virtual addresses), the kernel half looks like this:
 
@@ -60,13 +60,13 @@ Three observations before diving into individual regions:
 
 With 5-level paging (57-bit addresses, `CONFIG_X86_5LEVEL`), the same regions exist with the same ordering, just relocated and scaled up — the direct map grows to 32 PB and moves to `0xff11000000000000`. The layout is designed so the choice of paging depth changes constants, not structure.
 
-### The canonical hole
+### The canonical hole {#the-canonical-hole}
 
 Bits 63:48 of every valid address must be copies of bit 47 (sign extension). This hardware rule splits the address space into a "low" canonical half (`0x0000...` — userspace) and a "high" canonical half (`0xffff...` — kernel), with an enormous non-canonical gap between. The kernel gets the high half not by convention but because sign-extension makes "high half" cheap to test: any address with the top bit set is a kernel address. This is why kernel pointers all start with `0xffff` — and why a leaked pointer in a log file is instantly recognizable.
 
 ---
 
-## The direct map: the kernel's view of RAM
+## The direct map: the kernel's view of RAM {#the-direct-map-the-kernels-view-of-ram}
 
 The single most important region is the **direct map** (also called the *linear map* or *physmap*): a mapping of *all* physical memory, in order, starting at `PAGE_OFFSET`.
 
@@ -76,7 +76,7 @@ The single most important region is the **direct map** (also called the *linear 
 #define __pa(x)  ((unsigned long)(x) - PAGE_OFFSET)
 ```
 
-### Why map all of RAM permanently?
+### Why map all of RAM permanently? {#why-map-all-of-ram-permanently}
 
 Because the alternative is unbearable. The kernel constantly needs to touch arbitrary physical pages — a page it just allocated, a page cache page it's filling from disk, a page table page during a walk. Without a standing mapping, every such access would require creating a temporary mapping (as 32-bit kernels did with `kmap()` for highmem — a design so painful that killing it was a major motivation for going 64-bit). With the direct map, physical↔virtual conversion is one addition, no page table modification, no TLB shootdown.
 
@@ -104,7 +104,7 @@ flowchart LR
     M -. "describes" .-> P
 ```
 
-### The cost: fragmentation and attack surface
+### The cost: fragmentation and attack surface {#the-cost-fragmentation-and-attack-surface}
 
 The direct map's huge pages are also its weakness. Features that change permissions on a *single* 4 KB page — `set_memory_ro()` for module text, `set_memory_np()` for [secretmem](https://lwn.net/Articles/812325/), DEBUG_PAGEALLOC — force the kernel to split a 1 GB or 2 MB direct-map page into 4 KB pages, permanently increasing TLB pressure for all kernel memory access. Direct-map fragmentation is a recurring performance topic on the mm lists, and it's why permission-changing APIs are used sparingly.
 
@@ -116,7 +116,7 @@ The security story is sharper. Because *user* pages are also visible through the
 
 ---
 
-## vmemmap: the struct page array as an address-space trick
+## vmemmap: the struct page array as an address-space trick {#vmemmap-the-struct-page-array-as-an-address-space-trick}
 
 The kernel tracks every physical 4 KB page with a `struct page` (see [Life of a page](life-of-page.md)). On a 1 TB machine that's 256 million of them — and the core mm code wants `pfn_to_page()` to be *fast*, because it runs in every allocator hot path:
 
@@ -132,7 +132,7 @@ The region is sized for the worst case: 64 TB of physical memory / 4 KB per page
 
 ---
 
-## The vmalloc arena
+## The vmalloc arena {#the-vmalloc-arena}
 
 Third major region: `VMALLOC_START` to `VMALLOC_END`, 32 TB of space for **virtually contiguous, physically scattered** allocations. The [vmalloc](vmalloc.md) page covers the allocator itself; from the address-space perspective, what matters is *why this is a separate region*:
 
@@ -145,7 +145,7 @@ The subtle cost of the region: vmalloc mappings modify the shared kernel page ta
 
 ---
 
-## The top 2 GB: kernel text and modules
+## The top 2 GB: kernel text and modules {#the-top-2-gb-kernel-text-and-modules}
 
 Kernel code doesn't run from the direct map. It gets its own alias at the very top of the address space, `__START_KERNEL_map = 0xffffffff80000000`, with modules immediately after. The placement is not aesthetic — it's an ABI constraint:
 
@@ -156,7 +156,7 @@ So kernel text has *three* addresses: its physical address, its direct-map alias
 
 ---
 
-## KASLR: shuffling the map
+## KASLR: shuffling the map {#kaslr-shuffling-the-map}
 
 Everything above describes the *compile-time* layout. With `CONFIG_RANDOMIZE_BASE` and `CONFIG_RANDOMIZE_MEMORY` (both default on), boot-time KASLR randomizes, independently:
 
@@ -175,13 +175,13 @@ Honest assessment of the design ([LWN: Kernel address space layout randomization
 
 ---
 
-## How arm64 does it differently
+## How arm64 does it differently {#how-arm64-does-it-differently}
 
 The same concepts appear on arm64 ([arm64 memory model](../arch/arm64/memory-model.md)) with one elegant hardware difference: instead of one page-table root (CR3) covering both halves, arm64 has **two** — `TTBR0_EL1` for the low (user) half and `TTBR1_EL1` for the high (kernel) half. The kernel half never changes on context switch, so switching processes touches only TTBR0; and the arm64 equivalent of KPTI (unmapping the kernel while in userspace) is a matter of pointing TTBR1 at a minimal table rather than maintaining paired PGDs. The arm64 layout also places the linear map at the *bottom* of the kernel half and the kernel image in vmalloc space — same ingredients, different plate.
 
 ---
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # The authoritative map for your running kernel
@@ -211,7 +211,7 @@ sudo cat /proc/vmallocinfo | awk '{print $1}' | head -3   # 0xffffc9... (vmalloc
 
 ---
 
-## Common issues
+## Common issues {#common-issues}
 
 **`DirectMap4k` keeps growing.** Loading/unloading modules, BPF programs, and anything using `set_memory_*()` splits direct-map huge pages, and splits are (mostly) never merged back. On long-running machines this is a real, measurable TLB-pressure regression — one reason BPF and module allocations moved toward shared executable-memory pools.
 
@@ -223,7 +223,7 @@ sudo cat /proc/vmallocinfo | awk '{print $1}' | head -3   # 0xffffc9... (vmalloc
 
 ---
 
-## Version notes
+## Version notes {#version-notes}
 
 | Change | Linux version | Why it matters here |
 |--------|--------------|---------------------|
@@ -239,9 +239,9 @@ sudo cat /proc/vmallocinfo | awk '{print $1}' | head -3   # 0xffffc9... (vmalloc
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [Documentation/arch/x86/x86_64/mm.rst](https://docs.kernel.org/arch/x86/x86_64/mm.html) — the canonical memory-map table (both 4- and 5-level)
 - [arch/x86/mm/kaslr.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/kaslr.c) — memory-region randomization, ~100 very readable lines
@@ -249,7 +249,7 @@ sudo cat /proc/vmallocinfo | awk '{print $1}' | head -3   # 0xffffc9... (vmalloc
 - [include/asm-generic/memory_model.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/memory_model.h) — `pfn_to_page()` across memory models
 - [Documentation/arch/arm64/memory.rst](https://docs.kernel.org/arch/arm64/memory.html) — the arm64 counterpart map
 
-### Related pages
+### Related pages {#related-pages}
 
 - [x86-64 Page Tables](../arch/x86/page-tables.md) — the translation machinery beneath this map, KPTI, PCID
 - [x86_64 Boot Page Table Setup](boot-page-tables.md) — how this layout is constructed at boot
@@ -260,7 +260,7 @@ sudo cat /proc/vmallocinfo | awk '{print $1}' | head -3   # 0xffffc9... (vmalloc
 - [Getting User Pages (GUP)](gup.md) — how the direct-map pages get pinned for DMA
 - [arm64 Memory Model](../arch/arm64/memory-model.md) — the TTBR0/TTBR1 split in depth
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Memory: the flat, the discontiguous, and the sparse](https://lwn.net/Articles/789304/) — why vmemmap won; the history of memory models
 - [Kernel address space layout randomization](https://lwn.net/Articles/569635/) — KASLR's design and its honest limitations

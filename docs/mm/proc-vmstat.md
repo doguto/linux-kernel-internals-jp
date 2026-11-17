@@ -1,8 +1,8 @@
-# Understanding /proc/vmstat
+# Understanding /proc/vmstat {#understanding-procvmstat}
 
 > Counters and gauges for memory subsystem diagnostics
 
-## What is /proc/vmstat?
+## What is /proc/vmstat? {#what-is-procvmstat}
 
 `/proc/vmstat` exposes the kernel's internal memory management counters. Unlike `/proc/meminfo` which shows current state, `/proc/vmstat` includes both **gauges** (current values) and **counters** (monotonically increasing since boot).
 
@@ -22,11 +22,11 @@ pgscan_kswapd 0
 pgscan_direct 0
 ```
 
-## Counters vs Gauges
+## Counters vs Gauges {#counters-vs-gauges}
 
 This distinction is critical for monitoring. `/proc/vmstat` mixes both types.
 
-### Gauges (current state — can go up or down)
+### Gauges (current state — can go up or down) {#gauges-current-state-can-go-up-or-down}
 
 Prefixed with `nr_`. Reflect the **current** value, not cumulative. Read directly for the current state.
 
@@ -47,13 +47,13 @@ Prefixed with `nr_`. Reflect the **current** value, not cumulative. Read directl
 | `nr_swapcached` | Pages in the swap cache |
 | `nr_kernel_stack` | Kernel stack usage (in KiB) |
 
-### Counters (monotonically increasing since boot)
+### Counters (monotonically increasing since boot) {#counters-monotonically-increasing-since-boot}
 
 Defined in [`enum vm_event_item`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vm_event_item.h). You must compute **deltas** between two readings to get rates.
 
 **Gotcha**: `nr_dirtied` and `nr_written` have the `nr_` prefix but are actually counters (total pages dirtied/written since boot), not gauges.
 
-## Page Fault Counters
+## Page Fault Counters {#page-fault-counters}
 
 | Field | What it counts | Source |
 |-------|---------------|--------|
@@ -64,11 +64,11 @@ Minor faults = `pgfault - pgmajfault`. A minor fault means the page was already 
 
 **Diagnostic**: If `pgmajfault / pgfault` ratio exceeds ~1%, I/O latency is likely impacting application performance.
 
-## Reclaim Counters
+## Reclaim Counters {#reclaim-counters}
 
 These are the most important counters for diagnosing memory pressure.
 
-### Scanning vs Stealing
+### Scanning vs Stealing {#scanning-vs-stealing}
 
 | Field | What it counts |
 |-------|---------------|
@@ -88,7 +88,7 @@ All incremented in [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/g
 | `pgsteal_anon` | Anonymous pages reclaimed |
 | `pgsteal_file` | File-backed pages reclaimed |
 
-### Reclaim Efficiency
+### Reclaim Efficiency {#reclaim-efficiency}
 
 ```
 efficiency = pgsteal / pgscan
@@ -102,7 +102,7 @@ efficiency = pgsteal / pgscan
 
 Compute separately for kswapd and direct reclaim, and for anon vs file, to pinpoint the bottleneck.
 
-### Allocation Stalls
+### Allocation Stalls {#allocation-stalls}
 
 | Field | What it counts |
 |-------|---------------|
@@ -115,7 +115,7 @@ Incremented in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/g
 
 **Every increment means a process blocked waiting for memory.** This directly causes latency spikes. If `allocstall_normal` is incrementing at more than a few per second sustained, the system needs more free memory headroom.
 
-## Swap Counters
+## Swap Counters {#swap-counters}
 
 | Field | What it counts |
 |-------|---------------|
@@ -126,7 +126,7 @@ Incremented in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/g
 
 `pswpin`/`pswpout` are specifically swap operations. `pgpgin`/`pgpgout` are broader (all block I/O).
 
-## LRU Movement
+## LRU Movement {#lru-movement}
 
 | Field | What it counts |
 |-------|---------------|
@@ -135,7 +135,7 @@ Incremented in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/g
 | `pglazyfree` | Pages marked for lazy free via `MADV_FREE` |
 | `pglazyfreed` | Lazyfree pages actually reclaimed |
 
-## Compaction Counters
+## Compaction Counters {#compaction-counters}
 
 | Field | What it counts |
 |-------|---------------|
@@ -151,7 +151,7 @@ Source: [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torv
 
 **Failure rate**: `compact_fail / (compact_fail + compact_success)` above 50% means severe fragmentation with unmovable pages blocking compaction.
 
-## THP Counters
+## THP Counters {#thp-counters}
 
 | Field | What it counts |
 |-------|---------------|
@@ -166,7 +166,7 @@ Source: [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torv
 
 Source: [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c), [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c).
 
-## OOM Counter
+## OOM Counter {#oom-counter}
 
 | Field | What it counts |
 |-------|---------------|
@@ -174,9 +174,9 @@ Source: [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/tor
 
 Incremented in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c).
 
-## Diagnostic Patterns
+## Diagnostic Patterns {#diagnostic-patterns}
 
-### Detecting memory pressure
+### Detecting memory pressure {#detecting-memory-pressure}
 
 ```bash
 # Watch reclaim activity (1-second deltas)
@@ -190,7 +190,7 @@ watch -n 1 'grep -E "pgscan_|pgsteal_|allocstall" /proc/vmstat'
 | `allocstall_normal` increasing | Allocation stalls — latency impact on applications |
 | `pgsteal / pgscan` ratio dropping | Reclaim efficiency falling — running out of easy-to-reclaim pages |
 
-### Detecting swap thrashing
+### Detecting swap thrashing {#detecting-swap-thrashing}
 
 ```bash
 grep -E "pswpin|pswpout|pgmajfault" /proc/vmstat
@@ -198,7 +198,7 @@ grep -E "pswpin|pswpout|pgmajfault" /proc/vmstat
 
 High `pswpin` + `pswpout` with high `pgmajfault` = the system is swapping actively and applications are faulting pages back in. The working set does not fit in RAM.
 
-### Detecting THP problems
+### Detecting THP problems {#detecting-thp-problems}
 
 ```bash
 grep "thp_" /proc/vmstat
@@ -215,7 +215,7 @@ grep "thp_" /proc/vmstat
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-### Detecting compaction problems
+### Detecting compaction problems {#detecting-compaction-problems}
 
 | Signal | Problem |
 |--------|---------|
@@ -223,9 +223,9 @@ echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 | `compact_fail >> compact_success` | Unmovable pages blocking defragmentation |
 | `compact_migrate_scanned >> compact_isolated` | Migration scanner finds pages but cannot move them |
 
-## Using /proc/vmstat with Tools
+## Using /proc/vmstat with Tools {#using-procvmstat-with-tools}
 
-### Direct reading (most complete)
+### Direct reading (most complete) {#direct-reading-most-complete}
 
 ```bash
 # Compute deltas (rate per second)
@@ -233,7 +233,7 @@ paste <(cat /proc/vmstat) <(sleep 1; cat /proc/vmstat) | \
   awk '$1 == $3 && $2 != $4 {print $1, $4-$2, "delta/s"}'
 ```
 
-### vmstat command (procps)
+### vmstat command (procps) {#vmstat-command-procps}
 
 ```bash
 $ vmstat 1
@@ -248,7 +248,7 @@ procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
 | `bi` (block in) | `pgpgin` delta |
 | `bo` (block out) | `pgpgout` delta |
 
-### sar command (sysstat)
+### sar command (sysstat) {#sar-command-sysstat}
 
 ```bash
 # Page fault and reclaim rates
@@ -261,7 +261,7 @@ sar -W 1
 # pswpin/s, pswpout/s from their respective counters
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # See which counters are actively changing (memory pressure test)
@@ -278,7 +278,7 @@ awk '/pgscan_kswapd/{scan=$2} /pgsteal_kswapd/{steal=$2} END{if(scan>0) printf "
 awk '/thp_fault_alloc /{ok=$2} /thp_fault_fallback /{fail=$2} END{total=ok+fail; if(total>0) printf "THP success: %.1f%% (%d/%d)\n", ok/total*100, ok, total; else print "No THP faults"}' /proc/vmstat
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | What it contains |
 |------|-----------------|
@@ -289,7 +289,7 @@ awk '/thp_fault_alloc /{ok=$2} /thp_fault_fallback /{fail=$2} END{total=ok+fail;
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Allocation and stall counters |
 | [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Compaction counters |
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [/proc/meminfo](proc-meminfo.md) — complementary current-state view
 - [Reading an OOM log](reading-oom-log.md) — what happens when these counters go critical

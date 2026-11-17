@@ -1,4 +1,4 @@
-# Debugging War Stories
+# Debugging War Stories {#debugging-war-stories}
 
 > Bugs caught by KASAN, lockdep, syzkaller, and other tools
 
@@ -9,19 +9,19 @@ These are technically grounded accounts of the kinds of bugs that kernel debuggi
 
 ---
 
-## 1. KASAN finds a use-after-free in a network driver RX path
+## 1. KASAN finds a use-after-free in a network driver RX path {#1-kasan-finds-a-use-after-free-in-a-network-driver-rx-path}
 
 **Tool:** KASAN (generic, `CONFIG_KASAN_GENERIC`)
 **Bug class:** Use-after-free
 **Subsystem:** Networking (`sk_buff`, NAPI RX handler)
 
-### What happened
+### What happened {#what-happened}
 
 A network driver's RX completion handler was processing received frames in a loop. Inside the loop, the driver called `dev_kfree_skb()` to release the `sk_buff` after passing it up the stack via `netif_receive_skb()`. But the loop then accessed `skb->len` in its accounting code — after the skb had been freed.
 
 The access was in a fast path that the developer had been optimizing. An earlier refactor moved the accounting code below the `dev_kfree_skb()` call without noticing that `skb` was now a dangling pointer.
 
-### The KASAN report
+### The KASAN report {#the-kasan-report}
 
 ```
 ==================================================================
@@ -55,7 +55,7 @@ Reading the report:
 - The **Read of size 4** is accessing `skb->len` (a `__u32` at offset `0x68` in `struct sk_buff`)
 - The free stack shows `mydrv_rx_completion+0x198`; the access stack shows `mydrv_rx_completion+0x1a8` — the access is 16 bytes later in the same function, confirming a use-after-free in the same call frame
 
-### The fix
+### The fix {#the-fix}
 
 ```c
 /* Before (buggy): */
@@ -88,13 +88,13 @@ void mydrv_rx_completion(struct mydrv *priv, struct rx_desc *desc)
 
 ---
 
-## 2. lockdep catches an ABBA deadlock before production
+## 2. lockdep catches an ABBA deadlock before production {#2-lockdep-catches-an-abba-deadlock-before-production}
 
 **Tool:** lockdep (`CONFIG_PROVE_LOCKING`)
 **Bug class:** Circular lock dependency (potential deadlock)
 **Subsystem:** Filesystem (ext4-style inode stats)
 
-### What happened
+### What happened {#what-happened_1}
 
 A developer added a per-superblock `stats_lock` spinlock to protect aggregate I/O statistics. They introduced two code paths that acquired the new lock:
 
@@ -107,7 +107,7 @@ Path A: inode→i_rwsem → sb→stats_lock
 Path B: sb→stats_lock → inode→i_rwsem
 ```
 
-### The lockdep splat
+### The lockdep splat {#the-lockdep-splat}
 
 ```
 ======================================================
@@ -137,7 +137,7 @@ the existing dependency chain (in reverse order) is:
 
 Lockdep fired on the **first execution** of `stats_flush_worker`, before any production system ran the code. No actual deadlock had occurred — both paths could have been running on different CPUs in a busy filesystem.
 
-### The fix
+### The fix {#the-fix_1}
 
 The developer reversed the acquisition order in `stats_flush_worker`: collect the dirty-inode list under `stats_lock` into a local array, drop `stats_lock`, then acquire each inode lock individually.
 
@@ -176,19 +176,19 @@ void stats_flush_worker(struct work_struct *work)
 
 ---
 
-## 3. syzkaller finds a NULL deref via crafted io_uring SQE
+## 3. syzkaller finds a NULL deref via crafted io_uring SQE {#3-syzkaller-finds-a-null-deref-via-crafted-io_uring-sqe}
 
 **Tool:** syzkaller + syzbot
 **Bug class:** NULL pointer dereference (missing bounds check)
 **Subsystem:** io_uring (`io_write`, fixed-file table)
 
-### What happened
+### What happened {#what-happened_2}
 
 A new io_uring feature landed in `linux-next`. Within 2 hours, syzbot reported a NULL pointer dereference in `io_write()`, triggered by an `IORING_OP_WRITE` SQE with `IOSQE_FIXED_FILE` set but with `ctx->file_table.files` being NULL (no fixed files registered).
 
 The kernel was reading `ctx->file_table.files[req->fixed_file]` without checking whether `ctx->file_table.files` was initialized. The reproducer was a 20-line C program.
 
-### The syzbot report
+### The syzbot report {#the-syzbot-report}
 
 ```
 BUG: kernel NULL pointer dereference, address: 0000000000000000
@@ -211,7 +211,7 @@ Reproduced with:
     buf=0x7f00, len=0x10, off=0x0})
 ```
 
-### The root cause
+### The root cause {#the-root-cause}
 
 ```c
 /* Before (buggy) — io_uring/io_uring.c: */
@@ -230,7 +230,7 @@ static struct file *io_file_get_fixed(struct io_ring_ctx *ctx,
 }
 ```
 
-### The fix
+### The fix {#the-fix_2}
 
 ```c
 /* After (fixed): */
@@ -261,17 +261,17 @@ if (req->flags & REQ_F_FIXED_FILE) {
 
 ---
 
-## 4. KFENCE catches an off-by-one in `kstrdup`
+## 4. KFENCE catches an off-by-one in `kstrdup` {#4-kfence-catches-an-off-by-one-in-kstrdup}
 
 **Tool:** KFENCE (`CONFIG_KFENCE`)
 **Bug class:** Heap out-of-bounds write (off-by-one)
 **Subsystem:** String helpers / driver core
 
-### What happened
+### What happened {#what-happened_3}
 
 A production server running a recent kernel started showing KFENCE reports in its kernel logs. The system had `CONFIG_KFENCE=y` with the default 100ms sample interval. The report appeared in the first hour of uptime.
 
-### The KFENCE report
+### The KFENCE report {#the-kfence-report}
 
 ```
 ==================================================================
@@ -294,7 +294,7 @@ CPU: 1 PID: 1 Comm: swapper/0 Not tainted 6.8.0 #1
 ==================================================================
 ```
 
-### Root cause
+### Root cause {#root-cause}
 
 The helper in `mydriver` called `kstrdup()` indirectly through an upstream utility function. That utility function had a bug: it allocated `strlen(s)` bytes instead of `strlen(s) + 1`, omitting space for the NUL terminator. The `kstrdup` implementation then wrote the NUL at byte index `len`, which is one past the end of the allocation.
 
@@ -315,7 +315,7 @@ The bug had existed for several kernel releases, but no KASAN-enabled kernel had
 
 KFENCE, by contrast, samples allocations in production at near-zero overhead, so it eventually caught this allocation once it landed in a KFENCE slot that happened to be right-aligned in its 4 KB data page (KFENCE randomizes left/right placement per allocation). The guard page immediately followed byte 7. The NUL write to byte 8 hit the guard page and faulted.
 
-### The fix
+### The fix {#the-fix_3}
 
 ```c
 /* Fixed: */
@@ -343,19 +343,19 @@ char *make_name(const char *prefix, const char *suffix)
 
 ---
 
-## 5. kdump saves the day after silent memory corruption
+## 5. kdump saves the day after silent memory corruption {#5-kdump-saves-the-day-after-silent-memory-corruption}
 
 **Tool:** kdump + `crash` + KASAN (follow-up)
 **Bug class:** Use-after-free corrupting `kmem_cache` freelist
 **Subsystem:** Block layer (`bio` objects), device lifecycle
 
-### What happened
+### What happened {#what-happened_4}
 
 A storage server experienced periodic silent hangs — the system would stop responding and reboot (via hardware watchdog) with no oops, no panic, and no messages in the kernel log. The crashes happened every few days under heavy I/O load.
 
 After enabling kdump (`CONFIG_KEXEC=y`, `crashkernel=256M` on the boot command line), the team captured a vmcore on the next crash.
 
-### crash analysis
+### crash analysis {#crash-analysis}
 
 ```bash
 crash vmlinux /var/crash/vmcore
@@ -379,13 +379,13 @@ The `kmem_cache` freelist for `bio` objects had been corrupted. A freed `bio` ha
 
 This corrupted freelist pointer would eventually cause `kmem_cache_alloc()` to return a bogus pointer — at which point the kernel would write into an arbitrary kernel address, leading to the silent hang.
 
-### Tracking down the writer
+### Tracking down the writer {#tracking-down-the-writer}
 
 The `crash` session showed the corrupted bio was last seen allocated by a specific block driver from the `bio` backtrace stored in `SLUB` debug metadata (visible because `CONFIG_SLUB_DEBUG=y` was enabled).
 
 With that information, the team enabled `CONFIG_KASAN=y` on a test system with the same driver and workload.
 
-### The KASAN report
+### The KASAN report {#the-kasan-report_1}
 
 Within minutes of starting the test I/O workload:
 
@@ -406,13 +406,13 @@ Allocated by task 56:
 ==================================================================
 ```
 
-### Root cause
+### Root cause {#root-cause_1}
 
 The driver was accessing `bio->bi_iter` after calling `bio_endio()`. `bio_endio()` calls the bio's completion callback which may call `bio_put()` — dropping the last reference and freeing the bio back to the slab. If the driver's reference count was wrong, `bio_endio()` would free the bio and the driver would then write into freed memory.
 
 The actual bug: the driver called `bio_endio()` without first calling `get_device()` on the target device. Under memory pressure, the device's `release()` callback ran and freed a shared structure that included the bio pool. When `bio_endio()` subsequently ran, it released the bio into an already-destroyed pool, corrupting the freelist.
 
-### The fix
+### The fix {#the-fix_4}
 
 ```c
 /* Before (buggy): driver submits I/O without holding device reference */
@@ -450,7 +450,7 @@ static void myblk_end_io(struct bio *bio)
 
 ---
 
-## Tool summary
+## Tool summary {#tool-summary}
 
 | Story | Bug | Tool that found it | Time to find |
 |---|---|---|---|
@@ -462,9 +462,9 @@ static void myblk_end_io(struct bio *bio)
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/locking/lockdep.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/locking/lockdep.c) — `check_noncircular()` and `check_deadlock()`, the runtime cycle-detection code behind Case 2's splat
 - [mm/kfence/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/core.c) and [lib/Kconfig.kfence](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kfence) — the sampling-gate implementation and `CONFIG_KFENCE_SAMPLE_INTERVAL` (default 100, in milliseconds), confirming Case 4's "default 100ms sample interval" claim
@@ -472,7 +472,7 @@ static void myblk_end_io(struct bio *bio)
 - [mm/kasan/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/report.c) — `kasan_report()`, the reporting path behind Case 1 and Case 5's follow-up KASAN report
 - [io_uring/io_uring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/io_uring/io_uring.c) — `io_file_get_fixed()`, the real fixed-file resolution function Case 3's illustrative bug is modeled on (current source validates through `io_rsrc_node_lookup()` rather than the simplified direct index check shown here)
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KASAN and KFENCE](kasan-kfence.md) — memory error detector reference
 - [lockdep in Practice](dynamic-debug-lockdep.md) — reading splats, annotating false positives
@@ -481,7 +481,7 @@ static void myblk_end_io(struct bio *bio)
 - [Oops Analysis](oops-analysis.md) — decoding stack traces
 - [KCSAN](kcsan.md) — data race detection
 
-### External
+### External {#external}
 
 - [Kernel documentation: KASAN](https://docs.kernel.org/dev-tools/kasan.html) — shadow memory and use-after-free/out-of-bounds detection, the mechanism behind Case 1's report and Case 5's follow-up KASAN run
 - [Kernel documentation: KFENCE](https://docs.kernel.org/dev-tools/kfence.html) — the sampling guard-page detector, its production-safe overhead, and left/right allocation alignment within a slot, behind Case 4

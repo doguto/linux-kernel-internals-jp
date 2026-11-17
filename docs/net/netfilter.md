@@ -1,14 +1,14 @@
-# Netfilter Architecture
+# Netfilter Architecture {#netfilter-architecture}
 
 > The kernel's packet filtering and NAT framework: hooks, tables, and connection tracking
 
-## What Netfilter is
+## What Netfilter is {#what-netfilter-is}
 
 Netfilter is a framework of hooks embedded at fixed points in the IP stack. Every packet traversing the network passes through these hooks, where registered callbacks (from iptables, nftables, conntrack, etc.) can inspect and modify it.
 
 Netfilter itself is just the framework. The policy (firewall rules, NAT, etc.) is implemented by modules that register at these hooks.
 
-## The five hook points
+## The five hook points {#the-five-hook-points}
 
 ```
                           Routing Decision
@@ -39,7 +39,7 @@ enum nf_inet_hooks {
 | LOCAL_OUT | After socket, before routing | OUTPUT chain |
 | POSTROUTING | Before NIC transmit | SNAT (masquerade) |
 
-## struct nf_hook_ops: registering a hook
+## struct nf_hook_ops: registering a hook {#struct-nfhookops-registering-a-hook}
 
 Any module can register callbacks at these hooks:
 
@@ -81,7 +81,7 @@ static unsigned int syn_log_hook(void *priv, struct sk_buff *skb,
 }
 ```
 
-## iptables vs nftables
+## iptables vs nftables {#iptables-vs-nftables}
 
 Both are userspace tools that install rules into Netfilter. They differ in the underlying kernel representation:
 
@@ -96,7 +96,7 @@ Both are userspace tools that install rules into Netfilter. They differ in the u
 
 Both install their rules as Netfilter hook callbacks under the hood.
 
-### iptables chains and tables
+### iptables chains and tables {#iptables-chains-and-tables}
 
 ```bash
 # iptables organizes rules into tables and chains
@@ -112,7 +112,7 @@ iptables -t raw -L -n -v      # raw table (conntrack bypass)
 # raw:    PREROUTING, OUTPUT (runs BEFORE conntrack)
 ```
 
-### nftables equivalent
+### nftables equivalent {#nftables-equivalent}
 
 ```bash
 # nftables uses a unified command
@@ -129,7 +129,7 @@ nft add element inet myfilter allowed_ips { 10.0.0.1, 10.0.0.2 }
 nft add rule inet myfilter input ip saddr @allowed_ips accept
 ```
 
-## Connection tracking (conntrack)
+## Connection tracking (conntrack) {#connection-tracking-conntrack}
 
 **Conntrack** is the stateful packet inspection layer. It tracks every connection through the kernel, enabling:
 
@@ -137,7 +137,7 @@ nft add rule inet myfilter input ip saddr @allowed_ips accept
 - NAT (both DNAT and SNAT need to rewrite both directions)
 - Connection-aware applications (via NFQUEUE or nf_conntrack events)
 
-### struct nf_conn
+### struct nf_conn {#struct-nf_conn}
 
 ```c
 // include/net/netfilter/nf_conntrack.h
@@ -161,7 +161,7 @@ struct nf_conn {
 };
 ```
 
-### Conntrack lifecycle
+### Conntrack lifecycle {#conntrack-lifecycle}
 
 ```
 Packet arrives → PREROUTING → conntrack lookup
@@ -175,7 +175,7 @@ POSTROUTING → NAT rewrites src/dst if needed
     → nf_conn stores the rewrite for the reply direction
 ```
 
-### Viewing conntrack state
+### Viewing conntrack state {#viewing-conntrack-state}
 
 ```bash
 # List all tracked connections
@@ -193,7 +193,7 @@ conntrack -E
 cat /proc/net/stat/nf_conntrack
 ```
 
-### Conntrack tuning
+### Conntrack tuning {#conntrack-tuning}
 
 ```bash
 # Maximum number of tracked connections
@@ -213,7 +213,7 @@ cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait  # default: 120s
 
 A full conntrack table causes new connections to be dropped. This is a common issue on busy NAT gateways or connection-heavy servers.
 
-## NAT: DNAT and SNAT
+## NAT: DNAT and SNAT {#nat-dnat-and-snat}
 
 NAT is implemented as Netfilter hooks that modify packets and store the rewrite in the conntrack entry:
 
@@ -231,7 +231,7 @@ nft add rule inet nat postrouting oifname "eth0" masquerade
 
 The conntrack entry stores both directions, so reply packets are automatically rewritten in the opposite direction (DNAT reply becomes SNAT, etc.) without needing explicit reverse rules.
 
-## NF_HOOK macro: how hooks are called
+## NF_HOOK macro: how hooks are called {#nf_hook-macro-how-hooks-are-called}
 
 At each hook point in the IP stack:
 
@@ -244,7 +244,7 @@ return NF_HOOK(NFPROTO_IPV4, NF_INET_PRE_ROUTING,
 
 `NF_HOOK` calls each registered hook in priority order. If all return `NF_ACCEPT`, `ip_rcv_finish` is called. Any `NF_DROP` stops processing immediately.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [nftables vs iptables](nftables-iptables.md) — Rule syntax and migration
 - [Connection Tracking](conntrack.md) — conntrack internals in depth

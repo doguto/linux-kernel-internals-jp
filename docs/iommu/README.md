@@ -1,8 +1,8 @@
-# IOMMU and DMA
+# IOMMU and DMA {#iommu-and-dma}
 
 > Hardware address translation and memory protection for devices
 
-## Why IOMMU?
+## Why IOMMU? {#why-iommu}
 
 Without an IOMMU, a DMA-capable device can access any physical memory — a compromised network card can read or overwrite kernel memory. The IOMMU sits between the PCIe bus and physical memory, translating device I/O virtual addresses (IOVAs) to physical addresses and enforcing access permissions.
 
@@ -21,7 +21,7 @@ Beyond security, the IOMMU enables:
 - **Scatter-gather flattening**: discontiguous physical pages appear contiguous to the device
 - **Device passthrough (VFIO)**: safely assign physical devices to VMs
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -32,7 +32,7 @@ Beyond security, the IOMMU enables:
 | [VFIO Internals](vfio-internals.md) | Container/group/device hierarchy, mdev, MSI irqfd, KVM passthrough |
 | [IOMMU War Stories](war-stories.md) | DMAR faults, IOVA perf bottleneck, group isolation, swiotlb exhaustion |
 
-## Reading order
+## Reading order {#reading-order}
 
 New to IOMMU internals? Work through the pages in this order:
 
@@ -44,7 +44,7 @@ New to IOMMU internals? Work through the pages in this order:
 6. **[VFIO Internals](vfio-internals.md)** — device passthrough architecture; page pinning, interrupt delivery, mdev
 7. **[IOMMU War Stories](war-stories.md)** — real incidents tying all the above together; good for consolidating understanding
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # Check if IOMMU is active

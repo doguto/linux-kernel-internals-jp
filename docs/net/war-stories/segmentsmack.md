@@ -1,4 +1,4 @@
-# SegmentSmack
+# SegmentSmack {#segmentsmack}
 
 > CVE-2018-5390 — tiny, deliberately-scattered out-of-order TCP segments could pin a CPU core at 100% with roughly 2 kpps of traffic
 
@@ -22,7 +22,7 @@ Actively exploited
 
 *Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 When TCP segments arrive out of order, the kernel holds them in a per-socket out-of-order (OFO) queue — an rbtree (`tp->out_of_order_queue`, introduced by commit [`9f5afeae5152`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9f5afeae51526b3ad7b7cb21ee8b145ce6ea7a7a) "tcp: use an RB tree for ooo receive queue") keyed by sequence number, so later segments can be inserted and merged with existing ranges in roughly O(log n) time. Eric Dumazet [posted the conversion](https://lore.kernel.org/netdev/1473284968.15733.8.camel@edumazet-glaptop3.roam.corp.google.com/) on behalf of Yaogong Wang in September 2016; the review that followed was entirely about correctness, not attack surface — Ilpo Järvinen specifically asked whether stream-corruption testing had been done ("This kind of changes have some potential to cause some corruption to the stream content"), and Dumazet answered that it had been tested on real Google front-ends under up to 10% packet loss. Nobody in that thread considered what an adversary who could shape the *ordering* of arrivals, rather than just their loss rate, might do to the new tree — which is exactly the angle SegmentSmack came from two years later. Two related routines manage this queue under memory pressure:
 
@@ -31,17 +31,17 @@ When TCP segments arrive out of order, the kernel holds them in a per-socket out
 
 Both were designed around the assumption that "adjacent ranges" would typically be a manageable number of reasonably sized segments.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Juha-Matti Tilli (Aalto University / Nokia Bell Labs) found that a remote attacker could send a stream of **tiny, out-of-order TCP segments with deliberately randomized sequence offsets** on an established connection. Because each segment lands in a different, non-adjacent spot in the rbtree, `tcp_collapse_ofo_queue()` had to walk and examine essentially every node on every incoming packet — without ever finding enough adjacency to actually shrink the queue. [Red Hat's advisory](https://access.redhat.com/articles/3553061) noted that as little as ~2 kpps (kilopackets/second) of crafted traffic was enough to trigger the pathological behavior, and the attack could not be done with spoofed source addresses, so it required (and consumed) a real, if cheap, TCP connection.
 
 According to [Aalto University's account of the discovery](https://www.aalto.fi/en/news/juha-matti-tilli-could-not-sleep-instead-he-had-an-idea-that-took-him-to-the-vulnerabilities), Tilli found this bug as a side effect of unrelated work: his post-graduate research was on IP fragment reassembly, where he'd identified that Linux (like most open-source stacks) walked a plain linked list to reassemble fragments — an algorithmic-complexity weakness in its own right, later tracked separately as FragmentSmack ([CVE-2018-5391](https://nvd.nist.gov/vuln/detail/CVE-2018-5391)). Testing a balanced-search-tree replacement for that linked list, he ran speed comparisons against Linux's stack and, in the process, "also noticed another vulnerability associated with the most common way to break information, TCP segmentation" — the out-of-order queue's collapse logic. He reported both findings directly to the Finnish Communications Regulatory Authority and to Linus Torvalds.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 Sustained, attacker-controlled **CPU pinning**: a single low-bandwidth connection could keep a CPU core at 100% utilization by forcing repeated O(n) or worse scans of the out-of-order queue, with the queue holding on the order of thousands of nodes under default `tcp_rmem[2]` settings (~7,000 nodes at the 6 MB default). Red Hat and the wider community named this **SegmentSmack**. LWN's follow-up (["CVE-2018-5390 and 'embargoes'", August 2018](https://lwn.net/Articles/762512/)) covered the bug's disclosure timeline rather than its internals, but confirmed the practical impact and the "SegmentSmack" naming.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The merge fix for CVE-2018-5390 landed as a five-commit series merged via [`1a4f14bab186`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1a4f14bab1868b443f0dd3c55b689a478f82e72e) ("Merge branch 'tcp-robust-ooo'"), all authored by Eric Dumazet and reported by Tilli. The underlying issues:
 
@@ -49,7 +49,7 @@ The merge fix for CVE-2018-5390 landed as a five-commit series merged via [`1a4f
 - `tcp_collapse_ofo_queue()` had no early-exit: it would keep scanning and attempting collapses across the whole rbtree even when the "ranges" being merged were single tiny packets that could never coalesce into anything useful.
 - Nothing tracked how much *work* (versus how much *memory*) had been spent on a given collapse/prune pass, so an attacker who couldn't grow the queue's memory footprint could still make the kernel spend unbounded CPU walking it.
 
-## Resolution
+## Resolution {#resolution}
 
 The `tcp-robust-ooo` series made the OFO queue economics attacker-resistant rather than just memory-bounded:
 
@@ -77,7 +77,7 @@ No published exploit tool or Metasploit module exists for this one either — th
 nstat -az | grep -i 'TcpExtOfoPruned\|TcpExtTCPOFOMerge'
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Memory-bounded is not CPU-bounded.** A queue that respects `sk_rcvbuf` can still let an attacker burn unbounded CPU per byte received, if the algorithm walking that queue has no independent bound on its own work.
 
@@ -88,12 +88,12 @@ nstat -az | grep -i 'TcpExtOfoPruned\|TcpExtTCPOFOMerge'
 !!! warning "Pattern to watch for"
     Watch `TcpExtOfoPruned` and `TcpExtTCPOFOMerge` in `nstat`/`/proc/net/netstat` for unusual spikes correlated with a specific peer — that's the observable signature of an out-of-order queue under this kind of pressure. Kernels before 4.9.116/4.14.59/4.17.11 (4.18 in mainline) are exposed if `tcp-robust-ooo` hasn't been backported.
 
-## See also
+## See also {#see-also}
 
 - [TCP Implementation](../tcp.md) — the out-of-order queue and receive path involved in this bug
 - [The TCP SACK Panic](sack-panic.md) and [The Challenge-ACK Side Channel](challenge-ack.md) — two other TCP-layer war stories from the same era
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2018-5390](https://nvd.nist.gov/vuln/detail/CVE-2018-5390) — SegmentSmack CVE record
 - [git.kernel.org: 9f5afeae5152](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9f5afeae51526b3ad7b7cb21ee8b145ce6ea7a7a) — "tcp: use an RB tree for ooo receive queue", the 2016 rbtree conversion this bug exploited

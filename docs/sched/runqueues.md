@@ -1,8 +1,8 @@
-# Runqueues and Task Selection
+# Runqueues and Task Selection {#runqueues-and-task-selection}
 
 > Per-CPU runqueues, struct rq, and how the scheduler picks the next task
 
-## The per-CPU design
+## The per-CPU design {#the-per-cpu-design}
 
 Every CPU has its own runqueue. There is no global queue of runnable tasks — each CPU independently manages its own set and picks from it. This design scales: CPUs never contend on a shared lock just to pick the next task.
 
@@ -19,7 +19,7 @@ CPU 0             CPU 1             CPU 2             CPU 3
 
 Load balancing periodically migrates tasks between CPUs to keep them busy, but that's separate from the per-CPU selection path.
 
-## struct rq
+## struct rq {#struct-rq}
 
 `struct rq` is the central per-CPU scheduler state, defined in `kernel/sched/sched.h`:
 
@@ -61,7 +61,7 @@ struct rq {
 };
 ```
 
-### Key fields
+### Key fields {#key-fields}
 
 | Field | Type | Purpose |
 |-------|------|---------|
@@ -74,7 +74,7 @@ struct rq {
 | `rt` | `struct rt_rq` | RT runqueue (FIFO/RR tasks) |
 | `dl` | `struct dl_rq` | Deadline runqueue (SCHED_DEADLINE tasks) |
 
-## Accessing runqueues
+## Accessing runqueues {#accessing-runqueues}
 
 The runqueues are declared as a per-CPU variable:
 
@@ -94,9 +94,9 @@ Access macros:
 
 Most scheduler code uses `this_rq()` — the runqueue for the currently executing CPU. Accessing another CPU's runqueue requires holding that CPU's `rq->__lock`.
 
-## The three sub-queues
+## The three sub-queues {#the-three-sub-queues}
 
-### struct cfs_rq (fair tasks)
+### struct cfs_rq (fair tasks) {#struct-cfs_rq-fair-tasks}
 
 ```c
 // kernel/sched/sched.h
@@ -113,7 +113,7 @@ struct cfs_rq {
 
 The `tasks_timeline` RB-tree holds all runnable fair tasks, ordered by `vruntime`. The `rb_root_cached` variant caches the leftmost node for O(1) access, though since EEVDF the leftmost node is no longer always selected — but the cache remains useful as a starting point for the tree walk.
 
-### struct rt_rq (RT tasks)
+### struct rt_rq (RT tasks) {#struct-rt_rq-rt-tasks}
 
 ```c
 // kernel/sched/sched.h
@@ -132,7 +132,7 @@ struct rt_prio_array {
 
 RT task selection is O(1): `sched_find_first_bit(bitmap)` finds the highest-priority non-empty queue, then takes the head of that queue.
 
-### struct dl_rq (deadline tasks)
+### struct dl_rq (deadline tasks) {#struct-dl_rq-deadline-tasks}
 
 ```c
 // kernel/sched/sched.h
@@ -145,7 +145,7 @@ struct dl_rq {
 
 Deadline task selection picks the task with the earliest `dl_deadline` from the RB-tree — similar to EEVDF but for absolute (not virtual) deadlines.
 
-## The scheduling decision
+## The scheduling decision {#the-scheduling-decision}
 
 The core of the scheduler lives in `__schedule()` in `kernel/sched/core.c`:
 
@@ -180,7 +180,7 @@ static void __sched notrace __schedule(int sched_mode)
 }
 ```
 
-### pick_next_task()
+### pick_next_task() {#picknexttask}
 
 Walks the scheduler class hierarchy until a class has a task:
 
@@ -214,7 +214,7 @@ restart:
 
 The fast path skips the class walk entirely when all tasks are SCHED_NORMAL (the common case on most systems). This saves checking three higher-priority classes that almost never have tasks.
 
-## context_switch()
+## context_switch() {#context_switch}
 
 Once `next` is selected, `context_switch()` switches execution:
 
@@ -246,7 +246,7 @@ context_switch(struct rq *rq, struct task_struct *prev,
 
 `switch_to()` is architecture-specific. On x86-64 it saves/restores registers and switches the stack pointer. After `switch_to()`, execution continues in `next`'s context — `prev` is whatever task ran before `next` last yielded.
 
-## Runqueue clock
+## Runqueue clock {#runqueue-clock}
 
 `rq->clock` is a nanosecond-precision monotonic clock per CPU, updated at each scheduling event:
 
@@ -260,7 +260,7 @@ u64 now = rq_clock_task(rq);
 
 CFS uses `rq_clock_task()` (not wall time) for vruntime updates, which means time spent in a VM guest doesn't count toward the host task's CPU consumption.
 
-## Observing runqueue state
+## Observing runqueue state {#observing-runqueue-state}
 
 ```bash
 # Tasks currently running or runnable per CPU
@@ -279,7 +279,7 @@ watch -n 0.5 'cat /proc/$(pgrep stress | head -1)/sched 2>/dev/null'
 awk '/^cpu[0-9]/ {print $1, "running:", $2, "switches:", $8}' /proc/schedstat
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Scheduler Classes](scheduler-classes.md) — The five classes that populate these queues
 - [CFS](cfs.md) — `struct cfs_rq` and the fair class in depth

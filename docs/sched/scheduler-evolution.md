@@ -1,8 +1,8 @@
-# Scheduler Evolution: O(1) → CFS → EEVDF
+# Scheduler Evolution: O(1) → CFS → EEVDF {#scheduler-evolution-o1-cfs-eevdf}
 
 > How Linux's scheduler changed three times in thirty years, and why
 
-## The problem every scheduler solves
+## The problem every scheduler solves {#the-problem-every-scheduler-solves}
 
 The kernel must answer one question thousands of times per second: **which task should run next?**
 
@@ -17,7 +17,7 @@ No scheduler solves all four perfectly. Each generation of Linux scheduler made 
 
 ---
 
-## The original scheduler (1991–2001)
+## The original scheduler (1991–2001) {#the-original-scheduler-19912001}
 
 Linux 1.0 used a simple O(n) scheduler: to pick the next task, it scanned every runnable task and picked the one with the highest "goodness" score. (O(n) means the time to pick a task grows linearly with the number of runnable tasks — 100 tasks takes ~100× longer than 1 task.)
 
@@ -25,13 +25,13 @@ This worked fine with a handful of processes. With hundreds, it didn't — every
 
 ---
 
-## The O(1) scheduler (2.6.0, 2003)
+## The O(1) scheduler (2.6.0, 2003) {#the-o1-scheduler-260-2003}
 
 **Author**: Ingo Molnar | **Announcement**: [LWN, January 2002](https://lwn.net/2002/0110/a/scheduler.php3)
 
 Linux 2.6.0 introduced the O(1) scheduler. The key insight: **precompute priorities into fixed-size bitmaps**.
 
-### How it worked
+### How it worked {#how-it-worked}
 
 Two priority arrays per CPU (`active` and `expired`), each with 140 priority levels and a bitmap marking which levels had runnable tasks:
 
@@ -49,11 +49,11 @@ To pick the next task:
 
 When a task exhausted its timeslice, it moved from `active` to `expired` with a freshly calculated timeslice. When `active` emptied, swap the pointers.
 
-### Why it was fast
+### Why it was fast {#why-it-was-fast}
 
 No scanning. Task selection was a single bitmap operation regardless of how many tasks were running. This was a genuine win on large systems.
 
-### The problem: fairness heuristics
+### The problem: fairness heuristics {#the-problem-fairness-heuristics}
 
 The O(1) scheduler calculated "interactivity" scores to boost interactive tasks and penalize CPU-bound ones. These heuristics were notoriously fragile:
 
@@ -65,7 +65,7 @@ Con Kolivas, a Linux contributor and anesthesiologist, spent years writing patch
 
 ---
 
-## CFS: Completely Fair Scheduler (2.6.23, October 2007)
+## CFS: Completely Fair Scheduler (2.6.23, October 2007) {#cfs-completely-fair-scheduler-2623-october-2007}
 
 **Author**: Ingo Molnar (inspired by Con Kolivas's work) | **Announcement**: [LKML, April 2007](https://lkml.org/lkml/2007/4/13/180) | [LWN coverage](https://lwn.net/Articles/230574/)
 
@@ -73,13 +73,13 @@ Con Kolivas, a Linux contributor and anesthesiologist, spent years writing patch
 
 CFS replaced the O(1) scheduler's heuristics with a single elegant concept: **virtual runtime**.
 
-### The core idea
+### The core idea {#the-core-idea}
 
 Every task has a `vruntime` — the amount of CPU time it has consumed, weighted by its priority. The scheduler always runs the task with the smallest `vruntime`.
 
 This is provably fair: over time, all tasks at the same priority converge on equal CPU share.
 
-### Virtual time and weight
+### Virtual time and weight {#virtual-time-and-weight}
 
 Not all tasks are equal. A task at nice -20 should get more CPU than a task at nice +19. CFS handles this through **weight**:
 
@@ -113,7 +113,7 @@ static u64 calc_delta_fair(u64 delta, struct sched_entity *se)
 
 A high-weight task's vruntime advances slowly relative to wall time; a low-weight task's vruntime advances quickly. Result: high-weight tasks get more real CPU time while still being selected by the same "smallest vruntime" rule.
 
-### The red-black tree
+### The red-black tree {#the-red-black-tree}
 
 Runnable tasks are stored in a red-black tree (`struct rb_root_cached`), keyed by vruntime. The leftmost node is always the task with the smallest vruntime — the next task to run.
 
@@ -127,7 +127,7 @@ Runnable tasks are stored in a red-black tree (`struct rb_root_cached`), keyed b
 
 Enqueue, dequeue, and min-lookup are all O(log n). In practice, runqueues are small enough that this is effectively constant.
 
-### Key data structures
+### Key data structures {#key-data-structures}
 
 ```c
 // include/linux/sched.h — per-task
@@ -148,7 +148,7 @@ struct cfs_rq {
 };
 ```
 
-### The update loop
+### The update loop {#the-update-loop}
 
 Every timer tick and on every context switch, `update_curr()` runs:
 
@@ -168,13 +168,13 @@ static void update_curr(struct cfs_rq *cfs_rq)
 }
 ```
 
-### CFS strengths
+### CFS strengths {#cfs-strengths}
 
 - **No heuristics**: Fairness is a mathematical property, not an approximation
 - **Predictable**: vruntime makes scheduling behavior auditable
 - **Good for most workloads**: Server, desktop, container workloads all benefit
 
-### CFS weaknesses
+### CFS weaknesses {#cfs-weaknesses}
 
 Over time, a new problem emerged. CFS's "minimum vruntime" approach optimizes for fairness but not for latency. A task that wakes up and needs to run quickly might have to wait behind tasks that technically have smaller vruntimes, even if those tasks have been running for a while.
 
@@ -182,7 +182,7 @@ Real-time and latency-sensitive workloads (network I/O, audio, gaming) need a sc
 
 ---
 
-## EEVDF: Earliest Eligible Virtual Deadline First (6.6, October 2023)
+## EEVDF: Earliest Eligible Virtual Deadline First (6.6, October 2023) {#eevdf-earliest-eligible-virtual-deadline-first-66-october-2023}
 
 **Author**: Peter Zijlstra (Intel) | **Patch series**: [lore.kernel.org, May 2023](https://lore.kernel.org/lkml/20230531115839.089944915@infradead.org/)
 
@@ -190,7 +190,7 @@ Real-time and latency-sensitive workloads (network I/O, audio, gaming) need a sc
 
 EEVDF is based on a 1995 academic paper by Ion Stoica and Hussein Abdel-Wahab ([CiteSeerX](https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=805acf7726282721504c8f00575d91ebfd750564)). It adds **virtual deadlines** to the fairness model.
 
-### The key insight
+### The key insight {#the-key-insight}
 
 CFS asks: *who has used the least CPU?* (minimum vruntime)
 
@@ -198,7 +198,7 @@ EEVDF asks: *who has the most urgent deadline, among those who are eligible to r
 
 This distinction matters for latency. A task that wakes up after sleeping has a short virtual deadline — it needs to run soon. EEVDF can give it the CPU without violating fairness for other tasks.
 
-### Eligibility and virtual deadlines
+### Eligibility and virtual deadlines {#eligibility-and-virtual-deadlines}
 
 Each task has:
 
@@ -244,7 +244,7 @@ The deadline is set when a task is enqueued:
 se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
 ```
 
-### Comparison: CFS vs EEVDF
+### Comparison: CFS vs EEVDF {#comparison-cfs-vs-eevdf}
 
 | Property | CFS | EEVDF |
 |----------|-----|-------|
@@ -254,7 +254,7 @@ se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
 | Time slice | Dynamic, implicit | Explicit (`se->slice`) |
 | Based on | Rotating Staircase Deadline (Con Kolivas) | Stoica & Abdel-Wahab, 1995 |
 
-### What changed in practice
+### What changed in practice {#what-changed-in-practice}
 
 For most workloads the difference is subtle — CFS was already good. EEVDF primarily helps:
 
@@ -262,7 +262,7 @@ For most workloads the difference is subtle — CFS was already good. EEVDF prim
 - **Audio/multimedia**: More consistent scheduling cadence
 - **Mixed workloads**: CPU-bound tasks less likely to delay latency-sensitive ones
 
-### The `kernel.sched_latency_ns` knob
+### The `kernel.sched_latency_ns` knob {#the-kernelschedlatencyns-knob}
 
 EEVDF made the existing `sched_latency_ns` sysctl more meaningful as it now directly influences the `slice` assigned to tasks:
 
@@ -276,7 +276,7 @@ cat /proc/sys/kernel/sched_latency_ns
 
 ---
 
-## Summary
+## Summary {#summary}
 
 | Era | Scheduler | Version | Key innovation | Main weakness |
 |-----|-----------|---------|----------------|---------------|
@@ -285,7 +285,7 @@ cat /proc/sys/kernel/sched_latency_ns
 | 2007–2023 | CFS | 2.6.23–6.5 | Virtual runtime, provable fairness | Poor latency for waking tasks |
 | 2023– | EEVDF | 6.6+ | Virtual deadlines + eligibility | Still settling (active development) |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — CFS and EEVDF implementation
 - [LWN: An EEVDF CPU scheduler for Linux](https://lwn.net/Articles/925371/) (2023)

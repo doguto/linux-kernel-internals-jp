@@ -1,4 +1,4 @@
-# IPC War Stories
+# IPC War Stories {#ipc-war-stories}
 
 > Leaked semaphores, fd exhaustion, signal storms, and pipe capacity surprises
 
@@ -6,9 +6,9 @@ Real-world IPC bugs share a common theme: the happy path works perfectly, but th
 
 ---
 
-## 1. The SysV semaphore leak
+## 1. The SysV semaphore leak {#1-the-sysv-semaphore-leak}
 
-### What happened
+### What happened {#what-happened}
 
 A C++ application used SysV semaphores for inter-process locking. Each worker process called `semget(IPC_CREAT, ...)` on startup and `semctl(IPC_RMID)` on clean shutdown. In the error path — triggered when the backing database was unreachable — the code returned early before calling `IPC_RMID`.
 
@@ -32,11 +32,11 @@ practice, identifying which sets are truly abandoned means correlating the ownin
 `otime`/`ctime` against what you already know about your own services, not querying the kernel
 for a PID that was never recorded.
 
-### Root cause
+### Root cause {#root-cause}
 
 SysV semaphore sets persist in kernel memory until `IPC_RMID` is called or the machine reboots. They have no association with any file descriptor or process lifetime. The kernel tracks them in the `ipc_ids` structure (`ipc/util.c`) keyed by a numeric ID — there is no automatic garbage collection.
 
-### Fix
+### Fix {#fix}
 
 Two complementary changes:
 
@@ -56,9 +56,9 @@ sem_unlink("/myapp-lock");  /* name gone; object destroyed when last user closes
 
 ---
 
-## 2. The Unix socket fd leak via SCM_RIGHTS
+## 2. The Unix socket fd leak via SCM_RIGHTS {#2-the-unix-socket-fd-leak-via-scm_rights}
 
-### What happened
+### What happened {#what-happened_1}
 
 A privilege-separated daemon split into a privileged parent and an unprivileged worker. The parent opened sensitive files and passed their file descriptors to the worker via `SCM_RIGHTS` over a Unix domain socket (`SOCK_SEQPACKET`). The worker handled requests, used the fds, and was supposed to `close()` them after use.
 
@@ -70,13 +70,13 @@ lsof -p <worker_pid> | wc -l        # thousands
 lsof -p <worker_pid> | grep passwd  # many open copies of /etc/passwd
 ```
 
-### Root cause
+### Root cause {#root-cause_1}
 
 When `SCM_RIGHTS` delivers a file descriptor, the kernel calls `receive_fd()` (in `fs/file.c`), which reserves and installs a new file descriptor in the receiver's `files_struct` (via `get_unused_fd_flags()`/`fd_install()`, which in turn reach the underlying slot-allocator `alloc_fd()`). This is a full kernel-level `dup()` — the receiver's fd table grows by one per received fd, completely independently of the sender. The sender closing its copy has no effect on the receiver's copy.
 
 In-flight `SCM_RIGHTS` fds are tracked per-`user_struct` (`user->unix_inflight`), not on `struct unix_sock` itself. Once delivered, the fd is solely the receiver's responsibility.
 
-### Fix
+### Fix {#fix_1}
 
 Close received fds in every code path, including error paths. The pattern:
 
@@ -99,9 +99,9 @@ For defense in depth: apply `O_CLOEXEC` to received fds immediately via `fcntl(r
 
 ---
 
-## 3. The pipe capacity surprise
+## 3. The pipe capacity surprise {#3-the-pipe-capacity-surprise}
 
-### What happened
+### What happened {#what-happened_2}
 
 A log aggregation pipeline connected a producer (generating structured log lines) to a consumer (compressing and forwarding to a remote endpoint) via an anonymous pipe. Under normal load, the consumer kept up. During a 50ms processing spike — caused by a TLS renegotiation on the remote connection — the consumer stalled.
 
@@ -113,11 +113,11 @@ fcntl(fd, F_GETPIPE_SZ)  # returns current capacity in bytes
 cat /proc/sys/fs/pipe-max-size  # system-wide maximum
 ```
 
-### Root cause
+### Root cause {#root-cause_2}
 
 A pipe is a fixed-capacity circular buffer. `struct pipe_inode_info` (defined in `include/linux/pipe_fs_i.h`) tracks the ring of `struct pipe_buffer` pages. When all pages are full, `anon_pipe_write()` in `fs/pipe.c` either blocks (default) or returns `EAGAIN` (if `O_NONBLOCK`). There is no automatic buffering beyond the kernel pipe capacity.
 
-### Fix
+### Fix {#fix_2}
 
 Three options, in order of invasiveness:
 
@@ -134,9 +134,9 @@ Three options, in order of invasiveness:
 
 ---
 
-## 4. The signal storm from SIGCHLD
+## 4. The signal storm from SIGCHLD {#4-the-signal-storm-from-sigchld}
 
-### What happened
+### What happened {#what-happened_3}
 
 A job scheduler spawned thousands of short-lived worker processes. The parent installed a `SIGCHLD` handler that called `waitpid(-1, &status, WNOHANG)` once — to reap one child — and returned. Under low load, this worked: one child exited, one signal arrived, one `waitpid()` call reaped it.
 
@@ -149,13 +149,13 @@ After several hours, `ps aux | grep Z` showed thousands of `<defunct>` entries. 
 ps -o pid,stat,ppid | awk '$2 ~ /Z/ && $3 == <parent_pid> {count++} END {print count}'
 ```
 
-### Root cause
+### Root cause {#root-cause_3}
 
 Standard signals (1–31) use a single-bit pending mask per thread (`pending` in `struct task_struct`, type `struct sigpending`). The mask has one bit per signal number. If `SIGCHLD` is already pending when another child exits, the new delivery is silently discarded — the mask bit is already set. The signal handler sees only one delivery regardless of how many children exited.
 
 Real-time signals (`SIGRTMIN` through `SIGRTMAX`, kernel range 32–64, user-visible range 34–64 once glibc's two reserved signals are excluded) use a queue (`struct sigqueue`) and are not subject to this merging, but `SIGCHLD` is a standard signal.
 
-### Fix
+### Fix {#fix_3}
 
 Always loop `waitpid()` until it returns 0 (no more waitable children) or -1/`ECHILD` (no children at all):
 
@@ -179,9 +179,9 @@ The `while` loop is non-optional. Signal handlers for `SIGCHLD` without it are s
 
 ---
 
-## 5. The eventfd overflow
+## 5. The eventfd overflow {#5-the-eventfd-overflow}
 
-### What happened
+### What happened {#what-happened_4}
 
 A high-throughput event pipeline used `eventfd` with `EFD_SEMAPHORE | EFD_NONBLOCK` to notify a consumer of pending work items. The producer, running in a tight loop, called `write(efd, &one, 8)` for each work item. The consumer read from the eventfd and processed items one at a time.
 
@@ -196,7 +196,7 @@ write(efd, &(uint64_t){1}, 8);
 
 Work items were enqueued in the producer's internal queue but the consumer was never notified they existed. After the spike subsided and the consumer caught up, the eventfd counter dropped — but the stranded items remained in the queue, unprocessed, until the next producer write triggered a fresh notification. Those items experienced unbounded latency.
 
-### Root cause
+### Root cause {#root-cause_4}
 
 `eventfd_write()` in `fs/eventfd.c` checks:
 
@@ -211,7 +211,7 @@ if (ULLONG_MAX - ctx->count <= ucnt) {
 
 The counter has a ceiling of `UINT64_MAX - 1` (not `UINT64_MAX`, because `UINT64_MAX` is the sentinel value used internally) — it does not saturate at that ceiling, it blocks or fails. With `EFD_NONBLOCK`, the write returns `EAGAIN` silently rather than blocking. The event is lost if the caller does not handle `EAGAIN` as backpressure.
 
-### Fix
+### Fix {#fix_4}
 
 Handle `EAGAIN` explicitly on every non-blocking eventfd write:
 
@@ -239,7 +239,7 @@ The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is expli
 
 ---
 
-## Patterns across all five
+## Patterns across all five {#patterns-across-all-five}
 
 | Incident | Root mechanism | Detection | Prevention |
 |----------|---------------|-----------|------------|
@@ -249,9 +249,9 @@ The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is expli
 | SIGCHLD coalescing | Standard signal bit-mask | Zombie accumulation | Loop `waitpid()` in handler |
 | eventfd overflow | `UINT64_MAX - 1` cap | Silent `EAGAIN` | Check return value; handle `EAGAIN` as backpressure |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [ipc/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/util.c) — `ipc_addid()`, `ipc_rmid()`, and the per-namespace `ipc_ids` table that SysV objects live in until explicitly removed, behind Case 1
 - [ipc/sem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/sem.c) — `semget()`, `semctl()`, and the `SEM_UNDO` adjustment-on-exit handling behind Case 1's fix
@@ -266,7 +266,7 @@ The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is expli
 - [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()` and the `ULLONG_MAX - 1` blocking/EAGAIN ceiling behind Case 5
 - [net/core/sock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core/sock.c) — `sock_alloc_send_pskb()`, the generic full-send-buffer wait/`-EAGAIN` path every socket type (including `AF_UNIX`) goes through, behind Case 5's Unix-socket alternative
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`semop(2)`](https://man7.org/linux/man-pages/man2/semop.2.html) — documents `SEM_UNDO`: adjustments are automatically reversed when a process terminates, used in Case 1
 - [`sem_unlink(3)`](https://man7.org/linux/man-pages/man3/sem_unlink.3.html) — confirms a named POSIX semaphore is destroyed only once every process that has it open has closed it, the mechanism behind Case 1's "migrate to POSIX semaphores" fix
@@ -279,7 +279,7 @@ The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is expli
 - [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — documents `EFD_SEMAPHORE`, `EFD_NONBLOCK`, and the counter's `UINT64_MAX - 1` blocking/EAGAIN ceiling, used in Case 5
 - [`mq_send(3)`](https://man7.org/linux/man-pages/man3/mq_send.3.html) — documents the blocking/`EAGAIN` behavior when `mq_maxmsg` is reached, the alternative mechanism mentioned in Case 5's fix
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Signals](signals.md) — `SIGCHLD`, `sigaction`, `sigprocmask`
 - [Pipes and FIFOs](pipes.md) — `struct pipe_inode_info`, `PIPE_BUF`, `F_SETPIPE_SZ`
@@ -288,7 +288,7 @@ The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is expli
 - [eventfd and signalfd](eventfd-signalfd.md) — `EFD_SEMAPHORE`, `EFD_NONBLOCK`, counter semantics
 - [POSIX Message Queues](mqueue.md) — `mq_send`, `mq_maxmsg`, blocking/backpressure semantics, the alternative discussed in Case 5
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Circular pipes](https://lwn.net/Articles/118750/) (January 11, 2005) — the introduction of the multi-page circular pipe buffer in 2.6.11, the ancestor of the `struct pipe_inode_info` ring behind Case 3
 - [The evolution of pipe buffers](https://lwn.net/Articles/119682/) (January 18, 2005) — follow-up on the pipe buffer redesign, including the 16-page capacity ceiling behind Case 3's default 64 KiB pipe size

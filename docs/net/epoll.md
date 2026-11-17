@@ -1,8 +1,8 @@
-# epoll Internals
+# epoll Internals {#epoll-internals}
 
 > How epoll monitors thousands of file descriptors efficiently
 
-## The problem with poll/select
+## The problem with poll/select {#the-problem-with-pollselect}
 
 `select()` and `poll()` require passing the entire set of monitored file descriptors on every call. For N fds:
 
@@ -13,7 +13,7 @@
 
 With 10,000 connections this is unacceptable.
 
-## epoll: O(1) per event
+## epoll: O(1) per event {#epoll-o1-per-event}
 
 epoll uses a **kernel-resident interest list** — registered once, no re-copying:
 
@@ -27,7 +27,7 @@ epoll workflow:
   epoll_wait returns → copy only ready events (O(ready), not O(N))
 ```
 
-## Creating an epoll instance
+## Creating an epoll instance {#creating-an-epoll-instance}
 
 ```c
 #include <sys/epoll.h>
@@ -61,9 +61,9 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-## Level-triggered vs edge-triggered
+## Level-triggered vs edge-triggered {#level-triggered-vs-edge-triggered}
 
-### Level-triggered (LT) — default
+### Level-triggered (LT) — default {#level-triggered-lt-default}
 
 `epoll_wait` returns as long as the fd is ready:
 
@@ -82,7 +82,7 @@ ev.events = EPOLLIN;
 
 Safe: even if you don't drain the buffer in one call, you'll get notified again.
 
-### Edge-triggered (ET)
+### Edge-triggered (ET) {#edge-triggered-et}
 
 `epoll_wait` returns only when the fd **transitions** from not-ready to ready:
 
@@ -121,7 +121,7 @@ void handle_read_et(int fd) {
 }
 ```
 
-### EPOLLONESHOT: single notification
+### EPOLLONESHOT: single notification {#epolloneshot-single-notification}
 
 Receive one notification, then the fd is automatically disabled:
 
@@ -135,9 +135,9 @@ epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* re-enable */
 
 Useful for multi-threaded epoll where only one thread should handle each event.
 
-## Kernel data structures
+## Kernel data structures {#kernel-data-structures}
 
-### struct eventpoll
+### struct eventpoll {#struct-eventpoll}
 
 ```c
 /* fs/eventpoll.c */
@@ -178,7 +178,7 @@ struct eventpoll {
 };
 ```
 
-### struct epitem
+### struct epitem {#struct-epitem}
 
 One `epitem` per monitored fd:
 
@@ -218,7 +218,7 @@ struct epitem {
 };
 ```
 
-### ep_poll_callback: the critical wakeup path
+### ep_poll_callback: the critical wakeup path {#eppollcallback-the-critical-wakeup-path}
 
 When a monitored fd becomes ready, this callback runs from the fd's wait queue:
 
@@ -268,7 +268,7 @@ out_unlock:
 }
 ```
 
-### epoll_ctl(ADD) kernel path
+### epoll_ctl(ADD) kernel path {#epoll_ctladd-kernel-path}
 
 ```c
 /* fs/eventpoll.c */
@@ -302,7 +302,7 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 }
 ```
 
-## Thundering herd and EPOLLEXCLUSIVE
+## Thundering herd and EPOLLEXCLUSIVE {#thundering-herd-and-epollexclusive}
 
 When many threads all `epoll_wait` on the same epfd and one event arrives, all threads wake up but only one handles it — **thundering herd**.
 
@@ -324,7 +324,7 @@ setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int));
 /* Kernel load-balances new connections across all SO_REUSEPORT sockets */
 ```
 
-## epoll with eventfd, signalfd, timerfd
+## epoll with eventfd, signalfd, timerfd {#epoll-with-eventfd-signalfd-timerfd}
 
 epoll works with any fd that implements `->poll`:
 
@@ -339,14 +339,14 @@ epoll_ctl(epfd, EPOLL_CTL_ADD, pipe_rfd,  &ev_pipe);
 
 All block on a single `epoll_wait`. No polling loop, no busy-waiting.
 
-## epoll limitations
+## epoll limitations {#epoll-limitations}
 
 - **Regular files**: always "ready" — cannot use epoll for disk file I/O (use io_uring)
 - **Directories**: not pollable
 - **No timeout per fd**: epoll_wait has one timeout for all
 - **Notification only**: epoll tells you a fd is ready but doesn't do the I/O (unlike io_uring)
 
-## Observing epoll
+## Observing epoll {#observing-epoll}
 
 ```bash
 # Count epoll instances per process
@@ -366,7 +366,7 @@ strace -e epoll_wait,epoll_ctl nginx &
 perf stat -e syscalls:sys_enter_epoll_wait nginx
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Socket Layer Overview](socket-layer.md) — socket poll() implementation
 - [eventfd and signalfd](../ipc/eventfd-signalfd.md) — epoll-compatible event fds

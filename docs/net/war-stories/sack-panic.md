@@ -1,4 +1,4 @@
-# The TCP SACK Panic
+# The TCP SACK Panic {#the-tcp-sack-panic}
 
 > CVE-2019-11477 / CVE-2019-11478 / CVE-2019-11479 — a remote peer could crash any Linux TCP endpoint with a carefully crafted sequence of SACK blocks
 
@@ -22,17 +22,17 @@ Actively exploited
 
 *Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 TCP's selective acknowledgment (SACK) option, defined in RFC 2018, lets a receiver tell the sender exactly which byte ranges it has received out of order, instead of forcing the sender to retransmit everything after the first gap. To implement this efficiently, Linux's retransmit queue and out-of-order queue hold data in `struct sk_buff` (SKB) chains, and the kernel aggressively **coalesces** adjacent SKBs together as SACK information arrives, to avoid keeping thousands of tiny buffer fragments around.
 
 Each SKB carries a `struct tcp_skb_cb` control block (`include/net/tcp.h`) that tracks, among other things, `tcp_gso_segs` — the number of MSS-sized segments the SKB represents for generic segmentation offload (GSO) accounting. This field is a **16-bit unsigned integer**, which is fine as long as a single SKB never represents more than 65,535 segments. An SKB can hold up to 17 fragments (`MAX_SKB_FRAGS`), each up to 32 KB on x86 (64 KB on some PowerPC configurations with 64 KB pages) — so a maximally-packed SKB can hold over 500 KB of payload. If the MSS is tiny, that translates into an enormous segment count.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Linux enforces a minimum MSS floor, but as of the vulnerable code that floor was hardcoded to 48 bytes in `__tcp_mtu_to_mss()` in `net/ipv4/tcp_output.c` — and TCP options can consume up to 40 of those bytes, leaving as little as **8 bytes of real payload per segment**. Jonathan Looney at Netflix found that a remote peer could advertise this minimal MSS and then send a carefully crafted sequence of SACK blocks — published as [Netflix's own advisory](https://github.com/Netflix/security-bulletins/blob/master/advisories/third-party/2019-001.md) (NFLX-2019-001), the primary source for all three CVEs. Because SACK processing causes `tcp_shift_skb_data()` in `net/ipv4/tcp_input.c` to coalesce retransmit-queue SKBs via `skb_shift()`, an attacker could drive one SKB's accumulated segment count past 65,535 — silently overflowing the 16-bit `tcp_gso_segs` field.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The overflow caused `tcp_shifted_skb()` to hit:
 
@@ -47,7 +47,7 @@ BUG_ON(tcp_skb_pcount(skb) < pcount);
 
 LWN's coverage (["The TCP SACK panic", June 2019](https://lwn.net/Articles/791409/)) noted this was "the most serious of four SACK-related bugs found by Jonathan Looney at Netflix" (a fourth, related bug affected FreeBSD's RACK stack, not Linux).
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 Three independent weaknesses combined:
 
@@ -61,7 +61,7 @@ The bug's reach also grew in a way nobody was tracking as a security property. I
 
 Also in that comment thread, XFS maintainer Dave Chinner ("dgc") recognized the bug's shape from a much older incident: "I remember back in late 2002 when a bug report for an Irix NFS server performance issue was nailed down to a serious SACK problem due to really small MSS windows being sent from a buggy NFS client implementation. The phrase 'SACK panic' triggered my memory immediately…" Chinner's broader point was about institutional memory, not blame: "the OS networking community knew about these problems 15 years ago but that knowledge seems to have been lost and so we have repeated past mistakes. Which raises some interesting questions: where did that institutional knowledge go?"
 
-## Resolution
+## Resolution {#resolution}
 
 Three separate commits addressed the three CVEs:
 
@@ -92,7 +92,7 @@ No published exploit tool or Metasploit module exists for this one — a remote 
 sysctl net.ipv4.tcp_min_snd_mss
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A fixed-width counter is a hard ceiling, not a soft guideline.** `tcp_gso_segs` being a `u16` was a reasonable choice under the assumption that no single SKB could realistically represent more than 65,535 segments — an assumption that held until an attacker controlled the MSS.
 
@@ -105,13 +105,13 @@ sysctl net.ipv4.tcp_min_snd_mss
 !!! warning "Pattern to watch for"
     Any per-connection or per-buffer counter derived from attacker-controllable values (segment counts, buffer sizes, queue lengths) needs an explicit cap that's enforced *before* the value is used, not just an assertion that fires after it's already wrong. If you're running a pre-5.1.11/4.19.52/4.14.127/4.9.182/4.4.182 kernel, check `sysctl net.ipv4.tcp_min_snd_mss` — its absence means you're still exposed.
 
-## See also
+## See also {#see-also}
 
 - [TCP Implementation](../tcp.md) — SACK, the retransmit queue, and the receive path involved in this bug
 - [TCP Congestion Control](../tcp-congestion.md) — how MSS and segment sizing interact with the send path
 - [SegmentSmack](segmentsmack.md) and [The Challenge-ACK Side Channel](challenge-ack.md) — two other TCP-layer war stories from the same era
 
-## External references
+## External references {#external-references}
 
 - [Netflix: NFLX-2019-001](https://github.com/Netflix/security-bulletins/blob/master/advisories/third-party/2019-001.md) — Jonathan Looney's original advisory, including patches and workarounds for all three CVEs
 - [NVD: CVE-2019-11477](https://nvd.nist.gov/vuln/detail/CVE-2019-11477), [CVE-2019-11478](https://nvd.nist.gov/vuln/detail/CVE-2019-11478), [CVE-2019-11479](https://nvd.nist.gov/vuln/detail/CVE-2019-11479) — the TCP SACK panic CVE records

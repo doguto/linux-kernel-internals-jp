@@ -1,8 +1,8 @@
-# POSIX Message Queues
+# POSIX Message Queues {#posix-message-queues}
 
 > Priority-ordered, kernel-managed message passing between processes
 
-## Overview
+## Overview {#overview}
 
 POSIX message queues (`mq_open`, `mq_send`, `mq_receive`) provide a message-passing IPC mechanism with:
 
@@ -18,7 +18,7 @@ mount -t mqueue none /dev/mqueue
 ls /dev/mqueue/   # lists all open queues
 ```
 
-## Basic usage
+## Basic usage {#basic-usage}
 
 ```c
 #include <mqueue.h>
@@ -51,7 +51,7 @@ mq_close(mq);
 mq_unlink("/myqueue");
 ```
 
-### Queue attributes
+### Queue attributes {#queue-attributes}
 
 ```c
 /* Query queue attributes */
@@ -70,7 +70,7 @@ if (n == -1 && errno == EAGAIN)
     printf("queue empty\n");
 ```
 
-## Priority queue behavior
+## Priority queue behavior {#priority-queue-behavior}
 
 Messages are ordered by priority (highest first). Same priority messages are FIFO:
 
@@ -85,7 +85,7 @@ mq_send(mq, "high2",  5, 9);  /* priority 9 */
 
 Priority range: 0 to `sysconf(_SC_MQ_PRIO_MAX) - 1` (at least 32, typically 32768).
 
-## Timed operations
+## Timed operations {#timed-operations}
 
 ```c
 #include <time.h>
@@ -105,7 +105,7 @@ if (n == -1 && errno == ETIMEDOUT)
     printf("queue empty, timed out\n");
 ```
 
-## Async notification: mq_notify
+## Async notification: mq_notify {#async-notification-mq_notify}
 
 `mq_notify` delivers a notification when a message arrives in an empty queue:
 
@@ -136,7 +136,7 @@ void my_handler(union sigval sv) {
 }
 ```
 
-### epoll with mq_notify + eventfd
+### epoll with mq_notify + eventfd {#epoll-with-mq_notify-eventfd}
 
 For integration with an event loop:
 
@@ -160,7 +160,7 @@ void notify_handler(union sigval sv) {
 /* epoll_wait on efd triggers when message arrives */
 ```
 
-## System limits
+## System limits {#system-limits}
 
 ```bash
 # Maximum number of message queues per user
@@ -181,9 +181,9 @@ ls -la /dev/mqueue/
 cat /dev/mqueue/myqueue  # shows: QSIZE:0 NOTIFY:0 SIGNO:0 NOTIFY_PID:0
 ```
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### struct mqueue_inode_info
+### struct mqueue_inode_info {#struct-mqueueinodeinfo}
 
 ```c
 /* ipc/mqueue.c */
@@ -223,7 +223,7 @@ struct posix_msg_tree_node {
 };
 ```
 
-### Message structure
+### Message structure {#message-structure}
 
 ```c
 /* include/linux/msg.h */
@@ -237,7 +237,7 @@ struct msg_msg {
 };
 ```
 
-### mq_send kernel path
+### mq_send kernel path {#mq_send-kernel-path}
 
 ```c
 /* ipc/mqueue.c -- simplified from the real do_mq_timedsend(); the real
@@ -276,7 +276,7 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
 }
 ```
 
-### Priority tree insertion
+### Priority tree insertion {#priority-tree-insertion}
 
 ```c
 /* ipc/mqueue.c */
@@ -326,7 +326,7 @@ insert_msg:
 }
 ```
 
-## POSIX mqueue vs SysV message queues
+## POSIX mqueue vs SysV message queues {#posix-mqueue-vs-sysv-message-queues}
 
 | Feature | POSIX mqueue | SysV msgsnd/msgrcv |
 |---------|-------------|-------------------|
@@ -341,7 +341,7 @@ insert_msg:
 
 Note: On Linux, POSIX mqueue file descriptors are real fds and work with `select()`, `poll()`, and `epoll()` directly (since 2.6.19).
 
-## SysV message queues (brief)
+## SysV message queues (brief) {#sysv-message-queues-brief}
 
 ```c
 #include <sys/msg.h>
@@ -376,16 +376,16 @@ ipcs -q -i <msqid>
 ipcrm --all=msg
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [ipc/mqueue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/mqueue.c) — POSIX mqueue filesystem, syscalls (`do_mq_timedsend()`, `do_mq_timedreceive()`), and `struct mqueue_inode_info`
 - [ipc/msg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/msg.c) — SysV message queue implementation (`msgget`/`msgsnd`/`msgrcv`)
 - [include/uapi/linux/mqueue.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mqueue.h) — `struct mq_attr` and `MQ_PRIO_MAX` (32768)
 - [include/linux/msg.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/msg.h) — `struct msg_msg`, the message representation shared by POSIX and SysV queues
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`mq_overview(7)`](https://man7.org/linux/man-pages/man7/mq_overview.7.html) — overview of the POSIX message queue API, `/dev/mqueue`, and the `/proc/sys/fs/mqueue` limits
 - [`mq_open(3)`](https://man7.org/linux/man-pages/man3/mq_open.3.html) — create/open a queue, `O_CREAT`/`O_EXCL` semantics, `struct mq_attr`
@@ -394,7 +394,7 @@ ipcrm --all=msg
 - [`mq_notify(3)`](https://man7.org/linux/man-pages/man3/mq_notify.3.html) — `SIGEV_SIGNAL`/`SIGEV_THREAD`/`SIGEV_NONE` notification modes
 - [`mq_getattr(3)`](https://man7.org/linux/man-pages/man3/mq_getattr.3.html) — `mq_getattr()`/`mq_setattr()`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [SysV IPC: Semaphores and Message Queues](sysv-semaphores.md) — full treatment of `msgget`/`msgsnd`/`msgrcv` and kernel internals, referenced briefly above
 - [eventfd and signalfd](eventfd-signalfd.md) — the `epoll` integration pattern used in the mq_notify example above
@@ -403,6 +403,6 @@ ipcrm --all=msg
 - [Shared Memory, Semaphores, and eventfd](shared-memory.md) — zero-copy bulk IPC vs. mqueue's small bounded messages
 - [POSIX Timers and timerfd](../time/posix-timers.md) — same `sigevent`-based notification model as `mq_notify`
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [IPC medley: message-queue peeking, io_uring, and bus1](https://lwn.net/Articles/1065490/) — Jonathan Corbet, April 2026; covers a proposed (not yet merged as of this page's kernel pin) `mq_timedreceive2()`/`MQ_PEEK` extension for non-destructive, index-addressed message reads

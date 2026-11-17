@@ -1,20 +1,20 @@
-# Syscall War Stories
+# Syscall War Stories {#syscall-war-stories}
 
 > Real bugs, ABI breaks, and lessons from the syscall interface
 
 These incidents are drawn from real Linux kernel development history. Each one illustrates a constraint or
 hazard that is not obvious until you hit it in production.
 
-## The time_t overflow (Y2038)
+## The time_t overflow (Y2038) {#the-time_t-overflow-y2038}
 
-### Background
+### Background {#background}
 
 The original `stat()` syscall (and `time()`, `select()`, `utime()`, and many others) stored timestamps as
 `time_t`, which on 32-bit architectures is a signed 32-bit integer. A 32-bit `time_t` overflows on
 **January 19, 2038 at 03:14:07 UTC**. At that moment, the value wraps to a large negative number,
 representing a time in 1901.
 
-### What the kernel did
+### What the kernel did {#what-the-kernel-did}
 
 Adding `stat64()` and `lstat64()` helped 32-bit architectures get 64-bit file sizes, but the time fields
 in `struct stat64` on 32-bit Linux still used 32-bit `time_t`. The real fix required new syscalls with
@@ -50,7 +50,7 @@ Linux 5.1 added a family of `_time64` variants for 32-bit architectures:
 `ppoll_time64`, `io_pgetevents_time64`, `utimensat_time64`, and several more — over 20 new syscalls just
 to fix the time type.
 
-### The lesson
+### The lesson {#the-lesson}
 
 ABI decisions made in the 1970s (when `time_t` was sized for the hardware of the day) propagated for
 50 years. The fix required a coordinated effort across glibc, musl, the kernel, and every toolchain
@@ -62,15 +62,15 @@ Y2038.
 
 ---
 
-## The futex ABI hash collision
+## The futex ABI hash collision {#the-futex-abi-hash-collision}
 
-### Background
+### Background {#background_1}
 
 `futex()` was added in Linux 2.5.7 as a fast user-space mutex. The kernel uses the futex's address as a
 hash key to find waiters: `futex_wait(addr, val)` adds the current task to a wait queue keyed on `addr`.
 `futex_wake(addr, n)` finds waiters on `addr` and wakes them.
 
-### The bug
+### The bug {#the-bug}
 
 The early implementation keyed on the **virtual** address. Two processes that shared a memory-mapped region
 (via `mmap(MAP_SHARED)` or a shared anonymous mapping) could both call `futex_wait()` on what was the same
@@ -78,7 +78,7 @@ physical memory location, but with different virtual addresses. The hash lookup 
 the waiter and the waker were in different wait queues — the wake had no effect, and the waiter slept
 forever.
 
-### The fix
+### The fix {#the-fix}
 
 The fix was to key shared futexes on the identity of the underlying object — an inode sequence number,
 combined with the page offset — rather than on the virtual address at all. The kernel now computes a
@@ -113,7 +113,7 @@ page's offset within that file — an identity that's the same no matter which p
 space maps the page. Private mappings (anonymous, `MAP_PRIVATE`) key on the virtual address plus the
 `mm_struct` pointer, which uniquely identifies the mapping within a process.
 
-### The lesson
+### The lesson {#the-lesson_1}
 
 The syscall ABI looked correct: `futex(addr, FUTEX_WAIT, val, timeout)` is a reasonable interface. The
 bug was in the implementation's semantics — the kernel's notion of "same futex" did not match the user's
@@ -126,15 +126,15 @@ across process boundaries — must be defined in terms of physical or file ident
 
 ---
 
-## The clone vs fork CLONE_FILES fd sharing
+## The clone vs fork CLONE_FILES fd sharing {#the-clone-vs-fork-clone_files-fd-sharing}
 
-### Background
+### Background {#background_2}
 
 `clone(CLONE_FILES)` creates a new task that shares the parent's file descriptor table. Both tasks see the
 same `struct files_struct`, so an `open()` in one is immediately visible as an `fd` in the other. This is
 how `pthread_create()` works: threads share file descriptors.
 
-### The hazard
+### The hazard {#the-hazard}
 
 A program created a thread via `clone(CLONE_FILES | CLONE_VM | CLONE_THREAD | SIGCHLD)` and used the
 following pattern:
@@ -162,7 +162,7 @@ kernel must hold `files->file_lock` during the operation, but if another thread 
 the validity check and the installation, the behavior is undefined. The `POSIX_SPAWN_FILE_ACTIONS_ADDDUP2`
 interface was specifically designed to avoid this by serializing at a higher level.
 
-### The lesson
+### The lesson {#the-lesson_2}
 
 `CLONE_FILES` threads must treat all fd operations as shared-memory operations: any close, dup, or
 `execve` in any thread immediately affects all threads. Using `O_CLOEXEC` on fds you intend to share
@@ -171,14 +171,14 @@ not share the fd table (`CLONE_FILES` without `CLONE_THREAD`) when fd lifecycle 
 
 ---
 
-## The EINTR surprise
+## The EINTR surprise {#the-eintr-surprise}
 
-### Background
+### Background {#background_3}
 
 `poll()`, `select()`, `read()`, and most blocking syscalls return `-1` with `errno == EINTR` when
 interrupted by a signal. This is documented, well-known, and still causes production bugs regularly.
 
-### The incident
+### The incident {#the-incident}
 
 A long-running daemon used `poll()` with a multi-minute timeout to wait for network events. It installed
 a `SIGTERM` handler to initiate graceful shutdown:
@@ -209,7 +209,7 @@ When `SIGTERM` arrived during `poll()`, the handler ran, set `shutdown_requested
 `poll()` then returned `-1` with `errno == EINTR`. The daemon treated any negative return from `poll()` as
 fatal and called `exit(1)` — bypassing the graceful shutdown it had carefully implemented.
 
-### The fix and the subtlety
+### The fix and the subtlety {#the-fix-and-the-subtlety}
 
 The obvious fix is to check for `EINTR` and retry:
 
@@ -256,15 +256,15 @@ unblocking the signal and entering the wait.
 
 ---
 
-## The syscall number collision on a new architecture
+## The syscall number collision on a new architecture {#the-syscall-number-collision-on-a-new-architecture}
 
-### Background
+### Background {#background_4}
 
 RISC-V was officially merged into the Linux kernel in version 4.15 (2018). It uses the generic syscall
 table from `include/uapi/asm-generic/unistd.h` rather than a hand-maintained architecture-specific table.
 Syscall numbers are assigned sequentially as new syscalls are merged upstream.
 
-### The incident
+### The incident {#the-incident_1}
 
 A semiconductor vendor shipped a downstream kernel for a RISC-V SoC that needed a custom interface to
 control proprietary hardware accelerator firmware. Rather than use an `ioctl()` or `netlink` interface,
@@ -288,7 +288,7 @@ Because the vendor's downstream branched before `futex_waitv` was merged, their 
 upstream. The collision was not detectable until customers started mixing vendor-provided userspace with
 upstream kernels.
 
-### The lesson
+### The lesson {#the-lesson_3}
 
 Out-of-tree syscall numbers in production are a time bomb. The kernel's syscall number space is a global
 namespace managed by the upstream `MAINTAINERS` process. Assigning a number in a downstream tree with the
@@ -306,7 +306,7 @@ modification.
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [SYSCALL_DEFINE and Dispatch](syscall-define.md) — ABI stability guarantees and struct-based syscalls
 - [32-bit Compat Syscalls](compat.md) — the 32-bit ABI machinery (`compat_stat`'s 32-bit time fields among them) that the Y2038 fix had to work around
@@ -317,7 +317,7 @@ modification.
 - [Adding a New Syscall](adding-syscall.md) — The right way to add a syscall and avoid the pitfalls above
 - [kernel/futex/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/futex/core.c) — `get_futex_key()`: keys on the `mm_struct` pointer and address for private futexes, or an inode sequence number and page offset for shared ones — not a physical address
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: a528d35e8bfc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f) — "statx: Add a system call to make enhanced file info available," David Howells, merged for Linux 4.11 (fs/stat.c)
 - [git.kernel.org: 3075d9da0b4c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3075d9da0b4ccc88959db30de80ebd11d2dde175) — "Use ERESTART_RESTARTBLOCK if poll() is interrupted by a signal," the fs/select.c change (merged for Linux 2.6.24) behind the EINTR story's central claim about `poll()`

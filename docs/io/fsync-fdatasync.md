@@ -1,8 +1,8 @@
-# Durability Semantics: fsync, fdatasync, O_SYNC, and Write Barriers
+# Durability Semantics: fsync, fdatasync, O_SYNC, and Write Barriers {#durability-semantics-fsync-fdatasync-o_sync-and-write-barriers}
 
 > What each durability syscall actually promises, where the guarantees break down, and how databases use them correctly
 
-## The durability gap
+## The durability gap {#the-durability-gap}
 
 `write()` returns when data is in DRAM — specifically in the kernel's **page cache**. The call does not touch persistent storage. Between the moment `write()` returns and the moment data survives a power cut, three independent layers can each lose data:
 
@@ -53,15 +53,15 @@ The contract of each durability mechanism specifies which layers it closes:
 
 ---
 
-## fsync()
+## fsync() {#fsync}
 
-### POSIX definition
+### POSIX definition {#posix-definition}
 
 POSIX requires that `fsync()` cause all modified data **and metadata** of the file to be transferred to the underlying hardware. "Transferred" means the hardware has acknowledged persistence — the application can assume the data will survive a power failure.
 
 The key phrase is *all metadata*: `fsync()` must persist not only file data blocks but also the inode (size, block pointers, modification time, change time) and any filesystem-level journal records needed to make that inode state recoverable.
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation}
 
 The entry point is `SYSCALL_DEFINE1(fsync)` in `fs/sync.c`, which calls `do_fsync(fd, 0)`. The `0` is the `datasync` flag — for `fsync()` it is always 0. The path from syscall to filesystem is:
 
@@ -90,7 +90,7 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 
 The range `[start, end]` is used by `msync()` for partial flushes; for a plain `fsync()` call the entire file range is passed. The `datasync` argument is forwarded unchanged to the filesystem, which uses it to decide whether to flush non-essential metadata.
 
-### What "stable storage" means for different hardware
+### What "stable storage" means for different hardware {#what-stable-storage-means-for-different-hardware}
 
 On rotating disk, stable storage is the platter. The drive must drain its volatile write cache — the kernel does this by issuing a `REQ_OP_FLUSH` block request, which translates to the ATA `FLUSH CACHE EXT` command or SCSI `SYNCHRONIZE CACHE`.
 
@@ -98,7 +98,7 @@ On SATA SSD and NVMe, stable storage is flash cells that have been programmed (n
 
 On enterprise flash with battery-backed write cache (BBWC) or capacitor-backed persistent memory (PMem/Optane), writes to the device's RAM are already considered durable, so FLUSH can be made a no-op. The kernel respects a `BLK_FEAT_FUA` flag indicating the device honors FUA, and a `BLK_FEAT_WRITE_CACHE` flag indicating a volatile write cache is present.
 
-### Ext4 journal modes and fsync cost
+### Ext4 journal modes and fsync cost {#ext4-journal-modes-and-fsync-cost}
 
 Ext4 has three journal modes that dramatically affect what `fsync()` must do:
 
@@ -179,7 +179,7 @@ out:
 
 **`data=journal`**: All data is written to the journal before being written to its final location. `fsync()` is expensive because it must commit the journal transaction that contains the data itself, not just metadata. Rarely used; reserved for applications that need strict ordering and can tolerate the write amplification.
 
-### XFS: log force vs data write ordering
+### XFS: log force vs data write ordering {#xfs-log-force-vs-data-write-ordering}
 
 XFS does not use a block-level journal in the ext4 sense; it uses a log structured for transactions. `xfs_file_fsync()` issues a log force (`xfs_log_force_seq()`) to flush the in-memory log to disk, then optionally issues a storage barrier.
 
@@ -232,7 +232,7 @@ out_flush:
 }
 ```
 
-### Typical fsync latency
+### Typical fsync latency {#typical-fsync-latency}
 
 These are representative numbers for a single `fsync()` call with a small write workload:
 
@@ -249,9 +249,9 @@ The latency is dominated by the time to drain the write cache and for the journa
 
 ---
 
-## fdatasync()
+## fdatasync() {#fdatasync}
 
-### POSIX definition
+### POSIX definition {#posix-definition_1}
 
 `fdatasync()` transfers file data and **enough metadata to retrieve the data** to stable storage. It explicitly does not need to flush metadata that does not affect the ability to read back data. From POSIX:
 
@@ -269,7 +269,7 @@ The metadata `fdatasync()` **must** flush:
 - Block pointers — any newly allocated data blocks must be findable
 - Indirect/extent tree changes — required to locate data
 
-### The datasync flag path
+### The datasync flag path {#the-datasync-flag-path}
 
 `SYSCALL_DEFINE1(fdatasync)` calls `do_fsync(fd, 1)`. The `1` travels through `vfs_fsync_range()` and into the filesystem's `fsync` method as the `datasync` argument.
 
@@ -295,7 +295,7 @@ ret = jbd2_complete_transaction(journal, commit_tid);
 
 `i_datasync_tid` is the transaction ID of the last transaction that affected data-accessible metadata. For a file that has not changed size since the last journal commit, `i_datasync_tid` may already be committed, making the `jbd2_complete_transaction()` call return immediately. This is the common case for databases writing to pre-allocated files — there is no size change, so there is no metadata journal commit to wait for.
 
-### When fdatasync is equivalent to fsync
+### When fdatasync is equivalent to fsync {#when-fdatasync-is-equivalent-to-fsync}
 
 `fdatasync()` must perform a full metadata flush (equivalent to `fsync()`) when:
 
@@ -306,7 +306,7 @@ ret = jbd2_complete_transaction(journal, commit_tid);
 
 For a database WAL file that is pre-allocated and written sequentially without size changes, `fdatasync()` skips the metadata journal commit entirely on every write after the first. This is why PostgreSQL uses `fdatasync()` for WAL writes — the WAL file is pre-allocated and its size rarely changes during normal operation.
 
-### Why fdatasync is faster
+### Why fdatasync is faster {#why-fdatasync-is-faster}
 
 The performance advantage is not about writing less data — both `fsync()` and `fdatasync()` must flush dirty data pages. The advantage is in journal commits: a metadata journal commit requires writing a commit block to the journal device and waiting for the FLUSH or FUA acknowledgment. On a heavily written filesystem, this commit may include unrelated metadata from other files, serializing all fsync() callers. `fdatasync()` avoids this serialization point when no metadata change is needed.
 
@@ -314,9 +314,9 @@ Benchmarks on a SATA SSD with ext4 `data=ordered` typically show `fdatasync()` a
 
 ---
 
-## sync() and syncfs()
+## sync() and syncfs() {#sync-and-syncfs}
 
-### sync() — system-wide flush
+### sync() — system-wide flush {#sync-system-wide-flush}
 
 `sync()` instructs the kernel to flush all dirty pages and all journal transactions across all mounted filesystems. Historically `sync()` initiated writeback and returned immediately — this was intentional; the Unix documentation simply said it "schedules" writes, not that it waits for them.
 
@@ -347,7 +347,7 @@ Despite waiting, `sync()` does **not** issue a FLUSH command to every storage de
 
 **When to use `sync()`**: system shutdown, testing, and scripting scenarios where you need everything on disk. Not appropriate for application-level durability — the scope is too broad and the cost too high.
 
-### syncfs() — per-filesystem flush
+### syncfs() — per-filesystem flush {#syncfs-per-filesystem-flush}
 
 `syncfs()` was added in Linux 2.6.39 to give per-filesystem semantics without the system-wide cost of `sync()`. It takes a file descriptor and flushes the filesystem that contains it:
 
@@ -379,9 +379,9 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 
 ---
 
-## O_SYNC and O_DSYNC
+## O_SYNC and O_DSYNC {#osync-and-odsync}
 
-### Per-fd synchronous I/O
+### Per-fd synchronous I/O {#per-fd-synchronous-io}
 
 `O_SYNC` and `O_DSYNC` are flags passed to `open()` that make every subsequent `write()` on the file descriptor synchronous — the write call blocks until data is on stable storage. They avoid the need for a separate `fsync()` call after each write.
 
@@ -390,7 +390,7 @@ int fd = open("wal.log", O_WRONLY | O_CREAT | O_DSYNC, 0644);
 write(fd, record, len);  /* blocks until data is on stable storage */
 ```
 
-### IOCB flags and generic_write_sync
+### IOCB flags and generic_write_sync {#iocb-flags-and-genericwritesync}
 
 When `O_SYNC` or `O_DSYNC` is set on the file, the VFS sets corresponding flags in the `kiocb` struct before calling `write_iter`:
 
@@ -452,7 +452,7 @@ The `vfs_fsync_range()` call passes `datasync=1` for `O_DSYNC` (only `IOCB_DSYNC
 
 In practice, for most write workloads on pre-allocated files, `O_DSYNC` and `O_SYNC` have identical performance because `fdatasync` and `fsync` behave identically when no pure-metadata change is pending.
 
-### Performance cost
+### Performance cost {#performance-cost}
 
 `O_SYNC` and `O_DSYNC` serialize each write with a storage flush. On random small writes, this eliminates all write coalescing:
 
@@ -465,7 +465,7 @@ In practice, for most write workloads on pre-allocated files, `O_DSYNC` and `O_S
 
 The large ratio for random 4KB writes is because each write round-trips to the drive (commit latency ~100 µs on NVMe) and there is no pipelining.
 
-### When to use O_SYNC / O_DSYNC
+### When to use O_SYNC / O_DSYNC {#when-to-use-osync-odsync}
 
 - **WAL files and redo logs**: databases that need every log record durable before acknowledging a commit. Using `O_DSYNC` on the WAL file avoids a separate `fdatasync()` call and reduces syscall count.
 - **Audit logs**: security-critical logs where every event must survive a crash.
@@ -475,9 +475,9 @@ The large ratio for random 4KB writes is because each write round-trips to the d
 
 ---
 
-## Write barriers in filesystems
+## Write barriers in filesystems {#write-barriers-in-filesystems}
 
-### The ordering problem
+### The ordering problem {#the-ordering-problem}
 
 Consider a database writing a data page and then a journal record describing that write. If the storage device reorders these two writes — journal record lands first, crash occurs, data page never arrives — recovery replays a journal entry that points to stale data. The file is now corrupt.
 
@@ -496,7 +496,7 @@ The kernel bio flags:
 
 `REQ_FUA` sets the FUA bit on the NVMe write command. `REQ_PREFLUSH` causes a FLUSH command to be issued before the write. The block layer in `blk-flush.c` sequences these correctly for drives that require FLUSH+WRITE instead of FUA.
 
-### How journaling filesystems use barriers
+### How journaling filesystems use barriers {#how-journaling-filesystems-use-barriers}
 
 ```mermaid
 sequenceDiagram
@@ -523,7 +523,7 @@ sequenceDiagram
 
 **btrfs**: btrfs uses ordered writes for data (data is on disk before the tree root that references it) and writes the superblock with `REQ_FUA | REQ_PREFLUSH` to ensure the new tree root is persistent before the superblock is updated.
 
-### Barrier detection and the nobarrier risk
+### Barrier detection and the nobarrier risk {#barrier-detection-and-the-nobarrier-risk}
 
 The `nobarrier` mount option disables write barriers. On a storage device with a volatile write cache, this creates a window where journal commits are acknowledged before the data they describe is persistent. On crash-and-recover, the journal replays the commit but the referenced data blocks contain stale or zeroed content.
 
@@ -535,7 +535,7 @@ To test whether a device honors FLUSH commands, see the [Benchmarking fsync](#be
 
 ---
 
-## The new-file durability trap
+## The new-file durability trap {#the-new-file-durability-trap}
 
 A common application mistake is to create a new file, write data, `fsync()` the file, and assume the file is durable. This is insufficient.
 
@@ -566,7 +566,7 @@ The two `fsync()` calls ensure:
 
 On ext4 `data=ordered`, the two `fsync()` calls may collapse into a single journal commit if both happen within the same transaction window — but the application cannot assume this and must issue both calls.
 
-### Who does this correctly
+### Who does this correctly {#who-does-this-correctly}
 
 **SQLite**: in WAL mode, SQLite calls `fsync()` on the WAL file and on the directory after creating the WAL file. See `unixSync()` in `os_unix.c`:
 
@@ -598,7 +598,7 @@ static int unixSync(sqlite3_file *id, int flags)
 
 ---
 
-## Durability matrix
+## Durability matrix {#durability-matrix}
 
 The following table summarizes what each write mechanism guarantees across the three durability layers:
 
@@ -619,9 +619,9 @@ The following table summarizes what each write mechanism guarantees across the t
 
 ---
 
-## Atomic write guarantees
+## Atomic write guarantees {#atomic-write-guarantees}
 
-### POSIX atomicity and its limits
+### POSIX atomicity and its limits {#posix-atomicity-and-its-limits}
 
 POSIX does **not** guarantee that `write()` is atomic with respect to concurrent readers. A reader calling `read()` on the same file concurrently with a `write()` may see a partial write — some bytes old, some bytes new, depending on page cache state and filesystem implementation.
 
@@ -630,7 +630,7 @@ POSIX does guarantee:
 - `O_APPEND` writes are atomic **for the offset assignment only** — the file offset is assigned atomically so that two concurrent `write()` calls with `O_APPEND` do not assign the same offset. The data of each write is serialized.
 - `pwrite()` updates are visible atomically at the sector level on most Linux filesystems (ext4, xfs, btrfs) for writes within a single filesystem block, but this is an implementation detail, not a POSIX guarantee.
 
-### O_APPEND atomicity
+### O_APPEND atomicity {#o_append-atomicity}
 
 When a file is opened with `O_APPEND`, the kernel holds `inode_lock` across the seek-to-end and write, making the offset assignment and the write itself atomic with respect to other `O_APPEND` writers on the same inode. This is why write(2) says:
 
@@ -638,7 +638,7 @@ When a file is opened with `O_APPEND`, the kernel holds `inode_lock` across the 
 
 This atomicity holds for writes that complete in a single `write()` call. If the write spans multiple pages and requires partial writes (e.g., due to signal interruption or `PIPE_BUF` limits), the kernel may release and reacquire the inode lock between page writes, breaking atomicity.
 
-### io_uring RWF_ATOMIC (Linux 6.11+)
+### io_uring RWF_ATOMIC (Linux 6.11+) {#iouring-rwfatomic-linux-611}
 
 Linux 6.11 introduced `RWF_ATOMIC` via io_uring, providing true atomic writes up to `stx_atomic_write_unit_max` bytes (reported via `statx(2)`):
 
@@ -666,9 +666,9 @@ sqe->rw_flags = RWF_ATOMIC;
 
 ---
 
-## Common database patterns
+## Common database patterns {#common-database-patterns}
 
-### PostgreSQL WAL
+### PostgreSQL WAL {#postgresql-wal}
 
 PostgreSQL writes its Write-Ahead Log to files in `pg_wal/`. Each transaction's WAL records are written with `write()`, and `fdatasync()` is called before the transaction is acknowledged to the client. The WAL files are pre-allocated (via `posix_fallocate()`), so file size rarely changes — this means `fdatasync()` avoids the metadata journal commit on every flush.
 
@@ -706,7 +706,7 @@ static void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
 
 `wal_sync_method` defaults to `fdatasync` on Linux, `fsync` on macOS (where `fdatasync` behavior differs).
 
-### SQLite WAL mode
+### SQLite WAL mode {#sqlite-wal-mode}
 
 In WAL mode, SQLite writes transactions to a WAL file and periodically checkpoints (copies WAL records back to the main database file). The checkpoint requires a specific fsync sequence:
 
@@ -718,7 +718,7 @@ In WAL mode, SQLite writes transactions to a WAL file and periodically checkpoin
 
 This two-phase barrier pattern ensures that a crash at any point leaves either the WAL or the database file in a consistent state.
 
-### MySQL InnoDB: innodb_flush_method
+### MySQL InnoDB: innodb_flush_method {#mysql-innodb-innodbflushmethod}
 
 InnoDB exposes `innodb_flush_method` to control how it flushes data and log files:
 
@@ -732,7 +732,7 @@ InnoDB exposes `innodb_flush_method` to control how it flushes data and log file
 
 `O_DIRECT_NO_FSYNC` skips `fsync()` on data files entirely, relying on `O_DIRECT` bypassing the page cache (so there is nothing to flush in the OS). It still requires the drive write cache to be drained — this is only safe with BBWC or an NVMe device that is configured to disable the volatile write cache.
 
-### RocksDB: use_fsync
+### RocksDB: use_fsync {#rocksdb-use_fsync}
 
 RocksDB defaults to `fdatasync()` (`use_fsync = false`) for SST file flushes and compaction output files. The `use_fsync` option switches to `fsync()`:
 
@@ -769,9 +769,9 @@ macOS requires `F_FULLFSYNC` (an `fcntl` call) instead of `fsync()` because macO
 
 ---
 
-## Benchmarking fsync
+## Benchmarking fsync {#benchmarking-fsync}
 
-### fio: measuring throughput and latency
+### fio: measuring throughput and latency {#fio-measuring-throughput-and-latency}
 
 fio provides `--fsync=N` and `--fdatasync=N` options to issue a sync every N writes:
 
@@ -804,7 +804,7 @@ Key fio output fields for fsync benchmarking:
 - `iops`: operations per second
 - `clat percentiles`: 99th/99.9th percentile latency reveals outliers
 
-### bpftrace: per-fsync latency
+### bpftrace: per-fsync latency {#bpftrace-per-fsync-latency}
 
 Measure actual fsync latency distribution from userspace to kernel return:
 
@@ -844,7 +844,7 @@ tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
 '
 ```
 
-### Detecting whether a drive honors FLUSH
+### Detecting whether a drive honors FLUSH {#detecting-whether-a-drive-honors-flush}
 
 A drive that ignores FLUSH commands will report very low fsync latency — too low. On NVMe with no write cache, fsync on a 4KB write should take ~50–200 µs. If you see consistent 10–20 µs, the drive may be ignoring FLUSH.
 
@@ -883,7 +883,7 @@ A device reporting `write through` does not buffer writes and does not require F
 
 ---
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Purpose |
 |---|---|
@@ -898,7 +898,7 @@ A device reporting `write through` does not buffer writes and does not require F
 | `include/linux/blk_types.h` | `REQ_FUA`, `REQ_PREFLUSH` bio flags |
 | `include/uapi/linux/fs.h` | `RWF_ATOMIC`, `RWF_SYNC`, `RWF_DSYNC` userspace flags |
 
-### Further reading
+### Further reading {#further-reading}
 
 - POSIX `fsync` specification: The Open Group Base Specifications Issue 8, `<unistd.h>`
 - [Filesystem Robustness - The Linux Documentation Project](https://www.kernel.org/doc/html/latest/filesystems/ext4/journal.html)

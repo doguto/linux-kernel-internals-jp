@@ -1,8 +1,8 @@
-# Life of a Packet (Receive Path)
+# Life of a Packet (Receive Path) {#life-of-a-packet-receive-path}
 
 > From NIC DMA to application read(), step by step
 
-## Overview
+## Overview {#overview}
 
 A TCP packet arriving at a server traverses roughly 8 distinct phases before the application receives the data. Each phase is handled by a different kernel subsystem, and the same `sk_buff` passes through all of them without data copying.
 
@@ -27,7 +27,7 @@ Socket receive queue
 Application: read() / recv()
 ```
 
-## Phase 1: NIC DMA and interrupt
+## Phase 1: NIC DMA and interrupt {#phase-1-nic-dma-and-interrupt}
 
 The NIC places received packets into a pre-allocated **ring buffer** via DMA. Each ring entry (descriptor) points to a kernel buffer:
 
@@ -43,7 +43,7 @@ When a packet arrives:
 2. NIC sets the "done" bit on the ring descriptor
 3. NIC raises a hardware interrupt
 
-## Phase 2: NAPI polling
+## Phase 2: NAPI polling {#phase-2-napi-polling}
 
 The hard IRQ handler disables further NIC interrupts and schedules NAPI:
 
@@ -86,7 +86,7 @@ static int my_nic_poll(struct napi_struct *napi, int budget)
 }
 ```
 
-## Phase 3: Ethernet demux — __netif_receive_skb()
+## Phase 3: Ethernet demux — __netif_receive_skb() {#phase-3-ethernet-demux-_netifreceive_skb}
 
 `napi_gro_receive()` either merges the packet with an existing GRO flow or delivers it to `__netif_receive_skb()`:
 
@@ -110,7 +110,7 @@ static int __netif_receive_skb_core(struct sk_buff *skb, ...)
 }
 ```
 
-## Phase 4: IP input — ip_rcv()
+## Phase 4: IP input — ip_rcv() {#phase-4-ip-input-ip_rcv}
 
 ```c
 // net/ipv4/ip_input.c:564
@@ -138,7 +138,7 @@ static int ip_rcv_finish(struct sk_buff *skb)
 }
 ```
 
-## Phase 5: Netfilter INPUT hook and local delivery
+## Phase 5: Netfilter INPUT hook and local delivery {#phase-5-netfilter-input-hook-and-local-delivery}
 
 ```c
 // net/ipv4/ip_input.c
@@ -160,7 +160,7 @@ static int ip_local_deliver_finish(struct sk_buff *skb)
 }
 ```
 
-## Phase 6: TCP receive — tcp_v4_rcv()
+## Phase 6: TCP receive — tcp_v4_rcv() {#phase-6-tcp-receive-tcpv4rcv}
 
 ```c
 // net/ipv4/tcp_ipv4.c:2147
@@ -192,7 +192,7 @@ static int tcp_v4_do_rcv(struct sock *sk, struct sk_buff *skb)
 }
 ```
 
-## Phase 7: TCP state machine and socket queue
+## Phase 7: TCP state machine and socket queue {#phase-7-tcp-state-machine-and-socket-queue}
 
 For an ESTABLISHED connection receiving data:
 
@@ -222,7 +222,7 @@ static int tcp_queue_rcv(struct sock *sk, struct sk_buff *skb, bool *fragstolen)
 }
 ```
 
-## Phase 8: Application read()
+## Phase 8: Application read() {#phase-8-application-read}
 
 The application calls `read()` or `recv()`. If `sk_receive_queue` is empty, it blocks (TASK_INTERRUPTIBLE). When `sk_data_ready()` fires, the task wakes:
 
@@ -254,7 +254,7 @@ int tcp_recvmsg(struct sock *sk, struct msghdr *msg, size_t len, int flags, int 
 
 `release_sock()` processes the backlog: packets that arrived while the socket was locked are now handled by `tcp_v4_do_rcv()`.
 
-## Key counters to watch
+## Key counters to watch {#key-counters-to-watch}
 
 ```bash
 # Drop counters at each stage
@@ -270,7 +270,7 @@ netstat -s | grep -E "segments|retransmit|error"
 ss -tn  # non-zero RX-Q means unread data in socket buffer
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [sk_buff](sk-buff.md) — The packet structure used throughout this path
 - [Network Device and NAPI](napi.md) — Phases 1-2 in depth

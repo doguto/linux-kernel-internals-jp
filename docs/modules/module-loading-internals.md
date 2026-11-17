@@ -1,8 +1,8 @@
-# Module Loading Internals
+# Module Loading Internals {#module-loading-internals}
 
 > What load_module() does: ELF parsing, relocation, symbol resolution, and versioning
 
-## The syscalls
+## The syscalls {#the-syscalls}
 
 Two syscalls can load a kernel module:
 
@@ -24,11 +24,11 @@ long finit_module(int fd, const char __user *uargs, int flags);
 
 The first two flags route through `try_to_force_load()`, which taints the kernel with `TAINT_FORCED_MODULE` (`F`) when `CONFIG_MODULE_FORCE_LOAD=y` and fails the load with `ENOEXEC` when it is not.
 
-## load_module(): step by step
+## load_module(): step by step {#load_module-step-by-step}
 
 `load_module()` takes the raw ELF bytes and produces a running module. Step 1 happens in the syscall wrappers, just before `load_module()` is entered; steps 2 through 11 are the body of `load_module()` itself, in the order its work happens (step 8's version check runs inside step 7's symbol resolution, not as a separate pass).
 
-### 1. Get the ELF image into the kernel
+### 1. Get the ELF image into the kernel {#1-get-the-elf-image-into-the-kernel}
 
 Neither syscall hands `load_module()` a userspace pointer. Each one first materialises the whole `.ko` in kernel memory and fills in a `struct load_info`, which carries `info->hdr` (the image) and `info->len` (its length) through every later stage.
 
@@ -60,11 +60,11 @@ If `MODULE_INIT_COMPRESSED_FILE` was passed, `module_decompress()` expands `buf`
 
 Either way, the resulting buffer is a complete ELF relocatable object.
 
-### 2. Check the module signature
+### 2. Check the module signature {#2-check-the-module-signature}
 
 `module_sig_check()` runs first, before any section is examined, so a corrupt image cannot steer the loader before its authenticity is established. It also trims the appended signature off the end of the image by adjusting `info->len`, which makes every subsequent bounds check operate on the real ELF length. See [Kernel Module Signing](module-signing.md) for the details.
 
-### 3. Validate the ELF headers and cache the section table
+### 3. Validate the ELF headers and cache the section table {#3-validate-the-elf-headers-and-cache-the-section-table}
 
 `elf_validity_cache_copy()` performs the structural checks and records the indices of the sections the loader will need later. It verifies, among other things:
 
@@ -77,7 +77,7 @@ Either way, the resulting buffer is a complete ELF relocatable object.
 
 Failures here return `ENOEXEC`. On success `info->mod` points at the module's on-disk `struct module` inside the temporary image, and `info->index.*` holds the cached section indices (`.modinfo`, symbol table, string table, `__versions`, and the extended-modversions pair).
 
-### 4. Early checks: blacklist, module_layout CRC, vermagic
+### 4. Early checks: blacklist, module_layout CRC, vermagic {#4-early-checks-blacklist-module_layout-crc-vermagic}
 
 `early_mod_check()` runs the checks that can be made before anything is allocated:
 
@@ -99,7 +99,7 @@ The vermagic comparison is where the classic "version magic" error originates:
 
 `same_magic()` skips the leading kernel-release word of the string when the module carries CRCs, so a modversions-enabled module is judged on the remaining configuration fields (SMP, preemption model, module unload support, and so on) rather than on an exact release match.
 
-### 5. Lay out and allocate module memory
+### 5. Lay out and allocate module memory {#5-lay-out-and-allocate-module-memory}
 
 `layout_and_allocate()` assigns every `SHF_ALLOC` section an offset within one of seven memory classes, then `move_module()` allocates each class and copies the sections in.
 
@@ -175,7 +175,7 @@ With `__START_KERNEL_map` at `0xffffffff80000000` and `KERNEL_IMAGE_SIZE` at 1 G
 
 The proximity to the kernel image is mandatory, not incidental: the compiler generates 32-bit PC-relative relocations (`R_X86_64_PC32`, `R_X86_64_PLT32`) whose signed 32-bit offset can only reach ±2 GB from the instruction. Placing modules further away would overflow them.
 
-### 6. Find the optional sections
+### 6. Find the optional sections {#6-find-the-optional-sections}
 
 With the module at its final address, `find_module_sections()` records pointers into the sections the kernel will consult at runtime. Together with the indices cached back in step 3, these are the sections that matter to a load:
 
@@ -208,7 +208,7 @@ if (section_addr(info, "__kcrctab_gpl"))
 
 `check_export_symbol_sections()` then rejects with `ENOEXEC` any module that exports symbols but ships no `__kflagstab`.
 
-### 7. Resolve symbols
+### 7. Resolve symbols {#7-resolve-symbols}
 
 Symbol resolution comes **before** relocation, and necessarily so: a relocation against an undefined symbol needs that symbol's address, which resolution is what supplies. `load_module()` calls them in exactly that order:
 
@@ -260,7 +260,7 @@ if (!fsa->gplok && (sym_flags & KSYM_FLAG_GPL_ONLY))
 
 That `return false` is why a proprietary module reaching for a GPL-only export does not get a distinct "license" error: the entry is skipped as though it were not there, `find_symbol()` reports failure, and `simplify_symbols()` ends up at its `-ENOENT` path, printing `Unknown symbol <name>` like any genuinely missing symbol. The same lookup also sets `mod->using_gplonly_symbols` when a GPL-only export *is* successfully consumed, which later prevents such a module from also importing from a proprietary one.
 
-### 8. Verify CRC checksums
+### 8. Verify CRC checksums {#8-verify-crc-checksums}
 
 Version checking is not a separate pass — `resolve_symbol()` calls `check_version()` on each symbol it finds, during step 7. With `CONFIG_MODVERSIONS=y`, every imported symbol carries a CRC in the module's `__versions` section:
 
@@ -310,7 +310,7 @@ It is worth keeping the failure codes apart, because they are easy to confuse fr
 | Imported symbol CRC mismatch | `EINVAL` | `resolve_symbol()`, via `check_version()` |
 | Symbol missing, or GPL-only and unreachable | `ENOENT` | `simplify_symbols()` |
 
-### 9. Apply relocations
+### 9. Apply relocations {#9-apply-relocations}
 
 The ELF `.rela.*` sections contain relocation entries, now resolvable because step 7 filled in every `st_value`. The kernel applies them with:
 
@@ -335,7 +335,7 @@ On x86-64, the common relocation types are:
 
 For each entry the kernel computes `val = sym->st_value + r_addend`, subtracts the relocation's own address for the PC-relative types, and writes the result at the relocation offset. The PC-relative types (`R_X86_64_PC32`/`PLT32`) are not range-checked at all — if a target exceeds the ±2 GB reach discussed in step 5, the truncation is silent. `R_X86_64_32S` and `R_X86_64_32` are absolute-address types instead: they fail the load with `ENOEXEC` ("overflow") if `val` doesn't survive the narrowing, which is the `-mcmodel=kernel` constraint (a module's absolute symbol references must fit the top 2 GB of the address space), not the same ±2 GB PC-relative window.
 
-### 10. Complete formation and fire the COMING notifiers
+### 10. Complete formation and fire the COMING notifiers {#10-complete-formation-and-fire-the-coming-notifiers}
 
 `complete_formation()` does the work that makes the module safe for other CPUs to observe. Under `module_mutex` it checks for duplicate exports with `verify_exported_symbols()`, finalises the BUG and CFI tables, applies page permissions to the memory classes allocated in step 5 (`module_enable_rodata_ro()`, `module_enable_data_nx()`, `module_enable_text_rox()`), and only then publishes the state change:
 
@@ -357,7 +357,7 @@ err = notifier_to_errno(err);
 
 The `_robust` variant is the important detail: if any callback in the chain fails, it automatically replays the chain with `MODULE_STATE_GOING` for the callbacks that already succeeded, so a subsystem that patched the module can undo its work. Subsystems such as kprobes register on this chain (`kprobe_register_module_notifier()`) to instrument the new module's code; ftrace and live-patching are wired in directly instead — `ftrace_module_enable()` and `klp_module_coming()` run just before the chain, for the same reason.
 
-### 11. Call mod->init()
+### 11. Call mod->init() {#11-call-mod-init}
 
 `load_module()` ends with `return do_init_module(mod);`, and `do_init_module()` invokes the module's init function through `do_one_initcall()` — the very same helper used for built-in initcalls. That is why the `initcall_blacklist=` boot parameter works on module init functions too: `initcall_blacklisted()` resolves the function pointer with `sprint_symbol_no_offset()` and strips the `[module_name]` suffix before comparing. Going through `do_one_initcall()` also gets a module's init the initcall tracepoints and the `WARN` for leaving preemption or interrupt state imbalanced.
 
@@ -417,7 +417,7 @@ if (ret == -EEXIST)
         ret = -EBUSY;
 ```
 
-## struct module
+## struct module {#struct-module}
 
 `struct module` (defined in `include/linux/module.h`) is the kernel's runtime representation of a loaded module. Key fields:
 
@@ -467,7 +467,7 @@ Note that the unload machinery — both lists, `exit`, and the reference count �
 
 The reference count itself is a plain `atomic_t refcnt`. The per-CPU `struct module_ref __percpu *refptr` it replaced has been gone since v3.19.
 
-## MODULE_STATE_* lifecycle
+## MODULE_STATE_* lifecycle {#modulestate-lifecycle}
 
 ```
 insmod / modprobe
@@ -500,7 +500,7 @@ insmod / modprobe
 
 The `UNFORMED` and `COMING` states are both visible to other CPUs through the global modules list, and both are special-cased there: `find_symbol()` skips `UNFORMED` modules outright, `m_show()` omits them from `/proc/modules`, and `strong_try_module_get()` refuses a `COMING` module with `-EBUSY` so a dependent load waits rather than binding to a half-built provider. (`GOING` gets no such special-casing in `find_symbol()` — a module can still export symbols while unloading — but `m_show()` does print it, as `Unloading`.) What guarantees no thread is still executing *inside* a module by the time it reaches `GOING` is the reference count, not RCU: `try_module_get()`/`module_put()` (and `strong_try_module_get()` behind `__symbol_get()`) hold the count up, and `delete_module()` will not set `GOING` with a live count remaining unless the caller forces it (`try_stop_module()` sets `GOING` regardless of count when `try_force_unload()` succeeds, gated on `CONFIG_MODULE_FORCE_UNLOAD` and the `O_TRUNC` flag to `delete_module(2)`) — otherwise `try_release_module_ref()` puts the base reference back and `try_stop_module()` returns `-EWOULDBLOCK`, failing `rmmod` immediately. (The kernel has not blocked and waited for a refcount to drain since v3.13, commit `3f2b9c9cdf38` "module: remove rmmod --wait option.") The `synchronize_rcu()` calls on the teardown paths do a different job: `free_module()` unlinks the module from the modules list, the mod tree and the bug list with the `_rcu` variants — "Unlink carefully: kallsyms could be walking list" — and then waits a grace period so those RCU readers cannot touch the memory as it is freed.
 
-## /proc/modules format
+## /proc/modules format {#procmodules-format}
 
 ```bash
 cat /proc/modules
@@ -522,7 +522,7 @@ cat /proc/modules
 
 When `mod->taints` is non-zero a parenthesised flag suffix follows, e.g. `(OE)` for an out-of-tree unsigned module, with `+` appended while the module is loading and `-` while it is unloading.
 
-## Symbol versioning detail
+## Symbol versioning detail {#symbol-versioning-detail}
 
 There are two CRC generators. `scripts/genksyms/` is the original: it runs at kernel build time, parses the preprocessed C, and computes a CRC over the full type signature (recursively expanding struct and union layouts) of each exported symbol. Its C parser cannot see Rust, and cannot version a symbol whose type is only fully described in debug info, so `scripts/gendwarfksyms/` was added alongside it under `CONFIG_GENDWARFKSYMS`; it derives the same kind of CRC from DWARF rather than from source.
 
@@ -546,9 +546,9 @@ grep -w module_layout Module.symvers | cat -A
 
 When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)` to embed the correct CRCs in the module's `__versions` (or `__version_ext_crcs`/`__version_ext_names`) section. Building against the wrong `Module.symvers` is the most common cause of version mismatch errors.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — the loader core: `load_module()`, `simplify_symbols()`, `apply_relocations()`, `do_init_module()`, and the `init_module`/`finit_module` `SYSCALL_DEFINE`s
 - [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — `struct load_info`, the ELF-section cache threaded through every stage of a load
@@ -564,7 +564,7 @@ When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)
 - [`12af2b83d0b1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=12af2b83d0b17ec8b379b721dd4a8fbcd5d791f3) — "mm: introduce execmem_alloc() and execmem_free()" (Mike Rapoport, 2024): the allocator that module text and data are carved out of today
 - [`55fcb926b6d8`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=55fcb926b6d8b5cfb40873e4840a69961db1bb69) — "module: use kflagstab instead of *_gpl sections" (Siddharth Nayyar, 2026): GPL-only became a bit in a parallel `__kflagstab` section, so the loader no longer searches a separate `__ksymtab_gpl`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — documents both syscalls in one page: the prototypes, the three `finit_module()` flags, and that `finit_module()` appeared in Linux 3.8
 - [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — the unload side; states that the call fails with `EWOULDBLOCK` when other loaded modules refer to symbols defined in this one, and what `O_NONBLOCK`/`O_TRUNC` change
@@ -572,7 +572,7 @@ When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)
 - [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — determines "what symbols each module exports and needs" and writes the resulting graph to `modules.dep`, the input to dependency-ordered loading
 - [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — the tool that consults `modules.dep`, which "lists what other modules each module needs (if any), and modprobe uses this to add or remove these dependencies automatically"; the man page does not name the syscall it ultimately issues, but kmod's implementation loads each `.ko` with `finit_module()`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Module Parameters, Symbols, and Kconfig](module-params.md) — `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`, the `has no CRC!` and `disagrees about version` symptoms, and `/proc/kallsyms`, from the module author's side
 - [Kernel Module Signing](module-signing.md) — `module_sig_check()`, which `load_module()` runs before it looks at a single ELF section
@@ -580,7 +580,7 @@ When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)
 - [Writing and Loading Kernel Modules](module-basics.md) — the source-level view: `module_init`/`module_exit`, `__init` sections, and the `.ko` this page takes apart
 - [Module War Stories](war-stories.md) — CRC mismatches, taint cascades, and versioning surprises seen in production
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Loading modules from file descriptors](https://lwn.net/Articles/519010/) — Michael Kerrisk, October 2012, on the proposal that became `finit_module()`; the driving motivation was letting the kernel reason about a module's *filesystem origin* (dm-verity-backed roots, LSMs reading signatures from extended attributes), not just its bytes
 - [The return of modversions](https://lwn.net/Articles/21393/) — January 2003; describes the mechanism step 8 above implements: one structure per imported symbol holding "the symbol name and its checksum", linked into a special section and discarded once the load succeeds
@@ -588,7 +588,7 @@ When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)
 - [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — June 2023; Mike Rapoport's case for taking executable-memory allocation away from the module loader, and the direct-map fragmentation that motivated it
 - [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — November 2024; how the loader's GPL-only enforcement worked as of the article's two-table `__ksymtab`/`__ksymtab_gpl` model (replaced by the single-table `__kflagstab` scheme described above in v7.1) and the proposal to restrict an export to a named set of modules
 
-### External
+### External {#external}
 
 - [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — the upstream guide to out-of-tree builds, including "Symbols From the Kernel (vmlinux + modules)" and the `KBUILD_EXTRA_SYMBOLS` escape hatch for cross-module `Module.symvers`
 - [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — the authoritative taint-flag table, including `F` ("module was force loaded"), `O` (out-of-tree module), and `E` (unsigned module)

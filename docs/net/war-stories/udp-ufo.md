@@ -1,4 +1,4 @@
-# UDP Fragmentation-Offload Path-Switch Corruption
+# UDP Fragmentation-Offload Path-Switch Corruption {#udp-fragmentation-offload-path-switch-corruption}
 
 > CVE-2017-1000112 — a per-call heuristic that should have been a per-datagram invariant let two `send()` calls disagree about how a UDP datagram was being built, syzkaller-found and embargo-disclosed in one week
 
@@ -22,31 +22,31 @@ Actively exploited
 
 *Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 UDP datagrams larger than the path MTU can be built up incrementally with `MSG_MORE`, appending data across multiple `send()` calls before the kernel actually transmits. Depending on whether the underlying NIC advertises UFO (`NETIF_F_UFO`, a scatter-gather segmentation offload for UDP), `__ip_append_data()` in `net/ipv4/ip_output.c` (and its IPv6 counterpart `__ip6_append_data()` in `net/ipv6/ip6_output.c`) chooses one of two paths for building the outgoing SKB(s): the UFO path via `ip_ufo_append_data()`, which builds a single GSO SKB with the fragmentation deferred to the NIC/software GSO, or the plain fragmentation path, which splits the data into MTU-sized SKBs itself, computing a `copy` length for each fragment as it goes.
 
 UFO's scatter-gather design was itself the outcome of a real disagreement. [Neterion's original 2005 posting](https://lore.kernel.org/netdev/20050526232006.60E6365005@linux.site/) built the offload data path through `sock_append_data()`; David Miller pushed back that this "seems like a lot of wasted work" compared to simply handing fragments to the device, and pointed out that `NETIF_F_FRAGLIST` already existed to express exactly the kind of fragment-list offload he had in mind. Rather than pick one design, the two approaches were prototyped as competing patches — Miller: "I think minimizing driver specific work is probably going to make the SG approach more desirable, but we'll see." The scatter-gather version is what shipped, as `e89e9cf539a2`.
 
-## The trigger
+## The trigger {#the-trigger}
 
 The decision of which path to use was re-evaluated on **every** `send()` call in a `MSG_MORE` sequence, based on current conditions, rather than being fixed for the lifetime of the datagram being built. Andrey Konovalov, using syzkaller, found that between two `send()` calls on the same socket building the same oversized datagram, the append path could **switch from UFO to non-UFO** mid-datagram.
 
 When the non-UFO path then continued appending onto an SKB that had already grown past the MTU under the UFO path's rules, its `copy = maxfraglen - skb->len` computation could go negative, triggering the fragmentation branch, which computed `fraggap = skb_prev->len - maxfraglen` — itself capable of exceeding the MTU — and from there `copy = datalen - transhdrlen - fraggap` could also go negative.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 A negative `copy` length fed directly into `skb_copy_and_csum_bits()`, which performs an **out-of-bounds write** using that length as a copy size. [The NVD entry](https://nvd.nist.gov/vuln/detail/CVE-2017-1000112) describes the same defect present in the IPv6 code path. The bug was traced back to the original UFO scatter-gather implementation, commit [`e89e9cf539a2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e89e9cf539a28df7d0eb1d0a545368e9920b34ac) ("[IPv4/IPv6]: UFO Scatter-gather approach") from October 2005 — meaning it had existed for roughly twelve years before syzkaller found it.
 
 Konovalov didn't stop at reporting it: he published his own [proof-of-concept local privilege escalation exploit](https://github.com/xairy/kernel-exploits/tree/master/CVE-2017-1000112), and that PoC was later ported into a [Metasploit module](https://www.exploit-db.com/exploits/45147) (`exploit/linux/local/ufo_privilege_escalation`) by h00die and Brendan Coles. As with AF_PACKET, there's no public evidence of it being caught in active exploitation against real targets — it isn't on CISA's KEV catalog — but the out-of-bounds write was demonstrably weaponizable into full local root, not just a crash.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The bug is a **state-consistency bug across a multi-call API**: `sendmsg(MSG_MORE)` sequences are meant to build one logical datagram across several calls, but the UFO-vs-fragmentation decision was a per-call heuristic rather than a per-datagram invariant. Once the first `send()` call had committed an SKB to the "GSO, defer to UFO" shape, a later `send()` call in the same sequence was still free to decide independently that non-UFO fragmentation applied — even though the SKB it was appending to was already built under different assumptions.
 
 The multi-call capability this bug depends on was itself a deliberate design decision, taken in review twelve years earlier. Ravinandan Arakali's original UFO scatter-gather patch refused to use the UFO path at all once the socket already had a queued SKB — `if (skb_queue_len(&sk->sk_write_queue))` returned `-EOPNOTSUPP`, silently falling back to software fragmentation rather than surfacing an error — and [David Miller flagged that guard in review](https://lore.kernel.org/netdev/20050719.142320.52167011.davem@davemloft.net/): it "breaks NFS, and other things using MSG_MORE and UDP_CORK." Miller laid out the choice explicitly — either add corked-socket support to the UFO append path, or take a different implementation ("the frag_list patch") that didn't have the problem: "I prefer the frag_list patch from a cleanliness perspective, however I remember you saying that the sock_append_data() approach obtained better performance." (Arakali had in fact reported, in an earlier round of the same design debate, no measurable difference between the two — only that the scatter-gather version minimized coalescing work in the driver.) Neterion kept the scatter-gather approach and added multi-call support to it instead of dropping it — which is precisely the code path that, left unaudited for the different failure mode of a UFO/fragmentation *path switch* mid-sequence, produced CVE-2017-1000112. The 2005 thread was about NFS correctness, not security, but it's the moment the multi-call capability this bug depends on was deliberately kept in the design.
 
-## Resolution
+## Resolution {#resolution}
 
 [`85f1bd9a7b5a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=85f1bd9a7b5a79d5baa8bf44af19658f7bf77bfa) ("udp: consistently apply ufo or fragmentation"), authored by Willem de Bruijn and reported by Andrey Konovalov, enforces the invariant explicitly in both `__ip_append_data()` and `__ip6_append_data()`: **once an SKB is GSO (`skb_is_gso(skb)`), always continue appending via the UFO path** for the rest of that datagram, regardless of what the size/MTU heuristic would otherwise choose:
 
@@ -70,7 +70,7 @@ What Konovalov's [disclosure email](https://seclists.org/oss-sec/2017/q3/277) do
 
 But it meant the kernel had two fixes in flight at once for the same underlying feature: a minimal, stable-backportable patch that repaired the UFO/fragmentation invariant (what actually shipped for this CVE, since it could go to `-stable` immediately), and a slower-moving, `net-next`-only effort to remove software UFO offload altogether, which was too large and too likely to break existing users (UFO support was later partially restored for tuntap/`AF_PACKET` to preserve live-migration compatibility with older guests) to be a candidate for an urgent security fix. The invariant fix addressed the immediate bug without waiting on, or depending on, that larger cleanup.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Multi-call APIs need invariants that survive across calls, not just per-call correctness.** Each individual `send(MSG_MORE)` call's path-selection logic was locally reasonable; the bug only existed in the transition between two calls that each made a locally-correct but mutually inconsistent decision.
 
@@ -81,12 +81,12 @@ But it meant the kernel had two fixes in flight at once for the same underlying 
 !!! warning "Pattern to watch for"
     Any code path where a per-call heuristic decision (buffer strategy, offload path, algorithm choice) can vary across a sequence of calls building one logical object is a candidate for this bug class. If your workload uses `MSG_MORE` with UDP sockets near or above MTU size, make sure you're on a kernel that includes `85f1bd9a7b5a` (August 2017 or later stable).
 
-## See also
+## See also {#see-also}
 
 - [UDP Socket Internals](../udp.md) — the send path and UFO/segmentation behavior behind this bug
 - [AF_PACKET Privilege Escalation](af-packet.md) — another syzkaller-found bug in the same era
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2017-1000112](https://nvd.nist.gov/vuln/detail/CVE-2017-1000112) — UDP UFO path-switch CVE record
 - [git.kernel.org: e89e9cf539a2](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e89e9cf539a28df7d0eb1d0a545368e9920b34ac) — "[IPv4/IPv6]: UFO Scatter-gather approach" (2005), the original implementation this bug traces back to

@@ -1,8 +1,8 @@
-# Slab Allocator (SLUB)
+# Slab Allocator (SLUB) {#slab-allocator-slub}
 
 > Efficient allocation of small kernel objects
 
-## What is the Slab Allocator?
+## What is the Slab Allocator? {#what-is-the-slab-allocator}
 
 The slab allocator sits between the page allocator and kernel code. It carves pages into fixed-size object caches, reducing internal fragmentation and speeding up allocation of commonly-used structures.
 
@@ -16,7 +16,7 @@ void *kmem_cache_alloc(struct kmem_cache *cache, gfp_t flags);
 void kmem_cache_free(struct kmem_cache *cache, void *ptr);
 ```
 
-## Why Not Just Use the Page Allocator?
+## Why Not Just Use the Page Allocator? {#why-not-just-use-the-page-allocator}
 
 The page allocator works in `4KB` chunks. But kernel objects are often much smaller:
 
@@ -29,7 +29,7 @@ The page allocator works in `4KB` chunks. But kernel objects are often much smal
 
 Allocating a full page for a 200-byte object wastes 95% of the memory.
 
-## The Slab Concept
+## The Slab Concept {#the-slab-concept}
 
 Originally from SunOS ([Bonwick, USENIX Summer 1994](https://www.usenix.org/conference/usenix-summer-1994-technical-conference/slab-allocator-object-caching-kernel)), the idea:
 
@@ -48,7 +48,7 @@ slab for 256-byte objects (one page):
  in use            free                    free
 ```
 
-## SLUB vs SLAB vs SLOB
+## SLUB vs SLAB vs SLOB {#slub-vs-slab-vs-slob}
 
 Linux has had three slab implementations:
 
@@ -58,7 +58,7 @@ Linux has had three slab implementations:
 | SLUB | **Default** ([since v2.6.23](https://git.kernel.org/linus/a0acd820)) | Simpler, lower overhead, no queues |
 | SLOB | [Removed (v6.4)](https://git.kernel.org/linus/c9929f0e344a) | Minimal, for embedded systems |
 
-### Why SLUB replaced SLAB
+### Why SLUB replaced SLAB {#why-slub-replaced-slab}
 
 The original SLAB allocator (Jeff Bonwick, ported to Linux by Christoph Lameter in 2.0) maintained *three* lists of slabs per CPU per cache: a per-CPU queue, a shared queue, and a per-NUMA-node list. This three-level structure minimized cross-CPU object movement (a freed object went to the per-CPU list first, avoiding contention), but it came at a cost:
 
@@ -70,9 +70,9 @@ Christoph Lameter designed SLUB (merged in Linux 2.6.23, 2007) by removing the q
 
 The result: SLUB had less metadata, fewer locks, and comparable or better performance. It became the default in 2.6.23. SLAB was kept as a `Kconfig` option for compatibility and finally removed in Linux 6.8 (2024). SLOB (a tiny first-fit allocator for embedded systems with no MMU) was removed in Linux 6.4 (2023) as embedded platforms gained enough RAM to use SLUB.
 
-## How SLUB Works
+## How SLUB Works {#how-slub-works}
 
-### Per-CPU Slabs
+### Per-CPU Slabs {#per-cpu-slabs}
 
 Each CPU has a "current" slab for fast allocation:
 
@@ -91,7 +91,7 @@ CPU 0                    CPU 1
 
 Fast path uses atomic `cmpxchg` instead of locks (when hardware supports it).
 
-### Allocation Fast Path
+### Allocation Fast Path {#allocation-fast-path}
 
 From `mm/slub.c`:
 
@@ -105,7 +105,7 @@ The fast path:
 
 This avoids traditional locks in the common case while remaining correct under preemption and migration.
 
-### Freelist Encoding
+### Freelist Encoding {#freelist-encoding}
 
 SLUB stores the freelist pointer inside free objects themselves:
 
@@ -120,7 +120,7 @@ Free object layout:
 When allocated, pointer is overwritten by actual data
 ```
 
-### Partial Slabs
+### Partial Slabs {#partial-slabs}
 
 When a CPU slab fills, SLUB gets a partially-full slab from the node's partial list:
 
@@ -133,7 +133,7 @@ Per-CPU          Per-Node Partial List
 
 The per-CPU partial list behavior is controlled by `CONFIG_SLUB_CPU_PARTIAL`. When enabled (default), each CPU maintains its own partial list, reducing contention on the node's partial list.
 
-## kmalloc Size Classes
+## kmalloc Size Classes {#kmalloc-size-classes}
 
 `kmalloc()` uses pre-created caches for power-of-2 sizes:
 
@@ -150,7 +150,7 @@ kmalloc-8k     (8192 bytes)
 
 Request for 100 bytes -> `kmalloc-128` (28 bytes internal fragmentation)
 
-### kvmalloc
+### kvmalloc {#kvmalloc}
 
 For allocations that might be large, use `kvmalloc()` instead of `kmalloc()`:
 
@@ -161,7 +161,7 @@ void kvfree(const void *addr);
 
 `kvmalloc()` tries `kmalloc()` first, falls back to `vmalloc()` for larger allocations. This avoids high-order allocation failures while keeping small allocations fast.
 
-## Cache Merging
+## Cache Merging {#cache-merging}
 
 To reduce memory overhead, SLUB merges similar caches:
 
@@ -174,7 +174,7 @@ struct bar { int x, y, z; };      /* 12 bytes */
 
 Disable with boot option `slub_nomerge` for debugging.
 
-## SLUB Debugging
+## SLUB Debugging {#slub-debugging}
 
 SLUB has extensive debugging features:
 
@@ -193,7 +193,7 @@ slub_debug=PFZ,kmalloc-256
 cat /sys/kernel/slab/kmalloc-256/sanity_checks
 ```
 
-### Poison Values
+### Poison Values {#poison-values}
 
 | Pattern | Meaning |
 |---------|---------|
@@ -203,7 +203,7 @@ cat /sys/kernel/slab/kmalloc-256/sanity_checks
 | `0xbb` | Red zone inactive (`SLUB_RED_INACTIVE`) - detects buffer overflows on free objects |
 | `0xcc` | Red zone active (`SLUB_RED_ACTIVE`) - detects buffer overflows on in-use objects |
 
-## Security Hardening
+## Security Hardening {#security-hardening}
 
 SLUB has several security features:
 
@@ -214,7 +214,7 @@ SLUB has several security features:
 | `CONFIG_INIT_ON_ALLOC_DEFAULT_ON` | Zero memory on allocation |
 | `CONFIG_INIT_ON_FREE_DEFAULT_ON` | Zero memory on free |
 
-### KFENCE
+### KFENCE {#kfence}
 
 KFENCE (Kernel Electric Fence) is a sampling-based memory safety error detector. From the [kernel documentation](https://docs.kernel.org/dev-tools/kfence.html):
 
@@ -227,9 +227,9 @@ Unlike `slub_debug`, KFENCE can run in production because it only samples a frac
 cat /sys/module/kfence/parameters/sample_interval
 ```
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### View All Slab Caches
+### View All Slab Caches {#view-all-slab-caches}
 
 ```bash
 # Summary of all caches
@@ -239,7 +239,7 @@ cat /proc/slabinfo
 slabtop -s c    # Sort by cache size
 ```
 
-### Inspect Specific Cache
+### Inspect Specific Cache {#inspect-specific-cache}
 
 ```bash
 # Via sysfs (SLUB)
@@ -253,14 +253,14 @@ ls /sys/kernel/slab/kmalloc-256/
 # - cpu_slabs: per-CPU slabs
 ```
 
-### Memory Usage by Cache
+### Memory Usage by Cache {#memory-usage-by-cache}
 
 ```bash
 # Top memory consumers
 cat /proc/slabinfo | awk 'NR>2 {print $1, $3*$4}' | sort -k2 -nr | head
 ```
 
-### Trace Allocations
+### Trace Allocations {#trace-allocations}
 
 ```bash
 # Enable kmalloc tracing
@@ -268,9 +268,9 @@ echo 1 > /sys/kernel/debug/tracing/events/kmem/kmalloc/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
-### struct kmem_cache
+### struct kmem_cache {#struct-kmem_cache}
 
 ```c
 struct kmem_cache {
@@ -283,7 +283,7 @@ struct kmem_cache {
 };
 ```
 
-### struct kmem_cache_cpu
+### struct kmem_cache_cpu {#struct-kmemcachecpu}
 
 ```c
 /* From mm/slub.c */
@@ -301,15 +301,15 @@ struct kmem_cache_cpu {
 };
 ```
 
-## History
+## History {#history}
 
-### SLAB (1996)
+### SLAB (1996) {#slab-1996}
 
 Ported from SunOS, based on [Bonwick's 1994 paper](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf).
 
 *Note: Predates LKML archives.*
 
-### SLUB Introduction (v2.6.22, 2007)
+### SLUB Introduction (v2.6.22, 2007) {#slub-introduction-v2622-2007}
 
 **Commit**: [81819f0fc828](https://git.kernel.org/linus/81819f0fc828)
 
@@ -317,7 +317,7 @@ Ported from SunOS, based on [Bonwick's 1994 paper](https://people.eecs.berkeley.
 
 *Note: The commit message contains the design rationale. Pre-2008 LKML archives are sparse.*
 
-### SLAB Deprecation (v6.5, 2023)
+### SLAB Deprecation (v6.5, 2023) {#slab-deprecation-v65-2023}
 
 **Commit**: [eb07c4f39c3e](https://git.kernel.org/linus/eb07c4f39c3e) ("mm/slab: rename CONFIG_SLAB to CONFIG_SLAB_DEPRECATED") | [LKML](https://lore.kernel.org/linux-arm-kernel/20230523091139.21449-1-vbabka@suse.cz/)
 
@@ -325,7 +325,7 @@ Ported from SunOS, based on [Bonwick's 1994 paper](https://people.eecs.berkeley.
 
 SLAB was deprecated, with SLUB as the sole remaining allocator.
 
-### SLAB Removal (v6.8, 2024)
+### SLAB Removal (v6.8, 2024) {#slab-removal-v68-2024}
 
 **Commit**: [16a1d968358a](https://git.kernel.org/linus/16a1d968358a) ("mm/slab: remove mm/slab.c and slab_def.h") | [LKML](https://lore.kernel.org/lkml/20231113191340.17482-22-vbabka@suse.cz/)
 
@@ -333,41 +333,41 @@ SLAB was deprecated, with SLUB as the sole remaining allocator.
 
 SLAB code removed. SLUB is now the only slab allocator.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Slab Fragmentation
+### Slab Fragmentation {#slab-fragmentation}
 
 Objects allocated but not freed, preventing slab pages from being returned.
 
 **Debug**: Check `/sys/kernel/slab/*/partial`
 
-### Memory Leaks
+### Memory Leaks {#memory-leaks}
 
 Allocations without matching frees.
 
 **Debug**: Use `slub_debug=U` to track allocation sites, or use kmemleak.
 
-### Cache Line Bouncing
+### Cache Line Bouncing {#cache-line-bouncing}
 
 Per-CPU slab contention on workloads that allocate on one CPU and free on another.
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 Heap exploitation is the bread and butter of kernel exploits. The SLUB allocator's design - storing freelist pointers inline with objects, using per-CPU caches, and merging similar caches - creates a rich attack surface.
 
-### Case 1: Netfilter heap out-of-bounds (CVE-2021-22555)
+### Case 1: Netfilter heap out-of-bounds (CVE-2021-22555) {#case-1-netfilter-heap-out-of-bounds-cve-2021-22555}
 
-#### What happened
+#### What happened {#what-happened}
 
 In July 2021, Andy Nguyen (Google) demonstrated a 15-year-old heap out-of-bounds write in Linux Netfilter that bypassed all modern mitigations to achieve kernel code execution. The exploit won $10,000 in Google's kCTF program.
 
-#### The bug
+#### The bug {#the-bug}
 
 From the [Project Zero writeup](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html):
 
 The vulnerability exists in `net/netfilter/x_tables.c`. When `IPT_SO_SET_REPLACE` is called in compatibility mode, structures must be converted from 32-bit to 64-bit format. The conversion function `xt_compat_target_from_user()` could write 4 bytes of zeros out-of-bounds.
 
-#### Exploitation technique
+#### Exploitation technique {#exploitation-technique}
 
 The exploit uses several advanced techniques:
 
@@ -377,7 +377,7 @@ The exploit uses several advanced techniques:
 4. **Leak kernel addresses**: Read freed msg_msg to defeat KASLR
 5. **Fake object injection**: Spray fake objects to control execution
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [b29c457a6511](https://git.kernel.org/linus/b29c457a6511) ("netfilter: x_tables: fix compat match/target pad out-of-bound write")
 
@@ -385,19 +385,19 @@ The exploit uses several advanced techniques:
 
 ---
 
-### Case 2: io_uring use-after-free (CVE-2022-29582)
+### Case 2: io_uring use-after-free (CVE-2022-29582) {#case-2-io_uring-use-after-free-cve-2022-29582}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 In 2022, security researchers discovered a race condition in io_uring's timeout handling that led to a use-after-free. The exploit achieved root privileges on Google's hardened kCTF environment.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 From the [technical writeup](https://ruia-ruia.github.io/2022/08/05/CVE-2022-29582-io-uring/):
 
 A race exists between timeout flush and removal in io_uring. When the same timeout request is processed by both paths simultaneously, it gets freed twice, creating a use-after-free.
 
-#### Exploitation technique
+#### Exploitation technique {#exploitation-technique_1}
 
 The exploit uses a **cross-cache attack**:
 
@@ -406,7 +406,7 @@ The exploit uses a **cross-cache attack**:
 3. **Type confusion**: The freed `io_kiocb` slot now holds a different object type
 4. **Arbitrary read/write**: Manipulate the confused object to gain primitives
 
-#### The fix
+#### The fix {#the-fix_1}
 
 **Commit**: [e677edbcabee](https://git.kernel.org/linus/e677edbcabee) ("io_uring: fix race between timeout flush and removal")
 
@@ -414,13 +414,13 @@ The exploit uses a **cross-cache attack**:
 
 ---
 
-### Case 3: SLUB freelist hardening bypasses
+### Case 3: SLUB freelist hardening bypasses {#case-3-slub-freelist-hardening-bypasses}
 
-#### The hardening
+#### The hardening {#the-hardening}
 
 Linux added `CONFIG_SLAB_FREELIST_HARDENED` to protect against freelist corruption. The freelist pointer is XORed with a per-cache random value and the pointer's own address.
 
-#### Bypassing the hardening
+#### Bypassing the hardening {#bypassing-the-hardening}
 
 Despite hardening, researchers have found bypasses:
 
@@ -436,25 +436,25 @@ Despite hardening, researchers have found bypasses:
 
 ---
 
-### Case 4: Cache merging security issues
+### Case 4: Cache merging security issues {#case-4-cache-merging-security-issues}
 
-#### The problem
+#### The problem {#the-problem}
 
 SLUB merges caches with similar object sizes and flags to reduce memory overhead. When caches merge, objects of different types share the same slab pages, and UAF in one object type can affect the other.
 
-#### The fix
+#### The fix {#the-fix_2}
 
 For security-sensitive caches, use `SLAB_ACCOUNT` or `SLAB_NO_MERGE`. Boot option `slub_nomerge` disables all merging (performance cost).
 
 ---
 
-### Case 5: Out-of-slab access patterns
+### Case 5: Out-of-slab access patterns {#case-5-out-of-slab-access-patterns}
 
-#### The bug class
+#### The bug class {#the-bug-class}
 
 Many vulnerabilities involve accessing memory just outside a slab object (off-by-one, linear overflow). With standard SLUB, this corrupts adjacent objects or freelist pointers.
 
-#### Detection
+#### Detection {#detection}
 
 ```bash
 # Enable red zoning to detect overflows
@@ -466,7 +466,7 @@ CONFIG_KFENCE=y
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Root Cause | Exploitation |
 |-----|------|------------|--------------|
@@ -477,9 +477,9 @@ CONFIG_KFENCE=y
 
 **The pattern**: SLUB bugs are rarely in SLUB itself - they're in code that *uses* SLUB. But understanding SLUB internals is essential for both exploitation and defense.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -487,7 +487,7 @@ CONFIG_KFENCE=y
 | [`include/linux/slab.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/slab.h) | Slab API |
 | [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | Common slab code |
 
-### Key Commits
+### Key Commits {#key-commits}
 
 | Commit | Kernel | Description |
 |--------|--------|-------------|
@@ -495,17 +495,17 @@ CONFIG_KFENCE=y
 | [eb07c4f39c3e](https://git.kernel.org/linus/eb07c4f39c3e) | v6.5 | SLAB deprecation |
 | [16a1d968358a](https://git.kernel.org/linus/16a1d968358a) | v6.8 | SLAB removal |
 
-### Further Reading
+### Further Reading {#further-reading}
 
 - [Bonwick, "The Slab Allocator" (1994)](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf) - Original design paper
 
-### Related
+### Related {#related}
 
 - [page-allocator](page-allocator.md) - Where SLUB gets its pages
 - [overview](overview.md) - How slab fits in the allocator hierarchy
 - [Bug Index](bugs/README.md) - Index of all mm kernel bugs
 
-## Further reading
+## Further reading {#further-reading_1}
 
 - [page-allocator.md](page-allocator.md) — The buddy system that SLUB draws pages from
 - [vmalloc.md](vmalloc.md) — `kvmalloc()` falls back to vmalloc for large allocations that kmalloc cannot satisfy

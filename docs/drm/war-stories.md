@@ -1,4 +1,4 @@
-# War Stories: GPU/DRM Bugs and Regressions
+# War Stories: GPU/DRM Bugs and Regressions {#war-stories-gpudrm-bugs-and-regressions}
 
 > Five incidents from the shared DRM scheduler and driver recovery paths — none of them a CVE, all of them a GPU that either hung when it shouldn't have, or didn't recover when it should have
 
@@ -8,31 +8,31 @@ There is no CVE on this page. GPU/DRM's public incident record looks structurall
 
 The other two are policy, not bugs: two changes to how `drm_sched` decides *which* job runs next, each one fixing a real starvation pattern the previous policy couldn't see coming until workloads exercised it.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by when the fix landed — newest first.
 
-### [The Xe TDR Recovery Regression Chain](war-stories/xe-tdr-recovery-regression.md)
+### [The Xe TDR Recovery Regression Chain](war-stories/xe-tdr-recovery-regression.md) {#the-xe-tdr-recovery-regression-chain}
 **November 2024 – July 2026 · not a CVE**
 A fix for one Xe TDR bug on Lunar Lake regressed unstarted-job recovery twenty months later; the next fix was itself found to dereference freed job memory, written just two days after it. Three commits, one function; the last two each carry a `Fixes:` tag pointing at the one before them.
 
-### [The Scheduler Fairness Evolution](war-stories/scheduler-fairness-evolution.md)
+### [The Scheduler Fairness Evolution](war-stories/scheduler-fairness-evolution.md) {#the-scheduler-fairness-evolution}
 **Linux 6.2 (2022) → Linux 7.2 (2026) · not a CVE**
 Round robin starved entities with long job queues. FIFO fixed that and starved low-priority entities under sustained high-priority load instead. Fair scheduling, borrowing CFS's virtual-runtime model, is the current answer to both.
 
-### [The msm GPU Recovery/Shrinker Deadlock](war-stories/msm-shrinker-deadlock.md)
+### [The msm GPU Recovery/Shrinker Deadlock](war-stories/msm-shrinker-deadlock.md) {#the-msm-gpu-recoveryshrinker-deadlock}
 **April 2026 (Linux 7.1) · not a CVE**
 A GPU-hang recovery worker allocated memory for a crash dump while holding the lock the stuck ring's job thread needed — and that allocation triggered a shrinker that waited on the exact fence the stuck job would have signaled.
 
-### [The `drm_sched_entity_kill_jobs_cb` Lockdep Deadlock](war-stories/entity-kill-jobs-deadlock.md)
+### [The `drm_sched_entity_kill_jobs_cb` Lockdep Deadlock](war-stories/entity-kill-jobs-deadlock.md) {#the-drmschedentitykilljobs_cb-lockdep-deadlock}
 **November 2025 · not a CVE**
 A cleanup callback ran in interrupt context and took a lock that ordinary process-context code held without disabling interrupts — plus a second, independent deadlock in the same function, both fixed by moving the logic out of the signaling callback entirely.
 
-### [The `NO_HANG` False Positive](war-stories/no-hang-false-positive.md)
+### [The `NO_HANG` False Positive](war-stories/no-hang-false-positive.md) {#the-no_hang-false-positive}
 **Linux 6.17 (July 2025) · not a CVE**
 For years the scheduler had one answer to a fired timeout: reset the hardware. Three drivers had their own, better way to know the GPU wasn't actually hung, and had no way to tell the scheduler so — until this.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | Xe TDR chain | Fairness evolution | msm shrinker | Kill-jobs deadlock | NO_HANG |
 |---------|:---:|:---:|:---:|:---:|:---:|
@@ -51,7 +51,7 @@ For years the scheduler had one answer to a fired timeout: reset the hardware. T
 
 **Nothing on this page is a CVE, and that's a genuine property of the subsystem, not an oversight in what got selected.** A GPU hang, a stuck compositor, a scheduler-fairness regression — all real, all disruptive, none of them hand an unprivileged process a privilege it didn't have. Compare the [security](../security/war-stories.md) or [BPF](../bpf/war-stories.md) pages, where a comparably small mistake — a stale struct field, a copy taken before a value changed, a register-bounds error — is the entire vulnerability. Here it's a reliability incident with a hung-task trace instead of an exploit chain.
 
-## See also
+## See also {#see-also}
 
 - [Command Submission, `dma_fence`, and the GPU Scheduler](command-submission.md) — the architecture every incident on this page lives inside: `drm_sched`, TDR, and the `dma_fence` cross-driver contract
 - [GEM Buffer Objects and dma-buf Sharing](gem-dmabuf.md) — GEM shrinkers and `dma_resv`, the other half of the msm deadlock

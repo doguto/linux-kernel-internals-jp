@@ -1,8 +1,8 @@
-# Power Domains and genpd
+# Power Domains and genpd {#power-domains-and-genpd}
 
 > Grouping devices under shared power rails: the generic power domain framework
 
-## The problem: shared power rails
+## The problem: shared power rails {#the-problem-shared-power-rails}
 
 On a desktop or server CPU, each core can individually gate its power. On an embedded SoC it is rarely that simple. A typical mobile SoC might power the GPU block, the display controller, and the memory interface for that display all from a single PMIC rail. Cutting that rail to save power requires that every device on it be quiescent first. If even one device is still doing DMA, powering off the rail corrupts data.
 
@@ -24,7 +24,7 @@ Each rail: single switch, all devices must be idle before it can be cut.
 
 Before genpd, each SoC vendor duplicated logic to track device idleness and sequence rail power-off. The **Generic Power Domain (genpd)** framework, introduced in Linux 3.1 (2011), provides that infrastructure once and for all.
 
-## struct generic_pm_domain
+## struct generic_pm_domain {#struct-genericpmdomain}
 
 The central structure (`include/linux/pm_domain.h`):
 
@@ -66,7 +66,7 @@ struct generic_pm_domain {
 | `GENPD_STATE_ON` | Rail on; needed by an active device attached directly to this domain, or by a powered child domain |
 | `GENPD_STATE_OFF` | Rail off; no attached device is active and no child domain needs it powered |
 
-## Registering a power domain
+## Registering a power domain {#registering-a-power-domain}
 
 ```c
 /* platform code or SoC driver */
@@ -92,7 +92,7 @@ static int soc_pm_init(void)
 
 `pm_genpd_init()` links the domain into the global `gpd_list` and populates `genpd->domain.ops` (a `struct dev_pm_ops`) with genpd's own runtime-PM and system-sleep callbacks (`genpd_runtime_suspend()`, `genpd_runtime_resume()`, `genpd_suspend_noirq()`, and so on). Every device later added to this domain gets `dev->pm_domain` pointed at `&genpd->domain` via `dev_pm_domain_set()`, so those callbacks run instead of the device's bus-level ones.
 
-## Adding devices to a domain
+## Adding devices to a domain {#adding-devices-to-a-domain}
 
 ```c
 /* Called during device probe, typically from OF glue or platform code */
@@ -105,7 +105,7 @@ After this call the Runtime PM lifecycle of `gpu_dev` is managed by the domain. 
 
 On ARM SoCs using Device Tree, the binding `power-domains = <&pd_gpu>` in the DTS node causes the driver core to call `dev_pm_domain_attach()` during probe, which in turn calls `genpd_dev_pm_attach()` to parse the phandle and perform the attachment automatically — no explicit driver call is needed. (`of_genpd_add_device()` is a separate, lower-level API for platform code that already has an `of_phandle_args` and wants to add a device manually.) The `&pd_gpu` phandle refers to a power domain provider registered with `of_genpd_add_provider_simple()` or `of_genpd_add_provider_onecell()`.
 
-## Domain dependencies
+## Domain dependencies {#domain-dependencies}
 
 Some rails have dependencies — a sub-rail cannot be on unless its parent rail is also on. genpd models this with subdomain links:
 
@@ -130,7 +130,7 @@ Power-on order:  display_core → display_dsi → mipi_phy
 Power-off order: mipi_phy → display_dsi → display_core
 ```
 
-## Runtime PM integration
+## Runtime PM integration {#runtime-pm-integration}
 
 genpd integrates transparently with Runtime PM. Note that `suspended_count`
 is a **system-suspend** counter (see its comment in `struct
@@ -171,7 +171,7 @@ genpd runtime_resume hook
    dev->runtime_resume()      [device driver callback]
 ```
 
-## struct gpd_timing_data
+## struct gpd_timing_data {#struct-gpdtimingdata}
 
 Each device can carry timing metadata used by the genpd governor to decide whether it is worth powering the domain off for a predicted idle period:
 
@@ -191,7 +191,7 @@ The `simple_qos_governor`'s actual comparison (in `__default_power_down_ok()`, `
 
 Drivers can supply per-state timing via the `domain-idle-state` Device Tree node using `entry-latency-us` and `exit-latency-us` properties (in microseconds; the kernel scales to nanoseconds internally).
 
-## genpd governors
+## genpd governors {#genpd-governors}
 
 Three governors ship in-tree (`drivers/pmdomain/governor.c`):
 
@@ -203,7 +203,7 @@ Three governors ship in-tree (`drivers/pmdomain/governor.c`):
 
 The governor is selected as the second argument to `pm_genpd_init()`, which simply stores it in `genpd->gov` — there is no fallback to a default. Passing `NULL` means the domain has **no** governor at all: `genpd_power_off()` then skips `power_down_ok()` entirely and hardcodes `genpd->state_idx = 0` (the shallowest state) whenever it decides to power off. If the domain has more than one power state and no governor was given, `pm_genpd_init()` even logs `pr_warn("%s: no governor for states\n", ...)`. To get the QoS-aware behavior described above, pass `&simple_qos_governor` explicitly.
 
-## Debugging with debugfs
+## Debugging with debugfs {#debugging-with-debugfs}
 
 The genpd core creates one directory per domain under `/sys/kernel/debug/pm_genpd/`:
 
@@ -229,7 +229,7 @@ cat /sys/kernel/debug/pm_genpd/gpu-domain/current_state
 
 The global `pm_genpd_summary` file is synthesized by `summary_show()` in `drivers/pmdomain/core.c`, which walks the global `gpd_list` and calls `genpd_summary_one()` per domain. For each domain it prints the domain name, its `on`/`off-<state_idx>` status, and aggregated `performance_state`, followed by one line per attached device giving that device's runtime-PM status via `rtpm_status_str()` (`active`/`suspending`/`suspended`/`resuming`/`unsupported`/`error`), its own performance state, and an `SW`/`HW` indicator from `mode_status_str()` showing whether that device's power state is currently managed by software or left to hardware autonomy.
 
-## Real-world implementations
+## Real-world implementations {#real-world-implementations}
 
 Several production genpd backends illustrate the framework:
 
@@ -241,9 +241,9 @@ Several production genpd backends illustrate the framework:
 
 All three follow the same pattern: allocate `struct generic_pm_domain`, fill `power_on`/`power_off` callbacks, call `pm_genpd_init()`, and register as a DT provider.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain`, `struct gpd_timing_data`, and the `pm_genpd_*`/`of_genpd_*` API
 - [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — genpd core: `pm_genpd_init()`, `genpd_add_subdomain()`, `genpd_dev_pm_attach()`, debugfs summary
@@ -251,16 +251,16 @@ All three follow the same pattern: allocate `struct generic_pm_domain`, fill `po
 - [drivers/clk/qcom/gdsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/clk/qcom/gdsc.c) — Qualcomm GDSC genpd backend: `gdsc_enable()`/`gdsc_disable()`
 - [Documentation/devicetree/bindings/power/power-domain.yaml](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/devicetree/bindings/power/power-domain.yaml) — DT binding spec for `power-domains` and `#power-domain-cells`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Runtime PM](runtime-pm.md) — usage counting, autosuspend, dev_pm_ops; genpd's runtime_suspend/resume hooks build on this
 - [System Suspend](suspend.md) — system-wide sleep; genpd participates in the freeze/suspend sequence
 - [Device Tree](../drivers/device-tree.md) — phandle parsing, the mechanism the `power-domains` DT binding relies on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [PM / Domains: Support for generic I/O PM domains](https://lwn.net/Articles/449302/) — Rafael J. Wysocki's original genpd patchset (2011) explaining the shared-power-resource and parent/child domain model this page describes
 
-### External
+### External {#external}
 
 - [Documentation/driver-api/pm/devices.rst — Device Power Management Domains](https://docs.kernel.org/driver-api/pm/devices.html#device-power-management-domains) — upstream explanation of `dev->pm_domain`, `struct dev_pm_domain`, and why power domain callbacks take precedence over subsystem callbacks

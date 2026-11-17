@@ -1,8 +1,8 @@
-# Running out of memory
+# Running out of memory {#running-out-of-memory}
 
 > The progression from healthy system to OOM kill
 
-## The path to OOM
+## The path to OOM {#the-path-to-oom}
 
 When memory runs low, the kernel doesn't immediately panic. It goes through escalating stages of intervention, trying to free memory before resorting to killing processes. Understanding this progression helps you diagnose why your process was killed and how to prevent it.
 
@@ -42,7 +42,7 @@ flowchart TB
     HEALTHY --> HW --> BACKGROUND --> LW --> DIRECT --> MW --> OOM --> ZERO
 ```
 
-## Stage 1: Watermarks and pressure detection
+## Stage 1: Watermarks and pressure detection {#stage-1-watermarks-and-pressure-detection}
 
 Each memory zone has three watermarks that control reclaim behavior:
 
@@ -57,7 +57,7 @@ enum zone_watermarks {
 };
 ```
 
-### How watermarks are calculated
+### How watermarks are calculated {#how-watermarks-are-calculated}
 
 Watermarks derive from [`vm.min_free_kbytes` and `vm.watermark_scale_factor`](https://docs.kernel.org/admin-guide/sysctl/vm.html):
 
@@ -83,7 +83,7 @@ flowchart TB
     MIN ---|"Direct reclaim triggered<br/>GFP_ATOMIC allocations may fail"| ZERO
 ```
 
-### Viewing watermarks
+### Viewing watermarks {#viewing-watermarks}
 
 ```bash
 # Detailed zone information including watermarks
@@ -96,11 +96,11 @@ cat /proc/zoneinfo | grep -A 20 "zone   Normal"
 #   high           - high watermark
 ```
 
-## Stage 2: Background reclaim (kswapd)
+## Stage 2: Background reclaim (kswapd) {#stage-2-background-reclaim-kswapd}
 
 When free pages drop below the low watermark, `kswapd` wakes up to reclaim pages in the background.
 
-### kswapd mechanics
+### kswapd mechanics {#kswapd-mechanics}
 
 ```mermaid
 flowchart TB
@@ -125,7 +125,7 @@ ps aux | grep kswapd
 # kswapd1 - for node 1 (on NUMA systems)
 ```
 
-### What kswapd reclaims
+### What kswapd reclaims {#what-kswapd-reclaims}
 
 kswapd scans the inactive LRU lists looking for reclaimable pages:
 
@@ -148,7 +148,7 @@ static void shrink_node(pg_data_t *pgdat, struct scan_control *sc)
 }
 ```
 
-### Swappiness
+### Swappiness {#swappiness}
 
 The `vm.swappiness` parameter controls the balance between reclaiming file pages versus swapping anonymous pages:
 
@@ -172,11 +172,11 @@ sysctl vm.swappiness=10  # Minimize swapping
 
 **Note**: Values above 100 only have effect with [MGLRU](https://docs.kernel.org/admin-guide/mm/multigen_lru.html) enabled (kernel 6.1+). On older kernels or with MGLRU disabled, values are effectively clamped to 0-100.
 
-## Stage 3: Direct reclaim
+## Stage 3: Direct reclaim {#stage-3-direct-reclaim}
 
 When kswapd can't keep up and free pages fall below the min watermark, allocating processes must help reclaim pages themselves.
 
-### The allocation slowpath
+### The allocation slowpath {#the-allocation-slowpath}
 
 ```c
 // mm/page_alloc.c __alloc_pages() (simplified)
@@ -219,7 +219,7 @@ static struct page *__alloc_pages_slowpath(...)
 }
 ```
 
-### Direct reclaim impact
+### Direct reclaim impact {#direct-reclaim-impact}
 
 Direct reclaim blocks the allocating process:
 
@@ -244,7 +244,7 @@ sequenceDiagram
 
 This can cause significant latency spikes. Applications that allocate during memory pressure may see multi-millisecond delays.
 
-### Monitoring direct reclaim
+### Monitoring direct reclaim {#monitoring-direct-reclaim}
 
 ```bash
 # Count direct reclaim events
@@ -258,11 +258,11 @@ cat /proc/vmstat | grep allocstall
 watch -n 1 'grep -E "allocstall|pgsteal_direct|pgscan_direct" /proc/vmstat'
 ```
 
-## Stage 4: Reclaim failures and retries
+## Stage 4: Reclaim failures and retries {#stage-4-reclaim-failures-and-retries}
 
 Sometimes reclaim doesn't free enough memory. The kernel retries with increasing desperation.
 
-### Retry logic
+### Retry logic {#retry-logic}
 
 ```c
 // The allocation retries with __GFP_RETRY_MAYFAIL or similar flags
@@ -277,7 +277,7 @@ Sometimes reclaim doesn't free enough memory. The kernel retries with increasing
 
 (Defined in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c).)
 
-### What causes reclaim to fail?
+### What causes reclaim to fail? {#what-causes-reclaim-to-fail}
 
 | Cause | Description |
 |-------|-------------|
@@ -287,7 +287,7 @@ Sometimes reclaim doesn't free enough memory. The kernel retries with increasing
 | Thrashing | Pages reclaimed and immediately needed again |
 | Memory fragmentation | Free pages exist but in wrong zones/orders |
 
-### The compaction fallback
+### The compaction fallback {#the-compaction-fallback}
 
 For high-order allocations (multiple contiguous pages), compaction tries to defragment memory:
 
@@ -317,11 +317,11 @@ echo 1 > /proc/sys/vm/compact_memory
 cat /proc/vmstat | grep compact
 ```
 
-## Stage 5: The OOM killer
+## Stage 5: The OOM killer {#stage-5-the-oom-killer}
 
 When all reclaim efforts fail, the OOM (Out Of Memory) killer terminates a process to free memory.
 
-### OOM killer invocation
+### OOM killer invocation {#oom-killer-invocation}
 
 ```c
 // mm/page_alloc.c (simplified)
@@ -343,7 +343,7 @@ static struct page *__alloc_pages_may_oom(...)
 }
 ```
 
-### How OOM selects a victim
+### How OOM selects a victim {#how-oom-selects-a-victim}
 
 The OOM killer scores processes by their "badness" - how much memory they use and how easy they are to kill:
 
@@ -368,7 +368,7 @@ long oom_badness(struct task_struct *p, ...)
 }
 ```
 
-### OOM score components
+### OOM score components {#oom-score-components}
 
 | Factor | Impact |
 |--------|--------|
@@ -378,7 +378,7 @@ long oom_badness(struct task_struct *p, ...)
 | Root processes | Had 3% bonus ([removed in v4.17](https://git.kernel.org/linus/d46078b28889)) |
 | Children's memory | Considered if killing parent frees more |
 
-### Controlling OOM behavior
+### Controlling OOM behavior {#controlling-oom-behavior}
 
 ```bash
 # View OOM score (higher = more likely to be killed)
@@ -395,7 +395,7 @@ echo -500 > /proc/$PID/oom_score_adj   # Less likely to kill
 echo 1000 > /proc/$PID/oom_score_adj   # Kill this first
 ```
 
-### The OOM kill message
+### The OOM kill message {#the-oom-kill-message}
 
 When OOM kills, check `dmesg`:
 
@@ -416,7 +416,7 @@ The log shows:
 - Page table memory
 - OOM adjustment value
 
-## Stage 6: Post-OOM recovery
+## Stage 6: Post-OOM recovery {#stage-6-post-oom-recovery}
 
 After OOM kills a process:
 
@@ -429,7 +429,7 @@ flowchart TB
     E --> F["6. Waiting allocations retry and succeed"]
 ```
 
-### OOM reaper
+### OOM reaper {#oom-reaper}
 
 The OOM reaper (v4.6+) accelerates memory freeing from killed processes:
 
@@ -441,7 +441,7 @@ The OOM reaper (v4.6+) accelerates memory freeing from killed processes:
 
 This helps when the victim is stuck (e.g., in uninterruptible I/O) and can't exit promptly.
 
-## Memory cgroups and OOM
+## Memory cgroups and OOM {#memory-cgroups-and-oom}
 
 With cgroups, OOM can be scoped to a container:
 
@@ -466,9 +466,9 @@ cat /sys/fs/cgroup/mygroup/memory.events
 
 See [memory cgroups](memcg.md) for details.
 
-## Preventing OOM
+## Preventing OOM {#preventing-oom}
 
-### Tune watermarks
+### Tune watermarks {#tune-watermarks}
 
 ```bash
 # Increase min_free_kbytes for earlier kswapd intervention
@@ -477,7 +477,7 @@ sysctl vm.min_free_kbytes=131072  # 128MB
 # Tradeoff: more memory reserved, less available for applications
 ```
 
-### Add swap
+### Add swap {#add-swap}
 
 Without swap, anonymous pages can't be reclaimed. Even a small swap provides emergency breathing room:
 
@@ -492,7 +492,7 @@ mkswap /swapfile
 swapon /swapfile
 ```
 
-### Protect critical processes
+### Protect critical processes {#protect-critical-processes}
 
 ```bash
 # Protect database from OOM
@@ -503,7 +503,7 @@ echo -1000 > /proc/$(pidof postgres)/oom_score_adj
 # OOMScoreAdjust=-1000
 ```
 
-### Use memory cgroups
+### Use memory cgroups {#use-memory-cgroups}
 
 Isolate workloads with memory limits:
 
@@ -514,9 +514,9 @@ echo 4G > /sys/fs/cgroup/mycontainer/memory.max
 # The container hits OOM before affecting the system
 ```
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Watch OOM progression
+### Watch OOM progression {#watch-oom-progression}
 
 ```bash
 # Terminal 1: Monitor memory state
@@ -529,7 +529,7 @@ stress --vm 1 --vm-bytes 99% --vm-keep
 dmesg -w | grep -i oom
 ```
 
-### Simulate memory pressure stages
+### Simulate memory pressure stages {#simulate-memory-pressure-stages}
 
 ```bash
 # Watch watermarks during pressure
@@ -539,7 +539,7 @@ watch -n 1 'cat /proc/zoneinfo | grep -A 15 "zone   Normal" | head -20'
 vmstat 1  # watch 'si', 'so', and 'wa' columns
 ```
 
-### Monitor reclaim activity
+### Monitor reclaim activity {#monitor-reclaim-activity}
 
 ```bash
 # Comprehensive reclaim stats
@@ -550,7 +550,7 @@ echo 1 > /sys/kernel/debug/tracing/events/vmscan/mm_vmscan_direct_reclaim_begin/
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Test OOM score adjustment
+### Test OOM score adjustment {#test-oom-score-adjustment}
 
 ```bash
 # Create test process
@@ -565,7 +565,7 @@ echo 500 > /proc/$PID/oom_score_adj
 cat /proc/$PID/oom_score
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -574,11 +574,11 @@ cat /proc/$PID/oom_score
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Watermarks, allocation slowpath |
 | [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | Zone and watermark definitions |
 
-## History
+## History {#history}
 
 The OOM killer has evolved dramatically over 30+ years, driven by production failures and changing workloads.
 
-### Timeline
+### Timeline {#timeline}
 
 ```mermaid
 timeline
@@ -597,13 +597,13 @@ timeline
          : MGLRU improves pressure handling
 ```
 
-### Era 1: The wild west (1991-2010)
+### Era 1: The wild west (1991-2010) {#era-1-the-wild-west-1991-2010}
 
 Early Linux had a simple OOM killer with crude heuristics. It would often kill the wrong process - sometimes critical system daemons, sometimes the user's screen locker (see [Case 1](#case-1-the-screen-locker-incident-2004) above).
 
 The scoring was arbitrary: processes got points based on memory usage, but the formula was ad-hoc and hard to tune. Administrators had no way to protect critical processes.
 
-### Era 2: The Rientjes rewrite (2010)
+### Era 2: The Rientjes rewrite (2010) {#era-2-the-rientjes-rewrite-2010}
 
 David Rientjes (Google) rewrote the OOM killer with a principled scoring system.
 
@@ -619,7 +619,7 @@ David Rientjes (Google) rewrote the OOM killer with a principled scoring system.
 
 The new `oom_score_adj` interface finally let administrators protect critical processes with `-1000` (never kill) or mark expendable processes with `+1000` (kill first).
 
-### Era 3: The reliability fixes (2016)
+### Era 3: The reliability fixes (2016) {#era-3-the-reliability-fixes-2016}
 
 Michal Hocko (SUSE) tackled the deadlock problems discovered by Tetsuo Handa (see [Case 2](#case-2-the-mmap_sem-deadlock-2010-2016) above).
 
@@ -631,11 +631,11 @@ Michal Hocko (SUSE) tackled the deadlock problems discovered by Tetsuo Handa (se
 
 This solved the "OOM fired but system still hung" problem that plagued production systems.
 
-### Era 4: Containers and proactive monitoring (2018)
+### Era 4: Containers and proactive monitoring (2018) {#era-4-containers-and-proactive-monitoring-2018}
 
 Two major additions addressed modern workloads:
 
-#### Per-cgroup OOM (v4.19)
+#### Per-cgroup OOM (v4.19) {#per-cgroup-oom-v419}
 
 Roman Gushchin (Facebook) added cgroup-aware OOM handling. Containers need isolated OOM - one container's memory hog shouldn't kill processes in another container.
 
@@ -655,7 +655,7 @@ cat /sys/fs/cgroup/mycontainer/memory.events
 # oom_kill 0
 ```
 
-#### PSI - Pressure Stall Information (v4.20)
+#### PSI - Pressure Stall Information (v4.20) {#psi-pressure-stall-information-v420}
 
 Johannes Weiner (Facebook) added PSI to detect pressure *before* OOM (see [Case 3](#case-3-the-thrashing-livelock-2010-mitigated-2018) above).
 
@@ -675,7 +675,7 @@ cat /proc/pressure/memory
 
 PSI enabled userspace OOM daemons (`systemd-oomd`, `earlyoom`) to kill processes based on actual pressure rather than just free memory counts.
 
-### Summary of major commits
+### Summary of major commits {#summary-of-major-commits}
 
 | Version | Year | Change | Author | Commit |
 |---------|------|--------|--------|--------|
@@ -684,31 +684,31 @@ PSI enabled userspace OOM daemons (`systemd-oomd`, `earlyoom`) to kill processes
 | v4.19 | 2018 | Per-cgroup OOM (`memory.oom.group`) | Roman Gushchin | [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) |
 | v4.20 | 2018 | PSI | Johannes Weiner | [eb414681d5a0](https://git.kernel.org/linus/eb414681d5a0) |
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 The OOM killer's history is littered with edge cases that taught kernel developers painful lessons. Understanding these helps explain why the current design exists and what safeguards are now in place.
 
 ---
 
-### Case 1: The screen locker incident (2004)
+### Case 1: The screen locker incident (2004) {#case-1-the-screen-locker-incident-2004}
 
-#### What happened
+#### What happened {#what-happened}
 
 In September 2004, developer Thomas Habets returned to his Linux workstation to find it unlocked. The OOM killer had terminated his `xlock` screen locker during a memory shortage, leaving his session exposed to anyone walking by.
 
 As Habets [wrote on LKML](https://lwn.net/Articles/104145/): *"I just got a very uncomfortable surprise when found my box unlocked thanks to this."*
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 This wasn't just an inconvenience - it was a **security breach**. Screen lockers, authentication daemons, and similar security-critical processes must never be killed, even under memory pressure. An attacker with physical access could trigger OOM to unlock a workstation.
 
-#### The proposed fix
+#### The proposed fix {#the-proposed-fix}
 
 Habets submitted the [oom_pardon patch](https://lwn.net/Articles/104145/), proposing a sysctl at `/proc/sys/vm/oom_pardon` that would accept a list of executables to never kill:
 
 > *"How about a sysctl that does 'for the love of kbaek, don't ever kill these processes when OOM. If nothing else can be killed, I'd rather you panic.' Examples for this list would be /usr/bin/vlock and /usr/X11R6/bin/xlock."*
 
-#### Community response
+#### Community response {#community-response}
 
 The discussion on [LWN](https://lwn.net/Articles/104179/) and LKML was spirited. Alan Cox [pointed out](https://lwn.net/Articles/104179/) that the real problem was overcommit:
 
@@ -720,7 +720,7 @@ Andries Brouwer offered a memorable [analogy](https://lwn.net/Articles/104179/):
 
 It turned out SUSE already had a similar patch allowing administrators to adjust OOM scores per-process.
 
-#### What was fixed
+#### What was fixed {#what-was-fixed}
 
 The immediate `oom_pardon` patch wasn't merged, but the discussion led to:
 
@@ -729,7 +729,7 @@ The immediate `oom_pardon` patch wasn't merged, but the discussion led to:
 
 **Commit**: [a63d83f427fb](https://git.kernel.org/linus/a63d83f427fb) ("oom: badness heuristic rewrite") - David Rientjes, 2010
 
-#### Future-proofing
+#### Future-proofing {#future-proofing}
 
 ```bash
 # Protect critical processes today
@@ -742,9 +742,9 @@ OOMScoreAdjust=-1000
 
 ---
 
-### Case 2: The mmap_sem deadlock (2010-2016)
+### Case 2: The mmap_sem deadlock (2010-2016) {#case-2-the-mmap_sem-deadlock-2010-2016}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 Tetsuo Handa, a persistent kernel debugger, [demonstrated workloads](https://lwn.net/Articles/666024/) that would cause the OOM killer to fire but never free memory. The system would hang indefinitely.
 
@@ -770,13 +770,13 @@ flowchart TD
 
 Meanwhile, other processes trying to allocate memory are waiting for this victim to die and release memory - which never happens.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 Servers running memory-intensive workloads would hang completely. The OOM killer had fired (visible in dmesg), but no memory was freed. The only recovery was a hard reboot.
 
 Handa [showed](https://lore.kernel.org/linux-mm/1469734954-31247-1-git-send-email-mhocko@kernel.org/) it was *"not hard to construct workloads which break the core assumption... the OOM victim might take unbounded amount of time to exit."*
 
-#### The fix: OOM reaper (v4.6)
+#### The fix: OOM reaper (v4.6) {#the-fix-oom-reaper-v46}
 
 Michal Hocko (SUSE) developed the [OOM reaper](https://lwn.net/Articles/666024/), based on ideas from Mel Gorman (LSFMM 2015) and Oleg Nesterov.
 
@@ -791,21 +791,21 @@ The reaper is a dedicated kernel thread that:
 2. Walks the victim's VMAs and unmaps anonymous pages
 3. Frees memory without waiting for the victim to exit
 
-#### Additional safeguards (v4.8)
+#### Additional safeguards (v4.8) {#additional-safeguards-v48}
 
 Hocko added `MMF_OOM_SKIP` flag: if the reaper can't acquire `mmap_sem` after multiple attempts, it marks the mm as "reaped" anyway, allowing the OOM killer to select another victim.
 
 **Commit**: [11a410d516e8](https://git.kernel.org/linus/11a410d516e8) ("mm, oom_reaper: do not attempt to reap a task more than twice")
 
-#### Concurrent work: killable mmap_sem
+#### Concurrent work: killable mmap_sem {#concurrent-work-killable-mmap_sem}
 
 Many code paths holding `mmap_sem` for write were converted to use `down_write_killable()`, so they can be interrupted by `SIGKILL`. This reduces the window for deadlocks.
 
 ---
 
-### Case 3: The thrashing livelock (2010, mitigated 2018+)
+### Case 3: The thrashing livelock (2010, mitigated 2018+) {#case-3-the-thrashing-livelock-2010-mitigated-2018}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 When memory is tight but not exhausted, systems can enter a pathological state where they're technically alive but completely unresponsive for minutes or hours.
 
@@ -822,7 +822,7 @@ The pathology:
 5. OOM killer never triggers because there's technically "free" memory (it's just being constantly evicted and reloaded)
 6. From the user's perspective, the system is frozen
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 This affected desktop users severely. The Fedora Workstation working group [discussed](https://fedoraproject.org/wiki/Changes/EnableEarlyoom) *"better interactivity in low-memory situations"* for months:
 
@@ -830,7 +830,7 @@ This affected desktop users severely. The Fedora Workstation working group [disc
 
 The [le9-patch](https://github.com/hakavlad/le9-patch) repository documents: *"The kernel may crash due to OOM even with files present in the page cache, just because it cannot reclaim pages quickly enough to keep up with the allocations... due to memory shortage, the system drops the cache for shared libraries and even for the program text of running processes."*
 
-#### Fixes and mitigations
+#### Fixes and mitigations {#fixes-and-mitigations}
 
 **1. PSI - Pressure Stall Information (v4.20)**
 
@@ -873,9 +873,9 @@ earlyoom -m 5 -s 5  # Kill when <5% memory AND <5% swap
 
 ---
 
-### Case 4: The fork bomb race (2011)
+### Case 4: The fork bomb race (2011) {#case-4-the-fork-bomb-race-2011}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 Fork bombs create processes faster than the OOM killer can kill them:
 
@@ -894,11 +894,11 @@ The OOM killer's per-process scoring fails here:
 4. Fork bomb creates 1000 more processes in the meantime
 5. Repeat forever
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_3}
 
 A single malicious (or buggy) user could take down a multi-user system. Even root couldn't recover without a reboot because the shell could barely get CPU time.
 
-#### The fork bomb killer patch
+#### The fork bomb killer patch {#the-fork-bomb-killer-patch}
 
 Hiroyuki proposed a [fork bomb killer](https://lwn.net/Articles/435917/) with heuristics:
 
@@ -913,7 +913,7 @@ When detected:
 - All tasks in the fork bomb are killed
 - New `fork()` in that session returns `-ENOMEM` for 30 seconds
 
-#### What was actually merged: cgroups pids controller (v4.3)
+#### What was actually merged: cgroups pids controller (v4.3) {#what-was-actually-merged-cgroups-pids-controller-v43}
 
 Instead of kernel heuristics, the solution was the [pids controller](https://docs.kernel.org/admin-guide/cgroup-v1/pids.html):
 
@@ -933,13 +933,13 @@ ulimit -u 500  # Max 500 processes for this user
 
 ---
 
-### Case 5: CVE-2012-4398 - OOM deadlock denial of service
+### Case 5: CVE-2012-4398 - OOM deadlock denial of service {#case-5-cve-2012-4398-oom-deadlock-denial-of-service}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 Tetsuo Handa (the same developer who found the mmap_sem deadlock) discovered that a local unprivileged user could trigger a deadlock in the OOM killer.
 
-#### The bug
+#### The bug {#the-bug}
 
 The [Red Hat CVE page](https://access.redhat.com/security/cve/CVE-2012-4398) describes it:
 
@@ -951,11 +951,11 @@ The attack pattern:
 3. Module loading needs memory, but OOM is active
 4. Deadlock: OOM waiting for memory, memory waiting for OOM to finish
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_4}
 
 A local unprivileged user could cause denial of service through excessive memory consumption and system hang. Red Hat rated this as "Moderate" severity.
 
-#### The fix
+#### The fix {#the-fix}
 
 **Red Hat Errata**: [RHSA-2013:1348](https://access.redhat.com/errata/RHSA-2013:1348)
 
@@ -963,15 +963,15 @@ The fix prevented the deadlock by ensuring proper lock ordering between the OOM 
 
 [Red Hat credited Tetsuo Handa](https://access.redhat.com/security/cve/CVE-2012-4398) for reporting this issue.
 
-#### Future-proofing
+#### Future-proofing {#future-proofing_1}
 
 This CVE highlighted that OOM handling is **security-sensitive**. Subsequent OOM work has been more carefully reviewed for potential abuse by local attackers.
 
 ---
 
-### Case 6: systemd cgroup massacre (2022)
+### Case 6: systemd cgroup massacre (2022) {#case-6-systemd-cgroup-massacre-2022}
 
-#### What happened
+#### What happened {#what-happened_5}
 
 With cgroups v2 and systemd's scope management, a new problem emerged: when the kernel OOM killer terminates one process in a user session, systemd would kill **all** processes in that cgroup scope.
 
@@ -986,7 +986,7 @@ Example scenario:
 4. systemd kills the entire session scope - Firefox, VS Code, terminal, everything
 5. All unsaved work is lost
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_5}
 
 Users on Fedora, Arch, and other distributions with systemd-oomd enabled by default experienced unexpected session terminations. [One blogger wrote](https://utcc.utoronto.ca/~cks/space/blog/linux/SystemdOomdNowDisabled): *"I've now disabled systemd-oomd on my Fedora desktops."*
 
@@ -994,7 +994,7 @@ The [related issue #25853](https://github.com/systemd/systemd/issues/25853) requ
 
 > *"Add systemd-oomd option to kill single, largest process instead of entire cgroup."*
 
-#### The design decision
+#### The design decision {#the-design-decision}
 
 The [systemd-oomd documentation](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.service.html) explains the rationale:
 
@@ -1002,7 +1002,7 @@ The [systemd-oomd documentation](https://www.freedesktop.org/software/systemd/ma
 
 This is intentional - systemd treats cgroups as the unit of resource management. But for user sessions, it's often the wrong granularity.
 
-#### The fix
+#### The fix {#the-fix_1}
 
 [GitHub PR #25385](https://github.com/systemd/systemd/pull/25385) added support for `OOMPolicy=` in scope units, allowing users to control how systemd responds to kernel OOM events in user sessions.
 
@@ -1020,7 +1020,7 @@ OOMPolicy=continue  # Don't kill siblings
 DefaultOOMPolicy=continue
 ```
 
-#### Legacy workarounds (pre-fix)
+#### Legacy workarounds (pre-fix) {#legacy-workarounds-pre-fix}
 
 ```bash
 # Disable systemd-oomd entirely (still useful if you prefer kernel OOM)
@@ -1032,7 +1032,7 @@ systemd-run --user --scope firefox
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Era | Problem | Root Cause | Fix | Prevention Today |
 |-----|---------|------------|-----|------------------|
@@ -1046,16 +1046,16 @@ systemd-run --user --scope firefox
 
 The common thread: **OOM handling is harder than it looks**. Each "obvious" assumption - processes die quickly, free memory means healthy system, per-process scoring is sufficient - has been proven wrong in production.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Page reclaim](reclaim.md) - Reclaim mechanisms in depth
 - [Memory overcommit](overcommit.md) - Why OOM happens despite "free" memory
 - [Memory cgroups](memcg.md) - Container memory limits
 - [Life of a page](life-of-page.md) - Page lifecycle and reclaim
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The OOM killer](https://lwn.net/Articles/317814/) (2008) - Classic overview
 - [Respite from the OOM killer](https://lwn.net/Articles/104179/) (2004) - The screen locker incident

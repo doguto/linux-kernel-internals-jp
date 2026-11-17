@@ -1,8 +1,8 @@
-# Vectored I/O (Scatter-Gather)
+# Vectored I/O (Scatter-Gather) {#vectored-io-scatter-gather}
 
 > readv/writev: one syscall, multiple buffers — the kernel's scatter-gather interface
 
-## What vectored I/O is
+## What vectored I/O is {#what-vectored-io-is}
 
 A single `read()` or `write()` call works with one contiguous buffer. Real applications rarely have data in one place: a network packet has a fixed header, a variable-length payload, and sometimes a trailer. Building a contiguous buffer requires an extra `malloc` and `memcpy`.
 
@@ -20,11 +20,11 @@ readv(fd, iov, 3):
                └→ [trailer buf, 4 bytes]
 ```
 
-### The atomicity guarantee
+### The atomicity guarantee {#the-atomicity-guarantee}
 
 The POSIX specification — and the Linux implementation — guarantees that a `readv()` or `writev()` is **atomic at the file level**: the combined transfer appears as a single operation. Another writer on a pipe or regular file cannot interleave between the vectors. This is the key difference from calling `write()` three times in a row, where another process sharing the fd can interpose writes between your calls.
 
-### The syscall family
+### The syscall family {#the-syscall-family}
 
 | Syscall | Description |
 |---------|-------------|
@@ -37,7 +37,7 @@ The POSIX specification — and the Linux implementation — guarantees that a `
 
 ---
 
-## `struct iovec` and the syscall interface
+## `struct iovec` and the syscall interface {#struct-iovec-and-the-syscall-interface}
 
 The user-space structure is defined in `include/uapi/linux/uio.h`:
 
@@ -50,7 +50,7 @@ struct iovec {
 
 The total transfer is the sum of all `iov_len` values. Buffers need not be contiguous in memory, and they need not be the same size.
 
-### IOV_MAX
+### IOV_MAX {#iov_max}
 
 POSIX defines `IOV_MAX` as the maximum number of `iovec` entries per call. On Linux this is **1024** (`UIO_MAXIOV` in `include/uapi/linux/uio.h`). Passing more than 1024 vectors returns `EINVAL`. In practice, exceeding a few dozen vectors is unusual — use `sendfile` or `splice` when you need to send many disjoint ranges.
 
@@ -62,7 +62,7 @@ POSIX defines `IOV_MAX` as the maximum number of `iovec` entries per call. On Li
 _Static_assert(IOV_MAX >= 16, "need at least 16 vectors");
 ```
 
-### `preadv2`/`pwritev2` flags
+### `preadv2`/`pwritev2` flags {#preadv2pwritev2-flags}
 
 The `flags` argument to `preadv2`/`pwritev2` gives per-call control without reopening the file:
 
@@ -78,7 +78,7 @@ These flags are defined in `include/uapi/linux/fs.h` as the `rwf_t` type.
 
 ---
 
-## `iov_iter` — the kernel's unified I/O iterator
+## `iov_iter` — the kernel's unified I/O iterator {#iov_iter-the-kernels-unified-io-iterator}
 
 The kernel does not pass raw `iovec` arrays all the way down to filesystems and drivers. Instead, the VFS translates the user-space `iovec` into a `struct iov_iter` — a single abstraction that all layers speak.
 
@@ -109,7 +109,7 @@ struct iov_iter {
 };
 ```
 
-### Iterator flavours
+### Iterator flavours {#iterator-flavours}
 
 | `iter_type` | Backing store | Used by |
 |-------------|--------------|---------|
@@ -120,7 +120,7 @@ struct iov_iter {
 | `ITER_PIPE` | Pipe ring buffer | `splice`, `sendfile` |
 | `ITER_UBUF` | Single user buffer | Optimised single-vector fast path |
 
-### Core iterator operations (`lib/iov_iter.c`)
+### Core iterator operations (`lib/iov_iter.c`) {#core-iterator-operations-libiov_iterc}
 
 ```c
 /* Copy data to user space (read path) */
@@ -139,13 +139,13 @@ size_t iov_iter_count(const struct iov_iter *i);
 void iov_iter_revert(struct iov_iter *i, size_t bytes);
 ```
 
-### Why this abstraction exists
+### Why this abstraction exists {#why-this-abstraction-exists}
 
 Before `iov_iter`, each layer (network, VFS, block) handled scatter-gather differently. `iov_iter` gives a single calling convention: the network `recvmsg` path, the filesystem `read_iter`, and the block layer DMA mapping code all accept an `iov_iter *` and call the same helpers. Code that previously had to special-case `iovec` vs kernel buffer vs page list now handles all cases through one interface.
 
 ---
 
-## How `readv` flows through the kernel
+## How `readv` flows through the kernel {#how-readv-flows-through-the-kernel}
 
 ```mermaid
 flowchart TD
@@ -196,7 +196,7 @@ static ssize_t do_readv(unsigned long fd, const struct iovec __user *vec,
 
 ---
 
-## Scatter-gather for network I/O
+## Scatter-gather for network I/O {#scatter-gather-for-network-io}
 
 The socket layer uses the same scatter-gather concept through `struct msghdr`:
 
@@ -214,7 +214,7 @@ struct msghdr {
 
 User space fills a `struct user_msghdr` with an `iovec` array and calls `sendmsg`/`recvmsg`. The kernel converts it to the internal `msghdr` with `msg_iter` set up as `ITER_IOVEC`.
 
-### Packet headers and payload in separate buffers
+### Packet headers and payload in separate buffers {#packet-headers-and-payload-in-separate-buffers}
 
 A common network pattern: iovec[0] holds a fixed protocol header, iovec[1] holds the payload. This avoids copying the payload into a contiguous buffer just to prepend a header.
 
@@ -263,7 +263,7 @@ Inside the kernel, `tcp_sendmsg_locked` calls `sk_msg_from_msghdr` (or the TCP z
 
 ---
 
-## Block layer scatter-gather — `struct bio_vec`
+## Block layer scatter-gather — `struct bio_vec` {#block-layer-scatter-gather-struct-bio_vec}
 
 At the block layer, scatter-gather uses `struct bio_vec` rather than `iovec`. Where `iovec` describes user-space virtual buffers, `bio_vec` describes **physical pages**:
 
@@ -278,7 +278,7 @@ struct bio_vec {
 
 A `struct bio` carries an array of `bio_vec` entries. Each entry describes a contiguous run of bytes within one page. Non-contiguous physical memory is expressed as multiple `bio_vec` entries.
 
-### Iterating segments
+### Iterating segments {#iterating-segments}
 
 ```c
 /* include/linux/bio.h */
@@ -292,7 +292,7 @@ bio_for_each_segment(bv, bio, iter) {
 }
 ```
 
-### DMA scatter-gather at the hardware level
+### DMA scatter-gather at the hardware level {#dma-scatter-gather-at-the-hardware-level}
 
 When the block layer submits a `bio` to an NVMe or SATA controller, it converts the `bio_vec` array into a **Physical Region Descriptor Table (PRDT)** or **PRP list** that the DMA engine understands. The DMA engine transfers directly between device and RAM without any CPU copying:
 
@@ -306,13 +306,13 @@ bio_vec[2]: page=0x7f000, offset=512, len=3584 ─┘
 
 The physical pages do not have to be contiguous — the DMA engine's scatter-gather capability handles the discontiguous list. This is what makes `O_DIRECT` reads with `iov_iter` efficient: the pages pinned from the user `iovec` become `bio_vec` entries that the DMA engine writes directly.
 
-### `iov_iter` ↔ `bio_vec` conversion
+### `iov_iter` ↔ `bio_vec` conversion {#ioviter-biovec-conversion}
 
 When `iomap_dio_rw` processes a direct I/O request, it calls `iov_iter_get_pages2` to pin the user pages, then builds `bio_vec` entries from them. The `iov_iter` machinery handles the conversion transparently.
 
 ---
 
-## `process_vm_readv` / `process_vm_writev`
+## `process_vm_readv` / `process_vm_writev` {#processvmreadv-processvmwritev}
 
 Linux 3.2 added two syscalls for cross-process vectored I/O:
 
@@ -332,7 +332,7 @@ ssize_t process_vm_writev(pid_t pid,
 
 `local_iov` describes buffers in the **calling** process; `remote_iov` describes buffers in the **target** process (identified by `pid`). The kernel copies data directly between the two address spaces without going through `ptrace`.
 
-### Authorization
+### Authorization {#authorization}
 
 The caller must have the equivalent of `PTRACE_MODE_ATTACH_REALCREDS` permission on the target process (same check as `ptrace(PTRACE_ATTACH, ...)`). This means:
 
@@ -340,7 +340,7 @@ The caller must have the equivalent of `PTRACE_MODE_ATTACH_REALCREDS` permission
 - `CAP_SYS_PTRACE` capability, and
 - The target process must not have set `PR_SET_DUMPABLE` to 0
 
-### Why prefer this over ptrace
+### Why prefer this over ptrace {#why-prefer-this-over-ptrace}
 
 `ptrace(PTRACE_PEEKDATA, ...)` reads one word at a time and requires the target to be stopped. `process_vm_readv` reads arbitrarily large regions in a single syscall while the target continues running. Debuggers and memory profilers (e.g., those that snapshot a live process's heap) use this for performance.
 
@@ -358,9 +358,9 @@ Note: there is no atomicity guarantee across the two address spaces. The remote 
 
 ---
 
-## Performance considerations
+## Performance considerations {#performance-considerations}
 
-### Avoid per-iovec syscall overhead
+### Avoid per-iovec syscall overhead {#avoid-per-iovec-syscall-overhead}
 
 The main win from vectored I/O is **fewer syscalls**. Each syscall costs a user→kernel→user round trip (~100–300 ns on modern hardware plus TLB flushes). If you are sending a header + payload + checksum, one `writev` is faster than three `write` calls even if the data fits in one page.
 
@@ -371,7 +371,7 @@ Three write() calls:             One writev():
   three cache-line fills   vs    one iov[] array prefetch
 ```
 
-### Ideal iovec granularity
+### Ideal iovec granularity {#ideal-iovec-granularity}
 
 Too many small iovecs hurt: `import_iovec` validates each entry, and the iterator advances one segment at a time. As a rule of thumb:
 
@@ -379,7 +379,7 @@ Too many small iovecs hurt: `import_iovec` validates each entry, and the iterato
 - Avoid iovecs smaller than a cache line (64 bytes) — the iterator overhead exceeds the copy savings.
 - For large payloads split across many pages, prefer `sendfile` or `splice` to avoid pinning user pages.
 
-### `RWF_NOWAIT` for non-blocking page cache reads
+### `RWF_NOWAIT` for non-blocking page cache reads {#rwf_nowait-for-non-blocking-page-cache-reads}
 
 `preadv2` with `RWF_NOWAIT` returns `EAGAIN` immediately if the read would block — either because the pages are not in the page cache or because the filesystem would need to take a lock. This is useful for building non-blocking I/O without io_uring:
 
@@ -407,7 +407,7 @@ ssize_t try_cached_read(int fd, void *buf, size_t len, off_t offset)
 
 `RWF_NOWAIT` is checked in `generic_file_read_iter`: if `iocb->ki_flags & IOCB_NOWAIT` and the page is not in cache, the read returns `-EAGAIN` rather than sleeping in `filemap_get_pages`.
 
-### Multi-part network packet example
+### Multi-part network packet example {#multi-part-network-packet-example}
 
 ```c
 #include <sys/uio.h>
@@ -451,7 +451,7 @@ int recv_response(int fd, struct resp_header *hdr,
 }
 ```
 
-### `preadv2` with `RWF_NOWAIT` in a poll loop
+### `preadv2` with `RWF_NOWAIT` in a poll loop {#preadv2-with-rwf_nowait-in-a-poll-loop}
 
 ```c
 #include <sys/uio.h>
@@ -480,7 +480,7 @@ ssize_t nonblocking_file_read(int fd, struct iovec *iov, int iovcnt,
 
 ---
 
-## Kernel source references
+## Kernel source references {#kernel-source-references}
 
 | File | Contents |
 |------|----------|
@@ -494,7 +494,7 @@ ssize_t nonblocking_file_read(int fd, struct iovec *iov, int iovcnt,
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Direct I/O](direct-io.md) — O_DIRECT + preadv2 for database workloads
 - [Async I/O Evolution](async-io.md) — io_uring replaces aio for scatter-gather

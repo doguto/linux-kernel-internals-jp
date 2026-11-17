@@ -1,8 +1,8 @@
-# brk vs mmap: Two Ways to Get Memory
+# brk vs mmap: Two Ways to Get Memory {#brk-vs-mmap-two-ways-to-get-memory}
 
 > The kernel provides two mechanisms; userspace allocators choose between them
 
-## Kernel Mechanisms vs Userspace Policy
+## Kernel Mechanisms vs Userspace Policy {#kernel-mechanisms-vs-userspace-policy}
 
 The kernel provides two system calls for obtaining memory:
 
@@ -11,9 +11,9 @@ The kernel provides two system calls for obtaining memory:
 
 The kernel doesn't care which one you use. It just implements both and lets userspace decide. This document covers both the kernel mechanisms and how glibc uses them - clearly separated.
 
-## The Two Approaches
+## The Two Approaches {#the-two-approaches}
 
-### brk(): The Heap
+### brk(): The Heap {#brk-the-heap}
 
 `brk()` moves the "program break" - historically called the end of the "data segment," though on modern systems it's just another VMA that grows upward (see `do_brk_flags()` in [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c)):
 
@@ -51,7 +51,7 @@ syscall(SYS_brk, current_brk + 4096);             // Extend by 4KB
 - Cannot release memory in the middle
 - Lower overhead than mmap (but still a syscall - involves VMA updates, security checks, rlimit checks)
 
-### mmap(): Anonymous Mappings
+### mmap(): Anonymous Mappings {#mmap-anonymous-mappings}
 
 `mmap()` creates a new region anywhere in the address space:
 
@@ -89,7 +89,7 @@ See [`do_mmap()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux
 - Can release (`munmap`) individually
 - More overhead per allocation
 
-## Userspace Policy: How glibc Chooses
+## Userspace Policy: How glibc Chooses {#userspace-policy-how-glibc-chooses}
 
 This is where userspace makes its own decisions - the kernel isn't involved.
 
@@ -127,9 +127,9 @@ mallopt(M_MMAP_THRESHOLD, 65536);
 
 See [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/Memory-Allocation-Tunables.html) for details.
 
-## Why the Threshold?
+## Why the Threshold? {#why-the-threshold}
 
-### Small allocations → brk (heap)
+### Small allocations → brk (heap) {#small-allocations-brk-heap}
 
 **Pros:**
 
@@ -142,7 +142,7 @@ See [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/M
 - Memory fragmentation over time
 - Harder to return memory to OS (requires free space at top of heap)
 
-### Large allocations → mmap
+### Large allocations → mmap {#large-allocations-mmap}
 
 **Pros:**
 
@@ -156,7 +156,7 @@ See [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/M
 - TLB pressure (each mapping needs entries)
 - Potential address space fragmentation
 
-## The Fragmentation Problem
+## The Fragmentation Problem {#the-fragmentation-problem}
 
 Consider this scenario with brk-only allocation:
 
@@ -183,7 +183,7 @@ mmap regions:
 [ Large E ]   ← Independent of heap
 ```
 
-## Real-World Example
+## Real-World Example {#real-world-example}
 
 ```c
 #include <stdlib.h>
@@ -218,16 +218,16 @@ mmap(NULL, 266240, ..., MAP_ANONYMOUS)  = 0x7f8b12345000  # Large alloc
 munmap(0x7f8b12345000, 266240)          = 0              # Large free
 ```
 
-## When glibc Returns Memory
+## When glibc Returns Memory {#when-glibc-returns-memory}
 
-### Heap (brk) memory:
+### Heap (brk) memory: {#heap-brk-memory}
 
 - Freed blocks go to malloc's free list for reuse
 - `glibc` automatically trims the heap when free space at the top exceeds `M_TRIM_THRESHOLD` (default 128KB)
 - `malloc_trim()` can force trimming, but only releases memory at the top of the heap
 - Memory in the middle of the heap cannot be returned to the OS
 
-### mmap memory:
+### mmap memory: {#mmap-memory}
 
 - `munmap()` on free → immediate return to OS
 - RSS decreases visibly
@@ -242,7 +242,7 @@ malloc_trim(0);  // Returns free memory at heap top to OS
 madvise(addr, len, MADV_DONTNEED);  // Release pages, keep mapping
 ```
 
-## Tuning the Threshold
+## Tuning the Threshold {#tuning-the-threshold}
 
 ```c
 #include <malloc.h>
@@ -261,7 +261,7 @@ export MALLOC_MMAP_THRESHOLD_=65536
 ./myprogram
 ```
 
-## Trade-offs Summary
+## Trade-offs Summary {#trade-offs-summary}
 
 | Factor | brk (heap) | mmap |
 |--------|------------|------|
@@ -272,11 +272,11 @@ export MALLOC_MMAP_THRESHOLD_=65536
 | TLB pressure | Low | Higher |
 | Best for | Many small allocs | Large allocs |
 
-## Historical Context
+## Historical Context {#historical-context}
 
 These two system calls come from different eras and were designed for different purposes.
 
-### brk(): The Original (1979)
+### brk(): The Original (1979) {#brk-the-original-1979}
 
 `brk()` appeared in [**Version 7 AT&T Unix (1979)**](https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/man/man2/brk.2) - one of the earliest Unix system calls. In the 1970s, address spaces were tiny (often 64KB total). The "program break" literally divided the program's code from its data, and you grew the heap by moving this boundary upward.
 
@@ -288,7 +288,7 @@ The call is now considered a historical artifact:
 - **Removed** from POSIX.1-2001
 - Linux keeps it for compatibility, but modern allocators use it less
 
-### mmap(): File Mapping First (1983-1988)
+### mmap(): File Mapping First (1983-1988) {#mmap-file-mapping-first-1983-1988}
 
 `mmap()` was designed for a completely different purpose: **memory-mapped files**.
 
@@ -301,7 +301,7 @@ Timeline:
 
 The original use case was mapping file contents directly into memory - read a file by accessing memory addresses instead of calling `read()`. This had nothing to do with heap allocation.
 
-### MAP_ANONYMOUS: The Game Changer
+### MAP_ANONYMOUS: The Game Changer {#map_anonymous-the-game-changer}
 
 The feature that made `mmap()` useful for heap allocation: **`MAP_ANONYMOUS`** (or `MAP_ANON`).
 
@@ -309,7 +309,7 @@ The feature that made `mmap()` useful for heap allocation: **`MAP_ANONYMOUS`** (
 - Before this existed, the workaround was `mmap("/dev/zero", ...)`
 - **`MAP_ANONYMOUS` with `MAP_PRIVATE`**: Available in early Linux (concept from [BSD's `MAP_ANON`](https://man.freebsd.org/cgi/man.cgi?query=mmap&sektion=2))
 
-#### The "Monstrosity" That Took Years
+#### The "Monstrosity" That Took Years {#the-monstrosity-that-took-years}
 
 **`MAP_ANONYMOUS` with `MAP_SHARED`** has a contentious history:
 
@@ -328,7 +328,7 @@ He recommended SysV shared memory instead and wanted to "avoid shared anonymous 
 
 Once `MAP_ANONYMOUS` existed, allocators could use `mmap()` for large allocations with a key advantage: `munmap()` returns memory to the OS immediately, unlike `brk()` where you can only shrink the heap from the top.
 
-### Why Both Survive
+### Why Both Survive {#why-both-survive}
 
 Today we have two mechanisms because they evolved for different purposes:
 
@@ -340,7 +340,7 @@ Today we have two mechanisms because they evolved for different purposes:
 
 Modern allocators like `glibc`'s `malloc` use **both**: `brk()` for the main arena (small allocations benefit from locality), `mmap()` for large allocations (clean release back to OS). This isn't elegant design - it's historical accident turned pragmatic engineering.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # Watch brk vs mmap in action
@@ -356,29 +356,29 @@ cat /proc/<pid>/maps | grep anon
 watch -n 0.5 "grep -E 'VmRSS|VmData' /proc/<pid>/status"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `do_mmap()` and anonymous mapping implementation
 - [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — `do_brk_flags()`: the kernel side of heap extension
 - [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — tmpfs backing for `MAP_SHARED | MAP_ANONYMOUS` mappings
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`brk(2)`](https://man7.org/linux/man-pages/man2/brk.2.html) — system call interface; notes its POSIX legacy status
 - [`mmap(2)`](https://man7.org/linux/man-pages/man2/mmap.2.html) — full flag reference including `MAP_ANONYMOUS`, `MAP_POPULATE`, and `MAP_HUGETLB`
 - [`mallopt(3)`](https://man7.org/linux/man-pages/man3/mallopt.3.html) — glibc tuning: `M_MMAP_THRESHOLD`, `M_TRIM_THRESHOLD`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [mmap.md](mmap.md) — VMA structure, `mm_struct`, and the full address space layout
 - [overcommit.md](overcommit.md) — why `mmap()` can succeed even when physical RAM is insufficient
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Fun with `mmap()`](https://lwn.net/Articles/657338/) — deep dive into anonymous and file-backed mappings
 
-### External
+### External {#external}
 
 - [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) — arena design, per-thread caches, and the dynamic mmap threshold algorithm

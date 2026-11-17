@@ -1,14 +1,14 @@
-# The TTY Subsystem: One Model for Every Terminal, Real or Virtual
+# The TTY Subsystem: One Model for Every Terminal, Real or Virtual {#the-tty-subsystem-one-model-for-every-terminal-real-or-virtual}
 
 > Linux still uses the decades-old teletypewriter model — a line discipline sitting between a low-level driver and userspace — to unify physical serial ports, pseudo-terminals, and the system console under one `tty_struct`/`tty_driver` object model
 
-## Getting Started
+## Getting Started {#getting-started}
 
 Every terminal session — a physical serial console on an embedded board, an `ssh` login, a GUI terminal emulator window, even the kernel's own boot messages scrolling past — is, from the kernel's point of view, a **TTY**. The name is inherited from real hardware: a *teletypewriter*, an electromechanical device that printed characters sent to it and sent back whatever a human typed. Linux (like every Unix before it) still uses that decades-old model today as the shape for all character-oriented, line-buffered terminal I/O, even though almost nobody has plugged an actual teletype into a computer in this century. The kernel's own documentation puts it plainly: "Teletypewriter (TTY) layer takes care of all those serial devices. Including the virtual ones like pseudoterminal (PTY)."
 
 `drivers/tty/` is also one of the oldest and, by the admission of the people who maintain it, one of the trickiest corners of the kernel. An LWN retrospective on a TTY regression opened with "there are dark areas of the kernel where only the bravest hackers dare to tread... arguably, no part of the kernel is darker and scarier than the serial terminal (TTY) code." That reputation is a useful piece of context for a page like this one: the object model below is stable and well-documented, but the code that implements it has accreted for decades and rewards caution.
 
-### The problem the TTY subsystem solves
+### The problem the TTY subsystem solves {#the-problem-the-tty-subsystem-solves}
 
 Three very different things all need to look like "a terminal" to userspace:
 
@@ -18,13 +18,13 @@ Three very different things all need to look like "a terminal" to userspace:
 
 Without a shared model, each of these would need its own reimplementation of things every terminal has to handle: turning a stream of raw bytes into editable lines (backspace deletes the last character), deciding whether input is buffered a line at a time or delivered byte-by-byte, echoing typed characters back to the user, generating a signal when the user presses an interrupt key, and negotiating window size. Linux's TTY layer, rooted at `drivers/tty/` with its data structures in `include/linux/tty.h`, `include/linux/tty_driver.h`, and `include/linux/tty_ldisc.h`, factors this into three layers so that only the bottom one — moving bytes to and from an actual UART, pty peer, or screen — has to be written per device family. Everything above that is shared.
 
-### The three-layer stack
+### The three-layer stack {#the-three-layer-stack}
 
 1. **The low-level driver.** This is the layer that actually moves bytes: a UART driver for real serial hardware (`drivers/tty/serial/`), the pty master/slave implementation (`drivers/tty/pty.c`), or the virtual-console/framebuffer console driver (`drivers/tty/vt/`) for the screen. Each of these registers a `struct tty_driver` and implements a `struct tty_operations` — the vtable the tty core calls into for `open()`, `write()`, `ioctl()`, and so on.
 2. **The line discipline.** Sitting between the driver and the character-device interface userspace sees, a line discipline (`struct tty_ldisc_ops`) interprets the raw byte stream. The default, and the one almost every interactive terminal uses, is **N_TTY** (`N_TTY` is `0`, defined in `include/uapi/linux/tty.h`) — it implements canonical ("cooked") vs. raw mode, character echo, and signal generation from control characters, most famously turning Ctrl-C into `SIGINT`. Every newly opened tty gets N_TTY automatically: `tty_ldisc_init()` in `drivers/tty/tty_ldisc.c` calls `tty_ldisc_get(tty, N_TTY)` unconditionally, and it's also the fallback a tty reverts to if something goes wrong switching to another one. A process can swap in a different line discipline with the `TIOCSETD` ioctl — the kernel ships around two dozen others (`N_PPP`, `N_HDLC`, `N_SLIP`, `N_HCI` for Bluetooth UART, `N_GSM0710`, and more) that repurpose a serial line as a protocol framer rather than a human-facing terminal.
 3. **`tty_struct` and `tty_driver`.** These are the core kernel objects that tie the other two together: `struct tty_driver` represents a driver family (e.g., "the serial driver" or "the pty slave driver"), and `struct tty_struct` represents one open tty instance, holding the pointer to its current line discipline (`ldisc`), its driver (`driver`, `ops`), its terminal settings (`termios`), and the rest of its live state.
 
-### Core structures
+### Core structures {#core-structures}
 
 **`struct tty_struct`** (`include/linux/tty.h`) is allocated per open tty and lives (reference-counted via an embedded `kref`) until the last reference drops. Key fields:
 
@@ -108,7 +108,7 @@ struct tty_driver {
 
 **`struct tty_ldisc_ops`** (`include/linux/tty_ldisc.h`) is the line discipline's vtable, and the kernel doc comment splits its hooks into two directions: hooks marked `[TTY]` are called from the tty core downward — `open()`, `close()`, `read()`, `write()`, `ioctl()`, `set_termios()`, `poll()`, `hangup()` — and hooks marked `[DRV]` are called from the low-level driver upward, feeding received data in: `receive_buf()` and its newer variant `receive_buf2()` (preferred when present, since it can report back how many bytes it consumed for automatic flow control), `write_wakeup()` (the driver has room for more output), `dcd_change()` (used by the `N_PPS` Pulse-Per-Second discipline), and `lookahead_buf()` (a fast path for characters — like software flow-control bytes — that need handling before the regular `receive_buf()` call gets to them). N_TTY's implementation of `receive_buf()`/`receive_buf2()` is where canonical-mode line editing, echo, and `ISIG` signal generation actually happen: when the local flag `ISIG` (`c_lflag`) is set and the incoming character matches `INTR_CHAR(tty)` (the terminal's configured interrupt character, normally Ctrl-C), `drivers/tty/n_tty.c` calls `n_tty_receive_signal_char(tty, SIGINT, c)` to raise `SIGINT` on the tty's foreground process group.
 
-### The console: printk, boot messages, and the tty layer
+### The console: printk, boot messages, and the tty layer {#the-console-printk-boot-messages-and-the-tty-layer}
 
 The kernel's own text output — early boot messages, `printk()`, everything you see on a serial console or the screen before and often after a shell starts — goes through a related but distinct mechanism: `struct console` (`include/linux/console.h`), registered console drivers, flags like `CON_BOOT` (an early console, replaced once the real one registers) and `CON_PRINTBUFFER` (replay buffered messages so nothing is lost during the handoff). This isn't the tty core itself, but the two are deliberately linked: `struct console` has a `device` callback,
 
@@ -118,14 +118,14 @@ struct tty_driver *(*device)(struct console *co, int *index);
 
 whose job is to say which `tty_driver` backs a given console. This is exactly the mechanism `/dev/console` uses when it's opened: `tty_lookup_driver()` in `drivers/tty/tty_io.c` calls `console_device()` to find the `tty_driver` currently registered as the system console, then opens a tty through it like any other. The virtual-console driver that drives the text screen (`drivers/tty/vt/`, backing `/dev/tty1`–`/dev/tty63` and the currently-active-VT alias `/dev/tty0`) is itself an ordinary `struct tty_driver` with `type == TTY_DRIVER_TYPE_CONSOLE`; a headless system with a serial console instead points the same `device` callback at whichever `tty_driver` backs that serial port. The `struct console`/printk-routing side of this (the NBCON non-blocking console rework, multiple simultaneous console drivers, etc.) is its own subsystem and out of scope for this page — the point here is just that "the console" is, underneath, one more consumer of the same `tty_driver`/`tty_struct` model everything else uses.
 
-### Device node naming
+### Device node naming {#device-node-naming}
 
 - **`/dev/ttyS0`, `/dev/ttyS1`, ...** — real serial ports, one per UART line a driver enumerates (the 8250/16550-family driver under `drivers/tty/serial/8250/`, for the most common case). The `ttyS(4)` man page puts it simply: "ttyS[0-3] are character devices for the serial terminal lines."
 - **`/dev/pts/N`** — UNIX 98 pseudo-terminal slaves. Userspace opens `/dev/ptmx`, a clone device handled by `ptmx_open()` in `drivers/tty/pty.c`, to allocate a fresh pty master; the `devpts` filesystem then creates the matching `/dev/pts/N` slave node. Every terminal emulator, every `ssh` session, and every `tmux`/`screen` pane is one of these pairs. On the kernel side this is two separate `struct tty_driver`s — `ptm_driver` (`driver_name = "pty_master"`, `name = "ptm"`, master side) and `pts_driver` (`driver_name = "pty_slave"`, `name = "pts"`, slave side) — cross-linked through `tty_driver.other`; `ptmx_open()` allocates the master via `tty_init_dev(ptm_driver, index)`. This is distinct from the legacy BSD-style `pty_driver` (`name = "pty"`), set up separately by `legacy_pty_init()` under `CONFIG_LEGACY_PTYS`, which backs the old `/dev/ptyXX`/`/dev/ttyXX` pairs rather than `/dev/ptmx`.
 - **`/dev/tty`** — not a distinct device family but a fixed alias, device number `MKDEV(TTYAUX_MAJOR, 0)` — major `TTYAUX_MAJOR` (`5`), minor `0` — per the `tty(4)` man page: "a character file with major number 5 and minor number 0... a synonym for the controlling terminal of a process, if any." Opening it calls `tty_open_current_tty()`, which looks up the calling process's controlling tty via `get_current_tty()` and reopens that.
 - **`/dev/console`** — the system console alias, device number `MKDEV(TTYAUX_MAJOR, 1)` (major `5`, minor `1`), resolved the same way via `console_device()` as described above — it can point at a serial port, a virtual console, or (less commonly) a pty, depending on how the system was booted (`console=` kernel parameter) and what's currently registered.
 
-### Architecture: from hardware to userspace
+### Architecture: from hardware to userspace {#architecture-from-hardware-to-userspace}
 
 ```
   Hardware / peer object
@@ -169,19 +169,19 @@ whose job is to say which `tty_driver` backs a given console. This is exactly th
                      (console_device(), device number MKDEV(TTYAUX_MAJOR, 1))
 ```
 
-### The rest of this section
+### The rest of this section {#the-rest-of-this-section}
 
 - **[Serial Core: One Abstraction Over Every UART](serial.md)** — how a real UART chip driver plugs into `serial_core`, `tty_driver`, and `tty_port`, worked through the 8250/16550 and `uartlite` drivers.
 - **[Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md)** — canonical vs. raw mode, `termios`, signal generation, job control, and pseudo-terminals, mostly through N_TTY (the non-N_TTY disciplines get a short overview).
 - **[War Stories](war-stories.md)** — real incidents from the TTY/serial subsystem.
 
-### Prerequisites and neighbors
+### Prerequisites and neighbors {#prerequisites-and-neighbors}
 
 Every `/dev/tty*`, `/dev/pts/*`, and `/dev/ttyS*` node is an ordinary [character device](../drivers/chardev.md) underneath, registered through the same `cdev`/`file_operations` machinery as any other driver — the tty layer's `struct tty_operations` sits one level above that as a terminal-specific vtable. Serial and console drivers are ordinary [Linux device-model](../drivers/device-model.md) citizens (platform devices for on-SoC UARTs, PCI devices for add-in serial cards). Reading order: this page, then [Serial Core: One Abstraction Over Every UART](serial.md) if you're working with real UART hardware, or [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) if you want the N_TTY internals.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/tty.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct`, the `TTY_*` flag bits, and the termios accessor macros
 - [include/linux/tty_driver.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_driver.h) — `struct tty_driver`, `struct tty_operations`, `tty_alloc_driver()`/`tty_register_driver()`
@@ -193,23 +193,23 @@ Every `/dev/tty*`, `/dev/pts/*`, and `/dev/ttyS*` node is an ordinary [character
 - [drivers/tty/n_tty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/n_tty.c) — the default N_TTY line discipline: canonical mode, echo, signal generation
 - [drivers/tty/pty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — the pty master/slave drivers, `/dev/ptmx`, UNIX 98 pty allocation
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`tty(4)`](https://man7.org/linux/man-pages/man4/tty.4.html) — `/dev/tty`, the controlling-terminal alias
 - [`ttyS(4)`](https://man7.org/linux/man-pages/man4/ttyS.4.html) — the serial terminal line devices
 - [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — pseudoterminal master/slave pairs, UNIX 98 vs. BSD ptys, `/dev/ptmx` and `/dev/pts/*`
 - [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — canonical vs. noncanonical mode, the `c_iflag`/`c_oflag`/`c_cflag`/`c_lflag` fields, and the `ISIG` special characters
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Serial Core: One Abstraction Over Every UART](serial.md) · [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) · [War Stories](war-stories.md) — the rest of this section
 - [Character and Misc Devices](../drivers/chardev.md) · [Linux Device Model](../drivers/device-model.md) — the driver-core layers the TTY subsystem sits on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [A tempest in a tty pot](https://lwn.net/Articles/343828/) — on the TTY code's reputation for complexity, and the maintenance dispute that briefly left it without a maintainer
 
-### External
+### External {#external}
 
 - [Kernel docs: TTY driver-api index](https://docs.kernel.org/driver-api/tty/index.html) — the kernel's own overview of `tty_driver`, `tty_port`, `tty_struct`, line disciplines, and the console
 - [Kernel docs: TTY Line Discipline](https://docs.kernel.org/driver-api/tty/tty_ldisc.html) — `tty_ldisc_ops`, the N_TTY default, and the N_NULL fallback when a discipline fails

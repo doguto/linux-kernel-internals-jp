@@ -1,8 +1,8 @@
-# File-Backed mmap and Page Faults
+# File-Backed mmap and Page Faults {#file-backed-mmap-and-page-faults}
 
 > How mmap() of a file works: from mapping to first read
 
-## mmap of a regular file
+## mmap of a regular file {#mmap-of-a-regular-file}
 
 ```c
 int fd = open("data.bin", O_RDONLY);
@@ -28,7 +28,7 @@ First read from addr:
      Miss: allocate a page, read from disk, map into page table
 ```
 
-## The page fault path
+## The page fault path {#the-page-fault-path}
 
 ```c
 /* mm/memory.c */
@@ -69,7 +69,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 }
 ```
 
-### do_fault: file-backed fault
+### do_fault: file-backed fault {#do_fault-file-backed-fault}
 
 ```c
 /* mm/memory.c */
@@ -105,7 +105,7 @@ static vm_fault_t do_read_fault(struct vm_fault *vmf)
 }
 ```
 
-### filemap_fault: page cache lookup
+### filemap_fault: page cache lookup {#filemap_fault-page-cache-lookup}
 
 ```c
 /* mm/filemap.c */
@@ -148,7 +148,7 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 }
 ```
 
-## Readahead
+## Readahead {#readahead}
 
 The kernel prefetches pages ahead of sequential access:
 
@@ -178,9 +178,9 @@ struct file_ra_state {
 };
 ```
 
-## MAP_PRIVATE vs MAP_SHARED
+## MAP_PRIVATE vs MAP_SHARED {#mapprivate-vs-mapshared}
 
-### MAP_PRIVATE (copy-on-write)
+### MAP_PRIVATE (copy-on-write) {#map_private-copy-on-write}
 
 ```
 Initial state:
@@ -212,7 +212,7 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 }
 ```
 
-### MAP_SHARED (shared dirty)
+### MAP_SHARED (shared dirty) {#map_shared-shared-dirty}
 
 ```
 Write to MAP_SHARED:
@@ -243,7 +243,7 @@ static vm_fault_t do_shared_fault(struct vm_fault *vmf)
 }
 ```
 
-## madvise hints
+## madvise hints {#madvise-hints}
 
 `madvise()` tells the kernel how the application will access pages:
 
@@ -273,7 +273,7 @@ madvise(mmap_addr, file_size, MADV_DONTNEED);
 /* Physical pages freed immediately; next access re-reads from file */
 ```
 
-### MADV_SEQUENTIAL in the kernel
+### MADV_SEQUENTIAL in the kernel {#madv_sequential-in-the-kernel}
 
 ```c
 /* mm/madvise.c */
@@ -298,7 +298,7 @@ if (vma->vm_flags & VM_RAND_READ)
     ra->ra_pages = 0;  /* disable readahead */
 ```
 
-## Huge pages for file mappings (THP)
+## Huge pages for file mappings (THP) {#huge-pages-for-file-mappings-thp}
 
 File-backed mappings can use Transparent Huge Pages if the filesystem supports it (ext4, tmpfs, xfs with 5.18+):
 
@@ -322,7 +322,7 @@ cat /proc/<pid>/smaps | grep -A5 "file_name"
 # AnonHugePages:    2048 kB
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Page Cache](page-cache.md) — the cache filemap_fault reads from
 - [Copy-on-Write](cow.md) — MAP_PRIVATE COW mechanics

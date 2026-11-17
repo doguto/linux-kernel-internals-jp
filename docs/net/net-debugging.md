@@ -1,12 +1,12 @@
-# Network Debugging with ss and ip
+# Network Debugging with ss and ip {#network-debugging-with-ss-and-ip}
 
 > Essential tools for inspecting network state without looking at source code
 
-## ss: socket statistics
+## ss: socket statistics {#ss-socket-statistics}
 
 `ss` (socket statistics) is the modern replacement for `netstat`. It reads directly from kernel data structures instead of parsing `/proc/net/tcp`, making it significantly faster.
 
-### Basic usage
+### Basic usage {#basic-usage}
 
 ```bash
 # All TCP sockets
@@ -28,7 +28,7 @@ ss -un
 ss -x
 ```
 
-### Filter by state and address
+### Filter by state and address {#filter-by-state-and-address}
 
 ```bash
 # Specific state
@@ -52,7 +52,7 @@ ss -tn src 10.0.0.0/8
 ss -tn state time-wait | wc -l
 ```
 
-### Detailed socket info
+### Detailed socket info {#detailed-socket-info}
 
 ```bash
 # Show internal TCP info (congestion state, cwnd, RTT, etc.)
@@ -77,7 +77,7 @@ ss -tni
 #   delivery_rate: actual send rate
 ```
 
-### Socket memory usage
+### Socket memory usage {#socket-memory-usage}
 
 ```bash
 # Show send/receive queue sizes and memory
@@ -91,9 +91,9 @@ ss -tm
 # Large Send-Q: network is slow / receiver window is small
 ```
 
-## ip: network configuration and state
+## ip: network configuration and state {#ip-network-configuration-and-state}
 
-### Interface information
+### Interface information {#interface-information}
 
 ```bash
 # Show all interfaces with statistics
@@ -112,7 +112,7 @@ ip monitor link
 ip monitor address
 ```
 
-### Route inspection
+### Route inspection {#route-inspection}
 
 ```bash
 # Show routing table
@@ -130,7 +130,7 @@ ip monitor route
 ip route show cache
 ```
 
-### ARP/neighbor table
+### ARP/neighbor table {#arpneighbor-table}
 
 ```bash
 # Show ARP table
@@ -151,7 +151,7 @@ ip neigh add 10.0.0.5 lladdr 52:54:00:11:22:33 dev eth0
 ip monitor neigh
 ```
 
-## /proc/net: reading socket tables
+## /proc/net: reading socket tables {#procnet-reading-socket-tables}
 
 ```bash
 # TCP socket table (hex addresses)
@@ -176,7 +176,7 @@ cat /proc/net/dev
 cat /proc/net/arp
 ```
 
-## Quick diagnostic patterns
+## Quick diagnostic patterns {#quick-diagnostic-patterns}
 
 ```bash
 # Count connections by state (overall health check)
@@ -201,7 +201,7 @@ ss -tn | awk '$3 > 0'  # Send-Q > 0
 ss -tn | awk '$2 > 10000'  # Recv-Q > 10KB
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Understanding /proc/net/snmp](proc-snmp.md) — Protocol counters in depth
 - [Network Tracing](net-tracing.md) — ftrace and BPF for packet-level debugging

@@ -1,8 +1,8 @@
-# Fixed Buffers and Fixed Files
+# Fixed Buffers and Fixed Files {#fixed-buffers-and-fixed-files}
 
 > Amortizing page pinning and fd lookup across I/O operations
 
-## The per-operation tax
+## The per-operation tax {#the-per-operation-tax}
 
 Every `read()` or `write()` — and every plain `IORING_OP_READ` — pays two costs that are easy to overlook:
 
@@ -12,9 +12,9 @@ Every `read()` or `write()` — and every plain `IORING_OP_READ` — pays two co
 
 Fixed buffers and fixed files solve these problems by paying the cost once, at registration time, and amortizing it across every subsequent I/O.
 
-## Fixed buffers (`IORING_REGISTER_BUFFERS`)
+## Fixed buffers (`IORING_REGISTER_BUFFERS`) {#fixed-buffers-ioringregisterbuffers}
 
-### Registration
+### Registration {#registration}
 
 ```c
 #include <sys/uio.h>
@@ -71,7 +71,7 @@ struct io_ring_ctx {
 
 The pages remain pinned — and the `bio_vec` table stays valid — until the buffers are unregistered. No page-table walk happens on the I/O submission path.
 
-### Using fixed buffers in SQEs
+### Using fixed buffers in SQEs {#using-fixed-buffers-in-sqes}
 
 Use `IORING_OP_READ_FIXED` / `IORING_OP_WRITE_FIXED` and set `buf_index` in the SQE to the index of the registered buffer:
 
@@ -101,7 +101,7 @@ io_uring_submit(&ring);
 
 `addr` must fall within the range `[iovecs[buf_index].iov_base, iov_base + iov_len)`. The kernel validates this at submission time and returns `-EFAULT` if the range is out of bounds.
 
-### Unregistering
+### Unregistering {#unregistering}
 
 ```c
 io_uring_unregister_buffers(&ring);
@@ -111,9 +111,9 @@ io_uring_unregister_buffers(&ring);
 
 All pinned pages are released. Any in-flight operations that reference the buffers must complete before unregistration succeeds.
 
-## Fixed files (`IORING_REGISTER_FILES`)
+## Fixed files (`IORING_REGISTER_FILES`) {#fixed-files-ioringregisterfiles}
 
-### Registration
+### Registration {#registration_1}
 
 ```c
 int fds[MAX_CLIENTS];
@@ -138,7 +138,7 @@ io_uring_register(ring_fd, IORING_REGISTER_FILES, fds, nr_fds);
 
 The kernel resolves each fd to its `struct file *`, calls `fget()` once to take a counted reference, and stores the pointer in the `io_rsrc_data` files table on `io_ring_ctx`. Subsequent operations use the stored pointer directly — `fdget()` is not called on the submission path.
 
-### Using fixed files in SQEs
+### Using fixed files in SQEs {#using-fixed-files-in-sqes}
 
 Set `IOSQE_FIXED_FILE` in `sqe->flags` and use the registered array index as `sqe->fd`:
 
@@ -155,7 +155,7 @@ io_uring_submit(&ring);
 
 Fixed files and fixed buffers are independent features and can be combined freely in the same SQE.
 
-### Updating slots without full re-registration
+### Updating slots without full re-registration {#updating-slots-without-full-re-registration}
 
 When a client disconnects and a new one connects, update the relevant slot atomically — without unregistering the entire table:
 
@@ -171,13 +171,13 @@ if (ret < 0)
 
 This maps to `IORING_REGISTER_FILES_UPDATE` and allows per-slot updates at runtime. Setting a slot to `-1` releases the reference for that slot.
 
-### Unregistering
+### Unregistering {#unregistering_1}
 
 ```c
 io_uring_unregister_files(&ring);
 ```
 
-## Performance numbers
+## Performance numbers {#performance-numbers}
 
 The performance benefit from fixed resources compounds at higher IOPS:
 
@@ -197,13 +197,13 @@ Three distinct effects drive the numbers:
 
 The gains are most visible with small I/O operations on fast NVMe or in-memory filesystems (tmpfs, ramfs), where the kernel overhead is large relative to the actual I/O time. On rotating disk, I/O latency dominates and the savings are proportionally smaller.
 
-## Buffer rings (Linux 5.19+)
+## Buffer rings (Linux 5.19+) {#buffer-rings-linux-519}
 
 Fixed buffers work well when the application assigns each I/O to a specific buffer. For socket `recv` or similar operations where the incoming data size is not known in advance, the application cannot safely assign a buffer at SQE submission time — the buffer might not be large enough, or hundreds of inflight receives might exhaust the buffer pool.
 
 **Provided buffer rings** (`IORING_REGISTER_PBUF_RING`, added in Linux 5.19) solve this by letting the kernel select a buffer from a pool at the moment data arrives:
 
-### Setting up a buffer ring
+### Setting up a buffer ring {#setting-up-a-buffer-ring}
 
 ```c
 #include <liburing.h>
@@ -240,7 +240,7 @@ io_uring_buf_ring_advance(buf_ring, NUM_BUFS);
 
 The `io_uring_buf_ring` is a single-producer (userspace) / single-consumer (kernel) ring. Userspace adds buffers via `io_uring_buf_ring_add` and commits them with `io_uring_buf_ring_advance`. The kernel picks from the tail.
 
-### Submitting a recv with buffer selection
+### Submitting a recv with buffer selection {#submitting-a-recv-with-buffer-selection}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -254,7 +254,7 @@ io_uring_sqe_set_data64(sqe, (uint64_t)client_fd);
 io_uring_submit(&ring);
 ```
 
-### Consuming completions and recycling buffers
+### Consuming completions and recycling buffers {#consuming-completions-and-recycling-buffers}
 
 ```c
 struct io_uring_cqe *cqe;
@@ -297,7 +297,7 @@ io_uring_free_buf_ring(&ring, buf_ring, NUM_BUFS, bgid);
 /* equivalent to IORING_UNREGISTER_PBUF_RING */
 ```
 
-## Complete C example
+## Complete C example {#complete-c-example}
 
 The following example registers both buffers and a file, issues a `IORING_OP_READ_FIXED`, and cleans up:
 
@@ -424,7 +424,7 @@ Key points in the example:
 - `addr` (the `buf` argument) must lie within the registered region for `buf_index`. Passing `raw[0]` with `buf_index=0` satisfies this because `iovecs[0].iov_base == raw[0]`.
 - Unregistration order does not matter, but both should happen before `io_uring_queue_exit`.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Architecture and Rings](io-uring-arch.md) — Ring layout, SQE/CQE structures, mmap setup
 - [Operations and Advanced Features](io-uring-ops.md) — Supported opcodes, SQPOLL, linked requests

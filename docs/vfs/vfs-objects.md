@@ -1,8 +1,8 @@
-# VFS Objects: superblock, inode, dentry, file
+# VFS Objects: superblock, inode, dentry, file {#vfs-objects-superblock-inode-dentry-file}
 
 > The four data structures that represent every file system object in Linux
 
-## Overview
+## Overview {#overview}
 
 VFS defines four objects that together represent any filesystem resource [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/vfs.html):
 
@@ -24,7 +24,7 @@ Mounted filesystem
                                  (one per open() call)
 ```
 
-## struct super_block: the mounted filesystem
+## struct super_block: the mounted filesystem {#struct-super_block-the-mounted-filesystem}
 
 A `super_block` exists for each mounted filesystem instance. It holds the global state of the mounted filesystem:
 
@@ -58,7 +58,7 @@ struct super_operations {
 
 `s_fs_info` is the "escape hatch" — the filesystem stores its own private data here. For ext4, it's a `struct ext4_sb_info` with journal handle, block group descriptors, etc.
 
-## struct inode: a file system object
+## struct inode: a file system object {#struct-inode-a-file-system-object}
 
 An `inode` represents a file, directory, symlink, device node, or socket — any named object in the filesystem. One inode can have multiple names (hard links) but a single set of metadata.
 
@@ -103,7 +103,7 @@ struct inode_operations {
 
 The `i_mapping` field points to the `address_space` structure that links this inode to its pages in the page cache. When you `read()` a file, data goes into pages indexed by this `address_space`.
 
-## struct dentry: a path component
+## struct dentry: a path component {#struct-dentry-a-path-component}
 
 A `dentry` (directory entry) caches the mapping from a name to an inode. The **dentry cache** (dcache) is VFS's primary lookup cache — before going to disk, the kernel checks if the path component is already in the dcache. Since Linux 2.6.38, most dcache lookups use an RCU-based lock-free fast path introduced by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/); the `d_seq` seqlock detects concurrent modifications without ever taking a spinlock on the common (cache-hit) path.
 
@@ -132,7 +132,7 @@ Key distinction:
 
 Multiple dentries can point to the same inode (hard links). When you `link("a", "b")`, you create a new dentry `b` pointing to the same inode as `a`.
 
-## struct file: an open file description
+## struct file: an open file description {#struct-file-an-open-file-description}
 
 A `file` is created each time `open()` is called. Multiple `file` structs can refer to the same inode (from different processes or multiple opens in the same process):
 
@@ -169,7 +169,7 @@ struct file_operations {
 
 `f_pos` is per-open-file, which is why two processes with the same `open()` of the same file can read at different positions. But after `fork()`, parent and child share the same `struct file` (and thus the same `f_pos`) until one of them calls `open()` again.
 
-## How the four objects relate to user operations
+## How the four objects relate to user operations {#how-the-four-objects-relate-to-user-operations}
 
 ```
 open("/usr/bin/bash", O_RDONLY)
@@ -197,7 +197,7 @@ file->f_op->read_iter()
   → page cache lookup → disk read if miss
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Path Resolution](namei.md) — How VFS walks from "/" to the target dentry
 - [File Operations](file-ops.md) — The file_operations vtable in detail

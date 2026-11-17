@@ -1,8 +1,8 @@
-# Life of a page
+# Life of a page {#life-of-a-page}
 
 > Following a physical page from allocation through reclaim and reuse
 
-## The journey of a page
+## The journey of a page {#the-journey-of-a-page}
 
 A physical page in Linux leads an eventful life. It's born in the buddy allocator, assigned to serve a process or cache, tracked for activity, and eventually reclaimed when memory runs low. This document follows that journey.
 
@@ -26,7 +26,7 @@ flowchart TD
     end
 ```
 
-## Birth: Page allocation
+## Birth: Page allocation {#birth-page-allocation}
 
 Every page's life begins in the buddy allocator's free lists. When the kernel needs a page - for a process, page cache, or kernel data structure - it calls [`alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c):
 
@@ -34,7 +34,7 @@ Every page's life begins in the buddy allocator's free lists. When the kernel ne
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
 ```
 
-### From free list to assigned
+### From free list to assigned {#from-free-list-to-assigned}
 
 ```mermaid
 flowchart TD
@@ -57,7 +57,7 @@ flowchart TD
 
 The page starts with a clean slate: refcount of 1 (the allocator holds it), no mappings, no flags indicating special state.
 
-### Page initialization
+### Page initialization {#page-initialization}
 
 Depending on use, the page gets initialized differently:
 
@@ -77,7 +77,7 @@ folio_add_new_anon_rmap(folio, vma, addr);
 folio_add_lru(folio);  // Add to LRU for tracking
 ```
 
-## The page structure
+## The page structure {#the-page-structure}
 
 Every physical page frame is represented by a `struct page` (or `struct folio` for compound pages):
 
@@ -94,7 +94,7 @@ struct page {
 };
 ```
 
-### Key page flags
+### Key page flags {#key-page-flags}
 
 Flags track the page's state through its lifecycle:
 
@@ -118,7 +118,7 @@ View a page's flags in debugfs:
 cat /sys/kernel/debug/page_owner  # If CONFIG_PAGE_OWNER enabled
 ```
 
-### Reference counting
+### Reference counting {#reference-counting}
 
 The page's `_refcount` tracks how many users hold the page:
 
@@ -142,11 +142,11 @@ The [`_mapcount`](https://lwn.net/Articles/974223/) tracks page table mappings s
 - `0`: Mapped in exactly one page table
 - `N`: Mapped in N+1 page tables (shared)
 
-## Active use: Working set
+## Active use: Working set {#active-use-working-set}
 
 Once allocated and mapped, the page enters the working set. The kernel tracks access patterns to make reclaim decisions later.
 
-### LRU lists
+### LRU lists {#lru-lists}
 
 Pages are organized into LRU (Least Recently Used) lists per memory node:
 
@@ -176,7 +176,7 @@ Pages move between lists based on access:
 4. **Active but not accessed**: Demoted to inactive
 5. **Inactive and not accessed**: Candidates for reclaim
 
-### The referenced flag dance
+### The referenced flag dance {#the-referenced-flag-dance}
 
 The `PG_referenced` flag implements a second-chance algorithm:
 
@@ -197,7 +197,7 @@ flowchart LR
 
 This prevents single accesses from keeping cold pages in memory while still protecting genuinely hot pages.
 
-### Multi-Gen LRU (MGLRU)
+### Multi-Gen LRU (MGLRU) {#multi-gen-lru-mglru}
 
 Kernel v6.1 introduced [MGLRU](https://docs.kernel.org/admin-guide/mm/multigen_lru.html) as an alternative to the classic two-list model ([commit ec1c86b25f4b](https://git.kernel.org/linus/ec1c86b25f4b), [LWN coverage](https://lwn.net/Articles/910608/)):
 
@@ -223,11 +223,11 @@ cat /sys/kernel/mm/lru_gen/enabled
 
 See [page reclaim](reclaim.md) for details on MGLRU.
 
-## Reclaim: The page's twilight
+## Reclaim: The page's twilight {#reclaim-the-pages-twilight}
 
 When memory runs low, the kernel must reclaim pages. A page's fate depends on its type and state.
 
-### The reclaim decision tree
+### The reclaim decision tree {#the-reclaim-decision-tree}
 
 ```mermaid
 flowchart TD
@@ -242,7 +242,7 @@ flowchart TD
     ANON -->|"no (file page)"| FREE["Free the page"]
 ```
 
-### File-backed pages: Easy reclaim
+### File-backed pages: Easy reclaim {#file-backed-pages-easy-reclaim}
 
 File pages (page cache) are relatively easy to reclaim:
 
@@ -261,7 +261,7 @@ flowchart LR
 
 The page can always be re-read from the backing file if needed again.
 
-### Anonymous pages: Swap or die
+### Anonymous pages: Swap or die {#anonymous-pages-swap-or-die}
 
 Anonymous pages (heap, stack) have no backing file. Without swap, they can't be reclaimed:
 
@@ -280,7 +280,7 @@ flowchart LR
 
 This is why running without swap can lead to OOM kills even with "free" file cache pages.
 
-### The swap-out process
+### The swap-out process {#the-swap-out-process}
 
 When an anonymous page is chosen for swap-out:
 
@@ -324,7 +324,7 @@ flowchart LR
     PP -->|"returned to"| BUDDY["Buddy Allocator"]
 ```
 
-## Resurrection: Swap-in
+## Resurrection: Swap-in {#resurrection-swap-in}
 
 When a process accesses a swapped page, a page fault brings it back:
 
@@ -344,7 +344,7 @@ flowchart TD
     C --> D["Page restored, process continues"]
 ```
 
-### Swap cache
+### Swap cache {#swap-cache}
 
 The swap cache avoids redundant I/O when multiple processes share a swapped page:
 
@@ -366,7 +366,7 @@ The page stays in swap cache until:
 - All processes have private copies (after COW)
 - Or the swap slot is needed
 
-## Death and rebirth
+## Death and rebirth {#death-and-rebirth}
 
 Eventually, a page's content is no longer needed. The page returns to the buddy allocator:
 
@@ -379,7 +379,7 @@ put_page(page);  // Decrement refcount
           → Return to per-CPU freelist or buddy
 ```
 
-### Page reuse
+### Page reuse {#page-reuse}
 
 The freed page doesn't stay free for long:
 
@@ -392,7 +392,7 @@ flowchart TD
 
 Per-CPU lists keep recently-freed pages hot in cache for immediate reuse.
 
-## The complete lifecycle
+## The complete lifecycle {#the-complete-lifecycle}
 
 Putting it all together for a typical anonymous page:
 
@@ -421,9 +421,9 @@ flowchart LR
 | Swap out | 0 | -1 |
 | Swap in | 1→2 | -1→0 |
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Watch page state changes
+### Watch page state changes {#watch-page-state-changes}
 
 ```bash
 # View system-wide page statistics
@@ -437,7 +437,7 @@ cat /proc/vmstat | grep -E "^pg|^ps"
 # pswpin/pswpout - Swap activity
 ```
 
-### Monitor LRU activity
+### Monitor LRU activity {#monitor-lru-activity}
 
 ```bash
 # Watch LRU list sizes
@@ -447,7 +447,7 @@ watch -n 1 'cat /proc/meminfo | grep -E "Active|Inactive"'
 cat /sys/devices/system/node/node0/meminfo
 ```
 
-### Trace page lifecycle events
+### Trace page lifecycle events {#trace-page-lifecycle-events}
 
 ```bash
 # Enable page allocation tracing
@@ -462,7 +462,7 @@ echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_free/enable
 ```
 
-### Observe swap behavior
+### Observe swap behavior {#observe-swap-behavior}
 
 ```bash
 # Watch swap activity in real-time
@@ -482,7 +482,7 @@ for pid in /proc/[0-9]*; do
 done | sort -t: -k2 -n -r | head
 ```
 
-### Force reclaim to observe page lifecycle
+### Force reclaim to observe page lifecycle {#force-reclaim-to-observe-page-lifecycle}
 
 ```bash
 # Drop clean caches (doesn't affect anonymous pages)
@@ -495,7 +495,7 @@ stress --vm 1 --vm-bytes 90% --vm-keep &
 watch -n 1 'cat /proc/meminfo | grep -E "MemFree|SwapUsed|Active|Inactive"'
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -506,9 +506,9 @@ watch -n 1 'cat /proc/meminfo | grep -E "MemFree|SwapUsed|Active|Inactive"'
 | [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | Swap cache |
 | [`mm/rmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/rmap.c) | Reverse mapping, finding page table entries |
 
-## History
+## History {#history}
 
-### struct page evolution
+### struct page evolution {#struct-page-evolution}
 
 The `struct page` has grown and changed significantly over the years:
 
@@ -530,7 +530,7 @@ Throughout the lifecycle above, you see `folio` instead of `page` in modern code
 - **Stage 4**: `shrink_folio_list()` processes folios during reclaim
 - **Why it matters**: A folio explicitly represents one or more contiguous pages as a unit, eliminating ambiguity about whether a function receives a head page, tail page, or single page
 
-### LRU evolution
+### LRU evolution {#lru-evolution}
 
 The LRU system described in Stage 2 (page tracking) has evolved significantly:
 
@@ -546,19 +546,19 @@ The LRU system described in Stage 2 (page tracking) has evolved significantly:
 
 MGLRU significantly improves performance under memory pressure by avoiding the "refault" problem where useful pages get evicted too aggressively.
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 Page lifecycle management involves reference counting, LRU tracking, and writeback coordination. Bugs here cause use-after-free, data corruption, or system crashes.
 
 ---
 
-### Case 1: Page refcount underflow/overflow
+### Case 1: Page refcount underflow/overflow {#case-1-page-refcount-underflowoverflow}
 
-#### What happened
+#### What happened {#what-happened}
 
 Page reference counting bugs are a perennial source of kernel vulnerabilities. A refcount going negative (underflow) or wrapping around (overflow) [leads to use-after-free](https://lwn.net/Articles/786044/).
 
-#### The bug
+#### The bug {#the-bug}
 
 From [Project Zero research](https://projectzero.google/2021/10/how-simple-linux-kernel-memory.html):
 
@@ -571,13 +571,13 @@ The pattern:
 4. Another allocation reuses the page
 5. Original user writes to "freed" page → **memory corruption**
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 [Research from Fudan University](https://yuanxzhang.github.io/paper/cid-security21.pdf) found:
 
 > *"UAF vulnerabilities from refcount bugs can be exploited for local privilege escalation... such vulnerabilities can be stealthy - hiding in the kernel for about 4 years until discovered, affecting tens of millions of Linux PCs/servers including 66% of Android devices."*
 
-#### Mitigations
+#### Mitigations {#mitigations}
 
 - **`refcount_t` type**: Saturates on overflow/underflow instead of wrapping
 - **KASAN**: Detects use-after-free in debug builds
@@ -585,13 +585,13 @@ The pattern:
 
 ---
 
-### Case 2: Large folio data loss (2023)
+### Case 2: Large folio data loss (2023) {#case-2-large-folio-data-loss-2023}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 The large folio feature (kernel 6.1+) introduced a bug causing silent data loss on XFS and other filesystems.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 From the [LKML report](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/):
 
@@ -607,11 +607,11 @@ flowchart LR
     D --> E["DATA LOSS"]
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 Meta disabled large folios in their kernels. Jens Axboe noted: *"Meta ran into this issue and have been reverting it since our 5.19 release."*
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [a48d5bdc877b](https://git.kernel.org/linus/a48d5bdc877b) ("mm: fix for negative counter: nr_file_hugepages")
 
@@ -619,13 +619,13 @@ Meta disabled large folios in their kernels. Jens Axboe noted: *"Meta ran into t
 
 ---
 
-### Case 3: LRU list corruption
+### Case 3: LRU list corruption {#case-3-lru-list-corruption}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 Pages must be properly added to and removed from LRU lists. Bugs in this code cause list corruption, leading to crashes or infinite loops in reclaim.
 
-#### The bug class
+#### The bug class {#the-bug-class}
 
 Common patterns:
 
@@ -637,7 +637,7 @@ From a [Red Hat bug report](https://access.redhat.com/solutions/5773601):
 
 > *"kernel BUG at mm/filemap.c:240!"* - triggered by corrupted page cache state.
 
-#### Why it's hard
+#### Why it's hard {#why-its-hard}
 
 LRU operations happen from multiple contexts:
 
@@ -648,7 +648,7 @@ LRU operations happen from multiple contexts:
 
 All must coordinate correctly, often under memory pressure when the system is already stressed.
 
-#### Mitigations
+#### Mitigations {#mitigations_1}
 
 - **LRU lock**: Per-node locking protects LRU lists
 - **Page flags**: `PG_lru` flag tracks LRU membership
@@ -656,13 +656,13 @@ All must coordinate correctly, often under memory pressure when the system is al
 
 ---
 
-### Case 4: Reverse mapping (rmap) bugs
+### Case 4: Reverse mapping (rmap) bugs {#case-4-reverse-mapping-rmap-bugs}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 Reverse mapping tracks which page table entries point to a page. Bugs here cause missed unmaps or corrupted page tables.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 When reclaiming a page, the kernel must:
 1. Find all PTEs pointing to the page (via rmap)
@@ -674,7 +674,7 @@ If rmap is corrupted or incomplete:
 - PTEs point to freed pages → **use-after-free**
 - Pages can't be reclaimed → **memory leak**
 
-#### Historical example
+#### Historical example {#historical-example}
 
 Early rmap implementations had scalability issues. A page mapped by 1000 processes required walking 1000 entries. This led to:
 
@@ -682,7 +682,7 @@ Early rmap implementations had scalability issues. A page mapped by 1000 process
 - Lock contention
 - Livelock under pressure
 
-#### Modern solutions
+#### Modern solutions {#modern-solutions}
 
 - **Anonymous VMA (anon_vma)**: Chain structure for efficient anonymous page tracking
 - **Object-based reverse mapping**: File pages tracked via address_space
@@ -690,13 +690,13 @@ Early rmap implementations had scalability issues. A page mapped by 1000 process
 
 ---
 
-### Case 5: hwpoison and page refcount
+### Case 5: hwpoison and page refcount {#case-5-hwpoison-and-page-refcount}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 Memory hardware errors (hwpoison) require special handling. A page with an uncorrectable error must be isolated without corrupting other data.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 From a kernel fix for `mm/hwpoison`:
 
@@ -711,7 +711,7 @@ Hwpoison must handle pages in various states:
 
 Each case requires different handling, and missing any leads to refcount leaks or premature frees.
 
-#### The fix
+#### The fix {#the-fix_1}
 
 **Commit**: [4f32be677b12](https://git.kernel.org/linus/4f32be677b12) ("mm/hwpoison: fix page refcount of unknown non LRU page")
 
@@ -719,7 +719,7 @@ Each case requires different handling, and missing any leads to refcount leaks o
 
 The fix adds `put_page()` to drop the page reference from `__get_any_page()` when the page is still not on the LRU list after draining.
 
-#### Why this matters
+#### Why this matters {#why-this-matters}
 
 Hardware errors are rare but when they occur:
 
@@ -731,7 +731,7 @@ Getting this wrong means either data corruption (reusing bad memory) or memory l
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Root Cause | Impact | Prevention |
 |-----|------------|--------|------------|
@@ -743,16 +743,16 @@ Getting this wrong means either data corruption (reusing bad memory) or memory l
 
 The common thread: **pages pass through many states and subsystems**. Every transition is a potential bug site.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Page allocator](page-allocator.md) - Buddy system details
 - [Page reclaim](reclaim.md) - Reclaim mechanisms in depth
 - [Swap](swap.md) - Swap subsystem details
 - [Life of a malloc](life-of-malloc.md) - How pages get allocated for userspace
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The folio pull request](https://lwn.net/Articles/849538/) (2021) - Why folios were introduced
 - [Multi-generational LRU: the basics](https://lwn.net/Articles/851184/) (2021) - MGLRU design

@@ -1,8 +1,8 @@
-# Page Allocator (Buddy System)
+# Page Allocator (Buddy System) {#page-allocator-buddy-system}
 
 > The foundation of Linux memory management - allocating physical page frames
 
-## What is the Page Allocator?
+## What is the Page Allocator? {#what-is-the-page-allocator}
 
 The page allocator manages physical memory at the page granularity (typically `4KB`). It's the lowest-level allocator in the kernel - every other allocator (SLUB, vmalloc) ultimately gets pages from here.
 
@@ -11,11 +11,11 @@ struct page *alloc_pages(gfp_t gfp, unsigned int order);
 void free_pages(unsigned long addr, unsigned int order);
 ```
 
-## The Buddy System
+## The Buddy System {#the-buddy-system}
 
 Linux uses a **buddy allocator**, an algorithm dating back to 1965 ([Knowlton, CACM](https://dl.acm.org/doi/10.1145/365628.365655)). The key insight: manage memory in power-of-2 sized blocks, and when you free memory, merge it with its "buddy" if also free.
 
-### How It Works
+### How It Works {#how-it-works}
 
 ```
 Memory divided into blocks of order 0, 1, 2, ... 10
@@ -35,7 +35,7 @@ Free lists per order:
 +-------------------------------------------+
 ```
 
-### Allocation Example
+### Allocation Example {#allocation-example}
 
 Request for 3 pages (needs order 2 = 4 pages):
 
@@ -51,7 +51,7 @@ Request for 3 pages (needs order 2 = 4 pages):
 3. Continue splitting from higher orders if needed
 ```
 
-### Free Example (Buddy Merging)
+### Free Example (Buddy Merging) {#free-example-buddy-merging}
 
 Freeing a 4-page block at address 0x4000 (order-2 blocks must be 4-page aligned):
 
@@ -65,11 +65,11 @@ Freeing a 4-page block at address 0x4000 (order-2 blocks must be 4-page aligned)
 Merging continues up to MAX_ORDER or until buddy isn't free
 ```
 
-### Why Buddies?
+### Why Buddies? {#why-buddies}
 
 The buddy's address can be computed with a single XOR operation - no searching required. Two adjacent blocks of the same size are buddies only if they came from splitting the same larger block.
 
-## Memory Zones
+## Memory Zones {#memory-zones}
 
 Physical memory is divided into zones based on hardware constraints:
 
@@ -82,7 +82,7 @@ Physical memory is divided into zones based on hardware constraints:
 
 Each zone has its own set of buddy free lists.
 
-## GFP Flags
+## GFP Flags {#gfp-flags}
 
 GFP (Get Free Pages) flags control allocation behavior:
 
@@ -103,9 +103,9 @@ __GFP_NOFAIL  /* Never fail - use sparingly, can deadlock */
 
 See [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) for the full list.
 
-## History & Evolution
+## History & Evolution {#history-evolution}
 
-### Origins (1991)
+### Origins (1991) {#origins-1991}
 
 The buddy allocator has been in Linux since the beginning. The basic algorithm is from:
 
@@ -113,7 +113,7 @@ The buddy allocator has been in Linux since the beginning. The basic algorithm i
 
 *Note: Pre-LKML era. Early implementation details are in the git history starting from v2.6.12.*
 
-### Per-CPU Page Lists (v2.5/2.6)
+### Per-CPU Page Lists (v2.5/2.6) {#per-cpu-page-lists-v2526}
 
 **Problem**: The zone lock became a bottleneck on SMP systems - every allocation/free needed it.
 
@@ -130,7 +130,7 @@ CPU 1: [page] [page] ...
    Zone free lists (locked)
 ```
 
-### NUMA Awareness (v2.6)
+### NUMA Awareness (v2.6) {#numa-awareness-v26}
 
 **Problem**: On NUMA systems, accessing remote memory is slower than local memory.
 
@@ -143,7 +143,7 @@ alloc_pages_node(node_id, gfp, order);
 
 *Note: NUMA support evolved over many releases. See `mm/mempolicy.c` for allocation policies.*
 
-### Compaction (v2.6.35, 2010)
+### Compaction (v2.6.35, 2010) {#compaction-v2635-2010}
 
 **Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
@@ -153,7 +153,7 @@ alloc_pages_node(node_id, gfp, order);
 
 **Solution**: Memory compaction - move pages to create contiguous free blocks.
 
-### CMA (Contiguous Memory Allocator, v3.5, 2012)
+### CMA (Contiguous Memory Allocator, v3.5, 2012) {#cma-contiguous-memory-allocator-v35-2012}
 
 **Commit**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
 
@@ -165,9 +165,9 @@ alloc_pages_node(node_id, gfp, order);
 
 **Solution**: Reserve regions that can be used by movable pages normally, but reclaimed for contiguous allocation when needed.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### View Buddy Allocator State
+### View Buddy Allocator State {#view-buddy-allocator-state}
 
 ```bash
 # Free blocks per order, per zone
@@ -180,7 +180,7 @@ cat /proc/buddyinfo
 # Each number = count of free blocks at that order
 ```
 
-### View Zone Information
+### View Zone Information {#view-zone-information}
 
 ```bash
 # Detailed zone stats
@@ -192,7 +192,7 @@ cat /proc/zoneinfo
 # - managed: pages managed by this zone
 ```
 
-### Memory Pressure Test
+### Memory Pressure Test {#memory-pressure-test}
 
 ```bash
 # Watch buddy state while allocating memory
@@ -202,7 +202,7 @@ watch -n 1 cat /proc/buddyinfo
 stress --vm 1 --vm-bytes 1G
 ```
 
-### Trace Allocations
+### Trace Allocations {#trace-allocations}
 
 ```bash
 # Enable page allocation tracing (requires debugfs)
@@ -212,9 +212,9 @@ cat /sys/kernel/debug/tracing/trace_pipe
 # Output shows: page address, order, gfp flags, migratetype
 ```
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
-### struct zone
+### struct zone {#struct-zone}
 
 ```c
 struct zone {
@@ -233,7 +233,7 @@ struct zone {
 
 *Note: `NR_PAGE_ORDERS` [replaced `MAX_ORDER`](https://git.kernel.org/linus/fd37721803c6) in v6.8. When reading older code, `MAX_ORDER` is the same concept.*
 
-### Watermarks
+### Watermarks {#watermarks}
 
 Each zone has watermarks that control reclaim behavior:
 
@@ -256,7 +256,7 @@ sysctl vm.min_free_kbytes=65536
 
 **Zone fallback**: When a zone is exhausted, allocations fall back to other zones in order: NORMAL → DMA32 → DMA (preferring higher zones first).
 
-### struct free_area
+### struct free_area {#struct-free_area}
 
 ```c
 struct free_area {
@@ -265,7 +265,7 @@ struct free_area {
 };
 ```
 
-### Migrate Types
+### Migrate Types {#migrate-types}
 
 Pages are grouped by mobility to reduce fragmentation:
 
@@ -283,9 +283,9 @@ Pages are grouped by mobility to reduce fragmentation:
 cat /proc/pagetypeinfo
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### High-Order Allocation Failures
+### High-Order Allocation Failures {#high-order-allocation-failures}
 
 Large contiguous allocations (order > 3) can fail due to fragmentation even with free memory.
 
@@ -295,21 +295,21 @@ Large contiguous allocations (order > 3) can fail due to fragmentation even with
 - Use vmalloc instead (virtual contiguity)
 - Enable compaction (`/proc/sys/vm/compact_memory`)
 
-### Zone Imbalance
+### Zone Imbalance {#zone-imbalance}
 
 Memory pressure in one zone while others have free memory.
 
 **Check**: `cat /proc/zoneinfo | grep -E "zone|free|min"`
 
-### OOM Despite Free Pages
+### OOM Despite Free Pages {#oom-despite-free-pages}
 
 Free pages exist but in wrong zone or wrong migratetype.
 
 **Debug**: Check `/proc/buddyinfo` and `/proc/pagetypeinfo`
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -317,20 +317,20 @@ Free pages exist but in wrong zone or wrong migratetype.
 | [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) | GFP flags |
 | [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | Zone structures |
 
-### Key Commits
+### Key Commits {#key-commits}
 
 | Commit | Kernel | Description |
 |--------|--------|-------------|
 | [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) | v2.6.35 | Memory compaction |
 | [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) | v3.5 | CMA introduction |
 
-### Related
+### Related {#related}
 
 - [overview](overview.md) - How page allocator fits with other allocators
 - [slab](slab.md) - SLUB uses pages from buddy allocator
 - [vmalloc](vmalloc.md) - Gets individual pages from buddy
 
-## Further reading
+## Further reading {#further-reading}
 
 - [slab.md](slab.md) — SLUB sits directly on top of the buddy allocator for sub-page allocations
 - [compaction.md](compaction.md) — How the kernel defragments physical memory to satisfy high-order requests

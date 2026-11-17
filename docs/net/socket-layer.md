@@ -1,8 +1,8 @@
-# Socket Layer Overview
+# Socket Layer Overview {#socket-layer-overview}
 
 > How the kernel maps userspace socket calls to protocol implementations
 
-## The socket abstraction
+## The socket abstraction {#the-socket-abstraction}
 
 A socket is a bidirectional communication endpoint. From userspace, it's just a file descriptor. Internally, it's a stack of three structures:
 
@@ -18,7 +18,7 @@ sock:        struct sock (protocol view: receive queues, buffers, state machine)
 protocol:    struct proto (TCP/UDP/RAW-specific operations)
 ```
 
-## struct socket — the VFS-facing layer
+## struct socket — the VFS-facing layer {#struct-socket-the-vfs-facing-layer}
 
 ```c
 // include/linux/net.h
@@ -55,7 +55,7 @@ struct proto_ops {
 
 For TCP/IPv4, `proto_ops = inet_stream_ops`. For UDP, `proto_ops = inet_dgram_ops`. For AF_UNIX, `proto_ops = unix_stream_ops`.
 
-## struct sock — the protocol-facing layer
+## struct sock — the protocol-facing layer {#struct-sock-the-protocol-facing-layer}
 
 ```c
 // include/net/sock.h
@@ -91,7 +91,7 @@ struct sock {
 };
 ```
 
-## struct proto — the protocol implementation
+## struct proto — the protocol implementation {#struct-proto-the-protocol-implementation}
 
 Each protocol registers a `struct proto` that contains the actual work:
 
@@ -116,7 +116,7 @@ struct proto {
 TCP: `struct proto tcp_prot` at `net/ipv4/tcp_ipv4.c`
 UDP: `struct proto udp_prot` at `net/ipv4/udp.c`
 
-## Creating a socket: socket(2)
+## Creating a socket: socket(2) {#creating-a-socket-socket2}
 
 ```
 socket(AF_INET, SOCK_STREAM, 0)
@@ -131,7 +131,7 @@ socket(AF_INET, SOCK_STREAM, 0)
         → sock_map_fd()  # install in fd table
 ```
 
-## The two dispatch levels
+## The two dispatch levels {#the-two-dispatch-levels}
 
 The double-layer dispatch (proto_ops → proto) exists because:
 
@@ -140,7 +140,7 @@ The double-layer dispatch (proto_ops → proto) exists because:
 
 A single layer can't serve both: `sendmsg()` on a TCP socket needs different behavior from `sendmsg()` on a UDP socket, but both go through the same VFS file operations.
 
-## Receive path: how data reaches the socket
+## Receive path: how data reaches the socket {#receive-path-how-data-reaches-the-socket}
 
 ```
 NIC interrupt → NAPI poll → __netif_receive_skb()
@@ -153,7 +153,7 @@ NIC interrupt → NAPI poll → __netif_receive_skb()
 
 The `sk_backlog` handles the case where a packet arrives while the socket lock is held (e.g., during another syscall). Packets are held in the backlog and processed when the lock is released.
 
-## Socket buffers and memory
+## Socket buffers and memory {#socket-buffers-and-memory}
 
 ```bash
 # Default receive/send buffer sizes
@@ -171,7 +171,7 @@ cat /proc/sys/net/ipv4/tcp_wmem
 
 `sk->sk_rmem_alloc` tracks memory currently held in `sk_receive_queue`. When it exceeds `sk_rcvbuf`, new incoming packets are silently dropped by the kernel — for TCP the sender retransmits, but for UDP the data is simply lost.
 
-## Socket state machine (TCP)
+## Socket state machine (TCP) {#socket-state-machine-tcp}
 
 ```
                    connect()
@@ -184,7 +184,7 @@ cat /proc/sys/net/ipv4/tcp_wmem
 
 `sk->sk_state` (accessed via `sk->__sk_common.skc_state`) tracks this. The TCP protocol implementation transitions these states and calls `sk->sk_state_change()` to notify waiting pollers.
 
-## Inspecting sockets
+## Inspecting sockets {#inspecting-sockets}
 
 ```bash
 # List all TCP sockets
@@ -203,7 +203,7 @@ cat /proc/net/tcp  # hex: local_addr:port remote_addr:port state tx_queue rx_que
 ss -tan | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [sk_buff](sk-buff.md) — The packet structure passed between layers
 - [Network Device and NAPI](napi.md) — How packets arrive from hardware

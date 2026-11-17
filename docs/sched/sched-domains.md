@@ -1,8 +1,8 @@
-# Scheduling Domains
+# Scheduling Domains {#scheduling-domains}
 
 > How the kernel organizes CPUs into a hierarchy for load balancing
 
-## What scheduling domains are
+## What scheduling domains are {#what-scheduling-domains-are}
 
 The Linux scheduler doesn't just balance load between individual CPUs — it uses a hierarchical topology that reflects the hardware: SMT siblings, CPU cores, NUMA sockets. This hierarchy is called the **scheduling domain tree**.
 
@@ -14,7 +14,7 @@ This matters because:
 - Moving between NUMA sockets is expensive (remote memory access)
 - The scheduler should balance aggressively at the cheap levels and conservatively at the expensive ones
 
-## struct sched_domain
+## struct sched_domain {#struct-sched_domain}
 
 ```c
 // include/linux/sched/topology.h
@@ -39,7 +39,7 @@ struct sched_domain {
 };
 ```
 
-### SD_* flags
+### SD_* flags {#sd_-flags}
 
 Flags control what load balancing is enabled at each domain level:
 
@@ -56,7 +56,7 @@ SD_NUMA             // Domain crosses NUMA node boundary
 SD_OVERLAP          // Domain can overlap with siblings (NUMA)
 ```
 
-## The topology hierarchy
+## The topology hierarchy {#the-topology-hierarchy}
 
 The default topology levels (from narrowest to broadest):
 
@@ -81,7 +81,7 @@ DEFINE_PER_CPU(struct sched_domain __rcu *, sd_asym_packing);
 DEFINE_PER_CPU(struct sched_domain __rcu *, sd_asym_cpucapacity);
 ```
 
-### struct sched_domain_topology_level
+### struct sched_domain_topology_level {#struct-scheddomaintopology_level}
 
 Architecture code defines topology by providing a list of levels:
 
@@ -104,7 +104,7 @@ static struct sched_domain_topology_level default_topology[] = {
 
 NUMA levels are added on top by `sched_init_numa()` based on ACPI SRAT data.
 
-## Building domains: build_sched_domains()
+## Building domains: build_sched_domains() {#building-domains-buildscheddomains}
 
 When topology changes (boot, CPU hotplug, cpuset partition), the kernel rebuilds the domain tree:
 
@@ -130,7 +130,7 @@ This is called via `rebuild_sched_domains()`, which is triggered by:
 - CPU hotplug events
 - cpuset partition root changes
 
-## Load balancing: sched_balance_rq()
+## Load balancing: sched_balance_rq() {#load-balancing-schedbalancerq}
 
 Load balancing happens in `sched_balance_rq()` (previously `load_balance()`), called periodically by the scheduler tick and when a CPU goes idle:
 
@@ -145,7 +145,7 @@ Idle CPU → sched_balance_rq()
 
 Key principle: **start at the narrowest domain first**. If there's enough work within the MC domain, don't cross the PKG boundary. NUMA migrations are last resort.
 
-### Idle load balancing
+### Idle load balancing {#idle-load-balancing}
 
 When a CPU runs out of work, it enters `newidle_balance()`:
 
@@ -166,11 +166,11 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 }
 ```
 
-### Periodic balancing
+### Periodic balancing {#periodic-balancing}
 
 The scheduler tick triggers `sched_balance_softirq()` every `balance_interval` jiffies. The interval adapts: if recent balancing found no imbalance, `balance_interval` doubles (up to `max_interval`) to reduce overhead. When imbalance is found, it resets to `min_interval`.
 
-## Viewing domain topology
+## Viewing domain topology {#viewing-domain-topology}
 
 ```bash
 # /proc/schedstat shows per-domain statistics (requires CONFIG_SCHEDSTATS)
@@ -185,7 +185,7 @@ cat /sys/kernel/debug/sched/domains/cpu0/domain0/flags
 cat /sys/kernel/debug/sched/domains/cpu0/domain1/name   # "PKG"
 ```
 
-## Domain isolation with cpuset
+## Domain isolation with cpuset {#domain-isolation-with-cpuset}
 
 cpuset partition roots **break** the scheduling domain tree. When you create a partition root with CPUs 4-7:
 
@@ -196,7 +196,7 @@ cpuset partition roots **break** the scheduling domain tree. When you create a p
 
 This is how container runtimes pin VMs or containers to exclusive CPU sets with no interference from the host scheduler.
 
-## Asymmetric CPU capacity (big.LITTLE)
+## Asymmetric CPU capacity (big.LITTLE) {#asymmetric-cpu-capacity-biglittle}
 
 On ARM systems with heterogeneous CPUs (Cortex-A55 + Cortex-A78), the `SD_ASYM_CPUCAPACITY` flag marks domains spanning CPUs of different compute capacity. The scheduler tracks CPU capacity via `cpu_capacity` and uses Energy Aware Scheduling (EAS) to prefer placing tasks on appropriately-sized CPUs.
 
@@ -205,7 +205,7 @@ On ARM systems with heterogeneous CPUs (Cortex-A55 + Cortex-A78), the `SD_ASYM_C
 cat /sys/devices/system/cpu/cpu*/cpu_capacity
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [cpuset](cpuset.md) — How cpuset partition roots interact with sched domains
 - [CPU Affinity](cpu-affinity.md) — Per-task affinity and its relationship to domains

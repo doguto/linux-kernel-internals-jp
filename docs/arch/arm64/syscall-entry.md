@@ -1,4 +1,4 @@
-# ARM64 Syscall Entry
+# ARM64 Syscall Entry {#arm64-syscall-entry}
 
 > From SVC instruction to kernel C handler and back
 
@@ -8,7 +8,7 @@ register-save machinery, C dispatch layer, and back to userspace via `ERET`. Thi
 
 ---
 
-## The SVC instruction
+## The SVC instruction {#the-svc-instruction}
 
 On ARM64, system calls are made with `SVC #0` (Supervisor Call). The calling convention is:
 
@@ -29,7 +29,7 @@ svc  #0             /* trap to EL1; return value in x0 */
 
 The immediate in `SVC #0` is conventionally zero — Linux ignores it. The syscall number comes from `x8`.
 
-### Contrast with x86-64
+### Contrast with x86-64 {#contrast-with-x86-64}
 
 | Aspect | ARM64 (`SVC #0`) | x86-64 (`SYSCALL`) |
 |--------|------------------|-------------------|
@@ -45,7 +45,7 @@ On ARM64, `SVC #0` triggers a synchronous exception dispatched through the vecto
 
 ---
 
-## Exception vector dispatch
+## Exception vector dispatch {#exception-vector-dispatch}
 
 When `SVC #0` executes, the CPU takes a **synchronous exception** and jumps to `VBAR_EL1 + 0x400` —
 the slot for synchronous exceptions from 64-bit EL0:
@@ -73,7 +73,7 @@ SYM_CODE_START(vectors)
 SYM_CODE_END(vectors)
 ```
 
-### ESR_EL1 and EC == 0x15
+### ESR_EL1 and EC == 0x15 {#esr_el1-and-ec-0x15}
 
 The CPU populates `ESR_EL1` with the exception cause. Bits 31:26 are the **Exception Class (EC)**; for
 a 64-bit SVC, EC is `0x15`:
@@ -111,7 +111,7 @@ Note: `el0t_64_sync_handler` is a C function in `arch/arm64/kernel/entry-common.
 
 ---
 
-## Register save and restore
+## Register save and restore {#register-save-and-restore}
 
 `kernel_entry 0, 64` saves all userspace registers onto the kernel stack as a `struct pt_regs`:
 
@@ -141,7 +141,7 @@ the program counter from `ELR_EL1` and processor state from `SPSR_EL1`, returnin
 
 ---
 
-## The C dispatch path
+## The C dispatch path {#the-c-dispatch-path}
 
 After register save, control flows from assembly into C:
 
@@ -177,7 +177,7 @@ static void invoke_syscall(struct pt_regs *regs, unsigned int scno,
 }
 ```
 
-### The syscall table
+### The syscall table {#the-syscall-table}
 
 The ARM64 native syscall table is built in `arch/arm64/kernel/sys.c` via the `__SYSCALL()` macro:
 
@@ -196,7 +196,7 @@ shared with RISC-V and LoongArch. `__NR_write` is 64, `__NR_read` is 63, `__NR_o
 
 ---
 
-## Syscall tracing and seccomp
+## Syscall tracing and seccomp {#syscall-tracing-and-seccomp}
 
 `syscall_enter_from_user_mode_work()` in `kernel/entry/common.c` handles all pre-syscall hooks. It
 checks the `syscall_work` flags in `thread_info`:
@@ -231,7 +231,7 @@ ptrace exit-stops, and delivers any pending signals before `kernel_exit` restore
 
 ---
 
-## AArch32 compat
+## AArch32 compat {#aarch32-compat}
 
 A 64-bit ARM64 kernel can run 32-bit ARM (AArch32) ELF binaries (`CONFIG_COMPAT`). These processes also
 use `SVC #0`, but with a different register convention:
@@ -262,7 +262,7 @@ translate 32-bit struct layouts. `TIF_32BIT` marks a compat thread; `is_compat_t
 
 ---
 
-## vDSO: avoiding SVC for hot paths
+## vDSO: avoiding SVC for hot paths {#vdso-avoiding-svc-for-hot-paths}
 
 `clock_gettime`, `gettimeofday`, and `clock_getres` are called millions of times per second in some
 workloads. The **vDSO** (virtual Dynamic Shared Object) implements these without `SVC #0` by reading
@@ -290,9 +290,9 @@ There is no vsyscall fixed-address page on ARM64 — that is an x86-64-only lega
 
 ---
 
-## Observability
+## Observability {#observability}
 
-### strace
+### strace {#strace}
 
 ```bash
 strace ls                       # trace all syscalls
@@ -304,7 +304,7 @@ strace -p <pid>                 # attach to a running process
 `strace` uses `ptrace(PTRACE_SYSCALL)` and never sees vDSO-accelerated calls — those never issue
 `svc #0`.
 
-### perf trace and bpftrace
+### perf trace and bpftrace {#perf-trace-and-bpftrace}
 
 ```bash
 perf trace ls                   # low-overhead syscall trace via tracepoints
@@ -317,7 +317,7 @@ bpftrace -e 'tracepoint:syscalls:sys_enter_* { @[probe] = count(); }'
 bpftrace -e 'tracepoint:syscalls:sys_enter_read /pid == 1234/ { printf("fd=%d\n", args->fd); }'
 ```
 
-### /proc/PID/syscall
+### /proc/PID/syscall {#procpidsyscall}
 
 ```bash
 cat /proc/$(pidof sshd)/syscall
@@ -327,7 +327,7 @@ cat /proc/$(pidof sshd)/syscall
 
 Shows the syscall number, arguments, user SP, and user PC for a process blocked in a syscall.
 
-### Raw tracepoints
+### Raw tracepoints {#raw-tracepoints}
 
 ```bash
 # Enable sys_enter_read tracing via ftrace
@@ -337,7 +337,7 @@ cat /sys/kernel/debug/tracing/trace
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 **In this site:**
 

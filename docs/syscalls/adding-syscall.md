@@ -1,8 +1,8 @@
-# Adding a New System Call
+# Adding a New System Call {#adding-a-new-system-call}
 
 > A complete walkthrough for kernel contributors
 
-## When to add a new syscall
+## When to add a new syscall {#when-to-add-a-new-syscall}
 
 A new syscall is the right approach when:
 
@@ -17,7 +17,7 @@ Avoid adding syscalls for things that can be done via:
 - Netlink (for networking-related configuration)
 - An existing syscall extension (e.g., `fcntl` with a new `cmd`)
 
-## Step 1: Define the syscall
+## Step 1: Define the syscall {#step-1-define-the-syscall}
 
 Use the modern struct-based pattern for new syscalls:
 
@@ -65,7 +65,7 @@ SYSCALL_DEFINE2(hello, struct hello_args __user *, uargs, size_t, size)
 }
 ```
 
-## Step 2: Define the UAPI struct
+## Step 2: Define the UAPI struct {#step-2-define-the-uapi-struct}
 
 Put userspace-visible types in `include/uapi/linux/hello.h`:
 
@@ -98,16 +98,16 @@ Key rules for UAPI structs:
 - Use `__u64` for pointer-sized fields (enables compat with 32-bit userspace)
 - The struct is an ABI — once merged it cannot be changed incompatibly
 
-## Step 3: Add to the syscall table
+## Step 3: Add to the syscall table {#step-3-add-to-the-syscall-table}
 
-### For x86-64: `arch/x86/entry/syscalls/syscall_64.tbl`
+### For x86-64: `arch/x86/entry/syscalls/syscall_64.tbl` {#for-x86-64-archx86entrysyscallssyscall_64tbl}
 
 ```
 # Append at the end (after the highest existing number)
 451     common  hello           sys_hello
 ```
 
-### For generic architectures: `include/uapi/asm-generic/unistd.h`
+### For generic architectures: `include/uapi/asm-generic/unistd.h` {#for-generic-architectures-includeuapiasm-genericunistdh}
 
 ```c
 #define __NR_hello 451
@@ -116,11 +116,11 @@ __SYSCALL(__NR_hello, sys_hello)
 #define __NR_syscalls 452
 ```
 
-### For ARM64: `arch/arm64/include/asm/unistd.h`
+### For ARM64: `arch/arm64/include/asm/unistd.h` {#for-arm64-archarm64includeasmunistdh}
 
 ARM64 uses the generic table, so `include/uapi/asm-generic/unistd.h` covers it.
 
-### For 32-bit compat
+### For 32-bit compat {#for-32-bit-compat}
 
 If the syscall takes a struct with pointers (stored as `__u64`), it already works correctly for 32-bit processes — no compat version needed. If it uses architecture-specific types, add a compat version:
 
@@ -134,7 +134,7 @@ COMPAT_SYSCALL_DEFINE2(hello, compat_uptr_t, uargs, compat_size_t, size)
 #endif
 ```
 
-## Step 4: Add the kernel header
+## Step 4: Add the kernel header {#step-4-add-the-kernel-header}
 
 ```c
 /* include/linux/hello.h */
@@ -149,7 +149,7 @@ long ksys_hello(struct hello_args __user *uargs, size_t size);
 #endif
 ```
 
-## Step 5: Wire it up in the build
+## Step 5: Wire it up in the build {#step-5-wire-it-up-in-the-build}
 
 Add to the appropriate `Makefile`:
 
@@ -160,7 +160,7 @@ obj-y += hello.o
 
 Or add it to an existing file if it's small enough.
 
-## Step 6: Add a man page stub
+## Step 6: Add a man page stub {#step-6-add-a-man-page-stub}
 
 ```
 man2/hello.2  ← syscall man pages live in section 2
@@ -168,7 +168,7 @@ man2/hello.2  ← syscall man pages live in section 2
 
 The man-pages project (not in the kernel tree) documents syscalls. Submit a patch there too.
 
-## Step 7: Write a selftest
+## Step 7: Write a selftest {#step-7-write-a-selftest}
 
 ```c
 /* tools/testing/selftests/hello/hello_test.c */
@@ -216,9 +216,9 @@ TEST_GEN_PROGS := hello_test
 include ../lib.mk
 ```
 
-## Common mistakes
+## Common mistakes {#common-mistakes}
 
-### Forgetting to validate struct size
+### Forgetting to validate struct size {#forgetting-to-validate-struct-size}
 
 ```c
 /* WRONG: assumes struct is exactly this size */
@@ -228,7 +228,7 @@ if (copy_from_user(&args, uargs, sizeof(args)))
 if (copy_struct_from_user(&args, sizeof(args), uargs, size))
 ```
 
-### Leaving implicit padding in structs
+### Leaving implicit padding in structs {#leaving-implicit-padding-in-structs}
 
 ```c
 /* WRONG: compiler adds 4 bytes of padding after flags */
@@ -245,7 +245,7 @@ struct good_args {
 };
 ```
 
-### Using kernel types in UAPI
+### Using kernel types in UAPI {#using-kernel-types-in-uapi}
 
 ```c
 /* WRONG: size_t is 4 or 8 bytes depending on arch */
@@ -259,7 +259,7 @@ struct good {
 };
 ```
 
-### Directly dereferencing userspace pointers
+### Directly dereferencing userspace pointers {#directly-dereferencing-userspace-pointers}
 
 ```c
 /* WRONG: UB + security vulnerability */
@@ -271,7 +271,7 @@ if (get_user(value, (int __user *)uargs->ptr))
     return -EFAULT;
 ```
 
-### Missing capability check
+### Missing capability check {#missing-capability-check}
 
 ```c
 /* If the syscall requires privilege: */
@@ -283,7 +283,7 @@ if (!ns_capable(current_user_ns(), CAP_SYS_ADMIN))
     return -EPERM;
 ```
 
-## Testing without merging
+## Testing without merging {#testing-without-merging}
 
 ```bash
 # Build the kernel with your changes
@@ -299,7 +299,7 @@ make
 sudo ./run_kselftest.sh
 ```
 
-## The review process
+## The review process {#the-review-process}
 
 Expect these questions from reviewers:
 1. **Why a new syscall?** Can't this be done with ioctl/sysfs/etc.?
@@ -310,26 +310,26 @@ Expect these questions from reviewers:
 6. **Documentation**: man page? kernel-doc comments?
 7. **Tests**: selftests included?
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — the `SYSCALL_DEFINE0`...`SYSCALL_DEFINE6` macros and the `SYSCALL_DEFINEx`/`__SYSCALL_DEFINEx` chain they expand into
 - [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — the x86-64 syscall number table (`<number> <abi> <name> <entry point>`)
 - [include/uapi/asm-generic/unistd.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/unistd.h) — the generic syscall table shared by ARM64 and other architectures; `__NR_syscalls` and the `__SYSCALL()` macro
 - [include/linux/uaccess.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/uaccess.h) — `copy_struct_from_user()`, the versioned-struct copy helper for extensible syscall ABIs
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — low-level syscall invocation from C, and the `SYS_*` number macros
 - [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — the full list of Linux system calls, by kernel version and architecture availability
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](syscall-entry.md) — how the new syscall gets called
 - [SYSCALL_DEFINE and dispatch](syscall-define.md) — the dispatch mechanism
 - [32-bit Compat Syscalls](compat.md) — the compat layer referenced in Step 3
 
-### External
+### External {#external}
 
 - [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — the authoritative kernel guide (`Documentation/process/adding-syscalls.rst`), covering syscall alternatives, ABI extensibility, table wiring, and compat entry points

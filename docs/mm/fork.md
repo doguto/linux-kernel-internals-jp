@@ -1,8 +1,8 @@
-# What happens when you fork
+# What happens when you fork {#what-happens-when-you-fork}
 
 > The memory mechanics of process creation
 
-## fork() in 30 seconds
+## fork() in 30 seconds {#fork-in-30-seconds}
 
 When a process calls `fork()`, the kernel creates a child process that's almost an exact copy of the parent. But copying gigabytes of memory would be slow and wasteful. Instead, Linux uses **copy-on-write (COW)**: parent and child share the same physical pages until one of them writes.
 
@@ -45,7 +45,7 @@ flowchart TB
 
 This makes fork() fast - `O(page tables)` rather than `O(memory used)`.
 
-## Before fork: The parent's memory
+## Before fork: The parent's memory {#before-fork-the-parents-memory}
 
 A typical process has multiple memory regions, each backed differently:
 
@@ -76,7 +76,7 @@ flowchart TB
 
 Each region is represented by a VMA ([Virtual Memory Area](mmap.md)). The kernel must handle each VMA appropriately during fork.
 
-## The fork system call
+## The fork system call {#the-fork-system-call}
 
 Fork is implemented via the `clone()` system call internally:
 
@@ -97,7 +97,7 @@ SYSCALL_DEFINE0(fork)
 }
 ```
 
-### What gets copied
+### What gets copied {#what-gets-copied}
 
 Fork creates copies of many process structures:
 
@@ -113,7 +113,7 @@ Fork creates copies of many process structures:
 
 The critical insight: **page tables are copied, physical pages are not**.
 
-## Inside dup_mm(): Copying the address space
+## Inside dup_mm(): Copying the address space {#inside-dup_mm-copying-the-address-space}
 
 The memory copying happens in [`dup_mm()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c):
 
@@ -140,7 +140,7 @@ static struct mm_struct *dup_mm(struct task_struct *tsk,
 }
 ```
 
-### VMA duplication
+### VMA duplication {#vma-duplication}
 
 Each VMA is duplicated, but the handling depends on its type:
 
@@ -173,7 +173,7 @@ static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 }
 ```
 
-### Page table copying and COW setup
+### Page table copying and COW setup {#page-table-copying-and-cow-setup}
 
 The key function is [`copy_page_range()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c), which walks the parent's page tables and creates corresponding entries in the child:
 
@@ -203,7 +203,7 @@ int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
 
 **Critical detail**: Both parent AND child are made read-only for private writable mappings. This ensures the first writer (whichever process) triggers the COW fault.
 
-### The COW setup in detail
+### The COW setup in detail {#the-cow-setup-in-detail}
 
 ```mermaid
 flowchart TB
@@ -226,7 +226,7 @@ flowchart TB
 
 Both PTEs point to the same physical page. Both are marked read-only. The page's reference count increments to 2.
 
-## COW fault handling
+## COW fault handling {#cow-fault-handling}
 
 When either process writes to a COW page, a page fault occurs:
 
@@ -279,7 +279,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 }
 ```
 
-### After COW fault
+### After COW fault {#after-cow-fault}
 
 ```mermaid
 flowchart LR
@@ -298,11 +298,11 @@ flowchart LR
 
 **Important**: The parent's PTE stays read-only even though it's now the exclusive owner. If the parent writes later, `do_wp_page()` sees refcount=1, calls `wp_page_reuse()`, and simply makes the PTE writable - no copy needed. This lazy approach avoids modifying PTEs that might never be written to.
 
-## TLB considerations
+## TLB considerations {#tlb-considerations}
 
 After modifying page tables, stale TLB entries must be invalidated.
 
-### During fork
+### During fork {#during-fork}
 
 When making PTEs read-only for COW:
 
@@ -316,7 +316,7 @@ ptep_set_wrprotect(src_mm, addr, src_pte);
 
 On x86, modifying a PTE from writable to read-only requires flushing the TLB entry. Otherwise, the CPU might use a cached writable entry and skip the COW fault.
 
-### During COW fault
+### During COW fault {#during-cow-fault}
 
 After updating the faulting process's PTE:
 
@@ -327,7 +327,7 @@ After updating the faulting process's PTE:
 flush_tlb_page(vma, address);
 ```
 
-### Multi-threaded processes
+### Multi-threaded processes {#multi-threaded-processes}
 
 If the forking process is multi-threaded, all threads share the same `mm_struct`. During fork:
 
@@ -337,7 +337,7 @@ If the forking process is multi-threaded, all threads share the same `mm_struct`
 
 This is one reason `fork()` in heavily multi-threaded processes can be slow.
 
-## Memory accounting after fork
+## Memory accounting after fork {#memory-accounting-after-fork}
 
 After fork, memory metrics can be confusing:
 
@@ -349,7 +349,7 @@ ps -o pid,vsz,rss,comm -p $PARENT_PID,$CHILD_PID
 # RSS: Initially same, diverges as COW happens
 ```
 
-### RSS (Resident Set Size)
+### RSS (Resident Set Size) {#rss-resident-set-size}
 
 RSS counts physical pages mapped to a process. After fork:
 
@@ -370,7 +370,7 @@ flowchart LR
     end
 ```
 
-### PSS (Proportional Set Size)
+### PSS (Proportional Set Size) {#pss-proportional-set-size}
 
 PSS divides shared pages among sharing processes:
 
@@ -391,7 +391,7 @@ flowchart LR
 cat /proc/$PID/smaps_rollup | grep Pss
 ```
 
-### Shared vs Private
+### Shared vs Private {#shared-vs-private}
 
 The `smaps` file distinguishes:
 
@@ -406,7 +406,7 @@ cat /proc/$PID/smaps | grep -E "^(Shared|Private)"
 
 After fork, most pages are `Shared_Clean`. As COW happens, they become `Private_Dirty` in the writing process.
 
-## exec() and COW cleanup
+## exec() and COW cleanup {#exec-and-cow-cleanup}
 
 The common pattern `fork() + exec()` is highly optimized:
 
@@ -437,7 +437,7 @@ flowchart LR
 
 This is why shells (which fork+exec constantly) are efficient despite creating many child processes.
 
-### vfork() optimization
+### vfork() optimization {#vfork-optimization}
 
 `vfork()` goes further - it doesn't even copy page tables:
 
@@ -452,9 +452,9 @@ if (pid == 0) {
 
 **Warning**: With `vfork()`, any memory modification in the child corrupts the parent. Only use if you `exec()` or `_exit()` immediately.
 
-## Special cases
+## Special cases {#special-cases}
 
-### VM_DONTFORK
+### VM_DONTFORK {#vm_dontfork}
 
 Some VMAs shouldn't be inherited:
 
@@ -467,7 +467,7 @@ madvise(buf, size, MADV_DONTFORK);
 
 The child simply won't have this mapping. Use for DMA buffers or security-sensitive regions.
 
-### VM_WIPEONFORK
+### VM_WIPEONFORK {#vm_wipeonfork}
 
 The mapping exists in the child but content is zeroed:
 
@@ -477,7 +477,7 @@ madvise(addr, len, MADV_WIPEONFORK);
 
 Added in kernel 4.14 ([commit d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)) for security-sensitive data (encryption keys, random state) that shouldn't leak to children.
 
-### Huge pages and fork
+### Huge pages and fork {#huge-pages-and-fork}
 
 Transparent Huge Pages (THP) have special COW handling:
 
@@ -486,9 +486,9 @@ Transparent Huge Pages (THP) have special COW handling:
 
 See the [THP documentation](thp.md) and [COW explainer](cow.md) for details.
 
-## Performance considerations
+## Performance considerations {#performance-considerations}
 
-### Fork latency
+### Fork latency {#fork-latency}
 
 Fork time scales with:
 
@@ -498,13 +498,13 @@ Fork time scales with:
 
 For a process with 1GB of mapped memory (256K pages), fork must walk and copy page table entries for all of them.
 
-### Reducing fork overhead
+### Reducing fork overhead {#reducing-fork-overhead}
 
 1. **Use `posix_spawn()` when possible**: Combines fork+exec more efficiently
 2. **Avoid huge address spaces before fork**: Unmapping reduces page table copying
 3. **Consider `vfork()` for fork+exec**: No page table copy, but dangerous
 
-### Measuring fork impact
+### Measuring fork impact {#measuring-fork-impact}
 
 ```bash
 # Time fork() operations
@@ -517,9 +517,9 @@ perf trace -e clone ./your_program
 perf stat -e page-faults ./your_program
 ```
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Watch COW in action
+### Watch COW in action {#watch-cow-in-action}
 
 ```bash
 cat > /tmp/cow_demo.c << 'EOF'
@@ -570,7 +570,7 @@ gcc -o /tmp/cow_demo /tmp/cow_demo.c
 /tmp/cow_demo
 ```
 
-### Monitor page sharing
+### Monitor page sharing {#monitor-page-sharing}
 
 ```bash
 # View shared vs private memory
@@ -588,7 +588,7 @@ cat /proc/$PID/smaps_rollup
 # Private_Dirty increases (copies made)
 ```
 
-### Trace fork system call
+### Trace fork system call {#trace-fork-system-call}
 
 ```bash
 # Trace fork with timing
@@ -598,7 +598,7 @@ strace -f -T -e clone,execve ./your_program
 # -T: show time spent in syscall
 ```
 
-### Count page table pages
+### Count page table pages {#count-page-table-pages}
 
 ```bash
 # Page table memory is in /proc/PID/status
@@ -608,7 +608,7 @@ grep -E "VmPTE|VmPMD" /proc/$PID/status
 # VmPMD: PMD-level page table memory
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -617,13 +617,13 @@ grep -E "VmPTE|VmPMD" /proc/$PID/status
 | [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | VMA duplication |
 | [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct, vm_area_struct |
 
-## History
+## History {#history}
 
-### Early COW
+### Early COW {#early-cow}
 
 Copy-on-write in Unix predates Linux. Linux inherited the technique from Unix tradition when Linus Torvalds wrote the initial implementation in 1991.
 
-### Per-VMA locks (v6.4, 2023)
+### Per-VMA locks (v6.4, 2023) {#per-vma-locks-v64-2023}
 
 **Commit**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) ("mm: add per-VMA lock and helper functions to control it") | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
 
@@ -631,7 +631,7 @@ Copy-on-write in Unix predates Linux. Linux inherited the technique from Unix tr
 
 COW page faults can now be handled with per-VMA locks instead of the global `mmap_lock`, significantly improving scalability for multi-threaded processes after fork.
 
-### COW under VMA lock (v6.4+, 2023)
+### COW under VMA lock (v6.4+, 2023) {#cow-under-vma-lock-v64-2023}
 
 **Commit**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9) ("mm: call wp_page_copy() under the VMA lock") | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
 
@@ -639,21 +639,21 @@ COW page faults can now be handled with per-VMA locks instead of the global `mma
 
 Part of ongoing work to handle COW faults without taking `mmap_lock`, improving concurrent page fault handling.
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 Fork and COW involve subtle race conditions between memory mapping, page table manipulation, and signal handling. These bugs have led to some of the most impactful Linux kernel vulnerabilities.
 
 ---
 
-### Case 1: Dirty COW (CVE-2016-5195)
+### Case 1: Dirty COW (CVE-2016-5195) {#case-1-dirty-cow-cve-2016-5195}
 
-#### What happened
+#### What happened {#what-happened}
 
 In October 2016, Phil Oester discovered a race condition in the kernel's COW handling that had existed since kernel 2.6.22 (July 2007) - **nine years** undetected.
 
 The vulnerability allowed an unprivileged local user to gain write access to read-only memory mappings, enabling privilege escalation to root.
 
-#### The bug
+#### The bug {#the-bug}
 
 The [official Dirty COW page](https://dirtycow.ninja/) explains the race condition occurs between two operations:
 
@@ -676,7 +676,7 @@ sequenceDiagram
     Note over K: Read-only page now modified!
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 The vulnerability was [actively exploited in the wild](https://www.redhat.com/en/blog/understanding-and-mitigating-dirty-cow-vulnerability). Attack scenarios included:
 
@@ -686,7 +686,7 @@ The vulnerability was [actively exploited in the wild](https://www.redhat.com/en
 
 [Red Hat's analysis](https://access.redhat.com/security/vulnerabilities/DirtyCow): *"Although it is a local privilege escalation, remote attackers can use it in conjunction with other exploits that allow remote execution of non-privileged code to achieve remote root access."*
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) ("mm: remove gup_flags FOLL_WRITE games from __get_user_pages()") | [LKML](https://lkml.org/lkml/2016/10/19/860)
 
@@ -696,7 +696,7 @@ Linus wrote: *"This is an ancient bug that was actually attempted to be fixed on
 
 The fix removed the `FOLL_WRITE` flag manipulation that created the race window.
 
-#### Why it went undetected
+#### Why it went undetected {#why-it-went-undetected}
 
 The bug was subtle:
 
@@ -704,19 +704,19 @@ The bug was subtle:
 - Only affected private mappings of read-only files
 - Normal testing wouldn't trigger the race
 
-#### Legacy
+#### Legacy {#legacy}
 
 Dirty COW spawned research into similar races. The name comes from "Dirty" (the write operation) + "COW" (Copy-On-Write). It earned its own logo, website, and became a textbook example of race condition vulnerabilities.
 
 ---
 
-### Case 2: StackRot (CVE-2023-3269)
+### Case 2: StackRot (CVE-2023-3269) {#case-2-stackrot-cve-2023-3269}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 In June 2023, Ruihan Li (Peking University) discovered a use-after-free vulnerability in the maple tree - the new data structure that replaced red-black trees for VMA management in kernel 6.1.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 The [StackRot disclosure](https://github.com/lrh2000/StackRot) explains:
 
@@ -734,7 +734,7 @@ flowchart TD
     F --> G["USE-AFTER-FREE!"]
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 From the [oss-security disclosure](https://www.openwall.com/lists/oss-security/2023/07/05/1):
 
@@ -742,25 +742,25 @@ From the [oss-security disclosure](https://www.openwall.com/lists/oss-security/2
 
 The vulnerability affected kernels 6.1 through 6.4 - any system using maple trees for VMA management.
 
-#### The fix
+#### The fix {#the-fix_1}
 
 Linus merged the fix on June 28, 2023 during the 6.5 merge window, with backports to 6.1.37, 6.3.11, and 6.4.1.
 
 Linus provided [a detailed merge message](https://github.com/lrh2000/StackRot) explaining the technical approach: ensuring proper locking when modifying maple tree nodes that might be accessed under RCU.
 
-#### Why this matters for fork
+#### Why this matters for fork {#why-this-matters-for-fork}
 
 Fork duplicates VMAs and their maple tree representation. The maple tree's complexity (compared to the simpler red-black tree it replaced) introduced this subtle race. It's a reminder that data structure changes in MM code require extremely careful concurrency analysis.
 
 ---
 
-### Case 3: The mremap() disaster (CVE-2004-0077)
+### Case 3: The mremap() disaster (CVE-2004-0077) {#case-3-the-mremap-disaster-cve-2004-0077}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 In February 2004, Paul Starzetz discovered a critical vulnerability in `mremap()` - the system call that moves or resizes memory mappings.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 From the [ISEC advisory](https://isec.pl/en/vulnerabilities/isec-0014-mremap-unmap.txt):
 
@@ -772,29 +772,29 @@ The kernel failed to properly validate arguments to `mremap()`. By crafting spec
 2. Hijack another process's virtual memory segment
 3. If that segment ran with elevated privileges, gain those privileges
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 Any local user could escalate to root. The vulnerability was trivially exploitable with public proof-of-concept code.
 
 From the advisory: *"No special privileges are required to use the mremap(2) system call, thus any process may misuse its unexpected behavior to disrupt the kernel memory management subsystem."*
 
-#### The fix
+#### The fix {#the-fix_2}
 
 Multiple patches were required across kernel versions 2.4.x and 2.6.x. The fix added proper bounds checking in the mremap path.
 
-#### Legacy
+#### Legacy {#legacy_1}
 
 This bug highlighted the danger of complex MM system calls. It led to increased scrutiny of mmap/mremap/mprotect code paths and inspired research into MM syscall fuzzing.
 
 ---
 
-### Case 4: TLB flush races in mremap (CVE-2018-18281)
+### Case 4: TLB flush races in mremap (CVE-2018-18281) {#case-4-tlb-flush-races-in-mremap-cve-2018-18281}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 In 2018, Jann Horn (Google Project Zero) found a TLB (Translation Lookaside Buffer) race in `mremap()`.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 From the [oss-security disclosure](https://www.openwall.com/lists/oss-security/2018/10/10/5) by Jann Horn:
 
@@ -804,11 +804,11 @@ When `mremap()` moves a mapping, it must:
 
 If the TLB flush is incomplete or races with concurrent access, a CPU might use stale translations, accessing the wrong physical page.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_3}
 
 An attacker could potentially read or write memory belonging to other processes, bypassing isolation.
 
-#### The fix
+#### The fix {#the-fix_3}
 
 **Commit**: [eb66ae030829](https://git.kernel.org/linus/eb66ae030829) ("mremap: properly flush TLB before releasing the page")
 
@@ -818,9 +818,9 @@ The fix ensures TLB flushes happen before releasing both source and destination 
 
 ---
 
-### Case 5: fork() and userfaultfd races
+### Case 5: fork() and userfaultfd races {#case-5-fork-and-userfaultfd-races}
 
-#### The pattern
+#### The pattern {#the-pattern}
 
 `userfaultfd` allows userspace to handle page faults. This is extremely useful for:
 
@@ -830,7 +830,7 @@ The fix ensures TLB flushes happen before releasing both source and destination 
 
 But it's also a powerful primitive for exploiting race conditions. By handling page faults in userspace, an attacker can **pause kernel execution** at precise moments.
 
-#### Exploitation technique
+#### Exploitation technique {#exploitation-technique}
 
 From [CVE-2019-18683 analysis](https://a13xp0p0v.github.io/2020/02/15/CVE-2019-18683.html):
 
@@ -843,7 +843,7 @@ From [CVE-2019-18683 analysis](https://a13xp0p0v.github.io/2020/02/15/CVE-2019-1
 
 This technique has been used in many kernel exploits, including Dirty COW variants.
 
-#### Mitigation
+#### Mitigation {#mitigation}
 
 Since kernel 5.2, `/proc/sys/vm/unprivileged_userfaultfd` can restrict userfaultfd to privileged users:
 
@@ -856,7 +856,7 @@ Many distributions now default to `0`.
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Root Cause | Impact | Prevention |
 |-----|------|------------|--------|------------|
@@ -868,15 +868,15 @@ Many distributions now default to `0`.
 
 The common thread: **fork and COW involve complex state shared between processes**. Any race condition in this code has severe security implications because it can break process isolation.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Copy-on-Write](cow.md) - Deep dive into COW mechanics and edge cases
 - [Process address space](mmap.md) - VMA structure and management
 - [Virtual vs Physical vs Resident](virtual-physical-resident.md) - Understanding memory metrics
 
-### External resources
+### External resources {#external-resources}
 
 - [LWN: The price of fork()](https://lwn.net/Articles/820258/) (2020) - Performance analysis of fork in modern systems
 - [Dirty COW vulnerability page](https://dirtycow.ninja/) - Original disclosure and technical details

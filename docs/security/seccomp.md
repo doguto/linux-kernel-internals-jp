@@ -1,8 +1,8 @@
-# seccomp BPF
+# seccomp BPF {#seccomp-bpf}
 
 > Syscall filtering for privilege reduction and attack surface minimization
 
-## What seccomp does
+## What seccomp does {#what-seccomp-does}
 
 seccomp (secure computing mode) installs a BPF program that runs on every syscall entry. The filter can:
 
@@ -26,19 +26,19 @@ Process → syscall instruction
  kernel handles syscall
 ```
 
-## From strict mode to seccomp-BPF
+## From strict mode to seccomp-BPF {#from-strict-mode-to-seccomp-bpf}
 
-### The original seccomp (Linux 2.6.12, 2005)
+### The original seccomp (Linux 2.6.12, 2005) {#the-original-seccomp-linux-2612-2005}
 
 Andrea Arcangeli introduced seccomp — [`d949d0ec9c60`](https://git.kernel.org/linus/d949d0ec9c601f2b148bed3cdb5f87c052968554) — to address a specific threat: untrusted code running in a computational sandbox (e.g., a commercial "safe browsing" or grid computing service). The design was maximally restrictive: once a process called `prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT)`, it could only use four syscalls: `read`, `write`, `exit`, and `sigreturn`. Any other syscall killed it with SIGKILL.
 
 This was safe but completely unusable for real applications. An application that needs to open files, allocate memory, or interact with the network couldn't use strict mode at all.
 
-### Why the kernel couldn't do more (without BPF)
+### Why the kernel couldn't do more (without BPF) {#why-the-kernel-couldnt-do-more-without-bpf}
 
 The limitation was policy expression. "Allow only `read` and `write`" is simple. "Allow `read` and `write` on file descriptors that were open before sandbox entry, but not `open`" is stateful and complex. "Allow `mmap` with `PROT_READ` but not `PROT_WRITE|PROT_EXEC`" requires inspecting arguments. Encoding all possible policies in the kernel would have required a domain-specific language — exactly what BPF is.
 
-### seccomp-BPF (Linux 3.5, 2012)
+### seccomp-BPF (Linux 3.5, 2012) {#seccomp-bpf-linux-35-2012}
 
 Will Drewry (Google Chrome team) wrote the seccomp-BPF extension — [`e2cfabdfd075`](https://git.kernel.org/linus/e2cfabdfd075648216f99c2c03821cf3f47c1727), [LWN](https://lwn.net/Articles/475043/) — driven by Chrome's sandbox requirements. Chrome needed to isolate its renderer process from the kernel — allow only the syscalls the renderer legitimately needs, with argument filtering to prevent abuse even of allowed syscalls.
 
@@ -48,7 +48,7 @@ Instead of building a new policy language, seccomp-BPF reused cBPF as-is. The ke
 
 Chrome shipped with seccomp-BPF in Chrome 23 (2012), becoming the first major application to sandbox itself this way. systemd, Docker, Firefox, and Android all adopted seccomp-BPF filters. The `SECCOMP_RET_USER_NOTIF` extension (Linux 5.0, 2019 — [`6a21cc50f0c7`](https://git.kernel.org/linus/6a21cc50f0c7f87dae5259f6cfefe024412313f6) by Tycho Andersen) allowed supervisors to intercept and handle syscalls on behalf of sandboxed processes, enabling user-namespace container emulation without root.
 
-## Classic (strict) mode
+## Classic (strict) mode {#classic-strict-mode}
 
 Before BPF filters, seccomp offered only one mode:
 
@@ -58,7 +58,7 @@ prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT);
 /* Any other syscall → SIGKILL */
 ```
 
-## BPF filter mode
+## BPF filter mode {#bpf-filter-mode}
 
 The full seccomp uses Classic BPF programs operating on `struct seccomp_data`:
 
@@ -72,7 +72,7 @@ struct seccomp_data {
 };
 ```
 
-### Filter return values
+### Filter return values {#filter-return-values}
 
 ```c
 SECCOMP_RET_KILL_PROCESS  /* kill entire process with SIGSYS (most severe) */
@@ -87,7 +87,7 @@ SECCOMP_RET_ALLOW         /* allow (most permissive) */
 
 Return value precedence (lowest wins): KILL > TRAP > ERRNO > USER_NOTIF > TRACE > LOG > ALLOW.
 
-### Raw BPF filter example
+### Raw BPF filter example {#raw-bpf-filter-example}
 
 ```c
 #include <sys/prctl.h>
@@ -144,7 +144,7 @@ static int install_filter(void)
 }
 ```
 
-### libseccomp: high-level API
+### libseccomp: high-level API {#libseccomp-high-level-api}
 
 Raw BPF is error-prone. Use `libseccomp` instead:
 
@@ -176,7 +176,7 @@ seccomp_release(ctx);
 gcc -o myapp myapp.c -lseccomp
 ```
 
-## Container use: Docker's default profile
+## Container use: Docker's default profile {#container-use-dockers-default-profile}
 
 Docker installs a seccomp profile blocking ~40 dangerous syscalls:
 
@@ -204,7 +204,7 @@ The default Docker profile blocks (among others):
 - `syslog` — read kernel ring buffer
 - `uselib` — old library loading
 
-## SECCOMP_RET_USER_NOTIF: supervisor pattern
+## SECCOMP_RET_USER_NOTIF: supervisor pattern {#seccompretuser_notif-supervisor-pattern}
 
 Since Linux 5.0, a filter can defer decisions to a supervisor process. This enables:
 
@@ -236,7 +236,7 @@ while (1) {
 
 This is how rootless container runtimes (Podman, nerdctl) allow containers to perform privileged operations like `mount` — the supervisor intercepts and handles them safely.
 
-## Kernel seccomp implementation
+## Kernel seccomp implementation {#kernel-seccomp-implementation}
 
 ```c
 /* kernel/seccomp.c: in syscall entry path */
@@ -269,7 +269,7 @@ static int __seccomp_filter(u32 this_syscall, const struct seccomp_data *sd,
 }
 ```
 
-## Auditing seccomp actions
+## Auditing seccomp actions {#auditing-seccomp-actions}
 
 ```bash
 # Check process's current seccomp mode
@@ -285,7 +285,7 @@ ausearch -m SECCOMP | head -20
 strace -e seccomp ./myprogram
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LSM Framework](lsm.md) — MAC policies that run after seccomp (in individual syscall implementations)
 - [Capabilities](capabilities.md) — Privilege reduction before seccomp

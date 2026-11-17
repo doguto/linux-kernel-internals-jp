@@ -1,8 +1,8 @@
-# libbpf and BPF Skeletons
+# libbpf and BPF Skeletons {#libbpf-and-bpf-skeletons}
 
 > The standard userspace library for loading and interacting with BPF programs
 
-## What libbpf does
+## What libbpf does {#what-libbpf-does}
 
 libbpf is the official userspace library for BPF (`tools/lib/bpf/` in the kernel tree), originally introduced in Linux 4.3 by Wang Nan. [(commit)](https://git.kernel.org/linus/1b76c13e4b36f978ea45af079f38ad423a229630) It handles:
 
@@ -13,7 +13,7 @@ libbpf is the official userspace library for BPF (`tools/lib/bpf/` in the kernel
 - Map access from userspace
 - Ring buffer and perf buffer polling
 
-## The BPF skeleton workflow
+## The BPF skeleton workflow {#the-bpf-skeleton-workflow}
 
 The recommended modern approach uses **BPF skeletons** — generated C structs that wrap a specific BPF program, providing type-safe access to its maps and programs:
 
@@ -42,9 +42,9 @@ The recommended modern approach uses **BPF skeletons** — generated C structs t
                  └──────────────────────────────────────┘
 ```
 
-## Complete minimal example
+## Complete minimal example {#complete-minimal-example}
 
-### BPF side: `minimal.bpf.c`
+### BPF side: `minimal.bpf.c` {#bpf-side-minimalbpfc}
 
 ```c
 // SPDX-License-Identifier: GPL-2.0
@@ -84,7 +84,7 @@ int count_syscall(struct trace_event_raw_sys_enter *ctx)
 }
 ```
 
-### Generate the skeleton
+### Generate the skeleton {#generate-the-skeleton}
 
 ```bash
 # Compile BPF program
@@ -129,7 +129,7 @@ static inline int minimal_bpf__attach(struct minimal_bpf *obj);
 static inline void minimal_bpf__destroy(struct minimal_bpf *obj);
 ```
 
-### Userspace side: `minimal.c`
+### Userspace side: `minimal.c` {#userspace-side-minimalc}
 
 ```c
 #include <stdio.h>
@@ -205,7 +205,7 @@ gcc -o minimal minimal.c -lbpf -lelf -lz
 sudo ./minimal
 ```
 
-## Ring buffer polling
+## Ring buffer polling {#ring-buffer-polling}
 
 For event-driven programs using `BPF_MAP_TYPE_RINGBUF`:
 
@@ -252,7 +252,7 @@ int main(void)
 }
 ```
 
-## libbpf core objects
+## libbpf core objects {#libbpf-core-objects}
 
 ```c
 /* Object: represents a .bpf.o file */
@@ -280,7 +280,7 @@ int fd = bpf_map__fd(map);
 bpf_map__set_max_entries(map, 65536);
 ```
 
-## Manual program attachment
+## Manual program attachment {#manual-program-attachment}
 
 For program types that need explicit setup:
 
@@ -312,7 +312,7 @@ struct bpf_link *link = bpf_program__attach_uprobe(prog,
 struct bpf_link *link = bpf_program__attach_cgroup(prog, cgroup_fd);
 ```
 
-## Error handling and logging
+## Error handling and logging {#error-handling-and-logging}
 
 ```c
 /* Set up libbpf logging */
@@ -334,7 +334,7 @@ if (!skel) {
 }
 ```
 
-## BPF object lifecycle with skeleton
+## BPF object lifecycle with skeleton {#bpf-object-lifecycle-with-skeleton}
 
 ```
 open()           parse ELF sections, create bpf_object
@@ -359,7 +359,7 @@ destroy()        detach all links
                  free bpf_object
 ```
 
-## Useful bpftool commands
+## Useful bpftool commands {#useful-bpftool-commands}
 
 ```bash
 # Inspect loaded programs
@@ -386,7 +386,7 @@ bpftool gen skeleton prog.bpf.o > prog.skel.h
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Architecture](bpf-overview.md) — Program types and the bpf() syscall
 - [BPF Maps](bpf-maps.md) — Map types and operations

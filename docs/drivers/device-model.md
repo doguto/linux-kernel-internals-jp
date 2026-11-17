@@ -1,8 +1,8 @@
-# Linux Device Model
+# Linux Device Model {#linux-device-model}
 
 > The object-oriented framework that organizes all kernel devices
 
-## Why the device model exists
+## Why the device model exists {#why-the-device-model-exists}
 
 Before 2.6, each bus subsystem (PCI, USB, SCSI) independently managed power, hotplug, and sysfs. The device model (introduced in 2.5 by Patrick Mochel [(LWN)](https://lwn.net/Articles/31185/)) unified this into a single framework:
 
@@ -11,7 +11,7 @@ Before 2.6, each bus subsystem (PCI, USB, SCSI) independently managed power, hot
 - **sysfs**: every device and driver automatically appears in `/sys/` (sysfs was written by Patrick Mochel during the 2.5 cycle and shipped with Linux 2.6.0 [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html))
 - **Reference counting**: devices live exactly as long as they're needed
 
-## kobject: the base object
+## kobject: the base object {#kobject-the-base-object}
 
 Every kernel object that appears in sysfs has a `kobject`:
 
@@ -39,7 +39,7 @@ kobject_get(kobj);    /* increment refcount */
 kobject_put(kobj);    /* decrement; calls ktype->release() when zero */
 ```
 
-## struct device: the universal device
+## struct device: the universal device {#struct-device-the-universal-device}
 
 ```c
 /* include/linux/device.h */
@@ -87,7 +87,7 @@ dev_set_drvdata(dev, data);      /* store driver-private pointer */
 dev_get_drvdata(dev);            /* retrieve it */
 ```
 
-## struct bus_type: the bus abstraction
+## struct bus_type: the bus abstraction {#struct-bus_type-the-bus-abstraction}
 
 ```c
 struct bus_type {
@@ -137,7 +137,7 @@ bus_for_each_dev(bus, start, data, fn);
 bus_for_each_drv(bus, start, data, fn);
 ```
 
-## struct device_driver
+## struct device_driver {#struct-device_driver}
 
 ```c
 struct device_driver {
@@ -168,7 +168,7 @@ struct device_driver {
 };
 ```
 
-## The match and probe flow
+## The match and probe flow {#the-match-and-probe-flow}
 
 When a device is registered (or a driver is registered), the bus iterates all drivers (or devices) calling `bus->match()`. On a match, `driver_probe_device()` is called:
 
@@ -206,7 +206,7 @@ static int driver_probe_device(struct device_driver *drv, struct device *dev)
 }
 ```
 
-## sysfs attributes
+## sysfs attributes {#sysfs-attributes}
 
 Drivers and devices expose attributes (files) in sysfs:
 
@@ -259,7 +259,7 @@ cat /sys/bus/platform/devices/mydev.0/temperature
 echo 50 > /sys/bus/platform/devices/mydev.0/setpoint
 ```
 
-## uevent: hotplug notification
+## uevent: hotplug notification {#uevent-hotplug-notification}
 
 When devices are added/removed, the kernel sends uevents to userspace (received by `udevd`/`systemd-udevd`):
 
@@ -280,7 +280,7 @@ udevadm monitor --kernel --udev
 
 The kernel's `kobject_uevent()` sends netlink messages; udevd receives them and runs rules.
 
-## Power management: dev_pm_ops
+## Power management: dev_pm_ops {#power-management-devpmops}
 
 ```c
 static const struct dev_pm_ops my_pm_ops = {
@@ -316,7 +316,7 @@ pm_runtime_get_sync(dev);   /* increment usage count, resume if suspended */
 pm_runtime_put_autosuspend(dev);  /* decrement, autosuspend timer starts */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Platform Drivers](platform-driver.md) — The most common embedded driver pattern
 - [Character and Misc Devices](chardev.md) — Exposing devices to userspace via /dev

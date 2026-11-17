@@ -1,8 +1,8 @@
-# Kernel Boot Parameters
+# Kernel Boot Parameters {#kernel-boot-parameters}
 
 > Command-line parsing, `__setup` macros, and `early_param`
 
-## How the kernel receives its command line
+## How the kernel receives its command line {#how-the-kernel-receives-its-command-line}
 
 The kernel's command line originates with the bootloader. GRUB, for example, places the command string in the boot protocol's `boot_params.hdr.cmd_line_ptr` field (a physical address). The arch setup code (`setup_arch()`) copies this into the kernel's address space early in boot.
 
@@ -24,17 +24,17 @@ cat /proc/cmdline
 
 ---
 
-## Parsing stages
+## Parsing stages {#parsing-stages}
 
 The kernel parses the command line in three distinct phases. The phase determines which parameters are visible and when.
 
-### Phase 1: `parse_early_param()` — very early
+### Phase 1: `parse_early_param()` — very early {#phase-1-parseearlyparam-very-early}
 
 Called from `start_kernel()` before memory allocators are initialized. This phase handles parameters that must be known before the rest of boot can proceed — for example, the amount of usable RAM or which console to use.
 
 Parameters registered with `early_param()` are processed here.
 
-### Phase 2: `parse_args()` — main kernel init
+### Phase 2: `parse_args()` — main kernel init {#phase-2-parse_args-main-kernel-init}
 
 Called from `start_kernel()` after `setup_arch()` and the per-CPU areas are set up. Each token is checked, in order: first against the **built-in module parameters** (`module.param=value` form), then — only on a miss — against `__setup()` handlers (see [`parse_args()` internals](#parse_args-internals) below for exactly how).
 
@@ -43,13 +43,13 @@ Anything not matched by either is treated as either:
 - An environment variable to pass to the init process
 - An unknown parameter (logged via `pr_notice()`, not a warning)
 
-### Phase 3: module parameters — at module load time
+### Phase 3: module parameters — at module load time {#phase-3-module-parameters-at-module-load-time}
 
 For loadable modules, parameters passed on the `insmod`/`modprobe` command line are parsed when the module is loaded, via `kernel/params.c`. For built-in modules, these appear as `module.param=value` on the kernel command line and are handled during Phase 2.
 
 ---
 
-## `early_param()` macro
+## `early_param()` macro {#early_param-macro}
 
 ```c
 /* include/linux/init.h */
@@ -59,7 +59,7 @@ For loadable modules, parameters passed on the `insmod`/`modprobe` command line 
 
 The `1` marks this as an early parameter. `parse_early_param()` doesn't filter inside `parse_args()` itself — it calls `parse_args()` with an empty parameter array and `do_early_param()` as the `unknown` callback, and `do_early_param()` is what scans `.init.setup` and skips every entry whose `early` flag isn't set (see [`parse_args()` internals](#parse_args-internals) below).
 
-### Example: `mem=` handler
+### Example: `mem=` handler {#example-mem-handler}
 
 ```c
 /* arch/x86/kernel/e820.c */
@@ -90,7 +90,7 @@ Common parameters handled by `early_param()`:
 
 ---
 
-## `__setup()` macro
+## `__setup()` macro {#__setup-macro}
 
 ```c
 /* include/linux/init.h */
@@ -118,7 +118,7 @@ struct obs_kernel_param {
 
 The linker collects all `.init.setup` entries into a contiguous array between `__setup_start` and `__setup_end`. `parse_args()` never iterates this array itself — it's walked by the `unknown` callbacks (`do_early_param()` in Phase 1, `obsolete_checksetup()` in Phase 2), which call the matching `setup_func` when they find an entry whose `str` matches (see [`parse_args()` internals](#parse_args-internals) below for the full picture).
 
-### Writing a `__setup()` handler
+### Writing a `__setup()` handler {#writing-a-__setup-handler}
 
 ```c
 static int __init myopt_setup(char *str)
@@ -139,7 +139,7 @@ __setup("myopt=", myopt_setup);
 
 The handler receives a pointer to the value portion of the parameter (everything after `myopt=`). Return `1` if the parameter was recognized and handled, `0` if not (which allows other handlers to try it). The setup string can include the `=` to require a value, or omit it for a bare flag.
 
-### Boolean flag example
+### Boolean flag example {#boolean-flag-example}
 
 ```c
 static bool myfeature_enabled __initdata = false;
@@ -154,7 +154,7 @@ __setup("myfeature", myfeature_setup);
 
 ---
 
-## `parse_args()` internals
+## `parse_args()` internals {#parse_args-internals}
 
 `parse_args()` (`kernel/params.c`) is generic — it doesn't know about `.init.setup` at all. For each
 whitespace-separated token, split on the first `=`, it calls `parse_one()`, which:
@@ -208,7 +208,7 @@ a genuinely unknown/init-environment token if both scans miss.
 
 ---
 
-## Module parameters for built-in modules
+## Module parameters for built-in modules {#module-parameters-for-built-in-modules}
 
 A module built into the kernel (via `y` in Kconfig rather than `m`) still exposes parameters, but they are parsed from the kernel command line instead of the `insmod` command line:
 
@@ -228,7 +228,7 @@ The module name prefix (`rcutree`) is derived from the source file's compiled mo
 
 (A parameter that genuinely looks like this — a plain `module_param()` a reader could set via `net_core.netdev_budget=` — used to exist for network polling: `net/core/dev.c`'s `netdev_budget`. It's since migrated to a **sysctl**, `net.core.netdev_budget`, and no longer appears as a command-line-settable `module_param()` or under `/sys/module/` at all.)
 
-### Accessing from sysfs
+### Accessing from sysfs {#accessing-from-sysfs}
 
 Module parameters for loaded modules (or built-ins with `0644` permissions) are exposed under `/sys/module/`:
 
@@ -241,7 +241,7 @@ Parameters marked `0444` (like `qhimark` above) are read-only after boot — the
 
 ---
 
-## Important kernel parameters
+## Important kernel parameters {#important-kernel-parameters}
 
 These are parameters whose handlers are worth understanding at a source level:
 
@@ -263,7 +263,7 @@ These are parameters whose handlers are worth understanding at a source level:
 
 `core_param()` (`include/linux/moduleparam.h`) isn't a third parsing mechanism alongside `__setup()`/`early_param()` — it's `module_param()`'s own registration primitive, `__module_param_call()`, called with an empty module-name prefix (`""`) instead of the file's real module name. That's why `panic=10` works unprefixed on the command line instead of needing something like `kernel.panic=10`: it lands in the very same built-in-module-parameter array (`__start___param`..`__stop___param`) that ordinary `module_param()` calls populate, just without a dotted prefix in front of it.
 
-### Selecting an init binary
+### Selecting an init binary {#selecting-an-init-binary}
 
 ```
 init=/bin/sh          # drop to a root shell (recovery)
@@ -272,14 +272,14 @@ init=/lib/systemd/systemd  # explicit systemd (usually the default)
 rdinit=/bin/sh        # shell in initramfs (before pivot_root)
 ```
 
-### Limiting CPUs
+### Limiting CPUs {#limiting-cpus}
 
 ```
 maxcpus=1    # boot as if uniprocessor (secondary CPUs parked)
 nosmp        # equivalent; disables SMP entirely
 ```
 
-### KASLR control
+### KASLR control {#kaslr-control}
 
 ```
 nokaslr      # disable kernel address space layout randomization
@@ -288,7 +288,7 @@ nokaslr      # disable kernel address space layout randomization
 
 ---
 
-## Inspecting parameters from kernel code
+## Inspecting parameters from kernel code {#inspecting-parameters-from-kernel-code}
 
 ```c
 #include <linux/init.h>
@@ -320,9 +320,9 @@ For production code, prefer `early_param()` or `__setup()` over manual string se
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — `early_param()`, `__setup()`, `__setup_param()` macros and `struct obs_kernel_param`
 - [kernel/params.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/params.c) — `parse_args()` and `parse_one()`: the token-splitting loop and per-token dispatch
@@ -336,15 +336,15 @@ For production code, prefer `early_param()` or `__setup()` over manual string se
 - [kernel/crash_reserve.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_reserve.c) — `parse_crashkernel_dummy()` (the registered `early_param` entry point) and `parse_crashkernel()`
 - [kernel/rcu/tree.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/rcu/tree.c) — `qhimark`/`module_param(qhimark, ...)`: the built-in module-parameter worked example on this page
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`proc_cmdline(5)`](https://man7.org/linux/man-pages/man5/proc_cmdline.5.html) — documents `/proc/cmdline`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Early Boot and start_kernel()](early-boot.md) — when each parsing phase runs
 - [Module Init and Initcalls](initcalls-modules.md) — `module_param()` in loadable modules
 
-### External
+### External {#external}
 
 - [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — the canonical, generated list of every parameter recognized by `__setup()`, `early_param()`, `core_param()`, and `module_param()`

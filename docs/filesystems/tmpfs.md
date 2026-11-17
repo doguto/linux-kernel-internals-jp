@@ -1,8 +1,8 @@
-# tmpfs and ramfs
+# tmpfs and ramfs {#tmpfs-and-ramfs}
 
 > Memory-backed filesystems with no persistent storage
 
-## What tmpfs is
+## What tmpfs is {#what-tmpfs-is}
 
 tmpfs is a filesystem that lives entirely in RAM (and optionally swap). It's backed by the page cache — each file's data is anonymous memory, evictable to swap under memory pressure [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html). The current implementation was created by Christoph Rohland around 2001, replacing the older shm filesystem.
 
@@ -18,7 +18,7 @@ mount -t tmpfs -o size=512m tmpfs /mnt/mytmpfs
 # /var/cache — build caches
 ```
 
-## tmpfs vs ramfs
+## tmpfs vs ramfs {#tmpfs-vs-ramfs}
 
 | | tmpfs | ramfs |
 |---|-------|-------|
@@ -29,7 +29,7 @@ mount -t tmpfs -o size=512m tmpfs /mnt/mytmpfs
 | shmem backed | Yes | No |
 | Use case | /tmp, /run, shm | embedded with no swap |
 
-## tmpfs implementation
+## tmpfs implementation {#tmpfs-implementation}
 
 tmpfs is built on top of `shmem` (shared memory) subsystem:
 
@@ -43,7 +43,7 @@ static const struct file_system_type shmem_fs_type = {
 };
 ```
 
-### shmem inode
+### shmem inode {#shmem-inode}
 
 ```c
 struct shmem_inode_info {
@@ -62,7 +62,7 @@ struct shmem_inode_info {
 };
 ```
 
-### Page fault path for tmpfs
+### Page fault path for tmpfs {#page-fault-path-for-tmpfs}
 
 When a process reads from a tmpfs file and the page isn't in memory:
 
@@ -80,7 +80,7 @@ shmem_get_folio(inode, index, ...)
 
 For pages that were swapped out, `shmem_fault` reads them back from swap before returning. This is transparent to the application.
 
-### Size limits
+### Size limits {#size-limits}
 
 ```bash
 # Default: half of RAM
@@ -102,7 +102,7 @@ cat /proc/meminfo | grep -E "Shmem|Swap"
 # Shmem:           524288 kB  ← total tmpfs usage
 ```
 
-### NUMA policy
+### NUMA policy {#numa-policy}
 
 ```bash
 # Mount with preferred NUMA node
@@ -115,7 +115,7 @@ mount -t tmpfs -o mpol=interleave tmpfs /tmp
 mount -t tmpfs -o mpol=bind:0-1 tmpfs /tmp
 ```
 
-## devtmpfs: /dev filesystem
+## devtmpfs: /dev filesystem {#devtmpfs-dev-filesystem}
 
 devtmpfs is a special tmpfs populated by the kernel with device nodes before udev runs:
 
@@ -130,7 +130,7 @@ ls -la /dev/sda /dev/null /dev/tty
 # crw-rw-rw- root tty   5, 0  /dev/tty
 ```
 
-## tmpfs and Linux's /proc, /sys
+## tmpfs and Linux's /proc, /sys {#tmpfs-and-linuxs-proc-sys}
 
 Both `/proc` and `/sys` are special pseudo-filesystems built on the same infrastructure:
 
@@ -154,7 +154,7 @@ static struct file_system_type sysfs_fs_type = {
 
 These filesystems don't use backing storage — reads synthesize data from kernel data structures; writes trigger kernel operations.
 
-## Volatile mounts: tmpfs in container use
+## Volatile mounts: tmpfs in container use {#volatile-mounts-tmpfs-in-container-use}
 
 Containers use tmpfs for writable layers and ephemeral storage:
 
@@ -166,7 +166,7 @@ docker run --tmpfs /tmp:size=512m,mode=1777 ubuntu bash
 # Creates a tmpfs mount for the pod's ephemeral volume
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ext4](ext4.md) — Persistent alternative
 - [btrfs](btrfs.md) — CoW persistent alternative

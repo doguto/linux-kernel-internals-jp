@@ -1,8 +1,8 @@
-# Life of a malloc
+# Life of a malloc {#life-of-a-malloc}
 
 > Tracing a userspace memory allocation from `malloc()` to physical pages
 
-## What happens when you call malloc?
+## What happens when you call malloc? {#what-happens-when-you-call-malloc}
 
 When a program calls `malloc(1024)`, what actually happens? The answer involves multiple layers of software, each optimizing for different goals:
 
@@ -49,9 +49,9 @@ flowchart TD
 
 The key insight: **malloc doesn't allocate physical memory**. It reserves virtual address space. Physical pages are allocated later, on first access, through demand paging.
 
-## Stage 1: Userspace (glibc)
+## Stage 1: Userspace (glibc) {#stage-1-userspace-glibc}
 
-### The allocator's job
+### The allocator's job {#the-allocators-job}
 
 `malloc()` is a library function, not a system call. glibc implements it using [ptmalloc (derived from dlmalloc)](https://sourceware.org/glibc/manual/latest/html_node/The-GNU-Allocator.html). The allocator has one goal: satisfy memory requests without calling into the kernel more than necessary.
 
@@ -71,7 +71,7 @@ For each allocation, ptmalloc2 checks:
 
 5. **System call**: Only when all else fails does glibc ask the kernel for more memory.
 
-### When glibc calls the kernel
+### When glibc calls the kernel {#when-glibc-calls-the-kernel}
 
 glibc uses two system calls to get memory from the kernel:
 
@@ -89,9 +89,9 @@ The threshold is [adaptive](https://man7.org/linux/man-pages/man3/mallopt.3.html
 
 See [brk vs mmap](brk-vs-mmap.md) for the full trade-off analysis.
 
-## Stage 2: Kernel entry
+## Stage 2: Kernel entry {#stage-2-kernel-entry}
 
-### The brk() path
+### The brk() path {#the-brk-path}
 
 When glibc calls `brk()`, it's asking the kernel to move the program break - the end of the heap:
 
@@ -122,7 +122,7 @@ SYSCALL_DEFINE1(brk, unsigned long, brk)
 
 The kernel updates the process's `mm_struct` to extend the heap VMA. No physical memory is allocated yet - just the virtual address range is reserved.
 
-### The mmap() path
+### The mmap() path {#the-mmap-path}
 
 For larger allocations, glibc uses `mmap()` with `MAP_ANONYMOUS`:
 
@@ -142,7 +142,7 @@ SYSCALL_DEFINE6(mmap, ...)
 
 Again, no physical memory yet. The kernel creates a VMA describing the mapping and returns. No page table entries exist yet - they'll be created lazily on first access.
 
-## Stage 3: VMA creation
+## Stage 3: VMA creation {#stage-3-vma-creation}
 
 Both `brk()` and `mmap()` result in VMA (Virtual Memory Area) creation or modification.
 
@@ -180,7 +180,7 @@ The new VMA is added to the process's maple tree (or red-black tree in kernels b
 
 **Key point**: When `malloc()` returns, you have a valid pointer, but no physical memory backs it. The page table entries for this region don't exist yet - they're created on first access when the CPU faults.
 
-## Stage 4: Page fault
+## Stage 4: Page fault {#stage-4-page-fault}
 
 Physical memory is allocated on first access. When the program reads or writes the malloc'd memory:
 
@@ -206,7 +206,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 }
 ```
 
-### Anonymous page allocation
+### Anonymous page allocation {#anonymous-page-allocation}
 
 For anonymous memory (heap, stack), [`do_anonymous_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) runs:
 
@@ -239,7 +239,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 
 This is where physical memory finally gets allocated.
 
-## Stage 5: Page allocator
+## Stage 5: Page allocator {#stage-5-page-allocator}
 
 The `vma_alloc_zeroed_movable_folio()` call ultimately reaches the buddy allocator:
 
@@ -268,7 +268,7 @@ struct page *__alloc_pages(gfp_t gfp, unsigned int order, int nid, nodemask_t *n
 }
 ```
 
-### Fast path
+### Fast path {#fast-path}
 
 Most allocations succeed immediately from per-CPU page lists or zone free lists:
 
@@ -291,7 +291,7 @@ flowchart TD
 
 For a single-page allocation (typical for page faults), the kernel checks the per-CPU list first. This requires no locking and is very fast.
 
-### Slow path
+### Slow path {#slow-path}
 
 If free pages are low:
 
@@ -302,7 +302,7 @@ If free pages are low:
 
 See [page reclaim](reclaim.md) for details on memory pressure handling.
 
-## Stage 6: Return to userspace
+## Stage 6: Return to userspace {#stage-6-return-to-userspace}
 
 After the page fault handler succeeds:
 
@@ -324,15 +324,15 @@ flowchart LR
 
 The program continues, unaware that a complex dance just occurred. From its perspective, `ptr[0] = 'x'` just worked.
 
-## Why demand paging?
+## Why demand paging? {#why-demand-paging}
 
 This lazy allocation strategy has major benefits:
 
-### 1. Fast malloc
+### 1. Fast malloc {#1-fast-malloc}
 
 `malloc()` returns immediately. The kernel work is deferred until actually needed.
 
-### 2. Sparse allocations are cheap
+### 2. Sparse allocations are cheap {#2-sparse-allocations-are-cheap}
 
 A program can allocate 1GB but only use 4KB. It pays only for what it touches:
 
@@ -344,17 +344,17 @@ char *huge = malloc(1024 * 1024 * 1024);
 huge[0] = 'a';
 ```
 
-### 3. Overcommit works
+### 3. Overcommit works {#3-overcommit-works}
 
 The kernel can promise more memory than physically exists. Most programs don't use all they request. See [memory overcommit](overcommit.md).
 
-### 4. fork() is fast
+### 4. fork() is fast {#4-fork-is-fast}
 
 Child processes share pages with parents via [copy-on-write](cow.md). Physical copies only happen when either process writes.
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Watch malloc in action
+### Watch malloc in action {#watch-malloc-in-action}
 
 ```bash
 # Trace system calls from a simple allocation
@@ -364,7 +364,7 @@ strace -e brk,mmap,munmap -f sh -c 'head -c 1M /dev/zero > /dev/null'
 perf stat -e page-faults,minor-faults,major-faults ./your_program
 ```
 
-### Observe demand paging
+### Observe demand paging {#observe-demand-paging}
 
 ```bash
 # Create a program that allocates but doesn't touch memory
@@ -398,7 +398,7 @@ watch -n 1 'ps -o pid,vsz,rss,comm -p $(pgrep lazy)'
 # VSZ jumps after malloc, RSS jumps only after touching
 ```
 
-### Examine the malloc threshold
+### Examine the malloc threshold {#examine-the-malloc-threshold}
 
 ```bash
 # See glibc's mmap threshold behavior
@@ -423,7 +423,7 @@ gcc -o /tmp/mmap_test /tmp/mmap_test.c
 strace -e brk,mmap /tmp/mmap_test
 ```
 
-### Trace page faults in the kernel
+### Trace page faults in the kernel {#trace-page-faults-in-the-kernel}
 
 ```bash
 # Enable page fault tracing (requires root, debugfs mounted)
@@ -437,13 +437,13 @@ cat /sys/kernel/debug/tracing/trace_pipe &
 echo 0 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 ```
 
-## Common misconceptions
+## Common misconceptions {#common-misconceptions}
 
-### "malloc allocates memory"
+### "malloc allocates memory" {#malloc-allocates-memory}
 
 Not really. It reserves address space. Physical pages come later via page faults.
 
-### "My program uses 1GB because malloc(1GB) succeeded"
+### "My program uses 1GB because malloc(1GB) succeeded" {#my-program-uses-1gb-because-malloc1gb-succeeded}
 
 Check RSS (Resident Set Size), not VSZ (Virtual Size). VSZ includes all reserved address space; RSS is physical memory actually used.
 
@@ -451,11 +451,11 @@ Check RSS (Resident Set Size), not VSZ (Virtual Size). VSZ includes all reserved
 ps -o pid,vsz,rss,comm -p <pid>
 ```
 
-### "Page faults are bad"
+### "Page faults are bad" {#page-faults-are-bad}
 
 Minor faults (demand paging) are normal and expected. Major faults (reading from disk) are expensive. The kernel optimizes for minor faults to be fast.
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -464,13 +464,13 @@ Minor faults (demand paging) are normal and expected. Major faults (reading from
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Buddy allocator, __alloc_pages() |
 | [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | vm_area_struct, mm_struct definitions |
 
-## History
+## History {#history}
 
-### Demand paging origins
+### Demand paging origins {#demand-paging-origins}
 
 Demand paging has been part of Linux since the beginning. The basic mechanism - mapping virtual addresses without backing physical memory until access - is fundamental to Unix-like systems.
 
-### VMA management evolution
+### VMA management evolution {#vma-management-evolution}
 
 In **Stage 3** above, when `mmap()` creates a new VMA, it must be inserted into the process's VMA collection for later lookup (e.g., during page faults). The data structure for this has evolved:
 
@@ -482,7 +482,7 @@ In **Stage 3** above, when `mmap()` creates a new VMA, it must be inserted into 
 
 **Author**: Liam Howlett (Oracle)
 
-### Folio conversion (v5.16+)
+### Folio conversion (v5.16+) {#folio-conversion-v516}
 
 In **Stage 4** above, `do_anonymous_page()` allocates a `struct folio` rather than a raw `struct page`. A folio is the modern abstraction for memory:
 
@@ -494,29 +494,29 @@ In **Stage 4** above, `do_anonymous_page()` allocates a `struct folio` rather th
 
 **Author**: Matthew Wilcox (Oracle)
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 The malloc path spans userspace (glibc) and kernel (brk/mmap, page fault). Bugs at either level can lead to memory corruption or privilege escalation.
 
 ---
 
-### Case 1: glibc heap overflow (CVE-2023-6246)
+### Case 1: glibc heap overflow (CVE-2023-6246) {#case-1-glibc-heap-overflow-cve-2023-6246}
 
-#### What happened
+#### What happened {#what-happened}
 
 In January 2024, Qualys discovered a heap buffer overflow in glibc's `__vsyslog_internal()` function that could be exploited for local privilege escalation.
 
-#### The bug
+#### The bug {#the-bug}
 
 From the [Qualys disclosure](https://medium.com/@elpepinillo/heap-heap-hooray-unveiling-glibc-heap-overflow-vulnerability-cve-2023-6246-0c6412423069):
 
 The `__vsyslog_internal()` function in glibc could overflow a heap buffer when processing specially crafted input. The heap (managed by ptmalloc2 in glibc) stores the buffer, and overflowing it corrupts adjacent heap metadata.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 An attacker with local access could escalate to root by exploiting programs that use `syslog()`.
 
-#### Why this matters for malloc
+#### Why this matters for malloc {#why-this-matters-for-malloc}
 
 When you call `malloc()`, glibc's ptmalloc2 manages the heap internally. Heap corruption vulnerabilities like this one abuse:
 
@@ -524,13 +524,13 @@ When you call `malloc()`, glibc's ptmalloc2 manages the heap internally. Heap co
 2. **Free list pointers**: Corrupting these leads to arbitrary write primitives
 3. **Tcache/fastbin**: Modern glibc mitigations complicate exploitation but don't eliminate it
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [6bd0e4efcc78](https://sourceware.org/git/?p=glibc.git;a=commit;h=6bd0e4efcc78f3c0115e5ea9739a1642807450da) (glibc)
 
 Fixed in glibc 2.39. The vulnerability was introduced in glibc 2.37 by commit `52a5be0df411`.
 
-#### Mitigations
+#### Mitigations {#mitigations}
 
 Modern glibc includes:
 
@@ -540,13 +540,13 @@ Modern glibc includes:
 
 ---
 
-### Case 2: The Stack Clash (2017)
+### Case 2: The Stack Clash (2017) {#case-2-the-stack-clash-2017}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 Qualys discovered that the gap between stack and heap could be jumped, allowing stack-to-heap or heap-to-stack corruption.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 The kernel maintains a "stack guard page" - an unmapped page between the stack and other mappings. The assumption: any access to this page triggers a segfault.
 
@@ -559,7 +559,7 @@ void vulnerable() {
 }
 ```
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 Local privilege escalation on many Linux distributions. The vulnerability affected:
 
@@ -567,7 +567,7 @@ Local privilege escalation on many Linux distributions. The vulnerability affect
 - FreeBSD, OpenBSD, NetBSD, Solaris
 - Programs using large stack allocations
 
-#### The fix
+#### The fix {#the-fix_1}
 
 **Commit**: [1be7107fbe18](https://git.kernel.org/linus/1be7107fbe18) ("mm: larger stack guard gap, between vmas")
 
@@ -575,19 +575,19 @@ The kernel increased the stack guard gap from 1 page (4KB) to 1MB by default:
 
 The guard gap defaults to 256 pages (1MB on 4KB page systems) and is configurable via the `stack_guard_gap=` kernel boot parameter (see `Documentation/admin-guide/kernel-parameters.txt`).
 
-#### Why this matters for malloc
+#### Why this matters for malloc {#why-this-matters-for-malloc_1}
 
 The heap (via `brk()`) and stack grow toward each other. This bug showed that the boundary between them must be carefully protected.
 
 ---
 
-### Case 3: mmap_min_addr bypass (CVE-2009-2695)
+### Case 3: mmap_min_addr bypass (CVE-2009-2695) {#case-3-mmapminaddr-bypass-cve-2009-2695}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 NULL pointer dereference bugs in the kernel could be exploited by mapping memory at address 0.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 Many kernel bugs involve dereferencing a NULL pointer. Normally this would crash. But if an attacker can map memory at address 0 and control its contents, they can turn a NULL dereference into code execution.
 
@@ -597,7 +597,7 @@ From [Red Hat's advisory](https://access.redhat.com/articles/17995):
 
 > *"A system with SELinux enforced was found to be more permissive in allowing local users in the unconfined_t domain to map low memory areas even if the mmap_min_addr restriction is enabled."*
 
-#### The fix
+#### The fix {#the-fix_2}
 
 Multiple commits fixed the SELinux policy and strengthened `mmap_min_addr` enforcement:
 
@@ -610,19 +610,19 @@ cat /proc/sys/vm/mmap_min_addr
 # Default: 65536 (64KB) - set by LSM_MMAP_MIN_ADDR in security/Kconfig
 ```
 
-#### Why this matters for malloc
+#### Why this matters for malloc {#why-this-matters-for-malloc_2}
 
 When `malloc()` uses `mmap()` for large allocations, the kernel chooses the address. `mmap_min_addr` ensures the kernel never maps at dangerously low addresses.
 
 ---
 
-### Case 4: ptmalloc thread arena exhaustion
+### Case 4: ptmalloc thread arena exhaustion {#case-4-ptmalloc-thread-arena-exhaustion}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 Under heavy concurrent allocation, glibc's ptmalloc could create excessive arenas, wasting memory.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 ptmalloc creates per-thread arenas to reduce lock contention. But the default limit (`8 * num_cpus`) can lead to:
 
@@ -630,11 +630,11 @@ ptmalloc creates per-thread arenas to reduce lock contention. But the default li
 2. Each arena has its own heap segment
 3. Fragmentation and memory waste explode
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 Applications with many threads (e.g., Java apps, web servers) could use 2-3x more memory than expected due to arena overhead.
 
-#### Mitigation
+#### Mitigation {#mitigation}
 
 ```bash
 # Limit arenas (set before running program)
@@ -646,13 +646,13 @@ export MALLOC_ARENA_MAX=2
 
 ---
 
-### Case 5: brk randomization weaknesses
+### Case 5: brk randomization weaknesses {#case-5-brk-randomization-weaknesses}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 ASLR (Address Space Layout Randomization) randomizes mmap but historically left brk predictable.
 
-#### The bug
+#### The bug {#the-bug_4}
 
 If `brk()` always returns the same address, heap exploitation becomes easier - attackers know where heap data lives.
 
@@ -662,7 +662,7 @@ Early ASLR implementations randomized:
 - mmap base ✓
 - brk/heap location - **partially or not at all**
 
-#### Modern status
+#### Modern status {#modern-status}
 
 Modern kernels randomize brk with `CONFIG_COMPAT_BRK=n`:
 
@@ -674,7 +674,7 @@ cat /proc/sys/kernel/randomize_va_space
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Layer | Impact | Prevention |
 |-----|------|-------|--------|------------|
@@ -686,9 +686,9 @@ cat /proc/sys/kernel/randomize_va_space
 
 The common thread: **malloc is the foundation of memory safety**. Bugs in heap management (glibc) or virtual memory setup (kernel) have severe security implications.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Process address space](mmap.md) - VMAs, mmap details
 - [Page allocator](page-allocator.md) - Buddy system internals
@@ -696,7 +696,7 @@ The common thread: **malloc is the foundation of memory safety**. Bugs in heap m
 - [brk vs mmap](brk-vs-mmap.md) - When glibc uses each method
 - [Page reclaim](reclaim.md) - What happens when memory runs low
 
-### External resources
+### External resources {#external-resources}
 
 - [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) - Official glibc documentation
 - [The Stack Clash](https://blog.qualys.com/vulnerabilities-threat-research/2017/06/19/the-stack-clash) - Qualys research paper

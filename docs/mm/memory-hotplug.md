@@ -1,8 +1,8 @@
-# Memory Hotplug
+# Memory Hotplug {#memory-hotplug}
 
 > Adding and removing physical memory while the system keeps running — the machinery that lets cloud VMs grow or shrink without a reboot
 
-## What Is Memory Hotplug?
+## What Is Memory Hotplug? {#what-is-memory-hotplug}
 
 Memory hotplug is the kernel's ability to add or remove physical RAM at runtime. The feature has two broad use cases that pull in different directions:
 
@@ -15,7 +15,7 @@ The kernel provides two symmetric operations:
 - **Hot-add** (online): add a new physical memory range and make it available to the allocator.
 - **Hot-remove** (offline): drain all pages off a memory range and then physically remove it. Hot-remove is significantly harder than hot-add.
 
-## Memory Sections
+## Memory Sections {#memory-sections}
 
 The kernel's sparse memory model tracks physical memory in fixed-size **sections**. Each section is the smallest independently online/offline unit.
 
@@ -53,7 +53,7 @@ The `section_mem_map` field encodes both the pointer to the `struct page` array 
 
 At the user-facing level, the kernel groups multiple sections into **memory blocks**. A memory block is the unit exposed in sysfs. `MIN_MEMORY_BLOCK_SIZE` is set to `1 << SECTION_SIZE_BITS`, so on x86-64 the minimum block size is 128 MB. In practice blocks are often larger.
 
-## The Sysfs Interface
+## The Sysfs Interface {#the-sysfs-interface}
 
 Every memory block has a sysfs directory under `/sys/devices/system/memory/`:
 
@@ -106,7 +106,7 @@ static const char *const online_type_to_str[] = {
 };
 ```
 
-## Hot-Add Path
+## Hot-Add Path {#hot-add-path}
 
 When new memory appears (via firmware/ACPI notification or a `virtio-mem` device), the kernel follows this path:
 
@@ -146,7 +146,7 @@ add_memory_resource()
 
 `online_pages()` does the memory-model work: it associates the PFN range with the requested zone, fires memory notifiers so drivers and subsystems can react, adds the pages to the buddy allocator via `online_pages_range()`, and then calls `undo_isolate_page_range()` to open the range for normal allocation.
 
-### ZONE_MOVABLE vs ZONE_NORMAL for New Memory
+### ZONE_MOVABLE vs ZONE_NORMAL for New Memory {#zonemovable-vs-zonenormal-for-new-memory}
 
 When onlining, you must choose a zone:
 
@@ -157,7 +157,7 @@ When onlining, you must choose a zone:
 !!! tip "Always use `online_movable` for hotplugged memory in VMs"
     If there is any chance you will need to offline (shrink) the VM's memory later, online new sections as `ZONE_MOVABLE`. Onlining as `ZONE_NORMAL` effectively makes the memory permanent because kernel slab, page tables, and other unmovable allocations may land there immediately.
 
-## ZONE_MOVABLE
+## ZONE_MOVABLE {#zone_movable}
 
 `ZONE_MOVABLE` exists specifically to enable hot-remove. The contract is strict: **no unmovable kernel allocations ever go here**. Only pages that can be migrated to another location are placed in `ZONE_MOVABLE` — anonymous memory, file-backed pages, and similar movable content.
 
@@ -186,7 +186,7 @@ grep -E "MemTotal|MemFree" /proc/meminfo
 !!! note "ZONE_MOVABLE and CMA"
     CMA pages (see [CMA](cma.md)) in kernel zones behave similarly to `ZONE_MOVABLE` — they can be migrated. But `ZONE_MOVABLE` is the primary mechanism for ensuring entire memory sections can be reclaimed.
 
-## Hot-Remove Path
+## Hot-Remove Path {#hot-remove-path}
 
 Hot-remove is much harder than hot-add. The fundamental challenge: before the kernel can give back a physical memory range, every `struct page` in that range must be free. That means migrating all live pages elsewhere. Pages that cannot be migrated block the offline.
 
@@ -230,13 +230,13 @@ offline_pages(pfn, nr_pages, zone, group)  [mm/memory_hotplug.c]
               or memory_notify(MEM_CANCEL_OFFLINE, ...) on failure
 ```
 
-### Page Isolation
+### Page Isolation {#page-isolation}
 
 `start_isolate_page_range()` in `mm/page_isolation.c` marks every pageblock in the target range as `MIGRATE_ISOLATE`. Once isolated, the page allocator will not hand out pages from this range to new allocations. This prevents a race where pages are freed from the range only to have new allocations immediately refill it.
 
 If any pageblock cannot be isolated (for example, because it straddles a zone boundary or has a structural constraint), `start_isolate_page_range()` returns `-EBUSY` and the offline fails immediately.
 
-### Page Migration
+### Page Migration {#page-migration}
 
 `do_migrate_range()` calls `migrate_pages()` with `MR_MEMORY_HOTPLUG` as the migration reason. The migration allocates replacement pages elsewhere in the system and moves all content and page table mappings. Pages are classified in `page_is_unmovable()`:
 
@@ -256,7 +256,7 @@ bool page_is_unmovable(struct zone *zone, struct page *page,
 }
 ```
 
-### Failure Cases
+### Failure Cases {#failure-cases}
 
 The offline can fail for several reasons, and the kernel will report them in dmesg:
 
@@ -274,7 +274,7 @@ The offline can fail for several reasons, and the kernel will report them in dme
 
 After a failed offline, `undo_isolate_page_range()` and `memory_notify(MEM_CANCEL_OFFLINE, ...)` restore the section to normal use.
 
-### remove_memory
+### remove_memory {#remove_memory}
 
 Once all blocks covering a physical range have been offlined, `remove_memory()` can be called to complete the hardware removal:
 
@@ -287,9 +287,9 @@ extern int offline_and_remove_memory(u64 start, u64 size);
 
 `remove_memory()` verifies all blocks are offline, then calls `arch_remove_memory()` to tear down the page table mappings for the range, followed by `sparse_remove_section()` to free the `struct page` arrays.
 
-## Memory Onlining Policies
+## Memory Onlining Policies {#memory-onlining-policies}
 
-### auto_online_blocks
+### auto_online_blocks {#autoonlineblocks}
 
 The `auto_online_blocks` sysfs attribute at `/sys/devices/system/memory/auto_online_blocks` controls what happens when new memory blocks appear — whether they are onlined automatically and into which zone:
 
@@ -308,7 +308,7 @@ echo offline > /sys/devices/system/memory/auto_online_blocks
 
 This attribute maps directly to the kernel's `mhp_get_default_online_type()` / `mhp_set_default_online_type()` pair.
 
-### The online_policy Module Parameter
+### The online_policy Module Parameter {#the-online_policy-module-parameter}
 
 `memory_hotplug.online_policy` (settable via kernel command line or `/sys/module/memory_hotplug/parameters/online_policy`) controls zone selection when using the plain `online` (auto) mode:
 
@@ -319,7 +319,7 @@ This attribute maps directly to the kernel's `mhp_get_default_online_type()` / `
 
 The `auto-movable` policy uses `auto_movable_ratio` (default 301%) as an upper bound on the `ZONE_MOVABLE : kernel zones` ratio. This prevents the system from becoming so MOVABLE-heavy that kernel allocations are starved.
 
-### Recommended Settings for Cloud VMs
+### Recommended Settings for Cloud VMs {#recommended-settings-for-cloud-vms}
 
 For guest VMs that will have memory added and removed by the hypervisor:
 
@@ -330,13 +330,13 @@ echo online_movable > /sys/devices/system/memory/auto_online_blocks
 
 This ensures every hotplugged section is immediately available to applications and can be removed later without obstruction.
 
-## NUMA and Hotplug
+## NUMA and Hotplug {#numa-and-hotplug}
 
-### Adding Memory to an Existing Node
+### Adding Memory to an Existing Node {#adding-memory-to-an-existing-node}
 
 The common case — a new DIMM or VM memory increment belongs to an already-online NUMA node. This is relatively straightforward: `add_memory(nid, ...)` is called with the existing node's id, and `try_online_node()` is a no-op because the node is already online.
 
-### Adding a New NUMA Node
+### Adding a New NUMA Node {#adding-a-new-numa-node}
 
 Adding memory to a brand-new NUMA node is more complex. The node's `pg_data_t` structure must be allocated first, and the NUMA topology (distance tables, fallback lists) must be rebuilt. `try_online_node()` handles the first-memory case:
 
@@ -354,13 +354,13 @@ int try_online_node(int nid)
 
 If CPUs are associated with the new node (CPU hotplug), that adds further coordination requirements — CPUs must be brought online only after their node has memory.
 
-### Removing the Last Memory from a Node
+### Removing the Last Memory from a Node {#removing-the-last-memory-from-a-node}
 
 When `offline_pages()` is about to remove the last present pages from a NUMA node, it notifies the system via `node_notify(NODE_REMOVING_LAST_MEMORY, ...)`. On success, `node_clear_state(node, N_MEMORY)` marks the node as memory-less. `kswapd` and `kcompactd` for that node are stopped. The zone lists are rebuilt without the empty node.
 
-## Observing Hotplug Events
+## Observing Hotplug Events {#observing-hotplug-events}
 
-### dmesg
+### dmesg {#dmesg}
 
 The kernel logs memory online/offline events:
 
@@ -375,7 +375,7 @@ For a failed offline:
 kernel: memory offlining [mem 0x0000001000000000-0x000000101fffffff] failed due to unmovable page
 ```
 
-### udev Events
+### udev Events {#udev-events}
 
 When memory blocks are created in sysfs, `udev` sees `add` events for devices of subsystem `memory`. A `udev` rule can trigger custom scripts:
 
@@ -386,7 +386,7 @@ ACTION=="add", SUBSYSTEM=="memory", ATTR{state}=="offline", \
 
 This is how `systemd` and distribution scripts implement automatic onlining as an alternative to the kernel's built-in `auto_online_blocks`.
 
-### /sys/devices/system/memory/
+### /sys/devices/system/memory/ {#sysdevicessystemmemory}
 
 ```bash
 # Count total memory blocks
@@ -404,9 +404,9 @@ for d in /sys/devices/system/memory/memory*/; do
 done
 ```
 
-## The Cloud and VM Use Case
+## The Cloud and VM Use Case {#the-cloud-and-vm-use-case}
 
-### virtio-mem
+### virtio-mem {#virtio-mem}
 
 `virtio-mem` (introduced in Linux 5.8) is the modern memory balloon device for KVM/QEMU. Unlike the traditional `virtio-balloon`, which inflates by pinning pages away from the guest, `virtio-mem` uses memory hotplug: it adds and removes actual physical address ranges from the guest's view.
 
@@ -419,7 +419,7 @@ In both modes, `virtio-mem` calls `add_memory()` to plug memory and `offline_and
 
 The implication for zone selection: `virtio-mem` relies on userspace or the kernel's `auto_online_blocks` to online the added blocks. Setting `auto_online_blocks=online_movable` is essential for `virtio-mem` to be able to unplug memory, because blocks in `ZONE_MOVABLE` can be offlined.
 
-### Why VMs Prefer ZONE_MOVABLE for All Guest RAM
+### Why VMs Prefer ZONE_MOVABLE for All Guest RAM {#why-vms-prefer-zone_movable-for-all-guest-ram}
 
 Some VM configurations (particularly those using the `movable_node` boot option) put all guest memory into `ZONE_MOVABLE`. The rationale:
 
@@ -429,11 +429,11 @@ Some VM configurations (particularly those using the `movable_node` boot option)
 
 The `movable_node` boot parameter forces an entire NUMA node into `ZONE_MOVABLE`.
 
-### Kubernetes and Memory Hotplug
+### Kubernetes and Memory Hotplug {#kubernetes-and-memory-hotplug}
 
 Some Kubernetes runtimes (notably those using `kata-containers` or `cloud-hypervisor`) resize VM memory to match pod resource limits. When a pod's memory limit is increased, the runtime hot-adds memory to the VM. When the limit is decreased (and the memory balloon approach is used), memory sections are offlined and removed. The `auto_online_blocks=online_movable` setting is a common tuning recommendation in cloud VM images for this reason.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -447,7 +447,7 @@ Some Kubernetes runtimes (notably those using `kata-containers` or `cloud-hyperv
 | [`drivers/virtio/virtio_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_mem.c) | `virtio-mem` driver — uses `add_memory()` / `offline_and_remove_memory()` |
 | [`mm/mm_init.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mm_init.c) | `kernelcore=` and `movablecore=` boot parameter parsing |
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # List all memory blocks and their states
@@ -479,9 +479,9 @@ lsmod | grep virtio_mem
 ls /sys/bus/virtio/drivers/virtio_mem/ 2>/dev/null
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Offline Fails with "unmovable page"
+### Offline Fails with "unmovable page" {#offline-fails-with-unmovable-page}
 
 The section contains an unmovable kernel allocation — slab objects, page tables, or a pinned page.
 
@@ -501,7 +501,7 @@ cat /sys/devices/system/memory/memoryN/valid_zones
 - Set `auto_online_blocks=online_movable` before the next hotplug event
 - Try the offline repeatedly — memory compaction runs between attempts and may free the range
 
-### Memory Block Not Appearing After Hotplug
+### Memory Block Not Appearing After Hotplug {#memory-block-not-appearing-after-hotplug}
 
 The physical device was added but no sysfs entry appeared.
 
@@ -509,28 +509,28 @@ The physical device was added but no sysfs entry appeared.
 - Verify `CONFIG_MEMORY_HOTPLUG=y` in the running kernel (`zcat /proc/config.gz | grep MEMORY_HOTPLUG`)
 - On VMs, check that the hypervisor signal (ACPI notification or `virtio-mem` event) was delivered
 
-### ZONE_MOVABLE Is Empty
+### ZONE_MOVABLE Is Empty {#zone_movable-is-empty}
 
 `grep -A5 "Node.*Movable" /proc/zoneinfo` shows zero pages.
 
 - `ZONE_MOVABLE` is only populated if `kernelcore=`, `movablecore=`, or `movable_node` is specified at boot, or if memory was onlined via `online_movable`
 - Hotplugged memory onlined as `online_movable` will appear here
 
-## History
+## History {#history}
 
-### SPARSEMEM and the Foundations (v2.6.13, 2005)
+### SPARSEMEM and the Foundations (v2.6.13, 2005) {#sparsemem-and-the-foundations-v2613-2005}
 
 Memory hotplug required a new [memory model](memory-model.md). The classic `FLATMEM` model assumed a contiguous `mem_map` array spanning all physical memory, which breaks when memory appears and disappears at runtime. SPARSEMEM introduced the per-section `struct mem_section` array, making the `struct page` arrays discontiguous and independently allocatable.
 
-### Initial Hotplug Support (v2.6.15, 2006)
+### Initial Hotplug Support (v2.6.15, 2006) {#initial-hotplug-support-v2615-2006}
 
 Basic memory hot-add support was merged for x86-64 and ia64, providing `add_memory()` and the initial sysfs interface. Hot-remove was not yet supported.
 
-### Memory Hot-Remove (v2.6.24, 2008)
+### Memory Hot-Remove (v2.6.24, 2008) {#memory-hot-remove-v2624-2008}
 
 `offline_pages()` and the page migration machinery for hot-remove were added, enabling `ZONE_MOVABLE` to be used as a staging area for removable memory.
 
-### virtio-mem (v5.8, 2020)
+### virtio-mem (v5.8, 2020) {#virtio-mem-v58-2020}
 
 **Commit**: [35ee9a3e812b](https://git.kernel.org/linus/35ee9a3e812b)
 
@@ -540,11 +540,11 @@ The `virtio-mem` driver provided a clean interface for hypervisors to add and re
 
 **LWN coverage**: [virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/)
 
-### memmap_on_memory (v5.14, 2021)
+### memmap_on_memory (v5.14, 2021) {#memmaponmemory-v514-2021}
 
 The `MHP_MEMMAP_ON_MEMORY` flag and `memory_hotplug.memmap_on_memory` parameter allowed the `struct page` metadata for hotplugged memory to be stored inside the hotplugged memory itself, rather than consuming existing RAM.
 
-## References
+## References {#references}
 
 - [LWN: Memory hotplug](https://lwn.net/Articles/197855/) — early overview of the hot-remove design
 - [LWN: virtio-mem](https://lwn.net/Articles/820428/) — virtio-mem design and use cases
@@ -553,7 +553,7 @@ The `MHP_MEMMAP_ON_MEMORY` flag and `memory_hotplug.memmap_on_memory` parameter 
 - [compaction](compaction.md) — page migration used by `do_migrate_range()` during offline
 - [page-allocator](page-allocator.md) — migrate types and zone layout
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Kernel docs: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — official kernel documentation covering sysfs interface, zone selection, and the online/offline state machine
 - [Kernel docs: Memory hotplug notifier](https://docs.kernel.org/core-api/memory-hotplug.html) — `memory_notify()`, `MEM_GOING_ONLINE`/`MEM_CANCEL_OFFLINE`, and `struct memory_notify`

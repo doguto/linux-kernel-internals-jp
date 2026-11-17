@@ -1,8 +1,8 @@
-# 1GB Huge Pages
+# 1GB Huge Pages {#1gb-huge-pages}
 
 > PUD-level huge pages for workloads where even 2MB pages leave TLB pressure on the table
 
-## What are 1GB pages?
+## What are 1GB pages? {#what-are-1gb-pages}
 
 On x86-64, the CPU's page table walker can terminate a translation at three levels:
 
@@ -16,7 +16,7 @@ A **1GB huge page** maps the entire gigabyte with a single PUD entry. One TLB en
 
 This is the largest page size supported on x86-64. It requires explicit CPU support and explicit reservation. Nothing happens automatically.
 
-### CPU requirement
+### CPU requirement {#cpu-requirement}
 
 1GB pages require the `pdpe1gb` CPUID flag (kernel feature `X86_FEATURE_GBPAGES`). Check your system:
 
@@ -38,7 +38,7 @@ bool __init arch_hugetlb_valid_size(unsigned long size)
 }
 ```
 
-## TLB coverage: the core motivation
+## TLB coverage: the core motivation {#tlb-coverage-the-core-motivation}
 
 The TLB holds a finite number of virtual-to-physical address translations. When it fills, the CPU must walk the page table in memory — a multi-step operation that can cost 50–200 cycles per miss on modern hardware.
 
@@ -62,9 +62,9 @@ A typical L2 TLB (STLB) on a Skylake CPU holds 1,536 entries for 4KB pages and 3
 
 For more on TLB mechanics and 2MB page TLB math, see [Transparent Huge Pages](thp.md) and [hugetlbfs vs THP](hugetlbfs-vs-thp.md).
 
-## Allocation: boot time only (practically speaking)
+## Allocation: boot time only (practically speaking) {#allocation-boot-time-only-practically-speaking}
 
-### Why 1GB pages cannot be allocated at runtime
+### Why 1GB pages cannot be allocated at runtime {#why-1gb-pages-cannot-be-allocated-at-runtime}
 
 A 1GB page requires 1GB of **physically contiguous** memory, aligned to a 1GB physical boundary. On a freshly booted system with no memory fragmentation, this is feasible. On a system that has been running — with the kernel, drivers, file caches, and applications already fragmented across physical memory — finding a free, contiguous, aligned 1GB region is nearly impossible.
 
@@ -72,7 +72,7 @@ The kernel calls pages of this size "gigantic" because their allocation order (`
 
 Runtime allocation is technically possible when `CONFIG_CONTIG_ALLOC` is enabled — the kernel can use `alloc_contig_pages()` or CMA (Contiguous Memory Allocator) to assemble a contiguous region by migrating existing pages out of the way. In practice this succeeds only immediately after boot, before memory becomes fragmented. On a loaded production system, it almost always fails silently: you write a count to `nr_hugepages` and `free_hugepages` stays at 0.
 
-### Boot-time reservation
+### Boot-time reservation {#boot-time-reservation}
 
 Reserve 1GB pages on the kernel command line, before the memory allocator has touched anything:
 
@@ -95,7 +95,7 @@ hugepagesz=1G hugepages=16 hugepagesz=2M hugepages=1024
 !!! warning "Order matters"
     `hugepages=N` applies to the most recently specified `hugepagesz`. A stray `hugepages=` before any `hugepagesz=` applies to the default page size (usually 2MB). Always pair them explicitly.
 
-## Runtime failure: what it looks like
+## Runtime failure: what it looks like {#runtime-failure-what-it-looks-like}
 
 After boot, the 1GB pool lives at:
 
@@ -121,13 +121,13 @@ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages # shows unused p
 !!! note "CONFIG_CONTIG_ALLOC"
     Some distributions enable `CONFIG_CONTIG_ALLOC`, which allows runtime gigantic page allocation via `alloc_contig_pages()`. This may succeed immediately after boot when memory is still unfragmented, but should not be relied upon for production deployments. Boot-time reservation is the only reliable method.
 
-## NUMA implications
+## NUMA implications {#numa-implications}
 
 Each 1GB page is allocated on a specific NUMA node. A process running on node 0 that accesses a 1GB page residing on node 1 pays the NUMA remote memory penalty on **every single access** — there is no migration granularity below the 1GB page boundary.
 
 With 4KB or 2MB pages, the kernel's NUMA balancing can migrate individual pages or 2MB chunks closer to the accessing CPU. With 1GB pages, NUMA balancing does not apply — the pages are pinned in the hugetlb pool and are never migrated.
 
-### Per-node reservation
+### Per-node reservation {#per-node-reservation}
 
 Always reserve 1GB pages on the specific NUMA nodes where your workload runs:
 
@@ -156,7 +156,7 @@ cat /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/free_hugepages
 numastat -m | grep -i huge
 ```
 
-## When 1GB pages outperform 2MB pages
+## When 1GB pages outperform 2MB pages {#when-1gb-pages-outperform-2mb-pages}
 
 2MB pages already reduce TLB pressure by 512x over 4KB pages. Switching to 1GB pages provides another 512x reduction — but this only matters if TLB misses are still the bottleneck after switching to 2MB.
 
@@ -177,7 +177,7 @@ numastat -m | grep -i huge
 perf stat -e cycles,dTLB-load-misses,dTLB-load-misses:u ./workload
 ```
 
-## When NOT to use 1GB pages
+## When NOT to use 1GB pages {#when-not-to-use-1gb-pages}
 
 1GB pages are a commitment. They have significant downsides that rule them out for many workloads.
 
@@ -194,9 +194,9 @@ perf stat -e cycles,dTLB-load-misses,dTLB-load-misses:u ./workload
 !!! tip "For most workloads: start with 2MB"
     If you haven't already deployed 2MB hugetlbfs pages, do that first. The operational overhead is far lower (runtime allocation is possible), and you can measure how much TLB benefit you get before committing to the more complex 1GB setup. See [hugetlbfs vs THP](hugetlbfs-vs-thp.md) for 2MB page setup and comparison.
 
-## Using 1GB pages from applications
+## Using 1GB pages from applications {#using-1gb-pages-from-applications}
 
-### hugetlbfs mount
+### hugetlbfs mount {#hugetlbfs-mount}
 
 ```bash
 # Create a mount point for 1GB pages
@@ -206,7 +206,7 @@ mkdir -p /dev/hugepages-1G
 mount -t hugetlbfs -o pagesize=1G nodev /dev/hugepages-1G
 ```
 
-### mmap() with MAP_HUGE_1GB
+### mmap() with MAP_HUGE_1GB {#mmap-with-maphuge1gb}
 
 ```c
 #include <sys/mman.h>
@@ -224,7 +224,7 @@ if (ptr == MAP_FAILED) {
 
 `MAP_HUGE_1GB` is defined in `include/uapi/linux/mman.h` as `HUGETLB_FLAG_ENCODE_1GB`, which is `(30U << HUGETLB_FLAG_ENCODE_SHIFT)` = `(30U << 26)` = `0x78000000`. The value 30 encodes log2(1GB) = 30.
 
-### File on hugetlbfs (shared memory between processes)
+### File on hugetlbfs (shared memory between processes) {#file-on-hugetlbfs-shared-memory-between-processes}
 
 ```c
 /* Process 1: create the backing file */
@@ -244,9 +244,9 @@ void *ptr2 = mmap(NULL, 4UL * 1024 * 1024 * 1024,
 
 The hugetlbfs file approach is used by Oracle's SGA and by DPDK for shared packet memory.
 
-## Observing 1GB page usage
+## Observing 1GB page usage {#observing-1gb-page-usage}
 
-### /proc/meminfo
+### /proc/meminfo {#procmeminfo}
 
 `/proc/meminfo` only shows the **default** huge page size pool. On a system where the default is 2MB (the common case), `HugePages_Total` reflects the 2MB pool, not the 1GB pool:
 
@@ -273,7 +273,7 @@ $ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages
 4
 ```
 
-### Per-node via numastat
+### Per-node via numastat {#per-node-via-numastat}
 
 ```bash
 # Per-node breakdown of all huge page sizes
@@ -285,7 +285,7 @@ numastat -m
 # HugePages_Free    2.00    2.00    4.00
 ```
 
-### Per-node via sysfs
+### Per-node via sysfs {#per-node-via-sysfs}
 
 ```bash
 for node in /sys/devices/system/node/node*/hugepages/hugepages-1048576kB; do
@@ -295,14 +295,14 @@ for node in /sys/devices/system/node/node*/hugepages/hugepages-1048576kB; do
 done
 ```
 
-### Per-process
+### Per-process {#per-process}
 
 ```bash
 # Maps using 1GB huge pages show up in smaps with KernelPageSize: 1048576 kB
 grep -A5 "KernelPageSize" /proc/<pid>/smaps | grep -B1 "1048576"
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -313,33 +313,33 @@ grep -A5 "KernelPageSize" /proc/<pid>/smaps | grep -B1 "1048576"
 | [`include/uapi/linux/mman.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mman.h) | `MAP_HUGE_1GB` — mmap flag for 1GB pages |
 | [`include/uapi/asm-generic/hugetlb_encode.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/hugetlb_encode.h) | `HUGETLB_FLAG_ENCODE_1GB` = `(30U << 26)` |
 
-## History
+## History {#history}
 
-### 1GB page support (v2.6.26, 2008)
+### 1GB page support (v2.6.26, 2008) {#1gb-page-support-v2626-2008}
 
 1GB page support on x86-64 was introduced in Linux 2.6.26. AMD Barcelona (Family 10h) was the first x86 CPU to implement the `PDPE1GB` CPUID bit, which is exposed in Linux as `X86_FEATURE_GBPAGES` (cpufeature string `"pdpe1gb"`).
 
 **LWN coverage**: [Huge pages part 3: Administration](https://lwn.net/Articles/376606/) covers the NUMA pool management that accompanied 1GB page support.
 
-### MAP_HUGE_1GB flag (v3.8, 2013)
+### MAP_HUGE_1GB flag (v3.8, 2013) {#maphuge1gb-flag-v38-2013}
 
 **Commit**: [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) ("mm: support more pagesizes for MAP_HUGETLB/SHM_HUGETLB")
 
 Before this commit, applications had to open a file on a `pagesize=1G` hugetlbfs mount to get 1GB pages. This commit added the page-size encoding in mmap flags, enabling `MAP_HUGETLB | MAP_HUGE_1GB` without a mount point.
 
-## References
+## References {#references}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/hugetlbpage.rst`](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) — hugetlbfs admin guide including boot parameters and sysfs interface
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Huge pages part 1: Introduction](https://lwn.net/Articles/374424/) (2010)
 - [Huge pages part 2: Interfaces](https://lwn.net/Articles/375096/) (2010) — mmap flags and libhugetlbfs
 - [Huge pages part 3: Administration](https://lwn.net/Articles/376606/) (2010) — pool management and NUMA
 
-### Related Pages
+### Related Pages {#related-pages}
 
 - [hugetlbfs vs THP](hugetlbfs-vs-thp.md) — 2MB page comparison, pool management, and when to use hugetlbfs vs THP
 - [Transparent Huge Pages](thp.md) — 2MB PMD-level THP internals and tuning
@@ -347,7 +347,7 @@ Before this commit, applications had to open a file on a `pagesize=1G` hugetlbfs
 - [NUMA](numa.md) — per-node memory allocation and NUMA topology
 - [Page Allocator](page-allocator.md) — why the buddy allocator cannot satisfy 1GB allocations at runtime
 
-## Further reading
+## Further reading {#further-reading}
 
 - `Documentation/admin-guide/mm/hugetlbpage.rst` — the canonical kernel admin guide for hugetlbfs: boot parameters (`hugepagesz=`, `default_hugepagesz=`), sysfs interface, per-node reservation, and `MAP_HUGETLB` / `MAP_HUGE_1GB` flags; rendered at [docs.kernel.org](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html)
 - [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) — hugetlb pool management: `hugepagesz_setup()`, `default_hugepagesz_setup()`, `alloc_gigantic_frozen_folio()`, and `hugetlb_gigantic_pages_alloc_boot()` for the early-param reservation path

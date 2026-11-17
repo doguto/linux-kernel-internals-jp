@@ -1,8 +1,8 @@
-# Zone Reclaim Policy
+# Zone Reclaim Policy {#zone-reclaim-policy}
 
 > How the kernel reclaims memory per-zone, the role of `vm.zone_reclaim_mode`, and why it is off by default
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevance |
 |------|-----------|
@@ -14,7 +14,7 @@
 
 ---
 
-## Memory Zones
+## Memory Zones {#memory-zones}
 
 Linux divides physical memory into zones so that allocations with different addressing constraints can be satisfied without waste. The zone types are defined in `enum zone_type` in `include/linux/mmzone.h`:
 
@@ -50,11 +50,11 @@ Physical address space (typical 64-bit x86):
 
 ---
 
-## Zone Watermarks
+## Zone Watermarks {#zone-watermarks}
 
 Every zone tracks three watermarks that control when reclaim begins. These are stored in `struct zone._watermark[]` and accessed through inline helpers — never read the array directly.
 
-### The `enum zone_watermarks` enum
+### The `enum zone_watermarks` enum {#the-enum-zone_watermarks-enum}
 
 ```c
 /* include/linux/mmzone.h */
@@ -75,7 +75,7 @@ The three main levels:
 | `WMARK_LOW` | Background threshold. Falling below here wakes `kswapd`. |
 | `WMARK_HIGH` | Target. `kswapd` reclaims until free pages reach this level, then sleeps. |
 
-### Watermark accessor macros
+### Watermark accessor macros {#watermark-accessor-macros}
 
 `struct zone` stores the raw watermark values in `_watermark[]`. The `watermark_boost` field is added on top at read time to implement temporary boosting (see [Watermark Boosting](#watermark-boosting)). Always use these accessors:
 
@@ -101,7 +101,7 @@ static inline unsigned long high_wmark_pages(const struct zone *z) { return wmar
 
 Watermark values are derived from `vm.min_free_kbytes`. Raising that sysctl proportionally raises all three levels in every zone.
 
-### Checking watermarks: `zone_watermark_fast()` and `zone_watermark_ok()`
+### Checking watermarks: `zone_watermark_fast()` and `zone_watermark_ok()` {#checking-watermarks-zonewatermarkfast-and-zonewatermarkok}
 
 The allocator calls `zone_watermark_fast()` in the hot path and falls back to `zone_watermark_ok()` for the slower full check. Both live in `mm/page_alloc.c`:
 
@@ -119,7 +119,7 @@ static inline bool zone_watermark_fast(struct zone *z, unsigned int order,
 
 ---
 
-## Per-Zone kswapd: `balance_pgdat()`
+## Per-Zone kswapd: `balance_pgdat()` {#per-zone-kswapd-balance_pgdat}
 
 `kswapd` is a per-node (per-`pgdat`) kernel thread but it reclaims zone by zone. The core loop is `balance_pgdat()` in `mm/vmscan.c`:
 
@@ -152,9 +152,9 @@ ZONE_NORMAL and ZONE_DMA32 and ZONE_DMA in the same pass.
 
 ---
 
-## `node_reclaim()` and `vm.zone_reclaim_mode`
+## `node_reclaim()` and `vm.zone_reclaim_mode` {#nodereclaim-and-vmzonereclaim_mode}
 
-### The sysctl
+### The sysctl {#the-sysctl}
 
 `vm.zone_reclaim_mode` is the user-visible name for the kernel variable `node_reclaim_mode` (declared in `mm/vmscan.c`):
 
@@ -191,7 +191,7 @@ static inline bool node_reclaim_enabled(void)
 }
 ```
 
-### The call site in `get_page_from_freelist()`
+### The call site in `get_page_from_freelist()` {#the-call-site-in-getpagefrom_freelist}
 
 The hook is in `mm/page_alloc.c` inside `get_page_from_freelist()`, which is the main allocation path. After a zone fails its watermark check, the allocator checks whether node reclaim is worth trying:
 
@@ -220,7 +220,7 @@ default:
 
 If reclaim succeeded and the zone is now above its watermark, the allocation proceeds from that zone. Otherwise the allocator moves on to the next zone in the zonelist.
 
-### Inside `node_reclaim()`
+### Inside `node_reclaim()` {#inside-node_reclaim}
 
 `node_reclaim()` in `mm/vmscan.c` is the synchronous, per-node reclaim path. It is called directly from the allocator and blocks the allocating process:
 
@@ -251,7 +251,7 @@ On success it increments `PGSCAN_ZONE_RECLAIM_SUCCESS`; on failure, `PGSCAN_ZONE
 
 ---
 
-## Why `zone_reclaim_mode` Is Disabled by Default
+## Why `zone_reclaim_mode` Is Disabled by Default {#why-zonereclaimmode-is-disabled-by-default}
 
 When `zone_reclaim_mode=1`, the kernel prefers to reclaim pages from local memory before falling back to allocating from a remote NUMA node. The intent was to preserve NUMA locality, but in practice this causes a significant problem:
 
@@ -274,7 +274,7 @@ That "if non-zero" is a hint that "zero" is the safe default. Modern server work
 
 ---
 
-## `RECLAIM_DISTANCE` and `zone_allows_reclaim()`
+## `RECLAIM_DISTANCE` and `zone_allows_reclaim()` {#reclaimdistance-and-zoneallows_reclaim}
 
 Even when `zone_reclaim_mode` is non-zero, the kernel will not invoke `node_reclaim()` for zones that are topologically close to the requesting node. The threshold is `RECLAIM_DISTANCE`, defined in `include/linux/topology.h`:
 
@@ -317,17 +317,17 @@ node_distance(local, candidate) <= node_reclaim_distance?
 
 ---
 
-## DMA Zone Pressure
+## DMA Zone Pressure {#dma-zone-pressure}
 
 `ZONE_DMA` (first ~16MB) and `ZONE_DMA32` (first 4GB) are small relative to total system RAM. They fill up with device-specific allocations (`GFP_DMA`, `GFP_DMA32`) and are not easily reclaimed.
 
-### Why DMA zones deplete
+### Why DMA zones deplete {#why-dma-zones-deplete}
 
 - Device drivers allocate bounce buffers, descriptor rings, and firmware regions with `GFP_DMA` or `GFP_DMA32`.
 - These allocations are often long-lived (held for the device's lifetime).
 - The kernel does not automatically migrate DMA allocations to other zones.
 
-### Fallback and OOM behavior
+### Fallback and OOM behavior {#fallback-and-oom-behavior}
 
 - `GFP_KERNEL` allocations (normal memory) can fall back to `ZONE_DMA32` or `ZONE_DMA` if `ZONE_NORMAL` is exhausted, but the reverse is not true.
 - A `GFP_DMA` allocation with no free pages in `ZONE_DMA` triggers the OOM killer even if `ZONE_NORMAL` has gigabytes free, because `ZONE_NORMAL` memory is not reachable by the device.
@@ -341,7 +341,7 @@ GFP_DMA allocation path:
   ZONE_DMA only — OOM if exhausted
 ```
 
-### Detecting DMA zone pressure
+### Detecting DMA zone pressure {#detecting-dma-zone-pressure}
 
 ```bash
 # Check free pages per zone vs watermarks
@@ -359,13 +359,13 @@ Signs of trouble: `free` pages in `DMA` or `DMA32` approaching `min`, combined w
 
 ---
 
-## Watermark Boosting
+## Watermark Boosting {#watermark-boosting}
 
-### The problem it solves
+### The problem it solves {#the-problem-it-solves}
 
 When a high-order allocation (e.g. a THP) falls back to a lower migratetype (e.g. `MIGRATE_UNMOVABLE` stealing from `MIGRATE_MOVABLE`), it pollutes the lower-order free lists. Without intervention, future high-order allocations will keep failing and kswapd will never be woken because the zone may be above its normal watermarks even though it is internally fragmented.
 
-### How it works
+### How it works {#how-it-works}
 
 `boost_watermark()` in `mm/page_alloc.c` is called when `try_to_claim_block()` detects a migratetype fallback at order less than `pageblock_order`. It temporarily raises `zone->watermark_boost`:
 
@@ -408,7 +408,7 @@ if ((alloc_flags & ALLOC_KSWAPD) &&
 
 `balance_pgdat()` then drains the boost incrementally: each iteration it subtracts the initial `zone_boosts[i]` snapshot from `zone->watermark_boost` until the boost is gone and the zone is genuinely balanced.
 
-### Controlling boost behavior
+### Controlling boost behavior {#controlling-boost-behavior}
 
 ```bash
 # Default: 15000 (150% of WMARK_HIGH)
@@ -422,9 +422,9 @@ Set to `0` on systems where THP fallbacks are frequent and the resulting kswapd 
 
 ---
 
-## Observing Zone State
+## Observing Zone State {#observing-zone-state}
 
-### `/proc/zoneinfo`
+### `/proc/zoneinfo` {#proczoneinfo}
 
 The canonical per-zone diagnostic. Key fields:
 
@@ -442,7 +442,7 @@ Node 0, zone   Normal
 
 Check for zones where `free` is below `low` or approaching `min`.
 
-### `/proc/vmstat` — zone reclaim counters
+### `/proc/vmstat` — zone reclaim counters {#procvmstat-zone-reclaim-counters}
 
 These counters are only present when `CONFIG_NUMA=y`:
 
@@ -454,7 +454,7 @@ grep zone_reclaim /proc/vmstat
 
 A high `zone_reclaim_failed` count with `zone_reclaim_mode` enabled is a strong signal that the workload's hot pages cannot be reclaimed locally and `zone_reclaim_mode` should be disabled.
 
-### Quick diagnostic workflow
+### Quick diagnostic workflow {#quick-diagnostic-workflow}
 
 ```bash
 # 1. Check zone watermarks and free pages
@@ -473,7 +473,7 @@ grep -A 10 "zone.*DMA" /proc/zoneinfo | grep free
 grep -E "pageoutrun|kswapd" /proc/vmstat
 ```
 
-### Tuning guidance
+### Tuning guidance {#tuning-guidance}
 
 | Symptom | Likely cause | Action |
 |---------|-------------|--------|
@@ -483,27 +483,27 @@ grep -E "pageoutrun|kswapd" /proc/vmstat
 | kswapd running without memory pressure | Watermark boost active | Check `boost` field in `/proc/zoneinfo`; consider lowering `watermark_boost_factor` |
 | High-order allocation failures persist | Zone fragmentation | Inspect `/proc/buddyinfo`; consider `vm.compaction_proactiveness` |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `node_reclaim()`, `balance_pgdat()`, `kswapd()`, and the `node_reclaim_mode` variable
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `get_page_from_freelist()`, `zone_watermark_fast()`, `zone_watermark_ok()`, `zone_allows_reclaim()`, `boost_watermark()`
 - [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zone` watermark fields, `enum zone_watermarks`, `enum zone_type`, and watermark accessor inlines
 - [include/uapi/linux/mempolicy.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mempolicy.h) — `RECLAIM_ZONE`, `RECLAIM_WRITE`, `RECLAIM_UNMAP` bit definitions
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - `Documentation/admin-guide/sysctl/vm.rst` — `zone_reclaim_mode`, `min_free_kbytes`, `watermark_boost_factor`, and `watermark_scale_factor` ([rendered](https://docs.kernel.org/admin-guide/sysctl/vm.html))
 - `/proc/sys/vm/zone_reclaim_mode` — runtime toggle; `0` disables, `1`/`2`/`4` enable progressively more aggressive reclaim
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Zone reclaim mode considered harmful](https://lwn.net/Articles/432224/) — analysis of why `zone_reclaim_mode=1` hurts throughput on most workloads and why the default is off
 - [Watermark boosting](https://lwn.net/Articles/750500/) — the motivation for `watermark_boost_factor` and how it mitigates fragmentation-driven kswapd underactivity
 - [DMA zone management](https://lwn.net/Articles/258803/) — why DMA zones are small, how they deplete, and the constraints that prevent fallback across zone boundaries
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Effects on Memory Reclaim](numa-reclaim.md) — per-node kswapd threads, NUMA-balancing interaction with reclaim, and `zone_reclaim_mode` in the NUMA context
 - [NUMA Zonelist Construction and Fallback Ordering](numa-zonelist.md) — how the allocator's fallback list determines which zone is tried before `node_reclaim()` is called

@@ -1,8 +1,8 @@
-# Kernel Live Patching (KLP)
+# Kernel Live Patching (KLP) {#kernel-live-patching-klp}
 
 > Applying security fixes and bug fixes to a running kernel without rebooting
 
-## What KLP does
+## What KLP does {#what-klp-does}
 
 KLP redirects calls from the original (buggy) function to a replacement (patched) function at runtime, using ftrace's function entry hook:
 
@@ -19,7 +19,7 @@ Before patch:           After patch:
 
 The original function's body is never rewritten and no jump is inserted into it. KLP reuses the ftrace call site the compiler already emitted at function entry (via `-mfentry`, or `-fpatchable-function-entry` on arm64), and `klp_ftrace_handler()` redirects execution by changing the saved instruction pointer, not by patching code.
 
-## Architecture
+## Architecture {#architecture}
 
 ```c
 /* include/linux/livepatch.h */
@@ -80,7 +80,7 @@ struct klp_object {
 };
 ```
 
-## Writing a live patch module
+## Writing a live patch module {#writing-a-live-patch-module}
 
 ```c
 #include <linux/module.h>
@@ -148,14 +148,14 @@ MODULE_INFO(livepatch, "Y");
 MODULE_LICENSE("GPL");
 ```
 
-### Calling the original function
+### Calling the original function {#calling-the-original-function}
 
 The KLP API does not provide a `klp_call_orig()` helper. A live patch replacement
 must either fully re-implement the function or use `klp_shadow_*` to carry extra
 state. If you need access to the original logic, copy it into the patch module and
 apply only the targeted fix.
 
-## ftrace-based redirection
+## ftrace-based redirection {#ftrace-based-redirection}
 
 KLP registers an `ftrace_ops` per patched function with `FTRACE_OPS_FL_IPMODIFY`
 (permission to change the instruction pointer) and `klp_ftrace_handler()` redirects
@@ -223,7 +223,7 @@ the handler walks past B to A's version of the function rather than the
 original — so already-patched behavior from A is preserved during B's
 transition.
 
-## The consistency model
+## The consistency model {#the-consistency-model}
 
 KLP can't simply redirect calls immediately — a task might be in the middle of executing the old function. The **consistency model** ensures all tasks have transitioned before the patch is considered active:
 
@@ -254,7 +254,7 @@ cat /sys/kernel/livepatch/mypatch/transition
 echo 1 > /sys/kernel/livepatch/mypatch/force
 ```
 
-### Sleepy tasks
+### Sleepy tasks {#sleepy-tasks}
 
 A task blocked in `D` state (`TASK_UNINTERRUPTIBLE`) inside the old function will delay the transition, and the livepatch core cannot shorten that wait: `klp_send_signals()` reaches only tasks in interruptible sleep (`wake_up_state(task, TASK_INTERRUPTIBLE)` for kthreads, `set_notify_signal()` — itself only a `TASK_INTERRUPTIBLE` wakeup — for user tasks). A D-state task has to leave that state on its own; the periodic workqueue just re-checks until it does. See [KLP Consistency Model](klp-consistency.md):
 
@@ -268,7 +268,7 @@ ps aux | grep ' D '  # uninterruptible sleep tasks
 cat /proc/<pid>/stack  # check if in the old function
 ```
 
-## Shadow variables
+## Shadow variables {#shadow-variables}
 
 Shadow variables attach extra data to existing kernel objects without modifying their structure — useful when a patch needs to add state:
 
@@ -298,7 +298,7 @@ klp_shadow_free(file, KLP_SHADOW_MAGIC, NULL);
 
 Shadow data is stored in a global hash table keyed by (object pointer, ID).
 
-## Building a live patch
+## Building a live patch {#building-a-live-patch}
 
 ```bash
 # Kernel build tree required
@@ -316,7 +316,7 @@ cat /sys/kernel/livepatch/mypatch/enabled
 # 1
 ```
 
-## Observing live patches
+## Observing live patches {#observing-live-patches}
 
 ```bash
 # All active patches
@@ -342,9 +342,9 @@ dmesg | grep livepatch
 # livepatch: 'mypatch': patching complete
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`, `struct klp_object`, `struct klp_patch`, and the `klp_shadow_*()` prototypes
 - [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_ftrace_handler()`, the ftrace ops registration (`FTRACE_OPS_FL_IPMODIFY`), and the func-stack redirection logic
@@ -353,7 +353,7 @@ dmesg | grep livepatch
 - [samples/livepatch/livepatch-sample.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/samples/livepatch/livepatch-sample.c) — the canonical minimal live patch module (patches `cmdline_proc_show`)
 - [Documentation/ABI/testing/sysfs-kernel-livepatch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ABI/testing/sysfs-kernel-livepatch) — the authoritative `/sys/kernel/livepatch/` attribute list (`enabled`, `transition`, `force`, `replace`, `stack_order`, and per-object `patched`)
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KLP Consistency Model](klp-consistency.md) — deep dive on per-task patch state, stack checking, and the transition workqueue
 - [Cumulative Patches and Atomic Replace](klp-cumulative.md) — patch stacking, `.replace`, and `struct klp_ops`
@@ -362,13 +362,13 @@ dmesg | grep livepatch
 - [Kernel Modules](../modules/module-basics.md) — KLP patches are distributed and loaded as regular kernel modules
 - [Tracing: ftrace](../tracing/ftrace.md) — the function-entry hook mechanism KLP builds on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Kernel Live Patching](https://lwn.net/Articles/619390/) — Seth Jennings' original 2014 writeup of the ftrace-based core: the pre-merge `lp_patch`-based design (renamed `klp_` before merge) and the original sysfs interface
 - [livepatch: hybrid consistency model](https://lwn.net/Articles/685464/) — Josh Poimboeuf's 2016 series introducing per-task transitions, stack-reliability checking, and `TIF_PATCH_PENDING`
 - [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/) — Joe Lawrence's 2017 patch introducing `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()`
 
-### External
+### External {#external}
 
 - [Livepatch — The Linux Kernel documentation](https://docs.kernel.org/livepatch/livepatch.html) — official documentation: motivation, the consistency model, module life-cycle, and known limitations
 - [Shadow Variables — The Linux Kernel documentation](https://docs.kernel.org/livepatch/shadow-vars.html) — official shadow-variable API reference and usage notes

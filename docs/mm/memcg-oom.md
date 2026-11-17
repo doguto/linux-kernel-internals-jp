@@ -1,8 +1,8 @@
-# Cgroup OOM Controller
+# Cgroup OOM Controller {#cgroup-oom-controller}
 
 > How the kernel kills processes when a cgroup runs out of memory
 
-## Cgroup OOM vs Global OOM
+## Cgroup OOM vs Global OOM {#cgroup-oom-vs-global-oom}
 
 The kernel has two OOM paths. The global OOM killer fires when the entire system cannot satisfy an allocation after exhausting reclaim. The cgroup OOM controller fires when a single cgroup exceeds its `memory.max` after exhausting reclaim within that cgroup. The host system can have gigabytes free — the cgroup OOM does not care.
 
@@ -17,7 +17,7 @@ The kernel has two OOM paths. The global OOM killer fires when the entire system
 
 Both paths converge on the same victim selection function, `oom_badness()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c). The difference is which `totalpages` value is passed in — and `totalpages` is the denominator in the `oom_score_adj` calculation, so cgroup size matters.
 
-## What Triggers a Cgroup OOM
+## What Triggers a Cgroup OOM {#what-triggers-a-cgroup-oom}
 
 The sequence from normal operation to OOM kill has four steps:
 
@@ -42,11 +42,11 @@ flowchart TB
 
 4. **Kill**: A victim is selected and sent `SIGKILL`. Memory is freed, and the original allocation retries.
 
-### The `memory.high` path is separate
+### The `memory.high` path is separate {#the-memoryhigh-path-is-separate}
 
 `memory.high` does not trigger OOM. When a cgroup exceeds `memory.high`, the kernel throttles allocating processes and reclaims aggressively, but no process is killed. OOM is only triggered when `memory.max` is reached and reclaim fails. See [Tuning memory for containers](tuning-containers.md) for the distinction.
 
-## Victim Selection in a Cgroup Context
+## Victim Selection in a Cgroup Context {#victim-selection-in-a-cgroup-context}
 
 The function `oom_badness()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) computes a score for each process:
 
@@ -64,13 +64,13 @@ For cgroup OOM, `totalpages` is the cgroup's `memory.max` (or the current usage,
 
 In the cgroup case, `oom_score_adj` has much less absolute impact because `totalpages` is small. Processes that look highly penalized at the system level may be only moderately penalized within a small cgroup. The relative ordering can change.
 
-### Candidate enumeration
+### Candidate enumeration {#candidate-enumeration}
 
 For a cgroup OOM, only processes within the affected cgroup (and its descendants) are candidates. `select_bad_process()` uses `mem_cgroup_scan_tasks()` to iterate only tasks within the target memcg hierarchy, calling `oom_evaluate_task()` for each candidate.
 
 Processes with `oom_score_adj = -1000` are always skipped (immune). Kernel threads are always skipped. The process that triggered the OOM is not automatically the victim — it competes on score like any other process.
 
-## memory.oom.group: Killing the Whole Cgroup
+## memory.oom.group: Killing the Whole Cgroup {#memoryoomgroup-killing-the-whole-cgroup}
 
 By default, the OOM killer selects and kills one process. For containerized applications, killing one worker process often leaves the container in a broken state: the orchestrator sees the container still running, but a critical subprocess is dead.
 
@@ -85,7 +85,7 @@ By default, the OOM killer selects and kills one process. For containerized appl
 echo 1 > /sys/fs/cgroup/mycontainer/memory.oom.group
 ```
 
-### How group kill works
+### How group kill works {#how-group-kill-works}
 
 When the OOM killer selects a victim and `memory.oom.group = 1` is set on that victim's cgroup (or any ancestor with `oom_group` set), `mem_cgroup_get_oom_group()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) returns the highest ancestor cgroup with `oom_group = 1`. Then `oom_kill_memcg_member()` is called for every process in that cgroup's subtree.
 
@@ -100,7 +100,7 @@ The kill log includes an extra line:
 [  891.112298] Memory cgroup out of memory: Killed process 12003 (worker-3) ...
 ```
 
-### When to use memory.oom.group
+### When to use memory.oom.group {#when-to-use-memoryoomgroup}
 
 | Use case | Recommendation |
 |----------|----------------|
@@ -109,7 +109,7 @@ The kill log includes an extra line:
 | Microservice with sidecar | Enable — killing the app but not the proxy leaves a zombie |
 | Interactive shell session | Do not enable — kills the whole session for one bad command |
 
-## oom_score_adj Interaction with Cgroup OOM
+## oom_score_adj Interaction with Cgroup OOM {#oomscoreadj-interaction-with-cgroup-oom}
 
 `oom_score_adj` is set per-process (via `/proc/<pid>/oom_score_adj`) and ranges from -1000 to +1000. It modifies the computed OOM score:
 
@@ -127,7 +127,7 @@ echo 1000 > /proc/$(pgrep disposable-worker)/oom_score_adj
 !!! warning "Immune processes can cause OOM loops"
     If all processes in a cgroup have `oom_score_adj = -1000`, the OOM killer cannot select a victim. The allocation will fail with `-ENOMEM` rather than killing anything. This can cause `ENOMEM` errors or allocation hangs in the triggering process.
 
-### Systemd and oom_score_adj
+### Systemd and oom_score_adj {#systemd-and-oomscoreadj}
 
 systemd sets `OOMScoreAdjust` in unit files, which maps directly to `/proc/<pid>/oom_score_adj`. System-critical services (journald, udevd) are set to -1000 by default. For container workloads, set `OOMScoreAdjust` per service to control victim preference within a cgroup.
 
@@ -140,7 +140,7 @@ OOMScoreAdjust=200      # Prefer this service as a victim over others
 MemoryOOMPolicy=kill    # Default: kill the process (v253+)
 ```
 
-## The Kill Sequence: Functions and Log Output
+## The Kill Sequence: Functions and Log Output {#the-kill-sequence-functions-and-log-output}
 
 The complete call path from charge failure to process kill:
 
@@ -158,7 +158,7 @@ try_charge()                         [mm/memcontrol.c]
             → do_send_sig_info()     [SIGKILL]
 ```
 
-### What gets logged
+### What gets logged {#what-gets-logged}
 
 The log output is generated by `dump_header()` and `oom_kill_process()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c), with cgroup-specific memory stats from `mem_cgroup_print_oom_meminfo()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c).
 
@@ -202,9 +202,9 @@ Key differences from a global OOM log:
 
 See [Reading an OOM log](reading-oom-log.md) for a full annotated walkthrough of each field.
 
-## Configuring Cgroup OOM Behavior
+## Configuring Cgroup OOM Behavior {#configuring-cgroup-oom-behavior}
 
-### Prevent OOM by setting memory.high
+### Prevent OOM by setting memory.high {#prevent-oom-by-setting-memoryhigh}
 
 The most effective way to avoid cgroup OOM is to ensure the application encounters throttling (`memory.high`) before hitting the hard limit (`memory.max`). The gap between them gives the kernel room to reclaim and gives monitoring systems time to respond.
 
@@ -214,7 +214,7 @@ echo 800M > /sys/fs/cgroup/myapp/memory.high
 echo 1G   > /sys/fs/cgroup/myapp/memory.max
 ```
 
-### Allow swap as a buffer
+### Allow swap as a buffer {#allow-swap-as-a-buffer}
 
 If swap is available, allowing the cgroup to use it gives a buffer between the `memory.high` throttle zone and the `memory.max` OOM zone. See [Swap accounting in cgroups](memcg-swap.md) for details.
 
@@ -222,7 +222,7 @@ If swap is available, allowing the cgroup to use it gives a buffer between the `
 echo 512M > /sys/fs/cgroup/myapp/memory.swap.max
 ```
 
-### Monitor OOM events proactively
+### Monitor OOM events proactively {#monitor-oom-events-proactively}
 
 ```bash
 # Watch for OOM events
@@ -232,7 +232,7 @@ watch -n 5 cat /sys/fs/cgroup/myapp/memory.events
 # (systemd-oomd uses inotify on memory.pressure instead)
 ```
 
-### memory.events fields
+### memory.events fields {#memoryevents-fields}
 
 ```bash
 cat /sys/fs/cgroup/myapp/memory.events
@@ -246,7 +246,7 @@ cat /sys/fs/cgroup/myapp/memory.events
 
 `oom` counts OOM events. `oom_kill` counts processes killed. If `memory.oom.group = 1`, one OOM event can produce multiple `oom_kill` increments.
 
-## cgroup v1 vs v2 OOM Behavior
+## cgroup v1 vs v2 OOM Behavior {#cgroup-v1-vs-v2-oom-behavior}
 
 | Behavior | cgroup v1 | cgroup v2 |
 |----------|-----------|-----------|
@@ -261,7 +261,7 @@ cat /sys/fs/cgroup/myapp/memory.events
 !!! warning "memory.oom_control disable in v1 is dangerous"
     Setting `memory.oom_control = 1` in cgroup v1 disables the OOM killer for that cgroup. When the cgroup exceeds its limit, allocations block indefinitely instead of triggering OOM. Processes hang rather than die. This was removed from cgroup v2 by design. If you need allocation failure without killing, use `memory.oom.group` plus a userspace OOM daemon like [systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) or [Meta's oomd](https://facebookincubator.github.io/oomd/).
 
-## systemd-oomd: Userspace OOM Before the Kernel Fires
+## systemd-oomd: Userspace OOM Before the Kernel Fires {#systemd-oomd-userspace-oom-before-the-kernel-fires}
 
 [systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) monitors PSI (Pressure Stall Information) per cgroup and kills cgroups that are under sustained memory pressure, before the kernel OOM killer fires. It acts at the cgroup level (killing the whole cgroup), not the process level.
 
@@ -281,9 +281,9 @@ DefaultMemoryPressureDurationSec=30
 
 PSI-based killing is generally preferable to kernel OOM killing because it acts earlier (during high pressure, not after allocation failure) and kills at the cgroup boundary.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Trigger a cgroup OOM and observe the log
+### Trigger a cgroup OOM and observe the log {#trigger-a-cgroup-oom-and-observe-the-log}
 
 ```bash
 # Create a cgroup with a small limit
@@ -303,7 +303,7 @@ python3 -c "x = bytearray(100 * 1024 * 1024)"
 dmesg | grep -A 30 "Memory cgroup out of memory"
 ```
 
-### Compare oom_score_adj impact
+### Compare oom_score_adj impact {#compare-oomscoreadj-impact}
 
 ```bash
 # With two processes in a cgroup, observe which one is selected
@@ -331,7 +331,7 @@ echo $! | sudo tee /sys/fs/cgroup/score-test/cgroup.procs
 dmesg | tail -5
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Relevant functions |
 |------|--------------------|
@@ -339,13 +339,13 @@ dmesg | tail -5
 | [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | `out_of_memory()` — shared OOM logic; `oom_badness()` — scoring; `select_bad_process()` — candidate enumeration; `oom_kill_process()` — kill + log; `__oom_kill_process()` — actual SIGKILL |
 | [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`, oom_group field |
 
-## History
+## History {#history}
 
-### Cgroup OOM Notification (cgroup v1, v3.8, 2013)
+### Cgroup OOM Notification (cgroup v1, v3.8, 2013) {#cgroup-oom-notification-cgroup-v1-v38-2013}
 
 cgroup v1 introduced `memory.oom_control` with eventfd-based OOM notifications. The interface allowed userspace to be notified when OOM occurred, and optionally to disable the OOM killer entirely (blocking allocations instead). This was useful but fragile — disabled OOM kills led to hung processes.
 
-### memory.oom.group (v4.19, 2018)
+### memory.oom.group (v4.19, 2018) {#memoryoomgroup-v419-2018}
 
 **Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
 
@@ -353,30 +353,30 @@ cgroup v1 introduced `memory.oom_control` with eventfd-based OOM notifications. 
 
 Enabled killing all processes in a cgroup together on OOM, replacing the need for external watchdogs to restart partially-killed containers.
 
-### cgroup v2 OOM (v4.5+)
+### cgroup v2 OOM (v4.5+) {#cgroup-v2-oom-v45}
 
 cgroup v2 removed `memory.oom_control` disable functionality by design. The v2 philosophy is that processes should be killed rather than hung. The `memory.events` file replaced eventfd notifications with a simple counter file suitable for polling.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Cgroup memory controller |
 | [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer: scoring, selection, killing |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — memory interface files, oom.group
 - [`Documentation/filesystems/proc.rst`](https://docs.kernel.org/filesystems/proc.html) — `/proc/<pid>/oom_score_adj` and `oom_score` semantics
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [Toward better OOM killing](https://lwn.net/Articles/391222/) — background on the OOM scoring model
 - [Group-kill for memory-cgroup OOM](https://lwn.net/Articles/761118/) — memory.oom.group design
 
-### Related
+### Related {#related}
 
 - [Memory Cgroups](memcg.md) — memcg fundamentals
 - [Reading an OOM log](reading-oom-log.md) — annotated OOM log walkthrough
@@ -384,7 +384,7 @@ cgroup v2 removed `memory.oom_control` disable functionality by design. The v2 p
 - [Hierarchical memory limits](memcg-hierarchy.md) — how limits propagate in the cgroup tree
 - [Swap accounting in cgroups](memcg-swap.md) — using swap to avoid OOM
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `mem_cgroup_out_of_memory()` (cgroup OOM entry point), `mem_cgroup_get_oom_group()` (group-kill ancestor walk), `mem_cgroup_print_oom_meminfo()` (per-cgroup log output)
 - [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()` scoring, `select_bad_process()` with `mem_cgroup_scan_tasks()`, `oom_kill_process()` log generation — shared between global and cgroup OOM paths

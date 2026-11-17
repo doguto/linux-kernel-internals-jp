@@ -1,8 +1,8 @@
-# io_uring Networking
+# io_uring Networking {#io_uring-networking}
 
 > Zero-syscall network I/O, multishot accept, zero-copy send, and high-performance server patterns
 
-## Why io_uring for networking?
+## Why io_uring for networking? {#why-io_uring-for-networking}
 
 The classic Linux networking stack pairs `epoll` with non-blocking sockets. It works well, but every individual I/O operation still costs a syscall:
 
@@ -13,7 +13,7 @@ That is two syscalls per data transfer at minimum — more if you also call `acc
 
 io_uring with `IORING_SETUP_SQPOLL` eliminates per-operation syscalls entirely. After ring setup, the kernel's SQ polling thread monitors the submission queue continuously. Userspace drops SQEs into the ring and reads CQEs out without ever entering the kernel again. For network servers processing tens of thousands of connections, this is the difference between the kernel being on the hot path and being completely out of it.
 
-### Comparison: epoll+recv vs io_uring multishot recv
+### Comparison: epoll+recv vs io_uring multishot recv {#comparison-epollrecv-vs-io_uring-multishot-recv}
 
 | Aspect | epoll + non-blocking recv | io_uring multishot recv |
 |---|---|---|
@@ -25,11 +25,11 @@ io_uring with `IORING_SETUP_SQPOLL` eliminates per-operation syscalls entirely. 
 | API complexity | Familiar POSIX | New but consistent SQE/CQE model |
 | Kernel version requirement | Ubiquitous | Linux 5.1+ (networking ops), 5.19+ (multishot) |
 
-## Basic network operations
+## Basic network operations {#basic-network-operations}
 
 All network operations follow the same SQE model. The liburing helpers paper over the raw struct fields.
 
-### `IORING_OP_ACCEPT`
+### `IORING_OP_ACCEPT` {#ioringopaccept}
 
 Equivalent to `accept4(2)`. `res` in the CQE holds the new client file descriptor on success.
 
@@ -47,7 +47,7 @@ io_uring_sqe_set_data64(sqe, TAG_ACCEPT);
 
 For multishot accept (Linux 5.19), use `io_uring_prep_multishot_accept` — covered in detail in the next section.
 
-### `IORING_OP_CONNECT`
+### `IORING_OP_CONNECT` {#ioringopconnect}
 
 Equivalent to `connect(2)`. Non-blocking: the SQE is submitted and the CQE arrives when the connection completes (or fails). `res == 0` on success.
 
@@ -65,7 +65,7 @@ io_uring_prep_connect(sqe, sock_fd,
 io_uring_sqe_set_data64(sqe, TAG_CONNECT);
 ```
 
-### `IORING_OP_SEND` and `IORING_OP_RECV`
+### `IORING_OP_SEND` and `IORING_OP_RECV` {#ioringopsend-and-ioringoprecv}
 
 Direct equivalents of `send(2)` and `recv(2)`. `res` holds bytes transferred or `-errno`.
 
@@ -83,7 +83,7 @@ io_uring_sqe_set_data64(sqe, TAG_RECV);
 
 For multishot recv, set `IORING_RECV_MULTISHOT` and `IOSQE_BUFFER_SELECT` — covered in the section on provided buffers.
 
-### `IORING_OP_SENDMSG` and `IORING_OP_RECVMSG`
+### `IORING_OP_SENDMSG` and `IORING_OP_RECVMSG` {#ioringopsendmsg-and-ioringoprecvmsg}
 
 Equivalents of `sendmsg(2)` and `recvmsg(2)`. Accept a pointer to `struct msghdr` in `sqe->addr`. Useful for scatter-gather I/O and sending ancillary data.
 
@@ -102,7 +102,7 @@ sqe = io_uring_get_sqe(&ring);
 io_uring_prep_recvmsg(sqe, client_fd, &msg, 0 /* msg_flags */);
 ```
 
-### Key SQE flags for network operations
+### Key SQE flags for network operations {#key-sqe-flags-for-network-operations}
 
 | Flag | Effect |
 |---|---|
@@ -112,9 +112,9 @@ io_uring_prep_recvmsg(sqe, client_fd, &msg, 0 /* msg_flags */);
 | `IOSQE_IO_HARDLINK` | Chain unconditionally; next runs even if this one fails |
 | `IOSQE_ASYNC` | Force async execution (skip inline attempt; useful for known-blocking ops) |
 
-## High-performance accept loop
+## High-performance accept loop {#high-performance-accept-loop}
 
-### Multishot accept (Linux 5.19)
+### Multishot accept (Linux 5.19) {#multishot-accept-linux-519}
 
 `IORING_ACCEPT_MULTISHOT` keeps a single `IORING_OP_ACCEPT` SQE armed indefinitely. Each new connection produces a CQE with `res = new_client_fd`. The SQE is never consumed — it remains active until explicitly cancelled or until a fatal error forces it to disarm.
 
@@ -191,9 +191,9 @@ io_uring_submit(&ring);
 /* The multishot accept posts a final CQE with res == -ECANCELED */
 ```
 
-## Multishot recv with provided buffers
+## Multishot recv with provided buffers {#multishot-recv-with-provided-buffers}
 
-### Why provided buffers are required
+### Why provided buffers are required {#why-provided-buffers-are-required}
 
 With normal `IORING_OP_RECV`, the caller specifies a buffer before submission. The kernel knows exactly where to write data. For multishot recv, data arrives at unpredictable times and in unpredictable sizes. The kernel cannot borrow userspace memory between events — it needs a buffer available the moment data arrives.
 
@@ -201,7 +201,7 @@ Provided buffer rings solve this: the application pre-registers a pool of buffer
 
 `IORING_RECV_MULTISHOT` requires `IOSQE_BUFFER_SELECT`. Without it, the submission returns `EINVAL`.
 
-### Buffer ring setup
+### Buffer ring setup {#buffer-ring-setup}
 
 ```c
 #define NUM_BUFS   64      /* must be a power of 2 */
@@ -234,7 +234,7 @@ for (int i = 0; i < NUM_BUFS; i++) {
 io_uring_buf_ring_advance(buf_ring, NUM_BUFS);
 ```
 
-### Submitting multishot recv
+### Submitting multishot recv {#submitting-multishot-recv}
 
 ```c
 #define TAG_RECV(fd)  ((uint64_t)(fd) | (1ULL << 32))
@@ -250,7 +250,7 @@ void arm_recv(struct io_uring *ring, int client_fd)
 }
 ```
 
-### Handling recv CQEs and recycling buffers
+### Handling recv CQEs and recycling buffers {#handling-recv-cqes-and-recycling-buffers}
 
 ```c
 void handle_recv_cqe(struct io_uring_cqe *cqe,
@@ -291,7 +291,7 @@ void handle_recv_cqe(struct io_uring_cqe *cqe,
 }
 ```
 
-### `-ENOBUFS` handling
+### `-ENOBUFS` handling {#-enobufs-handling}
 
 When the buffer pool is exhausted, the multishot SQE is automatically disarmed and a CQE with `res == -ENOBUFS` is posted (`IORING_CQE_F_MORE` will be absent). The application should:
 
@@ -300,15 +300,15 @@ When the buffer pool is exhausted, the multishot SQE is automatically disarmed a
 
 Tuning `NUM_BUFS` to match your expected concurrency avoids `ENOBUFS` entirely. A useful heuristic: at least one buffer per active connection, plus slack for burst traffic.
 
-## `IORING_OP_SEND_ZC` — zero-copy send (Linux 6.1)
+## `IORING_OP_SEND_ZC` — zero-copy send (Linux 6.1) {#ioringopsend_zc-zero-copy-send-linux-61}
 
-### Background: MSG_ZEROCOPY before io_uring
+### Background: MSG_ZEROCOPY before io_uring {#background-msgzerocopy-before-iouring}
 
 The kernel's `MSG_ZEROCOPY` flag (added in Linux 4.14) allows `send()` to avoid copying user data into kernel buffers. Instead, the kernel pins the user pages and transfers them directly. When the transmission is complete and the pages can be unpinned, the kernel notifies the application via a message on the socket's error queue, which the application must then read with `recvmsg(MSG_ERRQUEUE)`.
 
 The result works but is cumbersome: sending is one syscall, and collecting the completion notification is a second `recvmsg` call on a different code path. Zero-copy adds complexity proportional to the benefit.
 
-### How `IORING_OP_SEND_ZC` works
+### How `IORING_OP_SEND_ZC` works {#how-ioringopsend_zc-works}
 
 `IORING_OP_SEND_ZC` integrates zero-copy directly into the io_uring model. A single SQE submission produces **two CQEs**:
 
@@ -346,7 +346,7 @@ void handle_send_zc_cqe(struct io_uring_cqe *cqe, void *buf)
 }
 ```
 
-### When zero-copy helps
+### When zero-copy helps {#when-zero-copy-helps}
 
 Zero-copy avoids a `memcpy` from userspace into kernel socket buffers. The benefit only materialises for large transfers; for small messages the pinning overhead exceeds the copy cost.
 
@@ -375,7 +375,7 @@ void adaptive_send(struct io_uring *ring, int fd,
 }
 ```
 
-## `IORING_OP_SENDMSG_ZC` — zero-copy sendmsg
+## `IORING_OP_SENDMSG_ZC` — zero-copy sendmsg {#ioringopsendmsg_zc-zero-copy-sendmsg}
 
 `IORING_OP_SENDMSG_ZC` (Linux 6.1) extends zero-copy to scatter-gather I/O via `struct msghdr`. It follows the same two-CQE protocol as `IORING_OP_SEND_ZC`: a result CQE then a `IORING_CQE_F_NOTIF` release CQE.
 
@@ -395,7 +395,7 @@ io_uring_sqe_set_data64(sqe, TAG_SENDMSG_ZC);
 io_uring_submit(&ring);
 ```
 
-### Using `IORING_OP_SENDMSG_ZC` with fixed buffers
+### Using `IORING_OP_SENDMSG_ZC` with fixed buffers {#using-ioringopsendmsg_zc-with-fixed-buffers}
 
 Pre-registering buffers with `io_uring_register_buffers()` allows the kernel to pin them once at registration time rather than per-send. Combine with `IORING_SENDMSG_FIXED_BUF` in `sqe->ioprio` to indicate the iovec references registered buffers:
 
@@ -413,9 +413,9 @@ io_uring_sqe_set_data64(sqe, TAG_SENDMSG_ZC);
 io_uring_submit(&ring);
 ```
 
-## Chaining network operations
+## Chaining network operations {#chaining-network-operations}
 
-### Linked accept + recv
+### Linked accept + recv {#linked-accept-recv}
 
 A newly accepted connection immediately needs a receive armed. Using `IOSQE_IO_LINK` chains the recv to start the moment accept delivers a client fd — but note that with multishot accept the fd isn't known at submission time, so this pattern is more useful for one-shot accept:
 
@@ -434,7 +434,7 @@ io_uring_prep_recv(sqe, /* fd set by kernel at accept time? No — */ -1, buf, B
 
 Linked SQEs share the same ring submission but sequential execution. The kernel fills in results in order. For network ops where the next fd depends on the current result, the multishot pattern (submit recv from the CQE handler) is cleaner.
 
-### Linked send + close
+### Linked send + close {#linked-send-close}
 
 After sending a response, close the connection. Using a hard link ensures `close` runs even if the send fails:
 
@@ -453,7 +453,7 @@ io_uring_sqe_set_data64(sqe, TAG_CLOSE);
 io_uring_submit(&ring);
 ```
 
-### Connect with timeout
+### Connect with timeout {#connect-with-timeout}
 
 `IORING_OP_LINK_TIMEOUT` cancels the preceding linked SQE if it does not complete within the deadline. Soft-link (`IOSQE_IO_LINK`) is correct here: if the connect succeeds before the timeout, the timeout SQE is automatically cancelled.
 
@@ -482,13 +482,13 @@ io_uring_submit(&ring);
  */
 ```
 
-## Fixed files for sockets
+## Fixed files for sockets {#fixed-files-for-sockets}
 
 Every `IORING_OP_RECV`, `IORING_OP_SEND`, and `IORING_OP_ACCEPT` on a regular file descriptor calls `fdget` and `fdput` internally to look up and pin the file in the file descriptor table. Under high connection rates this adds up.
 
 **Fixed files** pre-register a table of file descriptors with the ring at startup. Each operation that sets `IOSQE_FIXED_FILE` skips `fdget`/`fdput` entirely — the kernel references the pre-pinned `struct file` directly.
 
-### Registering the server socket
+### Registering the server socket {#registering-the-server-socket}
 
 ```c
 /* Register listen_fd as fixed file slot 0 */
@@ -499,7 +499,7 @@ fds[0] = listen_fd;
 io_uring_register_files(&ring, fds, MAX_CLIENTS + 1);
 ```
 
-### Adding accepted client sockets dynamically
+### Adding accepted client sockets dynamically {#adding-accepted-client-sockets-dynamically}
 
 `IORING_REGISTER_FILES_UPDATE` updates individual slots without re-registering the entire table. When a new client fd arrives from multishot accept, install it into the next free slot:
 
@@ -518,7 +518,7 @@ int install_fixed_file(struct io_uring *ring, int client_fd, int slot)
 
 Alternatively, `io_uring_prep_multishot_accept_direct()` submits a multishot accept that installs each new client fd directly into the fixed file table without any userspace `IORING_REGISTER_FILES_UPDATE` call. The CQE `res` field then carries the fixed file slot index, not an OS file descriptor. Note that `io_uring_prep_accept_direct()` is a one-shot accept that installs the result into a fixed file slot; for multishot operation with direct fd installation, use `io_uring_prep_multishot_accept_direct()`.
 
-### Using fixed files in subsequent operations
+### Using fixed files in subsequent operations {#using-fixed-files-in-subsequent-operations}
 
 ```c
 /* All ops on slot `fixed_slot` skip fdget/fdput */
@@ -531,7 +531,7 @@ io_uring_sqe_set_data64(sqe, TAG_RECV(fixed_slot));
 
 When closing a fixed file slot, use `IORING_OP_CLOSE` with `IOSQE_FIXED_FILE` set in `sqe->flags`, or the liburing wrapper `io_uring_prep_close_direct()`, to remove the entry from the registered table and close the underlying socket atomically.
 
-## Multishot accept + recv flow
+## Multishot accept + recv flow {#multishot-accept-recv-flow}
 
 The following diagram shows the complete event flow for a server using multishot accept and per-connection multishot recv with provided buffers. All events drain into a single CQ; the event loop dispatches by `user_data` tag.
 
@@ -569,9 +569,9 @@ sequenceDiagram
     U->>K: SQE: CLOSE client_fd
 ```
 
-## io_uring vs epoll for networking
+## io_uring vs epoll for networking {#io_uring-vs-epoll-for-networking}
 
-### Feature comparison
+### Feature comparison {#feature-comparison}
 
 | | epoll + non-blocking sockets | io_uring |
 |---|---|---|
@@ -586,14 +586,14 @@ sequenceDiagram
 | Portability | Linux, BSD, macOS (kqueue analogue) | Linux only |
 | Integration with existing codebases | Easy (drop-in for select/poll) | Requires redesign of I/O loop |
 
-### When to keep epoll
+### When to keep epoll {#when-to-keep-epoll}
 
 - **Existing codebases** where the I/O loop is structured around `epoll_fd` and event callbacks. The redesign cost outweighs the benefit for moderate workloads.
 - **Libraries that expose file descriptors** to callers (e.g. libev, libevent integration). epoll's fd-centric model maps directly.
 - **Portability requirements** — epoll is Linux-specific, but applications that also target BSD or macOS may use libuv or a portability shim that unifies kqueue/epoll.
 - **Simple workloads** — at fewer than ~10,000 connections, the syscall savings from io_uring are not the bottleneck.
 
-### When io_uring wins
+### When io_uring wins {#when-io_uring-wins}
 
 - **New high-performance servers** built without an existing event loop to preserve.
 - **High connection rates** (>100,000 connections, or >1M connections with SO_REUSEPORT per-core rings). Multishot accept eliminates the accept syscall bottleneck.
@@ -601,7 +601,7 @@ sequenceDiagram
 - **Kernel bypass comparison** — io_uring does not bypass the kernel networking stack the way DPDK or io_uring + AF_XDP does, but it eliminates the userspace-kernel transition overhead for each individual operation. For applications that do not need raw packet access, io_uring is a pragmatic middle ground.
 - **Mixed workloads** — disk I/O, timers, network, and `splice`/`tee` operations can all share a single event loop without a separate `aio` context or thread pool.
 
-## Complete echo server example
+## Complete echo server example {#complete-echo-server-example}
 
 A minimal but complete echo server demonstrating:
 
@@ -769,7 +769,7 @@ A few notes on the example:
 - All operations use `IOSQE_FIXED_FILE`, avoiding `fdget`/`fdput` on every SQE dispatch.
 - There is no `epoll_fd`, no separate poll thread, and no per-connection thread. A single CQ handles accept, recv, and send events for all connections.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Architecture and Rings](io-uring-arch.md) — SQE/CQE structures, ring layout, `io_uring_enter`
 - [Multishot, Linked Requests, and Probing](multishot-ops.md) — `IORING_CQE_F_MORE`, linked SQEs, capability probing

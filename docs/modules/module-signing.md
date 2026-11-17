@@ -1,8 +1,8 @@
-# Kernel Module Signing
+# Kernel Module Signing {#kernel-module-signing}
 
 > Cryptographic verification of modules before loading
 
-## Why module signing?
+## Why module signing? {#why-module-signing}
 
 Without module signing, anyone with root access can insert arbitrary kernel code via `insmod`. Module signing prevents loading unauthorized modules in security-sensitive environments:
 
@@ -10,7 +10,7 @@ Without module signing, anyone with root access can insert arbitrary kernel code
 - **Locked-down kernel**: `lockdown=integrity` mode prevents unsigned modules
 - **Compliance**: PCI-DSS, FIPS 140-3 requirements
 
-## Configuration
+## Configuration {#configuration}
 
 ```bash
 # Kconfig options:
@@ -27,7 +27,7 @@ CONFIG_MODULE_SIG_KEY="certs/signing_key.pem"  # Signing key path
 zcat /proc/config.gz | grep CONFIG_MODULE_SIG
 ```
 
-## Generating signing keys
+## Generating signing keys {#generating-signing-keys}
 
 ```bash
 # Generate a new key pair (during kernel build):
@@ -66,7 +66,7 @@ authorityKeyIdentifier=keyid
 EOF
 ```
 
-## Signing a module
+## Signing a module {#signing-a-module}
 
 ```bash
 # Sign a module using the kernel's sign-file utility:
@@ -95,7 +95,7 @@ hexdump -C mymodule.ko | tail -5
 # struct module_signature, and before that the PKCS#7 blob.
 ```
 
-## Module signature format
+## Module signature format {#module-signature-format}
 
 The signature is appended at the end of the `.ko` file:
 
@@ -146,7 +146,7 @@ modinfo mymodule.ko | grep sig
 # sig_hashalgo: sha512
 ```
 
-## Loading and verification
+## Loading and verification {#loading-and-verification}
 
 ```c
 /* kernel/module/signing.c */
@@ -252,7 +252,7 @@ which is a separate check in the same function for a module with no `intree`
 modinfo tag. An in-tree module you built and forgot to sign gets `E` and not
 `O`; an out-of-tree module that is properly signed gets `O` and not `E`.
 
-## Enrolled keys: the system keyring
+## Enrolled keys: the system keyring {#enrolled-keys-the-system-keyring}
 
 The kernel maintains several keyrings, and it matters a great deal which one a
 certificate lands in — `mod_verify_sig()` passes `VERIFY_USE_SECONDARY_KEYRING`
@@ -324,7 +324,7 @@ keyctl padd asymmetric "" %:.secondary_trusted_keys < my_key.x509
 # A key that is not vouched for is refused here no matter who you are.
 ```
 
-## Enrolling a custom key (UEFI + Secure Boot)
+## Enrolling a custom key (UEFI + Secure Boot) {#enrolling-a-custom-key-uefi-secure-boot}
 
 ```bash
 # 1. Export the certificate
@@ -360,7 +360,7 @@ kernel without it there is no upstream path from `mokutil --import` to module
 signature verification at all — you must rebuild with the certificate in
 `CONFIG_SYSTEM_TRUSTED_KEYS` instead.
 
-## Kernel lockdown mode
+## Kernel lockdown mode {#kernel-lockdown-mode}
 
 Linux lockdown (5.4+) restricts what root can do:
 
@@ -425,7 +425,7 @@ Under `lockdown=integrity` (`lockdown_reasons[]` in `security/security.c`):
 `confidentiality` adds the read-side restrictions on top: `/proc/kcore`,
 kprobes, tracefs, perf, and BPF or kgdb reading kernel RAM.
 
-## Debugging module signature issues
+## Debugging module signature issues {#debugging-module-signature-issues}
 
 ```bash
 # Why did a module fail to load?
@@ -459,7 +459,7 @@ cat /proc/sys/kernel/tainted
 # See Documentation/admin-guide/tainted-kernels.rst for bit meanings
 ```
 
-### `modprobe --force` does not defeat enforcement
+### `modprobe --force` does not defeat enforcement {#modprobe-force-does-not-defeat-enforcement}
 
 A persistent myth is that `modprobe --force` bypasses `sig_enforce`. It does
 the opposite of helping. `--force` is `--force-vermagic` plus
@@ -519,9 +519,9 @@ it:
    `cat /sys/module/module/parameters/sig_enforce` is the thing to check, not
    the config or the command line.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/module/signing.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/signing.c) — `module_sig_check()` and `mod_verify_sig()`: the marker check, the truncation of the signature block, and the `verify_pkcs7_signature()` call that does the actual verification against the secondary keyring
 - [include/uapi/linux/module_signature.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/module_signature.h) — `MODULE_SIGNATURE_MARKER` (`"~Module signature appended~\n"`) and `struct module_signature`, with the field-order comment describing the signer/key-id/signature/info-block layout
@@ -534,7 +534,7 @@ it:
 - [commit 000d388ed3bb](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=000d388ed3bbed745f366ce71b2bb7c2ee70f449) — "security: Add a static lockdown policy LSM" (August 2019, merged for 5.4), the commit that introduced the integrity/confidentiality levels used above
 - [commit d19967764ba8](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d19967764ba876f5c82dabaa28f983b21eb642a2) — "integrity: Introduce a Linux keyring called machine" (January 2022, merged for 5.18), the upstream mechanism that lets MOK-enrolled keys reach the trust chain module signing consults
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`finit_module(2)`](https://man7.org/linux/man-pages/man2/finit_module.2.html) — the load path itself; documents `EBADMSG` (misformatted signature) and `ENOKEY` ("returned only if the kernel was configured with `CONFIG_MODULE_SIG_FORCE`"), plus the `MODULE_INIT_IGNORE_MODVERSIONS`/`MODULE_INIT_IGNORE_VERMAGIC` flags. Note that the `ENOKEY` text is stale and contradicts the kernel as described above: since 5.4 an enforcing kernel returns `EKEYREJECTED`, not `ENOKEY`, and `ENOKEY` is instead one of the three *tolerated* errors inside `module_sig_check()`
 - [`kernel_lockdown(7)`](https://man7.org/linux/man-pages/man7/kernel_lockdown.7.html) — what lockdown actually blocks: unsigned modules, `/dev/mem`, `/dev/kmem`, `/dev/kcore`, `/dev/ioports`, unsigned kexec images, BPF and kprobes
@@ -542,7 +542,7 @@ it:
 - [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — what `--force` really is (`--force-vermagic` plus `--force-modversion`), which matters because a mangled module is no longer the module that was signed
 - [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — dumping a `.ko`'s attribute fields, with `-F` to select a single one
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Writing and Loading Kernel Modules](module-basics.md) — the module lifecycle this verification sits in front of
 - [Module Loading Internals](module-loading-internals.md) — `load_module()`, ELF parsing, and where the signature check happens relative to relocation and symbol resolution
@@ -551,14 +551,14 @@ it:
 - [LSM Framework](../security/lsm.md) — the hook tables, `security_add_hooks()`, and how a module registers itself, which is the machinery the lockdown LSM plugs into
 - [Linux Capabilities](../security/capabilities.md) — `CAP_SYS_MODULE`, the privilege required before signature checking is even reached
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Loading signed kernel modules](https://lwn.net/Articles/470906/) — Jake Edge, December 2011, on David Howells's early signed-module patches, which carried the signature in a `.module_sig` ELF section rather than appending it outside the ELF container
 - [The module signing endgame](https://lwn.net/Articles/525592/) — Jake Edge, November 2012, on the build-time versus install-time signing argument that led to Torvalds moving signing into `make modules_install`
 - [Kernel lockdown locked out — for now](https://lwn.net/Articles/751061/) — Jonathan Corbet, April 2018, on Torvalds's objection to automatically enabling lockdown when UEFI Secure Boot is detected; worth reading before assuming any given kernel couples the two
 - [Lockdown as a security module](https://lwn.net/Articles/791863/) — Jonathan Corbet, June 2019, on the LSM rework that landed, including why integrity reasons sort below confidentiality ones and where `LOCKDOWN_MODULE_SIGNATURE` fits
 
-### External
+### External {#external}
 
 - [Documentation/admin-guide/module-signing.rst](https://docs.kernel.org/admin-guide/module-signing.html) — the authoritative guide: every `CONFIG_MODULE_SIG_*` option, key generation via `certs/x509.genkey`, the four `sign-file` arguments, and the warning that signed modules must not be stripped afterwards
 - [Documentation/security/keys/core.rst](https://docs.kernel.org/security/keys/core.html) — the key retention service behind the trusted keyrings, including `/proc/keys` and the `keyctl` interface

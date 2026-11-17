@@ -1,4 +1,4 @@
-# x86-64 Syscall Entry
+# x86-64 Syscall Entry {#x86-64-syscall-entry}
 
 > SYSCALL instruction, entry_SYSCALL_64, vDSO, and signal delivery
 
@@ -6,11 +6,11 @@ Every time a user process calls `read()`, `write()`, `mmap()`, or any other syst
 
 ---
 
-## The SYSCALL instruction
+## The SYSCALL instruction {#the-syscall-instruction}
 
 `SYSCALL` is an x86-64 instruction (available in 64-bit mode) that performs a privilege transition from ring 3 (user) to ring 0 (kernel). Unlike an interrupt-based entry, `SYSCALL` does not consult the IDT and does not push a full exception frame — it is a streamlined mechanism specifically designed for syscall entry.
 
-### What SYSCALL does (hardware behavior)
+### What SYSCALL does (hardware behavior) {#what-syscall-does-hardware-behavior}
 
 ```
 When the CPU executes SYSCALL:
@@ -33,7 +33,7 @@ Registers at the point entry_SYSCALL_64 begins:
 
 Note that the SYSCALL ABI differs from the C ABI in one way: the 4th argument comes in `R10` rather than `RCX` (because `RCX` is overwritten by the SYSCALL instruction itself).
 
-### MSR setup
+### MSR setup {#msr-setup}
 
 Three MSRs configure the SYSCALL behavior. The kernel sets them in `arch/x86/kernel/cpu/common.c` during `syscall_init()`:
 
@@ -62,7 +62,7 @@ void syscall_init(void)
 
 ---
 
-## entry_SYSCALL_64 (`arch/x86/entry/entry_64.S`)
+## entry_SYSCALL_64 (`arch/x86/entry/entry_64.S`) {#entrysyscall64-archx86entryentry_64s}
 
 `entry_SYSCALL_64` is the assembly entry point for all 64-bit syscalls. It must:
 1. Save user state
@@ -115,7 +115,7 @@ The `SWITCH_TO_KERNEL_CR3` macro is only active when KPTI is compiled in and run
 
 ---
 
-## struct pt_regs
+## struct pt_regs {#struct-pt_regs}
 
 The assembly builds a `struct pt_regs` on the kernel stack. This structure captures the complete register state of the user process:
 
@@ -161,7 +161,7 @@ The layout matches what the hardware pushes during an interrupt/exception, so th
 
 ---
 
-## do_syscall_64() and the syscall table
+## do_syscall_64() and the syscall table {#dosyscall64-and-the-syscall-table}
 
 `do_syscall_64()` dispatches to the actual syscall handler:
 
@@ -198,7 +198,7 @@ static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
 
 `array_index_nospec()` is a Spectre v1 mitigation: it masks the index to prevent speculative out-of-bounds access to `sys_call_table`.
 
-### The syscall table
+### The syscall table {#the-syscall-table}
 
 `sys_call_table[]` is an array of function pointers, indexed by syscall number:
 
@@ -236,7 +236,7 @@ The macro expands to `__x64_sys_read(struct pt_regs *regs)`, which extracts argu
 
 ---
 
-## The return path: SYSRET and IRET
+## The return path: SYSRET and IRET {#the-return-path-sysret-and-iret}
 
 After `do_syscall_64()` returns, the entry code restores registers and returns to userspace.
 
@@ -263,11 +263,11 @@ The kernel checks which path is safe before deciding:
 
 ---
 
-## vDSO: fast syscalls without entering the kernel
+## vDSO: fast syscalls without entering the kernel {#vdso-fast-syscalls-without-entering-the-kernel}
 
 The **vDSO** (virtual Dynamic Shared Object) is a small shared library that the kernel maps into every process's address space. It provides fast implementations of certain syscalls that do not actually require entering the kernel ring 0.
 
-### How vDSO works
+### How vDSO works {#how-vdso-works}
 
 The kernel maps two special pages into the high end of every process's virtual address space:
 
@@ -293,7 +293,7 @@ cat /proc/self/maps | grep vdso
 # Use vdso_test from tools/testing/selftests/vDSO/ in the kernel tree
 ```
 
-### vDSO source
+### vDSO source {#vdso-source}
 
 The vDSO is compiled as a special shared library:
 
@@ -305,7 +305,7 @@ The vvar page is described by `struct vdso_data` (defined in `include/vdso/datap
 
 ---
 
-## int 0x80: the legacy 32-bit interface
+## int 0x80: the legacy 32-bit interface {#int-0x80-the-legacy-32-bit-interface}
 
 Before `SYSCALL` (and even before `SYSENTER`), system calls on x86 were made via `INT 0x80` — a software interrupt. This mechanism still works in 64-bit kernels for compatibility with 32-bit applications and code.
 
@@ -318,7 +318,7 @@ Before `SYSCALL` (and even before `SYSENTER`), system calls on x86 were made via
 
 ---
 
-## Signal delivery before returning to userspace
+## Signal delivery before returning to userspace {#signal-delivery-before-returning-to-userspace}
 
 Before `entry_SYSCALL_64` returns to userspace, the return path calls `syscall_exit_to_user_mode()`, which checks for pending signals:
 
@@ -343,7 +343,7 @@ static void exit_to_user_mode_loop(struct pt_regs *regs, u32 cached_flags)
 }
 ```
 
-### Signal frame setup
+### Signal frame setup {#signal-frame-setup}
 
 When `do_signal()` determines a signal must be delivered, it sets up a **signal frame** on the user stack before returning:
 
@@ -366,9 +366,9 @@ After the signal handler returns, it executes `sigreturn()` (or calls through th
 
 ---
 
-## Tracing and observability
+## Tracing and observability {#tracing-and-observability}
 
-### strace: intercepting every syscall
+### strace: intercepting every syscall {#strace-intercepting-every-syscall}
 
 `strace` uses `ptrace(PTRACE_SYSCALL)` to pause the tracee at every syscall entry and exit:
 
@@ -386,7 +386,7 @@ strace -T ls
 strace -p <pid>
 ```
 
-### perf trace: low-overhead syscall tracing
+### perf trace: low-overhead syscall tracing {#perf-trace-low-overhead-syscall-tracing}
 
 ```bash
 # System-wide syscall summary
@@ -399,7 +399,7 @@ perf trace -p <pid>
 perf stat -e 'syscalls:sys_enter_*' -p <pid> sleep 5
 ```
 
-### Tracepoints
+### Tracepoints {#tracepoints}
 
 The kernel provides entry and exit tracepoints for every syscall:
 
@@ -412,7 +412,7 @@ echo 1 > /sys/kernel/debug/tracing/events/syscalls/sys_enter_read/enable
 cat /sys/kernel/debug/tracing/trace
 ```
 
-### Seccomp BPF
+### Seccomp BPF {#seccomp-bpf}
 
 Seccomp BPF filters are applied during `syscall_enter_from_user_mode()`, before the syscall handler runs. Each filter rule is a BPF program that receives the syscall number and arguments and returns an action (allow, deny, kill, trap, etc.). See `kernel/seccomp.c`.
 
@@ -422,7 +422,7 @@ cat /proc/<pid>/status | grep Seccomp
 # Seccomp: 2  (2 = filter mode)
 ```
 
-### Finding entry_SYSCALL_64 in the running kernel
+### Finding entry_SYSCALL_64 in the running kernel {#finding-entrysyscall64-in-the-running-kernel}
 
 ```bash
 # Address of the syscall entry point
@@ -435,24 +435,24 @@ rdmsr 0xC0000082   # LSTAR — should match the above address
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source & documentation
+### Kernel source & documentation {#kernel-source-documentation}
 
 - [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64` itself; unusually well commented
 - [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — the syscall table and `do_syscall_64()`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — calling conventions for every architecture in one table
 - [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — which syscalls never enter the kernel
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Syscall Entry Path](../../syscalls/syscall-entry.md) — the architecture-neutral view
 - [ARM64 Syscall Entry](../arm64/syscall-entry.md) — SVC instead of SYSCALL
 - [vDSO](../../mm/vdso.md) — the fast path in depth
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — the classic walkthrough of this exact path

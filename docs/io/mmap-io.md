@@ -1,8 +1,8 @@
-# mmap as an I/O Mechanism
+# mmap as an I/O Mechanism {#mmap-as-an-io-mechanism}
 
 > Using file-backed mmap() for I/O: zero-copy reads, shared writes, and when the page fault cost pays off
 
-## What this page covers
+## What this page covers {#what-this-page-covers}
 
 `mmap()` is usually explained in the context of process address spaces and anonymous memory. But `mmap()` of a regular file is also a fully-featured I/O mechanism — an alternative to `read()` and `write()` that trades syscall overhead for page fault overhead and exposes the page cache directly as process memory.
 
@@ -10,9 +10,9 @@ This page focuses on file-backed mmap as an I/O path. For anonymous mmap (heap, 
 
 ---
 
-## File-backed mmap vs read/write
+## File-backed mmap vs read/write {#file-backed-mmap-vs-readwrite}
 
-### The basic trade-off
+### The basic trade-off {#the-basic-trade-off}
 
 `read()` and `write()` are the universal I/O interface. Every access is a syscall, and the kernel copies data between the page cache and a user-space buffer:
 
@@ -44,7 +44,7 @@ The two costs trade:
 | TLB pressure | Low | Higher (large mappings fill TLB) |
 | Page table entries | None | One PTE per mapped page |
 
-### When mmap wins
+### When mmap wins {#when-mmap-wins}
 
 **Large files with random access** — A search index, an embedded database, or a large lookup table accessed at arbitrary offsets. With `pread()`, each access is a syscall + copy. With mmap, it is a load instruction after the fault warms the page.
 
@@ -54,7 +54,7 @@ The two costs trade:
 
 **Avoiding double-buffering** — If an application implements its own in-process cache on top of `read()`, that cache plus the OS page cache means the same bytes are in RAM twice. mmap eliminates the application-side copy.
 
-### When read/write wins
+### When read/write wins {#when-readwrite-wins}
 
 **Sequential streaming of large files** — `read()` with a 128KB–1MB buffer amortizes syscall overhead across many pages. The kernel's readahead fires identically in both cases. But with mmap, 32 page faults per 128KB (32 × 4KB) add fault overhead. `read()` often wins here, especially with `O_DIRECT` eliminated as a variable.
 
@@ -68,7 +68,7 @@ The two costs trade:
 
 ---
 
-## mmap() call anatomy
+## mmap() call anatomy {#mmap-call-anatomy}
 
 ```c
 #include <sys/mman.h>
@@ -76,7 +76,7 @@ The two costs trade:
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 ```
 
-### Protection flags (prot)
+### Protection flags (prot) {#protection-flags-prot}
 
 ```c
 PROT_READ    /* pages are readable */
@@ -88,7 +88,7 @@ PROT_NONE    /* no access (guard pages, userfaultfd) */
 For read-only file I/O: `PROT_READ`.
 For read-write file I/O: `PROT_READ | PROT_WRITE`.
 
-### MAP_SHARED vs MAP_PRIVATE
+### MAP_SHARED vs MAP_PRIVATE {#mapshared-vs-mapprivate}
 
 `MAP_SHARED` — Writes go directly into the page cache. The modified page is visible to all other processes that have the same file mapped (or that call `read()` on it). The kernel will write the dirty page back to disk during writeback or when `msync()` is called.
 
@@ -105,7 +105,7 @@ char *rw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 char *priv = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 ```
 
-### MAP_POPULATE: eager fault-in
+### MAP_POPULATE: eager fault-in {#map_populate-eager-fault-in}
 
 By default, pages are faulted in lazily on first access. `MAP_POPULATE` tells the kernel to pre-fault the entire mapping during the `mmap()` call itself, using `readahead` to batch the I/O. For file-backed mappings, `MAP_POPULATE` submits I/O to fault in pages but does NOT guarantee all I/O is complete when `mmap()` returns. For anonymous mappings, the operation does complete synchronously. Contrast with `MADV_POPULATE_READ`, which blocks until the pages are actually faulted in.
 
@@ -119,7 +119,7 @@ This is useful when the latency of individual faults scattered across a workload
 
 `MAP_POPULATE` with `MAP_PRIVATE` also pre-faults, but does not trigger COW — pages are mapped read-only from the page cache and will COW on first write.
 
-### MAP_FIXED: map at an exact address
+### MAP_FIXED: map at an exact address {#map_fixed-map-at-an-exact-address}
 
 ```c
 /* Force the mapping at a specific virtual address */
@@ -137,7 +137,7 @@ if (addr == MAP_FAILED && errno == EEXIST)
     /* hint was occupied, try elsewhere */
 ```
 
-### MAP_HUGETLB: huge page mappings
+### MAP_HUGETLB: huge page mappings {#map_hugetlb-huge-page-mappings}
 
 ```c
 #include <linux/mman.h>
@@ -153,7 +153,7 @@ void *addr = mmap(NULL, len,
 
 ---
 
-## How a file-backed mmap read works
+## How a file-backed mmap read works {#how-a-file-backed-mmap-read-works}
 
 The first access to a page in an mmap'd file triggers a hardware page fault. The kernel's fault handler walks the VMA tree, finds the file-backed VMA, and reads the page from the page cache (or from disk if it is not cached). Subsequent accesses hit the page table directly — no kernel involvement.
 
@@ -194,7 +194,7 @@ sequenceDiagram
     Note over App,CPU: Subsequent accesses to same page:<br/>PTE present → no fault, direct memory access
 ```
 
-### Kernel code path
+### Kernel code path {#kernel-code-path}
 
 ```c
 /* mm/memory.c — entry point from architecture fault handler */
@@ -235,7 +235,7 @@ static vm_fault_t do_fault(struct vm_fault *vmf)
 }
 ```
 
-### filemap_fault: page cache lookup
+### filemap_fault: page cache lookup {#filemap_fault-page-cache-lookup}
 
 ```c
 /* mm/filemap.c */
@@ -285,11 +285,11 @@ After `finish_fault()` installs the PTE, the virtual address maps directly to th
 
 ---
 
-## How writes to MAP_SHARED work
+## How writes to MAP_SHARED work {#how-writes-to-map_shared-work}
 
 With `MAP_SHARED | PROT_WRITE`, writes go directly into the page cache. There is no separate user-space buffer; the process is writing into the kernel's page cache.
 
-### Initial state and first write fault
+### Initial state and first write fault {#initial-state-and-first-write-fault}
 
 Even though the VMA is marked writable, PTEs are initially installed read-only. This is intentional: the kernel needs to know when a page first becomes dirty so it can set the dirty bit, start tracking it for writeback, and (for filesystems with journaling like ext4) start a journal transaction.
 
@@ -333,7 +333,7 @@ static vm_fault_t do_shared_fault(struct vm_fault *vmf)
 }
 ```
 
-### Visibility to other processes
+### Visibility to other processes {#visibility-to-other-processes}
 
 A write to a `MAP_SHARED` mapping is immediately visible to all other processes that have the same file mapped. They share the same physical page; their PTEs point to the same frame. No `msync()` is needed for process-to-process visibility — it is instantaneous.
 
@@ -348,7 +348,7 @@ char *b = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 printf("%c\n", b[0]);   /* prints 'X' — no msync needed */
 ```
 
-### Writeback to disk
+### Writeback to disk {#writeback-to-disk}
 
 The kernel writes dirty pages to disk automatically as part of normal writeback (controlled by `dirty_expire_centisecs`, `dirty_writeback_centisecs`, and `dirty_ratio`). This happens asynchronously without any application action.
 
@@ -356,11 +356,11 @@ For explicit control, use `msync()` — see [msync() semantics](#msync-semantics
 
 ---
 
-## MAP_PRIVATE: copy-on-write semantics
+## MAP_PRIVATE: copy-on-write semantics {#map_private-copy-on-write-semantics}
 
 `MAP_PRIVATE` creates an independent view of the file. Reads share the page cache (no copying). Writes create a private copy of the page that is never written back to the file.
 
-### COW fault path
+### COW fault path {#cow-fault-path}
 
 ```
 Initial (read fault, MAP_PRIVATE):
@@ -405,7 +405,7 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 }
 ```
 
-### Use cases for MAP_PRIVATE on files
+### Use cases for MAP_PRIVATE on files {#use-cases-for-map_private-on-files}
 
 **Read-only access with potential local modifications** — A process loads a large read-only dataset but may modify a few entries locally (for a session-scoped cache, normalization, etc.). MAP_PRIVATE is read-efficient (pages shared with page cache) and write-efficient (only modified pages are copied).
 
@@ -434,7 +434,7 @@ index[42] = 0.0f;   /* normalize without touching the file */
 
 ---
 
-## msync() semantics
+## msync() semantics {#msync-semantics}
 
 `msync()` controls the relationship between dirty pages in a `MAP_SHARED` mapping and the data on disk.
 
@@ -444,7 +444,7 @@ index[42] = 0.0f;   /* normalize without touching the file */
 int msync(void *addr, size_t length, int flags);
 ```
 
-### MS_SYNC: wait for writeback
+### MS_SYNC: wait for writeback {#ms_sync-wait-for-writeback}
 
 `MS_SYNC` initiates writeback of all dirty pages in the range and waits for it to complete before returning. After `MS_SYNC` returns, the data is guaranteed to have reached the storage device (subject to the device's own write cache — combine with `O_SYNC` or a subsequent `sync_file_range()` for full durability).
 
@@ -461,7 +461,7 @@ if (msync(map, len, MS_SYNC) != 0)
 /* Data is on disk now */
 ```
 
-### MS_ASYNC: advisory flush
+### MS_ASYNC: advisory flush {#ms_async-advisory-flush}
 
 `MS_ASYNC` has been a complete no-op on Linux since kernel 2.6.19. The kernel's writeback daemon handles dirty page flushing independently. Calling `MS_ASYNC` has no observable effect and is retained only for POSIX source compatibility.
 
@@ -472,7 +472,7 @@ msync(map + offset, chunk_size, MS_ASYNC);
 /* Continue doing other work; writeback happens in background */
 ```
 
-### MS_INVALIDATE: discard cached changes
+### MS_INVALIDATE: discard cached changes {#ms_invalidate-discard-cached-changes}
 
 `MS_INVALIDATE` discards any in-memory changes to the range and reloads from the underlying file. It is used when another process (or the file on disk) may have changed the backing data and you want the mapping to reflect the on-disk state.
 
@@ -484,7 +484,7 @@ msync(map, len, MS_INVALIDATE);
 
 `MS_INVALIDATE` combined with `MS_SYNC` (as `MS_SYNC | MS_INVALIDATE`) writes out dirty pages first, then invalidates.
 
-### When is msync required?
+### When is msync required? {#when-is-msync-required}
 
 | Goal | What to do |
 |------|-----------|
@@ -495,7 +495,7 @@ msync(map, len, MS_INVALIDATE);
 | Reload from disk after external change | `msync(MS_INVALIDATE)` |
 | Partial-file durability | `sync_file_range(fd, offset, len, SYNC_FILE_RANGE_WRITE \| SYNC_FILE_RANGE_WAIT_AFTER)` |
 
-### msync vs fsync
+### msync vs fsync {#msync-vs-fsync}
 
 `fsync(fd)` and `msync(addr, len, MS_SYNC)` both flush dirty pages to disk, but they operate on different objects. `fsync()` takes a file descriptor and flushes all dirty pages for that file (plus metadata). `msync()` takes a virtual address range, which is a subset of the mapping (and a subset of the file).
 
@@ -510,11 +510,11 @@ fsync(fd);
 
 ---
 
-## File sealing with F_SEAL_*
+## File sealing with F_SEAL_* {#file-sealing-with-fseal}
 
 File sealing (introduced in Linux 3.17) allows a process to permanently restrict operations on a file descriptor, creating an immutable or partially-immutable shared memory region. It is most useful with `memfd_create()` but applies to any `tmpfs` file with sealing enabled.
 
-### The seals
+### The seals {#the-seals}
 
 ```c
 #include <linux/memfd.h>
@@ -536,7 +536,7 @@ F_SEAL_GROW
 F_SEAL_FUTURE_WRITE   /* Linux 5.1 */
 ```
 
-### Applying seals
+### Applying seals {#applying-seals}
 
 ```c
 int fd = memfd_create("shared_data", MFD_ALLOW_SEALING);
@@ -558,7 +558,7 @@ fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK);
 fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL);
 ```
 
-### Query current seals
+### Query current seals {#query-current-seals}
 
 ```c
 int seals = fcntl(fd, F_GET_SEALS);
@@ -566,7 +566,7 @@ if (seals & F_SEAL_WRITE)
     printf("file is write-sealed\n");
 ```
 
-### Android Ashmem replacement
+### Android Ashmem replacement {#android-ashmem-replacement}
 
 Android's original shared memory mechanism, Ashmem, was replaced by `memfd_create()` + sealing in Android 10 (API level 29). The pattern:
 
@@ -597,9 +597,9 @@ void *data = mmap(NULL, asset_size, PROT_READ, MAP_SHARED, fd, 0);
 
 ---
 
-## Performance characteristics
+## Performance characteristics {#performance-characteristics}
 
-### Benchmark intuition
+### Benchmark intuition {#benchmark-intuition}
 
 The break-even point between mmap and read/write depends on:
 
@@ -608,13 +608,13 @@ The break-even point between mmap and read/write depends on:
 - **Reuse** — Multiple passes over the same data strongly favour mmap (faults amortized)
 - **CPU architecture** — TLB size matters; x86 has a large TLB; ARM often has a smaller one
 
-### The copy_to_user elimination
+### The copy_to_user elimination {#the-copytouser-elimination}
 
 `read()` calls `copy_to_user()` to move data from the page cache into the user buffer. On modern x86 with ERMS (Enhanced REP MOVSB), this is fast but not free — for a 4KB page it costs roughly 400–1000 ns depending on cache state.
 
 mmap eliminates this copy. After the page fault, a load from the mapped address hits the page cache page directly (possibly L1/L2 cache if recently accessed). For workloads that access the same page many times, this is a significant win.
 
-### TLB cost
+### TLB cost {#tlb-cost}
 
 Every new PTE installed by a page fault must eventually be evicted from the TLB on context switch or TLB shootdown. Large mappings can cause TLB pressure, especially on multi-core systems where TLB invalidations are broadcast as IPIs.
 
@@ -627,13 +627,13 @@ void *addr = mmap(NULL, 512 * 1024 * 1024,
 madvise(addr, 512 * 1024 * 1024, MADV_HUGEPAGE);
 ```
 
-### When mmap page table overhead dominates
+### When mmap page table overhead dominates {#when-mmap-page-table-overhead-dominates}
 
 A 100 GB mapping with random access to 1% of pages still requires the kernel to allocate PTEs for every faulted page. Each PTE is 8 bytes; 1% of 100 GB / 4KB = ~260,000 PTEs = ~2 MB just for page tables. The VMA itself is O(1). For most workloads this is negligible, but for thousands of sparse mappings it adds up.
 
 `pread()` has zero per-page virtual memory overhead.
 
-### Summary table
+### Summary table {#summary-table}
 
 | Scenario | Winner | Reason |
 |----------|--------|--------|
@@ -648,7 +648,7 @@ A 100 GB mapping with random access to 1% of pages still requires the kernel to 
 
 ---
 
-## madvise() for I/O hints
+## madvise() for I/O hints {#madvise-for-io-hints}
 
 `madvise()` tells the kernel how the application will access a mapped region. The kernel uses these hints for readahead, page eviction policy, and THP decisions.
 
@@ -656,7 +656,7 @@ A 100 GB mapping with random access to 1% of pages still requires the kernel to 
 int madvise(void *addr, size_t length, int advice);
 ```
 
-### Hints that affect I/O behaviour
+### Hints that affect I/O behaviour {#hints-that-affect-io-behaviour}
 
 **MADV_SEQUENTIAL** — The application will access pages in order. The kernel increases the readahead window and marks pages as candidates for early eviction (they have been "used" in order). This is the most important hint for streaming reads through a large file.
 
@@ -694,7 +694,7 @@ madvise(map + processed_offset, CHUNK_SIZE, MADV_DONTNEED);
 
 **MADV_FREE** (Linux 4.5) — Like `MADV_DONTNEED` but lazy: the pages are marked as free candidates but not immediately reclaimed. If memory pressure is low, they may still be in memory on next access (avoiding a fault). Useful for reuse patterns where the caller "might" need the data again.
 
-### MADV_POPULATE_READ and MADV_POPULATE_WRITE (Linux 5.14)
+### MADV_POPULATE_READ and MADV_POPULATE_WRITE (Linux 5.14) {#madvpopulateread-and-madvpopulatewrite-linux-514}
 
 These hints explicitly pre-populate a range by simulating faults, without the calling thread needing to access each page:
 
@@ -710,7 +710,7 @@ madvise(map, file_size, MADV_POPULATE_WRITE);
 
 `MADV_POPULATE_WRITE` on a `MAP_PRIVATE` mapping pre-triggers all COW faults, so the process owns writable copies of all pages before any actual writes. This eliminates COW latency from the hot path.
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation}
 
 ```c
 /* mm/madvise.c */
@@ -753,9 +753,9 @@ if (vma->vm_flags & VM_SEQ_READ)
 
 ---
 
-## Practical examples
+## Practical examples {#practical-examples}
 
-### Example 1: Read-only data file
+### Example 1: Read-only data file {#example-1-read-only-data-file}
 
 Map a large read-only file for random access (e.g., a pre-built lookup table):
 
@@ -829,7 +829,7 @@ void lookup_close(struct lookup_table *tbl)
 }
 ```
 
-### Example 2: Memory-mapped database (LMDB pattern)
+### Example 2: Memory-mapped database (LMDB pattern) {#example-2-memory-mapped-database-lmdb-pattern}
 
 LMDB (Lightning Memory-Mapped Database) maps its entire data file into the process address space and uses B-tree navigation via pointer dereferences. This is the canonical mmap-as-database pattern:
 
@@ -910,7 +910,7 @@ Key design points from LMDB:
 - `msync(MS_SYNC)` is called only when committing a transaction, not on every write.
 - The full virtual address space is reserved upfront; the kernel only allocates PTEs (and physical pages) for pages that are actually accessed.
 
-### Example 3: Shared memory IPC via file-backed mmap
+### Example 3: Shared memory IPC via file-backed mmap {#example-3-shared-memory-ipc-via-file-backed-mmap}
 
 Two processes share a ring buffer backed by a regular file:
 
@@ -980,7 +980,7 @@ This IPC mechanism requires no `msync()` for inter-process visibility — the `M
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [File-Backed mmap and Page Faults](../mm/file-mmap.md) — VMA internals, page fault mechanics, readahead
 - [Page Cache](../mm/page-cache.md) — the shared backing store for all file-backed mmaps

@@ -1,4 +1,4 @@
-# Netfilter x_tables Heap Overflow
+# Netfilter x_tables Heap Overflow {#netfilter-x_tables-heap-overflow}
 
 > CVE-2021-22555 — a 15-year-old bounds-check gap in the iptables compat layer, sitting unactioned in syzbot's inbox for 8 months, became "Turning \x00\x00 into 10000$" and a Kubernetes pod escape
 
@@ -19,7 +19,7 @@ Actively exploited
 
 *Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 `iptables`/`ip6tables`/`arptables` rulesets are built by userspace and passed into the kernel via `setsockopt()`. On 64-bit kernels, 32-bit userspace tools (compat mode) submit rules in a **compat** layout that the kernel must translate into native 64-bit structures before use. This translation happens in `translate_compat_table()` (in each of `net/ipv4/netfilter/ip_tables.c`, `net/ipv6/netfilter/ip6_tables.c`, and `net/ipv4/netfilter/arp_tables.c`), which allocates a new buffer sized for the native layout and then calls `xt_compat_match_from_user()` / `xt_compat_target_from_user()` in `net/netfilter/x_tables.c` to copy and expand each match/target entry into it.
 
@@ -31,13 +31,13 @@ if (pad > 0)
     memset(m->data + match->matchsize, 0, pad);
 ```
 
-## The trigger
+## The trigger {#the-trigger}
 
 This per-entry padding zero used an offset (`m->data + match->matchsize`) computed independently for each match/target, without re-checking it against the actual size of the destination buffer allocated for the *whole* translated ruleset. By choosing targets whose `matchsize`/`targetsize` isn't 8-byte aligned ([Andy Nguyen's exploit writeup](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) cites `NFLOG` as one such target, achievable via a controllable out-of-bounds offset reaching up to `0x4C` bytes past the buffer), a local process able to load such a compat ruleset could cause the `memset()` to write a small number of zero bytes **past the end of the allocated ruleset blob** — a heap out-of-bounds write.
 
 Reaching this code path requires only being able to call `setsockopt(IPT_SO_SET_REPLACE)` (or the IPv6/ARP equivalents) from a 32-bit compat context, which requires `CAP_NET_ADMIN` — a capability routinely available to an unprivileged user inside a user *and* network namespace.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The bug had existed since **2.6.19-rc1** (2006) — roughly fifteen years — reachable via `net/netfilter/x_tables.c`. It was reported to the kernel by [syzbot](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) and independently by [Andy Nguyen](https://google.github.io/security-research/pocs/linux/cve-2021-22555/writeup.html) (Google).
 
@@ -49,11 +49,11 @@ syzbot's report actually predates Nguyen's by nearly eight months. On 17 August 
 
 The [syzbot dashboard](https://syzkaller.appspot.com/bug?extid=cfc0247ac173f597aaaa) for that report shows zero human follow-up on the thread, and its own cause and fix bisections both failed — it sat as an open, unactioned bug until Westphal's April 2021 fix, prompted by Nguyen's independent, exploit-driven report through `security@kernel.org`, was manually linked to it: the shipped commit carries both `Reported-by: syzbot+cfc0247ac173f597aaaa@syzkaller.appspotmail.com` and `Reported-by: Andy Nguyen <theflow@google.com>`. The automated report had everything a maintainer would need to reproduce and fix the bug eight months earlier; what was missing wasn't detection but triage.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The root cause is a **local, per-entry bounds check standing in for a missing global bounds check**: each match/target's padding write was "correct" in isolation (it wrote exactly `pad` bytes past that entry's data), but nothing validated that the cumulative effect of translating every entry in the ruleset stayed within the single buffer allocated up front. A fifteen-year-old assumption — that compat-mode entry sizes would always sum to no more than the native allocation — turned out to be false for certain target types.
 
-## Resolution
+## Resolution {#resolution}
 
 [`b29c457a6511`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d) ("netfilter: x_tables: fix compat match/target pad out-of-bound write") removes the per-entry padding `memset()` entirely and instead **zeroes the whole destination buffer up front**, before any entries are translated into it:
 
@@ -78,7 +78,7 @@ He offered a narrower version of the idea instead — dropping just the per-matc
 sysctl kernel.unprivileged_userns_clone   # if present (some distros), 0 blocks the CAP_NET_ADMIN-via-userns path
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A per-item bounds check is not a buffer bounds check.** Each `memset()` call was individually correct relative to the entry it was processing; the bug was in the aggregate, which no single call site could see.
 
@@ -91,13 +91,13 @@ sysctl kernel.unprivileged_userns_clone   # if present (some distros), 0 blocks 
 !!! warning "Pattern to watch for"
     User-namespace-reachable `CAP_NET_ADMIN`/`CAP_NET_RAW` code paths deserve extra scrutiny — capabilities that once implied "trusted root-equivalent caller" now routinely apply to unprivileged users inside containers. If `kernel.unprivileged_userns_clone` (or your distro's equivalent knob) is enabled, any bug in a `CAP_NET_ADMIN`-gated path is a potential container-escape primitive, not just a local bug.
 
-## See also
+## See also {#see-also}
 
 - [Netfilter Architecture](../netfilter.md) — x_tables, hooks, and the compat translation layer behind this bug
 - [Network Namespaces](../net-namespaces.md) — how unprivileged user+network namespaces expose `CAP_NET_ADMIN`-gated code paths
 - [AF_PACKET Privilege Escalation](af-packet.md) — another capability-gated local bug turned container-escape primitive
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2021-22555](https://nvd.nist.gov/vuln/detail/CVE-2021-22555) — Netfilter x_tables heap overflow CVE record
 - [git.kernel.org: b29c457a6511](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b29c457a6511435960115c0f548c4360d5f4801d) — "netfilter: x_tables: fix compat match/target pad out-of-bound write"

@@ -1,8 +1,8 @@
-# Module War Stories
+# Module War Stories {#module-war-stories}
 
 > ABI breaks, signing failures, taint cascades, and versioning surprises
 
-## 1. The CONFIG_MODVERSIONS CRC mismatch
+## 1. The CONFIG_MODVERSIONS CRC mismatch {#1-the-config_modversions-crc-mismatch}
 
 **Symptom:** Loading a freshly compiled driver on a vendor kernel failed immediately:
 
@@ -36,7 +36,7 @@ make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 
 ---
 
-## 2. The module signing loop
+## 2. The module signing loop {#2-the-module-signing-loop}
 
 **Symptom:** After a distribution switched to `CONFIG_MODULE_SIG_FORCE=y`, all unsigned third-party modules refused to load. An admin enrolled a custom signing key and signed the modules. Everything worked — until the next kernel update, when the modules again refused to load:
 
@@ -89,7 +89,7 @@ keyctl list %:.secondary_trusted_keys
 
 ---
 
-## 3. The taint cascade
+## 3. The taint cascade {#3-the-taint-cascade}
 
 **Symptom:** A production database server crashed with a NULL pointer dereference in `blk_mq_complete_request()`. The kernel oops was filed as a bug report upstream. Kernel developers closed the report within hours asking for reproduction on an untainted kernel.
 
@@ -135,7 +135,7 @@ cat /proc/sys/kernel/tainted
 
 ---
 
-## 4. The init section use-after-free
+## 4. The init section use-after-free {#4-the-init-section-use-after-free}
 
 **Symptom:** An embedded system ran stably for days, then crashed with a call trace pointing into unmapped memory. The crash address was different on each occurrence, and it only manifested under moderate I/O load. KASAN was not enabled in production.
 
@@ -205,7 +205,7 @@ The build-time net for this class of bug is `modpost`, not sparse — sparse has
 
 ---
 
-## 5. The negative ring size
+## 5. The negative ring size {#5-the-negative-ring-size}
 
 **Symptom:** A NIC driver crashed with a NULL-pointer dereference immediately at `insmod` time, but only on servers where an automation script had passed a non-default RX ring size. Every affected server hit it identically, at the same point in boot, on the first attempt.
 
@@ -279,9 +279,9 @@ Switching to `unsigned int` would, by itself, have caught this specific mistake:
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()` and its `"disagrees about version of symbol"` warning, plus `check_modstruct_version()`, which looks up the CRC of the `module_layout` anchor symbol before anything else in the module is touched, behind Case 1
 - [scripts/genksyms/genksyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/genksyms/genksyms.c) — the parser that expands an exported symbol's full type definition, including nested structs, into the CRC that Case 1's vendor and upstream builds disagreed about
@@ -303,7 +303,7 @@ Switching to `unsigned int` would, by itself, have caught this specific mistake:
 - [include/asm-generic/getorder.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/getorder.h) — `get_order()`, which returns `BITS_PER_LONG - PAGE_SHIFT` for the size-wrapped-to-zero value in Case 5
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — the `WARN_ON_ONCE_GFP(order > MAX_PAGE_ORDER, gfp)` guard that Case 5's allocation request actually hits, and the `NULL` it returns
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — the load-time errors these cases produce: `ENOEXEC` for a module image the kernel rejects (Case 1); the man page documents `ENOKEY` for a missing signature key, but since v5.4 (commit `49fcf732bdae`, "lockdown: Enforce module signatures if the kernel is locked down") an enforcing kernel actually returns `EKEYREJECTED` — "Key was rejected by service" — behind Case 2
 - [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — the unload path behind the `rmmod` advice in Case 3, and its `O_TRUNC` forced-unload flag
@@ -311,7 +311,7 @@ Switching to `unsigned int` would, by itself, have caught this specific mistake:
 - [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `-F field` extraction of module attributes from a `.ko`, the inspection step in Cases 1 and 2 (the man page's own field list doesn't mention `sig*`/`vermagic`, but `modinfo` prints them in practice — see `Documentation/admin-guide/module-signing.rst`)
 - [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — `keyctl list` and the `%:<name>` keyring-by-name notation used in Case 2's verification step
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Module Loading Internals](module-loading-internals.md) — `load_module()`, the `__versions` CRC check, and `Module.symvers`, the machinery behind Case 1
 - [Module Signing](module-signing.md) — `CONFIG_MODULE_SIG_FORCE`, signature format, and key enrollment, behind Case 2
@@ -322,7 +322,7 @@ Switching to `unsigned int` would, by itself, have caught this specific mistake:
 - [Kernel Oops Analysis](../debugging/oops-analysis.md) — decoding the tainted call traces quoted in Cases 3 and 4
 - [Platform Drivers](../drivers/platform-driver.md) — the `probe()`/`platform_set_drvdata()` pattern Case 4's driver is built on
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The end of modversions?](https://lwn.net/Articles/707520/) (November 30, 2016) — vermagic versus modversions, and how a single changed CRC stops a module from loading into an otherwise compatible kernel, the mechanism behind Case 1
 - [A new version of modversions](https://lwn.net/Articles/986892/) (August 26, 2024) — how `genksyms` derives a symbol's checksum from its expanded type information, which is why a transitive struct change breaks Case 1's module
@@ -331,7 +331,7 @@ Switching to `unsigned int` would, by itself, have caught this specific mistake:
 - [module: Introduce module unload taint tracking](https://lwn.net/Articles/893584/) (May 2, 2022) — Aaron Tomlin's series adding a record of tainting modules that were later unloaded, aimed squarely at Case 3's "which module tainted this kernel?" problem
 - [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) (June 8, 2023) — the proposal that became `execmem`, the allocator that now hands out and frees the module init text in Case 4
 
-### External
+### External {#external}
 
 - [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — the authoritative taint bit table (4096 = externally-built module, 8192 = unsigned module) and the statement that the kernel stays tainted after the offending module is unloaded, behind Case 3
 - [Reporting issues](https://docs.kernel.org/admin-guide/reporting-issues.html) — upstream's "check the taint flag" step and its insistence on reproducing on a healthy, untainted kernel, the rule Case 3's bug report ran into

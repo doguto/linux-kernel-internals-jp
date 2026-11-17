@@ -1,8 +1,8 @@
-# The Folio Abstraction
+# The Folio Abstraction {#the-folio-abstraction}
 
 > `struct folio` replaces the compound-page patchwork with a first-class kernel object that makes multi-page memory units safe, explicit, and efficient
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -16,9 +16,9 @@
 
 ---
 
-## Why folios exist
+## Why folios exist {#why-folios-exist}
 
-### The compound page problem
+### The compound page problem {#the-compound-page-problem}
 
 `struct page` was designed for order-0 (single, 4KB) pages. Huge pages were bolted on later using the *compound page* mechanism: a contiguous group of pages is allocated where the first page is the *head* and every subsequent page is a *tail*.
 
@@ -33,7 +33,7 @@ page = compound_head(page);
 
 This is error-prone, invisible to the type system, and scattered across thousands of call sites.
 
-### What a folio is
+### What a folio is {#what-a-folio-is}
 
 A `struct folio` is a first-class kernel object representing a **physically, virtually, and logically contiguous power-of-two-aligned set of bytes**. It is always at least `PAGE_SIZE` in size. The key guarantee is: a pointer to a `struct folio` is always a pointer to the *head*. There are no tail folios.
 
@@ -45,7 +45,7 @@ A `struct folio` is a first-class kernel object representing a **physically, vir
 
 ---
 
-## struct folio
+## struct folio {#struct-folio}
 
 The definition lives in `include/linux/mm_types.h`:
 
@@ -98,7 +98,7 @@ FOLIO_MATCH(_refcount,  _refcount);
 
 If the layout ever drifts, the build breaks.
 
-### Size and order accessors
+### Size and order accessors {#size-and-order-accessors}
 
 These are all in `include/linux/mm.h`:
 
@@ -120,9 +120,9 @@ For order-0 (the common case), `folio_order()` returns 0 without dereferencing a
 
 ---
 
-## page ↔ folio conversion
+## page ↔ folio conversion {#page-folio-conversion}
 
-### page_folio() — page to its owning folio
+### page_folio() — page to its owning folio {#page_folio-page-to-its-owning-folio}
 
 Defined in `include/linux/page-flags.h`:
 
@@ -137,7 +137,7 @@ This is a `_Generic` macro so it preserves const-correctness. `_compound_head()`
 !!! note "No-reference race"
     The kernel documentation notes: if the caller does not already hold a reference, `page_folio()` can race with a folio split. Always verify that the folio still contains the page after acquiring a reference.
 
-### folio_page() — nth page within a folio
+### folio_page() — nth page within a folio {#folio_page-nth-page-within-a-folio}
 
 ```c
 #define folio_page(folio, n)    (&(folio)->page + (n))
@@ -145,7 +145,7 @@ This is a `_Generic` macro so it preserves const-correctness. `_compound_head()`
 
 Simple pointer arithmetic. `folio_page(folio, 0)` is the head page; `folio_page(folio, folio_nr_pages(folio) - 1)` is the last page. No bounds checking is performed — the caller is assumed to hold a reference.
 
-### folio_file_page() — page for a given file index
+### folio_file_page() — page for a given file index {#foliofilepage-page-for-a-given-file-index}
 
 When a large folio spans multiple page-cache indices, `folio_file_page()` maps a file offset to the correct sub-page:
 
@@ -154,7 +154,7 @@ When a large folio spans multiple page-cache indices, `folio_file_page()` maps a
 static inline struct page *folio_file_page(struct folio *folio, pgoff_t index);
 ```
 
-### folio_pfn() and folio_address()
+### folio_pfn() and folio_address() {#foliopfn-and-folioaddress}
 
 ```c
 /* Page Frame Number of the first page in the folio */
@@ -175,13 +175,13 @@ static inline struct folio *pfn_folio(unsigned long pfn)
 
 ---
 
-## Reference counting
+## Reference counting {#reference-counting}
 
-### The model
+### The model {#the-model}
 
 The reference count lives in the folio (head page) in `_refcount`. Tail pages have no independent refcount. All reference operations go through the folio.
 
-### folio_get() and folio_put()
+### folio_get() and folio_put() {#folioget-and-folioput}
 
 ```c
 /* include/linux/mm.h */
@@ -210,7 +210,7 @@ static inline void put_page(struct page *page)
 }
 ```
 
-### folio_ref_count()
+### folio_ref_count() {#foliorefcount}
 
 ```c
 /* include/linux/page_ref.h */
@@ -219,7 +219,7 @@ static inline int folio_ref_count(const struct folio *folio);
 
 Returns the raw reference count. The kernel documentation warns not to access `_refcount` directly; always use this accessor.
 
-### folio_try_get()
+### folio_try_get() {#foliotryget}
 
 Use this when you do not already hold a reference and need to speculatively acquire one:
 
@@ -235,9 +235,9 @@ Returns `true` if the reference was acquired, `false` if the folio was already a
 
 ---
 
-## Where folios are used today
+## Where folios are used today {#where-folios-are-used-today}
 
-### Page cache
+### Page cache {#page-cache}
 
 `struct address_space` stores its cached pages in an XArray (`i_pages`). The XArray entries are `struct folio *` pointers. All modern page-cache lookup paths return folios:
 
@@ -255,7 +255,7 @@ int filemap_add_folio(struct address_space *mapping,
     struct folio *folio, pgoff_t index, gfp_t gfp);
 ```
 
-### Readahead
+### Readahead {#readahead}
 
 The `->readahead` address space operation receives a `struct readahead_control *`. Drivers and filesystems that have been converted call `readahead_folio()` in a loop:
 
@@ -266,7 +266,7 @@ static inline struct folio *readahead_folio(struct readahead_control *ractl);
 
 Each call returns the next folio to fill and advances the control structure by `folio_nr_pages()` pages.
 
-### Writeback
+### Writeback {#writeback}
 
 The writeback path uses folio-native operations. `mm/folio-compat.c` contains the shims that map old page-based APIs onto their folio equivalents:
 
@@ -279,7 +279,7 @@ void mark_page_accessed(struct page *page)  /* → folio_mark_accessed() */
 
 The comment at the top of `folio-compat.c` is explicit: *"All of the callers of these functions should be converted to use folios eventually."*
 
-### LRU lists
+### LRU lists {#lru-lists}
 
 ```c
 /* include/linux/swap.h */
@@ -288,13 +288,13 @@ void folio_add_lru(struct folio *folio);
 
 LRU accounting is per-folio. A large folio counts as `folio_nr_pages()` pages on the LRU, but it is a single eviction unit — the kernel cannot partially evict a folio.
 
-### Filesystem adoption
+### Filesystem adoption {#filesystem-adoption}
 
 Most in-tree filesystems have converted their `->readahead`, `->read_folio`, and `->writepages` methods. The address space operations struct (`struct address_space_operations`) now carries folio-native slots: `dirty_folio`, `migrate_folio`, `error_remove_folio`. Filesystems that have not yet converted fall back to compatibility wrappers; the conversion effort is ongoing.
 
 ---
 
-## Large folios
+## Large folios {#large-folios}
 
 An order-N folio with N ≥ 1 is a *large folio*. `folio_test_large()` returns true for these:
 
@@ -303,7 +303,7 @@ An order-N folio with N ≥ 1 is a *large folio*. `folio_test_large()` returns t
 static inline bool folio_test_large(const struct folio *folio);
 ```
 
-### Allocation
+### Allocation {#allocation}
 
 For page-cache use, allocate via `filemap_alloc_folio()`:
 
@@ -320,7 +320,7 @@ For generic kernel use, `folio_alloc()` (in `include/linux/gfp.h`) wraps the bud
     alloc_hooks(folio_alloc_noprof(gfp, order))
 ```
 
-### File-backed large folios and TLB
+### File-backed large folios and TLB {#file-backed-large-folios-and-tlb}
 
 When a page-cache folio spans multiple PMD-size-aligned pages, fewer page-table entries are needed to map it. For workloads that read or mmap large files sequentially, large folios reduce:
 
@@ -339,15 +339,15 @@ static inline void mapping_set_folio_order_range(
     unsigned int min, unsigned int max);
 ```
 
-### Relation to mTHP
+### Relation to mTHP {#relation-to-mthp}
 
 Large folios in the page cache are the file-backed counterpart to multi-size THP (mTHP) for anonymous memory. See [mTHP](mthp.md) for the anonymous side. The key distinction: file-backed large folios are managed by the page cache and `struct address_space`; anonymous large folios are managed by the THP machinery and `struct vm_area_struct`.
 
 ---
 
-## The conversion in progress
+## The conversion in progress {#the-conversion-in-progress}
 
-### The pattern: folio-compat.c
+### The pattern: folio-compat.c {#the-pattern-folio-compatc}
 
 `mm/folio-compat.c` is the canonical example of how the conversion proceeds. Each function in that file has the same structure:
 
@@ -362,7 +362,7 @@ EXPORT_SYMBOL(unlock_page);
 
 The page function converts to a folio and delegates. As callers are converted to call `folio_unlock()` directly, the page shim eventually has no callers and can be removed.
 
-### Naming convention
+### Naming convention {#naming-convention}
 
 The kernel has adopted a consistent naming convention:
 
@@ -374,7 +374,7 @@ The kernel has adopted a consistent naming convention:
 
 If a function name starts with `folio_`, it takes a `struct folio *` and operates on the whole folio. If it takes a `struct page *`, check `mm/folio-compat.c` — it is probably a shim.
 
-### How to tell if a function has been converted
+### How to tell if a function has been converted {#how-to-tell-if-a-function-has-been-converted}
 
 1. Check the parameter type: `struct folio *` means converted.
 2. Look in `mm/folio-compat.c`: if the old name appears there, the implementation has moved to a `folio_*` counterpart.
@@ -382,9 +382,9 @@ If a function name starts with `folio_`, it takes a `struct folio *` and operate
 
 ---
 
-## Writing folio-aware code
+## Writing folio-aware code {#writing-folio-aware-code}
 
-### The decision rule
+### The decision rule {#the-decision-rule}
 
 | You are working with… | Use |
 |----------------------|-----|
@@ -394,7 +394,7 @@ If a function name starts with `folio_`, it takes a `struct folio *` and operate
 | Raw page allocation (`alloc_pages`) | Returns `struct page *`; call `page_folio()` immediately |
 | Existing code that passes `struct page *` | Convert at the boundary; hold a folio reference before touching flags |
 
-### Typical folio-aware read path (sketch)
+### Typical folio-aware read path (sketch) {#typical-folio-aware-read-path-sketch}
 
 ```c
 struct folio *folio;
@@ -421,7 +421,7 @@ folio_unlock(folio);
 folio_put(folio);
 ```
 
-### Allocating a folio directly
+### Allocating a folio directly {#allocating-a-folio-directly}
 
 When you need a folio outside the page cache (e.g., a private kernel buffer):
 
@@ -436,7 +436,7 @@ if (!folio)
 folio_put(folio);   /* drops the allocator's reference; frees if zero */
 ```
 
-### Do not call folio_get() without a prior reference
+### Do not call folio_get() without a prior reference {#do-not-call-folio_get-without-a-prior-reference}
 
 ```c
 /* WRONG: folio pointer from a data structure with no lock held */
@@ -449,7 +449,7 @@ if (!folio_try_get(folio))
 
 ---
 
-## Reference summary
+## Reference summary {#reference-summary}
 
 | Function | Header | Description |
 |----------|--------|-------------|
@@ -470,7 +470,7 @@ if (!folio_try_get(folio))
 | `filemap_alloc_folio(gfp, order)` | `pagemap.h` | Allocate a page-cache folio |
 | `readahead_folio(ractl)` | `pagemap.h` | Get next folio from a readahead batch |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LWN: Folios](https://lwn.net/Articles/849538/) — Matthew Wilcox's 2021 article introducing the folio concept and explaining why `struct page` needed replacing
 - [LWN: Large folios for the page cache](https://lwn.net/Articles/893512/) — follow-up coverage on large folio support for file-backed memory and the page cache

@@ -1,4 +1,4 @@
-# The kobject Path Race That Needed a Retry, Not a Lock
+# The kobject Path Race That Needed a Retry, Not a Lock {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
 
 > CVE-2023-45863 — `kobject_get_path()` computed a sysfs path's length in one pass and filled the buffer in a second, unsynchronized pass, and a network-interface rename landing between the two passes could grow a name enough to overflow the undersized buffer straight into a heap slab
 
@@ -25,11 +25,11 @@ Actively exploited
 
 *Part of [War Stories: Device Drivers](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 Every uevent the kernel sends to userspace — `add`, `remove`, `change`, `move` — carries a `DEVPATH` field: the device's location in the sysfs tree, such as `/devices/pci0000:00/.../net/eth0`. `udevd`/`systemd-udevd` uses that string, joined with `/sys`, to know exactly which sysfs node an event refers to, so it can read further attributes, apply naming and permission rules, and create the matching `/dev` node. `kobject_get_path()` builds that string by walking a kobject's `parent` chain up to the root, in two separate passes: `get_kobj_path_length()` walks the chain once, summing `strlen(kobject_name(parent)) + 1` for every ancestor to compute the exact buffer size needed; `kobject_get_path()` then allocates a buffer of exactly that size and calls `fill_kobj_path()`, which walks the *same* chain a second time, writing each ancestor's name into the buffer right-to-left. Nothing holds a lock across the two passes — the code trusts that the chain, and every name in it, is unchanged between them.
 
-## The trigger
+## The trigger {#the-trigger}
 
 `ixgbe_probe()`, loading a network driver, registers a child kobject (the NIC's MII bus) via `device_add()`, which needs to build that child's sysfs path for its own `add` uevent. On CPU 0, `get_kobj_path_length()` walks up through the child's parent — the netdev's own kobject, e.g. named `eth0` — and computes a length based on that name. Concurrently, on CPU 1, `systemd-udevd` — reacting to the `add` uevent already sent moments earlier for the netdev itself — issues a rename, for instance applying a persistent-interface-naming rule that changes `eth0` to something longer like `enp3s0f0`. `kobject_rename()` swaps `kobj->name` to point at the new, longer string. Its own doc comment places the burden of synchronization entirely on the caller: "It is the responsibility of the caller to provide mutual exclusion between two different calls of `kobject_rename` on the same kobject." For a network interface, that mutual exclusion comes from the RTNL lock its caller (`dev_change_name()`) already holds — serializing renames against each other, but doing nothing to serialize a rename against an unrelated reader like `get_kobj_path_length()`/`fill_kobj_path()`, which never take RTNL or any other lock at all. If the rename lands between the two passes, `fill_kobj_path()`'s second walk sees the *new*, longer name for that ancestor while working with the length computed from the *old*, shorter one. The commit fixing this diagrams the interleaving directly:
 
@@ -66,7 +66,7 @@ ixgbe_probe
 
 `fill_kobj_path()` had no bound of its own — it trusted the `length` argument it was handed, and blindly subtracted `strlen()` of whatever name each ancestor's `kobject_name()` currently returned, walking off the front of the undersized buffer and `memcpy`-ing past its start.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 This is a heap buffer overflow with both the write offset and content driven by the renamed interface's new name — a write, not merely a read, past the front of a slab allocation. Wang Hai's KASAN report, from a stress-test loop of `rmmod ixgbe; sleep 0.5; modprobe ixgbe; sleep 0.5`, caught it directly:
 
@@ -97,11 +97,11 @@ Write of size 7 at addr ff1100090573d1fd by task kworker/28:1/673
  ret_from_fork+0x1f/0x30
 ```
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 `get_kobj_path_length()` and `fill_kobj_path()` were written under an implicit assumption: that a kobject's ancestor chain, and every ancestor's name, would hold still between a length computation and the fill that follows it. That assumption is reasonable for the common case — most kobjects aren't renamed — but nothing in the code enforced it, and a network interface rename triggered by udev's own reaction to the *first* uevent this same probe sequence sent is exactly the kind of concurrent event the two-pass design had no way to account for. The bug required both sides of the race to hold real, but not exotic, privilege: triggering the probe/reload path used in the reproducer needs `CAP_SYS_MODULE` (module load/unload), and issuing an interface rename via rtnetlink or the legacy `SIOCSIFNAME` ioctl needs `CAP_NET_ADMIN` — capabilities `systemd-udevd`, running as root, already holds as a matter of course. When Wang Hai pinged for a merge decision, Greg Kroah-Hartman's reply weighed exactly this: "It's in my 'to review' queue that I am working on. As this is not anything that a normal user can trigger, it's not that high of a priority, right?" — an explicit acknowledgment that the bug's root-only trigger surface shaped how urgently it was treated, not whether it was real.
 
-## Resolution
+## Resolution {#resolution}
 
 `3bb2a01caa81` ("kobject: Fix slab-out-of-bounds in fill_kobj_path()", Wang Hai) doesn't add a lock across the two passes — it makes `fill_kobj_path()` bounds-check itself and retry from scratch if the chain moved under it:
 
@@ -141,7 +141,7 @@ Write of size 7 at addr ff1100090573d1fd by task kworker/28:1/673
 
 Every write in `fill_kobj_path()` is now preceded by a check that `length` hasn't gone non-positive; the moment it would, the function bails out with `-EINVAL` instead of writing out of bounds, and `kobject_get_path()` treats that as a signal that the buffer it allocated is stale, frees it, and restarts the whole length-then-fill computation from `retry:`. There is still no lock — a sufficiently persistent stream of renames could in principle retry repeatedly — and a reviewer, Michal Swiatkowski, asked exactly that: "I wonder if there is no case we end up with infinite loop (fill_kobj_path always returning error). Do You know?" Wang Hai's answer: "It should only be possible to have an infinite loop if name or parent keeps changing. The probability of this is extremely low. If necessary, change it to only retry 3 times?" The retry cap was never added to the merged fix — `kobject_get_path()` retries unconditionally on every detected mismatch.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A two-pass "measure, then fill" pattern needs either a lock across both passes or a way for the fill pass to detect that the measurement is stale — it cannot simply trust the measurement stayed valid.** Locking wasn't the fix chosen here; a self-checking fill pass that fails cleanly and lets the caller retry achieved the same safety without introducing a new lock into a function already reachable from many contexts.
 
@@ -150,13 +150,13 @@ Every write in `fill_kobj_path()` is now preceded by a check that `length` hasn'
 !!! warning "Pattern to watch for"
     Any function that computes a buffer size in one pass and fills that buffer in a separate pass over the same mutable data is only as safe as the assumption that nothing changes in between. If the data can change concurrently and taking a lock across both passes isn't practical, the fill pass needs to detect a stale measurement and fail safely — not trust the number it was handed.
 
-## See also
+## See also {#see-also}
 
 - [Linux Device Model](../device-model.md) — `struct kobject`, sysfs, and the uevent mechanism this bug lives in
 - [The uevent_show() Fix That Deadlocked Driver Detach](uevent-show-deadlock.md) — a different driver-core race, in the same uevent-generation code path, whose deadlock traces back to a lock added to fix an earlier race and was ultimately resolved by removing that lock in favor of RCU
 - [Netfilter x_tables Heap Overflow](../../net/war-stories/netfilter-xtables.md) — a comparable heap-overflow-via-unchecked-length bug in a different subsystem
 
-## External references
+## External references {#external-references}
 
 - [git.kernel.org: 3bb2a01caa81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3bb2a01caa813d3a1845d378bbe4169ef280d394) — "kobject: Fix slab-out-of-bounds in fill_kobj_path()," the fix, with the full race diagram and KASAN report in its commit message
 - [lore.kernel.org: v2 patch thread](https://lore.kernel.org/r/20221220012143.52141-1-wanghai38@huawei.com/) — Wang Hai's submission and the Michal Swiatkowski / Greg Kroah-Hartman discussion

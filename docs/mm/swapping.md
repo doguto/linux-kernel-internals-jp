@@ -1,8 +1,8 @@
-# What happens during swapping
+# What happens during swapping {#what-happens-during-swapping}
 
 > The journey of a page from memory to disk and back
 
-## What is swapping?
+## What is swapping? {#what-is-swapping}
 
 When memory runs low, the kernel can move anonymous pages (heap, stack, private mappings) to a swap device - either a disk partition or a swap file. This frees physical memory for other uses while preserving the page's contents.
 
@@ -37,11 +37,11 @@ flowchart RL
 
 Unlike file pages (which can be re-read from their backing file), anonymous pages have nowhere to go except swap space.
 
-## Why this page was chosen
+## Why this page was chosen {#why-this-page-was-chosen}
 
 The kernel doesn't randomly pick pages to swap. It uses the [LRU (Least Recently Used)](reclaim.md) lists to find cold pages - pages that haven't been accessed recently.
 
-### The selection process
+### The selection process {#the-selection-process}
 
 ```mermaid
 flowchart TB
@@ -55,7 +55,7 @@ flowchart TB
     end
 ```
 
-### The referenced flag check
+### The referenced flag check {#the-referenced-flag-check}
 
 Pages get a "second chance" via the referenced flag:
 
@@ -75,7 +75,7 @@ flowchart TB
 
 This prevents swapping out pages that are still being used occasionally.
 
-## Swap space organization
+## Swap space organization {#swap-space-organization}
 
 Linux supports two types of swap:
 
@@ -86,7 +86,7 @@ Linux supports two types of swap:
 
 On modern kernels (2.6+), the kernel [maps swap file blocks to disk sectors at swapon time](https://lwn.net/Articles/2668/) and performs [direct block I/O, bypassing all filesystem code](https://lkml.org/lkml/2005/7/7/326). Performance between partition and file swap is effectively identical for non-fragmented files on non-COW filesystems (ext4, XFS). On SSDs, even fragmented swap files show negligible overhead since seek penalties don't apply.
 
-### Swap area structure
+### Swap area structure {#swap-area-structure}
 
 ```c
 // From include/linux/swap.h
@@ -104,7 +104,7 @@ struct swap_info_struct {
 };
 ```
 
-### Swap slots
+### Swap slots {#swap-slots}
 
 Swap space is divided into page-sized slots:
 
@@ -134,7 +134,7 @@ flowchart TB
     end
 ```
 
-### Viewing swap status
+### Viewing swap status {#viewing-swap-status}
 
 ```bash
 # View swap areas
@@ -149,7 +149,7 @@ swapon --show
 free -h
 ```
 
-## Stage 1: Swap slot allocation
+## Stage 1: Swap slot allocation {#stage-1-swap-slot-allocation}
 
 When the kernel decides to swap out a page, it first allocates a slot:
 
@@ -174,7 +174,7 @@ swp_entry_t folio_alloc_swap(struct folio *folio)
 }
 ```
 
-### Swap entry encoding
+### Swap entry encoding {#swap-entry-encoding}
 
 A swap entry packs the swap area type and offset into a single value:
 
@@ -191,7 +191,7 @@ flowchart LR
 
 This entry will replace the page table entry (PTE) after the page is written out.
 
-## Stage 2: Writing to swap
+## Stage 2: Writing to swap {#stage-2-writing-to-swap}
 
 Once a slot is allocated, the page content is written to the swap device:
 
@@ -216,7 +216,7 @@ static unsigned int shrink_folio_list(struct list_head *folio_list, ...)
 }
 ```
 
-### The add_to_swap() function
+### The add_to_swap() function {#the-addtoswap-function}
 
 ```c
 // mm/swap_state.c
@@ -241,7 +241,7 @@ bool add_to_swap(struct folio *folio)
 }
 ```
 
-### Writing to disk
+### Writing to disk {#writing-to-disk}
 
 ```c
 // Simplified I/O path
@@ -280,7 +280,7 @@ flowchart TB
     end
 ```
 
-## Stage 3: Page table update
+## Stage 3: Page table update {#stage-3-page-table-update}
 
 After the write completes, the PTE is updated to contain the swap entry instead of a page mapping:
 
@@ -305,7 +305,7 @@ flowchart LR
     Freed["Physical page returned to buddy allocator!"]
 ```
 
-### The swap cache
+### The swap cache {#the-swap-cache}
 
 During I/O, the page stays in the **swap cache** - an address space that allows finding in-flight pages:
 
@@ -329,11 +329,11 @@ After I/O completes successfully:
 - Physical page is freed
 - Only the swap slot remains with the data
 
-## Stage 4: Process accesses swapped page
+## Stage 4: Process accesses swapped page {#stage-4-process-accesses-swapped-page}
 
 Later, when a process accesses a swapped-out address, a page fault brings it back.
 
-### The fault handler detects a swap entry
+### The fault handler detects a swap entry {#the-fault-handler-detects-a-swap-entry}
 
 ```c
 // arch/x86/mm/fault.c → mm/memory.c
@@ -353,7 +353,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 }
 ```
 
-### do_swap_page() brings the page back
+### do_swap_page() brings the page back {#doswappage-brings-the-page-back}
 
 ```c
 // mm/memory.c (simplified)
@@ -393,7 +393,7 @@ vm_fault_t do_swap_page(struct vm_fault *vmf)
 }
 ```
 
-### Swap-in readahead
+### Swap-in readahead {#swap-in-readahead}
 
 Like file readahead, the kernel predicts you might access nearby swapped pages:
 
@@ -419,7 +419,7 @@ struct folio *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 }
 ```
 
-## Stage 5: Swap slot freed
+## Stage 5: Swap slot freed {#stage-5-swap-slot-freed}
 
 After successful swap-in, the swap slot can be freed:
 
@@ -440,7 +440,7 @@ void swap_free(swp_entry_t entry)
 }
 ```
 
-### Swap slots and COW
+### Swap slots and COW {#swap-slots-and-cow}
 
 When processes share a swapped page (after fork + swap):
 
@@ -473,7 +473,7 @@ flowchart TB
     SharedSlot --> ParentSwapIn --> ChildSwapIn
 ```
 
-## The complete swap cycle
+## The complete swap cycle {#the-complete-swap-cycle}
 
 Putting it all together:
 
@@ -511,9 +511,9 @@ flowchart TB
     TimePasses --> Step7
 ```
 
-## Swap tunables
+## Swap tunables {#swap-tunables}
 
-### Swappiness
+### Swappiness {#swappiness}
 
 Controls how aggressively the kernel swaps:
 
@@ -536,7 +536,7 @@ sysctl vm.swappiness=1
 | 60 | Default balance |
 | 100 | Aggressive swapping |
 
-### Swap priority
+### Swap priority {#swap-priority}
 
 Multiple swap areas can have different priorities:
 
@@ -550,7 +550,7 @@ swapon -p 10 /dev/ssd1
 swapon -p 10 /dev/ssd2         # Striped across both
 ```
 
-### VFS cache pressure
+### VFS cache pressure {#vfs-cache-pressure}
 
 Affects the balance between reclaiming file cache vs swapping:
 
@@ -562,9 +562,9 @@ cat /proc/sys/vm/vfs_cache_pressure
 # Higher = drop file caches more readily (swap less)
 ```
 
-## Swap performance considerations
+## Swap performance considerations {#swap-performance-considerations}
 
-### SSD vs HDD
+### SSD vs HDD {#ssd-vs-hdd}
 
 | Metric | HDD | SSD |
 |--------|-----|-----|
@@ -574,7 +574,7 @@ cat /proc/sys/vm/vfs_cache_pressure
 
 SSDs dramatically improve swap performance, making swapping much less painful.
 
-### Swap thrashing
+### Swap thrashing {#swap-thrashing}
 
 When the working set exceeds RAM, the system constantly swaps pages in and out:
 
@@ -612,7 +612,7 @@ flowchart LR
 - Reduce memory usage
 - Use zswap or zram for compression
 
-### zswap and zram
+### zswap and zram {#zswap-and-zram}
 
 **zswap**: Compresses pages before writing to swap device:
 
@@ -641,9 +641,9 @@ mkswap /dev/zram0
 swapon -p 100 /dev/zram0  # High priority
 ```
 
-## Try it yourself
+## Try it yourself {#try-it-yourself}
 
-### Monitor swap activity
+### Monitor swap activity {#monitor-swap-activity}
 
 ```bash
 # Real-time swap I/O
@@ -657,7 +657,7 @@ cat /proc/vmstat | grep -E "pswp|swap"
 # pswpout - pages swapped out
 ```
 
-### Watch a swap operation
+### Watch a swap operation {#watch-a-swap-operation}
 
 ```bash
 # Terminal 1: Monitor swap
@@ -672,7 +672,7 @@ for pid in $(pgrep stress); do
 done
 ```
 
-### Trace swap events
+### Trace swap events {#trace-swap-events}
 
 ```bash
 # Enable swap tracing
@@ -683,7 +683,7 @@ echo 1 > /sys/kernel/debug/tracing/events/swap/swap_readpage/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Examine swap contents
+### Examine swap contents {#examine-swap-contents}
 
 ```bash
 # Per-process swap usage
@@ -694,7 +694,7 @@ for pid in /proc/[0-9]*; do
 done | sort -t: -k2 -n -r | head -10
 ```
 
-### Test swap in/out explicitly
+### Test swap in/out explicitly {#test-swap-inout-explicitly}
 
 ```bash
 # Allocate memory and force swap
@@ -731,7 +731,7 @@ gcc -o /tmp/swap_test /tmp/swap_test.c
 /tmp/swap_test
 ```
 
-## Key source files
+## Key source files {#key-source-files}
 
 | File | What It Does |
 |------|--------------|
@@ -742,9 +742,9 @@ gcc -o /tmp/swap_test /tmp/swap_test.c
 | [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Page reclaim, swap-out path |
 | [`include/linux/swap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/swap.h) | Swap data structures |
 
-## History
+## History {#history}
 
-### Swap evolution
+### Swap evolution {#swap-evolution}
 
 **Early Linux**: Basic swap support from the beginning.
 
@@ -774,7 +774,7 @@ Unlike zswap (which caches before a real swap device), zram *is* the swap device
 
 In Stage 1 (slot allocation) above, the kernel now uses a swap slot cache to batch slot allocations, reducing contention on SSDs where swap I/O is fast enough that allocation overhead becomes significant.
 
-### Modern swap improvements
+### Modern swap improvements {#modern-swap-improvements}
 
 The swap subsystem continues to evolve for better SSD utilization and reduced latency:
 
@@ -782,19 +782,19 @@ The swap subsystem continues to evolve for better SSD utilization and reduced la
 - Improved swap readahead
 - Integration with memory cgroups for per-cgroup swap accounting
 
-## Notorious bugs and edge cases
+## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
 
 Swap involves complex interactions between page tables, swap slots, and caching. Race conditions in this code can cause data corruption or security vulnerabilities.
 
 ---
 
-### Case 1: The swap slot ABA problem (CVE-2024-26759)
+### Case 1: The swap slot ABA problem (CVE-2024-26759) {#case-1-the-swap-slot-aba-problem-cve-2024-26759}
 
-#### What happened
+#### What happened {#what-happened}
 
 In early 2024, Huang Ying (Intel) discovered a race condition in the "skip swapcache" optimization path that could cause data corruption.
 
-#### The bug
+#### The bug {#the-bug}
 
 The [LKML discussion](https://lkml.org/lkml/2024/2/16/426) explains the ABA problem:
 
@@ -826,11 +826,11 @@ sequenceDiagram
 
 The PTE value hasn't changed (still `swp_entry_t` for slot X), so the `pte_same()` check passes, but the data is completely different.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications}
 
 This is **silent data corruption** - applications would see old data instead of current data, with no errors reported. Databases, filesystems, or any application relying on data consistency could be affected.
 
-#### The fix
+#### The fix {#the-fix}
 
 **Commit**: [13ddaf26be32](https://git.kernel.org/linus/13ddaf26be32) ("mm/swap: fix race when skipping swapcache")
 
@@ -842,13 +842,13 @@ Fixes commit: [0bcac06f27d7](https://git.kernel.org/linus/0bcac06f27d7) ("mm, sw
 
 ---
 
-### Case 2: ZSWAP race conditions
+### Case 2: ZSWAP race conditions {#case-2-zswap-race-conditions}
 
-#### What happened
+#### What happened {#what-happened_1}
 
 The zswap compressed swap cache introduced concurrency challenges. [LKML bug reports](https://linux.kernel.narkive.com/0AHtSnDW/bug-report-zswap-theoretical-race-condition-issues) documented theoretical races.
 
-#### The bug
+#### The bug {#the-bug_1}
 
 When a duplicate store and reclaim happen concurrently:
 
@@ -859,11 +859,11 @@ When a duplicate store and reclaim happen concurrently:
 
 The swap cache now contains old data for offset A instead of the new data.
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_1}
 
 If `do_swap_page()` retrieves the page from swap cache, it returns stale data - another silent corruption scenario.
 
-#### Mitigations
+#### Mitigations {#mitigations}
 
 Zswap has undergone multiple locking improvements to address these races. The interactions between:
 
@@ -875,13 +875,13 @@ Zswap has undergone multiple locking improvements to address these races. The in
 
 ---
 
-### Case 3: Swap-over-NFS instability
+### Case 3: Swap-over-NFS instability {#case-3-swap-over-nfs-instability}
 
-#### What happened
+#### What happened {#what-happened_2}
 
 Swapping to NFS has historically been problematic. When the system is under memory pressure and needs to swap, it also needs memory for network I/O.
 
-#### The bug
+#### The bug {#the-bug_2}
 
 The classic deadlock scenario:
 
@@ -891,7 +891,7 @@ The classic deadlock scenario:
 4. Memory allocation triggers more reclaim
 5. Deadlock: can't free memory without network, can't do network without memory
 
-#### Mitigations
+#### Mitigations {#mitigations_1}
 
 **`PF_MEMALLOC` and memory reserves**: The kernel reserves memory for critical I/O paths. Processes doing swap I/O can dip into reserves.
 
@@ -901,13 +901,13 @@ The classic deadlock scenario:
 
 ---
 
-### Case 4: Swap partition vs. swap file races
+### Case 4: Swap partition vs. swap file races {#case-4-swap-partition-vs-swap-file-races}
 
-#### What happened
+#### What happened {#what-happened_3}
 
 Swap files introduce additional complexity compared to swap partitions because the filesystem layer is involved.
 
-#### The bug
+#### The bug {#the-bug_3}
 
 With swap files, `swap_writepage()` must go through the filesystem. This can race with:
 
@@ -915,25 +915,25 @@ With swap files, `swap_writepage()` must go through the filesystem. This can rac
 - Filesystem metadata updates
 - Journal commits
 
-#### Historical issues
+#### Historical issues {#historical-issues}
 
 - **XFS + swap**: Early XFS had issues with swap files due to delayed allocation
 - **Btrfs + swap**: Only supported swap files from kernel 5.0 due to COW complexity
 - **F2FS**: Added swap file support in kernel 5.10
 
-#### Modern status
+#### Modern status {#modern-status}
 
 Most filesystems now support swap files correctly, but the added complexity means more potential for bugs compared to raw partitions.
 
 ---
 
-### Case 5: The swap readahead trap
+### Case 5: The swap readahead trap {#case-5-the-swap-readahead-trap}
 
-#### What happened
+#### What happened {#what-happened_4}
 
 Swap readahead (reading more than one page on swap-in) is an optimization that can backfire.
 
-#### The problem
+#### The problem {#the-problem}
 
 Unlike file readahead (where sequential access is common), swap access patterns are often random - especially on systems with many processes. Aggressive swap readahead:
 
@@ -942,11 +942,11 @@ Unlike file readahead (where sequential access is common), swap access patterns 
 3. Increases swap I/O
 4. Makes memory pressure worse
 
-#### The bug class
+#### The bug class {#the-bug-class}
 
 Readahead tuning issues have caused performance regressions across kernel versions. The heuristics for "should we readahead?" are imperfect.
 
-#### Mitigation
+#### Mitigation {#mitigation}
 
 ```bash
 # Check current readahead (pages)
@@ -962,13 +962,13 @@ echo 0 > /proc/sys/vm/page-cluster
 
 ---
 
-### Case 6: Large folio + swap = data loss (2023)
+### Case 6: Large folio + swap = data loss (2023) {#case-6-large-folio-swap-data-loss-2023}
 
-#### What happened
+#### What happened {#what-happened_5}
 
 The large folio support (kernel 6.1+) introduced a data loss bug affecting XFS and other filesystems. Organizations reported [active data loss](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/) in production.
 
-#### The bug
+#### The bug {#the-bug_4}
 
 Large folios change how pages are tracked and written back. Interactions with the swap and writeback paths led to pages being marked clean when they were actually dirty, resulting in data loss.
 
@@ -976,11 +976,11 @@ From the LKML report:
 
 > *"At least 16 instances of data loss in a fleet of 1.5k VMs... happens mostly on nodes running database or storage-oriented workloads, including PostgreSQL, MySQL, RocksDB."*
 
-#### Real-world implications
+#### Real-world implications {#real-world-implications_2}
 
 This is catastrophic for databases and storage systems. Data written to memory but not yet persisted could simply disappear.
 
-#### The fix
+#### The fix {#the-fix_1}
 
 Meta and other companies disabled large folios while fixes were developed:
 
@@ -992,7 +992,7 @@ Multiple patches were required to fully address the issue.
 
 ---
 
-### Summary: Lessons learned
+### Summary: Lessons learned {#summary-lessons-learned}
 
 | Bug | Year | Root Cause | Impact | Prevention |
 |-----|------|------------|--------|------------|
@@ -1004,16 +1004,16 @@ Multiple patches were required to fully address the issue.
 
 The common thread: **swap is a "slow path" that gets less testing than the normal memory path**. When the system is under memory pressure, it's already in a degraded state, and bugs in swap handling compound the problem.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Related docs
+### Related docs {#related-docs}
 
 - [Swap](swap.md) - Swap configuration and management
 - [Page reclaim](reclaim.md) - How pages are selected for swap
 - [Life of a page](life-of-page.md) - Complete page lifecycle
 - [Running out of memory](oom.md) - What happens when swap isn't enough
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [In defense of swap](https://lwn.net/Articles/690079/) (2016) - Why swap matters
 - [zswap: compressed swap caching](https://lwn.net/Articles/537422/) (2013) - Compressed swap

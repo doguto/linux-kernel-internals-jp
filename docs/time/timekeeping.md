@@ -1,8 +1,8 @@
-# Timekeeping and Clocksources
+# Timekeeping and Clocksources {#timekeeping-and-clocksources}
 
 > How the kernel tracks time: TSC, HPET, clocksources, and NTP
 
-## Two abstractions: clocksource and clockevent
+## Two abstractions: clocksource and clockevent {#two-abstractions-clocksource-and-clockevent}
 
 The kernel splits time hardware into two roles:
 
@@ -13,7 +13,7 @@ The kernel splits time hardware into two roles:
 
 A clocksource is polled; a clockevent fires interrupts. Both are needed: the clocksource provides nanosecond-resolution reads; the clockevent drives the scheduler tick and hrtimers.
 
-## struct clocksource
+## struct clocksource {#struct-clocksource}
 
 ```c
 /* include/linux/clocksource.h */
@@ -41,7 +41,7 @@ static struct clocksource clocksource_tsc = {
 };
 ```
 
-### Counter → nanoseconds conversion
+### Counter → nanoseconds conversion {#counter-nanoseconds-conversion}
 
 The `mult` and `shift` fields avoid division in the hot path:
 
@@ -60,7 +60,7 @@ static inline s64 clocksource_cyc2ns(u64 cycles, u32 mult, u32 shift)
 
 For a 3.6 GHz TSC: `mult ≈ 1165084`, `shift = 22`. Each call to `clock_gettime` does one `rdtsc` + one multiply + one shift — no division, no lock.
 
-## struct timekeeper
+## struct timekeeper {#struct-timekeeper}
 
 The timekeeper holds the current time state and is updated on every tick and NTP adjustment:
 
@@ -128,7 +128,7 @@ struct tk_read_base {
 };
 ```
 
-### Clock IDs
+### Clock IDs {#clock-ids}
 
 | Clock ID | Description | Affected by |
 |----------|-------------|------------|
@@ -146,11 +146,11 @@ clock_gettime(CLOCK_MONOTONIC, &ts);  /* nanosecond precision */
 clock_gettime(CLOCK_REALTIME, &ts);   /* wall clock */
 ```
 
-## TSC: Time Stamp Counter
+## TSC: Time Stamp Counter {#tsc-time-stamp-counter}
 
 The TSC is the primary clocksource on x86. It's a 64-bit counter incremented every CPU cycle.
 
-### TSC calibration
+### TSC calibration {#tsc-calibration}
 
 At boot, the kernel calibrates the TSC frequency against a known-good reference (HPET, PIT, or ACPI PM timer):
 
@@ -175,7 +175,7 @@ static unsigned long pit_calibrate_tsc(u32 latch, unsigned long ms, int loopmin)
 }
 ```
 
-### TSC invariance
+### TSC invariance {#tsc-invariance}
 
 Modern CPUs have an **invariant TSC** (`CPUID[0x80000007] bit 8`) that runs at a fixed rate regardless of P-states or C-states. This makes TSC a reliable clocksource even on laptops with frequency scaling.
 
@@ -186,7 +186,7 @@ grep "constant_tsc nonstop_tsc" /proc/cpuinfo
 
 Without invariant TSC, TSC drifts when the CPU frequency changes — unreliable for timekeeping.
 
-## NTP: adjusting the clock
+## NTP: adjusting the clock {#ntp-adjusting-the-clock}
 
 NTP runs in userspace (ntpd/chronyd) but applies corrections to the kernel clock via `adjtimex(2)`:
 
@@ -208,7 +208,7 @@ new_mult = orig_mult + (freq_error * orig_mult) / NSEC_PER_SEC
 
 This makes the counter-to-nanosecond conversion run slightly faster or slower without any visible jumps.
 
-### NTP phase-locked loop (PLL)
+### NTP phase-locked loop (PLL) {#ntp-phase-locked-loop-pll}
 
 ```c
 /* kernel/time/ntp.c */
@@ -232,7 +232,7 @@ static void ntp_update_frequency(struct ntp_data *ntpdata)
 }
 ```
 
-## vDSO: time without a syscall
+## vDSO: time without a syscall {#vdso-time-without-a-syscall}
 
 `clock_gettime(CLOCK_MONOTONIC)` is the most-called libc function. The kernel optimizes it via the **vDSO** (virtual dynamic shared object) — a read-only page mapped into every process that contains the timekeeping fast path.
 
@@ -264,7 +264,7 @@ do_hres(const struct vdso_time_data *vd, const struct vdso_clock *vc, clockid_t 
 
 The vDSO page is updated by the kernel on every tick. User reads are entirely in userspace — no ring transitions, no TLB misses to kernel pages.
 
-## Observing timekeeping
+## Observing timekeeping {#observing-timekeeping}
 
 ```bash
 # Current clocksource and available alternatives
@@ -291,9 +291,9 @@ chronyc tracking
 cat /proc/timer_list | head -50
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/timekeeper_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timekeeper_internal.h) — definitions of `struct timekeeper` and `struct tk_read_base` with cacheline alignment comments
 - [kernel/time/timekeeping.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping.c) — timekeeping core: `ktime_get()`, `timekeeping_advance()`, `timekeeping_update_from_shadow()`, and leap-second processing
@@ -301,14 +301,14 @@ cat /proc/timer_list | head -50
 - [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — architecture-generic vDSO clock reading loop (`do_hres()`, `do_coarse()`) using lockless seqlock reads
 - [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — x86 TSC calibration (`pit_calibrate_tsc()`, `native_calibrate_tsc()`) and stability testing
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — retrieving clock timestamps across supported clock domains
 - [`clock_settime(2)`](https://man7.org/linux/man-pages/man2/clock_settime.2.html) — setting `CLOCK_REALTIME` and triggering `clock_was_set()` notifications
 - [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — adjusting kernel clock parameters and retrieving synchronization status
 - [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — overview of time and timer APIs in Linux
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Clocksource and Clockevent Drivers](clocksource.md) — hardware clocksource registration, rating, and cycle-to-ns conversion
 - [NTP and Clock Discipline](ntp.md) — PLL/FLL frequency corrections, leap-second insertion, and 11-minute RTC sync
@@ -316,11 +316,11 @@ cat /proc/timer_list | head -50
 - [Time Namespaces](time-namespaces.md) — container-isolated `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` offsets
 - [vDSO Fast System Calls](../mm/vdso.md) — shared data pages and architecture of userspace vDSO acceleration
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Introduce CLOCK_REALTIME_COARSE](https://lwn.net/Articles/347811/) — John Stultz, August 2009: the introduction of CLOCK_REALTIME_COARSE and CLOCK_MONOTONIC_COARSE vDSO clocks
 - [The trouble with the TSC](https://lwn.net/Articles/388188/) — Jake Edge, May 2010: invariant TSC guarantees, frequency scaling drift, and hardware clock calibration
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — official kernel guide to the timekeeping subsystem and clock interfaces

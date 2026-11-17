@@ -1,8 +1,8 @@
-# Kbuild: The Kernel Build System
+# Kbuild: The Kernel Build System {#kbuild-the-kernel-build-system}
 
 > Makefiles, Kconfig, out-of-tree modules, and cross-compilation
 
-## Overview
+## Overview {#overview}
 
 The kernel build system (Kbuild) is built on top of GNU Make. It uses a hierarchy of `Makefile` fragments across the source tree and a powerful configuration language (Kconfig):
 
@@ -12,7 +12,7 @@ make               → compiles kernel using .config
 make modules_install → installs modules to /lib/modules/$(uname -r)/
 ```
 
-## .config: kernel configuration
+## .config: kernel configuration {#config-kernel-configuration}
 
 ```bash
 # Start fresh from a default config:
@@ -35,7 +35,7 @@ make olddefconfig        # accept defaults for new symbols
 make randconfig         # random config (for testing)
 ```
 
-### Config file format
+### Config file format {#config-file-format}
 
 ```bash
 # .config format: each CONFIG_SYMBOL has one of:
@@ -56,7 +56,7 @@ CONFIG_EXT4_FS=m      # built as module
 ./scripts/config --set-val CONFIG_LOG_BUF_SHIFT 18
 ```
 
-## Kconfig language
+## Kconfig language {#kconfig-language}
 
 ```kconfig
 # drivers/net/ethernet/intel/Kconfig
@@ -95,7 +95,7 @@ config E1000E
 # imply A              → suggest enabling A (can be overridden)
 ```
 
-## Kbuild Makefiles
+## Kbuild Makefiles {#kbuild-makefiles}
 
 Each directory has a `Makefile` that tells Kbuild what to compile:
 
@@ -113,7 +113,7 @@ obj-y += subdirname/
 # → recurse into subdirname/Makefile
 ```
 
-### Top-level build flow
+### Top-level build flow {#top-level-build-flow}
 
 ```
 make
@@ -123,7 +123,7 @@ make
 └── modules: compile all obj-m into .ko files
 ```
 
-## Building an out-of-tree module
+## Building an out-of-tree module {#building-an-out-of-tree-module}
 
 ```makefile
 # Makefile for external module (hello_module.c):
@@ -155,7 +155,7 @@ sudo depmod -a       # update module dependency database
 modprobe hello_module
 ```
 
-### Multiple source files
+### Multiple source files {#multiple-source-files}
 
 ```makefile
 obj-m := mydriver.o
@@ -163,7 +163,7 @@ mydriver-y := main.o helper.o init.o
 # Builds main.o, helper.o, init.o and links into mydriver.ko
 ```
 
-## Cross-compilation
+## Cross-compilation {#cross-compilation}
 
 ```bash
 # Cross-compile for ARM64 on x86-64 host:
@@ -188,7 +188,7 @@ make -C /path/to/arm64-kernel-build M=$PWD \
      ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- modules
 ```
 
-## Compiler options and build flags
+## Compiler options and build flags {#compiler-options-and-build-flags}
 
 ```makefile
 # Add compilation flags:
@@ -234,7 +234,7 @@ make C=2        # sparse for all files
 make htmldocs   # build kernel documentation
 ```
 
-## depmod and module dependencies
+## depmod and module dependencies {#depmod-and-module-dependencies}
 
 ```bash
 # modules.dep: dependency database for modprobe:
@@ -258,7 +258,7 @@ cat /lib/modules/$(uname -r)/modules.dep | grep virtio_net
 # kernel/drivers/net/virtio_net.ko: kernel/drivers/virtio/virtio.ko ...
 ```
 
-## Build artifacts
+## Build artifacts {#build-artifacts}
 
 ```bash
 # After make:
@@ -292,7 +292,7 @@ modinfo drivers/net/ethernet/intel/e1000/e1000.ko
 # trailing flags are compared (same_magic() in kernel/module/version.c)
 ```
 
-## Useful build targets
+## Useful build targets {#useful-build-targets}
 
 ```bash
 make -j$(nproc)             # parallel build
@@ -318,9 +318,9 @@ make distclean # mrproper + editor/tag leftovers: *.orig, *.rej, *~, *.bak,
                # #*#, *%, core, tags/TAGS, cscope*, GPATH/GRTAGS/GSYMS/GTAGS
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [Makefile](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Makefile) — the top-level build driver: the `W=1`/`W=2`/`W=3` warning levels and `C=1`/`C=2` sparse checking, the `ARCH`/`CROSS_COMPILE` handling, and the `clean`/`mrproper`/`distclean` targets listed above
 - [scripts/Makefile.build](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/Makefile.build) — the per-directory recursion engine that reads each `Makefile`'s `obj-y`/`obj-m` lists and descends into `obj-y += subdir/`
@@ -329,14 +329,14 @@ make distclean # mrproper + editor/tag leftovers: *.orig, *.rej, *~, *.bak,
 - [scripts/kconfig/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/kconfig) — the Kconfig implementation: `lexer.l` and `parser.y` parse the language shown above, `mconf.c`/`nconf.c`/`qconf.cc`/`gconf.c` are the programs behind `menuconfig`/`nconfig`/`xconfig`/`gconfig`, and `streamline_config.pl` implements `localmodconfig`
 - [scripts/config](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/config) — the shell script implementing the `--state`/`--enable`/`--disable`/`--module`/`--set-val` `.config` edits used above
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — dependency-aware module loading, `-r`, and module parameters on the command line
 - [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — generates `modules.dep` and the map files; `-a`, `-b basedir`, and the optional `version` argument
 - [`modules.dep(5)`](https://man7.org/linux/man-pages/man5/modules.dep.5.html) — the format of `modules.dep`/`modules.dep.bin`, the dependency database `modprobe` consults
 - [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `-F field` extraction of the documented `.modinfo` fields (`depends`, `license`, `alias`, `parm`, …); kmod also prints `vermagic` and the `sig*` fields shown above, which the man page's own field list does not enumerate
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Writing and Loading Kernel Modules](module-basics.md) — module init/exit, the source-to-`.ko` lifecycle these Makefiles drive
 - [Module Loading Internals](module-loading-internals.md) — what the kernel does with the `.ko` afterwards: ELF parsing, relocation, and the `vermagic`/modversions checks
@@ -344,12 +344,12 @@ make distclean # mrproper + editor/tag leftovers: *.orig, *.rej, *~, *.bak,
 - [Kernel Module Signing](module-signing.md) — `CONFIG_MODULE_SIG_ALL` and signing out-of-tree modules
 - [KGDB: Kernel GDB Debugger](../debugging/kgdb.md) — the consumer of the debug-info builds described above
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [How many ways are there to configure the Linux kernel?](https://lwn.net/Articles/1034811/) — Daroc Alden, September 10, 2025: 32,468 Kconfig options on x86_64 in 6.16, and what `depends on`/`select` constraints do to the space of valid configurations
 - [A kbuild and kconfig maintainer change](https://lwn.net/Articles/1032722/) — August 6, 2025: Masahiro Yamada steps down after eight years; kbuild moves to "odd fixes" under Nathan Chancellor and Nicolas Schier, with Kconfig orphaned outright at the time — the same two have since picked up Kconfig as well, also under "odd fixes"
 
-### External
+### External {#external}
 
 - [Kernel Build System](https://docs.kernel.org/kbuild/index.html) — index of the upstream `Documentation/kbuild/` set
 - [Linux Kernel Makefiles](https://docs.kernel.org/kbuild/makefiles.html) — the authoritative reference for `obj-y`/`obj-m`, composite objects via `<module>-y`, `ccflags-y`/`subdir-ccflags-y`, and `$(src)`/`$(obj)`

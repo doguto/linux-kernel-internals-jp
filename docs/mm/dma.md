@@ -1,14 +1,14 @@
-# DMA Memory Allocation
+# DMA Memory Allocation {#dma-memory-allocation}
 
 > How the kernel allocates and manages memory for devices that access RAM directly
 
-## What is DMA?
+## What is DMA? {#what-is-dma}
 
 Direct Memory Access (DMA) lets hardware devices read and write system memory without involving the CPU for every byte transferred. A network card receiving packets, a disk controller fetching blocks, or a GPU reading textures -- all bypass the CPU and talk to RAM directly.
 
 This is essential for performance. Without DMA, the CPU would spend its time copying bytes between device registers and memory instead of doing useful work. But DMA introduces a fundamental problem: **devices operate on physical addresses, not virtual ones**, and they may not be able to reach all of physical memory.
 
-## Why DMA Needs Special Memory
+## Why DMA Needs Special Memory {#why-dma-needs-special-memory}
 
 Three constraints make DMA memory allocation different from normal `kmalloc()`:
 
@@ -18,7 +18,7 @@ Three constraints make DMA memory allocation different from normal `kmalloc()`:
 
 3. **Contiguity requirements**: Devices see physical memory, not virtual. A buffer that looks contiguous in the kernel's virtual address space may be scattered across physical pages. Without hardware support (IOMMU), the device needs physically contiguous memory.
 
-## DMA Zones
+## DMA Zones {#dma-zones}
 
 The kernel partitions physical memory into zones to handle device addressing limitations. From [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h):
 
@@ -31,19 +31,19 @@ enum zone_type {
 };
 ```
 
-### ZONE_DMA (first 16MB)
+### ZONE_DMA (first 16MB) {#zone_dma-first-16mb}
 
 A legacy zone for ISA bus devices. The ISA bus uses 24-bit addresses, limiting DMA to the first 2^24 = 16MB of RAM. Modern systems rarely need this, but the zone persists because some architectures still define it.
 
 Allocated with `GFP_DMA`.
 
-### ZONE_DMA32 (first 4GB)
+### ZONE_DMA32 (first 4GB) {#zone_dma32-first-4gb}
 
 For 32-bit PCI devices that use 32-bit DMA addresses. On a system with 64GB of RAM, these devices can only access the bottom 4GB. This is still relevant -- many embedded devices and older PCIe cards have 32-bit DMA masks.
 
 Allocated with `GFP_DMA32`.
 
-### ZONE_NORMAL
+### ZONE_NORMAL {#zone_normal}
 
 Memory accessible by the kernel and by devices with full addressing capability (64-bit DMA). No special constraints.
 
@@ -58,11 +58,11 @@ Physical Memory Layout (64-bit system with 64GB RAM):
 
 The zone boundaries are architecture-specific. ARM64 initially had no `ZONE_DMA` at all, but commit [1a8e1cef7603](https://git.kernel.org/linus/1a8e1cef7603) ("arm64: use both ZONE_DMA and ZONE_DMA32") added it to handle devices that can only address the lowest 1GB of physical memory — a constraint that exists on some ARM SoCs and PCIe devices regardless of what the architecture spec allows.
 
-## The DMA API
+## The DMA API {#the-dma-api}
 
 The kernel provides a unified DMA API that abstracts away the differences between architectures and IOMMUs. The API lives in [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) with the core implementation in [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma).
 
-### dma_alloc_coherent()
+### dma_alloc_coherent() {#dmaalloccoherent}
 
 Allocates a buffer that is simultaneously accessible by the CPU and the device, with hardware-enforced coherency (no manual cache management needed).
 
@@ -79,7 +79,7 @@ Returns two things: a CPU virtual address (the return value) and a device-visibl
 
 **Trade-off**: Coherent memory is often uncacheable on architectures without hardware cache coherency (e.g., some ARM SoCs). This makes CPU access slower. Do not use for large data buffers that the CPU will read/write intensively.
 
-### dma_map_single()
+### dma_map_single() {#dmamapsingle}
 
 Maps an existing kernel buffer for DMA access by a device. This is a "streaming" mapping -- it has a direction and a lifecycle.
 
@@ -100,7 +100,7 @@ The direction tells the kernel which cache operations are needed:
 
 **When to use**: Temporary transfers -- sending a network packet, submitting a disk I/O request. Map before the transfer, unmap when it completes.
 
-### dma_map_sg()
+### dma_map_sg() {#dmamapsg}
 
 Maps a scatter-gather list -- multiple non-contiguous memory regions -- for a single DMA operation. This is how the kernel handles I/O that spans multiple pages.
 
@@ -115,7 +115,7 @@ void dma_unmap_sg(struct device *dev, struct scatterlist *sg,
 
 **When to use**: Block I/O, large network transfers, any case where data spans multiple pages. Most real device drivers use scatter-gather extensively.
 
-## Coherent vs Streaming DMA Mappings
+## Coherent vs Streaming DMA Mappings {#coherent-vs-streaming-dma-mappings}
 
 This is the central design decision in the DMA API:
 
@@ -129,7 +129,7 @@ This is the central design decision in the DMA API:
 
 The key insight: **coherent mappings trade CPU performance for convenience, while streaming mappings trade convenience for CPU performance.** Most drivers use coherent mappings for small control structures and streaming mappings for data.
 
-### Sync Operations
+### Sync Operations {#sync-operations}
 
 Between map and unmap, if the CPU needs to touch a streaming buffer, it must use sync operations:
 
@@ -144,7 +144,7 @@ dma_sync_single_for_device(dev, dma_handle, size, DMA_FROM_DEVICE);
 
 These ensure cache coherency at the point of the sync call. Without them, the CPU may read stale cached data.
 
-## IOMMU
+## IOMMU {#iommu}
 
 An Input/Output Memory Management Unit (IOMMU) sits between devices and physical memory, translating device-visible "I/O virtual addresses" (IOVAs) to physical addresses. It is essentially a page table for devices.
 
@@ -158,7 +158,7 @@ With IOMMU:
   (device uses virtual addresses, translated by hardware)
 ```
 
-### What IOMMU enables
+### What IOMMU enables {#what-iommu-enables}
 
 1. **Scatter-gather coalescing**: Map physically scattered pages as contiguous to the device. A 64KB buffer spanning 16 scattered pages appears as one contiguous 64KB region to the device.
 
@@ -170,7 +170,7 @@ With IOMMU:
 
 The IOMMU driver in Linux lives under [`drivers/iommu/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu). The DMA API automatically uses the IOMMU when one is present -- drivers do not need to know or care.
 
-### LWN coverage
+### LWN coverage {#lwn-coverage}
 
 LWN's coverage of DMA addressing, cache coherency, and device isolation:
 
@@ -178,11 +178,11 @@ LWN's coverage of DMA addressing, cache coherency, and device isolation:
 - [Noncoherent DMA mappings](https://lwn.net/Articles/855328/) (2021) -- coherent vs. streaming mappings and cache-coherency management
 - [Restricted DMA](https://lwn.net/Articles/841916/) (2021) -- using SWIOTLB bounce buffering to isolate untrusted devices on systems without an IOMMU
 
-## SWIOTLB Bounce Buffers
+## SWIOTLB Bounce Buffers {#swiotlb-bounce-buffers}
 
 When there is no IOMMU and a device cannot address all of physical memory, the kernel falls back to SWIOTLB (Software I/O Translation Lookaside Buffer) -- a bounce buffer mechanism.
 
-### How it works
+### How it works {#how-it-works}
 
 1. Kernel allocates a pool of low-memory bounce buffers at boot (typically 64MB from memory below 4GB)
 2. When `dma_map_single()` is called for a buffer the device cannot reach, the kernel:
@@ -207,17 +207,17 @@ Low Memory (<4GB):
 +------------------+
 ```
 
-### The cost
+### The cost {#the-cost}
 
 Bounce buffering means **double the memory copies** -- a significant performance penalty. This is why IOMMUs are strongly preferred on modern systems.
 
 The SWIOTLB pool size can be configured at boot with `swiotlb=N` (number of 2KB slots). The implementation lives in [`kernel/dma/swiotlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c).
 
-### Confidential computing and SWIOTLB
+### Confidential computing and SWIOTLB {#confidential-computing-and-swiotlb}
 
 SWIOTLB gained renewed importance with confidential computing (AMD SEV, Intel TDX). In these environments, device DMA cannot access encrypted guest memory directly. The guest must use decrypted bounce buffers for all DMA operations. Commit [0b84e4f8b793](https://git.kernel.org/linus/0b84e4f8b793) ("swiotlb: Add restricted DMA pool initialization") added support for restricted DMA pools to handle these scenarios.
 
-## DMA Memory Pools
+## DMA Memory Pools {#dma-memory-pools}
 
 For drivers that frequently allocate and free small, fixed-size DMA-coherent buffers (like USB transfer descriptors or hardware command entries), the overhead of calling `dma_alloc_coherent()` each time is excessive. The DMA pool API solves this.
 
@@ -238,9 +238,9 @@ The pool pre-allocates large coherent regions and carves them into fixed-size ch
 
 The implementation lives in [`mm/dmapool.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c).
 
-## Common Mistakes
+## Common Mistakes {#common-mistakes}
 
-### Forgetting to unmap
+### Forgetting to unmap {#forgetting-to-unmap}
 
 Every `dma_map_single()` must have a matching `dma_unmap_single()`. Every `dma_map_sg()` must have a matching `dma_unmap_sg()`. Leaked mappings exhaust IOMMU address space or SWIOTLB pool, eventually causing allocation failures.
 
@@ -251,7 +251,7 @@ Enable `CONFIG_DMA_API_DEBUG` to catch this. It tracks all mappings and warns on
 echo 1 > /sys/kernel/debug/dma-api/enable
 ```
 
-### Using wrong GFP flags
+### Using wrong GFP flags {#using-wrong-gfp-flags}
 
 Do not use `GFP_DMA` unless you actually need memory in ZONE_DMA (first 16MB). Most modern devices with 32-bit DMA limitations need `GFP_DMA32` instead. But ideally, use the DMA API and let it handle zone selection:
 
@@ -266,7 +266,7 @@ buf = dma_alloc_coherent(dev, 4096, &dma_handle, GFP_KERNEL);
 
 The DMA API consults the device's DMA mask to determine the correct zone automatically.
 
-### Cache coherency bugs
+### Cache coherency bugs {#cache-coherency-bugs}
 
 On architectures without hardware-managed coherency, accessing a streaming DMA buffer without proper sync operations causes data corruption. This often manifests as intermittent failures that are extremely difficult to reproduce:
 
@@ -286,17 +286,17 @@ dma_unmap_single(dev, dma_handle, len, DMA_FROM_DEVICE);
 memcpy(dest, buf, len);  /* Safe: unmap invalidated cache */
 ```
 
-### Using virt_to_phys() for DMA
+### Using virt_to_phys() for DMA {#using-virttophys-for-dma}
 
 Never convert a virtual address to physical and hand it to a device. This bypasses the IOMMU, skips bounce buffering, and ignores the device's DMA mask. Always use the DMA API.
 
-### DMA to stack or module memory
+### DMA to stack or module memory {#dma-to-stack-or-module-memory}
 
 Stack memory and module text may reside in vmalloc space, which is not guaranteed to be physically contiguous or DMA-addressable. Always use `kmalloc()` or `dma_alloc_coherent()` for DMA buffers.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Check DMA zone sizes
+### Check DMA zone sizes {#check-dma-zone-sizes}
 
 ```bash
 # View zone information
@@ -310,7 +310,7 @@ cat /proc/buddyinfo
 # Node 0, zone   Normal  19374 7834 5327 2581  784  168   30    5    0    0    0
 ```
 
-### Inspect IOMMU state
+### Inspect IOMMU state {#inspect-iommu-state}
 
 ```bash
 # Check if IOMMU is active
@@ -325,7 +325,7 @@ ls /sys/kernel/iommu_groups/
 cat /sys/bus/pci/devices/0000:03:00.0/dma_mask_bits
 ```
 
-### Monitor SWIOTLB usage
+### Monitor SWIOTLB usage {#monitor-swiotlb-usage}
 
 ```bash
 # Check SWIOTLB pool size and usage
@@ -337,7 +337,7 @@ dmesg | grep -i swiotlb
 # Example: "software IO TLB: mapped [mem 0x00000000b3c00000-0x00000000b7c00000] (64MB)"
 ```
 
-### Enable DMA API debug checking
+### Enable DMA API debug checking {#enable-dma-api-debug-checking}
 
 ```bash
 # Build kernel with CONFIG_DMA_API_DEBUG=y
@@ -350,7 +350,7 @@ cat /sys/kernel/debug/dma-api/num_free_entries
 cat /sys/kernel/debug/dma-api/min_free_entries
 ```
 
-### View DMA pool statistics
+### View DMA pool statistics {#view-dma-pool-statistics}
 
 ```bash
 # DMA pool info per device
@@ -360,7 +360,7 @@ cat /sys/kernel/debug/dma_pools 2>/dev/null
 find /sys/kernel/debug/ -name "*dma*" 2>/dev/null
 ```
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -375,9 +375,9 @@ find /sys/kernel/debug/ -name "*dma*" 2>/dev/null
 
 ---
 
-## References
+## References {#references}
 
-### Further Reading
+### Further Reading {#further-reading}
 
 - [DMA API Guide](https://docs.kernel.org/core-api/dma-api.html) -- the authoritative kernel documentation on the DMA API
 - [DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) -- practical guide for driver developers
@@ -386,14 +386,14 @@ find /sys/kernel/debug/ -name "*dma*" 2>/dev/null
 - [LWN: Noncoherent DMA mappings](https://lwn.net/Articles/855328/) (2021) -- coherent vs. streaming mappings and cache coherency
 - [LWN: Restricted DMA](https://lwn.net/Articles/841916/) (2021) -- SWIOTLB bounce buffering to isolate untrusted devices
 
-### Related
+### Related {#related}
 
 - [Page Allocator](page-allocator.md) -- where DMA memory ultimately comes from
 - [vmalloc](vmalloc.md) -- virtual memory allocation (not suitable for DMA)
 - [NUMA](numa.md) -- NUMA-aware allocation and its interaction with DMA zones
 - [Overview](overview.md) -- how DMA allocation fits in the memory management hierarchy
 
-## Further reading
+## Further reading {#further-reading_1}
 
 - [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — the authoritative reference for every function in the DMA API
 - [Kernel docs: DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) — practical guide covering when and how to use each mapping type

@@ -1,12 +1,12 @@
-# The Input Subsystem: One Model for Every Keyboard, Mouse, and Touchscreen
+# The Input Subsystem: One Model for Every Keyboard, Mouse, and Touchscreen {#the-input-subsystem-one-model-for-every-keyboard-mouse-and-touchscreen}
 
 > How Linux turns a PS/2 keyboard, a USB mouse, and an I2C touchscreen into the same `struct input_event` stream — one kernel-level object model shared by every HID-class device, with `/dev/input/eventN` as the uniform handoff point to userspace
 
-## Getting Started
+## Getting Started {#getting-started}
 
 Every input device is, at bottom, a stream of discrete state changes: a key went down, a wheel turned two clicks, a finger touched down at (412, 900). But the hardware producing those changes is wildly heterogeneous — PS/2 controllers, USB HID devices, I2C/SPI touch controllers, Bluetooth peripherals, GPIO-wired buttons — and if every driver invented its own ioctl set and its own device-node convention, every window system and every application would need a driver-specific backend for each one. The **input subsystem**, living under `drivers/input/`, exists to prevent that: it gives every driver one shared object (`struct input_dev`), one event structure (`struct input_event`), and one small vocabulary of event types, so that from userspace's point of view a keyboard, a mouse, a joystick, and a touchscreen all look like the same kind of thing — a character device that emits a stream of typed, coded, timestamped events.
 
-### The problem the input subsystem solves
+### The problem the input subsystem solves {#the-problem-the-input-subsystem-solves}
 
 Before this model existed, individual driver subsystems (the console keyboard driver, the PS/2 mouse driver, joystick drivers) each exposed their own bespoke interface, and every application that wanted keyboard or pointer input had to know which one it was talking to. The input subsystem, whose core lives in `drivers/input/input.c` and whose data structures are declared in [`include/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) and [`include/uapi/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h), splits the problem into three layers:
 
@@ -16,7 +16,7 @@ Before this model existed, individual driver subsystems (the console keyboard dr
 
 The result is that a driver author only has to learn one API to make a new device usable by every input-aware program on the system, and a userspace program only has to learn one event format to read from any input device, regardless of the bus or protocol underneath.
 
-### The core object model: `struct input_dev`
+### The core object model: `struct input_dev` {#the-core-object-model-struct-input_dev}
 
 A driver's job is to build one `struct input_dev`, describe what kinds of events it can produce, and register it. Three calls carry almost the whole life cycle:
 
@@ -35,7 +35,7 @@ A driver's job is to build one `struct input_dev`, describe what kinds of events
 
 `struct input_dev` itself (defined in `include/linux/input.h`) is built almost entirely out of capability bitmaps sized by the corresponding `*_CNT` constant from `input-event-codes.h` — `evbit[BITS_TO_LONGS(EV_CNT)]`, `keybit[BITS_TO_LONGS(KEY_CNT)]`, `relbit`, `absbit`, `mscbit`, `ledbit`, `sndbit`, `ffbit`, `swbit` — plus identity fields (`name`, `phys`, `uniq`, `id`), the live-state mirrors (`key`, `led`, `snd`, `sw` — bitmaps of current pressed/lit/active state), an `open()`/`close()` pair the core calls when the first/last handler opens or closes the device (so a driver can defer starting a polling thread or requesting an IRQ until something actually wants events), and the embedded `struct device dev` that makes it a first-class citizen of the driver model.
 
-### The event model
+### The event model {#the-event-model}
 
 Every event, in-kernel or over the wire to userspace, is one `struct input_event` (`include/uapi/linux/input.h`):
 
@@ -82,7 +82,7 @@ input_sync(input_dev);                      /* -> input_event(dev, EV_SYN, SYN_R
 
 **`input_sync()`** matters more than it looks: individual `input_report_*()` calls describe *changes*, and several changes can belong to the same physical instant — moving a mouse diagonally is a `REL_X` and a `REL_Y` event that happened together. `EV_SYN`/`SYN_REPORT` is the marker that tells a reader "everything since the last `SYN_REPORT` happened as one atomic update"; a driver is expected to call `input_sync()` once after each batch of related reports, not after every single one.
 
-### The evdev userspace interface
+### The evdev userspace interface {#the-evdev-userspace-interface}
 
 **evdev** (`drivers/input/evdev.c`) is the input handler that hands the raw event stream to userspace essentially unfiltered. Each input device that evdev attaches to gets a character device node, `/dev/input/eventN`, allocated from minor numbers starting at `EVDEV_MINOR_BASE` (64) — the docs.kernel.org input overview documents this as the 64–95 legacy evdev minor range, with additional dynamic minors available beyond it for systems with more than 32 input devices.
 
@@ -90,7 +90,7 @@ A userspace program opens the node and calls `read()`; each `read()` returns one
 
 Almost nothing talks to `/dev/input/eventN` directly except two userspace layers built for exactly that purpose: **libevdev**, a thin C wrapper that handles the `ioctl()` boilerplate and keeps a local mirror of device state, and **libinput**, built on top of libevdev, which turns raw events into higher-level semantics — pointer acceleration, tap-to-click, gesture recognition, device-quirk workarounds — for consumption by a Wayland compositor or X server. This page stops at evdev: libevdev/libinput internals are userspace, not kernel, and out of scope here.
 
-### Device enumeration
+### Device enumeration {#device-enumeration}
 
 Three places let you inspect what input devices exist without reading any event data:
 
@@ -98,13 +98,13 @@ Three places let you inspect what input devices exist without reading any event 
 - **`/sys/class/input/`** — every registered input device and every handler-created node (`inputN`, `eventN`, `mouseN`, `jsN`) appears here as a symlink into the driver-model device tree, registered under the kernel's `input` device class (`const struct class input_class`, `.name = "input"`, in `drivers/input/input.c`). This is the same information `/proc/bus/input/devices` shows, but navigable as ordinary sysfs attribute files rather than a flat-text dump.
 - **udev naming** — udev consumes the sysfs tree above and creates the stable, human-readable symlinks under `/dev/input/by-id/` and `/dev/input/by-path/` that userspace tools actually use, since a bare `/dev/input/eventN` number is not guaranteed to stay attached to the same physical device across reboots or hot-plug events.
 
-### Absolute vs. relative devices, and multitouch
+### Absolute vs. relative devices, and multitouch {#absolute-vs-relative-devices-and-multitouch}
 
 The `EV_REL`/`EV_ABS` split exists because "where is the pointer" genuinely means different things for different hardware. A mouse reports **relative** motion (`REL_X`, `REL_Y`): it has no idea where the cursor is on screen, only how far it moved since the last report, and the receiving side (input core, then a compositor) accumulates those deltas into a position. A touchscreen or graphics tablet reports **absolute** position (`ABS_X`, `ABS_Y`): the hardware knows exactly where the contact is within its own coordinate space, and every report is a new authoritative value, not a delta.
 
 A single touch point fits neatly into `ABS_X`/`ABS_Y`, but a touchscreen or trackpad that can sense several simultaneous fingers cannot: one pair of absolute axes can't represent more than one position at a time. The kernel's **multitouch (MT) protocol** solves this with a set of `ABS_MT_*` codes (`ABS_MT_POSITION_X`, `ABS_MT_POSITION_Y`, `ABS_MT_TOUCH_MAJOR`, `ABS_MT_PRESSURE`, `ABS_MT_TRACKING_ID`, and others, starting at `ABS_MT_SLOT`) and a **slot** model: `ABS_MT_SLOT` selects which contact (slot) the following `ABS_MT_*` events describe, and `ABS_MT_TRACKING_ID` gives that contact a persistent ID for as long as it stays down — a non-negative value means an active contact, `-1` means the slot is now empty. A driver walks its slots, calls `input_mt_slot(dev, slot)` to select one and then reports that contact's `ABS_MT_*` axes, exactly the way it would report any other absolute axis. This slot-based scheme is officially called **type B**; an older **type A** scheme that sent anonymous per-contact data separated by `SYN_MT_REPORT` markers still exists in the protocol's history and is considered obsolete — the kernel's own documentation claims all in-tree drivers have been converted to type B, but that's not quite accurate: a handful of drivers, including `drivers/input/touchscreen/auo-pixcir-ts.c`, `drivers/input/touchscreen/usbtouchscreen.c`, and `drivers/hid/hid-ntrig.c`, still call `input_mt_sync()` and emit type-A reports. The large majority of drivers do use type B, and it's the scheme any new driver should target. See [Kernel docs: Multi-touch (MT) protocol](https://docs.kernel.org/input/multi-touch-protocol.html) for the full slot/tracking-ID mechanics; [HID: the Human Interface Device layer](hid.md) covers how a HID report descriptor is parsed and mapped onto `input_dev` capabilities in the first place, for devices — including multitouch touchscreens — that arrive over USB, Bluetooth, or I2C HID.
 
-### Architecture: from hardware to userspace
+### Architecture: from hardware to userspace {#architecture-from-hardware-to-userspace}
 
 ```
   Hardware (PS/2 controller, USB HID device, I2C/SPI touch controller, ...)
@@ -140,18 +140,18 @@ A single touch point fits neatly into `ABS_X`/`ABS_Y`, but a touchscreen or trac
   Wayland compositor / X server / plain read() by a console tool
 ```
 
-### The rest of this section
+### The rest of this section {#the-rest-of-this-section}
 
 - **[HID: the Human Interface Device layer](hid.md)** — how USB/Bluetooth/I2C HID report descriptors get parsed and mapped onto `input_dev` capabilities, the HID driver model, and transport layering.
 - **[War Stories](war-stories.md)** — real incidents from the input/HID subsystems.
 
-### Prerequisites and neighbors
+### Prerequisites and neighbors {#prerequisites-and-neighbors}
 
 Input drivers are ordinary [Linux device-model](../drivers/device-model.md) citizens — most are [USB devices](../usb/README.md) (via the HID layer), I2C/SPI [platform devices](../drivers/platform-driver.md), or, on older hardware, ISA/PS2 devices with no bus abstraction at all. The `/dev/input/*` nodes are plain [character devices](../drivers/chardev.md) registered through the same `cdev`/`file_operations` machinery as any other driver. Reading order: this page, then [HID](hid.md) if you're working with USB/Bluetooth input hardware.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) — `struct input_dev`, `struct input_handler`, `struct input_handle`, and the driver-facing registration/reporting API
 - [include/uapi/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h) — `struct input_event`, `struct input_absinfo`, the `EVIOC*` ioctls
@@ -161,18 +161,18 @@ Input drivers are ordinary [Linux device-model](../drivers/device-model.md) citi
 - [drivers/input/evdev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/evdev.c) — the evdev handler: `/dev/input/eventN`, `evdev_read()`, the per-client event ring buffer
 - [drivers/input/mousedev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/mousedev.c) · [drivers/input/joydev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/joydev.c) — the legacy `/dev/input/mice` and `/dev/input/jsN` handlers
 
-### Related pages
+### Related pages {#related-pages}
 
 - [HID: the Human Interface Device layer](hid.md) — report descriptors, parsing, the HID driver model, and USB/Bluetooth/I2C transport layering
 - [War Stories](war-stories.md) — real incidents in the subsystems above
 - [Linux Device Model](../drivers/device-model.md) · [Character and Misc Devices](../drivers/chardev.md) · [Platform Drivers](../drivers/platform-driver.md) — the driver-core layers the input subsystem sits on
 - [USB](../usb/README.md) — the bus most HID input devices attach through
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [An update on the input stack](https://lwn.net/Articles/801767/) — libinput's evolution, high-resolution scroll events, and the userspace layer built on top of evdev
 
-### External
+### External {#external}
 
 - [Kernel docs: Input subsystem introduction](https://docs.kernel.org/input/input.html) — the `input_event` structure, evdev, and the driver/core/handler architecture
 - [Kernel docs: Event codes](https://docs.kernel.org/input/event-codes.html) — the full semantics of every `EV_*` type

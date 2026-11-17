@@ -1,8 +1,8 @@
-# Maple Tree: VMA Management Data Structure
+# Maple Tree: VMA Management Data Structure {#maple-tree-vma-management-data-structure}
 
 > The B-tree variant that replaced the rbtree + linked list for virtual memory area management in Linux 6.1
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -15,7 +15,7 @@
 
 ---
 
-## Why the Maple Tree Replaced rbtree + Linked List
+## Why the Maple Tree Replaced rbtree + Linked List {#why-the-maple-tree-replaced-rbtree-linked-list}
 
 Before Linux 6.1, every `mm_struct` maintained two redundant data structures for VMAs:
 
@@ -32,11 +32,11 @@ The maple tree (merged in v6.1, authored at Oracle by Liam Howlett and Matthew W
 
 ---
 
-## What the Maple Tree Is
+## What the Maple Tree Is {#what-the-maple-tree-is}
 
 The maple tree is an RCU-safe, range-keyed B-tree. It stores non-overlapping ranges of unsigned long keys, mapping each range to an opaque pointer value. For VMA management the key is the address range `[vm_start, vm_end - 1]` and the value is `struct vm_area_struct *`.
 
-### Node types and sizes
+### Node types and sizes {#node-types-and-sizes}
 
 Three node types are defined (from `include/linux/maple_tree.h`):
 
@@ -81,7 +81,7 @@ struct maple_arange_64 {
 
 Allocation-range nodes additionally track the largest contiguous gap of NULL entries within each subtree. This supports `mas_empty_area()` / `mas_empty_area_rev()`, which find a free address range of a given size without scanning the entire tree — critical for `mmap()` address selection.
 
-### Node allocation
+### Node allocation {#node-allocation}
 
 All nodes are allocated from a dedicated `kmem_cache` named `maple_node`, created at boot by `maple_tree_init()`:
 
@@ -99,7 +99,7 @@ void __init maple_tree_init(void)
 
 The 256-byte alignment ensures that the bottom 8 bits of a node pointer are always zero. The maple tree uses these bits to encode the node type and tree metadata directly in the pointer, avoiding extra memory accesses.
 
-### Maximum tree height
+### Maximum tree height {#maximum-tree-height}
 
 ```c
 #define MAPLE_HEIGHT_MAX  31
@@ -109,7 +109,7 @@ With 16 slots per `maple_range_64` node, a tree of height 31 can represent 16^31
 
 ---
 
-## struct maple_tree
+## struct maple_tree {#struct-maple_tree}
 
 ```c
 /* include/linux/maple_tree.h */
@@ -129,7 +129,7 @@ struct maple_tree {
 - **`ma_flags`** — bitmask of tree-wide properties (see below).
 - **`ma_root`** — RCU-protected pointer to the root node (or a single stored value if the tree has exactly one entry at index 0).
 
-### Flags
+### Flags {#flags}
 
 ```c
 #define MT_FLAGS_ALLOC_RANGE   0x01  /* track largest free gap per node */
@@ -139,7 +139,7 @@ struct maple_tree {
 #define MT_FLAGS_LOCK_EXTERN   0x300 /* external lock; ma_lock unused */
 ```
 
-### How mm_struct embeds the maple tree
+### How mm_struct embeds the maple tree {#how-mm_struct-embeds-the-maple-tree}
 
 ```c
 /* include/linux/mm_types.h */
@@ -175,7 +175,7 @@ static struct mm_struct *mm_init(struct mm_struct *mm, ...)
 
 ---
 
-## RCU Safety
+## RCU Safety {#rcu-safety}
 
 The maple tree achieves lockless reads by ensuring that nodes removed from the tree are not freed until all currently executing RCU read-side critical sections have completed. When `MT_FLAGS_USE_RCU` is set, the removal path calls `call_rcu()` instead of freeing immediately:
 
@@ -191,7 +191,7 @@ if (mt_in_rcu(mt)) {
 
 The `struct maple_node` reuses its `slot[]` array as an `rcu_head` after the node is removed from the tree (both are stored in a union). A reader that loaded a pointer from `slots[]` before the node was unlinked can safely continue dereferencing it; the memory will not be returned to the allocator until after its RCU grace period.
 
-### RCU mode lifecycle in the mm
+### RCU mode lifecycle in the mm {#rcu-mode-lifecycle-in-the-mm}
 
 The `mm->mm_mt` operates with RCU enabled most of the time. During process teardown and the `dup_mmap()` path, the kernel temporarily disables RCU mode to avoid the overhead of deferred freeing when nodes are being discarded en masse:
 
@@ -207,7 +207,7 @@ mt_set_in_rcu(vmi.mas.tree);   /* re-enable RCU on the new mm */
 
 `mt_set_in_rcu()` and `mt_clear_in_rcu()` toggle `MT_FLAGS_USE_RCU` under the tree's lock.
 
-### Lockless VMA lookup (per-VMA lock fast path)
+### Lockless VMA lookup (per-VMA lock fast path) {#lockless-vma-lookup-per-vma-lock-fast-path}
 
 A reader holding only `rcu_read_lock()` — with no `mmap_lock` — can safely walk `mm->mm_mt` to find a VMA. This is the foundation of the per-VMA lock fast path (see [per-vma-locks.md](per-vma-locks.md)):
 
@@ -228,7 +228,7 @@ rcu_read_unlock();
 
 ---
 
-## MA_STATE and the Maple State Cursor
+## MA_STATE and the Maple State Cursor {#ma_state-and-the-maple-state-cursor}
 
 The `struct ma_state` is the operation cursor for all advanced maple tree APIs. It tracks the current position in the tree so that sequential operations (e.g. iterating over all VMAs) do not need to restart from the root on each call.
 
@@ -304,9 +304,9 @@ struct vma_iterator {
 
 ---
 
-## Key Operations
+## Key Operations {#key-operations}
 
-### Tree lifecycle: `mt_init()` and `mtree_destroy()`
+### Tree lifecycle: `mt_init()` and `mtree_destroy()` {#tree-lifecycle-mtinit-and-mtreedestroy}
 
 ```c
 /* Initialise an empty tree with default flags (no external lock, no RCU) */
@@ -329,7 +329,7 @@ For `mm->mm_mt`, `mm_init()` uses `mt_init_flags()` with `MM_MT_FLAGS`. Teardown
 
 ---
 
-### `mas_walk()` — position cursor at index
+### `mas_walk()` — position cursor at index {#mas_walk-position-cursor-at-index}
 
 ```c
 void *mas_walk(struct ma_state *mas);
@@ -347,7 +347,7 @@ vma = mas_walk(&mas);
 
 ---
 
-### `mas_find()` — forward iteration from index
+### `mas_find()` — forward iteration from index {#mas_find-forward-iteration-from-index}
 
 ```c
 void *mas_find(struct ma_state *mas, unsigned long max);
@@ -368,7 +368,7 @@ The `mas_for_each()` macro uses this:
 
 ---
 
-### `mas_store()` / `mas_store_gfp()` — insert or update a range mapping
+### `mas_store()` / `mas_store_gfp()` — insert or update a range mapping {#masstore-masstore_gfp-insert-or-update-a-range-mapping}
 
 ```c
 /* Store entry at [mas->index, mas->last]. Requires pre-allocated nodes. */
@@ -400,7 +400,7 @@ static inline int vma_iter_store_gfp(struct vma_iterator *vmi,
 
 ---
 
-### `mas_erase()` — remove the entry at the current index
+### `mas_erase()` — remove the entry at the current index {#mas_erase-remove-the-entry-at-the-current-index}
 
 ```c
 void *mas_erase(struct ma_state *mas);
@@ -422,7 +422,7 @@ static inline void vma_iter_clear(struct vma_iterator *vmi)
 
 ---
 
-### `mt_for_each()` — simple full-tree iteration
+### `mt_for_each()` — simple full-tree iteration {#mtforeach-simple-full-tree-iteration}
 
 ```c
 /* include/linux/maple_tree.h */
@@ -436,9 +436,9 @@ static inline void vma_iter_clear(struct vma_iterator *vmi)
 
 ---
 
-## Code Examples
+## Code Examples {#code-examples}
 
-### VMA lookup by address
+### VMA lookup by address {#vma-lookup-by-address}
 
 ```c
 /* find_vma() — mm/mmap.c */
@@ -453,7 +453,7 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 
 `mt_find()` starts at `index` and returns the first entry whose range covers or follows `addr`. For address lookup this is equivalent to asking "which VMA covers addr, or if none, which is the next one".
 
-### VMA insertion during mmap
+### VMA insertion during mmap {#vma-insertion-during-mmap}
 
 ```c
 /* mm/vma.c — anonymous mapping creation (simplified) */
@@ -468,7 +468,7 @@ if (vma_iter_store_gfp(vmi, vma, GFP_KERNEL))
 mm->map_count++;
 ```
 
-### Iterating all VMAs (e.g. for /proc/PID/maps)
+### Iterating all VMAs (e.g. for /proc/PID/maps) {#iterating-all-vmas-eg-for-procpidmaps}
 
 ```c
 VMA_ITERATOR(vmi, mm, 0);
@@ -481,7 +481,7 @@ for_each_vma(vmi, vma) {
 
 `for_each_vma` is built on `vma_next()` which advances the `vma_iterator` forward through the maple tree without restarting from the root.
 
-### Finding a free address range (mmap hint search)
+### Finding a free address range (mmap hint search) {#finding-a-free-address-range-mmap-hint-search}
 
 ```c
 /* mas_empty_area() — finds a gap of at least `size` bytes in [min, max] */
@@ -494,7 +494,7 @@ This leverages the `gap[]` array in `maple_arange_64` nodes to skip subtrees tha
 
 ---
 
-## Performance Compared to rbtree
+## Performance Compared to rbtree {#performance-compared-to-rbtree}
 
 | Property | rbtree + linked list | Maple tree |
 |----------|---------------------|------------|
@@ -512,13 +512,13 @@ For address spaces with thousands of mappings (JVM, large applications, containe
 
 ---
 
-## Debugging
+## Debugging {#debugging}
 
-### `/proc/PID/maps` and `/proc/PID/smaps`
+### `/proc/PID/maps` and `/proc/PID/smaps` {#procpidmaps-and-procpidsmaps}
 
 These files are generated by iterating `mm->mm_mt` directly. No change is required to read them; the maple tree is the authoritative source.
 
-### `CONFIG_DEBUG_MAPLE_TREE`
+### `CONFIG_DEBUG_MAPLE_TREE` {#configdebugmaple_tree}
 
 Enable via `lib/Kconfig.debug`:
 
@@ -538,7 +538,7 @@ void mt_validate(struct maple_tree *mt);
 
 `mt_validate()` checks that all pivot arrays are sorted, that no ranges overlap, that gap metadata is consistent, and that the height stored in `ma_flags` matches the actual tree depth.
 
-### `mt_dump()`
+### `mt_dump()` {#mt_dump}
 
 ```c
 void mt_dump(const struct maple_tree *mt, enum mt_dump_format format);
@@ -546,7 +546,7 @@ void mt_dump(const struct maple_tree *mt, enum mt_dump_format format);
 
 Prints the full tree to the kernel log in decimal (`mt_dump_dec`) or hexadecimal (`mt_dump_hex`) format. Available only when `CONFIG_DEBUG_MAPLE_TREE=y`. Called automatically by `MT_BUG_ON()` and `MAS_BUG_ON()` on failure.
 
-### `mas_dump()`
+### `mas_dump()` {#mas_dump}
 
 ```c
 void mas_dump(const struct ma_state *mas);
@@ -562,7 +562,7 @@ Prints the current state of an `ma_state` cursor (index, last, node pointer, sta
 
 ---
 
-## Relationship to Other Subsystems
+## Relationship to Other Subsystems {#relationship-to-other-subsystems}
 
 - **Per-VMA locks** (`mm/mmap_lock.c`) depend on `MT_FLAGS_USE_RCU` to perform lockless VMA lookups under `rcu_read_lock()`. See [per-vma-locks.md](per-vma-locks.md).
 - **`/proc/PID/maps`** iterates `mm->mm_mt` via `for_each_vma()` under `mmap_lock` for read.
@@ -570,7 +570,7 @@ Prints the current state of an `ma_state` cursor (index, last, node pointer, sta
 - **`execve()`** tears down the address space by calling `exit_mmap()`, which calls `__mt_destroy(&mm->mm_mt)` after clearing all page table entries.
 - **vmalloc** uses a red-black tree (`free_vmap_area_root`, a `struct rb_root`) for tracking kernel virtual address space — not a maple tree.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [LWN: The maple tree, a modern data structure for a complex problem](https://lwn.net/Articles/845507/) — 2022 article by Liam Howlett and Matthew Wilcox explaining the design rationale, node layout, and benchmarks against the rbtree + linked list combination
 - [lib/maple_tree.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/maple_tree.c) — the full implementation: `maple_tree_init()`, `mas_walk()`, `mas_find()`, `mas_store()`, `mas_erase()`, RCU node freeing via `mt_free_walk()`, and the `CONFIG_MAPLE_RCU_DISABLED` debug mode

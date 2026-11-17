@@ -1,8 +1,8 @@
-# ARM64 Memory Model
+# ARM64 Memory Model {#arm64-memory-model}
 
 > Weak ordering, barriers, and atomic operations on ARM64
 
-## ARM64 is weakly ordered
+## ARM64 is weakly ordered {#arm64-is-weakly-ordered}
 
 Unlike x86 (which has TSO — Total Store Order, nearly sequentially consistent), ARM64 has a **weakly ordered** memory model. The hardware may reorder loads and stores for performance:
 
@@ -15,7 +15,7 @@ LDR x3, [x4]     // load from address x4
 
 This matters for lock-free algorithms and any code that synchronizes between threads without using explicit atomic operations.
 
-## What ARM64 guarantees
+## What ARM64 guarantees {#what-arm64-guarantees}
 
 1. **Single-copy atomicity**: A naturally-aligned load or store of a single register is atomic (the value is either fully written or not written).
 
@@ -23,11 +23,11 @@ This matters for lock-free algorithms and any code that synchronizes between thr
 
 3. **No guarantees for independent accesses**: Stores and loads to unrelated addresses can be observed in any order by other CPUs.
 
-## Memory barrier instructions
+## Memory barrier instructions {#memory-barrier-instructions}
 
 ARM64 provides three barrier instructions:
 
-### DMB: Data Memory Barrier
+### DMB: Data Memory Barrier {#dmb-data-memory-barrier}
 
 Ensures memory accesses before the barrier are visible before accesses after it:
 
@@ -44,7 +44,7 @@ DMB OSH     /* outer shareable */
 
 `SY` (full system) is most conservative. `ISH` is typical for SMP kernels.
 
-### DSB: Data Synchronization Barrier
+### DSB: Data Synchronization Barrier {#dsb-data-synchronization-barrier}
 
 Stronger than DMB: not only are memory accesses ordered, but **the barrier stalls the pipeline** until all prior memory accesses are complete:
 
@@ -56,7 +56,7 @@ DSB ST      /* wait until all stores complete */
 
 Use DSB when you need to know memory accesses have *completed* (not just ordered) — e.g., before modifying page tables that the MMU might be walking, or before a cache maintenance operation takes effect.
 
-### ISB: Instruction Synchronization Barrier
+### ISB: Instruction Synchronization Barrier {#isb-instruction-synchronization-barrier}
 
 Flushes the instruction pipeline:
 
@@ -72,7 +72,7 @@ Use ISB after:
 
 Without ISB, the CPU might have already fetched and decoded instructions past the system register write.
 
-## Load-acquire and Store-release
+## Load-acquire and Store-release {#load-acquire-and-store-release}
 
 ARM64 provides special atomic load/store variants that include ordering semantics:
 
@@ -95,7 +95,7 @@ These implement the C11/C++11 `memory_order_acquire` and `memory_order_release` 
 /* STLR x0, [x1] == */  atomic_store_explicit(ptr, val, memory_order_release);
 ```
 
-## Exclusive load/store (atomics)
+## Exclusive load/store (atomics) {#exclusive-loadstore-atomics}
 
 ARM64 atomics use a load-link/store-conditional (LL/SC) mechanism:
 
@@ -129,7 +129,7 @@ SWP x0, x1, [x2]    /* [x2] = x0; x1 = old [x2] */
 
 LSE atomics are preferred on systems with many cores — they generate a single bus transaction rather than potentially many retry loops.
 
-## Linux kernel barrier macros on ARM64
+## Linux kernel barrier macros on ARM64 {#linux-kernel-barrier-macros-on-arm64}
 
 The kernel provides architecture-independent macros that map to ARM64 instructions:
 
@@ -152,7 +152,7 @@ READ_ONCE(x)    /* load, prevent compiler optimizations */
 WRITE_ONCE(x,v) /* store, prevent compiler optimizations */
 ```
 
-### When to use which
+### When to use which {#when-to-use-which}
 
 ```c
 /* Lock: acquire semantics — nothing after the lock can move before it */
@@ -175,7 +175,7 @@ tail = smp_load_acquire(&queue->tail);  /* load tail with acquire */
 data = READ_ONCE(item->data);           /* data visible after acquire load */
 ```
 
-## Page table barriers
+## Page table barriers {#page-table-barriers}
 
 A common ARM64 specific need: after modifying a page table entry, you must ensure the store is visible to the MMU before the TLB invalidation instruction:
 
@@ -203,7 +203,7 @@ static inline void flush_tlb_page(struct vm_area_struct *vma,
 }
 ```
 
-## Acquire/Release in the kernel: spinlock
+## Acquire/Release in the kernel: spinlock {#acquirerelease-in-the-kernel-spinlock}
 
 ```asm
 /* arch/arm64/include/asm/spinlock.h */
@@ -225,11 +225,11 @@ arch_spin_unlock:
     RET
 ```
 
-## Weak memory model bugs
+## Weak memory model bugs {#weak-memory-model-bugs}
 
 Common patterns that work on x86 (TSO) but **fail on ARM64**:
 
-### Missing barrier in producer/consumer
+### Missing barrier in producer/consumer {#missing-barrier-in-producerconsumer}
 
 ```c
 /* WRONG on ARM64: */
@@ -256,7 +256,7 @@ while (!smp_load_acquire(&item->ready)); /* LDAR: acquire ordering */
 use(READ_ONCE(item->data));
 ```
 
-### Missing dsb after page table update
+### Missing dsb after page table update {#missing-dsb-after-page-table-update}
 
 ```c
 /* WRONG: CPU may start walking old page tables after set_pte */
@@ -269,7 +269,7 @@ dsb(ishst);                 /* ensure PTE store visible */
 flush_tlb_page(vma, addr);
 ```
 
-## Observing memory ordering issues
+## Observing memory ordering issues {#observing-memory-ordering-issues}
 
 ```bash
 # Run litmus tests (memory model validation)
@@ -285,7 +285,7 @@ flush_tlb_page(vma, addr);
 dmesg | grep "data-race"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Exception Model](exception-model.md) — ARM64 exception levels and GIC
 - [Locking: Atomic Operations and Memory Barriers](../../locking/atomics.md) — kernel atomic API

@@ -1,16 +1,16 @@
-# Virtual vs Physical vs Resident Memory
+# Virtual vs Physical vs Resident Memory {#virtual-vs-physical-vs-resident-memory}
 
 > Understanding `VSZ`, `RSS`, and why memory numbers don't add up
 
-## The Confusion
+## The Confusion {#the-confusion}
 
 You run `ps aux` and see a process using 500MB of virtual memory (`VSZ`). But `free` shows plenty of memory available. Or you add up all the `RSS` values and get more than your total RAM. What's going on?
 
 The answer lies in understanding three different ways of measuring memory.
 
-## The Three Memory Types
+## The Three Memory Types {#the-three-memory-types}
 
-### Virtual Memory (VSZ/VIRT)
+### Virtual Memory (VSZ/VIRT) {#virtual-memory-vszvirt}
 
 **What it is:** The total address space a process has mapped.
 
@@ -35,7 +35,7 @@ $ ps -o pid,vsz,rss,comm -p $$
 
 In this example, `bash` has 500MB of virtual address space but only ~12MB resident in RAM. The `VSZ` number is essentially meaningless for capacity planning.
 
-### Physical Memory
+### Physical Memory {#physical-memory}
 
 **What it is:** Actual RAM chips in your system.
 
@@ -56,7 +56,7 @@ Mem:           15Gi       4.2Gi       1.1Gi       890Mi       10Gi        10Gi
 
 Here, 10GB is "used" by cache but available if needed.
 
-### Resident Memory (RSS/RES)
+### Resident Memory (RSS/RES) {#resident-memory-rssres}
 
 **What it is:** The portion of virtual memory currently in physical RAM.
 
@@ -73,7 +73,7 @@ Here, 10GB is "used" by cache but available if needed.
 
 `RSS` can be misleading for shared memory - here's why.
 
-## Why `RSS` Doesn't Add Up
+## Why `RSS` Doesn't Add Up {#why-rss-doesnt-add-up}
 
 Consider two processes using the same shared library:
 
@@ -87,7 +87,7 @@ But `libc` only exists once in physical RAM. The actual memory used is closer to
 
 This is why `RSS` totals often exceed physical RAM - shared pages are counted multiple times.
 
-### `PSS`: Proportional Set Size
+### `PSS`: Proportional Set Size {#pss-proportional-set-size}
 
 To solve the double-counting problem, Linux provides `PSS`:
 
@@ -113,7 +113,7 @@ Pss:               98765 kB
 
 Note: `PSS` has been available since kernel 2.6.25 via `/proc/<pid>/smaps`. The pre-aggregated `/proc/<pid>/smaps_rollup` was [added in kernel 4.14](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=493b0e9d945f) (2017) to avoid parsing overhead.
 
-## Virtual Memory Can Be Huge
+## Virtual Memory Can Be Huge {#virtual-memory-can-be-huge}
 
 A process can map far more virtual memory than physical RAM exists:
 
@@ -132,7 +132,7 @@ Why? Because:
 2. **Overcommit**: Linux allows allocations exceeding physical RAM
 3. **Sparse mappings**: Most of the space may never be used
 
-## The Memory Lifecycle
+## The Memory Lifecycle {#the-memory-lifecycle}
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -161,9 +161,9 @@ Why? Because:
    (demand paging)
 ```
 
-## Practical Examples
+## Practical Examples {#practical-examples}
 
-### Example 1: JVM Heap
+### Example 1: JVM Heap {#example-1-jvm-heap}
 
 ```bash
 $ java -Xmx4g -jar myapp.jar &
@@ -177,7 +177,7 @@ Resident: ~500MB (actual heap usage)
 
 The JVM reserves virtual space for the max heap but only uses physical RAM as needed.
 
-### Example 2: Memory-Mapped File
+### Example 2: Memory-Mapped File {#example-2-memory-mapped-file}
 
 ```bash
 $ ls -l bigfile.dat
@@ -194,7 +194,7 @@ $ ps -o vsz,rss -p <pid>
 
 The file is mapped but only accessed pages are in RAM.
 
-### Example 3: Shared Libraries
+### Example 3: Shared Libraries {#example-3-shared-libraries}
 
 ```bash
 $ pmap -x <pid> | grep libc
@@ -205,7 +205,7 @@ $ pmap -x <pid> | grep libc
 
 Most of `libc` is shared across all processes using it.
 
-### `USS`: Unique Set Size
+### `USS`: Unique Set Size {#uss-unique-set-size}
 
 **`USS`** (Unique Set Size) measures only the private memory used by a process - memory that would be freed if this process alone were killed. It excludes all shared memory.
 
@@ -216,11 +216,11 @@ $ grep ^Private /proc/<pid>/smaps | awk '{sum += $2} END {print sum " kB"}'
 
 `USS` is useful for understanding the true per-process memory cost, especially when analyzing container density or kill impact.
 
-## Historical Context
+## Historical Context {#historical-context}
 
 Memory metrics evolved as systems became more complex and the question "how much memory is this process using?" became harder to answer.
 
-### Early Unix: Simple Metrics
+### Early Unix: Simple Metrics {#early-unix-simple-metrics}
 
 In early Unix systems, memory accounting was straightforward:
 
@@ -229,13 +229,13 @@ In early Unix systems, memory accounting was straightforward:
 
 This was sufficient when processes rarely shared memory and systems had megabytes, not gigabytes.
 
-### The Shared Library Problem (1990s-2000s)
+### The Shared Library Problem (1990s-2000s) {#the-shared-library-problem-1990s-2000s}
 
 As shared libraries became universal, `RSS` became misleading. If 100 processes share `libc`, each reports `libc`'s size in its `RSS` - summing them gives a wildly inflated total.
 
 The `/proc` filesystem (present since early Linux development, well before 1.0) provided basic memory stats, but detailed per-mapping information came later.
 
-### Linux Adds Detailed Accounting
+### Linux Adds Detailed Accounting {#linux-adds-detailed-accounting}
 
 | Version | Year | Addition |
 |---------|------|----------|
@@ -243,7 +243,7 @@ The `/proc` filesystem (present since early Linux development, well before 1.0) 
 | **2.6.25** | Apr 2008 | **`PSS` added** - [LKML patch](https://lkml.iu.edu/hypermail/linux/kernel/0710.3/1565.html) by Fengguang Wu, concept by Matt Mackall |
 | **4.14** | Nov 2017 | `/proc/pid/smaps_rollup` - [commit 493b0e9d](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=493b0e9d945f) for faster aggregate stats |
 
-### The `PSS` Innovation (2007-2008)
+### The `PSS` Innovation (2007-2008) {#the-pss-innovation-2007-2008}
 
 Matt Mackall proposed `PSS` at the [Embedded Linux Conference](https://lwn.net/Articles/230975/) to answer: *"How much memory are applications really using?"*
 
@@ -251,7 +251,7 @@ The insight was simple: if 4 processes share a 40MB library, charge each 10MB (4
 
 The [original LKML patch](https://lkml.iu.edu/hypermail/linux/kernel/0708.1/3420.html) (August 2007) was submitted by Fengguang Wu implementing Matt Mackall's concept. It was merged as part of the ["maps4" series](https://lwn.net/Articles/256333/) in kernel 2.6.25 ([commit ec4dd3eb3575](https://git.kernel.org/linus/ec4dd3eb3575)).
 
-### Finer-Grained PSS Breakdown
+### Finer-Grained PSS Breakdown {#finer-grained-pss-breakdown}
 
 Modern kernels (4.14+) provide PSS broken down by type in `smaps_rollup`:
 
@@ -273,7 +273,7 @@ RssFile:     75000 kB
 RssShmem:     3456 kB
 ```
 
-### Modern Challenges
+### Modern Challenges {#modern-challenges}
 
 Today's complexity continues to grow:
 
@@ -284,7 +284,7 @@ Today's complexity continues to grow:
 
 The basic `VSZ`/`RSS`/`PSS` model still works, but tools like `cgroup` memory stats and `/proc/meminfo` provide the fuller picture.
 
-## Summary
+## Summary {#summary}
 
 | Metric | What It Measures | Shared Memory | Use For |
 |--------|------------------|---------------|---------|
@@ -293,7 +293,7 @@ The basic `VSZ`/`RSS`/`PSS` model still works, but tools like `cgroup` memory st
 | `PSS` | Proportional RAM | Divides fairly | Accurate accounting |
 | `USS` | Private only | Excludes | Per-process impact |
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
 ```bash
 # Compare VSZ vs RSS
@@ -309,7 +309,7 @@ watch -n 1 'cat /proc/meminfo | head -10'
 pmap -x <pid>
 ```
 
-## Further Reading
+## Further Reading {#further-reading}
 
 - [proc(5) man page](https://man7.org/linux/man-pages/man5/proc.5.html) - `/proc` filesystem documentation
 - [ELC: How much memory are applications really using?](https://lwn.net/Articles/230975/) - Matt Mackall's `PSS` introduction

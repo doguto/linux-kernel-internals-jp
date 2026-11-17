@@ -1,8 +1,8 @@
-# I2C and SPI Bus Drivers
+# I2C and SPI Bus Drivers {#i2c-and-spi-bus-drivers}
 
 > Writing drivers for I2C and SPI peripheral devices in the Linux kernel
 
-## I2C overview
+## I2C overview {#i2c-overview}
 
 I2C (Inter-Integrated Circuit) is a two-wire serial protocol for connecting low-speed peripherals (sensors, EEPROMs, touch controllers) to a microprocessor. The Linux I2C subsystem was carried into the mainline kernel through Greg Kroah-Hartman's driver-model work and later co-maintained by Jean Delvare (formerly of the lm-sensors project), who took sole maintainership in September 2005 [(LWN: I2C patches for 2.6.12-rc1)](https://lwn.net/Articles/130158/).
 
@@ -17,7 +17,7 @@ Physical wires:
                   7-bit addresses
 ```
 
-### I2C transaction format
+### I2C transaction format {#i2c-transaction-format}
 
 ```
 Start: SDA falls while SCL is high
@@ -30,9 +30,9 @@ Start: SDA falls while SCL is high
 Stop: SDA rises while SCL is high
 ```
 
-## I2C client driver
+## I2C client driver {#i2c-client-driver}
 
-### struct i2c_driver
+### struct i2c_driver {#struct-i2c_driver}
 
 ```c
 #include <linux/i2c.h>
@@ -113,9 +113,9 @@ module_i2c_driver(my_sensor_driver);
 /* Expands to: module_init + module_exit with i2c_add/del_driver */
 ```
 
-## I2C transfer functions
+## I2C transfer functions {#i2c-transfer-functions}
 
-### SMBus (common for simple devices)
+### SMBus (common for simple devices) {#smbus-common-for-simple-devices}
 
 ```c
 /* Read/write a single byte at a register address: */
@@ -136,7 +136,7 @@ u8 data[6];
 ret = i2c_smbus_read_i2c_block_data(client, 0x28, 6, data);
 ```
 
-### Raw I2C messages (for complex protocols)
+### Raw I2C messages (for complex protocols) {#raw-i2c-messages-for-complex-protocols}
 
 ```c
 /* For devices that don't follow SMBus convention: */
@@ -167,7 +167,7 @@ static int my_read_regs(struct i2c_client *client, u8 reg,
 }
 ```
 
-## regmap: register access abstraction
+## regmap: register access abstraction {#regmap-register-access-abstraction}
 
 `regmap` provides a unified API for register access across I2C, SPI, MMIO, and other buses:
 
@@ -218,7 +218,7 @@ u8 buf[6];
 regmap_bulk_read(sensor->regmap, REG_DATA_START, buf, 6);
 ```
 
-## SPI overview
+## SPI overview {#spi-overview}
 
 SPI (Serial Peripheral Interface) is a synchronous 4-wire protocol. The Linux SPI subsystem was written by David Brownell and merged in Linux 2.6.16 [(commit 8ae12a0d)](https://git.kernel.org/linus/8ae12a0d85987dc138f8c944cb78a92bf466cea0):
 
@@ -235,7 +235,7 @@ Unlike I2C:
   - Higher speeds (up to 100+ MHz vs I2C's 3.4 MHz)
 ```
 
-## SPI device driver
+## SPI device driver {#spi-device-driver}
 
 ```c
 #include <linux/spi/spi.h>
@@ -277,7 +277,7 @@ static struct spi_driver my_spi_driver = {
 module_spi_driver(my_spi_driver);
 ```
 
-## SPI transfer functions
+## SPI transfer functions {#spi-transfer-functions}
 
 ```c
 /* Simple synchronous read/write: */
@@ -305,7 +305,7 @@ regmap = devm_regmap_init_spi(spi, &my_regmap_config);
 regmap_read(regmap, REG_ID, &val);
 ```
 
-## Device Tree instantiation
+## Device Tree instantiation {#device-tree-instantiation}
 
 ```dts
 /* Board DTS: */
@@ -336,7 +336,7 @@ regmap_read(regmap, REG_ID, &val);
 };
 ```
 
-## Debugging I2C/SPI
+## Debugging I2C/SPI {#debugging-i2cspi}
 
 ```bash
 # List I2C buses:
@@ -379,7 +379,7 @@ kprobe:i2c_transfer {
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Platform Drivers](platform-driver.md) — MMIO register-mapped devices
 - [Device Tree](device-tree.md) — DTS binding for I2C/SPI devices

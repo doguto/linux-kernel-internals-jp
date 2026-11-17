@@ -1,4 +1,4 @@
-# The fs_context Legacy Parameter Overflow
+# The fs_context Legacy Parameter Overflow {#the-fs_context-legacy-parameter-overflow}
 
 > CVE-2022-0185 — a bounds check written as `PAGE_SIZE - 2 - size` in unsigned arithmetic let `unshare -Urm` plus a loop of `fsconfig()` calls write past the end of a 4 KB slab object, and turned Google's hardened Kubernetes CTF cluster into a $31,337 payout
 
@@ -25,7 +25,7 @@ Actively exploited
 
 *Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 Linux 5.1 shipped David Howells' filesystem context work, merged as [`3e1aeb00e6d1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3e1aeb00e6d132efc151dacc062b38269bc9eccc) ("vfs: Implement a filesystem superblock creation/configuration context") — the `fs_context` infrastructure and `legacy_parse_param()`. Linux 5.2 then added the new mount API syscalls that actually drive it from userspace — `fsopen()`, `fsconfig()`, `fsmount()`, `move_mount()`. Instead of handing the kernel one opaque option string at `mount()` time, userspace now opens a *context* and feeds it parameters one at a time, each as a separate syscall.
 
@@ -69,7 +69,7 @@ static int legacy_parse_param(struct fs_context *fc, struct fs_parameter *param)
 
 The `- 2` reserves room for the separating comma and the trailing NUL (the `=` is already folded into `len` itself for string-valued params). `size` is an `unsigned int`; `PAGE_SIZE` is an unsigned long; `len` is a `size_t`. Every operand is converted to unsigned long before the subtraction runs, so the result can never be negative.
 
-## The trigger
+## The trigger {#the-trigger}
 
 Each successful append advances `size` by `len + 1`, and the check permits `len <= PAGE_SIZE - 2 - size`. Run that arithmetic to its limit and `size` is allowed to reach exactly **4095** — one byte short of the buffer, with the NUL landing on the last valid byte. That is a legal, in-bounds state the check itself produces.
 
@@ -86,7 +86,7 @@ for (int i = 0; i < 117; i++)
 
 Reaching `fsopen()` at all requires `CAP_SYS_ADMIN` — but only in the user namespace that owns the caller's mount namespace (`ns_capable(current->nsproxy->mnt_ns->user_ns, CAP_SYS_ADMIN)`). As the [oss-security announcement](https://www.openwall.com/lists/oss-security/2022/01/18/7) put it: "An unprivileged user can use `unshare(CLONE_NEWNS|CLONE_NEWUSER)` to enter a namespace with the CAP_SYS_ADMIN permission, and then proceed with exploitation to root the system." On any distribution shipping unprivileged user namespaces — Ubuntu, Debian, and every container runtime that relies on them — the practical privilege requirement is none, which is why NVD scores this `PR:N` despite it being a local bug.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The kernel-visible symptom is a KASAN slab-out-of-bounds write in the `kmalloc-4k` cache, as seen in the Crusaders of Rust fuzzing run that led to public disclosure:
 
@@ -107,7 +107,7 @@ The writeup notes an irony worth recording: an anti-exploitation hardening chang
 
 They used it to escape Google's hardened kCTF Kubernetes containers and read another pod's flag, earning a $31,337 bounty — reduced from the maximum because a researcher going by n0psledbyte had found the same bug earlier without properly reporting or disclosing it, a collision Crusaders of Rust learned about only after their own report. A week later, Alejandro Guerrero [published an independent exploit](https://www.openwall.com/lists/oss-security/2022/01/25/14) on oss-security targeting Ubuntu 21.04 with kernel 5.11. Two and a half years after that, CISA added CVE-2022-0185 to its Known Exploited Vulnerabilities catalog (21 August 2024), confirmed via [NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0185), whose SSVC data records its exploitation status as **active**. There is no Exploit-DB entry and no Metasploit module; the [Crusaders of Rust repository](https://github.com/Crusaders-of-Rust/CVE-2022-0185) — created 19 January 2022, with the working exploits published 25 January — is the exploit distribution channel, and NVD tags it as such.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The check is not missing. It is the right check, computed in the wrong direction. `len > PAGE_SIZE - 2 - size` asks "does this parameter fit in the remaining space?" by first computing the remaining space — and *computing the remainder* is precisely the step that can go wrong when the types are unsigned. `size + len + 2 > PAGE_SIZE` asks the same question without ever forming a value that could underflow.
 
@@ -119,7 +119,7 @@ The exposure was also much wider than "one legacy code path." `legacy_parse_para
 
 A separate find, earlier than the Crusaders of Rust's, is the uncomfortable part. [syzbot reported it on 31 December 2021](https://groups.google.com/g/syzkaller-android-bugs/c/hWixpJ22kc8/m/MrIgyhQvEAAJ) — subject "KASAN: slab-out-of-bounds Write in legacy_parse_param", bug ID `02b637bea12b3944b0b9`, a distinct crash in the same function (`fs/fs_context.c:603` on the `android12-5.4` tree, rather than the CoR run's `fs/fs_context.c:569` on 5.14) and with syz and C reproducers that syzbot posted to the same thread fifteen minutes later. It landed on `syzkaller-android-bugs`, not on a VFS list, and no human replied until Lee Jones posted the already-public upstream fix to the thread on 26 January 2022 — eight days after the CVE was announced.
 
-## Resolution
+## Resolution {#resolution}
 
 [`722d94847de2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756) ("vfs: fs_context: fix up param length parsing in legacy_parse_param"), authored by Jamie Hill-Daniel on 18 January 2022, is a one-line change:
 
@@ -144,7 +144,7 @@ sysctl user.max_user_namespaces
 
 Both break rootless containers and anything else that legitimately unshares a user namespace, which is exactly the trade-off container platforms spent early 2022 arguing about.
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **Write bounds checks as sums, never as differences.** `a + b > LIMIT` and `b > LIMIT - a` are equivalent in mathematics and are not equivalent in C. Any check whose left-hand side subtracts an attacker-influenced quantity from a constant is one large input away from being a no-op, and no amount of care about the *comparison* helps if the *subtraction* is where the truth is lost.
 
@@ -157,14 +157,14 @@ Both break rootless containers and anything else that legitimately unshares a us
 !!! warning "Pattern to watch for"
     Grep your own code for bounds checks of the form `LIMIT - x - y` where any operand is unsigned and attacker-influenced — `PAGE_SIZE - hdr - len`, `sizeof(buf) - offset`, `count - consumed`. Each is a candidate for the same rewrite. Then check the second half of the pattern: whether repeated *valid* operations can walk the accumulator to the boundary value. On the operational side, treat every `fsopen()`/`fsconfig()`-reachable path, and every `CAP_SYS_ADMIN`-gated one, as unprivileged-reachable unless you have explicitly disabled unprivileged user namespaces.
 
-## See also
+## See also {#see-also}
 
 - [User Namespaces and Credential Mapping](../user-namespaces.md) — how `unshare(CLONE_NEWUSER)` grants a full capability set inside the new namespace, the mechanism this exploit depends on entirely
 - [Linux Capabilities](../capabilities.md) — including why `CAP_SYS_ADMIN` in particular is the capability that keeps showing up in escalation chains
 - [Filesystem Registration and Mounting](../../vfs/mounting.md) — `struct fs_context`, `init_fs_context()`, and the mount path this bug lives in
 - [Kernel Hardening](../kernel-hardening.md) — KASLR, hardened usercopy and SMAP/SMEP, all of which the published exploits had to work around
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2022-0185](https://nvd.nist.gov/vuln/detail/CVE-2022-0185) — CVSS 8.4 HIGH, affected ranges, and the references NVD tags as `Exploit`; confirms the CISA KEV listing, added 21 August 2024, CWE-190, with an 11 September 2024 remediation due date for federal agencies
 - [git.kernel.org: 722d94847de2](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=722d94847de29310e8aa03fcbdb41fc92c521756) — "vfs: fs_context: fix up param length parsing in legacy_parse_param", the one-line fix and its review trailers

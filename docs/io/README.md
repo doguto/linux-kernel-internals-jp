@@ -1,12 +1,12 @@
-# I/O Patterns
+# I/O Patterns {#io-patterns}
 
 > How Linux moves data between userspace, the page cache, and storage — and why the interface you choose shapes everything from latency to correctness
 
-## Getting Started
+## Getting Started {#getting-started}
 
 This documentation explains how Linux handles I/O — not just the system call API, but the implementation decisions underneath: where data lives at each stage, what copies happen (or don't), what the kernel defers, and what trade-offs each interface forces on application developers.
 
-### Prerequisites
+### Prerequisites {#prerequisites}
 
 This documentation assumes familiarity with:
 
@@ -16,7 +16,7 @@ This documentation assumes familiarity with:
 
 If you've used `read()` and `write()` from C and wondered what happens inside, you're in the right place. A passing familiarity with virtual memory (pages, the page cache) will help but is not required — the relevant concepts are introduced where needed. See [Further Reading](#further-reading) for recommended textbooks.
 
-### Getting the Kernel Source
+### Getting the Kernel Source {#getting-the-kernel-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
@@ -25,7 +25,7 @@ cd linux
 
 The most relevant directories for I/O are `mm/` (page cache, readahead, writeback) and `fs/` (syscall entry points, splice, fallocate). For building and configuration, see [Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html).
 
-### Running Tests
+### Running Tests {#running-tests}
 
 The fastest way to experiment with I/O behavior without rebooting your machine:
 
@@ -39,7 +39,7 @@ virtme-ng --kdir . --append 'test_module.run_tests=1'
 
 For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `ftrace` are the primary tools — see [observability.md](observability.md) for how to use them.
 
-### Suggested Reading Order
+### Suggested Reading Order {#suggested-reading-order}
 
 **Fundamentals — start here:**
 
@@ -71,7 +71,7 @@ For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `
 
 12. **[War Stories](war-stories.md)** — Real bugs, surprising behaviors, and production incidents traced to I/O subsystem edge cases
 
-### What You'll Learn
+### What You'll Learn {#what-youll-learn}
 
 | Textbook Concept | Linux Reality |
 |------------------|---------------|
@@ -82,7 +82,7 @@ For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `
 | "AIO is async" | [It depends which AIO you mean](async-io.md). POSIX AIO (`aio_read`) is implemented with threads in glibc. Linux AIO (`io_submit`) is real kernel async but restricted to `O_DIRECT`. io_uring is the first truly general async I/O mechanism |
 | "`splice` avoids copies" | [Only when no transformation is needed](splice-sendfile.md). Splice moves page references between kernel structures — the moment you touch the data, the copy happens |
 
-### What Makes This Different
+### What Makes This Different {#what-makes-this-different}
 
 - **Real commits**: Every claim links to actual kernel commits
 - **Real bugs**: Learn from what broke in production and why
@@ -92,9 +92,9 @@ For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `
 
 ---
 
-## Documentation
+## Documentation {#documentation}
 
-### Fundamentals
+### Fundamentals {#fundamentals}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -103,40 +103,40 @@ For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `
 | [page-cache-writeback](page-cache-writeback.md) | Dirty page accounting, flusher threads (`wb_workfn`), dirty throttling, and what `fsync()` actually flushes |
 | [direct-io](direct-io.md) | `O_DIRECT` path through the kernel, alignment constraints, DIO vs. buffered I/O performance trade-offs |
 
-### Memory-Mapped I/O
+### Memory-Mapped I/O {#memory-mapped-io}
 
 | Document | What You'll Learn |
 |----------|-------------------|
 | [mmap-io](mmap-io.md) | File-backed `mmap`, page fault handling, `MAP_SHARED` vs. `MAP_PRIVATE`, `msync()`, and when mmap hurts |
 
-### Zero-Copy and Vectored
+### Zero-Copy and Vectored {#zero-copy-and-vectored}
 
 | Document | What You'll Learn |
 |----------|-------------------|
 | [splice-sendfile](splice-sendfile.md) | `splice()`, `sendfile()`, `tee()`; pipe buffers as the kernel's zero-copy primitive; limitations |
 | [vectored-io](vectored-io.md) | `readv()` / `writev()`, scatter-gather DMA, `iov_iter` as the kernel's unified buffer abstraction |
 
-### Allocation and Space Management
+### Allocation and Space Management {#allocation-and-space-management}
 
 | Document | What You'll Learn |
 |----------|-------------------|
 | [fallocate](fallocate.md) | Pre-allocating space without writing data; `FALLOC_FL_PUNCH_HOLE`, `FALLOC_FL_KEEP_SIZE`, sparse files |
 
-### End-to-End Walkthroughs
+### End-to-End Walkthroughs {#end-to-end-walkthroughs}
 
 | Document | What You'll Learn |
 |----------|-------------------|
 | [life-of-a-write](life-of-a-write.md) | Tracing `write()` from the syscall entry through VFS, the address space, the block layer, and back |
 | [async-io](async-io.md) | POSIX AIO implementation, Linux AIO (`io_submit`) restrictions, io_uring submission queues and completion rings |
 
-### Observability and Tuning
+### Observability and Tuning {#observability-and-tuning}
 
 | Document | What You'll Learn |
 |----------|-------------------|
 | [observability](observability.md) | Reading `/proc/diskstats`, `iostat`, `blktrace` event anatomy, `bpftrace` one-liners for I/O tracing |
 | [tuning-storage](tuning-storage.md) | Block scheduler selection, `nr_requests`, readahead tuning, dirty ratio knobs, `fadvise` / `madvise` hints |
 
-### War Stories
+### War Stories {#war-stories}
 
 | Document | What You'll Learn |
 |----------|-------------------|
@@ -144,7 +144,7 @@ For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 If you want to read the actual kernel code:
 
@@ -162,9 +162,9 @@ If you want to read the actual kernel code:
 
 ---
 
-## Further Reading
+## Further Reading {#further-reading}
 
-### Blogs and Articles
+### Blogs and Articles {#blogs-and-articles}
 
 - Jens Axboe's blog — [https://axboe.dk/](https://axboe.dk/) — Axboe is the author of io_uring and the block layer; his posts explain design decisions directly from the source
 - LWN.net I/O coverage:
@@ -173,21 +173,21 @@ If you want to read the actual kernel code:
     - [Buffered I/O without page-cache thrashing](https://lwn.net/Articles/806980/) — `RWF_UNCACHED`, a buffered-I/O mode that avoids polluting the page cache
     - [No-I/O dirty throttling](https://lwn.net/Articles/456904/) — how dirty throttling was redesigned
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [Documentation/filesystems/vfs.rst](https://docs.kernel.org/filesystems/vfs.html) — VFS layer internals, `file_operations`, `address_space_operations`
 - [Documentation/filesystems/locking.rst](https://docs.kernel.org/filesystems/locking.html) — Locking rules for filesystem code
 - [Documentation/block/](https://docs.kernel.org/block/) — Block layer, I/O schedulers, request queues
 - [Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/) — `vm.dirty_ratio`, `vm.dirty_background_ratio`, and other tunables
 
-### Textbooks
+### Textbooks {#textbooks}
 
 - Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) — Ch. 13-14 (Storage and I/O Systems)
 - Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) — Ch. 5 (Input/Output)
 - Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) — Ch. 13 (The Virtual Filesystem), Ch. 15 (The Block I/O Layer)
 - Kerrisk, [*The Linux Programming Interface*](https://man7.org/tlpi/) — Ch. 13 (File I/O Buffering), Ch. 49 (Memory Mappings)
 
-### Papers
+### Papers {#papers}
 
 - Axboe, [*Efficient IO with io_uring*](https://kernel.dk/io_uring.pdf) — The design document for io_uring from its author
 - Pai et al., [*Flash: An Efficient and Portable Web Server*](https://www.usenix.org/legacy/events/usenix99/full_papers/pai/pai.pdf) — USENIX 1999; the paper that exposed the limits of POSIX AIO for real workloads

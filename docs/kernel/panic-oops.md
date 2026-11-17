@@ -1,8 +1,8 @@
-# Kernel Panic and Oops
+# Kernel Panic and Oops {#kernel-panic-and-oops}
 
 > Oops handling, `panic()`, call stack decoding, and kdump
 
-## What triggers an oops?
+## What triggers an oops? {#what-triggers-an-oops}
 
 An "oops" is the kernel's report of a fault it cannot safely recover from in the current context. Common triggers on x86-64:
 
@@ -17,7 +17,7 @@ The CPU raises an exception, the IDT handler runs, and control reaches `do_page_
 
 ---
 
-## `die()` and the oops path
+## `die()` and the oops path {#die-and-the-oops-path}
 
 ```c
 /* arch/x86/kernel/dumpstack.c */
@@ -34,7 +34,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 }
 ```
 
-### `oops_begin()` / `oops_end()`
+### `oops_begin()` / `oops_end()` {#oopsbegin-oopsend}
 
 `oops_begin()` takes a raw spinlock (`die_lock`) to serialize concurrent oopses across CPUs — nested oopses on the *same* CPU (tracked via `die_owner`/`die_nest_count`) are allowed through rather than deadlocking — then calls `console_verbose()` and `bust_spinlocks(1)` to flush any spinning console writers. It returns the saved interrupt flags so `oops_end()` can restore them. Neither function touches any watchdog, and there is no `oops_count` sysctl.
 
@@ -42,7 +42,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 
 ---
 
-## Anatomy of an oops message
+## Anatomy of an oops message {#anatomy-of-an-oops-message}
 
 ```
 BUG: unable to handle kernel NULL pointer dereference at 0000000000000008
@@ -84,7 +84,7 @@ Key fields:
 
 ---
 
-## Taint flags
+## Taint flags {#taint-flags}
 
 The `Tainted:` line summarizes kernel integrity state. A "tainted" kernel has been modified in ways that may make bug reports less reliable.
 
@@ -108,7 +108,7 @@ cat /proc/sys/kernel/tainted
 
 ---
 
-## Stack unwinding: ORC
+## Stack unwinding: ORC {#stack-unwinding-orc}
 
 Since Linux 4.14, x86-64 uses the **ORC (Oops Rewind Capability) unwinder** instead of frame pointer-based unwinding. ORC is more reliable because it works even when the compiler omits frame pointers (which is common with optimization).
 
@@ -132,7 +132,7 @@ On arm64, the kernel uses a frame-pointer-based unwinder. arm64 requires `CONFIG
 
 ---
 
-## `WARN()`, `BUG()`, and their variants
+## `WARN()`, `BUG()`, and their variants {#warn-bug-and-their-variants}
 
 ```c
 /* include/linux/bug.h, include/asm-generic/bug.h */
@@ -154,7 +154,7 @@ On x86 (and other architectures defining `__WARN_FLAGS`), `WARN()` expands to a 
 
 ---
 
-## `panic()`: the point of no return
+## `panic()`: the point of no return {#panic-the-point-of-no-return}
 
 `panic()` itself is a thin variadic wrapper; all of the actual logic lives in `vpanic()`, which it calls with a `va_list`:
 
@@ -216,7 +216,7 @@ void vpanic(const char *fmt, va_list args)
 
 The `panic_notifier_list` allows subsystems to register callbacks that run before the system halts. netconsole, pstore, and kdump all hook into this chain.
 
-### `panic_on_oops` sysctl
+### `panic_on_oops` sysctl {#paniconoops-sysctl}
 
 ```bash
 # Read current value:
@@ -230,7 +230,7 @@ echo 1 > /proc/sys/kernel/panic_on_oops
 
 When `panic_on_oops = 1`, `oops_end()` calls `panic()` instead of attempting to continue. This is appropriate in production environments where a partially-corrupted kernel state is worse than a clean reboot.
 
-### `panic=N` boot parameter
+### `panic=N` boot parameter {#panicn-boot-parameter}
 
 ```
 panic=30    # reboot 30 seconds after panic
@@ -240,11 +240,11 @@ panic=0     # do not reboot (halt forever, default)
 
 ---
 
-## kdump: capturing crash memory
+## kdump: capturing crash memory {#kdump-capturing-crash-memory}
 
 kdump allows the kernel to save a complete memory dump when it panics. The mechanism uses `kexec(2)` to boot a pre-loaded "crash kernel" from a reserved memory region, bypassing normal boot.
 
-### Setup
+### Setup {#setup}
 
 ```bash
 # Reserve memory for the crash kernel at boot time:
@@ -257,7 +257,7 @@ kexec -p /boot/vmlinuz-$(uname -r) \
     --append="root=/dev/sda1 irqpoll maxcpus=1 reset_devices"
 ```
 
-### What happens on panic
+### What happens on panic {#what-happens-on-panic}
 
 1. kdump is triggered from `panic()` (via the internal `__crash_kexec()`) or from `die()`'s `oops_end()` (via the public `crash_kexec()`)
 2. kexec switches to the crash kernel's page tables and jumps to its entry point
@@ -265,7 +265,7 @@ kexec -p /boot/vmlinuz-$(uname -r) \
 4. The crash kernel exposes the original kernel's memory as `/proc/vmcore` (an ELF core dump)
 5. A userspace tool (typically `makedumpfile`) copies `/proc/vmcore` to disk
 
-### Analyzing the dump
+### Analyzing the dump {#analyzing-the-dump}
 
 ```bash
 # On the crashed system (or a system with the same kernel):
@@ -282,9 +282,9 @@ The `crash` utility (from `crash-utility` package) is the standard tool for post
 
 ---
 
-## Decoding oops output
+## Decoding oops output {#decoding-oops-output}
 
-### `faddr2line`
+### `faddr2line` {#faddr2line}
 
 ```bash
 # Decode a function+offset from the oops:
@@ -294,7 +294,7 @@ scripts/faddr2line vmlinux my_driver_read+0x2c
 # my_driver_read (drivers/mydriver/mydriver.c:142)
 ```
 
-### `addr2line`
+### `addr2line` {#addr2line}
 
 ```bash
 # Decode a raw address (requires debug symbols):
@@ -304,7 +304,7 @@ addr2line -e vmlinux -a ffffffff81234567
 addr2line -e vmlinux -i -f ffffffff81234567
 ```
 
-### `decode_stacktrace.sh`
+### `decode_stacktrace.sh` {#decode_stacktracesh}
 
 ```bash
 # Pipe dmesg through the kernel's decode script:
@@ -316,7 +316,7 @@ dmesg | ./scripts/decode_stacktrace.sh vmlinux . /path/to/modules
 # my_driver_read (drivers/mydriver/mydriver.c:142)
 ```
 
-### `objdump` for instruction-level analysis
+### `objdump` for instruction-level analysis {#objdump-for-instruction-level-analysis}
 
 ```bash
 # Disassemble around the faulting instruction:
@@ -326,7 +326,7 @@ objdump -d --start-address=0xffffffff81234540 \
 
 ---
 
-## KASAN: Kernel Address SANitizer
+## KASAN: Kernel Address SANitizer {#kasan-kernel-address-sanitizer}
 
 KASAN (`CONFIG_KASAN`) is a compile-time instrumentation tool that detects use-after-free and out-of-bounds accesses. It maintains a "shadow memory" region where each byte tracks the validity of 8 bytes of real memory.
 
@@ -361,7 +361,7 @@ Generic KASAN uses one shadow byte per 8 bytes of real memory, adding approximat
 
 ---
 
-## KFENCE: Kernel Electric-Fence
+## KFENCE: Kernel Electric-Fence {#kfence-kernel-electric-fence}
 
 KFENCE (`CONFIG_KFENCE`, Linux 5.12+) is a sampling-based memory safety detector designed for production use. Instead of instrumenting every allocation, it periodically intercepts a small percentage of `kmalloc` and `kmem_cache_alloc` calls and places the returned object on a special "guarded" page flanked by guard pages.
 
@@ -387,9 +387,9 @@ KFENCE does not catch every bug (only sampled allocations are guarded), but it p
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic()`/`vpanic()`: message formatting, the panic notifier chain, and the reboot/halt sequence
 - [kernel/crash_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_core.c) — `kexec_should_crash()` and `crash_kexec()`: the kdump entry point; `oops_end()` calls the public `crash_kexec()`, while `vpanic()` calls the internal `__crash_kexec()` directly to bypass the panic-cpu check
@@ -400,25 +400,25 @@ KFENCE does not catch every bug (only sampled allocations are guarded), but it p
 - [include/asm-generic/bug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/bug.h) — `WARN()`/`BUG()` family and the `__warn()` declaration; on x86 the trap-based path (`report_bug()`, called from `exc_invalid_op()`) is what actually reaches it, not `warn_slowpath_fmt()`
 - [lib/bust_spinlocks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/bust_spinlocks.c) — `bust_spinlocks()`: the `oops_in_progress` counter used to keep console output readable during an oops
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — the underlying syscall behind `kexec -p`; documents `KEXEC_ON_CRASH`, the flag that registers a crash kernel
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Oops Analysis](../debugging/oops-analysis.md) — step-by-step guide to reading an oops
 - [kdump and crash](../debugging/kdump.md) — setting up and using kdump in depth
 - [KASAN](../mm/kasan.md) — KASAN configuration and use
 - [KFENCE](../mm/kfence.md) — KFENCE in production
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [ORC unwinder](https://lwn.net/Articles/728721/) — Josh Poimboeuf's patch series and design writeup introducing the ORC unwinder and objtool-generated unwind tables (2017)
 - [Crash dumps with kexec](https://lwn.net/Articles/108595/) — Jonathan Corbet on the original kexec-based crash dump design (2004)
 - [The kernel address sanitizer](https://lwn.net/Articles/612153/) — Jake Edge's introduction to KASAN (2014)
 - [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — Marco Elver's design writeup for KFENCE (2020)
 
-### External
+### External {#external}
 
 - [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — full taint flag reference
 - [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — kdump setup guide

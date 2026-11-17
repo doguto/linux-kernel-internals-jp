@@ -1,4 +1,4 @@
-# Stale ptracer Credentials
+# Stale ptracer Credentials {#stale-ptracer-credentials}
 
 > CVE-2019-13272 — `PTRACE_TRACEME` recorded the credentials of the *parent* it drafted as tracer rather than those of the child that actually requested the relationship, so an unprivileged child could obtain a root-marked ptrace relationship no privileged code ever asked for — and keep it after that parent dropped privileges and became attacker-controlled
 
@@ -25,7 +25,7 @@ Actively exploited
 
 *Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
 
-## Before state
+## Before state {#before-state}
 
 When one process traces another, the kernel needs to remember *how privileged the tracer was at the moment the relationship was formed*. It cannot just re-check the tracer's current credentials later, because the tracer might legitimately drop privileges after attaching — and it cannot ignore the question either, because the answer decides whether a traced process is allowed to complete a setuid `execve()` at full privilege.
 
@@ -84,7 +84,7 @@ For `PTRACE_ATTACH`, `new_parent` *is* `current` — the process asking for the 
 
 For background on `struct cred`, its copy-on-write discipline, and what happens to credentials across `execve()`, see [Credentials and User Namespaces](../credentials.md). The privilege-dropping pattern this bug undermines — acquire root, do the privileged work, `setuid()` back down, then `execve()` something less trusted — is covered in [Linux Capabilities](../capabilities.md#capability-based-privilege-dropping).
 
-## The trigger
+## The trigger {#the-trigger}
 
 `PTRACE_TRACEME` is unusual among ptrace requests: it is issued by the *tracee*, and it does not name a tracer. The kernel picks one for you — your real parent — and the only permission check is an LSM hook, `security_ptrace_traceme(current->parent)`, which asks whether the *parent* may trace the child — never whether the child should be allowed to draft it:
 
@@ -106,13 +106,13 @@ So an unprivileged process can unilaterally cause `ptracer_cred` to be set to a 
 
 The exploitation window is the gap in a privileged parent's lifetime between "is root" and "is no longer root." Jann Horn's [original Project Zero report](https://project-zero.issues.chromium.org/issues/42450993) (issue 1903) demonstrated it against polkit's `pkexec`: an attacker process A forks B; B forks a child C and only *then* `execve()`s `pkexec`, so C's real parent is now running as root; C calls `PTRACE_TRACEME`, and its recorded `ptracer_cred` snapshots root-owning B. C then `execve()`s a setuid binary — and because the kernel consults `ptracer_cred`, which holds *B's* root credentials rather than those of C, the process that actually requested the relationship, it treats the ptrace relationship as privileged and does not suppress the setuid transition, so C ends up running at full root while still traced. Only afterward does B drop privileges and become dumpable, at which point A can `PTRACE_ATTACH` to B and drive root-privileged C through it. Two derivative Exploit-DB proof-of-concept tools (bcoles's automated helper-targeting version of Horn's original, tested across twenty-odd distributions, and a later, three-distribution modification of bcoles's by Ujas Dhami) automated exactly this polkit-helper technique, and Rapid7 shipped it as a [Metasploit module](https://raw.githubusercontent.com/rapid7/metasploit-framework/master/modules/exploits/linux/local/ptrace_traceme_pkexec_helper.rb) in October 2019. All three of these later tools test the same local-session precondition — an `$XDG_SESSION_ID` for a non-remote login (`loginctl … Remote=no`) — but only the Metasploit module acts on it: its `check` returns `CheckCode::Safe` when `loginctl` reports `Remote=yes`, which is why it documents that it "cannot be executed over ssh." The two C proof-of-concepts merely print a warning — and likewise for SELinux's `deny_ptrace` boolean, which only they test — because `check_env()`'s return value is discarded by `main()`. Yama's `kernel.yama.ptrace_scope = 3` would block the `PTRACE_TRACEME` outright — scope 2 rejects it only when the parent lacks `CAP_SYS_PTRACE`, which the root `pkexec` parent has — yet none of those three checks the sysctl at all; neither restriction is Linux's default, which is why the bug was exploitable out of the box on most desktop and server distributions of the era.
 
-## Observed behavior
+## Observed behavior {#observed-behavior}
 
 The privilege half of this bug produced no crash, no memory corruption, no fuzzer-visible artifact — its only symptom is a permission decision coming out wrong. (A separate object-lifetime half of the same report is louder: Horn's other proof-of-concept races `setresuid()` against `PTRACE_TRACEME` and trips `put_cred_rcu()`'s panic.) A traced process could be manipulated (registers rewritten, `/proc/<pid>/mem` written, syscalls intercepted) by a "tracer" the kernel had marked privileged on the strength of credentials it never volunteered — and by the time the manipulation happened, the flesh-and-blood process behind that tracer role had dropped privileges via `setuid()`/`setgid()` and moved on to executing attacker-reachable code. NVD scores it CVSS 3.1 **7.8 HIGH** (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`) — local, low complexity, low privileges required, full confidentiality/integrity/availability impact, because the end state is arbitrary code execution as root.
 
 The bug had been present since Linux **4.10**, into which [`64b875f7ac8a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=64b875f7ac8a5d60a4e191479299e931ee949b67) — authored November 2016 — introduced `ptracer_cred` — nearly three years before Jann Horn's report. Distributions each caught up on their own schedule once the fix and CVE were public: Debian's DSA-4484 followed on July 20, Red Hat's RHSA-2019:2405 on August 7, and Ubuntu's five kernel advisories (USN-4093-1 through USN-4118-1, see External references) landed in two batches, August 13 and September 2 — a seven-week tail rather than a coordinated same-week release.
 
-## Why it happened
+## Why it happened {#why-it-happened}
 
 The root cause is a **subject/object mismatch inside a two-caller helper function**. `ptrace_link()` was written to serve both `PTRACE_ATTACH` (where the caller and the tracer are the same process) and `PTRACE_TRACEME` (where they are not) with a single code path that assumed they always were. `__task_cred(new_parent)` is the correct credential source when `new_parent == current`; for `PTRACE_TRACEME` it silently picks the *wrong* subject — the parent, who isn't the one asking for anything — and nothing in the type system or the function's signature flagged that the assumption had been violated for one of its two call sites.
 
@@ -120,7 +120,7 @@ The commit that introduced `ptracer_cred`, `64b875f7ac8a`, was itself a security
 
 The 2016 patch was [publicly reviewed](https://lore.kernel.org/lkml/87oa1eavfx.fsf_-_@xmission.com/) as part of a 3-patch series titled "Fixing ptrace vs exec vs userns interactions," and the review came within one question of the eventual bug — though aimed at a different line. Reviewing the `check_unsafe_exec()` hunk in `fs/exec.c` — the *consumer* of the new field, not the `ptrace_link()` capture site where the actual mismatch lived — Andy Lutomirski asked: "IIRC `PT_PTRACE_CAP` was added to prevent TOCTOU races. What prevents that type of race now? For that matter, what guarantees that we've already switched to new creds here and will continue to do so in the future?" Biederman's answer explained why the new field was safe *once populated*: "Because instead of capturing a single bit we now capture tracers entire credentials in `tsk->ptracer_cred`. As such `tsk->ptracer_cred` never changes except when ptracing begins or ends, and we remain safe for TOCTOU races." That answer is correct, and it is about *when* the credentials are captured; the neighboring question — *whose* credentials, for *which* caller — is what would have caught the `PTRACE_TRACEME` mismatch three years early. Nobody asked it. There's also a secondary, smaller bug the fix folds in: `ptrace_link()` obtained an RCU reference to the parent's credentials and then handed that pointer to `get_cred()` — and, in Jann Horn's own words from the fix's commit message, "the object lifetime rules for things like struct cred do not permit unconditionally turning an RCU reference into a stable reference" that way. That's a second reason the old code path was unsound, independent of whose credentials it was even reading.
 
-## Resolution
+## Resolution {#resolution}
 
 [`6994eefb0053`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6994eefb0053799d2e07cd140df6c2ea106c41ee) ("ptrace: Fix ->ptracer_cred handling for PTRACE_TRACEME"), authored by Jann Horn on July 4, 2019, collapses `ptrace_link()` to a single line:
 
@@ -145,7 +145,7 @@ sysctl -w kernel.yama.ptrace_scope=3    # 0/1 do not stop this bug (1 = Ubuntu/D
                                         # until reboot; lower values can still be changed either way.
 ```
 
-## What it taught us
+## What it taught us {#what-it-taught-us}
 
 **A helper function serving two call sites needs to name its actual precondition, not just satisfy the common case.** `ptrace_link()`'s bug is invisible if you only ever trace the `PTRACE_ATTACH` path; it only shows up once you ask "what does `new_parent` mean for the *other* caller?" — a question the function's own signature didn't prompt.
 
@@ -158,13 +158,13 @@ sysctl -w kernel.yama.ptrace_scope=3    # 0/1 do not stop this bug (1 = Ubuntu/D
 !!! warning "Pattern to watch for"
     Any kernel object that snapshots "how privileged was the *other* party in this relationship at creation time" needs to record the credentials of the process making the request, not a related process picked for convenience — and needs a test for every distinct calling convention of the code that populates it, not just the most common one.
 
-## See also
+## See also {#see-also}
 
 - [Credentials and User Namespaces](../credentials.md) — `struct cred`, its copy-on-write discipline, and what happens to credentials across `execve()`
 - [Linux Capabilities](../capabilities.md) — the privilege-dropping pattern (`setuid()` then `execve()`) this bug undermined
 - [Nested User Namespace UID/GID Mapping](nested-userns-uid-mapping.md) — another Jann Horn-reported credential/identity bug in the same era
 
-## External references
+## External references {#external-references}
 
 - [NVD: CVE-2019-13272](https://nvd.nist.gov/vuln/detail/CVE-2019-13272) — CVSS 3.1 7.8 HIGH, published July 17, 2019
 - [git.kernel.org: 6994eefb0053](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6994eefb0053799d2e07cd140df6c2ea106c41ee) — "ptrace: Fix ->ptracer_cred handling for PTRACE_TRACEME"

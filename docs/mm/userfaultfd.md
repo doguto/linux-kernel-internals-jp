@@ -1,8 +1,8 @@
-# userfaultfd: Userspace Page Fault Handling
+# userfaultfd: Userspace Page Fault Handling {#userfaultfd-userspace-page-fault-handling}
 
 > Let userspace handle page faults — the mechanism behind QEMU live migration and CRIU
 
-## What problem does userfaultfd solve?
+## What problem does userfaultfd solve? {#what-problem-does-userfaultfd-solve}
 
 Normally, page faults are handled by the kernel: a missing page triggers an anonymous allocation, swap-in, or file read. But some applications need to **intercept** page faults — to provide pages from their own storage or to implement copy-on-write in userspace.
 
@@ -14,7 +14,7 @@ Use cases:
 - **Garbage collectors**: implement generational GC barriers without mprotect overhead
 - **Sandboxes**: provide deterministic memory contents for testing
 
-## API overview
+## API overview {#api-overview}
 
 ```c
 #include <sys/ioctl.h>
@@ -66,9 +66,9 @@ while (1) {
 }
 ```
 
-## Fault resolution methods
+## Fault resolution methods {#fault-resolution-methods}
 
-### UFFDIO_COPY — install a page with data
+### UFFDIO_COPY — install a page with data {#uffdio_copy-install-a-page-with-data}
 
 ```c
 static char page_data[PAGE_SIZE];
@@ -84,7 +84,7 @@ ioctl(uf_fd, UFFDIO_COPY, &copy);
 /* Wakes the faulting thread */
 ```
 
-### UFFDIO_ZEROPAGE — install a zero page
+### UFFDIO_ZEROPAGE — install a zero page {#uffdio_zeropage-install-a-zero-page}
 
 ```c
 struct uffdio_zeropage zp = {
@@ -95,7 +95,7 @@ struct uffdio_zeropage zp = {
 ioctl(uf_fd, UFFDIO_ZEROPAGE, &zp);
 ```
 
-### UFFDIO_CONTINUE — resolve minor fault (for shared mappings)
+### UFFDIO_CONTINUE — resolve minor fault (for shared mappings) {#uffdio_continue-resolve-minor-fault-for-shared-mappings}
 
 ```c
 /* Minor fault: page exists in page cache but not in PTE */
@@ -107,7 +107,7 @@ struct uffdio_continue cont = {
 ioctl(uf_fd, UFFDIO_CONTINUE, &cont);
 ```
 
-### UFFDIO_WRITEPROTECT — write-protect pages to catch writes
+### UFFDIO_WRITEPROTECT — write-protect pages to catch writes {#uffdio_writeprotect-write-protect-pages-to-catch-writes}
 
 ```c
 /* Write-protect a region (triggers WP fault on write) */
@@ -123,7 +123,7 @@ wp.mode = 0;  /* remove WP — allow future writes */
 ioctl(uf_fd, UFFDIO_WRITEPROTECT, &wp);
 ```
 
-## Registration modes
+## Registration modes {#registration-modes}
 
 ```c
 /* UFFDIO_REGISTER_MODE_MISSING: intercept missing page faults */
@@ -139,7 +139,7 @@ reg.mode = UFFDIO_REGISTER_MODE_MISSING | UFFDIO_REGISTER_MODE_WP;
 reg.mode = UFFDIO_REGISTER_MODE_MINOR;
 ```
 
-## Complete example: lazy page provider
+## Complete example: lazy page provider {#complete-example-lazy-page-provider}
 
 ```c
 #include <sys/mman.h>
@@ -223,7 +223,7 @@ int main(void)
 }
 ```
 
-## QEMU live migration with userfaultfd
+## QEMU live migration with userfaultfd {#qemu-live-migration-with-userfaultfd}
 
 QEMU uses userfaultfd for **post-copy live migration**: start the destination VM before all memory has arrived.
 
@@ -247,9 +247,9 @@ Transfer page N ─────────────────────�
 
 The key benefit: the destination VM starts running quickly, with only hot pages needing to be fetched on-demand.
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
-### Fault interception
+### Fault interception {#fault-interception}
 
 ```c
 /* mm/userfaultfd.c */
@@ -288,7 +288,7 @@ vm_fault_t handle_userfault(struct vm_fault *vmf, unsigned long reason)
 }
 ```
 
-### struct userfaultfd_ctx
+### struct userfaultfd_ctx {#struct-userfaultfd_ctx}
 
 ```c
 struct userfaultfd_ctx {
@@ -306,7 +306,7 @@ struct userfaultfd_ctx {
 };
 ```
 
-## Events beyond page faults
+## Events beyond page faults {#events-beyond-page-faults}
 
 userfaultfd can also deliver non-fault events when the monitored region changes:
 
@@ -332,7 +332,7 @@ case UFFD_EVENT_UNMAP:
 }
 ```
 
-## Performance considerations
+## Performance considerations {#performance-considerations}
 
 ```
 userfaultfd overhead:
@@ -364,7 +364,7 @@ tracepoint:syscalls:sys_enter_ioctl
 { printf("UFFDIO from pid %d\n", pid); }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Page Fault Handler](page-fault.md) — handle_mm_fault, the entry point for userfaultfd
 - [File-backed mmap](file-mmap.md) — mmap fundamentals

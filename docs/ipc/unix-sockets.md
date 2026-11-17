@@ -1,10 +1,10 @@
-# Unix Domain Sockets
+# Unix Domain Sockets {#unix-domain-sockets}
 
 > Local IPC with file descriptor passing, abstract namespace, and SOCK_SEQPACKET
 
 Unix domain sockets (`AF_UNIX`) provide full-duplex, connection-oriented or datagram IPC entirely within the kernel — no network stack involved. They are the foundation of D-Bus, systemd socket activation, Docker's control socket, and countless other local daemons.
 
-## Socket types
+## Socket types {#socket-types}
 
 | Type | Semantics | Boundary preserved | Use case |
 |------|-----------|--------------------|----------|
@@ -22,7 +22,7 @@ Unix domain sockets (`AF_UNIX`) provide full-duplex, connection-oriented or data
 int srv = socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0);
 ```
 
-## struct sockaddr_un
+## struct sockaddr_un {#struct-sockaddr_un}
 
 ```c
 #include <sys/un.h>
@@ -35,7 +35,7 @@ struct sockaddr_un {
 
 `sun_path` is 108 bytes total (`UNIX_PATH_MAX`). For abstract-namespace sockets the first byte is `\0` and the remaining 107 bytes form the name.
 
-## Filesystem namespace
+## Filesystem namespace {#filesystem-namespace}
 
 Binding to a filesystem path creates a socket inode in the VFS:
 
@@ -56,7 +56,7 @@ Properties:
 - The socket file persists after the server exits — must be removed with `unlink()` before rebinding
 - Controlled by the filesystem namespace: containers with separate mount namespaces cannot see each other's socket files
 
-## Abstract namespace
+## Abstract namespace {#abstract-namespace}
 
 An abstract socket name starts with a null byte (`\0`). The kernel tracks the binding in memory — there is no filesystem entry:
 
@@ -77,7 +77,7 @@ Properties:
 - Visible only within the same network namespace (`ip netns` or container namespaces provide isolation)
 - `ss -xlp` shows abstract sockets with a `@` prefix in the address column
 
-## socketpair()
+## socketpair() {#socketpair}
 
 `socketpair()` creates a connected pair of sockets without binding or listening — the simplest way to create a bidirectional channel between a parent and child process:
 
@@ -97,7 +97,7 @@ if (fork() == 0) {
 
 This is preferable to a pipe for bidirectional IPC and to an anonymous socket pair for structured (message-boundary-preserving) communication.
 
-## File descriptor passing with SCM_RIGHTS
+## File descriptor passing with SCM_RIGHTS {#file-descriptor-passing-with-scm_rights}
 
 The `SCM_RIGHTS` control message lets a process send open file descriptors across a Unix socket. The kernel duplicates the file description into the receiver's file descriptor table — the receiver gets a new fd number pointing to the same underlying open file, including its offset, flags, and access mode.
 
@@ -149,13 +149,13 @@ if (rcmsg && rcmsg->cmsg_type == SCM_RIGHTS) {
 
 The kernel's `unix_stream_sendmsg()` / `unix_scm_to_skb()` path (in `net/unix/af_unix.c`) attaches the file references to the socket buffer. On the receive side, `unix_detach_fds()` extracts them from the skb, then `scm_detach_fds()` (in `net/core/scm.c`) installs each one via `scm_recv_one_fd()` — the same fd-table-installation logic the standalone `receive_fd()` helper (`fs/file.c`) uses for a single fd, inlined here to install a whole batch at once.
 
-### Leak risk
+### Leak risk {#leak-risk}
 
 Every received fd must be closed, including on error paths. If the receiver does not close the fd, it accumulates in the process's file descriptor table invisibly. `lsof -p <pid>` will reveal them, but the damage is done when `EMFILE` hits.
 
 Use `SOCK_CLOEXEC` on the *socket* to prevent the socket fds themselves from leaking across `exec()`. For received fds, set `O_CLOEXEC` with `fcntl(received_fd, F_SETFD, FD_CLOEXEC)` immediately after receipt.
 
-## Peer credential passing with SCM_CREDENTIALS
+## Peer credential passing with SCM_CREDENTIALS {#peer-credential-passing-with-scm_credentials}
 
 `SCM_CREDENTIALS` lets a sender attach its `pid`, `uid`, and `gid` to a message. The kernel validates the credentials against the sender's actual values — a process cannot forge a different uid (unless it is root).
 
@@ -192,7 +192,7 @@ printf("peer pid=%d uid=%d gid=%d\n", peer.pid, peer.uid, peer.gid);
 
 `SO_PEERCRED` is used by systemd, D-Bus, and polkit to authenticate the calling process before granting privileged operations.
 
-## Performance
+## Performance {#performance}
 
 Unix domain sockets bypass the entire TCP/IP stack. Data is copied directly between socket send and receive buffers in the kernel, or in some configurations uses zero-copy tricks via `sk_buff`. Actual throughput depends heavily on CPU, message size, and kernel version, so no specific numbers are given here — but the relative ordering below holds, because each step removes more of the copy/protocol overhead than the last:
 
@@ -202,7 +202,7 @@ Unix domain sockets bypass the entire TCP/IP stack. Data is copied directly betw
 
 `AF_UNIX` with `SOCK_DGRAM` avoids connection setup overhead entirely, which is useful for short fire-and-forget control messages between co-located processes.
 
-## Kernel implementation
+## Kernel implementation {#kernel-implementation}
 
 The implementation lives in `net/unix/af_unix.c`. Key structures:
 
@@ -232,9 +232,9 @@ Messages for `SOCK_DGRAM` and `SOCK_SEQPACKET` are stored as `sk_buff` entries i
 
 There is no per-socket in-flight-fd counter on `struct unix_sock` (an earlier kernel design tracked this via a `struct list_head link`/`atomic_long_t inflight` pair; both are gone). In-flight `SCM_RIGHTS` accounting is now per-`user_struct` (`user->unix_inflight`). The garbage collector (`net/unix/garbage.c`) builds an explicit graph of sockets and their fd references — each socket is a `struct unix_vertex` (linked from `unix_sock.vertex` above), each in-flight-fd reference an edge (`struct unix_edge`) — and runs a Tarjan-style strongly-connected-component search over that graph to find and free reference cycles, rather than a simple inflight-counter check.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [net/unix/af_unix.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/unix/af_unix.c) — core `AF_UNIX` implementation: `unix_stream_sendmsg()`, `unix_dgram_sendmsg()`, `unix_attach_fds()` / `unix_detach_fds()`, `unix_scm_to_skb()`
 - [net/unix/garbage.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/unix/garbage.c) — cycle-collecting garbage collector for `SCM_RIGHTS` reference cycles (`struct unix_vertex`, `struct unix_edge`)
@@ -242,14 +242,14 @@ There is no per-socket in-flight-fd counter on `struct unix_sock` (an earlier ke
 - [include/net/af_unix.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/net/af_unix.h) — `struct unix_sock` definition
 - [include/uapi/linux/un.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/un.h) — `struct sockaddr_un` and `UNIX_PATH_MAX`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`unix(7)`](https://man7.org/linux/man-pages/man7/unix.7.html) — the canonical reference: socket types, `sockaddr_un`, abstract namespace, `SCM_RIGHTS`, `SCM_CREDENTIALS`, `SO_PEERCRED`
 - [`socket(2)`](https://man7.org/linux/man-pages/man2/socket.2.html) — the `socket()` syscall and the `SOCK_STREAM` / `SOCK_DGRAM` / `SOCK_SEQPACKET` types
 - [`sendmsg(2)`](https://man7.org/linux/man-pages/man2/sendmsg.2.html) — `sendmsg()`/`recvmsg()`, `struct msghdr`, and ancillary data
 - [`cmsg(3)`](https://man7.org/linux/man-pages/man3/cmsg.3.html) — the `CMSG_FIRSTHDR`/`CMSG_DATA`/`CMSG_LEN`/`CMSG_SPACE` macros
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Pipes and FIFOs](pipes.md) — unidirectional byte-stream IPC
 - [Shared Memory](shared-memory.md) — zero-copy data exchange
@@ -257,6 +257,6 @@ There is no per-socket in-flight-fd counter on `struct unix_sock` (an earlier ke
 - [IPC War Stories](war-stories.md) — a real `SCM_RIGHTS` fd-leak incident from a privilege-separated daemon
 - [Socket Layer Overview](../net/socket-layer.md) — the generic `struct socket`/`struct sock`/`proto_ops` stack that `AF_UNIX` plugs into
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [io_uring, SCM_RIGHTS, and reference-count cycles](https://lwn.net/Articles/779472/) (Jonathan Corbet, February 2019) — how `io_uring` file registration created a new variant of the fd reference-count cycle that the `AF_UNIX` garbage collector exists to break

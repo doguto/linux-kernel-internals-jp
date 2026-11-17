@@ -1,8 +1,8 @@
-# io_uring vs epoll
+# io_uring vs epoll {#io_uring-vs-epoll}
 
 > When to replace your event loop, when to keep it, and how to migrate
 
-## The problem both solve
+## The problem both solve {#the-problem-both-solve}
 
 Modern servers need to wait on many file descriptors at once without spinning
 or blocking. The naive approach — one thread per connection — collapses under
@@ -36,9 +36,9 @@ submits work by writing to shared memory — zero syscalls.
 
 ---
 
-## epoll internals
+## epoll internals {#epoll-internals}
 
-### Setup
+### Setup {#setup}
 
 ```c
 /* Create an epoll instance. size arg is ignored since 2.6.8 but must be > 0 */
@@ -60,7 +60,7 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-### Kernel data structures
+### Kernel data structures {#kernel-data-structures}
 
 ```
 epoll instance (struct eventpoll)
@@ -77,7 +77,7 @@ epoll instance (struct eventpoll)
 `epoll_wait` cost is O(1) in the number of *active* fds, regardless of how
 many fds are registered. That is the key insight epoll contributed.
 
-### Edge-triggered vs level-triggered
+### Edge-triggered vs level-triggered {#edge-triggered-vs-level-triggered}
 
 - **Level-triggered (default):** `epoll_wait` returns an fd as long as data is
   available. Safe with standard blocking reads.
@@ -85,7 +85,7 @@ many fds are registered. That is the key insight epoll contributed.
   arrival). Userspace must drain the fd completely with non-blocking reads.
   Used to reduce spurious wakeups at the cost of more careful buffering.
 
-### EPOLLONESHOT
+### EPOLLONESHOT {#epolloneshot}
 
 `EPOLLONESHOT` disables the fd after one event. Userspace must re-arm with
 `EPOLL_CTL_MOD` after processing. Common pattern in multi-threaded servers to
@@ -98,9 +98,9 @@ epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* re-arm after handling */
 
 ---
 
-## Where epoll falls short
+## Where epoll falls short {#where-epoll-falls-short}
 
-### Regular files
+### Regular files {#regular-files}
 
 ```c
 /* This always returns immediately — regular files are always "ready" */
@@ -114,7 +114,7 @@ The kernel's poll implementation for regular files unconditionally returns
 done." The actual I/O happens synchronously in the `read()` call after the
 epoll event.
 
-### Syscall cost per batch
+### Syscall cost per batch {#syscall-cost-per-batch}
 
 Every I/O round-trip involves at minimum:
 
@@ -129,25 +129,25 @@ At 100 K RPS, that is 400 K+ syscalls/second. Each syscall crosses the
 user/kernel boundary, flushes the TLB partial state, and on systems with
 mitigations (KPTI, Retpoline) costs 100–300 ns.
 
-### No submission batching
+### No submission batching {#no-submission-batching}
 
 `epoll_ctl` takes one fd at a time. Registering 1000 fds on startup means
 1000 individual syscalls.
 
-### No integrated timers
+### No integrated timers {#no-integrated-timers}
 
 Timeouts require a separate `timerfd_create` + `EPOLL_CTL_ADD` or careful
 use of the `epoll_wait` timeout argument — neither integrates cleanly into
 an operation-level deadline model.
 
-### No cancellation
+### No cancellation {#no-cancellation}
 
 There is no way to cancel a pending `epoll_wait` other than closing the fd or
 sending a signal.
 
 ---
 
-## io_uring's unified model
+## io_uring's unified model {#io_urings-unified-model}
 
 io_uring presents one ring for *all* asynchronous operations. The same
 submission path handles:
@@ -161,7 +161,7 @@ Other:    IORING_OP_CONNECT, IORING_OP_OPENAT, IORING_OP_CLOSE,
           IORING_OP_STATX, IORING_OP_SPLICE, IORING_OP_SEND_ZC
 ```
 
-### IORING_OP_POLL_ADD — replacing epoll_wait
+### IORING_OP_POLL_ADD — replacing epoll_wait {#ioringoppolladd-replacing-epollwait}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -180,7 +180,7 @@ io_uring_cqe_seen(&ring, cqe);
 
 One-shot by default. Re-submit the SQE to re-arm, just like `EPOLLONESHOT`.
 
-### IORING_POLL_ADD_MULTI — persistent fd monitoring
+### IORING_POLL_ADD_MULTI — persistent fd monitoring {#ioringpolladd_multi-persistent-fd-monitoring}
 
 ```c
 sqe->len = IORING_POLL_ADD_MULTI;  /* multishot: don't auto-cancel */
@@ -197,7 +197,7 @@ io_uring_prep_poll_remove(sqe, user_data_tag);
 io_uring_submit(&ring);
 ```
 
-### Pipelining: ACCEPT + RECV in one ring
+### Pipelining: ACCEPT + RECV in one ring {#pipelining-accept-recv-in-one-ring}
 
 With linked SQEs (`IOSQE_IO_LINK`), a chain of operations completes in order
 without returning to userspace between steps:
@@ -217,7 +217,7 @@ sqe->user_data = TAG_RECV;
 io_uring_submit(&ring);
 ```
 
-### File I/O without threads
+### File I/O without threads {#file-io-without-threads}
 
 ```c
 /* Regular file read — actually async, not O_NONBLOCK faking */
@@ -231,7 +231,7 @@ io_uring_submit(&ring);
 
 ---
 
-## Feature comparison
+## Feature comparison {#feature-comparison}
 
 | Feature | epoll | io_uring |
 |---------|-------|---------|
@@ -256,9 +256,9 @@ io_uring_submit(&ring);
 
 ---
 
-## Syscall overhead
+## Syscall overhead {#syscall-overhead}
 
-### epoll path (per request, echo server example)
+### epoll path (per request, echo server example) {#epoll-path-per-request-echo-server-example}
 
 ```
 Client sends data:
@@ -270,7 +270,7 @@ Client sends data:
 = 3–4 syscalls per request
 ```
 
-### io_uring path (without SQPOLL)
+### io_uring path (without SQPOLL) {#io_uring-path-without-sqpoll}
 
 ```
 Client sends data:
@@ -280,7 +280,7 @@ Client sends data:
 = 1 syscall per batch of N requests
 ```
 
-### io_uring path (with SQPOLL)
+### io_uring path (with SQPOLL) {#io_uring-path-with-sqpoll}
 
 ```
 Client sends data:
@@ -291,7 +291,7 @@ Client sends data:
 = 0 syscalls per request (while ring is active)
 ```
 
-### Numbers from the wild
+### Numbers from the wild {#numbers-from-the-wild}
 
 Benchmarks on high-connection workloads (sources: io_uring author talks,
 Cloudflare blog, Nginx io_uring experiments):
@@ -307,9 +307,9 @@ Cloudflare blog, Nginx io_uring experiments):
 
 ---
 
-## Side-by-side: echo server
+## Side-by-side: echo server {#side-by-side-echo-server}
 
-### epoll version
+### epoll version {#epoll-version}
 
 ```c
 #include <sys/epoll.h>
@@ -378,7 +378,7 @@ int main(void) {
 }
 ```
 
-### io_uring version
+### io_uring version {#io_uring-version}
 
 ```c
 #include <liburing.h>
@@ -495,9 +495,9 @@ Key differences between the two versions:
 
 ---
 
-## Migration patterns
+## Migration patterns {#migration-patterns}
 
-### Step 1: replace `epoll_wait` with CQE drain
+### Step 1: replace `epoll_wait` with CQE drain {#step-1-replace-epoll_wait-with-cqe-drain}
 
 ```c
 /* Before */
@@ -513,7 +513,7 @@ io_uring_for_each_cqe(&ring, head, cqe) {
 io_uring_cq_advance(&ring, count);  /* bulk-advance head */
 ```
 
-### Step 2: replace `epoll_ctl ADD` with `IORING_OP_POLL_ADD`
+### Step 2: replace `epoll_ctl ADD` with `IORING_OP_POLL_ADD` {#step-2-replace-epollctl-add-with-ioringoppolladd}
 
 ```c
 /* Before */
@@ -527,7 +527,7 @@ sqe->user_data = (uintptr_t)conn;
 /* batch with other SQEs; call io_uring_submit once */
 ```
 
-### Step 3: replace post-event `recv` with `IORING_OP_RECV`
+### Step 3: replace post-event `recv` with `IORING_OP_RECV` {#step-3-replace-post-event-recv-with-ioringoprecv}
 
 ```c
 /* Before (two-step: epoll says ready, then recv) */
@@ -541,7 +541,7 @@ sqe->user_data = TAG_RECV | ctx;
 /* result arrives as cqe->res, no separate recv() call */
 ```
 
-### Step 4: optionally enable SQPOLL
+### Step 4: optionally enable SQPOLL {#step-4-optionally-enable-sqpoll}
 
 ```c
 struct io_uring_params params = {
@@ -556,7 +556,7 @@ io_uring_queue_init_params(QUEUE_DEPTH, &ring, &params);
 Requires `CAP_SYS_NICE` on kernels < 5.11, or `IORING_SETUP_SQPOLL` + a
 privileged process. On 5.11+, unprivileged SQPOLL is allowed.
 
-### Incremental migration strategy
+### Incremental migration strategy {#incremental-migration-strategy}
 
 ```
 Phase 1: introduce ring alongside epoll
@@ -576,7 +576,7 @@ Phase 3: remove epoll entirely
 
 ---
 
-## When to keep epoll
+## When to keep epoll {#when-to-keep-epoll}
 
 **Portability is required.** epoll is Linux-only, but it has been around since
 2.5.44. If the codebase must also compile on FreeBSD, macOS, or OpenBSD —
@@ -621,7 +621,7 @@ been measured.
 
 ---
 
-## When io_uring wins
+## When io_uring wins {#when-io_uring-wins}
 
 **New high-performance network servers.** If starting from scratch and
 targeting Linux 5.10+, io_uring is the right default. The syscall savings
@@ -659,12 +659,12 @@ overhead between the thread pool and the event loop.
 
 ---
 
-## `io_uring_prep_poll_add` and `IORING_POLL_ADD_MULTI` in depth
+## `io_uring_prep_poll_add` and `IORING_POLL_ADD_MULTI` in depth {#iouringpreppolladd-and-ioringpolladd_multi-in-depth}
 
 For teams that want a minimal migration — "use io_uring as a better epoll" —
 `IORING_OP_POLL_ADD` is the entry point.
 
-### One-shot poll (epoll EPOLLONESHOT equivalent)
+### One-shot poll (epoll EPOLLONESHOT equivalent) {#one-shot-poll-epoll-epolloneshot-equivalent}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -683,7 +683,7 @@ io_uring_cqe_seen(&ring, cqe);
 /* Must re-submit to watch fd again (like EPOLLONESHOT + EPOLL_CTL_MOD) */
 ```
 
-### Multishot poll (epoll level-triggered equivalent)
+### Multishot poll (epoll level-triggered equivalent) {#multishot-poll-epoll-level-triggered-equivalent}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -705,7 +705,7 @@ io_uring_cqe_seen(&ring, cqe);
 kernel. When it is absent (cancelled, error, or `IORING_OP_POLL_REMOVE`), the
 fd is no longer watched.
 
-### Cancelling a multishot poll
+### Cancelling a multishot poll {#cancelling-a-multishot-poll}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -714,7 +714,7 @@ io_uring_submit(&ring);
 /* A CQE with res == 0 confirms cancellation */
 ```
 
-### poll mask reference
+### poll mask reference {#poll-mask-reference}
 
 ```c
 POLLIN      — data available to read          (EPOLLIN equivalent)
@@ -727,7 +727,7 @@ POLLPRI     — urgent / out-of-band data       (EPOLLPRI equivalent)
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
 - [io_uring Architecture and Rings](io-uring-arch.md) — SQ/CQ ring layout,
   SQE/CQE structs, submission and completion flows

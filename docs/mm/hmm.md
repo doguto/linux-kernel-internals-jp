@@ -1,8 +1,8 @@
-# HMM: Heterogeneous Memory Management
+# HMM: Heterogeneous Memory Management {#hmm-heterogeneous-memory-management}
 
 > Sharing virtual address spaces between CPU and GPU — struct page for device memory
 
-## The problem
+## The problem {#the-problem}
 
 Modern systems have GPUs and other accelerators with their own memory (VRAM). Applications want to use a single virtual address space across CPU and GPU:
 
@@ -19,7 +19,7 @@ With HMM (unified virtual address space):
   Kernel: tracks ownership and handles faults on both sides
 ```
 
-## HMM components
+## HMM components {#hmm-components}
 
 ```
 Application virtual address space
@@ -43,7 +43,7 @@ Application virtual address space
     └─────────────────────────────────────────────────┘
 ```
 
-## struct page for device memory
+## struct page for device memory {#struct-page-for-device-memory}
 
 HMM extends `struct page` to represent GPU/device memory through `ZONE_DEVICE`:
 
@@ -71,11 +71,11 @@ devm_memremap_pages(dev, &pgmap);
 /* Now: pfn_to_page(pfn) works for device memory pages */
 ```
 
-## mmu_interval_notifier: CPU→GPU page table synchronization
+## mmu_interval_notifier: CPU→GPU page table synchronization {#mmuintervalnotifier-cpugpu-page-table-synchronization}
 
 Drivers use `mmu_interval_notifier` (introduced Linux 5.5, became the sole API when the earlier `hmm_mirror` was removed in 5.10) to receive callbacks when a virtual address range's CPU page table changes:
 
-### mmu_interval_notifier (Linux 5.5+)
+### mmu_interval_notifier (Linux 5.5+) {#mmuintervalnotifier-linux-55}
 
 ```c
 /* Preferred modern API: no full mirror, just range notifications */
@@ -99,7 +99,7 @@ static bool gpu_invalidate_range(struct mmu_interval_notifier *mni,
 }
 ```
 
-## HMM range snapshot
+## HMM range snapshot {#hmm-range-snapshot}
 
 A driver uses `hmm_range_fault()` to snapshot the current CPU page table state for a range, getting the physical addresses (PFNs) the GPU should map:
 
@@ -150,7 +150,7 @@ retry:
 }
 ```
 
-## Device-private memory migration
+## Device-private memory migration {#device-private-memory-migration}
 
 For GPUs with private VRAM (not CPU-addressable), pages are migrated between system RAM and VRAM on demand:
 
@@ -209,7 +209,7 @@ static vm_fault_t my_gpu_migrate_to_ram(struct vm_fault *vmf)
 }
 ```
 
-## SVM (Shared Virtual Memory) in practice
+## SVM (Shared Virtual Memory) in practice {#svm-shared-virtual-memory-in-practice}
 
 CUDA and ROCm implement SVM using HMM:
 
@@ -226,7 +226,7 @@ cudaMemPrefetchAsync(ptr, size, cudaCpuDeviceId);  /* prefetch to CPU */
 cudaMemPrefetchAsync(ptr, size, 0);                /* prefetch to GPU 0 */
 ```
 
-## Observing HMM
+## Observing HMM {#observing-hmm}
 
 ```bash
 # Check if kernel has HMM support:
@@ -251,7 +251,7 @@ kprobe:hmm_range_fault {
 numastat -p <cuda_process>
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Memory Tiering](memory-tiering.md) — CXL and NUMA memory tiers
 - [IOMMU](../iommu/iommu-arch.md) — IOMMU for GPU DMA

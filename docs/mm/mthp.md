@@ -1,8 +1,8 @@
-# Multi-size THP (mTHP)
+# Multi-size THP (mTHP) {#multi-size-thp-mthp}
 
 > Sub-PMD transparent huge pages for workloads where 2MB is too much
 
-## The problem with classic 2MB THP
+## The problem with classic 2MB THP {#the-problem-with-classic-2mb-thp}
 
 Traditional THP allocates PMD-sized huge pages — 2MB on x86-64 with 4KB base pages (PMD_ORDER = 9, so 2^9 = 512 pages × 4KB). For large server workloads, this is ideal: fewer TLB entries, faster page fault servicing at scale. For everything else, 2MB is often the wrong granularity.
 
@@ -16,7 +16,7 @@ The kernel documentation for THP describes the tradeoff explicitly:
 
 > "Page faults are significantly reduced (by a factor of e.g. 4, 8, 16, etc), but latency spikes are much less prominent because the size of each page isn't as huge as the PMD-sized variant and there is less memory to clear in each page fault."
 
-## What mTHP is
+## What mTHP is {#what-mthp-is}
 
 Multi-size THP (mTHP), introduced in Linux 6.10, allows the kernel to back anonymous memory with huge pages at orders between 2 and PMD_ORDER−1 (inclusive). On x86-64 with 4KB base pages that is orders 2–8, corresponding to 16KB through 512KB.
 
@@ -35,7 +35,7 @@ Unlike classic PMD-sized THP (which uses a dedicated PMD-level page table entry)
 !!! note "mTHP is also available for shmem/tmpfs"
     File-backed mTHP support was added for tmpfs and shmem. The order range for file-backed pages is governed by `THP_ORDERS_ALL_FILE_DEFAULT`, which covers up to `MAX_PAGECACHE_ORDER`. Per-size controls are surfaced in sysfs under the same `hugepages-NkB/` directories.
 
-## ARM64 contiguous PTE hardware
+## ARM64 contiguous PTE hardware {#arm64-contiguous-pte-hardware}
 
 On ARM64, PTE-mapped huge pages become genuinely efficient because the architecture supports a **contiguous PTE** hardware feature. When a naturally-aligned run of PTEs point to physically contiguous pages, the hardware can collapse those entries into a single TLB entry (or a small number of entries), reducing TLB pressure even without a PMD-level mapping.
 
@@ -46,7 +46,7 @@ The kernel uses `contpte_try_fold()` and `contpte_try_unfold()` (in `arch/arm64/
 !!! tip "This is why mTHP is particularly valuable on ARM64"
     The 64KB contpte size aligns with the order-4 mTHP size. Mobile and embedded ARM64 workloads with moderate working sets can get near-PMD TLB efficiency without the fragmentation and fault-latency cost of 2MB pages.
 
-## The sysfs interface
+## The sysfs interface {#the-sysfs-interface}
 
 mTHP is controlled entirely at runtime through sysfs. No kernel rebuild is needed beyond having `CONFIG_TRANSPARENT_HUGEPAGE` enabled.
 
@@ -60,7 +60,7 @@ The kernel creates one directory for each supported order. For example, on a 4KB
 
 The directory name is computed at boot from `(PAGE_SIZE << order) / 1024` as a kB value.
 
-### The `enabled` attribute (anonymous)
+### The `enabled` attribute (anonymous) {#the-enabled-attribute-anonymous}
 
 ```
 /sys/kernel/mm/transparent_hugepage/hugepages-<size>kB/enabled
@@ -86,11 +86,11 @@ The three global bitmasks that back these per-size flags are `huge_anon_orders_a
 
 **Default at boot:** PMD-sized THP defaults to `inherit`. All other sizes default to `never`. The first time you want mTHP to be active you must explicitly write `always` or `madvise` to the smaller-size `enabled` files.
 
-### The `enabled` attribute (shmem/file-backed)
+### The `enabled` attribute (shmem/file-backed) {#the-enabled-attribute-shmemfile-backed}
 
 For file-backed orders, the attribute is named `enabled` inside the same per-size directory but routed through the shmem subsystem (`thpsize_shmem_enabled_attr`). shmem supports additional values (`within_size`, `advise`) beyond what anonymous THP uses.
 
-### Boot-time configuration
+### Boot-time configuration {#boot-time-configuration}
 
 You can configure mTHP sizes from the kernel command line using the `thp_anon=` parameter:
 
@@ -100,7 +100,7 @@ thp_anon=16K-64K:always;128K,512K:inherit;256K:madvise;1M-2M:never
 
 If `thp_anon=` is specified at least once, any size not mentioned defaults to `never`.
 
-### Per-size statistics
+### Per-size statistics {#per-size-statistics}
 
 Each per-size directory also contains a `stats/` subdirectory:
 
@@ -124,7 +124,7 @@ These counters are tracked per-CPU in `struct mthp_stat` (declared in `include/l
 !!! note "Counters only track orders 2..PMD_ORDER"
     The `mod_mthp_stat()` helper silently drops events for `order <= 0` or `order > PMD_ORDER`. You will not see per-size stats for PMD-order pages in the mTHP `stats/` directory — PMD-order is tracked separately by the classic THP counters in `/proc/vmstat`.
 
-## Allocation paths that support mTHP
+## Allocation paths that support mTHP {#allocation-paths-that-support-mthp}
 
 **Anonymous memory (faults):** The primary supported path from 6.10 onward. When a process faults on an anonymous page, `__handle_mm_fault()` calls into the THP code, which uses `thp_vma_allowable_orders()` to determine which orders are eligible for the VMA at the faulting address. The fault handler then attempts to allocate the largest eligible order that succeeds.
 
@@ -134,7 +134,7 @@ These counters are tracked per-CPU in `struct mthp_stat` (declared in `include/l
 
 **shmem/tmpfs:** File-backed mTHP is supported for the internal shmem mount (used by `memfd_create`, shared memory) and for tmpfs mounts. Ordinary tmpfs uses all available sizes without fine-grained control; the internal shmem mount has per-size controls.
 
-## Impact on fragmentation
+## Impact on fragmentation {#impact-on-fragmentation}
 
 Classic 2MB THP either succeeds in finding 512 contiguous pages or falls back to 4KB pages entirely. There is no middle ground. This creates a cliff: a lightly-fragmented system gets good huge-page coverage; a moderately fragmented system gets none.
 
@@ -142,7 +142,7 @@ mTHP fills the middle ground. Order-4 (64KB) requires only 16 contiguous pages. 
 
 The fallback logic is explicit: if the preferred order cannot be satisfied, `anon_fault_fallback` is incremented and the allocator tries the next smaller enabled order, eventually falling back to order-0 (a single 4KB page) if necessary.
 
-## Performance: when mTHP helps
+## Performance: when mTHP helps {#performance-when-mthp-helps}
 
 **Medium-sized allocations** that do not fill a full PMD are the primary beneficiary. A 128KB buffer allocated as a 2MB THP wastes 1.875MB. As mTHP at 128KB it has zero waste.
 
@@ -152,7 +152,7 @@ The fallback logic is explicit: if the preferred order cannot be satisfied, `ano
 
 **Fragmented systems** where 2MB THP would have a high `thp_fault_fallback` rate. Smaller orders have better allocation success rates.
 
-## Kernel configuration
+## Kernel configuration {#kernel-configuration}
 
 `CONFIG_TRANSPARENT_HUGEPAGE` is the only compile-time gate. mTHP does not have its own `Kconfig` symbol — it is part of the base THP implementation and controlled entirely through the per-size sysfs interface at runtime.
 
@@ -162,7 +162,7 @@ Sub-PMD THP behavior at sysfs is only available when both `CONFIG_TRANSPARENT_HU
     Writing `never` to every per-size `enabled` file does not prevent `madvise(MADV_COLLAPSE)` from working. `MADV_COLLAPSE` ignores these settings and forces PMD-sized collapse unconditionally. See the kernel documentation note:
     > "Setting 'never' in all sysfs THP controls does **not** disable Transparent Huge Pages globally."
 
-## Further reading
+## Further reading {#further-reading}
 
 - Commit [19eaf44954df](https://git.kernel.org/linus/19eaf44954df) — the Linux 6.10 merge commit introducing anonymous multi-size THP; the commit message and series cover the sysfs interface design, `THP_ORDERS_ALL_ANON` encoding, and the ARM64 contpte motivation
 - [LWN: Multi-size THP](https://lwn.net/Articles/937239/) — 2023 coverage of Ryan Roberts's mTHP patch series, explaining the fragmentation trade-offs and the ARM64 contiguous-PTE benefit

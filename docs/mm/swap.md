@@ -1,8 +1,8 @@
-# Swap
+# Swap {#swap}
 
 > Extending memory to disk
 
-## What Is Swap?
+## What Is Swap? {#what-is-swap}
 
 Swap allows the kernel to move infrequently used pages from RAM to disk, freeing memory for active use. When those pages are needed again, they're read back from swap.
 
@@ -28,9 +28,9 @@ Later, page accessed:
 └────────────────────────────────────────────┘
 ```
 
-## Swap Types
+## Swap Types {#swap-types}
 
-### Swap Partition
+### Swap Partition {#swap-partition}
 
 Dedicated disk partition for swap:
 
@@ -45,7 +45,7 @@ swapon --show
 # /dev/sda2 partition 8G   1.2G -2
 ```
 
-### Swap File
+### Swap File {#swap-file}
 
 Regular file used as swap:
 
@@ -77,7 +77,7 @@ fallocate -l 4G /swap/swapfile
 # ... then mkswap, swapon as usual
 ```
 
-### zswap (Compressed Swap Cache)
+### zswap (Compressed Swap Cache) {#zswap-compressed-swap-cache}
 
 Compresses pages before writing to disk, often avoiding disk I/O entirely:
 
@@ -104,7 +104,7 @@ echo 20 > /sys/module/zswap/parameters/max_pool_percent
 grep -r . /sys/kernel/debug/zswap/ 2>/dev/null
 ```
 
-### zram (Compressed RAM Disk)
+### zram (Compressed RAM Disk) {#zram-compressed-ram-disk}
 
 RAM-based block device with compression - swap without disk:
 
@@ -120,9 +120,9 @@ mkswap /dev/zram0
 swapon /dev/zram0 -p 100  # Higher priority than disk swap
 ```
 
-## Swap Architecture
+## Swap Architecture {#swap-architecture}
 
-### Swap Areas
+### Swap Areas {#swap-areas}
 
 Linux supports multiple swap areas with priorities:
 
@@ -136,7 +136,7 @@ cat /proc/swaps
 
 Higher priority swap is used first. Equal priorities are striped (round-robin).
 
-### Swap Cache
+### Swap Cache {#swap-cache}
 
 Recently swapped-in pages stay in swap cache briefly:
 
@@ -150,7 +150,7 @@ Swap cache:
 
 If a swapped-in page is swapped out again without modification, no disk write needed.
 
-### Swap Slots
+### Swap Slots {#swap-slots}
 
 Swap space is divided into slots (one per page):
 
@@ -161,9 +161,9 @@ swap_entry_t entry = swp_entry(type, offset);
 /* offset: slot within that area */
 ```
 
-## Swapping Mechanics
+## Swapping Mechanics {#swapping-mechanics}
 
-### Swap Out (Page to Disk)
+### Swap Out (Page to Disk) {#swap-out-page-to-disk}
 
 ```
 Memory pressure
@@ -184,7 +184,7 @@ Update PTE: present=0, swap_entry=slot
 Free page frame
 ```
 
-### Swap In (Disk to Page)
+### Swap In (Disk to Page) {#swap-in-disk-to-page}
 
 ```
 Process accesses swapped page
@@ -208,9 +208,9 @@ Update PTE: present=1, page_frame=new
 Resume process
 ```
 
-## Configuration
+## Configuration {#configuration}
 
-### Swappiness
+### Swappiness {#swappiness}
 
 Controls preference for swapping anonymous pages vs dropping file cache (see [vm sysctl docs](https://docs.kernel.org/admin-guide/sysctl/vm.html)):
 
@@ -227,7 +227,7 @@ echo 80 > /proc/sys/vm/swappiness
 # 0 = swap only to avoid OOM (not never)
 ```
 
-### Swap Priority
+### Swap Priority {#swap-priority}
 
 ```bash
 # Set priority when enabling
@@ -239,7 +239,7 @@ swapon -p -2 /dev/sda2      # Low priority (default)
 # /dev/sda2  none swap sw,pri=-2  0 0
 ```
 
-### Overcommit
+### Overcommit {#overcommit}
 
 See [vm sysctl docs](https://docs.kernel.org/admin-guide/sysctl/vm.html) for details:
 
@@ -255,9 +255,9 @@ cat /proc/sys/vm/overcommit_ratio
 # 50 (default) = swap + 50% of RAM
 ```
 
-## Monitoring
+## Monitoring {#monitoring}
 
-### Swap Usage
+### Swap Usage {#swap-usage}
 
 ```bash
 # Quick view
@@ -272,7 +272,7 @@ cat /proc/meminfo | grep -i swap
 # SwapFree:     7000000 kB
 ```
 
-### Swap Activity
+### Swap Activity {#swap-activity}
 
 ```bash
 # Pages swapped in/out
@@ -286,7 +286,7 @@ vmstat 1
 # so = swap out (KB/s)
 ```
 
-### Per-Process Swap
+### Per-Process Swap {#per-process-swap}
 
 ```bash
 # Swap usage per process
@@ -300,7 +300,7 @@ awk '/VmSwap/{sum+=$2} END {print sum" kB"}' /proc/*/status 2>/dev/null
 grep VmSwap /proc/*/status 2>/dev/null | sort -k2 -n | tail
 ```
 
-### zswap Statistics
+### zswap Statistics {#zswap-statistics}
 
 ```bash
 cat /sys/kernel/debug/zswap/pool_total_size     # Compressed size
@@ -308,33 +308,33 @@ cat /sys/kernel/debug/zswap/stored_pages        # Pages in zswap
 cat /sys/kernel/debug/zswap/written_back_pages  # Evicted to disk
 ```
 
-## Evolution
+## Evolution {#evolution}
 
-### Original Swap (v0.12, January 1992)
+### Original Swap (v0.12, January 1992) {#original-swap-v012-january-1992}
 
 Swap (virtual memory) was added in Linux 0.12 (early 1992). The [RELNOTES-0.12](https://www.kernel.org/pub/linux/kernel/Historic/old-versions/RELNOTES-0.12) describe the new `mkswap` program and swap activation. Linux 0.01 had no swap support.
 
-### Multiple Swap Areas (v1.3)
+### Multiple Swap Areas (v1.3) {#multiple-swap-areas-v13}
 
 Support for multiple swap partitions with priorities.
 
-### Swap Files (v2.6)
+### Swap Files (v2.6) {#swap-files-v26}
 
 Swap files became as efficient as partitions — the kernel maps file blocks to disk sectors at swapon time and performs direct block I/O, bypassing the filesystem entirely (see [swapping: swap space organization](swapping.md#swap-space-organization) for details).
 
-### zswap (v3.11, 2013)
+### zswap (v3.11, 2013) {#zswap-v311-2013}
 
 **Commit**: [2b2811178e85](https://git.kernel.org/linus/2b2811178e85) ("zswap: add to mm/") | [LKML](https://lore.kernel.org/lkml/1361397888-14863-1-git-send-email-sjenning@linux.vnet.ibm.com/)
 
 Compressed swap cache to reduce disk I/O.
 
-### zram Swap (v3.14, 2014)
+### zram Swap (v3.14, 2014) {#zram-swap-v314-2014}
 
 **Commit**: [cd67e10ac699](https://git.kernel.org/linus/cd67e10ac699) ("zram: promote zram from staging")
 
 zram moved from staging to mainline, enabling diskless swap.
 
-### THP Swap (v4.13, 2017)
+### THP Swap (v4.13, 2017) {#thp-swap-v413-2017}
 
 **Commit**: [38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8) ("mm, THP, swap: delay splitting THP during swap out") | [LKML](https://lore.kernel.org/lkml/20170724051840.2309-1-ying.huang@intel.com/)
 
@@ -342,13 +342,13 @@ zram moved from staging to mainline, enabling diskless swap.
 
 Transparent Huge Pages can now be swapped without splitting first.
 
-### Swap-over-NFS (Experimental)
+### Swap-over-NFS (Experimental) {#swap-over-nfs-experimental}
 
 Work ongoing to allow swapping to network storage for diskless systems.
 
-## Swap vs No Swap
+## Swap vs No Swap {#swap-vs-no-swap}
 
-### Arguments for Swap
+### Arguments for Swap {#arguments-for-swap}
 
 | Benefit | Explanation |
 |---------|-------------|
@@ -357,7 +357,7 @@ Work ongoing to allow swapping to network storage for diskless systems.
 | Idle page eviction | Unused pages can be moved out |
 | Overcommit safety | More headroom for memory spikes |
 
-### Arguments Against Swap
+### Arguments Against Swap {#arguments-against-swap}
 
 | Concern | Explanation |
 |---------|-------------|
@@ -366,7 +366,7 @@ Work ongoing to allow swapping to network storage for diskless systems.
 | Thrashing | Heavy swap = system unusable |
 | Memory hiding | Masks memory leaks |
 
-### Recommendation
+### Recommendation {#recommendation}
 
 Most systems benefit from some swap. The kernel itself has no sizing recommendation — this is a distribution-level decision. [Red Hat's RHEL 9 guide](https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/9/html/managing_storage_devices/getting-started-with-swap_managing-storage-devices) is a commonly referenced set of guidelines:
 
@@ -379,9 +379,9 @@ Most systems benefit from some swap. The kernel itself has no sizing recommendat
 
 Adding zswap on top reduces disk I/O significantly. Embedded systems often use no swap due to limited storage and predictable workloads.
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Swap Thrashing
+### Swap Thrashing {#swap-thrashing}
 
 Constant swapping makes system unusable.
 
@@ -394,7 +394,7 @@ Constant swapping makes system unusable.
 - Lower swappiness
 - Kill memory-hungry processes
 
-### Swap Full
+### Swap Full {#swap-full}
 
 No swap space available.
 
@@ -406,7 +406,7 @@ No swap space available.
 - Enable zswap/zram
 - Investigate memory usage
 
-### SSD Wear
+### SSD Wear {#ssd-wear}
 
 Excessive swap writes wearing SSD.
 
@@ -416,9 +416,9 @@ Excessive swap writes wearing SSD.
 - Reduce swappiness
 - Add RAM
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -427,17 +427,17 @@ Excessive swap writes wearing SSD.
 | [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | Compressed swap cache |
 | [`drivers/block/zram/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/block/zram) | zram implementation |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html)
 
-### Related
+### Related {#related}
 
 - [reclaim](reclaim.md) - When swap is triggered
 - [page-cache](page-cache.md) - File pages vs anonymous pages
 - [mmap](mmap.md) - Anonymous memory that gets swapped
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/swap_state.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) — swap cache implementation: adding, looking up, and invalidating pages in the swap cache
 - [mm/swapfile.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swapfile.c) — swap area management: `swapon`/`swapoff`, slot allocation, priority handling, and the swap map

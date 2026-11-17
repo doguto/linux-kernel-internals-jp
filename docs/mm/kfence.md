@@ -1,16 +1,16 @@
-# KFENCE (Kernel Electric Fence)
+# KFENCE (Kernel Electric Fence) {#kfence-kernel-electric-fence}
 
 > Low-overhead sampling-based heap bug detection for production kernels
 
-## What Is KFENCE?
+## What Is KFENCE? {#what-is-kfence}
 
 KFENCE is a lightweight memory error detector that catches heap out-of-bounds accesses, use-after-free bugs, and invalid-free errors in the kernel. Unlike full-blown sanitizers that instrument every memory access, KFENCE uses a **sampling-based** approach: it only protects a small fraction of allocations at any time, relying on statistical probability to catch bugs over hours or days of uptime.
 
 The key insight is that bugs occurring frequently in production will eventually hit a KFENCE-protected allocation, given enough time. The fraction of protected allocations depends on the system's allocation rate relative to the sampling interval. This makes KFENCE practical for always-on deployment where KASAN would be prohibitively expensive.
 
-## Why KFENCE Exists
+## Why KFENCE Exists {#why-kfence-exists}
 
-### The Gap Between Testing and Production
+### The Gap Between Testing and Production {#the-gap-between-testing-and-production}
 
 Before KFENCE, kernel developers faced a dilemma:
 
@@ -22,7 +22,7 @@ Before KFENCE, kernel developers faced a dilemma:
 
 Many heap bugs only manifest under real production workloads -- specific timing, memory pressure, or access patterns that are hard to reproduce in test environments. KFENCE fills this gap: it runs in production with near-zero overhead, catching bugs that would otherwise go undetected until they cause data corruption or crashes.
 
-### Real-World Motivation
+### Real-World Motivation {#real-world-motivation}
 
 As described in the [KFENCE design document](https://docs.kernel.org/dev-tools/kfence.html), the motivation was:
 
@@ -30,7 +30,7 @@ As described in the [KFENCE design document](https://docs.kernel.org/dev-tools/k
 2. Full sanitizer overhead was unacceptable for production fleets
 3. Even a low sampling rate catches high-frequency bugs quickly
 
-## How It Differs from KASAN
+## How It Differs from KASAN {#how-it-differs-from-kasan}
 
 ```
 KASAN (always-on):
@@ -57,9 +57,9 @@ KFENCE (sampling):
 | Coverage | All allocations | Small rotating subset |
 | Configuration | Compile-time only | Runtime tunable via sysfs |
 
-## How It Works
+## How It Works {#how-it-works}
 
-### The Object Pool
+### The Object Pool {#the-object-pool}
 
 KFENCE pre-allocates a fixed pool of memory at boot time. By default, this pool holds space for 255 objects. The pool is laid out with **guard pages** between every object slot:
 
@@ -82,7 +82,7 @@ Each object slot is a full page (4KB on x86), but the actual object is placed at
 
 KFENCE alternates alignment to catch both left and right overflows.
 
-### The Sampling Mechanism
+### The Sampling Mechanism {#the-sampling-mechanism}
 
 KFENCE does not intercept every `kmalloc()` or `kmem_cache_alloc()` call. Instead, it uses a **timer-based sampling interval**:
 
@@ -104,7 +104,7 @@ Time →
 
 This approach ensures near-zero overhead during normal operation. The static branch (`static_branch_unlikely`) compiles to a NOP in the fast path, meaning zero cost for the 99.99%+ of allocations that are not sampled.
 
-### Detecting Bugs
+### Detecting Bugs {#detecting-bugs}
 
 When a KFENCE-protected allocation is misused, the hardware MMU does the detection:
 
@@ -114,7 +114,7 @@ When a KFENCE-protected allocation is misused, the hardware MMU does the detecti
 
 **Invalid free**: When `kfree()` is called on a KFENCE address, KFENCE validates the pointer. Double-frees and invalid pointers are caught and reported.
 
-## What a KFENCE Report Looks Like
+## What a KFENCE Report Looks Like {#what-a-kfence-report-looks-like}
 
 When KFENCE detects a bug, it prints a detailed report to the kernel log. Here is an annotated example of an out-of-bounds write:
 
@@ -170,9 +170,9 @@ freed by task 789 on cpu 1 at 19.200s:                            ← Free stack
 
 These reports provide enough information to diagnose the root cause: you can see exactly what object was involved, how big it was, which slab cache it came from, and the full call stacks for allocation, free, and the offending access.
 
-## Configuration
+## Configuration {#configuration}
 
-### Build-Time Options
+### Build-Time Options {#build-time-options}
 
 Enable KFENCE in your kernel config:
 
@@ -191,7 +191,7 @@ Optional build-time settings:
 | `CONFIG_KFENCE_NUM_OBJECTS` | 255 | Number of objects in the KFENCE pool |
 | `CONFIG_KFENCE_STRESS_TEST_FAULTS` | 0 | Inject faults for testing KFENCE itself |
 
-### Runtime Tuning
+### Runtime Tuning {#runtime-tuning}
 
 The sampling interval can be adjusted at runtime without rebooting:
 
@@ -209,7 +209,7 @@ echo 50 > /sys/module/kfence/parameters/sample_interval
 echo 0 > /sys/module/kfence/parameters/sample_interval
 ```
 
-### Boot Parameters
+### Boot Parameters {#boot-parameters}
 
 You can also set the interval at boot:
 
@@ -217,9 +217,9 @@ You can also set the interval at boot:
 kfence.sample_interval=200
 ```
 
-## Performance Characteristics
+## Performance Characteristics {#performance-characteristics}
 
-### Why It Is Safe for Production
+### Why It Is Safe for Production {#why-it-is-safe-for-production}
 
 KFENCE was designed from the ground up for production use:
 
@@ -238,13 +238,13 @@ KFENCE was designed from the ground up for production use:
 | Code size increase | Significant | None |
 | Production safe | No | Yes |
 
-### The Trade-off
+### The Trade-off {#the-trade-off}
 
 The cost of low overhead is **probabilistic detection**. KFENCE will not catch every bug immediately. A bug must hit a KFENCE-protected allocation to be detected. Detection time depends on the bug's frequency and the sampling interval — high-frequency bugs are caught faster, while rare bugs require more time.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Check if KFENCE Is Enabled
+### Check if KFENCE Is Enabled {#check-if-kfence-is-enabled}
 
 ```bash
 # Check kernel config
@@ -254,7 +254,7 @@ zcat /proc/config.gz 2>/dev/null | grep KFENCE || grep KFENCE /boot/config-$(una
 cat /sys/module/kfence/parameters/sample_interval
 ```
 
-### Monitor KFENCE Activity
+### Monitor KFENCE Activity {#monitor-kfence-activity}
 
 ```bash
 # KFENCE statistics are available via debugfs
@@ -269,7 +269,7 @@ cat /sys/kernel/debug/kfence/stats
 #   bugs found: 0
 ```
 
-### Trigger a Test Bug (in a VM)
+### Trigger a Test Bug (in a VM) {#trigger-a-test-bug-in-a-vm}
 
 !!! warning
     Only do this in a test VM or QEMU instance, never on a production system.
@@ -285,7 +285,7 @@ modprobe kfence_test
 ./tools/testing/kunit/kunit.py run kfence
 ```
 
-### Tuning for Your Workload
+### Tuning for Your Workload {#tuning-for-your-workload}
 
 ```bash
 # Start conservative (default 100ms)
@@ -298,9 +298,9 @@ echo 20 > /sys/module/kfence/parameters/sample_interval
 dmesg | grep -i kfence
 ```
 
-## History
+## History {#history}
 
-### v5.12: Introduction (2021)
+### v5.12: Introduction (2021) {#v512-introduction-2021}
 
 **Commits**:
 
@@ -318,11 +318,11 @@ The patch series went through extensive review on LKML: [KFENCE v7 patch series]
 
 **LWN coverage**: [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) provides an accessible overview of the design rationale.
 
-### v5.17: Improved Reporting and Coverage
+### v5.17: Improved Reporting and Coverage {#v517-improved-reporting-and-coverage}
 
 **Commit**: [58f116052668](https://git.kernel.org/linus/58f116052668) ("kfence: track memcache for allocations not covered by a slab cache")
 
-### v5.18: Deferrable Timer Support
+### v5.18: Deferrable Timer Support {#v518-deferrable-timer-support}
 
 **Commit**: [737b6a10ac19](https://git.kernel.org/linus/737b6a10ac19) ("kfence: allow use of a deferrable timer")
 
@@ -330,7 +330,7 @@ The patch series went through extensive review on LKML: [KFENCE v7 patch series]
 
 Added a deferrable timer option to reduce overhead on systems where power consumption matters. The deferrable timer does not wake idle CPUs, making KFENCE friendlier to mobile and embedded systems.
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -340,39 +340,39 @@ Added a deferrable timer option to reduce overhead on systems where power consum
 | [`include/linux/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kfence.h) | Public API and inline hooks |
 | [`mm/kfence/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/kfence.h) | Internal header with pool metadata structures |
 
-## References
+## References {#references}
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [KFENCE official documentation](https://docs.kernel.org/dev-tools/kfence.html) -- comprehensive reference for configuration and design
 
-### LWN Articles
+### LWN Articles {#lwn-articles}
 
 - [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) -- overview article from the initial submission
 
-### LKML Discussions
+### LKML Discussions {#lkml-discussions}
 
 - [KFENCE v7 patch series](https://lore.kernel.org/lkml/20201103175841.3495947-1-elver@google.com/) -- the final review series before merge
 - [KFENCE v1 RFC](https://lore.kernel.org/lkml/20200907134055.2878499-1-elver@google.com/) -- the original RFC with design discussion
 
-### Related
+### Related {#related}
 
 - [slab](slab.md) -- KFENCE hooks into the slab allocator (SLUB/SLAB) to intercept allocations
 - [vmalloc](vmalloc.md) -- KFENCE pool uses page-level protection similar to vmalloc guard pages
 - [oom](oom.md) -- KFENCE's fixed pool size means it does not contribute to OOM pressure
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation_1}
 
 - `Documentation/dev-tools/kfence.rst` — design rationale, configuration options, and tuning guidance for the sampling interval and pool size
 - [mm/kfence/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence) — full KFENCE implementation: pool allocation, guard page management, sampling timer, and report generation
 
-### LWN articles
+### LWN articles {#lwn-articles_1}
 
 - [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — Marco Elver's overview of the design rationale and production deployment model (2021)
 
-### Related docs
+### Related docs {#related-docs}
 
 - [kasan.md](kasan.md) — KASAN instruments every allocation; KFENCE complements it by covering production workloads KASAN cannot run on
 - [kmemleak.md](kmemleak.md) — detects memory leaks; combine with KFENCE to cover both access bugs and leaked allocations

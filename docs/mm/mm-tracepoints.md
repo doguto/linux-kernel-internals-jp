@@ -1,4 +1,4 @@
-# Memory Subsystem Tracepoints
+# Memory Subsystem Tracepoints {#memory-subsystem-tracepoints}
 
 > Runtime tracing of kernel memory events with perf, ftrace, and BPF
 
@@ -6,9 +6,9 @@ The kernel's memory management subsystem exposes dozens of tracepoints that let 
 
 This reference covers the tracepoints grouped by category, their available fields, and practical diagnostic examples using ftrace, `perf`, and BPF (via `bpftrace`).
 
-## Prerequisites and General Usage
+## Prerequisites and General Usage {#prerequisites-and-general-usage}
 
-### Finding Available Tracepoints
+### Finding Available Tracepoints {#finding-available-tracepoints}
 
 ```bash
 # List all mm-related tracepoints
@@ -21,7 +21,7 @@ ls /sys/kernel/debug/tracing/events/huge_memory/
 perf list 'mm:*' 'kmem:*' 'vmscan:*' 'compaction:*' 2>/dev/null
 ```
 
-### Enabling with ftrace
+### Enabling with ftrace {#enabling-with-ftrace}
 
 ```bash
 # Enable a single tracepoint
@@ -41,7 +41,7 @@ echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 echo > /sys/kernel/debug/tracing/trace   # clear the buffer
 ```
 
-### Enabling with perf
+### Enabling with perf {#enabling-with-perf}
 
 ```bash
 # Record mm tracepoints for 10 seconds
@@ -52,7 +52,7 @@ perf script
 perf stat -e 'kmem:mm_page_alloc,kmem:mm_page_free' -a -- sleep 5
 ```
 
-### Enabling with bpftrace
+### Enabling with bpftrace {#enabling-with-bpftrace}
 
 ```bash
 # bpftrace uses the same tracepoint names
@@ -61,11 +61,11 @@ bpftrace -e 'tracepoint:kmem:mm_page_alloc { @[comm] = count(); }'
 
 ---
 
-## Page Allocation Tracepoints
+## Page Allocation Tracepoints {#page-allocation-tracepoints}
 
 **Source**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
-### mm_page_alloc
+### mm_page_alloc {#mmpagealloc}
 
 Fires whenever the page allocator (`__alloc_pages()` in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)) successfully returns a page or compound page.
 
@@ -104,7 +104,7 @@ interval:s:5 {
 }'
 ```
 
-### mm_page_free
+### mm_page_free {#mmpagefree}
 
 Fires when a page (or compound page) is returned to the page allocator via `free_pages()` / `__free_pages()`.
 
@@ -122,7 +122,7 @@ Fires when a page (or compound page) is returned to the page allocator via `free
 perf stat -e kmem:mm_page_alloc,kmem:mm_page_free -a -- sleep 30
 ```
 
-### mm_page_alloc_zone_locked
+### mm_page_alloc_zone_locked {#mmpagealloczonelocked}
 
 Fires when the page allocator falls back to the zone lock path — typically when the per-CPU page set (PCP) is empty and must be refilled from the zone's free lists.
 
@@ -136,7 +136,7 @@ Fires when the page allocator falls back to the zone lock path — typically whe
 
 **Diagnostic use**: Frequent `mm_page_alloc_zone_locked` events relative to `mm_page_alloc` mean the PCP lists are frequently being exhausted. This can happen under allocation bursts or if `vm.percpu_pagelist_high_fraction` is set too conservatively.
 
-### mm_page_alloc_extfrag
+### mm_page_alloc_extfrag {#mmpagealloc_extfrag}
 
 Fires when the allocator satisfies a request by **stealing** pages from a different migratetype freelist. This is the main indicator of fragmentation.
 
@@ -155,13 +155,13 @@ Fires when the allocator satisfies a request by **stealing** pages from a differ
 
 ---
 
-## Page Reclaim Tracepoints
+## Page Reclaim Tracepoints {#page-reclaim-tracepoints}
 
 **Source**: [`include/trace/events/vmscan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h)
 
 These tracepoints cover both background reclaim (kswapd) and synchronous direct reclaim, which blocks the allocating process.
 
-### mm_vmscan_kswapd_wake
+### mm_vmscan_kswapd_wake {#mmvmscankswapd_wake}
 
 Fires when `kswapd` is woken up to begin background page reclaim.
 
@@ -184,7 +184,7 @@ tracepoint:vmscan:mm_vmscan_kswapd_wake {
 interval:s:1 { print(@); clear(@); }'
 ```
 
-### mm_vmscan_kswapd_sleep
+### mm_vmscan_kswapd_sleep {#mmvmscankswapd_sleep}
 
 Fires when kswapd goes back to sleep after reclaiming enough memory.
 
@@ -192,7 +192,7 @@ Fires when kswapd goes back to sleep after reclaiming enough memory.
 
 **Diagnostic use**: Time between `mm_vmscan_kswapd_wake` and `mm_vmscan_kswapd_sleep` gives the duration of each reclaim cycle.
 
-### mm_vmscan_direct_reclaim_begin / mm_vmscan_direct_reclaim_end
+### mm_vmscan_direct_reclaim_begin / mm_vmscan_direct_reclaim_end {#mmvmscandirectreclaimbegin-mmvmscandirectreclaimend}
 
 Fires when an allocation triggers **direct reclaim** — the allocating task itself must reclaim pages before it can proceed. Direct reclaim causes allocation latency visible to applications.
 
@@ -224,7 +224,7 @@ tracepoint:vmscan:mm_vmscan_direct_reclaim_end /@start[tid]/ {
 interval:s:10 { print(@latency_ns); }'
 ```
 
-### mm_vmscan_lru_isolate
+### mm_vmscan_lru_isolate {#mmvmscanlru_isolate}
 
 Fires when pages are isolated from the LRU list for reclaim consideration.
 
@@ -242,7 +242,7 @@ Fires when pages are isolated from the LRU list for reclaim consideration.
 
 **Diagnostic use**: A high `nr_skipped` / `nr_taken` ratio means many pages are temporarily busy (under writeback, locked, etc.) and cannot be reclaimed. This can cause reclaim to stall.
 
-### mm_vmscan_lru_shrink_inactive
+### mm_vmscan_lru_shrink_inactive {#mmvmscanlrushrinkinactive}
 
 Fires when the inactive LRU list is shrunk (pages are being reclaimed or moved to the active list after reference check).
 
@@ -265,7 +265,7 @@ Fires when the inactive LRU list is shrunk (pages are being reclaimed or moved t
 
 **Diagnostic use**: A large `nr_dirty` combined with low `nr_reclaimed` means reclaim is hitting dirty pages and having to wait for writeback. This is a common source of reclaim latency. The `priority` field (from 12 at start down to 0 at desperation) shows how aggressively the kernel is trying.
 
-### mm_vmscan_write_folio
+### mm_vmscan_write_folio {#mmvmscanwrite_folio}
 
 !!! note "Renamed in recent kernels"
     This tracepoint was originally called `mm_vmscan_writepage` and was renamed to `mm_vmscan_write_folio` during the folio conversion. Check `/sys/kernel/debug/tracing/events/vmscan/` on your running kernel for the exact name.
@@ -283,11 +283,11 @@ Fires when the reclaim path decides to write a dirty page/folio to swap or backi
 
 ---
 
-## OOM Tracepoints
+## OOM Tracepoints {#oom-tracepoints}
 
 **Source**: [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h)
 
-### oom_score_adj_update
+### oom_score_adj_update {#oomscoreadj_update}
 
 Fires when a process's `oom_score_adj` value is changed (via `/proc/PID/oom_score_adj`).
 
@@ -301,7 +301,7 @@ Fires when a process's `oom_score_adj` value is changed (via `/proc/PID/oom_scor
 
 **Diagnostic use**: Audit which processes are adjusting their OOM scores, and when. A process repeatedly setting itself to -1000 (fully protected) as it starts can leave the system without viable OOM victims.
 
-### mark_victim
+### mark_victim {#mark_victim}
 
 Fires when the OOM killer selects a process to kill.
 
@@ -327,7 +327,7 @@ For the full OOM debugging workflow, see [OOM Debugging](oom-debugging.md).
 
 ---
 
-## Page Fault Tracepoints
+## Page Fault Tracepoints {#page-fault-tracepoints}
 
 The kernel does not expose generic mm-level page fault tracepoints. Page fault observation is architecture-specific:
 
@@ -347,11 +347,11 @@ For page fault analysis, `/proc/vmstat` counters (`pgfault`, `pgmajfault`) and p
 
 ---
 
-## Compaction Tracepoints
+## Compaction Tracepoints {#compaction-tracepoints}
 
 **Source**: [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h)
 
-### mm_compaction_begin / mm_compaction_end
+### mm_compaction_begin / mm_compaction_end {#mmcompactionbegin-mmcompactionend}
 
 Fires when a compaction pass starts and ends.
 
@@ -387,7 +387,7 @@ tracepoint:compaction:mm_compaction_end {
 interval:s:10 { print(@status); }'
 ```
 
-### mm_compaction_isolate_migratepages / mm_compaction_isolate_freepages
+### mm_compaction_isolate_migratepages / mm_compaction_isolate_freepages {#mmcompactionisolatemigratepages-mmcompactionisolatefreepages}
 
 Fires when pages are isolated for migration or as free targets during compaction.
 
@@ -402,7 +402,7 @@ Fires when pages are isolated for migration or as free targets during compaction
 
 **Diagnostic use**: A low `nr_taken / nr_scanned` ratio means most pages in the zone are pinned (unmovable) and cannot be compacted. This indicates fundamental fragmentation that compaction cannot resolve — consider [CMA](cma.md) or huge page reservation changes.
 
-### mm_compaction_migratepages
+### mm_compaction_migratepages {#mmcompactionmigratepages}
 
 Fires when isolated pages are actually migrated to new locations.
 
@@ -415,13 +415,13 @@ Fires when isolated pages are actually migrated to new locations.
 
 ---
 
-## Huge Page Tracepoints
+## Huge Page Tracepoints {#huge-page-tracepoints}
 
 **Source**: [`include/trace/events/huge_memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h)
 
 The available tracepoints cover khugepaged's collapse activity. Check `/sys/kernel/debug/tracing/events/huge_memory/` on your running kernel for the full list, as names evolve with folio and file-THP work.
 
-### mm_collapse_huge_page
+### mm_collapse_huge_page {#mmcollapsehuge_page}
 
 Fires when the khugepaged daemon finishes a collapse attempt (success or failure).
 
@@ -444,7 +444,7 @@ tracepoint:huge_memory:mm_collapse_huge_page {
 interval:s:60 { print(@); clear(@); }'
 ```
 
-### mm_collapse_huge_page_isolate
+### mm_collapse_huge_page_isolate {#mmcollapsehugepageisolate}
 
 Fires when pages are isolated from the LRU as part of a collapse attempt.
 
@@ -452,7 +452,7 @@ Fires when pages are isolated from the LRU as part of a collapse attempt.
 
 **Diagnostic use**: A non-zero `status` here means the isolation step itself failed — the pages were busy (under I/O, locked, etc.) and could not be moved.
 
-### mm_khugepaged_scan_pmd
+### mm_khugepaged_scan_pmd {#mmkhugepagedscan_pmd}
 
 Fires when khugepaged scans a PMD entry looking for collapse opportunities.
 
@@ -460,11 +460,11 @@ Fires when khugepaged scans a PMD entry looking for collapse opportunities.
 
 ---
 
-## Slab Tracepoints
+## Slab Tracepoints {#slab-tracepoints}
 
 **Source**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
-### kmem_cache_alloc
+### kmem_cache_alloc {#kmemcachealloc}
 
 Fires on every allocation from a named slab cache (`kmem_cache_alloc()`, `kmem_cache_alloc_node()`).
 
@@ -493,7 +493,7 @@ interval:s:10 {
 }'
 ```
 
-### kmem_cache_free
+### kmem_cache_free {#kmemcachefree}
 
 Fires on every slab object free (`kmem_cache_free()`).
 
@@ -517,7 +517,7 @@ interval:s:30 {
 }'
 ```
 
-### kmalloc / kfree
+### kmalloc / kfree {#kmalloc-kfree}
 
 **`kmalloc`** fires on `kmalloc()` / `kzalloc()` allocations (general-purpose slab).
 
@@ -551,9 +551,9 @@ interval:s:15 {
 
 ---
 
-## Practical Diagnostic Recipes
+## Practical Diagnostic Recipes {#practical-diagnostic-recipes}
 
-### Recipe 1: Is Memory Pressure Causing Application Latency?
+### Recipe 1: Is Memory Pressure Causing Application Latency? {#recipe-1-is-memory-pressure-causing-application-latency}
 
 Determine whether direct reclaim is adding latency to your process:
 
@@ -577,7 +577,7 @@ tracepoint:vmscan:mm_vmscan_direct_reclaim_end /@start[tid]/ {
 
 If you see your application's task name in the output with high latency values, memory pressure is directly adding latency to your workload.
 
-### Recipe 2: Finding the Source of Memory Growth
+### Recipe 2: Finding the Source of Memory Growth {#recipe-2-finding-the-source-of-memory-growth}
 
 Identify which code path is allocating the most memory:
 
@@ -595,7 +595,7 @@ interval:s:60 {
 
 Cross-reference with [KASAN](kasan.md) if the growth is unexpected — it may be a legitimate feature allocating memory, or it may be a leak.
 
-### Recipe 3: Diagnosing THP Collapse Failures
+### Recipe 3: Diagnosing THP Collapse Failures {#recipe-3-diagnosing-thp-collapse-failures}
 
 If you expect THP to be helping but are not seeing `AnonHugePages` grow in `/proc/meminfo`:
 
@@ -614,7 +614,7 @@ interval:s:30 {
 
 A `status` of 0 is success. Non-zero values map to `SCAN_*` enum values in `mm/khugepaged.c` — check the source for the current mapping (e.g., `SCAN_ALLOC_HUGE_PAGE_FAIL`, `SCAN_CGROUP_CHARGE_FAIL`). If collapses are consistently failing, also check `/sys/kernel/mm/transparent_hugepage/khugepaged/pages_collapsed` and `full_scans` for a longer-term view.
 
-### Recipe 4: Watching the OOM Killer
+### Recipe 4: Watching the OOM Killer {#recipe-4-watching-the-oom-killer}
 
 Set up a persistent monitor that logs every OOM kill with process details:
 
@@ -634,7 +634,7 @@ tracepoint:oom:mark_victim {
 
 See [OOM Debugging](oom-debugging.md) for the full investigation workflow after an OOM event.
 
-### Recipe 5: Compaction Health Check
+### Recipe 5: Compaction Health Check {#recipe-5-compaction-health-check}
 
 Determine whether compaction is keeping up with high-order allocation demand:
 
@@ -663,7 +663,7 @@ High `@ownership_stolen` combined with frequent `COMPACT_DEFERRED` results is a 
 
 ---
 
-## Tracepoint Quick Reference
+## Tracepoint Quick Reference {#tracepoint-quick-reference}
 
 | Category | Tracepoint | Key Use |
 |----------|-----------|---------|
@@ -689,7 +689,7 @@ High `@ownership_stolen` combined with frequent `COMPACT_DEFERRED` results is a 
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Description |
 |------|-------------|
@@ -704,9 +704,9 @@ High `@ownership_stolen` combined with frequent `COMPACT_DEFERRED` results is a 
 | [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Compaction — calls compaction trace events |
 | [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | khugepaged daemon — calls huge_memory trace events |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/trace/events/mmflags.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/mmflags.h) — GFP flag name strings (`gfp_flag_names[]`) used to decode `gfp_flags` fields in tracepoint output
 - [include/trace/events/kmem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h) — page allocator and slab tracepoint definitions
@@ -714,21 +714,21 @@ High `@ownership_stolen` combined with frequent `COMPACT_DEFERRED` results is a 
 - [include/trace/events/compaction.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h) — compaction tracepoint definitions
 - [include/trace/events/huge_memory.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h) — THP and khugepaged tracepoint definitions
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - [`Documentation/trace/ftrace.rst`](https://docs.kernel.org/trace/ftrace.html) — full reference for the ftrace infrastructure: ring buffer, filter syntax, and function tracing
 - [`Documentation/trace/tracepoints.rst`](https://docs.kernel.org/trace/tracepoints.html) — how tracepoints are defined with `TRACE_EVENT()` and how to add new ones
 - [`Documentation/trace/events.rst`](https://docs.kernel.org/trace/events.html) — enabling and filtering events via `/sys/kernel/debug/tracing/events/`
 - [`Documentation/bpf/index.rst`](https://docs.kernel.org/bpf/index.html) — BPF subsystem documentation including `tracepoint` program type
 
-### Related pages
+### Related pages {#related-pages}
 
 - [understanding-proc-vmstat.md](understanding-proc-vmstat.md) — aggregate counters that summarize what individual tracepoints observe
 - [oom-debugging.md](oom-debugging.md) — using `oom:mark_victim` and PSI together for post-OOM investigation
 - [why-is-my-process-slow.md](why-is-my-process-slow.md) — using `mm_vmscan_direct_reclaim_begin/end` to attribute latency to memory pressure
 - [kasan.md](kasan.md) — memory bug detection to pair with allocation tracing when hunting use-after-free
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: Tracepoints in the Linux kernel](https://lwn.net/Articles/379903/) — original introduction to the `TRACE_EVENT()` macro and the design philosophy behind static tracepoints
 - [LWN: Dynamic tracing with BPF](https://lwn.net/Articles/740157/) — using `bpftrace` and BCC to attach to kernel tracepoints with low overhead

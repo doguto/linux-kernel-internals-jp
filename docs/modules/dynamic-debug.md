@@ -1,8 +1,8 @@
-# Dynamic Debug
+# Dynamic Debug {#dynamic-debug}
 
 > pr_debug and dev_dbg: enabling kernel debug messages at runtime without recompilation
 
-## The problem with pr_debug
+## The problem with pr_debug {#the-problem-with-pr_debug}
 
 `pr_debug()` is controlled in two ways:
 
@@ -15,7 +15,7 @@ Without `CONFIG_DYNAMIC_DEBUG`, this is an all-or-nothing compile-time switch th
 
 Two Kconfig symbols are involved. `CONFIG_DYNAMIC_DEBUG=y` turns the feature on kernel-wide: it selects `CONFIG_DYNAMIC_DEBUG_CORE` *and* catalogs every `pr_debug()`/`dev_dbg()` call site in the build (which costs roughly 2% of kernel text). `CONFIG_DYNAMIC_DEBUG_CORE=y` on its own builds only the machinery — the control file and the query engine — and catalogs nothing. Individual modules then opt in by adding `ccflags-y += -DDYNAMIC_DEBUG_MODULE` to their Makefile; the macros in `include/linux/dynamic_debug.h` are gated on `CONFIG_DYNAMIC_DEBUG || (CONFIG_DYNAMIC_DEBUG_CORE && DYNAMIC_DEBUG_MODULE)`. This split exists for size-sensitive builds, such as embedded systems, that want dynamic debug for a handful of drivers but cannot afford the full catalog.
 
-## How it works
+## How it works {#how-it-works}
 
 For every `pr_debug()` and `dev_dbg()` call site in the kernel, the compiler emits:
 
@@ -26,7 +26,7 @@ Dynamic debug uses the jump label (static key) infrastructure (`CONFIG_JUMP_LABE
 
 The two union members are the reason a `key` is a union at all, and the control path and the call site read it differently. `ddebug_change()` always flips `dd_key_true`. The call site, by contrast, expands `DYNAMIC_DEBUG_BRANCH()`, which picks its member from whether the translation unit was compiled with `DEBUG` defined: without it — the normal case — the branch is `static_branch_unlikely(&descriptor.key.dd_key_false)`, initialized off, so the compiler lays the debug call out on the unlikely path; with `-DDEBUG` it becomes `static_branch_likely(&descriptor.key.dd_key_true)`, initialized on, so the site starts out printing and the fast path is the one that logs. Both members alias the same underlying key, so the control file toggles either build identically.
 
-## struct _ddebug
+## struct _ddebug {#struct-_ddebug}
 
 Defined in `include/linux/dynamic_debug.h`:
 
@@ -71,7 +71,7 @@ So a control command is matched in two nested loops. `ddebug_change()` takes `dd
 
 The class test comes first in that inner loop, and it is not optional: when the query has no `class` spec, `valid_class` defaults to `_DPRINTK_CLASS_DFLT`, and every site whose `class_id` differs is skipped. So an ordinary query never touches class'd call sites — including the `module mymodule +p` form below, which enables that module's unclassed sites only. Reaching a subsystem's classed sites (DRM's debug categories, say) always requires naming the class explicitly.
 
-## The control interface
+## The control interface {#the-control-interface}
 
 The control file is at `/sys/kernel/debug/dynamic_debug/control`. Writing a query string to it enables or disables matching call sites.
 
@@ -112,7 +112,7 @@ cat /sys/kernel/debug/dynamic_debug/control | grep mymodule
 grep "=p" /sys/kernel/debug/dynamic_debug/control
 ```
 
-### Query syntax
+### Query syntax {#query-syntax}
 
 A control string has the form:
 
@@ -147,7 +147,7 @@ Within a multi-query string, a query beginning with `#` is treated as a comment 
 
 The `flags-spec` is `+` (add), `-` (remove), or `=` (set exactly) followed by one or more flag letters.
 
-### Output flag letters
+### Output flag letters {#output-flag-letters}
 
 | Flag | Meaning |
 |------|---------|
@@ -163,7 +163,7 @@ The `flags-spec` is `+` (add), `-` (remove), or `=` (set exactly) followed by on
 The decorator flags (`t`, `m`, `f`, `s`, `l`, `d`) are added to the message
 prefix in that fixed order, regardless of the order you type them in the query. `d` is not a prefix decorator at all — it appends a `dump_stack()` call after the message, handled separately from `__dynamic_emit_prefix()`.
 
-## Boot-time enablement
+## Boot-time enablement {#boot-time-enablement}
 
 Some debug messages are needed before debugfs is mounted. Two boot-time mechanisms exist:
 
@@ -192,7 +192,7 @@ options mymodule dyndbg=+pt
 
 When several sources set `dyndbg` for the same module, modprobe applies them in order — `/etc/modprobe.d/*.conf` first, then `<module>.dyndbg` from the boot command line, then arguments passed to `modprobe` itself — with the last one winning.
 
-## Module integration
+## Module integration {#module-integration}
 
 When a module is loaded, `find_module_sections()` in `kernel/module/main.c` locates the module's `__dyndbg` (and `__dyndbg_classes`) sections and records them in `mod->dyndbg_info`:
 
@@ -227,7 +227,7 @@ The notifier block uses `.priority = 0` deliberately, so that jump labels — re
 
 If a `dyndbg` module parameter was passed at load time (e.g., `insmod mymodule.ko dyndbg=+p`), it is not a real module parameter — the module loader's `unknown_module_param_cb()` recognizes it specially and hands it to `ddebug_dyndbg_module_param_cb()`. This happens after the descriptors are registered and before `mod->init()` runs, so debug messages from the init function itself can be captured.
 
-## pr_debug vs dev_dbg
+## pr_debug vs dev_dbg {#prdebug-vs-devdbg}
 
 Both use the dynamic debug infrastructure and are controlled through the same interface.
 
@@ -241,7 +241,7 @@ dev_dbg(&pdev->dev, "DMA transfer complete, status=%#x\n", status);
 
 `dev_dbg()` is preferred in driver code because the device name in the output immediately identifies which hardware instance produced the message. Both are no-ops (NOPs) when disabled.
 
-## print_hex_dump_debug
+## print_hex_dump_debug {#printhexdump_debug}
 
 For bulk data, `print_hex_dump_debug()` dumps a buffer in hex + ASCII format and is also controlled by dynamic debug:
 
@@ -259,7 +259,7 @@ Hex-dump call sites are a partial exception to the flag rules above: for `print_
 
 Matching them with `format` works, but on the `prefix_str` argument rather than a real format string: the descriptor records `prefix_str` if it is a constant string, and the literal `hexdump` if it is built at runtime. So the call above is selected by `format "rx buf: "`.
 
-## Combining with ftrace for lightweight tracing
+## Combining with ftrace for lightweight tracing {#combining-with-ftrace-for-lightweight-tracing}
 
 Enable thread info (`+t`) in dynamic debug output and compare timestamps against ftrace's function graph tracer to correlate debug messages with kernel function calls — without writing a custom tracepoint:
 
@@ -279,7 +279,7 @@ cat /sys/kernel/debug/tracing/trace_pipe &
 
 A bare `echo mymodule > set_ftrace_filter` does *not* do this — it is read as a function-name glob. Since no function is likely to be named after the module, nothing matches, and `ftrace_process_regex()` turns a zero-match write into `-EINVAL`, so the shell reports `write error: Invalid argument` rather than silently ignoring it. (If some unrelated function does happen to share the name, the write succeeds and traces that function instead.) The `mod:` filter command takes a function glob before the module name, so `'*:mod:mymodule'` means "every function in `mymodule`", while `'e1000_tx*:mod:e1000'` narrows to a subset. Append with `>>` to add another module's functions, and prefix an entry with `!` to remove it.
 
-## Implementation: jump label patching
+## Implementation: jump label patching {#implementation-jump-label-patching}
 
 When a `_ddebug` entry's `p` flag is set, the kernel:
 
@@ -289,7 +289,7 @@ When a `_ddebug` entry's `p` flag is set, the kernel:
 
 The call site address and all metadata are stored directly in the `_ddebug` descriptor at compile time — no runtime ELF debug info lookup occurs. When disabled, `static_branch_disable()` causes `jump_label_update()` to patch the branch back to a NOP. Because the patch is applied by the jump label subsystem, it is safe with respect to concurrent execution on other CPUs.
 
-## Checking what is enabled
+## Checking what is enabled {#checking-what-is-enabled}
 
 ```bash
 # All registered call sites — shows =p for enabled, =_ for disabled
@@ -318,9 +318,9 @@ echo "file drivers/net/ethernet/intel/e1000/e1000_main.c:3573 +p" \
 
 `ddebug_parse_query()` splits the `:3573` tail off and reparses it as a one-line range, so this selects exactly the site the output line came from. The second column, `[module]function`, is display formatting rather than query syntax — it has to be retyped as separate `module` and `func` specs to be used in a query.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/dynamic_debug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dynamic_debug.h) — the `struct _ddebug` definition quoted above, the `_DPRINTK_FLAGS_*` bit definitions behind the flag letters, `DEFINE_DYNAMIC_DEBUG_METADATA()` / `DYNAMIC_DEBUG_BRANCH()` (the macros that emit the `__dyndbg` descriptor and the static branch), and `dynamic_hex_dump()`
 - [lib/dynamic_debug.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/dynamic_debug.c) — the whole runtime: `ddebug_change()` walks the matching call sites and flips `dp->key.dd_key_true` with `static_branch_enable()`/`static_branch_disable()`; `__dynamic_pr_debug()` and `__dynamic_dev_dbg()` build the decorated prefix; `struct ddebug_table` is the per-module registration record; `dynamic_debug_init_control()` creates both the debugfs and procfs control files
@@ -330,12 +330,12 @@ echo "file drivers/net/ethernet/intel/e1000/e1000_main.c:3573 +p" \
 - [commit `7deabd674988`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7deabd67498869640c937c9bd83472574b7dea0b) — "dyndbg: use the module notifier callbacks" (Jason Baron, March 2023, merged for v6.4): deleted the old `dynamic_debug_setup()`/`dynamic_debug_remove()` hooks from the module loader in favour of `ddebug_module_notify()`, and explains why the notifier priority must let jump labels initialize first
 - [commit `239a5791ffd5`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=239a5791ffd5559f51815df442c4dbbe7fc21ade) — "dynamic_debug: allow to work if debugfs is disabled" (Greg Kroah-Hartman, February 2020, merged for v5.7): the commit that added `/proc/dynamic_debug/control`
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`modprobe.d(5)`](https://man7.org/linux/man-pages/man5/modprobe.d.5.html) — the `options <modulename> <option>` directive used to make a per-module `dyndbg=` setting persistent across boots
 - [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — how module parameters from the command line, aliases, and config files are combined before reaching `unknown_module_param_cb()`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Writing and Loading Kernel Modules](module-basics.md) — where `pr_debug()`/`dev_dbg()` fit in the module author's logging toolkit
 - [Module Loading Internals](module-loading-internals.md) — `load_module()`, section parsing, and the `MODULE_STATE_COMING`/`MODULE_STATE_GOING` notifier chain that dynamic debug hooks
@@ -343,7 +343,7 @@ echo "file drivers/net/ethernet/intel/e1000/e1000_main.c:3573 +p" \
 - [printk: Kernel Logging Internals](../kernel/printk.md) — the log buffer and loglevel filtering that debug output still has to get past once a call site is enabled
 - [ftrace: Function Tracer](../tracing/ftrace.md) — the tracer paired with dynamic debug in the correlation recipe above
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [The dynamic debugging interface](https://lwn.net/Articles/434833/) — Jonathan Corbet, March 22, 2011: LWN's introduction to the feature, covering `pr_debug()`/`dev_dbg()`, the debugfs control file, and the query language
 - [dynamic debug](https://lwn.net/Articles/286191/) — Jason Baron's original June 2008 patch posting, with the problem statement (`dprintk`, `pr_debug`, `DEBUGP`, and a dozen incompatible ways to enable them) that motivated a single uniform interface
@@ -351,7 +351,7 @@ echo "file drivers/net/ethernet/intel/e1000/e1000_main.c:3573 +p" \
 - [Jump label](https://lwn.net/Articles/412072/) — Jonathan Corbet, October 27, 2010: the NOP-patching mechanism that makes a disabled dynamic debug call site free
 - [Jump label reworked](https://lwn.net/Articles/436041/) — Jonathan Corbet, March 30, 2011: the `static_branch()` API rework that eventually became the static-key interface `ddebug_change()` calls today
 
-### External
+### External {#external}
 
 - [Dynamic debug — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — the authoritative reference for the control file: the full match-spec grammar (`func`, `file`, `module`, `format`, `class`, `line`), wildcard and line-range rules, the complete flag list and the fixed order decorators are printed in, and the `;`-separated multi-query form
 - [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — the canonical `dyndbg[="val"]` and `<module>.dyndbg[="val"]` boot-parameter entries (the howto above adds the detail that a boot query must not exceed 1023 characters, and that a bare `dyndbg=` is only processed at boot while `<module>.dyndbg` is reprocessed when the module loads)

@@ -1,8 +1,8 @@
-# 32-bit Compat Syscalls
+# 32-bit Compat Syscalls {#32-bit-compat-syscalls}
 
 > Supporting 32-bit userspace on 64-bit kernels
 
-## Why compat exists
+## Why compat exists {#why-compat-exists}
 
 A 64-bit kernel can run 32-bit ELF binaries directly (via `CONFIG_IA32_EMULATION` on x86-64). The problem is that
 32-bit and 64-bit ABIs differ in ways that go beyond register width:
@@ -18,7 +18,7 @@ syscalls like `read()`, the difference is minor. For syscalls that pass structs 
 embedded pointers (like `sendmsg()`, `stat()`, `select()`), the kernel needs entirely separate handlers to
 translate the 32-bit layout into the kernel's internal representation.
 
-## The COMPAT_SYSCALL_DEFINE macro
+## The COMPAT_SYSCALL_DEFINE macro {#the-compatsyscalldefine-macro}
 
 Compat syscall handlers are defined with `COMPAT_SYSCALL_DEFINE`, which lives in `include/linux/compat.h`:
 
@@ -39,7 +39,7 @@ syscalls do.
 For syscalls where the argument types are identical at all widths (e.g., `close(int fd)`) the `SYSCALL_DEFINE`
 handler is reused directly; the compat table points to the same `__x64_sys_close`.
 
-## The compat syscall tables
+## The compat syscall tables {#the-compat-syscall-tables}
 
 On x86-64, 32-bit processes are dispatched through a separate table:
 
@@ -75,7 +75,7 @@ the same switch-based dispatch pattern the native 64-bit path uses (`x64_sys_cal
 only because `kernel/trace/trace_syscalls.c` needs a syscall-number-to-address table for tracing — it is not
 used for dispatch.
 
-## Key compat types
+## Key compat types {#key-compat-types}
 
 ```c
 /* include/asm-generic/compat.h (pulled in by each arch's asm/compat.h) */
@@ -100,7 +100,7 @@ struct old_timespec32 {
 `old_timespec32` aligns at 4 bytes rather than 8, matching the layout a 32-bit compiler would produce.
 This is the fundamental reason 32-bit `clock_gettime()` cannot share the 64-bit handler.
 
-## compat_ptr() and ptr_to_compat()
+## compat_ptr() and ptr_to_compat() {#compatptr-and-ptrto_compat}
 
 `compat_ptr()` converts a `compat_uptr_t` (u32) into a kernel `void __user *` by zero-extending:
 
@@ -124,7 +124,7 @@ static inline compat_uptr_t ptr_to_compat(void __user *uptr)
 }
 ```
 
-## in_compat_syscall()
+## in_compat_syscall() {#incompatsyscall}
 
 Code that needs to behave differently for 32-bit callers (e.g., to pick the right struct size) uses
 `in_compat_syscall()`. On x86, it isn't a single check but a three-level chain down to a per-syscall status
@@ -163,9 +163,9 @@ static inline bool in_compat_syscall(void)
 the VFS and networking stack so that a single in-kernel code path can serve both 32-bit and 64-bit callers
 where only minor differences exist.
 
-## Struct layout differences: compat_iovec and compat_stat
+## Struct layout differences: compat_iovec and compat_stat {#struct-layout-differences-compatiovec-and-compatstat}
 
-### compat_iovec
+### compat_iovec {#compat_iovec}
 
 ```c
 /* include/linux/compat.h */
@@ -184,7 +184,7 @@ struct iovec {
 An `iovec` array passed by a 32-bit process has 8 bytes per element; the 64-bit layout has 16 bytes per
 element. `readv()` and `writev()` must detect the compat case and iterate using `compat_iovec`.
 
-### compat_stat
+### compat_stat {#compat_stat}
 
 ```c
 /* arch/x86/include/asm/compat.h */
@@ -213,7 +213,7 @@ struct compat_stat {
 The native `struct stat` on x86-64 uses 64-bit `off_t` for `st_size` and 64-bit `time_t`. The kernel fills
 in both forms depending on which handler was called.
 
-## When compat is NOT needed
+## When compat is NOT needed {#when-compat-is-not-needed}
 
 Modern struct-based syscalls designed with portability in mind use explicit-width types (`__u64`, `__u32`,
 `__s64`) rather than `long` or pointer types in their UAPI structs. Because the struct layout is identical
@@ -231,7 +231,7 @@ struct open_how {
 A 32-bit process that passes `struct open_how` has the same binary layout as a 64-bit process. The single
 `sys_openat2` handler works for both. This is the recommended pattern for any new syscall.
 
-## compat_ioctl: driver-level compat
+## compat_ioctl: driver-level compat {#compat_ioctl-driver-level-compat}
 
 `ioctl()` is special because ioctl commands encode struct sizes, and many commands pass structs with
 architecture-dependent layouts. Drivers implement both:
@@ -275,14 +275,14 @@ static long my_compat_ioctl(struct file *file, unsigned int cmd,
 }
 ```
 
-## Practical example: compat_sys_read vs sys_read
+## Practical example: compat_sys_read vs sys_read {#practical-example-compatsysread-vs-sys_read}
 
 `read()` only passes a 32-bit pointer and a 32-bit count. On x86-64, the kernel handles this transparently:
 `ia32_sys_call()`'s `read` case dispatches straight to the native `sys_read` handler, because `compat_ptr()` of the
 32-bit buffer address produces the correct 64-bit user pointer, and `compat_size_t` (u32) fits in `size_t`.
 No separate compat handler is needed.
 
-## Practical example: compat_sys_sendmsg vs sys_sendmsg
+## Practical example: compat_sys_sendmsg vs sys_sendmsg {#practical-example-compatsyssendmsg-vs-sys_sendmsg}
 
 `sendmsg()` passes `struct msghdr __user *`, which contains an embedded `struct iovec __user *` and a
 `void __user *` for the control message. Because both are pointers, they differ in size between 32-bit and
@@ -313,7 +313,7 @@ it calls `get_compat_msghdr()`, which reads `struct compat_msghdr` (containing `
 reconstructs a native `struct msghdr` in kernel space before proceeding; on the native path it calls
 `copy_msghdr_from_user()` instead.
 
-## Detecting 32-bit processes
+## Detecting 32-bit processes {#detecting-32-bit-processes}
 
 ```bash
 # The ELF class shows 32-bit
@@ -327,7 +327,7 @@ file /proc/$(pidof myapp)/exe
 Inside the kernel, `task_pt_regs(task)->cs` is compared to `__USER32_CS` to determine the execution mode of
 a traced task.
 
-## The old compat_alloc_user_space() pattern — removed in Linux 5.15
+## The old compat_alloc_user_space() pattern — removed in Linux 5.15 {#the-old-compatallocuser_space-pattern-removed-in-linux-515}
 
 Older compat handlers used a different strategy from the shared-helper pattern above: build a native-layout
 struct in a scratch region carved out below the user's own stack pointer, then call the *native* syscall
@@ -352,7 +352,7 @@ parser), but it now `copy_from_user()`s that array into kernel space and dispatc
 internal helpers the native path uses (`__sys_bind()`, `__sys_connect()`, ...), translating pointer-sized
 arguments with `compat_ptr()` along the way — no user-stack scratch space involved.
 
-## Summary: when to write a compat handler
+## Summary: when to write a compat handler {#summary-when-to-write-a-compat-handler}
 
 | Situation | Action |
 |-----------|--------|
@@ -362,9 +362,9 @@ arguments with `compat_ptr()` along the way — no user-stack scratch space invo
 | Struct has embedded pointer or `time_t` | Write compat struct + compat handler |
 | Driver `ioctl` with pointer args | Implement `compat_ioctl` in `file_operations` |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compat.h) — `COMPAT_SYSCALL_DEFINEx()` macros, `compat_ptr()`/`ptr_to_compat()`, `struct compat_iovec`
 - [include/asm-generic/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/compat.h) — the base `compat_uptr_t`, `compat_size_t`, `compat_long_t`, `compat_s64`/`compat_u64` typedefs (pulled in by each arch's `asm/compat.h`)
@@ -379,16 +379,16 @@ arguments with `compat_ptr()` along the way — no user-stack scratch space invo
 - [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `compat_ptr_ioctl()` and the compat `ioctl()` syscall's dispatch logic
 - [commit a7a08b275a8b](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a7a08b275a8bbade798c4bdaad07ade68fe7003c) — "arch: remove compat_alloc_user_space", Arnd Bergmann, first in Linux 5.15
 
-### Related pages
+### Related pages {#related-pages}
 
 - [SYSCALL_DEFINE and Dispatch](syscall-define.md) — How native syscalls are defined and dispatched
 - [Syscall Entry Path](syscall-entry.md) — `do_syscall_64()`'s dispatch and the `do_syscall_x32()` x32 path; ia32 compat dispatches through its own separate entry point (`ia32_sys_call()`) rather than through either of these
 - [Adding a New Syscall](adding-syscall.md) — Includes the checklist for deciding whether a new syscall needs a compat handler
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [LWN: System calls and 64-bit architectures](https://lwn.net/Articles/311630/) — Jake Edge, December 2008; the `preadv()`/`pwritev()` design debate that illustrates why some syscalls need a `compat_sys_*` handler and others don't
 
-### External
+### External {#external}
 
 - [Adding System Calls — The Linux Kernel documentation](https://docs.kernel.org/process/adding-syscalls.html) — Rendered version of `Documentation/process/adding-syscalls.rst`; see "Compatibility System Calls (Generic)" for when a compat handler is required

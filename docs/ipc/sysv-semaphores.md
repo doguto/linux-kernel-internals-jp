@@ -1,12 +1,12 @@
-# SysV IPC: Semaphores and Message Queues
+# SysV IPC: Semaphores and Message Queues {#sysv-ipc-semaphores-and-message-queues}
 
 > The original Unix IPC primitives: semaphores, message queues, and their kernel internals
 
 SysV IPC is the oldest IPC layer in Linux, inherited from System V Unix. It predates POSIX IPC and has a notoriously awkward API, but it remains in wide use because many commercial applications and databases (PostgreSQL, Oracle) still depend on it. Understanding its internals — and its failure modes — is essential for anyone debugging production systems.
 
-## SysV Semaphores
+## SysV Semaphores {#sysv-semaphores}
 
-### Creating and opening: semget()
+### Creating and opening: semget() {#creating-and-opening-semget}
 
 ```c
 #include <sys/sem.h>
@@ -22,7 +22,7 @@ int semid = semget(key, 3, IPC_CREAT | IPC_EXCL | 0600);
 
 `semget()` returns a semaphore set identifier (`semid`). The set holds `nsems` individual semaphores, each independently addressable. All semaphores in the set are operated on atomically by a single `semop()` call.
 
-### Operations: semop()
+### Operations: semop() {#operations-semop}
 
 ```c
 #include <sys/sem.h>
@@ -47,7 +47,7 @@ semop(semid, &unlock_op, 1);
 
 `semop()` applies all `nsops` operations **atomically** — either all succeed or none do. This is the key advantage over POSIX semaphores: you can atomically decrement multiple semaphores, which enables deadlock-free resource allocation (Dijkstra's "banker's algorithm" style).
 
-### SEM_UNDO: automatic cleanup on exit
+### SEM_UNDO: automatic cleanup on exit {#sem_undo-automatic-cleanup-on-exit}
 
 `SEM_UNDO` is critical for robustness. When a process exits (normally or via signal), the kernel automatically reverses all `SEM_UNDO` operations that process performed:
 
@@ -62,7 +62,7 @@ The kernel tracks per-process undo lists in `struct sem_undo` (defined in `ipc/s
 
 **Without `SEM_UNDO`**: a process that dies while holding a semaphore leaves it permanently decremented — all subsequent waiters block forever.
 
-### semctl(): control and inspection
+### semctl(): control and inspection {#semctl-control-and-inspection}
 
 ```c
 #include <sys/sem.h>
@@ -96,7 +96,7 @@ printf("last semop: %ld, nsems: %lu\n",
 semctl(semid, 0, IPC_RMID);
 ```
 
-### Kernel internals
+### Kernel internals {#kernel-internals}
 
 ```c
 /* ipc/sem.c (internal kernel structures, not exported in headers) */
@@ -126,9 +126,9 @@ struct sem {
 
 Waiting operations are tracked in `struct sem_queue` (defined in `ipc/sem.c`, an internal structure not exported in headers). When `semop()` cannot complete immediately, it enqueues a `sem_queue` entry and sleeps. `do_semtimedop()` (the common path behind both the `semop()` and `semtimedop()` syscalls) in `ipc/sem.c` walks the pending queue and wakes sleepers when a semaphore increment makes their operation satisfiable.
 
-## SysV Message Queues
+## SysV Message Queues {#sysv-message-queues}
 
-### Creating and opening: msgget()
+### Creating and opening: msgget() {#creating-and-opening-msgget}
 
 ```c
 #include <sys/msg.h>
@@ -137,7 +137,7 @@ key_t key = ftok("/var/run/myapp", 'M');
 int msqid = msgget(key, IPC_CREAT | 0600);
 ```
 
-### Sending: msgsnd()
+### Sending: msgsnd() {#sending-msgsnd}
 
 ```c
 struct msgbuf {
@@ -156,7 +156,7 @@ msgsnd(msqid, &msg, strlen(msg.mtext) + 1, 0);
 msgsnd(msqid, &msg, sizeof(msg.mtext), IPC_NOWAIT);
 ```
 
-### Receiving: msgrcv()
+### Receiving: msgrcv() {#receiving-msgrcv}
 
 The `msgtyp` argument controls which message is dequeued:
 
@@ -179,7 +179,7 @@ msgrcv(msqid, &recv_buf, sizeof(recv_buf.mtext), msgtyp, 0);
 
 This type-based filtering enables multiple message classes on a single queue, simulating priority.
 
-### msgctl(): control and inspection
+### msgctl(): control and inspection {#msgctl-control-and-inspection}
 
 ```c
 #include <sys/msg.h>
@@ -200,7 +200,7 @@ msgctl(msqid, IPC_SET, &ds);
 msgctl(msqid, IPC_RMID, NULL);
 ```
 
-### Kernel internals
+### Kernel internals {#kernel-internals_1}
 
 ```c
 /* ipc/msg.c */
@@ -222,9 +222,9 @@ struct msg_queue {
 
 Messages are stored as linked `struct msg_msg` entries on `q_messages`. When the queue is full (`q_cbytes >= q_qbytes`), the sending process sleeps on `q_senders`. When empty, the receiver sleeps on `q_receivers`. A successful send or receive wakes the opposite wait queue.
 
-## Observing SysV IPC
+## Observing SysV IPC {#observing-sysv-ipc}
 
-### /proc/sysvipc
+### /proc/sysvipc {#procsysvipc}
 
 ```bash
 # List all semaphore sets
@@ -236,7 +236,7 @@ cat /proc/sysvipc/msg
 # key      msqid perms      cbytes  qnum    lspid   lrpid   uid   gid  cuid  cgid      stime      rtime      ctime
 ```
 
-### ipcs / ipcrm
+### ipcs / ipcrm {#ipcs-ipcrm}
 
 ```bash
 # Show all SysV IPC resources
@@ -258,7 +258,7 @@ ipcrm -q <msqid>
 ipcs -s | awk 'NR>2 && $1 != "" {print $2}' | xargs -I{} ipcrm -s {}
 ```
 
-### System limits (sysctls)
+### System limits (sysctls) {#system-limits-sysctls}
 
 ```bash
 # Max semaphore sets system-wide
@@ -279,7 +279,7 @@ sysctl kernel.msgmnb    # max bytes per queue (default msg_qbytes)
 # kernel.msgmnb = 16384
 ```
 
-## Comparison: semaphore mechanisms
+## Comparison: semaphore mechanisms {#comparison-semaphore-mechanisms}
 
 | Mechanism | API | Blocking | Atomic multi-sem | Auto-cleanup | epoll-compatible |
 |-----------|-----|---------|------------------|--------------|-----------------|
@@ -289,7 +289,7 @@ sysctl kernel.msgmnb    # max bytes per queue (default msg_qbytes)
 | `futex` | `futex()` | Yes | No | On process exit (robust) | No |
 | `eventfd` | `read()`/`write()` | Yes | No | On fd close | **Yes** |
 
-## The SysV IPC leak problem
+## The SysV IPC leak problem {#the-sysv-ipc-leak-problem}
 
 SysV IPC objects — semaphore sets and message queues — **persist until explicitly removed (`IPC_RMID`) or until system reboot**. Unlike file descriptors, they are not tied to any process's lifetime. A process that crashes without cleanup leaves orphaned objects behind.
 
@@ -299,7 +299,7 @@ This causes two classes of failures:
 
 2. **Stale state**: An orphaned semaphore with a non-zero value can cause the next service instance to block indefinitely on `semop()`.
 
-### Diagnosis
+### Diagnosis {#diagnosis}
 
 ```bash
 # Find semaphore sets not attached to any running process
@@ -313,22 +313,22 @@ ipcs -s -v | grep -v "^--" | awk 'NR>2 {
 ipcs -s | awk 'NR>2 {print $5}' | sort | uniq -c | sort -rn
 ```
 
-### Prevention
+### Prevention {#prevention}
 
 - Always call `semctl(semid, 0, IPC_RMID)` in all exit paths, including signal handlers
 - Alternatively, prefer POSIX named semaphores (`sem_open()` / `sem_unlink()`): the name is removed by `sem_unlink()` and the semaphore itself is destroyed when the last `sem_t` is closed — no persistent kernel object
 - For pure intra-process synchronization, use `pthread_mutex` or `futex` directly
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [ipc/sem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/sem.c) — `struct sem_array`, `struct sem`, `struct sem_undo`; `do_semtimedop()` (the operation-processing path backing `semop()`) and `exit_sem()`
 - [ipc/msg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/msg.c) — `struct msg_queue` and the `msgget()`/`msgsnd()`/`msgrcv()`/`msgctl()` implementation
 - [include/uapi/linux/sem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/sem.h) — `struct sembuf`, `union semun`, and the `SEMMSL`/`SEMMNS`/`SEMOPM`/`SEMMNI` defaults
 - [include/uapi/linux/msg.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/msg.h) — `struct msgbuf`, `struct msqid_ds`, and the `MSGMNI`/`MSGMAX`/`MSGMNB` defaults
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`semget(2)`](https://man7.org/linux/man-pages/man2/semget.2.html) — create/open a semaphore set, `IPC_PRIVATE`, and the `nsems` limit
 - [`semop(2)`](https://man7.org/linux/man-pages/man2/semop.2.html) — `semop()`/`semtimedop()`, `SEM_UNDO`, and atomic multi-operation semantics
@@ -341,13 +341,13 @@ ipcs -s | awk 'NR>2 {print $5}' | sort | uniq -c | sort -rn
 - [`ipcrm(1)`](https://man7.org/linux/man-pages/man1/ipcrm.1.html) — remove SysV IPC objects by key or identifier
 - [`proc_sysvipc(5)`](https://man7.org/linux/man-pages/man5/proc_sysvipc.5.html) — the `/proc/sysvipc/{msg,sem,shm}` files
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Shared Memory, Semaphores, and eventfd](shared-memory.md) — SysV `shmget`/`shmat` and POSIX semaphores, contrasted with the SysV semaphores covered here
 - [POSIX Message Queues](mqueue.md) — the POSIX counterpart to this page's message-queue section, including a priority-ordering comparison
 - [eventfd and signalfd](eventfd-signalfd.md) — the pollable, fd-based alternative to blocking on `semop()`
 - [IPC War Stories](war-stories.md) — a real orphaned-semaphore-set incident walking through the `SEMMNI` exhaustion failure mode described above
 
-### External
+### External {#external}
 
 - [Kernel docs: sysctl/kernel.rst — msgmax, msgmnb, and msgmni](https://docs.kernel.org/admin-guide/sysctl/kernel.html#msgmax-msgmnb-and-msgmni) — official documentation of the current default values for the message-queue limits shown above

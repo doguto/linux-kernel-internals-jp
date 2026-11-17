@@ -1,8 +1,8 @@
-# ASoC: Audio for Embedded Systems
+# ASoC: Audio for Embedded Systems {#asoc-audio-for-embedded-systems}
 
 > Why a phone's audio path is three drivers wired together instead of one, and how DAPM keeps most of it powered off
 
-## The problem: the "sound card" is actually three chips on a board
+## The problem: the "sound card" is actually three chips on a board {#the-problem-the-sound-card-is-actually-three-chips-on-a-board}
 
 ALSA's original driver model assumes a sound card is one device. A PCI or USB sound card has a single `snd_pcm` driver that owns the DMA engine, the codec registers, and the mixer controls — because physically it's one chip (or one small board) behind one bus address. `snd_pcm_ops` for `hw_params`/`trigger`/`pointer` and a handful of `snd_kcontrol`s for volume are enough, because there's nothing else to describe: the codec is soldered to the same silicon as the DMA engine and never appears on any other card.
 
@@ -25,9 +25,9 @@ ASoC's answer is to stop treating "the sound card" as one driver and split it in
 
 That's the shape of the rest of this page: what each of those three driver types actually registers with the core, how the machine driver wires two of them together into a working `dai_link`, and why the resulting audio path needs its own fine-grained power model (DAPM) that a PC sound card never had to bother with.
 
-## Three driver components
+## Three driver components {#three-driver-components}
 
-### CPU DAI driver: the SoC side of the wire
+### CPU DAI driver: the SoC side of the wire {#cpu-dai-driver-the-soc-side-of-the-wire}
 
 The CPU DAI driver owns the SoC's digital audio interface hardware — the I2S/TDM/PCM controller that shifts bits onto a bus at a bit clock and frame-sync rate, and the DMA plumbing that feeds it from a ring buffer. It has no idea what's on the other end of the wire; it just needs to be configured with a format and a rate and told to start.
 
@@ -130,7 +130,7 @@ ret = devm_snd_soc_register_component(&pdev->dev,
 ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 ```
 
-### Codec driver: the DAC/ADC chip itself
+### Codec driver: the DAC/ADC chip itself {#codec-driver-the-dacadc-chip-itself}
 
 The codec driver is the platform-independent half: it knows how to talk to a specific DAC/ADC chip over I2C or SPI, what its mixer topology looks like, and how to sequence its internal power domains — but nothing about which SoC or which board it's wired to. That's what makes the wm8731-times-four problem `overview.rst` complains about solvable: write the codec driver once, reuse it on every board that happens to use that chip.
 
@@ -249,7 +249,7 @@ ret = devm_snd_soc_register_component(&i2c->dev,
 
 Nothing in either struct mentions Rockchip, and nothing in the Rockchip I2S driver mentions Maxim — which is exactly the reuse `overview.rst` was written to enable. The board that puts these two together is the machine driver's job.
 
-### Machine driver: DAI links and board glue
+### Machine driver: DAI links and board glue {#machine-driver-dai-links-and-board-glue}
 
 The machine driver is the only one of the three that's genuinely board-specific, and its central job is small: declare which CPU DAI connects to which codec DAI, over what bus format, and hand the pair to the core as a `struct snd_soc_dai_link`. `Documentation/sound/soc/machine.rst` puts the scope plainly:
 
@@ -354,7 +354,7 @@ static struct snd_soc_card rockchip_max98090_card = {
 
 `struct snd_soc_card` is the top-level object the machine driver registers with `devm_snd_soc_register_card()`: an array of `dai_link`s plus the board-level DAPM widgets/routes/controls that the codec driver doesn't already know about (the external speaker, the mic jack — see below). `dai_fmt` here spells out the I2S wire format directly on the link: standard I2S justification, normal (non-inverted) bit clock and frame, and the codec as the clock *consumer* on both bit clock and frame sync — meaning the Rockchip I2S controller is the one driving BCLK/LRCK on this board. `aux_dev`/`num_aux_devs` is a separate, smaller mechanism for a component that isn't part of any `dai_link` at all — on this board it points at `rk_98090_headset_dev`, whose init callback populates a `snd_soc_jack` (via `snd_soc_card_jack_new_pins()`, with the button-key masks and DAPM pins the jack reports through) and then calls `ts3a227e_enable_jack_detect()` to register that jack with the ts3a227e headset-detection IC's driver; the IC's own I2C probe is what actually requests its interrupt line, independently of this call. `aux_dev` wires up the jack-reporting path, not an audio data path.
 
-## DAPM: power-managing what a PC sound card doesn't have
+## DAPM: power-managing what a PC sound card doesn't have {#dapm-power-managing-what-a-pc-sound-card-doesnt-have}
 
 A PC sound card codec is behind a fixed AC'97 or HD-Audio link, plugged into wall power, and typically has one dominant power state: on, because the machine itself is either awake or suspended. An embedded codec is different in two ways that matter for power: it runs on a battery, and it usually contains several genuinely independent analog blocks — a headphone amp, a speaker amp, a mic bias supply, an ADC, a DAC — any subset of which might be needed at a given moment depending on what's actually connected and what's actually playing. Powering the whole chip for a phone call that only needs the mic-bias-to-ADC path is wasted current draw a laptop sound card never had to think about.
 
@@ -487,7 +487,7 @@ enum snd_soc_bias_level {
 };
 ```
 
-## Devicetree: describing the board topology without writing a driver
+## Devicetree: describing the board topology without writing a driver {#devicetree-describing-the-board-topology-without-writing-a-driver}
 
 Most embedded boards don't need a bespoke C machine driver at all. If the topology is just "one CPU DAI, one codec DAI, a fixed I2S format, and a short list of board widgets/routes" — which covers a large fraction of real hardware — the generic **simple-audio-card** driver (`sound/soc/generic/simple-card.c`) can build the entire `snd_soc_card` from devicetree properties, with no board-specific driver code at all. The DT node names the CPU and codec DAIs by phandle and spells out the same widget/route information a bespoke machine driver would hardcode in C:
 
@@ -548,7 +548,7 @@ codec {
 
 Both drivers are, structurally, just machine drivers themselves: they parse devicetree properties and populate the exact same `snd_soc_dai_link`/`snd_soc_card` structures a hand-written board driver like `rockchip_max98090.c` would build in C, then call the same `devm_snd_soc_register_card()`. The choice between writing a real machine driver, using simple-card, or using audio-graph-card is purely about how much board-specific logic (jack detection callbacks, GPIO-controlled amps, non-trivial `.init()` hooks) the board actually needs — anything simple-card and audio-graph-card can't express in properties still falls back to a C machine driver.
 
-## How it fits together
+## How it fits together {#how-it-fits-together}
 
 ```
                           snd_soc_card                         machine driver
@@ -585,9 +585,9 @@ Both drivers are, structurally, just machine drivers themselves: they parse devi
 
 The CPU DAI and codec boxes never reference each other by name in source; the machine driver — or the devicetree it was generated from — is the only thing that knows they're wired together on *this particular* board.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [`include/sound/soc.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc.h) — `snd_soc_dai_link`, `snd_soc_dai_link_component`, `snd_soc_card`, `SND_SOC_DAILINK_DEFS`/`SND_SOC_DAILINK_REG` macros
 - [`include/sound/soc-dai.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dai.h) — `snd_soc_dai`, `snd_soc_dai_driver`, `snd_soc_dai_ops`, DAI format bit definitions
@@ -598,14 +598,14 @@ The CPU DAI and codec boxes never reference each other by name in source; the ma
 - [`sound/soc/rockchip/rockchip_max98090.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/rockchip/rockchip_max98090.c) — a real machine driver, DAI links, board DAPM graph
 - [`sound/soc/generic/simple-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/simple-card.c), [`sound/soc/generic/audio-graph-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/audio-graph-card.c) — the generic devicetree-driven machine drivers
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Device Tree: ARM Hardware Description](../drivers/device-tree.md) — the `of_node`/phandle mechanism `snd_soc_dai_link_component` and simple-card/audio-graph-card build on
 - [I2C and SPI Bus Drivers](../drivers/i2c-spi.md) — the control bus most codec drivers register on
 - [Platform Drivers](../drivers/platform-driver.md) — the `platform_device`/`platform_driver` pattern CPU DAI and machine drivers both use
 - [ALSA War Stories](war-stories.md) — incident record for the PCM/rawmidi/USB-audio layers ASoC's `dai_link`s ultimately sit on top of
 
-### External
+### External {#external}
 
 - [ALSA SoC Layer Overview](https://docs.kernel.org/sound/soc/overview.html) — the problem statement and the codec/platform/machine split
 - [ASoC Machine Driver](https://docs.kernel.org/sound/soc/machine.html) — the machine driver's role (note: its inline code sample predates the current `cpus[]`/`codecs[]`/`platforms[]` array shape — the `SND_SOC_DAILINK_DEFS` form on this page reflects current mainline)

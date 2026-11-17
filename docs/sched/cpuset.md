@@ -1,8 +1,8 @@
-# cpuset: CPU and Memory Pinning
+# cpuset: CPU and Memory Pinning {#cpuset-cpu-and-memory-pinning}
 
 > How cgroups restrict which CPUs and NUMA nodes tasks can use
 
-## What cpuset controls
+## What cpuset controls {#what-cpuset-controls}
 
 `cpuset` is a cgroup subsystem that restricts which CPUs and NUMA memory nodes a group of tasks can use. It operates independently from CPU bandwidth and weight:
 
@@ -16,7 +16,7 @@ This matters for:
 - **Core isolation**: Reserve specific cores for latency-sensitive workloads
 - **Hardware partitioning**: Assign CPUs to dedicated containers
 
-## Interface
+## Interface {#interface}
 
 ```bash
 # v2 (unified hierarchy)
@@ -37,7 +37,7 @@ echo "0-3" > /sys/fs/cgroup/cpuset/mygroup/cpus
 echo "0"   > /sys/fs/cgroup/cpuset/mygroup/mems
 ```
 
-## struct cpuset
+## struct cpuset {#struct-cpuset}
 
 Each cgroup maps to a `cpuset` in `kernel/cgroup/cpuset-internal.h`:
 
@@ -68,7 +68,7 @@ struct cpuset {
 };
 ```
 
-### Flags
+### Flags {#flags}
 
 ```c
 typedef enum {
@@ -82,7 +82,7 @@ typedef enum {
 } cpuset_flagbits_t;
 ```
 
-## Effective masks: intersection with parent
+## Effective masks: intersection with parent {#effective-masks-intersection-with-parent}
 
 The key cpuset invariant: a child's **effective_cpus** can only be a subset of its parent's **effective_cpus**. If you write a CPU list that includes CPUs not in the parent's effective set, those CPUs are silently excluded.
 
@@ -104,7 +104,7 @@ static void cpuset_cpus_allowed(struct task_struct *p, struct cpumask *pmask)
 }
 ```
 
-## How tasks are constrained
+## How tasks are constrained {#how-tasks-are-constrained}
 
 When a task is added to a cgroup (`cgroup.procs`), or when the cpuset's effective_cpus changes, the kernel updates the task's affinity:
 
@@ -114,7 +114,7 @@ When a task is added to a cgroup (`cgroup.procs`), or when the cpuset's effectiv
 
 Tasks in a cpuset can still set their own affinity (via `sched_setaffinity()`), but the result is always **intersected** with the cpuset's effective_cpus. You can't escape the cpuset through affinity.
 
-## Partition roots (v2)
+## Partition roots (v2) {#partition-roots-v2}
 
 v2 cpusets support **partition roots** — a mechanism to carve CPUs out of the parent's scheduling domain entirely:
 
@@ -135,7 +135,7 @@ Partition states:
 - `root`: Carves out CPUs into a dedicated scheduling domain
 - `isolated`: Like root, but also disables load balancing within the partition
 
-## cpuset and scheduler domains
+## cpuset and scheduler domains {#cpuset-and-scheduler-domains}
 
 When a partition root is created or CPUs are assigned exclusively, the kernel **rebuilds the scheduling domains**:
 
@@ -147,7 +147,7 @@ rebuild_sched_domains();  // or rebuild_sched_domains_locked()
 
 This is expensive — each rebuild tears down and reconstructs per-CPU scheduler domain hierarchies. Avoid frequent cpuset CPU changes in production.
 
-## NUMA: mems_allowed
+## NUMA: mems_allowed {#numa-mems_allowed}
 
 `effective_mems` controls which NUMA nodes memory allocations can use:
 
@@ -163,7 +163,7 @@ With `CS_MEM_HARDWALL` set, tasks cannot fall back to other nodes even if their 
 
 With `CS_MEMORY_MIGRATE` set, existing pages are migrated to the new node set when `mems_allowed` changes.
 
-## Diagnosing cpuset constraints
+## Diagnosing cpuset constraints {#diagnosing-cpuset-constraints}
 
 ```bash
 # See a task's cpuset
@@ -187,7 +187,7 @@ cat /sys/fs/cgroup/nested/cpuset.cpus.effective
 # → 0-3   (silently clamped to parent's range)
 ```
 
-## cpuset vs sched_setaffinity
+## cpuset vs sched_setaffinity {#cpuset-vs-sched_setaffinity}
 
 | Mechanism | Who controls | Scope | Inheritable |
 |-----------|-------------|-------|-------------|
@@ -196,7 +196,7 @@ cat /sys/fs/cgroup/nested/cpuset.cpus.effective
 
 The effective affinity is always `user_affinity ∩ cpuset.effective_cpus`. If either restricts a CPU, the task cannot run there.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [CPU cgroup: v1 vs v2](cpu-cgroup.md) — CPU bandwidth and weight controls
 - [Scheduling Domains](sched-domains.md) — How cpuset partition roots affect load balancing

@@ -1,8 +1,8 @@
-# procfs and sysfs
+# procfs and sysfs {#procfs-and-sysfs}
 
 > How /proc and /sys expose kernel state to userspace
 
-## /proc: the process filesystem
+## /proc: the process filesystem {#proc-the-process-filesystem}
 
 `/proc` is a virtual filesystem that exposes kernel and process information. Files in `/proc` have no on-disk representation — content is generated on-the-fly when read. The `proc` filesystem has been part of Linux since its earliest versions, inherited from Unix tradition [(man page)](https://www.man7.org/linux/man-pages/man5/proc.5.html).
 
@@ -22,9 +22,9 @@
 /proc/<pid>/mem       # process memory (requires ptrace)
 ```
 
-## Creating a /proc entry
+## Creating a /proc entry {#creating-a-proc-entry}
 
-### Simple single-value file
+### Simple single-value file {#simple-single-value-file}
 
 ```c
 #include <linux/proc_fs.h>
@@ -78,7 +78,7 @@ static void __exit mymod_exit(void)
 }
 ```
 
-### seq_file: multi-page iterators
+### seq_file: multi-page iterators {#seq_file-multi-page-iterators}
 
 For files with many entries (like `/proc/net/tcp`), use the seq_file iterator API:
 
@@ -122,7 +122,7 @@ static int mylist_open(struct inode *inode, struct file *file)
 
 `seq_file` handles pagination automatically: if the output doesn't fit in one page, the kernel calls `start`/`next`/`show` again with the right offset for the next read.
 
-### /proc directory
+### /proc directory {#proc-directory}
 
 ```c
 struct proc_dir_entry *mydir;
@@ -140,7 +140,7 @@ proc_create_single("stats", 0444, mydir, stats_show);
 remove_proc_subtree("mymod", NULL);
 ```
 
-## /proc internals: struct proc_dir_entry
+## /proc internals: struct proc_dir_entry {#proc-internals-struct-procdirentry}
 
 ```c
 /* fs/proc/internal.h */
@@ -172,7 +172,7 @@ struct proc_dir_entry {
 
 The `/proc` filesystem is implemented as a regular VFS filesystem (`proc_fs_type`) that creates inodes on demand when a path is looked up.
 
-## sysfs: the device and driver hierarchy
+## sysfs: the device and driver hierarchy {#sysfs-the-device-and-driver-hierarchy}
 
 `sysfs` was introduced in Linux 2.6.0 by Patrick Mochel as a RAM-based filesystem for exporting kernel objects (kobjects) and their attributes to userspace [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html). It is mounted at `/sys` and exposes the kernel's device model as a directory tree:
 
@@ -189,7 +189,7 @@ The `/proc` filesystem is implemented as a regular VFS filesystem (`proc_fs_type
     └── security/
 ```
 
-## kobject: the sysfs object
+## kobject: the sysfs object {#kobject-the-sysfs-object}
 
 `kobject` is the fundamental object in the sysfs/device model hierarchy:
 
@@ -215,7 +215,7 @@ kobj = kobject_create_and_add("myobject", kernel_kobj);
 kobject_put(kobj);  /* decrement ref; frees when 0 */
 ```
 
-## Sysfs attributes: files in sysfs
+## Sysfs attributes: files in sysfs {#sysfs-attributes-files-in-sysfs}
 
 ```c
 /* A sysfs attribute = one file in /sys/... */
@@ -257,7 +257,7 @@ static DEVICE_ATTR_RW(speed);   /* creates dev_attr_speed */
 /* DEVICE_ATTR_WO(speed): write-only */
 ```
 
-### Attribute groups
+### Attribute groups {#attribute-groups}
 
 Drivers typically register attribute groups (multiple attributes at once):
 
@@ -297,7 +297,7 @@ struct device_driver mydev_driver = {
 /* Attributes are created/removed automatically with the device */
 ```
 
-## kernfs: the sysfs backend
+## kernfs: the sysfs backend {#kernfs-the-sysfs-backend}
 
 sysfs is built on top of `kernfs`, a generic virtual filesystem infrastructure:
 
@@ -328,7 +328,7 @@ struct kernfs_node {
 
 `/sys` attributes go through: `kernfs_fop_read_iter → kernfs_seq_show → sysfs_kf_seq_show → attribute->show()`
 
-## sysctl: /proc/sys via sysfs-like API
+## sysctl: /proc/sys via sysfs-like API {#sysctl-procsys-via-sysfs-like-api}
 
 ```c
 #include <linux/sysctl.h>
@@ -365,7 +365,7 @@ static void __exit mymod_exit(void)
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [VFS Objects](vfs-objects.md) — inode/dentry fundamentals
 - [Linux Device Model](../drivers/device-model.md) — kobject hierarchy in detail

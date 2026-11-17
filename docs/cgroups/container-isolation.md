@@ -1,8 +1,8 @@
-# Container Isolation Internals
+# Container Isolation Internals {#container-isolation-internals}
 
 > How Docker, Kubernetes, and container runtimes use namespaces and cgroups
 
-## What a container is, kernel-side
+## What a container is, kernel-side {#what-a-container-is-kernel-side}
 
 A container is a process (or process tree) that:
 
@@ -34,7 +34,7 @@ There is no "container" kernel object — it's a combination of existing primiti
     └─────────────────────────────────────────┘
 ```
 
-## Container creation sequence
+## Container creation sequence {#container-creation-sequence}
 
 This is what `docker run` or `runc` does at the kernel level:
 
@@ -72,7 +72,7 @@ prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog);
 execve("/entrypoint", argv, envp);
 ```
 
-## pivot_root: switching filesystem root
+## pivot_root: switching filesystem root {#pivot_root-switching-filesystem-root}
 
 Containers use `pivot_root` (not just `chroot`) to fully isolate the filesystem:
 
@@ -101,7 +101,7 @@ mount("sysfs", "/sys", "sysfs", 0, NULL);
 mount("tmpfs", "/dev", "tmpfs", 0, NULL);
 ```
 
-## Network setup: veth pairs
+## Network setup: veth pairs {#network-setup-veth-pairs}
 
 Container networking uses virtual ethernet pairs:
 
@@ -131,7 +131,7 @@ ip netns exec <container_pid> ip addr add 172.17.0.2/16 dev eth0
 ip netns exec <container_pid> ip route add default via 172.17.0.1
 ```
 
-## Cgroup namespace: container's view of cgroups
+## Cgroup namespace: container's view of cgroups {#cgroup-namespace-containers-view-of-cgroups}
 
 Without a cgroup namespace, a container would see the full host cgroup hierarchy. With `CLONE_NEWCGROUP`:
 
@@ -149,7 +149,7 @@ cat /proc/1/cgroup  # from inside container
 
 The cgroup namespace makes the container's cgroup appear as root, so `systemd` in a container doesn't see the host hierarchy.
 
-## User namespace: rootless containers
+## User namespace: rootless containers {#user-namespace-rootless-containers}
 
 Rootless containers (Docker rootless, Podman) run entirely as unprivileged users:
 
@@ -177,7 +177,7 @@ podman run --rm -it ubuntu bash
 
 The user namespace also enables unprivileged namespace creation for all other types. User namespaces were made fully functional for unprivileged users in Linux 3.9 [(LWN)](https://lwn.net/Articles/532593/).
 
-## seccomp: syscall filtering
+## seccomp: syscall filtering {#seccomp-syscall-filtering}
 
 Seccomp restricts which syscalls a container can make:
 
@@ -206,7 +206,7 @@ prctl(PR_SET_SECCOMP, SECCOMP_MODE_FILTER, &prog);
 
 Docker's default seccomp profile blocks ~40 syscalls (including `keyctl`, `kexec_load`, `perf_event_open`, `ptrace`, etc.).
 
-## OCI runtime spec
+## OCI runtime spec {#oci-runtime-spec}
 
 The Open Container Initiative (OCI) runtime spec defines what a container runtime (runc, crun, kata) must do. The spec is a JSON file (`config.json`):
 
@@ -241,7 +241,7 @@ The Open Container Initiative (OCI) runtime spec defines what a container runtim
 }
 ```
 
-## Debugging container isolation
+## Debugging container isolation {#debugging-container-isolation}
 
 ```bash
 # Check what namespaces a container process is in
@@ -270,7 +270,7 @@ cat /proc/$PID/status | grep Cap
 capsh --decode=00000000a80425fb
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Cgroup v2 Architecture](cgroup-v2.md) — Resource control internals
 - [Resource Controllers](cgroup-controllers.md) — cpu, memory, io limits

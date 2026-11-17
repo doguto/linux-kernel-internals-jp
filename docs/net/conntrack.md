@@ -1,8 +1,8 @@
-# Connection Tracking (conntrack)
+# Connection Tracking (conntrack) {#connection-tracking-conntrack}
 
 > How the kernel tracks the state of network connections for stateful firewalling and NAT
 
-## What conntrack does
+## What conntrack does {#what-conntrack-does}
 
 Connection tracking maintains a table of all active network flows. For every packet, the kernel looks up its flow in this table to determine its state (new, established, related, invalid). This enables:
 
@@ -12,7 +12,7 @@ Connection tracking maintains a table of all active network flows. For every pac
 
 Conntrack is implemented in `net/netfilter/nf_conntrack_core.c` and hooks at PREROUTING and OUTPUT (before routing and before NAT).
 
-## struct nf_conn
+## struct nf_conn {#struct-nf_conn}
 
 Each tracked connection is a `struct nf_conn`:
 
@@ -38,7 +38,7 @@ struct nf_conn {
 };
 ```
 
-### Connection status bits (IPS_*)
+### Connection status bits (IPS_*) {#connection-status-bits-ips_}
 
 ```c
 IPS_EXPECTED      // was expected by a helper (e.g., FTP data)
@@ -51,7 +51,7 @@ IPS_DYING         // being removed
 IPS_FIXED_TIMEOUT // timeout was explicitly set
 ```
 
-### TCP-specific state
+### TCP-specific state {#tcp-specific-state}
 
 ```c
 // TCP state tracked per connection
@@ -65,7 +65,7 @@ union nf_conntrack_proto {
 };
 ```
 
-## Conntrack tuple
+## Conntrack tuple {#conntrack-tuple}
 
 A **tuple** uniquely identifies a packet in one direction:
 
@@ -92,9 +92,9 @@ struct nf_conntrack_tuple {
 
 Two tuples are stored per `nf_conn`: the original direction and the reply direction (which is the original reversed). This is how NAT works — NAT modifies one or both tuples, and conntrack uses the reply tuple to match return traffic.
 
-## Conntrack lifecycle
+## Conntrack lifecycle {#conntrack-lifecycle}
 
-### 1. First packet (NEW)
+### 1. First packet (NEW) {#1-first-packet-new}
 
 ```
 Packet arrives → PREROUTING hook → nf_conntrack_in()
@@ -104,7 +104,7 @@ Packet arrives → PREROUTING hook → nf_conntrack_in()
     → Attach nf_conn to skb->_nfct
 ```
 
-### 2. Confirmed (at POSTROUTING or LOCAL_IN)
+### 2. Confirmed (at POSTROUTING or LOCAL_IN) {#2-confirmed-at-postrouting-or-local_in}
 
 ```
 nf_conntrack_confirm()
@@ -113,7 +113,7 @@ nf_conntrack_confirm()
     → Status: IPS_CONFIRMED
 ```
 
-### 3. Subsequent packets (ESTABLISHED)
+### 3. Subsequent packets (ESTABLISHED) {#3-subsequent-packets-established}
 
 ```
 Packet arrives → lookup by tuple → nf_conn found
@@ -122,7 +122,7 @@ Packet arrives → lookup by tuple → nf_conn found
     → Set IPS_ASSURED when connection is long-lived
 ```
 
-### 4. Timeout and cleanup
+### 4. Timeout and cleanup {#4-timeout-and-cleanup}
 
 Connections time out if no packets are seen. Timeouts vary by protocol and state:
 
@@ -141,7 +141,7 @@ cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream         # 180s
 cat /proc/sys/net/netfilter/nf_conntrack_icmp_timeout               # 30s
 ```
 
-## Conntrack states for firewall rules
+## Conntrack states for firewall rules {#conntrack-states-for-firewall-rules}
 
 States visible to iptables/nftables:
 
@@ -163,7 +163,7 @@ nft add rule inet filter input ct state established,related accept
 nft add rule inet filter input ct state invalid drop
 ```
 
-## Conntrack helpers: tracking related connections
+## Conntrack helpers: tracking related connections {#conntrack-helpers-tracking-related-connections}
 
 Some protocols open secondary connections (FTP data channel, SIP RTP media). **Conntrack helpers** parse protocol messages to `EXPECT` these secondary connections:
 
@@ -187,7 +187,7 @@ cat /proc/net/nf_conntrack | grep RELATED
 conntrack -L expect
 ```
 
-## Conntrack marks (connmark)
+## Conntrack marks (connmark) {#conntrack-marks-connmark}
 
 Marks allow correlating firewall rules with routing or QoS:
 
@@ -203,7 +203,7 @@ iptables -t mangle -A PREROUTING -j CONNMARK --restore-mark
 ip rule add fwmark 0x1 table 100
 ```
 
-## Monitoring and debugging
+## Monitoring and debugging {#monitoring-and-debugging}
 
 ```bash
 # List all connections
@@ -232,7 +232,7 @@ conntrack -D -p tcp --src 10.0.0.1 --sport 54321
 conntrack -F
 ```
 
-## Tuning for high-connection-rate environments
+## Tuning for high-connection-rate environments {#tuning-for-high-connection-rate-environments}
 
 ```bash
 # Increase table size (at the cost of memory)
@@ -251,7 +251,7 @@ iptables -t raw -A PREROUTING -p tcp --syn -j NOTRACK
 iptables -A INPUT -p tcp --syn -m conntrack --ctstate UNTRACKED -j ACCEPT
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Netfilter Architecture](netfilter.md) — The hook framework conntrack lives within
 - [nftables vs iptables](nftables-iptables.md) — How to write conntrack rules

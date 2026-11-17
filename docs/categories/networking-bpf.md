@@ -1,4 +1,4 @@
-# Networking & BPF
+# Networking & BPF {#networking-bpf}
 
 How packets move through the kernel — and how sandboxed BPF programs extend what the kernel does.
 

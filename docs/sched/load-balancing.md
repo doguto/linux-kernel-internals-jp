@@ -1,8 +1,8 @@
-# Load Balancing
+# Load Balancing {#load-balancing}
 
 > How the scheduler distributes tasks across CPUs
 
-## Why load balancing is hard
+## Why load balancing is hard {#why-load-balancing-is-hard}
 
 Load balancing must trade off:
 
@@ -13,7 +13,7 @@ Load balancing must trade off:
 
 The Linux scheduler uses a **hierarchical scheduling domain** topology to navigate these trade-offs.
 
-## Scheduling domains and groups
+## Scheduling domains and groups {#scheduling-domains-and-groups}
 
 ```
 System topology (example: 2-socket NUMA, 4 cores each, 2-way SMT):
@@ -62,7 +62,7 @@ struct sched_domain {
 };
 ```
 
-## Periodic load balancing
+## Periodic load balancing {#periodic-load-balancing}
 
 Every CPU runs `load_balance()` periodically (via the scheduler tick):
 
@@ -103,7 +103,7 @@ static int load_balance(int this_cpu, struct rq *this_rq,
 }
 ```
 
-## Load metric: PELT
+## Load metric: PELT {#load-metric-pelt}
 
 The scheduler uses **PELT** (Per-Entity Load Tracking) to measure each task's load contribution. Introduced in Linux 3.8 by Paul Turner (Google) — [`9d85f21c94f7`](https://git.kernel.org/linus/9d85f21c94f7f7a84d0ba686c58aa6d9da58fdbb). PELT tracks an exponentially weighted moving average of CPU utilization:
 
@@ -132,7 +132,7 @@ static u32 accumulate_sum(u64 delta, struct sched_avg *sa,
 }
 ```
 
-## struct lb_env: the balancing context
+## struct lb_env: the balancing context {#struct-lb_env-the-balancing-context}
 
 ```c
 /* kernel/sched/sched.h */
@@ -165,7 +165,7 @@ struct lb_env {
 };
 ```
 
-## newidle_balance: when CPU goes idle
+## newidle_balance: when CPU goes idle {#newidle_balance-when-cpu-goes-idle}
 
 When a CPU has no tasks, it immediately tries to pull work from a busier CPU:
 
@@ -205,7 +205,7 @@ static int newidle_balance(struct rq *this_rq, struct rq_flags *rf)
 
 `avg_idle` tracks average idle duration. If the CPU is expected to be idle for less time than the scan cost, it skips balancing — not worth the cache pollution.
 
-## Wakeup balancing: select_task_rq_fair
+## Wakeup balancing: select_task_rq_fair {#wakeup-balancing-selecttaskrq_fair}
 
 When a task wakes up, the scheduler selects which CPU to place it on:
 
@@ -245,7 +245,7 @@ static int select_task_rq_fair(struct task_struct *p, int prev_cpu,
 
 **Wake affine**: if task B always wakes after task A (producer/consumer), schedule B on the same or nearby CPU to share cache lines.
 
-## Misfit tasks on asymmetric CPUs
+## Misfit tasks on asymmetric CPUs {#misfit-tasks-on-asymmetric-cpus}
 
 On big.LITTLE / hybrid CPUs (ARM big.LITTLE, Intel hybrid P+E cores), a task is "misfit" if it demands more capacity than its current CPU provides:
 
@@ -273,7 +273,7 @@ static void check_misfit_status(struct rq *rq, struct sched_domain *sd)
 }
 ```
 
-## Observing load balancing
+## Observing load balancing {#observing-load-balancing}
 
 ```bash
 # Runqueue lengths per CPU
@@ -304,7 +304,7 @@ cat /proc/sys/kernel/sched_domain/cpu0/domain1/name
 cat /proc/<pid>/sched | grep -i util
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [EAS: Energy-Aware Scheduling](eas.md) — energy-optimal CPU selection on heterogeneous hardware
 - [Scheduler: EEVDF](eevdf.md) — per-CPU task selection

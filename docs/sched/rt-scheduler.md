@@ -1,8 +1,8 @@
-# RT Scheduler: SCHED_FIFO and SCHED_RR
+# RT Scheduler: SCHED_FIFO and SCHED_RR {#rt-scheduler-schedfifo-and-schedrr}
 
 > Hard real-time scheduling with priority-based preemption
 
-## What the RT scheduler provides
+## What the RT scheduler provides {#what-the-rt-scheduler-provides}
 
 The RT scheduler (`rt_sched_class`) gives tasks strict priority guarantees: an RT task at priority N will always preempt any fair-class task and any RT task at priority < N. There is no fairness, no vruntime, no time-sharing between tasks of different priorities — the highest-priority runnable task runs, period.
 
@@ -15,7 +15,7 @@ Two policies share the RT class:
 
 RT priorities range from 1 (lowest) to 99 (highest). This is the reverse of nice values: higher number = higher priority.
 
-## The RT runqueue
+## The RT runqueue {#the-rt-runqueue}
 
 ```c
 // kernel/sched/sched.h
@@ -42,7 +42,7 @@ next = list_first_entry(&rt_rq->active.queue[idx], ...);
 
 This is O(1) regardless of how many RT tasks exist — the bitmap scan is a single hardware instruction (`bsf`/`bsr` on x86).
 
-## struct sched_rt_entity
+## struct sched_rt_entity {#struct-schedrtentity}
 
 Every RT task has a `sched_rt_entity` embedded in its `task_struct`:
 
@@ -59,7 +59,7 @@ struct sched_rt_entity {
 };
 ```
 
-## Task selection: pick_next_task_rt()
+## Task selection: pick_next_task_rt() {#task-selection-picknexttask_rt}
 
 ```c
 // kernel/sched/rt.c
@@ -74,7 +74,7 @@ static struct task_struct *pick_task_rt(struct rq *rq)
 
 `pick_next_rt_entity()` finds the first-set bit in the priority bitmap, then returns the head of that queue. For SCHED_RR tasks at equal priority, the queue is FIFO — the task at the front ran least recently (has been waiting longest) and goes to the back after its slice.
 
-## SCHED_RR timeslice rotation
+## SCHED_RR timeslice rotation {#sched_rr-timeslice-rotation}
 
 On each timer tick, `task_tick_rt()` runs:
 
@@ -115,7 +115,7 @@ The default SCHED_RR timeslice is 100ms:
 int sched_rr_timeslice = RR_TIMESLICE;
 ```
 
-## RT throttling
+## RT throttling {#rt-throttling}
 
 An RT task that never sleeps will starve all normal tasks. The kernel protects against this with **RT throttling**:
 
@@ -138,7 +138,7 @@ echo -1 > /proc/sys/kernel/sched_rt_runtime_us
 
 Setting `sched_rt_runtime_us` to -1 disables throttling entirely. Only do this if you fully trust your RT tasks.
 
-## Setting RT policy
+## Setting RT policy {#setting-rt-policy}
 
 ```c
 // Set SCHED_FIFO at priority 50
@@ -166,7 +166,7 @@ chrt -f -p 80 $PID
 chrt -p $PID
 ```
 
-## SMP considerations: pushable tasks
+## SMP considerations: pushable tasks {#smp-considerations-pushable-tasks}
 
 On multi-CPU systems, the RT scheduler maintains a **pushable tasks** list — RT tasks that could be migrated to another CPU if their current CPU is occupied by a higher-priority RT task.
 
@@ -182,9 +182,9 @@ CPU 2: normal task              CPU 2: RT-70 (migrated)
 
 The `push_rt_task()` and `pull_rt_task()` functions handle this migration.
 
-## Practical patterns
+## Practical patterns {#practical-patterns}
 
-### Audio/video processing
+### Audio/video processing {#audiovideo-processing}
 
 ```c
 // Realtime audio thread: SCHED_FIFO, priority ~70
@@ -203,7 +203,7 @@ while (running) {
 }
 ```
 
-### Avoiding PI issues
+### Avoiding PI issues {#avoiding-pi-issues}
 
 When using mutexes in RT tasks, use `pthread_mutexattr_setprotocol(PTHREAD_PRIO_INHERIT)` to enable priority inheritance:
 
@@ -216,7 +216,7 @@ pthread_mutex_init(&mutex, &attr);
 
 Without PI, a low-priority task holding a mutex can block a high-priority RT task indefinitely — the classic priority inversion problem. See [Priority Inversion and PI Mutexes](pi-mutexes.md).
 
-## Further reading
+## Further reading {#further-reading}
 
 - [SCHED_DEADLINE](deadline.md) — Even stricter guarantees with bandwidth enforcement
 - [Priority Inversion and PI Mutexes](pi-mutexes.md) — The RT locking problem and solution

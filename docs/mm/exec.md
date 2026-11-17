@@ -1,8 +1,8 @@
-# What Happens During exec()
+# What Happens During exec() {#what-happens-during-exec}
 
 > From execve() syscall to a running new process
 
-## Overview
+## Overview {#overview}
 
 `execve()` replaces the current process image with a new one. The PID stays the same, but the address space, file descriptors (non-`O_CLOEXEC`), and registers are replaced:
 
@@ -23,7 +23,7 @@ execve("./myprogram", argv, envp)
    └─ start_thread: set IP = entry, SP = stack top
 ```
 
-## The linux_binprm structure
+## The linux_binprm structure {#the-linux_binprm-structure}
 
 ```c
 /* include/linux/binfmts.h */
@@ -56,7 +56,7 @@ struct linux_binprm {
 };
 ```
 
-## Step 1: syscall entry
+## Step 1: syscall entry {#step-1-syscall-entry}
 
 ```c
 /* fs/exec.c */
@@ -87,7 +87,7 @@ static int do_execveat_common(int fd, struct filename *filename,
 }
 ```
 
-## Step 2: binary format detection
+## Step 2: binary format detection {#step-2-binary-format-detection}
 
 ```c
 /* fs/exec.c */
@@ -110,7 +110,7 @@ static int search_binary_handler(struct linux_binprm *bprm)
 
 For `#!/bin/sh` scripts, `binfmt_script` re-invokes `search_binary_handler` with `/bin/sh` as the new executable.
 
-## Step 3: ELF loading
+## Step 3: ELF loading {#step-3-elf-loading}
 
 ```c
 /* fs/binfmt_elf.c */
@@ -177,7 +177,7 @@ static int load_elf_binary(struct linux_binprm *bprm)
 }
 ```
 
-## The resulting address space
+## The resulting address space {#the-resulting-address-space}
 
 After exec completes, `/proc/<pid>/maps` shows:
 
@@ -195,7 +195,7 @@ Address           Perms  Name
 7ffcc1401000-...  r-xp   [vdso]
 ```
 
-## Dynamic linker startup
+## Dynamic linker startup {#dynamic-linker-startup}
 
 The kernel jumps to `ld.so`'s entry point, not the main binary's. `ld.so`:
 1. Maps itself (it's position-independent)
@@ -214,7 +214,7 @@ The kernel jumps to `ld.so`'s entry point, not the main binary's. `ld.so`:
 /* Each shared library gets its own set of VMAs */
 ```
 
-## begin_new_exec: the point of no return
+## begin_new_exec: the point of no return {#beginnewexec-the-point-of-no-return}
 
 ```c
 /* fs/exec.c */
@@ -243,7 +243,7 @@ int begin_new_exec(struct linux_binprm *bprm)
 }
 ```
 
-## exec and threads
+## exec and threads {#exec-and-threads}
 
 If the calling process has multiple threads, `execve` kills all other threads before replacing the address space:
 
@@ -264,7 +264,7 @@ static int de_thread(struct task_struct *tsk)
 }
 ```
 
-## Observing exec
+## Observing exec {#observing-exec}
 
 ```bash
 # Trace exec syscalls
@@ -283,7 +283,7 @@ LD_DEBUG=all /usr/bin/ls 2>&1 | head -50
 cat /proc/$(pgrep myprogram)/maps
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [What Happens When You fork()](fork.md) — fork creates the starting mm
 - [Process Address Space](mmap.md) — VMA layout

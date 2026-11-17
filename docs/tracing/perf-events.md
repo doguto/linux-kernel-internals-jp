@@ -1,8 +1,8 @@
-# perf Events
+# perf Events {#perf-events}
 
 > Hardware performance counters, sampling, and profiling
 
-## What perf events are
+## What perf events are {#what-perf-events-are}
 
 The perf events subsystem was created by Ingo Molnár and Peter Zijlstra and introduced in Linux 2.6.31 [(LWN)](https://lwn.net/Articles/337493/). `perf_event_open` is the Linux syscall for accessing performance monitoring hardware:
 
@@ -12,7 +12,7 @@ The perf events subsystem was created by Ingo Molnár and Peter Zijlstra and int
 - **Dynamic events**: kprobes, uprobes, BPF
 - **Sampling**: record PC/stack every N events for statistical profiling
 
-## perf_event_open syscall
+## perf_event_open syscall {#perfeventopen-syscall}
 
 ```c
 #include <linux/perf_event.h>
@@ -48,7 +48,7 @@ ioctl(fd, PERF_EVENT_IOC_DISABLE, 0);
 close(fd);
 ```
 
-## Event types
+## Event types {#event-types}
 
 ```c
 /* Hardware events (CPU PMU) */
@@ -94,7 +94,7 @@ close(fd);
 .config = <cpu-specific PMU event code>  /* e.g., Intel perfmon event */
 ```
 
-## Sampling mode
+## Sampling mode {#sampling-mode}
 
 Sampling records the instruction pointer (and optionally call stack) every N events:
 
@@ -136,9 +136,9 @@ while (header->data_tail != header->data_head) {
 }
 ```
 
-## perf tool: the userspace frontend
+## perf tool: the userspace frontend {#perf-tool-the-userspace-frontend}
 
-### Counting
+### Counting {#counting}
 
 ```bash
 # Count events for a command
@@ -163,7 +163,7 @@ perf stat -a sleep 5
 perf stat -e cycles,instructions -r 3 ./myapp  # repeat 3 times
 ```
 
-### CPU profiling with perf record
+### CPU profiling with perf record {#cpu-profiling-with-perf-record}
 
 ```bash
 # Record with call graphs (frame pointer)
@@ -185,7 +185,7 @@ perf report --call-graph=graph
 perf report --stdio
 ```
 
-### Flame graphs
+### Flame graphs {#flame-graphs}
 
 ```bash
 # Record
@@ -198,7 +198,7 @@ perf script | stackcollapse-perf.pl | flamegraph.pl > flamegraph.svg
 hotspot perf.data
 ```
 
-### Kernel internals: struct perf_event
+### Kernel internals: struct perf_event {#kernel-internals-struct-perf_event}
 
 ```c
 /* include/linux/perf_event.h */
@@ -253,7 +253,7 @@ struct hw_perf_event {
 };
 ```
 
-### PMU: Hardware Performance Monitoring Unit
+### PMU: Hardware Performance Monitoring Unit {#pmu-hardware-performance-monitoring-unit}
 
 Each CPU architecture has a PMU with a limited number of programmable counters. On Intel:
 
@@ -275,7 +275,7 @@ Relevant MSRs:
 
 The perf subsystem multiplexes software events onto the limited hardware counters using `context_switch` and `rotation`.
 
-## Observing perf internals
+## Observing perf internals {#observing-perf-internals}
 
 ```bash
 # List available events
@@ -297,7 +297,7 @@ cat /proc/sys/kernel/perf_event_paranoid
 echo 0 > /proc/sys/kernel/perf_event_paranoid
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [ftrace](ftrace.md) — Low-level function tracing
 - [Kprobes and Tracepoints](kprobes-tracepoints.md) — Dynamic and static events used with perf

@@ -1,8 +1,8 @@
-# Life of a write() Syscall
+# Life of a write() Syscall {#life-of-a-write-syscall}
 
 > From application call to dirty page in the page cache (and eventually to disk)
 
-## Overview
+## Overview {#overview}
 
 ```
 Application: write(fd, buf, 4096)
@@ -28,7 +28,7 @@ Filesystem's ->writepages() (ext4, etc.)
 Block layer → disk
 ```
 
-## Phase 1: Syscall entry
+## Phase 1: Syscall entry {#phase-1-syscall-entry}
 
 The `write(2)` system call is documented in the Linux man pages [(man page)](https://man7.org/linux/man-pages/man2/write.2.html). The VFS layer dispatches it through a chain of generic helpers before it reaches the filesystem-specific code.
 
@@ -52,7 +52,7 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf, size_t, count
 }
 ```
 
-## Phase 2: VFS checks
+## Phase 2: VFS checks {#phase-2-vfs-checks}
 
 ```c
 /* fs/read_write.c */
@@ -74,7 +74,7 @@ ssize_t vfs_write(struct file *file, const char __user *buf,
 }
 ```
 
-## Phase 3: generic_file_write_iter
+## Phase 3: generic_file_write_iter {#phase-3-genericfilewrite_iter}
 
 For regular files, the filesystem's `write_iter` (e.g., `ext4_file_write_iter`) eventually calls `generic_file_write_iter()`:
 
@@ -99,7 +99,7 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
 }
 ```
 
-## Phase 4: writing to the page cache
+## Phase 4: writing to the page cache {#phase-4-writing-to-the-page-cache}
 
 `generic_perform_write()` loops over each page needed:
 
@@ -131,7 +131,7 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 }
 ```
 
-## Phase 5: dirty tracking
+## Phase 5: dirty tracking {#phase-5-dirty-tracking}
 
 After `set_page_dirty()`, multiple structures are marked dirty:
 
@@ -152,7 +152,7 @@ __mark_inode_dirty(inode, I_DIRTY_PAGES)
 wb_wakeup_delayed(wb)
 ```
 
-## Phase 6: writeback
+## Phase 6: writeback {#phase-6-writeback}
 
 The writeback daemon (`kworker`) periodically flushes dirty pages to disk:
 
@@ -182,7 +182,7 @@ Writeback is triggered by:
 - **Memory pressure**: when dirty pages exceed `dirty_ratio` (default 20% of RAM)
 - **fsync()**: explicit flush by the application
 
-## Viewing dirty page state
+## Viewing dirty page state {#viewing-dirty-page-state}
 
 ```bash
 # Current dirty memory
@@ -201,7 +201,7 @@ ls /sys/class/bdi/*/
 cat /sys/class/bdi/8:0/read_ahead_kb
 ```
 
-## fsync() vs fdatasync() vs sync()
+## fsync() vs fdatasync() vs sync() {#fsync-vs-fdatasync-vs-sync}
 
 `fsync()` [(man page)](https://man7.org/linux/man-pages/man2/fsync.2.html) guarantees that all data and metadata for a file are on stable storage. `fdatasync()` is the lighter variant: it flushes data and any metadata needed to read the data back (e.g., file size) but skips non-essential metadata such as access time. `sync()` [(man page)](https://man7.org/linux/man-pages/man2/sync.2.html) flushes everything system-wide.
 
@@ -220,7 +220,7 @@ fdatasync(fd)  /* faster than fsync when only data matters */
 sync()         /* use sparingly — blocks until complete */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Page Cache](../mm/page-cache.md) — How dirty pages are stored in memory
 - [File Operations](file-ops.md) — The file_operations vtable

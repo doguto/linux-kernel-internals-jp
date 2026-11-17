@@ -1,8 +1,8 @@
-# Shared Memory, Semaphores, and eventfd
+# Shared Memory, Semaphores, and eventfd {#shared-memory-semaphores-and-eventfd}
 
 > Zero-copy IPC and lightweight synchronization primitives
 
-## POSIX shared memory
+## POSIX shared memory {#posix-shared-memory}
 
 POSIX shared memory creates a named object backed by tmpfs that multiple processes can `mmap` into their address spaces:
 
@@ -42,7 +42,7 @@ ls /dev/shm/   # see current shared memory objects
 ipcs -m        # see System V shared memory segments
 ```
 
-## System V shared memory
+## System V shared memory {#system-v-shared-memory}
 
 The older but more widely available SHM API:
 
@@ -80,11 +80,11 @@ ipcs -m
 ipcrm -m <shmid>
 ```
 
-## Synchronization: POSIX semaphores
+## Synchronization: POSIX semaphores {#synchronization-posix-semaphores}
 
 Shared memory requires external synchronization. POSIX semaphores provide a counter that can be atomically incremented/decremented:
 
-### Named semaphores (between unrelated processes)
+### Named semaphores (between unrelated processes) {#named-semaphores-between-unrelated-processes}
 
 ```c
 #include <semaphore.h>
@@ -108,7 +108,7 @@ sem_post(sem);
 sem_close(sem);
 ```
 
-### Unnamed semaphores (shared memory or threads)
+### Unnamed semaphores (shared memory or threads) {#unnamed-semaphores-shared-memory-or-threads}
 
 ```c
 /* In shared memory, accessible to multiple processes */
@@ -133,7 +133,7 @@ sem_destroy(&sh->sem);
 munmap(sh, sizeof(*sh));
 ```
 
-### Kernel implementation
+### Kernel implementation {#kernel-implementation}
 
 POSIX semaphores use futexes internally:
 
@@ -152,7 +152,7 @@ sem_post(sem) {
 }
 ```
 
-## eventfd: lightweight event notification
+## eventfd: lightweight event notification {#eventfd-lightweight-event-notification}
 
 `eventfd` creates a file descriptor backed by a 64-bit counter — the lightest-weight
 notification mechanism, and the standard way to wake an `epoll`-driven event loop from another
@@ -176,7 +176,7 @@ libuv/libevent event loop backends, and cgroup event notification. See
 epoll integration pattern, and the real kernel implementation (`struct eventfd_ctx`,
 `eventfd_write()`/`eventfd_read()`).
 
-## memfd: anonymous file-backed shared memory
+## memfd: anonymous file-backed shared memory {#memfd-anonymous-file-backed-shared-memory}
 
 `memfd_create` creates an anonymous file in memory (no filesystem path), useful for sharing without name collisions:
 
@@ -205,7 +205,7 @@ send_fd_over_socket(socket_fd, fd);
   journal's own convention for large fields, not part of the D-Bus wire protocol itself
   (`misc_memfd()` in dbus-broker's `src/util/misc.c`, used from `src/util/log.c`)
 
-## Comparing shared memory approaches
+## Comparing shared memory approaches {#comparing-shared-memory-approaches}
 
 | Approach | Setup | Name in fs | fd | Sealing | Best for |
 |----------|-------|-----------|-----|---------|---------|
@@ -214,16 +214,16 @@ send_fd_over_socket(socket_fd, fd);
 | `mmap(MAP_SHARED | MAP_ANONYMOUS)` | Anonymous | No | No | Parent-child only |
 | `memfd_create` | Anonymous file | No | Yes | Yes | Dynamic, fd-passing |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [ipc/shm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/shm.c) — `shmget()`, `shmat()`/`shmdt()`, and `shmctl()` syscalls; `newseg()` creates the segment's hidden backing file via `shmem_kernel_file_setup()` (or `hugetlb_file_setup()` for `SHM_HUGETLB`)
 - [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — `shmem_file_setup()`/`shmem_kernel_file_setup()`: the tmpfs backing shared by both POSIX `shm_open()` objects and SysV `shmget()` segments
 - [mm/memfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memfd.c) — `memfd_create()` syscall and the `F_SEAL_*` sealing checks
 - [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()`/`eventfd_read()` and the `struct eventfd_ctx` counter/wait-queue implementation
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`shmget(2)`](https://man7.org/linux/man-pages/man2/shmget.2.html) — allocate a System V shared memory segment
 - [`shmat(2)`/`shmdt(2)`](https://man7.org/linux/man-pages/man2/shmat.2.html) — attach/detach a System V segment
@@ -234,7 +234,7 @@ send_fd_over_socket(socket_fd, fd);
 - [`memfd_create(2)`](https://man7.org/linux/man-pages/man2/memfd_create.2.html) — anonymous sealable memory files
 - [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — counter-backed notification fd, including `EFD_SEMAPHORE`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [Process Address Space](../mm/mmap.md) — VMAs and the `MAP_SHARED` flag that both POSIX shm and anonymous shared mappings rely on
 - [File-Backed mmap and Page Faults](../mm/file-mmap.md) — `MAP_PRIVATE` vs `MAP_SHARED` fault handling in detail
@@ -243,10 +243,10 @@ send_fd_over_socket(socket_fd, fd);
 - [eventfd and signalfd](eventfd-signalfd.md) — `struct eventfd_ctx`, epoll integration, and signalfd covered in depth
 - [Unix Domain Sockets](unix-sockets.md) — `SCM_RIGHTS`, the generic mechanism for passing any open file descriptor (including a `memfd_create()` fd) between processes
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Sealed files](https://lwn.net/Articles/593918/) (2014) — Jonathan Corbet on the `memfd_create()` and `F_SEAL_*` sealing mechanism described in this page's memfd section
 
-### External
+### External {#external}
 
 - [tmpfs — The Linux Kernel documentation](https://docs.kernel.org/filesystems/tmpfs.html) — confirms both POSIX `shm_open()`/`/dev/shm` and SysV `shmget()` segments are backed by tmpfs (SysV via an internal, non-visible mount)

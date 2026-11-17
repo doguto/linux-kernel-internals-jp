@@ -1,8 +1,8 @@
-# Lockdep: Lock Dependency Validator
+# Lockdep: Lock Dependency Validator {#lockdep-lock-dependency-validator}
 
 > The kernel's runtime lock correctness checker
 
-## What lockdep does
+## What lockdep does {#what-lockdep-does}
 
 Lockdep is a kernel subsystem (enabled by `CONFIG_PROVE_LOCKING`) that tracks lock acquisition order at runtime and detects potential deadlocks before they actually happen. It catches:
 
@@ -14,7 +14,7 @@ Lockdep is a kernel subsystem (enabled by `CONFIG_PROVE_LOCKING`) that tracks lo
 
 Lockdep reports a "possible deadlock" the first time it sees a new lock ordering that could lead to deadlock — even if no actual deadlock has occurred yet. This is much better than waiting for a real deadlock to happen in production.
 
-## Lock classes
+## Lock classes {#lock-classes}
 
 Lockdep tracks **lock classes**, not individual lock instances. A class represents "all locks initialized with this key". For example, all `mutex` instances of type `struct inode->i_mutex` belong to the same class, even though there are millions of inodes.
 
@@ -37,7 +37,7 @@ void init_my_struct(struct my_struct *s)
 }
 ```
 
-## Dependency graph
+## Dependency graph {#dependency-graph}
 
 Every time a lock is acquired while another lock is already held, lockdep adds an edge A → B to its directed graph. A circular dependency (A → B → A) means a potential deadlock.
 
@@ -50,7 +50,7 @@ Scenario:
 
 The warning appears the moment Thread 2's pattern is first observed, even if Threads 1 and 2 never actually run concurrently.
 
-## Reading a lockdep warning
+## Reading a lockdep warning {#reading-a-lockdep-warning}
 
 ```
 ======================================================
@@ -81,7 +81,7 @@ Key fields:
 - The lock type annotation `{+.+.}` shows where it's used: `+` = used with IRQs enabled, `-` = used with IRQs disabled, `.` = not used in that context
 - The dependency chain shows the exact call path that created the dependency
 
-## Lock annotations
+## Lock annotations {#lock-annotations}
 
 Lockdep provides annotations to use in your code:
 
@@ -107,7 +107,7 @@ lockdep_assert_in_rcu_read_lock();
 
 These are no-ops when lockdep is disabled (`CONFIG_PROVE_LOCKING=n`), so they're safe to leave in production code.
 
-## Subclasses for nested locks
+## Subclasses for nested locks {#subclasses-for-nested-locks}
 
 When you legitimately take two locks of the same class in order (e.g., locking a parent then a child in a tree traversal), lockdep needs a subclass annotation to understand this is intentional and not a deadlock:
 
@@ -132,7 +132,7 @@ void lock_parent_then_child(struct tree_node *parent,
 
 The `_nested` variants (`mutex_lock_nested`, `spin_lock_nested`, `down_read_nested`, etc.) take a subclass argument that lockdep uses to distinguish lock orderings at different tree depths.
 
-## /proc/lockdep
+## /proc/lockdep {#proclockdep}
 
 When lockdep is active, it exposes its data:
 
@@ -151,7 +151,7 @@ cat /proc/lockdep_stats
 # all direct dependencies: 23456
 ```
 
-## Lock stats (/proc/lock_stat)
+## Lock stats (/proc/lock_stat) {#lock-stats-proclock_stat}
 
 With `CONFIG_LOCK_STAT`, the kernel tracks contention per lock class:
 
@@ -171,7 +171,7 @@ Columns:
 
 High `contentions` and `waittime-max` indicate a lock hotspot.
 
-## Performance impact
+## Performance impact {#performance-impact}
 
 Lockdep is expensive — it keeps a complete dependency graph in memory and validates every lock acquisition. It's intended for development/testing kernels, not production:
 
@@ -180,7 +180,7 @@ Lockdep is expensive — it keeps a complete dependency graph in memory and vali
 
 For production, compile with `CONFIG_PROVE_LOCKING=n`. The `lockdep_assert_held()` annotations remain as no-ops.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Lock contention debugging](lock-debugging.md) — Using lock_stat and perf to find hotspots
 - [Spinlock](spinlock.md) — What lockdep validates

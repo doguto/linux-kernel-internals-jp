@@ -1,8 +1,8 @@
-# ARM64 Architecture
+# ARM64 Architecture {#arm64-architecture}
 
 > Exception levels, memory model, and ARM-specific kernel internals
 
-## Why ARM64?
+## Why ARM64? {#why-arm64}
 
 ARM64 (AArch64) is the dominant architecture for:
 
@@ -13,7 +13,7 @@ ARM64 (AArch64) is the dominant architecture for:
 
 Understanding ARM64-specific behavior is essential for kernel work on these platforms.
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -26,7 +26,7 @@ Understanding ARM64-specific behavior is essential for kernel work on these plat
 | [Spectre and Meltdown](spectre-meltdown.md) | Spectre v1/v2/BHB/v4, SSBS, CSV2, BHB clearing, KPTI |
 | [War Stories](war-stories.md) | SVE context switch, TLB ordering, DMA coherency, BTI crash, errata range bug |
 
-## ARM64 vs x86 key differences
+## ARM64 vs x86 key differences {#arm64-vs-x86-key-differences}
 
 | Feature | x86-64 | ARM64 |
 |---------|--------|-------|
@@ -38,7 +38,7 @@ Understanding ARM64-specific behavior is essential for kernel work on these plat
 | Page sizes | 4K/2M/1G | 4K/16K/64K base + 2M/1G huge |
 | TLB shootdown | IPI to other CPUs | TLBI broadcast via DSB |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # CPU features on ARM64

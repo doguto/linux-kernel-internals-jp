@@ -1,4 +1,4 @@
-# War Stories: Performance Regressions from mm Changes
+# War Stories: Performance Regressions from mm Changes {#war-stories-performance-regressions-from-mm-changes}
 
 > Real regressions from Linux memory management changes — what broke, why, and what the kernel learned
 
@@ -8,25 +8,25 @@ These are not hypothetical risks. Each caused real outages or performance degrad
 
 ---
 
-## Case 1: THP defrag=always and synchronous compaction stalls (v2.6.38–v4.x)
+## Case 1: THP defrag=always and synchronous compaction stalls (v2.6.38–v4.x) {#case-1-thp-defragalways-and-synchronous-compaction-stalls-v2638v4x}
 
-### Before state
+### Before state {#before-state}
 
 Before Transparent Huge Pages (v2.6.38, 2011), applications ran entirely on 4KB pages. Latency-sensitive workloads like Redis or database buffer pools were predictable: a page fault was a page fault, taking roughly the same time every time.
 
-### The change
+### The change {#the-change}
 
 THP shipped in v2.6.38 with `defrag=always` as the default mode for the `defrag` knob. This meant that every time the kernel tried to allocate a 2MB huge page and physical memory was fragmented, it would invoke synchronous memory compaction inline — in the page fault handler, while the faulting process was blocked waiting for the fault to complete.
 
 The intent was sound: compact memory eagerly so that huge pages are always available. The problem was that compaction is expensive. It scans large ranges of physical memory, identifies movable pages, and migrates them to create a 2MB contiguous region. On a loaded system, this work could take many milliseconds.
 
-### Observed regression
+### Observed regression {#observed-regression}
 
 Latency-sensitive applications — Redis instances, PostgreSQL, MySQL, and Java workloads with large heap sizes — began reporting random latency spikes. A request that normally completed in under a millisecond would occasionally take tens of milliseconds or more. The spikes were irregular and hard to reproduce in testing because they depended on the fragmentation state of physical memory, which varied with system uptime and allocation patterns.
 
 The pattern was first widely noticed and documented in LWN coverage of THP behavior (see [LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/) and subsequent follow-up articles). Database operators discovered that enabling THP — often enabled by default in distributions — was causing the problem.
 
-### Why it happened
+### Why it happened {#why-it-happened}
 
 The compaction path (`try_to_compact_pages` → `compact_zone`) walks physical memory looking for movable pages and free pages to create a contiguous 2MB region. This work scales with the number of pages scanned, not the size of the allocation. On a fragmented 64GB system, satisfying a single 2MB THP allocation could require scanning and migrating hundreds of megabytes of physical memory.
 
@@ -34,7 +34,7 @@ This happened synchronously in the fault path. The faulting process was blocked 
 
 Worse, the trigger was non-deterministic: compaction was only needed when memory was fragmented. A freshly booted system rarely triggered it. A system that had been running for hours, with many allocations and frees creating "Swiss cheese" fragmentation, triggered it constantly.
 
-### Resolution
+### Resolution {#resolution}
 
 The kernel added new `defrag` modes to give operators and applications more control:
 
@@ -67,7 +67,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 Many Linux distributions changed their defaults away from `defrag=always` as a result of this class of regression. See [compaction.md](compaction.md) for how compaction works and [thp.md](thp.md) for THP configuration details.
 
-### What it taught us
+### What it taught us {#what-it-taught-us}
 
 **Synchronous work in the fault path has unbounded latency.** Any operation that can scale with system state (fragmentation, memory size) and runs inline during a page fault will produce latency spikes proportional to that state. The lesson generalized beyond THP: the kernel should never do expensive, open-ended work in a path that a latency-sensitive process is blocked on.
 
@@ -85,21 +85,21 @@ Many Linux distributions changed their defaults away from `defrag=always` as a r
 
 ---
 
-## Case 2: Automatic NUMA balancing overhead (v3.13)
+## Case 2: Automatic NUMA balancing overhead (v3.13) {#case-2-automatic-numa-balancing-overhead-v313}
 
-### Before state
+### Before state {#before-state_1}
 
 Before v3.13, NUMA-aware placement was entirely the application's responsibility. Operators used `numactl --membind` or `numactl --interleave` to control where memory was allocated, and workloads that cared about locality had to be tuned manually. Most workloads ran without any NUMA policy and got whatever the default allocator gave them (typically local-node allocation via the `MPOL_DEFAULT` policy).
 
 This was imperfect — processes could migrate between CPUs and end up with remote memory — but it was **predictable**. The kernel did not move pages after they were allocated.
 
-### The change
+### The change {#the-change_1}
 
 Automatic NUMA balancing (`CONFIG_NUMA_BALANCING`) was introduced in v3.13 by Mel Gorman. The design addressed a real problem: processes that migrated between NUMA nodes ended up accessing remote memory, paying a latency penalty on every access. The kernel had no mechanism to detect this and correct it.
 
 The mechanism worked by periodically unmapping pages (marking PTEs as inaccessible) to catch access faults. When a process faulted on a page it had previously accessed, the kernel recorded which CPU caused the fault, measured the locality, and could decide to migrate the page closer to that CPU. The scanning was rate-limited by `numa_balancing_scan_period_min_ms` and `numa_balancing_scan_size_mb`.
 
-### Observed regression
+### Observed regression {#observed-regression_1}
 
 Several classes of workload regressed:
 
@@ -111,7 +111,7 @@ Several classes of workload regressed:
 
 The regressions were documented in LKML discussions shortly after v3.13 shipped (see the `linux-numa` and `linux-mm` archives from early 2014) and in LWN's coverage of NUMA balancing.
 
-### Why it happened
+### Why it happened {#why-it-happened_1}
 
 The core mechanism — intentionally unmapping pages to catch faults — has inherent cost regardless of whether migration occurs:
 
@@ -125,7 +125,7 @@ The core mechanism — intentionally unmapping pages to catch faults — has inh
 
 The problem was that NUMA balancing applied to all processes by default, including those that had already been carefully tuned or that had workloads unsuitable for automatic migration.
 
-### Resolution
+### Resolution {#resolution_1}
 
 The kernel added sysctls to control NUMA balancing behavior:
 
@@ -163,7 +163,7 @@ cat /proc/sys/kernel/numa_balancing_scan_delay_ms       # default: 1000
 
 The general guidance that emerged: workloads with well-understood NUMA topology should use explicit `numactl`/`mbind` placement and disable automatic balancing. Automatic balancing is most useful for workloads whose NUMA access patterns are dynamic or unknown.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_1}
 
 **Proactive optimization that interferes with deliberate placement is net negative.** The kernel did not know that an operator had already pinned a workload to specific NUMA nodes. From its perspective, a process accessing remote memory looked like a candidate for migration. The solution required adding control surfaces so that operators (and applications) could opt out.
 
@@ -190,19 +190,19 @@ The general guidance that emerged: workloads with well-understood NUMA topology 
 
 ---
 
-## Case 3: khugepaged CPU storms on multi-process systems
+## Case 3: khugepaged CPU storms on multi-process systems {#case-3-khugepaged-cpu-storms-on-multi-process-systems}
 
-### Before state
+### Before state {#before-state_2}
 
 Before THP (v2.6.38), the kernel had no background thread scanning process address spaces looking for memory to reorganize. Background memory activity was limited to kswapd (reclaim) and pdflush/writeback threads. These were well-understood and their CPU usage was proportional to memory pressure.
 
-### The change
+### The change {#the-change_2}
 
 THP introduced khugepaged, a kernel thread whose job is to find 512 contiguous 4KB pages in a process's address space and collapse them into a single 2MB huge page. This runs asynchronously, decoupled from the fault path. The intent was to allow THP to improve over time: even if a 2MB page couldn't be allocated at fault time (because memory was fragmented), khugepaged could later consolidate the 4KB pages into a huge page once there was an opportunity.
 
 The initial implementation was tuned for systems with relatively few long-lived processes.
 
-### Observed regression
+### Observed regression {#observed-regression_2}
 
 On systems running many processes — container hosts, build farms, CI systems, servers running hundreds of worker processes — khugepaged caused periodic CPU spikes. The spikes were visible in `top` and `perf top` as `khugepaged` consuming 1-5% of a CPU core periodically.
 
@@ -210,7 +210,7 @@ The pattern: khugepaged woke up on its scan interval, worked through a list of r
 
 In some cases, the scanning itself was harmful: khugepaged needed to acquire `mmap_lock` (formerly `mmap_sem`) in read mode to walk process page tables. On processes with heavily-used address spaces, this created contention with the application's own page fault handling.
 
-### Why it happened
+### Why it happened {#why-it-happened_2}
 
 The scan cost had two components:
 
@@ -220,7 +220,7 @@ The scan cost had two components:
 
 The CPU budget for khugepaged was not well-bounded relative to the number of processes or the size of their address spaces.
 
-### Resolution
+### Resolution {#resolution_2}
 
 The main levers for controlling khugepaged CPU usage are its scan interval and the number of pages it scans per wakeup:
 
@@ -246,7 +246,7 @@ echo never > /sys/kernel/mm/transparent_hugepage/enabled
 
 Over several kernel releases, khugepaged's scheduling was improved to better track which VMAs had changed since the last scan, avoiding rescanning unchanged regions. The per-process scan list management also improved.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_2}
 
 **Background optimization threads need CPU budgeting proportional to actual work available, not system size.** A system with 500 processes needs khugepaged to efficiently skip processes that have nothing to collapse, rather than visiting them all every scan cycle.
 
@@ -269,19 +269,19 @@ Over several kernel releases, khugepaged's scheduling was improved to better tra
 
 ---
 
-## Case 4: Swap readahead window mismatch
+## Case 4: Swap readahead window mismatch {#case-4-swap-readahead-window-mismatch}
 
-### Before state
+### Before state {#before-state_3}
 
 The Linux swap readahead mechanism prefetches swap pages sequentially when a page fault causes a swap-in. The assumption: if you're faulting in swap page N, you'll probably need swap page N+1, N+2, etc. soon. This is the same principle as page cache readahead for files. Reading ahead reduces latency for sequential swap access by hiding disk seek latency.
 
 The original readahead window was small and conservative.
 
-### The change
+### The change {#the-change_3}
 
 The swap readahead logic has been revised multiple times across kernel versions. In some versions, the readahead window size was increased to improve throughput for swap-heavy workloads. The changes affected how many additional pages the kernel would prefetch beyond the page that actually faulted.
 
-### Observed regression
+### Observed regression {#observed-regression_3}
 
 Two opposite failure modes have been observed at different times, both documented in LKML and LWN discussions of swap readahead behavior:
 
@@ -291,7 +291,7 @@ Two opposite failure modes have been observed at different times, both documente
 
 The regression pattern was documented in discussions around the swap readahead code in `mm/swap_state.c` and `mm/swap_slots.c`. The problem is described in the context of the "swap readahead trap" covered in [swapping.md](swapping.md#case-5-the-swap-readahead-trap).
 
-### Why it happened
+### Why it happened {#why-it-happened_3}
 
 Swap readahead inherits the same fundamental tension as page cache readahead: the kernel must predict whether future access will be sequential or random, using only past access patterns as a hint. For swap, this prediction is harder than for files because:
 
@@ -303,7 +303,7 @@ Swap readahead inherits the same fundamental tension as page cache readahead: th
 
 The readahead window is a single global parameter that cannot capture this workload diversity.
 
-### Resolution
+### Resolution {#resolution_3}
 
 The kernel's swap readahead path in `mm/swap_state.c` has been revised over multiple releases to use adaptive window sizing and better sequential detection. The `page_cluster` sysctl controls the readahead window:
 
@@ -331,7 +331,7 @@ Higher values (3-5) are appropriate for:
 
 Modern kernels also introduced swap slot clustering (`SWAP_CLUSTER_MAX`) to improve the locality of swap allocations, making readahead more effective when it is used.
 
-### What it taught us
+### What it taught us {#what-it-taught-us_3}
 
 **A single global parameter cannot describe diverse workloads.** Page cluster was a reasonable default for the original Linux target workload (workstations with a single large process under memory pressure). Servers running hundreds of small processes with interleaved swap access patterns need different tuning.
 
@@ -355,7 +355,7 @@ Modern kernels also introduced swap slot clustering (`SWAP_CLUSTER_MAX`) to impr
 
 ---
 
-## Common threads
+## Common threads {#common-threads}
 
 These four regressions share a set of structural patterns worth recognizing:
 
@@ -373,7 +373,7 @@ Recognizing the pattern is the first step to diagnosing it.
 
 ---
 
-## See also
+## See also {#see-also}
 
 - [Transparent Huge Pages](thp.md) — THP configuration and khugepaged tuning
 - [Memory Compaction](compaction.md) — How compaction works and its cost model
@@ -385,7 +385,7 @@ Recognizing the pattern is the first step to diagnosing it.
 
 ---
 
-## External references
+## External references {#external-references}
 
 - [LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/) — Original THP coverage including defrag behavior
 - [LWN: NUMA in a hurry](https://lwn.net/Articles/486858/) — Background on NUMA balancing design
@@ -396,7 +396,7 @@ Recognizing the pattern is the first step to diagnosing it.
 - [mm/khugepaged.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) — khugepaged implementation
 - [mm/swap_state.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) — Swap readahead implementation
 
-## Further reading
+## Further reading {#further-reading}
 
 - [war-stories-bugs.md](war-stories-bugs.md) — Production bug narratives: `zone_reclaim_mode` NUMA thrashing, THP compound page locking overhead, and RSS percpu counter inaccuracy causing wrong OOM victims
 - [Tuning Memory for Databases](tuning-databases.md) — practical guidance for avoiding the THP compaction stalls (Case 1) and NUMA placement problems (Case 2) covered here

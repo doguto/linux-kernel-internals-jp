@@ -1,8 +1,8 @@
-# Device Tree: ARM Hardware Description
+# Device Tree: ARM Hardware Description {#device-tree-arm-hardware-description}
 
 > DTS syntax, of_ API, platform driver binding, and DT overlays
 
-## What is a Device Tree?
+## What is a Device Tree? {#what-is-a-device-tree}
 
 On x86, the kernel discovers hardware at runtime (ACPI, PCI enumeration). On ARM and other embedded platforms, hardware is not self-describing — a **Device Tree** (DT) is a static description passed from the bootloader to the kernel. The Device Tree format originated in Sun's OpenFirmware and was adapted for Linux/PowerPC before Grant Likely championed its adoption for ARM [(LWN)](https://lwn.net/Articles/414016/); ARM device tree support landed in Linux 3.0 (July 2011) [(commit)](https://git.kernel.org/linus/9eb8f6743b076b67f00776cda4330c802e157b41):
 
@@ -18,7 +18,7 @@ Kernel:
   → platform drivers bind to nodes via compatible string
 ```
 
-## DTS syntax
+## DTS syntax {#dts-syntax}
 
 Device tree source (`.dts`) is compiled to binary blob (`.dtb`) with `dtc`:
 
@@ -108,7 +108,7 @@ dtc -I dtb -O dts /proc/device-tree > running.dts
 ls /proc/device-tree/
 ```
 
-## DTSI includes
+## DTSI includes {#dtsi-includes}
 
 ```dts
 /* SoC-level DTSI (shared hardware description): */
@@ -136,9 +136,9 @@ ls /proc/device-tree/
 };
 ```
 
-## Platform driver binding
+## Platform driver binding {#platform-driver-binding}
 
-### The compatible string
+### The compatible string {#the-compatible-string}
 
 The kernel matches DT nodes to drivers via the `compatible` property:
 
@@ -166,7 +166,7 @@ static struct platform_driver ns16550_driver = {
 module_platform_driver(ns16550_driver);
 ```
 
-### probe() reading DT properties
+### probe() reading DT properties {#probe-reading-dt-properties}
 
 ```c
 static int ns16550_probe(struct platform_device *pdev)
@@ -231,7 +231,7 @@ static int ns16550_probe(struct platform_device *pdev)
 }
 ```
 
-## of_ API reference
+## of_ API reference {#of_-api-reference}
 
 ```c
 /* Node lookup */
@@ -266,7 +266,7 @@ int of_irq_get(struct device_node *dev, int index);
 int of_irq_count(struct device_node *dev);
 ```
 
-## Phandles and cross-references
+## Phandles and cross-references {#phandles-and-cross-references}
 
 ```dts
 /* Phandles allow nodes to reference other nodes */
@@ -305,7 +305,7 @@ struct device_node *clk_node = of_parse_phandle(np, "clocks", 0);
 struct clk *clk = of_clk_get_by_name(np, "baudclk");
 ```
 
-## Device Tree overlays (DTO)
+## Device Tree overlays (DTO) {#device-tree-overlays-dto}
 
 Overlays allow dynamic modification of the live DT (e.g., Raspberry Pi hats):
 
@@ -347,7 +347,7 @@ rmdir /sys/kernel/config/device-tree/overlays/my-overlay
 ls /sys/kernel/config/device-tree/overlays/
 ```
 
-## Debugging Device Trees
+## Debugging Device Trees {#debugging-device-trees}
 
 ```bash
 # Live DT as filesystem:
@@ -385,7 +385,7 @@ dmesg | grep "11000000.serial"
 # [    1.234] 11000000.serial: ttyS0 at MMIO 0x11000000 (irq = 32, ...) is a NS16550A
 ```
 
-## Platform device lifecycle
+## Platform device lifecycle {#platform-device-lifecycle}
 
 ```
 DT blob → of_platform_populate() → creates struct platform_device for each node
@@ -415,7 +415,7 @@ struct platform_device {
 };
 ```
 
-## DT vs ACPI
+## DT vs ACPI {#dt-vs-acpi}
 
 | Feature | Device Tree | ACPI |
 |---------|-------------|------|
@@ -433,7 +433,7 @@ ls /proc/device-tree  2>/dev/null && echo "Device Tree" || echo "ACPI/other"
 ls /sys/firmware/acpi 2>/dev/null && echo "ACPI present"
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [PCI Drivers](pci-driver.md) — PCI device binding (vs DT platform binding)
 - [IRQ Affinity](../interrupts/irq-affinity.md) — DT interrupt-controller binding

@@ -1,8 +1,8 @@
-# IRQ Descriptor and irq_chip
+# IRQ Descriptor and irq_chip {#irq-descriptor-and-irq_chip}
 
 > The kernel's abstraction over interrupt hardware
 
-## The three-layer interrupt abstraction
+## The three-layer interrupt abstraction {#the-three-layer-interrupt-abstraction}
 
 The Linux interrupt subsystem — the genirq framework introduced in Linux 2.6.16 by Thomas Gleixner and Ingo Molnár [(LWN)](https://lwn.net/Articles/184750/) — uses three structures to abstract over wildly different interrupt controllers (APIC, GIC, IOAPIC, MSI, GPIO controllers...):
 
@@ -18,7 +18,7 @@ struct irq_desc        ← per-IRQ kernel state (handlers, counters, flags)
     └── struct irqaction     ← linked list of registered handlers
 ```
 
-## struct irq_desc
+## struct irq_desc {#struct-irq_desc}
 
 One `irq_desc` exists for each Linux IRQ number. It's the central object that ties together the hardware abstraction and the software handlers:
 
@@ -45,7 +45,7 @@ Key fields:
 - `action`: linked list of `irqaction` structs, one per registered handler
 - `depth`: incremented by `disable_irq()`, decremented by `enable_irq()` — only 0 means actually enabled
 
-## struct irqaction
+## struct irqaction {#struct-irqaction}
 
 One `irqaction` per `request_irq()` call. Multiple drivers can share an IRQ line, each with its own `irqaction`:
 
@@ -65,7 +65,7 @@ struct irqaction {
 
 When a shared IRQ fires, the kernel walks the `irqaction` chain calling each handler in turn. Each handler returns `IRQ_HANDLED` if it handled the interrupt, or `IRQ_NONE` if it wasn't its device.
 
-## struct irq_chip
+## struct irq_chip {#struct-irq_chip}
 
 The `irq_chip` provides operations for controlling the interrupt controller hardware. Each controller (APIC, ARM GIC, etc.) implements this interface:
 
@@ -96,7 +96,7 @@ struct irq_chip {
 
 Drivers typically don't call `irq_chip` operations directly — the generic IRQ layer calls them at the right time.
 
-## IRQ domains
+## IRQ domains {#irq-domains}
 
 Modern systems have hierarchical interrupt controllers (e.g., GPIO expander → GIC → CPU). **IRQ domains** map hardware interrupt numbers to Linux IRQ numbers:
 
@@ -129,7 +129,7 @@ static int my_irq_domain_map(struct irq_domain *d,
 }
 ```
 
-## Flow handlers
+## Flow handlers {#flow-handlers}
 
 The flow handler (`handle_irq` in `irq_desc`) determines how interrupt delivery works:
 
@@ -146,7 +146,7 @@ The difference between edge and level matters:
 - **Edge**: interrupt fires once when signal transitions. If missed, it won't fire again.
 - **Level**: interrupt fires as long as signal is asserted. Must be masked during handling.
 
-## Observing IRQ state
+## Observing IRQ state {#observing-irq-state}
 
 ```bash
 # Full IRQ table with controller info
@@ -163,7 +163,7 @@ cat /proc/irq/24/smp_affinity_list  # e.g., "0-3"
 cat /sys/kernel/debug/irq/irqs/24  # (requires debugfs)
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Interrupt Handling Overview](interrupts.md) — The hardware interrupt flow
 - [request_irq and free_irq](request-irq.md) — Registering irqactions

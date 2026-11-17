@@ -1,8 +1,8 @@
-# perf Profiling Advanced
+# perf Profiling Advanced {#perf-profiling-advanced}
 
 > Flame graphs, off-CPU analysis, memory profiling, and scheduler tracing
 
-## perf record basics (recap)
+## perf record basics (recap) {#perf-record-basics-recap}
 
 ```bash
 # CPU profiling: sample at 99Hz for 30 seconds
@@ -17,11 +17,11 @@ perf report --stdio | head -50
 
 See [perf Events](perf-events.md) for fundamentals. This page covers advanced analysis.
 
-## Flame graphs: visualizing CPU time
+## Flame graphs: visualizing CPU time {#flame-graphs-visualizing-cpu-time}
 
 Flame graphs show the call stack hierarchy of where CPU time is spent. Invented by Brendan Gregg at Oracle around 2011 [(brendangregg.com)](http://www.brendangregg.com/flamegraphs.html), the x-axis is time (sorted alphabetically, not temporally); width represents time spent.
 
-### Generating flame graphs
+### Generating flame graphs {#generating-flame-graphs}
 
 ```bash
 # 1. Record with call graphs
@@ -39,7 +39,7 @@ perf script | \
 open cpu-flamegraph.svg  # or firefox, chromium
 ```
 
-### Differential flame graphs
+### Differential flame graphs {#differential-flame-graphs}
 
 Compare before/after a change:
 
@@ -57,7 +57,7 @@ difffolded.pl before.folded after.folded | flamegraph.pl > diff.svg
 # Red = regressions (more time), Blue = improvements (less time)
 ```
 
-### Kernel symbols in flame graphs
+### Kernel symbols in flame graphs {#kernel-symbols-in-flame-graphs}
 
 ```bash
 # Ensure kernel symbols are readable:
@@ -68,11 +68,11 @@ echo -1 > /proc/sys/kernel/perf_event_paranoid
 modprobe --force-modversion mymodule
 ```
 
-## Off-CPU analysis: where threads are blocked
+## Off-CPU analysis: where threads are blocked {#off-cpu-analysis-where-threads-are-blocked}
 
 **On-CPU** profiling shows where CPU time is spent. **Off-CPU** analysis shows where threads are *sleeping* — waiting for I/O, locks, page faults, etc.
 
-### Off-CPU with perf sched
+### Off-CPU with perf sched {#off-cpu-with-perf-sched}
 
 ```bash
 # Record scheduler events
@@ -91,7 +91,7 @@ perf sched script | \
     flamegraph.pl --color=io > offcpu-flamegraph.svg
 ```
 
-### Off-CPU with BPF (bpftrace)
+### Off-CPU with BPF (bpftrace) {#off-cpu-with-bpf-bpftrace}
 
 ```bash
 # Trace time sleeping in do_nanosleep:
@@ -112,7 +112,7 @@ tracepoint:sched:sched_switch
 }'
 ```
 
-### Off-CPU with BCC offcputime
+### Off-CPU with BCC offcputime {#off-cpu-with-bcc-offcputime}
 
 ```bash
 # Install BCC tools
@@ -123,9 +123,9 @@ offcputime-bpfcc -f 30 | flamegraph.pl --color=io --title="Off-CPU Time" > offcp
 offcputime-bpfcc -f -p <pid> 30 > off-cpu.folded
 ```
 
-## Memory profiling
+## Memory profiling {#memory-profiling}
 
-### Finding memory allocations with perf mem
+### Finding memory allocations with perf mem {#finding-memory-allocations-with-perf-mem}
 
 ```bash
 # Record memory access events (requires hardware PMU support)
@@ -137,7 +137,7 @@ perf c2c record -g -a -- sleep 5
 perf c2c report   # cache-to-cache transfer analysis
 ```
 
-### perf malloc sampling
+### perf malloc sampling {#perf-malloc-sampling}
 
 ```bash
 # Profile malloc calls using uprobes
@@ -152,7 +152,7 @@ memleak-bpfcc -p <pid> 10
 #  1048576        100     malloc -> myapp_allocate_buffer -> main
 ```
 
-### Tracking page faults
+### Tracking page faults {#tracking-page-faults}
 
 ```bash
 # Count page faults per process
@@ -171,9 +171,9 @@ tracepoint:exceptions:page_fault_user
 }'
 ```
 
-## Scheduler analysis
+## Scheduler analysis {#scheduler-analysis}
 
-### Visualizing context switches
+### Visualizing context switches {#visualizing-context-switches}
 
 ```bash
 # Record scheduler events for a process
@@ -188,7 +188,7 @@ perf sched timehist | head -40
 perf sched replay
 ```
 
-### Finding scheduler wakeup latency
+### Finding scheduler wakeup latency {#finding-scheduler-wakeup-latency}
 
 ```bash
 # Record wakeup events
@@ -201,7 +201,7 @@ perf script | awk '
 '
 ```
 
-### runqlat: run queue latency histogram
+### runqlat: run queue latency histogram {#runqlat-run-queue-latency-histogram}
 
 ```bash
 # BCC tool: histogram of time tasks wait in run queue
@@ -231,7 +231,7 @@ tracepoint:sched:sched_switch
 }'
 ```
 
-## Profiling with hardware counters
+## Profiling with hardware counters {#profiling-with-hardware-counters}
 
 ```bash
 # Branch mispredictions (CPU pipeline stalls)
@@ -250,7 +250,7 @@ perf record -e cycles:pp -g ./my_program   # precise sampling
 perf report --sort=sym,dso --stdio
 ```
 
-### perf annotate: hot instruction identification
+### perf annotate: hot instruction identification {#perf-annotate-hot-instruction-identification}
 
 ```bash
 # See which instructions are hottest
@@ -266,7 +266,7 @@ perf annotate --stdio | head -60
 #    0.12  :      400b2a:  inc    %rdx
 ```
 
-## Linux perf for Java/JVM
+## Linux perf for Java/JVM {#linux-perf-for-javajvm}
 
 ```bash
 # Enable JIT symbol mapping (requires perf-map-agent or async-profiler):
@@ -282,7 +282,7 @@ perf script | stackcollapse-perf.pl | flamegraph.pl > java-flamegraph.svg
 ./profiler.sh -d 30 -f flamegraph.html $(pgrep java)
 ```
 
-## perf top: live profiling
+## perf top: live profiling {#perf-top-live-profiling}
 
 ```bash
 # Live CPU usage by function (like 'top' for functions)
@@ -298,7 +298,7 @@ perf top -K
 perf top --disassembler-style=att
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [perf Events](perf-events.md) — perf fundamentals, hardware counters
 - [ftrace Advanced](ftrace-advanced.md) — in-kernel histograms, function_graph

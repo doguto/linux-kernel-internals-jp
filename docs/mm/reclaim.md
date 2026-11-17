@@ -1,8 +1,8 @@
-# Page Reclaim
+# Page Reclaim {#page-reclaim}
 
 > What happens when memory runs low
 
-## What Is Page Reclaim?
+## What Is Page Reclaim? {#what-is-page-reclaim}
 
 When the system runs low on free memory, the kernel must reclaim pages from existing users. Page reclaim finds pages that can be freed or written to swap, making room for new allocations.
 
@@ -22,9 +22,9 @@ Memory Pressure
 Free Pages Available
 ```
 
-## Two Paths to Reclaim
+## Two Paths to Reclaim {#two-paths-to-reclaim}
 
-### 1. Background Reclaim (kswapd)
+### 1. Background Reclaim (kswapd) {#1-background-reclaim-kswapd}
 
 [`kswapd`](https://docs.kernel.org/mm/physical_memory.html) is a per-node kernel thread that reclaims pages in the background when memory falls below the `low` watermark.
 
@@ -43,7 +43,7 @@ Free pages fall below low watermark
 
 **Key characteristic**: Processes don't block. kswapd works asynchronously.
 
-### 2. Direct Reclaim
+### 2. Direct Reclaim {#2-direct-reclaim}
 
 When kswapd can't keep up and free pages fall below the `min` watermark, allocating processes must reclaim pages themselves.
 
@@ -62,7 +62,7 @@ Allocation request
 
 **Key characteristic**: The allocating process blocks until pages are freed.
 
-## Watermarks
+## Watermarks {#watermarks}
 
 Each zone has three watermarks controlling reclaim behavior:
 
@@ -88,9 +88,9 @@ cat /proc/zoneinfo | grep -E "min|low|high"
 sysctl vm.min_free_kbytes=65536
 ```
 
-## LRU Evolution
+## LRU Evolution {#lru-evolution}
 
-### Single-list LRU and the streaming problem
+### Single-list LRU and the streaming problem {#single-list-lru-and-the-streaming-problem}
 
 The original page cache LRU was a single list: recently accessed pages at the head, oldest pages at the tail. Eviction took from the tail. Simple and correct for workloads with stable working sets.
 
@@ -98,7 +98,7 @@ The problem: a process that reads a large file sequentially ("streaming") access
 
 This was observed early in Linux history. The fix — two lists — was in place by Linux 2.6.
 
-### Two-list LRU (active + inactive)
+### Two-list LRU (active + inactive) {#two-list-lru-active-inactive}
 
 The two-list model divides the LRU into **active** and **inactive** lists:
 
@@ -110,7 +110,7 @@ A streaming read fills the inactive list, but those pages never get a second acc
 
 This worked well for decades but had a fundamental limitation: a single bit of information ("has this page been accessed since it was put on the inactive list?") is a coarse approximation of "how hot is this page?" A page accessed continuously for the last hour looks identical to a page accessed once, both landing in `active`.
 
-### Multi-Gen LRU (MGLRU, Linux 6.1, 2022)
+### Multi-Gen LRU (MGLRU, Linux 6.1, 2022) {#multi-gen-lru-mglru-linux-61-2022}
 
 Yu Zhao (Google) designed MGLRU after observing Android devices (with limited RAM) thrashing between hot and warm pages using the two-list model. The core insight: instead of two categories (active/inactive), use multiple **generations** representing time bands.
 
@@ -118,11 +118,11 @@ Pages are assigned a generation number when faulted. Periodically, the kernel "a
 
 This gives the kernel much finer-grained information about page age: a page in generation 8 is older than generation 12, and the eviction algorithm can make better choices. MGLRU also uses hardware dirty bits and access bits more aggressively to track page activity without explicit software tracking on every access.
 
-## LRU Lists
+## LRU Lists {#lru-lists}
 
 The kernel tracks page usage with LRU (Least Recently Used) lists. Pages move between lists based on access patterns.
 
-### Classic LRU (Two-List)
+### Classic LRU (Two-List) {#classic-lru-two-list}
 
 ```
               Active                    Inactive
@@ -143,7 +143,7 @@ Four lists per node (two types x two states):
 - `LRU_INACTIVE_FILE` - Inactive file-backed pages
 - `LRU_ACTIVE_FILE` - Active file-backed pages
 
-### Multi-Gen LRU (MGLRU)
+### Multi-Gen LRU (MGLRU) {#multi-gen-lru-mglru}
 
 [Introduced in v6.1](https://lwn.net/Articles/910608/), MGLRU replaces the two-list model with [multiple generations](https://docs.kernel.org/admin-guide/mm/multigen_lru.html) for better aging accuracy ([commit ec1c86b25f4b](https://git.kernel.org/linus/ec1c86b25f4b)).
 
@@ -170,9 +170,9 @@ echo 0x0007 > /sys/kernel/mm/lru_gen/enabled
 # Bits: 0x0001=base, 0x0002=clear accessed in leaf PTEs, 0x0004=non-leaf PTEs
 ```
 
-## What Gets Reclaimed
+## What Gets Reclaimed {#what-gets-reclaimed}
 
-### File Pages (Page Cache)
+### File Pages (Page Cache) {#file-pages-page-cache}
 
 Pages backed by files on disk:
 
@@ -181,7 +181,7 @@ Pages backed by files on disk:
 | Clean | Drop immediately (can re-read from disk) |
 | Dirty | Write to disk first, then drop |
 
-### Anonymous Pages
+### Anonymous Pages {#anonymous-pages}
 
 Pages with no file backing (heap, stack):
 
@@ -190,7 +190,7 @@ Pages with no file backing (heap, stack):
 | Yes | Write to swap, then free |
 | No | Cannot reclaim without killing owner (OOM killer) |
 
-### Slab Caches
+### Slab Caches {#slab-caches}
 
 Kernel object caches can shrink via **shrinkers**:
 
@@ -212,7 +212,7 @@ Examples: dentry cache, inode cache, vfs caches.
 cat /sys/kernel/debug/shrinker/*
 ```
 
-## Swappiness
+## Swappiness {#swappiness}
 
 [`vm.swappiness`](https://docs.kernel.org/admin-guide/sysctl/vm.html) controls the balance between reclaiming file pages vs anonymous pages:
 
@@ -230,11 +230,11 @@ cat /proc/sys/vm/swappiness
 sysctl vm.swappiness=10
 ```
 
-## OOM Killer
+## OOM Killer {#oom-killer}
 
 When reclaim fails and memory is exhausted, the OOM (Out of Memory) killer terminates processes to free memory.
 
-### OOM Score
+### OOM Score {#oom-score}
 
 Each process has an OOM score (0-1000). Higher = more likely to be killed.
 
@@ -247,7 +247,7 @@ echo -500 > /proc/<pid>/oom_score_adj  # Less likely to be killed
 echo 1000 > /proc/<pid>/oom_score_adj  # Kill this first
 ```
 
-### OOM Selection Criteria
+### OOM Selection Criteria {#oom-selection-criteria}
 
 The kernel considers:
 1. Memory usage (primary factor)
@@ -263,7 +263,7 @@ dmesg | grep -i "out of memory"
 echo 1 > /sys/kernel/debug/tracing/events/oom/oom_score_adj_update/enable
 ```
 
-## Reclaim Behavior Tunables
+## Reclaim Behavior Tunables {#reclaim-behavior-tunables}
 
 | Sysctl | Description |
 |--------|-------------|
@@ -273,19 +273,19 @@ echo 1 > /sys/kernel/debug/tracing/events/oom/oom_score_adj_update/enable
 | `vm.dirty_ratio` | Max dirty pages before blocking writes |
 | `vm.dirty_background_ratio` | When background writeback starts |
 
-## History
+## History {#history}
 
-### Origins
+### Origins {#origins}
 
 Page reclaim has existed since early Linux. The basic [kswapd mechanism](https://www.kernel.org/doc/gorman/html/understand/understand013.html) was added by Stephen Tweedie in January 1996 (noted in the [vmscan.c header](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c)), predating git history.
 
-### rmap (Reverse Mapping, v2.5)
+### rmap (Reverse Mapping, v2.5) {#rmap-reverse-mapping-v25}
 
 **Problem**: To reclaim a page, kernel needed to find all PTEs pointing to it. Required scanning all page tables.
 
 **Solution**: Reverse mapping - each page tracks which PTEs map it.
 
-### Split LRU (v2.6.28, 2008)
+### Split LRU (v2.6.28, 2008) {#split-lru-v2628-2008}
 
 **Commit**: [4f98a2fee8ac](https://git.kernel.org/linus/4f98a2fee8ac) ("vmscan: split LRU lists into anon & file sets")
 
@@ -295,7 +295,7 @@ Page reclaim has existed since early Linux. The basic [kswapd mechanism](https:/
 
 Split single LRU into separate anonymous and file lists for better reclaim decisions.
 
-### MGLRU (v6.1, 2022)
+### MGLRU (v6.1, 2022) {#mglru-v61-2022}
 
 **Commit**: [ac35a4902374](https://git.kernel.org/linus/ac35a4902374) ("mm: multi-gen LRU: minimal implementation") | [LKML](https://lore.kernel.org/linux-mm/20220815071332.627393-1-yuzhao@google.com/)
 
@@ -303,9 +303,9 @@ Split single LRU into separate anonymous and file lists for better reclaim decis
 
 Multi-generational LRU for improved page aging and reduced overhead.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Monitor Reclaim Activity
+### Monitor Reclaim Activity {#monitor-reclaim-activity}
 
 ```bash
 # Real-time reclaim stats
@@ -317,7 +317,7 @@ watch -n 1 'cat /proc/vmstat | grep -E "pgscan|pgsteal|kswapd"'
 # pgsteal_*      - Pages successfully reclaimed
 ```
 
-### Trigger Memory Pressure
+### Trigger Memory Pressure {#trigger-memory-pressure}
 
 ```bash
 # Consume memory to trigger reclaim
@@ -327,7 +327,7 @@ stress --vm 1 --vm-bytes 2G --vm-keep
 watch -n 1 'ps aux | grep kswapd'
 ```
 
-### Trace Reclaim Events
+### Trace Reclaim Events {#trace-reclaim-events}
 
 ```bash
 # Enable reclaim tracing
@@ -338,7 +338,7 @@ echo 1 > /sys/kernel/debug/tracing/events/vmscan/mm_vmscan_direct_reclaim_end/en
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Check Zone Pressure
+### Check Zone Pressure {#check-zone-pressure}
 
 ```bash
 # Detailed zone info including watermarks
@@ -348,9 +348,9 @@ cat /proc/zoneinfo
 cat /proc/buddyinfo
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Direct Reclaim Stalls
+### Direct Reclaim Stalls {#direct-reclaim-stalls}
 
 Processes blocked in direct reclaim, causing latency spikes.
 
@@ -362,7 +362,7 @@ Processes blocked in direct reclaim, causing latency spikes.
 - Add swap if missing
 - Reduce memory pressure
 
-### kswapd CPU Usage
+### kswapd CPU Usage {#kswapd-cpu-usage}
 
 kswapd consuming excessive CPU.
 
@@ -374,15 +374,15 @@ kswapd consuming excessive CPU.
 - Workload constantly dirtying pages
 - Swap thrashing
 
-### OOM Kills Despite Free Memory
+### OOM Kills Despite Free Memory {#oom-kills-despite-free-memory}
 
 Free memory exists but in wrong zone or fragmented.
 
 **Debug**: Check `/proc/buddyinfo` and `/proc/zoneinfo`
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
@@ -390,23 +390,23 @@ Free memory exists but in wrong zone or fragmented.
 | [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer |
 | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Watermark checks |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/multigen_lru.rst`](https://docs.kernel.org/admin-guide/mm/multigen_lru.html)
 - [`Documentation/mm/balance.rst`](https://docs.kernel.org/mm/balance.html)
 
-### Mailing List Discussions
+### Mailing List Discussions {#mailing-list-discussions}
 
 - [Multi-Gen LRU Framework v14](https://lore.kernel.org/linux-mm/20220815071332.627393-1-yuzhao@google.com/) - Yu Zhao's August 2022 patch series
 - [MGLRU design doc](https://lore.kernel.org/all/20220815071332.627393-15-yuzhao@google.com/) - Detailed design explaining generations, page table walks, and the PID controller
 
-### Related
+### Related {#related}
 
 - [page-allocator](page-allocator.md) - Watermarks, zones
 - [glossary](glossary.md) - LRU, OOM, swap definitions
 - [memcg](memcg.md) - Per-cgroup memory limits and reclaim
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — the core reclaim engine: `shrink_node()`, `shrink_lruvec()`, `shrink_folio_list()`, `balance_pgdat()` (kswapd main loop), and `try_to_free_pages()` (direct reclaim entry point)
 - `Documentation/admin-guide/mm/multigen_lru.rst` — MGLRU architecture, the generation model, page table walk optimisation, and the built-in PID controller for balancing scan overhead

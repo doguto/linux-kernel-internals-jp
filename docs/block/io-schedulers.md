@@ -1,8 +1,8 @@
-# I/O Schedulers
+# I/O Schedulers {#io-schedulers}
 
 > How the block layer reorders requests for efficiency
 
-## What I/O schedulers do
+## What I/O schedulers do {#what-io-schedulers-do}
 
 An I/O scheduler (also called an elevator) sits between the block layer submission path and the hardware dispatch. It can:
 
@@ -13,13 +13,13 @@ An I/O scheduler (also called an elevator) sits between the block layer submissi
 
 On modern blk-mq hardware (NVMe, virtio-blk), schedulers are optional — for NVMe with many queues, "none" (no scheduler) is often optimal.
 
-### How a scheduler plugs into blk-mq
+### How a scheduler plugs into blk-mq {#how-a-scheduler-plugs-into-blk-mq}
 
 A blk-mq scheduler is an `elevator_type` exposing a small set of hooks — chiefly `bio_merge` (try to merge an incoming bio), `insert_requests` (accept requests into the scheduler's own queues), and `dispatch_request` (hand the next request to the hardware queue when it has room). Requests inserted into the scheduler *wait there* rather than going straight to hardware; the scheduler's `dispatch_request` decides the order they leave. A device has at most one scheduler, and it can be switched at runtime through sysfs — atomically with respect to live I/O, a property that has historically been a source of use-after-free bugs.
 
 The key insight is that a scheduler only earns its keep when reordering is worth more than its overhead. On a spinning disk, reordering saves milliseconds of seek time; on an NVMe device with no seek penalty and millions of IOPS, the scheduler's per-request bookkeeping can *cost* more than it saves — which is why `none` exists and is frequently the right answer.
 
-## Available schedulers
+## Available schedulers {#available-schedulers}
 
 ```bash
 # Check available schedulers for a device
@@ -32,7 +32,7 @@ echo mq-deadline > /sys/block/sda/queue/scheduler
 echo none > /sys/block/nvme0n1/queue/scheduler  # for NVMe
 ```
 
-### none
+### none {#none}
 
 No scheduling. Requests are dispatched in submission order. Optimal for:
 
@@ -43,7 +43,7 @@ No scheduling. Requests are dispatched in submission order. Optimal for:
 echo none > /sys/block/nvme0n1/queue/scheduler
 ```
 
-### mq-deadline
+### mq-deadline {#mq-deadline}
 
 **Default for most block devices.** Prevents request starvation by giving each request a deadline. Uses two separate queues: read and write. Introduced in Linux 4.11 by Jens Axboe — [`945ffb60c11d`](https://git.kernel.org/linus/945ffb60c11dfb228130f3f2bdde961cecb76671).
 
@@ -82,7 +82,7 @@ cat /sys/block/sda/queue/iosched/writes_starved  # default 2
 cat /sys/block/sda/queue/iosched/fifo_batch  # default 16
 ```
 
-### BFQ (Budget Fair Queueing)
+### BFQ (Budget Fair Queueing) {#bfq-budget-fair-queueing}
 
 **Best for desktop/interactive workloads.** Introduced in Linux 4.12 by Paolo Valente — [`aee69d78dec0`](https://git.kernel.org/linus/aee69d78dec0ffdf82e35d57c626e80dddc314d5), [LWN](https://lwn.net/Articles/720675/). Provides proportional-share I/O scheduling with a focus on low latency for interactive applications (browser, desktop UI) even under heavy background I/O.
 
@@ -108,7 +108,7 @@ ionice -c 2 -n 4 rsync source/ dest/   # best-effort, priority 4
 ionice -c 3 rsync source/ dest/         # idle class
 ```
 
-### kyber
+### kyber {#kyber}
 
 **For multi-queue, low-latency devices (NVMe, SSDs).** Introduced in Linux 4.12 by Omar Sandoval — [`00e043936e9a`](https://git.kernel.org/linus/00e043936e9a1c274c29366c7ecd9e17c79418e6), [LWN](https://lwn.net/Articles/720675/). Uses per-operation-type queues (read, write, discard) with token-based latency targeting.
 
@@ -128,7 +128,7 @@ cat /sys/block/nvme0n1/queue/iosched/read_lat_nsec    # default 2000000 (2ms)
 cat /sys/block/nvme0n1/queue/iosched/write_lat_nsec   # default 10000000 (10ms)
 ```
 
-## Choosing a scheduler
+## Choosing a scheduler {#choosing-a-scheduler}
 
 | Workload | Recommended scheduler |
 |----------|----------------------|
@@ -151,7 +151,7 @@ ACTION=="add|change", KERNEL=="nvme[0-9]*",
   ATTR{queue/scheduler}="none"
 ```
 
-## Monitoring I/O performance
+## Monitoring I/O performance {#monitoring-io-performance}
 
 ```bash
 # iostat: throughput, IOPS, latency
@@ -171,7 +171,7 @@ blkparse -i trace.blktrace.0 | head -50
 biolatency -d sda 10 1
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [blk-mq](blk-mq.md) — The dispatch layer below the scheduler
 - [bio and request structures](bio-request.md) — What the scheduler reorders

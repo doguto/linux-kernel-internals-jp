@@ -1,4 +1,4 @@
-# CVE War Stories: Memory Management Lessons
+# CVE War Stories: Memory Management Lessons {#cve-war-stories-memory-management-lessons}
 
 > Four vulnerabilities that reshaped how the kernel thinks about memory safety — told as narratives from discovery to design change
 
@@ -15,11 +15,11 @@ Each story follows the same arc:
 
 ---
 
-## Dirty COW (CVE-2016-5195)
+## Dirty COW (CVE-2016-5195) {#dirty-cow-cve-2016-5195}
 
 *Race condition in copy-on-write — nine years in the tree*
 
-### Discovery
+### Discovery {#discovery}
 
 In October 2016, Phil Oester was performing routine forensic analysis on a compromised production web server. Inside the exploit binary left by the attacker, he identified a previously unknown privilege escalation. The code was exploiting a race condition in the kernel's copy-on-write path. Oester contacted kernel security team members, and the bug was publicly disclosed on October 19, 2016.
 
@@ -27,13 +27,13 @@ The race condition itself had been introduced with kernel 2.6.22 in July 2007. L
 
 The name "Dirty COW" comes from the dirty bit in the COW path, plus the bug's interaction with copy-on-write. It acquired its own logo and website (dirtycow.ninja), a rarity for kernel CVEs.
 
-### The vulnerability
+### The vulnerability {#the-vulnerability}
 
 The technical mechanism is described in [cow.md — the Dirty COW section](cow.md#the-dirty-cow-vulnerability-2016). In brief: two threads could race to confuse the kernel into writing data to a read-only page instead of a private copy. One thread wrote through a `/proc/self/mem` path; the other called `madvise(MADV_DONTNEED)` to discard the COW copy the first thread was creating. Done rapidly enough, the kernel would drop the copy and retry the write — this time against the original read-only mapping.
 
 The root cause was in `__get_user_pages()`. The function used `FOLL_WRITE` to indicate that a write was intended, but when the first attempt failed (due to the page being read-only and needing COW), it retried *without* `FOLL_WRITE`. The retry succeeded — but now the kernel no longer knew a write was coming, so it handed back the original page without performing COW. The madvise thread's job was to keep forcing these retries.
 
-### The exploitation primitive
+### The exploitation primitive {#the-exploitation-primitive}
 
 The primitive is a write-anywhere-to-a-read-only-file-mapping. On a typical Linux system, this means:
 
@@ -45,7 +45,7 @@ Exploitation was reliable. The race window is narrow but the loop runs thousands
 
 The `userfaultfd` syscall (available since kernel 4.3) further widened the race window: an attacker could pause the kernel precisely in the middle of the fault path by triggering a user-handled fault, giving the madvise thread reliable timing. See [fork.md — userfaultfd races](fork.md#case-5-fork-and-userfaultfd-races) for the general pattern.
 
-### The fix
+### The fix {#the-fix}
 
 **Commit**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — "mm: remove gup_flags FOLL_WRITE games from `__get_user_pages()`"
 **Author**: Linus Torvalds
@@ -57,7 +57,7 @@ Linus's commit message: *"This is an ancient bug that was actually attempted to 
 
 The backport went to every stable kernel in active support within 24 hours. The patch for stable kernels was coordinated by Greg Kroah-Hartman.
 
-### Design changes
+### Design changes {#design-changes}
 
 The immediate fix closed the FOLL_WRITE gap, but the underlying problem — the kernel having no reliable way to distinguish short-term GUP pins from long-term DMA pins — continued to produce related bugs.
 
@@ -77,7 +77,7 @@ The kernel now has two distinct APIs for pinning user pages. `get_user_pages()` 
 
 The definitive closure. A new page flag tracks whether an anonymous page is exclusively owned by one process. The COW machinery previously inferred exclusivity from refcount > 1 — a heuristic that failed under GUP pins. With `PG_anon_exclusive`, exclusivity is explicit state. A pinned page that a COW operation would normally reuse is now correctly identified as shared, and the COW copy is always made. The commit message: *"Let's mark exclusively mapped anonymous pages with PG_anon_exclusive as exclusive, and use that information to make GUP pins reliable."*
 
-### What it taught the mm subsystem
+### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem}
 
 !!! note "Lesson: Write intent must be an invariant, not a hint that retries can drop"
 
@@ -89,11 +89,11 @@ The definitive closure. A new page flag tracks whether an anonymous page is excl
 
 ---
 
-## StackRot (CVE-2023-3269)
+## StackRot (CVE-2023-3269) {#stackrot-cve-2023-3269}
 
 *Use-after-free via maple tree rotation — new data structure, new invariant class*
 
-### Discovery
+### Discovery {#discovery_1}
 
 In June 2023, Ruihan Li, a graduate student at Peking University, was auditing the maple tree — the interval tree that replaced red-black trees for VMA management in kernel 6.1. He was specifically looking at the interaction between the maple tree's RCU-safe rotation logic and the MM locking model.
 
@@ -101,13 +101,13 @@ The disclosure was published on the oss-security mailing list on July 5, 2023 ([
 
 The bug was introduced with the maple tree merge in kernel 6.1 (December 2022). The window between introduction and disclosure was approximately seven months.
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_1}
 
 The technical mechanism is described in [fork.md — StackRot](fork.md#case-2-stackrot-cve-2023-3269). In brief: when the user stack grows downward (via a `MAP_GROWSDOWN` VMA), the kernel extends the VMA by lowering its start address. This modification updates the maple tree that stores VMAs — but the update did not hold the MM write lock. Because maple trees are designed for RCU-safe access, modifying a tree node creates a new node and schedules the old one for freeing via an RCU callback. Any thread holding the MM read lock at the time of the modification still holds a pointer to the old node, which will be freed when the RCU grace period expires.
 
 The result is a use-after-free on a maple tree node. The object is freed while a live pointer to it exists in another kernel thread's stack frame.
 
-### The exploitation primitive
+### The exploitation primitive {#the-exploitation-primitive_1}
 
 UAF on a maple tree node is a controlled heap object reuse primitive. Li's exploit demonstrated:
 
@@ -121,7 +121,7 @@ The exploit required only unprivileged local access — no special capabilities.
 
 Li noted the exploit was reliable on x86-64 with CONFIG_SLAB_FREELIST_HARDENED disabled, and that KFENCE could detect the UAF during development. The window between stack growth and RCU free is wide enough on loaded systems to be consistently winnable.
 
-### The fix
+### The fix {#the-fix_1}
 
 The fix was merged by Linus Torvalds on June 28, 2023, during the 6.5 merge window.
 
@@ -131,7 +131,7 @@ Additionally, the fix ensured that maple tree node replacements triggered by sta
 
 Linus's merge message provided a detailed explanation of the locking invariant that had been violated and the reasoning for the chosen fix over alternatives.
 
-### Design changes
+### Design changes {#design-changes_1}
 
 StackRot triggered a broader review of the maple tree's correctness under the kernel's MM locking model.
 
@@ -141,7 +141,7 @@ StackRot triggered a broader review of the maple tree's correctness under the ke
 
 **Audit of other `MAP_GROWSDOWN` paths** — the stack growth path was audited for other sites where VMA metadata is modified outside of full MM write lock protection. No additional UAFs were found immediately, but the audit produced several tightening patches for adjacent code.
 
-### What it taught the mm subsystem
+### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_1}
 
 !!! note "Lesson: RCU-safe does not mean lock-free for all callers — the locking domain must match the object lifetime"
 
@@ -153,11 +153,11 @@ StackRot triggered a broader review of the maple tree's correctness under the ke
 
 ---
 
-## Meltdown (CVE-2017-5754)
+## Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
 *Hardware speculation defeats software isolation — KPTI and the permanent reshaping of kernel mapping policy*
 
-### Discovery
+### Discovery {#discovery_2}
 
 The Meltdown and Spectre vulnerabilities were discovered independently by multiple research groups in 2017, then coordinated for simultaneous public disclosure on January 3, 2018.
 
@@ -167,13 +167,13 @@ The coordinated disclosure was unusually complex. Intel, AMD, and ARM were notif
 
 The embargo broke early. Google's Project Zero policy requires public disclosure within 90 days of vendor notification. The 90-day window expired before the coordinated date. Disclosure was moved to January 3, 2018 — earlier than originally planned.
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_2}
 
 The technical mechanism is described in [page-tables.md — Meltdown](page-tables.md#case-1-meltdown-cve-2017-5754). In brief: Intel CPUs (and some ARM cores) speculatively execute instructions past a privilege check failure. When a user-mode process reads a kernel virtual address, the CPU raises a page fault — but before it does, it may have already speculatively read the kernel memory and placed the data in a register, and the memory access has left a trace in the L1/L2 cache. The fault is delivered and the register value is discarded, but the cache state persists. Using a Flush+Reload side channel, the attacker can measure which cache lines were populated by the speculative load and reconstruct the value that was briefly in the register.
 
 The exploit is a loop: read one kernel byte speculatively, measure the cache side channel to recover the value, advance to the next byte.
 
-### The exploitation primitive
+### The exploitation primitive {#the-exploitation-primitive_2}
 
 Meltdown's primitive is **arbitrary kernel memory read from user space**, with no kernel code execution required, no memory corruption, and no race window to win. The attack is a pure observation of hardware behavior.
 
@@ -187,7 +187,7 @@ The Graz team demonstrated reading `/etc/shadow` passwords from kernel memory at
 
 Cloud environments were the most immediately alarming target. On a shared host, one VM's kernel memory could potentially be read from another VM on the same physical CPU, breaking the fundamental tenant isolation promise of public cloud infrastructure. Amazon, Google, and Microsoft all scrambled to patch their hypervisor fleets before disclosure.
 
-### The fix: KPTI
+### The fix: KPTI {#the-fix-kpti}
 
 **Commit**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — "x86/mm/pti: Add infrastructure for page table isolation"
 **Author**: Thomas Gleixner
@@ -214,7 +214,7 @@ Intel's subsequent hardware (Ice Lake and later) added PCID (Process-Context Ide
 
 There is no patch that fixes the CPU itself. Microcode updates improved some behaviors but did not eliminate the fundamental speculation vulnerability on existing hardware. KPTI remains the authoritative mitigation on all Intel hardware that predates eIBRS (Enhanced Indirect Branch Restricted Speculation, Ice Lake 2019).
 
-### Design changes
+### Design changes {#design-changes_2}
 
 Meltdown and KPTI produced changes at every level of the kernel's memory mapping philosophy. Several are permanent.
 
@@ -240,7 +240,7 @@ Spectre v2 requires replacing indirect calls and indirect jumps with retpoline s
 
 After Meltdown, two further hardware vulnerabilities required KPTI-like page table manipulation: MDS (Microarchitectural Data Sampling, CVE-2018-12126 family) and TAA (TSX Asynchronous Abort, CVE-2019-11135). The infrastructure KPTI added for maintaining dual page tables, handling CR3 switches in the syscall and interrupt paths, and communicating mitigation status via sysfs was reused directly. The pattern — software isolation layer over a hardware-unfixable vulnerability — has become a recurring design idiom.
 
-### What it taught the mm subsystem
+### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_2}
 
 !!! note "Lesson: Hardware assumptions are the hardest axioms to defend — isolation must be physical, not logical"
 
@@ -256,23 +256,23 @@ After Meltdown, two further hardware vulnerabilities required KPTI-like page tab
 
 ---
 
-## THP COW Race (CVE-2020-29368)
+## THP COW Race (CVE-2020-29368) {#thp-cow-race-cve-2020-29368}
 
 *Mapcount atomicity in huge page splitting — an optimization assumption that broke under concurrency*
 
-### Discovery
+### Discovery {#discovery_3}
 
 In November 2020, Jann Horn of Google Project Zero filed CVE-2020-29368 following analysis of the THP (Transparent Huge Page) copy-on-write path. Horn had been systematically reviewing copy-on-write interactions in the mm subsystem in the aftermath of Dirty COW and its follow-on fixes. The bug was a race condition in mapcount checking during huge PMD splitting, a code path introduced years earlier as part of the THP performance optimization work.
 
 This was not a production incident or a forensic discovery. It was a targeted code audit by a researcher with deep knowledge of mm internals and a specific research question: after FOLL_WRITE and FOLL_PIN, are there remaining cases where COW can be bypassed?
 
-### The vulnerability
+### The vulnerability {#the-vulnerability_3}
 
 The technical mechanism is described in [thp.md — THP COW race](thp.md#case-1-thp-cow-race-cve-2020-29368). In brief: when a write fault occurs on a shared 2MB THP, the kernel must split the huge page into 512 4KB pages before performing COW on the specific page that was written. The split decision is gated on `mapcount` — if the huge page is only mapped once (mapcount == 1), the kernel skips the COW copy and writes directly to the page, reusing it as a "private" page since no one else is sharing it.
 
 The problem: `mapcount` is read and the COW decision is made, and then the page table is modified — but these two operations are not atomic. Another thread can map the same huge page between the mapcount read and the page table update, making the mapcount stale. The kernel writes to the page believing it has exclusive ownership; the second thread now shares a page that was supposed to be private.
 
-### The exploitation primitive
+### The exploitation primitive {#the-exploitation-primitive_3}
 
 The primitive is a COW bypass for anonymous THP. Unlike Dirty COW, which targeted read-only file mappings, this race targets anonymous private mappings — the kind created by `malloc()`, stack allocation, and anonymous `mmap()`.
 
@@ -288,7 +288,7 @@ This breaks the fundamental process isolation guarantee for anonymous memory. In
 
 The impact: an attacker who can run code in a process that shares a THP with a privileged process (via fork, or via a deliberate memory sharing arrangement) can potentially read or write that privileged process's private memory. In container environments where a host process forks worker children, this could allow a container escape or cross-container read.
 
-### The fix
+### The fix {#the-fix_2}
 
 **Commit**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — "mm: thp: make the THP mapcount atomic against `__split_huge_pmd_locked()`"
 **Author**: Andrea Arcangeli (reported by Jann Horn)
@@ -297,7 +297,7 @@ The fix makes the mapcount read and the PTE update atomic with respect to each o
 
 This is a small patch — the change is a lock scope extension and a re-check under the lock — but it requires care because the page table lock is already held in related code paths and acquiring it twice is a deadlock risk. Horn's fix carefully identifies the precise site where the lock must be widened.
 
-### Design changes
+### Design changes {#design-changes_3}
 
 CVE-2020-29368 was part of a series of COW-related audits and fixes in 2020–2022 that treated the GUP / COW interaction as a subsystem in need of systematic hardening rather than point fixes.
 
@@ -316,7 +316,7 @@ After `PG_anon_exclusive` was established as the authoritative ownership tracker
 
 Following the CVE, the Google syzbot continuous fuzzing infrastructure added specific THP-related fault injection scenarios. These cover the split path, the mapcount check, and concurrent fork/write/madvise races against THP regions. As of 2024, syzbot runs multiple THP-targeted kernels continuously.
 
-### What it taught the mm subsystem
+### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_3}
 
 !!! note "Lesson: Optimizations that skip copies based on ownership heuristics need atomic ownership checks"
 
@@ -328,11 +328,11 @@ Following the CVE, the Google syzbot continuous fuzzing infrastructure added spe
 
 ---
 
-## Cross-cutting lessons
+## Cross-cutting lessons {#cross-cutting-lessons}
 
 The four CVEs above span hardware speculation, race conditions in COW, data structure locking invariants, and ownership tracking. Despite their differences, they share structural patterns that repeat across mm security bugs.
 
-### The patterns
+### The patterns {#the-patterns}
 
 | CVE | Root pattern | Where it appears again |
 |-----|-------------|----------------------|
@@ -341,7 +341,7 @@ The four CVEs above span hardware speculation, race conditions in COW, data stru
 | Meltdown | Hardware behavior contradicts architecture spec | Any security property depending on a CPU fault arriving before side effects |
 | THP COW race | TOCTOU on ownership heuristic | Any optimization that skips a safety operation based on a non-atomic check |
 
-### Defense in depth after 2020
+### Defense in depth after 2020 {#defense-in-depth-after-2020}
 
 Each CVE described here contributed one or more components to the current layered defense model for mm:
 
@@ -356,23 +356,23 @@ No single mitigation is complete. The value is in the combination: an attacker w
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Original disclosures
+### Original disclosures {#original-disclosures}
 
 - [dirtycow.ninja](https://dirtycow.ninja/) — Dirty COW disclosure, October 2016
 - [meltdownattack.com](https://meltdownattack.com/) — Meltdown paper and PoC, January 2018
 - [StackRot disclosure](https://github.com/lrh2000/StackRot) — CVE-2023-3269, July 2023
 - [oss-security: CVE-2020-29368](https://www.openwall.com/lists/oss-security/2020/12/03/2) — THP COW race
 
-### LWN coverage
+### LWN coverage {#lwn-coverage}
 
 - [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/) (2016) — Jonathan Corbet on the Dirty COW race and its fix
 - [The current state of kernel page-table isolation](https://lwn.net/Articles/741878/) (2017) — KPTI design, the Meltdown mitigation
 - [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) (2021) — Vlastimil Babka on the GUP-pin vs. COW problem
 - [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/) (2022) — David Hildenbrand's PG_anon_exclusive solution
 
-### Key kernel commits
+### Key kernel commits {#key-kernel-commits}
 
 - [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — Dirty COW fix
 - [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — KPTI initial infrastructure
@@ -380,7 +380,7 @@ No single mitigation is complete. The value is in the combination: an attacker w
 - [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) — PG_anon_exclusive
 - [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — THP mapcount atomicity fix
 
-### Technical docs on this site
+### Technical docs on this site {#technical-docs-on-this-site}
 
 - [Copy-on-Write](cow.md) — COW mechanics, GUP, and the full FOLL_PIN/PG_anon_exclusive evolution
 - [What happens when you fork](fork.md) — Dirty COW and StackRot technical walkthrough

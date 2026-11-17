@@ -1,8 +1,8 @@
-# NUMA Automatic Balancing
+# NUMA Automatic Balancing {#numa-automatic-balancing}
 
 > How the scheduler detects and fixes NUMA locality mismatches
 
-## The problem
+## The problem {#the-problem}
 
 On NUMA systems, memory access latency depends on which NUMA node holds the physical page:
 
@@ -20,9 +20,9 @@ Task running on CPU 2 reading pages on Node 0:
 
 **Automatic NUMA balancing** (CONFIG_NUMA_BALANCING) detects this situation and migrates pages to the node where they're being used. Introduced in Linux 3.13 by Mel Gorman (SUSE) et al. — [`10fc05d0e551`](https://git.kernel.org/linus/10fc05d0e551146ad6feb0ab8902d28a2d3c5624).
 
-## How it works
+## How it works {#how-it-works}
 
-### Phase 1: Mark pages as inaccessible (PROT_NONE)
+### Phase 1: Mark pages as inaccessible (PROT_NONE) {#phase-1-mark-pages-as-inaccessible-prot_none}
 
 The NUMA balancer periodically scans a process's page tables and changes the PTE of accessed pages to `PROT_NONE` (unmaps them without freeing):
 
@@ -43,7 +43,7 @@ static void task_numa_work(struct callback_head *work)
 }
 ```
 
-### Phase 2: Catch NUMA page faults
+### Phase 2: Catch NUMA page faults {#phase-2-catch-numa-page-faults}
 
 When the task accesses the PROT_NONE page, a page fault fires:
 
@@ -72,7 +72,7 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 }
 ```
 
-### Phase 3: Task migration
+### Phase 3: Task migration {#phase-3-task-migration}
 
 If the task has most of its pages on Node 1 but runs on Node 0, the scheduler may migrate the **task** instead of (or in addition to) the pages:
 
@@ -97,7 +97,7 @@ static bool task_numa_compare(struct task_numa_env *env,
 }
 ```
 
-## NUMA statistics per task
+## NUMA statistics per task {#numa-statistics-per-task}
 
 ```c
 /* task_struct NUMA fields: */
@@ -118,7 +118,7 @@ struct task_struct {
 };
 ```
 
-## NUMA groups: shared memory balancing
+## NUMA groups: shared memory balancing {#numa-groups-shared-memory-balancing}
 
 When multiple tasks share memory (e.g., a multithreaded program), they form a **NUMA group**:
 
@@ -144,7 +144,7 @@ struct numa_group {
 /* Tasks in a group are migrated together to preserve shared memory locality */
 ```
 
-## Balancing scan rate
+## Balancing scan rate {#balancing-scan-rate}
 
 The scan rate adapts based on how many NUMA faults are found:
 
@@ -168,7 +168,7 @@ static void update_task_scan_period(struct task_struct *p,
 }
 ```
 
-## Configuration
+## Configuration {#configuration}
 
 ```bash
 # Enable/disable automatic NUMA balancing:
@@ -188,7 +188,7 @@ echo 5000 > /proc/sys/kernel/numa_balancing_scan_period_max
 echo 1024 > /proc/sys/kernel/numa_balancing_scan_size
 ```
 
-## Observing NUMA balancing
+## Observing NUMA balancing {#observing-numa-balancing}
 
 ```bash
 # Per-process NUMA stats:
@@ -232,7 +232,7 @@ numactl --hardware
 #   1:  21  10
 ```
 
-## When to disable NUMA balancing
+## When to disable NUMA balancing {#when-to-disable-numa-balancing}
 
 ```bash
 # Disable for workloads where it hurts:
@@ -253,7 +253,7 @@ echo 0 > /proc/sys/kernel/numa_balancing
 # overhead (scan + faults) with no benefit
 ```
 
-## NUMA-aware memory allocation
+## NUMA-aware memory allocation {#numa-aware-memory-allocation}
 
 For applications that want explicit NUMA control:
 
@@ -273,7 +273,7 @@ numa_bitmask_setbit(mask, 0);
 numa_set_membind(mask);   /* only allocate from node 0 */
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [NUMA](../mm/numa.md) — NUMA architecture and zonelist
 - [NUMA Distance](../mm/numa-distance.md) — ACPI SRAT and distance matrices

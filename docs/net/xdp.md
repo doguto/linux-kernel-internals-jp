@@ -1,8 +1,8 @@
-# XDP: eXpress Data Path
+# XDP: eXpress Data Path {#xdp-express-data-path}
 
 > Kernel bypass at the driver level: BPF programs on the receive fast path
 
-## What is XDP?
+## What is XDP? {#what-is-xdp}
 
 XDP (eXpress Data Path) runs a BPF program at the earliest possible point in the kernel network stack — inside the NIC driver, **before** skb allocation. This achieves near-DPDK speeds while staying in the kernel:
 
@@ -23,7 +23,7 @@ DPDK (comparison):
   But: requires dedicated CPUs, no kernel network stack
 ```
 
-## XDP hook points
+## XDP hook points {#xdp-hook-points}
 
 ```c
 /* Three attachment modes: */
@@ -40,7 +40,7 @@ ip link set eth0 xdpgeneric obj xdp_prog.o sec xdp
 ip link set eth0 xdpoffload obj xdp_prog.o sec xdp
 ```
 
-## XDP verdicts
+## XDP verdicts {#xdp-verdicts}
 
 ```c
 /* BPF program returns one of these: */
@@ -52,7 +52,7 @@ XDP_REDIRECT  /* Forward to another interface, CPU, or AF_XDP socket */
 XDP_ABORTED   /* Drop + trace point for debugging (treated like DROP) */
 ```
 
-## XDP program structure
+## XDP program structure {#xdp-program-structure}
 
 ```c
 /* xdp_prog.c */
@@ -133,7 +133,7 @@ ip link show eth0
 ip link set eth0 xdp off
 ```
 
-## Packet modification (NAT)
+## Packet modification (NAT) {#packet-modification-nat}
 
 ```c
 SEC("xdp")
@@ -170,9 +170,9 @@ int xdp_dnat(struct xdp_md *ctx)
 }
 ```
 
-## XDP redirect
+## XDP redirect {#xdp-redirect}
 
-### Between interfaces
+### Between interfaces {#between-interfaces}
 
 ```c
 /* Redirect packet to eth1: */
@@ -184,7 +184,7 @@ int xdp_redirect_iface(struct xdp_md *ctx)
 }
 ```
 
-### DEVMAP: batch redirect
+### DEVMAP: batch redirect {#devmap-batch-redirect}
 
 ```c
 /* High-performance redirect via devmap */
@@ -210,7 +210,7 @@ int ifindex = if_nametoindex("eth1");
 bpf_map_update_elem(map_fd, &key, &ifindex, BPF_ANY);
 ```
 
-### CPUMAP: steer to specific CPU
+### CPUMAP: steer to specific CPU {#cpumap-steer-to-specific-cpu}
 
 ```c
 /* Redirect to CPU for further processing (after XDP) */
@@ -230,7 +230,7 @@ int xdp_cpumap_redirect(struct xdp_md *ctx)
 }
 ```
 
-## AF_XDP: zero-copy to userspace
+## AF_XDP: zero-copy to userspace {#af_xdp-zero-copy-to-userspace}
 
 AF_XDP (eXpress Data Path socket) moves packets directly to userspace memory without any kernel copying:
 
@@ -239,7 +239,7 @@ NIC DMA → UMEM (userspace memory) → XSK socket → userspace app
           ↑ zero copy! kernel never touches packet data
 ```
 
-### Setup
+### Setup {#setup}
 
 ```c
 /* Userspace: create AF_XDP socket */
@@ -281,7 +281,7 @@ struct sockaddr_xdp sxdp = {
 bind(xsk_fd, (struct sockaddr *)&sxdp, sizeof(sxdp));
 ```
 
-### XDP program for AF_XDP redirect
+### XDP program for AF_XDP redirect {#xdp-program-for-af_xdp-redirect}
 
 ```c
 /* BPF map of AF_XDP sockets */
@@ -305,7 +305,7 @@ int xdp_sock_prog(struct xdp_md *ctx)
 }
 ```
 
-## XDP vs alternatives
+## XDP vs alternatives {#xdp-vs-alternatives}
 
 | | XDP | DPDK | kernel TC | iptables |
 |---|-----|------|-----------|----------|
@@ -316,7 +316,7 @@ int xdp_sock_prog(struct xdp_md *ctx)
 | Programmability | BPF | C | BPF/C | limited |
 | Use case | DDoS mitigation, LB, firewall | High-freq trading, NFV | QoS, TC filter | Generic firewall |
 
-## Observability
+## Observability {#observability}
 
 ```bash
 # XDP program info:
@@ -345,7 +345,7 @@ perf record -e xdp:xdp_drop -ag -- sleep 10
 perf script
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [BPF Networking](../bpf/bpf-networking.md) — TC BPF, sockmap
 - [sk_buff: The Network Buffer](sk-buff.md) — XDP_PASS creates sk_buff

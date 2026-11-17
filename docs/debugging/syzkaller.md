@@ -1,14 +1,14 @@
-# syzkaller: Kernel Fuzzing
+# syzkaller: Kernel Fuzzing {#syzkaller-kernel-fuzzing}
 
 > Automated syscall fuzzing to find kernel bugs
 
-## What is syzkaller?
+## What is syzkaller? {#what-is-syzkaller}
 
 syzkaller is an automated kernel fuzzer developed by Google. It generates random **sequences of syscalls** and executes them in a VM, monitoring for crashes, hangs, memory errors (via KASAN/KCSAN), and other anomalies.
 
 Since 2015, syzkaller has found thousands of kernel bugs reported on [syzbot](https://syzkaller.appspot.com).
 
-## Architecture
+## Architecture {#architecture}
 
 ```
 syz-manager (host)
@@ -29,7 +29,7 @@ syz-executor (in VM)
 └── Monitors for crashes (KASAN, UBSAN, KCSAN, general panics)
 ```
 
-## kcov: kernel coverage instrumentation
+## kcov: kernel coverage instrumentation {#kcov-kernel-coverage-instrumentation}
 
 syzkaller uses **kcov** to guide fuzzing toward new code paths:
 
@@ -60,7 +60,7 @@ unsigned long n_pcs = cover[0];
 /* cover[1..n_pcs] = PC addresses of executed kernel code */
 ```
 
-## Syscall descriptions (syzlang)
+## Syscall descriptions (syzlang) {#syscall-descriptions-syzlang}
 
 syzkaller uses a description language (syzlang) to model syscall arguments:
 
@@ -85,7 +85,7 @@ sockaddr_in {
 
 This allows syzkaller to generate valid-ish syscall sequences rather than completely random bytes.
 
-## Running syzkaller locally
+## Running syzkaller locally {#running-syzkaller-locally}
 
 ```bash
 # Requirements: Go, QEMU, Linux kernel with kcov
@@ -144,7 +144,7 @@ EOF
 # Shows: corpus size, crashes found, coverage map
 ```
 
-## Reproducing crashes
+## Reproducing crashes {#reproducing-crashes}
 
 When syzkaller finds a crash, it generates a **reproducer**:
 
@@ -174,7 +174,7 @@ gcc -o repro repro.c && sudo ./repro
 ./bin/syz-execprog -executor ./bin/syz-executor -repeat=10 crash.log
 ```
 
-## syzbot: continuous fuzzing
+## syzbot: continuous fuzzing {#syzbot-continuous-fuzzing}
 
 [syzbot](https://syzkaller.appspot.com) runs syzkaller 24/7 on upstream kernels:
 
@@ -194,7 +194,7 @@ gcc -o repro repro.c && sudo ./repro
 # syzbot will verify and close the bug
 ```
 
-## Triage and analysis
+## Triage and analysis {#triage-and-analysis}
 
 ```bash
 # Decode a crash address:
@@ -213,18 +213,18 @@ crash> bt      # backtrace of crashed process
 crash> dis -l sk_destruct  # disassemble with source lines
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [kernel/kcov.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kcov.c) — `__sanitizer_cov_trace_pc()`, the per-edge hook the compiler inserts under `CONFIG_KCOV`, and `kcov_ioctl()`'s handling of `KCOV_INIT_TRACE`/`KCOV_ENABLE`/`KCOV_DISABLE`
 - [scripts/faddr2line](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/faddr2line) — the crash-address-to-source-line decoder used in the Triage and analysis section
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`ioctl(2)`](https://man7.org/linux/man-pages/man2/ioctl.2.html) — the `ioctl()` interface kcov uses for `KCOV_INIT_TRACE`, `KCOV_ENABLE`, and `KCOV_DISABLE`
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KASAN](../mm/kasan.md) — memory error sanitizer used alongside syzkaller
 - [KCSAN](kcsan.md) — data race detector
@@ -232,13 +232,13 @@ crash> dis -l sk_destruct  # disassemble with source lines
 - [kdump and crash](kdump.md) — capturing crash dumps
 - [Fault Injection](../mm/fault-injection.md) — forcing error paths
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Coverage-guided kernel fuzzing with syzkaller](https://lwn.net/Articles/677764/) (2016) — the original LWN introduction to syzkaller: motivation, a reproduction walkthrough, and its use of KCOV/KASAN
 - [Scrutinizing bugs found by syzbot](https://lwn.net/Articles/872649/) (2021) — analysis of the roughly 4,000 bugs syzbot found in its first four years
 - [Troubles with triaging syzbot reports](https://lwn.net/Articles/917762/) (2022) — the maintainer-side cost of syzbot's automated bug reports
 
-### External
+### External {#external}
 
 - [syzkaller](https://github.com/google/syzkaller) — the official Google repository
 - [syzbot documentation](https://github.com/google/syzkaller/blob/master/docs/syzbot.md) — the `#syz fix:`, `#syz dup:`, and other commands for triaging syzbot reports by email

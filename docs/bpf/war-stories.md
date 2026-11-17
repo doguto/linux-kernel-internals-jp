@@ -1,4 +1,4 @@
-# War Stories: BPF Verifier Bugs and CVEs
+# War Stories: BPF Verifier Bugs and CVEs {#war-stories-bpf-verifier-bugs-and-cves}
 
 > Real vulnerabilities from the eBPF verifier — what broke, why, and what the kernel eventually concluded about the whole idea
 
@@ -10,35 +10,35 @@ The other thing this page documents is a conclusion. After years of holding the 
 
 Each incident below has its own page: root-cause analysis grounded in the actual patches and the actual verifier traces the maintainers pasted into their commit messages, plus whatever public mailing-list record exists. For one of them — the 2020 jmp32 revert — that record is a full public thread with a replacement implementation from Jann Horn in the same series. For most of the rest, the fixes were handled privately and announced on oss-security once they shipped; CVE-2021-31440 has no oss-security announcement at all, only a ZDI advisory, and the unprivileged-BPF default change was an ordinary public patch posting. The pages say that rather than manufacturing a debate.
 
-## Incidents
+## Incidents {#incidents}
 
 Ordered reverse chronologically by earliest public disclosure — oss-security post, ZDI advisory, or NVD publication, whichever came first — newest first.
 
-### [Spectre in the BPF Verifier](war-stories/spectre-verifier.md)
+### [Spectre in the BPF Verifier](war-stories/spectre-verifier.md) {#spectre-in-the-bpf-verifier}
 **June 2021 · CVE-2021-33624 · CVSS 4.7**
 The verifier only walks paths that can actually execute. A CPU that mispredicts two mutually exclusive branches will execute a path the verifier proved impossible, dereferencing an attacker-controlled pointer under speculation. The fix stopped pruning unreachable branches and started simulating them.
 
-### [Unprivileged BPF Off by Default](war-stories/unprivileged-bpf-off.md)
+### [Unprivileged BPF Off by Default](war-stories/unprivileged-bpf-off.md) {#unprivileged-bpf-off-by-default}
 **May 2021 · not a CVE**
 Posted the same day CVE-2021-3490 was announced: a kconfig knob defaulting `kernel.unprivileged_bpf_disabled` to a new value 2 — off, but recoverable by an administrator. The end of a two-year argument about whether unprivileged BPF was ever achievable, which LWN had documented in 2019.
 
-### [ALU32 Bitwise Bounds Tracking](war-stories/alu32-bitwise-bounds.md)
+### [ALU32 Bitwise Bounds Tracking](war-stories/alu32-bitwise-bounds.md) {#alu32-bitwise-bounds-tracking}
 **May 2021 · CVE-2021-3490 · CVSS 7.8**
 Three functions skipped updating a register's 32-bit bounds on the grounds that a 64-bit sibling would handle it. The sibling only handled it under a stricter precondition, leaving registers in a state where the minimum exceeded the maximum. A public local-root exploit followed.
 
-### [The 32-Bit Unsigned Bounds Propagation Bug](war-stories/alu32-unsigned-bounds.md)
+### [The 32-Bit Unsigned Bounds Propagation Bug](war-stories/alu32-unsigned-bounds.md) {#the-32-bit-unsigned-bounds-propagation-bug}
 **May 2021 · CVE-2021-31440 · CVSS 7.0 (NVD) / 8.8 (ZDI)**
 Four and a half months earlier, someone had fixed exactly this bug in the signed half of a two-block pattern. The unsigned half sat unchanged in the trailing context of the fix's own diff.
 
-### [The jmp32 Bounds Regression](war-stories/jmp32-bounds.md)
+### [The jmp32 Bounds Regression](war-stories/jmp32-bounds.md) {#the-jmp32-bounds-regression}
 **March 2020 · CVE-2020-8835 · CVSS 7.8**
 A precision improvement, never intended for stable, was auto-selected into the 5.4 long-term series by a machine-learning classifier that mistook it for a fix. Manfred Paul turned it into a Pwn2Own entry. The fix was a pure 19-line deletion, chosen over a working repair.
 
-### [Sign Extension in `check_alu_op()`](war-stories/sign-extension.md)
+### [Sign Extension in `check_alu_op()`](war-stories/sign-extension.md) {#sign-extension-in-checkaluop}
 **December 2017 · CVE-2017-16995 · CVSS 7.8**
 The verifier sign-extended a 32-bit immediate that the machine zero-pads, so its model of the register was wrong from the first instruction. One of eight verifier bugs Jann Horn reported in a single message — the pass that established the verifier's arithmetic as a security-reviewed surface. Three public exploits, including a Metasploit module.
 
-## Common threads
+## Common threads {#common-threads}
 
 | Pattern | Spectre | Unpriv off | ALU32 bitwise | 32-bit unsigned | jmp32 | Sign extension |
 |---------|:-------:|:----------:|:-------------:|:----------------:|:-----:|:--------------:|
@@ -61,7 +61,7 @@ The first row is the page's spine. Four of the five bugs are the same disagreeme
 
 **Which is the actual conclusion of this page.** The [unprivileged-BPF-off](war-stories/unprivileged-bpf-off.md) entry is not a CVE and not a mistake — it is the subsystem's own answer to everything above it. Alexei Starovoitov's position, quoted on LWN in 2019, is that the verifier hardening built to make unprivileged BPF safe is "a lot of complex kernel code without users." Andy Lutomirski's counter, that the use cases don't exist *because* the support doesn't, was never refuted; it was settled by shipping a default. Read the five bug pages first, then that one, and the argument reads very differently than it does in isolation.
 
-## See also
+## See also {#see-also}
 
 - [BPF Verifier](bpf-verifier.md) — register state tracking, bounds, path exploration, and dead-code elimination: the machinery every bug on this page lives inside
 - [Architecture & Program Types](bpf-overview.md) — the eBPF instruction format, registers, and program types: the vocabulary the 2017 bug is written in

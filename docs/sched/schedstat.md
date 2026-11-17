@@ -1,14 +1,14 @@
-# Scheduler Statistics
+# Scheduler Statistics {#scheduler-statistics}
 
 > /proc/schedstat, /proc/PID/schedstat, and the sched_statistics structure
 
-## What schedstat tracks
+## What schedstat tracks {#what-schedstat-tracks}
 
 The kernel accumulates per-task and per-CPU scheduling statistics under `CONFIG_SCHEDSTATS`. These tell you how long tasks wait, how long they sleep, how often they migrate, and what's happening in the load balancer.
 
 Schedstat is the first place to look when diagnosing scheduling anomalies: excessive wait times, unexpected migrations, or load imbalance.
 
-## Enabling schedstat
+## Enabling schedstat {#enabling-schedstat}
 
 ```bash
 # Check if enabled (runtime toggle since 4.6)
@@ -24,7 +24,7 @@ echo 1 > /proc/sys/kernel/sched_schedstats
 
 Without `CONFIG_SCHEDSTATS`, the fields exist but are always zero. Most production kernels have `CONFIG_SCHEDSTATS` compiled in but disabled by default via the sysctl.
 
-## Per-task statistics: /proc/PID/schedstat
+## Per-task statistics: /proc/PID/schedstat {#per-task-statistics-procpidschedstat}
 
 ```bash
 cat /proc/$PID/schedstat
@@ -42,7 +42,7 @@ cat /proc/$$/schedstat
 # → ran 1.23s, waited 98.7ms, scheduled 1042 times
 ```
 
-### The sched_statistics struct
+### The sched_statistics struct {#the-sched_statistics-struct}
 
 These statistics are stored in `struct sched_entity` (embedded in `task_struct`):
 
@@ -88,7 +88,7 @@ struct sched_statistics {
 };
 ```
 
-## Per-CPU statistics: /proc/schedstat
+## Per-CPU statistics: /proc/schedstat {#per-cpu-statistics-procschedstat}
 
 ```bash
 cat /proc/schedstat
@@ -99,7 +99,7 @@ cat /proc/schedstat
 # domain0 00000003 0 0 0 0 0 0 ...
 ```
 
-### CPU line fields (v15 format)
+### CPU line fields (v15 format) {#cpu-line-fields-v15-format}
 
 ```
 cpu<N> yld_count sched_count sched_goidle ttwu_count ttwu_local \
@@ -117,7 +117,7 @@ cpu<N> yld_count sched_count sched_goidle ttwu_count ttwu_local \
 | `run_delay` | Total wait time before running (ns) |
 | `pcount` | Tasks scheduled |
 
-### Domain line fields
+### Domain line fields {#domain-line-fields}
 
 Each `domain<N>` line shows load balancer statistics for that scheduling domain on that CPU:
 
@@ -133,7 +133,7 @@ domain<N> cpumask lb_count[idle] lb_count[busy] lb_count[newly_idle] \
 
 These are the raw counters behind load balancing decisions — useful for diagnosing whether the load balancer is working.
 
-## /proc/PID/sched
+## /proc/PID/sched {#procpidsched}
 
 More detailed per-task stats (always available, not gated by schedstats):
 
@@ -167,7 +167,7 @@ Key fields:
 
 A high `nr_involuntary_switches` relative to `nr_voluntary_switches` suggests the task is being preempted frequently — it may be using more CPU than its allocation allows, or competing with higher-priority tasks.
 
-## Interpreting wait time
+## Interpreting wait time {#interpreting-wait-time}
 
 ```bash
 # Script to show top tasks by scheduler wait time
@@ -184,7 +184,7 @@ High `wait_time` relative to `cpu_time` means a task is often runnable but waiti
 - Task has low priority (nice value or cgroup weight)
 - CPU affinity is too restrictive
 
-## perf and schedstat together
+## perf and schedstat together {#perf-and-schedstat-together}
 
 ```bash
 # Measure scheduler overhead for a workload
@@ -194,7 +194,7 @@ perf stat -e context-switches,cpu-migrations,sched:sched_switch ./workload
 perf stat -e sched:sched_switch -a sleep 5 2>&1 | grep sched_switch
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Scheduler Tracing](sched-tracing.md) — ftrace events for real-time scheduling observation
 - [Scheduler Tuning](sched-tuning.md) — sysctl knobs to adjust scheduler behavior

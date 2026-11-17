@@ -1,8 +1,8 @@
-# io_uring Multishot, Linked Requests, and Probing
+# io_uring Multishot, Linked Requests, and Probing {#io_uring-multishot-linked-requests-and-probing}
 
 > One SQE, many CQEs — persistent operations, chained I/O, and capability detection
 
-## What multishot means
+## What multishot means {#what-multishot-means}
 
 A normal io_uring submission follows a one-to-one model: one SQE produces exactly one CQE. The SQE is consumed, the operation runs once, the result appears in the CQ.
 
@@ -21,7 +21,7 @@ When `IORING_CQE_F_MORE` is absent, the multishot SQE has been disarmed. This ha
 
 The multishot model eliminates the round-trip of resubmitting a new SQE after every accepted connection or every received message — critical for high-connection-rate servers.
 
-## Multishot accept (`IORING_OP_ACCEPT`)
+## Multishot accept (`IORING_OP_ACCEPT`) {#multishot-accept-ioringopaccept}
 
 **Added:** Linux 5.19 — `io_uring/net.c`
 
@@ -103,7 +103,7 @@ io_uring_submit(&ring);
 
 The kernel implementation lives in `io_uring/net.c` (`io_accept_multishot()`). On each `inet_csk_accept()` return, the kernel posts a CQE and immediately re-arms the wait — no round-trip to userspace required between connections.
 
-## Multishot recv (`IORING_OP_RECV`)
+## Multishot recv (`IORING_OP_RECV`) {#multishot-recv-ioringoprecv}
 
 **Added:** Linux 5.20 / 6.0 — `io_uring/net.c`
 
@@ -159,21 +159,21 @@ io_uring_cqe_seen(&ring, cqe);
 
 If the buffer pool runs dry, the multishot recv is automatically disarmed and posts a CQE with `res == -ENOBUFS` and `IORING_CQE_F_MORE` absent. Refill the buffer ring and resubmit.
 
-## Linked requests (`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`)
+## Linked requests (`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`) {#linked-requests-iosqeiolink-iosqeiohardlink}
 
 Linked requests let you express **ordering dependencies** between SQEs without any application involvement between steps. The kernel executes the chain sequentially: SQE B does not start until SQE A completes.
 
 Set `IOSQE_IO_LINK` on each SQE that should be followed by the next. The final SQE in the chain carries no link flag.
 
-### `IOSQE_IO_LINK` — soft link
+### `IOSQE_IO_LINK` — soft link {#iosqeiolink-soft-link}
 
 If the linked SQE fails (non-zero `res`), all subsequent SQEs in the chain receive a CQE with `res == -ECANCELED`. The chain is broken.
 
-### `IOSQE_IO_HARDLINK` — hard link
+### `IOSQE_IO_HARDLINK` — hard link {#iosqeiohardlink-hard-link}
 
 The chain continues regardless of whether the linked SQE succeeds or fails. Each SQE runs in sequence unconditionally. Useful when you need cleanup steps that must run even after an error.
 
-### Example: write then fsync
+### Example: write then fsync {#example-write-then-fsync}
 
 A common pattern for durable writes: persist data, then flush. A link guarantees `fsync` only runs after the write completes, and both are submitted in a single `io_uring_submit` call:
 
@@ -219,7 +219,7 @@ int durable_write(struct io_uring *ring, int fd,
 
 If the write fails, the fsync CQE arrives with `res == -ECANCELED` — no need to check the fsync result independently. To force the fsync regardless, replace `IOSQE_IO_LINK` with `IOSQE_IO_HARDLINK`.
 
-### Link timeouts
+### Link timeouts {#link-timeouts}
 
 A `IORING_OP_LINK_TIMEOUT` SQE can be appended to a chain to bound its total duration. If the linked operation doesn't complete within the timeout, it is cancelled:
 
@@ -235,7 +235,7 @@ io_uring_prep_link_timeout(sqe, &(struct __kernel_timespec){
 }, 0);
 ```
 
-## `IORING_OP_POLL_ADD` multishot
+## `IORING_OP_POLL_ADD` multishot {#ioringoppoll_add-multishot}
 
 **Added:** Linux 5.13 — `io_uring/poll.c`
 
@@ -264,11 +264,11 @@ io_uring_prep_poll_remove(sqe, TAG_POLL);
 io_uring_submit(&ring);
 ```
 
-## Probing capabilities (`io_uring_probe`)
+## Probing capabilities (`io_uring_probe`) {#probing-capabilities-iouringprobe}
 
 io_uring adds new opcodes and features frequently — and not all kernels support all operations. Calling an unsupported opcode produces `EINVAL` or `EOPNOTSUPP`, which is difficult to distinguish from a usage error. The probe API lets you query the kernel's capabilities before committing to a code path.
 
-### Raw probe via `io_uring_register`
+### Raw probe via `io_uring_register` {#raw-probe-via-iouringregister}
 
 ```c
 #include <linux/io_uring.h>
@@ -301,7 +301,7 @@ bool op_supported(const struct io_uring_probe *probe, unsigned op)
 }
 ```
 
-### liburing helper
+### liburing helper {#liburing-helper}
 
 ```c
 #include <liburing.h>
@@ -324,7 +324,7 @@ io_uring_queue_exit(&ring);
 
 `io_uring_get_probe_ring()` calls `io_uring_register(IORING_REGISTER_PROBE)` internally and returns a heap-allocated `io_uring_probe`. Free it with `io_uring_free_probe()`.
 
-### Why probing matters
+### Why probing matters {#why-probing-matters}
 
 | Approach | Consequence of missing op |
 |----------|--------------------------|
@@ -335,7 +335,7 @@ io_uring_queue_exit(&ring);
 
 Probe once at startup, store the results, and branch on them. The probe syscall is cheap — one `io_uring_register` call.
 
-## Putting it together: multishot accept with linked reads
+## Putting it together: multishot accept with linked reads {#putting-it-together-multishot-accept-with-linked-reads}
 
 A sketch of a server that combines multishot accept, per-connection multishot recv, and linked write+fsync for log durability:
 
@@ -357,7 +357,7 @@ listen_fd
 
 All three operation types drain into the same CQ. A single event loop harvests them by checking `user_data` tags to dispatch each CQE to the right handler. No epoll, no thread-per-connection, no per-event syscall.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Architecture and Rings](io-uring-arch.md) — SQE/CQE structures, ring layout, `io_uring_enter`
 - [Operations and Advanced Features](io-uring-ops.md) — SQPOLL, fixed files, provided buffers

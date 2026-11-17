@@ -1,8 +1,8 @@
-# Futex Internals
+# Futex Internals {#futex-internals}
 
 > How userspace mutex and condition variable implementations work in the kernel
 
-## Why futexes exist
+## Why futexes exist {#why-futexes-exist}
 
 Before futexes, every POSIX mutex operation went through the kernel. `pthread_mutex_lock()` called `sem_wait()` or a similar syscall; `pthread_mutex_unlock()` called `sem_post()`. A syscall costs ~100–300 ns on modern hardware. A program that holds fine-grained mutexes for short durations (a hash table lock held for a few cache accesses, for example) could spend more time in the kernel than doing actual work.
 
@@ -10,7 +10,7 @@ Hubertus Franke (IBM), Rusty Russell, and Matthew Kirkwood designed futexes in 2
 
 futex(2) entered Linux 2.6.0 (December 2003) — see [`man 2 futex`](https://www.man7.org/linux/man-pages/man2/futex.2.html). Today, glibc's `pthread_mutex_t`, `pthread_cond_t`, `pthread_rwlock_t`, `sem_t`, and C++ `std::mutex` are all implemented on top of futexes.
 
-## What is a futex?
+## What is a futex? {#what-is-a-futex}
 
 A **futex** (fast userspace mutex) is the kernel mechanism that allows userspace locking primitives (pthreads mutex, condition variables, semaphores) to be efficient. The key insight: in the common uncontended case, locking and unlocking should happen entirely in userspace with no kernel involvement. The kernel is only called when there's actual contention.
 
@@ -19,7 +19,7 @@ The futex syscall (`futex(2)`) provides two core operations:
 - `FUTEX_WAIT`: sleep if the futex word has a given value
 - `FUTEX_WAKE`: wake one or more waiters
 
-## The uncontended fast path
+## The uncontended fast path {#the-uncontended-fast-path}
 
 A pthread mutex, for example, is implemented over a 32-bit integer in userspace memory:
 
@@ -59,7 +59,7 @@ The kernel is called only when:
 
 For a lightly-contended mutex, most lock/unlock operations complete entirely in userspace with two atomic instructions.
 
-## Kernel-side data structures
+## Kernel-side data structures {#kernel-side-data-structures}
 
 ```c
 /* kernel/futex/futex.h */
@@ -101,7 +101,7 @@ struct futex_hash_bucket {
 
 The hash table has `1 << CONFIG_FUTEX_HASHBITS` buckets (default 256 on most configs). Multiple futexes may share a bucket — the key is used to identify the specific futex when waking.
 
-## Private vs shared futexes
+## Private vs shared futexes {#private-vs-shared-futexes}
 
 ```c
 /* Private futex (process-private, default in glibc) */
@@ -113,7 +113,7 @@ futex(&word, FUTEX_WAIT, expected, timeout, NULL, 0);
 
 Private futexes are slightly faster because the key is just the virtual address — no page table walk needed. Shared futexes use the underlying page's physical address (via `page->mapping` + offset) so multiple processes mapping the same page see the same futex.
 
-## FUTEX_WAIT: going to sleep
+## FUTEX_WAIT: going to sleep {#futex_wait-going-to-sleep}
 
 ```c
 /* Simplified kernel FUTEX_WAIT implementation */
@@ -156,7 +156,7 @@ The crucial step is checking the value **under the hash bucket lock** (step 3). 
 - The lock holder unlocks and calls FUTEX_WAKE before we've queued
 - We'd sleep forever without the lock check
 
-## FUTEX_WAKE: waking sleepers
+## FUTEX_WAKE: waking sleepers {#futex_wake-waking-sleepers}
 
 ```c
 int futex_wake(u32 __user *uaddr, int nr_wake)
@@ -181,7 +181,7 @@ int futex_wake(u32 __user *uaddr, int nr_wake)
 }
 ```
 
-## PI futexes
+## PI futexes {#pi-futexes}
 
 Priority-inheritance futexes (`FUTEX_LOCK_PI`, `FUTEX_UNLOCK_PI`) implement the priority inheritance protocol for userspace mutexes. When a high-priority task blocks on a PI futex held by a low-priority task, the low-priority task's effective priority is boosted.
 
@@ -200,7 +200,7 @@ void pi_mutex_lock(int *uaddr)
 }
 ```
 
-## Condition variables (FUTEX_WAIT + FUTEX_WAKE)
+## Condition variables (FUTEX_WAIT + FUTEX_WAKE) {#condition-variables-futexwait-futexwake}
 
 `pthread_cond_wait` is implemented as:
 1. Release the associated mutex (userspace atomic)
@@ -209,13 +209,13 @@ void pi_mutex_lock(int *uaddr)
 
 `pthread_cond_signal` / `pthread_cond_broadcast` use `FUTEX_WAKE` (signal) or `FUTEX_REQUEUE` (broadcast, to efficiently move waiters to the mutex's queue without waking them all).
 
-### Why FUTEX_REQUEUE exists
+### Why FUTEX_REQUEUE exists {#why-futex_requeue-exists}
 
 The naive implementation of `pthread_cond_broadcast` is `FUTEX_WAKE` with a large count — wake all waiters. The problem: all N waiters wake up simultaneously, all try to re-acquire the associated mutex, and N-1 of them immediately go back to sleep. This is a **thundering herd**.
 
 `FUTEX_CMP_REQUEUE` (added in Linux 2.6.7, 2004 — [`man 2 futex`](https://www.man7.org/linux/man-pages/man2/futex.2.html)) moves sleeping threads from the condvar queue to the mutex queue *without waking them*. One waiter is woken (to acquire the mutex), and the rest are requeued. When the first waiter releases the mutex, the next requeued waiter wakes up, and so on. N waiters are processed sequentially rather than all competing at once.
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Mutex and rt_mutex](mutex.md) — Kernel-side sleeping locks
 - [Priority Inversion & PI Mutexes](../sched/pi-mutexes.md) — The rt_mutex PI mechanism

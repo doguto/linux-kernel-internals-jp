@@ -1,8 +1,8 @@
-# Character and Misc Devices
+# Character and Misc Devices {#character-and-misc-devices}
 
 > Exposing driver functionality to userspace via /dev
 
-## Character devices
+## Character devices {#character-devices}
 
 A character device (cdev) is a special file in `/dev` that provides a byte-stream interface to a driver. Unlike block devices, character devices do not buffer data in the page cache — I/O goes directly to the driver. The two-step `alloc_chrdev_region` / `cdev_add` interface was introduced by Al Viro just before Linux 2.6.0 to support an expanded `dev_t` type; the old `register_chrdev()` remains as a compatibility shim [(LWN)](https://lwn.net/Articles/195805/).
 
@@ -21,7 +21,7 @@ A character device (cdev) is a special file in `/dev` that provides a byte-strea
    driver code
 ```
 
-## Allocating major/minor numbers
+## Allocating major/minor numbers {#allocating-majorminor-numbers}
 
 ```c
 /* Static allocation (reserved in Documentation/admin-guide/devices.txt) */
@@ -39,7 +39,7 @@ int minor = MINOR(devt);
 unregister_chrdev_region(devt, 1);
 ```
 
-## struct cdev
+## struct cdev {#struct-cdev}
 
 ```c
 #include <linux/cdev.h>
@@ -54,7 +54,7 @@ struct cdev {
 };
 ```
 
-## struct file_operations
+## struct file_operations {#struct-file_operations}
 
 ```c
 /* include/linux/fs.h */
@@ -80,7 +80,7 @@ struct file_operations {
 };
 ```
 
-## A complete minimal character driver
+## A complete minimal character driver {#a-complete-minimal-character-driver}
 
 ```c
 /* drivers/mychardev/mychardev.c */
@@ -233,7 +233,7 @@ echo "hello" > /dev/mychardev
 cat /dev/mychardev  # → hello
 ```
 
-## misc_register: the easy path
+## misc_register: the easy path {#misc_register-the-easy-path}
 
 For simple devices that don't need multiple minors, `misc_register` handles major/minor allocation and class creation automatically:
 
@@ -260,7 +260,7 @@ static void __exit mymisc_exit(void)
 
 All misc devices share major number 10 — a value reserved in the kernel's official device list since at least Linux 1.3. They appear under `/sys/class/misc/`.
 
-## ioctl: control operations
+## ioctl: control operations {#ioctl-control-operations}
 
 ioctl lets userspace send control commands to the driver:
 
@@ -313,7 +313,7 @@ ioctl(fd, MYDEV_IOCTL_RESET);
 ioctl(fd, MYDEV_IOCTL_QUERY, &query);
 ```
 
-## mmap: mapping device memory to userspace
+## mmap: mapping device memory to userspace {#mmap-mapping-device-memory-to-userspace}
 
 Drivers can let userspace map device memory or kernel buffers directly:
 
@@ -356,7 +356,7 @@ volatile uint32_t *reg = (volatile uint32_t *)mapped;
 uint32_t val = *reg;
 ```
 
-## poll/select support
+## poll/select support {#pollselect-support}
 
 ```c
 static __poll_t mydev_poll(struct file *filp, poll_table *wait)
@@ -375,7 +375,7 @@ static __poll_t mydev_poll(struct file *filp, poll_table *wait)
 }
 ```
 
-## struct device integration
+## struct device integration {#struct-device-integration}
 
 To get a proper `/sys/class/` entry and auto-create `/dev/`:
 
@@ -401,7 +401,7 @@ err_class:
 }
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Linux Device Model](device-model.md) — struct device, class, kobject
 - [Platform Drivers](platform-driver.md) — devm_ resource management

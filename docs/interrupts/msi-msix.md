@@ -1,8 +1,8 @@
-# MSI and MSI-X: PCIe Message-Signaled Interrupts
+# MSI and MSI-X: PCIe Message-Signaled Interrupts {#msi-and-msi-x-pcie-message-signaled-interrupts}
 
 > Replacing legacy INTx with per-queue interrupt vectors for NVMe, NIC, and GPU
 
-## Why MSI-X?
+## Why MSI-X? {#why-msi-x}
 
 Legacy PCI interrupts (INTx, INTA-INTD) have fundamental limitations:
 
@@ -23,7 +23,7 @@ MSI/MSI-X:
 
 **MSI-X** extends MSI to 2048 vectors per device (vs 32 for MSI), and each vector can have independent affinity.
 
-## MSI capability structure
+## MSI capability structure {#msi-capability-structure}
 
 ```
 PCI config space:
@@ -51,7 +51,7 @@ pci_read_config_word(dev, pos + PCI_MSI_FLAGS, &ctrl);
 int nvec = 1 << ((ctrl & PCI_MSI_FLAGS_QMASK) >> 1);  /* max vectors */
 ```
 
-## MSI-X table
+## MSI-X table {#msi-x-table}
 
 MSI-X uses a table in one of the device's BARs:
 
@@ -78,7 +78,7 @@ MSI-X Table entry (16 bytes each):
                [0]: Masked (1 = masked)
 ```
 
-## Linux kernel: requesting MSI-X vectors
+## Linux kernel: requesting MSI-X vectors {#linux-kernel-requesting-msi-x-vectors}
 
 ```c
 /* drivers/net/ethernet/intel/igb/igb_main.c (simplified) */
@@ -119,7 +119,7 @@ for (i = 0; i < adapter->num_q_vectors; i++) {
 pci_free_irq_vectors(adapter->pdev);
 ```
 
-## Per-vector IRQ affinity
+## Per-vector IRQ affinity {#per-vector-irq-affinity}
 
 With MSI-X, each vector can be pinned to a different CPU:
 
@@ -150,7 +150,7 @@ irq_set_affinity_hint(irq, cpumask);
 irq_set_affinity(irq, cpumask);
 ```
 
-## Interrupt coalescing
+## Interrupt coalescing {#interrupt-coalescing}
 
 To reduce interrupt rate (and CPU overhead), drivers aggregate multiple completions:
 
@@ -171,7 +171,7 @@ ethtool -C eth0 rx-usecs=100 tx-usecs=100
 ethtool -C eth0 adaptive-rx on adaptive-tx on
 ```
 
-### Kernel coalescing support
+### Kernel coalescing support {#kernel-coalescing-support}
 
 ```c
 /* NIC driver implements: */
@@ -192,7 +192,7 @@ static int igb_set_coalesce(struct net_device *netdev,
 }
 ```
 
-## Checking MSI-X status
+## Checking MSI-X status {#checking-msi-x-status}
 
 ```bash
 # Verify MSI-X is active:
@@ -216,7 +216,7 @@ cat /sys/bus/pci/devices/0000:03:00.0/msi_irqs/
 # 32  33  34  ...  (one per MSI-X vector)
 ```
 
-## MSI vs MSI-X comparison
+## MSI vs MSI-X comparison {#msi-vs-msi-x-comparison}
 
 | | INTx | MSI | MSI-X |
 |---|------|-----|-------|
@@ -227,7 +227,7 @@ cat /sys/bus/pci/devices/0000:03:00.0/msi_irqs/
 | Table location | PCI pins | Config space | BAR |
 | Usage | Legacy | Simple devices | NVMe, 10GbE, GPU |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [PCI Drivers](../drivers/pci-driver.md) — PCIe driver basics including MSI setup
 - [IRQ Affinity](../interrupts/irq-affinity.md) — configuring IRQ CPU affinity

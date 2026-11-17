@@ -1,8 +1,8 @@
-# Credentials and User Namespaces
+# Credentials and User Namespaces {#credentials-and-user-namespaces}
 
 > struct cred, uid mapping, and capability inheritance across namespace boundaries
 
-## struct cred: task credentials
+## struct cred: task credentials {#struct-cred-task-credentials}
 
 Every task has a `struct cred` that holds its security identity:
 
@@ -34,7 +34,7 @@ struct cred {
 };
 ```
 
-### Credential immutability
+### Credential immutability {#credential-immutability}
 
 Credentials are **copy-on-write**: to modify credentials, you prepare a new copy, modify it, then commit:
 
@@ -68,7 +68,7 @@ uid_t euid = current_euid().val;
 uid_t uid = task_uid(task).val;
 ```
 
-### The credential transition on execve
+### The credential transition on execve {#the-credential-transition-on-execve}
 
 ```c
 /* security/commoncap.c */
@@ -100,7 +100,7 @@ int cap_bprm_creds_from_file(struct linux_binprm *bprm, const struct file *file)
 }
 ```
 
-## User namespaces
+## User namespaces {#user-namespaces}
 
 A **user namespace** creates a private mapping between UIDs/GIDs in the namespace and the host system. This allows:
 
@@ -118,7 +118,7 @@ cat /proc/self/uid_map
 # 0     1000    1   (UID 0 in ns = UID 1000 on host; 1 UID mapped)
 ```
 
-### uid_map and gid_map
+### uid_map and gid_map {#uidmap-and-gidmap}
 
 ```bash
 # /proc/<pid>/uid_map format:
@@ -134,7 +134,7 @@ echo "0 1000 1" > /proc/<pid>/gid_map
 # Note: requires either: be the process itself (unshare), or CAP_SETUID on host
 ```
 
-### newuidmap / newgidmap
+### newuidmap / newgidmap {#newuidmap-newgidmap}
 
 ```bash
 # For containers with range mappings:
@@ -151,7 +151,7 @@ newuidmap <pid> 0 1000 1 1 100000 65536
 newgidmap <pid> 0 1000 1 1 100000 65536
 ```
 
-## Kernel: UID translation
+## Kernel: UID translation {#kernel-uid-translation}
 
 When the kernel resolves UIDs for permission checks, it always works with **k**uids (kernel UIDs) that map to the initial user namespace:
 
@@ -175,7 +175,7 @@ if (!uid_eq(kuid, file_inode->i_uid))
     return -EACCES;
 ```
 
-### struct user_namespace
+### struct user_namespace {#struct-user_namespace}
 
 ```c
 /* include/linux/user_namespace.h */
@@ -201,7 +201,7 @@ struct user_namespace {
 };
 ```
 
-## Capabilities across namespaces
+## Capabilities across namespaces {#capabilities-across-namespaces}
 
 Capabilities are **namespace-scoped**: having `CAP_NET_ADMIN` in a network namespace only grants control over that namespace's network stack.
 
@@ -241,7 +241,7 @@ bool capable_wrt_inode_uidgid(struct user_namespace *ns,
 }
 ```
 
-## The loginuid: audit identity
+## The loginuid: audit identity {#the-loginuid-audit-identity}
 
 `/proc/self/loginuid` records the original user who logged in, even after `su`/`sudo`:
 
@@ -268,7 +268,7 @@ kuid_t task_loginuid(const struct task_struct *t)
 /* Cannot be changed after first set (without CAP_AUDIT_CONTROL) */
 ```
 
-## Observing credential changes
+## Observing credential changes {#observing-credential-changes}
 
 ```bash
 # Trace setuid/setgid calls
@@ -290,7 +290,7 @@ auditctl -a always,exit -F arch=b64 \
 ausearch -k cred_change -i | tail -20
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Capabilities](capabilities.md) — capability bit reference
 - [LSM Framework](lsm.md) — LSM hooks on credential transitions

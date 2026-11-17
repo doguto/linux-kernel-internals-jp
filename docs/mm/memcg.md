@@ -1,8 +1,8 @@
-# Memory Cgroups (memcg)
+# Memory Cgroups (memcg) {#memory-cgroups-memcg}
 
 > Container memory limits and accounting
 
-## What Is memcg?
+## What Is memcg? {#what-is-memcg}
 
 [Memory cgroups](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory) (memcg) allow limiting and tracking memory usage for groups of processes. They're the foundation of container memory limits (Docker, Kubernetes, systemd).
 
@@ -20,7 +20,7 @@ Container A (limit: 1GB)      Container B (limit: 2GB)
               (tracks & enforces)
 ```
 
-## cgroup v1 vs v2
+## cgroup v1 vs v2 {#cgroup-v1-vs-v2}
 
 Linux has two cgroup implementations:
 
@@ -41,9 +41,9 @@ mount | grep cgroup
 # v2: /sys/fs/cgroup (unified)
 ```
 
-## Basic Operations
+## Basic Operations {#basic-operations}
 
-### Create a cgroup
+### Create a cgroup {#create-a-cgroup}
 
 ```bash
 # Create a new cgroup
@@ -56,7 +56,7 @@ echo $PID > /sys/fs/cgroup/mygroup/cgroup.procs
 echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control
 ```
 
-### Set Memory Limit
+### Set Memory Limit {#set-memory-limit}
 
 ```bash
 # Set 500MB limit (cgroup v2)
@@ -66,7 +66,7 @@ echo 500M > /sys/fs/cgroup/mygroup/memory.max
 echo 400M > /sys/fs/cgroup/mygroup/memory.high
 ```
 
-### View Usage
+### View Usage {#view-usage}
 
 ```bash
 # Current memory usage
@@ -76,7 +76,7 @@ cat /sys/fs/cgroup/mygroup/memory.current
 cat /sys/fs/cgroup/mygroup/memory.stat
 ```
 
-## Memory Limits (v2)
+## Memory Limits (v2) {#memory-limits-v2}
 
 | File | Description |
 |------|-------------|
@@ -105,7 +105,7 @@ cat /sys/fs/cgroup/mygroup/memory.stat
       reclaim
 ```
 
-### Example: Container Limits
+### Example: Container Limits {#example-container-limits}
 
 ```bash
 # Production container setup
@@ -114,7 +114,7 @@ echo 800M > /sys/fs/cgroup/container/memory.high # Start throttling
 echo 200M > /sys/fs/cgroup/container/memory.low  # Protect this much
 ```
 
-## What's Accounted
+## What's Accounted {#whats-accounted}
 
 memcg tracks:
 
@@ -126,7 +126,7 @@ memcg tracks:
 | Huge pages | Separate | Via `hugetlb` controller |
 | Kernel stacks | Yes (v2) | Per-task kernel stacks |
 
-### Memory Statistics
+### Memory Statistics {#memory-statistics}
 
 ```bash
 cat /sys/fs/cgroup/mygroup/memory.stat
@@ -140,7 +140,7 @@ cat /sys/fs/cgroup/mygroup/memory.stat
 # pgmajfault  - Major page faults (disk I/O)
 ```
 
-## Per-cgroup Reclaim
+## Per-cgroup Reclaim {#per-cgroup-reclaim}
 
 When a cgroup approaches its limit, reclaim happens within that cgroup first.
 
@@ -155,7 +155,7 @@ Reclaim from Cgroup A only
 (other cgroups unaffected)
 ```
 
-### memory.reclaim ([v5.19+](https://lwn.net/Articles/894849/))
+### memory.reclaim ([v5.19+](https://lwn.net/Articles/894849/)) {#memoryreclaim-v519}
 
 Proactively trigger reclaim ([commit 94968384dde1](https://git.kernel.org/linus/94968384dde1)):
 
@@ -170,7 +170,7 @@ Useful for:
 - Reducing memory before migration
 - Testing reclaim behavior
 
-## OOM Handling
+## OOM Handling {#oom-handling}
 
 When a cgroup exceeds `memory.max`:
 
@@ -190,7 +190,7 @@ cat /sys/fs/cgroup/mygroup/memory.events
 # high       - Times memory.high was hit
 ```
 
-### OOM Group Kill (v4.19+)
+### OOM Group Kill (v4.19+) {#oom-group-kill-v419}
 
 **Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
 
@@ -204,7 +204,7 @@ echo 1 > /sys/fs/cgroup/mygroup/memory.oom.group
 
 Useful for containers where killing one process leaves others broken.
 
-## Pressure Stall Information (PSI)
+## Pressure Stall Information (PSI) {#pressure-stall-information-psi}
 
 PSI shows how much time tasks spend waiting for memory:
 
@@ -216,7 +216,7 @@ cat /sys/fs/cgroup/mygroup/memory.pressure
 # full: percentage of time all tasks were stalled
 ```
 
-### Use Cases
+### Use Cases {#use-cases}
 
 - **Autoscaling**: Scale up when pressure increases
 - **Health checks**: Detect memory-constrained containers
@@ -227,7 +227,7 @@ cat /sys/fs/cgroup/mygroup/memory.pressure
 cat /proc/pressure/memory
 ```
 
-## Hierarchical Limits
+## Hierarchical Limits {#hierarchical-limits}
 
 Cgroups are hierarchical. Child limits can't exceed parent:
 
@@ -239,7 +239,7 @@ root (limit: 8GB)
 └── container-b (limit: 4GB)
 ```
 
-## Swap Control
+## Swap Control {#swap-control}
 
 ```bash
 # Limit swap usage (v2)
@@ -250,9 +250,9 @@ echo 500M > /sys/fs/cgroup/mygroup/memory.swap.max # 500MB swap
 cat /sys/fs/cgroup/mygroup/memory.swap.current
 ```
 
-## History
+## History {#history}
 
-### Memory Controller Introduction (v2.6.25, 2008)
+### Memory Controller Introduction (v2.6.25, 2008) {#memory-controller-introduction-v2625-2008}
 
 **Commit**: [8cdea7c05454](https://git.kernel.org/linus/8cdea7c05454) ("Memory controller: cgroups setup")
 
@@ -262,15 +262,15 @@ cat /sys/fs/cgroup/mygroup/memory.swap.current
 
 Initial memory cgroup implementation for cgroup v1.
 
-### Unified Hierarchy (cgroup v2, v4.5, 2016)
+### Unified Hierarchy (cgroup v2, v4.5, 2016) {#unified-hierarchy-cgroup-v2-v45-2016}
 
 The cgroup v2 unified hierarchy was [marked non-experimental in v4.5](https://lwn.net/Articles/679786/) ([commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)), with the memory controller considered stable for production use. The memory controller was reworked significantly from v1, with cleaner semantics and integrated pressure stall information.
 
-### Kernel Memory Accounting (v4.5+)
+### Kernel Memory Accounting (v4.5+) {#kernel-memory-accounting-v45}
 
 Kernel memory (slab, stacks) [included in memory.current by default](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory) in v2 ([background: the new slab memory controller](https://lwn.net/Articles/798605/)).
 
-### memory.reclaim (v5.19, 2022)
+### memory.reclaim (v5.19, 2022) {#memoryreclaim-v519-2022}
 
 **Commit**: [94968384dde1](https://git.kernel.org/linus/94968384dde1) ("memcg: introduce per-memcg reclaim interface") | [LKML](https://lore.kernel.org/linux-mm/20220421234426.3494842-2-yosryahmed@google.com/)
 
@@ -278,9 +278,9 @@ Kernel memory (slab, stacks) [included in memory.current by default](https://doc
 
 Proactive reclaim interface.
 
-## Try It Yourself
+## Try It Yourself {#try-it-yourself}
 
-### Create a Memory-Limited Shell
+### Create a Memory-Limited Shell {#create-a-memory-limited-shell}
 
 ```bash
 # Create cgroup
@@ -299,7 +299,7 @@ echo $$ | sudo tee /sys/fs/cgroup/test/cgroup.procs
 python3 -c "x = 'a' * 150_000_000"  # Will be OOM killed
 ```
 
-### Monitor a Container
+### Monitor a Container {#monitor-a-container}
 
 ```bash
 # Find container's cgroup
@@ -312,7 +312,7 @@ watch -n 1 cat /sys/fs/cgroup/$CGROUP/memory.current
 cat /sys/fs/cgroup/$CGROUP/memory.stat
 ```
 
-### Simulate Memory Pressure
+### Simulate Memory Pressure {#simulate-memory-pressure}
 
 ```bash
 # Create cgroup with low limit
@@ -327,9 +327,9 @@ stress --vm 1 --vm-bytes 100M
 cat /sys/fs/cgroup/pressure-test/memory.pressure
 ```
 
-## Common Issues
+## Common Issues {#common-issues}
 
-### Container OOM Despite Free System Memory
+### Container OOM Despite Free System Memory {#container-oom-despite-free-system-memory}
 
 Container hit its `memory.max` limit.
 
@@ -341,7 +341,7 @@ Container hit its `memory.max` limit.
 - Optimize application memory usage
 - Add swap and `memory.swap.max`
 
-### Slow Container Startup
+### Slow Container Startup {#slow-container-startup}
 
 Memory being reclaimed during startup.
 
@@ -353,32 +353,32 @@ Memory being reclaimed during startup.
 - Pre-warm with `memory.reclaim`
 - Check if limit is too low
 
-### Kernel Memory Growing Unbounded (v1)
+### Kernel Memory Growing Unbounded (v1) {#kernel-memory-growing-unbounded-v1}
 
 In cgroup v1, kernel memory wasn't limited by default.
 
 **Solution**: Use cgroup v2, or set `memory.kmem.limit_in_bytes` in v1.
 
-## References
+## References {#references}
 
-### Key Code
+### Key Code {#key-code}
 
 | File | Description |
 |------|-------------|
 | [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory controller implementation |
 | [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg API |
 
-### Kernel Documentation
+### Kernel Documentation {#kernel-documentation}
 
 - [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - Authoritative cgroup v2 docs
 
-### Related
+### Related {#related}
 
 - [reclaim](reclaim.md) - How memory is reclaimed
 - [page-allocator](page-allocator.md) - Global memory allocation
 - [glossary](glossary.md) - cgroup, OOM definitions
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — the entire memory controller implementation: charge/uncharge paths, limit enforcement, PSI integration, and the `memory.reclaim` interface
 - `Documentation/admin-guide/cgroup-v2.rst` — authoritative kernel reference for every `memory.*` interface file, including semantics, units, and version requirements

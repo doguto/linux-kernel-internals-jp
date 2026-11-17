@@ -1,8 +1,8 @@
-# MGLRU: Multi-Generation LRU
+# MGLRU: Multi-Generation LRU {#mglru-multi-generation-lru}
 
 > A generational page reclaim algorithm for better working set detection
 
-## The problem with classic LRU
+## The problem with classic LRU {#the-problem-with-classic-lru}
 
 The classic LRU (Least Recently Used) page reclaim uses two lists per memory zone: **active** and **inactive**. Pages migrate between them based on access. The fundamental problems:
 
@@ -10,7 +10,7 @@ The classic LRU (Least Recently Used) page reclaim uses two lists per memory zon
 2. **One-time access pollution**: A large `dd` or `tar` operation reads every file once, thrashing the active list with cold pages.
 3. **No temporal locality**: Classic LRU treats a page accessed 1 second ago the same as one accessed 1 year ago.
 
-## MGLRU's generational model
+## MGLRU's generational model {#mglrus-generational-model}
 
 MGLRU (Multi-Generation LRU, merged in 6.1) divides pages into **generations**. Each generation represents pages that became hot at roughly the same time. The oldest generation is evicted first:
 
@@ -26,7 +26,7 @@ Age: promote pages to the newest generation when accessed
 
 Typical number of generations: 4. Each generation is ~seconds to minutes of activity.
 
-## Key data structures
+## Key data structures {#key-data-structures}
 
 ```c
 /* mm/vmscan.c (6.1+) */
@@ -51,7 +51,7 @@ struct lru_gen_folio {
 /* gen = folio_lru_gen(folio): which generation this folio is in */
 ```
 
-## Aging: scanning for hot pages
+## Aging: scanning for hot pages {#aging-scanning-for-hot-pages}
 
 **Aging** walks page tables to find recently accessed pages and promote them to the newest generation:
 
@@ -74,7 +74,7 @@ static bool walk_mm(struct lruvec *lruvec, struct mm_struct *mm,
 
 The accessed bit in PTEs tells the kernel which pages have been touched since the last aging pass. Pages with the accessed bit set are promoted to the newest generation; those without are left in their old generation (and will be evicted sooner).
 
-## Eviction: reclaiming old generations
+## Eviction: reclaiming old generations {#eviction-reclaiming-old-generations}
 
 **Eviction** reclaims pages from the oldest generation:
 
@@ -104,7 +104,7 @@ static long evict_folios(struct lruvec *lruvec, struct scan_control *sc,
 }
 ```
 
-## Working set protection: refault detection
+## Working set protection: refault detection {#working-set-protection-refault-detection}
 
 MGLRU detects when evicted pages are immediately faulted back in (**refaults**), indicating the working set was violated. It uses a Bloom filter:
 
@@ -123,7 +123,7 @@ static bool lru_gen_test_recent(struct lruvec *lruvec, bool file,
 }
 ```
 
-## Comparison: classic LRU vs MGLRU
+## Comparison: classic LRU vs MGLRU {#comparison-classic-lru-vs-mglru}
 
 | Aspect | Classic LRU | MGLRU |
 |--------|-------------|-------|
@@ -134,7 +134,7 @@ static bool lru_gen_test_recent(struct lruvec *lruvec, bool file,
 | Streaming reads | pollutes active list | one-time accesses stay in old gen |
 | Memory overhead | 2 list_head per folio | generation counters + Bloom filter |
 
-## Configuration
+## Configuration {#configuration}
 
 ```bash
 # MGLRU is enabled by default in 6.1+
@@ -155,7 +155,7 @@ echo 1000 > /sys/kernel/mm/lru_gen/min_ttl_ms  # protect pages for 1s
 # Number of generations: controlled by MAX_NR_GENS (compile-time, usually 4)
 ```
 
-## Observing MGLRU
+## Observing MGLRU {#observing-mglru}
 
 ```bash
 # Generation distribution per node/memcg/zone
@@ -180,7 +180,7 @@ cat /proc/vmstat | grep pgrefault
 perf stat -e vmscan:mm_vmscan_lru_isolate -a sleep 5
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Page Reclaim](reclaim.md) — overall reclaim framework
 - [Reclaim Throttling](reclaim-throttling.md) — memory pressure signaling

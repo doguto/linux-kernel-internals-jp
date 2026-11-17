@@ -1,8 +1,8 @@
-# NUMA Zonelist Construction and Fallback Ordering
+# NUMA Zonelist Construction and Fallback Ordering {#numa-zonelist-construction-and-fallback-ordering}
 
 > When a NUMA node runs out of memory, the kernel's pre-built fallback list determines where the next allocation lands — and memory policies can override that list entirely.
 
-## What Is a Zonelist?
+## What Is a Zonelist? {#what-is-a-zonelist}
 
 Every NUMA node (`pg_data_t`, also called `pgdat`) carries an array of zonelists. A zonelist is an ordered sequence of `zoneref` entries — one entry per (zone, node) pair — that the allocator walks in priority order when fulfilling a request.
 
@@ -61,9 +61,9 @@ where `gfp_zonelist()` returns `ZONELIST_NOFALLBACK` if `__GFP_THISNODE` is set,
 
 ---
 
-## How Zonelists Are Built
+## How Zonelists Are Built {#how-zonelists-are-built}
 
-### Entry Point: `build_all_zonelists()`
+### Entry Point: `build_all_zonelists()` {#entry-point-buildallzonelists}
 
 Zonelists are constructed at two points in the kernel's lifetime:
 
@@ -85,7 +85,7 @@ void __ref build_all_zonelists(pg_data_t *pgdat)
 
 The rebuild holds a write-side seqlock (`zonelist_update_seq`) so that concurrent allocators — which may run at IRQ level with `GFP_ATOMIC` — can detect a rebuild in progress and re-read the zonelist.
 
-### Node Ordering: `build_zonelists()`
+### Node Ordering: `build_zonelists()` {#node-ordering-build_zonelists}
 
 For each `pgdat`, `build_zonelists()` constructs the `ZONELIST_FALLBACK` list by calling `find_next_best_node()` repeatedly until all nodes with memory have been visited:
 
@@ -118,7 +118,7 @@ static void build_zonelists(pg_data_t *pgdat)
 
 The kernel prints the resulting order at boot: `Fallback order for Node N: 0 1 2 ...`
 
-### Choosing the Next Best Node: `find_next_best_node()`
+### Choosing the Next Best Node: `find_next_best_node()` {#choosing-the-next-best-node-findnextbest_node}
 
 `find_next_best_node()` scores every unvisited node using a composite metric:
 
@@ -128,7 +128,7 @@ The kernel prints the resulting order at boot: `Fallback order for Node N: 0 1 2
 
 The preferred (local) node is always placed first.
 
-### The `numa_zonelist_order` Sysctl
+### The `numa_zonelist_order` Sysctl {#the-numazonelistorder-sysctl}
 
 The kernel exposes `/proc/sys/vm/numa_zonelist_order`. In current kernels, only `"Node"` order is implemented. An older zone-based ordering mode was removed because it was not useful in practice. The sysctl is retained for compatibility but ignores any value that does not begin with `'d'`, `'D'`, `'n'`, or `'N'` (matching `"Default"` and `"Node"`), emitting a warning otherwise.
 
@@ -139,7 +139,7 @@ Node
 
 ---
 
-## Zone Ordering Within a Node
+## Zone Ordering Within a Node {#zone-ordering-within-a-node}
 
 Within a single node, `build_zonerefs_node()` iterates zones from the highest zone index down to zero and appends each populated zone to the list:
 
@@ -187,9 +187,9 @@ ZONE_MOVABLE → ZONE_NORMAL → ZONE_DMA32 → ZONE_DMA
 
 ---
 
-## Fallback Algorithm: Iterating the Zonelist
+## Fallback Algorithm: Iterating the Zonelist {#fallback-algorithm-iterating-the-zonelist}
 
-### The `for_each_zone_zonelist` Family
+### The `for_each_zone_zonelist` Family {#the-foreachzone_zonelist-family}
 
 The allocator's fast path (`get_page_from_freelist()`) iterates the zonelist using:
 
@@ -210,7 +210,7 @@ The allocator's fast path (`get_page_from_freelist()`) iterates the zonelist usi
 
 `z` is a cursor (`struct zoneref *`) into the zonelist's `_zonerefs` array. Advancing `++z` moves to the next entry without re-scanning from the beginning — this is O(1) per step.
 
-### Watermark Gating
+### Watermark Gating {#watermark-gating}
 
 At each zone the allocator checks the watermark before attempting an allocation:
 
@@ -234,7 +234,7 @@ if (!zone_watermark_fast(zone, order, mark,
 
 ---
 
-## How Memory Policies Modify Zonelist Traversal
+## How Memory Policies Modify Zonelist Traversal {#how-memory-policies-modify-zonelist-traversal}
 
 Memory policies (`struct mempolicy`) intercept the allocation path in `mempolicy.c` and can change either the preferred node or the nodemask that filters the zonelist iterator.
 
@@ -284,30 +284,30 @@ static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
 }
 ```
 
-### `MPOL_DEFAULT`
+### `MPOL_DEFAULT` {#mpol_default}
 
 No policy object is set (`current->mempolicy == NULL`). The allocator uses the current CPU's node as the preferred node and no nodemask filter. The full fallback list is available.
 
-### `MPOL_PREFERRED`
+### `MPOL_PREFERRED` {#mpol_preferred}
 
 The `nodes` field holds exactly one node. `policy_nodemask()` sets `*nid` to that node, making it the preferred starting point. The nodemask filter remains `NULL`, so if the preferred node is exhausted, the allocator falls back through the full `ZONELIST_FALLBACK` list.
 
-### `MPOL_BIND`
+### `MPOL_BIND` {#mpol_bind}
 
 `policy_nodemask()` returns `&pol->nodes` as the nodemask filter. `for_each_zone_zonelist_nodemask` skips any zone whose node is not in that mask. The allocator therefore only considers the bound nodes. **If all bound nodes are exhausted, no fallback to other nodes occurs** — the allocation fails and triggers OOM rather than spilling onto an unbound node.
 
 !!! warning "MPOL_BIND and OOM"
     A process bound with `MPOL_BIND` to a node that is full will be killed by the OOM killer rather than falling back to remote memory. This is intentional: the application has explicitly declared that it requires local memory.
 
-### `MPOL_INTERLEAVE`
+### `MPOL_INTERLEAVE` {#mpol_interleave}
 
 `interleave_nodes()` advances `current->il_prev` to the next node in `pol->nodes` and returns it as the preferred node for this allocation. No nodemask filter is applied to the zonelist — normal fallback is still available if the interleaved node is temporarily exhausted. Over many allocations, pages are spread round-robin across the allowed nodes.
 
-### `MPOL_LOCAL`
+### `MPOL_LOCAL` {#mpol_local}
 
 Allocate from the current CPU's NUMA node. `policy_nodemask()` does not modify `*nid` for `MPOL_LOCAL` (it falls through to the default case), so `numa_node_id()` is used. Normal fallback applies.
 
-### Summary Table
+### Summary Table {#summary-table}
 
 | Policy | Preferred Node | Nodemask Filter | On Exhaustion |
 |---|---|---|---|
@@ -319,7 +319,7 @@ Allocate from the current CPU's NUMA node. `policy_nodemask()` does not modify `
 
 ---
 
-## Practical Effect: Two-Node Example
+## Practical Effect: Two-Node Example {#practical-effect-two-node-example}
 
 Consider a system with node 0 (32 GB) and node 1 (32 GB). NUMA distance: local = 10, remote = 20. Node 0's `ZONELIST_FALLBACK` list is:
 
@@ -338,9 +338,9 @@ The preferred nid is overridden to node 0, but no nodemask filter is applied. Wh
 
 ---
 
-## Observing Fallback in Practice
+## Observing Fallback in Practice {#observing-fallback-in-practice}
 
-### `numastat`
+### `numastat` {#numastat}
 
 ```bash
 numastat
@@ -359,7 +359,7 @@ numastat
 
 High `numa_miss` counts indicate memory pressure on the preferred node and frequent fallback to remote memory.
 
-### `/proc/zoneinfo`
+### `/proc/zoneinfo` {#proczoneinfo}
 
 ```bash
 grep -A 20 "Node 0, zone" /proc/zoneinfo
@@ -367,7 +367,7 @@ grep -A 20 "Node 0, zone" /proc/zoneinfo
 
 Per-zone free page counts and the three watermarks (`min`, `low`, `high`) are visible here. When `free` approaches `min`, the zone will fail `zone_watermark_ok()` for most allocations and the allocator will skip to the next zonelist entry.
 
-### Kernel Boot Log
+### Kernel Boot Log {#kernel-boot-log}
 
 At boot, the kernel prints each node's fallback order:
 
@@ -386,7 +386,7 @@ for (node = 0; node < nr_nodes; node++)
 
 ---
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | What to Look For |
 |---|---|
@@ -397,23 +397,23 @@ for (node = 0; node < nr_nodes; node++)
 | `mm/page_alloc.c` | `build_all_zonelists()`, `__build_all_zonelists()`, `build_zonelists()`, `build_zonelists_in_node_order()`, `build_thisnode_zonelists()`, `build_zonerefs_node()`, `find_next_best_node()`, `get_page_from_freelist()`, `zone_watermark_ok()`, `__zone_watermark_ok()` |
 | `mm/mempolicy.c` | `policy_nodemask()`, `alloc_pages_mpol()`, `interleave_nodes()`, `mempolicy_slab_node()` |
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `build_all_zonelists()`, `build_zonelists()`, `find_next_best_node()`, `get_page_from_freelist()`, `zone_watermark_ok()`
 - [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `policy_nodemask()`, `alloc_pages_mpol()`, and all memory policy mode implementations
 - [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zonelist`, `struct zoneref`, `for_each_zone_zonelist_nodemask`, `ZONELIST_FALLBACK`, `ZONELIST_NOFALLBACK`
 
-### Kernel documentation
+### Kernel documentation {#kernel-documentation}
 
 - `Documentation/admin-guide/mm/numa_memory_policy.rst` — reference for all `MPOL_*` policy modes and how they interact with the zonelist ([rendered](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html))
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [GFP flags and memory zones](https://lwn.net/Articles/629925/) — how GFP flags select zones and interact with the fallback list
 
-### Related docs
+### Related docs {#related-docs}
 
 - [NUMA Memory Management](numa.md) — memory policy overview: `set_mempolicy()`, `mbind()`, `numactl`, and automatic NUMA balancing
 - [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how `node_distance()` values drive `find_next_best_node()` scoring

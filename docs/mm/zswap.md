@@ -1,8 +1,8 @@
-# zswap Internals: Compressed Swap Cache
+# zswap Internals: Compressed Swap Cache {#zswap-internals-compressed-swap-cache}
 
 > A compressed RAM cache that intercepts pages on their way to the swap device — trading CPU cycles for I/O reduction
 
-## What zswap Is (and Is Not)
+## What zswap Is (and Is Not) {#what-zswap-is-and-is-not}
 
 zswap is a **write-back compressed cache** that sits in front of the swap device. When the kernel decides to swap out an anonymous page, zswap intercepts it, compresses it, and stores the compressed data in a RAM-based pool. If the compressed pool fills up, zswap evicts the coldest entries back to the backing swap device.
 
@@ -16,7 +16,7 @@ The key insight: reading from compressed RAM is orders of magnitude faster than 
 
     You can stack them: use zram as the swap device and zswap in front of it. However, this means pages get compressed twice — once by zswap and once by zram — which wastes CPU with minimal additional benefit. See [Interaction with zram](#interaction-with-zram).
 
-## Architecture Overview
+## Architecture Overview {#architecture-overview}
 
 ```mermaid
 graph TD
@@ -56,9 +56,9 @@ graph TD
 !!! info "Frontswap is gone"
     Prior to Linux 6.x, zswap hooked into the kernel via the **frontswap** interface (`frontswap_store`, `frontswap_load`, etc.). That interface was removed. zswap now integrates directly: `zswap_store()` and `zswap_load()` are called explicitly from the swap writeback and swapin code paths. The entry points are declared in `include/linux/zswap.h`.
 
-## Key Data Structures
+## Key Data Structures {#key-data-structures}
 
-### `struct zswap_pool`
+### `struct zswap_pool` {#struct-zswap_pool}
 
 ```c
 struct zswap_pool {
@@ -74,7 +74,7 @@ struct zswap_pool {
 
 Each pool is tied to a single compression algorithm. When you change the compressor at runtime, a new pool is created. The old pool lives on until all its entries are evicted or loaded, then it is destroyed via `zswap_pool_destroy()`.
 
-### `struct zswap_entry`
+### `struct zswap_entry` {#struct-zswap_entry}
 
 ```c
 struct zswap_entry {
@@ -98,7 +98,7 @@ static struct xarray *zswap_trees[MAX_SWAPFILES];
 
 The `swap_zswap_tree()` helper maps a `swp_entry_t` to the right xarray shard.
 
-### `struct crypto_acomp_ctx`
+### `struct crypto_acomp_ctx` {#struct-cryptoacompctx}
 
 ```c
 struct crypto_acomp_ctx {
@@ -112,9 +112,9 @@ struct crypto_acomp_ctx {
 
 One context per CPU per pool. `acomp_ctx_get_cpu_lock()` acquires the mutex for the current CPU's context; `acomp_ctx_put_unlock()` releases it.
 
-## The Compression Pipeline
+## The Compression Pipeline {#the-compression-pipeline}
 
-### Store Path: `zswap_store()`
+### Store Path: `zswap_store()` {#store-path-zswap_store}
 
 When the MM subsystem wants to swap out a folio, it calls `zswap_store(struct folio *folio)`:
 
@@ -139,7 +139,7 @@ zswap_store(folio)
 
 If the store fails for any reason (pool full, allocation failure, compression error), any previously stored entry for that swap slot is invalidated via `xa_erase()` + `zswap_entry_free()`. This prevents stale compressed data from being written over by a new version of the page.
 
-### Compression: `zswap_compress()`
+### Compression: `zswap_compress()` {#compression-zswap_compress}
 
 zswap uses the kernel's **async compression API** (`crypto/acompress.h`):
 
@@ -153,7 +153,7 @@ zswap uses the kernel's **async compression API** (`crypto/acompress.h`):
 
     If writeback is disabled for the cgroup (`memory.zswap.writeback=0`), incompressible pages are **rejected** outright — there is no point storing an uncompressible page if it can never be evicted.
 
-### Decompression: `zswap_decompress()`
+### Decompression: `zswap_decompress()` {#decompression-zswap_decompress}
 
 Called from both `zswap_load()` (fault path) and `zswap_writeback_entry()` (writeback path):
 
@@ -168,7 +168,7 @@ zs_obj_read_sg_end()
 
 zsmalloc objects can span page boundaries, so the input is always a scatter-gather list of 1–2 entries.
 
-### Load Path: `zswap_load()`
+### Load Path: `zswap_load()` {#load-path-zswap_load}
 
 On a page fault, swapin code calls `zswap_load(struct folio *folio)`:
 
@@ -180,13 +180,13 @@ On a page fault, swapin code calls `zswap_load(struct folio *folio)`:
 !!! warning "Large folio limitation"
     `zswap_load()` explicitly rejects large folios with `WARN_ON_ONCE(folio_test_large(folio))` and returns `-EINVAL`. Large folios may be only partially stored in zswap (each constituent page independently), and the load path does not handle this case. The result is a `SIGBUS` from `do_swap_page()`.
 
-## Pool Backend: zsmalloc
+## Pool Backend: zsmalloc {#pool-backend-zsmalloc}
 
 In current kernels, zswap **exclusively** uses **zsmalloc** as its memory allocator. The older backends (zbud, z3fold) are no longer used by zswap.
 
 `CONFIG_ZSWAP` selects `CONFIG_ZSMALLOC` automatically.
 
-### How zsmalloc Works
+### How zsmalloc Works {#how-zsmalloc-works}
 
 zsmalloc is a variable-size slab allocator designed for compressed page storage. Its key properties:
 
@@ -221,9 +221,9 @@ graph LR
 
 The high object density of zsmalloc (especially for small compressed outputs) is why it replaced zbud (2 pages per physical page) and z3fold (up to 3 pages per physical page) — workloads with good compression ratios benefit enormously.
 
-## Pool Management and Writeback
+## Pool Management and Writeback {#pool-management-and-writeback}
 
-### Global Pool Size Limit
+### Global Pool Size Limit {#global-pool-size-limit}
 
 ```c
 static unsigned int zswap_max_pool_percent = 20;
@@ -252,7 +252,7 @@ When the pool hits the limit, `zswap_pool_reached_full = true`. New stores are r
 
 When the pool is full and a store fails, `zswap_store()` queues `zswap_shrink_work` to trigger background writeback.
 
-### The Global LRU
+### The Global LRU {#the-global-lru}
 
 All `zswap_entry` objects across all pools share a single global `list_lru`:
 
@@ -262,7 +262,7 @@ static struct list_lru zswap_list_lru;
 
 The LRU is NUMA-aware and memcg-aware. Entries are added to the LRU at store time with `entry->referenced = true`.
 
-### The Shrinker and Writeback: `shrink_worker()`
+### The Shrinker and Writeback: `shrink_worker()` {#the-shrinker-and-writeback-shrink_worker}
 
 Two mechanisms trigger writeback to the backing swap device:
 
@@ -272,7 +272,7 @@ Registered as a standard kernel shrinker (`SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_
 **2. Pool-full work queue** (`shrink_worker`):
 When `zswap_pool_reached_full` is set and a store fails, `shrink_worker()` is queued on the `zswap-shrink` workqueue. It iterates memcgs round-robin and calls `shrink_memcg()` on each, continuing until the pool drains below `zswap_accept_thr_pages()`.
 
-### Second-Chance LRU Algorithm
+### Second-Chance LRU Algorithm {#second-chance-lru-algorithm}
 
 `shrink_memcg_cb()` implements a **second-chance** eviction policy:
 
@@ -287,14 +287,14 @@ writeback_result = zswap_writeback_entry(entry, swpentry);
 
 New entries start with `referenced = true`. The shrinker clears this flag on first encounter and rotates the entry to the tail. Only on the second encounter (when `referenced` is already false) does writeback happen.
 
-### Shrinker Calibration
+### Shrinker Calibration {#shrinker-calibration}
 
 `zswap_shrinker_count()` scales the number of shrinkable objects by several factors to avoid over-shrinking:
 
 1. **Compression ratio**: `mult_frac(nr_freeable, nr_backing, nr_stored)` — if the pool compresses 4:1, fewer physical pages are freed per writeback, so fewer candidates are reported.
 2. **Disk swapin penalty**: `nr_disk_swapins` (tracked in `zswap_lruvec_state.nr_disk_swapins`) is subtracted from `nr_freeable`. If we observe swapins from disk, it means we previously over-evicted from zswap, so we slow down.
 
-### `zswap_writeback_entry()`
+### `zswap_writeback_entry()` {#zswapwritebackentry}
 
 The writeback of a single entry:
 
@@ -311,14 +311,14 @@ zswap_writeback_entry(entry, swpentry)
 
 If a concurrent swapin allocated the folio first (`!folio_was_allocated`), writeback is skipped — the page just became hot, so evicting it would be wrong.
 
-## Same-Filled Page Detection
+## Same-Filled Page Detection {#same-filled-page-detection}
 
 !!! info "Note on this kernel version"
     The upstream kernel documentation for older versions describes a same-value-filled (zero page) optimization where pages are checked for uniform content before compression, and only the fill pattern is stored. However, searching the current `mm/zswap.c` source reveals that this optimization **is not present in this version** of the code. There is no `page_same_filled()` call or similar logic in `zswap_store_page()` or `zswap_compress()`. Incompressible pages are handled (stored uncompressed at full PAGE_SIZE when writeback is enabled), but there is no separate path for same-value detection.
 
     The `stored_incompressible_pages` debugfs counter tracks pages stored at full size.
 
-## Per-Cgroup Limits
+## Per-Cgroup Limits {#per-cgroup-limits}
 
 Three cgroup v2 files control zswap per cgroup:
 
@@ -341,7 +341,7 @@ echo 0 > /sys/fs/cgroup/myapp/memory.zswap.writeback
 !!! warning "writeback=0 and incompressible pages"
     If `memory.zswap.writeback=0` and a page is incompressible, zswap **rejects the store entirely** (returns `false` from `zswap_compress()`). The page then falls through to the swap device. This can cause a feedback loop: the same incompressible page may be rejected repeatedly by zswap and keep triggering swap I/O.
 
-## Sysfs Tunables
+## Sysfs Tunables {#sysfs-tunables}
 
 All tunables live under `/sys/module/zswap/parameters/`:
 
@@ -376,7 +376,7 @@ Alternatively, set these at boot time:
 zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=25
 ```
 
-## Kconfig Options
+## Kconfig Options {#kconfig-options}
 
 | Option | Description |
 |--------|-------------|
@@ -392,9 +392,9 @@ zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=25
 | `CONFIG_ZSMALLOC` | zsmalloc allocator (required by zswap). |
 | `CONFIG_ZSMALLOC_STAT` | Export per-size-class statistics for zsmalloc via debugfs. |
 
-## Observability
+## Observability {#observability}
 
-### debugfs: `/sys/kernel/debug/zswap/`
+### debugfs: `/sys/kernel/debug/zswap/` {#debugfs-syskerneldebugzswap}
 
 All counters are read-only and approximate (not atomically consistent with each other, but individually accurate to `u64`):
 
@@ -419,7 +419,7 @@ for f in /sys/kernel/debug/zswap/*; do
 done
 ```
 
-### vmstat Events
+### vmstat Events {#vmstat-events}
 
 Three events are counted in `/proc/vmstat`:
 
@@ -434,7 +434,7 @@ Three events are counted in `/proc/vmstat`:
 watch -n1 'grep -E "^zswp" /proc/vmstat'
 ```
 
-### Per-Cgroup Stats
+### Per-Cgroup Stats {#per-cgroup-stats}
 
 For cgroup v2, `memory.stat` includes:
 
@@ -447,7 +447,7 @@ For cgroup v2, `memory.stat` includes:
 cat /sys/fs/cgroup/myapp/memory.stat | grep zswap
 ```
 
-### Estimating Compression Ratio
+### Estimating Compression Ratio {#estimating-compression-ratio}
 
 ```bash
 stored=$(cat /sys/kernel/debug/zswap/stored_pages)
@@ -463,7 +463,7 @@ if [ "$stored" -gt 0 ]; then
 fi
 ```
 
-## Interaction with zram
+## Interaction with zram {#interaction-with-zram}
 
 zswap can sit in front of a zram device. The full stack looks like this:
 
@@ -488,9 +488,9 @@ graph TD
 
     If you must use both (e.g., the system has both a zram swap and a disk swap), consider disabling zswap for the zram swap type.
 
-## Performance Tradeoffs
+## Performance Tradeoffs {#performance-tradeoffs}
 
-### CPU vs. Memory vs. I/O
+### CPU vs. Memory vs. I/O {#cpu-vs-memory-vs-io}
 
 ```
 Low compression ratio (data is random, already compressed):
@@ -506,7 +506,7 @@ High compression ratio (text, code, zeroed pages):
   → Net result: CPU overhead well justified
 ```
 
-### Compressor Comparison
+### Compressor Comparison {#compressor-comparison}
 
 | Algorithm | Speed | Ratio | Best for |
 |-----------|-------|-------|----------|
@@ -528,7 +528,7 @@ High compression ratio (text, code, zeroed pages):
     ```
     Old entries remain in their old pool and are decompressed with the old algorithm until they are evicted.
 
-### When to Enable the Shrinker
+### When to Enable the Shrinker {#when-to-enable-the-shrinker}
 
 By default (`CONFIG_ZSWAP_SHRINKER_DEFAULT_ON=n`), writeback only triggers when the pool hits `max_pool_percent`. This means cold pages can accumulate in the pool indefinitely until the limit is reached.
 
@@ -542,7 +542,7 @@ Enabling the shrinker (`shrinker_enabled=Y`) allows the memory allocator to proa
 echo Y > /sys/module/zswap/parameters/shrinker_enabled
 ```
 
-### Pool Size Tuning
+### Pool Size Tuning {#pool-size-tuning}
 
 The default `max_pool_percent=20` is conservative. On systems with ample RAM and slow swap (spinning disk), a larger pool is beneficial:
 
@@ -553,7 +553,7 @@ echo 40 > /sys/module/zswap/parameters/max_pool_percent
 
 On systems where RAM is more precious (containers, embedded), keep the default or reduce it.
 
-## Initialization and Lifecycle
+## Initialization and Lifecycle {#initialization-and-lifecycle}
 
 zswap initializes lazily via `late_initcall(zswap_init)`. This ensures the crypto subsystem is available:
 
@@ -575,7 +575,7 @@ CPU hotplug callbacks (`zswap_cpu_comp_prepare` / `zswap_cpu_comp_dead`) allocat
 
 When a swap device is enabled (`swapon`), `zswap_swapon()` allocates the xarray shards for that swap type. When disabled (`swapoff`), `zswap_swapoff()` frees them (all entries must have been invalidated by `try_to_unuse()` first).
 
-## Key Source Files
+## Key Source Files {#key-source-files}
 
 | File | Purpose |
 |------|---------|
@@ -589,7 +589,7 @@ When a swap device is enabled (`swapon`), `zswap_swapon()` allocates the xarray 
 | `include/linux/memcontrol.h` | `MEMCG_ZSWAP_B`, `MEMCG_ZSWAPPED`, `obj_cgroup_may_zswap()`, `mem_cgroup_zswap_writeback_enabled()`; `zswap_max` field in `struct mem_cgroup` |
 | `Documentation/admin-guide/mm/zswap.rst` | Upstream admin guide (may lag the source) |
 
-## Further reading
+## Further reading {#further-reading}
 
 - [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — complete zswap implementation: store, load, writeback, shrinker, pool management, and debugfs counters
 - `Documentation/admin-guide/mm/zswap.rst` — upstream admin guide covering tunables, cgroup controls, and observability

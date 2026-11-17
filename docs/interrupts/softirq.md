@@ -1,12 +1,12 @@
-# Softirqs
+# Softirqs {#softirqs}
 
 > The kernel's high-priority deferred work mechanism
 
-## From bottom halves to softirqs to threaded IRQs
+## From bottom halves to softirqs to threaded IRQs {#from-bottom-halves-to-softirqs-to-threaded-irqs}
 
 Interrupt deferral in Linux has gone through three generations, each addressing the limitations of the previous.
 
-### Bottom halves (Linux 2.0–2.3)
+### Bottom halves (Linux 2.0–2.3) {#bottom-halves-linux-2023}
 
 The original deferred-work mechanism was called "bottom halves" (BH). The model: an interrupt handler (the "top half") does minimal work and marks a BH for later execution. At the next safe moment, the kernel runs the marked BHs.
 
@@ -14,7 +14,7 @@ The fatal flaw: **only one BH could run anywhere in the system at a time**, prot
 
 There were also only 32 BH slots, statically defined — no driver could add its own.
 
-### Softirqs (Linux 2.3, SMP rewrite)
+### Softirqs (Linux 2.3, SMP rewrite) {#softirqs-linux-23-smp-rewrite}
 
 Softirqs replaced BHs in Linux 2.3 during the SMP scalability push. The key change: **multiple softirqs can run in parallel on different CPUs**. `NET_RX_SOFTIRQ` on CPU 0 no longer blocks `TIMER_SOFTIRQ` on CPU 1.
 
@@ -22,7 +22,7 @@ The trade-off: because softirqs can run in parallel, softirq handlers themselves
 
 Tasklets (built on `TASKLET_SOFTIRQ`) were added to give drivers a way to defer work into softirq context without needing to be reentrant — a tasklet is guaranteed to run on only one CPU at a time, but different tasklets can run in parallel.
 
-### Threaded IRQs (Linux 2.6.30, 2009)
+### Threaded IRQs (Linux 2.6.30, 2009) {#threaded-irqs-linux-2630-2009}
 
 Tasklets solved the reentrance problem but created new ones: tasklets run in softirq context, which means they cannot sleep, must complete quickly, and run with `bh_disable()` semantics that cause scheduling latency for high-priority processes.
 
@@ -34,13 +34,13 @@ Thomas Gleixner introduced threaded IRQ handlers as a better model for most driv
 
 Tasklets were explicitly deprecated for new use in Linux 5.9 (2020) [(LWN)](https://lwn.net/Articles/830964/) — see [Tasklets](tasklets.md#the-deprecation-nobody-planned-to-start-then-couldnt-finish) for the deprecation debate itself. The recommendation for new driver code is: use threaded IRQs or regular workqueues if the handler can sleep and needs process context, or a `WQ_BH` workqueue if it must stay in atomic (softirq-like) context the way a tasklet did — `WQ_BH` is the more direct mechanical replacement for that fast-path case, not a process-context alternative. Tasklets remain for existing drivers but should not appear in new code.
 
-## What are softirqs?
+## What are softirqs? {#what-are-softirqs}
 
 Softirqs (software interrupts) are the lowest-level deferred execution mechanism in the kernel. Unlike hardirq handlers that run with interrupts disabled, softirqs run with interrupts **enabled** — they're preemptible by hardirqs but not by other softirqs on the same CPU.
 
 Softirqs are statically defined: there are exactly 10 softirq types, registered at boot. New types cannot be added dynamically. Drivers don't use softirqs directly — they use [tasklets](tasklets.md) or [workqueues](workqueues.md) instead.
 
-## The 10 softirq types
+## The 10 softirq types {#the-10-softirq-types}
 
 ```c
 /* include/linux/interrupt.h */
@@ -61,7 +61,7 @@ enum {
 
 The number is the **priority** — lower number runs first. `HI_SOFTIRQ` (priority 0) for high-priority tasklets always preempts `TASKLET_SOFTIRQ` (priority 6) for normal tasklets.
 
-## How softirqs are triggered
+## How softirqs are triggered {#how-softirqs-are-triggered}
 
 A softirq is raised by calling `raise_softirq()`, which sets a bit in the per-CPU `__softirq_pending` bitmask:
 
@@ -73,7 +73,7 @@ raise_softirq(NET_RX_SOFTIRQ);
 raise_softirq_irqoff(NET_TX_SOFTIRQ);
 ```
 
-## When softirqs run
+## When softirqs run {#when-softirqs-run}
 
 Softirqs are processed at three points:
 
@@ -113,7 +113,7 @@ static void handle_softirqs(bool ksirqd)
 
 The loop limits to `MAX_SOFTIRQ_RESTART` (10) iterations before waking `ksoftirqd`, preventing softirqs from starving processes indefinitely.
 
-## ksoftirqd
+## ksoftirqd {#ksoftirqd}
 
 When softirqs are too frequent (high network load, many timers), the loop would run too long. Instead, the kernel wakes `ksoftirqd/N` — one per CPU — which is a kernel thread at `SCHED_NORMAL` priority that drains pending softirqs:
 
@@ -126,7 +126,7 @@ ps aux | grep ksoftirqd
 
 Since `ksoftirqd` is a normal process, it can be preempted by user tasks, preventing livelock. High CPU usage by `ksoftirqd` indicates the system is processing many interrupts.
 
-## Checking softirq activity
+## Checking softirq activity {#checking-softirq-activity}
 
 ```bash
 # Per-CPU softirq counts
@@ -148,7 +148,7 @@ cat /proc/softirqs
 # RCU high = many RCU callbacks being processed
 ```
 
-## Registering a softirq handler (kernel subsystems only)
+## Registering a softirq handler (kernel subsystems only) {#registering-a-softirq-handler-kernel-subsystems-only}
 
 ```c
 /* At boot time only (not from drivers) */
@@ -165,7 +165,7 @@ static void my_softirq_action(void)
 
 Drivers should use tasklets or workqueues instead — never add a new softirq type.
 
-## local_bh_disable / local_bh_enable
+## local_bh_disable / local_bh_enable {#localbhdisable-localbhenable}
 
 Code that shares data with softirq handlers must disable softirqs on the local CPU while accessing the data:
 
@@ -181,7 +181,7 @@ spin_lock_bh(&my_lock);
 spin_unlock_bh(&my_lock);
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Tasklets](tasklets.md) — The driver-accessible wrapper around softirqs
 - [Workqueues](workqueues.md) — When you need to sleep in deferred work

@@ -1,8 +1,8 @@
-# The Timer Wheel
+# The Timer Wheel {#the-timer-wheel}
 
 > jiffies, struct timer_list, and the hierarchical timer wheel for low-resolution timers
 
-## Two timer systems
+## Two timer systems {#two-timer-systems}
 
 Linux maintains two distinct timer implementations that serve different use cases:
 
@@ -13,7 +13,7 @@ Linux maintains two distinct timer implementations that serve different use case
 
 hrtimers program hardware clockevents directly for precise wakeups. The timer wheel is designed for timeouts that are frequently cancelled before expiry (e.g., TCP retransmit timers that are cancelled when an ACK arrives). The O(1) insert and cancel cost is the key advantage — most timer-list timers never actually fire.
 
-## jiffies and HZ
+## jiffies and HZ {#jiffies-and-hz}
 
 `jiffies` is a global counter incremented once per hardware tick. It is the fundamental unit of time for the timer wheel.
 
@@ -42,7 +42,7 @@ nsecs_to_jiffies(1000000UL) /* ns → jiffies */
 
 Always use these helpers rather than computing `HZ * seconds` directly — the helpers handle rounding correctly and are portable across HZ configurations.
 
-## struct timer_list
+## struct timer_list {#struct-timer_list}
 
 ```c
 /* include/linux/timer_types.h */
@@ -74,9 +74,9 @@ timer_setup(&my_timer, my_callback, 0);
 
 `timer_setup()` replaced the older `init_timer()` + `setup_timer()` pattern (changed in Linux 4.14) — the callback now receives the `struct timer_list *` directly rather than an opaque `unsigned long` data argument.
 
-## The public API
+## The public API {#the-public-api}
 
-### add_timer()
+### add_timer() {#add_timer}
 
 ```c
 void add_timer(struct timer_list *timer);
@@ -90,7 +90,7 @@ my_timer.expires = jiffies + msecs_to_jiffies(500);
 add_timer(&my_timer);
 ```
 
-### mod_timer()
+### mod_timer() {#mod_timer}
 
 ```c
 int mod_timer(struct timer_list *timer, unsigned long expires);
@@ -98,7 +98,7 @@ int mod_timer(struct timer_list *timer, unsigned long expires);
 
 Changes the expiry of a pending timer atomically. If the timer is not pending, it is added. Returns 1 if the timer was pending, 0 if it was not. This is the preferred way to both add and modify a timer in one call.
 
-### timer_reduce()
+### timer_reduce() {#timer_reduce}
 
 ```c
 int timer_reduce(struct timer_list *timer, unsigned long expires);
@@ -106,7 +106,7 @@ int timer_reduce(struct timer_list *timer, unsigned long expires);
 
 Like `mod_timer()` but only moves the expiry *earlier*. If the timer is already set to expire at or before `expires`, the call is a no-op. Added in Linux 4.15. This prevents a driver from accidentally delaying a timer that was already scheduled to fire sooner — useful when multiple code paths may arm the same timer.
 
-### timer_delete() vs timer_delete_sync()
+### timer_delete() vs timer_delete_sync() {#timerdelete-vs-timerdelete_sync}
 
 ```c
 int timer_delete(struct timer_list *timer);
@@ -125,11 +125,11 @@ kfree(my_data);   /* safe: callback is done */
 
 Since Linux 6.2, `timer_shutdown_sync()` marks the timer as permanently dead after stopping it, so any subsequent `add_timer()` or `mod_timer()` calls are silently ignored. Use this when a timer must never fire again (e.g., during driver removal).
 
-## The hierarchical wheel (Linux 4.8+)
+## The hierarchical wheel (Linux 4.8+) {#the-hierarchical-wheel-linux-48}
 
 Linux 4.8 replaced the old five-level cascade wheel with a hierarchical wheel design (`kernel/time/timer.c`). The old design required expensive cascade operations when the wheel's hand advanced past a level boundary; the new design uses a simpler, more cache-friendly structure.
 
-### struct timer_base
+### struct timer_base {#struct-timer_base}
 
 ```c
 /* kernel/time/timer.c (internal) */
@@ -153,7 +153,7 @@ struct timer_base {
 
 On SMP systems with `CONFIG_NO_HZ_COMMON`, each CPU has three `timer_base` instances (`NR_BASES = 3`): `BASE_LOCAL` (for pinned timers), `BASE_GLOBAL` (for non-pinned / migratable timers), and `BASE_DEF` (for deferrable timers).
 
-### Wheel geometry
+### Wheel geometry {#wheel-geometry}
 
 The number of levels depends on the configured `HZ`:
 
@@ -178,7 +178,7 @@ Each level is 8× coarser than the previous. When a timer is inserted, the kerne
 
 Total wheel capacity: 576 buckets (9 × 64) for HZ=250. The `pending_map` bitmap lets the kernel quickly find the next non-empty bucket without scanning all entries.
 
-### __run_timers()
+### __run_timers() {#_runtimers}
 
 ```c
 static void __run_timers(struct timer_base *base);
@@ -188,7 +188,7 @@ Called indirectly from `run_timer_softirq()` (the TIMER_SOFTIRQ handler) via the
 
 The softirq is raised by the tick interrupt handler. On a NOHZ (tickless) system, the tick may be skipped entirely when the CPU is idle, and `__run_timers()` catches up when the CPU wakes.
 
-## Deferrable timers
+## Deferrable timers {#deferrable-timers}
 
 ```c
 timer_setup(&my_timer, my_callback, TIMER_DEFERRABLE);
@@ -198,7 +198,7 @@ A deferrable timer is stored in `BASE_DEF` (the deferrable base). These timers e
 
 Use deferrable timers for periodic maintenance work that is not time-critical (e.g., statistics gathering, buffer flushing). Using them reduces unnecessary wakeups and improves power efficiency on NOHZ systems.
 
-## Relationship to workqueues
+## Relationship to workqueues {#relationship-to-workqueues}
 
 `schedule_delayed_work()` combines the timer wheel with the workqueue system:
 
@@ -215,7 +215,7 @@ schedule_delayed_work(&my_dwork, msecs_to_jiffies(100));
 
 When the timer fires, its callback calls `queue_work()` to push `work` onto the system workqueue. The actual work runs in a workqueue thread (process context, can sleep) rather than in softirq context. Use `schedule_delayed_work()` when the deferred action needs to sleep or allocate memory — use a plain `timer_list` only when the callback is short and cannot sleep.
 
-## Observing timers
+## Observing timers {#observing-timers}
 
 There is no direct procfs interface for inspecting pending timer-wheel entries. Use kernel tracing instead:
 
@@ -240,9 +240,9 @@ grep TIMER /proc/softirqs
 perf stat -e irq:softirq_entry,irq:softirq_exit -a -- sleep 5
 ```
 
-## Common pitfalls
+## Common pitfalls {#common-pitfalls}
 
-### Jiffies wraparound
+### Jiffies wraparound {#jiffies-wraparound}
 
 `jiffies` is an `unsigned long` and wraps at `ULONG_MAX`. On 32-bit kernels with HZ=1000 this happens every ~49 days. Never compare jiffies with raw `>` or `<`:
 
@@ -269,36 +269,36 @@ if (time_after_eq(jiffies, start + HZ)) { ... }
 
 This handles unsigned wraparound correctly by interpreting the result of the unsigned subtraction as a signed value.
 
-### Sleeping in a timer callback
+### Sleeping in a timer callback {#sleeping-in-a-timer-callback}
 
 Timer callbacks run in softirq context. They must not sleep, call `schedule()`, or acquire any lock that could sleep (e.g., a mutex). Use `schedule_delayed_work()` if the deferred action needs to sleep.
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [include/linux/timer_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timer_types.h) — public `struct timer_list` API: `timer_setup()`, `add_timer()`, `mod_timer()`, `timer_reduce()`, `timer_delete_sync()`, and `timer_shutdown_sync()`
 - [include/linux/jiffies.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/jiffies.h) — `jiffies` counter, time conversion helpers (`msecs_to_jiffies()`), and wraparound-safe comparison macros (`time_after()`, `time_before()`)
 - [kernel/time/timer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer.c) — hierarchical timer wheel implementation, `__run_timers()`, level and bucket calculation, and softirq execution
 - [kernel/time/timer_migration.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer_migration.c) — hierarchical timer pull migration (`tmigr_handle_remote()`) managing global timers across idle CPU clusters
 
-### Man pages
+### Man pages {#man-pages}
 
 - [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — overview of time concepts, jiffies, and kernel timer granularities
 
-### Related pages
+### Related pages {#related-pages}
 
 - [High-Resolution Timers (hrtimers)](hrtimers.md) — nanosecond-precision rbtree timers vs coarse timer wheel comparison
 - [Clocksource and Clockevent Drivers](clocksource.md) — hardware tick generation and clockevent interrupt handling
 - [Time Subsystem War Stories](war-stories.md) — real-world teardown use-after-free races and 32-bit jiffies overflow bugs
 - [Workqueues: Concurrency-Managed Workqueues](../interrupts/workqueues.md) — `delayed_work` mechanisms combining timer wheels with process-context workqueues
 
-### LWN articles
+### LWN articles {#lwn-articles}
 
 - [Reinventing the timer wheel](https://lwn.net/Articles/646950/) — Jonathan Corbet, June 2015: Thomas Gleixner's redesign replacing the cascade wheel with the non-cascading hierarchy
 - [The high-resolution timer API](https://lwn.net/Articles/167897/) — Jonathan Corbet, January 2006: the design and integration of the hrtimer subsystem alongside the classic timer wheel
 
-### External
+### External {#external}
 
 - [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — official kernel guide to timer systems and timekeeping
 - [Timers Subsystem Documentation](https://docs.kernel.org/timers/index.html) — kernel documentation covering timer wheel internals, high-resolution timers, and NO_HZ operation

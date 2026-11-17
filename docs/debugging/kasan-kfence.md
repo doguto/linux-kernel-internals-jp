@@ -1,8 +1,8 @@
-# KASAN and KFENCE
+# KASAN and KFENCE {#kasan-and-kfence}
 
 > Memory error detection: out-of-bounds, use-after-free, and heap corruption
 
-## Overview
+## Overview {#overview}
 
 The kernel has two complementary tools for catching memory errors at runtime:
 
@@ -13,11 +13,11 @@ They can be enabled simultaneously. KFENCE catches what it samples with zero ove
 
 ---
 
-## KASAN: Kernel Address Sanitizer
+## KASAN: Kernel Address Sanitizer {#kasan-kernel-address-sanitizer}
 
 `CONFIG_KASAN` enables compile-time instrumentation that checks every memory access against a shadow memory region.
 
-### Shadow memory
+### Shadow memory {#shadow-memory}
 
 Generic KASAN maps every 8 bytes of kernel memory to 1 **shadow byte** stored in a dedicated shadow region. On x86-64 with 4-level paging, the shadow region starts at `0xdffffc0000000000` (the `KASAN_SHADOW_OFFSET`).
 
@@ -41,7 +41,7 @@ The shadow byte encoding:
 
 These constants are defined in `mm/kasan/kasan.h`. (`include/linux/kasan-tags.h` defines a separate set of pointer-tag constants — `KASAN_TAG_KERNEL`, `KASAN_TAG_INVALID`, etc. — used by the SW-tag/HW-tag modes below, not these poison/redzone values.)
 
-### Compiler instrumentation
+### Compiler instrumentation {#compiler-instrumentation}
 
 With `CONFIG_KASAN_GENERIC`, GCC/Clang is invoked with `-fsanitize=kernel-address`. The compiler inserts a call before every memory access:
 
@@ -68,13 +68,13 @@ static __always_inline bool memory_is_poisoned_1(unsigned long addr)
 }
 ```
 
-### Inline vs. outline instrumentation
+### Inline vs. outline instrumentation {#inline-vs-outline-instrumentation}
 
 `CONFIG_KASAN_INLINE` (default): the shadow check is inlined at each access site — faster but produces a larger kernel binary.
 
 `CONFIG_KASAN_OUTLINE`: the compiler emits a function call to `__asan_load*`/`__asan_store*` — smaller binary, higher call overhead.
 
-### Slab allocator integration
+### Slab allocator integration {#slab-allocator-integration}
 
 KASAN hooks into the slab allocator via functions defined in `mm/kasan/common.c`:
 
@@ -104,7 +104,7 @@ struct kasan_free_meta {
 };
 ```
 
-### SW-tag KASAN (arm64)
+### SW-tag KASAN (arm64) {#sw-tag-kasan-arm64}
 
 On arm64 with `CONFIG_KASAN_SW_TAGS`, KASAN uses the **top-byte ignore** (TBI) feature: bits [63:56] of a pointer are ignored by the MMU, so KASAN stores a random 8-bit tag there.
 
@@ -114,7 +114,7 @@ On arm64 with `CONFIG_KASAN_SW_TAGS`, KASAN uses the **top-byte ignore** (TBI) f
 
 This reduces false negatives from imprecise granularity and enables catching some inter-object OOB accesses that generic KASAN misses.
 
-### HW-tag KASAN (arm64 MTE)
+### HW-tag KASAN (arm64 MTE) {#hw-tag-kasan-arm64-mte}
 
 `CONFIG_KASAN_HW_TAGS` uses ARM **Memory Tagging Extension** (MTE) hardware:
 
@@ -123,7 +123,7 @@ This reduces false negatives from imprecise granularity and enables catching som
 - The CPU raises a tag check fault on mismatch — no shadow memory needed, near-zero overhead when idle.
 - Integration is in `mm/kasan/hw_tags.c`; the allocator calls `set_tag()`/`get_tag()` wrappers over MTE instructions (`irg`, `stg`, `ldg`).
 
-### KASAN report format
+### KASAN report format {#kasan-report-format}
 
 ```
 ==================================================================
@@ -167,7 +167,7 @@ Key sections:
 3. **Free stack** — where the object was freed
 4. **Shadow dump** — surrounding shadow bytes; `fb` = `KASAN_SLAB_FREE` (freed slab object)
 
-### Overhead
+### Overhead {#overhead}
 
 | Resource | Cost |
 |---|---|
@@ -175,7 +175,7 @@ Key sections:
 | CPU | ~2–3× slowdown (instrumentation at every access) |
 | Inline vs. outline | Inline: ~20% faster, ~40% larger `.text` |
 
-### Enabling KASAN
+### Enabling KASAN {#enabling-kasan}
 
 ```bash
 # Minimal KASAN configuration:
@@ -194,11 +194,11 @@ CONFIG_KASAN_MODULE_TEST=y   # test module for self-check
 
 ---
 
-## KFENCE: Kernel Electric Fence
+## KFENCE: Kernel Electric Fence {#kfence-kernel-electric-fence}
 
 `CONFIG_KFENCE` provides a **sampling** memory error detector with near-zero average overhead, suitable for production kernels.
 
-### How it works
+### How it works {#how-it-works}
 
 KFENCE does not use shadow memory. Instead it maintains a small **KFENCE pool** of objects, each surrounded by **guard pages** (unmapped pages). An out-of-bounds write to a guard page causes an immediate page fault, which KFENCE intercepts and reports.
 
@@ -218,7 +218,7 @@ Each object is placed against **either the left or right page boundary, chosen a
 
 For **use-after-free** detection: when a KFENCE object is freed, its page is marked inaccessible (similar to `mprotect(PROT_NONE)`). Any subsequent access faults and triggers a KFENCE report.
 
-### Sampling
+### Sampling {#sampling}
 
 KFENCE is not invoked for every allocation. Instead, the slab allocator calls `__kfence_alloc()` at a configurable rate:
 
@@ -238,7 +238,7 @@ void *__kfence_alloc(struct kmem_cache *s, size_t size, gfp_t flags)
 
 A periodic work item (`toggle_allocation_gate()`) fires every `kfence_sample_interval` milliseconds and resets `kfence_allocation_gate` to `-kfence_burst` — allowing a burst of up to `kfence_burst + 1` samples per interval, not just one (`kfence_burst` defaults to 0, i.e. one sample per interval). Each call to `__kfence_alloc()` atomically increments the gate via `atomic_inc_return()`; only the call whose result is `≤ 1` gets redirected into the KFENCE pool. When `CONFIG_KFENCE_STATIC_KEYS` is enabled, a static branch (`kfence_allocation_key`) also gates the fast path so non-sampled allocations skip this check almost entirely.
 
-### Configuration
+### Configuration {#configuration}
 
 ```bash
 # Kconfig:
@@ -256,13 +256,13 @@ kfence.sample_interval=100      # sample one allocation every ~100 ms (default)
 echo 50 > /sys/module/kfence/parameters/sample_interval
 ```
 
-### KFENCE pool size
+### KFENCE pool size {#kfence-pool-size}
 
 With `CONFIG_KFENCE_NUM_OBJECTS=255` and 2 pages (8 KB) per slot, the pool uses ~2 MB of physical memory. Each slot is a fixed-size region; objects smaller than a page are placed against a randomly chosen left or right boundary within the slot's data page.
 
 The pool is allocated at boot in `kfence_init()` (`mm/kfence/core.c`) and registered with the page allocator to keep it from being reclaimed.
 
-### KFENCE report format
+### KFENCE report format {#kfence-report-format}
 
 ```
 ==================================================================
@@ -289,13 +289,13 @@ Key fields:
 - **0xffff888080a3c000-0xffff888080a3c006** — the object address range (7 bytes)
 - **1B left of kfence-#42** — the overrun distance
 
-### Limitations vs. KASAN
+### Limitations vs. KASAN {#limitations-vs-kasan}
 
 KFENCE only catches errors in the sampled allocations. An OOB or UAF in a non-sampled allocation is invisible to KFENCE. This is intentional — the trade-off gives production-safe overhead.
 
 ---
 
-## KASAN vs. KFENCE comparison
+## KASAN vs. KFENCE comparison {#kasan-vs-kfence-comparison}
 
 | Property | KASAN (generic) | KFENCE |
 |---|---|---|
@@ -313,7 +313,7 @@ KFENCE only catches errors in the sampled allocations. An OOB or UAF in a non-sa
 | Kernel version | 4.0+ | 5.12+ |
 | Arm64 hardware variant | MTE (HW-tag KASAN) | N/A |
 
-### Using both together
+### Using both together {#using-both-together}
 
 Enable both in development kernels. KASAN catches everything; KFENCE adds an independent detector and its reports appear in production-like workloads where KASAN overhead is too high to run continuously.
 
@@ -325,16 +325,16 @@ CONFIG_KFENCE=y
 
 ---
 
-## Further reading
+## Further reading {#further-reading}
 
-### Kernel source
+### Kernel source {#kernel-source}
 
 - [mm/kasan/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/report.c) — `kasan_report()` and `print_report()`: the report-generation code behind the KASAN report format shown above
 - [mm/kasan/kasan.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h) — internal header holding the actual shadow-byte constants (`KASAN_SLAB_FREE`, `KASAN_SLAB_REDZONE`, etc.) and the `kasan_alloc_meta`/`kasan_free_meta` layout
 - [mm/kfence/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/core.c) — `__kfence_alloc()` and the `kfence_allocation_gate` sampling counter referenced above
 - [mm/kfence/report.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/report.c) — `kfence_report_error()`: the report-generation code behind the KFENCE report format shown above
 
-### Related pages
+### Related pages {#related-pages}
 
 - [KCSAN](kcsan.md) — data race detection (complements KASAN)
 - [syzkaller](syzkaller.md) — fuzzer that uses KASAN to find bugs automatically
@@ -342,7 +342,7 @@ CONFIG_KFENCE=y
 - [KASAN in mm/](../mm/kasan.md) — shadow memory layout, the three tagging modes, and compiler instrumentation in depth
 - [KFENCE in mm/](../mm/kfence.md) — pool layout, guard-page mechanics, and sampling design in depth
 
-### External
+### External {#external}
 
 - [KASAN official documentation](https://docs.kernel.org/dev-tools/kasan.html) — report-format reference, boot parameters (`kasan.mode`, `kasan.fault`, `kasan.stacktrace`), and how to run the KUnit test suite
 - [KFENCE official documentation](https://docs.kernel.org/dev-tools/kfence.html) — report-format reference, the `/sys/kernel/debug/kfence/{stats,objects}` interface, and boot/sysfs tuning parameters

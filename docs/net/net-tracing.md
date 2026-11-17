@@ -1,8 +1,8 @@
-# Tracing the Network Stack
+# Tracing the Network Stack {#tracing-the-network-stack}
 
 > ftrace, perf, and BPF tools for packet-level network debugging
 
-## Network trace events
+## Network trace events {#network-trace-events}
 
 The kernel emits tracepoints at key points in the network stack, accessible via ftrace and perf:
 
@@ -24,7 +24,7 @@ ls /sys/kernel/debug/tracing/events/skb/
 # tcp:tcp_destroy_sock       - socket destroyed
 ```
 
-## Tracing packet drops with kfree_skb
+## Tracing packet drops with kfree_skb {#tracing-packet-drops-with-kfree_skb}
 
 `skb:kfree_skb` fires whenever an sk_buff is dropped. The `reason` field identifies why:
 
@@ -41,7 +41,7 @@ trace-cmd record -e skb:kfree_skb sleep 5
 trace-cmd report | grep kfree_skb
 ```
 
-### Drop reason codes (Linux 5.17+)
+### Drop reason codes (Linux 5.17+) {#drop-reason-codes-linux-517}
 
 The `reason` field was added to identify exact drop location:
 
@@ -57,7 +57,7 @@ grep -r "SKB_DROP_REASON" /usr/include/linux/ 2>/dev/null | head -20
 # etc.
 ```
 
-### Using dropwatch (BCC)
+### Using dropwatch (BCC) {#using-dropwatch-bcc}
 
 ```bash
 # dropwatch: show packet drop locations and rates
@@ -75,7 +75,7 @@ interval:s:5 {
 }'
 ```
 
-## Tracing TCP events
+## Tracing TCP events {#tracing-tcp-events}
 
 ```bash
 # Trace TCP state changes and resets
@@ -97,7 +97,7 @@ kprobe:tcp_retransmit_skb {
 }'
 ```
 
-## perf for network events
+## perf for network events {#perf-for-network-events}
 
 ```bash
 # Count network events system-wide
@@ -115,7 +115,7 @@ perf report
 perf top -e net:net_dev_xmit
 ```
 
-## bpftrace one-liners
+## bpftrace one-liners {#bpftrace-one-liners}
 
 ```bash
 # Show receive rate per device
@@ -155,7 +155,7 @@ kretprobe:tcp_finish_connect {
 }'
 ```
 
-## Wireshark / tcpdump
+## Wireshark / tcpdump {#wireshark-tcpdump}
 
 For packet-level capture:
 
@@ -180,7 +180,7 @@ tcpdump -r /tmp/capture.pcap -nn
 tcpdump -i any -n
 ```
 
-### AF_PACKET sockets (what tcpdump uses)
+### AF_PACKET sockets (what tcpdump uses) {#af_packet-sockets-what-tcpdump-uses}
 
 tcpdump uses AF_PACKET sockets, which receive a copy of every packet at the `__netif_receive_skb` level — before the packet is processed by the network stack. This is why tcpdump sees packets even if they're subsequently dropped by iptables.
 
@@ -192,7 +192,7 @@ tcpdump -i eth0 -w /dev/null -v  # shows "X packets captured, Y dropped by kerne
 tcpdump -i eth0 -B 65536 -w /dev/null  # 65MB buffer
 ```
 
-## Tracing with nftables/iptables
+## Tracing with nftables/iptables {#tracing-with-nftablesiptables}
 
 For packet-level debugging of firewall rules:
 
@@ -208,7 +208,7 @@ iptables -I INPUT 1 -p tcp --dport 80 -j LOG --log-prefix "HTTP: " --log-level 4
 journalctl -k | grep "HTTP: "
 ```
 
-## net_ratelimit and kernel log drops
+## net_ratelimit and kernel log drops {#net_ratelimit-and-kernel-log-drops}
 
 The kernel rate-limits some network messages to prevent log flooding. If you see messages like `net_ratelimit: X callbacks suppressed`, the kernel is dropping log messages:
 
@@ -218,7 +218,7 @@ echo 5000 > /proc/sys/net/core/message_burst  # burst
 echo 10 > /proc/sys/net/core/message_cost     # tokens per interval
 ```
 
-## Systematic approach to network debugging
+## Systematic approach to network debugging {#systematic-approach-to-network-debugging}
 
 1. **Check counters first**: `/proc/net/dev`, `ethtool -S eth0`, `/proc/net/snmp`
 2. **Identify drop location**: `skb:kfree_skb` tracepoint or `dropwatch`
@@ -227,7 +227,7 @@ echo 10 > /proc/sys/net/core/message_cost     # tokens per interval
 5. **Packet capture**: `tcpdump` for protocol-level analysis
 6. **Firewall trace**: nftables `meta nftrace` or iptables LOG
 
-## Further reading
+## Further reading {#further-reading}
 
 - [Network Debugging with ss and ip](net-debugging.md) — Socket and route inspection
 - [Understanding /proc/net/snmp](proc-snmp.md) — Protocol counters

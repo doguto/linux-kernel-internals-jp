@@ -1,8 +1,8 @@
-# Device Drivers
+# Device Drivers {#device-drivers}
 
 > How hardware becomes accessible to userspace
 
-## Overview
+## Overview {#overview}
 
 Device drivers bridge hardware and the rest of the kernel. The Linux driver model organizes this with:
 
@@ -28,7 +28,7 @@ struct device_driver ←── struct pci_driver (driver-specific extension)
     Hardware
 ```
 
-## Pages in this section
+## Pages in this section {#pages-in-this-section}
 
 | Page | What it covers |
 |------|----------------|
@@ -40,7 +40,7 @@ struct device_driver ←── struct pci_driver (driver-specific extension)
 | [War Stories](war-stories.md) | Real driver-core bugs and regressions: probe-order races, sysfs deadlocks, the fw_devlink default rollout |
 | [Device Tree](device-tree.md) | Hardware description for non-discoverable buses |
 
-## Quick reference
+## Quick reference {#quick-reference}
 
 ```bash
 # List all devices and their drivers

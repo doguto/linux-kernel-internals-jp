@@ -1,8 +1,8 @@
-# Page Fault Handler
+# Page Fault Handler {#page-fault-handler}
 
 > From hardware exception to page mapped: the complete fault path
 
-## Hardware page fault
+## Hardware page fault {#hardware-page-fault}
 
 When the CPU encounters a virtual address that isn't mapped in the page tables, it raises a **page fault exception** (#PF on x86):
 
@@ -14,7 +14,7 @@ CPU accesses virtual address 0x7fff1234
   → jumps to IDT entry 14 → kernel's fault handler
 ```
 
-## x86 page fault error codes
+## x86 page fault error codes {#x86-page-fault-error-codes}
 
 The error code pushed by the CPU describes the fault:
 
@@ -45,7 +45,7 @@ Bit 15 (SS): 1 = shadow stack access
 
 `CR2` register holds the **faulting virtual address** at the time of the fault.
 
-## Kernel entry point
+## Kernel entry point {#kernel-entry-point}
 
 ```c
 /* arch/x86/mm/fault.c */
@@ -73,7 +73,7 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 }
 ```
 
-## User-space fault path
+## User-space fault path {#user-space-fault-path}
 
 ```c
 /* arch/x86/mm/fault.c */
@@ -138,7 +138,7 @@ do_sigbus:
 }
 ```
 
-## Fault types and their handling
+## Fault types and their handling {#fault-types-and-their-handling}
 
 ```c
 /* mm/memory.c */
@@ -194,7 +194,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 }
 ```
 
-## Fault types summary
+## Fault types summary {#fault-types-summary}
 
 | PTE state | Access type | Handler | Description |
 |-----------|------------|---------|-------------|
@@ -207,7 +207,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 | VMA: no write perm | Write | SIGSEGV | Permission denied |
 | VMA: no exec perm | Fetch | SIGSEGV | NX violation |
 
-## do_anonymous_page: demand-zero page
+## do_anonymous_page: demand-zero page {#doanonymouspage-demand-zero-page}
 
 ```c
 /* mm/memory.c */
@@ -242,7 +242,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 }
 ```
 
-## do_wp_page: copy-on-write
+## do_wp_page: copy-on-write {#dowppage-copy-on-write}
 
 ```c
 /* mm/memory.c */
@@ -290,7 +290,7 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 }
 ```
 
-## Kernel page faults
+## Kernel page faults {#kernel-page-faults}
 
 ```c
 /* Kernel-space fault: usually a bug */
@@ -318,7 +318,7 @@ do_kern_addr_fault(struct pt_regs *regs, unsigned long error_code,
 
 Common kernel fault: `copy_to_user` / `copy_from_user` with an invalid user pointer. The `fixup_exception` mechanism uses a table of `{fault_address → recovery_address}` pairs — if the fault address is in the table, execution jumps to the recovery code (returns `-EFAULT`).
 
-## Observing page faults
+## Observing page faults {#observing-page-faults}
 
 ```bash
 # Per-process fault statistics
@@ -343,7 +343,7 @@ bpftrace -e 'tracepoint:exceptions:page_fault_user {
 }'
 ```
 
-## Further reading
+## Further reading {#further-reading}
 
 - [File-backed mmap and page faults](file-mmap.md) — do_fault/filemap_fault path
 - [Copy-on-Write](cow.md) — do_wp_page mechanics
