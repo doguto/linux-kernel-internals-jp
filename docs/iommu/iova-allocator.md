@@ -1,37 +1,37 @@
-# IOVA Allocator {#iova-allocator}
+# IOVAアロケータ {#iova-allocator}
 
-> How the kernel manages I/O virtual address space
+> カーネルはI/O仮想アドレス空間をどう管理するか
 
-## What is IOVA space? {#what-is-iova-space}
+## IOVA空間とは {#what-is-iova-space}
 
-Every device attached to an IOMMU domain has its own I/O virtual address space. When a driver calls `dma_map_single()` or `dma_map_sg()`, the DMA-IOMMU layer must carve out a range of I/O virtual addresses (IOVAs), create a mapping in the IOMMU page tables for that range, and return the IOVA to the driver. When the transfer completes and the driver unmaps, those addresses must be returned to the pool.
+IOMMUドメインにアタッチされた各デバイスは、独自のI/O仮想アドレス空間を持つ。ドライバが`dma_map_single()`や`dma_map_sg()`を呼ぶと、DMA-IOMMU層はI/O仮想アドレス（IOVA）の範囲を切り出し、その範囲についてIOMMUページテーブルにマッピングを作成し、IOVAをドライバに返さなければならない。転送が完了してドライバがアンマップすると、それらのアドレスはプールに返されなければならない。
 
-At high packet or I/O rates this allocation and free cycle is on the fast path. A 25 Gbps NIC receiving small packets can issue millions of DMA maps per second. The IOVA allocator is therefore a significant source of CPU overhead — it shows up in `perf top` profiles for network and NVMe workloads.
+パケットレートやI/Oレートが高い場合、この割り当てと解放のサイクルは高速パス上にある。小さなパケットを受信する25 GbpsのNICは、毎秒数百万回のDMAマップを発行しうる。そのためIOVAアロケータはCPUオーバーヘッドの大きな発生源となり、ネットワークやNVMeのワークロードの`perf top`プロファイルに現れる。
 
-The allocator lives in `drivers/iommu/iova.c`, with types declared in `include/linux/iova.h`.
+アロケータは`drivers/iommu/iova.c`にあり、型は`include/linux/iova.h`で宣言されている。
 
-## Core data structures {#core-data-structures}
+## 中核となるデータ構造 {#core-data-structures}
 
 ### struct iova_domain {#struct-iova_domain}
 
 ```c
 /* include/linux/iova.h */
 struct iova_domain {
-    spinlock_t      iova_rbtree_lock; /* serialize rbtree access */
-    struct rb_root  rbroot;           /* rbtree of allocated IOVAs */
-    struct rb_node *cached_node;      /* last free() position hint */
-    struct rb_node *cached32_node;    /* cached node for < 4GB range */
-    unsigned long   granule;          /* allocation granularity (page size) */
-    unsigned long   start_pfn;        /* lowest allocatable IOVA PFN */
-    unsigned long   dma_32bit_pfn;    /* highest IOVA PFN < 4GB */
-    unsigned long   max32_alloc_size; /* max single alloc below 4GB */
-    struct iova      anchor;          /* sentinel node in rbtree */
-    struct iova_rcache *rcaches; /* dynamically allocated in iova_domain_init_rcaches() */
-    struct hlist_node cpuhp_dead;     /* CPU-hotplug teardown of rcache state */
+    spinlock_t      iova_rbtree_lock; /* rbtree へのアクセスを直列化する */
+    struct rb_root  rbroot;           /* 割り当て済み IOVA の rbtree */
+    struct rb_node *cached_node;      /* 直近の free() 位置のヒント */
+    struct rb_node *cached32_node;    /* 4GB 未満の範囲用のキャッシュノード */
+    unsigned long   granule;          /* 割り当て粒度（ページサイズ） */
+    unsigned long   start_pfn;        /* 割り当て可能な最小の IOVA PFN */
+    unsigned long   dma_32bit_pfn;    /* 4GB 未満で最大の IOVA PFN */
+    unsigned long   max32_alloc_size; /* 4GB 未満での 1 回の割り当ての最大値 */
+    struct iova      anchor;          /* rbtree の番兵ノード */
+    struct iova_rcache *rcaches; /* iova_domain_init_rcaches() で動的に割り当てられる */
+    struct hlist_node cpuhp_dead;     /* CPU ホットプラグ時の rcache 状態の破棄 */
 };
 ```
 
-The domain covers the entire IOVA address space available to a group of devices. The `granule` is typically 4 KB (one page), meaning IOVAs are allocated in page-sized units. The rbtree tracks allocated ranges so the allocator can find holes.
+ドメインは、デバイスのグループが利用できるIOVAアドレス空間全体をカバーする。`granule`は通常4 KB（1ページ）であり、IOVAはページサイズ単位で割り当てられる。rbtreeは割り当て済みの範囲を追跡し、アロケータが空き領域を見つけられるようにする。
 
 ### struct iova {#struct-iova}
 
@@ -39,30 +39,30 @@ The domain covers the entire IOVA address space available to a group of devices.
 /* include/linux/iova.h */
 struct iova {
     struct rb_node  node;
-    unsigned long   pfn_hi;   /* last PFN of this allocation (inclusive) */
-    unsigned long   pfn_lo;   /* first PFN of this allocation */
+    unsigned long   pfn_hi;   /* この割り当ての最後の PFN（この値を含む） */
+    unsigned long   pfn_lo;   /* この割り当ての最初の PFN */
 };
 ```
 
-Each allocated range is represented as a `struct iova` embedded in the rbtree. `pfn_lo` and `pfn_hi` are IOVA PFNs (IOVA >> PAGE_SHIFT).
+割り当て済みの各範囲は、rbtreeに埋め込まれた`struct iova`として表される。`pfn_lo`と`pfn_hi`はIOVAのPFN（IOVA >> PAGE_SHIFT）である。
 
-## Allocation and free call paths {#allocation-and-free-call-paths}
+## 割り当てと解放の呼び出し経路 {#allocation-and-free-call-paths}
 
 ### alloc_iova() {#alloc_iova}
 
 ```c
 /* drivers/iommu/iova.c */
 struct iova *alloc_iova(struct iova_domain *iovad,
-                        unsigned long size,      /* in page frames */
-                        unsigned long limit_pfn, /* upper bound */
+                        unsigned long size,      /* ページフレーム単位 */
+                        unsigned long limit_pfn, /* 上限 */
                         bool size_aligned);
 ```
 
-The function searches the rbtree from `limit_pfn` downward (allocating top-down to keep low addresses available for 32-bit devices). It walks the cached hint first; if that misses, it falls back to a full rbtree traversal to find a free gap.
+この関数はrbtreeを`limit_pfn`から下向きに探索する（32ビットデバイスのために低位アドレスを空けておくよう、上から下へ割り当てる）。まずキャッシュされたヒントをたどり、それが外れた場合は空きの隙間を見つけるためにrbtree全体の走査にフォールバックする。
 
-The allocation is top-down for an important reason: keeping low IOVA space (below 4 GB) free for 32-bit legacy devices that arrive later. 64-bit-capable devices fill from the top; 32-bit-limited devices fill from `dma_32bit_pfn` downward.
+上から下へ割り当てるのには重要な理由がある。後から来る32ビットのレガシーデバイスのために、低位のIOVA空間（4 GB未満）を空けておくためである。64ビット対応デバイスは上から埋めていき、32ビットに制限されたデバイスは`dma_32bit_pfn`から下向きに埋めていく。
 
-This is a simplification, though: even a device with a 64-bit DMA mask doesn't get a high IOVA on its very first allocation. For PCI devices, `iommu_dma_alloc_iova()` tries the 32-bit range *first* — a SAC-before-DAC compatibility workaround, gated by the per-device `pci_32bit_workaround` flag (`struct dev_iommu`) — and only falls back to the full address range once that 32-bit attempt fails. See the next section for the real allocation logic.
+ただし、これは単純化した説明である。64ビットのDMAマスクを持つデバイスであっても、最初の割り当てで高位のIOVAを得るわけではない。PCIデバイスの場合、`iommu_dma_alloc_iova()`は*まず*32ビットの範囲を試す。これはSAC-before-DACの互換性回避策であり、デバイスごとの`pci_32bit_workaround`フラグ（`struct dev_iommu`）で制御される。この32ビットでの試行が失敗して初めて、アドレス範囲全体にフォールバックする。実際の割り当てロジックは次の節を参照。
 
 ### free_iova() {#free_iova}
 
@@ -71,16 +71,16 @@ This is a simplification, though: even a device with a 64-bit DMA mask doesn't g
 void free_iova(struct iova_domain *iovad, unsigned long pfn);
 ```
 
-Removes the node from the rbtree and updates the cached hint. With the spinlock, this is serialized — at high rate, this becomes a bottleneck. The per-CPU rcache exists to avoid this path entirely for common sizes.
+rbtreeからノードを削除し、キャッシュされたヒントを更新する。spinlockによってこれは直列化されるため、高頻度ではボトルネックになる。per-CPUのrcacheは、よく使われるサイズについてこの経路を完全に回避するために存在する。
 
-### The DMA-IOMMU wrapper {#the-dma-iommu-wrapper}
+### DMA-IOMMUラッパー {#the-dma-iommu-wrapper}
 
-In practice, drivers don't call `alloc_iova()` directly. The DMA-IOMMU layer calls `iommu_dma_alloc_iova()`, which — for a PCI device that hasn't yet been proven to need the full address range — tries the 32-bit region first, and only calls into the general path (still via the per-CPU rcache, falling back to `alloc_iova()` on a miss) once that's exhausted:
+実際には、ドライバが`alloc_iova()`を直接呼ぶことはない。DMA-IOMMU層は`iommu_dma_alloc_iova()`を呼ぶ。この関数は、アドレス範囲全体が必要だとまだ判明していないPCIデバイスについては、まず32ビットの領域を試し、それが尽きて初めて汎用の経路（これもper-CPU rcacheを経由し、ミスすると`alloc_iova()`にフォールバックする）を呼び出す。
 
 ```c
-/* drivers/iommu/dma-iommu.c (simplified — omits the MSI-cookie
- * short-circuit and the device/domain-aperture dma_limit clamping
- * that happen before this) */
+/* drivers/iommu/dma-iommu.c（簡略版 — この前に行われる MSI クッキーの
+ * 短絡処理と、デバイス/ドメインのアパーチャによる dma_limit の
+ * クランプは省略している） */
 static dma_addr_t iommu_dma_alloc_iova(struct iommu_domain *domain,
                                         size_t size, u64 dma_limit,
                                         struct device *dev)
@@ -91,71 +91,71 @@ static dma_addr_t iommu_dma_alloc_iova(struct iommu_domain *domain,
     unsigned long iova_len = size >> shift;
     unsigned long iova;
 
-    /* SAC-before-DAC: try the 32-bit range first, once, for PCI devices */
+    /* SAC-before-DAC: PCI デバイスについては、まず一度だけ 32 ビットの範囲を試す */
     if (dma_limit > DMA_BIT_MASK(32) && dev->iommu->pci_32bit_workaround) {
         iova = alloc_iova_fast(iovad, iova_len, DMA_BIT_MASK(32) >> shift, false);
         if (iova)
             goto done;
-        /* Failed: this device really does need the high range */
+        /* 失敗: このデバイスは本当に高位の範囲を必要としている */
         dev->iommu->pci_32bit_workaround = false;
         dev_notice(dev, "Using %d-bit DMA addresses\n", bits_per(dma_limit));
     }
 
-    /* Fast path: per-CPU rcache (falls back to alloc_iova() on miss) */
+    /* 高速パス: per-CPU rcache（ミスすると alloc_iova() にフォールバック） */
     iova = alloc_iova_fast(iovad, iova_len, dma_limit >> shift, true);
 done:
     return (dma_addr_t)iova << shift;
 }
 ```
 
-`pci_32bit_workaround` starts `true` for every PCI device (unless the `iommu.forcedac` boot parameter disables it) and latches to `false` — permanently, for that device — the first time the 32-bit range can't satisfy a request. The comment in the real source is explicit about why this still matters on modern hardware: "the original SAC vs. DAC reasoning loses relevance with PCIe, but enough hardware and firmware bugs are still lurking out there that it's safest not to venture into the 64-bit space until necessary."
+`pci_32bit_workaround`はすべてのPCIデバイスで`true`から始まり（`iommu.forcedac`ブートパラメータで無効にされない限り）、32ビットの範囲で要求を満たせなかった最初の時点で`false`にラッチされる（そのデバイスについては恒久的に）。実際のソースのコメントは、これが現代のハードウェアでもなお重要な理由をはっきり述べている。"the original SAC vs. DAC reasoning loses relevance with PCIe, but enough hardware and firmware bugs are still lurking out there that it's safest not to venture into the 64-bit space until necessary."（訳: 元々のSAC対DACの理由づけはPCIeでは意味を失っているが、ハードウェアやファームウェアのバグはまだ十分に潜んでいるので、必要になるまで64ビット空間に踏み込まないのが最も安全である。）
 
-## Per-CPU IOVA caches (rcache) {#per-cpu-iova-caches-rcache}
+## per-CPU IOVAキャッシュ（rcache） {#per-cpu-iova-caches-rcache}
 
-The magazine-style per-CPU cache is the key to keeping IOVA allocation off the rbtree lock on the fast path.
+マガジン方式のper-CPUキャッシュこそが、高速パスでのIOVA割り当てをrbtreeのロックから切り離す鍵である。
 
-### struct iova_rcache and struct iova_cpu_rcache {#struct-iovarcache-and-struct-iovacpu_rcache}
+### struct iova_rcacheとstruct iova_cpu_rcache {#struct-iovarcache-and-struct-iovacpu_rcache}
 
 ```c
-/* drivers/iommu/iova.c — these are all internal to iova.c, not exposed
- * in include/linux/iova.h, which only forward-declares struct iova_rcache */
+/* drivers/iommu/iova.c — これらはすべて iova.c の内部にあり、
+ * include/linux/iova.h には公開されていない（ヘッダは struct iova_rcache を前方宣言するだけ） */
 
-/* 127 chosen so sizeof(struct iova_magazine) = exactly 1024 bytes
- * (127 × 8 + 8 = 1024), avoiding kmalloc internal fragmentation. */
+/* 127 は sizeof(struct iova_magazine) がちょうど 1024 バイトになるよう選ばれている
+ * (127 × 8 + 8 = 1024)。kmalloc の内部断片化を避けるため。 */
 #define IOVA_MAG_SIZE 127
 
 struct iova_magazine {
     union {
-        unsigned long size;         /* fill count when in use */
-        struct iova_magazine *next; /* free-list link when in depot */
+        unsigned long size;         /* 使用中は充填数 */
+        struct iova_magazine *next; /* デポ内ではフリーリストのリンク */
     };
     unsigned long  pfns[IOVA_MAG_SIZE];
 };
 
 struct iova_cpu_rcache {
     spinlock_t         lock;
-    struct iova_magazine *loaded;   /* current magazine (drawn from) */
-    struct iova_magazine *prev;     /* spare magazine */
+    struct iova_magazine *loaded;   /* 現在のマガジン（ここから取り出す） */
+    struct iova_magazine *prev;     /* 予備のマガジン */
 };
 
 struct iova_rcache {
-    spinlock_t          lock;       /* protects depot */
+    spinlock_t          lock;       /* デポを保護する */
     unsigned int         depot_size;
-    struct iova_magazine *depot;    /* singly-linked list of depot magazines */
+    struct iova_magazine *depot;    /* デポのマガジンの単方向リスト */
     struct iova_cpu_rcache __percpu *cpu_rcaches;
-    struct iova_domain  *iovad;     /* owning domain, for the depot-trim worker below */
-    struct delayed_work  work;      /* periodically trims the depot back down */
+    struct iova_domain  *iovad;     /* 所有するドメイン（下記のデポ縮小ワーカー用） */
+    struct delayed_work  work;      /* 定期的にデポを縮小する */
 };
 ```
 
-A delayed-work callback (`iova_depot_work_func()`, period `IOVA_DEPOT_DELAY` = 100ms) periodically
-frees depot magazines down to `num_online_cpus()` — the depot is not an unbounded stash.
+遅延ワークのコールバック（`iova_depot_work_func()`、周期は`IOVA_DEPOT_DELAY` = 100ms）が定期的に
+デポのマガジンを`num_online_cpus()`個まで解放する。デポは無制限の貯蔵庫ではない。
 
-`IOVA_RANGE_CACHE_MAX_SIZE` is defined as 6 in recent kernels, giving 6 size classes. Each size class manages IOVAs of a specific power-of-two page count (1, 2, 4, 8, 16, 32 pages), covering the most common DMA buffer sizes for network and NVMe workloads.
+最近のカーネルでは`IOVA_RANGE_CACHE_MAX_SIZE`は6と定義されており、6つのサイズクラスがある。各サイズクラスは特定の2のべき乗のページ数（1、2、4、8、16、32ページ）のIOVAを管理し、ネットワークやNVMeのワークロードで最もよく使われるDMAバッファサイズをカバーする。
 
-### How the magazine cache works {#how-the-magazine-cache-works}
+### マガジンキャッシュの仕組み {#how-the-magazine-cache-works}
 
-The design is inspired by the Slab magazine allocator (Bonwick & Adams, 2001):
+この設計はslabのマガジンアロケータ（Bonwick & Adams, 2001）に着想を得ている。
 
 ```
 Per-CPU rcache:
@@ -166,58 +166,58 @@ Global depot:
   [mag0] [mag1] [mag2] ... [magN]             <- overflow magazines
 ```
 
-**Allocation (fast path, no rbtree lock):**
-1. Pop a PFN from the `loaded` magazine of the matching size class.
-2. If `loaded` is empty, swap `loaded` and `prev`. If `prev` is also empty, pull a full magazine from the global depot. If the depot is also empty, fall back to `alloc_iova()` (slow path, acquires rbtree lock).
+**割り当て（高速パス、rbtreeロックなし）:**
+1. 該当するサイズクラスの`loaded`マガジンからPFNを1つ取り出す。
+2. `loaded`が空なら、`loaded`と`prev`を入れ替える。`prev`も空なら、グローバルなデポから満杯のマガジンを取ってくる。デポも空なら、`alloc_iova()`（低速パス、rbtreeロックを取得する）にフォールバックする。
 
-**Free (fast path, no rbtree lock):**
-1. Push the PFN onto the `loaded` magazine.
-2. If `loaded` is full, swap `loaded` and `prev`. If `prev` is also full, push `prev` to the depot and allocate a fresh empty magazine for `prev`.
+**解放（高速パス、rbtreeロックなし）:**
+1. PFNを`loaded`マガジンに積む。
+2. `loaded`が満杯なら、`loaded`と`prev`を入れ替える。`prev`も満杯なら、`prev`をデポに送り、`prev`用に新しい空のマガジンを割り当てる。
 
-The critical property: on the normal alloc/free cycle, no spinlock contention with other CPUs. Each CPU manages its own loaded magazine independently.
+重要な性質は、通常の割り当て/解放サイクルでは他のCPUとのspinlock競合が起きないことである。各CPUは自分のloadedマガジンを独立して管理する。
 
-**Performance note:** The rcache is what makes 10 Gbps+ NICs viable on IOMMU-enabled systems. Without it, every packet's DMA map would acquire the global rbtree spinlock. A single-threaded 25 Gbps small-packet workload can issue over 3 million `dma_map_single()` calls per second; the rcache absorbs this with no cross-CPU synchronization in the common case.
+**性能に関する注記:** rcacheこそが、IOMMUを有効にしたシステムで10 Gbps以上のNICを実用的にしているものである。rcacheがなければ、パケットごとのDMAマップがグローバルなrbtreeのspinlockを取得することになる。シングルスレッドの25 Gbps小パケットワークロードは毎秒300万回以上の`dma_map_single()`呼び出しを発行しうるが、rcacheは一般的なケースではCPU間の同期なしにこれを吸収する。
 
-## IOVA flush queues (struct iova_fq) {#iova-flush-queues-struct-iova_fq}
+## IOVAフラッシュキュー（struct iova_fq） {#iova-flush-queues-struct-iova_fq}
 
-Flush queues decouple IOVA freeing from IOTLB invalidation. Unmapping a DMA range requires both freeing the IOVA and flushing the IOMMU TLB. IOTLB flushes are expensive — on Intel VT-d they require a write to the DMAR registers and may stall the bus.
+フラッシュキューは、IOVAの解放とIOTLBの無効化を切り離す。DMA範囲のアンマップには、IOVAの解放とIOMMU TLBのフラッシュの両方が必要である。IOTLBのフラッシュは高コストであり、Intel VT-dではDMARレジスタへの書き込みを必要とし、バスをストールさせることがある。
 
-The concept dates to Linux 5.15, but not in the per-CPU form shown below: 5.15's flush queue was a single, simpler per-domain structure living in `iova.c`. The per-CPU `struct iova_fq` design in `dma-iommu.c` — what every currently-supported kernel actually runs — landed in a later rework, first appearing in Linux **5.17**.
+この概念はLinux 5.15にさかのぼるが、下に示すper-CPUの形ではなかった。5.15のフラッシュキューは、`iova.c`にある単一の、より単純なドメインごとの構造体だった。`dma-iommu.c`にあるper-CPUの`struct iova_fq`の設計（現在サポートされているすべてのカーネルが実際に動かしているもの）は、その後の作り直しで導入され、Linux **5.17**で初めて登場した。
 
 ```c
-/* drivers/iommu/dma-iommu.c — not include/linux/iova.h, which has no "fq" symbols at all */
+/* drivers/iommu/dma-iommu.c — include/linux/iova.h ではない。そちらには "fq" のシンボルは一切ない */
 #define IOVA_DEFAULT_FQ_SIZE   256
 
 struct iova_fq_entry {
     unsigned long iova_pfn;
     unsigned long pages;
-    struct iommu_pages_list freelist; /* IOMMU page-table pages freed with this entry,
-                                        * deferred until the batched flush actually runs */
-    u64 counter;               /* flush counter when this entry was added */
+    struct iommu_pages_list freelist; /* このエントリとともに解放される IOMMU ページテーブルのページ。
+                                        * バッチ化されたフラッシュが実際に走るまで遅延される */
+    u64 counter;               /* このエントリが追加されたときのフラッシュカウンタ */
 };
 
 struct iova_fq {
     spinlock_t lock;
     unsigned int head, tail;
-    unsigned int mod_mask;     /* ring size - 1; entries[] is power-of-two sized */
-    struct iova_fq_entry entries[]; /* flexible array member */
+    unsigned int mod_mask;     /* リングサイズ - 1。entries[] のサイズは 2 のべき乗 */
+    struct iova_fq_entry entries[]; /* フレキシブル配列メンバ */
 };
 ```
 
-Instead of calling `iommu_iotlb_sync()` immediately after each unmap, the flush queue accumulates freed IOVAs. A background worker (or the next domain-wide flush) drains the queue, performs one batched IOTLB invalidation, and then returns the IOVAs to the rcache or rbtree. This amortizes the hardware invalidation cost over many unmaps.
+アンマップのたびにすぐ`iommu_iotlb_sync()`を呼ぶ代わりに、フラッシュキューは解放されたIOVAを蓄積する。バックグラウンドのワーカー（または次のドメイン全体のフラッシュ）がキューを排出し、バッチ化された1回のIOTLB無効化を行ってから、IOVAをrcacheまたはrbtreeに返す。これにより、ハードウェアの無効化コストが多数のアンマップにわたって償却される。
 
-The domain type `IOMMU_DOMAIN_DMA_FQ` enables flush-queue mode:
+ドメインタイプ`IOMMU_DOMAIN_DMA_FQ`がフラッシュキューモードを有効にする。
 
 ```c
-/* drivers/iommu/dma-iommu.c — real signature takes the domain, not the
- * cookie directly, and handles a separate MSI-cookie teardown case */
+/* drivers/iommu/dma-iommu.c — 実際のシグネチャはクッキーを直接ではなく
+ * ドメインを受け取り、MSI クッキーの破棄という別のケースも扱う */
 static void iommu_dma_free_iova(struct iommu_domain *domain, dma_addr_t iova,
                                 size_t size, struct iommu_iotlb_gather *gather)
 {
     struct iova_domain *iovad = &domain->iova_cookie->iovad;
 
     if (domain->cookie_type == IOMMU_COOKIE_DMA_MSI) {
-        /* MSI case: only ever cleaning up the most recent allocation */
+        /* MSI の場合: 常に直近の割り当てだけを片付ける */
         domain->msi_cookie->msi_iova -= size;
     } else if (gather && gather->queued) {
         queue_iova(domain->iova_cookie, iova_pfn(iovad, iova),
@@ -229,69 +229,69 @@ static void iommu_dma_free_iova(struct iommu_domain *domain, dma_addr_t iova,
 }
 ```
 
-## The 32-bit DMA limit {#the-32-bit-dma-limit}
+## 32ビットDMAの制限 {#the-32-bit-dma-limit}
 
-Many legacy and embedded devices have 32-bit DMA address registers. On a system with > 4 GB of RAM, the IOMMU must ensure those devices receive IOVAs below 4 GB — physical memory above 4 GB is fine, but the IOVA the device sees must fit in 32 bits.
+多くのレガシーデバイスや組み込みデバイスは、32ビットのDMAアドレスレジスタを持つ。RAMが4 GBを超えるシステムでは、IOMMUはそれらのデバイスが4 GB未満のIOVAを受け取るよう保証しなければならない。4 GBより上の物理メモリは問題ないが、デバイスから見えるIOVAは32ビットに収まらなければならない。
 
-The `dma_32bit_pfn` field in `struct iova_domain` marks the upper boundary of the 32-bit IOVA region:
+`struct iova_domain`の`dma_32bit_pfn`フィールドは、32ビットIOVA領域の上限を示す。
 
 ```c
-/* init_iova_domain() sets a fixed 4 GB boundary, derived only from the
- * domain's granule -- it takes no struct device and is not clamped by
- * any device's DMA mask:
+/* init_iova_domain() は、ドメインの granule だけから導出した固定の 4 GB 境界を
+ * 設定する -- struct device は受け取らず、どのデバイスの DMA マスクによっても
+ * クランプされない:
  *   iovad->dma_32bit_pfn = 1UL << (32 - iova_shift(iovad));
- * Per-device DMA-mask clamping happens separately, as a local dma_limit
- * parameter inside iommu_dma_alloc_iova(), not by mutating this field. */
+ * デバイスごとの DMA マスクによるクランプは、このフィールドを書き換えるのではなく、
+ * iommu_dma_alloc_iova() 内のローカルな dma_limit パラメータとして別途行われる。 */
 ```
 
-When a driver calls `dma_set_mask(dev, DMA_BIT_MASK(32))`, subsequent allocations use `limit_pfn = iovad->dma_32bit_pfn`. The allocator satisfies the constraint by searching only the region below 4 GB.
+ドライバが`dma_set_mask(dev, DMA_BIT_MASK(32))`を呼ぶと、以後の割り当ては`limit_pfn = iovad->dma_32bit_pfn`を使う。アロケータは4 GB未満の領域だけを探索することで、この制約を満たす。
 
-The consequence: on a system with many 32-bit devices, the low IOVA range becomes contested. Large 64-bit-capable devices should explicitly call `dma_set_mask(dev, DMA_BIT_MASK(64))` to allow allocation from the unconstrained high range, leaving low IOVAs for those that truly need them.
+その結果、32ビットデバイスが多いシステムでは、低位のIOVA範囲が奪い合いになる。大規模な64ビット対応デバイスは明示的に`dma_set_mask(dev, DMA_BIT_MASK(64))`を呼んで制約のない高位範囲から割り当てられるようにし、低位のIOVAを本当に必要とするデバイスのために残しておくべきである。
 
-## Impact on DMA performance {#impact-on-dma-performance}
+## DMA性能への影響 {#impact-on-dma-performance}
 
-IOVA allocation shows up in profiles in two ways:
+IOVAの割り当ては、プロファイルに2つの形で現れる。
 
-1. **Lock contention on `iova_rbtree_lock`** — occurs when the rcache is cold (driver startup, or buffer sizes that miss all six size classes). Visible in `perf` as time in `alloc_iova()` holding the spinlock.
+1. **`iova_rbtree_lock`のロック競合** — rcacheが冷えているとき（ドライバの起動時、または6つのサイズクラスのどれにも当たらないバッファサイズ）に起きる。`perf`では、spinlockを保持したまま`alloc_iova()`で費やされる時間として見える。
 
-2. **IOTLB flush cost** — without flush queues, each `dma_unmap_single()` issues an IOTLB invalidation. On Intel VT-d, this costs hundreds of nanoseconds per call. Flush queues batch this cost.
+2. **IOTLBフラッシュのコスト** — フラッシュキューがなければ、`dma_unmap_single()`のたびにIOTLB無効化が発行される。Intel VT-dでは呼び出しごとに数百ナノ秒かかる。フラッシュキューはこのコストをバッチ化する。
 
 ```bash
-# See IOVA allocator state per domain
-# Note: no single generic /sys/kernel/debug/iommu/iova file exists.
-# IOVA-related stats appear under vendor-specific paths, e.g.:
+# ドメインごとの IOVA アロケータの状態を見る
+# 注: 汎用の /sys/kernel/debug/iommu/iova というファイルは 1 つも存在しない。
+# IOVA 関連の統計はベンダー固有のパスの下に現れる。例:
 #   /sys/kernel/debug/iommu/intel/  (Intel VT-d)
 
-# perf: find IOVA allocation cost in a NIC driver workload
+# perf: NIC ドライバのワークロードで IOVA 割り当てのコストを見つける
 perf record -g -- netperf -t UDP_STREAM -H <host> -l 30
 perf report --sort=symbol | grep -i iova
 
-# Tracepoints for DMA map/unmap timing
+# DMA の map/unmap のタイミング用 tracepoint
 echo 1 > /sys/kernel/tracing/events/dma/enable
 cat /sys/kernel/tracing/trace
 ```
 
-A common tuning mistake for high-throughput drivers: using `dma_map_single()` per-packet instead of `dma_map_sg()` with batched scatter-gather entries. `dma_map_sg()` coalesces contiguous pages and issues fewer IOVA allocations, reducing both allocator pressure and the number of IOMMU page table entries that must be flushed.
+高スループットのドライバでよくあるチューニングの誤りは、バッチ化したスキャッタギャザーエントリで`dma_map_sg()`を使う代わりに、パケットごとに`dma_map_single()`を使うことである。`dma_map_sg()`は連続したページをまとめてIOVAの割り当て回数を減らすので、アロケータへの負荷と、フラッシュしなければならないIOMMUページテーブルエントリの数の両方が減る。
 
-## Source files {#source-files}
+## ソースファイル {#source-files}
 
-| File | Role |
+| ファイル | 役割 |
 |------|------|
-| `drivers/iommu/iova.c` | IOVA rbtree allocator, rcache, flush queues |
-| `include/linux/iova.h` | `iova_domain`, `iova`, `iova_rcache`, `iova_fq` struct definitions |
-| `drivers/iommu/dma-iommu.c` | DMA-IOMMU glue: calls into iova.c from DMA API |
-| `drivers/iommu/iommu.c` | `iommu_iotlb_gather` accumulation and sync |
+| `drivers/iommu/iova.c` | IOVAのrbtreeアロケータ、rcache、フラッシュキュー |
+| `include/linux/iova.h` | `iova_domain`、`iova`、`iova_rcache`、`iova_fq`構造体の定義 |
+| `drivers/iommu/dma-iommu.c` | DMA-IOMMUのグルー: DMA APIからiova.cを呼び出す |
+| `drivers/iommu/iommu.c` | `iommu_iotlb_gather`の蓄積とsync |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/iommu/iova.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iova.c) — `alloc_iova()`, `free_iova()`, the rbtree allocator, and the per-CPU rcache/magazine implementation
-- [include/linux/iova.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/iova.h) — `struct iova_domain` and `struct iova` definitions
-- [drivers/iommu/dma-iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/dma-iommu.c) — `iommu_dma_alloc_iova()` / `iommu_dma_free_iova()`, and the flush-queue (`struct iova_fq`) implementation
+- [drivers/iommu/iova.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iova.c) — `alloc_iova()`、`free_iova()`、rbtreeアロケータ、per-CPU rcache/マガジンの実装
+- [include/linux/iova.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/iova.h) — `struct iova_domain`と`struct iova`の定義
+- [drivers/iommu/dma-iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/dma-iommu.c) — `iommu_dma_alloc_iova()` / `iommu_dma_free_iova()`、およびフラッシュキュー（`struct iova_fq`）の実装
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [DMA API](dma-api.md) — `dma_map_single`, `dma_map_sg`, swiotlb
-- [IOMMU Architecture](iommu-arch.md) — IOMMU domains, IOTLB flush mechanics
-- [IOMMU War Stories](war-stories.md) — IOVA allocator as a perf bottleneck (real incident)
+- [DMA API](dma-api.md) — `dma_map_single`、`dma_map_sg`、swiotlb
+- [IOMMUアーキテクチャ](iommu-arch.md) — IOMMUドメイン、IOTLBフラッシュの仕組み
+- [IOMMU事件簿](war-stories.md) — 性能ボトルネックとなったIOVAアロケータ（実際のインシデント）

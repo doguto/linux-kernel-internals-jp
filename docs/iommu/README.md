@@ -1,10 +1,10 @@
-# IOMMU and DMA {#iommu-and-dma}
+# IOMMUとDMA {#iommu-and-dma}
 
-> Hardware address translation and memory protection for devices
+> デバイスのためのハードウェアアドレス変換とメモリ保護
 
-## Why IOMMU? {#why-iommu}
+## なぜIOMMUか {#why-iommu}
 
-Without an IOMMU, a DMA-capable device can access any physical memory — a compromised network card can read or overwrite kernel memory. The IOMMU sits between the PCIe bus and physical memory, translating device I/O virtual addresses (IOVAs) to physical addresses and enforcing access permissions.
+IOMMUがなければ、DMA可能なデバイスは任意の物理メモリにアクセスできる。乗っ取られたネットワークカードがカーネルメモリを読み取ったり上書きしたりできてしまう。IOMMUはPCIeバスと物理メモリの間に位置し、デバイスのI/O仮想アドレス（IOVA）を物理アドレスに変換するとともに、アクセス権限を強制する。
 
 ```
 Without IOMMU:
@@ -15,53 +15,53 @@ With IOMMU:
                   (checked against per-domain page tables)
 ```
 
-Beyond security, the IOMMU enables:
+セキュリティ以外にも、IOMMUは次のことを可能にする。
 
-- **IOVA remapping**: devices with < 64-bit address buses can DMA to high memory
-- **Scatter-gather flattening**: discontiguous physical pages appear contiguous to the device
-- **Device passthrough (VFIO)**: safely assign physical devices to VMs
+- **IOVAリマッピング**: アドレスバスが64ビット未満のデバイスでも高位メモリにDMAできる
+- **スキャッタギャザーの平坦化**: 不連続な物理ページがデバイスからは連続して見える
+- **デバイスパススルー（VFIO）**: 物理デバイスを安全にVMへ割り当てる
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [IOMMU Architecture](iommu-arch.md) | Intel VT-d, AMD-Vi, iommu_domain, IOMMU groups, VFIO |
-| [DMA API](dma-api.md) | dma_alloc_coherent, dma_map_single/sg, swiotlb, IOVA allocation |
-| [IOVA Allocator](iova-allocator.md) | iova_domain, rbtree, per-CPU rcache magazines, flush queues |
-| [Shared Virtual Addressing](sva.md) | PASID, ATS, PRI, iommu_sva API, Intel DSA, ARM SMMU v3 |
-| [VFIO Internals](vfio-internals.md) | Container/group/device hierarchy, mdev, MSI irqfd, KVM passthrough |
-| [IOMMU War Stories](war-stories.md) | DMAR faults, IOVA perf bottleneck, group isolation, swiotlb exhaustion |
+| [IOMMUアーキテクチャ](iommu-arch.md) | Intel VT-d、AMD-Vi、iommu_domain、IOMMUグループ、VFIO |
+| [DMA API](dma-api.md) | dma_alloc_coherent、dma_map_single/sg、swiotlb、IOVA割り当て |
+| [IOVAアロケータ](iova-allocator.md) | iova_domain、rbtree、per-CPU rcacheマガジン、フラッシュキュー |
+| [共有仮想アドレッシング](sva.md) | PASID、ATS、PRI、iommu_sva API、Intel DSA、ARM SMMU v3 |
+| [VFIOの内部](vfio-internals.md) | コンテナ/グループ/デバイスの階層、mdev、MSI irqfd、KVMパススルー |
+| [IOMMU事件簿](war-stories.md) | DMARフォールト、IOVAの性能ボトルネック、グループ分離、swiotlb枯渇 |
 
-## Reading order {#reading-order}
+## 読む順番 {#reading-order}
 
-New to IOMMU internals? Work through the pages in this order:
+IOMMUの内部に初めて触れるなら、次の順にページを読み進めるとよい。
 
-1. **[README](README.md)** — this page; why IOMMU exists, quick reference
-2. **[IOMMU Architecture](iommu-arch.md)** — hardware (VT-d, AMD-Vi, ARM SMMU), the kernel abstraction (`iommu_domain`, groups), IOTLB
-3. **[DMA API](dma-api.md)** — how drivers actually use DMA: coherent, streaming, scatter-gather, swiotlb
-4. **[IOVA Allocator](iova-allocator.md)** — the address allocator underneath DMA mapping; rcache and flush queue internals; performance impact
-5. **[Shared Virtual Addressing](sva.md)** — advanced: PASID-based VA sharing for accelerators; requires understanding of IOMMU domains
-6. **[VFIO Internals](vfio-internals.md)** — device passthrough architecture; page pinning, interrupt delivery, mdev
-7. **[IOMMU War Stories](war-stories.md)** — real incidents tying all the above together; good for consolidating understanding
+1. **[README](README.md)** — このページ。IOMMUが存在する理由とクイックリファレンス
+2. **[IOMMUアーキテクチャ](iommu-arch.md)** — ハードウェア（VT-d、AMD-Vi、ARM SMMU）、カーネルの抽象化（`iommu_domain`、グループ）、IOTLB
+3. **[DMA API](dma-api.md)** — ドライバが実際にDMAをどう使うか。コヒーレント、ストリーミング、スキャッタギャザー、swiotlb
+4. **[IOVAアロケータ](iova-allocator.md)** — DMAマッピングの下にあるアドレスアロケータ。rcacheとフラッシュキューの内部、性能への影響
+5. **[共有仮想アドレッシング](sva.md)** — 発展的内容。アクセラレータ向けのPASIDベースのVA共有。IOMMUドメインの理解が前提
+6. **[VFIOの内部](vfio-internals.md)** — デバイスパススルーのアーキテクチャ。ページのピン留め、割り込み配送、mdev
+7. **[IOMMU事件簿](war-stories.md)** — ここまでの内容すべてを結びつける実際のインシデント。理解の定着に役立つ
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Check if IOMMU is active
+# IOMMUが有効か確認する
 dmesg | grep -i iommu | head -20
 # DMAR: IOMMU enabled
 # AMD-Vi: device isolation enabled
 
-# List IOMMU groups (devices that share address space)
+# IOMMUグループ（アドレス空間を共有するデバイス群）を一覧表示する
 ls /sys/kernel/iommu_groups/
 for g in /sys/kernel/iommu_groups/*/devices/*; do echo "$g"; done
 
-# Enable IOMMU at boot (kernel parameter)
+# ブート時にIOMMUを有効にする（カーネルパラメータ）
 # Intel: intel_iommu=on
 # AMD:   amd_iommu=on
-# Both:  iommu=pt (passthrough — no translation, just groups)
+# 両方:  iommu=pt (パススルー — 変換なし、グループのみ)
 
-# VFIO: bind a device for VM passthrough
+# VFIO: VMパススルー用にデバイスをバインドする
 echo "8086 1521" | sudo tee /sys/bus/pci/drivers/vfio-pci/new_id
 echo "0000:01:00.0" | sudo tee /sys/bus/pci/devices/0000:01:00.0/driver/unbind
 echo "0000:01:00.0" | sudo tee /sys/bus/pci/drivers/vfio-pci/bind

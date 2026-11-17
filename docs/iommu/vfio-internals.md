@@ -1,20 +1,20 @@
-# VFIO Internals {#vfio-internals}
+# VFIOの内部 {#vfio-internals}
 
-> Device passthrough: containers, groups, mdev, and KVM integration
+> デバイスパススルー: コンテナ、グループ、mdev、KVMとの統合
 
-## Overview {#overview}
+## 概要 {#overview}
 
-VFIO (Virtual Function I/O) is the kernel framework for safely exposing physical devices to userspace processes or virtual machines. It uses the IOMMU to enforce memory access isolation while giving the userspace driver (or hypervisor) direct access to device MMIO, interrupts, and DMA.
+VFIO（Virtual Function I/O）は、物理デバイスをユーザー空間のプロセスや仮想マシンに安全に公開するためのカーネルフレームワークである。IOMMUを使ってメモリアクセスの分離を強制しつつ、ユーザー空間ドライバ（またはハイパーバイザ）にデバイスのMMIO、割り込み、DMAへの直接アクセスを与える。
 
-The three primary use cases are:
+主なユースケースは次の3つである。
 
-- **VM device passthrough**: QEMU/KVM passes a physical NIC, GPU, or NVMe to a guest.
-- **Userspace drivers**: DPDK binds NICs to VFIO for kernel-bypass packet processing.
-- **Mediated devices**: A physical GPU or NIC is split into virtual instances assigned to separate VMs.
+- **VMへのデバイスパススルー**: QEMU/KVMが物理NIC、GPU、NVMeをゲストに渡す。
+- **ユーザー空間ドライバ**: DPDKがカーネルバイパスのパケット処理のためにNICをVFIOにバインドする。
+- **Mediated device**: 物理GPUやNICを仮想インスタンスに分割し、別々のVMに割り当てる。
 
-VFIO source lives in `drivers/vfio/` with headers in `include/linux/vfio.h`.
+VFIOのソースは`drivers/vfio/`にあり、ヘッダは`include/linux/vfio.h`にある。
 
-## Container → group → device hierarchy {#container-group-device-hierarchy}
+## コンテナ → グループ → デバイスの階層 {#container-group-device-hierarchy}
 
 ```
 /dev/vfio/vfio          (VFIO container)
@@ -27,13 +27,13 @@ VFIO source lives in `drivers/vfio/` with headers in `include/linux/vfio.h`.
             └── 0000:03:00.0   (NVMe)
 ```
 
-**Container**: an IOMMU domain. All groups added to a container share one IOMMU address space. The container is the unit that receives `VFIO_IOMMU_MAP_DMA` calls — mapping guest physical memory into the device's IOVA space.
+**コンテナ**: IOMMUドメインである。コンテナに追加されたすべてのグループは1つのIOMMUアドレス空間を共有する。コンテナは`VFIO_IOMMU_MAP_DMA`呼び出し（ゲストの物理メモリをデバイスのIOVA空間にマッピングする）を受け取る単位である。
 
-**Group**: maps to an IOMMU group (the smallest isolatable set of devices). A group must be added to a container before its devices can be opened. All devices in a group share the container's IOMMU domain — it is not possible to assign devices in the same group to different VMs.
+**グループ**: IOMMUグループ（分離可能なデバイスの最小集合）に対応する。グループのデバイスを開く前に、グループをコンテナに追加しなければならない。グループ内のすべてのデバイスはコンテナのIOMMUドメインを共有する。同じグループのデバイスを別々のVMに割り当てることはできない。
 
-**Device**: the individual PCI function. Once the group is in a container, the device fd allows MMIO region mapping, interrupt setup, and device reset.
+**デバイス**: 個々のPCIファンクションである。グループがコンテナに入ると、デバイスのfdを通じてMMIO領域のマッピング、割り込みの設定、デバイスのリセットが可能になる。
 
-## Core data structures {#core-data-structures}
+## 中核となるデータ構造 {#core-data-structures}
 
 ```c
 /* include/linux/vfio.h */
@@ -41,11 +41,11 @@ struct vfio_device {
     struct device            *dev;
     const struct vfio_device_ops *ops;
     struct vfio_group        *group;
-    /* IOMMU binding is via iommufd_device in 6.x+ */
+    /* 6.x 以降、IOMMU との結び付けは iommufd_device 経由 */
     /* ... */
 };
 
-/* drivers/vfio/vfio.h -- private to the VFIO core, not the public header above */
+/* drivers/vfio/vfio.h -- VFIO コア専用。上の公開ヘッダではない */
 struct vfio_group {
     struct device             dev;
     struct cdev                cdev;
@@ -57,33 +57,33 @@ struct vfio_group {
     /* ... */
 };
 
-/* drivers/vfio/container.c -- no domain pointer; the container just
- * dispatches to whichever IOMMU backend (iommu_driver) is set */
+/* drivers/vfio/container.c -- ドメインへのポインタはない。コンテナは
+ * 設定されている IOMMU バックエンド（iommu_driver）に処理を振り分けるだけ */
 struct vfio_container {
     struct kref                kref;
     struct list_head          group_list;
     struct rw_semaphore       group_lock;
     struct vfio_iommu_driver *iommu_driver;
-    void                     *iommu_data; /* driver-private (e.g. vfio_iommu) */
+    void                     *iommu_data; /* ドライバ固有（例: vfio_iommu） */
     bool                        noiommu;
 };
 ```
 
-The `vfio_device_ops` structure defines per-device operations (`open_device`/`close_device`, read, write, ioctl for MMIO/interrupt/reset).
+`vfio_device_ops`構造体は、デバイスごとの操作（`open_device`/`close_device`、read、write、MMIO/割り込み/リセット用のioctl）を定義する。
 
-## IOMMU type1 backend {#iommu-type1-backend}
+## IOMMU type1バックエンド {#iommu-type1-backend}
 
-The most common IOMMU backend is `vfio_iommu_type1` (`drivers/vfio/vfio_iommu_type1.c`). It handles x86 systems with Intel VT-d or AMD-Vi, and arm64 systems with ARM SMMU.
+最も一般的なIOMMUバックエンドは`vfio_iommu_type1`（`drivers/vfio/vfio_iommu_type1.c`）である。Intel VT-dまたはAMD-Viを持つx86システムと、ARM SMMUを持つarm64システムを扱う。
 
-### DMA mapping: pinning and mapping {#dma-mapping-pinning-and-mapping}
+### DMAマッピング: ピン留めとマッピング {#dma-mapping-pinning-and-mapping}
 
-When QEMU calls `VFIO_IOMMU_MAP_DMA`, the kernel must:
+QEMUが`VFIO_IOMMU_MAP_DMA`を呼ぶと、カーネルは次のことをしなければならない。
 
-1. **Pin the host pages** (user virtual address → physical pages, preventing swap).
-2. **Map into the IOMMU domain** (IOVA → physical address, so the device can DMA to guest memory).
+1. **ホストのページをピン留めする**（ユーザー仮想アドレス → 物理ページ。スワップを防ぐ）。
+2. **IOMMUドメインにマップする**（IOVA → 物理アドレス。デバイスがゲストメモリにDMAできるようにする）。
 
 ```c
-/* drivers/vfio/vfio_iommu_type1.c (simplified) */
+/* drivers/vfio/vfio_iommu_type1.c（簡略版） */
 static int vfio_dma_do_map(struct vfio_iommu *iommu,
                             struct vfio_iommu_type1_dma_map *map)
 {
@@ -91,37 +91,37 @@ static int vfio_dma_do_map(struct vfio_iommu *iommu,
     dma_addr_t iova = map->iova;
     size_t size = map->size;
 
-    /* Record the mapping in our rb-tree first, before any pinning */
-    dma = vfio_find_dma(iommu, iova, size);  /* ensure no overlap */
-    vfio_link_dma(iommu, dma);               /* insert into tree */
+    /* ピン留めの前に、まずマッピングを rb-tree に記録する */
+    dma = vfio_find_dma(iommu, iova, size);  /* 重複がないことを確認 */
+    vfio_link_dma(iommu, dma);               /* ツリーに挿入 */
 
-    /* Pin the pages AND create IOMMU page table entries -- both happen
-     * inside this one call, not as separate steps: vfio_pin_map_dma()
-     * pins (HVA → HPA, via pin_user_pages_remote() further down the
-     * call chain) and maps (IOVA → HPA) each domain in
-     * iommu->domain_list together, one domain at a time (a container
-     * can span more than one IOMMU domain -- not a single
-     * iommu->domain pointer) */
+    /* ページのピン留めと IOMMU ページテーブルエントリの作成 -- どちらも
+     * 別々のステップではなく、この 1 回の呼び出しの中で行われる:
+     * vfio_pin_map_dma() は、iommu->domain_list 内の各ドメインについて、
+     * ピン留め（HVA → HPA、呼び出しチェーンの先の pin_user_pages_remote() 経由）と
+     * マップ（IOVA → HPA）をドメインごとにまとめて行う（コンテナは
+     * 複数の IOMMU ドメインにまたがりうる -- 単一の
+     * iommu->domain ポインタではない） */
     vfio_pin_map_dma(iommu, dma, size);
 }
 ```
 
-The `pin_user_pages_remote()` call (introduced in kernel 5.6 to replace `get_user_pages_remote()` for DMA pinning) increments the page refcount and marks pages as pinned, preventing them from being swapped or moved while the device may be accessing them.
+`pin_user_pages_remote()`呼び出し（DMA用のピン留めで`get_user_pages_remote()`を置き換えるためにカーネル5.6で導入された）は、ページの参照カウントを増やしてページをピン留め済みとしてマークし、デバイスがアクセスしている可能性のある間、ページがスワップされたり移動されたりするのを防ぐ。
 
-### The DMA map rb-tree {#the-dma-map-rb-tree}
+### DMAマップのrb-tree {#the-dma-map-rb-tree}
 
-All active DMA mappings are tracked in a red-black tree, keyed and searched for overlap by IOVA (`vfio_find_dma()`) — not a radix tree or the kernel's interval-tree API. This allows the kernel to:
+すべてのアクティブなDMAマッピングは赤黒木で追跡され、IOVAをキーとして重複が探索される（`vfio_find_dma()`）。radix treeやカーネルのinterval tree APIではない。これによりカーネルは次のことができる。
 
-- Detect and reject overlapping `MAP_DMA` requests.
-- Enumerate all mappings for cleanup when a group is removed.
-- Implement `VFIO_IOMMU_UNMAP_DMA` by looking up and removing entries.
+- 重複する`MAP_DMA`要求を検出して拒否する。
+- グループが削除されたときに、クリーンアップのためすべてのマッピングを列挙する。
+- エントリを検索して削除することで`VFIO_IOMMU_UNMAP_DMA`を実装する。
 
 ```c
-/* struct vfio_iommu tracks mappings */
+/* struct vfio_iommu がマッピングを追跡する */
 struct vfio_iommu {
-    struct list_head       domain_list; /* one container can span >1 IOMMU domain */
-    struct rb_root          dma_list;   /* rb-tree of vfio_dma, overlap-searched by IOVA */
-    unsigned int            dma_avail;   /* remaining DMA map limit */
+    struct list_head       domain_list; /* 1 つのコンテナは複数の IOMMU ドメインにまたがりうる */
+    struct rb_root          dma_list;   /* vfio_dma の rb-tree。IOVA で重複を探索 */
+    unsigned int            dma_avail;   /* 残りの DMA マップ数の上限 */
     /* ... */
 };
 
@@ -138,23 +138,23 @@ struct vfio_dma {
     unsigned long         vaddr;
     size_t                size;
     int                   prot;        /* IOMMU_READ | IOMMU_WRITE */
-    struct rb_root        pfn_list;    /* pinned pages */
+    struct rb_root        pfn_list;    /* ピン留めされたページ */
 };
 ```
 
-### IOMMU backend variants {#iommu-backend-variants}
+### IOMMUバックエンドの種類 {#iommu-backend-variants}
 
-| Backend | Where used | Notes |
+| バックエンド | 使われる場所 | 備考 |
 |---------|-----------|-------|
-| `vfio_iommu_type1` | x86 (VT-d, AMD-Vi), arm64 (SMMU) | Standard; pin_user_pages + iommu_map |
-| `vfio_iommu_spapr_tce` | PowerPC (POWER8/9 TCE IOMMU) | TCE (Translation Control Entry) tables |
-| `vfio-noiommu` | No IOMMU present | Unsafe; no isolation; requires `enable_unsafe_noiommu_mode=1` |
+| `vfio_iommu_type1` | x86（VT-d、AMD-Vi）、arm64（SMMU） | 標準。pin_user_pages + iommu_map |
+| `vfio_iommu_spapr_tce` | PowerPC（POWER8/9 TCE IOMMU） | TCE（Translation Control Entry）テーブル |
+| `vfio-noiommu` | IOMMUが存在しない場合 | 安全でない。分離なし。`enable_unsafe_noiommu_mode=1`が必要 |
 
-`vfio-noiommu` exists for development boards and embedded systems without an IOMMU. It provides the VFIO userspace API but offers no isolation — the device can DMA anywhere. It is a compile-time option and prints a warning in dmesg.
+`vfio-noiommu`は、IOMMUを持たない開発ボードや組み込みシステムのために存在する。VFIOのユーザー空間APIを提供するが、分離はまったく提供しない。デバイスはどこにでもDMAできる。これはコンパイル時のオプションであり、dmesgに警告を出力する。
 
-## MSI/MSI-X interrupt delivery {#msimsi-x-interrupt-delivery}
+## MSI/MSI-X割り込みの配送 {#msimsi-x-interrupt-delivery}
 
-One of the most complex parts of VFIO is delivering device interrupts to the VM without userspace round-trips. The full path for MSI delivery:
+VFIOで最も複雑な部分の1つが、ユーザー空間との往復なしにデバイスの割り込みをVMに配送することである。MSI配送の全経路は次のとおり。
 
 ```
 Device raises MSI
@@ -175,14 +175,14 @@ KVM in-kernel irqchip (APIC emulation)
 vCPU interrupt injection → guest ISR
 ```
 
-### vfio_irq_ctx and eventfd {#vfioirqctx-and-eventfd}
+### vfio_irq_ctxとeventfd {#vfioirqctx-and-eventfd}
 
 ```c
 /* drivers/vfio/pci/vfio_pci_intrs.c */
 struct vfio_pci_irq_ctx {
-    struct vfio_pci_core_device *vdev;    /* the device this IRQ context belongs to */
-    struct eventfd_ctx        *trigger;  /* eventfd for interrupt notification */
-    struct virqfd             *unmask;   /* for level-triggered IRQs */
+    struct vfio_pci_core_device *vdev;    /* この IRQ コンテキストが属するデバイス */
+    struct eventfd_ctx        *trigger;  /* 割り込み通知用の eventfd */
+    struct virqfd             *unmask;   /* レベルトリガ IRQ 用 */
     struct virqfd             *mask;
     char                      *name;
     bool                       masked;
@@ -190,75 +190,75 @@ struct vfio_pci_irq_ctx {
 };
 ```
 
-When QEMU sets up interrupts via `VFIO_DEVICE_SET_IRQS`, VFIO creates an `eventfd` for each MSI vector. The device's MSI handler calls `eventfd_signal(ctx->trigger)`, which wakes any waiter on the eventfd.
+QEMUが`VFIO_DEVICE_SET_IRQS`で割り込みを設定すると、VFIOはMSIベクタごとに`eventfd`を作成する。デバイスのMSIハンドラは`eventfd_signal(ctx->trigger)`を呼び、eventfdで待っている者を起こす。
 
-### irqfd: the fast path {#irqfd-the-fast-path}
+### irqfd: 高速パス {#irqfd-the-fast-path}
 
-The key optimization is `irqfd` — KVM's mechanism for injecting interrupts from an eventfd without returning to userspace:
+鍵となる最適化が`irqfd`である。これは、ユーザー空間に戻ることなくeventfdから割り込みを注入するKVMの仕組みである。
 
 ```c
 /* KVM irqfd (virt/kvm/eventfd.c) */
 /*
- * QEMU calls KVM_IRQFD ioctl to associate an eventfd with a guest IRQ line.
- * When the eventfd is signaled (by VFIO's MSI handler), the irqfd workqueue
- * fires kvm_set_irq() directly in the host kernel.
+ * QEMU は KVM_IRQFD ioctl を呼んで、eventfd をゲストの IRQ ラインに関連付ける。
+ * eventfd が（VFIO の MSI ハンドラによって）シグナルされると、irqfd の workqueue が
+ * ホストカーネル内で直接 kvm_set_irq() を実行する。
  */
 ```
 
-Flow with irqfd:
-1. QEMU configures `KVM_IRQFD` binding eventfd → guest IRQ number.
-2. Device MSI fires → host interrupt handler → `eventfd_signal()`.
-3. irqfd's wait queue wakes → `kvm_set_irq()` runs → injects interrupt into guest vCPU.
+irqfdを使った流れ:
+1. QEMUが`KVM_IRQFD`を設定し、eventfd → ゲストIRQ番号を結び付ける。
+2. デバイスのMSIが発火する → ホストの割り込みハンドラ → `eventfd_signal()`。
+3. irqfdの待ちキューが起こされる → `kvm_set_irq()`が実行される → ゲストのvCPUに割り込みを注入する。
 
-No userspace is involved in steps 2–3. The guest sees its interrupt within microseconds of the device raising MSI.
+ステップ2〜3にユーザー空間は一切関与しない。ゲストは、デバイスがMSIを上げてから数マイクロ秒以内に割り込みを受け取る。
 
-For legacy INTx interrupts, the path is slower: VFIO uses `irqfd` plus a resample mechanism to handle level-triggered semantics.
+レガシーなINTx割り込みでは経路はより遅い。VFIOはレベルトリガのセマンティクスを扱うために、`irqfd`に加えてリサンプル機構を使う。
 
-## mdev: Mediated Devices {#mdev-mediated-devices}
+## mdev: Mediated Device {#mdev-mediated-devices}
 
-mdev allows a physical device with internal resources (GPU compute engines, NIC queues, crypto engines) to be partitioned into multiple independent virtual devices, each assignable to a different VM.
+mdevは、内部リソース（GPUの計算エンジン、NICのキュー、暗号エンジン）を持つ物理デバイスを、複数の独立した仮想デバイスに分割できるようにする。それぞれを別のVMに割り当てられる。
 
-### Architecture (kernel 5.x) {#architecture-kernel-5x}
+### アーキテクチャ（カーネル5.x） {#architecture-kernel-5x}
 
 ```c
-/* include/linux/mdev.h — current struct shape; the mdev_parent_ops-based
- * design this section otherwise describes predates this and was replaced
- * (see "struct vfio_device_ops" below) */
+/* include/linux/mdev.h — 現在の構造体の形。この節がそれ以外の部分で説明している
+ * mdev_parent_ops ベースの設計はこれより前のもので、置き換えられた
+ * （下記の「struct vfio_device_ops」を参照） */
 struct mdev_parent {
-    struct device            *dev;         /* physical device (PF) */
+    struct device            *dev;         /* 物理デバイス（PF） */
     struct mdev_driver       *mdev_driver;
-    struct kset              *mdev_types_kset;  /* one entry per supported type */
+    struct kset              *mdev_types_kset;  /* サポートする type ごとに 1 エントリ */
     struct rw_semaphore       unreg_sem;
-    struct mdev_type        **types;       /* each type is a resource slice */
+    struct mdev_type        **types;       /* 各 type はリソースの一切れ */
     unsigned int              nr_types;
     atomic_t                  available_instances;
 };
 
 struct mdev_device {
     struct device             dev;
-    guid_t                    uuid;        /* identifies the mdev instance */
+    guid_t                    uuid;        /* mdev インスタンスを識別する */
     struct list_head          next;
-    struct mdev_type         *type;        /* the resource slice this instance was created from */
+    struct mdev_type         *type;        /* このインスタンスの作成元のリソーススライス */
     bool                      active;
 };
 ```
 
-The physical device driver registers a `mdev_parent` with supported mdev types. Each type describes a resource slice (e.g., "1/4 of the GPU"). Userspace creates instances via sysfs:
+物理デバイスのドライバは、サポートするmdev typeとともに`mdev_parent`を登録する。各typeはリソースの一切れ（例: 「GPUの1/4」）を表す。ユーザー空間はsysfs経由でインスタンスを作成する。
 
 ```bash
-# Create an nvidia vGPU mdev instance on GPU 0000:01:00.0
+# GPU 0000:01:00.0 上に nvidia vGPU の mdev インスタンスを作成する
 UUID=$(uuidgen)
 echo $UUID > /sys/bus/pci/devices/0000:01:00.0/mdev_supported_types/nvidia-35/create
-# nvidia-35 = GRID RTX 6000-1Q (1GB vGPU type)
+# nvidia-35 = GRID RTX 6000-1Q（1GB の vGPU type）
 
-# The mdev appears as a new device:
+# mdev は新しいデバイスとして現れる:
 ls /sys/bus/mdev/devices/
 # $UUID
 ```
 
-### struct vfio_device_ops (kernel 5.19+) {#struct-vfiodeviceops-kernel-519}
+### struct vfio_device_ops（カーネル5.19以降） {#struct-vfiodeviceops-kernel-519}
 
-In Linux 5.19, the older `mdev_parent_ops` interface was consolidated into `struct vfio_device_ops` (commit `6b42f491e17c`, "vfio/mdev: Remove mdev_parent_ops"). Physical device drivers that support mdev now implement `vfio_device_ops` directly:
+Linux 5.19で、古い`mdev_parent_ops`インターフェースは`struct vfio_device_ops`に統合された（コミット`6b42f491e17c`、"vfio/mdev: Remove mdev_parent_ops"）。mdevをサポートする物理デバイスのドライバは、現在では`vfio_device_ops`を直接実装する。
 
 ```c
 /* include/linux/vfio.h */
@@ -268,8 +268,8 @@ struct vfio_device_ops {
     int  (*init)(struct vfio_device *vdev);
     void (*release)(struct vfio_device *vdev);
 
-    /* IOMMUFD lifecycle — bind the device to an iommufd context and
-     * attach it to an IOAS/hwpt; omitted from this sketch, see below */
+    /* IOMMUFD のライフサイクル — デバイスを iommufd コンテキストにバインドし、
+     * IOAS/hwpt にアタッチする。このスケッチでは扱わない。下記を参照 */
     int  (*bind_iommufd)(struct vfio_device *vdev, struct iommufd_ctx *ictx, u32 *out_device_id);
     void (*unbind_iommufd)(struct vfio_device *vdev);
     int  (*attach_ioas)(struct vfio_device *vdev, u32 *pt_id);
@@ -290,20 +290,20 @@ struct vfio_device_ops {
 
     int  (*match)(struct vfio_device *vdev, char *buf);
     void (*dma_unmap)(struct vfio_device *vdev, u64 iova, u64 length);
-    /* ... plus pasid_attach_ioas/pasid_detach_ioas, match_token_uuid,
-     * get_region_info_caps, and device_feature */
+    /* ... さらに pasid_attach_ioas/pasid_detach_ioas、match_token_uuid、
+     * get_region_info_caps、device_feature がある */
 };
 ```
 
-The `bind_iommufd`/`attach_ioas` pair (and their PASID-scoped variants) are the device-cdev + IOMMUFD ownership hooks discussed in [the virtualization-side VFIO page](../virtualization/vfio.md#the-newer-model-device-cdev-iommufd) — they only run when a device is opened through `/dev/vfio/devices/vfioN` rather than the classic group/container path this page otherwise describes.
+`bind_iommufd`/`attach_ioas`の組（およびそのPASIDスコープ版）は、[仮想化側のVFIOページ](../virtualization/vfio.md#the-newer-model-device-cdev-iommufd)で扱うdevice cdev + IOMMUFDの所有権フックである。これらは、このページがそれ以外の部分で説明している従来のグループ/コンテナ経路ではなく、`/dev/vfio/devices/vfioN`を通じてデバイスが開かれた場合にのみ実行される。
 
-**Intel GVT-g** (Intel integrated GPU virtualization, `drivers/gpu/drm/i915/gvt/`) and **nvidia vGPU** implement their own `vfio_device_ops`. The mdev device appears to QEMU as a standard VFIO device, so no QEMU changes are needed — QEMU just opens `/dev/vfio/<group>` and operates normally.
+**Intel GVT-g**（Intel内蔵GPUの仮想化、`drivers/gpu/drm/i915/gvt/`）と**nvidia vGPU**は、独自の`vfio_device_ops`を実装している。mdevデバイスはQEMUからは標準のVFIOデバイスに見えるので、QEMUの変更は不要である。QEMUは単に`/dev/vfio/<group>`を開いて通常どおり動作する。
 
-### mdev isolation model {#mdev-isolation-model}
+### mdevの分離モデル {#mdev-isolation-model}
 
-mdev devices in the same physical function share one IOMMU group (the PF's group). They therefore share one IOMMU domain. The isolation between vGPU instances is enforced by the physical device's own hardware (GPU MMU, NIC queue isolation) — not by separate IOMMU domains. This is weaker than full device passthrough, and the security model depends entirely on the correctness of the PF driver's virtual device implementation.
+同じ物理ファンクションのmdevデバイスは、1つのIOMMUグループ（PFのグループ）を共有する。したがって1つのIOMMUドメインを共有する。vGPUインスタンス間の分離は、別々のIOMMUドメインによってではなく、物理デバイス自身のハードウェア（GPUのMMU、NICのキュー分離）によって強制される。これは完全なデバイスパススルーより弱く、セキュリティモデルは完全にPFドライバの仮想デバイス実装の正しさに依存する。
 
-## Complete VM passthrough: QEMU → KVM flow {#complete-vm-passthrough-qemu-kvm-flow}
+## VMパススルーの全体像: QEMU → KVMの流れ {#complete-vm-passthrough-qemu-kvm-flow}
 
 ```
 QEMU process
@@ -330,112 +330,112 @@ Runtime:
   Device MSI:    Device → IOMMU interrupt remap → host IRQ → irqfd → vCPU
 ```
 
-### VFIO_IOMMU_MAP_DMA in detail {#vfioiommumap_dma-in-detail}
+### VFIO_IOMMU_MAP_DMAの詳細 {#vfioiommumap_dma-in-detail}
 
-QEMU maps all guest RAM into the IOMMU domain at guest startup. For a 4 GB guest:
+QEMUはゲストの起動時に、ゲストのRAM全体をIOMMUドメインにマップする。4 GBのゲストの場合は次のようになる。
 
 ```c
 struct vfio_iommu_type1_dma_map dma_map = {
     .argsz = sizeof(dma_map),
     .flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
-    .vaddr = (uint64_t)guest_ram_hva,  /* QEMU's VA for guest RAM */
-    .iova  = 0x0,                      /* guest physical address base */
+    .vaddr = (uint64_t)guest_ram_hva,  /* ゲスト RAM に対する QEMU の VA */
+    .iova  = 0x0,                      /* ゲスト物理アドレスのベース */
     .size  = 0x100000000ULL,           /* 4 GB */
 };
 ioctl(container, VFIO_IOMMU_MAP_DMA, &dma_map);
 ```
 
-The kernel walks all 4 GB of QEMU's VA range, pins the pages, and creates IOMMU page table entries mapping IOVA 0..4GB → host physical pages. After this, the assigned device can DMA to guest physical addresses directly — the IOMMU translates them to the correct host pages.
+カーネルはQEMUのVA範囲4 GB全体をたどってページをピン留めし、IOVA 0..4GB → ホスト物理ページをマッピングするIOMMUページテーブルエントリを作成する。これ以降、割り当てられたデバイスはゲスト物理アドレスに直接DMAでき、IOMMUがそれを正しいホストページに変換する。
 
-## Security model {#security-model}
+## セキュリティモデル {#security-model}
 
-The IOMMU group is the security boundary. Devices in the same group share an IOMMU domain — they can DMA to each other without IOMMU enforcement. VFIO enforces:
+IOMMUグループがセキュリティ境界である。同じグループのデバイスはIOMMUドメインを共有し、IOMMUによる強制なしに互いにDMAできる。VFIOは次のことを強制する。
 
-1. **Whole-group assignment**: you cannot assign device A from a group to VM1 and device B from the same group to VM2. The entire group must go to one VM (or stay in the host).
-2. **No cross-group DMA**: IOMMU page tables ensure the device can only reach memory explicitly mapped via `VFIO_IOMMU_MAP_DMA`. A compromised device cannot reach host kernel memory or other VMs' memory.
-3. **Interrupt remapping required**: On Intel, VT-d interrupt remapping must be active (check `dmesg | grep "Enabled IRQ remapping"`). Without interrupt remapping, a device can inject arbitrary interrupts, bypassing the security model.
+1. **グループ全体の割り当て**: あるグループのデバイスAをVM1に、同じグループのデバイスBをVM2に割り当てることはできない。グループ全体を1つのVMに渡す（またはホストに残す）必要がある。
+2. **グループ間のDMAの禁止**: IOMMUページテーブルにより、デバイスは`VFIO_IOMMU_MAP_DMA`で明示的にマップされたメモリにしか到達できない。乗っ取られたデバイスがホストカーネルのメモリや他のVMのメモリに到達することはできない。
+3. **割り込みリマッピングが必須**: Intelでは、VT-dの割り込みリマッピングが有効になっていなければならない（`dmesg | grep "Enabled IRQ remapping"`で確認）。割り込みリマッピングがなければ、デバイスは任意の割り込みを注入でき、セキュリティモデルを迂回できてしまう。
 
 ```bash
-# Verify IOMMU is enforcing isolation (not passthrough mode)
+# IOMMU が分離を強制していること（パススルーモードでないこと）を確認する
 dmesg | grep -i "iommu"
-# DMAR: IOMMU enabled  ← translation active
-# (NOT: iommu=pt ← passthrough mode, no isolation)
+# DMAR: IOMMU enabled  ← 変換が有効
+# (iommu=pt ではないこと ← パススルーモード、分離なし)
 
-# Check interrupt remapping
+# 割り込みリマッピングを確認する
 dmesg | grep -i "remapping"
 # DMAR-IR: Enabled IRQ remapping in x2apic mode
 
-# List devices in a group before passthrough
+# パススルーの前にグループ内のデバイスを一覧表示する
 ls /sys/kernel/iommu_groups/12/devices/
-# If more than one device: both must be passed through together
+# 複数のデバイスがあれば、両方をまとめてパススルーしなければならない
 ```
 
-## Observing VFIO {#observing-vfio}
+## VFIOの観測 {#observing-vfio}
 
 ```bash
-# VFIO devices and groups
+# VFIO のデバイスとグループ
 ls /sys/bus/pci/drivers/vfio-pci/
 
-# Active VFIO containers/groups (requires root)
+# アクティブな VFIO のコンテナ/グループ（root 権限が必要）
 ls /dev/vfio/
 
-# DMAR faults during passthrough (device DMA'd to unmapped address)
+# パススルー中の DMAR フォールト（デバイスがマップされていないアドレスに DMA した）
 dmesg | grep DMAR
 
-# VFIO tracing (generic x86/arm64)
+# VFIO のトレーシング（汎用の x86/arm64）
 echo 1 > /sys/kernel/tracing/events/vfio/enable
 echo 1 > /sys/kernel/tracing/events/iommu/enable
-# Note: events/vfio_ap/ tracepoints are s390 (IBM Z) only — for AP
-# (Adjunct Processor) crypto devices. Do not use on x86 or arm64.
+# 注: events/vfio_ap/ の tracepoint は s390（IBM Z）専用 — AP
+# （Adjunct Processor）暗号デバイス向け。x86 や arm64 では使わないこと。
 
-# MSI eventfd: see how often interrupts fire
-# (via /proc/interrupts or perf stat)
+# MSI eventfd: 割り込みの発生頻度を見る
+# （/proc/interrupts または perf stat で）
 grep vfio /proc/interrupts
 ```
 
-## Source files {#source-files}
+## ソースファイル {#source-files}
 
-| File | Role |
+| ファイル | 役割 |
 |------|------|
-| `drivers/vfio/vfio_main.c` | Container/group/device lifecycle, ioctls |
-| `drivers/vfio/vfio_iommu_type1.c` | IOMMU backend: pin_user_pages, iommu_map, DMA map tree |
-| `drivers/vfio/pci/vfio_pci_core.c` | PCI device ops: MMIO mmap, config space, interrupts |
-| `drivers/vfio/pci/vfio_pci_intrs.c` | MSI/MSI-X/INTx eventfd setup, irqfd integration |
-| `drivers/vfio/mdev/` | Mediated device bus and sysfs interface |
-| `virt/kvm/eventfd.c` | `irqfd` — eventfd → vCPU interrupt injection |
-| `include/linux/vfio.h` | All VFIO struct and ioctl definitions |
-| `include/uapi/linux/vfio.h` | Userspace-visible ioctl API |
+| `drivers/vfio/vfio_main.c` | コンテナ/グループ/デバイスのライフサイクル、ioctl |
+| `drivers/vfio/vfio_iommu_type1.c` | IOMMUバックエンド: pin_user_pages、iommu_map、DMAマップのツリー |
+| `drivers/vfio/pci/vfio_pci_core.c` | PCIデバイスの操作: MMIOのmmap、コンフィギュレーション空間、割り込み |
+| `drivers/vfio/pci/vfio_pci_intrs.c` | MSI/MSI-X/INTxのeventfd設定、irqfdとの統合 |
+| `drivers/vfio/mdev/` | Mediated deviceのバスとsysfsインターフェース |
+| `virt/kvm/eventfd.c` | `irqfd` — eventfd → vCPUへの割り込み注入 |
+| `include/linux/vfio.h` | VFIOのすべての構造体とioctlの定義 |
+| `include/uapi/linux/vfio.h` | ユーザー空間から見えるioctl API |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — `vfio_register_group_dev()` and core device/group/container lifecycle
-- [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group` (private to the VFIO core, not `include/linux/vfio.h`)
-- [drivers/vfio/container.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/container.c) — `struct vfio_container` and the `VFIO_SET_IOMMU`/group-attach path
-- [drivers/vfio/vfio_iommu_type1.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_iommu_type1.c) — `vfio_dma_do_map()`, `struct vfio_iommu`, `struct vfio_dma`: the type1 IOMMU backend
-- [include/linux/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vfio.h) — `struct vfio_device` and `struct vfio_device_ops`, the public bus-driver API
-- [drivers/vfio/pci/vfio_pci_intrs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/pci/vfio_pci_intrs.c) — `struct vfio_pci_irq_ctx`: MSI/MSI-X/INTx eventfd setup
-- [drivers/vfio/mdev/mdev_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/mdev/mdev_core.c) — `mdev_register_parent()` and the mediated-device bus core
-- [virt/kvm/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/eventfd.c) — `irqfd`: a workqueue calls `kvm_set_irq()` when the bound eventfd fires
+- [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — `vfio_register_group_dev()`と、デバイス/グループ/コンテナのライフサイクルの中核
+- [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group`（VFIOコア専用であり、`include/linux/vfio.h`にはない）
+- [drivers/vfio/container.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/container.c) — `struct vfio_container`と`VFIO_SET_IOMMU`/グループのアタッチ経路
+- [drivers/vfio/vfio_iommu_type1.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_iommu_type1.c) — `vfio_dma_do_map()`、`struct vfio_iommu`、`struct vfio_dma`: type1 IOMMUバックエンド
+- [include/linux/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vfio.h) — `struct vfio_device`と`struct vfio_device_ops`。公開されたバスドライバAPI
+- [drivers/vfio/pci/vfio_pci_intrs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/pci/vfio_pci_intrs.c) — `struct vfio_pci_irq_ctx`: MSI/MSI-X/INTxのeventfd設定
+- [drivers/vfio/mdev/mdev_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/mdev/mdev_core.c) — `mdev_register_parent()`とmediated deviceバスのコア
+- [virt/kvm/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/virt/kvm/eventfd.c) — `irqfd`: バインドされたeventfdが発火するとworkqueueが`kvm_set_irq()`を呼ぶ
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`ioctl(2)`](https://man7.org/linux/man-pages/man2/ioctl.2.html) — every VFIO container/group/device operation (`VFIO_SET_IOMMU`, `VFIO_IOMMU_MAP_DMA`, `VFIO_DEVICE_SET_IRQS`, …) is an ioctl on a `/dev/vfio` file descriptor
+- [`ioctl(2)`](https://man7.org/linux/man-pages/man2/ioctl.2.html) — VFIOのコンテナ/グループ/デバイスの操作（`VFIO_SET_IOMMU`、`VFIO_IOMMU_MAP_DMA`、`VFIO_DEVICE_SET_IRQS`など）はすべて`/dev/vfio`のファイルディスクリプタに対するioctlである
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [IOMMU Architecture](iommu-arch.md) — IOMMU domains, groups, SR-IOV
-- [IOVA Allocator](iova-allocator.md) — the in-kernel IOVA allocator used by `dma_map_*()`; VFIO's type1 backend bypasses it, since userspace supplies the IOVA directly in `VFIO_IOMMU_MAP_DMA`
-- [IOMMU War Stories](war-stories.md) — group isolation blocking passthrough (real incident)
-- [VFIO: Virtual Function I/O and Device Passthrough](../virtualization/vfio.md) — the same subsystem from a setup/operations angle: QEMU passthrough, SR-IOV, mdev walkthrough
-- [Getting User Pages (GUP)](../mm/gup.md) — `pin_user_pages_remote()`, the page-pinning primitive behind VFIO's DMA mapping path
+- [IOMMUアーキテクチャ](iommu-arch.md) — IOMMUドメイン、グループ、SR-IOV
+- [IOVAアロケータ](iova-allocator.md) — `dma_map_*()`が使うカーネル内のIOVAアロケータ。ユーザー空間が`VFIO_IOMMU_MAP_DMA`でIOVAを直接指定するため、VFIOのtype1バックエンドはこれを迂回する
+- [IOMMU事件簿](war-stories.md) — グループ分離がパススルーを阻んだ事例（実際のインシデント）
+- [VFIO: Virtual Function I/Oとデバイスパススルー](../virtualization/vfio.md) — 同じサブシステムをセットアップ/運用の観点から扱う。QEMUパススルー、SR-IOV、mdevの手順解説
+- [ユーザーページの取得（GUP）](../mm/gup.md) — `pin_user_pages_remote()`。VFIOのDMAマッピング経路の背後にあるページピン留めのプリミティブ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Jonathan Corbet's original coverage of the VFIO framework and IOMMU-group-based device assignment (January 3, 2012)
+- [Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — VFIOフレームワークとIOMMUグループに基づくデバイス割り当てに関するJonathan Corbetの最初の記事（2012年1月3日）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — official kernel documentation for the container/group/device model and userspace API
-- [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — official documentation for the mdev framework
+- [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — コンテナ/グループ/デバイスモデルとユーザー空間APIに関する公式カーネルドキュメント
+- [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — mdevフレームワークに関する公式ドキュメント
