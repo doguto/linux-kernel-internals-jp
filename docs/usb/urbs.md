@@ -1,87 +1,87 @@
-# URBs and the Four Transfer Types {#urbs-and-the-four-transfer-types}
+# URBと4つの転送タイプ {#urbs-and-the-four-transfer-types}
 
-> The URB is the single unit of USB data movement — how it's built, submitted, and completed, and how its shape changes for each of the four transfer types
+> URBはUSBのデータ移動の唯一の単位である — それがどのように構築・投入・完了されるのか、そして4つの転送タイプごとにその形がどう変わるのか
 
-Every byte a USB driver moves rides in a **URB** (USB Request Block). It is the USB analogue of the block layer's [`bio`](../block/bio-request.md): a self-contained I/O request that a driver hands to the core, which schedules it on the bus and reports completion asynchronously through a callback. Understanding the URB lifecycle is most of understanding how to write a USB driver.
+USBドライバが動かすすべてのバイトは**URB**（USB Request Block）に乗って運ばれる。これはブロック層の[`bio`](../block/bio-request.md)のUSB版である。つまり、ドライバがコアに手渡す自己完結したI/Oリクエストであり、コアはそれをバス上にスケジュールし、完了をコールバック経由で非同期に通知する。URBのライフサイクルを理解することが、USBドライバの書き方を理解することの大部分を占める。
 
-## Anatomy of a URB {#anatomy-of-a-urb}
+## URBの構造 {#anatomy-of-a-urb}
 
 ```c
 struct urb {
-    struct usb_device *dev;          /* target device                    */
-    unsigned int   pipe;             /* endpoint + direction + type       */
-    void          *transfer_buffer;  /* DMA-able data buffer              */
+    struct usb_device *dev;          /* 対象デバイス                      */
+    unsigned int   pipe;             /* エンドポイント + 方向 + タイプ     */
+    void          *transfer_buffer;  /* DMA可能なデータバッファ           */
     u32            transfer_buffer_length;
-    u32            actual_length;     /* filled in on completion          */
-    int            status;            /* 0 or negative errno on completion */
-    usb_complete_t complete;          /* callback fired when done          */
-    void          *context;           /* driver's cookie                   */
-    int            interval;          /* polling period (periodic types)   */
-    int            number_of_packets; /* isochronous only                  */
+    u32            actual_length;     /* 完了時に設定される               */
+    int            status;            /* 完了時に0または負のerrno         */
+    usb_complete_t complete;          /* 完了時に呼ばれるコールバック      */
+    void          *context;           /* ドライバ用のクッキー              */
+    int            interval;          /* ポーリング周期（周期型タイプ）    */
+    int            number_of_packets; /* アイソクロナスのみ                */
     struct usb_iso_packet_descriptor iso_frame_desc[0];
     /* ... */
 };
 ```
 
-The **pipe** encodes the whole target in one integer — device, endpoint number, direction, and transfer type — built with helpers like `usb_sndbulkpipe(dev, ep)` (host→device bulk) or `usb_rcvintpipe(dev, ep)` (device→host interrupt). "snd/rcv" are always from the *host's* point of view.
+**pipe**は、対象全体 — デバイス、エンドポイント番号、方向、転送タイプ — を1つの整数にエンコードしたもので、`usb_sndbulkpipe(dev, ep)`（ホスト→デバイスのバルク）や`usb_rcvintpipe(dev, ep)`（デバイス→ホストのインタラプト）のようなヘルパーで組み立てる。「snd/rcv」は常に*ホスト*から見た向きである。
 
-## The lifecycle {#the-lifecycle}
+## ライフサイクル {#the-lifecycle}
 
 ```c
-urb = usb_alloc_urb(0, GFP_KERNEL);                 /* 1. allocate       */
-usb_fill_bulk_urb(urb, dev, pipe, buf, len,         /* 2. fill           */
+urb = usb_alloc_urb(0, GFP_KERNEL);                 /* 1. 割り当て       */
+usb_fill_bulk_urb(urb, dev, pipe, buf, len,         /* 2. 設定           */
                   my_complete, ctx);
-usb_submit_urb(urb, GFP_KERNEL);                    /* 3. submit (async) */
-/* returns immediately; the transfer happens later on the bus            */
+usb_submit_urb(urb, GFP_KERNEL);                    /* 3. 投入（非同期） */
+/* すぐに戻る。転送は後でバス上で行われる                                */
 
-static void my_complete(struct urb *urb)            /* 4. completion     */
+static void my_complete(struct urb *urb)            /* 4. 完了           */
 {
     if (urb->status == 0)
-        /* urb->actual_length bytes transferred */ ;
-    /* for a continuous stream, resubmit here with GFP_ATOMIC */
+        /* urb->actual_length バイトが転送された */ ;
+    /* 連続ストリームの場合は、ここで GFP_ATOMIC を使って再投入する */
 }
-/* usb_free_urb(urb);  when finished (ref-counted)  */
+/* usb_free_urb(urb);  使い終わったら（参照カウント付き）  */
 ```
 
-Two things about step 4 matter. The completion callback runs in **atomic (interrupt) context** — it must not sleep, and any resubmission from inside it uses `GFP_ATOMIC`. And a submitted URB is **reference-counted and owned by the core** until its callback fires; to cancel one, a driver calls `usb_kill_urb()` (waits for completion) or `usb_unlink_urb()` (async), never just frees it.
+ステップ4については2つの点が重要である。完了コールバックは**アトミック（割り込み）コンテキスト**で実行される — スリープしてはならず、その中から再投入する場合は`GFP_ATOMIC`を使う。また、投入されたURBはコールバックが呼ばれるまで**参照カウントされ、コアが所有する**。キャンセルするには、ドライバは`usb_kill_urb()`（完了を待つ）または`usb_unlink_urb()`（非同期）を呼ぶのであって、決して単に解放してはならない。
 
-For one-shot transfers where blocking is fine, usbcore provides synchronous wrappers that build, submit, and wait internally: **`usb_control_msg()`**, **`usb_bulk_msg()`**, **`usb_interrupt_msg()`**.
+ブロックしても構わない単発の転送のために、usbcoreは内部で構築・投入・待機を行う同期ラッパーを提供している: **`usb_control_msg()`**、**`usb_bulk_msg()`**、**`usb_interrupt_msg()`**。
 
-## The four transfer types {#the-four-transfer-types}
+## 4つの転送タイプ {#the-four-transfer-types}
 
-The endpoint's type (from its [descriptor](enumeration.md)) determines how the core schedules the URB and what guarantees it gets.
+エンドポイントのタイプ（その[ディスクリプタ](enumeration.md)から得られる）によって、コアがURBをどのようにスケジュールし、どのような保証を与えるかが決まる。
 
-### Control — setup, configuration, small commands {#control-setup-configuration-small-commands}
+### コントロール — セットアップ、構成、小さなコマンド {#control-setup-configuration-small-commands}
 
-Control transfers are the only *bidirectional* type and the only one guaranteed to exist (endpoint 0). Each has up to three stages: a **SETUP** packet (an 8-byte request), an optional **DATA** stage, and a **STATUS** handshake. All enumeration and most "send this device a command" operations are control transfers, usually issued via `usb_control_msg()`.
+コントロール転送は唯一の*双方向*タイプであり、存在が保証されている唯一のタイプでもある（エンドポイント0）。各転送は最大3つのステージを持つ: **SETUP**パケット（8バイトのリクエスト）、省略可能な**DATA**ステージ、そして**STATUS**ハンドシェイクである。列挙のすべてと、「このデバイスにこのコマンドを送る」操作の大半はコントロール転送であり、通常は`usb_control_msg()`経由で発行される。
 
-### Bulk — large, reliable, whenever-there's-room {#bulk-large-reliable-whenever-theres-room}
+### バルク — 大容量、高信頼、空きがあるときに {#bulk-large-reliable-whenever-theres-room}
 
-Bulk transfers are error-checked and retried (reliable delivery) but get **no timing or bandwidth guarantee** — the host schedules them only in bandwidth left over after the periodic types. Ideal for "move a lot of data, correctly, eventually": mass storage, printers, bulk network adapters.
+バルク転送はエラー検査と再送が行われる（信頼性のある配送）が、**タイミングや帯域の保証はない** — ホストは周期型タイプの後に残った帯域でのみそれをスケジュールする。「大量のデータを、正しく、いずれは運ぶ」用途に最適である: マスストレージ、プリンタ、バルク型のネットワークアダプタなど。
 
-### Interrupt — small, bounded latency, host-polled {#interrupt-small-bounded-latency-host-polled}
+### インタラプト — 小容量、上限のあるレイテンシ、ホストによるポーリング {#interrupt-small-bounded-latency-host-polled}
 
-Despite the name, nothing interrupts the host. The device declares a desired polling interval (`bInterval`); the host **polls** the endpoint at least that often and the device answers "nothing new" or hands over a small payload. This bounds worst-case latency, which is what a keyboard or mouse needs. Drivers keep one interrupt URB perpetually in flight, resubmitting it from the completion callback.
+名前に反して、ホストに割り込むものは何もない。デバイスは希望するポーリング間隔（`bInterval`）を宣言し、ホストは少なくともその頻度でエンドポイントを**ポーリング**する。デバイスは「新しいものはない」と答えるか、小さなペイロードを渡す。これにより最悪ケースのレイテンシに上限が設けられ、それこそがキーボードやマウスに必要なものである。ドライバは1つのインタラプトURBを常に送信中の状態に保ち、完了コールバックから再投入し続ける。
 
-### Isochronous — guaranteed bandwidth, no retransmission {#isochronous-guaranteed-bandwidth-no-retransmission}
+### アイソクロナス — 帯域保証あり、再送なし {#isochronous-guaranteed-bandwidth-no-retransmission}
 
-Isochronous transfers reserve **guaranteed bandwidth** at configuration time and deliver on a fixed schedule, but are **never retried** — a corrupted or late packet is simply lost. That is the correct trade for streaming audio and video, where a stale frame is worthless and re-sending it would only break timing. An isochronous URB carries *many* packets at once (`number_of_packets`, each described by an `iso_frame_desc[]` entry with its own status and length), because scheduling one URB per frame would be far too much overhead.
+アイソクロナス転送は構成時に**保証された帯域**を予約し、固定スケジュールで配送するが、**決して再送されない** — 壊れたパケットや遅れたパケットは単に失われる。これは音声や映像のストリーミングにとって正しいトレードオフである。古いフレームには価値がなく、再送すればタイミングを壊すだけだからである。アイソクロナスURBは*多数の*パケットを一度に運ぶ（`number_of_packets`。各パケットはそれぞれ独自のステータスと長さを持つ`iso_frame_desc[]`エントリで記述される）。フレームごとに1つのURBをスケジュールしていては、オーバーヘッドが大きすぎるからである。
 
-| Type | Reliable? | Timing | Bandwidth | Typical use |
+| タイプ | 信頼性 | タイミング | 帯域 | 典型的な用途 |
 |---|---|---|---|---|
-| Control | yes | none | best-effort | enumeration, commands |
-| Bulk | yes | none | leftover | storage, printers |
-| Interrupt | yes | bounded latency | reserved (small) | HID |
-| Isochronous | **no** | fixed schedule | **reserved** | audio, video |
+| コントロール | あり | なし | ベストエフォート | 列挙、コマンド |
+| バルク | あり | なし | 残り帯域 | ストレージ、プリンタ |
+| インタラプト | あり | 上限のあるレイテンシ | 予約（小） | HID |
+| アイソクロナス | **なし** | 固定スケジュール | **予約** | 音声、映像 |
 
-## Bandwidth, DMA, and errors {#bandwidth-dma-and-errors}
+## 帯域、DMA、エラー {#bandwidth-dma-and-errors}
 
-- **Bandwidth reservation.** The two periodic types (interrupt and isochronous) reserve bus bandwidth when an interface or alternate setting is selected. If the bus can't satisfy the request, `SET_INTERFACE`/`usb_submit_urb` **fails** rather than silently degrading — which is why a webcam may refuse a high-resolution alt-setting on a crowded bus.
-- **DMA.** `transfer_buffer` must be DMA-addressable; the HCD maps it for the [DMA engine](../mm/dma.md). For hot paths, `usb_alloc_coherent()` hands back a buffer that's already mapped.
-- **Errors** arrive as a negative `urb->status`: `-EPIPE` (endpoint **stalled/halted** — cleared with `usb_clear_halt()`), `-EOVERFLOW` (**babble**: device sent more than the endpoint's max packet), `-ENOENT`/`-ECONNRESET` (URB was killed/unlinked), `-ESHUTDOWN` (the device was disconnected).
+- **帯域予約。** 2つの周期型タイプ（インタラプトとアイソクロナス）は、インターフェースまたはオルタネートセッティングが選択された時点でバス帯域を予約する。バスが要求を満たせない場合、黙って品質を落とすのではなく`SET_INTERFACE`/`usb_submit_urb`が**失敗する** — 混雑したバス上でウェブカメラが高解像度のオルタネートセッティングを拒否することがあるのはこのためである。
+- **DMA。** `transfer_buffer`はDMAでアドレス指定可能でなければならない。HCDがそれを[DMAエンジン](../mm/dma.md)用にマップする。ホットパスでは、`usb_alloc_coherent()`がすでにマップ済みのバッファを返してくれる。
+- **エラー**は負の`urb->status`として届く: `-EPIPE`（エンドポイントが**ストール／ホルト**した — `usb_clear_halt()`で解除する）、`-EOVERFLOW`（**バブル**: デバイスがエンドポイントの最大パケットサイズを超えて送信した）、`-ENOENT`/`-ECONNRESET`（URBがkill／unlinkされた）、`-ESHUTDOWN`（デバイスが切断された）。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: USB Request Block (URB)](https://docs.kernel.org/driver-api/usb/URB.html) — the authoritative URB lifecycle reference
-- [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — the submit/complete interface
-- [USB overview](README.md) · [Enumeration and Descriptors](enumeration.md) — where endpoints and their types come from
+- [Kernel docs: USB Request Block (URB)](https://docs.kernel.org/driver-api/usb/URB.html) — URBのライフサイクルに関する正式なリファレンス
+- [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — 投入／完了のインターフェース
+- [USBの概要](README.md) · [列挙とディスクリプタ](enumeration.md) — エンドポイントとそのタイプがどこから来るか

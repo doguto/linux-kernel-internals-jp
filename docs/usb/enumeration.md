@@ -1,12 +1,12 @@
-# USB Enumeration and Descriptors {#usb-enumeration-and-descriptors}
+# USBの列挙とディスクリプタ {#usb-enumeration-and-descriptors}
 
-> How a device that just appeared on the wire tells the host what it is — the descriptor hierarchy, the standard control requests that read it, and the reset-address-configure dance that ends with a driver bound
+> 回線上に現れたばかりのデバイスが、自分が何者であるかをホストにどう伝えるか — ディスクリプタの階層、それを読み取る標準コントロールリクエスト、そしてドライバのバインドで終わる「リセット→アドレス設定→構成」の一連の手順
 
-When a USB device is plugged in, the host knows nothing about it — not its speed, not its identity, not what it can do. **Enumeration** is the conversation over the mandatory control endpoint (endpoint 0) that turns an anonymous newly-attached device into an addressed, configured device with drivers bound to its interfaces. Everything the host learns comes from the device's **descriptors**.
+USBデバイスが接続されたとき、ホストはそれについて何も知らない — 速度も、正体も、何ができるのかも。**列挙（enumeration）**とは、必須のコントロールエンドポイント（エンドポイント0）上で行われるやりとりであり、新たに接続された匿名のデバイスを、アドレスが割り当てられ構成され、各インターフェースにドライバがバインドされたデバイスへと変える。ホストが知ることはすべて、デバイスの**ディスクリプタ**から得られる。
 
-## The descriptor hierarchy {#the-descriptor-hierarchy}
+## ディスクリプタの階層 {#the-descriptor-hierarchy}
 
-A device describes itself as a tree of fixed-format structures (defined in the kernel in `include/uapi/linux/usb/ch9.h`, mirroring "Chapter 9" of the USB specification):
+デバイスは自身を、固定フォーマットの構造体のツリーとして記述する（カーネルでは`include/uapi/linux/usb/ch9.h`で定義されており、USB仕様の「Chapter 9」をそのまま反映している）:
 
 ```
 Device descriptor              idVendor, idProduct, bDeviceClass,
@@ -22,60 +22,60 @@ Device descriptor              idVendor, idProduct, bDeviceClass,
         └── Interface descriptor ...
 ```
 
-- **Device descriptor** — one per device. Carries `idVendor`/`idProduct` (the identity drivers match on), the device class, and `bMaxPacketSize0` (how big endpoint 0's packets are — needed before anything else can be read reliably).
-- **Configuration descriptor** — a complete power/feature profile. Most devices have exactly one; only one is ever *active*. Reading it returns the interface and endpoint descriptors packed after it in one contiguous blob.
-- **Interface descriptor** — one *function*. Its `bInterfaceClass` (mass storage, HID, CDC, audio…) is what usbcore matches drivers against. Interfaces can have **alternate settings** — different endpoint arrangements selected at runtime (isochronous devices use this to switch bandwidth, e.g. a webcam picking a resolution).
-- **Endpoint descriptor** — one data pipe: its address and direction, its [transfer type](README.md), its max packet size, and `bInterval` (the polling period for interrupt/isochronous endpoints).
-- **String descriptors** — optional human-readable UTF-16 strings (manufacturer, product, serial) referenced by index.
+- **デバイスディスクリプタ** — デバイスごとに1つ。`idVendor`/`idProduct`（ドライバがマッチに使う識別情報）、デバイスクラス、そして`bMaxPacketSize0`（エンドポイント0のパケットの大きさ — 他の何かを確実に読み取る前に必要となる）を持つ。
+- **コンフィギュレーションディスクリプタ** — 電力と機能の完全なプロファイル。ほとんどのデバイスはちょうど1つだけ持ち、*アクティブ*になるのは常に1つだけである。これを読み取ると、その後ろに詰め込まれたインターフェースディスクリプタとエンドポイントディスクリプタが、1つの連続したデータの塊として返される。
+- **インターフェースディスクリプタ** — 1つの*ファンクション*。その`bInterfaceClass`（マスストレージ、HID、CDC、オーディオ…）が、usbcoreがドライバとのマッチに使うものである。インターフェースは**オルタネートセッティング**を持つことができる — 実行時に選択される異なるエンドポイント構成である（アイソクロナスデバイスはこれを使って帯域を切り替える。たとえばウェブカメラが解像度を選ぶ場合など）。
+- **エンドポイントディスクリプタ** — 1本のデータパイプ。そのアドレスと方向、[転送タイプ](README.md)、最大パケットサイズ、そして`bInterval`（インタラプト／アイソクロナスエンドポイントのポーリング周期）を持つ。
+- **ストリングディスクリプタ** — 省略可能な、人間が読めるUTF-16文字列（製造元、製品名、シリアル番号）で、インデックスで参照される。
 
-Class drivers layer their own **class-specific descriptors** into this tree — for example the CDC union descriptor, or the short HID descriptor — which the class driver, not usbcore, interprets. Some class data lives *outside* the tree entirely: a HID device's actual **report descriptor** isn't packed into the configuration blob but fetched separately with a class-specific `GET_DESCRIPTOR(Report)`.
+クラスドライバは、このツリーに独自の**クラス固有ディスクリプタ**を重ねる — たとえばCDCのユニオンディスクリプタや、短いHIDディスクリプタなど — これらはusbcoreではなくクラスドライバが解釈する。クラスのデータの中には、ツリーの*外側*にまったく別に置かれるものもある。HIDデバイスの実際の**レポートディスクリプタ**はコンフィギュレーションの塊には詰め込まれておらず、クラス固有の`GET_DESCRIPTOR(Report)`で別途取得される。
 
-## The standard control requests {#the-standard-control-requests}
+## 標準コントロールリクエスト {#the-standard-control-requests}
 
-Enumeration is driven entirely by **standard device requests** on endpoint 0 — an 8-byte SETUP packet the host sends, defined once for every USB device:
+列挙は完全に、エンドポイント0上の**標準デバイスリクエスト**によって駆動される — ホストが送る8バイトのSETUPパケットで、すべてのUSBデバイスに共通して一度だけ定義されている:
 
-| Request | What it does |
+| リクエスト | 何をするか |
 |---|---|
-| `GET_DESCRIPTOR` | Read a descriptor (device, configuration+children, string) |
-| `SET_ADDRESS` | Assign the device its unique bus address |
-| `SET_CONFIGURATION` | Activate a configuration (this is what "turns the device on") |
-| `SET_INTERFACE` / `GET_INTERFACE` | Select or query an interface's alternate setting |
-| `GET_STATUS`, `CLEAR_FEATURE`, `SET_FEATURE` | Halt/unhalt endpoints, remote-wakeup, etc. |
+| `GET_DESCRIPTOR` | ディスクリプタを読み取る（デバイス、コンフィギュレーション＋その子、ストリング） |
+| `SET_ADDRESS` | デバイスに一意のバスアドレスを割り当てる |
+| `SET_CONFIGURATION` | コンフィギュレーションを有効化する（これが「デバイスをオンにする」操作である） |
+| `SET_INTERFACE` / `GET_INTERFACE` | インターフェースのオルタネートセッティングを選択または問い合わせる |
+| `GET_STATUS`, `CLEAR_FEATURE`, `SET_FEATURE` | エンドポイントのホルト／ホルト解除、リモートウェイクアップなど |
 
-These are the same requests `usb_control_msg()` issues, and they work *before* any driver exists — endpoint 0 is the one pipe guaranteed to be present the instant a device attaches.
+これらは`usb_control_msg()`が発行するのと同じリクエストであり、ドライバが存在する*前から*機能する — エンドポイント0は、デバイスが接続されたその瞬間から存在が保証されている唯一のパイプだからである。
 
-## The sequence {#the-sequence}
+## 手順 {#the-sequence}
 
-The hub driver, not the target device, orchestrates this:
+これを取り仕切るのは対象デバイスではなく、ハブドライバである:
 
-1. **Attach + debounce.** A downstream hub port signals a status change; the hub driver debounces it (a device isn't "there" until the line is stable).
-2. **Speed detection.** Before any packet, the idle pull-up resistors reveal the basic speed — D+ pulled up = full-speed, D− = low-speed (USB 3 uses separate SuperSpeed lanes). A high-speed-capable device attaches as full-speed and only negotiates high-speed via a **chirp handshake during the reset** in the next step.
-3. **Reset.** The host resets the port. The device wakes at the **default address 0**.
-4. **First read.** The host does `GET_DESCRIPTOR(device)` to learn `bMaxPacketSize0` — it must know endpoint 0's packet size before it can reliably read anything longer.
-5. **Address.** `SET_ADDRESS` moves the device off address 0 to a unique address (1–127). Because *only one device can sit at address 0 at a time*, hubs enumerate their ports **one at a time** — this serialization is why plugging in a big hub full of devices takes a visible moment.
-6. **Full read.** With a private address, the host reads the full device descriptor, then each configuration descriptor (and its packed interface/endpoint descriptors), then strings.
-7. **Configure.** `SET_CONFIGURATION` activates the chosen configuration. The device's endpoints (beyond 0) now exist and are usable.
-8. **Bind.** usbcore matches each interface against registered drivers and calls the winner's `->probe()`.
+1. **接続＋デバウンス。** 下流のハブポートが状態変化を通知し、ハブドライバがそれをデバウンスする（信号線が安定するまで、デバイスは「そこにある」とは見なされない）。
+2. **速度検出。** パケットを送る前に、アイドル時のプルアップ抵抗によって基本的な速度がわかる — D+がプルアップされていればフルスピード、D−ならロースピードである（USB 3は別個のSuperSpeedレーンを使う）。ハイスピード対応のデバイスはフルスピードとして接続され、次のステップの**リセット中のchirpハンドシェイク**によってのみハイスピードをネゴシエートする。
+3. **リセット。** ホストがポートをリセットする。デバイスは**デフォルトアドレス0**で起動する。
+4. **最初の読み取り。** ホストは`GET_DESCRIPTOR(device)`を行って`bMaxPacketSize0`を知る — それより長いものを確実に読み取るには、エンドポイント0のパケットサイズを先に知っておく必要がある。
+5. **アドレス設定。** `SET_ADDRESS`によって、デバイスはアドレス0から一意のアドレス（1〜127）に移される。*アドレス0に同時に存在できるデバイスは1つだけ*なので、ハブはポートを**1つずつ**列挙する — デバイスでいっぱいの大きなハブを接続すると目に見えて時間がかかるのは、この直列化のためである。
+6. **完全な読み取り。** 専用のアドレスを得たところで、ホストは完全なデバイスディスクリプタを読み、次に各コンフィギュレーションディスクリプタ（とそこに詰め込まれたインターフェース／エンドポイントディスクリプタ）を、そしてストリングを読む。
+7. **構成。** `SET_CONFIGURATION`が選ばれたコンフィギュレーションを有効化する。これでデバイスのエンドポイント（0以外）が存在するようになり、使用可能になる。
+8. **バインド。** usbcoreが各インターフェースを登録済みドライバと照合し、選ばれたドライバの`->probe()`を呼ぶ。
 
-## How drivers match {#how-drivers-match}
+## ドライバのマッチ方法 {#how-drivers-match}
 
-A USB driver advertises what it handles with a `usb_device_id` table, matched during step 8:
+USBドライバは、自分が扱うものを`usb_device_id`テーブルで宣言し、これがステップ8で照合される:
 
 ```c
 static const struct usb_device_id my_ids[] = {
-    { USB_DEVICE(0x046d, 0xc52b) },              /* exact vendor+product   */
-    { USB_INTERFACE_INFO(USB_CLASS_HID, 0, 0) }, /* any device of a class  */
-    { }                                          /* terminator             */
+    { USB_DEVICE(0x046d, 0xc52b) },              /* ベンダー+プロダクトに完全一致 */
+    { USB_INTERFACE_INFO(USB_CLASS_HID, 0, 0) }, /* あるクラスの任意のデバイス    */
+    { }                                          /* 終端                          */
 };
 MODULE_DEVICE_TABLE(usb, my_ids);
 ```
 
-Matching on `USB_DEVICE` binds one specific product; matching on `USB_INTERFACE_INFO` (class/subclass/protocol) is how generic class drivers like `usb-storage` and `usbhid` claim *any* device that speaks their class. `MODULE_DEVICE_TABLE` exports this table so a plugged-in device's IDs can auto-load the right module via the `modalias` mechanism.
+`USB_DEVICE`でマッチすると特定の1製品にバインドされる。`USB_INTERFACE_INFO`（クラス／サブクラス／プロトコル）でマッチするのは、`usb-storage`や`usbhid`のような汎用クラスドライバが、自分のクラスを話す*任意の*デバイスを引き受けるための方法である。`MODULE_DEVICE_TABLE`はこのテーブルをエクスポートし、接続されたデバイスのIDから`modalias`の仕組みを通じて適切なモジュールを自動ロードできるようにする。
 
-The whole enumerated tree is then visible from user space under `/sys/bus/usb/devices/` and via `lsusb -v`.
+列挙されたツリー全体は、その後ユーザー空間から`/sys/bus/usb/devices/`以下や`lsusb -v`で見ることができる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [USB overview](README.md) — the stack, the device model, and the transfer types these endpoints use
-- [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — descriptors, interfaces, and driver binding
-- [Kernel docs: writing USB device drivers](https://docs.kernel.org/driver-api/usb/writing_usb_driver.html) — the probe/`usb_device_id` path in practice
+- [USBの概要](README.md) — スタック、デバイスモデル、そしてこれらのエンドポイントが使う転送タイプ
+- [Kernel docs: the USB core API](https://docs.kernel.org/driver-api/usb/usb.html) — ディスクリプタ、インターフェース、ドライバのバインド
+- [Kernel docs: writing USB device drivers](https://docs.kernel.org/driver-api/usb/writing_usb_driver.html) — probe／`usb_device_id`の流れの実際

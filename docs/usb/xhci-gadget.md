@@ -1,34 +1,34 @@
-# Host Controllers (xHCI) and Gadget Mode {#host-controllers-xhci-and-gadget-mode}
+# ホストコントローラ（xHCI）とガジェットモード {#host-controllers-xhci-and-gadget-mode}
 
-> The bottom of the host stack — how xHCI actually schedules transfers on the wire — and the mirror image: how Linux becomes a USB *device* through the gadget framework
+> ホストスタックの最下層 — xHCIが実際にどのように転送を回線上にスケジュールするか — と、その鏡像として、Linuxがガジェットフレームワークを通じてどのようにUSB *デバイス*になるか
 
-The [overview](README.md) treated the host controller as a black box that "owns the wire." This page opens it: what the **host controller driver (HCD)** does, how the modern **xHCI** controller is structured, and then the opposite direction entirely — **gadget mode**, where Linux *is* the peripheral.
+[概要](README.md)では、ホストコントローラを「回線を所有する」ブラックボックスとして扱った。このページではその中を開ける。**ホストコントローラドライバ（HCD）**が何をするのか、現代的な**xHCI**コントローラがどのような構造になっているのか、そしてまったく逆方向の、Linux*が*ペリフェラルになる**ガジェットモード**を見ていく。
 
-## The host controller driver {#the-host-controller-driver}
+## ホストコントローラドライバ {#the-host-controller-driver}
 
-Every host-side USB stack bottoms out in an HCD. usbcore talks to it through a uniform `struct usb_hcd` interface — enqueue this URB, cancel that one, what's the root-hub status — so the rest of the kernel never sees controller-specific details. The families, newest first:
+ホスト側のUSBスタックはすべて、最終的にHCDに行き着く。usbcoreは統一された`struct usb_hcd`インターフェース — このURBをキューに入れる、あのURBをキャンセルする、ルートハブの状態はどうか — を通じてHCDとやりとりするので、カーネルの他の部分がコントローラ固有の詳細を目にすることはない。系統を新しい順に挙げる:
 
-- **xHCI** (eXtensible Host Controller Interface) — the modern controller; one xHCI handles USB 1, 2, and 3+ speeds. This is what essentially all current hardware uses.
-- **EHCI** (USB 2 high-speed), **OHCI/UHCI** (USB 1) — legacy. EHCI historically needed *companion* OHCI/UHCI controllers to handle the low/full-speed devices it couldn't.
+- **xHCI**（eXtensible Host Controller Interface）— 現代のコントローラ。1つのxHCIでUSB 1、2、3以降のすべての速度を扱う。現在のハードウェアは事実上すべてこれを使っている。
+- **EHCI**（USB 2のハイスピード）、**OHCI/UHCI**（USB 1）— レガシー。EHCIは歴史的に、自身が扱えないロースピード／フルスピードのデバイスを処理するために*コンパニオン*のOHCI/UHCIコントローラを必要とした。
 
-A host controller is almost always a [PCIe function](../drivers/pci-driver.md) (or an SoC platform device), so the HCD is also a PCI/platform driver that probes the controller and maps its registers.
+ホストコントローラはほぼ常に[PCIeファンクション](../drivers/pci-driver.md)（あるいはSoCのプラットフォームデバイス）なので、HCDはコントローラをプローブしてそのレジスタをマップするPCI／プラットフォームドライバでもある。
 
-## Inside xHCI: rings, TRBs, and contexts {#inside-xhci-rings-trbs-and-contexts}
+## xHCIの内部: リング、TRB、コンテキスト {#inside-xhci-rings-trbs-and-contexts}
 
-xHCI's key design move was to **push transfer scheduling into the controller**. Where EHCI exposed frame-list schedules the *driver* had to weave, xHCI is organized around shared-memory **rings** — the same producer/consumer pattern as [NVMe](../block/nvme.md) submission/completion queues:
+xHCIの設計上の要は、**転送スケジューリングをコントローラ側に押し込んだ**ことである。EHCIが*ドライバ*に編み上げさせるフレームリスト型のスケジュールを公開していたのに対し、xHCIは共有メモリ上の**リング**を中心に構成されている — [NVMe](../block/nvme.md)のサブミッション／コンプリーションキューと同じプロデューサ／コンシューマパターンである:
 
-- **Transfer Request Blocks (TRBs)** are the ring entries — each describes one chunk of a transfer (data, setup stage, link to the next ring segment).
-- **Transfer rings** — one per active endpoint. The driver appends TRBs; the controller consumes them.
-- **Command ring** — the driver issues controller commands (enable a device slot, configure an endpoint, set address).
-- **Event ring** — the controller posts completions and port events here; the driver consumes them, typically off an **MSI-X** interrupt.
-- **Doorbell registers** — how the driver tells the controller "I added work to this ring," avoiding a poll.
-- **Device Context Base Address Array (DCBAA)** — an array of *pointers* to per-device **device context** structures; each device context holds that device's *slot* context plus its *endpoint* contexts, which carry each endpoint's state (type, max packet, ring dequeue pointer). The controller owns and updates the contexts.
+- **Transfer Request Block（TRB）**はリングのエントリである — それぞれが転送の1つの塊（データ、セットアップステージ、次のリングセグメントへのリンク）を記述する。
+- **転送リング（transfer ring）** — アクティブなエンドポイントごとに1つ。ドライバがTRBを追加し、コントローラがそれを消費する。
+- **コマンドリング（command ring）** — ドライバがコントローラへのコマンド（デバイススロットの有効化、エンドポイントの構成、アドレスの設定）を発行する。
+- **イベントリング（event ring）** — コントローラが完了通知やポートイベントをここに投入し、ドライバがそれを消費する。通常は**MSI-X**割り込みを契機とする。
+- **ドアベルレジスタ（doorbell register）** — ドライバがコントローラに「このリングに仕事を追加した」と伝える手段で、ポーリングを避けられる。
+- **Device Context Base Address Array（DCBAA）** — デバイスごとの**デバイスコンテキスト**構造体への*ポインタ*の配列。各デバイスコンテキストは、そのデバイスの*スロット*コンテキストと*エンドポイント*コンテキスト群を保持し、エンドポイントコンテキストは各エンドポイントの状態（種別、最大パケットサイズ、リングのデキューポインタ）を持つ。コンテキストはコントローラが所有し、更新する。
 
-The result: enqueuing a URB becomes "append TRBs to the endpoint's transfer ring and ring the doorbell," and completions arrive as events — a lockless, memory-resident hand-off rather than register poking per packet. The driver lives in `drivers/usb/host/xhci*`.
+その結果、URBをキューに入れる処理は「エンドポイントの転送リングにTRBを追加してドアベルを鳴らす」ことになり、完了はイベントとして届く — パケットごとにレジスタを叩くのではなく、ロックレスでメモリ上に置かれた受け渡しである。ドライバは`drivers/usb/host/xhci*`にある。
 
-## Gadget mode: Linux as a USB device {#gadget-mode-linux-as-a-usb-device}
+## ガジェットモード: USBデバイスとしてのLinux {#gadget-mode-linux-as-a-usb-device}
 
-Everything above is the **host**. But a phone presenting itself as a flash drive, a dev board exposing a serial console over USB, a `g_ether` network link — those are Linux acting as a **peripheral**. The device side is a separate stack with three parts:
+ここまでの内容はすべて**ホスト**側である。しかし、フラッシュドライブとして振る舞うスマートフォン、USB越しにシリアルコンソールを公開する開発ボード、`g_ether`によるネットワークリンク — これらはLinuxが**ペリフェラル**として動作している例である。デバイス側は3つの部分からなる別個のスタックである:
 
 ```
   Gadget function(s)      ← mass storage, serial (ACM), ethernet (ECM/RNDIS),
@@ -40,17 +40,17 @@ Everything above is the **host**. But a phone presenting itself as a flash drive
   UDC hardware  → the wire → some host enumerates *us*
 ```
 
-- A **UDC (USB Device Controller) driver** is the device-side counterpart of the HCD: it drives the peripheral controller and presents endpoints to the gadget layer.
-- The **composite framework** lets a device be built from reusable **function** drivers, assembling their interface/endpoint descriptors into the configuration a host will read during enumeration — the same descriptors from the [enumeration](enumeration.md) page, now *served* rather than read.
-- Functions can be bound at runtime through **configfs** under `/sys/kernel/config/usb_gadget/`: create a gadget, set its vendor/product IDs, instantiate functions (`mass_storage.0`, `acm.0`, `ecm.0`), link them into a configuration, and bind to a UDC to go live. **FunctionFS** goes further, letting a *userspace* program implement a function's endpoints (this is how Android's adb works).
+- **UDC（USB Device Controller）ドライバ**はHCDのデバイス側の対応物である。ペリフェラルコントローラを駆動し、エンドポイントをガジェット層に提供する。
+- **コンポジットフレームワーク**は、再利用可能な**ファンクション**ドライバからデバイスを組み立てられるようにする。各ファンクションのインターフェース／エンドポイントディスクリプタを、ホストが列挙時に読み取るコンフィギュレーションへとまとめ上げる — [列挙](enumeration.md)のページで扱ったのと同じディスクリプタを、今度は読む側ではなく*提供する*側として扱うわけである。
+- ファンクションは`/sys/kernel/config/usb_gadget/`以下の**configfs**を通じて実行時にバインドできる。ガジェットを作成し、ベンダー／プロダクトIDを設定し、ファンクション（`mass_storage.0`、`acm.0`、`ecm.0`）をインスタンス化し、それらをコンフィギュレーションにリンクし、UDCにバインドすれば稼働状態になる。**FunctionFS**はさらに進んで、*ユーザー空間*のプログラムがファンクションのエンドポイントを実装できるようにする（Androidのadbはこの仕組みで動いている）。
 
-## Dual-role and OTG {#dual-role-and-otg}
+## デュアルロールとOTG {#dual-role-and-otg}
 
-A USB-C port is often **dual-role** (DRD): it can act as host or device depending on what's plugged in, negotiated over the connector. The kernel's role-switching moves the port between its xHCI (host) and UDC (gadget) drivers as the role changes — the same physical port, two entirely different stacks behind it.
+USB-Cポートは**デュアルロール**（DRD）であることが多い。接続されたものに応じてホストにもデバイスにもなることができ、その役割はコネクタ上でネゴシエートされる。カーネルのロール切り替え機能は、役割の変化に合わせてポートをxHCI（ホスト）ドライバとUDC（ガジェット）ドライバの間で移し替える — 同じ物理ポートの背後に、まったく異なる2つのスタックがあるわけである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: USB gadget API](https://docs.kernel.org/driver-api/usb/gadget.html) — the composite/function framework
-- [Kernel docs: gadget configfs](https://docs.kernel.org/usb/gadget_configfs.html) — composing a gadget at runtime
-- [Kernel docs: FunctionFS](https://docs.kernel.org/usb/functionfs.html) — implementing a gadget function from userspace
-- [USB overview](README.md) — the host stack this sits beneath · [PCI Drivers](../drivers/pci-driver.md) — how host controllers attach
+- [Kernel docs: USB gadget API](https://docs.kernel.org/driver-api/usb/gadget.html) — コンポジット／ファンクションのフレームワーク
+- [Kernel docs: gadget configfs](https://docs.kernel.org/usb/gadget_configfs.html) — 実行時にガジェットを組み立てる
+- [Kernel docs: FunctionFS](https://docs.kernel.org/usb/functionfs.html) — ユーザー空間からガジェットファンクションを実装する
+- [USBの概要](README.md) — このページの内容がその下に位置するホストスタック · [PCIドライバ](../drivers/pci-driver.md) — ホストコントローラの接続方法
