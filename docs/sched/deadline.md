@@ -1,16 +1,16 @@
 # SCHED_DEADLINE {#sched_deadline}
 
-> Bandwidth-based real-time scheduling with admission control
+> 受け入れ制御を備えた、帯域ベースのリアルタイムスケジューリング
 
-## What SCHED_DEADLINE provides {#what-sched_deadline-provides}
+## SCHED_DEADLINEが提供するもの {#what-sched_deadline-provides}
 
-`SCHED_DEADLINE` is the highest-priority regular scheduling policy in Linux (above SCHED_FIFO/RR). Instead of a fixed priority, each task describes its computational requirements:
+`SCHED_DEADLINE`は、Linuxで最も優先度の高い通常のスケジューリングポリシーである（SCHED_FIFO/RRより上）。固定の優先度の代わりに、各タスクは自身の計算上の要件を記述する:
 
-- **Runtime** (`sched_runtime`): How much CPU time it needs per period
-- **Deadline** (`sched_deadline`): By when it must finish
-- **Period** (`sched_period`): How often it repeats (defaults to deadline if unset)
+- **実行時間**（`sched_runtime`）: 周期ごとにどれだけのCPU時間が必要か
+- **デッドライン**（`sched_deadline`）: いつまでに終えなければならないか
+- **周期**（`sched_period`）: どれくらいの頻度で繰り返すか（未設定ならデッドラインと同じ）
 
-The kernel enforces these bounds using **Constant Bandwidth Server (CBS)**: each task gets exactly its declared bandwidth and no more. When a task exhausts its runtime budget, it is throttled until the next period.
+カーネルは**Constant Bandwidth Server（CBS）**を使ってこれらの範囲を強制する。各タスクは宣言したとおりの帯域をちょうど得て、それ以上は得られない。タスクが実行時間の予算を使い切ると、次の周期までスロットリングされる。
 
 ```
 Task declares: 5ms runtime, 10ms deadline, 10ms period
@@ -23,81 +23,81 @@ Timeline:
           deadline must be met ←------↑
 ```
 
-## Why SCHED_DEADLINE over SCHED_FIFO? {#why-sched_deadline-over-sched_fifo}
+## なぜSCHED_FIFOではなくSCHED_DEADLINEなのか {#why-sched_deadline-over-sched_fifo}
 
-| Property | SCHED_FIFO | SCHED_DEADLINE |
+| 性質 | SCHED_FIFO | SCHED_DEADLINE |
 |----------|------------|----------------|
-| Guarantee type | Priority (relative) | Bandwidth (absolute) |
-| Admission control | None | Yes — kernel rejects infeasible tasks |
-| Worst-case latency | Unbounded for same-priority tasks | Bounded by deadline |
-| Overrun behavior | Starvation | Throttled, replenished at next period |
-| Use case | Simple RT tasks | Periodic tasks with timing requirements |
+| 保証の種類 | 優先度（相対的） | 帯域（絶対的） |
+| 受け入れ制御 | なし | あり — カーネルは実現不可能なタスクを拒否する |
+| 最悪ケースのレイテンシ | 同じ優先度のタスクについては上限なし | デッドラインで上限が決まる |
+| 超過時の挙動 | 飢餓 | スロットリングされ、次の周期で補充される |
+| 用途 | 単純なRTタスク | タイミング要件のある周期的タスク |
 
-SCHED_DEADLINE is suitable for tasks with provable timing requirements: video encoding frames, network packet processing at a rate guarantee, industrial control loops.
+SCHED_DEADLINEは、タイミング要件を証明できるタスクに適している。例えば、ビデオエンコードのフレーム処理、レート保証付きのネットワークパケット処理、産業用の制御ループなどである。
 
-## Data structures {#data-structures}
+## データ構造 {#data-structures}
 
 ### struct sched_dl_entity {#struct-sched_dl_entity}
 
-Embedded in `task_struct`, tracks per-task deadline state:
+`task_struct`に埋め込まれ、タスクごとのデッドラインの状態を追跡する:
 
 ```c
 // include/linux/sched.h
 struct sched_dl_entity {
-    struct rb_node  rb_node;        // position in dl_rq RB-tree
-    struct hrtimer  dl_timer;       // CBS replenishment timer
+    struct rb_node  rb_node;        // dl_rqの赤黒木内の位置
+    struct hrtimer  dl_timer;       // CBSの補充タイマー
 
-    u64 dl_runtime;     // declared runtime (r_i)
-    u64 dl_deadline;    // declared relative deadline (d_i)
-    u64 dl_period;      // declared period (p_i); 0 means = dl_deadline
-    u64 dl_bw;          // bandwidth = dl_runtime / dl_period
-    u64 dl_density;     // density = dl_runtime / dl_deadline
+    u64 dl_runtime;     // 宣言した実行時間（r_i）
+    u64 dl_deadline;    // 宣言した相対デッドライン（d_i）
+    u64 dl_period;      // 宣言した周期（p_i）。0は = dl_deadline を意味する
+    u64 dl_bw;          // 帯域 = dl_runtime / dl_period
+    u64 dl_density;     // 密度 = dl_runtime / dl_deadline
 
-    s64 runtime;        // remaining runtime for current instance
-    u64 deadline;       // absolute deadline for current instance
+    s64 runtime;        // 現在のインスタンスの残り実行時間
+    u64 deadline;       // 現在のインスタンスの絶対デッドライン
 
-    unsigned int dl_throttled : 1;  // budget exhausted this period
+    unsigned int dl_throttled : 1;  // この周期の予算を使い切った
     // ...
-    struct hrtimer  inactive_timer; // GRUB inactive time tracking
+    struct hrtimer  inactive_timer; // GRUBの非アクティブ時間の追跡
 };
 ```
 
 ### struct dl_rq {#struct-dl_rq}
 
-Per-CPU deadline runqueue:
+CPUごとのデッドラインランキュー:
 
 ```c
 // kernel/sched/sched.h
 struct dl_rq {
-    struct rb_root_cached root;              // RB-tree ordered by absolute deadline
-    unsigned int          dl_nr_running;     // runnable DL task count
+    struct rb_root_cached root;              // 絶対デッドライン順の赤黒木
+    unsigned int          dl_nr_running;     // 実行可能なDLタスクの数
     struct {
         u64 curr, next;
-    } earliest_dl;                           // cached earliest deadlines
+    } earliest_dl;                           // キャッシュされた最も早いデッドライン
 
-    u64 running_bw;   // bandwidth of currently running tasks
-    u64 this_bw;      // total assigned bandwidth (running + blocked)
-    u64 extra_bw;     // reclaimed idle bandwidth (GRUB)
-    u64 max_bw;       // maximum reclaimable bandwidth
-    u64 bw_ratio;     // 1/Umax for GRUB calculations
+    u64 running_bw;   // 現在実行中のタスクの帯域
+    u64 this_bw;      // 割り当てられた帯域の合計（実行中 + ブロック中）
+    u64 extra_bw;     // 回収したアイドル帯域（GRUB）
+    u64 max_bw;       // 回収可能な最大帯域
+    u64 bw_ratio;     // GRUBの計算用の1/Umax
 };
 ```
 
-## Admission control {#admission-control}
+## 受け入れ制御 {#admission-control}
 
-Before a task can become `SCHED_DEADLINE`, the kernel checks whether the system can accommodate it:
+タスクが`SCHED_DEADLINE`になる前に、カーネルはシステムがそれを受け入れられるかどうかをチェックする:
 
 ```c
 // kernel/sched/deadline.c
 static int sched_dl_overflow(struct task_struct *p, int policy,
                               const struct sched_attr *attr)
 {
-    // Check: sum of all DL bandwidths + new task <= 1.0 (per CPU)
-    // If over capacity: return -EBUSY
+    // チェック: すべてのDL帯域の合計 + 新しいタスク <= 1.0（CPUあたり）
+    // 容量を超える場合: -EBUSYを返す
 }
 ```
 
-The check is global across all CPUs in the scheduling domain. If accepting the new task would make the total utilization exceed 100%, `sched_setattr()` returns `-EBUSY`:
+このチェックは、スケジューリングドメイン内のすべてのCPUにわたるグローバルなものである。新しいタスクを受け入れると合計の使用率が100%を超える場合、`sched_setattr()`は`-EBUSY`を返す:
 
 ```c
 struct sched_attr attr = {
@@ -109,24 +109,24 @@ struct sched_attr attr = {
 };
 if (sched_setattr(0, &attr, 0) < 0) {
     if (errno == EBUSY)
-        // System cannot admit this task — too much DL bandwidth in use
+        // システムはこのタスクを受け入れられない — 使用中のDL帯域が多すぎる
 }
 ```
 
-This is unlike SCHED_FIFO/RR where any number of tasks can be created regardless of system capacity.
+これは、システムの容量にかかわらずいくつでもタスクを作成できるSCHED_FIFO/RRとは異なる。
 
-## CBS: budget enforcement and replenishment {#cbs-budget-enforcement-and-replenishment}
+## CBS: 予算の強制と補充 {#cbs-budget-enforcement-and-replenishment}
 
-### Budget exhaustion {#budget-exhaustion}
+### 予算の枯渇 {#budget-exhaustion}
 
-Each time the task runs, its remaining `runtime` decreases. When it hits zero:
+タスクが実行されるたびに、残りの`runtime`は減少する。それがゼロになると:
 
-1. Task is marked `dl_throttled = 1`
-2. Task is dequeued from the dl_rq
-3. An hrtimer (`dl_timer`) is armed for the next replenishment time
-4. The task can no longer run until replenished
+1. タスクに`dl_throttled = 1`が設定される
+2. タスクがdl_rqからデキューされる
+3. 次の補充時刻に向けてhrtimer（`dl_timer`）が設定される
+4. 補充されるまで、タスクはもう実行できない
 
-### Replenishment via dl_task_timer() {#replenishment-via-dl_task_timer}
+### dl_task_timer()による補充 {#replenishment-via-dl_task_timer}
 
 ```c
 // kernel/sched/deadline.c
@@ -135,25 +135,25 @@ static enum hrtimer_restart dl_task_timer(struct hrtimer *timer)
     struct sched_dl_entity *dl_se = container_of(timer, ...);
     struct task_struct *p = dl_task_of(dl_se);
 
-    // Replenish budget for next period
+    // 次の周期のために予算を補充する
     replenish_dl_entity(dl_se);
 
-    // Re-enqueue the task
+    // タスクを再エンキューする
     enqueue_task(rq, p, ENQUEUE_REPLENISH);
 
-    // Check preemption
+    // プリエンプションをチェックする
     wakeup_preempt(rq, p, 0);
 }
 ```
 
-`replenish_dl_entity()` sets:
+`replenish_dl_entity()`は次のように設定する:
 
-- `dl_se->runtime = dl_se->dl_runtime` (full budget restored)
-- `dl_se->deadline += dl_se->dl_period` (absolute deadline advanced)
+- `dl_se->runtime = dl_se->dl_runtime`（予算を満タンに戻す）
+- `dl_se->deadline += dl_se->dl_period`（絶対デッドラインを進める）
 
-### EDF selection {#edf-selection}
+### EDFによる選択 {#edf-selection}
 
-Among multiple runnable DL tasks, the scheduler always picks the one with the **earliest absolute deadline** (EDF — Earliest Deadline First):
+実行可能なDLタスクが複数ある場合、スケジューラは常に**絶対デッドラインが最も早い**ものを選ぶ（EDF — Earliest Deadline First）:
 
 ```c
 // kernel/sched/deadline.c
@@ -164,22 +164,22 @@ static struct sched_dl_entity *pick_next_dl_entity(struct dl_rq *dl_rq)
 }
 ```
 
-The RB-tree is ordered by `deadline`, so the leftmost node always has the earliest deadline.
+赤黒木は`deadline`順に並んでいるので、最左ノードが常に最も早いデッドラインを持つ。
 
-## GRUB: reclaiming unused bandwidth {#grub-reclaiming-unused-bandwidth}
+## GRUB: 使われていない帯域の回収 {#grub-reclaiming-unused-bandwidth}
 
-A DL task that doesn't use its full budget would waste CPU time — other tasks couldn't use the reserved bandwidth. **GRUB (Greedy Reclamation of Unused Bandwidth)** solves this:
+予算を使い切らないDLタスクはCPU時間を無駄にしてしまう。予約された帯域を他のタスクが使えないからである。**GRUB（Greedy Reclamation of Unused Bandwidth）**がこれを解決する。
 
-When a DL task is inactive (sleeping), its unused bandwidth is tracked and made available to other tasks via `extra_bw`. This allows the system to run more work than the strict bandwidth reservation would suggest, while still meeting all deadlines when tasks are active.
+DLタスクが非アクティブ（スリープ中）のとき、その使われていない帯域は追跡され、`extra_bw`を通じて他のタスクが利用できるようになる。これにより、タスクがアクティブなときにはすべてのデッドラインを守りつつ、厳密な帯域予約から想定されるより多くの仕事をシステムで実行できる。
 
 ```bash
-# Check total DL bandwidth per CPU
+# CPUごとのDL帯域の合計を確認する
 cat /proc/sched_debug | grep -A 5 "dl_rq"
 ```
 
-## Using SCHED_DEADLINE {#using-sched_deadline}
+## SCHED_DEADLINEを使う {#using-sched_deadline}
 
-### Setting the policy {#setting-the-policy}
+### ポリシーの設定 {#setting-the-policy}
 
 ```c
 #include <linux/sched/types.h>
@@ -188,53 +188,53 @@ struct sched_attr attr = {
     .size           = sizeof(struct sched_attr),
     .sched_policy   = SCHED_DEADLINE,
     .sched_flags    = 0,
-    .sched_runtime  =  5000000,  // 5ms in nanoseconds
+    .sched_runtime  =  5000000,  // ナノ秒単位で5ms
     .sched_deadline = 10000000,  // 10ms
-    .sched_period   = 10000000,  // 10ms (= 50% utilization)
+    .sched_period   = 10000000,  // 10ms（= 使用率50%）
 };
 
 if (sched_setattr(0, &attr, 0) < 0)
     perror("sched_setattr");
 ```
 
-Requires `CAP_SYS_NICE`.
+`CAP_SYS_NICE`が必要である。
 
-### sched_yield() for SCHED_DEADLINE {#sched_yield-for-sched_deadline}
+### SCHED_DEADLINEでのsched_yield() {#sched_yield-for-sched_deadline}
 
-A DL task should call `sched_yield()` when it finishes its work early. This tells the CBS that the task is done for this period and the remaining budget can be reclaimed:
+DLタスクは、仕事を早く終えたときに`sched_yield()`を呼び出すべきである。これにより、タスクがこの周期の仕事を終えたこと、そして残りの予算を回収できることがCBSに伝わる:
 
 ```c
 while (1) {
-    do_periodic_work();  // finishes before dl_runtime
-    sched_yield();       // release remaining budget, sleep until next period
+    do_periodic_work();  // dl_runtimeより前に終わる
+    sched_yield();       // 残りの予算を解放し、次の周期までスリープする
 }
 ```
 
-Without `sched_yield()`, the task runs until its budget is exhausted, wasting CPU cycles.
+`sched_yield()`を呼ばないと、タスクは予算を使い切るまで実行され、CPUサイクルを無駄にする。
 
-### Constraints {#constraints}
+### 制約 {#constraints}
 
-- `fork()` from a `SCHED_DEADLINE` task succeeds, but the child is demoted to `SCHED_NORMAL`
-- `pthread_create()` in a DL task works, but the new thread inherits `SCHED_NORMAL`
-- DL tasks cannot be part of a cgroup with CPU limits
+- `SCHED_DEADLINE`タスクからの`fork()`は成功するが、子は`SCHED_NORMAL`に降格される
+- DLタスク内での`pthread_create()`は動作するが、新しいスレッドは`SCHED_NORMAL`を継承する
+- DLタスクは、CPU制限のあるcgroupに所属できない
 
 ```bash
-# Check current DL tasks
-chrt -p $PID  # shows SCHED_DEADLINE and parameters
+# 現在のDLタスクを確認する
+chrt -p $PID  # SCHED_DEADLINEとパラメータを表示する
 
-# View system DL bandwidth usage
+# システムのDL帯域の使用量を表示する
 cat /proc/sched_debug | grep running_bw
 ```
 
-## Interaction with RT tasks {#interaction-with-rt-tasks}
+## RTタスクとの相互作用 {#interaction-with-rt-tasks}
 
-`dl_sched_class` sits above `rt_sched_class` in the class hierarchy. A SCHED_DEADLINE task always preempts SCHED_FIFO/RR tasks, regardless of RT priority.
+クラス階層において、`dl_sched_class`は`rt_sched_class`の上に位置する。SCHED_DEADLINEタスクは、RT優先度にかかわらず、常にSCHED_FIFO/RRタスクをプリエンプトする。
 
-If an RT task holds a mutex that a DL task needs, priority inheritance boosts the RT task's priority. SCHED_DEADLINE also has boosting support via `is_dl_boosted()` — when a DL task is boosted, its effective deadline is derived from the donor task.
+DLタスクが必要とするmutexをRTタスクが保持している場合、優先度継承によってRTタスクの優先度がブーストされる。SCHED_DEADLINEも`is_dl_boosted()`によるブーストをサポートしている。DLタスクがブーストされると、その実効デッドラインはドナータスクから導かれる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [RT Scheduler](rt-scheduler.md) — SCHED_FIFO/RR, the class below DL
-- [Priority Inversion and PI Mutexes](pi-mutexes.md) — How DL interacts with locking
-- [Scheduler Classes](scheduler-classes.md) — Where DL fits in the hierarchy
-- [kernel/sched/deadline.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/deadline.c) — Full CBS implementation
+- [RTスケジューラ](rt-scheduler.md) — SCHED_FIFO/RR、DLの下にあるクラス
+- [優先度逆転とPI mutex](pi-mutexes.md) — DLがロックとどう相互作用するか
+- [スケジューラクラス](scheduler-classes.md) — 階層の中でのDLの位置
+- [kernel/sched/deadline.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/deadline.c) — CBSの完全な実装

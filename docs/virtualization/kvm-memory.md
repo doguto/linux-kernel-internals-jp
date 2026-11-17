@@ -1,10 +1,10 @@
-# Memory Virtualization {#memory-virtualization}
+# メモリ仮想化 {#memory-virtualization}
 
-> EPT, shadow paging, balloon driver, and huge pages for KVM guests
+> KVMゲストのためのEPT、シャドウページング、バルーンドライバ、huge page
 
-## Two layers of address translation {#two-layers-of-address-translation}
+## 2段階のアドレス変換 {#two-layers-of-address-translation}
 
-A guest OS thinks it controls physical memory. It doesn't — it controls *guest physical addresses* (GPA), which KVM translates to *host physical addresses* (HPA) using a second page table layer.
+ゲストOSは自分が物理メモリを制御していると考えている。実際にはそうではない。ゲストOSが制御しているのは*ゲスト物理アドレス*（GPA）であり、KVMはそれを2段目のページテーブル層を使って*ホスト物理アドレス*（HPA）に変換する。
 
 ```
 Guest virtual → Guest physical → Host physical
@@ -14,13 +14,13 @@ Without hardware:  two separate walks, merged by software (shadow paging)
 With EPT/NPT:      hardware does a 2D walk automatically
 ```
 
-## Extended Page Tables (EPT / NPT) {#extended-page-tables-ept-npt}
+## Extended Page Tables（EPT / NPT） {#extended-page-tables-ept-npt}
 
-Intel EPT (Extended Page Tables) and AMD NPT (Nested Page Tables) are the hardware mechanisms for GPA→HPA translation. They eliminate the need for shadow page tables on modern hardware.
+Intel EPT（Extended Page Tables）とAMD NPT（Nested Page Tables）は、GPA→HPA変換のためのハードウェア機構である。これらにより、最近のハードウェアではシャドウページテーブルが不要になる。
 
-### EPT page walk {#ept-page-walk}
+### EPTのページウォーク {#ept-page-walk}
 
-The CPU walks both GCR3 (guest CR3) and the EPT pointer (EPTP) simultaneously:
+CPUは、GCR3（ゲストのCR3）とEPTポインタ（EPTP）の両方を同時にたどる。
 
 ```
 Guest CR3 → PML4 → PDPT → PD → PT → GPA
@@ -28,39 +28,39 @@ Guest CR3 → PML4 → PDPT → PD → PT → GPA
                            EPTP → EPT PML4 → EPT PDPT → EPT PD → EPT PT → HPA
 ```
 
-For a 4-level guest walking a 4-level EPT, the hardware may touch up to 24 page table entries in the worst case (4 guest + 4×4 EPT walks).
+4段のゲストが4段のEPTをたどる場合、最悪のケースでハードウェアは最大24個のページテーブルエントリにアクセスすることがある（ゲストの4回 + EPTの4×4回のウォーク）。
 
 ### struct kvm_mmu {#struct-kvm_mmu}
 
 ```c
-/* Simplified — arch/x86/include/asm/kvm_host.h; several callback and
- * shadow-root fields (get_guest_pgd, get_pdptr, inject_page_fault,
- * gva_to_gpa, sync_spte, mirror_root_hpa, cpu_role, pkru_mask,
- * permissions[], pml4_root, pml5_root, shadow/guest reserved-bits
- * validators) omitted */
+/* 簡略化したもの — arch/x86/include/asm/kvm_host.h。いくつかのコールバックと
+ * シャドウルートのフィールド（get_guest_pgd、get_pdptr、inject_page_fault、
+ * gva_to_gpa、sync_spte、mirror_root_hpa、cpu_role、pkru_mask、
+ * permissions[]、pml4_root、pml5_root、シャドウ/ゲストの予約ビットの
+ * バリデータ）は省略している */
 struct kvm_mmu {
-    /* Page fault handler: invoked on GPA fault */
+    /* ページフォールトハンドラ: GPAのフォールト時に呼ばれる */
     int (*page_fault)(struct kvm_vcpu *vcpu,
                       struct kvm_page_fault *fault);
 
-    /* Root (top-level EPT/shadow PT physical address) */
+    /* ルート（最上位のEPT/シャドウPTの物理アドレス） */
     struct kvm_mmu_root_info root;   /* root.hpa, root.pgd */
     union kvm_mmu_page_role root_role;
 
     struct kvm_mmu_root_info prev_roots[KVM_MMU_NUM_PREV_ROOTS];
 
-    /* PAE root page table(s) — needed when shadowing a 32-bit/PAE guest
-     * paging mode (e.g. under NPT) with a 64-bit host MMU */
+    /* PAEのルートページテーブル — 64ビットのホストMMUで32ビット/PAEの
+     * ゲストのページングモードをシャドウする場合（例: NPT下）に必要 */
     u64                  *pae_root;
 };
 ```
 
-### EPT violation handling {#ept-violation-handling}
+### EPT violationの処理 {#ept-violation-handling}
 
-When a guest accesses memory with no EPT entry, the CPU triggers an EPT violation VM exit:
+ゲストがEPTエントリのないメモリにアクセスすると、CPUはEPT violationのVM exitを発生させる。
 
 ```c
-/* arch/x86/kvm/vmx/vmx.c — handle_ept_violation(), simplified */
+/* arch/x86/kvm/vmx/vmx.c — handle_ept_violation()、簡略化したもの */
 static int handle_ept_violation(struct kvm_vcpu *vcpu)
 {
     gpa_t gpa    = vmcs_read64(GUEST_PHYSICAL_ADDRESS);
@@ -68,38 +68,38 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
     u64   error_code = 0;
 
     /*
-     * exit_qual bits:
-     *   bit 0: read fault
-     *   bit 1: write fault
-     *   bit 2: fetch fault
-     *   bit 7: GPA in addr translation of GVA (not a direct access)
+     * exit_qualのビット:
+     *   ビット0: 読み込みフォールト
+     *   ビット1: 書き込みフォールト
+     *   ビット2: フェッチフォールト
+     *   ビット7: GVAのアドレス変換中のGPA（直接アクセスではない）
      */
     if (exit_qual & EPT_VIOLATION_ACC_WRITE)
         error_code |= PFERR_WRITE_MASK;
     if (exit_qual & EPT_VIOLATION_ACC_INSTR)
         error_code |= PFERR_FETCH_MASK;
-    /* (present/MBEC/GVA-translation/TDX-private bits omitted here) */
+    /* （present/MBEC/GVA変換/TDXプライベートのビットはここでは省略） */
 
-    /* Look up or create the HPA mapping */
+    /* HPAのマッピングを検索または作成する */
     return kvm_mmu_page_fault(vcpu, gpa, error_code, NULL, 0);
 }
 
-/* arch/x86/kvm/mmu/mmu.c — kvm_mmu_page_fault(), simplified (real signature
- * takes 5 concrete params, not variadic; not static; also handles
- * software-protected-VM attributes and write-protect faults, omitted here) */
+/* arch/x86/kvm/mmu/mmu.c — kvm_mmu_page_fault()、簡略化したもの（実際のシグネチャは
+ * 可変長引数ではなく具体的な5つの引数をとる。staticではない。ソフトウェア保護VMの
+ * 属性や書き込み保護フォールトも処理するが、ここでは省略） */
 int noinline kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
                                  u64 error_code, void *insn, int insn_len)
 {
     bool direct = vcpu->arch.mmu->root_role.direct;
     int r, emulation_type = EMULTYPE_PF;
 
-    /* A reserved bit set in error_code is KVM's own MMIO hint */
+    /* error_codeに予約ビットがセットされているのは、KVM自身のMMIOのヒント */
     if (error_code & PFERR_RSVD_MASK) {
         r = handle_mmio_page_fault(vcpu, cr2_or_gpa, direct);
         if (r == RET_PF_EMULATE)
             goto emulate;
     } else {
-        /* Try to resolve the fault by building EPT entries */
+        /* EPTエントリを構築してフォールトの解決を試みる */
         r = kvm_mmu_do_page_fault(vcpu, cr2_or_gpa, error_code, false,
                                   &emulation_type, NULL);
     }
@@ -108,50 +108,50 @@ int noinline kvm_mmu_page_fault(struct kvm_vcpu *vcpu, gpa_t cr2_or_gpa,
         return r;
 
 emulate:
-    /* Emulate the access (e.g., MMIO to a device region) */
+    /* アクセスをエミュレートする（例: デバイス領域へのMMIO） */
     return x86_emulate_instruction(vcpu, cr2_or_gpa, emulation_type,
                                    insn, insn_len);
 }
 ```
 
-### struct kvm_mmu_page (shadow pages) {#struct-kvm_mmu_page-shadow-pages}
+### struct kvm_mmu_page（シャドウページ） {#struct-kvm_mmu_page-shadow-pages}
 
-KVM tracks EPT/shadow pages via `struct kvm_mmu_page`. One struct per page table page:
+KVMは、EPT/シャドウページを`struct kvm_mmu_page`で追跡する。ページテーブルのページ1つにつき1つの構造体がある。
 
 ```c
 struct kvm_mmu_page {
-    struct list_head    link;          /* in kvm->arch.active_mmu_pages */
-    struct hlist_node   hash_link;     /* hash table by gfn */
+    struct list_head    link;          /* kvm->arch.active_mmu_pages内 */
+    struct hlist_node   hash_link;     /* gfnによるハッシュテーブル */
 
-    bool                unsync;        /* sptes may be out of date */
-    u8                  mmu_valid_gen; /* generation counter */
-    bool                nx_huge_page_disallowed; /* can't use a huge page here
-                                                     due to the NX huge page
-                                                     mitigation */
+    bool                unsync;        /* sptesが古くなっている可能性がある */
+    u8                  mmu_valid_gen; /* 世代カウンタ */
+    bool                nx_huge_page_disallowed; /* NX huge pageの緩和策の
+                                                     ため、ここではhuge pageを
+                                                     使えない */
 
-    gfn_t               gfn;          /* guest frame number this page maps */
-    union kvm_mmu_page_role role;      /* level, cr4_pae, access bits, ... */
+    gfn_t               gfn;          /* このページがマップするゲストのフレーム番号 */
+    union kvm_mmu_page_role role;      /* レベル、cr4_pae、アクセスビット、... */
 
-    u64                *spt;          /* the actual page table page (4096 bytes) */
-    u64                *shadowed_translation; /* per-spte: shadowed GPA (upper
-                                                  bits) + access perms (lower) */
-    struct kvm_rmap_head parent_ptes;  /* reverse map: who points here */
+    u64                *spt;          /* 実際のページテーブルのページ（4096バイト） */
+    u64                *shadowed_translation; /* sptごと: シャドウされたGPA（上位
+                                                  ビット）+ アクセス権（下位） */
+    struct kvm_rmap_head parent_ptes;  /* 逆マップ: どこからここを指しているか */
 
     atomic_t            write_flooding_count;
 
-    /* Separate list (kvm->arch.possible_nx_huge_pages), independent of
-     * active_mmu_pages above: pages KVM split to 4K solely to mitigate the
-     * iTLB multihit erratum (an executable huge PTE would otherwise be
-     * split by hardware in a way that can hang certain CPUs). Periodically
-     * re-zapped by a recovery thread (kvm_recover_nx_huge_pages()) so KVM
-     * can retry the huge mapping and recoup the mitigation's TLB cost. */
+    /* 上のactive_mmu_pagesとは独立した別のリスト（kvm->arch.possible_nx_huge_pages）:
+     * iTLB multihitのエラッタを緩和するためだけにKVMが4Kに分割したページ
+     * （そうしないと、実行可能なhuge PTEがハードウェアによって分割され、
+     * 特定のCPUをハングさせ得る）。回復スレッド（kvm_recover_nx_huge_pages()）が
+     * 周期的に再びzapし、KVMがhugeマッピングを再試行して緩和策による
+     * TLBのコストを取り戻せるようにする。 */
     struct list_head    possible_nx_huge_page_link;
 };
 ```
 
-## Shadow paging (without EPT) {#shadow-paging-without-ept}
+## シャドウページング（EPTなし） {#shadow-paging-without-ept}
 
-On older hardware without EPT, KVM maintains **shadow page tables** that directly map GVA→HPA. The guest's CR3 points to the shadow page table, not its own.
+EPTのない古いハードウェアでは、KVMはGVA→HPAを直接マップする**シャドウページテーブル**を維持する。ゲストのCR3は、ゲスト自身のページテーブルではなくシャドウページテーブルを指す。
 
 ```
 Guest CR3 ──────────► Shadow PT (GVA → HPA, maintained by KVM)
@@ -160,20 +160,20 @@ Guest's own PT ──────────────┘
 (GVA → GPA, never loaded)
 ```
 
-### The write-protection trap {#the-write-protection-trap}
+### 書き込み保護によるトラップ {#the-write-protection-trap}
 
-Shadow paging requires KVM to intercept every guest write to a page table:
+シャドウページングでは、KVMはゲストによるページテーブルへのすべての書き込みをインターセプトする必要がある。
 
-1. KVM write-protects all guest page table pages in the shadow PT (clear write permission)
-2. When guest tries to modify its own page table → write fault → VM exit
-3. KVM emulates the write, updates both guest PT and shadow PT
-4. Resume guest
+1. KVMは、シャドウPT内のゲストのページテーブルページをすべて書き込み保護する（書き込み権限をクリアする）
+2. ゲストが自身のページテーブルを変更しようとすると → 書き込みフォールト → VM exit
+3. KVMは書き込みをエミュレートし、ゲストのPTとシャドウPTの両方を更新する
+4. ゲストを再開する
 
-This is costly for page-table-heavy workloads. EPT avoids this entirely.
+これはページテーブル操作の多いワークロードではコストが高い。EPTはこれを完全に回避する。
 
-## Memory slots {#memory-slots}
+## メモリスロット {#memory-slots}
 
-KVM maps guest physical memory in *slots* — contiguous GPA ranges backed by host userspace memory:
+KVMは、ゲストの物理メモリを*スロット*単位でマップする。スロットとは、ホストのユーザー空間メモリを裏付けとする連続したGPA範囲である。
 
 ```c
 /* include/linux/kvm_host.h */
@@ -182,38 +182,38 @@ struct kvm_memory_slot {
     struct interval_tree_node hva_node[2];
     struct rb_node      gfn_node[2];
 
-    gfn_t               base_gfn;   /* start GFN */
-    unsigned long       npages;     /* number of guest pages */
+    gfn_t               base_gfn;   /* 開始GFN */
+    unsigned long       npages;     /* ゲストページ数 */
     unsigned long      *dirty_bitmap;
     struct kvm_arch_memory_slot arch;
 
-    unsigned long       userspace_addr; /* HVA of backing memory */
-    u32                 flags;          /* KVM_MEM_LOG_DIRTY_PAGES, etc. */
+    unsigned long       userspace_addr; /* 裏付けとなるメモリのHVA */
+    u32                 flags;          /* KVM_MEM_LOG_DIRTY_PAGESなど */
     short               id;
     u16                 as_id;
 };
 ```
 
-A slot can be:
+スロットは次のいずれかである。
 
-- **Normal RAM**: backed by `mmap(MAP_ANONYMOUS)` memory in the VMM (e.g. QEMU)
-- **ROM**: read-only (bios, option ROM)
-- **MMIO**: no backing — triggers `KVM_EXIT_MMIO` on access
+- **通常のRAM**: VMM（例: QEMU）内の`mmap(MAP_ANONYMOUS)`メモリを裏付けとする
+- **ROM**: 読み取り専用（BIOS、オプションROM）
+- **MMIO**: 裏付けなし — アクセス時に`KVM_EXIT_MMIO`を発生させる
 
-## Dirty page tracking {#dirty-page-tracking}
+## ダーティページ追跡 {#dirty-page-tracking}
 
-KVM can track which guest pages have been modified (used by live migration):
+KVMは、どのゲストページが変更されたかを追跡できる（ライブマイグレーションで使われる）。
 
 ```c
-/* Enable dirty tracking on a slot */
+/* スロットでダーティ追跡を有効にする */
 struct kvm_userspace_memory_region region = {
     .slot  = 0,
-    .flags = KVM_MEM_LOG_DIRTY_PAGES,  /* enables dirty bitmap */
+    .flags = KVM_MEM_LOG_DIRTY_PAGES,  /* ダーティビットマップを有効にする */
     /* ... */
 };
 ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &region);
 
-/* Fetch and clear dirty bitmap (pauses guest writes during collection) */
+/* ダーティビットマップを取得してクリアする（収集中はゲストの書き込みを一時停止する） */
 struct kvm_dirty_log log = {
     .slot       = 0,
     .dirty_bitmap = bitmap,
@@ -221,32 +221,32 @@ struct kvm_dirty_log log = {
 ioctl(vm_fd, KVM_GET_DIRTY_LOG, &log);
 ```
 
-### Dirty ring (5.11+) {#dirty-ring-511}
+### ダーティリング（5.11以降） {#dirty-ring-511}
 
-The dirty ring is a faster alternative that avoids the bitmap scan:
+ダーティリングは、ビットマップの走査を避ける、より高速な代替手段である。
 
 ```c
-/* Kernel exports dirty GFNs to a per-vCPU ring */
+/* カーネルはダーティなGFNをvCPUごとのリングにエクスポートする */
 struct kvm_dirty_ring {
-    u32    dirty_index;   /* written by kernel */
-    u32    reset_index;   /* read/reset by VMM */
+    u32    dirty_index;   /* カーネルが書き込む */
+    u32    reset_index;   /* VMMが読み込み/リセットする */
     u32    size;
     u32    soft_limit;
-    struct kvm_dirty_gfn *dirty_gfns; /* mmap'd ring */
+    struct kvm_dirty_gfn *dirty_gfns; /* mmapされたリング */
 };
 
 struct kvm_dirty_gfn {
     __u32 flags;
     __u32 slot;
-    __u64 offset;  /* page offset within slot */
+    __u64 offset;  /* スロット内のページオフセット */
 };
 ```
 
-The VMM polls the ring, processes dirty GFNs, and resets them. No bitmap scan needed — much faster for high-write-rate guests.
+VMMはリングをポーリングし、ダーティなGFNを処理してリセットする。ビットマップの走査は不要であり、書き込み頻度の高いゲストでははるかに高速である。
 
-## Balloon driver {#balloon-driver}
+## バルーンドライバ {#balloon-driver}
 
-The balloon driver is a paravirtual mechanism for the host to reclaim memory from a guest without the guest noticing page table manipulations.
+バルーンドライバは、ゲストにページテーブルの操作を気付かせることなく、ホストがゲストからメモリを回収するための準仮想化の仕組みである。
 
 ```
 Host (KVM)              Guest (virtio-balloon driver)
@@ -266,26 +266,26 @@ Host (KVM)              Guest (virtio-balloon driver)
     │                              │ release pages back to guest allocator
 ```
 
-### Balloon stats {#balloon-stats}
+### バルーンの統計 {#balloon-stats}
 
-The guest can also report memory statistics to the host:
+ゲストはメモリの統計をホストに報告することもできる。
 
 ```c
-/* drivers/virtio/virtio_balloon.c, simplified.
- * update_stat() takes a running index, not just a tag — real callers do
- * update_stat(vb, idx++, TAG, val). Real code splits this in two:
- * update_balloon_vm_stats() first fills in vm-event-derived stats (swap
- * in/out, major/minor faults, OOM kills, reclaim/scan counts, hugetlb
- * stats — omitted here), returning the count; update_balloon_stats()
- * below picks up from there and appends the sysinfo-derived stats. Both
- * return the total entries filled, not void. */
+/* drivers/virtio/virtio_balloon.c、簡略化したもの。
+ * update_stat()はタグだけでなく実行中のインデックスを受け取る — 実際の呼び出し側は
+ * update_stat(vb, idx++, TAG, val)とする。実際のコードはこれを2つに分けている:
+ * まずupdate_balloon_vm_stats()がvmイベント由来の統計（スワップの
+ * イン/アウト、メジャー/マイナーフォールト、OOM kill、回収/スキャンの回数、hugetlbの
+ * 統計 — ここでは省略）を埋めて個数を返し、下のupdate_balloon_stats()が
+ * そこから続けてsysinfo由来の統計を追加する。どちらも
+ * voidではなく、埋めたエントリの総数を返す。 */
 static unsigned int update_balloon_stats(struct virtio_balloon *vb)
 {
     struct sysinfo i;
     unsigned int idx;
     unsigned long caches;
 
-    idx = update_balloon_vm_stats(vb);  /* SWAP_IN/OUT, MAJFLT, MINFLT, ... */
+    idx = update_balloon_vm_stats(vb);  /* SWAP_IN/OUT、MAJFLT、MINFLT、... */
 
     si_meminfo(&i);
     caches = global_node_page_state(NR_FILE_PAGES);
@@ -303,34 +303,34 @@ static unsigned int update_balloon_stats(struct virtio_balloon *vb)
 }
 ```
 
-The host uses these stats to make inflation/deflation decisions intelligently (e.g., don't inflate if guest has no free memory).
+ホストはこれらの統計を使って、膨張/収縮の判断を賢く行う（例: ゲストに空きメモリがなければ膨張させない）。
 
-## Huge pages for guests {#huge-pages-for-guests}
+## ゲストのためのhuge page {#huge-pages-for-guests}
 
-Using huge pages in the EPT improves TLB efficiency. KVM can map a 2MB or 1GB GPA range with a single EPT entry.
+EPTでhuge pageを使うと、TLBの効率が向上する。KVMは、2MBまたは1GBのGPA範囲を単一のEPTエントリでマップできる。
 
-### Transparent huge pages (THP) for guest memory {#transparent-huge-pages-thp-for-guest-memory}
+### ゲストメモリのためのTransparent huge page（THP） {#transparent-huge-pages-thp-for-guest-memory}
 
-QEMU typically allocates guest RAM with `mmap(MAP_ANONYMOUS)`. With THP enabled, the host kernel may promote guest pages to huge pages automatically, and KVM will use 2MB EPT entries:
+QEMUは通常、`mmap(MAP_ANONYMOUS)`でゲストのRAMを割り当てる。THPが有効であれば、ホストカーネルはゲストのページを自動的にhuge pageに昇格させることがあり、KVMは2MBのEPTエントリを使う。
 
 ```bash
-# On host: allow THP for anonymous memory
+# ホスト上で: 無名メモリにTHPを許可する
 echo always > /sys/kernel/mm/transparent_hugepage/enabled
 
-# Check if guest pages are backed by hugepages
+# ゲストのページがhugepageで裏付けられているか確認する
 grep -i huge /proc/$(pgrep qemu)/smaps | head
 # AnonHugePages: 1234567 kB
 ```
 
-### hugetlbfs-backed guest memory {#hugetlbfs-backed-guest-memory}
+### hugetlbfsを裏付けとするゲストメモリ {#hugetlbfs-backed-guest-memory}
 
-For guaranteed huge pages with no THP pressure, QEMU can use hugetlbfs:
+THPの負荷なしにhuge pageを保証するには、QEMUはhugetlbfsを使える。
 
 ```bash
-# Allocate 512 x 2MB hugepages (1GB total) on host
+# ホスト上で2MBのhugepageを512個（合計1GB）割り当てる
 echo 512 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
 
-# Start QEMU with hugetlbfs memory
+# hugetlbfsのメモリでQEMUを起動する
 qemu-system-x86_64 \
     -m 1G \
     -mem-path /dev/hugepages \
@@ -338,15 +338,15 @@ qemu-system-x86_64 \
     ...
 ```
 
-When EPT maps these, every 2MB of guest physical memory uses one EPT leaf entry instead of 512. Fewer TLB misses → better guest performance for memory-intensive workloads.
+EPTがこれらをマップすると、ゲスト物理メモリ2MBごとに、512個ではなく1個のEPTリーフエントリを使う。TLBミスが減る → メモリ集約的なワークロードでゲストの性能が向上する。
 
-### KVM large page handling {#kvm-large-page-handling}
+### KVMのラージページの扱い {#kvm-large-page-handling}
 
 ```c
-/* arch/x86/kvm/mmu/mmu.c — kvm_mmu_hugepage_adjust(), simplified.
- * Not static, and returns void, not int. The actual alignment / host-page-size
- * check is a separate helper, kvm_mmu_max_mapping_level() (walks each memslot's
- * per-gfn lpage_info plus the real host page size) — not reproduced here. */
+/* arch/x86/kvm/mmu/mmu.c — kvm_mmu_hugepage_adjust()、簡略化したもの。
+ * staticではなく、intではなくvoidを返す。実際のアラインメント/ホストのページサイズの
+ * チェックは別のヘルパーkvm_mmu_max_mapping_level()で行われる（各memslotの
+ * gfnごとのlpage_infoと実際のホストのページサイズをたどる）— ここでは再現していない。 */
 void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault)
 {
     struct kvm_memory_slot *slot = fault->slot;
@@ -360,10 +360,10 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
     if (is_error_noslot_pfn(fault->pfn))
         return;
     if (kvm_slot_dirty_track_enabled(slot))
-        return;   /* KVM dirty-logs at 4KiB granularity, so huge pages
-                     get split to 4K on first write when a slot is dirty-tracked */
+        return;   /* KVMは4KiB粒度でダーティログを取るので、スロットがダーティ追跡
+                     されている場合、huge pageは最初の書き込みで4Kに分割される */
 
-    /* Largest level both the GPA alignment and the host page support: */
+    /* GPAのアラインメントとホストのページの両方がサポートする最大のレベル: */
     fault->req_level = kvm_mmu_max_mapping_level(vcpu->kvm, fault,
                                                  fault->slot, fault->gfn);
     if (fault->req_level == PG_LEVEL_4K || fault->huge_page_disallowed)
@@ -375,133 +375,133 @@ void kvm_mmu_hugepage_adjust(struct kvm_vcpu *vcpu, struct kvm_page_fault *fault
 }
 ```
 
-## Observing guest memory {#observing-guest-memory}
+## ゲストメモリの観測 {#observing-guest-memory}
 
 ```bash
-# There's no dedicated "ept_violations" file (see kvm_vcpu_stats_desc[] in
-# x86.c for the full real list). pf_taken is the nearest available proxy —
-# it counts every fault handled by kvm_mmu_page_fault(), which includes
-# EPT violations but isn't scoped to them exclusively:
+# 専用の"ept_violations"ファイルはない（実際の完全な一覧はx86.cの
+# kvm_vcpu_stats_desc[]を参照）。pf_takenが利用できる最も近い代替指標である —
+# kvm_mmu_page_fault()が処理するすべてのフォールトを数えるので、EPT violationを
+# 含むが、それだけに限定されてはいない:
 cat /sys/kernel/debug/kvm/*/vcpu0/pf_taken
 
-# Guest TLB flush requests (also per-vCPU, same directory level)
+# ゲストのTLBフラッシュ要求（これもvCPUごと、同じディレクトリ階層）
 cat /sys/kernel/debug/kvm/*/vcpu0/tlb_flush
 
-# Shadow pages KVM couldn't make huge, due to the NX-huge-page mitigation
-# (this one's a per-VM stat, directly under the VM directory)
+# NX huge pageの緩和策のためにKVMがhugeにできなかったシャドウページ
+# （これはVMごとの統計で、VMのディレクトリ直下にある）
 cat /sys/kernel/debug/kvm/*/nx_lpage_splits
 
-# Host sees guest RSS as the QEMU process
+# ホストからはゲストのRSSはQEMUプロセスとして見える
 cat /proc/$(pgrep qemu)/status | grep VmRSS
 
-# Check EPT is active
+# EPTが有効か確認する
 cat /sys/module/kvm_intel/parameters/ept
 # Y   (or N if disabled)
 
-# Force EPT off for testing (requires shadow paging fallback)
+# テストのためにEPTを強制的に無効にする（シャドウページングへのフォールバックが必要）
 modprobe kvm_intel ept=0
 ```
 
-## KVM dirty logging for live migration {#kvm-dirty-logging-for-live-migration}
+## ライブマイグレーションのためのKVMのダーティロギング {#kvm-dirty-logging-for-live-migration}
 
-Live migration must transfer guest memory to the destination. KVM's dirty logging tracks which pages were written since the last iteration:
+ライブマイグレーションでは、ゲストのメモリを移行先に転送しなければならない。KVMのダーティロギングは、前回の反復以降にどのページが書き込まれたかを追跡する。
 
 ```c
-/* Enable dirty logging on a memory slot: */
+/* メモリスロットでダーティロギングを有効にする: */
 struct kvm_dirty_log {
     __u32 slot;
     __u32 padding1;
     union {
-        void __user *dirty_bitmap; /* userspace buffer for dirty bits */
+        void __user *dirty_bitmap; /* ダーティビット用のユーザー空間バッファ */
         __u64 padding2;
     };
 };
 
-/* Phase 1: enable dirty logging */
+/* フェーズ1: ダーティロギングを有効にする */
 struct kvm_userspace_memory_region region = {
     .slot  = 0,
-    .flags = KVM_MEM_LOG_DIRTY_PAGES,  /* enable dirty tracking */
+    .flags = KVM_MEM_LOG_DIRTY_PAGES,  /* ダーティ追跡を有効にする */
     .guest_phys_addr = 0,
     .memory_size = 4ULL << 30,         /* 4GB */
     .userspace_addr = (uint64_t)vm_mem,
 };
 ioctl(vm_fd, KVM_SET_USER_MEMORY_REGION, &region);
 
-/* Phase 2: iterative copy — transfer dirty pages, clear bitmap, repeat */
+/* フェーズ2: 反復的なコピー — ダーティページを転送し、ビットマップをクリアし、繰り返す */
 void *dirty_bitmap = calloc(1, bitmap_size);
 struct kvm_dirty_log dirty = {
     .slot = 0,
     .dirty_bitmap = dirty_bitmap,
 };
 ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty);
-/* Now dirty_bitmap has a bit set for each 4K page written since last call */
-/* Transfer those pages to destination, then repeat */
+/* これでdirty_bitmapには、前回の呼び出し以降に書き込まれた4Kページごとにビットがセットされている */
+/* それらのページを移行先に転送し、繰り返す */
 ```
 
-The EPT hardware's dirty bit (EPT PTE bit 9) is cleared when KVM resets the bitmap. Next write access causes an EPT violation → KVM marks page dirty and re-enables the dirty bit.
+EPTハードウェアのダーティビット（EPT PTEのビット9）は、KVMがビットマップをリセットするときにクリアされる。次の書き込みアクセスでEPT violationが発生し → KVMはページをダーティとしてマークし、ダーティビットを再び有効にする。
 
 ### KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 {#kvm_cap_manual_dirty_log_protect2}
 
-A two-phase protocol for very large VMs that avoids races:
+競合を避ける、非常に大きなVM向けの2段階のプロトコル:
 
 ```bash
-# Phase 1: get dirty pages (kernel also write-protects them to capture new dirtying)
+# フェーズ1: ダーティページを取得する（カーネルは新たなダーティ化を捉えるため、それらを書き込み保護もする）
 ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty);
-# Transfer those dirty pages to destination...
-# Phase 2: clear dirty bits for the pages just transferred
+# それらのダーティページを移行先に転送する...
+# フェーズ2: 転送したばかりのページのダーティビットをクリアする
 ioctl(vm_fd, KVM_CLEAR_DIRTY_LOG, &clear);
 ```
 
-## Memory overcommit and KSM {#memory-overcommit-and-ksm}
+## メモリのオーバーコミットとKSM {#memory-overcommit-and-ksm}
 
 ```bash
-# KSM (Kernel Samepage Merging): merge identical pages across VMs
-echo 1 > /sys/kernel/mm/ksm/run         # enable
-echo 200 > /sys/kernel/mm/ksm/pages_to_scan  # pages/interval
+# KSM（Kernel Samepage Merging）: VM間で同一のページをマージする
+echo 1 > /sys/kernel/mm/ksm/run         # 有効にする
+echo 200 > /sys/kernel/mm/ksm/pages_to_scan  # ページ数/間隔
 echo 100 > /sys/kernel/mm/ksm/sleep_millisecs
 
-# Stats:
-cat /sys/kernel/mm/ksm/pages_shared     # merged pages
-cat /sys/kernel/mm/ksm/pages_sharing    # using those shared pages
-cat /sys/kernel/mm/ksm/pages_unshared   # not mergeable
-# savings = pages_sharing * 4KB
+# 統計:
+cat /sys/kernel/mm/ksm/pages_shared     # マージされたページ
+cat /sys/kernel/mm/ksm/pages_sharing    # それらの共有ページを使っているもの
+cat /sys/kernel/mm/ksm/pages_unshared   # マージ不可
+# 節約量 = pages_sharing * 4KB
 
-# QEMU: enable KSM for guest memory
-# (automatic: QEMU calls madvise(MADV_MERGEABLE) on guest RAM)
+# QEMU: ゲストメモリでKSMを有効にする
+# （自動: QEMUはゲストのRAMに対してmadvise(MADV_MERGEABLE)を呼ぶ）
 
-# Memory balloon: reclaim memory from idle guests
-# virtio-balloon driver in guest tells host to reclaim pages
-# Used by libvirt/QEMU to over-provision RAM across VMs
+# メモリバルーン: アイドルなゲストからメモリを回収する
+# ゲスト内のvirtio-balloonドライバがホストにページの回収を伝える
+# libvirt/QEMUがVM間でRAMをオーバープロビジョニングするために使う
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/include/asm/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/kvm_host.h) — `struct kvm_mmu`: the per-vCPU MMU context (`root` — a `struct kvm_mmu_root_info` holding the root HPA — `page_fault` handler, `root_role`)
-- [arch/x86/kvm/mmu/mmu_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu_internal.h) — `struct kvm_mmu_page`: one struct per shadow/EPT page-table page, including the reverse-map `parent_ptes`
-- [arch/x86/kvm/mmu/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu.c) — `kvm_mmu_page_fault()` and `kvm_mmu_hugepage_adjust()`: GPA fault resolution and huge-page level selection
-- [arch/x86/kvm/vmx/vmx.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmx.c) — `handle_ept_violation()`: the VMX EPT-violation VM-exit handler
-- [include/linux/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_host.h) — `struct kvm_memory_slot`: guest physical memory slot layout
-- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `struct kvm_userspace_memory_region`, `struct kvm_dirty_gfn`, and the `KVM_SET_USER_MEMORY_REGION` / `KVM_MEM_LOG_DIRTY_PAGES` ioctl ABI
-- [include/linux/kvm_dirty_ring.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_dirty_ring.h) — `struct kvm_dirty_ring`: the per-vCPU dirty-GFN ring buffer (5.11+)
-- [drivers/virtio/virtio_balloon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_balloon.c) — `update_balloon_stats()`: guest memory statistics reported to the host
+- [arch/x86/include/asm/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/kvm_host.h) — `struct kvm_mmu`: vCPUごとのMMUコンテキスト（`root` — ルートのHPAを保持する`struct kvm_mmu_root_info` — 、`page_fault`ハンドラ、`root_role`）
+- [arch/x86/kvm/mmu/mmu_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu_internal.h) — `struct kvm_mmu_page`: シャドウ/EPTのページテーブルページごとに1つの構造体。逆マップ`parent_ptes`を含む
+- [arch/x86/kvm/mmu/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/mmu/mmu.c) — `kvm_mmu_page_fault()`と`kvm_mmu_hugepage_adjust()`: GPAのフォールト解決とhuge pageのレベル選択
+- [arch/x86/kvm/vmx/vmx.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmx.c) — `handle_ept_violation()`: VMXのEPT violationによるVM exitのハンドラ
+- [include/linux/kvm_host.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_host.h) — `struct kvm_memory_slot`: ゲスト物理メモリのスロットのレイアウト
+- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `struct kvm_userspace_memory_region`、`struct kvm_dirty_gfn`、および`KVM_SET_USER_MEMORY_REGION` / `KVM_MEM_LOG_DIRTY_PAGES`のioctl ABI
+- [include/linux/kvm_dirty_ring.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kvm_dirty_ring.h) — `struct kvm_dirty_ring`: vCPUごとのダーティGFNのリングバッファ（5.11以降）
+- [drivers/virtio/virtio_balloon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_balloon.c) — `update_balloon_stats()`: ホストに報告されるゲストのメモリ統計
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KVM Architecture](kvm-arch.md) — /dev/kvm API, vCPU run loop
-- [virtio](virtio.md) — paravirtual I/O: virtqueues, virtio-net, virtio-blk
-- [VFIO](vfio.md) — direct device passthrough to VMs
-- [KVM Live Migration](live-migration.md) — how dirty-bitmap and dirty-ring tracking drive the pre-copy migration loop
-- [Memory Management: page tables](../mm/page-tables.md) — host-side page tables
-- [Memory Management: THP](../mm/thp.md) — huge page promotion KVM uses
+- [KVMアーキテクチャ](kvm-arch.md) — /dev/kvm API、vCPUの実行ループ
+- [virtio](virtio.md) — 準仮想化I/O: virtqueue、virtio-net、virtio-blk
+- [VFIO](vfio.md) — VMへのデバイスの直接パススルー
+- [KVMライブマイグレーション](live-migration.md) — ダーティビットマップとダーティリングによる追跡が、プレコピーのマイグレーションループをどう駆動するか
+- [メモリ管理: ページテーブル](../mm/page-tables.md) — ホスト側のページテーブル
+- [メモリ管理: THP](../mm/thp.md) — KVMが利用するhuge pageへの昇格
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [KVM: Dirty ring interface](https://lwn.net/Articles/833784/) — Peter Xu's patch posting introducing the per-vCPU dirty-ring alternative to the dirty bitmap
+- [KVM: Dirty ring interface](https://lwn.net/Articles/833784/) — ダーティビットマップに代わるvCPUごとのダーティリングを導入したPeter Xuのパッチ投稿
 
-### External {#external}
+### 外部資料 {#external}
 
-- [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — memory slot ioctls (`KVM_SET_USER_MEMORY_REGION`), dirty logging (`KVM_GET_DIRTY_LOG`, `KVM_CLEAR_DIRTY_LOG`), and the dirty-ring capability
-- [Kernel Samepage Merging](https://docs.kernel.org/admin-guide/mm/ksm.html) — the `/sys/kernel/mm/ksm/` sysfs knobs and how KSM deduplicates identical guest pages
-- [Transparent Hugepage Support](https://docs.kernel.org/admin-guide/mm/transhuge.html) — THP configuration referenced in the guest huge-pages section above
+- [The Definitive KVM API Documentation](https://docs.kernel.org/virt/kvm/api.html) — メモリスロットのioctl（`KVM_SET_USER_MEMORY_REGION`）、ダーティロギング（`KVM_GET_DIRTY_LOG`、`KVM_CLEAR_DIRTY_LOG`）、ダーティリングのケーパビリティ
+- [Kernel Samepage Merging](https://docs.kernel.org/admin-guide/mm/ksm.html) — `/sys/kernel/mm/ksm/`のsysfsの設定項目と、KSMが同一のゲストページを重複排除する仕組み
+- [Transparent Hugepage Support](https://docs.kernel.org/admin-guide/mm/transhuge.html) — 上のゲストのhuge pageのセクションで参照したTHPの設定

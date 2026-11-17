@@ -1,16 +1,16 @@
 # seccomp BPF {#seccomp-bpf}
 
-> Syscall filtering for privilege reduction and attack surface minimization
+> 権限削減と攻撃対象領域の最小化のためのsyscallフィルタリング
 
-## What seccomp does {#what-seccomp-does}
+## seccompが行うこと {#what-seccomp-does}
 
-seccomp (secure computing mode) installs a BPF program that runs on every syscall entry. The filter can:
+seccomp（secure computing mode）は、すべてのsyscallエントリで実行されるBPFプログラムをインストールする。フィルタは次のことができる:
 
-- Allow the syscall to proceed
-- Return an error to the caller (without kernel processing)
-- Kill the process
-- Log the event
-- Notify a userspace process (SECCOMP_RET_USER_NOTIF)
+- syscallの続行を許可する
+- 呼び出し元にエラーを返す（カーネルでの処理は行わない）
+- プロセスをkillする
+- イベントを記録する
+- ユーザー空間のプロセスに通知する（SECCOMP_RET_USER_NOTIF）
 
 ```
 Process → syscall instruction
@@ -26,68 +26,68 @@ Process → syscall instruction
  kernel handles syscall
 ```
 
-## From strict mode to seccomp-BPF {#from-strict-mode-to-seccomp-bpf}
+## strictモードからseccomp-BPFへ {#from-strict-mode-to-seccomp-bpf}
 
-### The original seccomp (Linux 2.6.12, 2005) {#the-original-seccomp-linux-2612-2005}
+### 最初のseccomp（Linux 2.6.12、2005年） {#the-original-seccomp-linux-2612-2005}
 
-Andrea Arcangeli introduced seccomp — [`d949d0ec9c60`](https://git.kernel.org/linus/d949d0ec9c601f2b148bed3cdb5f87c052968554) — to address a specific threat: untrusted code running in a computational sandbox (e.g., a commercial "safe browsing" or grid computing service). The design was maximally restrictive: once a process called `prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT)`, it could only use four syscalls: `read`, `write`, `exit`, and `sigreturn`. Any other syscall killed it with SIGKILL.
+Andrea Arcangeliは、特定の脅威に対処するためにseccompを導入した — [`d949d0ec9c60`](https://git.kernel.org/linus/d949d0ec9c601f2b148bed3cdb5f87c052968554)。その脅威とは、計算用サンドボックス（たとえば商用の「安全なブラウジング」やグリッドコンピューティングのサービス）内で動く信頼できないコードである。設計は最大限に制限的だった。プロセスが`prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT)`を呼ぶと、以後は`read`、`write`、`exit`、`sigreturn`の4つのsyscallしか使えなくなる。それ以外のsyscallを呼ぶとSIGKILLでkillされた。
 
-This was safe but completely unusable for real applications. An application that needs to open files, allocate memory, or interact with the network couldn't use strict mode at all.
+これは安全ではあったが、実際のアプリケーションにはまったく使えなかった。ファイルを開いたり、メモリを割り当てたり、ネットワークとやり取りしたりする必要のあるアプリケーションは、strictモードをまったく使えなかった。
 
-### Why the kernel couldn't do more (without BPF) {#why-the-kernel-couldnt-do-more-without-bpf}
+### なぜカーネルは（BPFなしでは）それ以上のことができなかったか {#why-the-kernel-couldnt-do-more-without-bpf}
 
-The limitation was policy expression. "Allow only `read` and `write`" is simple. "Allow `read` and `write` on file descriptors that were open before sandbox entry, but not `open`" is stateful and complex. "Allow `mmap` with `PROT_READ` but not `PROT_WRITE|PROT_EXEC`" requires inspecting arguments. Encoding all possible policies in the kernel would have required a domain-specific language — exactly what BPF is.
+制約はポリシーの表現にあった。「`read`と`write`だけを許可する」は単純である。「サンドボックスに入る前に開かれていたファイルディスクリプタに対する`read`と`write`は許可するが、`open`は許可しない」は状態を持ち複雑である。「`PROT_READ`での`mmap`は許可するが`PROT_WRITE|PROT_EXEC`は許可しない」は引数の検査を必要とする。考えうるすべてのポリシーをカーネル内にエンコードするには、ドメイン固有言語が必要になったはずだ — それこそがまさにBPFである。
 
-### seccomp-BPF (Linux 3.5, 2012) {#seccomp-bpf-linux-35-2012}
+### seccomp-BPF（Linux 3.5、2012年） {#seccomp-bpf-linux-35-2012}
 
-Will Drewry (Google Chrome team) wrote the seccomp-BPF extension — [`e2cfabdfd075`](https://git.kernel.org/linus/e2cfabdfd075648216f99c2c03821cf3f47c1727), [LWN](https://lwn.net/Articles/475043/) — driven by Chrome's sandbox requirements. Chrome needed to isolate its renderer process from the kernel — allow only the syscalls the renderer legitimately needs, with argument filtering to prevent abuse even of allowed syscalls.
+Will Drewry（Google Chromeチーム）は、Chromeのサンドボックスの要件を動機としてseccomp-BPF拡張を書いた — [`e2cfabdfd075`](https://git.kernel.org/linus/e2cfabdfd075648216f99c2c03821cf3f47c1727)、[LWN](https://lwn.net/Articles/475043/)。Chromeはレンダラプロセスをカーネルから隔離する必要があった — レンダラが正当に必要とするsyscallだけを許可し、許可したsyscallでさえ悪用されないよう引数をフィルタリングするのである。
 
-The key insight: Classic BPF (the existing socket filter VM) was already a general-purpose policy language for inspecting kernel data. `struct seccomp_data` — the syscall number plus six arguments — is just a 64-byte struct. A cBPF program can inspect any field of that struct and return ALLOW or DENY.
+鍵となる洞察は次のとおりである。Classic BPF（既存のソケットフィルタVM）は、すでにカーネルのデータを検査するための汎用ポリシー言語だった。`struct seccomp_data` — syscall番号と6つの引数 — は64バイトの構造体にすぎない。cBPFプログラムはその構造体の任意のフィールドを検査し、ALLOWかDENYを返せる。
 
-Instead of building a new policy language, seccomp-BPF reused cBPF as-is. The kernel runs the BPF program on every syscall entry; the program returns an action code. This required almost no new kernel machinery — the BPF interpreter/JIT was already there.
+seccomp-BPFは新しいポリシー言語を作る代わりに、cBPFをそのまま再利用した。カーネルはすべてのsyscallエントリでBPFプログラムを実行し、プログラムはアクションコードを返す。これには新しいカーネルの仕組みはほとんど必要なかった — BPFのインタプリタ/JITはすでに存在していたからである。
 
-Chrome shipped with seccomp-BPF in Chrome 23 (2012), becoming the first major application to sandbox itself this way. systemd, Docker, Firefox, and Android all adopted seccomp-BPF filters. The `SECCOMP_RET_USER_NOTIF` extension (Linux 5.0, 2019 — [`6a21cc50f0c7`](https://git.kernel.org/linus/6a21cc50f0c7f87dae5259f6cfefe024412313f6) by Tycho Andersen) allowed supervisors to intercept and handle syscalls on behalf of sandboxed processes, enabling user-namespace container emulation without root.
+ChromeはChrome 23（2012年）でseccomp-BPFを搭載し、この方法で自らをサンドボックス化した最初の主要アプリケーションとなった。systemd、Docker、Firefox、Androidはいずれもseccomp-BPFフィルタを採用した。`SECCOMP_RET_USER_NOTIF`拡張（Linux 5.0、2019年 — Tycho Andersenによる[`6a21cc50f0c7`](https://git.kernel.org/linus/6a21cc50f0c7f87dae5259f6cfefe024412313f6)）により、スーパーバイザがサンドボックス化されたプロセスに代わってsyscallを横取りして処理できるようになり、rootなしでのユーザーnamespaceコンテナのエミュレーションが可能になった。
 
-## Classic (strict) mode {#classic-strict-mode}
+## クラシック（strict）モード {#classic-strict-mode}
 
-Before BPF filters, seccomp offered only one mode:
+BPFフィルタ以前、seccompは1つのモードしか提供していなかった:
 
 ```c
-/* Allow only read, write, exit, sigreturn */
+/* read、write、exit、sigreturnのみを許可する */
 prctl(PR_SET_SECCOMP, SECCOMP_MODE_STRICT);
-/* Any other syscall → SIGKILL */
+/* それ以外のsyscall → SIGKILL */
 ```
 
-## BPF filter mode {#bpf-filter-mode}
+## BPFフィルタモード {#bpf-filter-mode}
 
-The full seccomp uses Classic BPF programs operating on `struct seccomp_data`:
+完全なseccompは、`struct seccomp_data`を対象に動作するClassic BPFプログラムを使う:
 
 ```c
 /* include/uapi/linux/seccomp.h */
 struct seccomp_data {
-    int     nr;                     /* syscall number */
+    int     nr;                     /* syscall番号 */
     __u32   arch;                   /* AUDIT_ARCH_* */
-    __u64   instruction_pointer;    /* rip at syscall */
-    __u64   args[6];                /* syscall arguments */
+    __u64   instruction_pointer;    /* syscall時のrip */
+    __u64   args[6];                /* syscallの引数 */
 };
 ```
 
-### Filter return values {#filter-return-values}
+### フィルタの戻り値 {#filter-return-values}
 
 ```c
-SECCOMP_RET_KILL_PROCESS  /* kill entire process with SIGSYS (most severe) */
-SECCOMP_RET_KILL_THREAD   /* kill calling thread only */
-SECCOMP_RET_TRAP          /* deliver SIGSYS (can be caught by signal handler) */
-SECCOMP_RET_ERRNO         /* return error: SECCOMP_RET_DATA contains errno */
-SECCOMP_RET_USER_NOTIF    /* notify supervisor process (5.0+) */
-SECCOMP_RET_TRACE         /* notify ptrace debugger */
-SECCOMP_RET_LOG           /* allow but log the syscall */
-SECCOMP_RET_ALLOW         /* allow (most permissive) */
+SECCOMP_RET_KILL_PROCESS  /* プロセス全体をSIGSYSでkillする（最も厳しい） */
+SECCOMP_RET_KILL_THREAD   /* 呼び出したスレッドだけをkillする */
+SECCOMP_RET_TRAP          /* SIGSYSを配送する（シグナルハンドラで捕捉可能） */
+SECCOMP_RET_ERRNO         /* エラーを返す: SECCOMP_RET_DATAにerrnoが入る */
+SECCOMP_RET_USER_NOTIF    /* スーパーバイザプロセスに通知する（5.0以降） */
+SECCOMP_RET_TRACE         /* ptraceデバッガに通知する */
+SECCOMP_RET_LOG           /* 許可するがsyscallを記録する */
+SECCOMP_RET_ALLOW         /* 許可する（最も寛容） */
 ```
 
-Return value precedence (lowest wins): KILL > TRAP > ERRNO > USER_NOTIF > TRACE > LOG > ALLOW.
+戻り値の優先順位（最も低い値が勝つ）: KILL > TRAP > ERRNO > USER_NOTIF > TRACE > LOG > ALLOW。
 
-### Raw BPF filter example {#raw-bpf-filter-example}
+### 生のBPFフィルタの例 {#raw-bpf-filter-example}
 
 ```c
 #include <sys/prctl.h>
@@ -99,31 +99,31 @@ Return value precedence (lowest wins): KILL > TRAP > ERRNO > USER_NOTIF > TRACE 
 static int install_filter(void)
 {
     struct sock_filter filter[] = {
-        /* Load architecture */
+        /* アーキテクチャをロードする */
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                  (offsetof(struct seccomp_data, arch))),
-        /* Verify x86-64 */
+        /* x86-64であることを検証する */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K,
                  AUDIT_ARCH_X86_64, 1, 0),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
 
-        /* Load syscall number */
+        /* syscall番号をロードする */
         BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
                  (offsetof(struct seccomp_data, nr))),
 
-        /* Allow read */
+        /* readを許可する */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_read, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-        /* Allow write */
+        /* writeを許可する */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_write, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-        /* Allow exit_group */
+        /* exit_groupを許可する */
         BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, __NR_exit_group, 0, 1),
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 
-        /* Default: kill */
+        /* デフォルト: kill */
         BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_KILL_PROCESS),
     };
 
@@ -132,8 +132,8 @@ static int install_filter(void)
         .filter = filter,
     };
 
-    /* Must set PR_SET_NO_NEW_PRIVS before installing filter
-       (unless running as root) */
+    /* フィルタをインストールする前にPR_SET_NO_NEW_PRIVSを設定しなければならない
+       （rootで実行している場合を除く） */
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0)
         return -1;
 
@@ -144,102 +144,102 @@ static int install_filter(void)
 }
 ```
 
-### libseccomp: high-level API {#libseccomp-high-level-api}
+### libseccomp: 高水準API {#libseccomp-high-level-api}
 
-Raw BPF is error-prone. Use `libseccomp` instead:
+生のBPFは間違いやすい。代わりに`libseccomp`を使うこと:
 
 ```c
 #include <seccomp.h>
 
-/* Allow-list approach: start with everything blocked */
+/* 許可リスト方式: すべてをブロックした状態から始める */
 scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_KILL_PROCESS);
 
-/* Add allowances */
+/* 許可を追加する */
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(read), 0);
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(write), 0);
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(exit_group), 0);
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(mmap), 0);
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(munmap), 0);
 
-/* Conditional rule: only allow openat with read-only flag */
+/* 条件付きルール: 読み取り専用フラグのopenatのみを許可する */
 seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(openat), 1,
     SCMP_A2(SCMP_CMP_MASKED_EQ, O_WRONLY | O_RDWR, 0));
-/*          ^ argument 2 (flags) masked against O_WRONLY|O_RDWR must equal 0 */
+/*          ^ 引数2（flags）をO_WRONLY|O_RDWRでマスクした値が0でなければならない */
 
-/* Load the filter */
+/* フィルタをロードする */
 seccomp_load(ctx);
 seccomp_release(ctx);
 ```
 
 ```bash
-# Link against libseccomp
+# libseccompとリンクする
 gcc -o myapp myapp.c -lseccomp
 ```
 
-## Container use: Docker's default profile {#container-use-dockers-default-profile}
+## コンテナでの利用: Dockerのデフォルトプロファイル {#container-use-dockers-default-profile}
 
-Docker installs a seccomp profile blocking ~40 dangerous syscalls:
+Dockerは約40個の危険なsyscallをブロックするseccompプロファイルをインストールする:
 
 ```bash
-# Show Docker's default seccomp profile
+# Dockerのデフォルトのseccompプロファイルを表示する
 docker inspect --format '{{.HostConfig.SecurityOpt}}' container_name
 
-# Run with no seccomp (for debugging)
+# seccompなしで実行する（デバッグ用）
 docker run --security-opt seccomp=unconfined ubuntu bash
 
-# Run with custom profile
+# 独自のプロファイルで実行する
 docker run --security-opt seccomp=/path/to/profile.json ubuntu bash
 ```
 
-The default Docker profile blocks (among others):
+Dockerのデフォルトプロファイルは（特に）次のものをブロックする:
 
-- `acct` — process accounting
-- `add_key` — kernel keyring
-- `bpf` — BPF programs
-- `kexec_load` — kernel replacement
-- `mount` — filesystem mounting
-- `perf_event_open` — performance monitoring
-- `ptrace` — process tracing
-- `swapon/swapoff` — swap management
-- `syslog` — read kernel ring buffer
-- `uselib` — old library loading
+- `acct` — プロセスアカウンティング
+- `add_key` — カーネルのキーリング
+- `bpf` — BPFプログラム
+- `kexec_load` — カーネルの置き換え
+- `mount` — ファイルシステムのマウント
+- `perf_event_open` — 性能監視
+- `ptrace` — プロセスのトレース
+- `swapon/swapoff` — スワップの管理
+- `syslog` — カーネルのリングバッファの読み取り
+- `uselib` — 古いライブラリのロード
 
-## SECCOMP_RET_USER_NOTIF: supervisor pattern {#seccomp_ret_user_notif-supervisor-pattern}
+## SECCOMP_RET_USER_NOTIF: スーパーバイザパターン {#seccomp_ret_user_notif-supervisor-pattern}
 
-Since Linux 5.0, a filter can defer decisions to a supervisor process. This enables:
+Linux 5.0以降、フィルタは判断をスーパーバイザプロセスに委ねられる。これにより次のことが可能になる:
 
-- Userspace policy enforcement
-- Container escape prevention (container manager approves mounts)
-- Debugging (supervisor logs allowed syscalls)
+- ユーザー空間でのポリシーの適用
+- コンテナエスケープの防止（コンテナマネージャがマウントを承認する）
+- デバッグ（スーパーバイザが許可したsyscallを記録する）
 
 ```c
-/* Supervisor process: receives notifications */
-int notif_fd = seccomp_notify_fd(ctx);  /* after seccomp_load */
+/* スーパーバイザプロセス: 通知を受け取る */
+int notif_fd = seccomp_notify_fd(ctx);  /* seccomp_loadの後 */
 
-struct seccomp_notif *notif = /* allocate */;
-struct seccomp_notif_resp *resp = /* allocate */;
+struct seccomp_notif *notif = /* 割り当てる */;
+struct seccomp_notif_resp *resp = /* 割り当てる */;
 
 while (1) {
     ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_RECV, notif);
 
-    /* Inspect: notif->pid, notif->data.nr (syscall), notif->data.args */
+    /* 検査する: notif->pid、notif->data.nr（syscall）、notif->data.args */
     if (should_allow(notif))
-        resp->error  = 0;        /* allow */
+        resp->error  = 0;        /* 許可 */
         resp->flags  = SECCOMP_USER_NOTIF_FLAG_CONTINUE;
     else
-        resp->error  = -EPERM;   /* deny */
+        resp->error  = -EPERM;   /* 拒否 */
 
     resp->id = notif->id;
     ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_SEND, resp);
 }
 ```
 
-This is how rootless container runtimes (Podman, nerdctl) allow containers to perform privileged operations like `mount` — the supervisor intercepts and handles them safely.
+rootlessコンテナランタイム（Podman、nerdctl）は、このようにしてコンテナに`mount`のような特権操作を行わせている — スーパーバイザがそれを横取りし、安全に処理するのである。
 
-## Kernel seccomp implementation {#kernel-seccomp-implementation}
+## カーネルのseccomp実装 {#kernel-seccomp-implementation}
 
 ```c
-/* kernel/seccomp.c: in syscall entry path */
+/* kernel/seccomp.c: syscallエントリのパス内 */
 static int __seccomp_filter(u32 this_syscall, const struct seccomp_data *sd,
                              const bool recheck_after_trace)
 {
@@ -247,7 +247,7 @@ static int __seccomp_filter(u32 this_syscall, const struct seccomp_data *sd,
     struct seccomp_filter *match = NULL;
     int action;
 
-    /* Run all installed filters (they're chained) */
+    /* インストール済みのすべてのフィルタを実行する（チェーンされている） */
     filter_ret = run_filters(sd, &match);
 
     data    = filter_ret & SECCOMP_RET_DATA;
@@ -257,9 +257,9 @@ static int __seccomp_filter(u32 this_syscall, const struct seccomp_data *sd,
     case SECCOMP_RET_ALLOW:
         return 0;
     case SECCOMP_RET_KILL_PROCESS:
-        do_group_exit(SIGSYS);  /* kill the entire thread group */
+        do_group_exit(SIGSYS);  /* スレッドグループ全体をkillする */
     case SECCOMP_RET_KILL_THREAD:
-        do_exit(SIGSYS);        /* kill the calling thread only */
+        do_exit(SIGSYS);        /* 呼び出したスレッドだけをkillする */
     case SECCOMP_RET_ERRNO:
         syscall_set_return_value(current, current_pt_regs(),
                                   -data, 0);
@@ -269,26 +269,26 @@ static int __seccomp_filter(u32 this_syscall, const struct seccomp_data *sd,
 }
 ```
 
-## Auditing seccomp actions {#auditing-seccomp-actions}
+## seccompのアクションを監査する {#auditing-seccomp-actions}
 
 ```bash
-# Check process's current seccomp mode
+# プロセスの現在のseccompモードを確認する
 cat /proc/self/status | grep Seccomp
-# Seccomp: 2   (0=off, 1=strict, 2=filter)
+# Seccomp: 2   （0=off、1=strict、2=filter）
 
-# See seccomp violations in audit log
+# auditログでseccompの違反を確認する
 ausearch -m SECCOMP | head -20
 # type=SECCOMP msg=audit(1234.567:890): avc:  seccomp
 # sig=31 arch=c000003e syscall=62 compat=0 ip=0x7f... code=0x80000000
 
-# strace with seccomp
+# seccompと一緒にstraceを使う
 strace -e seccomp ./myprogram
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LSM Framework](lsm.md) — MAC policies that run after seccomp (in individual syscall implementations)
-- [Capabilities](capabilities.md) — Privilege reduction before seccomp
-- [BPF: Architecture](../bpf/bpf-overview.md) — BPF programs as seccomp filters
-- [Cgroups: Container Isolation](../cgroups/container-isolation.md) — seccomp in containers
-- `man 2 seccomp` — syscall documentation
+- [LSMフレームワーク](lsm.md) — seccompの後に（個々のsyscall実装内で）実行されるMACポリシー
+- [ケーパビリティ](capabilities.md) — seccompの前に行う権限の削減
+- [BPF: アーキテクチャ](../bpf/bpf-overview.md) — seccompフィルタとしてのBPFプログラム
+- [cgroup: コンテナの隔離](../cgroups/container-isolation.md) — コンテナにおけるseccomp
+- `man 2 seccomp` — syscallのドキュメント

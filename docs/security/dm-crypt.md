@@ -1,10 +1,10 @@
-# dm-crypt: Block-Level Encryption {#dm-crypt-block-level-encryption}
+# dm-crypt: ブロックレベルの暗号化 {#dm-crypt-block-level-encryption}
 
-> Device mapper encryption target, LUKS2 key management, and AES-XTS
+> device mapperの暗号化ターゲット、LUKS2の鍵管理、AES-XTS
 
-## Architecture {#architecture}
+## アーキテクチャ {#architecture}
 
-dm-crypt sits in the device mapper stack, transparently encrypting/decrypting all I/O between the filesystem and the block device:
+dm-cryptはdevice mapperのスタック内に位置し、ファイルシステムとブロックデバイスの間のすべてのI/Oを透過的に暗号化/復号する:
 
 ```
 Application
@@ -19,15 +19,15 @@ Physical storage: only ciphertext on disk
 ```
 
 ```bash
-# View dm-crypt device:
+# dm-cryptデバイスを表示する:
 dmsetup table /dev/mapper/cryptroot
 # 0 976771072 crypt aes-xts-plain64 :64:logon:cryptsetup:...
 # sectors:    cipher           key          IV mode
 ```
 
-## LUKS2 on-disk format {#luks2-on-disk-format}
+## LUKS2のオンディスク形式 {#luks2-on-disk-format}
 
-LUKS (**L**inux **U**nified **K**ey **S**etup) is the standard format for dm-crypt headers. LUKS2 (since kernel 4.12 / cryptsetup 2.0):
+LUKS（**L**inux **U**nified **K**ey **S**etup）は、dm-cryptヘッダの標準形式である。LUKS2（カーネル4.12 / cryptsetup 2.0以降）:
 
 ```
 LUKS2 on-disk layout:
@@ -54,7 +54,7 @@ LUKS2 on-disk layout:
 └─────────────────────────────────────────────────────────┘
 ```
 
-### Key derivation (PBKDF2/Argon2) {#key-derivation-pbkdf2argon2}
+### 鍵導出（PBKDF2/Argon2） {#key-derivation-pbkdf2argon2}
 
 ```
 User passphrase
@@ -65,33 +65,33 @@ Master key (256-bit for AES-256-XTS)
       ↓ used directly for AES-XTS encryption
 ```
 
-Argon2id (LUKS2 default) is memory-hard — defeating GPU brute-force attacks.
+Argon2id（LUKS2のデフォルト）はメモリハードであり、GPUによる総当たり攻撃を無力化する。
 
-## cryptsetup: LUKS management {#cryptsetup-luks-management}
+## cryptsetup: LUKSの管理 {#cryptsetup-luks-management}
 
 ```bash
-# Create LUKS2 container:
+# LUKS2コンテナを作成する:
 cryptsetup luksFormat --type luks2 \
     --cipher aes-xts-plain64 \
-    --key-size 512 \           # 512-bit key = AES-256-XTS (split 256+256)
+    --key-size 512 \           # 512ビット鍵 = AES-256-XTS（256+256に分割）
     --hash sha512 \
     --pbkdf argon2id \
-    --iter-time 3000 \         # KDF tuning: target 3 seconds
+    --iter-time 3000 \         # KDFの調整: 目標3秒
     /dev/sda1
 
-# Open (decrypt and create /dev/mapper/mydev):
+# オープンする（復号して/dev/mapper/mydevを作成する）:
 cryptsetup open /dev/sda1 mydev
-# Prompts for passphrase → creates /dev/mapper/mydev
+# パスフレーズを尋ねる → /dev/mapper/mydevを作成する
 
-# Create filesystem on decrypted device:
+# 復号されたデバイス上にファイルシステムを作成する:
 mkfs.ext4 /dev/mapper/mydev
 mount /dev/mapper/mydev /mnt
 
-# Close (remove decrypted device):
+# クローズする（復号されたデバイスを削除する）:
 umount /mnt
 cryptsetup close mydev
 
-# Show LUKS header info:
+# LUKSヘッダの情報を表示する:
 cryptsetup luksDump /dev/sda1
 # Version:        2
 # Epoch:          3
@@ -108,92 +108,92 @@ cryptsetup luksDump /dev/sda1
 #     Cipher key: 512 bits
 #     PBKDF:      argon2id
 
-# Add a second passphrase (key slot 1):
+# 2つ目のパスフレーズを追加する（キースロット1）:
 cryptsetup luksAddKey /dev/sda1
 
-# Add a keyfile (for automated unlock):
+# キーファイルを追加する（自動アンロック用）:
 dd if=/dev/urandom of=/root/keyfile bs=512 count=4
 cryptsetup luksAddKey /dev/sda1 /root/keyfile
 
-# Open with keyfile:
+# キーファイルでオープンする:
 cryptsetup open /dev/sda1 mydev --key-file /root/keyfile
 
-# Remove a passphrase:
-cryptsetup luksKillSlot /dev/sda1 1   # remove slot 1
+# パスフレーズを削除する:
+cryptsetup luksKillSlot /dev/sda1 1   # スロット1を削除する
 ```
 
-## dm-crypt kernel target {#dm-crypt-kernel-target}
+## dm-cryptのカーネルターゲット {#dm-crypt-kernel-target}
 
-The kernel-side implementation is in `drivers/md/dm-crypt.c`:
+カーネル側の実装は`drivers/md/dm-crypt.c`にある:
 
 ```c
-/* Device mapper target structure */
+/* device mapperのターゲット構造体 */
 struct dm_target {
     /* ... */
-    sector_t begin;    /* start of the target in the device */
-    sector_t len;      /* length of the target */
+    sector_t begin;    /* デバイス内でのターゲットの開始位置 */
+    sector_t len;      /* ターゲットの長さ */
     struct target_type *type;
-    void *private;     /* points to crypt_config */
+    void *private;     /* crypt_configを指す */
 };
 
-/* dm-crypt private state */
+/* dm-cryptの私的な状態 */
 struct crypt_config {
-    struct dm_dev   *dev;          /* underlying device */
-    sector_t         start;        /* start sector */
+    struct dm_dev   *dev;          /* 下位のデバイス */
+    sector_t         start;        /* 開始セクタ */
 
-    /* Crypto */
-    struct crypto_skcipher **tfms; /* per-CPU cipher handles */
+    /* 暗号 */
+    struct crypto_skcipher **tfms; /* CPUごとの暗号ハンドル */
     unsigned int     tfms_count;   /* = num_cpus */
     char            *cipher_string; /* "aes-xts-plain64" */
     unsigned int     key_size;
-    u8              *key;          /* master key in kernel memory */
+    u8              *key;          /* カーネルメモリ内のマスター鍵 */
 
     /* IV */
-    iv_generator_fn  iv_gen_ops;   /* plain64, essiv, tcw, etc. */
+    iv_generator_fn  iv_gen_ops;   /* plain64、essiv、tcwなど */
 
     /* I/O */
-    mempool_t        req_pool;     /* pool of crypt_io structs */
-    struct workqueue_struct *io_queue;   /* encrypt/decrypt workers */
+    mempool_t        req_pool;     /* crypt_io構造体のプール */
+    struct workqueue_struct *io_queue;   /* 暗号化/復号のワーカ */
     struct workqueue_struct *crypt_queue;
 };
 ```
 
-### Encryption path (write) {#encryption-path-write}
+### 暗号化のパス（書き込み） {#encryption-path-write}
 
 ```c
-/* dm-crypt intercepts every bio: */
+/* dm-cryptはすべてのbioを横取りする: */
 static int crypt_map(struct dm_target *ti, struct bio *bio)
 {
     struct crypt_io *io;
     struct crypt_config *cc = ti->private;
 
-    /* Allocate per-request state */
+    /* リクエストごとの状態を割り当てる */
     io = mempool_alloc(&cc->io_pool, GFP_NOIO);
     io->cc = cc;
     io->base_bio = bio;
 
     if (bio_data_dir(bio) == WRITE) {
-        /* Encrypt: submit to crypt_queue workqueue */
+        /* 暗号化: crypt_queue workqueueに投入する */
         kcryptd_queue_crypt(io);
     } else {
-        /* Read: submit plain I/O, decrypt in completion */
+        /* 読み取り: 平文のI/Oを発行し、完了時に復号する */
         crypt_submit_bio(cc, io, bio);
     }
     return DM_MAPIO_SUBMITTED;
 }
 
-/* Encryption worker: */
+/* 暗号化のワーカ: */
 static void kcryptd_crypt_write_io_submit(struct crypt_io *io, int async)
 {
-    /* For each page in the bio: */
-    /*   1. Set up IV from sector number */
+    /* bio内の各ページについて: */
+    /*   1. セクタ番号からIVを設定する */
     /*   2. skcipher_request_set_crypt() */
     /*   3. crypto_skcipher_encrypt() */
-    /*   4. Submit encrypted bio to underlying device */
+    /*   4. 暗号化したbioを下位デバイスに発行する */
 }
 ```
 
-### IV modes {#iv-modes}
+### IVモード {#iv-modes}
 
 ```
 plain64:   IV = sector_number (64-bit)
@@ -211,10 +211,10 @@ aes-xts-plain64 (recommended):
            Standard for disk encryption (IEEE P1619)
 ```
 
-## Performance {#performance}
+## 性能 {#performance}
 
 ```bash
-# Benchmark cipher options:
+# 暗号のオプションをベンチマークする:
 cryptsetup benchmark
 # # Tests are approximate using memory only (no storage IO).
 # PBKDF2-sha1        1234567 iterations per second for 256-bit key
@@ -227,81 +227,81 @@ cryptsetup benchmark
 #          aes-xts        256b      2100.4 MiB/s      2098.7 MiB/s
 #          aes-xts        512b      1890.2 MiB/s      1887.3 MiB/s
 
-# AES-NI hardware acceleration:
+# AES-NIによるハードウェア高速化:
 grep -m1 aes /proc/cpuinfo
-# flags: ... aes ...  ← hardware AES-NI present
+# flags: ... aes ...  ← ハードウェアAES-NIが存在する
 
-# Measure dm-crypt overhead vs raw device:
+# 生デバイスと比べたdm-cryptのオーバーヘッドを測定する:
 fio --filename=/dev/mapper/mydev --direct=1 --rw=read --bs=128k \
     --ioengine=libaio --iodepth=32 --name=crypt-read
 fio --filename=/dev/sda1 --direct=1 --rw=read --bs=128k \
     --ioengine=libaio --iodepth=32 --name=raw-read
-# With AES-NI: typically < 5% overhead
+# AES-NIがあれば: オーバーヘッドは通常5%未満
 ```
 
-## /etc/crypttab: persistent configuration {#etccrypttab-persistent-configuration}
+## /etc/crypttab: 永続的な設定 {#etccrypttab-persistent-configuration}
 
 ```bash
-# /etc/crypttab format: name device keyfile options
+# /etc/crypttabの形式: name device keyfile options
 cryptroot   /dev/sda1   none          luks,discard
 cryptdata   /dev/sdb1   /root/keyfile luks,nofail
 cryptswap   /dev/sdc1   /dev/urandom  swap,cipher=aes-xts-plain64
 
-# Fields:
+# フィールド:
 # name:    → /dev/mapper/<name>
 # device:  UUID=... or /dev/sdX or LABEL=...
-# keyfile: "none" = prompt; path = file; /dev/urandom = random (for swap)
-# options: luks, discard (trim), nofail (skip if not present), etc.
+# keyfile: "none" = 入力を求める、パス = ファイル、/dev/urandom = ランダム（スワップ用）
+# options: luks、discard（trim）、nofail（存在しなければスキップ）など
 
-# Use UUID to be device-name-independent:
+# デバイス名に依存しないようUUIDを使う:
 blkid /dev/sda1 | grep UUID
 cryptroot   UUID=abc123-...   none   luks
 ```
 
-## LUKS vs plain dm-crypt {#luks-vs-plain-dm-crypt}
+## LUKSとplain dm-cryptの比較 {#luks-vs-plain-dm-crypt}
 
 ```bash
-# Plain dm-crypt (no LUKS header, no key management):
+# plain dm-crypt（LUKSヘッダなし、鍵管理なし）:
 cryptsetup open --type plain \
     --cipher aes-xts-plain64 \
     --key-size 512 \
     --hash sha512 \
     /dev/sda1 mydev
-# Key derived directly from passphrase via hash (no KDF tuning)
-# No header means no metadata footprint (deniable encryption)
-# But: can't add multiple keys, no integrity checking
+# 鍵はハッシュを介してパスフレーズから直接導出される（KDFの調整なし）
+# ヘッダがないのでメタデータの痕跡が残らない（否認可能な暗号化）
+# ただし: 複数の鍵を追加できず、完全性のチェックもない
 ```
 
-## dm-integrity: authentication {#dm-integrity-authentication}
+## dm-integrity: 認証 {#dm-integrity-authentication}
 
-dm-crypt provides confidentiality but not integrity. dm-integrity adds authentication tags:
+dm-cryptは機密性を提供するが、完全性は提供しない。dm-integrityは認証タグを追加する:
 
 ```bash
-# Create dm-integrity + dm-crypt stack:
-# Step 1: format with integrity
+# dm-integrity + dm-cryptのスタックを作成する:
+# ステップ1: integrity付きでフォーマットする
 cryptsetup open --type plain --integrity hmac-sha256 /dev/sda1 mydev-int
-# Step 2: LUKS on top
+# ステップ2: その上にLUKSを載せる
 cryptsetup luksFormat /dev/mapper/mydev-int
 cryptsetup open /dev/mapper/mydev-int mydev
 
-# Or use LUKS2 with integrity directly:
+# あるいはintegrity付きのLUKS2を直接使う:
 cryptsetup luksFormat --type luks2 \
     --integrity hmac-sha256 \
     /dev/sda1
-# Adds HMAC tag per 512-byte sector → detects tampering
+# 512バイトのセクタごとにHMACタグを追加する → 改ざんを検出する
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# dm-crypt stats:
+# dm-cryptの統計:
 dmsetup status /dev/mapper/cryptroot
 # 0 976771072 crypt 0 0 0 0 /dev/sda1 2048
 
-# Block I/O stats for dm-crypt device:
+# dm-cryptデバイスのブロックI/O統計:
 iostat -x /dev/mapper/cryptroot 1
 
-# Crypto subsystem stats:
+# 暗号サブシステムの統計:
 cat /proc/crypto | grep -A5 "aes"
 # name         : xts(aes)
 # driver       : xts-aes-aesni
@@ -309,11 +309,11 @@ cat /proc/crypto | grep -A5 "aes"
 # priority     : 401
 # type         : skcipher
 
-# Hardware vs software crypto:
-# driver ending in -aesni = hardware accelerated
-# driver ending in -generic = software fallback
+# ハードウェア暗号とソフトウェア暗号:
+# -aesniで終わるdriver = ハードウェア高速化
+# -genericで終わるdriver = ソフトウェアによるフォールバック
 
-# BPF trace encrypt latency:
+# BPFで暗号化のレイテンシをトレースする:
 bpftrace -e '
 kprobe:kcryptd_crypt_write_convert { @start[tid] = nsecs; }
 kretprobe:kcryptd_crypt_write_convert /@start[tid]/
@@ -323,13 +323,13 @@ kretprobe:kcryptd_crypt_write_convert /@start[tid]/
 }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Btrfs](../filesystems/btrfs.md) — commonly used filesystem on top of dm-crypt
-- [ext4 Journaling](../filesystems/ext4-journal.md) — filesystem below dm-crypt
-- [NVMe Driver](../block/nvme.md) — block device underneath dm-crypt
-- [Kernel Crypto API](../crypto/crypto-api.md) — skcipher/AEAD dm-crypt uses
-- [LSM Framework](lsm.md) — dm-crypt works with SELinux/AppArmor
-- `drivers/md/dm-crypt.c` — dm-crypt target implementation
-- `lib/crypto/` — kernel AES-XTS implementation
+- [Btrfs](../filesystems/btrfs.md) — dm-cryptの上でよく使われるファイルシステム
+- [ext4のジャーナリング](../filesystems/ext4-journal.md) — dm-cryptの上に載るファイルシステム
+- [NVMeドライバ](../block/nvme.md) — dm-cryptの下にあるブロックデバイス
+- [カーネルの暗号API](../crypto/crypto-api.md) — dm-cryptが使うskcipher/AEAD
+- [LSMフレームワーク](lsm.md) — dm-cryptはSELinux/AppArmorと併用できる
+- `drivers/md/dm-crypt.c` — dm-cryptターゲットの実装
+- `lib/crypto/` — カーネルのAES-XTS実装
 - `Documentation/admin-guide/device-mapper/dm-crypt.rst`

@@ -1,38 +1,42 @@
-# sched_ext: BPF-Programmable Scheduling {#sched_ext-bpf-programmable-scheduling}
+# sched_ext: BPFでプログラム可能なスケジューリング {#sched_ext-bpf-programmable-scheduling}
 
-> How a standing "no" to pluggable schedulers became a "yes" in Linux 6.12
+> プラガブルなスケジューラに対する長年の「ノー」が、Linux 6.12で「イエス」に変わった経緯
 
-## What it is {#what-it-is}
+## sched_extとは {#what-it-is}
 
-`sched_ext` (SCX) is a sixth [scheduler class](scheduler-classes.md). Unlike the others, its scheduling policy isn't compiled into the kernel — it's a BPF program, loaded and unloaded from userspace like any other BPF object. Writing a new CPU scheduler for Linux no longer requires patching and rebuilding the kernel; it means writing a BPF program against a fixed set of callbacks and loading it.
+`sched_ext`（SCX）は6番目の[スケジューラクラス](scheduler-classes.md)である。他のクラスと違い、そのスケジューリングポリシーはカーネルにコンパイルされていない — 他のBPFオブジェクトと同様に、ユーザー空間からロード・アンロードされるBPFプログラムである。Linux向けに新しいCPUスケジューラを書くのに、もはやカーネルにパッチを当てて再ビルドする必要はない。決まったコールバック群に対してBPFプログラムを書き、それをロードすればよい。
 
-It isn't a peer of `fair`, `rt`, and `deadline` in priority, though: the kernel's own scheduler-class linkage (`include/asm-generic/vmlinux.lds.h`'s `SCHED_DATA`) orders the classes `stop → dl → rt → fair → ext → idle`. A CPU only ever looks at `ext` for a task to run after `deadline`, `rt`, and `fair` have nothing runnable — sched_ext sits just above `idle`, not alongside the established three.
+ただし、優先度の面では`fair`、`rt`、`deadline`と対等ではない: カーネル自身のスケジューラクラスのリンク順（`include/asm-generic/vmlinux.lds.h`の`SCHED_DATA`）は、クラスを`stop → dl → rt → fair → ext → idle`の順に並べている。CPUが実行するタスクを`ext`に探しに行くのは、`deadline`、`rt`、`fair`のいずれにも実行可能なものがない場合だけである — sched_extは既存の3クラスと並ぶ位置ではなく、`idle`のすぐ上に位置する。
 
-`kernel/sched/ext.c` is absent from the Linux v6.11 tag and present in v6.12, confirming the class merged in **Linux 6.12** (November 2024).
+`kernel/sched/ext.c`はLinux v6.11のタグには存在せず、v6.12には存在する。これにより、このクラスが**Linux 6.12**（2024年11月）でマージされたことが確認できる。
 
-## A standing "no" {#a-standing-no}
+## 長年の「ノー」 {#a-standing-no}
 
-Loadable, pluggable scheduling policy is not a new idea — it's one Linus Torvalds had rejected before. When Tejun Heo first posted the sched_ext patch set (co-written with David Vernet, Josh Don, and Barret Rhoden), scheduler maintainer Peter Zijlstra's response was blunt:
+ロード可能でプラガブルなスケジューリングポリシーは新しいアイデアではない — Linus Torvaldsが以前に却下してきたものである。Tejun Heoが（David Vernet、Josh Don、Barret Rhodenとの共著で）sched_extのパッチセットを最初に投稿したとき、スケジューラのメンテナであるPeter Zijlstraの反応は率直だった:
 
 > "I hate all of this. Linus NAK'ed loadable schedulers a number of times in the past and this is just that again -- with the extra downside of the whole BPF thing on top."
 >
 > — [Peter Zijlstra, replying to the first posted version](https://lwn.net/ml/linux-kernel/Y5b2btWFJeEfTyJg@hirez.programming.kicks-ass.net/)
 
-That single sentence carries the whole prior history: this wasn't the first attempt at pluggable scheduling, and every previous one had been turned down by Torvalds himself. The objection wasn't really about BPF — it was about the scheduler, of all subsystems, being opened up to third-party policy at all. A misbehaving scheduler doesn't crash a program; it can wedge the entire machine.
+（訳: 「こういうものは全部嫌いだ。Linusは過去に何度もロード可能なスケジューラにNAKを出しており、これもまたそれと同じだ — しかもBPF絡みという欠点まで上乗せされている。」）
 
-## The 2024 override {#the-2024-override}
+この一文にそれまでの歴史がすべて詰まっている: これはプラガブルなスケジューリングの最初の試みではなく、それ以前の試みはすべてTorvalds自身によって却下されていた。反対の理由は実のところBPFではなかった — よりによってスケジューラというサブシステムを、サードパーティのポリシーに開放すること自体が問題だったのである。不正な動作をするスケジューラは、プログラムをクラッシュさせるだけでは済まない。マシン全体を固まらせることもありうる。
 
-Despite that, Torvalds decided to merge it anyway — over the scheduler maintainer's own objection. LWN reported in June 2024 that he'd made his decision and would override the scheduler maintainer to merge it, quoting Torvalds' own reasoning directly:
+## 2024年の覆し {#the-2024-override}
+
+それにもかかわらず、Torvaldsは — スケジューラのメンテナ自身の反対を押し切って — マージすることを決めた。LWNは2024年6月、彼が決断を下し、スケジューラのメンテナの判断を覆してマージするつもりであると報じ、Torvalds自身の理由づけを直接引用した:
 
 > "I honestly see no reason to delay this any more. This whole patchset was the major (private) discussion at last year's kernel maintainer summit, and I don't find any value in having the same discussion (whether off-list or as an actual event) at the upcoming maintainer summit one year later, so to make any kind of sane progress, my current plan is to merge this for 6.11."
 
-Torvalds is explicit that this was a "(private)" discussion, not a formal agenda item — and LWN's own published coverage of the [2023 Kernel Maintainers Summit](https://lwn.net/Articles/951847/) is consistent with that: the day's listed sessions were filesystem maintenance, committing to Rust, maintainer burnout, and a Q&A on maintainer pain points. sched_ext isn't among them. Whatever conversation Torvalds is referring to happened outside the summit's reported agenda, which is weaker evidence than "the whole kernel community spent a Maintainer Summit's worth of formal time on it" — it's his own stated reason for not wanting to repeat an off-the-record discussion, not a documented consensus-seeking process.
+（訳: 「正直なところ、これ以上遅らせる理由はないと思う。このパッチセット全体は昨年のカーネルメンテナサミットにおける主要な（非公開の）議論だったし、1年後の次のメンテナサミットで（リスト外であれ実際のイベントとしてであれ）同じ議論をすることに価値を見出せない。だから、何らかのまともな進展を得るために、現時点では6.11でこれをマージするつもりだ。」）
 
-The override didn't stick on the first try, either. Torvalds' announcement above named 6.11 as the target, but [LWN's coverage of the actual 6.11 merge window](https://lwn.net/Articles/982605/) tells a different story: "After that came a strongly worded discussion about whether that step was justified, or whether sched_ext needed more work first... sched_ext was not merged for 6.11." The override triggered real, substantive pushback, not a routine slip — `kernel/sched/ext.c` didn't land until the following cycle, 6.12, in November 2024.
+Torvaldsは、これが正式な議題ではなく「（非公開の）」議論だったと明言している — そしてLWN自身が公開した[2023 Kernel Maintainers Summit](https://lwn.net/Articles/951847/)の記事もそれと整合する: その日に挙げられたセッションは、ファイルシステムのメンテナンス、Rustへのコミット、メンテナの燃え尽き、そしてメンテナの悩みに関するQ&Aであった。sched_extはその中にない。Torvaldsが言及している会話がどのようなものであれ、それはサミットの報告された議題の外で行われたものであり、「カーネルコミュニティ全体がメンテナサミットの正式な時間を丸ごとそれに費やした」という主張に比べれば弱い根拠である — それはオフレコの議論を繰り返したくないという彼自身の述べた理由であって、文書化された合意形成のプロセスではない。
 
-## How it actually works {#how-it-actually-works}
+しかも、この覆しは一度目ではうまくいかなかった。上のTorvaldsの発表は6.11を目標としていたが、[実際の6.11マージウィンドウに関するLWNの記事](https://lwn.net/Articles/982605/)は別の話を伝えている: "After that came a strongly worded discussion about whether that step was justified, or whether sched_ext needed more work first... sched_ext was not merged for 6.11."（訳: 「その後、その措置が正当だったのか、それともsched_extにはまずさらなる作業が必要だったのかについて、激しい議論が起こった……sched_extは6.11ではマージされなかった。」）この覆しは、よくある遅延ではなく、本物の実質的な反発を引き起こしたのである — `kernel/sched/ext.c`が入ったのは次のサイクル、2024年11月の6.12になってからだった。
 
-A BPF scheduler is a `struct sched_ext_ops` instance — a set of callbacks the kernel invokes at each point in a task's scheduling lifecycle. The real struct, defined in `kernel/sched/ext.c`, includes (among others):
+## 実際の動作の仕組み {#how-it-actually-works}
+
+BPFスケジューラは`struct sched_ext_ops`のインスタンスである — タスクのスケジューリングのライフサイクルの各時点でカーネルが呼び出すコールバックの集合である。`kernel/sched/ext.c`で定義されている実際の構造体には、（他のものに加えて）次のものが含まれる:
 
 ```c
 /* kernel/sched/ext.c */
@@ -50,25 +54,25 @@ struct sched_ext_ops {
     bool (*core_sched_before)(struct task_struct *a, struct task_struct *b);
     void (*set_weight)(struct task_struct *p, u32 weight);
     s32  (*init_task)(struct task_struct *p, struct scx_init_task_args *args);
-    /* ... dump()/dump_cpu()/dump_task() for debugging, cgroup callbacks,
-       cpu_online()/cpu_offline(), and more, in between ... */
+    /* ... その間に、デバッグ用のdump()/dump_cpu()/dump_task()、cgroupのコールバック、
+       cpu_online()/cpu_offline()などがある ... */
     s32  (*init)(void);
     void (*exit)(struct scx_exit_info *info);
 };
 ```
 
-The lifecycle for a single wakeup: `select_cpu()` picks a target CPU (this is where a scheduler might implement its own idle-CPU search), `enqueue()` places the task somewhere the scheduler chooses, and `dispatch()` is called whenever a CPU's local dispatch queue runs empty — including when the previously-running task's time slice ran out but it's still runnable, not only when the CPU is truly idle. A scheduler doesn't manage its own run queue data structure from scratch — it moves tasks between **dispatch queues (DSQs)**, `struct scx_dispatch_q` in the kernel. A DSQ isn't strictly a FIFO or a priority queue; per the kernel's own documentation, a single DSQ "can operate as both a FIFO and a priority queue" at once, with vtime-ordered entries (`scx_bpf_dispatch_vtime()`) always consumed after plain FIFO ones. Every CPU has its own built-in **local DSQ** (`SCX_DSQ_LOCAL`) that it always runs tasks from, plus a single built-in **global DSQ** (`SCX_DSQ_GLOBAL`) shared by all CPUs as a default landing spot; a scheduler is free to create additional DSQs for per-cgroup or other custom queuing, which get "consumed" into a CPU's local DSQ to actually run.
+1回の起床におけるライフサイクルは次のとおりである: `select_cpu()`がターゲットCPUを選び（スケジューラが独自のアイドルCPU探索を実装するならここである）、`enqueue()`がスケジューラの選んだ場所にタスクを置き、`dispatch()`はCPUのローカルディスパッチキューが空になるたびに呼ばれる — CPUが本当にアイドルになったときだけでなく、直前に実行していたタスクのタイムスライスが尽きたがまだ実行可能である場合も含む。スケジューラは自前のランキューのデータ構造を一から管理するわけではない — タスクを**ディスパッチキュー（DSQ）**、カーネル内の`struct scx_dispatch_q`の間で移動させるのである。DSQは厳密なFIFOでも優先度キューでもない。カーネル自身のドキュメントによれば、単一のDSQは同時に「FIFOとしても優先度キューとしても動作できる」。vtime順のエントリ（`scx_bpf_dispatch_vtime()`）は、常に通常のFIFOエントリの後に消費される。各CPUは、常にそこからタスクを実行する組み込みの**ローカルDSQ**（`SCX_DSQ_LOCAL`）を持ち、さらにデフォルトの置き場としてすべてのCPUが共有する組み込みの**グローバルDSQ**（`SCX_DSQ_GLOBAL`）がひとつある。スケジューラは、cgroupごとのキューやその他の独自のキューイングのために追加のDSQを自由に作成でき、それらは実際に実行されるためにCPUのローカルDSQへと「消費」される。
 
-## The safety model {#the-safety-model}
+## 安全性モデル {#the-safety-model}
 
-Letting a BPF program make scheduling decisions is only tenable if a broken one can't hang the machine. Two independent mechanisms enforce that:
+BPFプログラムにスケジューリングの判断を任せることが成り立つのは、壊れたプログラムがマシンをハングさせられない場合に限られる。それを強制する独立した仕組みが2つある:
 
-**The BPF verifier** rejects at load time any program that could loop unboundedly, access memory it shouldn't, or otherwise violate BPF's usual safety guarantees — the same verifier that gates every other BPF program type.
+**BPF検証器（verifier）**は、無制限にループしうるプログラム、アクセスすべきでないメモリにアクセスしうるプログラム、その他BPFの通常の安全性保証に違反しうるプログラムを、ロード時に拒否する — 他のすべてのBPFプログラムタイプを関門する検証器と同じものである。
 
-**The watchdog** catches misbehavior the verifier can't: a scheduler that's fully valid BPF but simply never dispatches a runnable task. `kernel/sched/ext.c`'s watchdog periodically walks each runqueue's runnable list and checks how long each task has waited, capped at `SCX_WATCHDOG_MAX_TIMEOUT` — 30 seconds:
+**ウォッチドッグ**は、検証器では捕まえられない不正動作を捕捉する: BPFとしては完全に正当だが、実行可能なタスクをまったくディスパッチしないスケジューラである。`kernel/sched/ext.c`のウォッチドッグは、各ランキューの実行可能リストを定期的にたどり、各タスクがどれだけ待っているかを確認する。上限は`SCX_WATCHDOG_MAX_TIMEOUT` — 30秒である:
 
 ```c
-/* kernel/sched/ext.c (simplified) */
+/* kernel/sched/ext.c（簡略化） */
 static bool check_rq_for_timeouts(struct rq *rq)
 {
     list_for_each_entry(p, &rq->scx.runnable_list, scx.runnable_node) {
@@ -82,44 +86,44 @@ static bool check_rq_for_timeouts(struct rq *rq)
 }
 ```
 
-A stall doesn't trigger an immediate, synchronous flip to CFS — `scx_ops_error_kind()` queues a disable request onto a kernel thread's work queue (`kthread_queue_work()`), which then runs `scx_ops_disable_workfn()`. That function's first substantive step is **bypass mode**: `scx_ops_bypass(true)` marks every runqueue `SCX_RQ_BYPASSING`, and sched_ext's own dispatch logic starts ignoring the BPF scheduler's decisions in favor of a hardcoded global FIFO — guaranteeing forward progress as soon as that queued work runs, without waiting for anything else to unload. The same function then does the slower, full teardown: it walks every task still on the SCX class and recomputes its scheduler class via the core scheduler's `__setscheduler_class()`, which checks deadline and RT priority first and only falls through to `&fair_sched_class` — [EEVDF](eevdf.md) — once neither applies and SCX itself is being torn down. The BPF scheduler is unloaded, and every task it owned lands back on EEVDF until a new one is loaded.
+ストールが検出されても、即座に同期的にCFSへ切り替わるわけではない — `scx_ops_error_kind()`は無効化要求をカーネルスレッドのワークキューに積み（`kthread_queue_work()`）、そのワークが`scx_ops_disable_workfn()`を実行する。この関数の最初の実質的な処理は**バイパスモード**である: `scx_ops_bypass(true)`がすべてのランキューに`SCX_RQ_BYPASSING`の印を付け、sched_ext自身のディスパッチロジックはBPFスケジューラの判断を無視し、ハードコードされたグローバルFIFOを使い始める — これにより、他の何かのアンロードを待つことなく、積まれたワークが実行された時点で前進が保証される。同じ関数はその後、より時間のかかる完全な後始末を行う: SCXクラスに残っているすべてのタスクをたどり、コアスケジューラの`__setscheduler_class()`でスケジューラクラスを再計算する。この関数はまずデッドラインとRTの優先度を確認し、どちらにも該当せずSCX自体が取り壊されている場合にのみ`&fair_sched_class` — [EEVDF](eevdf.md) — にフォールスルーする。BPFスケジューラはアンロードされ、それが所有していたすべてのタスクは、新しいスケジューラがロードされるまでEEVDFに戻る。
 
-There's also a manual escape hatch that doesn't depend on the watchdog or the verifier at all: pressing the `SysRq-S` key sequence aborts the running BPF scheduler and reverts every task to CFS immediately, the same as a detected stall or scheduler-triggered error. A companion `SysRq-D` dumps sched_ext's internal debug state without terminating the scheduler, for diagnosing a problem without losing it.
+ウォッチドッグにも検証器にもまったく依存しない、手動の非常口もある: `SysRq-S`キーシーケンスを押すと、実行中のBPFスケジューラが中止され、検出されたストールやスケジューラ起因のエラーと同様に、すべてのタスクが直ちにCFSに戻る。対になる`SysRq-D`は、スケジューラを終了させずにsched_extの内部デバッグ状態をダンプする。問題を失わずに診断するためのものである。
 
-## Real-world adoption {#real-world-adoption}
+## 実世界での採用 {#real-world-adoption}
 
-At the 2024 Linux Plumbers Conference, Tejun Heo described real deployments, not hypotheticals: `scx_layered` was already running on **over one million machines**, delivering measurable performance gains; `scx_lavd` was headed for shipment on Valve's **Steam Deck**; and `scx_bpfland` was showing promising results for general desktop use. By late 2024, sched_ext support was shipping in CachyOS, Arch Linux, Ubuntu, Fedora, Nix, and openSUSE — on those distributions, trying a different scheduler is a package install and a command, not a kernel rebuild.
+2024年のLinux Plumbers Conferenceで、Tejun Heoは仮定の話ではなく実際の導入例を紹介した: `scx_layered`はすでに**100万台を超えるマシン**で稼働しており、測定可能な性能向上をもたらしていた。`scx_lavd`はValveの**Steam Deck**への搭載に向かっていた。そして`scx_bpfland`は一般的なデスクトップ用途で有望な結果を示していた。2024年後半までに、sched_extのサポートはCachyOS、Arch Linux、Ubuntu、Fedora、Nix、openSUSEで提供されるようになった — これらのディストリビューションでは、別のスケジューラを試すのはカーネルの再ビルドではなく、パッケージのインストールとコマンド1つで済む。
 
-## Where it's heading {#where-its-heading}
+## 今後の方向性 {#where-its-heading}
 
-Heo's own framing of the future work is **composability**: letting multiple BPF schedulers cooperate instead of one program owning every decision. The stated goal is for one scheduler to focus on time-slice policy while another handles load balancing or partitioning, and eventually for schedulers to stack down the cgroup hierarchy — a different scheduler responsible for each level.
+Heo自身が描く今後の作業は**組み合わせ可能性（composability）**である: ひとつのプログラムがすべての判断を握るのではなく、複数のBPFスケジューラを協調させることである。掲げられている目標は、あるスケジューラがタイムスライスのポリシーに専念し、別のスケジューラが負荷分散やパーティショニングを担当すること、そして最終的にはスケジューラをcgroup階層に沿って積み重ね、各階層を別々のスケジューラが担当できるようにすることである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-Links pinned to the **v6.12** tag — several of these names have since been renamed (e.g. `scx_ops_bypass()` → `scx_bypass()`, `scx_ops_disable_workfn()` → `scx_disable_workfn()`, both first appearing at v6.16), so a HEAD-tracking link would show different names than described above.
+リンクは**v6.12**タグに固定している — これらの名前のいくつかはその後改名されており（例: `scx_ops_bypass()` → `scx_bypass()`、`scx_ops_disable_workfn()` → `scx_disable_workfn()`。いずれもv6.16で初登場）、HEADを追うリンクでは上で説明したものとは異なる名前が表示されるためである。
 
-- [kernel/sched/ext.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/ext.c?h=v6.12) — the sched_ext implementation: `struct sched_ext_ops`, dispatch queues, the watchdog, bypass mode, and the `SysRq-S`/`SysRq-D` handlers
-- [include/linux/sched/ext.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/ext.h?h=v6.12) — `struct scx_dispatch_q` and other public sched_ext types
-- [Documentation/scheduler/sched-ext.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/scheduler/sched-ext.rst?h=v6.12) — the kernel's own design document: DSQ semantics, the FIFO-and-priority-queue behavior, and the three conditions that abort a BPF scheduler
-- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h?h=v6.12) — `SCHED_DATA`, the linker-enforced scheduler class ordering (`stop → dl → rt → fair → ext → idle`)
+- [kernel/sched/ext.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/ext.c?h=v6.12) — sched_extの実装: `struct sched_ext_ops`、ディスパッチキュー、ウォッチドッグ、バイパスモード、`SysRq-S`/`SysRq-D`のハンドラ
+- [include/linux/sched/ext.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/ext.h?h=v6.12) — `struct scx_dispatch_q`その他の公開sched_ext型
+- [Documentation/scheduler/sched-ext.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/scheduler/sched-ext.rst?h=v6.12) — カーネル自身の設計文書: DSQのセマンティクス、FIFOと優先度キューを兼ねる挙動、BPFスケジューラを中止させる3つの条件
+- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h?h=v6.12) — `SCHED_DATA`、リンカによって強制されるスケジューラクラスの順序（`stop → dl → rt → fair → ext → idle`）
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The extensible scheduler class](https://lwn.net/Articles/922405/) (February 2023) — Jonathan Corbet's review of the second posted version, including Zijlstra's "I hate all of this" response to the first
-- [Extensible scheduler class to be merged for 6.11](https://lwn.net/Articles/978007/) (June 2024) — Torvalds' override announcement, in his own words
-- [The rest of the 6.11 merge window](https://lwn.net/Articles/982605/) (August 2024) — the actual outcome: "sched_ext was not merged for 6.11" after a "strongly worded discussion"
-- [sched: Implement BPF extensible scheduler class](https://lwn.net/Articles/978911/) — Tejun Heo's v7 (final) patch-series cover letter, posted 18 June 2024, ahead of the attempted 6.11 merge
-- [The 2023 Kernel Maintainers Summit](https://lwn.net/Articles/951847/) (November 2023) — LWN's published coverage of the summit's actual agenda, which does not list sched_ext
-- [Sched_ext at LPC 2024](https://lwn.net/Articles/991205/) — real deployment numbers (scx_layered, scx_lavd/Steam Deck) and the composability roadmap
+- [The extensible scheduler class](https://lwn.net/Articles/922405/)（2023年2月） — Jonathan Corbetによる2番目の投稿版のレビュー。最初の版に対するZijlstraの「I hate all of this」という反応も含む
+- [Extensible scheduler class to be merged for 6.11](https://lwn.net/Articles/978007/)（2024年6月） — Torvalds自身の言葉による覆しの発表
+- [The rest of the 6.11 merge window](https://lwn.net/Articles/982605/)（2024年8月） — 実際の結末: 「激しい議論」の後、「sched_extは6.11ではマージされなかった」
+- [sched: Implement BPF extensible scheduler class](https://lwn.net/Articles/978911/) — Tejun Heoによるv7（最終版）パッチシリーズのカバーレター。6.11でのマージの試みに先立ち、2024年6月18日に投稿された
+- [The 2023 Kernel Maintainers Summit](https://lwn.net/Articles/951847/)（2023年11月） — サミットの実際の議題についてLWNが公開した記事。sched_extは載っていない
+- [Sched_ext at LPC 2024](https://lwn.net/Articles/991205/) — 実際の導入数（scx_layered、scx_lavd/Steam Deck）と組み合わせ可能性のロードマップ
 
-### Mailing list {#mailing-list}
+### メーリングリスト {#mailing-list}
 
-- [Peter Zijlstra's "I hate all of this" reply](https://lwn.net/ml/linux-kernel/Y5b2btWFJeEfTyJg@hirez.programming.kicks-ass.net/) — via LWN's own mailing-list mirror, his response to the first posted version of the patch set
+- [Peter Zijlstraの「I hate all of this」返信](https://lwn.net/ml/linux-kernel/Y5b2btWFJeEfTyJg@hirez.programming.kicks-ass.net/) — LWN自身のメーリングリストミラー経由。パッチセットの最初の投稿版に対する彼の反応
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Scheduler Classes](scheduler-classes.md) — how sched_ext fits alongside the other five classes
-- [EEVDF](eevdf.md) — where a task's scheduler class resolves to once sched_ext is disabled
-- [Scheduler Evolution](scheduler-evolution.md) — the O(1) → CFS → EEVDF history this class sits alongside
+- [スケジューラクラス](scheduler-classes.md) — sched_extが他の5つのクラスとどう並ぶか
+- [EEVDF](eevdf.md) — sched_extが無効化されたとき、タスクのスケジューラクラスがどこに解決されるか
+- [スケジューラの進化](scheduler-evolution.md) — このクラスと並ぶO(1) → CFS → EEVDFの歴史
