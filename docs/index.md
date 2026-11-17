@@ -5,91 +5,91 @@ hide:
 
 # Linux Kernel Internals {#linux-kernel-internals}
 
-A community hub for understanding the Linux kernel — documentation and discussions about design decisions, internals, and the journey of contributing.
+Linuxカーネルを理解するためのコミュニティハブ — 設計判断、内部構造、そしてコントリビュートに至る道のりについてのドキュメントと議論の場。
 
-## What This Is {#what-this-is}
+## これは何か {#what-this-is}
 
-**Documentation**: Deep dives into kernel subsystems, explaining *why* things work the way they do, not just the APIs.
+**ドキュメント**: カーネルのサブシステムを深く掘り下げ、APIだけでなく、物事が*なぜ*そのように動くのかを説明する。
 
-**Discussion**: A place to ask questions, share discoveries, and help each other understand the kernel.
+**ディスカッション**: 質問をしたり、発見を共有したり、カーネルの理解を互いに助け合ったりする場。
 
-## Why? {#why}
+## なぜか？ {#why}
 
-The kernel has extensive API documentation, but understanding the *rationale* requires digging through mailing list archives, scattered articles, and tribal knowledge. We're building a more accessible resource.
+カーネルには充実したAPIドキュメントがあるが、その*根拠*を理解するには、メーリングリストのアーカイブ、散在する記事、そして暗黙知を掘り起こす必要がある。我々は、より手に取りやすいリソースを作っている。
 
-## Documentation {#documentation}
+## ドキュメント {#documentation}
 
-### General {#general}
+### 全般 {#general}
 
-- [Linux Evolution](linux-evolution.md) — from hobby project to world infrastructure
+- [Linuxの進化](linux-evolution.md) — 趣味のプロジェクトから世界のインフラへ
 
-### Subsystems {#subsystems}
+### サブシステム {#subsystems}
 
-**Foundations**
+**基礎**
 
-- [Kernel Internals (kernel/)](kernel/README.md) — the glue that holds every subsystem together: boot, logging, parameters, panics, and module init
-- [Architecture (arch/)](arch/arm64/README.md) — where the kernel meets the hardware: boot, CPU features, exceptions, and per-arch specifics (x86, arm64)
-- [System Calls (syscalls/)](syscalls/README.md) — how user space crosses into the kernel and back
-- [Modules (modules/)](modules/README.md) — loading, linking, and unloading kernel code at runtime
-- [Time (time/)](time/README.md) — clocks, timers, ticks, and how the kernel keeps and measures time
+- [カーネル内部（kernel/）](kernel/README.md) — すべてのサブシステムをつなぎとめる接着剤: ブート、ロギング、パラメータ、パニック、モジュール初期化
+- [アーキテクチャ（arch/）](arch/arm64/README.md) — カーネルがハードウェアと接する場所: ブート、CPU機能、例外、アーキテクチャ固有の事項（x86、arm64）
+- [システムコール（syscalls/）](syscalls/README.md) — ユーザー空間がカーネルへ入り、また戻る仕組み
+- [モジュール（modules/）](modules/README.md) — カーネルコードを実行時にロード、リンク、アンロードする
+- [時間（time/）](time/README.md) — クロック、タイマー、ティック、そしてカーネルが時刻を保持・計測する仕組み
 
-**Memory**
+**メモリ**
 
-- [Memory Management (mm/)](mm/README.md) — how the kernel allocates, maps, and reclaims physical and virtual memory
-- [IOMMU (iommu/)](iommu/README.md) — address translation and isolation between devices and memory
+- [メモリ管理（mm/）](mm/README.md) — カーネルが物理メモリと仮想メモリを割り当て、マップし、回収する仕組み
+- [IOMMU（iommu/）](iommu/README.md) — デバイスとメモリの間のアドレス変換と分離
 
-**Scheduling & Concurrency**
+**スケジューリングと並行性**
 
-- [Scheduler (sched/)](sched/README.md) — how the kernel decides which task runs next, and when
-- [Locking (locking/)](locking/README.md) — the primitives that keep concurrent code correct: spinlocks, mutexes, RCU
-- [Interrupts (interrupts/)](interrupts/README.md) — handling hardware events and safely deferring work
-- [IPC (ipc/)](ipc/README.md) — how processes communicate: pipes, signals, shared memory, message queues
+- [スケジューラ（sched/）](sched/README.md) — 次にどのタスクをいつ実行するかをカーネルが決める仕組み
+- [ロック（locking/）](locking/README.md) — 並行コードの正しさを保つプリミティブ: spinlock、mutex、RCU
+- [割り込み（interrupts/）](interrupts/README.md) — ハードウェアイベントの処理と、作業の安全な遅延実行
+- [IPC（ipc/）](ipc/README.md) — プロセス間の通信方法: パイプ、シグナル、共有メモリ、メッセージキュー
 
-**Storage & I/O**
+**ストレージとI/O**
 
-- [VFS (vfs/)](vfs/README.md) — the abstraction that lets one API drive every filesystem
-- [Filesystems (filesystems/)](filesystems/README.md) — how on-disk formats and the page cache turn bytes into files
-- [Block Layer (block/)](block/README.md) — the path from a filesystem request to a physical device
-- [I/O Patterns (io/)](io/README.md) — buffered vs. direct, sync vs. async, and the tradeoffs between them
-- [io_uring (io-uring/)](io-uring/README.md) — the ring-based interface for high-performance asynchronous I/O
+- [VFS（vfs/）](vfs/README.md) — 1つのAPIですべてのファイルシステムを駆動できるようにする抽象化
+- [ファイルシステム（filesystems/）](filesystems/README.md) — ディスク上のフォーマットとページキャッシュがバイト列をファイルに変える仕組み
+- [ブロック層（block/）](block/README.md) — ファイルシステムの要求から物理デバイスまでの経路
+- [I/Oパターン（io/）](io/README.md) — バッファードI/OとダイレクトI/O、同期と非同期、そしてそれらの間のトレードオフ
+- [io_uring（io-uring/）](io-uring/README.md) — 高性能な非同期I/Oのためのリングベースのインターフェース
 
-**Devices & Drivers**
+**デバイスとドライバ**
 
-- [Drivers (drivers/)](drivers/README.md) — the device model and how drivers bind to hardware
-- [USB (usb/)](usb/README.md) — the host-scheduled, hot-pluggable peripheral bus: descriptors, endpoints, and URBs
-- [GPU / DRM (drm/)](drm/README.md) — the graphics and display stack: KMS modesetting, GEM buffers, and command submission
+- [ドライバ（drivers/）](drivers/README.md) — デバイスモデルと、ドライバがハードウェアにバインドする仕組み
+- [USB（usb/）](usb/README.md) — ホストがスケジューリングするホットプラグ対応の周辺機器バス: ディスクリプタ、エンドポイント、URB
+- [GPU / DRM（drm/）](drm/README.md) — グラフィックスとディスプレイのスタック: KMSによるモード設定、GEMバッファ、コマンド投入
 
-**Networking & BPF**
+**ネットワークとBPF**
 
-- [Networking (net/)](net/network-stack-overview.md) — the journey of a packet through the stack, from socket to wire
-- [BPF (bpf/)](bpf/README.md) — running sandboxed programs in the kernel for tracing, networking, and security
+- [ネットワーク（net/）](net/network-stack-overview.md) — ソケットから回線まで、スタックを通るパケットの旅
+- [BPF（bpf/）](bpf/README.md) — トレーシング、ネットワーク、セキュリティのためにサンドボックス化されたプログラムをカーネル内で実行する
 
-**Isolation & Security**
+**分離とセキュリティ**
 
-- [Cgroups (cgroups/)](cgroups/README.md) — accounting for and limiting resources per group of processes; the basis of containers
-- [Security (security/)](security/README.md) — LSMs, capabilities, seccomp, and the kernel's access-control machinery
-- [Virtualization (virtualization/)](virtualization/README.md) — KVM and how the kernel runs guest machines
-- [Crypto (crypto/)](crypto/README.md) — the kernel's cryptographic API and hardware acceleration
-- [Livepatch (livepatch/)](livepatch/README.md) — patching a running kernel without rebooting
+- [Cgroups（cgroups/）](cgroups/README.md) — プロセスのグループごとにリソースを計上・制限する。コンテナの基盤
+- [セキュリティ（security/）](security/README.md) — LSM、ケーパビリティ、seccomp、そしてカーネルのアクセス制御機構
+- [仮想化（virtualization/）](virtualization/README.md) — KVMと、カーネルがゲストマシンを実行する仕組み
+- [暗号（crypto/）](crypto/README.md) — カーネルの暗号APIとハードウェアアクセラレーション
+- [Livepatch（livepatch/）](livepatch/README.md) — 実行中のカーネルを再起動せずにパッチする
 
-**Observability**
+**可観測性**
 
-- [Tracing (tracing/)](tracing/README.md) — ftrace, tracepoints, and perf: seeing what the kernel is doing
-- [Debugging (debugging/)](debugging/README.md) — tools and techniques for diagnosing kernel problems
-- [Power Management (power/)](power/README.md) — suspend, resume, cpufreq, and idle states
+- [トレーシング（tracing/）](tracing/README.md) — ftrace、tracepoint、perf: カーネルが何をしているかを見る
+- [デバッグ（debugging/）](debugging/README.md) — カーネルの問題を診断するためのツールと手法
+- [電源管理（power/）](power/README.md) — サスペンド、レジューム、cpufreq、アイドル状態
 
-## Community {#community}
+## コミュニティ {#community}
 
-- [Contributing Guide](contributing.md) to get started as a contributor
-- [GitHub Discussions](https://github.com/laveeshb/linux-kernel-internals/discussions) for questions and conversations
-- [GitHub Issues](https://github.com/laveeshb/linux-kernel-internals/issues) to suggest topics or report problems
+- コントリビュータとして始めるには[コントリビューションガイド](contributing.md)を参照
+- 質問や会話には[GitHub Discussions](https://github.com/laveeshb/linux-kernel-internals/discussions)
+- トピックの提案や問題の報告には[GitHub Issues](https://github.com/laveeshb/linux-kernel-internals/issues)
 
-## Disclaimer {#disclaimer}
+## 免責事項 {#disclaimer}
 
-This is a community learning resource, not a definitive reference. The Linux kernel is complex and constantly evolving. While we strive for accuracy and link to primary sources (commits, LKML), errors may exist. When in doubt, consult the [official kernel documentation](https://docs.kernel.org/) and source code. Contributions and corrections are welcome.
+これはコミュニティの学習リソースであり、決定版のリファレンスではない。Linuxカーネルは複雑で、絶えず進化している。我々は正確さに努め、一次資料（コミット、LKML）へのリンクを示しているが、誤りが存在する可能性はある。疑わしい場合は、[公式カーネルドキュメント](https://docs.kernel.org/)とソースコードを参照してほしい。貢献や訂正を歓迎する。
 
-## License {#license}
+## ライセンス {#license}
 
-- Documentation: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
-- Code snippets: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)
-- Tux logo: Larry Ewing (original), Simon Budig (SVG)
+- ドキュメント: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
+- コードスニペット: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)
+- Tuxロゴ: Larry Ewing（オリジナル）、Simon Budig（SVG）

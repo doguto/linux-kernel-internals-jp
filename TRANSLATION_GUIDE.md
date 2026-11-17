@@ -23,6 +23,8 @@
 - HTML タグ、`{ .class }` などの attr_list、脚注記号は残す。
 - 行の追加・削除で構造を壊さない（段落は段落、リストはリストのまま）。
 
+- 強調 `**...**` の内側を句読点や括弧で終わらせない（Markdown が強調として認識しなくなる）。括弧は強調の外に出す。
+
 ## 訳さないもの
 
 - 人名、メーリングリスト名（LKML, lore）、記事・論文・パッチのタイトル、コミットハッシュ、カーネルバージョン。
@@ -85,6 +87,14 @@
 | mitigation | 緩和策 |
 | hypervisor / guest / host | ハイパーバイザ / ゲスト / ホスト |
 | tracing | トレーシング |
+| War Stories | 事件簿 |
+| Getting Started | はじめに |
+| CVE case study | CVE事例研究 |
+| use-after-free | use-after-free（原語のまま） |
+| What's New | 更新履歴 |
+| time / timekeeping | 時間 / 時刻管理 |
+| timer | タイマー |
+| Observability | 可観測性 |
 | Further reading | 参考文献 |
 | See also | 関連項目 |
 | Key takeaways | 要点 |

@@ -1,7 +1,7 @@
-# Observability {#observability}
+# 可観測性 {#observability}
 
-Tools for seeing, measuring, and tuning a running kernel.
+実行中のカーネルを観察し、計測し、チューニングするためのツール。
 
-- [Tracing (tracing/)](../tracing/README.md) — ftrace, tracepoints, and perf: seeing what the kernel is doing
-- [Debugging (debugging/)](../debugging/README.md) — tools and techniques for diagnosing kernel problems
-- [Power Management (power/)](../power/README.md) — suspend, resume, cpufreq, and idle states
+- [トレーシング（tracing/）](../tracing/README.md) — ftrace、tracepoint、perf: カーネルが何をしているかを見る
+- [デバッグ（debugging/）](../debugging/README.md) — カーネルの問題を診断するためのツールと手法
+- [電源管理（power/）](../power/README.md) — サスペンド、レジューム、cpufreq、アイドル状態

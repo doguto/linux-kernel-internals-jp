@@ -1,32 +1,32 @@
-# About {#about}
+# このサイトについて {#about}
 
-[kernel-internals.org](https://kernel-internals.org) is a reference for the *design rationale* behind the Linux kernel — not "here's the struct and the function," but "here's the problem, what was tried first, why the current design won, and what it costs."
+[kernel-internals.org](https://kernel-internals.org)は、Linuxカーネルの背後にある*設計上の理由*のためのリファレンスである — 「これが構造体で、これが関数だ」ではなく、「これが問題で、最初に何が試され、なぜ現在の設計が勝ち残り、その代償は何か」を扱う。
 
-## Why this exists {#why-this-exists}
+## なぜこのサイトがあるのか {#why-this-exists}
 
-The kernel is exhaustively documented, yet the material is oddly split. [docs.kernel.org](https://docs.kernel.org) is authoritative reference — it tells you *what* a thing is and *how* to use it, not *why* it is built that way. [LWN](https://lwn.net) is the best writing anywhere on the *why*, but it is news-shaped: tied to a particular patch series, organized by when things happened rather than by subsystem. The reasoning behind the design — the trade-offs, the alternatives that were rejected, the mailing-list arguments that settled it — ends up scattered across commits and threads.
+カーネルは徹底的に文書化されているが、その資料は妙に分断されている。[docs.kernel.org](https://docs.kernel.org)は権威あるリファレンスである — それはあるものが*何*であり、*どう*使うかを教えてくれるが、*なぜ*そのように作られているかは教えてくれない。[LWN](https://lwn.net)は*なぜ*について書かれたものとしてはどこよりも優れているが、ニュースの形をとっている: 特定のパッチシリーズに結びつき、サブシステムごとではなく出来事が起きた時期ごとに整理されている。設計の背後にある理由付け — トレードオフ、却下された代替案、決着をつけたメーリングリストでの議論 — は、コミットやスレッドのあちこちに散らばってしまう。
 
-This site pulls that reasoning together and organizes it by subsystem, so you can sit down and understand not just how the kernel works, but why it works that way. It is meant to complement docs.kernel.org, not compete with it.
+このサイトはその理由付けを一つにまとめ、サブシステムごとに整理する。それにより、腰を据えて、カーネルがどう動くかだけでなく、なぜそのように動くのかを理解できるようにする。docs.kernel.orgと競合するのではなく、それを補完することを意図している。
 
-## How it stays honest {#how-it-stays-honest}
+## 誠実さを保つ方法 {#how-it-stays-honest}
 
-- **Every claim traces to a primary source** — a specific commit on [git.kernel.org](https://git.kernel.org), an [LWN](https://lwn.net) article, or a [lore.kernel.org](https://lore.kernel.org) thread. If a claim cannot be cited, it does not belong on the site, and where something is summarized the original is one click away.
-- **Cross-references do not rot** — continuous integration fails the build on any broken internal link or anchor, so as the site grows the links between pages stay honest.
-- **Content reflects a specific kernel snapshot** — pages are fact-checked against Linux mainline as of a point-in-time commit (currently [`f5bbbfec59b4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5bbbfec59b4e2fb7520a91de3df8a6174325d6a), August 2026, v7.2-rc7), updated periodically. Individual pages cite the specific kernel version each claim is true as of, so a page being slightly behind current mainline doesn't make it wrong — just possibly missing the newest development.
+- **すべての主張は一次資料にたどれる** — [git.kernel.org](https://git.kernel.org)上の特定のコミット、[LWN](https://lwn.net)の記事、あるいは[lore.kernel.org](https://lore.kernel.org)のスレッドである。出典を示せない主張はサイトに載せるべきではなく、何かを要約している箇所では原典へワンクリックでたどれる。
+- **相互参照は腐らない** — 継続的インテグレーションは、内部リンクやアンカーが1つでも壊れていればビルドを失敗させる。そのため、サイトが成長してもページ間のリンクは正しく保たれる。
+- **内容は特定のカーネルスナップショットを反映する** — 各ページは、ある時点のコミット（現在は[`f5bbbfec59b4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f5bbbfec59b4e2fb7520a91de3df8a6174325d6a)、2026年8月、v7.2-rc7）時点のLinuxメインラインに対してファクトチェックされており、定期的に更新される。個々のページは、各主張がどのカーネルバージョンの時点で正しいかを明記している。したがって、ページが現在のメインラインからわずかに遅れていても誤りになるわけではない — 最新の開発内容が欠けている可能性があるだけである。
 
-## Getting involved {#getting-involved}
+## 参加するには {#getting-involved}
 
-The site is open source — the full source and history live on **[GitHub](https://github.com/laveeshb/linux-kernel-internals)**. Contributions are welcome:
+このサイトはオープンソースである — 全ソースと履歴は**[GitHub](https://github.com/laveeshb/linux-kernel-internals)**にある。貢献を歓迎する:
 
-- **Corrections** — if a *why* is wrong, please say so. A confidently wrong explanation is worse than none.
-- **Requests** — a subsystem or topic you would like covered? [Start a discussion](https://github.com/laveeshb/linux-kernel-internals/discussions).
-- **Contributions** — see the [Contributing guide](contributing.md); the [open issues](https://github.com/laveeshb/linux-kernel-internals/issues) track what is next.
+- **訂正** — *なぜ*の説明が間違っていたら、ぜひ指摘してほしい。自信満々の誤った説明は、説明がないことよりも悪い。
+- **リクエスト** — 取り上げてほしいサブシステムやトピックがあるか？ [ディスカッションを始めよう](https://github.com/laveeshb/linux-kernel-internals/discussions)。
+- **貢献** — [コントリビューションガイド](contributing.md)を参照のこと。[オープンなissue](https://github.com/laveeshb/linux-kernel-internals/issues)で次に取り組むことを管理している。
 
-## License {#license}
+## ライセンス {#license}
 
-- Documentation: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
-- Code snippets: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)
+- ドキュメント: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
+- コードスニペット: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)
 
 ---
 
-Created and maintained by [Laveesh Bansal](https://laveeshb.com).
+[Laveesh Bansal](https://laveeshb.com)が作成・保守している。

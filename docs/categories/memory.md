@@ -1,6 +1,6 @@
-# Memory {#memory}
+# メモリ {#memory}
 
-How the kernel gives every process the illusion of a large, private address space — and manages the physical RAM and device access underneath.
+カーネルがすべてのプロセスに大きくプライベートなアドレス空間という幻想を与える仕組み — そしてその下にある物理RAMとデバイスアクセスを管理する仕組み。
 
-- [Memory Management (mm/)](../mm/README.md) — how the kernel allocates, maps, and reclaims physical and virtual memory
-- [IOMMU (iommu/)](../iommu/README.md) — address translation and isolation between devices and memory
+- [メモリ管理（mm/）](../mm/README.md) — カーネルが物理メモリと仮想メモリを割り当て、マップし、回収する仕組み
+- [IOMMU（iommu/）](../iommu/README.md) — デバイスとメモリの間のアドレス変換と分離

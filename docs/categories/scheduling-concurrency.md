@@ -1,8 +1,8 @@
-# Scheduling & Concurrency {#scheduling-concurrency}
+# スケジューリングと並行性 {#scheduling-concurrency}
 
-How the kernel shares CPUs among competing tasks and keeps concurrent code correct.
+カーネルが競合するタスク間でCPUをどのように共有し、並行コードの正しさをどのように保つか。
 
-- [Scheduler (sched/)](../sched/README.md) — how the kernel decides which task runs next, and when
-- [Locking (locking/)](../locking/README.md) — the primitives that keep concurrent code correct: spinlocks, mutexes, RCU
-- [Interrupts (interrupts/)](../interrupts/README.md) — handling hardware events and safely deferring work
-- [IPC (ipc/)](../ipc/README.md) — how processes communicate: pipes, signals, shared memory, message queues
+- [スケジューラ（sched/）](../sched/README.md) — 次にどのタスクをいつ実行するかをカーネルが決める仕組み
+- [ロック（locking/）](../locking/README.md) — 並行コードの正しさを保つプリミティブ: spinlock、mutex、RCU
+- [割り込み（interrupts/）](../interrupts/README.md) — ハードウェアイベントの処理と、作業の安全な遅延実行
+- [IPC（ipc/）](../ipc/README.md) — プロセス間の通信方法: パイプ、シグナル、共有メモリ、メッセージキュー

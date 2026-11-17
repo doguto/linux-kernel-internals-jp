@@ -1,9 +1,9 @@
-# Storage & I/O {#storage-io}
+# ストレージとI/O {#storage-io}
 
-The path data takes from an application's read or write down to a physical device — and the layers that make it general and fast.
+アプリケーションのreadやwriteから物理デバイスに至るまでデータがたどる経路 — そしてそれを汎用的かつ高速にする各層。
 
-- [VFS (vfs/)](../vfs/README.md) — the abstraction that lets one API drive every filesystem
-- [Filesystems (filesystems/)](../filesystems/README.md) — how on-disk formats and the page cache turn bytes into files
-- [Block Layer (block/)](../block/README.md) — the path from a filesystem request to a physical device
-- [I/O Patterns (io/)](../io/README.md) — buffered vs. direct, sync vs. async, and the tradeoffs between them
-- [io_uring (io-uring/)](../io-uring/README.md) — the ring-based interface for high-performance asynchronous I/O
+- [VFS（vfs/）](../vfs/README.md) — 1つのAPIですべてのファイルシステムを駆動できるようにする抽象化
+- [ファイルシステム（filesystems/）](../filesystems/README.md) — ディスク上のフォーマットとページキャッシュがバイト列をファイルに変える仕組み
+- [ブロック層（block/）](../block/README.md) — ファイルシステムの要求から物理デバイスまでの経路
+- [I/Oパターン（io/）](../io/README.md) — バッファードI/OとダイレクトI/O、同期と非同期、そしてそれらの間のトレードオフ
+- [io_uring（io-uring/）](../io-uring/README.md) — 高性能な非同期I/Oのためのリングベースのインターフェース

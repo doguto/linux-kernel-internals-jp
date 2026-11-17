@@ -1,9 +1,10 @@
-site_name: Linux Kernel Internals
-site_description: Documentation about Linux kernel internals, design decisions, and the journey of contributing
-site_url: https://kernel-internals.org/
+site_name: Linux Kernel Internals 日本語版
+site_description: Linuxカーネルの内部構造、設計判断、コントリビュートの道のりに関するドキュメント（kernel-internals.org の非公式日本語訳）
+copyright: '原文 <a href="https://kernel-internals.org/">kernel-internals.org</a>（<a href="https://github.com/laveeshb/linux-kernel-internals">laveeshb/linux-kernel-internals</a>）を翻訳。ドキュメントは <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.ja">CC BY-SA 4.0</a>、コード片は GPL-2.0 で提供される。'
 
 theme:
   name: material
+  language: ja
   logo: assets/tux.svg
   favicon: assets/tux-outline.svg
   palette:
@@ -12,13 +13,13 @@ theme:
       accent: indigo
       toggle:
         icon: material/brightness-7
-        name: Switch to dark mode
+        name: ダークモードに切り替え
     - scheme: slate
       primary: indigo
       accent: indigo
       toggle:
         icon: material/brightness-4
-        name: Switch to light mode
+        name: ライトモードに切り替え
   features:
     - navigation.tabs
     - navigation.indexes
@@ -60,10 +61,10 @@ extra:
       link: https://github.com/laveeshb/linux-kernel-internals
     - icon: fontawesome/solid/comments
       link: https://github.com/laveeshb/linux-kernel-internals/discussions
-      name: Discussions
+      name: Discussions（原文）
     - icon: fontawesome/solid/bug
       link: https://github.com/laveeshb/linux-kernel-internals/issues
-      name: Issues
+      name: Issues（原文）
 
 # This makes external links open in new tabs
 extra_css:
@@ -73,593 +74,593 @@ extra_javascript:
   - javascripts/external-links.js
 
 nav:
-  - Home: index.md
-  - Foundations:
+  - "ホーム": index.md
+  - "基礎":
     - categories/foundations.md
-    - Background:
-      - Linux Evolution: linux-evolution.md
-      - Hardware Evolution: hardware-evolution.md
-    - Kernel Internals:
-      - Getting Started: kernel/README.md
-      - printk and Kernel Logging: kernel/printk.md
-      - Early Boot and start_kernel(): kernel/early-boot.md
-      - Kernel Boot Parameters: kernel/boot-params.md
-      - Kernel Panic and Oops: kernel/panic-oops.md
-      - Module Init and Initcalls: kernel/initcalls-modules.md
-      - War Stories: kernel/war-stories.md
-    - Architecture:
-      - ARM64:
-        - Getting Started: arch/arm64/README.md
-        - Boot Sequence: arch/arm64/boot.md
-        - Exception Model: arch/arm64/exception-model.md
-        - Memory Model: arch/arm64/memory-model.md
-        - Page Tables: arch/arm64/page-tables.md
-        - Syscall Entry: arch/arm64/syscall-entry.md
-        - CPU Features and Alternatives: arch/arm64/cpu-features.md
-        - Spectre and Meltdown: arch/arm64/spectre-meltdown.md
-        - War Stories: arch/arm64/war-stories.md
-      - x86:
-        - Getting Started: arch/x86/README.md
-        - Boot Sequence: arch/x86/boot.md
-        - Page Tables: arch/x86/page-tables.md
-        - Syscall Entry: arch/x86/syscall-entry.md
-        - Exception and Interrupt Handling: arch/x86/exceptions.md
-        - CPU Features and Alternatives: arch/x86/cpu-features.md
-        - Spectre and Meltdown: arch/x86/spectre-meltdown.md
-        - War Stories: arch/x86/war-stories.md
-    - System Calls:
-      - Getting Started: syscalls/README.md
-      - Syscall Entry Path: syscalls/syscall-entry.md
-      - SYSCALL_DEFINE and Dispatch: syscalls/syscall-define.md
-      - Adding a New Syscall: syscalls/adding-syscall.md
-      - 32-bit Compat Syscalls: syscalls/compat.md
-      - ptrace and Syscall Interception: syscalls/ptrace-interception.md
-      - vDSO and Virtual System Calls: syscalls/vdso.md
-      - Syscall Auditing: syscalls/audit.md
-      - Syscall Restart Mechanisms: syscalls/restart-block.md
-      - War Stories: syscalls/war-stories.md
-    - Time:
-      - Getting Started: time/README.md
-      - Timekeeping and Clocksources: time/timekeeping.md
-      - Clocksource and Clockevent Drivers: time/clocksource.md
-      - hrtimers: time/hrtimers.md
-      - POSIX Timers and timerfd: time/posix-timers.md
-      - The Timer Wheel: time/timer-wheel.md
-      - NTP and Clock Discipline: time/ntp.md
-      - Time Namespaces: time/time-namespaces.md
-      - War Stories: time/war-stories.md
-    - Kernel Modules:
-      - Getting Started: modules/README.md
-      - Writing and Loading Modules: modules/module-basics.md
-      - Parameters, Symbols, and Kconfig: modules/module-params.md
-      - Module Signing: modules/module-signing.md
-      - Kbuild Build System: modules/kbuild.md
-      - Module Loading Internals: modules/module-loading-internals.md
-      - Dynamic Debug: modules/dynamic-debug.md
-      - War Stories: modules/war-stories.md
-  - Memory:
+    - "背景":
+      - "Linuxの進化": linux-evolution.md
+      - "ハードウェアの進化": hardware-evolution.md
+    - "カーネル内部":
+      - "はじめに": kernel/README.md
+      - "printkとカーネルログ": kernel/printk.md
+      - "初期ブートとstart_kernel()": kernel/early-boot.md
+      - "カーネルブートパラメータ": kernel/boot-params.md
+      - "カーネルパニックとOops": kernel/panic-oops.md
+      - "モジュール初期化とinitcall": kernel/initcalls-modules.md
+      - "事件簿": kernel/war-stories.md
+    - "アーキテクチャ":
+      - "ARM64":
+        - "はじめに": arch/arm64/README.md
+        - "ブートシーケンス": arch/arm64/boot.md
+        - "例外モデル": arch/arm64/exception-model.md
+        - "メモリモデル": arch/arm64/memory-model.md
+        - "ページテーブル": arch/arm64/page-tables.md
+        - "システムコールのエントリ": arch/arm64/syscall-entry.md
+        - "CPU機能とalternatives": arch/arm64/cpu-features.md
+        - "SpectreとMeltdown": arch/arm64/spectre-meltdown.md
+        - "事件簿": arch/arm64/war-stories.md
+      - "x86":
+        - "はじめに": arch/x86/README.md
+        - "ブートシーケンス": arch/x86/boot.md
+        - "ページテーブル": arch/x86/page-tables.md
+        - "システムコールのエントリ": arch/x86/syscall-entry.md
+        - "例外と割り込みの処理": arch/x86/exceptions.md
+        - "CPU機能とalternatives": arch/x86/cpu-features.md
+        - "SpectreとMeltdown": arch/x86/spectre-meltdown.md
+        - "事件簿": arch/x86/war-stories.md
+    - "システムコール":
+      - "はじめに": syscalls/README.md
+      - "システムコールのエントリパス": syscalls/syscall-entry.md
+      - "SYSCALL_DEFINEとディスパッチ": syscalls/syscall-define.md
+      - "新しいシステムコールの追加": syscalls/adding-syscall.md
+      - "32ビット互換システムコール": syscalls/compat.md
+      - "ptraceとシステムコールの横取り": syscalls/ptrace-interception.md
+      - "vDSOと仮想システムコール": syscalls/vdso.md
+      - "システムコールの監査": syscalls/audit.md
+      - "システムコールの再開機構": syscalls/restart-block.md
+      - "事件簿": syscalls/war-stories.md
+    - "時間":
+      - "はじめに": time/README.md
+      - "時刻管理とclocksource": time/timekeeping.md
+      - "clocksourceとclockeventドライバ": time/clocksource.md
+      - "hrtimer": time/hrtimers.md
+      - "POSIXタイマーとtimerfd": time/posix-timers.md
+      - "タイマーホイール": time/timer-wheel.md
+      - "NTPとクロック規律": time/ntp.md
+      - "時間名前空間": time/time-namespaces.md
+      - "事件簿": time/war-stories.md
+    - "カーネルモジュール":
+      - "はじめに": modules/README.md
+      - "モジュールの作成とロード": modules/module-basics.md
+      - "パラメータ、シンボル、Kconfig": modules/module-params.md
+      - "モジュール署名": modules/module-signing.md
+      - "Kbuildビルドシステム": modules/kbuild.md
+      - "モジュールロードの内部": modules/module-loading-internals.md
+      - "動的デバッグ": modules/dynamic-debug.md
+      - "事件簿": modules/war-stories.md
+  - "メモリ":
     - categories/memory.md
-    - Memory Management:
-      - Getting Started: mm/README.md
-      - Overview: mm/overview.md
-      - Fundamentals:
-        - Page Allocator: mm/page-allocator.md
-        - kmalloc (SLUB): mm/slab.md
-        - SLUB Allocator Internals: mm/slab-internals.md
-        - vmalloc: mm/vmalloc.md
-        - NUMA: mm/numa.md
-      - NUMA Advanced:
-        - Distance Metrics: mm/numa-distance.md
-        - Zonelist & Fallback: mm/numa-zonelist.md
-        - NUMA & Reclaim: mm/numa-reclaim.md
-        - Memory Hotplug: mm/memory-hotplug.md
-      - Address Translation:
-        - Page Tables: mm/page-tables.md
-        - Kernel Address Space: mm/kernel-address-space.md
-        - "Physical Memory Model": mm/memory-model.md
-        - Process Address Space: mm/mmap.md
-        - Page Fault Handler: mm/page-fault.md
-        - "vDSO: Fast Syscalls Without the Kernel": mm/vdso.md
-      - Caching & Reclaim:
-        - Page Cache: mm/page-cache.md
-        - Page Reclaim: mm/reclaim.md
-        - MGLRU: mm/mglru.md
-        - Reclaim Throttling: mm/reclaim-throttling.md
-        - Zone Reclaim Policy: mm/zone-reclaim.md
-        - Shrinker API: mm/shrinker.md
-        - DAMON: mm/damon.md
-        - Swap: mm/swap.md
-        - zswap: mm/zswap.md
-      - Advanced:
-        - Memory Cgroups: mm/memcg.md
-        - Transparent Huge Pages: mm/thp.md
-        - Multi-Size THP: mm/mthp.md
-        - Compaction: mm/compaction.md
-        - KSM: mm/ksm.md
-        - Folio Abstraction: mm/folio.md
-        - Maple Tree (VMA Data Structure): mm/maple-tree.md
-        - Per-VMA Locks: mm/per-vma-locks.md
-        - RCU in Memory Management: mm/rcu-mm.md
-        - TLB Optimization: mm/tlb-optimization.md
-        - CXL Memory Tiering: mm/cxl-memory-tiering.md
-        - Memory Tiering: mm/memory-tiering.md
-        - HMM (Heterogeneous Memory Management): mm/hmm.md
-        - userfaultfd: mm/userfaultfd.md
-        - Page Table Walking API: mm/page-walk.md
-        - "GUP: Getting User Pages": mm/gup.md
-        - vrealloc: mm/vrealloc.md
-      - Memory Cgroups:
-        - Container Memory Limits: mm/container-memory-limits.md
-        - memory.stat Reference: mm/memory-stat.md
-        - Cgroup Hierarchy: mm/memcg-hierarchy.md
-        - Cgroup OOM: mm/memcg-oom.md
-        - Cgroup Swap Accounting: mm/memcg-swap.md
-      - Lifecycle:
-        - Life of a malloc: mm/life-of-malloc.md
-        - Life of a page: mm/life-of-page.md
-        - What happens when you fork: mm/fork.md
-        - What happens during exec(): mm/exec.md
-        - Running out of memory: mm/oom.md
-        - Life of a file read: mm/life-of-read.md
-        - File-backed mmap and page faults: mm/file-mmap.md
-        - What happens during swapping: mm/swapping.md
-      - Explainers:
-        - Virtual vs Physical vs Resident: mm/virtual-physical-resident.md
-        - Memory Overcommit: mm/overcommit.md
-        - brk vs mmap: mm/brk-vs-mmap.md
-        - Contiguous Memory: mm/contiguous-memory.md
-        - Copy-on-Write: mm/cow.md
-      - Boot & Subsystems:
-        - memblock: mm/memblock.md
-        - Memory Reservation: mm/memory-reservation.md
-        - Boot Page Tables: mm/boot-page-tables.md
-        - NUMA Topology (ACPI SRAT/SLIT): mm/numa-acpi-srat.md
-        - CMA: mm/cma.md
-        - DMA: mm/dma.md
-        - Device Coherency: mm/device-coherency.md
-        - PCI BAR Mapping: mm/pci-bar-mapping.md
-        - hugetlbfs vs THP: mm/hugetlbfs-vs-thp.md
-        - 1GB Huge Pages: mm/hugepages-1gb.md
-      - Tuning:
-        - PSI: mm/psi.md
-        - Sysctl Reference: mm/sysctl-reference.md
-        - Containers: mm/tuning-containers.md
-        - Databases: mm/tuning-databases.md
-        - Memory Bandwidth: mm/memory-bandwidth.md
-        - Swap Thrashing: mm/swap-thrashing.md
-      - Debugging:
-        - KASAN: mm/kasan.md
-        - KFENCE: mm/kfence.md
-        - Kmemleak: mm/kmemleak.md
-        - Page Poisoning: mm/page-poisoning.md
-        - MM Tracepoints: mm/mm-tracepoints.md
-        - Fault Injection: mm/fault-injection.md
-        - Why is my process slow?: mm/why-is-my-process-slow.md
-        - Reading an OOM log: mm/reading-oom-log.md
-        - OOM Debugging: mm/oom-debugging.md
-        - Understanding /proc/meminfo: mm/understanding-proc-meminfo.md
-        - Understanding /proc/vmstat: mm/understanding-proc-vmstat.md
-        - /proc/meminfo reference: mm/proc-meminfo.md
-        - /proc/vmstat reference: mm/proc-vmstat.md
-      - Bugs:
-        - Bug Index: mm/bugs/README.md
-        - "War Stories: Performance Regressions": mm/war-stories-regressions.md
-        - "War Stories: CVE Case Studies": mm/war-stories-cves.md
-        - "War Stories: Bug Incident Narratives": mm/war-stories-bugs.md
-      - Reference:
-        - Glossary: mm/glossary.md
-    - IOMMU and DMA:
-      - Getting Started: iommu/README.md
-      - IOMMU Architecture: iommu/iommu-arch.md
-      - DMA API: iommu/dma-api.md
-      - IOVA Allocator: iommu/iova-allocator.md
-      - Shared Virtual Addressing: iommu/sva.md
-      - VFIO Internals: iommu/vfio-internals.md
-      - IOMMU War Stories: iommu/war-stories.md
-  - Scheduling & Concurrency:
+    - "メモリ管理":
+      - "はじめに": mm/README.md
+      - "概要": mm/overview.md
+      - "基本":
+        - "ページアロケータ": mm/page-allocator.md
+        - "kmalloc（SLUB）": mm/slab.md
+        - "SLUBアロケータの内部": mm/slab-internals.md
+        - "vmalloc": mm/vmalloc.md
+        - "NUMA": mm/numa.md
+      - "NUMA（発展）":
+        - "距離メトリクス": mm/numa-distance.md
+        - "zonelistとフォールバック": mm/numa-zonelist.md
+        - "NUMAと回収": mm/numa-reclaim.md
+        - "メモリホットプラグ": mm/memory-hotplug.md
+      - "アドレス変換":
+        - "ページテーブル": mm/page-tables.md
+        - "カーネルアドレス空間": mm/kernel-address-space.md
+        - "物理メモリモデル": mm/memory-model.md
+        - "プロセスのアドレス空間": mm/mmap.md
+        - "ページフォールトハンドラ": mm/page-fault.md
+        - "vDSO: カーネルに入らない高速システムコール": mm/vdso.md
+      - "キャッシュと回収":
+        - "ページキャッシュ": mm/page-cache.md
+        - "ページ回収": mm/reclaim.md
+        - "MGLRU": mm/mglru.md
+        - "回収のスロットリング": mm/reclaim-throttling.md
+        - "ゾーン回収ポリシー": mm/zone-reclaim.md
+        - "Shrinker API": mm/shrinker.md
+        - "DAMON": mm/damon.md
+        - "スワップ": mm/swap.md
+        - "zswap": mm/zswap.md
+      - "発展":
+        - "メモリcgroup": mm/memcg.md
+        - "透過的ヒュージページ": mm/thp.md
+        - "マルチサイズTHP": mm/mthp.md
+        - "コンパクション": mm/compaction.md
+        - "KSM": mm/ksm.md
+        - "folio抽象": mm/folio.md
+        - "Maple Tree（VMAのデータ構造）": mm/maple-tree.md
+        - "VMA単位のロック": mm/per-vma-locks.md
+        - "メモリ管理におけるRCU": mm/rcu-mm.md
+        - "TLBの最適化": mm/tlb-optimization.md
+        - "CXLメモリ階層化": mm/cxl-memory-tiering.md
+        - "メモリ階層化": mm/memory-tiering.md
+        - "HMM（異種メモリ管理）": mm/hmm.md
+        - "userfaultfd": mm/userfaultfd.md
+        - "ページテーブルウォークAPI": mm/page-walk.md
+        - "GUP: ユーザーページの取得": mm/gup.md
+        - "vrealloc": mm/vrealloc.md
+      - "メモリcgroup":
+        - "コンテナのメモリ制限": mm/container-memory-limits.md
+        - "memory.statリファレンス": mm/memory-stat.md
+        - "cgroup階層": mm/memcg-hierarchy.md
+        - "cgroupのOOM": mm/memcg-oom.md
+        - "cgroupのスワップ計上": mm/memcg-swap.md
+      - "ライフサイクル":
+        - "mallocの一生": mm/life-of-malloc.md
+        - "ページの一生": mm/life-of-page.md
+        - "forkしたときに何が起こるか": mm/fork.md
+        - "exec()の間に何が起こるか": mm/exec.md
+        - "メモリ不足": mm/oom.md
+        - "ファイル読み込みの一生": mm/life-of-read.md
+        - "ファイルバックのmmapとページフォールト": mm/file-mmap.md
+        - "スワップ中に何が起こるか": mm/swapping.md
+      - "解説":
+        - "仮想・物理・常駐の違い": mm/virtual-physical-resident.md
+        - "メモリオーバーコミット": mm/overcommit.md
+        - "brkとmmap": mm/brk-vs-mmap.md
+        - "連続メモリ": mm/contiguous-memory.md
+        - "コピーオンライト": mm/cow.md
+      - "ブートとサブシステム":
+        - "memblock": mm/memblock.md
+        - "メモリ予約": mm/memory-reservation.md
+        - "ブート時のページテーブル": mm/boot-page-tables.md
+        - "NUMAトポロジ（ACPI SRAT/SLIT）": mm/numa-acpi-srat.md
+        - "CMA": mm/cma.md
+        - "DMA": mm/dma.md
+        - "デバイスのコヒーレンシ": mm/device-coherency.md
+        - "PCI BARのマッピング": mm/pci-bar-mapping.md
+        - "hugetlbfsとTHP": mm/hugetlbfs-vs-thp.md
+        - "1GBヒュージページ": mm/hugepages-1gb.md
+      - "チューニング":
+        - "PSI": mm/psi.md
+        - "sysctlリファレンス": mm/sysctl-reference.md
+        - "コンテナ": mm/tuning-containers.md
+        - "データベース": mm/tuning-databases.md
+        - "メモリ帯域": mm/memory-bandwidth.md
+        - "スワップスラッシング": mm/swap-thrashing.md
+      - "デバッグ":
+        - "KASAN": mm/kasan.md
+        - "KFENCE": mm/kfence.md
+        - "Kmemleak": mm/kmemleak.md
+        - "ページポイズニング": mm/page-poisoning.md
+        - "MMのtracepoint": mm/mm-tracepoints.md
+        - "フォールトインジェクション": mm/fault-injection.md
+        - "なぜプロセスが遅いのか": mm/why-is-my-process-slow.md
+        - "OOMログの読み方": mm/reading-oom-log.md
+        - "OOMのデバッグ": mm/oom-debugging.md
+        - "/proc/meminfoを理解する": mm/understanding-proc-meminfo.md
+        - "/proc/vmstatを理解する": mm/understanding-proc-vmstat.md
+        - "/proc/meminfoリファレンス": mm/proc-meminfo.md
+        - "/proc/vmstatリファレンス": mm/proc-vmstat.md
+      - "バグ":
+        - "バグ索引": mm/bugs/README.md
+        - "事件簿: 性能リグレッション": mm/war-stories-regressions.md
+        - "事件簿: CVE事例研究": mm/war-stories-cves.md
+        - "事件簿: バグ事例": mm/war-stories-bugs.md
+      - "リファレンス":
+        - "用語集": mm/glossary.md
+    - "IOMMUとDMA":
+      - "はじめに": iommu/README.md
+      - "IOMMUのアーキテクチャ": iommu/iommu-arch.md
+      - "DMA API": iommu/dma-api.md
+      - "IOVAアロケータ": iommu/iova-allocator.md
+      - "共有仮想アドレッシング": iommu/sva.md
+      - "VFIOの内部": iommu/vfio-internals.md
+      - "IOMMU事件簿": iommu/war-stories.md
+  - "スケジューリングと並行性":
     - categories/scheduling-concurrency.md
-    - Scheduler:
-      - Getting Started: sched/README.md
-      - Fundamentals:
-        - Scheduler Evolution: sched/scheduler-evolution.md
-        - Scheduler Classes: sched/scheduler-classes.md
-        - CFS: sched/cfs.md
-        - EEVDF: sched/eevdf.md
-        - sched_ext (BPF Scheduling): sched/sched-ext.md
-        - Runqueues & Task Selection: sched/runqueues.md
-      - Lifecycle:
-        - Life of a Context Switch: sched/context-switch.md
-        - What Happens When a Process Wakes Up: sched/wakeup.md
-        - "What Happens When You fork()": sched/sched-fork.md
-      - Real-Time:
-        - RT Scheduler: sched/rt-scheduler.md
-        - SCHED_DEADLINE: sched/deadline.md
-        - Priority Inversion & PI Mutexes: sched/pi-mutexes.md
-      - Resource Control & Topology:
-        - CPU cgroup (v1 vs v2): sched/cpu-cgroup.md
-        - CPU Bandwidth Control: sched/cpu-bandwidth.md
-        - cpuset: sched/cpuset.md
-        - Scheduling Domains: sched/sched-domains.md
-        - CPU Affinity: sched/cpu-affinity.md
-      - Advanced:
-        - Load Balancing: sched/load-balancing.md
-        - NUMA Automatic Balancing: sched/numa-balancing.md
-        - Energy-Aware Scheduling: sched/eas.md
-        - Preemption Model: sched/preemption.md
-        - The Scheduling Tick: sched/sched-tick.md
-        - Real-Time Linux Tuning: sched/rt-tuning.md
-      - Debugging & Observability:
-        - Scheduler Statistics: sched/schedstat.md
-        - Scheduler Tracing: sched/sched-tracing.md
-        - Scheduler Tuning: sched/sched-tuning.md
-      - War Stories:
-        - Scheduler War Stories: sched/war-stories.md
-        - The DEADLINE Lock Holder That Forgot to Inherit on the Way Down: sched/war-stories/deadline-pi-deboost.md
-        - 'The Cost of Asking "Is There Any Work For Me?" Too Often': sched/war-stories/newidle-balance-cost.md
-        - "PSI Polling: A Waitqueue That Outlived the cgroup That Owned It": sched/war-stories/psi-trigger-uaf.md
-        - "wake_wide(): A Heuristic That Helps One Workload by Hurting Another": sched/war-stories/wake-wide-heuristic.md
-        - The CFS Bandwidth Slice That Expired Before It Was Spent: sched/war-stories/cfs-bandwidth-throttling.md
-    - Locking:
-      - Getting Started: locking/README.md
-      - Fundamentals:
-        - Spinlock and raw_spinlock: locking/spinlock.md
-        - Mutex and rt_mutex: locking/mutex.md
-        - rwlock and rwsem: locking/rwlock-rwsem.md
-        - RCU (Read-Copy-Update): locking/rcu.md
-        - Seqlock: locking/seqlock.md
-      - Advanced:
-        - Atomic Operations and Memory Barriers: locking/atomics.md
-        - Per-CPU Variables: locking/percpu.md
-        - Lockdep: locking/lockdep.md
-        - Lock Contention Debugging: locking/lock-debugging.md
-        - Futex Internals: locking/futex.md
-        - SRCU: locking/srcu.md
-        - Completions and Wait Queues: locking/completions.md
-        - "PREEMPT_RT: Twenty Years to Mainline": locking/preempt-rt.md
-      - War Stories:
-        - Locking War Stories: locking/war-stories.md
-        - The Deadlock Detector That Scheduled While Atomic: locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md
-        - The PI-Futex Fixup That Had No Answer for a Permanent Fault: locking/war-stories/pi-futex-fixup-owner-uaf.md
-        - "Towelroot: The Missing Check on the Requeuer's Half of the Pair": locking/war-stories/towelroot-futex-requeue.md
-        - The PI-Mutex Origin Story: locking/war-stories/pi-mutex-origin.md
-    - Interrupts:
-      - Getting Started: interrupts/README.md
-      - Fundamentals:
-        - Interrupt Handling Overview: interrupts/interrupts.md
-        - IRQ Descriptor and irq_chip: interrupts/irq-desc.md
-        - request_irq and free_irq: interrupts/request-irq.md
-        - Threaded IRQs: interrupts/threaded-irq.md
-        - IRQ Affinity and CPU Isolation: interrupts/irq-affinity.md
-        - MSI and MSI-X: interrupts/msi-msix.md
-      - Deferred Work:
-        - Softirqs: interrupts/softirq.md
-        - Tasklets: interrupts/tasklets.md
-        - Workqueues: interrupts/workqueues.md
-        - Workqueue Internals (cmwq): interrupts/workqueue-internals.md
-        - Timers and hrtimers: interrupts/timers.md
-      - War Stories:
-        - Interrupt War Stories: interrupts/war-stories.md
-        - The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order: interrupts/war-stories/vector-leak-cpu-offline.md
-        - The IPI Verifier That Trusted Its Own Caller: interrupts/war-stories/ipi-send-verify-null-deref.md
-        - The Warning That Vector Space Was Silently Breaking Affinity: interrupts/war-stories/vector-exhaustion-silent-affinity-break.md
-        - The Affinity Notifier That Outlived Its Own Reference Count: interrupts/war-stories/affinity-notifier-uaf.md
-    - IPC:
-      - Getting Started: ipc/README.md
-      - Signals: ipc/signals.md
-      - Pipes and FIFOs: ipc/pipes.md
-      - Shared Memory and Semaphores: ipc/shared-memory.md
-      - eventfd and signalfd: ipc/eventfd-signalfd.md
-      - POSIX Message Queues: ipc/mqueue.md
-      - Unix Domain Sockets: ipc/unix-sockets.md
-      - SysV Semaphores and Message Queues: ipc/sysv-semaphores.md
-      - IPC War Stories: ipc/war-stories.md
-  - Storage & I/O:
+    - "スケジューラ":
+      - "はじめに": sched/README.md
+      - "基本":
+        - "スケジューラの進化": sched/scheduler-evolution.md
+        - "スケジューラクラス": sched/scheduler-classes.md
+        - "CFS": sched/cfs.md
+        - "EEVDF": sched/eevdf.md
+        - "sched_ext（BPFスケジューリング）": sched/sched-ext.md
+        - "ランキューとタスク選択": sched/runqueues.md
+      - "ライフサイクル":
+        - "コンテキストスイッチの一生": sched/context-switch.md
+        - "プロセスが起床するとき何が起こるか": sched/wakeup.md
+        - "fork()したときに何が起こるか": sched/sched-fork.md
+      - "リアルタイム":
+        - "RTスケジューラ": sched/rt-scheduler.md
+        - "SCHED_DEADLINE": sched/deadline.md
+        - "優先度逆転とPI mutex": sched/pi-mutexes.md
+      - "リソース制御とトポロジ":
+        - "CPU cgroup（v1とv2）": sched/cpu-cgroup.md
+        - "CPU帯域制御": sched/cpu-bandwidth.md
+        - "cpuset": sched/cpuset.md
+        - "スケジューリングドメイン": sched/sched-domains.md
+        - "CPUアフィニティ": sched/cpu-affinity.md
+      - "発展":
+        - "負荷分散": sched/load-balancing.md
+        - "NUMA自動バランシング": sched/numa-balancing.md
+        - "エネルギーを考慮したスケジューリング": sched/eas.md
+        - "プリエンプションモデル": sched/preemption.md
+        - "スケジューリングティック": sched/sched-tick.md
+        - "リアルタイムLinuxのチューニング": sched/rt-tuning.md
+      - "デバッグと可観測性":
+        - "スケジューラの統計": sched/schedstat.md
+        - "スケジューラのトレーシング": sched/sched-tracing.md
+        - "スケジューラのチューニング": sched/sched-tuning.md
+      - "事件簿":
+        - "スケジューラ事件簿": sched/war-stories.md
+        - "降格時に継承を忘れたDEADLINEロック保持者": sched/war-stories/deadline-pi-deboost.md
+        - "「何か仕事はある？」と頻繁に尋ねるコスト": sched/war-stories/newidle-balance-cost.md
+        - "PSIポーリング: 所有者のcgroupより長生きした待ちキュー": sched/war-stories/psi-trigger-uaf.md
+        - "wake_wide(): あるワークロードを助け別のワークロードを害するヒューリスティック": sched/war-stories/wake-wide-heuristic.md
+        - "使われる前に期限切れになったCFS帯域スライス": sched/war-stories/cfs-bandwidth-throttling.md
+    - "ロック":
+      - "はじめに": locking/README.md
+      - "基本":
+        - "spinlockとraw_spinlock": locking/spinlock.md
+        - "mutexとrt_mutex": locking/mutex.md
+        - "rwlockとrwsem": locking/rwlock-rwsem.md
+        - "RCU（Read-Copy-Update）": locking/rcu.md
+        - "seqlock": locking/seqlock.md
+      - "発展":
+        - "アトミック操作とメモリバリア": locking/atomics.md
+        - "per-CPU変数": locking/percpu.md
+        - "lockdep": locking/lockdep.md
+        - "ロック競合のデバッグ": locking/lock-debugging.md
+        - "futexの内部": locking/futex.md
+        - "SRCU": locking/srcu.md
+        - "completionと待ちキュー": locking/completions.md
+        - "PREEMPT_RT: メインラインまでの20年": locking/preempt-rt.md
+      - "事件簿":
+        - "ロック事件簿": locking/war-stories.md
+        - "アトミックコンテキストでスケジュールしたデッドロック検出器": locking/war-stories/rtmutex-deadlock-detector-atomic-sleep.md
+        - "永続的なフォールトに答えを持たなかったPI-futexの修正処理": locking/war-stories/pi-futex-fixup-owner-uaf.md
+        - "Towelroot: requeue側に欠けていたチェック": locking/war-stories/towelroot-futex-requeue.md
+        - "PI-mutex誕生の経緯": locking/war-stories/pi-mutex-origin.md
+    - "割り込み":
+      - "はじめに": interrupts/README.md
+      - "基本":
+        - "割り込み処理の概要": interrupts/interrupts.md
+        - "IRQディスクリプタとirq_chip": interrupts/irq-desc.md
+        - "request_irqとfree_irq": interrupts/request-irq.md
+        - "スレッド化IRQ": interrupts/threaded-irq.md
+        - "IRQアフィニティとCPU隔離": interrupts/irq-affinity.md
+        - "MSIとMSI-X": interrupts/msi-msix.md
+      - "遅延処理":
+        - "softirq": interrupts/softirq.md
+        - "tasklet": interrupts/tasklets.md
+        - "workqueue": interrupts/workqueues.md
+        - "workqueueの内部（cmwq）": interrupts/workqueue-internals.md
+        - "タイマーとhrtimer": interrupts/timers.md
+      - "事件簿":
+        - "割り込み事件簿": interrupts/war-stories.md
+        - "2つのCPUが誤った順序でオフラインになって起きたベクタリーク": interrupts/war-stories/vector-leak-cpu-offline.md
+        - "呼び出し元を信用したIPI検証器": interrupts/war-stories/ipi-send-verify-null-deref.md
+        - "ベクタ空間が黙ってアフィニティを壊していたことを示す警告": interrupts/war-stories/vector-exhaustion-silent-affinity-break.md
+        - "自身の参照カウントより長生きしたアフィニティ通知": interrupts/war-stories/affinity-notifier-uaf.md
+    - "IPC":
+      - "はじめに": ipc/README.md
+      - "シグナル": ipc/signals.md
+      - "パイプとFIFO": ipc/pipes.md
+      - "共有メモリとセマフォ": ipc/shared-memory.md
+      - "eventfdとsignalfd": ipc/eventfd-signalfd.md
+      - "POSIXメッセージキュー": ipc/mqueue.md
+      - "Unixドメインソケット": ipc/unix-sockets.md
+      - "SysVセマフォとメッセージキュー": ipc/sysv-semaphores.md
+      - "IPC事件簿": ipc/war-stories.md
+  - "ストレージとI/O":
     - categories/storage-io.md
-    - VFS:
-      - Getting Started: vfs/README.md
-      - Fundamentals:
-        - "VFS Objects: superblock, inode, dentry, file": vfs/vfs-objects.md
-        - Path Resolution: vfs/namei.md
-        - File Operations: vfs/file-ops.md
-        - Filesystem Registration and Mounting: vfs/mounting.md
-      - Lifecycle:
-        - Life of a write() Syscall: vfs/life-of-write.md
-        - Dentry and Inode Caches: vfs/dcache-icache.md
-      - Advanced:
-        - splice, sendfile, copy_file_range: vfs/splice-sendfile.md
-        - inotify and fanotify: vfs/inotify.md
-        - Extended Attributes (xattr): vfs/xattr.md
-        - procfs and sysfs: vfs/procfs-sysfs.md
-      - War Stories:
-        - VFS War Stories: vfs/war-stories.md
-        - The Dentry-Cache Walk Livelock: vfs/war-stories/dentry-cache-livelock.md
-        - "Sequoia: The seq_file Size-Truncation Overflow": vfs/war-stories/sequoia-seq-file-overflow.md
-        - "OverlayFS: UID Mapping Confusion": vfs/war-stories/overlayfs-uid-confusion.md
-        - "OverlayFS: Capability-Xattr Bypass": vfs/war-stories/overlayfs-capability-bypass.md
-    - Filesystems:
-      - Getting Started: filesystems/README.md
-      - ext4: filesystems/ext4.md
-      - ext4 Journaling (JBD2): filesystems/ext4-journal.md
-      - tmpfs and ramfs: filesystems/tmpfs.md
-      - btrfs: filesystems/btrfs.md
-      - XFS: filesystems/xfs.md
-      - OverlayFS: filesystems/overlayfs.md
-      - Crash Consistency and Recovery: filesystems/crash-consistency.md
-      - "iomap: Extent-Based I/O": filesystems/iomap.md
-      - "FUSE: Filesystems in Userspace": filesystems/fuse.md
-      - War Stories: filesystems/war-stories.md
-    - Block Layer:
-      - Getting Started: block/README.md
-      - Block Layer Overview: block/block-overview.md
-      - Life of a Block I/O: block/life-of-block-io.md
-      - bio and request structures: block/bio-request.md
-      - blk-mq (Multi-Queue): block/blk-mq.md
-      - I/O Schedulers: block/io-schedulers.md
-      - Block Cgroup (I/O Control): block/blk-cgroup.md
-      - NVMe Driver: block/nvme.md
-      - dm-verity (Integrity): block/dm-verity.md
-      - War Stories: block/war-stories.md
-      - Observability: block/block-observability.md
-    - I/O Patterns:
-      - Getting Started: io/README.md
-      - Life of a Write: io/life-of-a-write.md
-      - Buffered I/O and the Page Cache: io/buffered-io.md
-      - Readahead: io/readahead.md
-      - Page Cache Writeback: io/page-cache-writeback.md
-      - Memory-Mapped I/O: io/mmap-io.md
-      - Direct I/O: io/direct-io.md
-      - Vectored I/O (Scatter-Gather): io/vectored-io.md
-      - splice, sendfile, and Zero-Copy: io/splice-sendfile.md
-      - fallocate and File Space Management: io/fallocate.md
-      - Async I/O Evolution: io/async-io.md
-      - Observability: io/observability.md
-      - Tuning Storage I/O: io/tuning-storage.md
-      - "Buffered vs Direct I/O": io/buffered-vs-direct.md
-      - I/O Consistency and Ordering: io/io-consistency.md
-      - "fsync, fdatasync, and O_SYNC": io/fsync-fdatasync.md
-      - "pread / pwrite and RWF flags": io/pread-pwrite.md
-      - I/O Polling: io/io-polling.md
-      - "I/O Priorities (ionice)": io/io-priorities.md
-      - I/O Bandwidth: io/io-bandwidth.md
-      - Tuning for Streaming Workloads: io/tuning-streaming.md
-      - Debugging I/O Hangs: io/debugging-io-hangs.md
-      - "Understanding /proc/diskstats": io/understanding-proc-diskstats.md
-      - War Stories: io/war-stories.md
-    - io_uring:
-      - Getting Started: io-uring/README.md
-      - Life of an io_uring Request: io-uring/life-of-request.md
-      - Architecture and Rings: io-uring/io-uring-arch.md
-      - Operations and Advanced Features: io-uring/io-uring-ops.md
-      - Fixed Buffers and Files: io-uring/fixed-buffers.md
-      - Multishot, Linked Requests, and Probing: io-uring/multishot-ops.md
-      - Networking with io_uring: io-uring/networking.md
-      - io_uring vs epoll: io-uring/io-uring-vs-epoll.md
-      - Security Model: io-uring/security.md
-      - War Stories: io-uring/war-stories.md
-  - Devices & Drivers:
+    - "VFS":
+      - "はじめに": vfs/README.md
+      - "基本":
+        - "VFSオブジェクト: superblock、inode、dentry、file": vfs/vfs-objects.md
+        - "パス解決": vfs/namei.md
+        - "ファイル操作": vfs/file-ops.md
+        - "ファイルシステムの登録とマウント": vfs/mounting.md
+      - "ライフサイクル":
+        - "write()システムコールの一生": vfs/life-of-write.md
+        - "dentryキャッシュとinodeキャッシュ": vfs/dcache-icache.md
+      - "発展":
+        - "splice、sendfile、copy_file_range": vfs/splice-sendfile.md
+        - "inotifyとfanotify": vfs/inotify.md
+        - "拡張属性（xattr）": vfs/xattr.md
+        - "procfsとsysfs": vfs/procfs-sysfs.md
+      - "事件簿":
+        - "VFS事件簿": vfs/war-stories.md
+        - "dentryキャッシュ走査のライブロック": vfs/war-stories/dentry-cache-livelock.md
+        - "Sequoia: seq_fileのサイズ切り詰めによるオーバーフロー": vfs/war-stories/sequoia-seq-file-overflow.md
+        - "OverlayFS: UIDマッピングの混乱": vfs/war-stories/overlayfs-uid-confusion.md
+        - "OverlayFS: ケーパビリティxattrのバイパス": vfs/war-stories/overlayfs-capability-bypass.md
+    - "ファイルシステム":
+      - "はじめに": filesystems/README.md
+      - "ext4": filesystems/ext4.md
+      - "ext4のジャーナリング（JBD2）": filesystems/ext4-journal.md
+      - "tmpfsとramfs": filesystems/tmpfs.md
+      - "btrfs": filesystems/btrfs.md
+      - "XFS": filesystems/xfs.md
+      - "OverlayFS": filesystems/overlayfs.md
+      - "クラッシュ整合性と回復": filesystems/crash-consistency.md
+      - "iomap: エクステントベースのI/O": filesystems/iomap.md
+      - "FUSE: ユーザー空間ファイルシステム": filesystems/fuse.md
+      - "事件簿": filesystems/war-stories.md
+    - "ブロック層":
+      - "はじめに": block/README.md
+      - "ブロック層の概要": block/block-overview.md
+      - "ブロックI/Oの一生": block/life-of-block-io.md
+      - "bioとrequest構造体": block/bio-request.md
+      - "blk-mq（マルチキュー）": block/blk-mq.md
+      - "I/Oスケジューラ": block/io-schedulers.md
+      - "ブロックcgroup（I/O制御）": block/blk-cgroup.md
+      - "NVMeドライバ": block/nvme.md
+      - "dm-verity（完全性）": block/dm-verity.md
+      - "事件簿": block/war-stories.md
+      - "可観測性": block/block-observability.md
+    - "I/Oパターン":
+      - "はじめに": io/README.md
+      - "書き込みの一生": io/life-of-a-write.md
+      - "バッファードI/Oとページキャッシュ": io/buffered-io.md
+      - "先読み": io/readahead.md
+      - "ページキャッシュのライトバック": io/page-cache-writeback.md
+      - "メモリマップドI/O": io/mmap-io.md
+      - "ダイレクトI/O": io/direct-io.md
+      - "ベクタI/O（スキャッタ・ギャザー）": io/vectored-io.md
+      - "splice、sendfile、ゼロコピー": io/splice-sendfile.md
+      - "fallocateとファイル領域管理": io/fallocate.md
+      - "非同期I/Oの進化": io/async-io.md
+      - "可観測性": io/observability.md
+      - "ストレージI/Oのチューニング": io/tuning-storage.md
+      - "バッファードI/OとダイレクトI/O": io/buffered-vs-direct.md
+      - "I/Oの一貫性と順序": io/io-consistency.md
+      - "fsync、fdatasync、O_SYNC": io/fsync-fdatasync.md
+      - "pread / pwriteとRWFフラグ": io/pread-pwrite.md
+      - "I/Oポーリング": io/io-polling.md
+      - "I/O優先度（ionice）": io/io-priorities.md
+      - "I/O帯域": io/io-bandwidth.md
+      - "ストリーミングワークロード向けチューニング": io/tuning-streaming.md
+      - "I/Oハングのデバッグ": io/debugging-io-hangs.md
+      - "/proc/diskstatsを理解する": io/understanding-proc-diskstats.md
+      - "事件簿": io/war-stories.md
+    - "io_uring":
+      - "はじめに": io-uring/README.md
+      - "io_uringリクエストの一生": io-uring/life-of-request.md
+      - "アーキテクチャとリング": io-uring/io-uring-arch.md
+      - "操作と高度な機能": io-uring/io-uring-ops.md
+      - "固定バッファと固定ファイル": io-uring/fixed-buffers.md
+      - "マルチショット、リンクされたリクエスト、プロービング": io-uring/multishot-ops.md
+      - "io_uringによるネットワーキング": io-uring/networking.md
+      - "io_uringとepoll": io-uring/io-uring-vs-epoll.md
+      - "セキュリティモデル": io-uring/security.md
+      - "事件簿": io-uring/war-stories.md
+  - "デバイスとドライバ":
     - categories/devices.md
-    - Device Drivers:
-      - Getting Started: drivers/README.md
-      - Linux Device Model: drivers/device-model.md
-      - Platform Drivers: drivers/platform-driver.md
-      - Character and Misc Devices: drivers/chardev.md
-      - PCI Drivers: drivers/pci-driver.md
-      - Device Tree: drivers/device-tree.md
-      - I2C and SPI Drivers: drivers/i2c-spi.md
-      - War Stories:
-        - Device Drivers War Stories: drivers/war-stories.md
-        - The uevent_show() Fix That Deadlocked Driver Detach: drivers/war-stories/uevent-show-deadlock.md
-        - The kobject Path Race That Needed a Retry, Not a Lock: drivers/war-stories/kobject-path-race.md
-        - "fw_devlink=on: The Default That Broke Boot Twice Before It Stuck": drivers/war-stories/fw-devlink-boot-breaking.md
-        - The Deferred-Probe Origin Story: drivers/war-stories/deferred-probe-origin.md
-    - USB:
-      - Getting Started: usb/README.md
-      - Enumeration and Descriptors: usb/enumeration.md
-      - URBs and Transfer Types: usb/urbs.md
-      - Host Controllers and Gadget Mode: usb/xhci-gadget.md
-      - War Stories: usb/war-stories.md
-    - GPU / DRM:
-      - Getting Started: drm/README.md
-      - Kernel Mode Setting (KMS): drm/kms.md
-      - GEM Buffer Objects and dma-buf: drm/gem-dmabuf.md
-      - "Command Submission, Fences, and the GPU Scheduler": drm/command-submission.md
-      - War Stories:
-        - DRM War Stories: drm/war-stories.md
-        - The Xe TDR Recovery Regression Chain: drm/war-stories/xe-tdr-recovery-regression.md
-        - The Scheduler Fairness Evolution: drm/war-stories/scheduler-fairness-evolution.md
-        - The msm GPU Recovery/Shrinker Deadlock: drm/war-stories/msm-shrinker-deadlock.md
-        - "The drm_sched_entity_kill_jobs_cb Lockdep Deadlock": drm/war-stories/entity-kill-jobs-deadlock.md
-        - "The NO_HANG False Positive": drm/war-stories/no-hang-false-positive.md
-    - Audio / ALSA:
-      - Getting Started: alsa/README.md
-      - The PCM Data Path: alsa/pcm.md
-      - "ASoC: Audio for Embedded": alsa/asoc.md
-      - War Stories:
-        - ALSA War Stories: alsa/war-stories.md
-        - The 21-Year-Latent USB Mixer Teardown Use-After-Free: alsa/war-stories/mixer-teardown-use-after-free.md
-        - The USB Audio Clock Descriptor Out-of-Bounds Reads: alsa/war-stories/usb-audio-clock-descriptor-oob.md
-    - Input / HID:
-      - Getting Started: input/README.md
-      - The HID Subsystem: input/hid.md
-      - War Stories:
-        - Input/HID War Stories: input/war-stories.md
-        - The Uninitialized HID Report Buffer Kernel Memory Leak: input/war-stories/uninitialized-report-buffer-leak.md
-        - "The hid_validate_values() Type Confusion That a 2014 Bug Fix Introduced": input/war-stories/hid-validate-values-type-confusion.md
-    - TTY / Serial:
-      - Getting Started: tty/README.md
-      - Serial Core and UART Drivers: tty/serial.md
-      - "Line Disciplines, termios, and Pseudo-Terminals": tty/line-disciplines.md
-      - War Stories:
-        - TTY/Serial War Stories: tty/war-stories.md
-        - "The n_tty Echo Race: Nine Years From Fix to CISA's Exploited-in-the-Wild List": tty/war-stories/n-tty-echo-race.md
-        - The pty_write() Lock That Was Fixed, Un-Fixed, and Fixed Again: tty/war-stories/pty-write-lock-saga.md
-  - Networking & BPF:
+    - "デバイスドライバ":
+      - "はじめに": drivers/README.md
+      - "Linuxデバイスモデル": drivers/device-model.md
+      - "プラットフォームドライバ": drivers/platform-driver.md
+      - "キャラクタデバイスとmiscデバイス": drivers/chardev.md
+      - "PCIドライバ": drivers/pci-driver.md
+      - "デバイスツリー": drivers/device-tree.md
+      - "I2CとSPIのドライバ": drivers/i2c-spi.md
+      - "事件簿":
+        - "デバイスドライバ事件簿": drivers/war-stories.md
+        - "ドライバ切り離しをデッドロックさせたuevent_show()の修正": drivers/war-stories/uevent-show-deadlock.md
+        - "ロックではなくリトライが必要だったkobjectパスの競合": drivers/war-stories/kobject-path-race.md
+        - "fw_devlink=on: 定着するまでに2度ブートを壊したデフォルト": drivers/war-stories/fw-devlink-boot-breaking.md
+        - "deferred probe誕生の経緯": drivers/war-stories/deferred-probe-origin.md
+    - "USB":
+      - "はじめに": usb/README.md
+      - "列挙とディスクリプタ": usb/enumeration.md
+      - "URBと転送タイプ": usb/urbs.md
+      - "ホストコントローラとガジェットモード": usb/xhci-gadget.md
+      - "事件簿": usb/war-stories.md
+    - "GPU / DRM":
+      - "はじめに": drm/README.md
+      - "カーネルモード設定（KMS）": drm/kms.md
+      - "GEMバッファオブジェクトとdma-buf": drm/gem-dmabuf.md
+      - "コマンド投入、フェンス、GPUスケジューラ": drm/command-submission.md
+      - "事件簿":
+        - "DRM事件簿": drm/war-stories.md
+        - "Xe TDR回復のリグレッション連鎖": drm/war-stories/xe-tdr-recovery-regression.md
+        - "スケジューラの公平性の進化": drm/war-stories/scheduler-fairness-evolution.md
+        - "msm GPUの回復処理とshrinkerのデッドロック": drm/war-stories/msm-shrinker-deadlock.md
+        - "drm_sched_entity_kill_jobs_cbのlockdepデッドロック": drm/war-stories/entity-kill-jobs-deadlock.md
+        - "NO_HANGの誤検知": drm/war-stories/no-hang-false-positive.md
+    - "オーディオ / ALSA":
+      - "はじめに": alsa/README.md
+      - "PCMのデータパス": alsa/pcm.md
+      - "ASoC: 組み込み向けオーディオ": alsa/asoc.md
+      - "事件簿":
+        - "ALSA事件簿": alsa/war-stories.md
+        - "21年潜伏したUSBミキサー破棄時のuse-after-free": alsa/war-stories/mixer-teardown-use-after-free.md
+        - "USBオーディオのクロックディスクリプタ範囲外読み出し": alsa/war-stories/usb-audio-clock-descriptor-oob.md
+    - "入力 / HID":
+      - "はじめに": input/README.md
+      - "HIDサブシステム": input/hid.md
+      - "事件簿":
+        - "入力/HID事件簿": input/war-stories.md
+        - "未初期化HIDレポートバッファによるカーネルメモリ漏洩": input/war-stories/uninitialized-report-buffer-leak.md
+        - "2014年のバグ修正が持ち込んだhid_validate_values()の型混同": input/war-stories/hid-validate-values-type-confusion.md
+    - "TTY / シリアル":
+      - "はじめに": tty/README.md
+      - "シリアルコアとUARTドライバ": tty/serial.md
+      - "ラインディシプリン、termios、疑似端末": tty/line-disciplines.md
+      - "事件簿":
+        - "TTY/シリアル事件簿": tty/war-stories.md
+        - "n_ttyエコー競合: 修正からCISAの悪用確認リスト入りまで9年": tty/war-stories/n-tty-echo-race.md
+        - "修正され、戻され、再び修正されたpty_write()のロック": tty/war-stories/pty-write-lock-saga.md
+  - "ネットワーキングとBPF":
     - categories/networking-bpf.md
-    - Networking:
-      - Getting Started: net/README.md
-      - Fundamentals:
-        - "Why Is the Network Stack So Complex?": net/network-stack-overview.md
-        - "sk_buff: The Network Buffer": net/sk-buff.md
-        - Socket Layer Overview: net/socket-layer.md
-        - epoll Internals: net/epoll.md
-        - Network Device and NAPI: net/napi.md
-      - Lifecycle:
-        - Life of a Packet (receive): net/life-of-packet-rx.md
-        - Life of a Packet (transmit): net/life-of-packet-tx.md
-        - What Happens When You connect(): net/connect.md
-      - TCP/IP:
-        - TCP Implementation: net/tcp.md
-        - TCP Congestion Control: net/tcp-congestion.md
-        - UDP Internals: net/udp.md
-        - IP Routing: net/ip-routing.md
-      - Filtering:
-        - Netfilter Architecture: net/netfilter.md
-        - nftables vs iptables: net/nftables-iptables.md
-        - Connection Tracking: net/conntrack.md
-      - XDP & TC:
-        - XDP (eXpress Data Path): net/xdp.md
-        - AF_XDP Sockets: net/af-xdp.md
-        - TC and qdisc: net/tc-qdisc.md
-      - Advanced:
-        - Container Networking: net/container-networking.md
-        - Network Namespaces: net/net-namespaces.md
-        - TUN/TAP Virtual Devices: net/tun-tap.md
-        - AF_PACKET Raw Sockets: net/packet-socket.md
-        - Kernel TLS (kTLS): net/ktls.md
-        - Netlink: net/netlink.md
-      - Debugging & Observability:
-        - Network Debugging with ss and ip: net/net-debugging.md
-        - Network Tracing: net/net-tracing.md
-        - Understanding /proc/net/snmp: net/proc-snmp.md
-        - Network Buffer Tuning: net/net-buffer-tuning.md
-      - War Stories:
-        - Network War Stories: net/war-stories.md
-        - The net/sched act_api Filter-Delete Race: net/war-stories/act-api-uaf.md
-        - Netfilter x_tables Heap Overflow: net/war-stories/netfilter-xtables.md
-        - The TCP SACK Panic: net/war-stories/sack-panic.md
-        - SegmentSmack: net/war-stories/segmentsmack.md
-        - UDP UFO Path-Switch Corruption: net/war-stories/udp-ufo.md
-        - AF_PACKET Privilege Escalation: net/war-stories/af-packet.md
-        - The Challenge-ACK Side Channel: net/war-stories/challenge-ack.md
-    - BPF/eBPF:
-      - Getting Started: bpf/README.md
-      - Architecture & Program Types: bpf/bpf-overview.md
-      - BPF Maps: bpf/bpf-maps.md
-      - BPF Verifier: bpf/bpf-verifier.md
-      - BPF Security Model: bpf/bpf-security-model.md
-      - BTF and CO-RE: bpf/btf-core.md
-      - Helpers, kfuncs, and the JIT: bpf/bpf-helpers-kfuncs-jit.md
-      - libbpf and Skeletons: bpf/libbpf.md
-      - BPF Ring Buffer: bpf/bpf-ringbuf.md
-      - BPF Networking (TC, cgroup, sockmap): bpf/bpf-networking.md
-      - War Stories:
-        - BPF War Stories: bpf/war-stories.md
-        - Spectre in the BPF Verifier: bpf/war-stories/spectre-verifier.md
-        - Unprivileged BPF Off by Default: bpf/war-stories/unprivileged-bpf-off.md
-        - ALU32 Bitwise Bounds Tracking: bpf/war-stories/alu32-bitwise-bounds.md
-        - 32-Bit Unsigned Bounds Propagation: bpf/war-stories/alu32-unsigned-bounds.md
-        - The jmp32 Bounds Regression: bpf/war-stories/jmp32-bounds.md
-        - Sign Extension in check_alu_op(): bpf/war-stories/sign-extension.md
-  - Isolation & Security:
+    - "ネットワーキング":
+      - "はじめに": net/README.md
+      - "基本":
+        - "なぜネットワークスタックはこれほど複雑なのか": net/network-stack-overview.md
+        - "sk_buff: ネットワークバッファ": net/sk-buff.md
+        - "ソケット層の概要": net/socket-layer.md
+        - "epollの内部": net/epoll.md
+        - "ネットワークデバイスとNAPI": net/napi.md
+      - "ライフサイクル":
+        - "パケットの一生（受信）": net/life-of-packet-rx.md
+        - "パケットの一生（送信）": net/life-of-packet-tx.md
+        - "connect()したときに何が起こるか": net/connect.md
+      - "TCP/IP":
+        - "TCPの実装": net/tcp.md
+        - "TCP輻輳制御": net/tcp-congestion.md
+        - "UDPの内部": net/udp.md
+        - "IPルーティング": net/ip-routing.md
+      - "フィルタリング":
+        - "Netfilterのアーキテクチャ": net/netfilter.md
+        - "nftablesとiptables": net/nftables-iptables.md
+        - "コネクショントラッキング": net/conntrack.md
+      - "XDPとTC":
+        - "XDP（eXpress Data Path）": net/xdp.md
+        - "AF_XDPソケット": net/af-xdp.md
+        - "TCとqdisc": net/tc-qdisc.md
+      - "発展":
+        - "コンテナネットワーキング": net/container-networking.md
+        - "ネットワーク名前空間": net/net-namespaces.md
+        - "TUN/TAP仮想デバイス": net/tun-tap.md
+        - "AF_PACKET rawソケット": net/packet-socket.md
+        - "カーネルTLS（kTLS）": net/ktls.md
+        - "Netlink": net/netlink.md
+      - "デバッグと可観測性":
+        - "ssとipによるネットワークデバッグ": net/net-debugging.md
+        - "ネットワークのトレーシング": net/net-tracing.md
+        - "/proc/net/snmpを理解する": net/proc-snmp.md
+        - "ネットワークバッファのチューニング": net/net-buffer-tuning.md
+      - "事件簿":
+        - "ネットワーク事件簿": net/war-stories.md
+        - "net/sched act_apiのフィルタ削除競合": net/war-stories/act-api-uaf.md
+        - "Netfilter x_tablesのヒープオーバーフロー": net/war-stories/netfilter-xtables.md
+        - "TCP SACKパニック": net/war-stories/sack-panic.md
+        - "SegmentSmack": net/war-stories/segmentsmack.md
+        - "UDP UFOのパス切り替えによる破損": net/war-stories/udp-ufo.md
+        - "AF_PACKETの権限昇格": net/war-stories/af-packet.md
+        - "Challenge-ACKサイドチャネル": net/war-stories/challenge-ack.md
+    - "BPF/eBPF":
+      - "はじめに": bpf/README.md
+      - "アーキテクチャとプログラムタイプ": bpf/bpf-overview.md
+      - "BPFマップ": bpf/bpf-maps.md
+      - "BPF検証器": bpf/bpf-verifier.md
+      - "BPFのセキュリティモデル": bpf/bpf-security-model.md
+      - "BTFとCO-RE": bpf/btf-core.md
+      - "ヘルパー、kfunc、JIT": bpf/bpf-helpers-kfuncs-jit.md
+      - "libbpfとスケルトン": bpf/libbpf.md
+      - "BPFリングバッファ": bpf/bpf-ringbuf.md
+      - "BPFネットワーキング（TC、cgroup、sockmap）": bpf/bpf-networking.md
+      - "事件簿":
+        - "BPF事件簿": bpf/war-stories.md
+        - "BPF検証器におけるSpectre": bpf/war-stories/spectre-verifier.md
+        - "非特権BPFのデフォルト無効化": bpf/war-stories/unprivileged-bpf-off.md
+        - "ALU32のビット演算境界追跡": bpf/war-stories/alu32-bitwise-bounds.md
+        - "32ビット符号なし境界の伝播": bpf/war-stories/alu32-unsigned-bounds.md
+        - "jmp32境界のリグレッション": bpf/war-stories/jmp32-bounds.md
+        - "check_alu_op()の符号拡張": bpf/war-stories/sign-extension.md
+  - "隔離とセキュリティ":
     - categories/isolation-security.md
-    - Cgroups & Namespaces:
-      - Getting Started: cgroups/README.md
-      - Cgroup v2 Architecture: cgroups/cgroup-v2.md
-      - Resource Controllers: cgroups/cgroup-controllers.md
-      - Namespaces: cgroups/namespaces.md
-      - Container Isolation: cgroups/container-isolation.md
-      - io Controller: cgroups/io-cgroup.md
-      - Cgroup BPF Programs: cgroups/cgroup-bpf.md
-      - systemd and Cgroup Integration: cgroups/systemd-cgroups.md
-      - War Stories: cgroups/war-stories.md
-    - Security:
-      - Getting Started: security/README.md
-      - LSM Framework: security/lsm.md
-      - Capabilities: security/capabilities.md
-      - seccomp BPF: security/seccomp.md
-      - Linux Audit: security/audit.md
-      - Credentials and User Namespaces: security/credentials.md
-      - User Namespaces and uid Mapping: security/user-namespaces.md
-      - dm-crypt (Block Encryption): security/dm-crypt.md
-      - fscrypt (Per-File Encryption): security/fscrypt.md
-      - SELinux: security/selinux.md
-      - Kernel Hardening: security/kernel-hardening.md
-      - Landlock Sandboxing: security/landlock.md
-      - War Stories:
-        - Security War Stories: security/war-stories.md
-        - Dirty Pipe: security/war-stories/dirty-pipe.md
-        - The fs_context Legacy Parameter Overflow: security/war-stories/fscontext-overflow.md
-        - Stale ptracer Credentials: security/war-stories/stale-ptracer-creds.md
-        - Nested User Namespace UID/GID Mapping: security/war-stories/nested-userns-uid-mapping.md
-    - Virtualization:
-      - Getting Started: virtualization/README.md
-      - KVM Architecture: virtualization/kvm-arch.md
-      - Memory Virtualization: virtualization/kvm-memory.md
+    - "cgroupと名前空間":
+      - "はじめに": cgroups/README.md
+      - "cgroup v2のアーキテクチャ": cgroups/cgroup-v2.md
+      - "リソースコントローラ": cgroups/cgroup-controllers.md
+      - "名前空間": cgroups/namespaces.md
+      - "コンテナの隔離": cgroups/container-isolation.md
+      - "ioコントローラ": cgroups/io-cgroup.md
+      - "cgroup BPFプログラム": cgroups/cgroup-bpf.md
+      - "systemdとcgroupの統合": cgroups/systemd-cgroups.md
+      - "事件簿": cgroups/war-stories.md
+    - "セキュリティ":
+      - "はじめに": security/README.md
+      - "LSMフレームワーク": security/lsm.md
+      - "ケーパビリティ": security/capabilities.md
+      - "seccomp BPF": security/seccomp.md
+      - "Linux監査": security/audit.md
+      - "クレデンシャルとユーザー名前空間": security/credentials.md
+      - "ユーザー名前空間とuidマッピング": security/user-namespaces.md
+      - "dm-crypt（ブロック暗号化）": security/dm-crypt.md
+      - "fscrypt（ファイル単位の暗号化）": security/fscrypt.md
+      - "SELinux": security/selinux.md
+      - "カーネルの堅牢化": security/kernel-hardening.md
+      - "Landlockによるサンドボックス": security/landlock.md
+      - "事件簿":
+        - "セキュリティ事件簿": security/war-stories.md
+        - "Dirty Pipe": security/war-stories/dirty-pipe.md
+        - "fs_contextレガシーパラメータのオーバーフロー": security/war-stories/fscontext-overflow.md
+        - "古いptracerのクレデンシャル": security/war-stories/stale-ptracer-creds.md
+        - "ネストしたユーザー名前空間のUID/GIDマッピング": security/war-stories/nested-userns-uid-mapping.md
+    - "仮想化":
+      - "はじめに": virtualization/README.md
+      - "KVMのアーキテクチャ": virtualization/kvm-arch.md
+      - "メモリ仮想化": virtualization/kvm-memory.md
       - virtio: virtualization/virtio.md
-      - VFIO Device Passthrough: virtualization/vfio.md
-      - KVM Exit Handling: virtualization/kvm-exits.md
-      - KVM Live Migration: virtualization/live-migration.md
-      - Nested Virtualization: virtualization/nested-virt.md
-      - War Stories:
-        - Virtualization War Stories: virtualization/war-stories.md
-        - "MDS: The Mitigation That Flushed the Buffers Too Early": virtualization/war-stories/mds-verw-timing-gap.md
-        - "vhost: The Dirty-Log Counter That Forgot Zero-Length Descriptors": virtualization/war-stories/vhost-migration-log-overflow.md
-        - The Nested-VMX Refactor That Forgot One Field on the Error Path: virtualization/war-stories/nested-vmx-posted-interrupt-uaf.md
-        - "L1TF: When a Not-Present Page Table Entry Wasn't Not-Present Enough": virtualization/war-stories/l1tf-foreshadow-vmm.md
-        - "VENOM: The Floppy Controller Nobody Turned Off": virtualization/war-stories/venom-fdc-overflow.md
-    - Crypto:
-      - Getting Started: crypto/README.md
-      - Kernel Crypto API: crypto/crypto-api.md
-      - dm-crypt and fscrypt: crypto/encryption.md
-      - "crypto_engine: Hardware Offload": crypto/crypto-engine.md
-      - Kernel Keyring: crypto/keyring.md
-      - Random Number Generation: crypto/rng.md
-      - Crypto War Stories: crypto/war-stories.md
-    - Live Patching:
-      - Getting Started: livepatch/README.md
-      - Kernel Live Patching: livepatch/klp.md
-      - KLP Consistency Model: livepatch/klp-consistency.md
-      - Cumulative Patches and Atomic Replace: livepatch/klp-cumulative.md
-      - "KLP State: Custom Consistency Checks": livepatch/klp-state.md
-      - kGraft vs. kpatch History: livepatch/kgraft-vs-kpatch-history.md
-      - kexec: livepatch/kexec.md
-      - War Stories: livepatch/war-stories.md
-  - Observability:
+      - "VFIOデバイスパススルー": virtualization/vfio.md
+      - "KVMのexit処理": virtualization/kvm-exits.md
+      - "KVMのライブマイグレーション": virtualization/live-migration.md
+      - "ネストした仮想化": virtualization/nested-virt.md
+      - "事件簿":
+        - "仮想化事件簿": virtualization/war-stories.md
+        - "MDS: バッファのフラッシュが早すぎた緩和策": virtualization/war-stories/mds-verw-timing-gap.md
+        - "vhost: 長さゼロのディスクリプタを忘れたダーティログカウンタ": virtualization/war-stories/vhost-migration-log-overflow.md
+        - "エラーパスでフィールドを1つ忘れたネストVMXのリファクタ": virtualization/war-stories/nested-vmx-posted-interrupt-uaf.md
+        - "L1TF: 不在のはずのページテーブルエントリが十分に不在ではなかったとき": virtualization/war-stories/l1tf-foreshadow-vmm.md
+        - "VENOM: 誰も無効化しなかったフロッピーコントローラ": virtualization/war-stories/venom-fdc-overflow.md
+    - "暗号":
+      - "はじめに": crypto/README.md
+      - "カーネル暗号API": crypto/crypto-api.md
+      - "dm-cryptとfscrypt": crypto/encryption.md
+      - "crypto_engine: ハードウェアオフロード": crypto/crypto-engine.md
+      - "カーネルキーリング": crypto/keyring.md
+      - "乱数生成": crypto/rng.md
+      - "暗号事件簿": crypto/war-stories.md
+    - "ライブパッチ":
+      - "はじめに": livepatch/README.md
+      - "カーネルライブパッチ": livepatch/klp.md
+      - "KLPの一貫性モデル": livepatch/klp-consistency.md
+      - "累積パッチとアトミック置換": livepatch/klp-cumulative.md
+      - "KLP State: 独自の一貫性チェック": livepatch/klp-state.md
+      - "kGraftとkpatchの歴史": livepatch/kgraft-vs-kpatch-history.md
+      - "kexec": livepatch/kexec.md
+      - "事件簿": livepatch/war-stories.md
+  - "可観測性":
     - categories/observability.md
-    - Tracing:
-      - Getting Started: tracing/README.md
-      - ftrace: tracing/ftrace.md
-      - ftrace Advanced: tracing/ftrace-advanced.md
-      - Ring Buffer and tracefs: tracing/ring-buffer.md
-      - Kprobes and Tracepoints: tracing/kprobes-tracepoints.md
-      - Trace Events and Dynamic Events: tracing/trace-events.md
-      - perf Events: tracing/perf-events.md
-      - perf Profiling Advanced: tracing/perf-profiling.md
-      - War Stories: tracing/war-stories.md
-      - uprobes and USDT: tracing/uprobes-usdt.md
-      - BPF for Tracing: tracing/bpf-tracing.md
-    - Kernel Debugging:
-      - Getting Started: debugging/README.md
-      - KGDB: debugging/kgdb.md
-      - kdump and crash: debugging/kdump.md
-      - Oops Analysis: debugging/oops-analysis.md
-      - KCSAN (Data Race Detector): debugging/kcsan.md
-      - syzkaller Fuzzing: debugging/syzkaller.md
-      - KASAN and KFENCE: debugging/kasan-kfence.md
-      - lockdep in Practice: debugging/dynamic-debug-lockdep.md
-      - War Stories: debugging/war-stories.md
-    - Power Management:
-      - Getting Started: power/README.md
-      - cpufreq and P-states: power/cpufreq.md
-      - cpuidle and C-states: power/cpuidle.md
-      - Thermal Management: power/thermal.md
-      - Runtime PM: power/runtime-pm.md
-      - System Suspend: power/suspend.md
-      - Power Domains and genpd: power/power-domains.md
-      - Power Capping and RAPL: power/power-capping.md
-      - War Stories: power/war-stories.md
-  - What's New: changelog.md
-  - About:
+    - "トレーシング":
+      - "はじめに": tracing/README.md
+      - "ftrace": tracing/ftrace.md
+      - "ftrace（発展）": tracing/ftrace-advanced.md
+      - "リングバッファとtracefs": tracing/ring-buffer.md
+      - "kprobeとtracepoint": tracing/kprobes-tracepoints.md
+      - "トレースイベントと動的イベント": tracing/trace-events.md
+      - "perfイベント": tracing/perf-events.md
+      - "perfプロファイリング（発展）": tracing/perf-profiling.md
+      - "事件簿": tracing/war-stories.md
+      - "uprobeとUSDT": tracing/uprobes-usdt.md
+      - "トレーシングのためのBPF": tracing/bpf-tracing.md
+    - "カーネルデバッグ":
+      - "はじめに": debugging/README.md
+      - "KGDB": debugging/kgdb.md
+      - "kdumpとcrash": debugging/kdump.md
+      - "Oopsの解析": debugging/oops-analysis.md
+      - "KCSAN（データ競合検出器）": debugging/kcsan.md
+      - "syzkallerによるファジング": debugging/syzkaller.md
+      - "KASANとKFENCE": debugging/kasan-kfence.md
+      - "lockdepの実践": debugging/dynamic-debug-lockdep.md
+      - "事件簿": debugging/war-stories.md
+    - "電源管理":
+      - "はじめに": power/README.md
+      - "cpufreqとPステート": power/cpufreq.md
+      - "cpuidleとCステート": power/cpuidle.md
+      - "熱管理": power/thermal.md
+      - "ランタイムPM": power/runtime-pm.md
+      - "システムサスペンド": power/suspend.md
+      - "電源ドメインとgenpd": power/power-domains.md
+      - "電力キャッピングとRAPL": power/power-capping.md
+      - "事件簿": power/war-stories.md
+  - "更新履歴": changelog.md
+  - "このサイトについて":
     - about.md
-    - Contributing: contributing.md
+    - "コントリビュート": contributing.md
 

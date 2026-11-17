@@ -1,9 +1,9 @@
-# Isolation & Security {#isolation-security}
+# 分離とセキュリティ {#isolation-security}
 
-The mechanisms that separate, confine, and protect workloads — from containers to access control to running whole guests.
+ワークロードを分離し、閉じ込め、保護する仕組み — コンテナからアクセス制御、ゲスト全体の実行まで。
 
-- [Cgroups (cgroups/)](../cgroups/README.md) — accounting for and limiting resources per group of processes; the basis of containers
-- [Security (security/)](../security/README.md) — LSMs, capabilities, seccomp, and the kernel's access-control machinery
-- [Virtualization (virtualization/)](../virtualization/README.md) — KVM and how the kernel runs guest machines
-- [Crypto (crypto/)](../crypto/README.md) — the kernel's cryptographic API and hardware acceleration
-- [Livepatch (livepatch/)](../livepatch/README.md) — patching a running kernel without rebooting
+- [Cgroups（cgroups/）](../cgroups/README.md) — プロセスのグループごとにリソースを計上・制限する。コンテナの基盤
+- [セキュリティ（security/）](../security/README.md) — LSM、ケーパビリティ、seccomp、そしてカーネルのアクセス制御機構
+- [仮想化（virtualization/）](../virtualization/README.md) — KVMと、カーネルがゲストマシンを実行する仕組み
+- [暗号（crypto/）](../crypto/README.md) — カーネルの暗号APIとハードウェアアクセラレーション
+- [Livepatch（livepatch/）](../livepatch/README.md) — 実行中のカーネルを再起動せずにパッチする

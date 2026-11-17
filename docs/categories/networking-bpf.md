@@ -1,6 +1,6 @@
-# Networking & BPF {#networking-bpf}
+# ネットワークとBPF {#networking-bpf}
 
-How packets move through the kernel — and how sandboxed BPF programs extend what the kernel does.
+パケットがカーネル内をどのように移動するか — そしてサンドボックス化されたBPFプログラムがカーネルの機能をどのように拡張するか。
 
-- [Networking (net/)](../net/network-stack-overview.md) — the journey of a packet through the stack, from socket to wire
-- [BPF (bpf/)](../bpf/README.md) — running sandboxed programs in the kernel for tracing, networking, and security
+- [ネットワーク（net/）](../net/network-stack-overview.md) — ソケットから回線まで、スタックを通るパケットの旅
+- [BPF（bpf/）](../bpf/README.md) — トレーシング、ネットワーク、セキュリティのためにサンドボックス化されたプログラムをカーネル内で実行する

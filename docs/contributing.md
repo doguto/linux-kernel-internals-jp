@@ -1,64 +1,64 @@
-# Contributing to Linux Kernel Internals {#contributing-to-linux-kernel-internals}
+# Linux Kernel Internalsへのコントリビュート {#contributing-to-linux-kernel-internals}
 
-> **Reading this on the website?** Head to the [GitHub repository](https://github.com/laveeshb/linux-kernel-internals) to contribute, open issues, or join discussions.
+> **これをWebサイトで読んでいるなら？** コントリビュート、issueの作成、ディスカッションへの参加は[GitHubリポジトリ](https://github.com/laveeshb/linux-kernel-internals)で行ってほしい。
 
-Thank you for your interest in contributing! This project aims to document Linux kernel internals in an accessible, engaging way.
+コントリビュートに関心を持ってくれてありがとう！ このプロジェクトは、Linuxカーネルの内部構造を、わかりやすく興味を引く形で文書化することを目指している。
 
-## Project Philosophy {#project-philosophy}
+## プロジェクトの理念 {#project-philosophy}
 
-This is **not** another reference documenting what the Linux kernel looks like today. The official [kernel documentation](https://docs.kernel.org/) already does that well.
+これは、今日のLinuxカーネルがどうなっているかを文書化するもう1つのリファレンス**ではない**。公式の[カーネルドキュメント](https://docs.kernel.org/)がすでにそれをうまくやっている。
 
-Instead, we focus on:
+その代わりに、我々は次のことに焦点を当てる:
 
-- **Why** things are designed the way they are
-- **How** subsystems evolved over time
-- **What problems** led to current solutions
-- **Trade-offs** that were considered
+- 物事が現在の設計になっている**理由**
+- サブシステムが時間とともに**どのように**進化してきたか
+- **どのような問題**が現在の解決策につながったか
+- 検討された**トレードオフ**
 
-When writing, don't just explain *what* the code does - help readers understand the reasoning behind design decisions, the historical context, and how things changed over kernel versions. Link to commits, mailing list discussions, and conference talks that capture these decisions.
+執筆するときは、コードが*何*をするかを説明するだけにしないこと — 設計判断の背後にある理由付け、歴史的な文脈、そしてカーネルバージョンを経て物事がどう変わってきたかを読者が理解できるよう手助けしてほしい。こうした判断を記録しているコミット、メーリングリストでの議論、カンファレンスでの講演へリンクすること。
 
-## How to Contribute {#how-to-contribute}
+## コントリビュートの方法 {#how-to-contribute}
 
-### Finding Work {#finding-work}
+### 取り組む作業を見つける {#finding-work}
 
-Browse [open issues](https://github.com/laveeshb/linux-kernel-internals/issues) and filter by [labels](https://github.com/laveeshb/linux-kernel-internals/labels):
+[オープンなissue](https://github.com/laveeshb/linux-kernel-internals/issues)を閲覧し、[ラベル](https://github.com/laveeshb/linux-kernel-internals/labels)で絞り込む:
 
-| Label prefix | Purpose |
+| ラベルの接頭辞 | 目的 |
 |--------------|---------|
-| `priority/*` | Importance (high, medium, low) |
-| `area/*` | Kernel subsystem (mm, scheduler, etc.) |
-| `type/*` | Document style (narrative, reference, guide, explainer) |
-| `epic/*` | Grouped work items |
+| `priority/*` | 重要度（high、medium、low） |
+| `area/*` | カーネルサブシステム（mm、schedulerなど） |
+| `type/*` | ドキュメントのスタイル（narrative、reference、guide、explainer） |
+| `epic/*` | まとめられた作業項目 |
 
-Look for `good first issue` if you're new to the project.
+プロジェクトに初めて参加するなら`good first issue`を探してほしい。
 
-### Workflow {#workflow}
+### ワークフロー {#workflow}
 
-1. **Fork** the repository
-2. **Create a branch** from `main` (e.g., `add-kasan-docs`)
-3. **Write your content** following the style guide below
-4. **Test locally** with `mkdocs serve`
-5. **Submit a PR** with a clear description
-6. **Address feedback** from reviewers
+1. リポジトリを**フォーク**する
+2. `main`から**ブランチを作成**する（例: `add-kasan-docs`）
+3. 下記のスタイルガイドに従って**内容を書く**
+4. `mkdocs serve`で**ローカルでテスト**する
+5. 明確な説明を付けて**PRを提出**する
+6. レビュアーからの**フィードバックに対応**する
 
-### Pull Request Requirements {#pull-request-requirements}
+### プルリクエストの要件 {#pull-request-requirements}
 
-- PRs require **1 approval** before merging
-- Keep PRs focused on a single topic
-- Link to the relevant issue (e.g., "Closes #42")
+- PRはマージ前に**1件の承認**が必要
+- PRは単一のトピックに絞る
+- 関連するissueへリンクする（例: "Closes #42"）
 
-## Writing Style Guide {#writing-style-guide}
+## 執筆スタイルガイド {#writing-style-guide}
 
-### Voice and Tone {#voice-and-tone}
+### 語り口とトーン {#voice-and-tone}
 
-- **Accessible but accurate** - Explain complex topics clearly without sacrificing correctness
-- **Teach, don't just document** - Help readers understand *why*, not just *what*
-- **Use active voice** - "The kernel allocates pages" not "Pages are allocated by the kernel"
-- **Be concise** - Avoid filler words and unnecessary jargon
+- **わかりやすく、かつ正確に** - 正確さを犠牲にせずに、複雑なトピックを明快に説明する
+- **文書化するだけでなく、教える** - *何*だけでなく*なぜ*を読者が理解できるよう助ける
+- **能動態を使う** - "Pages are allocated by the kernel"ではなく"The kernel allocates pages"
+- **簡潔に** - つなぎの言葉や不要な専門用語を避ける
 
-### Document Structure {#document-structure}
+### ドキュメントの構成 {#document-structure}
 
-Every document should follow this general structure:
+すべてのドキュメントは、おおむね次の構成に従うべきである:
 
 ```markdown
 # Title
@@ -90,34 +90,34 @@ When features were added, why decisions were made.
 Links to kernel docs, LWN articles, relevant commits.
 ```
 
-### Formatting Conventions {#formatting-conventions}
+### 書式の規約 {#formatting-conventions}
 
-**Headers**
+**見出し**
 
-- Use sentence case: "Page allocator" not "Page Allocator"
-- H1 (`#`) for page title only
-- H2 (`##`) for major sections
-- H3 (`###`) for subsections
+- センテンスケースを使う: "Page Allocator"ではなく"Page allocator"
+- H1（`#`）はページタイトルのみに使う
+- H2（`##`）は主要なセクションに使う
+- H3（`###`）はサブセクションに使う
 
-**Code blocks**
+**コードブロック**
 ```c
-// Use language hints for syntax highlighting
+// シンタックスハイライトのために言語ヒントを使う
 struct page *page = alloc_pages(GFP_KERNEL, 0);
 ```
 
-**Shell commands**
+**シェルコマンド**
 ```bash
-# Show what the command does with a comment
+# コマンドが何をするかをコメントで示す
 cat /proc/meminfo | grep -i huge
 ```
 
-**Tables** for comparisons:
-| Feature | Option A | Option B |
+比較には**表**を使う:
+| 機能 | オプションA | オプションB |
 |---------|----------|----------|
-| Speed   | Fast     | Slow     |
-| Memory  | Low      | High     |
+| 速度   | 速い     | 遅い     |
+| メモリ  | 少ない      | 多い     |
 
-**Diagrams** using ASCII or Mermaid:
+ASCIIまたはMermaidによる**図**:
 ```
 +-----------+      +-----------+
 |  Process  |----->|  Kernel   |
@@ -126,74 +126,74 @@ cat /proc/meminfo | grep -i huge
 
 ```mermaid
 graph LR
-    A[User Space] --> B[System Call]
-    B --> C[Kernel]
+    A["ユーザー空間"] --> B["システムコール"]
+    B --> C["カーネル"]
 ```
 
-### Content Guidelines {#content-guidelines}
+### 内容のガイドライン {#content-guidelines}
 
-**Do include:**
+**含めるべきもの:**
 
-- Real kernel function names and structures
-- Links to actual kernel commits when discussing changes
-- Specific kernel versions when features were introduced
-- "Try it yourself" sections with commands
-- Common misconceptions and pitfalls
-- Historical context for design decisions
+- 実際のカーネルの関数名や構造体
+- 変更について論じる際の、実際のカーネルコミットへのリンク
+- 機能が導入された具体的なカーネルバージョン
+- コマンド付きの「自分で試してみよう」セクション
+- よくある誤解や落とし穴
+- 設計判断の歴史的な文脈
 
-**Don't include:**
+**含めるべきでないもの:**
 
-- Speculation or unverified information
-- Outdated information without noting it's outdated
-- Copy-pasted content from other sources
-- Marketing language or hype
-- Commercial sources (vendor blogs, product documentation, sponsored content)
+- 憶測や未検証の情報
+- 古いことを明記していない古い情報
+- 他の情報源からコピー＆ペーストした内容
+- マーケティング的な言葉や誇大な宣伝
+- 商業的な情報源（ベンダーのブログ、製品ドキュメント、スポンサー付きコンテンツ）
 
-### Sourcing Claims {#sourcing-claims}
+### 主張の出典 {#sourcing-claims}
 
-Every claim, opinion, or technical statement should be backed by verifiable sources:
+あらゆる主張、意見、技術的な記述は、検証可能な出典に裏付けられているべきである:
 
-**Acceptable sources:**
+**受け入れられる出典:**
 
-- Kernel commits (`git.kernel.org` only — not mirrors or forks)
-- LKML threads (`lore.kernel.org`)
-- Official kernel documentation (`docs.kernel.org`)
-- LWN.net articles
-- Conference talks (Linux Plumbers, Kernel Recipes, etc.)
-- Academic papers
-- Maintainer blog posts
+- カーネルのコミット（`git.kernel.org`のみ — ミラーやフォークは不可）
+- LKMLのスレッド（`lore.kernel.org`）
+- 公式カーネルドキュメント（`docs.kernel.org`）
+- LWN.netの記事
+- カンファレンスでの講演（Linux Plumbers、Kernel Recipesなど）
+- 学術論文
+- メンテナのブログ記事
 
-**Not acceptable:**
+**受け入れられないもの:**
 
-- Commercial vendor documentation
-- Product marketing materials
-- Unsourced Stack Overflow answers
-- AI-generated content without verification
+- 商業ベンダーのドキュメント
+- 製品のマーケティング資料
+- 出典のないStack Overflowの回答
+- 検証されていないAI生成コンテンツ
 
-When making a claim, link to the source:
+主張をするときは、その出典へリンクする:
 ```markdown
 The buddy allocator coalesces free blocks to reduce fragmentation
 ([Knuth, TAOCP Vol 1](https://example.com), first implemented in
 [commit abc123](https://git.kernel.org/...)).
 ```
 
-### Linking to Kernel Source {#linking-to-kernel-source}
+### カーネルソースへのリンク {#linking-to-kernel-source}
 
-When referencing kernel code:
+カーネルのコードを参照するとき:
 
-- Link to [git.kernel.org](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/) for browsable source
-- Use stable/latest kernel version unless discussing historical changes
-- Include function signatures when introducing APIs
+- 閲覧可能なソースとして[git.kernel.org](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/)へリンクする
+- 歴史的な変更を論じる場合を除き、stable/最新のカーネルバージョンを使う
+- APIを紹介するときは関数シグネチャを含める
 
-Example:
+例:
 ```markdown
 The [`alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h)
 function is the primary interface...
 ```
 
-### Referencing Commits {#referencing-commits}
+### コミットの参照 {#referencing-commits}
 
-When a feature was introduced or changed, link to the commit:
+機能が導入または変更されたときは、そのコミットへリンクする:
 
 ```markdown
 This was introduced in kernel 5.18
@@ -201,60 +201,60 @@ This was introduced in kernel 5.18
 "mm: add feature X").
 ```
 
-## Technical Accuracy {#technical-accuracy}
+## 技術的な正確さ {#technical-accuracy}
 
-### Verification {#verification}
+### 検証 {#verification}
 
-- Test commands before including them
-- Verify kernel version information
-- Cross-reference with official kernel documentation
-- When unsure, note it: "As of kernel 6.x..." or "This may vary by configuration"
+- コマンドは載せる前にテストする
+- カーネルバージョンの情報を検証する
+- 公式カーネルドキュメントと照合する
+- 確信が持てない場合は、その旨を記す: "As of kernel 6.x..."や"This may vary by configuration"
 
-### Review Process {#review-process}
+### レビューの流れ {#review-process}
 
-Reviewers will check for:
+レビュアーは次の点を確認する:
 
-- Technical accuracy
-- Clarity and readability
-- Adherence to style guide
-- Working code examples
-- Proper linking and references
+- 技術的な正確さ
+- 明快さと読みやすさ
+- スタイルガイドへの準拠
+- 動作するコード例
+- 適切なリンクと参照
 
-## Local Development {#local-development}
+## ローカルでの開発 {#local-development}
 
-### Setup {#setup}
+### セットアップ {#setup}
 
 ```bash
-# Clone your fork
+# 自分のフォークをクローンする
 git clone https://github.com/YOUR_USERNAME/linux-kernel-internals.git
 cd linux-kernel-internals
 
-# Create virtual environment
+# 仮想環境を作成する
 python -m venv .venv
 source .venv/bin/activate
 
-# Install dependencies
+# 依存関係をインストールする
 pip install mkdocs mkdocs-material
 
-# Start local server
+# ローカルサーバーを起動する
 mkdocs serve
 ```
 
-### Preview {#preview}
+### プレビュー {#preview}
 
-Open `http://127.0.0.1:8000` to preview your changes. The server auto-reloads on file changes.
+`http://127.0.0.1:8000`を開いて変更をプレビューする。サーバーはファイルの変更時に自動でリロードする。
 
-### Build {#build}
+### ビルド {#build}
 
 ```bash
 mkdocs build
 ```
 
-Check for warnings in the build output.
+ビルド出力に警告がないか確認する。
 
-## Commit Messages {#commit-messages}
+## コミットメッセージ {#commit-messages}
 
-Write clear, descriptive commit messages:
+明確で説明的なコミットメッセージを書く:
 
 ```
 Add KASAN documentation
@@ -264,26 +264,26 @@ Add KASAN documentation
 - Include example report analysis
 ```
 
-**Do:**
+**すべきこと:**
 
-- Use imperative mood ("Add" not "Added")
-- Keep first line under 50 characters
-- Explain what and why in the body
+- 命令形を使う（"Added"ではなく"Add"）
+- 1行目は50文字未満に収める
+- 本文で何を、なぜ変更したかを説明する
 
-**Don't:**
+**すべきでないこと:**
 
-- Include AI/assistant attribution
-- Use vague messages like "Update docs"
-- Include unrelated changes in one commit
+- AI/アシスタントによる帰属表記を含める
+- "Update docs"のような曖昧なメッセージを使う
+- 無関係な変更を1つのコミットに含める
 
-## Questions? {#questions}
+## 質問は？ {#questions}
 
-- Open a [Discussion](https://github.com/laveeshb/linux-kernel-internals/discussions) for questions
-- File an [Issue](https://github.com/laveeshb/linux-kernel-internals/issues) for bugs or suggestions
+- 質問には[Discussion](https://github.com/laveeshb/linux-kernel-internals/discussions)を開く
+- バグや提案には[Issue](https://github.com/laveeshb/linux-kernel-internals/issues)を登録する
 
-## License {#license}
+## ライセンス {#license}
 
-By contributing, you agree that your contributions will be licensed under the same dual license as the project:
+コントリビュートすることで、あなたの貢献がプロジェクトと同じデュアルライセンスの下でライセンスされることに同意したものとする:
 
-- Documentation: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
-- Code examples: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)
+- ドキュメント: [CC BY-SA 4.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-CC-BY-SA-4.0)
+- コード例: [GPL-2.0](https://github.com/laveeshb/linux-kernel-internals/blob/main/LICENSE-GPL-2.0)

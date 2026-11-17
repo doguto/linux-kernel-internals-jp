@@ -1,9 +1,9 @@
-# Foundations {#foundations}
+# 基礎 {#foundations}
 
-The groundwork the rest of the kernel builds on: how it boots, meets the hardware, exposes itself to user space, and keeps time.
+カーネルの他の部分すべてが土台とする基盤: カーネルがどのようにブートし、ハードウェアと接し、ユーザー空間に自身を公開し、時刻を管理するか。
 
-- [Kernel Internals (kernel/)](../kernel/README.md) — the glue that holds every subsystem together: boot, logging, parameters, panics, and module init
-- [Architecture (arch/)](../arch/arm64/README.md) — where the kernel meets the hardware: boot, CPU features, exceptions, and per-arch specifics (x86, arm64)
-- [System Calls (syscalls/)](../syscalls/README.md) — how user space crosses into the kernel and back
-- [Modules (modules/)](../modules/README.md) — loading, linking, and unloading kernel code at runtime
-- [Time (time/)](../time/README.md) — clocks, timers, ticks, and how the kernel keeps and measures time
+- [カーネル内部（kernel/）](../kernel/README.md) — すべてのサブシステムをつなぎとめる接着剤: ブート、ロギング、パラメータ、パニック、モジュール初期化
+- [アーキテクチャ（arch/）](../arch/arm64/README.md) — カーネルがハードウェアと接する場所: ブート、CPU機能、例外、アーキテクチャ固有の事項（x86、arm64）
+- [システムコール（syscalls/）](../syscalls/README.md) — ユーザー空間がカーネルへ入り、また戻る仕組み
+- [モジュール（modules/）](../modules/README.md) — カーネルコードを実行時にロード、リンク、アンロードする
+- [時間（time/）](../time/README.md) — クロック、タイマー、ティック、そしてカーネルが時刻を保持・計測する仕組み
