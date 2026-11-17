@@ -1,55 +1,55 @@
-# Kernel Mode Setting (KMS): the Object Model and Atomic Modesetting {#kernel-mode-setting-kms-the-object-model-and-atomic-modesetting}
+# カーネルモード設定（KMS）: オブジェクトモデルとアトミックモード設定 {#kernel-mode-setting-kms-the-object-model-and-atomic-modesetting}
 
-> Four objects that model a display pipeline, and one ioctl that changes all of them together or none of them at all
+> ディスプレイパイプラインをモデル化する4つのオブジェクトと、それらすべてをまとめて変更するか、まったく変更しないかのどちらかを行う1つのioctl
 
-## The problem: describing a display pipeline in the kernel {#the-problem-describing-a-display-pipeline-in-the-kernel}
+## 問題: ディスプレイパイプラインをカーネル内でどう記述するか {#the-problem-describing-a-display-pipeline-in-the-kernel}
 
-Turning a framebuffer into photons on a screen is not one operation, it is a chain of them: pick a rectangle of pixel data, scale and position it, blend it with any other layers sharing the screen, convert the result into a signal a cable or panel understands, and drive that signal out a physical port at the right timing so the display doesn't just show garbage. [KMS (Kernel Mode Setting)](README.md) is DRM's model of that chain. It represents each stage as a kernel object — `drm_plane`, `drm_crtc`, `drm_encoder`, `drm_connector` — wires them into a pipeline per display, and gives userspace one ioctl, `DRM_IOCTL_MODE_ATOMIC`, to propose and validate a complete pipeline configuration before any of it touches hardware.
+フレームバッファを画面上の光子に変えるのは1つの操作ではなく、操作の連鎖である。ピクセルデータの矩形を選び、拡大縮小して配置し、画面を共有する他のレイヤーとブレンドし、その結果をケーブルやパネルが理解できる信号に変換し、ディスプレイがゴミを表示しないよう正しいタイミングでその信号を物理ポートから送り出す。[KMS（Kernel Mode Setting）](README.md)は、この連鎖のDRMにおけるモデルである。各段階をカーネルオブジェクト — `drm_plane`、`drm_crtc`、`drm_encoder`、`drm_connector` — として表現し、それらをディスプレイごとのパイプラインとして結び付け、ユーザー空間には1つのioctl `DRM_IOCTL_MODE_ATOMIC` を提供する。これにより、パイプライン構成全体を、ハードウェアに一切触れる前に提案して検証できる。
 
-KMS itself dates to December 2008, when [`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef) moved modesetting out of X and into the kernel (see the [DRM overview](README.md) for that history). What this page covers is what came after: the object model KMS introduced, and the atomic ioctl that — six years later — replaced KMS's original one-property-at-a-time interface.
+KMS自体は2008年12月にさかのぼる。このとき [`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef) がモード設定をXからカーネルへと移した（その歴史については[DRMの概要](README.md)を参照）。このページが扱うのはその後のことである。KMSが導入したオブジェクトモデルと、6年後にKMS本来の「一度に1プロパティずつ」のインターフェースを置き換えたアトミックioctlである。
 
-## The four objects {#the-four-objects}
+## 4つのオブジェクト {#the-four-objects}
 
-### `drm_plane` — a hardware compositing layer {#drm_plane-a-hardware-compositing-layer}
+### `drm_plane` — ハードウェア合成レイヤー {#drm_plane-a-hardware-compositing-layer}
 
-A plane is one layer of pixel data that display hardware can scan out and blend with other planes, all in a fixed-function compositor built into the display controller — no GPU 3D engine involved. `include/drm/drm_plane.h` defines three types:
+planeは、ディスプレイハードウェアがスキャンアウトして他のplaneとブレンドできるピクセルデータの1レイヤーである。すべてディスプレイコントローラに内蔵された固定機能のコンポジタで行われ、GPUの3Dエンジンは関与しない。`include/drm/drm_plane.h` は3つの種類を定義している。
 
 ```c
 enum drm_plane_type {
-	DRM_PLANE_TYPE_OVERLAY,  /* any non-primary, non-cursor plane ("sprites") */
-	DRM_PLANE_TYPE_PRIMARY,  /* the plane most likely to light up the CRTC alone */
-	DRM_PLANE_TYPE_CURSOR,   /* small plane sized for drm_mode_config.cursor_{width,height} */
+	DRM_PLANE_TYPE_OVERLAY,  /* プライマリでもカーソルでもない任意のplane（"sprites"） */
+	DRM_PLANE_TYPE_PRIMARY,  /* 単独でCRTCを点灯させる可能性が最も高いplane */
+	DRM_PLANE_TYPE_CURSOR,   /* drm_mode_config.cursor_{width,height} に合わせたサイズの小さなplane */
 };
 ```
 
-`struct drm_plane` carries the hardware-independent state — `format_types` (the pixel formats it accepts), `possible_crtcs` (which CRTCs it can feed), and the currently-bound `fb`/`crtc`. The per-commit geometry lives in `struct drm_plane_state`:
+`struct drm_plane` はハードウェアに依存しない状態 — `format_types`（受け付けるピクセルフォーマット）、`possible_crtcs`（どのCRTCに供給できるか）、現在バインドされている `fb`/`crtc` — を保持する。コミットごとのジオメトリは `struct drm_plane_state` にある。
 
 ```c
 // include/drm/drm_plane.h
 struct drm_plane_state {
 	struct drm_plane   *plane;
 	struct drm_crtc     *crtc;
-	struct drm_framebuffer *fb;   // the buffer this plane is scanning out
+	struct drm_framebuffer *fb;   // このplaneがスキャンアウトしているバッファ
 	...
-	int32_t  crtc_x,  crtc_y;     // position on the CRTC, integer pixels
-	uint32_t crtc_w,  crtc_h;     // size on the CRTC, integer pixels
-	uint32_t src_x,   src_y;      // position within the source fb, 16.16 fixed point
-	uint32_t src_w,   src_h;      // size of the sampled region, 16.16 fixed point
+	int32_t  crtc_x,  crtc_y;     // CRTC上の位置、整数ピクセル
+	uint32_t crtc_w,  crtc_h;     // CRTC上のサイズ、整数ピクセル
+	uint32_t src_x,   src_y;      // ソースfb内の位置、16.16固定小数点
+	uint32_t src_w,   src_h;      // サンプリングされる領域のサイズ、16.16固定小数点
 	unsigned int rotation;
-	unsigned int zpos;            // blend order relative to other planes
-	struct drm_rect src, dst;     // derived integer rects
+	unsigned int zpos;            // 他のplaneに対するブレンド順序
+	struct drm_rect src, dst;     // 導出された整数矩形
 	bool visible;
 	...
 };
 ```
 
-The distinction between `src_*` (fixed-point, in the framebuffer's own coordinate space — this is what lets a plane crop or scale) and `crtc_*` (integer, in the output's coordinate space — this is where the result lands) is what makes a plane a real compositing primitive rather than just a pointer to a buffer.
+`src_*`（固定小数点で、フレームバッファ自身の座標空間にある — これによりplaneはクロップや拡大縮小ができる）と `crtc_*`（整数で、出力の座標空間にある — 結果が配置される場所）の区別こそが、planeを単なるバッファへのポインタではなく、本物の合成プリミティブにしている。
 
-Multi-plane hardware matters because it's the difference between the display controller doing compositing for free and the GPU having to render one. A video player showing a 4K movie in a window doesn't need to touch the 3D engine at all: it decodes into a buffer, hands that buffer directly to an overlay plane sized and positioned over the window, and the display controller blends it with the desktop's primary plane in hardware, scan line by scan line, at zero GPU cost and with no extra memory copy. Lose the overlay plane — headless SoC displays, or a compositor unable to find one free — and that same video has to be composited into the desktop framebuffer by the GPU every frame instead.
+マルチplaneハードウェアが重要なのは、ディスプレイコントローラが合成を無償で行うか、GPUが合成結果を描画しなければならないかの違いになるからである。ウィンドウ内で4K映画を表示する動画プレーヤーは、3Dエンジンに一切触れる必要がない。バッファにデコードし、そのバッファをウィンドウの上にサイズと位置を合わせたoverlay planeに直接渡せば、ディスプレイコントローラがそれをデスクトップのprimary planeとハードウェアで、走査線ごとに、GPUコストゼロかつ余分なメモリコピーなしでブレンドする。overlay planeが失われると — ヘッドレスなSoCディスプレイや、空いているplaneを見つけられないコンポジタの場合 — 同じ動画を毎フレームGPUがデスクトップのフレームバッファに合成しなければならなくなる。
 
-### `drm_crtc` — the scanout engine {#drm_crtc-the-scanout-engine}
+### `drm_crtc` — スキャンアウトエンジン {#drm_crtc-the-scanout-engine}
 
-A CRTC (the name is a holdover from CRT "Cathode Ray Tube Controller" hardware) is the engine that actually walks a composited image out to an encoder in real time, line by line, timed against a `drm_display_mode`. `struct drm_crtc` holds two built-in plane pointers — every CRTC has at least a `primary` plane, and usually a `cursor` plane:
+CRTC（名前はCRT「Cathode Ray Tube Controller」ハードウェアの名残である）は、合成された画像を `drm_display_mode` に合わせたタイミングで、1行ずつリアルタイムにencoderへ送り出すエンジンである。`struct drm_crtc` は2つの組み込みplaneポインタを持つ。すべてのCRTCは少なくとも `primary` planeを持ち、通常は `cursor` planeも持つ。
 
 ```c
 // include/drm/drm_crtc.h
@@ -58,14 +58,14 @@ struct drm_crtc {
 	struct drm_plane *primary;
 	struct drm_plane *cursor;
 	...
-	struct drm_display_mode mode;    // current, legacy-path timings
-	struct drm_display_mode hwmode;  // what's actually programmed after adjustment
+	struct drm_display_mode mode;    // 現在の、レガシーパスのタイミング
+	struct drm_display_mode hwmode;  // 調整後に実際にプログラムされた値
 	...
-	struct drm_crtc_state *state;    // current atomic state
+	struct drm_crtc_state *state;    // 現在のアトミック状態
 };
 ```
 
-The mode itself, `struct drm_display_mode` (`include/drm/drm_modes.h`), is the full CRT-derived timing description: pixel `clock` in kHz, and the horizontal/vertical `display`/`sync_start`/`sync_end`/`total` values that define active pixels, sync pulses, and blanking intervals. `struct drm_crtc_state` is where atomic commits actually record what changed:
+モード自体である `struct drm_display_mode`（`include/drm/drm_modes.h`）は、CRT由来の完全なタイミング記述である。kHz単位のピクセル `clock` と、有効ピクセル、同期パルス、ブランキング期間を定義する水平／垂直の `display`/`sync_start`/`sync_end`/`total` の値からなる。アトミックコミットが何が変わったかを実際に記録する場所は `struct drm_crtc_state` である。
 
 ```c
 // include/drm/drm_crtc.h
@@ -74,7 +74,7 @@ struct drm_crtc_state {
 	bool enable;
 	bool active;
 	bool planes_changed     : 1;
-	bool mode_changed       : 1;   // @mode or @enable changed — needs a real modeset
+	bool mode_changed       : 1;   // @mode または @enable が変化した — 本物のモード設定が必要
 	bool active_changed     : 1;
 	bool connectors_changed : 1;
 	...
@@ -84,17 +84,17 @@ struct drm_crtc_state {
 };
 ```
 
-`mode_changed`, together with `active_changed` and `connectors_changed`, is what `drm_atomic_crtc_needs_modeset()` combines and the atomic core checks against `DRM_MODE_ATOMIC_ALLOW_MODESET`, covered below.
+`mode_changed` は `active_changed` および `connectors_changed` とともに `drm_atomic_crtc_needs_modeset()` によって組み合わされ、アトミックコアはその結果を `DRM_MODE_ATOMIC_ALLOW_MODESET` と照合する。これについては後述する。
 
-### `drm_encoder` — signal conversion, increasingly a formality {#drm_encoder-signal-conversion-increasingly-a-formality}
+### `drm_encoder` — 信号変換、次第に形式的な存在に {#drm_encoder-signal-conversion-increasingly-a-formality}
 
-`include/drm/drm_encoder.h` describes the encoder's job in one line: "CRTCs drive pixels to encoders, which convert them into signals appropriate for a given connector." `encoder_type` names the format it produces — `DRM_MODE_ENCODER_TMDS` for DVI/HDMI/eDP, `DRM_MODE_ENCODER_DAC` for VGA, `DRM_MODE_ENCODER_DSI`/`DPI` for panels, `DRM_MODE_ENCODER_VIRTUAL` for VM displays — and `possible_crtcs`/`possible_clones` are bitmasks fixed at registration time describing which CRTCs can drive this encoder and which sibling encoders it can clone alongside.
+`include/drm/drm_encoder.h` は、encoderの役割を1行で説明している。"CRTCs drive pixels to encoders, which convert them into signals appropriate for a given connector."（訳: CRTCはピクセルをencoderに送り、encoderはそれを特定のconnectorに適した信号に変換する。）`encoder_type` は生成するフォーマットを示す — DVI/HDMI/eDP用の `DRM_MODE_ENCODER_TMDS`、VGA用の `DRM_MODE_ENCODER_DAC`、パネル用の `DRM_MODE_ENCODER_DSI`/`DPI`、VMディスプレイ用の `DRM_MODE_ENCODER_VIRTUAL`。`possible_crtcs`/`possible_clones` は登録時に固定されるビットマスクで、どのCRTCがこのencoderを駆動できるか、どの兄弟encoderと並んでクローン出力できるかを記述する。
 
-On real hardware from the era KMS was designed for, the encoder was a distinct block: a TMDS transmitter chip, a separate silicon block doing signal conversion downstream of the scanout engine. On modern SoCs and integrated GPUs that block is frequently either fused into the same hardware as the CRTC or reduced to fixed muxing, and the kernel's own header now says as much: `drm_encoder.crtc` is documented as "only really meaningful for non-atomic drivers. Atomic drivers should instead check `drm_connector_state.crtc`" — atomic drivers are steered toward asking the *connector* which CRTC drives it, treating the encoder as bookkeeping rather than a real object to reason about. Many simple modern drivers instantiate exactly one encoder per connector purely to satisfy the object model.
+KMSが設計された時代の実ハードウェアでは、encoderは独立したブロックだった。TMDSトランスミッタチップ、つまりスキャンアウトエンジンの下流で信号変換を行う別個のシリコンブロックである。現代のSoCや統合GPUでは、そのブロックはCRTCと同じハードウェアに統合されているか、固定のマルチプレクスに縮小されていることが多く、カーネル自身のヘッダも今ではそう述べている。`drm_encoder.crtc` は "only really meaningful for non-atomic drivers. Atomic drivers should instead check `drm_connector_state.crtc`"（訳: 非アトミックドライバでのみ実質的に意味がある。アトミックドライバは代わりに `drm_connector_state.crtc` を確認すべきである）と文書化されている。アトミックドライバは、どのCRTCが自分を駆動しているかを*connector*に問い合わせるよう誘導されており、encoderは推論すべき実体のあるオブジェクトではなく、管理上の記録として扱われる。単純な現代のドライバの多くは、純粋にオブジェクトモデルを満たすためだけに、connectorごとにちょうど1つのencoderを生成している。
 
-### `drm_connector` — the physical output, and hotplug {#drm_connector-the-physical-output-and-hotplug}
+### `drm_connector` — 物理出力とホットプラグ {#drm_connector-the-physical-output-and-hotplug}
 
-The connector is the one object tied to something you can point at on the back of the machine: an HDMI jack, a DisplayPort connector, an eDP panel's fixed internal link. It owns the connection's mutable state — is anything plugged in right now, and what modes does whatever is plugged in support:
+connectorは、マシンの背面で指し示せるものに結び付いた唯一のオブジェクトである。HDMIジャック、DisplayPortコネクタ、eDPパネルの固定内部リンクなどだ。connectorは接続の可変状態を所有する。今何かが接続されているか、接続されているものがどのモードをサポートしているか、である。
 
 ```c
 // include/drm/drm_connector.h
@@ -102,7 +102,7 @@ struct drm_connector {
 	...
 	int connector_type;                 // DRM_MODE_CONNECTOR_HDMIA, ...
 	enum drm_connector_status status;
-	struct list_head modes;             // drm_display_mode list, EDID-derived
+	struct list_head modes;             // drm_display_mode のリスト、EDID由来
 	struct drm_display_info display_info;
 	const struct drm_connector_funcs *funcs;
 	const struct drm_connector_helper_funcs *helper_private;
@@ -113,22 +113,22 @@ struct drm_connector {
 };
 ```
 
-Detection is a driver callback, not core logic — `struct drm_connector_funcs` and its atomic-aware counterpart in `include/drm/drm_modeset_helper_vtables.h`:
+検出はコアのロジックではなく、ドライバのコールバックである。`struct drm_connector_funcs` と、`include/drm/drm_modeset_helper_vtables.h` にあるそのアトミック対応版がそれにあたる。
 
 ```c
 // drm_connector_funcs
 enum drm_connector_status (*detect)(struct drm_connector *connector, bool force);
 
-// drm_connector_helper_funcs — the modeset-lock-aware version
+// drm_connector_helper_funcs — modesetロックを意識した版
 int (*detect_ctx)(struct drm_connector *connector,
 		   struct drm_modeset_acquire_ctx *ctx, bool force);
 ```
 
-`force` tells the driver whether this is a cheap periodic poll (leave it false, skip expensive/destructive probing) or a user-initiated recheck where it's fine to do a real, possibly disruptive detection cycle. A hotplug event — a monitor plugged into HDMI, a DP dock connected — fires an interrupt the driver turns into a call to `drm_kms_helper_hotplug_event()`, which schedules connector re-probing; userspace (a compositor listening on the DRM fd, or via udev) picks up the resulting uevent and re-reads connector state through `DRM_IOCTL_MODE_GETCONNECTOR`.
+`force` は、これが安価な定期ポーリングなのか（falseのままにし、高コストで破壊的なプローブは省略する）、それともユーザーが開始した再確認であり、実際の、場合によっては妨げになる検出サイクルを行ってよいのかをドライバに伝える。ホットプラグイベント — HDMIにモニタが接続された、DPドックが接続された — は割り込みを発生させ、ドライバはそれを `drm_kms_helper_hotplug_event()` の呼び出しに変える。これがconnectorの再プローブをスケジュールする。ユーザー空間（DRMのfdで待ち受けるコンポジタ、あるいはudev経由）は、その結果のueventを受け取り、`DRM_IOCTL_MODE_GETCONNECTOR` でconnectorの状態を読み直す。
 
-Once something is detected, `helper_private->get_modes()` populates the connector's mode list, ordinarily by reading EDID over I2C/DDC or an AUX channel and parsing it into `drm_display_mode` entries via `drm_add_edid_modes()`/`drm_helper_probe_add_cmdline_mode()`-style helpers — this is where a 4K panel's native timing and a monitor's supported refresh rates actually come from.
+何かが検出されると、`helper_private->get_modes()` がconnectorのモードリストを埋める。通常はI2C/DDCまたはAUXチャネル経由でEDIDを読み、`drm_add_edid_modes()`/`drm_helper_probe_add_cmdline_mode()` のようなヘルパーで `drm_display_mode` のエントリに解析する。4Kパネルのネイティブタイミングや、モニタがサポートするリフレッシュレートは、実際にはここから来ている。
 
-### The pipeline, and where the framebuffer attaches {#the-pipeline-and-where-the-framebuffer-attaches}
+### パイプラインと、フレームバッファが接続される場所 {#the-pipeline-and-where-the-framebuffer-attaches}
 
 ```
   drm_framebuffer                                                   physical
@@ -138,35 +138,35 @@ Once something is detected, `helper_private->get_modes()` populates the connecto
                          cursor/overlay
 ```
 
-A `drm_framebuffer` is metadata over GEM buffer objects — pixel `format`, per-plane `pitches`/`offsets`, `width`/`height` — that doesn't itself belong to any particular plane; it's attached by assigning it to `drm_plane_state.fb` as part of a commit. One or more planes feed a CRTC, which reads them in composited form, applies its `drm_display_mode` timing, and drives the result to the encoder bound to it (directly, or via `drm_bridge` chain hops for things like SoC-internal MIPI-to-eDP converters); the encoder converts to the connector's signal format, and the connector is the wire out to the display. All four object types, plus the framebuffer, are modeset objects (`struct drm_mode_object`); planes, CRTCs, and connectors each carry their own property sets — which is exactly what made changing them one at a time so dangerous, covered next.
+`drm_framebuffer` はGEMバッファオブジェクトの上のメタデータ — ピクセル `format`、planeごとの `pitches`/`offsets`、`width`/`height` — であり、それ自体は特定のplaneに属さない。コミットの一部として `drm_plane_state.fb` に割り当てることで接続される。1つ以上のplaneがCRTCに供給され、CRTCはそれらを合成された形で読み込み、`drm_display_mode` のタイミングを適用し、結果をバインドされたencoderへ送る（直接、あるいはSoC内部のMIPI-eDP変換器のようなものについては `drm_bridge` チェーンを経由して）。encoderはconnectorの信号フォーマットに変換し、connectorがディスプレイへの配線となる。4種類のオブジェクトすべてとフレームバッファはmodesetオブジェクト（`struct drm_mode_object`）であり、plane、CRTC、connectorはそれぞれ独自のプロパティセットを持つ。それこそが、これらを1つずつ変更することをあれほど危険にしていた理由であり、次に扱う。
 
-## Why the legacy API had to go {#why-the-legacy-api-had-to-go}
+## なぜレガシーAPIは廃止されなければならなかったか {#why-the-legacy-api-had-to-go}
 
-The original 2008 KMS interface was modeled closely on X's own XRandR-era model: a `DRM_IOCTL_MODE_SETCRTC` (`drm_mode_setcrtc()`) to bind a CRTC to a mode, connectors, and a framebuffer in one call, plus separate ioctls layered on afterward as needs grew — `DRM_IOCTL_MODE_SETPLANE` for plane updates, and once properties existed, `DRM_IOCTL_MODE_OBJ_SETPROPERTY` (`drm_mode_obj_set_property_ioctl()`) to change one property on one object per call. All of these ioctl entries are still present in `drivers/gpu/drm/drm_ioctl.c` today, kept for legacy userspace.
+2008年の最初のKMSインターフェースは、X自身のXRandR時代のモデルを忠実に模していた。CRTCをモード、connector、フレームバッファに1回の呼び出しでバインドする `DRM_IOCTL_MODE_SETCRTC`（`drm_mode_setcrtc()`）があり、必要が増えるにつれて別個のioctlが後から追加された。planeの更新用の `DRM_IOCTL_MODE_SETPLANE`、そしてプロパティが導入されてからは、1回の呼び出しで1つのオブジェクトの1つのプロパティを変更する `DRM_IOCTL_MODE_OBJ_SETPROPERTY`（`drm_mode_obj_set_property_ioctl()`）である。これらのioctlエントリはすべて、レガシーなユーザー空間のために、今日でも `drivers/gpu/drm/drm_ioctl.c` に残っている。
 
-The failure mode was structural, not incidental. A compositor reacting to a hotplug — say, a laptop's external monitor appearing, forcing a mode change on the internal panel to keep both in sync — had to issue a sequence of separate ioctls: disable one CRTC, set a new mode on another, re-point planes, re-enable. Nothing prevented another process (or the same compositor, on the next vblank) from observing the display mid-sequence, and nothing let the kernel reject the *whole* sequence up front if step three turned out to be invalid on the real hardware — you found out by getting a mid-sequence error and a screen already left in a half-updated state. There was no way to ask "would this new configuration work at all" without actually applying pieces of it.
+障害モードは偶発的なものではなく構造的なものだった。ホットプラグに反応するコンポジタ — たとえばノートPCの外部モニタが現れ、両方を同期させるために内蔵パネルのモード変更を強いられる場合 — は、一連の別々のioctlを発行しなければならなかった。あるCRTCを無効化し、別のCRTCに新しいモードを設定し、planeの向き先を変え、再び有効化する。別のプロセス（あるいは次のvblankでの同じコンポジタ）がシーケンスの途中でディスプレイを観測することを妨げるものは何もなく、手順3が実ハードウェアで無効だと判明した場合にシーケンス*全体*を事前に拒否する手段もカーネルにはなかった。シーケンスの途中でエラーを受け取り、画面がすでに中途半端に更新された状態で残されて初めてそれがわかるのである。新しい構成の一部を実際に適用せずに「この構成はそもそも動作するか」を問い合わせる方法はなかった。
 
-The fix was proposed and driven by two DRM developers over 2014: Rob Clark posted the locking and state-tracking infrastructure as a 17-patch series, ["prepare for atomic/nuclear modeset/pageflip"](https://lwn.net/Articles/600369/), to dri-devel in May 2014 — explicitly infrastructure-only, not yet the ioctl itself. Daniel Vetter then reworked and landed the core state-tracking object in [`cc4ceb484b37`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cc4ceb484b37b9369e0d4e8682b7ae1849ae4579) ("drm: Global atomic state handling," July 2014), whose commit message describes it explicitly as a divergence from — and successor to — "Rob's patches." Vetter's [cover letter](https://lore.kernel.org/dri-devel/1406497308-30733-1-git-send-email-daniel.vetter@ffwll.ch/) for that series lays out why he diverged: synchronous, software-side state updates so "all the tricky locking dances can be abolished," and check-only operations that don't have to block on the previous update completing, since "compositors need to do [this] right after having completed the current frame." Rob Clark defended his own design in the same thread — his refcounted state was meant to let states chain so check-only paths needed no locks at all, and "in cases where drivers have to fwd one property to another object or other sort of side effect, I think my way was nicer, imho ;-)." Vetter's design is the one that shipped.
+修正は、2014年にかけて2人のDRM開発者によって提案され、推進された。Rob Clarkは2014年5月、ロックと状態追跡のインフラを17パッチのシリーズ ["prepare for atomic/nuclear modeset/pageflip"](https://lwn.net/Articles/600369/) としてdri-develに投稿した。これは明示的にインフラのみで、まだioctl自体ではなかった。その後Daniel Vetterがコアの状態追跡オブジェクトを作り直し、[`cc4ceb484b37`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cc4ceb484b37b9369e0d4e8682b7ae1849ae4579)（"drm: Global atomic state handling"、2014年7月）として取り込んだ。そのコミットメッセージは、これを "Rob's patches" からの分岐であり後継であると明示的に述べている。そのシリーズに対するVetterの[カバーレター](https://lore.kernel.org/dri-devel/1406497308-30733-1-git-send-email-daniel.vetter@ffwll.ch/)は、分岐した理由を説明している。ソフトウェア側の状態更新を同期的にすることで "all the tricky locking dances can be abolished"（訳: 厄介なロックのダンスをすべて廃止できる）こと、そしてチェックのみの操作が前の更新の完了を待ってブロックする必要がないこと。なぜなら "compositors need to do [this] right after having completed the current frame"（訳: コンポジタは現在のフレームを完了した直後に［これを］行う必要がある）からである。Rob Clarkは同じスレッドで自身の設計を擁護した。彼の参照カウント付き状態は、状態を連鎖させることでチェックのみのパスがロックをまったく必要としないようにする意図であり、"in cases where drivers have to fwd one property to another object or other sort of side effect, I think my way was nicer, imho ;-)"（訳: ドライバがあるプロパティを別のオブジェクトに転送しなければならない場合や、その他の副作用がある場合には、私のやり方のほうが良かったと思う、私見だけど ;-)）と述べた。出荷されたのはVetterの設計である。
 
-Rob Clark then landed the userspace-facing entry point itself in [`d34f20d6e2f2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d34f20d6e2f21bd3531b969dc40913181a8ae31a) ("drm: Atomic modeset ioctl," December 2014, reviewed by Daniel Vetter and Sean Paul), which added `DRM_IOCTL_MODE_ATOMIC` and gated it behind a `DRM_CLIENT_CAP_ATOMIC` capability flag so legacy userspace wouldn't stumble into it by accident. The [RFC two days before](https://lore.kernel.org/dri-devel/1418771141-16954-1-git-send-email-robdclark@gmail.com/) the merged version is where the uAPI itself got argued over: Michel Dänzer pushed for the ioctl to take an explicit *when*-parameter for the change to take effect, and — anticipating variable-refresh-rate displays — that it should be a timestamp rather than a frame counter. Pekka Paalanen, drawing on Wayland's own Presentation extension, pushed back on the complexity a queueing model like that opens up: how do you cancel a commit scheduled an hour out? The ioctl that shipped took neither — commits are either synchronous or nonblocking-and-immediate, with no scheduled-future-commit concept at all. The interface, and enough converted drivers to rely on it, shipped in Linux 4.2 in mid-2015 — LWN's two-part design writeup, [part 1](https://lwn.net/Articles/653071/) and [part 2](https://lwn.net/Articles/653466/) (Daniel Vetter, August 2015), frames the driving motivation as Wayland-era compositors needing "every frame is perfect" semantics and power-sensitive mobile/embedded hardware needing to batch state changes instead of touching registers one property at a time.
+その後Rob Clarkは、ユーザー空間向けのエントリポイントそのものを [`d34f20d6e2f2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d34f20d6e2f21bd3531b969dc40913181a8ae31a)（"drm: Atomic modeset ioctl"、2014年12月、Daniel VetterとSean Paulがレビュー）で取り込んだ。これは `DRM_IOCTL_MODE_ATOMIC` を追加し、レガシーなユーザー空間が偶然これに踏み込まないよう `DRM_CLIENT_CAP_ATOMIC` ケーパビリティフラグの背後に置いた。uAPI自体が議論されたのは、マージ版の[2日前のRFC](https://lore.kernel.org/dri-devel/1418771141-16954-1-git-send-email-robdclark@gmail.com/)である。Michel Dänzerは、変更が有効になる*時点*を示す明示的なパラメータをioctlが取るべきだと主張し、さらに可変リフレッシュレートのディスプレイを見越して、それはフレームカウンタではなくタイムスタンプであるべきだとした。Pekka Paalanenは、Wayland自身のPresentation拡張の経験に基づき、そのようなキューイングモデルがもたらす複雑さに反論した。1時間先にスケジュールされたコミットをどうやってキャンセルするのか、と。出荷されたioctlはどちらも採用しなかった。コミットは同期的か、ノンブロッキングかつ即時のどちらかであり、将来のコミットをスケジュールするという概念は一切ない。このインターフェースと、それに依存できるだけの数の移行済みドライバは、2015年半ばのLinux 4.2で出荷された。LWNの2部構成の設計解説、[パート1](https://lwn.net/Articles/653071/)と[パート2](https://lwn.net/Articles/653466/)（Daniel Vetter、2015年8月）は、推進力となった動機を、Wayland時代のコンポジタが「すべてのフレームが完璧である」セマンティクスを必要としたこと、そして電力に敏感なモバイル／組み込みハードウェアが、1プロパティずつレジスタに触れるのではなく状態変更をまとめる必要があったことだと位置付けている。
 
-## How an atomic commit actually works {#how-an-atomic-commit-actually-works}
+## アトミックコミットは実際にどう動くか {#how-an-atomic-commit-actually-works}
 
-### The container: `drm_atomic_state` → `drm_atomic_commit` {#the-container-drmatomicstate-drmatomiccommit}
+### コンテナ: `drm_atomic_state` → `drm_atomic_commit` {#the-container-drmatomicstate-drmatomiccommit}
 
-The atomic core assembles a proposed configuration into one container object before touching anything. From 2014 through Linux 7.1 this struct was named `struct drm_atomic_state`, and that's the name you'll see in the LWN articles above and in most driver code still in wide deployment. In April 2026 it was renamed to `struct drm_atomic_commit` by [`5164f7e7ff8e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5164f7e7ff8ec7d41065d3862630c2ba09854328) ("drm: Rename struct drm_atomic_state to drm_atomic_commit," Maxime Ripard) — the commit message's rationale is that `drm_atomic_state` was easily confused with the *per-object* state structs (`drm_plane_state`, `drm_crtc_state`, etc.), when it's actually a commit-in-progress that references old and new per-object states, not "the state" of the device. This page uses the current name; mentally substitute `drm_atomic_state` if you're reading pre-2026 kernel source or documentation — it's the same object.
+アトミックコアは、何かに触れる前に、提案された構成を1つのコンテナオブジェクトにまとめ上げる。2014年からLinux 7.1まで、この構造体は `struct drm_atomic_state` という名前だった。上で挙げたLWNの記事や、現在も広く展開されているドライバコードの大半で目にするのはこの名前である。2026年4月、[`5164f7e7ff8e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5164f7e7ff8ec7d41065d3862630c2ba09854328)（"drm: Rename struct drm_atomic_state to drm_atomic_commit"、Maxime Ripard）によって `struct drm_atomic_commit` に改名された。コミットメッセージが挙げる理由は、`drm_atomic_state` が*オブジェクトごと*の状態構造体（`drm_plane_state`、`drm_crtc_state` など）と混同されやすいが、実際にはデバイスの「状態」ではなく、新旧のオブジェクトごとの状態を参照する進行中のコミットだから、というものである。このページでは現在の名前を使う。2026年以前のカーネルソースやドキュメントを読む場合は、頭の中で `drm_atomic_state` に置き換えてほしい。同じオブジェクトである。
 
 ```c
-// include/drm/drm_atomic.h (current master)
+// include/drm/drm_atomic.h（現在のmaster）
 struct drm_atomic_commit {
 	struct kref ref;
 	struct drm_device *dev;
 
-	bool allow_modeset       : 1;   // DRM_MODE_ATOMIC_ALLOW_MODESET was set
+	bool allow_modeset       : 1;   // DRM_MODE_ATOMIC_ALLOW_MODESET が設定されていた
 	bool legacy_cursor_update : 1;
 	bool async_update        : 1;
 	bool duplicated          : 1;
-	bool checked             : 1;   // ->atomic_check has run
+	bool checked             : 1;   // ->atomic_check が実行済み
 
 	struct __drm_planes_state     *planes;
 	struct __drm_crtcs_state      *crtcs;
@@ -182,18 +182,18 @@ struct drm_atomic_commit {
 };
 ```
 
-Each per-object array entry holds both the object's old state (what's currently live) and the proposed new state, obtained via `drm_atomic_get_crtc_state()` / `drm_atomic_get_plane_state()` / `drm_atomic_get_connector_state()` — calling one of these is what pulls an object into the commit and duplicates its current state for the driver to mutate.
+オブジェクトごとの配列の各エントリは、そのオブジェクトの古い状態（現在有効なもの）と提案された新しい状態の両方を保持する。これらは `drm_atomic_get_crtc_state()` / `drm_atomic_get_plane_state()` / `drm_atomic_get_connector_state()` によって取得される。これらのいずれかを呼び出すことで、オブジェクトがコミットに取り込まれ、ドライバが変更できるようにその現在の状態が複製される。
 
-### The check/commit split {#the-checkcommit-split}
+### チェックとコミットの分離 {#the-checkcommit-split}
 
-Two entry points, cleanly separated:
+2つのエントリポイントがきれいに分離されている。
 
-- **`drm_atomic_check_only(struct drm_atomic_commit *state)`** (`drivers/gpu/drm/drm_atomic.c`) — validates the proposed state against `config->funcs->atomic_check`, and additionally rejects the commit with `-EINVAL` if any CRTC needs a full modeset (`drm_atomic_crtc_needs_modeset()`: `mode_changed`, `active_changed`, or `connectors_changed`) but `state->allow_modeset` is false. No hardware is touched. Drivers implementing `atomic_check` typically call the generic **`drm_atomic_helper_check(struct drm_device *dev, struct drm_atomic_commit *state)`** (`drivers/gpu/drm/drm_atomic_helper.c`) as their first step, which runs the shared plane/CRTC/connector cross-validation (does every enabled CRTC have a mode and at least one connector, do plane geometries fit, etc.) before any hardware-specific checks.
-- **`drm_atomic_commit(struct drm_atomic_commit *state)`** / **`drm_atomic_nonblocking_commit(struct drm_atomic_commit *state)`** — both documented as internally calling check first ("checking will be internally enforced by always calling `->atomic_check` before `->atomic_commit`," per the original design commit), then applying the state to hardware. Either can return `-EDEADLK` if the ww-mutex locking (`state->acquire_ctx`, a `drm_modeset_acquire_ctx`) hit a backoff case; the caller is expected to drop locks and retry, which is exactly what the ioctl handler does in its `retry:` loop.
+- **`drm_atomic_check_only(struct drm_atomic_commit *state)`**（`drivers/gpu/drm/drm_atomic.c`）— 提案された状態を `config->funcs->atomic_check` に照らして検証する。さらに、いずれかのCRTCが完全なモード設定を必要とする（`drm_atomic_crtc_needs_modeset()`: `mode_changed`、`active_changed`、`connectors_changed` のいずれか）にもかかわらず `state->allow_modeset` がfalseであれば、`-EINVAL` でコミットを拒否する。ハードウェアには一切触れない。`atomic_check` を実装するドライバは、通常、最初のステップとして汎用の **`drm_atomic_helper_check(struct drm_device *dev, struct drm_atomic_commit *state)`**（`drivers/gpu/drm/drm_atomic_helper.c`）を呼ぶ。これは、ハードウェア固有のチェックの前に、plane/CRTC/connectorにまたがる共通の相互検証（有効なすべてのCRTCがモードと少なくとも1つのconnectorを持つか、planeのジオメトリが収まるか、など）を実行する。
+- **`drm_atomic_commit(struct drm_atomic_commit *state)`** / **`drm_atomic_nonblocking_commit(struct drm_atomic_commit *state)`** — どちらも内部で最初にチェックを呼ぶと文書化されており（元の設計コミットによれば "checking will be internally enforced by always calling `->atomic_check` before `->atomic_commit`"、訳: `->atomic_commit` の前に常に `->atomic_check` を呼ぶことで、チェックは内部的に強制される）、その後で状態をハードウェアに適用する。どちらも、ww-mutexのロック（`state->acquire_ctx`、`drm_modeset_acquire_ctx`）がバックオフのケースに当たった場合は `-EDEADLK` を返しうる。呼び出し側はロックを解放して再試行することが期待されており、ioctlハンドラはまさにそれを `retry:` ループで行っている。
 
-### uAPI flags {#uapi-flags}
+### uAPIフラグ {#uapi-flags}
 
-The ioctl struct and its flags, defined in `include/uapi/drm/drm_mode.h` since the original `d34f20d6e2f2` and unchanged since:
+ioctlの構造体とそのフラグは、最初の `d34f20d6e2f2` 以来 `include/uapi/drm/drm_mode.h` で定義されており、それ以来変わっていない。
 
 ```c
 #define DRM_MODE_ATOMIC_TEST_ONLY      0x0100
@@ -203,43 +203,43 @@ The ioctl struct and its flags, defined in `include/uapi/drm/drm_mode.h` since t
 struct drm_mode_atomic {
 	__u32 flags;
 	__u32 count_objs;
-	__u64 objs_ptr;           // array of object IDs
-	__u64 count_props_ptr;    // array of per-object property counts
-	__u64 props_ptr;          // flat array of property IDs
-	__u64 prop_values_ptr;    // flat array of property values
+	__u64 objs_ptr;           // オブジェクトIDの配列
+	__u64 count_props_ptr;    // オブジェクトごとのプロパティ数の配列
+	__u64 props_ptr;          // プロパティIDのフラットな配列
+	__u64 prop_values_ptr;    // プロパティ値のフラットな配列
 	__u64 reserved;
-	__u64 user_data;          // echoed back in the completion event
+	__u64 user_data;          // 完了イベントでそのまま返される
 };
 ```
 
-- **`DRM_MODE_ATOMIC_TEST_ONLY`** — run `drm_atomic_check_only()` and return its result; never call commit. This is the "would this work" dry run the legacy API had no equivalent for — a compositor can probe an arbitrary combination of mode/plane/property changes and get a definitive yes/no with zero visible side effects.
-- **`DRM_MODE_ATOMIC_ALLOW_MODESET`** — without it, any change that would require a real modeset (`drm_atomic_crtc_needs_modeset()`) is rejected. Compositors set this only for actual mode changes and leave it off for routine per-frame plane/property updates, so a buggy commit can't accidentally force a full, visible modeset.
-- **`DRM_MODE_ATOMIC_NONBLOCK`** — routes to `drm_atomic_nonblocking_commit()` instead of `drm_atomic_commit()`; the ioctl returns once the commit is validated and queued, without waiting for the hardware to actually flip.
-- **`DRM_MODE_PAGE_FLIP_EVENT`** (shared with the legacy page-flip ioctl) — request a completion event; mutually exclusive with `TEST_ONLY` (checked explicitly in `drm_mode_atomic_ioctl()`, since a dry run has nothing to signal completion of).
+- **`DRM_MODE_ATOMIC_TEST_ONLY`** — `drm_atomic_check_only()` を実行してその結果を返す。コミットは決して呼ばない。これはレガシーAPIに相当するものがなかった「これは動作するか」のドライランである。コンポジタは、モード／plane／プロパティの変更の任意の組み合わせを試し、目に見える副作用ゼロで確定的なyes/noを得られる。
+- **`DRM_MODE_ATOMIC_ALLOW_MODESET`** — これがないと、本物のモード設定を必要とする変更（`drm_atomic_crtc_needs_modeset()`）はすべて拒否される。コンポジタはこれを実際のモード変更のときだけ設定し、フレームごとの定常的なplane／プロパティの更新では設定しない。これにより、バグのあるコミットが誤って完全で目に見えるモード設定を強制することがなくなる。
+- **`DRM_MODE_ATOMIC_NONBLOCK`** — `drm_atomic_commit()` の代わりに `drm_atomic_nonblocking_commit()` に振り向ける。ioctlは、ハードウェアが実際にフリップするのを待たずに、コミットが検証されキューに入った時点で戻る。
+- **`DRM_MODE_PAGE_FLIP_EVENT`**（レガシーなページフリップioctlと共有）— 完了イベントを要求する。`TEST_ONLY` とは相互排他的である（ドライランには完了を通知すべき対象がないため、`drm_mode_atomic_ioctl()` で明示的にチェックされる）。
 
-### Completion: vblank-synced events {#completion-vblank-synced-events}
+### 完了: vblankに同期したイベント {#completion-vblank-synced-events}
 
-When `DRM_MODE_PAGE_FLIP_EVENT` is set, the ioctl handler attaches a `struct drm_pending_vblank_event` to each affected CRTC's `crtc_state->event`. Once the driver's atomic commit worker has actually written the new state to hardware and the display has flipped at the next vblank, it calls **`drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_vblank_event *e)`** (`drivers/gpu/drm/drm_vblank.c`), which stamps the event with the current vblank sequence number and timestamp and queues it for delivery; userspace reads it back off the DRM file descriptor as a `DRM_EVENT_FLIP_COMPLETE`. `struct drm_crtc_commit` (one per CRTC per in-flight commit, referenced from `drm_crtc_state.commit`) exposes this as three `completion` stages a driver or helper can wait on — `flip_done` (hardware has flipped, same moment the event fires), `hw_done` (all register writes for the commit are out, which for a CRTC being *disabled* can be later than `flip_done`), and `cleanup_done` (old buffers released) — which is what lets `DRM_MODE_ATOMIC_NONBLOCK` commits queue up behind each other correctly instead of racing.
+`DRM_MODE_PAGE_FLIP_EVENT` が設定されている場合、ioctlハンドラは影響を受ける各CRTCの `crtc_state->event` に `struct drm_pending_vblank_event` を付加する。ドライバのアトミックコミットワーカーが新しい状態を実際にハードウェアに書き込み、次のvblankでディスプレイがフリップすると、ドライバは **`drm_crtc_send_vblank_event(struct drm_crtc *crtc, struct drm_pending_vblank_event *e)`**（`drivers/gpu/drm/drm_vblank.c`）を呼ぶ。これはイベントに現在のvblankシーケンス番号とタイムスタンプを刻み、配送のためにキューに入れる。ユーザー空間はそれをDRMファイルディスクリプタから `DRM_EVENT_FLIP_COMPLETE` として読み戻す。`struct drm_crtc_commit`（進行中のコミットごと、CRTCごとに1つあり、`drm_crtc_state.commit` から参照される）は、これをドライバやヘルパーが待機できる3つの `completion` 段階として公開する。`flip_done`（ハードウェアがフリップした。イベントが発火するのと同じ瞬間）、`hw_done`（コミットのためのレジスタ書き込みがすべて出された。*無効化*されるCRTCの場合は `flip_done` より遅くなることがある）、`cleanup_done`（古いバッファが解放された）である。これにより、`DRM_MODE_ATOMIC_NONBLOCK` のコミットが競合することなく、正しく互いの後ろに並ぶことができる。
 
-## Worked example: hotplug, then an overlay video commit {#worked-example-hotplug-then-an-overlay-video-commit}
+## 実例: ホットプラグ、続いてoverlayでの動画コミット {#worked-example-hotplug-then-an-overlay-video-commit}
 
-**1. A display appears.** The driver's hotplug interrupt handler calls `drm_kms_helper_hotplug_event()`; the compositor gets a uevent, re-reads connectors via `DRM_IOCTL_MODE_GETCONNECTOR`, and sees a new connector with `status == connector_status_connected` and a freshly populated mode list. To light it up, it builds one `DRM_IOCTL_MODE_ATOMIC` request: object IDs for the connector, its CRTC, and the CRTC's primary plane; properties `CRTC_ID` on the connector, `MODE_ID` (a blob property referencing the chosen `drm_display_mode`) and `ACTIVE=1` on the CRTC, and `CRTC_ID`/`FB_ID`/`CRTC_X`/`CRTC_Y`/`CRTC_W`/`CRTC_H`/`SRC_*` on the primary plane. It sets `DRM_MODE_ATOMIC_ALLOW_MODESET` (this is a real mode change) and, for a first dry run, `DRM_MODE_ATOMIC_TEST_ONLY`.
+**1. ディスプレイが現れる。** ドライバのホットプラグ割り込みハンドラが `drm_kms_helper_hotplug_event()` を呼ぶ。コンポジタはueventを受け取り、`DRM_IOCTL_MODE_GETCONNECTOR` でconnectorを読み直し、`status == connector_status_connected` で新たにモードリストが埋められた新しいconnectorを見つける。それを点灯させるため、コンポジタは1つの `DRM_IOCTL_MODE_ATOMIC` リクエストを組み立てる。オブジェクトIDはconnector、そのCRTC、CRTCのprimary planeのもの。プロパティは、connectorには `CRTC_ID`、CRTCには `MODE_ID`（選択した `drm_display_mode` を参照するblobプロパティ）と `ACTIVE=1`、primary planeには `CRTC_ID`/`FB_ID`/`CRTC_X`/`CRTC_Y`/`CRTC_W`/`CRTC_H`/`SRC_*` である。`DRM_MODE_ATOMIC_ALLOW_MODESET`（これは本物のモード変更である）を設定し、最初のドライランとして `DRM_MODE_ATOMIC_TEST_ONLY` も設定する。
 
-Kernel-side, `drm_mode_atomic_ioctl()` (`drivers/gpu/drm/drm_atomic_uapi.c`) walks `objs_ptr`/`props_ptr`/`prop_values_ptr`, resolving each object with `drm_mode_object_find()` and routing each property through `drm_atomic_set_property()`, which pulls the relevant object into the commit (`drm_atomic_get_crtc_state()` etc.) and mutates its proposed `drm_crtc_state`/`drm_plane_state`/`drm_connector_state`. Because `TEST_ONLY` is set, it calls only `drm_atomic_check_only()` — which runs the driver's `atomic_check` (typically starting with `drm_atomic_helper_check()`), skips the modeset rejection (`drm_atomic_crtc_needs_modeset()` is true here, but `allow_modeset` was set), and returns 0 or an error without a single register write happening. The compositor repeats the same request without `TEST_ONLY` (optionally adding `DRM_MODE_PAGE_FLIP_EVENT`) to actually apply it; this time `drm_atomic_commit()` runs, hardware is reprogrammed, and — once the new mode is actually scanning out — `drm_crtc_send_vblank_event()` signals completion.
+カーネル側では、`drm_mode_atomic_ioctl()`（`drivers/gpu/drm/drm_atomic_uapi.c`）が `objs_ptr`/`props_ptr`/`prop_values_ptr` を走査し、各オブジェクトを `drm_mode_object_find()` で解決し、各プロパティを `drm_atomic_set_property()` に通す。これが該当するオブジェクトをコミットに取り込み（`drm_atomic_get_crtc_state()` など）、提案された `drm_crtc_state`/`drm_plane_state`/`drm_connector_state` を変更する。`TEST_ONLY` が設定されているので、`drm_atomic_check_only()` だけを呼ぶ。これはドライバの `atomic_check`（通常は `drm_atomic_helper_check()` から始まる）を実行し、モード設定による拒否はスキップし（ここでは `drm_atomic_crtc_needs_modeset()` はtrueだが、`allow_modeset` が設定されていた）、レジスタ書き込みを1つも行わずに0またはエラーを返す。コンポジタは同じリクエストを `TEST_ONLY` なしで（必要に応じて `DRM_MODE_PAGE_FLIP_EVENT` を追加して）繰り返し、実際に適用する。今度は `drm_atomic_commit()` が実行され、ハードウェアが再プログラムされ、新しいモードで実際にスキャンアウトが始まると `drm_crtc_send_vblank_event()` が完了を通知する。
 
-**2. A video app requests direct-scanout overlay.** A fullscreen video player wants its decoded frames to bypass GPU composition entirely. It finds a plane of type `DRM_PLANE_TYPE_OVERLAY` usable on the same CRTC as the desktop (enumerated via `DRM_IOCTL_MODE_GETPLANERESOURCES` / `GETPLANE`, filtering `possible_crtcs`), and issues an atomic commit touching only that plane: `CRTC_ID` binding it to the desktop's CRTC, `FB_ID` pointing at its latest decoded buffer, `CRTC_X`/`CRTC_Y`/`CRTC_W`/`CRTC_H` for where the video window sits, `SRC_X`/`SRC_Y`/`SRC_W`/`SRC_H` (16.16 fixed point) for the source crop, and `zpos` above the desktop's primary plane but below any cursor. No `ALLOW_MODESET` — nothing here should require a modeset, so the commit goes through without it; if a bug did make the CRTC need one, the kernel would reject the commit rather than flash the screen, which is exactly the safety property compositors want for a per-frame update. `DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT` lets the player queue the next frame's commit without blocking, throttled by waiting for the previous frame's flip-complete event before submitting the next — the same rhythm a page-flip loop always had, just now expressed as one atomic commit per frame instead of a plane-specific ioctl.
+**2. 動画アプリがダイレクトスキャンアウトのoverlayを要求する。** フルスクリーンの動画プレーヤーは、デコードしたフレームにGPU合成を完全にバイパスさせたい。デスクトップと同じCRTCで使える `DRM_PLANE_TYPE_OVERLAY` 型のplaneを見つけ（`DRM_IOCTL_MODE_GETPLANERESOURCES` / `GETPLANE` で列挙し、`possible_crtcs` でフィルタする）、そのplaneだけに触れるアトミックコミットを発行する。デスクトップのCRTCにバインドする `CRTC_ID`、最新のデコード済みバッファを指す `FB_ID`、動画ウィンドウの位置を示す `CRTC_X`/`CRTC_Y`/`CRTC_W`/`CRTC_H`、ソースのクロップを示す `SRC_X`/`SRC_Y`/`SRC_W`/`SRC_H`（16.16固定小数点）、そしてデスクトップのprimary planeより上で、どのカーソルよりも下の `zpos` である。`ALLOW_MODESET` はない。ここにはモード設定を必要とするものは何もないはずなので、コミットはそれなしで通る。仮にバグによってCRTCがモード設定を必要とするようになったとしても、カーネルは画面を点滅させるのではなくコミットを拒否する。これはまさに、コンポジタがフレームごとの更新に求める安全性である。`DRM_MODE_ATOMIC_NONBLOCK | DRM_MODE_PAGE_FLIP_EVENT` により、プレーヤーは次のフレームのコミットをブロックせずにキューに入れられ、前のフレームのフリップ完了イベントを待ってから次を投入することでペースが調整される。ページフリップのループがずっと持っていたのと同じリズムであり、それが今ではplane固有のioctlではなく、フレームごとに1つのアトミックコミットとして表現されているだけである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: kernel mode setting (KMS)](https://docs.kernel.org/gpu/drm-kms.html) — the authoritative object-model and atomic-design reference, kept in sync with `Documentation/gpu/drm-kms.rst`
-- [`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef) — "DRM: add mode setting support," the original December 2008 KMS merge
-- [`cc4ceb484b37`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cc4ceb484b37b9369e0d4e8682b7ae1849ae4579) — "drm: Global atomic state handling," Daniel Vetter, July 2014: the core atomic state object
-- [lore.kernel.org: atomic, remixed](https://lore.kernel.org/dri-devel/1406497308-30733-1-git-send-email-daniel.vetter@ffwll.ch/) — the July 2014 design thread, including Rob Clark's defense of his own competing approach
-- [`d34f20d6e2f2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d34f20d6e2f21bd3531b969dc40913181a8ae31a) — "drm: Atomic modeset ioctl," Rob Clark, December 2014: the `DRM_IOCTL_MODE_ATOMIC` entry point
-- [lore.kernel.org: Atomic Properties (RFC: drm: Atomic modeset ioctl)](https://lore.kernel.org/dri-devel/1418771141-16954-1-git-send-email-robdclark@gmail.com/) — the uAPI debate, including the rejected timestamp-based scheduling proposal
-- [`5164f7e7ff8e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5164f7e7ff8ec7d41065d3862630c2ba09854328) — "drm: Rename struct drm_atomic_state to drm_atomic_commit," Maxime Ripard, April 2026
-- [LWN: "prepare for atomic/nuclear modeset/pageflip"](https://lwn.net/Articles/600369/) — Rob Clark's May 2014 infrastructure series that started the transition
-- [LWN: Atomic mode setting design overview, part 1](https://lwn.net/Articles/653071/) — Daniel Vetter, August 2015, on the legacy interface's history and limits
-- [LWN: Atomic mode setting design overview, part 2](https://lwn.net/Articles/653466/) — Daniel Vetter, August 2015, on the check/commit split and locking
-- `drivers/gpu/drm/drm_atomic.c`, `drivers/gpu/drm/drm_atomic_uapi.c`, `drivers/gpu/drm/drm_atomic_helper.c` in the kernel tree — the current implementation
-- [DRM: the Direct Rendering Manager](README.md) — the object model's place in the wider GPU stack
+- [カーネルドキュメント: kernel mode setting (KMS)](https://docs.kernel.org/gpu/drm-kms.html) — オブジェクトモデルとアトミック設計に関する正式なリファレンス。`Documentation/gpu/drm-kms.rst` と同期が保たれている
+- [`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef) — "DRM: add mode setting support"。2008年12月の最初のKMSマージ
+- [`cc4ceb484b37`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cc4ceb484b37b9369e0d4e8682b7ae1849ae4579) — "drm: Global atomic state handling"、Daniel Vetter、2014年7月。コアのアトミック状態オブジェクト
+- [lore.kernel.org: atomic, remixed](https://lore.kernel.org/dri-devel/1406497308-30733-1-git-send-email-daniel.vetter@ffwll.ch/) — 2014年7月の設計スレッド。Rob Clarkによる自身の競合アプローチの擁護を含む
+- [`d34f20d6e2f2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d34f20d6e2f21bd3531b969dc40913181a8ae31a) — "drm: Atomic modeset ioctl"、Rob Clark、2014年12月。`DRM_IOCTL_MODE_ATOMIC` のエントリポイント
+- [lore.kernel.org: Atomic Properties (RFC: drm: Atomic modeset ioctl)](https://lore.kernel.org/dri-devel/1418771141-16954-1-git-send-email-robdclark@gmail.com/) — uAPIの議論。却下されたタイムスタンプベースのスケジューリング案を含む
+- [`5164f7e7ff8e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5164f7e7ff8ec7d41065d3862630c2ba09854328) — "drm: Rename struct drm_atomic_state to drm_atomic_commit"、Maxime Ripard、2026年4月
+- [LWN: "prepare for atomic/nuclear modeset/pageflip"](https://lwn.net/Articles/600369/) — 移行の始まりとなった、Rob Clarkによる2014年5月のインフラシリーズ
+- [LWN: Atomic mode setting design overview, part 1](https://lwn.net/Articles/653071/) — Daniel Vetter、2015年8月。レガシーインターフェースの歴史と限界について
+- [LWN: Atomic mode setting design overview, part 2](https://lwn.net/Articles/653466/) — Daniel Vetter、2015年8月。チェック／コミットの分離とロックについて
+- カーネルツリー内の `drivers/gpu/drm/drm_atomic.c`、`drivers/gpu/drm/drm_atomic_uapi.c`、`drivers/gpu/drm/drm_atomic_helper.c` — 現在の実装
+- [DRM: Direct Rendering Manager](README.md) — より広いGPUスタックの中でのオブジェクトモデルの位置付け

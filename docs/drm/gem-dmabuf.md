@@ -1,68 +1,68 @@
-# GEM Buffer Objects and dma-buf: Allocating and Sharing GPU Memory {#gem-buffer-objects-and-dma-buf-allocating-and-sharing-gpu-memory}
+# GEMバッファオブジェクトとdma-buf: GPUメモリの割り当てと共有 {#gem-buffer-objects-and-dma-buf-allocating-and-sharing-gpu-memory}
 
-> One base object every driver's buffer type embeds for refcounted GPU memory, and one framework — dma-buf — for handing that memory to a completely different device without copying it
+> 参照カウント付きGPUメモリのために全ドライバのバッファ型が埋め込む1つの基底オブジェクトと、そのメモリをコピーせずにまったく別のデバイスへ渡すための1つのフレームワーク — dma-buf
 
-## The problem: GPU memory needs a lifecycle, and it needs to leave the GPU {#the-problem-gpu-memory-needs-a-lifecycle-and-it-needs-to-leave-the-gpu}
+## 問題: GPUメモリにはライフサイクルが必要であり、GPUの外に出ていく必要もある {#the-problem-gpu-memory-needs-a-lifecycle-and-it-needs-to-leave-the-gpu}
 
-A frame a GPU renders doesn't stay on the GPU. It gets scanned out by a display controller that might be a second, entirely separate driver on a hybrid-graphics laptop. A frame a camera captures doesn't stay in the camera driver either — a compositor wants to hand it straight to the GPU for scaling and color conversion, with no CPU copy in between. Both cases need the same two things: a kernel-tracked, refcounted object to represent a chunk of GPU-visible memory, and a way to pass a *reference* to that memory across a driver boundary the exporting driver knows nothing about, safely and without copying.
+GPUが描画したフレームはGPUにとどまらない。ディスプレイコントローラによってスキャンアウトされるが、ハイブリッドグラフィックスのノートPCでは、それは2つ目のまったく別のドライバかもしれない。カメラがキャプチャしたフレームもカメラドライバにとどまらない。コンポジタはそれを、間にCPUコピーを挟まずに、拡大縮小や色変換のためにGPUへ直接渡したい。どちらのケースも同じ2つのものを必要とする。GPUから見えるメモリの塊を表す、カーネルが追跡する参照カウント付きのオブジェクトと、エクスポートする側のドライバが何も知らないドライバ境界を越えて、そのメモリへの*参照*を安全かつコピーなしに渡す方法である。
 
-**GEM (Graphics Execution Manager)** is the first piece: the base buffer-object type every DRM driver's memory allocator builds on, and the per-process/per-device handle system userspace uses to refer to it. **dma-buf** is the second: a cross-subsystem framework, not DRM-specific, for exporting any kernel buffer as a file descriptor another driver can attach to, map for its own DMA, and synchronize against — whether that other driver is a second GPU, a display controller, or a V4L2 video capture device. DRM's own binding to it is called **PRIME**.
+**GEM（Graphics Execution Manager）** は1つ目の部品である。すべてのDRMドライバのメモリアロケータが土台とする基底バッファオブジェクト型であり、ユーザー空間がそれを参照するために使うプロセスごと／デバイスごとのハンドルの仕組みである。**dma-buf** は2つ目である。DRM固有ではないサブシステム横断のフレームワークで、任意のカーネルバッファをファイルディスクリプタとしてエクスポートし、別のドライバがそれにアタッチし、自身のDMAのためにマップし、同期をとれるようにする。その別のドライバが2つ目のGPUであっても、ディスプレイコントローラであっても、V4L2の動画キャプチャデバイスであってもよい。DRM自身のdma-bufへのバインディングは **PRIME** と呼ばれる。
 
-## GEM: the base buffer object {#gem-the-base-buffer-object}
+## GEM: 基底バッファオブジェクト {#gem-the-base-buffer-object}
 
-`struct drm_gem_object` (`include/drm/drm_gem.h`) is the generic part every driver-specific buffer type embeds as its first member. It doesn't know anything about pixel formats or hardware placement — that's left to the driver or to helper layers built on top — it just handles refcounting, mmap bookkeeping, and the plumbing that makes a GEM object exportable:
+`struct drm_gem_object`（`include/drm/drm_gem.h`）は、ドライバ固有のすべてのバッファ型が最初のメンバとして埋め込む汎用部分である。ピクセルフォーマットやハードウェア上の配置については何も知らない — それはドライバや、その上に構築されたヘルパー層に任される。扱うのは参照カウント、mmapの管理情報、そしてGEMオブジェクトをエクスポート可能にする配管だけである。
 
 ```c
 // include/drm/drm_gem.h
 struct drm_gem_object {
-	struct kref refcount;              // reference count; drm_gem_object_get()/_put()
-	unsigned handle_count;              // number of open per-process handles
+	struct kref refcount;              // 参照カウント。drm_gem_object_get()/_put()
+	unsigned handle_count;              // 開かれているプロセスごとのハンドルの数
 
-	struct drm_device *dev;             // owning DRM device
+	struct drm_device *dev;             // 所有するDRMデバイス
 
-	struct file *filp;                  // shmem backing file, or NULL for driver-private storage
+	struct file *filp;                  // shmemのバッキングファイル。ドライバ独自のストレージならNULL
 
-	struct drm_vma_offset_node vma_node; // mmap offset bookkeeping
+	struct drm_vma_offset_node vma_node; // mmapオフセットの管理情報
 
-	size_t size;                        // immutable over the object's lifetime
+	size_t size;                        // オブジェクトの生存期間中は不変
 
-	int name;                           // GEM_FLINK/GEM_OPEN global name; 0 = unnamed
+	int name;                           // GEM_FLINK/GEM_OPEN のグローバル名。0 = 名前なし
 
-	struct dma_buf *dma_buf;            // dma-buf this object is exported/imported through
-	struct dma_buf_attachment *import_attach; // set only for objects imported from elsewhere
+	struct dma_buf *dma_buf;            // このオブジェクトのエクスポート／インポートに使われるdma-buf
+	struct dma_buf_attachment *import_attach; // 他所からインポートされたオブジェクトでのみ設定される
 
-	struct dma_resv *resv;              // reservation object: normally == &_resv
-	struct dma_resv _resv;              // the reservation object itself, for non-imported objects
+	struct dma_resv *resv;              // 予約オブジェクト。通常は == &_resv
+	struct dma_resv _resv;              // インポートされていないオブジェクト用の予約オブジェクト本体
 
 	const struct drm_gem_object_funcs *funcs; // free/open/close/export/pin/vmap/mmap/evict/...
 	...
 };
 ```
 
-A few things worth noting directly from that layout:
+このレイアウトから直接読み取れる、注目すべき点がいくつかある。
 
-- **Refcounting is a plain `struct kref`.** `drm_gem_object_get()` calls `kref_get()`; `drm_gem_object_put()` calls `kref_put()` against `drm_gem_object_free()`, which dispatches to the driver's `funcs->free`.
-- **`resv` and `_resv` are separate fields on purpose.** For a normal, locally allocated object `resv` just points back at its own embedded `_resv`. For an object imported from another device's dma-buf, `resv` instead points at the *exporter's* reservation object — so fence tracking follows the underlying buffer, not whichever driver most recently imported it, which is exactly what lets two different GPU drivers agree on who's still using a shared buffer (see [Fences and `dma_resv`](#fences-and-dma_resv), below).
-- **`dma_buf` and `import_attach` are the two dma-buf linkage points.** `dma_buf` is set for a GEM object either way — exported or imported (`drm_gem.h` documents it as associated with the object "either through importing or exporting"). `import_attach` is what's specific to the import direction (pointing at this device's attachment to someone else's dma-buf), which is exactly why `drm_gem_is_imported()` tests `!!obj->import_attach` rather than checking `dma_buf`, which wouldn't distinguish the two cases.
-- **`name` is the deprecated global name** — more on why below.
+- **参照カウントは素の `struct kref` である。** `drm_gem_object_get()` は `kref_get()` を呼び、`drm_gem_object_put()` は `drm_gem_object_free()` を解放関数として `kref_put()` を呼ぶ。`drm_gem_object_free()` はドライバの `funcs->free` にディスパッチする。
+- **`resv` と `_resv` は意図的に別のフィールドになっている。** 通常のローカルに割り当てられたオブジェクトでは、`resv` は自身に埋め込まれた `_resv` を指すだけである。別のデバイスのdma-bufからインポートされたオブジェクトでは、`resv` は代わりに*エクスポータ*の予約オブジェクトを指す。こうしてfenceの追跡は、直近にインポートしたドライバではなく、基盤となるバッファに従う。これこそが、2つの異なるGPUドライバが共有バッファを誰がまだ使っているかについて合意できる理由である（後述の[fenceと `dma_resv`](#fences-and-dma_resv)を参照）。
+- **`dma_buf` と `import_attach` は、dma-bufとの2つの結合点である。** `dma_buf` は、GEMオブジェクトがエクスポートされた場合でもインポートされた場合でも設定される（`drm_gem.h` は、これを "either through importing or exporting"、つまりインポートかエクスポートのいずれかを通じてオブジェクトに関連付けられたものと説明している）。インポート方向に固有なのは `import_attach`（他者のdma-bufへのこのデバイスのアタッチメントを指す）であり、まさにそれゆえに `drm_gem_is_imported()` は、2つのケースを区別できない `dma_buf` ではなく `!!obj->import_attach` を調べている。
+- **`name` は非推奨のグローバル名である** — その理由は後述する。
 
-### Three ways to reference a GEM object, and why two of them are obsolete {#three-ways-to-reference-a-gem-object-and-why-two-of-them-are-obsolete}
+### GEMオブジェクトを参照する3つの方法と、そのうち2つが廃れた理由 {#three-ways-to-reference-a-gem-object-and-why-two-of-them-are-obsolete}
 
-A GEM object needs some integer userspace can pass through an ioctl — you can't hand a raw kernel pointer across the syscall boundary. DRM has had three answers to "which integer," introduced in roughly this order, each fixing a limitation or security problem in the last:
+GEMオブジェクトには、ユーザー空間がioctlで受け渡しできる何らかの整数が必要である。生のカーネルポインタをシステムコールの境界越しに渡すことはできない。「どの整数か」に対して、DRMにはおおむねこの順で導入された3つの答えがあり、それぞれが前のものの制限やセキュリティ問題を修正している。
 
-**1. The handle** — a `u32` returned by whatever ioctl created or imported the object (a driver's dumb-buffer or GEM-create ioctl, or `DRM_IOCTL_PRIME_FD_TO_HANDLE`), scoped to a single `struct drm_file` — i.e., to one open file description on `/dev/dri/card0` or `/dev/dri/renderD128`. It lives in that file's `object_idr` (`include/drm/drm_file.h`: "Mapping of mm object handles to object pointers. Used by the GEM subsystem."). A handle from one process's fd means nothing to another process; there's no cross-process sharing story here at all. It's released with `DRM_IOCTL_GEM_CLOSE`.
+**1. ハンドル** — オブジェクトを作成またはインポートしたioctl（ドライバのdumb bufferやGEM作成のioctl、あるいは `DRM_IOCTL_PRIME_FD_TO_HANDLE`）が返す `u32` であり、1つの `struct drm_file`、つまり `/dev/dri/card0` や `/dev/dri/renderD128` 上の1つのオープンファイル記述にスコープされる。そのファイルの `object_idr` に格納される（`include/drm/drm_file.h`: "Mapping of mm object handles to object pointers. Used by the GEM subsystem."、訳: mmオブジェクトのハンドルからオブジェクトポインタへの対応表。GEMサブシステムが使用する）。あるプロセスのfdから得たハンドルは別のプロセスにとっては何の意味も持たず、ここにはプロセス間共有の仕組みは一切ない。`DRM_IOCTL_GEM_CLOSE` で解放される。
 
-**2. The global name (`GEM_FLINK`/`GEM_OPEN`) — deprecated.** `DRM_IOCTL_GEM_FLINK` turns a handle into a small global integer (`struct drm_gem_object.name`) visible to *any* process that can open the DRM node; `DRM_IOCTL_GEM_OPEN` turns that integer back into a handle in the caller's own namespace. The problem is exactly what it sounds like: a flink name is a small, sequentially-ish allocated integer with **no access control** — nothing stops a second, unrelated process on the same system from calling `GEM_OPEN` with a guessed or brute-forced name and getting a handle to a buffer it was never given. `docs.kernel.org`'s DRM uAPI documentation is blunt about the consequence: render nodes, introduced to let unprivileged clients submit rendering work, are explicitly designed to avoid "the buffer-leaks, which occur if clients guess the flink names," and state outright that **"New clients must not use the insecure FLINK interface."**
+**2. グローバル名（`GEM_FLINK`/`GEM_OPEN`）— 非推奨。** `DRM_IOCTL_GEM_FLINK` はハンドルを、DRMノードを開ける*任意の*プロセスから見える小さなグローバル整数（`struct drm_gem_object.name`）に変換する。`DRM_IOCTL_GEM_OPEN` はその整数を呼び出し側自身の名前空間のハンドルに戻す。問題はその名のとおりである。flink名は小さく、ほぼ連番で割り当てられる整数であり、**アクセス制御がない**。同じシステム上の無関係な2つ目のプロセスが、推測や総当たりで得た名前で `GEM_OPEN` を呼び、渡されたこともないバッファのハンドルを得ることを止めるものは何もない。`docs.kernel.org` のDRM uAPIドキュメントは、その帰結について率直である。特権を持たないクライアントがレンダリング処理を投入できるように導入されたレンダーノードは、"the buffer-leaks, which occur if clients guess the flink names"（訳: クライアントがflink名を推測した場合に起こるバッファの漏洩）を避けるよう明示的に設計されており、**"New clients must not use the insecure FLINK interface."**（訳: 新しいクライアントは安全でないFLINKインターフェースを使ってはならない）と断言している。
 
-**3. The dma-buf file descriptor (via DRM PRIME) — the modern mechanism.** `DRM_IOCTL_PRIME_HANDLE_TO_FD` exports a handle as an fd backed by a `struct dma_buf`. An fd carries ordinary Unix file-descriptor security semantics: it isn't guessable, and the only ways to get one are being handed it explicitly — passed over a `SCM_RIGHTS` control message on a Unix domain socket, or inherited across `fork()` — both of which require the sender to have chosen to share it. DRM's own kerneldoc in `drivers/gpu/drm/drm_prime.c` states the comparison directly: PRIME fds "offer additional security: as file descriptors must be explicitly sent over UNIX domain sockets to be shared between applications, they can't be guessed like the globally unique GEM names." This is also the *only* one of the three that works across devices — a name or a handle only ever means something to one specific DRM driver's own object namespace; a dma-buf fd can be handed to a totally different driver (see [DRM PRIME](#drm-prime-drms-dma-buf-binding), below).
+**3. dma-bufファイルディスクリプタ（DRM PRIME経由）— 現代的な仕組み。** `DRM_IOCTL_PRIME_HANDLE_TO_FD` は、ハンドルを `struct dma_buf` を裏付けとするfdとしてエクスポートする。fdは通常のUnixファイルディスクリプタのセキュリティセマンティクスを持つ。推測できず、手に入れる方法は明示的に渡されることだけである — Unixドメインソケット上の `SCM_RIGHTS` 制御メッセージで渡されるか、`fork()` をまたいで継承されるかで、どちらも送り手が共有を選択している必要がある。`drivers/gpu/drm/drm_prime.c` にあるDRM自身のkerneldocは、この比較を直接述べている。PRIMEのfdは "offer additional security: as file descriptors must be explicitly sent over UNIX domain sockets to be shared between applications, they can't be guessed like the globally unique GEM names."（訳: 追加のセキュリティを提供する。ファイルディスクリプタはアプリケーション間で共有するためにUNIXドメインソケットで明示的に送られなければならないので、グローバルに一意なGEM名のように推測されることはない）。また、これは3つのうちデバイスをまたいで機能する*唯一*の方法でもある。名前やハンドルは、特定の1つのDRMドライバ自身のオブジェクト名前空間でしか意味を持たないが、dma-bufのfdはまったく別のドライバに渡すことができる（後述の[DRM PRIME](#drm-prime-drms-dma-buf-binding)を参照）。
 
-### Backing memory: shmem helpers vs. TTM {#backing-memory-shmem-helpers-vs-ttm}
+### バッキングメモリ: shmemヘルパーとTTM {#backing-memory-shmem-helpers-vs-ttm}
 
-`drm_gem_object` itself says nothing about *where* the bytes live — that's the job of a backing-memory helper layered on top, and which one a driver uses tracks directly to whether its GPU has its own dedicated video memory.
+`drm_gem_object` 自体は、バイトが*どこに*あるかについて何も言わない。それはその上に重ねられたバッキングメモリのヘルパーの仕事であり、ドライバがどちらを使うかは、そのGPUが専用のビデオメモリを持つかどうかに直接対応している。
 
-**`struct drm_gem_shmem_object`** (`include/drm/drm_gem_shmem_helper.h`) is the simple, common case: `struct drm_gem_shmem_object { struct drm_gem_object base; struct page **pages; ... struct sg_table *sgt; void *vaddr; ... }`. Backing storage is an ordinary shmem file (`drm_gem_object.filp`) — swappable system RAM, the same pool any other process memory comes from. This is what integrated GPUs and simpler SoC display/render drivers use, because there's no second memory pool to manage: system RAM is the only memory the GPU can address.
+**`struct drm_gem_shmem_object`**（`include/drm/drm_gem_shmem_helper.h`）は、単純でよくあるケースである: `struct drm_gem_shmem_object { struct drm_gem_object base; struct page **pages; ... struct sg_table *sgt; void *vaddr; ... }`。バッキングストレージは通常のshmemファイル（`drm_gem_object.filp`）、つまりスワップ可能なシステムRAMであり、他のプロセスメモリと同じプールから来る。統合GPUや単純なSoCのディスプレイ／レンダードライバはこれを使う。管理すべき2つ目のメモリプールがなく、システムRAMがGPUがアドレス指定できる唯一のメモリだからである。
 
-Discrete GPUs don't have that luxury — they have their own on-board VRAM, which is faster than going over PCIe to system memory but far more limited in size, so the kernel has to decide what lives where and migrate buffers between the two as pressure demands. That's **TTM (Translation Table Manager)**, DRM's original, older memory manager, predating GEM. There's no separate `drm_gem_ttm_object` type — instead `struct ttm_buffer_object` (`include/drm/ttm/ttm_bo.h`) embeds a `struct drm_gem_object base` directly, the same pattern the shmem helper uses:
+ディスクリートGPUにはその余裕がない。オンボードのVRAMを持っており、それはPCIe越しにシステムメモリへアクセスするより高速だが、サイズははるかに限られている。そのためカーネルは何をどこに置くかを決め、メモリ圧迫に応じて両者の間でバッファを移動しなければならない。それが **TTM（Translation Table Manager）** であり、GEMより前から存在する、DRM本来の古いメモリマネージャである。別個の `drm_gem_ttm_object` 型はない。代わりに `struct ttm_buffer_object`（`include/drm/ttm/ttm_bo.h`）が `struct drm_gem_object base` を直接埋め込んでおり、shmemヘルパーと同じパターンである。
 
 ```c
 // include/drm/ttm/ttm_bo.h
@@ -71,143 +71,143 @@ struct ttm_buffer_object {
 	struct ttm_device *bdev;
 	enum ttm_bo_type type;
 	...
-	struct ttm_resource *resource;   // current placement: VRAM range, or system memory
-	struct ttm_tt *ttm;              // page array for the "TT" (system-memory) case
+	struct ttm_resource *resource;   // 現在の配置: VRAMの範囲、またはシステムメモリ
+	struct ttm_tt *ttm;              // "TT"（システムメモリ）の場合のページ配列
 	...
 };
 ```
 
-`drm_gem_ttm_helper.h` supplies the glue (`drm_gem_ttm_vmap()`, `drm_gem_ttm_mmap()`, a `drm_gem_ttm_of_gem()` `container_of` macro) that lets a TTM-backed object still present a normal `drm_gem_object_funcs` vtable to the rest of DRM. The kernel's own memory-management documentation frames the split this way: TTM "tri[es] to be a one-size-fits-them all solution" for VRAM-plus-system-memory placement and eviction, while GEM "identified common code between drivers and created a support library to share it" for the simpler UMA case — which is why amdgpu and nouveau sit on TTM and most integrated/SoC drivers sit on the shmem helper. TTM's internal eviction and placement machinery is its own large subsystem and out of scope here; what matters for this page is just that both backing types are `drm_gem_object` underneath, so everything above — handles, names, dma-buf export, `resv` — works identically regardless of which one a driver picked.
+`drm_gem_ttm_helper.h` は、TTMを裏付けとするオブジェクトがDRMの他の部分に対して通常の `drm_gem_object_funcs` vtableを提示できるようにする糊（`drm_gem_ttm_vmap()`、`drm_gem_ttm_mmap()`、`container_of` マクロ `drm_gem_ttm_of_gem()`）を提供する。カーネル自身のメモリ管理ドキュメントは、この分担を次のように位置付けている。TTMはVRAMとシステムメモリにまたがる配置と追い出しについて "tri[es] to be a one-size-fits-them all solution"（訳: すべてに合う万能の解決策であろうとする）一方、GEMは単純なUMAのケースについて "identified common code between drivers and created a support library to share it"（訳: ドライバ間の共通コードを特定し、それを共有するためのサポートライブラリを作った）。amdgpuやnouveauがTTMの上にあり、統合GPUやSoCのドライバのほとんどがshmemヘルパーの上にあるのはこのためである。TTMの内部の追い出しと配置の仕組みはそれ自体が大きなサブシステムであり、ここでは扱わない。このページにとって重要なのは、どちらのバッキング型も下層は `drm_gem_object` であるため、上で述べたすべて — ハンドル、名前、dma-bufのエクスポート、`resv` — がドライバがどちらを選んだかに関係なく同じように動作するということだけである。
 
-## dma-buf: sharing a buffer across driver boundaries {#dma-buf-sharing-a-buffer-across-driver-boundaries}
+## dma-buf: ドライバ境界を越えたバッファの共有 {#dma-buf-sharing-a-buffer-across-driver-boundaries}
 
-### Why it exists {#why-it-exists}
+### なぜ存在するか {#why-it-exists}
 
-Before dma-buf, if a V4L2 capture driver had a frame and a separate DRM driver's GPU needed to touch it — scale it, color-convert it, composite it — the only options were a real memory copy, or a one-off hack coupling those two specific drivers together. Neither scales: a copy costs bandwidth and latency on every frame, and driver-pair-specific glue means every new combination of producer and consumer needs its own code.
+dma-buf以前は、V4L2のキャプチャドライバがフレームを持っていて、別のDRMドライバのGPUがそれに触れる必要がある場合 — 拡大縮小、色変換、合成 — 選択肢は実際のメモリコピーか、その特定の2つのドライバを結合する場当たり的なハックしかなかった。どちらもスケールしない。コピーは毎フレーム帯域とレイテンシを消費し、ドライバの組み合わせごとの糊コードでは、プロデューサとコンシューマの新しい組み合わせごとに専用のコードが必要になる。
 
-dma-buf was proposed at the 2011 Linaro/kernel mini-summits and landed as a generic, subsystem-agnostic framework rather than a GPU-specific one. The foundational commit, [`d15bd7ee445d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d15bd7ee445d0702ad801fdaece348fdb79e6581) ("dma-buf: Introduce dma buffer sharing mechanism," Sumit Semwal, authored 26 December 2011, committed by Dave Airlie 6 January 2012 for the Linux 3.3 merge window), is explicit that it's building on earlier work — "based on design suggestions from many people at the mini-summits... most notably from Arnd Bergmann, Rob Clark and Daniel Vetter" — and that the whole mechanism was demonstrated first between two V4L2 devices by Tomasz Stanislawski. That design took three public RFC rounds to settle: the [second of them](https://lore.kernel.org/dri-devel/1322816252-19955-1-git-send-email-sumit.semwal@ti.com/), posted 2 December 2011, is where most of the subsystem-agnostic shape got argued over, with Arnd Bergmann, Daniel Vetter, Rob Clark, Dave Airlie, Alan Cox, NVIDIA's Robert Morell, Inki Dae, and, from the media side, maintainer Mauro Carvalho Chehab plus V4L2 developers Hans Verkuil and Sakari Ailus all weighing in on the same thread. LWN's coverage at the time, [**"DMA buffer sharing in 3.3"**](https://lwn.net/Articles/474819/) (Jonathan Corbet, January 11, 2012), states the intended use case in almost exactly the terms this page opened with: *"The initial target use is sharing buffers between producers and consumers of video streams; a camera device, for example, could acquire a stream of frames into a series of buffers that are shared with the graphics adapter, enabling the capture and display of the data with no copying in the kernel."*
+dma-bufは2011年のLinaro／カーネルのミニサミットで提案され、GPU固有ではなく、サブシステムに依存しない汎用フレームワークとして取り込まれた。基礎となるコミット [`d15bd7ee445d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d15bd7ee445d0702ad801fdaece348fdb79e6581)（"dma-buf: Introduce dma buffer sharing mechanism"、Sumit Semwal、2011年12月26日作成、Linux 3.3のマージウィンドウ向けに2012年1月6日にDave Airlieがコミット）は、先行する成果の上に構築していることを明示している — "based on design suggestions from many people at the mini-summits... most notably from Arnd Bergmann, Rob Clark and Daniel Vetter"（訳: ミニサミットでの多くの人々からの設計上の提案、とりわけArnd Bergmann、Rob Clark、Daniel Vetterからの提案に基づく）— そして、この仕組み全体はまずTomasz Stanislawskiによって2つのV4L2デバイス間で実証されたことも明記している。その設計が固まるまでには3回の公開RFCを要した。2011年12月2日に投稿された[その2回目](https://lore.kernel.org/dri-devel/1322816252-19955-1-git-send-email-sumit.semwal@ti.com/)で、サブシステムに依存しない形の大部分が議論された。同じスレッドには、Arnd Bergmann、Daniel Vetter、Rob Clark、Dave Airlie、Alan Cox、NVIDIAのRobert Morell、Inki Dae、そしてメディア側からはメンテナのMauro Carvalho ChehabとV4L2開発者のHans Verkuil、Sakari Ailusが意見を寄せた。当時のLWNの記事 [**"DMA buffer sharing in 3.3"**](https://lwn.net/Articles/474819/)（Jonathan Corbet、2012年1月11日）は、意図された用途を、このページの冒頭とほぼ同じ言葉で述べている: *"The initial target use is sharing buffers between producers and consumers of video streams; a camera device, for example, could acquire a stream of frames into a series of buffers that are shared with the graphics adapter, enabling the capture and display of the data with no copying in the kernel."*（訳: 当初の対象用途は、動画ストリームのプロデューサとコンシューマの間でバッファを共有することである。たとえばカメラデバイスは、グラフィックスアダプタと共有される一連のバッファにフレームのストリームを取り込むことができ、カーネル内でのコピーなしにデータのキャプチャと表示が可能になる。）
 
-DRM's own binding on top, **PRIME**, followed not long after: [`3248877ea179`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3248877ea1796915419fba7c89315fdbf00cb56a) ("drm: base prime/dma-buf support (v5)," Dave Airlie, authored 25 November 2011, committed 30 March 2012 for the Linux 3.4 merge window) added the GEM-handle-to-dma-buf-fd translation layer, explicitly as an "agreed upon starting point" for driver support that followed in nouveau, i915, and others. The v5 posting collected `Reviewed-by` tags from Daniel Vetter, Rob Clark, Sumit Semwal, and Inki Dae, plus an [`Acked-by` from Ben Widawsky](https://lore.kernel.org/dri-devel/20120327183151.0523bf8d@bwidawsk.net/), all within about sixteen hours of Dave Airlie posting it on 27 March 2012; Airlie committed it three days later.
+その上に構築されたDRM自身のバインディングである **PRIME** は、それから間もなく続いた。[`3248877ea179`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3248877ea1796915419fba7c89315fdbf00cb56a)（"drm: base prime/dma-buf support (v5)"、Dave Airlie、2011年11月25日作成、Linux 3.4のマージウィンドウ向けに2012年3月30日コミット）は、GEMハンドルとdma-buf fdを相互変換する層を追加した。これは、その後nouveau、i915などで続いたドライバ対応のための "agreed upon starting point"（合意された出発点）であると明示されていた。v5の投稿は、2012年3月27日にDave Airlieが投稿してから約16時間以内に、Daniel Vetter、Rob Clark、Sumit Semwal、Inki Daeからの `Reviewed-by` タグと、[Ben Widawskyからの `Acked-by`](https://lore.kernel.org/dri-devel/20120327183151.0523bf8d@bwidawsk.net/)を集めた。Airlieはその3日後にコミットした。
 
 ### `struct dma_buf` {#struct-dma_buf}
 
-`include/linux/dma-buf.h` defines the exported object itself:
+`include/linux/dma-buf.h` は、エクスポートされるオブジェクトそのものを定義している。
 
 ```c
 // include/linux/dma-buf.h
 struct dma_buf {
-	size_t size;                       // invariant over the buffer's lifetime
-	struct file *file;                 // the fd userspace holds; also used for refcounting
-	struct list_head attachments;      // one entry per attached device, guarded by resv
-	const struct dma_buf_ops *ops;     // exporter's vtable
+	size_t size;                       // バッファの生存期間中は不変
+	struct file *file;                 // ユーザー空間が保持するfd。参照カウントにも使われる
+	struct list_head attachments;      // アタッチされたデバイスごとに1エントリ。resvで保護される
+	const struct dma_buf_ops *ops;     // エクスポータのvtable
 	...
-	const char *exp_name;              // exporting driver's name, for debugging
-	struct dma_resv *resv;             // reservation object: fences for this buffer
-	wait_queue_head_t poll;            // userspace poll() support
+	const char *exp_name;              // エクスポートしたドライバの名前。デバッグ用
+	struct dma_resv *resv;             // 予約オブジェクト: このバッファのfence
+	wait_queue_head_t poll;            // ユーザー空間のpoll()サポート
 	...
 };
 ```
 
-`ops` is a `struct dma_buf_ops` the exporting driver fills in — `attach`/`detach`, `map_dma_buf`/`unmap_dma_buf`, `pin`/`unpin`, `mmap`, `vmap`/`vunmap`, and `release` — the vtable every dma-buf importer interacts with indirectly through the generic `dma_buf_*()` API rather than ever calling an exporter's callback directly.
+`ops` はエクスポートするドライバが埋める `struct dma_buf_ops` であり — `attach`/`detach`、`map_dma_buf`/`unmap_dma_buf`、`pin`/`unpin`、`mmap`、`vmap`/`vunmap`、`release` — すべてのdma-bufインポータは、エクスポータのコールバックを直接呼ぶことは決してなく、汎用の `dma_buf_*()` APIを通じて間接的にこのvtableとやり取りする。
 
-### The attach/map dance {#the-attachmap-dance}
+### attachとmapの手順 {#the-attachmap-dance}
 
-Getting from "I have an fd" to "I can DMA into this buffer" is deliberately two steps, not one:
+「fdを持っている」状態から「このバッファにDMAできる」状態に至るまでは、意図的に1段階ではなく2段階になっている。
 
-1. **`dma_buf_attach(struct dma_buf *dmabuf, struct device *dev)`** — the importer declares *intent* to use the buffer from a specific device, and creates a `struct dma_buf_attachment`. This calls the exporter's optional `dma_buf_ops.attach` callback, which is the exporter's chance to say no: kerneldoc for that callback spells out exactly why — "exporters which support buffer objects in special locations like VRAM or device-specific carveout areas should check whether the buffer could be move [sic] to system memory (or directly accessed by the provided device), and otherwise need to fail the attach operation." A buffer sitting in one GPU's VRAM might be physically unreachable by a second GPU or by an unrelated capture device without first being migrated or bounced through system memory — `attach()` is where that gets negotiated, before anyone commits to a mapping.
-2. **`dma_buf_map_attachment(struct dma_buf_attachment *attach, enum dma_data_direction dir)`** — now actually get a `struct sg_table`, DMA-mapped for *this* attachment's device specifically. The kerneldoc for `map_dma_buf` notes this "may sleep, e.g. when the backing storage first needs to be allocated, or moved to a location suitable for all currently attached devices" — and that on the first call for a buffer, the exporter is free to look across *all* current attachments and choose backing storage that satisfies every one of them at once.
+1. **`dma_buf_attach(struct dma_buf *dmabuf, struct device *dev)`** — インポータは、特定のデバイスからバッファを使う*意図*を宣言し、`struct dma_buf_attachment` を作成する。これはエクスポータの任意の `dma_buf_ops.attach` コールバックを呼び、エクスポータにとっては拒否する機会となる。そのコールバックのkerneldocはまさにその理由を説明している — "exporters which support buffer objects in special locations like VRAM or device-specific carveout areas should check whether the buffer could be move [sic] to system memory (or directly accessed by the provided device), and otherwise need to fail the attach operation."（訳: VRAMやデバイス固有のカーブアウト領域のような特殊な場所にあるバッファオブジェクトをサポートするエクスポータは、バッファをシステムメモリに移動できるか（または提供されたデバイスから直接アクセスできるか）を確認し、そうでなければattach操作を失敗させる必要がある。）あるGPUのVRAMにあるバッファは、まず移行されるかシステムメモリ経由でバウンスされない限り、2つ目のGPUや無関係なキャプチャデバイスからは物理的に到達できないかもしれない。誰かがマッピングを確定する前に、それを交渉するのが `attach()` である。
+2. **`dma_buf_map_attachment(struct dma_buf_attachment *attach, enum dma_data_direction dir)`** — ここで実際に `struct sg_table` を得る。これは特に*この*アタッチメントのデバイス向けにDMAマップされたものである。`map_dma_buf` のkerneldocは、これが "may sleep, e.g. when the backing storage first needs to be allocated, or moved to a location suitable for all currently attached devices"（訳: スリープすることがある。たとえばバッキングストレージを最初に割り当てる必要がある場合や、現在アタッチされているすべてのデバイスに適した場所へ移動する必要がある場合）と記しており、さらにバッファに対する最初の呼び出しでは、エクスポータは現在の*すべての*アタッチメントを見渡し、それらすべてを同時に満たすバッキングストレージを自由に選べるとしている。
 
-The two-step split exists because a GPU and, say, a camera capture engine can have genuinely different DMA addressing constraints — different IOMMU domains, different reachable physical ranges, different alignment needs — and the exporter needs the chance to migrate or pin the buffer into a location that works for the new device *before* that device is allowed to touch it, rather than finding out mid-access that the placement was wrong.
+2段階に分かれているのは、GPUと、たとえばカメラのキャプチャエンジンとでは、DMAのアドレス指定の制約が本当に異なりうるからである — 異なるIOMMUドメイン、異なる到達可能な物理範囲、異なるアラインメント要件。エクスポータには、新しいデバイスがバッファに触れることを許される*前に*、そのデバイスで機能する場所へバッファを移行またはピン留めする機会が必要であり、アクセスの途中で配置が間違っていたと判明するのでは困るのである。
 
-### DRM PRIME: DRM's dma-buf binding {#drm-prime-drms-dma-buf-binding}
+### DRM PRIME: DRMのdma-bufバインディング {#drm-prime-drms-dma-buf-binding}
 
-PRIME is how a GEM handle in one driver's namespace becomes a GEM handle in a completely different driver's namespace, by round-tripping through a dma-buf fd. The two ioctls, and what actually happens underneath them (`drivers/gpu/drm/drm_prime.c`):
+PRIMEは、あるドライバの名前空間にあるGEMハンドルを、dma-bufのfdを往復させることで、まったく別のドライバの名前空間にあるGEMハンドルにする仕組みである。2つのioctlと、その下で実際に起こること（`drivers/gpu/drm/drm_prime.c`）は次のとおり。
 
-- **`DRM_IOCTL_PRIME_HANDLE_TO_FD`** — export. Handler `drm_prime_handle_to_fd_ioctl()` calls `drm_gem_prime_handle_to_fd()`, which calls `drm_gem_prime_handle_to_dmabuf()`: that looks up the GEM object for the handle and calls either the driver's own `drm_gem_object_funcs.export`, or the generic default, **`drm_gem_prime_export()`**. Either way the result is a `struct dma_buf`; `dma_buf_fd()`-equivalent plumbing (`fd_install()` on an already-reserved fd) hands userspace back an fd in `drm_prime_handle.fd`.
-- **`DRM_IOCTL_PRIME_FD_TO_HANDLE`** — import. Handler `drm_prime_fd_to_handle_ioctl()` calls `drm_gem_prime_fd_to_handle()`: it takes a reference on the dma-buf (`dma_buf_get()`), checks whether *this* driver has already imported this exact dma-buf before (a per-`drm_file` lookup cache, so re-importing the same buffer twice returns the same handle rather than creating a duplicate object), and otherwise calls the driver's `gem_prime_import` callback or the generic **`drm_gem_prime_import()`**, which creates a new GEM object with `import_attach` set and `resv` pointed at the exporter's reservation object. A fresh handle for that object is then created in the *importing* driver's own `object_idr` — same handle mechanism as any locally-allocated object, just wrapping memory this driver didn't allocate.
+- **`DRM_IOCTL_PRIME_HANDLE_TO_FD`** — エクスポート。ハンドラ `drm_prime_handle_to_fd_ioctl()` は `drm_gem_prime_handle_to_fd()` を呼び、それが `drm_gem_prime_handle_to_dmabuf()` を呼ぶ。これはハンドルに対応するGEMオブジェクトを探し、ドライバ独自の `drm_gem_object_funcs.export` か、汎用のデフォルトである **`drm_gem_prime_export()`** のどちらかを呼ぶ。いずれにせよ結果は `struct dma_buf` であり、`dma_buf_fd()` 相当の配管（予約済みのfdに対する `fd_install()`）が、`drm_prime_handle.fd` でユーザー空間にfdを返す。
+- **`DRM_IOCTL_PRIME_FD_TO_HANDLE`** — インポート。ハンドラ `drm_prime_fd_to_handle_ioctl()` は `drm_gem_prime_fd_to_handle()` を呼ぶ。これはdma-bufへの参照を取得し（`dma_buf_get()`）、*この*ドライバがまったく同じdma-bufを以前にインポートしたことがあるかを確認する（`drm_file` ごとのルックアップキャッシュであり、同じバッファを2回インポートしても重複したオブジェクトを作らずに同じハンドルが返る）。なければ、ドライバの `gem_prime_import` コールバックか汎用の **`drm_gem_prime_import()`** を呼ぶ。これは `import_attach` が設定され、`resv` がエクスポータの予約オブジェクトを指す新しいGEMオブジェクトを作成する。続いてそのオブジェクトの新しいハンドルが、*インポートする側*のドライバ自身の `object_idr` に作成される。ローカルに割り当てられたオブジェクトとまったく同じハンドルの仕組みであり、ただこのドライバが割り当てたのではないメモリを包んでいるだけである。
 
-This is the literal mechanism behind both scenarios this page opened with: a compositor exporting a rendered frame's GEM handle as a fd and handing that fd (over a Unix socket, e.g. the Wayland protocol) to a separate display-controller driver's `PRIME_FD_TO_HANDLE`; or a V4L2 driver exporting a captured frame the same way for a GPU driver to import and treat as an ordinary, zero-copy-populated GEM object.
+これが、このページの冒頭で挙げた2つのシナリオの背後にある仕組みそのものである。コンポジタが描画済みフレームのGEMハンドルをfdとしてエクスポートし、そのfdを（Unixソケット、たとえばWaylandプロトコル経由で）別のディスプレイコントローラのドライバの `PRIME_FD_TO_HANDLE` に渡すケース。あるいは、V4L2ドライバがキャプチャしたフレームを同じ方法でエクスポートし、GPUドライバがそれをインポートして、ゼロコピーで中身が入った通常のGEMオブジェクトとして扱うケースである。
 
-## Fences and `dma_resv` {#fences-and-dma_resv}
+## fenceと `dma_resv` {#fences-and-dma_resv}
 
-Two drivers sharing a buffer both need an answer to "is anyone still using this," without either one understanding anything about how the other's hardware works or what its command queues look like. dma-buf answers that with two cooperating pieces.
+バッファを共有する2つのドライバはどちらも、「まだ誰かがこれを使っているか」に対する答えを必要とする。しかも、どちらも相手のハードウェアがどう動くかや、そのコマンドキューがどうなっているかを一切理解せずにである。dma-bufは、協調する2つの部品でこれに答える。
 
-### `struct dma_fence`: a one-shot completion signal {#struct-dma_fence-a-one-shot-completion-signal}
+### `struct dma_fence`: 一度きりの完了シグナル {#struct-dma_fence-a-one-shot-completion-signal}
 
-`struct dma_fence` (`include/linux/dma-fence.h`) is the primitive:
+`struct dma_fence`（`include/linux/dma-fence.h`）がそのプリミティブである。
 
 ```c
 // include/linux/dma-fence.h
 struct dma_fence {
 	...
 	const struct dma_fence_ops __rcu *ops;
-	struct list_head cb_list;   // callbacks to run on signal (replaced by @timestamp once signaled)
-	u64 context;                // which timeline/engine this fence belongs to
-	u64 seqno;                  // ordering within that context
+	struct list_head cb_list;   // シグナル時に実行するコールバック（シグナル後は @timestamp に置き換わる）
+	u64 context;                // このfenceが属するタイムライン／エンジン
+	u64 seqno;                  // そのコンテキスト内での順序
 	unsigned long flags;
 	struct kref refcount;
-	int error;                  // set if the fence completed with an error, not just success
+	int error;                  // 単なる成功ではなく、エラーで完了した場合に設定される
 };
 ```
 
-A fence represents one specific piece of GPU work finishing — a command-buffer submission, a page-table update, a copy — and nothing more. It doesn't know or care what engine produced it. Other code can `dma_fence_wait()` on it (block until it signals) or `dma_fence_add_callback()` (get notified asynchronously, e.g. to unblock a later scheduled GPU job without the CPU ever having to block), and the `dma_fence_ops.enable_signaling` callback is where an implementation hooks up whatever interrupt or polling mechanism actually detects hardware completion. Every wait-for-completion in the GPU stack — a driver waiting to reuse a buffer, a display controller waiting before scanning one out, one GPU job waiting on a dependency from another — reduces to waiting on one or more `dma_fence` objects, regardless of which driver or which piece of silicon produced them.
+fenceは、GPUの特定の1つの処理 — コマンドバッファの投入、ページテーブルの更新、コピー — が完了することを表し、それ以上のものではない。どのエンジンがそれを生成したかは知らないし、気にもしない。他のコードは、それに対して `dma_fence_wait()`（シグナルされるまでブロックする）したり、`dma_fence_add_callback()`（非同期に通知を受ける。たとえばCPUが一度もブロックすることなく、後でスケジュールされたGPUジョブのブロックを解除するため）したりできる。`dma_fence_ops.enable_signaling` コールバックは、実装がハードウェアの完了を実際に検出する割り込みやポーリングの仕組みを接続する場所である。GPUスタックにおけるあらゆる完了待ち — バッファを再利用するために待つドライバ、スキャンアウトする前に待つディスプレイコントローラ、別のジョブからの依存関係を待つGPUジョブ — は、どのドライバやどのシリコンが生成したかに関係なく、1つ以上の `dma_fence` オブジェクトを待つことに帰着する。
 
-### `struct dma_resv`: which fences belong to a buffer, and why {#struct-dma_resv-which-fences-belong-to-a-buffer-and-why}
+### `struct dma_resv`: どのfenceがバッファに属するか、そしてその理由 {#struct-dma_resv-which-fences-belong-to-a-buffer-and-why}
 
-`struct dma_resv` (`include/linux/dma-resv.h`) is the container attached to a buffer — `dma_buf.resv`, and by extension `drm_gem_object.resv` — that tracks which fences apply to it:
+`struct dma_resv`（`include/linux/dma-resv.h`）は、バッファ — `dma_buf.resv`、ひいては `drm_gem_object.resv` — に付けられ、どのfenceがそのバッファに適用されるかを追跡するコンテナである。
 
 ```c
 // include/linux/dma-resv.h
 struct dma_resv {
-	struct ww_mutex lock;             // update-side lock; see dma_resv_lock()/_unlock()
-	struct dma_resv_list __rcu *fences; // the fences currently attached
+	struct ww_mutex lock;             // 更新側のロック。dma_resv_lock()/_unlock() を参照
+	struct dma_resv_list __rcu *fences; // 現在アタッチされているfence
 };
 ```
 
-The current kernel doesn't split "the one writer fence" from "the shared reader fences" into two separate fields the way older documentation describes — that model has evolved. Instead every fence added via `dma_resv_add_fence()` carries an `enum dma_resv_usage` tag, in strict ascending order of "how much can safely run concurrently with it":
+現在のカーネルは、古いドキュメントが説明しているように「1つの書き込みfence」と「共有の読み込みfence群」を2つの別々のフィールドに分けてはいない。そのモデルは進化した。代わりに、`dma_resv_add_fence()` で追加されるすべてのfenceは `enum dma_resv_usage` のタグを持ち、それは「それと並行して安全に実行できるものがどれだけあるか」の厳密な昇順になっている。
 
 ```c
 // include/linux/dma-resv.h
 enum dma_resv_usage {
-	DMA_RESV_USAGE_KERNEL,    // in-kernel memory management (moves, clears) — always wait for these
-	DMA_RESV_USAGE_WRITE,     // implicit write access — a new write must wait for prior reads+writes
-	DMA_RESV_USAGE_READ,      // implicit read access — a new read only waits for prior writes
-	DMA_RESV_USAGE_BOOKKEEP,  // no implicit sync at all (e.g. explicitly-synced submissions)
+	DMA_RESV_USAGE_KERNEL,    // カーネル内のメモリ管理（移動、クリア）— 常にこれらを待つ
+	DMA_RESV_USAGE_WRITE,     // 暗黙的な書き込みアクセス — 新しい書き込みは先行する読み込み＋書き込みを待つ必要がある
+	DMA_RESV_USAGE_READ,      // 暗黙的な読み込みアクセス — 新しい読み込みは先行する書き込みだけを待つ
+	DMA_RESV_USAGE_BOOKKEEP,  // 暗黙的な同期は一切なし（例: 明示的に同期される投入）
 };
 ```
 
-Asking for fences at a given usage level (`dma_resv_get_fences()`, `dma_resv_wait_timeout()`, ...) also returns every fence at a *lower* usage level in that list — asking for `WRITE` fences implicitly includes `KERNEL` fences, asking for `READ` includes both `WRITE` and `KERNEL`. That's what encodes the familiar reader/writer rule (many concurrent readers are fine; a writer must wait for everyone) without needing two separate storage slots: a new read only has to wait for existing *write* fences, but a new write has to wait for both existing reads and existing writes, which is precisely what `dma_resv_usage_rw()`'s inverted-looking mapping (`write ? DMA_RESV_USAGE_READ : DMA_RESV_USAGE_WRITE`) implements — asking "what must a new write wait for" returns the read-and-below set.
+ある使用レベルでfenceを要求すると（`dma_resv_get_fences()`、`dma_resv_wait_timeout()` など）、そのリストにある*より低い*使用レベルのfenceもすべて返される。`WRITE` のfenceを要求すると暗黙的に `KERNEL` のfenceが含まれ、`READ` を要求すると `WRITE` と `KERNEL` の両方が含まれる。これが、2つの別々の格納場所を必要とせずに、おなじみのreader/writerの規則（多数の並行するreaderは問題ないが、writerは全員を待たなければならない）を表現している。新しい読み込みは既存の*書き込み*fenceを待つだけでよいが、新しい書き込みは既存の読み込みと既存の書き込みの両方を待たなければならない。まさにこれを実装しているのが、`dma_resv_usage_rw()` の一見逆に見える対応付け（`write ? DMA_RESV_USAGE_READ : DMA_RESV_USAGE_WRITE`）である。「新しい書き込みは何を待つべきか」を問うと、READ以下の集合が返る。
 
-### Why this matters concretely {#why-this-matters-concretely}
+### 具体的になぜ重要か {#why-this-matters-concretely}
 
-Every place two pieces of hardware might touch the same buffer without one waiting for the other to physically finish is a use-after-scanout or a torn-frame bug waiting to happen, and none of these devices can inspect each other's command queues to know when that is. So instead they all agree to go through `dma_resv`: a GPU driver about to evict or reuse a buffer's memory checks (or waits on) the fences in its `dma_resv` rather than assuming the job that last wrote it is done; a display driver about to scan a buffer out for the first time after a render does the same before it programs the CRTC; a dynamic dma-buf importer (one that participates in migration, per the `dma_buf_attach_ops.invalidate_mappings` callback) is required by the documented rules in `dma-buf.h` to "obey the write fences and wait for them to signal before allowing access to the buffer's underlying storage through the device." None of this requires the display driver to understand GPU command-buffer semantics, or the GPU driver to understand display-controller timing — both just wait on fences.
+2つのハードウェアが、一方が他方の物理的な完了を待たずに同じバッファに触れうる場所はどこでも、スキャンアウト後の使用（use-after-scanout）やフレームのティアリングのバグの温床である。そしてこれらのデバイスはどれも、それがいつなのかを知るために互いのコマンドキューを検査することはできない。そこで代わりに、全員が `dma_resv` を通すことに合意する。バッファのメモリを追い出したり再利用したりしようとするGPUドライバは、最後にそれを書いたジョブが完了したと仮定するのではなく、その `dma_resv` にあるfenceを確認する（または待つ）。描画の後でバッファを初めてスキャンアウトしようとするディスプレイドライバは、CRTCをプログラムする前に同じことをする。動的なdma-bufインポータ（`dma_buf_attach_ops.invalidate_mappings` コールバックに従い、移行に参加するもの）は、`dma-buf.h` に文書化された規則により、"obey the write fences and wait for them to signal before allowing access to the buffer's underlying storage through the device"（訳: 書き込みfenceに従い、デバイスを通じてバッファの基盤ストレージへのアクセスを許す前に、それらがシグナルされるのを待つ）ことが求められる。これらのいずれも、ディスプレイドライバがGPUのコマンドバッファのセマンティクスを理解することや、GPUドライバがディスプレイコントローラのタイミングを理解することを必要としない。どちらもただfenceを待つだけである。
 
-## Worked example: a camera frame becomes a GPU texture, zero-copy {#worked-example-a-camera-frame-becomes-a-gpu-texture-zero-copy}
+## 実例: カメラのフレームがゼロコピーでGPUテクスチャになる {#worked-example-a-camera-frame-becomes-a-gpu-texture-zero-copy}
 
-A V4L2 capture driver has just filled a buffer with a captured frame and a compositor wants to use it as a GPU texture for scaling/color-conversion, without a CPU copy in either direction.
+V4L2のキャプチャドライバがキャプチャしたフレームでバッファを埋めたところで、コンポジタはそれを、どちらの方向にもCPUコピーなしで、拡大縮小／色変換のためのGPUテクスチャとして使いたい。
 
-**1. Capture side exports.** The V4L2 driver, acting as a dma-buf exporter for its capture buffers (the same role any `dma_buf_ops`-implementing driver plays — V4L2's own buffer-sharing API is a thin wrapper over exactly this mechanism, and was in fact dma-buf's original demonstrated use case), hands userspace a dma-buf fd for the just-captured frame.
+**1. キャプチャ側がエクスポートする。** V4L2ドライバは、キャプチャバッファのdma-bufエクスポータとして振る舞い（`dma_buf_ops` を実装する任意のドライバが担うのと同じ役割である — V4L2自身のバッファ共有APIはまさにこの仕組みの薄いラッパーであり、実際にdma-bufの最初に実証された用途でもあった）、キャプチャしたばかりのフレームのdma-buf fdをユーザー空間に渡す。
 
-**2. The compositor imports it into the GPU driver.** It passes that fd to `DRM_IOCTL_PRIME_FD_TO_HANDLE` on the GPU's DRM fd. Kernel-side: `drm_gem_prime_fd_to_handle()` takes a reference on the dma-buf, doesn't find it in this file's import cache (first time seeing this buffer), and calls the GPU driver's `gem_prime_import` — which bottoms out in `drm_gem_prime_import()` / `drm_gem_prime_import_dev()`. That creates a new `drm_gem_object` in the GPU driver with `import_attach` set (from an internal `dma_buf_attach()` against the GPU's device) and `resv` pointed at the *V4L2 driver's* reservation object, not a fresh one — this GEM object and the original V4L2 buffer now share fence tracking. A handle for it lands in `object_idr` for the compositor's DRM file descriptor.
+**2. コンポジタがそれをGPUドライバにインポートする。** そのfdを、GPUのDRM fdに対する `DRM_IOCTL_PRIME_FD_TO_HANDLE` に渡す。カーネル側では、`drm_gem_prime_fd_to_handle()` がdma-bufへの参照を取得し、このファイルのインポートキャッシュにそれが見つからない（このバッファを見るのは初めて）ので、GPUドライバの `gem_prime_import` を呼ぶ。これは最終的に `drm_gem_prime_import()` / `drm_gem_prime_import_dev()` に行き着く。これがGPUドライバ内に新しい `drm_gem_object` を作成する。`import_attach` は（GPUのデバイスに対する内部の `dma_buf_attach()` から）設定され、`resv` は新しいものではなく*V4L2ドライバの*予約オブジェクトを指す — このGEMオブジェクトと元のV4L2バッファは、今やfenceの追跡を共有している。そのハンドルは、コンポジタのDRMファイルディスクリプタの `object_idr` に置かれる。
 
-**3. Mapping for actual GPU access.** `drm_gem_prime_import_dev()` already did the attach/map work on the compositor's behalf during step 2 — calling `dma_buf_attach()` and then `dma_buf_map_attachment_unlocked()` (the variant for callers not already holding the `dma_resv` lock) for the GPU's attachment, getting back an `sg_table` DMA-mapped for the GPU's own address space/IOMMU domain. A V4L2 capture engine and a GPU render engine can easily have different reachable physical ranges, which is exactly the case the attach/map split exists for.
+**3. 実際のGPUアクセスのためのマッピング。** `drm_gem_prime_import_dev()` は、手順2の間にコンポジタに代わってattach/mapの作業をすでに行っている。GPUのアタッチメントに対して `dma_buf_attach()` を呼び、続いて `dma_buf_map_attachment_unlocked()`（まだ `dma_resv` のロックを保持していない呼び出し元向けの変種）を呼んで、GPU自身のアドレス空間／IOMMUドメイン向けにDMAマップされた `sg_table` を得る。V4L2のキャプチャエンジンとGPUのレンダーエンジンは、到達可能な物理範囲が異なることがよくあり、まさにそのケースのためにattach/mapの分離が存在する。
 
-**4. Fencing keeps it safe — except V4L2 is a documented exception.** Because the imported GEM object's `resv` points at the *exporter's* `dma_resv`, any fence the exporting driver attaches is automatically visible to the GPU driver, and gets folded into the GPU job's dependencies under implicit sync (or waited on explicitly). But `dma-buf.h`'s implicit-synchronization rules call out V4L2 by name as a driver that doesn't participate: "Some drivers only expose a synchronous userspace API with no pipelining across drivers. These do not set any fences for their access. An example here is v4l." V4L2 gets its ordering from `VIDIOC_DQBUF` instead — a captured buffer isn't handed back to userspace (and so isn't passed on as a dma-buf fd) until the capture DMA has already completed, so by the time the compositor imports it there's nothing left in flight to fence. The shared-`resv` fencing path is what carries dependencies in the GPU-to-GPU case, where both sides pipeline asynchronously — see below.
+**4. fenceが安全を保つ — ただしV4L2は文書化された例外である。** インポートされたGEMオブジェクトの `resv` は*エクスポータの* `dma_resv` を指しているので、エクスポートするドライバが付けたfenceは自動的にGPUドライバからも見え、暗黙的同期のもとでGPUジョブの依存関係に組み込まれる（あるいは明示的に待たれる）。しかし `dma-buf.h` の暗黙的同期の規則は、参加しないドライバとしてV4L2を名指ししている: "Some drivers only expose a synchronous userspace API with no pipelining across drivers. These do not set any fences for their access. An example here is v4l."（訳: 一部のドライバは、ドライバをまたいだパイプライン化のない同期的なユーザー空間APIしか公開しない。これらは自身のアクセスに対してfenceを一切設定しない。その例がv4lである。）V4L2は代わりに `VIDIOC_DQBUF` から順序付けを得ている。キャプチャされたバッファは、キャプチャDMAがすでに完了するまでユーザー空間に返されない（したがってdma-buf fdとして渡されることもない）ので、コンポジタがそれをインポートする時点では、fenceで守るべき実行中の処理は何も残っていない。共有 `resv` によるfenceのパスが依存関係を運ぶのは、両側が非同期にパイプライン処理するGPUからGPUへのケースである — 以下を参照。
 
-**5. Teardown.** The compositor eventually calls `DRM_IOCTL_GEM_CLOSE` on its GPU-side handle. Handle release, not the dma-buf fd itself, is what drops the GPU driver's GEM object reference; the underlying dma-buf stays alive as long as anyone still holds a reference to it — the compositor's own dma-buf fd, or any other importer's `get_dma_buf()` reference. The V4L2 side is the reverse of what you might expect: exporting the buffer took a reference *on the underlying vb2 buffer*, so that capture buffer's memory cannot be freed until the dma-buf itself is finally released, not the other way around.
+**5. 後片付け。** コンポジタは最終的に、GPU側のハンドルに対して `DRM_IOCTL_GEM_CLOSE` を呼ぶ。GPUドライバのGEMオブジェクトへの参照を落とすのは、dma-buf fdそのものではなくハンドルの解放である。基盤となるdma-bufは、誰かがまだ参照を保持している限り — コンポジタ自身のdma-buf fd、あるいは他のインポータの `get_dma_buf()` による参照 — 生き続ける。V4L2側は予想とは逆である。バッファのエクスポートは*基盤となるvb2バッファに対する*参照を取得したので、そのキャプチャバッファのメモリは、dma-buf自体が最終的に解放されるまで解放できない。その逆ではない。
 
-The same export/import shape — `PRIME_HANDLE_TO_FD` on one driver's GEM handle, `PRIME_FD_TO_HANDLE` on another driver's DRM fd — is how a render GPU hands a composited frame to a physically separate display-output GPU on a hybrid-graphics laptop, except there the fencing is live: the render GPU attaches a `DMA_RESV_USAGE_WRITE` fence for its submission via `dma_resv_add_fence()`, and the display driver, seeing the same `dma_resv` through the imported object's `resv`, picks that fence up before the flip. `drm_gem_plane_helper_prepare_fb()` — the default `prepare_fb` hook for GEM-backed drivers — calls `dma_resv_get_singleton(obj->resv, DMA_RESV_USAGE_WRITE, ...)` and stashes the result in the plane state, which `drm_atomic_helper_wait_for_fences()` then waits on before the commit actually programs the hardware. Only which side is "exporter" and which is "importer" changes.
+同じエクスポート／インポートの形 — あるドライバのGEMハンドルに対する `PRIME_HANDLE_TO_FD`、別のドライバのDRM fdに対する `PRIME_FD_TO_HANDLE` — は、ハイブリッドグラフィックスのノートPCで、レンダリング用GPUが合成済みフレームを物理的に別のディスプレイ出力用GPUに渡す方法でもある。ただしそこではfenceが実際に働く。レンダリング用GPUは自身の投入に対して `dma_resv_add_fence()` で `DMA_RESV_USAGE_WRITE` のfenceを付け、ディスプレイドライバはインポートしたオブジェクトの `resv` を通じて同じ `dma_resv` を見て、フリップの前にそのfenceを拾う。GEMを裏付けとするドライバのデフォルトの `prepare_fb` フックである `drm_gem_plane_helper_prepare_fb()` は、`dma_resv_get_singleton(obj->resv, DMA_RESV_USAGE_WRITE, ...)` を呼んで結果をplaneの状態に格納し、`drm_atomic_helper_wait_for_fences()` が、コミットが実際にハードウェアをプログラムする前にそれを待つ。変わるのは、どちらの側が「エクスポータ」でどちらが「インポータ」かだけである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: DRM Memory Management (GEM, TTM)](https://docs.kernel.org/gpu/drm-mm.html) — the authoritative GEM/TTM design and API reference
-- [Kernel docs: Buffer Sharing and Synchronization (dma-buf)](https://docs.kernel.org/driver-api/dma-buf.html) — dma-buf, dma-buf attachments, and implicit vs. explicit fencing
-- [Kernel docs: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — includes the explicit "New clients must not use the insecure FLINK interface" guidance
-- [`d15bd7ee445d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d15bd7ee445d0702ad801fdaece348fdb79e6581) — "dma-buf: Introduce dma buffer sharing mechanism," Sumit Semwal, merged for Linux 3.3 (early 2012)
-- [lore.kernel.org: [RFC v2] Introduce DMA buffer sharing mechanism](https://lore.kernel.org/dri-devel/1322816252-19955-1-git-send-email-sumit.semwal@ti.com/) — the second (December 2011) RFC round, where the subsystem-agnostic design was argued over
-- [`3248877ea179`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3248877ea1796915419fba7c89315fdbf00cb56a) — "drm: base prime/dma-buf support (v5)," Dave Airlie, merged for Linux 3.4 (spring 2012): DRM's GEM-handle-to-dma-buf-fd binding
-- [LWN: "DMA buffer sharing in 3.3"](https://lwn.net/Articles/474819/) — Jonathan Corbet, January 11, 2012, on the merged framework and its camera-to-GPU motivating use case
-- `include/drm/drm_gem.h`, `include/drm/drm_gem_shmem_helper.h`, `include/drm/drm_gem_ttm_helper.h` — GEM object and backing-memory helper definitions
-- `include/linux/dma-buf.h`, `include/linux/dma-resv.h`, `include/linux/dma-fence.h` — the dma-buf, reservation, and fence structures
-- `drivers/gpu/drm/drm_prime.c` — the DRM PRIME implementation of export/import
-- [DRM: the Direct Rendering Manager](README.md) · [Kernel Mode Setting (KMS)](kms.md) — where GEM buffers end up once they're on screen
+- [カーネルドキュメント: DRM Memory Management (GEM, TTM)](https://docs.kernel.org/gpu/drm-mm.html) — GEM/TTMの設計とAPIに関する正式なリファレンス
+- [カーネルドキュメント: Buffer Sharing and Synchronization (dma-buf)](https://docs.kernel.org/driver-api/dma-buf.html) — dma-buf、dma-bufのアタッチメント、暗黙的fenceと明示的fence
+- [カーネルドキュメント: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — "New clients must not use the insecure FLINK interface" という明示的な指針を含む
+- [`d15bd7ee445d`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d15bd7ee445d0702ad801fdaece348fdb79e6581) — "dma-buf: Introduce dma buffer sharing mechanism"、Sumit Semwal、Linux 3.3向けにマージ（2012年初め）
+- [lore.kernel.org: [RFC v2] Introduce DMA buffer sharing mechanism](https://lore.kernel.org/dri-devel/1322816252-19955-1-git-send-email-sumit.semwal@ti.com/) — サブシステムに依存しない設計が議論された2回目（2011年12月）のRFC
+- [`3248877ea179`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3248877ea1796915419fba7c89315fdbf00cb56a) — "drm: base prime/dma-buf support (v5)"、Dave Airlie、Linux 3.4向けにマージ（2012年春）。DRMのGEMハンドル⇔dma-buf fdのバインディング
+- [LWN: "DMA buffer sharing in 3.3"](https://lwn.net/Articles/474819/) — Jonathan Corbet、2012年1月11日。マージされたフレームワークと、その動機となったカメラからGPUへの用途について
+- `include/drm/drm_gem.h`、`include/drm/drm_gem_shmem_helper.h`、`include/drm/drm_gem_ttm_helper.h` — GEMオブジェクトとバッキングメモリヘルパーの定義
+- `include/linux/dma-buf.h`、`include/linux/dma-resv.h`、`include/linux/dma-fence.h` — dma-buf、予約オブジェクト、fenceの構造体
+- `drivers/gpu/drm/drm_prime.c` — DRM PRIMEによるエクスポート／インポートの実装
+- [DRM: Direct Rendering Manager](README.md) · [カーネルモード設定（KMS）](kms.md) — GEMバッファが画面に映ったときの行き先

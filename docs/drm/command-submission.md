@@ -1,33 +1,33 @@
-# Command Submission, Fences, and the GPU Scheduler {#command-submission-fences-and-the-gpu-scheduler}
+# コマンド投入、fence、GPUスケジューラ {#command-submission-fences-and-the-gpu-scheduler}
 
-> How a batch of GPU work gets from an ioctl to hardware execution — and what happens when it never comes back
+> GPU処理のバッチがioctlからハードウェア実行に至るまでの流れ — そして、それが決して戻ってこないときに何が起こるか
 
-## The problem: the kernel can't read the command stream, but it still has to schedule it {#the-problem-the-kernel-cant-read-the-command-stream-but-it-still-has-to-schedule-it}
+## 問題: カーネルはコマンドストリームを読めないが、それでもスケジュールしなければならない {#the-problem-the-kernel-cant-read-the-command-stream-but-it-still-has-to-schedule-it}
 
-The [DRM overview](README.md) makes the split clear: userspace (Mesa) builds the hardware's native command buffers, and the kernel doesn't inspect them. But "doesn't inspect" is not the same as "doesn't manage." Between the ioctl and the hardware there is a long list of things only the kernel can do — decide which of several competing clients gets the ring next, make sure a submission doesn't start before the buffers it reads have finished being written by somebody else's submission, keep the buffers it touches resident until it's done, and notice when a submission has been sitting on the hardware for seconds and is never going to finish.
+[DRMの概要](README.md)は分担を明確にしている。ユーザー空間（Mesa）がハードウェア固有のコマンドバッファを組み立て、カーネルはそれを検査しない。しかし「検査しない」ことは「管理しない」ことと同じではない。ioctlとハードウェアの間には、カーネルにしかできないことが長いリストをなしている。競合する複数のクライアントのうちどれに次にリングを使わせるかを決めること、投入が読み込むバッファへの他者の投入による書き込みが終わる前にその投入が開始しないようにすること、投入が触れるバッファをそれが終わるまで常駐させておくこと、そして投入が何秒もハードウェア上に居座り、決して終わりそうにないことに気づくことである。
 
-That machinery divides into three pieces, and this page follows them in order:
+この仕組みは3つの部品に分かれ、このページはそれを順に追う。
 
-- **Command submission** — a driver-specific ioctl that turns a userspace-built command buffer into a kernel-tracked **job**.
-- **`struct dma_fence`** — the one-shot completion primitive every wait in the GPU stack reduces to. [GEM and dma-buf](gem-dmabuf.md) introduced it as the thing stored in a buffer's `dma_resv`; here we go into how a fence actually gets signaled.
-- **`drm_sched`** — the shared GPU scheduler in `drivers/gpu/drm/scheduler/`, which owns the queue between "userspace submitted a job" and "the driver pushed it at hardware," including the timeout that fires when hardware stops answering.
+- **コマンド投入** — ユーザー空間が組み立てたコマンドバッファを、カーネルが追跡する**ジョブ**に変えるドライバ固有のioctl。
+- **`struct dma_fence`** — GPUスタックにおけるあらゆる待機が帰着する、一度きりの完了プリミティブ。[GEMとdma-buf](gem-dmabuf.md)では、バッファの `dma_resv` に格納されるものとして紹介した。ここでは、fenceが実際にどうシグナルされるかに踏み込む。
+- **`drm_sched`** — `drivers/gpu/drm/scheduler/` にある共有GPUスケジューラ。「ユーザー空間がジョブを投入した」から「ドライバがそれをハードウェアに送った」までの間のキューを所有し、ハードウェアが応答しなくなったときに発火するタイムアウトも含む。
 
-Code and struct layouts on this page are from **Linux 7.1** unless noted; the scheduler is under active redesign and the last section flags what has already changed in mainline since.
+このページのコードと構造体のレイアウトは、特に断りがない限り **Linux 7.1** のものである。スケジューラは活発に再設計が進んでおり、最後のセクションでは、それ以降メインラインですでに変わった点を示す。
 
-## Command submission: driver-specific by design {#command-submission-driver-specific-by-design}
+## コマンド投入: 設計上ドライバ固有 {#command-submission-driver-specific-by-design}
 
-There is no generic "submit rendering" ioctl. Each driver defines its own, because the shape of a submission is a property of the hardware: how many independent engines it has, whether it takes a GPU virtual address or a buffer handle, whether it needs an explicit residency list. LWN's ["The Linux graphics stack in a nutshell, part 1"](https://lwn.net/Articles/955376/) (Thomas Zimmermann, December 19, 2023) puts it plainly for the render path: *"It's again all specific to the hardware and provided as `ioctl()` operations by each DRM driver individually. As with buffer allocation, the hardware driver within Mesa invokes the DRM driver's `ioctl()` operations."*
+汎用の「レンダリング投入」ioctlは存在しない。投入の形はハードウェアの性質であるため、各ドライバが独自に定義する。独立したエンジンをいくつ持つか、GPU仮想アドレスを受け取るのかバッファハンドルを受け取るのか、明示的な常駐リストが必要か、などである。LWNの["The Linux graphics stack in a nutshell, part 1"](https://lwn.net/Articles/955376/)（Thomas Zimmermann、2023年12月19日）は、レンダーパスについて端的にこう述べている: *"It's again all specific to the hardware and provided as `ioctl()` operations by each DRM driver individually. As with buffer allocation, the hardware driver within Mesa invokes the DRM driver's `ioctl()` operations."*（訳: これもまたすべてハードウェア固有であり、各DRMドライバが個別に `ioctl()` 操作として提供する。バッファ割り当てと同様に、Mesa内のハードウェアドライバがDRMドライバの `ioctl()` 操作を呼び出す。）
 
-amdgpu's is `DRM_IOCTL_AMDGPU_CS` ("command submission"), and it's a good representative because it's the driver the scheduler was originally written for. The uAPI (`include/uapi/drm/amdgpu_drm.h`) is deliberately open-ended — a small fixed header plus an array of variable-length, tagged **chunks**:
+amdgpuのものは `DRM_IOCTL_AMDGPU_CS`（"command submission"）であり、スケジューラが元々そのために書かれたドライバなので、よい代表例である。uAPI（`include/uapi/drm/amdgpu_drm.h`）は意図的に拡張可能になっている。小さな固定ヘッダと、タグ付きの可変長**チャンク**の配列である。
 
 ```c
 // include/uapi/drm/amdgpu_drm.h
 struct drm_amdgpu_cs_in {
-	__u32		ctx_id;           /* rendering context id */
-	__u32		bo_list_handle;   /* resource list associated with this CS */
+	__u32		ctx_id;           /* レンダリングコンテキストID */
+	__u32		bo_list_handle;   /* このCSに関連付けられたリソースリスト */
 	__u32		num_chunks;
 	__u32		flags;
-	__u64		chunks;           /* points to __u64 * which point to cs chunks */
+	__u64		chunks;           /* CSチャンクを指す __u64 * を指す */
 };
 
 struct drm_amdgpu_cs_chunk {
@@ -37,11 +37,11 @@ struct drm_amdgpu_cs_chunk {
 };
 
 struct drm_amdgpu_cs_out {
-	__u64 handle;                     /* sequence number to wait on later */
+	__u64 handle;                     /* 後で待機するためのシーケンス番号 */
 };
 ```
 
-The chunk IDs are what carry the actual meaning:
+実際の意味を運ぶのはチャンクIDである。
 
 ```c
 #define AMDGPU_CHUNK_ID_IB			0x01
@@ -56,32 +56,32 @@ The chunk IDs are what carry the actual meaning:
 #define AMDGPU_CHUNK_ID_CP_GFX_SHADOW		0x0a
 ```
 
-An **IB chunk** (`struct drm_amdgpu_cs_chunk_ib`) is the command buffer itself — but note what it actually contains: `va_start` (a GPU *virtual* address to begin executing at), `ib_bytes`, and `ip_type`/`ip_instance`/`ring` naming which hardware engine to run on. On the graphics and compute rings the kernel never reads the packets at that address; it just needs the buffers to be resident and the page tables to be right, which is exactly the isolation model the [overview](README.md) describes. (The video and JPEG rings are the exception: `amdgpu_cs_patch_jobs()` — fifth in the call sequence below — actually parses or in-place patches those command streams, since that hardware needs it. The in-tree comment still says "Only for UVD/VCE VM emulation," but in 7.1 three VCN generations (1.0, 3.0, and 4.0) set `patch_cs_in_place`, and every JPEG generation except 5.0.2 sets `parse_cs`.) **`BO_HANDLES`** is the residency list. **`DEPENDENCIES`** names fences to wait for by `(ctx_id, ip_type, ip_instance, ring, handle)` — amdgpu's own per-context sequence numbers, the same values earlier submissions got back in `cs_out.handle`. The **`SYNCOBJ_*`** chunks are the driver-independent equivalent: `SYNCOBJ_IN` for fences to wait on, `SYNCOBJ_OUT` for fences to signal, with the `TIMELINE_` variants adding a `point` for timeline `drm_syncobj`s.
+**IBチャンク**（`struct drm_amdgpu_cs_chunk_ib`）はコマンドバッファそのものだが、実際に何を含むかに注目してほしい。`va_start`（実行を開始するGPU*仮想*アドレス）、`ib_bytes`、そしてどのハードウェアエンジンで実行するかを示す `ip_type`/`ip_instance`/`ring` である。グラフィックスと計算のリングでは、カーネルはそのアドレスにあるパケットを決して読まない。必要なのはバッファが常駐していることとページテーブルが正しいことだけであり、これはまさに[概要](README.md)が説明する分離モデルである。（動画とJPEGのリングは例外である。下の呼び出し順で5番目にある `amdgpu_cs_patch_jobs()` は、そのハードウェアが必要とするため、それらのコマンドストリームを実際に解析したり、その場でパッチしたりする。ツリー内のコメントは今でも "Only for UVD/VCE VM emulation" と書いているが、7.1では3世代のVCN（1.0、3.0、4.0）が `patch_cs_in_place` を設定し、5.0.2を除くすべてのJPEG世代が `parse_cs` を設定している。）**`BO_HANDLES`** は常駐リストである。**`DEPENDENCIES`** は、待機するfenceを `(ctx_id, ip_type, ip_instance, ring, handle)` で指定する。これはamdgpu独自のコンテキストごとのシーケンス番号であり、以前の投入が `cs_out.handle` で受け取ったのと同じ値である。**`SYNCOBJ_*`** チャンクはドライバに依存しない同等物である。`SYNCOBJ_IN` は待機するfence、`SYNCOBJ_OUT` はシグナルするfenceを指定し、`TIMELINE_` 版はタイムライン `drm_syncobj` のための `point` を追加する。
 
-`amdgpu_cs_ioctl()` (`drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c`) runs the whole thing as a fixed pipeline, and the function names read like a table of contents:
+`amdgpu_cs_ioctl()`（`drivers/gpu/drm/amd/amdgpu/amdgpu_cs.c`）は全体を固定のパイプラインとして実行し、関数名はまるで目次のように読める。
 
 ```c
-	r = amdgpu_cs_parser_init(&parser, adev, filp, data);   /* look up ctx, reject a guilty one */
-	r = amdgpu_cs_pass1(&parser, data);                     /* copy chunks in, allocate jobs */
-	r = amdgpu_cs_pass2(&parser);                           /* interpret each chunk */
-	r = amdgpu_cs_parser_bos(&parser, data);                /* lock + validate the BO list */
-	r = amdgpu_cs_patch_jobs(&parser);                      /* parse/patch IBs -- video/JPEG only */
-	r = amdgpu_cs_vm_handling(&parser);                     /* page-table updates */
-	r = amdgpu_cs_sync_rings(&parser);                      /* collect dependencies */
-	r = amdgpu_cs_submit(&parser, data);                    /* arm + push to the scheduler */
+	r = amdgpu_cs_parser_init(&parser, adev, filp, data);   /* ctxを探し、guiltyなものは拒否 */
+	r = amdgpu_cs_pass1(&parser, data);                     /* チャンクをコピーし、ジョブを割り当てる */
+	r = amdgpu_cs_pass2(&parser);                           /* 各チャンクを解釈する */
+	r = amdgpu_cs_parser_bos(&parser, data);                /* BOリストをロックして検証する */
+	r = amdgpu_cs_patch_jobs(&parser);                      /* IBを解析／パッチする -- 動画／JPEGのみ */
+	r = amdgpu_cs_vm_handling(&parser);                     /* ページテーブルの更新 */
+	r = amdgpu_cs_sync_rings(&parser);                      /* 依存関係を収集する */
+	r = amdgpu_cs_submit(&parser, data);                    /* armしてスケジューラにpushする */
 ```
 
-The two-pass split exists because pass 1 has to know how many distinct engines the submission targets before it can allocate anything: `amdgpu_cs_job_idx()` maps each IB chunk's `ip_type`/`ip_instance`/`ring` to a scheduler entity, deduplicates against entities already seen, and grows a "gang" — up to `AMDGPU_CS_GANG_SIZE` jobs from one ioctl, one per engine, with one of them designated the **gang leader**. Only after that loop does pass 1 call `amdgpu_job_alloc()` for each.
+2パスに分かれているのは、パス1が何かを割り当てる前に、投入がいくつの異なるエンジンを対象としているかを知る必要があるからである。`amdgpu_cs_job_idx()` は各IBチャンクの `ip_type`/`ip_instance`/`ring` をスケジューラのエンティティに対応付け、既出のエンティティと重複を除き、「ギャング」を拡大する。ギャングは1つのioctlから最大 `AMDGPU_CS_GANG_SIZE` 個のジョブからなり、エンジンごとに1つで、そのうち1つが**ギャングリーダー**に指定される。そのループの後で初めて、パス1は各ジョブについて `amdgpu_job_alloc()` を呼ぶ。
 
-### What a "job" is {#what-a-job-is}
+### 「ジョブ」とは何か {#what-a-job-is}
 
-`amdgpu_job_alloc()` bottoms out in `drm_sched_job_init()`, which is where a driver-private submission becomes a scheduler-visible object. That is the definition of a job worth holding on to: **a job is one unit of work that the scheduler hands to the driver's `run_job()` callback, that carries its own list of dependency fences, and whose completion is represented by a fence other code can wait on.** (The deprecated `drm_sched_resubmit_jobs()` can call `run_job()` a second time for the same job — the `run_job()` kerneldoc warns that doing so "violates dma_fence rules"; see [timeout detection and recovery](#timeout-detection-and-recovery) below.) Everything hardware-specific stays in the driver's containing struct (amdgpu's `struct amdgpu_job` embeds `struct drm_sched_job base` as its first member, the same embedding pattern GEM uses for buffer objects).
+`amdgpu_job_alloc()` は最終的に `drm_sched_job_init()` に行き着く。ここで、ドライバ独自の投入がスケジューラから見えるオブジェクトになる。覚えておく価値のあるジョブの定義は次のとおりである。**ジョブとは、スケジューラがドライバの `run_job()` コールバックに渡す1単位の処理であり、自身の依存fenceのリストを持ち、その完了は他のコードが待機できるfenceで表される。**（非推奨の `drm_sched_resubmit_jobs()` は同じジョブに対して `run_job()` を2回呼ぶことがある — `run_job()` のkerneldocは、そうすることは "violates dma_fence rules"（dma_fenceの規則に違反する）と警告している。後述の[タイムアウトの検出とリカバリ](#timeout-detection-and-recovery)を参照。）ハードウェア固有のものはすべて、ドライバの外側の構造体にとどまる（amdgpuの `struct amdgpu_job` は最初のメンバとして `struct drm_sched_job base` を埋め込んでいる。GEMがバッファオブジェクトで使っているのと同じ埋め込みパターンである）。
 
-## `struct dma_fence`, in detail {#struct-dma_fence-in-detail}
+## `struct dma_fence` の詳細 {#struct-dma_fence-in-detail}
 
-[GEM and dma-buf](gem-dmabuf.md) introduced `dma_fence` as the thing that lives in a buffer's `dma_resv` and lets two drivers agree on who is still using memory. Command submission needs the next layer down: how a fence is ordered, how it gets signaled, and what the kernel guarantees about it.
+[GEMとdma-buf](gem-dmabuf.md)では、`dma_fence` を、バッファの `dma_resv` に置かれ、2つのドライバが誰がまだメモリを使っているかについて合意できるようにするものとして紹介した。コマンド投入には、その1つ下の層が必要である。fenceがどう順序付けられ、どうシグナルされ、カーネルがそれについて何を保証するかである。
 
-### Contexts and sequence numbers {#contexts-and-sequence-numbers}
+### コンテキストとシーケンス番号 {#contexts-and-sequence-numbers}
 
 ```c
 // include/linux/dma-fence.h
@@ -92,7 +92,7 @@ struct dma_fence {
 	};
 	const struct dma_fence_ops __rcu *ops;
 	union {
-		struct list_head cb_list;   /* replaced by @timestamp on dma_fence_signal() */
+		struct list_head cb_list;   /* dma_fence_signal() で @timestamp に置き換わる */
 		ktime_t timestamp;
 		struct rcu_head rcu;
 	};
@@ -104,13 +104,13 @@ struct dma_fence {
 };
 ```
 
-`context` and `seqno` together are the ordering model, and `dma-fence.c`'s own overview states the rule: fences are *"associated with a context, allocated through `dma_fence_context_alloc()`, and all fences on the same context are fully ordered."* Within a context, a later `seqno` means "later" — though the comparison itself is the driver's choice: `__dma_fence_is_later()` does a wrapping 32-bit compare by default, or compares the full 64 bits if the fence sets `DMA_FENCE_FLAG_SEQNO64_BIT`. Across contexts there is no ordering at all, which is why comparing sequence numbers between two different engines is meaningless. `dma_fence_is_later()` is only valid for two fences sharing a context.
+`context` と `seqno` の組が順序付けのモデルであり、`dma-fence.c` 自身の概要がその規則を述べている。fenceは *"associated with a context, allocated through `dma_fence_context_alloc()`, and all fences on the same context are fully ordered."*（訳: `dma_fence_context_alloc()` で割り当てられたコンテキストに関連付けられ、同じコンテキスト上のすべてのfenceは全順序付けされている。）コンテキスト内では、より大きい `seqno` は「より後」を意味する — ただし比較自体はドライバの選択である。`__dma_fence_is_later()` はデフォルトではラップアラウンドを考慮した32ビット比較を行い、fenceが `DMA_FENCE_FLAG_SEQNO64_BIT` を設定していれば64ビット全体を比較する。コンテキストをまたぐと順序はまったくない。だからこそ、2つの異なるエンジン間でシーケンス番号を比較しても意味がない。`dma_fence_is_later()` は、コンテキストを共有する2つのfenceに対してのみ有効である。
 
-That property is what makes fence *deduplication* cheap. `drm_sched_job_add_dependency()` walks the job's existing dependency array and, if it finds one from the same `context`, keeps only the later of the two — the code comment spells out the payoff: *"This lets the size of the array of deps scale with the number of engines involved, rather than the number of BOs."* A submission touching 500 buffers that were all last written by the same engine ends up with one dependency, not 500.
+この性質が、fenceの*重複排除*を安価にしている。`drm_sched_job_add_dependency()` はジョブの既存の依存配列を走査し、同じ `context` のものが見つかれば、2つのうち後のものだけを残す。コードのコメントがその効果を説明している: *"This lets the size of the array of deps scale with the number of engines involved, rather than the number of BOs."*（訳: これにより依存配列のサイズは、BOの数ではなく関与するエンジンの数に比例するようになる。）500個のバッファに触れる投入でも、それらがすべて同じエンジンによって最後に書き込まれていれば、依存関係は500個ではなく1個になる。
 
-### Signaling {#signaling}
+### シグナル {#signaling}
 
-`struct dma_fence_ops` is small, and only two callbacks are mandatory (`get_driver_name` and `get_timeline_name`, both informational — surfaced through `SYNC_IOC_FILE_INFO` as well as debug output). The interesting one is optional:
+`struct dma_fence_ops` は小さく、必須のコールバックは2つだけである（`get_driver_name` と `get_timeline_name`。どちらも情報提供用で、デバッグ出力に加えて `SYNC_IOC_FILE_INFO` でも公開される）。興味深いのは任意のものである。
 
 ```c
 // include/linux/dma-fence.h
@@ -125,9 +125,9 @@ struct dma_fence_ops {
 };
 ```
 
-`enable_signaling` exists because interrupts cost something. Its kerneldoc explains the intent: implementations that can do hardware-to-hardware signaling can *"implement this op to enable the necessary interrupts, or insert commands into cmdstream, etc, to avoid these costly operations for the common case where only hw->hw synchronization is required."* Nothing calls it directly; it is invoked lazily by `__dma_fence_enable_signaling()` the first time somebody actually needs a software notification — which happens from `dma_fence_add_callback()`, or via `dma_fence_enable_sw_signaling()` — which `dma_fence_wait_timeout()` calls unconditionally before it starts waiting. If the callback returns `false` — meaning the fence already passed, or signaling could not be enabled at all — `__dma_fence_enable_signaling()` signals it immediately, with whatever `fence->error` the driver set.
+`enable_signaling` が存在するのは、割り込みにはコストがかかるからである。そのkerneldocが意図を説明している。ハードウェア間のシグナルが可能な実装は、*"implement this op to enable the necessary interrupts, or insert commands into cmdstream, etc, to avoid these costly operations for the common case where only hw->hw synchronization is required."*（訳: このopを実装して必要な割り込みを有効化したり、コマンドストリームにコマンドを挿入したりすることで、hw->hwの同期だけが必要なよくあるケースでは、これらのコストの高い操作を避けられる。）これを直接呼ぶものはない。誰かが実際にソフトウェア通知を必要とした最初の時点で、`__dma_fence_enable_signaling()` によって遅延的に呼び出される。それは `dma_fence_add_callback()` から、あるいは `dma_fence_enable_sw_signaling()` 経由で起こり、後者は `dma_fence_wait_timeout()` が待機を始める前に無条件に呼ぶ。コールバックが `false` を返した場合 — fenceがすでに完了しているか、シグナルを有効化できなかったことを意味する — `__dma_fence_enable_signaling()` は、ドライバが設定した `fence->error` のまま、即座にそれをシグナルする。
 
-amdgpu's hardware fence shows the pattern in miniature. `amdgpu_fence_ops` implements `enable_signaling` as nothing more than arming a fallback timer:
+amdgpuのハードウェアfenceは、このパターンを縮図として示している。`amdgpu_fence_ops` は `enable_signaling` を、フォールバックタイマーを仕掛けるだけのものとして実装している。
 
 ```c
 // drivers/gpu/drm/amd/amdgpu/amdgpu_fence.c
@@ -140,35 +140,37 @@ static bool amdgpu_fence_enable_signaling(struct dma_fence *f)
 }
 ```
 
-The real signaling comes from `amdgpu_fence_process()`, called from the ring's interrupt handler: it reads the last-completed sequence number the GPU wrote to memory (`amdgpu_fence_read()`), and signals every fence from the previously known `last_seq` up to it. The fallback timer is insurance against a missed interrupt.
+実際のシグナルは、リングの割り込みハンドラから呼ばれる `amdgpu_fence_process()` から来る。これはGPUがメモリに書き込んだ最後に完了したシーケンス番号を読み（`amdgpu_fence_read()`）、以前に把握していた `last_seq` からそこまでのすべてのfenceをシグナルする。フォールバックタイマーは、割り込みの取りこぼしに対する保険である。
 
-On the waiting side, `dma_fence_add_callback()` is the non-blocking primitive the scheduler leans on, and it has one sharp edge worth internalizing: **if the fence is already signaled it returns `-ENOENT` and does not call the callback.** Every caller has to treat `-ENOENT` as "already done, act now," which is exactly what `drm_sched_run_job_work()` does after `run_job()` returns a hardware fence. Its kerneldoc also warns that *"the callback can be called from an atomic context or irq context"* — a callback may not sleep.
+待機する側では、`dma_fence_add_callback()` がスケジューラの頼るノンブロッキングのプリミティブであり、身に付けておくべき鋭い落とし穴が1つある。**fenceがすでにシグナル済みの場合、`-ENOENT` を返し、コールバックを呼ばない。** すべての呼び出し側は `-ENOENT` を「すでに完了している、今すぐ行動せよ」として扱わなければならず、`drm_sched_run_job_work()` は `run_job()` がハードウェアfenceを返した後でまさにそうしている。そのkerneldocはさらに、*"the callback can be called from an atomic context or irq context"*（訳: コールバックはアトミックコンテキストやirqコンテキストから呼ばれうる）と警告している。コールバックはスリープしてはならない。
 
-### The cross-driver contract {#the-cross-driver-contract}
+### ドライバ横断の契約 {#the-cross-driver-contract}
 
-Because a fence created by one driver can be waited on by a completely different one, `dma-fence.c` documents a set of rules under **"fence cross-driver contract"** that constrain every implementation. The first is the one this page cares about most:
+あるドライバが作成したfenceを、まったく別のドライバが待機しうるため、`dma-fence.c` はすべての実装を制約する一連の規則を **"fence cross-driver contract"** として文書化している。最初のものが、このページで最も重要なものである。
 
 > *Fences must complete in a reasonable time. Fences which represent kernels and shaders submitted by userspace, which could run forever, must be backed up by timeout and gpu hang recovery code. Minimally that code must prevent further command submission and force complete all in-flight fences... Ideally the driver supports gpu recovery which only affects the offending userspace context, and no other userspace submissions.*
 
-The remaining rules are mostly locking constraints that follow from it: drivers may call `dma_fence_wait()` while holding a `dma_resv` lock, from a shrinker callback, and from an MMU notifier — so any code on the path to `dma_fence_signal()` must not take a `dma_resv` lock, must not allocate with `GFP_KERNEL`, and must not allocate with `GFP_NOFS`/`GFP_NOIO` either. `dma_fence_begin_signalling()`/`dma_fence_end_signalling()` exist to let lockdep police exactly this.
+（訳: fenceは妥当な時間内に完了しなければならない。ユーザー空間が投入した、永遠に実行されうるカーネルやシェーダーを表すfenceは、タイムアウトとGPUハングのリカバリコードによって裏打ちされなければならない。最低限、そのコードはそれ以降のコマンド投入を阻止し、実行中のすべてのfenceを強制的に完了させなければならない……理想的には、ドライバは問題を起こしたユーザー空間コンテキストだけに影響し、他のユーザー空間の投入には影響しないGPUリカバリをサポートする。）
 
-The mirror image of the rule is [**"Indefinite DMA Fences"**](https://docs.kernel.org/driver-api/dma-buf.html) in the dma-buf documentation, which enumerates proposals that would have allowed a fence whose completion is under userspace's control (future fences, proxy fences, userspace fences, long-running compute batches) and explains why they are rejected: *"Mixing indefinite fences with normal in-kernel DMA fences does not work, even when a fallback timeout is included to protect against malicious userspace."* The reason a GPU hang must be *recovered from* rather than merely waited out is this contract — memory reclaim is allowed to block on a fence.
+残りの規則は、主にそこから導かれるロックの制約である。ドライバは `dma_resv` のロックを保持したまま、シュリンカのコールバックから、そしてMMU notifierから `dma_fence_wait()` を呼んでよい。したがって、`dma_fence_signal()` に至る経路上のコードは、`dma_resv` のロックを取ってはならず、`GFP_KERNEL` で割り当ててはならず、`GFP_NOFS`/`GFP_NOIO` でも割り当ててはならない。`dma_fence_begin_signalling()`/`dma_fence_end_signalling()` は、まさにこれをlockdepに監視させるために存在する。
 
-### Deadline hints {#deadline-hints}
+この規則の裏返しが、dma-bufドキュメントの[**"Indefinite DMA Fences"**](https://docs.kernel.org/driver-api/dma-buf.html)である。これは、完了がユーザー空間の制御下にあるfenceを許したであろう提案（future fence、proxy fence、ユーザー空間fence、長時間実行される計算バッチ）を列挙し、それらが却下される理由を説明している: *"Mixing indefinite fences with normal in-kernel DMA fences does not work, even when a fallback timeout is included to protect against malicious userspace."*（訳: 無期限のfenceを通常のカーネル内DMA fenceと混ぜることはうまくいかない。悪意あるユーザー空間から守るためのフォールバックタイムアウトを含めたとしてもである。）GPUハングが単に待ち切られるのではなく*回復*されなければならない理由がこの契約である — メモリ回収はfenceでブロックすることが許されている。
 
-One late addition worth knowing about, because it shows up in the scheduler's fence ops. `dma_fence_set_deadline()` lets a waiter tell the signaler *when* it would like the fence done, as an absolute `ktime`. The `deadline hints` documentation gives the motivating case: a double-buffered renderer that misses a vblank ends up *more* idle (it waits a whole extra vblank period), so a utilization-based devfreq governor sees idle time and lowers the GPU clock — precisely backwards. It is explicitly advisory: *"The deadline hint is just that, a hint. The driver that created the fence may react by increasing frequency, making different scheduling choices, etc. Or doing nothing at all."*
+### デッドラインのヒント {#deadline-hints}
 
-## `drm_sched`: the shared GPU scheduler {#drm_sched-the-shared-gpu-scheduler}
+スケジューラのfence opsに現れるため、知っておく価値のある後発の追加機能が1つある。`dma_fence_set_deadline()` は、待機する側がシグナルする側に、fenceを*いつ*完了してほしいかを絶対値の `ktime` で伝えられるようにする。`deadline hints` のドキュメントは動機となったケースを挙げている。ダブルバッファリングのレンダラがvblankを逃すと、*より*アイドルになる（まるまる1vblank期間余分に待つ）ため、利用率ベースのdevfreqガバナはアイドル時間を見てGPUクロックを下げてしまう — まさに逆効果である。これは明示的に助言にすぎない: *"The deadline hint is just that, a hint. The driver that created the fence may react by increasing frequency, making different scheduling choices, etc. Or doing nothing at all."*（訳: デッドラインのヒントはあくまでヒントである。fenceを作成したドライバは、周波数を上げたり、異なるスケジューリングの選択をしたりして反応するかもしれない。あるいは何もしないかもしれない。）
 
-### Why it's shared {#why-its-shared}
+## `drm_sched`: 共有GPUスケジューラ {#drm_sched-the-shared-gpu-scheduler}
 
-The scheduler was not designed as common infrastructure. It arrived as AMD-only code in [`a72ce6f84109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a72ce6f84109c1dec1ab236d65979d3250668af3) ("drm/amd: add basic scheduling framework," authored by Jammy Zhou in May 2015 with sign-offs from Shaoyun Liu and Chunming Zhou, merged for Linux 4.3), living under `drivers/gpu/drm/amd/scheduler/`. Its commit message already describes the object model that survives today essentially unchanged — a *run queue* ("a set of entities scheduling commands for the same ring... implements the scheduling policy that selects the next entity to emit commands from...") and an *entity* ("a wrapper around a job queue... Entities take turns emitting jobs from their job queue to the corresponding hardware ring"). The [31-patch series](https://lore.kernel.org/dri-devel/1438381367-24980-1-git-send-email-alexander.deucher@amd.com/) that introduced it was developed inside AMD and posted to dri-devel as a finished batch — it drew zero replies. Nobody outside AMD reviewed the design before it shipped, because at the time nobody outside AMD needed to.
+### なぜ共有されているか {#why-its-shared}
 
-Two and a half years later, Lucas Stach moved it wholesale in [`1b1f42d8fde4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b1f42d8fde4fef1ed7873bf5aa91755f8c3de35) ("drm: move amd_gpu_scheduler into common location," authored December 2017, merged for Linux 4.16): *"This moves and renames the AMDGPU scheduler to a common location in DRM in order to facilitate re-use by other drivers. This is mostly a straight forward rename with no code changes."* Announcing the move, Stach was explicit about why: *"this is the first step to make the marvelous AMDGPU scheduler useable for other drivers. I have a (mostly) working prototype of Etnaviv using the scheduler."* AMD's own Monk Liu asked the question that mattered most to the driver giving up sole ownership — *"I'm wondering if GPU reset still work after this home move"* — and Stach's answer was the one-line reason the move was safe: *"this is just a code move that doesn't change anything about the inner workings of the scheduler."* The first non-AMD user followed one cycle later — [`e93b6deeb45a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e93b6deeb45a781489f4ceaa97f9545a3cbebb81) ("drm/etnaviv: hook up DRM GPU scheduler," Lucas Stach, merged for 4.17), whose commit message notes the immediate win of not having to keep etnaviv's own retire worker: *"Allows to get rid of the retire worker, as this is now driven by the scheduler."* Etnaviv's own hangcheck code went away two days later in [`6d7a20c07760`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6d7a20c0776036115c6e22bc673d645d524c4b8a) ("drm/etnaviv: replace hangcheck with scheduler timeout") — whose commit message flags a real behavioral tradeoff: *"we don't allow jobs to run indefinitely as long as they make progress anymore, as this introduces quality of service issues when multiple processes are using the GPU."*
+スケジューラは共通基盤として設計されたわけではない。[`a72ce6f84109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a72ce6f84109c1dec1ab236d65979d3250668af3)（"drm/amd: add basic scheduling framework"。2015年5月にJammy Zhouが作成し、Shaoyun LiuとChunming ZhouがSigned-off、Linux 4.3向けにマージ）でAMD専用のコードとして登場し、`drivers/gpu/drm/amd/scheduler/` に置かれていた。そのコミットメッセージはすでに、今日まで本質的に変わらず残っているオブジェクトモデルを説明している。*ランキュー*（"a set of entities scheduling commands for the same ring... implements the scheduling policy that selects the next entity to emit commands from..."、訳: 同じリングに対してコマンドをスケジュールするエンティティの集合……次にコマンドを発行するエンティティを選ぶスケジューリングポリシーを実装する……）と*エンティティ*（"a wrapper around a job queue... Entities take turns emitting jobs from their job queue to the corresponding hardware ring"、訳: ジョブキューのラッパー……エンティティは順番に、自身のジョブキューから対応するハードウェアリングへジョブを発行する）である。それを導入した[31パッチのシリーズ](https://lore.kernel.org/dri-devel/1438381367-24980-1-git-send-email-alexander.deucher@amd.com/)はAMD社内で開発され、完成したまとまりとしてdri-develに投稿された — 返信はゼロだった。AMD外部の誰も、出荷前にその設計をレビューしなかった。当時、AMD外部の誰もそれを必要としていなかったからである。
 
-That is the reason a shared scheduler exists at all: every driver with a ring buffer had independently written the same three things — an ordered software queue in front of the hardware queue, dependency tracking so a job doesn't start before its inputs are ready, and a hangcheck timer. In Linux 7.1 thirteen drivers select `DRM_SCHED`: amdgpu, etnaviv, imagination, lima, msm, nouveau, panfrost, panthor, v3d and xe under `drivers/gpu/drm/`, plus amdxdna, ethosu and rocket under `drivers/accel/`.
+2年半後、Lucas Stachが [`1b1f42d8fde4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b1f42d8fde4fef1ed7873bf5aa91755f8c3de35)（"drm: move amd_gpu_scheduler into common location"、2017年12月作成、Linux 4.16向けにマージ）でそれを丸ごと移動した: *"This moves and renames the AMDGPU scheduler to a common location in DRM in order to facilitate re-use by other drivers. This is mostly a straight forward rename with no code changes."*（訳: 他のドライバによる再利用を容易にするため、AMDGPUスケジューラをDRM内の共通の場所に移動し、名前を変更する。これはほぼ単純な名前の変更であり、コードの変更はない。）移動を告知する際、Stachは理由を明言した: *"this is the first step to make the marvelous AMDGPU scheduler useable for other drivers. I have a (mostly) working prototype of Etnaviv using the scheduler."*（訳: これは素晴らしいAMDGPUスケジューラを他のドライバでも使えるようにするための第一歩だ。このスケジューラを使うEtnavivの（ほぼ）動作するプロトタイプがある。）AMDのMonk Liuは、単独の所有権を手放すドライバにとって最も重要な問いを投げかけた — *"I'm wondering if GPU reset still work after this home move"*（訳: この引っ越しの後もGPUリセットは動くのだろうか）— そしてStachの答えが、移動が安全である一行の理由だった: *"this is just a code move that doesn't change anything about the inner workings of the scheduler."*（訳: これは単なるコードの移動であり、スケジューラの内部動作は何も変えない。）AMD以外の最初のユーザーは1サイクル後に続いた — [`e93b6deeb45a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e93b6deeb45a781489f4ceaa97f9545a3cbebb81)（"drm/etnaviv: hook up DRM GPU scheduler"、Lucas Stach、4.17向けにマージ）であり、そのコミットメッセージは、etnaviv独自のretireワーカーを維持しなくて済むという直接の利点を記している: *"Allows to get rid of the retire worker, as this is now driven by the scheduler."*（訳: これは今やスケジューラによって駆動されるので、retireワーカーを取り除ける。）Etnaviv独自のハングチェックのコードは、その2日後に [`6d7a20c07760`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=6d7a20c0776036115c6e22bc673d645d524c4b8a)（"drm/etnaviv: replace hangcheck with scheduler timeout"）で削除された。そのコミットメッセージは、実際の動作上のトレードオフを指摘している: *"we don't allow jobs to run indefinitely as long as they make progress anymore, as this introduces quality of service issues when multiple processes are using the GPU."*（訳: 進捗している限りジョブを無期限に実行させることはもう許さない。複数のプロセスがGPUを使っているときにサービス品質の問題を引き起こすからである。）
 
-### The four objects {#the-four-objects}
+これこそが、そもそも共有スケジューラが存在する理由である。リングバッファを持つすべてのドライバが、同じ3つのものを独立に書いていた。ハードウェアキューの手前にある順序付きのソフトウェアキュー、入力が準備できる前にジョブが開始しないようにする依存関係の追跡、そしてハングチェックのタイマーである。Linux 7.1では13のドライバが `DRM_SCHED` をselectしている。`drivers/gpu/drm/` 以下のamdgpu、etnaviv、imagination、lima、msm、nouveau、panfrost、panthor、v3d、xe、そして `drivers/accel/` 以下のamdxdna、ethosu、rocketである。
+
+### 4つのオブジェクト {#the-four-objects}
 
 ```
   drm_sched_entity           drm_sched_rq              drm_gpu_scheduler        hardware
@@ -181,7 +183,7 @@ That is the reason a shared scheduler exists at all: every driver with a ring bu
   └──────────────┘                                    └──────────────────┘
 ```
 
-**`struct drm_gpu_scheduler`** is one per hardware ring (`sched_main.c`'s overview: *"Each hw run queue has one scheduler"*). It owns the run-queue array, the workqueues, the list of jobs currently on hardware, and the timeout:
+**`struct drm_gpu_scheduler`** はハードウェアリングごとに1つある（`sched_main.c` の概要: *"Each hw run queue has one scheduler"*、訳: 各hwランキューは1つのスケジューラを持つ）。ランキューの配列、workqueue、現在ハードウェア上にあるジョブのリスト、そしてタイムアウトを所有する。
 
 ```c
 // include/drm/gpu_scheduler.h
@@ -199,7 +201,7 @@ struct drm_gpu_scheduler {
 	struct work_struct		work_run_job;
 	struct work_struct		work_free_job;
 	struct delayed_work		work_tdr;
-	struct list_head		pending_list;   /* jobs handed to hardware */
+	struct list_head		pending_list;   /* ハードウェアに渡されたジョブ */
 	spinlock_t			job_list_lock;
 	int				hang_limit;
 	atomic_t			*score;
@@ -207,35 +209,35 @@ struct drm_gpu_scheduler {
 };
 ```
 
-**`struct drm_sched_rq`** is one run-queue per priority level (`DRM_SCHED_PRIORITY_KERNEL`, `HIGH`, `NORMAL`, `LOW`), holding the set of entities with work pending. **`struct drm_sched_entity`** is the per-client queue — its own kerneldoc calls it *"A wrapper around a job queue (typically attached to the DRM file_priv)"*. In amdgpu, `amdgpu_ctx_init_entity()` creates one entity per `(hardware IP type, ring)` pair per context — they live in `ctx->entities[hw_ip][ring]` — so a process holding two GPU contexts and using both graphics and compute ends up with at least four independent entities. The entity holds a single-producer/single-consumer queue of jobs (`struct spsc_queue job_queue`) plus the fence identity that ties the whole thing together:
+**`struct drm_sched_rq`** は優先度レベル（`DRM_SCHED_PRIORITY_KERNEL`、`HIGH`、`NORMAL`、`LOW`）ごとに1つのランキューであり、処理が保留中のエンティティの集合を保持する。**`struct drm_sched_entity`** はクライアントごとのキューであり、そのkerneldoc自身が *"A wrapper around a job queue (typically attached to the DRM file_priv)"*（訳: ジョブキューのラッパー（通常はDRMのfile_privに付随する））と呼んでいる。amdgpuでは、`amdgpu_ctx_init_entity()` がコンテキストごとに `(ハードウェアIPの種類, リング)` の組ごとに1つのエンティティを作成する — それらは `ctx->entities[hw_ip][ring]` に置かれる — ので、2つのGPUコンテキストを持ち、グラフィックスと計算の両方を使うプロセスは、少なくとも4つの独立したエンティティを持つことになる。エンティティは、ジョブの単一プロデューサ／単一コンシューマのキュー（`struct spsc_queue job_queue`）と、全体を結び付けるfenceの識別情報を保持する。
 
 ```c
-// include/drm/gpu_scheduler.h — struct drm_sched_entity, selected fields
+// include/drm/gpu_scheduler.h — struct drm_sched_entity の主なフィールド
 	struct spsc_queue		job_queue;
 	atomic_t			fence_seq;
 	uint64_t			fence_context;
-	struct dma_fence		*dependency;   /* what the head job is blocked on */
+	struct dma_fence		*dependency;   /* 先頭のジョブが何でブロックされているか */
 	struct dma_fence_cb		cb;
 	atomic_t			*guilty;
 	struct dma_fence __rcu		*last_scheduled;
 ```
 
-`drm_sched_entity_init()` calls `dma_fence_context_alloc(2)` — **two** contexts per entity, not one, because every job produces two fences and they must be independently orderable.
+`drm_sched_entity_init()` は `dma_fence_context_alloc(2)` を呼ぶ — エンティティごとに1つではなく**2つ**のコンテキストである。すべてのジョブは2つのfenceを生成し、それらは独立に順序付けられなければならないからである。
 
-**`struct drm_sched_job`** is the unit the driver embeds:
+**`struct drm_sched_job`** は、ドライバが埋め込む単位である。
 
 ```c
 struct drm_sched_job {
 	ktime_t				submit_ts;
-	struct drm_gpu_scheduler	*sched;    /* set by drm_sched_job_arm() */
+	struct drm_gpu_scheduler	*sched;    /* drm_sched_job_arm() で設定される */
 	struct drm_sched_fence		*s_fence;
 	struct drm_sched_entity		*entity;
 	enum drm_sched_priority		s_priority;
 	u32				credits;
 	unsigned int			last_dependency;
-	atomic_t			karma;     /* hangs blamed on this job */
+	atomic_t			karma;     /* このジョブのせいにされたハングの数 */
 	struct spsc_node		queue_node;
-	struct list_head		list;      /* on the scheduler's pending_list */
+	struct list_head		list;      /* スケジューラの pending_list 上 */
 	union {
 		struct dma_fence_cb	finish_cb;
 		struct work_struct	work;
@@ -245,17 +247,17 @@ struct drm_sched_job {
 };
 ```
 
-### Two fences per job, and why {#two-fences-per-job-and-why}
+### ジョブごとに2つのfence、そしてその理由 {#two-fences-per-job-and-why}
 
-`struct drm_sched_fence` is the piece that makes the whole pipeline work, and it contains *two* `dma_fence`s plus a pointer to a third:
+`struct drm_sched_fence` はパイプライン全体を機能させる部品であり、*2つ*の `dma_fence` と、3つ目へのポインタを含む。
 
 ```c
 // include/drm/gpu_scheduler.h
 struct drm_sched_fence {
-	struct dma_fence		scheduled;  /* job has been pushed to hardware */
-	struct dma_fence		finished;   /* job is complete */
+	struct dma_fence		scheduled;  /* ジョブがハードウェアにpushされた */
+	struct dma_fence		finished;   /* ジョブが完了した */
 	ktime_t				deadline;
-	struct dma_fence		*parent;    /* the hardware fence from run_job() */
+	struct dma_fence		*parent;    /* run_job() からのハードウェアfence */
 	struct drm_gpu_scheduler	*sched;
 	spinlock_t			lock;
 	void				*owner;
@@ -263,19 +265,19 @@ struct drm_sched_fence {
 };
 ```
 
-`drm_sched_fence_init()` gives them adjacent contexts — `scheduled` gets `entity->fence_context`, `finished` gets `entity->fence_context + 1`, both with the same `seqno`.
+`drm_sched_fence_init()` はそれらに隣接するコンテキストを与える。`scheduled` は `entity->fence_context` を、`finished` は `entity->fence_context + 1` を得て、どちらも同じ `seqno` を持つ。
 
-The reason there are two is a chicken-and-egg problem the `finished` fence's kerneldoc states directly: *"When setting up an out fence for the job, you should use this, since it's available immediately upon `drm_sched_job_init()`, and the fence returned by the driver from `run_job()` won't be created until the dependencies have resolved."* A submission needs a fence to hand back to userspace and to stick in every touched buffer's `dma_resv` *at ioctl time* — but the hardware fence doesn't exist until the job actually reaches hardware, possibly seconds later. So `finished` is a stand-in: the scheduler signals it when `parent` (the real hardware fence) signals, forwarding the error code along the way.
+2つある理由は、`finished` fenceのkerneldocが直接述べている鶏と卵の問題である: *"When setting up an out fence for the job, you should use this, since it's available immediately upon `drm_sched_job_init()`, and the fence returned by the driver from `run_job()` won't be created until the dependencies have resolved."*（訳: ジョブの出力fenceを設定するときはこれを使うべきである。これは `drm_sched_job_init()` の直後から利用可能だが、ドライバが `run_job()` から返すfenceは依存関係が解決するまで作成されないからである。）投入には、ユーザー空間に返し、触れるすべてのバッファの `dma_resv` に入れるためのfenceが*ioctlの時点で*必要である。しかしハードウェアfenceは、ジョブが実際にハードウェアに到達するまで存在しない。それは数秒後かもしれない。そこで `finished` が代役となる。スケジューラは、`parent`（本物のハードウェアfence）がシグナルされたときにそれをシグナルし、その際にエラーコードを引き継ぐ。
 
-The `scheduled` fence buys something different: pipelining. When one job depends on another job *on the same scheduler*, `drm_sched_entity_add_dependency_cb()` quietly substitutes the dependency's `scheduled` fence for its `finished` fence:
+`scheduled` fenceがもたらすものは別で、パイプライン化である。あるジョブが*同じスケジューラ上の*別のジョブに依存する場合、`drm_sched_entity_add_dependency_cb()` は、依存先の `finished` fenceを、ひそかにその `scheduled` fenceに置き換える。
 
 ```c
 	s_fence = to_drm_sched_fence(fence);
 	if (!fence->error && s_fence && s_fence->sched == sched &&
 	    !test_bit(DRM_SCHED_FENCE_DONT_PIPELINE, &fence->flags)) {
 		/*
-		 * Fence is from the same scheduler, only need to wait for
-		 * it to be scheduled
+		 * fenceは同じスケジューラからのものなので、
+		 * スケジュールされるのを待つだけでよい
 		 */
 		fence = dma_fence_get(&s_fence->scheduled);
 		dma_fence_put(entity->dependency);
@@ -283,49 +285,49 @@ The `scheduled` fence buys something different: pipelining. When one job depends
 	}
 ```
 
-Since both jobs go to the same ring and the ring executes in order, the dependent job can be pushed to hardware as soon as its predecessor has been pushed — no CPU round trip waiting for completion. `DRM_SCHED_FENCE_DONT_PIPELINE` (a `dma_fence` user flag) is the opt-out for cases where that isn't safe. The same function also short-circuits dependencies on the entity's *own* fences entirely — an entity's jobs are already ordered by its SPSC queue.
+両方のジョブが同じリングに行き、リングは順番に実行するので、依存する側のジョブは、先行ジョブがpushされた時点ですぐにハードウェアにpushできる — 完了を待つCPUの往復は不要である。`DRM_SCHED_FENCE_DONT_PIPELINE`（`dma_fence` のユーザーフラグ）は、それが安全でないケースのためのオプトアウトである。同じ関数は、エンティティ*自身の*fenceへの依存も完全に省略する — エンティティのジョブは、そのSPSCキューによってすでに順序付けられているからである。
 
-### The pipeline {#the-pipeline}
+### パイプライン {#the-pipeline}
 
-**Submit side**, in a required order:
+**投入側**、必須の順序で:
 
-1. **`drm_sched_job_init(job, entity, credits, owner, drm_client_id)`** — allocates the `drm_sched_fence` and initializes the dependency xarray. It does *not* yet pick a scheduler.
-2. Dependencies get attached: `drm_sched_job_add_dependency()` for a raw fence, `drm_sched_job_add_syncobj_dependency()` for a `drm_syncobj` handle plus timeline point, `drm_sched_job_add_resv_dependencies()` to sweep a `dma_resv` at a given `dma_resv_usage`, or `drm_sched_job_add_implicit_dependencies(job, obj, write)` — which is just the `dma_resv` variant with `dma_resv_usage_rw(write)`, i.e. exactly the implicit-sync rule from [GEM/dma-buf](gem-dmabuf.md#fences-and-dma_resv) expressed as a job dependency.
-3. **`drm_sched_job_arm(job)`** — picks the scheduler (`drm_sched_entity_select_rq()`), stamps `job->sched` and `job->s_priority`, and initializes the two fences with real sequence numbers. `drm_sched_job_cleanup()`'s kerneldoc calls this *"a point of no return since it initializes the fences and their sequence number"*: once armed, the job **must** be pushed, because other code may now be holding its `finished` fence.
-4. **`drm_sched_entity_push_job(job)`** — timestamps the job, pushes it onto the entity's SPSC queue, and if it's the first job, adds the entity to its run-queue and calls `drm_sched_wakeup()`.
+1. **`drm_sched_job_init(job, entity, credits, owner, drm_client_id)`** — `drm_sched_fence` を割り当て、依存関係のxarrayを初期化する。この時点ではまだスケジューラを選ば*ない*。
+2. 依存関係が付けられる。生のfenceには `drm_sched_job_add_dependency()`、`drm_syncobj` ハンドルとタイムラインポイントには `drm_sched_job_add_syncobj_dependency()`、指定した `dma_resv_usage` で `dma_resv` を走査するには `drm_sched_job_add_resv_dependencies()`、あるいは `drm_sched_job_add_implicit_dependencies(job, obj, write)` を使う。最後のものは `dma_resv_usage_rw(write)` を使う `dma_resv` 版にすぎず、つまり[GEM/dma-buf](gem-dmabuf.md#fences-and-dma_resv)の暗黙的同期の規則をまさにジョブの依存関係として表現したものである。
+3. **`drm_sched_job_arm(job)`** — スケジューラを選び（`drm_sched_entity_select_rq()`）、`job->sched` と `job->s_priority` を記録し、2つのfenceを本物のシーケンス番号で初期化する。`drm_sched_job_cleanup()` のkerneldocはこれを *"a point of no return since it initializes the fences and their sequence number"*（訳: fenceとそのシーケンス番号を初期化するので、後戻りできない地点）と呼んでいる。armされたら、ジョブは**必ず**pushされなければならない。他のコードがすでにその `finished` fenceを保持しているかもしれないからである。
+4. **`drm_sched_entity_push_job(job)`** — ジョブにタイムスタンプを付け、エンティティのSPSCキューにpushし、それが最初のジョブであれば、エンティティをそのランキューに追加して `drm_sched_wakeup()` を呼ぶ。
 
-amdgpu's `amdgpu_cs_submit()` shows all of this with the gang wrinkle: it arms every job in the gang, makes the gang leader depend on every other member's **`scheduled`** fence, publishes the leader's `finished` fence into every locked buffer's `dma_resv` (`DMA_RESV_USAGE_WRITE` for the leader, `DMA_RESV_USAGE_READ` for the rest), and only then pushes them all.
+amdgpuの `amdgpu_cs_submit()` は、ギャングという一ひねりを加えてこれらすべてを示している。ギャング内のすべてのジョブをarmし、ギャングリーダーを他のすべてのメンバーの **`scheduled`** fenceに依存させ、リーダーの `finished` fenceをロックされたすべてのバッファの `dma_resv` に公開し（リーダーには `DMA_RESV_USAGE_WRITE`、残りには `DMA_RESV_USAGE_READ`）、その後で初めてそれらすべてをpushする。
 
-**Execution side** — `drm_sched_run_job_work()`, a work item on `submit_wq`:
+**実行側** — `submit_wq` 上のワークアイテムである `drm_sched_run_job_work()`:
 
-1. **`drm_sched_select_entity()`** walks run-queues from `DRM_SCHED_PRIORITY_KERNEL` downward and returns the first ready entity. Crucially, if a run-queue has a ready entity but the scheduler is out of credits, the per-run-queue selector helper returns `ERR_PTR(-ENOSPC)` rather than `NULL`, the priority loop stops, and `drm_sched_select_entity()` hands back `NULL` — so a busy ring does not let low-priority work jump ahead of blocked high-priority work.
-2. **`drm_sched_entity_pop_job()`** resolves dependencies. It loops `drm_sched_job_dependency()`, which returns the next fence from the job's xarray (already-signaled ones don't stall it: registering the callback returns `-ENOENT` and the loop moves to the next dependency) — or, once the xarray is exhausted, calls the driver's optional `prepare_job()` callback, which can return yet another fence — amdgpu uses it to grab a VMID. For each, `drm_sched_entity_add_dependency_cb()` registers `drm_sched_entity_wakeup` and the worker returns; the entity is re-examined when that fence signals.
-3. The job is added to `sched->pending_list` and the timeout is (re)armed by `drm_sched_job_begin()`.
-4. **`sched->ops->run_job(job)`** — the driver actually writes the ring. It returns the **hardware fence**, and the scheduler *inherits* the caller's reference: *"the scheduler expects to 'inherit' its own reference to this fence from the callback. It does not invoke an extra `dma_fence_get()` on it."*
-5. `drm_sched_fence_scheduled()` stores the hardware fence as `s_fence->parent` and signals `scheduled`. A `dma_fence_add_callback()` on the hardware fence arms `drm_sched_job_done_cb()`; the `-ENOENT` case (already signaled) is handled by calling `drm_sched_job_done()` directly.
-6. When the hardware fence signals, `drm_sched_job_done()` returns the job's credits, signals `finished` with the hardware fence's error code, and queues `work_free_job`, which eventually calls `sched->ops->free_job()`.
+1. **`drm_sched_select_entity()`** は `DRM_SCHED_PRIORITY_KERNEL` から下に向かってランキューを走査し、最初に準備ができたエンティティを返す。重要なのは、あるランキューに準備のできたエンティティがあるのにスケジューラのクレジットが尽きている場合、ランキューごとの選択ヘルパーは `NULL` ではなく `ERR_PTR(-ENOSPC)` を返し、優先度のループは停止し、`drm_sched_select_entity()` は `NULL` を返すことである — これにより、忙しいリングで低優先度の処理がブロックされた高優先度の処理を追い越すことがなくなる。
+2. **`drm_sched_entity_pop_job()`** は依存関係を解決する。`drm_sched_job_dependency()` をループで呼び、これはジョブのxarrayから次のfenceを返す（すでにシグナル済みのものは停滞させない。コールバックの登録が `-ENOENT` を返し、ループは次の依存関係に進む）。xarrayを使い切ると、ドライバの任意の `prepare_job()` コールバックを呼び、これはさらに別のfenceを返すことがある — amdgpuはこれをVMIDの取得に使っている。それぞれについて、`drm_sched_entity_add_dependency_cb()` が `drm_sched_entity_wakeup` を登録し、ワーカーは戻る。エンティティは、そのfenceがシグナルされたときに再検査される。
+3. ジョブは `sched->pending_list` に追加され、`drm_sched_job_begin()` によってタイムアウトが（再）設定される。
+4. **`sched->ops->run_job(job)`** — ドライバが実際にリングに書き込む。これは**ハードウェアfence**を返し、スケジューラは呼び出し側の参照を*継承*する: *"the scheduler expects to 'inherit' its own reference to this fence from the callback. It does not invoke an extra `dma_fence_get()` on it."*（訳: スケジューラは、このfenceへの自身の参照をコールバックから「継承」することを期待している。追加の `dma_fence_get()` は呼ばない。）
+5. `drm_sched_fence_scheduled()` がハードウェアfenceを `s_fence->parent` として格納し、`scheduled` をシグナルする。ハードウェアfenceに対する `dma_fence_add_callback()` が `drm_sched_job_done_cb()` を仕掛ける。`-ENOENT` の場合（すでにシグナル済み）は、`drm_sched_job_done()` を直接呼ぶことで処理される。
+6. ハードウェアfenceがシグナルされると、`drm_sched_job_done()` がジョブのクレジットを返却し、ハードウェアfenceのエラーコードとともに `finished` をシグナルし、`work_free_job` をキューに入れる。これが最終的に `sched->ops->free_job()` を呼ぶ。
 
-### Flow control: credits {#flow-control-credits}
+### フロー制御: クレジット {#flow-control-credits}
 
-`drm_sched` doesn't count jobs, it counts **credits** — a driver-defined quantity per job against a per-scheduler `credit_limit`. `sched_main.c` documents why this is a limit and not a queue: *"If by executing one more job the scheduler's credit count would exceed the scheduler's credit limit, the job won't be executed."* The point is ring-buffer capacity. Matthew Brost's workqueue-conversion commit describes the trick Xe relies on: *"in Xe submissions are done via programming a ring buffer (circular buffer), a drm_gpu_scheduler provides a limit on number of jobs, if the limit of number jobs is set to RING_SIZE / MAX_SIZE_PER_JOB we get flow control on the ring for free."* amdgpu keeps it simple — `credit_limit = ring->num_hw_submission` and every job costs 1 credit. `drm_sched_can_queue()` clamps any job whose credits exceed the whole limit down to the limit (with a `dev_WARN`) specifically to guarantee forward progress rather than deadlocking on an impossible job.
+`drm_sched` はジョブを数えるのではなく、**クレジット**を数える。ジョブごとにドライバが定義する量を、スケジューラごとの `credit_limit` と照らし合わせる。`sched_main.c` は、これがキューではなく上限である理由を文書化している: *"If by executing one more job the scheduler's credit count would exceed the scheduler's credit limit, the job won't be executed."*（訳: もう1つジョブを実行するとスケジューラのクレジット数がその上限を超える場合、そのジョブは実行されない。）要点はリングバッファの容量である。Matthew Brostのworkqueue移行コミットは、Xeが頼っている工夫を説明している: *"in Xe submissions are done via programming a ring buffer (circular buffer), a drm_gpu_scheduler provides a limit on number of jobs, if the limit of number jobs is set to RING_SIZE / MAX_SIZE_PER_JOB we get flow control on the ring for free."*（訳: Xeでは投入はリングバッファ（循環バッファ）をプログラムすることで行われ、drm_gpu_schedulerはジョブ数の上限を提供するので、ジョブ数の上限を RING_SIZE / MAX_SIZE_PER_JOB に設定すれば、リングのフロー制御がただで手に入る。）amdgpuは単純にしている — `credit_limit = ring->num_hw_submission` で、すべてのジョブのコストは1クレジットである。`drm_sched_can_queue()` は、クレジットが上限全体を超えるジョブを（`dev_WARN` とともに）上限まで切り詰める。これは、不可能なジョブでデッドロックするのではなく、前進を保証するためである。
 
-### Scheduling policy, three eras {#scheduling-policy-three-eras}
+### スケジューリングポリシー、3つの時代 {#scheduling-policy-three-eras}
 
-The policy that picks between entities on a run-queue has been rewritten twice, and each rewrite was driven by a measured starvation problem.
+ランキュー上のエンティティから選択するポリシーは2回書き直されており、どの書き直しも、測定された飢餓の問題によって推進された。
 
-- **Round-robin** (2015–2022) — `drm_sched_rq_select_entity_rr()` walks the entity list from wherever it stopped last time. Luben Tuikov's commit message for the switch away from it shows the failure with a diagram: with entities holding wildly different queue depths, strict round-robin drains one job per entity per pass, so a deep queue's oldest job can sit behind many newer jobs from shallow queues.
-- **FIFO** (Linux 6.2 onwards) — [`08fb97de03aa`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08fb97de03aa2205c6791301bd83a095abc1949c) (Andrey Grodzovsky, "drm/sched: Add FIFO sched policy to run queue") added `drm_sched_rq_select_entity_fifo()`, which keeps entities in an `rb_root_cached` keyed on `oldest_job_waiting` and always picks the entity whose head job arrived first — O(1) selection, O(log N) update. [`977d97f18b5b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=977d97f18b5b8efb7a94da84724113f15ae6cc2d) (Luben Tuikov) made it the default in the same release. Both policies remain selectable in 7.1 via the scheduler's `sched_policy` module parameter.
-- **Fair** (merged for Linux 7.2, still unreleased as of this writing) — Tvrtko Ursulin's [`2fa4d8e2c109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2fa4d8e2c1091189064c5b93222a23ded2d881ba) ("drm/sched: Add fair scheduling policy") replaces both with a CFS-style virtual-runtime ordering: *"entity run queue is sorted by the virtual GPU time consumed by entities in a way that the entity with least vruntime runs first... It is able to avoid total priority starvation, which is one of the problems with FIFO, and it also does not need for per priority run queues."* [`45c211ddf92a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=45c211ddf92a1f9b4214ffadaf70d9037f53aaf6) made it the default and [`77a6809f1dc3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=77a6809f1dc39376116f8d769a0d2630dc95ad79) then deleted FIFO, round-robin, and the whole per-priority run-queue array, collapsing `drm_gpu_scheduler.sched_rq[]` into a single embedded `struct drm_sched_rq rq`. If you are reading mainline rather than 7.1, that is the largest structural difference from what's shown above.
+- **ラウンドロビン**（2015〜2022年）— `drm_sched_rq_select_entity_rr()` は、前回止まったところからエンティティリストを走査する。Luben Tuikovによる、そこから移行するためのコミットメッセージは、その障害を図で示している。キューの深さが大きく異なるエンティティがある場合、厳密なラウンドロビンは1回の走査でエンティティごとに1ジョブずつ処理するため、深いキューの最も古いジョブが、浅いキューからの多数の新しいジョブの後ろに置かれ続けることがある。
+- **FIFO**（Linux 6.2以降）— [`08fb97de03aa`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08fb97de03aa2205c6791301bd83a095abc1949c)（Andrey Grodzovsky、"drm/sched: Add FIFO sched policy to run queue"）が `drm_sched_rq_select_entity_fifo()` を追加した。これはエンティティを `oldest_job_waiting` をキーとする `rb_root_cached` に保持し、常に先頭のジョブが最初に到着したエンティティを選ぶ — 選択はO(1)、更新はO(log N)である。[`977d97f18b5b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=977d97f18b5b8efb7a94da84724113f15ae6cc2d)（Luben Tuikov）が同じリリースでそれをデフォルトにした。7.1では、スケジューラの `sched_policy` モジュールパラメータで両方のポリシーを選択できる。
+- **フェア**（Linux 7.2向けにマージ済み、執筆時点では未リリース）— Tvrtko Ursulinの [`2fa4d8e2c109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2fa4d8e2c1091189064c5b93222a23ded2d881ba)（"drm/sched: Add fair scheduling policy"）は、両方をCFS風の仮想実行時間による順序付けで置き換える: *"entity run queue is sorted by the virtual GPU time consumed by entities in a way that the entity with least vruntime runs first... It is able to avoid total priority starvation, which is one of the problems with FIFO, and it also does not need for per priority run queues."*（訳: エンティティのランキューは、エンティティが消費した仮想GPU時間でソートされ、vruntimeが最も少ないエンティティが最初に実行される……FIFOの問題の1つである優先度による完全な飢餓を避けることができ、優先度ごとのランキューも必要としない。）[`45c211ddf92a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=45c211ddf92a1f9b4214ffadaf70d9037f53aaf6) がそれをデフォルトにし、続いて [`77a6809f1dc3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=77a6809f1dc39376116f8d769a0d2630dc95ad79) がFIFO、ラウンドロビン、そして優先度ごとのランキュー配列全体を削除し、`drm_gpu_scheduler.sched_rq[]` を埋め込みの単一の `struct drm_sched_rq rq` にまとめた。7.1ではなくメインラインを読んでいるなら、これが上で示したものとの最大の構造的な違いである。
 
-One more structural change worth knowing when reading older code: until Linux 6.8 each scheduler ran a dedicated **kthread**. [`a6149f039369`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6149f0393699308fb00149be913044977bceb56) (Matthew Brost, "drm/sched: Convert drm scheduler to use a work queue rather than kthread") replaced it with the `work_run_job`/`work_free_job` work items shown above. The motivation came from Xe, which maps one scheduler to one entity — needed because its firmware scheduler (GuC) may reorder and preempt submissions, so *"if a using shared drm_gpu_scheduler across multiple drm_sched_entity, the TDR falls apart as the TDR expects submission order == completion order"* — and one kthread per entity does not scale.
+古いコードを読むときに知っておく価値のある構造変更がもう1つある。Linux 6.8までは、各スケジューラは専用の **kthread** を実行していた。[`a6149f039369`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6149f0393699308fb00149be913044977bceb56)（Matthew Brost、"drm/sched: Convert drm scheduler to use a work queue rather than kthread"）が、それを上で示した `work_run_job`/`work_free_job` ワークアイテムに置き換えた。動機はXeから来ていた。Xeは1つのスケジューラを1つのエンティティに対応付ける。そのファームウェアスケジューラ（GuC）が投入を並べ替えたりプリエンプトしたりしうるため、それが必要だったのである — *"if a using shared drm_gpu_scheduler across multiple drm_sched_entity, the TDR falls apart as the TDR expects submission order == completion order"*（訳: 共有のdrm_gpu_schedulerを複数のdrm_sched_entityにまたがって使うと、TDRは投入順序 == 完了順序を前提としているため破綻する）— そして、エンティティごとに1つのkthreadはスケールしない。
 
-## Timeout detection and recovery {#timeout-detection-and-recovery}
+## タイムアウトの検出とリカバリ {#timeout-detection-and-recovery}
 
-### The timer {#the-timer}
+### タイマー {#the-timer}
 
-`sched->work_tdr` is a `delayed_work` running `drm_sched_job_timedout()`, armed by `drm_sched_start_timeout()` whenever `pending_list` is non-empty and `sched->timeout != MAX_SCHEDULE_TIMEOUT`. It is re-armed on each job completion, so the timeout is per-job-at-the-head, not per-submission-batch. Two functions short-circuit it: `drm_sched_fault()` fires it immediately when a driver's interrupt handler detects a hardware fault, and `drm_sched_tdr_queue_imm()` sets `sched->timeout = 0` and re-arms.
+`sched->work_tdr` は `drm_sched_job_timedout()` を実行する `delayed_work` であり、`pending_list` が空でなく `sched->timeout != MAX_SCHEDULE_TIMEOUT` であるときは常に、`drm_sched_start_timeout()` によって設定される。ジョブが完了するたびに再設定されるので、タイムアウトは投入バッチごとではなく、先頭にあるジョブごとである。2つの関数がこれを短絡させる。`drm_sched_fault()` は、ドライバの割り込みハンドラがハードウェア障害を検出したときに即座にそれを発火させ、`drm_sched_tdr_queue_imm()` は `sched->timeout = 0` を設定して再設定する。
 
-The handler itself is short:
+ハンドラ自体は短い。
 
 ```c
 // drivers/gpu/drm/scheduler/sched_main.c
@@ -338,10 +340,10 @@ static void drm_sched_job_timedout(struct work_struct *work)
 
 	if (job) {
 		/*
-		 * Remove the bad job so it cannot be freed by a concurrent
-		 * &struct drm_sched_backend_ops.free_job. It will be
-		 * reinserted after the scheduler's work items have been
-		 * cancelled, at which point it's safe.
+		 * 並行する &struct drm_sched_backend_ops.free_job によって
+		 * 解放されないよう、問題のジョブを取り除く。スケジューラの
+		 * ワークアイテムがキャンセルされた後、安全になった時点で
+		 * 再挿入される。
 		 */
 		list_del_init(&job->list);
 		spin_unlock(&sched->job_list_lock);
@@ -359,86 +361,88 @@ static void drm_sched_job_timedout(struct work_struct *work)
 }
 ```
 
-Note what it does *not* do: there is no generic reset. The core's entire contribution is "the head of `pending_list` has been there too long — here it is, you deal with it." Recovery is `timedout_job()`, a driver callback returning a status:
+これが*しない*ことに注目してほしい。汎用のリセットはない。コアの貢献は「`pending_list` の先頭が長く居座りすぎている — ほら、これだ、あとは任せた」ということだけである。リカバリは `timedout_job()` であり、ステータスを返すドライバのコールバックである。
 
 ```c
 enum drm_gpu_sched_stat {
-	DRM_GPU_SCHED_STAT_NONE,     /* reserved, do not use */
-	DRM_GPU_SCHED_STAT_RESET,    /* the GPU hung and was successfully reset */
-	DRM_GPU_SCHED_STAT_ENODEV,   /* device is gone */
-	DRM_GPU_SCHED_STAT_NO_HANG,  /* GPU did not hang and is still running */
+	DRM_GPU_SCHED_STAT_NONE,     /* 予約済み、使用しないこと */
+	DRM_GPU_SCHED_STAT_RESET,    /* GPUがハングし、リセットに成功した */
+	DRM_GPU_SCHED_STAT_ENODEV,   /* デバイスがなくなった */
+	DRM_GPU_SCHED_STAT_NO_HANG,  /* GPUはハングしておらず、まだ動作している */
 };
 ```
 
-`DRM_GPU_SCHED_STAT_NO_HANG` is the newest of these, added by Maíra Canal in [`0b1217bfdfdd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0b1217bfdfddf664c15954d1d51ee18ed88a2ccf) ("drm/sched: Allow drivers to skip the reset and keep on running," Linux 6.17) to fix a real leak. Because the handler removes the job from `pending_list` *before* calling `timedout_job()`, a driver that decided "actually the GPU is fine, this job is just slow" had no way to put it back — so when the job did finish, `free_job()` was never called for it. The commit names both cases it covers: a driver observing GPU forward progress through a hardware-specific mechanism (*"This happens in v3d, Etnaviv, and Xe"*), and the plain race where *"Timeout has fired before the free-job worker."*
+`DRM_GPU_SCHED_STAT_NO_HANG` はこれらの中で最も新しく、実際のリークを修正するためにMaíra Canalが [`0b1217bfdfdd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0b1217bfdfddf664c15954d1d51ee18ed88a2ccf)（"drm/sched: Allow drivers to skip the reset and keep on running"、Linux 6.17）で追加した。ハンドラは `timedout_job()` を呼ぶ*前に*ジョブを `pending_list` から取り除くので、「実はGPUは大丈夫で、このジョブが遅いだけだ」と判断したドライバには、それを戻す手段がなかった — そのためジョブが実際に完了しても、それに対して `free_job()` が呼ばれることはなかった。このコミットは、カバーする2つのケースを挙げている。ハードウェア固有の仕組みでGPUの前進を観測するドライバ（*"This happens in v3d, Etnaviv, and Xe"*、訳: これはv3d、Etnaviv、Xeで起こる）と、*"Timeout has fired before the free-job worker."*（訳: free-jobワーカーより先にタイムアウトが発火した）という単純な競合である。
 
-### Resetting without killing everyone {#resetting-without-killing-everyone}
+### 全員を巻き添えにせずにリセットする {#resetting-without-killing-everyone}
 
-The `timedout_job` kerneldoc in `gpu_scheduler.h` spells out the recommended sequence, and the interesting part is how much of it exists to *avoid* collateral damage. For a hardware scheduler where one `drm_gpu_scheduler` serves many entities on one ring, tearing down the scheduler is not acceptable, because *"this would effectively also affect innocent userspace processes which did not submit faulty jobs."* The prescribed order is: `drm_sched_stop()` every affected scheduler → kill the entity the faulty job came from → issue the driver-specific ring reset → re-submit the survivors → `drm_sched_start()`.
+`gpu_scheduler.h` にある `timedout_job` のkerneldocは推奨される手順を詳述しており、興味深いのは、そのどれだけが巻き添え被害を*避ける*ためにあるかである。1つの `drm_gpu_scheduler` が1つのリング上で多数のエンティティに対応するハードウェアスケジューラの場合、スケジューラを破棄することは許容できない。*"this would effectively also affect innocent userspace processes which did not submit faulty jobs."*（訳: それは事実上、問題のあるジョブを投入していない無実のユーザー空間プロセスにも影響を与えてしまう。）規定された順序は次のとおりである。影響を受けるすべてのスケジューラを `drm_sched_stop()` する → 問題のジョブが来たエンティティを殺す → ドライバ固有のリングリセットを発行する → 生き残ったものを再投入する → `drm_sched_start()`。
 
-`drm_sched_stop(sched, bad)` does the delicate bookkeeping. It pauses the work items, then walks `pending_list` *backwards* and for each job either removes the hardware-fence callback (the job hasn't completed; drop `s_fence->parent` and refund its credits, so it can be re-submitted) or, if the callback was already running, waits out the `finished` fence and frees the job. The guilty job is deliberately kept alive — `sched->free_guilty` is set as a hint so the timeout handler frees it afterwards. `drm_sched_start(sched, errno)` then re-attaches callbacks to the survivors and force-completes anything whose parent fence is gone with `errno ?: -ECANCELED` — which is how errors reach userspace rather than a wait hanging forever.
+`drm_sched_stop(sched, bad)` は繊細な管理作業を行う。ワークアイテムを一時停止し、次に `pending_list` を*逆向きに*走査し、各ジョブについて、ハードウェアfenceのコールバックを取り除く（ジョブは完了していない。`s_fence->parent` を落とし、クレジットを返却して、再投入できるようにする）か、コールバックがすでに実行中であれば、`finished` fenceを待ち切ってジョブを解放する。guiltyなジョブは意図的に生かしておかれる — タイムアウトハンドラが後でそれを解放するように、ヒントとして `sched->free_guilty` が設定される。その後 `drm_sched_start(sched, errno)` が生き残ったものにコールバックを再び付け、親fenceがなくなったものはすべて `errno ?: -ECANCELED` で強制完了させる — これが、待機が永遠にハングするのではなく、エラーがユーザー空間に届く仕組みである。
 
-Blame is tracked with **karma**. `drm_sched_increase_karma(bad)` increments the job's `karma` and sets the owning entity's `guilty` flag, and `drm_sched_entity_pop_job()` then poisons every subsequent job from that entity by setting `-ECANCELED` on its `finished` fence. The core still calls `run_job()` on it; it's the driver that checks — amdgpu's `amdgpu_job_run()` logs "Skip scheduling IBs in ring(%s)" and returns no hardware fence when `finished->error < 0`. Kernel jobs are exempt by design — the comment notes that a GPU hang can corrupt kernel VM-update jobs too, *"but keep in mind that kernel jobs always considered good."* (The related `hang_limit`/`drm_sched_invalidate_job()` threshold mechanism is now marked DEPRECATED in `drm_sched_init_args`, which tells drivers to set it to 0.)
+責任は**karma**で追跡される。`drm_sched_increase_karma(bad)` はジョブの `karma` をインクリメントし、所有するエンティティの `guilty` フラグを設定する。すると `drm_sched_entity_pop_job()` は、そのエンティティからの後続のすべてのジョブを、その `finished` fenceに `-ECANCELED` を設定することで汚染する。コアはそれでもそのジョブに対して `run_job()` を呼ぶ。チェックするのはドライバである — amdgpuの `amdgpu_job_run()` は、`finished->error < 0` のとき "Skip scheduling IBs in ring(%s)" とログを出し、ハードウェアfenceを返さない。カーネルのジョブは設計上除外される — コメントは、GPUハングはカーネルのVM更新ジョブも壊しうると記しつつ、*"but keep in mind that kernel jobs always considered good."*（訳: ただし、カーネルのジョブは常に正常とみなされることに留意せよ）としている。（関連する `hang_limit`/`drm_sched_invalidate_job()` のしきい値の仕組みは、現在 `drm_sched_init_args` でDEPRECATEDとマークされており、ドライバにはそれを0に設定するよう指示している。）
 
-`drm_sched_resubmit_jobs()` carries an unusually blunt deprecation notice, and it is a good summary of what the community learned here:
+`drm_sched_resubmit_jobs()` には異例なほど率直な非推奨の注記があり、コミュニティがここで何を学んだかのよい要約になっている。
 
 > *Re-submitting jobs was a concept AMD came up as cheap way to implement recovery after a job timeout. This turned out to be not working very well. First of all there are many problem with the dma_fence implementation and requirements. Either the implementation is risking deadlocks with core memory management or violating documented implementation details of the dma_fence object.*
 
-Re-initializing a `dma_fence` that other drivers may already hold references to breaks the one-shot contract; and allocating memory during reset can deadlock against reclaim waiting on the very fence you're trying to signal. The suggested replacement is for drivers to iterate `drm_sched_for_each_pending_job()` after stopping the scheduler and do their own recovery.
+（訳: ジョブの再投入は、ジョブのタイムアウト後のリカバリを安価に実装する方法としてAMDが考え出した概念である。これはあまりうまく機能しないことが判明した。まず第一に、dma_fenceの実装と要件に多くの問題がある。実装は、コアのメモリ管理とのデッドロックの危険を冒すか、dma_fenceオブジェクトの文書化された実装上の詳細に違反するかのどちらかである。）
 
-### What amdgpu actually does {#what-amdgpu-actually-does}
+他のドライバがすでに参照を保持しているかもしれない `dma_fence` を再初期化することは、一度きりの契約を破る。そしてリセット中にメモリを割り当てると、シグナルしようとしているまさにそのfenceを待つメモリ回収とデッドロックしうる。推奨される代替策は、ドライバがスケジューラを停止した後で `drm_sched_for_each_pending_job()` を反復し、独自のリカバリを行うことである。
 
-`amdgpu_job_timedout()` is a good illustration of "escalate as little as possible." In order:
+### amdgpuが実際にすること {#what-amdgpu-actually-does}
 
-1. If the device is unplugged (`drm_dev_enter()` fails), return `DRM_GPU_SCHED_STAT_ENODEV` immediately.
-2. Take a devcoredump (`amdgpu_job_core_dump()`) right away, to capture state before recovery perturbs it.
-3. Try **soft recovery** — `amdgpu_ring_soft_recovery()` marks the timed-out fence `-ENODATA` and then spins on the per-ASIC `ring->funcs->soft_recovery(ring, vmid)` callback for up to 10 ms, hoping the fence signals. Nothing is reset. On success: log `"ring %s timeout, but soft recovered"` and stop.
-4. Try a **per-queue ring reset** — `drm_sched_wqueue_stop()`, `amdgpu_ring_reset()`, `drm_sched_wqueue_start()`, and on success emit `drm_dev_wedged_event(..., DRM_WEDGE_RECOVERY_NONE, info)` so userspace can collect the coredump.
-5. Otherwise `dma_fence_set_error(&s_job->s_fence->finished, -ETIME)` and fall through to `amdgpu_device_gpu_recover()`, a full device reset.
+`amdgpu_job_timedout()` は「エスカレーションはできるだけ少なく」のよい例である。順に:
 
-Every path except the unplugged-device one falls through to a single `return DRM_GPU_SCHED_STAT_NO_HANG` at the end of the function, annotated `/* This is needed to add the job back to the pending list */` — amdgpu leans on the `NO_HANG` reinsertion path unconditionally so the core puts the job back and `free_job()` still runs for it, rather than distinguishing "recovered" from "was never hung."
+1. デバイスが取り外されていれば（`drm_dev_enter()` が失敗する）、即座に `DRM_GPU_SCHED_STAT_ENODEV` を返す。
+2. リカバリが状態をかき乱す前にそれを捕捉するため、すぐにdevcoredumpを取る（`amdgpu_job_core_dump()`）。
+3. **ソフトリカバリ**を試みる — `amdgpu_ring_soft_recovery()` はタイムアウトしたfenceを `-ENODATA` とマークし、fenceがシグナルされることを期待して、ASICごとの `ring->funcs->soft_recovery(ring, vmid)` コールバックで最大10msスピンする。何もリセットされない。成功すれば、`"ring %s timeout, but soft recovered"` とログを出して終了する。
+4. **キューごとのリングリセット**を試みる — `drm_sched_wqueue_stop()`、`amdgpu_ring_reset()`、`drm_sched_wqueue_start()`。成功すれば、ユーザー空間がcoredumpを回収できるように `drm_dev_wedged_event(..., DRM_WEDGE_RECOVERY_NONE, info)` を発行する。
+5. それ以外の場合は `dma_fence_set_error(&s_job->s_fence->finished, -ETIME)` を行い、デバイス全体のリセットである `amdgpu_device_gpu_recover()` へと進む。
 
-Default timeouts are set per engine type in `amdgpu_device_init_schedulers()` from `adev->gfx_timeout` / `compute_timeout` / `sdma_timeout` / `video_timeout`; `amdgpu_device_get_job_timeout_settings()` initializes all four to 2 seconds, overridable with the `amdgpu.lockup_timeout=` parameter (a negative value disables the timeout and taints the kernel with `TAINT_SOFTLOCKUP`). Notably, amdgpu passes `adev->reset_domain->wq` as `timeout_wq` — the `timedout_job` kerneldoc explicitly recommends an ordered workqueue for GPUs that have distinct hardware queues but must reset globally, so that timeout handlers on different schedulers run one at a time.
+デバイスが取り外された場合を除くすべてのパスは、関数末尾の単一の `return DRM_GPU_SCHED_STAT_NO_HANG` に行き着き、そこには `/* This is needed to add the job back to the pending list */` という注釈がある。amdgpuは「回復した」と「そもそもハングしていなかった」を区別するのではなく、`NO_HANG` の再挿入パスに無条件に頼り、コアにジョブを戻させて、それに対して `free_job()` が依然として実行されるようにしている。
 
-### Telling userspace {#telling-userspace}
+デフォルトのタイムアウトは、`amdgpu_device_init_schedulers()` で `adev->gfx_timeout` / `compute_timeout` / `sdma_timeout` / `video_timeout` からエンジンの種類ごとに設定される。`amdgpu_device_get_job_timeout_settings()` は4つすべてを2秒に初期化し、`amdgpu.lockup_timeout=` パラメータで上書きできる（負の値はタイムアウトを無効化し、カーネルを `TAINT_SOFTLOCKUP` でtaintする）。注目すべきことに、amdgpuは `timeout_wq` として `adev->reset_domain->wq` を渡している — `timedout_job` のkerneldocは、別個のハードウェアキューを持つがグローバルにリセットしなければならないGPUに対して、異なるスケジューラのタイムアウトハンドラが1つずつ実行されるよう、順序付きworkqueueを明示的に推奨している。
 
-Recovery is only half the job; a client whose context was killed has to find out. [Kernel docs: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) devotes a "Device reset" section to this, and its framing is that error propagation *"goes in the opposite direction of the usual flow of commands"* — hence the vendor-independent mechanism being `dma_fence_set_error()` on fences before signaling them, with the scheduler forwarding errors *"from the hardware fence to the scheduler fence to bubble up errors to the higher levels of the stack and eventually userspace."* Drivers are told to track resets per context (`drm_sched_entity_error()` is the provided helper) and to **reject new submissions from affected contexts** — which is exactly what `amdgpu_cs_parser_init()` does when it returns `-ECANCELED` for a context whose `guilty` flag is set. Userspace then surfaces it as `GL_ARB_robustness` reset status or Vulkan's `VK_ERROR_DEVICE_LOST`. The same document is candid that this only works if the application opted into robustness at all, and that *"there is no strong community consensus on what the userspace driver should do"* otherwise.
+### ユーザー空間に伝える {#telling-userspace}
 
-## Worked example: one `AMDGPU_CS` call, end to end {#worked-example-one-amdgpu_cs-call-end-to-end}
+リカバリは仕事の半分にすぎない。コンテキストを殺されたクライアントはそれを知る必要がある。[カーネルドキュメント: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) はこれに "Device reset" のセクションを割いており、その位置付けは、エラーの伝播は *"goes in the opposite direction of the usual flow of commands"*（訳: 通常のコマンドの流れとは逆方向に進む）というものである — そのため、ベンダーに依存しない仕組みは、fenceをシグナルする前にそれに対して `dma_fence_set_error()` を行うことであり、スケジューラはエラーを *"from the hardware fence to the scheduler fence to bubble up errors to the higher levels of the stack and eventually userspace."*（訳: ハードウェアfenceからスケジューラfenceへと転送し、エラーをスタックの上位レベル、そして最終的にユーザー空間へと浮かび上がらせる）。ドライバは、リセットをコンテキストごとに追跡し（`drm_sched_entity_error()` が提供されているヘルパーである）、**影響を受けたコンテキストからの新しい投入を拒否する**よう指示されている — これはまさに、`guilty` フラグが設定されたコンテキストに対して `amdgpu_cs_parser_init()` が `-ECANCELED` を返すときに行っていることである。ユーザー空間はそれを `GL_ARB_robustness` のリセットステータスや、Vulkanの `VK_ERROR_DEVICE_LOST` として表面化させる。同じドキュメントは、これはアプリケーションがそもそもrobustnessをオプトインしている場合にのみ機能し、そうでない場合には *"there is no strong community consensus on what the userspace driver should do"*（訳: ユーザー空間ドライバが何をすべきかについて、コミュニティの強い合意はない）と率直に認めている。
 
-A Vulkan application submits a render pass that samples a texture another queue just wrote, and presents the result.
+## 実例: 1回の `AMDGPU_CS` 呼び出しを端から端まで {#worked-example-one-amdgpu_cs-call-end-to-end}
 
-**1. Userspace builds the request.** Mesa's radv writes the command packets into a GPU-visible buffer it already owns, then fills a `union drm_amdgpu_cs` with `ctx_id`, a `bo_list_handle` naming every buffer the submission touches, and chunks: one `AMDGPU_CHUNK_ID_IB` (the `va_start` of those packets, `ip_type = AMDGPU_HW_IP_GFX`), one `AMDGPU_CHUNK_ID_SYNCOBJ_IN` naming the syncobj the other queue will signal, and one `AMDGPU_CHUNK_ID_SYNCOBJ_OUT` for the fence the compositor will wait on.
+Vulkanアプリケーションが、別のキューが書き込んだばかりのテクスチャをサンプリングするレンダーパスを投入し、その結果を表示する。
 
-**2. Pass 1 allocates the job.** `amdgpu_cs_pass1()` copies the chunk array in, and for the IB chunk calls `amdgpu_cs_job_idx()` → `amdgpu_ctx_get_entity()`, resolving `(GFX, instance 0, ring 0)` to a `drm_sched_entity` created earlier by `amdgpu_ctx_init_entity()`. One engine, so `gang_size == 1`. `amdgpu_job_alloc()` → `drm_sched_job_init()` creates the `drm_sched_fence` — at this instant the `finished` fence exists and is unsignaled, with no idea which hardware ring will eventually run it.
+**1. ユーザー空間がリクエストを組み立てる。** Mesaのradvは、すでに所有しているGPUから見えるバッファにコマンドパケットを書き込み、次に `union drm_amdgpu_cs` に `ctx_id`、投入が触れるすべてのバッファを示す `bo_list_handle`、そしてチャンクを埋める。チャンクは、`AMDGPU_CHUNK_ID_IB` が1つ（それらのパケットの `va_start`、`ip_type = AMDGPU_HW_IP_GFX`）、もう一方のキューがシグナルするsyncobjを示す `AMDGPU_CHUNK_ID_SYNCOBJ_IN` が1つ、コンポジタが待機するfenceのための `AMDGPU_CHUNK_ID_SYNCOBJ_OUT` が1つである。
 
-**3. Pass 2 turns chunks into dependencies.** The `SYNCOBJ_IN` chunk goes through `amdgpu_syncobj_lookup_and_add()`, which resolves the handle to a `dma_fence` and adds it to the submission's sync set. `amdgpu_cs_parser_bos()` locks every buffer in the BO list with `drm_exec` (a `ww_acquire_ctx` wrapper, so lock-ordering conflicts back off and retry) and validates their placement. `amdgpu_cs_sync_rings()` then does the *implicit* half: it walks every locked object's `dma_resv` with `amdgpu_sync_resv()` and pushes the result into each job via `amdgpu_sync_push_to_job()`, which bottoms out in `drm_sched_job_add_dependency()`. Explicit and implicit dependencies end up in the same xarray.
+**2. パス1がジョブを割り当てる。** `amdgpu_cs_pass1()` はチャンク配列をコピーし、IBチャンクについて `amdgpu_cs_job_idx()` → `amdgpu_ctx_get_entity()` を呼び、`(GFX, instance 0, ring 0)` を、以前に `amdgpu_ctx_init_entity()` が作成した `drm_sched_entity` に解決する。エンジンは1つなので `gang_size == 1` である。`amdgpu_job_alloc()` → `drm_sched_job_init()` が `drm_sched_fence` を作成する — この瞬間、`finished` fenceは存在し、シグナルされておらず、最終的にどのハードウェアリングがそれを実行するかも知らない。
 
-**4. Arm and push.** `amdgpu_cs_submit()` calls `drm_sched_job_arm()` — *now* `drm_sched_entity_select_rq()` picks a scheduler (`drm_sched_pick_best()` chooses the least-loaded ring by `score` if the entity was given several), and the two fences get real sequence numbers. The `finished` fence is added to every locked buffer's `dma_resv` with `DMA_RESV_USAGE_WRITE`, which is what makes the *next* submission's implicit-sync sweep — or the display driver's `prepare_fb`, per [GEM/dma-buf](gem-dmabuf.md#worked-example-a-camera-frame-becomes-a-gpu-texture-zero-copy) — automatically wait for this render. `amdgpu_ctx_add_fence()` records it under a sequence number returned in `cs->out.handle`. Then `drm_sched_entity_push_job()`, and the ioctl returns. Nothing has touched the ring yet.
+**3. パス2がチャンクを依存関係に変える。** `SYNCOBJ_IN` チャンクは `amdgpu_syncobj_lookup_and_add()` を通り、これがハンドルを `dma_fence` に解決して投入の同期セットに追加する。`amdgpu_cs_parser_bos()` はBOリストのすべてのバッファを `drm_exec`（`ww_acquire_ctx` のラッパーであり、ロック順序の衝突はバックオフして再試行する）でロックし、その配置を検証する。続いて `amdgpu_cs_sync_rings()` が*暗黙的*な半分を行う。ロックされたすべてのオブジェクトの `dma_resv` を `amdgpu_sync_resv()` で走査し、その結果を `amdgpu_sync_push_to_job()` で各ジョブにpushする。これは最終的に `drm_sched_job_add_dependency()` に行き着く。明示的な依存関係と暗黙的な依存関係は、同じxarrayに入る。
 
-**5. The scheduler runs it.** `drm_sched_run_job_work()` picks the entity, and `drm_sched_entity_pop_job()` finds the texture-write dependency unsignaled — so it registers a callback and returns without running anything. When the other queue's job completes and signals, `drm_sched_entity_wakeup()` re-queues the work item. This time dependencies are exhausted, so `prepare_job()` (amdgpu: `amdgpu_vmid_grab()`) may return one more fence for a VMID; once that clears, the job lands on `pending_list`, the 2-second GFX timeout is armed, and `amdgpu_job_run()` writes the ring. It returns an `amdgpu_fence`; the scheduler stores it as `s_fence->parent`, signals `scheduled`, and hangs `drm_sched_job_done_cb()` off it.
+**4. armとpush。** `amdgpu_cs_submit()` が `drm_sched_job_arm()` を呼ぶ — *ここで* `drm_sched_entity_select_rq()` がスケジューラを選び（エンティティに複数が与えられていれば、`drm_sched_pick_best()` が `score` で最も負荷の低いリングを選ぶ）、2つのfenceが本物のシーケンス番号を得る。`finished` fenceは、ロックされたすべてのバッファの `dma_resv` に `DMA_RESV_USAGE_WRITE` で追加される。これにより、*次の*投入の暗黙的同期の走査 — あるいは[GEM/dma-buf](gem-dmabuf.md#worked-example-a-camera-frame-becomes-a-gpu-texture-zero-copy)にあるように、ディスプレイドライバの `prepare_fb` — が、このレンダリングを自動的に待つようになる。`amdgpu_ctx_add_fence()` は、それを `cs->out.handle` で返されるシーケンス番号のもとに記録する。次に `drm_sched_entity_push_job()` を行い、ioctlは戻る。まだ何もリングに触れていない。
 
-**6a. Normal completion.** The GPU writes the sequence number to memory and raises its ring interrupt; `amdgpu_fence_process()` signals every fence up to that seqno. `drm_sched_job_done()` refunds the credits, signals `finished` (error code forwarded from the hardware fence), and queues `work_free_job`. The `SYNCOBJ_OUT` fence — which is the `finished` fence — signals, the compositor's wait completes, and the frame goes up for a [KMS](kms.md) atomic commit.
+**5. スケジューラがそれを実行する。** `drm_sched_run_job_work()` がエンティティを選び、`drm_sched_entity_pop_job()` はテクスチャ書き込みの依存関係がシグナルされていないことを見つける — そこでコールバックを登録し、何も実行せずに戻る。もう一方のキューのジョブが完了してシグナルすると、`drm_sched_entity_wakeup()` がワークアイテムを再びキューに入れる。今度は依存関係を使い切っているので、`prepare_job()`（amdgpu: `amdgpu_vmid_grab()`）がVMIDのためのfenceをもう1つ返すかもしれない。それが解消されると、ジョブは `pending_list` に入り、2秒のGFXタイムアウトが設定され、`amdgpu_job_run()` がリングに書き込む。これは `amdgpu_fence` を返す。スケジューラはそれを `s_fence->parent` として格納し、`scheduled` をシグナルし、それに `drm_sched_job_done_cb()` をぶら下げる。
 
-**6b. The shader loops forever instead.** No interrupt arrives. Two seconds later `drm_sched_job_timedout()` pops the job off `pending_list` and calls `amdgpu_job_timedout()`. A coredump is taken; soft recovery is tried for 10 ms; if the fence still hasn't signaled, a per-queue ring reset is attempted; if that fails too, `-ETIME` is set on `finished` and the whole device is reset. On that full-reset path, `drm_sched_increase_karma()` marks the entity guilty, so every job still queued behind this one is completed with `-ECANCELED` rather than run. The application's next `AMDGPU_CS` is rejected with `-ECANCELED` at `amdgpu_cs_parser_init()`, radv turns that into `VK_ERROR_DEVICE_LOST`, and — critically for the rest of the system — the compositor's wait on that syncobj completes with an error rather than hanging forever, because the cross-driver fence contract does not permit anything else.
+**6a. 通常の完了。** GPUはシーケンス番号をメモリに書き込み、リング割り込みを上げる。`amdgpu_fence_process()` はそのseqnoまでのすべてのfenceをシグナルする。`drm_sched_job_done()` はクレジットを返却し、`finished` をシグナルし（エラーコードはハードウェアfenceから引き継がれる）、`work_free_job` をキューに入れる。`SYNCOBJ_OUT` のfence — これは `finished` fenceである — がシグナルされ、コンポジタの待機が完了し、フレームは[KMS](kms.md)のアトミックコミットに回される。
 
-## Further reading {#further-reading}
+**6b. 代わりにシェーダーが永遠にループする。** 割り込みは来ない。2秒後、`drm_sched_job_timedout()` がジョブを `pending_list` から取り出し、`amdgpu_job_timedout()` を呼ぶ。coredumpが取られ、ソフトリカバリが10ms試みられる。fenceがまだシグナルされていなければ、キューごとのリングリセットが試みられる。それも失敗すれば、`finished` に `-ETIME` が設定され、デバイス全体がリセットされる。その完全リセットのパスでは、`drm_sched_increase_karma()` がエンティティをguiltyとマークするので、このジョブの後ろにまだキューに入っているすべてのジョブは、実行されるのではなく `-ECANCELED` で完了させられる。アプリケーションの次の `AMDGPU_CS` は `amdgpu_cs_parser_init()` で `-ECANCELED` で拒否され、radvはそれを `VK_ERROR_DEVICE_LOST` に変える。そして — システムの残りにとって決定的に重要なことに — そのsyncobjに対するコンポジタの待機は、永遠にハングするのではなくエラーで完了する。ドライバ横断のfence契約が、それ以外の何も許さないからである。
 
-- [Kernel docs: DRM Memory Management](https://docs.kernel.org/gpu/drm-mm.html) — includes the "GPU Scheduler" chapter (overview, flow control, and the generated `drm_sched` API reference) and "DRM Sync Objects"
-- [Kernel docs: Buffer Sharing and Synchronization (dma-buf)](https://docs.kernel.org/driver-api/dma-buf.html) — the DMA fence overview, cross-driver contract, signalling annotations, deadline hints, and the "Indefinite DMA Fences" rationale
-- [Kernel docs: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — the "Device reset", "Robustness" and "Device Wedging" sections on propagating a hang to userspace
-- [`a72ce6f84109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a72ce6f84109c1dec1ab236d65979d3250668af3) — "drm/amd: add basic scheduling framework," Linux 4.3 (2015): the original AMD-only scheduler
-- [lore.kernel.org: Add GPU scheduler to amdgpu](https://lore.kernel.org/dri-devel/1438381367-24980-1-git-send-email-alexander.deucher@amd.com/) — the 31-patch series that introduced it, posted as a finished batch with zero replies
-- [`1b1f42d8fde4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b1f42d8fde4fef1ed7873bf5aa91755f8c3de35) — "drm: move amd_gpu_scheduler into common location," Lucas Stach, Linux 4.16 (2018)
-- [lore.kernel.org: Move scheduler out of AMDGPU](https://lore.kernel.org/dri-devel/20171201152901.3626-1-l.stach@pengutronix.de/) — the review thread, including Monk Liu's GPU-reset question
-- [`e93b6deeb45a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e93b6deeb45a781489f4ceaa97f9545a3cbebb81) — "drm/etnaviv: hook up DRM GPU scheduler," Linux 4.17: the first non-AMD user
-- [`08fb97de03aa`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08fb97de03aa2205c6791301bd83a095abc1949c) · [`977d97f18b5b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=977d97f18b5b8efb7a94da84724113f15ae6cc2d) — FIFO scheduling policy added and made the default, Linux 6.2
-- [`a6149f039369`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6149f0393699308fb00149be913044977bceb56) — "drm/sched: Convert drm scheduler to use a work queue rather than kthread," Matthew Brost, Linux 6.8
-- [`0b1217bfdfdd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0b1217bfdfddf664c15954d1d51ee18ed88a2ccf) — "drm/sched: Allow drivers to skip the reset and keep on running," Maíra Canal, Linux 6.17: `DRM_GPU_SCHED_STAT_NO_HANG`
-- [`2fa4d8e2c109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2fa4d8e2c1091189064c5b93222a23ded2d881ba) · [`77a6809f1dc3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=77a6809f1dc39376116f8d769a0d2630dc95ad79) — "Add fair scheduling policy" and "Remove FIFO and RR and simplify to a single run queue," Tvrtko Ursulin, Linux 7.2
-- [LWN: "The Linux graphics stack in a nutshell, part 1"](https://lwn.net/Articles/955376/) — Thomas Zimmermann, December 19, 2023, on where Mesa ends and driver-specific ioctls begin
-- `include/drm/gpu_scheduler.h`, `drivers/gpu/drm/scheduler/{sched_main.c,sched_entity.c,sched_fence.c}` — the scheduler itself
-- `include/linux/dma-fence.h`, `drivers/dma-buf/dma-fence.c` — the fence primitive and its documented contract
-- `include/uapi/drm/amdgpu_drm.h`, `drivers/gpu/drm/amd/amdgpu/{amdgpu_cs.c,amdgpu_job.c,amdgpu_fence.c}` — a complete real submission path
-- [DRM: the Direct Rendering Manager](README.md) · [GEM Buffer Objects and dma-buf](gem-dmabuf.md) · [Kernel Mode Setting (KMS)](kms.md) — the buffers jobs operate on, and where their output ends up
-- [Workqueues](../interrupts/workqueues.md) — the deferred-work mechanism `submit_wq`, `timeout_wq` and `work_tdr` are built on
+## 参考文献 {#further-reading}
+
+- [カーネルドキュメント: DRM Memory Management](https://docs.kernel.org/gpu/drm-mm.html) — "GPU Scheduler" の章（概要、フロー制御、生成された `drm_sched` APIリファレンス）と "DRM Sync Objects" を含む
+- [カーネルドキュメント: Buffer Sharing and Synchronization (dma-buf)](https://docs.kernel.org/driver-api/dma-buf.html) — DMA fenceの概要、ドライバ横断の契約、シグナルのアノテーション、デッドラインのヒント、"Indefinite DMA Fences" の論拠
+- [カーネルドキュメント: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — ハングをユーザー空間に伝播させることに関する "Device reset"、"Robustness"、"Device Wedging" のセクション
+- [`a72ce6f84109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a72ce6f84109c1dec1ab236d65979d3250668af3) — "drm/amd: add basic scheduling framework"、Linux 4.3（2015年）。最初のAMD専用スケジューラ
+- [lore.kernel.org: Add GPU scheduler to amdgpu](https://lore.kernel.org/dri-devel/1438381367-24980-1-git-send-email-alexander.deucher@amd.com/) — それを導入した31パッチのシリーズ。完成したまとまりとして投稿され、返信はゼロだった
+- [`1b1f42d8fde4`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1b1f42d8fde4fef1ed7873bf5aa91755f8c3de35) — "drm: move amd_gpu_scheduler into common location"、Lucas Stach、Linux 4.16（2018年）
+- [lore.kernel.org: Move scheduler out of AMDGPU](https://lore.kernel.org/dri-devel/20171201152901.3626-1-l.stach@pengutronix.de/) — レビュースレッド。Monk LiuのGPUリセットに関する質問を含む
+- [`e93b6deeb45a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e93b6deeb45a781489f4ceaa97f9545a3cbebb81) — "drm/etnaviv: hook up DRM GPU scheduler"、Linux 4.17。AMD以外の最初のユーザー
+- [`08fb97de03aa`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=08fb97de03aa2205c6791301bd83a095abc1949c) · [`977d97f18b5b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=977d97f18b5b8efb7a94da84724113f15ae6cc2d) — FIFOスケジューリングポリシーの追加とデフォルト化、Linux 6.2
+- [`a6149f039369`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a6149f0393699308fb00149be913044977bceb56) — "drm/sched: Convert drm scheduler to use a work queue rather than kthread"、Matthew Brost、Linux 6.8
+- [`0b1217bfdfdd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0b1217bfdfddf664c15954d1d51ee18ed88a2ccf) — "drm/sched: Allow drivers to skip the reset and keep on running"、Maíra Canal、Linux 6.17。`DRM_GPU_SCHED_STAT_NO_HANG`
+- [`2fa4d8e2c109`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2fa4d8e2c1091189064c5b93222a23ded2d881ba) · [`77a6809f1dc3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=77a6809f1dc39376116f8d769a0d2630dc95ad79) — "Add fair scheduling policy" と "Remove FIFO and RR and simplify to a single run queue"、Tvrtko Ursulin、Linux 7.2
+- [LWN: "The Linux graphics stack in a nutshell, part 1"](https://lwn.net/Articles/955376/) — Thomas Zimmermann、2023年12月19日。Mesaがどこで終わり、ドライバ固有のioctlがどこで始まるかについて
+- `include/drm/gpu_scheduler.h`、`drivers/gpu/drm/scheduler/{sched_main.c,sched_entity.c,sched_fence.c}` — スケジューラ本体
+- `include/linux/dma-fence.h`、`drivers/dma-buf/dma-fence.c` — fenceプリミティブと、その文書化された契約
+- `include/uapi/drm/amdgpu_drm.h`、`drivers/gpu/drm/amd/amdgpu/{amdgpu_cs.c,amdgpu_job.c,amdgpu_fence.c}` — 実際の完全な投入パス
+- [DRM: Direct Rendering Manager](README.md) · [GEMバッファオブジェクトとdma-buf](gem-dmabuf.md) · [カーネルモード設定（KMS）](kms.md) — ジョブが操作するバッファと、その出力の行き先
+- [workqueue](../interrupts/workqueues.md) — `submit_wq`、`timeout_wq`、`work_tdr` が土台としている遅延処理の仕組み

@@ -1,21 +1,21 @@
-# DRM: the Direct Rendering Manager {#drm-the-direct-rendering-manager}
+# DRM: Direct Rendering Manager {#drm-the-direct-rendering-manager}
 
-> How Linux shares one GPU between many processes — privileged display and memory-management operations live in the kernel, while userspace builds the command buffers the hardware actually executes
+> Linuxが1つのGPUを多数のプロセスでどう共有するか — 特権が必要なディスプレイ操作とメモリ管理操作はカーネル内に置き、ハードウェアが実際に実行するコマンドバッファはユーザー空間が組み立てる
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-A GPU is a single, expensive, stateful piece of hardware that many unrelated processes need to touch at once: a compositor scanning out a desktop, a browser tab rendering WebGL, a game submitting draw calls, a media player decoding video on a fixed-function block. **DRM (Direct Rendering Manager)**, living under `drivers/gpu/drm/`, is the kernel subsystem that arbitrates this sharing. It splits into two halves:
+GPUは、1台しかない高価でステートフルなハードウェアであり、無関係な多数のプロセスが同時に触る必要がある。デスクトップをスキャンアウトするコンポジタ、WebGLを描画するブラウザのタブ、描画コールを発行するゲーム、固定機能ブロックで動画をデコードするメディアプレーヤーなどである。`drivers/gpu/drm/` 以下にある **DRM（Direct Rendering Manager）** は、この共有を調停するカーネルサブシステムである。DRMは2つの部分に分かれる。
 
-- **KMS (Kernel Mode Setting)** — the *output* side: choosing a display mode, wiring a frame buffer to a physical connector, and pushing pixels out over HDMI/DisplayPort/eDP.
-- **Rendering and acceleration** — the *compute/draw* side: allocating GPU-visible memory, submitting command buffers, and synchronizing that work with the rest of the system.
+- **KMS（Kernel Mode Setting）** — *出力*側。ディスプレイモードを選択し、フレームバッファを物理コネクタに結び付け、HDMI/DisplayPort/eDP経由でピクセルを送り出す。
+- **レンダリングとアクセラレーション** — *計算／描画*側。GPUから見えるメモリを割り当て、コマンドバッファを投入し、その処理をシステムの他の部分と同期させる。
 
-### The problem DRM solves {#the-problem-drm-solves}
+### DRMが解決する問題 {#the-problem-drm-solves}
 
-Before DRM, X servers (XFree86) drove graphics hardware directly from userspace, running as root and poking hardware registers itself — a single privileged, crash-prone process, internally duplicating root-level hardware access across its own per-chipset drivers. A bug there could hang or corrupt the whole machine, and there was no kernel arbiter to stop two clients from fighting over the same display or GPU memory. DRM's earliest form only arbitrated *rendering* among multiple clients; modesetting itself stayed in X's hands until **KMS** — kernel mode setting — moved it into the kernel with [`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef) ("DRM: add mode setting support," signed off by DRM maintainer Dave Airlie, committed to mainline in December 2008 as part of the Linux 2.6.29 development cycle).
+DRM以前は、Xサーバー（XFree86）がユーザー空間からグラフィックスハードウェアを直接駆動していた。rootとして動作し、自らハードウェアレジスタを叩いていたのである。つまり、特権を持ちクラッシュしやすい単一のプロセスが、チップセットごとの独自ドライバ群の中でrootレベルのハードウェアアクセスを内部的に重複して抱えていた。そこにバグがあればマシン全体をハングさせたり破壊したりしかねず、2つのクライアントが同じディスプレイやGPUメモリを奪い合うのを止めるカーネル側の調停者も存在しなかった。初期のDRMは複数クライアント間の*レンダリング*を調停するだけで、モード設定自体はXの手に残っていた。それをカーネルに移したのが **KMS**（カーネルモード設定）であり、[`f453ba046074`](https://git.kernel.org/linus/f453ba0460742ad027ae0c4c7d61e62817b3e7ef)（"DRM: add mode setting support"。DRMメンテナのDave AirlieがSigned-offし、Linux 2.6.29の開発サイクルの一部として2008年12月にメインラインにコミットされた）によって実現した。
 
-DRM's answer is a familiar kernel pattern: put the parts that require trust in the kernel, keep the parts that don't in userspace. The kernel side validates and owns modesetting, GPU memory management, and command-submission bookkeeping (which buffers a job touches, when it's safe to reclaim them). The userspace driver — largely **Mesa** — is the part that actually knows how to translate OpenGL/Vulkan calls into the hardware's native command-buffer format; it builds those buffers in unprivileged userspace and hands them to the kernel through an ioctl. The kernel doesn't inspect the command stream itself — isolation instead comes from per-context GPU page tables (the GPU's own MMU): the kernel binds only the buffers a submission references into that context's page tables, so one client's commands simply cannot address another client's memory.
+DRMの答えは、カーネルでおなじみのパターンである。信頼が必要な部分はカーネルに置き、そうでない部分はユーザー空間に残す。カーネル側は、モード設定、GPUメモリ管理、コマンド投入の管理情報（あるジョブがどのバッファに触れるか、いつそれらを回収しても安全か）を検証し、所有する。ユーザー空間ドライバ — 主に **Mesa** — は、OpenGL/Vulkanの呼び出しをハードウェア固有のコマンドバッファ形式に変換する方法を実際に知っている部分であり、特権を持たないユーザー空間でそのバッファを組み立て、ioctlを通じてカーネルに渡す。カーネルはコマンドストリーム自体は検査しない。分離は代わりにコンテキストごとのGPUページテーブル（GPU自身のMMU）によって実現される。カーネルは投入が参照するバッファだけをそのコンテキストのページテーブルにバインドするため、あるクライアントのコマンドは別のクライアントのメモリをそもそもアドレス指定できない。
 
-### Architecture: core + drivers, kernel + userspace {#architecture-core-drivers-kernel-userspace}
+### アーキテクチャ: コア＋ドライバ、カーネル＋ユーザー空間 {#architecture-core-drivers-kernel-userspace}
 
 ```
   Application (game, browser, compositor)
@@ -33,34 +33,34 @@ DRM's answer is a familiar kernel pattern: put the parts that require trust in t
   GPU hardware
 ```
 
-The **DRM core** provides the shared machinery — the KMS object model, GEM buffer lifecycle, dma-buf/fence plumbing, a generic GPU scheduler — so that each hardware driver only has to implement the hardware-specific pieces underneath a common ioctl and uAPI surface. On top, `libdrm` wraps the raw ioctls in a stable C API; Mesa historically built entirely on it, though several Mesa drivers (Intel's iris/anv among them) now issue some ioctls directly.
+**DRMコア**は共有の仕組み — KMSオブジェクトモデル、GEMバッファのライフサイクル、dma-buf/fenceの配管、汎用GPUスケジューラ — を提供する。これにより各ハードウェアドライバは、共通のioctlとuAPIの下にあるハードウェア固有の部分だけを実装すればよい。その上では `libdrm` が生のioctlを安定したC APIでラップしている。Mesaは歴史的に完全にこれの上に構築されてきたが、現在ではいくつかのMesaドライバ（Intelのiris/anvなど）が一部のioctlを直接発行している。
 
-### Two device nodes, two privilege levels {#two-device-nodes-two-privilege-levels}
+### 2つのデバイスノード、2つの特権レベル {#two-device-nodes-two-privilege-levels}
 
-DRM exposes a GPU through character devices with different trust levels — a display-only driver exposes just one, but most GPU drivers expose two:
+DRMは、信頼レベルの異なるキャラクタデバイスを通じてGPUを公開する。ディスプレイ専用ドライバは1つだけを公開するが、ほとんどのGPUドライバは2つを公開する。
 
-- **`/dev/dri/card0`** — the **primary node**. This is the privileged interface: modesetting, and historically all rendering too. A display server or compositor opens this to configure outputs.
-- **`/dev/dri/renderD128`** — the **render node**. Introduced so that offscreen renderers and GPGPU clients — a headless compute job, a video transcoder — can submit rendering work *without* authenticating to a display server and without any modesetting access. Render nodes drop the DRM-Master concept entirely: no global or privileged ioctls are permitted, only non-global rendering commands and PRIME (dma-buf) buffer sharing. Access control is just filesystem permissions on the node.
+- **`/dev/dri/card0`** — **プライマリノード**。これは特権インターフェースであり、モード設定を担い、歴史的にはすべてのレンダリングも担っていた。ディスプレイサーバーやコンポジタは、出力を設定するためにこれを開く。
+- **`/dev/dri/renderD128`** — **レンダーノード**。オフスクリーンレンダラやGPGPUクライアント — ヘッドレスの計算ジョブや動画トランスコーダ — が、ディスプレイサーバーへの認証*なしに*、かつモード設定のアクセス権を一切持たずにレンダリング処理を投入できるように導入された。レンダーノードではDRM-Masterの概念が完全に取り除かれている。グローバルな、あるいは特権を要するioctlは一切許されず、許可されるのは非グローバルなレンダリングコマンドとPRIME（dma-buf）によるバッファ共有だけである。アクセス制御は、単にノードに対するファイルシステムのパーミッションで行われる。
 
-### The rest of this section {#the-rest-of-this-section}
+### このセクションの残り {#the-rest-of-this-section}
 
-The pages that follow go deeper on each piece summarized above:
+以降のページでは、上で概要を述べた各要素をさらに掘り下げる。
 
-- **[KMS modesetting](kms.md)** — the object model (CRTC, plane, connector, encoder) and how atomic modesetting commits a whole display configuration as one indivisible transaction instead of the old per-property, get-it-wrong-and-flicker interface.
-- **[GEM buffer objects and dma-buf](gem-dmabuf.md)** — how GPU memory is allocated and refcounted (GEM), and how buffers are shared *across* devices and subsystems — GPU to display, a V4L2 camera's captured frame handed to the GPU — via dma-buf.
-- **[Command submission, fences, and the GPU scheduler](command-submission.md)** — how a batch of GPU work gets from a driver-specific ioctl to hardware execution via `drm_sched`, how `dma_fence` lets the kernel track "is this buffer still in use" across asynchronous, pipelined GPU work, and what happens when a job hangs.
-- **[War stories](war-stories.md)** — five real hangs, deadlocks, and scheduler-fairness incidents from the `drm_sched`/TDR/`dma_fence` machinery covered above, none of them a CVE.
+- **[KMSモード設定](kms.md)** — オブジェクトモデル（CRTC、plane、connector、encoder）と、アトミックモード設定がディスプレイ構成全体を1つの不可分なトランザクションとしてコミットする仕組み。かつての、プロパティごとに設定し、間違えればちらつくインターフェースに代わるものである。
+- **[GEMバッファオブジェクトとdma-buf](gem-dmabuf.md)** — GPUメモリがどう割り当てられ参照カウントされるか（GEM）、そしてバッファがデバイスやサブシステムを*またいで*どう共有されるか — GPUからディスプレイへ、V4L2カメラがキャプチャしたフレームをGPUへ — をdma-bufを通じて説明する。
+- **[コマンド投入、fence、GPUスケジューラ](command-submission.md)** — GPU処理のバッチがドライバ固有のioctlから `drm_sched` を経てハードウェア実行に至るまでの流れ、非同期でパイプライン化されたGPU処理をまたいで「このバッファはまだ使用中か」をカーネルが `dma_fence` でどう追跡するか、そしてジョブがハングしたときに何が起こるか。
+- **[事件簿](war-stories.md)** — 上で扱った `drm_sched`/TDR/`dma_fence` の仕組みから生じた、実際のハング、デッドロック、スケジューラの公平性に関する5つのインシデント。いずれもCVEではない。
 
-### Prerequisites and neighbors {#prerequisites-and-neighbors}
+### 前提知識と関連分野 {#prerequisites-and-neighbors}
 
-On desktops and servers, GPUs are usually [PCIe devices](../drivers/pci-driver.md); on SoCs, the GPU and display controller are typically platform devices bound through the same driver core. Either way, buffer objects that the GPU reads or writes are subject to the same [DMA](../mm/dma.md) coherency rules as any other DMA-capable device. Reading order: this page, then [KMS](kms.md), then [GEM/dma-buf](gem-dmabuf.md), then [command submission](command-submission.md), then [war stories](war-stories.md) — each builds on device/memory-management concepts from the one before.
+デスクトップやサーバーでは、GPUは通常[PCIeデバイス](../drivers/pci-driver.md)である。SoCでは、GPUとディスプレイコントローラは通常、同じドライバコアを通じてバインドされるプラットフォームデバイスである。いずれにせよ、GPUが読み書きするバッファオブジェクトは、他のDMA対応デバイスと同じ[DMA](../mm/dma.md)のコヒーレンシ規則に従う。読む順序は、このページ、次に[KMS](kms.md)、次に[GEM/dma-buf](gem-dmabuf.md)、次に[コマンド投入](command-submission.md)、そして[事件簿](war-stories.md)である。各ページは、前のページのデバイス／メモリ管理の概念の上に積み上がっている。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: GPU driver developer's guide](https://docs.kernel.org/gpu/index.html) — the top-level index for all DRM kernel documentation
-- [Kernel docs: DRM contribution guide](https://docs.kernel.org/gpu/introduction.html) — style guidelines, the contribution process, and a curated list of graphics-stack talks
-- [Kernel docs: kernel mode setting (KMS)](https://docs.kernel.org/gpu/drm-kms.html) — the CRTC/plane/connector/encoder object model and atomic modesetting
-- [Kernel docs: memory management](https://docs.kernel.org/gpu/drm-mm.html) — GEM, TTM, and buffer object lifecycle
-- [Kernel docs: DRM internals](https://docs.kernel.org/gpu/drm-internals.html) — driver-facing internals of the DRM core
-- [Kernel docs: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — the userspace-facing ioctl surface, including the primary/render node split
-- [PCI Drivers](../drivers/pci-driver.md) · [DMA](../mm/dma.md) — the bus and memory layers most DRM drivers sit on
+- [カーネルドキュメント: GPU driver developer's guide](https://docs.kernel.org/gpu/index.html) — DRMに関するカーネルドキュメント全体のトップレベル索引
+- [カーネルドキュメント: DRM contribution guide](https://docs.kernel.org/gpu/introduction.html) — スタイルガイドライン、貢献プロセス、グラフィックススタックに関する講演の厳選リスト
+- [カーネルドキュメント: kernel mode setting (KMS)](https://docs.kernel.org/gpu/drm-kms.html) — CRTC/plane/connector/encoderのオブジェクトモデルとアトミックモード設定
+- [カーネルドキュメント: memory management](https://docs.kernel.org/gpu/drm-mm.html) — GEM、TTM、バッファオブジェクトのライフサイクル
+- [カーネルドキュメント: DRM internals](https://docs.kernel.org/gpu/drm-internals.html) — DRMコアのドライバ向け内部構造
+- [カーネルドキュメント: DRM uAPI](https://docs.kernel.org/gpu/drm-uapi.html) — プライマリ／レンダーノードの分割を含む、ユーザー空間向けのioctlインターフェース
+- [PCIドライバ](../drivers/pci-driver.md) · [DMA](../mm/dma.md) — ほとんどのDRMドライバが載っているバス層とメモリ層
