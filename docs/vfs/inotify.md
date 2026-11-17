@@ -1,22 +1,22 @@
-# inotify and fanotify {#inotify-and-fanotify}
+# inotifyとfanotify {#inotify-and-fanotify}
 
-> Filesystem event notification: watching files and directories for changes
+> ファイルシステムのイベント通知: ファイルやディレクトリの変更を監視する
 
-## inotify: file/directory watch API {#inotify-filedirectory-watch-api}
+## inotify: ファイル/ディレクトリ監視API {#inotify-filedirectory-watch-api}
 
-`inotify` provides notifications when files or directories change. It was introduced in Linux 2.6.13 by Robert Love, based on earlier work by John McCutchan [(commit)](https://git.kernel.org/linus/0eeca28300df110bd6ed54b31193c83b87921443) [(LWN)](https://lwn.net/Articles/104343/), replacing the older **dnotify** mechanism which had a directory-only, signal-based interface. It's used by file managers, build systems, editors, and container runtimes.
+`inotify`は、ファイルやディレクトリが変更されたときに通知を提供する。John McCutchanによる以前の成果を基に、Robert LoveによってLinux 2.6.13で導入された[(commit)](https://git.kernel.org/linus/0eeca28300df110bd6ed54b31193c83b87921443) [(LWN)](https://lwn.net/Articles/104343/)。これは、ディレクトリ専用でシグナルベースのインターフェースを持っていた古い**dnotify**の仕組みを置き換えるものである。ファイルマネージャ、ビルドシステム、エディタ、コンテナランタイムで使われている。
 
 ```c
 #include <sys/inotify.h>
 
-/* 1. Create an inotify instance */
+/* 1. inotifyインスタンスを作成する */
 int ifd = inotify_init1(IN_NONBLOCK | IN_CLOEXEC);
 
-/* 2. Add a watch */
+/* 2. watchを追加する */
 int wd = inotify_add_watch(ifd, "/etc/nginx/nginx.conf",
                             IN_MODIFY | IN_CREATE | IN_DELETE);
 
-/* 3. Read events */
+/* 3. イベントを読む */
 char buf[4096] __attribute__((aligned(__alignof__(struct inotify_event))));
 ssize_t n = read(ifd, buf, sizeof(buf));
 
@@ -31,110 +31,110 @@ while (ptr < buf + n) {
     ptr += sizeof(*ev) + ev->len;
 }
 
-/* 4. Remove a watch */
+/* 4. watchを削除する */
 inotify_rm_watch(ifd, wd);
 close(ifd);
 ```
 
-### Event masks {#event-masks}
+### イベントマスク {#event-masks}
 
 ```c
-/* Watch events (what to watch for) */
-IN_ACCESS        /* File was read */
-IN_MODIFY        /* File was modified */
-IN_ATTRIB        /* Metadata changed (chmod, chown, timestamps) */
-IN_CLOSE_WRITE   /* File opened for writing was closed */
-IN_CLOSE_NOWRITE /* File opened read-only was closed */
-IN_OPEN          /* File was opened */
-IN_MOVED_FROM    /* File moved out of watched directory */
-IN_MOVED_TO      /* File moved into watched directory */
-IN_CREATE        /* File/directory created in watched directory */
-IN_DELETE        /* File/directory deleted from watched directory */
-IN_DELETE_SELF   /* Watched file/directory itself deleted */
-IN_MOVE_SELF     /* Watched file/directory itself moved */
+/* 監視イベント（何を監視するか） */
+IN_ACCESS        /* ファイルが読まれた */
+IN_MODIFY        /* ファイルが変更された */
+IN_ATTRIB        /* メタデータが変更された（chmod、chown、タイムスタンプ） */
+IN_CLOSE_WRITE   /* 書き込み用にオープンされたファイルがクローズされた */
+IN_CLOSE_NOWRITE /* 読み取り専用でオープンされたファイルがクローズされた */
+IN_OPEN          /* ファイルがオープンされた */
+IN_MOVED_FROM    /* ファイルが監視対象ディレクトリから移動された */
+IN_MOVED_TO      /* ファイルが監視対象ディレクトリへ移動された */
+IN_CREATE        /* 監視対象ディレクトリ内でファイル/ディレクトリが作成された */
+IN_DELETE        /* 監視対象ディレクトリからファイル/ディレクトリが削除された */
+IN_DELETE_SELF   /* 監視対象のファイル/ディレクトリ自体が削除された */
+IN_MOVE_SELF     /* 監視対象のファイル/ディレクトリ自体が移動された */
 
-/* Convenience combinations */
+/* 便利な組み合わせ */
 IN_CLOSE    /* IN_CLOSE_WRITE | IN_CLOSE_NOWRITE */
 IN_MOVE     /* IN_MOVED_FROM | IN_MOVED_TO */
-IN_ALL_EVENTS /* All of the above */
+IN_ALL_EVENTS /* 上記のすべて */
 
-/* Event flags returned in mask (not used in add_watch) */
-IN_UNMOUNT   /* Filesystem containing watched object was unmounted */
-IN_Q_OVERFLOW /* Event queue overflowed (wd = -1) */
-IN_IGNORED   /* Watch was removed (inotify_rm_watch or file deleted) */
-IN_ISDIR     /* Subject of this event is a directory */
+/* maskで返されるイベントフラグ（add_watchでは使わない） */
+IN_UNMOUNT   /* 監視対象を含むファイルシステムがアンマウントされた */
+IN_Q_OVERFLOW /* イベントキューがオーバーフローした（wd = -1） */
+IN_IGNORED   /* watchが削除された（inotify_rm_watchまたはファイル削除） */
+IN_ISDIR     /* このイベントの対象はディレクトリである */
 
-/* Watch flags (inotify_add_watch flags parameter) */
-IN_DONT_FOLLOW  /* Don't dereference symlinks */
-IN_EXCL_UNLINK  /* Don't generate events for unlinked files */
-IN_ONESHOT      /* Remove watch after first event */
-IN_ONLYDIR      /* Only watch if path is a directory */
+/* watchフラグ（inotify_add_watchのflags引数） */
+IN_DONT_FOLLOW  /* シンボリックリンクを参照外ししない */
+IN_EXCL_UNLINK  /* unlinkされたファイルについてイベントを生成しない */
+IN_ONESHOT      /* 最初のイベントの後にwatchを削除する */
+IN_ONLYDIR      /* パスがディレクトリの場合のみ監視する */
 ```
 
-### Rename detection with cookie {#rename-detection-with-cookie}
+### cookieによるrenameの検出 {#rename-detection-with-cookie}
 
-`IN_MOVED_FROM` and `IN_MOVED_TO` events for the same rename share a `cookie` value:
+同じrenameに対する`IN_MOVED_FROM`と`IN_MOVED_TO`のイベントは、同じ`cookie`値を共有する:
 
 ```c
-/* Detect rename: /src/old → /dst/new */
+/* renameを検出する: /src/old → /dst/new */
 int wd_src = inotify_add_watch(ifd, "/src", IN_MOVE);
 int wd_dst = inotify_add_watch(ifd, "/dst", IN_MOVE);
 
-/* Read events */
-/* Event 1: wd=wd_src, mask=IN_MOVED_FROM, cookie=42, name="old" */
-/* Event 2: wd=wd_dst, mask=IN_MOVED_TO,   cookie=42, name="new" */
+/* イベントを読む */
+/* イベント1: wd=wd_src, mask=IN_MOVED_FROM, cookie=42, name="old" */
+/* イベント2: wd=wd_dst, mask=IN_MOVED_TO,   cookie=42, name="new" */
 
-/* Match by cookie to reconstruct the rename */
+/* cookieで突き合わせてrenameを再構成する */
 ```
 
-If only one side is watched, you get an `IN_MOVED_FROM` or `IN_MOVED_TO` without the matching pair — detect cross-directory renames that way.
+片側しか監視していない場合は、対になるイベントのない`IN_MOVED_FROM`または`IN_MOVED_TO`を受け取る。ディレクトリをまたぐrenameはこの方法で検出できる。
 
-### inotify limits {#inotify-limits}
+### inotifyの上限 {#inotify-limits}
 
 ```bash
-# Maximum number of inotify instances per user
-cat /proc/sys/fs/inotify/max_user_instances  # default: 128
+# ユーザーごとのinotifyインスタンスの最大数
+cat /proc/sys/fs/inotify/max_user_instances  # デフォルト: 128
 
-# Maximum number of watches per instance
-cat /proc/sys/fs/inotify/max_user_watches    # default: 8192
+# インスタンスごとのwatchの最大数
+cat /proc/sys/fs/inotify/max_user_watches    # デフォルト: 8192
 
-# Maximum queue length (events before IN_Q_OVERFLOW)
-cat /proc/sys/fs/inotify/max_queued_events   # default: 16384
+# キューの最大長（IN_Q_OVERFLOWになるまでのイベント数）
+cat /proc/sys/fs/inotify/max_queued_events   # デフォルト: 16384
 
-# Increase for large codebases (e.g., webpack, VS Code):
+# 大規模なコードベース向けに増やす（例: webpack、VS Code）:
 echo 524288 | sudo tee /proc/sys/fs/inotify/max_user_watches
 ```
 
-### inotify limitations {#inotify-limitations}
+### inotifyの制限事項 {#inotify-limitations}
 
-- **Recursive watching**: inotify does not watch subdirectories automatically — you must add a watch for each directory
-- **No event for the watcher itself**: if the watched directory is deleted, you get `IN_DELETE_SELF` but cannot watch the replacement
-- **Network filesystems**: inotify may not work on NFS, CIFS (depends on server support)
-- **Overflow loses events**: `IN_Q_OVERFLOW` tells you events were dropped but not which ones
+- **再帰的な監視**: inotifyはサブディレクトリを自動的には監視しない。ディレクトリごとにwatchを追加しなければならない
+- **監視者自身のイベントがない**: 監視対象のディレクトリが削除されると`IN_DELETE_SELF`を受け取るが、置き換えられたディレクトリを監視することはできない
+- **ネットワークファイルシステム**: inotifyはNFSやCIFSでは動作しないことがある（サーバーのサポートに依存する）
+- **オーバーフローでイベントが失われる**: `IN_Q_OVERFLOW`はイベントが破棄されたことを伝えるが、どのイベントかは伝えない
 
-## fanotify: filesystem-wide event notification {#fanotify-filesystem-wide-event-notification}
+## fanotify: ファイルシステム全体のイベント通知 {#fanotify-filesystem-wide-event-notification}
 
-`fanotify` was introduced in Linux 2.6.36 by Eric Paris at Red Hat [(commit)](https://git.kernel.org/linus/ff0b16a9850e8a240ad59e10b0a1291a8fcf7cbc) and fully enabled in Linux 2.6.37. It is a superset of inotify with additional capabilities:
+`fanotify`は、Red HatのEric ParisによってLinux 2.6.36で導入され[(commit)](https://git.kernel.org/linus/ff0b16a9850e8a240ad59e10b0a1291a8fcf7cbc)、Linux 2.6.37で完全に有効化された。これはinotifyの上位集合であり、次の追加機能を持つ:
 
-- Watch entire mount points, not just individual files/dirs
-- Receive the file descriptor of the changed file (open for reading)
-- **Permission events**: intercept access and deny it (used by AV scanners)
-- Watch for filesystem-wide changes (all files on a mount)
+- 個々のファイル/ディレクトリだけでなく、マウントポイント全体を監視する
+- 変更されたファイルのファイルディスクリプタ（読み取り用にオープン済み）を受け取る
+- **パーミッションイベント**: アクセスを横取りして拒否する（アンチウイルススキャナが使用）
+- ファイルシステム全体の変更（マウント上のすべてのファイル）を監視する
 
 ```c
 #include <sys/fanotify.h>
 #include <fcntl.h>
 
-/* Create fanotify instance: requires CAP_SYS_ADMIN for some flags */
+/* fanotifyインスタンスを作成する: 一部のフラグにはCAP_SYS_ADMINが必要 */
 int fan = fanotify_init(FAN_CLOEXEC | FAN_CLASS_NOTIF,
                          O_RDONLY | O_LARGEFILE);
 
-/* Watch an entire mount point */
+/* マウントポイント全体を監視する */
 fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT,
               FAN_OPEN | FAN_CLOSE_WRITE | FAN_MODIFY,
               AT_FDCWD, "/home");
 
-/* Read events */
+/* イベントを読む */
 struct fanotify_event_metadata buf[10];
 ssize_t n = read(fan, buf, sizeof(buf));
 
@@ -143,10 +143,10 @@ for (struct fanotify_event_metadata *m = buf;
      m = FAN_EVENT_NEXT(m, n)) {
 
     if (m->fd == FAN_NOFD)
-        continue;  /* overflow or error event */
+        continue;  /* オーバーフローまたはエラーのイベント */
 
-    /* m->fd is a readable fd to the changed file */
-    /* Read /proc/self/fd/N to get the path: */
+    /* m->fdは変更されたファイルへの読み取り可能なfd */
+    /* パスを得るには /proc/self/fd/N を読む: */
     char path[PATH_MAX];
     char fdpath[64];
     snprintf(fdpath, sizeof(fdpath), "/proc/self/fd/%d", m->fd);
@@ -155,14 +155,14 @@ for (struct fanotify_event_metadata *m = buf;
     printf("pid=%d fd=%d mask=%llx path=%s\n",
            m->pid, m->fd, m->mask, path);
 
-    close(m->fd);  /* MUST close each event fd */
+    close(m->fd);  /* 各イベントのfdは必ずクローズすること */
 }
 ```
 
-### fanotify permission events {#fanotify-permission-events}
+### fanotifyのパーミッションイベント {#fanotify-permission-events}
 
 ```c
-/* Permission events: intercept and allow/deny access */
+/* パーミッションイベント: アクセスを横取りして許可/拒否する */
 int fan = fanotify_init(FAN_CLOEXEC | FAN_CLASS_CONTENT,
                          O_RDONLY | O_LARGEFILE);
 
@@ -170,57 +170,57 @@ fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_MOUNT,
               FAN_OPEN_PERM | FAN_ACCESS_PERM,
               AT_FDCWD, "/restricted");
 
-/* Read a permission event */
+/* パーミッションイベントを読む */
 struct fanotify_event_metadata ev;
 read(fan, &ev, sizeof(ev));
 
-/* Inspect the file (ev.fd is open for reading) */
-/* ... check if access should be allowed ... */
+/* ファイルを検査する（ev.fdは読み取り用にオープン済み） */
+/* ... アクセスを許可すべきか確認する ... */
 
-/* Respond: allow or deny */
+/* 応答する: 許可または拒否 */
 struct fanotify_response resp = {
     .fd       = ev.fd,
-    .response = FAN_ALLOW,  /* or FAN_DENY */
+    .response = FAN_ALLOW,  /* またはFAN_DENY */
 };
 write(fan, &resp, sizeof(resp));
 close(ev.fd);
 ```
 
-`FAN_CLASS_CONTENT` (for `FAN_OPEN_PERM` etc.) requires `CAP_SYS_ADMIN`. This is how antivirus software (like ClamAV's `clamonacc`) implements on-access scanning on Linux.
+`FAN_CLASS_CONTENT`（`FAN_OPEN_PERM`などのため）には`CAP_SYS_ADMIN`が必要である。アンチウイルスソフトウェア（ClamAVの`clamonacc`など）は、この方法でLinux上のオンアクセススキャンを実装している。
 
-### fanotify mark types (5.1+) {#fanotify-mark-types-51}
+### fanotifyのマーク種別（5.1以降） {#fanotify-mark-types-51}
 
 ```c
-/* Mark an individual filesystem object (5.1+) */
+/* 個々のファイルシステムオブジェクトにマークする（5.1以降） */
 fanotify_mark(fan, FAN_MARK_ADD | FAN_MARK_FILESYSTEM,
               FAN_CREATE | FAN_DELETE | FAN_RENAME,
               AT_FDCWD, "/");
-/* Watches all creates/deletes/renames on entire filesystem */
+/* ファイルシステム全体のすべての作成/削除/renameを監視する */
 
-/* FAN_RENAME event includes both source and dest info (5.17+) */
-/* FAN_REPORT_FID: report file ID instead of fd (avoids fd leak) */
+/* FAN_RENAMEイベントは移動元と移動先の両方の情報を含む（5.17以降） */
+/* FAN_REPORT_FID: fdの代わりにファイルIDを報告する（fdのリークを避ける） */
 int fan = fanotify_init(FAN_CLASS_NOTIF | FAN_REPORT_FID, 0);
 ```
 
-## Kernel implementation: fsnotify {#kernel-implementation-fsnotify}
+## カーネルの実装: fsnotify {#kernel-implementation-fsnotify}
 
-Both `inotify` and `fanotify` are built on top of `fsnotify`, a generic filesystem notification framework:
+`inotify`と`fanotify`はどちらも、汎用のファイルシステム通知フレームワークである`fsnotify`の上に構築されている:
 
 ```c
 /* include/linux/fsnotify_backend.h */
 struct fsnotify_group {
-    /* One per inotify/fanotify instance */
+    /* inotify/fanotifyのインスタンスごとに1つ */
     struct list_head        marks_list;
     const struct fsnotify_ops *ops;
     struct mutex            notification_mutex;
-    struct list_head        notification_list; /* pending events */
+    struct list_head        notification_list; /* 保留中のイベント */
     wait_queue_head_t       notification_waitq;
     atomic_t                num_marks;
-    u32                     mask;  /* aggregated event mask */
+    u32                     mask;  /* 集約されたイベントマスク */
 };
 
 struct fsnotify_mark {
-    /* Attached to: inode, mount point, or filesystem */
+    /* 付与先: inode、マウントポイント、またはファイルシステム */
     __u32 mask;
     union {
         struct inode    *inode;
@@ -231,32 +231,32 @@ struct fsnotify_mark {
 };
 ```
 
-When a VFS operation occurs (e.g., `vfs_write`):
+VFS操作（例: `vfs_write`）が発生すると:
 
 ```c
 /* fs/notify/fsnotify.c */
 int fsnotify(struct inode *inode, __u32 mask, const void *data, int data_type,
              const struct qstr *file_name, u32 cookie)
 {
-    /* Called from VFS hooks after each operation */
+    /* 各操作の後にVFSフックから呼ばれる */
 
-    /* Walk marks on this inode */
+    /* このinode上のマークを走査する */
     hlist_for_each_entry(mark, &inode->i_fsnotify_marks, obj_list) {
         if (mark->mask & mask) {
-            /* Deliver event to this group (inotify or fanotify) */
+            /* このグループ（inotifyまたはfanotify）にイベントを配送する */
             mark->group->ops->handle_event(mark->group, mark, inode,
                                             mask, data, ...);
         }
     }
 }
 
-/* Called from: */
+/* 呼び出し元: */
 /* vfs_write → file_update_time → fsnotify(IN_MODIFY) */
 /* vfs_unlink → fsnotify_unlink → fsnotify(IN_DELETE) */
 /* security_inode_rename → fsnotify_rename */
 ```
 
-### VFS hook points {#vfs-hook-points}
+### VFSのフックポイント {#vfs-hook-points}
 
 ```c
 /* fs/attr.c */
@@ -277,16 +277,16 @@ int vfs_rename(...)
 {
     /* ... */
     fsnotify_move(old_dir, new_dir, old_name, new_name, ...);
-    /* → IN_MOVED_FROM + IN_MOVED_TO with shared cookie */
+    /* → 共通のcookieを持つIN_MOVED_FROM + IN_MOVED_TO */
 }
 ```
 
-## Practical patterns {#practical-patterns}
+## 実践的なパターン {#practical-patterns}
 
-### Watch a directory recursively (userspace workaround) {#watch-a-directory-recursively-userspace-workaround}
+### ディレクトリを再帰的に監視する（ユーザー空間での回避策） {#watch-a-directory-recursively-userspace-workaround}
 
 ```c
-/* inotify has no recursive mode — must add watches manually */
+/* inotifyには再帰モードがない — watchを手動で追加しなければならない */
 void watch_recursive(int ifd, const char *path) {
     int wd = inotify_add_watch(ifd, path, IN_ALL_EVENTS);
 
@@ -303,13 +303,13 @@ void watch_recursive(int ifd, const char *path) {
     closedir(dir);
 }
 
-/* When IN_CREATE | IN_ISDIR arrives: add a new watch for the new subdir */
+/* IN_CREATE | IN_ISDIR が届いたら: 新しいサブディレクトリに新しいwatchを追加する */
 ```
 
-### Using epoll with inotify {#using-epoll-with-inotify}
+### inotifyとepollを併用する {#using-epoll-with-inotify}
 
 ```c
-/* inotify fd integrates with epoll */
+/* inotifyのfdはepollと統合できる */
 int epfd = epoll_create1(0);
 struct epoll_event ev = {
     .events  = EPOLLIN,
@@ -317,33 +317,33 @@ struct epoll_event ev = {
 };
 epoll_ctl(epfd, EPOLL_CTL_ADD, ifd, &ev);
 
-/* Event loop */
+/* イベントループ */
 struct epoll_event evs[16];
 int n = epoll_wait(epfd, evs, 16, -1);
 for (int i = 0; i < n; i++) {
     if (evs[i].data.fd == ifd) {
-        /* Read inotify events */
+        /* inotifyのイベントを読む */
     }
 }
 ```
 
-## inotify vs fanotify {#inotify-vs-fanotify}
+## inotifyとfanotifyの比較 {#inotify-vs-fanotify}
 
-| Feature | inotify | fanotify |
+| 機能 | inotify | fanotify |
 |---------|---------|---------|
-| Watch granularity | File or directory | File, mount, filesystem |
-| Recursive | No (userspace workaround) | Yes (FAN_MARK_MOUNT) |
-| Event fd for changed file | No | Yes |
-| Permission events | No | Yes (FAN_CLASS_CONTENT) |
-| Network filesystems | Limited | Better support |
-| Privileges required | None | CAP_SYS_ADMIN for some |
-| Rename tracking | Cookie-based | FAN_RENAME (5.17+) |
-| Typical use | Build systems, editors | AV scanning, audit |
+| 監視の粒度 | ファイルまたはディレクトリ | ファイル、マウント、ファイルシステム |
+| 再帰 | なし（ユーザー空間での回避策） | あり（FAN_MARK_MOUNT） |
+| 変更されたファイルのイベントfd | なし | あり |
+| パーミッションイベント | なし | あり（FAN_CLASS_CONTENT） |
+| ネットワークファイルシステム | 限定的 | より良いサポート |
+| 必要な権限 | なし | 一部はCAP_SYS_ADMIN |
+| renameの追跡 | cookieベース | FAN_RENAME（5.17以降） |
+| 典型的な用途 | ビルドシステム、エディタ | アンチウイルススキャン、監査 |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — inodes and dentries that receive events
-- [File Operations](file-ops.md) — VFS hooks that trigger fsnotify
-- [IPC: Signals](../ipc/signals.md) — `SIGEV_SIGNAL` delivery for fanotify
-- `fs/notify/` — fsnotify, inotify, and fanotify implementation
-- `include/linux/fsnotify.h` — fsnotify hook declarations
+- [VFSオブジェクト](vfs-objects.md) — イベントを受け取るinodeとdentry
+- [ファイル操作](file-ops.md) — fsnotifyを起動するVFSフック
+- [IPC: シグナル](../ipc/signals.md) — fanotifyのための`SIGEV_SIGNAL`配送
+- `fs/notify/` — fsnotify、inotify、fanotifyの実装
+- `include/linux/fsnotify.h` — fsnotifyフックの宣言
