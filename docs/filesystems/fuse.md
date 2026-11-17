@@ -1,17 +1,17 @@
-# FUSE: Filesystems in Userspace {#fuse-filesystems-in-userspace}
+# FUSE: ユーザー空間のファイルシステム {#fuse-filesystems-in-userspace}
 
-> How the kernel lets an *ordinary program* implement a filesystem — the request/response protocol over `/dev/fuse`, why it costs what it costs, and how virtiofs and io_uring change the math
+> カーネルが*普通のプログラム*にファイルシステムを実装させる仕組み — `/dev/fuse`上のリクエスト／レスポンスプロトコル、そのコストがなぜそうなるのか、そしてvirtiofsとio_uringがその計算をどう変えるのか
 
-Everything else in this section is kernel code: ext4, XFS, and btrfs are compiled into the kernel and run in kernel context. FUSE is the exception that makes the rest possible to sidestep — it lets a filesystem be implemented by a normal userspace process. sshfs, s3fs, gluster's client, `ntfs-3g`, GNOME's gvfs, AppImage, and rclone's mount all work this way. The trade is flexibility (write a filesystem in any language, with no kernel code and no reboot) against a performance cost that comes directly from the architecture.
+このセクションの他の内容はすべてカーネルコードである。ext4、XFS、btrfsはカーネルに組み込まれ、カーネルコンテキストで動作する。FUSEは例外であり、それ以外のすべてを回避する道を開く — 通常のユーザー空間プロセスがファイルシステムを実装できるようにするのだ。sshfs、s3fs、glusterのクライアント、`ntfs-3g`、GNOMEのgvfs、AppImage、rcloneのマウントはすべてこの方式で動作する。トレードオフは、柔軟性（任意の言語で、カーネルコードなし、再起動なしでファイルシステムを書ける）と、アーキテクチャから直接生じる性能コストとの間にある。
 
-## The architecture: a kernel driver that forwards to a daemon {#the-architecture-a-kernel-driver-that-forwards-to-a-daemon}
+## アーキテクチャ: デーモンへ転送するカーネルドライバ {#the-architecture-a-kernel-driver-that-forwards-to-a-daemon}
 
-FUSE is two halves that talk through a device:
+FUSEはデバイスを通じて対話する2つの部分からなる。
 
-1. A **kernel module** (`fs/fuse/`) that registers `fuse` as a real filesystem type. To the VFS it looks like any other filesystem — it implements the inode and file operations.
-2. A **userspace daemon** (usually built on `libfuse`) that contains the actual filesystem logic.
+1. 実際のファイルシステムタイプとして`fuse`を登録する**カーネルモジュール**（`fs/fuse/`）。VFSから見ると他のファイルシステムと変わらない — inode操作とファイル操作を実装している。
+2. 実際のファイルシステムロジックを含む**ユーザー空間デーモン**（通常は`libfuse`上に構築される）。
 
-They communicate through the character device **`/dev/fuse`**. When a process does `open()`, `read()`, `stat()`, or `readdir()` on a FUSE mount, the VFS calls into the FUSE kernel module, which does *not* know how to answer — instead it packages the operation into a **request** and makes it available for the daemon to read from `/dev/fuse`. The daemon reads the request, does whatever it means (fetch from S3, read over SSH, decode NTFS), and writes a **reply** back. The kernel unpacks the reply and returns it to the original caller, which was blocked the whole time.
+両者はキャラクタデバイス**`/dev/fuse`**を通じて通信する。プロセスがFUSEマウント上で`open()`、`read()`、`stat()`、`readdir()`を実行すると、VFSはFUSEカーネルモジュールを呼び出す。しかしモジュールは答え方を*知らない*。代わりに操作を**リクエスト**にまとめ、デーモンが`/dev/fuse`から読み出せるようにする。デーモンはリクエストを読み、それが意味する処理（S3からの取得、SSH越しの読み出し、NTFSのデコード）を行い、**リプライ**を書き戻す。カーネルはリプライを展開し、ずっとブロックしていた元の呼び出し元へ返す。
 
 ```
   user process              kernel                         FUSE daemon (userspace)
@@ -25,32 +25,32 @@ They communicate through the character device **`/dev/fuse`**. When a process do
   ◄──────── data ───── VFS ◄── FUSE module (copies reply into the page)
 ```
 
-Each request carries an opcode (`FUSE_LOOKUP`, `FUSE_OPEN`, `FUSE_READ`, `FUSE_WRITE`, `FUSE_GETATTR`, …) and its arguments; the protocol is versioned and negotiated at mount via a `FUSE_INIT` handshake.
+各リクエストはオペコード（`FUSE_LOOKUP`、`FUSE_OPEN`、`FUSE_READ`、`FUSE_WRITE`、`FUSE_GETATTR`、…）とその引数を運ぶ。プロトコルはバージョン管理されており、マウント時に`FUSE_INIT`ハンドシェイクでネゴシエートされる。
 
-## Why it costs what it costs {#why-it-costs-what-it-costs}
+## コストがなぜそうなるのか {#why-it-costs-what-it-costs}
 
-A single `read()` that a native filesystem answers with a page-cache hit becomes, under FUSE, a round trip out to userspace and back:
+ネイティブなファイルシステムならページキャッシュのヒットで応答する1回の`read()`が、FUSEではユーザー空間への往復になる。
 
-- **Context switches.** The calling task blocks; the daemon must be scheduled to read the request; then control comes back. That's at least two extra scheduling boundaries per uncached operation.
-- **Data copies.** Historically the reply data was copied from the daemon's buffer through `/dev/fuse` into the kernel's page. `splice()` later removed some of these copies, but the boundary crossing remains.
-- **Serialization.** Every operation is marshaled into the FUSE protocol format and unmarshaled again.
+- **コンテキストスイッチ。** 呼び出し元タスクはブロックし、デーモンはリクエストを読むためにスケジュールされなければならず、その後に制御が戻ってくる。キャッシュされていない操作1回につき、少なくとも2つの余分なスケジューリング境界が生じる。
+- **データコピー。** 歴史的に、リプライのデータはデーモンのバッファから`/dev/fuse`を経てカーネルのpageへコピーされていた。後に`splice()`がこれらのコピーの一部を取り除いたが、境界の横断は残っている。
+- **シリアライズ。** すべての操作はFUSEプロトコル形式にマーシャリングされ、再びアンマーシャリングされる。
 
-FUSE mitigates rather than eliminates this. The kernel side caches aggressively — dentries, attributes, and page data are cached with negotiated timeouts, so repeated lookups and cached reads never leave the kernel. Writeback caching batches dirty data. `max_pages` and readahead let one request move up to a megabyte at a time. But the fundamental "cross to userspace for a cache miss" cost is inherent to the model, which is why FUSE filesystems trail native ones on metadata-heavy and small-I/O workloads.
+FUSEはこれを排除するのではなく緩和する。カーネル側は積極的にキャッシュする — dentry、属性、pageデータはネゴシエートされたタイムアウト付きでキャッシュされるため、繰り返しのルックアップやキャッシュ済みの読み出しはカーネルの外に出ない。ライトバックキャッシングはダーティデータをまとめる。`max_pages`とリードアヘッドにより、1つのリクエストで最大1メガバイトずつ移動できる。しかし「キャッシュミスのたびにユーザー空間へ渡る」という根本的なコストはモデルに固有のものであり、メタデータの多いワークロードや小さなI/Oのワークロードで、FUSEファイルシステムがネイティブなものに後れをとるのはこのためである。
 
-## Security: unprivileged mounts {#security-unprivileged-mounts}
+## セキュリティ: 非特権マウント {#security-unprivileged-mounts}
 
-Because a FUSE daemon is untrusted userspace serving filesystem responses to other processes, mounting one was historically privileged. The kernel gained support for **fully unprivileged FUSE mounts inside user namespaces** ([`4ad769f3c346`](https://git.kernel.org/linus/4ad769f3c346) "fuse: Allow fully unprivileged mounts"), which is what lets rootless containers and sandboxes mount FUSE filesystems safely — the kernel restricts what such a mount can do (e.g. `allow_other` is confined to the mounting namespace) so a malicious daemon can't attack processes outside its own domain.
+FUSEデーモンは他のプロセスにファイルシステムの応答を返す信頼できないユーザー空間であるため、そのマウントは歴史的に特権操作だった。カーネルは**user namespace内での完全に非特権なFUSEマウント**のサポートを得た（[`4ad769f3c346`](https://git.kernel.org/linus/4ad769f3c346) "fuse: Allow fully unprivileged mounts"）。これにより、rootlessコンテナやサンドボックスがFUSEファイルシステムを安全にマウントできる — カーネルはそうしたマウントができることを制限し（例えば`allow_other`はマウントしたnamespaceの中に限定される）、悪意あるデーモンが自身のドメイン外のプロセスを攻撃できないようにしている。
 
-## Beyond the classic model {#beyond-the-classic-model}
+## 古典的モデルを超えて {#beyond-the-classic-model}
 
-Two developments attack FUSE's central cost — the userspace round trip:
+FUSEの中心的なコスト — ユーザー空間への往復 — に挑む2つの進展がある。
 
-- **virtiofs** applies the FUSE protocol to a different problem: sharing a host directory into a virtual machine. Instead of `/dev/fuse`, requests travel over a **virtio** transport to a device the host services, giving VMs a shared filesystem with near-native semantics and, via DAX, the ability to map host page cache directly. See the kernel's [virtiofs documentation](https://docs.kernel.org/filesystems/virtiofs.html) ([`a62a8ef9d97d`](https://git.kernel.org/linus/a62a8ef9d97d) "virtio-fs: add virtiofs filesystem").
-- **FUSE over io_uring** replaces the read/write-on-`/dev/fuse` request loop with shared ring buffers, so the kernel and daemon exchange requests and replies with far fewer syscalls and context switches, and can keep a request serviced on the same CPU. See [FUSE-over-io-uring](https://docs.kernel.org/filesystems/fuse/fuse-io-uring.html). (For the ring mechanism itself, see [io_uring](../io-uring/README.md).)
+- **virtiofs**は、FUSEプロトコルを別の問題、すなわちホストのディレクトリを仮想マシンと共有する問題に適用する。リクエストは`/dev/fuse`ではなく**virtio**トランスポートを通ってホストが処理するデバイスへ送られ、VMにネイティブに近いセマンティクスを持つ共有ファイルシステムを提供し、さらにDAXを介してホストのページキャッシュを直接マッピングする能力を与える。カーネルの[virtiofs documentation](https://docs.kernel.org/filesystems/virtiofs.html)を参照（[`a62a8ef9d97d`](https://git.kernel.org/linus/a62a8ef9d97d) "virtio-fs: add virtiofs filesystem"）。
+- **FUSE over io_uring**は、`/dev/fuse`に対するread/writeのリクエストループを共有リングバッファに置き換える。これによりカーネルとデーモンははるかに少ないシステムコールとコンテキストスイッチでリクエストとリプライを交換でき、リクエストを同じCPU上で処理し続けることもできる。[FUSE-over-io-uring](https://docs.kernel.org/filesystems/fuse/fuse-io-uring.html)を参照。（リング機構そのものについては[io_uring](../io-uring/README.md)を参照。）
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: FUSE](https://docs.kernel.org/filesystems/fuse/fuse.html) — the protocol and the design rationale
-- [Kernel docs: virtiofs](https://docs.kernel.org/filesystems/virtiofs.html) — FUSE protocol over virtio for VMs
-- [Kernel docs: FUSE over io_uring](https://docs.kernel.org/filesystems/fuse/fuse-io-uring.html) — the ring-based transport
-- [VFS](../vfs/README.md) — the layer FUSE plugs into as just another filesystem type
+- [Kernel docs: FUSE](https://docs.kernel.org/filesystems/fuse/fuse.html) — プロトコルと設計の根拠
+- [Kernel docs: virtiofs](https://docs.kernel.org/filesystems/virtiofs.html) — VM向けにvirtio上で動くFUSEプロトコル
+- [Kernel docs: FUSE over io_uring](https://docs.kernel.org/filesystems/fuse/fuse-io-uring.html) — リングベースのトランスポート
+- [VFS](../vfs/README.md) — FUSEが単なる1つのファイルシステムタイプとして接続されるレイヤ

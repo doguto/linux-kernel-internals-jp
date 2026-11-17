@@ -1,65 +1,65 @@
-# Crash Consistency and Recovery {#crash-consistency-and-recovery}
+# クラッシュ一貫性とリカバリ {#crash-consistency-and-recovery}
 
-> Why a filesystem survives a power cut mid-write — the two strategies (journaling and copy-on-write), what `fsync()` really promises, and where the guarantees leak
+> 書き込み途中の電源断をファイルシステムがなぜ生き延びられるのか — 2つの戦略（ジャーナリングとcopy-on-write）、`fsync()`が本当に約束すること、そして保証がどこから漏れるのか
 
-A single logical operation — appending to a file — touches several independent places on disk: the data blocks, the inode's block map, the inode itself (size, mtime), and the free-space bitmap. The device commits these whenever it likes, in whatever order it likes. If power fails partway through, the on-disk image can be left in a state that no correct sequence of operations could produce: an inode claiming blocks the allocator still considers free, or a lengthened file whose tail points at uninitialized garbage.
+単一の論理的な操作 — ファイルへの追記 — は、ディスク上の複数の独立した場所に触れる。データブロック、inodeのブロックマップ、inode自体（サイズ、mtime）、そして空き領域ビットマップである。デバイスはこれらを好きなときに、好きな順序でコミットする。途中で電源が落ちると、ディスク上のイメージは、正しい操作の列では決して生じえない状態に残されうる。アロケータがまだ空きと見なしているブロックをinodeが自分のものだと主張していたり、伸長されたファイルの末尾が初期化されていないゴミを指していたりする。
 
-Crash consistency is the property that, after an unclean shutdown, the filesystem can be brought back to *some* valid state — never a corrupt one. Every serious Linux filesystem provides it, and they do so in one of two ways.
+クラッシュ一貫性とは、アンクリーンなシャットダウンの後、ファイルシステムを*何らかの*有効な状態に戻せる — 決して壊れた状態にはならない — という性質である。本格的なLinuxファイルシステムはどれもこれを提供しており、その方法は2つのうちのどちらかである。
 
-## Why you can't just "write carefully" {#why-you-cant-just-write-carefully}
+## なぜ「注意深く書く」だけでは済まないのか {#why-you-cant-just-write-carefully}
 
-Ordering writes in the code doesn't order them on the platter. Two things get in the way:
+コード内で書き込みの順序を決めても、プラッタ上の順序は決まらない。2つのものが邪魔をする。
 
-- **Reordering.** The [block layer](../block/bio-request.md), the device queue, and the drive's own firmware are all free to reorder in-flight writes to optimize seeks and parallelism.
-- **Volatile caches.** Almost every drive has a volatile write-back cache. A write that has "completed" from the kernel's point of view may still live only in that cache, and is lost on power failure.
+- **並べ替え。** [ブロックレイヤ](../block/bio-request.md)、デバイスキュー、ドライブ自身のファームウェアはいずれも、シークと並列性を最適化するために処理中の書き込みを自由に並べ替えてよい。
+- **揮発性キャッシュ。** ほぼすべてのドライブは揮発性のライトバックキャッシュを持つ。カーネルから見て「完了」した書き込みが、まだそのキャッシュの中にしか存在しないこともあり、電源断で失われる。
 
-So the filesystem needs a way to say *"these writes must reach stable media before those."* The kernel expresses this with two request flags (see the block layer's [writeback cache control](https://docs.kernel.org/block/writeback_cache_control.html)):
+そこでファイルシステムには、*「これらの書き込みは、あれらより先に安定したメディアに到達しなければならない」*と言う手段が必要になる。カーネルはこれを2つのリクエストフラグで表現する（ブロックレイヤの[writeback cache control](https://docs.kernel.org/block/writeback_cache_control.html)を参照）。
 
-- **`REQ_PREFLUSH`** — flush the device cache so all *previously* completed writes are on stable media before this request begins.
-- **`REQ_FUA`** (Force Unit Access) — this request itself must be on stable media before it is reported complete.
+- **`REQ_PREFLUSH`** — デバイスキャッシュをフラッシュし、*それ以前に*完了したすべての書き込みが、このリクエストの開始前に安定したメディア上にあるようにする。
+- **`REQ_FUA`**（Force Unit Access） — このリクエスト自体が、完了を報告される前に安定したメディア上になければならない。
 
-A journal commit and a CoW superblock update are both, underneath, a carefully placed pair of flush/FUA writes. (These replaced the older, coarser "write barriers"; the barrier concept was removed once flush/FUA gave finer control.)
+ジャーナルのコミットもCoWのスーパーブロック更新も、その根底では注意深く配置されたflush/FUA書き込みのペアである。（これらは古くて粗い「書き込みバリア」を置き換えたものである。flush/FUAがより細かな制御を与えるようになったため、バリアの概念は削除された。）
 
-## Strategy 1: journaling (ext4, XFS) {#strategy-1-journaling-ext4-xfs}
+## 戦略1: ジャーナリング（ext4、XFS） {#strategy-1-journaling-ext4-xfs}
 
-A journaling filesystem writes its intended changes to a dedicated **log** *before* touching their real locations. The sequence for one transaction:
+ジャーナリングファイルシステムは、意図した変更を実際の位置に触れる*前に*専用の**ログ**へ書き込む。1つのトランザクションの流れは次のとおりである。
 
-1. Write the changed blocks (or just the metadata) into the journal.
-2. Issue a flush, then write a **commit record** — with `REQ_FUA` — that marks the transaction complete and durable.
-3. Only later ("checkpoint") copy the changes to their real, in-place locations.
+1. 変更されたブロック（またはメタデータのみ）をジャーナルに書き込む。
+2. フラッシュを発行し、続いてトランザクションが完了し永続化されたことを示す**コミットレコード**を`REQ_FUA`付きで書き込む。
+3. その後になって初めて（「チェックポイント」）、変更を実際のインプレースの位置へコピーする。
 
-If the machine crashes before step 2's commit record lands, recovery discards the incomplete transaction — it's as if the operation never happened. If it crashes after, recovery **replays** the logged blocks over their in-place destinations. Either way the filesystem lands in a consistent state, and recovery is bounded by the size of the log rather than a full-disk `fsck`.
+ステップ2のコミットレコードが書き込まれる前にマシンがクラッシュした場合、リカバリは不完全なトランザクションを破棄する — 操作がまったく行われなかったかのようになる。その後にクラッシュした場合、リカバリはログに記録されたブロックをインプレースの宛先の上に**リプレイ**する。いずれにせよファイルシステムは一貫した状態に落ち着き、リカバリにかかる時間はディスク全体の`fsck`ではなくログのサイズで抑えられる。
 
-What gets journaled is a policy choice. ext4 offers three data modes:
+何をジャーナリングするかはポリシーの選択である。ext4は3つのデータモードを提供する。
 
-- **`data=journal`** — both data and metadata go through the log. Safest, roughly half the write throughput (everything is written twice).
-- **`data=ordered`** (the default) — only metadata is journaled, but data blocks are forced to disk *before* the metadata that references them commits. This closes the "inode points at garbage" hole without journaling data.
-- **`data=writeback`** — metadata journaled, no ordering of data against it: after a crash, metadata is consistent but a freshly extended file may expose stale contents.
+- **`data=journal`** — データとメタデータの両方がログを通る。最も安全だが、書き込みスループットはおよそ半分になる（すべてが2回書き込まれる）。
+- **`data=ordered`**（デフォルト） — ジャーナリングされるのはメタデータのみだが、データブロックは、それを参照するメタデータがコミットされる*前に*ディスクへ強制的に書き出される。これにより、データをジャーナリングせずに「inodeがゴミを指す」穴を塞ぐ。
+- **`data=writeback`** — メタデータはジャーナリングされるが、データとの順序付けはない。クラッシュ後、メタデータは一貫しているが、拡張されたばかりのファイルが古い内容を露出する可能性がある。
 
-The jbd2 mechanics behind all this — transactions, the commit record, checkpointing — are covered in the [ext4 journaling deep dive](ext4-journal.md). XFS uses the same write-ahead-logging idea with a very different, highly concurrent design (delayed logging, in-memory log items); see the kernel's [XFS delayed logging design](https://docs.kernel.org/filesystems/xfs/xfs-delayed-logging-design.html).
+これらすべての背後にあるjbd2の仕組み — トランザクション、コミットレコード、チェックポイント — は[ext4ジャーナリング詳解](ext4-journal.md)で扱う。XFSは同じ先行書き込みログの考え方を、非常に異なる、高度に並行な設計（遅延ロギング、メモリ内ログアイテム）で使っている。カーネルの[XFS delayed logging design](https://docs.kernel.org/filesystems/xfs/xfs-delayed-logging-design.html)を参照。
 
-## Strategy 2: copy-on-write (btrfs) {#strategy-2-copy-on-write-btrfs}
+## 戦略2: copy-on-write（btrfs） {#strategy-2-copy-on-write-btrfs}
 
-A copy-on-write filesystem never overwrites live data. To change a block, it writes a *new* copy into free space, then updates the pointer to it — which, being a metadata block, is itself copied and re-pointed, all the way up the tree to the root. Nothing that the current, committed tree references is ever mutated in place.
+copy-on-writeファイルシステムは生きているデータを決して上書きしない。ブロックを変更するには、*新しい*コピーを空き領域に書き込み、それへのポインタを更新する — そのポインタもメタデータブロックであるため、それ自体もコピーされて指し直され、ツリーをルートまでさかのぼる。現在コミットされているツリーが参照しているものは、決してインプレースで変更されない。
 
-A transaction commits by writing all the new blocks, flushing, and then atomically updating the **superblock** to point at the new tree root (again with a flush/FUA so the superblock write is durable and last). The superblock update is the single atomic pivot: either the new root is installed or it isn't.
+トランザクションは、すべての新しいブロックを書き込み、フラッシュし、その後**スーパーブロック**を新しいツリーのルートを指すようにアトミックに更新することでコミットされる（ここでもflush/FUAを用い、スーパーブロックの書き込みが永続的で最後になるようにする）。スーパーブロックの更新が唯一のアトミックな転換点である。新しいルートがインストールされるか、されないかのどちらかだ。
 
-Recovery is therefore trivial — there is nothing to replay. A crash mid-transaction simply leaves the superblock pointing at the *previous* root, and the half-written new blocks sit in space the old tree never referenced, to be reclaimed. btrfs keeps multiple superblock copies with monotonic generation numbers so it can always find the newest fully-written one. Snapshots are the same mechanism used deliberately: a snapshot is just an old tree root that is kept instead of reclaimed. See [btrfs](btrfs.md).
+したがってリカバリは自明である — リプレイすべきものは何もない。トランザクションの途中でクラッシュしても、スーパーブロックは*以前の*ルートを指したままであり、書きかけの新しいブロックは古いツリーが一度も参照していない領域に置かれているだけで、後に回収される。btrfsは単調増加する世代番号を持つ複数のスーパーブロックのコピーを保持しており、完全に書き込まれた最新のものを常に見つけられる。スナップショットは同じ仕組みを意図的に使ったものである。スナップショットとは、回収されずに保持された古いツリーのルートにすぎない。[btrfs](btrfs.md)を参照。
 
-## `fsync()`: the application's durability contract {#fsync-the-applications-durability-contract}
+## `fsync()`: アプリケーションの永続性の契約 {#fsync-the-applications-durability-contract}
 
-Filesystem consistency is not the same as *your data being safe*. After a crash a journaled filesystem guarantees its own metadata is consistent, but a `write()` that was still sitting in the [page cache](../io/page-cache-writeback.md) is simply gone. The only way an application forces its data to durable storage is `fsync()`/`fdatasync()` (or opening with `O_SYNC`), which flushes the file's dirty pages and the metadata needed to find them, all the way through the device cache.
+ファイルシステムの一貫性は、*あなたのデータが安全であること*と同じではない。クラッシュ後、ジャーナリングファイルシステムは自身のメタデータの一貫性を保証するが、まだ[ページキャッシュ](../io/page-cache-writeback.md)に置かれていた`write()`は単に消える。アプリケーションがデータを永続ストレージへ強制的に書き出す唯一の方法は`fsync()`/`fdatasync()`（または`O_SYNC`でのオープン）であり、これはファイルのダーティなpageと、それらを見つけるのに必要なメタデータを、デバイスキャッシュを通り抜けるところまでフラッシュする。
 
-This contract had a notorious hole. Historically the kernel recorded a writeback failure by setting a single per-inode error bit and clearing it on the first reader — so if the kernel's own flusher observed the `EIO` first, a later `fsync()` from the application returned **success** even though the data never reached disk. PostgreSQL hit exactly this in 2018 ("fsyncgate"): a checkpoint's `fsync()` reported success after the writeback error had already been consumed and discarded, and the database wrongly believed its data was safe. The fix was new per-file error tracking (`errseq_t`) that guarantees **every** open file descriptor sees a writeback error exactly once, regardless of who else observed it ([`5660e13d2fd6`](https://git.kernel.org/linus/5660e13d2fd6) "fs: new infrastructure for writeback error handling and reporting", building on the [`84cbadadc6ea`](https://git.kernel.org/linus/84cbadadc6ea) `errseq_t` type).
+この契約には悪名高い穴があった。歴史的に、カーネルはライトバックの失敗を、inodeごとの単一のエラービットを立てることで記録し、最初の読み手がそれをクリアしていた — そのため、カーネル自身のフラッシャが先に`EIO`を観測すると、データがディスクに到達していないにもかかわらず、アプリケーションからの後続の`fsync()`は**成功**を返した。PostgreSQLは2018年にまさにこの問題に遭遇した（「fsyncgate」）。ライトバックエラーがすでに消費されて破棄された後に、チェックポイントの`fsync()`が成功を報告し、データベースはデータが安全だと誤って信じてしまった。修正は新しいファイルごとのエラー追跡（`errseq_t`）であり、誰が他にエラーを観測したかにかかわらず、開かれている**すべての**ファイルディスクリプタがライトバックエラーをちょうど一度だけ見ることを保証する（[`5660e13d2fd6`](https://git.kernel.org/linus/5660e13d2fd6) "fs: new infrastructure for writeback error handling and reporting"。[`84cbadadc6ea`](https://git.kernel.org/linus/84cbadadc6ea)の`errseq_t`型の上に構築されている）。
 
-## Where the guarantees leak {#where-the-guarantees-leak}
+## 保証が漏れる場所 {#where-the-guarantees-leak}
 
-Every scheme above rests on one assumption: **when the kernel issues a flush, the device actually persists.** Consumer drives have been caught ignoring `FLUSH`/FUA to win benchmarks; a drive that lies about durability defeats journaling and CoW alike, because the "committed" record may still be in a cache that a power cut erases. This is why durability testing uses real power-loss rigs, and why enterprise SSDs advertise power-loss-protected caches. The filesystem can only be as consistent as the storage is honest.
+上記のすべての方式は1つの前提の上に成り立っている。**カーネルがフラッシュを発行したら、デバイスは実際に永続化する**という前提である。コンシューマ向けドライブがベンチマークで勝つために`FLUSH`/FUAを無視していたことが発覚した例がある。永続性について嘘をつくドライブは、ジャーナリングもCoWも等しく無力にする。「コミット済み」のレコードが、電源断で消えるキャッシュの中にまだあるかもしれないからだ。永続性のテストに実際の電源断試験装置が使われ、エンタープライズSSDが電源断保護付きキャッシュを売りにするのはこのためである。ファイルシステムは、ストレージが正直である程度にしか一貫していられない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ext4 journaling deep dive](ext4-journal.md) — jbd2 transactions and the commit path in detail
-- [btrfs](btrfs.md) — the copy-on-write B-tree and superblock pivot
-- [page cache and writeback](../io/page-cache-writeback.md) — where dirty data lives before `fsync()`
-- [Kernel docs: writeback cache control](https://docs.kernel.org/block/writeback_cache_control.html) — `REQ_PREFLUSH` / `REQ_FUA` semantics
-- [Kernel docs: ext4 journal](https://docs.kernel.org/filesystems/ext4/journal.html) — the on-disk jbd2 format
+- [ext4ジャーナリング詳解](ext4-journal.md) — jbd2のトランザクションとコミットパスの詳細
+- [btrfs](btrfs.md) — copy-on-write B-treeとスーパーブロックによる転換
+- [ページキャッシュとライトバック](../io/page-cache-writeback.md) — `fsync()`以前にダーティデータが置かれる場所
+- [Kernel docs: writeback cache control](https://docs.kernel.org/block/writeback_cache_control.html) — `REQ_PREFLUSH` / `REQ_FUA`のセマンティクス
+- [Kernel docs: ext4 journal](https://docs.kernel.org/filesystems/ext4/journal.html) — ディスク上のjbd2フォーマット

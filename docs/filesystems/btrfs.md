@@ -1,78 +1,78 @@
-# Btrfs: B-tree Filesystem {#btrfs-b-tree-filesystem}
+# Btrfs: B-treeファイルシステム {#btrfs-b-tree-filesystem}
 
-> Copy-on-write B-tree layout, snapshots, subvolumes, and RAID. Created by Chris Mason at Oracle and merged into the mainline kernel in Linux 2.6.29. See [A short history of btrfs](https://lwn.net/Articles/342892/) (LWN) for the design story.
+> copy-on-writeのB-treeレイアウト、スナップショット、サブボリューム、RAID。OracleのChris Masonが作成し、Linux 2.6.29でメインラインカーネルにマージされた。設計の経緯については[A short history of btrfs](https://lwn.net/Articles/342892/)（LWN）を参照。
 
-## Why Btrfs? {#why-btrfs}
+## なぜBtrfsか {#why-btrfs}
 
-Btrfs (B-tree filesystem) was designed to address limitations of ext4:
+Btrfs（B-tree filesystem）は、ext4の限界に対処するために設計された。
 
-| Feature | ext4 | Btrfs |
+| 機能 | ext4 | Btrfs |
 |---------|------|-------|
-| Max volume | 1 EiB | 16 EiB |
-| Checksums | No | Yes (CRC32C/xxhash/SHA256) |
-| Snapshots | No | Yes (instant, writable) |
-| Subvolumes | No | Yes (independent namespaces) |
-| RAID | mdraid only | Built-in RAID 0/1/5/6/10 |
-| Compression | No | zlib/lzo/zstd inline |
-| Deduplication | No | Offline (duperemove) |
-| Send/receive | No | Yes (incremental backups) |
-| Copy-on-write | No (uses journaling) | Data + metadata |
+| 最大ボリューム | 1 EiB | 16 EiB |
+| チェックサム | なし | あり（CRC32C/xxhash/SHA256） |
+| スナップショット | なし | あり（即時、書き込み可能） |
+| サブボリューム | なし | あり（独立した名前空間） |
+| RAID | mdraidのみ | RAID 0/1/5/6/10を内蔵 |
+| 圧縮 | なし | zlib/lzo/zstdによるインライン圧縮 |
+| 重複排除 | なし | オフライン（duperemove） |
+| Send/receive | なし | あり（増分バックアップ） |
+| Copy-on-write | なし（ジャーナリングを使う） | データ + メタデータ |
 
-## B-tree structure {#b-tree-structure}
+## B-treeの構造 {#b-tree-structure}
 
-Everything in Btrfs is stored in B-trees (hence "B-tree filesystem"), a design inspired by ReiserFS and ZFS concepts. There is no separate inode table or block bitmap — all metadata lives in these trees:
+BtrfsではすべてがB-treeに格納される（それゆえ「B-tree filesystem」と呼ばれる）。この設計はReiserFSとZFSの概念に着想を得ている。独立したinodeテーブルやブロックビットマップは存在せず、すべてのメタデータはこれらのツリーの中にある。
 
 ```
 Btrfs superblock
 └── tree of tree roots
-    ├── root tree     ← metadata about all other trees
-    ├── extent tree   ← free space and block reference counts
-    ├── chunk tree    ← logical → physical address mapping
-    ├── device tree   ← physical devices
-    ├── checksum tree ← data block checksums
+    ├── root tree     ← 他のすべてのツリーに関するメタデータ
+    ├── extent tree   ← 空き領域とブロックの参照カウント
+    ├── chunk tree    ← 論理 → 物理アドレスのマッピング
+    ├── device tree   ← 物理デバイス
+    ├── checksum tree ← データブロックのチェックサム
     └── [subvolume trees]
-        ├── subvol 256 (default root)  ← files and directories
+        ├── subvol 256 (default root)  ← ファイルとディレクトリ
         ├── subvol 257 (first snapshot)
         └── ...
 ```
 
-### B-tree node format {#b-tree-node-format}
+### B-treeノードのフォーマット {#b-tree-node-format}
 
 ```c
 /* include/uapi/linux/btrfs_tree.h */
 
-/* Every node starts with this header: */
+/* すべてのノードはこのヘッダで始まる: */
 struct btrfs_header {
-    __u8    csum[BTRFS_CSUM_SIZE]; /* checksum of this block */
-    __u8    fsid[BTRFS_FSID_SIZE]; /* filesystem UUID */
-    __le64  bytenr;                /* this block's bytenr (logical addr) */
+    __u8    csum[BTRFS_CSUM_SIZE]; /* このブロックのチェックサム */
+    __u8    fsid[BTRFS_FSID_SIZE]; /* ファイルシステムの UUID */
+    __le64  bytenr;                /* このブロックの bytenr（論理アドレス） */
     __le64  flags;
     __u8    chunk_tree_uuid[BTRFS_UUID_SIZE];
-    __le64  generation;            /* transaction ID when written */
-    __le64  owner;                 /* tree ID this node belongs to */
-    __le32  nritems;               /* number of items */
-    __u8    level;                 /* 0 = leaf, >0 = internal node */
+    __le64  generation;            /* 書き込まれたときのトランザクション ID */
+    __le64  owner;                 /* このノードが属するツリーの ID */
+    __le32  nritems;               /* アイテム数 */
+    __u8    level;                 /* 0 = リーフ、>0 = 内部ノード */
 };
 
-/* Internal node: array of (key, blockptr) pairs */
+/* 内部ノード: (key, blockptr) ペアの配列 */
 struct btrfs_key_ptr {
     struct btrfs_disk_key key;
-    __le64 blockptr;           /* child node address */
+    __le64 blockptr;           /* 子ノードのアドレス */
     __le64 generation;
 };
 
-/* Leaf node: items + data packed from both ends */
+/* リーフノード: アイテムとデータを両端から詰める */
 struct btrfs_item {
-    struct btrfs_disk_key key;  /* (objectid, type, offset) triple */
-    __le32 offset;              /* data offset from end of leaf */
-    __le32 size;                /* data size */
+    struct btrfs_disk_key key;  /* (objectid, type, offset) の 3 つ組 */
+    __le32 offset;              /* リーフ末尾からのデータオフセット */
+    __le32 size;                /* データサイズ */
 };
-/* Item data sits at end of leaf, items array at start, they grow toward center */
+/* アイテムのデータはリーフの末尾に、アイテム配列は先頭に置かれ、互いに中央へ向かって伸びる */
 ```
 
-### Keys {#keys}
+### キー {#keys}
 
-Every item in every Btrfs tree has a 3-part key:
+Btrfsのすべてのツリーのすべてのアイテムは、3つの部分からなるキーを持つ。
 
 ```
 (objectid, type, offset)
@@ -87,9 +87,9 @@ Examples:
 (256, XATTR_ITEM,    name_hash)   → extended attribute
 ```
 
-## Copy-on-write semantics {#copy-on-write-semantics}
+## Copy-on-writeのセマンティクス {#copy-on-write-semantics}
 
-Btrfs never overwrites data in place. Every write creates new blocks:
+Btrfsはデータをインプレースで上書きすることがない。すべての書き込みは新しいブロックを作る。
 
 ```
 Write to file:
@@ -120,221 +120,221 @@ Root ──→ [A]                 Root ──→ [A']  (new)
 blk1 still valid (could be shared by snapshot)
 ```
 
-## Subvolumes and snapshots {#subvolumes-and-snapshots}
+## サブボリュームとスナップショット {#subvolumes-and-snapshots}
 
-A **subvolume** is an independently rootable B-tree (its own root inode):
+**サブボリューム**は、独立してルートとなりうるB-tree（独自のルートinodeを持つ）である。
 
 ```bash
-# Create a subvolume:
+# サブボリュームを作成する:
 btrfs subvolume create /data/myapp
 
-# List subvolumes:
+# サブボリュームを一覧表示する:
 btrfs subvolume list /data
 # ID 256 gen 100 top level 5 path myapp
 # ID 257 gen 102 top level 5 path myapp-snap-2024
 
-# Create a snapshot (instant, CoW):
+# スナップショットを作成する（即時、CoW）:
 btrfs subvolume snapshot /data/myapp /data/myapp-snap-2024
-# Read-only snapshot:
+# 読み取り専用スナップショット:
 btrfs subvolume snapshot -r /data/myapp /data/myapp-backup
 
-# Delete snapshot:
+# スナップショットを削除する:
 btrfs subvolume delete /data/myapp-snap-2024
 
-# Set default subvolume (what mounts to /):
+# デフォルトのサブボリューム（/ にマウントされるもの）を設定する:
 btrfs subvolume set-default 256 /data
 ```
 
-Snapshot creation is O(1) — it just copies the B-tree root pointer. Shared blocks are reference-counted in the extent tree.
+スナップショットの作成はO(1)である — B-treeのルートポインタをコピーするだけだからだ。共有されたブロックはエクステントツリーで参照カウントされる。
 
-## Extent tree: space accounting {#extent-tree-space-accounting}
+## エクステントツリー: 領域の管理 {#extent-tree-space-accounting}
 
 ```c
-/* Each allocated extent has a back-reference: */
+/* 割り当てられた各エクステントは後方参照を持つ: */
 struct btrfs_extent_item {
-    __le64  refs;          /* reference count */
+    __le64  refs;          /* 参照カウント */
     __le64  generation;
-    __le64  flags;         /* BTRFS_EXTENT_FLAG_DATA or _TREE_BLOCK */
+    __le64  flags;         /* BTRFS_EXTENT_FLAG_DATA または _TREE_BLOCK */
 };
 
-/* Inline back-reference (for single owner): */
+/* インライン後方参照（所有者が 1 つの場合）: */
 struct btrfs_extent_inline_ref {
-    __u8    type;           /* BTRFS_EXTENT_DATA_REF_KEY etc. */
-    __le64  offset;         /* depends on type */
+    __u8    type;           /* BTRFS_EXTENT_DATA_REF_KEY など */
+    __le64  offset;         /* type に依存する */
 };
 ```
 
 ```bash
-# Show extent usage:
+# エクステントの使用状況を表示する:
 btrfs filesystem df /data
 # Data, single: total=2.00GiB, used=1.23GiB
 # Metadata, DUP: total=256.00MiB, used=12.50MiB
 # System, DUP: total=8.00MiB, used=16.00KiB
 
-# Detailed space info:
+# 詳細な領域情報:
 btrfs filesystem usage /data
 
-# Show shared extents between snapshots:
+# スナップショット間で共有されているエクステントを表示する:
 btrfs inspect-internal dump-tree -t extent /dev/sda1 | head -50
 ```
 
-## Checksums {#checksums}
+## チェックサム {#checksums}
 
-Btrfs checksums every data block and every metadata block:
+Btrfsはすべてのデータブロックとすべてのメタデータブロックにチェックサムを付ける。
 
 ```bash
-# Default checksum: crc32c (fast, hardware-accelerated)
-# Available: xxhash (faster), sha256, blake2b (collision-resistant)
+# デフォルトのチェックサム: crc32c（高速、ハードウェアアクセラレーション対応）
+# 利用可能なもの: xxhash（より高速）、sha256、blake2b（衝突耐性あり）
 
-# Set checksum at mkfs:
+# mkfs 時にチェックサムを指定する:
 mkfs.btrfs --checksum xxhash /dev/sda1
 
-# Check filesystem:
-btrfs scrub start /data          # verify all checksums
-btrfs scrub status /data         # check progress
+# ファイルシステムを検査する:
+btrfs scrub start /data          # すべてのチェックサムを検証する
+btrfs scrub status /data         # 進捗を確認する
 # scrub device /dev/sda1 (id 1) done
 # total bytes scrubbed: 100.23GiB with 0 errors
 
-# Scrub finds silent bit-rot that ext4 would miss!
+# scrub は ext4 なら見逃すサイレントなビット腐敗を見つける!
 ```
 
 ```c
-/* Kernel verifies checksum on every read (fs/btrfs/disk-io.c):
- * btrfs_validate_extent_buffer() computes the checksum over the
- * extent buffer data and compares against the stored checksum in
- * the first bytes of the buffer header.
- * Uses fs_info->csum_type to dispatch to the correct hash (crc32c,
- * xxhash64, sha256, or blake2b). */
+/* カーネルは読み出しのたびにチェックサムを検証する（fs/btrfs/disk-io.c）:
+ * btrfs_validate_extent_buffer() はエクステントバッファのデータに対して
+ * チェックサムを計算し、バッファヘッダの先頭バイトに格納された
+ * チェックサムと比較する。
+ * fs_info->csum_type を使って正しいハッシュ（crc32c、xxhash64、
+ * sha256、blake2b）にディスパッチする。 */
 ```
 
-## Inline compression {#inline-compression}
+## インライン圧縮 {#inline-compression}
 
 ```bash
-# Mount with compression:
-mount -o compress=zstd /dev/sda1 /data      # zstd (best ratio/speed balance)
-mount -o compress=lzo /dev/sda1 /data       # lzo (fastest)
-mount -o compress=zlib /dev/sda1 /data      # zlib (best ratio)
-mount -o compress-force=zstd /dev/sda1 /data # force even for incompressible data
+# 圧縮を有効にしてマウントする:
+mount -o compress=zstd /dev/sda1 /data      # zstd（圧縮率と速度のバランスが最良）
+mount -o compress=lzo /dev/sda1 /data       # lzo（最速）
+mount -o compress=zlib /dev/sda1 /data      # zlib（圧縮率が最良）
+mount -o compress-force=zstd /dev/sda1 /data # 圧縮できないデータでも強制する
 
-# Per-file compression:
+# ファイルごとの圧縮:
 btrfs property set /data/bigfile compression zstd
 
-# Check compression ratio:
+# 圧縮率を確認する:
 compsize /data/bigfile
 # Type       Perc     Disk Usage   Uncompressed Referenced
 # TOTAL       42%      420M         1.00G        1.00G
 # zstd        42%      420M         1.00G        1.00G
 ```
 
-## Send/receive (incremental backups) {#sendreceive-incremental-backups}
+## Send/receive（増分バックアップ） {#sendreceive-incremental-backups}
 
 ```bash
-# Full backup:
+# フルバックアップ:
 btrfs subvolume snapshot -r /data/myapp /data/myapp-snap-1
 btrfs send /data/myapp-snap-1 | btrfs receive /backup/
 
-# Incremental: only changed blocks since snap-1
+# 増分: snap-1 以降に変更されたブロックのみ
 btrfs subvolume snapshot -r /data/myapp /data/myapp-snap-2
 btrfs send -p /data/myapp-snap-1 /data/myapp-snap-2 | btrfs receive /backup/
-# Sends only the diff between snap-1 and snap-2
+# snap-1 と snap-2 の差分だけを送る
 
-# Over SSH:
+# SSH 経由:
 btrfs send /data/myapp-snap-2 | ssh backuphost "btrfs receive /backup/"
 ```
 
-## RAID in Btrfs {#raid-in-btrfs}
+## BtrfsのRAID {#raid-in-btrfs}
 
 ```bash
-# Create RAID 1 (mirrored metadata + data):
+# RAID 1（メタデータとデータをミラーリング）を作成する:
 mkfs.btrfs -d raid1 -m raid1 /dev/sda /dev/sdb
 
-# Add device to existing filesystem:
+# 既存のファイルシステムにデバイスを追加する:
 btrfs device add /dev/sdc /data
 btrfs balance start -dconvert=raid1 -mconvert=raid1 /data
 
-# Show RAID status:
+# RAID の状態を表示する:
 btrfs filesystem show /data
 
-# Replace a failed device:
+# 故障したデバイスを交換する:
 btrfs replace start /dev/sdb /dev/sdd /data
 btrfs replace status /data
 ```
 
-## Transaction model {#transaction-model}
+## トランザクションモデル {#transaction-model}
 
-Btrfs uses a transaction-based model without a journal:
+Btrfsはジャーナルを持たない、トランザクションベースのモデルを使う。
 
 ```c
 /* fs/btrfs/transaction.c */
 struct btrfs_trans_handle {
-    u64             transid;         /* transaction ID */
-    u64             bytes_reserved;  /* space reserved */
+    u64             transid;         /* トランザクション ID */
+    u64             bytes_reserved;  /* 予約された領域 */
     struct btrfs_transaction *transaction;
 };
 
-/* Begin transaction (reserves space): */
-trans = btrfs_start_transaction(root, 10); /* reserve 10 blocks worth */
+/* トランザクションを開始する（領域を予約する）: */
+trans = btrfs_start_transaction(root, 10); /* 10 ブロック分を予約する */
 
-/* Modify B-tree items (e.g., insert inode ref): */
+/* B-tree のアイテムを変更する（例: inode ref を挿入する）: */
 btrfs_insert_inode_ref(trans, root, name, namelen, objectid, dir_objectid, index);
 
-/* Commit (COW all dirty nodes, update superblock): */
+/* コミットする（ダーティなノードをすべて COW し、スーパーブロックを更新する）: */
 btrfs_commit_transaction(trans);
 ```
 
-The superblock is written last and contains the root of the tree-of-roots. Until the superblock update, the old tree is intact — crash at any point leaves the previous transaction's state valid.
+スーパーブロックは最後に書き込まれ、tree-of-rootsのルートを含む。スーパーブロックが更新されるまで古いツリーは無傷のままであり、どの時点でクラッシュしても直前のトランザクションの状態が有効なまま残る。
 
-## Defragmentation {#defragmentation}
+## デフラグ {#defragmentation}
 
-CoW fragmentation builds up over time:
+CoWによる断片化は時間とともに蓄積する。
 
 ```bash
-# Defragment a file (rewrites extents sequentially):
+# ファイルをデフラグする（エクステントをシーケンシャルに書き直す）:
 btrfs filesystem defragment /data/bigfile
 
-# Defragment with compression:
+# 圧縮しながらデフラグする:
 btrfs filesystem defragment -czstd /data/bigfile
 
-# Defragment entire subvolume (warning: breaks CoW sharing with snapshots!):
+# サブボリューム全体をデフラグする（警告: スナップショットとの CoW 共有が壊れる!）:
 btrfs filesystem defragment -r /data/myapp
 
-# Auto-defrag on mount:
+# マウント時の自動デフラグ:
 mount -o autodefrag /dev/sda1 /data
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Filesystem stats:
+# ファイルシステムの統計:
 btrfs filesystem show
 btrfs filesystem df /data
 btrfs filesystem usage /data
 
-# Tree inspection (low-level):
-btrfs inspect-internal dump-tree /dev/sda1       # all trees
-btrfs inspect-internal dump-tree -t fs /dev/sda1 # subvolume tree
-btrfs inspect-internal dump-super /dev/sda1       # superblock
+# ツリーの調査（低レベル）:
+btrfs inspect-internal dump-tree /dev/sda1       # すべてのツリー
+btrfs inspect-internal dump-tree -t fs /dev/sda1 # サブボリュームツリー
+btrfs inspect-internal dump-super /dev/sda1       # スーパーブロック
 
-# Find which file owns a logical address:
+# 論理アドレスを所有するファイルを探す:
 btrfs inspect-internal logical-resolve 12345678 /data
 
-# Check for errors (offline, non-destructive):
+# エラーを検査する（オフライン、非破壊）:
 btrfs check --readonly /dev/sda1
 
-# Stats: read/write errors per device
+# 統計: デバイスごとの読み書きエラー
 btrfs device stats /data
 
-# Performance tracing:
+# 性能のトレーシング:
 bpftrace -e 'kprobe:btrfs_file_write_iter { @[comm] = count(); }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ext4 Journaling (JBD2)](ext4-journal.md) — journal-based contrast
-- [Page Cache](../mm/page-cache.md) — page cache that Btrfs CoW writes through
-- [Copy-on-Write](../mm/cow.md) — process CoW vs filesystem CoW
-- [xattr](../vfs/xattr.md) — Btrfs stores xattrs in the subvolume tree
-- [Kernel docs: btrfs](https://docs.kernel.org/filesystems/btrfs.html) — feature overview and entry point to the btrfs documentation
-- [btrfs feature status](https://btrfs.readthedocs.io/en/latest/Status.html) — per-feature stability, including the RAID5/6 caveats
-- [A short history of btrfs (LWN)](https://lwn.net/Articles/342892/) — the design rationale, by Valerie Aurora
-- `fs/btrfs/` — Btrfs implementation
+- [ext4ジャーナリング（JBD2）](ext4-journal.md) — ジャーナルベースとの対比
+- [ページキャッシュ](../mm/page-cache.md) — BtrfsのCoW書き込みが経由するページキャッシュ
+- [Copy-on-Write](../mm/cow.md) — プロセスのCoWとファイルシステムのCoW
+- [xattr](../vfs/xattr.md) — Btrfsはxattrをサブボリュームツリーに格納する
+- [Kernel docs: btrfs](https://docs.kernel.org/filesystems/btrfs.html) — 機能の概要と、btrfsドキュメントへの入口
+- [btrfs feature status](https://btrfs.readthedocs.io/en/latest/Status.html) — RAID5/6に関する注意点を含む、機能ごとの安定性
+- [A short history of btrfs (LWN)](https://lwn.net/Articles/342892/) — Valerie Auroraによる設計の根拠
+- `fs/btrfs/` — Btrfsの実装

@@ -1,10 +1,10 @@
-# ext4 Journaling and Crash Recovery {#ext4-journaling-and-crash-recovery}
+# ext4のジャーナリングとクラッシュリカバリ {#ext4-journaling-and-crash-recovery}
 
-> JBD2 transaction lifecycle: how ext4 survives power failures
+> JBD2のトランザクションのライフサイクル: ext4が電源障害をどう生き延びるか
 
-## Why journaling? {#why-journaling}
+## なぜジャーナリングか {#why-journaling}
 
-Without journaling, a power failure mid-write can leave the filesystem in an inconsistent state:
+ジャーナリングがなければ、書き込みの途中で電源障害が起きると、ファイルシステムが不整合な状態に残されうる。
 
 ```
 Without journal:
@@ -17,30 +17,30 @@ fsck must scan the entire filesystem to find and fix inconsistencies.
 On a 4TB filesystem: hours.
 ```
 
-With journaling, changes are written to the **journal** (a circular log) first. After crash, the kernel replays the journal in seconds.
+ジャーナリングでは、変更はまず**ジャーナル**（循環ログ）に書き込まれる。クラッシュ後、カーネルは数秒でジャーナルをリプレイする。
 
-## ext4 journal modes {#ext4-journal-modes}
+## ext4のジャーナルモード {#ext4-journal-modes}
 
 ```bash
-# Check/set journal mode at mount time:
-mount -o data=ordered /dev/sda1 /mnt   # default
-mount -o data=writeback /dev/sda1 /mnt  # highest performance
-mount -o data=journal /dev/sda1 /mnt    # most durable
+# マウント時にジャーナルモードを確認／設定する:
+mount -o data=ordered /dev/sda1 /mnt   # デフォルト
+mount -o data=writeback /dev/sda1 /mnt  # 最高性能
+mount -o data=journal /dev/sda1 /mnt    # 最も永続性が高い
 ```
 
-| Mode | What's journaled | Performance | Durability |
+| モード | ジャーナリング対象 | 性能 | 永続性 |
 |------|-----------------|-------------|-----------|
-| `writeback` | Metadata only; data can be written after metadata | Fastest | Data may be corrupted after crash |
-| `ordered` | Metadata only; **data written before metadata** | Good | Data blocks committed before metadata |
-| `journal` | Both metadata and data | Slowest | Strongest |
+| `writeback` | メタデータのみ。データはメタデータの後に書き込まれうる | 最速 | クラッシュ後にデータが壊れている可能性がある |
+| `ordered` | メタデータのみ。**データはメタデータより先に書き込まれる** | 良好 | データブロックはメタデータより先にコミットされる |
+| `journal` | メタデータとデータの両方 | 最も遅い | 最も強い |
 
-Default is `ordered`: metadata changes are atomic, data blocks are guaranteed to be written before the metadata that references them.
+デフォルトは`ordered`である。メタデータの変更はアトミックであり、データブロックは、それを参照するメタデータより先に書き込まれることが保証される。
 
-## JBD2: the journaling layer {#jbd2-the-journaling-layer}
+## JBD2: ジャーナリングレイヤ {#jbd2-the-journaling-layer}
 
-ext4 uses JBD2 (Journaling Block Device 2) as its journaling layer. JBD2 is independent of ext4 — it could journal any block device.
+ext4はジャーナリングレイヤとしてJBD2（Journaling Block Device 2）を使う。JBD2はext4から独立しており、任意のブロックデバイスをジャーナリングできる。
 
-### Journal layout on disk {#journal-layout-on-disk}
+### ディスク上のジャーナルのレイアウト {#journal-layout-on-disk}
 
 ```
 Ext4 partition layout:
@@ -62,46 +62,46 @@ T1 (transaction 1):
   └────────────────────────────┴──────────────────────┴──────────────┘
 ```
 
-The journal superblock records `s_start` (tail) and `s_sequence` (current transaction). Recovery replays all transactions from `s_start` to the last valid commit block.
+ジャーナルのスーパーブロックは`s_start`（末尾）と`s_sequence`（現在のトランザクション）を記録する。リカバリは`s_start`から最後の有効なコミットブロックまでのすべてのトランザクションをリプレイする。
 
 ### struct journal_t {#struct-journal_t}
 
 ```c
 /* include/linux/jbd2.h */
 typedef struct journal_s {
-    /* Journal superblock data */
-    unsigned long   j_flags;        /* JBD2_UNMOUNT, JBD2_ABORT, ... */
+    /* ジャーナルのスーパーブロックのデータ */
+    unsigned long   j_flags;        /* JBD2_UNMOUNT、JBD2_ABORT、... */
     int             j_errno;
-    struct buffer_head *j_sb_buffer; /* journal superblock buffer */
+    struct buffer_head *j_sb_buffer; /* ジャーナルのスーパーブロックのバッファ */
 
-    /* Transaction state */
-    transaction_t  *j_running_transaction;    /* current open transaction */
-    transaction_t  *j_committing_transaction; /* being committed */
-    transaction_t  *j_checkpoint_transactions; /* not yet freed */
+    /* トランザクションの状態 */
+    transaction_t  *j_running_transaction;    /* 現在オープンしているトランザクション */
+    transaction_t  *j_committing_transaction; /* コミット中のもの */
+    transaction_t  *j_checkpoint_transactions; /* まだ解放されていないもの */
 
-    /* Journal block range */
-    unsigned int    j_maxlen;       /* total journal blocks */
-    unsigned int    j_tail;         /* oldest known transaction */
-    unsigned int    j_free;         /* free journal blocks */
-    unsigned int    j_first;        /* journal start block */
-    unsigned int    j_last;         /* journal end block (exclusive) */
-    unsigned int    j_head;         /* current write position */
+    /* ジャーナルのブロック範囲 */
+    unsigned int    j_maxlen;       /* ジャーナルの総ブロック数 */
+    unsigned int    j_tail;         /* 既知の最も古いトランザクション */
+    unsigned int    j_free;         /* ジャーナルの空きブロック数 */
+    unsigned int    j_first;        /* ジャーナルの開始ブロック */
+    unsigned int    j_last;         /* ジャーナルの終了ブロック（この値は含まない） */
+    unsigned int    j_head;         /* 現在の書き込み位置 */
 
-    /* Sequence numbers */
+    /* シーケンス番号 */
     tid_t           j_tail_sequence;
     tid_t           j_transaction_sequence;
     tid_t           j_commit_sequence;
     tid_t           j_commit_request;
 
-    /* Block device */
-    struct block_device *j_dev;     /* journal device */
-    struct block_device *j_fs_dev;  /* filesystem device */
+    /* ブロックデバイス */
+    struct block_device *j_dev;     /* ジャーナルのデバイス */
+    struct block_device *j_fs_dev;  /* ファイルシステムのデバイス */
     unsigned int        j_blocksize;
 
-    /* kjournald kernel thread */
+    /* kjournald カーネルスレッド */
     struct task_struct *j_task;
 
-    /* Commit timer and workqueue */
+    /* コミットタイマーと workqueue */
     struct timer_list   j_commit_timer;
 } journal_t;
 ```
@@ -111,10 +111,10 @@ typedef struct journal_s {
 ```c
 typedef struct transaction_s {
     journal_t      *t_journal;
-    tid_t           t_tid;          /* transaction ID */
+    tid_t           t_tid;          /* トランザクション ID */
     enum {
-        T_RUNNING,          /* accepting new handles */
-        T_LOCKED,           /* waiting for handles to close */
+        T_RUNNING,          /* 新しいハンドルを受け付けている */
+        T_LOCKED,           /* ハンドルが閉じられるのを待っている */
         T_SWITCH,
         T_FLUSH,
         T_COMMIT,
@@ -123,86 +123,86 @@ typedef struct transaction_s {
         T_FINISHED,
     } t_state;
 
-    struct list_head t_buffers;      /* buffers modified in this transaction */
-    struct list_head t_forget;       /* buffers to unlink after commit */
-    struct list_head t_checkpoint_list; /* buffers needing checkpoint */
+    struct list_head t_buffers;      /* このトランザクションで変更されたバッファ */
+    struct list_head t_forget;       /* コミット後にリンクを外すバッファ */
+    struct list_head t_checkpoint_list; /* チェックポイントが必要なバッファ */
 
-    atomic_t        t_handle_count; /* number of open handles */
-    unsigned int    t_outstanding_credits; /* remaining journal space */
+    atomic_t        t_handle_count; /* オープンしているハンドルの数 */
+    unsigned int    t_outstanding_credits; /* 残りのジャーナル領域 */
 } transaction_t;
 ```
 
-## Transaction lifecycle {#transaction-lifecycle}
+## トランザクションのライフサイクル {#transaction-lifecycle}
 
-### Phase 1: begin {#phase-1-begin}
+### フェーズ1: 開始 {#phase-1-begin}
 
 ```c
-/* Start a transaction */
+/* トランザクションを開始する */
 handle_t *handle = jbd2_journal_start(journal, nblocks);
-/* nblocks: worst-case blocks this handle will modify */
-/* Returns a handle; increments t_handle_count */
+/* nblocks: このハンドルが変更する最悪ケースのブロック数 */
+/* ハンドルを返し、t_handle_count をインクリメントする */
 ```
 
-### Phase 2: modify buffers {#phase-2-modify-buffers}
+### フェーズ2: バッファの変更 {#phase-2-modify-buffers}
 
 ```c
-/* Tell JBD2 we're about to modify a buffer (gets the journal credit): */
+/* バッファを変更しようとしていることを JBD2 に伝える（ジャーナルクレジットを得る）: */
 jbd2_journal_get_write_access(handle, bh);
-/* Adds bh to the transaction's t_buffers list */
-/* Copies the original block to the journal buffer */
+/* bh をトランザクションの t_buffers リストに追加する */
+/* 元のブロックをジャーナルバッファにコピーする */
 
-/* Modify the buffer: */
+/* バッファを変更する: */
 ext4_set_bit(block, group->bg_block_bitmap->b_data);
 
-/* Tell JBD2 the modification is complete: */
+/* 変更が完了したことを JBD2 に伝える: */
 jbd2_journal_dirty_metadata(handle, bh);
-/* Marks bh as dirty in the transaction */
+/* トランザクション内で bh をダーティとしてマークする */
 ```
 
-### Phase 3: commit (kjournald) {#phase-3-commit-kjournald}
+### フェーズ3: コミット（kjournald） {#phase-3-commit-kjournald}
 
 ```c
-/* kjournald thread (fs/jbd2/journal.c) */
+/* kjournald スレッド（fs/jbd2/journal.c） */
 static int kjournald2(void *arg)
 {
     journal_t *journal = arg;
     transaction_t *transaction;
 
     for (;;) {
-        /* Wait for commit needed or timer */
+        /* コミットが必要になるか、タイマーが切れるのを待つ */
         wait_event_interruptible_timeout(journal->j_wait_commit, ...);
 
-        /* Commit the current transaction */
+        /* 現在のトランザクションをコミットする */
         jbd2_journal_commit_transaction(journal);
     }
 }
 ```
 
-Commit phases:
-1. **Close**: stop accepting new handles for this transaction (T_LOCKED)
-2. **Write descriptor**: write the descriptor block listing all modified buffers
-3. **Write data**: write all modified metadata buffers to the journal
-4. **Flush**: wait for all journal writes to complete
-5. **Write commit block**: write the commit block with the transaction's sequence number
-6. **Checkpoint**: once the commit block is on disk, the filesystem blocks can be written in place
-7. **Free**: after checkpoint, free journal space
+コミットのフェーズ:
+1. **クローズ**: このトランザクションで新しいハンドルの受け付けを停止する（T_LOCKED）
+2. **ディスクリプタの書き込み**: 変更されたすべてのバッファを列挙するディスクリプタブロックを書き込む
+3. **データの書き込み**: 変更されたすべてのメタデータバッファをジャーナルに書き込む
+4. **フラッシュ**: すべてのジャーナル書き込みの完了を待つ
+5. **コミットブロックの書き込み**: トランザクションのシーケンス番号を含むコミットブロックを書き込む
+6. **チェックポイント**: コミットブロックがディスク上に載ったら、ファイルシステムのブロックをインプレースで書き込める
+7. **解放**: チェックポイントの後、ジャーナル領域を解放する
 
-### Phase 4: checkpoint {#phase-4-checkpoint}
+### フェーズ4: チェックポイント {#phase-4-checkpoint}
 
-After committing, the original filesystem blocks must be written out (checkpointed) before the journal space can be reused:
+コミットの後、ジャーナル領域を再利用できるようにする前に、元のファイルシステムのブロックを書き出さ（チェックポイントし）なければならない。
 
 ```c
-/* The transaction's modified blocks are eventually written to
-   their real filesystem locations (checkpointed) */
+/* トランザクションで変更されたブロックは、いずれ
+   ファイルシステム上の実際の位置へ書き込まれる（チェックポイントされる） */
 jbd2_log_do_checkpoint(journal);
 
-/* After checkpoint: journal space is freed for the next transaction */
+/* チェックポイントの後: ジャーナル領域は次のトランザクションのために解放される */
 ```
 
-## Crash recovery {#crash-recovery}
+## クラッシュリカバリ {#crash-recovery}
 
 ```bash
-# View journal state
+# ジャーナルの状態を表示する
 debugfs -R "show_super_stats" /dev/sda1 | grep -i journal
 # Journal inode: 8
 # Journal backup: inode blocks
@@ -210,14 +210,14 @@ debugfs -R "show_super_stats" /dev/sda1 | grep -i journal
 # Journal size: 128m
 # Journal length: 32768
 
-# Replay journal manually (dry run):
+# ジャーナルを手動でリプレイする（ドライラン）:
 e2fsck -n /dev/sda1 2>&1 | head -20
 # Pass 1: Checking inodes, blocks, and sizes
 # Pass 2: Checking directory structure
 # ...
 ```
 
-### Kernel journal recovery {#kernel-journal-recovery}
+### カーネルによるジャーナルリカバリ {#kernel-journal-recovery}
 
 ```c
 /* fs/jbd2/recovery.c */
@@ -225,16 +225,16 @@ int jbd2_journal_recover(journal_t *journal)
 {
     struct recovery_info info = {};
 
-    /* Scan the journal for all valid transactions */
+    /* ジャーナルをスキャンして、有効なトランザクションをすべて探す */
     err = do_one_pass(journal, &info, PASS_SCAN);
-    /* Finds all committed transactions: info.end_transaction */
+    /* コミット済みのトランザクションをすべて見つける: info.end_transaction */
 
-    /* Replay valid transactions: write blocks to their real locations */
+    /* 有効なトランザクションをリプレイする: ブロックを実際の位置へ書き込む */
     err = do_one_pass(journal, &info, PASS_REVOKE);
-    /* Applies revoke records (blocks that were freed and shouldn't be replayed) */
+    /* revoke レコード（解放済みでリプレイすべきでないブロック）を適用する */
 
     err = do_one_pass(journal, &info, PASS_REPLAY);
-    /* Replays remaining transactions to their real filesystem locations */
+    /* 残りのトランザクションをファイルシステム上の実際の位置へリプレイする */
 
     jbd2_journal_clear_revoke(journal);
     err = sync_blockdev(journal->j_fs_dev);
@@ -242,78 +242,78 @@ int jbd2_journal_recover(journal_t *journal)
 }
 ```
 
-Recovery is **O(journal size)**, not O(filesystem size). Even a 2TB filesystem recovers in seconds because only the journal (default 128MB) is replayed.
+リカバリは**O(ジャーナルサイズ)**であり、O(ファイルシステムサイズ)ではない。リプレイされるのはジャーナル（デフォルト128MB）だけなので、2TBのファイルシステムでも数秒で回復する。
 
-## Fast commit (ext4 5.10+) {#fast-commit-ext4-510}
+## Fast commit（ext4 5.10以降） {#fast-commit-ext4-510}
 
-JBD2 full commits are expensive (hundreds of microseconds). **Fast commit** is an optimized path for common operations:
+JBD2の完全なコミットはコストが高い（数百マイクロ秒）。**Fast commit**は、よくある操作のために最適化されたパスである。
 
 ```c
 /* fs/ext4/fast_commit.c */
-/* Fast commit records only what changed (delta), not full blocks: */
-/* - Inode changes (truncate, setattr)           */
-/* - Directory entry changes (create, unlink)    */
+/* Fast commit はブロック全体ではなく、変更されたもの（差分）だけを記録する: */
+/* - inode の変更（truncate、setattr）           */
+/* - ディレクトリエントリの変更（create、unlink） */
 
-/* Much smaller journal writes: ~1KB vs ~4KB per commit */
+/* ジャーナル書き込みがはるかに小さい: コミットあたり約 1KB 対 約 4KB */
 ```
 
 ```bash
-# Enable fast commit (default on new ext4 filesystems):
+# fast commit を有効にする（新しい ext4 ファイルシステムではデフォルト）:
 tune2fs -O fast_commit /dev/sda1
 mke2fs -O fast_commit /dev/sda1
 
-# Check:
+# 確認する:
 tune2fs -l /dev/sda1 | grep "Filesystem features"
 # Filesystem features: fast_commit ...
 ```
 
-## ext4 journaling vs fsync {#ext4-journaling-vs-fsync}
+## ext4のジャーナリングとfsync {#ext4-journaling-vs-fsync}
 
 ```c
-/* Application: ensure data durability */
+/* アプリケーション: データの永続性を保証する */
 fd = open("file", O_WRONLY);
 write(fd, data, len);
-fsync(fd);     /* blocks until data AND metadata are on disk */
-/* Without fsync: data may be in page cache or journal, not disk */
+fsync(fd);     /* データとメタデータの両方がディスクに載るまでブロックする */
+/* fsync なしでは: データはディスクではなく、ページキャッシュかジャーナルにあるかもしれない */
 
-/* fdatasync: data only (no metadata unless file size changed) */
+/* fdatasync: データのみ（ファイルサイズが変わらない限りメタデータは含まない） */
 fdatasync(fd);
 
-/* O_SYNC: fsync after every write */
+/* O_SYNC: 毎回の書き込みの後に fsync する */
 fd = open("file", O_WRONLY | O_SYNC);
 ```
 
-The journal only guarantees metadata consistency after crash. Data durability requires `fsync()` or `O_SYNC`.
+ジャーナルが保証するのは、クラッシュ後のメタデータの一貫性だけである。データの永続性には`fsync()`または`O_SYNC`が必要である。
 
-## Monitoring journal performance {#monitoring-journal-performance}
+## ジャーナル性能の監視 {#monitoring-journal-performance}
 
 ```bash
-# Journal statistics
+# ジャーナルの統計
 cat /proc/fs/ext4/<dev>/journal_info
 # journal_sequence: 12345
 # journal_buffers: 0
 # journal_outstanding: 0
 
-# Trace journal commits
+# ジャーナルのコミットをトレースする
 bpftrace -e '
 kprobe:jbd2_journal_commit_transaction {
     @commits = count();
     @time_ns = hist(nsecs);
 }'
 
-# iostat: journal writes appear as writes to the same device
+# iostat: ジャーナルの書き込みは同じデバイスへの書き込みとして現れる
 iostat -x 1
 
-# blktrace: see journal vs data writes
+# blktrace: ジャーナルの書き込みとデータの書き込みを見分ける
 blktrace -d /dev/sda1 -o - | blkparse -i - | grep -v "Q  W" | head -50
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ext4](ext4.md) — ext4 architecture and disk layout
-- [Life of a write() Syscall](../vfs/life-of-write.md) — write path ending at JBD2
-- [Page Cache](../mm/page-cache.md) — dirty pages that JBD2 journals
-- [IOMMU DMA](../mm/dma.md) — journal I/O uses DMA
-- [Kernel docs: ext4 journal (jbd2)](https://docs.kernel.org/filesystems/ext4/journal.html) — the on-disk journal format
-- `fs/jbd2/` — JBD2 implementation
-- `fs/ext4/` — ext4 JBD2 integration
+- [ext4](ext4.md) — ext4のアーキテクチャとディスクレイアウト
+- [write()システムコールの一生](../vfs/life-of-write.md) — JBD2で終わる書き込みパス
+- [ページキャッシュ](../mm/page-cache.md) — JBD2がジャーナリングするダーティなpage
+- [IOMMU DMA](../mm/dma.md) — ジャーナルのI/OはDMAを使う
+- [Kernel docs: ext4 journal (jbd2)](https://docs.kernel.org/filesystems/ext4/journal.html) — ディスク上のジャーナルフォーマット
+- `fs/jbd2/` — JBD2の実装
+- `fs/ext4/` — ext4とJBD2の統合

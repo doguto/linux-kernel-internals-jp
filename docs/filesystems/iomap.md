@@ -1,62 +1,62 @@
-# iomap: the Extent-Based I/O Framework {#iomap-the-extent-based-io-framework}
+# iomap: エクステントベースのI/Oフレームワーク {#iomap-the-extent-based-io-framework}
 
-> The modern, filesystem-agnostic layer that maps file offsets to device blocks and drives buffered, direct, and DAX I/O over them — what it is, what it replaced, and why
+> ファイルオフセットをデバイスブロックへマッピングし、その上でバッファードI/O、ダイレクトI/O、DAX I/Oを駆動する、ファイルシステム非依存の現代的なレイヤ — それが何であり、何を置き換え、なぜ生まれたのか
 
-For most of Linux's history, the generic code that turned a `read()` or `write()` into block I/O was built on the **`buffer_head`**: one small descriptor per filesystem block. iomap is the framework that replaced it, and it is now the shared I/O engine under XFS, gfs2, zonefs, and the direct-I/O path of ext4 and btrfs (plus ext4's DAX path). Understanding iomap is understanding how a modern Linux filesystem actually moves data.
+Linuxの歴史の大半において、`read()`や`write()`をブロックI/Oに変換する汎用コードは**`buffer_head`**の上に構築されていた。これはファイルシステムブロック1つにつき1つの小さな記述子である。iomapはそれを置き換えたフレームワークであり、現在ではXFS、gfs2、zonefs、そしてext4とbtrfsのダイレクトI/Oパス（およびext4のDAXパス）の下で共有されるI/Oエンジンとなっている。iomapを理解することは、現代のLinuxファイルシステムが実際にどのようにデータを動かしているかを理解することである。
 
-## The problem with `buffer_head` {#the-problem-with-buffer_head}
+## `buffer_head`の問題点 {#the-problem-with-buffer_head}
 
-A `buffer_head` describes the mapping and state of a **single** filesystem block (typically 4 KiB). That granularity is the whole problem:
+`buffer_head`は**単一の**ファイルシステムブロック（通常4 KiB）のマッピングと状態を記述する。この粒度こそが問題のすべてである。
 
-- **One struct per block.** A 1 MiB buffered write allocates and threads ~256 `buffer_head`s, each individually mapped, tracked, and torn down — real CPU and memory overhead for what is logically one contiguous operation.
-- **No notion of an extent.** Modern filesystems (XFS, ext4, btrfs) store files as **extents** — "these 40,000 blocks are contiguous on disk." The `buffer_head` model can't express that; it re-derives the mapping one block at a time.
-- **Tangled state.** `buffer_head` mixed the block *mapping* with page dirtiness/writeback state and locking, making the generic paths hard to reason about and hard to make concurrent.
+- **ブロックごとに1つの構造体。** 1 MiBのバッファードライトは約256個の`buffer_head`を割り当ててつなぎ合わせ、それぞれを個別にマッピングし、追跡し、破棄する。論理的には1つの連続した操作にすぎないものに対して、現実のCPUとメモリのオーバーヘッドが生じる。
+- **エクステントという概念がない。** 現代のファイルシステム（XFS、ext4、btrfs）はファイルを**エクステント**として格納する — 「この40,000ブロックはディスク上で連続している」というものだ。`buffer_head`モデルはそれを表現できず、マッピングを1ブロックずつ導出し直す。
+- **絡み合った状態。** `buffer_head`はブロックの*マッピング*と、pageのダーティ／ライトバック状態やロックとを混在させており、汎用パスを理解しにくく、並行化しにくいものにしていた。
 
-## The core idea: describe a mapping, not a block {#the-core-idea-describe-a-mapping-not-a-block}
+## 中核となる考え方: ブロックではなくマッピングを記述する {#the-core-idea-describe-a-mapping-not-a-block}
 
-iomap's central structure, `struct iomap`, describes an arbitrarily large **contiguous mapping** of a file range to a device range in a single object — offset, length, the device block address, the backing device, and a **type**:
+iomapの中心となる構造体`struct iomap`は、ファイル範囲からデバイス範囲への任意の大きさの**連続したマッピング**を単一のオブジェクトで記述する — オフセット、長さ、デバイスブロックアドレス、バッキングデバイス、そして**タイプ**である。
 
-| Type | Meaning |
+| タイプ | 意味 |
 |---|---|
-| `IOMAP_MAPPED` | real, allocated blocks on disk at a known address |
-| `IOMAP_HOLE` | a sparse hole — reads return zeros, no blocks allocated |
-| `IOMAP_UNWRITTEN` | blocks are allocated but not yet initialized (preallocation); reads return zeros |
-| `IOMAP_DELALLOC` | delayed allocation — reserved in memory, no physical block chosen yet |
-| `IOMAP_INLINE` | data stored inline in the inode itself |
+| `IOMAP_MAPPED` | 既知のアドレスにある、ディスク上の実際に割り当て済みのブロック |
+| `IOMAP_HOLE` | スパースなホール — 読み出しはゼロを返し、ブロックは割り当てられていない |
+| `IOMAP_UNWRITTEN` | ブロックは割り当て済みだがまだ初期化されていない（事前割り当て）。読み出しはゼロを返す |
+| `IOMAP_DELALLOC` | 遅延割り当て — メモリ上で予約済みだが、物理ブロックはまだ選ばれていない |
+| `IOMAP_INLINE` | データがinode自体の中にインラインで格納されている |
 
-One `struct iomap` can cover megabytes, so the generic code asks the filesystem for a mapping *once* and then processes the whole range.
+1つの`struct iomap`がメガバイト単位をカバーできるため、汎用コードはファイルシステムにマッピングを*一度*尋ねるだけで、範囲全体を処理できる。
 
-## How it works: `iomap_begin` and the iteration loop {#how-it-works-iomap_begin-and-the-iteration-loop}
+## 仕組み: `iomap_begin`と反復ループ {#how-it-works-iomap_begin-and-the-iteration-loop}
 
-The division of labor is the point. The filesystem provides just two callbacks in a `struct iomap_ops`:
+要点は役割分担にある。ファイルシステムが`struct iomap_ops`で提供するコールバックはたった2つである。
 
-- **`->iomap_begin(inode, pos, length, ...)`** — "for this file range, fill in a `struct iomap`." This is the *only* filesystem-specific logic: consult the extent tree, allocate if needed, and return the mapping.
-- **`->iomap_end()`** — optional cleanup/commit after the range is processed.
+- **`->iomap_begin(inode, pos, length, ...)`** — 「このファイル範囲について`struct iomap`を埋めよ」。これが*唯一の*ファイルシステム固有のロジックである。エクステントツリーを参照し、必要なら割り当てを行い、マッピングを返す。
+- **`->iomap_end()`** — 範囲の処理後に行う、任意のクリーンアップ／コミット処理。
 
-Everything else lives in generic `fs/iomap/` code. An operation runs the **`iomap_iter`** loop: it calls `->iomap_begin` for the current position, gets back a mapping, does the actual work (copy to/from the page cache, build and submit `bio`s) across that mapping, advances, and repeats until the whole request is covered. The filesystem never touches the page cache or the [block layer](../block/bio-request.md) directly — it only answers "where does this file offset live?"
+それ以外はすべて汎用の`fs/iomap/`コードにある。操作は**`iomap_iter`**ループを実行する。現在位置について`->iomap_begin`を呼び出し、マッピングを受け取り、そのマッピング全体にわたって実際の作業（ページキャッシュとのコピー、`bio`の構築と発行）を行い、位置を進め、リクエスト全体がカバーされるまで繰り返す。ファイルシステムはページキャッシュや[ブロックレイヤ](../block/bio-request.md)に直接触れることはない — 「このファイルオフセットはどこにあるのか」に答えるだけである。
 
-On top of the iterator, iomap provides the full set of high-level operations, so a filesystem gets them all by implementing `iomap_begin` once:
+このイテレータの上に、iomapは高水準操作一式を提供する。そのためファイルシステムは`iomap_begin`を一度実装するだけで、それらすべてを手に入れられる。
 
-- **Buffered I/O** — `iomap_file_buffered_write()`, and the buffered read path, folio-native.
-- **Direct I/O** — `iomap_dio_rw()`, the shared O_DIRECT engine.
-- **Writeback** — building `bio`s from dirty folios over their mappings.
-- **DAX** — direct-access I/O to persistent memory, bypassing the page cache.
-- **`FIEMAP`, `SEEK_HOLE`/`SEEK_DATA`, swapfile activation** — all fall out of the same "ask the fs for the mapping" model.
+- **バッファードI/O** — `iomap_file_buffered_write()`とバッファードリードパス。folioネイティブである。
+- **ダイレクトI/O** — `iomap_dio_rw()`。共有のO_DIRECTエンジンである。
+- **ライトバック** — ダーティなfolioから、そのマッピングに基づいて`bio`を構築する。
+- **DAX** — ページキャッシュをバイパスする、永続メモリへのダイレクトアクセスI/O。
+- **`FIEMAP`、`SEEK_HOLE`/`SEEK_DATA`、スワップファイルの有効化** — いずれも同じ「fsにマッピングを尋ねる」モデルから自然に導かれる。
 
-## History and adoption {#history-and-adoption}
+## 歴史と採用 {#history-and-adoption}
 
-iomap was introduced in 2016 by Christoph Hellwig ([`ae259a9c8593`](https://git.kernel.org/linus/ae259a9c8593) "fs: introduce iomap infrastructure", Linux 4.8), initially to give XFS a clean `SEEK_HOLE`/`FIEMAP` and direct-I/O path. It proved general enough that the code was later split into its own subsystem directory ([`1c230208f53d`](https://git.kernel.org/linus/1c230208f53d) "iomap: start moving code to fs/iomap/"), and filesystems migrated their paths onto it:
+iomapは2016年にChristoph Hellwigによって導入された（[`ae259a9c8593`](https://git.kernel.org/linus/ae259a9c8593) "fs: introduce iomap infrastructure"、Linux 4.8）。当初の目的は、XFSにクリーンな`SEEK_HOLE`/`FIEMAP`およびダイレクトI/Oパスを与えることだった。十分に汎用的であることが判明したため、コードは後に独自のサブシステムディレクトリに分離され（[`1c230208f53d`](https://git.kernel.org/linus/1c230208f53d) "iomap: start moving code to fs/iomap/"）、各ファイルシステムが自らのパスをその上へ移行していった。
 
-- **XFS** — the original consumer; all of its I/O paths run on iomap.
-- **gfs2, zonefs, erofs** — adopted iomap for their block-mapping and I/O.
-- **ext4** — uses iomap for DAX and direct I/O.
-- **btrfs** — moved its direct-I/O path onto iomap.
+- **XFS** — 最初の利用者。すべてのI/Oパスがiomap上で動作する。
+- **gfs2、zonefs、erofs** — ブロックマッピングとI/Oにiomapを採用した。
+- **ext4** — DAXとダイレクトI/Oにiomapを使用する。
+- **btrfs** — ダイレクトI/Oパスをiomap上へ移行した。
 
-iomap was also **converted to folios early**, and — crucially — its generic paths were already centralized in `fs/iomap/` rather than duplicated behind per-filesystem `buffer_head` code. That is why the kernel's folio conversion advanced first through the iomap-based filesystems: there was one place to convert, not one per filesystem.
+iomapは**早期にfolioへ変換された**。そして決定的に重要なのは、その汎用パスがファイルシステムごとの`buffer_head`コードの背後に重複して存在するのではなく、すでに`fs/iomap/`に集約されていたことである。カーネルのfolio変換がiomapベースのファイルシステムから先に進んだのはこのためである。変換すべき場所はファイルシステムごとではなく、1か所だけだった。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: iomap design](https://docs.kernel.org/filesystems/iomap/design.html) — the data model and the theory of operation
-- [Kernel docs: iomap operations](https://docs.kernel.org/filesystems/iomap/operations.html) — the buffered, direct, DAX, and writeback APIs
-- [bio and request structures](../block/bio-request.md) — the block-layer objects iomap builds and submits
-- [ext4](ext4.md) · [XFS](xfs.md) · [btrfs](btrfs.md) — the filesystems whose I/O paths run on iomap
+- [Kernel docs: iomap design](https://docs.kernel.org/filesystems/iomap/design.html) — データモデルと動作原理
+- [Kernel docs: iomap operations](https://docs.kernel.org/filesystems/iomap/operations.html) — バッファード、ダイレクト、DAX、ライトバックの各API
+- [bioとrequest構造体](../block/bio-request.md) — iomapが構築して発行するブロックレイヤのオブジェクト
+- [ext4](ext4.md) · [XFS](xfs.md) · [btrfs](btrfs.md) — I/Oパスがiomap上で動作するファイルシステム

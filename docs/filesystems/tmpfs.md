@@ -1,37 +1,37 @@
-# tmpfs and ramfs {#tmpfs-and-ramfs}
+# tmpfsとramfs {#tmpfs-and-ramfs}
 
-> Memory-backed filesystems with no persistent storage
+> 永続ストレージを持たない、メモリをバックエンドとするファイルシステム
 
-## What tmpfs is {#what-tmpfs-is}
+## tmpfsとは何か {#what-tmpfs-is}
 
-tmpfs is a filesystem that lives entirely in RAM (and optionally swap). It's backed by the page cache — each file's data is anonymous memory, evictable to swap under memory pressure [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html). The current implementation was created by Christoph Rohland around 2001, replacing the older shm filesystem.
+tmpfsは完全にRAM（および任意でスワップ）上に存在するファイルシステムである。ページキャッシュをバックエンドとしており、各ファイルのデータは無名メモリで、メモリ逼迫時にはスワップへ追い出すことができる[(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/tmpfs.html)。現在の実装は2001年ごろにChristoph Rohlandによって作られ、古いshmファイルシステムを置き換えた。
 
 ```bash
-# Mount a tmpfs
+# tmpfs をマウントする
 mount -t tmpfs -o size=512m tmpfs /mnt/mytmpfs
 
-# Common uses:
-# /tmp — temporary files
-# /run — runtime data (PID files, sockets)
-# /dev/shm — POSIX shared memory (shm_open)
-# container overlays — Docker container upper layers
-# /var/cache — build caches
+# 一般的な用途:
+# /tmp — 一時ファイル
+# /run — 実行時データ（PID ファイル、ソケット）
+# /dev/shm — POSIX 共有メモリ（shm_open）
+# コンテナのオーバーレイ — Docker コンテナの上位レイヤ
+# /var/cache — ビルドキャッシュ
 ```
 
-## tmpfs vs ramfs {#tmpfs-vs-ramfs}
+## tmpfsとramfsの比較 {#tmpfs-vs-ramfs}
 
 | | tmpfs | ramfs |
 |---|-------|-------|
-| Size limit | Yes (configurable) | No (can OOM) |
-| Swap | Yes (pages evicted to swap) | No (always in RAM) |
-| VFS operations | Full (truncate, etc.) | Full |
-| Persistence | No (lost on umount) | No (lost on umount) |
-| shmem backed | Yes | No |
-| Use case | /tmp, /run, shm | embedded with no swap |
+| サイズ制限 | あり（設定可能） | なし（OOMになりうる） |
+| スワップ | あり（pageはスワップへ追い出される） | なし（常にRAM上） |
+| VFS操作 | 完全（truncateなど） | 完全 |
+| 永続性 | なし（umountで消える） | なし（umountで消える） |
+| shmemバックエンド | あり | なし |
+| 用途 | /tmp、/run、shm | スワップのない組み込み |
 
-## tmpfs implementation {#tmpfs-implementation}
+## tmpfsの実装 {#tmpfs-implementation}
 
-tmpfs is built on top of `shmem` (shared memory) subsystem:
+tmpfsは`shmem`（共有メモリ）サブシステムの上に構築されている。
 
 ```c
 /* mm/shmem.c */
@@ -43,96 +43,96 @@ static const struct file_system_type shmem_fs_type = {
 };
 ```
 
-### shmem inode {#shmem-inode}
+### shmemのinode {#shmem-inode}
 
 ```c
 struct shmem_inode_info {
     spinlock_t          lock;
-    unsigned int        seals;          /* F_SEAL_* for memfd */
+    unsigned int        seals;          /* memfd 用の F_SEAL_* */
     unsigned long       flags;
-    unsigned long       alloced;        /* pages allocated */
-    unsigned long       swapped;        /* pages swapped out */
-    pgoff_t             fallocend;      /* end of fallocate range */
-    struct list_head    shrinklist;     /* list of inodes with swap */
-    struct list_head    swaplist;       /* link to global swap list */
-    struct shared_policy policy;        /* NUMA policy */
+    unsigned long       alloced;        /* 割り当て済みの page 数 */
+    unsigned long       swapped;        /* スワップアウトされた page 数 */
+    pgoff_t             fallocend;      /* fallocate 範囲の終端 */
+    struct list_head    shrinklist;     /* スワップを持つ inode のリスト */
+    struct list_head    swaplist;       /* グローバルなスワップリストへのリンク */
+    struct shared_policy policy;        /* NUMA ポリシー */
     struct simple_xattrs xattrs;
     atomic_long_t       i_direct_seals;
-    struct inode        vfs_inode;      /* MUST be last */
+    struct inode        vfs_inode;      /* 必ず最後に置くこと */
 };
 ```
 
-### Page fault path for tmpfs {#page-fault-path-for-tmpfs}
+### tmpfsのページフォールトパス {#page-fault-path-for-tmpfs}
 
-When a process reads from a tmpfs file and the page isn't in memory:
+プロセスがtmpfsのファイルから読み出し、そのpageがメモリ上にない場合は次のようになる。
 
 ```c
 /* mm/shmem.c: shmem_fault() → shmem_get_folio() */
 shmem_get_folio(inode, index, ...)
-  → filemap_get_folio()   /* check page cache */
+  → filemap_get_folio()   /* ページキャッシュを確認 */
   → if not found:
       shmem_alloc_and_add_folio()
           → alloc_folio(GFP_HIGHUSER)
-          → /* if page was swapped: swap_read_folio() */
-          → /* otherwise: zero the page */
+          → /* page がスワップされていた場合: swap_read_folio() */
+          → /* それ以外: page をゼロ埋めする */
           → add_to_page_cache()
 ```
 
-For pages that were swapped out, `shmem_fault` reads them back from swap before returning. This is transparent to the application.
+スワップアウトされていたpageについては、`shmem_fault`が戻る前にスワップから読み戻す。これはアプリケーションからは透過的である。
 
-### Size limits {#size-limits}
+### サイズ制限 {#size-limits}
 
 ```bash
-# Default: half of RAM
+# デフォルト: RAM の半分
 mount -t tmpfs tmpfs /tmp
 
-# Explicit size
-mount -t tmpfs -o size=1g tmpfs /tmp       # 1GB hard limit
-mount -t tmpfs -o size=50% tmpfs /tmp      # 50% of RAM
+# 明示的なサイズ指定
+mount -t tmpfs -o size=1g tmpfs /tmp       # 1GB のハードリミット
+mount -t tmpfs -o size=50% tmpfs /tmp      # RAM の 50%
 
-# nr_inodes limit
+# nr_inodes の制限
 mount -t tmpfs -o size=512m,nr_inodes=100k tmpfs /tmp
 
-# Check current usage
+# 現在の使用量を確認する
 df -h /tmp
 cat /proc/mounts | grep tmpfs
 
-# tmpfs stats
+# tmpfs の統計
 cat /proc/meminfo | grep -E "Shmem|Swap"
-# Shmem:           524288 kB  ← total tmpfs usage
+# Shmem:           524288 kB  ← tmpfs の合計使用量
 ```
 
-### NUMA policy {#numa-policy}
+### NUMAポリシー {#numa-policy}
 
 ```bash
-# Mount with preferred NUMA node
-mount -t tmpfs -o mpol=prefer:0 tmpfs /tmp  # prefer node 0
+# 優先する NUMA ノードを指定してマウントする
+mount -t tmpfs -o mpol=prefer:0 tmpfs /tmp  # ノード 0 を優先
 
-# Interleave across nodes
+# ノード間でインターリーブする
 mount -t tmpfs -o mpol=interleave tmpfs /tmp
 
-# Bind to specific node
+# 特定のノードにバインドする
 mount -t tmpfs -o mpol=bind:0-1 tmpfs /tmp
 ```
 
-## devtmpfs: /dev filesystem {#devtmpfs-dev-filesystem}
+## devtmpfs: /devファイルシステム {#devtmpfs-dev-filesystem}
 
-devtmpfs is a special tmpfs populated by the kernel with device nodes before udev runs:
+devtmpfsは、udevが動き出す前にカーネルがデバイスノードを配置する特別なtmpfsである。
 
 ```bash
 mount | grep devtmpfs
 # devtmpfs on /dev type devtmpfs (rw,nosuid,size=...)
 
-# Kernel creates nodes as devices are discovered:
+# デバイスが検出されるにつれてカーネルがノードを作成する:
 ls -la /dev/sda /dev/null /dev/tty
-# brw-rw---- root disk  8, 0  /dev/sda   ← block device (major=8, minor=0)
-# crw-rw-rw- root root  1, 3  /dev/null  ← char device
+# brw-rw---- root disk  8, 0  /dev/sda   ← ブロックデバイス（major=8, minor=0）
+# crw-rw-rw- root root  1, 3  /dev/null  ← キャラクタデバイス
 # crw-rw-rw- root tty   5, 0  /dev/tty
 ```
 
-## tmpfs and Linux's /proc, /sys {#tmpfs-and-linuxs-proc-sys}
+## tmpfsとLinuxの/proc、/sys {#tmpfs-and-linuxs-proc-sys}
 
-Both `/proc` and `/sys` are special pseudo-filesystems built on the same infrastructure:
+`/proc`と`/sys`はいずれも、同じ基盤の上に構築された特別な疑似ファイルシステムである。
 
 ```c
 /* proc_fs_type */
@@ -143,7 +143,7 @@ static struct file_system_type proc_fs_type = {
     .fs_flags       = FS_USERNS_MOUNT,
 };
 
-/* sysfs built on kernfs */
+/* kernfs の上に構築された sysfs */
 static struct file_system_type sysfs_fs_type = {
     .name           = "sysfs",
     .init_fs_context = sysfs_init_fs_context,
@@ -152,24 +152,24 @@ static struct file_system_type sysfs_fs_type = {
 };
 ```
 
-These filesystems don't use backing storage — reads synthesize data from kernel data structures; writes trigger kernel operations.
+これらのファイルシステムはバッキングストレージを使わない — 読み出しはカーネルのデータ構造からデータを合成し、書き込みはカーネルの操作を引き起こす。
 
-## Volatile mounts: tmpfs in container use {#volatile-mounts-tmpfs-in-container-use}
+## 揮発性マウント: コンテナでのtmpfs {#volatile-mounts-tmpfs-in-container-use}
 
-Containers use tmpfs for writable layers and ephemeral storage:
+コンテナは書き込み可能なレイヤや一時的なストレージにtmpfsを使う。
 
 ```bash
-# Docker: mount tmpfs for /tmp in container
+# Docker: コンテナ内の /tmp に tmpfs をマウントする
 docker run --tmpfs /tmp:size=512m,mode=1777 ubuntu bash
 
-# Kubernetes: emptyDir with medium: Memory
-# Creates a tmpfs mount for the pod's ephemeral volume
+# Kubernetes: medium: Memory を指定した emptyDir
+# Pod の一時ボリューム用に tmpfs マウントを作成する
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ext4](ext4.md) — Persistent alternative
-- [btrfs](btrfs.md) — CoW persistent alternative
-- [Memory Management: mmap](../mm/mmap.md) — How tmpfs pages are faulted in
-- [IPC: Shared Memory](../ipc/shared-memory.md) — POSIX shm backed by tmpfs
-- [Kernel docs: tmpfs](https://docs.kernel.org/filesystems/tmpfs.html) — mount options (`size`, `nr_inodes`, `huge`) and semantics
+- [ext4](ext4.md) — 永続的な代替
+- [btrfs](btrfs.md) — CoWの永続的な代替
+- [メモリ管理: mmap](../mm/mmap.md) — tmpfsのpageがどのようにフォールトインされるか
+- [IPC: 共有メモリ](../ipc/shared-memory.md) — tmpfsをバックエンドとするPOSIX shm
+- [Kernel docs: tmpfs](https://docs.kernel.org/filesystems/tmpfs.html) — マウントオプション（`size`、`nr_inodes`、`huge`）とセマンティクス

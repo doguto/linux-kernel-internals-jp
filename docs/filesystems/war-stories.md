@@ -1,49 +1,49 @@
-# Filesystem War Stories {#filesystem-war-stories}
+# ファイルシステムの事件簿 {#filesystem-war-stories}
 
-> Four incidents where a filesystem behaved *exactly as designed* and still lost data, handed out root, or introduced a new bug while repairing an existing one — and what the kernel changed in response
+> ファイルシステムが*まさに設計どおりに*動作したにもかかわらずデータを失い、root権限を明け渡し、あるいは既存のバグを修復しようとして新たなバグを持ち込んだ4つの事件 — そしてカーネルがそれを受けて何を変えたのか
 
-Filesystems fail in instructive ways. Most of the bugs below aren't sloppy code so much as a design decision colliding with reality — an optimization that widened a crash window, a container feature that trusted the wrong metadata, a RAID layer with no atomicity for its own updates. The fourth is the plainer kind of bug, a stale pointer captured one line too early — but it only exists because repairing a live, mounted filesystem's own metadata is itself a relatively new and structurally tricky feature. They map directly onto the concepts in [crash consistency](crash-consistency.md), [overlayfs](overlayfs.md), [btrfs](btrfs.md), and [XFS](xfs.md).
+ファイルシステムは教訓に富んだ形で失敗する。以下のバグのほとんどは、ずさんなコードというより、設計判断が現実と衝突したものである — クラッシュの窓を広げた最適化、間違ったメタデータを信頼したコンテナ機能、自身の更新にアトミック性を持たないRAIDレイヤ。4つ目はより素朴な種類のバグ、つまり1行早すぎるタイミングで捕捉された古いポインタだが、それが存在するのは、マウント中の生きたファイルシステムが自身のメタデータを修復すること自体が、比較的新しく構造的に厄介な機能だからにほかならない。これらは[クラッシュ一貫性](crash-consistency.md)、[overlayfs](overlayfs.md)、[btrfs](btrfs.md)、[XFS](xfs.md)の概念に直接対応している。
 
-## 1. ext4 and the empty files: delayed allocation meets `O_PONIES` (2009) {#1-ext4-and-the-empty-files-delayed-allocation-meets-o_ponies-2009}
+## 1. ext4と空のファイル: 遅延割り当てと`O_PONIES`（2009年） {#1-ext4-and-the-empty-files-delayed-allocation-meets-o_ponies-2009}
 
-When ext4 became a default, users upgrading from ext3 started reporting a shocking symptom: after a crash or hard power-off, recently-saved files — KDE config, session state, whole dotfiles — came back **zero length**. Data that "had been saved" was simply gone.
+ext4がデフォルトになったとき、ext3からアップグレードしたユーザーが衝撃的な症状を報告し始めた。クラッシュや強制的な電源断の後、最近保存したファイル — KDEの設定、セッション状態、ドットファイル丸ごと — が**長さゼロ**で戻ってきたのである。「保存済み」だったデータが、ただ消えていた。
 
-Nothing was corrupt. This was [delayed allocation](iomap.md) working as intended. To choose good on-disk layout, ext4 defers picking physical blocks for freshly written data for up to ~30 seconds. Applications were saving files with the classic "atomic replace" idiom — write a new file, then `rename()` it over the old one — but *without* an `fsync()` in between. On ext3 the shorter allocation window and `data=ordered` behavior had made that pattern *usually* survive a crash. ext4's wider window turned "usually" into "usually not": after a crash, the rename had committed (metadata) but the data blocks were never allocated, leaving a valid directory entry pointing at an empty file.
+何も壊れてはいなかった。これは[遅延割り当て](iomap.md)が意図どおりに動作した結果だった。ディスク上の良いレイアウトを選ぶために、ext4は新たに書き込まれたデータの物理ブロックの選択を最大約30秒先送りする。アプリケーションは古典的な「アトミックな置き換え」イディオム — 新しいファイルを書き込み、それを古いファイルの上に`rename()`する — でファイルを保存していたが、その間に`fsync()`を*挟んでいなかった*。ext3では、より短い割り当ての窓と`data=ordered`の挙動によって、このパターンは*たいてい*クラッシュを生き延びていた。ext4の広い窓は「たいてい大丈夫」を「たいてい駄目」に変えた。クラッシュ後、rename（メタデータ）はコミットされていたがデータブロックは一度も割り当てられておらず、空のファイルを指す有効なディレクトリエントリが残されたのである。
 
-The famous LKML thread that followed was, in effect, a fight over whether applications were owed durability they never asked for — Ted Ts'o's point was that **POSIX guarantees nothing without `fsync()`**, a position critics mockingly labeled the demand for "`O_PONIES`" (magical guarantees). But being *right* about POSIX doesn't help users. Ext4 added heuristics that detect exactly these idioms and force the data out: replacing a file via `rename()`, or truncating a file to zero and rewriting it, triggers writeback of the delayed-allocation blocks. The behavior is controlled by the **`auto_da_alloc`** mount option, on by default and [documented in the ext4 admin guide](https://docs.kernel.org/admin-guide/ext4.html).
+続いて起きた有名なLKMLのスレッドは、事実上、アプリケーションが自ら求めてもいない永続性を与えられるべきかどうかをめぐる争いだった — Ted Ts'oの主張は**POSIXは`fsync()`なしには何も保証しない**というものであり、批判者はこの立場を嘲って、（魔法のような保証である）「`O_PONIES`」の要求と呼んだ。しかしPOSIXについて*正しい*ことはユーザーの助けにはならない。ext4はまさにこれらのイディオムを検出してデータを強制的に書き出すヒューリスティクスを追加した。`rename()`によるファイルの置き換えや、ファイルをゼロに切り詰めて書き直すことが、遅延割り当てブロックのライトバックを引き起こす。この挙動は**`auto_da_alloc`**マウントオプションで制御され、デフォルトで有効であり、[ext4 admin guideに記載されている](https://docs.kernel.org/admin-guide/ext4.html)。
 
-**Lesson:** the gap between what the standard promises and what applications *assume* is where data goes to die. A correct optimization that changes observable timing is a compatibility break. See [crash consistency](crash-consistency.md) for why `fsync()` remains the only real guarantee.
+**教訓:** 標準が約束することと、アプリケーションが*想定している*こととの隔たりこそ、データが失われる場所である。観測可能なタイミングを変える正しい最適化は、互換性の破壊である。なぜ`fsync()`が唯一の本当の保証であり続けるのかについては[クラッシュ一貫性](crash-consistency.md)を参照。
 
-## 2. overlayfs copy-up and a path to root: CVE-2023-0386 (2023) {#2-overlayfs-copy-up-and-a-path-to-root-cve-2023-0386-2023}
+## 2. overlayfsのcopy-upとrootへの道: CVE-2023-0386（2023年） {#2-overlayfs-copy-up-and-a-path-to-root-cve-2023-0386-2023}
 
-[overlayfs](overlayfs.md) implements containers' layered images: a read-only lower layer, a writable upper layer, and **copy-up** — the first write to a lower-layer file copies it into the upper layer, preserving its metadata, including the setuid bit.
+[overlayfs](overlayfs.md)はコンテナのレイヤ化されたイメージを実装する。読み取り専用の下位レイヤ、書き込み可能な上位レイヤ、そして**copy-up**である — 下位レイヤのファイルへの最初の書き込みは、そのファイルを上位レイヤにコピーし、setuidビットを含めメタデータを保持する。
 
-The vulnerability chained two features. An unprivileged user, inside a user namespace, could set up a [FUSE](fuse.md) mount that served a file *claiming* to be a setuid-root binary owned by uid 0. Used as an overlayfs lower layer, copy-up faithfully carried the setuid bit and ownership up into the real upper filesystem — where the mapping was no longer confined to the namespace. The result was a genuine setuid-root binary on a normally-mounted filesystem: a straight path from unprivileged user to root.
+この脆弱性は2つの機能を連鎖させた。非特権ユーザーはuser namespace内で、uid 0が所有するsetuid-rootバイナリであると*称する*ファイルを提供する[FUSE](fuse.md)マウントを構築できた。それをoverlayfsの下位レイヤとして使うと、copy-upはsetuidビットと所有者を忠実に実際の上位ファイルシステムへ持ち上げた — そこではマッピングはもはやnamespaceに閉じ込められていない。その結果、通常にマウントされたファイルシステム上に本物のsetuid-rootバイナリが生まれた。非特権ユーザーからrootへの一直線の道である。
 
-The fix makes copy-up **verify the uid/gid actually map** into the mounter's namespace and refuse the operation otherwise ([`4f11ada10d0a`](https://git.kernel.org/linus/4f11ada10d0a) "ovl: fail on invalid uid/gid mapping at copy up"). Copying up a file whose owner can't be represented in the caller's credentials is exactly the case that must fail closed.
+修正により、copy-upはuid/gidがマウントした者のnamespaceへ**実際にマッピングされることを検証し**、そうでなければ操作を拒否するようになった（[`4f11ada10d0a`](https://git.kernel.org/linus/4f11ada10d0a) "ovl: fail on invalid uid/gid mapping at copy up"）。所有者が呼び出し元のクレデンシャルで表現できないファイルのcopy-upは、まさにfail closed（安全側に倒して失敗）しなければならないケースである。
 
-**Lesson:** a filesystem that faithfully preserves metadata is a security boundary when one of its layers is attacker-controlled. Trusting uid/gid from a FUSE-backed lower layer meant trusting the attacker; the union filesystem must re-validate identity at the moment it crosses a privilege boundary.
+**教訓:** メタデータを忠実に保持するファイルシステムは、レイヤの1つが攻撃者に制御されている場合、セキュリティ境界となる。FUSEをバックエンドとする下位レイヤのuid/gidを信頼することは、攻撃者を信頼することを意味した。ユニオンファイルシステムは、権限境界を越える瞬間にIDを再検証しなければならない。
 
-## 3. The btrfs RAID5/6 write hole {#3-the-btrfs-raid56-write-hole}
+## 3. btrfsのRAID5/6ライトホール {#3-the-btrfs-raid56-write-hole}
 
-[btrfs](btrfs.md) is copy-on-write and checksums everything, which normally makes it exceptionally crash-safe. Its parity RAID (RAID5/RAID6) is the glaring exception, and the reason is structural.
+[btrfs](btrfs.md)はcopy-on-writeであり、すべてにチェックサムを付けるため、通常は非常にクラッシュに強い。そのパリティRAID（RAID5/RAID6）は目立った例外であり、その理由は構造的なものである。
 
-A RAID5 stripe is several data blocks plus one parity block computed across them. Updating part of a stripe means recomputing and rewriting parity. That read-modify-write of the parity block is **not** protected by btrfs's CoW transaction machinery — it happens in place. If power is lost after some of a stripe's blocks are written but before parity is consistent, the stripe is left with parity that doesn't match its data: the **write hole**. Worse, the corruption is latent — it only surfaces later, when a disk fails and btrfs reconstructs a block from the now-wrong parity, silently returning bad data (or, for metadata, endangering the whole filesystem). The btrfs project's own documentation marks RAID5/6 as **unstable** and [documents the write hole explicitly](https://btrfs.readthedocs.io/en/latest/btrfs-man5.html), cautioning against relying on it — the common guidance is to keep metadata on a RAID profile (like RAID1) that isn't exposed to it.
+RAID5のストライプは、複数のデータブロックと、それらにわたって計算された1つのパリティブロックからなる。ストライプの一部を更新するには、パリティを再計算して書き直す必要がある。このパリティブロックのread-modify-writeはbtrfsのCoWトランザクション機構によって保護されて**いない** — インプレースで行われる。ストライプのブロックの一部が書き込まれた後、パリティが一貫する前に電源が失われると、ストライプはデータと一致しないパリティを持ったまま残される。これが**ライトホール**である。さらに悪いことに、この破損は潜在的である — 後になってディスクが故障し、btrfsが今や間違ったパリティからブロックを再構築するときに初めて表面化し、黙って不正なデータを返す（メタデータの場合はファイルシステム全体を危険にさらす）。btrfsプロジェクト自身のドキュメントはRAID5/6を**不安定**とし、[ライトホールを明示的に記載して](https://btrfs.readthedocs.io/en/latest/btrfs-man5.html)、それに依存しないよう警告している — 一般的な指針は、メタデータをその影響を受けないRAIDプロファイル（RAID1など）に置くことである。
 
-**Lesson:** crash consistency is not a property of "the filesystem" as a whole — each subsystem needs its own atomicity story. btrfs solved it for the tree and for single-device writes, but the parity-RAID stripe update sits *outside* that mechanism, so all the CoW guarantees above it don't reach it.
+**教訓:** クラッシュ一貫性は「ファイルシステム」全体としての性質ではない — 各サブシステムがそれぞれ自分のアトミック性の筋書きを必要とする。btrfsはツリーと単一デバイスへの書き込みについてはそれを解決したが、パリティRAIDのストライプ更新はその仕組みの*外側*にあるため、その上にあるCoWの保証はすべてそこに届かない。
 
-## 4. CVE-2025-68784: repairing a filesystem's own reallocating buffer out from under itself {#4-cve-2025-68784-repairing-a-filesystems-own-reallocating-buffer-out-from-under-itself}
+## 4. CVE-2025-68784: ファイルシステム自身の再割り当てされるバッファを足元から修復する {#4-cve-2025-68784-repairing-a-filesystems-own-reallocating-buffer-out-from-under-itself}
 
-XFS's [online repair](xfs.md#online-repair-xfs-519) can salvage extended-attribute values from metadata it otherwise judges too damaged to trust — `xrep_xattr_salvage_remote_attr()` reads a remote (out-of-line) attribute value out of a corrupt leaf block and copies whatever's recoverable into a scratch buffer, `ab->value`, so it can be reinserted once the attribute structure itself is rebuilt.
+XFSの[オンライン修復](xfs.md#online-repair-xfs-519)は、他の点では信頼できないほど損傷していると判断したメタデータから、拡張属性の値をサルベージできる — `xrep_xattr_salvage_remote_attr()`は、破損したリーフブロックからリモート（アウトオブライン）の属性値を読み出し、回収可能なものをスクラッチバッファ`ab->value`にコピーする。これは、属性構造自体が再構築された後に再挿入するためである。
 
-The function builds a `struct xfs_da_args` — the argument struct XFS's attribute code passes around internally — as a single initializer, including `.value = ab->value` pointing at that scratch buffer. Only *after* constructing this struct does it call `xchk_setup_xattr_buf()` to make sure the buffer is large enough for the value it's about to salvage. That sizing check doesn't grow the buffer in place — whenever the existing one is too small, it unconditionally frees it (`kvfree()`) and allocates a fresh one (`kvmalloc()`). `ab->value` gets updated to point at that fresh allocation — but `args.value`, captured at struct-initializer time, still points at the buffer that was just freed. The subsequent call to `xfs_attr3_leaf_getvalue(leaf_bp, &args)` reads and writes through that stale pointer: a use-after-free in code whose entire job is repairing corruption, on a metadata path that only exists because [online repair](xfs.md#online-repair-xfs-519) added the ability to fix XFS attribute structures without unmounting.
+この関数は`struct xfs_da_args` — XFSの属性コードが内部で受け渡す引数構造体 — を単一の初期化子で構築し、そこにはスクラッチバッファを指す`.value = ab->value`が含まれる。この構造体を構築した*後で*初めて、サルベージしようとしている値に対してバッファが十分な大きさかを確かめるために`xchk_setup_xattr_buf()`を呼び出す。このサイズ確認はバッファをインプレースで拡張しない — 既存のバッファが小さすぎる場合は必ず、それを無条件に解放し（`kvfree()`）、新しいバッファを割り当てる（`kvmalloc()`）。`ab->value`はその新しい割り当てを指すよう更新される — しかし構造体初期化子の時点で捕捉された`args.value`は、解放されたばかりのバッファを指したままである。続く`xfs_attr3_leaf_getvalue(leaf_bp, &args)`の呼び出しは、その古いポインタを通じて読み書きを行う。破損の修復こそが唯一の仕事であるコードにおけるuse-after-freeであり、しかもそれは、[オンライン修復](xfs.md#online-repair-xfs-519)がアンマウントせずにXFSの属性構造を修復する能力を追加したからこそ存在するメタデータパス上にあった。
 
-The fix ([`5990fd756943`](https://git.kernel.org/linus/5990fd756943) "xfs: fix a UAF problem in xattr repair", Darrick J. Wong) is a two-line reordering: drop `.value = ab->value` from the initializer, and assign `args.value = ab->value` explicitly right after `xchk_setup_xattr_buf()` returns successfully — guaranteeing `args.value` always reflects whatever `ab->value` currently is, reallocated or not. The bug had existed since Linux 6.10, when attribute repair itself was added.
+修正（[`5990fd756943`](https://git.kernel.org/linus/5990fd756943) "xfs: fix a UAF problem in xattr repair"、Darrick J. Wong）は2行の並べ替えである。初期化子から`.value = ab->value`を取り除き、`xchk_setup_xattr_buf()`が成功を返した直後に`args.value = ab->value`を明示的に代入する — これにより、再割り当てされたかどうかにかかわらず、`args.value`が常に現在の`ab->value`を反映することが保証される。このバグは、属性の修復機能自体が追加されたLinux 6.10から存在していた。
 
-**Lesson:** a pointer captured into a struct literal at declaration time is a snapshot, not a live reference — if anything between that declaration and the struct's use can reallocate the thing it points at, the snapshot is stale the moment the reallocation happens. This is the same class of bug as capturing a `container_of()` result across a lock you drop and reacquire: correct at the instant it was taken, wrong by the time it's used.
+**教訓:** 宣言時に構造体リテラルへ捕捉されたポインタはスナップショットであり、生きた参照ではない — その宣言から構造体の使用までの間に、指している先を再割り当てしうるものがあれば、再割り当てが起きた瞬間にスナップショットは古くなる。これは、ロックを手放して再取得する前後で`container_of()`の結果を保持し続けるのと同じ種類のバグである。取得した瞬間には正しく、使われる時点では間違っている。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Crash Consistency and Recovery](crash-consistency.md) — journaling vs CoW, and why `fsync()` is the only durability contract
-- [overlayfs](overlayfs.md) · [btrfs](btrfs.md) · [FUSE](fuse.md) · [XFS](xfs.md) — the subsystems these incidents live in
-- [Kernel docs: ext4 admin guide](https://docs.kernel.org/admin-guide/ext4.html) — `auto_da_alloc` and the other ext4 mount options
+- [クラッシュ一貫性とリカバリ](crash-consistency.md) — ジャーナリングとCoW、そしてなぜ`fsync()`が唯一の永続性の契約なのか
+- [overlayfs](overlayfs.md) · [btrfs](btrfs.md) · [FUSE](fuse.md) · [XFS](xfs.md) — これらの事件が起きたサブシステム
+- [Kernel docs: ext4 admin guide](https://docs.kernel.org/admin-guide/ext4.html) — `auto_da_alloc`とその他のext4マウントオプション

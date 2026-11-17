@@ -1,31 +1,31 @@
-# XFS: High-Performance Journaling Filesystem {#xfs-high-performance-journaling-filesystem}
+# XFS: 高性能ジャーナリングファイルシステム {#xfs-high-performance-journaling-filesystem}
 
-> Allocation groups, B-tree index structures, delayed allocation, and online repair
+> アロケーショングループ、B-treeインデックス構造、遅延割り当て、オンライン修復
 
-## Why XFS? {#why-xfs}
+## なぜXFSか {#why-xfs}
 
-XFS was originally developed at SGI for IRIX in 1993, then ported to Linux by Steve Lord and the SGI team; it was merged into the mainline kernel in Linux 2.5.36 (2002). It excels at:
+XFSはもともと1993年にSGIでIRIX向けに開発され、その後Steve LordとSGIチームによってLinuxへ移植された。メインラインカーネルにはLinux 2.5.36（2002年）でマージされた。XFSが優れているのは次の点である。
 
-- **Large files and filesystems**: up to 8 EiB volumes, 8 EiB files
-- **High concurrency**: per-allocation-group locking, minimal global contention
-- **Metadata performance**: B-tree indexes for extents, inodes, and free space
-- **Online operations**: defrag, grow, and repair while mounted
+- **大きなファイルとファイルシステム**: 最大8 EiBのボリューム、8 EiBのファイル
+- **高い並行性**: アロケーショングループごとのロックにより、グローバルな競合が最小限
+- **メタデータ性能**: エクステント、inode、空き領域に対するB-treeインデックス
+- **オンライン操作**: マウントしたままでのデフラグ、拡張、修復
 
-| Feature | ext4 | XFS | Btrfs |
+| 機能 | ext4 | XFS | Btrfs |
 |---------|------|-----|-------|
-| Max filesystem | 1 EiB | 8 EiB | 16 EiB |
-| Max file size | 16 TiB | 8 EiB | 16 EiB |
-| Delayed alloc | Yes | Yes | Yes |
-| Journal | JBD2 | Internal (xlog) | None (CoW) |
-| Checksums | Metadata only | Metadata + dir | All blocks |
-| Online repair | No | Yes (5.19+) | Yes (btrfs scrub) |
-| Reflinks | No | Yes | Yes |
-| Quotas | Yes | Yes | Yes |
-| Realtime section | No | Yes | No |
+| 最大ファイルシステムサイズ | 1 EiB | 8 EiB | 16 EiB |
+| 最大ファイルサイズ | 16 TiB | 8 EiB | 16 EiB |
+| 遅延割り当て | あり | あり | あり |
+| ジャーナル | JBD2 | 内蔵（xlog） | なし（CoW） |
+| チェックサム | メタデータのみ | メタデータ + ディレクトリ | 全ブロック |
+| オンライン修復 | なし | あり（5.19以降） | あり（btrfs scrub） |
+| Reflink | なし | あり | あり |
+| クォータ | あり | あり | あり |
+| リアルタイムセクション | なし | あり | なし |
 
-## Allocation Groups {#allocation-groups}
+## アロケーショングループ {#allocation-groups}
 
-XFS divides the filesystem into **Allocation Groups (AGs)**. Each AG manages its own inodes, free space, and B-trees independently:
+XFSはファイルシステムを**アロケーショングループ（AG）**に分割する。各AGは自分のinode、空き領域、B-treeを独立して管理する。
 
 ```
 XFS filesystem:
@@ -45,10 +45,10 @@ XFS filesystem:
               └────────────────────────────────────────┘
 ```
 
-AG size defaults to roughly 1 GiB (power of 2 ≤ filesystem size / 4). The number of AGs determines the parallelism:
+AGのサイズはデフォルトでおよそ1 GiB（ファイルシステムサイズ / 4以下の2のべき乗）である。AGの数が並列度を決める。
 
 ```bash
-# Check AG count and size:
+# AG の数とサイズを確認する:
 xfs_info /dev/sda1
 # meta-data=/dev/sda1    isize=512  agcount=16, agsize=6553600 blks
 #          =             sectsz=512   attr=2, projid32bit=1
@@ -60,24 +60,24 @@ xfs_info /dev/sda1
 # realtime =none         extsz=4096   blocks=0, rtextents=0
 ```
 
-## B-tree structures {#b-tree-structures}
+## B-tree構造 {#b-tree-structures}
 
-### Free space B-trees (bnobt and cntbt) {#free-space-b-trees-bnobt-and-cntbt}
+### 空き領域B-tree（bnobtとcntbt） {#free-space-b-trees-bnobt-and-cntbt}
 
-Two B-trees track free space, allowing O(log n) allocation:
+2つのB-treeが空き領域を追跡し、O(log n)での割り当てを可能にする。
 
 ```c
-/* Free extent record: */
+/* 空きエクステントのレコード: */
 struct xfs_alloc_rec {
-    __be32  ar_startblock;  /* starting block number */
-    __be32  ar_blockcount;  /* number of free blocks */
+    __be32  ar_startblock;  /* 開始ブロック番号 */
+    __be32  ar_blockcount;  /* 空きブロック数 */
 };
-/* bnobt: keyed by startblock (for contiguous allocation near a hint) */
-/* cntbt: keyed by blockcount (for best-fit allocation by size) */
+/* bnobt: startblock をキーとする（ヒント付近での連続割り当て用） */
+/* cntbt: blockcount をキーとする（サイズによるベストフィット割り当て用） */
 ```
 
 ```bash
-# Dump free space B-tree:
+# 空き領域 B-tree をダンプする:
 xfs_db -c 'ag 0' -c 'agf' -c 'print' /dev/sda1
 # magicnum = 0x58414746   (XAGF)
 # versionnum = 1
@@ -90,88 +90,88 @@ xfs_db -c 'ag 0' -c 'agf' -c 'print' /dev/sda1
 # freeblks = 5234567
 ```
 
-### Inode B-tree (inobt) and free inode B-tree (finobt) {#inode-b-tree-inobt-and-free-inode-b-tree-finobt}
+### inode B-tree（inobt）と空きinode B-tree（finobt） {#inode-b-tree-inobt-and-free-inode-b-tree-finobt}
 
 ```c
-/* Inode chunk record: 64 inodes per chunk */
+/* inode チャンクのレコード: チャンクあたり 64 inode */
 struct xfs_inobt_rec {
-    __be32  ir_startino;   /* first inode number in chunk */
-    __be16  ir_holemask;   /* holes in the inode chunk (sparse inodes) */
-    __u8    ir_count;      /* # of inodes in this record */
-    __u8    ir_freecount;  /* # of free inodes */
-    __be64  ir_free;       /* bitmask of free inodes */
+    __be32  ir_startino;   /* チャンク内の最初の inode 番号 */
+    __be16  ir_holemask;   /* inode チャンク内のホール（スパース inode） */
+    __u8    ir_count;      /* このレコード内の inode 数 */
+    __u8    ir_freecount;  /* 空き inode 数 */
+    __be64  ir_free;       /* 空き inode のビットマスク */
 };
-/* finobt: same format, but only records with ir_freecount > 0 */
-/* finobt allows O(log n) free inode lookup instead of scanning inobt */
+/* finobt: 同じフォーマットだが、ir_freecount > 0 のレコードのみ */
+/* finobt により、inobt を走査する代わりに O(log n) で空き inode を検索できる */
 ```
 
-### Reverse mapping B-tree (rmapbt) {#reverse-mapping-b-tree-rmapbt}
+### 逆マッピングB-tree（rmapbt） {#reverse-mapping-b-tree-rmapbt}
 
-Introduced in Linux 4.8. Every allocated block is back-referenced to its owner:
+Linux 4.8で導入された。割り当てられたすべてのブロックが、その所有者への後方参照を持つ。
 
 ```c
 struct xfs_rmap_rec {
-    __be32  rm_startblock; /* start block of extent */
-    __be32  rm_blockcount; /* length of extent */
-    __be64  rm_owner;      /* owner (inode#, or XFS_RMAP_OWN_* for metadata) */
-    __be64  rm_offset;     /* file offset (for data extents) */
-    /* flags: unwritten, attr fork, bmbt block */
+    __be32  rm_startblock; /* エクステントの開始ブロック */
+    __be32  rm_blockcount; /* エクステントの長さ */
+    __be64  rm_owner;      /* 所有者（inode 番号、またはメタデータの場合は XFS_RMAP_OWN_*） */
+    __be64  rm_offset;     /* ファイルオフセット（データエクステントの場合） */
+    /* フラグ: unwritten、attr fork、bmbt ブロック */
 };
 ```
 
-rmapbt enables: online repair (find which inode owns a corrupt block), online scrub, and reflink COW tracking.
+rmapbtにより、オンライン修復（破損したブロックをどのinodeが所有しているかを見つける）、オンラインscrub、reflinkのCOW追跡が可能になる。
 
-## Inode format {#inode-format}
+## inodeのフォーマット {#inode-format}
 
-XFS inodes are 512 bytes (configurable to 256 or 2048):
+XFSのinodeは512バイトである（256または2048に設定可能）。
 
 ```c
 struct xfs_dinode {
     __be16  di_magic;      /* 0x494e "IN" */
-    __be16  di_mode;       /* file type + permissions */
-    __u8    di_version;    /* inode version 1/2/3 */
+    __be16  di_mode;       /* ファイルタイプ + パーミッション */
+    __u8    di_version;    /* inode のバージョン 1/2/3 */
     __u8    di_format;     /* XFS_DINODE_FMT_* */
     __be64  di_size;
-    __be64  di_nblocks;    /* # of data + attr blocks */
-    __be32  di_extsize;    /* extent size hint */
-    __be32  di_nextents;   /* # of data extents */
-    __be16  di_anextents;  /* # of attr extents */
+    __be64  di_nblocks;    /* データ + 属性ブロックの数 */
+    __be32  di_extsize;    /* エクステントサイズのヒント */
+    __be32  di_nextents;   /* データエクステントの数 */
+    __be16  di_anextents;  /* 属性エクステントの数 */
     __be64  di_atime;
     __be64  di_mtime;
     __be64  di_ctime;
-    __be64  di_crtime;     /* v3: creation time */
-    __be64  di_ino;        /* v3: inode number (self-identification) */
-    uuid_t  di_uuid;       /* v3: filesystem UUID */
-    /* ... checksum, flags ... */
-    /* Followed by: data fork (extents or B-tree root or inline data) */
+    __be64  di_crtime;     /* v3: 作成時刻 */
+    __be64  di_ino;        /* v3: inode 番号（自己識別） */
+    uuid_t  di_uuid;       /* v3: ファイルシステムの UUID */
+    /* ... チェックサム、フラグ ... */
+    /* この後に続くもの: データフォーク（エクステント、B-tree のルート、またはインラインデータ） */
 };
 
-/* di_format values: */
-/* XFS_DINODE_FMT_DEV:    special file, device number inline */
-/* XFS_DINODE_FMT_LOCAL:  data inline (small files/dirs) */
-/* XFS_DINODE_FMT_EXTENTS: extent list fits in inode */
-/* XFS_DINODE_FMT_BTREE:  B-tree rooted in inode (many extents) */
+/* di_format の値: */
+/* XFS_DINODE_FMT_DEV:    特殊ファイル。デバイス番号をインラインで持つ */
+/* XFS_DINODE_FMT_LOCAL:  データをインラインで持つ（小さなファイル／ディレクトリ） */
+/* XFS_DINODE_FMT_EXTENTS: エクステントリストが inode に収まる */
+/* XFS_DINODE_FMT_BTREE:  inode をルートとする B-tree（エクステントが多い場合） */
 ```
 
-### Extent format {#extent-format}
+### エクステントのフォーマット {#extent-format}
 
-XFS stores extents in a compact 128-bit format:
+XFSはエクステントをコンパクトな128ビットのフォーマットで格納する。
 
 ```c
-/* xfs_bmbt_rec: 128-bit packed extent record */
-/* Bits:
-   [127]      unwritten flag
-   [126:73]   file offset in blocks (54 bits)
-   [72:21]    start block (52 bits)
-   [20:0]     block count (21 bits, max 2M blocks per extent)
+/* xfs_bmbt_rec: 128 ビットにパックされたエクステントレコード */
+/* ビット:
+   [127]      unwritten フラグ
+   [126:73]   ブロック単位のファイルオフセット（54 ビット）
+   [72:21]    開始ブロック（52 ビット）
+   [20:0]     ブロック数（21 ビット。エクステントあたり最大 2M ブロック）
 */
 ```
 
-Up to ~20 extents fit inline in the inode. Beyond that, a B-tree (bmbt) is rooted in the inode.
+最大約20個のエクステントがinode内にインラインで収まる。それを超えると、inodeをルートとするB-tree（bmbt）が使われる。
 
-## Delayed allocation {#delayed-allocation}
+## 遅延割り当て {#delayed-allocation}
 
-XFS uses **delayed allocation** to improve write performance. Instead of allocating disk blocks immediately on write, XFS reserves space in memory and delays the actual allocation until writeback:
+XFSは書き込み性能を向上させるために**遅延割り当て**を使う。書き込み時にすぐディスクブロックを割り当てる代わりに、XFSはメモリ上で領域を予約し、実際の割り当てをライトバックまで遅らせる。
 
 ```
 write() → page cache → dirty pages
@@ -183,32 +183,32 @@ write() → page cache → dirty pages
                     blocks written to disk
 ```
 
-Benefits:
+利点は次のとおりである。
 
-- Consecutive writes can be merged into large extents
-- Allocation happens when more context is available (full file size known)
-- Fewer, larger extents → less fragmentation
+- 連続した書き込みを大きなエクステントにまとめられる
+- より多くの文脈が得られた時点（ファイルサイズ全体が分かった時点）で割り当てが行われる
+- エクステントがより少なく、より大きくなる → 断片化が減る
 
 ```bash
-# Monitor allocation statistics:
+# 割り当ての統計を監視する:
 xfs_io -c 'statfs' /data
 # geometry.rtextsize = 0
 # geometry.rtblocks = 0
 
-# Check fragmentation:
+# 断片化を確認する:
 xfs_db -c 'freesp -s' /dev/sda1
 # from      to extents  blocks    pct
 #    1       1  123456  123456   5.40
 #    2       3   23456   46912   2.06
 # ...
 
-# Defragment:
-xfs_fsr /dev/sda1       # filesystem reorganizer
+# デフラグする:
+xfs_fsr /dev/sda1       # ファイルシステムの再編成ツール
 ```
 
-## XFS journal (xlog) {#xfs-journal-xlog}
+## XFSのジャーナル（xlog） {#xfs-journal-xlog}
 
-XFS uses its own journaling (xlog), separate from JBD2:
+XFSはJBD2とは別の、独自のジャーナリング（xlog）を使う。
 
 ```
 Journal write sequence:
@@ -223,33 +223,33 @@ On crash recovery:
   xlog_recover() replays committed transactions since last checkpoint
 ```
 
-### Committed Item List (CIL) {#committed-item-list-cil}
+### Committed Item List（CIL） {#committed-item-list-cil}
 
-The CIL is XFS's equivalent of JBD2's running transaction, but with delayed flushing. Delayed logging (log intent items) was designed and implemented by Dave Chinner:
+CILはJBD2の実行中トランザクションに相当するXFSの仕組みだが、フラッシュが遅延される。遅延ロギング（ログインテントアイテム）はDave Chinnerによって設計・実装された。
 
 ```c
-/* Multiple transactions are batched into one CIL push: */
-/* - xfs_log_commit_cil() adds items to in-memory CIL */
-/* - When CIL exceeds threshold (1/4 log), push to disk */
-/* - One xlog_write() for many transactions → fewer I/Os */
+/* 複数のトランザクションが 1 回の CIL プッシュにまとめられる: */
+/* - xfs_log_commit_cil() がメモリ上の CIL にアイテムを追加する */
+/* - CIL がしきい値（ログの 1/4）を超えると、ディスクへプッシュする */
+/* - 多数のトランザクションに対して 1 回の xlog_write() → I/O が減る */
 ```
 
 ```bash
-# Journal stats:
+# ジャーナルの統計:
 xfs_logprint -t /dev/sda1 | head -30
 
-# Check journal size:
+# ジャーナルのサイズを確認する:
 xfs_info /dev/sda1 | grep log
 # log  =internal   bsize=4096  blocks=51200, version=2
-# Journal: 51200 * 4096 = 200MB internal log
+# ジャーナル: 51200 * 4096 = 200MB の内部ログ
 ```
 
-## Online repair (XFS 5.19+) {#online-repair-xfs-519}
+## オンライン修復（XFS 5.19以降） {#online-repair-xfs-519}
 
-A unique XFS feature: repair the filesystem while it is mounted:
+XFS独自の機能として、マウントしたままファイルシステムを修復できる。
 
 ```bash
-# Online scrub: check for inconsistencies (read-only, safe):
+# オンライン scrub: 不整合を検査する（読み取り専用、安全）:
 xfs_scrub /data
 # Phase 1: Check internal metadata.
 # Phase 2: Scan directory tree.
@@ -257,93 +257,93 @@ xfs_scrub /data
 # Phase 4: Verify inode disk data.
 # Phase 5: Check summary counters.
 
-# Aggressive: also repair found issues:
-xfs_scrub -n /data   # dry run: just report
-xfs_scrub /data      # repair in-place
+# 積極的: 見つかった問題も修復する:
+xfs_scrub -n /data   # ドライラン: 報告するだけ
+xfs_scrub /data      # インプレースで修復する
 
-# Traditional offline repair (unmounted):
+# 従来のオフライン修復（アンマウント状態）:
 xfs_repair /dev/sda1
 ```
 
-Scrub works by cross-referencing B-trees: the rmapbt knows every allocated block, so the scrubber can verify that every block referenced by the extent B-tree is also in the rmapbt.
+scrubはB-tree同士を相互参照することで動作する。rmapbtは割り当てられたすべてのブロックを知っているので、scrubberはエクステントB-treeが参照するすべてのブロックがrmapbtにも存在することを検証できる。
 
-## Quotas {#quotas}
+## クォータ {#quotas}
 
 ```bash
-# Enable quota at mount:
-mount -o uquota /dev/sda1 /data     # user quota
-mount -o gquota /dev/sda1 /data     # group quota
-mount -o pquota /dev/sda1 /data     # project quota (for directories)
+# マウント時にクォータを有効にする:
+mount -o uquota /dev/sda1 /data     # ユーザークォータ
+mount -o gquota /dev/sda1 /data     # グループクォータ
+mount -o pquota /dev/sda1 /data     # プロジェクトクォータ（ディレクトリ用）
 
-# Set limits:
+# 制限を設定する:
 xfs_quota -x -c 'limit bsoft=1g bhard=2g user1' /data
-xfs_quota -x -c 'limit -p bsoft=10g bhard=20g 100' /data  # project 100
+xfs_quota -x -c 'limit -p bsoft=10g bhard=20g 100' /data  # プロジェクト 100
 
-# Report:
+# レポート:
 xfs_quota -c 'quota -h user1' /data
 xfs_quota -c 'df -h' /data
 
-# Project quota: track a directory tree
+# プロジェクトクォータ: ディレクトリツリーを追跡する
 echo "100:/data/project1" >> /etc/projects
 echo "100:Project One" >> /etc/projid
-xfs_quota -x -c 'project -s 100' /data  # assign directory to project
+xfs_quota -x -c 'project -s 100' /data  # ディレクトリをプロジェクトに割り当てる
 ```
 
-## Performance tuning {#performance-tuning}
+## 性能チューニング {#performance-tuning}
 
 ```bash
-# Optimal mkfs for a specific workload:
+# 特定のワークロードに最適な mkfs:
 mkfs.xfs \
-    -b size=4096 \          # block size (4K default)
-    -l size=256m \          # journal size (larger = better burst)
-    -d agcount=32 \         # 32 AGs = 32-way parallelism
-    -i size=512 \           # inode size (512B, or 256B for small files)
+    -b size=4096 \          # ブロックサイズ（デフォルトは 4K）
+    -l size=256m \          # ジャーナルサイズ（大きいほどバーストに強い）
+    -d agcount=32 \         # 32 AG = 32 並列
+    -i size=512 \           # inode サイズ（512B。小さなファイルなら 256B）
     /dev/sda1
 
-# Mount options:
+# マウントオプション:
 mount -o noatime,largeio,inode64 /dev/sda1 /data
-# noatime:  skip atime updates (reduces writes)
-# largeio:  512KB I/O for striped storage
-# inode64:  allocate inodes throughout filesystem (not just first 1TB)
+# noatime:  atime の更新を省く（書き込みが減る）
+# largeio:  ストライプ構成のストレージ向けに 512KB の I/O を使う
+# inode64:  inode をファイルシステム全体に割り当てる（先頭 1TB だけではなく）
 
-# Allocator hints: tell XFS about RAID geometry
+# アロケータへのヒント: RAID のジオメトリを XFS に伝える
 mkfs.xfs -d su=64k,sw=4 /dev/md0
-# su=stripe unit (64K), sw=stripe width (4 disks)
+# su=ストライプユニット（64K）、sw=ストライプ幅（4 ディスク）
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# XFS statistics:
+# XFS の統計:
 cat /proc/fs/xfs/stat
 # extent_alloc 12345 678 90123 456
-# abt 0 0 0 0       ← alloc B-tree operations
+# abt 0 0 0 0       ← 割り当て B-tree の操作
 # blk_map ...
-# bmbt ...          ← extent B-tree operations
-# dir ...           ← directory operations
-# trans ...         ← transaction statistics
+# bmbt ...          ← エクステント B-tree の操作
+# dir ...           ← ディレクトリ操作
+# trans ...         ← トランザクションの統計
 
-# IO stats:
-xfs_io -c 'fiemap' /data/bigfile  # show extent map for a file
+# I/O の統計:
+xfs_io -c 'fiemap' /data/bigfile  # ファイルのエクステントマップを表示する
 
-# Trace XFS B-tree operations:
+# XFS の B-tree 操作をトレースする:
 bpftrace -e 'kprobe:xfs_alloc_ag_vextent { @[probe] = count(); }'
 
-# Check inode count:
+# inode 数を確認する:
 df -i /data
 
-# Detailed space usage:
+# 詳細な領域使用状況:
 xfs_db -c 'freesp -d' /dev/sda1
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ext4 Journaling (JBD2)](ext4-journal.md) — alternative journaling approach
-- [Btrfs](btrfs.md) — CoW filesystem comparison
-- [blk-mq](../block/blk-mq.md) — block layer XFS submits I/O through
-- [Page Cache](../mm/page-cache.md) — XFS uses page cache for buffered I/O
-- [Kernel docs: XFS](https://docs.kernel.org/filesystems/xfs/index.html) — XFS developer documentation
-- [Kernel docs: XFS delayed logging design](https://docs.kernel.org/filesystems/xfs/xfs-delayed-logging-design.html) — the log architecture in depth
-- [Kernel docs: XFS self-describing metadata](https://docs.kernel.org/filesystems/xfs/xfs-self-describing-metadata.html) — v5 on-disk format with per-block CRCs
-- `fs/xfs/` — XFS implementation
-- `xfsprogs` — mkfs.xfs, xfs_info, xfs_repair, xfs_scrub, xfs_io
+- [ext4ジャーナリング（JBD2）](ext4-journal.md) — 別のジャーナリング手法
+- [Btrfs](btrfs.md) — CoWファイルシステムとの比較
+- [blk-mq](../block/blk-mq.md) — XFSがI/Oを発行する際に経由するブロックレイヤ
+- [ページキャッシュ](../mm/page-cache.md) — XFSはバッファードI/Oにページキャッシュを使う
+- [Kernel docs: XFS](https://docs.kernel.org/filesystems/xfs/index.html) — XFSの開発者向けドキュメント
+- [Kernel docs: XFS delayed logging design](https://docs.kernel.org/filesystems/xfs/xfs-delayed-logging-design.html) — ログのアーキテクチャの詳細
+- [Kernel docs: XFS self-describing metadata](https://docs.kernel.org/filesystems/xfs/xfs-self-describing-metadata.html) — ブロックごとのCRCを持つv5オンディスクフォーマット
+- `fs/xfs/` — XFSの実装
+- `xfsprogs` — mkfs.xfs、xfs_info、xfs_repair、xfs_scrub、xfs_io

@@ -1,18 +1,18 @@
 # OverlayFS {#overlayfs}
 
-> Union mounts for container image layers. Written by Miklos Szeredi at SUSE and merged in Linux 3.18 [(commit)](https://git.kernel.org/linus/e9be9d5e76e34872f0c37d72e25bc27fe9e2c54c) [(LWN)](https://lwn.net/Articles/618140/).
+> コンテナイメージのレイヤのためのユニオンマウント。SUSEのMiklos Szerediが書き、Linux 3.18でマージされた [(commit)](https://git.kernel.org/linus/e9be9d5e76e34872f0c37d72e25bc27fe9e2c54c) [(LWN)](https://lwn.net/Articles/618140/)。
 
-## What OverlayFS does {#what-overlayfs-does}
+## OverlayFSが行うこと {#what-overlayfs-does}
 
-OverlayFS presents a merged view of two or more directory trees:
+OverlayFSは2つ以上のディレクトリツリーをマージしたビューを提示する。
 
 ```
 overlay mount (what containers see):
   /
-  ├── bin/bash          ← from lower (base image, read-only)
-  ├── lib/              ← from lower
-  ├── etc/hostname      ← from upper (container-specific, writable)
-  └── tmp/myfile        ← from upper (written by container)
+  ├── bin/bash          ← lower 由来（ベースイメージ、読み取り専用）
+  ├── lib/              ← lower 由来
+  ├── etc/hostname      ← upper 由来（コンテナ固有、書き込み可能）
+  └── tmp/myfile        ← upper 由来（コンテナが書き込んだもの）
 
 lower (read-only, multiple layers possible):
   Layer 3 (app image):  /app/
@@ -27,32 +27,32 @@ work (internal scratch dir, must be on same filesystem as upper):
   (used for atomic copy-up)
 ```
 
-## Mounting OverlayFS {#mounting-overlayfs}
+## OverlayFSのマウント {#mounting-overlayfs}
 
 ```bash
-# Basic two-layer overlay
+# 基本的な 2 レイヤのオーバーレイ
 mount -t overlay overlay \
     -o lowerdir=/lower,upperdir=/upper,workdir=/work \
     /merged
 
-# Multi-layer (Docker uses this for image layers)
-# Layers listed right-to-left: rightmost is the bottom layer
+# 複数レイヤ（Docker はイメージレイヤにこれを使う）
+# レイヤは右から左へ並べる: 一番右が最下層のレイヤ
 mount -t overlay overlay \
     -o lowerdir=/layer3:/layer2:/layer1,upperdir=/upper,workdir=/work \
     /merged
 
-# Read-only overlay (no upper/work — useful for union of multiple images)
+# 読み取り専用のオーバーレイ（upper/work なし — 複数イメージのユニオンに便利）
 mount -t overlay overlay \
     -o lowerdir=/layer2:/layer1 \
     /merged
 ```
 
-## Copy-on-write (copy-up) {#copy-on-write-copy-up}
+## Copy-on-write（copy-up） {#copy-on-write-copy-up}
 
-When a container writes to a file from a lower layer, OverlayFS:
-1. Copies the file from lower to upper (copy-up)
-2. Applies the write to the copy in upper
-3. Future reads see the upper copy
+コンテナが下位レイヤ由来のファイルに書き込むと、OverlayFSは次のように動作する。
+1. ファイルをlowerからupperへコピーする（copy-up）
+2. upperのコピーに書き込みを適用する
+3. 以後の読み出しはupperのコピーを見る
 
 ```
 Container: open("/etc/passwd", O_RDWR)
@@ -63,7 +63,7 @@ Container: open("/etc/passwd", O_RDWR)
   → Lower layer unchanged (other containers unaffected)
 ```
 
-### Copy-up in the kernel {#copy-up-in-the-kernel}
+### カーネル内のcopy-up {#copy-up-in-the-kernel}
 
 ```c
 /* fs/overlayfs/copy_up.c */
@@ -72,14 +72,14 @@ static int ovl_copy_up_inode(struct ovl_copy_up_ctx *c, struct dentry *temp)
     struct ovl_fs *ofs = OVL_FS(c->dentry->d_sb);
     int err;
 
-    /* Copy data */
+    /* データをコピーする */
     if (S_ISREG(c->stat.mode)) {
         struct path upperpath, datapath;
         ovl_path_upper(c->dentry, &upperpath);
         ovl_copy_up_data(c, &upperpath);
     }
 
-    /* Copy metadata (timestamps, xattrs, owner) */
+    /* メタデータ（タイムスタンプ、xattr、所有者）をコピーする */
     err = ovl_copy_up_metadata(c, temp);
 
     return err;
@@ -93,46 +93,46 @@ static int ovl_copy_up_data(struct ovl_copy_up_ctx *c,
     old_file = ovl_path_open(&c->lowerpath, O_LARGEFILE | O_RDONLY);
     new_file = ovl_path_open(temp, O_LARGEFILE | O_WRONLY);
 
-    /* Atomic copy: splice/copy_file_range for zero-copy */
+    /* アトミックなコピー: ゼロコピーのための splice/copy_file_range */
     err = do_splice_direct(old_file, &old_pos, new_file, &new_pos,
                             len, SPLICE_F_MOVE);
     return err;
 }
 ```
 
-Copy-up is atomic: the kernel writes to a temp file in `workdir`, then `rename()`s it to the final location in `upper`. If interrupted, no partial file is visible.
+copy-upはアトミックである。カーネルは`workdir`内の一時ファイルに書き込み、それを`upper`内の最終的な位置へ`rename()`する。途中で中断されても、部分的なファイルが見えることはない。
 
-## Whiteout files {#whiteout-files}
+## ホワイトアウトファイル {#whiteout-files}
 
-When a container *deletes* a file from the lower layer, OverlayFS creates a **whiteout** entry in upper — a special file that marks the file as deleted:
+コンテナが下位レイヤのファイルを*削除*すると、OverlayFSはupperに**ホワイトアウト**エントリを作成する — ファイルが削除されたことを示す特別なファイルである。
 
 ```bash
-# Container deletes /etc/shadow
+# コンテナが /etc/shadow を削除する
 rm /etc/shadow
 
-# In upper layer, a whiteout is created:
+# 上位レイヤにホワイトアウトが作成される:
 ls -la /upper/etc/
-# c---------  0 root root 0, 0 ... shadow    ← char device 0,0 = whiteout
+# c---------  0 root root 0, 0 ... shadow    ← キャラクタデバイス 0,0 = ホワイトアウト
 
-# OverlayFS hides lower:/etc/shadow because upper:/etc/shadow is a whiteout
+# upper:/etc/shadow がホワイトアウトなので、OverlayFS は lower:/etc/shadow を隠す
 ```
 
-### Opaque directories {#opaque-directories}
+### 不透明ディレクトリ {#opaque-directories}
 
-When a container deletes a directory and recreates it (or if a copy-up of a directory occurs), OverlayFS marks the upper directory as **opaque** — lower directory contents are hidden:
+コンテナがディレクトリを削除して作り直した場合（あるいはディレクトリのcopy-upが起きた場合）、OverlayFSはupperのディレクトリを**opaque**（不透明）としてマークする — 下位ディレクトリの内容は隠される。
 
 ```bash
-# Container: rm -rf /etc && mkdir /etc && echo "new" > /etc/hosts
+# コンテナ: rm -rf /etc && mkdir /etc && echo "new" > /etc/hosts
 
-# upper/etc has xattr: trusted.overlay.opaque = "y"
+# upper/etc は xattr: trusted.overlay.opaque = "y" を持つ
 getfattr -n trusted.overlay.opaque /upper/etc/
 # trusted.overlay.opaque="y"
-# → lower/etc/ contents completely hidden
+# → lower/etc/ の内容は完全に隠される
 ```
 
-## Metacopy optimization {#metacopy-optimization}
+## Metacopy最適化 {#metacopy-optimization}
 
-**Metacopy** (`metacopy=on`) defers data copy-up until actual data write. Metadata changes (chmod, chown, xattr) only copy metadata, leaving data in lower:
+**Metacopy**（`metacopy=on`）は、データのcopy-upを実際のデータ書き込みまで先送りする。メタデータの変更（chmod、chown、xattr）ではメタデータのみをコピーし、データはlowerに残す。
 
 ```
 Without metacopy:  chown myfile → full data copy-up
@@ -146,23 +146,23 @@ mount -t overlay overlay \
     /merged
 ```
 
-This dramatically reduces copy-up cost for permission changes.
+これにより、パーミッション変更時のcopy-upコストが劇的に削減される。
 
-## Docker's overlay2 driver {#dockers-overlay2-driver}
+## Dockerのoverlay2ドライバ {#dockers-overlay2-driver}
 
-Docker uses OverlayFS as its default storage driver (`overlay2`) — replacing AUFS as the default for most Linux distributions:
+DockerはOverlayFSをデフォルトのストレージドライバ（`overlay2`）として使っている — ほとんどのLinuxディストリビューションで、AUFSに代わってデフォルトとなった。
 
 ```bash
-# Docker image layers
+# Docker イメージのレイヤ
 ls /var/lib/docker/overlay2/
 # <layer-id>/
-#   diff/      ← the layer's filesystem tree
-#   link       ← short symlink name for this layer
-#   lower      ← ':'-separated list of parent layer symlinks
-#   merged/    ← the mounted overlay (only for running containers)
-#   work/      ← overlay workdir
+#   diff/      ← そのレイヤのファイルシステムツリー
+#   link       ← このレイヤの短いシンボリックリンク名
+#   lower      ← 親レイヤのシンボリックリンクを ':' 区切りで並べたリスト
+#   merged/    ← マウントされたオーバーレイ（実行中のコンテナのみ）
+#   work/      ← オーバーレイの workdir
 
-# Inspect a running container's overlay
+# 実行中のコンテナのオーバーレイを調べる
 docker inspect <container> | jq '.[].GraphDriver.Data'
 # {
 #   "LowerDir": "/var/lib/docker/overlay2/abc/diff:/var/lib/docker/overlay2/def/diff",
@@ -172,9 +172,9 @@ docker inspect <container> | jq '.[].GraphDriver.Data'
 # }
 ```
 
-### Layer sharing {#layer-sharing}
+### レイヤの共有 {#layer-sharing}
 
-The power of OverlayFS for containers: multiple containers with the same base image share the lower layers:
+コンテナにとってのOverlayFSの強みは、同じベースイメージを持つ複数のコンテナが下位レイヤを共有できることである。
 
 ```
 debian:latest (shared, read-only):
@@ -186,9 +186,9 @@ Container A:                Container B:
   (Container A changes)      (Container B changes)
 ```
 
-Changes in Container A don't affect Container B — each has its own upper layer.
+コンテナAでの変更はコンテナBに影響しない — それぞれが自分の上位レイヤを持っている。
 
-## OverlayFS internals {#overlayfs-internals}
+## OverlayFSの内部 {#overlayfs-internals}
 
 ### struct ovl_entry {#struct-ovl_entry}
 
@@ -201,26 +201,26 @@ struct ovl_entry {
         };
         struct rcu_head     rcu;
     };
-    unsigned                 numlower;   /* number of lower layers */
-    struct ovl_path          lowerstack[]; /* flexible array of lower paths */
+    unsigned                 numlower;   /* 下位レイヤの数 */
+    struct ovl_path          lowerstack[]; /* 下位パスのフレキシブル配列 */
 };
 
-/* Per-inode overlay state */
+/* inode ごとのオーバーレイ状態 */
 struct ovl_inode {
     union {
-        struct ovl_dir_cache  *cache;   /* directory entry cache */
-        struct inode          *lowerdata; /* lower data inode (metacopy) */
+        struct ovl_dir_cache  *cache;   /* ディレクトリエントリキャッシュ */
+        struct inode          *lowerdata; /* 下位のデータ inode（metacopy） */
     };
-    const char        *redirect;         /* redirect xattr value */
-    u64                version;          /* copy-up version */
+    const char        *redirect;         /* redirect xattr の値 */
+    u64                version;          /* copy-up のバージョン */
     unsigned long      flags;
-    struct inode       vfs_inode;        /* embedded VFS inode */
-    struct dentry     *__upperdentry;    /* upper dentry (after copy-up) */
-    struct ovl_entry  *oe;               /* lower layers */
+    struct inode       vfs_inode;        /* 埋め込まれた VFS inode */
+    struct dentry     *__upperdentry;    /* 上位の dentry（copy-up 後） */
+    struct ovl_entry  *oe;               /* 下位レイヤ */
 };
 ```
 
-### Lookup: merging directory entries {#lookup-merging-directory-entries}
+### ルックアップ: ディレクトリエントリのマージ {#lookup-merging-directory-entries}
 
 ```c
 /* fs/overlayfs/dir.c */
@@ -230,52 +230,52 @@ static struct dentry *ovl_lookup(struct inode *dir, struct dentry *dentry,
     struct ovl_entry *oe;
     const struct cred *old_cred;
 
-    /* Look up in upper first */
+    /* まず upper を検索する */
     if (ovl_dentry_upper(dentry->d_parent)) {
         upperdentry = ovl_lookup_upper(dentry, ...);
         if (upperdentry && ovl_is_whiteout(upperdentry)) {
-            /* Found a whiteout: file is deleted */
+            /* ホワイトアウトが見つかった: ファイルは削除済み */
             return d_splice_alias(ERR_PTR(-ENOENT), dentry);
         }
     }
 
-    /* Look up in each lower layer */
+    /* 各下位レイヤを検索する */
     for (i = 0; i < poe->numlower; i++) {
         lowerdentry = ovl_lookup_lower(dentry, &poe->lowerstack[i], ...);
         if (lowerdentry)
             break;
     }
 
-    /* Merge: upper (if exists) takes precedence over lower */
-    /* Opaque dirs: stop looking through lower */
+    /* マージ: upper（存在すれば）が lower より優先される */
+    /* 不透明ディレクトリ: lower の検索をやめる */
 }
 ```
 
-## Performance considerations {#performance-considerations}
+## 性能上の考慮事項 {#performance-considerations}
 
 ```bash
-# Copy-up latency: first write to a large file triggers full copy
-# This can cause latency spikes in containers
+# copy-up のレイテンシ: 大きなファイルへの最初の書き込みは完全なコピーを引き起こす
+# これはコンテナでレイテンシのスパイクを引き起こしうる
 
-# Measure copy-up cost
+# copy-up のコストを計測する
 time (docker exec mycontainer sh -c "echo x >> /etc/large_file")
 
-# Use named volumes to avoid copy-up for frequently written data
+# 頻繁に書き込まれるデータには名前付きボリュームを使って copy-up を避ける
 docker run -v /host/data:/container/data myimage
 
-# Check overlay stats
-cat /proc/fs/overlayfs/features  # supported features
+# オーバーレイの統計を確認する
+cat /proc/fs/overlayfs/features  # サポートされている機能
 
-# inode usage (overlayfs consumes host inodes for upper layer)
+# inode の使用量（overlayfs は上位レイヤのためにホストの inode を消費する）
 df -i /var/lib/docker
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Container Networking](../net/container-networking.md) — network side of containers
-- [Cgroups: Container Isolation](../cgroups/container-isolation.md) — full container setup
-- [VFS: Filesystem Registration and Mounting](../vfs/mounting.md) — how overlayfs registers
-- [VFS: Path Resolution](../vfs/namei.md) — dentry lookup through overlayfs
-- [Memory Management: Copy-on-Write](../mm/cow.md) — page-level CoW vs file-level CoW
-- [Kernel docs: overlay filesystem](https://docs.kernel.org/filesystems/overlayfs.html) — semantics, copy-up, and multiple lower layers
-- `fs/overlayfs/` in the kernel tree — OverlayFS implementation
+- [コンテナネットワーキング](../net/container-networking.md) — コンテナのネットワーク側
+- [cgroup: コンテナの分離](../cgroups/container-isolation.md) — コンテナの完全なセットアップ
+- [VFS: ファイルシステムの登録とマウント](../vfs/mounting.md) — overlayfsがどのように登録されるか
+- [VFS: パス解決](../vfs/namei.md) — overlayfsを通じたdentryルックアップ
+- [メモリ管理: Copy-on-Write](../mm/cow.md) — pageレベルのCoWとファイルレベルのCoW
+- [Kernel docs: overlay filesystem](https://docs.kernel.org/filesystems/overlayfs.html) — セマンティクス、copy-up、複数の下位レイヤ
+- カーネルツリーの`fs/overlayfs/` — OverlayFSの実装

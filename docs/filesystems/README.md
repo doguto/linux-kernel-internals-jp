@@ -1,95 +1,95 @@
-# Filesystems {#filesystems}
+# ファイルシステム {#filesystems}
 
-> How the kernel turns a flat array of disk blocks into named files with metadata — and keeps them consistent across a crash
+> カーネルがディスクブロックの平坦な配列を、メタデータを持つ名前付きファイルへとどう変えるのか — そしてクラッシュをまたいでそれらの一貫性をどう保つのか
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-A block device is a linear array of fixed-size sectors; a *filesystem* is the code that imposes structure on it — a hierarchy of named files, their contents, and the metadata (sizes, timestamps, permissions, block maps) that ties them together. The structure is the easy part. The hard part is keeping it *consistent* when power fails mid-write — and almost every design decision a Linux filesystem makes is, at bottom, an answer to "how do we not corrupt everything on a crash?"
+ブロックデバイスは固定サイズのセクタの線形配列であり、*ファイルシステム*はそこに構造を課すコードである — 名前付きファイルの階層、その内容、そしてそれらを結び付けるメタデータ（サイズ、タイムスタンプ、パーミッション、ブロックマップ）だ。構造は簡単な部分である。難しいのは、書き込みの途中で電源が落ちたときに*一貫性*を保つことであり、Linuxファイルシステムが行うほぼすべての設計判断は、突き詰めれば「クラッシュ時にすべてを壊さないにはどうするか」への答えである。
 
-This section explains the *why* behind the major Linux filesystems — the trade-offs behind journaling versus copy-on-write, extents versus block maps, in-place updates versus never overwriting — not just their on-disk formats.
+このセクションでは、主要なLinuxファイルシステムのオンディスクフォーマットだけでなく、その背後にある*理由*を説明する — ジャーナリングとcopy-on-write、エクステントとブロックマップ、インプレース更新と決して上書きしない方式、それぞれのトレードオフである。
 
 ```
 Application: open("/data/file", O_RDONLY)
           │
           ▼
-     VFS layer            ← generic operations (see vfs/)
+     VFS layer            ← 汎用操作（vfs/ を参照）
           │
           ▼
   Filesystem driver       ← ext4, btrfs, xfs, tmpfs, ...
           │
           ▼
-     Page cache           ← in-memory cache of file data
+     Page cache           ← ファイルデータのメモリ内キャッシュ
           │
           ▼
-   Block layer (bio)      ← submits I/O to disk
+   Block layer (bio)      ← ディスクへ I/O を発行
           │
           ▼
     Block device          ← NVMe, SATA, virtio-blk
 ```
 
-### The one question every filesystem answers {#the-one-question-every-filesystem-answers}
+### すべてのファイルシステムが答える1つの問い {#the-one-question-every-filesystem-answers}
 
-Writing a file touches several places on disk — the data blocks, the block map, the inode, the free-space bitmap. A crash *between* those writes leaves the filesystem inconsistent: an inode pointing at blocks the allocator still thinks are free, or data in blocks the inode doesn't yet reference. There are two dominant strategies:
+ファイルを書き込むと、ディスク上の複数の場所に触れることになる — データブロック、ブロックマップ、inode、空き領域ビットマップである。それらの書き込みの*間*でクラッシュすると、ファイルシステムは不整合な状態に残される。アロケータがまだ空きだと思っているブロックをinodeが指していたり、inodeがまだ参照していないブロックにデータがあったりする。支配的な戦略は2つある。
 
-- **Journaling** (ext4, XFS) — write the intended changes to a **log** first and commit them atomically, then apply them in place. After a crash, replay the log. Updates still happen *in place*, but the journal makes them recoverable.
-- **Copy-on-write** (btrfs) — never overwrite live data. Write new versions into free space, then atomically flip a single pointer to the new tree root. A crash simply leaves the old, consistent tree intact.
+- **ジャーナリング**（ext4、XFS） — 意図した変更をまず**ログ**に書き込んでアトミックにコミットし、その後インプレースで適用する。クラッシュ後はログをリプレイする。更新はやはり*インプレースで*行われるが、ジャーナルによって回復可能になる。
+- **Copy-on-write**（btrfs） — 生きているデータを決して上書きしない。新しいバージョンを空き領域に書き込み、その後、単一のポインタを新しいツリーのルートへアトミックに切り替える。クラッシュしても、古い一貫したツリーがそのまま残るだけである。
 
-Nearly everything else — extents, delayed allocation, snapshots, checksums — follows from committing to one of these.
+それ以外のほぼすべて — エクステント、遅延割り当て、スナップショット、チェックサム — は、このどちらかを選ぶことから導かれる。
 
-### Prerequisites {#prerequisites}
+### 前提知識 {#prerequisites}
 
-Familiarity with the [VFS](../vfs/README.md) (the layer above, which dispatches operations to these filesystems), the [page cache](../mm/page-cache.md) (where file data lives in memory), and the [block layer](../block/README.md) (below, which carries the I/O to the device).
+[VFS](../vfs/README.md)（上位のレイヤで、操作をこれらのファイルシステムへディスパッチする）、[ページキャッシュ](../mm/page-cache.md)（メモリ上でファイルデータが置かれる場所）、[ブロックレイヤ](../block/README.md)（下位のレイヤで、I/Oをデバイスへ運ぶ）に馴染みがあること。
 
-### Suggested reading order {#suggested-reading-order}
+### 推奨する読む順序 {#suggested-reading-order}
 
-1. **[ext4](ext4.md)** — the default: extents, and journaling with jbd2
-2. **[ext4 Journaling Deep Dive](ext4-journal.md)** — jbd2 internals; ordered vs. journaled data modes
-3. **[XFS](xfs.md)** — allocation groups, delayed allocation, and a log built for scale
-4. **[btrfs](btrfs.md)** — the copy-on-write B-tree, subvolumes, and snapshots
-5. **[tmpfs and ramfs](tmpfs.md)** — a filesystem with no disk at all
-6. **[overlayfs](overlayfs.md)** — union mounts and copy-up, the basis of container images
-7. **[Crash Consistency and Recovery](crash-consistency.md)** — journaling vs. copy-on-write, and what `fsync()` really promises
-8. **[iomap](iomap.md)** — the modern extent-based I/O framework that replaced `buffer_head`
-9. **[FUSE](fuse.md)** — filesystems implemented in userspace
-10. **[War Stories](war-stories.md)** — ext4's `O_PONIES` saga, an overlayfs privilege escalation, and the btrfs write hole
+1. **[ext4](ext4.md)** — デフォルト。エクステントと、jbd2によるジャーナリング
+2. **[ext4ジャーナリング詳解](ext4-journal.md)** — jbd2の内部。orderedモードとjournaledデータモード
+3. **[XFS](xfs.md)** — アロケーショングループ、遅延割り当て、スケールのために作られたログ
+4. **[btrfs](btrfs.md)** — copy-on-write B-tree、サブボリューム、スナップショット
+5. **[tmpfsとramfs](tmpfs.md)** — ディスクをまったく持たないファイルシステム
+6. **[overlayfs](overlayfs.md)** — ユニオンマウントとcopy-up。コンテナイメージの基盤
+7. **[クラッシュ一貫性とリカバリ](crash-consistency.md)** — ジャーナリングとcopy-on-write、そして`fsync()`が本当に約束すること
+8. **[iomap](iomap.md)** — `buffer_head`を置き換えた現代的なエクステントベースのI/Oフレームワーク
+9. **[FUSE](fuse.md)** — ユーザー空間で実装されるファイルシステム
+10. **[事件簿](war-stories.md)** — ext4の`O_PONIES`騒動、overlayfsの権限昇格、btrfsのライトホール
 
-### What you'll learn {#what-youll-learn}
+### 学べること {#what-youll-learn}
 
-| Textbook idea | Linux reality |
+| 教科書的な考え方 | Linuxの現実 |
 |---|---|
-| "The filesystem writes files to disk" | It writes to the [page cache](../mm/page-cache.md); the real disk write is deferred to writeback, which is why [`fsync()`](../io/page-cache-writeback.md) exists |
-| "A journal logs everything" | ext4 defaults to journaling *metadata* only (`data=ordered`); full data journaling exists but roughly halves write throughput |
-| "Copy-on-write means snapshots" | CoW is a *crash-consistency* strategy first; snapshots then come cheap — a snapshot is just an old tree root kept instead of reclaimed |
-| "Deleting a file frees its space" | Only the metadata immediately; actual reclamation on SSDs involves discard/TRIM, and on CoW filesystems, reference counting |
+| 「ファイルシステムはファイルをディスクに書き込む」 | 書き込み先は[ページキャッシュ](../mm/page-cache.md)である。実際のディスク書き込みはライトバックまで先送りされる。だからこそ[`fsync()`](../io/page-cache-writeback.md)が存在する |
+| 「ジャーナルはすべてを記録する」 | ext4はデフォルトで*メタデータ*のみをジャーナリングする（`data=ordered`）。完全なデータジャーナリングも存在するが、書き込みスループットはおよそ半分になる |
+| 「Copy-on-writeとはスナップショットのことだ」 | CoWはまず*クラッシュ一貫性*のための戦略である。スナップショットはその結果として安価に得られる — スナップショットとは、回収されずに残された古いツリーのルートにすぎない |
+| 「ファイルを削除すれば領域が解放される」 | 即座に解放されるのはメタデータだけである。SSDでの実際の回収にはdiscard/TRIMが関わり、CoWファイルシステムでは参照カウントが関わる |
 
-## Documentation {#documentation}
+## ドキュメント {#documentation}
 
-| Page | What it covers |
+| ページ | 内容 |
 |------|----------------|
-| [ext4](ext4.md) | On-disk layout, extents, journaling with jbd2 |
-| [ext4 Journaling Deep Dive](ext4-journal.md) | jbd2 internals, ordered vs journaled data |
-| [XFS](xfs.md) | Allocation groups, delayed allocation, log design |
-| [btrfs](btrfs.md) | Copy-on-Write B-tree, subvolumes, snapshots |
-| [tmpfs and ramfs](tmpfs.md) | Memory-backed filesystems, size limits |
-| [overlayfs](overlayfs.md) | Union mounts, copy-up, container layers |
-| [Crash Consistency and Recovery](crash-consistency.md) | Journaling vs CoW, flush/FUA, and `fsync()` durability |
-| [iomap](iomap.md) | The extent-based I/O framework behind XFS, ext4, and btrfs |
-| [FUSE](fuse.md) | Userspace filesystems: the `/dev/fuse` protocol and its costs |
-| [War Stories](war-stories.md) | ext4 `O_PONIES`, overlayfs CVE-2023-0386, the btrfs write hole |
+| [ext4](ext4.md) | オンディスクレイアウト、エクステント、jbd2によるジャーナリング |
+| [ext4ジャーナリング詳解](ext4-journal.md) | jbd2の内部、orderedとjournaledデータ |
+| [XFS](xfs.md) | アロケーショングループ、遅延割り当て、ログの設計 |
+| [btrfs](btrfs.md) | Copy-on-Write B-tree、サブボリューム、スナップショット |
+| [tmpfsとramfs](tmpfs.md) | メモリをバックエンドとするファイルシステム、サイズ制限 |
+| [overlayfs](overlayfs.md) | ユニオンマウント、copy-up、コンテナのレイヤ |
+| [クラッシュ一貫性とリカバリ](crash-consistency.md) | ジャーナリングとCoW、flush/FUA、`fsync()`の永続性 |
+| [iomap](iomap.md) | XFS、ext4、btrfsを支えるエクステントベースのI/Oフレームワーク |
+| [FUSE](fuse.md) | ユーザー空間ファイルシステム: `/dev/fuse`プロトコルとそのコスト |
+| [事件簿](war-stories.md) | ext4の`O_PONIES`、overlayfsのCVE-2023-0386、btrfsのライトホール |
 
-## Choosing a filesystem {#choosing-a-filesystem}
+## ファイルシステムの選び方 {#choosing-a-filesystem}
 
-| Filesystem | Use case | Key feature |
+| ファイルシステム | 用途 | 主な特徴 |
 |-----------|---------|-------------|
-| ext4 | General purpose, servers | Stable, journaled |
-| btrfs | Desktop, NAS | CoW, snapshots, RAID (0/1/10) |
-| xfs | High-performance servers | High scalability |
-| tmpfs | /tmp, /run, shared memory | RAM-backed, fast |
-| overlayfs | Container images | Union of layers |
-| squashfs | Read-only (LiveCD, containers) | Compressed, read-only |
-| erofs | Android, embedded | Compressed, fast read |
+| ext4 | 汎用、サーバー | 安定、ジャーナリング |
+| btrfs | デスクトップ、NAS | CoW、スナップショット、RAID（0/1/10） |
+| xfs | 高性能サーバー | 高いスケーラビリティ |
+| tmpfs | /tmp、/run、共有メモリ | RAMバックエンド、高速 |
+| overlayfs | コンテナイメージ | レイヤのユニオン |
+| squashfs | 読み取り専用（LiveCD、コンテナ） | 圧縮、読み取り専用 |
+| erofs | Android、組み込み | 圧縮、高速な読み出し |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: filesystems](https://docs.kernel.org/filesystems/index.html) — per-filesystem and VFS reference
-- [VFS](../vfs/README.md) · [page cache](../mm/page-cache.md) · [block layer](../block/README.md) — the layers above and below
+- [Kernel docs: filesystems](https://docs.kernel.org/filesystems/index.html) — ファイルシステムごと、およびVFSのリファレンス
+- [VFS](../vfs/README.md) · [ページキャッシュ](../mm/page-cache.md) · [ブロックレイヤ](../block/README.md) — 上位と下位のレイヤ
