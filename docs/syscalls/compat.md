@@ -1,26 +1,26 @@
-# 32-bit Compat Syscalls {#32-bit-compat-syscalls}
+# 32ビット互換syscall {#32-bit-compat-syscalls}
 
-> Supporting 32-bit userspace on 64-bit kernels
+> 64ビットカーネル上での32ビットユーザー空間のサポート
 
-## Why compat exists {#why-compat-exists}
+## なぜcompatが存在するのか {#why-compat-exists}
 
-A 64-bit kernel can run 32-bit ELF binaries directly (via `CONFIG_IA32_EMULATION` on x86-64). The problem is that
-32-bit and 64-bit ABIs differ in ways that go beyond register width:
+64ビットカーネルは、32ビットのELFバイナリを直接実行できる（x86-64では `CONFIG_IA32_EMULATION` による）。問題は、
+32ビットと64ビットのABIが、レジスタ幅を超えたところで異なっていることである。
 
-- **Pointer size**: 32-bit userspace uses 4-byte pointers; the kernel uses 8-byte pointers.
-- **`time_t` and `off_t`**: 32-bit ABIs define these as `int` (32 bits); 64-bit ABIs use `long` (64 bits).
-- **Struct layout**: structs containing `long`, `size_t`, or pointer members have different padding and sizes.
-- **Argument passing**: 32-bit x86 uses the `int 0x80` path or `sysenter`; arguments are 32-bit registers.
+- **ポインタのサイズ**: 32ビットのユーザー空間は4バイトのポインタを使い、カーネルは8バイトのポインタを使う。
+- **`time_t` と `off_t`**: 32ビットABIではこれらは `int`（32ビット）として定義され、64ビットABIでは `long`（64ビット）が使われる。
+- **構造体のレイアウト**: `long`、`size_t`、ポインタのメンバーを含む構造体は、パディングとサイズが異なる。
+- **引数の受け渡し**: 32ビットx86は `int 0x80` のパスか `sysenter` を使い、引数は32ビットレジスタで渡される。
 
-If a 32-bit process calls `read()`, it passes a 32-bit pointer for `buf`. The kernel cannot treat that as a 64-bit
-pointer directly — it must zero-extend the value and validate it within the 32-bit address space. For simple
-syscalls like `read()`, the difference is minor. For syscalls that pass structs containing `time_t`, `off_t`, or
-embedded pointers (like `sendmsg()`, `stat()`, `select()`), the kernel needs entirely separate handlers to
-translate the 32-bit layout into the kernel's internal representation.
+32ビットプロセスが `read()` を呼ぶと、`buf` には32ビットのポインタが渡される。カーネルはそれを64ビットの
+ポインタとして直接扱うことはできない — 値をゼロ拡張し、32ビットのアドレス空間内で検証しなければならない。`read()` のような
+単純なsyscallでは、違いはわずかである。`time_t`、`off_t`、あるいは埋め込みポインタを含む構造体を渡すsyscall
+（`sendmsg()`、`stat()`、`select()` など）では、32ビットのレイアウトをカーネルの内部表現に変換するために、
+カーネルはまったく別のハンドラを必要とする。
 
-## The COMPAT_SYSCALL_DEFINE macro {#the-compat_syscall_define-macro}
+## COMPAT_SYSCALL_DEFINEマクロ {#the-compat_syscall_define-macro}
 
-Compat syscall handlers are defined with `COMPAT_SYSCALL_DEFINE`, which lives in `include/linux/compat.h`:
+compat syscallのハンドラは、`include/linux/compat.h` にある `COMPAT_SYSCALL_DEFINE` で定義される。
 
 ```c
 /* include/linux/compat.h */
@@ -29,19 +29,19 @@ COMPAT_SYSCALL_DEFINE3(read, unsigned int, fd,
                        compat_size_t, count)
 ```
 
-`COMPAT_SYSCALL_DEFINE` generates a C function named `compat_sys_xxx` (e.g., `compat_sys_read`). On x86, the
-architecture-specific `__IA32_COMPAT_SYS_STUBx` macros in `arch/x86/include/asm/syscall_wrapper.h` then
-generate a separate `__ia32_compat_sys_xxx` entry-point stub that decodes 32-bit registers and calls
-`compat_sys_xxx`. The macro itself produces `compat_sys_xxx`, not the ia32 stub. The macro also generates
-the necessary tracepoint metadata so compat syscalls appear in `ftrace` and `perf` output the same way native
-syscalls do.
+`COMPAT_SYSCALL_DEFINE` は、`compat_sys_xxx` という名前のC関数（例: `compat_sys_read`）を生成する。x86では、
+`arch/x86/include/asm/syscall_wrapper.h` にあるアーキテクチャ固有の `__IA32_COMPAT_SYS_STUBx` マクロが、さらに
+32ビットレジスタをデコードして `compat_sys_xxx` を呼ぶ、別の `__ia32_compat_sys_xxx` エントリポイントスタブを
+生成する。マクロ自体が生成するのは `compat_sys_xxx` であり、ia32スタブではない。マクロはまた、
+compat syscallがネイティブのsyscallと同じように `ftrace` や `perf` の出力に現れるよう、
+必要なtracepointのメタデータも生成する。
 
-For syscalls where the argument types are identical at all widths (e.g., `close(int fd)`) the `SYSCALL_DEFINE`
-handler is reused directly; the compat table points to the same `__x64_sys_close`.
+引数の型がどの幅でも同一であるsyscall（例: `close(int fd)`）では、`SYSCALL_DEFINE` の
+ハンドラがそのまま再利用される。compatテーブルは同じ `__x64_sys_close` を指す。
 
-## The compat syscall tables {#the-compat-syscall-tables}
+## compat syscallテーブル {#the-compat-syscall-tables}
 
-On x86-64, 32-bit processes are dispatched through a separate table:
+x86-64では、32ビットプロセスは別のテーブルを通じてディスパッチされる。
 
 ```
 # arch/x86/entry/syscalls/syscall_32.tbl (partial)
@@ -54,7 +54,7 @@ On x86-64, 32-bit processes are dispatched through a separate table:
 ...
 ```
 
-The build system generates `arch/x86/include/generated/asm/syscalls_32.h`, which is included in:
+ビルドシステムは `arch/x86/include/generated/asm/syscalls_32.h` を生成し、それが次の箇所にインクルードされる。
 
 ```c
 /* arch/x86/entry/syscall_32.c */
@@ -68,19 +68,19 @@ static noinline long ia32_sys_call(const struct pt_regs *regs, unsigned int nr)
 }
 ```
 
-When a 32-bit process enters the kernel via `int 0x80` or `sysenter`, the entry code detects the 32-bit CS
-segment and calls `ia32_sys_call()`, which switches on the syscall number to the matching `__ia32_*` stub —
-the same switch-based dispatch pattern the native 64-bit path uses (`x64_sys_call()`; see
-[Syscall Entry Path](syscall-entry.md)). A `sys_call_table[]` array is still built for `CONFIG_X86_32`, but
-only because `kernel/trace/trace_syscalls.c` needs a syscall-number-to-address table for tracing — it is not
-used for dispatch.
+32ビットプロセスが `int 0x80` または `sysenter` でカーネルに入ると、エントリコードは32ビットのCS
+セグメントを検出して `ia32_sys_call()` を呼ぶ。これはsyscall番号でswitchし、対応する `__ia32_*` スタブに振り分ける —
+ネイティブの64ビットパスが使うのと同じswitchベースのディスパッチパターンである（`x64_sys_call()`。
+[syscallのエントリパス](syscall-entry.md)を参照）。`CONFIG_X86_32` では `sys_call_table[]` 配列もまだ構築されるが、
+それは `kernel/trace/trace_syscalls.c` がトレーシングのためにsyscall番号からアドレスへのテーブルを必要とするからにすぎない —
+ディスパッチには使われない。
 
-## Key compat types {#key-compat-types}
+## 主要なcompat型 {#key-compat-types}
 
 ```c
-/* include/asm-generic/compat.h (pulled in by each arch's asm/compat.h) */
-typedef u32                 compat_uptr_t;   /* 32-bit userspace pointer */
-typedef u32                 compat_size_t;   /* 32-bit size_t */
+/* include/asm-generic/compat.h（各アーキテクチャの asm/compat.h から取り込まれる） */
+typedef u32                 compat_uptr_t;   /* 32ビットのユーザー空間ポインタ */
+typedef u32                 compat_size_t;   /* 32ビットの size_t */
 typedef s32                 compat_ssize_t;
 typedef s32                 compat_long_t;
 typedef u32                 compat_ulong_t;
@@ -97,12 +97,12 @@ struct old_timespec32 {
 };
 ```
 
-`old_timespec32` aligns at 4 bytes rather than 8, matching the layout a 32-bit compiler would produce.
-This is the fundamental reason 32-bit `clock_gettime()` cannot share the 64-bit handler.
+`old_timespec32` は8バイトではなく4バイトでアラインされ、32ビットコンパイラが生成するレイアウトと一致する。
+これが、32ビットの `clock_gettime()` が64ビットのハンドラを共有できない根本的な理由である。
 
-## compat_ptr() and ptr_to_compat() {#compat_ptr-and-ptr_to_compat}
+## compat_ptr() と ptr_to_compat() {#compat_ptr-and-ptr_to_compat}
 
-`compat_ptr()` converts a `compat_uptr_t` (u32) into a kernel `void __user *` by zero-extending:
+`compat_ptr()` は、`compat_uptr_t`（u32）をゼロ拡張してカーネルの `void __user *` に変換する。
 
 ```c
 /* include/linux/compat.h */
@@ -112,10 +112,10 @@ static inline void __user *compat_ptr(compat_uptr_t uptr)
 }
 ```
 
-This is safe because a 32-bit process cannot have a valid address above 4 GB; the zero-extension just produces
-the correct 64-bit representation of the 32-bit address.
+32ビットプロセスは4 GBを超える有効なアドレスを持てないので、これは安全である。ゼロ拡張は単に、
+32ビットアドレスの正しい64ビット表現を生成するだけである。
 
-The reverse direction uses `ptr_to_compat()`:
+逆方向には `ptr_to_compat()` を使う。
 
 ```c
 static inline compat_uptr_t ptr_to_compat(void __user *uptr)
@@ -126,19 +126,19 @@ static inline compat_uptr_t ptr_to_compat(void __user *uptr)
 
 ## in_compat_syscall() {#in_compat_syscall}
 
-Code that needs to behave differently for 32-bit callers (e.g., to pick the right struct size) uses
-`in_compat_syscall()`. On x86, it isn't a single check but a three-level chain down to a per-syscall status
-bit — not a thread flag. Some other architectures (ARM64, MIPS) use `TIF_32BIT` instead. The generic
-declaration is in `include/linux/compat.h`; x86 overrides it in `arch/x86/include/asm/compat.h`:
+32ビットの呼び出し元に対して異なる振る舞いをする必要があるコード（例: 正しい構造体サイズを選ぶため）は、
+`in_compat_syscall()` を使う。x86では、これは単一のチェックではなく、syscallごとのステータス
+ビットに至る3段階の連鎖である — スレッドフラグではない。他のいくつかのアーキテクチャ（ARM64、MIPS）は代わりに `TIF_32BIT` を使う。汎用の
+宣言は `include/linux/compat.h` にあり、x86は `arch/x86/include/asm/compat.h` でそれをオーバーライドする。
 
 ```c
-/* include/linux/compat.h — generic fallback */
+/* include/linux/compat.h — 汎用のフォールバック */
 static inline bool in_compat_syscall(void)
 {
-    return is_compat_task();  /* arch-specific */
+    return is_compat_task();  /* アーキテクチャ固有 */
 }
 
-/* arch/x86/include/asm/compat.h — x86 override */
+/* arch/x86/include/asm/compat.h — x86 によるオーバーライド */
 static inline bool in_32bit_syscall(void)
 {
     return in_ia32_syscall() || in_x32_syscall();
@@ -150,8 +150,8 @@ static inline bool in_compat_syscall(void)
 }
 ```
 
-`in_ia32_syscall()` is a macro, not a function — it's defined two levels down in
-`arch/x86/include/asm/thread_info.h`:
+`in_ia32_syscall()` は関数ではなくマクロである — 2段階下の
+`arch/x86/include/asm/thread_info.h` で定義されている。
 
 ```c
 /* arch/x86/include/asm/thread_info.h */
@@ -159,30 +159,30 @@ static inline bool in_compat_syscall(void)
                            current_thread_info()->status & TS_COMPAT)
 ```
 
-`TS_COMPAT` is set when a task is executing in 32-bit compatibility mode. It is checked at various points in
-the VFS and networking stack so that a single in-kernel code path can serve both 32-bit and 64-bit callers
-where only minor differences exist.
+`TS_COMPAT` は、タスクが32ビット互換モードで実行しているときに設定される。これはVFSやネットワークスタックの
+さまざまな箇所でチェックされ、わずかな違いしかない場合には、単一のカーネル内コードパスで
+32ビットと64ビットの両方の呼び出し元に対応できるようにしている。
 
-## Struct layout differences: compat_iovec and compat_stat {#struct-layout-differences-compat_iovec-and-compat_stat}
+## 構造体レイアウトの違い: compat_iovecとcompat_stat {#struct-layout-differences-compat_iovec-and-compat_stat}
 
 ### compat_iovec {#compat_iovec}
 
 ```c
 /* include/linux/compat.h */
 struct compat_iovec {
-    compat_uptr_t   iov_base;   /* u32 — 32-bit pointer */
+    compat_uptr_t   iov_base;   /* u32 — 32ビットポインタ */
     compat_size_t   iov_len;    /* u32 */
 };
 
-/* vs native: */
+/* ネイティブ版との比較: */
 struct iovec {
-    void __user    *iov_base;   /* 8 bytes on x86-64 */
-    __kernel_size_t iov_len;    /* 8 bytes on x86-64 */
+    void __user    *iov_base;   /* x86-64では8バイト */
+    __kernel_size_t iov_len;    /* x86-64では8バイト */
 };
 ```
 
-An `iovec` array passed by a 32-bit process has 8 bytes per element; the 64-bit layout has 16 bytes per
-element. `readv()` and `writev()` must detect the compat case and iterate using `compat_iovec`.
+32ビットプロセスが渡す `iovec` 配列は要素あたり8バイトであり、64ビットのレイアウトは要素あたり16バイトである。
+`readv()` と `writev()` はcompatのケースを検出し、`compat_iovec` を使って反復しなければならない。
 
 ### compat_stat {#compat_stat}
 
@@ -191,15 +191,15 @@ element. `readv()` and `writev()` must detect the compat case and iterate using 
 struct compat_stat {
     u32             st_dev;
     compat_ino_t    st_ino;     /* u32 */
-    compat_mode_t   st_mode;    /* u16 on x86; u32 in the generic definition */
-    compat_nlink_t  st_nlink;   /* u16 on x86; u32 in the generic definition */
-    __compat_uid_t  st_uid;     /* u16 on x86; u32 in the generic definition */
-    __compat_gid_t  st_gid;     /* u16 on x86; u32 in the generic definition */
+    compat_mode_t   st_mode;    /* x86ではu16、汎用定義ではu32 */
+    compat_nlink_t  st_nlink;   /* x86ではu16、汎用定義ではu32 */
+    __compat_uid_t  st_uid;     /* x86ではu16、汎用定義ではu32 */
+    __compat_gid_t  st_gid;     /* x86ではu16、汎用定義ではu32 */
     u32             st_rdev;
-    u32             st_size;    /* only 32 bits! */
+    u32             st_size;    /* わずか32ビット！ */
     u32             st_blksize;
     u32             st_blocks;
-    u32             st_atime;   /* 32-bit time_t */
+    u32             st_atime;   /* 32ビットの time_t */
     u32             st_atime_nsec;
     u32             st_mtime;
     u32             st_mtime_nsec;
@@ -210,17 +210,17 @@ struct compat_stat {
 };
 ```
 
-The native `struct stat` on x86-64 uses 64-bit `off_t` for `st_size` and 64-bit `time_t`. The kernel fills
-in both forms depending on which handler was called.
+x86-64のネイティブの `struct stat` は、`st_size` に64ビットの `off_t` を、そして64ビットの `time_t` を使う。カーネルは、
+どちらのハンドラが呼ばれたかに応じて、いずれかの形式を埋める。
 
-## When compat is NOT needed {#when-compat-is-not-needed}
+## compatが不要な場合 {#when-compat-is-not-needed}
 
-Modern struct-based syscalls designed with portability in mind use explicit-width types (`__u64`, `__u32`,
-`__s64`) rather than `long` or pointer types in their UAPI structs. Because the struct layout is identical
-between 32-bit and 64-bit, no compat handler is needed:
+移植性を念頭に置いて設計された現代的な構造体ベースのsyscallは、UAPI構造体で `long` やポインタ型ではなく、
+幅が明示された型（`__u64`、`__u32`、`__s64`）を使う。構造体のレイアウトが
+32ビットと64ビットで同一なので、compatハンドラは不要である。
 
 ```c
-/* include/uapi/linux/openat2.h — used by openat2() */
+/* include/uapi/linux/openat2.h — openat2() が使う */
 struct open_how {
     __u64   flags;
     __u64   mode;
@@ -228,13 +228,13 @@ struct open_how {
 };
 ```
 
-A 32-bit process that passes `struct open_how` has the same binary layout as a 64-bit process. The single
-`sys_openat2` handler works for both. This is the recommended pattern for any new syscall.
+32ビットプロセスが渡す `struct open_how` は、64ビットプロセスと同じバイナリレイアウトを持つ。単一の
+`sys_openat2` ハンドラが両方で動作する。これは、あらゆる新しいsyscallに推奨されるパターンである。
 
-## compat_ioctl: driver-level compat {#compat_ioctl-driver-level-compat}
+## compat_ioctl: ドライバレベルのcompat {#compat_ioctl-driver-level-compat}
 
-`ioctl()` is special because ioctl commands encode struct sizes, and many commands pass structs with
-architecture-dependent layouts. Drivers implement both:
+`ioctl()` は特別である。ioctlコマンドは構造体のサイズをエンコードしており、多くのコマンドは
+アーキテクチャ依存のレイアウトを持つ構造体を渡すからである。ドライバは両方を実装する。
 
 ```c
 /* include/linux/fs.h — file_operations */
@@ -246,17 +246,17 @@ struct file_operations {
 };
 ```
 
-When a 32-bit process calls `ioctl()`, the compat ioctl syscall first tries `do_vfs_ioctl()` for commands the
-VFS itself understands generically (independent of the driver). If that returns `-ENOIOCTLCMD` (not one of
-those), it falls through to the driver's `compat_ioctl`, if set. There is no generic, automatic
-translation-table fallback for arbitrary driver-specific commands — if `compat_ioctl` is NULL, a 32-bit
-caller gets `-ENOTTY` for anything the driver hasn't explicitly handled. For commands whose only argument is
-either absent or already compatible between widths (pointers, not raw `unsigned long` values embedding a
-pointer), a driver can opt in to the generic `compat_ptr_ioctl()` helper (`fs/ioctl.c`) instead of writing
-its own — it just zero-extends `arg` through `compat_ptr()` and calls `unlocked_ioctl`.
+32ビットプロセスが `ioctl()` を呼ぶと、compatのioctl syscallはまず、VFS自身が（ドライバとは独立に）汎用的に理解するコマンドについて
+`do_vfs_ioctl()` を試す。それが `-ENOIOCTLCMD`（それらのコマンドではない）を返すと、
+設定されていればドライバの `compat_ioctl` に処理が渡る。任意のドライバ固有コマンドに対する、汎用的で自動的な
+変換テーブルによるフォールバックは存在しない — `compat_ioctl` がNULLなら、32ビットの
+呼び出し元は、ドライバが明示的に処理していないものすべてに対して `-ENOTTY` を受け取る。唯一の引数が
+存在しないか、幅の間ですでに互換性がある（ポインタであり、ポインタを埋め込んだ生の `unsigned long` 値ではない）コマンドについては、
+ドライバは独自に書く代わりに、汎用の `compat_ptr_ioctl()` ヘルパー（`fs/ioctl.c`）を選択的に使える
+— これは単に `compat_ptr()` を通じて `arg` をゼロ拡張し、`unlocked_ioctl` を呼ぶだけである。
 
 ```c
-/* Example: driver that handles compat explicitly */
+/* 例: compatを明示的に処理するドライバ */
 static long my_compat_ioctl(struct file *file, unsigned int cmd,
                              unsigned long arg)
 {
@@ -264,7 +264,7 @@ static long my_compat_ioctl(struct file *file, unsigned int cmd,
     case MY_IOCTL_GET_INFO32: {
         struct my_info32 __user *uinfo = compat_ptr(arg);
         struct my_info32 kinfo;
-        /* fill kinfo from kernel state */
+        /* カーネルの状態から kinfo を埋める */
         if (copy_to_user(uinfo, &kinfo, sizeof(kinfo)))
             return -EFAULT;
         return 0;
@@ -275,18 +275,18 @@ static long my_compat_ioctl(struct file *file, unsigned int cmd,
 }
 ```
 
-## Practical example: compat_sys_read vs sys_read {#practical-example-compat_sys_read-vs-sys_read}
+## 実例: compat_sys_readとsys_read {#practical-example-compat_sys_read-vs-sys_read}
 
-`read()` only passes a 32-bit pointer and a 32-bit count. On x86-64, the kernel handles this transparently:
-`ia32_sys_call()`'s `read` case dispatches straight to the native `sys_read` handler, because `compat_ptr()` of the
-32-bit buffer address produces the correct 64-bit user pointer, and `compat_size_t` (u32) fits in `size_t`.
-No separate compat handler is needed.
+`read()` が渡すのは、32ビットのポインタと32ビットのカウントだけである。x86-64では、カーネルはこれを透過的に処理する。
+`ia32_sys_call()` の `read` のケースは、ネイティブの `sys_read` ハンドラに直接ディスパッチする。32ビットのバッファアドレスに対する
+`compat_ptr()` が正しい64ビットのユーザーポインタを生成し、`compat_size_t`（u32）は `size_t` に収まるからである。
+別のcompatハンドラは必要ない。
 
-## Practical example: compat_sys_sendmsg vs sys_sendmsg {#practical-example-compat_sys_sendmsg-vs-sys_sendmsg}
+## 実例: compat_sys_sendmsgとsys_sendmsg {#practical-example-compat_sys_sendmsg-vs-sys_sendmsg}
 
-`sendmsg()` passes `struct msghdr __user *`, which contains an embedded `struct iovec __user *` and a
-`void __user *` for the control message. Because both are pointers, they differ in size between 32-bit and
-64-bit:
+`sendmsg()` は `struct msghdr __user *` を渡す。これには埋め込みの `struct iovec __user *` と、
+制御メッセージ用の `void __user *` が含まれる。どちらもポインタなので、32ビットと64ビットでサイズが
+異なる。
 
 ```c
 /* net/compat.c */
@@ -304,91 +304,90 @@ COMPAT_SYSCALL_DEFINE3(sendmsg, int, fd, struct compat_msghdr __user *, msg,
 }
 ```
 
-The `MSG_CMSG_COMPAT` flag, not a separate boolean, is what marks this as a compat call — it's OR'd in here.
-The final argument to `__sys_sendmsg()` is `forbid_cmsg_compat`: when `true`, it rejects a caller that has
-`MSG_CMSG_COMPAT` set (used by the *native* `sys_sendmsg` path, to reject a native caller spoofing that
-flag); the compat path legitimately sets the flag itself, so it passes `false`. Downstream,
-`sendmsg_copy_msghdr()` (`net/socket.c`) is what actually branches on `MSG_CMSG_COMPAT`: on the compat path
-it calls `get_compat_msghdr()`, which reads `struct compat_msghdr` (containing `compat_uptr_t` fields) and
-reconstructs a native `struct msghdr` in kernel space before proceeding; on the native path it calls
-`copy_msghdr_from_user()` instead.
+これがcompat呼び出しであることを示すのは、別個のブール値ではなく `MSG_CMSG_COMPAT` フラグである — ここでORされている。
+`__sys_sendmsg()` の最後の引数は `forbid_cmsg_compat` である。`true` のときは、
+`MSG_CMSG_COMPAT` が設定された呼び出し元を拒否する（*ネイティブ*の `sys_sendmsg` パスで、そのフラグを偽装する
+ネイティブの呼び出し元を拒否するために使われる）。compatパスは正当にフラグを自分で設定するので、`false` を渡す。下流では、
+実際に `MSG_CMSG_COMPAT` で分岐するのは `sendmsg_copy_msghdr()`（`net/socket.c`）である。compatパスでは
+`get_compat_msghdr()` を呼び、これが（`compat_uptr_t` フィールドを含む）`struct compat_msghdr` を読み取って、
+処理を進める前にカーネル空間でネイティブの `struct msghdr` を再構築する。ネイティブパスでは、代わりに
+`copy_msghdr_from_user()` を呼ぶ。
 
-## Detecting 32-bit processes {#detecting-32-bit-processes}
+## 32ビットプロセスの検出 {#detecting-32-bit-processes}
 
 ```bash
-# The ELF class shows 32-bit
+# ELFクラスが32ビットであることを示す
 file /proc/$(pidof myapp)/exe
 # ELF 32-bit LSB executable ...
 
-# Or check the CS segment register in the task's pt_regs
-# CS == __USER32_CS (0x23) for ia32; CS == __USER_CS (0x33) for x86-64
+# あるいはタスクの pt_regs 内のCSセグメントレジスタを確認する
+# ia32 では CS == __USER32_CS (0x23)、x86-64 では CS == __USER_CS (0x33)
 ```
 
-Inside the kernel, `task_pt_regs(task)->cs` is compared to `__USER32_CS` to determine the execution mode of
-a traced task.
+カーネル内では、トレースされているタスクの実行モードを判定するために、`task_pt_regs(task)->cs` が `__USER32_CS` と
+比較される。
 
-## The old compat_alloc_user_space() pattern — removed in Linux 5.15 {#the-old-compat_alloc_user_space-pattern-removed-in-linux-515}
+## 古いcompat_alloc_user_space()パターン — Linux 5.15で削除 {#the-old-compat_alloc_user_space-pattern-removed-in-linux-515}
 
-Older compat handlers used a different strategy from the shared-helper pattern above: build a native-layout
-struct in a scratch region carved out below the user's own stack pointer, then call the *native* syscall
-handler as if userspace itself had passed that struct. `compat_alloc_user_space()` was the function that
-carved out that scratch region — it aligned the result to 16 bytes, checked it stayed within the caller's
-address range, and validated it with `access_ok()` before handing it back.
+古いcompatハンドラは、上の共通ヘルパーパターンとは異なる戦略を使っていた。ユーザー自身のスタックポインタの下に
+切り出したスクラッチ領域にネイティブレイアウトの構造体を構築し、ユーザー空間自身がその構造体を渡したかのように
+*ネイティブ*のsyscallハンドラを呼ぶ、というものである。`compat_alloc_user_space()` は、そのスクラッチ領域を
+切り出す関数だった — 結果を16バイトにアラインし、それが呼び出し元のアドレス範囲内にあることをチェックし、
+`access_ok()` で検証してから返していた。
 
-That function, and the pattern it enabled, is gone. Arnd Bergmann's series eliminating `set_fs()`-based
-address-space overrides removed the last callers, and `compat_alloc_user_space()` itself in
+その関数と、それが可能にしていたパターンは、もう存在しない。`set_fs()` ベースのアドレス空間オーバーライドを
+廃止するArnd Bergmannのパッチシリーズが最後の呼び出し元を取り除き、`compat_alloc_user_space()` 自体は
 [commit a7a08b275a8b](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a7a08b275a8bbade798c4bdaad07ade68fe7003c)
-("arch: remove compat_alloc_user_space") — first absent starting in **Linux 5.15** (October 2021).
+（"arch: remove compat_alloc_user_space"）で削除された — **Linux 5.15**（2021年10月）以降は存在しない。
 
-The replacement isn't a new function; it's the shared-kernel-space-helper pattern this page already showed
-for `sendmsg()`: a common `__sys_*()` function that takes already-copied-in kernel data and is called
-directly from both the native and compat entry points, with any compat-specific translation (pointer width,
-`MSG_CMSG_COMPAT`, etc.) done in kernel space along the way — never by faking a struct on the user's own
-stack and re-entering as if userspace had built it. `compat_sys_socketcall()` (`net/compat.c`) — the very
-function this section used to cite as a `compat_alloc_user_space()` user — is a good example of the
-*before* and *after* in one place: it's still a genuinely separate compat handler (a 32-bit process packs
-its socketcall argument array as `u32`s, not native `unsigned long`s, so it can't just reuse the native
-parser), but it now `copy_from_user()`s that array into kernel space and dispatches straight to the same
-internal helpers the native path uses (`__sys_bind()`, `__sys_connect()`, ...), translating pointer-sized
-arguments with `compat_ptr()` along the way — no user-stack scratch space involved.
+置き換えは新しい関数ではない。このページですでに `sendmsg()` について示した、カーネル空間の共通ヘルパーパターンである。
+すでにコピーして取り込んだカーネルデータを受け取る共通の `__sys_*()` 関数を、ネイティブとcompatの両方の
+エントリポイントから直接呼び出し、compat固有の変換（ポインタ幅、`MSG_CMSG_COMPAT` など）はその途中で
+カーネル空間で行う — ユーザー自身のスタック上に構造体を偽造し、ユーザー空間がそれを構築したかのように
+再入することは決してない。`compat_sys_socketcall()`（`net/compat.c`）— まさにこの節がかつて `compat_alloc_user_space()`
+の利用者として挙げていた関数 — は、*以前*と*以後*を1か所で示す良い例である。これは依然として本当に独立した
+compatハンドラである（32ビットプロセスはsocketcallの引数配列をネイティブの `unsigned long` ではなく `u32` として詰めるので、
+ネイティブのパーサをそのまま再利用することはできない）。しかし現在は、その配列を `copy_from_user()` でカーネル空間に取り込み、
+ネイティブパスが使うのと同じ内部ヘルパー（`__sys_bind()`、`__sys_connect()` など）に直接ディスパッチし、
+その途中でポインタサイズの引数を `compat_ptr()` で変換する — ユーザースタック上のスクラッチ領域は一切関与しない。
 
-## Summary: when to write a compat handler {#summary-when-to-write-a-compat-handler}
+## まとめ: compatハンドラを書くべきとき {#summary-when-to-write-a-compat-handler}
 
-| Situation | Action |
+| 状況 | 対応 |
 |-----------|--------|
-| Syscall args are `int`, `unsigned int`, fixed-size types | Share native handler |
-| Args contain `long`, `size_t`, `off_t`, or pointers | Write `COMPAT_SYSCALL_DEFINE` handler |
-| Struct passed by pointer uses explicit `__u64`/`__u32` | Share native handler (no compat needed) |
-| Struct has embedded pointer or `time_t` | Write compat struct + compat handler |
-| Driver `ioctl` with pointer args | Implement `compat_ioctl` in `file_operations` |
+| syscallの引数が `int`、`unsigned int`、固定サイズの型 | ネイティブのハンドラを共有する |
+| 引数に `long`、`size_t`、`off_t`、ポインタが含まれる | `COMPAT_SYSCALL_DEFINE` のハンドラを書く |
+| ポインタで渡される構造体が明示的な `__u64`/`__u32` を使う | ネイティブのハンドラを共有する（compat不要） |
+| 構造体に埋め込みポインタや `time_t` がある | compat構造体とcompatハンドラを書く |
+| ポインタ引数を持つドライバの `ioctl` | `file_operations` に `compat_ioctl` を実装する |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compat.h) — `COMPAT_SYSCALL_DEFINEx()` macros, `compat_ptr()`/`ptr_to_compat()`, `struct compat_iovec`
-- [include/asm-generic/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/compat.h) — the base `compat_uptr_t`, `compat_size_t`, `compat_long_t`, `compat_s64`/`compat_u64` typedefs (pulled in by each arch's `asm/compat.h`)
-- [arch/x86/include/asm/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/compat.h) — `struct compat_stat` and the x86 override of `in_compat_syscall()`/`in_32bit_syscall()`
-- [arch/x86/include/asm/thread_info.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/thread_info.h) — the `in_ia32_syscall()` macro and the `TS_COMPAT` flag it checks
-- [include/vdso/time32.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/vdso/time32.h) — `struct old_timespec32`, the real 32-bit-layout timespec
-- [arch/x86/include/asm/syscall_wrapper.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/syscall_wrapper.h) — `__IA32_COMPAT_SYS_STUBx()`: generates the `__ia32_compat_sys_xxx` entry stub
-- [arch/x86/entry/syscalls/syscall_32.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_32.tbl) — the ia32 syscall table, including its compat-entry-point column
-- [include/uapi/linux/openat2.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/openat2.h) — `struct open_how`: an explicit-width UAPI struct that needs no compat handler
-- [net/compat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/compat.c) — `compat_sys_sendmsg`/`compat_sys_recvmsg`, `compat_sys_socketcall()`, and `get_compat_msghdr()`
-- [include/linux/fs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) — `struct file_operations`, including the `compat_ioctl` member
-- [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `compat_ptr_ioctl()` and the compat `ioctl()` syscall's dispatch logic
-- [commit a7a08b275a8b](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a7a08b275a8bbade798c4bdaad07ade68fe7003c) — "arch: remove compat_alloc_user_space", Arnd Bergmann, first in Linux 5.15
+- [include/linux/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/compat.h) — `COMPAT_SYSCALL_DEFINEx()` マクロ、`compat_ptr()`/`ptr_to_compat()`、`struct compat_iovec`
+- [include/asm-generic/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/compat.h) — 基本となる `compat_uptr_t`、`compat_size_t`、`compat_long_t`、`compat_s64`/`compat_u64` のtypedef（各アーキテクチャの `asm/compat.h` から取り込まれる）
+- [arch/x86/include/asm/compat.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/compat.h) — `struct compat_stat` と、x86による `in_compat_syscall()`/`in_32bit_syscall()` のオーバーライド
+- [arch/x86/include/asm/thread_info.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/thread_info.h) — `in_ia32_syscall()` マクロと、それがチェックする `TS_COMPAT` フラグ
+- [include/vdso/time32.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/vdso/time32.h) — `struct old_timespec32`。実際の32ビットレイアウトのtimespec
+- [arch/x86/include/asm/syscall_wrapper.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/syscall_wrapper.h) — `__IA32_COMPAT_SYS_STUBx()`: `__ia32_compat_sys_xxx` エントリスタブを生成する
+- [arch/x86/entry/syscalls/syscall_32.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_32.tbl) — ia32のsyscallテーブル。compatエントリポイントの列を含む
+- [include/uapi/linux/openat2.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/openat2.h) — `struct open_how`: compatハンドラを必要としない、幅が明示されたUAPI構造体
+- [net/compat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/compat.c) — `compat_sys_sendmsg`/`compat_sys_recvmsg`、`compat_sys_socketcall()`、`get_compat_msghdr()`
+- [include/linux/fs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) — `compat_ioctl` メンバーを含む `struct file_operations`
+- [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `compat_ptr_ioctl()` と、compatの `ioctl()` syscallのディスパッチロジック
+- [commit a7a08b275a8b](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a7a08b275a8bbade798c4bdaad07ade68fe7003c) — "arch: remove compat_alloc_user_space"、Arnd Bergmann、Linux 5.15で初めて取り込まれた
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [SYSCALL_DEFINE and Dispatch](syscall-define.md) — How native syscalls are defined and dispatched
-- [Syscall Entry Path](syscall-entry.md) — `do_syscall_64()`'s dispatch and the `do_syscall_x32()` x32 path; ia32 compat dispatches through its own separate entry point (`ia32_sys_call()`) rather than through either of these
-- [Adding a New Syscall](adding-syscall.md) — Includes the checklist for deciding whether a new syscall needs a compat handler
+- [SYSCALL_DEFINEとディスパッチ](syscall-define.md) — ネイティブのsyscallがどのように定義され、ディスパッチされるか
+- [syscallのエントリパス](syscall-entry.md) — `do_syscall_64()` のディスパッチと、`do_syscall_x32()` のx32パス。ia32 compatは、これらのいずれでもなく、独自の別のエントリポイント（`ia32_sys_call()`）を通じてディスパッチされる
+- [新しいsyscallの追加](adding-syscall.md) — 新しいsyscallにcompatハンドラが必要かどうかを判断するチェックリストを含む
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [LWN: System calls and 64-bit architectures](https://lwn.net/Articles/311630/) — Jake Edge, December 2008; the `preadv()`/`pwritev()` design debate that illustrates why some syscalls need a `compat_sys_*` handler and others don't
+- [LWN: System calls and 64-bit architectures](https://lwn.net/Articles/311630/) — Jake Edge、2008年12月。`preadv()`/`pwritev()` の設計をめぐる議論であり、`compat_sys_*` ハンドラを必要とするsyscallとそうでないsyscallがある理由を示している
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Adding System Calls — The Linux Kernel documentation](https://docs.kernel.org/process/adding-syscalls.html) — Rendered version of `Documentation/process/adding-syscalls.rst`; see "Compatibility System Calls (Generic)" for when a compat handler is required
+- [Adding System Calls — The Linux Kernel documentation](https://docs.kernel.org/process/adding-syscalls.html) — `Documentation/process/adding-syscalls.rst` のレンダリング版。compatハンドラが必要となる場合については "Compatibility System Calls (Generic)" を参照
