@@ -1,126 +1,126 @@
-# War Stories: mm Bug Incident Narratives {#war-stories-mm-bug-incident-narratives}
+# 事件簿: mmのバグ事件の記録 {#war-stories-mm-bug-incident-narratives}
 
-> Three production bugs that revealed deep design problems in the Linux memory manager — told from the moment operators noticed something was wrong through the investigation, fix, and design lessons that followed
+> Linuxメモリマネージャの深い設計上の問題を明らかにした3つの本番環境のバグ。運用者が何かおかしいと気づいた瞬間から、調査、修正、そしてそこから得られた設計上の教訓までを語る
 
-Each of these happened: the commit hashes below point to the actual fixes, and the LKML threads and production reports are linked so you can read the original discussion yourself.
+これらはいずれも実際に起きたことである。以下のコミットハッシュは実際の修正を指しており、LKMLのスレッドや本番環境での報告にもリンクしているので、元の議論を自分で読むことができる。
 
-The three bugs were chosen to cover different parts of the subsystem and different classes of failure:
+3つのバグは、サブシステムの異なる部分と異なる種類の障害を網羅するように選んだ:
 
-| Bug | Area | Failure class | Era |
+| バグ | 領域 | 障害の種類 | 時期 |
 |-----|------|---------------|-----|
-| zone_reclaim_mode | NUMA reclaim policy | Silent perf destruction | 2006–2014 |
-| THP compound page locking | Page allocator / AIO path | Collateral overhead | 2011–2013 |
-| RSS percpu_counter inaccuracy | Memory accounting / OOM | Wrong victim selection | 2022–2026 |
+| zone_reclaim_mode | NUMA回収ポリシー | 静かな性能破壊 | 2006–2014 |
+| THPのcompound pageロック | ページアロケータ / AIOパス | 巻き添えのオーバーヘッド | 2011–2013 |
+| RSS percpu_counterの不正確さ | メモリアカウンティング / OOM | 誤った犠牲プロセスの選択 | 2022–2026 |
 
 ---
 
-## Bug 1: zone_reclaim_mode — The NUMA Reclaim Policy That Destroyed Performance by Default {#bug-1-zonereclaimmode-the-numa-reclaim-policy-that-destroyed-performance-by-default}
+## バグ1: zone_reclaim_mode — デフォルトで性能を破壊したNUMA回収ポリシー {#bug-1-zonereclaimmode-the-numa-reclaim-policy-that-destroyed-performance-by-default}
 
-*Introduced approximately v2.6.16 (2006). Disabled by default in v3.16 (2014). Commit: [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753).*
+*v2.6.16（2006年）頃に導入。v3.16（2014年）でデフォルト無効化。コミット: [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753)。*
 
-### The symptom {#the-symptom}
+### 症状 {#the-symptom}
 
-Operators running databases, web servers, and in-memory caches on NUMA hardware — typically two- or four-socket x86 servers — noticed that their applications ran significantly slower than expected. The symptoms were inconsistent: some servers were fine, others on identical hardware were not. Performance could drop by 50% or more on the affected machines without any obvious cause.
+NUMAハードウェア（典型的には2ソケットまたは4ソケットのx86サーバー）上でデータベース、Webサーバー、インメモリキャッシュを動かしていた運用者たちは、アプリケーションが想定よりかなり遅く動作していることに気づいた。症状は一貫しなかった。問題のないサーバーもあれば、同一ハードウェアでも問題のあるサーバーもあった。影響を受けたマシンでは、明白な原因なしに性能が50%以上低下することもあった。
 
-The slowdown did not correlate with CPU saturation, network latency, or disk I/O. Memory appeared to have plenty of free space. The kernel was not swapping. Yet the application was clearly spending time waiting.
+この速度低下は、CPU飽和、ネットワークレイテンシ、ディスクI/Oのいずれとも相関しなかった。メモリには十分な空きがあるように見えた。カーネルはスワップしていなかった。それでもアプリケーションは明らかに待ち時間を費やしていた。
 
-A careful operator inspecting `/proc/vmstat` would find elevated counts for `zone_reclaim_failed` — a counter that incremented every time the kernel tried to reclaim memory from the local NUMA node and failed. The reclaim was failing because there was nothing to reclaim locally: the workload's active pages were spread across both NUMA nodes, but `zone_reclaim_mode` was forcing the allocator to repeatedly try (and fail) to satisfy allocations from a single node before spilling to the other.
+注意深い運用者が `/proc/vmstat` を調べると、`zone_reclaim_failed` のカウントが高くなっていることに気づいただろう。これは、カーネルがローカルNUMAノードからメモリを回収しようとして失敗するたびに増加するカウンタである。回収が失敗していたのは、ローカルに回収できるものが何もなかったからだ。ワークロードのアクティブなページは両方のNUMAノードに分散していたが、`zone_reclaim_mode` はアロケータに対し、もう一方のノードにあふれさせる前に、単一ノードから割り当てを満たそうと繰り返し試みる（そして失敗する）ことを強いていた。
 
-### Investigation {#investigation}
+### 調査 {#investigation}
 
-The investigation path was difficult because the slowdown was not obviously memory-related from the application side. A process accessing remote NUMA memory experiences higher latency on every memory access, which manifests as reduced throughput across the board — slower queries, higher latency, less IPC — with no single bottleneck visible in top-level tools.
+調査は困難だった。アプリケーション側から見ると、速度低下が明らかにメモリ関連だとは分からなかったからである。リモートNUMAメモリにアクセスするプロセスは、すべてのメモリアクセスでより高いレイテンシを被る。これは全体的なスループットの低下（クエリの低速化、レイテンシの増加、IPCの低下）として現れ、トップレベルのツールでは単一のボトルネックが見えない。
 
-The first clue for many operators was the `numastat` tool, which revealed that a large fraction of memory accesses were going to a non-local NUMA node:
+多くの運用者にとって最初の手がかりは `numastat` ツールで、メモリアクセスの大部分が非ローカルのNUMAノードに向かっていることを明らかにした:
 
 ```bash
 numastat -p <pid>
-# Per-NUMA-node allocation statistics for a process
-# A large gap between local and remote allocations suggests
-# zone_reclaim_mode is interfering with cross-node allocation
+# プロセスのNUMAノードごとの割り当て統計
+# ローカル割り当てとリモート割り当ての間に大きな差がある場合、
+# zone_reclaim_modeがノード間割り当てを妨げていることを示唆する
 
 cat /proc/vmstat | grep zone_reclaim
 # zone_reclaim_failed: <large number>
-# Each increment means the kernel tried to reclaim locally but couldn't
+# 1増えるごとに、カーネルがローカルで回収を試みたが失敗したことを意味する
 ```
 
-For those who knew to look, the setting was visible:
+確認すべき場所を知っている者には、設定が見えていた:
 
 ```bash
 cat /proc/sys/vm/zone_reclaim_mode
-# 1   ← enabled; this is the culprit
+# 1   ← 有効。これが犯人
 ```
 
-Setting it to zero immediately recovered performance, which confirmed the diagnosis. The fix was one sysctl away, but only for those who knew it existed.
+これを0に設定すると性能が即座に回復し、診断が確定した。修正はsysctl1つで済んだが、それはその存在を知っている者に限られた。
 
-### Root cause {#root-cause}
+### 根本原因 {#root-cause}
 
-`zone_reclaim_mode` was introduced when NUMA systems were predominantly found in HPC clusters. The workloads on those machines were carefully partitioned: each NUMA node ran a distinct slice of a distributed computation, and cross-node memory access was genuinely expensive and to be avoided. When memory on a node became tight, the correct behavior was to reclaim local pages rather than spill to a remote node — the remote-access penalty was worse than the reclaim cost.
+`zone_reclaim_mode` が導入されたのは、NUMAシステムが主にHPCクラスタで使われていた時代である。それらのマシン上のワークロードは慎重に分割されていた。各NUMAノードは分散計算の別々の一部を実行し、ノード間のメモリアクセスは本当に高コストで避けるべきものだった。あるノードのメモリが逼迫したときは、リモートノードにあふれさせるのではなくローカルのページを回収するのが正しい挙動だった。リモートアクセスのペナルティの方が回収コストより悪かったからである。
 
-When enabled (`zone_reclaim_mode=1`), the kernel's page allocator would, before falling through to a remote NUMA node, attempt to reclaim pages from the local node's LRU lists. This reclaim ran inline during the allocation path: the allocating process was stalled while the kernel scanned and evicted pages from the local node.
+有効にすると（`zone_reclaim_mode=1`）、カーネルのページアロケータはリモートNUMAノードにフォールバックする前に、ローカルノードのLRUリストからページを回収しようと試みた。この回収は割り当てパスの中でインラインで実行された。カーネルがローカルノードのページをスキャンして追い出す間、割り当てを行うプロセスは停止していた。
 
-The problem was that this assumption — cross-node access is always worse than local reclaim — stopped being true as NUMA hardware became commonplace outside HPC. On a modern two-socket database server:
+問題は、この前提（ノード間アクセスは常にローカル回収より悪い）が、NUMAハードウェアがHPC以外でも一般的になるにつれて成り立たなくなったことだった。現代の2ソケットのデータベースサーバーでは:
 
-1. The workload's hot pages were spread across both nodes naturally.
-2. The application's working set did not fit in one node.
-3. `zone_reclaim_mode` forced the allocator to reclaim active working-set pages from the local node before allocating from the remote node.
-4. Those evicted pages were promptly faulted back in, creating a reclaim-fault-evict loop.
-5. Remote-node allocations eventually happened anyway — after the reclaim attempt — so the reclaim was wasted work that also damaged the working set.
+1. ワークロードのホットなページは自然に両方のノードに分散していた。
+2. アプリケーションのワーキングセットは1つのノードに収まらなかった。
+3. `zone_reclaim_mode` は、リモートノードから割り当てる前に、ローカルノードからアクティブなワーキングセットのページを回収することをアロケータに強いた。
+4. 追い出されたページはすぐにフォールトで読み戻され、回収・フォールト・追い出しのループが生じた。
+5. 結局リモートノードからの割り当ては（回収の試みの後で）行われたので、回収は無駄な作業であり、しかもワーキングセットを損なった。
 
-The Mel Gorman commit message that finally disabled the default put it plainly ([4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753)):
+最終的にデフォルトを無効化したMel Gormanのコミットメッセージは、これを率直に述べている（[4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753)）:
 
 > *"zone_reclaim_mode causes processes to prefer reclaiming memory from local node instead of spilling over to other nodes. This made sense initially when NUMA machines were almost exclusively HPC and the workload was partitioned into nodes. The NUMA penalties were sufficiently high to justify reclaiming the memory. On current machines and workloads it is often the case that zone_reclaim_mode destroys performance but not all users know how to detect this."*
 
-### The fix {#the-fix}
+### 修正 {#the-fix}
 
-The immediate fix was runtime: setting `vm.zone_reclaim_mode=0` disabled the local-first reclaim policy and allowed the allocator to spill to remote nodes freely. Performance recovered immediately on affected systems.
+即時の修正は実行時に行えた。`vm.zone_reclaim_mode=0` を設定するとローカル優先の回収ポリシーが無効になり、アロケータはリモートノードへ自由にあふれさせられるようになった。影響を受けたシステムでは性能が即座に回復した。
 
 ```bash
-# Disable zone_reclaim_mode (makes cross-node allocation free to proceed)
+# zone_reclaim_modeを無効化する（ノード間割り当てが自由に進められるようになる）
 sysctl vm.zone_reclaim_mode=0
 echo 0 > /proc/sys/vm/zone_reclaim_mode
 ```
 
-The structural fix was commit [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753) (v3.16, June 2014), authored by Mel Gorman, which changed the kernel default from `1` to `0`. The commit was acked by Johannes Weiner, Michal Hocko, and Christoph Lameter — the core mm team — indicating broad consensus that the old default was wrong for the majority of systems.
+構造的な修正はMel Gormanによるコミット [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753)（v3.16、2014年6月）で、カーネルのデフォルトを `1` から `0` に変更した。このコミットはJohannes Weiner、Michal Hocko、Christoph Lameterというmmの中核チームからackを受けており、古いデフォルトが大多数のシステムにとって誤りだという幅広い合意があったことを示している。
 
-A companion commit, [6b187d0260b6](https://git.kernel.org/linus/6b187d0260b6), refined the heuristic for when zone_reclaim should even be considered: it is now only auto-enabled if the NUMA node distance exceeds a threshold (`RECLAIM_DISTANCE`, typically 30), meaning nodes that are truly remote (not just on different sockets but with reasonable interconnect) still benefit from the policy.
+関連コミット [6b187d0260b6](https://git.kernel.org/linus/6b187d0260b6) は、そもそもzone_reclaimを検討すべき場合のヒューリスティックを改良した。現在では、NUMAノード間距離がしきい値（`RECLAIM_DISTANCE`、通常30）を超える場合にのみ自動的に有効化される。つまり、本当に遠いノード（単に別ソケットにあるだけでなく、相応のインターコネクトを介するもの）では、引き続きこのポリシーの恩恵を受ける。
 
-### Design lesson {#design-lesson}
+### 設計上の教訓 {#design-lesson}
 
-**Default behavior must match the majority workload, not the historical workload.** Zone_reclaim_mode made sense when it was introduced because the machines it ran on were nearly all HPC clusters with partitioned workloads. By the time NUMA servers were everywhere, the default was wrong for most users — but it remained on for years because those who needed to disable it had to know about an obscure sysctl.
+**デフォルトの挙動は、歴史的なワークロードではなく大多数のワークロードに合わせなければならない。** zone_reclaim_modeは導入当時には理にかなっていた。それが動くマシンはほぼすべて、ワークロードを分割したHPCクラスタだったからである。NUMAサーバーがどこにでもある時代になると、このデフォルトはほとんどのユーザーにとって誤りになったが、無効化する必要のある人々が無名のsysctlについて知っていなければならなかったため、何年も有効なままだった。
 
-**Silent performance destruction is worse than an error.** Zone_reclaim_mode did not produce errors, warnings, or unusual metrics that an operator unfamiliar with the option would recognize as its signature. The failure mode was a percentage-point throughput reduction with no obvious cause. A performance bug that produces only "things are slower" without a clear signal pointing to the root cause can persist for years in production.
+**静かな性能破壊はエラーより悪い。** zone_reclaim_modeは、このオプションに詳しくない運用者がその兆候だと認識できるようなエラー、警告、異常なメトリクスを一切生じなかった。障害の様態は、明白な原因のない数パーセントポイントのスループット低下だった。根本原因を指す明確なシグナルがなく「何かが遅い」とだけ現れる性能バグは、本番環境で何年も残り続けることがある。
 
-!!! note "Design change that followed"
-    After this experience, there was renewed attention to NUMA policy defaults and documentation. The kernel documentation for `zone_reclaim_mode` was expanded to note that it is typically harmful unless the node NUMA distance is large enough that cross-node access is genuinely expensive. The `numastat` and `numactl` tooling improved, and distributions began including NUMA tuning guidance in their documentation for database workloads.
+!!! note "その後の設計変更"
+    この経験の後、NUMAポリシーのデフォルトとドキュメントに改めて注意が向けられた。`zone_reclaim_mode` のカーネルドキュメントは拡充され、ノード間アクセスが本当に高コストになるほどNUMAノード距離が大きい場合を除き、通常は有害であることが記された。`numastat` や `numactl` のツールも改善され、ディストリビューションはデータベースワークロード向けのNUMAチューニングの指針をドキュメントに含めるようになった。
 
-    If you run NUMA hardware and are experiencing unexplained performance degradation, verify this setting before investigating anything else:
+    NUMAハードウェアを運用していて説明のつかない性能劣化が起きているなら、他の何かを調べる前にこの設定を確認すること:
     ```bash
     cat /proc/sys/vm/zone_reclaim_mode
-    # Should be 0 on most workloads; if it's nonzero, try setting it to 0
+    # ほとんどのワークロードでは0であるべき。0以外なら0に設定してみる
     ```
 
 ---
 
-## Bug 2: THP's Compound Page Locking Overhead Broke Hugetlbfs AIO {#bug-2-thps-compound-page-locking-overhead-broke-hugetlbfs-aio}
+## バグ2: THPのcompound pageロックのオーバーヘッドがhugetlbfsのAIOを壊した {#bug-2-thps-compound-page-locking-overhead-broke-hugetlbfs-aio}
 
-*Introduced with THP in v2.6.38 (2011). Fixed in v3.12 (2013). Commit: [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8).*
+*v2.6.38（2011年）でTHPとともに混入。v3.12（2013年）で修正。コミット: [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8)。*
 
-### The symptom {#the-symptom_1}
+### 症状 {#the-symptom_1}
 
-Oracle database administrators benchmarking I/O performance on Linux noticed a sharp regression after upgrading kernels. Using Oracle's `orion` I/O benchmark tool — a standard tool for characterizing storage performance under database I/O patterns — they measured read throughput from flash storage into hugetlbfs-backed buffers. The numbers from the commit message are precise:
+Linux上でI/O性能のベンチマークを取っていたOracleデータベースの管理者たちは、カーネルをアップグレードした後に急激なリグレッションに気づいた。Oracleの `orion` I/Oベンチマークツール（データベースのI/Oパターンでストレージ性能を特性評価するための標準ツール）を使い、フラッシュストレージからhugetlbfsで裏付けられたバッファへの読み込みスループットを測定していた。コミットメッセージにある数値は正確である:
 
-| I/O block size | Pre-THP | After THP (v2.6.39) | After THP (v3.11-rc5) |
+| I/Oブロックサイズ | THP以前 | THP以後（v2.6.39） | THP以後（v3.11-rc5） |
 |----------------|---------|---------------------|----------------------|
-| 1MB reads | 8,384 MB/s | 5,629 MB/s | 6,501 MB/s |
-| 64KB reads | 7,867 MB/s | 4,576 MB/s | 4,251 MB/s |
+| 1MB読み込み | 8,384 MB/s | 5,629 MB/s | 6,501 MB/s |
+| 64KB読み込み | 7,867 MB/s | 4,576 MB/s | 4,251 MB/s |
 
-The 1MB workload lost 33% throughput. The 64KB workload lost 41%. Neither was recovering in subsequent releases — the v3.11-rc5 numbers show the problem persisting two years after THP was introduced.
+1MBのワークロードではスループットが33%低下した。64KBのワークロードでは41%低下した。どちらも後続のリリースで回復しておらず、v3.11-rc5の数値は、THP導入から2年経っても問題が続いていることを示している。
 
-This was not a THP workload. The benchmark was using `shmget()` with `SHM_HUGETLB` to allocate traditional hugetlbfs pages — a mechanism that predates THP by many years. The application had not changed. The storage had not changed. Only the kernel had changed.
+これはTHPのワークロードではなかった。ベンチマークは `SHM_HUGETLB` 付きの `shmget()` を使って従来のhugetlbfsページを割り当てていた。THPより何年も前からある仕組みである。アプリケーションは変わっていなかった。ストレージも変わっていなかった。変わったのはカーネルだけだった。
 
-### Investigation {#investigation_1}
+### 調査 {#investigation_1}
 
-The investigation was done by Khalid Aziz at Oracle. The key tool was `perf top`, which revealed the root cause immediately:
+調査はOracleのKhalid Azizが行った。鍵となったツールは `perf top` で、根本原因を即座に明らかにした:
 
 ```
 # perf top output on the regressed kernel, during AIO benchmark
@@ -130,211 +130,211 @@ The investigation was done by Khalid Aziz at Oracle. The key tool was `perf top`
    ...
 ```
 
-More than 40% of CPU cycles were being consumed in two page reference counting functions: `__get_page_tail()` and `put_compound_page()`. These functions are called on every `get_page()` and `put_page()` for compound pages. Every time the AIO layer submitted I/O to a hugetlbfs page, it called `get_page()` to grab a reference; every time I/O completed, it called `put_page()` to release it. On a 64KB-block I/O benchmark doing hundreds of thousands of operations per second, these calls were on the critical path.
+CPUサイクルの40%超が、2つのページ参照カウント関数 `__get_page_tail()` と `put_compound_page()` で消費されていた。これらの関数は、compound pageに対するすべての `get_page()` と `put_page()` で呼ばれる。AIO層がhugetlbfsページにI/Oを発行するたびに参照を取るため `get_page()` を呼び、I/Oが完了するたびに解放するため `put_page()` を呼んでいた。毎秒数十万回の操作を行う64KBブロックのI/Oベンチマークでは、これらの呼び出しがクリティカルパス上にあった。
 
-The question was: why were these functions expensive? They hadn't been before THP.
+問題は、なぜこれらの関数が高コストなのかということだった。THP以前はそうではなかった。
 
-The answer was in what THP added to the compound page handling path. When THP was introduced, it created a new risk: a transparent huge page could be split while another thread was in the middle of `get_page()` or `put_page()`. To handle this safely, the kernel added locking to the compound page reference counting path — specifically, it acquired the compound page's lock on every `get_page_tail()` call to prevent concurrent splits from racing with reference counting.
+答えは、THPがcompound pageの処理パスに追加したものにあった。THPが導入されたとき、新たなリスクが生まれた。別のスレッドが `get_page()` や `put_page()` の途中にいる間に、透過的ヒュージページが分割されうるのである。これを安全に扱うため、カーネルはcompound pageの参照カウントパスにロックを追加した。具体的には、`get_page_tail()` を呼ぶたびにcompound pageのロックを取得し、並行する分割が参照カウントと競合しないようにした。
 
-This locking was necessary for transparent huge pages, which can be split under concurrent access. But it was applied to **all** compound pages — including traditional hugetlbfs pages, which cannot be split. Hugetlbfs pages are allocated from a preallocated pool and have a fixed size for their entire lifetime. There is no split operation. The lock was pure overhead.
+このロックは、並行アクセス下で分割されうる透過的ヒュージページには必要だった。しかしそれは**すべての**compound pageに適用された。分割できない従来のhugetlbfsページも含めてである。hugetlbfsページは事前に確保されたプールから割り当てられ、その生涯を通じて固定サイズを持つ。分割操作は存在しない。このロックは純粋なオーバーヘッドだった。
 
-### Root cause {#root-cause_1}
+### 根本原因 {#root-cause_1}
 
-The code path before THP: `get_page()` on a compound page tail incremented the head page's reference count atomically. Fast, no locking.
+THP以前のコードパス: compound pageのtailに対する `get_page()` は、headページの参照カウントをアトミックにインクリメントしていた。高速で、ロックなし。
 
-The code path after THP: `__get_page_tail()` checked `PageTail()`, then acquired the compound page lock, re-checked that the page was still a tail (in case a split happened between the check and the lock), then incremented the reference count, then released the lock. Correct for THP. Completely unnecessary for hugetlbfs.
+THP以後のコードパス: `__get_page_tail()` は `PageTail()` をチェックし、次にcompound pageのロックを取得し、ページがまだtailであることを再チェックし（チェックとロックの間に分割が起きた場合に備えて）、それから参照カウントをインクリメントし、ロックを解放した。THPにとっては正しい。hugetlbfsにとってはまったく不要である。
 
-The same pattern applied to `put_compound_page()`: releasing a reference to a compound page tail now went through a locking path that was designed to handle the case where a split might be in progress.
+同じパターンは `put_compound_page()` にも当てはまった。compound pageのtailへの参照の解放は、分割が進行中かもしれない場合を扱うために設計されたロックパスを通るようになった。
 
-On a benchmark doing I/O at hundreds of thousands of requests per second, with each I/O acquiring and releasing a page reference, this overhead compounded. The compound page lock became a hot spot. `perf top` showed it clearly; the diagnosis from there was straightforward.
+毎秒数十万リクエストでI/Oを行い、各I/Oがページ参照の取得と解放を行うベンチマークでは、このオーバーヘッドが積み重なった。compound pageのロックがホットスポットになった。`perf top` はそれをはっきり示しており、そこからの診断は単純だった。
 
-### The fix {#the-fix_1}
+### 修正 {#the-fix_1}
 
-Commit [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8) by Khalid Aziz, merged in v3.12 (November 2013), added a fast path that bypasses the split-protection locking for hugetlbfs pages. Hugetlbfs pages are identified by `PageHuge()`, which is set at allocation time and never cleared. If a compound page has `PageHuge()` set, it cannot be a transparent huge page, and therefore cannot be split. The lock is not needed.
+Khalid Azizによるコミット [7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8) はv3.12（2013年11月）でマージされ、hugetlbfsページについては分割保護のロックを迂回する高速パスを追加した。hugetlbfsページは `PageHuge()` で識別される。これは割り当て時に設定され、決してクリアされない。compound pageに `PageHuge()` が設定されていれば、それは透過的ヒュージページではありえず、したがって分割されえない。ロックは不要である。
 
 ```c
-/* Simplified version of the fix logic */
+/* 修正ロジックの簡略版 */
 static void __get_page_tail(struct page *page)
 {
     if (likely(!PageTail(page)))
         return;
 
-    /* Hugetlbfs pages cannot be split — skip the THP lock */
+    /* hugetlbfsページは分割できない — THPのロックをスキップする */
     if (PageHuge(compound_head(page))) {
         atomic_inc(&compound_head(page)->_count);
         return;
     }
 
-    /* THP pages need the lock to guard against concurrent splits */
-    /* ... THP-specific locking path ... */
+    /* THPページは並行分割から守るためロックが必要 */
+    /* ... THP固有のロックパス ... */
 }
 ```
 
-The result was immediate: 1MB read throughput recovered to 8,371 MB/s (versus the pre-THP baseline of 8,384 MB/s — effectively full recovery). 64KB throughput improved from 4,251 MB/s to 6,510 MB/s, a 53% improvement, though still below the pre-THP baseline — indicating additional overhead remained elsewhere in the 64KB path.
+効果は即座に現れた。1MB読み込みのスループットは8,371 MB/sに回復した（THP以前のベースライン8,384 MB/sと比べ、実質的に完全回復）。64KBのスループットは4,251 MB/sから6,510 MB/sへと53%改善したが、依然としてTHP以前のベースラインを下回っており、64KBのパスの別の箇所に追加のオーバーヘッドが残っていることを示していた。
 
-### Design lesson {#design-lesson_1}
+### 設計上の教訓 {#design-lesson_1}
 
-**Optimizations for a new feature must not add overhead to unrelated code paths.** THP's compound page split protection was necessary and correct for transparent huge pages. Applying it to all compound pages was a natural but incorrect generalization. The assumption was that the locking path was "fast enough" — but at hundreds of thousands of operations per second, even a small per-operation overhead accumulates into a major throughput regression.
+**新機能のための最適化が、無関係なコードパスにオーバーヘッドを加えてはならない。** THPのcompound page分割保護は、透過的ヒュージページにとって必要かつ正しかった。それをすべてのcompound pageに適用したのは、自然ではあるが誤った一般化だった。ロックパスは「十分に速い」と想定されていたが、毎秒数十万回の操作では、操作ごとのわずかなオーバーヘッドでも積み重なって大きなスループットのリグレッションになる。
 
-**`perf top` is the right first tool for unexplained CPU-bound regressions.** The regression showed up as increased CPU consumption (lower throughput at the same CPU utilization), not as increased latency or error rates. The instant `perf top` showed `__get_page_tail` at 40% of cycles, the investigation was effectively over.
+**説明のつかないCPUバウンドのリグレッションには、`perf top` が最初に使うべきツールである。** このリグレッションは、レイテンシやエラー率の増加としてではなく、CPU消費の増加（同じCPU使用率でのスループット低下）として現れた。`perf top` が `__get_page_tail` をサイクルの40%と示した瞬間、調査は実質的に終わっていた。
 
-**HPC and database AIO patterns stress reference counting.** Unlike workloads that allocate pages once and hold them, direct I/O patterns constantly acquire and release page references — one per I/O operation. Code on this path must be optimized at the instruction level, not just algorithmically. A single extra lock acquire per operation can be catastrophic.
+**HPCやデータベースのAIOパターンは参照カウントに負荷をかける。** ページを一度割り当てて保持し続けるワークロードと違い、ダイレクトI/Oのパターンはページ参照の取得と解放を絶えず行う（I/O操作ごとに1回）。このパス上のコードはアルゴリズムだけでなく命令レベルで最適化しなければならない。操作ごとに余分なロック取得が1つあるだけで壊滅的になりうる。
 
-!!! note "Design change that followed"
-    This bug led to more careful review of what compound page handling code applies to. The distinction between `PageHuge()` (cannot be split, no THP locking needed) and THP pages (can be split, locking needed) became an explicit consideration in the compound page code. Subsequent work on the folio abstraction further formalized the type distinctions that allow fast paths to be taken safely.
+!!! note "その後の設計変更"
+    このバグを契機に、compound page処理コードが何に適用されるかがより慎重にレビューされるようになった。`PageHuge()`（分割できず、THPのロック不要）とTHPページ（分割でき、ロックが必要）の区別は、compound pageのコードで明示的に考慮される事項になった。その後のfolio抽象化の取り組みは、高速パスを安全に通れるようにする型の区別をさらに形式化した。
 
-    To detect this class of regression, watch `perf top` for unexpectedly high time in reference-counting functions (`get_page`, `put_page`, `__get_page_tail`, `put_compound_page`, and their folio equivalents in newer kernels) during I/O-intensive workloads on hugetlbfs or large-page-backed memory.
+    この種のリグレッションを検出するには、hugetlbfsや大きなページで裏付けられたメモリ上でのI/O集約的なワークロード中に、参照カウント関数（`get_page`、`put_page`、`__get_page_tail`、`put_compound_page`、および新しいカーネルではそれらのfolio版）に予想外に多くの時間が費やされていないか、`perf top` で監視すること。
 
 ---
 
-## Bug 3: RSS Percpu Counter Inaccuracy and Wrong OOM Victims {#bug-3-rss-percpu-counter-inaccuracy-and-wrong-oom-victims}
+## バグ3: RSSのpercpuカウンタの不正確さと誤ったOOM犠牲プロセス {#bug-3-rss-percpu-counter-inaccuracy-and-wrong-oom-victims}
 
-*RSS conversion introduced in v6.2 (February 2023), commit [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1). Inaccuracy fixed in 2026, commit [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b).*
+*RSSの変換はv6.2（2023年2月）で導入、コミット [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1)。不正確さは2026年に修正、コミット [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b)。*
 
-### The symptom {#the-symptom_2}
+### 症状 {#the-symptom_2}
 
-After upgrading to a Linux v6.2 or later kernel, engineering teams running production services on large-core-count machines began seeing two categories of anomalous behavior.
+Linux v6.2以降のカーネルにアップグレードした後、多コアのマシンで本番サービスを運用するエンジニアリングチームは、2種類の異常な挙動を目にするようになった。
 
-The first: monitoring systems that watched RSS to detect memory overuse started firing spuriously. A service expected to use approximately 100MB of memory — monitored by a watchdog process reading `/proc/<pid>/status` — was reporting RSS tens of megabytes higher than expected. On a machine with 250 CPU cores, a five-thread service could appear to use 100MB more memory than it actually did. For services close to their monitored limit, this caused unnecessary alerts and restarts.
+1つ目: メモリの使いすぎを検出するためにRSSを監視していたモニタリングシステムが、誤って発報するようになった。約100MBのメモリを使うと想定されたサービス（`/proc/<pid>/status` を読むウォッチドッグプロセスが監視していた）が、想定より数十メガバイト多いRSSを報告していた。250 CPUコアのマシンでは、5スレッドのサービスが実際より100MB多くメモリを使っているように見えることがあった。監視上の上限に近いサービスでは、これが不要なアラートや再起動を引き起こした。
 
-The second, more serious: when the system did reach an OOM condition, the kernel killed the wrong process. A low-memory service that happened to have a large apparent RSS (due to the accounting inaccuracy) would be selected as the OOM victim even when higher-memory services were the real cause of pressure. The service with the highest real memory usage survived; a lighter service was killed in its place. This made OOM situations harder to recover from and harder to diagnose.
+2つ目は、より深刻だった。システムが実際にOOM状態に達したとき、カーネルが誤ったプロセスをkillしたのである。（アカウンティングの不正確さのせいで）見かけのRSSがたまたま大きかった低メモリのサービスが、よりメモリを使うサービスが真の圧迫の原因であるにもかかわらず、OOMの犠牲プロセスとして選ばれた。実際のメモリ使用量が最も多いサービスは生き残り、代わりに軽いサービスがkillされた。これにより、OOM状況からの回復も診断も難しくなった。
 
-Both symptoms appeared after the v6.2 kernel upgrade and disappeared when reverting to v5.x. The upgrade was the only change.
+どちらの症状もv6.2カーネルへのアップグレード後に現れ、v5.xに戻すと消えた。アップグレードが唯一の変更だった。
 
-### Investigation {#investigation_2}
+### 調査 {#investigation_2}
 
-The investigation began with the monitoring anomaly. The watchdog was reading `/proc/<pid>/status`:
+調査はモニタリングの異常から始まった。ウォッチドッグは `/proc/<pid>/status` を読んでいた:
 
 ```bash
 cat /proc/<pid>/status | grep VmRSS
-# VmRSS:    156432 kB   ← reported
-# Expected: ~102400 kB (100MB)
-# Discrepancy: ~54MB
+# VmRSS:    156432 kB   ← 報告された値
+# 期待値: ~102400 kB (100MB)
+# 差異: ~54MB
 ```
 
-The discrepancy varied between reads and was larger on machines with more CPUs. This suggested a statistical rather than deterministic accounting error. The natural hypothesis: something changed in how RSS is counted.
+差異は読み取りごとに変動し、CPUの多いマシンほど大きかった。これは決定的なものではなく統計的なアカウンティング誤差を示唆していた。自然な仮説は、RSSの数え方で何かが変わったというものだった。
 
-Examining the v6.2 kernel changelog pointed directly to commit [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1) ("mm: convert mm's rss stats into percpu_counter"). This commit changed the per-thread RSS batching model.
+v6.2カーネルの変更履歴を調べると、コミット [f1a7941243c1](https://git.kernel.org/linus/f1a7941243c1)（"mm: convert mm's rss stats into percpu_counter"）に直接行き着いた。このコミットはスレッドごとのRSSバッチ処理モデルを変更した。
 
-**Before v6.2**: Each thread maintained a private RSS counter with a flush threshold of `TASK_RSS_EVENTS_THRESH` (64 pages = 256KB). When a thread's counter exceeded the threshold, it was flushed to the per-`mm_struct` atomic counter. The maximum error at any moment was `nr_threads × 64 pages`. For a five-thread process: 5 × 64 × 4KB = 1.25MB. Small and bounded.
+**v6.2以前**: 各スレッドは私的なRSSカウンタを持ち、そのフラッシュしきい値は `TASK_RSS_EVENTS_THRESH`（64ページ = 256KB）だった。スレッドのカウンタがしきい値を超えると、`mm_struct` ごとのアトミックカウンタにフラッシュされた。任意の時点での最大誤差は `nr_threads × 64 pages` だった。5スレッドのプロセスなら 5 × 64 × 4KB = 1.25MB。小さく、上限がある。
 
-**After v6.2**: The commit converted RSS to use `percpu_counter`, the kernel's standard per-CPU approximate counter infrastructure. `percpu_counter` maintains a per-CPU batch and flushes to a global sum when the batch overflows. The batch size for `percpu_counter` scales with the number of CPUs: on a 250-CPU machine, the maximum error is approximately `nr_cpus × batch_size × nr_counters`. The commit message acknowledges this scaling:
+**v6.2以後**: このコミットは、RSSをカーネル標準のCPUごとの近似カウンタ基盤である `percpu_counter` を使うように変換した。`percpu_counter` はCPUごとのバッチを保持し、バッチがあふれるとグローバルな合計にフラッシュする。`percpu_counter` のバッチサイズはCPU数に応じて大きくなる。250 CPUのマシンでは、最大誤差はおよそ `nr_cpus × batch_size × nr_counters` になる。コミットメッセージはこのスケーリングを認めている:
 
 > *"convert the error margin from (nr_threads * 64) to approximately (nr_cpus ^ 2)"*
 
-The intent was to reduce lock contention on the per-`mm_struct` counter in highly multithreaded workloads, which was a real problem. But the tradeoff — error scaling approximately as CPU count squared — was not adequately considered in the contexts where RSS accuracy matters most: OOM victim selection and memory monitoring.
+意図は、高度にマルチスレッドなワークロードにおける `mm_struct` ごとのカウンタでのロック競合を減らすことであり、それは実在の問題だった。しかしそのトレードオフ（誤差がおよそCPU数の2乗で増える）は、RSSの正確さが最も重要な文脈、すなわちOOMの犠牲プロセス選択とメモリ監視において、十分に検討されていなかった。
 
-On a 250-CPU machine, the error margin grew from bounded kilobytes to potentially gigabytes. A single process could appear to have RSS several hundred megabytes different from its actual resident set size. The commit noted that readers like OOM killer and memory reclaim "are not performance critical and should be ok with slow read" — but it did not implement a precise read path, leaving them using the fast (inaccurate) counter.
+250 CPUのマシンでは、誤差の幅は上限のあるキロバイト単位から、潜在的にはギガバイト単位にまで拡大した。単一のプロセスのRSSが、実際の常駐セットサイズと数百メガバイト異なって見えることがあった。コミットは、OOM killerやメモリ回収のような読み手は「性能上クリティカルではなく、低速な読み取りでも問題ないはずだ（are not performance critical and should be ok with slow read）」と記していたが、正確な読み取りパスは実装しておらず、それらは高速な（不正確な）カウンタを使ったままになっていた。
 
-### Root cause {#root-cause_2}
+### 根本原因 {#root-cause_2}
 
-The `percpu_counter` infrastructure is designed for statistics where approximate values are sufficient: page counts, network packet counters, event rates. The `percpu_counter_read()` function returns the approximate value immediately. `percpu_counter_sum()` returns the precise value but is slow because it must sum across all per-CPU slots.
+`percpu_counter` 基盤は、近似値で十分な統計のために設計されている。ページ数、ネットワークパケットのカウンタ、イベントレートなどである。`percpu_counter_read()` 関数は近似値を即座に返す。`percpu_counter_sum()` は正確な値を返すが、すべてのCPUごとのスロットを合計しなければならないので低速である。
 
-After v6.2, `get_mm_counter()` — used throughout the OOM killer and in `/proc` RSS reporting — called `percpu_counter_read()`. This was accurate enough for short reports on small machines but degraded on large machines because threads migrated between CPUs during their lifetime, leaving stale values in per-CPU slots that were not yet flushed.
+v6.2以後、OOM killer全体と `/proc` のRSS報告で使われる `get_mm_counter()` は `percpu_counter_read()` を呼んでいた。これは小さなマシンでの短い報告には十分正確だったが、大きなマシンでは劣化した。スレッドが生涯の間にCPU間を移動し、まだフラッシュされていない古い値をCPUごとのスロットに残していくからである。
 
-The OOM killer path in `oom_badness()` used `get_mm_counter()` to read RSS for each process when selecting a victim. On a 250-CPU server:
+`oom_badness()` のOOM killerパスは、犠牲プロセスを選ぶ際に `get_mm_counter()` を使って各プロセスのRSSを読んでいた。250 CPUのサーバーでは:
 
-- Process A (the real memory hog): actual RSS 2GB, reported as 1.7GB
-- Process B (a small service): actual RSS 100MB, reported as 650MB
+- プロセスA（真のメモリ大食い）: 実際のRSS 2GB、報告値 1.7GB
+- プロセスB（小さなサービス）: 実際のRSS 100MB、報告値 650MB
 
-The OOM killer kills Process B. Process A continues running and immediately triggers another OOM. The system enters an OOM loop killing innocent services.
+OOM killerはプロセスBをkillする。プロセスAは動き続け、すぐに再びOOMを引き起こす。システムは無実のサービスをkillし続けるOOMループに入る。
 
-The bug report from Sweet Tea Dorminy, as quoted in the fix commit, described exactly this scenario occurring in production.
+修正コミットで引用されているSweet Tea Dorminyからのバグ報告は、まさにこのシナリオが本番環境で起きたことを記述していた。
 
-### The fix {#the-fix_2}
+### 修正 {#the-fix_2}
 
-Commit [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b) (January 2026) introduced `get_mm_counter_sum()`, which calls `percpu_counter_sum()` instead of `percpu_counter_read()` for contexts where accuracy matters. The OOM killer's victim selection, its console dump output, and the OOM reaper's progress reporting were all converted to use the precise version.
+コミット [5898aa8f9a0b](https://git.kernel.org/linus/5898aa8f9a0b)（2026年1月）は `get_mm_counter_sum()` を導入した。これは正確さが重要な文脈のために、`percpu_counter_read()` の代わりに `percpu_counter_sum()` を呼ぶ。OOM killerの犠牲プロセス選択、そのコンソールダンプ出力、OOM reaperの進捗報告は、すべて正確な版を使うように変換された。
 
-The tradeoff is explicit: `percpu_counter_sum()` must read all per-CPU slots, taking time proportional to the number of CPUs. For the OOM killer this is acceptable — OOM events are infrequent, and waiting a few extra microseconds for accurate RSS values is far preferable to killing the wrong process.
+トレードオフは明示的である。`percpu_counter_sum()` はすべてのCPUごとのスロットを読まなければならず、CPU数に比例した時間がかかる。OOM killerにとってこれは許容できる。OOMイベントはまれであり、正確なRSS値のために数マイクロ秒余分に待つ方が、誤ったプロセスをkillするよりはるかに望ましい。
 
 ```c
-/* Before fix — fast but potentially gigabytes off on large machines */
+/* 修正前 — 高速だが、大きなマシンではギガバイト単位でずれる可能性がある */
 points += get_mm_counter(p->mm, MM_ANONPAGES) +
           get_mm_counter(p->mm, MM_FILEPAGES) +
           get_mm_counter(p->mm, MM_SHMEMPAGES);
 
-/* After fix — slower but accurate when it counts */
+/* 修正後 — 低速だが、肝心なときに正確 */
 points += get_mm_counter_sum(p->mm, MM_ANONPAGES) +
           get_mm_counter_sum(p->mm, MM_FILEPAGES) +
           get_mm_counter_sum(p->mm, MM_SHMEMPAGES);
 ```
 
-The fix also addressed the same inaccuracy in the RSS values printed to the kernel log when an OOM kill occurs — previously, the logged RSS could be wildly wrong on large machines, making post-mortem analysis misleading.
+この修正は、OOM killが起きたときにカーネルログに出力されるRSS値の同じ不正確さにも対処した。以前は、大きなマシンではログに記録されるRSSが大きく外れることがあり、事後分析を誤らせていた。
 
-### Design lesson {#design-lesson_2}
+### 設計上の教訓 {#design-lesson_2}
 
-**Approximate counters are not interchangeable with exact counters in decision-making paths.** The `percpu_counter` infrastructure is deliberately approximate — that is its purpose. Converting an RSS counter to use it is an appropriate optimization for hot paths where exact values are not needed. The mistake was not providing a precise read path and ensuring that all callers requiring accuracy used it. The comment in the original commit ("OOM killer and memory reclaim are not performance critical and should be ok with slow read") identified the right concern but was not translated into code.
+**意思決定のパスにおいて、近似カウンタは正確なカウンタと交換可能ではない。** `percpu_counter` 基盤は意図的に近似的であり、それがその目的である。RSSカウンタをそれを使うように変換するのは、正確な値が不要なホットパスにとっては適切な最適化である。誤りは、正確な読み取りパスを提供し、正確さを必要とするすべての呼び出し元がそれを使うようにしなかったことだった。元のコミットのコメント（"OOM killer and memory reclaim are not performance critical and should be ok with slow read"）は正しい懸念を特定していたが、コードには反映されなかった。
 
-**The error bound of a counter must be understood relative to the values being measured.** A 1MB error margin in a 1GB RSS measurement is 0.1% — negligible. The same error formula on a 250-CPU machine produces errors in the hundreds of megabytes. When the error exceeds the difference in RSS between processes, the ranking used by the OOM killer is meaningless. Error analysis must be done in the context of real-world machine sizes, not development workstations.
+**カウンタの誤差の上限は、測定される値との相対で理解しなければならない。** 1GBのRSS測定における1MBの誤差幅は0.1%で、無視できる。同じ誤差の式でも、250 CPUのマシンでは数百メガバイトの誤差を生む。誤差がプロセス間のRSSの差を超えると、OOM killerが使う順位付けは無意味になる。誤差の分析は、開発用ワークステーションではなく、現実のマシンサイズの文脈で行わなければならない。
 
-**Wrong OOM kills cause cascading failures.** If the OOM killer kills the wrong process, memory is not freed from the real cause of pressure. Another OOM condition triggers quickly. The new victim is again selected inaccurately. Systems can enter OOM loops that kill many correct processes before the real culprit is finally selected — or never select it at all.
+**誤ったOOM killは連鎖的な障害を引き起こす。** OOM killerが誤ったプロセスをkillすると、真の圧迫の原因からはメモリが解放されない。すぐに別のOOM状態が発生する。新たな犠牲プロセスもまた不正確に選ばれる。システムはOOMループに入り、真の犯人が最終的に選ばれるまでに多くの正常なプロセスをkillすることがある。あるいは、いつまでも選ばれないこともある。
 
-!!! note "Design change that followed"
-    This bug reinforced a design rule: callers of RSS counters must explicitly choose between the approximate and precise read. The `get_mm_counter()` / `get_mm_counter_sum()` split makes this explicit. Any new caller of `get_mm_counter()` must consciously accept that it may be off by large amounts on many-core systems.
+!!! note "その後の設計変更"
+    このバグは、RSSカウンタの呼び出し元は近似的な読み取りと正確な読み取りのどちらかを明示的に選ばなければならないという設計ルールを強化した。`get_mm_counter()` / `get_mm_counter_sum()` の分割がこれを明示的にしている。`get_mm_counter()` の新たな呼び出し元は、多コアのシステムでは大きくずれうることを意識的に受け入れなければならない。
 
-    If you operate large servers (100+ CPU cores) and are running kernels v6.2 through approximately v6.24, verify whether your OOM kill logs show accurate RSS values by comparing the logged `anon-rss` against `/proc/<pid>/smaps_rollup` for the killed process at OOM time. If the logged values differ substantially from expected, this bug may be affecting your OOM victim selection.
+    大規模サーバー（100以上のCPUコア）を運用していて、v6.2からおよそv6.24までのカーネルを動かしているなら、OOM kill時にログに記録された `anon-rss` を、killされたプロセスの `/proc/<pid>/smaps_rollup` と比較して、OOM killのログが正確なRSS値を示しているか確認すること。ログに記録された値が期待値と大きく異なる場合、このバグがOOMの犠牲プロセス選択に影響している可能性がある。
 
     ```bash
-    # Check kernel version for the fix
+    # 修正が入っているかカーネルバージョンを確認する
     uname -r
-    # Fix is in commits merged after January 2026
+    # 修正は2026年1月以降にマージされたコミットに含まれる
 
-    # At OOM time, the kernel logs:
+    # OOM時、カーネルは次のようにログを出す:
     # "Killed process <pid> (<name>) total-vm:X anon-rss:Y file-rss:Z"
-    # On a v6.2-v6.24 kernel with 100+ CPUs, Y and Z may be significantly wrong
+    # 100以上のCPUを持つv6.2-v6.24カーネルでは、YとZが大きく誤っている可能性がある
     ```
 
 ---
 
-## Summary: What These Bugs Have in Common {#summary-what-these-bugs-have-in-common}
+## まとめ: これらのバグに共通すること {#summary-what-these-bugs-have-in-common}
 
-All three bugs share a structural pattern that appears repeatedly in mm development:
+3つのバグはすべて、mmの開発で繰り返し現れる構造的なパターンを共有している:
 
-| Pattern | zone_reclaim_mode | THP compound locking | RSS percpu inaccuracy |
+| パターン | zone_reclaim_mode | THPのcompoundロック | RSS percpuの不正確さ |
 |---------|-------------------|----------------------|----------------------|
-| **Assumption that failed** | NUMA workloads are partitioned | All compound pages can be split | Approximate counts are good enough everywhere |
-| **Who was affected** | Multi-socket NUMA servers | Hugetlbfs + AIO (databases) | Many-core servers (100+ CPUs) |
-| **Detection tool** | numastat, vmstat | perf top | /proc/status, OOM logs |
-| **Time to default fix** | ~8 years | ~2 years | ~3 years |
-| **Fix type** | Changed default | Added fast path | Added precise read path |
+| **破綻した前提** | NUMAワークロードは分割されている | すべてのcompound pageは分割されうる | 近似カウントはどこでも十分 |
+| **影響を受けた対象** | マルチソケットNUMAサーバー | hugetlbfs + AIO（データベース） | 多コアサーバー（100以上のCPU） |
+| **検出ツール** | numastat、vmstat | perf top | /proc/status、OOMログ |
+| **デフォルト修正までの期間** | 約8年 | 約2年 | 約3年 |
+| **修正の種類** | デフォルトを変更 | 高速パスを追加 | 正確な読み取りパスを追加 |
 
-The recurring theme: **an optimization correct in one context becomes harmful in a different context**, and the harm is difficult to see without knowing what to look for. All three bugs survived in production for years because their signatures were "unexplained performance degradation" or "occasional wrong behavior" rather than crashes or data loss.
+繰り返し現れるテーマは、**ある文脈で正しい最適化が、別の文脈では有害になる**ことであり、その害は何を探すべきか知らなければ見えにくい。3つのバグがいずれも本番環境で何年も生き残ったのは、その兆候がクラッシュやデータ損失ではなく、「説明のつかない性能劣化」や「ときどき起きる誤った挙動」だったからである。
 
-!!! note "Investigation toolkit for mm bugs"
-    These three bugs can be investigated with standard Linux tools:
+!!! note "mmバグの調査ツールキット"
+    これら3つのバグは、標準的なLinuxツールで調査できる:
 
     ```bash
-    # zone_reclaim_mode: check NUMA reclaim activity
+    # zone_reclaim_mode: NUMA回収の活動を確認する
     cat /proc/sys/vm/zone_reclaim_mode
     cat /proc/vmstat | grep zone_reclaim
 
-    # Compound page locking: profile reference counting overhead
+    # compound pageのロック: 参照カウントのオーバーヘッドをプロファイルする
     perf top -e cycles:k
-    # Look for get_page, put_page, __folio_put variants at high percentages
+    # get_page、put_page、__folio_putの各種が高い割合になっていないか探す
 
-    # RSS accuracy: compare approximate vs. precise RSS
-    cat /proc/<pid>/status | grep VmRSS       # uses approximate counter
-    cat /proc/<pid>/smaps_rollup | grep Rss   # forces precise accounting
-    # Large discrepancy on many-core systems indicates the percpu inaccuracy
+    # RSSの正確さ: 近似RSSと正確なRSSを比較する
+    cat /proc/<pid>/status | grep VmRSS       # 近似カウンタを使う
+    cat /proc/<pid>/smaps_rollup | grep Rss   # 正確なアカウンティングを強制する
+    # 多コアシステムで大きな差異があれば、percpuの不正確さを示す
     ```
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [thp.md](thp.md) — THP configuration, defrag modes, and khugepaged tuning
-- [oom.md](oom.md) — OOM killer mechanics, deadlocks, and the OOM reaper
-- [war-stories-regressions.md](war-stories-regressions.md) — Performance regressions from mm changes (THP defrag stalls, NUMA balancing overhead, khugepaged CPU storms)
-- [war-stories-cves.md](war-stories-cves.md) — Security vulnerability narratives (Dirty COW, StackRot, THP COW race)
-- [numa.md](numa.md) — NUMA memory policy and the zone_reclaim design
-- [reclaim.md](reclaim.md) — How kswapd and direct reclaim work
+- [thp.md](thp.md) — THPの設定、defragモード、khugepagedのチューニング
+- [oom.md](oom.md) — OOM killerの仕組み、デッドロック、OOM reaper
+- [war-stories-regressions.md](war-stories-regressions.md) — mmの変更による性能リグレッション（THP defragのストール、NUMAバランシングのオーバーヘッド、khugepagedのCPUストーム）
+- [war-stories-cves.md](war-stories-cves.md) — セキュリティ脆弱性の記録（Dirty COW、StackRot、THP COWの競合）
+- [numa.md](numa.md) — NUMAメモリポリシーとzone_reclaimの設計
+- [reclaim.md](reclaim.md) — kswapdと直接回収の仕組み
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Reading an OOM log](reading-oom-log.md) — how to parse the dmesg output from a real OOM event, including the task table and scoring fields discussed in Bug 3
-- [/proc/vmstat reference](proc-vmstat.md) — `zone_reclaim_failed` and other counters relevant to diagnosing Bug 1
-- [Tuning Memory for Databases](tuning-databases.md) — practical `vm.zone_reclaim_mode`, huge pages, and NUMA interleave settings that address the root causes behind Bugs 1 and 2
-- [LWN: NUMA in a hurry](https://lwn.net/Articles/473440/) — background on NUMA memory management and why local-first reclaim was originally introduced
-- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) — original THP design covering the compound page model that led to Bug 2
-- [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()` scoring, victim selection, and the `get_mm_counter` calls fixed in Bug 3
-- [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `node_reclaim()` implementing the zone_reclaim_mode policy from Bug 1
-- [Commit 4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753) — Mel Gorman's commit disabling `zone_reclaim_mode` by default, with detailed rationale
-- [Commit 7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8) — Khalid Aziz's fix adding the `PageHuge()` fast path that resolved Bug 2
+- [OOMログの読み方](reading-oom-log.md) — 実際のOOMイベントのdmesg出力を解析する方法。バグ3で論じたタスク表とスコアのフィールドを含む
+- [/proc/vmstatリファレンス](proc-vmstat.md) — `zone_reclaim_failed` など、バグ1の診断に関係するカウンタ
+- [データベース向けのメモリチューニング](tuning-databases.md) — バグ1と2の根本原因に対処する、実践的な `vm.zone_reclaim_mode`、ヒュージページ、NUMAインターリーブの設定
+- [LWN: NUMA in a hurry](https://lwn.net/Articles/473440/) — NUMAメモリ管理の背景と、ローカル優先の回収がもともと導入された理由
+- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) — バグ2につながったcompound pageモデルを扱う、THPの元の設計
+- [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()` のスコアリング、犠牲プロセスの選択、バグ3で修正された `get_mm_counter` の呼び出し
+- [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — バグ1のzone_reclaim_modeポリシーを実装する `node_reclaim()`
+- [Commit 4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753) — `zone_reclaim_mode` をデフォルトで無効化したMel Gormanのコミット。詳細な根拠付き
+- [Commit 7cb2ef56e6a8](https://git.kernel.org/linus/7cb2ef56e6a8) — バグ2を解決した `PageHuge()` 高速パスを追加したKhalid Azizの修正

@@ -1,408 +1,408 @@
-# War Stories: Performance Regressions from mm Changes {#war-stories-performance-regressions-from-mm-changes}
+# 事件簿: mmの変更による性能リグレッション {#war-stories-performance-regressions-from-mm-changes}
 
-> Real regressions from Linux memory management changes — what broke, why, and what the kernel learned
+> Linuxメモリ管理の変更によって実際に起きたリグレッション。何が壊れ、なぜ壊れ、カーネルが何を学んだか
 
-Memory management is one of the most performance-sensitive parts of the kernel. Changes that look correct on paper — and that pass all existing tests — can cause severe regressions in production workloads that the test suite never exercised. This page documents four well-known regressions drawn from public LWN articles, kernel commit logs, and LKML discussions.
+メモリ管理は、カーネルの中で最も性能に敏感な部分の1つである。机上では正しく見え、既存のすべてのテストに合格する変更でも、テストスイートが一度も試さなかった本番ワークロードで深刻なリグレッションを引き起こすことがある。このページでは、公開されているLWNの記事、カーネルのコミットログ、LKMLの議論から、よく知られた4つのリグレッションを取り上げる。
 
-These are not hypothetical risks. Each caused real outages or performance degradations that drove kernel developers to add new tunables, redesign subsystems, or rethink default behavior.
+これらは仮定上のリスクではない。いずれも実際の障害や性能劣化を引き起こし、カーネル開発者に新たなチューニング可能なパラメータの追加、サブシステムの再設計、デフォルト挙動の再考を促した。
 
 ---
 
-## Case 1: THP defrag=always and synchronous compaction stalls (v2.6.38–v4.x) {#case-1-thp-defragalways-and-synchronous-compaction-stalls-v2638v4x}
+## ケース1: THPのdefrag=alwaysと同期コンパクションによるストール（v2.6.38–v4.x） {#case-1-thp-defragalways-and-synchronous-compaction-stalls-v2638v4x}
 
-### Before state {#before-state}
+### 事前の状態 {#before-state}
 
-Before Transparent Huge Pages (v2.6.38, 2011), applications ran entirely on 4KB pages. Latency-sensitive workloads like Redis or database buffer pools were predictable: a page fault was a page fault, taking roughly the same time every time.
+Transparent Huge Pages（v2.6.38、2011年）以前、アプリケーションは完全に4KBページの上で動いていた。Redisやデータベースのバッファプールのようなレイテンシに敏感なワークロードは予測可能だった。ページフォールトはページフォールトであり、毎回ほぼ同じ時間で済んだ。
 
-### The change {#the-change}
+### 変更 {#the-change}
 
-THP shipped in v2.6.38 with `defrag=always` as the default mode for the `defrag` knob. This meant that every time the kernel tried to allocate a 2MB huge page and physical memory was fragmented, it would invoke synchronous memory compaction inline — in the page fault handler, while the faulting process was blocked waiting for the fault to complete.
+THPはv2.6.38で、`defrag` ノブのデフォルトモードを `defrag=always` として出荷された。これは、カーネルが2MBのヒュージページを割り当てようとして物理メモリが断片化していると、そのたびに同期的なメモリコンパクションをインラインで（ページフォールトハンドラの中で、フォールトしたプロセスがフォールトの完了を待ってブロックされている間に）実行することを意味した。
 
-The intent was sound: compact memory eagerly so that huge pages are always available. The problem was that compaction is expensive. It scans large ranges of physical memory, identifies movable pages, and migrates them to create a 2MB contiguous region. On a loaded system, this work could take many milliseconds.
+意図は妥当だった。ヒュージページが常に利用できるよう、積極的にメモリをコンパクションするというものである。問題は、コンパクションが高コストなことだった。物理メモリの広い範囲をスキャンし、移動可能なページを特定し、それらを移行して2MBの連続領域を作る。負荷のかかったシステムでは、この作業に何ミリ秒もかかることがあった。
 
-### Observed regression {#observed-regression}
+### 観測されたリグレッション {#observed-regression}
 
-Latency-sensitive applications — Redis instances, PostgreSQL, MySQL, and Java workloads with large heap sizes — began reporting random latency spikes. A request that normally completed in under a millisecond would occasionally take tens of milliseconds or more. The spikes were irregular and hard to reproduce in testing because they depended on the fragmentation state of physical memory, which varied with system uptime and allocation patterns.
+レイテンシに敏感なアプリケーション（Redisインスタンス、PostgreSQL、MySQL、大きなヒープサイズを持つJavaワークロード）が、ランダムなレイテンシのスパイクを報告し始めた。通常1ミリ秒未満で完了するリクエストが、ときおり数十ミリ秒以上かかった。スパイクは不規則で、テストでは再現しにくかった。物理メモリの断片化状態に依存しており、それはシステムの稼働時間や割り当てパターンによって変わったからである。
 
-The pattern was first widely noticed and documented in LWN coverage of THP behavior (see [LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/) and subsequent follow-up articles). Database operators discovered that enabling THP — often enabled by default in distributions — was causing the problem.
+このパターンが最初に広く気づかれ記録されたのは、THPの挙動に関するLWNの記事においてだった（[LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/)とその後の続報を参照）。データベースの運用者たちは、THPの有効化（ディストリビューションではしばしばデフォルトで有効だった）が問題を引き起こしていることを突き止めた。
 
-### Why it happened {#why-it-happened}
+### なぜ起きたか {#why-it-happened}
 
-The compaction path (`try_to_compact_pages` → `compact_zone`) walks physical memory looking for movable pages and free pages to create a contiguous 2MB region. This work scales with the number of pages scanned, not the size of the allocation. On a fragmented 64GB system, satisfying a single 2MB THP allocation could require scanning and migrating hundreds of megabytes of physical memory.
+コンパクションのパス（`try_to_compact_pages` → `compact_zone`）は、2MBの連続領域を作るために、移動可能なページと空きページを探して物理メモリを走査する。この作業は割り当てのサイズではなく、スキャンするページ数に比例して増える。断片化した64GBのシステムでは、たった1つの2MBのTHP割り当てを満たすために、数百メガバイトの物理メモリをスキャンして移行する必要がありえた。
 
-This happened synchronously in the fault path. The faulting process was blocked the entire time. From the application's perspective, a normal anonymous page fault took an unpredictable, arbitrarily long time.
+これはフォールトパスの中で同期的に起きた。フォールトしたプロセスはその間ずっとブロックされていた。アプリケーションから見ると、通常の無名ページフォールトに予測不能かつ任意に長い時間がかかった。
 
-Worse, the trigger was non-deterministic: compaction was only needed when memory was fragmented. A freshly booted system rarely triggered it. A system that had been running for hours, with many allocations and frees creating "Swiss cheese" fragmentation, triggered it constantly.
+さらに悪いことに、きっかけは非決定的だった。コンパクションが必要になるのはメモリが断片化しているときだけだった。起動したばかりのシステムではめったに起きなかった。何時間も動き続け、多数の割り当てと解放で「スイスチーズ」状の断片化が生じたシステムでは、絶えず起きた。
 
-### Resolution {#resolution}
+### 解決 {#resolution}
 
-The kernel added new `defrag` modes to give operators and applications more control:
+カーネルは、運用者とアプリケーションがより細かく制御できるよう、新しい `defrag` モードを追加した:
 
 ```bash
-# View current defrag mode
+# 現在のdefragモードを表示する
 cat /sys/kernel/mm/transparent_hugepage/defrag
 # [always] defer defer+madvise madvise never
 
-# Avoid synchronous compaction on fault
+# フォールト時の同期コンパクションを避ける
 echo defer+madvise > /sys/kernel/mm/transparent_hugepage/defrag
 
-# Or opt out of defrag entirely
+# あるいはdefragから完全に外れる
 echo madvise > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-The `defer` mode (added in v4.6, commit [444eb2a449ef](https://git.kernel.org/linus/444eb2a449ef)) hands defragmentation off to khugepaged to do asynchronously in the background, rather than stalling the faulting process. The `defer+madvise` mode combines this: asynchronous for all memory, but synchronous only for regions that the application has explicitly tagged with `MADV_HUGEPAGE`.
+`defer` モード（v4.6で追加、コミット [444eb2a449ef](https://git.kernel.org/linus/444eb2a449ef)）は、フォールトしたプロセスをストールさせる代わりに、デフラグをkhugepagedに渡してバックグラウンドで非同期に行わせる。`defer+madvise` モードはこれを組み合わせたもので、すべてのメモリについては非同期だが、アプリケーションが明示的に `MADV_HUGEPAGE` でタグ付けした領域についてのみ同期的に行う。
 
-Applications that genuinely need huge pages and can tolerate occasional stalls (such as KVM guests doing large sequential allocations) can opt in to synchronous defrag per-region using `madvise`:
+本当にヒュージページを必要とし、ときおりのストールを許容できるアプリケーション（大きな連続割り当てを行うKVMゲストなど）は、`madvise` を使って領域ごとに同期defragにオプトインできる:
 
 ```c
-/* Only compact synchronously for this specific region */
+/* この特定の領域についてのみ同期的にコンパクションする */
 madvise(ptr, size, MADV_HUGEPAGE);
 ```
 
-Meanwhile, latency-sensitive workloads that never needed THP got guidance to disable it entirely:
+一方、THPを一度も必要としなかったレイテンシに敏感なワークロードには、完全に無効化するよう指針が示された:
 
 ```bash
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-Many Linux distributions changed their defaults away from `defrag=always` as a result of this class of regression. See [compaction.md](compaction.md) for how compaction works and [thp.md](thp.md) for THP configuration details.
+この種のリグレッションの結果、多くのLinuxディストリビューションはデフォルトを `defrag=always` から変更した。コンパクションの仕組みについては[compaction.md](compaction.md)を、THPの設定の詳細については[thp.md](thp.md)を参照。
 
-### What it taught us {#what-it-taught-us}
+### 教訓 {#what-it-taught-us}
 
-**Synchronous work in the fault path has unbounded latency.** Any operation that can scale with system state (fragmentation, memory size) and runs inline during a page fault will produce latency spikes proportional to that state. The lesson generalized beyond THP: the kernel should never do expensive, open-ended work in a path that a latency-sensitive process is blocked on.
+**フォールトパスでの同期的な作業のレイテンシには上限がない。** システムの状態（断片化、メモリサイズ）に応じて増大しうる操作をページフォールト中にインラインで実行すると、その状態に比例したレイテンシのスパイクが生じる。この教訓はTHPを超えて一般化された。レイテンシに敏感なプロセスがブロックされるパスで、カーネルは高コストで際限のない作業をしてはならない。
 
-**Opt-in semantics for expensive optimizations matter.** THP delivered real throughput wins for workloads with large, contiguous working sets — but the default behavior of `defrag=always` imposed those costs on all workloads, including ones that never benefited. The fix was not to remove the optimization but to make its most expensive part opt-in.
+**高コストな最適化はオプトインにすることが重要である。** THPは大きく連続したワーキングセットを持つワークロードに実際のスループット向上をもたらした。しかし `defrag=always` のデフォルト挙動は、その恩恵を一切受けないものも含め、すべてのワークロードにそのコストを課した。修正は最適化を取り除くことではなく、その最も高コストな部分をオプトインにすることだった。
 
-!!! warning "Pattern to watch for"
-    If your application shows irregular latency spikes that appear only after the system has been running for hours (not at startup), and the spikes are not correlated with I/O or CPU saturation, check whether THP defrag is triggering synchronous compaction. Look for time spent in `try_to_compact_pages` via `perf top` or trace the `mm_compaction_begin` tracepoint.
+!!! warning "注意すべきパターン"
+    アプリケーションに、（起動時ではなく）システムが何時間も動いた後にだけ現れる不規則なレイテンシのスパイクがあり、そのスパイクがI/OやCPU飽和と相関していないなら、THPのdefragが同期コンパクションを引き起こしていないか確認すること。`perf top` で `try_to_compact_pages` に費やされた時間を探すか、`mm_compaction_begin` tracepointをトレースする。
 
     ```bash
-    # Check for compaction events
+    # コンパクションのイベントを確認する
     cat /proc/vmstat | grep compact
-    # compact_stall: number of times a process stalled for compaction
-    # compact_fail:  compaction ran but did not produce a huge page
+    # compact_stall: プロセスがコンパクションのためにストールした回数
+    # compact_fail:  コンパクションが実行されたがヒュージページを生成できなかった
     ```
 
 ---
 
-## Case 2: Automatic NUMA balancing overhead (v3.13) {#case-2-automatic-numa-balancing-overhead-v313}
+## ケース2: 自動NUMAバランシングのオーバーヘッド（v3.13） {#case-2-automatic-numa-balancing-overhead-v313}
 
-### Before state {#before-state_1}
+### 事前の状態 {#before-state_1}
 
-Before v3.13, NUMA-aware placement was entirely the application's responsibility. Operators used `numactl --membind` or `numactl --interleave` to control where memory was allocated, and workloads that cared about locality had to be tuned manually. Most workloads ran without any NUMA policy and got whatever the default allocator gave them (typically local-node allocation via the `MPOL_DEFAULT` policy).
+v3.13以前、NUMAを意識した配置は完全にアプリケーションの責任だった。運用者は `numactl --membind` や `numactl --interleave` を使ってメモリの割り当て先を制御し、局所性を気にするワークロードは手動でチューニングしなければならなかった。ほとんどのワークロードはNUMAポリシーなしで動き、デフォルトのアロケータが与えるもの（典型的には `MPOL_DEFAULT` ポリシーによるローカルノード割り当て）を受け取っていた。
 
-This was imperfect — processes could migrate between CPUs and end up with remote memory — but it was **predictable**. The kernel did not move pages after they were allocated.
+これは不完全だった（プロセスがCPU間を移動してリモートメモリを持つことになりえた）が、**予測可能**だった。カーネルは割り当て後にページを移動しなかった。
 
-### The change {#the-change_1}
+### 変更 {#the-change_1}
 
-Automatic NUMA balancing (`CONFIG_NUMA_BALANCING`) was introduced in v3.13 by Mel Gorman. The design addressed a real problem: processes that migrated between NUMA nodes ended up accessing remote memory, paying a latency penalty on every access. The kernel had no mechanism to detect this and correct it.
+自動NUMAバランシング（`CONFIG_NUMA_BALANCING`）は、Mel Gormanによってv3.13で導入された。この設計は実在の問題に取り組むものだった。NUMAノード間を移動したプロセスはリモートメモリにアクセスすることになり、すべてのアクセスでレイテンシのペナルティを払っていた。カーネルにはこれを検出して是正する仕組みがなかった。
 
-The mechanism worked by periodically unmapping pages (marking PTEs as inaccessible) to catch access faults. When a process faulted on a page it had previously accessed, the kernel recorded which CPU caused the fault, measured the locality, and could decide to migrate the page closer to that CPU. The scanning was rate-limited by `numa_balancing_scan_period_min_ms` and `numa_balancing_scan_size_mb`.
+この仕組みは、アクセスフォールトを捕捉するために定期的にページをアンマップする（PTEをアクセス不能にマークする）ことで動作した。プロセスが以前アクセスしたページでフォールトすると、カーネルはどのCPUがフォールトを起こしたかを記録し、局所性を測定し、そのCPUに近い場所へページを移行するかどうかを判断できた。スキャンは `numa_balancing_scan_period_min_ms` と `numa_balancing_scan_size_mb` でレート制限されていた。
 
-### Observed regression {#observed-regression_1}
+### 観測されたリグレッション {#observed-regression_1}
 
-Several classes of workload regressed:
+いくつかの種類のワークロードでリグレッションが起きた:
 
-**HPC and batch workloads** that had carefully placed their memory with `numactl` or `mbind` found that the kernel was now unmapping and re-migrating pages that were already in the right place. The extra faults and TLB shootdowns added overhead with no benefit.
+**HPCやバッチのワークロード**で、`numactl` や `mbind` でメモリを慎重に配置していたものは、すでに正しい場所にあるページをカーネルがアンマップし、再移行するようになったことに気づいた。余分なフォールトとTLBシュートダウンは、何の利益もなくオーバーヘッドを加えた。
 
-**Workloads with shared memory** — multiple processes accessing the same pages — saw contention. When two processes on different NUMA nodes both access a shared page, NUMA balancing cannot satisfy both; it may migrate the page back and forth, causing what is known as NUMA page thrashing.
+**共有メモリを使うワークロード**（複数のプロセスが同じページにアクセスするもの）では競合が見られた。異なるNUMAノード上の2つのプロセスが共有ページにアクセスすると、NUMAバランシングは両方を満足させられない。ページを行ったり来たりさせて移行することがあり、NUMAページスラッシングと呼ばれる状態を引き起こした。
 
-**Latency-sensitive workloads** noticed that the periodic unmapping caused bursts of minor faults that temporarily increased access latency. Even if the page was not migrated, the TLB miss caused by the intentional unmap added latency to subsequent accesses until the TLB was re-populated.
+**レイテンシに敏感なワークロード**は、定期的なアンマップがマイナーフォールトのバーストを引き起こし、一時的にアクセスレイテンシを増加させることに気づいた。ページが移行されなかった場合でも、意図的なアンマップによって生じたTLBミスが、TLBが再充填されるまで後続のアクセスにレイテンシを加えた。
 
-The regressions were documented in LKML discussions shortly after v3.13 shipped (see the `linux-numa` and `linux-mm` archives from early 2014) and in LWN's coverage of NUMA balancing.
+これらのリグレッションは、v3.13の出荷直後のLKMLの議論（2014年初頭の `linux-numa` と `linux-mm` のアーカイブを参照）や、NUMAバランシングに関するLWNの記事で記録されている。
 
-### Why it happened {#why-it-happened_1}
+### なぜ起きたか {#why-it-happened_1}
 
-The core mechanism — intentionally unmapping pages to catch faults — has inherent cost regardless of whether migration occurs:
+中核の仕組み（フォールトを捕捉するために意図的にページをアンマップする）には、移行が起きるかどうかにかかわらず固有のコストがある:
 
-1. **TLB shootdowns**: Unmapping a page that is mapped in multiple processes requires sending inter-processor interrupts to all CPUs that have a TLB entry for that page. On large NUMA systems with many CPUs, this is expensive.
+1. **TLBシュートダウン**: 複数のプロセスにマップされているページをアンマップするには、そのページのTLBエントリを持つすべてのCPUにプロセッサ間割り込みを送る必要がある。多数のCPUを持つ大規模NUMAシステムでは、これは高コストである。
 
-2. **Page table lock contention**: Scanning and modifying PTEs requires holding page table locks, which contend with the application's own page fault handling.
+2. **ページテーブルロックの競合**: PTEのスキャンと変更にはページテーブルロックの保持が必要で、アプリケーション自身のページフォールト処理と競合する。
 
-3. **Migration overhead when pages are already local**: If a workload was already correctly placed (e.g., via `numactl`), NUMA balancing would still scan, unmap, and fault — incurring overhead without delivering benefit.
+3. **ページがすでにローカルにある場合の移行オーバーヘッド**: ワークロードがすでに正しく配置されていても（例: `numactl` によって）、NUMAバランシングはスキャン、アンマップ、フォールトを行い続け、利益をもたらさずにオーバーヘッドを生じた。
 
-4. **Shared pages amplify contention**: Two threads on different nodes racing to pull a shared page local will each trigger migration, resulting in the page bouncing between nodes.
+4. **共有ページが競合を増幅する**: 異なるノード上の2つのスレッドが共有ページを自分のローカルに引き寄せようと競合すると、それぞれが移行を引き起こし、ページがノード間を跳ね回る結果になる。
 
-The problem was that NUMA balancing applied to all processes by default, including those that had already been carefully tuned or that had workloads unsuitable for automatic migration.
+問題は、NUMAバランシングがデフォルトですべてのプロセスに適用されていたことだった。すでに慎重にチューニングされていたものや、自動移行に適さないワークロードを持つものも含めてである。
 
-### Resolution {#resolution_1}
+### 解決 {#resolution_1}
 
-The kernel added sysctls to control NUMA balancing behavior:
+カーネルはNUMAバランシングの挙動を制御するsysctlを追加した:
 
 ```bash
-# Disable automatic NUMA balancing system-wide
+# システム全体で自動NUMAバランシングを無効化する
 echo 0 > /proc/sys/kernel/numa_balancing
 
-# Check current state
+# 現在の状態を確認する
 cat /proc/sys/kernel/numa_balancing
 ```
 
-Per-process control is available via the `prctl` interface:
+プロセスごとの制御は `prctl` インターフェイスで利用できる:
 
 ```c
-/* Disable NUMA balancing for this process */
-prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0);  /* not NUMA-specific */
+/* このプロセスのNUMAバランシングを無効化する */
+prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0);  /* NUMA固有ではない */
 
-/* Use NUMA policy instead */
+/* 代わりにNUMAポリシーを使う */
 /* mbind(addr, len, MPOL_BIND, nodemask, maxnode, flags) */
 ```
 
-Scan rate tunables were also refined over subsequent releases:
+スキャンレートのチューニング可能なパラメータも、その後のリリースで改良された:
 
 ```bash
-# How long to wait before re-scanning a region (milliseconds)
-cat /proc/sys/kernel/numa_balancing_scan_period_min_ms  # default: 1000
-cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # default: 60000
+# 領域を再スキャンするまでの待ち時間（ミリ秒）
+cat /proc/sys/kernel/numa_balancing_scan_period_min_ms  # デフォルト: 1000
+cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # デフォルト: 60000
 
-# How much memory to scan per period (MB)
-cat /proc/sys/kernel/numa_balancing_scan_size_mb        # default: 256
+# 1周期あたりにスキャンするメモリ量（MB）
+cat /proc/sys/kernel/numa_balancing_scan_size_mb        # デフォルト: 256
 
-# How long to delay migration after detecting a fault (ms)
-cat /proc/sys/kernel/numa_balancing_scan_delay_ms       # default: 1000
+# フォールト検出後に移行を遅らせる時間（ms）
+cat /proc/sys/kernel/numa_balancing_scan_delay_ms       # デフォルト: 1000
 ```
 
-The general guidance that emerged: workloads with well-understood NUMA topology should use explicit `numactl`/`mbind` placement and disable automatic balancing. Automatic balancing is most useful for workloads whose NUMA access patterns are dynamic or unknown.
+浮かび上がった一般的な指針は、NUMAトポロジがよく理解されているワークロードは明示的な `numactl`/`mbind` による配置を使い、自動バランシングを無効化すべきだというものである。自動バランシングは、NUMAアクセスパターンが動的または未知のワークロードで最も有用である。
 
-### What it taught us {#what-it-taught-us_1}
+### 教訓 {#what-it-taught-us_1}
 
-**Proactive optimization that interferes with deliberate placement is net negative.** The kernel did not know that an operator had already pinned a workload to specific NUMA nodes. From its perspective, a process accessing remote memory looked like a candidate for migration. The solution required adding control surfaces so that operators (and applications) could opt out.
+**意図的な配置を妨げる先回りの最適化は、差し引きでマイナスになる。** カーネルは、運用者がすでにワークロードを特定のNUMAノードにピン留めしていることを知らなかった。カーネルから見ると、リモートメモリにアクセスしているプロセスは移行の候補に見えた。解決には、運用者（とアプリケーション）がオプトアウトできるよう制御手段を追加する必要があった。
 
-**Fault-based sampling has side effects.** Using intentional faults to gather access statistics works, but every fault has cost: TLB invalidation, page table lock acquisition, and potential migration. The measurement instrument changed the system it was measuring. NUMA balancing's scan rate controls exist to limit this overhead.
+**フォールトに基づくサンプリングには副作用がある。** 意図的なフォールトを使ってアクセス統計を集めることは機能するが、どのフォールトにもコストがある。TLBの無効化、ページテーブルロックの取得、そして場合によっては移行である。測定手段が、測定対象のシステムを変えてしまった。NUMAバランシングのスキャンレート制御は、このオーバーヘッドを制限するために存在する。
 
-**TLB shootdowns are expensive at scale.** On a 4-socket server with 256 hardware threads, unmapping a shared page requires broadcasting IPI to all CPUs that have a TLB entry — potentially all 256. This overhead does not appear on 2-socket test machines used during development but becomes significant in production.
+**大規模環境ではTLBシュートダウンは高コストである。** 256ハードウェアスレッドを持つ4ソケットサーバーでは、共有ページをアンマップするには、TLBエントリを持つすべてのCPU（潜在的には256個すべて）にIPIをブロードキャストする必要がある。このオーバーヘッドは開発中に使われる2ソケットのテストマシンでは現れないが、本番環境では顕著になる。
 
-!!! warning "Pattern to watch for"
-    If a workload that was tuned with `numactl` or `taskset` regresses after upgrading to v3.13 or later, check whether automatic NUMA balancing is active. High `numa_pages_migrated` in `/proc/vmstat` combined with no improvement in NUMA locality (measured via `perf stat -e node-loads,node-load-misses`) suggests the balancer is working against a workload that was already correctly placed.
+!!! warning "注意すべきパターン"
+    `numactl` や `taskset` でチューニングされていたワークロードがv3.13以降へのアップグレード後にリグレッションした場合は、自動NUMAバランシングが有効になっていないか確認すること。`/proc/vmstat` の `numa_pages_migrated` が高いのに、NUMA局所性（`perf stat -e node-loads,node-load-misses` で測定）が改善していない場合、バランサがすでに正しく配置されていたワークロードに逆らって動いていることを示唆する。
 
     ```bash
-    # Check NUMA balancing activity
+    # NUMAバランシングの活動を確認する
     grep -E 'numa_|pgmigrate' /proc/vmstat
 
-    # Key counters:
-    # numa_page_migrated   - pages moved by NUMA balancing
-    # numa_pages_migrated  - (older kernels, same meaning)
-    # pgmigrate_success    - successful migrations
-    # pgmigrate_fail       - failed migrations (contention)
+    # 主要なカウンタ:
+    # numa_page_migrated   - NUMAバランシングによって移動されたページ
+    # numa_pages_migrated  - （古いカーネル、同じ意味）
+    # pgmigrate_success    - 成功した移行
+    # pgmigrate_fail       - 失敗した移行（競合）
 
-    # Check per-node memory access balance
+    # ノードごとのメモリアクセスの偏りを確認する
     numastat -n
     ```
 
 ---
 
-## Case 3: khugepaged CPU storms on multi-process systems {#case-3-khugepaged-cpu-storms-on-multi-process-systems}
+## ケース3: マルチプロセスシステムでのkhugepagedのCPUストーム {#case-3-khugepaged-cpu-storms-on-multi-process-systems}
 
-### Before state {#before-state_2}
+### 事前の状態 {#before-state_2}
 
-Before THP (v2.6.38), the kernel had no background thread scanning process address spaces looking for memory to reorganize. Background memory activity was limited to kswapd (reclaim) and pdflush/writeback threads. These were well-understood and their CPU usage was proportional to memory pressure.
+THP（v2.6.38）以前、カーネルには、再編成すべきメモリを探してプロセスのアドレス空間をスキャンするバックグラウンドスレッドはなかった。バックグラウンドのメモリ活動は、kswapd（回収）とpdflush/ライトバックのスレッドに限られていた。これらはよく理解されており、そのCPU使用量はメモリ圧迫に比例していた。
 
-### The change {#the-change_2}
+### 変更 {#the-change_2}
 
-THP introduced khugepaged, a kernel thread whose job is to find 512 contiguous 4KB pages in a process's address space and collapse them into a single 2MB huge page. This runs asynchronously, decoupled from the fault path. The intent was to allow THP to improve over time: even if a 2MB page couldn't be allocated at fault time (because memory was fragmented), khugepaged could later consolidate the 4KB pages into a huge page once there was an opportunity.
+THPはkhugepagedを導入した。これは、プロセスのアドレス空間内で連続した512個の4KBページを見つけ、1つの2MBヒュージページに集約（collapse）することを仕事とするカーネルスレッドである。これはフォールトパスから切り離されて非同期に動作する。意図は、THPが時間とともに改善できるようにすることだった。フォールト時に（メモリが断片化していて）2MBページを割り当てられなかったとしても、khugepagedが後で機会があれば4KBページをヒュージページに統合できる。
 
-The initial implementation was tuned for systems with relatively few long-lived processes.
+初期の実装は、長寿命のプロセスが比較的少ないシステム向けにチューニングされていた。
 
-### Observed regression {#observed-regression_2}
+### 観測されたリグレッション {#observed-regression_2}
 
-On systems running many processes — container hosts, build farms, CI systems, servers running hundreds of worker processes — khugepaged caused periodic CPU spikes. The spikes were visible in `top` and `perf top` as `khugepaged` consuming 1-5% of a CPU core periodically.
+多数のプロセスを動かすシステム（コンテナホスト、ビルドファーム、CIシステム、数百のワーカープロセスを動かすサーバー）では、khugepagedが定期的なCPUスパイクを引き起こした。スパイクは `top` や `perf top` で、`khugepaged` が定期的にCPUコアの1〜5%を消費する形で見えた。
 
-The pattern: khugepaged woke up on its scan interval, worked through a list of registered processes (all processes with THP regions), scanned each one looking for collapsible regions, and then slept again. On a system with hundreds of processes each with multi-gigabyte address spaces, this scan took significant CPU time even when there was nothing useful to collapse.
+パターンはこうだった。khugepagedはスキャン間隔ごとに起床し、登録されたプロセス（THP領域を持つすべてのプロセス）のリストをたどり、それぞれをスキャンして集約可能な領域を探し、再びスリープする。それぞれ数ギガバイトのアドレス空間を持つ数百のプロセスがあるシステムでは、集約すべき有用なものが何もなくても、このスキャンにかなりのCPU時間がかかった。
 
-In some cases, the scanning itself was harmful: khugepaged needed to acquire `mmap_lock` (formerly `mmap_sem`) in read mode to walk process page tables. On processes with heavily-used address spaces, this created contention with the application's own page fault handling.
+場合によってはスキャンそのものが有害だった。khugepagedは、プロセスのページテーブルを走査するために `mmap_lock`（以前の `mmap_sem`）を読み取りモードで取得する必要があった。アドレス空間が頻繁に使われるプロセスでは、これがアプリケーション自身のページフォールト処理との競合を生んだ。
 
-### Why it happened {#why-it-happened_2}
+### なぜ起きたか {#why-it-happened_2}
 
-The scan cost had two components:
+スキャンのコストには2つの要素があった:
 
-1. **Iterating processes**: khugepaged maintained a list of all anonymous VMAs with THP enabled. Even VMAs with no collapsible pages needed to be visited to discover they were not collapsible.
+1. **プロセスの反復処理**: khugepagedは、THPが有効なすべての無名VMAのリストを保持していた。集約可能なページのないVMAでさえ、集約できないことを発見するために訪問する必要があった。
 
-2. **The "almost collapsible" problem**: When a 2MB region had 511 of 512 pages present (one page missing), khugepaged found it promising but could not collapse it. With the default `max_ptes_none=511`, it would attempt collapse, allocate a 2MB page, fail because not all pages were present, and retry on the next scan cycle. Each retry consumed CPU and caused TLB activity.
+2. **「ほぼ集約可能」問題**: 2MBの領域に512ページ中511ページが存在する（1ページ欠けている）とき、khugepagedはそれを有望だと判断したが、集約できなかった。デフォルトの `max_ptes_none=511` では、集約を試み、2MBページを割り当て、すべてのページが存在しないため失敗し、次のスキャンサイクルで再試行した。再試行のたびにCPUを消費し、TLBの活動を引き起こした。
 
-The CPU budget for khugepaged was not well-bounded relative to the number of processes or the size of their address spaces.
+khugepagedのCPU予算は、プロセス数やそのアドレス空間のサイズに対して適切に制限されていなかった。
 
-### Resolution {#resolution_2}
+### 解決 {#resolution_2}
 
-The main levers for controlling khugepaged CPU usage are its scan interval and the number of pages it scans per wakeup:
+khugepagedのCPU使用量を制御する主なレバーは、そのスキャン間隔と、1回の起床あたりにスキャンするページ数である:
 
 ```bash
-# Increase sleep between scans (default: 10000ms)
+# スキャン間のスリープを長くする（デフォルト: 10000ms）
 echo 60000 > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs
 
-# Reduce pages examined per scan period (default: 4096)
+# スキャン周期あたりに調べるページ数を減らす（デフォルト: 4096）
 echo 1024 > /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
 
-# Restrict collapse to regions where all pages are present
-# (reduces wasted work on "almost collapsible" regions)
+# すべてのページが存在する領域に集約を限定する
+# （「ほぼ集約可能」な領域での無駄な作業を減らす）
 echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none
 ```
 
-The `max_ptes_none` tunable is particularly effective at reducing wasted work: setting it to 0 means khugepaged will only collapse a region when all 512 pages are present, avoiding repeated failed collapse attempts.
+`max_ptes_none` チューニングパラメータは、無駄な作業を減らすのに特に効果的である。これを0にすると、khugepagedは512ページすべてが存在する場合にのみ領域を集約するようになり、失敗する集約の試みの繰り返しを避けられる。
 
-For systems where THP latency benefits are not needed (latency-sensitive apps, containers with small heaps), disabling THP entirely eliminates khugepaged's work:
+THPのレイテンシ上の利益が不要なシステム（レイテンシに敏感なアプリ、小さなヒープのコンテナ）では、THPを完全に無効化するとkhugepagedの作業がなくなる:
 
 ```bash
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-Over several kernel releases, khugepaged's scheduling was improved to better track which VMAs had changed since the last scan, avoiding rescanning unchanged regions. The per-process scan list management also improved.
+いくつかのカーネルリリースを通じて、khugepagedのスケジューリングは改善され、前回のスキャン以降にどのVMAが変化したかをよりよく追跡して、変化のない領域の再スキャンを避けるようになった。プロセスごとのスキャンリストの管理も改善された。
 
-### What it taught us {#what-it-taught-us_2}
+### 教訓 {#what-it-taught-us_2}
 
-**Background optimization threads need CPU budgeting proportional to actual work available, not system size.** A system with 500 processes needs khugepaged to efficiently skip processes that have nothing to collapse, rather than visiting them all every scan cycle.
+**バックグラウンドの最適化スレッドには、システムの規模ではなく、実際に存在する作業量に比例したCPU予算が必要である。** 500プロセスのシステムでは、khugepagedは毎スキャンサイクルですべてを訪問するのではなく、集約すべきものが何もないプロセスを効率的にスキップする必要がある。
 
-**"Almost collapsible" is worse than "not collapsible."** A region that is clearly not a candidate for THP is skipped cheaply. A region that looks like it might be a candidate but cannot yet be collapsed causes repeated wasted work. Setting conservative thresholds (like `max_ptes_none=0`) trades some missed optimization opportunities for predictable CPU overhead.
+**「ほぼ集約可能」は「集約不可能」より悪い。** 明らかにTHPの候補でない領域は低コストでスキップされる。候補かもしれないように見えるがまだ集約できない領域は、無駄な作業を繰り返し引き起こす。保守的なしきい値（`max_ptes_none=0` など）を設定すると、一部の最適化の機会を逃す代わりに、予測可能なCPUオーバーヘッドが得られる。
 
-**Per-workload THP configuration matters.** Container environments running mixed workloads benefit from per-container THP control. Modern kernels support this via the cgroup THP interface, allowing some containers to use THP while others opt out.
+**ワークロードごとのTHP設定が重要である。** 混在したワークロードを動かすコンテナ環境は、コンテナごとのTHP制御の恩恵を受ける。現代のカーネルはcgroupのTHPインターフェイスでこれをサポートしており、一部のコンテナはTHPを使い、他のコンテナはオプトアウトできる。
 
-!!! warning "Pattern to watch for"
-    Periodic CPU spikes appearing in `top` or `perf top` attributed to `khugepaged` on systems with many processes are a sign of khugepaged over-scanning. Check the scan interval and pages_to_scan settings, and review whether the workloads on the system actually benefit from THP. Also watch for high values of `thp_collapse_alloc_failed` in `/proc/vmstat`, which indicates khugepaged is doing work but failing to collapse.
+!!! warning "注意すべきパターン"
+    多数のプロセスを持つシステムで、`top` や `perf top` に `khugepaged` に起因する定期的なCPUスパイクが現れるのは、khugepagedの過剰スキャンの兆候である。スキャン間隔とpages_to_scanの設定を確認し、システム上のワークロードが実際にTHPの恩恵を受けているかを見直すこと。また、`/proc/vmstat` の `thp_collapse_alloc_failed` の値が高くないかにも注意する。これはkhugepagedが作業をしているのに集約に失敗していることを示す。
 
     ```bash
-    # Check khugepaged activity
+    # khugepagedの活動を確認する
     cat /proc/vmstat | grep thp
-    # thp_collapse_alloc        - successful collapses
-    # thp_collapse_alloc_failed - attempted but failed
+    # thp_collapse_alloc        - 成功した集約
+    # thp_collapse_alloc_failed - 試みたが失敗した
 
-    # High failure rate = wasted CPU
-    # Consider reducing pages_to_scan or raising max_ptes_none threshold
+    # 失敗率が高い = CPUの無駄
+    # pages_to_scanを減らすか、max_ptes_noneのしきい値を引き上げることを検討する
     ```
 
 ---
 
-## Case 4: Swap readahead window mismatch {#case-4-swap-readahead-window-mismatch}
+## ケース4: スワップ先読みウィンドウの不一致 {#case-4-swap-readahead-window-mismatch}
 
-### Before state {#before-state_3}
+### 事前の状態 {#before-state_3}
 
-The Linux swap readahead mechanism prefetches swap pages sequentially when a page fault causes a swap-in. The assumption: if you're faulting in swap page N, you'll probably need swap page N+1, N+2, etc. soon. This is the same principle as page cache readahead for files. Reading ahead reduces latency for sequential swap access by hiding disk seek latency.
+Linuxのスワップ先読みの仕組みは、ページフォールトがスワップインを引き起こしたときに、スワップページを順次プリフェッチする。前提は、スワップページNをフォールトで読み込んでいるなら、すぐにスワップページN+1、N+2なども必要になるだろうというものである。これはファイルに対するページキャッシュの先読みと同じ原理である。先読みはディスクのシークレイテンシを隠すことで、順次的なスワップアクセスのレイテンシを減らす。
 
-The original readahead window was small and conservative.
+元の先読みウィンドウは小さく保守的だった。
 
-### The change {#the-change_3}
+### 変更 {#the-change_3}
 
-The swap readahead logic has been revised multiple times across kernel versions. In some versions, the readahead window size was increased to improve throughput for swap-heavy workloads. The changes affected how many additional pages the kernel would prefetch beyond the page that actually faulted.
+スワップ先読みのロジックは、カーネルのバージョンを通じて何度も改訂されてきた。いくつかのバージョンでは、スワップを多用するワークロードのスループットを改善するために先読みウィンドウのサイズが増やされた。これらの変更は、実際にフォールトしたページに加えてカーネルがいくつのページをプリフェッチするかに影響した。
 
-### Observed regression {#observed-regression_3}
+### 観測されたリグレッション {#observed-regression_3}
 
-Two opposite failure modes have been observed at different times, both documented in LKML and LWN discussions of swap readahead behavior:
+異なる時期に2つの正反対の障害様態が観測されており、いずれもスワップ先読みの挙動に関するLKMLやLWNの議論で記録されている:
 
-**Window too large (over-prefetching)**: When the readahead window was large, the kernel issued I/O for many swap pages beyond what was needed. For workloads with random swap access patterns — common when many unrelated processes are swapping independently — the prefetched pages were never accessed. This wasted I/O bandwidth and polluted the swap cache with pages that would need to be evicted before pages that were actually needed could be brought in. Effective swap throughput decreased.
+**ウィンドウが大きすぎる（過剰なプリフェッチ）**: 先読みウィンドウが大きいと、カーネルは必要以上に多くのスワップページについてI/Oを発行した。ランダムなスワップアクセスパターンを持つワークロード（多数の無関係なプロセスがそれぞれ独立にスワップしている場合によくある）では、プリフェッチされたページは一度もアクセスされなかった。これはI/O帯域を浪費し、実際に必要なページを読み込む前に追い出さなければならないページでスワップキャッシュを汚染した。実効的なスワップのスループットは低下した。
 
-**Window too small (under-prefetching)**: When the window was reduced to address over-prefetching, workloads with genuinely sequential swap access patterns — such as a single large process that had been partially swapped out and was now being restored — suffered. Each page fault caused only a small readahead, resulting in many sequential I/O operations where one larger I/O would have been more efficient.
+**ウィンドウが小さすぎる（不十分なプリフェッチ）**: 過剰なプリフェッチに対処するためにウィンドウが縮小されると、本当に順次的なスワップアクセスパターンを持つワークロード（部分的にスワップアウトされていて、今復元されようとしている単一の大きなプロセスなど）が苦しんだ。ページフォールトごとに小さな先読みしか行われず、1つの大きなI/Oの方が効率的だったはずのところで、多数の順次I/O操作が発生した。
 
-The regression pattern was documented in discussions around the swap readahead code in `mm/swap_state.c` and `mm/swap_slots.c`. The problem is described in the context of the "swap readahead trap" covered in [swapping.md](swapping.md#case-5-the-swap-readahead-trap).
+このリグレッションのパターンは、`mm/swap_state.c` と `mm/swap_slots.c` のスワップ先読みコードに関する議論で記録されている。この問題は、[swapping.md](swapping.md#case-5-the-swap-readahead-trap)で扱っている「スワップ先読みの罠」の文脈で説明されている。
 
-### Why it happened {#why-it-happened_3}
+### なぜ起きたか {#why-it-happened_3}
 
-Swap readahead inherits the same fundamental tension as page cache readahead: the kernel must predict whether future access will be sequential or random, using only past access patterns as a hint. For swap, this prediction is harder than for files because:
+スワップ先読みは、ページキャッシュの先読みと同じ根本的な緊張関係を受け継いでいる。カーネルは、過去のアクセスパターンだけをヒントに、将来のアクセスが順次的かランダムかを予測しなければならない。スワップでは、この予測はファイルの場合より難しい。なぜなら:
 
-1. **Swap pages from different processes are interleaved**: Unlike a file whose blocks are laid out with some locality, swap slots for process A and process B may alternate. A large readahead window for process A's fault may pull in process B's pages that process B will not need until much later.
+1. **異なるプロセスのスワップページが交互に並ぶ**: ブロックがある程度の局所性をもって配置されるファイルと違い、プロセスAとプロセスBのスワップスロットは交互になりうる。プロセスAのフォールトに対する大きな先読みウィンドウは、プロセスBがずっと後まで必要としないプロセスBのページを読み込むかもしれない。
 
-2. **Swap is accessed under memory pressure**: Swap-ins happen when memory is already tight. Reading ahead aggressively competes for the same scarce I/O bandwidth as the swap-outs that are also happening.
+2. **スワップはメモリ圧迫下でアクセスされる**: スワップインはメモリがすでに逼迫しているときに起きる。積極的な先読みは、同時に起きているスワップアウトと同じ乏しいI/O帯域を奪い合う。
 
-3. **Access patterns are not stationary**: A process being restored from swap accesses pages in roughly the order it accesses memory on startup, which may not match the order they were swapped out. Sequential on-disk layout does not imply sequential access order.
+3. **アクセスパターンは定常的ではない**: スワップから復元されるプロセスは、起動時にメモリにアクセスする順序でおおよそページにアクセスするが、それはスワップアウトされた順序と一致しないかもしれない。ディスク上で順次的に配置されていることは、アクセス順序が順次的であることを意味しない。
 
-The readahead window is a single global parameter that cannot capture this workload diversity.
+先読みウィンドウは単一のグローバルなパラメータであり、このワークロードの多様性を捉えられない。
 
-### Resolution {#resolution_3}
+### 解決 {#resolution_3}
 
-The kernel's swap readahead path in `mm/swap_state.c` has been revised over multiple releases to use adaptive window sizing and better sequential detection. The `page_cluster` sysctl controls the readahead window:
+`mm/swap_state.c` にあるカーネルのスワップ先読みパスは、複数のリリースにわたって改訂され、適応的なウィンドウサイズとより良い順次性の検出を使うようになった。`page_cluster` sysctlが先読みウィンドウを制御する:
 
 ```bash
-# View current swap readahead cluster size (power of 2 pages)
+# 現在のスワップ先読みクラスタサイズを表示する（2のべき乗のページ数）
 cat /proc/sys/vm/page_cluster
-# Default: 3 (= 2^3 = 8 pages prefetched)
+# デフォルト: 3（= 2^3 = 8ページをプリフェッチ）
 
-# Reduce for random-access swap workloads
-sysctl vm.page_cluster=0  # disable readahead (1 page at a time)
+# ランダムアクセスのスワップワークロードでは減らす
+sysctl vm.page_cluster=0  # 先読みを無効化（1度に1ページ）
 
-# Increase for sequential swap workloads on fast storage
-sysctl vm.page_cluster=5  # prefetch 32 pages
+# 高速ストレージ上の順次的なスワップワークロードでは増やす
+sysctl vm.page_cluster=5  # 32ページをプリフェッチ
 ```
 
-Setting `vm.page_cluster=0` disables swap readahead entirely, reading exactly the page that faulted. This is appropriate for:
+`vm.page_cluster=0` を設定するとスワップ先読みが完全に無効になり、フォールトしたページだけを正確に読む。これは次の場合に適している:
 
-- Systems with NVMe swap where random I/O latency is low
-- Workloads with random swap access patterns (many small independent processes)
+- ランダムI/Oのレイテンシが低いNVMeスワップを持つシステム
+- ランダムなスワップアクセスパターンを持つワークロード（多数の小さな独立したプロセス）
 
-Higher values (3-5) are appropriate for:
+より大きな値（3〜5）は次の場合に適している:
 
-- Rotational disk swap where sequential I/O is much faster than random I/O
-- Single large processes being restored from swap
+- 順次I/OがランダムI/Oよりはるかに速い回転ディスク上のスワップ
+- スワップから復元される単一の大きなプロセス
 
-Modern kernels also introduced swap slot clustering (`SWAP_CLUSTER_MAX`) to improve the locality of swap allocations, making readahead more effective when it is used.
+現代のカーネルはスワップスロットのクラスタリング（`SWAP_CLUSTER_MAX`）も導入し、スワップ割り当ての局所性を改善して、先読みを使う場合にそれがより効果的になるようにした。
 
-### What it taught us {#what-it-taught-us_3}
+### 教訓 {#what-it-taught-us_3}
 
-**A single global parameter cannot describe diverse workloads.** Page cluster was a reasonable default for the original Linux target workload (workstations with a single large process under memory pressure). Servers running hundreds of small processes with interleaved swap access patterns need different tuning.
+**単一のグローバルなパラメータでは多様なワークロードを記述できない。** page clusterは、元々のLinuxの対象ワークロード（メモリ圧迫下で単一の大きなプロセスを動かすワークステーション）にとっては妥当なデフォルトだった。交互に並ぶスワップアクセスパターンを持つ数百の小さなプロセスを動かすサーバーには、異なるチューニングが必要である。
 
-**Readahead has negative value when the access pattern is not sequential.** The principle of readahead is that I/O bandwidth is cheap and latency is expensive, so fetching extra data is worthwhile. When I/O bandwidth is scarce (because you are under memory pressure) and access is random (because many processes are swapping simultaneously), readahead makes things worse, not better.
+**アクセスパターンが順次的でないとき、先読みはマイナスの価値を持つ。** 先読みの原理は、I/O帯域は安くレイテンシは高価なので、余分なデータを取得する価値があるというものである。I/O帯域が乏しく（メモリ圧迫下にあるため）、アクセスがランダムである（多数のプロセスが同時にスワップしているため）とき、先読みは状況を良くするどころか悪くする。
 
-**Swap performance depends heavily on storage characteristics.** The optimal readahead size for a 7200 RPM hard disk, an SSD, and an NVMe device are all different. Default values calibrated for one era of hardware can become wrong as storage technology changes.
+**スワップの性能はストレージの特性に大きく依存する。** 7200 RPMのハードディスク、SSD、NVMeデバイスでは、最適な先読みサイズはそれぞれ異なる。ある時代のハードウェアに合わせて調整されたデフォルト値は、ストレージ技術が変わるにつれて誤ったものになりうる。
 
-!!! warning "Pattern to watch for"
-    If swap performance is worse than expected for the storage device's rated throughput, check whether `vm.page_cluster` is appropriate for the workload's access pattern. High `pswpin` (swap-ins) combined with low actual storage read throughput suggests that either many small I/Os are being issued (cluster too low) or that I/O is being wasted on pages that are never accessed (cluster too high, random pattern).
+!!! warning "注意すべきパターン"
+    スワップの性能がストレージデバイスの公称スループットから期待されるより悪い場合は、`vm.page_cluster` がワークロードのアクセスパターンに適しているか確認すること。`pswpin`（スワップイン）が多いのに実際のストレージ読み込みスループットが低い場合、多数の小さなI/Oが発行されている（クラスタが小さすぎる）か、一度もアクセスされないページにI/Oが浪費されている（クラスタが大きすぎ、ランダムなパターン）かのどちらかを示唆する。
 
     ```bash
-    # Measure swap I/O patterns
-    vmstat 1 | awk '{print $7, $8}'  # si (swap-in), so (swap-out)
+    # スワップのI/Oパターンを測定する
+    vmstat 1 | awk '{print $7, $8}'  # si（スワップイン）、so（スワップアウト）
 
-    # Check if swap reads are sequential via iostat
-    iostat -x 1  # %util and await on the swap device
+    # iostatでスワップの読み込みが順次的か確認する
+    iostat -x 1  # スワップデバイスの%utilとawait
 
-    # If %util is high but throughput is low = too many small I/Os
-    # If throughput is low but %util is low = I/O is being wasted
+    # %utilが高いのにスループットが低い = 小さなI/Oが多すぎる
+    # スループットが低く%utilも低い = I/Oが浪費されている
     ```
 
 ---
 
-## Common threads {#common-threads}
+## 共通する筋 {#common-threads}
 
-These four regressions share a set of structural patterns worth recognizing:
+これら4つのリグレッションは、認識しておく価値のある一連の構造的パターンを共有している:
 
-| Pattern | THP defrag stalls | NUMA balancing overhead | khugepaged CPU storms | Swap readahead mismatch |
+| パターン | THP defragのストール | NUMAバランシングのオーバーヘッド | khugepagedのCPUストーム | スワップ先読みの不一致 |
 |---------|-------------------|------------------------|----------------------|------------------------|
-| Optimization correct in theory | Yes | Yes | Yes | Yes |
-| Default harmed a class of workloads | Yes | Yes | Yes | Depends on version |
-| Fixed by adding opt-out / tuning knobs | Yes | Yes | Yes | Yes |
-| Root cause: workload diversity | Yes | Yes | Yes | Yes |
-| Latency vs throughput tradeoff | Yes | Partially | Partially | Yes |
+| 理論上は正しい最適化 | はい | はい | はい | はい |
+| デフォルトがある種のワークロードを害した | はい | はい | はい | バージョンによる |
+| オプトアウト / チューニングノブの追加で修正 | はい | はい | はい | はい |
+| 根本原因: ワークロードの多様性 | はい | はい | はい | はい |
+| レイテンシとスループットのトレードオフ | はい | 部分的に | 部分的に | はい |
 
-The broader lesson: mm optimizations often make an implicit assumption about workload behavior (sequential access, single large process, benefit from page colocation). When that assumption is violated — which happens across a diverse fleet of servers — the optimization becomes a regression.
+より広い教訓: mmの最適化は、ワークロードの挙動について暗黙の前提（順次アクセス、単一の大きなプロセス、ページの同居による利益）を置いていることが多い。その前提が破られると（多様なサーバー群ではそれが起きる）、最適化はリグレッションになる。
 
-Recognizing the pattern is the first step to diagnosing it.
-
----
-
-## See also {#see-also}
-
-- [Transparent Huge Pages](thp.md) — THP configuration and khugepaged tuning
-- [Memory Compaction](compaction.md) — How compaction works and its cost model
-- [Page Reclaim](reclaim.md) — kswapd, direct reclaim, and swappiness
-- [NUMA](numa.md) — NUMA topology, balancing, and placement policies
-- [What happens during swapping](swapping.md) — Swap-in/swap-out lifecycle and the readahead trap
-- [Swap Thrashing](swap-thrashing.md) — Detecting and preventing swap thrashing
-- [Bug Index](bugs/README.md) — Security bugs and data corruption in the mm subsystem
+パターンを認識することが、それを診断するための第一歩である。
 
 ---
 
-## External references {#external-references}
+## 関連項目 {#see-also}
 
-- [LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/) — Original THP coverage including defrag behavior
-- [LWN: NUMA in a hurry](https://lwn.net/Articles/486858/) — Background on NUMA balancing design
-- [LWN: Automatic NUMA balancing](https://lwn.net/Articles/548098/) — v3.13 NUMA balancing introduction
-- [LWN: Transparent huge pages and the NUMA problem](https://lwn.net/Articles/591790/) — THP and NUMA interaction
-- [Kernel docs: THP](https://docs.kernel.org/admin-guide/mm/transhuge.html) — Official THP documentation with defrag modes
-- [Kernel docs: NUMA balancing](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) — NUMA policy reference
-- [mm/khugepaged.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) — khugepaged implementation
-- [mm/swap_state.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) — Swap readahead implementation
+- [Transparent Huge Pages](thp.md) — THPの設定とkhugepagedのチューニング
+- [メモリコンパクション](compaction.md) — コンパクションの仕組みとそのコストモデル
+- [ページ回収](reclaim.md) — kswapd、直接回収、swappiness
+- [NUMA](numa.md) — NUMAトポロジ、バランシング、配置ポリシー
+- [スワップ中に何が起きるか](swapping.md) — スワップイン/スワップアウトのライフサイクルと先読みの罠
+- [スワップスラッシング](swap-thrashing.md) — スワップスラッシングの検出と防止
+- [バグ索引](bugs/README.md) — mmサブシステムにおけるセキュリティバグとデータ破損
 
-## Further reading {#further-reading}
+---
 
-- [war-stories-bugs.md](war-stories-bugs.md) — Production bug narratives: `zone_reclaim_mode` NUMA thrashing, THP compound page locking overhead, and RSS percpu counter inaccuracy causing wrong OOM victims
-- [Tuning Memory for Databases](tuning-databases.md) — practical guidance for avoiding the THP compaction stalls (Case 1) and NUMA placement problems (Case 2) covered here
-- [Tuning Memory for Containers](tuning-containers.md) — per-cgroup THP control and memory limits that help isolate the khugepaged CPU storms from Case 3
-- [/proc/vmstat reference](proc-vmstat.md) — `compact_stall`, `thp_collapse_alloc_failed`, `numa_pages_migrated`, and `pswpin` counters for detecting all four regression patterns
-- [LWN: THP defrag modes](https://lwn.net/Articles/629613/) — `defer` and `defer+madvise` defrag modes that fixed the Case 1 synchronous compaction stalls
-- [LWN: Better active/inactive list balancing](https://lwn.net/Articles/495543/) — how the reclaim scanner interacts with NUMA balancing (Case 2)
-- [`Documentation/admin-guide/mm/transhuge.rst`](https://docs.kernel.org/admin-guide/mm/transhuge.html) — authoritative THP documentation covering `defrag` modes, khugepaged tunables, and per-cgroup control
-- [Commit 444eb2a449ef](https://git.kernel.org/linus/444eb2a449ef) — `defer` defrag mode addition that decoupled THP compaction from the fault path
+## 外部参考資料 {#external-references}
+
+- [LWN: Transparent huge pages in 2.6.38](https://lwn.net/Articles/423584/) — defragの挙動を含む、THPの初期の記事
+- [LWN: NUMA in a hurry](https://lwn.net/Articles/486858/) — NUMAバランシングの設計の背景
+- [LWN: Automatic NUMA balancing](https://lwn.net/Articles/548098/) — v3.13でのNUMAバランシングの導入
+- [LWN: Transparent huge pages and the NUMA problem](https://lwn.net/Articles/591790/) — THPとNUMAの相互作用
+- [Kernel docs: THP](https://docs.kernel.org/admin-guide/mm/transhuge.html) — defragモードを含むTHPの公式ドキュメント
+- [Kernel docs: NUMA balancing](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html) — NUMAポリシーのリファレンス
+- [mm/khugepaged.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) — khugepagedの実装
+- [mm/swap_state.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) — スワップ先読みの実装
+
+## 参考文献 {#further-reading}
+
+- [war-stories-bugs.md](war-stories-bugs.md) — 本番環境のバグの記録: `zone_reclaim_mode` によるNUMAスラッシング、THPのcompound pageロックのオーバーヘッド、誤ったOOM犠牲プロセスを招いたRSS percpuカウンタの不正確さ
+- [データベース向けのメモリチューニング](tuning-databases.md) — ここで扱ったTHPコンパクションのストール（ケース1）とNUMA配置の問題（ケース2）を避けるための実践的な指針
+- [コンテナ向けのメモリチューニング](tuning-containers.md) — ケース3のkhugepagedのCPUストームを隔離するのに役立つ、cgroupごとのTHP制御とメモリ制限
+- [/proc/vmstatリファレンス](proc-vmstat.md) — 4つのリグレッションパターンすべてを検出するための `compact_stall`、`thp_collapse_alloc_failed`、`numa_pages_migrated`、`pswpin` カウンタ
+- [LWN: THP defrag modes](https://lwn.net/Articles/629613/) — ケース1の同期コンパクションのストールを修正した `defer` と `defer+madvise` のdefragモード
+- [LWN: Better active/inactive list balancing](https://lwn.net/Articles/495543/) — 回収スキャナがNUMAバランシングとどう相互作用するか（ケース2）
+- [`Documentation/admin-guide/mm/transhuge.rst`](https://docs.kernel.org/admin-guide/mm/transhuge.html) — `defrag` モード、khugepagedのチューニング可能なパラメータ、cgroupごとの制御を扱う、THPの正式なドキュメント
+- [Commit 444eb2a449ef](https://git.kernel.org/linus/444eb2a449ef) — THPのコンパクションをフォールトパスから切り離した `defer` defragモードの追加

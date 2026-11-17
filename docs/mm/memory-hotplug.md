@@ -1,40 +1,40 @@
-# Memory Hotplug {#memory-hotplug}
+# メモリホットプラグ {#memory-hotplug}
 
-> Adding and removing physical memory while the system keeps running — the machinery that lets cloud VMs grow or shrink without a reboot
+> システムを動かしたまま物理メモリを追加・削除する仕組み。クラウドVMが再起動なしで拡大・縮小できるようにする機構
 
-## What Is Memory Hotplug? {#what-is-memory-hotplug}
+## メモリホットプラグとは何か {#what-is-memory-hotplug}
 
-Memory hotplug is the kernel's ability to add or remove physical RAM at runtime. The feature has two broad use cases that pull in different directions:
+メモリホットプラグとは、実行時に物理RAMを追加・削除するカーネルの能力である。この機能には、互いに異なる方向へ引っ張り合う2つの大きなユースケースがある:
 
-**Physical hotplug** — enterprise servers with hot-swap memory bays can accept new DIMMs while the system is running. A database server can grow from 256 GB to 512 GB without a maintenance window. Similarly, a failed DIMM can be isolated and removed without powering down.
+**物理的なホットプラグ** — ホットスワップ可能なメモリベイを備えたエンタープライズサーバーは、システムの稼働中に新しいDIMMを受け入れられる。データベースサーバーは、メンテナンス時間なしに256 GBから512 GBへ拡張できる。同様に、故障したDIMMを電源を落とさずに隔離して取り外せる。
 
-**Virtual machine memory resizing** — cloud hypervisors add and remove memory from guest VMs to reclaim unused pages from idle tenants and give them to busy ones. This is now the dominant use case. Orchestration systems can increase a VM's memory when a workload spikes, or decrease it to reclaim resources. Tools like `virtio-mem` use hotplug as the mechanism underneath.
+**仮想マシンのメモリサイズ変更** — クラウドのハイパーバイザは、アイドル状態のテナントから未使用のページを回収して忙しいテナントに与えるために、ゲストVMにメモリを追加・削除する。現在ではこれが主要なユースケースである。オーケストレーションシステムは、ワークロードが急増したときにVMのメモリを増やしたり、リソースを回収するために減らしたりできる。`virtio-mem` のようなツールは、その下の仕組みとしてホットプラグを使う。
 
-The kernel provides two symmetric operations:
+カーネルは対称的な2つの操作を提供する:
 
-- **Hot-add** (online): add a new physical memory range and make it available to the allocator.
-- **Hot-remove** (offline): drain all pages off a memory range and then physically remove it. Hot-remove is significantly harder than hot-add.
+- **ホットアド**（オンライン化）: 新しい物理メモリ範囲を追加し、アロケータが使えるようにする。
+- **ホットリムーブ**（オフライン化）: メモリ範囲からすべてのページを退避させてから、物理的に取り外す。ホットリムーブはホットアドよりはるかに難しい。
 
-## Memory Sections {#memory-sections}
+## メモリセクション {#memory-sections}
 
-The kernel's sparse memory model tracks physical memory in fixed-size **sections**. Each section is the smallest independently online/offline unit.
+カーネルのスパースメモリモデルは、物理メモリを固定サイズの**セクション**単位で追跡する。各セクションは、独立してオンライン化・オフライン化できる最小単位である。
 
-Section size is architecture-defined via `SECTION_SIZE_BITS`. On x86-64:
+セクションサイズはアーキテクチャごとに `SECTION_SIZE_BITS` で定義される。x86-64では:
 
 ```c
 /* arch/x86/include/asm/sparsemem.h */
 # define SECTION_SIZE_BITS  27  /* matt - 128 is convenient right now */
 ```
 
-This means sections are `1 << 27` = **128 MB** on x86-64. arm64 defaults to the same 128 MB sections with 4K pages; with `CONFIG_ARM64_64K_PAGES`, it uses 512 MB sections (`SECTION_SIZE_BITS = 29`).
+つまりx86-64ではセクションは `1 << 27` = **128 MB** である。arm64も4Kページではデフォルトで同じ128 MBのセクションを使う。`CONFIG_ARM64_64K_PAGES` では512 MBのセクション（`SECTION_SIZE_BITS = 29`）を使う。
 
-Each section is represented by `struct mem_section` from `include/linux/mmzone.h`:
+各セクションは `include/linux/mmzone.h` の `struct mem_section` で表される:
 
 ```c
 struct mem_section {
     /*
-     * This is, logically, a pointer to an array of struct pages.
-     * However, it is stored with some other magic.
+     * 論理的には、これはstruct pageの配列へのポインタである。
+     * ただし、他の仕掛けと一緒に格納されている。
      */
     unsigned long section_mem_map;
 
@@ -45,28 +45,28 @@ struct mem_section {
 };
 ```
 
-The `section_mem_map` field encodes both the pointer to the `struct page` array for this section and a set of status flags packed into the low bits:
+`section_mem_map` フィールドは、このセクションの `struct page` 配列へのポインタと、下位ビットに詰め込まれた一連の状態フラグの両方をエンコードしている:
 
-- `SECTION_MARKED_PRESENT` — physical memory is present here
-- `SECTION_HAS_MEM_MAP` — the `struct page` array is valid
-- `SECTION_IS_ONLINE` — the section has been onlined to the allocator
+- `SECTION_MARKED_PRESENT` — ここに物理メモリが存在する
+- `SECTION_HAS_MEM_MAP` — `struct page` 配列が有効である
+- `SECTION_IS_ONLINE` — セクションがアロケータに対してオンライン化されている
 
-At the user-facing level, the kernel groups multiple sections into **memory blocks**. A memory block is the unit exposed in sysfs. `MIN_MEMORY_BLOCK_SIZE` is set to `1 << SECTION_SIZE_BITS`, so on x86-64 the minimum block size is 128 MB. In practice blocks are often larger.
+ユーザーから見えるレベルでは、カーネルは複数のセクションを**メモリブロック**にまとめる。メモリブロックはsysfsで公開される単位である。`MIN_MEMORY_BLOCK_SIZE` は `1 << SECTION_SIZE_BITS` に設定されているので、x86-64では最小ブロックサイズは128 MBである。実際にはブロックはもっと大きいことが多い。
 
-## The Sysfs Interface {#the-sysfs-interface}
+## sysfsインターフェイス {#the-sysfs-interface}
 
-Every memory block has a sysfs directory under `/sys/devices/system/memory/`:
+各メモリブロックは `/sys/devices/system/memory/` の下にsysfsディレクトリを持つ:
 
 ```
 /sys/devices/system/memory/
-├── auto_online_blocks          # Policy for automatic onlining
-├── block_size_bytes            # Memory block size in hex bytes
-├── memory0/                    # Block 0 (often firmware-reserved)
-│   ├── node0                   # NUMA node symlink
-│   ├── phys_index              # Physical block index
-│   ├── removable               # Whether block can be removed
+├── auto_online_blocks          # 自動オンライン化のポリシー
+├── block_size_bytes            # メモリブロックサイズ（16進のバイト数）
+├── memory0/                    # ブロック0（ファームウェア予約であることが多い）
+│   ├── node0                   # NUMAノードへのシンボリックリンク
+│   ├── phys_index              # 物理ブロックインデックス
+│   ├── removable               # ブロックを取り外せるかどうか
 │   ├── state                   # offline / online / going-offline
-│   └── valid_zones             # Which zones this block can be onlined to
+│   └── valid_zones             # このブロックをオンライン化できるゾーン
 ├── memory1/
 │   └── state
 ...
@@ -74,27 +74,27 @@ Every memory block has a sysfs directory under `/sys/devices/system/memory/`:
 │   └── state
 ```
 
-The `state` file is the primary control interface. It accepts:
+`state` ファイルが主要な制御インターフェイスである。次の値を受け付ける:
 
-| Write value | Effect |
+| 書き込む値 | 効果 |
 |-------------|--------|
-| `online` | Online using auto policy (`MMOP_ONLINE`) |
-| `online_kernel` | Online to `ZONE_NORMAL` (`MMOP_ONLINE_KERNEL`) |
-| `online_movable` | Online to `ZONE_MOVABLE` (`MMOP_ONLINE_MOVABLE`) |
-| `offline` | Attempt to offline (may fail) |
+| `online` | 自動ポリシーでオンライン化（`MMOP_ONLINE`） |
+| `online_kernel` | `ZONE_NORMAL` にオンライン化（`MMOP_ONLINE_KERNEL`） |
+| `online_movable` | `ZONE_MOVABLE` にオンライン化（`MMOP_ONLINE_MOVABLE`） |
+| `offline` | オフライン化を試みる（失敗することがある） |
 
 ```bash
-# Check the state of a memory block
+# メモリブロックの状態を確認する
 cat /sys/devices/system/memory/memory128/state
 
-# Bring it online into ZONE_MOVABLE
+# ZONE_MOVABLEにオンライン化する
 echo online_movable > /sys/devices/system/memory/memory128/state
 
-# Offline it (may fail if unmovable pages are present)
+# オフライン化する（移動不能なページがあると失敗することがある）
 echo offline > /sys/devices/system/memory/memory128/state
 ```
 
-The kernel code that parses these writes lives in `drivers/base/memory.c`:
+これらの書き込みを解析するカーネルコードは `drivers/base/memory.c` にある:
 
 ```c
 /* drivers/base/memory.c */
@@ -106,12 +106,12 @@ static const char *const online_type_to_str[] = {
 };
 ```
 
-## Hot-Add Path {#hot-add-path}
+## ホットアドのパス {#hot-add-path}
 
-When new memory appears (via firmware/ACPI notification or a `virtio-mem` device), the kernel follows this path:
+新しいメモリが現れると（ファームウェア/ACPIの通知や `virtio-mem` デバイスによって）、カーネルは次のパスをたどる:
 
 ```
-Firmware/ACPI or virtio-mem signals new memory range
+ファームウェア/ACPIまたはvirtio-memが新しいメモリ範囲を通知
         │
         ▼
 add_memory(nid, start, size, mhp_flags)    [mm/memory_hotplug.c]
@@ -119,81 +119,81 @@ add_memory(nid, start, size, mhp_flags)    [mm/memory_hotplug.c]
         ▼
 add_memory_resource()
         │
-        ├── arch_add_memory()              [arch-specific page table setup]
-        │         Maps the new range into the kernel's linear map
+        ├── arch_add_memory()              [アーキテクチャ固有のページテーブル設定]
+        │         新しい範囲をカーネルのリニアマップにマップする
         │
         ├── create_memory_block_devices()  [drivers/base/memory.c]
-        │         Creates /sys/devices/system/memory/memoryN entries
+        │         /sys/devices/system/memory/memoryN のエントリを作成する
         │
-        └── (auto_online_blocks policy)
+        └── (auto_online_blocksポリシー)
               │
               ▼
         online_pages(pfn, nr_pages, zone, group)  [mm/memory_hotplug.c]
               │
-              ├── move_pfn_range_to_zone()     Associate pages with zone
+              ├── move_pfn_range_to_zone()     ページをゾーンに関連付ける
               ├── memory_notify(MEM_GOING_ONLINE, ...)
-              ├── online_pages_range()          Add pages to buddy allocator
-              ├── undo_isolate_page_range()     Open the range for allocation
+              ├── online_pages_range()          ページをバディアロケータに追加する
+              ├── undo_isolate_page_range()     範囲を割り当てに開放する
               └── memory_notify(MEM_ONLINE, ...)
 ```
 
-`add_memory()` takes a NUMA node id, a physical start address, a size in bytes, and a flags bitfield (`mhp_t`). Key flags include:
+`add_memory()` は、NUMAノードID、物理開始アドレス、バイト単位のサイズ、フラグのビットフィールド（`mhp_t`）を受け取る。主なフラグには次のものがある:
 
-- `MHP_MERGE_RESOURCE` — merge the new resource entry with adjacent ones in `/proc/iomem`
-- `MHP_MEMMAP_ON_MEMORY` — store the `struct page` array (vmemmap) inside the hot-added memory itself, conserving existing memory
+- `MHP_MERGE_RESOURCE` — 新しいリソースエントリを `/proc/iomem` 内の隣接するものとマージする
+- `MHP_MEMMAP_ON_MEMORY` — `struct page` 配列（vmemmap）をホットアドされたメモリ自体の中に格納し、既存のメモリを節約する
 
-`arch_add_memory()` handles the architecture-specific work: building page table entries so the kernel's direct mapping covers the new physical addresses.
+`arch_add_memory()` はアーキテクチャ固有の作業を担当する。カーネルのダイレクトマッピングが新しい物理アドレスをカバーするよう、ページテーブルエントリを構築する。
 
-`online_pages()` does the memory-model work: it associates the PFN range with the requested zone, fires memory notifiers so drivers and subsystems can react, adds the pages to the buddy allocator via `online_pages_range()`, and then calls `undo_isolate_page_range()` to open the range for normal allocation.
+`online_pages()` はメモリモデルの作業を行う。PFN範囲を要求されたゾーンに関連付け、ドライバやサブシステムが反応できるようメモリ通知を発行し、`online_pages_range()` でページをバディアロケータに追加し、それから `undo_isolate_page_range()` を呼んで範囲を通常の割り当てに開放する。
 
-### ZONE_MOVABLE vs ZONE_NORMAL for New Memory {#zonemovable-vs-zonenormal-for-new-memory}
+### 新しいメモリにはZONE_MOVABLEかZONE_NORMALか {#zonemovable-vs-zonenormal-for-new-memory}
 
-When onlining, you must choose a zone:
+オンライン化の際には、ゾーンを選ばなければならない:
 
-**`ZONE_NORMAL` (online_kernel)**: New pages join the normal kernel zone. Kernel data structures may be placed here. This is a one-way door — you cannot offline the section later if the kernel has put unmovable data on it.
+**`ZONE_NORMAL`（online_kernel）**: 新しいページは通常のカーネルゾーンに加わる。カーネルのデータ構造がここに配置されうる。これは一方通行の扉である。カーネルが移動不能なデータを置いてしまうと、後でそのセクションをオフライン化できない。
 
-**`ZONE_MOVABLE` (online_movable)**: New pages join the movable zone. The kernel guarantees it will never place unmovable allocations here. This is the exit ramp — if you ever need to offline this memory, it is possible because all pages can be migrated away.
+**`ZONE_MOVABLE`（online_movable）**: 新しいページはmovableゾーンに加わる。カーネルは移動不能な割り当てをここに決して置かないことを保証する。これは出口である。このメモリをオフライン化する必要が生じても、すべてのページを他所へ移行できるので可能である。
 
-!!! tip "Always use `online_movable` for hotplugged memory in VMs"
-    If there is any chance you will need to offline (shrink) the VM's memory later, online new sections as `ZONE_MOVABLE`. Onlining as `ZONE_NORMAL` effectively makes the memory permanent because kernel slab, page tables, and other unmovable allocations may land there immediately.
+!!! tip "VMでホットプラグしたメモリには常に `online_movable` を使う"
+    VMのメモリを後でオフライン化（縮小）する必要が生じる可能性が少しでもあるなら、新しいセクションは `ZONE_MOVABLE` としてオンライン化すること。`ZONE_NORMAL` としてオンライン化すると、カーネルのslab、ページテーブル、その他の移動不能な割り当てが即座にそこに置かれうるので、そのメモリは実質的に恒久的なものになる。
 
 ## ZONE_MOVABLE {#zone_movable}
 
-`ZONE_MOVABLE` exists specifically to enable hot-remove. The contract is strict: **no unmovable kernel allocations ever go here**. Only pages that can be migrated to another location are placed in `ZONE_MOVABLE` — anonymous memory, file-backed pages, and similar movable content.
+`ZONE_MOVABLE` は、まさにホットリムーブを可能にするために存在する。その約束は厳格である。**移動不能なカーネル割り当ては決してここに置かれない**。別の場所に移行できるページだけが `ZONE_MOVABLE` に置かれる。無名メモリ、ファイルで裏付けられたページ、その他同様の移動可能な内容である。
 
-This zone is not created by default on a normal system. It is enabled by boot parameters:
+このゾーンは通常のシステムではデフォルトで作成されない。ブートパラメータで有効にする:
 
 ```bash
-# Reserve all but 8GB for ZONE_MOVABLE (8GB stays as kernel-usable zones)
+# 8GBを除くすべてをZONE_MOVABLEに確保する（8GBはカーネルが使えるゾーンに残る）
 kernelcore=8G
 
-# Alternatively, specify how much should be ZONE_MOVABLE
+# あるいは、ZONE_MOVABLEにする量を指定する
 movablecore=80%
 ```
 
-`kernelcore=N` sets the amount of memory that must remain in kernel-usable zones; the rest becomes `ZONE_MOVABLE`. `movablecore=N` is the inverse: it specifies how much should be movable.
+`kernelcore=N` は、カーネルが使えるゾーンに残さなければならないメモリ量を設定する。残りは `ZONE_MOVABLE` になる。`movablecore=N` はその逆で、movableにする量を指定する。
 
-To inspect the current zone layout:
+現在のゾーン配置を調べるには:
 
 ```bash
-# Show all zones including Movable
+# Movableを含むすべてのゾーンを表示する
 grep -A5 "Node.*Movable" /proc/zoneinfo
 
-# Compact summary from /proc/meminfo
+# /proc/meminfoからの簡潔な要約
 grep -E "MemTotal|MemFree" /proc/meminfo
 ```
 
-!!! note "ZONE_MOVABLE and CMA"
-    CMA pages (see [CMA](cma.md)) in kernel zones behave similarly to `ZONE_MOVABLE` — they can be migrated. But `ZONE_MOVABLE` is the primary mechanism for ensuring entire memory sections can be reclaimed.
+!!! note "ZONE_MOVABLEとCMA"
+    カーネルゾーン内のCMAページ（[CMA](cma.md)を参照）は `ZONE_MOVABLE` と同様に振る舞い、移行できる。しかし、メモリセクション全体を確実に回収できるようにするための主要な仕組みは `ZONE_MOVABLE` である。
 
-## Hot-Remove Path {#hot-remove-path}
+## ホットリムーブのパス {#hot-remove-path}
 
-Hot-remove is much harder than hot-add. The fundamental challenge: before the kernel can give back a physical memory range, every `struct page` in that range must be free. That means migrating all live pages elsewhere. Pages that cannot be migrated block the offline.
+ホットリムーブはホットアドよりはるかに難しい。根本的な課題は、カーネルが物理メモリ範囲を返却する前に、その範囲内のすべての `struct page` が空いていなければならないことである。つまり、生きているページをすべて他所へ移行する必要がある。移行できないページはオフライン化を妨げる。
 
-The offline path is:
+オフライン化のパスは次のとおりである:
 
 ```
-User writes "offline" to sysfs state file
+ユーザーがsysfsのstateファイルに "offline" を書き込む
         │
         ▼
 memory_block_offline()              [drivers/base/memory.c]
@@ -201,82 +201,82 @@ memory_block_offline()              [drivers/base/memory.c]
         ▼
 offline_pages(pfn, nr_pages, zone, group)  [mm/memory_hotplug.c]
         │
-        ├── zone_pcp_disable()          Disable per-CPU page lists
-        ├── lru_cache_disable()         Disable LRU caches
+        ├── zone_pcp_disable()          CPUごとのページリストを無効化
+        ├── lru_cache_disable()         LRUキャッシュを無効化
         │
         ├── start_isolate_page_range()  [mm/page_isolation.c]
-        │       Mark every pageblock MIGRATE_ISOLATE
-        │       Prevents new allocations into the range
-        │       Returns -EBUSY if any pageblock cannot be isolated
+        │       すべてのpageblockをMIGRATE_ISOLATEにマークする
+        │       範囲への新たな割り当てを防ぐ
+        │       隔離できないpageblockがあれば-EBUSYを返す
         │
         ├── memory_notify(MEM_GOING_OFFLINE, ...)
         │
-        ├── [loop]
-        │       scan_movable_pages()    Find pages still present
-        │       do_migrate_range()      Migrate them out via migrate_pages()
-        │       [repeat until no movable pages remain or failure]
+        ├── [ループ]
+        │       scan_movable_pages()    まだ存在するページを探す
+        │       do_migrate_range()      migrate_pages()で外へ移行する
+        │       [移動可能なページがなくなるか失敗するまで繰り返す]
         │
-        ├── dissolve_free_hugetlb_folios()   Handle huge pages
+        ├── dissolve_free_hugetlb_folios()   ヒュージページを処理する
         │
-        ├── test_pages_isolated()       Verify range is fully free
+        ├── test_pages_isolated()       範囲が完全に空いたことを確認する
         │
-        ├── __offline_isolated_pages()  Remove pages from buddy allocator
-        │       Marks sections SECTION_IS_ONLINE = 0
+        ├── __offline_isolated_pages()  バディアロケータからページを取り除く
+        │       セクションを SECTION_IS_ONLINE = 0 にマークする
         │
-        ├── undo_isolate_page_range()   On success: not needed
-        │   (or on failure: restore MIGRATE_MOVABLE and cancel)
+        ├── undo_isolate_page_range()   成功時: 不要
+        │   (失敗時: MIGRATE_MOVABLEに戻して取り消す)
         │
         └── memory_notify(MEM_OFFLINE, ...)
-              or memory_notify(MEM_CANCEL_OFFLINE, ...) on failure
+              失敗時は memory_notify(MEM_CANCEL_OFFLINE, ...)
 ```
 
-### Page Isolation {#page-isolation}
+### ページの隔離 {#page-isolation}
 
-`start_isolate_page_range()` in `mm/page_isolation.c` marks every pageblock in the target range as `MIGRATE_ISOLATE`. Once isolated, the page allocator will not hand out pages from this range to new allocations. This prevents a race where pages are freed from the range only to have new allocations immediately refill it.
+`mm/page_isolation.c` の `start_isolate_page_range()` は、対象範囲内のすべてのpageblockを `MIGRATE_ISOLATE` としてマークする。隔離されると、ページアロケータはこの範囲のページを新たな割り当てに渡さなくなる。これにより、範囲からページが解放されたのに新たな割り当てがすぐにまたそこを埋めてしまう、という競合を防ぐ。
 
-If any pageblock cannot be isolated (for example, because it straddles a zone boundary or has a structural constraint), `start_isolate_page_range()` returns `-EBUSY` and the offline fails immediately.
+隔離できないpageblockがあると（たとえばゾーン境界をまたいでいる、あるいは構造上の制約がある場合）、`start_isolate_page_range()` は `-EBUSY` を返し、オフライン化は即座に失敗する。
 
-### Page Migration {#page-migration}
+### ページの移行 {#page-migration}
 
-`do_migrate_range()` calls `migrate_pages()` with `MR_MEMORY_HOTPLUG` as the migration reason. The migration allocates replacement pages elsewhere in the system and moves all content and page table mappings. Pages are classified in `page_is_unmovable()`:
+`do_migrate_range()` は、移行理由を `MR_MEMORY_HOTPLUG` として `migrate_pages()` を呼ぶ。移行はシステム内の別の場所に代替ページを割り当て、すべての内容とページテーブルのマッピングを移す。ページは `page_is_unmovable()` で分類される:
 
 ```c
 /* mm/page_isolation.c */
 bool page_is_unmovable(struct zone *zone, struct page *page,
         enum pb_isolate_mode mode, unsigned long *step)
 {
-    /* Boot-time allocations and memory holes are PG_reserved and unmovable */
+    /* ブート時の割り当てとメモリホールはPG_reservedで移動不能 */
     if (PageReserved(page))
         return true;
 
-    /* All pages in ZONE_MOVABLE are considered movable */
+    /* ZONE_MOVABLE内のページはすべて移動可能とみなされる */
     if (zone_idx(zone) == ZONE_MOVABLE)
         return false;
     ...
 }
 ```
 
-### Failure Cases {#failure-cases}
+### 失敗のケース {#failure-cases}
 
-The offline can fail for several reasons, and the kernel will report them in dmesg:
+オフライン化はいくつかの理由で失敗しうる。カーネルはそれをdmesgに報告する:
 
-| Failure reason | Cause |
+| 失敗理由 | 原因 |
 |----------------|-------|
-| `failure to isolate range` | A pageblock could not be marked MIGRATE_ISOLATE |
-| `unmovable page` | A page in the range has no migration method |
-| `notifier failure` | A kernel notifier (driver, subsystem) rejected the offline |
-| `signal backoff` | A signal arrived during the migration loop |
-| `failure to dissolve huge pages` | Hugetlbfs pages could not be freed |
-| `memory holes` | The range contains non-RAM gaps |
+| `failure to isolate range` | pageblockをMIGRATE_ISOLATEにマークできなかった |
+| `unmovable page` | 範囲内のページに移行方法がない |
+| `notifier failure` | カーネルの通知先（ドライバ、サブシステム）がオフライン化を拒否した |
+| `signal backoff` | 移行ループ中にシグナルが届いた |
+| `failure to dissolve huge pages` | hugetlbfsのページを解放できなかった |
+| `memory holes` | 範囲にRAMでない隙間が含まれている |
 
-!!! warning "Unmovable pages are the most common blocker"
-    If memory was onlined as `ZONE_NORMAL`, kernel slab caches, page tables, and other unmovable allocations may have been placed there. These cannot be migrated. The offline will spin through the migration loop and eventually fail with `unmovable page`. The only remedy is to online future hotplugged memory as `ZONE_MOVABLE`.
+!!! warning "移動不能なページが最もよくある障害要因"
+    メモリが `ZONE_NORMAL` としてオンライン化されていた場合、カーネルのslabキャッシュ、ページテーブル、その他の移動不能な割り当てがそこに置かれている可能性がある。これらは移行できない。オフライン化は移行ループを空回りし、最終的に `unmovable page` で失敗する。唯一の対処法は、今後ホットプラグするメモリを `ZONE_MOVABLE` としてオンライン化することである。
 
-After a failed offline, `undo_isolate_page_range()` and `memory_notify(MEM_CANCEL_OFFLINE, ...)` restore the section to normal use.
+オフライン化に失敗した後は、`undo_isolate_page_range()` と `memory_notify(MEM_CANCEL_OFFLINE, ...)` がセクションを通常の使用状態に戻す。
 
 ### remove_memory {#remove_memory}
 
-Once all blocks covering a physical range have been offlined, `remove_memory()` can be called to complete the hardware removal:
+物理範囲をカバーするすべてのブロックがオフライン化されると、`remove_memory()` を呼んでハードウェアの取り外しを完了できる:
 
 ```c
 /* include/linux/memory_hotplug.h (CONFIG_MEMORY_HOTREMOVE) */
@@ -285,60 +285,60 @@ extern void __remove_memory(u64 start, u64 size);
 extern int offline_and_remove_memory(u64 start, u64 size);
 ```
 
-`remove_memory()` verifies all blocks are offline, then calls `arch_remove_memory()` to tear down the page table mappings for the range, followed by `sparse_remove_section()` to free the `struct page` arrays.
+`remove_memory()` はすべてのブロックがオフラインであることを確認してから、`arch_remove_memory()` を呼んでその範囲のページテーブルマッピングを解体し、続いて `sparse_remove_section()` で `struct page` 配列を解放する。
 
-## Memory Onlining Policies {#memory-onlining-policies}
+## メモリのオンライン化ポリシー {#memory-onlining-policies}
 
 ### auto_online_blocks {#autoonlineblocks}
 
-The `auto_online_blocks` sysfs attribute at `/sys/devices/system/memory/auto_online_blocks` controls what happens when new memory blocks appear — whether they are onlined automatically and into which zone:
+`/sys/devices/system/memory/auto_online_blocks` にあるsysfs属性 `auto_online_blocks` は、新しいメモリブロックが現れたときに何が起きるか（自動的にオンライン化されるか、どのゾーンにか）を制御する:
 
 ```bash
-# Check the current policy
+# 現在のポリシーを確認する
 cat /sys/devices/system/memory/auto_online_blocks
 
-# Possible values: offline, online, online_kernel, online_movable
+# 取りうる値: offline, online, online_kernel, online_movable
 
-# Automatically online new blocks into ZONE_MOVABLE
+# 新しいブロックを自動的にZONE_MOVABLEにオンライン化する
 echo online_movable > /sys/devices/system/memory/auto_online_blocks
 
-# Leave new blocks offline for manual handling
+# 新しいブロックを手動処理のためにオフラインのままにする
 echo offline > /sys/devices/system/memory/auto_online_blocks
 ```
 
-This attribute maps directly to the kernel's `mhp_get_default_online_type()` / `mhp_set_default_online_type()` pair.
+この属性は、カーネルの `mhp_get_default_online_type()` / `mhp_set_default_online_type()` の組に直接対応する。
 
-### The online_policy Module Parameter {#the-online_policy-module-parameter}
+### online_policyモジュールパラメータ {#the-online_policy-module-parameter}
 
-`memory_hotplug.online_policy` (settable via kernel command line or `/sys/module/memory_hotplug/parameters/online_policy`) controls zone selection when using the plain `online` (auto) mode:
+`memory_hotplug.online_policy`（カーネルコマンドラインまたは `/sys/module/memory_hotplug/parameters/online_policy` で設定可能）は、単なる `online`（自動）モードを使うときのゾーン選択を制御する:
 
-| Policy | Behavior |
+| ポリシー | 挙動 |
 |--------|----------|
-| `contig-zones` (default) | Keep zones contiguous; online to the zone the adjacent memory block uses |
-| `auto-movable` | Online to `ZONE_MOVABLE` when the movable:kernel ratio allows it |
+| `contig-zones`（デフォルト） | ゾーンを連続に保つ。隣接するメモリブロックが使っているゾーンにオンライン化する |
+| `auto-movable` | movable:kernelの比率が許す場合に `ZONE_MOVABLE` にオンライン化する |
 
-The `auto-movable` policy uses `auto_movable_ratio` (default 301%) as an upper bound on the `ZONE_MOVABLE : kernel zones` ratio. This prevents the system from becoming so MOVABLE-heavy that kernel allocations are starved.
+`auto-movable` ポリシーは、`ZONE_MOVABLE : kernel zones` の比率の上限として `auto_movable_ratio`（デフォルト301%）を使う。これにより、システムがMOVABLEに偏りすぎてカーネルの割り当てが枯渇するのを防ぐ。
 
-### Recommended Settings for Cloud VMs {#recommended-settings-for-cloud-vms}
+### クラウドVM向けの推奨設定 {#recommended-settings-for-cloud-vms}
 
-For guest VMs that will have memory added and removed by the hypervisor:
+ハイパーバイザによってメモリが追加・削除されるゲストVMでは:
 
 ```bash
-# At boot (in /etc/rc.local or cloud-init):
+# ブート時に（/etc/rc.localまたはcloud-initで）:
 echo online_movable > /sys/devices/system/memory/auto_online_blocks
 ```
 
-This ensures every hotplugged section is immediately available to applications and can be removed later without obstruction.
+これにより、ホットプラグされたすべてのセクションがすぐにアプリケーションから使え、後で妨げなく取り外せるようになる。
 
-## NUMA and Hotplug {#numa-and-hotplug}
+## NUMAとホットプラグ {#numa-and-hotplug}
 
-### Adding Memory to an Existing Node {#adding-memory-to-an-existing-node}
+### 既存のノードへのメモリ追加 {#adding-memory-to-an-existing-node}
 
-The common case — a new DIMM or VM memory increment belongs to an already-online NUMA node. This is relatively straightforward: `add_memory(nid, ...)` is called with the existing node's id, and `try_online_node()` is a no-op because the node is already online.
+よくあるケースは、新しいDIMMやVMのメモリ増分がすでにオンラインのNUMAノードに属する場合である。これは比較的単純である。`add_memory(nid, ...)` が既存ノードのIDで呼ばれ、ノードはすでにオンラインなので `try_online_node()` は何もしない。
 
-### Adding a New NUMA Node {#adding-a-new-numa-node}
+### 新しいNUMAノードの追加 {#adding-a-new-numa-node}
 
-Adding memory to a brand-new NUMA node is more complex. The node's `pg_data_t` structure must be allocated first, and the NUMA topology (distance tables, fallback lists) must be rebuilt. `try_online_node()` handles the first-memory case:
+まったく新しいNUMAノードにメモリを追加するのはより複雑である。まずノードの `pg_data_t` 構造体を割り当て、NUMAトポロジ（距離テーブル、フォールバックリスト）を再構築しなければならない。`try_online_node()` が最初のメモリの場合を処理する:
 
 ```c
 /* mm/memory_hotplug.c */
@@ -352,218 +352,218 @@ int try_online_node(int nid)
 }
 ```
 
-If CPUs are associated with the new node (CPU hotplug), that adds further coordination requirements — CPUs must be brought online only after their node has memory.
+新しいノードにCPUが関連付けられている場合（CPUホットプラグ）、さらに調整が必要になる。CPUは、そのノードがメモリを持った後にのみオンライン化しなければならない。
 
-### Removing the Last Memory from a Node {#removing-the-last-memory-from-a-node}
+### ノードから最後のメモリを削除する {#removing-the-last-memory-from-a-node}
 
-When `offline_pages()` is about to remove the last present pages from a NUMA node, it notifies the system via `node_notify(NODE_REMOVING_LAST_MEMORY, ...)`. On success, `node_clear_state(node, N_MEMORY)` marks the node as memory-less. `kswapd` and `kcompactd` for that node are stopped. The zone lists are rebuilt without the empty node.
+`offline_pages()` がNUMAノードから最後の存在ページを削除しようとするとき、`node_notify(NODE_REMOVING_LAST_MEMORY, ...)` でシステムに通知する。成功すると、`node_clear_state(node, N_MEMORY)` がそのノードをメモリなしとしてマークする。そのノードの `kswapd` と `kcompactd` は停止される。ゾーンリストは空のノードを除いて再構築される。
 
-## Observing Hotplug Events {#observing-hotplug-events}
+## ホットプラグイベントの観察 {#observing-hotplug-events}
 
 ### dmesg {#dmesg}
 
-The kernel logs memory online/offline events:
+カーネルはメモリのオンライン化・オフライン化のイベントをログに記録する:
 
 ```
 kernel: [  123.456789] memory: online [mem 0x0000001000000000-0x000000103fffffff]
 kernel: [  456.789012] Offlined Pages 32768
 ```
 
-For a failed offline:
+オフライン化に失敗した場合:
 
 ```
 kernel: memory offlining [mem 0x0000001000000000-0x000000101fffffff] failed due to unmovable page
 ```
 
-### udev Events {#udev-events}
+### udevイベント {#udev-events}
 
-When memory blocks are created in sysfs, `udev` sees `add` events for devices of subsystem `memory`. A `udev` rule can trigger custom scripts:
+sysfsにメモリブロックが作成されると、`udev` はサブシステム `memory` のデバイスについて `add` イベントを受け取る。`udev` ルールでカスタムスクリプトを起動できる:
 
 ```
 ACTION=="add", SUBSYSTEM=="memory", ATTR{state}=="offline", \
   RUN+="/usr/local/bin/memory-online.sh $env{DEVPATH}"
 ```
 
-This is how `systemd` and distribution scripts implement automatic onlining as an alternative to the kernel's built-in `auto_online_blocks`.
+`systemd` やディストリビューションのスクリプトは、カーネル組み込みの `auto_online_blocks` の代替として、この方法で自動オンライン化を実装している。
 
 ### /sys/devices/system/memory/ {#sysdevicessystemmemory}
 
 ```bash
-# Count total memory blocks
+# メモリブロックの総数を数える
 ls /sys/devices/system/memory/ | grep -c memory
 
-# List all offline blocks
+# オフラインのブロックをすべて列挙する
 for d in /sys/devices/system/memory/memory*/; do
   state=$(cat "$d/state")
   [ "$state" = "offline" ] && echo "$d: $state"
 done
 
-# Show which zone each block would be onlined to
+# 各ブロックをどのゾーンにオンライン化できるかを表示する
 for d in /sys/devices/system/memory/memory*/; do
   echo "$d: $(cat $d/valid_zones 2>/dev/null)"
 done
 ```
 
-## The Cloud and VM Use Case {#the-cloud-and-vm-use-case}
+## クラウドとVMのユースケース {#the-cloud-and-vm-use-case}
 
 ### virtio-mem {#virtio-mem}
 
-`virtio-mem` (introduced in Linux 5.8) is the modern memory balloon device for KVM/QEMU. Unlike the traditional `virtio-balloon`, which inflates by pinning pages away from the guest, `virtio-mem` uses memory hotplug: it adds and removes actual physical address ranges from the guest's view.
+`virtio-mem`（Linux 5.8で導入）は、KVM/QEMU向けの現代的なメモリバルーンデバイスである。ページをピン留めしてゲストから取り上げることで膨張する従来の `virtio-balloon` と異なり、`virtio-mem` はメモリホットプラグを使う。ゲストから見える実際の物理アドレス範囲を追加・削除するのである。
 
-The driver (`drivers/virtio/virtio_mem.c`) operates in two modes selected automatically based on alignment:
+ドライバ（`drivers/virtio/virtio_mem.c`）は、アラインメントに基づいて自動的に選ばれる2つのモードで動作する:
 
-- **Sub Block Mode (SBM)**: A Linux memory block spans several smaller sub-blocks. Individual sub-blocks within a block can be plugged or unplugged. Memory is added/removed at Linux memory block granularity.
-- **Big Block Mode (BBM)**: A Big Block spans one or more Linux memory blocks. Used when the device's block size exceeds the Linux memory block size.
+- **Sub Block Mode（SBM）**: 1つのLinuxメモリブロックが、より小さい複数のサブブロックにまたがる。ブロック内の個々のサブブロックをplug/unplugできる。メモリはLinuxメモリブロック単位で追加・削除される。
+- **Big Block Mode（BBM）**: 1つのBig Blockが1つ以上のLinuxメモリブロックにまたがる。デバイスのブロックサイズがLinuxメモリブロックサイズを超える場合に使われる。
 
-In both modes, `virtio-mem` calls `add_memory()` to plug memory and `offline_and_remove_memory()` to unplug it. The driver tracks which sub-blocks are plugged using bitmaps.
+どちらのモードでも、`virtio-mem` はメモリをplugするために `add_memory()` を、unplugするために `offline_and_remove_memory()` を呼ぶ。ドライバはどのサブブロックがplugされているかをビットマップで追跡する。
 
-The implication for zone selection: `virtio-mem` relies on userspace or the kernel's `auto_online_blocks` to online the added blocks. Setting `auto_online_blocks=online_movable` is essential for `virtio-mem` to be able to unplug memory, because blocks in `ZONE_MOVABLE` can be offlined.
+ゾーン選択への含意: `virtio-mem` は、追加したブロックのオンライン化をユーザー空間またはカーネルの `auto_online_blocks` に頼っている。`ZONE_MOVABLE` のブロックはオフライン化できるので、`virtio-mem` がメモリをunplugできるようにするには `auto_online_blocks=online_movable` の設定が不可欠である。
 
-### Why VMs Prefer ZONE_MOVABLE for All Guest RAM {#why-vms-prefer-zone_movable-for-all-guest-ram}
+### なぜVMはゲストRAM全体にZONE_MOVABLEを好むか {#why-vms-prefer-zone_movable-for-all-guest-ram}
 
-Some VM configurations (particularly those using the `movable_node` boot option) put all guest memory into `ZONE_MOVABLE`. The rationale:
+一部のVM構成（特に `movable_node` ブートオプションを使うもの）は、ゲストメモリ全体を `ZONE_MOVABLE` に置く。その理由は:
 
-1. The hypervisor may want to reclaim any guest page, not just hotplugged ones.
-2. Guest kernels should not assume their memory is permanently assigned.
-3. Live migration moves all guest memory, which requires it to be migratable.
+1. ハイパーバイザは、ホットプラグされたページだけでなく、任意のゲストページを回収したい場合がある。
+2. ゲストカーネルは、自分のメモリが恒久的に割り当てられていると想定すべきではない。
+3. ライブマイグレーションはゲストメモリ全体を移動させるので、それが移行可能である必要がある。
 
-The `movable_node` boot parameter forces an entire NUMA node into `ZONE_MOVABLE`.
+`movable_node` ブートパラメータは、NUMAノード全体を `ZONE_MOVABLE` にすることを強制する。
 
-### Kubernetes and Memory Hotplug {#kubernetes-and-memory-hotplug}
+### Kubernetesとメモリホットプラグ {#kubernetes-and-memory-hotplug}
 
-Some Kubernetes runtimes (notably those using `kata-containers` or `cloud-hypervisor`) resize VM memory to match pod resource limits. When a pod's memory limit is increased, the runtime hot-adds memory to the VM. When the limit is decreased (and the memory balloon approach is used), memory sections are offlined and removed. The `auto_online_blocks=online_movable` setting is a common tuning recommendation in cloud VM images for this reason.
+一部のKubernetesランタイム（特に `kata-containers` や `cloud-hypervisor` を使うもの）は、Podのリソース制限に合わせてVMのメモリをリサイズする。Podのメモリ制限が増えると、ランタイムはVMにメモリをホットアドする。制限が減ると（メモリバルーン方式を使う場合）、メモリセクションがオフライン化されて取り除かれる。このため、`auto_online_blocks=online_movable` の設定はクラウドVMイメージにおける一般的なチューニングの推奨事項となっている。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memory_hotplug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory_hotplug.c) | Core hotplug logic: `add_memory()`, `remove_memory()`, `online_pages()`, `offline_pages()`, `do_migrate_range()` |
-| [`include/linux/memory_hotplug.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memory_hotplug.h) | Public API: `add_memory()`, `online_pages()`, `offline_pages()`, `mhp_t` flags, `struct mhp_params` |
-| [`drivers/base/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/memory.c) | sysfs interface: `state` attribute, `auto_online_blocks`, `memory_block_online()`, `memory_block_offline()` |
-| [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) | Page isolation: `start_isolate_page_range()`, `undo_isolate_page_range()`, `page_is_unmovable()` |
-| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | `struct mem_section`, `SECTION_SIZE_BITS` reference, `struct mem_section_usage` |
-| [`include/linux/memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memory.h) | `struct memory_block`, `struct memory_group`, `enum memory_block_state`, `register_memory_notifier()` |
-| [`arch/x86/include/asm/sparsemem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/sparsemem.h) | x86-64 `SECTION_SIZE_BITS = 27` (128 MB sections) |
-| [`drivers/virtio/virtio_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_mem.c) | `virtio-mem` driver — uses `add_memory()` / `offline_and_remove_memory()` |
-| [`mm/mm_init.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mm_init.c) | `kernelcore=` and `movablecore=` boot parameter parsing |
+| [`mm/memory_hotplug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory_hotplug.c) | ホットプラグの中核ロジック: `add_memory()`、`remove_memory()`、`online_pages()`、`offline_pages()`、`do_migrate_range()` |
+| [`include/linux/memory_hotplug.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memory_hotplug.h) | 公開API: `add_memory()`、`online_pages()`、`offline_pages()`、`mhp_t` フラグ、`struct mhp_params` |
+| [`drivers/base/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/memory.c) | sysfsインターフェイス: `state` 属性、`auto_online_blocks`、`memory_block_online()`、`memory_block_offline()` |
+| [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) | ページの隔離: `start_isolate_page_range()`、`undo_isolate_page_range()`、`page_is_unmovable()` |
+| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | `struct mem_section`、`SECTION_SIZE_BITS` の参照、`struct mem_section_usage` |
+| [`include/linux/memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memory.h) | `struct memory_block`、`struct memory_group`、`enum memory_block_state`、`register_memory_notifier()` |
+| [`arch/x86/include/asm/sparsemem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/sparsemem.h) | x86-64の `SECTION_SIZE_BITS = 27`（128 MBのセクション） |
+| [`drivers/virtio/virtio_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_mem.c) | `virtio-mem` ドライバ — `add_memory()` / `offline_and_remove_memory()` を使う |
+| [`mm/mm_init.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mm_init.c) | `kernelcore=` と `movablecore=` ブートパラメータの解析 |
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
 ```bash
-# List all memory blocks and their states
+# すべてのメモリブロックとその状態を列挙する
 ls /sys/devices/system/memory/ | grep memory
 
-# Check current onlining policy
+# 現在のオンライン化ポリシーを確認する
 cat /sys/devices/system/memory/auto_online_blocks
 
-# Check memory block size
+# メモリブロックサイズを確認する
 printf "%d MB\n" $(($(cat /sys/devices/system/memory/block_size_bytes) / 1024 / 1024))
 
-# Find any offline memory blocks
+# オフラインのメモリブロックを探す
 for d in /sys/devices/system/memory/memory*/; do
   state=$(cat "$d/state" 2>/dev/null)
   [ "$state" = "offline" ] && echo "OFFLINE: $d"
 done
 
-# Check which zones a memory block can be onlined to
+# メモリブロックをどのゾーンにオンライン化できるかを確認する
 cat /sys/devices/system/memory/memory0/valid_zones
 
-# Check ZONE_MOVABLE size via /proc/zoneinfo
+# /proc/zoneinfoでZONE_MOVABLEのサイズを確認する
 grep -A5 "Node.*Movable" /proc/zoneinfo
 
-# Watch dmesg for hotplug events in real time
+# dmesgでホットプラグイベントをリアルタイムに監視する
 dmesg -w | grep -E "memory|hotplug|Offlined|online"
 
-# On a VM with virtio-mem, check if the driver is loaded
+# virtio-memを使うVMで、ドライバがロードされているか確認する
 lsmod | grep virtio_mem
 ls /sys/bus/virtio/drivers/virtio_mem/ 2>/dev/null
 ```
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Offline Fails with "unmovable page" {#offline-fails-with-unmovable-page}
+### オフライン化が "unmovable page" で失敗する {#offline-fails-with-unmovable-page}
 
-The section contains an unmovable kernel allocation — slab objects, page tables, or a pinned page.
+セクションに移動不能なカーネル割り当て（slabオブジェクト、ページテーブル、ピン留めされたページ）が含まれている。
 
-**Diagnosis**:
+**診断**:
 ```bash
 dmesg | grep "offlining.*failed"
-# Look for the specific failure reason
+# 具体的な失敗理由を探す
 
-# Check what zone the block is in
+# ブロックがどのゾーンにあるかを確認する
 cat /sys/devices/system/memory/memoryN/valid_zones
-# If it shows only "Normal", all normal-zone allocations are blocking you
+# "Normal" しか表示されない場合、normalゾーンのすべての割り当てが妨げになっている
 ```
 
-**Remedies**:
+**対処法**:
 
-- If possible, online the block as `ZONE_MOVABLE` instead (requires re-onlining)
-- Set `auto_online_blocks=online_movable` before the next hotplug event
-- Try the offline repeatedly — memory compaction runs between attempts and may free the range
+- 可能なら、代わりにブロックを `ZONE_MOVABLE` としてオンライン化する（再オンライン化が必要）
+- 次のホットプラグイベントの前に `auto_online_blocks=online_movable` を設定する
+- オフライン化を繰り返し試す — 試行の間にメモリコンパクションが走り、範囲が空く可能性がある
 
-### Memory Block Not Appearing After Hotplug {#memory-block-not-appearing-after-hotplug}
+### ホットプラグ後にメモリブロックが現れない {#memory-block-not-appearing-after-hotplug}
 
-The physical device was added but no sysfs entry appeared.
+物理デバイスは追加されたが、sysfsのエントリが現れない。
 
-- Check `dmesg` for ACPI or firmware errors
-- Verify `CONFIG_MEMORY_HOTPLUG=y` in the running kernel (`zcat /proc/config.gz | grep MEMORY_HOTPLUG`)
-- On VMs, check that the hypervisor signal (ACPI notification or `virtio-mem` event) was delivered
+- `dmesg` でACPIやファームウェアのエラーを確認する
+- 実行中のカーネルで `CONFIG_MEMORY_HOTPLUG=y` になっているか確認する（`zcat /proc/config.gz | grep MEMORY_HOTPLUG`）
+- VMでは、ハイパーバイザからのシグナル（ACPI通知や `virtio-mem` イベント）が届いたか確認する
 
-### ZONE_MOVABLE Is Empty {#zone_movable-is-empty}
+### ZONE_MOVABLEが空である {#zone_movable-is-empty}
 
-`grep -A5 "Node.*Movable" /proc/zoneinfo` shows zero pages.
+`grep -A5 "Node.*Movable" /proc/zoneinfo` がゼロページを示す。
 
-- `ZONE_MOVABLE` is only populated if `kernelcore=`, `movablecore=`, or `movable_node` is specified at boot, or if memory was onlined via `online_movable`
-- Hotplugged memory onlined as `online_movable` will appear here
+- `ZONE_MOVABLE` にページが入るのは、ブート時に `kernelcore=`、`movablecore=`、`movable_node` のいずれかが指定された場合か、メモリが `online_movable` でオンライン化された場合だけである
+- `online_movable` としてオンライン化されたホットプラグメモリはここに現れる
 
-## History {#history}
+## 歴史 {#history}
 
-### SPARSEMEM and the Foundations (v2.6.13, 2005) {#sparsemem-and-the-foundations-v2613-2005}
+### SPARSEMEMと基盤（v2.6.13、2005年） {#sparsemem-and-the-foundations-v2613-2005}
 
-Memory hotplug required a new [memory model](memory-model.md). The classic `FLATMEM` model assumed a contiguous `mem_map` array spanning all physical memory, which breaks when memory appears and disappears at runtime. SPARSEMEM introduced the per-section `struct mem_section` array, making the `struct page` arrays discontiguous and independently allocatable.
+メモリホットプラグには新しい[メモリモデル](memory-model.md)が必要だった。古典的な `FLATMEM` モデルは、すべての物理メモリにまたがる連続した `mem_map` 配列を前提としており、実行時にメモリが現れたり消えたりすると破綻する。SPARSEMEMはセクションごとの `struct mem_section` 配列を導入し、`struct page` 配列を不連続かつ独立に割り当て可能にした。
 
-### Initial Hotplug Support (v2.6.15, 2006) {#initial-hotplug-support-v2615-2006}
+### 初期のホットプラグサポート（v2.6.15、2006年） {#initial-hotplug-support-v2615-2006}
 
-Basic memory hot-add support was merged for x86-64 and ia64, providing `add_memory()` and the initial sysfs interface. Hot-remove was not yet supported.
+x86-64とia64向けに基本的なメモリホットアドのサポートがマージされ、`add_memory()` と初期のsysfsインターフェイスが提供された。ホットリムーブはまだサポートされていなかった。
 
-### Memory Hot-Remove (v2.6.24, 2008) {#memory-hot-remove-v2624-2008}
+### メモリのホットリムーブ（v2.6.24、2008年） {#memory-hot-remove-v2624-2008}
 
-`offline_pages()` and the page migration machinery for hot-remove were added, enabling `ZONE_MOVABLE` to be used as a staging area for removable memory.
+`offline_pages()` とホットリムーブのためのページ移行機構が追加され、`ZONE_MOVABLE` を取り外し可能なメモリの待機領域として使えるようになった。
 
-### virtio-mem (v5.8, 2020) {#virtio-mem-v58-2020}
+### virtio-mem（v5.8、2020年） {#virtio-mem-v58-2020}
 
-**Commit**: [35ee9a3e812b](https://git.kernel.org/linus/35ee9a3e812b)
+**コミット**: [35ee9a3e812b](https://git.kernel.org/linus/35ee9a3e812b)
 
-**Author**: David Hildenbrand (Red Hat)
+**作者**: David Hildenbrand（Red Hat）
 
-The `virtio-mem` driver provided a clean interface for hypervisors to add and remove guest memory in fine-grained blocks, replacing the coarser balloon driver approach for cloud use cases.
+`virtio-mem` ドライバは、ハイパーバイザがゲストメモリを細粒度のブロックで追加・削除するための整ったインターフェイスを提供し、クラウドのユースケースにおいて、より粗いバルーンドライバ方式を置き換えた。
 
-**LWN coverage**: [virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/)
+**LWNの記事**: [virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/)
 
-### memmap_on_memory (v5.14, 2021) {#memmaponmemory-v514-2021}
+### memmap_on_memory（v5.14、2021年） {#memmaponmemory-v514-2021}
 
-The `MHP_MEMMAP_ON_MEMORY` flag and `memory_hotplug.memmap_on_memory` parameter allowed the `struct page` metadata for hotplugged memory to be stored inside the hotplugged memory itself, rather than consuming existing RAM.
+`MHP_MEMMAP_ON_MEMORY` フラグと `memory_hotplug.memmap_on_memory` パラメータにより、ホットプラグされたメモリの `struct page` メタデータを、既存のRAMを消費するのではなく、ホットプラグされたメモリ自体の中に格納できるようになった。
 
-## References {#references}
+## 参考資料 {#references}
 
-- [LWN: Memory hotplug](https://lwn.net/Articles/197855/) — early overview of the hot-remove design
-- [LWN: virtio-mem](https://lwn.net/Articles/820428/) — virtio-mem design and use cases
-- [numa](numa.md) — NUMA topology and how hotplug interacts with node online/offline
-- [cma](cma.md) — CMA and `MIGRATE_CMA`, related movable memory machinery
-- [compaction](compaction.md) — page migration used by `do_migrate_range()` during offline
-- [page-allocator](page-allocator.md) — migrate types and zone layout
+- [LWN: Memory hotplug](https://lwn.net/Articles/197855/) — ホットリムーブ設計の初期の概要
+- [LWN: virtio-mem](https://lwn.net/Articles/820428/) — virtio-memの設計とユースケース
+- [numa](numa.md) — NUMAトポロジと、ホットプラグがノードのオンライン化・オフライン化とどう関わるか
+- [cma](cma.md) — CMAと `MIGRATE_CMA`。関連する移動可能メモリの機構
+- [compaction](compaction.md) — オフライン化中に `do_migrate_range()` が使うページ移行
+- [page-allocator](page-allocator.md) — マイグレートタイプとゾーン配置
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — official kernel documentation covering sysfs interface, zone selection, and the online/offline state machine
-- [Kernel docs: Memory hotplug notifier](https://docs.kernel.org/core-api/memory-hotplug.html) — `memory_notify()`, `MEM_GOING_ONLINE`/`MEM_CANCEL_OFFLINE`, and `struct memory_notify`
-- [`Documentation/admin-guide/mm/memory-hotplug.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/memory-hotplug.rst) — kernel source for the memory hotplug admin guide
-- [`mm/memory_hotplug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory_hotplug.c) — core implementation: `add_memory()`, `remove_memory()`, `online_pages()`, `offline_pages()`
-- [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) — `start_isolate_page_range()` and `page_is_unmovable()` used during offline
-- [`drivers/virtio/virtio_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_mem.c) — virtio-mem driver implementing Sub Block Mode and Big Block Mode hotplug for VMs
-- [LWN: Memory hotplug](https://lwn.net/Articles/197855/) — early design overview of the hot-remove path and ZONE_MOVABLE rationale (2007)
-- [LWN: virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/) — virtio-mem design, sub-block granularity, and cloud VM use cases (2020)
-- [LWN: Memory offlining and migration](https://lwn.net/Articles/650996/) — the page isolation and migration machinery behind `offline_pages()` (2015)
-- [numa.md](numa.md) — NUMA topology changes when nodes are added or removed via hotplug
-- [cma.md](cma.md) — `MIGRATE_CMA` pages and their relationship to `ZONE_MOVABLE` movable page guarantees
-- [compaction.md](compaction.md) — page migration machinery reused by `do_migrate_range()` during memory offlining
+- [Kernel docs: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — sysfsインターフェイス、ゾーン選択、オンライン/オフラインの状態機械を扱う公式カーネルドキュメント
+- [Kernel docs: Memory hotplug notifier](https://docs.kernel.org/core-api/memory-hotplug.html) — `memory_notify()`、`MEM_GOING_ONLINE`/`MEM_CANCEL_OFFLINE`、`struct memory_notify`
+- [`Documentation/admin-guide/mm/memory-hotplug.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/memory-hotplug.rst) — メモリホットプラグ管理ガイドのカーネルソース
+- [`mm/memory_hotplug.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory_hotplug.c) — 中核の実装: `add_memory()`、`remove_memory()`、`online_pages()`、`offline_pages()`
+- [`mm/page_isolation.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_isolation.c) — オフライン化中に使われる `start_isolate_page_range()` と `page_is_unmovable()`
+- [`drivers/virtio/virtio_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_mem.c) — VM向けにSub Block ModeとBig Block Modeのホットプラグを実装するvirtio-memドライバ
+- [LWN: Memory hotplug](https://lwn.net/Articles/197855/) — ホットリムーブのパスとZONE_MOVABLEの根拠に関する初期の設計概要（2007年）
+- [LWN: virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/) — virtio-memの設計、サブブロックの粒度、クラウドVMのユースケース（2020年）
+- [LWN: Memory offlining and migration](https://lwn.net/Articles/650996/) — `offline_pages()` の背後にあるページの隔離と移行の機構（2015年）
+- [numa.md](numa.md) — ホットプラグでノードが追加・削除されるときのNUMAトポロジの変化
+- [cma.md](cma.md) — `MIGRATE_CMA` ページと、`ZONE_MOVABLE` の移動可能ページ保証との関係
+- [compaction.md](compaction.md) — メモリのオフライン化中に `do_migrate_range()` が再利用するページ移行機構

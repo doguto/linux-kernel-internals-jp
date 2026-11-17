@@ -1,40 +1,40 @@
-# What happens when you fork {#what-happens-when-you-fork}
+# forkすると何が起きるか {#what-happens-when-you-fork}
 
-> The memory mechanics of process creation
+> プロセス生成におけるメモリの仕組み
 
-## fork() in 30 seconds {#fork-in-30-seconds}
+## 30秒でわかるfork() {#fork-in-30-seconds}
 
-When a process calls `fork()`, the kernel creates a child process that's almost an exact copy of the parent. But copying gigabytes of memory would be slow and wasteful. Instead, Linux uses **copy-on-write (COW)**: parent and child share the same physical pages until one of them writes.
+プロセスが `fork()` を呼ぶと、カーネルは親プロセスのほぼ正確なコピーである子プロセスを作る。しかし、ギガバイト単位のメモリをコピーするのは遅く、無駄が多い。そこでLinuxは**コピーオンライト（COW）**を使う。親と子は、どちらかが書き込むまで同じ物理ページを共有する。
 
 ```mermaid
 flowchart TB
-    subgraph before["Parent Process (before fork)"]
-        VAS["Virtual Address Space<br/>[stack] [heap] [data] [code] [libs]"]
-        PP["Physical pages (owned exclusively)"]
+    subgraph before["親プロセス（fork前）"]
+        VAS["仮想アドレス空間<br/>[stack] [heap] [data] [code] [libs]"]
+        PP["物理ページ（排他的に所有）"]
         VAS --> PP
     end
 
-    subgraph after["After fork()"]
-        subgraph Parent1["Parent"]
+    subgraph after["fork()後"]
+        subgraph Parent1["親"]
             PS1["[stack]"]
         end
-        subgraph Child1["Child"]
+        subgraph Child1["子"]
             CS1["[stack]"]
         end
-        SP["Shared physical pages (read-only)"]
+        SP["共有された物理ページ（読み取り専用）"]
         PS1 --> SP
         CS1 --> SP
     end
 
-    subgraph cow["After child writes to stack"]
-        subgraph Parent2["Parent"]
+    subgraph cow["子がスタックに書き込んだ後"]
+        subgraph Parent2["親"]
             PS2["[stack]"]
-            OP["[Original]"]
+            OP["[元のページ]"]
             PS2 --> OP
         end
-        subgraph Child2["Child"]
+        subgraph Child2["子"]
             CS2["[stack]"]
-            CP["[Copy] (new page)"]
+            CP["[コピー]（新しいページ）"]
             CS2 --> CP
         end
     end
@@ -43,25 +43,25 @@ flowchart TB
     after --> cow
 ```
 
-This makes fork() fast - `O(page tables)` rather than `O(memory used)`.
+これによりfork()は高速になる。`O(使用メモリ量)` ではなく `O(ページテーブル)` で済む。
 
-## Before fork: The parent's memory {#before-fork-the-parents-memory}
+## fork前: 親のメモリ {#before-fork-the-parents-memory}
 
-A typical process has multiple memory regions, each backed differently:
+典型的なプロセスは複数のメモリ領域を持ち、それぞれ異なる方法で裏付けられている:
 
 ```mermaid
 flowchart TB
-    subgraph addr["Parent Process Address Space"]
+    subgraph addr["親プロセスのアドレス空間"]
         direction TB
-        HIGH["High addresses"]
-        STACK["[Stack]<br/>Anonymous, private, grows down"]
-        MMAP["[Memory-mapped files]<br/>File-backed, may be shared"]
-        LIBS["[Shared libraries]<br/>File-backed, shared across processes<br/>(libc.so, etc.)"]
-        HEAP["[Heap]<br/>Anonymous, private, grows up"]
-        BSS["[BSS]<br/>Anonymous (zero-initialized global variables)"]
-        DATA["[Data]<br/>File-backed (initialized global variables)"]
-        TEXT["[Text/Code]<br/>File-backed, read-only, executable"]
-        LOW["Low addresses"]
+        HIGH["高位アドレス"]
+        STACK["[Stack]<br/>無名、プライベート、下方向に伸びる"]
+        MMAP["[メモリマップされたファイル]<br/>ファイルで裏付け、共有されうる"]
+        LIBS["[共有ライブラリ]<br/>ファイルで裏付け、プロセス間で共有<br/>（libc.soなど）"]
+        HEAP["[Heap]<br/>無名、プライベート、上方向に伸びる"]
+        BSS["[BSS]<br/>無名（ゼロ初期化されたグローバル変数）"]
+        DATA["[Data]<br/>ファイルで裏付け（初期化済みグローバル変数）"]
+        TEXT["[Text/Code]<br/>ファイルで裏付け、読み取り専用、実行可能"]
+        LOW["低位アドレス"]
 
         HIGH --- STACK
         STACK --- MMAP
@@ -74,20 +74,20 @@ flowchart TB
     end
 ```
 
-Each region is represented by a VMA ([Virtual Memory Area](mmap.md)). The kernel must handle each VMA appropriately during fork.
+各領域はVMA（[Virtual Memory Area](mmap.md)）で表される。カーネルはfork中に各VMAを適切に処理しなければならない。
 
-## The fork system call {#the-fork-system-call}
+## forkシステムコール {#the-fork-system-call}
 
-Fork is implemented via the `clone()` system call internally:
+forkは内部的には `clone()` システムコールで実装されている:
 
 ```c
-// User calls fork()
+// ユーザーがfork()を呼ぶ
 pid_t child = fork();
 
-// glibc translates to:
+// glibcは次のように変換する:
 clone(SIGCHLD, 0, NULL, NULL, 0);
 
-// Kernel entry point: kernel/fork.c
+// カーネルのエントリポイント: kernel/fork.c
 SYSCALL_DEFINE0(fork)
 {
     struct kernel_clone_args args = {
@@ -97,126 +97,126 @@ SYSCALL_DEFINE0(fork)
 }
 ```
 
-### What gets copied {#what-gets-copied}
+### 何がコピーされるか {#what-gets-copied}
 
-Fork creates copies of many process structures:
+forkは多くのプロセス構造体のコピーを作る:
 
-| Structure | What Happens |
+| 構造体 | 何が起きるか |
 |-----------|--------------|
-| `task_struct` | New copy for child |
-| `mm_struct` | New copy (address space descriptor) |
-| VMAs | Duplicated (but reference same pages) |
-| Page tables | Duplicated (pointing to same physical pages) |
-| Physical pages | **Shared** (COW setup) |
-| File descriptors | Duplicated (reference same files) |
-| Signal handlers | Copied |
+| `task_struct` | 子のために新しいコピーを作る |
+| `mm_struct` | 新しいコピー（アドレス空間記述子） |
+| VMA | 複製される（ただし同じページを参照） |
+| ページテーブル | 複製される（同じ物理ページを指す） |
+| 物理ページ | **共有される**（COWの設定） |
+| ファイルディスクリプタ | 複製される（同じファイルを参照） |
+| シグナルハンドラ | コピーされる |
 
-The critical insight: **page tables are copied, physical pages are not**.
+決定的なポイントは、**ページテーブルはコピーされるが、物理ページはコピーされない**ということである。
 
-## Inside dup_mm(): Copying the address space {#inside-dup_mm-copying-the-address-space}
+## dup_mm()の内部: アドレス空間のコピー {#inside-dup_mm-copying-the-address-space}
 
-The memory copying happens in [`dup_mm()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c):
+メモリのコピーは [`dup_mm()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) で行われる:
 
 ```c
-// kernel/fork.c (simplified)
+// kernel/fork.c（簡略化）
 static struct mm_struct *dup_mm(struct task_struct *tsk,
                                 struct mm_struct *oldmm)
 {
     struct mm_struct *mm;
 
-    // 1. Allocate new mm_struct
+    // 1. 新しいmm_structを割り当てる
     mm = allocate_mm();
 
-    // 2. Copy mm_struct fields
+    // 2. mm_structのフィールドをコピーする
     memcpy(mm, oldmm, sizeof(*mm));
 
-    // 3. Allocate new page tables (PGD)
+    // 3. 新しいページテーブル（PGD）を割り当てる
     mm->pgd = pgd_alloc(mm);
 
-    // 4. Copy VMAs and page tables
+    // 4. VMAとページテーブルをコピーする
     dup_mmap(mm, oldmm);
 
     return mm;
 }
 ```
 
-### VMA duplication {#vma-duplication}
+### VMAの複製 {#vma-duplication}
 
-Each VMA is duplicated, but the handling depends on its type:
+各VMAは複製されるが、扱いはその種類によって異なる:
 
 ```c
-// kernel/fork.c dup_mmap() (simplified)
+// kernel/fork.c dup_mmap()（簡略化）
 static int dup_mmap(struct mm_struct *mm, struct mm_struct *oldmm)
 {
     struct vm_area_struct *mpnt, *tmp;
 
     for_each_vma(oldmm, mpnt) {
-        // Skip regions marked DONTFORK
+        // DONTFORKとマークされた領域はスキップする
         if (mpnt->vm_flags & VM_DONTFORK)
             continue;
 
-        // Create new VMA for child
+        // 子のために新しいVMAを作る
         tmp = vm_area_dup(mpnt);
 
-        // Handle special cases
+        // 特殊なケースを処理する
         if (mpnt->vm_flags & VM_WIPEONFORK) {
-            // Child sees zeros (security feature)
+            // 子にはゼロが見える（セキュリティ機能）
             tmp->anon_vma = NULL;
         }
 
-        // Copy page tables for this VMA
+        // このVMAのページテーブルをコピーする
         copy_page_range(mm, oldmm, tmp, mpnt);
 
-        // Add VMA to child's address space
+        // VMAを子のアドレス空間に追加する
         insert_vm_struct(mm, tmp);
     }
 }
 ```
 
-### Page table copying and COW setup {#page-table-copying-and-cow-setup}
+### ページテーブルのコピーとCOWの設定 {#page-table-copying-and-cow-setup}
 
-The key function is [`copy_page_range()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c), which walks the parent's page tables and creates corresponding entries in the child:
+鍵となる関数は [`copy_page_range()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) で、親のページテーブルを走査し、子に対応するエントリを作成する:
 
 ```c
-// mm/memory.c (simplified)
+// mm/memory.c（簡略化）
 int copy_page_range(struct mm_struct *dst_mm, struct mm_struct *src_mm,
                     struct vm_area_struct *dst_vma,
                     struct vm_area_struct *src_vma)
 {
-    // Walk page table levels: PGD → PUD → PMD → PTE
-    // For each valid PTE...
+    // ページテーブルの階層を走査: PGD → PUD → PMD → PTE
+    // 有効な各PTEについて...
 
-    // If it's a private writable mapping:
+    // プライベートな書き込み可能マッピングなら:
     if (is_cow_mapping(src_vma->vm_flags)) {
-        // Make BOTH parent and child PTEs read-only
+        // 親と子の両方のPTEを読み取り専用にする
         ptep_set_wrprotect(src_mm, addr, src_pte);
         pte = pte_wrprotect(pte);
     }
 
-    // Copy the PTE to child (pointing to same physical page)
+    // PTEを子にコピーする（同じ物理ページを指す）
     set_pte_at(dst_mm, addr, dst_pte, pte);
 
-    // Increment page reference count
+    // ページの参照カウントをインクリメントする
     page_dup_rmap(page);
 }
 ```
 
-**Critical detail**: Both parent AND child are made read-only for private writable mappings. This ensures the first writer (whichever process) triggers the COW fault.
+**重要な詳細**: プライベートな書き込み可能マッピングでは、親と子の**両方**が読み取り専用にされる。これにより、最初に書き込んだ側（どちらのプロセスであれ）がCOWフォールトを引き起こすことが保証される。
 
-### The COW setup in detail {#the-cow-setup-in-detail}
+### COWの設定の詳細 {#the-cow-setup-in-detail}
 
 ```mermaid
 flowchart TB
-    subgraph before["Before fork"]
-        PPTE1["Parent PTE<br/>[RW, present]<br/>refcount=1"]
-        PAGE1["Physical Page"]
+    subgraph before["fork前"]
+        PPTE1["親のPTE<br/>[RW, present]<br/>refcount=1"]
+        PAGE1["物理ページ"]
         PPTE1 --> PAGE1
     end
 
-    subgraph after["After fork (COW setup)"]
-        PPTE2["Parent PTE<br/>[RO, present]"]
-        PAGE2["Physical Page<br/>refcount=2"]
-        CPTE["Child PTE<br/>[RO, present]"]
+    subgraph after["fork後（COWの設定）"]
+        PPTE2["親のPTE<br/>[RO, present]"]
+        PAGE2["物理ページ<br/>refcount=2"]
+        CPTE["子のPTE<br/>[RO, present]"]
         PPTE2 --> PAGE2
         CPTE --> PAGE2
     end
@@ -224,36 +224,36 @@ flowchart TB
     before --> after
 ```
 
-Both PTEs point to the same physical page. Both are marked read-only. The page's reference count increments to 2.
+両方のPTEが同じ物理ページを指す。両方とも読み取り専用にマークされる。ページの参照カウントは2にインクリメントされる。
 
-## COW fault handling {#cow-fault-handling}
+## COWフォールトの処理 {#cow-fault-handling}
 
-When either process writes to a COW page, a page fault occurs:
+どちらかのプロセスがCOWページに書き込むと、ページフォールトが発生する:
 
 ```c
-// User code (in parent or child)
-buffer[0] = 'x';  // Write to shared page
+// ユーザーコード（親または子）
+buffer[0] = 'x';  // 共有ページへの書き込み
 
-// CPU: "PTE says read-only, but this is a write!"
-// → Page fault → Kernel handles it
+// CPU:「PTEは読み取り専用だと言っているのに、これは書き込みだ！」
+// → ページフォールト → カーネルが処理する
 ```
 
-The kernel handles this in [`do_wp_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c):
+カーネルはこれを [`do_wp_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) で処理する:
 
 ```c
-// mm/memory.c (simplified)
+// mm/memory.c（簡略化）
 static vm_fault_t do_wp_page(struct vm_fault *vmf)
 {
     struct folio *old_folio = page_folio(vmf->page);
 
-    // Check if we're the only user of this page
+    // このページの唯一の使用者かどうかを確認する
     if (wp_can_reuse_anon_folio(old_folio, vmf->vma)) {
-        // We're the only mapper - just make it writable
+        // 唯一のマッパーなので、単に書き込み可能にする
         wp_page_reuse(vmf, old_folio);
         return 0;
     }
 
-    // Multiple mappers - need to copy
+    // 複数のマッパーがいるので、コピーが必要
     return wp_page_copy(vmf);
 }
 
@@ -262,264 +262,264 @@ static vm_fault_t wp_page_copy(struct vm_fault *vmf)
     struct folio *old_folio = page_folio(vmf->page);
     struct folio *new_folio;
 
-    // 1. Allocate new page
+    // 1. 新しいページを割り当てる
     new_folio = vma_alloc_folio(GFP_HIGHUSER_MOVABLE, ...);
 
-    // 2. Copy content (the actual "copy" in copy-on-write)
+    // 2. 内容をコピーする（コピーオンライトの実際の「コピー」）
     copy_user_highpage(&new_folio->page, &old_folio->page, ...);
 
-    // 3. Update page table to point to new page (with write permission)
+    // 3. ページテーブルを新しいページを指すよう更新する（書き込み権限付き）
     set_pte_at(vma->vm_mm, vmf->address, vmf->pte,
                mk_pte(&new_folio->page, vma->vm_page_prot));
 
-    // 4. Decrement old page refcount
+    // 4. 古いページの参照カウントをデクリメントする
     folio_put(old_folio);
 
     return 0;
 }
 ```
 
-### After COW fault {#after-cow-fault}
+### COWフォールトの後 {#after-cow-fault}
 
 ```mermaid
 flowchart LR
-    subgraph parent["Parent (still read-only)"]
-        PPTE["Parent PTE<br/>[RO, present]"]
-        ORIG["Original Page<br/>refcount=1"]
+    subgraph parent["親（まだ読み取り専用）"]
+        PPTE["親のPTE<br/>[RO, present]"]
+        ORIG["元のページ<br/>refcount=1"]
         PPTE --> ORIG
     end
 
-    subgraph child["Child (has its own copy)"]
-        CPTE["Child PTE<br/>[RW, present]"]
-        COPY["New Page (copy)<br/>refcount=1"]
+    subgraph child["子（自分のコピーを持つ）"]
+        CPTE["子のPTE<br/>[RW, present]"]
+        COPY["新しいページ（コピー）<br/>refcount=1"]
         CPTE --> COPY
     end
 ```
 
-**Important**: The parent's PTE stays read-only even though it's now the exclusive owner. If the parent writes later, `do_wp_page()` sees refcount=1, calls `wp_page_reuse()`, and simply makes the PTE writable - no copy needed. This lazy approach avoids modifying PTEs that might never be written to.
+**重要**: 親のPTEは、今や排他的な所有者になっているにもかかわらず読み取り専用のままである。後で親が書き込むと、`do_wp_page()` はrefcount=1を見て `wp_page_reuse()` を呼び、単にPTEを書き込み可能にする。コピーは不要である。この遅延的なアプローチにより、一度も書き込まれないかもしれないPTEを変更せずに済む。
 
-## TLB considerations {#tlb-considerations}
+## TLBに関する考慮事項 {#tlb-considerations}
 
-After modifying page tables, stale TLB entries must be invalidated.
+ページテーブルを変更した後は、古いTLBエントリを無効化しなければならない。
 
-### During fork {#during-fork}
+### fork中 {#during-fork}
 
-When making PTEs read-only for COW:
+COWのためにPTEを読み取り専用にするとき:
 
 ```c
-// The parent's PTE changes from RW to RO
-// TLB might have cached the old RW entry
+// 親のPTEはRWからROに変わる
+// TLBは古いRWエントリをキャッシュしているかもしれない
 
 ptep_set_wrprotect(src_mm, addr, src_pte);
-// This implies a TLB flush for that address
+// これはそのアドレスのTLBフラッシュを伴う
 ```
 
-On x86, modifying a PTE from writable to read-only requires flushing the TLB entry. Otherwise, the CPU might use a cached writable entry and skip the COW fault.
+x86では、PTEを書き込み可能から読み取り専用に変更するには、そのTLBエントリをフラッシュする必要がある。そうしないと、CPUがキャッシュされた書き込み可能エントリを使い、COWフォールトを飛ばしてしまう可能性がある。
 
-### During COW fault {#during-cow-fault}
+### COWフォールト中 {#during-cow-fault}
 
-After updating the faulting process's PTE:
+フォールトしたプロセスのPTEを更新した後:
 
 ```c
-// Old entry (RO) → New entry (RW, different physical page)
-// Flush the old TLB entry
+// 古いエントリ（RO）→ 新しいエントリ（RW、別の物理ページ）
+// 古いTLBエントリをフラッシュする
 
 flush_tlb_page(vma, address);
 ```
 
-### Multi-threaded processes {#multi-threaded-processes}
+### マルチスレッドプロセス {#multi-threaded-processes}
 
-If the forking process is multi-threaded, all threads share the same `mm_struct`. During fork:
+forkするプロセスがマルチスレッドの場合、すべてのスレッドが同じ `mm_struct` を共有する。fork中は:
 
-- The forking thread holds `mmap_lock` for write
-- Other threads are prevented from faulting during the page table copy
-- TLB shootdowns may be needed across CPUs running sibling threads
+- forkするスレッドが `mmap_lock` を書き込みモードで保持する
+- ページテーブルのコピー中、他のスレッドはフォールトできなくなる
+- 兄弟スレッドを実行しているCPUにまたがるTLBシュートダウンが必要になることがある
 
-This is one reason `fork()` in heavily multi-threaded processes can be slow.
+これが、高度にマルチスレッドなプロセスで `fork()` が遅くなりうる理由の1つである。
 
-## Memory accounting after fork {#memory-accounting-after-fork}
+## fork後のメモリアカウンティング {#memory-accounting-after-fork}
 
-After fork, memory metrics can be confusing:
+fork後、メモリのメトリクスは紛らわしくなることがある:
 
 ```bash
-# Parent and child both show:
+# 親と子の両方が次を示す:
 ps -o pid,vsz,rss,comm -p $PARENT_PID,$CHILD_PID
 
-# VSZ: Same (same virtual address space layout)
-# RSS: Initially same, diverges as COW happens
+# VSZ: 同じ（同じ仮想アドレス空間レイアウト）
+# RSS: 最初は同じ、COWが起きるにつれて分岐する
 ```
 
-### RSS (Resident Set Size) {#rss-resident-set-size}
+### RSS（Resident Set Size） {#rss-resident-set-size}
 
-RSS counts physical pages mapped to a process. After fork:
+RSSは、プロセスにマップされている物理ページを数える。fork後は:
 
-- Both processes count the shared pages in their RSS
-- The sum of parent + child RSS > actual physical memory used
-- This is expected! RSS is per-process, not system-wide
+- 両方のプロセスが共有ページを自分のRSSに数える
+- 親と子のRSSの合計 > 実際に使われている物理メモリ
+- これは想定どおりである！ RSSはプロセスごとの値であり、システム全体の値ではない
 
 ```mermaid
 flowchart LR
-    subgraph reality["Reality after fork"]
-        PHYS["Physical memory: 100MB (shared)"]
-        subgraph reported["Reported (misleading)"]
-            PRSS["Parent RSS: 100MB"]
-            CRSS["Child RSS: 100MB"]
-            TRSS["Total RSS: 200MB"]
+    subgraph reality["fork後の実態"]
+        PHYS["物理メモリ: 100MB（共有）"]
+        subgraph reported["報告値（誤解を招く）"]
+            PRSS["親のRSS: 100MB"]
+            CRSS["子のRSS: 100MB"]
+            TRSS["RSSの合計: 200MB"]
         end
-        ACTUAL["Actual physical: 100MB"]
+        ACTUAL["実際の物理メモリ: 100MB"]
     end
 ```
 
-### PSS (Proportional Set Size) {#pss-proportional-set-size}
+### PSS（Proportional Set Size） {#pss-proportional-set-size}
 
-PSS divides shared pages among sharing processes:
+PSSは共有ページを共有しているプロセス間で按分する:
 
 ```mermaid
 flowchart LR
-    subgraph pss["With PSS"]
-        PHYS["Physical memory: 100MB<br/>(shared between 2 processes)"]
-        subgraph accurate["Accurate accounting"]
-            PPSS["Parent PSS: 50MB"]
-            CPSS["Child PSS: 50MB"]
-            TPSS["Total PSS: 100MB"]
+    subgraph pss["PSSの場合"]
+        PHYS["物理メモリ: 100MB<br/>（2つのプロセス間で共有）"]
+        subgraph accurate["正確なアカウンティング"]
+            PPSS["親のPSS: 50MB"]
+            CPSS["子のPSS: 50MB"]
+            TPSS["PSSの合計: 100MB"]
         end
     end
 ```
 
 ```bash
-# View PSS
+# PSSを表示する
 cat /proc/$PID/smaps_rollup | grep Pss
 ```
 
-### Shared vs Private {#shared-vs-private}
+### 共有とプライベート {#shared-vs-private}
 
-The `smaps` file distinguishes:
+`smaps` ファイルは次を区別する:
 
 ```bash
 cat /proc/$PID/smaps | grep -E "^(Shared|Private)"
 
-# Shared_Clean:  Shared, unmodified pages
-# Shared_Dirty:  Shared, modified pages (rare after fork)
-# Private_Clean: Private pages, not written
-# Private_Dirty: Private pages, written (COW completed)
+# Shared_Clean:  共有され、変更されていないページ
+# Shared_Dirty:  共有され、変更されたページ（fork後はまれ）
+# Private_Clean: プライベートで、書き込まれていないページ
+# Private_Dirty: プライベートで、書き込まれたページ（COW完了）
 ```
 
-After fork, most pages are `Shared_Clean`. As COW happens, they become `Private_Dirty` in the writing process.
+fork後、ほとんどのページは `Shared_Clean` である。COWが起きるにつれ、書き込んだプロセスではそれらが `Private_Dirty` になる。
 
-## exec() and COW cleanup {#exec-and-cow-cleanup}
+## exec()とCOWの後始末 {#exec-and-cow-cleanup}
 
-The common pattern `fork() + exec()` is highly optimized:
+一般的なパターンである `fork() + exec()` は高度に最適化されている:
 
 ```c
 pid_t pid = fork();
 if (pid == 0) {
-    // Child process
-    exec("/bin/ls", ...);  // Replace address space entirely
+    // 子プロセス
+    exec("/bin/ls", ...);  // アドレス空間を丸ごと置き換える
 }
 ```
 
-When `exec()` runs:
+`exec()` が実行されると:
 
-1. **Entire address space is discarded**
-2. COW pages are never copied (refcount decremented instead)
-3. New program's pages are mapped fresh
+1. **アドレス空間全体が破棄される**
+2. COWページは一度もコピーされない（代わりに参照カウントがデクリメントされる）
+3. 新しいプログラムのページが新たにマップされる
 
 ```mermaid
 flowchart LR
     FORK["fork()"]
-    COW["Shared COW pages"]
-    EXEC["exec()<br/>Discards all!"]
-    RESULT["No copies made!<br/>Just refcount up, then down."]
+    COW["共有されたCOWページ"]
+    EXEC["exec()<br/>すべて破棄！"]
+    RESULT["コピーは一切行われない！<br/>参照カウントが増えて、減るだけ。"]
 
     FORK --> COW --> EXEC
     COW --> RESULT
 ```
 
-This is why shells (which fork+exec constantly) are efficient despite creating many child processes.
+これが、シェル（絶えずfork+execする）が多くの子プロセスを作るにもかかわらず効率的である理由である。
 
-### vfork() optimization {#vfork-optimization}
+### vfork()による最適化 {#vfork-optimization}
 
-`vfork()` goes further - it doesn't even copy page tables:
+`vfork()` はさらに踏み込み、ページテーブルさえコピーしない:
 
 ```c
 pid_t pid = vfork();
 if (pid == 0) {
-    // Child SHARES parent's address space entirely
-    // Parent is BLOCKED until child exits or execs
+    // 子は親のアドレス空間を丸ごと共有する
+    // 親は子が終了するかexecするまでブロックされる
     exec("/bin/ls", ...);
 }
 ```
 
-**Warning**: With `vfork()`, any memory modification in the child corrupts the parent. Only use if you `exec()` or `_exit()` immediately.
+**警告**: `vfork()` では、子でのメモリの変更はすべて親を破壊する。直ちに `exec()` か `_exit()` する場合にのみ使うこと。
 
-## Special cases {#special-cases}
+## 特殊なケース {#special-cases}
 
 ### VM_DONTFORK {#vm_dontfork}
 
-Some VMAs shouldn't be inherited:
+継承されるべきでないVMAもある:
 
 ```c
-// After mmap, mark the region as don't-fork
+// mmapの後、領域をdon't-forkとしてマークする
 void *buf = mmap(NULL, size, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 madvise(buf, size, MADV_DONTFORK);
 ```
 
-The child simply won't have this mapping. Use for DMA buffers or security-sensitive regions.
+子にはこのマッピングが単に存在しない。DMAバッファやセキュリティ上重要な領域に使う。
 
 ### VM_WIPEONFORK {#vm_wipeonfork}
 
-The mapping exists in the child but content is zeroed:
+マッピングは子に存在するが、内容はゼロにされる:
 
 ```c
 madvise(addr, len, MADV_WIPEONFORK);
 ```
 
-Added in kernel 4.14 ([commit d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)) for security-sensitive data (encryption keys, random state) that shouldn't leak to children.
+子に漏れてはならないセキュリティ上重要なデータ（暗号鍵、乱数の状態）のために、カーネル4.14で追加された（[commit d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)）。
 
-### Huge pages and fork {#huge-pages-and-fork}
+### ヒュージページとfork {#huge-pages-and-fork}
 
-Transparent Huge Pages (THP) have special COW handling:
+Transparent Huge Pages（THP）には特別なCOW処理がある:
 
-- **Old behavior**: Copy entire 2MB on first write (expensive!)
-- **Modern behavior (v4.5+)**: Split THP into 4KB pages, COW only the written page
+- **以前の挙動**: 最初の書き込みで2MB全体をコピーする（高コスト！）
+- **現代の挙動（v4.5以降）**: THPを4KBページに分割し、書き込まれたページだけをCOWする
 
-See the [THP documentation](thp.md) and [COW explainer](cow.md) for details.
+詳細は[THPのドキュメント](thp.md)と[COWの解説](cow.md)を参照。
 
-## Performance considerations {#performance-considerations}
+## 性能に関する考慮事項 {#performance-considerations}
 
-### Fork latency {#fork-latency}
+### forkのレイテンシ {#fork-latency}
 
-Fork time scales with:
+forkにかかる時間は次の要素に比例して増える:
 
-1. **Number of VMAs**: Each VMA is duplicated
-2. **Page table size**: All page table levels are copied
-3. **TLB flush overhead**: Especially on multi-CPU processes
+1. **VMAの数**: 各VMAが複製される
+2. **ページテーブルのサイズ**: すべての階層のページテーブルがコピーされる
+3. **TLBフラッシュのオーバーヘッド**: 特に複数CPUで動くプロセスで
 
-For a process with 1GB of mapped memory (256K pages), fork must walk and copy page table entries for all of them.
+1GBのマップ済みメモリ（256Kページ）を持つプロセスでは、forkはそのすべてのページテーブルエントリを走査してコピーしなければならない。
 
-### Reducing fork overhead {#reducing-fork-overhead}
+### forkのオーバーヘッドを減らす {#reducing-fork-overhead}
 
-1. **Use `posix_spawn()` when possible**: Combines fork+exec more efficiently
-2. **Avoid huge address spaces before fork**: Unmapping reduces page table copying
-3. **Consider `vfork()` for fork+exec**: No page table copy, but dangerous
+1. **可能なら `posix_spawn()` を使う**: fork+execをより効率的に組み合わせる
+2. **fork前に巨大なアドレス空間を避ける**: アンマップするとページテーブルのコピーが減る
+3. **fork+execには `vfork()` を検討する**: ページテーブルのコピーは不要だが、危険
 
-### Measuring fork impact {#measuring-fork-impact}
+### forkの影響を測定する {#measuring-fork-impact}
 
 ```bash
-# Time fork() operations
+# fork()操作の時間を計測する
 perf stat -e 'syscalls:sys_enter_clone' ./your_program
 
-# Trace fork latency
+# forkのレイテンシをトレースする
 perf trace -e clone ./your_program
 
-# Watch COW faults after fork
+# fork後のCOWフォールトを観察する
 perf stat -e page-faults ./your_program
 ```
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Watch COW in action {#watch-cow-in-action}
+### COWの動作を観察する {#watch-cow-in-action}
 
 ```bash
 cat > /tmp/cow_demo.c << 'EOF'
@@ -530,10 +530,10 @@ cat > /tmp/cow_demo.c << 'EOF'
 #include <sys/wait.h>
 
 int main() {
-    // Allocate and touch memory
+    // メモリを割り当てて触る
     size_t size = 100 * 1024 * 1024;  // 100MB
     char *buf = malloc(size);
-    memset(buf, 'A', size);  // Fault in all pages
+    memset(buf, 'A', size);  // すべてのページをフォールトで割り当てる
 
     printf("Before fork - check RSS:\n");
     printf("  Parent PID: %d\n", getpid());
@@ -544,9 +544,9 @@ int main() {
     pid_t pid = fork();
 
     if (pid == 0) {
-        // Child
+        // 子
         printf("\nAfter fork - child PID: %d\n", getpid());
-        sleep(1);  // Let parent print first
+        sleep(1);  // 親に先に出力させる
 
         printf("\nChild writing to all pages (triggering COW)...\n");
         memset(buf, 'B', size);
@@ -558,8 +558,8 @@ int main() {
 
         exit(0);
     } else {
-        // Parent
-        sleep(2);  // Let child do its work
+        // 親
+        sleep(2);  // 子に作業させる
         wait(NULL);
     }
 
@@ -570,314 +570,314 @@ gcc -o /tmp/cow_demo /tmp/cow_demo.c
 /tmp/cow_demo
 ```
 
-### Monitor page sharing {#monitor-page-sharing}
+### ページ共有を監視する {#monitor-page-sharing}
 
 ```bash
-# View shared vs private memory
+# 共有メモリとプライベートメモリを表示する
 cat /proc/$PID/smaps_rollup
 
-# Before fork (in parent):
-# Shared_Clean + Shared_Dirty ≈ 0 (no sharing)
+# fork前（親で）:
+# Shared_Clean + Shared_Dirty ≈ 0（共有なし）
 # Private_Clean + Private_Dirty ≈ RSS
 
-# After fork (before COW):
-# Shared_Clean ≈ most memory (COW shared)
-# Private_* ≈ small
+# fork後（COW前）:
+# Shared_Clean ≈ メモリの大部分（COWで共有）
+# Private_* ≈ 小さい
 
-# After COW:
-# Private_Dirty increases (copies made)
+# COW後:
+# Private_Dirty が増える（コピーが作られた）
 ```
 
-### Trace fork system call {#trace-fork-system-call}
+### forkシステムコールをトレースする {#trace-fork-system-call}
 
 ```bash
-# Trace fork with timing
+# 時間付きでforkをトレースする
 strace -f -T -e clone,execve ./your_program
 
-# -f: follow forks
-# -T: show time spent in syscall
+# -f: forkを追跡する
+# -T: システムコールに費やした時間を表示する
 ```
 
-### Count page table pages {#count-page-table-pages}
+### ページテーブルのページ数を数える {#count-page-table-pages}
 
 ```bash
-# Page table memory is in /proc/PID/status
+# ページテーブルのメモリは/proc/PID/statusにある
 grep -E "VmPTE|VmPMD" /proc/$PID/status
 
-# VmPTE: PTE-level page table memory
-# VmPMD: PMD-level page table memory
+# VmPTE: PTEレベルのページテーブルメモリ
+# VmPMD: PMDレベルのページテーブルメモリ
 ```
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`kernel/fork.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) | fork/clone implementation, dup_mm() |
-| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | copy_page_range(), COW fault handling |
-| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | VMA duplication |
-| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct, vm_area_struct |
+| [`kernel/fork.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) | fork/cloneの実装、dup_mm() |
+| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | copy_page_range()、COWフォールトの処理 |
+| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | VMAの複製 |
+| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct、vm_area_struct |
 
-## History {#history}
+## 歴史 {#history}
 
-### Early COW {#early-cow}
+### 初期のCOW {#early-cow}
 
-Copy-on-write in Unix predates Linux. Linux inherited the technique from Unix tradition when Linus Torvalds wrote the initial implementation in 1991.
+Unixにおけるコピーオンライトは、Linuxより前から存在する。Linuxは、Linus Torvaldsが1991年に最初の実装を書いたときに、Unixの伝統からこの技法を受け継いだ。
 
-### Per-VMA locks (v6.4, 2023) {#per-vma-locks-v64-2023}
+### VMAごとのロック（v6.4、2023年） {#per-vma-locks-v64-2023}
 
-**Commit**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) ("mm: add per-VMA lock and helper functions to control it") | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
+**コミット**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997)（"mm: add per-VMA lock and helper functions to control it"） | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
 
-**Author**: Suren Baghdasaryan
+**作者**: Suren Baghdasaryan
 
-COW page faults can now be handled with per-VMA locks instead of the global `mmap_lock`, significantly improving scalability for multi-threaded processes after fork.
+COWのページフォールトを、グローバルな `mmap_lock` の代わりにVMAごとのロックで処理できるようになり、fork後のマルチスレッドプロセスのスケーラビリティが大きく向上した。
 
-### COW under VMA lock (v6.4+, 2023) {#cow-under-vma-lock-v64-2023}
+### VMAロック下でのCOW（v6.4以降、2023年） {#cow-under-vma-lock-v64-2023}
 
-**Commit**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9) ("mm: call wp_page_copy() under the VMA lock") | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
+**コミット**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9)（"mm: call wp_page_copy() under the VMA lock"） | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
 
-**Author**: Matthew Wilcox (Oracle)
+**作者**: Matthew Wilcox（Oracle）
 
-Part of ongoing work to handle COW faults without taking `mmap_lock`, improving concurrent page fault handling.
+`mmap_lock` を取らずにCOWフォールトを処理するための継続的な取り組みの一部で、並行するページフォールト処理を改善する。
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-Fork and COW involve subtle race conditions between memory mapping, page table manipulation, and signal handling. These bugs have led to some of the most impactful Linux kernel vulnerabilities.
+forkとCOWには、メモリマッピング、ページテーブル操作、シグナル処理の間の微妙な競合状態が絡む。これらのバグは、Linuxカーネルで最も影響の大きかった脆弱性のいくつかにつながった。
 
 ---
 
-### Case 1: Dirty COW (CVE-2016-5195) {#case-1-dirty-cow-cve-2016-5195}
+### ケース1: Dirty COW（CVE-2016-5195） {#case-1-dirty-cow-cve-2016-5195}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-In October 2016, Phil Oester discovered a race condition in the kernel's COW handling that had existed since kernel 2.6.22 (July 2007) - **nine years** undetected.
+2016年10月、Phil Oesterは、カーネル2.6.22（2007年7月）から存在していたカーネルのCOW処理の競合状態を発見した。**9年間**発見されていなかったのである。
 
-The vulnerability allowed an unprivileged local user to gain write access to read-only memory mappings, enabling privilege escalation to root.
+この脆弱性により、権限のないローカルユーザーが読み取り専用のメモリマッピングへの書き込みアクセスを得られ、rootへの権限昇格が可能になった。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-The [official Dirty COW page](https://dirtycow.ninja/) explains the race condition occurs between two operations:
+[Dirty COWの公式ページ](https://dirtycow.ninja/)によれば、競合状態は次の2つの操作の間で起きる:
 
-1. **Thread A**: Writing to a COW memory mapping (triggers COW fault)
-2. **Thread B**: Calling `madvise(MADV_DONTNEED)` to discard the page
+1. **スレッドA**: COWメモリマッピングへの書き込み（COWフォールトを引き起こす）
+2. **スレッドB**: ページを破棄するために `madvise(MADV_DONTNEED)` を呼ぶ
 
-When these race repeatedly, the kernel can be confused into writing data directly to the original read-only page instead of creating a private copy first.
+これらが繰り返し競合すると、カーネルが混乱し、先にプライベートなコピーを作る代わりに、元の読み取り専用ページへ直接データを書き込んでしまうことがある。
 
 ```mermaid
 sequenceDiagram
-    participant T1 as Thread 1 (write)
-    participant K as Kernel
-    participant T2 as Thread 2 (madvise)
+    participant T1 as スレッド1（書き込み）
+    participant K as カーネル
+    participant T2 as スレッド2（madvise）
 
-    T1->>K: Write to COW page
-    K->>K: Start COW fault handling
+    T1->>K: COWページへの書き込み
+    K->>K: COWフォールト処理を開始
     T2->>K: madvise(MADV_DONTNEED)
-    K->>K: Discard the COW copy
-    K->>K: Race! Write goes to original page
-    Note over K: Read-only page now modified!
+    K->>K: COWのコピーを破棄
+    K->>K: 競合！書き込みが元のページへ
+    Note over K: 読み取り専用ページが変更された！
 ```
 
-#### Real-world implications {#real-world-implications}
+#### 現実への影響 {#real-world-implications}
 
-The vulnerability was [actively exploited in the wild](https://www.redhat.com/en/blog/understanding-and-mitigating-dirty-cow-vulnerability). Attack scenarios included:
+この脆弱性は[実際に悪用されていた](https://www.redhat.com/en/blog/understanding-and-mitigating-dirty-cow-vulnerability)。攻撃シナリオには次のものがあった:
 
-- Overwriting `/etc/passwd` to gain root access
-- Modifying setuid binaries
-- Rooting Android devices before version 7 (Nougat)
+- `/etc/passwd` を上書きしてrootアクセスを得る
+- setuidバイナリを改変する
+- バージョン7（Nougat）より前のAndroidデバイスをroot化する
 
-[Red Hat's analysis](https://access.redhat.com/security/vulnerabilities/DirtyCow): *"Although it is a local privilege escalation, remote attackers can use it in conjunction with other exploits that allow remote execution of non-privileged code to achieve remote root access."*
+[Red Hatの分析](https://access.redhat.com/security/vulnerabilities/DirtyCow): *"Although it is a local privilege escalation, remote attackers can use it in conjunction with other exploits that allow remote execution of non-privileged code to achieve remote root access."*（訳: ローカルの権限昇格ではあるが、リモート攻撃者は、権限のないコードのリモート実行を可能にする他のエクスプロイトと組み合わせて、リモートからのrootアクセスを得るために使える）
 
-#### The fix {#the-fix}
+#### 修正 {#the-fix}
 
-**Commit**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) ("mm: remove gup_flags FOLL_WRITE games from __get_user_pages()") | [LKML](https://lkml.org/lkml/2016/10/19/860)
+**コミット**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a)（"mm: remove gup_flags FOLL_WRITE games from __get_user_pages()"） | [LKML](https://lkml.org/lkml/2016/10/19/860)
 
-**Author**: Linus Torvalds
+**作者**: Linus Torvalds
 
-Linus wrote: *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago... It was then undone due to problems on s390."*
+Linusはこう書いている: *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago... It was then undone due to problems on s390."*（訳: これは大昔のバグで、実は11年前に私が一度（まずいやり方で）修正しようとしたものだ……その後s390での問題のために取り消された）
 
-The fix removed the `FOLL_WRITE` flag manipulation that created the race window.
+この修正は、競合の窓を生んでいた `FOLL_WRITE` フラグの操作を取り除いた。
 
-#### Why it went undetected {#why-it-went-undetected}
+#### なぜ発見されなかったか {#why-it-went-undetected}
 
-The bug was subtle:
+このバグは微妙だった:
 
-- Required precise timing between two threads
-- Only affected private mappings of read-only files
-- Normal testing wouldn't trigger the race
+- 2つのスレッド間の正確なタイミングが必要だった
+- 読み取り専用ファイルのプライベートマッピングにしか影響しなかった
+- 通常のテストでは競合は起きなかった
 
-#### Legacy {#legacy}
+#### 遺産 {#legacy}
 
-Dirty COW spawned research into similar races. The name comes from "Dirty" (the write operation) + "COW" (Copy-On-Write). It earned its own logo, website, and became a textbook example of race condition vulnerabilities.
+Dirty COWは同様の競合の研究を生んだ。名前は "Dirty"（書き込み操作）+ "COW"（Copy-On-Write）に由来する。独自のロゴとWebサイトを持ち、競合状態の脆弱性の教科書的な例となった。
 
 ---
 
-### Case 2: StackRot (CVE-2023-3269) {#case-2-stackrot-cve-2023-3269}
+### ケース2: StackRot（CVE-2023-3269） {#case-2-stackrot-cve-2023-3269}
 
-#### What happened {#what-happened_1}
+#### 何が起きたか {#what-happened_1}
 
-In June 2023, Ruihan Li (Peking University) discovered a use-after-free vulnerability in the maple tree - the new data structure that replaced red-black trees for VMA management in kernel 6.1.
+2023年6月、Ruihan Li（北京大学）は、maple treeにuse-after-freeの脆弱性を発見した。maple treeは、カーネル6.1でVMA管理のために赤黒木を置き換えた新しいデータ構造である。
 
-#### The bug {#the-bug_1}
+#### バグ {#the-bug_1}
 
-The [StackRot disclosure](https://github.com/lrh2000/StackRot) explains:
+[StackRotの公開情報](https://github.com/lrh2000/StackRot)は次のように説明している:
 
-When the stack grows (via `MAP_GROWSDOWN`), the kernel adjusts the VMA's start address. This adjustment modifies the maple tree **without holding the MM write lock**.
+スタックが（`MAP_GROWSDOWN` によって）伸びるとき、カーネルはVMAの開始アドレスを調整する。この調整は、**MMの書き込みロックを保持せずに**maple treeを変更する。
 
-Because maple trees are RCU-safe, node modifications create new nodes and schedule old ones for deletion via RCU callbacks. But VMA access only requires the MM read lock - it doesn't enter RCU critical sections.
+maple treeはRCUセーフなので、ノードの変更では新しいノードが作られ、古いノードはRCUコールバックによる削除が予約される。しかしVMAへのアクセスにはMMの読み取りロックしか必要なく、RCUのクリティカルセクションには入らない。
 
 ```mermaid
 flowchart TD
-    A["Stack grows<br/>(page fault below stack)"] --> B["Kernel adjusts VMA start"]
-    B --> C["Maple tree node replaced"]
-    C --> D["Old node scheduled for RCU free"]
-    D --> E["Other thread holds MM read lock<br/>Still has pointer to old node"]
-    E --> F["RCU callback frees old node"]
+    A["スタックが伸びる<br/>（スタックの下でのページフォールト）"] --> B["カーネルがVMAの開始を調整"]
+    B --> C["maple treeのノードが置き換えられる"]
+    C --> D["古いノードがRCU解放に予約される"]
+    D --> E["他のスレッドがMMの読み取りロックを保持<br/>まだ古いノードへのポインタを持っている"]
+    E --> F["RCUコールバックが古いノードを解放"]
     F --> G["USE-AFTER-FREE!"]
 ```
 
-#### Real-world implications {#real-world-implications_1}
+#### 現実への影響 {#real-world-implications_1}
 
-From the [oss-security disclosure](https://www.openwall.com/lists/oss-security/2023/07/05/1):
+[oss-securityでの公開](https://www.openwall.com/lists/oss-security/2023/07/05/1)より:
 
 > *"An unprivileged local user could use this flaw to compromise the kernel and escalate their privileges."*
 
-The vulnerability affected kernels 6.1 through 6.4 - any system using maple trees for VMA management.
+この脆弱性はカーネル6.1から6.4に影響した。VMA管理にmaple treeを使うすべてのシステムである。
 
-#### The fix {#the-fix_1}
+#### 修正 {#the-fix_1}
 
-Linus merged the fix on June 28, 2023 during the 6.5 merge window, with backports to 6.1.37, 6.3.11, and 6.4.1.
+Linusは2023年6月28日、6.5のマージウィンドウ中に修正をマージし、6.1.37、6.3.11、6.4.1にバックポートされた。
 
-Linus provided [a detailed merge message](https://github.com/lrh2000/StackRot) explaining the technical approach: ensuring proper locking when modifying maple tree nodes that might be accessed under RCU.
+Linusは技術的なアプローチを説明する[詳細なマージメッセージ](https://github.com/lrh2000/StackRot)を残した。RCU下でアクセスされうるmaple treeのノードを変更する際に、適切なロックを確実に行うというものである。
 
-#### Why this matters for fork {#why-this-matters-for-fork}
+#### なぜforkにとって重要か {#why-this-matters-for-fork}
 
-Fork duplicates VMAs and their maple tree representation. The maple tree's complexity (compared to the simpler red-black tree it replaced) introduced this subtle race. It's a reminder that data structure changes in MM code require extremely careful concurrency analysis.
+forkはVMAとそのmaple treeでの表現を複製する。maple treeの複雑さ（置き換えた、より単純な赤黒木と比べて）がこの微妙な競合をもたらした。MMコードにおけるデータ構造の変更には、極めて慎重な並行性の分析が必要であることを思い出させる事例である。
 
 ---
 
-### Case 3: The mremap() disaster (CVE-2004-0077) {#case-3-the-mremap-disaster-cve-2004-0077}
+### ケース3: mremap()の大惨事（CVE-2004-0077） {#case-3-the-mremap-disaster-cve-2004-0077}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_2}
 
-In February 2004, Paul Starzetz discovered a critical vulnerability in `mremap()` - the system call that moves or resizes memory mappings.
+2004年2月、Paul Starzetzは `mremap()`（メモリマッピングを移動またはリサイズするシステムコール）に重大な脆弱性を発見した。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_2}
 
-From the [ISEC advisory](https://isec.pl/en/vulnerabilities/isec-0014-mremap-unmap.txt):
+[ISECのアドバイザリ](https://isec.pl/en/vulnerabilities/isec-0014-mremap-unmap.txt)より:
 
 > *"A critical security vulnerability was found in the Linux kernel memory management code in the mremap(2) system call due to incorrect bound checks."*
 
-The kernel failed to properly validate arguments to `mremap()`. By crafting specific arguments, an attacker could:
+カーネルは `mremap()` の引数を適切に検証していなかった。特定の引数を細工することで、攻撃者は次のことができた:
 
-1. Overflow page table counters
-2. Hijack another process's virtual memory segment
-3. If that segment ran with elevated privileges, gain those privileges
+1. ページテーブルのカウンタをオーバーフローさせる
+2. 他のプロセスの仮想メモリセグメントを乗っ取る
+3. そのセグメントが昇格した権限で動いていれば、その権限を得る
 
-#### Real-world implications {#real-world-implications_2}
+#### 現実への影響 {#real-world-implications_2}
 
-Any local user could escalate to root. The vulnerability was trivially exploitable with public proof-of-concept code.
+任意のローカルユーザーがrootに昇格できた。この脆弱性は、公開された概念実証コードで容易に悪用できた。
 
-From the advisory: *"No special privileges are required to use the mremap(2) system call, thus any process may misuse its unexpected behavior to disrupt the kernel memory management subsystem."*
+アドバイザリより: *"No special privileges are required to use the mremap(2) system call, thus any process may misuse its unexpected behavior to disrupt the kernel memory management subsystem."*（訳: mremap(2)システムコールの使用には特別な権限は不要なので、どのプロセスでもその予期しない挙動を悪用してカーネルのメモリ管理サブシステムを混乱させられる）
 
-#### The fix {#the-fix_2}
+#### 修正 {#the-fix_2}
 
-Multiple patches were required across kernel versions 2.4.x and 2.6.x. The fix added proper bounds checking in the mremap path.
+カーネルバージョン2.4.xと2.6.xにまたがって複数のパッチが必要だった。修正はmremapのパスに適切な境界チェックを追加した。
 
-#### Legacy {#legacy_1}
+#### 遺産 {#legacy_1}
 
-This bug highlighted the danger of complex MM system calls. It led to increased scrutiny of mmap/mremap/mprotect code paths and inspired research into MM syscall fuzzing.
-
----
-
-### Case 4: TLB flush races in mremap (CVE-2018-18281) {#case-4-tlb-flush-races-in-mremap-cve-2018-18281}
-
-#### What happened {#what-happened_3}
-
-In 2018, Jann Horn (Google Project Zero) found a TLB (Translation Lookaside Buffer) race in `mremap()`.
-
-#### The bug {#the-bug_3}
-
-From the [oss-security disclosure](https://www.openwall.com/lists/oss-security/2018/10/10/5) by Jann Horn:
-
-When `mremap()` moves a mapping, it must:
-1. Update page tables
-2. Flush TLBs on all CPUs that might have cached the old translation
-
-If the TLB flush is incomplete or races with concurrent access, a CPU might use stale translations, accessing the wrong physical page.
-
-#### Real-world implications {#real-world-implications_3}
-
-An attacker could potentially read or write memory belonging to other processes, bypassing isolation.
-
-#### The fix {#the-fix_3}
-
-**Commit**: [eb66ae030829](https://git.kernel.org/linus/eb66ae030829) ("mremap: properly flush TLB before releasing the page")
-
-**Author**: Linus Torvalds
-
-The fix ensures TLB flushes happen before releasing both source and destination page table locks, preventing stale TLB entries from accessing reallocated pages.
+このバグは、複雑なMMシステムコールの危険性を浮き彫りにした。mmap/mremap/mprotectのコードパスへの精査が強まり、MMシステムコールのファジング研究のきっかけとなった。
 
 ---
 
-### Case 5: fork() and userfaultfd races {#case-5-fork-and-userfaultfd-races}
+### ケース4: mremapにおけるTLBフラッシュの競合（CVE-2018-18281） {#case-4-tlb-flush-races-in-mremap-cve-2018-18281}
 
-#### The pattern {#the-pattern}
+#### 何が起きたか {#what-happened_3}
 
-`userfaultfd` allows userspace to handle page faults. This is extremely useful for:
+2018年、Jann Horn（Google Project Zero）は `mremap()` にTLB（Translation Lookaside Buffer）の競合を発見した。
 
-- Live migration of VMs
-- Garbage collectors
-- Custom memory management
+#### バグ {#the-bug_3}
 
-But it's also a powerful primitive for exploiting race conditions. By handling page faults in userspace, an attacker can **pause kernel execution** at precise moments.
+Jann Hornによる[oss-securityでの公開](https://www.openwall.com/lists/oss-security/2018/10/10/5)より:
 
-#### Exploitation technique {#exploitation-technique}
+`mremap()` がマッピングを移動するとき、次のことをしなければならない:
+1. ページテーブルを更新する
+2. 古い変換をキャッシュしている可能性のあるすべてのCPUでTLBをフラッシュする
 
-From [CVE-2019-18683 analysis](https://a13xp0p0v.github.io/2020/02/15/CVE-2019-18683.html):
+TLBフラッシュが不完全だったり並行アクセスと競合したりすると、CPUが古い変換を使い、誤った物理ページにアクセスする可能性がある。
 
-1. Attacker maps memory with userfaultfd
-2. Triggers a kernel code path that accesses that memory
-3. Kernel blocks waiting for userspace to handle the fault
-4. Attacker manipulates other kernel state while kernel is paused
-5. Attacker releases the fault
-6. Kernel continues with corrupted state
+#### 現実への影響 {#real-world-implications_3}
 
-This technique has been used in many kernel exploits, including Dirty COW variants.
+攻撃者は分離を迂回して、他のプロセスに属するメモリを読み書きできる可能性があった。
 
-#### Mitigation {#mitigation}
+#### 修正 {#the-fix_3}
 
-Since kernel 5.2, `/proc/sys/vm/unprivileged_userfaultfd` can restrict userfaultfd to privileged users:
+**コミット**: [eb66ae030829](https://git.kernel.org/linus/eb66ae030829)（"mremap: properly flush TLB before releasing the page"）
+
+**作者**: Linus Torvalds
+
+この修正は、移動元と移動先の両方のページテーブルロックを解放する前にTLBフラッシュが行われることを保証し、古いTLBエントリが再割り当てされたページにアクセスするのを防ぐ。
+
+---
+
+### ケース5: fork()とuserfaultfdの競合 {#case-5-fork-and-userfaultfd-races}
+
+#### パターン {#the-pattern}
+
+`userfaultfd` は、ユーザー空間がページフォールトを処理できるようにする。これは次の用途で非常に有用である:
+
+- VMのライブマイグレーション
+- ガベージコレクタ
+- 独自のメモリ管理
+
+しかし、これは競合状態を悪用するための強力なプリミティブでもある。ページフォールトをユーザー空間で処理することで、攻撃者は正確な瞬間に**カーネルの実行を一時停止**させられる。
+
+#### 悪用の手法 {#exploitation-technique}
+
+[CVE-2019-18683の分析](https://a13xp0p0v.github.io/2020/02/15/CVE-2019-18683.html)より:
+
+1. 攻撃者がuserfaultfd付きでメモリをマップする
+2. そのメモリにアクセスするカーネルのコードパスを起動する
+3. カーネルはユーザー空間がフォールトを処理するのを待ってブロックする
+4. カーネルが一時停止している間に、攻撃者が他のカーネル状態を操作する
+5. 攻撃者がフォールトを解放する
+6. カーネルは壊れた状態のまま処理を続ける
+
+この手法は、Dirty COWの亜種を含む多くのカーネルエクスプロイトで使われてきた。
+
+#### 緩和策 {#mitigation}
+
+カーネル5.2以降、`/proc/sys/vm/unprivileged_userfaultfd` でuserfaultfdを特権ユーザーに制限できる:
 
 ```bash
-# Disable unprivileged userfaultfd (reduces kernel attack surface)
+# 非特権のuserfaultfdを無効化する（カーネルの攻撃対象領域を減らす）
 echo 0 > /proc/sys/vm/unprivileged_userfaultfd
 ```
 
-Many distributions now default to `0`.
+現在、多くのディストリビューションはデフォルトで `0` にしている。
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Year | Root Cause | Impact | Prevention |
+| バグ | 年 | 根本原因 | 影響 | 予防 |
 |-----|------|------------|--------|------------|
-| **Dirty COW** | 2016 | Race in COW + madvise | Root access | Kernel update, lived 9 years undetected |
-| **StackRot** | 2023 | RCU vs MM lock mismatch | Root access | Careful data structure concurrency review |
-| **mremap bounds** | 2004 | Missing bounds checks | Root access | Syscall argument validation |
-| **TLB flush race** | 2018 | Incomplete TLB flush | Memory disclosure | Proper flush ordering |
-| **userfaultfd races** | Ongoing | Kernel pause primitive | Various | Restrict unprivileged userfaultfd |
+| **Dirty COW** | 2016 | COWとmadviseの競合 | rootアクセス | カーネル更新。9年間発見されずに存在 |
+| **StackRot** | 2023 | RCUとMMロックの不整合 | rootアクセス | データ構造の並行性の慎重なレビュー |
+| **mremapの境界** | 2004 | 境界チェックの欠如 | rootアクセス | システムコール引数の検証 |
+| **TLBフラッシュの競合** | 2018 | 不完全なTLBフラッシュ | メモリの漏洩 | 適切なフラッシュの順序 |
+| **userfaultfdの競合** | 継続中 | カーネルを一時停止させるプリミティブ | さまざま | 非特権のuserfaultfdを制限する |
 
-The common thread: **fork and COW involve complex state shared between processes**. Any race condition in this code has severe security implications because it can break process isolation.
+共通するのは、**forkとCOWにはプロセス間で共有される複雑な状態が絡む**ということである。このコードにおけるあらゆる競合状態は、プロセスの分離を破りうるため、深刻なセキュリティ上の影響を持つ。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Copy-on-Write](cow.md) - Deep dive into COW mechanics and edge cases
-- [Process address space](mmap.md) - VMA structure and management
-- [Virtual vs Physical vs Resident](virtual-physical-resident.md) - Understanding memory metrics
+- [コピーオンライト](cow.md) - COWの仕組みとエッジケースの詳細
+- [プロセスのアドレス空間](mmap.md) - VMAの構造と管理
+- [仮想 vs 物理 vs 常駐](virtual-physical-resident.md) - メモリのメトリクスを理解する
 
-### External resources {#external-resources}
+### 外部資料 {#external-resources}
 
-- [LWN: The price of fork()](https://lwn.net/Articles/820258/) (2020) - Performance analysis of fork in modern systems
-- [Dirty COW vulnerability page](https://dirtycow.ninja/) - Original disclosure and technical details
-- [StackRot disclosure](https://github.com/lrh2000/StackRot) - CVE-2023-3269 details and exploit
+- [LWN: The price of fork()](https://lwn.net/Articles/820258/)（2020年） - 現代のシステムにおけるforkの性能分析
+- [Dirty COW vulnerability page](https://dirtycow.ninja/) - 最初の公開情報と技術的詳細
+- [StackRot disclosure](https://github.com/lrh2000/StackRot) - CVE-2023-3269の詳細とエクスプロイト
