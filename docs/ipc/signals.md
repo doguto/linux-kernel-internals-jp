@@ -1,10 +1,10 @@
-# Signals {#signals}
+# シグナル {#signals}
 
-> Asynchronous notifications delivered to processes
+> プロセスに配送される非同期通知
 
-## Signal basics {#signal-basics}
+## シグナルの基本 {#signal-basics}
 
-A signal is an integer (1–64 on x86-64) sent to a process or thread. The kernel delivers it by interrupting the target process at the next opportunity (syscall return, interrupt return).
+シグナルは、プロセスまたはスレッドに送られる整数（x86-64では1〜64）である。カーネルは、次の機会（システムコールからの復帰、割り込みからの復帰）に対象プロセスに割り込むことでシグナルを配送する。
 
 ```
 Sender                Kernel                Receiver
@@ -15,9 +15,9 @@ kill(pid, SIGTERM) →  pending bit set   →   process checks TIF_SIGPENDING
                                            → or default action (terminate)
 ```
 
-Standard signals (1–31) are not queued — multiple sends before delivery collapse to one. Real-time signals (32–64, `SIGRTMIN`..`SIGRTMAX`) are queued.
+標準シグナル（1〜31）はキューイングされない。配送前に複数回送られても1つにまとめられる。リアルタイムシグナル（32〜64、`SIGRTMIN`..`SIGRTMAX`）はキューイングされる。
 
-## Signal numbers and default actions {#signal-numbers-and-default-actions}
+## シグナル番号とデフォルト動作 {#signal-numbers-and-default-actions}
 
 ```
 SIGHUP  (1)  — hangup (terminal closed) → terminate
@@ -42,233 +42,234 @@ SIGUSR2 (12) — user defined → terminate
 SIGRTMIN..SIGRTMAX (32..64) — real-time → terminate
 ```
 
-## Sending signals {#sending-signals}
+## シグナルの送信 {#sending-signals}
 
 ```c
-/* kill: send to process or process group */
-kill(pid, SIGTERM);   /* pid>0: specific process */
-kill(-pgrp, SIGTERM); /* pid<0: process group */
-kill(0, SIGTERM);     /* current process group */
-kill(-1, SIGTERM);    /* all processes (except init) — requires privilege */
+/* kill: プロセスまたはプロセスグループに送る */
+kill(pid, SIGTERM);   /* pid>0: 特定のプロセス */
+kill(-pgrp, SIGTERM); /* pid<0: プロセスグループ */
+kill(0, SIGTERM);     /* 現在のプロセスグループ */
+kill(-1, SIGTERM);    /* すべてのプロセス（init を除く）— 特権が必要 */
 
-/* tkill: send to specific thread (deprecated, use tgkill) */
+/* tkill: 特定のスレッドに送る（非推奨。tgkill を使う） */
 tkill(tid, SIGTERM);
 
-/* tgkill: send to specific thread in specific process (Linux-specific) */
+/* tgkill: 特定プロセス内の特定スレッドに送る（Linux 固有） */
 tgkill(tgid, tid, SIGTERM);
 
-/* sigqueue: send with data (for real-time signals) */
+/* sigqueue: データ付きで送る（リアルタイムシグナル用） */
 union sigval value;
 value.sival_int = 42;
 sigqueue(pid, SIGRTMIN, value);
-/* Receiver gets si_value.sival_int == 42 in siginfo_t */
+/* 受信者は siginfo_t 内で si_value.sival_int == 42 を受け取る */
 
-/* raise: send to current thread */
+/* raise: 現在のスレッドに送る */
 raise(SIGINT);
 
-/* From kernel: */
-send_sig(SIGTERM, task, 0);         /* send to process */
-send_sig_info(SIGTERM, &info, task); /* with siginfo_t */
+/* カーネルから: */
+send_sig(SIGTERM, task, 0);         /* プロセスに送る */
+send_sig_info(SIGTERM, &info, task); /* siginfo_t 付き */
 kill_pgrp(pgrp, SIGTERM, 0);
 ```
 
-## Kernel signal delivery path {#kernel-signal-delivery-path}
+## カーネルのシグナル配送パス {#kernel-signal-delivery-path}
 
 ```c
-/* Spans three files: do_send_sig_info()/get_signal() are in kernel/signal.c
- * (signal_wake_up() is a thin inline wrapper in include/linux/sched/signal.h
- * around kernel/signal.c's signal_wake_up_state()); exit_to_user_mode_loop()
- * is in kernel/entry/common.c; arch_do_signal_or_restart()/handle_signal()/
- * setup_rt_frame() are x86-64-specific, in arch/x86/kernel/signal.c */
+/* 3つのファイルにまたがる: do_send_sig_info()/get_signal() は kernel/signal.c
+ * にある（signal_wake_up() は include/linux/sched/signal.h にある、
+ * kernel/signal.c の signal_wake_up_state() の薄いインラインラッパー）。
+ * exit_to_user_mode_loop() は kernel/entry/common.c にある。
+ * arch_do_signal_or_restart()/handle_signal()/setup_rt_frame() は x86-64 固有で、
+ * arch/x86/kernel/signal.c にある */
 
-/* 1. do_send_sig_info(): queues signal to target task. It's a thin wrapper
- *    over send_signal_locked() -> __send_signal_locked(), which do the
- *    actual queuing and dispatch shown below (not do_send_sig_info() itself) */
+/* 1. do_send_sig_info(): 対象タスクにシグナルをキューイングする。これは
+ *    send_signal_locked() -> __send_signal_locked() の薄いラッパーであり、
+ *    以下に示す実際のキューイングとディスパッチはそちらが行う（do_send_sig_info() 自身ではない） */
 do_send_sig_info(sig, info, task, type)
   → send_signal_locked(sig, info, task, type)
       → __send_signal_locked(sig, info, task, type, force)
-          /* Process-directed (kill): goes to task->signal->shared_pending */
-          /* Thread-directed (tgkill): goes to task->pending */
+          /* プロセス宛て（kill）: task->signal->shared_pending に入る */
+          /* スレッド宛て（tgkill）: task->pending に入る */
           → sigaddset(&pending->signal, sig)
           → complete_signal(sig, task, type)
-              → signal_wake_up(task, sig == SIGKILL)  /* wake if sleeping, set TIF_SIGPENDING */
+              → signal_wake_up(task, sig == SIGKILL)  /* スリープ中なら起こし、TIF_SIGPENDING を立てる */
 
-/* 2. On return to userspace (syscall return, interrupt return): */
+/* 2. ユーザー空間への復帰時（システムコール復帰、割り込み復帰）: */
 exit_to_user_mode_loop()
   → if TIF_SIGPENDING: arch_do_signal_or_restart(regs)
-      → get_signal(&ksig)               /* dequeue next signal (also handles
-                                          * the ignored/default-action cases
-                                          * internally -- only "handled"
-                                          * returns to the caller below) */
-      → if handled: handle_signal(&ksig) /* set up userspace stack frame */
+      → get_signal(&ksig)               /* 次のシグナルを取り出す（無視/デフォルト
+                                          * 動作のケースも内部で処理する --
+                                          * 下の呼び出し元に戻るのは
+                                          * "handled" の場合だけ） */
+      → if handled: handle_signal(&ksig) /* ユーザー空間のスタックフレームを構築 */
 
-/* 3. handle_signal: set up signal frame on userspace stack */
+/* 3. handle_signal: ユーザー空間スタック上にシグナルフレームを構築 */
 handle_signal(ksig, regs)
   → setup_rt_frame(ksig, regs)
-      /* pushes: siginfo_t, ucontext_t onto user stack */
-      /* sets rip = signal handler, rsp = new user stack */
-      /* sets frame->pretcode = sa_restorer (a pointer, not pushed code) */
+      /* ユーザースタックに siginfo_t、ucontext_t を積む */
+      /* rip = シグナルハンドラ、rsp = 新しいユーザースタック に設定 */
+      /* frame->pretcode = sa_restorer を設定（積まれるのはコードではなくポインタ） */
 ```
 
-`setup_rt_frame()` (`arch/x86/kernel/signal.c`) is itself just a dispatcher that picks the right ABI variant — for a 64-bit process it calls `x64_setup_rt_frame()` in `arch/x86/kernel/signal_64.c`, which does the actual work below. It does not push trampoline machine code onto the stack — it requires `SA_RESTORER` and writes only a pointer (`unsafe_put_user(ksig->ka.sa.sa_restorer, &frame->pretcode, ...)`) to the userspace restorer stub, which normally lives in glibc/vDSO (`__restore_rt`). After the signal handler returns, that restorer calls `rt_sigreturn`, which restores the saved `ucontext_t` (CPU registers before signal delivery) and resumes normal execution.
+`setup_rt_frame()`（`arch/x86/kernel/signal.c`）自体は、適切なABIの変種を選ぶディスパッチャにすぎない。64ビットプロセスでは`arch/x86/kernel/signal_64.c`の`x64_setup_rt_frame()`を呼び、それが以下の実際の処理を行う。トランポリンの機械語をスタックに積むことはしない。`SA_RESTORER`を必須とし、ユーザー空間のrestorerスタブ（通常はglibc/vDSO内の`__restore_rt`）へのポインタだけを書き込む（`unsafe_put_user(ksig->ka.sa.sa_restorer, &frame->pretcode, ...)`）。シグナルハンドラが戻ると、そのrestorerが`rt_sigreturn`を呼び、保存された`ucontext_t`（シグナル配送前のCPUレジスタ）を復元して通常の実行を再開する。
 
-## struct sigaction: installing handlers {#struct-sigaction-installing-handlers}
+## struct sigaction: ハンドラのインストール {#struct-sigaction-installing-handlers}
 
 ```c
 #include <signal.h>
 
-/* sa_handler or sa_sigaction (not both) */
+/* sa_handler か sa_sigaction のどちらか（両方は不可） */
 struct sigaction {
     union {
         void (*sa_handler)(int signum);
         void (*sa_sigaction)(int signum, siginfo_t *info, void *ucontext);
     };
-    sigset_t sa_mask;     /* signals to block during handler */
+    sigset_t sa_mask;     /* ハンドラ実行中にブロックするシグナル */
     int      sa_flags;    /* SA_SIGINFO, SA_RESTART, SA_NODEFER, ... */
-    void    (*sa_restorer)(void);  /* internal use */
+    void    (*sa_restorer)(void);  /* 内部用 */
 };
 ```
 
 ```c
-/* Install a signal handler */
+/* シグナルハンドラをインストールする */
 struct sigaction sa = {
     .sa_sigaction = my_handler,
     .sa_flags = SA_SIGINFO | SA_RESTART,
 };
 sigemptyset(&sa.sa_mask);
-sigaddset(&sa.sa_mask, SIGTERM);  /* block SIGTERM during handler */
+sigaddset(&sa.sa_mask, SIGTERM);  /* ハンドラ実行中は SIGTERM をブロック */
 sigaction(SIGUSR1, &sa, NULL);
 
-/* Handler: */
+/* ハンドラ: */
 static void my_handler(int sig, siginfo_t *info, void *ctx)
 {
-    /* info->si_pid: sender's PID */
+    /* info->si_pid: 送信者の PID */
     /* info->si_code: SI_USER, SI_QUEUE, SI_TIMER, ... */
-    /* info->si_value: data from sigqueue() */
+    /* info->si_value: sigqueue() からのデータ */
     printf("signal %d from pid %d\n", sig, info->si_pid);
 }
 ```
 
-**`printf()` is not actually safe to call here.** It's shown above (and in the `sigchld_handler` example below) for brevity, but `printf()` is not on the [signal-safety(7)](https://man7.org/linux/man-pages/man7/signal-safety.7.html) list of async-signal-safe functions — its internal stdio buffering isn't reentrant, so a handler that interrupts another `printf()` call already in progress can corrupt that buffer. Two real fixes: call `write(2)` directly (it *is* async-signal-safe) to emit pre-formatted text, or — the more common pattern — have the handler only set a `volatile sig_atomic_t` flag and do the actual work (including any `printf()`) back in the main loop, outside signal context.
+**ここで`printf()`を呼ぶのは実際には安全ではない。** 上の例（および後述の`sigchld_handler`の例）では簡潔さのために示しているが、`printf()`は[signal-safety(7)](https://man7.org/linux/man-pages/man7/signal-safety.7.html)の非同期シグナル安全な関数の一覧に含まれていない。内部のstdioバッファリングはリエントラントではないため、すでに実行中の別の`printf()`呼び出しに割り込んだハンドラは、そのバッファを破壊しうる。実際的な対処は2つある。`write(2)`を直接呼んで（これは非同期シグナル安全*である*）事前に整形したテキストを出力するか、より一般的なパターンとして、ハンドラでは`volatile sig_atomic_t`フラグを立てるだけにし、実際の処理（`printf()`を含む）はシグナルコンテキストの外、メインループに戻ってから行う。
 
-Important flags:
+重要なフラグ:
 
-- `SA_SIGINFO` — use `sa_sigaction` (3-arg handler) instead of `sa_handler`
-- `SA_RESTART` — auto-restart interrupted syscalls (`EINTR` hidden from app)
-- `SA_NODEFER` — don't block the signal during its own handler (reentrant)
-- `SA_RESETHAND` — reset to default after one delivery
+- `SA_SIGINFO` — `sa_handler`の代わりに`sa_sigaction`（3引数のハンドラ）を使う
+- `SA_RESTART` — 中断されたシステムコールを自動的に再開する（アプリから`EINTR`が見えなくなる）
+- `SA_NODEFER` — 自身のハンドラ実行中にそのシグナルをブロックしない（リエントラント）
+- `SA_RESETHAND` — 1回配送した後にデフォルトに戻す
 
-## Signal masks {#signal-masks}
+## シグナルマスク {#signal-masks}
 
-Each thread has a signal mask — blocked signals are not delivered until unblocked:
+各スレッドはシグナルマスクを持つ。ブロックされたシグナルは、ブロックが解除されるまで配送されない:
 
 ```c
-/* Block SIGINT and SIGTERM temporarily */
+/* SIGINT と SIGTERM を一時的にブロック */
 sigset_t block_set, old_set;
 sigemptyset(&block_set);
 sigaddset(&block_set, SIGINT);
 sigaddset(&block_set, SIGTERM);
 sigprocmask(SIG_BLOCK, &block_set, &old_set);
 
-/* ... critical section ... */
+/* ... クリティカルセクション ... */
 
-/* Restore original mask */
+/* 元のマスクを復元 */
 sigprocmask(SIG_SETMASK, &old_set, NULL);
 
-/* Atomically: wait for specific signal while unblocking */
-sigsuspend(&old_set);  /* replaces mask, sleeps until any signal */
+/* アトミックに: ブロックを解除しつつ特定のシグナルを待つ */
+sigsuspend(&old_set);  /* マスクを置き換え、何らかのシグナルが来るまでスリープ */
 ```
 
-### Kernel data structures {#kernel-data-structures}
+### カーネルのデータ構造 {#kernel-data-structures}
 
 ```c
-/* Per-process signal state */
+/* プロセスごとのシグナル状態 */
 struct signal_struct {
-    /* pending signals shared by all threads: */
+    /* 全スレッドで共有される保留中シグナル: */
     struct sigpending   shared_pending;
     /* ... */
 };
 
-/* Per-thread signal state */
+/* スレッドごとのシグナル状態 */
 struct task_struct {
-    /* thread-private pending signals: */
+    /* スレッド固有の保留中シグナル: */
     struct sigpending   pending;
-    sigset_t            blocked;        /* current signal mask */
-    sigset_t            real_blocked;   /* saved mask (for sigwaitinfo) */
-    sigset_t            saved_sigmask;  /* restored on sigreturn */
+    sigset_t            blocked;        /* 現在のシグナルマスク */
+    sigset_t            real_blocked;   /* 保存されたマスク（sigwaitinfo 用） */
+    sigset_t            saved_sigmask;  /* sigreturn 時に復元される */
     /* ... */
 };
 
 struct sigpending {
-    struct list_head    list;           /* queued siginfo_t for RT signals */
-    sigset_t            signal;         /* bitmask of pending standard signals */
+    struct list_head    list;           /* RT シグナル用にキューイングされた siginfo_t */
+    sigset_t            signal;         /* 保留中の標準シグナルのビットマスク */
 };
 ```
 
-## Real-time signals {#real-time-signals}
+## リアルタイムシグナル {#real-time-signals}
 
-Real-time signals (SIGRTMIN..SIGRTMAX) differ from standard signals:
+リアルタイムシグナル（SIGRTMIN..SIGRTMAX）は標準シグナルと次の点で異なる:
 
-- **Queued**: multiple sends before delivery are all delivered (FIFO order)
-- **Value**: can carry an integer or pointer (via sigqueue + `si_value`)
-- **Priority**: lower signal number = higher priority within real-time range
+- **キューイングされる**: 配送前に複数回送られても、すべて配送される（FIFO順）
+- **値**: 整数またはポインタを運べる（sigqueue + `si_value`経由）
+- **優先度**: リアルタイムの範囲内では、シグナル番号が小さいほど優先度が高い
 
 ```c
-/* Send with data */
+/* データ付きで送信 */
 union sigval val = { .sival_int = 100 };
 sigqueue(pid, SIGRTMIN+1, val);
 
-/* Receive multiple */
+/* 複数回分を受信 */
 struct sigaction sa = {
     .sa_sigaction = rt_handler,
     .sa_flags = SA_SIGINFO,
 };
 sigaction(SIGRTMIN+1, &sa, NULL);
 
-/* Synchronously wait for signal */
+/* 同期的にシグナルを待つ */
 sigset_t wait_set;
 sigemptyset(&wait_set);
 sigaddset(&wait_set, SIGRTMIN+1);
-sigprocmask(SIG_BLOCK, &wait_set, NULL);  /* must block before sigwaitinfo */
+sigprocmask(SIG_BLOCK, &wait_set, NULL);  /* sigwaitinfo の前にブロックしておく必要がある */
 
 siginfo_t info;
 sigwaitinfo(&wait_set, &info);
 /* info.si_value.sival_int == 100 */
 ```
 
-## signalfd: signals as file descriptors {#signalfd-signals-as-file-descriptors}
+## signalfd: ファイルディスクリプタとしてのシグナル {#signalfd-signals-as-file-descriptors}
 
-`signalfd` converts signal delivery into `read()` calls, enabling use with `epoll`:
+`signalfd`はシグナル配送を`read()`呼び出しに変換し、`epoll`と組み合わせて使えるようにする:
 
 ```c
 #include <sys/signalfd.h>
 #include <sys/epoll.h>
 
-/* Block signals we want to receive via signalfd */
+/* signalfd 経由で受け取りたいシグナルをブロック */
 sigset_t mask;
 sigemptyset(&mask);
 sigaddset(&mask, SIGINT);
 sigaddset(&mask, SIGTERM);
 sigprocmask(SIG_BLOCK, &mask, NULL);
 
-/* Create signalfd */
+/* signalfd を作成 */
 int sfd = signalfd(-1, &mask, SFD_NONBLOCK | SFD_CLOEXEC);
 
-/* Add to epoll */
+/* epoll に追加 */
 struct epoll_event ev = { .events = EPOLLIN, .data.fd = sfd };
 epoll_ctl(epfd, EPOLL_CTL_ADD, sfd, &ev);
 
-/* Read signal info */
+/* シグナル情報を読む */
 struct signalfd_siginfo si;
 read(sfd, &si, sizeof(si));
 if (si.ssi_signo == SIGTERM) {
-    /* clean shutdown */
+    /* クリーンにシャットダウン */
 }
 ```
 
-## SIGCHLD and waitpid {#sigchld-and-waitpid}
+## SIGCHLDとwaitpid {#sigchld-and-waitpid}
 
-`SIGCHLD` is sent to a parent when a child changes state (exits, stops, continues). The parent must call `waitpid` to reap the zombie:
+`SIGCHLD`は、子の状態が変化した（終了、停止、再開）ときに親に送られる。親は`waitpid`を呼んでゾンビを回収しなければならない:
 
 ```c
 static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
@@ -276,7 +277,7 @@ static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
     int status;
     pid_t pid;
 
-    /* Reap all exited children (loop for multiple children) */
+    /* 終了したすべての子を回収する（複数の子のためにループ） */
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
         if (WIFEXITED(status))
             printf("child %d exited with %d\n", pid, WEXITSTATUS(status));
@@ -286,32 +287,32 @@ static void sigchld_handler(int sig, siginfo_t *info, void *ctx)
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `do_send_sig_info()`, `send_signal_locked()`/`__send_signal_locked()`, `complete_signal()`, `signal_wake_up_state()`, and `get_signal()`: the core signal-queuing and dequeuing implementation
-- [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`: where `TIF_SIGPENDING` is checked on the way back to userspace
-- [arch/x86/kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal.c) — `arch_do_signal_or_restart()`, `handle_signal()`, `setup_rt_frame()` (the ABI dispatcher): x86-64 signal-frame setup and the `sa_restorer`/`rt_sigreturn` return path
-- [arch/x86/kernel/signal_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal_64.c) — `x64_setup_rt_frame()`, the real 64-bit frame-building code `setup_rt_frame()` dispatches to
-- [include/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched.h) — `task_struct`: per-thread `pending`, `blocked`, `real_blocked`, `saved_sigmask`
-- [include/linux/sched/signal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/signal.h) — `signal_struct`: per-process `shared_pending`
-- [include/linux/signal_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/signal_types.h) — `struct sigpending` definition
+- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `do_send_sig_info()`、`send_signal_locked()`/`__send_signal_locked()`、`complete_signal()`、`signal_wake_up_state()`、`get_signal()`: シグナルのキューイングと取り出しの中核実装
+- [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`: ユーザー空間へ戻る途中で`TIF_SIGPENDING`がチェックされる場所
+- [arch/x86/kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal.c) — `arch_do_signal_or_restart()`、`handle_signal()`、`setup_rt_frame()`（ABIディスパッチャ）: x86-64のシグナルフレーム構築と、`sa_restorer`/`rt_sigreturn`による復帰パス
+- [arch/x86/kernel/signal_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal_64.c) — `x64_setup_rt_frame()`: `setup_rt_frame()`のディスパッチ先となる、実際の64ビットフレーム構築コード
+- [include/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched.h) — `task_struct`: スレッドごとの`pending`、`blocked`、`real_blocked`、`saved_sigmask`
+- [include/linux/sched/signal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/signal.h) — `signal_struct`: プロセスごとの`shared_pending`
+- [include/linux/signal_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/signal_types.h) — `struct sigpending`の定義
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html) — signal list, default dispositions, and the standard-vs-real-time queuing distinction
-- [sigaction(2)](https://man7.org/linux/man-pages/man2/sigaction.2.html) — `struct sigaction` and the `SA_*` flags
-- [kill(2)](https://man7.org/linux/man-pages/man2/kill.2.html) — `pid` targeting rules (process, process group, broadcast)
-- [rt_sigqueueinfo(2)](https://man7.org/linux/man-pages/man2/rt_sigqueueinfo.2.html) — the syscall underlying `sigqueue(3)`, used to queue a real-time signal with data
-- [signalfd(2)](https://man7.org/linux/man-pages/man2/signalfd.2.html) — signals delivered as `read()`-able file descriptor events
-- [signal-safety(7)](https://man7.org/linux/man-pages/man7/signal-safety.7.html) — which functions may safely be called from a signal handler
+- [signal(7)](https://man7.org/linux/man-pages/man7/signal.7.html) — シグナルの一覧、デフォルトの処理方法、標準シグナルとリアルタイムシグナルのキューイングの違い
+- [sigaction(2)](https://man7.org/linux/man-pages/man2/sigaction.2.html) — `struct sigaction`と`SA_*`フラグ
+- [kill(2)](https://man7.org/linux/man-pages/man2/kill.2.html) — `pid`による対象指定の規則（プロセス、プロセスグループ、ブロードキャスト）
+- [rt_sigqueueinfo(2)](https://man7.org/linux/man-pages/man2/rt_sigqueueinfo.2.html) — `sigqueue(3)`の下にあるシステムコールで、データ付きのリアルタイムシグナルをキューイングするのに使う
+- [signalfd(2)](https://man7.org/linux/man-pages/man2/signalfd.2.html) — `read()`可能なファイルディスクリプタのイベントとして配送されるシグナル
+- [signal-safety(7)](https://man7.org/linux/man-pages/man7/signal-safety.7.html) — シグナルハンドラから安全に呼び出せる関数
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [eventfd and signalfd](eventfd-signalfd.md) — a fuller treatment of `signalfd`, including `struct signalfd_siginfo` and the `epoll` integration pattern
-- [Pipes and FIFOs](pipes.md) — `SIGPIPE` when writing to a broken pipe
+- [eventfdとsignalfd](eventfd-signalfd.md) — `struct signalfd_siginfo`や`epoll`統合パターンを含む、`signalfd`のより詳しい解説
+- [パイプとFIFO](pipes.md) — 壊れたパイプに書き込んだときの`SIGPIPE`
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Ghosts of Unix past, part 3: Unfixable designs](https://lwn.net/Articles/414618/) — Neil Brown on why the original signal design became unfixably complicated, and how `signalfd()` sidesteps it by making delivery synchronous
+- [Ghosts of Unix past, part 3: Unfixable designs](https://lwn.net/Articles/414618/) — 元のシグナル設計がなぜ修正不能なほど複雑になったのか、そして`signalfd()`が配送を同期的にすることでその問題をどう回避しているのかについてのNeil Brownの記事

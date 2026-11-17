@@ -1,149 +1,149 @@
-# POSIX Message Queues {#posix-message-queues}
+# POSIXメッセージキュー {#posix-message-queues}
 
-> Priority-ordered, kernel-managed message passing between processes
+> プロセス間での、優先度順でカーネル管理のメッセージ受け渡し
 
-## Overview {#overview}
+## 概要 {#overview}
 
-POSIX message queues (`mq_open`, `mq_send`, `mq_receive`) provide a message-passing IPC mechanism with:
+POSIXメッセージキュー（`mq_open`、`mq_send`、`mq_receive`）は、次の特徴を持つメッセージ受け渡し型のIPC機構を提供する:
 
-- **Priority ordering**: messages are dequeued highest-priority first
-- **Blocking and non-blocking**: readers block until a message arrives
-- **Async notification**: `mq_notify` delivers a signal or starts a thread when a message arrives
-- **Kernel persistence**: queues survive until explicitly deleted or system reboot
-- **VFS integration**: queues appear as files under `/dev/mqueue`
+- **優先度順**: メッセージは優先度の高いものから順に取り出される
+- **ブロッキングと非ブロッキング**: 読み手はメッセージが届くまでブロックする
+- **非同期通知**: `mq_notify`は、メッセージ到着時にシグナルを配送するかスレッドを起動する
+- **カーネル永続性**: キューは明示的に削除されるかシステムが再起動されるまで存続する
+- **VFS統合**: キューは`/dev/mqueue`配下のファイルとして見える
 
 ```bash
-# Mount the mqueue filesystem (usually automatic on modern systems)
+# mqueue ファイルシステムをマウント（最近のシステムでは通常自動）
 mount -t mqueue none /dev/mqueue
-ls /dev/mqueue/   # lists all open queues
+ls /dev/mqueue/   # 開かれているすべてのキューを一覧表示
 ```
 
-## Basic usage {#basic-usage}
+## 基本的な使い方 {#basic-usage}
 
 ```c
 #include <mqueue.h>
-/* Link with -lrt */
+/* -lrt とリンクする */
 
-/* Create or open a queue */
+/* キューを作成または開く */
 struct mq_attr attr = {
-    .mq_maxmsg  = 10,     /* maximum messages in queue */
-    .mq_msgsize = 256,    /* maximum message size (bytes) */
+    .mq_maxmsg  = 10,     /* キュー内の最大メッセージ数 */
+    .mq_msgsize = 256,    /* 最大メッセージサイズ（バイト） */
 };
 
-/* Producer: open for writing */
+/* 生産者: 書き込み用に開く */
 mqd_t mq = mq_open("/myqueue", O_WRONLY | O_CREAT, 0644, &attr);
 
-/* Consumer: open for reading */
+/* 消費者: 読み出し用に開く */
 mqd_t mq = mq_open("/myqueue", O_RDONLY);
 
-/* Send a message (priority 5) */
+/* メッセージを送信（優先度5） */
 const char *msg = "hello";
-mq_send(mq, msg, strlen(msg), 5);  /* prio=5 (higher = dequeued first) */
+mq_send(mq, msg, strlen(msg), 5);  /* prio=5（大きいほど先に取り出される） */
 
-/* Receive the highest-priority message */
+/* 最も優先度の高いメッセージを受信 */
 char buf[256];
 unsigned int prio;
 ssize_t n = mq_receive(mq, buf, sizeof(buf), &prio);
 printf("received %zd bytes, priority=%u: %.*s\n", n, prio, (int)n, buf);
 
-/* Delete the queue */
+/* キューを削除 */
 mq_close(mq);
 mq_unlink("/myqueue");
 ```
 
-### Queue attributes {#queue-attributes}
+### キューの属性 {#queue-attributes}
 
 ```c
-/* Query queue attributes */
+/* キューの属性を問い合わせる */
 struct mq_attr attr;
 mq_getattr(mq, &attr);
 printf("maxmsg=%ld msgsize=%ld curmsgs=%ld\n",
        attr.mq_maxmsg, attr.mq_msgsize, attr.mq_curmsgs);
 
-/* Set non-blocking mode */
+/* 非ブロッキングモードを設定 */
 attr.mq_flags = O_NONBLOCK;
 mq_setattr(mq, &attr, NULL);
 
-/* Non-blocking receive: returns EAGAIN if empty */
+/* 非ブロッキング受信: 空なら EAGAIN を返す */
 ssize_t n = mq_receive(mq, buf, sizeof(buf), &prio);
 if (n == -1 && errno == EAGAIN)
     printf("queue empty\n");
 ```
 
-## Priority queue behavior {#priority-queue-behavior}
+## 優先度キューの挙動 {#priority-queue-behavior}
 
-Messages are ordered by priority (highest first). Same priority messages are FIFO:
+メッセージは優先度順（高いものが先）に並ぶ。同じ優先度のメッセージはFIFOである:
 
 ```c
-mq_send(mq, "low",    3, 1);  /* priority 1 */
-mq_send(mq, "high",   4, 9);  /* priority 9 */
-mq_send(mq, "medium", 6, 5);  /* priority 5 */
-mq_send(mq, "high2",  5, 9);  /* priority 9 */
+mq_send(mq, "low",    3, 1);  /* 優先度 1 */
+mq_send(mq, "high",   4, 9);  /* 優先度 9 */
+mq_send(mq, "medium", 6, 5);  /* 優先度 5 */
+mq_send(mq, "high2",  5, 9);  /* 優先度 9 */
 
-/* Dequeue order: high (p9), high2 (p9), medium (p5), low (p1) */
+/* 取り出し順: high (p9)、high2 (p9)、medium (p5)、low (p1) */
 ```
 
-Priority range: 0 to `sysconf(_SC_MQ_PRIO_MAX) - 1` (at least 32, typically 32768).
+優先度の範囲: 0から`sysconf(_SC_MQ_PRIO_MAX) - 1`まで（最低32、通常は32768）。
 
-## Timed operations {#timed-operations}
+## タイムアウト付き操作 {#timed-operations}
 
 ```c
 #include <time.h>
 
-/* Send with timeout (absolute time) */
+/* タイムアウト付き送信（絶対時刻） */
 struct timespec deadline;
 clock_gettime(CLOCK_REALTIME, &deadline);
-deadline.tv_sec += 5;  /* 5 seconds from now */
+deadline.tv_sec += 5;  /* 今から5秒後 */
 
 int ret = mq_timedsend(mq, msg, len, prio, &deadline);
 if (ret == -1 && errno == ETIMEDOUT)
     printf("queue full, timed out\n");
 
-/* Receive with timeout */
+/* タイムアウト付き受信 */
 ssize_t n = mq_timedreceive(mq, buf, size, &prio, &deadline);
 if (n == -1 && errno == ETIMEDOUT)
     printf("queue empty, timed out\n");
 ```
 
-## Async notification: mq_notify {#async-notification-mq_notify}
+## 非同期通知: mq_notify {#async-notification-mq_notify}
 
-`mq_notify` delivers a notification when a message arrives in an empty queue:
+`mq_notify`は、空のキューにメッセージが到着したときに通知を配送する:
 
 ```c
-/* Signal notification */
+/* シグナルによる通知 */
 struct sigevent sev = {
     .sigev_notify = SIGEV_SIGNAL,
     .sigev_signo  = SIGUSR1,
 };
 mq_notify(mq, &sev);
 
-/* Only one process can be registered for notifications at a time */
-/* Registration is one-shot: must re-register after each notification */
+/* 通知に登録できるのは一度に1プロセスだけ */
+/* 登録はワンショット: 通知のたびに再登録が必要 */
 
-/* Thread notification: starts a thread on message arrival */
+/* スレッドによる通知: メッセージ到着時にスレッドを起動する */
 struct sigevent sev = {
     .sigev_notify            = SIGEV_THREAD,
     .sigev_notify_function   = my_handler,
-    .sigev_notify_attributes = NULL,  /* default thread attrs */
+    .sigev_notify_attributes = NULL,  /* デフォルトのスレッド属性 */
 };
 mq_notify(mq, &sev);
 
 void my_handler(union sigval sv) {
-    /* Called in a new thread when message arrives */
-    mqd_t mq = sv.sival_int;  /* pass mq via sigval if needed */
-    /* Read messages, then re-register: */
+    /* メッセージ到着時に新しいスレッドで呼ばれる */
+    mqd_t mq = sv.sival_int;  /* 必要なら sigval 経由で mq を渡す */
+    /* メッセージを読み、再登録する: */
     mq_notify(mq, &sev);
 }
 ```
 
-### epoll with mq_notify + eventfd {#epoll-with-mq_notify-eventfd}
+### mq_notify + eventfdによるepoll {#epoll-with-mq_notify-eventfd}
 
-For integration with an event loop:
+イベントループと統合するには:
 
 ```c
 int efd = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
 
-/* Notify via eventfd write */
+/* eventfd への書き込みで通知する */
 struct sigevent sev = {
     .sigev_notify            = SIGEV_THREAD,
     .sigev_notify_function   = notify_handler,
@@ -154,34 +154,34 @@ mq_notify(mq, &sev);
 void notify_handler(union sigval sv) {
     int efd = sv.sival_int;
     write(efd, &(uint64_t){1}, 8);
-    mq_notify(mq, &sev);  /* re-register */
+    mq_notify(mq, &sev);  /* 再登録 */
 }
 
-/* epoll_wait on efd triggers when message arrives */
+/* メッセージが到着すると efd に対する epoll_wait が発火する */
 ```
 
-## System limits {#system-limits}
+## システムの制限 {#system-limits}
 
 ```bash
-# Maximum number of message queues per user
-cat /proc/sys/fs/mqueue/queues_max    # default: 256
+# ユーザーあたりのメッセージキューの最大数
+cat /proc/sys/fs/mqueue/queues_max    # デフォルト: 256
 
-# Default maximum messages per queue
-cat /proc/sys/fs/mqueue/msg_max       # default: 10
+# キューあたりのデフォルトの最大メッセージ数
+cat /proc/sys/fs/mqueue/msg_max       # デフォルト: 10
 
-# Default maximum message size
-cat /proc/sys/fs/mqueue/msgsize_max   # default: 8192
+# デフォルトの最大メッセージサイズ
+cat /proc/sys/fs/mqueue/msgsize_max   # デフォルト: 8192
 
-# Default mq_maxmsg applied to queues created without explicit attributes
-# (not priority-related; msgsize_default is the sibling for message size)
+# 属性を明示せずに作成されたキューに適用されるデフォルトの mq_maxmsg
+# （優先度とは無関係。メッセージサイズについては msgsize_default が対応する）
 cat /proc/sys/fs/mqueue/msg_default
 
-# View all open queues with their attributes:
+# 開かれているすべてのキューを属性付きで表示:
 ls -la /dev/mqueue/
-cat /dev/mqueue/myqueue  # shows: QSIZE:0 NOTIFY:0 SIGNO:0 NOTIFY_PID:0
+cat /dev/mqueue/myqueue  # 表示内容: QSIZE:0 NOTIFY:0 SIGNO:0 NOTIFY_PID:0
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルでの実装 {#kernel-implementation}
 
 ### struct mqueue_inode_info {#struct-mqueueinodeinfo}
 
@@ -192,30 +192,30 @@ struct mqueue_inode_info {
     struct inode       vfs_inode;
     wait_queue_head_t  wait_q;
 
-    /* One rb-tree, keyed by priority -- not an array of per-priority
-     * lists. Same-priority messages are FIFO via a per-node msg_list. */
+    /* 優先度をキーとする1本のrbツリー -- 優先度ごとのリストの配列ではない。
+     * 同じ優先度のメッセージはノードごとの msg_list によって FIFO になる。 */
     struct rb_root     msg_tree;
     struct rb_node    *msg_tree_rightmost;
-    struct posix_msg_tree_node *node_cache;  /* spare node, avoids GFP_ATOMIC alloc */
+    struct posix_msg_tree_node *node_cache;  /* 予備ノード。GFP_ATOMIC での割り当てを避ける */
     struct mq_attr     attr;
 
-    /* Notification */
+    /* 通知 */
     struct sigevent    notify;
     struct pid        *notify_owner;
     u32                notify_self_exec_id;
     struct user_namespace *notify_user_ns;
-    struct ucounts    *ucounts;       /* user who created, for accounting */
+    struct ucounts    *ucounts;       /* 作成したユーザー（アカウンティング用） */
     struct sock       *notify_sock;
     struct sk_buff    *notify_cookie;
 
-    /* Waiters for free space and for messages, respectively */
+    /* それぞれ空き領域の待機者とメッセージの待機者 */
     struct ext_wait_queue e_wait_q[2];
 
-    unsigned long      qsize;         /* total size of queue in memory */
+    unsigned long      qsize;         /* メモリ上のキューの合計サイズ */
 };
 
-/* Each rb-tree node covers one distinct priority; messages of that
- * priority hang off msg_list in FIFO order */
+/* rbツリーの各ノードは1つの異なる優先度を担当し、その優先度の
+ * メッセージは FIFO 順に msg_list にぶら下がる */
 struct posix_msg_tree_node {
     struct rb_node    rb_node;
     struct list_head  msg_list;
@@ -223,27 +223,27 @@ struct posix_msg_tree_node {
 };
 ```
 
-### Message structure {#message-structure}
+### メッセージ構造体 {#message-structure}
 
 ```c
 /* include/linux/msg.h */
 struct msg_msg {
-    struct list_head  m_list;   /* on priority list */
-    long              m_type;   /* priority (stored as type) */
-    size_t            m_ts;     /* message text size */
-    struct msg_msgseg *next;    /* for messages > PAGE_SIZE */
-    void             *security; /* LSM security label */
-    /* Message data follows immediately in memory */
+    struct list_head  m_list;   /* 優先度リスト上 */
+    long              m_type;   /* 優先度（type として格納） */
+    size_t            m_ts;     /* メッセージテキストのサイズ */
+    struct msg_msgseg *next;    /* PAGE_SIZE を超えるメッセージ用 */
+    void             *security; /* LSM のセキュリティラベル */
+    /* メッセージデータはメモリ上でこの直後に続く */
 };
 ```
 
-### mq_send kernel path {#mq_send-kernel-path}
+### mq_sendのカーネルパス {#mq_send-kernel-path}
 
 ```c
-/* ipc/mqueue.c -- simplified from the real do_mq_timedsend(); the real
- * function also handles a speculative node_cache allocation and a
- * pipelined direct handoff to an already-waiting receiver, skipping the
- * tree entirely when one exists */
+/* ipc/mqueue.c -- 実際の do_mq_timedsend() を簡略化したもの。実際の
+ * 関数は、投機的な node_cache の割り当てや、すでに待機している受信者への
+ * パイプライン化された直接の受け渡し（存在すればツリーを完全にスキップする）
+ * も扱う */
 static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
                            size_t msg_len, unsigned int msg_prio,
                            struct timespec64 *ts)
@@ -251,7 +251,7 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
     struct mqueue_inode_info *info;
     struct msg_msg *msg_ptr;
 
-    /* Allocate and copy message data from userspace */
+    /* メッセージデータを割り当て、ユーザー空間からコピー */
     msg_ptr = load_msg(u_msg_ptr, msg_len);
     msg_ptr->m_ts = msg_len;
     msg_ptr->m_type = msg_prio;
@@ -259,15 +259,15 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
     spin_lock(&info->lock);
 
     if (info->attr.mq_curmsgs == info->attr.mq_maxmsg) {
-        /* Queue full: block (via wq_sleep(), on the SEND wait list) or EAGAIN */
+        /* キューが満杯: ブロック（wq_sleep() により SEND 待ちリスト上で）または EAGAIN */
         if (filp->f_flags & O_NONBLOCK) {
             spin_unlock(&info->lock);
             return -EAGAIN;
         }
-        return wq_sleep(info, SEND, timeout, &wait);  /* releases the lock itself */
+        return wq_sleep(info, SEND, timeout, &wait);  /* ロックは自身で解放する */
     }
 
-    /* No receiver waiting: insert into the priority tree and notify */
+    /* 待機中の受信者なし: 優先度ツリーに挿入して通知 */
     msg_insert(msg_ptr, info);
     __do_notify(info);
 
@@ -276,7 +276,7 @@ static int do_mq_timedsend(mqd_t mqdes, const char __user *u_msg_ptr,
 }
 ```
 
-### Priority tree insertion {#priority-tree-insertion}
+### 優先度ツリーへの挿入 {#priority-tree-insertion}
 
 ```c
 /* ipc/mqueue.c */
@@ -286,7 +286,7 @@ static int msg_insert(struct msg_msg *msg, struct mqueue_inode_info *info)
     struct posix_msg_tree_node *leaf;
     bool rightmost = true;
 
-    /* Find (or create) the rb-tree node for this priority */
+    /* この優先度の rbツリーノードを探す（なければ作る） */
     p = &info->msg_tree.rb_node;
     while (*p) {
         parent = *p;
@@ -300,8 +300,8 @@ static int msg_insert(struct msg_msg *msg, struct mqueue_inode_info *info)
         } else
             p = &(*p)->rb_right;
     }
-    /* No existing node for this priority: use the spare node_cache if
-     * available, otherwise allocate one (GFP_ATOMIC, under the lock) */
+    /* この優先度の既存ノードがない: 予備の node_cache があればそれを使い、
+     * なければ割り当てる（ロック下なので GFP_ATOMIC） */
     if (info->node_cache) {
         leaf = info->node_cache;
         info->node_cache = NULL;
@@ -318,7 +318,7 @@ static int msg_insert(struct msg_msg *msg, struct mqueue_inode_info *info)
     rb_insert_color(&leaf->rb_node, &info->msg_tree);
 
 insert_msg:
-    /* Same-priority messages are FIFO within this node's msg_list */
+    /* 同じ優先度のメッセージは、このノードの msg_list 内で FIFO */
     info->attr.mq_curmsgs++;
     info->qsize += msg->m_ts;
     list_add_tail(&msg->m_list, &leaf->msg_list);
@@ -326,83 +326,83 @@ insert_msg:
 }
 ```
 
-## POSIX mqueue vs SysV message queues {#posix-mqueue-vs-sysv-message-queues}
+## POSIX mqueueとSysVメッセージキューの比較 {#posix-mqueue-vs-sysv-message-queues}
 
-| Feature | POSIX mqueue | SysV msgsnd/msgrcv |
+| 機能 | POSIX mqueue | SysV msgsnd/msgrcv |
 |---------|-------------|-------------------|
 | API | `mq_open`/`mq_send` | `msgget`/`msgsnd` |
-| Name | `/name` in mqueue FS | Integer key (IPC_PRIVATE) |
-| Priority | Yes (per-message priority) | Type-based filtering |
-| Notification | `mq_notify` (signal/thread) | None (polling only) |
-| epoll | Yes (real fd on Linux) | No |
+| 名前 | mqueue FS内の`/name` | 整数キー（IPC_PRIVATE） |
+| 優先度 | あり（メッセージごとの優先度） | typeによるフィルタリング |
+| 通知 | `mq_notify`（シグナル/スレッド） | なし（ポーリングのみ） |
+| epoll | 可（Linuxでは本物のfd） | 不可 |
 | VFS | `/dev/mqueue/` | `/proc/sysvipc/msg` |
-| Persistence | Until `mq_unlink` | Until explicit removal |
-| Portability | POSIX standard | Historical (XSI) |
+| 永続性 | `mq_unlink`まで | 明示的に削除するまで |
+| 移植性 | POSIX標準 | 歴史的（XSI） |
 
-Note: On Linux, POSIX mqueue file descriptors are real fds and work with `select()`, `poll()`, and `epoll()` directly (since 2.6.19).
+注: Linuxでは、POSIX mqueueのファイルディスクリプタは本物のfdであり、`select()`、`poll()`、`epoll()`で直接扱える（2.6.19以降）。
 
-## SysV message queues (brief) {#sysv-message-queues-brief}
+## SysVメッセージキュー（簡単に） {#sysv-message-queues-brief}
 
 ```c
 #include <sys/msg.h>
 
-/* Create/get a SysV message queue */
+/* SysV メッセージキューを作成/取得 */
 int msqid = msgget(IPC_PRIVATE, IPC_CREAT | 0666);
-/* or by key: key_t key = ftok("/some/file", 'A'); */
+/* またはキーで: key_t key = ftok("/some/file", 'A'); */
 
-/* Send */
+/* 送信 */
 struct msgbuf {
-    long mtype;   /* must be > 0; used for filtering */
+    long mtype;   /* 0より大きくなければならない。フィルタリングに使われる */
     char mtext[256];
 } msg = { .mtype = 1, .mtext = "hello" };
 msgsnd(msqid, &msg, strlen(msg.mtext), 0);
 
-/* Receive: mtype=0 → first message; mtype>0 → first msg of that type */
+/* 受信: mtype=0 → 先頭のメッセージ、mtype>0 → その type の最初のメッセージ */
 struct msgbuf recv;
 msgrcv(msqid, &recv, sizeof(recv.mtext), 0, 0);
 
-/* Remove */
+/* 削除 */
 msgctl(msqid, IPC_RMID, NULL);
 ```
 
 ```bash
-# List SysV queues
+# SysV キューを一覧表示
 ipcs -q
 
-# Show queue details
+# キューの詳細を表示
 ipcs -q -i <msqid>
 
-# Remove all SysV queues
+# すべての SysV キューを削除
 ipcrm --all=msg
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [ipc/mqueue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/mqueue.c) — POSIX mqueue filesystem, syscalls (`do_mq_timedsend()`, `do_mq_timedreceive()`), and `struct mqueue_inode_info`
-- [ipc/msg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/msg.c) — SysV message queue implementation (`msgget`/`msgsnd`/`msgrcv`)
-- [include/uapi/linux/mqueue.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mqueue.h) — `struct mq_attr` and `MQ_PRIO_MAX` (32768)
-- [include/linux/msg.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/msg.h) — `struct msg_msg`, the message representation shared by POSIX and SysV queues
+- [ipc/mqueue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/mqueue.c) — POSIX mqueueファイルシステム、システムコール（`do_mq_timedsend()`、`do_mq_timedreceive()`）、`struct mqueue_inode_info`
+- [ipc/msg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/msg.c) — SysVメッセージキューの実装（`msgget`/`msgsnd`/`msgrcv`）
+- [include/uapi/linux/mqueue.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mqueue.h) — `struct mq_attr`と`MQ_PRIO_MAX`（32768）
+- [include/linux/msg.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/msg.h) — `struct msg_msg`: POSIXとSysVのキューで共有されるメッセージ表現
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`mq_overview(7)`](https://man7.org/linux/man-pages/man7/mq_overview.7.html) — overview of the POSIX message queue API, `/dev/mqueue`, and the `/proc/sys/fs/mqueue` limits
-- [`mq_open(3)`](https://man7.org/linux/man-pages/man3/mq_open.3.html) — create/open a queue, `O_CREAT`/`O_EXCL` semantics, `struct mq_attr`
+- [`mq_overview(7)`](https://man7.org/linux/man-pages/man7/mq_overview.7.html) — POSIXメッセージキューAPI、`/dev/mqueue`、`/proc/sys/fs/mqueue`の制限の概要
+- [`mq_open(3)`](https://man7.org/linux/man-pages/man3/mq_open.3.html) — キューの作成/オープン、`O_CREAT`/`O_EXCL`の意味論、`struct mq_attr`
 - [`mq_send(3)`](https://man7.org/linux/man-pages/man3/mq_send.3.html) — `mq_send()`/`mq_timedsend()`
 - [`mq_receive(3)`](https://man7.org/linux/man-pages/man3/mq_receive.3.html) — `mq_receive()`/`mq_timedreceive()`
-- [`mq_notify(3)`](https://man7.org/linux/man-pages/man3/mq_notify.3.html) — `SIGEV_SIGNAL`/`SIGEV_THREAD`/`SIGEV_NONE` notification modes
+- [`mq_notify(3)`](https://man7.org/linux/man-pages/man3/mq_notify.3.html) — `SIGEV_SIGNAL`/`SIGEV_THREAD`/`SIGEV_NONE`の通知モード
 - [`mq_getattr(3)`](https://man7.org/linux/man-pages/man3/mq_getattr.3.html) — `mq_getattr()`/`mq_setattr()`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [SysV IPC: Semaphores and Message Queues](sysv-semaphores.md) — full treatment of `msgget`/`msgsnd`/`msgrcv` and kernel internals, referenced briefly above
-- [eventfd and signalfd](eventfd-signalfd.md) — the `epoll` integration pattern used in the mq_notify example above
-- [Signals](signals.md) — real-time signal delivery, used by `mq_notify`'s `SIGEV_SIGNAL` mode
-- [Pipes and FIFOs](pipes.md) — byte-stream IPC, contrasted with mqueue's message-oriented model
-- [Shared Memory, Semaphores, and eventfd](shared-memory.md) — zero-copy bulk IPC vs. mqueue's small bounded messages
-- [POSIX Timers and timerfd](../time/posix-timers.md) — same `sigevent`-based notification model as `mq_notify`
+- [SysV IPC: セマフォとメッセージキュー](sysv-semaphores.md) — 上で簡単に触れた`msgget`/`msgsnd`/`msgrcv`とカーネル内部の詳しい解説
+- [eventfdとsignalfd](eventfd-signalfd.md) — 上のmq_notifyの例で使った`epoll`統合パターン
+- [シグナル](signals.md) — `mq_notify`の`SIGEV_SIGNAL`モードで使われるリアルタイムシグナルの配送
+- [パイプとFIFO](pipes.md) — mqueueのメッセージ指向モデルと対比されるバイトストリームIPC
+- [共有メモリ、セマフォ、eventfd](shared-memory.md) — ゼロコピーの大量データIPCと、mqueueの小さく上限のあるメッセージとの対比
+- [POSIXタイマーとtimerfd](../time/posix-timers.md) — `mq_notify`と同じ`sigevent`ベースの通知モデル
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [IPC medley: message-queue peeking, io_uring, and bus1](https://lwn.net/Articles/1065490/) — Jonathan Corbet, April 2026; covers a proposed (not yet merged as of this page's kernel pin) `mq_timedreceive2()`/`MQ_PEEK` extension for non-destructive, index-addressed message reads
+- [IPC medley: message-queue peeking, io_uring, and bus1](https://lwn.net/Articles/1065490/) — Jonathan Corbet、2026年4月。非破壊的でインデックス指定のメッセージ読み出しを行う`mq_timedreceive2()`/`MQ_PEEK`拡張の提案（本ページが対象とするカーネルの時点ではまだマージされていない）を扱っている

@@ -1,92 +1,92 @@
-# IPC War Stories {#ipc-war-stories}
+# IPC事件簿 {#ipc-war-stories}
 
-> Leaked semaphores, fd exhaustion, signal storms, and pipe capacity surprises
+> リークしたセマフォ、fd枯渇、シグナルストーム、パイプ容量の意外な落とし穴
 
-Real-world IPC bugs share a common theme: the happy path works perfectly, but the error path, the slow consumer, or the edge case that only manifests after days of operation reveals a fundamental misunderstanding of how the kernel manages IPC resources. These are five real categories of incidents — the kind that show up in post-mortems.
+実際のIPCバグには共通のテーマがある。正常系は完璧に動くが、エラーパス、遅い消費者、あるいは何日も稼働して初めて表面化するエッジケースが、カーネルがIPCリソースをどう管理しているかについての根本的な誤解を露わにするのである。以下は、事後分析（ポストモーテム）に登場するたぐいの、実際に起きた5つのカテゴリの事例である。
 
 ---
 
-## 1. The SysV semaphore leak {#1-the-sysv-semaphore-leak}
+## 1. SysVセマフォのリーク {#1-the-sysv-semaphore-leak}
 
-### What happened {#what-happened}
+### 何が起きたか {#what-happened}
 
-A C++ application used SysV semaphores for inter-process locking. Each worker process called `semget(IPC_CREAT, ...)` on startup and `semctl(IPC_RMID)` on clean shutdown. In the error path — triggered when the backing database was unreachable — the code returned early before calling `IPC_RMID`.
+あるC++アプリケーションは、プロセス間のロックにSysVセマフォを使っていた。各ワーカープロセスは起動時に`semget(IPC_CREAT, ...)`を呼び、正常なシャットダウン時に`semctl(IPC_RMID)`を呼んでいた。バックエンドのデータベースに到達できないときに通るエラーパスでは、コードが`IPC_RMID`を呼ぶ前に早期リターンしていた。
 
-After 48 hours of operation with periodic connection failures, `ipcs -s` showed 128 semaphore sets — the deployment's `kernel.sem` `SEMMNI` setting had been tuned down from the kernel's 32000 default to 128 as a defensive resource cap, and that limit had been reached. Subsequent worker startups received `ENOSPC` from `semget()`. The service was down.
+断続的な接続失敗を伴いながら48時間稼働した後、`ipcs -s`は128個のセマフォセットを表示した。このデプロイメントでは、防御的なリソース上限として`kernel.sem`の`SEMMNI`設定をカーネルデフォルトの32000から128に下げており、その上限に達していたのである。以後のワーカー起動では`semget()`が`ENOSPC`を返した。サービスは停止した。
 
 ```bash
-# Diagnosis: count the sets
-ipcs -s | wc -l          # 131 (128 sets + 3 header lines)
+# 診断: セットの数を数える
+ipcs -s | wc -l          # 131（128 セット + ヘッダー行 3 行）
 
-# Owning UID and last-operation time for each set
-ipcs -s -c   # creator/owner UID and GID
-ipcs -s -t   # last semop() time and last permission-change time
+# 各セットの所有 UID と最終操作時刻
+ipcs -s -c   # 作成者/所有者の UID と GID
+ipcs -s -t   # 最後の semop() の時刻と最後のパーミッション変更の時刻
 ```
 
-There's no way to go further than that and pin an orphaned set to the dead process that created
-it: `struct semid_ds` (`ipc/sem.c`, `include/uapi/linux/sem.h`) has no PID field of any kind —
-only the creator/owner's UID and GID, plus the two timestamps above. `ipcs -p` ("show PIDs of
-creator and last operator") exists for shared memory and message queues, which do track a
-`cpid`/`lpid`, but for semaphore sets it's a documented no-op — it prints nothing at all. In
-practice, identifying which sets are truly abandoned means correlating the owning UID and stale
-`otime`/`ctime` against what you already know about your own services, not querying the kernel
-for a PID that was never recorded.
+これ以上踏み込んで、孤立したセットをそれを作成した死んだプロセスに結び付ける方法はない。
+`struct semid_ds`（`ipc/sem.c`、`include/uapi/linux/sem.h`）には、いかなる種類のPIDフィールドもない。
+あるのは作成者/所有者のUIDとGID、それに上記の2つのタイムスタンプだけである。`ipcs -p`（「作成者と
+最後の操作者のPIDを表示」）は、`cpid`/`lpid`を追跡している共有メモリとメッセージキューには
+存在するが、セマフォセットに対しては何もしないことが文書化されており、何も出力しない。
+実際には、どのセットが本当に放棄されたものかを特定するには、所有UIDと古い
+`otime`/`ctime`を、自分のサービスについてすでに分かっていることと突き合わせるしかない。一度も記録されていないPIDを
+カーネルに問い合わせることはできない。
 
-### Root cause {#root-cause}
+### 根本原因 {#root-cause}
 
-SysV semaphore sets persist in kernel memory until `IPC_RMID` is called or the machine reboots. They have no association with any file descriptor or process lifetime. The kernel tracks them in the `ipc_ids` structure (`ipc/util.c`) keyed by a numeric ID — there is no automatic garbage collection.
+SysVセマフォセットは、`IPC_RMID`が呼ばれるかマシンが再起動されるまでカーネルメモリ内に存続する。どのファイルディスクリプタやプロセスの寿命とも関連付けられていない。カーネルはそれらを数値IDをキーとする`ipc_ids`構造体（`ipc/util.c`）で追跡しており、自動的なガベージコレクションは存在しない。
 
-### Fix {#fix}
+### 対処 {#fix}
 
-Two complementary changes:
+互いに補完する2つの変更:
 
-1. **Immediate**: clean up manually with `ipcrm -s` for each leaked semid, then restart the service.
+1. **即時対応**: リークした各semidについて`ipcrm -s`で手動で片付け、サービスを再起動する。
 
-2. **Permanent**: use `SEM_UNDO` on all `semop()` calls so the kernel automatically reverses the operation if the process exits, and call `IPC_RMID` in a `SIGTERM`/`SIGINT` handler *and* in the normal error path.
+2. **恒久対応**: すべての`semop()`呼び出しで`SEM_UNDO`を使い、プロセスが終了した場合にカーネルが自動的に操作を取り消すようにする。そして`SIGTERM`/`SIGINT`ハンドラ*と*通常のエラーパスの両方で`IPC_RMID`を呼ぶ。
 
-Better still: migrate to POSIX named semaphores. `sem_unlink()` removes the name from the filesystem namespace; the semaphore object itself is destroyed when the last `sem_t` handle is closed — no persistent kernel object, no leak.
+さらに良いのは、POSIX名前付きセマフォに移行することである。`sem_unlink()`はファイルシステム名前空間から名前を削除し、セマフォオブジェクト自体は最後の`sem_t`ハンドルが閉じられた時点で破棄される。永続的なカーネルオブジェクトはなく、リークもない。
 
 ```c
-/* POSIX named semaphore: automatic cleanup */
+/* POSIX 名前付きセマフォ: 自動的なクリーンアップ */
 sem_t *sem = sem_open("/myapp-lock", O_CREAT | O_EXCL, 0600, 1);
-/* ... use sem_wait() / sem_post() ... */
+/* ... sem_wait() / sem_post() を使う ... */
 sem_close(sem);
-sem_unlink("/myapp-lock");  /* name gone; object destroyed when last user closes */
+sem_unlink("/myapp-lock");  /* 名前は消え、最後の利用者が閉じた時点でオブジェクトが破棄される */
 ```
 
 ---
 
-## 2. The Unix socket fd leak via SCM_RIGHTS {#2-the-unix-socket-fd-leak-via-scm_rights}
+## 2. SCM_RIGHTSによるUnixソケットのfdリーク {#2-the-unix-socket-fd-leak-via-scm_rights}
 
-### What happened {#what-happened_1}
+### 何が起きたか {#what-happened_1}
 
-A privilege-separated daemon split into a privileged parent and an unprivileged worker. The parent opened sensitive files and passed their file descriptors to the worker via `SCM_RIGHTS` over a Unix domain socket (`SOCK_SEQPACKET`). The worker handled requests, used the fds, and was supposed to `close()` them after use.
+ある特権分離デーモンは、特権を持つ親プロセスと特権を持たないワーカーに分かれていた。親は機密ファイルを開き、そのファイルディスクリプタをUnixドメインソケット（`SOCK_SEQPACKET`）越しに`SCM_RIGHTS`でワーカーに渡していた。ワーカーはリクエストを処理してfdを使い、使用後に`close()`することになっていた。
 
-A bug in the error-handling branch — triggered when the downstream service returned an unexpected status code — caused the worker to skip the `close()` call. Each failed request left one fd open. After several thousand requests, the worker process hit `EMFILE` (errno 24, "Too many open files"). New requests were rejected at the `recvmsg()` stage because the kernel could not install the incoming fd into the worker's table.
+下流のサービスが予期しないステータスコードを返したときに通るエラー処理分岐のバグにより、ワーカーは`close()`呼び出しをスキップしていた。失敗したリクエストごとにfdが1つ開いたまま残った。数千件のリクエストの後、ワーカープロセスは`EMFILE`（errno 24、"Too many open files"）に達した。カーネルが受信したfdをワーカーのテーブルにインストールできなくなったため、新しいリクエストは`recvmsg()`の段階で拒否された。
 
 ```bash
-# Diagnosis
-lsof -p <worker_pid> | wc -l        # thousands
-lsof -p <worker_pid> | grep passwd  # many open copies of /etc/passwd
+# 診断
+lsof -p <worker_pid> | wc -l        # 数千
+lsof -p <worker_pid> | grep passwd  # /etc/passwd のコピーが大量に開かれている
 ```
 
-### Root cause {#root-cause_1}
+### 根本原因 {#root-cause_1}
 
-When `SCM_RIGHTS` delivers a file descriptor, the kernel calls `receive_fd()` (in `fs/file.c`), which reserves and installs a new file descriptor in the receiver's `files_struct` (via `get_unused_fd_flags()`/`fd_install()`, which in turn reach the underlying slot-allocator `alloc_fd()`). This is a full kernel-level `dup()` — the receiver's fd table grows by one per received fd, completely independently of the sender. The sender closing its copy has no effect on the receiver's copy.
+`SCM_RIGHTS`がファイルディスクリプタを配送するとき、カーネルは`receive_fd()`（`fs/file.c`内）を呼ぶ。これは受信者の`files_struct`に新しいファイルディスクリプタを予約してインストールする（`get_unused_fd_flags()`/`fd_install()`を介し、それらがさらに下位のスロットアロケータ`alloc_fd()`に到達する）。これはカーネルレベルでの完全な`dup()`であり、受信者のfdテーブルは、送信者とはまったく独立に、受信したfd1つにつき1つ増える。送信者が自分のコピーを閉じても、受信者のコピーには影響しない。
 
-In-flight `SCM_RIGHTS` fds are tracked per-`user_struct` (`user->unix_inflight`), not on `struct unix_sock` itself. Once delivered, the fd is solely the receiver's responsibility.
+送信中（in-flight）の`SCM_RIGHTS`のfdは、`struct unix_sock`自体ではなく`user_struct`単位（`user->unix_inflight`）で追跡される。配送された後は、そのfdは受信者だけの責任となる。
 
-### Fix {#fix_1}
+### 対処 {#fix_1}
 
-Close received fds in every code path, including error paths. The pattern:
+エラーパスを含むすべてのコードパスで、受け取ったfdを閉じる。パターン:
 
 ```c
 int received_fd = -1;
 
-/* ... recvmsg and extract received_fd ... */
+/* ... recvmsg して received_fd を取り出す ... */
 
 int ret = process_request(received_fd);
-/* close ALWAYS, not just on success */
+/* 成功時だけでなく「常に」閉じる */
 if (received_fd >= 0) {
     close(received_fd);
     received_fd = -1;
@@ -95,69 +95,69 @@ if (ret < 0)
     return ret;
 ```
 
-For defense in depth: apply `O_CLOEXEC` to received fds immediately via `fcntl(received_fd, F_SETFD, FD_CLOEXEC)` so they do not leak into child processes spawned by `exec()`. Also raise `RLIMIT_NOFILE` to give earlier warning headroom, and monitor `/proc/<pid>/fd` count in alerting.
+多層防御として: 受け取ったfdには`fcntl(received_fd, F_SETFD, FD_CLOEXEC)`で直ちに`O_CLOEXEC`を適用し、`exec()`で起動される子プロセスにリークしないようにする。また、`RLIMIT_NOFILE`を引き上げて早めに警告できる余裕を持たせ、`/proc/<pid>/fd`の数をアラートで監視する。
 
 ---
 
-## 3. The pipe capacity surprise {#3-the-pipe-capacity-surprise}
+## 3. パイプ容量の意外な落とし穴 {#3-the-pipe-capacity-surprise}
 
-### What happened {#what-happened_2}
+### 何が起きたか {#what-happened_2}
 
-A log aggregation pipeline connected a producer (generating structured log lines) to a consumer (compressing and forwarding to a remote endpoint) via an anonymous pipe. Under normal load, the consumer kept up. During a 50ms processing spike — caused by a TLS renegotiation on the remote connection — the consumer stalled.
+あるログ集約パイプラインでは、生産者（構造化されたログ行を生成する）と消費者（圧縮してリモートのエンドポイントに転送する）が無名パイプでつながれていた。通常の負荷では消費者は追いついていた。リモート接続でのTLS再ネゴシエーションによって50msの処理スパイクが発生した間、消費者は停滞した。
 
-During those 50ms, the producer continued writing. The pipe filled to its default 65536-byte limit (`/proc/sys/fs/pipe-max-size` defaults to 1 MiB, but the *per-pipe* default capacity is 64 KiB, controlled by the `pipe_max_size` sysctl and the individual pipe's current capacity). The producer's `write()` call blocked. Since the producer thread was also responsible for ingesting incoming log events, the entire ingestion path backed up. By the time the consumer recovered, 8 seconds of logs had been dropped.
+その50msの間も、生産者は書き込みを続けた。パイプはデフォルトの65536バイトの上限まで埋まった（`/proc/sys/fs/pipe-max-size`のデフォルトは1 MiBだが、*パイプごとの*デフォルト容量は64 KiBであり、`pipe_max_size` sysctlと個々のパイプの現在の容量によって制御される）。生産者の`write()`呼び出しはブロックした。生産者スレッドは入ってくるログイベントの取り込みも担当していたため、取り込みパス全体が詰まった。消費者が回復した時点で、8秒分のログが失われていた。
 
 ```bash
-# Check current pipe capacity (Linux 2.6.35+)
-fcntl(fd, F_GETPIPE_SZ)  # returns current capacity in bytes
-cat /proc/sys/fs/pipe-max-size  # system-wide maximum
+# 現在のパイプ容量を確認（Linux 2.6.35 以降）
+fcntl(fd, F_GETPIPE_SZ)  # 現在の容量をバイト単位で返す
+cat /proc/sys/fs/pipe-max-size  # システム全体の上限
 ```
 
-### Root cause {#root-cause_2}
+### 根本原因 {#root-cause_2}
 
-A pipe is a fixed-capacity circular buffer. `struct pipe_inode_info` (defined in `include/linux/pipe_fs_i.h`) tracks the ring of `struct pipe_buffer` pages. When all pages are full, `anon_pipe_write()` in `fs/pipe.c` either blocks (default) or returns `EAGAIN` (if `O_NONBLOCK`). There is no automatic buffering beyond the kernel pipe capacity.
+パイプは固定容量の循環バッファである。`struct pipe_inode_info`（`include/linux/pipe_fs_i.h`で定義）は、`struct pipe_buffer`ページのリングを追跡する。すべてのページが埋まると、`fs/pipe.c`の`anon_pipe_write()`はブロックする（デフォルト）か、`EAGAIN`を返す（`O_NONBLOCK`の場合）。カーネルのパイプ容量を超える自動的なバッファリングは存在しない。
 
-### Fix {#fix_2}
+### 対処 {#fix_2}
 
-Three options, in order of invasiveness:
+侵襲性の低い順に3つの選択肢がある:
 
-1. **Increase pipe capacity** (quick fix):
+1. **パイプ容量を増やす**（応急処置）:
    ```c
-   /* Increase to 1 MiB (bounded by /proc/sys/fs/pipe-max-size) */
+   /* 1 MiB に増やす（/proc/sys/fs/pipe-max-size が上限） */
    fcntl(pipefd[1], F_SETPIPE_SZ, 1048576);
    ```
-   This buys time but does not eliminate the blocking — it only delays it.
+   これは時間を稼ぐが、ブロッキングをなくすわけではない。遅らせるだけである。
 
-2. **Non-blocking writes with a userspace buffer**: set `O_NONBLOCK` on the write end, handle `EAGAIN` by accumulating in a userspace ring buffer, and retry on the next iteration. This decouples producer and consumer at the cost of memory.
+2. **ユーザー空間バッファを伴う非ブロッキング書き込み**: 書き込み端に`O_NONBLOCK`を設定し、`EAGAIN`をユーザー空間のリングバッファに溜めることで処理し、次の反復で再試行する。メモリを犠牲にして、生産者と消費者を切り離せる。
 
-3. **Switch to a Unix socket with `SO_SNDBUF`**: a `SOCK_STREAM` Unix socket with a large `SO_SNDBUF` provides more tunable buffering, and with `O_NONBLOCK` the `EAGAIN` back-pressure is explicit and recoverable without blocking the producer thread.
+3. **`SO_SNDBUF`を備えたUnixソケットに切り替える**: 大きな`SO_SNDBUF`を持つ`SOCK_STREAM`のUnixソケットは、より調整しやすいバッファリングを提供する。さらに`O_NONBLOCK`と組み合わせれば、`EAGAIN`によるバックプレッシャーが明示的になり、生産者スレッドをブロックせずに回復できる。
 
 ---
 
-## 4. The signal storm from SIGCHLD {#4-the-signal-storm-from-sigchld}
+## 4. SIGCHLDによるシグナルストーム {#4-the-signal-storm-from-sigchld}
 
-### What happened {#what-happened_3}
+### 何が起きたか {#what-happened_3}
 
-A job scheduler spawned thousands of short-lived worker processes. The parent installed a `SIGCHLD` handler that called `waitpid(-1, &status, WNOHANG)` once — to reap one child — and returned. Under low load, this worked: one child exited, one signal arrived, one `waitpid()` call reaped it.
+あるジョブスケジューラは、短命なワーカープロセスを数千個生成していた。親は`SIGCHLD`ハンドラをインストールしていたが、そのハンドラは子を1つ回収するために`waitpid(-1, &status, WNOHANG)`を1回だけ呼んで戻るものだった。低負荷時にはこれで動いていた。子が1つ終了し、シグナルが1つ届き、1回の`waitpid()`呼び出しでそれを回収する。
 
-Under high load, multiple children exited within a short window. Linux standard signals (`SIGCHLD` is signal 17, a standard signal) are *not* queued — if the signal is already pending, additional deliveries are discarded. The parent received one `SIGCHLD` for what were actually 200 child exits. The single `waitpid()` call reaped one zombie. The other 199 remained in the process table as zombies.
+高負荷時には、短い時間内に複数の子が終了した。Linuxの標準シグナル（`SIGCHLD`はシグナル17で、標準シグナルである）はキューイング*されない*。シグナルがすでに保留中であれば、追加の配送は破棄される。親は、実際には200個の子の終了に対して1つの`SIGCHLD`しか受け取らなかった。1回の`waitpid()`呼び出しはゾンビを1つ回収した。残りの199個はゾンビとしてプロセステーブルに残った。
 
-After several hours, `ps aux | grep Z` showed thousands of `<defunct>` entries. The pid namespace was exhausted. New `fork()` calls returned `EAGAIN`.
+数時間後、`ps aux | grep Z`は数千の`<defunct>`エントリを表示した。PID名前空間が枯渇した。新たな`fork()`呼び出しは`EAGAIN`を返した。
 
 ```bash
-# Count zombie children
+# ゾンビの子を数える
 ps -o pid,stat,ppid | awk '$2 ~ /Z/ && $3 == <parent_pid> {count++} END {print count}'
 ```
 
-### Root cause {#root-cause_3}
+### 根本原因 {#root-cause_3}
 
-Standard signals (1–31) use a single-bit pending mask per thread (`pending` in `struct task_struct`, type `struct sigpending`). The mask has one bit per signal number. If `SIGCHLD` is already pending when another child exits, the new delivery is silently discarded — the mask bit is already set. The signal handler sees only one delivery regardless of how many children exited.
+標準シグナル（1〜31）は、スレッドごとに1ビットの保留マスク（`struct task_struct`内の`pending`、型は`struct sigpending`）を使う。マスクはシグナル番号ごとに1ビットを持つ。別の子が終了したときに`SIGCHLD`がすでに保留中であれば、新しい配送は黙って破棄される。マスクのビットはすでに立っているからである。何個の子が終了したかにかかわらず、シグナルハンドラが見るのは1回の配送だけである。
 
-Real-time signals (`SIGRTMIN` through `SIGRTMAX`, kernel range 32–64, user-visible range 34–64 once glibc's two reserved signals are excluded) use a queue (`struct sigqueue`) and are not subject to this merging, but `SIGCHLD` is a standard signal.
+リアルタイムシグナル（`SIGRTMIN`から`SIGRTMAX`まで。カーネル上の範囲は32〜64、glibcが予約する2つのシグナルを除くとユーザーから見える範囲は34〜64）はキュー（`struct sigqueue`）を使い、このような統合の対象にはならない。しかし`SIGCHLD`は標準シグナルである。
 
-### Fix {#fix_3}
+### 対処 {#fix_3}
 
-Always loop `waitpid()` until it returns 0 (no more waitable children) or -1/`ECHILD` (no children at all):
+`waitpid()`が0（待機可能な子がもうない）または-1/`ECHILD`（子がまったくいない）を返すまで、必ずループする:
 
 ```c
 static void sigchld_handler(int sig)
@@ -166,62 +166,62 @@ static void sigchld_handler(int sig)
     int status;
     pid_t pid;
 
-    /* Loop: one signal may represent multiple child exits */
+    /* ループ: 1つのシグナルが複数の子の終了を表していることがある */
     while ((pid = waitpid(-1, &status, WNOHANG)) > 0) {
-        /* record pid/status if needed */
+        /* 必要なら pid/status を記録 */
     }
 
-    errno = saved_errno;  /* waitpid may set errno; restore for interrupted syscalls */
+    errno = saved_errno;  /* waitpid は errno を設定しうる。中断されたシステムコールのために復元する */
 }
 ```
 
-The `while` loop is non-optional. Signal handlers for `SIGCHLD` without it are subtly broken in any multi-child scenario. Alternatively, use `signalfd` with `SIGCHLD` blocked at the thread level and loop `waitpid()` every time the signalfd becomes readable.
+この`while`ループは省略できない。これを欠いた`SIGCHLD`のシグナルハンドラは、複数の子がいるどんな状況でも微妙に壊れている。あるいは、スレッドレベルで`SIGCHLD`をブロックしたうえで`signalfd`を使い、signalfdが読み出し可能になるたびに`waitpid()`をループさせてもよい。
 
 ---
 
-## 5. The eventfd overflow {#5-the-eventfd-overflow}
+## 5. eventfdのオーバーフロー {#5-the-eventfd-overflow}
 
-### What happened {#what-happened_4}
+### 何が起きたか {#what-happened_4}
 
-A high-throughput event pipeline used `eventfd` with `EFD_SEMAPHORE | EFD_NONBLOCK` to notify a consumer of pending work items. The producer, running in a tight loop, called `write(efd, &one, 8)` for each work item. The consumer read from the eventfd and processed items one at a time.
+ある高スループットのイベントパイプラインは、保留中の作業項目を消費者に通知するために`EFD_SEMAPHORE | EFD_NONBLOCK`付きの`eventfd`を使っていた。生産者はタイトなループで動き、作業項目ごとに`write(efd, &one, 8)`を呼んでいた。消費者はeventfdから読み出し、項目を1つずつ処理していた。
 
-Under a traffic spike, the producer generated items faster than the consumer could process them. The eventfd counter climbed toward `UINT64_MAX - 1`. When the counter reached that threshold, subsequent `write()` calls returned `EAGAIN` — the kernel refused to increment further because doing so would overflow the `uint64_t` counter (see `eventfd_write()` in `fs/eventfd.c`).
+トラフィックのスパイク時、生産者は消費者が処理できるよりも速く項目を生成した。eventfdのカウンタは`UINT64_MAX - 1`に向かって増えていった。カウンタがその閾値に達すると、以後の`write()`呼び出しは`EAGAIN`を返した。それ以上インクリメントすると`uint64_t`のカウンタがオーバーフローするため、カーネルが拒否したのである（`fs/eventfd.c`の`eventfd_write()`を参照）。
 
-The producer code did not check the return value of `write()` carefully:
+生産者のコードは`write()`の戻り値をきちんとチェックしていなかった:
 
 ```c
-/* Bug: EAGAIN silently dropped */
+/* バグ: EAGAIN が黙って捨てられる */
 write(efd, &(uint64_t){1}, 8);
 ```
 
-Work items were enqueued in the producer's internal queue but the consumer was never notified they existed. After the spike subsided and the consumer caught up, the eventfd counter dropped — but the stranded items remained in the queue, unprocessed, until the next producer write triggered a fresh notification. Those items experienced unbounded latency.
+作業項目は生産者の内部キューに入れられたが、消費者にはその存在が一切通知されなかった。スパイクが収まって消費者が追いつくと、eventfdのカウンタは下がった。しかし取り残された項目は、次の生産者の書き込みが新たな通知を引き起こすまで、処理されないままキューに残った。それらの項目には際限のないレイテンシが生じた。
 
-### Root cause {#root-cause_4}
+### 根本原因 {#root-cause_4}
 
-`eventfd_write()` in `fs/eventfd.c` checks:
+`fs/eventfd.c`の`eventfd_write()`は次のようにチェックする:
 
 ```c
 if (ULLONG_MAX - ctx->count <= ucnt) {
-    /* Would overflow UINT64_MAX - 1 */
+    /* UINT64_MAX - 1 を超えてしまう */
     if (file->f_flags & O_NONBLOCK)
         return -EAGAIN;
-    /* else: block until counter drops */
+    /* それ以外: カウンタが下がるまでブロック */
 }
 ```
 
-The counter has a ceiling of `UINT64_MAX - 1` (not `UINT64_MAX`, because `UINT64_MAX` is the sentinel value used internally) — it does not saturate at that ceiling, it blocks or fails. With `EFD_NONBLOCK`, the write returns `EAGAIN` silently rather than blocking. The event is lost if the caller does not handle `EAGAIN` as backpressure.
+カウンタの上限は`UINT64_MAX - 1`である（`UINT64_MAX`ではない。`UINT64_MAX`は内部で番兵値として使われるため）。カウンタはその上限で飽和するのではなく、ブロックするか失敗する。`EFD_NONBLOCK`の場合、書き込みはブロックせずに黙って`EAGAIN`を返す。呼び出し元が`EAGAIN`をバックプレッシャーとして扱わなければ、そのイベントは失われる。
 
-### Fix {#fix_4}
+### 対処 {#fix_4}
 
-Handle `EAGAIN` explicitly on every non-blocking eventfd write:
+非ブロッキングのeventfd書き込みのたびに、`EAGAIN`を明示的に処理する:
 
 ```c
 uint64_t one = 1;
 ssize_t n = write(efd, &one, sizeof(one));
 if (n < 0) {
     if (errno == EAGAIN) {
-        /* Counter is at its ceiling: consumer is behind. */
-        /* Apply backpressure: slow down, log, or wake consumer another way. */
+        /* カウンタが上限に達している: 消費者が遅れている。 */
+        /* バックプレッシャーをかける: 速度を落とす、ログに残す、または別の方法で消費者を起こす。 */
         apply_backpressure();
     } else {
         perror("eventfd write");
@@ -229,67 +229,67 @@ if (n < 0) {
 }
 ```
 
-Or switch to an IPC mechanism where backpressure is part of the protocol rather than a special error code:
+あるいは、バックプレッシャーが特別なエラーコードではなくプロトコルの一部になっているIPC機構に切り替える:
 
-- **POSIX message queue** (`mq_open`): `mq_send()` blocks (or returns `EAGAIN`) when the queue is full (`mq_maxmsg` items); the queue depth is explicit and configurable.
-- **Unix socket** (`AF_UNIX SOCK_DGRAM`): when the send buffer is full, a non-blocking `sendmsg()` returns `EAGAIN`/`EWOULDBLOCK` (a blocking one waits instead) — explicit backpressure on each message. (`ENOBUFS` is documented for a *network interface's* output queue, per `send(2)`; it doesn't apply here — `net/unix/af_unix.c`'s datagram send path goes through the same generic socket-buffer wait as every other socket type, `sock_alloc_send_pskb()` in `net/core/sock.c`, which returns `-EAGAIN` on a full buffer.)
-- **Blocking eventfd** (without `EFD_NONBLOCK`): the producer blocks when the counter is at maximum, providing natural flow control at the cost of a blocked thread.
+- **POSIXメッセージキュー**（`mq_open`）: キューが満杯（`mq_maxmsg`個）のとき、`mq_send()`はブロックする（または`EAGAIN`を返す）。キューの深さは明示的で、設定可能である。
+- **Unixソケット**（`AF_UNIX SOCK_DGRAM`）: 送信バッファが満杯のとき、非ブロッキングの`sendmsg()`は`EAGAIN`/`EWOULDBLOCK`を返す（ブロッキングの場合は代わりに待つ）。メッセージごとに明示的なバックプレッシャーがかかる。（`send(2)`によれば、`ENOBUFS`は*ネットワークインターフェース*の出力キューについて文書化されたものであり、ここには当てはまらない。`net/unix/af_unix.c`のデータグラム送信パスは、他のすべてのソケットタイプと同じ汎用のソケットバッファ待機、つまり`net/core/sock.c`の`sock_alloc_send_pskb()`を通り、バッファが満杯なら`-EAGAIN`を返す。）
+- **ブロッキングのeventfd**（`EFD_NONBLOCK`なし）: カウンタが最大値のとき生産者はブロックし、スレッドがブロックされる代償と引き換えに自然なフロー制御が得られる。
 
-The general principle: `EFD_NONBLOCK` is appropriate only when `EAGAIN` is explicitly handled as a first-class condition, not a rare error.
+一般原則: `EFD_NONBLOCK`が適切なのは、`EAGAIN`を稀なエラーとしてではなく、第一級の状態として明示的に扱う場合だけである。
 
 ---
 
-## Patterns across all five {#patterns-across-all-five}
+## 5つすべてに共通するパターン {#patterns-across-all-five}
 
-| Incident | Root mechanism | Detection | Prevention |
+| 事例 | 根本的な仕組み | 検出 | 予防 |
 |----------|---------------|-----------|------------|
-| SysV semaphore leak | Persistent kernel objects | `ipcs -s`, `ENOSPC` | `IPC_RMID` in all paths; prefer POSIX semaphores |
-| SCM_RIGHTS fd leak | Receiver owns the fd | `lsof`, `EMFILE` | Close in all paths; `O_CLOEXEC` |
-| Pipe capacity | Fixed kernel buffer | Producer blocks | `F_SETPIPE_SZ`; non-blocking + userspace buffer |
-| SIGCHLD coalescing | Standard signal bit-mask | Zombie accumulation | Loop `waitpid()` in handler |
-| eventfd overflow | `UINT64_MAX - 1` cap | Silent `EAGAIN` | Check return value; handle `EAGAIN` as backpressure |
+| SysVセマフォのリーク | 永続的なカーネルオブジェクト | `ipcs -s`、`ENOSPC` | すべてのパスで`IPC_RMID`。POSIXセマフォを優先 |
+| SCM_RIGHTSのfdリーク | fdは受信者が所有する | `lsof`、`EMFILE` | すべてのパスで閉じる。`O_CLOEXEC` |
+| パイプ容量 | 固定長のカーネルバッファ | 生産者がブロックする | `F_SETPIPE_SZ`。非ブロッキング + ユーザー空間バッファ |
+| SIGCHLDの統合 | 標準シグナルのビットマスク | ゾンビの蓄積 | ハンドラ内で`waitpid()`をループ |
+| eventfdのオーバーフロー | `UINT64_MAX - 1`の上限 | 黙って返る`EAGAIN` | 戻り値をチェックし、`EAGAIN`をバックプレッシャーとして扱う |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [ipc/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/util.c) — `ipc_addid()`, `ipc_rmid()`, and the per-namespace `ipc_ids` table that SysV objects live in until explicitly removed, behind Case 1
-- [ipc/sem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/sem.c) — `semget()`, `semctl()`, and the `SEM_UNDO` adjustment-on-exit handling behind Case 1's fix
-- [include/uapi/linux/sem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/sem.h) — `struct semid_ds`, which has no PID field at all, behind Case 1's diagnosis limits
-- [fs/file.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/file.c) — `receive_fd()`, which reserves and installs a received `SCM_RIGHTS` descriptor into the receiver's own `files_struct`, behind Case 2
-- [net/core/scm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core/scm.c) — `scm_detach_fds()` and `scm_recv_one_fd()`, the control-message path that calls `receive_fd()` for each `SCM_RIGHTS` descriptor, behind Case 2
-- [net/unix/garbage.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/unix/garbage.c) — the per-user `unix_inflight` counter and cycle-detecting garbage collector for in-flight `SCM_RIGHTS` fds, behind Case 2
-- [include/linux/pipe_fs_i.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pipe_fs_i.h) — `struct pipe_inode_info` and `struct pipe_buffer`, the fixed-size ring behind Case 3
-- [fs/pipe.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pipe.c) — `anon_pipe_write()`, the `pipe_max_size` sysctl, and `F_SETPIPE_SZ` handling behind Case 3
-- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `legacy_queue()` and `__send_signal_locked()`, which drop a standard signal that is already pending on the target, behind Case 4
-- [include/linux/signal_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/signal_types.h) — `struct sigpending` (a bitmask) versus `struct sigqueue` (a queued list entry), the data structures behind Case 4's standard/real-time distinction
-- [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()` and the `ULLONG_MAX - 1` blocking/EAGAIN ceiling behind Case 5
-- [net/core/sock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core/sock.c) — `sock_alloc_send_pskb()`, the generic full-send-buffer wait/`-EAGAIN` path every socket type (including `AF_UNIX`) goes through, behind Case 5's Unix-socket alternative
+- [ipc/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/util.c) — `ipc_addid()`、`ipc_rmid()`、およびSysVオブジェクトが明示的に削除されるまで存在し続ける名前空間ごとの`ipc_ids`テーブル（事例1の背景）
+- [ipc/sem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/sem.c) — `semget()`、`semctl()`、および終了時に調整を行う`SEM_UNDO`の処理（事例1の対処の背景）
+- [include/uapi/linux/sem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/sem.h) — PIDフィールドをまったく持たない`struct semid_ds`（事例1の診断の限界の背景）
+- [fs/file.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/file.c) — 受信した`SCM_RIGHTS`ディスクリプタを受信者自身の`files_struct`に予約・インストールする`receive_fd()`（事例2の背景）
+- [net/core/scm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core/scm.c) — `scm_detach_fds()`と`scm_recv_one_fd()`: 各`SCM_RIGHTS`ディスクリプタに対して`receive_fd()`を呼ぶ制御メッセージのパス（事例2の背景）
+- [net/unix/garbage.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/unix/garbage.c) — ユーザーごとの`unix_inflight`カウンタと、送信中の`SCM_RIGHTS` fdに対する循環検出ガベージコレクタ（事例2の背景）
+- [include/linux/pipe_fs_i.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pipe_fs_i.h) — `struct pipe_inode_info`と`struct pipe_buffer`: 事例3の背景にある固定サイズのリング
+- [fs/pipe.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/pipe.c) — `anon_pipe_write()`、`pipe_max_size` sysctl、`F_SETPIPE_SZ`の処理（事例3の背景）
+- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — 対象ですでに保留中の標準シグナルを破棄する`legacy_queue()`と`__send_signal_locked()`（事例4の背景）
+- [include/linux/signal_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/signal_types.h) — `struct sigpending`（ビットマスク）と`struct sigqueue`（キューイングされるリストエントリ）: 事例4における標準/リアルタイムの違いの背景にあるデータ構造
+- [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()`と、ブロック/EAGAINとなる`ULLONG_MAX - 1`の上限（事例5の背景）
+- [net/core/sock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core/sock.c) — `sock_alloc_send_pskb()`: すべてのソケットタイプ（`AF_UNIX`を含む）が通る、送信バッファ満杯時の汎用の待機/`-EAGAIN`パス（事例5のUnixソケットによる代替手段の背景）
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`semop(2)`](https://man7.org/linux/man-pages/man2/semop.2.html) — documents `SEM_UNDO`: adjustments are automatically reversed when a process terminates, used in Case 1
-- [`sem_unlink(3)`](https://man7.org/linux/man-pages/man3/sem_unlink.3.html) — confirms a named POSIX semaphore is destroyed only once every process that has it open has closed it, the mechanism behind Case 1's "migrate to POSIX semaphores" fix
-- [`ipcs(1)`](https://man7.org/linux/man-pages/man1/ipcs.1.html) — the diagnostic tool used in Case 1
-- [`unix(7)`](https://man7.org/linux/man-pages/man7/unix.7.html) — documents `SCM_RIGHTS` ancillary data for passing open file descriptors between processes, used in Case 2
-- [`pipe(7)`](https://man7.org/linux/man-pages/man7/pipe.7.html) — documents pipe capacity (16 pages / 65,536 bytes by default since Linux 2.6.11) and blocking-write behavior, used in Case 3
-- [`fcntl(2)`](https://man7.org/linux/man-pages/man2/fcntl.2.html) — documents `F_SETPIPE_SZ`/`F_GETPIPE_SZ` for resizing a pipe, used in Case 3's fix
-- [`signal(7)`](https://man7.org/linux/man-pages/man7/signal.7.html) — documents that standard signals do not queue (multiple pending instances collapse to one) while real-time signals do, the mechanism behind Case 4
-- [`wait(2)`](https://man7.org/linux/man-pages/man2/waitpid.2.html) — documents `waitpid()` and `WNOHANG`, used in Case 4's fix
-- [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — documents `EFD_SEMAPHORE`, `EFD_NONBLOCK`, and the counter's `UINT64_MAX - 1` blocking/EAGAIN ceiling, used in Case 5
-- [`mq_send(3)`](https://man7.org/linux/man-pages/man3/mq_send.3.html) — documents the blocking/`EAGAIN` behavior when `mq_maxmsg` is reached, the alternative mechanism mentioned in Case 5's fix
+- [`semop(2)`](https://man7.org/linux/man-pages/man2/semop.2.html) — `SEM_UNDO`について記述している。プロセス終了時に調整が自動的に取り消される（事例1で使用）
+- [`sem_unlink(3)`](https://man7.org/linux/man-pages/man3/sem_unlink.3.html) — 名前付きPOSIXセマフォは、それを開いているすべてのプロセスが閉じた時点で初めて破棄されることを確認できる。事例1の「POSIXセマフォへの移行」という対処の背景にある仕組み
+- [`ipcs(1)`](https://man7.org/linux/man-pages/man1/ipcs.1.html) — 事例1で使った診断ツール
+- [`unix(7)`](https://man7.org/linux/man-pages/man7/unix.7.html) — オープン済みファイルディスクリプタをプロセス間で渡すための`SCM_RIGHTS`補助データについて記述している（事例2で使用）
+- [`pipe(7)`](https://man7.org/linux/man-pages/man7/pipe.7.html) — パイプの容量（Linux 2.6.11以降はデフォルトで16ページ / 65,536バイト）とブロッキング書き込みの挙動について記述している（事例3で使用）
+- [`fcntl(2)`](https://man7.org/linux/man-pages/man2/fcntl.2.html) — パイプのサイズ変更のための`F_SETPIPE_SZ`/`F_GETPIPE_SZ`について記述している（事例3の対処で使用）
+- [`signal(7)`](https://man7.org/linux/man-pages/man7/signal.7.html) — 標準シグナルはキューイングされず（保留中の複数のインスタンスは1つにまとめられる）、リアルタイムシグナルはキューイングされることを記述している。事例4の背景にある仕組み
+- [`wait(2)`](https://man7.org/linux/man-pages/man2/waitpid.2.html) — `waitpid()`と`WNOHANG`について記述している（事例4の対処で使用）
+- [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — `EFD_SEMAPHORE`、`EFD_NONBLOCK`、およびブロック/EAGAINとなるカウンタの`UINT64_MAX - 1`の上限について記述している（事例5で使用）
+- [`mq_send(3)`](https://man7.org/linux/man-pages/man3/mq_send.3.html) — `mq_maxmsg`に達したときのブロック/`EAGAIN`の挙動について記述している。事例5の対処で触れた代替機構
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Signals](signals.md) — `SIGCHLD`, `sigaction`, `sigprocmask`
-- [Pipes and FIFOs](pipes.md) — `struct pipe_inode_info`, `PIPE_BUF`, `F_SETPIPE_SZ`
-- [Unix Domain Sockets](unix-sockets.md) — `SCM_RIGHTS`, `SCM_CREDENTIALS`, fd passing internals
-- [SysV IPC: Semaphores and Message Queues](sysv-semaphores.md) — `SEM_UNDO`, `IPC_RMID`, `SEMMNI`
-- [eventfd and signalfd](eventfd-signalfd.md) — `EFD_SEMAPHORE`, `EFD_NONBLOCK`, counter semantics
-- [POSIX Message Queues](mqueue.md) — `mq_send`, `mq_maxmsg`, blocking/backpressure semantics, the alternative discussed in Case 5
+- [シグナル](signals.md) — `SIGCHLD`、`sigaction`、`sigprocmask`
+- [パイプとFIFO](pipes.md) — `struct pipe_inode_info`、`PIPE_BUF`、`F_SETPIPE_SZ`
+- [Unixドメインソケット](unix-sockets.md) — `SCM_RIGHTS`、`SCM_CREDENTIALS`、fd受け渡しの内部構造
+- [SysV IPC: セマフォとメッセージキュー](sysv-semaphores.md) — `SEM_UNDO`、`IPC_RMID`、`SEMMNI`
+- [eventfdとsignalfd](eventfd-signalfd.md) — `EFD_SEMAPHORE`、`EFD_NONBLOCK`、カウンタの意味論
+- [POSIXメッセージキュー](mqueue.md) — `mq_send`、`mq_maxmsg`、ブロッキング/バックプレッシャーの意味論。事例5で論じた代替手段
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Circular pipes](https://lwn.net/Articles/118750/) (January 11, 2005) — the introduction of the multi-page circular pipe buffer in 2.6.11, the ancestor of the `struct pipe_inode_info` ring behind Case 3
-- [The evolution of pipe buffers](https://lwn.net/Articles/119682/) (January 18, 2005) — follow-up on the pipe buffer redesign, including the 16-page capacity ceiling behind Case 3's default 64 KiB pipe size
-- [io_uring, SCM_RIGHTS, and reference-count cycles](https://lwn.net/Articles/779472/) (February 13, 2019) — how the kernel tracks and garbage-collects in-flight `SCM_RIGHTS` file descriptors, the mechanism behind Case 2
+- [Circular pipes](https://lwn.net/Articles/118750/)（2005年1月11日）— 2.6.11における複数ページの循環パイプバッファの導入。事例3の背景にある`struct pipe_inode_info`リングの祖先
+- [The evolution of pipe buffers](https://lwn.net/Articles/119682/)（2005年1月18日）— パイプバッファの再設計の続報。事例3のデフォルトのパイプサイズ64 KiBの背景にある16ページという容量上限を含む
+- [io_uring, SCM_RIGHTS, and reference-count cycles](https://lwn.net/Articles/779472/)（2019年2月13日）— カーネルが送信中の`SCM_RIGHTS`ファイルディスクリプタをどのように追跡し、ガベージコレクションするか。事例2の背景にある仕組み

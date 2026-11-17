@@ -1,33 +1,33 @@
-# Shared Memory, Semaphores, and eventfd {#shared-memory-semaphores-and-eventfd}
+# 共有メモリ、セマフォ、eventfd {#shared-memory-semaphores-and-eventfd}
 
-> Zero-copy IPC and lightweight synchronization primitives
+> ゼロコピーIPCと軽量な同期プリミティブ
 
-## POSIX shared memory {#posix-shared-memory}
+## POSIX共有メモリ {#posix-shared-memory}
 
-POSIX shared memory creates a named object backed by tmpfs that multiple processes can `mmap` into their address spaces:
+POSIX共有メモリは、tmpfsを裏付けとする名前付きオブジェクトを作成し、複数のプロセスがそれを自身のアドレス空間に`mmap`できるようにする:
 
 ```c
 #include <sys/mman.h>
 #include <fcntl.h>
 
-/* Process A: create and write */
+/* プロセスA: 作成して書き込む */
 int fd = shm_open("/myshm",
                   O_CREAT | O_RDWR,
                   0600);
-ftruncate(fd, 4096);  /* set size */
+ftruncate(fd, 4096);  /* サイズを設定 */
 
 void *ptr = mmap(NULL, 4096,
                  PROT_READ | PROT_WRITE,
                  MAP_SHARED, fd, 0);
-close(fd);  /* fd no longer needed after mmap */
+close(fd);  /* mmap後はfdは不要 */
 
 *(int *)ptr = 42;
 munmap(ptr, 4096);
 
-/* Remove the name (pages freed when last mmap is gone) */
+/* 名前を削除する（最後のmmapがなくなった時点でページが解放される） */
 shm_unlink("/myshm");
 
-/* Process B: open and read */
+/* プロセスB: 開いて読み出す */
 int fd = shm_open("/myshm", O_RDONLY, 0);
 void *ptr = mmap(NULL, 4096, PROT_READ, MAP_SHARED, fd, 0);
 close(fd);
@@ -35,83 +35,83 @@ int val = *(int *)ptr;   /* val == 42 */
 munmap(ptr, 4096);
 ```
 
-`shm_open` is implemented as `open` on `/dev/shm/` (a tmpfs mount). The shared pages are in the page cache, mapped into both processes' page tables.
+`shm_open`は`/dev/shm/`（tmpfsマウント）に対する`open`として実装されている。共有ページはページキャッシュ内にあり、両方のプロセスのページテーブルにマップされる。
 
 ```bash
-ls /dev/shm/   # see current shared memory objects
-ipcs -m        # see System V shared memory segments
+ls /dev/shm/   # 現在の共有メモリオブジェクトを確認
+ipcs -m        # System V共有メモリセグメントを確認
 ```
 
-## System V shared memory {#system-v-shared-memory}
+## System V共有メモリ {#system-v-shared-memory}
 
-The older but more widely available SHM API:
+より古いが、より広く利用可能なSHM API:
 
 ```c
 #include <sys/shm.h>
 #include <sys/ipc.h>
 
-/* Create/get a segment */
-key_t key = ftok("/tmp/myfile", 'A');  /* generate key from path+id */
+/* セグメントを作成/取得 */
+key_t key = ftok("/tmp/myfile", 'A');  /* パス+IDからキーを生成 */
 int shmid = shmget(key,
-                   4096,               /* size */
-                   IPC_CREAT | 0600);  /* flags */
+                   4096,               /* サイズ */
+                   IPC_CREAT | 0600);  /* フラグ */
 
-/* Attach (map into address space) */
-void *ptr = shmat(shmid, NULL, 0);     /* NULL = kernel chooses addr */
+/* アタッチ（アドレス空間にマップ） */
+void *ptr = shmat(shmid, NULL, 0);     /* NULL = カーネルがアドレスを選ぶ */
 
-/* Use it */
+/* 使用する */
 *(int *)ptr = 99;
 
-/* Detach */
+/* デタッチ */
 shmdt(ptr);
 
-/* Remove (kernel frees when all processes detach) */
+/* 削除（全プロセスがデタッチした時点でカーネルが解放） */
 shmctl(shmid, IPC_RMID, NULL);
 ```
 
 ```bash
-# Show System V shared memory
+# System V共有メモリを表示
 ipcs -m
 # ------ Shared Memory Segments --------
 # key        shmid    owner   perms  bytes  nattch  status
 # 0x00000000 0        root    600    4096   0
 
-# Remove a segment
+# セグメントを削除
 ipcrm -m <shmid>
 ```
 
-## Synchronization: POSIX semaphores {#synchronization-posix-semaphores}
+## 同期: POSIXセマフォ {#synchronization-posix-semaphores}
 
-Shared memory requires external synchronization. POSIX semaphores provide a counter that can be atomically incremented/decremented:
+共有メモリには外部の同期が必要である。POSIXセマフォは、アトミックにインクリメント/デクリメントできるカウンタを提供する:
 
-### Named semaphores (between unrelated processes) {#named-semaphores-between-unrelated-processes}
+### 名前付きセマフォ（無関係なプロセス間） {#named-semaphores-between-unrelated-processes}
 
 ```c
 #include <semaphore.h>
 
-/* Process A */
+/* プロセスA */
 sem_t *sem = sem_open("/mysem",
-                      O_CREAT, 0600, 1);  /* initial value = 1 */
+                      O_CREAT, 0600, 1);  /* 初期値 = 1 */
 
-sem_wait(sem);       /* P(): decrement, block if 0 */
-/* critical section */
-sem_post(sem);       /* V(): increment, wake one waiter */
+sem_wait(sem);       /* P(): デクリメント、0ならブロック */
+/* クリティカルセクション */
+sem_post(sem);       /* V(): インクリメント、待機者を1つ起こす */
 
-sem_close(sem);      /* close fd */
-sem_unlink("/mysem"); /* remove name */
+sem_close(sem);      /* fdを閉じる */
+sem_unlink("/mysem"); /* 名前を削除 */
 
-/* Process B */
-sem_t *sem = sem_open("/mysem", 0);  /* open existing */
+/* プロセスB */
+sem_t *sem = sem_open("/mysem", 0);  /* 既存のものを開く */
 sem_wait(sem);
 /* ... */
 sem_post(sem);
 sem_close(sem);
 ```
 
-### Unnamed semaphores (shared memory or threads) {#unnamed-semaphores-shared-memory-or-threads}
+### 無名セマフォ（共有メモリまたはスレッド） {#unnamed-semaphores-shared-memory-or-threads}
 
 ```c
-/* In shared memory, accessible to multiple processes */
+/* 共有メモリ内に置き、複数プロセスからアクセス可能にする */
 struct shared {
     sem_t sem;
     int   data;
@@ -121,132 +121,132 @@ struct shared *sh = mmap(NULL, sizeof(*sh),
                          PROT_READ|PROT_WRITE,
                          MAP_SHARED|MAP_ANONYMOUS, -1, 0);
 
-sem_init(&sh->sem, 1, 1);  /* pshared=1: shared between processes */
+sem_init(&sh->sem, 1, 1);  /* pshared=1: プロセス間で共有 */
 
-/* Process A/B: */
+/* プロセスA/B: */
 sem_wait(&sh->sem);
 sh->data++;
 sem_post(&sh->sem);
 
-/* Cleanup */
+/* 後始末 */
 sem_destroy(&sh->sem);
 munmap(sh, sizeof(*sh));
 ```
 
-### Kernel implementation {#kernel-implementation}
+### カーネルでの実装 {#kernel-implementation}
 
-POSIX semaphores use futexes internally:
+POSIXセマフォは内部でfutexを使う:
 
 ```c
-/* glibc sem_wait: */
+/* glibcのsem_wait: */
 sem_wait(sem) {
     if (__atomic_sub_fetch(&sem->value, 1, __ATOMIC_ACQ_REL) >= 0)
-        return;  /* fast path: counter was > 0 */
-    /* slow path: wait */
+        return;  /* 高速パス: カウンタは > 0 だった */
+    /* 低速パス: 待機 */
     futex_wait(&sem->value, ...);
 }
 
 sem_post(sem) {
     if (__atomic_add_fetch(&sem->value, 1, __ATOMIC_RELEASE) <= 0)
-        futex_wake(&sem->value, 1);  /* wake one waiter */
+        futex_wake(&sem->value, 1);  /* 待機者を1つ起こす */
 }
 ```
 
-## eventfd: lightweight event notification {#eventfd-lightweight-event-notification}
+## eventfd: 軽量なイベント通知 {#eventfd-lightweight-event-notification}
 
-`eventfd` creates a file descriptor backed by a 64-bit counter — the lightest-weight
-notification mechanism, and the standard way to wake an `epoll`-driven event loop from another
-thread or context:
+`eventfd`は64ビットカウンタを裏付けとするファイルディスクリプタを作成する。これは最も軽量な
+通知機構であり、別のスレッドやコンテキストから`epoll`駆動のイベントループを起こすための
+標準的な方法である:
 
 ```c
 #include <sys/eventfd.h>
 
-int efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);  /* initial value 0 */
+int efd = eventfd(0, EFD_CLOEXEC | EFD_NONBLOCK);  /* 初期値 0 */
 
 uint64_t val = 1;
-write(efd, &val, sizeof(val));      /* signal: counter += 1 */
+write(efd, &val, sizeof(val));      /* 通知: counter += 1 */
 
 uint64_t count;
-read(efd, &count, sizeof(count));   /* consume: returns counter, resets to 0 */
+read(efd, &count, sizeof(count));   /* 消費: カウンタを返し、0にリセット */
 ```
 
-It's used extensively in QEMU/KVM virtio notifications, io_uring completion notification,
-libuv/libevent event loop backends, and cgroup event notification. See
-[eventfd and signalfd](eventfd-signalfd.md) for the full treatment — `EFD_SEMAPHORE` mode, the
-epoll integration pattern, and the real kernel implementation (`struct eventfd_ctx`,
-`eventfd_write()`/`eventfd_read()`).
+QEMU/KVMのvirtio通知、io_uringの完了通知、
+libuv/libeventのイベントループバックエンド、cgroupのイベント通知で広く使われている。
+詳しくは[eventfdとsignalfd](eventfd-signalfd.md)を参照のこと。`EFD_SEMAPHORE`モード、
+epoll統合パターン、実際のカーネル実装（`struct eventfd_ctx`、
+`eventfd_write()`/`eventfd_read()`）を扱っている。
 
-## memfd: anonymous file-backed shared memory {#memfd-anonymous-file-backed-shared-memory}
+## memfd: 匿名のファイル裏付け共有メモリ {#memfd-anonymous-file-backed-shared-memory}
 
-`memfd_create` creates an anonymous file in memory (no filesystem path), useful for sharing without name collisions:
+`memfd_create`はメモリ上に匿名ファイル（ファイルシステムパスなし）を作成する。名前の衝突なしに共有するのに便利である:
 
 ```c
 #include <sys/mman.h>
 
-/* Create anonymous file */
+/* 匿名ファイルを作成 */
 int fd = memfd_create("mydata", MFD_CLOEXEC | MFD_ALLOW_SEALING);
 ftruncate(fd, size);
 
 void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
 
-/* Seal: prevent future modifications (useful for read-only sharing) */
+/* シール: 以後の変更を防ぐ（読み取り専用の共有に有用） */
 fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK);
 
-/* Pass fd to another process via Unix socket (SCM_RIGHTS) */
+/* Unixソケット経由でfdを別プロセスに渡す（SCM_RIGHTS） */
 send_fd_over_socket(socket_fd, fd);
-/* Other process can mmap the fd — no name needed */
+/* 相手のプロセスはそのfdをmmapできる — 名前は不要 */
 ```
 
-`memfd_create` is used by:
+`memfd_create`の利用例:
 
-- Graphics/Wayland: sharing framebuffers between client and compositor
-- dbus-broker: when an oversized log entry doesn't fit in a single datagram to the systemd
-  journal socket, it's sealed into a memfd and sent as the datagram's payload instead — the
-  journal's own convention for large fields, not part of the D-Bus wire protocol itself
-  (`misc_memfd()` in dbus-broker's `src/util/misc.c`, used from `src/util/log.c`)
+- グラフィックス/Wayland: クライアントとコンポジタ間でのフレームバッファの共有
+- dbus-broker: サイズの大きすぎるログエントリがsystemd journalソケットへの1つのデータグラムに
+  収まらない場合、それをmemfdに封入（シール）し、代わりにデータグラムのペイロードとして送る。
+  これは大きなフィールドに対するjournal自身の規約であり、D-Busのワイヤプロトコル自体の一部ではない
+  （dbus-brokerの`src/util/misc.c`にある`misc_memfd()`で、`src/util/log.c`から使われる）
 
-## Comparing shared memory approaches {#comparing-shared-memory-approaches}
+## 共有メモリ手法の比較 {#comparing-shared-memory-approaches}
 
-| Approach | Setup | Name in fs | fd | Sealing | Best for |
+| 手法 | セットアップ | fs上の名前 | fd | シーリング | 最適な用途 |
 |----------|-------|-----------|-----|---------|---------|
-| POSIX shm (`shm_open`) | Path in `/dev/shm/` | Yes | After open | No | Named, persistent |
-| System V (`shmget`) | IPC key | Via `ipcs` | No | No | Legacy compatibility |
-| `mmap(MAP_SHARED | MAP_ANONYMOUS)` | Anonymous | No | No | Parent-child only |
-| `memfd_create` | Anonymous file | No | Yes | Yes | Dynamic, fd-passing |
+| POSIX shm (`shm_open`) | `/dev/shm/`内のパス | あり | open後 | なし | 名前付き、永続的 |
+| System V (`shmget`) | IPCキー | `ipcs`経由 | なし | なし | レガシー互換性 |
+| `mmap(MAP_SHARED | MAP_ANONYMOUS)` | 匿名 | なし | なし | 親子間のみ |
+| `memfd_create` | 匿名ファイル | なし | あり | あり | 動的、fd受け渡し |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [ipc/shm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/shm.c) — `shmget()`, `shmat()`/`shmdt()`, and `shmctl()` syscalls; `newseg()` creates the segment's hidden backing file via `shmem_kernel_file_setup()` (or `hugetlb_file_setup()` for `SHM_HUGETLB`)
-- [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — `shmem_file_setup()`/`shmem_kernel_file_setup()`: the tmpfs backing shared by both POSIX `shm_open()` objects and SysV `shmget()` segments
-- [mm/memfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memfd.c) — `memfd_create()` syscall and the `F_SEAL_*` sealing checks
-- [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()`/`eventfd_read()` and the `struct eventfd_ctx` counter/wait-queue implementation
+- [ipc/shm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/ipc/shm.c) — `shmget()`、`shmat()`/`shmdt()`、`shmctl()`システムコール。`newseg()`が`shmem_kernel_file_setup()`（`SHM_HUGETLB`の場合は`hugetlb_file_setup()`）を通じてセグメントの隠れた裏付けファイルを作成する
+- [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — `shmem_file_setup()`/`shmem_kernel_file_setup()`: POSIXの`shm_open()`オブジェクトとSysVの`shmget()`セグメントの両方が共有するtmpfsの裏付け
+- [mm/memfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memfd.c) — `memfd_create()`システムコールと`F_SEAL_*`シーリングのチェック
+- [fs/eventfd.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/eventfd.c) — `eventfd_write()`/`eventfd_read()`と、`struct eventfd_ctx`のカウンタ/待ちキューの実装
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`shmget(2)`](https://man7.org/linux/man-pages/man2/shmget.2.html) — allocate a System V shared memory segment
-- [`shmat(2)`/`shmdt(2)`](https://man7.org/linux/man-pages/man2/shmat.2.html) — attach/detach a System V segment
-- [`shmctl(2)`](https://man7.org/linux/man-pages/man2/shmctl.2.html) — control operations, including `IPC_RMID`
-- [`shm_open(3)`](https://man7.org/linux/man-pages/man3/shm_open.3.html) — POSIX shared memory objects; documents the `/dev/shm` tmpfs implementation on Linux
-- [`shm_overview(7)`](https://man7.org/linux/man-pages/man7/shm_overview.7.html) — POSIX shared memory API overview
-- [`sem_overview(7)`](https://man7.org/linux/man-pages/man7/sem_overview.7.html) — POSIX semaphores: named vs. unnamed, `/dev/shm` persistence for named semaphores
-- [`memfd_create(2)`](https://man7.org/linux/man-pages/man2/memfd_create.2.html) — anonymous sealable memory files
-- [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — counter-backed notification fd, including `EFD_SEMAPHORE`
+- [`shmget(2)`](https://man7.org/linux/man-pages/man2/shmget.2.html) — System V共有メモリセグメントを割り当てる
+- [`shmat(2)`/`shmdt(2)`](https://man7.org/linux/man-pages/man2/shmat.2.html) — System Vセグメントをアタッチ/デタッチする
+- [`shmctl(2)`](https://man7.org/linux/man-pages/man2/shmctl.2.html) — `IPC_RMID`を含む制御操作
+- [`shm_open(3)`](https://man7.org/linux/man-pages/man3/shm_open.3.html) — POSIX共有メモリオブジェクト。Linuxにおける`/dev/shm` tmpfs実装について記述している
+- [`shm_overview(7)`](https://man7.org/linux/man-pages/man7/shm_overview.7.html) — POSIX共有メモリAPIの概要
+- [`sem_overview(7)`](https://man7.org/linux/man-pages/man7/sem_overview.7.html) — POSIXセマフォ: 名前付きと無名の違い、名前付きセマフォの`/dev/shm`での永続性
+- [`memfd_create(2)`](https://man7.org/linux/man-pages/man2/memfd_create.2.html) — シール可能な匿名メモリファイル
+- [`eventfd(2)`](https://man7.org/linux/man-pages/man2/eventfd.2.html) — `EFD_SEMAPHORE`を含む、カウンタ裏付けの通知fd
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Process Address Space](../mm/mmap.md) — VMAs and the `MAP_SHARED` flag that both POSIX shm and anonymous shared mappings rely on
-- [File-Backed mmap and Page Faults](../mm/file-mmap.md) — `MAP_PRIVATE` vs `MAP_SHARED` fault handling in detail
-- [Futex Internals](../locking/futex.md) — how `sem_wait()`/`sem_post()` fall back to the kernel when the uncontended fast-path atomic isn't enough
-- [SysV IPC: Semaphores and Message Queues](sysv-semaphores.md) — `semget`/`semop`, `SEM_UNDO`, and the SysV IPC leak problem
-- [eventfd and signalfd](eventfd-signalfd.md) — `struct eventfd_ctx`, epoll integration, and signalfd covered in depth
-- [Unix Domain Sockets](unix-sockets.md) — `SCM_RIGHTS`, the generic mechanism for passing any open file descriptor (including a `memfd_create()` fd) between processes
+- [プロセスのアドレス空間](../mm/mmap.md) — VMAと、POSIX shmと匿名共有マッピングの両方が依拠する`MAP_SHARED`フラグ
+- [ファイル裏付けmmapとページフォールト](../mm/file-mmap.md) — `MAP_PRIVATE`と`MAP_SHARED`のフォールト処理の詳細
+- [futexの内部構造](../locking/futex.md) — 競合のない高速パスのアトミック操作だけでは足りないとき、`sem_wait()`/`sem_post()`がどのようにカーネルにフォールバックするか
+- [SysV IPC: セマフォとメッセージキュー](sysv-semaphores.md) — `semget`/`semop`、`SEM_UNDO`、SysV IPCのリーク問題
+- [eventfdとsignalfd](eventfd-signalfd.md) — `struct eventfd_ctx`、epoll統合、signalfdを詳しく扱う
+- [Unixドメインソケット](unix-sockets.md) — `SCM_RIGHTS`: 任意のオープン済みファイルディスクリプタ（`memfd_create()`のfdを含む）をプロセス間で渡すための汎用機構
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Sealed files](https://lwn.net/Articles/593918/) (2014) — Jonathan Corbet on the `memfd_create()` and `F_SEAL_*` sealing mechanism described in this page's memfd section
+- [Sealed files](https://lwn.net/Articles/593918/) (2014) — 本ページのmemfdの節で説明した`memfd_create()`と`F_SEAL_*`シーリング機構に関するJonathan Corbetの記事
 
-### External {#external}
+### 外部資料 {#external}
 
-- [tmpfs — The Linux Kernel documentation](https://docs.kernel.org/filesystems/tmpfs.html) — confirms both POSIX `shm_open()`/`/dev/shm` and SysV `shmget()` segments are backed by tmpfs (SysV via an internal, non-visible mount)
+- [tmpfs — The Linux Kernel documentation](https://docs.kernel.org/filesystems/tmpfs.html) — POSIXの`shm_open()`/`/dev/shm`とSysVの`shmget()`セグメントの両方がtmpfsを裏付けとすることを確認できる（SysVは内部の不可視マウント経由）

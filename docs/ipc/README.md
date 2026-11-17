@@ -1,27 +1,27 @@
-# IPC: Inter-Process Communication {#ipc-inter-process-communication}
+# IPC: プロセス間通信 {#ipc-inter-process-communication}
 
-> Mechanisms for processes to exchange data and coordinate
+> プロセス同士がデータを交換し、協調動作するための仕組み
 
-## IPC mechanisms overview {#ipc-mechanisms-overview}
+## IPC機構の概要 {#ipc-mechanisms-overview}
 
-| Mechanism | Communication | Direction | Data size | Persistence |
+| 機構 | 通信形態 | 方向 | データサイズ | 永続性 |
 |-----------|--------------|-----------|-----------|-------------|
-| Signals | Event notification | One-way | Signal number only | Until delivered |
-| Pipe (anonymous) | Byte stream | Unidirectional | Buffered (~64KB) | Until both ends close |
-| FIFO (named pipe) | Byte stream | Unidirectional | Buffered | While file exists |
-| Unix socket | Stream or datagram | Bidirectional | Flexible | While fd open |
-| POSIX shared memory | Raw memory | Both | Arbitrary | Until shm_unlink |
-| POSIX message queue | Typed messages | Both | max_msg_size | Until mq_unlink |
-| eventfd | Counter + notification | Both | 8-byte counter | Until all fds closed |
-| signalfd | Signal as fd | One-way | siginfo_t | While fd open |
+| シグナル | イベント通知 | 一方向 | シグナル番号のみ | 配送されるまで |
+| パイプ（無名） | バイトストリーム | 単方向 | バッファあり（~64KB） | 両端が閉じられるまで |
+| FIFO（名前付きパイプ） | バイトストリーム | 単方向 | バッファあり | ファイルが存在する間 |
+| Unixソケット | ストリームまたはデータグラム | 双方向 | 柔軟 | fdが開いている間 |
+| POSIX共有メモリ | 生のメモリ | 双方向 | 任意 | shm_unlinkまで |
+| POSIXメッセージキュー | 型付きメッセージ | 双方向 | max_msg_size | mq_unlinkまで |
+| eventfd | カウンタ + 通知 | 双方向 | 8バイトのカウンタ | すべてのfdが閉じられるまで |
+| signalfd | fdとしてのシグナル | 一方向 | siginfo_t | fdが開いている間 |
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Signals](signals.md) | Signal delivery, sigaction, masks, real-time signals |
-| [Pipes and FIFOs](pipes.md) | Pipe internals, splice, vmsplice |
-| [Shared Memory and Semaphores](shared-memory.md) | POSIX shm, SysV shm, semaphores, eventfd |
-| [Unix Domain Sockets](unix-sockets.md) | SOCK_SEQPACKET, abstract namespace, SCM_RIGHTS, SO_PEERCRED |
-| [SysV IPC: Semaphores and Message Queues](sysv-semaphores.md) | semget/semop, msgget/msgsnd, SEM_UNDO, leak prevention |
-| [IPC War Stories](war-stories.md) | Leaked semaphores, fd exhaustion, signal storms, pipe surprises |
+| [シグナル](signals.md) | シグナル配送、sigaction、マスク、リアルタイムシグナル |
+| [パイプとFIFO](pipes.md) | パイプの内部構造、splice、vmsplice |
+| [共有メモリとセマフォ](shared-memory.md) | POSIX shm、SysV shm、セマフォ、eventfd |
+| [Unixドメインソケット](unix-sockets.md) | SOCK_SEQPACKET、抽象名前空間、SCM_RIGHTS、SO_PEERCRED |
+| [SysV IPC: セマフォとメッセージキュー](sysv-semaphores.md) | semget/semop、msgget/msgsnd、SEM_UNDO、リーク防止 |
+| [IPC事件簿](war-stories.md) | リークしたセマフォ、fd枯渇、シグナルストーム、パイプの意外な挙動 |
