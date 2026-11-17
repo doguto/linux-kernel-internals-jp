@@ -1,12 +1,12 @@
 # Direct I/O {#direct-io}
 
-> O_DIRECT: bypassing the page cache for predictable I/O latency
+> O_DIRECT: 予測可能なI/Oレイテンシのためにページキャッシュをバイパスする
 
-## What O_DIRECT does {#what-o_direct-does}
+## O_DIRECTが行うこと {#what-o_direct-does}
 
-By default, `read()` and `write()` go through the **page cache** — the kernel reads disk data into DRAM pages and serves reads from there. Writes go to dirty pages, which are flushed asynchronously.
+デフォルトでは、`read()`と`write()`は**ページキャッシュ**を経由する。カーネルはディスクのデータをDRAMのpageに読み込み、読み出しはそこから応答する。書き込みはダーティpageに対して行われ、それが非同期にフラッシュされる。
 
-O_DIRECT bypasses the page cache:
+O_DIRECTはページキャッシュをバイパスする:
 
 ```
 Buffered I/O:
@@ -18,9 +18,9 @@ O_DIRECT:
   read()  ← disk (synchronous, no page cache)
 ```
 
-## Why use O_DIRECT? {#why-use-o_direct}
+## なぜO_DIRECTを使うのか {#why-use-o_direct}
 
-**Databases (PostgreSQL, MySQL InnoDB, Oracle)**: Databases implement their own buffer pool. Routing I/O through both the database buffer and the OS page cache wastes DRAM. O_DIRECT gives the database full control:
+**データベース（PostgreSQL、MySQL InnoDB、Oracle）**: データベースは独自のバッファプールを実装している。I/OをデータベースのバッファとOSのページキャッシュの両方に通すとDRAMが無駄になる。O_DIRECTはデータベースに完全な制御を与える:
 
 ```
 Without O_DIRECT:
@@ -30,88 +30,88 @@ With O_DIRECT:
   DB buffer (8GB) = all RAM goes to the database
 ```
 
-**Predictable latency**: Page cache writeback can cause surprising latency spikes when dirty pages are flushed. O_DIRECT writes complete when the data reaches the drive.
+**予測可能なレイテンシ**: ページキャッシュのライトバックは、ダーティpageがフラッシュされる際に思わぬレイテンシスパイクを引き起こすことがある。O_DIRECTの書き込みは、データがドライブに到達した時点で完了する。
 
-**NUMA-aware memory**: O_DIRECT allows passing NUMA-local buffers to the kernel, avoiding cache effects across NUMA nodes.
+**NUMAを考慮したメモリ**: O_DIRECTではNUMAローカルなバッファをカーネルに渡すことができ、NUMAノードをまたぐキャッシュの影響を避けられる。
 
-## Alignment requirements {#alignment-requirements}
+## アライメント要件 {#alignment-requirements}
 
-O_DIRECT has strict alignment requirements. Violating them returns `EINVAL`:
+O_DIRECTには厳格なアライメント要件がある。違反すると`EINVAL`が返る:
 
 ```c
-#define SECTOR_SIZE 512    /* minimum for most drives */
-#define BLOCK_SIZE  4096   /* filesystem block size */
+#define SECTOR_SIZE 512    /* 大半のドライブでの最小値 */
+#define BLOCK_SIZE  4096   /* ファイルシステムのブロックサイズ */
 
-/* All three must be aligned to logical block size (usually 512B or 4096B): */
-/* 1. File offset */
-/* 2. Buffer address */
-/* 3. Transfer length */
+/* 次の3つはすべて論理ブロックサイズ（通常512Bまたは4096B）にアラインされていなければならない: */
+/* 1. ファイルオフセット */
+/* 2. バッファアドレス */
+/* 3. 転送長 */
 
-/* Correct: 4096-byte aligned everything */
+/* 正しい例: すべて4096バイトアライン */
 void *buf;
-posix_memalign(&buf, 4096, 4096);   /* 4096-byte aligned buffer */
+posix_memalign(&buf, 4096, 4096);   /* 4096バイトアラインのバッファ */
 
 int fd = open("file", O_RDWR | O_DIRECT);
 pread(fd, buf, 4096, 0);    /* offset=0, len=4096 → OK */
-pread(fd, buf, 4096, 512);  /* offset=512, len=4096 → EINVAL on many FS */
-pread(fd, buf, 512, 0);     /* len=512 → may work (if blksize=512) */
+pread(fd, buf, 4096, 512);  /* offset=512, len=4096 → 多くのFSでEINVAL */
+pread(fd, buf, 512, 0);     /* len=512 → 動く可能性あり（blksize=512の場合） */
 ```
 
-### Checking the required alignment {#checking-the-required-alignment}
+### 必要なアライメントの確認 {#checking-the-required-alignment}
 
 ```c
 #include <sys/ioctl.h>
 #include <linux/fs.h>
 
 int blksz;
-ioctl(fd, BLKSSZGET, &blksz);   /* logical block size */
-/* or */
+ioctl(fd, BLKSSZGET, &blksz);   /* 論理ブロックサイズ */
+/* または */
 struct stat st;
 fstat(fd, &st);
-/* st.st_blksize = preferred I/O block size */
+/* st.st_blksize = 推奨I/Oブロックサイズ */
 
-/* For block devices: */
-ioctl(fd, BLKPBSZGET, &blksz);  /* physical block size (may be 4096) */
+/* ブロックデバイスの場合: */
+ioctl(fd, BLKPBSZGET, &blksz);  /* 物理ブロックサイズ（4096の場合あり） */
 ```
 
-## O_DIRECT in the kernel {#o_direct-in-the-kernel}
+## カーネル内のO_DIRECT {#o_direct-in-the-kernel}
 
 ```c
 /* fs/read_write.c */
 static ssize_t do_loop_readv_writev(struct file *filp, struct iov_iter *iter,
                                      loff_t *ppos, int type, rwf_t flags)
 {
-    /* O_DIRECT path for block-aligned I/O */
+    /* ブロックアラインされたI/Oのための O_DIRECT パス */
     if (filp->f_flags & O_DIRECT) {
         return filp->f_op->read_iter(kiocb, iter);
         /* → generic_file_direct_write → filemap_write_and_wait_range +
              filp->f_mapping->a_ops->direct_IO */
     }
-    /* ... buffered path ... */
+    /* ... バッファードパス ... */
 }
 
-/* Per-filesystem direct_IO implementation: */
-/* ext4_direct_IO → iomap_dio_rw → bio submission */
+/* ファイルシステムごとの direct_IO 実装: */
+/* ext4_direct_IO → iomap_dio_rw → bio 発行 */
 static ssize_t ext4_direct_IO(struct kiocb *iocb, struct iov_iter *iter)
 {
     struct inode *inode = iocb->ki_filp->f_mapping->host;
     size_t count = iov_iter_count(iter);
 
-    /* Must flush dirty pages in range (coherency: page cache may have newer data) */
+    /* 範囲内のダーティ page をフラッシュする必要がある（一貫性: ページキャッシュの方が新しいデータを持っている可能性がある） */
     ret = filemap_write_and_wait_range(inode->i_mapping, offset,
                                         offset + count - 1);
     if (ret)
         return ret;
 
-    /* Submit DIO: goes directly to the block layer */
+    /* DIO を発行: ブロック層へ直接送られる */
     return iomap_dio_rw(iocb, iter, &ext4_iomap_ops,
                          &ext4_dio_write_ops, 0, 0, 0);
 }
 ```
 
-## iomap DIO: modern direct I/O path {#iomap-dio-modern-direct-io-path}
+## iomap DIO: 現代のdirect I/Oパス {#iomap-dio-modern-direct-io-path}
 
-Since 4.10, most filesystems use the `iomap` layer for direct I/O:
+4.10以降、ほとんどのファイルシステムはdirect I/Oに`iomap`層を使用している:
 
 ```c
 /* fs/iomap/direct-io.c */
@@ -123,66 +123,66 @@ ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 {
     struct iomap_dio *dio;
 
-    /* Map file blocks to physical addresses */
+    /* ファイルブロックを物理アドレスへマップする */
     while (iov_iter_count(iter)) {
         ret = iomap_apply(inode, pos, count, flags, ops, dio,
                            iomap_dio_iter);
     }
 
-    /* Wait for all bios to complete (sync DIO) */
+    /* すべての bio の完了を待つ（同期 DIO） */
     if (!is_sync_kiocb(iocb))
-        return -EIOCBQUEUED;  /* async: caller will wait */
+        return -EIOCBQUEUED;  /* 非同期: 呼び出し側が待つ */
 
     wait_for_completion_io(&dio->done);
     return dio->size;
 }
 ```
 
-## O_DIRECT vs mmap {#o_direct-vs-mmap}
+## O_DIRECTとmmapの比較 {#o_direct-vs-mmap}
 
-| Aspect | O_DIRECT | mmap |
+| 観点 | O_DIRECT | mmap |
 |--------|----------|------|
-| Page cache | Bypassed | Used |
-| Zero-copy | With DMA (buffer directly addressed) | Copy from page cache |
-| Random access | `pread(fd, buf, len, offset)` | `memcpy(buf, mmap_ptr + offset, len)` |
-| CPU cost | Syscall per I/O | After fault: load instructions |
-| Alignment | Strict sector alignment | None (page granularity) |
-| Scatter-gather | `preadv(fd, iov, n, offset)` | Natural (pointer arithmetic) |
-| Typical use | Databases | Search engines, key-value stores |
+| ページキャッシュ | バイパスする | 使用する |
+| ゼロコピー | DMAで可能（バッファを直接アドレス指定） | ページキャッシュからコピー |
+| ランダムアクセス | `pread(fd, buf, len, offset)` | `memcpy(buf, mmap_ptr + offset, len)` |
+| CPUコスト | I/Oごとにsyscall | フォールト後はロード命令のみ |
+| アライメント | 厳格なセクタアライメント | なし（page粒度） |
+| スキャッタ・ギャザー | `preadv(fd, iov, n, offset)` | 自然に可能（ポインタ演算） |
+| 典型的な用途 | データベース | 検索エンジン、キーバリューストア |
 
-## O_DSYNC and O_SYNC: write durability {#odsync-and-osync-write-durability}
+## O_DSYNCとO_SYNC: 書き込みの永続性 {#odsync-and-osync-write-durability}
 
 ```c
-/* O_SYNC: fsync() after every write (metadata + data durable) */
+/* O_SYNC: 毎回の書き込み後に fsync()（メタデータ + データが永続化） */
 int fd = open("file", O_WRONLY | O_SYNC);
 
-/* O_DSYNC: only data durable (no metadata sync for performance) */
+/* O_DSYNC: データのみ永続化（性能のためメタデータは同期しない） */
 int fd = open("file", O_WRONLY | O_DSYNC);
 
-/* fsync() manually: flush buffered writes to disk */
+/* fsync() を手動で: バッファリングされた書き込みをディスクへフラッシュ */
 write(fd, data, len);
-fsync(fd);  /* or fdatasync(fd) for data only */
+fsync(fd);  /* データのみなら fdatasync(fd) */
 ```
 
-## O_DIRECT performance tips {#o_direct-performance-tips}
+## O_DIRECTの性能向上のヒント {#o_direct-performance-tips}
 
 ```c
-/* Use io_uring with IORING_OP_READ_FIXED for best O_DIRECT performance */
-/* Register buffers once: */
+/* O_DIRECT で最高性能を得るには io_uring の IORING_OP_READ_FIXED を使う */
+/* バッファを一度だけ登録: */
 struct iovec iov[1] = {{ .iov_base = buf, .iov_len = BUF_SIZE }};
 io_uring_register_buffers(ring, iov, 1);
 
-/* Submit with registered buffer (no per-op mapping) */
+/* 登録済みバッファで発行（操作ごとのマッピングが不要） */
 struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
 io_uring_prep_read_fixed(sqe, fd, buf, BUF_SIZE, offset, 0);
 io_uring_submit(ring);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Async I/O evolution](async-io.md) — AIO, io_uring for O_DIRECT
-- [io_uring: Operations](../io-uring/io-uring-ops.md) — IORING_OP_READ_FIXED
-- [Block Layer: bio and request](../block/bio-request.md) — bio submission from DIO
-- [Memory Management: page cache](../mm/page-cache.md) — what O_DIRECT bypasses
-- `fs/iomap/direct-io.c` — modern DIO implementation
-- `Documentation/filesystems/dax.txt` — DAX for PMEM
+- [非同期I/Oの進化](async-io.md) — O_DIRECT向けのAIO、io_uring
+- [io_uring: 操作](../io-uring/io-uring-ops.md) — IORING_OP_READ_FIXED
+- [ブロック層: bioとrequest](../block/bio-request.md) — DIOからのbio発行
+- [メモリ管理: ページキャッシュ](../mm/page-cache.md) — O_DIRECTがバイパスするもの
+- `fs/iomap/direct-io.c` — 現代のDIO実装
+- `Documentation/filesystems/dax.txt` — PMEM向けのDAX

@@ -1,10 +1,10 @@
-# Tuning I/O for Streaming and High-Throughput Workloads {#tuning-io-for-streaming-and-high-throughput-workloads}
+# ストリーミングおよび高スループットワークロード向けのI/Oチューニング {#tuning-io-for-streaming-and-high-throughput-workloads}
 
-> Maximizing sequential read and write throughput for video, backup, ETL, and data pipeline workloads
+> 動画、バックアップ、ETL、データパイプラインのワークロードにおけるシーケンシャルな読み書きのスループットを最大化する
 
-## What streaming I/O looks like {#what-streaming-io-looks-like}
+## ストリーミングI/Oとはどのようなものか {#what-streaming-io-looks-like}
 
-Streaming workloads read or write data sequentially at high rates: video encoding/decoding, backup agents, log aggregation, ETL pipelines, Kafka brokers, and Hadoop/Spark. Their I/O pattern is:
+ストリーミングワークロードは、データを高いレートでシーケンシャルに読み書きする。動画のエンコード/デコード、バックアップエージェント、ログ集約、ETLパイプライン、Kafkaブローカー、Hadoop/Sparkなどである。そのI/Oパターンは次のとおりである:
 
 ```
 Streaming write pattern:
@@ -20,31 +20,31 @@ Offset: 12MB  1MB   7MB   3MB   15MB   ...
         ████  ████  ████  ████  ████       random jumps, small sizes
 ```
 
-The kernel's default configuration already favors sequential I/O through readahead and writeback coalescing — but defaults leave significant throughput on the table for workloads that are *exclusively* sequential.
+カーネルのデフォルト設定は、先読みとライトバックの結合によってすでにシーケンシャルI/Oを優遇している — しかし、*もっぱら*シーケンシャルなワークロードにとっては、デフォルトのままでは相当なスループットを取りこぼしている。
 
 ---
 
-## Readahead: the primary lever for streaming reads {#readahead-the-primary-lever-for-streaming-reads}
+## 先読み: ストリーミング読み出しの主要なつまみ {#readahead-the-primary-lever-for-streaming-reads}
 
-The kernel's readahead mechanism pre-fetches data from disk ahead of the current read position. For streaming reads, aggressive readahead directly translates to throughput: the device stays busy reading while the application processes previously fetched data.
+カーネルの先読みの仕組みは、現在の読み出し位置より先のデータをディスクからプリフェッチする。ストリーミング読み出しでは、積極的な先読みがそのままスループットにつながる。アプリケーションが以前に取得したデータを処理している間も、デバイスは読み出しで忙しく動き続ける。
 
 ```bash
-# Current readahead size
-cat /sys/block/sda/queue/read_ahead_kb    # default: 128KB
+# 現在の先読みサイズ
+cat /sys/block/sda/queue/read_ahead_kb    # デフォルト: 128KB
 
-# For streaming reads, increase substantially
-echo 4096 > /sys/block/sda/queue/read_ahead_kb   # 4MB readahead
-echo 8192 > /sys/block/nvme0n1/queue/read_ahead_kb  # 8MB for NVMe
+# ストリーミング読み出しでは大幅に増やす
+echo 4096 > /sys/block/sda/queue/read_ahead_kb   # 4MB の先読み
+echo 8192 > /sys/block/nvme0n1/queue/read_ahead_kb  # NVMe では 8MB
 
-# The optimal value depends on:
-# - Storage latency (higher latency → larger readahead to keep device busy)
-# - Memory available for caching
-# - How much data is read sequentially before seeking
+# 最適な値は次に依存する:
+# - ストレージのレイテンシ（レイテンシが高いほど、デバイスを忙しく保つために大きな先読みが必要）
+# - キャッシュに使えるメモリ
+# - シークする前にどれだけのデータをシーケンシャルに読むか
 ```
 
-**Calculating the optimal readahead window:**
+**最適な先読みウィンドウの計算:**
 
-The readahead window should keep the device busy during application processing time. For a device delivering 2GB/s with 0.1ms latency per request at 128KB:
+先読みウィンドウは、アプリケーションが処理している間もデバイスを忙しく保てる大きさにすべきである。2GB/sを出し、128KBのリクエストあたり0.1msのレイテンシを持つデバイスの場合:
 
 ```
 Without readahead (synchronous reads):
@@ -57,73 +57,73 @@ With 4MB readahead:
   This allows substantial CPU processing between reads without stalling
 ```
 
-**Per-file readahead with `posix_fadvise`:**
+**`posix_fadvise`によるファイルごとの先読み:**
 
 ```c
-/* Tell the kernel this file will be read sequentially — triggers large readahead */
+/* このファイルがシーケンシャルに読まれることをカーネルに伝える — 大きな先読みを引き起こす */
 posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 
-/* For files you won't need in the page cache after reading (streaming/single-pass) */
+/* 読んだ後にページキャッシュに残す必要のないファイル（ストリーミング/一度きり）の場合 */
 posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 
-/* Combination for streaming single-pass reads: aggressive readahead, no cache pollution */
+/* ストリーミングの一度きりの読み出し向けの組み合わせ: 積極的な先読み、キャッシュ汚染なし */
 posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
-/* ... read chunk ... */
+/* ... チャンクを読む ... */
 posix_fadvise(fd, processed_offset, chunk_size, POSIX_FADV_DONTNEED);
 ```
 
-`POSIX_FADV_DONTNEED` on already-processed data prevents the page cache from filling with single-pass data and evicting working-set pages for other processes. This is critical on a server running both streaming workloads and other services.
+処理済みのデータに対して`POSIX_FADV_DONTNEED`を使うと、ページキャッシュが一度きりのデータで埋まり、ほかのプロセスのワーキングセットのpageが追い出されるのを防げる。これは、ストリーミングワークロードとほかのサービスの両方を動かしているサーバーでは極めて重要である。
 
 ---
 
-## Write buffering: letting the page cache absorb bursts {#write-buffering-letting-the-page-cache-absorb-bursts}
+## 書き込みバッファリング: ページキャッシュにバーストを吸収させる {#write-buffering-letting-the-page-cache-absorb-bursts}
 
-For streaming writes, the page cache acts as a write buffer. Writes go to the page cache immediately and are flushed to storage asynchronously by writeback threads. The application can write faster than the device can absorb, up to the dirty limit.
+ストリーミング書き込みでは、ページキャッシュが書き込みバッファとして働く。書き込みは即座にページキャッシュに入り、ライトバックスレッドによって非同期にストレージへフラッシュされる。アプリケーションは、ダーティの上限までは、デバイスが吸収できるより速く書き込むことができる。
 
 ```bash
-# Tune for streaming write workloads
+# ストリーミング書き込みワークロード向けのチューニング
 
-# Allow more dirty data in memory before throttling
-# Default: 20% of RAM. For dedicated streaming servers: 40-60%
+# スロットリングが始まるまでにメモリ上に置けるダーティデータを増やす
+# デフォルト: RAM の 20%。ストリーミング専用サーバーでは 40〜60%
 echo 40 > /proc/sys/vm/dirty_ratio
 
-# Background writeback starts at this threshold
-# Default: 10%. For streaming: 20-30%
+# このしきい値でバックグラウンドのライトバックが始まる
+# デフォルト: 10%。ストリーミングでは 20〜30%
 echo 20 > /proc/sys/vm/dirty_background_ratio
 
-# Let dirty data sit longer before flushing (reduces write amplification
-# from small batches). Default: 3000 (30s). For streaming: 6000 (60s)
+# フラッシュまでダーティデータを長く置いておく（小さなバッチによる
+# 書き込み増幅を減らす）。デフォルト: 3000（30s）。ストリーミングでは 6000（60s）
 echo 6000 > /proc/sys/vm/dirty_expire_centisecs
 
-# Run writeback less frequently (larger batches per flush)
-# Default: 500 (5s). For streaming: 1000 (10s)
+# ライトバックの実行頻度を下げる（フラッシュあたりのバッチを大きくする）
+# デフォルト: 500（5s）。ストリーミングでは 1000（10s）
 echo 1000 > /proc/sys/vm/dirty_writeback_centisecs
 ```
 
-!!! warning "Dirty ratio and crash risk"
-    A high `dirty_ratio` means more data is in memory but not yet on disk. A system crash or power failure when 40% of RAM is dirty can lose gigabytes of data. Only use high dirty ratios for workloads where data loss is acceptable (ephemeral data, easily regenerated data) or where the storage has a battery-backed write cache.
+!!! warning "ダーティ比率とクラッシュのリスク"
+    `dirty_ratio`が高いということは、メモリ上にあってまだディスクに載っていないデータが多いということである。RAMの40%がダーティな状態でシステムクラッシュや電源障害が起きると、数ギガバイトのデータが失われうる。高いダーティ比率を使うのは、データ損失が許容できるワークロード（一時的なデータ、容易に再生成できるデータ）か、ストレージがバッテリーバックアップ付きのライトキャッシュを持つ場合に限ること。
 
 ---
 
-## Large I/O size alignment {#large-io-size-alignment}
+## 大きなI/Oサイズとアライメント {#large-io-size-alignment}
 
-Streaming workloads should write in large, aligned chunks. The kernel can submit large sequential I/Os as a single BIO (block I/O request), maximizing device efficiency.
+ストリーミングワークロードは、大きくアラインされたチャンク単位で書き込むべきである。カーネルは大きなシーケンシャルI/Oを1つのBIO（ブロックI/Oリクエスト）として発行でき、デバイスの効率を最大化できる。
 
 ```bash
-# Check maximum request size the device handles efficiently
-cat /sys/block/nvme0n1/queue/max_sectors_kb   # e.g.: 512
-cat /sys/block/sda/queue/max_hw_sectors_kb    # hardware maximum
+# デバイスが効率よく処理できる最大リクエストサイズを確認
+cat /sys/block/nvme0n1/queue/max_sectors_kb   # 例: 512
+cat /sys/block/sda/queue/max_hw_sectors_kb    # ハードウェアの最大値
 
-# For streaming writes, match the I/O size to the device's preferred chunk:
-# NVMe: 256KB-1MB chunks
-# SATA SSD: 128KB-256KB chunks
-# HDD: 1MB-8MB chunks (rotational latency amortization)
+# ストリーミング書き込みでは、I/O サイズをデバイスが好むチャンクに合わせる:
+# NVMe: 256KB〜1MB のチャンク
+# SATA SSD: 128KB〜256KB のチャンク
+# HDD: 1MB〜8MB のチャンク（回転待ちレイテンシの償却）
 ```
 
-**In application code:**
+**アプリケーションコードでは:**
 
 ```c
-/* Streaming write: use large aligned buffers */
+/* ストリーミング書き込み: 大きなアラインされたバッファを使う */
 #define STREAM_BUF_SIZE (1 * 1024 * 1024)  /* 1MB */
 
 void *buf;
@@ -131,155 +131,155 @@ posix_memalign(&buf, 4096, STREAM_BUF_SIZE);
 
 while (has_data()) {
     size_t n = fill_buffer(buf, STREAM_BUF_SIZE);
-    write(fd, buf, n);  /* kernel coalesces into large BIO */
+    write(fd, buf, n);  /* カーネルが大きな BIO にまとめる */
 }
 ```
 
-For io_uring, use vectored writes with `IORING_OP_WRITEV` to submit multiple 256KB buffers at once, reducing syscall overhead.
+io_uringでは、`IORING_OP_WRITEV`によるベクタ書き込みを使って複数の256KBバッファを一度に発行し、syscallのオーバーヘッドを減らす。
 
 ---
 
-## Bypass the page cache for single-pass streaming {#bypass-the-page-cache-for-single-pass-streaming}
+## 一度きりのストリーミングではページキャッシュをバイパスする {#bypass-the-page-cache-for-single-pass-streaming}
 
-When data will be read or written only once (backup dumps, log rotation, video encoding input), the page cache wastes RAM and evicts useful data without benefit.
+データが一度だけ読み書きされる場合（バックアップダンプ、ログローテーション、動画エンコードの入力）、ページキャッシュはRAMを無駄にし、何の利益もなく有用なデータを追い出す。
 
-**For single-pass reads:**
+**一度きりの読み出しの場合:**
 
 ```c
-/* O_DIRECT: bypass page cache, read directly into userspace buffer */
+/* O_DIRECT: ページキャッシュをバイパスし、ユーザー空間のバッファへ直接読み込む */
 int fd = open(path, O_RDONLY | O_DIRECT);
 
-/* Or: use buffered I/O but advise no caching */
+/* または: バッファード I/O を使いつつ、キャッシュしないよう助言する */
 int fd = open(path, O_RDONLY);
 posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL | POSIX_FADV_NOREUSE);
-/* After reading each block: */
+/* 各ブロックを読んだ後: */
 posix_fadvise(fd, offset, block_size, POSIX_FADV_DONTNEED);
 ```
 
-**For single-pass writes (backup, dump):**
+**一度きりの書き込みの場合（バックアップ、ダンプ）:**
 
 ```c
-/* Write through to device without page cache buffering */
+/* ページキャッシュでバッファリングせずにデバイスへ書き込む */
 int fd = open(path, O_WRONLY | O_DIRECT);
-/* Requires 512-byte or 4096-byte aligned buffers */
+/* 512 バイトまたは 4096 バイトにアラインされたバッファが必要 */
 ```
 
-**Why this matters for a shared server:**
+**共有サーバーでこれが重要な理由:**
 
-A 100GB backup running with buffered I/O will fill the page cache with 100GB of data that will never be read again, evicting the working sets of databases, web servers, and other running processes. On a 64GB server, a full-cache backup can cause a 40-60% performance hit to other services for 10-20 minutes afterward as their working sets are re-faulted from disk.
+バッファードI/Oで実行される100GBのバックアップは、二度と読まれない100GBのデータでページキャッシュを埋め、データベース、Webサーバー、その他の実行中プロセスのワーキングセットを追い出す。64GBのサーバーでは、キャッシュを埋め尽くすバックアップの後、ほかのサービスのワーキングセットがディスクから再びフォールトインされるまでの10〜20分間、それらのサービスに40〜60%の性能低下が生じることがある。
 
 ---
 
-## Parallel I/O streams {#parallel-io-streams}
+## 並列I/Oストリーム {#parallel-io-streams}
 
-Modern NVMe devices have multiple hardware queues and are designed for parallel I/O. A single sequential stream may not saturate the device:
+最新のNVMeデバイスは複数のハードウェアキューを持ち、並列I/O向けに設計されている。単一のシーケンシャルストリームではデバイスを飽和させられないことがある:
 
 ```bash
-# NVMe: number of hardware queues
-cat /sys/block/nvme0n1/mq/     # one directory per queue
+# NVMe: ハードウェアキューの数
+cat /sys/block/nvme0n1/mq/     # キューごとに 1 つのディレクトリ
 
-# Test: single stream vs multiple streams
-# Single stream:
+# テスト: 単一ストリームと複数ストリームの比較
+# 単一ストリーム:
 fio --name=single --rw=read --bs=1M --direct=1 \
     --numjobs=1 --iodepth=4 --filename=/dev/nvme0n1 \
     --size=10G --time_based --runtime=30
 
-# Multiple parallel streams (often 2-4× faster on NVMe):
+# 複数の並列ストリーム（NVMe では 2〜4 倍速いことが多い）:
 fio --name=parallel --rw=read --bs=1M --direct=1 \
     --numjobs=4 --iodepth=4 --filename=/dev/nvme0n1 \
     --size=10G --time_based --runtime=30 --group_reporting
 ```
 
-For high-speed NVMe (7GB/s rated), a single stream may only achieve 4-5GB/s due to CPU/PCIe bottlenecks. Parallel streams distribute across multiple CPU cores and PCIe lanes.
+高速なNVMe（定格7GB/s）では、CPU/PCIeのボトルネックにより、単一ストリームでは4〜5GB/sしか出ないことがある。並列ストリームは複数のCPUコアとPCIeレーンに分散する。
 
 ---
 
-## Kafka broker I/O tuning {#kafka-broker-io-tuning}
+## KafkaブローカーのI/Oチューニング {#kafka-broker-io-tuning}
 
-Kafka is a canonical streaming workload: producers write to partition logs sequentially, consumers read from different offsets on the same logs simultaneously.
+Kafkaは典型的なストリーミングワークロードである。プロデューサーはパーティションログにシーケンシャルに書き込み、コンシューマーは同じログの異なるオフセットから同時に読み出す。
 
 ```bash
-# Kafka I/O pattern:
-# - Producers: sequential append to partition files
-# - Consumers: sequential reads from various offsets (readahead essential)
-# - Replication: sequential reads of recent data → shares readahead benefit
+# Kafka の I/O パターン:
+# - プロデューサー: パーティションファイルへのシーケンシャルな追記
+# - コンシューマー: さまざまなオフセットからのシーケンシャル読み出し（先読みが不可欠）
+# - レプリケーション: 最近のデータのシーケンシャル読み出し → 先読みの恩恵を共有
 
-# Kernel settings for Kafka brokers:
+# Kafka ブローカー向けのカーネル設定:
 
-# Large dirty buffer (Kafka writes are bursty and sequential)
+# 大きなダーティバッファ（Kafka の書き込みはバースト的かつシーケンシャル）
 echo 40 > /proc/sys/vm/dirty_ratio
 echo 15 > /proc/sys/vm/dirty_background_ratio
 
-# Longer dirty expiry (Kafka segments are long-lived, frequent fsync via flush config)
+# ダーティの有効期限を長めに（Kafka のセグメントは長寿命で、flush 設定による fsync が頻繁）
 echo 3000 > /proc/sys/vm/dirty_expire_centisecs
 
-# Aggressive readahead for consumer reads
+# コンシューマーの読み出し向けに積極的な先読み
 echo 4096 > /sys/block/nvme0n1/queue/read_ahead_kb
 
-# Kafka application settings to match:
-# log.flush.interval.messages=Long.MAX_VALUE  # let OS handle flushing
-# log.flush.interval.ms=Long.MAX_VALUE        # rely on replication for durability
-# log.retention.bytes=107374182400            # 100GB per partition
+# これに合わせた Kafka アプリケーションの設定:
+# log.flush.interval.messages=Long.MAX_VALUE  # フラッシュは OS に任せる
+# log.flush.interval.ms=Long.MAX_VALUE        # 永続性はレプリケーションに頼る
+# log.retention.bytes=107374182400            # パーティションあたり 100GB
 ```
 
-**Why Kafka relies on the page cache:**
+**Kafkaがページキャッシュに頼る理由:**
 
-Kafka intentionally does not maintain its own buffer pool. Consumer reads that are close behind producers (the common case: the same recently written data) are served directly from the page cache without a disk read. The kernel's readahead brings subsequent segments into cache proactively. This zero-copy path from producer to consumer is Kafka's performance secret — see Kafka's performance documentation and the [splice/sendfile internals](splice-sendfile.md).
+Kafkaは意図的に独自のバッファプールを持たない。プロデューサーのすぐ後ろを追うコンシューマーの読み出し（よくあるケース: 最近書き込まれた同じデータ）は、ディスク読み出しなしにページキャッシュから直接応答される。カーネルの先読みは後続のセグメントを先回りしてキャッシュに取り込む。プロデューサーからコンシューマーへのこのゼロコピー経路がKafkaの性能の秘密である — Kafkaの性能に関するドキュメントと[splice/sendfileの内部](splice-sendfile.md)を参照。
 
 ---
 
-## HDFS DataNode I/O tuning {#hdfs-datanode-io-tuning}
+## HDFS DataNodeのI/Oチューニング {#hdfs-datanode-io-tuning}
 
-Hadoop DataNodes receive large blocks (128MB-256MB) from clients and write them to local storage. The pattern is sequential write followed by sequential reads from multiple clients.
+HadoopのDataNodeは、クライアントから大きなブロック（128MB〜256MB）を受け取り、ローカルストレージに書き込む。パターンは、シーケンシャルな書き込みの後に複数のクライアントからのシーケンシャル読み出しが続くというものである。
 
 ```bash
-# DataNode storage: large sequential I/Os, multiple concurrent streams
-# Typically 4-12 drives per node (JBOD, not RAID)
+# DataNode のストレージ: 大きなシーケンシャル I/O、複数の同時ストリーム
+# 通常はノードあたり 4〜12 台のドライブ（RAID ではなく JBOD）
 
-# Per-disk readahead: set high for replication reads
+# ディスクごとの先読み: レプリケーションの読み出しのため高く設定
 for disk in /sys/block/sd*; do
     echo 8192 > $disk/queue/read_ahead_kb
 done
 
-# Allow large dirty buffers (DataNodes have significant RAM)
+# 大きなダーティバッファを許可（DataNode は相当な RAM を持つ）
 echo 40 > /proc/sys/vm/dirty_ratio
 echo 20 > /proc/sys/vm/dirty_background_ratio
 
-# HDFS application settings:
-# dfs.datanode.data.dir — one directory per disk (parallel streams)
-# dfs.datanode.handler.count — match to number of disks × 2
-# dfs.client.read.shortcircuit — enable for local client reads (zero-copy)
+# HDFS アプリケーションの設定:
+# dfs.datanode.data.dir — ディスクごとに 1 つのディレクトリ（並列ストリーム）
+# dfs.datanode.handler.count — ディスク数 × 2 に合わせる
+# dfs.client.read.shortcircuit — ローカルクライアントの読み出し向けに有効化（ゼロコピー）
 ```
 
 ---
 
-## Video streaming server I/O tuning {#video-streaming-server-io-tuning}
+## 動画ストリーミングサーバーのI/Oチューニング {#video-streaming-server-io-tuning}
 
-A video streaming server reads large files sequentially and sends them to clients. The working set is large (active video catalog) and access is somewhat random by file but sequential within each file.
+動画ストリーミングサーバーは大きなファイルをシーケンシャルに読み、クライアントへ送信する。ワーキングセットは大きく（アクティブな動画カタログ）、アクセスはファイル単位ではややランダムだが、各ファイル内ではシーケンシャルである。
 
 ```bash
-# Moderate readahead: good for per-file sequential access
-# But not too large — too many concurrent files would consume RAM
-echo 2048 > /sys/block/nvme0n1/queue/read_ahead_kb  # 2MB per file
+# 中程度の先読み: ファイルごとのシーケンシャルアクセスに適する
+# ただし大きすぎないように — 同時に開くファイルが多すぎると RAM を消費する
+echo 2048 > /sys/block/nvme0n1/queue/read_ahead_kb  # ファイルあたり 2MB
 
-# Use posix_fadvise in the application for each video file:
-# SEQUENTIAL: enables larger per-file readahead
-# DONTNEED after send: frees cache after streaming (if files are large and single-pass)
+# アプリケーションで各動画ファイルに posix_fadvise を使う:
+# SEQUENTIAL: ファイルごとのより大きな先読みを有効化
+# 送信後に DONTNEED: ストリーミング後にキャッシュを解放（ファイルが大きく一度きりの場合）
 
-# sendfile() for zero-copy delivery to network sockets
-# The kernel reads from file → NIC DMA directly, bypassing userspace copy
+# ネットワークソケットへのゼロコピー配信には sendfile()
+# カーネルはファイルから読み → NIC へ直接 DMA し、ユーザー空間へのコピーをバイパスする
 ssize_t sent = sendfile(client_sockfd, file_fd, &offset, chunk_size);
 
-# For HTTP range requests (seeking within video):
+# HTTP の範囲リクエスト（動画内のシーク）の場合:
 posix_fadvise(fd, range_start, range_end - range_start, POSIX_FADV_WILLNEED);
 ```
 
 ---
 
-## Throughput measurement and validation {#throughput-measurement-and-validation}
+## スループットの計測と検証 {#throughput-measurement-and-validation}
 
 ```bash
-# fio: streaming benchmark
+# fio: ストリーミングのベンチマーク
 fio --name=stream_read \
     --rw=read \
     --bs=1M \
@@ -293,38 +293,38 @@ fio --name=stream_read \
     --output-format=normal \
     --group_reporting
 
-# Target metrics:
-# NVMe Gen4 sequential: 5-7 GB/s read, 4-6 GB/s write
-# SATA SSD sequential: 400-550 MB/s read, 350-500 MB/s write
-# HDD sequential: 100-200 MB/s read, 80-150 MB/s write
+# 目標とするメトリクス:
+# NVMe Gen4 シーケンシャル: 読み出し 5〜7 GB/s、書き込み 4〜6 GB/s
+# SATA SSD シーケンシャル: 読み出し 400〜550 MB/s、書き込み 350〜500 MB/s
+# HDD シーケンシャル: 読み出し 100〜200 MB/s、書き込み 80〜150 MB/s
 
-# Compare with and without readahead:
+# 先読みの有無で比較:
 echo 0 > /sys/block/nvme0n1/queue/read_ahead_kb
-fio --name=no_ra --rw=read --bs=4k --direct=0 ...   # buffered without readahead
+fio --name=no_ra --rw=read --bs=4k --direct=0 ...   # 先読みなしのバッファード
 
 echo 4096 > /sys/block/nvme0n1/queue/read_ahead_kb
-fio --name=ra --rw=read --bs=4k --direct=0 ...      # buffered with readahead
+fio --name=ra --rw=read --bs=4k --direct=0 ...      # 先読みありのバッファード
 ```
 
 ---
 
-## Quick reference: streaming tuning by storage type {#quick-reference-streaming-tuning-by-storage-type}
+## クイックリファレンス: ストレージの種類ごとのストリーミングチューニング {#quick-reference-streaming-tuning-by-storage-type}
 
-| Setting | HDD | SATA SSD | NVMe |
+| 設定 | HDD | SATA SSD | NVMe |
 |---------|-----|----------|------|
-| `read_ahead_kb` | 8192 | 4096 | 2048-4096 |
-| `dirty_ratio` | 40% | 30% | 20-30% |
-| `dirty_background_ratio` | 20% | 15% | 10-15% |
+| `read_ahead_kb` | 8192 | 4096 | 2048〜4096 |
+| `dirty_ratio` | 40% | 30% | 20〜30% |
+| `dirty_background_ratio` | 20% | 15% | 10〜15% |
 | `scheduler` | `mq-deadline` | `mq-deadline` | `none` |
 | `nr_requests` | 256 | 256 | 1024 |
-| I/O size | 1-8MB | 256KB-1MB | 256KB-1MB |
-| Parallel streams | 1-2 | 2-4 | 4-8 |
+| I/Oサイズ | 1〜8MB | 256KB〜1MB | 256KB〜1MB |
+| 並列ストリーム数 | 1〜2 | 2〜4 | 4〜8 |
 
 ---
 
-## Related pages {#related-pages}
+## 関連ページ {#related-pages}
 
-- [Readahead](readahead.md) — how the kernel readahead algorithm works
-- [splice, sendfile, and Zero-Copy](splice-sendfile.md) — zero-copy for network streaming
-- [Tuning Storage I/O](tuning-storage.md) — complete sysctl reference
-- [Buffered I/O and the Page Cache](buffered-io.md) — how buffered writes work
+- [先読み](readahead.md) — カーネルの先読みアルゴリズムの仕組み
+- [splice、sendfile、ゼロコピー](splice-sendfile.md) — ネットワークストリーミングのためのゼロコピー
+- [ストレージI/Oのチューニング](tuning-storage.md) — sysctlの完全なリファレンス
+- [バッファードI/Oとページキャッシュ](buffered-io.md) — バッファード書き込みの仕組み

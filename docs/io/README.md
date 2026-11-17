@@ -1,193 +1,193 @@
-# I/O Patterns {#io-patterns}
+# I/Oパターン {#io-patterns}
 
-> How Linux moves data between userspace, the page cache, and storage — and why the interface you choose shapes everything from latency to correctness
+> Linuxがユーザー空間、ページキャッシュ、ストレージの間でデータをどう移動させるか — そして選んだインターフェースがレイテンシから正しさまであらゆるものを左右するのはなぜか
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-This documentation explains how Linux handles I/O — not just the system call API, but the implementation decisions underneath: where data lives at each stage, what copies happen (or don't), what the kernel defers, and what trade-offs each interface forces on application developers.
+このドキュメントは、LinuxがI/Oをどう扱うかを説明する — システムコールAPIだけでなく、その下にある実装上の判断についてもである。各段階でデータがどこにあるのか、どんなコピーが起きる（あるいは起きない）のか、カーネルが何を先送りするのか、そして各インターフェースがアプリケーション開発者にどんなトレードオフを強いるのか。
 
-### Prerequisites {#prerequisites}
+### 前提知識 {#prerequisites}
 
-This documentation assumes familiarity with:
+このドキュメントは、次の事項に慣れていることを前提とする:
 
-- **C programming** — The kernel is written in C; syscall behavior is best understood at the C level
-- **Basic OS concepts** — Processes, kernel vs. userspace, system calls, file descriptors
-- **File descriptors** — What they are, how `open()` / `close()` / `dup()` work, and that they reference kernel-side `struct file` objects
+- **Cプログラミング** — カーネルはCで書かれており、syscallの挙動はCのレベルで理解するのが最もよい
+- **OSの基本概念** — プロセス、カーネル空間とユーザー空間、システムコール、ファイルディスクリプタ
+- **ファイルディスクリプタ** — それが何であるか、`open()` / `close()` / `dup()`がどう動作するか、そしてそれがカーネル側の`struct file`オブジェクトを参照していること
 
-If you've used `read()` and `write()` from C and wondered what happens inside, you're in the right place. A passing familiarity with virtual memory (pages, the page cache) will help but is not required — the relevant concepts are introduced where needed. See [Further Reading](#further-reading) for recommended textbooks.
+Cから`read()`や`write()`を使ったことがあり、その内部で何が起きているのか疑問に思ったことがあるなら、ここが適切な場所である。仮想メモリ（page、ページキャッシュ）について多少の知識があると役立つが、必須ではない — 関連する概念は必要なところで紹介する。推奨する教科書については[参考文献](#further-reading)を参照。
 
-### Getting the Kernel Source {#getting-the-kernel-source}
+### カーネルソースの入手 {#getting-the-kernel-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
 cd linux
 ```
 
-The most relevant directories for I/O are `mm/` (page cache, readahead, writeback) and `fs/` (syscall entry points, splice, fallocate). For building and configuration, see [Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html).
+I/Oに最も関係するディレクトリは`mm/`（ページキャッシュ、先読み、ライトバック）と`fs/`（syscallのエントリポイント、splice、fallocate）である。ビルドと設定については[Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html)を参照。
 
-### Running Tests {#running-tests}
+### テストの実行 {#running-tests}
 
-The fastest way to experiment with I/O behavior without rebooting your machine:
+マシンを再起動せずにI/Oの挙動を試す最も手早い方法:
 
 ```bash
-# Install virtme-ng (runs the kernel in QEMU with your host filesystem)
+# virtme-ng をインストール（ホストのファイルシステムを使って QEMU 上でカーネルを実行する）
 pip install virtme-ng
 
-# Build and boot with a test module
+# テストモジュール付きでビルドして起動
 virtme-ng --kdir . --append 'test_module.run_tests=1'
 ```
 
-For tracing I/O at runtime on your current kernel, `blktrace`, `bpftrace`, and `ftrace` are the primary tools — see [observability.md](observability.md) for how to use them.
+現在のカーネルで実行時にI/Oをトレースするには、`blktrace`、`bpftrace`、`ftrace`が主なツールである — 使い方は[observability.md](observability.md)を参照。
 
-### Suggested Reading Order {#suggested-reading-order}
+### 推奨する読む順序 {#suggested-reading-order}
 
-**Fundamentals — start here:**
+**基礎 — ここから始める:**
 
-1. **[Buffered I/O](buffered-io.md)** — How `read()` and `write()` interact with the page cache; what "buffered" actually means
-2. **[Direct I/O](direct-io.md)** — `O_DIRECT`, alignment requirements, when to bypass the page cache, and when not to
-3. **[Readahead](readahead.md)** — How the kernel speculatively fetches pages before you ask for them, and how to control it
-4. **[Page Cache and Writeback](page-cache-writeback.md)** — Dirty pages, flusher threads, `fsync()`, and the durability guarantees (or lack thereof) of `write()`
+1. **[バッファードI/O](buffered-io.md)** — `read()`と`write()`がページキャッシュとどう関わるか。「バッファード」が実際に何を意味するか
+2. **[Direct I/O](direct-io.md)** — `O_DIRECT`、アライメント要件、ページキャッシュをバイパスすべきときと、すべきでないとき
+3. **[先読み](readahead.md)** — カーネルが要求される前にpageを投機的に取得する仕組みと、その制御方法
+4. **[ページキャッシュとライトバック](page-cache-writeback.md)** — ダーティpage、フラッシャースレッド、`fsync()`、そして`write()`の永続性保証（あるいはその欠如）
 
-**Memory-Mapped I/O:**
+**メモリマップドI/O:**
 
-5. **[mmap I/O](mmap-io.md)** — Mapping files into the address space; page faults as the I/O mechanism; when mmap wins and when it doesn't
+5. **[mmap I/O](mmap-io.md)** — ファイルをアドレス空間にマップする。I/Oの仕組みとしてのページフォールト。mmapが有利な場合とそうでない場合
 
-**Zero-Copy and Vectored:**
+**ゼロコピーとベクタI/O:**
 
-6. **[splice and sendfile](splice-sendfile.md)** — Moving data between file descriptors without userspace copies; what "zero-copy" actually means here
-7. **[Vectored I/O](vectored-io.md)** — `readv()` / `writev()`, scatter-gather, `iov_iter` internals
+6. **[spliceとsendfile](splice-sendfile.md)** — ユーザー空間へのコピーなしにファイルディスクリプタ間でデータを移動する。ここでの「ゼロコピー」が実際に何を意味するか
+7. **[ベクタI/O](vectored-io.md)** — `readv()` / `writev()`、スキャッタ・ギャザー、`iov_iter`の内部
 
-**End-to-End Walkthroughs:**
+**エンドツーエンドのウォークスルー:**
 
-8. **[Life of a write](life-of-a-write.md)** — Tracing a `write()` call from userspace through the page cache to the block layer
-9. **[Async I/O](async-io.md)** — POSIX AIO (fake), Linux AIO (`io_submit`), and io_uring (real async); why the history matters
+8. **[writeの一生](life-of-a-write.md)** — `write()`呼び出しをユーザー空間からページキャッシュを経てブロック層までトレースする
+9. **[非同期I/O](async-io.md)** — POSIX AIO（偽物）、Linux AIO（`io_submit`）、io_uring（真の非同期）。なぜその歴史が重要なのか
 
-**Observability and Tuning:**
+**可観測性とチューニング:**
 
-10. **[Observability](observability.md)** — Tools for measuring I/O: `iostat`, `blktrace`, `bpftrace`, `perf`, `/proc/diskstats`
-11. **[Tuning Storage I/O](tuning-storage.md)** — Scheduler selection, readahead size, dirty ratio knobs, `fadvise()`, `madvise()`
+10. **[可観測性](observability.md)** — I/Oを計測するためのツール: `iostat`、`blktrace`、`bpftrace`、`perf`、`/proc/diskstats`
+11. **[ストレージI/Oのチューニング](tuning-storage.md)** — スケジューラの選択、先読みサイズ、ダーティ比率のつまみ、`fadvise()`、`madvise()`
 
-**War Stories:**
+**事件簿:**
 
-12. **[War Stories](war-stories.md)** — Real bugs, surprising behaviors, and production incidents traced to I/O subsystem edge cases
+12. **[事件簿](war-stories.md)** — I/Oサブシステムのエッジケースに起因する実際のバグ、驚くべき挙動、本番環境のインシデント
 
-### What You'll Learn {#what-youll-learn}
+### 学べること {#what-youll-learn}
 
-| Textbook Concept | Linux Reality |
+| 教科書の概念 | Linuxの現実 |
 |------------------|---------------|
-| "`write()` saves data to disk" | [No — it writes into the page cache](page-cache-writeback.md). The kernel may not flush to storage for seconds. Call `fsync()` if you need durability |
-| "`O_DIRECT` is faster" | [Depends entirely on workload](direct-io.md). Alignment requirements are strict, readahead is disabled, and for workloads with temporal locality the page cache usually wins |
-| "`sendfile` is zero-copy" | [Zero userspace copies, yes](splice-sendfile.md), but the CPU still touches metadata and socket buffers. True zero-copy (DMA to NIC) requires additional hardware support |
-| "`mmap` is always faster than `read()`" | [Not for sequential streaming](mmap-io.md). Page fault overhead and TLB pressure make `read()` competitive; mmap wins for random access and shared data |
-| "AIO is async" | [It depends which AIO you mean](async-io.md). POSIX AIO (`aio_read`) is implemented with threads in glibc. Linux AIO (`io_submit`) is real kernel async but restricted to `O_DIRECT`. io_uring is the first truly general async I/O mechanism |
-| "`splice` avoids copies" | [Only when no transformation is needed](splice-sendfile.md). Splice moves page references between kernel structures — the moment you touch the data, the copy happens |
+| 「`write()`はデータをディスクに保存する」 | [いいえ — ページキャッシュに書き込む](page-cache-writeback.md)。カーネルは数秒間ストレージへフラッシュしないことがある。永続性が必要なら`fsync()`を呼ぶこと |
+| 「`O_DIRECT`の方が速い」 | [完全にワークロード次第](direct-io.md)。アライメント要件は厳格で、先読みは無効になり、時間的局所性のあるワークロードでは通常ページキャッシュの方が有利である |
+| 「`sendfile`はゼロコピーである」 | [ユーザー空間へのコピーはゼロ、それは正しい](splice-sendfile.md)が、CPUは依然としてメタデータとソケットバッファに触れる。真のゼロコピー（NICへのDMA）には追加のハードウェアサポートが必要である |
+| 「`mmap`は常に`read()`より速い」 | [シーケンシャルなストリーミングでは違う](mmap-io.md)。ページフォールトのオーバーヘッドとTLBへの負荷により`read()`も十分に競争力がある。mmapが有利なのはランダムアクセスと共有データの場合である |
+| 「AIOは非同期である」 | [どのAIOを指すかによる](async-io.md)。POSIX AIO（`aio_read`）はglibcでスレッドを使って実装されている。Linux AIO（`io_submit`）は真のカーネル内非同期だが`O_DIRECT`に限られる。io_uringは初めての真に汎用的な非同期I/Oの仕組みである |
+| 「`splice`はコピーを回避する」 | [変換が不要な場合に限る](splice-sendfile.md)。spliceはカーネルの構造体の間でpageへの参照を移動させる — データに触れた瞬間にコピーが発生する |
 
-### What Makes This Different {#what-makes-this-different}
+### このドキュメントの特徴 {#what-makes-this-different}
 
-- **Real commits**: Every claim links to actual kernel commits
-- **Real bugs**: Learn from what broke in production and why
-- **Real discussions**: Links to LKML where design decisions were debated
-- **Real trade-offs**: Not just "what" but "why this interface and not that one"
-- **Hands-on**: "Try It Yourself" sections with commands to run and code to read
-
----
-
-## Documentation {#documentation}
-
-### Fundamentals {#fundamentals}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [buffered-io](buffered-io.md) | How `read()` and `write()` move data through the page cache; what happens on a cache hit vs. miss |
-| [readahead](readahead.md) | The kernel's speculative prefetch logic; `POSIX_FADV_SEQUENTIAL`, `posix_fadvise()`, manual readahead |
-| [page-cache-writeback](page-cache-writeback.md) | Dirty page accounting, flusher threads (`wb_workfn`), dirty throttling, and what `fsync()` actually flushes |
-| [direct-io](direct-io.md) | `O_DIRECT` path through the kernel, alignment constraints, DIO vs. buffered I/O performance trade-offs |
-
-### Memory-Mapped I/O {#memory-mapped-io}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [mmap-io](mmap-io.md) | File-backed `mmap`, page fault handling, `MAP_SHARED` vs. `MAP_PRIVATE`, `msync()`, and when mmap hurts |
-
-### Zero-Copy and Vectored {#zero-copy-and-vectored}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [splice-sendfile](splice-sendfile.md) | `splice()`, `sendfile()`, `tee()`; pipe buffers as the kernel's zero-copy primitive; limitations |
-| [vectored-io](vectored-io.md) | `readv()` / `writev()`, scatter-gather DMA, `iov_iter` as the kernel's unified buffer abstraction |
-
-### Allocation and Space Management {#allocation-and-space-management}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [fallocate](fallocate.md) | Pre-allocating space without writing data; `FALLOC_FL_PUNCH_HOLE`, `FALLOC_FL_KEEP_SIZE`, sparse files |
-
-### End-to-End Walkthroughs {#end-to-end-walkthroughs}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [life-of-a-write](life-of-a-write.md) | Tracing `write()` from the syscall entry through VFS, the address space, the block layer, and back |
-| [async-io](async-io.md) | POSIX AIO implementation, Linux AIO (`io_submit`) restrictions, io_uring submission queues and completion rings |
-
-### Observability and Tuning {#observability-and-tuning}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [observability](observability.md) | Reading `/proc/diskstats`, `iostat`, `blktrace` event anatomy, `bpftrace` one-liners for I/O tracing |
-| [tuning-storage](tuning-storage.md) | Block scheduler selection, `nr_requests`, readahead tuning, dirty ratio knobs, `fadvise` / `madvise` hints |
-
-### War Stories {#war-stories}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [war-stories](war-stories.md) | Production incidents and surprising behaviors: write ordering bugs, `fsync` gaps, mmap + truncate races |
+- **実際のコミット**: すべての主張は実際のカーネルコミットにリンクしている
+- **実際のバグ**: 本番環境で何が壊れ、なぜ壊れたのかから学ぶ
+- **実際の議論**: 設計判断が議論されたLKMLへのリンク
+- **実際のトレードオフ**: 「何を」だけでなく「なぜこのインターフェースで、あのインターフェースではないのか」
+- **ハンズオン**: 実行するコマンドと読むべきコードを示す「自分で試してみよう」セクション
 
 ---
 
-## Key Source Files {#key-source-files}
+## ドキュメント {#documentation}
 
-If you want to read the actual kernel code:
+### 基礎 {#fundamentals}
 
-| File | What It Does |
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [buffered-io](buffered-io.md) | `read()`と`write()`がページキャッシュを通じてデータをどう移動させるか。キャッシュのヒット時とミス時に何が起きるか |
+| [readahead](readahead.md) | カーネルの投機的プリフェッチのロジック。`POSIX_FADV_SEQUENTIAL`、`posix_fadvise()`、手動の先読み |
+| [page-cache-writeback](page-cache-writeback.md) | ダーティpageの集計、フラッシャースレッド（`wb_workfn`）、ダーティスロットリング、そして`fsync()`が実際に何をフラッシュするか |
+| [direct-io](direct-io.md) | カーネル内の`O_DIRECT`の経路、アライメント制約、DIOとバッファードI/Oの性能上のトレードオフ |
+
+### メモリマップドI/O {#memory-mapped-io}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [mmap-io](mmap-io.md) | ファイルバックの`mmap`、ページフォールトの処理、`MAP_SHARED`と`MAP_PRIVATE`、`msync()`、そしてmmapが害になる場合 |
+
+### ゼロコピーとベクタI/O {#zero-copy-and-vectored}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [splice-sendfile](splice-sendfile.md) | `splice()`、`sendfile()`、`tee()`。カーネルのゼロコピープリミティブとしてのパイプバッファ。制限事項 |
+| [vectored-io](vectored-io.md) | `readv()` / `writev()`、スキャッタ・ギャザーDMA、カーネルの統一バッファ抽象としての`iov_iter` |
+
+### 割り当てと領域管理 {#allocation-and-space-management}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [fallocate](fallocate.md) | データを書かずに領域を事前割り当てする。`FALLOC_FL_PUNCH_HOLE`、`FALLOC_FL_KEEP_SIZE`、スパースファイル |
+
+### エンドツーエンドのウォークスルー {#end-to-end-walkthroughs}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [life-of-a-write](life-of-a-write.md) | `write()`をsyscallのエントリからVFS、アドレス空間、ブロック層まで追い、戻ってくるまでをトレースする |
+| [async-io](async-io.md) | POSIX AIOの実装、Linux AIO（`io_submit`）の制約、io_uringの発行キューと完了リング |
+
+### 可観測性とチューニング {#observability-and-tuning}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [observability](observability.md) | `/proc/diskstats`、`iostat`の読み方、`blktrace`のイベントの構造、I/Oトレーシングのための`bpftrace`ワンライナー |
+| [tuning-storage](tuning-storage.md) | ブロックスケジューラの選択、`nr_requests`、先読みのチューニング、ダーティ比率のつまみ、`fadvise` / `madvise`のヒント |
+
+### 事件簿 {#war-stories}
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [war-stories](war-stories.md) | 本番環境のインシデントと驚くべき挙動: 書き込み順序のバグ、`fsync`の抜け、mmap + truncateの競合 |
+
+---
+
+## 主要なソースファイル {#key-source-files}
+
+実際のカーネルコードを読みたい場合:
+
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | Core page cache implementation — `generic_file_read_iter()`, `generic_file_write_iter()`, page lookup and insertion |
-| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | Readahead state machine, `page_cache_async_readahead()`, `force_page_cache_readahead()` |
-| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | Dirty page accounting, dirty throttling (`balance_dirty_pages()`), writeback control |
-| [`fs/fs-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fs-writeback.c) | Inode writeback, `wb_workfn()` flusher thread, `sync_inodes_sb()`, writeback bandwidth estimation |
-| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | `read()`, `write()`, `pread()`, `pwrite()` syscall entry points; `vfs_read()` / `vfs_write()` |
-| [`fs/splice.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/splice.c) | `splice()`, `sendfile()`, `tee()` — pipe buffer movement between file descriptors |
-| [`fs/fallocate.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fallocate.c) | `fallocate()` syscall dispatch; mode flag validation; filesystem delegation |
-| [`lib/iov_iter.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/iov_iter.c) | `iov_iter` abstraction over `iovec`, `kvec`, `bio_vec`, and pipe buffers; copy to/from user |
-| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | `struct file`, `struct inode`, `struct address_space`, `struct file_operations` — the central VFS types |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | ページキャッシュのコア実装 — `generic_file_read_iter()`、`generic_file_write_iter()`、pageの検索と挿入 |
+| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | 先読みのステートマシン、`page_cache_async_readahead()`、`force_page_cache_readahead()` |
+| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | ダーティpageの集計、ダーティスロットリング（`balance_dirty_pages()`）、ライトバックの制御 |
+| [`fs/fs-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fs-writeback.c) | inodeのライトバック、`wb_workfn()`フラッシャースレッド、`sync_inodes_sb()`、ライトバック帯域幅の推定 |
+| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | `read()`、`write()`、`pread()`、`pwrite()`のsyscallエントリポイント。`vfs_read()` / `vfs_write()` |
+| [`fs/splice.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/splice.c) | `splice()`、`sendfile()`、`tee()` — ファイルディスクリプタ間のパイプバッファの移動 |
+| [`fs/fallocate.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fallocate.c) | `fallocate()` syscallのディスパッチ。モードフラグの検証。ファイルシステムへの委譲 |
+| [`lib/iov_iter.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/iov_iter.c) | `iovec`、`kvec`、`bio_vec`、パイプバッファに対する`iov_iter`抽象。ユーザーとの間のコピー |
+| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | `struct file`、`struct inode`、`struct address_space`、`struct file_operations` — VFSの中心的な型 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Blogs and Articles {#blogs-and-articles}
+### ブログと記事 {#blogs-and-articles}
 
-- Jens Axboe's blog — [https://axboe.dk/](https://axboe.dk/) — Axboe is the author of io_uring and the block layer; his posts explain design decisions directly from the source
-- LWN.net I/O coverage:
-    - [Clarifying memory management with page folios](https://lwn.net/Articles/849538/) — folio conversion and the move away from raw page pointers
-    - [Ringing in a new asynchronous I/O API](https://lwn.net/Articles/776703/) — the original io_uring introduction
-    - [Buffered I/O without page-cache thrashing](https://lwn.net/Articles/806980/) — `RWF_UNCACHED`, a buffered-I/O mode that avoids polluting the page cache
-    - [No-I/O dirty throttling](https://lwn.net/Articles/456904/) — how dirty throttling was redesigned
+- Jens Axboeのブログ — [https://axboe.dk/](https://axboe.dk/) — Axboeはio_uringとブロック層の作者であり、その投稿は設計判断をソースに即して直接説明している
+- LWN.netのI/O関連記事:
+    - [Clarifying memory management with page folios](https://lwn.net/Articles/849538/) — folioへの変換と、生のpageポインタからの脱却
+    - [Ringing in a new asynchronous I/O API](https://lwn.net/Articles/776703/) — 最初のio_uringの紹介
+    - [Buffered I/O without page-cache thrashing](https://lwn.net/Articles/806980/) — ページキャッシュを汚染しないバッファードI/Oモードである`RWF_UNCACHED`
+    - [No-I/O dirty throttling](https://lwn.net/Articles/456904/) — ダーティスロットリングがどのように再設計されたか
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [Documentation/filesystems/vfs.rst](https://docs.kernel.org/filesystems/vfs.html) — VFS layer internals, `file_operations`, `address_space_operations`
-- [Documentation/filesystems/locking.rst](https://docs.kernel.org/filesystems/locking.html) — Locking rules for filesystem code
-- [Documentation/block/](https://docs.kernel.org/block/) — Block layer, I/O schedulers, request queues
-- [Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/) — `vm.dirty_ratio`, `vm.dirty_background_ratio`, and other tunables
+- [Documentation/filesystems/vfs.rst](https://docs.kernel.org/filesystems/vfs.html) — VFS層の内部、`file_operations`、`address_space_operations`
+- [Documentation/filesystems/locking.rst](https://docs.kernel.org/filesystems/locking.html) — ファイルシステムコードのロック規則
+- [Documentation/block/](https://docs.kernel.org/block/) — ブロック層、I/Oスケジューラ、リクエストキュー
+- [Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/) — `vm.dirty_ratio`、`vm.dirty_background_ratio`、その他のチューニング可能なパラメータ
 
-### Textbooks {#textbooks}
+### 教科書 {#textbooks}
 
-- Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) — Ch. 13-14 (Storage and I/O Systems)
-- Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) — Ch. 5 (Input/Output)
-- Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) — Ch. 13 (The Virtual Filesystem), Ch. 15 (The Block I/O Layer)
-- Kerrisk, [*The Linux Programming Interface*](https://man7.org/tlpi/) — Ch. 13 (File I/O Buffering), Ch. 49 (Memory Mappings)
+- Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) — 第13〜14章（Storage and I/O Systems）
+- Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) — 第5章（Input/Output）
+- Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) — 第13章（The Virtual Filesystem）、第15章（The Block I/O Layer）
+- Kerrisk, [*The Linux Programming Interface*](https://man7.org/tlpi/) — 第13章（File I/O Buffering）、第49章（Memory Mappings）
 
-### Papers {#papers}
+### 論文 {#papers}
 
-- Axboe, [*Efficient IO with io_uring*](https://kernel.dk/io_uring.pdf) — The design document for io_uring from its author
-- Pai et al., [*Flash: An Efficient and Portable Web Server*](https://www.usenix.org/legacy/events/usenix99/full_papers/pai/pai.pdf) — USENIX 1999; the paper that exposed the limits of POSIX AIO for real workloads
+- Axboe, [*Efficient IO with io_uring*](https://kernel.dk/io_uring.pdf) — 作者自身によるio_uringの設計文書
+- Pai et al., [*Flash: An Efficient and Portable Web Server*](https://www.usenix.org/legacy/events/usenix99/full_papers/pai/pai.pdf) — USENIX 1999。実際のワークロードにおけるPOSIX AIOの限界を明らかにした論文

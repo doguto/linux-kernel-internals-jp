@@ -1,14 +1,14 @@
-# I/O Polling: HIPRI, IOPOLL, and NOWAIT {#io-polling-hipri-iopoll-and-nowait}
+# I/Oポーリング: HIPRI、IOPOLL、NOWAIT {#io-polling-hipri-iopoll-and-nowait}
 
-> Eliminating interrupt and thread-switch overhead for NVMe I/O — how IOCB_HIPRI, io_uring IOPOLL, and IOCB_NOWAIT work inside the kernel
+> NVMe I/Oから割り込みとスレッド切り替えのオーバーヘッドを取り除く — IOCB_HIPRI、io_uringのIOPOLL、IOCB_NOWAITがカーネル内部でどのように動作するか
 
 ---
 
-## Why polling? {#why-polling}
+## なぜポーリングか {#why-polling}
 
-Traditional block I/O uses interrupts. When a write or read completes, the NVMe controller asserts an MSI-X interrupt. The CPU stops what it is doing, saves state, runs the interrupt handler, posts the completion, and returns. For a spinning disk with multi-millisecond latency, this overhead is negligible. For a modern NVMe SSD with sub-100µs latency, the interrupt path starts to matter.
+従来のブロックI/Oは割り込みを使う。書き込みや読み出しが完了すると、NVMeコントローラはMSI-X割り込みを発行する。CPUは実行中の処理を中断して状態を保存し、割り込みハンドラを実行して完了を通知し、元の処理に戻る。数ミリ秒のレイテンシを持つ回転ディスクでは、このオーバーヘッドは無視できる。しかしレイテンシが100µsを切る最新のNVMe SSDでは、割り込み経路のコストが無視できなくなってくる。
 
-Break down what happens on the interrupt path for a 50µs NVMe read:
+50µsのNVMe読み出しで、割り込み経路上で何が起きているかを分解してみる。
 
 ```
 Application thread submits I/O
@@ -25,9 +25,9 @@ Application thread submits I/O
 Total overhead (interrupt + wakeup path):     ~7–15 µs on top of device latency
 ```
 
-On a device with 50µs latency, that overhead is 15–30% of total observed latency. For p99 tail latency the problem is worse: interrupt coalescing, CPU c-states, and scheduler jitter all inflate the wake-up path.
+レイテンシ50µsのデバイスでは、このオーバーヘッドは観測される総レイテンシの15〜30%に相当する。p99のテールレイテンシでは問題はさらに深刻になる。割り込みコアレッシング、CPUのCステート、スケジューラのジッタのすべてが起床経路を膨らませるからである。
 
-Polling eliminates the interrupt entirely:
+ポーリングは割り込みを完全に取り除く。
 
 ```
 Application thread submits I/O
@@ -40,19 +40,19 @@ Application thread submits I/O
 Total overhead:                               ~2–4 µs on top of device latency
 ```
 
-The tradeoff is CPU: the polling core cannot go idle while waiting. One core is 100% busy for the duration of every I/O. This is a reasonable trade for:
+トレードオフはCPUである。ポーリングするコアは待機中にアイドル状態になれない。すべてのI/Oの間、1つのコアが100%ビジーになる。これは次のような場合には妥当なトレードオフである。
 
-- **Latency-sensitive workloads**: database transaction commits, key-value stores, real-time analytics
-- **High-IOPS workloads**: where the polling core is always finding completions immediately and is therefore doing useful work
-- **Tail-latency SLOs**: eliminating the interrupt jitter that inflates p99 and p999
+- **レイテンシに敏感なワークロード**: データベースのトランザクションコミット、キーバリューストア、リアルタイム分析
+- **高IOPSのワークロード**: ポーリングするコアが常にすぐ完了を見つけるため、有用な仕事をしている
+- **テールレイテンシのSLO**: p99やp999を膨らませる割り込みのジッタを取り除く
 
-It is a poor trade for:
+一方、次のような場合には割に合わない。
 
-- **Low-IOPS workloads**: the core spins doing nothing most of the time
-- **Shared systems**: the polling core is stolen from other tenants
-- **Rotating media or slow SSDs**: latency is high enough that sleeping is always better
+- **低IOPSのワークロード**: コアはほとんどの時間、何もせずにスピンする
+- **共有システム**: ポーリングするコアが他のテナントから奪われる
+- **回転メディアや低速なSSD**: レイテンシが十分に大きいため、スリープする方が常に有利
 
-### Interrupt path vs polling path {#interrupt-path-vs-polling-path}
+### 割り込み経路とポーリング経路 {#interrupt-path-vs-polling-path}
 
 ```
 Interrupt path:
@@ -76,31 +76,31 @@ Polling path:
 
 ---
 
-## HIPRI: the kernel polling interface {#hipri-the-kernel-polling-interface}
+## HIPRI: カーネルのポーリングインターフェース {#hipri-the-kernel-polling-interface}
 
-The user-visible entry point for polling is the `RWF_HIPRI` flag on `preadv2()`/`pwritev2()`, or `IORING_SETUP_IOPOLL` on an io_uring ring. Both ultimately set `IOCB_HIPRI` in the kiocb's `ki_flags`.
+ポーリングのユーザーから見える入口は、`preadv2()`/`pwritev2()`の`RWF_HIPRI`フラグ、またはio_uringリングの`IORING_SETUP_IOPOLL`である。どちらも最終的にはkiocbの`ki_flags`に`IOCB_HIPRI`をセットする。
 
-### Userspace API {#userspace-api}
+### ユーザー空間API {#userspace-api}
 
 ```c
-/* preadv2/pwritev2 with RWF_HIPRI: per-call polling request */
+/* RWF_HIPRI付きのpreadv2/pwritev2: 呼び出し単位のポーリング要求 */
 #include <sys/uio.h>
 
 struct iovec iov = { .iov_base = buf, .iov_len = 4096 };
-/* RWF_HIPRI = 0x1: request high-priority polling for this call */
+/* RWF_HIPRI = 0x1: この呼び出しで高優先度ポーリングを要求する */
 ssize_t n = preadv2(fd, &iov, 1, offset, RWF_HIPRI);
 
-/* io_uring: ring-wide IOPOLL mode */
+/* io_uring: リング全体のIOPOLLモード */
 struct io_uring_params params = {};
 params.flags |= IORING_SETUP_IOPOLL;
 int ring_fd = io_uring_setup(128, &params);
 ```
 
-Both require `O_DIRECT`. HIPRI on a buffered file is rejected: the block layer has no way to poll for a page cache fill.
+どちらも`O_DIRECT`を必要とする。バッファードファイルに対するHIPRIは拒否される。ブロック層にはページキャッシュの充填をポーリングする手段がないからである。
 
-### How RWF_HIPRI becomes IOCB_HIPRI {#how-rwfhipri-becomes-iocbhipri}
+### RWF_HIPRIがIOCB_HIPRIになるまで {#how-rwfhipri-becomes-iocbhipri}
 
-The `RWF_*` flags passed to `preadv2()` and `pwritev2()` are copied directly into `IOCB_*` flags. The values are deliberately equal:
+`preadv2()`や`pwritev2()`に渡された`RWF_*`フラグは、そのまま`IOCB_*`フラグにコピーされる。値は意図的に同じにしてある。
 
 ```c
 /* include/uapi/linux/fs.h */
@@ -112,7 +112,7 @@ The `RWF_*` flags passed to `preadv2()` and `pwritev2()` are copied directly int
 #define IOCB_NOWAIT (__force int) RWF_NOWAIT   /* = 0x8 */
 ```
 
-At VFS entry:
+VFSの入口では次のようになる。
 
 ```c
 /* fs/read_write.c */
@@ -122,21 +122,21 @@ static ssize_t do_iter_readv_writev(struct file *filp, struct iov_iter *iter,
     struct kiocb kiocb;
     init_sync_kiocb(&kiocb, filp);
 
-    /* Copy RWF_* flags to IOCB_* — values are identical */
+    /* RWF_*フラグをIOCB_*にコピーする — 値は同一 */
     ret = kiocb_set_rw_flags(&kiocb, flags);
     if (ret)
         return ret;
-    /* kiocb.ki_flags now has IOCB_HIPRI set if RWF_HIPRI was passed */
+    /* RWF_HIPRIが渡されていれば、kiocb.ki_flagsにはIOCB_HIPRIがセットされている */
     ...
 }
 ```
 
-### HIPRI flows through to the bio {#hipri-flows-through-to-the-bio}
+### HIPRIはbioまで伝わる {#hipri-flows-through-to-the-bio}
 
-Once `IOCB_HIPRI` is set on the kiocb, it propagates to the bio and then to the block-layer request:
+kiocbに`IOCB_HIPRI`がセットされると、それはbioへ、さらにブロック層のリクエストへと伝播する。
 
 ```c
-/* fs/iomap/direct-io.c — iomap DIO path */
+/* fs/iomap/direct-io.c — iomapのDIO経路 */
 static void iomap_dio_submit_bio(const struct iomap_iter *iter,
         struct iomap_dio *dio, struct bio *bio, loff_t pos)
 {
@@ -144,10 +144,10 @@ static void iomap_dio_submit_bio(const struct iomap_iter *iter,
 
     atomic_inc(&dio->ref);
 
-    /* Sync dio can't be polled reliably */
+    /* 同期dioは確実にはポーリングできない */
     if ((iocb->ki_flags & IOCB_HIPRI) && !is_sync_kiocb(iocb)) {
-        bio->bi_opf |= REQ_POLLED;         /* mark the bio for polling */
-        WRITE_ONCE(iocb->private, bio);    /* stash it so ->iopoll can find it */
+        bio->bi_opf |= REQ_POLLED;         /* bioにポーリング対象の印を付ける */
+        WRITE_ONCE(iocb->private, bio);    /* ->iopollが見つけられるよう保存しておく */
     }
 
     if (dio->dops && dio->dops->submit_io)
@@ -157,15 +157,15 @@ static void iomap_dio_submit_bio(const struct iomap_iter *iter,
 }
 ```
 
-In the block layer, a `REQ_POLLED` bio is steered to a **poll hardware queue** — a separate set of hardware queues (`HCTX_TYPE_POLL`) that have no interrupt assigned. Drivers opt in by carving out some of their queues for polling: NVMe, for example, dedicates part of its queue pool to the poll map, controlled by the `nvme.poll_queues` module parameter. The block layer maintains up to three per-device queue maps — `HCTX_TYPE_DEFAULT`, `HCTX_TYPE_READ`, and `HCTX_TYPE_POLL` — and a `REQ_POLLED` request is dispatched to the poll map.
+ブロック層では、`REQ_POLLED`のbioは**ポーリング用ハードウェアキュー**に振り分けられる。これは割り込みが割り当てられていない、別のハードウェアキューの集合（`HCTX_TYPE_POLL`）である。ドライバは自身のキューの一部をポーリング用に切り出すことでこれに参加する。たとえばNVMeは、キュープールの一部をポーリング用マップに割り当て、その数は`nvme.poll_queues`モジュールパラメータで制御される。ブロック層はデバイスごとに最大3つのキューマップ（`HCTX_TYPE_DEFAULT`、`HCTX_TYPE_READ`、`HCTX_TYPE_POLL`）を保持し、`REQ_POLLED`のリクエストはポーリング用マップにディスパッチされる。
 
-Keeping poll queues interrupt-free is what makes polling safe: because no interrupt handler ever touches a poll queue's completion ring, the polling thread can read and advance it without racing the IRQ path. If polled and non-polled I/O shared a queue, the poll loop and the interrupt handler could both try to reap the same completion.
+ポーリング用キューを割り込みなしに保つことが、ポーリングを安全にしている。ポーリング用キューの完了リングには割り込みハンドラが一切触れないため、ポーリングするスレッドはIRQ経路と競合することなくリングを読み進められる。もしポーリングするI/OとしないI/Oがキューを共有していれば、ポーリングループと割り込みハンドラの両方が同じ完了を刈り取ろうとしかねない。
 
 ---
 
-## The iopoll hook: filesystem-level polling {#the-iopoll-hook-filesystem-level-polling}
+## iopollフック: ファイルシステムレベルのポーリング {#the-iopoll-hook-filesystem-level-polling}
 
-`file_operations` has an `iopoll` method that io_uring calls to check for completions without going to sleep:
+`file_operations`には`iopoll`メソッドがあり、io_uringはスリープせずに完了を確認するためにこれを呼び出す。
 
 ```c
 /* include/linux/fs.h */
@@ -177,15 +177,15 @@ struct file_operations {
 };
 ```
 
-### iocb_bio_iopoll: the common implementation {#iocbbioiopoll-the-common-implementation}
+### iocb_bio_iopoll: 共通実装 {#iocbbioiopoll-the-common-implementation}
 
-Both ext4 and XFS delegate to the iomap layer, which stores the bio pointer in `kiocb->private` at submission time:
+ext4とXFSはどちらもiomap層に処理を委ねる。iomap層は発行時にbioのポインタを`kiocb->private`に保存する。
 
 ```c
-/* At DIO submission time the originating bio is stashed in the kiocb */
+/* DIOの発行時に、元のbioがkiocbに保存される */
 kiocb->private = bio;
 
-/* block/blk-core.c — the ->iopoll handler shared by ext4, XFS, f2fs, ... */
+/* block/blk-core.c — ext4、XFS、f2fsなどが共有する->iopollハンドラ */
 int iocb_bio_iopoll(struct kiocb *kiocb, struct io_comp_batch *iob,
                     unsigned int flags)
 {
@@ -193,7 +193,7 @@ int iocb_bio_iopoll(struct kiocb *kiocb, struct io_comp_batch *iob,
     int ret = 0;
 
     rcu_read_lock();
-    bio = READ_ONCE(kiocb->private);   /* NULL if the I/O already completed */
+    bio = READ_ONCE(kiocb->private);   /* I/Oが既に完了していればNULL */
     if (bio)
         ret = bio_poll(bio, iob, flags);
     rcu_read_unlock();
@@ -203,7 +203,7 @@ int iocb_bio_iopoll(struct kiocb *kiocb, struct io_comp_batch *iob,
 EXPORT_SYMBOL_GPL(iocb_bio_iopoll);
 ```
 
-The `bio_poll` function walks down to the block layer:
+`bio_poll`関数はブロック層へと降りていく。
 
 ```c
 /* block/blk-core.c */
@@ -216,28 +216,28 @@ int bio_poll(struct bio *bio, struct io_comp_batch *iob, unsigned int flags)
     if (!bio->bi_bdev)
         return 0;
     q = bdev_get_queue(bio->bi_bdev);
-    if (cookie == BLK_QC_T_NONE)         /* not a polled submission */
+    if (cookie == BLK_QC_T_NONE)         /* ポーリング付きの発行ではない */
         return 0;
 
     blk_flush_plug(current->plug, false);
 
-    /* Take a queue usage ref so the hctx and requests stay valid */
+    /* hctxとリクエストが有効なままとなるよう、キュー使用の参照を取る */
     if (!percpu_ref_tryget(&q->q_usage_counter))
         return 0;
     if (queue_is_mq(q))
-        ret = blk_mq_poll(q, cookie, iob, flags);   /* NVMe: check the CQ */
+        ret = blk_mq_poll(q, cookie, iob, flags);   /* NVMe: CQを確認する */
     blk_queue_exit(q);
     return ret;
 }
 ```
 
-The `cookie` is the hardware-queue identifier recorded on the bio at submission time. Since the `blk_qc_t` rework (5.16) it is simply the hardware queue number, so `blk_mq_poll()` can go straight to the right queue — and thus the right NVMe completion queue — to check for completions.
+`cookie`は、発行時にbioに記録されたハードウェアキューの識別子である。`blk_qc_t`の改修（5.16）以降、これは単にハードウェアキューの番号になっているため、`blk_mq_poll()`は正しいキュー、つまり正しいNVMe完了キューへ直接たどり着いて完了を確認できる。
 
 ---
 
-## NVMe polling: reading the completion queue directly {#nvme-polling-reading-the-completion-queue-directly}
+## NVMeのポーリング: 完了キューを直接読む {#nvme-polling-reading-the-completion-queue-directly}
 
-NVMe controllers use a pair of rings per queue: a submission queue (SQ) that the driver writes commands into, and a completion queue (CQ) that the controller writes completions into. The driver detects new CQ entries by checking the **phase bit** — a single bit that the controller toggles on each pass through the ring.
+NVMeコントローラはキューごとに一対のリングを使う。ドライバがコマンドを書き込むサブミッションキュー（SQ）と、コントローラが完了を書き込む完了キュー（CQ）である。ドライバは**フェーズビット**を確認することで新しいCQエントリを検出する。これはコントローラがリングを一周するたびに反転させる1ビットである。
 
 ```c
 /* drivers/nvme/host/pci.c */
@@ -257,8 +257,9 @@ static int nvme_poll(struct blk_mq_hw_ctx *hctx, struct io_comp_batch *iob)
         return 0;
 
     /*
-     * Poll lock: multiple poll callers (e.g. threads sharing an io_uring
-     * ring) must serialize CQ processing to avoid double-completing an entry.
+     * ポーリングロック: 複数のポーリング呼び出し元（例: io_uringリングを
+     * 共有するスレッド群）は、エントリの二重完了を避けるためにCQ処理を
+     * 直列化しなければならない。
      */
     spin_lock(&nvmeq->cq_poll_lock);
     found = nvme_poll_cq(nvmeq, iob);
@@ -268,9 +269,9 @@ static int nvme_poll(struct blk_mq_hw_ctx *hctx, struct io_comp_batch *iob)
 }
 ```
 
-`nvme_poll_cq` walks pending CQ entries, completes each request, and updates the head pointer. The phase bit check is a single memory read — no MMIO, no PCI transaction. This is why polling is so fast: detecting completion is a load from a DMA-mapped memory region that the controller writes to.
+`nvme_poll_cq`は保留中のCQエントリをたどり、各リクエストを完了させ、ヘッドポインタを更新する。フェーズビットの確認は1回のメモリ読み出しにすぎず、MMIOもPCIトランザクションも伴わない。ポーリングがこれほど速いのはこのためである。完了の検出は、コントローラが書き込むDMAマップされたメモリ領域からのロード1回で済む。
 
-### Phase bit mechanics {#phase-bit-mechanics}
+### フェーズビットの仕組み {#phase-bit-mechanics}
 
 ```
 CQ ring (4 entries):
@@ -285,19 +286,19 @@ CQ ring (4 entries):
   Driver detects it: phase bit at cq_head matches expected phase → new entry
 ```
 
-On the interrupt path, the driver does the same `nvme_poll_cq()` work — but triggered by the interrupt handler (`nvme_irq()`) rather than the poll loop. The code path from `nvme_poll_cq()` onward is shared.
+割り込み経路でも、ドライバは同じ`nvme_poll_cq()`の処理を行う。ただし、ポーリングループではなく割り込みハンドラ（`nvme_irq()`）によって起動される。`nvme_poll_cq()`以降のコードパスは共通である。
 
 ---
 
-## io_uring IOPOLL mode {#io_uring-iopoll-mode}
+## io_uringのIOPOLLモード {#io_uring-iopoll-mode}
 
-io_uring's `IORING_SETUP_IOPOLL` is the highest-performance polling interface. It combines:
+io_uringの`IORING_SETUP_IOPOLL`は、最も高性能なポーリングインターフェースである。これは次の要素を組み合わせている。
 
-1. Asynchronous submission (no per-I/O syscall overhead)
-2. Kernel-side completion polling (no interrupt, no wakeup)
-3. Optional submission-side polling (`IORING_SETUP_SQPOLL`, described below)
+1. 非同期の発行（I/Oごとのシステムコールオーバーヘッドがない）
+2. カーネル側での完了ポーリング（割り込みも起床もない）
+3. オプションの発行側ポーリング（`IORING_SETUP_SQPOLL`、後述）
 
-### Setup {#setup}
+### セットアップ {#setup}
 
 ```c
 #include <liburing.h>
@@ -306,37 +307,37 @@ struct io_uring ring;
 struct io_uring_params params = {};
 
 params.flags = IORING_SETUP_IOPOLL;
-/* Optional: also poll the submission queue */
+/* オプション: サブミッションキューもポーリングする */
 /* params.flags |= IORING_SETUP_SQPOLL; */
 
 io_uring_queue_init_params(128, &ring, &params);
 
-/* O_DIRECT is required for IOPOLL */
+/* IOPOLLにはO_DIRECTが必須 */
 int fd = open("/dev/nvme0n1", O_RDWR | O_DIRECT);
 
-/* Register fixed buffers (strongly recommended with IOPOLL) */
+/* 固定バッファを登録する（IOPOLLでは強く推奨） */
 struct iovec iov[1] = {{ .iov_base = buf, .iov_len = BUF_SIZE }};
 io_uring_register_buffers(&ring, iov, 1);
 ```
 
-### Submission and completion {#submission-and-completion}
+### 発行と完了 {#submission-and-completion}
 
 ```c
-/* Submit a read using a registered (fixed) buffer */
+/* 登録済み（固定）バッファを使って読み出しを発行する */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read_fixed(sqe, fd, buf, BUF_SIZE, offset, 0 /* buf_index */);
 io_uring_submit(&ring);
 
-/* Wait for completion: kernel busy-waits in io_do_iopoll() */
+/* 完了を待つ: カーネルはio_do_iopoll()内でビジーウェイトする */
 struct io_uring_cqe *cqe;
-io_uring_wait_cqe(&ring, &cqe);   /* calls io_uring_enter(IORING_ENTER_GETEVENTS) */
+io_uring_wait_cqe(&ring, &cqe);   /* io_uring_enter(IORING_ENTER_GETEVENTS)を呼ぶ */
 int result = cqe->res;
 io_uring_cqe_seen(&ring, cqe);
 ```
 
-### Inside io_do_iopoll() {#inside-iodoiopoll}
+### io_do_iopoll()の内部 {#inside-iodoiopoll}
 
-When `io_uring_enter()` is called with `IORING_ENTER_GETEVENTS` on a IOPOLL ring, the kernel enters the poll loop:
+IOPOLLリングに対して`IORING_ENTER_GETEVENTS`付きで`io_uring_enter()`が呼ばれると、カーネルはポーリングループに入る。
 
 ```c
 /* io_uring/rw.c */
@@ -350,7 +351,7 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
     if (ctx->poll_multi_queue || force_nonspin)
         poll_flags |= BLK_POLL_ONESHOT;
 
-    /* Poll each in-flight request's file (its ->iopoll method) */
+    /* 処理中の各リクエストのファイルをポーリングする（その->iopollメソッド） */
     list_for_each_entry(req, &ctx->iopoll_list, iopoll_node) {
         int ret;
 
@@ -371,7 +372,7 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
     if (!rq_list_empty(&iob.req_list))
         iob.complete(&iob);
 
-    /* Second pass: reap completed requests and queue their CQEs */
+    /* 2回目のパス: 完了したリクエストを刈り取り、CQEをキューに入れる */
     list_for_each_entry_safe(req, tmp, &ctx->iopoll_list, iopoll_node) {
         if (!smp_load_acquire(&req->iopoll_completed))
             continue;
@@ -386,13 +387,13 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 }
 ```
 
-The loop iterates `ctx->iopoll_list`, calling each file's `iopoll` method, until all requested completions have arrived. The caller in `io_uring_enter()` repeats this until `min_complete` CQEs are available:
+このループは`ctx->iopoll_list`をたどり、要求されたすべての完了が届くまで各ファイルの`iopoll`メソッドを呼び出す。`io_uring_enter()`内の呼び出し元は、`min_complete`個のCQEが得られるまでこれを繰り返す。
 
 ```c
 /* io_uring/io_uring.c */
 static int io_iopoll_check(struct io_ring_ctx *ctx, unsigned int min_events)
 {
-    /* Already have completions pending? Don't bother spinning. */
+    /* 既に完了が保留されているなら、スピンする必要はない */
     if (io_cqring_events(ctx))
         return 0;
 
@@ -408,7 +409,7 @@ static int io_iopoll_check(struct io_ring_ctx *ctx, unsigned int min_events)
 }
 ```
 
-### Request lifecycle in IOPOLL mode {#request-lifecycle-in-iopoll-mode}
+### IOPOLLモードにおけるリクエストのライフサイクル {#request-lifecycle-in-iopoll-mode}
 
 ```
 io_uring_submit()
@@ -431,18 +432,18 @@ io_uring_enter(IORING_ENTER_GETEVENTS)
 
 ---
 
-## SQPOLL: kernel-side submission polling {#sqpoll-kernel-side-submission-polling}
+## SQPOLL: カーネル側での発行ポーリング {#sqpoll-kernel-side-submission-polling}
 
-`IORING_SETUP_SQPOLL` is a companion feature to IOPOLL that eliminates the submission-side syscall. With SQPOLL, a dedicated kernel thread polls the SQ ring:
+`IORING_SETUP_SQPOLL`はIOPOLLと組み合わせて使う機能で、発行側のシステムコールを取り除く。SQPOLLでは、専用のカーネルスレッドがSQリングをポーリングする。
 
 ```c
-/* SQPOLL + IOPOLL: zero syscalls per I/O */
+/* SQPOLL + IOPOLL: I/Oあたりのシステムコールはゼロ */
 params.flags = IORING_SETUP_IOPOLL | IORING_SETUP_SQPOLL;
-params.sq_thread_idle = 2000;  /* ms before SQPOLL thread sleeps */
+params.sq_thread_idle = 2000;  /* SQPOLLスレッドがスリープするまでのミリ秒 */
 io_uring_queue_init_params(128, &ring, &params);
 ```
 
-The SQPOLL thread (`io_sq_thread()`) runs as a real-time kernel thread bound to a CPU:
+SQPOLLスレッド（`io_sq_thread()`）は、CPUにバインドされたリアルタイムのカーネルスレッドとして動作する。
 
 ```c
 /* io_uring/sqpoll.c */
@@ -455,8 +456,8 @@ static int io_sq_thread(void *data)
         bool cap_entries = !list_is_singular(&sqd->ctx_list);
 
         /*
-         * Check all rings associated with this SQPOLL thread for
-         * new SQEs. Submit any found.
+         * このSQPOLLスレッドに関連付けられたすべてのリングで新しい
+         * SQEを確認する。見つかったものはすべて発行する。
          */
         list_for_each_entry(ctx, &sqd->ctx_list, sqd_list)
             io_submit_sqes(ctx, cap_entries ? IORING_SQPOLL_CAP_ENTRIES_VALUE
@@ -464,7 +465,7 @@ static int io_sq_thread(void *data)
 
         if (list_empty(&sqd->ctx_list) ||
             (!io_sqring_entries(ctx) && time_after(jiffies, timeout))) {
-            /* No work: sleep until userspace writes to the SQ ring */
+            /* 仕事がない: ユーザー空間がSQリングに書き込むまでスリープする */
             set_current_state(TASK_INTERRUPTIBLE);
             schedule_timeout(usecs_to_jiffies(sqd->sq_thread_idle * 1000));
         }
@@ -473,105 +474,105 @@ static int io_sq_thread(void *data)
 }
 ```
 
-With both SQPOLL and IOPOLL enabled, the userspace application:
+SQPOLLとIOPOLLの両方を有効にすると、ユーザー空間のアプリケーションは次のように動く。
 
-1. Writes SQEs into the shared SQ ring (no syscall)
-2. The SQPOLL kernel thread picks them up and submits them
-3. Calls `io_uring_enter(IORING_ENTER_GETEVENTS)` to collect completions (one syscall for a batch of results)
-4. Or reads CQEs directly from the CQ ring if `IORING_FEAT_NODROP` is set
+1. 共有SQリングにSQEを書き込む（システムコールなし）
+2. SQPOLLカーネルスレッドがそれを拾い上げて発行する
+3. `io_uring_enter(IORING_ENTER_GETEVENTS)`を呼んで完了を回収する（結果のバッチ1つにつきシステムコール1回）
+4. あるいは、`IORING_FEAT_NODROP`がセットされていればCQリングから直接CQEを読む
 
-### Requirements for SQPOLL + IOPOLL {#requirements-for-sqpoll-iopoll}
+### SQPOLL + IOPOLLの要件 {#requirements-for-sqpoll-iopoll}
 
-| Requirement | Reason |
+| 要件 | 理由 |
 |-------------|--------|
-| `O_DIRECT` | Buffered I/O has no poll hook |
-| NVMe (or similar) device | Polling requires a `mq_ops->poll` implementation |
-| Fixed buffers (`io_uring_register_buffers`) | Avoids per-I/O `get_user_pages` overhead |
-| Fixed files (`io_uring_register_files`) | Avoids per-I/O `fdget` overhead |
-| `CAP_SYS_NICE` or privileged process | SQPOLL thread needs elevated priority |
+| `O_DIRECT` | バッファードI/Oにはポーリングフックがない |
+| NVMe（または類似の）デバイス | ポーリングには`mq_ops->poll`の実装が必要 |
+| 固定バッファ（`io_uring_register_buffers`） | I/Oごとの`get_user_pages`のオーバーヘッドを避ける |
+| 固定ファイル（`io_uring_register_files`） | I/Oごとの`fdget`のオーバーヘッドを避ける |
+| `CAP_SYS_NICE`または特権プロセス | SQPOLLスレッドには高い優先度が必要 |
 
 ---
 
-## IOCB_NOWAIT: fail fast instead of block {#iocb_nowait-fail-fast-instead-of-block}
+## IOCB_NOWAIT: ブロックせずに即座に失敗する {#iocb_nowait-fail-fast-instead-of-block}
 
-`IOCB_NOWAIT` is conceptually different from `IOCB_HIPRI`. Rather than polling for completion, NOWAIT says: "if this I/O would have to wait for any reason, return `-EAGAIN` immediately instead."
+`IOCB_NOWAIT`は概念的に`IOCB_HIPRI`とは異なる。完了をポーリングするのではなく、NOWAITは「このI/Oが何らかの理由で待たなければならないなら、代わりに即座に`-EAGAIN`を返せ」と指示する。
 
 ```c
-/* RWF_NOWAIT: per-call non-blocking I/O */
+/* RWF_NOWAIT: 呼び出し単位のノンブロッキングI/O */
 ssize_t n = preadv2(fd, &iov, 1, offset, RWF_NOWAIT);
 if (n == -EAGAIN) {
-    /* I/O would block — fall back or queue for later */
+    /* I/Oがブロックする — フォールバックするか、後で処理するためキューに入れる */
 }
 
-/* io_uring sets IOCB_NOWAIT automatically on O_DIRECT files */
-/* No special flag needed — it is the default io_uring behavior */
+/* io_uringはO_DIRECTファイルに対して自動的にIOCB_NOWAITをセットする */
+/* 特別なフラグは不要 — io_uringのデフォルトの挙動である */
 ```
 
-### What causes NOWAIT to return EAGAIN? {#what-causes-nowait-to-return-eagain}
+### NOWAITがEAGAINを返す原因 {#what-causes-nowait-to-return-eagain}
 
-Any operation that would require the calling context to sleep triggers the NOWAIT fast-path:
+呼び出し元のコンテキストがスリープしなければならなくなる操作はすべて、NOWAITの高速パスを発動させる。
 
 ```c
-/* Inode lock contention */
+/* inodeロックの競合 */
 if (iocb->ki_flags & IOCB_NOWAIT) {
     if (!inode_trylock_shared(inode))
-        return -EAGAIN;   /* someone holds i_rwsem exclusively */
+        return -EAGAIN;   /* 誰かがi_rwsemを排他的に保持している */
 }
 
-/* Page not in cache (buffered read) */
+/* ページがキャッシュにない（バッファード読み出し） */
 if (iocb->ki_flags & IOCB_NOWAIT) {
     folio = filemap_get_folio(mapping, index);
     if (!folio || !folio_test_uptodate(folio))
-        return -EAGAIN;   /* would need disk I/O to fill page */
+        return -EAGAIN;   /* ページを埋めるにはディスクI/Oが必要 */
 }
 
-/* Folio lock contention (buffered write) */
+/* folioロックの競合（バッファード書き込み） */
 if (iocb->ki_flags & IOCB_NOWAIT) {
     if (!folio_trylock(folio))
-        return -EAGAIN;   /* writer holds the folio lock */
+        return -EAGAIN;   /* 書き込み側がfolioロックを保持している */
 }
 
-/* Block layer: request queue full */
+/* ブロック層: リクエストキューが満杯 */
 if (iocb->ki_flags & IOCB_NOWAIT) {
     bio->bi_opf |= REQ_NOWAIT;
-    /* blk-mq returns BLK_STS_AGAIN if no tags available */
+    /* 利用可能なタグがなければblk-mqはBLK_STS_AGAINを返す */
 }
 ```
 
-### NOWAIT in io_uring's fast path {#nowait-in-io_urings-fast-path}
+### io_uringの高速パスにおけるNOWAIT {#nowait-in-io_urings-fast-path}
 
-io_uring's performance depends heavily on NOWAIT. Each read is first issued on the submitting task in non-blocking mode: on that initial issue io_uring sets `IOCB_NOWAIT`, so the filesystem returns `-EAGAIN` rather than sleeping.
+io_uringの性能はNOWAITに大きく依存している。各読み出しは、まず発行元のタスク上でノンブロッキングモードで発行される。この最初の発行でio_uringは`IOCB_NOWAIT`をセットするため、ファイルシステムはスリープする代わりに`-EAGAIN`を返す。
 
 ```c
-/* io_uring/rw.c — condensed from io_read()/__io_read() */
+/* io_uring/rw.c — io_read()/__io_read()を要約したもの */
 static int __io_read(struct io_kiocb *req, unsigned int issue_flags)
 {
     struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
     bool force_nonblock = issue_flags & IO_URING_F_NONBLOCK;
 
-    /* On the initial, non-blocking issue, tell the fs not to sleep */
+    /* 最初のノンブロッキング発行では、ファイルシステムにスリープしないよう伝える */
     if (force_nonblock)
         rw->kiocb.ki_flags |= IOCB_NOWAIT;
 
     ret = io_iter_do_read(rw, &iter);   /* → file->f_op->read_iter() */
 
     /*
-     * If the fast path would block, read_iter returns -EAGAIN. io_read()
-     * propagates it to the core, which re-queues the request to the io-wq
-     * thread pool — where it is re-issued without IO_URING_F_NONBLOCK and
-     * is allowed to sleep.
+     * 高速パスがブロックしそうな場合、read_iterは-EAGAINを返す。io_read()は
+     * それをコアに伝播し、コアはリクエストをio-wqスレッドプールに
+     * 再キューイングする。そこではIO_URING_F_NONBLOCKなしで再発行され、
+     * スリープが許される。
      */
     return ret;
 }
 ```
 
-The io-wq fallback is what gives io_uring the ability to handle any I/O, even when the fast path cannot complete it. But the important metric is the hit rate: for an O_DIRECT workload on an NVMe device where the queue is rarely full, nearly 100% of operations complete on the fast path — no thread pool, no context switch.
+io-wqへのフォールバックがあるからこそ、高速パスで完了できない場合でもio_uringはあらゆるI/Oを扱える。しかし重要な指標はヒット率である。キューが満杯になることがまれなNVMeデバイス上のO_DIRECTワークロードでは、ほぼ100%の操作が高速パスで完了する。スレッドプールもコンテキストスイッチも使わない。
 
 ---
 
-## NOWAIT support by filesystem and operation {#nowait-support-by-filesystem-and-operation}
+## ファイルシステムと操作ごとのNOWAITサポート {#nowait-support-by-filesystem-and-operation}
 
-Not all I/O types support NOWAIT equally. The support depends on what locks and resources the operation needs:
+すべてのI/O種別が等しくNOWAITをサポートしているわけではない。サポートの程度は、その操作が必要とするロックやリソースによって決まる。
 
 ### O_DIRECT I/O {#o_direct-io}
 
@@ -584,13 +585,13 @@ btrfs O_DIRECT read:    Full NOWAIT support (since ~5.16)
 btrfs O_DIRECT write:   Partial (CoW may require allocation)
 ```
 
-For O_DIRECT, the main failure modes are:
+O_DIRECTの場合、主な失敗要因は次のとおりである。
 
-- `i_rwsem` held exclusively (rare, only during truncate/fallocate)
-- NVMe queue full (rare at normal utilization)
-- Extent map not yet in memory (XFS: extent tree may need a read)
+- `i_rwsem`が排他的に保持されている（まれ、truncate/fallocateの間のみ）
+- NVMeキューが満杯（通常の利用率ではまれ）
+- エクステントマップがまだメモリ上にない（XFS: エクステントツリーの読み出しが必要になることがある）
 
-### Buffered I/O {#buffered-io}
+### バッファードI/O {#buffered-io}
 
 ```
 Buffered read, page in cache and uptodate:    NOWAIT succeeds
@@ -601,41 +602,41 @@ Buffered write, page allocation needed:       NOWAIT returns EAGAIN
 Buffered write, journal pressure (ext4):      NOWAIT returns EAGAIN
 ```
 
-Buffered NOWAIT reads are useful for workloads with a hot working set: if the page is in cache (common case), the read completes without any syscall overhead. On a cache miss, NOWAIT hands off to io-wq, which handles the disk read in the background.
+バッファードのNOWAIT読み出しは、ホットなワーキングセットを持つワークロードで有用である。ページがキャッシュにあれば（よくあるケース）、読み出しはシステムコールのオーバーヘッドなしに完了する。キャッシュミスの場合、NOWAITはio-wqに処理を引き渡し、io-wqがバックグラウンドでディスク読み出しを処理する。
 
-### Operation support matrix {#operation-support-matrix}
+### 操作サポートマトリクス {#operation-support-matrix}
 
-| Filesystem | O_DIRECT read | O_DIRECT write | Buffered read | Buffered write |
+| ファイルシステム | O_DIRECT読み出し | O_DIRECT書き込み | バッファード読み出し | バッファード書き込み |
 |------------|--------------|----------------|---------------|----------------|
-| ext4       | Full         | Full           | Partial       | Partial        |
-| XFS        | Full         | Full           | Partial       | Partial        |
-| btrfs      | Full         | Partial        | Partial       | Limited        |
-| tmpfs      | N/A          | N/A            | Full          | Full           |
-| nfs        | Full         | Full           | Limited       | Limited        |
-| block dev  | Full         | Full           | N/A           | N/A            |
+| ext4       | 完全         | 完全           | 部分的       | 部分的        |
+| XFS        | 完全         | 完全           | 部分的       | 部分的        |
+| btrfs      | 完全         | 部分的        | 部分的       | 限定的        |
+| tmpfs      | N/A          | N/A            | 完全          | 完全          |
+| nfs        | 完全         | 完全           | 限定的       | 限定的       |
+| block dev  | 完全         | 完全           | N/A           | N/A            |
 
-"Partial" means: succeeds when resources are uncontested (which is the common case for well-tuned workloads), but falls back to io-wq on contention. "Limited" means: falls back frequently because the filesystem's write path has structural blocking points.
+「部分的」とは、リソースが競合していなければ成功する（よくチューニングされたワークロードではこれが通常のケース）が、競合時にはio-wqにフォールバックすることを意味する。「限定的」とは、ファイルシステムの書き込み経路に構造的なブロッキングポイントがあるため、頻繁にフォールバックすることを意味する。
 
 ---
 
-## HIPRI vs IOPOLL vs NOWAIT: comparison {#hipri-vs-iopoll-vs-nowait-comparison}
+## HIPRI、IOPOLL、NOWAITの比較 {#hipri-vs-iopoll-vs-nowait-comparison}
 
-These three flags are often mentioned together but solve different problems:
+これら3つのフラグはよく一緒に言及されるが、解決する問題は異なる。
 
-| Feature | HIPRI / IOPOLL | NOWAIT |
+| 機能 | HIPRI / IOPOLL | NOWAIT |
 |---------|---------------|--------|
-| What it does | Polls NVMe CQ instead of sleeping on IRQ | Returns EAGAIN instead of sleeping |
-| Mechanism | Busy-wait loop in kernel | Trylock / non-blocking allocation |
-| CPU cost | High — one core occupied while waiting | Low — just changes error handling |
-| Latency benefit | Eliminates IRQ delivery + wakeup (~5–15µs) | Eliminates thread context switch (~2–5µs) |
-| Works with | O_DIRECT only | Buffered I/O and O_DIRECT |
-| Fallback behavior | None — caller gets result or waits | io_uring falls back to io-wq thread |
-| Best for | Consistent low p99 on NVMe | High concurrency, mixed workloads |
-| Requires dedicated hardware queue | Yes | No |
-| Requires kernel IOPOLL support in driver | Yes (nvme, io_uring, virtio-blk) | No |
-| Combined with io_uring | `IORING_SETUP_IOPOLL` | Default behavior, no flag needed |
+| 何をするか | IRQでスリープする代わりにNVMe CQをポーリングする | スリープする代わりにEAGAINを返す |
+| 仕組み | カーネル内のビジーウェイトループ | trylock / ノンブロッキングな割り当て |
+| CPUコスト | 高い — 待機中は1コアが占有される | 低い — エラー処理が変わるだけ |
+| レイテンシ上の利点 | IRQ配送と起床を取り除く（~5–15µs） | スレッドのコンテキストスイッチを取り除く（~2–5µs） |
+| 使える対象 | O_DIRECTのみ | バッファードI/OとO_DIRECT |
+| フォールバック時の挙動 | なし — 呼び出し元は結果を得るか待つ | io_uringはio-wqスレッドにフォールバック |
+| 最適な用途 | NVMeで一貫して低いp99 | 高並行性、混在ワークロード |
+| 専用ハードウェアキューが必要 | はい | いいえ |
+| ドライバのカーネルIOPOLLサポートが必要 | はい（nvme、io_uring、virtio-blk） | いいえ |
+| io_uringとの組み合わせ | `IORING_SETUP_IOPOLL` | デフォルトの挙動、フラグ不要 |
 
-### Choosing the right mode {#choosing-the-right-mode}
+### 適切なモードの選び方 {#choosing-the-right-mode}
 
 ```
 High-performance NVMe, dedicated server, latency SLO:
@@ -655,31 +656,31 @@ Mixed read/write, NVMe, p99 matters:
 
 ---
 
-## Measuring poll effectiveness {#measuring-poll-effectiveness}
+## ポーリングの効果を測定する {#measuring-poll-effectiveness}
 
-### Check that the NVMe driver supports polling {#check-that-the-nvme-driver-supports-polling}
+### NVMeドライバがポーリングをサポートしているか確認する {#check-that-the-nvme-driver-supports-polling}
 
 ```bash
-# Verify the block device has poll queues
+# ブロックデバイスにポーリング用キューがあるか確認する
 cat /sys/block/nvme0n1/queue/io_poll
-# 0 = disabled (default), 1 = enabled
+# 0 = 無効（デフォルト）、1 = 有効
 
-# Enable polling for the device
+# デバイスのポーリングを有効にする
 echo 1 > /sys/block/nvme0n1/queue/io_poll
 
-# Check number of hardware queues (one per CPU typically)
+# ハードウェアキューの数を確認する（通常はCPUごとに1つ）
 cat /sys/block/nvme0n1/mq/*/nr_tags | head
-# Each queue's tag depth (e.g. 1024)
+# 各キューのタグ深さ（例: 1024）
 
-# Verify the device has multiple queues
+# デバイスが複数のキューを持っているか確認する
 ls /sys/block/nvme0n1/mq/
 # 0  1  2  3  ...  (one directory per hw queue)
 ```
 
-### fio benchmark: interrupt vs poll {#fio-benchmark-interrupt-vs-poll}
+### fioベンチマーク: 割り込みとポーリングの比較 {#fio-benchmark-interrupt-vs-poll}
 
 ```bash
-# Baseline: O_DIRECT with interrupts (default)
+# ベースライン: 割り込みを使うO_DIRECT（デフォルト）
 fio --name=baseline \
     --filename=/dev/nvme0n1 \
     --ioengine=io_uring \
@@ -691,7 +692,7 @@ fio --name=baseline \
     --output-format=json \
     --lat_percentiles=1
 
-# Polling mode: IORING_SETUP_IOPOLL
+# ポーリングモード: IORING_SETUP_IOPOLL
 fio --name=polled \
     --filename=/dev/nvme0n1 \
     --ioengine=io_uring \
@@ -699,26 +700,26 @@ fio --name=polled \
     --rw=randread \
     --bs=4k \
     --direct=1 \
-    --hipri=1 \           # sets IORING_SETUP_IOPOLL
+    --hipri=1 \           # IORING_SETUP_IOPOLLをセットする
     --runtime=30 \
     --output-format=json \
     --lat_percentiles=1
-# Compare p50, p99, p999 latency between the two runs
+# 2回の実行でp50、p99、p999のレイテンシを比較する
 ```
 
-### bpftrace: count interrupt vs poll completions {#bpftrace-count-interrupt-vs-poll-completions}
+### bpftrace: 割り込みによる完了とポーリングによる完了を数える {#bpftrace-count-interrupt-vs-poll-completions}
 
 ```bash
-# Count block completions by whether they came from interrupt or poll context
+# ブロック完了を、割り込みコンテキストとポーリングコンテキストのどちらから来たかで数える
 bpftrace -e '
 tracepoint:block:block_rq_complete
 {
-    /* softirq context = interrupt-driven; task context = polling */
+    /* softirqコンテキスト = 割り込み駆動、タスクコンテキスト = ポーリング */
     @completions[curtask->comm, in_softirq()] = count();
 }
 interval:s:5 { print(@completions); clear(@completions); }'
 
-# Trace NOWAIT fallbacks: how often io_uring falls back to io-wq
+# NOWAITのフォールバックをトレースする: io_uringがio-wqにフォールバックする頻度
 bpftrace -e '
 kprobe:io_wq_enqueue
 {
@@ -727,28 +728,28 @@ kprobe:io_wq_enqueue
 interval:s:5 { print(@io_wq_fallbacks); clear(@io_wq_fallbacks); }'
 ```
 
-### perf: NVMe interrupt rate {#perf-nvme-interrupt-rate}
+### perf: NVMeの割り込みレート {#perf-nvme-interrupt-rate}
 
 ```bash
-# Count NVMe MSI-X interrupts while fio runs
-# With polling enabled, this count should drop dramatically
+# fio実行中のNVMe MSI-X割り込みを数える
+# ポーリングが有効なら、この数は劇的に減るはずである
 perf stat -e 'irq_vectors:irq_handler_entry' \
     -p $(pgrep fio) \
     -- sleep 10
 
-# Or count via /proc/interrupts
+# あるいは/proc/interruptsで数える
 watch -n1 'grep nvme /proc/interrupts'
-# With IOPOLL active: the NVMe interrupt counter should stop incrementing
+# IOPOLLが有効なら: NVMeの割り込みカウンタは増加しなくなるはずである
 ```
 
-### io_uring statistics {#io_uring-statistics}
+### io_uringの統計 {#io_uring-statistics}
 
 ```bash
-# io_uring exposes per-ring statistics via /proc
+# io_uringはリングごとの統計を/proc経由で公開している
 cat /proc/$(pgrep myapp)/fdinfo/$(ls -1 /proc/$(pgrep myapp)/fd | head -1)
-# Look for: sq_entries, cq_entries, sq_head, sq_tail, cq_head, cq_tail
+# 注目する項目: sq_entries, cq_entries, sq_head, sq_tail, cq_head, cq_tail
 
-# Kernel tracepoints for io_uring internals (Linux 5.x+)
+# io_uring内部のカーネルtracepoint（Linux 5.x以降）
 bpftrace -e '
 tracepoint:io_uring:io_uring_poll_arm   { @poll_armed = count(); }
 tracepoint:io_uring:io_uring_complete   { @completed  = count(); }
@@ -756,16 +757,16 @@ interval:s:1 { print(@poll_armed); print(@completed);
                clear(@poll_armed); clear(@completed); }'
 ```
 
-### Verifying NOWAIT hit rate {#verifying-nowait-hit-rate}
+### NOWAITのヒット率を検証する {#verifying-nowait-hit-rate}
 
 ```bash
-# Instrument the NOWAIT fast path and io-wq fallback
+# NOWAITの高速パスとio-wqへのフォールバックを計測する
 bpftrace -e '
-/* Fast path completion */
+/* 高速パスでの完了 */
 kretprobe:vfs_iocb_iter_read /retval > 0/ {
     @nowait_hits = count();
 }
-/* io-wq fallback (NOWAIT miss) */
+/* io-wqへのフォールバック（NOWAITミス） */
 kprobe:io_wq_enqueue {
     @io_wq_submissions = count();
 }
@@ -774,34 +775,34 @@ interval:s:5 {
            @nowait_hits, @io_wq_submissions);
     clear(@nowait_hits); clear(@io_wq_submissions);
 }'
-# Target: >95% NOWAIT hits for O_DIRECT NVMe workloads
+# 目標: O_DIRECTのNVMeワークロードでNOWAITヒット率95%超
 ```
 
 ---
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Contents |
+| ファイル | 内容 |
 |------|----------|
-| `include/linux/fs.h` | `IOCB_HIPRI`, `IOCB_NOWAIT`, `struct kiocb`, `file_operations.iopoll` |
-| `include/uapi/linux/fs.h` | `RWF_HIPRI`, `RWF_NOWAIT` (userspace-visible flags) |
-| `include/uapi/linux/io_uring.h` | `IORING_SETUP_IOPOLL`, `IORING_SETUP_SQPOLL` |
-| `fs/read_write.c` | `kiocb_set_rw_flags()`, `do_iter_readv_writev()` |
-| `fs/iomap/direct-io.c` | `iomap_dio_rw()`, `iocb_bio_iopoll()`, bio submission with `REQ_HIPRI` |
+| `include/linux/fs.h` | `IOCB_HIPRI`、`IOCB_NOWAIT`、`struct kiocb`、`file_operations.iopoll` |
+| `include/uapi/linux/fs.h` | `RWF_HIPRI`、`RWF_NOWAIT`（ユーザー空間から見えるフラグ） |
+| `include/uapi/linux/io_uring.h` | `IORING_SETUP_IOPOLL`、`IORING_SETUP_SQPOLL` |
+| `fs/read_write.c` | `kiocb_set_rw_flags()`、`do_iter_readv_writev()` |
+| `fs/iomap/direct-io.c` | `iomap_dio_rw()`、`iocb_bio_iopoll()`、`REQ_HIPRI`付きのbio発行 |
 | `block/bio.c` | `bio_poll()` |
-| `block/blk-mq.c` | HIPRI request allocation, poll queue management |
-| `drivers/nvme/host/pci.c` | `nvme_poll()`, `nvme_cqe_pending()`, phase bit check |
-| `io_uring/io_uring.c` | `io_do_iopoll()`, `io_iopoll_check()` |
-| `io_uring/rw.c` | `io_read()`, `io_write()`, NOWAIT fast path and io-wq fallback |
-| `io_uring/sqpoll.c` | `io_sq_thread()`, SQPOLL kernel thread |
+| `block/blk-mq.c` | HIPRIリクエストの割り当て、ポーリング用キューの管理 |
+| `drivers/nvme/host/pci.c` | `nvme_poll()`、`nvme_cqe_pending()`、フェーズビットの確認 |
+| `io_uring/io_uring.c` | `io_do_iopoll()`、`io_iopoll_check()` |
+| `io_uring/rw.c` | `io_read()`、`io_write()`、NOWAITの高速パスとio-wqへのフォールバック |
+| `io_uring/sqpoll.c` | `io_sq_thread()`、SQPOLLカーネルスレッド |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Direct I/O](direct-io.md) — O_DIRECT requirement for HIPRI/IOPOLL
-- [Async I/O Evolution](async-io.md) — io_uring architecture and SQE/CQE model
-- [Tuning storage](tuning-storage.md) — practical fio and io_uring performance tuning
-- `Documentation/block/blk-mq.rst` — block multiqueue architecture
-- `Documentation/admin-guide/iostats.rst` — interpreting `/proc/diskstats`
-- NVMe specification §4.6 — Completion Queue entry format and phase bit semantics
+- [Direct I/O](direct-io.md) — HIPRI/IOPOLLにおけるO_DIRECTの必要性
+- [非同期I/Oの進化](async-io.md) — io_uringのアーキテクチャとSQE/CQEモデル
+- [ストレージのチューニング](tuning-storage.md) — fioとio_uringの実践的な性能チューニング
+- `Documentation/block/blk-mq.rst` — ブロックマルチキューのアーキテクチャ
+- `Documentation/admin-guide/iostats.rst` — `/proc/diskstats`の読み方
+- NVMe仕様 §4.6 — Completion Queueエントリの形式とフェーズビットのセマンティクス

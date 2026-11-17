@@ -1,28 +1,28 @@
-# fallocate and File Space Management {#fallocate-and-file-space-management}
+# fallocateとファイル空間の管理 {#fallocate-and-file-space-management}
 
-> Reserving disk blocks without writing data: avoiding ENOSPC, fragmentation, and sparse-file surprises
+> データを書かずにディスクブロックを予約する: ENOSPC、断片化、スパースファイルの思わぬ挙動を避ける
 
-## The problem with `write()`-based preallocation {#the-problem-with-write-based-preallocation}
+## `write()`ベースの事前割り当ての問題 {#the-problem-with-write-based-preallocation}
 
-The traditional way to guarantee space for a file before filling it is to write zeros:
+ファイルを埋める前にその領域を保証する伝統的な方法は、ゼロを書き込むことである。
 
 ```c
-/* old pattern: write zeros to preallocate 1 GiB */
+/* 古いパターン: ゼロを書き込んで 1 GiB を事前割り当てする */
 char zeros[4096] = {0};
 for (size_t i = 0; i < (1UL << 30) / sizeof(zeros); i++) {
     write(fd, zeros, sizeof(zeros));
 }
 ```
 
-This has three serious problems:
+これには3つの深刻な問題がある。
 
-**It is slow.** Every `write()` dirtied pages must be flushed through the page cache and eventually written to disk. Writing 1 GiB of zeros takes real I/O time even though the data is meaningless.
+**遅い。** `write()`でダーティになったすべてのpageは、ページキャッシュを通じてフラッシュされ、最終的にディスクに書き込まれなければならない。データに意味がないにもかかわらず、1 GiBのゼロを書き込むには実際のI/O時間がかかる。
 
-**It does not prevent ENOSPC mid-write.** Space is only reserved one page at a time as writes arrive. A concurrent process filling the filesystem can trigger `ENOSPC` halfway through the loop, leaving a partially-written file and a caller that must now decide how to recover.
+**書き込み途中のENOSPCを防げない。** 領域は、書き込みが届くたびに1 pageずつしか予約されない。ファイルシステムを埋めている並行プロセスがあると、ループの途中で`ENOSPC`が発生しうる。その結果、部分的に書かれたファイルが残り、呼び出し側はどう回復するかを決めなければならなくなる。
 
-**It causes fragmentation.** The filesystem allocates blocks as writes come in, interleaving them with other concurrent allocations. A large sequential file can end up as hundreds of small extents scattered across the disk.
+**断片化を引き起こす。** ファイルシステムは書き込みが届くたびにブロックを割り当て、それらを他の並行する割り当てと交互に配置する。大きなシーケンシャルファイルが、ディスク上に散らばった数百の小さなエクステントになってしまうことがある。
 
-`fallocate(2)` solves all three: the kernel contacts the filesystem and reserves contiguous extents in a single operation, marking them allocated but not yet written. No I/O occurs. The file size reflects the reservation (or doesn't, depending on the mode). A later `write()` fills already-allocated blocks — it can no longer fail with `ENOSPC` for that range.
+`fallocate(2)`はこの3つすべてを解決する。カーネルはファイルシステムに働きかけ、1回の操作で連続したエクステントを予約し、それらを割り当て済みだが未書き込みとしてマークする。I/Oは発生しない。ファイルサイズは予約を反映する（モードによっては反映しない）。後の`write()`はすでに割り当て済みのブロックを埋めるので、その範囲について`ENOSPC`で失敗することはもうない。
 
 ```
 write()-based preallocation:
@@ -33,7 +33,7 @@ fallocate(mode=0):
   write(data) → fills already-allocated blocks (no allocation at write time)
 ```
 
-## `fallocate()` system call {#fallocate-system-call}
+## `fallocate()`システムコール {#fallocate-system-call}
 
 ```c
 #include <fcntl.h>
@@ -41,54 +41,54 @@ fallocate(mode=0):
 int fallocate(int fd, int mode, off_t offset, off_t len);
 ```
 
-- `fd` — open file descriptor (must be writable)
-- `mode` — zero for the default allocation, or a bitmask of `FALLOC_FL_*` flags
-- `offset` — byte offset at which the operation starts
-- `len` — length in bytes of the region to operate on
+- `fd` — オープン済みのファイルディスクリプタ（書き込み可能でなければならない）
+- `mode` — デフォルトの割り当てならゼロ、または`FALLOC_FL_*`フラグのビットマスク
+- `offset` — 操作を開始するバイトオフセット
+- `len` — 操作対象の領域のバイト長
 
-Returns 0 on success, -1 on error. Errors include:
+成功時は0、エラー時は-1を返す。エラーには次のものがある。
 
-| Error | Meaning |
+| エラー | 意味 |
 |-------|---------|
-| `ENOSPC` | Not enough space to satisfy the request |
-| `EOPNOTSUPP` | Filesystem or mode not supported |
-| `EINVAL` | Bad offset/len, or incompatible flags |
-| `EBADF` | `fd` not open for writing |
-| `ESPIPE` | `fd` is a pipe or FIFO |
+| `ENOSPC` | 要求を満たすのに十分な領域がない |
+| `EOPNOTSUPP` | ファイルシステムまたはモードがサポートされていない |
+| `EINVAL` | 不正なoffset/len、または互換性のないフラグ |
+| `EBADF` | `fd`が書き込み用に開かれていない |
+| `ESPIPE` | `fd`がパイプまたはFIFO |
 
-The flag constants live in `include/uapi/linux/falloc.h`; the VFS dispatch is in `fs/fallocate.c`.
+フラグ定数は`include/uapi/linux/falloc.h`にあり、VFSのディスパッチは`fs/fallocate.c`にある。
 
-## Modes overview {#modes-overview}
+## モードの概要 {#modes-overview}
 
-| Mode | Constant | Effect |
+| モード | 定数 | 効果 |
 |------|----------|--------|
-| Default | `0` | Allocate blocks; extend file size if needed; fill with zeros |
-| Keep size | `FALLOC_FL_KEEP_SIZE` | Allocate blocks; **do not** extend file size |
-| Punch hole | `FALLOC_FL_PUNCH_HOLE \| FALLOC_FL_KEEP_SIZE` | Deallocate blocks; reads return zeros |
-| Collapse range | `FALLOC_FL_COLLAPSE_RANGE` | Remove bytes from the middle of a file |
-| Zero range | `FALLOC_FL_ZERO_RANGE` | Zero a range without removing allocation |
-| Insert range | `FALLOC_FL_INSERT_RANGE` | Insert empty space, shifting subsequent data |
-| Unshare range | `FALLOC_FL_UNSHARE_RANGE` | Break copy-on-write sharing of reflinked extents |
+| デフォルト | `0` | ブロックを割り当てる。必要ならファイルサイズを拡張する。ゼロで埋める |
+| サイズ維持 | `FALLOC_FL_KEEP_SIZE` | ブロックを割り当てる。ファイルサイズは拡張 **しない** |
+| ホールパンチ | `FALLOC_FL_PUNCH_HOLE \| FALLOC_FL_KEEP_SIZE` | ブロックの割り当てを解除する。読み出しはゼロを返す |
+| 範囲の削除 | `FALLOC_FL_COLLAPSE_RANGE` | ファイルの途中からバイトを取り除く |
+| 範囲のゼロ化 | `FALLOC_FL_ZERO_RANGE` | 割り当てを取り除かずに範囲をゼロにする |
+| 範囲の挿入 | `FALLOC_FL_INSERT_RANGE` | 空の領域を挿入し、後続のデータをずらす |
+| 共有の解除 | `FALLOC_FL_UNSHARE_RANGE` | reflinkされたエクステントのコピーオンライト共有を解消する |
 
-`FALLOC_FL_PUNCH_HOLE` must always be combined with `FALLOC_FL_KEEP_SIZE`; the kernel rejects `FALLOC_FL_PUNCH_HOLE` alone with `EINVAL`.
+`FALLOC_FL_PUNCH_HOLE`は常に`FALLOC_FL_KEEP_SIZE`と組み合わせなければならない。カーネルは`FALLOC_FL_PUNCH_HOLE`単独の指定を`EINVAL`で拒否する。
 
-## Default allocation (mode = 0) {#default-allocation-mode-0}
+## デフォルトの割り当て（mode = 0） {#default-allocation-mode-0}
 
 ```c
-/* Preallocate a 512 MiB file */
+/* 512 MiB のファイルを事前割り当てする */
 int fd = open("data.bin", O_RDWR | O_CREAT, 0644);
 if (fallocate(fd, 0, 0, 512UL << 20) == -1)
     perror("fallocate");
 ```
 
-After this call:
+この呼び出しの後は次のようになる。
 
-- `stat(2).st_size` equals 512 MiB — the file size is extended.
-- `stat(2).st_blocks` is proportional to 512 MiB — physical blocks are allocated.
-- Reading unwritten regions returns zeros, but no I/O is required: the filesystem marks the extents as allocated-but-unwritten.
-- Subsequent `write()` calls into the range never need to allocate new blocks and cannot fail with `ENOSPC` for that range.
+- `stat(2).st_size`は512 MiBに等しい — ファイルサイズが拡張される。
+- `stat(2).st_blocks`は512 MiBに比例する — 物理ブロックが割り当てられる。
+- 未書き込みの領域を読むとゼロが返るが、I/Oは必要ない。ファイルシステムはエクステントを「割り当て済みだが未書き込み」としてマークしている。
+- その範囲への後続の`write()`呼び出しは新しいブロックを割り当てる必要がなく、その範囲について`ENOSPC`で失敗することはない。
 
-### Effect on `st_size` vs `st_blocks` {#effect-on-stsize-vs-stblocks}
+### `st_size`と`st_blocks`への影響 {#effect-on-stsize-vs-stblocks}
 
 ```
 Before fallocate:
@@ -104,41 +104,41 @@ After fallocate(fd, FALLOC_FL_KEEP_SIZE, 0, 512MiB):
   st_blocks = 1048576     (blocks still allocated)
 ```
 
-### Sparse file detection: `du` vs `ls` {#sparse-file-detection-du-vs-ls}
+### スパースファイルの見分け方: `du`と`ls` {#sparse-file-detection-du-vs-ls}
 
-`ls -l` reports `st_size` (logical size). `du` reports `st_blocks` (physical allocation). A sparse file shows a large `ls -l` size but a small `du` result:
+`ls -l`は`st_size`（論理サイズ）を報告する。`du`は`st_blocks`（物理的な割り当て）を報告する。スパースファイルは`ls -l`では大きなサイズを示すが、`du`の結果は小さい。
 
 ```bash
-# Create a 1 GiB sparse file (ftruncate, no blocks)
+# 1 GiB のスパースファイルを作成する（ftruncate、ブロックなし）
 truncate -s 1G sparse.bin
 ls -lh sparse.bin          # 1.0G
-du -sh sparse.bin          # 4.0K  (only the inode)
+du -sh sparse.bin          # 4.0K  （inode のみ）
 
-# Preallocate 1 GiB (fallocate, actual blocks)
+# 1 GiB を事前割り当てする（fallocate、実際のブロック）
 fallocate -l 1G preallocated.bin
 ls -lh preallocated.bin    # 1.0G
-du -sh preallocated.bin    # 1.1G  (actual disk usage)
+du -sh preallocated.bin    # 1.1G  （実際のディスク使用量）
 ```
 
-### Filesystem-specific behavior {#filesystem-specific-behavior}
+### ファイルシステム固有の挙動 {#filesystem-specific-behavior}
 
-**ext4**: Uses extent preallocation (`ext4_fallocate` in `fs/ext4/extents.c`). Creates unwritten extents — the extent tree marks the range as `EXT_UNWRITTEN`. Reads from unwritten extents return zeros without disk I/O. On the first write to a block, the extent is converted to written.
+**ext4**: エクステントの事前割り当て（`fs/ext4/extents.c`の`ext4_fallocate`）を使う。未書き込み（unwritten）エクステントを作成し、エクステントツリーはその範囲を`EXT_UNWRITTEN`としてマークする。未書き込みエクステントからの読み出しは、ディスクI/Oなしにゼロを返す。ブロックへの最初の書き込みで、エクステントは書き込み済みに変換される。
 
-**XFS**: Calls `xfs_alloc_file_space`, which creates unwritten extents in the B-tree. XFS was the first Linux filesystem to implement `fallocate`-style preallocation via `XFS_IOC_ALLOCSP`.
+**XFS**: `xfs_alloc_file_space`を呼び、B-tree内に未書き込みエクステントを作成する。XFSは、`XFS_IOC_ALLOCSP`を通じて`fallocate`方式の事前割り当てを実装した最初のLinuxファイルシステムである。
 
-**btrfs**: Supports `fallocate` but may produce more fragmentation over time due to copy-on-write semantics: overwriting preallocated blocks creates new extents rather than updating in place (unless `nodatacow` is set for the file).
+**btrfs**: `fallocate`をサポートするが、コピーオンライトのセマンティクスのため、時間とともにより多くの断片化を生じることがある。事前割り当てされたブロックを上書きすると、その場で更新するのではなく新しいエクステントが作られる（ファイルに`nodatacow`が設定されていない限り）。
 
-**tmpfs**: Supports `fallocate` for in-memory files; blocks are DRAM pages. Hole punching is also supported.
+**tmpfs**: メモリ上のファイルに対して`fallocate`をサポートする。ブロックはDRAMのpageである。ホールパンチもサポートされる。
 
-## `FALLOC_FL_KEEP_SIZE`: preallocate without extending {#fallocflkeep_size-preallocate-without-extending}
+## `FALLOC_FL_KEEP_SIZE`: 拡張せずに事前割り当てする {#fallocflkeep_size-preallocate-without-extending}
 
-This mode allocates physical blocks but leaves `st_size` unchanged. It is the canonical pattern for write-ahead log (WAL) preallocation:
+このモードは物理ブロックを割り当てるが、`st_size`は変更しない。これは先行書き込みログ（WAL）の事前割り当てにおける定番のパターンである。
 
 ```c
 /*
- * PostgreSQL-style WAL segment preallocation.
- * The file appears empty (st_size=0) but blocks are already reserved.
- * When the WAL writer calls write(), it fills pre-allocated blocks.
+ * PostgreSQL 方式の WAL セグメントの事前割り当て。
+ * ファイルは空に見える（st_size=0）が、ブロックはすでに予約されている。
+ * WAL の書き込み側が write() を呼ぶと、事前割り当てされたブロックが埋まる。
  */
 int preallocate_wal_segment(const char *path, size_t segment_size)
 {
@@ -146,9 +146,9 @@ int preallocate_wal_segment(const char *path, size_t segment_size)
     if (fd < 0)
         return -1;
 
-    /* Reserve blocks; file size stays 0 */
+    /* ブロックを予約する。ファイルサイズは 0 のまま */
     if (fallocate(fd, FALLOC_FL_KEEP_SIZE, 0, segment_size) == -1) {
-        /* Fall back to writing zeros if fallocate unsupported */
+        /* fallocate が未サポートならゼロの書き込みにフォールバックする */
         if (errno == EOPNOTSUPP)
             return write_zeros(fd, segment_size);
         close(fd);
@@ -159,18 +159,18 @@ int preallocate_wal_segment(const char *path, size_t segment_size)
 }
 ```
 
-Why keep size at zero? The consuming process (the WAL applier) must not see the file as having data until the WAL writer says so. `st_size` is the authoritative "how much data is here" signal; `st_blocks` is a storage-layer detail.
+なぜサイズをゼロのままにするのか。消費側のプロセス（WALを適用する側）は、WALの書き込み側がそう告げるまで、ファイルにデータがあると見てはならないからである。`st_size`は「ここにどれだけのデータがあるか」を示す正式なシグナルであり、`st_blocks`はストレージ層の詳細にすぎない。
 
-## `FALLOC_FL_PUNCH_HOLE`: reclaiming space within a file {#fallocflpunch_hole-reclaiming-space-within-a-file}
+## `FALLOC_FL_PUNCH_HOLE`: ファイル内の領域を回収する {#fallocflpunch_hole-reclaiming-space-within-a-file}
 
-Hole punching deallocates blocks in the middle of a file without changing `st_size`. The punched region becomes a sparse hole: reads return zeros, but no disk blocks are consumed.
+ホールパンチは、`st_size`を変えずにファイルの途中のブロックの割り当てを解除する。パンチされた領域はスパースなホールになる。読み出しはゼロを返すが、ディスクブロックは消費されない。
 
 ```c
 #include <linux/falloc.h>
 
 /*
- * Punch a hole from byte 'offset' for 'len' bytes.
- * FALLOC_FL_KEEP_SIZE is mandatory with FALLOC_FL_PUNCH_HOLE.
+ * バイト 'offset' から 'len' バイトのホールをパンチする。
+ * FALLOC_FL_PUNCH_HOLE には FALLOC_FL_KEEP_SIZE が必須である。
  */
 int punch_hole(int fd, off_t offset, off_t len)
 {
@@ -179,33 +179,33 @@ int punch_hole(int fd, off_t offset, off_t len)
 }
 ```
 
-### Use cases {#use-cases}
+### 用途 {#use-cases}
 
-**Log rotation**: Rather than unlinking and recreating a log file (which breaks open file descriptors held by other processes), punch the consumed region:
+**ログローテーション**: ログファイルをunlinkして作り直す（他のプロセスが保持しているオープン中のファイルディスクリプタを壊してしまう）代わりに、消費済みの領域をパンチする。
 
 ```c
-/* Process has read bytes [0, consumed_offset). Reclaim the space. */
+/* プロセスはバイト [0, consumed_offset) を読み終えた。その領域を回収する。 */
 punch_hole(log_fd, 0, consumed_offset);
-/* st_size unchanged; readers still see the file at its original size */
+/* st_size は変わらない。読み出し側には元のサイズのままのファイルが見える */
 ```
 
-**Database free-list management**: Databases that manage their own free lists (like PostgreSQL's heap pages marked as dead) can punch holes over freed page ranges, returning blocks to the filesystem without truncating the file.
+**データベースの空きリスト管理**: 独自の空きリストを管理するデータベース（PostgreSQLの、deadとマークされたヒープpageなど）は、解放されたpageの範囲にホールをパンチし、ファイルを切り詰めることなくブロックをファイルシステムへ返すことができる。
 
-**Large media files**: Video editing tools can punch holes over deleted frame ranges, reclaiming space while keeping the file structure intact.
+**大きなメディアファイル**: 動画編集ツールは、削除されたフレームの範囲にホールをパンチし、ファイル構造をそのまま保ちながら領域を回収できる。
 
-### Iterating holes with `SEEK_HOLE` / `SEEK_DATA` {#iterating-holes-with-seekhole-seekdata}
+### `SEEK_HOLE` / `SEEK_DATA`によるホールの走査 {#iterating-holes-with-seekhole-seekdata}
 
-After punching holes, use `lseek(2)` with `SEEK_HOLE` and `SEEK_DATA` to find the boundaries of data and sparse regions:
+ホールをパンチした後は、`SEEK_HOLE`と`SEEK_DATA`を指定した`lseek(2)`を使って、データ領域とスパース領域の境界を見つける。
 
 ```c
 #include <unistd.h>
 #include <stdio.h>
 
 /*
- * Print all data and hole extents in a file.
- * SEEK_DATA: seek to next data region at or after offset.
- * SEEK_HOLE: seek to next hole at or after offset.
- * A file always ends with a virtual hole at st_size.
+ * ファイル内のすべてのデータとホールのエクステントを表示する。
+ * SEEK_DATA: offset 以降の次のデータ領域へシークする。
+ * SEEK_HOLE: offset 以降の次のホールへシークする。
+ * ファイルは常に st_size の位置にある仮想的なホールで終わる。
  */
 void print_extents(int fd, off_t file_size)
 {
@@ -214,18 +214,18 @@ void print_extents(int fd, off_t file_size)
     while (pos < file_size) {
         off_t data_start = lseek(fd, pos, SEEK_DATA);
         if (data_start == -1)
-            break;  /* no more data: rest is a hole */
+            break;  /* もうデータはない: 残りはホール */
 
         off_t hole_start = lseek(fd, data_start, SEEK_HOLE);
         if (hole_start == -1)
-            hole_start = file_size;  /* data extends to end */
+            hole_start = file_size;  /* データは末尾まで続く */
 
         printf("  data: [%lld, %lld)  (%lld bytes)\n",
                (long long)data_start,
                (long long)hole_start,
                (long long)(hole_start - data_start));
 
-        /* Find where the hole ends */
+        /* ホールがどこで終わるかを見つける */
         off_t next_data = lseek(fd, hole_start, SEEK_DATA);
         if (next_data == -1)
             next_data = file_size;
@@ -241,66 +241,66 @@ void print_extents(int fd, off_t file_size)
 }
 ```
 
-`SEEK_HOLE` and `SEEK_DATA` were standardized in POSIX 2013 and are supported on ext4, XFS, btrfs, and tmpfs. On filesystems that do not support them, `SEEK_HOLE` returns `st_size` (the whole file appears to be data).
+`SEEK_HOLE`と`SEEK_DATA`はPOSIX 2013で標準化され、ext4、XFS、btrfs、tmpfsでサポートされている。これらをサポートしないファイルシステムでは、`SEEK_HOLE`は`st_size`を返す（ファイル全体がデータであるように見える）。
 
-## `FALLOC_FL_ZERO_RANGE`: zeroing without punching {#fallocflzero_range-zeroing-without-punching}
+## `FALLOC_FL_ZERO_RANGE`: パンチせずにゼロ化する {#fallocflzero_range-zeroing-without-punching}
 
-`FALLOC_FL_ZERO_RANGE` zeros a region of a file efficiently. Unlike punch-hole, the blocks remain allocated. Unlike writing zeros through `write()`, the filesystem may implement this as metadata-only if the region aligns to block boundaries:
+`FALLOC_FL_ZERO_RANGE`は、ファイルの領域を効率的にゼロにする。ホールパンチと異なり、ブロックは割り当てられたままである。`write()`でゼロを書き込む場合と異なり、領域がブロック境界にアラインされていれば、ファイルシステムはこれをメタデータのみの操作として実装できる。
 
 ```c
-/* Zero bytes [offset, offset+len) without deallocating blocks */
+/* ブロックの割り当てを解除せずにバイト [offset, offset+len) をゼロにする */
 fallocate(fd, FALLOC_FL_ZERO_RANGE, offset, len);
 
-/* Optionally avoid extending file size (mirror KEEP_SIZE behavior) */
+/* 必要ならファイルサイズの拡張を避ける（KEEP_SIZE と同じ挙動） */
 fallocate(fd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, offset, len);
 ```
 
-On ext4 and XFS, aligned zero-range requests convert written extents to unwritten extents in the extent tree — the same representation as freshly preallocated blocks. No actual zero bytes are written to disk; the filesystem's read path synthesizes them. For unaligned edges, partial blocks are read, zeroed, and written back.
+ext4とXFSでは、アラインされたゼロ範囲の要求は、エクステントツリー内の書き込み済みエクステントを未書き込みエクステントに変換する。これは新しく事前割り当てされたブロックと同じ表現である。実際のゼロバイトがディスクに書かれることはなく、ファイルシステムの読み出し経路がそれを合成する。アラインされていない端の部分については、部分ブロックが読み込まれ、ゼロにされ、書き戻される。
 
-## `FALLOC_FL_COLLAPSE_RANGE`: removing a file section {#fallocflcollapse_range-removing-a-file-section}
+## `FALLOC_FL_COLLAPSE_RANGE`: ファイルの一部を取り除く {#fallocflcollapse_range-removing-a-file-section}
 
-`FALLOC_FL_COLLAPSE_RANGE` removes `len` bytes starting at `offset` from a file, shifting all subsequent data down. No hole is left: the file shrinks by `len` bytes. Both `offset` and `len` must be multiples of the filesystem block size.
+`FALLOC_FL_COLLAPSE_RANGE`は、ファイルの`offset`から始まる`len`バイトを取り除き、後続のデータをすべて前方へずらす。ホールは残らず、ファイルは`len`バイト縮む。`offset`と`len`はともにファイルシステムのブロックサイズの倍数でなければならない。
 
 ```c
-/* Remove 1 MiB starting at offset 4 MiB, shifting the rest down */
+/* オフセット 4 MiB から 1 MiB を取り除き、残りを前へずらす */
 fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 4UL << 20, 1UL << 20);
 ```
 
-This is useful for in-place log compaction: rather than copying the remaining data into a new file, collapse the consumed head. Supported on ext4 (since 3.15) and XFS (since 3.15). btrfs does not support it.
+これはインプレースでのログの圧縮に役立つ。残りのデータを新しいファイルにコピーする代わりに、消費済みの先頭部分を取り除けばよい。ext4（3.15以降）とXFS（3.15以降）でサポートされている。btrfsはサポートしていない。
 
-## `FALLOC_FL_INSERT_RANGE`: inserting space {#fallocflinsert_range-inserting-space}
+## `FALLOC_FL_INSERT_RANGE`: 領域を挿入する {#fallocflinsert_range-inserting-space}
 
-The inverse of collapse: `FALLOC_FL_INSERT_RANGE` inserts `len` zero bytes at `offset`, shifting subsequent data up. The file grows by `len`. Both values must be block-size aligned.
+collapseの逆で、`FALLOC_FL_INSERT_RANGE`は`offset`に`len`バイトのゼロを挿入し、後続のデータを後方へずらす。ファイルは`len`だけ大きくなる。どちらの値もブロックサイズにアラインされていなければならない。
 
 ```c
-/* Insert 512 KiB at offset 2 MiB */
+/* オフセット 2 MiB に 512 KiB を挿入する */
 fallocate(fd, FALLOC_FL_INSERT_RANGE, 2UL << 20, 512UL << 10);
 ```
 
-Supported on ext4 (since 4.1) and XFS (since 4.1). Rarely used in practice.
+ext4（4.1以降）とXFS（4.1以降）でサポートされている。実際に使われることはまれである。
 
-## `FALLOC_FL_UNSHARE_RANGE`: breaking reflink sharing {#fallocflunshare_range-breaking-reflink-sharing}
+## `FALLOC_FL_UNSHARE_RANGE`: reflinkの共有を解消する {#fallocflunshare_range-breaking-reflink-sharing}
 
-On copy-on-write filesystems that support reflinks (btrfs, XFS), `cp --reflink` creates a file that shares extent tree entries with the original. A write to either file triggers copy-on-write to a new extent.
+reflinkをサポートするコピーオンライト型ファイルシステム（btrfs、XFS）では、`cp --reflink`は元のファイルとエクステントツリーのエントリを共有するファイルを作成する。どちらかのファイルへの書き込みは、新しいエクステントへのコピーオンライトを引き起こす。
 
-`FALLOC_FL_UNSHARE_RANGE` forces the kernel to physically copy the shared data, breaking the sharing relationship:
+`FALLOC_FL_UNSHARE_RANGE`は、カーネルに共有データを物理的にコピーさせ、共有関係を解消する。
 
 ```c
 struct stat st;
 fstat(fd, &st);
 
-/* Force all shared extents to become private copies */
+/* すべての共有エクステントを強制的にプライベートなコピーにする */
 fallocate(fd, FALLOC_FL_UNSHARE_RANGE, 0, st.st_size);
 ```
 
-This is useful before intensive random writes to a reflinked file: without unsharing, every write triggers a COW allocation and potentially scatters extents. After unsharing, writes are in-place and contiguous (assuming the file was not already fragmented).
+これは、reflinkされたファイルに激しいランダム書き込みを行う前に役立つ。共有を解除しなければ、すべての書き込みがCOWによる割り当てを引き起こし、エクステントが散らばる可能性がある。共有を解除した後は、書き込みはインプレースかつ連続的になる（ファイルがすでに断片化していなければ）。
 
-!!! note "Filesystem implementation differences"
-    XFS has a native, efficient kernel-level unshare implementation that operates on extent metadata directly. btrfs does not have a native kernel-level unshare operation for this flag and falls back to a read-rewrite path, which is less efficient and produces I/O proportional to file size.
+!!! note "ファイルシステムによる実装の違い"
+    XFSは、エクステントのメタデータを直接操作する、ネイティブで効率的なカーネルレベルのunshare実装を持っている。btrfsはこのフラグに対するネイティブなカーネルレベルのunshare操作を持たず、読み出し・再書き込みの経路にフォールバックする。これは効率が悪く、ファイルサイズに比例したI/Oを生む。
 
-See [Copy-on-write filesystems](#copy-on-write-filesystems-btrfs-and-xfs) below for the broader context.
+より広い文脈については、後述の[コピーオンライト型ファイルシステム](#copy-on-write-filesystems-btrfs-and-xfs)を参照のこと。
 
-## `posix_fallocate()`: the POSIX fallback {#posix_fallocate-the-posix-fallback}
+## `posix_fallocate()`: POSIXのフォールバック {#posix_fallocate-the-posix-fallback}
 
 ```c
 #include <fcntl.h>
@@ -308,10 +308,10 @@ See [Copy-on-write filesystems](#copy-on-write-filesystems-btrfs-and-xfs) below 
 int posix_fallocate(int fd, off_t offset, off_t len);
 ```
 
-`posix_fallocate()` is a libc function (not a direct syscall) that guarantees space reservation. If the kernel supports `fallocate(fd, 0, offset, len)`, glibc calls it directly. If not — on NFS, CIFS, or old kernels — glibc falls back to writing zeros:
+`posix_fallocate()`は、領域の予約を保証するlibcの関数である（直接のシステムコールではない）。カーネルが`fallocate(fd, 0, offset, len)`をサポートしていれば、glibcはそれを直接呼ぶ。サポートしていなければ（NFS、CIFS、古いカーネルなど）、glibcはゼロの書き込みにフォールバックする。
 
 ```c
-/* glibc sysdeps/unix/sysv/linux/posix_fallocate.c (simplified) */
+/* glibc sysdeps/unix/sysv/linux/posix_fallocate.c（簡略化） */
 int posix_fallocate(int fd, off_t offset, off_t len)
 {
     int ret = fallocate(fd, 0, offset, len);
@@ -320,44 +320,44 @@ int posix_fallocate(int fd, off_t offset, off_t len)
     if (errno != EOPNOTSUPP)
         return errno;
 
-    /* Fallback: write zeros the slow way */
+    /* フォールバック: 低速な方法でゼロを書き込む */
     return write_zeros_range(fd, offset, len);
 }
 ```
 
-The fallback is correct but slow and still subject to ENOSPC mid-write. Prefer calling `fallocate(2)` directly and handling `EOPNOTSUPP` yourself when you care about performance.
+このフォールバックは正しいが遅く、書き込み途中のENOSPCの可能性も依然として残る。性能を重視する場合は、`fallocate(2)`を直接呼び、`EOPNOTSUPP`を自分で処理するほうがよい。
 
-## `ftruncate()` vs `fallocate()` {#ftruncate-vs-fallocate}
+## `ftruncate()`と`fallocate()` {#ftruncate-vs-fallocate}
 
-`ftruncate(fd, new_size)` and `fallocate(fd, 0, 0, new_size)` both extend a file to `new_size`, but they do fundamentally different things:
+`ftruncate(fd, new_size)`と`fallocate(fd, 0, 0, new_size)`はどちらもファイルを`new_size`まで拡張するが、行うことは根本的に異なる。
 
-| Aspect | `ftruncate(fd, size)` | `fallocate(fd, 0, 0, size)` |
+| 観点 | `ftruncate(fd, size)` | `fallocate(fd, 0, 0, size)` |
 |--------|----------------------|----------------------------|
-| Blocks allocated | No (sparse) | Yes (real blocks) |
-| `st_size` | Set to `size` | Set to `size` |
-| `st_blocks` | Unchanged (nearly 0) | Proportional to `size` |
-| Later write can ENOSPC | Yes | No (blocks already reserved) |
-| Fragmentation risk | None at extend time | None (extent is contiguous) |
-| Disk usage | Near zero | Full `size` |
-| Speed | Instant (metadata only) | Proportional to `size` |
+| ブロックの割り当て | なし（スパース） | あり（実ブロック） |
+| `st_size` | `size`に設定 | `size`に設定 |
+| `st_blocks` | 変化なし（ほぼ0） | `size`に比例 |
+| 後の書き込みでENOSPCになりうるか | なりうる | ならない（ブロックは予約済み） |
+| 断片化のリスク | 拡張時にはなし | なし（エクステントは連続） |
+| ディスク使用量 | ほぼゼロ | `size`全体 |
+| 速度 | 即時（メタデータのみ） | `size`に比例 |
 
 ```c
-/* ftruncate: creates a 1 GiB sparse file */
+/* ftruncate: 1 GiB のスパースファイルを作成する */
 ftruncate(fd, 1UL << 30);
-/* st_size=1GiB, st_blocks≈8 (just inode), disk usage: ~4KiB */
+/* st_size=1GiB、st_blocks≈8（inode のみ）、ディスク使用量: 約 4KiB */
 
-/* fallocate: creates a 1 GiB preallocated file */
+/* fallocate: 1 GiB の事前割り当て済みファイルを作成する */
 fallocate(fd, 0, 0, 1UL << 30);
-/* st_size=1GiB, st_blocks=2097152, disk usage: ~1GiB */
+/* st_size=1GiB、st_blocks=2097152、ディスク使用量: 約 1GiB */
 ```
 
-When shrinking, both `ftruncate(fd, smaller_size)` and `fallocate(fd, 0, 0, smaller_size)` truncate the file. Use `ftruncate` for truncation — `fallocate` is not documented for shrinking below the current size, and behavior is filesystem-dependent.
+縮小する場合、`ftruncate(fd, smaller_size)`と`fallocate(fd, 0, 0, smaller_size)`はどちらもファイルを切り詰める。切り詰めには`ftruncate`を使うこと。`fallocate`は現在のサイズより小さくする用途については文書化されておらず、挙動はファイルシステムに依存する。
 
-## Practical use cases with code {#practical-use-cases-with-code}
+## コード付きの実践的な用途 {#practical-use-cases-with-code}
 
-### 1. Download file reservation {#1-download-file-reservation}
+### 1.ダウンロードファイルの領域予約 {#1-download-file-reservation}
 
-Preallocate the full file size before a download begins to guarantee space and avoid fragmentation:
+ダウンロードの開始前にファイルサイズ全体を事前割り当てし、領域を保証して断片化を避ける。
 
 ```c
 #include <fcntl.h>
@@ -374,35 +374,35 @@ int create_download_file(const char *path, off_t expected_size)
     if (fallocate(fd, 0, 0, expected_size) == -1) {
         if (errno == EOPNOTSUPP) {
             /*
-             * Filesystem doesn't support fallocate.
-             * Fall back to ftruncate: creates a sparse file.
-             * ENOSPC is possible during the actual download.
+             * ファイルシステムが fallocate をサポートしていない。
+             * ftruncate にフォールバックする: スパースファイルが作られる。
+             * 実際のダウンロード中に ENOSPC が起こりうる。
              */
             if (ftruncate(fd, expected_size) == -1) {
                 close(fd);
                 return -1;
             }
         } else {
-            /* ENOSPC or other real error */
+            /* ENOSPC またはその他の本当のエラー */
             close(fd);
             return -1;
         }
     }
 
-    return fd;  /* caller writes download data via pwrite() */
+    return fd;  /* 呼び出し側は pwrite() でダウンロードデータを書き込む */
 }
 ```
 
-### 2. WAL/journal preallocation (PostgreSQL pattern) {#2-waljournal-preallocation-postgresql-pattern}
+### 2. WAL/ジャーナルの事前割り当て（PostgreSQLのパターン） {#2-waljournal-preallocation-postgresql-pattern}
 
 ```c
 #include <fcntl.h>
 #include <linux/falloc.h>
 
 /*
- * Preallocate a WAL segment file.
- * Use KEEP_SIZE so the file appears empty to WAL readers.
- * The writer fills it via sequential write() calls.
+ * WAL セグメントファイルを事前割り当てする。
+ * KEEP_SIZE を使うので、WAL の読み出し側にはファイルが空に見える。
+ * 書き込み側はシーケンシャルな write() 呼び出しでそれを埋める。
  */
 int preallocate_wal(const char *path, size_t wal_segment_size)
 {
@@ -421,7 +421,7 @@ int preallocate_wal(const char *path, size_t wal_segment_size)
 }
 ```
 
-### 3. Log file rotation with hole punching {#3-log-file-rotation-with-hole-punching}
+### 3.ホールパンチによるログファイルのローテーション {#3-log-file-rotation-with-hole-punching}
 
 ```c
 #include <fcntl.h>
@@ -429,9 +429,9 @@ int preallocate_wal(const char *path, size_t wal_segment_size)
 #include <sys/stat.h>
 
 /*
- * After a consumer has processed log bytes [0, consumed_up_to),
- * punch the consumed region to return disk space.
- * The file descriptor stays open; active writers are unaffected.
+ * 消費側がログのバイト [0, consumed_up_to) を処理した後、
+ * 消費済みの領域をパンチしてディスク領域を返却する。
+ * ファイルディスクリプタは開いたままで、稼働中の書き込み側は影響を受けない。
  */
 int reclaim_consumed_log(int fd, off_t consumed_up_to)
 {
@@ -439,19 +439,19 @@ int reclaim_consumed_log(int fd, off_t consumed_up_to)
     if (fstat(fd, &st) == -1)
         return -1;
 
-    /* Align to filesystem block size */
+    /* ファイルシステムのブロックサイズにアラインする */
     long blksz = st.st_blksize;
     off_t aligned_end = (consumed_up_to / blksz) * blksz;
 
     if (aligned_end <= 0)
-        return 0;   /* nothing to punch yet */
+        return 0;   /* まだパンチするものはない */
 
     return fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                      0, aligned_end);
 }
 ```
 
-### 4. Sparse file creation and hole inspection {#4-sparse-file-creation-and-hole-inspection}
+### 4.スパースファイルの作成とホールの調査 {#4-sparse-file-creation-and-hole-inspection}
 
 ```c
 #include <fcntl.h>
@@ -462,25 +462,25 @@ int reclaim_consumed_log(int fd, off_t consumed_up_to)
 int main(void)
 {
     const char *path = "sparse_demo.bin";
-    const off_t size = 10UL << 20;  /* 10 MiB file */
+    const off_t size = 10UL << 20;  /* 10 MiB のファイル */
 
-    /* Create a 10 MiB preallocated file */
+    /* 10 MiB の事前割り当て済みファイルを作成する */
     int fd = open(path, O_RDWR | O_CREAT | O_TRUNC, 0644);
     fallocate(fd, 0, 0, size);
 
-    /* Write data in two 1 MiB blocks */
+    /* 1 MiB のブロック 2 つにデータを書く */
     char buf[1 << 20];
     memset(buf, 'A', sizeof(buf));
-    pwrite(fd, buf, sizeof(buf), 0);           /* bytes [0, 1MiB) */
-    pwrite(fd, buf, sizeof(buf), 4 << 20);     /* bytes [4MiB, 5MiB) */
+    pwrite(fd, buf, sizeof(buf), 0);           /* バイト [0, 1MiB) */
+    pwrite(fd, buf, sizeof(buf), 4 << 20);     /* バイト [4MiB, 5MiB) */
 
-    /* Punch holes in the regions we don't need */
+    /* 不要な領域にホールをパンチする */
     fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-              1 << 20, 3 << 20);               /* punch [1MiB, 4MiB) */
+              1 << 20, 3 << 20);               /* [1MiB, 4MiB) をパンチ */
     fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
-              5 << 20, 5 << 20);               /* punch [5MiB, 10MiB) */
+              5 << 20, 5 << 20);               /* [5MiB, 10MiB) をパンチ */
 
-    /* Iterate extents using SEEK_DATA / SEEK_HOLE */
+    /* SEEK_DATA / SEEK_HOLE でエクステントを走査する */
     printf("Extents in %s:\n", path);
     off_t pos = 0;
     while (pos < size) {
@@ -499,61 +499,61 @@ int main(void)
     return 0;
 }
 /*
- * Output:
+ * 出力:
  *   data [0, 1048576)
  *   data [4194304, 5242880)
  */
 ```
 
-## Filesystem support matrix {#filesystem-support-matrix}
+## ファイルシステムのサポート表 {#filesystem-support-matrix}
 
-| Mode | ext4 | XFS | btrfs | tmpfs | NFS | CIFS |
+| モード | ext4 | XFS | btrfs | tmpfs | NFS | CIFS |
 |------|------|-----|-------|-------|-----|------|
-| `mode=0` (allocate) | Yes | Yes | Yes | Yes | No* | No* |
+| `mode=0`（割り当て） | Yes | Yes | Yes | Yes | No* | No* |
 | `FALLOC_FL_KEEP_SIZE` | Yes | Yes | Yes | Yes | No* | No* |
-| `FALLOC_FL_PUNCH_HOLE` | Yes (3.0+) | Yes | Yes | Yes | Partial† | Partial |
+| `FALLOC_FL_PUNCH_HOLE` | Yes (3.0+) | Yes | Yes | Yes | 部分的† | 部分的 |
 | `FALLOC_FL_COLLAPSE_RANGE` | Yes (3.15+) | Yes (3.15+) | No | No | No | No |
 | `FALLOC_FL_ZERO_RANGE` | Yes (3.15+) | Yes | Yes | No | No | No |
 | `FALLOC_FL_INSERT_RANGE` | Yes (4.1+) | Yes (4.1+) | No | No | No | No |
 | `FALLOC_FL_UNSHARE_RANGE` | No | Yes | Yes | No | No | No |
 
-\* NFS (for modes other than `FALLOC_FL_PUNCH_HOLE`) and CIFS may support some modes depending on the server-side filesystem. `fallocate` over NFS typically returns `EOPNOTSUPP` from the client, causing `posix_fallocate` to fall back to writing zeros.
+\* NFS（`FALLOC_FL_PUNCH_HOLE`以外のモード）とCIFSは、サーバー側のファイルシステムによっては一部のモードをサポートすることがある。NFS越しの`fallocate`は通常クライアントから`EOPNOTSUPP`を返し、`posix_fallocate`はゼロの書き込みにフォールバックする。
 
-† NFSv4.2 clients support hole punching via the `DEALLOCATE` NFS operation when the server-side filesystem also supports it. NFSv3, NFSv4.0, and NFSv4.1 do not support `FALLOC_FL_PUNCH_HOLE` and return `EOPNOTSUPP`.
+† NFSv4.2クライアントは、サーバー側のファイルシステムもサポートしている場合、NFSの`DEALLOCATE`操作を介してホールパンチをサポートする。NFSv3、NFSv4.0、NFSv4.1は`FALLOC_FL_PUNCH_HOLE`をサポートせず、`EOPNOTSUPP`を返す。
 
-Always check for `EOPNOTSUPP` and have a fallback:
+常に`EOPNOTSUPP`を確認し、フォールバックを用意しておくこと。
 
 ```c
 ret = fallocate(fd, FALLOC_FL_PUNCH_HOLE | FALLOC_FL_KEEP_SIZE,
                 offset, len);
 if (ret == -1 && errno == EOPNOTSUPP) {
-    /* Filesystem doesn't support hole punching.
-     * Options: write zeros (keeps space used), or ignore. */
+    /* ファイルシステムがホールパンチをサポートしていない。
+     * 選択肢: ゼロを書く（領域は使われたまま）か、無視する。 */
 }
 ```
 
-## Copy-on-write filesystems: btrfs and XFS {#copy-on-write-filesystems-btrfs-and-xfs}
+## コピーオンライト型ファイルシステム: btrfsとXFS {#copy-on-write-filesystems-btrfs-and-xfs}
 
-### Reflinks and `cp --reflink` {#reflinks-and-cp-reflink}
+### reflinkと`cp --reflink` {#reflinks-and-cp-reflink}
 
-btrfs and XFS support *reflinks*: a file copy that shares extent tree entries with the original. A `cp --reflink` is nearly instant and uses no additional disk space until one of the files is modified:
+btrfsとXFSは *reflink* をサポートする。これは元のファイルとエクステントツリーのエントリを共有するファイルのコピーである。`cp --reflink`はほぼ瞬時に完了し、どちらかのファイルが変更されるまで追加のディスク領域を使わない。
 
 ```bash
-# Create a 1 GiB file, then reflink-copy it (instant, no extra space)
+# 1 GiB のファイルを作成し、reflink コピーする（瞬時、追加領域なし）
 fallocate -l 1G original.bin
 cp --reflink=always original.bin copy.bin
-du -sh original.bin copy.bin   # both show ~1GiB but share the blocks
+du -sh original.bin copy.bin   # どちらも約 1GiB と表示されるが、ブロックは共有されている
 ```
 
-When a reflinked block is written, the filesystem performs copy-on-write: the writing process gets a new private extent, and the other file's extent remains unchanged.
+reflinkされたブロックに書き込まれると、ファイルシステムはコピーオンライトを行う。書き込んだプロセスは新しいプライベートなエクステントを得て、もう一方のファイルのエクステントは変わらない。
 
-### `copy_file_range` and kernel-side reflinks {#copyfilerange-and-kernel-side-reflinks}
+### `copy_file_range`とカーネル側のreflink {#copyfilerange-and-kernel-side-reflinks}
 
-`copy_file_range(2)` asks the kernel to copy a range between files. On reflink-capable filesystems, the kernel may satisfy this as a metadata-only clone operation rather than copying bytes:
+`copy_file_range(2)`は、ファイル間で範囲をコピーするようカーネルに依頼する。reflinkに対応したファイルシステムでは、カーネルはバイトをコピーする代わりに、メタデータのみのクローン操作としてこれを満たすことがある。
 
 ```c
 #include <sys/sendfile.h>
-/* Actually: */
+/* 実際には: */
 #include <unistd.h>
 
 ssize_t copy_file_range(int fd_in, loff_t *off_in,
@@ -561,34 +561,34 @@ ssize_t copy_file_range(int fd_in, loff_t *off_in,
                          size_t len, unsigned int flags);
 ```
 
-For block-aligned ranges on XFS or btrfs with matching block sizes, this becomes a reflink clone — O(extents), effectively constant for single-extent files, but scales with extent count for heavily fragmented files. For other cases it falls back to a read/write loop.
+ブロックサイズが一致するXFSやbtrfs上でブロックにアラインされた範囲の場合、これはreflinkクローンになる。コストはO(エクステント数)であり、単一エクステントのファイルでは実質的に一定だが、ひどく断片化したファイルではエクステント数に応じて増える。それ以外の場合は読み書きのループにフォールバックする。
 
-### Fragmentation over time with COW {#fragmentation-over-time-with-cow}
+### COWによる時間経過での断片化 {#fragmentation-over-time-with-cow}
 
-COW filesystems accumulate fragmentation for frequently overwritten files. Each overwrite creates a new extent; the extent tree grows; sequential reads become random I/O. `FALLOC_FL_UNSHARE_RANGE` is one tool to combat this: it consolidates shared extents into a single contiguous private allocation.
+COWファイルシステムでは、頻繁に上書きされるファイルに断片化が蓄積する。上書きのたびに新しいエクステントが作られ、エクステントツリーが大きくなり、シーケンシャルな読み出しがランダムI/Oになる。`FALLOC_FL_UNSHARE_RANGE`はこれに対抗する手段の1つで、共有エクステントを単一の連続したプライベートな割り当てに統合する。
 
-For databases on btrfs, the standard recommendation is to disable data COW for database files:
+btrfs上のデータベースについては、データベースファイルのデータCOWを無効にするのが標準的な推奨である。
 
 ```bash
-# Disable COW on a directory (new files inherit the flag)
+# ディレクトリで COW を無効にする（新しいファイルはフラグを継承する）
 chattr +C /var/lib/postgresql/
 
-# Or on an existing file (must be empty)
+# または既存のファイルに対して（空でなければならない）
 chattr +C database.db
 ```
 
-With `+C` (nodatacow), `fallocate` and `write` behave more like they do on ext4: in-place updates without per-block copy-on-write.
+`+C`（nodatacow）を指定すると、`fallocate`と`write`はext4上と同様に振る舞うようになる。すなわち、ブロックごとのコピーオンライトなしのインプレース更新である。
 
-### Detecting extent sharing {#detecting-extent-sharing}
+### エクステント共有の検出 {#detecting-extent-sharing}
 
-On XFS and btrfs, the `FIEMAP` ioctl with the `FIEMAP_EXTENT_SHARED` flag indicates shared extents:
+XFSとbtrfsでは、`FIEMAP` ioctlの`FIEMAP_EXTENT_SHARED`フラグが共有エクステントを示す。
 
 ```c
 #include <linux/fiemap.h>
 #include <linux/fs.h>
 #include <sys/ioctl.h>
 
-/* Check if any extents in the file are shared (reflinked) */
+/* ファイル内に共有された（reflink された）エクステントがあるか確認する */
 int has_shared_extents(int fd)
 {
     struct {
@@ -612,9 +612,9 @@ int has_shared_extents(int fd)
 }
 ```
 
-## Kernel internals {#kernel-internals}
+## カーネル内部 {#kernel-internals}
 
-The VFS entry point for `fallocate` is `vfs_fallocate()` in `fs/fallocate.c`:
+`fallocate`のVFSエントリポイントは、`fs/fallocate.c`の`vfs_fallocate()`である。
 
 ```c
 /* fs/fallocate.c */
@@ -622,7 +622,7 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
     struct inode *inode = file_inode(file);
 
-    /* Basic sanity checks */
+    /* 基本的な妥当性チェック */
     if (offset < 0 || len <= 0)
         return -EINVAL;
     if (mode & ~(FALLOC_FL_KEEP_SIZE | FALLOC_FL_PUNCH_HOLE |
@@ -630,11 +630,11 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
                  FALLOC_FL_INSERT_RANGE | FALLOC_FL_UNSHARE_RANGE))
         return -EOPNOTSUPP;
 
-    /* Filesystem must implement fallocate */
+    /* ファイルシステムが fallocate を実装していなければならない */
     if (!file->f_op->fallocate)
         return -EOPNOTSUPP;
 
-    /* Security and quota checks */
+    /* セキュリティとクォータのチェック */
     ret = security_file_permission(file, MAY_WRITE);
     if (ret)
         return ret;
@@ -643,10 +643,10 @@ int vfs_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 }
 ```
 
-Each filesystem provides its own `fallocate` operation. For ext4:
+各ファイルシステムは独自の`fallocate`操作を提供する。ext4の場合は次のとおりである。
 
 ```c
-/* fs/ext4/extents.c (simplified) */
+/* fs/ext4/extents.c（簡略化） */
 long ext4_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
 {
     struct inode *inode = file_inode(file);
@@ -660,34 +660,34 @@ long ext4_fallocate(struct file *file, int mode, loff_t offset, loff_t len)
     if (mode & FALLOC_FL_INSERT_RANGE)
         return ext4_insert_range(inode, offset, len);
 
-    /* Default: allocate unwritten extents */
+    /* デフォルト: 未書き込みエクステントを割り当てる */
     return ext4_alloc_file_blocks(file, lblk, max_blocks,
                                    new_size, flags);
 }
 ```
 
-The flags constant definitions are in `include/uapi/linux/falloc.h`:
+フラグ定数の定義は`include/uapi/linux/falloc.h`にある。
 
 ```c
 /* include/uapi/linux/falloc.h */
 #define FALLOC_FL_KEEP_SIZE      0x01
 #define FALLOC_FL_PUNCH_HOLE     0x02
-#define FALLOC_FL_NO_HIDE_STALE  0x04  /* internal, not for userspace */
+#define FALLOC_FL_NO_HIDE_STALE  0x04  /* 内部用、ユーザー空間向けではない */
 #define FALLOC_FL_COLLAPSE_RANGE 0x08
 #define FALLOC_FL_ZERO_RANGE     0x10
 #define FALLOC_FL_INSERT_RANGE   0x20
 #define FALLOC_FL_UNSHARE_RANGE  0x40
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Buffered I/O and the Page Cache](buffered-io.md) — page cache interaction with preallocated extents
-- [Direct I/O](direct-io.md) — bypassing the page cache for O_DIRECT writes into preallocated ranges
-- [Life of a Write](life-of-a-write.md) — how `write()` interacts with preallocated (unwritten) extents
-- [VFS: File Operations](../vfs/file-ops.md) — `f_op->fallocate` dispatch
-- [splice, sendfile, copy_file_range](../vfs/splice-sendfile.md) — kernel-side reflink copies
-- [btrfs](../filesystems/btrfs.md) — COW semantics and extent sharing
-- [XFS](../filesystems/xfs.md) — extent B-tree and preallocation history
-- `fs/fallocate.c` — VFS `vfs_fallocate()` implementation
-- `include/uapi/linux/falloc.h` — `FALLOC_FL_*` flag definitions
-- `fs/ext4/extents.c` — `ext4_fallocate()` and unwritten extent handling
+- [バッファードI/Oとページキャッシュ](buffered-io.md) — 事前割り当てされたエクステントとページキャッシュの相互作用
+- [ダイレクトI/O](direct-io.md) — 事前割り当てされた範囲へのO_DIRECT書き込みでページキャッシュをバイパスする
+- [writeの一生](life-of-a-write.md) — `write()`が事前割り当てされた（未書き込みの）エクステントとどう相互作用するか
+- [VFS: ファイル操作](../vfs/file-ops.md) — `f_op->fallocate`のディスパッチ
+- [splice、sendfile、copy_file_range](../vfs/splice-sendfile.md) — カーネル側のreflinkコピー
+- [btrfs](../filesystems/btrfs.md) — COWのセマンティクスとエクステントの共有
+- [XFS](../filesystems/xfs.md) — エクステントB-treeと事前割り当ての歴史
+- `fs/fallocate.c` — VFSの`vfs_fallocate()`の実装
+- `include/uapi/linux/falloc.h` — `FALLOC_FL_*`フラグの定義
+- `fs/ext4/extents.c` — `ext4_fallocate()`と未書き込みエクステントの処理

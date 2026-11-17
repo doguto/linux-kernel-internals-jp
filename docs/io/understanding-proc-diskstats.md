@@ -1,10 +1,10 @@
-# Understanding /proc/diskstats {#understanding-procdiskstats}
+# /proc/diskstatsを理解する {#understanding-procdiskstats}
 
-> A field-by-field guide to reading and interpreting Linux block device statistics
+> Linuxのブロックデバイス統計を読み解くための、フィールドごとのガイド
 
-## What `/proc/diskstats` tells you {#what-procdiskstats-tells-you}
+## `/proc/diskstats`から分かること {#what-procdiskstats-tells-you}
 
-`/proc/diskstats` exposes per-block-device I/O counters maintained by the kernel's block layer. Every I/O request that passes through `blk-mq` is counted here — reads, writes, discards, flushes, queue time, and service time.
+`/proc/diskstats`は、カーネルのブロック層が管理するブロックデバイスごとのI/Oカウンタを公開している。`blk-mq`を通過するすべてのI/Oリクエストがここで集計される — 読み出し、書き込み、discard、フラッシュ、キュー待ち時間、サービス時間である。
 
 ```bash
 cat /proc/diskstats
@@ -13,11 +13,11 @@ cat /proc/diskstats
 # 259       0 nvme0n1 ...
 ```
 
-The counters are cumulative since boot. To get rates, take the delta between two readings.
+カウンタは起動時からの累積値である。レートを得るには、2回の読み取り値の差分を取る。
 
 ---
 
-## Field reference {#field-reference}
+## フィールドリファレンス {#field-reference}
 
 ```
 Field  1: major device number
@@ -44,170 +44,170 @@ Field 20: time spent flushing (ms) (kernel 5.5+)
 
 ---
 
-## Fields 4–7: Reads {#fields-47-reads}
+## フィールド4〜7: 読み出し {#fields-47-reads}
 
-### Field 4: `reads_completed` {#field-4-reads_completed}
+### フィールド4: `reads_completed` {#field-4-reads_completed}
 
-The number of read I/Os that completed successfully. This includes I/Os that were satisfied from the device (not from a higher-level cache). Does **not** include reads merged into an existing queued request before they were issued (those are counted in field 5).
+正常に完了した読み出しI/Oの数。デバイスから（上位のキャッシュからではなく）満たされたI/Oが含まれる。発行前に既存のキュー内リクエストにマージされた読み出しは**含まない**（それらはフィールド5で数えられる）。
 
 ```bash
-# Rate: reads per second
+# レート: 1 秒あたりの読み出し数
 prev=$(awk '/^sda /{print $4}' /proc/diskstats); sleep 1
 curr=$(awk '/^sda /{print $4}' /proc/diskstats)
 echo "$((curr - prev)) reads/sec"
 ```
 
-### Field 5: `reads_merged` {#field-5-reads_merged}
+### フィールド5: `reads_merged` {#field-5-reads_merged}
 
-The number of read requests that were merged with an adjacent in-flight request before being issued to the device. Two reads for adjacent sectors can be merged into one larger read, reducing IOPS at the device level.
+デバイスに発行される前に、隣接する実行中のリクエストとマージされた読み出しリクエストの数。隣接するセクタへの2つの読み出しは1つの大きな読み出しにマージでき、デバイスレベルでのIOPSが減る。
 
-A high merge ratio indicates good I/O locality and an efficient I/O scheduler. A low ratio (close to 0) is normal for NVMe with `none` scheduler or for purely random workloads.
+マージ率が高いことは、I/Oの局所性が良く、I/Oスケジューラが効率的であることを示す。マージ率が低い（0に近い）のは、`none`スケジューラを使うNVMeや、純粋にランダムなワークロードでは正常である。
 
 ```
 reads_merged / (reads_completed + reads_merged) = merge ratio
 ```
 
-### Field 6: `sectors_read` {#field-6-sectors_read}
+### フィールド6: `sectors_read` {#field-6-sectors_read}
 
-Total sectors (512 bytes each) read. Divide by 2048 for megabytes, or use:
+読み出したセクタ（各512バイト）の総数。メガバイトにするには2048で割るか、次のようにする:
 
 ```bash
-# Read throughput in MB/s
+# 読み出しスループット（MB/s）
 awk 'BEGIN{prev=0} /^sda /{
     if (prev > 0) printf "%.1f MB/s read\n", ($6 - prev) * 512 / 1024 / 1024;
     prev = $6
 }' <(cat /proc/diskstats; sleep 1; cat /proc/diskstats)
 ```
 
-### Field 7: `ms_reading` {#field-7-ms_reading}
+### フィールド7: `ms_reading` {#field-7-ms_reading}
 
-Total milliseconds spent in read I/Os. This is the sum of the duration of each read request from when it was issued to the device until it completed.
+読み出しI/Oに費やされた合計ミリ秒。各読み出しリクエストがデバイスに発行されてから完了するまでの時間の合計である。
 
 ```
 average read latency = ms_reading / reads_completed   (in ms per read)
 ```
 
-If `ms_reading / reads_completed` is much higher than the device's rated latency (e.g., 10ms on an NVMe that should do 0.1ms), I/Os are spending time queued in the scheduler before reaching the device, or the device is under heavy contention.
+`ms_reading / reads_completed`がデバイスの定格レイテンシよりはるかに高い場合（たとえば0.1msのはずのNVMeで10ms）、I/Oがデバイスに届く前にスケジューラのキューで時間を費やしているか、デバイスが激しい競合下にある。
 
 ---
 
-## Fields 8–11: Writes {#fields-811-writes}
+## フィールド8〜11: 書き込み {#fields-811-writes}
 
-The write fields mirror the read fields:
+書き込みのフィールドは読み出しのフィールドと対になっている:
 
-- **Field 8** (`writes_completed`): writes finished successfully
-- **Field 9** (`writes_merged`): writes merged before issue
-- **Field 10** (`sectors_written`): sectors written (× 512 bytes)
-- **Field 11** (`ms_writing`): total ms spent in write I/Os
+- **フィールド8**（`writes_completed`）: 正常に完了した書き込み
+- **フィールド9**（`writes_merged`）: 発行前にマージされた書き込み
+- **フィールド10**（`sectors_written`）: 書き込んだセクタ数（× 512バイト）
+- **フィールド11**（`ms_writing`）: 書き込みI/Oに費やされた合計ms
 
 ```bash
-# Average write latency
+# 平均書き込みレイテンシ
 awk '/^nvme0n1 /{
     if ($8 > 0) printf "avg write latency: %.2f ms\n", $11 / $8
 }' /proc/diskstats
 ```
 
-**Write latency vs read latency**: on HDDs and SSDs, writes are often faster than reads at the device level because of write caching. But writes with `fsync()` are slower because they must flush the device cache — the `ms_writing` counter includes the flush wait.
+**書き込みレイテンシと読み出しレイテンシ**: HDDやSSDでは、ライトキャッシュのため、デバイスレベルでは書き込みの方が読み出しより速いことが多い。しかし`fsync()`を伴う書き込みは、デバイスのキャッシュをフラッシュしなければならないため遅くなる — `ms_writing`カウンタにはフラッシュの待ち時間が含まれる。
 
 ---
 
-## Field 12: `ios_in_progress` {#field-12-iosinprogress}
+## フィールド12: `ios_in_progress` {#field-12-iosinprogress}
 
-The number of I/Os currently in flight to the device — submitted to the driver but not yet completed. This is a **snapshot** (not cumulative), reflecting the instantaneous queue depth.
+現在デバイスに対して実行中のI/Oの数 — ドライバに発行されたがまだ完了していないもの。これは**スナップショット**（累積値ではない）であり、瞬間的なキュー深度を反映する。
 
 ```bash
-# Watch queue depth in real time
+# キュー深度をリアルタイムで観察
 watch -n 0.5 "awk '/^nvme0n1 /{print \"in-flight:\", \$12}' /proc/diskstats"
 ```
 
-**Interpreting `ios_in_progress`:**
+**`ios_in_progress`の解釈:**
 
-- Consistently 0: the device is idle or I/O is very bursty (you're sampling between bursts).
-- 1–8: light load, device is not saturated.
-- Near `nr_requests` (default 1023 for NVMe): device is saturated; new I/Os queue in the software layer.
-- 0 while `%util` is high in `iostat`: `iostat` uses field 13 (`ms_doing_io`) for `%util`, not field 12. The device may be processing I/Os faster than they can be sampled.
+- 常に0: デバイスがアイドルであるか、I/Oが非常にバースト的である（バーストの合間にサンプリングしている）。
+- 1〜8: 軽い負荷で、デバイスは飽和していない。
+- `nr_requests`（NVMeのデフォルトは1023）に近い: デバイスは飽和しており、新しいI/Oはソフトウェア層でキューに入る。
+- `iostat`の`%util`が高いのに0: `iostat`は`%util`にフィールド12ではなくフィールド13（`ms_doing_io`）を使う。デバイスがサンプリングできるより速くI/Oを処理している可能性がある。
 
 ---
 
-## Field 13: `ms_doing_io` {#field-13-msdoingio}
+## フィールド13: `ms_doing_io` {#field-13-msdoingio}
 
-Total milliseconds during which at least one I/O was in progress. This is the raw input to `iostat`'s `%util` metric:
+少なくとも1つのI/Oが実行中だった合計ミリ秒。これは`iostat`の`%util`メトリクスの元データである:
 
 ```
 %util = (delta ms_doing_io) / (measurement_interval_ms) × 100
 ```
 
-`%util` reaching 100% means the device had at least one I/O in flight for the entire measurement interval — the device was never idle. For HDDs, this indicates saturation. For NVMe, 100% `%util` is normal and does not indicate saturation (NVMe can handle many parallel I/Os at 100% utilization).
+`%util`が100%に達するということは、計測期間全体にわたってデバイスに少なくとも1つのI/Oが実行中だった — デバイスが一度もアイドルにならなかった — ことを意味する。HDDでは、これは飽和を示す。NVMeでは、100%の`%util`は正常であり、飽和を示さない（NVMeは利用率100%でも多数の並列I/Oを処理できる）。
 
 ```bash
-# Compute %util manually
+# %util を手動で計算
 prev=$(awk '/^sda /{print $13}' /proc/diskstats)
 sleep 1
 curr=$(awk '/^sda /{print $13}' /proc/diskstats)
-echo "util: $(( (curr - prev) ))%"   # if interval is exactly 1000ms
+echo "util: $(( (curr - prev) ))%"   # 間隔がちょうど 1000ms の場合
 ```
 
 ---
 
-## Field 14: `ms_weighted_io` (weighted time in I/Os) {#field-14-msweightedio-weighted-time-in-ios}
+## フィールド14: `ms_weighted_io`（I/Oの重み付き時間） {#field-14-msweightedio-weighted-time-in-ios}
 
-This field increments by `(current_ios_in_progress × elapsed_ms)` each time a BIO is queued or completed. It is the queue-depth-weighted time — the integral of queue depth over time.
+このフィールドは、BIOがキューに入れられるか完了するたびに`(current_ios_in_progress × elapsed_ms)`だけ増加する。キュー深度で重み付けされた時間 — キュー深度の時間積分 — である。
 
 ```
 ms_weighted_io / ms_doing_io ≈ average queue depth during active periods
 ```
 
-This is used by `iostat` to compute `aqu-sz` (average queue size):
+これは`iostat`が`aqu-sz`（平均キューサイズ）を計算するのに使われる:
 
 ```
 aqu-sz = delta(ms_weighted_io) / measurement_interval_ms
 ```
 
-A high `aqu-sz` with low `await` is fine (NVMe servicing a large parallel queue efficiently). A high `aqu-sz` with high `await` indicates the device cannot keep up with the queue — genuine saturation.
+`aqu-sz`が高く`await`が低いのは問題ない（NVMeが大きな並列キューを効率よく処理している）。`aqu-sz`が高く`await`も高い場合は、デバイスがキューに追いつけていない — 真の飽和 — ことを示す。
 
 ---
 
-## Fields 15–18: Discards (kernel 4.18+) {#fields-1518-discards-kernel-418}
+## フィールド15〜18: discard（カーネル4.18以降） {#fields-1518-discards-kernel-418}
 
-Discards (TRIM/UNMAP) notify the device of freed space, allowing SSDs to garbage-collect unused blocks in advance. The discard fields mirror the read/write structure:
+discard（TRIM/UNMAP）はデバイスに解放された領域を通知し、SSDが未使用ブロックを事前にガベージコレクションできるようにする。discardのフィールドは読み出し/書き込みの構造と対になっている:
 
-- **Field 15** (`discards_completed`): discard operations completed
-- **Field 16** (`discards_merged`): discards merged (rare in practice)
-- **Field 17** (`sectors_discarded`): sectors discarded
-- **Field 18** (`ms_discarding`): ms spent processing discards
+- **フィールド15**（`discards_completed`）: 完了したdiscard操作
+- **フィールド16**（`discards_merged`）: マージされたdiscard（実際にはまれ）
+- **フィールド17**（`sectors_discarded`）: discardされたセクタ数
+- **フィールド18**（`ms_discarding`）: discardの処理に費やされたms
 
 ```bash
-# Is discard active? (databases, containers benefit from periodic TRIM)
+# discard は動いているか?（データベースやコンテナは定期的な TRIM の恩恵を受ける）
 awk '/^nvme0n1 /{print "discards:", $15, "sectors:", $17}' /proc/diskstats
 
-# Enable periodic TRIM via fstrim (run from cron weekly)
-fstrim -v /  # discard unused blocks on the root filesystem
+# fstrim で定期的な TRIM を有効にする（cron から毎週実行）
+fstrim -v /  # ルートファイルシステムの未使用ブロックを discard
 ```
 
-High discard rates indicate active space reclamation — expected on systems that delete and recreate large files (containers, databases rotating logs). Very high discard rates can cause SSD write amplification if the device's garbage collector is overwhelmed.
+discardのレートが高いことは、領域の回収が活発であることを示す — 大きなファイルを削除・再作成するシステム（コンテナ、ログをローテートするデータベース）では想定どおりである。discardのレートが非常に高いと、デバイスのガベージコレクタが追いつかなくなった場合にSSDの書き込み増幅を引き起こすことがある。
 
 ---
 
-## Fields 19–20: Flush requests (kernel 5.5+) {#fields-1920-flush-requests-kernel-55}
+## フィールド19〜20: フラッシュリクエスト（カーネル5.5以降） {#fields-1920-flush-requests-kernel-55}
 
-Flush requests send a cache-flush command (`REQ_PREFLUSH` or `REQ_FUA`) to the device, telling it to commit write-cached data to persistent media. These are generated by journaling filesystems before journal commits and by explicit `fsync()` calls.
+フラッシュリクエストはデバイスにキャッシュフラッシュコマンド（`REQ_PREFLUSH`または`REQ_FUA`）を送り、ライトキャッシュ上のデータを永続メディアにコミットするよう指示する。これらは、ジャーナリングファイルシステムがジャーナルのコミット前に生成するほか、明示的な`fsync()`呼び出しによっても生成される。
 
-- **Field 19** (`flush_requests`): flush commands completed
-- **Field 20** (`ms_flushing`): total ms spent in flush operations
+- **フィールド19**（`flush_requests`）: 完了したフラッシュコマンド
+- **フィールド20**（`ms_flushing`）: フラッシュ操作に費やされた合計ms
 
 ```bash
-# Flush rate: how often the device is being flushed
+# フラッシュレート: デバイスがどれくらいの頻度でフラッシュされているか
 prev_f=$(awk '/^sda /{print $19}' /proc/diskstats); sleep 10
 curr_f=$(awk '/^sda /{print $19}' /proc/diskstats)
 echo "$(( (curr_f - prev_f) / 10 )) flushes/sec"
 
-# Average flush latency (ms per flush)
+# 平均フラッシュレイテンシ（フラッシュあたりの ms）
 awk '/^sda /{if ($19 > 0) printf "avg flush latency: %.1f ms\n", $20/$19}' /proc/diskstats
 ```
 
-**Why flush latency matters for databases:**
+**なぜフラッシュレイテンシがデータベースにとって重要か:**
 
-Each `fsync()` or `fdatasync()` on a file that has dirty data triggers at least one flush command. The flush latency directly bounds the maximum transaction rate:
+ダーティデータを持つファイルに対する`fsync()`や`fdatasync()`は、それぞれ少なくとも1回のフラッシュコマンドを引き起こす。フラッシュレイテンシは最大トランザクションレートの上限を直接決める:
 
 ```
 max_tps ≤ 1000 / avg_flush_latency_ms
@@ -217,16 +217,16 @@ SATA SSD (1ms flush): max ~1,000 TPS
 HDD (5ms flush): max ~200 TPS
 ```
 
-Monitoring `ms_flushing / flush_requests` gives the actual flush latency on your storage.
+`ms_flushing / flush_requests`を監視すれば、使用しているストレージでの実際のフラッシュレイテンシが分かる。
 
 ---
 
-## Practical analysis recipes {#practical-analysis-recipes}
+## 実践的な分析レシピ {#practical-analysis-recipes}
 
-### Detect a saturated device {#detect-a-saturated-device}
+### 飽和したデバイスを検出する {#detect-a-saturated-device}
 
 ```bash
-# Sample diskstats twice, compute derived metrics
+# diskstats を 2 回サンプリングし、派生メトリクスを計算
 {
   read line1 < <(grep '^sda ' /proc/diskstats)
   sleep 5
@@ -243,7 +243,7 @@ Monitoring `ms_flushing / flush_requests` gives the actual flush latency on your
 }
 ```
 
-### Find the device with the highest write latency {#find-the-device-with-the-highest-write-latency}
+### 書き込みレイテンシが最も高いデバイスを探す {#find-the-device-with-the-highest-write-latency}
 
 ```bash
 awk '
@@ -255,25 +255,25 @@ END { printf "slowest writer: %s at %.1f ms avg\n", max_dev, max_lat }
 ' /proc/diskstats
 ```
 
-### Watch flush activity during a database checkpoint {#watch-flush-activity-during-a-database-checkpoint}
+### データベースのチェックポイント中のフラッシュ活動を観察する {#watch-flush-activity-during-a-database-checkpoint}
 
 ```bash
-# Before checkpoint
+# チェックポイント前
 awk '/nvme0n1/{print $19, $20}' /proc/diskstats
 
-# Run checkpoint (PostgreSQL):
+# チェックポイントを実行（PostgreSQL）:
 # psql -c "CHECKPOINT"
 
-# After checkpoint
+# チェックポイント後
 awk '/nvme0n1/{print $19, $20}' /proc/diskstats
-# Delta: how many flushes the checkpoint generated and total ms spent
+# 差分: チェックポイントが生成したフラッシュ数と、費やされた合計 ms
 ```
 
 ---
 
-## Relationship to `iostat` output {#relationship-to-iostat-output}
+## `iostat`の出力との関係 {#relationship-to-iostat-output}
 
-| `iostat -x` column | `/proc/diskstats` derivation |
+| `iostat -x`の列 | `/proc/diskstats`からの導出 |
 |--------------------|-----------------------------|
 | `r/s` | `delta(reads_completed) / interval` |
 | `w/s` | `delta(writes_completed) / interval` |
@@ -286,10 +286,10 @@ awk '/nvme0n1/{print $19, $20}' /proc/diskstats
 | `aqu-sz` | `delta(ms_weighted_io) / (interval × 1000)` |
 | `%util` | `delta(ms_doing_io) / (interval × 10)` |
 
-`iostat` is a more convenient interface for monitoring; `/proc/diskstats` is the authoritative source for programmatic access, alerting, and custom metrics pipelines.
+`iostat`は監視のためのより便利なインターフェースであり、`/proc/diskstats`はプログラムからのアクセス、アラート、独自のメトリクスパイプラインのための信頼できる情報源である。
 
 ---
 
-## Related pages {#related-pages}
+## 関連ページ {#related-pages}
 
-- [Tuning Storage I/O](tuning-storage.md) — acting on what diskstats reveals
+- [ストレージI/Oのチューニング](tuning-storage.md) — diskstatsが明らかにしたことへの対処

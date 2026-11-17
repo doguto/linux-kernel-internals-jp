@@ -1,20 +1,20 @@
-# Zero-copy I/O: splice, sendfile, and friends {#zero-copy-io-splice-sendfile-and-friends}
+# ゼロコピーI/O: splice、sendfile、およびその仲間 {#zero-copy-io-splice-sendfile-and-friends}
 
-> Moving data between file descriptors without touching userspace
+> ユーザー空間を経由せずにファイルディスクリプタ間でデータを移動する
 
-## The problem: unnecessary copies {#the-problem-unnecessary-copies}
+## 問題: 不要なコピー {#the-problem-unnecessary-copies}
 
-The naive way to serve a file over a network socket is:
+ファイルをネットワークソケット経由で送り出す素朴な方法は次のとおりである。
 
 ```c
-/* Classic read+write loop — two copies, four context switches */
+/* 古典的なread+writeループ — コピー2回、コンテキストスイッチ4回 */
 char buf[65536];
 ssize_t n;
 while ((n = read(file_fd, buf, sizeof buf)) > 0)
     write(sock_fd, buf, n);
 ```
 
-Every iteration pays a full round trip through userspace. To understand why that hurts, trace what the kernel actually does:
+ループの各反復で、ユーザー空間を往復するコストを丸ごと支払う。なぜそれが問題なのかを理解するため、カーネルが実際に何をしているかを追ってみる。
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -39,33 +39,33 @@ Every iteration pays a full round trip through userspace. To understand why that
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-For a static file web server pushing hundreds of megabytes per second, those CPU copies add up. The kernel page cache already holds the file data; the network stack needs a reference to it. The copies through userspace are pure overhead.
+毎秒数百メガバイトを送り出す静的ファイルのWebサーバーでは、これらのCPUコピーが積み重なる。カーネルのページキャッシュは既にファイルデータを保持しており、ネットワークスタックが必要とするのはそれへの参照だけである。ユーザー空間を経由するコピーは純粋なオーバーヘッドである。
 
-Linux provides three syscalls that eliminate them: `sendfile(2)`, `splice(2)`, and `vmsplice(2)`. A fourth, `copy_file_range(2)`, eliminates copies for file-to-file transfers.
+Linuxはこれらを取り除く3つのシステムコール、`sendfile(2)`、`splice(2)`、`vmsplice(2)`を提供している。4つ目の`copy_file_range(2)`は、ファイルからファイルへの転送でコピーを取り除く。
 
 ```mermaid
 flowchart LR
     subgraph Traditional["read() + write()"]
-        D1[Disk] -->|DMA| PC1[Page cache]
-        PC1 -->|CPU copy| UB[Userspace buffer]
-        UB -->|CPU copy| SK1[Socket buffer]
+        D1[ディスク] -->|DMA| PC1[ページキャッシュ]
+        PC1 -->|CPUコピー| UB[ユーザー空間バッファ]
+        UB -->|CPUコピー| SK1[ソケットバッファ]
         SK1 -->|DMA| N1[NIC]
     end
 
     subgraph ZeroCopy["sendfile() / splice()"]
-        D2[Disk] -->|DMA| PC2[Page cache]
-        PC2 -->|page ref| SK2[Socket buffer]
+        D2[ディスク] -->|DMA| PC2[ページキャッシュ]
+        PC2 -->|ページ参照| SK2[ソケットバッファ]
         SK2 -->|DMA| N2[NIC]
     end
 ```
 
-The zero-copy path passes a **page reference** (a pointer and length) rather than copying bytes. The NIC's scatter-gather DMA then reads directly from the page cache page. No CPU is involved in moving the data bytes at all.
+ゼロコピー経路では、バイトをコピーする代わりに**ページ参照**（ポインタと長さ）を渡す。その後、NICのスキャッタギャザーDMAがページキャッシュのページから直接読み出す。データのバイトを移動するのにCPUはまったく関与しない。
 
 ---
 
-## `sendfile(2)` — file to socket without userspace {#sendfile2-file-to-socket-without-userspace}
+## `sendfile(2)` — ユーザー空間を経由しないファイルからソケットへの転送 {#sendfile2-file-to-socket-without-userspace}
 
-`sendfile` was added in Linux 2.2 and is the simplest zero-copy interface. It transfers data from a file directly to a socket inside the kernel.
+`sendfile`はLinux 2.2で追加された、最も単純なゼロコピーインターフェースである。カーネル内でファイルからソケットへ直接データを転送する。
 
 ```c
 #include <sys/sendfile.h>
@@ -73,13 +73,13 @@ The zero-copy path passes a **page reference** (a pointer and length) rather tha
 ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
 ```
 
-- `out_fd` — must be a socket (or a pipe on kernels >= 2.6.33)
-- `in_fd` — must be a regular file or block device; supports `mmap`-style access
-- `offset` — if non-NULL, read starts here and is updated on return; the file's position is unchanged
-- `count` — bytes to transfer; kernel loops internally until `count` bytes sent or error
+- `out_fd` — ソケットでなければならない（カーネル2.6.33以降ではパイプも可）
+- `in_fd` — 通常ファイルまたはブロックデバイスでなければならない。`mmap`的なアクセスをサポートしている必要がある
+- `offset` — NULLでなければ、読み出しはここから始まり、戻り時に更新される。ファイルの位置は変わらない
+- `count` — 転送するバイト数。カーネルは`count`バイトを送信するかエラーになるまで内部でループする
 
 ```c
-/* Serve a file over HTTP — the canonical sendfile pattern */
+/* HTTPでファイルを送出する — 典型的なsendfileのパターン */
 #include <sys/sendfile.h>
 #include <sys/stat.h>
 #include <fcntl.h>
@@ -87,7 +87,7 @@ ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
 void serve_file(int sock_fd, const char *path)
 {
     int file_fd = open(path, O_RDONLY);
-    if (file_fd < 0) { /* handle error */ return; }
+    if (file_fd < 0) { /* エラー処理 */ return; }
 
     struct stat st;
     fstat(file_fd, &st);
@@ -99,7 +99,7 @@ void serve_file(int sock_fd, const char *path)
         ssize_t sent = sendfile(sock_fd, file_fd, &offset, remaining);
         if (sent < 0) {
             if (errno == EAGAIN || errno == EINTR) continue;
-            break;  /* real error */
+            break;  /* 本当のエラー */
         }
         remaining -= sent;
     }
@@ -108,57 +108,57 @@ void serve_file(int sock_fd, const char *path)
 }
 ```
 
-### What sendfile does in the kernel {#what-sendfile-does-in-the-kernel}
+### sendfileがカーネル内で行うこと {#what-sendfile-does-in-the-kernel}
 
-Internally `sendfile` calls `do_sendfile` in `fs/read_write.c`, which:
+内部的に`sendfile`は`fs/read_write.c`の`do_sendfile`を呼び出し、これは次の処理を行う。
 
-1. Calls `in_file->f_op->splice_read` to populate a temporary pipe with page references from the file
-2. Calls `sock_sendpage` (or `generic_splice_sendpage`) to pass those page references into the socket's send buffer as `skb_frag_t` entries
-3. If the NIC supports scatter-gather DMA (`NETIF_F_SG`), the NIC reads the page cache pages directly — zero CPU copies
+1. `in_file->f_op->splice_read`を呼び出し、一時的なパイプをファイルのページ参照で満たす
+2. `sock_sendpage`（または`generic_splice_sendpage`）を呼び出し、それらのページ参照を`skb_frag_t`エントリとしてソケットの送信バッファに渡す
+3. NICがスキャッタギャザーDMA（`NETIF_F_SG`）をサポートしていれば、NICはページキャッシュのページを直接読み出す — CPUによるコピーはゼロ
 
-Without NIC scatter-gather support, the kernel falls back to a single copy from page cache into a contiguous `sk_buff` — still one copy fewer than the `read+write` path.
+NICがスキャッタギャザーをサポートしていない場合、カーネルはページキャッシュから連続した`sk_buff`への1回のコピーにフォールバックする。それでも`read+write`経路よりコピーが1回少ない。
 
-### Non-blocking sendfile {#non-blocking-sendfile}
+### ノンブロッキングのsendfile {#non-blocking-sendfile}
 
-Linux's `sendfile(2)` takes no flags argument. To get non-blocking behavior, set `O_NONBLOCK` on the output socket. When the socket buffer is full, `sendfile` returns `EAGAIN`.
+Linuxの`sendfile(2)`はフラグ引数を取らない。ノンブロッキングの挙動を得るには、出力側ソケットに`O_NONBLOCK`をセットする。ソケットバッファが満杯のとき、`sendfile`は`EAGAIN`を返す。
 
 ```c
-/* Set output socket non-blocking for async sendfile */
+/* 非同期sendfileのため出力ソケットをノンブロッキングにする */
 fcntl(sock_fd, F_SETFL, O_NONBLOCK);
-/* sendfile returns EAGAIN if socket buffer full */
+/* ソケットバッファが満杯ならsendfileはEAGAINを返す */
 ret = sendfile(sock_fd, file_fd, &offset, len);
 if (ret == -1 && errno == EAGAIN) {
-    /* wait for socket writability with poll/epoll */
+    /* poll/epollでソケットが書き込み可能になるのを待つ */
 }
 ```
 
-### nginx and sendfile {#nginx-and-sendfile}
+### nginxとsendfile {#nginx-and-sendfile}
 
-nginx enables `sendfile` by default:
+nginxはデフォルトで`sendfile`を有効にしている。
 
 ```nginx
 http {
     sendfile        on;
-    tcp_nopush      on;   # TCP_CORK: batch small headers with first data chunk
-    tcp_nodelay     on;   # flush after cork releases
-    sendfile_max_chunk 512k;   # limit per-call to avoid starving other connections
+    tcp_nopush      on;   # TCP_CORK: 小さなヘッダを最初のデータチャンクとまとめる
+    tcp_nodelay     on;   # corkの解除後にフラッシュする
+    sendfile_max_chunk 512k;   # 他の接続を飢餓状態にしないよう1回あたりの量を制限する
 }
 ```
 
-`tcp_nopush` sets `TCP_CORK` before `sendfile` so the HTTP headers and the start of the file body go out in one TCP segment, then the cork is released.
+`tcp_nopush`は`sendfile`の前に`TCP_CORK`をセットし、HTTPヘッダとファイル本体の先頭が1つのTCPセグメントで送出されるようにしてから、corkを解除する。
 
-### sendfile limitations {#sendfile-limitations}
+### sendfileの制限 {#sendfile-limitations}
 
-- `out_fd` must be a socket (or a pipe); file-to-file doesn't work
-- Cannot interpose a transform (compression, encryption) — those require touching the data
-- HTTPS cannot use sendfile without kTLS (`SO_TLS_TX`); see [kTLS](../net/ktls.md)
-- Offsets are limited to `off_t` size — use `sendfile64` (which glibc maps to `sendfile` on 64-bit)
+- `out_fd`はソケット（またはパイプ）でなければならず、ファイルからファイルへの転送はできない
+- 変換処理（圧縮、暗号化）を挟むことはできない — それらはデータに触れる必要がある
+- HTTPSでは、kTLS（`SO_TLS_TX`）なしにsendfileを使えない。[kTLS](../net/ktls.md)を参照
+- オフセットは`off_t`のサイズに制限される — `sendfile64`を使う（64ビットではglibcがこれを`sendfile`にマップする）
 
 ---
 
-## `splice(2)` — the generalisation {#splice2-the-generalisation}
+## `splice(2)` — 一般化 {#splice2-the-generalisation}
 
-`splice` was introduced in Linux 2.6.17 by Jens Axboe, generalising the file-to-socket case. It transfers data between any two file descriptors where **at least one is a pipe**.
+`splice`はJens AxboeによってLinux 2.6.17で導入され、ファイルからソケットへのケースを一般化したものである。**少なくとも一方がパイプである**任意の2つのファイルディスクリプタ間でデータを転送する。
 
 ```c
 #define _GNU_SOURCE
@@ -169,26 +169,26 @@ ssize_t splice(int fd_in,  loff_t *off_in,
                size_t len, unsigned int flags);
 ```
 
-- `fd_in` / `fd_out` — source and destination; one must be a pipe
-- `off_in` / `off_out` — file offsets (updated on return); must be NULL for pipes
-- `len` — maximum bytes to move in this call
+- `fd_in` / `fd_out` — 転送元と転送先。一方はパイプでなければならない
+- `off_in` / `off_out` — ファイルオフセット（戻り時に更新される）。パイプの場合はNULLでなければならない
+- `len` — この呼び出しで移動する最大バイト数
 - `flags` — `SPLICE_F_MOVE | SPLICE_F_NONBLOCK | SPLICE_F_MORE | SPLICE_F_GIFT`
 
-### Flags {#flags}
+### フラグ {#flags}
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |------|---------|
-| `SPLICE_F_MOVE` | Hint: move pages rather than copy (may be ignored by kernel) |
-| `SPLICE_F_NONBLOCK` | Do not block on pipe I/O; file I/O may still block |
-| `SPLICE_F_MORE` | More data is coming; hint for socket layer (like `MSG_MORE`) |
-| `SPLICE_F_GIFT` | Used with `vmsplice`: user pages are gifted to the kernel permanently |
+| `SPLICE_F_MOVE` | ヒント: ページをコピーではなく移動する（カーネルは無視することがある） |
+| `SPLICE_F_NONBLOCK` | パイプI/Oでブロックしない。ファイルI/Oはブロックする可能性がある |
+| `SPLICE_F_MORE` | さらにデータが続く。ソケット層へのヒント（`MSG_MORE`と同様） |
+| `SPLICE_F_GIFT` | `vmsplice`で使う。ユーザーページを恒久的にカーネルへ譲渡する |
 
-### File to socket via a pipe {#file-to-socket-via-a-pipe}
+### パイプ経由のファイルからソケットへの転送 {#file-to-socket-via-a-pipe}
 
-`sendfile` can be emulated with two `splice` calls through a pipe:
+`sendfile`は、パイプを介した2回の`splice`呼び出しでエミュレートできる。
 
 ```c
-/* splice-based file-to-socket (generalises sendfile) */
+/* spliceベースのファイルからソケットへの転送（sendfileを一般化したもの） */
 int pfd[2];
 pipe(pfd);
 
@@ -196,12 +196,12 @@ off_t offset = 0;
 ssize_t remaining = file_size;
 
 while (remaining > 0) {
-    /* Step 1: file → pipe read-end  (adds page refs to pipe buffer) */
+    /* ステップ1: ファイル → パイプの読み出し端（パイプバッファにページ参照を追加する） */
     ssize_t n = splice(file_fd, &offset, pfd[1], NULL,
                        remaining, SPLICE_F_MOVE | SPLICE_F_MORE);
     if (n <= 0) break;
 
-    /* Step 2: pipe write-end → socket  (sends page refs as skb frags) */
+    /* ステップ2: パイプの書き込み端 → ソケット（ページ参照をskbフラグメントとして送る） */
     ssize_t sent = 0;
     while (sent < n) {
         ssize_t r = splice(pfd[0], NULL, sock_fd, NULL,
@@ -216,7 +216,7 @@ close(pfd[0]);
 close(pfd[1]);
 ```
 
-### Valid splice combinations {#valid-splice-combinations}
+### 有効なspliceの組み合わせ {#valid-splice-combinations}
 
 ```
 file  → pipe  ✓   (adds page refs from page cache into pipe)
@@ -229,65 +229,65 @@ socket → pipe ✓   (drains socket receive buffer into pipe)
 
 ---
 
-## `tee(2)` — duplicating pipe data without consuming it {#tee2-duplicating-pipe-data-without-consuming-it}
+## `tee(2)` — パイプのデータを消費せずに複製する {#tee2-duplicating-pipe-data-without-consuming-it}
 
-`tee` copies data between two pipe file descriptors without removing it from the source. Pages are shared by reference; no bytes are copied.
+`tee`は、2つのパイプのファイルディスクリプタ間で、転送元からデータを取り除かずにデータをコピーする。ページは参照で共有され、バイトはコピーされない。
 
 ```c
 ssize_t tee(int fd_in, int fd_out, size_t len, unsigned int flags);
 ```
 
-Both `fd_in` and `fd_out` must be pipes. After `tee`, the data remains readable from `fd_in` and is also available in `fd_out`.
+`fd_in`と`fd_out`はどちらもパイプでなければならない。`tee`の後も、データは`fd_in`から読み出せる状態のまま残り、`fd_out`でも利用可能になる。
 
-### Log-and-forward pattern {#log-and-forward-pattern}
+### ログを取りつつ転送するパターン {#log-and-forward-pattern}
 
 ```c
 /*
- * Read from a source, log every byte to disk,
- * and simultaneously forward to a downstream socket.
+ * 転送元から読み出し、すべてのバイトをディスクにログとして記録し、
+ * 同時に下流のソケットへ転送する。
  */
-int src_pipe[2];    /* data arrives here */
-int log_pipe[2];    /* copy for logging */
+int src_pipe[2];    /* データはここに到着する */
+int log_pipe[2];    /* ログ用のコピー */
 
 pipe(src_pipe);
 pipe(log_pipe);
 
-/* Producer fills src_pipe[1] */
+/* プロデューサがsrc_pipe[1]を満たす */
 
-/* --- Consumer loop --- */
+/* --- コンシューマのループ --- */
 while (1) {
-    /* 1. Duplicate src_pipe → log_pipe (pages shared, not consumed) */
+    /* 1. src_pipe → log_pipeに複製する（ページは共有され、消費されない） */
     ssize_t n = tee(src_pipe[0], log_pipe[1], 65536, SPLICE_F_NONBLOCK);
     if (n < 0 && errno == EAGAIN) {
-        /* nothing to tee yet */
+        /* まだteeするものがない */
         poll_on(src_pipe[0]);
         continue;
     }
 
-    /* 2. Flush log_pipe to disk (consumes log_pipe side) */
+    /* 2. log_pipeをディスクにフラッシュする（log_pipe側を消費する） */
     splice(log_pipe[0], NULL, log_fd, &log_offset, n, SPLICE_F_MOVE);
 
-    /* 3. Consume from src_pipe → downstream socket */
+    /* 3. src_pipeから消費 → 下流のソケット */
     splice(src_pipe[0], NULL, downstream_fd, NULL, n, SPLICE_F_MOVE);
 }
 ```
 
-This is the basis of `tee(1)` in GNU coreutils — it uses `tee(2)` internally when both source and destination are pipes.
+これはGNU coreutilsの`tee(1)`の基礎になっている。`tee(1)`は、転送元と転送先がどちらもパイプの場合に内部で`tee(2)`を使う。
 
 ---
 
-## How splice works internally {#how-splice-works-internally}
+## spliceの内部動作 {#how-splice-works-internally}
 
-### The pipe as a page-reference queue {#the-pipe-as-a-page-reference-queue}
+### ページ参照キューとしてのパイプ {#the-pipe-as-a-page-reference-queue}
 
-The central data structure is `struct pipe_inode_info` (`include/linux/pipe_fs_i.h`), which contains a ring of `struct pipe_buffer` entries:
+中心となるデータ構造は`struct pipe_inode_info`（`include/linux/pipe_fs_i.h`）であり、`struct pipe_buffer`エントリのリングを含んでいる。
 
 ```c
 /* include/linux/pipe_fs_i.h */
 struct pipe_buffer {
-    struct page             *page;    /* the actual page */
-    unsigned int             offset;  /* byte offset within the page */
-    unsigned int             len;     /* byte count */
+    struct page             *page;    /* 実際のページ */
+    unsigned int             offset;  /* ページ内のバイトオフセット */
+    unsigned int             len;     /* バイト数 */
     const struct pipe_buf_operations *ops;
     unsigned int             flags;
     unsigned long            private;
@@ -296,8 +296,8 @@ struct pipe_buffer {
 struct pipe_inode_info {
     struct mutex             mutex;
     wait_queue_head_t        rd_wait, wr_wait;
-    unsigned int             head;    /* index of next slot to write */
-    unsigned int             tail;    /* index of next slot to read */
+    unsigned int             head;    /* 次に書き込むスロットのインデックス */
+    unsigned int             tail;    /* 次に読み出すスロットのインデックス */
     unsigned int             ring_size;
     unsigned int             nr_accounted;
     unsigned int             readers;
@@ -309,7 +309,7 @@ struct pipe_inode_info {
     struct page             *tmp_page;
     struct fasync_struct    *fasync_readers;
     struct fasync_struct    *fasync_writers;
-    struct pipe_buffer      *bufs;   /* ring buffer of pipe_buffer */
+    struct pipe_buffer      *bufs;   /* pipe_bufferのリングバッファ */
     struct user_struct      *user;
 #ifdef CONFIG_WATCH_QUEUE
     struct watch_queue      *watch_queue;
@@ -317,64 +317,64 @@ struct pipe_inode_info {
 };
 ```
 
-When `splice(file_fd, ..., pipe_wr, ...)` runs, `do_splice_to` calls `file->f_op->splice_read` (e.g., `filemap_splice_read` for regular files). This function finds the pages in the page cache and installs references to them — not copies — as `pipe_buffer` entries in the pipe ring. The page's reference count is incremented; no data moves.
+`splice(file_fd, ..., pipe_wr, ...)`が実行されると、`do_splice_to`は`file->f_op->splice_read`（例えば通常ファイルなら`filemap_splice_read`）を呼び出す。この関数はページキャッシュ内のページを見つけ、コピーではなくそれらへの参照を、パイプリング内の`pipe_buffer`エントリとして設置する。ページの参照カウントがインクリメントされるだけで、データは移動しない。
 
-When `splice(pipe_rd, ..., sock_fd, ...)` runs, `do_splice_from` calls `sock_splice_write` (or the socket's `splice_write` file operation). For TCP, this calls `tcp_sendpage`, which attaches the page as a fragment in an `sk_buff` — again by reference, not by copy.
+`splice(pipe_rd, ..., sock_fd, ...)`が実行されると、`do_splice_from`は`sock_splice_write`（またはソケットの`splice_write`ファイル操作）を呼び出す。TCPの場合、これは`tcp_sendpage`を呼び出し、ページを`sk_buff`内のフラグメントとして付加する。ここでもコピーではなく参照による。
 
-The bytes finally leave the machine when the NIC's DMA engine reads the page cache page directly, driven by the scatter-gather descriptor in the transmit ring.
+バイトが最終的にマシンを離れるのは、送信リング内のスキャッタギャザーディスクリプタに従って、NICのDMAエンジンがページキャッシュのページを直接読み出すときである。
 
-### splice_from_pipe and splice_to_pipe {#splicefrompipe-and-splicetopipe}
+### splice_from_pipeとsplice_to_pipe {#splicefrompipe-and-splicetopipe}
 
-The kernel exports two helpers used by filesystem and socket drivers:
+カーネルは、ファイルシステムやソケットのドライバが使う2つのヘルパーをエクスポートしている。
 
 ```c
-/* fs/splice.c — called by socket/file splice_write implementations */
+/* fs/splice.c — ソケット/ファイルのsplice_write実装から呼ばれる */
 ssize_t splice_from_pipe(struct pipe_inode_info *pipe,
                          struct file *out,
                          loff_t *ppos, size_t len,
                          unsigned int flags,
                          splice_actor *actor);
 
-/* fs/splice.c — called by file splice_read implementations */
+/* fs/splice.c — ファイルのsplice_read実装から呼ばれる */
 ssize_t splice_to_pipe(struct pipe_inode_info *pipe,
                        struct splice_pipe_desc *spd);
 ```
 
-`splice_from_pipe` iterates over the pipe's `pipe_buffer` ring and calls the `actor` callback (e.g., `pipe_to_sendpage` for sockets, `pipe_to_file` for files) once per buffer. The actor hands the page off without copying it.
+`splice_from_pipe`はパイプの`pipe_buffer`リングを走査し、バッファごとに1回`actor`コールバック（例えばソケットなら`pipe_to_sendpage`、ファイルなら`pipe_to_file`）を呼び出す。actorはページをコピーせずに引き渡す。
 
-### When splice must fall back to copying {#when-splice-must-fall-back-to-copying}
+### spliceがコピーにフォールバックせざるを得ない場合 {#when-splice-must-fall-back-to-copying}
 
-Not all combinations are truly zero-copy at the kernel level:
+すべての組み合わせが、カーネルレベルで真にゼロコピーになるわけではない。
 
-- **`O_DIRECT` files**: Direct I/O bypasses the page cache, so there are no cached pages to reference. The kernel must copy into a temporary page.
-- **Certain encrypted filesystems**: fscrypt-encrypted files store ciphertext in the page cache. Splice would expose ciphertext to the receiving socket; the kernel refuses and returns `EOPNOTSUPP`, forcing the caller to decrypt through userspace.
-- **Network filesystems (NFS, CIFS)**: Remote pages may not be pinnable in the same way; the implementation falls back to a kernel-level copy.
-- **Pipes with `O_DIRECT` set** (`F_SETPIPE_SZ` with `O_DIRECT` semantics on older kernels): forces packet-mode behaviour.
+- **`O_DIRECT`のファイル**: ダイレクトI/Oはページキャッシュをバイパスするため、参照すべきキャッシュ済みページが存在しない。カーネルは一時的なページにコピーしなければならない。
+- **一部の暗号化ファイルシステム**: fscryptで暗号化されたファイルは、ページキャッシュに暗号文を格納する。spliceすると受信側のソケットに暗号文を晒すことになるため、カーネルはこれを拒否して`EOPNOTSUPP`を返し、呼び出し元にユーザー空間を通じて復号させる。
+- **ネットワークファイルシステム（NFS、CIFS）**: リモートのページは同じようにはピン留めできないことがあるため、実装はカーネルレベルのコピーにフォールバックする。
+- **`O_DIRECT`がセットされたパイプ**（古いカーネルでの`O_DIRECT`セマンティクスを伴う`F_SETPIPE_SZ`）: パケットモードの挙動を強制する。
 
 ---
 
-## Comparison: sendfile vs splice vs io_uring vs MSG_ZEROCOPY {#comparison-sendfile-vs-splice-vs-iouring-vs-msgzerocopy}
+## 比較: sendfile、splice、io_uring、MSG_ZEROCOPY {#comparison-sendfile-vs-splice-vs-iouring-vs-msgzerocopy}
 
-| Feature | `sendfile` | `splice` | `io_uring IORING_OP_SPLICE` | `MSG_ZEROCOPY` |
+| 機能 | `sendfile` | `splice` | `io_uring IORING_OP_SPLICE` | `MSG_ZEROCOPY` |
 |---------|-----------|---------|----------------------------|----------------|
-| Kernel version | 2.2 | 2.6.17 | 5.7 | 4.14 |
-| Zero-copy (with SG NIC) | Yes | Yes | Yes | Yes |
-| Works file→socket | Yes | Via pipe | Via pipe | N/A (send only) |
-| Works file→file | No | Via pipe | Via pipe | No |
-| Needs a pipe fd | No | Yes | Yes | No |
-| Async / non-blocking | No (blocks for disk) | No | Yes (submission queue) | Callback via `SO_EE_ORIGIN_ZEROCOPY` |
-| Complexity | Low | Medium | Medium | High |
-| Typical use case | Static file serving | Pipelines, log shipping | High-concurrency servers | High-throughput senders |
-| Transform possible | No | No | No | No |
+| カーネルバージョン | 2.2 | 2.6.17 | 5.7 | 4.14 |
+| ゼロコピー（SG対応NIC使用時） | はい | はい | はい | はい |
+| ファイル→ソケット | 可 | パイプ経由 | パイプ経由 | N/A（送信のみ） |
+| ファイル→ファイル | 不可 | パイプ経由 | パイプ経由 | 不可 |
+| パイプのfdが必要 | いいえ | はい | はい | いいえ |
+| 非同期 / ノンブロッキング | いいえ（ディスクでブロックする） | いいえ | はい（サブミッションキュー） | `SO_EE_ORIGIN_ZEROCOPY`によるコールバック |
+| 複雑さ | 低 | 中 | 中 | 高 |
+| 典型的な用途 | 静的ファイルの配信 | パイプライン、ログ転送 | 高並行性サーバー | 高スループットな送信側 |
+| 変換処理の挿入 | 不可 | 不可 | 不可 | 不可 |
 
-### io_uring splice {#io_uring-splice}
+### io_uringのsplice {#io_uring-splice}
 
-`IORING_OP_SPLICE` was added in Linux 5.7 and allows chaining splice operations asynchronously in an io_uring submission ring:
+`IORING_OP_SPLICE`はLinux 5.7で追加され、io_uringのサブミッションリング内でsplice操作を非同期に連鎖させることができる。
 
 ```c
 #include <liburing.h>
 
-/* Chain: file → pipe → socket, all submitted as one batch */
+/* 連鎖: ファイル → パイプ → ソケット、すべてを1つのバッチとして発行する */
 void submit_splice_chain(struct io_uring *ring,
                          int file_fd, off_t file_off,
                          int pipe_wr, int pipe_rd,
@@ -382,51 +382,51 @@ void submit_splice_chain(struct io_uring *ring,
 {
     struct io_uring_sqe *sqe;
 
-    /* SQE 1: file → pipe write-end */
+    /* SQE 1: ファイル → パイプの書き込み端 */
     sqe = io_uring_get_sqe(ring);
     io_uring_prep_splice(sqe, file_fd, file_off, pipe_wr, -1,
                          len, SPLICE_F_MOVE);
     io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);
 
-    /* SQE 2: pipe read-end → socket (linked, runs after SQE 1) */
+    /* SQE 2: パイプの読み出し端 → ソケット（リンクされており、SQE 1の後に実行される） */
     sqe = io_uring_get_sqe(ring);
     io_uring_prep_splice(sqe, pipe_rd, -1, sock_fd, -1,
                          len, SPLICE_F_MOVE);
 
     io_uring_submit(ring);
-    /* Completions arrive in the CQ ring — no thread blocks */
+    /* 完了はCQリングに届く — ブロックするスレッドはない */
 }
 ```
 
 ### MSG_ZEROCOPY {#msg_zerocopy}
 
-`MSG_ZEROCOPY` (Linux 4.14, `include/uapi/linux/socket.h`) is different in character: it operates on `send(2)` / `sendmsg(2)` and tells the kernel to hold the user buffer pages rather than copying them into socket buffers. The application gets a notification via the socket error queue (`SO_EE_ORIGIN_ZEROCOPY`) when the kernel is done with the pages.
+`MSG_ZEROCOPY`（Linux 4.14、`include/uapi/linux/socket.h`）は性格が異なる。これは`send(2)` / `sendmsg(2)`に作用し、ユーザーバッファのページをソケットバッファにコピーする代わりに保持するようカーネルに指示する。カーネルがページを使い終わると、アプリケーションはソケットのエラーキュー（`SO_EE_ORIGIN_ZEROCOPY`）経由で通知を受け取る。
 
 ```c
-/* Enable on socket */
+/* ソケットで有効にする */
 int one = 1;
 setsockopt(sock_fd, SOL_SOCKET, SO_ZEROCOPY, &one, sizeof one);
 
-/* Send without copying */
+/* コピーせずに送信する */
 send(sock_fd, buf, len, MSG_ZEROCOPY);
 
-/* Wait for completion notification */
+/* 完了通知を待つ */
 struct msghdr msg = {};
 struct iovec  iov;
 char control[100];
 msg.msg_control    = control;
 msg.msg_controllen = sizeof control;
 recvmsg(sock_fd, &msg, MSG_ERRQUEUE);
-/* parse cmsg for SO_EE_ORIGIN_ZEROCOPY range */
+/* cmsgを解析してSO_EE_ORIGIN_ZEROCOPYの範囲を得る */
 ```
 
-`MSG_ZEROCOPY` is best for large `send` calls (> ~10 KB); for small sends the notification overhead exceeds the copy cost. It also requires the application to track in-flight buffers carefully.
+`MSG_ZEROCOPY`は大きな`send`呼び出し（約10KB超）に最適である。小さな送信では、通知のオーバーヘッドがコピーのコストを上回る。また、アプリケーションは処理中のバッファを注意深く追跡する必要がある。
 
 ---
 
-## `vmsplice(2)` — userspace memory into a pipe {#vmsplice2-userspace-memory-into-a-pipe}
+## `vmsplice(2)` — ユーザー空間のメモリをパイプへ {#vmsplice2-userspace-memory-into-a-pipe}
 
-`vmsplice` splices userspace virtual memory into a pipe, allowing user pages to be passed to the kernel without copying.
+`vmsplice`はユーザー空間の仮想メモリをパイプにspliceし、ユーザーページをコピーせずにカーネルへ渡せるようにする。
 
 ```c
 #define _GNU_SOURCE
@@ -437,41 +437,41 @@ ssize_t vmsplice(int fd, const struct iovec *iov,
                  unsigned long nr_segs, unsigned int flags);
 ```
 
-`fd` must be the write end of a pipe. Each `iovec` describes a range of the caller's virtual address space.
+`fd`はパイプの書き込み端でなければならない。各`iovec`は呼び出し元の仮想アドレス空間の範囲を表す。
 
 ### SPLICE_F_GIFT {#splicefgift}
 
-Without `SPLICE_F_GIFT`, the kernel copies the pages before they enter the pipe (because the user might modify them before the pipe consumer reads them). With `SPLICE_F_GIFT`, the user promises not to modify or free the pages — the kernel accepts them as a gift and maps them directly into the pipe ring:
+`SPLICE_F_GIFT`がない場合、カーネルはページがパイプに入る前にコピーする（パイプのコンシューマが読む前にユーザーが変更するかもしれないため）。`SPLICE_F_GIFT`を指定すると、ユーザーはページを変更も解放もしないと約束し、カーネルはそれらを贈り物として受け取ってパイプリングに直接マップする。
 
 ```c
-/* Producer: hand off a page-aligned buffer to the kernel (zero-copy) */
+/* プロデューサ: ページアラインされたバッファをカーネルに引き渡す（ゼロコピー） */
 void *buf;
 posix_memalign(&buf, getpagesize(), BUF_SIZE);
 
-/* Fill buf ... */
+/* bufを埋める ... */
 
 struct iovec iov = { .iov_base = buf, .iov_len = BUF_SIZE };
 
 /*
- * SPLICE_F_GIFT: kernel owns these pages now.
- * Do NOT access buf after this call.
+ * SPLICE_F_GIFT: これらのページは今やカーネルのものである。
+ * この呼び出しの後でbufにアクセスしてはならない。
  */
 ssize_t n = vmsplice(pipe_wr, &iov, 1, SPLICE_F_GIFT);
-/* buf is now a kernel page; the application must not touch it */
+/* bufは今やカーネルのページであり、アプリケーションは触れてはならない */
 
-/* Consumer can splice pipe_rd → socket / file zero-copy */
+/* コンシューマはpipe_rd → ソケット / ファイルへゼロコピーでspliceできる */
 splice(pipe_rd, NULL, sock_fd, NULL, n, SPLICE_F_MOVE);
 ```
 
-`SPLICE_F_GIFT` is effectively a zero-copy transfer of user pages to the kernel. `SPLICE_F_GIFT` is a user-space contract — the kernel trusts the caller not to modify the pages after the gift. There is no kernel-level enforcement; the kernel does NOT unmap the pages from the calling process. Accessing `buf` after the gift is undefined behaviour that may silently corrupt data in the pipe, but will not cause a segfault or other kernel protection. In practice, `vmsplice` + `SPLICE_F_GIFT` is used in high-performance message brokers and kernel bypass-adjacent code.
+`SPLICE_F_GIFT`は、事実上ユーザーページをカーネルへゼロコピーで転送するものである。`SPLICE_F_GIFT`はユーザー空間側の約束事であり、カーネルは譲渡後に呼び出し元がページを変更しないと信頼している。カーネルレベルでの強制は一切ない。カーネルは呼び出し元プロセスからページをアンマップ*しない*。譲渡後に`buf`にアクセスするのは未定義動作であり、パイプ内のデータを黙って破壊する可能性があるが、セグメンテーション違反やその他のカーネルによる保護は発生しない。実際には、`vmsplice` + `SPLICE_F_GIFT`は高性能なメッセージブローカーや、カーネルバイパスに近いコードで使われている。
 
 ---
 
-## Practical patterns {#practical-patterns}
+## 実践的なパターン {#practical-patterns}
 
-### Pattern 1: nginx-style static file serving {#pattern-1-nginx-style-static-file-serving}
+### パターン1: nginx風の静的ファイル配信 {#pattern-1-nginx-style-static-file-serving}
 
-This is the fundamental zero-copy web server loop. Real nginx uses `sendfile` directly; the splice version shown below works for any socket type:
+これはゼロコピーWebサーバーの基本的なループである。実際のnginxは`sendfile`を直接使う。以下に示すspliceのバージョンは任意の種類のソケットで動作する。
 
 ```c
 #define _GNU_SOURCE
@@ -482,12 +482,12 @@ This is the fundamental zero-copy web server loop. Real nginx uses `sendfile` di
 #include <unistd.h>
 #include <errno.h>
 
-#define CHUNK (1 << 20)   /* 1 MiB per sendfile call — avoids starvation */
+#define CHUNK (1 << 20)   /* sendfile 1回あたり1 MiB — 飢餓状態を避ける */
 
 /*
- * serve_static: send file_fd contents to sock_fd using sendfile.
+ * serve_static: sendfileを使ってfile_fdの内容をsock_fdに送る。
  *
- * Returns 0 on success, -1 on error.
+ * 成功時は0、エラー時は-1を返す。
  */
 int serve_static(int sock_fd, int file_fd)
 {
@@ -505,7 +505,7 @@ int serve_static(int sock_fd, int file_fd)
         if (sent < 0) {
             if (errno == EINTR)  continue;
             if (errno == EAGAIN) {
-                /* Socket send buffer full: wait for writability */
+                /* ソケットの送信バッファが満杯: 書き込み可能になるのを待つ */
                 fd_set wfds;
                 FD_ZERO(&wfds);
                 FD_SET(sock_fd, &wfds);
@@ -520,9 +520,9 @@ int serve_static(int sock_fd, int file_fd)
 }
 ```
 
-### Pattern 2: splice-based log shipping with tee {#pattern-2-splice-based-log-shipping-with-tee}
+### パターン2: spliceとteeによるログ転送 {#pattern-2-splice-based-log-shipping-with-tee}
 
-Forward a byte stream to both a log file and a downstream service, zero-copy:
+バイトストリームをログファイルと下流のサービスの両方へ、ゼロコピーで転送する。
 
 ```c
 #define _GNU_SOURCE
@@ -534,27 +534,27 @@ Forward a byte stream to both a log file and a downstream service, zero-copy:
 
 /*
  * log_and_forward:
- *   reads from src_fd (e.g., stdin or a socket),
- *   writes all bytes to log_fd,
- *   and forwards all bytes to fwd_fd.
+ *   src_fd（例: stdinやソケット）から読み出し、
+ *   すべてのバイトをlog_fdに書き込み、
+ *   すべてのバイトをfwd_fdに転送する。
  */
 void log_and_forward(int src_fd, int log_fd, int fwd_fd)
 {
-    int a[2], b[2];   /* a = primary pipe, b = tee copy */
+    int a[2], b[2];   /* a = 主パイプ、b = teeによるコピー */
     pipe(a);
     pipe(b);
 
     while (1) {
-        /* 1. Drain src into primary pipe */
+        /* 1. srcを主パイプに流し込む */
         ssize_t n = splice(src_fd, NULL, a[1], NULL,
                            BUF, SPLICE_F_MOVE);
         if (n <= 0) break;
 
-        /* 2. Duplicate a[0] → b[1] without consuming a[0] */
+        /* 2. a[0]を消費せずにa[0] → b[1]へ複製する */
         ssize_t t = tee(a[0], b[1], n, 0);
-        if (t < n) break;  /* partial tee is unusual but possible */
+        if (t < n) break;  /* 部分的なteeはまれだが起こりうる */
 
-        /* 3. Forward b[0] → downstream (consumes b side) */
+        /* 3. b[0] → 下流へ転送する（b側を消費する） */
         while (t > 0) {
             ssize_t r = splice(b[0], NULL, fwd_fd, NULL,
                                t, SPLICE_F_MOVE);
@@ -562,7 +562,7 @@ void log_and_forward(int src_fd, int log_fd, int fwd_fd)
             t -= r;
         }
 
-        /* 4. Write a[0] → log file (consumes a side) */
+        /* 4. a[0] → ログファイルへ書き込む（a側を消費する） */
         ssize_t w = n;
         while (w > 0) {
             ssize_t r = splice(a[0], NULL, log_fd, NULL,
@@ -577,15 +577,15 @@ done:
 }
 ```
 
-### Pattern 3: pipe-stage data processing {#pattern-3-pipe-stage-data-processing}
+### パターン3: パイプ段によるデータ処理 {#pattern-3-pipe-stage-data-processing}
 
-When a transformation is required (e.g., prepend a header to each message), splice the data around the transform:
+変換処理が必要な場合（例えば各メッセージにヘッダを前置する）、変換部分を避けてデータをspliceする。
 
 ```c
 /*
- * Process a stream: read chunks from src, prepend a 4-byte
- * length header, and send to dst. Only the header goes
- * through userspace; the payload is spliced.
+ * ストリームを処理する: srcからチャンクを読み、4バイトの長さヘッダを
+ * 前置してdstに送る。ユーザー空間を経由するのはヘッダだけで、
+ * ペイロードはspliceされる。
  */
 void framed_forward(int src_fd, int dst_sock)
 {
@@ -593,7 +593,7 @@ void framed_forward(int src_fd, int dst_sock)
     pipe(p);
 
     while (1) {
-        /* Peek at available data */
+        /* 利用可能なデータを覗く */
         ssize_t n = splice(src_fd, NULL, p[1], NULL,
                            65536, SPLICE_F_MOVE | SPLICE_F_NONBLOCK);
         if (n < 0 && errno == EAGAIN) {
@@ -603,11 +603,11 @@ void framed_forward(int src_fd, int dst_sock)
         }
         if (n <= 0) break;
 
-        /* Write 4-byte header through userspace (tiny, unavoidable) */
+        /* 4バイトのヘッダをユーザー空間経由で書き込む（小さく、避けられない） */
         uint32_t hdr = htonl((uint32_t)n);
         send(dst_sock, &hdr, 4, MSG_MORE);
 
-        /* Splice payload zero-copy */
+        /* ペイロードをゼロコピーでspliceする */
         splice(p[0], NULL, dst_sock, NULL, n, SPLICE_F_MOVE);
     }
     close(p[0]); close(p[1]);
@@ -616,19 +616,19 @@ void framed_forward(int src_fd, int dst_sock)
 
 ---
 
-## When zero-copy doesn't help {#when-zero-copy-doesnt-help}
+## ゼロコピーが役に立たない場合 {#when-zero-copy-doesnt-help}
 
-Zero-copy is not universally beneficial. Understand the cases where it hurts or doesn't apply:
+ゼロコピーは常に有益なわけではない。かえって悪化させる場合や適用できない場合を理解しておくこと。
 
-### Small files {#small-files}
+### 小さなファイル {#small-files}
 
-`sendfile` and `splice` have per-call overhead: syscall entry, pipe buffer allocation, page reference management, and scatter-gather descriptor setup. For files smaller than roughly 64 KB, this overhead can exceed the cost of a simple `read+write` with a hot CPU cache. Static asset servers often use `sendfile` only for files above a configurable threshold.
+`sendfile`と`splice`には呼び出しごとのオーバーヘッドがある。システムコールへの入口、パイプバッファの割り当て、ページ参照の管理、スキャッタギャザーディスクリプタのセットアップである。おおよそ64KBより小さいファイルでは、このオーバーヘッドが、CPUキャッシュが温まった状態での単純な`read+write`のコストを上回ることがある。静的アセットのサーバーは、設定可能なしきい値を超えるファイルにのみ`sendfile`を使うことが多い。
 
-### HTTPS without kTLS {#https-without-ktls}
+### kTLSなしのHTTPS {#https-without-ktls}
 
-TLS encryption requires reading plaintext, encrypting it, and writing ciphertext. The CPU *must* touch the data. `sendfile` cannot help unless **kTLS** (`SO_TLS_TX`) is in use (Linux 4.17+). With kTLS, the kernel's TLS record layer encrypts pages on their way to the NIC, preserving zero-copy for the file-to-network segment. See [kTLS](../net/ktls.md).
+TLS暗号化では、平文を読み、それを暗号化し、暗号文を書き込む必要がある。CPUはデータに*必ず*触れなければならない。**kTLS**（`SO_TLS_TX`）を使っていない限り（Linux 4.17以降）、`sendfile`は役に立たない。kTLSを使えば、カーネルのTLSレコード層がNICへ向かう途中でページを暗号化し、ファイルからネットワークへの区間のゼロコピーが保たれる。[kTLS](../net/ktls.md)を参照。
 
-Without kTLS:
+kTLSなしの場合:
 
 ```
 Disk → page cache → CPU decrypt (TLS record) → socket buffer → NIC
@@ -636,27 +636,27 @@ Disk → page cache → CPU decrypt (TLS record) → socket buffer → NIC
              userspace (or kTLS) must touch every byte
 ```
 
-### Compressed content {#compressed-content}
+### 圧縮済みコンテンツ {#compressed-content}
 
-Sending gzip or Brotli-compressed files can use `sendfile` fine — the compressed bytes are already in the page cache. However, *on-the-fly compression* (as nginx does with `gzip on`) requires reading and compressing in userspace, so zero-copy provides no benefit for that path.
+gzipやBrotliで圧縮済みのファイルを送るのには、`sendfile`を問題なく使える。圧縮されたバイトは既にページキャッシュにあるからである。しかし、*その場での圧縮*（nginxが`gzip on`で行うもの）はユーザー空間での読み出しと圧縮を必要とするため、その経路ではゼロコピーは何の利益ももたらさない。
 
-### Content transformations {#content-transformations}
+### コンテンツの変換 {#content-transformations}
 
-Any transformation — substitution, encoding conversion, image resizing — requires touching the bytes. In those cases, the only optimisation available is to minimise extra copies (use `O_DIRECT` + `mmap` for the source, write directly to the socket buffer), not `splice` or `sendfile`.
+置換、エンコーディング変換、画像のリサイズなど、あらゆる変換はバイトに触れる必要がある。その場合に可能な最適化は、余分なコピーを最小限にすること（転送元に`O_DIRECT` + `mmap`を使い、ソケットバッファに直接書き込む）だけであり、`splice`や`sendfile`ではない。
 
-### High-frequency small sends (MSG_ZEROCOPY) {#high-frequency-small-sends-msg_zerocopy}
+### 高頻度の小さな送信（MSG_ZEROCOPY） {#high-frequency-small-sends-msg_zerocopy}
 
-`MSG_ZEROCOPY` has a per-send completion notification that must be collected from the error queue. For messages smaller than ~10 KB, the synchronisation cost dominates. Benchmarks from the Linux networking team suggest the break-even point is around 10–100 KB depending on the workload.
+`MSG_ZEROCOPY`には送信ごとの完了通知があり、エラーキューから回収しなければならない。約10KBより小さいメッセージでは、同期のコストが支配的になる。Linuxネットワーキングチームのベンチマークによれば、損益分岐点はワークロードに応じて約10〜100KBである。
 
-### NUMA effects {#numa-effects}
+### NUMAの影響 {#numa-effects}
 
-When the NIC and the page cache are on different NUMA nodes, the DMA read that the NIC performs crosses the interconnect. This is inherent to the hardware topology and not something splice can fix. For latency-sensitive paths on multi-socket systems, pin worker threads and their page allocations to the NUMA node local to the NIC.
+NICとページキャッシュが異なるNUMAノード上にある場合、NICが行うDMA読み出しはインターコネクトをまたぐ。これはハードウェアトポロジーに固有のものであり、spliceで解決できるものではない。マルチソケットシステム上のレイテンシに敏感な経路では、ワーカースレッドとそのページ割り当てを、NICにローカルなNUMAノードに固定すること。
 
 ---
 
-## `copy_file_range(2)` — server-side file copy {#copyfilerange2-server-side-file-copy}
+## `copy_file_range(2)` — サーバー側でのファイルコピー {#copyfilerange2-server-side-file-copy}
 
-`copy_file_range` was added in Linux 4.5. It copies bytes between two file descriptors entirely within the kernel — no userspace buffer involved.
+`copy_file_range`はLinux 4.5で追加された。2つのファイルディスクリプタ間で、完全にカーネル内でバイトをコピーする。ユーザー空間のバッファは一切関与しない。
 
 ```c
 #define _GNU_SOURCE
@@ -667,17 +667,17 @@ ssize_t copy_file_range(int fd_in,  loff_t *off_in,
                         size_t len, unsigned int flags);
 ```
 
-`flags` is currently unused and must be 0. `off_in` and `off_out` are optional; if NULL, the file's current position is used.
+`flags`は現在未使用であり、0でなければならない。`off_in`と`off_out`は省略可能で、NULLの場合はファイルの現在位置が使われる。
 
-### The filesystem shortcut {#the-filesystem-shortcut}
+### ファイルシステムによる近道 {#the-filesystem-shortcut}
 
-The kernel calls the filesystem's `copy_file_range` operation first:
+カーネルはまず、ファイルシステムの`copy_file_range`操作を呼び出す。
 
 ```c
 /* fs/read_write.c */
 SYSCALL_DEFINE6(copy_file_range, ...)
 {
-    /* Try filesystem-specific implementation */
+    /* ファイルシステム固有の実装を試す */
     if (out_file->f_op->copy_file_range) {
         ret = out_file->f_op->copy_file_range(file_in, pos_in,
                                                file_out, pos_out,
@@ -685,21 +685,21 @@ SYSCALL_DEFINE6(copy_file_range, ...)
         if (ret != -EOPNOTSUPP && ret != -EXDEV)
             return ret;
     }
-    /* Fallback: do_splice_direct — splice-based kernel copy */
+    /* フォールバック: do_splice_direct — spliceベースのカーネル内コピー */
     return do_splice_direct(file_in, &pos_in, file_out, &pos_out,
                             len, 0);
 }
 ```
 
-On filesystems that implement it:
+これを実装しているファイルシステムでは次のようになる。
 
-- **Btrfs** (`btrfs_copy_file_range`): performs a **reflink** — the destination file shares the source's extent tree nodes, with copy-on-write semantics. The copy completes in microseconds regardless of file size; no data is read from or written to disk.
-- **XFS** (with `reflink=1` mount option, Linux 4.16+): same reflink semantics.
-- **NFS v4.2+** (`nfs42_copy_file_range`): delegates to `COPY` operation on the server — the server copies internally.
-- **SMB3** (`smb2_copychunk_range`): uses the `IOCTL FSCTL_SRV_COPYCHUNK` operation.
-- **All others**: fall back to `do_splice_direct`, which opens a temporary pipe and uses splice internally. Still zero userspace copies, but not instantaneous.
+- **Btrfs**（`btrfs_copy_file_range`）: **reflink**を行う。コピー先のファイルはコピー元のエクステントツリーのノードを共有し、コピーオンライトのセマンティクスを持つ。コピーはファイルサイズにかかわらずマイクロ秒単位で完了し、ディスクからのデータ読み出しもディスクへの書き込みも行われない。
+- **XFS**（`reflink=1`マウントオプション付き、Linux 4.16以降）: 同じreflinkセマンティクス。
+- **NFS v4.2以降**（`nfs42_copy_file_range`）: サーバー上の`COPY`操作に委譲する。サーバーが内部でコピーを行う。
+- **SMB3**（`smb2_copychunk_range`）: `IOCTL FSCTL_SRV_COPYCHUNK`操作を使う。
+- **その他すべて**: `do_splice_direct`にフォールバックする。これは一時的なパイプを開き、内部でspliceを使う。ユーザー空間へのコピーはやはりゼロだが、瞬時には終わらない。
 
-### Reflink: copy-on-write file copies {#reflink-copy-on-write-file-copies}
+### reflink: コピーオンライトによるファイルコピー {#reflink-copy-on-write-file-copies}
 
 ```
 Before copy_file_range on Btrfs:
@@ -714,54 +714,54 @@ After copy_file_range (reflink):
   dst inode ──► [new leaf]──► [new extent: blocks 0..127 (private)]
 ```
 
-The practical effect: `cp --reflink=always large-file copy` returns instantly:
+実際の効果として、`cp --reflink=always large-file copy`は即座に戻る。
 
 ```bash
-# Check filesystem reflink support
-cp --reflink=always src.img dst.img   # error if not supported
-cp --reflink=auto   src.img dst.img   # silently falls back to copy
+# ファイルシステムのreflinkサポートを確認する
+cp --reflink=always src.img dst.img   # サポートされていなければエラー
+cp --reflink=auto   src.img dst.img   # 黙って通常のコピーにフォールバックする
 
-# XFS: verify reflink is enabled
+# XFS: reflinkが有効か確認する
 xfs_info /mount/point | grep reflink
 
-# Btrfs: always supported on modern kernels
+# Btrfs: 最近のカーネルでは常にサポートされている
 ```
 
-### copy_file_range and cross-filesystem copies {#copyfilerange-and-cross-filesystem-copies}
+### copy_file_rangeとファイルシステムをまたぐコピー {#copyfilerange-and-cross-filesystem-copies}
 
-`copy_file_range` returns `-EXDEV` when `fd_in` and `fd_out` are on different filesystems (or different mounts of the same filesystem). The kernel falls back to `do_splice_direct` in this case since Linux 5.3; earlier kernels returned the error to userspace.
+`copy_file_range`は、`fd_in`と`fd_out`が異なるファイルシステム（または同じファイルシステムの異なるマウント）上にある場合に`-EXDEV`を返す。Linux 5.3以降、この場合カーネルは`do_splice_direct`にフォールバックする。それ以前のカーネルはエラーをユーザー空間に返していた。
 
-### Comparison with splice for file copies {#comparison-with-splice-for-file-copies}
+### ファイルコピーにおけるspliceとの比較 {#comparison-with-splice-for-file-copies}
 
-| | `splice` (via pipe) | `copy_file_range` |
+| | `splice`（パイプ経由） | `copy_file_range` |
 |--|--------------------|--------------------|
-| Needs pipe fd | Yes | No |
-| Works file→file | Yes (via pipe) | Yes (direct) |
-| Reflink support | No | Yes (on capable FS) |
-| Cross-fs | Yes | No (EXDEV) |
-| Typical speed | Fast (page refs) | Instantaneous (reflink) |
+| パイプのfdが必要 | はい | いいえ |
+| ファイル→ファイル | 可（パイプ経由） | 可（直接） |
+| reflinkサポート | なし | あり（対応FS上） |
+| ファイルシステムをまたぐ | 可 | 不可（EXDEV） |
+| 典型的な速度 | 高速（ページ参照） | 瞬時（reflink） |
 
 ---
 
-## Kernel source references {#kernel-source-references}
+## カーネルソースの参照先 {#kernel-source-references}
 
-The implementation lives in two main files:
+実装は主に2つのファイルにある。
 
-- `fs/splice.c` — `sys_splice`, `sys_tee`, `sys_vmsplice`, `do_splice_to`, `do_splice_from`, `splice_pipe_to_pipe`, `splice_from_pipe`, `filemap_splice_read`, `generic_splice_sendpage`
-- `include/linux/splice.h` — `struct splice_pipe_desc`, `splice_actor` typedef, `splice_from_pipe` / `splice_to_pipe` prototypes, pipe buffer operation tables
-- `fs/read_write.c` — `sys_sendfile64`, `do_sendfile`, `sys_copy_file_range`, `do_splice_direct`
-- `include/linux/pipe_fs_i.h` — `struct pipe_inode_info`, `struct pipe_buffer`, `struct pipe_buf_operations`
-- `net/socket.c` — `sock_splice_read`, `sock_splice_write` (socket-side splice hooks)
+- `fs/splice.c` — `sys_splice`、`sys_tee`、`sys_vmsplice`、`do_splice_to`、`do_splice_from`、`splice_pipe_to_pipe`、`splice_from_pipe`、`filemap_splice_read`、`generic_splice_sendpage`
+- `include/linux/splice.h` — `struct splice_pipe_desc`、`splice_actor`のtypedef、`splice_from_pipe` / `splice_to_pipe`のプロトタイプ、パイプバッファの操作テーブル
+- `fs/read_write.c` — `sys_sendfile64`、`do_sendfile`、`sys_copy_file_range`、`do_splice_direct`
+- `include/linux/pipe_fs_i.h` — `struct pipe_inode_info`、`struct pipe_buffer`、`struct pipe_buf_operations`
+- `net/socket.c` — `sock_splice_read`、`sock_splice_write`（ソケット側のspliceフック）
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Buffered I/O and the page cache](buffered-io.md) — what splice's page references point into
-- [Direct I/O](direct-io.md) — why O_DIRECT and splice don't mix well
-- [io_uring: Operations](../io-uring/io-uring-ops.md) — `IORING_OP_SPLICE` and `IORING_OP_TEE`
-- [kTLS](../net/ktls.md) — zero-copy HTTPS via in-kernel TLS
-- [splice, sendfile, copy_file_range (VFS layer)](../vfs/splice-sendfile.md) — VFS-level view of the same syscalls
-- [Page cache](../mm/page-cache.md) — page reference counting that makes zero-copy safe
-- `fs/splice.c` — canonical implementation
-- `include/linux/splice.h` — data structures and exported helpers
+- [バッファードI/Oとページキャッシュ](buffered-io.md) — spliceのページ参照が指す先
+- [Direct I/O](direct-io.md) — O_DIRECTとspliceの相性が悪い理由
+- [io_uring: 操作](../io-uring/io-uring-ops.md) — `IORING_OP_SPLICE`と`IORING_OP_TEE`
+- [kTLS](../net/ktls.md) — カーネル内TLSによるゼロコピーHTTPS
+- [splice、sendfile、copy_file_range（VFS層）](../vfs/splice-sendfile.md) — 同じシステムコールをVFSレベルから見たもの
+- [ページキャッシュ](../mm/page-cache.md) — ゼロコピーを安全にしているページの参照カウント
+- `fs/splice.c` — 標準的な実装
+- `include/linux/splice.h` — データ構造とエクスポートされたヘルパー

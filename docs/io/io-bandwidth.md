@@ -1,10 +1,10 @@
-# I/O Bandwidth: Measurement and Optimization {#io-bandwidth-measurement-and-optimization}
+# I/O帯域幅: 計測と最適化 {#io-bandwidth-measurement-and-optimization}
 
-> How to measure actual I/O bandwidth, where the limits come from, and how to approach them
+> 実際のI/O帯域幅をどう計測するか、限界はどこから来るのか、そしてどう限界に近づくか
 
-## What limits I/O bandwidth? {#what-limits-io-bandwidth}
+## I/O帯域幅を制限するものは何か {#what-limits-io-bandwidth}
 
-I/O bandwidth — bytes per second moving between storage and memory — is bounded by the weakest link in the chain:
+I/O帯域幅 — ストレージとメモリの間を移動する1秒あたりのバイト数 — は、経路の中で最も弱い部分によって上限が決まる:
 
 ```
 Application → VFS → Page Cache → Block Layer → PCIe Bus → Storage Device
@@ -21,16 +21,16 @@ Typical limits:
   DDR5 memory bus:     ~77 GB/s per channel
 ```
 
-In practice, the limit is often not the hardware interface but the software path: CPU overhead, queue serialization, filesystem overhead, or the memory subsystem's ability to supply data fast enough.
+実際には、限界はハードウェアインターフェースではなく、ソフトウェアの経路にあることが多い。CPUのオーバーヘッド、キューの直列化、ファイルシステムのオーバーヘッド、あるいはメモリサブシステムが十分な速さでデータを供給できるかどうかである。
 
 ---
 
-## Measuring device bandwidth {#measuring-device-bandwidth}
+## デバイスの帯域幅を計測する {#measuring-device-bandwidth}
 
-### `fio`: the authoritative benchmark {#fio-the-authoritative-benchmark}
+### `fio`: 信頼できるベンチマーク {#fio-the-authoritative-benchmark}
 
 ```bash
-# Sequential read throughput (O_DIRECT, bypass page cache)
+# シーケンシャル読み出しのスループット（O_DIRECT、ページキャッシュをバイパス）
 fio --name=seq_read \
     --rw=read \
     --bs=1M \
@@ -43,7 +43,7 @@ fio --name=seq_read \
     --runtime=30 \
     --group_reporting
 
-# Sequential write throughput
+# シーケンシャル書き込みのスループット
 fio --name=seq_write \
     --rw=write \
     --bs=1M \
@@ -56,14 +56,14 @@ fio --name=seq_write \
     --runtime=30 \
     --group_reporting
 
-# Key output line:
+# 重要な出力行:
 # READ: bw=5123MiB/s (5373MB/s), 5123MiB/s-5123MiB/s (5373MB/s-5373MB/s), io=150GiB (161GB), run=30001-30001msec
 ```
 
-**Why `bs=1M` and `iodepth=32`?** Sequential bandwidth is maximized with large I/O sizes (the device can serve a 1MB request in one operation) and sufficient queue depth to keep the device busy while the previous I/O completes.
+**なぜ`bs=1M`と`iodepth=32`なのか?** シーケンシャル帯域幅は、大きなI/Oサイズ（デバイスは1MBのリクエストを1回の操作で処理できる）と、前のI/Oが完了する間もデバイスを忙しく保つのに十分なキュー深度によって最大化される。
 
 ```bash
-# Find the optimal block size for your device
+# デバイスに最適なブロックサイズを探す
 for bs in 4k 16k 64k 256k 1M 4M; do
     bw=$(fio --name=test --rw=read --bs=$bs --direct=1 \
               --iodepth=32 --numjobs=1 \
@@ -74,23 +74,23 @@ for bs in 4k 16k 64k 256k 1M 4M; do
 done
 ```
 
-### `dd`: quick sequential measurement {#dd-quick-sequential-measurement}
+### `dd`: 手早いシーケンシャル計測 {#dd-quick-sequential-measurement}
 
 ```bash
-# Read throughput (O_DIRECT, from device)
+# 読み出しスループット（O_DIRECT、デバイスから）
 dd if=/dev/nvme0n1 of=/dev/null bs=1M count=4096 iflag=direct 2>&1 | tail -1
 # 4294967296 bytes (4.3 GB, 4.0 GiB) copied, 0.843 s, 5.1 GB/s
 
-# Write throughput (O_DIRECT, to device)
+# 書き込みスループット（O_DIRECT、デバイスへ）
 dd if=/dev/zero of=/dev/nvme0n1 bs=1M count=4096 oflag=direct 2>&1 | tail -1
 ```
 
-`dd` is not a reliable benchmark (single-threaded, no queue depth control), but it is fast and available everywhere.
+`dd`は信頼できるベンチマークではない（シングルスレッドで、キュー深度を制御できない）が、高速でどこでも使える。
 
-### `/proc/diskstats` for live throughput {#procdiskstats-for-live-throughput}
+### ライブのスループットを見るための`/proc/diskstats` {#procdiskstats-for-live-throughput}
 
 ```bash
-# Live read/write throughput in MB/s
+# 読み書きのライブスループット（MB/s）
 awk '
 BEGIN { getline line1 < "/proc/diskstats"; close("/proc/diskstats") }
 /nvme0n1/ { split(line1, a); split($0, b)
@@ -103,60 +103,60 @@ BEGIN { getline line1 < "/proc/diskstats"; close("/proc/diskstats") }
 
 ---
 
-## The CPU bottleneck in I/O bandwidth {#the-cpu-bottleneck-in-io-bandwidth}
+## I/O帯域幅におけるCPUのボトルネック {#the-cpu-bottleneck-in-io-bandwidth}
 
-On modern NVMe devices (5–7 GB/s), the storage device is often not the bottleneck — the CPU is. Moving data between the device and memory requires:
+最新のNVMeデバイス（5〜7 GB/s）では、ストレージデバイスがボトルネックでないことが多く、CPUがボトルネックになる。デバイスとメモリの間でデータを移動するには次のものが必要である:
 
-1. **Interrupt handling**: one interrupt per I/O completion (or per-batch with interrupt coalescing)
-2. **Memory copy**: if data passes through the kernel buffer before reaching userspace
-3. **DMA management**: programming the IOMMU, pinning pages, checking completion
+1. **割り込み処理**: I/O完了ごとに1回の割り込み（割り込みコアレッシングを使えばバッチごと）
+2. **メモリコピー**: データがユーザー空間に届く前にカーネルバッファを経由する場合
+3. **DMAの管理**: IOMMUのプログラミング、pageのピン留め、完了の確認
 
 ```bash
-# Check CPU usage during sequential I/O
+# シーケンシャル I/O 中の CPU 使用率を確認
 iostat -xz 1 &
 mpstat -P ALL 1 &
 
 dd if=/dev/nvme0n1 of=/dev/null bs=1M count=10240 iflag=direct
 
-# Look for: high %irq or %soft on the CPU handling NVMe interrupts
-# If one CPU is pegged at 100% doing I/O interrupts, you are CPU-bound
+# 確認する点: NVMe 割り込みを処理している CPU で %irq や %soft が高いか
+# 1 つの CPU が I/O 割り込みで 100% に張り付いているなら、CPU がボトルネック
 ```
 
-**CPU-limited bandwidth symptoms:**
+**CPUで制限された帯域幅の症状:**
 
-- `iostat %util` < 100% but bandwidth plateau at ~3–4 GB/s
-- One CPU core at 100% (`mpstat` shows high `%irq` or `%soft`)
-- Throughput increases linearly with the number of parallel jobs (up to CPU saturation)
+- `iostat %util`が100%未満なのに、帯域幅が約3〜4 GB/sで頭打ちになる
+- 1つのCPUコアが100%になっている（`mpstat`で`%irq`または`%soft`が高い）
+- スループットが並列ジョブ数に比例して増加する（CPUが飽和するまで）
 
-**Solutions:**
+**解決策:**
 
 ```bash
-# 1. Spread NVMe IRQs across CPUs
-# Find NVMe IRQ numbers
+# 1. NVMe の IRQ を複数の CPU に分散させる
+# NVMe の IRQ 番号を探す
 grep nvme /proc/interrupts | awk '{print $1}' | tr -d ':'
 
-# Set affinity to spread across all CPUs
+# すべての CPU に分散するようアフィニティを設定
 for irq in $(grep nvme0 /proc/interrupts | awk '{print $1}' | tr -d ':'); do
-    echo ff > /proc/irq/$irq/smp_affinity  # all 8 CPUs in bitmask
+    echo ff > /proc/irq/$irq/smp_affinity  # ビットマスクで 8 CPU すべて
 done
 
-# 2. Use io_uring with IOPOLL to eliminate interrupt overhead
-# IOPOLL: application polls for completion instead of waiting for interrupt
-# Trades CPU cycles for reduced interrupt latency
+# 2. io_uring と IOPOLL を使って割り込みのオーバーヘッドをなくす
+# IOPOLL: アプリケーションが割り込みを待つ代わりに完了をポーリングする
+# CPU サイクルと引き換えに割り込みのレイテンシを減らす
 
-# 3. Increase interrupt coalescing (batch completions, fewer interrupts)
-# NVMe: set completion queue interrupt coalescing
-nvme set-feature /dev/nvme0 -f 8 -v 0x0064  # aggregate 100 entries or 1ms
+# 3. 割り込みコアレッシングを増やす（完了をバッチ化し、割り込みを減らす）
+# NVMe: 完了キューの割り込みコアレッシングを設定
+nvme set-feature /dev/nvme0 -f 8 -v 0x0064  # 100 エントリまたは 1ms をまとめる
 ```
 
 ---
 
-## Queue depth and parallelism {#queue-depth-and-parallelism}
+## キュー深度と並列性 {#queue-depth-and-parallelism}
 
-For sequential I/O, bandwidth scales with queue depth — up to the device's internal parallelism limit:
+シーケンシャルI/Oでは、帯域幅はキュー深度に応じて伸びる — デバイス内部の並列性の限界までである:
 
 ```bash
-# Bandwidth vs queue depth (1 job, varying iodepth)
+# 帯域幅とキュー深度の関係（1 ジョブ、iodepth を変化）
 for qd in 1 2 4 8 16 32 64 128; do
     bw=$(fio --name=qd_test --rw=read --bs=128k --direct=1 \
               --numjobs=1 --iodepth=$qd \
@@ -167,7 +167,7 @@ for qd in 1 2 4 8 16 32 64 128; do
 done
 ```
 
-Typical NVMe bandwidth vs queue depth curve:
+NVMeにおける帯域幅とキュー深度の典型的な曲線:
 
 ```
 QD=1:   ~1.5 GB/s  (device latency limits throughput)
@@ -178,69 +178,69 @@ QD=32:  ~7.0 GB/s  (saturated — diminishing returns)
 QD=64:  ~7.0 GB/s  (no improvement, higher latency)
 ```
 
-The relationship is: `IOPS = queue_depth / latency`; multiply by block size for throughput. If latency is 100µs (0.1ms), a queue depth of 1 achieves 10,000 IOPS = 40 MB/s at 4KB. At queue depth 32: 320,000 IOPS = 1.25 GB/s at 4KB.
+関係式は`IOPS = queue_depth / latency`であり、これにブロックサイズを掛けるとスループットになる。レイテンシが100µs（0.1ms）なら、キュー深度1では10,000 IOPS = 4KBで40 MB/sとなる。キュー深度32では320,000 IOPS = 4KBで1.25 GB/sとなる。
 
 ---
 
-## Memory bandwidth as a ceiling {#memory-bandwidth-as-a-ceiling}
+## 上限としてのメモリ帯域幅 {#memory-bandwidth-as-a-ceiling}
 
-For large sequential I/O, data must move between the device and DRAM. The DRAM bandwidth imposes an absolute ceiling:
+大きなシーケンシャルI/Oでは、データはデバイスとDRAMの間を移動しなければならない。DRAMの帯域幅が絶対的な上限となる:
 
 ```bash
-# Measure DRAM bandwidth with stream benchmark
+# stream ベンチマークで DRAM 帯域幅を計測
 # https://www.cs.virginia.edu/stream/
 ./stream
 # Triad: 85432.3 MB/s  (typical DDR5 on a desktop)
 
-# For NVMe at 7 GB/s: DRAM bandwidth is not the bottleneck
-# For a RAID of 8 NVMe at 7 GB/s each = 56 GB/s: approaching DRAM limits
+# 7 GB/s の NVMe なら: DRAM 帯域幅はボトルネックではない
+# 各 7 GB/s の NVMe 8 台による RAID = 56 GB/s: DRAM の限界に近づく
 ```
 
-When building high-bandwidth storage systems (NVMe-oF, large RAID arrays), DRAM bandwidth becomes the limiting factor. Solutions include:
+高帯域幅のストレージシステム（NVMe-oF、大規模RAIDアレイ）を構築する場合、DRAMの帯域幅が制限要因となる。解決策には次のものがある:
 
-- **NUMA-aware I/O**: keep I/O buffers in the same NUMA node as the device
-- **DMA directly to PMEM**: bypass DRAM for persistent memory destinations
-- **Kernel bypass**: SPDK (Storage Performance Development Kit) avoids kernel overhead entirely
+- **NUMAを考慮したI/O**: I/Oバッファをデバイスと同じNUMAノードに置く
+- **PMEMへの直接DMA**: 永続メモリが転送先の場合はDRAMをバイパスする
+- **カーネルバイパス**: SPDK（Storage Performance Development Kit）はカーネルのオーバーヘッドを完全に回避する
 
 ---
 
-## Filesystem overhead on bandwidth {#filesystem-overhead-on-bandwidth}
+## 帯域幅に対するファイルシステムのオーバーヘッド {#filesystem-overhead-on-bandwidth}
 
-A raw block device delivers its rated bandwidth. A filesystem on top adds overhead:
+生のブロックデバイスは定格どおりの帯域幅を発揮する。その上にファイルシステムを載せるとオーバーヘッドが加わる:
 
 ```bash
-# Raw device bandwidth
+# 生デバイスの帯域幅
 fio --name=raw --rw=read --bs=1M --direct=1 --iodepth=32 \
     --filename=/dev/nvme0n1 --size=10G --runtime=10 --time_based
 
-# Same device with ext4 filesystem
+# 同じデバイスに ext4 ファイルシステムを作成した場合
 mkfs.ext4 /dev/nvme0n1
 mount /dev/nvme0n1 /mnt
 fio --name=fs --rw=read --bs=1M --direct=1 --iodepth=32 \
     --filename=/mnt/testfile --size=10G --runtime=10 --time_based
 ```
 
-Typical filesystem overhead for sequential I/O with `O_DIRECT`:
+`O_DIRECT`によるシーケンシャルI/Oでの典型的なファイルシステムのオーバーヘッド:
 
-- **ext4, XFS**: 3–8% overhead (extent lookup, inode lock)
-- **Btrfs**: 5–15% overhead (tree operations, checksums)
-- **tmpfs**: 0% (memory-backed, no device I/O)
+- **ext4、XFS**: 3〜8%のオーバーヘッド（エクステントの検索、inodeのロック）
+- **Btrfs**: 5〜15%のオーバーヘッド（ツリー操作、チェックサム）
+- **tmpfs**: 0%（メモリベースで、デバイスI/Oがない）
 
-For buffered I/O (through page cache), the page cache adds a copy but also enables readahead and caching, which can deliver higher bandwidth than the device for re-read workloads.
+バッファードI/O（ページキャッシュ経由）では、ページキャッシュによってコピーが1回増えるが、先読みとキャッシュも有効になるため、再読み込みの多いワークロードではデバイスより高い帯域幅を実現できる。
 
 ---
 
-## Monitoring bandwidth in production {#monitoring-bandwidth-in-production}
+## 本番環境での帯域幅の監視 {#monitoring-bandwidth-in-production}
 
 ```bash
-# iostat: simplest monitoring
+# iostat: 最も簡単な監視
 iostat -xz 1 | grep -E '(nvme|Device)'
 
-# Key columns for bandwidth:
-# rkB/s: read KB/s
-# wkB/s: write KB/s
+# 帯域幅に関する重要な列:
+# rkB/s: 読み出し KB/s
+# wkB/s: 書き込み KB/s
 
-# bpftrace: live per-process I/O bandwidth
+# bpftrace: プロセスごとの I/O 帯域幅をライブで
 bpftrace -e '
 tracepoint:block:block_rq_complete {
     @bytes_by_comm[comm] = sum(args->nr_sector * 512);
@@ -250,8 +250,8 @@ interval:s:1 {
     clear(@bytes_by_comm);
 }'
 
-# Alert when write bandwidth exceeds threshold (for monitoring systems)
-THRESHOLD=$((400 * 1024))  # 400 MB/s in KB/s
+# 書き込み帯域幅がしきい値を超えたら警告（監視システム向け）
+THRESHOLD=$((400 * 1024))  # 400 MB/s を KB/s で
 while true; do
     wbw=$(awk '/nvme0n1/{print $9}' /proc/diskstats)
     sleep 1
@@ -265,22 +265,22 @@ done
 
 ---
 
-## Quick reference: bandwidth characteristics by storage type {#quick-reference-bandwidth-characteristics-by-storage-type}
+## クイックリファレンス: ストレージの種類ごとの帯域幅特性 {#quick-reference-bandwidth-characteristics-by-storage-type}
 
-| Storage | Seq Read | Seq Write | Notes |
+| ストレージ | シーケンシャル読み出し | シーケンシャル書き込み | 備考 |
 |---------|----------|-----------|-------|
-| SATA HDD | 80–200 MB/s | 70–180 MB/s | Rotational; sequential ≫ random |
-| SATA SSD | 400–560 MB/s | 350–520 MB/s | SATA III interface limit |
-| NVMe Gen3 ×4 | 2–3.5 GB/s | 1.5–3 GB/s | PCIe 3.0 ×4 limit: 3.94 GB/s |
-| NVMe Gen4 ×4 | 4–7 GB/s | 3–6.5 GB/s | PCIe 4.0 ×4 limit: 7.88 GB/s |
-| NVMe Gen5 ×4 | 8–14 GB/s | 6–12 GB/s | PCIe 5.0 ×4 limit: 15.75 GB/s |
-| Intel Optane | 2.5–7 GB/s | 2–7 GB/s | Very low latency (10µs); bandwidth lags NVMe Gen5 |
-| NVMe-oF (TCP) | Up to 25 Gb/s NIC | | Network-limited |
+| SATA HDD | 80〜200 MB/s | 70〜180 MB/s | 回転型。シーケンシャル ≫ ランダム |
+| SATA SSD | 400〜560 MB/s | 350〜520 MB/s | SATA IIIインターフェースの限界 |
+| NVMe Gen3 ×4 | 2〜3.5 GB/s | 1.5〜3 GB/s | PCIe 3.0 ×4の限界: 3.94 GB/s |
+| NVMe Gen4 ×4 | 4〜7 GB/s | 3〜6.5 GB/s | PCIe 4.0 ×4の限界: 7.88 GB/s |
+| NVMe Gen5 ×4 | 8〜14 GB/s | 6〜12 GB/s | PCIe 5.0 ×4の限界: 15.75 GB/s |
+| Intel Optane | 2.5〜7 GB/s | 2〜7 GB/s | 非常に低レイテンシ（10µs）。帯域幅はNVMe Gen5に劣る |
+| NVMe-oF（TCP） | 最大25 Gb/sのNIC | | ネットワークで制限される |
 
 ---
 
-## Related pages {#related-pages}
+## 関連ページ {#related-pages}
 
-- [Tuning I/O for Streaming Workloads](tuning-streaming.md) — maximizing sequential throughput
-- [I/O Polling (HIPRI and IOPOLL)](io-polling.md) — eliminating interrupt overhead
-- [Understanding /proc/diskstats](understanding-proc-diskstats.md) — measuring bandwidth from diskstats
+- [ストリーミングワークロード向けのI/Oチューニング](tuning-streaming.md) — シーケンシャルスループットの最大化
+- [I/Oポーリング（HIPRIとIOPOLL）](io-polling.md) — 割り込みのオーバーヘッドの排除
+- [/proc/diskstatsを理解する](understanding-proc-diskstats.md) — diskstatsからの帯域幅の計測

@@ -1,19 +1,19 @@
-# Async I/O Evolution {#async-io-evolution}
+# 非同期I/Oの進化 {#async-io-evolution}
 
-> From POSIX AIO to Linux AIO to io_uring
+> POSIX AIOからLinux AIO、そしてio_uringへ
 
-## The problem with synchronous I/O {#the-problem-with-synchronous-io}
+## 同期I/Oの問題 {#the-problem-with-synchronous-io}
 
-Synchronous `read()`/`write()` block the calling thread until data is transferred. For high-throughput servers this means either:
+同期的な`read()`/`write()`は、データが転送されるまで呼び出し元スレッドをブロックする。高スループットなサーバーにとって、これは次のいずれかを意味する:
 
-- Many threads (each blocking on I/O) — high memory cost, context switch overhead
-- Non-blocking I/O with `epoll` — works for sockets, but **epoll does not work for regular files** (they are always "ready")
+- 多数のスレッド（それぞれがI/Oでブロックする）— メモリコストが高く、コンテキストスイッチのオーバーヘッドがある
+- `epoll`によるノンブロッキングI/O — ソケットには有効だが、**epollは通常ファイルには機能しない**（通常ファイルは常に「ready」である）
 
-The goal of async I/O: submit I/O, do other work, collect results when ready.
+非同期I/Oの目標は、I/Oを発行し、ほかの作業を行い、準備ができたら結果を回収することである。
 
-## POSIX AIO (glibc userspace) {#posix-aio-glibc-userspace}
+## POSIX AIO（glibcのユーザー空間実装） {#posix-aio-glibc-userspace}
 
-POSIX AIO (`aio_read`, `aio_write`) is the standard API — but the Linux glibc implementation fakes it with threads:
+POSIX AIO（`aio_read`、`aio_write`）は標準APIである。しかしLinuxのglibc実装はスレッドを使ってこれを模倣している:
 
 ```c
 #include <aio.h>
@@ -23,49 +23,49 @@ struct aiocb cb = {
     .aio_buf    = buf,
     .aio_nbytes = 4096,
     .aio_offset = 0,
-    /* Notify via signal: */
+    /* シグナルで通知: */
     .aio_sigevent = {
         .sigev_notify = SIGEV_SIGNAL,
         .sigev_signo  = SIGUSR1,
     },
 };
 
-/* Submit async read */
+/* 非同期読み出しを発行 */
 aio_read(&cb);
 
-/* ... do other work ... */
+/* ... ほかの作業を行う ... */
 
-/* Check completion */
+/* 完了を確認 */
 int err = aio_error(&cb);
 if (err == 0) {
-    ssize_t n = aio_return(&cb);  /* bytes transferred */
+    ssize_t n = aio_return(&cb);  /* 転送されたバイト数 */
 }
 
-/* Or: wait for all */
+/* または: すべての完了を待つ */
 const struct aiocb *list[] = { &cb };
 aio_suspend(list, 1, NULL);
 ```
 
-**The problem**: glibc implements POSIX AIO using a thread pool. Each `aio_read()` submits work to a worker thread that calls `pread()` synchronously. This adds:
+**問題点**: glibcはPOSIX AIOをスレッドプールで実装している。各`aio_read()`は、`pread()`を同期的に呼び出すワーカースレッドに作業を渡す。これにより次のものが加わる:
 
-- Thread creation/teardown overhead
-- Memory per thread (stack)
-- Context switches to the worker thread and back
-- No kernel bypass — still goes through the kernel per-thread
+- スレッドの生成・破棄のオーバーヘッド
+- スレッドごとのメモリ（スタック）
+- ワーカースレッドとの間を行き来するコンテキストスイッチ
+- カーネルのバイパスはない — スレッドごとに依然としてカーネルを経由する
 
-## Linux Kernel AIO {#linux-kernel-aio}
+## Linuxカーネル AIO {#linux-kernel-aio}
 
-Linux added native async I/O in 2.6 (`io_submit`, `io_getevents`). Unlike POSIX AIO, this runs in the kernel — no threads.
+Linuxは2.6でネイティブな非同期I/O（`io_submit`、`io_getevents`）を追加した。POSIX AIOと異なり、これはカーネル内で動作し、スレッドを使わない。
 
 ```c
 #include <linux/aio_abi.h>
 #include <sys/syscall.h>
 
-/* Setup: create an AIO context */
+/* セットアップ: AIO コンテキストを作成 */
 aio_context_t ctx = 0;
-io_setup(128, &ctx);  /* max 128 in-flight ops */
+io_setup(128, &ctx);  /* 実行中の操作は最大 128 */
 
-/* Prepare an iocb */
+/* iocb を準備 */
 struct iocb cb = {
     .aio_lio_opcode = IOCB_CMD_PREAD,
     .aio_fildes     = fd,
@@ -75,10 +75,10 @@ struct iocb cb = {
 };
 struct iocb *cbs[] = { &cb };
 
-/* Submit */
+/* 発行 */
 io_submit(ctx, 1, cbs);
 
-/* Wait for completion */
+/* 完了を待つ */
 struct io_event events[1];
 struct timespec timeout = { .tv_sec = 1 };
 int n = io_getevents(ctx, 1, 1, events, &timeout);
@@ -89,22 +89,22 @@ if (n == 1) {
 io_destroy(ctx);
 ```
 
-### Linux AIO limitations {#linux-aio-limitations}
+### Linux AIOの制限 {#linux-aio-limitations}
 
-Linux AIO was designed specifically for `O_DIRECT` I/O. It has serious limitations:
+Linux AIOは`O_DIRECT` I/O専用に設計された。深刻な制限がある:
 
-| Limitation | Details |
+| 制限 | 詳細 |
 |-----------|---------|
-| **O_DIRECT only** | Buffered I/O submits synchronously even with `io_submit` |
-| **No network sockets** | Only block/file I/O, not sockets or pipes |
-| **io_submit can block** | On buffered files or full submission ring |
-| **No fixed buffers** | Each op requires mapping/unmapping user buffers |
-| **No chaining** | Can't express "read A, then write B" without round-tripping to userspace |
-| **No fsync** | `IOCB_CMD_FSYNC` exists but rarely works async |
+| **O_DIRECTのみ** | バッファードI/Oは`io_submit`を使っても同期的に発行される |
+| **ネットワークソケット非対応** | ブロック/ファイルI/Oのみで、ソケットやパイプには使えない |
+| **io_submitがブロックしうる** | バッファードファイルの場合や発行リングが満杯の場合 |
+| **固定バッファがない** | 操作ごとにユーザーバッファのマップ/アンマップが必要 |
+| **チェーンがない** | 「Aを読み、次にBを書く」をユーザー空間との往復なしに表現できない |
+| **fsyncがない** | `IOCB_CMD_FSYNC`は存在するが、非同期に動作することはまれ |
 
-The result: Linux AIO only helps databases already using `O_DIRECT`. It does not solve the general async I/O problem.
+結果として、Linux AIOはすでに`O_DIRECT`を使っているデータベースにしか役立たない。一般的な非同期I/Oの問題は解決しない。
 
-### Kernel path for Linux AIO {#kernel-path-for-linux-aio}
+### Linux AIOのカーネルパス {#kernel-path-for-linux-aio}
 
 ```c
 /* fs/aio.c */
@@ -125,8 +125,8 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb, ...)
     switch (iocb.aio_lio_opcode) {
     case IOCB_CMD_PREAD:
         ret = aio_read(&req->rw, &iocb, false, compat);
-        /* For O_DIRECT: submits bio and returns immediately */
-        /* For buffered: may block right here in io_submit! */
+        /* O_DIRECT の場合: bio を発行してすぐに戻る */
+        /* バッファードの場合: ここ io_submit の中でブロックしうる! */
         break;
     case IOCB_CMD_PWRITE:
         ret = aio_write(&req->rw, &iocb, false, compat);
@@ -135,9 +135,9 @@ static int io_submit_one(struct kioctx *ctx, struct iocb __user *user_iocb, ...)
 }
 ```
 
-## io_uring: solving the problem properly {#io_uring-solving-the-problem-properly}
+## io_uring: 問題を正しく解決する {#io_uring-solving-the-problem-properly}
 
-`io_uring` (merged in Linux 5.1, 2019) addresses all Linux AIO limitations. It uses two shared-memory ring buffers between kernel and userspace:
+`io_uring`（Linux 5.1、2019年にマージ）は、Linux AIOの制限をすべて解消する。カーネルとユーザー空間の間で共有メモリ上の2つのリングバッファを使う:
 
 ```
 Userspace                    Kernel
@@ -153,9 +153,9 @@ Userspace                    Kernel
    │  └─────────────────────┘   │
 ```
 
-No locking needed: SQ tail is written by userspace, SQ head by kernel; CQ tail by kernel, CQ head by userspace.
+ロックは不要である。SQのtailはユーザー空間が、SQのheadはカーネルが書き込む。CQのtailはカーネルが、CQのheadはユーザー空間が書き込む。
 
-### Basic io_uring usage {#basic-io_uring-usage}
+### io_uringの基本的な使い方 {#basic-io_uring-usage}
 
 ```c
 #include <liburing.h>
@@ -163,14 +163,14 @@ No locking needed: SQ tail is written by userspace, SQ head by kernel; CQ tail b
 struct io_uring ring;
 io_uring_queue_init(128, &ring, 0);
 
-/* Submit a read */
+/* 読み出しを発行 */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read(sqe, fd, buf, 4096, offset);
-sqe->user_data = 42;  /* tag to identify completion */
+sqe->user_data = 42;  /* 完了を識別するためのタグ */
 
 io_uring_submit(&ring);
 
-/* Wait for completion */
+/* 完了を待つ */
 struct io_uring_cqe *cqe;
 io_uring_wait_cqe(&ring, &cqe);
 printf("read %d bytes (tag=%llu)\n", cqe->res, cqe->user_data);
@@ -179,60 +179,60 @@ io_uring_cqe_seen(&ring, cqe);
 io_uring_queue_exit(&ring);
 ```
 
-### io_uring vs Linux AIO {#io_uring-vs-linux-aio}
+### io_uringとLinux AIOの比較 {#io_uring-vs-linux-aio}
 
-| Feature | Linux AIO | io_uring |
+| 機能 | Linux AIO | io_uring |
 |---------|-----------|---------|
-| Buffered I/O | Blocks in submit | Truly async |
-| Network sockets | No | Yes (recv/send/accept/connect) |
-| Fixed buffers | No | Yes (zero-copy after register) |
-| Request chaining | No | Yes (IOSQE_IO_LINK) |
-| Polled I/O (no IRQ) | No | Yes (IORING_SETUP_IOPOLL) |
-| Kernel thread submit | No | Yes (IORING_SETUP_SQPOLL) |
-| fsync | Partial | Yes |
-| Splice/tee | No | Yes |
-| openat/statx/unlinkat | No | Yes |
-| Zero syscalls | No | Yes (with SQPOLL) |
+| バッファードI/O | 発行時にブロック | 真に非同期 |
+| ネットワークソケット | 非対応 | 対応（recv/send/accept/connect） |
+| 固定バッファ | 非対応 | 対応（登録後はゼロコピー） |
+| リクエストのチェーン | 非対応 | 対応（IOSQE_IO_LINK） |
+| ポーリングI/O（IRQなし） | 非対応 | 対応（IORING_SETUP_IOPOLL） |
+| カーネルスレッドによる発行 | 非対応 | 対応（IORING_SETUP_SQPOLL） |
+| fsync | 部分的 | 対応 |
+| splice/tee | 非対応 | 対応 |
+| openat/statx/unlinkat | 非対応 | 対応 |
+| syscallゼロ | 非対応 | 対応（SQPOLL使用時） |
 
-### io_uring SQPOLL: zero-syscall I/O {#io_uring-sqpoll-zero-syscall-io}
+### io_uring SQPOLL: syscallなしのI/O {#io_uring-sqpoll-zero-syscall-io}
 
-With `IORING_SETUP_SQPOLL`, a kernel thread polls the SQ ring:
+`IORING_SETUP_SQPOLL`を指定すると、カーネルスレッドがSQリングをポーリングする:
 
 ```c
 struct io_uring_params params = {
     .flags = IORING_SETUP_SQPOLL,
-    .sq_thread_idle = 2000,  /* ms before kernel thread sleeps */
+    .sq_thread_idle = 2000,  /* カーネルスレッドがスリープするまでの ms */
 };
 io_uring_queue_init_params(128, &ring, &params);
 
-/* Now io_uring_submit() is optional — kernel polls for new SQEs */
+/* これで io_uring_submit() は省略可能 — カーネルが新しい SQE をポーリングする */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read(sqe, fd, buf, 4096, 0);
 io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 
-/* No syscall needed if kernel thread is still polling: */
-io_uring_submit(&ring);  /* may return without syscall */
+/* カーネルスレッドがまだポーリング中なら syscall は不要: */
+io_uring_submit(&ring);  /* syscall なしで戻ることがある */
 ```
 
-Useful for NVMe with polled queues (`IORING_SETUP_IOPOLL` + `IORING_SETUP_SQPOLL`): latency of 50-100µs with zero syscalls.
+ポーリングキューを持つNVMe（`IORING_SETUP_IOPOLL` + `IORING_SETUP_SQPOLL`）で有用であり、syscallゼロで50〜100µsのレイテンシを実現する。
 
-### io_uring request chaining {#io_uring-request-chaining}
+### io_uringのリクエストチェーン {#io_uring-request-chaining}
 
 ```c
-/* Chain: read file → write to socket, only if read succeeds */
+/* チェーン: ファイルを読み → ソケットへ書く（読み出しが成功した場合のみ） */
 struct io_uring_sqe *read_sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read(read_sqe, file_fd, buf, 4096, 0);
-io_uring_sqe_set_flags(read_sqe, IOSQE_IO_LINK);  /* link to next */
+io_uring_sqe_set_flags(read_sqe, IOSQE_IO_LINK);  /* 次へリンク */
 
 struct io_uring_sqe *send_sqe = io_uring_get_sqe(&ring);
 io_uring_prep_send(send_sqe, sock_fd, buf, 4096, 0);
-/* No IOSQE_IO_LINK: end of chain */
+/* IOSQE_IO_LINK なし: チェーンの終端 */
 
 io_uring_submit(&ring);
-/* Kernel executes read, then send (if read succeeded) */
+/* カーネルは read を実行し、（read が成功すれば）send を実行する */
 ```
 
-### io_uring kernel internals {#io_uring-kernel-internals}
+### io_uringのカーネル内部 {#io_uring-kernel-internals}
 
 ```c
 /* io_uring/io_uring.c */
@@ -241,59 +241,59 @@ static int io_read(struct io_kiocb *req, unsigned int issue_flags)
     struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
     struct kiocb *kiocb = &rw->kiocb;
 
-    /* Try inline (non-blocking first): */
+    /* まずインラインで試す（ノンブロッキング）: */
     ret = io_iter_do_read(rw, &iter);
 
     if (ret == -EAGAIN) {
-        /* Would block: punt to io-wq thread pool */
+        /* ブロックしそう: io-wq スレッドプールに回す */
         if (issue_flags & IO_URING_F_NONBLOCK)
             return -EAGAIN;
-        /* Or: submit to async worker */
+        /* または: 非同期ワーカーへ発行 */
         io_req_task_work_add(req);
     }
-    /* Complete inline if data was in page cache */
+    /* データがページキャッシュにあればインラインで完了 */
     io_req_set_res(req, ret, 0);
     return IOU_OK;
 }
 ```
 
-io_uring first attempts the operation inline (non-blocking). If it would block, it falls back to a `io-wq` worker thread (similar to a kernel thread pool but cheaper than POSIX AIO's userspace threads).
+io_uringはまず操作をインライン（ノンブロッキング）で試みる。ブロックしそうな場合は`io-wq`ワーカースレッドにフォールバックする（カーネルスレッドプールに似ているが、POSIX AIOのユーザー空間スレッドより軽量である）。
 
-## epoll limitations for file I/O {#epoll-limitations-for-file-io}
+## ファイルI/Oに対するepollの制限 {#epoll-limitations-for-file-io}
 
-For completeness: `epoll` does not solve async file I/O:
+補足として、`epoll`は非同期ファイルI/Oを解決しない:
 
 ```c
-/* This does NOT work for regular files: */
+/* これは通常ファイルには機能しない: */
 int fd = open("file.dat", O_RDONLY | O_NONBLOCK);
 int epfd = epoll_create1(0);
 
 struct epoll_event ev = { .events = EPOLLIN, .data.fd = fd };
 epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 
-/* epoll_wait will return immediately: files are always "ready" */
+/* epoll_wait はすぐに戻る: ファイルは常に「ready」 */
 epoll_wait(epfd, events, 10, -1);
-/* read() still blocks if data isn't in page cache */
+/* データがページキャッシュになければ read() はやはりブロックする */
 ```
 
-Regular files always appear ready to epoll because the VFS has no mechanism to notify when a page cache miss resolves. Only sockets and pipes have genuine readiness semantics.
+VFSにはページキャッシュミスが解消されたことを通知する仕組みがないため、通常ファイルはepollに対して常にreadyに見える。真のreadiness（準備完了）セマンティクスを持つのはソケットとパイプだけである。
 
-## Choosing the right async I/O {#choosing-the-right-async-io}
+## 適切な非同期I/Oの選び方 {#choosing-the-right-async-io}
 
-| Scenario | Recommendation |
+| シナリオ | 推奨 |
 |----------|---------------|
-| O_DIRECT database I/O | io_uring (or Linux AIO for legacy) |
-| Network + file I/O together | io_uring |
-| High-throughput NVMe | io_uring + IOPOLL + SQPOLL |
-| Portable POSIX code | POSIX AIO (accepts the thread overhead) |
-| Socket-only server | epoll + non-blocking sockets |
-| Buffered file I/O, simple | Sync read/write + thread pool |
+| O_DIRECTのデータベースI/O | io_uring（レガシーならLinux AIO） |
+| ネットワークとファイルI/Oの併用 | io_uring |
+| 高スループットなNVMe | io_uring + IOPOLL + SQPOLL |
+| 移植性のあるPOSIXコード | POSIX AIO（スレッドのオーバーヘッドを受け入れる） |
+| ソケットのみのサーバー | epoll + ノンブロッキングソケット |
+| 単純なバッファードファイルI/O | 同期read/write + スレッドプール |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Direct I/O](direct-io.md) — O_DIRECT, alignment requirements
-- [io_uring: Architecture](../io-uring/io-uring-arch.md) — ring setup, SQE/CQE layout
-- [io_uring: Operations](../io-uring/io-uring-ops.md) — full operation reference
-- `io_uring/io_uring.c` — io_uring core
-- `fs/aio.c` — Linux AIO implementation
-- [io_uring.pdf](https://kernel.dk/io_uring.pdf) — Jens Axboe's design paper
+- [Direct I/O](direct-io.md) — O_DIRECT、アライメント要件
+- [io_uring: アーキテクチャ](../io-uring/io-uring-arch.md) — リングのセットアップ、SQE/CQEのレイアウト
+- [io_uring: 操作](../io-uring/io-uring-ops.md) — 操作の完全なリファレンス
+- `io_uring/io_uring.c` — io_uringのコア
+- `fs/aio.c` — Linux AIOの実装
+- [io_uring.pdf](https://kernel.dk/io_uring.pdf) — Jens Axboeによる設計論文

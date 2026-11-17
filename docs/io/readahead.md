@@ -1,51 +1,51 @@
-# Readahead {#readahead}
+# 先読み（readahead） {#readahead}
 
-> Prefetching pages into the page cache before a process requests them
+> プロセスが要求する前にpageをページキャッシュへプリフェッチする
 
-## What is readahead? {#what-is-readahead}
+## 先読みとは何か {#what-is-readahead}
 
-When a process reads a file sequentially, each `read()` that misses the page cache incurs a block I/O wait. Readahead eliminates this latency by predicting which pages will be needed soon and issuing I/O for them **before** the process requests them — ideally so the pages are already warm in the page cache by the time the process gets there.
+プロセスがファイルをシーケンシャルに読むとき、ページキャッシュにミスした`read()`はそれぞれブロックI/Oの待ちを伴う。先読みは、どのpageがまもなく必要になるかを予測し、プロセスが要求する**前に**それらのI/Oを発行することで、このレイテンシをなくす — 理想的には、プロセスがそこに到達する時点でpageがすでにページキャッシュに温まっている状態にする。
 
-The kernel implements readahead entirely inside the page cache layer (`mm/readahead.c`). It is transparent to applications: a sequential `read()` just happens to return faster because the data was already fetched.
+カーネルは先読みをページキャッシュ層（`mm/readahead.c`）の内部だけで実装している。アプリケーションからは透過的であり、シーケンシャルな`read()`は、データがすでに取得されているために単に速く戻るだけである。
 
-Key properties:
+主な性質:
 
-- Only applies to **buffered I/O**. `O_DIRECT` bypasses the page cache and therefore bypasses readahead entirely.
-- The kernel tracks a **readahead window** — a contiguous range of pages to prefetch — per open file description.
-- The window grows on confirmed sequential access and shrinks (or is disabled) when random access is detected.
+- **バッファードI/O**にのみ適用される。`O_DIRECT`はページキャッシュをバイパスするため、先読みも完全にバイパスする。
+- カーネルは、オープンファイル記述ごとに**先読みウィンドウ** — プリフェッチするpageの連続した範囲 — を追跡する。
+- ウィンドウはシーケンシャルなアクセスが確認されると拡大し、ランダムアクセスが検出されると縮小する（または無効になる）。
 
 ## `struct file_ra_state` {#struct-filerastate}
 
-Every `struct file` carries a `file_ra_state` that records the readahead window for that open file description.
+すべての`struct file`は、そのオープンファイル記述の先読みウィンドウを記録する`file_ra_state`を持っている。
 
 ```c
 /* include/linux/fs.h */
 struct file_ra_state {
-    pgoff_t start;          /* where the current window begins (page index) */
-    unsigned int size;      /* number of pages in the current window */
-    unsigned int async_size;/* pages left in window before async prefetch fires */
-    unsigned int ra_pages;  /* max readahead in pages (0 = disabled) */
-    unsigned int mmap_miss; /* cache miss stat for mmap accesses */
-    loff_t prev_pos;        /* position of last read, for sequential detection */
+    pgoff_t start;          /* 現在のウィンドウの開始位置（page インデックス） */
+    unsigned int size;      /* 現在のウィンドウ内の page 数 */
+    unsigned int async_size;/* 非同期プリフェッチが発火するまでにウィンドウ内に残る page 数 */
+    unsigned int ra_pages;  /* page 単位の最大先読み量（0 = 無効） */
+    unsigned int mmap_miss; /* mmap アクセスのキャッシュミス統計 */
+    loff_t prev_pos;        /* シーケンシャル検出のための、前回の読み出し位置 */
 };
 ```
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `start` | Page index of the first page in the current readahead window |
-| `size` | Total pages in the current window (`start` .. `start + size - 1`) |
-| `async_size` | When the process reaches `start + size - async_size`, an async prefetch is triggered for the *next* window |
-| `ra_pages` | Upper bound on window size; `0` disables readahead |
-| `mmap_miss` | Counts page-fault misses on mmap'd regions to detect sequential mmap access |
-| `prev_pos` | Byte offset of the previous read, used to detect whether the current read is sequential |
+| `start` | 現在の先読みウィンドウの最初のpageのインデックス |
+| `size` | 現在のウィンドウ内のpageの総数（`start` .. `start + size - 1`） |
+| `async_size` | プロセスが`start + size - async_size`に到達すると、*次の*ウィンドウの非同期プリフェッチが起動される |
+| `ra_pages` | ウィンドウサイズの上限。`0`で先読みが無効になる |
+| `mmap_miss` | シーケンシャルなmmapアクセスを検出するため、mmapされた領域でのページフォールトのミスを数える |
+| `prev_pos` | 前回の読み出しのバイトオフセット。現在の読み出しがシーケンシャルかどうかの検出に使われる |
 
-`ra_pages` is initialised from the backing device's `queue/read_ahead_kb` setting (divided by page size). `POSIX_FADV_SEQUENTIAL` doubles it; `POSIX_FADV_RANDOM` sets it to zero.
+`ra_pages`は、バッキングデバイスの`queue/read_ahead_kb`設定（をページサイズで割った値）で初期化される。`POSIX_FADV_SEQUENTIAL`はこれを2倍にし、`POSIX_FADV_RANDOM`はゼロにする。
 
-## Synchronous readahead {#synchronous-readahead}
+## 同期先読み {#synchronous-readahead}
 
-Synchronous readahead happens **on the critical path** of `read()`. When the VFS services a `read()` call, it calls into the readahead machinery before (or while) reading the requested page. The result: I/O for pages beyond the requested one is submitted before the process blocks waiting for the requested page.
+同期先読みは`read()`の**クリティカルパス上で**行われる。VFSが`read()`呼び出しを処理するとき、要求されたpageを読む前に（または読みながら）先読みの仕組みを呼び出す。その結果、プロセスが要求したpageを待ってブロックする前に、要求されたpageより先のpageのI/Oが発行される。
 
-### Call path {#call-path}
+### 呼び出し経路 {#call-path}
 
 ```
 read()
@@ -60,12 +60,12 @@ read()
 
 ### `page_cache_ra_unbounded()` {#pagecachera_unbounded}
 
-`page_cache_ra_unbounded()` is the low-level workhorse. It:
+`page_cache_ra_unbounded()`は低レベルの主力関数である。この関数は次のことを行う:
 
-1. Iterates over pages in the window `[ractl->_index, ractl->_index + nr_to_read)`.
-2. For each page not already in cache, allocates a page and marks it `PG_locked`.
-3. Submits a single merged `readahead` bio covering the range.
-4. Marks exactly one page — the first page of the lookahead zone, at index `start + size - async_size` — with `PG_readahead`. This single page acts as the trigger: when `filemap_read` encounters it already uptodate, async readahead fires for the next window.
+1. ウィンドウ`[ractl->_index, ractl->_index + nr_to_read)`内のpageを順に処理する。
+2. まだキャッシュにない各pageについて、pageを割り当てて`PG_locked`をマークする。
+3. その範囲をカバーする、マージされた1つの`readahead` bioを発行する。
+4. ちょうど1つのpage — 先読み領域（lookahead zone）の最初のpageで、インデックスは`start + size - async_size` — に`PG_readahead`をマークする。この1つのpageがトリガーとして働く。`filemap_read`がこのpageをすでにuptodateの状態で見つけると、次のウィンドウの非同期先読みが発火する。
 
 ```c
 /* mm/readahead.c */
@@ -77,35 +77,35 @@ void page_cache_ra_unbounded(struct readahead_control *ractl,
     unsigned long index = readahead_index(ractl);
 
     /*
-     * Allocate pages, add to page cache, then submit I/O.
-     * 'lookahead_size' pages at the end get PG_readahead set
-     * so async readahead fires when the process reaches them.
+     * page を割り当ててページキャッシュに追加し、I/O を発行する。
+     * 末尾の 'lookahead_size' 個の page には PG_readahead が設定され、
+     * プロセスがそこに到達すると非同期先読みが発火する。
      */
     for (i = 0; i < nr_to_read; i++) {
         struct folio *folio = xa_load(&mapping->i_pages, index + i);
         if (folio)
-            continue;           /* already cached */
+            continue;           /* すでにキャッシュ済み */
         folio = filemap_alloc_folio(gfp, 0);
         filemap_add_folio(mapping, folio, index + i, gfp);
         ractl->_nr_pages++;
     }
-    read_pages(ractl);          /* submit bio(s) */
+    read_pages(ractl);          /* bio を発行 */
 }
 ```
 
 ### `ondemand_readahead()` {#ondemand_readahead}
 
-`ondemand_readahead()` is a `static` internal function (not a public API) that sits above `do_page_cache_ra()` and decides **how many pages** to read. It implements the window-growth heuristic and sequential-detection logic described in the next section.
+`ondemand_readahead()`は`static`な内部関数（公開APIではない）であり、`do_page_cache_ra()`の上位に位置して、**何pageを**読むかを決める。次節で説明するウィンドウ拡大のヒューリスティックとシーケンシャル検出のロジックを実装している。
 
-> **Note:** In Linux 6.6+, `ondemand_readahead()` was renamed to `page_cache_ra_order()` as part of the large-folio readahead refactor.
+> **注:** Linux 6.6以降では、大きなfolioの先読みに関するリファクタリングの一環として、`ondemand_readahead()`は`page_cache_ra_order()`に改名された。
 
-## Async readahead {#async-readahead}
+## 非同期先読み {#async-readahead}
 
-Async readahead prefetches the **next** window in the background while the process is still consuming the current one, so there is no stall at the window boundary.
+非同期先読みは、プロセスが現在のウィンドウをまだ消費している間に、**次の**ウィンドウをバックグラウンドでプリフェッチする。そのため、ウィンドウの境界で停滞が起きない。
 
-### The readahead marker page {#the-readahead-marker-page}
+### 先読みマーカーpage {#the-readahead-marker-page}
 
-When `page_cache_ra_unbounded()` submits a window, it sets the `PG_readahead` flag on exactly one page — the first page of the lookahead zone, at index `start + size - async_size`. When `filemap_read()` encounters this page already uptodate, it calls `page_cache_async_ra()` — which calls `ondemand_readahead()` again for the next window — without waiting for the current read to finish.
+`page_cache_ra_unbounded()`がウィンドウを発行するとき、ちょうど1つのpage — 先読み領域の最初のpageで、インデックスは`start + size - async_size` — に`PG_readahead`フラグを設定する。`filemap_read()`がこのpageをすでにuptodateの状態で見つけると、現在の読み出しの完了を待たずに`page_cache_async_ra()`を呼び出す。これは次のウィンドウのために再び`ondemand_readahead()`を呼び出す。
 
 ```
 Window N already in cache (or being read):
@@ -118,54 +118,54 @@ Window N already in cache (or being read):
                (async, does not block the read())
 ```
 
-This means: by the time the process reads the last page of window N, window N+1 is already in flight (or done). With an appropriate `async_size`, the process never stalls.
+つまり、プロセスがウィンドウNの最後のpageを読む時点で、ウィンドウN+1はすでに転送中（または完了済み）である。適切な`async_size`であれば、プロセスが停滞することはない。
 
 ```c
-/* mm/readahead.c — called when PG_readahead page is hit */
+/* mm/readahead.c — PG_readahead の page にヒットしたときに呼ばれる */
 void page_cache_async_ra(struct readahead_control *ractl,
                          struct folio *folio,
                          unsigned long req_count)
 {
-    /* Don't start async readahead if the folio is not yet uptodate
-     * or if the readahead flag is no longer set. */
+    /* folio がまだ uptodate でない場合や、readahead フラグが
+     * もう設定されていない場合は非同期先読みを開始しない。 */
     if (!folio_test_readahead(folio))
         return;
     ondemand_readahead(ractl, folio, req_count);
 }
 ```
 
-## Adaptive readahead {#adaptive-readahead}
+## 適応的な先読み {#adaptive-readahead}
 
-The kernel does not use a fixed window size. `ondemand_readahead()` grows and shrinks `ra->size` based on observed access patterns.
+カーネルは固定のウィンドウサイズを使わない。`ondemand_readahead()`は、観測されたアクセスパターンに基づいて`ra->size`を拡大・縮小する。
 
-### Sequential detection {#sequential-detection}
+### シーケンシャル検出 {#sequential-detection}
 
-A read is considered sequential if:
+次のいずれかを満たす場合、読み出しはシーケンシャルとみなされる:
 
-- The current read offset equals `ra->start + ra->size` (continues exactly where the last window ended), **or**
-- `prev_pos` is within one page of the current offset (the process stepped forward by one read).
+- 現在の読み出しオフセットが`ra->start + ra->size`に等しい（前回のウィンドウが終わったところからちょうど続いている）、**または**
+- `prev_pos`が現在のオフセットから1page以内にある（プロセスが1回の読み出し分だけ前進した）。
 
-If neither condition holds, the access is treated as **random** and the window is reset to a small initial size (typically 2 pages) rather than zero — so the kernel probes whether sequential access might resume.
+どちらの条件も満たさない場合、そのアクセスは**ランダム**として扱われ、ウィンドウはゼロではなく小さな初期サイズ（通常2page）にリセットされる — これにより、カーネルはシーケンシャルアクセスが再開するかどうかを探る。
 
-### Window growth {#window-growth}
+### ウィンドウの拡大 {#window-growth}
 
-On each sequential confirmation, the window roughly doubles until it hits `ra->ra_pages`:
+シーケンシャルであることが確認されるたびに、ウィンドウは`ra->ra_pages`に達するまでおおよそ2倍になる:
 
 ```c
-/* Simplified from ondemand_readahead() in mm/readahead.c */
+/* mm/readahead.c の ondemand_readahead() を簡略化したもの */
 if (sequential) {
     ra->size = min(ra->size * 2, ra->ra_pages);
 } else {
-    /* Random-looking access: reset to initial probe size */
+    /* ランダムに見えるアクセス: 初期の探索サイズにリセット */
     ra->size  = get_init_ra_size(ra->ra_pages, ra->ra_pages);
     ra->start = offset;
 }
-ra->async_size = ra->size / 2;   /* fire async prefetch halfway through */
+ra->async_size = ra->size / 2;   /* 半分まで進んだところで非同期プリフェッチを発火 */
 ```
 
-`async_size` is set to roughly half the window so the async prefetch fires early enough that I/O completes before the process reaches the end of the window.
+`async_size`はウィンドウのおよそ半分に設定される。これにより非同期プリフェッチが十分早く発火し、プロセスがウィンドウの末尾に到達する前にI/Oが完了する。
 
-### State machine summary {#state-machine-summary}
+### ステートマシンのまとめ {#state-machine-summary}
 
 ```
 First read on file
@@ -184,9 +184,9 @@ POSIX_FADV_RANDOM or ra_pages == 0
   → readahead fully disabled
 ```
 
-## `posix_fadvise()` hints {#posix_fadvise-hints}
+## `posix_fadvise()`のヒント {#posix_fadvise-hints}
 
-`posix_fadvise()` lets an application tell the kernel about its intended access pattern, adjusting the readahead behaviour without changing the read API.
+`posix_fadvise()`を使うと、アプリケーションは意図するアクセスパターンをカーネルに伝え、読み出しAPIを変えずに先読みの挙動を調整できる。
 
 ```c
 #include <fcntl.h>
@@ -194,35 +194,35 @@ POSIX_FADV_RANDOM or ra_pages == 0
 int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 ```
 
-| Advice | Effect on readahead |
+| アドバイス | 先読みへの影響 |
 |--------|---------------------|
-| `POSIX_FADV_NORMAL` | Restore default `ra_pages` |
-| `POSIX_FADV_SEQUENTIAL` | Double `ra_pages` relative to the BDI default — calling it twice does not quadruple |
-| `POSIX_FADV_RANDOM` | Set `ra_pages = 0` — disable readahead entirely |
-| `POSIX_FADV_WILLNEED` | Trigger immediate synchronous readahead for `[offset, offset+len)` |
-| `POSIX_FADV_DONTNEED` | Drop pages in range from the page cache |
-| `POSIX_FADV_NOREUSE` | Hint that pages will not be reused (advisory, limited kernel support) |
+| `POSIX_FADV_NORMAL` | デフォルトの`ra_pages`に戻す |
+| `POSIX_FADV_SEQUENTIAL` | BDIのデフォルトに対して`ra_pages`を2倍にする — 2回呼んでも4倍にはならない |
+| `POSIX_FADV_RANDOM` | `ra_pages = 0`に設定する — 先読みを完全に無効化する |
+| `POSIX_FADV_WILLNEED` | `[offset, offset+len)`に対して即座に同期先読みを起動する |
+| `POSIX_FADV_DONTNEED` | 範囲内のpageをページキャッシュから破棄する |
+| `POSIX_FADV_NOREUSE` | pageが再利用されないことを示すヒント（助言的なもので、カーネルのサポートは限定的） |
 
 ### `POSIX_FADV_SEQUENTIAL` {#posixfadvsequential}
 
-Doubles `ra->ra_pages` relative to the BDI default — calling it twice does not quadruple the window. Useful for applications that stream a file from start to finish and want larger prefetch windows to hide I/O latency.
+BDIのデフォルトに対して`ra->ra_pages`を2倍にする — 2回呼んでもウィンドウは4倍にはならない。ファイルを最初から最後までストリーミングし、I/Oレイテンシを隠すためにより大きなプリフェッチウィンドウを望むアプリケーションに有用である。
 
 ### `POSIX_FADV_RANDOM` {#posixfadvrandom}
 
-Sets `ra->ra_pages = 0`. The kernel skips all readahead logic for this file descriptor. Every page fault or `read()` that misses the cache will fetch exactly the requested page(s) — no more. Appropriate for databases doing their own I/O scheduling or workloads with truly random access patterns where prefetched pages would be evicted before use.
+`ra->ra_pages = 0`に設定する。カーネルはこのファイルディスクリプタについて先読みのロジックをすべてスキップする。キャッシュにミスしたページフォールトや`read()`は、要求されたpageだけを取得する — それ以上は取得しない。独自のI/Oスケジューリングを行うデータベースや、プリフェッチしたpageが使われる前に追い出されてしまうような真にランダムなアクセスパターンのワークロードに適している。
 
 ### `POSIX_FADV_WILLNEED` {#posixfadvwillneed}
 
-Schedules immediate readahead for the specified range regardless of the current access pattern. The call returns before the I/O completes (it is non-blocking). Useful for:
+現在のアクセスパターンにかかわらず、指定した範囲の先読みを即座にスケジュールする。この呼び出しはI/Oの完了前に戻る（ノンブロッキングである）。次の用途に有用である:
 
-- Preloading a file before starting a sequential scan
-- Warming the cache during an idle period before a latency-sensitive operation
+- シーケンシャルスキャンを開始する前にファイルを事前に読み込む
+- レイテンシに敏感な操作の前に、アイドル期間中にキャッシュを温めておく
 
 ### `POSIX_FADV_DONTNEED` {#posixfadvdontneed}
 
-Drops clean pages in the range from the page cache. Useful for streaming applications that read a file once and want to avoid polluting the cache (similar to `O_DIRECT` but without the alignment restrictions).
+範囲内のクリーンなpageをページキャッシュから破棄する。ファイルを一度だけ読み、キャッシュの汚染を避けたいストリーミングアプリケーションに有用である（`O_DIRECT`に似ているが、アライメントの制約がない）。
 
-### C example {#c-example}
+### Cの例 {#c-example}
 
 ```c
 #include <fcntl.h>
@@ -238,14 +238,14 @@ int main(void)
     off_t file_size = lseek(fd, 0, SEEK_END);
 
     /*
-     * Tell the kernel we will read sequentially.
-     * This doubles ra_pages, so the prefetch window grows faster.
+     * シーケンシャルに読むことをカーネルに伝える。
+     * これにより ra_pages が 2 倍になり、プリフェッチウィンドウがより速く拡大する。
      */
     posix_fadvise(fd, 0, file_size, POSIX_FADV_SEQUENTIAL);
 
     /*
-     * Optionally: warm the first 64 MiB into cache now,
-     * before the processing loop starts.
+     * 任意: 処理ループを始める前に、
+     * 先頭 64 MiB を今のうちにキャッシュへ温めておく。
      */
     posix_fadvise(fd, 0, 64 * 1024 * 1024, POSIX_FADV_WILLNEED);
 
@@ -253,11 +253,11 @@ int main(void)
     ssize_t n;
     lseek(fd, 0, SEEK_SET);
     while ((n = read(fd, buf, 1024 * 1024)) > 0) {
-        /* process buf[0..n-1] */
+        /* buf[0..n-1] を処理する */
 
         /*
-         * Drop already-processed pages from cache to avoid
-         * evicting more useful data.
+         * より有用なデータを追い出さないよう、
+         * 処理済みの page をキャッシュから破棄する。
          */
         off_t pos = lseek(fd, 0, SEEK_CUR);
         posix_fadvise(fd, pos - n, n, POSIX_FADV_DONTNEED);
@@ -269,74 +269,74 @@ int main(void)
 }
 ```
 
-## `madvise()` equivalents for mmap {#madvise-equivalents-for-mmap}
+## mmap向けの`madvise()`による同等機能 {#madvise-equivalents-for-mmap}
 
-For memory-mapped files, `posix_fadvise()` does not apply. Use `madvise()` instead:
+メモリマップされたファイルには`posix_fadvise()`は適用されない。代わりに`madvise()`を使う:
 
 ```c
 #include <sys/mman.h>
 
 void *addr = mmap(NULL, length, PROT_READ, MAP_SHARED, fd, 0);
 
-/* Equivalent of POSIX_FADV_SEQUENTIAL: */
+/* POSIX_FADV_SEQUENTIAL に相当: */
 madvise(addr, length, MADV_SEQUENTIAL);
 
-/* Equivalent of POSIX_FADV_RANDOM: */
+/* POSIX_FADV_RANDOM に相当: */
 madvise(addr, length, MADV_RANDOM);
 
-/* Equivalent of POSIX_FADV_WILLNEED: */
+/* POSIX_FADV_WILLNEED に相当: */
 madvise(addr, length, MADV_WILLNEED);
 
-/* Drop pages (equivalent of POSIX_FADV_DONTNEED): */
+/* page を破棄（POSIX_FADV_DONTNEED に相当）: */
 madvise(addr, length, MADV_DONTNEED);
 ```
 
-| `madvise` flag | Effect |
+| `madvise`のフラグ | 効果 |
 |---------------|--------|
-| `MADV_SEQUENTIAL` | Doubles readahead, aggressively evicts pages behind the fault point |
-| `MADV_RANDOM` | Disables readahead for this mapping (`ra_pages = 0` for faults in range) |
-| `MADV_WILLNEED` | Triggers async readahead for the range — pages are faulted in before the process accesses them |
-| `MADV_DONTNEED` | Drops pages from cache; next access will re-fault |
+| `MADV_SEQUENTIAL` | 先読みを2倍にし、フォールト位置より後ろのpageを積極的に追い出す |
+| `MADV_RANDOM` | このマッピングの先読みを無効化する（範囲内のフォールトに対して`ra_pages = 0`） |
+| `MADV_WILLNEED` | 範囲に対する非同期先読みを起動する — プロセスがアクセスする前にpageがフォールトインされる |
+| `MADV_DONTNEED` | pageをキャッシュから破棄する。次のアクセスで再びフォールトする |
 
-`MADV_SEQUENTIAL` also instructs the kernel's page-fault handler to drop pages **behind** the current fault point more aggressively, reducing memory pressure for streaming workloads.
+`MADV_SEQUENTIAL`はさらに、カーネルのページフォールトハンドラに対して、現在のフォールト位置より**後ろ**のpageをより積極的に破棄するよう指示し、ストリーミングワークロードのメモリ圧迫を軽減する。
 
-## Practical tuning {#practical-tuning}
+## 実践的なチューニング {#practical-tuning}
 
 ### `/sys/block/<dev>/queue/read_ahead_kb` {#sysblockqueuereadaheadkb}
 
-The per-device readahead size sets the default `ra_pages` for all files on that device:
+デバイスごとの先読みサイズは、そのデバイス上のすべてのファイルのデフォルトの`ra_pages`を決める:
 
 ```bash
-# Read the current setting (in kilobytes):
+# 現在の設定を読む（キロバイト単位）:
 cat /sys/block/sda/queue/read_ahead_kb
 # 128
 
-# Increase for sequential workloads (e.g., large video files, backups):
+# シーケンシャルなワークロード（大きな動画ファイル、バックアップなど）では増やす:
 echo 2048 > /sys/block/sda/queue/read_ahead_kb
 
-# Reduce for random-access workloads (e.g., database data files):
+# ランダムアクセスのワークロード（データベースのデータファイルなど）では減らす:
 echo 16 > /sys/block/sda/queue/read_ahead_kb
 ```
 
-`POSIX_FADV_SEQUENTIAL` doubles this per-fd value; `POSIX_FADV_RANDOM` zeroes it. The sysfs knob is the global baseline.
+`POSIX_FADV_SEQUENTIAL`はこのfdごとの値を2倍にし、`POSIX_FADV_RANDOM`はゼロにする。sysfsのつまみはグローバルな基準値である。
 
-### Effect on database workloads {#effect-on-database-workloads}
+### データベースワークロードへの影響 {#effect-on-database-workloads}
 
-Most databases (PostgreSQL, MySQL InnoDB, RocksDB) open data files with either `O_DIRECT` or explicit `POSIX_FADV_RANDOM`:
+ほとんどのデータベース（PostgreSQL、MySQL InnoDB、RocksDB）は、データファイルを`O_DIRECT`か明示的な`POSIX_FADV_RANDOM`のどちらかで開く:
 
-- **`O_DIRECT`** — bypasses page cache and readahead entirely; the database manages its own buffer pool.
-- **`POSIX_FADV_RANDOM`** — keeps buffered I/O but disables the kernel's readahead; the database issues its own prefetch via `POSIX_FADV_WILLNEED` when it knows a sequential scan is coming.
+- **`O_DIRECT`** — ページキャッシュと先読みを完全にバイパスする。データベースは独自のバッファプールを管理する。
+- **`POSIX_FADV_RANDOM`** — バッファードI/Oを維持しつつカーネルの先読みを無効にする。データベースは、シーケンシャルスキャンが来ると分かっているときに`POSIX_FADV_WILLNEED`で独自にプリフェッチを発行する。
 
-For a database running **buffered I/O without fadvise hints**, a large `read_ahead_kb` wastes memory and I/O bandwidth because the kernel prefetches pages the database will not access in order. Reducing `read_ahead_kb` to 16–64 KB on database block devices is a common production tuning step.
+**fadviseのヒントなしでバッファードI/O**を使うデータベースでは、大きな`read_ahead_kb`はメモリとI/O帯域幅を無駄にする。データベースが順番にはアクセスしないpageをカーネルがプリフェッチしてしまうからである。データベースのブロックデバイスで`read_ahead_kb`を16〜64 KBに減らすのは、本番環境でよく行われるチューニングである。
 
-Conversely, for **sequential workloads** — log shipping, backup streams, analytics full-table scans — a large readahead window (512 KB – 4 MB) keeps the I/O pipeline full and eliminates stalls.
+逆に、**シーケンシャルなワークロード** — ログシッピング、バックアップストリーム、分析系のフルテーブルスキャン — では、大きな先読みウィンドウ（512 KB〜4 MB）がI/Oパイプラインを満たし続け、停滞をなくす。
 
-### NVMe considerations {#nvme-considerations}
+### NVMeでの考慮事項 {#nvme-considerations}
 
-On NVMe, I/O latency is low enough (50–200 µs) that readahead is less critical for moderate sequential reads. However, because NVMe queues are deep (1024+ commands), submitting a large readahead window early still helps saturate bandwidth. The default `read_ahead_kb` for NVMe devices is typically 128 KB; tuning to 512 KB or higher can improve throughput for bulk sequential workloads.
+NVMeではI/Oレイテンシが十分に低い（50〜200 µs）ため、中程度のシーケンシャル読み出しでは先読みの重要性は低い。しかし、NVMeのキューは深い（1024以上のコマンド）ため、大きな先読みウィンドウを早めに発行することは、依然として帯域幅を飽和させるのに役立つ。NVMeデバイスのデフォルトの`read_ahead_kb`は通常128 KBであり、512 KB以上にチューニングすると、大量のシーケンシャルワークロードでスループットが向上することがある。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Buffered I/O](buffered-io.md) — page cache, `filemap_read()`, writeback
-- [Direct I/O](direct-io.md) — bypassing the page cache and readahead
-- `mm/readahead.c` — `ondemand_readahead()`, `page_cache_ra_unbounded()`, `page_cache_async_ra()`
+- [バッファードI/O](buffered-io.md) — ページキャッシュ、`filemap_read()`、ライトバック
+- [Direct I/O](direct-io.md) — ページキャッシュと先読みのバイパス
+- `mm/readahead.c` — `ondemand_readahead()`、`page_cache_ra_unbounded()`、`page_cache_async_ra()`

@@ -1,10 +1,10 @@
 # pread / pwrite / preadv2 / pwritev2 {#pread-pwrite-preadv2-pwritev2}
 
-> Positional I/O, scatter-gather, and per-call flags: the full API from pread64 to RWF_ATOMIC
+> 位置指定I/O、スキャッタ・ギャザー、呼び出しごとのフラグ: pread64からRWF_ATOMICまでのAPI全体
 
-## The problem with read() / write() for concurrent I/O {#the-problem-with-read-write-for-concurrent-io}
+## 並行I/Oにおけるread() / write()の問題 {#the-problem-with-read-write-for-concurrent-io}
 
-`read()` and `write()` use `file->f_pos` — the file position stored in the open file description. Because an open file description is shared between all file descriptors that refer to it (after `dup`, `dup2`, `fork`, etc.), concurrent access creates a race:
+`read()`と`write()`は`file->f_pos`、すなわちオープンファイル記述（open file description）に格納されたファイル位置を使う。オープンファイル記述は、それを参照するすべてのファイルディスクリプタ（`dup`、`dup2`、`fork`などの後）の間で共有されるため、並行アクセスは競合状態を生む。
 
 ```
 Thread A                        Thread B
@@ -14,9 +14,9 @@ lseek(fd, 0, SEEK_SET)         lseek(fd, 4096, SEEK_SET)
 read(fd, buf, 4096)            ← reads from offset 4096, not 0
 ```
 
-Even when two threads each hold their own `fd` obtained from `open()` independently, `lseek()` + `read()` is still not atomic: another `read()` on the same thread can interleave between the seek and the read.
+2つのスレッドがそれぞれ`open()`で独立に得た自分の`fd`を持っている場合でも、`lseek()` + `read()`はアトミックではない。同じスレッド上の別の`read()`が、シークと読み出しの間に割り込みうる。
 
-The kernel serializes `f_pos` updates with `file->f_pos_lock` (a mutex), but this serialization is per-operation — it does not make seek+read atomic as a unit.
+カーネルは`f_pos`の更新を`file->f_pos_lock`（mutex）で直列化するが、この直列化は操作単位であり、シーク+読み出しを1つの単位としてアトミックにするものではない。
 
 ```
 Thread A: fdget_pos() → acquires f_pos_lock
@@ -28,9 +28,9 @@ Thread A: fdget_pos() → acquires f_pos_lock
           fdput_pos() → releases f_pos_lock
 ```
 
-Between those two lock acquisitions, Thread B can change `f_pos`. This is a TOCTOU problem at the application level.
+この2回のロック取得の間に、スレッドBは`f_pos`を変更できる。これはアプリケーションレベルでのTOCTOU問題である。
 
-`pread()` and `pwrite()` solve this: they accept an explicit `offset` argument and never read or write `f_pos`. There is no race because the offset lives on the caller's stack.
+`pread()`と`pwrite()`はこれを解決する。これらは明示的な`offset`引数を受け取り、`f_pos`を読むことも書くこともない。オフセットは呼び出し側のスタック上にあるので、競合は起きない。
 
 ---
 
@@ -39,16 +39,16 @@ Between those two lock acquisitions, Thread B can change `f_pos`. This is a TOCT
 ```c
 #include <unistd.h>
 
-/* Read count bytes from fd at offset into buf; f_pos is unchanged. */
+/* fd のオフセット offset から count バイトを buf に読む。f_pos は変わらない。 */
 ssize_t pread(int fd, void *buf, size_t count, off_t offset);
 
-/* Write count bytes from buf to fd at offset; f_pos is unchanged. */
+/* buf から count バイトを fd のオフセット offset に書く。f_pos は変わらない。 */
 ssize_t pwrite(int fd, const void *buf, size_t count, off_t offset);
 ```
 
-### Syscall implementation {#syscall-implementation}
+### システムコールの実装 {#syscall-implementation}
 
-The kernel entry points are `pread64` and `pwrite64` (the `64` suffix indicates that the offset is a 64-bit `loff_t`, matching `off64_t` from glibc):
+カーネルのエントリポイントは`pread64`と`pwrite64`である（`64`という接尾辞は、オフセットがglibcの`off64_t`に対応する64ビットの`loff_t`であることを示す）。
 
 ```c
 /* fs/read_write.c */
@@ -58,15 +58,15 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
     struct fd f;
     ssize_t ret = -EBADF;
 
-    f = fdget(fd);          /* note: fdget, NOT fdget_pos */
+    f = fdget(fd);          /* 注意: fdget_pos ではなく fdget */
     if (f.file) {
         ret = -ESPIPE;
-        if (f.file->f_mode & FMODE_PREAD)   /* file must be seekable */
+        if (f.file->f_mode & FMODE_PREAD)   /* ファイルはシーク可能でなければならない */
             ret = vfs_read(f.file, buf, count, &pos);
             /*
-             * pos is a local variable on the kernel stack.
-             * vfs_read() may advance it, but the result is
-             * never written back to f.file->f_pos.
+             * pos はカーネルスタック上のローカル変数である。
+             * vfs_read() はそれを進めることがあるが、その結果が
+             * f.file->f_pos に書き戻されることはない。
              */
         fdput(f);
     }
@@ -74,17 +74,17 @@ SYSCALL_DEFINE4(pread64, unsigned int, fd, char __user *, buf,
 }
 ```
 
-The `FMODE_PREAD` / `FMODE_PWRITE` mode flags are set for regular files and block devices. Pipes, sockets, and other non-seekable file types do not set these flags and return `ESPIPE`.
+`FMODE_PREAD` / `FMODE_PWRITE`のモードフラグは、通常ファイルとブロックデバイスでセットされる。パイプ、ソケット、その他のシーク不可能なファイル種別はこれらのフラグをセットせず、`ESPIPE`を返す。
 
-### fdget vs fdget_pos — the key difference {#fdget-vs-fdget_pos-the-key-difference}
+### fdgetとfdget_pos — 重要な違い {#fdget-vs-fdget_pos-the-key-difference}
 
-`read()` uses `fdget_pos()`:
+`read()`は`fdget_pos()`を使う。
 
 ```c
 /* fs/read_write.c */
 ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
 {
-    struct fd f = fdget_pos(fd);    /* acquires f_pos_lock */
+    struct fd f = fdget_pos(fd);    /* f_pos_lock を取得する */
     ssize_t ret = -EBADF;
 
     if (f.file) {
@@ -96,43 +96,43 @@ ssize_t ksys_read(unsigned int fd, char __user *buf, size_t count)
         ret = vfs_read(f.file, buf, count, ppos);
         if (!IS_ERR_VALUE(ret)) {
             if (ppos)
-                f.file->f_pos = pos;    /* write back updated position */
+                f.file->f_pos = pos;    /* 更新された位置を書き戻す */
         }
-        fdput_pos(f);                   /* releases f_pos_lock */
+        fdput_pos(f);                   /* f_pos_lock を解放する */
     }
     return ret;
 }
 ```
 
-`pread()` uses `fdget()` (no lock, no position update):
+`pread()`は`fdget()`を使う（ロックなし、位置の更新なし）。
 
 | | `read()` / `write()` | `pread()` / `pwrite()` |
 |---|---|---|
-| Lock acquired | `f_pos_lock` (mutex) | none |
-| Position source | `file->f_pos` | local stack variable |
-| Position updated after | yes | no |
-| Safe for concurrent threads | only sequentially | yes |
+| 取得するロック | `f_pos_lock`（mutex） | なし |
+| 位置の取得元 | `file->f_pos` | スタック上のローカル変数 |
+| 実行後に位置を更新するか | する | しない |
+| 並行スレッドで安全か | 逐次的な場合のみ | 安全 |
 
-Because `pread()`/`pwrite()` do not touch `f_pos` and do not take `f_pos_lock`, multiple threads can issue concurrent positional reads on the same open file description without any serialization overhead.
+`pread()`/`pwrite()`は`f_pos`に触れず`f_pos_lock`も取らないため、複数のスレッドが同じオープンファイル記述に対して、直列化のオーバーヘッドなしに並行して位置指定読み出しを発行できる。
 
-### Error cases {#error-cases}
+### エラーケース {#error-cases}
 
 ```c
-/* ESPIPE: fd is a pipe or socket */
+/* ESPIPE: fd がパイプまたはソケット */
 pread(pipefd[0], buf, 4096, 0);     /* → -1, errno = ESPIPE */
 
-/* EINVAL: offset is negative */
+/* EINVAL: オフセットが負 */
 pread(fd, buf, 4096, -1);           /* → -1, errno = EINVAL */
 
-/* Works fine: offset beyond EOF returns 0 */
-pread(fd, buf, 4096, 1ULL << 40);   /* → 0 (EOF) if file is smaller */
+/* 問題なく動作する: EOF を超えるオフセットは 0 を返す */
+pread(fd, buf, 4096, 1ULL << 40);   /* → ファイルがより小さければ 0（EOF） */
 ```
 
 ---
 
 ## preadv() / pwritev() {#preadv-pwritev}
 
-`readv()` and `writev()` have had scatter-gather I/O since POSIX.1-2001, but there was no way to specify an explicit offset. Linux 2.6.30 added `preadv()` and `pwritev()` to fill this gap:
+`readv()`と`writev()`はPOSIX.1-2001からスキャッタ・ギャザーI/Oを備えていたが、明示的なオフセットを指定する方法はなかった。Linux 2.6.30はこの穴を埋めるために`preadv()`と`pwritev()`を追加した。
 
 ```c
 #include <sys/uio.h>
@@ -141,9 +141,9 @@ ssize_t preadv(int fd, const struct iovec *iov, int iovcnt, off_t offset);
 ssize_t pwritev(int fd, const struct iovec *iov, int iovcnt, off_t offset);
 ```
 
-These combine the offset semantics of `pread()`/`pwrite()` with the scatter-gather capability of `readv()`/`writev()`. Like the non-vectored variants, they do not touch `f_pos` and require `FMODE_PREAD`/`FMODE_PWRITE`.
+これらは`pread()`/`pwrite()`のオフセットのセマンティクスと、`readv()`/`writev()`のスキャッタ・ギャザー機能を組み合わせたものである。ベクタでない版と同様に、`f_pos`に触れず、`FMODE_PREAD`/`FMODE_PWRITE`を必要とする。
 
-### Kernel path {#kernel-path}
+### カーネル内の経路 {#kernel-path}
 
 ```c
 /* fs/read_write.c */
@@ -182,16 +182,16 @@ static ssize_t do_preadv(unsigned long fd, const struct iovec __user *vec,
 }
 ```
 
-The split of `pos` into `pos_l` and `pos_h` is a 32-bit ABI artifact: on 32-bit architectures, a 64-bit `loff_t` is passed as two 32-bit registers. On 64-bit architectures the ABI provides a single register.
+`pos`を`pos_l`と`pos_h`に分けているのは32ビットABIの名残である。32ビットアーキテクチャでは、64ビットの`loff_t`は2つの32ビットレジスタで渡される。64ビットアーキテクチャではABIが単一のレジスタを提供する。
 
-### Why databases use preadv {#why-databases-use-preadv}
+### なぜデータベースはpreadvを使うか {#why-databases-use-preadv}
 
-A typical database page read looks like:
+典型的なデータベースのpage読み出しは次のようになる。
 
 ```c
 /*
- * Read a B-tree page from a fixed offset into separate header and
- * data buffers, without touching f_pos and without a staging allocation.
+ * 固定オフセットから B-tree の page を、ヘッダとデータの別々の
+ * バッファへ読み込む。f_pos には触れず、中間バッファの割り当てもしない。
  */
 struct page_header hdr;
 uint8_t data[PAGE_SIZE - sizeof(hdr)];
@@ -204,15 +204,15 @@ struct iovec iov[2] = {
 ssize_t n = preadv(dbfile, iov, 2, page_no * PAGE_SIZE);
 ```
 
-Two benefits:
-1. **No memcpy**: header and data land directly in separate structures — no need to read into a flat buffer and then split it.
-2. **Thread-safe**: multiple threads can call `preadv()` on the same `fd` at different offsets simultaneously without any user-space locking.
+利点は2つある。
+1. **memcpyが不要**: ヘッダとデータが別々の構造体へ直接入る。フラットなバッファに読み込んでから分割する必要はない。
+2. **スレッドセーフ**: 複数のスレッドが、ユーザー空間でのロックなしに、同じ`fd`に対して異なるオフセットで同時に`preadv()`を呼べる。
 
 ---
 
-## preadv2() / pwritev2(): per-call flags {#preadv2-pwritev2-per-call-flags}
+## preadv2() / pwritev2(): 呼び出しごとのフラグ {#preadv2-pwritev2-per-call-flags}
 
-Linux 4.6 extended `preadv()`/`pwritev()` with a `flags` argument:
+Linux 4.6は`preadv()`/`pwritev()`を`flags`引数で拡張した。
 
 ```c
 #include <sys/uio.h>
@@ -223,25 +223,25 @@ ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
                  off_t offset, int flags);
 ```
 
-`flags` is of type `rwf_t` (defined as `__kernel_rwf_t`, an `int`). It allows per-call control of I/O behaviour that was previously only settable at file-open time via `O_` flags or required a separate fcntl call.
+`flags`は`rwf_t`型（`__kernel_rwf_t`、つまり`int`として定義される）である。これにより、以前はファイルオープン時に`O_`フラグで設定するか、別途fcntl呼び出しを必要としたI/Oの振る舞いを、呼び出しごとに制御できる。
 
-### RWF_* flags {#rwf_-flags}
+### RWF_* フラグ {#rwf_-flags}
 
-| Flag | Value | Kernel version | Description |
+| フラグ | 値 | カーネルバージョン | 説明 |
 |------|-------|----------------|-------------|
-| `RWF_HIPRI` | `0x01` | 4.6 | High-priority I/O; poll for completion (NVMe polled queues) |
-| `RWF_DSYNC` | `0x02` | 4.7 | Data-sync semantics for this write (like `O_DSYNC` per call) |
-| `RWF_SYNC` | `0x04` | 4.7 | Full sync for this write (like `O_SYNC` per call) |
-| `RWF_NOWAIT` | `0x08` | 4.14 | Return `EAGAIN` immediately if I/O would block |
-| `RWF_APPEND` | `0x10` | 4.16 | Atomic append to end of file regardless of `offset` |
-| `RWF_NOAPPEND` | `0x20` | 6.9 | Override `O_APPEND` for this call; write at given offset |
-| `RWF_ATOMIC` | `0x40` | 6.11 | Hardware-guaranteed atomic write |
+| `RWF_HIPRI` | `0x01` | 4.6 | 高優先度I/O。完了をポーリングする（NVMeのポーリングキュー） |
+| `RWF_DSYNC` | `0x02` | 4.7 | この書き込みにデータ同期セマンティクスを適用（呼び出し単位の`O_DSYNC`） |
+| `RWF_SYNC` | `0x04` | 4.7 | この書き込みを完全同期にする（呼び出し単位の`O_SYNC`） |
+| `RWF_NOWAIT` | `0x08` | 4.14 | I/Oがブロックする場合は直ちに`EAGAIN`を返す |
+| `RWF_APPEND` | `0x10` | 4.16 | `offset`にかかわらずファイル末尾へアトミックに追記する |
+| `RWF_NOAPPEND` | `0x20` | 6.9 | この呼び出しについて`O_APPEND`を上書きし、指定オフセットに書き込む |
+| `RWF_ATOMIC` | `0x40` | 6.11 | ハードウェアが保証するアトミック書き込み |
 
-Flags are defined in `include/uapi/linux/fs.h`.
+フラグは`include/uapi/linux/fs.h`で定義されている。
 
-### How flags reach the filesystem: kiocb_set_rw_flags {#how-flags-reach-the-filesystem-kiocbsetrw_flags}
+### フラグがファイルシステムに届く仕組み: kiocb_set_rw_flags {#how-flags-reach-the-filesystem-kiocbsetrw_flags}
 
-Every I/O operation in the kernel is represented by a `struct kiocb` (kernel I/O control block). The `RWF_*` flags are translated to `IOCB_*` flags and stored in `kiocb.ki_flags`:
+カーネル内のすべてのI/O操作は`struct kiocb`（kernel I/O control block）で表される。`RWF_*`フラグは`IOCB_*`フラグに変換され、`kiocb.ki_flags`に格納される。
 
 ```c
 /* include/linux/fs.h */
@@ -250,14 +250,14 @@ static inline int kiocb_set_rw_flags(struct kiocb *ki, rwf_t flags,
 {
     int kiocb_flags = 0;
 
-    /* check for unknown flags */
+    /* 未知のフラグをチェックする */
     if (unlikely(flags & ~RWF_SUPPORTED))
         return -EOPNOTSUPP;
 
     if (flags & RWF_NOWAIT) {
         if (!(ki->ki_filp->f_mode & FMODE_NOWAIT))
             return -EOPNOTSUPP;
-        kiocb_flags |= IOCB_NOIO;          /* don't submit I/O, just check */
+        kiocb_flags |= IOCB_NOIO;          /* I/O は発行せず、チェックのみ */
         kiocb_flags |= IOCB_NOWAIT;
     }
     if (flags & RWF_HIPRI)
@@ -280,30 +280,30 @@ static inline int kiocb_set_rw_flags(struct kiocb *ki, rwf_t flags,
 }
 ```
 
-Once `IOCB_*` flags are set on the `kiocb`, every layer that handles the I/O — the VFS, the filesystem (`ext4`, `xfs`), and the block layer — checks these flags to adjust behaviour. Filesystems check `iocb->ki_flags & IOCB_NOWAIT` before taking a lock that might sleep; the block layer checks `IOCB_HIPRI` to route to a polled NVMe queue.
+`kiocb`に`IOCB_*`フラグがセットされると、そのI/Oを扱うすべての層、すなわちVFS、ファイルシステム（`ext4`、`xfs`）、ブロック層がこれらのフラグを確認して振る舞いを調整する。ファイルシステムはスリープするかもしれないロックを取る前に`iocb->ki_flags & IOCB_NOWAIT`を確認し、ブロック層は`IOCB_HIPRI`を確認してポーリング型のNVMeキューへ振り分ける。
 
-### offset = -1: use current f_pos {#offset-1-use-current-f_pos}
+### offset = -1: 現在のf_posを使う {#offset-1-use-current-f_pos}
 
-When `offset` is `-1` (cast to `off_t`), `preadv2()` / `pwritev2()` behave like `readv()` / `writev()`: the current `f_pos` is used and updated afterward. This makes it possible to use `RWF_*` flags without having an explicit offset:
+`offset`が（`off_t`にキャストした）`-1`のとき、`preadv2()` / `pwritev2()`は`readv()` / `writev()`と同じように振る舞う。現在の`f_pos`が使われ、その後更新される。これにより、明示的なオフセットを持たずに`RWF_*`フラグを使うことができる。
 
 ```c
-/* Use RWF_NOWAIT with the current file position */
+/* 現在のファイル位置で RWF_NOWAIT を使う */
 ssize_t n = preadv2(fd, iov, 1, (off_t)-1, RWF_NOWAIT);
 ```
 
-When `offset == -1`, the syscall falls back to `fdget_pos()` and takes `f_pos_lock` — it behaves exactly like `readv()` plus flags.
+`offset == -1`の場合、システムコールは`fdget_pos()`にフォールバックして`f_pos_lock`を取る。つまり、`readv()`にフラグを加えたものとまったく同じように振る舞う。
 
 ---
 
-## RWF_NOWAIT in detail {#rwf_nowait-in-detail}
+## RWF_NOWAITの詳細 {#rwf_nowait-in-detail}
 
-`RWF_NOWAIT` is the most commonly used per-call flag. It asks the kernel: "complete this I/O only if you can do so without blocking. Otherwise return `EAGAIN`."
+`RWF_NOWAIT`は最もよく使われる呼び出しごとのフラグである。これはカーネルに「ブロックせずに済む場合に限りこのI/Oを完了させよ。そうでなければ`EAGAIN`を返せ」と依頼する。
 
 ```c
-/* Attempt a non-blocking read from the page cache */
+/* ページキャッシュからのノンブロッキング読み出しを試みる */
 ssize_t n = preadv2(fd, iov, 1, offset, RWF_NOWAIT);
 if (n == -1 && errno == EAGAIN) {
-    /* I/O would have blocked — submit asynchronously */
+    /* I/O はブロックしていたはず — 非同期で発行する */
     submit_async_io(fd, iov, offset);
     return;
 }
@@ -311,29 +311,29 @@ if (n < 0) {
     perror("preadv2");
     return;
 }
-/* Data was in the page cache — returned without I/O */
+/* データはページキャッシュにあった — I/O なしで返された */
 process_data(iov[0].iov_base, n);
 ```
 
-### When preadv2 with RWF_NOWAIT returns EAGAIN {#when-preadv2-with-rwf_nowait-returns-eagain}
+### RWF_NOWAIT付きのpreadv2がEAGAINを返すとき {#when-preadv2-with-rwf_nowait-returns-eagain}
 
-The read returns `EAGAIN` without doing any I/O in these cases:
+読み出しは次の場合に、I/Oを一切行わずに`EAGAIN`を返す。
 
-**Page cache miss**: The requested pages are not in the page cache and fetching them would require submitting block I/O. `generic_file_read_iter` checks `IOCB_NOWAIT` in `filemap_get_pages` and returns `-EAGAIN` rather than calling `read_folio` to submit a bio.
+**ページキャッシュミス**: 要求されたpageがページキャッシュになく、それを取得するにはブロックI/Oの発行が必要になる場合。`generic_file_read_iter`は`filemap_get_pages`の中で`IOCB_NOWAIT`を確認し、`read_folio`を呼んでbioを発行する代わりに`-EAGAIN`を返す。
 
-**Inode lock contended**: For buffered reads, `generic_file_read_iter` may need the `inode->i_rwsem` in read mode. If the lock is held by a writer and `IOCB_NOWAIT` is set, the kernel returns `-EAGAIN` rather than sleeping on the lock.
+**inodeロックの競合**: バッファード読み出しでは、`generic_file_read_iter`が`inode->i_rwsem`を読み取りモードで必要とすることがある。ロックが書き込み側に保持されていて`IOCB_NOWAIT`がセットされていれば、カーネルはロックでスリープする代わりに`-EAGAIN`を返す。
 
-**Filesystem journal congested**: Filesystems like ext4 may need journal resources even for reads in some paths. If `IOCB_NOWAIT` is set and the required resource is unavailable, `-EAGAIN` is returned.
+**ファイルシステムのジャーナルの混雑**: ext4のようなファイルシステムは、一部の経路では読み出しでもジャーナルのリソースを必要とすることがある。`IOCB_NOWAIT`がセットされていて必要なリソースが利用できなければ、`-EAGAIN`が返される。
 
-**Direct I/O extent mapping**: For `O_DIRECT` reads, ext4 and XFS need to look up the extent map. If the extent does not exist (hole) and `IOCB_NOWAIT` is set, XFS returns `-EAGAIN` for allocating extents because that requires journal transactions.
+**ダイレクトI/Oのエクステントマッピング**: `O_DIRECT`読み出しでは、ext4とXFSはエクステントマップを検索する必要がある。エクステントが存在せず（ホール）`IOCB_NOWAIT`がセットされている場合、XFSはエクステントの割り当てにジャーナルトランザクションが必要になるため`-EAGAIN`を返す。
 
-**Truncate or writeback lock**: Some filesystems hold `i_rwsem` exclusively during truncate. A concurrent `RWF_NOWAIT` read that cannot get a shared lock returns `-EAGAIN`.
+**truncateやライトバックのロック**: 一部のファイルシステムはtruncateの間`i_rwsem`を排他的に保持する。共有ロックを取得できない並行の`RWF_NOWAIT`読み出しは`-EAGAIN`を返す。
 
-Note: buffered reads rarely succeed with `RWF_NOWAIT` unless the pages are already in cache. For a workload that frequently gets `EAGAIN`, `io_uring` with `IORING_OP_READ` is more efficient since it submits true async I/O rather than polling.
+注意: バッファード読み出しは、pageがすでにキャッシュにない限り、`RWF_NOWAIT`で成功することはまれである。頻繁に`EAGAIN`を受け取るワークロードでは、ポーリングではなく真の非同期I/Oを発行する`IORING_OP_READ`付きの`io_uring`のほうが効率的である。
 
-### The FMODE_NOWAIT gate {#the-fmode_nowait-gate}
+### FMODE_NOWAITによる関門 {#the-fmode_nowait-gate}
 
-Not all file types support `RWF_NOWAIT`. The kernel checks `FMODE_NOWAIT` on the file before honouring the flag:
+すべてのファイル種別が`RWF_NOWAIT`をサポートしているわけではない。カーネルはフラグを尊重する前に、ファイルの`FMODE_NOWAIT`を確認する。
 
 ```c
 if (flags & RWF_NOWAIT) {
@@ -343,29 +343,29 @@ if (flags & RWF_NOWAIT) {
 }
 ```
 
-`FMODE_NOWAIT` is set for regular files opened on filesystems that support non-blocking I/O (ext4, XFS, btrfs) and for block devices. It is not set for sockets, pipes, or filesystems that have not opted in.
+`FMODE_NOWAIT`は、ノンブロッキングI/Oをサポートするファイルシステム（ext4、XFS、btrfs）上で開かれた通常ファイルと、ブロックデバイスでセットされる。ソケット、パイプ、オプトインしていないファイルシステムではセットされない。
 
 ---
 
-## RWF_DSYNC and RWF_SYNC {#rwfdsync-and-rwfsync}
+## RWF_DSYNCとRWF_SYNC {#rwfdsync-and-rwfsync}
 
-`O_DSYNC` and `O_SYNC` are per-fd flags set at open time. They force data (and optionally metadata) to be written to stable storage before each write returns. The per-call equivalents avoid the overhead of opening the file with these flags when only some writes need durability:
+`O_DSYNC`と`O_SYNC`は、オープン時に設定されるfdごとのフラグである。これらは各書き込みが戻る前に、データ（および場合によってはメタデータ）を安定ストレージへ書き込むよう強制する。呼び出しごとの同等機能を使えば、一部の書き込みだけが永続性を必要とする場合に、ファイルをこれらのフラグ付きで開くオーバーヘッドを避けられる。
 
 ```c
 /*
- * Write a transaction log entry: must be durable before we return.
- * Normal data writes don't need this overhead.
+ * トランザクションログのエントリを書く: 戻る前に永続化されていなければならない。
+ * 通常のデータ書き込みにはこのオーバーヘッドは不要である。
  */
 ssize_t n = pwritev2(logfd, iov, 1, log_offset, RWF_DSYNC);
 if (n < 0) {
     perror("pwritev2 RWF_DSYNC");
 }
-/* Data is now on stable storage — safe to acknowledge the transaction */
+/* データはこれで安定ストレージ上にある — トランザクションを確認応答してよい */
 ```
 
-`RWF_DSYNC` maps to `IOCB_DSYNC` and forces `vfs_fsync_range()` after the write completes, flushing data pages and the file's inode (but not the directory entry). `RWF_SYNC` maps to `IOCB_DSYNC | IOCB_SYNC` and also forces metadata (the `O_SYNC` equivalent).
+`RWF_DSYNC`は`IOCB_DSYNC`に対応し、書き込み完了後に`vfs_fsync_range()`を強制して、データpageとファイルのinodeをフラッシュする（ただしディレクトリエントリはフラッシュしない）。`RWF_SYNC`は`IOCB_DSYNC | IOCB_SYNC`に対応し、メタデータも強制する（`O_SYNC`相当）。
 
-The implementation in `do_iter_write`:
+`do_iter_write`での実装は次のとおりである。
 
 ```c
 /* fs/read_write.c */
@@ -375,12 +375,12 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
     size_t tot_len;
     ssize_t ret = 0;
 
-    /* ... permission checks ... */
+    /* ... 権限チェック ... */
 
-    ret = __generic_file_write_iter(file_iocb, iter);  /* the actual write */
+    ret = __generic_file_write_iter(file_iocb, iter);  /* 実際の書き込み */
 
     if (ret > 0 && iocb_is_dsync(file_iocb)) {
-        /* RWF_DSYNC or RWF_SYNC: flush data to stable storage */
+        /* RWF_DSYNC または RWF_SYNC: データを安定ストレージへフラッシュする */
         ret = generic_write_sync(file_iocb, ret);
     }
 
@@ -392,69 +392,69 @@ static ssize_t do_iter_write(struct file *file, struct iov_iter *iter,
 
 ## RWF_APPEND {#rwf_append}
 
-`O_APPEND` makes all writes to an fd atomic appends: the file position is moved to EOF under the inode lock before each write, preventing two concurrent writers from overwriting each other. But `O_APPEND` is a property of the open file description — you cannot toggle it per-call without `fcntl(F_SETFL)`.
+`O_APPEND`は、fdへのすべての書き込みをアトミックな追記にする。各書き込みの前にinodeロックの下でファイル位置がEOFへ移動されるため、2つの並行する書き込み側が互いに上書きし合うことを防ぐ。しかし`O_APPEND`はオープンファイル記述の属性であり、`fcntl(F_SETFL)`なしに呼び出しごとに切り替えることはできない。
 
-`RWF_APPEND` provides the same atomic-append guarantee on a per-call basis:
+`RWF_APPEND`は同じアトミックな追記の保証を呼び出し単位で提供する。
 
 ```c
 /*
- * Append a log record atomically.
- * The fd was not opened with O_APPEND; we use RWF_APPEND per call
- * so we can also do random reads/writes on the same fd.
+ * ログレコードをアトミックに追記する。
+ * fd は O_APPEND なしで開かれている。呼び出しごとに RWF_APPEND を使うので、
+ * 同じ fd でランダムな読み書きも行える。
  */
-ssize_t n = pwritev2(fd, iov, 1, /* offset ignored */ 0, RWF_APPEND);
+ssize_t n = pwritev2(fd, iov, 1, /* オフセットは無視される */ 0, RWF_APPEND);
 ```
 
-The `offset` argument is ignored when `RWF_APPEND` is set. The write position is determined by the filesystem under the inode lock, atomically with the write itself.
+`RWF_APPEND`がセットされていると、`offset`引数は無視される。書き込み位置は、ファイルシステムによってinodeロックの下で、書き込み自体とアトミックに決定される。
 
-Implementation: `IOCB_APPEND` causes the VFS and filesystem to:
-1. Lock the inode exclusively.
-2. Read `i_size` to get the current EOF.
-3. Write data starting at EOF.
-4. Update `i_size` atomically.
-5. Unlock.
+実装: `IOCB_APPEND`により、VFSとファイルシステムは次を行う。
+1. inodeを排他的にロックする。
+2. `i_size`を読んで現在のEOFを得る。
+3. EOFからデータを書き込む。
+4. `i_size`をアトミックに更新する。
+5. アンロックする。
 
-This is the same code path as `O_APPEND`, just triggered by a per-call flag rather than a file mode.
+これは`O_APPEND`と同じコードパスであり、ファイルモードではなく呼び出しごとのフラグによって起動されるだけである。
 
-### RWF_NOAPPEND (Linux 6.9) {#rwf_noappend-linux-69}
+### RWF_NOAPPEND（Linux 6.9） {#rwf_noappend-linux-69}
 
-The converse: if a file was opened with `O_APPEND`, `RWF_NOAPPEND` overrides it for a single call and writes at the given explicit `offset` instead:
+逆の働きをするもので、ファイルが`O_APPEND`で開かれている場合に、`RWF_NOAPPEND`は1回の呼び出しについてそれを上書きし、代わりに指定された明示的な`offset`に書き込む。
 
 ```c
-/* fd opened with O_APPEND, but write this particular record at a fixed offset */
+/* fd は O_APPEND で開かれているが、このレコードだけは固定オフセットに書く */
 pwritev2(fd, iov, 1, fixed_offset, RWF_NOAPPEND);
 ```
 
 ---
 
-## RWF_HIPRI: high-priority polled I/O {#rwf_hipri-high-priority-polled-io}
+## RWF_HIPRI: 高優先度のポーリングI/O {#rwf_hipri-high-priority-polled-io}
 
-NVMe drives support **polled I/O queues**: instead of waiting for a hardware interrupt when I/O completes, the CPU spins on the NVMe completion queue. This reduces latency at the cost of CPU time. `RWF_HIPRI` requests polled completion for this I/O:
+NVMeドライブは **ポーリング型I/Oキュー** をサポートする。I/O完了時にハードウェア割り込みを待つ代わりに、CPUがNVMeの完了キューをスピンして監視する。これによりCPU時間と引き換えにレイテンシが減る。`RWF_HIPRI`は、このI/Oについてポーリングによる完了を要求する。
 
 ```c
-/* O_DIRECT is required for polled I/O */
+/* ポーリング I/O には O_DIRECT が必要 */
 int fd = open("file", O_RDWR | O_DIRECT);
 
 ssize_t n = preadv2(fd, iov, 1, offset, RWF_HIPRI);
 ```
 
-`RWF_HIPRI` sets `IOCB_HIPRI` on the kiocb. The block layer checks this flag and, if the block device supports polled queues (`BLK_MQ_F_POLL`), routes the bio to a polled queue and calls `blk_poll()` instead of waiting on a completion interrupt.
+`RWF_HIPRI`はkiocbに`IOCB_HIPRI`をセットする。ブロック層はこのフラグを確認し、ブロックデバイスがポーリングキュー（`BLK_MQ_F_POLL`）をサポートしていれば、bioをポーリングキューへ振り分け、完了割り込みを待つ代わりに`blk_poll()`を呼ぶ。
 
-Effective only with `O_DIRECT` — buffered I/O completion happens asynchronously via writeback threads and cannot be polled by the application.
+有効なのは`O_DIRECT`の場合のみである。バッファードI/Oの完了はライトバックスレッドを介して非同期に起こり、アプリケーションがポーリングすることはできない。
 
 ---
 
-## RWF_ATOMIC (Linux 6.11) {#rwf_atomic-linux-611}
+## RWF_ATOMIC（Linux 6.11） {#rwf_atomic-linux-611}
 
-Traditional disk writes have no atomicity guarantee at the hardware level: a power failure mid-write can leave a sector partially written. Databases work around this with journaling or copy-on-write. Modern storage devices (NVMe with the Atomic Write Unit feature set) can guarantee that a write of up to `N` bytes is either fully committed or not committed at all.
+従来のディスク書き込みには、ハードウェアレベルでのアトミック性の保証がない。書き込みの途中で電源が落ちると、セクタが部分的に書かれたままになりうる。データベースはジャーナリングやコピーオンライトでこれを回避している。現代のストレージデバイス（Atomic Write Unit機能セットを持つNVMe）は、`N`バイトまでの書き込みが完全にコミットされるか、まったくコミットされないかのどちらかであることを保証できる。
 
-Linux 6.11 exposed this as `RWF_ATOMIC`:
+Linux 6.11はこれを`RWF_ATOMIC`として公開した。
 
 ```c
 #include <sys/stat.h>   /* statx */
 #include <linux/stat.h> /* STATX_WRITE_ATOMIC */
 
-/* Step 1: check device capabilities */
+/* ステップ 1: デバイスの能力を確認する */
 struct statx stx;
 if (statx(fd, "", AT_EMPTY_PATH, STATX_WRITE_ATOMIC, &stx) < 0)
     err(1, "statx");
@@ -463,49 +463,49 @@ printf("atomic write unit min: %u bytes\n", stx.stx_atomic_write_unit_min);
 printf("atomic write unit max: %u bytes\n", stx.stx_atomic_write_unit_max);
 printf("max atomic segments:   %u\n",       stx.stx_atomic_write_segments_max);
 
-/* Step 2: issue an atomic write */
-/* Buffer must be aligned to stx_atomic_write_unit_min */
-/* Length must not exceed stx_atomic_write_unit_max */
+/* ステップ 2: アトミック書き込みを発行する */
+/* バッファは stx_atomic_write_unit_min にアラインされていなければならない */
+/* 長さは stx_atomic_write_unit_max を超えてはならない */
 ssize_t n = pwritev2(fd, iov, 1, offset, RWF_ATOMIC);
 if (n < 0 && errno == EINVAL) {
-    /* Alignment or size constraint violated, or FS doesn't support it */
+    /* アラインメントやサイズの制約違反、または FS が未サポート */
 }
 ```
 
-### Requirements for RWF_ATOMIC {#requirements-for-rwf_atomic}
+### RWF_ATOMICの要件 {#requirements-for-rwf_atomic}
 
-- The write size must be a power of two between `stx_atomic_write_unit_min` and `stx_atomic_write_unit_max`.
-- The buffer address and file offset must be aligned to `stx_atomic_write_unit_min`.
-- The write must not span a `stx_atomic_write_unit_max`-aligned boundary.
-- The filesystem must support it. XFS supports `RWF_ATOMIC` on `O_DIRECT` writes as of 6.11. ext4 support is in progress.
-- The block device must advertise the Atomic Write Unit via the NVMe or SCSI interface.
+- 書き込みサイズは、`stx_atomic_write_unit_min`と`stx_atomic_write_unit_max`の間の2のべき乗でなければならない。
+- バッファアドレスとファイルオフセットは`stx_atomic_write_unit_min`にアラインされていなければならない。
+- 書き込みは`stx_atomic_write_unit_max`にアラインされた境界をまたいではならない。
+- ファイルシステムがサポートしていなければならない。XFSは6.11時点で`O_DIRECT`書き込みに対する`RWF_ATOMIC`をサポートしている。ext4のサポートは進行中である。
+- ブロックデバイスがNVMeまたはSCSIインターフェースを通じてAtomic Write Unitを通知していなければならない。
 
-### Why this matters for databases {#why-this-matters-for-databases}
+### なぜこれがデータベースにとって重要か {#why-this-matters-for-databases}
 
-Without `RWF_ATOMIC`:
+`RWF_ATOMIC`なしの場合:
 ```
 journaling overhead:
   write journal record → flush → update actual page → flush
   2× I/O amplification, 2× flush latency
 ```
 
-With `RWF_ATOMIC` on supported hardware:
+対応ハードウェアで`RWF_ATOMIC`を使う場合:
 ```
   write page directly at target location → hardware guarantees atomicity
   1× I/O, 0 journal overhead
 ```
 
-PostgreSQL and MySQL are expected to adopt `RWF_ATOMIC` for 8 KB–16 KB page writes once the kernel and filesystem support stabilises.
+PostgreSQLとMySQLは、カーネルとファイルシステムのサポートが安定すれば、8 KB〜16 KBのpage書き込みに`RWF_ATOMIC`を採用すると見込まれている。
 
 ---
 
-## f_pos locking internals {#f_pos-locking-internals}
+## f_posロックの内部 {#f_pos-locking-internals}
 
-For completeness: here is how `f_pos_lock` works in `read()` / `write()` and why `pread()` can skip it.
+補足として、`read()` / `write()`で`f_pos_lock`がどう働くか、そして`pread()`がなぜそれを省略できるかを示す。
 
-### The lock itself {#the-lock-itself}
+### ロックそのもの {#the-lock-itself}
 
-`file->f_pos_lock` is a `mutex` embedded in `struct file`:
+`file->f_pos_lock`は`struct file`に埋め込まれた`mutex`である。
 
 ```c
 /* include/linux/fs.h */
@@ -514,15 +514,15 @@ struct file {
     spinlock_t          f_lock;
     fmode_t             f_mode;
     atomic_long_t       f_count;
-    struct mutex        f_pos_lock;   /* protects f_pos for read/write */
+    struct mutex        f_pos_lock;   /* read/write のために f_pos を保護する */
     loff_t              f_pos;
     /* ... */
 };
 ```
 
-### file_ppos: stream vs seekable {#file_ppos-stream-vs-seekable}
+### file_ppos: ストリームとシーク可能なファイル {#file_ppos-stream-vs-seekable}
 
-Not all file types have a meaningful position. `file_ppos()` returns `NULL` for stream files (pipes, sockets) so that the lock path is skipped entirely:
+すべてのファイル種別が意味のある位置を持つわけではない。`file_ppos()`はストリームファイル（パイプ、ソケット）に対して`NULL`を返し、ロックの経路を完全にスキップさせる。
 
 ```c
 /* fs/read_write.c */
@@ -542,9 +542,9 @@ static struct fd fdget_pos(int fd)
 }
 
 /*
- * __fdget_pos: if the file has a position AND multiple threads share
- * this file description (f_count > 1), acquire f_pos_lock so that
- * concurrent read/write calls serialize their f_pos updates.
+ * __fdget_pos: ファイルが位置を持ち、かつ複数のスレッドがこの
+ * ファイル記述を共有している（f_count > 1）場合、f_pos_lock を取得して、
+ * 並行する read/write 呼び出しが f_pos の更新を直列化するようにする。
  */
 
 static inline void fdput_pos(struct fd f)
@@ -555,90 +555,90 @@ static inline void fdput_pos(struct fd f)
 }
 ```
 
-The lock is only taken when `f_count > 1` (multiple fds referring to the same open file description). A file opened by a single-threaded process and not shared with `dup`/`fork` never contends on `f_pos_lock`.
+ロックは`f_count > 1`（複数のfdが同じオープンファイル記述を参照している）の場合にのみ取られる。シングルスレッドのプロセスが開き、`dup`/`fork`で共有されていないファイルが`f_pos_lock`で競合することはない。
 
-### Summary: when does f_pos_lock fire? {#summary-when-does-fposlock-fire}
+### まとめ: f_pos_lockはいつ取られるか {#summary-when-does-fposlock-fire}
 
-| Scenario | f_pos_lock taken? |
+| シナリオ | f_pos_lockを取るか |
 |---|---|
-| Single-threaded, no dup | No (`f_count == 1`) |
-| After `dup(fd)` | Yes |
-| After `fork()` | Yes (parent and child share the description) |
-| `read()` on pipe | No (`FMODE_STREAM` → `file_ppos` returns NULL) |
-| `pread()` on any file | Never |
+| シングルスレッド、dupなし | 取らない（`f_count == 1`） |
+| `dup(fd)`の後 | 取る |
+| `fork()`の後 | 取る（親と子が記述を共有する） |
+| パイプに対する`read()` | 取らない（`FMODE_STREAM` → `file_ppos`がNULLを返す） |
+| 任意のファイルに対する`pread()` | 決して取らない |
 
 ---
 
-## io_uring equivalents {#io_uring-equivalents}
+## io_uringでの同等機能 {#io_uring-equivalents}
 
-`io_uring` (Linux 5.1+) exposes positional I/O as first-class operations, mapping directly onto the `preadv2`/`pwritev2` semantics:
+`io_uring`（Linux 5.1以降）は位置指定I/Oを第一級の操作として公開しており、`preadv2`/`pwritev2`のセマンティクスに直接対応する。
 
-| io_uring opcode | Equivalent syscall | Notes |
+| io_uringのオペコード | 同等のシステムコール | 備考 |
 |---|---|---|
-| `IORING_OP_READ` | `pread()` | Single buffer, explicit offset |
-| `IORING_OP_WRITE` | `pwrite()` | Single buffer, explicit offset |
-| `IORING_OP_READV` | `preadv()` | Vectored, explicit offset |
-| `IORING_OP_WRITEV` | `pwritev()` | Vectored, explicit offset |
-| `IORING_OP_READ_FIXED` | `pread()` | Pre-registered buffers (no copy from user) |
-| `IORING_OP_WRITE_FIXED` | `pwrite()` | Pre-registered buffers (no copy from user) |
+| `IORING_OP_READ` | `pread()` | 単一バッファ、明示的なオフセット |
+| `IORING_OP_WRITE` | `pwrite()` | 単一バッファ、明示的なオフセット |
+| `IORING_OP_READV` | `preadv()` | ベクタ、明示的なオフセット |
+| `IORING_OP_WRITEV` | `pwritev()` | ベクタ、明示的なオフセット |
+| `IORING_OP_READ_FIXED` | `pread()` | 事前登録したバッファ（ユーザーからのコピーなし） |
+| `IORING_OP_WRITE_FIXED` | `pwrite()` | 事前登録したバッファ（ユーザーからのコピーなし） |
 
-`RWF_*` flags are passed via `sqe->rw_flags`:
+`RWF_*`フラグは`sqe->rw_flags`を介して渡される。
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 
 io_uring_prep_readv(sqe, fd, iov, 1, offset);
-sqe->rw_flags = RWF_NOWAIT;   /* same RWF_* flags as preadv2 */
+sqe->rw_flags = RWF_NOWAIT;   /* preadv2 と同じ RWF_* フラグ */
 
 io_uring_submit(&ring);
 ```
 
-Inside the kernel, `io_uring` creates a `kiocb` and calls `kiocb_set_rw_flags()` with the `sqe->rw_flags` value — the same function called by `preadv2`. The `IOCB_*` flags propagate through the filesystem in exactly the same way.
+カーネル内部では、`io_uring`は`kiocb`を作成し、`sqe->rw_flags`の値を使って`kiocb_set_rw_flags()`を呼ぶ。これは`preadv2`が呼ぶのと同じ関数である。`IOCB_*`フラグは、まったく同じ方法でファイルシステムを伝播する。
 
-The main advantage of `io_uring` over `preadv2` is not the per-call flags (those are identical) but **submission batching**: many I/O operations are submitted in a single `io_uring_enter()` syscall, reducing syscall overhead for high-IOPS workloads.
+`preadv2`に対する`io_uring`の主な利点は、呼び出しごとのフラグ（これらは同一である）ではなく **発行のバッチ化** である。多数のI/O操作が1回の`io_uring_enter()`システムコールで発行され、高IOPSのワークロードでのシステムコールのオーバーヘッドを減らす。
 
 ---
 
-## Performance comparison {#performance-comparison}
+## 性能比較 {#performance-comparison}
 
-| Syscall | `f_pos_lock`? | Vectored? | Per-call flags? | Best use case |
+| システムコール | `f_pos_lock`? | ベクタ? | 呼び出しごとのフラグ? | 最適な用途 |
 |---------|:---:|:---:|:---:|---|
-| `read` / `write` | yes | no | no | Simple sequential access |
-| `pread` / `pwrite` | no | no | no | Random access, concurrent threads |
-| `readv` / `writev` | yes | yes | no | Scatter-gather sequential |
-| `preadv` / `pwritev` | no | yes | no | Scatter-gather random access |
-| `preadv2` / `pwritev2` | no | yes | yes | Full control per call |
-| `io_uring` | no | yes | yes | High-concurrency, batch submission |
+| `read` / `write` | あり | なし | なし | 単純なシーケンシャルアクセス |
+| `pread` / `pwrite` | なし | なし | なし | ランダムアクセス、並行スレッド |
+| `readv` / `writev` | あり | あり | なし | シーケンシャルなスキャッタ・ギャザー |
+| `preadv` / `pwritev` | なし | あり | なし | ランダムアクセスのスキャッタ・ギャザー |
+| `preadv2` / `pwritev2` | なし | あり | あり | 呼び出しごとの完全な制御 |
+| `io_uring` | なし | あり | あり | 高い並行性、バッチ発行 |
 
-For a database using multiple threads to issue random reads:
+複数のスレッドでランダム読み出しを発行するデータベースの場合:
 
-- `read()` + `lseek()`: requires external mutex around each seek+read pair.
-- `pread()`: safe without any mutex; each thread passes its own offset.
-- `preadv()`: safe and avoids an extra `memcpy` when the page header and body go to different structures.
-- `preadv2(..., RWF_NOWAIT)`: can check the page cache without blocking; fall back to `io_uring` on `EAGAIN`.
-- `io_uring` with `IORING_OP_READ_FIXED`: lowest overhead for sustained random I/O.
+- `read()` + `lseek()`: シーク+読み出しの組ごとに外部のmutexが必要。
+- `pread()`: mutexなしで安全。各スレッドが自分のオフセットを渡す。
+- `preadv()`: 安全で、pageのヘッダと本体が別々の構造体へ入る場合に余分な`memcpy`を避けられる。
+- `preadv2(..., RWF_NOWAIT)`: ブロックせずにページキャッシュを確認できる。`EAGAIN`の場合は`io_uring`にフォールバックする。
+- `IORING_OP_READ_FIXED`付きの`io_uring`: 持続的なランダムI/Oで最もオーバーヘッドが小さい。
 
 ---
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Contents |
+| ファイル | 内容 |
 |------|----------|
-| `fs/read_write.c` | `pread64`, `pwrite64`, `do_preadv`, `do_pwritev`, `ksys_read`, `fdget_pos`, `fdput_pos`, `file_ppos` |
-| `include/linux/fs.h` | `struct file`, `f_pos_lock`, `FMODE_PREAD`, `FMODE_PWRITE`, `FMODE_NOWAIT`, `kiocb_set_rw_flags`, `IOCB_*` flags |
-| `include/uapi/linux/fs.h` | `RWF_HIPRI`, `RWF_DSYNC`, `RWF_SYNC`, `RWF_NOWAIT`, `RWF_APPEND`, `RWF_NOAPPEND`, `RWF_ATOMIC`, `rwf_t` |
-| `mm/filemap.c` | `generic_file_read_iter`, `filemap_get_pages` — where `IOCB_NOWAIT` is checked for buffered reads |
-| `fs/inode.c` | `inode_init_always` — where `i_rwsem` is initialised (taken in `RWF_NOWAIT` paths) |
-| `io_uring/rw.c` | io_uring read/write handlers; calls `kiocb_set_rw_flags` with `sqe->rw_flags` |
-| `block/blk-mq.c` | `blk_poll` — the polled completion path for `IOCB_HIPRI` |
-| `fs/xfs/xfs_file.c` | XFS `read_iter` / `write_iter`; `RWF_ATOMIC` and `IOCB_NOWAIT` handling |
+| `fs/read_write.c` | `pread64`、`pwrite64`、`do_preadv`、`do_pwritev`、`ksys_read`、`fdget_pos`、`fdput_pos`、`file_ppos` |
+| `include/linux/fs.h` | `struct file`、`f_pos_lock`、`FMODE_PREAD`、`FMODE_PWRITE`、`FMODE_NOWAIT`、`kiocb_set_rw_flags`、`IOCB_*`フラグ |
+| `include/uapi/linux/fs.h` | `RWF_HIPRI`、`RWF_DSYNC`、`RWF_SYNC`、`RWF_NOWAIT`、`RWF_APPEND`、`RWF_NOAPPEND`、`RWF_ATOMIC`、`rwf_t` |
+| `mm/filemap.c` | `generic_file_read_iter`、`filemap_get_pages` — バッファード読み出しで`IOCB_NOWAIT`が確認される場所 |
+| `fs/inode.c` | `inode_init_always` — `i_rwsem`が初期化される場所（`RWF_NOWAIT`の経路で取得される） |
+| `io_uring/rw.c` | io_uringの読み書きハンドラ。`sqe->rw_flags`を使って`kiocb_set_rw_flags`を呼ぶ |
+| `block/blk-mq.c` | `blk_poll` — `IOCB_HIPRI`のためのポーリングによる完了経路 |
+| `fs/xfs/xfs_file.c` | XFSの`read_iter` / `write_iter`。`RWF_ATOMIC`と`IOCB_NOWAIT`の処理 |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Vectored I/O (readv/writev)](vectored-io.md) — `struct iovec`, `iov_iter`, scatter-gather fundamentals
-- [Direct I/O](direct-io.md) — `O_DIRECT` alignment requirements; `RWF_HIPRI` requires `O_DIRECT`
-- [Buffered I/O and the Page Cache](buffered-io.md) — what `RWF_NOWAIT` tests against; `filemap_get_pages`
-- [Async I/O Evolution](async-io.md) — io_uring `IORING_OP_READ` / `IORING_OP_WRITE` and `sqe->rw_flags`
-- [fsync / fdatasync](fsync-fdatasync.md) — what `RWF_DSYNC` and `RWF_SYNC` trigger under the hood
+- [ベクタI/O（readv/writev）](vectored-io.md) — `struct iovec`、`iov_iter`、スキャッタ・ギャザーの基礎
+- [ダイレクトI/O](direct-io.md) — `O_DIRECT`のアラインメント要件。`RWF_HIPRI`には`O_DIRECT`が必要
+- [バッファードI/Oとページキャッシュ](buffered-io.md) — `RWF_NOWAIT`が何に対して判定するか。`filemap_get_pages`
+- [非同期I/Oの進化](async-io.md) — io_uringの`IORING_OP_READ` / `IORING_OP_WRITE`と`sqe->rw_flags`
+- [fsync / fdatasync](fsync-fdatasync.md) — `RWF_DSYNC`と`RWF_SYNC`が内部で何を引き起こすか

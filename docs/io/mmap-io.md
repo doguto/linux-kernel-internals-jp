@@ -1,20 +1,20 @@
-# mmap as an I/O Mechanism {#mmap-as-an-io-mechanism}
+# I/Oの仕組みとしてのmmap {#mmap-as-an-io-mechanism}
 
-> Using file-backed mmap() for I/O: zero-copy reads, shared writes, and when the page fault cost pays off
+> ファイルベースのmmap()をI/Oに使う: ゼロコピーの読み出し、共有書き込み、そしてページフォールトのコストが見合うのはいつか
 
-## What this page covers {#what-this-page-covers}
+## このページで扱う内容 {#what-this-page-covers}
 
-`mmap()` is usually explained in the context of process address spaces and anonymous memory. But `mmap()` of a regular file is also a fully-featured I/O mechanism — an alternative to `read()` and `write()` that trades syscall overhead for page fault overhead and exposes the page cache directly as process memory.
+`mmap()`は通常、プロセスのアドレス空間や匿名メモリの文脈で説明される。しかし通常ファイルの`mmap()`は、それ自体が完全な機能を備えたI/Oの仕組みでもある。`read()`や`write()`の代替であり、システムコールのオーバーヘッドをページフォールトのオーバーヘッドと引き換えにし、ページキャッシュをプロセスのメモリとして直接公開する。
 
-This page focuses on file-backed mmap as an I/O path. For anonymous mmap (heap, stacks, shared memory without a file), see [Process Address Space](../mm/mmap.md). For the low-level page fault and VMA mechanics, see [File-Backed mmap and Page Faults](../mm/file-mmap.md).
+このページでは、I/O経路としてのファイルベースmmapに焦点を当てる。匿名mmap（ヒープ、スタック、ファイルを伴わない共有メモリ）については[プロセスのアドレス空間](../mm/mmap.md)を参照。低レベルのページフォールトとVMAの仕組みについては[ファイルベースmmapとページフォールト](../mm/file-mmap.md)を参照。
 
 ---
 
-## File-backed mmap vs read/write {#file-backed-mmap-vs-readwrite}
+## ファイルベースmmapとread/writeの比較 {#file-backed-mmap-vs-readwrite}
 
-### The basic trade-off {#the-basic-trade-off}
+### 基本的なトレードオフ {#the-basic-trade-off}
 
-`read()` and `write()` are the universal I/O interface. Every access is a syscall, and the kernel copies data between the page cache and a user-space buffer:
+`read()`と`write()`は汎用のI/Oインターフェースである。すべてのアクセスがシステムコールであり、カーネルはページキャッシュとユーザー空間バッファの間でデータをコピーする。
 
 ```
 read() path:
@@ -25,7 +25,7 @@ read() path:
   disk
 ```
 
-`mmap()` maps the page cache directly into the process's virtual address space. After the initial fault, subsequent accesses are plain load/store instructions — no syscall, no copy:
+`mmap()`はページキャッシュをプロセスの仮想アドレス空間に直接マップする。最初のフォールトの後、以降のアクセスは単なるロード/ストア命令であり、システムコールもコピーもない。
 
 ```
 mmap() path (after fault):
@@ -34,41 +34,41 @@ mmap() path (after fault):
                                                disk
 ```
 
-The two costs trade:
+2つのコストは次のように入れ替わる。
 
-| Cost | read/write | mmap |
+| コスト | read/write | mmap |
 |------|-----------|------|
-| System call per access | Yes | No (after mapping) |
-| `copy_to_user` per access | Yes | No |
-| Page fault on first access | No | Yes (per 4KB page) |
-| TLB pressure | Low | Higher (large mappings fill TLB) |
-| Page table entries | None | One PTE per mapped page |
+| アクセスごとのシステムコール | あり | なし（マッピング後） |
+| アクセスごとの`copy_to_user` | あり | なし |
+| 初回アクセス時のページフォールト | なし | あり（4KBページごと） |
+| TLBへの負荷 | 低い | 高め（大きなマッピングはTLBを埋める） |
+| ページテーブルエントリ | なし | マップされたページごとにPTEが1つ |
 
-### When mmap wins {#when-mmap-wins}
+### mmapが有利な場合 {#when-mmap-wins}
 
-**Large files with random access** — A search index, an embedded database, or a large lookup table accessed at arbitrary offsets. With `pread()`, each access is a syscall + copy. With mmap, it is a load instruction after the fault warms the page.
+**ランダムアクセスされる大きなファイル** — 検索インデックス、組み込みデータベース、任意のオフセットでアクセスされる大きなルックアップテーブルなど。`pread()`では、各アクセスがシステムコール+コピーになる。mmapでは、フォールトでページが温まった後はロード命令1つで済む。
 
-**Multiple processes reading the same file** — All processes share the same physical page cache pages. Their PTEs all point to the same frames. With `read()`, each process has its own user-space buffer; the data is in RAM twice. With mmap, it is in RAM once.
+**複数のプロセスが同じファイルを読む** — すべてのプロセスが、同じ物理的なページキャッシュのページを共有する。それらのPTEはすべて同じフレームを指す。`read()`では各プロセスが独自のユーザー空間バッファを持つため、データはRAM上に二重に存在する。mmapでは1回だけである。
 
-**Read-heavy workloads that fit in RAM** — Once faulted in, repeated access has zero kernel involvement. LMDB, RocksDB with block cache disabled, and Lucene's segment files all exploit this.
+**RAMに収まる読み出し中心のワークロード** — 一度フォールトインすれば、繰り返しのアクセスにカーネルはまったく関与しない。LMDB、ブロックキャッシュを無効にしたRocksDB、Luceneのセグメントファイルはいずれもこれを活用している。
 
-**Avoiding double-buffering** — If an application implements its own in-process cache on top of `read()`, that cache plus the OS page cache means the same bytes are in RAM twice. mmap eliminates the application-side copy.
+**二重バッファリングの回避** — アプリケーションが`read()`の上に独自のプロセス内キャッシュを実装すると、そのキャッシュとOSのページキャッシュによって、同じバイトがRAM上に二重に存在することになる。mmapはアプリケーション側のコピーを取り除く。
 
-### When read/write wins {#when-readwrite-wins}
+### read/writeが有利な場合 {#when-readwrite-wins}
 
-**Sequential streaming of large files** — `read()` with a 128KB–1MB buffer amortizes syscall overhead across many pages. The kernel's readahead fires identically in both cases. But with mmap, 32 page faults per 128KB (32 × 4KB) add fault overhead. `read()` often wins here, especially with `O_DIRECT` eliminated as a variable.
+**大きなファイルのシーケンシャルなストリーミング** — 128KB〜1MBのバッファを使う`read()`は、システムコールのオーバーヘッドを多数のページで償却する。カーネルのリードアヘッドはどちらの場合も同じように働く。しかしmmapでは、128KBあたり32回のページフォールト（32 × 4KB）がフォールトのオーバーヘッドとして加わる。ここでは`read()`が勝つことが多い。`O_DIRECT`を変数から除外した場合は特にそうである。
 
-**O_DIRECT workloads** — O_DIRECT bypasses the page cache entirely. mmap cannot do this; it is fundamentally tied to the page cache.
+**O_DIRECTのワークロード** — O_DIRECTはページキャッシュを完全にバイパスする。mmapにはこれができない。mmapは本質的にページキャッシュと結びついているからである。
 
-**Short-lived processes** — A process that reads a 4KB config file and exits will pay the mmap setup cost (kernel allocates a VMA, installs the mapping) for no benefit. `read()` is simpler and faster for small one-shot reads.
+**短命なプロセス** — 4KBの設定ファイルを読んで終了するプロセスは、何の利益もないのにmmapのセットアップコスト（カーネルがVMAを割り当て、マッピングを設置する）を支払うことになる。小さな一度きりの読み出しには`read()`の方が単純で速い。
 
-**Writes that need explicit durability control** — `write()` + `fsync()` is a familiar, well-tested path. mmap writes require `msync()` for durability, and the semantics are subtler (see [msync() semantics](#msync-semantics)).
+**明示的な永続性の制御が必要な書き込み** — `write()` + `fsync()`はなじみ深く、よくテストされた経路である。mmapでの書き込みは永続性のために`msync()`を必要とし、そのセマンティクスはより微妙である（[msync()のセマンティクス](#msync-semantics)を参照）。
 
-**When page table overhead dominates** — Mapping 100 GB of files and touching a tiny fraction means 100 GB worth of PTEs potentially allocated and TLB pressure on every context switch. `pread()` has no per-byte virtual memory overhead.
+**ページテーブルのオーバーヘッドが支配的な場合** — 100GBのファイルをマップしてそのごく一部にしか触れない場合、100GB分のPTEが割り当てられる可能性があり、コンテキストスイッチのたびにTLBに負荷がかかる。`pread()`にはバイトあたりの仮想メモリのオーバーヘッドがない。
 
 ---
 
-## mmap() call anatomy {#mmap-call-anatomy}
+## mmap()呼び出しの構造 {#mmap-call-anatomy}
 
 ```c
 #include <sys/mman.h>
@@ -76,133 +76,133 @@ The two costs trade:
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset);
 ```
 
-### Protection flags (prot) {#protection-flags-prot}
+### 保護フラグ（prot） {#protection-flags-prot}
 
 ```c
-PROT_READ    /* pages are readable */
-PROT_WRITE   /* pages are writable */
-PROT_EXEC    /* pages are executable */
-PROT_NONE    /* no access (guard pages, userfaultfd) */
+PROT_READ    /* ページは読み出し可能 */
+PROT_WRITE   /* ページは書き込み可能 */
+PROT_EXEC    /* ページは実行可能 */
+PROT_NONE    /* アクセス不可（ガードページ、userfaultfd） */
 ```
 
-For read-only file I/O: `PROT_READ`.
-For read-write file I/O: `PROT_READ | PROT_WRITE`.
+読み出し専用のファイルI/Oには`PROT_READ`を使う。
+読み書きするファイルI/Oには`PROT_READ | PROT_WRITE`を使う。
 
-### MAP_SHARED vs MAP_PRIVATE {#mapshared-vs-mapprivate}
+### MAP_SHAREDとMAP_PRIVATE {#mapshared-vs-mapprivate}
 
-`MAP_SHARED` — Writes go directly into the page cache. The modified page is visible to all other processes that have the same file mapped (or that call `read()` on it). The kernel will write the dirty page back to disk during writeback or when `msync()` is called.
+`MAP_SHARED` — 書き込みはページキャッシュに直接入る。変更されたページは、同じファイルをマップしている（またはそのファイルに対して`read()`を呼ぶ）他のすべてのプロセスから見える。カーネルは、ライトバック中または`msync()`が呼ばれたときに、ダーティページをディスクに書き戻す。
 
-`MAP_PRIVATE` — Writes trigger copy-on-write. A private copy of the page is made for this process. The original page cache page is untouched. Other processes never see the write. The private copy is never written back to the file.
+`MAP_PRIVATE` — 書き込みはコピーオンライトを引き起こす。このプロセス用にページのプライベートコピーが作られる。元のページキャッシュのページには手を付けない。他のプロセスがその書き込みを目にすることはない。プライベートコピーがファイルに書き戻されることはない。
 
 ```c
-/* Read-only view, no COW overhead */
+/* 読み出し専用のビュー、COWのオーバーヘッドなし */
 char *ro = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
 
-/* Read-write, changes visible to all and written back to file */
+/* 読み書き可能、変更は全員に見え、ファイルに書き戻される */
 char *rw = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-/* Read-write, changes private (like loading a config you may modify) */
+/* 読み書き可能、変更はプライベート（変更するかもしれない設定の読み込みなど） */
 char *priv = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
 ```
 
-### MAP_POPULATE: eager fault-in {#map_populate-eager-fault-in}
+### MAP_POPULATE: 先行フォールトイン {#map_populate-eager-fault-in}
 
-By default, pages are faulted in lazily on first access. `MAP_POPULATE` tells the kernel to pre-fault the entire mapping during the `mmap()` call itself, using `readahead` to batch the I/O. For file-backed mappings, `MAP_POPULATE` submits I/O to fault in pages but does NOT guarantee all I/O is complete when `mmap()` returns. For anonymous mappings, the operation does complete synchronously. Contrast with `MADV_POPULATE_READ`, which blocks until the pages are actually faulted in.
+デフォルトでは、ページは初回アクセス時に遅延してフォールトインされる。`MAP_POPULATE`は、`mmap()`呼び出しの中でマッピング全体を事前にフォールトさせるようカーネルに指示し、`readahead`を使ってI/Oをバッチ化する。ファイルベースのマッピングでは、`MAP_POPULATE`はページをフォールトインするためのI/Oを発行するが、`mmap()`が戻った時点ですべてのI/Oが完了していることは保証*しない*。匿名マッピングでは、この操作は同期的に完了する。対照的に`MADV_POPULATE_READ`は、ページが実際にフォールトインされるまでブロックする。
 
 ```c
-/* mmap() submits readahead for all pages (file-backed: I/O may still be in flight) */
+/* mmap()はすべてのページに対してリードアヘッドを発行する（ファイルベース: I/Oはまだ処理中かもしれない） */
 void *addr = mmap(NULL, len, PROT_READ, MAP_SHARED | MAP_POPULATE, fd, 0);
-/* For guaranteed fault completion on file-backed mappings, use MADV_POPULATE_READ */
+/* ファイルベースのマッピングでフォールトの完了を保証するには、MADV_POPULATE_READを使う */
 ```
 
-This is useful when the latency of individual faults scattered across a workload is more harmful than a single up-front I/O burst. LMDB uses `MAP_POPULATE` for its environment open.
+これは、ワークロード全体に散らばった個々のフォールトのレイテンシが、事前の1回のI/Oバーストよりも有害な場合に有用である。LMDBは環境のオープン時に`MAP_POPULATE`を使う。
 
-`MAP_POPULATE` with `MAP_PRIVATE` also pre-faults, but does not trigger COW — pages are mapped read-only from the page cache and will COW on first write.
+`MAP_PRIVATE`と組み合わせた`MAP_POPULATE`も事前フォールトを行うが、COWは引き起こさない。ページはページキャッシュから読み出し専用でマップされ、最初の書き込み時にCOWされる。
 
-### MAP_FIXED: map at an exact address {#map_fixed-map-at-an-exact-address}
+### MAP_FIXED: 正確なアドレスにマップする {#map_fixed-map-at-an-exact-address}
 
 ```c
-/* Force the mapping at a specific virtual address */
-/* WARNING: silently replaces any existing mapping at that address */
+/* 特定の仮想アドレスにマッピングを強制する */
+/* 警告: そのアドレスにある既存のマッピングを黙って置き換える */
 void *addr = mmap((void *)0x7f0000000000, len,
                   PROT_READ, MAP_SHARED | MAP_FIXED, fd, 0);
 ```
 
-`MAP_FIXED_NOREPLACE` (Linux 4.17) is safer — it fails with `EEXIST` instead of silently clobbering an existing mapping:
+`MAP_FIXED_NOREPLACE`（Linux 4.17）はより安全である。既存のマッピングを黙って上書きする代わりに、`EEXIST`で失敗する。
 
 ```c
 void *addr = mmap(hint, len, PROT_READ,
                   MAP_SHARED | MAP_FIXED_NOREPLACE, fd, 0);
 if (addr == MAP_FAILED && errno == EEXIST)
-    /* hint was occupied, try elsewhere */
+    /* hintは使用中だった。別の場所を試す */
 ```
 
-### MAP_HUGETLB: huge page mappings {#map_hugetlb-huge-page-mappings}
+### MAP_HUGETLB: ヒュージページによるマッピング {#map_hugetlb-huge-page-mappings}
 
 ```c
 #include <linux/mman.h>
 
-/* Map a file using 2MB huge pages */
+/* 2MBのヒュージページを使ってファイルをマップする */
 void *addr = mmap(NULL, len,
                   PROT_READ | PROT_WRITE,
                   MAP_SHARED | MAP_HUGETLB | (MAP_HUGE_2MB << MAP_HUGE_SHIFT),
                   fd, 0);
 ```
 
-`MAP_HUGETLB` is primarily for hugetlbfs-backed files or `memfd_create()` with `MFD_HUGETLB`. For regular file mmaps, Transparent Huge Pages (THP) are a more flexible option — see [Huge Pages and THP](../mm/thp.md).
+`MAP_HUGETLB`は主に、hugetlbfsベースのファイルや`MFD_HUGETLB`付きの`memfd_create()`向けである。通常ファイルのmmapでは、Transparent Huge Pages（THP）の方が柔軟な選択肢である。[ヒュージページとTHP](../mm/thp.md)を参照。
 
 ---
 
-## How a file-backed mmap read works {#how-a-file-backed-mmap-read-works}
+## ファイルベースmmapの読み出しの仕組み {#how-a-file-backed-mmap-read-works}
 
-The first access to a page in an mmap'd file triggers a hardware page fault. The kernel's fault handler walks the VMA tree, finds the file-backed VMA, and reads the page from the page cache (or from disk if it is not cached). Subsequent accesses hit the page table directly — no kernel involvement.
+mmapしたファイル内のページへの最初のアクセスは、ハードウェアのページフォールトを引き起こす。カーネルのフォールトハンドラはVMAツリーをたどってファイルベースのVMAを見つけ、ページキャッシュから（キャッシュされていなければディスクから）ページを読み出す。以降のアクセスはページテーブルに直接ヒットし、カーネルは関与しない。
 
 ```mermaid
 sequenceDiagram
-    participant App as Application
+    participant App as アプリケーション
     participant CPU as CPU / MMU
     participant KMM as mm/memory.c
     participant KFM as mm/filemap.c
-    participant PC  as Page Cache
-    participant FS  as Filesystem
-    participant Disk as Disk
+    participant PC  as ページキャッシュ
+    participant FS  as ファイルシステム
+    participant Disk as ディスク
 
     App->>CPU: load [mmap_addr + offset]
-    CPU->>KMM: page fault (PTE not present)
+    CPU->>KMM: ページフォールト（PTEが存在しない）
     KMM->>KMM: handle_mm_fault() → handle_pte_fault()
     KMM->>KMM: pte_none() + vma->vm_ops → do_fault()
-    KMM->>KMM: read fault → do_read_fault()
+    KMM->>KMM: 読み出しフォールト → do_read_fault()
     KMM->>KFM: vma->vm_ops->fault() → filemap_fault()
     KFM->>PC: filemap_get_folio(mapping, pgoff)
-    alt Page cache hit
-        PC-->>KFM: folio (already in memory)
-        KFM->>KFM: page_cache_async_readahead() for future pages
-    else Page cache miss
+    alt ページキャッシュのヒット
+        PC-->>KFM: folio（既にメモリ上にある）
+        KFM->>KFM: 将来のページのためのpage_cache_async_readahead()
+    else ページキャッシュのミス
         KFM->>KFM: page_cache_sync_readahead()
-        KFM->>PC: filemap_add_folio() — allocate new folio
+        KFM->>PC: filemap_add_folio() — 新しいfolioを割り当てる
         KFM->>FS: mapping->a_ops->readahead(rac)
-        FS->>Disk: bio submission (readpages)
-        Disk-->>FS: data
-        FS-->>PC: folio uptodate
+        FS->>Disk: bioの発行（readpages）
+        Disk-->>FS: データ
+        FS-->>PC: folioがuptodateになる
         KFM->>KFM: wait_on_page_locked(folio)
     end
     KFM-->>KMM: VM_FAULT_LOCKED + vmf->page
-    KMM->>KMM: finish_fault() — install PTE
-    KMM-->>CPU: return from fault handler
-    CPU-->>App: load completes (data in register)
+    KMM->>KMM: finish_fault() — PTEを設置する
+    KMM-->>CPU: フォールトハンドラから戻る
+    CPU-->>App: ロード完了（データはレジスタ内）
 
-    Note over App,CPU: Subsequent accesses to same page:<br/>PTE present → no fault, direct memory access
+    Note over App,CPU: 同じページへの以降のアクセス:<br/>PTEが存在 → フォールトなし、メモリへの直接アクセス
 ```
 
-### Kernel code path {#kernel-code-path}
+### カーネルのコードパス {#kernel-code-path}
 
 ```c
-/* mm/memory.c — entry point from architecture fault handler */
+/* mm/memory.c — アーキテクチャのフォールトハンドラからの入口 */
 vm_fault_t handle_mm_fault(struct vm_area_struct *vma,
                             unsigned long address, unsigned int flags,
                             struct pt_regs *regs)
 {
-    /* Walk/allocate page table levels: pgd → p4d → pud → pmd */
+    /* ページテーブルの各レベルをたどる/割り当てる: pgd → p4d → pud → pmd */
     return handle_pte_fault(vmf);
 }
 
@@ -213,29 +213,29 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
     if (!pte_present(entry)) {
         if (pte_none(entry)) {
             if (vmf->vma->vm_ops)
-                return do_fault(vmf);       /* file-backed */
-            return do_anonymous_page(vmf);  /* anonymous */
+                return do_fault(vmf);       /* ファイルベース */
+            return do_anonymous_page(vmf);  /* 匿名 */
         }
-        return do_swap_page(vmf);           /* swapped out */
+        return do_swap_page(vmf);           /* スワップアウトされている */
     }
-    /* Present but write-protected: copy-on-write */
+    /* 存在するが書き込み保護されている: コピーオンライト */
     if (vmf->flags & FAULT_FLAG_WRITE && !pte_write(entry))
         return do_wp_page(vmf);
     return 0;
 }
 
-/* mm/memory.c — dispatch read vs write vs shared faults */
+/* mm/memory.c — 読み出し、書き込み、共有のフォールトを振り分ける */
 static vm_fault_t do_fault(struct vm_fault *vmf)
 {
     if (!(vmf->flags & FAULT_FLAG_WRITE))
-        return do_read_fault(vmf);          /* read: share page cache page */
+        return do_read_fault(vmf);          /* 読み出し: ページキャッシュのページを共有する */
     if (!(vmf->vma->vm_flags & VM_SHARED))
-        return do_cow_fault(vmf);           /* MAP_PRIVATE write: COW */
-    return do_shared_fault(vmf);            /* MAP_SHARED write: dirty in-place */
+        return do_cow_fault(vmf);           /* MAP_PRIVATEへの書き込み: COW */
+    return do_shared_fault(vmf);            /* MAP_SHAREDへの書き込み: その場でダーティにする */
 }
 ```
 
-### filemap_fault: page cache lookup {#filemap_fault-page-cache-lookup}
+### filemap_fault: ページキャッシュの検索 {#filemap_fault-page-cache-lookup}
 
 ```c
 /* mm/filemap.c */
@@ -247,29 +247,29 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
     struct file_ra_state *ra = &file->f_ra;
     struct folio *folio;
 
-    /* Step 1: look up in the page cache (radix tree / xarray) */
+    /* ステップ1: ページキャッシュ（radix tree / xarray）を検索する */
     folio = filemap_get_folio(mapping, offset);
 
     if (!folio) {
-        /* Cache miss */
-        count_vm_event(PGMAJFAULT);         /* major fault counter */
+        /* キャッシュミス */
+        count_vm_event(PGMAJFAULT);         /* メジャーフォールトのカウンタ */
         mem_cgroup_count_vm_event(vma->vm_mm, PGMAJFAULT);
 
-        /* Synchronous readahead: read this page + surrounding pages */
+        /* 同期リードアヘッド: このページと周辺のページを読む */
         page_cache_sync_readahead(mapping, ra, file, offset, ra->ra_pages);
 
-        /* Allocate and add folio to page cache */
+        /* folioを割り当ててページキャッシュに追加する */
         folio = filemap_alloc_folio(vmf->gfp_mask, 0);
         filemap_add_folio(mapping, folio, offset, vmf->gfp_mask);
 
-        /* Invoke filesystem readahead: submits bio(s) */
+        /* ファイルシステムのリードアヘッドを呼び出す: bioを発行する */
         mapping->a_ops->readahead(rac);
         /* → ext4_readahead → ext4_mpage_readpages → submit_bio */
 
-        /* Wait for disk I/O to complete */
+        /* ディスクI/Oの完了を待つ */
         wait_on_page_locked(folio);
     } else {
-        /* Cache hit: async readahead for pages ahead of this one */
+        /* キャッシュヒット: このページより先のページを非同期にリードアヘッドする */
         count_vm_event(PGMINORAULT);
         page_cache_async_readahead(mapping, ra, file, folio,
                                    offset, ra->ra_pages);
@@ -277,21 +277,21 @@ vm_fault_t filemap_fault(struct vm_fault *vmf)
 
     vmf->page = folio_file_page(folio, offset);
     return VM_FAULT_LOCKED;
-    /* do_read_fault will call finish_fault() to install the PTE */
+    /* do_read_faultがfinish_fault()を呼んでPTEを設置する */
 }
 ```
 
-After `finish_fault()` installs the PTE, the virtual address maps directly to the physical page in the page cache. The next load to any byte on that page is resolved entirely in hardware — no trap to the kernel.
+`finish_fault()`がPTEを設置した後、仮想アドレスはページキャッシュ内の物理ページに直接マップされる。そのページ上の任意のバイトへの次のロードは、完全にハードウェア内で解決される。カーネルへのトラップは発生しない。
 
 ---
 
-## How writes to MAP_SHARED work {#how-writes-to-map_shared-work}
+## MAP_SHAREDへの書き込みの仕組み {#how-writes-to-map_shared-work}
 
-With `MAP_SHARED | PROT_WRITE`, writes go directly into the page cache. There is no separate user-space buffer; the process is writing into the kernel's page cache.
+`MAP_SHARED | PROT_WRITE`では、書き込みはページキャッシュに直接入る。別個のユーザー空間バッファは存在せず、プロセスはカーネルのページキャッシュに書き込んでいる。
 
-### Initial state and first write fault {#initial-state-and-first-write-fault}
+### 初期状態と最初の書き込みフォールト {#initial-state-and-first-write-fault}
 
-Even though the VMA is marked writable, PTEs are initially installed read-only. This is intentional: the kernel needs to know when a page first becomes dirty so it can set the dirty bit, start tracking it for writeback, and (for filesystems with journaling like ext4) start a journal transaction.
+VMAが書き込み可能とマークされていても、PTEは最初は読み出し専用で設置される。これは意図的なものである。カーネルは、ページが初めてダーティになる時点を知る必要がある。そうすることで、ダーティビットをセットし、ライトバックのための追跡を開始し、（ext4のようなジャーナリングを行うファイルシステムでは）ジャーナルトランザクションを開始できる。
 
 ```
 Initial state after read fault:
@@ -315,52 +315,52 @@ static vm_fault_t do_shared_fault(struct vm_fault *vmf)
     struct vm_area_struct *vma = vmf->vma;
     vm_fault_t ret;
 
-    /* Read the page from cache (or disk) */
+    /* キャッシュ（またはディスク）からページを読む */
     ret = __do_fault(vmf);
     if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
         return ret;
 
-    /* Notify filesystem of imminent write (journaling, etc.) */
+    /* 差し迫った書き込みをファイルシステムに通知する（ジャーナリングなど） */
     if (vma->vm_ops->page_mkwrite) {
         ret = do_page_mkwrite(vmf);
         if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE)))
             return ret;
     }
 
-    /* Mark dirty and install writable PTE */
+    /* ダーティにして書き込み可能なPTEを設置する */
     fault_dirty_shared_page(vmf);
     return ret;
 }
 ```
 
-### Visibility to other processes {#visibility-to-other-processes}
+### 他のプロセスからの可視性 {#visibility-to-other-processes}
 
-A write to a `MAP_SHARED` mapping is immediately visible to all other processes that have the same file mapped. They share the same physical page; their PTEs point to the same frame. No `msync()` is needed for process-to-process visibility — it is instantaneous.
+`MAP_SHARED`マッピングへの書き込みは、同じファイルをマップしている他のすべてのプロセスから即座に見える。それらは同じ物理ページを共有しており、PTEは同じフレームを指している。プロセス間の可視性のために`msync()`は不要であり、即座に反映される。
 
 ```c
-/* Process A */
+/* プロセスA */
 int fd = open("shared.dat", O_RDWR);
 char *a = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-a[0] = 'X';   /* instantly visible to Process B */
+a[0] = 'X';   /* プロセスBから即座に見える */
 
-/* Process B (same file open) */
+/* プロセスB（同じファイルをオープン） */
 char *b = mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-printf("%c\n", b[0]);   /* prints 'X' — no msync needed */
+printf("%c\n", b[0]);   /* 'X'を出力する — msyncは不要 */
 ```
 
-### Writeback to disk {#writeback-to-disk}
+### ディスクへのライトバック {#writeback-to-disk}
 
-The kernel writes dirty pages to disk automatically as part of normal writeback (controlled by `dirty_expire_centisecs`, `dirty_writeback_centisecs`, and `dirty_ratio`). This happens asynchronously without any application action.
+カーネルは、通常のライトバック（`dirty_expire_centisecs`、`dirty_writeback_centisecs`、`dirty_ratio`で制御される）の一環として、ダーティページを自動的にディスクに書き込む。これはアプリケーションが何もしなくても非同期に行われる。
 
-For explicit control, use `msync()` — see [msync() semantics](#msync-semantics).
+明示的に制御するには`msync()`を使う。[msync()のセマンティクス](#msync-semantics)を参照。
 
 ---
 
-## MAP_PRIVATE: copy-on-write semantics {#map_private-copy-on-write-semantics}
+## MAP_PRIVATE: コピーオンライトのセマンティクス {#map_private-copy-on-write-semantics}
 
-`MAP_PRIVATE` creates an independent view of the file. Reads share the page cache (no copying). Writes create a private copy of the page that is never written back to the file.
+`MAP_PRIVATE`はファイルの独立したビューを作る。読み出しはページキャッシュを共有する（コピーなし）。書き込みはページのプライベートコピーを作り、それがファイルに書き戻されることはない。
 
-### COW fault path {#cow-fault-path}
+### COWフォールトの経路 {#cow-fault-path}
 
 ```
 Initial (read fault, MAP_PRIVATE):
@@ -383,21 +383,21 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
     struct vm_area_struct *vma = vmf->vma;
     vm_fault_t ret;
 
-    /* Allocate a new anonymous page for the private copy */
+    /* プライベートコピー用に新しい匿名ページを割り当てる */
     vmf->cow_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vma, vmf->address);
     if (!vmf->cow_page)
         return VM_FAULT_OOM;
 
-    /* Read the original file page into vmf->page */
+    /* 元のファイルページをvmf->pageに読み込む */
     ret = __do_fault(vmf);
     if (unlikely(ret & (VM_FAULT_ERROR | VM_FAULT_NOPAGE | VM_FAULT_RETRY)))
         goto uncharge_out;
 
-    /* Copy file page → private page */
+    /* ファイルページ → プライベートページへコピーする */
     copy_user_highpage(vmf->cow_page, vmf->page, vmf->address, vma);
     __SetPageUptodate(vmf->cow_page);
 
-    /* Install PTE pointing to the private copy (writable) */
+    /* プライベートコピーを指すPTE（書き込み可能）を設置する */
     ret |= finish_fault(vmf);
     unlock_page(vmf->page);
     put_page(vmf->page);
@@ -405,38 +405,38 @@ static vm_fault_t do_cow_fault(struct vm_fault *vmf)
 }
 ```
 
-### Use cases for MAP_PRIVATE on files {#use-cases-for-map_private-on-files}
+### ファイルに対するMAP_PRIVATEの用途 {#use-cases-for-map_private-on-files}
 
-**Read-only access with potential local modifications** — A process loads a large read-only dataset but may modify a few entries locally (for a session-scoped cache, normalization, etc.). MAP_PRIVATE is read-efficient (pages shared with page cache) and write-efficient (only modified pages are copied).
+**ローカルで変更する可能性のある読み出し専用アクセス** — プロセスが大きな読み出し専用データセットを読み込むが、いくつかのエントリをローカルで変更するかもしれない（セッション単位のキャッシュ、正規化など）場合。MAP_PRIVATEは読み出しが効率的（ページはページキャッシュと共有される）であり、書き込みも効率的（変更されたページだけがコピーされる）である。
 
-**Process isolation / fork semantics** — After `fork()`, both parent and child inherit MAP_PRIVATE mappings. The PTEs are write-protected; the first write in either process creates a private copy. This is exactly how `exec()` works for text segments.
+**プロセスの分離 / forkのセマンティクス** — `fork()`の後、親と子はどちらもMAP_PRIVATEマッピングを継承する。PTEは書き込み保護されており、どちらかのプロセスでの最初の書き込みがプライベートコピーを作る。これはまさに`exec()`がテキストセグメントに対して行っていることである。
 
-**Implementing application-level snapshots** — Map a database file with MAP_PRIVATE. Take a "snapshot" of the current state. The application can modify the snapshot freely; the underlying file is untouched.
+**アプリケーションレベルのスナップショットの実装** — データベースファイルをMAP_PRIVATEでマップする。現在の状態の「スナップショット」を取る。アプリケーションはスナップショットを自由に変更でき、元のファイルには手が付けられない。
 
 ```c
-/* Load a read-only dataset; modifications stay local */
+/* 読み出し専用のデータセットを読み込む。変更はローカルにとどまる */
 int fd = open("embedding-index.bin", O_RDONLY);
 struct stat st;
 fstat(fd, &st);
 
 float *index = mmap(NULL, st.st_size,
                     PROT_READ | PROT_WRITE,
-                    MAP_PRIVATE,           /* writes never reach the file */
+                    MAP_PRIVATE,           /* 書き込みがファイルに届くことはない */
                     fd, 0);
-close(fd);   /* fd can be closed immediately after mmap */
+close(fd);   /* mmapの直後にfdを閉じてよい */
 
-/* Reads share the page cache — no extra RAM for unmodified pages */
+/* 読み出しはページキャッシュを共有する — 変更されていないページに余分なRAMは不要 */
 float score = index[1024];
 
-/* This write creates a private COW copy of only this page */
-index[42] = 0.0f;   /* normalize without touching the file */
+/* この書き込みは、このページだけのプライベートなCOWコピーを作る */
+index[42] = 0.0f;   /* ファイルに触れずに正規化する */
 ```
 
 ---
 
-## msync() semantics {#msync-semantics}
+## msync()のセマンティクス {#msync-semantics}
 
-`msync()` controls the relationship between dirty pages in a `MAP_SHARED` mapping and the data on disk.
+`msync()`は、`MAP_SHARED`マッピング内のダーティページとディスク上のデータとの関係を制御する。
 
 ```c
 #include <sys/mman.h>
@@ -444,121 +444,121 @@ index[42] = 0.0f;   /* normalize without touching the file */
 int msync(void *addr, size_t length, int flags);
 ```
 
-### MS_SYNC: wait for writeback {#ms_sync-wait-for-writeback}
+### MS_SYNC: ライトバックを待つ {#ms_sync-wait-for-writeback}
 
-`MS_SYNC` initiates writeback of all dirty pages in the range and waits for it to complete before returning. After `MS_SYNC` returns, the data is guaranteed to have reached the storage device (subject to the device's own write cache — combine with `O_SYNC` or a subsequent `sync_file_range()` for full durability).
+`MS_SYNC`は範囲内のすべてのダーティページのライトバックを開始し、それが完了するのを待ってから戻る。`MS_SYNC`が戻った後、データがストレージデバイスに到達していることが保証される（ただしデバイス自身の書き込みキャッシュに左右される。完全な永続性を得るには`O_SYNC`やその後の`sync_file_range()`と組み合わせること）。
 
 ```c
 char *map = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
 
-/* ... modify pages ... */
+/* ... ページを変更する ... */
 map[0] = 'A';
 map[4096] = 'B';
 
-/* Flush to disk and wait */
+/* ディスクにフラッシュして待つ */
 if (msync(map, len, MS_SYNC) != 0)
     perror("msync");
-/* Data is on disk now */
+/* データは今やディスク上にある */
 ```
 
-### MS_ASYNC: advisory flush {#ms_async-advisory-flush}
+### MS_ASYNC: 助言的なフラッシュ {#ms_async-advisory-flush}
 
-`MS_ASYNC` has been a complete no-op on Linux since kernel 2.6.19. The kernel's writeback daemon handles dirty page flushing independently. Calling `MS_ASYNC` has no observable effect and is retained only for POSIX source compatibility.
+`MS_ASYNC`は、カーネル2.6.19以降のLinuxでは完全に何もしない（no-op）。カーネルのライトバックデーモンが、ダーティページのフラッシュを独立して処理する。`MS_ASYNC`を呼んでも観測可能な効果はなく、POSIXのソース互換性のためだけに残されている。
 
 ```c
-/* Write a block, schedule flush, continue processing */
+/* ブロックを書き込み、フラッシュをスケジュールし、処理を続ける */
 memcpy(map + offset, data, chunk_size);
 msync(map + offset, chunk_size, MS_ASYNC);
-/* Continue doing other work; writeback happens in background */
+/* 他の作業を続ける。ライトバックはバックグラウンドで行われる */
 ```
 
-### MS_INVALIDATE: discard cached changes {#ms_invalidate-discard-cached-changes}
+### MS_INVALIDATE: キャッシュされた変更を破棄する {#ms_invalidate-discard-cached-changes}
 
-`MS_INVALIDATE` discards any in-memory changes to the range and reloads from the underlying file. It is used when another process (or the file on disk) may have changed the backing data and you want the mapping to reflect the on-disk state.
+`MS_INVALIDATE`は、範囲に対するメモリ上の変更をすべて破棄し、基になるファイルから再読み込みする。他のプロセス（またはディスク上のファイル）が背後のデータを変更した可能性があり、マッピングにディスク上の状態を反映させたい場合に使う。
 
 ```c
-/* Another process wrote to the file; reload our view */
+/* 他のプロセスがファイルに書き込んだ。こちらのビューを再読み込みする */
 msync(map, len, MS_INVALIDATE);
-/* Subsequent reads will re-fault pages from disk */
+/* 以降の読み出しではディスクからページが再フォールトされる */
 ```
 
-`MS_INVALIDATE` combined with `MS_SYNC` (as `MS_SYNC | MS_INVALIDATE`) writes out dirty pages first, then invalidates.
+`MS_INVALIDATE`を`MS_SYNC`と組み合わせる（`MS_SYNC | MS_INVALIDATE`として）と、まずダーティページを書き出してから無効化する。
 
-### When is msync required? {#when-is-msync-required}
+### msyncが必要になるのはいつか {#when-is-msync-required}
 
-| Goal | What to do |
+| 目的 | すべきこと |
 |------|-----------|
-| Writes visible to other mmap processes | Nothing — automatic (shared page cache) |
-| Writes visible via read() by other processes | Nothing — same page cache |
-| Writes durably on disk (survive power loss) | `msync(MS_SYNC)` or `fsync(fd)` |
-| `msync(MS_ASYNC)` — No-op on Linux since 2.6.19 | Never (writeback happens independently via the writeback daemon) |
-| Reload from disk after external change | `msync(MS_INVALIDATE)` |
-| Partial-file durability | `sync_file_range(fd, offset, len, SYNC_FILE_RANGE_WRITE \| SYNC_FILE_RANGE_WAIT_AFTER)` |
+| 書き込みを他のmmapプロセスから見えるようにする | 何もしない — 自動的（共有されたページキャッシュ） |
+| 書き込みを他のプロセスのread()から見えるようにする | 何もしない — 同じページキャッシュ |
+| 書き込みをディスク上で永続化する（電源断に耐える） | `msync(MS_SYNC)`または`fsync(fd)` |
+| `msync(MS_ASYNC)` — 2.6.19以降のLinuxではno-op | 不要（ライトバックはライトバックデーモンによって独立して行われる） |
+| 外部での変更後にディスクから再読み込みする | `msync(MS_INVALIDATE)` |
+| ファイルの一部分の永続化 | `sync_file_range(fd, offset, len, SYNC_FILE_RANGE_WRITE \| SYNC_FILE_RANGE_WAIT_AFTER)` |
 
-### msync vs fsync {#msync-vs-fsync}
+### msyncとfsync {#msync-vs-fsync}
 
-`fsync(fd)` and `msync(addr, len, MS_SYNC)` both flush dirty pages to disk, but they operate on different objects. `fsync()` takes a file descriptor and flushes all dirty pages for that file (plus metadata). `msync()` takes a virtual address range, which is a subset of the mapping (and a subset of the file).
+`fsync(fd)`と`msync(addr, len, MS_SYNC)`はどちらもダーティページをディスクにフラッシュするが、操作対象が異なる。`fsync()`はファイルディスクリプタを取り、そのファイルのすべてのダーティページ（とメタデータ）をフラッシュする。`msync()`は仮想アドレス範囲を取り、これはマッピングの部分集合（したがってファイルの部分集合）である。
 
-For a full-file durability guarantee, `fsync(fd)` is simpler. For range durability on a large file, `msync()` on the specific range is more efficient.
+ファイル全体の永続性を保証するなら、`fsync(fd)`の方が単純である。大きなファイルの一部範囲の永続性なら、特定の範囲に対する`msync()`の方が効率的である。
 
 ```c
-/* Equivalent for full-file durability */
+/* ファイル全体の永続性については等価 */
 msync(map, file_size, MS_SYNC);
-/* vs */
+/* 対 */
 fsync(fd);
 ```
 
 ---
 
-## File sealing with F_SEAL_* {#file-sealing-with-fseal}
+## F_SEAL_*によるファイルシーリング {#file-sealing-with-fseal}
 
-File sealing (introduced in Linux 3.17) allows a process to permanently restrict operations on a file descriptor, creating an immutable or partially-immutable shared memory region. It is most useful with `memfd_create()` but applies to any `tmpfs` file with sealing enabled.
+ファイルシーリング（Linux 3.17で導入）により、プロセスはファイルディスクリプタに対する操作を恒久的に制限し、不変または部分的に不変な共有メモリ領域を作ることができる。最も有用なのは`memfd_create()`と組み合わせた場合だが、シーリングが有効な任意の`tmpfs`ファイルに適用できる。
 
-### The seals {#the-seals}
+### シールの種類 {#the-seals}
 
 ```c
 #include <linux/memfd.h>
 #include <fcntl.h>
 
-/* Prevent adding further seals */
+/* これ以上シールを追加できないようにする */
 F_SEAL_SEAL
 
-/* Prevent write() calls and MAP_SHARED | PROT_WRITE mappings */
+/* write()呼び出しとMAP_SHARED | PROT_WRITEのマッピングを禁止する */
 F_SEAL_WRITE
 
-/* Prevent shrinking the file */
+/* ファイルの縮小を禁止する */
 F_SEAL_SHRINK
 
-/* Prevent growing the file (write beyond end, ftruncate to larger size) */
+/* ファイルの拡大を禁止する（末尾を越える書き込み、より大きなサイズへのftruncate） */
 F_SEAL_GROW
 
-/* Prevent MAP_SHARED | PROT_WRITE, but allow MAP_PRIVATE | PROT_WRITE */
+/* MAP_SHARED | PROT_WRITEを禁止するが、MAP_PRIVATE | PROT_WRITEは許可する */
 F_SEAL_FUTURE_WRITE   /* Linux 5.1 */
 ```
 
-### Applying seals {#applying-seals}
+### シールの適用 {#applying-seals}
 
 ```c
 int fd = memfd_create("shared_data", MFD_ALLOW_SEALING);
 
-/* Write initial data */
+/* 初期データを書き込む */
 ftruncate(fd, DATA_SIZE);
 write(fd, data, DATA_SIZE);
 
-/* Seal: prevent any further writes or size changes */
+/* シール: 以降の書き込みやサイズ変更をすべて禁止する */
 fcntl(fd, F_ADD_SEALS, F_SEAL_WRITE | F_SEAL_GROW | F_SEAL_SHRINK);
 
-/* Now pass fd to another process. That process can: */
-/*   - mmap with MAP_SHARED | PROT_READ ✓ */
-/*   - mmap with MAP_SHARED | PROT_WRITE ✗ (EPERM) */
-/*   - write() to fd ✗ (EPERM) */
+/* fdを別のプロセスに渡す。そのプロセスができること: */
+/*   - MAP_SHARED | PROT_READでのmmap ✓ */
+/*   - MAP_SHARED | PROT_WRITEでのmmap ✗ (EPERM) */
+/*   - fdへのwrite() ✗ (EPERM) */
 /*   - ftruncate() ✗ (EPERM) */
 
-/* Seal the seal list (no more seals can be added) */
+/* シールのリスト自体をシールする（これ以上シールを追加できない） */
 fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL);
 ```
 
-### Query current seals {#query-current-seals}
+### 現在のシールを問い合わせる {#query-current-seals}
 
 ```c
 int seals = fcntl(fd, F_GET_SEALS);
@@ -566,19 +566,19 @@ if (seals & F_SEAL_WRITE)
     printf("file is write-sealed\n");
 ```
 
-### Android Ashmem replacement {#android-ashmem-replacement}
+### AndroidのAshmemの置き換え {#android-ashmem-replacement}
 
-Android's original shared memory mechanism, Ashmem, was replaced by `memfd_create()` + sealing in Android 10 (API level 29). The pattern:
+Androidの元々の共有メモリの仕組みであるAshmemは、Android 10（APIレベル29）で`memfd_create()` + シーリングに置き換えられた。そのパターンは次のとおりである。
 
-1. Process A creates a `memfd`, writes data, applies `F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW`.
-2. Process A sends the fd to Process B over a Unix socket (with `SCM_RIGHTS`).
-3. Process B verifies the seals with `F_GET_SEALS` before mmap'ing.
-4. Process B can safely mmap `MAP_SHARED` knowing the data cannot change under it.
+1. プロセスAが`memfd`を作成し、データを書き込み、`F_SEAL_WRITE | F_SEAL_SHRINK | F_SEAL_GROW`を適用する。
+2. プロセスAが、Unixソケット経由で（`SCM_RIGHTS`を使って）fdをプロセスBに送る。
+3. プロセスBは、mmapする前に`F_GET_SEALS`でシールを検証する。
+4. プロセスBは、データが自分の下で変更されないことを知った上で、安全に`MAP_SHARED`でmmapできる。
 
-Sealing provides a security contract: the receiver verifies what the sender promises, without trusting the sender not to modify the data after the fact.
+シーリングはセキュリティ上の契約を提供する。受信側は、送信側が後からデータを変更しないと信頼することなく、送信側の約束を検証できる。
 
 ```c
-/* Sender */
+/* 送信側 */
 int fd = memfd_create("asset", MFD_ALLOW_SEALING);
 ftruncate(fd, asset_size);
 write(fd, asset_data, asset_size);
@@ -586,131 +586,131 @@ fcntl(fd, F_ADD_SEALS, F_SEAL_SEAL | F_SEAL_WRITE |
                         F_SEAL_GROW | F_SEAL_SHRINK);
 send_fd_over_socket(sock, fd);
 
-/* Receiver */
+/* 受信側 */
 int fd = recv_fd_from_socket(sock);
 int seals = fcntl(fd, F_GET_SEALS);
 assert((seals & (F_SEAL_WRITE | F_SEAL_SEAL)) ==
-               (F_SEAL_WRITE | F_SEAL_SEAL));  /* verify promise */
+               (F_SEAL_WRITE | F_SEAL_SEAL));  /* 約束を検証する */
 void *data = mmap(NULL, asset_size, PROT_READ, MAP_SHARED, fd, 0);
-/* Safe: sender cannot modify data */
+/* 安全: 送信側はデータを変更できない */
 ```
 
 ---
 
-## Performance characteristics {#performance-characteristics}
+## 性能特性 {#performance-characteristics}
 
-### Benchmark intuition {#benchmark-intuition}
+### ベンチマークの直感 {#benchmark-intuition}
 
-The break-even point between mmap and read/write depends on:
+mmapとread/writeの損益分岐点は、次の要素に依存する。
 
-- **File size** — Large files favour mmap (amortize VMA/fault overhead)
-- **Access pattern** — Random access strongly favours mmap; sequential access is similar or slightly favours read()
-- **Reuse** — Multiple passes over the same data strongly favour mmap (faults amortized)
-- **CPU architecture** — TLB size matters; x86 has a large TLB; ARM often has a smaller one
+- **ファイルサイズ** — 大きなファイルはmmapに有利（VMAやフォールトのオーバーヘッドを償却できる）
+- **アクセスパターン** — ランダムアクセスはmmapに強く有利。シーケンシャルアクセスでは同程度か、わずかにread()に有利
+- **再利用** — 同じデータを何度も走査する場合はmmapに強く有利（フォールトが償却される）
+- **CPUアーキテクチャ** — TLBのサイズが重要。x86は大きなTLBを持つが、ARMはそれより小さいことが多い
 
-### The copy_to_user elimination {#the-copytouser-elimination}
+### copy_to_userの除去 {#the-copytouser-elimination}
 
-`read()` calls `copy_to_user()` to move data from the page cache into the user buffer. On modern x86 with ERMS (Enhanced REP MOVSB), this is fast but not free — for a 4KB page it costs roughly 400–1000 ns depending on cache state.
+`read()`は`copy_to_user()`を呼んで、ページキャッシュからユーザーバッファへデータを移す。ERMS（Enhanced REP MOVSB）を備えた最近のx86では高速だが、無償ではない。4KBのページでは、キャッシュの状態に応じておおよそ400〜1000nsかかる。
 
-mmap eliminates this copy. After the page fault, a load from the mapped address hits the page cache page directly (possibly L1/L2 cache if recently accessed). For workloads that access the same page many times, this is a significant win.
+mmapはこのコピーを取り除く。ページフォールトの後、マップされたアドレスからのロードはページキャッシュのページに直接ヒットする（最近アクセスされていればL1/L2キャッシュに当たることもある）。同じページに何度もアクセスするワークロードでは、これは大きな利点である。
 
-### TLB cost {#tlb-cost}
+### TLBのコスト {#tlb-cost}
 
-Every new PTE installed by a page fault must eventually be evicted from the TLB on context switch or TLB shootdown. Large mappings can cause TLB pressure, especially on multi-core systems where TLB invalidations are broadcast as IPIs.
+ページフォールトによって設置された新しいPTEは、いずれもコンテキストスイッチやTLBシュートダウンの際にTLBから追い出されなければならない。大きなマッピングはTLBに負荷をかけうる。TLBの無効化がIPIとしてブロードキャストされるマルチコアシステムでは特にそうである。
 
-Using huge pages (2MB via `MAP_HUGETLB` or THP) reduces TLB pressure dramatically — one TLB entry covers 512 × 4KB instead of one.
+ヒュージページ（`MAP_HUGETLB`やTHPによる2MB）を使えば、TLBへの負荷は劇的に減る。1つのTLBエントリが、1つではなく512 × 4KBをカバーするからである。
 
 ```c
-/* 2MB THP for large mmap: 512x fewer TLB entries */
+/* 大きなmmapに2MBのTHPを使う: TLBエントリは512分の1になる */
 void *addr = mmap(NULL, 512 * 1024 * 1024,
                   PROT_READ, MAP_SHARED, fd, 0);
 madvise(addr, 512 * 1024 * 1024, MADV_HUGEPAGE);
 ```
 
-### When mmap page table overhead dominates {#when-mmap-page-table-overhead-dominates}
+### mmapのページテーブルのオーバーヘッドが支配的になる場合 {#when-mmap-page-table-overhead-dominates}
 
-A 100 GB mapping with random access to 1% of pages still requires the kernel to allocate PTEs for every faulted page. Each PTE is 8 bytes; 1% of 100 GB / 4KB = ~260,000 PTEs = ~2 MB just for page tables. The VMA itself is O(1). For most workloads this is negligible, but for thousands of sparse mappings it adds up.
+ページの1%にランダムアクセスする100GBのマッピングでも、カーネルはフォールトしたすべてのページに対してPTEを割り当てる必要がある。各PTEは8バイトであり、100GB / 4KBの1% = 約260,000個のPTE = ページテーブルだけで約2MBになる。VMA自体はO(1)である。ほとんどのワークロードではこれは無視できるが、何千もの疎なマッピングがあると積み重なる。
 
-`pread()` has zero per-page virtual memory overhead.
+`pread()`には、ページあたりの仮想メモリのオーバーヘッドがまったくない。
 
-### Summary table {#summary-table}
+### まとめの表 {#summary-table}
 
-| Scenario | Winner | Reason |
+| シナリオ | 勝者 | 理由 |
 |----------|--------|--------|
-| Large file, random reads, multiple passes | mmap | No copy, faults amortized |
-| Large file, random reads, single pass | Tie | Fault cost ≈ copy cost |
-| Sequential streaming, single pass | read() | Readahead equally effective; no fault overhead |
-| Multiple processes reading same file | mmap | Physical pages shared |
-| Small file, read once | read() | VMA + fault overhead not worth it |
-| Database buffer pool | O_DIRECT | Bypass page cache entirely |
-| Embedded key-value store (LMDB) | mmap | Zero-copy, shared across processes |
-| Write with durability guarantee | Depends | fsync vs msync; read/write simpler |
+| 大きなファイル、ランダム読み出し、複数回走査 | mmap | コピーなし、フォールトが償却される |
+| 大きなファイル、ランダム読み出し、1回の走査 | 引き分け | フォールトのコスト ≈ コピーのコスト |
+| シーケンシャルなストリーミング、1回の走査 | read() | リードアヘッドの効果は同等。フォールトのオーバーヘッドがない |
+| 複数のプロセスが同じファイルを読む | mmap | 物理ページが共有される |
+| 小さなファイル、1回だけ読む | read() | VMAとフォールトのオーバーヘッドに見合わない |
+| データベースのバッファプール | O_DIRECT | ページキャッシュを完全にバイパスする |
+| 組み込みキーバリューストア（LMDB） | mmap | ゼロコピー、プロセス間で共有 |
+| 永続性の保証付きの書き込み | 場合による | fsyncかmsyncか。read/writeの方が単純 |
 
 ---
 
-## madvise() for I/O hints {#madvise-for-io-hints}
+## I/Oのヒントとしてのmadvise() {#madvise-for-io-hints}
 
-`madvise()` tells the kernel how the application will access a mapped region. The kernel uses these hints for readahead, page eviction policy, and THP decisions.
+`madvise()`は、アプリケーションがマップされた領域にどのようにアクセスするかをカーネルに伝える。カーネルはこれらのヒントを、リードアヘッド、ページ追い出しのポリシー、THPの判断に利用する。
 
 ```c
 int madvise(void *addr, size_t length, int advice);
 ```
 
-### Hints that affect I/O behaviour {#hints-that-affect-io-behaviour}
+### I/Oの挙動に影響するヒント {#hints-that-affect-io-behaviour}
 
-**MADV_SEQUENTIAL** — The application will access pages in order. The kernel increases the readahead window and marks pages as candidates for early eviction (they have been "used" in order). This is the most important hint for streaming reads through a large file.
+**MADV_SEQUENTIAL** — アプリケーションはページを順番にアクセスする。カーネルはリードアヘッドのウィンドウを広げ、ページを早期の追い出し候補としてマークする（それらは順番に「使用済み」になっていくため）。大きなファイルをストリーミングで読む場合に最も重要なヒントである。
 
 ```c
 madvise(map, file_size, MADV_SEQUENTIAL);
-/* Read sequentially: kernel prefetches aggressively */
+/* シーケンシャルに読む: カーネルは積極的にプリフェッチする */
 for (size_t i = 0; i < file_size; i += 64)
     process_byte(map[i]);
 ```
 
-**MADV_RANDOM** — The application will access pages in random order. Readahead is disabled. Without this hint, the kernel wastes I/O prefetching pages that will not be accessed soon.
+**MADV_RANDOM** — アプリケーションはページをランダムな順序でアクセスする。リードアヘッドは無効になる。このヒントがないと、カーネルはすぐにはアクセスされないページをプリフェッチしてI/Oを無駄にする。
 
 ```c
 madvise(map, file_size, MADV_RANDOM);
-/* Random access: no wasted readahead */
+/* ランダムアクセス: 無駄なリードアヘッドがない */
 uint64_t key = hash_to_page_offset(query);
 return *(uint64_t *)(map + key);
 ```
 
-**MADV_WILLNEED** — Prefetch the given range asynchronously now. The kernel schedules readahead for the range immediately. The call returns before the I/O completes. Useful for overlapping computation with I/O:
+**MADV_WILLNEED** — 指定した範囲を今すぐ非同期にプリフェッチする。カーネルはその範囲のリードアヘッドを直ちにスケジュールする。呼び出しはI/Oの完了前に戻る。計算とI/Oを重ね合わせるのに有用である。
 
 ```c
-/* Start prefetching the next chunk while processing the current one */
+/* 現在のチャンクを処理している間に、次のチャンクのプリフェッチを開始する */
 madvise(map + next_offset, CHUNK_SIZE, MADV_WILLNEED);
 process_chunk(map + current_offset, CHUNK_SIZE);
-/* By the time we get here, next chunk is likely in cache */
+/* ここに到達する頃には、次のチャンクはおそらくキャッシュにある */
 ```
 
-**MADV_DONTNEED** — The kernel may reclaim the physical pages for this range. The virtual mapping remains valid; the next access will re-fault pages from disk. Used to release memory after processing a section of a large file:
+**MADV_DONTNEED** — カーネルはこの範囲の物理ページを回収してよい。仮想マッピングは有効なまま残り、次のアクセスではディスクからページが再フォールトされる。大きなファイルのある区間を処理した後にメモリを解放するために使う。
 
 ```c
-/* Done with this chunk; release physical pages */
+/* このチャンクの処理は終わった。物理ページを解放する */
 madvise(map + processed_offset, CHUNK_SIZE, MADV_DONTNEED);
 ```
 
-**MADV_FREE** (Linux 4.5) — Like `MADV_DONTNEED` but lazy: the pages are marked as free candidates but not immediately reclaimed. If memory pressure is low, they may still be in memory on next access (avoiding a fault). Useful for reuse patterns where the caller "might" need the data again.
+**MADV_FREE**（Linux 4.5） — `MADV_DONTNEED`に似ているが遅延的である。ページは解放候補としてマークされるが、すぐには回収されない。メモリ圧迫が低ければ、次のアクセス時にもまだメモリ上にあるかもしれない（フォールトを避けられる）。呼び出し元がデータを再び必要と「するかもしれない」再利用パターンで有用である。
 
-### MADV_POPULATE_READ and MADV_POPULATE_WRITE (Linux 5.14) {#madvpopulateread-and-madvpopulatewrite-linux-514}
+### MADV_POPULATE_READとMADV_POPULATE_WRITE（Linux 5.14） {#madvpopulateread-and-madvpopulatewrite-linux-514}
 
-These hints explicitly pre-populate a range by simulating faults, without the calling thread needing to access each page:
+これらのヒントは、呼び出し元のスレッドが各ページにアクセスすることなく、フォールトをシミュレートして範囲を明示的に事前に埋める。
 
 ```c
-/* Pre-fault pages for reading: equivalent to MAP_POPULATE, but post-mmap */
+/* 読み出し用にページを事前フォールトする: MAP_POPULATEと同等だが、mmap後に行う */
 madvise(map, file_size, MADV_POPULATE_READ);
 
-/* Pre-fault pages for writing: triggers COW on MAP_PRIVATE regions */
+/* 書き込み用にページを事前フォールトする: MAP_PRIVATE領域ではCOWを引き起こす */
 madvise(map, file_size, MADV_POPULATE_WRITE);
 ```
 
-`MADV_POPULATE_READ` is useful when you want to start I/O on a range while continuing other setup. Unlike `MADV_WILLNEED`, it guarantees that pages are fully faulted in (not just scheduled) before returning. Like `MAP_POPULATE` but can be applied to a sub-range at any time after mmap.
+`MADV_POPULATE_READ`は、他のセットアップを続けながら範囲に対するI/Oを開始したい場合に有用である。`MADV_WILLNEED`とは異なり、戻る前にページが完全にフォールトインされていること（単にスケジュールされただけではないこと）を保証する。`MAP_POPULATE`に似ているが、mmap後の任意の時点で部分範囲に適用できる。
 
-`MADV_POPULATE_WRITE` on a `MAP_PRIVATE` mapping pre-triggers all COW faults, so the process owns writable copies of all pages before any actual writes. This eliminates COW latency from the hot path.
+`MAP_PRIVATE`マッピングに対する`MADV_POPULATE_WRITE`は、すべてのCOWフォールトを事前に発生させるため、実際の書き込みの前にプロセスはすべてのページの書き込み可能なコピーを所有することになる。これによりホットパスからCOWのレイテンシが取り除かれる。
 
-### Kernel implementation {#kernel-implementation}
+### カーネルの実装 {#kernel-implementation}
 
 ```c
 /* mm/madvise.c */
@@ -739,25 +739,25 @@ static long madvise_behavior(struct vm_area_struct *vma,
         return madvise_willneed(vma, prev, start, end);
     /* ... */
     }
-    /* Update VMA flags */
+    /* VMAのフラグを更新する */
     vma = vma_modify_flags(vma, prev, start, end, new_flags);
 }
 
-/* filemap_fault reads the vm_flags to set readahead size */
+/* filemap_faultはvm_flagsを読んでリードアヘッドのサイズを設定する */
 /* mm/filemap.c */
 if (vma->vm_flags & VM_RAND_READ)
-    ra->ra_pages = 0;    /* disable readahead */
+    ra->ra_pages = 0;    /* リードアヘッドを無効にする */
 if (vma->vm_flags & VM_SEQ_READ)
     ra->ra_pages = max(ra->ra_pages, bdi->ra_pages);
 ```
 
 ---
 
-## Practical examples {#practical-examples}
+## 実践的な例 {#practical-examples}
 
-### Example 1: Read-only data file {#example-1-read-only-data-file}
+### 例1: 読み出し専用のデータファイル {#example-1-read-only-data-file}
 
-Map a large read-only file for random access (e.g., a pre-built lookup table):
+ランダムアクセス用に、大きな読み出し専用ファイル（例えば事前に構築されたルックアップテーブル）をマップする。
 
 ```c
 #include <fcntl.h>
@@ -791,9 +791,9 @@ int lookup_open(struct lookup_table *tbl, const char *path)
         return -1;
     }
 
-    /* Random access: disable readahead */
+    /* ランダムアクセス: リードアヘッドを無効にする */
     void *addr = mmap(NULL, st.st_size, PROT_READ, MAP_SHARED, fd, 0);
-    close(fd);   /* fd no longer needed after mmap */
+    close(fd);   /* mmapの後はfdはもう不要 */
 
     if (addr == MAP_FAILED)
         return -1;
@@ -809,7 +809,7 @@ int lookup_open(struct lookup_table *tbl, const char *path)
 
 uint64_t lookup_query(const struct lookup_table *tbl, uint64_t key)
 {
-    /* Binary search: touches O(log N) pages, fault cost per new page */
+    /* 二分探索: O(log N)個のページに触れ、新しいページごとにフォールトのコストがかかる */
     size_t lo = 0, hi = tbl->count;
     while (lo < hi) {
         size_t mid = lo + (hi - lo) / 2;
@@ -829,9 +829,9 @@ void lookup_close(struct lookup_table *tbl)
 }
 ```
 
-### Example 2: Memory-mapped database (LMDB pattern) {#example-2-memory-mapped-database-lmdb-pattern}
+### 例2: メモリマップドデータベース（LMDBのパターン） {#example-2-memory-mapped-database-lmdb-pattern}
 
-LMDB (Lightning Memory-Mapped Database) maps its entire data file into the process address space and uses B-tree navigation via pointer dereferences. This is the canonical mmap-as-database pattern:
+LMDB（Lightning Memory-Mapped Database）は、データファイル全体をプロセスのアドレス空間にマップし、ポインタの参照外しによってBツリーをたどる。これはmmapをデータベースとして使う典型的なパターンである。
 
 ```c
 #include <fcntl.h>
@@ -840,18 +840,18 @@ LMDB (Lightning Memory-Mapped Database) maps its entire data file into the proce
 #include <stdio.h>
 #include <stdint.h>
 
-#define DB_MAX_SIZE (1UL << 32)   /* 4 GB virtual address space reservation */
+#define DB_MAX_SIZE (1UL << 32)   /* 4GBの仮想アドレス空間を予約 */
 
 typedef struct {
     uint32_t magic;
     uint32_t version;
-    uint64_t root_pgno;         /* B-tree root page number */
+    uint64_t root_pgno;         /* Bツリーのルートのページ番号 */
     uint64_t num_pages;
 } db_meta_t;
 
 typedef struct {
-    void    *addr;              /* base of mmap */
-    size_t   map_size;          /* current mapping size */
+    void    *addr;              /* mmapのベースアドレス */
+    size_t   map_size;          /* 現在のマッピングサイズ */
     int      fd;
 } db_env_t;
 
@@ -864,32 +864,32 @@ int db_open(db_env_t *env, const char *path)
     struct stat st;
     fstat(env->fd, &st);
 
-    /* Map the full address space reservation upfront.
-     * Physical pages are only allocated as the file grows.
-     * LMDB does exactly this — maps DB_MAX_SIZE but the file starts small. */
+    /* 予約したアドレス空間全体を最初にマップする。
+     * 物理ページはファイルが大きくなるにつれてのみ割り当てられる。
+     * LMDBはまさにこれを行う — DB_MAX_SIZEをマップするが、ファイルは小さく始まる。 */
     env->map_size = DB_MAX_SIZE;
     env->addr = mmap(NULL, env->map_size,
                      PROT_READ | PROT_WRITE,
-                     MAP_SHARED,      /* writes go to file */
+                     MAP_SHARED,      /* 書き込みはファイルに届く */
                      env->fd, 0);
     if (env->addr == MAP_FAILED)
         return -1;
 
-    /* Read the meta page (always page 0) */
+    /* メタページ（常にページ0）を読む */
     db_meta_t *meta = env->addr;
     if (meta->magic != 0xBEEFCAFE) {
-        /* New database: initialize meta page */
+        /* 新しいデータベース: メタページを初期化する */
         meta->magic    = 0xBEEFCAFE;
         meta->version  = 1;
         meta->root_pgno = 1;
         meta->num_pages = 2;
-        msync(env->addr, 4096, MS_SYNC);   /* durably write meta page */
+        msync(env->addr, 4096, MS_SYNC);   /* メタページを永続的に書き込む */
     }
 
     return 0;
 }
 
-/* Page access: just a pointer dereference after the first fault */
+/* ページへのアクセス: 最初のフォールトの後は単なるポインタの参照外し */
 static inline void *db_page(db_env_t *env, uint64_t pgno)
 {
     return (char *)env->addr + (pgno * 4096);
@@ -897,22 +897,22 @@ static inline void *db_page(db_env_t *env, uint64_t pgno)
 
 void db_close(db_env_t *env)
 {
-    msync(env->addr, env->map_size, MS_SYNC);  /* flush dirty pages */
+    msync(env->addr, env->map_size, MS_SYNC);  /* ダーティページをフラッシュする */
     munmap(env->addr, env->map_size);
     close(env->fd);
 }
 ```
 
-Key design points from LMDB:
+LMDBの主要な設計上のポイント:
 
-- The mapping is `MAP_SHARED` — writes are visible to all reader processes immediately.
-- Readers need no locks for read-only access because the B-tree is updated via copy-on-write at the database level (MVCC pages, not OS COW).
-- `msync(MS_SYNC)` is called only when committing a transaction, not on every write.
-- The full virtual address space is reserved upfront; the kernel only allocates PTEs (and physical pages) for pages that are actually accessed.
+- マッピングは`MAP_SHARED`である — 書き込みはすべての読み出し側プロセスから即座に見える。
+- 読み出し側は、読み出し専用アクセスのためのロックを必要としない。Bツリーはデータベースレベルでのコピーオンライト（OSのCOWではなく、MVCCページ）によって更新されるからである。
+- `msync(MS_SYNC)`は書き込みのたびではなく、トランザクションのコミット時にのみ呼ばれる。
+- 仮想アドレス空間全体を最初に予約する。カーネルは実際にアクセスされたページに対してのみPTE（と物理ページ）を割り当てる。
 
-### Example 3: Shared memory IPC via file-backed mmap {#example-3-shared-memory-ipc-via-file-backed-mmap}
+### 例3: ファイルベースmmapによる共有メモリIPC {#example-3-shared-memory-ipc-via-file-backed-mmap}
 
-Two processes share a ring buffer backed by a regular file:
+2つのプロセスが、通常ファイルをバックエンドとするリングバッファを共有する。
 
 ```c
 /* shared_ring.h */
@@ -921,32 +921,32 @@ Two processes share a ring buffer backed by a regular file:
 
 typedef struct {
     uint32_t magic;
-    uint32_t head;          /* producer writes here */
-    uint32_t tail;          /* consumer reads here */
+    uint32_t head;          /* プロデューサはここに書き込む */
+    uint32_t tail;          /* コンシューマはここから読む */
     uint32_t _pad;
-    char     data[RING_ENTRIES][64];   /* fixed-size slots */
+    char     data[RING_ENTRIES][64];   /* 固定サイズのスロット */
 } ring_t;
 
-/* Producer */
+/* プロデューサ */
 int ring_produce(ring_t *ring, const char *msg, size_t len)
 {
     uint32_t next = (ring->head + 1) % RING_ENTRIES;
     if (next == ring->tail)
-        return -1;  /* full */
+        return -1;  /* 満杯 */
 
     memcpy(ring->data[ring->head], msg, len < 64 ? len : 63);
-    /* Compiler/CPU memory barrier before updating head */
+    /* headを更新する前のコンパイラ/CPUのメモリバリア */
     __atomic_store_n(&ring->head, next, __ATOMIC_RELEASE);
     return 0;
-    /* No msync needed: consumer shares same page cache page */
+    /* msyncは不要: コンシューマは同じページキャッシュのページを共有している */
 }
 
-/* Consumer */
+/* コンシューマ */
 int ring_consume(ring_t *ring, char *out, size_t out_len)
 {
     if (__atomic_load_n(&ring->tail, __ATOMIC_ACQUIRE) ==
         __atomic_load_n(&ring->head, __ATOMIC_ACQUIRE))
-        return -1;  /* empty */
+        return -1;  /* 空 */
 
     memcpy(out, ring->data[ring->tail], out_len < 64 ? out_len : 63);
     __atomic_store_n(&ring->tail,
@@ -955,7 +955,7 @@ int ring_consume(ring_t *ring, char *out, size_t out_len)
     return 0;
 }
 
-/* Setup (both processes) */
+/* セットアップ（両方のプロセス） */
 ring_t *ring_open(const char *path)
 {
     int fd = open(path, O_RDWR | O_CREAT, 0600);
@@ -963,7 +963,7 @@ ring_t *ring_open(const char *path)
 
     ring_t *r = mmap(NULL, sizeof(ring_t),
                      PROT_READ | PROT_WRITE,
-                     MAP_SHARED,    /* essential: shared page cache */
+                     MAP_SHARED,    /* 必須: ページキャッシュを共有する */
                      fd, 0);
     close(fd);
 
@@ -976,21 +976,21 @@ ring_t *ring_open(const char *path)
 }
 ```
 
-This IPC mechanism requires no `msync()` for inter-process visibility — the `MAP_SHARED` page is the same physical page in both processes. The only synchronization needed is atomic operations for the head/tail indices. `msync(MS_SYNC)` would only be needed if the data must survive a crash.
+このIPCの仕組みでは、プロセス間の可視性のために`msync()`は必要ない。`MAP_SHARED`のページは、両方のプロセスで同じ物理ページだからである。必要な同期は、head/tailのインデックスに対するアトミック操作だけである。`msync(MS_SYNC)`が必要になるのは、データがクラッシュを生き延びなければならない場合だけである。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [File-Backed mmap and Page Faults](../mm/file-mmap.md) — VMA internals, page fault mechanics, readahead
-- [Page Cache](../mm/page-cache.md) — the shared backing store for all file-backed mmaps
-- [Direct I/O](direct-io.md) — the alternative: bypass the page cache entirely
-- [Buffered I/O](buffered-io.md) — read/write path through the page cache
-- [Copy-on-Write](../mm/cow.md) — MAP_PRIVATE COW mechanics in depth
-- [Process Address Space](../mm/mmap.md) — VMA layout, munmap, mremap
-- [Huge Pages and THP](../mm/thp.md) — reducing TLB pressure on large mappings
-- [userfaultfd](../mm/userfaultfd.md) — intercept page faults from userspace
-- `mm/filemap.c` — `filemap_fault()`, `filemap_get_folio()`, readahead
-- `mm/memory.c` — `do_fault()`, `do_cow_fault()`, `do_shared_fault()`
-- `mm/mmap.c` — `mmap_region()`, VMA creation
-- `mm/madvise.c` — `madvise()` implementation
+- [ファイルベースmmapとページフォールト](../mm/file-mmap.md) — VMAの内部、ページフォールトの仕組み、リードアヘッド
+- [ページキャッシュ](../mm/page-cache.md) — すべてのファイルベースmmapが共有するバッキングストア
+- [Direct I/O](direct-io.md) — 代替手段: ページキャッシュを完全にバイパスする
+- [バッファードI/O](buffered-io.md) — ページキャッシュを通るread/writeの経路
+- [コピーオンライト](../mm/cow.md) — MAP_PRIVATEのCOWの仕組みの詳細
+- [プロセスのアドレス空間](../mm/mmap.md) — VMAのレイアウト、munmap、mremap
+- [ヒュージページとTHP](../mm/thp.md) — 大きなマッピングでのTLBへの負荷を減らす
+- [userfaultfd](../mm/userfaultfd.md) — ユーザー空間からページフォールトを横取りする
+- `mm/filemap.c` — `filemap_fault()`、`filemap_get_folio()`、リードアヘッド
+- `mm/memory.c` — `do_fault()`、`do_cow_fault()`、`do_shared_fault()`
+- `mm/mmap.c` — `mmap_region()`、VMAの作成
+- `mm/madvise.c` — `madvise()`の実装

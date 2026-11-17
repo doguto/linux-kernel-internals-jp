@@ -1,10 +1,10 @@
-# Page Cache Writeback {#page-cache-writeback}
+# ページキャッシュのライトバック {#page-cache-writeback}
 
-> How the kernel flushes dirty pages to storage, and what controls the timing
+> カーネルがダーティpageをストレージへどうフラッシュするか、そしてそのタイミングを制御するものは何か
 
-## What writeback is {#what-writeback-is}
+## ライトバックとは何か {#what-writeback-is}
 
-When a process calls `write()`, the kernel copies data into **page cache** pages and marks them **dirty** — modified in memory but not yet on disk. At some later point the kernel must flush these dirty pages to storage. That process is called **writeback**.
+プロセスが`write()`を呼ぶと、カーネルはデータを**ページキャッシュ**のpageにコピーし、それを**ダーティ** — メモリ上では変更されているが、まだディスクには載っていない — としてマークする。その後のある時点で、カーネルはこれらのダーティpageをストレージへフラッシュしなければならない。この処理を**ライトバック**と呼ぶ。
 
 ```
 write() path:
@@ -15,58 +15,58 @@ write() path:
                              writeback → block layer → disk
 ```
 
-Writeback sits at the intersection of two competing pressures:
+ライトバックは、相反する2つの圧力の交点に位置している:
 
-- **Write performance**: buffering writes in DRAM and flushing them in large batches is much faster than writing every `write()` call synchronously to disk.
-- **Memory pressure**: dirty pages cannot be reclaimed until they are written back. Too many dirty pages means less free memory for new allocations.
+- **書き込み性能**: 書き込みをDRAMにバッファリングして大きなバッチでフラッシュする方が、すべての`write()`呼び出しを同期的にディスクへ書くよりはるかに速い。
+- **メモリ圧迫**: ダーティpageはライトバックされるまで回収できない。ダーティpageが多すぎると、新たな割り当てに使える空きメモリが減る。
 
-The kernel balances these by limiting how much of RAM can be dirty at any time, and by proactively flushing dirty pages in the background.
+カーネルは、ある時点でダーティにできるRAMの量を制限し、バックグラウンドで先回りしてダーティpageをフラッシュすることで、これらのバランスを取っている。
 
-## Writeback threads: `bdi_writeback` {#writeback-threads-bdi_writeback}
+## ライトバックスレッド: `bdi_writeback` {#writeback-threads-bdi_writeback}
 
-Each block device has an associated **backing device info** (`struct bdi_writeback`) that owns the writeback state for all filesystems on that device. A per-BDI kernel worker thread (`wb_workfn`) runs the actual flush work.
+各ブロックデバイスには**backing device info**（`struct bdi_writeback`）が関連付けられており、そのデバイス上のすべてのファイルシステムのライトバック状態を保持している。BDIごとのカーネルワーカースレッド（`wb_workfn`）が実際のフラッシュ処理を実行する。
 
 ```c
 /* include/linux/backing-dev-defs.h */
 struct bdi_writeback {
-    struct backing_dev_info *bdi;   /* parent BDI */
-    unsigned long state;            /* WB_writeback_running, etc. */
-    unsigned long last_old_flush;   /* timestamp of last old-data (time-expired) writeback run */
+    struct backing_dev_info *bdi;   /* 親 BDI */
+    unsigned long state;            /* WB_writeback_running など */
+    unsigned long last_old_flush;   /* 古いデータ（期限切れ）のライトバックを最後に実行した時刻 */
 
-    struct list_head b_dirty;       /* dirty inodes */
-    struct list_head b_io;          /* inodes ready for writeback */
-    struct list_head b_more_io;     /* inodes waiting for more writeback */
-    struct list_head b_dirty_time;  /* time-expired dirty inodes */
+    struct list_head b_dirty;       /* ダーティな inode */
+    struct list_head b_io;          /* ライトバックの準備ができた inode */
+    struct list_head b_more_io;     /* さらなるライトバックを待っている inode */
+    struct list_head b_dirty_time;  /* 期限切れのダーティな inode */
 
-    spinlock_t list_lock;           /* protects the inode lists */
+    spinlock_t list_lock;           /* inode リストを保護する */
 
-    struct percpu_counter stat[NR_WB_STAT_ITEMS]; /* bytes written, etc. */
+    struct percpu_counter stat[NR_WB_STAT_ITEMS]; /* 書き込んだバイト数など */
 
-    struct delayed_work dwork;      /* work item for wb_workfn */
-    struct delayed_work bw_dwork;   /* bandwidth estimation work */
+    struct delayed_work dwork;      /* wb_workfn の work アイテム */
+    struct delayed_work bw_dwork;   /* 帯域幅推定の work */
 };
 ```
 
-The work function `wb_workfn()` (in `fs/fs-writeback.c`) is scheduled via the `dwork` delayed work item. It calls `writeback_inodes_wb()` to walk the dirty inode lists and push pages to storage:
+work関数`wb_workfn()`（`fs/fs-writeback.c`内）は、`dwork`の遅延workアイテムを通じてスケジュールされる。この関数は`writeback_inodes_wb()`を呼び出してダーティinodeのリストをたどり、pageをストレージへ送り出す:
 
 ```c
-/* fs/fs-writeback.c (simplified) */
+/* fs/fs-writeback.c（簡略化） */
 void wb_workfn(struct work_struct *work)
 {
     struct bdi_writeback *wb =
         container_of(to_delayed_work(work), struct bdi_writeback, dwork);
     struct wb_writeback_work *work_item;
 
-    /* Process any explicit work items (sync, fsync) first */
+    /* まず明示的な work アイテム（sync、fsync）を処理する */
     while ((work_item = get_next_work_item(wb)) != NULL) {
         wb_do_writeback(wb);
         finish_writeback_work(wb, work_item);
     }
 
-    /* Then do periodic/background writeback */
+    /* 次に定期的/バックグラウンドのライトバックを行う */
     wb_do_writeback(wb);
 
-    /* Reschedule if there is still dirty data */
+    /* まだダーティなデータがあれば再スケジュールする */
     if (wb_has_dirty_io(wb))
         wb_wakeup_delayed(wb);
 }
@@ -74,10 +74,10 @@ void wb_workfn(struct work_struct *work)
 static long writeback_inodes_wb(struct bdi_writeback *wb,
                                  struct wb_writeback_work *work)
 {
-    /* Move inodes from b_dirty → b_io */
+    /* inode を b_dirty → b_io へ移す */
     queue_io(wb, work, dirtied_before);
 
-    /* Iterate b_io list and write each inode's dirty pages */
+    /* b_io リストを順にたどり、各 inode のダーティ page を書き込む */
     while (!list_empty(&wb->b_io)) {
         struct inode *inode = wb_inode(wb->b_io.prev);
         writeback_sb_inodes(inode->i_sb, wb, work);
@@ -85,27 +85,27 @@ static long writeback_inodes_wb(struct bdi_writeback *wb,
 }
 ```
 
-To see which BDIs exist on a running system:
+実行中のシステムにどのBDIが存在するかを確認するには:
 
 ```bash
 ls /sys/class/bdi/
-# e.g.: 8:0  259:0  0:12  ...
+# 例: 8:0  259:0  0:12  ...
 
-# Writeback stats per BDI:
+# BDI ごとのライトバック統計:
 cat /sys/class/bdi/8:0/stats
 ```
 
-## Dirty throttling {#dirty-throttling}
+## ダーティスロットリング {#dirty-throttling}
 
-The kernel imposes two thresholds — expressed as a percentage of available memory — to control how much dirty data can accumulate.
+カーネルは、蓄積できるダーティデータの量を制御するため、利用可能なメモリに対する割合で表される2つのしきい値を設けている。
 
-### `dirty_background_ratio` (default: 10%) {#dirtybackgroundratio-default-10}
+### `dirty_background_ratio`（デフォルト: 10%） {#dirtybackgroundratio-default-10}
 
-The **soft limit**. When dirty pages exceed this fraction of memory, the background flusher (`wb_workfn`) is woken up to start writing. Processes writing new data are not stalled — writeback runs concurrently.
+**ソフトリミット**である。ダーティpageがメモリのこの割合を超えると、バックグラウンドのフラッシャー（`wb_workfn`）が起こされて書き込みを開始する。新しいデータを書き込んでいるプロセスは停止させられない — ライトバックは並行して実行される。
 
-### `dirty_ratio` (default: 20%) {#dirty_ratio-default-20}
+### `dirty_ratio`（デフォルト: 20%） {#dirty_ratio-default-20}
 
-The **hard limit**. When dirty pages hit this fraction of memory, the kernel throttles the writing process directly: `balance_dirty_pages()` stalls the process (via `io_schedule_timeout()`, putting it in `TASK_UNINTERRUPTIBLE` D-state) until enough dirty pages have been flushed. This is sometimes called **direct reclaim throttling** or **dirty throttling**. Throttled writers appear in D-state (uninterruptible sleep waiting for I/O), which is why `vmstat` reports them under `b` (blocked).
+**ハードリミット**である。ダーティpageがメモリのこの割合に達すると、カーネルは書き込み中のプロセスを直接スロットリングする。`balance_dirty_pages()`は、十分な量のダーティpageがフラッシュされるまで、プロセスを（`io_schedule_timeout()`によって`TASK_UNINTERRUPTIBLE`のD状態にして）停止させる。これは**直接回収スロットリング**（direct reclaim throttling）または**ダーティスロットリング**と呼ばれることがある。スロットリングされた書き込み側はD状態（I/Oを待つ割り込み不可能なスリープ）として現れるため、`vmstat`はそれらを`b`（blocked）として報告する。
 
 ```
           0%        10%         20%
@@ -115,35 +115,35 @@ The **hard limit**. When dirty pages hit this fraction of memory, the kernel thr
                    wakes up    (process stalls)
 ```
 
-### `/proc/sys/vm/` parameters {#procsysvm-parameters}
+### `/proc/sys/vm/`のパラメータ {#procsysvm-parameters}
 
-| Parameter | Default | Description |
+| パラメータ | デフォルト | 説明 |
 |-----------|---------|-------------|
-| `dirty_ratio` | 20 | Hard limit: % of memory that can be dirty before a writing process is throttled |
-| `dirty_background_ratio` | 10 | Soft limit: % of memory that triggers background writeback |
-| `dirty_bytes` | 0 | Hard limit in bytes (overrides `dirty_ratio` when non-zero) |
-| `dirty_background_bytes` | 0 | Soft limit in bytes (overrides `dirty_background_ratio` when non-zero) |
-| `dirty_writeback_centisecs` | 500 | How often the flusher wakes up, in centiseconds (500 = 5 s) |
-| `dirty_expire_centisecs` | 3000 | How old a dirty page must be before it is eligible for writeback (3000 = 30 s) |
+| `dirty_ratio` | 20 | ハードリミット: 書き込み中のプロセスがスロットリングされるまでにダーティにできるメモリの割合（%） |
+| `dirty_background_ratio` | 10 | ソフトリミット: バックグラウンドのライトバックを起動するメモリの割合（%） |
+| `dirty_bytes` | 0 | バイト単位のハードリミット（0以外のとき`dirty_ratio`より優先される） |
+| `dirty_background_bytes` | 0 | バイト単位のソフトリミット（0以外のとき`dirty_background_ratio`より優先される） |
+| `dirty_writeback_centisecs` | 500 | フラッシャーが起きる間隔。センチ秒単位（500 = 5秒） |
+| `dirty_expire_centisecs` | 3000 | ダーティpageがライトバックの対象となるまでの経過時間（3000 = 30秒） |
 
 ```bash
-# Read current values:
+# 現在の値を読む:
 sysctl vm.dirty_ratio vm.dirty_background_ratio \
        vm.dirty_writeback_centisecs vm.dirty_expire_centisecs
 
-# Tune for a write-heavy workload (more buffering):
+# 書き込みの多いワークロード向けにチューニング（バッファリングを増やす）:
 sysctl -w vm.dirty_ratio=40
 sysctl -w vm.dirty_background_ratio=20
 
-# Tune for durability (flush more aggressively):
-sysctl -w vm.dirty_writeback_centisecs=100   # wake up every 1 s
-sysctl -w vm.dirty_expire_centisecs=500      # flush pages older than 5 s
+# 永続性重視のチューニング（より積極的にフラッシュする）:
+sysctl -w vm.dirty_writeback_centisecs=100   # 1 秒ごとに起きる
+sysctl -w vm.dirty_expire_centisecs=500      # 5 秒より古い page をフラッシュ
 ```
 
-The logic that enforces the hard limit lives in `mm/page-writeback.c`:
+ハードリミットを強制するロジックは`mm/page-writeback.c`にある:
 
 ```c
-/* mm/page-writeback.c (simplified) */
+/* mm/page-writeback.c（簡略化） */
 static void balance_dirty_pages(struct bdi_writeback *wb,
                                  unsigned long pages_dirtied)
 {
@@ -154,10 +154,10 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
         if (nr_dirty <= dirty_thresh)
             break;
 
-        /* Kick background writeback */
+        /* バックグラウンドのライトバックを起動 */
         wb_start_background_writeback(wb);
 
-        /* Throttle the writing process (task enters D-state / TASK_UNINTERRUPTIBLE) */
+        /* 書き込み中のプロセスをスロットリング（タスクは D 状態 / TASK_UNINTERRUPTIBLE に入る） */
         nr_reclaimable = nr_dirty - dirty_thresh;
         pause = msecs_to_jiffies(
             balance_dirty_pages_ratelimited_interval(wb, nr_reclaimable));
@@ -166,25 +166,25 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
 }
 ```
 
-## When writeback triggers {#when-writeback-triggers}
+## ライトバックが起動するとき {#when-writeback-triggers}
 
-Writeback fires from four distinct sources:
+ライトバックは4つの異なる発生源から起動される:
 
-### 1. Periodic (timer-based) {#1-periodic-timer-based}
+### 1. 定期的（タイマーベース） {#1-periodic-timer-based}
 
-Every `dirty_writeback_centisecs` centiseconds, the per-BDI delayed work item fires `wb_workfn`. It flushes pages older than `dirty_expire_centisecs`. This is the normal steady-state path for most workloads.
+`dirty_writeback_centisecs`センチ秒ごとに、BDIごとの遅延workアイテムが`wb_workfn`を起動する。これは`dirty_expire_centisecs`より古いpageをフラッシュする。ほとんどのワークロードにとって、これが通常の定常状態の経路である。
 
-### 2. Soft limit crossed {#2-soft-limit-crossed}
+### 2. ソフトリミットの超過 {#2-soft-limit-crossed}
 
-When dirty pages exceed `dirty_background_ratio`, `wb_start_background_writeback()` is called from `balance_dirty_pages()`, waking the flusher immediately without stalling the writer.
+ダーティpageが`dirty_background_ratio`を超えると、`balance_dirty_pages()`から`wb_start_background_writeback()`が呼ばれ、書き込み側を停止させることなくフラッシャーを即座に起こす。
 
-### 3. Memory pressure (kswapd) {#3-memory-pressure-kswapd}
+### 3. メモリ圧迫（kswapd） {#3-memory-pressure-kswapd}
 
-When `kswapd` tries to reclaim pages, it cannot reclaim dirty pages without writing them first. It calls `wakeup_flusher_threads()` to ask writeback to flush dirty pages so they become reclaimable. If background writeback is too slow, `kswapd` itself may write pages directly.
+`kswapd`がpageを回収しようとするとき、ダーティpageはまず書き出さなければ回収できない。`kswapd`は`wakeup_flusher_threads()`を呼び、ダーティpageをフラッシュして回収可能にするようライトバックに依頼する。バックグラウンドのライトバックが遅すぎる場合は、`kswapd`自身がpageを直接書き出すこともある。
 
-### 4. Explicit sync calls {#4-explicit-sync-calls}
+### 4. 明示的なsync呼び出し {#4-explicit-sync-calls}
 
-`sync()`, `fsync()`, and `fdatasync()` inject a `wb_writeback_work` item directly into the BDI's work queue, bypassing the periodic timer entirely.
+`sync()`、`fsync()`、`fdatasync()`は、`wb_writeback_work`アイテムをBDIのworkキューに直接投入し、定期タイマーを完全にバイパスする。
 
 ```
                 ┌──────────────────────────────────────────┐
@@ -200,9 +200,9 @@ When `kswapd` tries to reclaim pages, it cannot reclaim dirty pages without writ
                     writeback_inodes_wb()
 ```
 
-## The writeback path {#the-writeback-path}
+## ライトバックの経路 {#the-writeback-path}
 
-Once `wb_workfn` is running, the call chain proceeds down through the VFS and into the filesystem:
+`wb_workfn`が動き出すと、呼び出しチェーンはVFSを下ってファイルシステムへと進む:
 
 ```
 wb_workfn()
@@ -218,7 +218,7 @@ wb_workfn()
                                                         └── block layer → driver → disk
 ```
 
-The key boundary is `a_ops->writepages` — the `address_space_operations` vector. Each filesystem implements its own, but they all eventually call down to `submit_bio()`.
+重要な境界は`a_ops->writepages` — `address_space_operations`ベクタ — である。各ファイルシステムは独自の実装を持つが、最終的にはいずれも`submit_bio()`を呼び出す。
 
 ```c
 /* mm/page-writeback.c */
@@ -235,116 +235,116 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 }
 ```
 
-The `writeback_control` struct carries the parameters for the writeback pass: how many pages to write, whether to wait for I/O completion, and which range of the file to flush.
+`writeback_control`構造体は、ライトバック処理のパラメータを運ぶ。何page書くか、I/Oの完了を待つかどうか、ファイルのどの範囲をフラッシュするかである。
 
 ```c
 /* include/linux/writeback.h */
 struct writeback_control {
-    long nr_to_write;           /* number of pages to write (decremented) */
-    long pages_skipped;         /* pages that were skipped */
-    loff_t range_start;         /* start of file range to write */
-    loff_t range_end;           /* end of file range */
-    enum writeback_sync_modes sync_mode; /* WB_SYNC_NONE or WB_SYNC_ALL */
-    unsigned for_kupdate:1;     /* periodic flusher writeback */
-    unsigned for_background:1;  /* background (soft limit) writeback */
-    unsigned tagged_writepages:1; /* tag-based writeback */
+    long nr_to_write;           /* 書き込む page 数（減算されていく） */
+    long pages_skipped;         /* スキップされた page */
+    loff_t range_start;         /* 書き込むファイル範囲の開始 */
+    loff_t range_end;           /* ファイル範囲の終了 */
+    enum writeback_sync_modes sync_mode; /* WB_SYNC_NONE または WB_SYNC_ALL */
+    unsigned for_kupdate:1;     /* 定期的なフラッシャーによるライトバック */
+    unsigned for_background:1;  /* バックグラウンド（ソフトリミット）のライトバック */
+    unsigned tagged_writepages:1; /* タグベースのライトバック */
 };
 ```
 
-## `fsync()` vs `fdatasync()` vs `sync()` {#fsync-vs-fdatasync-vs-sync}
+## `fsync()`と`fdatasync()`と`sync()` {#fsync-vs-fdatasync-vs-sync}
 
-These three calls are often confused. They differ in scope and in what metadata they guarantee:
+この3つの呼び出しはよく混同される。範囲と、どのメタデータを保証するかが異なる:
 
-| Call | Scope | Data | File metadata (size, mtime) | Other metadata (dir entry) |
+| 呼び出し | 範囲 | データ | ファイルのメタデータ（サイズ、mtime） | その他のメタデータ（ディレクトリエントリ） |
 |------|-------|------|-----------------------------|---------------------------|
-| `fdatasync(fd)` | single file | yes | only if needed for data integrity | no |
-| `fsync(fd)` | single file | yes | yes | no |
-| `sync()` | all filesystems | yes | yes | yes (deferred, not guaranteed immediate) |
+| `fdatasync(fd)` | 単一ファイル | はい | データの完全性に必要な場合のみ | いいえ |
+| `fsync(fd)` | 単一ファイル | はい | はい | いいえ |
+| `sync()` | すべてのファイルシステム | はい | はい | はい（遅延され、即時は保証されない） |
 
 ```c
-/* Ensure a newly written file is durable and findable after crash */
+/* 新しく書き込んだファイルを永続化し、クラッシュ後も見つけられるようにする */
 
 int fd = open("data.bin", O_WRONLY | O_CREAT, 0644);
 write(fd, buf, len);
 
-/* Step 1: flush file data and metadata to disk */
+/* ステップ 1: ファイルのデータとメタデータをディスクへフラッシュ */
 fsync(fd);
 
-/* Step 2: flush the directory entry (so the filename survives a crash) */
+/* ステップ 2: ディレクトリエントリをフラッシュ（ファイル名がクラッシュ後も残るように） */
 int dir_fd = open(dirname(path), O_RDONLY);
-fsync(dir_fd);    /* flushes the directory's data, making the entry durable */
+fsync(dir_fd);    /* ディレクトリのデータをフラッシュし、エントリを永続化する */
 close(dir_fd);
 
 close(fd);
 ```
 
-`fdatasync()` skips all non-critical metadata (mtime, atime, ctime) and the associated journal commit for the inode — unless the file size changed, in which case the size update is still flushed because it is required for correct data reads. On ext4 this can save one full journal transaction per `fdatasync` when no size change occurred.
+`fdatasync()`は、重要でないメタデータ（mtime、atime、ctime）と、それに伴うinodeのジャーナルコミットをすべてスキップする — ただしファイルサイズが変わった場合は例外で、正しくデータを読み出すために必要なのでサイズの更新は引き続きフラッシュされる。ext4では、サイズの変更がなければ`fdatasync`ごとにジャーナルトランザクションを丸ごと1回節約できる。
 
-The kernel path for `fsync()`:
+`fsync()`のカーネルパス:
 
 ```c
 /* fs/sync.c */
 SYSCALL_DEFINE1(fsync, unsigned int, fd)
 {
-    return do_fsync(fd, 0);  /* 0 = sync data + metadata */
+    return do_fsync(fd, 0);  /* 0 = データ + メタデータを sync */
 }
 
 SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
 {
-    return do_fsync(fd, 1);  /* 1 = datasync (metadata only if needed) */
+    return do_fsync(fd, 1);  /* 1 = datasync（メタデータは必要な場合のみ） */
 }
 
 static int do_fsync(unsigned int fd, int datasync)
 {
     struct fd f = fdget(fd);
     ret = vfs_fsync(f.file, datasync);
-    /* vfs_fsync → file->f_op->fsync → filesystem fsync implementation */
+    /* vfs_fsync → file->f_op->fsync → ファイルシステムの fsync 実装 */
 }
 ```
 
-## Write barriers and persistence {#write-barriers-and-persistence}
+## ライトバリアと永続化 {#write-barriers-and-persistence}
 
-Even after `fsync()` returns, durability depends on the storage device honouring write ordering. The kernel uses **write barriers** to communicate ordering requirements to the block layer.
+`fsync()`が戻った後でも、永続性はストレージデバイスが書き込み順序を守るかどうかに依存する。カーネルは**ライトバリア**を使って、順序の要件をブロック層に伝える。
 
-### `O_SYNC` and `O_DSYNC` {#osync-and-odsync}
+### `O_SYNC`と`O_DSYNC` {#osync-and-odsync}
 
-Opening a file with `O_SYNC` makes every `write()` behave like `write()` + `fsync()` — the call does not return until data and metadata have been flushed to durable storage.
+`O_SYNC`でファイルを開くと、すべての`write()`が`write()` + `fsync()`のように振る舞う — データとメタデータが永続ストレージにフラッシュされるまで呼び出しは戻らない。
 
-`O_DSYNC` is the per-write equivalent of `fdatasync()`: each `write()` flushes data (and size metadata if the file was extended), but not timestamps.
+`O_DSYNC`は`fdatasync()`の書き込みごと版である。各`write()`はデータ（およびファイルが拡張された場合はサイズのメタデータ）をフラッシュするが、タイムスタンプはフラッシュしない。
 
 ```c
-/* O_SYNC: every write is immediately durable */
+/* O_SYNC: すべての書き込みが即座に永続化される */
 int fd = open("journal.log", O_WRONLY | O_CREAT | O_SYNC, 0644);
-write(fd, record, len);  /* does not return until on disk */
+write(fd, record, len);  /* ディスクに載るまで戻らない */
 
-/* O_DSYNC: data durable, mtime may lag */
+/* O_DSYNC: データは永続化されるが、mtime は遅れることがある */
 int fd = open("data.bin", O_WRONLY | O_CREAT | O_DSYNC, 0644);
-write(fd, buf, len);  /* data durable; inode mtime may not be */
+write(fd, buf, len);  /* データは永続化される。inode の mtime はそうとは限らない */
 ```
 
-These flags set `IOCB_SYNC` / `IOCB_DSYNC` on the in-kernel `kiocb`, which the filesystem checks after completing the write to decide whether to call `vfs_fsync_range()` inline.
+これらのフラグはカーネル内の`kiocb`に`IOCB_SYNC` / `IOCB_DSYNC`を設定する。ファイルシステムは書き込みの完了後にこれを確認し、`vfs_fsync_range()`をインラインで呼ぶかどうかを決める。
 
-### Flush cache commands {#flush-cache-commands}
+### キャッシュフラッシュコマンド {#flush-cache-commands}
 
-The block layer translates write barrier requirements into storage commands:
+ブロック層は、ライトバリアの要件をストレージのコマンドに変換する:
 
-| Requirement | SATA/SCSI command | NVMe command |
+| 要件 | SATA/SCSIのコマンド | NVMeのコマンド |
 |-------------|-------------------|--------------|
-| Flush write cache | `FLUSH CACHE` | `Flush` |
-| Force unit access (per-write) | `FUA` bit on write | `FUA` bit on write |
+| ライトキャッシュのフラッシュ | `FLUSH CACHE` | `Flush` |
+| Force Unit Access（書き込みごと） | 書き込みの`FUA`ビット | 書き込みの`FUA`ビット |
 
-FUA (Force Unit Access) tells the drive to bypass its write cache for a specific write, avoiding the round-trip cost of a separate flush command. The block layer uses FUA for `O_DSYNC` writes on drives that support it:
+FUA（Force Unit Access）は、特定の書き込みについてライトキャッシュをバイパスするようドライブに指示し、別途フラッシュコマンドを送る往復のコストを回避する。ブロック層は、FUAをサポートするドライブでは`O_DSYNC`の書き込みにFUAを使う:
 
 ```bash
-# Check if a drive supports FUA:
-cat /sys/block/sda/queue/fua       # 1 = supported
-cat /sys/block/nvme0n1/queue/fua   # 1 = supported
+# ドライブが FUA をサポートしているか確認:
+cat /sys/block/sda/queue/fua       # 1 = サポート
+cat /sys/block/nvme0n1/queue/fua   # 1 = サポート
 
-# Check write cache status:
-hdparm -W /dev/sda                 # 0 = disabled, 1 = enabled
+# ライトキャッシュの状態を確認:
+hdparm -W /dev/sda                 # 0 = 無効、1 = 有効
 ```
 
-### Ordering guarantees summary {#ordering-guarantees-summary}
+### 順序保証のまとめ {#ordering-guarantees-summary}
 
 ```
 O_SYNC write:
@@ -364,34 +364,34 @@ fdatasync():
   transaction per fdatasync when no size change occurred.
 ```
 
-If a drive has a volatile write cache and write cache is enabled, data written without `O_SYNC`/`fsync()` can be lost on power failure even after `write()` returns — it may still be sitting in the drive's DRAM.
+ドライブが揮発性のライトキャッシュを持ち、ライトキャッシュが有効になっている場合、`O_SYNC`/`fsync()`なしで書き込まれたデータは、`write()`が戻った後でも電源障害で失われうる — まだドライブのDRAMに残っている可能性があるからである。
 
-## Observing writeback {#observing-writeback}
+## ライトバックの観測 {#observing-writeback}
 
 ```bash
-# Real-time dirty page stats:
+# ダーティ page の統計をリアルタイムで:
 watch -n1 'grep -E "Dirty|Writeback" /proc/meminfo'
 
-# Per-BDI writeback statistics:
+# BDI ごとのライトバック統計:
 cat /sys/class/bdi/*/stats
 
-# Trace writeback events with ftrace:
+# ftrace でライトバックのイベントをトレース:
 echo 1 > /sys/kernel/debug/tracing/events/writeback/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# vmstat: see writeback columns (bo = blocks out per second):
+# vmstat: ライトバックの列を見る（bo = 1 秒あたりの出力ブロック数）:
 vmstat 1
 
-# iostat: see write throughput per device:
+# iostat: デバイスごとの書き込みスループットを見る:
 iostat -x 1
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Buffered I/O](buffered-io.md) — how the page cache works and how dirty pages are created
-- [Direct I/O](direct-io.md) — bypassing the page cache and writeback entirely
-- [Async I/O](async-io.md) — io_uring and Linux AIO for non-blocking I/O submission
-- `mm/page-writeback.c` — dirty throttling, `balance_dirty_pages()`, `do_writepages()`
-- `fs/fs-writeback.c` — `wb_workfn()`, `writeback_inodes_wb()`, `writeback_sb_inodes()`
-- `include/linux/backing-dev-defs.h` — `struct bdi_writeback` definition
+- [バッファードI/O](buffered-io.md) — ページキャッシュの仕組みと、ダーティpageがどう作られるか
+- [Direct I/O](direct-io.md) — ページキャッシュとライトバックの完全なバイパス
+- [非同期I/O](async-io.md) — ノンブロッキングなI/O発行のためのio_uringとLinux AIO
+- `mm/page-writeback.c` — ダーティスロットリング、`balance_dirty_pages()`、`do_writepages()`
+- `fs/fs-writeback.c` — `wb_workfn()`、`writeback_inodes_wb()`、`writeback_sb_inodes()`
+- `include/linux/backing-dev-defs.h` — `struct bdi_writeback`の定義
 - `include/linux/writeback.h` — `struct writeback_control`

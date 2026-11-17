@@ -1,10 +1,10 @@
-# Buffered I/O {#buffered-io}
+# バッファードI/O {#buffered-io}
 
-> How `read()` and `write()` flow through VFS, the page cache, and back
+> `read()`と`write()`がVFS、ページキャッシュを通って流れ、戻ってくるまで
 
-## What buffered I/O means {#what-buffered-io-means}
+## バッファードI/Oとは何か {#what-buffered-io-means}
 
-By default every `read()` and `write()` on a regular file goes through the **page cache**: a region of DRAM managed by the kernel that caches file data as 4 KB pages (or larger folios; `struct folio` was introduced in Linux 5.16 but large folios in the file page cache required Linux 6.1+). The kernel satisfies reads from these cached pages and accumulates writes in dirty pages before flushing them to storage asynchronously.
+デフォルトでは、通常ファイルに対するすべての`read()`と`write()`は **ページキャッシュ** を経由する。ページキャッシュとはカーネルが管理するDRAM上の領域で、ファイルデータを4 KBのpage（あるいはより大きなfolio。`struct folio`はLinux 5.16で導入されたが、ファイルページキャッシュでのラージfolioにはLinux 6.1以降が必要）としてキャッシュする。カーネルは読み出しをこのキャッシュ済みpageから満たし、書き込みはダーティページに蓄積してから非同期にストレージへフラッシュする。
 
 ```
 read()  → VFS → page cache hit?  yes → copy to userspace
@@ -15,11 +15,11 @@ write() → VFS → page cache → mark dirty → return to userspace
                               storage
 ```
 
-This is why `write()` returns before data hits the disk, and why repeated reads of the same file are fast.
+これが、データがディスクに届く前に`write()`が戻る理由であり、同じファイルを繰り返し読むと速い理由でもある。
 
-## The syscall path into the kernel {#the-syscall-path-into-the-kernel}
+## カーネルへのシステムコール経路 {#the-syscall-path-into-the-kernel}
 
-Starting from userspace, a `read()` or `write()` on a regular file follows this chain:
+ユーザー空間から始まり、通常ファイルに対する`read()`や`write()`は次の連鎖をたどる。
 
 ```
 read(fd, buf, count)
@@ -37,74 +37,74 @@ write(fd, buf, count)
       → generic_file_write_iter()           [mm/filemap.c]
 ```
 
-`generic_file_read_iter` and `generic_file_write_iter` are the generic implementations used by ext4, xfs, btrfs, and most other filesystems. They work entirely against the page cache via the `address_space` abstraction.
+`generic_file_read_iter`と`generic_file_write_iter`は、ext4、xfs、btrfsをはじめとする大半のファイルシステムで使われる汎用実装である。これらは`address_space`抽象を介して、完全にページキャッシュに対して動作する。
 
-The `kiocb` struct carries per-operation state through this chain:
+`kiocb`構造体は、この連鎖を通じて操作ごとの状態を運ぶ。
 
 ```c
 /* include/linux/fs.h */
 struct kiocb {
-    struct file       *ki_filp;    /* file being operated on */
-    loff_t             ki_pos;     /* current file offset */
-    void (*ki_complete)(struct kiocb *, long);  /* async completion cb */
+    struct file       *ki_filp;    /* 操作対象のファイル */
+    loff_t             ki_pos;     /* 現在のファイルオフセット */
+    void (*ki_complete)(struct kiocb *, long);  /* 非同期完了コールバック */
     void              *private;
-    int                ki_flags;   /* IOCB_* flags (O_DIRECT, O_SYNC, …) */
+    int                ki_flags;   /* IOCB_* フラグ（O_DIRECT、O_SYNC など） */
     u16                ki_ioprio;
-    struct wait_page_queue *ki_waitq;  /* for async page waits */
+    struct wait_page_queue *ki_waitq;  /* 非同期の page 待ち用 */
 };
 ```
 
-## Page cache structure {#page-cache-structure}
+## ページキャッシュの構造 {#page-cache-structure}
 
-Every inode that holds file data has an embedded `address_space` that owns its cached pages:
+ファイルデータを保持するすべてのinodeは、キャッシュ済みpageを所有する`address_space`を埋め込んでいる。
 
 ```c
 /* include/linux/fs.h */
 struct address_space {
-    struct inode            *host;          /* owning inode */
-    struct xarray            i_pages;       /* all cached folios, indexed by page index */
+    struct inode            *host;          /* 所有者の inode */
+    struct xarray            i_pages;       /* キャッシュ済みの全 folio。page インデックスで索引付け */
     struct rw_semaphore      invalidate_lock;
-    gfp_t                    gfp_mask;      /* allocation flags for new pages */
+    gfp_t                    gfp_mask;      /* 新しい page 用の割り当てフラグ */
     atomic_t                 i_mmap_writable;
-    struct rb_root_cached    i_mmap;        /* all VMAs mapping this file */
-    unsigned long            nrpages;       /* total base-page units cached (= folio_nr_pages() per folio, not one per folio) */
-    unsigned long            writeback_index; /* next page to write back */
-    const struct address_space_operations *a_ops;  /* read_folio, dirty_folio, writepages, … */
+    struct rb_root_cached    i_mmap;        /* このファイルをマップする全 VMA */
+    unsigned long            nrpages;       /* キャッシュされたベース page 単位の総数（folio ごとに 1 ではなく folio_nr_pages()） */
+    unsigned long            writeback_index; /* 次にライトバックする page */
+    const struct address_space_operations *a_ops;  /* read_folio、dirty_folio、writepages など */
     unsigned long            flags;
-    errseq_t                 wb_err;        /* sticky write-back error */
+    errseq_t                 wb_err;        /* 保持され続けるライトバックエラー */
     spinlock_t               private_lock;
     struct list_head         private_list;
     void                    *private_data;
 };
 ```
 
-Before Linux 5.16 the cache was an `xarray` of `struct page *`. From 5.16 onward the unit is a **folio** — a physically contiguous group of pages represented by `struct folio`. A folio may be a single base page (order 0) or a large folio (order N, covering 2^N pages); large folios in the file page cache required Linux 6.1+. The index into `i_pages` is the page index of the folio's first page.
+Linux 5.16より前は、キャッシュは`struct page *`の`xarray`だった。5.16以降、単位は **folio**、すなわち`struct folio`で表される物理的に連続したpageのグループである。folioは単一のベースpage（order 0）の場合もあれば、ラージfolio（order N、2^N個のpageをカバー）の場合もある。ファイルページキャッシュでのラージfolioにはLinux 6.1以降が必要だった。`i_pages`へのインデックスは、folioの先頭pageのpageインデックスである。
 
 ```c
-/* include/linux/mm_types.h (simplified) */
+/* include/linux/mm_types.h（簡略化） */
 struct folio {
-    /* Low-order bits of flags encode folio state */
+    /* flags の下位ビットが folio の状態をエンコードする */
     unsigned long flags;
     union {
         struct {
-            /* For file-backed folios: */
+            /* ファイルバックの folio の場合: */
             struct address_space *mapping;
-            pgoff_t               index;     /* offset in file >> PAGE_SHIFT */
+            pgoff_t               index;     /* ファイル内オフセット >> PAGE_SHIFT */
         };
     };
     atomic_t      _refcount;
     atomic_t      _mapcount;
-    /* … followed by the actual page data … */
+    /* … この後に実際の page データが続く … */
 };
 ```
 
-The `a_ops` pointer is the critical dispatch table linking the generic page cache code to filesystem-specific logic:
+`a_ops`ポインタは、汎用のページキャッシュコードとファイルシステム固有のロジックを結びつける重要なディスパッチテーブルである。
 
 ```c
 /* include/linux/fs.h */
 struct address_space_operations {
-    int  (*read_folio)(struct file *, struct folio *);  /* formerly readpage */
-    int  (*writepage)(struct page *, struct writeback_control *);  /* writepage is being removed from the kernel; prefer writepages */
+    int  (*read_folio)(struct file *, struct folio *);  /* 以前の readpage */
+    int  (*writepage)(struct page *, struct writeback_control *);  /* writepage はカーネルから削除されつつある。writepages を優先すること */
     bool (*dirty_folio)(struct address_space *, struct folio *);
     int  (*write_begin)(struct file *, struct address_space *, loff_t,
                          unsigned len, struct folio **, void **);
@@ -113,12 +113,12 @@ struct address_space_operations {
     int  (*writepages)(struct address_space *, struct writeback_control *);
     /* … */
 };
-/* write_begin/write_end signatures use struct folio since Linux 6.12 */
+/* write_begin/write_end のシグネチャは Linux 6.12 以降 struct folio を使う */
 ```
 
-## Read path {#read-path}
+## 読み出し経路 {#read-path}
 
-`generic_file_read_iter` delegates to `filemap_read` for buffered I/O:
+`generic_file_read_iter`は、バッファードI/Oについては`filemap_read`に処理を委ねる。
 
 ```c
 /* mm/filemap.c */
@@ -134,22 +134,22 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
     int     error = 0;
 
     do {
-        /* Look up folios covering [index, last] in the xarray */
+        /* xarray 内で [index, last] をカバーする folio を探す */
         nr = filemap_get_folios(mapping, &index, last_index, &fbatch);
 
         for (i = 0; i < nr; i++) {
             struct folio *folio = fbatch.folios[i];
 
             /*
-             * Wait until folio is up-to-date. This is the actual wait
-             * pattern used in filemap_read: wait for PG_locked to clear,
-             * then check PG_uptodate explicitly.
+             * folio が最新になるまで待つ。これは filemap_read で実際に
+             * 使われている待ちパターンである: PG_locked がクリアされるのを
+             * 待ち、その後 PG_uptodate を明示的に確認する。
              */
             folio_wait_locked(folio);
             if (!folio_test_uptodate(folio))
                 goto io_error;
 
-            /* Copy data from folio to user iov_iter */
+            /* folio からユーザーの iov_iter へデータをコピーする */
             copied = copy_folio_to_iter(folio, offset, bytes, iter);
         }
     } while (iov_iter_count(iter) && iocb->ki_pos < isize && !error);
@@ -159,13 +159,13 @@ out:
 }
 ```
 
-### Cache hit {#cache-hit}
+### キャッシュヒット {#cache-hit}
 
-If the requested page index is present in `i_pages` and has `PG_uptodate` set, `filemap_read` copies directly from the folio to the user buffer. No I/O is issued and the call returns without sleeping.
+要求されたpageインデックスが`i_pages`に存在し、`PG_uptodate`がセットされていれば、`filemap_read`はfolioからユーザーバッファへ直接コピーする。I/Oは発行されず、呼び出しはスリープせずに戻る。
 
-### Cache miss {#cache-miss}
+### キャッシュミス {#cache-miss}
 
-When a lookup in `i_pages` returns nothing for an index, the kernel must populate the folio:
+`i_pages`の検索で、あるインデックスについて何も返らなかった場合、カーネルはfolioを埋めなければならない。
 
 ```
 filemap_read
@@ -180,13 +180,13 @@ filemap_read
   → copy_folio_to_iter()            now safe to copy
 ```
 
-The folio is held locked (`PG_locked`) while I/O is in flight. Any other reader that finds the folio already in `i_pages` but not yet uptodate will block inside `folio_wait_locked` on the same folio's wait queue rather than issuing a duplicate I/O.
+I/Oの実行中、folioはロックされたまま（`PG_locked`）保持される。folioがすでに`i_pages`にあるがまだ最新でないことを見つけた他の読み出し側は、重複したI/Oを発行する代わりに、同じfolioの待ちキュー上で`folio_wait_locked`の中でブロックする。
 
-Read-ahead runs in parallel: `page_cache_async_ra` and `ondemand_readahead` speculatively fill the cache ahead of the current read position to hide latency. The readahead window starts small and grows geometrically until it hits `ra->ra_pages`.
+先読み（read-ahead）は並行して動作する。`page_cache_async_ra`と`ondemand_readahead`は、現在の読み出し位置より先のキャッシュを投機的に埋めてレイテンシを隠す。先読みウィンドウは小さく始まり、`ra->ra_pages`に達するまで幾何級数的に拡大する。
 
-## Write path {#write-path}
+## 書き込み経路 {#write-path}
 
-`generic_file_write_iter` handles locking and sync semantics, then calls `generic_perform_write` for the actual work:
+`generic_file_write_iter`はロックと同期セマンティクスを処理し、その後実際の処理のために`generic_perform_write`を呼び出す。
 
 ```c
 /* mm/filemap.c */
@@ -207,9 +207,9 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
                                      iov_iter_count(i));
 
         /*
-         * 1. Ask the filesystem to prepare the target page.
-         *    For block-mapped files this finds or allocates the page and
-         *    reads partial-page data from disk if needed (read-modify-write).
+         * 1. 対象 page の準備をファイルシステムに依頼する。
+         *    ブロックマップ型のファイルでは、page を見つけるか割り当て、
+         *    必要ならディスクから部分 page のデータを読み込む（read-modify-write）。
          */
         status = a_ops->write_begin(file, mapping, pos, bytes,
                                      &page, &fsdata);
@@ -217,33 +217,33 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
             break;
 
         /*
-         * 2. Copy from user buffer into the page.
+         * 2. ユーザーバッファから page へコピーする。
          */
         copied = copy_page_from_iter_atomic(page, offset, bytes, i);
 
         /*
-         * 3. Tell the filesystem the copy is done; it marks the page dirty
-         *    and unlocks it.
+         * 3. コピーが終わったことをファイルシステムに伝える。ファイルシステムは
+         *    page をダーティにしてアンロックする。
          */
         status = a_ops->write_end(file, mapping, pos, bytes, copied,
                                    page, fsdata);
-        if (unlikely(status != copied)) { /* short write or error */ }
+        if (unlikely(status != copied)) { /* ショートライトまたはエラー */ }
 
         pos     += copied;
         written += copied;
 
-        balance_dirty_pages_ratelimited(mapping); /* throttle if too dirty */
+        balance_dirty_pages_ratelimited(mapping); /* ダーティが多すぎればスロットリングする */
     } while (iov_iter_count(i));
 
     return written;
 }
 ```
 
-`write_begin` and `write_end` are the two hooks that let each filesystem manage block allocation and journaling around the copy. For ext4 in `data=ordered` mode, `write_begin` pins journal credits and `write_end` calls `ext4_journal_stop()` to release the journal handle — this does not trigger a commit. The transaction commits later, at fsync time or when the transaction fills. The data ordering constraint (data written before its metadata is committed) is enforced at writeback time, not by `write_end`.
+`write_begin`と`write_end`は、各ファイルシステムがコピーの前後でブロック割り当てとジャーナリングを管理できるようにする2つのフックである。`data=ordered`モードのext4では、`write_begin`がジャーナルクレジットを確保し、`write_end`が`ext4_journal_stop()`を呼んでジャーナルハンドルを解放する。これはコミットを引き起こさない。トランザクションは後で、fsync時またはトランザクションが満杯になったときにコミットされる。データ順序の制約（メタデータがコミットされる前にデータが書かれること）は、`write_end`ではなくライトバック時に強制される。
 
-## Dirty page lifecycle {#dirty-page-lifecycle}
+## ダーティページのライフサイクル {#dirty-page-lifecycle}
 
-Once `write_end` marks a page dirty the kernel tracks it for writeback. The state machine for a folio is:
+`write_end`がpageをダーティにすると、カーネルはライトバックのためにそれを追跡する。folioの状態遷移は次のとおりである。
 
 ```
 [not in cache]
@@ -261,18 +261,18 @@ Once `write_end` marks a page dirty the kernel tracks it for writeback. The stat
 [clean, uptodate]       ← back to steady state
 ```
 
-### How a page becomes dirty {#how-a-page-becomes-dirty}
+### pageがダーティになる仕組み {#how-a-page-becomes-dirty}
 
-The call chain has two distinct layers. `folio_mark_dirty` is the public API that
-dispatches through `a_ops->dirty_folio`. `filemap_dirty_folio` is the default
-implementation registered in `a_ops->dirty_folio` by most filesystems — these are
-two separate functions in a dispatch chain, not recursive calls.
+呼び出しの連鎖には2つの異なる層がある。`folio_mark_dirty`は
+`a_ops->dirty_folio`を通じてディスパッチする公開APIである。`filemap_dirty_folio`は、大半のファイルシステムが
+`a_ops->dirty_folio`に登録するデフォルト実装である。これらはディスパッチ連鎖の中の
+別々の2つの関数であり、再帰呼び出しではない。
 
 ```c
 /*
- * Public API (mm/page-writeback.c):
- * Dispatches through a_ops->dirty_folio if the filesystem registers one;
- * falls back to filemap_dirty_folio otherwise.
+ * 公開 API（mm/page-writeback.c）:
+ * ファイルシステムが a_ops->dirty_folio を登録していればそれを通じてディスパッチし、
+ * そうでなければ filemap_dirty_folio にフォールバックする。
  */
 bool folio_mark_dirty(struct folio *folio)
 {
@@ -285,20 +285,20 @@ bool folio_mark_dirty(struct folio *folio)
 }
 
 /*
- * Default a_ops->dirty_folio implementation (mm/filemap.c):
- * Does the actual accounting — marks the folio dirty, updates writeback
- * stats, and notifies the inode tracking machinery.
+ * a_ops->dirty_folio のデフォルト実装（mm/filemap.c）:
+ * 実際の計上を行う。folio をダーティにし、ライトバック統計を更新し、
+ * inode 追跡の仕組みに通知する。
  */
 bool filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
 {
     folio_memcg_lock(folio);
-    if (folio_test_set_dirty(folio)) {   /* atomic test-and-set PG_dirty */
+    if (folio_test_set_dirty(folio)) {   /* PG_dirty のアトミックな test-and-set */
         folio_memcg_unlock(folio);
-        return false;   /* already dirty */
+        return false;   /* すでにダーティ */
     }
     folio_memcg_unlock(folio);
 
-    /* Account dirty memory against the writeback device */
+    /* ダーティメモリをライトバックデバイスに対して計上する */
     wb_stat_mod(inode_to_bdi(mapping->host)->wb, WB_RECLAIMABLE, 1);
 
     __mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
@@ -306,14 +306,14 @@ bool filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
 }
 ```
 
-The kernel enforces two dirty-throttle limits (expressed as percentages of memory):
+カーネルは2つのダーティスロットリング閾値（メモリに対する割合で表される）を強制する。
 
-- `dirty_background_ratio` / `dirty_background_bytes` — background writeback starts
-- `dirty_ratio` / `dirty_bytes` — foreground throttling; `balance_dirty_pages_ratelimited` blocks the writing process
+- `dirty_background_ratio` / `dirty_background_bytes` — バックグラウンドのライトバックが始まる
+- `dirty_ratio` / `dirty_bytes` — フォアグラウンドのスロットリング。`balance_dirty_pages_ratelimited`が書き込み中のプロセスをブロックする
 
-`/proc/sys/vm/dirty_writeback_centisecs` controls how often `wb_workfn` (the per-BDI writeback worker) wakes up to flush pages that have been dirty longer than `dirty_expire_centisecs`.
+`/proc/sys/vm/dirty_writeback_centisecs`は、`wb_workfn`（BDIごとのライトバックワーカー）が起床して`dirty_expire_centisecs`より長くダーティのままのpageをフラッシュする頻度を制御する。
 
-### Writeback {#writeback}
+### ライトバック {#writeback}
 
 ```c
 /* fs/fs-writeback.c */
@@ -328,97 +328,97 @@ static long writeback_sb_inodes(struct super_block *sb,
     while (!list_empty(&wb->b_io)) {
         struct inode *inode = wb_inode(wb->b_io.prev);
         __writeback_single_inode(inode, &wbc);
-        /* → do_writepages → a_ops->writepages or generic_writepages
-             → write_cache_pages → folio_lock + a_ops->writepage per folio
+        /* → do_writepages → a_ops->writepages または generic_writepages
+             → write_cache_pages → folio ごとに folio_lock + a_ops->writepage
                → ext4_writepage / iomap_writepage → submit_bio
-               → folio_start_writeback(): sets PG_writeback */
+               → folio_start_writeback(): PG_writeback をセットする */
     }
 }
 ```
 
-After a bio completes, the block layer calls the end I/O handler which calls `folio_end_writeback`, clearing `PG_writeback` and waking any waiters.
+bioが完了すると、ブロック層はI/O終了ハンドラを呼び出し、それが`folio_end_writeback`を呼んで`PG_writeback`をクリアし、待機者を起こす。
 
-## Buffer heads {#buffer-heads}
+## バッファヘッド {#buffer-heads}
 
-Before folios and `iomap`, block-mapped files tracked per-block I/O state with `struct buffer_head`:
+folioと`iomap`以前、ブロックマップ型のファイルはブロックごとのI/O状態を`struct buffer_head`で追跡していた。
 
 ```c
 /* include/linux/buffer_head.h */
 struct buffer_head {
-    unsigned long      b_state;     /* BH_Uptodate, BH_Dirty, BH_Lock, … */
-    struct buffer_head *b_this_page; /* circular list of page's bh */
+    unsigned long      b_state;     /* BH_Uptodate、BH_Dirty、BH_Lock など */
+    struct buffer_head *b_this_page; /* page の bh の循環リスト */
     union {
-        struct page    *b_page;      /* page this bh belongs to */
+        struct page    *b_page;      /* この bh が属する page */
         struct folio   *b_folio;
     };
-    sector_t           b_blocknr;   /* block number on disk */
-    size_t             b_size;      /* block size */
-    char              *b_data;      /* pointer within page */
+    sector_t           b_blocknr;   /* ディスク上のブロック番号 */
+    size_t             b_size;      /* ブロックサイズ */
+    char              *b_data;      /* page 内へのポインタ */
     struct block_device *b_bdev;
-    bh_end_io_t       *b_end_io;    /* I/O completion */
+    bh_end_io_t       *b_end_io;    /* I/O 完了 */
     void              *b_private;
     /* … */
 };
 ```
 
-Each page in a block-mapped file had a ring of buffer heads, one per filesystem block. For a 4 KB page with 1 KB blocks that is four buffer heads tracking four individual sectors. This works but is expensive: each buffer head is ~60 bytes allocated from slab, there is locking overhead for the ring, and the per-block granularity complicates folio-size increases.
+ブロックマップ型ファイルの各pageは、ファイルシステムブロックごとに1つずつのバッファヘッドのリングを持っていた。1 KBブロックの4 KB pageであれば、4つの個別セクタを追跡する4つのバッファヘッドになる。これは動作するが高コストである。各バッファヘッドはslabから割り当てられる約60バイトであり、リングにはロックのオーバーヘッドがあり、ブロック単位の粒度はfolioサイズの拡大を複雑にする。
 
-The modern replacement is **iomap** (`fs/iomap/`). Instead of per-block metadata attached to each page, iomap maps a range of file bytes to a range of physical blocks in one call. This eliminates buffer heads for filesystems that have migrated (ext4, xfs, btrfs, f2fs). Buffer heads remain for older codepaths, FAT, and some block devices.
+現代の代替は **iomap**（`fs/iomap/`）である。各pageにブロックごとのメタデータを付ける代わりに、iomapはファイルのバイト範囲を物理ブロックの範囲へ1回の呼び出しでマップする。これにより、移行済みのファイルシステム（ext4、xfs、btrfs、f2fs）ではバッファヘッドが不要になる。バッファヘッドは古いコードパス、FAT、一部のブロックデバイスに残っている。
 
 ```c
 /* include/linux/iomap.h */
 struct iomap {
-    u64            addr;    /* disk offset in bytes, IOMAP_NULL_ADDR if hole */
-    loff_t         offset;  /* file offset */
-    u64            length;  /* length of this mapping */
-    u16            type;    /* IOMAP_HOLE, IOMAP_MAPPED, IOMAP_UNWRITTEN, … */
+    u64            addr;    /* ディスクオフセット（バイト単位）。ホールなら IOMAP_NULL_ADDR */
+    loff_t         offset;  /* ファイルオフセット */
+    u64            length;  /* このマッピングの長さ */
+    u16            type;    /* IOMAP_HOLE、IOMAP_MAPPED、IOMAP_UNWRITTEN など */
     u16            flags;
     struct block_device *bdev;
     struct dax_device   *dax_dev;
 };
 ```
 
-With iomap, `a_ops->write_begin` is implemented by `iomap_write_begin`, which calls the filesystem's `iomap_ops->iomap_begin` to get a single `struct iomap` covering the write range, then uses that to set up the folio — no buffer heads involved.
+iomapでは、`a_ops->write_begin`は`iomap_write_begin`によって実装される。これはファイルシステムの`iomap_ops->iomap_begin`を呼んで書き込み範囲をカバーする単一の`struct iomap`を取得し、それを使ってfolioをセットアップする。バッファヘッドは一切関与しない。
 
-## O_SYNC and fsync {#o_sync-and-fsync}
+## O_SYNCとfsync {#o_sync-and-fsync}
 
-`write()` with buffered I/O returns as soon as data lands in the page cache. To get durability guarantees:
+バッファードI/Oでの`write()`は、データがページキャッシュに入った時点で戻る。永続性の保証を得るには次のようにする。
 
 ```c
-/* O_SYNC: every write blocks until data+metadata reach stable storage */
+/* O_SYNC: 各 write はデータ+メタデータが安定ストレージに届くまでブロックする */
 int fd = open("file", O_WRONLY | O_SYNC);
 
-/* O_DSYNC: every write blocks until data reaches stable storage (no metadata) */
+/* O_DSYNC: 各 write はデータが安定ストレージに届くまでブロックする（メタデータは含まない） */
 int fd = open("file", O_WRONLY | O_DSYNC);
 
-/* Manual fsync: flush all dirty pages + metadata for this file */
+/* 手動 fsync: このファイルのダーティページ + メタデータをすべてフラッシュする */
 write(fd, buf, len);
-fsync(fd);         /* → vfs_fsync → a_ops->writepages + inode log commit */
+fsync(fd);         /* → vfs_fsync → a_ops->writepages + inode ログのコミット */
 
-/* fdatasync: flush dirty pages only (skip metadata if size unchanged) */
+/* fdatasync: ダーティページのみフラッシュする（サイズが変わらなければメタデータは省略） */
 fdatasync(fd);
 ```
 
-When `O_SYNC` is set, `generic_file_write_iter` calls `generic_write_sync` after `generic_perform_write`, which calls `vfs_fsync_range` to force writeback and wait for it before returning to userspace.
+`O_SYNC`がセットされていると、`generic_file_write_iter`は`generic_perform_write`の後に`generic_write_sync`を呼び、それが`vfs_fsync_range`を呼んでライトバックを強制し、ユーザー空間に戻る前にその完了を待つ。
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Role |
+| ファイル | 役割 |
 |------|------|
-| `mm/filemap.c` | `filemap_read`, `generic_perform_write`, `filemap_dirty_folio`, page fault read |
-| `mm/page-writeback.c` | dirty accounting, `balance_dirty_pages`, throttling |
-| `fs/fs-writeback.c` | writeback worker, `writeback_sb_inodes`, `__writeback_single_inode` |
-| `include/linux/fs.h` | `struct address_space`, `struct kiocb`, `address_space_operations` |
-| `include/linux/pagemap.h` | page cache lookup helpers, folio state accessors |
-| `include/linux/buffer_head.h` | `struct buffer_head`, BH_* state bits |
-| `include/linux/iomap.h` | `struct iomap`, iomap operation tables |
-| `fs/iomap/buffered-io.c` | iomap `write_begin`/`write_end`, iomap writepage |
-| `mm/readahead.c` | `ondemand_readahead`, readahead window management |
+| `mm/filemap.c` | `filemap_read`、`generic_perform_write`、`filemap_dirty_folio`、ページフォールト時の読み出し |
+| `mm/page-writeback.c` | ダーティの計上、`balance_dirty_pages`、スロットリング |
+| `fs/fs-writeback.c` | ライトバックワーカー、`writeback_sb_inodes`、`__writeback_single_inode` |
+| `include/linux/fs.h` | `struct address_space`、`struct kiocb`、`address_space_operations` |
+| `include/linux/pagemap.h` | ページキャッシュ検索ヘルパー、folio状態アクセサ |
+| `include/linux/buffer_head.h` | `struct buffer_head`、BH_* 状態ビット |
+| `include/linux/iomap.h` | `struct iomap`、iomap操作テーブル |
+| `fs/iomap/buffered-io.c` | iomapの`write_begin`/`write_end`、iomap writepage |
+| `mm/readahead.c` | `ondemand_readahead`、先読みウィンドウの管理 |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Async I/O evolution](async-io.md) — POSIX AIO and io_uring, including how io_uring handles buffered I/O asynchronously
-- [Direct I/O](direct-io.md) — bypassing the page cache with O_DIRECT
-- [Page cache lifecycle](../mm/page-cache.md) — eviction, LRU lists, memory pressure
-- `mm/filemap.c` — core buffered read and write implementation
-- `include/linux/fs.h` — `address_space`, `kiocb`, and `address_space_operations` definitions
+- [非同期I/Oの進化](async-io.md) — POSIX AIOとio_uring。io_uringがバッファードI/Oを非同期に扱う方法を含む
+- [ダイレクトI/O](direct-io.md) — O_DIRECTによるページキャッシュのバイパス
+- [ページキャッシュのライフサイクル](../mm/page-cache.md) — 追い出し、LRUリスト、メモリ圧迫
+- `mm/filemap.c` — バッファード読み書きの中核実装
+- `include/linux/fs.h` — `address_space`、`kiocb`、`address_space_operations`の定義
