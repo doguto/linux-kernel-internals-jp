@@ -1,44 +1,44 @@
-# Kernel Memory Reservation Mechanisms {#kernel-memory-reservation-mechanisms}
+# カーネルのメモリ予約メカニズム {#kernel-memory-reservation-mechanisms}
 
-> Not all physical RAM is yours to use — the kernel, firmware, and hardware carve out regions long before user space ever runs
+> 物理RAMのすべてが自由に使えるわけではない。ユーザー空間が動き出すずっと前に、カーネル、ファームウェア、ハードウェアが領域を切り出している
 
-## Why reservations exist {#why-reservations-exist}
+## なぜ予約が存在するか {#why-reservations-exist}
 
-Physical memory is not a flat, uniformly available resource. By the time the kernel reaches `start_kernel()`, several parties have already laid claim to portions of the physical address space:
+物理メモリは、平坦で一様に利用できる資源ではない。カーネルが`start_kernel()`に到達する時点で、すでにいくつもの当事者が物理アドレス空間の一部を占有している。
 
-- **Firmware tables** — the BIOS, ACPI tables (RSDT, XSDT, DSDT), and SMBIOS data reside in RAM and must not be overwritten
-- **Kernel text and data** — `.text`, `.rodata`, `.data`, `.bss`, and related sections occupy fixed physical addresses set by the bootloader
-- **EFI runtime services** — on UEFI systems, boot services memory and the EFI memory map itself need protection
-- **EBDA and legacy BIOS region** — the Extended BIOS Data Area and the top of the first megabyte are historically corrupt-prone
-- **Device memory and memory-mapped I/O** — firmware may describe ranges as `E820_TYPE_RESERVED` rather than RAM
-- **crashkernel regions** — a dedicated region held in reserve for the kdump capture kernel
-- **CMA pools** — contiguous memory for DMA that doubles as ordinary movable memory until needed
-- **Hardware quirks** — some chipsets corrupt specific physical ranges (Sandy Bridge iGPU is a canonical x86 example)
+- **ファームウェアテーブル** — BIOS、ACPIテーブル（RSDT、XSDT、DSDT）、SMBIOSデータはRAM上に置かれており、上書きしてはならない
+- **カーネルのテキストとデータ** — `.text`、`.rodata`、`.data`、`.bss`および関連セクションは、ブートローダが設定した固定の物理アドレスを占める
+- **EFIランタイムサービス** — UEFIシステムでは、ブートサービスのメモリとEFIメモリマップ自体を保護する必要がある
+- **EBDAとレガシーBIOS領域** — Extended BIOS Data Areaと先頭1メガバイトの上端は、歴史的に破壊されやすい
+- **デバイスメモリとメモリマップドI/O** — ファームウェアは範囲をRAMではなく`E820_TYPE_RESERVED`として記述することがある
+- **crashkernel領域** — kdumpのキャプチャカーネル用に確保しておく専用領域
+- **CMAプール** — DMA用の連続メモリで、必要になるまでは通常のmovableメモリとしても使われる
+- **ハードウェアの不具合（quirk）** — 一部のチップセットは特定の物理範囲を破壊する（Sandy Bridge iGPUはx86における代表例）
 
-The buddy allocator, which manages all general-purpose page allocation, can only hand out pages it knows are free. Anything outside that set must be reserved before `memblock_free_all()` hands memory over.
+汎用のpage割り当てをすべて管理するバディアロケータは、空いているとわかっているpageしか払い出せない。その集合の外にあるものは、`memblock_free_all()`がメモリを引き渡す前に予約されていなければならない。
 
-!!! note "Key Source Files"
-    | File | Role |
+!!! note "主要なソースファイル"
+    | ファイル | 役割 |
     |---|---|
-    | `mm/memblock.c` | Core memblock allocator and reservation engine |
-    | `include/linux/memblock.h` | Public API, flag definitions, inline wrappers |
-    | `arch/x86/kernel/setup.c` | `setup_arch()` — orchestrates all x86 boot reservations |
-    | `arch/x86/kernel/ebda.c` | `reserve_bios_regions()` — EBDA and legacy BIOS area |
-    | `arch/x86/realmode/init.c` | `reserve_real_mode()` — first 1 MB and trampoline |
-    | `arch/x86/platform/efi/efi.c` | `efi_memblock_x86_reserve_range()` — EFI memory map |
-    | `arch/x86/kernel/e820.c` | `e820__memblock_setup()` — translates e820 map to memblock |
-    | `kernel/crash_reserve.c` | `reserve_crashkernel_generic()` — kdump region |
-    | `mm/memory_hotplug.c` | `movable_node` parameter handling |
+    | `mm/memblock.c` | memblockアロケータと予約エンジンの中核 |
+    | `include/linux/memblock.h` | 公開API、フラグ定義、インラインラッパー |
+    | `arch/x86/kernel/setup.c` | `setup_arch()` — x86のブート時予約をすべて統括する |
+    | `arch/x86/kernel/ebda.c` | `reserve_bios_regions()` — EBDAとレガシーBIOS領域 |
+    | `arch/x86/realmode/init.c` | `reserve_real_mode()` — 先頭1 MBとトランポリン |
+    | `arch/x86/platform/efi/efi.c` | `efi_memblock_x86_reserve_range()` — EFIメモリマップ |
+    | `arch/x86/kernel/e820.c` | `e820__memblock_setup()` — e820マップをmemblockに変換する |
+    | `kernel/crash_reserve.c` | `reserve_crashkernel_generic()` — kdump領域 |
+    | `mm/memory_hotplug.c` | `movable_node`パラメータの処理 |
 
 ---
 
-## memblock reservations {#memblock-reservations}
+## memblockによる予約 {#memblock-reservations}
 
-memblock is the kernel's boot-time memory manager. It maintains two flat arrays of `struct memblock_region`: one for all available physical memory (`memblock.memory`) and one for reserved regions (`memblock.reserved`). When `memblock_free_all()` is called late in `mm_init()`, only pages that appear in `memblock.memory` but *not* in `memblock.reserved` are released to the buddy allocator. Everything else stays off-limits.
+memblockはカーネルのブート時メモリマネージャである。`struct memblock_region`の平坦な配列を2つ保持する。1つは利用可能なすべての物理メモリ用（`memblock.memory`）、もう1つは予約領域用（`memblock.reserved`）である。`mm_init()`の終盤で`memblock_free_all()`が呼ばれると、`memblock.memory`に含まれ、かつ`memblock.reserved`には*含まれない*pageだけがバディアロケータに解放される。それ以外はすべて立ち入り禁止のままとなる。
 
 ### memblock_reserve() {#memblock_reserve}
 
-The primary reservation function is a thin inline wrapper in `include/linux/memblock.h`:
+主要な予約関数は、`include/linux/memblock.h`にある薄いインラインラッパーである。
 
 ```c
 static __always_inline int memblock_reserve(phys_addr_t base, phys_addr_t size)
@@ -47,9 +47,9 @@ static __always_inline int memblock_reserve(phys_addr_t base, phys_addr_t size)
 }
 ```
 
-`__memblock_reserve()` calls `memblock_add_range()` against `memblock.reserved`, merging overlapping and adjacent regions as it goes. The function is safe to call from the earliest stages of `setup_arch()`, before paging is fully initialized.
+`__memblock_reserve()`は`memblock.reserved`に対して`memblock_add_range()`を呼び、重なり合う領域や隣接する領域をその都度マージする。この関数は、ページングが完全に初期化される前の`setup_arch()`の最初期段階から安全に呼び出せる。
 
-A variant, `memblock_reserve_kern()`, sets the additional `MEMBLOCK_RSRV_KERN` flag to indicate the region is consumed by the kernel itself (versus firmware, device memory, etc.):
+派生版の`memblock_reserve_kern()`は、追加で`MEMBLOCK_RSRV_KERN`フラグを設定し、その領域が（ファームウェアやデバイスメモリなどではなく）カーネル自身によって消費されることを示す。
 
 ```c
 static __always_inline int memblock_reserve_kern(phys_addr_t base, phys_addr_t size)
@@ -58,11 +58,11 @@ static __always_inline int memblock_reserve_kern(phys_addr_t base, phys_addr_t s
 }
 ```
 
-All internal memblock allocations automatically set `MEMBLOCK_RSRV_KERN`.
+memblock内部の割り当てはすべて、自動的に`MEMBLOCK_RSRV_KERN`を設定する。
 
 ### memblock_phys_alloc() {#memblockphysalloc}
 
-Before the buddy allocator is available, the kernel must allocate memory for its own data structures (page tables, `struct page` arrays, zone structures). `memblock_phys_alloc()` satisfies these requests and returns a physical address:
+バディアロケータが使えるようになる前に、カーネルは自身のデータ構造（ページテーブル、`struct page`配列、zone構造体）のためのメモリを割り当てなければならない。`memblock_phys_alloc()`はこうした要求を満たし、物理アドレスを返す。
 
 ```c
 static __always_inline phys_addr_t memblock_phys_alloc(phys_addr_t size,
@@ -72,11 +72,11 @@ static __always_inline phys_addr_t memblock_phys_alloc(phys_addr_t size,
 }
 ```
 
-The call both allocates and implicitly marks the region reserved via `__memblock_reserve()` with `MEMBLOCK_RSRV_KERN`. A mapped virtual-address variant, `memblock_alloc()`, is also widely used for kernel data structure initialization.
+この呼び出しは割り当てを行うと同時に、`MEMBLOCK_RSRV_KERN`付きの`__memblock_reserve()`を介して暗黙的にその領域を予約済みとしてマークする。マップ済み仮想アドレスを返す派生版の`memblock_alloc()`も、カーネルのデータ構造の初期化で広く使われている。
 
 ### memblock_mark_nomap() {#memblockmarknomap}
 
-A reserved region still gets struct pages allocated for it and is covered by the kernel direct map by default. `memblock_mark_nomap()` goes further by setting the `MEMBLOCK_NOMAP` flag, which prevents the region from being included in the kernel's direct physical mapping altogether:
+予約された領域にも、デフォルトではstruct pageが割り当てられ、カーネルのダイレクトマップでカバーされる。`memblock_mark_nomap()`はさらに踏み込んで`MEMBLOCK_NOMAP`フラグを設定し、その領域がカーネルのダイレクト物理マッピングにまったく含まれないようにする。
 
 ```c
 int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
@@ -85,41 +85,41 @@ int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
 }
 ```
 
-Regions marked `MEMBLOCK_NOMAP` are still covered by the memory map (struct pages exist and are `PageReserved()`), but the kernel has no linear-map virtual address for them. This is used for device memory ranges or persistent memory that requires special mapping treatment. As the comment in `include/linux/memblock.h` states: *"don't add to kernel direct mapping and treat as reserved in the memory map."*
+`MEMBLOCK_NOMAP`とマークされた領域もメモリマップにはカバーされる（struct pageは存在し、`PageReserved()`となる）が、カーネルはその領域に対するリニアマップ上の仮想アドレスを持たない。これは、特別なマッピング処理を必要とするデバイスメモリの範囲や永続メモリに使われる。`include/linux/memblock.h`のコメントにあるとおり、*"don't add to kernel direct mapping and treat as reserved in the memory map."*（カーネルのダイレクトマッピングに追加せず、メモリマップ上では予約済みとして扱う）である。
 
-### memblock flags summary {#memblock-flags-summary}
+### memblockフラグのまとめ {#memblock-flags-summary}
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |---|---|
-| `MEMBLOCK_NONE` | Plain reserved region |
-| `MEMBLOCK_HOTPLUG` | Firmware-described hot(un)pluggable memory |
-| `MEMBLOCK_MIRROR` | Mirrored (redundant) memory region |
-| `MEMBLOCK_NOMAP` | Exclude from kernel direct map |
-| `MEMBLOCK_DRIVER_MANAGED` | Always added via driver, not firmware RAM |
-| `MEMBLOCK_RSRV_NOINIT` | Reserved; struct pages not fully initialized |
-| `MEMBLOCK_RSRV_KERN` | Reserved for kernel use |
+| `MEMBLOCK_NONE` | 通常の予約領域 |
+| `MEMBLOCK_HOTPLUG` | ファームウェアが記述したホット（アン）プラグ可能なメモリ |
+| `MEMBLOCK_MIRROR` | ミラー化（冗長化）されたメモリ領域 |
+| `MEMBLOCK_NOMAP` | カーネルのダイレクトマップから除外する |
+| `MEMBLOCK_DRIVER_MANAGED` | ファームウェアのRAMではなく、常にドライバ経由で追加される |
+| `MEMBLOCK_RSRV_NOINIT` | 予約済み。struct pageは完全には初期化されない |
+| `MEMBLOCK_RSRV_KERN` | カーネル用に予約済み |
 
 ---
 
-## What gets reserved at boot on x86 {#what-gets-reserved-at-boot-on-x86}
+## x86でブート時に予約されるもの {#what-gets-reserved-at-boot-on-x86}
 
-`setup_arch()` in `arch/x86/kernel/setup.c` orchestrates all physical memory reservations for x86. The sequence matters — later stages depend on earlier reservations already being in place.
+`arch/x86/kernel/setup.c`の`setup_arch()`が、x86における物理メモリの予約をすべて統括する。順序が重要であり、後の段階は先の予約がすでに済んでいることを前提とする。
 
-### Phase 1: early_reserve_memory() {#phase-1-earlyreservememory}
+### フェーズ1: early_reserve_memory() {#phase-1-earlyreservememory}
 
-Called before `e820__memory_setup()` adds any RAM to `memblock.memory`, so nothing gets allocated on top of these regions:
+`e820__memory_setup()`がRAMを`memblock.memory`に追加する前に呼ばれるため、これらの領域の上に何かが割り当てられることはない。
 
 ```c
 static void __init early_reserve_memory(void)
 {
     /*
-     * Reserve the memory occupied by the kernel between _text and
-     * __end_of_kernel_reserve symbols.
+     * _text から __end_of_kernel_reserve シンボルまでの間で
+     * カーネルが占有するメモリを予約する。
      */
     memblock_reserve_kern(__pa_symbol(_text),
                   (unsigned long)__end_of_kernel_reserve - (unsigned long)_text);
 
-    /* Reserve the first 64K; BIOSes are known to corrupt low memory */
+    /* 先頭 64K を予約する。BIOS は低位メモリを破壊することが知られている */
     memblock_reserve(0, SZ_64K);
 
     early_reserve_initrd();
@@ -131,42 +131,42 @@ static void __init early_reserve_memory(void)
 }
 ```
 
-**Kernel image:** The range from `_text` to `__end_of_kernel_reserve` (a linker-defined symbol in `arch/x86/kernel/vmlinux.lds.S`) covers `.text`, `.rodata`, `.data`, `.bss`, and related sections. Any sections placed *after* `__end_of_kernel_reserve` (such as `.brk`) must be reserved separately.
+**カーネルイメージ:** `_text`から`__end_of_kernel_reserve`（`arch/x86/kernel/vmlinux.lds.S`でリンカが定義するシンボル）までの範囲は、`.text`、`.rodata`、`.data`、`.bss`および関連セクションをカバーする。`__end_of_kernel_reserve`の*後*に置かれたセクション（`.brk`など）は、別途予約しなければならない。
 
-**Low memory:** The first 64 KB (raised to 1 MB later by `reserve_real_mode()`) is reserved because legacy BIOSes corrupt low RAM and the first page must be reserved to prevent L1TF side-channel leaks.
+**低位メモリ:** 先頭64 KB（後に`reserve_real_mode()`によって1 MBに拡大される）が予約されるのは、レガシーBIOSが低位RAMを破壊するためであり、また先頭pageはL1TFのサイドチャネル漏洩を防ぐために予約しなければならないからである。
 
-**initrd:** `early_reserve_initrd()` immediately calls `memblock_reserve_kern()` on the ramdisk image address from `boot_params`, ensuring memblock cannot allocate over it before full setup completes.
+**initrd:** `early_reserve_initrd()`は、`boot_params`から得たramdiskイメージのアドレスに対して即座に`memblock_reserve_kern()`を呼び、セットアップが完了する前にmemblockがその上に割り当てを行えないようにする。
 
-**BIOS/EBDA:** `reserve_bios_regions()` in `arch/x86/kernel/ebda.c` reads the EBDA pointer and reserves everything from the EBDA start through the top of the first megabyte:
+**BIOS/EBDA:** `arch/x86/kernel/ebda.c`の`reserve_bios_regions()`はEBDAポインタを読み取り、EBDAの先頭から先頭1メガバイトの上端までをすべて予約する。
 
 ```c
 memblock_reserve(bios_start, 0x100000 - bios_start);
 ```
 
-### Phase 2: e820 and EFI memory map processing {#phase-2-e820-and-efi-memory-map-processing}
+### フェーズ2: e820とEFIメモリマップの処理 {#phase-2-e820-and-efi-memory-map-processing}
 
-`e820__memory_setup()` reads the firmware's physical memory map (BIOS e820 or EFI memory map) and constructs the authoritative picture of what is RAM, what is reserved, and what is absent. Regions typed `E820_TYPE_RAM` are subsequently added to `memblock.memory` by `e820__memblock_setup()`.
+`e820__memory_setup()`はファームウェアの物理メモリマップ（BIOSのe820またはEFIメモリマップ）を読み取り、何がRAMで、何が予約済みで、何が存在しないかについての信頼できる全体像を構築する。`E820_TYPE_RAM`型の領域は、その後`e820__memblock_setup()`によって`memblock.memory`に追加される。
 
-On EFI systems, `efi_memblock_x86_reserve_range()` reserves the EFI memory map table itself:
+EFIシステムでは、`efi_memblock_x86_reserve_range()`がEFIメモリマップのテーブル自体を予約する。
 
 ```c
 memblock_reserve(pmap, efi.memmap.nr_map * efi.memmap.desc_size);
 ```
 
-### Phase 3: post-e820 reservations {#phase-3-post-e820-reservations}
+### フェーズ3: e820処理後の予約 {#phase-3-post-e820-reservations}
 
-After `e820__memblock_setup()`, the full memory topology is known and further reservations are made:
+`e820__memblock_setup()`の後にはメモリトポロジ全体が判明しており、さらに予約が行われる。
 
-- **EFI boot services:** `efi_reserve_boot_services()` pins EFI boot service memory so runtime services remain accessible until `efi_free_boot_services()` is called after the boot CPU is up.
-- **Real mode trampoline:** `x86_platform.realmode_reserve()` calls `reserve_real_mode()`, which allocates a sub-1 MB trampoline region (for AP startup) and then unconditionally reserves the entire first megabyte with `memblock_reserve(0, SZ_1M)`.
-- **initrd (final):** `reserve_initrd()` later verifies the initrd mapping and frees the physical pages once they have been copied.
-- **ACPI tables:** `acpi_boot_table_init()` ultimately calls `memblock_reserve()` on ACPI table ranges found in the firmware map.
-- **CMA:** `dma_contiguous_reserve()` carves out the CMA region (see [CMA reservations](#cma-reservations) below).
-- **crashkernel:** `arch_reserve_crashkernel()` reserves the kdump region (see [crashkernel reservation](#crashkernel-reservation) below).
+- **EFIブートサービス:** `efi_reserve_boot_services()`はEFIブートサービスのメモリを固定し、ブートCPUが立ち上がった後に`efi_free_boot_services()`が呼ばれるまで、ランタイムサービスがアクセス可能な状態を保つ。
+- **リアルモードトランポリン:** `x86_platform.realmode_reserve()`は`reserve_real_mode()`を呼ぶ。これは1 MB未満のトランポリン領域（AP起動用）を割り当て、その後`memblock_reserve(0, SZ_1M)`で先頭1メガバイト全体を無条件に予約する。
+- **initrd（最終）:** `reserve_initrd()`は後でinitrdのマッピングを検証し、コピーが済んだ時点で物理pageを解放する。
+- **ACPIテーブル:** `acpi_boot_table_init()`は最終的に、ファームウェアのマップで見つかったACPIテーブルの範囲に対して`memblock_reserve()`を呼ぶ。
+- **CMA:** `dma_contiguous_reserve()`がCMA領域を切り出す（後述の[CMAによる予約](#cma-reservations)を参照）。
+- **crashkernel:** `arch_reserve_crashkernel()`がkdump領域を予約する（後述の[crashkernelの予約](#crashkernel-reservation)を参照）。
 
-### Reading the reservation log {#reading-the-reservation-log}
+### 予約ログの読み方 {#reading-the-reservation-log}
 
-The kernel logs all memblock reservations at early boot. A typical x86 dmesg contains:
+カーネルはブート初期にmemblockの予約をすべてログに出力する。典型的なx86のdmesgには次のような内容が含まれる。
 
 ```
 [    0.000000] BIOS-provided physical RAM map:
@@ -185,11 +185,11 @@ The kernel logs all memblock reservations at early boot. A typical x86 dmesg con
 
 ---
 
-## The reserved memory map {#the-reserved-memory-map}
+## 予約済みメモリのマップ {#the-reserved-memory-map}
 
 ### /proc/iomem {#prociomem}
 
-`/proc/iomem` is the canonical view of the kernel resource tree — a hierarchical record of every claimed physical address range. Every reservation that calls `insert_resource()` or `request_resource()` appears here:
+`/proc/iomem`はカーネルのリソースツリーを示す正規のビューであり、占有されたすべての物理アドレス範囲の階層的な記録である。`insert_resource()`や`request_resource()`を呼ぶ予約はすべてここに現れる。
 
 ```
 # cat /proc/iomem
@@ -211,17 +211,17 @@ fd000000-fdffffff : PCI Bus 0000:00
 ...
 ```
 
-Fields to note:
+注目すべきフィールド:
 
-- `System RAM` — memory available to the kernel
-- `Kernel code` / `Kernel rodata` / `Kernel data` / `Kernel bss` — exact regions occupied by the kernel image
-- `Crash kernel` — the crashkernel-reserved region
-- `Reserved` — firmware-reserved areas the kernel does not use
-- `PCI Bus` — memory-mapped I/O ranges claimed by PCI
+- `System RAM` — カーネルが利用できるメモリ
+- `Kernel code` / `Kernel rodata` / `Kernel data` / `Kernel bss` — カーネルイメージが占める正確な領域
+- `Crash kernel` — crashkernel用に予約された領域
+- `Reserved` — カーネルが使用しない、ファームウェアが予約した領域
+- `PCI Bus` — PCIが占有するメモリマップドI/Oの範囲
 
 ### /sys/kernel/debug/memblock/reserved {#syskerneldebugmemblockreserved}
 
-When `CONFIG_DEBUG_FS` is enabled, `memblock_init_debugfs()` in `mm/memblock.c` registers debugfs entries:
+`CONFIG_DEBUG_FS`が有効な場合、`mm/memblock.c`の`memblock_init_debugfs()`がdebugfsのエントリを登録する。
 
 ```c
 static int __init memblock_init_debugfs(void)
@@ -245,17 +245,17 @@ static int __init memblock_init_debugfs(void)
 ```
 
 !!! note
-    This file reflects the memblock state at the time of reading. After `memblock_free_all()` is called (during `mm_init()`), memblock's internal arrays may be freed if `CONFIG_ARCH_KEEP_MEMBLOCK` is not set. On such kernels, the debugfs file may be absent or empty post-boot. On x86, `CONFIG_ARCH_KEEP_MEMBLOCK` is typically enabled, preserving the data.
+    このファイルは読み出した時点でのmemblockの状態を反映する。（`mm_init()`中に）`memblock_free_all()`が呼ばれた後、`CONFIG_ARCH_KEEP_MEMBLOCK`が設定されていなければ、memblockの内部配列は解放されることがある。そのようなカーネルでは、ブート後にこのdebugfsファイルは存在しないか空になる場合がある。x86では通常`CONFIG_ARCH_KEEP_MEMBLOCK`が有効になっており、データは保持される。
 
 ---
 
-## crashkernel reservation {#crashkernel-reservation}
+## crashkernelの予約 {#crashkernel-reservation}
 
-The `crashkernel=` kernel command line parameter reserves a contiguous region of physical memory at boot that is handed over to a secondary "capture kernel" when the running kernel panics. This is the foundation of kdump.
+カーネルコマンドラインパラメータ`crashkernel=`は、ブート時に物理メモリの連続領域を予約する。この領域は、実行中のカーネルがパニックしたときに2つ目の「キャプチャカーネル」に引き渡される。これがkdumpの基盤である。
 
-### How it works {#how-it-works}
+### 仕組み {#how-it-works}
 
-`arch_reserve_crashkernel()` in `arch/x86/kernel/setup.c` parses the command line and delegates to `reserve_crashkernel_generic()` in `kernel/crash_reserve.c`:
+`arch/x86/kernel/setup.c`の`arch_reserve_crashkernel()`はコマンドラインを解析し、`kernel/crash_reserve.c`の`reserve_crashkernel_generic()`に処理を委ねる。
 
 ```c
 static void __init arch_reserve_crashkernel(void)
@@ -271,14 +271,14 @@ static void __init arch_reserve_crashkernel(void)
 }
 ```
 
-`reserve_crashkernel_generic()` uses `memblock_phys_alloc_range()` to find and reserve a suitable region:
+`reserve_crashkernel_generic()`は`memblock_phys_alloc_range()`を使って適切な領域を探し、予約する。
 
 ```c
 crash_base = memblock_phys_alloc_range(crash_size, CRASH_ALIGN,
                                        search_base, search_end);
 ```
 
-Once allocated, the region is recorded in `crashk_res` and registered in the iomem resource tree:
+割り当てが済むと、その領域は`crashk_res`に記録され、iomemのリソースツリーに登録される。
 
 ```c
 crashk_res.start = crash_base;
@@ -286,75 +286,75 @@ crashk_res.end   = crash_base + crash_size - 1;
 insert_resource(&iomem_resource, &crashk_res);
 ```
 
-The reserved memory is removed from the running kernel's linear map so it cannot be accidentally written. `kexec_load()` places the capture kernel image and initrd inside this region; on panic, `crash_kexec()` jumps into it.
+予約されたメモリは、誤って書き込まれないよう実行中のカーネルのリニアマップから取り除かれる。`kexec_load()`はキャプチャカーネルのイメージとinitrdをこの領域内に配置し、パニック時には`crash_kexec()`がそこへジャンプする。
 
-### Syntax options {#syntax-options}
+### 構文のオプション {#syntax-options}
 
-| Syntax | Meaning |
+| 構文 | 意味 |
 |---|---|
-| `crashkernel=256M` | Reserve 256 MB, kernel chooses address |
-| `crashkernel=256M@512M` | Reserve 256 MB at physical offset 512 MB |
-| `crashkernel=256M,high` | Prefer memory above 4 GB |
-| `crashkernel=256M,high crashkernel=64M,low` | 256 MB high + 64 MB DMA-accessible region |
-| `crashkernel=512M-2G:64M,2G-:128M` | Size range: 64 MB if RAM is 512 M–2 G, 128 MB if > 2 G |
+| `crashkernel=256M` | 256 MBを予約し、アドレスはカーネルが選ぶ |
+| `crashkernel=256M@512M` | 物理オフセット512 MBの位置に256 MBを予約する |
+| `crashkernel=256M,high` | 4 GBより上のメモリを優先する |
+| `crashkernel=256M,high crashkernel=64M,low` | high側256 MB + DMAでアクセス可能な64 MBの領域 |
+| `crashkernel=512M-2G:64M,2G-:128M` | サイズ範囲指定: RAMが512 M〜2 Gなら64 MB、2 Gを超えるなら128 MB |
 
 !!! tip
-    On x86-64, if the initial low-memory search fails, the kernel automatically retries in high memory and allocates a small `crashk_low_res` region below 4 GB to satisfy DMA-capable hardware in the capture kernel.
+    x86-64では、最初の低位メモリでの探索が失敗すると、カーネルは自動的に高位メモリで再試行し、キャプチャカーネル内のDMA対応ハードウェアの要件を満たすため、4 GB未満に小さな`crashk_low_res`領域を割り当てる。
 
-### Timing {#timing}
+### タイミング {#timing}
 
-Note in `setup_arch()` that `arch_reserve_crashkernel()` is called *after* `initmem_init()` (which parses ACPI SRAT) so that the reservation avoids hotpluggable memory regions:
+`setup_arch()`では、`arch_reserve_crashkernel()`が（ACPI SRATを解析する）`initmem_init()`の*後*に呼ばれる点に注意してほしい。これにより、予約がホットプラグ可能なメモリ領域を避けるようになっている。
 
 ```c
 initmem_init();
 dma_contiguous_reserve(max_pfn_mapped << PAGE_SHIFT);
 
 /*
- * Reserve memory for crash kernel after SRAT is parsed so that it
- * won't consume hotpluggable memory.
+ * SRAT を解析した後で crash kernel 用のメモリを予約し、
+ * ホットプラグ可能なメモリを消費しないようにする。
  */
 arch_reserve_crashkernel();
 ```
 
 ---
 
-## CMA reservations {#cma-reservations}
+## CMAによる予約 {#cma-reservations}
 
-CMA (Contiguous Memory Allocator) carves out a physically contiguous region at boot, but unlike a hard reservation it remains productive: the kernel places movable pages (page cache, anonymous memory) in the CMA region during normal operation. When a device driver requests a large contiguous DMA buffer, the kernel migrates those movable pages out and hands the now-empty contiguous range to the driver.
+CMA（Contiguous Memory Allocator）はブート時に物理的に連続した領域を切り出すが、ハードな予約とは異なり、その領域は無駄にならない。通常運用中、カーネルはCMA領域にmovableなpage（ページキャッシュ、匿名メモリ）を配置する。デバイスドライバが大きな連続DMAバッファを要求すると、カーネルはそれらのmovableなpageを外へ移動（マイグレーション）し、空になった連続範囲をドライバに引き渡す。
 
-On x86, `setup_arch()` calls `dma_contiguous_reserve(max_pfn_mapped << PAGE_SHIFT)` to size and reserve the default CMA region.
+x86では、`setup_arch()`が`dma_contiguous_reserve(max_pfn_mapped << PAGE_SHIFT)`を呼び、デフォルトのCMA領域のサイズを決めて予約する。
 
-See [CMA](cma.md) for full coverage of the CMA lifecycle, `dma_contiguous_reserve()`, `cma_declare_contiguous()`, and `alloc_contig_range()`.
+CMAのライフサイクル、`dma_contiguous_reserve()`、`cma_declare_contiguous()`、`alloc_contig_range()`についての詳しい解説は[CMA](cma.md)を参照のこと。
 
 ---
 
-## Runtime reservations {#runtime-reservations}
+## 実行時の予約 {#runtime-reservations}
 
-Once `memblock_free_all()` hands unreserved pages to the buddy allocator, the reservation landscape changes fundamentally. There is **no runtime equivalent of `memblock_reserve()`** for arbitrary physical ranges — the memblock arrays may have been freed, and the buddy allocator has no concept of marking an arbitrary range as off-limits after initialization.
+`memblock_free_all()`が予約されていないpageをバディアロケータに引き渡すと、予約をめぐる状況は根本的に変わる。任意の物理範囲に対する**`memblock_reserve()`の実行時版は存在しない**。memblockの配列はすでに解放されているかもしれず、バディアロケータには初期化後に任意の範囲を立ち入り禁止としてマークするという概念がない。
 
-To hold memory at runtime, the kernel must allocate it and keep it allocated:
+実行時にメモリを確保しておくには、カーネルはそれを割り当て、割り当てたまま保持しなければならない。
 
 ```c
-/* Allocate and pin pages — never free them */
+/* page を割り当てて固定する — 決して解放しない */
 struct page *page = alloc_pages(GFP_KERNEL, order);
 ```
 
-Calling `alloc_pages()` removes the pages from the free pool. As long as the kernel holds the reference and never calls `__free_pages()`, those pages remain unavailable for other use.
+`alloc_pages()`を呼ぶと、そのpageは空きプールから取り除かれる。カーネルが参照を保持し、`__free_pages()`を呼ばない限り、それらのpageは他の用途に使えないままとなる。
 
 !!! warning
-    There is no way to "reserve" a specific physical address at runtime. If a driver or subsystem needs a particular physical range, it must be reserved at boot time via `memblock_reserve()` from an `early_param` handler or architecture setup code, or mapped through a mechanism like persistent memory (pmem) that uses `MEMBLOCK_NOMAP`.
+    実行時に特定の物理アドレスを「予約」する方法はない。ドライバやサブシステムが特定の物理範囲を必要とする場合は、`early_param`ハンドラやアーキテクチャのセットアップコードから`memblock_reserve()`を使ってブート時に予約するか、`MEMBLOCK_NOMAP`を使う永続メモリ（pmem）のような仕組みを通してマップしなければならない。
 
-### Memory hotplug {#memory-hotplug}
+### メモリホットプラグ {#memory-hotplug}
 
-The one mechanism that changes the physical memory available to the buddy allocator at runtime is memory hotplug: adding new DIMM slots or removing existing ones on capable hardware. This extends (or shrinks) `memblock.memory` and the buddy allocator's managed range. See the memory hotplug documentation for details on `add_memory()`, `remove_memory()`, and the `MEMBLOCK_HOTPLUG` flag.
+実行時にバディアロケータが利用できる物理メモリを変える唯一の仕組みが、メモリホットプラグである。対応ハードウェア上で新しいDIMMスロットを追加したり、既存のものを取り外したりする。これにより`memblock.memory`とバディアロケータの管理範囲が拡大（または縮小）する。`add_memory()`、`remove_memory()`、`MEMBLOCK_HOTPLUG`フラグの詳細については、メモリホットプラグのドキュメントを参照のこと。
 
 ---
 
-## ZONE_MOVABLE and movable_node {#zonemovable-and-movablenode}
+## ZONE_MOVABLEとmovable_node {#zonemovable-and-movablenode}
 
-Beyond hard reservations, the kernel supports a softer form of memory isolation: ensuring that a zone or an entire NUMA node's memory is placed in `ZONE_MOVABLE`. Pages in `ZONE_MOVABLE` can only be satisfied by movable allocations, which guarantees they can be migrated out, making the zone suitable for memory offlining and hotplug.
+ハードな予約以外にも、カーネルはよりソフトな形のメモリ隔離をサポートしている。それは、あるzoneやNUMAノード全体のメモリを`ZONE_MOVABLE`に配置することを保証するものである。`ZONE_MOVABLE`内のpageはmovableな割り当てにしか使われないため、それらを外へマイグレーションできることが保証され、このzoneはメモリのオフライン化やホットプラグに適したものとなる。
 
-The `movable_node` kernel command line parameter enables this behavior. It is handled by `cmdline_parse_movable_node()` in `mm/memory_hotplug.c`:
+カーネルコマンドラインパラメータ`movable_node`がこの動作を有効にする。これは`mm/memory_hotplug.c`の`cmdline_parse_movable_node()`で処理される。
 
 ```c
 static int __init cmdline_parse_movable_node(char *p)
@@ -365,20 +365,20 @@ static int __init cmdline_parse_movable_node(char *p)
 early_param("movable_node", cmdline_parse_movable_node);
 ```
 
-When `movable_node_is_enabled()` returns true, `mm_init.c` iterates over memblock regions flagged `MEMBLOCK_HOTPLUG` and places their PFN range into `ZONE_MOVABLE` rather than `ZONE_NORMAL`. This prevents the kernel from placing non-migratable allocations (kernel code, pinned memory) on that node, enabling the entire node to be offlined and removed.
+`movable_node_is_enabled()`がtrueを返すと、`mm_init.c`は`MEMBLOCK_HOTPLUG`フラグの付いたmemblock領域を走査し、そのPFN範囲を`ZONE_NORMAL`ではなく`ZONE_MOVABLE`に配置する。これにより、カーネルがそのノードにマイグレーション不可能な割り当て（カーネルコード、固定されたメモリ）を置くことが防がれ、ノード全体をオフライン化して取り外せるようになる。
 
 ```
 zone_movable_pfn[nid] = min(usable_startpfn, zone_movable_pfn[nid]);
 ```
 
-`ZONE_MOVABLE` is also used without `movable_node` through the `kernelcore=` and `movablecore=` parameters, which split a portion of each node's memory into the movable zone.
+`ZONE_MOVABLE`は、`movable_node`なしでも`kernelcore=`と`movablecore=`パラメータを通じて使われる。これらは各ノードのメモリの一部をmovable zoneに分割する。
 
-!!! note "Memory tiering"
-    `movable_node` is also used in CXL memory tiering configurations to mark slow-memory nodes as fully movable, enabling the kernel's tiered memory promotion/demotion machinery to move pages between fast (local DRAM) and slow (CXL-attached) tiers. See the CXL memory tiering documentation for details.
+!!! note "メモリ階層化"
+    `movable_node`はCXLのメモリ階層化構成でも使われ、低速メモリのノードを完全にmovableとしてマークする。これにより、カーネルの階層化メモリにおける昇格／降格の仕組みが、高速（ローカルDRAM）層と低速（CXL接続）層の間でpageを移動できるようになる。詳細はCXLメモリ階層化のドキュメントを参照のこと。
 
 ---
 
-## Summary: reservation mechanisms at a glance {#summary-reservation-mechanisms-at-a-glance}
+## まとめ: 予約メカニズムの一覧 {#summary-reservation-mechanisms-at-a-glance}
 
 ```
 Boot time                          Runtime
@@ -407,14 +407,14 @@ Visible in:
   dmesg | grep -i reserved
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — covers `MEMBLOCK_HOTPLUG` regions, `movable_node`, and how reservations interact with runtime memory add/remove
-- [`Documentation/admin-guide/mm/memory-hotplug.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/memory-hotplug.rst) — `kernelcore=` and `movablecore=` parameters that shape the ZONE_MOVABLE split at boot
-- [`mm/memblock.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) — core memblock implementation: `memblock_reserve()`, `memblock_mark_nomap()`, `memblock_free_all()`
-- [`arch/x86/kernel/setup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/setup.c) — `setup_arch()` orchestrating all x86 boot reservations in sequence
-- [`kernel/crash_reserve.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_reserve.c) — `reserve_crashkernel_generic()` implementation
-- [LWN: memblock and early memory management](https://lwn.net/Articles/438225/) — how memblock replaced the earlier bootmem allocator and why flat arrays work for boot-time allocation (2011)
-- [memblock.md](memblock.md) — detailed coverage of the memblock allocator lifecycle, region merging, and transition to the buddy allocator
-- [cma.md](cma.md) — how `dma_contiguous_reserve()` carves out CMA regions within the memblock reservation phase
-- [memory-hotplug.md](memory-hotplug.md) — runtime counterpart to boot reservations: adding and removing physical memory after `memblock_free_all()`
+- [カーネルドキュメント: Memory hotplug](https://docs.kernel.org/admin-guide/mm/memory-hotplug.html) — `MEMBLOCK_HOTPLUG`領域、`movable_node`、および予約が実行時のメモリ追加／削除とどう相互作用するかを解説している
+- [`Documentation/admin-guide/mm/memory-hotplug.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/admin-guide/mm/memory-hotplug.rst) — ブート時のZONE_MOVABLEの分割を決める`kernelcore=`と`movablecore=`パラメータ
+- [`mm/memblock.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) — memblockの中核実装: `memblock_reserve()`、`memblock_mark_nomap()`、`memblock_free_all()`
+- [`arch/x86/kernel/setup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/setup.c) — x86のブート時予約をすべて順に統括する`setup_arch()`
+- [`kernel/crash_reserve.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_reserve.c) — `reserve_crashkernel_generic()`の実装
+- [LWN: memblock and early memory management](https://lwn.net/Articles/438225/) — memblockが以前のbootmemアロケータをどのように置き換えたか、そしてブート時の割り当てに平坦な配列がなぜうまく機能するか（2011年）
+- [memblock.md](memblock.md) — memblockアロケータのライフサイクル、領域のマージ、バディアロケータへの移行についての詳しい解説
+- [cma.md](cma.md) — memblockの予約フェーズ中に`dma_contiguous_reserve()`がCMA領域をどのように切り出すか
+- [memory-hotplug.md](memory-hotplug.md) — ブート時予約の実行時版: `memblock_free_all()`の後に物理メモリを追加・削除する

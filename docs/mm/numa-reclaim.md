@@ -1,10 +1,10 @@
-# NUMA Effects on Memory Reclaim {#numa-effects-on-memory-reclaim}
+# メモリ回収に対するNUMAの影響 {#numa-effects-on-memory-reclaim}
 
-> How per-node watermarks, per-node kswapd threads, and NUMA balancing interact to shape memory reclaim on multi-socket systems — and what can go wrong when a remote node is under pressure.
+> ノードごとのウォーターマーク、ノードごとのkswapdスレッド、NUMAバランシングがどのように相互作用してマルチソケットシステムのメモリ回収を形作るのか、そしてリモートノードに圧力がかかったときに何がうまくいかなくなり得るのか。
 
-## Background: NUMA memory is node-local {#background-numa-memory-is-node-local}
+## 背景: NUMAのメモリはノードローカルである {#background-numa-memory-is-node-local}
 
-On a NUMA system each physical CPU socket (a **node**) owns a bank of memory. The kernel represents each node as a `pg_data_t` (also called `pgdat`). Each `pgdat` contains one or more zones (`struct zone`), and each zone maintains its own watermark thresholds.
+NUMAシステムでは、物理CPUソケット（**ノード**）がそれぞれメモリバンクを所有する。カーネルは各ノードを`pg_data_t`（`pgdat`とも呼ばれる）として表現する。各`pgdat`は1つ以上のzone（`struct zone`）を含み、各zoneは固有のウォーターマーク閾値を管理する。
 
 ```
 System with 2 NUMA nodes
@@ -19,13 +19,13 @@ System with 2 NUMA nodes
   └────────────────────┘          └────────────────────┘
 ```
 
-There is **one kswapd kernel thread per node**, not one for the whole system. Reclaim accounting, watermarks, and LRU lists are all per-node. This is the fundamental fact that drives everything else in this document.
+kswapdカーネルスレッドは、システム全体で1つではなく**ノードごとに1つ**存在する。回収のアカウンティング、ウォーターマーク、LRUリストはすべてノード単位である。これが、本ドキュメントの他のすべての内容を左右する根本的な事実である。
 
 ---
 
-## Per-node watermarks {#per-node-watermarks}
+## ノードごとのウォーターマーク {#per-node-watermarks}
 
-Every `struct zone` stores its own watermark array:
+すべての`struct zone`は固有のウォーターマーク配列を格納している。
 
 ```c
 /* include/linux/mmzone.h */
@@ -33,19 +33,19 @@ enum zone_watermarks {
     WMARK_MIN,
     WMARK_LOW,
     WMARK_HIGH,
-    WMARK_PROMO,        /* used when memory-tiering NUMA balancing is on */
+    WMARK_PROMO,        /* メモリ階層化の NUMA バランシングが有効なときに使われる */
     NR_WMARK
 };
 
 struct zone {
     /* ... */
     unsigned long _watermark[NR_WMARK];
-    unsigned long watermark_boost;   /* temporary boost after fragmentation events */
+    unsigned long watermark_boost;   /* 断片化イベント後の一時的なブースト */
     /* ... */
 };
 ```
 
-The accessor macros add `watermark_boost` to the stored value:
+アクセサマクロは、格納された値に`watermark_boost`を加算する。
 
 ```c
 static inline unsigned long wmark_pages(const struct zone *z,
@@ -60,22 +60,22 @@ static inline unsigned long high_wmark_pages(const struct zone *z) { ... }
 static inline unsigned long promo_wmark_pages(const struct zone *z){ ... }
 ```
 
-The watermarks control two different reclaim paths:
+ウォーターマークは2つの異なる回収パスを制御する。
 
-| Condition | Action |
+| 条件 | 動作 |
 |---|---|
-| free pages < `low_wmark_pages(zone)` | `wakeup_kswapd()` — wake the node's kswapd |
-| free pages < `min_wmark_pages(zone)` | Direct reclaim — the allocating process blocks |
+| 空きpage < `low_wmark_pages(zone)` | `wakeup_kswapd()` — そのノードのkswapdを起床させる |
+| 空きpage < `min_wmark_pages(zone)` | 直接回収 — 割り当て中のプロセスがブロックする |
 
-Because each zone on each node has its own watermarks, **Node 1 can be at `WMARK_MIN` while Node 0 sits comfortably above `WMARK_HIGH`**. The kernel does not average watermarks across nodes.
+各ノードの各zoneが固有のウォーターマークを持つため、**Node 0が`WMARK_HIGH`を余裕で上回っている一方で、Node 1が`WMARK_MIN`に達していることがあり得る**。カーネルはノード間でウォーターマークを平均化しない。
 
 ---
 
-## Per-node kswapd {#per-node-kswapd}
+## ノードごとのkswapd {#per-node-kswapd}
 
-### One thread per pgdat {#one-thread-per-pgdat}
+### pgdatごとに1スレッド {#one-thread-per-pgdat}
 
-`kswapd_run()` creates one kernel thread per node at boot:
+`kswapd_run()`はブート時にノードごとに1つのカーネルスレッドを作成する。
 
 ```c
 /* mm/vmscan.c */
@@ -90,18 +90,18 @@ void __meminit kswapd_run(int nid)
 }
 ```
 
-Each thread is pinned to its node (`kthread_create_on_node`) so allocations made by kswapd itself come from the correct local pool. The `pgdat` pointer stored in `pg_data_t::kswapd` is that node's thread handle.
+各スレッドは自分のノードに固定される（`kthread_create_on_node`）ので、kswapd自身が行う割り当ては正しいローカルプールから得られる。`pg_data_t::kswapd`に格納されたポインタが、そのノードのスレッドのハンドルである。
 
-### How kswapd wakes up {#how-kswapd-wakes-up}
+### kswapdはどう起床するか {#how-kswapd-wakes-up}
 
-`wakeup_kswapd()` is called from the page allocator (`mm/page_alloc.c`) whenever an allocation is attempted against a zone whose free pages are below `WMARK_LOW`:
+`wakeup_kswapd()`は、空きpageが`WMARK_LOW`を下回っているzoneに対して割り当てが試みられるたびに、ページアロケータ（`mm/page_alloc.c`）から呼ばれる。
 
 ```c
 /* mm/vmscan.c */
 void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
                    enum zone_type highest_zoneidx)
 {
-    pg_data_t *pgdat = zone->zone_pgdat;   /* the zone's owning node */
+    pg_data_t *pgdat = zone->zone_pgdat;   /* その zone を所有するノード */
     /* ... */
     if (READ_ONCE(pgdat->kswapd_order) < order)
         WRITE_ONCE(pgdat->kswapd_order, order);
@@ -110,18 +110,18 @@ void wakeup_kswapd(struct zone *zone, gfp_t gfp_flags, int order,
 }
 ```
 
-Only the **zone's owning node's kswapd** is woken. A shortage on Node 1 does not automatically wake kswapd on Node 0.
+起床させられるのは**そのzoneを所有するノードのkswapd**だけである。Node 1での不足が、Node 0のkswapdを自動的に起床させることはない。
 
-### What balance_pgdat does {#what-balance_pgdat-does}
+### balance_pgdatが行うこと {#what-balance_pgdat-does}
 
-Once woken, the kswapd thread calls `balance_pgdat()`:
+起床すると、kswapdスレッドは`balance_pgdat()`を呼ぶ。
 
 ```c
 /* mm/vmscan.c */
 static int balance_pgdat(pg_data_t *pgdat, int order, int highest_zoneidx)
 ```
 
-`balance_pgdat()` loops over the node's zones in priority order, calling `shrink_node()` until all managed zones are balanced. "Balanced" is tested by `pgdat_balanced()`:
+`balance_pgdat()`はノードのzoneを優先順位の順にループし、管理対象のすべてのzoneがバランスするまで`shrink_node()`を呼ぶ。「バランスしている」かどうかは`pgdat_balanced()`で判定される。
 
 ```c
 /* mm/vmscan.c */
@@ -133,35 +133,35 @@ static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
             mark = promo_wmark_pages(zone);
         else
             mark = high_wmark_pages(zone);
-        /* check free pages >= mark ... */
+        /* 空き page >= mark かを確認する ... */
     }
 }
 ```
 
-kswapd reclaims until every zone on **its own node** is above `WMARK_HIGH`. It has no obligation to reclaim from a remote node, and it does not look at the remote node's watermarks.
+kswapdは、**自分のノード**のすべてのzoneが`WMARK_HIGH`を上回るまで回収する。リモートノードから回収する義務はなく、リモートノードのウォーターマークも見ない。
 
-### kswapd vs direct reclaim {#kswapd-vs-direct-reclaim}
+### kswapdと直接回収 {#kswapd-vs-direct-reclaim}
 
-| | kswapd (background) | Direct reclaim |
+| | kswapd（バックグラウンド） | 直接回収 |
 |---|---|---|
-| Triggered by | free pages < `WMARK_LOW` | free pages < `WMARK_MIN` |
-| Who reclaims | Dedicated kernel thread | The allocating process itself |
-| Process latency | None (async) | Process blocks |
-| Entry point | `balance_pgdat()` | `try_to_free_pages()` → `do_try_to_free_pages()` |
-| Node scope | Own node's LRU | Follows the allocation's `zonelist` |
+| きっかけ | 空きpage < `WMARK_LOW` | 空きpage < `WMARK_MIN` |
+| 誰が回収するか | 専用のカーネルスレッド | 割り当て中のプロセス自身 |
+| プロセスのレイテンシ | なし（非同期） | プロセスがブロックする |
+| エントリポイント | `balance_pgdat()` | `try_to_free_pages()` → `do_try_to_free_pages()` |
+| ノードの範囲 | 自ノードのLRU | 割り当ての`zonelist`に従う |
 
 !!!note
-    `kswapd_failures` in `pg_data_t` counts consecutive runs that reclaimed zero pages. After `MAX_RECLAIM_RETRIES` failures, `kswapd_test_hopeless()` returns true and the node is considered "hopeless". kswapd backs off and lets direct reclaim handle the node instead.
+    `pg_data_t`の`kswapd_failures`は、回収したpageがゼロだった連続実行の回数を数える。`MAX_RECLAIM_RETRIES`回失敗すると、`kswapd_test_hopeless()`がtrueを返し、そのノードは「見込みなし（hopeless）」とみなされる。kswapdは手を引き、代わりに直接回収がそのノードを処理するに任せる。
 
 ---
 
-## NUMA balancing and its interaction with reclaim {#numa-balancing-and-its-interaction-with-reclaim}
+## NUMAバランシングと回収の相互作用 {#numa-balancing-and-its-interaction-with-reclaim}
 
-### How NUMA hint faults work {#how-numa-hint-faults-work}
+### NUMAヒントフォールトの仕組み {#how-numa-hint-faults-work}
 
-When `CONFIG_NUMA_BALANCING` is on, the kernel periodically scans a task's VMA with `task_numa_work()` (in `kernel/sched/fair.c`), installing PROT_NONE PTEs on pages whose placement it wants to evaluate. The next access to such a page traps as a page fault and reaches `do_numa_page()` in `mm/memory.c`.
+`CONFIG_NUMA_BALANCING`が有効な場合、カーネルは`task_numa_work()`（`kernel/sched/fair.c`）でタスクのVMAを定期的に走査し、配置を評価したいpageにPROT_NONEのPTEを設定する。そのようなpageへの次のアクセスはページフォールトとしてトラップされ、`mm/memory.c`の`do_numa_page()`に到達する。
 
-`do_numa_page()` calls `numa_migrate_check()` to decide whether the faulting page should move to the local node. If migration is warranted, it proceeds through `migrate_misplaced_folio_prepare()` and `migrate_misplaced_folio()`:
+`do_numa_page()`は`numa_migrate_check()`を呼び、フォールトしたpageをローカルノードへ移動すべきかを判断する。マイグレーションが妥当であれば、`migrate_misplaced_folio_prepare()`と`migrate_misplaced_folio()`を経て処理を進める。
 
 ```c
 /* mm/memory.c */
@@ -171,7 +171,7 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
     target_nid = numa_migrate_check(folio, vmf, vmf->address, &flags,
                                      writable, &last_cpupid);
     if (target_nid == NUMA_NO_NODE)
-        goto out_map;               /* stay put */
+        goto out_map;               /* その場に留まる */
 
     if (migrate_misplaced_folio_prepare(folio, vma, target_nid)) {
         flags |= TNF_MIGRATE_FAIL;
@@ -179,7 +179,7 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
     }
     if (!migrate_misplaced_folio(folio, target_nid)) {
         nid = target_nid;
-        flags |= TNF_MIGRATED;      /* moved to local node */
+        flags |= TNF_MIGRATED;      /* ローカルノードへ移動した */
         task_numa_fault(last_cpupid, nid, nr_pages, flags);
         return 0;
     }
@@ -188,11 +188,11 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 }
 ```
 
-The same pattern applies to transparent huge pages, handled in `mm/huge_memory.c`.
+同じパターンが透過的ヒュージページにも適用され、`mm/huge_memory.c`で処理される。
 
-### The promotion path vs the reclaim path {#the-promotion-path-vs-the-reclaim-path}
+### 昇格パスと回収パス {#the-promotion-path-vs-the-reclaim-path}
 
-When a remote page is accessed:
+リモートのpageがアクセスされたとき:
 
 ```
 Remote page accessed on Node 0 by CPU on Node 0
@@ -214,31 +214,31 @@ Migration succeeds     Migration fails
                                reclaimed by kswapd1
 ```
 
-Pages that cannot be migrated (for example because Node 0 is low on memory itself, or the page is shared and migration is blocked) stay on Node 1's LRU. Node 1's kswapd will eventually reclaim them as cold pages, regardless of whether the faulting process is still actively using them on Node 0.
+マイグレーションできないpage（たとえばNode 0自体のメモリが少ない場合や、pageが共有されていてマイグレーションが阻まれる場合）は、Node 1のLRUに留まる。Node 1のkswapdは、フォールトしたプロセスがNode 0でまだそれを活発に使っているかどうかにかかわらず、最終的にそれらをコールドなpageとして回収する。
 
-This is the core tension: **the reclaim path and the promotion path compete**. A page that kswapd1 reclaims to relieve Node 1's pressure may be one that NUMA balancing was about to promote to Node 0 for better locality.
+これが核心的な緊張関係である。**回収パスと昇格パスは競合する**。kswapd1がNode 1の圧力を和らげるために回収するpageは、NUMAバランシングがより良い局所性のためにNode 0へ昇格させようとしていたpageかもしれない。
 
-### WMARK_PROMO and memory tiering {#wmark_promo-and-memory-tiering}
+### WMARK_PROMOとメモリ階層化 {#wmark_promo-and-memory-tiering}
 
-When `sysctl_numa_balancing_mode` has `NUMA_BALANCING_MEMORY_TIERING` set (used for CXL/persistent memory tiers), `pgdat_balanced()` uses `promo_wmark_pages(zone)` instead of `high_wmark_pages(zone)` as its target. This reserves more headroom on the faster tier so promotions from slower memory can proceed without immediately triggering reclaim.
+`sysctl_numa_balancing_mode`に`NUMA_BALANCING_MEMORY_TIERING`が設定されている場合（CXL／永続メモリの階層で使われる）、`pgdat_balanced()`は目標として`high_wmark_pages(zone)`の代わりに`promo_wmark_pages(zone)`を使う。これにより高速な階層により多くの余裕が確保され、低速なメモリからの昇格が、すぐに回収を引き起こすことなく進められる。
 
 ---
 
 ## zone_reclaim_mode {#zonereclaimmode}
 
-### What it was {#what-it-was}
+### それは何だったか {#what-it-was}
 
-`vm.zone_reclaim_mode` (kernel variable: `node_reclaim_mode`) is a sysctl that, when non-zero, causes the page allocator to attempt local reclaim **before** falling back to a remote node's memory. It was intended for workloads where NUMA locality is more important than the cache-spill cost of forced reclaim.
+`vm.zone_reclaim_mode`（カーネル変数: `node_reclaim_mode`）はsysctlであり、非ゼロのとき、ページアロケータはリモートノードのメモリにフォールバックする**前に**ローカルでの回収を試みる。これは、強制的な回収によってキャッシュがあふれるコストよりも、NUMAの局所性のほうが重要なワークロードを想定したものだった。
 
-The bits are defined in `include/uapi/linux/mempolicy.h`:
+ビットは`include/uapi/linux/mempolicy.h`で定義されている。
 
 ```c
-#define RECLAIM_ZONE    (1<<0)  /* enable zone/node reclaim */
-#define RECLAIM_WRITE   (1<<1)  /* writeback dirty pages during reclaim */
-#define RECLAIM_UNMAP   (1<<2)  /* unmap mapped pages during reclaim */
+#define RECLAIM_ZONE    (1<<0)  /* zone/node 回収を有効にする */
+#define RECLAIM_WRITE   (1<<1)  /* 回収中にダーティ page をライトバックする */
+#define RECLAIM_UNMAP   (1<<2)  /* 回収中にマップされた page をアンマップする */
 ```
 
-`node_reclaim_enabled()` returns true when any of these bits is set:
+`node_reclaim_enabled()`は、これらのビットのいずれかが設定されているとtrueを返す。
 
 ```c
 /* mm/internal.h */
@@ -248,7 +248,7 @@ static inline bool node_reclaim_enabled(void)
 }
 ```
 
-When enabled and an allocation misses its preferred zone's watermark, `get_page_from_freelist()` in `mm/page_alloc.c` calls `node_reclaim()` on the local node before moving on to remote zones:
+有効な状態で割り当てが優先zoneのウォーターマークを満たせないと、`mm/page_alloc.c`の`get_page_from_freelist()`は、リモートのzoneに進む前にローカルノードに対して`node_reclaim()`を呼ぶ。
 
 ```c
 /* mm/page_alloc.c */
@@ -259,213 +259,215 @@ if (!node_reclaim_enabled() ||
 ret = node_reclaim(zone->zone_pgdat, gfp_mask, order);
 ```
 
-`zone_allows_reclaim()` enforces a NUMA distance gate: reclaim is only attempted if the target zone's node is within `node_reclaim_distance` of the preferred zone's node (default: `RECLAIM_DISTANCE = 30` in `include/linux/topology.h`). This prevents the allocator from doing expensive local reclaim to avoid a remote node that is actually close by.
+`zone_allows_reclaim()`はNUMA距離によるゲートを課す。回収が試みられるのは、対象zoneのノードが優先zoneのノードから`node_reclaim_distance`以内にある場合だけである（デフォルト: `include/linux/topology.h`の`RECLAIM_DISTANCE = 30`）。これにより、実際には近くにあるリモートノードを避けるためにアロケータがコストの高いローカル回収を行うことを防いでいる。
 
-### Why it caused latency problems {#why-it-caused-latency-problems}
+### なぜレイテンシの問題を引き起こしたか {#why-it-caused-latency-problems}
 
-Forcing local reclaim before remote allocation means:
+リモートからの割り当ての前にローカルでの回収を強制すると、次のようになる。
 
-- Useful hot pages are evicted from local memory to preserve an empty watermark buffer.
-- Workloads with working sets that span nodes, or that share memory across nodes, see disproportionate eviction because zone_reclaim never looks at the remote node's free space.
-- Write-back paths (`RECLAIM_WRITE`) add I/O latency to allocation paths that would otherwise complete quickly by using remote DRAM.
+- 空のウォーターマークバッファを保つために、有用なホットpageがローカルメモリから追い出される。
+- ワーキングセットが複数ノードにまたがる、あるいはノード間でメモリを共有するワークロードでは、zone_reclaimがリモートノードの空き容量を一切見ないため、不釣り合いな追い出しが発生する。
+- ライトバックのパス（`RECLAIM_WRITE`）が、本来ならリモートのDRAMを使って素早く完了するはずの割り当てパスにI/Oのレイテンシを加える。
 
-For general-purpose workloads — including most databases and in-memory caches — the loss of warm cache pages exceeds any benefit from avoiding the NUMA penalty of a remote access.
+汎用的なワークロード（ほとんどのデータベースやインメモリキャッシュを含む）では、温まったキャッシュpageを失う損失が、リモートアクセスのNUMAペナルティを避ける利益を上回る。
 
-### Current state {#current-state}
+### 現状 {#current-state}
 
-`zone_reclaim_mode` is **disabled by default** (zero). The kernel documentation (`Documentation/admin-guide/sysctl/vm.rst`) explicitly states:
+`zone_reclaim_mode`は**デフォルトで無効**（ゼロ）である。カーネルドキュメント（`Documentation/admin-guide/sysctl/vm.rst`）は明確にこう述べている。
 
 > *zone_reclaim_mode is disabled by default. For file servers or workloads that benefit from having their data cached, zone_reclaim_mode should be left disabled as the caching effect is likely to be more important than data locality.*
 
-It remains useful only for tightly partitioned HPC or NUMA-aware real-time workloads where each process's working set fits entirely within a single node and remote access latency is the dominant performance concern.
+（訳: zone_reclaim_modeはデフォルトで無効である。ファイルサーバーや、データがキャッシュされることで恩恵を受けるワークロードでは、キャッシュの効果のほうがデータの局所性よりも重要である可能性が高いため、zone_reclaim_modeは無効のままにしておくべきである。）
+
+これが今でも有用なのは、各プロセスのワーキングセットが単一ノードに完全に収まり、リモートアクセスのレイテンシが性能上の支配的な懸念となる、厳密に分割されたHPCやNUMAを意識したリアルタイムのワークロードに限られる。
 
 !!!warning
-    Enabling `zone_reclaim_mode` on a shared-memory workload or a workload with a working set larger than one NUMA node will typically hurt throughput. Benchmark before and after on your specific workload.
+    共有メモリを使うワークロードや、ワーキングセットが1つのNUMAノードより大きいワークロードで`zone_reclaim_mode`を有効にすると、通常はスループットが損なわれる。対象のワークロードで、有効化の前後でベンチマークを取ること。
 
 ---
 
-## Remote memory pressure causing local reclaim {#remote-memory-pressure-causing-local-reclaim}
+## リモートのメモリ圧力がローカルの回収を引き起こす {#remote-memory-pressure-causing-local-reclaim}
 
-Consider a two-node system where Node 1's allocations are exhausting local memory:
+Node 1の割り当てがローカルメモリを使い果たしつつある、2ノードのシステムを考える。
 
 ```
 Node 0: 20 GB free (comfortably above WMARK_HIGH)
 Node 1:  1 GB free (below WMARK_LOW, kswapd1 running hard)
 ```
 
-With `zone_reclaim_mode = 0` (the default), what happens to a process running on Node 1?
+`zone_reclaim_mode = 0`（デフォルト）のとき、Node 1で実行中のプロセスには何が起きるか。
 
-1. Node 1's page allocator falls through Node 1's zones, finds them below watermark, and checks the `zonelist` — which includes Node 0's zones as fallback.
-2. The allocator **does not call `node_reclaim()`** because `node_reclaim_enabled()` is false.
-3. The allocation succeeds immediately from Node 0. The process gets remote memory but doesn't stall.
-4. Meanwhile, kswapd1 continues reclaiming from Node 1's own LRU in the background, trying to push Node 1 back above `WMARK_HIGH`.
+1. Node 1のページアロケータはNode 1のzoneを順に調べ、それらがウォーターマークを下回っていることを見つけ、`zonelist`を確認する。これにはフォールバック先としてNode 0のzoneが含まれている。
+2. `node_reclaim_enabled()`がfalseなので、アロケータは**`node_reclaim()`を呼ばない**。
+3. 割り当てはNode 0からただちに成功する。プロセスはリモートのメモリを得るが、ストールはしない。
+4. その間、kswapd1はバックグラウンドでNode 1自身のLRUから回収を続け、Node 1を`WMARK_HIGH`より上に戻そうとする。
 
-**Critically: kswapd1 reclaims from Node 1's LRU regardless of Node 0's free memory.** It has no mechanism to "borrow" Node 0's headroom. The result is that Node 1 may reclaim actively used pages from Node 1 while Node 0 sits largely idle.
+**決定的なのは、kswapd1はNode 0の空きメモリにかかわらずNode 1のLRUから回収するという点である。** Node 0の余裕を「借りる」仕組みは持っていない。その結果、Node 0がほとんど遊んでいるのに、Node 1は活発に使われているpageをNode 1から回収することがある。
 
-This is not a bug — it is the correct behavior for general-purpose workloads. The alternative (stopping reclaim because remote memory is free) would leak memory on the remote node indefinitely, eventually causing remote memory to run out too.
+これはバグではなく、汎用的なワークロードにとって正しい動作である。代替案（リモートのメモリに空きがあるからといって回収を止める）では、リモートノードのメモリが際限なく流出し、最終的にはリモートのメモリも枯渇してしまう。
 
 !!!note
-    Processes on Node 1 **do not automatically migrate to Node 0** when Node 1 is under pressure. Process placement is a scheduler concern, not a memory reclaim concern. Use `numactl --cpunodebind` or `taskset` to explicitly control process placement, or rely on the scheduler's load-balancing (which considers NUMA topology but is not guaranteed to move processes off a memory-pressured node).
+    Node 1に圧力がかかっても、Node 1上のプロセスが**Node 0へ自動的に移動することはない**。プロセスの配置はスケジューラの関心事であり、メモリ回収の関心事ではない。プロセスの配置を明示的に制御するには`numactl --cpunodebind`や`taskset`を使うか、スケジューラの負荷分散に頼ること（これはNUMAトポロジを考慮するが、メモリ圧力のかかったノードからプロセスを移動させる保証はない）。
 
 ---
 
-## Observing per-node reclaim {#observing-per-node-reclaim}
+## ノードごとの回収の観測 {#observing-per-node-reclaim}
 
 ### /proc/vmstat {#procvmstat}
 
-`/proc/vmstat` reports system-wide counters. The most relevant for reclaim:
+`/proc/vmstat`はシステム全体のカウンタを報告する。回収に最も関係するもの:
 
 ```bash
 grep -E 'pgsteal|pgscan|kswapd' /proc/vmstat
 ```
 
-Key fields (string names from `mm/vmstat.c`):
+主要なフィールド（文字列名は`mm/vmstat.c`より）:
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---|---|
-| `pgsteal_kswapd` | Pages reclaimed by kswapd (all nodes combined) |
-| `pgsteal_direct` | Pages reclaimed by direct reclaim |
-| `pgscan_kswapd` | Pages scanned by kswapd |
-| `pgscan_direct` | Pages scanned by direct reclaim |
-| `pgscan_direct_throttle` | Times direct reclaim was throttled |
-| `kswapd_low_wmark_hit_quickly` | Times kswapd restored the low watermark without a full scan |
-| `kswapd_high_wmark_hit_quickly` | Times kswapd reached the high watermark quickly |
-| `zone_reclaim_success` | `node_reclaim()` calls that reclaimed enough pages |
-| `zone_reclaim_failed` | `node_reclaim()` calls that did not reclaim enough |
+| `pgsteal_kswapd` | kswapdが回収したpage（全ノードの合計） |
+| `pgsteal_direct` | 直接回収で回収されたpage |
+| `pgscan_kswapd` | kswapdが走査したpage |
+| `pgscan_direct` | 直接回収で走査されたpage |
+| `pgscan_direct_throttle` | 直接回収がスロットリングされた回数 |
+| `kswapd_low_wmark_hit_quickly` | kswapdが完全な走査なしにlowウォーターマークを回復した回数 |
+| `kswapd_high_wmark_hit_quickly` | kswapdがhighウォーターマークに素早く到達した回数 |
+| `zone_reclaim_success` | 十分なpageを回収できた`node_reclaim()`の呼び出し |
+| `zone_reclaim_failed` | 十分に回収できなかった`node_reclaim()`の呼び出し |
 
-`zone_reclaim_success` and `zone_reclaim_failed` are non-zero only when `zone_reclaim_mode != 0`.
+`zone_reclaim_success`と`zone_reclaim_failed`が非ゼロになるのは、`zone_reclaim_mode != 0`のときだけである。
 
-### Per-node vmstat {#per-node-vmstat}
+### ノードごとのvmstat {#per-node-vmstat}
 
-Each node exposes its own vmstat counters through sysfs:
+各ノードはsysfsを通じて固有のvmstatカウンタを公開している。
 
 ```bash
-# Per-node free pages
+# ノードごとの空き page
 cat /sys/devices/system/node/node0/vmstat
 cat /sys/devices/system/node/node1/vmstat
 
-# Example fields visible here:
+# ここで見えるフィールドの例:
 # nr_inactive_anon, nr_active_anon, nr_inactive_file, nr_active_file
 # pgsteal_kswapd, pgscan_kswapd, pgsteal_direct, pgscan_direct
 ```
 
-Comparing `pgsteal_kswapd` between nodes reveals which node is bearing the reclaim burden. A large asymmetry often indicates a memory placement problem.
+ノード間で`pgsteal_kswapd`を比較すると、どのノードが回収の負担を担っているかがわかる。大きな非対称性は、メモリ配置の問題を示していることが多い。
 
-### NUMA allocation counters {#numa-allocation-counters}
+### NUMA割り当てのカウンタ {#numa-allocation-counters}
 
 ```bash
-numastat          # per-node hit/miss counters (reads /sys/devices/system/node/nodeN/numastat)
-numastat -p <pid> # per-process NUMA mapping
+numastat          # ノードごとのヒット/ミスのカウンタ（/sys/devices/system/node/nodeN/numastat を読む）
+numastat -p <pid> # プロセスごとの NUMA マッピング
 ```
 
-The relevant per-node counters in `/sys/devices/system/node/nodeN/numastat`:
+`/sys/devices/system/node/nodeN/numastat`にある、関連するノードごとのカウンタ:
 
-| sysfs name | `/proc/vmstat` name | Meaning |
+| sysfsでの名前 | `/proc/vmstat`での名前 | 意味 |
 |---|---|---|
-| `numa_hit` | `numa_hit` | Allocations that landed on the intended node |
-| `numa_miss` | `numa_miss` | Allocations that landed on a different node |
-| `numa_foreign` | `numa_foreign` | Allocations intended for this node that landed elsewhere |
-| `local_node` | `numa_local` | Allocations by a CPU local to this node |
-| `other_node` | `numa_other` | Allocations by a CPU on a remote node |
-| `interleave_hit` | `numa_interleave` | Interleave policy landed on the intended node |
+| `numa_hit` | `numa_hit` | 意図したノードに置かれた割り当て |
+| `numa_miss` | `numa_miss` | 別のノードに置かれた割り当て |
+| `numa_foreign` | `numa_foreign` | このノード向けだったが別の場所に置かれた割り当て |
+| `local_node` | `numa_local` | このノードにローカルなCPUによる割り当て |
+| `other_node` | `numa_other` | リモートノード上のCPUによる割り当て |
+| `interleave_hit` | `numa_interleave` | インターリーブポリシーで意図したノードに置かれた割り当て |
 
-A rising `numa_miss` on Node 1 alongside active kswapd reclaim on Node 1 is the canonical sign that Node 1 is memory-pressured and falling back to remote allocation.
+Node 1で`numa_miss`が増加し、同時にNode 1でkswapdの回収が活発に行われているなら、それはNode 1がメモリ圧力にさらされ、リモートからの割り当てにフォールバックしていることを示す典型的な兆候である。
 
-### NUMA balancing counters {#numa-balancing-counters}
+### NUMAバランシングのカウンタ {#numa-balancing-counters}
 
 ```bash
 grep numa /proc/vmstat
 ```
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---|---|
-| `numa_hint_faults` | PROT_NONE fault fires (NUMA hint page scanned and accessed) |
-| `numa_hint_faults_local` | Hint faults where the page was already local |
-| `numa_pages_migrated` | Pages successfully promoted/migrated via NUMA balancing |
+| `numa_hint_faults` | PROT_NONEフォールトの発生（NUMAヒントのpageが走査され、アクセスされた） |
+| `numa_hint_faults_local` | pageがすでにローカルだったヒントフォールト |
+| `numa_pages_migrated` | NUMAバランシングによって昇格／マイグレーションに成功したpage |
 
-A low `numa_pages_migrated` / `numa_hint_faults` ratio means most hint faults are failing to migrate, often because the target node is too full.
+`numa_pages_migrated` / `numa_hint_faults`の比率が低い場合、ほとんどのヒントフォールトがマイグレーションに失敗していることを意味する。多くの場合、移動先のノードが満杯すぎることが原因である。
 
 ---
 
-## Tuning {#tuning}
+## チューニング {#tuning}
 
-### MPOL_INTERLEAVE to reduce per-node hotspots {#mpol_interleave-to-reduce-per-node-hotspots}
+### ノードごとのホットスポットを減らすためのMPOL_INTERLEAVE {#mpol_interleave-to-reduce-per-node-hotspots}
 
-When a large shared-memory dataset (e.g., a database buffer pool, a shared queue) is allocated entirely on one node, any memory pressure on that node will evict parts of that dataset. Interleaving spreads the allocation — and the pressure — across all nodes:
+大きな共有メモリのデータセット（例: データベースのバッファプール、共有キュー）がすべて1つのノードに割り当てられると、そのノードにかかるメモリ圧力によってデータセットの一部が追い出される。インターリーブを使うと、割り当て — そして圧力 — がすべてのノードに分散される。
 
 ```c
-/* Application code */
+/* アプリケーションのコード */
 #include <numaif.h>
 
-unsigned long nodemask = 0x3;  /* nodes 0 and 1 */
+unsigned long nodemask = 0x3;  /* ノード 0 と 1 */
 mbind(addr, length, MPOL_INTERLEAVE, &nodemask, 2, 0);
 ```
 
 ```bash
-# At process start
+# プロセス起動時に
 numactl --interleave=all ./my_application
 ```
 
-The tradeoff: individual accesses will sometimes be remote, increasing average latency. This is usually worthwhile when the dataset is too large to fit on one node or when multiple NUMA-local processes all need the same data.
+トレードオフ: 個々のアクセスがリモートになることがあり、平均レイテンシが増加する。通常これは、データセットが1つのノードに収まらないほど大きい場合や、NUMAローカルな複数のプロセスがすべて同じデータを必要とする場合には割に合う。
 
-### Transparent huge pages and NUMA {#transparent-huge-pages-and-numa}
+### 透過的ヒュージページとNUMA {#transparent-huge-pages-and-numa}
 
-THP allocation is always attempted from the local node first. If the local node cannot satisfy a 2MB contiguous allocation but a remote node can, the kernel falls back to a remote allocation or to a base-page allocation — it does not split the THP request across nodes. Under local memory pressure, kswapd's compaction (`kcompactd`) runs to create the contiguous free range, but this compaction is also per-node.
+THPの割り当ては常にまずローカルノードから試みられる。ローカルノードが2MBの連続した割り当てを満たせず、リモートノードなら満たせる場合、カーネルはリモートからの割り当てか、ベースページの割り当てにフォールバックする。THPの要求を複数のノードに分割することはない。ローカルのメモリ圧力下では、kswapdのコンパクション（`kcompactd`）が連続した空き範囲を作るために動作するが、このコンパクションもノード単位である。
 
-For applications that mix NUMA pinning with THP:
+NUMAの固定とTHPを併用するアプリケーションでは:
 
-- `MADV_HUGEPAGE` on a region that spans both nodes will attempt THPs on whichever node each VMA range maps to.
-- `numactl --membind=0 --huge-pages` restricts THP allocation to Node 0; if Node 0 lacks contiguous memory, the allocation falls back to base pages or blocks.
+- 両方のノードにまたがる領域への`MADV_HUGEPAGE`は、各VMA範囲がマップされているノードでTHPを試みる。
+- `numactl --membind=0 --huge-pages`はTHPの割り当てをNode 0に制限する。Node 0に連続したメモリがなければ、割り当てはベースページにフォールバックするか、ブロックする。
 
 !!!tip
-    If kswapd on one node is consistently more active than others while the overall system has free memory, the first thing to check is whether a single process or shared segment is concentrating its allocations on that node. `numastat -p <pid>` shows how a process's virtual mappings distribute across nodes.
+    システム全体には空きメモリがあるのに、あるノードのkswapdが他より常に活発な場合、まず確認すべきは、単一のプロセスや共有セグメントがそのノードに割り当てを集中させていないかである。`numastat -p <pid>`は、プロセスの仮想マッピングがノード間でどう分布しているかを示す。
 
-### Adjusting node_reclaim_distance {#adjusting-nodereclaimdistance}
+### node_reclaim_distanceの調整 {#adjusting-nodereclaimdistance}
 
-On AMD EPYC or similar multi-die platforms where 2-hop NUMA distance is reported as 32 (above the default `RECLAIM_DISTANCE` of 30), the kernel may refuse to do local reclaim across the intra-socket fabric even though those accesses are relatively fast. The distance threshold can be tuned:
+AMD EPYCや類似のマルチダイプラットフォームでは、2ホップのNUMA距離が32と報告され（デフォルトの`RECLAIM_DISTANCE`である30を上回る）、ソケット内のファブリックを介したアクセスは比較的高速であるにもかかわらず、カーネルがそれをまたいだローカル回収を拒むことがある。距離の閾値は調整できる。
 
-The `node_reclaim_distance` variable in `mm/page_alloc.c` defaults to `RECLAIM_DISTANCE` (30). It is **not** exposed as a sysctl — changing it requires modifying the kernel source or using a custom kernel module. To work around this, configure `vm.zone_reclaim_mode = 0` to disable local reclaim entirely, or adjust NUMA memory policies to prefer remote allocation on these platforms.
+`mm/page_alloc.c`の`node_reclaim_distance`変数のデフォルトは`RECLAIM_DISTANCE`（30）である。これはsysctlとして**公開されていない** — 変更するにはカーネルソースを修正するか、カスタムのカーネルモジュールを使う必要がある。回避策として、これらのプラットフォームでは`vm.zone_reclaim_mode = 0`に設定してローカル回収を完全に無効にするか、リモートからの割り当てを優先するようにNUMAメモリポリシーを調整する。
 
 ---
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What it contains |
+| ファイル | 含まれるもの |
 |---|---|
-| `mm/vmscan.c` | `kswapd()`, `kswapd_run()`, `balance_pgdat()`, `pgdat_balanced()`, `wakeup_kswapd()`, `node_reclaim()`, `node_reclaim_mode` variable |
-| `mm/page_alloc.c` | `get_page_from_freelist()`, `zone_watermark_ok()`, `__zone_watermark_ok()`, `zone_allows_reclaim()`, `node_reclaim_distance` |
-| `include/linux/mmzone.h` | `struct zone` (watermark fields), `struct pglist_data` (kswapd fields), `enum zone_watermarks`, watermark accessor inlines |
-| `mm/migrate.c` | `migrate_misplaced_folio()`, `migrate_misplaced_folio_prepare()`, `migrate_pages()` |
-| `mm/memory.c` | `do_numa_page()`, `numa_migrate_check()` |
+| `mm/vmscan.c` | `kswapd()`、`kswapd_run()`、`balance_pgdat()`、`pgdat_balanced()`、`wakeup_kswapd()`、`node_reclaim()`、`node_reclaim_mode`変数 |
+| `mm/page_alloc.c` | `get_page_from_freelist()`、`zone_watermark_ok()`、`__zone_watermark_ok()`、`zone_allows_reclaim()`、`node_reclaim_distance` |
+| `include/linux/mmzone.h` | `struct zone`（ウォーターマークのフィールド）、`struct pglist_data`（kswapdのフィールド）、`enum zone_watermarks`、ウォーターマークのアクセサインライン関数 |
+| `mm/migrate.c` | `migrate_misplaced_folio()`、`migrate_misplaced_folio_prepare()`、`migrate_pages()` |
+| `mm/memory.c` | `do_numa_page()`、`numa_migrate_check()` |
 | `mm/internal.h` | `node_reclaim_enabled()` |
-| `include/uapi/linux/mempolicy.h` | `RECLAIM_ZONE`, `RECLAIM_WRITE`, `RECLAIM_UNMAP`, `MPOL_INTERLEAVE` |
-| `include/linux/topology.h` | `RECLAIM_DISTANCE` default (30), `node_reclaim_distance` declaration |
-| `include/linux/vm_event_item.h` | `PGSTEAL_KSWAPD`, `PGSCAN_KSWAPD`, `NUMA_HINT_FAULTS`, `NUMA_PAGE_MIGRATE` enum values |
-| `mm/vmstat.c` | Counter string names (`pgsteal_kswapd`, `numa_hit`, `numa_miss`, `zone_reclaim_success`, etc.) |
-| `kernel/sched/fair.c` | `task_numa_work()` — NUMA hint PTE scanner |
+| `include/uapi/linux/mempolicy.h` | `RECLAIM_ZONE`、`RECLAIM_WRITE`、`RECLAIM_UNMAP`、`MPOL_INTERLEAVE` |
+| `include/linux/topology.h` | `RECLAIM_DISTANCE`のデフォルト値（30）、`node_reclaim_distance`の宣言 |
+| `include/linux/vm_event_item.h` | `PGSTEAL_KSWAPD`、`PGSCAN_KSWAPD`、`NUMA_HINT_FAULTS`、`NUMA_PAGE_MIGRATE`の列挙値 |
+| `mm/vmstat.c` | カウンタの文字列名（`pgsteal_kswapd`、`numa_hit`、`numa_miss`、`zone_reclaim_success`など） |
+| `kernel/sched/fair.c` | `task_numa_work()` — NUMAヒントPTEのスキャナ |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `kswapd()`, `kswapd_run()`, `balance_pgdat()`, `pgdat_balanced()`, `wakeup_kswapd()`, `node_reclaim()`, `node_reclaim_mode`
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `get_page_from_freelist()`, `zone_allows_reclaim()`, `node_reclaim_distance`, and fallback zonelist traversal
-- [mm/memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) — `do_numa_page()` and `numa_migrate_check()`: the NUMA hint fault path that drives page migration
-- [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()` and `migrate_misplaced_folio_prepare()`
+- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `kswapd()`、`kswapd_run()`、`balance_pgdat()`、`pgdat_balanced()`、`wakeup_kswapd()`、`node_reclaim()`、`node_reclaim_mode`
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `get_page_from_freelist()`、`zone_allows_reclaim()`、`node_reclaim_distance`、およびフォールバック用zonelistの走査
+- [mm/memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) — `do_numa_page()`と`numa_migrate_check()`: pageのマイグレーションを駆動するNUMAヒントフォールトのパス
+- [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()`と`migrate_misplaced_folio_prepare()`
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- `Documentation/admin-guide/sysctl/vm.rst` — documents `zone_reclaim_mode`, `min_free_kbytes`, and related reclaim knobs ([rendered](https://docs.kernel.org/admin-guide/sysctl/vm.html))
+- `Documentation/admin-guide/sysctl/vm.rst` — `zone_reclaim_mode`、`min_free_kbytes`、および関連する回収のつまみを説明している（[レンダリング版](https://docs.kernel.org/admin-guide/sysctl/vm.html)）
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Per-node reclaim and kswapd](https://lwn.net/Articles/461294/) — analysis of per-node kswapd wakeup logic and the interaction between nodes under memory pressure
-- [NUMA balancing and page migration](https://lwn.net/Articles/568870/) — how hint faults, migration decisions, and the promotion path work in automatic NUMA balancing
-- [Zone reclaim mode considered harmful](https://lwn.net/Articles/432224/) — the case for disabling `zone_reclaim_mode` on general-purpose workloads
+- [Per-node reclaim and kswapd](https://lwn.net/Articles/461294/) — ノードごとのkswapdの起床ロジックと、メモリ圧力下でのノード間の相互作用の分析
+- [NUMA balancing and page migration](https://lwn.net/Articles/568870/) — 自動NUMAバランシングにおいて、ヒントフォールト、マイグレーションの判断、昇格パスがどう機能するか
+- [Zone reclaim mode considered harmful](https://lwn.net/Articles/432224/) — 汎用的なワークロードで`zone_reclaim_mode`を無効にすべき理由
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [NUMA Memory Management](numa.md) — NUMA overview, memory policies, automatic balancing, and monitoring
-- [Zone Reclaim Policy](zone-reclaim.md) — `vm.zone_reclaim_mode`, watermark boosting, and DMA zone pressure in detail
-- [NUMA Zonelist Construction and Fallback Ordering](numa-zonelist.md) — how fallback to remote nodes is ordered and how `MPOL_BIND` prevents it
-- [Reclaim](reclaim.md) — the full reclaim machinery: LRU lists, `shrink_node()`, and direct reclaim
+- [NUMAのメモリ管理](numa.md) — NUMAの概要、メモリポリシー、自動バランシング、監視
+- [zone回収ポリシー](zone-reclaim.md) — `vm.zone_reclaim_mode`、ウォーターマークブースト、DMA zoneへの圧力の詳細
+- [NUMAのzonelist構築とフォールバック順序](numa-zonelist.md) — リモートノードへのフォールバックがどう順序付けられ、`MPOL_BIND`がそれをどう防ぐか
+- [回収](reclaim.md) — 回収の仕組みの全体: LRUリスト、`shrink_node()`、直接回収
