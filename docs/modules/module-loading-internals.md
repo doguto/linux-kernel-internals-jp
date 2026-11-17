@@ -1,41 +1,41 @@
-# Module Loading Internals {#module-loading-internals}
+# モジュールロードの内部 {#module-loading-internals}
 
-> What load_module() does: ELF parsing, relocation, symbol resolution, and versioning
+> load_module()が行うこと: ELFの解析、再配置、シンボル解決、バージョニング
 
-## The syscalls {#the-syscalls}
+## システムコール {#the-syscalls}
 
-Two syscalls can load a kernel module:
+カーネルモジュールをロードできるシステムコールは2つある:
 
 ```c
-/* Load from a buffer in userspace — the original interface */
+/* ユーザー空間のバッファからロードする — 元々のインターフェース */
 long init_module(void __user *umod, unsigned long len, const char __user *uargs);
 
-/* Load from a file descriptor — added in Linux 3.8 */
+/* ファイルディスクリプタからロードする — Linux 3.8 で追加 */
 long finit_module(int fd, const char __user *uargs, int flags);
 ```
 
-`finit_module()` was added so the kernel can reason about where a module *came from*, not just what bytes it contains. A file descriptor names a file on a filesystem, so the kernel and any LSM can consider the file's provenance — a signature held in an extended attribute, a dm-verity-protected root filesystem — rather than judging an anonymous userspace buffer. Both syscalls eventually call `load_module()` in `kernel/module/main.c`.
+`finit_module()`が追加されたのは、モジュールがどんなバイト列を含むかだけでなく、それが*どこから来たか*をカーネルが判断できるようにするためである。ファイルディスクリプタはファイルシステム上のファイルを指すので、カーネルや任意のLSMは、匿名のユーザー空間バッファを判定するのではなく、ファイルの来歴 — 拡張属性に保持された署名や、dm-verityで保護されたルートファイルシステム — を考慮できる。どちらのシステムコールも、最終的には`kernel/module/main.c`の`load_module()`を呼び出す。
 
-`finit_module()` accepts exactly three flags; anything else in `flags` is rejected with `EINVAL`:
+`finit_module()`が受け付けるフラグはちょうど3つであり、`flags`にそれ以外のものがあれば`EINVAL`で拒否される:
 
-- `MODULE_INIT_IGNORE_MODVERSIONS` — zero out the version-section indices so the CRC comparison is skipped
-- `MODULE_INIT_IGNORE_VERMAGIC` — treat the module as having no vermagic string, skipping the version-string comparison
-- `MODULE_INIT_COMPRESSED_FILE` — the file is a compressed `.ko` in whichever single format the kernel was built with (`CONFIG_MODULE_COMPRESS_GZIP`, `_XZ`, or `_ZSTD` — `kernel/module/decompress.c` selects exactly one with an `#if`/`#elif` chain); the kernel decompresses it itself via `module_decompress()`
+- `MODULE_INIT_IGNORE_MODVERSIONS` — バージョンセクションのインデックスをゼロにし、CRCの比較をスキップする
+- `MODULE_INIT_IGNORE_VERMAGIC` — モジュールにvermagic文字列がないものとして扱い、バージョン文字列の比較をスキップする
+- `MODULE_INIT_COMPRESSED_FILE` — ファイルは、カーネルがビルドされたときの単一の形式（`CONFIG_MODULE_COMPRESS_GZIP`、`_XZ`、`_ZSTD`のいずれか — `kernel/module/decompress.c`は`#if`/`#elif`の連鎖でちょうど1つを選択する）で圧縮された`.ko`である。カーネルが`module_decompress()`を介して自ら展開する
 
-The first two flags route through `try_to_force_load()`, which taints the kernel with `TAINT_FORCED_MODULE` (`F`) when `CONFIG_MODULE_FORCE_LOAD=y` and fails the load with `ENOEXEC` when it is not.
+最初の2つのフラグは`try_to_force_load()`を経由する。これは`CONFIG_MODULE_FORCE_LOAD=y`であればカーネルを`TAINT_FORCED_MODULE`（`F`）でtaintし、そうでなければ`ENOEXEC`でロードを失敗させる。
 
-## load_module(): step by step {#load_module-step-by-step}
+## load_module(): ステップごとの解説 {#load_module-step-by-step}
 
-`load_module()` takes the raw ELF bytes and produces a running module. Step 1 happens in the syscall wrappers, just before `load_module()` is entered; steps 2 through 11 are the body of `load_module()` itself, in the order its work happens (step 8's version check runs inside step 7's symbol resolution, not as a separate pass).
+`load_module()`は生のELFバイト列を受け取り、動作するモジュールを生成する。ステップ1は`load_module()`に入る直前のシステムコールラッパーで行われる。ステップ2から11は`load_module()`本体であり、処理が行われる順に並べてある（ステップ8のバージョンチェックは、独立したパスとしてではなく、ステップ7のシンボル解決の中で実行される）。
 
-### 1. Get the ELF image into the kernel {#1-get-the-elf-image-into-the-kernel}
+### 1. ELFイメージをカーネルに取り込む {#1-get-the-elf-image-into-the-kernel}
 
-Neither syscall hands `load_module()` a userspace pointer. Each one first materialises the whole `.ko` in kernel memory and fills in a `struct load_info`, which carries `info->hdr` (the image) and `info->len` (its length) through every later stage.
+どちらのシステムコールも、`load_module()`にユーザー空間のポインタを渡すことはない。それぞれがまず`.ko`全体をカーネルメモリ上に実体化し、`struct load_info`を埋める。これは`info->hdr`（イメージ）と`info->len`（その長さ）を、以降のすべての段階に運ぶ。
 
-`init_module()` uses `copy_module_from_user()`:
+`init_module()`は`copy_module_from_user()`を使う:
 
 ```c
-/* kernel/module/main.c — abridged */
+/* kernel/module/main.c — 抜粋 */
 info->hdr = __vmalloc(info->len, GFP_KERNEL | __GFP_NOWARN);
 if (!info->hdr)
         return -ENOMEM;
@@ -46,9 +46,9 @@ if (copy_chunked_from_user(info->hdr, umod, info->len) != 0) {
 }
 ```
 
-`copy_chunked_from_user()` is a loop around `copy_from_user()` that moves at most `16 * PAGE_SIZE` per iteration and calls `cond_resched()` between chunks, so copying a large module does not hold the CPU for an unbounded time.
+`copy_chunked_from_user()`は`copy_from_user()`を囲むループで、1回の反復で最大`16 * PAGE_SIZE`を移動し、チャンクの合間に`cond_resched()`を呼び出す。そのため、大きなモジュールのコピーがCPUを際限なく占有することはない。
 
-`finit_module()` takes a different route: `idempotent_init_module()` → `init_module_from_file()`, which reads the file with
+`finit_module()`は別の経路をたどる。`idempotent_init_module()` → `init_module_from_file()`であり、後者は次のようにファイルを読み込む
 
 ```c
 len = kernel_read_file(f, 0, &buf, INT_MAX, NULL,
@@ -56,38 +56,38 @@ len = kernel_read_file(f, 0, &buf, INT_MAX, NULL,
                                     READING_MODULE);
 ```
 
-If `MODULE_INIT_COMPRESSED_FILE` was passed, `module_decompress()` expands `buf` into `info->hdr`; otherwise `buf` *is* `info->hdr`. The `idempotent_*` wrapper deduplicates concurrent loads: it hashes the file's inode into a small hash table, and if another task is already loading that same inode, the second caller simply waits on a completion and returns the first caller's result instead of doing the work twice.
+`MODULE_INIT_COMPRESSED_FILE`が渡された場合は`module_decompress()`が`buf`を`info->hdr`に展開し、そうでなければ`buf`が*そのまま*`info->hdr`になる。`idempotent_*`ラッパーは並行するロードの重複を排除する。ファイルのinodeを小さなハッシュテーブルにハッシュし、別のタスクがすでに同じinodeをロード中であれば、2番目の呼び出し元は処理を二重に行う代わりに、単にcompletionを待って最初の呼び出し元の結果を返す。
 
-Either way, the resulting buffer is a complete ELF relocatable object.
+いずれの場合も、得られるバッファは完全なELF再配置可能オブジェクトである。
 
-### 2. Check the module signature {#2-check-the-module-signature}
+### 2. モジュール署名をチェックする {#2-check-the-module-signature}
 
-`module_sig_check()` runs first, before any section is examined, so a corrupt image cannot steer the loader before its authenticity is established. It also trims the appended signature off the end of the image by adjusting `info->len`, which makes every subsequent bounds check operate on the real ELF length. See [Kernel Module Signing](module-signing.md) for the details.
+`module_sig_check()`は、どのセクションが調べられるよりも先に最初に実行される。そのため、真正性が確立される前に、壊れたイメージがローダーを誘導することはできない。また、`info->len`を調整してイメージ末尾に付加された署名を切り落とすので、以降のすべての境界チェックは実際のELFの長さに対して行われる。詳細は[カーネルモジュールの署名](module-signing.md)を参照。
 
-### 3. Validate the ELF headers and cache the section table {#3-validate-the-elf-headers-and-cache-the-section-table}
+### 3. ELFヘッダを検証し、セクションテーブルをキャッシュする {#3-validate-the-elf-headers-and-cache-the-section-table}
 
-`elf_validity_cache_copy()` performs the structural checks and records the indices of the sections the loader will need later. It verifies, among other things:
+`elf_validity_cache_copy()`は構造上のチェックを行い、ローダーが後で必要とするセクションのインデックスを記録する。特に次の点を検証する:
 
-- `e_ident` starts with the ELF magic bytes (`\x7fELF`)
-- `e_type == ET_REL` — modules are relocatable objects, not executables or shared libraries
-- `elf_check_arch()` accepts `e_machine` (on x86-64, `EM_X86_64`)
-- `e_shentsize` equals the running kernel's `sizeof(Elf_Shdr)`, and the section header array lies inside `info->len`
-- Section 0 is a proper `SHT_NULL` entry with zero size and address
-- Every section's contents are in bounds
+- `e_ident`がELFのマジックバイト（`\x7fELF`）で始まる
+- `e_type == ET_REL` — モジュールは再配置可能オブジェクトであり、実行ファイルや共有ライブラリではない
+- `elf_check_arch()`が`e_machine`を受け入れる（x86-64では`EM_X86_64`）
+- `e_shentsize`が稼働中のカーネルの`sizeof(Elf_Shdr)`に等しく、セクションヘッダ配列が`info->len`の範囲内にある
+- セクション0が、サイズとアドレスがゼロの正しい`SHT_NULL`エントリである
+- すべてのセクションの内容が範囲内にある
 
-Failures here return `ENOEXEC`. On success `info->mod` points at the module's on-disk `struct module` inside the temporary image, and `info->index.*` holds the cached section indices (`.modinfo`, symbol table, string table, `__versions`, and the extended-modversions pair).
+ここでの失敗は`ENOEXEC`を返す。成功すると、`info->mod`は一時イメージ内にあるモジュールのディスク上の`struct module`を指し、`info->index.*`はキャッシュされたセクションインデックス（`.modinfo`、シンボルテーブル、文字列テーブル、`__versions`、拡張modversionsのペア）を保持する。
 
-### 4. Early checks: blacklist, module_layout CRC, vermagic {#4-early-checks-blacklist-module_layout-crc-vermagic}
+### 4. 早期チェック: ブラックリスト、module_layoutのCRC、vermagic {#4-early-checks-blacklist-module_layout-crc-vermagic}
 
-`early_mod_check()` runs the checks that can be made before anything is allocated:
+`early_mod_check()`は、何かを割り当てる前に実行できるチェックを行う:
 
-- `blacklisted()` compares the module name against the comma-separated `module_blacklist=` boot parameter, returning `EPERM` if it is listed
-- `rewrite_section_headers()` points every `sh_addr` at the temporary image and clears `SHF_ALLOC` on `.modinfo` and the version sections, so they are usable during the load but never copied into the module's runtime memory
-- `check_modstruct_version()` runs the modversions check against the pseudo-symbol `module_layout`, catching a module built against an incompatible `struct module`
-- `check_modinfo()` compares the module's `vermagic` string from `.modinfo` against the running kernel's, returning `ENOEXEC` on mismatch
-- `module_patient_check_exists()` rejects a duplicate name — waiting first if an existing module of that name is still `COMING` or `UNFORMED`, then returning `EEXIST` if it went `LIVE` and `EBUSY` otherwise
+- `blacklisted()`はモジュール名をカンマ区切りの`module_blacklist=`ブートパラメータと比較し、そこに含まれていれば`EPERM`を返す
+- `rewrite_section_headers()`はすべての`sh_addr`を一時イメージに向け、`.modinfo`とバージョンセクションの`SHF_ALLOC`をクリアする。これにより、それらはロード中には使えるが、モジュールの実行時メモリには決してコピーされない
+- `check_modstruct_version()`は擬似シンボル`module_layout`に対してmodversionsのチェックを行い、互換性のない`struct module`に対してビルドされたモジュールを捕捉する
+- `check_modinfo()`は`.modinfo`にあるモジュールの`vermagic`文字列を稼働中のカーネルのものと比較し、不一致なら`ENOEXEC`を返す
+- `module_patient_check_exists()`は名前の重複を拒否する — その名前の既存モジュールがまだ`COMING`か`UNFORMED`であればまず待機し、それが`LIVE`になった場合は`EEXIST`を、そうでなければ`EBUSY`を返す
 
-The vermagic comparison is where the classic "version magic" error originates:
+vermagicの比較は、おなじみの「version magic」エラーの発生源である:
 
 ```c
 } else if (!same_magic(modmagic, vermagic, info->index.vers)) {
@@ -97,13 +97,13 @@ The vermagic comparison is where the classic "version magic" error originates:
 }
 ```
 
-`same_magic()` skips the leading kernel-release word of the string when the module carries CRCs, so a modversions-enabled module is judged on the remaining configuration fields (SMP, preemption model, module unload support, and so on) rather than on an exact release match.
+`same_magic()`は、モジュールがCRCを持つ場合、文字列の先頭にあるカーネルリリースの語をスキップする。そのため、modversionsが有効なモジュールは、リリースの完全一致ではなく、残りの構成フィールド（SMP、プリエンプションモデル、モジュールのアンロードのサポートなど）で判定される。
 
-### 5. Lay out and allocate module memory {#5-lay-out-and-allocate-module-memory}
+### 5. モジュールメモリをレイアウトし、割り当てる {#5-lay-out-and-allocate-module-memory}
 
-`layout_and_allocate()` assigns every `SHF_ALLOC` section an offset within one of seven memory classes, then `move_module()` allocates each class and copies the sections in.
+`layout_and_allocate()`は、すべての`SHF_ALLOC`セクションに7つのメモリクラスのいずれかの中でのオフセットを割り当て、続いて`move_module()`が各クラスを割り当ててセクションをコピーする。
 
-The old two-region model — `mod->core_layout` and `mod->init_layout`, both `struct module_layout` — is gone. Since commit `ac3b43283923` (v6.4) a module owns an array of independently allocated regions:
+古い2領域モデル — どちらも`struct module_layout`である`mod->core_layout`と`mod->init_layout` — はなくなった。コミット`ac3b43283923`（v6.4）以降、モジュールは独立に割り当てられる領域の配列を所有する:
 
 ```c
 /* include/linux/module.h */
@@ -126,22 +126,22 @@ struct module {
 };
 ```
 
-| Class | Holds | Lifetime |
+| クラス | 保持するもの | 寿命 |
 |-------|-------|----------|
-| `MOD_TEXT` | executable sections (`SHF_EXECINSTR \| SHF_ALLOC`) | until unload |
-| `MOD_DATA` | writable data, plus arch small-data sections | until unload |
-| `MOD_RODATA` | allocated, non-writable data | until unload |
-| `MOD_RO_AFTER_INIT` | `SHF_RO_AFTER_INIT` sections — writable during init, sealed afterwards | until unload |
-| `MOD_INIT_TEXT` | `.init.text` | freed after init |
-| `MOD_INIT_DATA` | `.init.data` | freed after init |
-| `MOD_INIT_RODATA` | `.init.rodata` | freed after init |
+| `MOD_TEXT` | 実行可能セクション（`SHF_EXECINSTR \| SHF_ALLOC`） | アンロードまで |
+| `MOD_DATA` | 書き込み可能なデータ、およびアーキテクチャのsmall-dataセクション | アンロードまで |
+| `MOD_RODATA` | 割り当てられた書き込み不可のデータ | アンロードまで |
+| `MOD_RO_AFTER_INIT` | `SHF_RO_AFTER_INIT`セクション — init中は書き込み可能で、その後封印される | アンロードまで |
+| `MOD_INIT_TEXT` | `.init.text` | init後に解放 |
+| `MOD_INIT_DATA` | `.init.data` | init後に解放 |
+| `MOD_INIT_RODATA` | `.init.rodata` | init後に解放 |
 
-Splitting text from data this way is what lets `complete_formation()` apply different page permissions to each class rather than to one undifferentiated blob.
+このようにテキストとデータを分割しているからこそ、`complete_formation()`は、区別のない1つの塊に対してではなく、クラスごとに異なるページ権限を適用できる。
 
-Each class is allocated by `module_memory_alloc()`, which no longer has an allocator of its own — `module_alloc()` was replaced by the generic executable-memory allocator:
+各クラスは`module_memory_alloc()`によって割り当てられる。これはもはや独自のアロケータを持たない — `module_alloc()`は汎用の実行可能メモリアロケータに置き換えられた:
 
 ```c
-/* kernel/module/main.c — abridged */
+/* kernel/module/main.c — 抜粋 */
 static int module_memory_alloc(struct module *mod, enum mod_mem_type type)
 {
         unsigned int size = PAGE_ALIGN(mod->mem[type].size);
@@ -158,7 +158,7 @@ static int module_memory_alloc(struct module *mod, enum mod_mem_type type)
 }
 ```
 
-`EXECMEM_MODULE_TEXT` maps to the architecture's module region. On x86-64 that region starts at
+`EXECMEM_MODULE_TEXT`はアーキテクチャのモジュール領域に対応する。x86-64では、その領域は次の位置から始まる
 
 ```c
 /* arch/x86/include/asm/pgtable_64_types.h */
@@ -171,31 +171,31 @@ static int module_memory_alloc(struct module *mod, enum mod_mem_type type)
 #endif
 ```
 
-With `__START_KERNEL_map` at `0xffffffff80000000` and `KERNEL_IMAGE_SIZE` at 1 GiB — the value used when `CONFIG_RANDOMIZE_BASE` (KASLR) is enabled, as it is in essentially every distribution kernel — modules start at `0xffffffffc0000000`, which is why loaded modules show addresses like `0xffffffffc0400000` in `/proc/modules`. Without KASLR the image limit shrinks to 512 MiB and the module region starts at `0xffffffffa0000000` instead, growing to 1.5 GiB.
+`__START_KERNEL_map`が`0xffffffff80000000`で、`KERNEL_IMAGE_SIZE`が1 GiB — `CONFIG_RANDOMIZE_BASE`（KASLR）が有効な場合に使われる値であり、事実上すべてのディストリビューションカーネルで有効になっている — であれば、モジュールは`0xffffffffc0000000`から始まる。ロードされたモジュールが`/proc/modules`で`0xffffffffc0400000`のようなアドレスを示すのはこのためである。KASLRがない場合、イメージの上限は512 MiBに縮み、モジュール領域は代わりに`0xffffffffa0000000`から始まって1.5 GiBに広がる。
 
-The proximity to the kernel image is mandatory, not incidental: the compiler generates 32-bit PC-relative relocations (`R_X86_64_PC32`, `R_X86_64_PLT32`) whose signed 32-bit offset can only reach ±2 GB from the instruction. Placing modules further away would overflow them.
+カーネルイメージに近いことは偶然ではなく必須である。コンパイラは32ビットのPC相対再配置（`R_X86_64_PC32`、`R_X86_64_PLT32`）を生成し、その符号付き32ビットオフセットは命令から±2 GBの範囲にしか届かない。モジュールをそれより遠くに置けば、これらがオーバーフローしてしまう。
 
-### 6. Find the optional sections {#6-find-the-optional-sections}
+### 6. オプションのセクションを見つける {#6-find-the-optional-sections}
 
-With the module at its final address, `find_module_sections()` records pointers into the sections the kernel will consult at runtime. Together with the indices cached back in step 3, these are the sections that matter to a load:
+モジュールが最終的なアドレスに置かれた状態で、`find_module_sections()`は、カーネルが実行時に参照するセクションへのポインタを記録する。ステップ3でキャッシュされたインデックスと合わせて、ロードに関係するのは次のセクションである:
 
-| Section | Purpose |
+| セクション | 目的 |
 |---------|---------|
-| `.gnu.linkonce.this_module` | the module's `struct module` |
-| `.modinfo` | null-separated `key=value` strings (license, author, description, vermagic) |
-| `.init.text` | init code — freed after `mod->init()` returns |
-| `.exit.text` | cleanup code — kept until unload with `CONFIG_MODULE_UNLOAD=y`; laid out as init memory and freed otherwise |
-| `__versions` | array of `struct modversion_info` for CRC checking |
-| `__version_ext_crcs` / `__version_ext_names` | the extended-modversions form of the same data, for long symbol names |
-| `__ksymtab` | exported symbols this module provides |
-| `__kcrctab` | CRCs for this module's exported symbols |
-| `__kflagstab` | one flag byte per `__ksymtab` entry — `KSYM_FLAG_GPL_ONLY` marks a GPL-only export |
-| `__param` | the module's `module_param()` entries |
+| `.gnu.linkonce.this_module` | モジュールの`struct module` |
+| `.modinfo` | ヌル区切りの`key=value`文字列（ライセンス、作者、説明、vermagic） |
+| `.init.text` | 初期化コード — `mod->init()`が戻った後に解放される |
+| `.exit.text` | クリーンアップコード — `CONFIG_MODULE_UNLOAD=y`ではアンロードまで保持される。そうでなければinitメモリとしてレイアウトされ、解放される |
+| `__versions` | CRCチェック用の`struct modversion_info`の配列 |
+| `__version_ext_crcs` / `__version_ext_names` | 同じデータの拡張modversions形式。長いシンボル名向け |
+| `__ksymtab` | このモジュールが提供するエクスポートシンボル |
+| `__kcrctab` | このモジュールのエクスポートシンボルのCRC |
+| `__kflagstab` | `__ksymtab`のエントリごとに1バイトのフラグ — `KSYM_FLAG_GPL_ONLY`はGPL専用のエクスポートを示す |
+| `__param` | モジュールの`module_param()`エントリ |
 
-There is no longer a separate `__ksymtab_gpl`. Since commit `55fcb926b6d8` (v7.1) GPL-only status is a bit in the parallel `__kflagstab` byte array, and the loader warns if it finds the old sections:
+独立した`__ksymtab_gpl`はもはや存在しない。コミット`55fcb926b6d8`（v7.1）以降、GPL専用かどうかは並列する`__kflagstab`バイト配列の1ビットであり、ローダーは古いセクションを見つけると警告を出す:
 
 ```c
-/* — abridged, omitting the earlier mod->kp = section_objs(info, "__param", ...) — */
+/* — 抜粋。それより前の mod->kp = section_objs(info, "__param", ...) は省略 — */
 mod->syms = section_objs(info, "__ksymtab", sizeof(*mod->syms), &mod->num_syms);
 mod->crcs = section_addr(info, "__kcrctab");
 mod->flagstab = section_addr(info, "__kflagstab");
@@ -206,14 +206,14 @@ if (section_addr(info, "__kcrctab_gpl"))
         pr_warn("%s: ignoring obsolete section __kcrctab_gpl\n", mod->name);
 ```
 
-`check_export_symbol_sections()` then rejects with `ENOEXEC` any module that exports symbols but ships no `__kflagstab`.
+続いて`check_export_symbol_sections()`が、シンボルをエクスポートしているのに`__kflagstab`を持たないモジュールを`ENOEXEC`で拒否する。
 
-### 7. Resolve symbols {#7-resolve-symbols}
+### 7. シンボルを解決する {#7-resolve-symbols}
 
-Symbol resolution comes **before** relocation, and necessarily so: a relocation against an undefined symbol needs that symbol's address, which resolution is what supplies. `load_module()` calls them in exactly that order:
+シンボル解決は再配置の**前**に行われ、そうでなければならない。未定義シンボルに対する再配置にはそのシンボルのアドレスが必要であり、それを供給するのがシンボル解決だからである。`load_module()`はまさにその順序でこれらを呼び出す:
 
 ```c
-/* Fix up syms, so that st_value is a pointer to location. */
+/* シンボルを修正し、st_value が位置へのポインタになるようにする。 */
 err = simplify_symbols(mod, info);
 if (err < 0)
         goto free_modinfo;
@@ -223,12 +223,12 @@ if (err < 0)
         goto free_modinfo;
 ```
 
-`simplify_symbols()` walks the module's symbol table and switches on each entry's `st_shndx`. Defined symbols get their section's base address added to `st_value`; `SHN_ABS` symbols are left alone; percpu symbols are diverted to the module's percpu allocation. Undefined symbols go to the lookup path:
+`simplify_symbols()`はモジュールのシンボルテーブルを走査し、各エントリの`st_shndx`で分岐する。定義済みシンボルは、`st_value`にそのセクションのベースアドレスが加算される。`SHN_ABS`シンボルはそのままにされる。percpuシンボルはモジュールのpercpu割り当てへと振り向けられる。未定義シンボルは検索パスに回される:
 
 ```c
 case SHN_UNDEF:
         ksym = resolve_symbol_wait(mod, info, name);
-        /* Ok if resolved.  */
+        /* 解決できれば OK。 */
         if (ksym && !IS_ERR(ksym)) {
                 sym[i].st_value = kernel_symbol_value(ksym);
                 break;
@@ -238,14 +238,14 @@ case SHN_UNDEF:
         pr_warn("%s: Unknown symbol %s (err %d)\n", mod->name, name, ret);
 ```
 
-`resolve_symbol_wait()` wraps `resolve_symbol()` in a `wait_event_interruptible_timeout()` with a 30-second budget. The wait exists for dependency ordering: if the module that exports the symbol is itself mid-load and still in `MODULE_STATE_COMING`, `strong_try_module_get()` returns `-EBUSY`, and rather than failing the load the kernel sleeps until the provider goes `LIVE` or the timeout expires (`gave up waiting for init of module %s`).
+`resolve_symbol_wait()`は`resolve_symbol()`を、30秒の猶予を持つ`wait_event_interruptible_timeout()`で包む。この待機は依存関係の順序付けのために存在する。シンボルをエクスポートするモジュール自体がロード途中でまだ`MODULE_STATE_COMING`にある場合、`strong_try_module_get()`は`-EBUSY`を返し、カーネルはロードを失敗させる代わりに、提供側が`LIVE`になるかタイムアウトが切れる（`gave up waiting for init of module %s`）までスリープする。
 
-`resolve_symbol()` calls `find_symbol()`, which searches, in order:
+`resolve_symbol()`は`find_symbol()`を呼び出し、これは次の順に検索する:
 
-1. vmlinux's own exports, between the `__start___ksymtab` and `__stop___ksymtab` linker symbols
-2. the `__ksymtab` of every loaded module not in `MODULE_STATE_UNFORMED`
+1. vmlinux自身のエクスポート。`__start___ksymtab`と`__stop___ksymtab`のリンカシンボルの間にある
+2. `MODULE_STATE_UNFORMED`ではない、ロード済みの全モジュールの`__ksymtab`
 
-Both are sorted arrays of `struct kernel_symbol`, and `find_exported_symbol_in_section()` locates a name with `bsearch()` rather than a hash lookup. There is one table per provider, not two — GPL-only status is read out of the matching `__kflagstab` byte after the search hits:
+どちらも`struct kernel_symbol`のソート済み配列であり、`find_exported_symbol_in_section()`はハッシュ検索ではなく`bsearch()`で名前を探す。テーブルは提供側ごとに1つであり、2つではない — GPL専用かどうかは、検索がヒットした後に対応する`__kflagstab`のバイトから読み出される:
 
 ```c
 sym = bsearch(fsa->name, syms->start, syms->stop - syms->start,
@@ -258,11 +258,11 @@ if (!fsa->gplok && (sym_flags & KSYM_FLAG_GPL_ONLY))
         return false;
 ```
 
-That `return false` is why a proprietary module reaching for a GPL-only export does not get a distinct "license" error: the entry is skipped as though it were not there, `find_symbol()` reports failure, and `simplify_symbols()` ends up at its `-ENOENT` path, printing `Unknown symbol <name>` like any genuinely missing symbol. The same lookup also sets `mod->using_gplonly_symbols` when a GPL-only export *is* successfully consumed, which later prevents such a module from also importing from a proprietary one.
+この`return false`こそが、プロプライエタリなモジュールがGPL専用のエクスポートを使おうとしても、独自の「ライセンス」エラーが出ない理由である。エントリは存在しないかのようにスキップされ、`find_symbol()`は失敗を報告し、`simplify_symbols()`は`-ENOENT`のパスに行き着いて、本当に存在しないシンボルと同様に`Unknown symbol <name>`を出力する。同じ検索処理は、GPL専用のエクスポートが*実際に*正常に使われたときに`mod->using_gplonly_symbols`もセットする。これにより、そのようなモジュールがプロプライエタリなモジュールからもインポートすることが後で阻止される。
 
-### 8. Verify CRC checksums {#8-verify-crc-checksums}
+### 8. CRCチェックサムを検証する {#8-verify-crc-checksums}
 
-Version checking is not a separate pass — `resolve_symbol()` calls `check_version()` on each symbol it finds, during step 7. With `CONFIG_MODVERSIONS=y`, every imported symbol carries a CRC in the module's `__versions` section:
+バージョンチェックは独立したパスではない — `resolve_symbol()`は、ステップ7の間に見つけた各シンボルについて`check_version()`を呼び出す。`CONFIG_MODVERSIONS=y`では、インポートされるすべてのシンボルが、モジュールの`__versions`セクションにCRCを持つ:
 
 ```c
 struct modversion_info {
@@ -271,10 +271,10 @@ struct modversion_info {
 };
 ```
 
-`MODULE_NAME_LEN` is `64 - sizeof(unsigned long)`, so 56 bytes on 64-bit — which is not enough for every exported symbol name. The newer *extended modversions* format splits the record in two, a `__version_ext_crcs` array of `u32` and a `__version_ext_names` blob of null-terminated strings of unbounded length. `check_version()` prefers it when present:
+`MODULE_NAME_LEN`は`64 - sizeof(unsigned long)`であり、64ビットでは56バイトになる — これではすべてのエクスポートシンボル名には足りない。新しい*拡張modversions*形式はレコードを2つに分け、`u32`の配列である`__version_ext_crcs`と、長さに制限のないヌル終端文字列の塊である`__version_ext_names`にする。`check_version()`は、それが存在すればそちらを優先する:
 
 ```c
-/* If we have extended version info, rely on it */
+/* 拡張バージョン情報があれば、それに依拠する */
 if (info->index.vers_ext_crc) {
         for_each_modversion_info_ext(version_ext, info) {
                 ...
@@ -282,15 +282,15 @@ if (info->index.vers_ext_crc) {
 }
 ```
 
-and falls back to the fixed-size `struct modversion_info` array otherwise.
+存在しなければ、固定サイズの`struct modversion_info`配列にフォールバックする。
 
-Either way, the module's recorded CRC is compared against the CRC the *providing* side supplied (`fsa.crc`, read from the provider's `__kcrctab`). A mismatch means the symbol's type signature differs between the kernel the module was built against and the running kernel. `check_version()` logs
+いずれにせよ、モジュールに記録されたCRCは、*提供側*が供給したCRC（提供側の`__kcrctab`から読み出された`fsa.crc`）と比較される。不一致は、モジュールのビルドに使われたカーネルと稼働中のカーネルとで、シンボルの型シグネチャが異なることを意味する。`check_version()`は次のログを出し
 
 ```
 mymodule: disagrees about version of symbol tcp_sendmsg
 ```
 
-and returns 0, whereupon `resolve_symbol()` fails that symbol with `EINVAL`:
+0を返す。すると`resolve_symbol()`はそのシンボルを`EINVAL`で失敗させる:
 
 ```c
 if (!check_version(info, name, mod, fsa.crc)) {
@@ -299,55 +299,55 @@ if (!check_version(info, name, mod, fsa.crc)) {
 }
 ```
 
-That `EINVAL` path is reached only by *ordinary* imported symbols. The `module_layout` pseudo-symbol never travels it: `modpost` synthesises it with `sym_add_unresolved("module_layout", mod, false)` purely so it gets a row in the module's CRC table, and the module contains no undefined ELF reference to it — so `simplify_symbols()` and `resolve_symbol()` never see it. Its CRC is compared once, much earlier, by `check_modstruct_version()` in step 4, and `early_mod_check()` turns the failure into `ENOEXEC` (`Invalid module format`).
+この`EINVAL`のパスに到達するのは*通常の*インポートシンボルだけである。`module_layout`擬似シンボルがこの経路を通ることはない。`modpost`は、モジュールのCRCテーブルに行を持たせるためだけに`sym_add_unresolved("module_layout", mod, false)`でそれを合成しており、モジュールにはそれへの未定義ELF参照が含まれない — そのため`simplify_symbols()`も`resolve_symbol()`もそれを見ることはない。そのCRCは、ずっと早いステップ4で`check_modstruct_version()`によって一度だけ比較され、`early_mod_check()`がその失敗を`ENOEXEC`（`Invalid module format`）に変換する。
 
-It is worth keeping the failure codes apart, because they are easy to confuse from userspace:
+失敗コードを区別しておく価値がある。ユーザー空間からは混同しやすいからだ:
 
-| Condition | errno | Raised by |
+| 条件 | errno | 発生元 |
 |-----------|-------|-----------|
-| Vermagic string mismatch | `ENOEXEC` | `check_modinfo()`, step 4 |
-| `module_layout` CRC mismatch | `ENOEXEC` | `check_modstruct_version()` via `early_mod_check()`, step 4 |
-| Imported symbol CRC mismatch | `EINVAL` | `resolve_symbol()`, via `check_version()` |
-| Symbol missing, or GPL-only and unreachable | `ENOENT` | `simplify_symbols()` |
+| vermagic文字列の不一致 | `ENOEXEC` | `check_modinfo()`、ステップ4 |
+| `module_layout`のCRC不一致 | `ENOEXEC` | `early_mod_check()`経由の`check_modstruct_version()`、ステップ4 |
+| インポートシンボルのCRC不一致 | `EINVAL` | `check_version()`経由の`resolve_symbol()` |
+| シンボルが存在しない、またはGPL専用で到達できない | `ENOENT` | `simplify_symbols()` |
 
-### 9. Apply relocations {#9-apply-relocations}
+### 9. 再配置を適用する {#9-apply-relocations}
 
-The ELF `.rela.*` sections contain relocation entries, now resolvable because step 7 filled in every `st_value`. The kernel applies them with:
+ELFの`.rela.*`セクションには再配置エントリが含まれており、ステップ7がすべての`st_value`を埋めたので、今や解決可能になっている。カーネルは次の関数でそれらを適用する:
 
 ```c
-/* Arch-independent dispatch */
+/* アーキテクチャ非依存のディスパッチ */
 static int apply_relocations(struct module *mod, const struct load_info *info);
 
-/* Arch-specific implementation (e.g., arch/x86/kernel/module.c) */
+/* アーキテクチャ固有の実装（例: arch/x86/kernel/module.c） */
 int apply_relocate_add(Elf64_Shdr *sechdrs, const char *strtab,
                        unsigned int symindex, unsigned int relsec,
                        struct module *mod);
 ```
 
-On x86-64, the common relocation types are:
+x86-64では、よく使われる再配置タイプは次のとおりである:
 
-| Type | Meaning |
+| タイプ | 意味 |
 |------|---------|
-| `R_X86_64_64` | 64-bit absolute address |
-| `R_X86_64_PC32` | 32-bit PC-relative (used for `call`, `jmp` to nearby symbols) |
-| `R_X86_64_PLT32` | 32-bit PC-relative via PLT — used for calls that may go through a thunk |
-| `R_X86_64_32S` | 32-bit sign-extended absolute |
+| `R_X86_64_64` | 64ビット絶対アドレス |
+| `R_X86_64_PC32` | 32ビットPC相対（近くのシンボルへの`call`、`jmp`に使われる） |
+| `R_X86_64_PLT32` | PLT経由の32ビットPC相対 — サンクを経由する可能性のある呼び出しに使われる |
+| `R_X86_64_32S` | 32ビット符号拡張絶対アドレス |
 
-For each entry the kernel computes `val = sym->st_value + r_addend`, subtracts the relocation's own address for the PC-relative types, and writes the result at the relocation offset. The PC-relative types (`R_X86_64_PC32`/`PLT32`) are not range-checked at all — if a target exceeds the ±2 GB reach discussed in step 5, the truncation is silent. `R_X86_64_32S` and `R_X86_64_32` are absolute-address types instead: they fail the load with `ENOEXEC` ("overflow") if `val` doesn't survive the narrowing, which is the `-mcmodel=kernel` constraint (a module's absolute symbol references must fit the top 2 GB of the address space), not the same ±2 GB PC-relative window.
+各エントリについて、カーネルは`val = sym->st_value + r_addend`を計算し、PC相対タイプでは再配置自身のアドレスを減算して、その結果を再配置オフセットに書き込む。PC相対タイプ（`R_X86_64_PC32`/`PLT32`）は範囲チェックがまったく行われない — ターゲットがステップ5で述べた±2 GBの到達範囲を超えると、切り詰めは黙って行われる。一方、`R_X86_64_32S`と`R_X86_64_32`は絶対アドレスのタイプであり、`val`が縮小変換に耐えられなければ`ENOEXEC`（「overflow」）でロードを失敗させる。これは`-mcmodel=kernel`の制約（モジュールの絶対シンボル参照は、アドレス空間の最上位2 GBに収まらなければならない）であり、±2 GBのPC相対ウィンドウと同じものではない。
 
-### 10. Complete formation and fire the COMING notifiers {#10-complete-formation-and-fire-the-coming-notifiers}
+### 10. 形成を完了し、COMING通知を発火する {#10-complete-formation-and-fire-the-coming-notifiers}
 
-`complete_formation()` does the work that makes the module safe for other CPUs to observe. Under `module_mutex` it checks for duplicate exports with `verify_exported_symbols()`, finalises the BUG and CFI tables, applies page permissions to the memory classes allocated in step 5 (`module_enable_rodata_ro()`, `module_enable_data_nx()`, `module_enable_text_rox()`), and only then publishes the state change:
+`complete_formation()`は、モジュールを他のCPUから観測しても安全な状態にする作業を行う。`module_mutex`の下で、`verify_exported_symbols()`によりエクスポートの重複をチェックし、BUGテーブルとCFIテーブルを確定させ、ステップ5で割り当てたメモリクラスにページ権限を適用し（`module_enable_rodata_ro()`、`module_enable_data_nx()`、`module_enable_text_rox()`）、そうして初めて状態の変更を公開する:
 
 ```c
 /*
- * Mark state as coming so strong_try_module_get() ignores us,
- * but kallsyms etc. can see us.
+ * 状態を coming にする。strong_try_module_get() はこのモジュールを無視するが、
+ * kallsyms などからは見える。
  */
 mod->state = MODULE_STATE_COMING;
 ```
 
-The notifiers fire afterwards, from `prepare_coming_module()`:
+通知はその後、`prepare_coming_module()`から発火する:
 
 ```c
 err = blocking_notifier_call_chain_robust(&module_notify_list,
@@ -355,29 +355,29 @@ err = blocking_notifier_call_chain_robust(&module_notify_list,
 err = notifier_to_errno(err);
 ```
 
-The `_robust` variant is the important detail: if any callback in the chain fails, it automatically replays the chain with `MODULE_STATE_GOING` for the callbacks that already succeeded, so a subsystem that patched the module can undo its work. Subsystems such as kprobes register on this chain (`kprobe_register_module_notifier()`) to instrument the new module's code; ftrace and live-patching are wired in directly instead — `ftrace_module_enable()` and `klp_module_coming()` run just before the chain, for the same reason.
+重要な点は`_robust`版であることだ。チェーン内のいずれかのコールバックが失敗すると、すでに成功したコールバックに対して`MODULE_STATE_GOING`でチェーンを自動的に再実行するので、モジュールにパッチを当てたサブシステムはその作業を元に戻せる。kprobeなどのサブシステムは、新しいモジュールのコードを計装するためにこのチェーンに登録する（`kprobe_register_module_notifier()`）。ftraceとライブパッチは代わりに直接組み込まれている — 同じ理由で、`ftrace_module_enable()`と`klp_module_coming()`がチェーンの直前に実行される。
 
-### 11. Call mod->init() {#11-call-mod-init}
+### 11. mod->init()を呼び出す {#11-call-mod-init}
 
-`load_module()` ends with `return do_init_module(mod);`, and `do_init_module()` invokes the module's init function through `do_one_initcall()` — the very same helper used for built-in initcalls. That is why the `initcall_blacklist=` boot parameter works on module init functions too: `initcall_blacklisted()` resolves the function pointer with `sprint_symbol_no_offset()` and strips the `[module_name]` suffix before comparing. Going through `do_one_initcall()` also gets a module's init the initcall tracepoints and the `WARN` for leaving preemption or interrupt state imbalanced.
+`load_module()`は`return do_init_module(mod);`で終わり、`do_init_module()`は`do_one_initcall()`を通してモジュールのinit関数を呼び出す — 組み込みのinitcallに使われるのとまったく同じヘルパーである。`initcall_blacklist=`ブートパラメータがモジュールのinit関数にも効くのはこのためである。`initcall_blacklisted()`は`sprint_symbol_no_offset()`で関数ポインタを解決し、比較の前に`[module_name]`の接尾辞を取り除く。`do_one_initcall()`を経由することで、モジュールのinitにはinitcallのtracepointと、プリエンプションや割り込みの状態を不均衡なまま残した場合の`WARN`も適用される。
 
 ```c
 do_mod_ctors(mod);
-/* Start the module */
+/* モジュールを開始する */
 if (mod->init != NULL)
         ret = do_one_initcall(mod->init);
 ```
 
-**On success** (`ret == 0`) the module becomes `MODULE_STATE_LIVE`, the `MODULE_STATE_LIVE` notifier fires, a `KOBJ_ADD` uevent is emitted, the initial reference is dropped with `module_put()`, and the three init memory classes are detached from `mod->mem[]`. A positive return is accepted but warned about (`init suspiciously returned %d`).
+**成功した場合**（`ret == 0`）、モジュールは`MODULE_STATE_LIVE`になり、`MODULE_STATE_LIVE`の通知が発火し、`KOBJ_ADD` ueventが発行され、初期参照が`module_put()`で落とされ、3つのinitメモリクラスが`mod->mem[]`から切り離される。正の戻り値は受け入れられるが、警告が出る（`init suspiciously returned %d`）。
 
-The init memory is *not* freed inline. The bases are pushed onto a lockless list and a workqueue item is scheduled:
+initメモリはその場では解放*されない*。ベースアドレスがロックレスリストに積まれ、workqueueのアイテムがスケジュールされる:
 
 ```c
 if (llist_add(&freeinit->node, &init_free_list))
         schedule_work(&init_free_wq);
 ```
 
-`do_free_init()` then runs from that workqueue, waits out an RCU grace period (kallsyms may be walking the init symbols inside an RCU read-side section), and only then calls `execmem_free()` on each region. `module_memfree()` is gone along with `module_alloc()`.
+その後`do_free_init()`がそのworkqueueから実行され、RCUのグレースピリオドが過ぎるのを待ち（kallsymsがRCUの読み取り側クリティカルセクション内でinitシンボルを走査している可能性がある）、それから初めて各領域に対して`execmem_free()`を呼び出す。`module_memfree()`は`module_alloc()`とともになくなった。
 
 ```c
 static void do_free_init(struct work_struct *w)
@@ -395,11 +395,11 @@ static void do_free_init(struct work_struct *w)
 }
 ```
 
-**On failure** (a negative return) the module is torn down without ever running its exit function — `mod->exit()` is only for `rmmod`, and a module whose init failed is assumed not to have finished setting anything up:
+**失敗した場合**（負の戻り値）、モジュールはexit関数を一度も実行されることなく破棄される — `mod->exit()`は`rmmod`専用であり、initが失敗したモジュールは何もセットアップを終えていないとみなされる:
 
 ```c
 fail:
-        /* Try to protect us from buggy refcounters. */
+        /* バグのある参照カウンタから身を守ることを試みる。 */
         mod->state = MODULE_STATE_GOING;
         synchronize_rcu();
         module_put(mod);
@@ -410,7 +410,7 @@ fail:
         free_module(mod);
 ```
 
-One errno is rewritten on the way out. `EEXIST` is reserved by `init_module()`/`finit_module()` to tell userspace that a module of this name is already loaded, so a module whose own init returns `-EEXIST` has it remapped:
+戻る途中で1つのerrnoが書き換えられる。`EEXIST`は、この名前のモジュールがすでにロードされていることをユーザー空間に伝えるために`init_module()`/`finit_module()`が予約しているので、自身のinitが`-EEXIST`を返したモジュールはそれを付け替えられる:
 
 ```c
 if (ret == -EEXIST)
@@ -419,36 +419,36 @@ if (ret == -EEXIST)
 
 ## struct module {#struct-module}
 
-`struct module` (defined in `include/linux/module.h`) is the kernel's runtime representation of a loaded module. Key fields:
+`struct module`（`include/linux/module.h`で定義）は、ロードされたモジュールのカーネル内での実行時表現である。主なフィールド:
 
 ```c
 struct module {
-    enum module_state    state;         /* current lifecycle state */
-    struct list_head     list;          /* linked into global modules list */
+    enum module_state    state;         /* 現在のライフサイクル状態 */
+    struct list_head     list;          /* グローバルな modules リストにつながれる */
     char                 name[MODULE_NAME_LEN];
 
-    /* Exported symbols — one table, plus a parallel flag byte per entry */
+    /* エクスポートシンボル — テーブル1つと、エントリごとに並列するフラグバイト */
     const struct kernel_symbol *syms;
     const u32                  *crcs;
     const u8                   *flagstab;
     unsigned int                num_syms;
 
-    /* Set when this module successfully imported a GPL-only export */
+    /* このモジュールが GPL 専用のエクスポートのインポートに成功したときにセットされる */
     bool using_gplonly_symbols;
 
-    /* Startup function */
+    /* 開始関数 */
     int (*init)(void);
 
-    /* Memory regions — one per class, allocated independently */
+    /* メモリ領域 — クラスごとに1つ、独立に割り当てられる */
     struct module_memory mem[MOD_MEM_NUM_TYPES] __module_memory_align;
 
 #ifdef CONFIG_MODULE_UNLOAD
-    /* What modules depend on me? */
+    /* どのモジュールが自分に依存しているか? */
     struct list_head source_list;
-    /* What modules do I depend on? */
+    /* 自分はどのモジュールに依存しているか? */
     struct list_head target_list;
 
-    /* Destruction function. */
+    /* 破棄関数。 */
     void (*exit)(void);
 
     atomic_t refcnt;
@@ -456,51 +456,51 @@ struct module {
 };
 ```
 
-The two dependency lists are named from the perspective of a `struct module_use` edge, which records a `source` (the importing module) and a `target` (the exporting module). `add_module_usage(a, b)` — where `a` imports from `b` — links the edge onto `b->source_list` and onto `a->target_list`. So:
+2つの依存リストは、`struct module_use`のエッジの視点から命名されている。このエッジは`source`（インポートする側のモジュール）と`target`（エクスポートする側のモジュール）を記録する。`add_module_usage(a, b)` — `a`が`b`からインポートする — は、エッジを`b->source_list`と`a->target_list`につなぐ。したがって:
 
-- **`source_list`** holds the edges whose `target` is this module: **what depends on me**. This is the list `lsmod` renders in its "Used by" column.
-- **`target_list`** holds the edges whose `source` is this module: **what I depend on**.
+- **`source_list`**は、`target`がこのモジュールであるエッジを保持する。つまり**自分に依存しているもの**である。これは`lsmod`が「Used by」列に表示するリストである。
+- **`target_list`**は、`source`がこのモジュールであるエッジを保持する。つまり**自分が依存しているもの**である。
 
-Together they form the dependency graph that `rmmod` walks: a module can only be removed when its `source_list` is empty and its `refcnt` has drained.
+これらが合わさって`rmmod`が走査する依存グラフを形成する。モジュールを削除できるのは、その`source_list`が空で、`refcnt`が尽きたときだけである。
 
-Note that the unload machinery — both lists, `exit`, and the reference count — only exists under `CONFIG_MODULE_UNLOAD`. Build without it and modules are load-only, which is why `print_unload_info()` has a stub that prints two literal dashes instead of a refcount and a dependency list.
+アンロードの仕組み — 両方のリスト、`exit`、参照カウント — は`CONFIG_MODULE_UNLOAD`の下でのみ存在することに注意。これなしでビルドするとモジュールはロード専用になる。`print_unload_info()`が、参照カウントと依存リストの代わりに2つのダッシュをそのまま出力するスタブを持っているのはこのためである。
 
-The reference count itself is a plain `atomic_t refcnt`. The per-CPU `struct module_ref __percpu *refptr` it replaced has been gone since v3.19.
+参照カウント自体は単純な`atomic_t refcnt`である。それが置き換えたper-CPUの`struct module_ref __percpu *refptr`は、v3.19以降存在しない。
 
-## MODULE_STATE_* lifecycle {#modulestate-lifecycle}
+## MODULE_STATE_*のライフサイクル {#modulestate-lifecycle}
 
 ```
 insmod / modprobe
       │
       ▼
- UNFORMED    add_unformed_module(): the name is reserved in the modules
-      │      list, but find_symbol() and /proc/modules both skip it
+ UNFORMED    add_unformed_module(): modules リスト内に名前が予約されるが、
+      │      find_symbol() と /proc/modules はどちらもこれをスキップする
       ▼
-  COMING     complete_formation() seals page permissions and sets the
-      │      state; prepare_coming_module() then runs ftrace/klp setup
-      │      and the COMING notifier chain
+  COMING     complete_formation() がページ権限を封印して状態をセットし、
+      │      続いて prepare_coming_module() が ftrace/klp のセットアップと
+      │      COMING 通知チェーンを実行する
       ▼
  do_init_module() → do_one_initcall(mod->init)
       │
-      ├── returns 0 ──────────────► LIVE
-      │                              │   init memory goes to a workqueue;
-      │                              │   do_free_init() waits an RCU grace
-      │                              │   period, then execmem_free()s it
+      ├── 0 を返す ───────────────► LIVE
+      │                              │   init メモリは workqueue に送られる。
+      │                              │   do_free_init() が RCU のグレース
+      │                              │   ピリオドを待ってから execmem_free() する
       │                              │
-      │                            rmmod   (needs an empty source_list and
-      │                              │       a drained refcnt; runs mod->exit())
+      │                            rmmod   (空の source_list と尽きた refcnt が
+      │                              │       必要。mod->exit() を実行する)
       │                              ▼
-      └── returns < 0 ────────────► GOING
-                                     │   GOING notifier fires. mod->exit() is
-                                     │   NOT called on this path — a failed
-                                     │   init never gets its exit function
+      └── 0 未満を返す ─────────────► GOING
+                                     │   GOING 通知が発火する。このパスでは
+                                     │   mod->exit() は呼ばれない — init に失敗した
+                                     │   モジュールの exit 関数は呼ばれない
                                      ▼
-                                  free_module() → execmem_free() per mem[] class
+                                  free_module() → mem[] クラスごとに execmem_free()
 ```
 
-The `UNFORMED` and `COMING` states are both visible to other CPUs through the global modules list, and both are special-cased there: `find_symbol()` skips `UNFORMED` modules outright, `m_show()` omits them from `/proc/modules`, and `strong_try_module_get()` refuses a `COMING` module with `-EBUSY` so a dependent load waits rather than binding to a half-built provider. (`GOING` gets no such special-casing in `find_symbol()` — a module can still export symbols while unloading — but `m_show()` does print it, as `Unloading`.) What guarantees no thread is still executing *inside* a module by the time it reaches `GOING` is the reference count, not RCU: `try_module_get()`/`module_put()` (and `strong_try_module_get()` behind `__symbol_get()`) hold the count up, and `delete_module()` will not set `GOING` with a live count remaining unless the caller forces it (`try_stop_module()` sets `GOING` regardless of count when `try_force_unload()` succeeds, gated on `CONFIG_MODULE_FORCE_UNLOAD` and the `O_TRUNC` flag to `delete_module(2)`) — otherwise `try_release_module_ref()` puts the base reference back and `try_stop_module()` returns `-EWOULDBLOCK`, failing `rmmod` immediately. (The kernel has not blocked and waited for a refcount to drain since v3.13, commit `3f2b9c9cdf38` "module: remove rmmod --wait option.") The `synchronize_rcu()` calls on the teardown paths do a different job: `free_module()` unlinks the module from the modules list, the mod tree and the bug list with the `_rcu` variants — "Unlink carefully: kallsyms could be walking list" — and then waits a grace period so those RCU readers cannot touch the memory as it is freed.
+`UNFORMED`と`COMING`の状態はどちらもグローバルなmodulesリストを通して他のCPUから見え、どちらもそこで特別扱いされる。`find_symbol()`は`UNFORMED`のモジュールを完全にスキップし、`m_show()`はそれらを`/proc/modules`から除外し、`strong_try_module_get()`は`COMING`のモジュールを`-EBUSY`で拒否する。これにより、依存する側のロードは作りかけの提供側に結び付くのではなく待機する。（`GOING`は`find_symbol()`でそのような特別扱いを受けない — モジュールはアンロード中でもシンボルをエクスポートできる — が、`m_show()`は`Unloading`としてそれを表示する。）モジュールが`GOING`に達した時点で、どのスレッドもまだモジュールの*中*を実行していないことを保証するのは、RCUではなく参照カウントである。`try_module_get()`/`module_put()`（および`__symbol_get()`の背後にある`strong_try_module_get()`）がカウントを保持し、`delete_module()`は、呼び出し元が強制しない限り、生きたカウントが残っている状態で`GOING`をセットしない（`try_force_unload()`が成功すると、`try_stop_module()`はカウントに関係なく`GOING`をセットする。これは`CONFIG_MODULE_FORCE_UNLOAD`と`delete_module(2)`への`O_TRUNC`フラグによって制限される）— そうでなければ`try_release_module_ref()`がベース参照を戻し、`try_stop_module()`は`-EWOULDBLOCK`を返して、`rmmod`は即座に失敗する。（カーネルは、v3.13のコミット`3f2b9c9cdf38`「module: remove rmmod --wait option.」以降、ブロックして参照カウントが尽きるのを待つことはしていない。）破棄パス上の`synchronize_rcu()`呼び出しは別の役割を果たす。`free_module()`はモジュールを`_rcu`版を使ってmodulesリスト、modツリー、bugリストからリンク解除し — 「Unlink carefully: kallsyms could be walking list」（慎重にリンク解除せよ: kallsymsがリストを走査している可能性がある） — それからグレースピリオドを待つので、それらのRCU読み取り側は解放中のメモリに触れることができない。
 
-## /proc/modules format {#procmodules-format}
+## /proc/modulesの形式 {#procmodules-format}
 
 ```bash
 cat /proc/modules
@@ -512,21 +512,21 @@ cat /proc/modules
 #               refcount
 ```
 
-`m_show()` in `kernel/module/procfs.c` is the authority on the format. Fields:
+形式の権威は`kernel/module/procfs.c`の`m_show()`である。各フィールド:
 
-- **size**: `module_total_size(mod)`, which sums `mod->mem[type].size` over **all seven** memory classes — not just the core ones. Reading `/proc/modules` before a module's init memory has been freed therefore reports a slightly larger number than reading it afterwards.
-- **refcount**: `module_refcount(mod)` — the number of held references, or `-1` once `try_stop_module()` has dropped `MODULE_REF_BASE`, i.e. for a module shown as `Unloading`. (`module_refcount()`'s own kernel-doc says it will "return the refcount or -1 if unloading"; the window is real because `delete_module()` runs `mod->exit()` after setting `GOING` but while the module is still on the modules list, and `m_show()` only skips `UNFORMED`.) With `CONFIG_MODULE_UNLOAD=n` there is no refcount and no dependency tracking at all, and `print_unload_info()`'s stub prints two literal dashes (`- -`) in place of this field *and* the next one.
-- **dependents**: the modules that depend on *this* one, not the ones it depends on. `print_unload_info()` walks `mod->source_list` and prints `use->source->name` with a trailing comma for each — the same set `lsmod` shows under "Used by". A module with an init function but no exit function additionally gets `[permanent],` appended, matching the `if (mod->init && !mod->exit)` test in `delete_module()` that refuses to unload it short of a forced removal. If nothing at all was printed, a single `-` is emitted.
-- **state**: `Live`, `Loading` (`MODULE_STATE_COMING`), or `Unloading` (`MODULE_STATE_GOING`). `MODULE_STATE_UNFORMED` modules are skipped entirely.
-- **load address**: `mod->mem[MOD_TEXT].base` — the base of the module's text region, not of some combined "core layout". Readers that fail `kallsyms_show_value()` see `0x0000000000000000` instead.
+- **size**: `module_total_size(mod)`。これはコアのものだけでなく、**7つすべての**メモリクラスにわたって`mod->mem[type].size`を合計する。そのため、モジュールのinitメモリが解放される前に`/proc/modules`を読むと、解放後に読んだときよりわずかに大きな数値が報告される。
+- **refcount**: `module_refcount(mod)` — 保持されている参照の数、または`try_stop_module()`が`MODULE_REF_BASE`を落とした後、つまり`Unloading`と表示されるモジュールでは`-1`。（`module_refcount()`自身のkernel-docには「return the refcount or -1 if unloading」とある。このウィンドウは実在する。`delete_module()`は`GOING`をセットした後、モジュールがまだmodulesリストに載っている間に`mod->exit()`を実行し、`m_show()`は`UNFORMED`しかスキップしないからである。）`CONFIG_MODULE_UNLOAD=n`では参照カウントも依存関係の追跡もまったくなく、`print_unload_info()`のスタブは、このフィールド*と*次のフィールドの代わりに2つのダッシュ（`- -`）をそのまま出力する。
+- **dependents**: このモジュールが依存しているモジュールではなく、*この*モジュールに依存しているモジュール。`print_unload_info()`は`mod->source_list`を走査し、それぞれについて末尾にカンマを付けて`use->source->name`を出力する — `lsmod`が「Used by」の下に表示するのと同じ集合である。init関数を持つがexit関数を持たないモジュールには、さらに`[permanent],`が付加される。これは、強制削除でない限りそのモジュールのアンロードを拒否する`delete_module()`内の`if (mod->init && !mod->exit)`テストに対応する。何も出力されなかった場合は、`-`が1つ出力される。
+- **state**: `Live`、`Loading`（`MODULE_STATE_COMING`）、`Unloading`（`MODULE_STATE_GOING`）のいずれか。`MODULE_STATE_UNFORMED`のモジュールは完全にスキップされる。
+- **load address**: `mod->mem[MOD_TEXT].base` — 何らかの結合された「コアレイアウト」のベースではなく、モジュールのテキスト領域のベース。`kallsyms_show_value()`を満たさない読み手には、代わりに`0x0000000000000000`が見える。
 
-When `mod->taints` is non-zero a parenthesised flag suffix follows, e.g. `(OE)` for an out-of-tree unsigned module, with `+` appended while the module is loading and `-` while it is unloading.
+`mod->taints`が非ゼロの場合は、括弧付きのフラグ接尾辞が続く。たとえば、ツリー外の署名なしモジュールなら`(OE)`であり、モジュールのロード中は`+`、アンロード中は`-`が付加される。
 
-## Symbol versioning detail {#symbol-versioning-detail}
+## シンボルバージョニングの詳細 {#symbol-versioning-detail}
 
-There are two CRC generators. `scripts/genksyms/` is the original: it runs at kernel build time, parses the preprocessed C, and computes a CRC over the full type signature (recursively expanding struct and union layouts) of each exported symbol. Its C parser cannot see Rust, and cannot version a symbol whose type is only fully described in debug info, so `scripts/gendwarfksyms/` was added alongside it under `CONFIG_GENDWARFKSYMS`; it derives the same kind of CRC from DWARF rather than from source.
+CRCの生成器は2つある。`scripts/genksyms/`がオリジナルであり、カーネルのビルド時に実行され、プリプロセス済みのCを解析し、各エクスポートシンボルの完全な型シグネチャ（構造体と共用体のレイアウトを再帰的に展開したもの）に対してCRCを計算する。そのCパーサはRustを見ることができず、型がデバッグ情報でしか完全に記述されないシンボルをバージョン付けすることもできない。そこで`CONFIG_GENDWARFKSYMS`の下で`scripts/gendwarfksyms/`がそれと並んで追加された。こちらはソースではなくDWARFから同種のCRCを導出する。
 
-Either way the result lands in `Module.symvers`, which `modpost` writes from `write_dump()`:
+いずれにせよ結果は`Module.symvers`に入り、`modpost`が`write_dump()`からそれを書き出す:
 
 ```c
 buf_printf(&buf, "0x%08x\t%s\t%s\tEXPORT_SYMBOL%s\t%s\n",
@@ -535,60 +535,60 @@ buf_printf(&buf, "0x%08x\t%s\t%s\tEXPORT_SYMBOL%s\t%s\n",
            sym->namespace);
 ```
 
-Five tab-separated fields: CRC, symbol name, the providing module (`vmlinux` for built-ins), the export flavour, and the namespace. The namespace field is the empty string for symbols exported without one, so an unnamespaced line simply ends in a tab:
+タブ区切りの5つのフィールドは、CRC、シンボル名、提供するモジュール（組み込みなら`vmlinux`）、エクスポートの種類、名前空間である。名前空間なしでエクスポートされたシンボルでは名前空間フィールドは空文字列なので、名前空間のない行は単にタブで終わる:
 
 ```bash
 grep -w module_layout Module.symvers | cat -A
 # 0x1a2b3c4d^Imodule_layout^Ivmlinux^IEXPORT_SYMBOL^I$
 ```
 
-(`cat -A` renders tabs as `^I` and end-of-line as `$`; the CRC itself is specific to the build.)
+（`cat -A`はタブを`^I`、行末を`$`として表示する。CRC自体はビルドに固有の値である。）
 
-When building an out-of-tree module, `make` reads `Module.symvers` from `$(KDIR)` to embed the correct CRCs in the module's `__versions` (or `__version_ext_crcs`/`__version_ext_names`) section. Building against the wrong `Module.symvers` is the most common cause of version mismatch errors.
+ツリー外モジュールをビルドする際、`make`は`$(KDIR)`から`Module.symvers`を読み込み、正しいCRCをモジュールの`__versions`（または`__version_ext_crcs`/`__version_ext_names`）セクションに埋め込む。誤った`Module.symvers`に対してビルドすることが、バージョン不一致エラーの最も一般的な原因である。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — the loader core: `load_module()`, `simplify_symbols()`, `apply_relocations()`, `do_init_module()`, and the `init_module`/`finit_module` `SYSCALL_DEFINE`s
-- [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — `struct load_info`, the ELF-section cache threaded through every stage of a load
-- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()` and `same_magic()`: the `__versions` CRC comparison and the vermagic check, plus the newer extended-modversions path for long symbol names
-- [kernel/module/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/kallsyms.c) — `layout_symtab()` and `add_kallsyms()`: how a module's own symbol table is carried into its allocated memory and exposed through `/proc/kallsyms`
-- [kernel/module/procfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/procfs.c) — `m_show()`: the authoritative source for the `/proc/modules` field order, the `Live`/`Loading`/`Unloading` strings, and the `[permanent]` marker
-- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module`, `enum module_state`, `struct modversion_info`, and the `struct module_memory mem[]` array that holds each allocated section class
-- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()`/`EXPORT_SYMBOL_GPL()`: the `.export_symbol` entries that modpost turns into `__ksymtab`
-- [include/uapi/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/module.h) — the complete `finit_module()` flag set: `MODULE_INIT_IGNORE_MODVERSIONS`, `MODULE_INIT_IGNORE_VERMAGIC`, `MODULE_INIT_COMPRESSED_FILE`
-- [arch/x86/kernel/module.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/module.c) — `apply_relocate_add()`: the x86-64 `R_X86_64_*` switch that computes and writes each relocation
-- [scripts/genksyms/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/genksyms) — the `CONFIG_MODVERSIONS` CRC generator that produces the values recorded in `Module.symvers`
-- [`ac3b43283923`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ac3b43283923440900b4f36ca5f9f0b1ca43b70e) — "module: replace module_layout with module_memory" (Song Liu, 2023): the commit that split the old two-region core/init layout into the per-class `mod->mem[]` array
-- [`12af2b83d0b1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=12af2b83d0b17ec8b379b721dd4a8fbcd5d791f3) — "mm: introduce execmem_alloc() and execmem_free()" (Mike Rapoport, 2024): the allocator that module text and data are carved out of today
-- [`55fcb926b6d8`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=55fcb926b6d8b5cfb40873e4840a69961db1bb69) — "module: use kflagstab instead of *_gpl sections" (Siddharth Nayyar, 2026): GPL-only became a bit in a parallel `__kflagstab` section, so the loader no longer searches a separate `__ksymtab_gpl`
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — ローダーの中核: `load_module()`、`simplify_symbols()`、`apply_relocations()`、`do_init_module()`、および`init_module`/`finit_module`の`SYSCALL_DEFINE`
+- [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — `struct load_info`。ロードのすべての段階を通して受け渡されるELFセクションのキャッシュ
+- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()`と`same_magic()`: `__versions`のCRC比較とvermagicチェック、および長いシンボル名向けの新しい拡張modversionsのパス
+- [kernel/module/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/kallsyms.c) — `layout_symtab()`と`add_kallsyms()`: モジュール自身のシンボルテーブルが、割り当てられたメモリにどのように運ばれ、`/proc/kallsyms`を通して公開されるか
+- [kernel/module/procfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/procfs.c) — `m_show()`: `/proc/modules`のフィールド順序、`Live`/`Loading`/`Unloading`の文字列、`[permanent]`マーカーに関する権威あるソース
+- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module`、`enum module_state`、`struct modversion_info`、および割り当てられた各セクションクラスを保持する`struct module_memory mem[]`配列
+- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()`/`EXPORT_SYMBOL_GPL()`: modpostが`__ksymtab`に変換する`.export_symbol`エントリ
+- [include/uapi/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/module.h) — `finit_module()`のフラグの完全な集合: `MODULE_INIT_IGNORE_MODVERSIONS`、`MODULE_INIT_IGNORE_VERMAGIC`、`MODULE_INIT_COMPRESSED_FILE`
+- [arch/x86/kernel/module.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/module.c) — `apply_relocate_add()`: 各再配置を計算して書き込む、x86-64の`R_X86_64_*`のswitch
+- [scripts/genksyms/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/genksyms) — `Module.symvers`に記録される値を生成する、`CONFIG_MODVERSIONS`のCRC生成器
+- [`ac3b43283923`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=ac3b43283923440900b4f36ca5f9f0b1ca43b70e) — 「module: replace module_layout with module_memory」（Song Liu, 2023）: 古いcore/initの2領域レイアウトを、クラスごとの`mod->mem[]`配列に分割したコミット
+- [`12af2b83d0b1`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=12af2b83d0b17ec8b379b721dd4a8fbcd5d791f3) — 「mm: introduce execmem_alloc() and execmem_free()」（Mike Rapoport, 2024）: 現在モジュールのテキストとデータが切り出されるアロケータ
+- [`55fcb926b6d8`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=55fcb926b6d8b5cfb40873e4840a69961db1bb69) — 「module: use kflagstab instead of *_gpl sections」（Siddharth Nayyar, 2026）: GPL専用が並列する`__kflagstab`セクションの1ビットになり、ローダーは独立した`__ksymtab_gpl`を検索しなくなった
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — documents both syscalls in one page: the prototypes, the three `finit_module()` flags, and that `finit_module()` appeared in Linux 3.8
-- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — the unload side; states that the call fails with `EWOULDBLOCK` when other loaded modules refer to symbols defined in this one, and what `O_NONBLOCK`/`O_TRUNC` change
-- [`lsmod(8)`](https://man7.org/linux/man-pages/man8/lsmod.8.html) — "a trivial program which nicely formats the contents of the `/proc/modules`"; the userspace view of the file dissected above
-- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — determines "what symbols each module exports and needs" and writes the resulting graph to `modules.dep`, the input to dependency-ordered loading
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — the tool that consults `modules.dep`, which "lists what other modules each module needs (if any), and modprobe uses this to add or remove these dependencies automatically"; the man page does not name the syscall it ultimately issues, but kmod's implementation loads each `.ko` with `finit_module()`
+- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — 両方のシステムコールを1ページで説明している: プロトタイプ、`finit_module()`の3つのフラグ、そして`finit_module()`がLinux 3.8で登場したこと
+- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — アンロード側。他のロード済みモジュールがこのモジュールで定義されたシンボルを参照している場合に呼び出しが`EWOULDBLOCK`で失敗すること、および`O_NONBLOCK`/`O_TRUNC`が何を変えるかを述べている
+- [`lsmod(8)`](https://man7.org/linux/man-pages/man8/lsmod.8.html) — 「a trivial program which nicely formats the contents of the `/proc/modules`」（`/proc/modules`の内容をきれいに整形する単純なプログラム）。上で分解したファイルのユーザー空間からの見え方
+- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — 「what symbols each module exports and needs」（各モジュールがどのシンボルをエクスポートし、必要とするか）を判定し、結果のグラフを`modules.dep`に書き出す。依存関係順のロードの入力となる
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — `modules.dep`を参照するツール。`modules.dep`は「lists what other modules each module needs (if any), and modprobe uses this to add or remove these dependencies automatically」（各モジュールが必要とする他のモジュールを（あれば）列挙し、modprobeはこれを使ってそれらの依存関係を自動的に追加または削除する）。manページは最終的に発行するシステムコールを明記していないが、kmodの実装は各`.ko`を`finit_module()`でロードする
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Module Parameters, Symbols, and Kconfig](module-params.md) — `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`, the `has no CRC!` and `disagrees about version` symptoms, and `/proc/kallsyms`, from the module author's side
-- [Kernel Module Signing](module-signing.md) — `module_sig_check()`, which `load_module()` runs before it looks at a single ELF section
-- [Kbuild: The Kernel Build System](kbuild.md) — out-of-tree builds and cross-compilation, the build side that produces the `.ko` this walkthrough loads
-- [Writing and Loading Kernel Modules](module-basics.md) — the source-level view: `module_init`/`module_exit`, `__init` sections, and the `.ko` this page takes apart
-- [Module War Stories](war-stories.md) — CRC mismatches, taint cascades, and versioning surprises seen in production
+- [モジュールパラメータ、シンボル、Kconfig](module-params.md) — `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`、`has no CRC!`と`disagrees about version`の症状、`/proc/kallsyms`をモジュール作成者の側から
+- [カーネルモジュールの署名](module-signing.md) — `load_module()`がELFセクションを1つも見る前に実行する`module_sig_check()`
+- [Kbuild: カーネルビルドシステム](kbuild.md) — ツリー外ビルドとクロスコンパイル。このウォークスルーがロードする`.ko`を生成するビルド側
+- [カーネルモジュールの作成とロード](module-basics.md) — ソースレベルの視点: `module_init`/`module_exit`、`__init`セクション、そしてこのページが分解する`.ko`
+- [モジュールの事件簿](war-stories.md) — 本番環境で見られたCRCの不一致、taintの連鎖、バージョニングの意外な落とし穴
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Loading modules from file descriptors](https://lwn.net/Articles/519010/) — Michael Kerrisk, October 2012, on the proposal that became `finit_module()`; the driving motivation was letting the kernel reason about a module's *filesystem origin* (dm-verity-backed roots, LSMs reading signatures from extended attributes), not just its bytes
-- [The return of modversions](https://lwn.net/Articles/21393/) — January 2003; describes the mechanism step 8 above implements: one structure per imported symbol holding "the symbol name and its checksum", linked into a special section and discarded once the load succeeds
-- [A new version of modversions](https://lwn.net/Articles/986892/) — August 2024; why `genksyms`' C parser cannot version Rust code, and the `gendwarfksyms` replacement that derives CRCs from DWARF instead of source
-- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — June 2023; Mike Rapoport's case for taking executable-memory allocation away from the module loader, and the direct-map fragmentation that motivated it
-- [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — November 2024; how the loader's GPL-only enforcement worked as of the article's two-table `__ksymtab`/`__ksymtab_gpl` model (replaced by the single-table `__kflagstab` scheme described above in v7.1) and the proposal to restrict an export to a named set of modules
+- [Loading modules from file descriptors](https://lwn.net/Articles/519010/) — Michael Kerrisk、2012年10月。`finit_module()`となった提案について。主な動機は、モジュールのバイト列だけでなく、その*ファイルシステム上の出自*（dm-verityで裏付けられたルート、拡張属性から署名を読むLSM）をカーネルが判断できるようにすることだった
+- [The return of modversions](https://lwn.net/Articles/21393/) — 2003年1月。上のステップ8が実装している仕組みを説明している。インポートされるシンボルごとに「the symbol name and its checksum」（シンボル名とそのチェックサム）を保持する構造体が1つあり、特別なセクションにリンクされ、ロードが成功すると破棄される
+- [A new version of modversions](https://lwn.net/Articles/986892/) — 2024年8月。`genksyms`のCパーサがRustのコードをバージョン付けできない理由と、ソースではなくDWARFからCRCを導出する代替の`gendwarfksyms`
+- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — 2023年6月。実行可能メモリの割り当てをモジュールローダーから切り離すべきだというMike Rapoportの主張と、その動機となったダイレクトマップの断片化
+- [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — 2024年11月。記事の時点での2テーブル（`__ksymtab`/`__ksymtab_gpl`）モデルにおいて、ローダーのGPL専用の強制がどう機能していたか（v7.1で、上で説明した単一テーブルの`__kflagstab`方式に置き換えられた）、およびエクスポートを名前付きのモジュール集合に制限する提案
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — the upstream guide to out-of-tree builds, including "Symbols From the Kernel (vmlinux + modules)" and the `KBUILD_EXTRA_SYMBOLS` escape hatch for cross-module `Module.symvers`
-- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — the authoritative taint-flag table, including `F` ("module was force loaded"), `O` (out-of-tree module), and `E` (unsigned module)
+- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — ツリー外ビルドに関するアップストリームのガイド。「Symbols From the Kernel (vmlinux + modules)」や、モジュール間の`Module.symvers`のための抜け道である`KBUILD_EXTRA_SYMBOLS`を含む
+- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — 権威あるtaintフラグの表。`F`（「module was force loaded」、モジュールが強制ロードされた）、`O`（ツリー外モジュール）、`E`（署名なしモジュール）を含む

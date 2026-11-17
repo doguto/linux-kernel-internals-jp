@@ -1,10 +1,10 @@
-# Module War Stories {#module-war-stories}
+# モジュールの事件簿 {#module-war-stories}
 
-> ABI breaks, signing failures, taint cascades, and versioning surprises
+> ABIの破壊、署名の失敗、taintの連鎖、バージョニングの意外な落とし穴
 
-## 1. The CONFIG_MODVERSIONS CRC mismatch {#1-the-config_modversions-crc-mismatch}
+## 1. CONFIG_MODVERSIONSのCRC不一致 {#1-the-config_modversions-crc-mismatch}
 
-**Symptom:** Loading a freshly compiled driver on a vendor kernel failed immediately:
+**症状:** ベンダーカーネル上で、新しくコンパイルしたドライバのロードが即座に失敗した:
 
 ```
 insmod: ERROR: could not insert module mydriver.ko: Invalid module format
@@ -12,33 +12,33 @@ dmesg | tail -2
 # mydriver: disagrees about version of symbol module_layout
 ```
 
-**What happened:** The engineer had compiled the module against a vanilla upstream source tree of nominally the same version. The production servers ran a vendor kernel that had backported several patches from a later release cycle, one of which changed the layout of an internal struct that `module_layout` depends on. The vendor's `genksyms` computed a different CRC for `module_layout` than upstream's `genksyms` did, because the type signature traversal reached the modified struct.
+**何が起きたか:** エンジニアは、名目上は同じバージョンのバニラなアップストリームのソースツリーに対してモジュールをコンパイルしていた。本番サーバーで動いていたのはベンダーカーネルで、後のリリースサイクルからいくつかのパッチがバックポートされており、そのうちの1つが`module_layout`の依存する内部構造体のレイアウトを変更していた。型シグネチャの走査がその変更された構造体に到達するため、ベンダーの`genksyms`はアップストリームの`genksyms`とは異なる`module_layout`のCRCを計算した。
 
-From the kernel's perspective, the ABI had changed — and `module_layout` is the very first thing the loader checks. `load_module()` calls `early_mod_check()`, which calls `check_modstruct_version()` before anything else in the module image is used. That looks up the kernel's CRC for the `module_layout` anchor symbol, compares it against the module's `__versions` table, prints `disagrees about version of symbol module_layout`, and returns 0 — `check_version()` is a predicate, not an errno source. It is the caller that converts the failure: `early_mod_check()` returns `-ENOEXEC`, which is the `Invalid module format` that `insmod` reported.
+カーネルの視点からすると、ABIが変わっていたことになる — そして`module_layout`は、ローダーが真っ先にチェックするものである。`load_module()`は`early_mod_check()`を呼び出し、それがモジュールイメージ内の他の何かを使うより前に`check_modstruct_version()`を呼び出す。これは`module_layout`アンカーシンボルに対するカーネル側のCRCを検索し、モジュールの`__versions`テーブルと比較して、`disagrees about version of symbol module_layout`を出力し、0を返す — `check_version()`は述語であって、errnoの発生源ではない。失敗を変換するのは呼び出し側である。`early_mod_check()`が`-ENOEXEC`を返し、これが`insmod`の報告した`Invalid module format`である。
 
-It is worth being precise about which path fired, because there are two and they behave differently. Had an *ordinary* exported symbol mismatched instead, the module-struct check would have passed and the failure would have surfaced much later, during symbol resolution: `resolve_symbol()` turns a failed `check_version()` into `ERR_PTR(-EINVAL)`, and `simplify_symbols()` then prints `mydriver: Unknown symbol <name> (err -22)` — `-22` being `EINVAL`. No such line ever appears for `module_layout`, because `module_layout` is only ever an entry in the CRC table; the module contains no undefined ELF reference to it, so symbol resolution never sees it at all.
+どちらのパスが発火したのかを正確に把握しておく価値がある。パスは2つあり、それぞれ挙動が異なるからだ。もし代わりに*通常の*エクスポートシンボルが不一致だったなら、モジュール構造体のチェックは通過し、失敗はずっと後のシンボル解決の段階で表面化していただろう。`resolve_symbol()`は`check_version()`の失敗を`ERR_PTR(-EINVAL)`に変換し、続いて`simplify_symbols()`が`mydriver: Unknown symbol <name> (err -22)`を出力する — `-22`は`EINVAL`である。`module_layout`についてはそのような行は決して現れない。`module_layout`はCRCテーブルのエントリとしてしか存在せず、モジュールにはそれへの未定義ELF参照が含まれないので、シンボル解決はそれをまったく見ないからである。
 
-**Why it was hard to diagnose:** The build produced no warnings. The upstream headers declared the same prototypes the vendor's did, so nothing in the driver's own source looked wrong, and the struct that had actually changed was never named in it — the mismatch was through a transitive type dependency that `genksyms` tracks but humans rarely inspect. Worse, the number that ends up in a module's `__versions` section is not recomputed from the driver's source at all: `modpost` copies it out of the build tree's `Module.symvers`. The wrong CRC is baked in at build time, from the wrong tree, with nothing at build time to flag it.
+**診断が難しかった理由:** ビルドでは警告が一切出なかった。アップストリームのヘッダはベンダーのものと同じプロトタイプを宣言していたので、ドライバ自身のソースには何もおかしく見える箇所がなく、実際に変更された構造体はそこでは一度も名前が出てこなかった — 不一致は、`genksyms`は追跡するが人間はめったに調べない推移的な型依存を経由していた。さらに悪いことに、モジュールの`__versions`セクションに入る数値は、ドライバのソースから再計算されるわけではまったくない。`modpost`がビルドツリーの`Module.symvers`からそれをコピーする。誤ったCRCがビルド時に、誤ったツリーから焼き込まれ、ビルド時にはそれを指摘するものが何もない。
 
-**Fix:** Always build out-of-tree modules against the exact `Module.symvers` of the target kernel. Copy `Module.symvers` from the running kernel's build directory:
+**修正:** ツリー外モジュールは、常にターゲットカーネルの正確な`Module.symvers`に対してビルドすること。稼働中のカーネルのビルドディレクトリから`Module.symvers`をコピーする:
 
 ```bash
-# Use the vendor kernel's Module.symvers, not upstream's
+# アップストリームのものではなく、ベンダーカーネルの Module.symvers を使う
 cp /lib/modules/$(uname -r)/build/Module.symvers .
 
-# For modules that depend on other out-of-tree modules,
-# concatenate their Module.symvers files:
+# 他のツリー外モジュールに依存するモジュールの場合は、
+# それらの Module.symvers ファイルを連結する:
 export KBUILD_EXTRA_SYMBOLS="/path/to/dep1/Module.symvers /path/to/dep2/Module.symvers"
 make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 ```
 
-**Lesson:** CRC mismatches are not just about kernel versions. Vendors routinely backport patches that change exported ABIs without changing the kernel version string. `Module.symvers` is the ground truth; the kernel headers are not.
+**教訓:** CRCの不一致はカーネルバージョンだけの問題ではない。ベンダーは、カーネルのバージョン文字列を変えずに、エクスポートされたABIを変更するパッチを日常的にバックポートする。真実の拠り所は`Module.symvers`であり、カーネルヘッダではない。
 
 ---
 
-## 2. The module signing loop {#2-the-module-signing-loop}
+## 2. モジュール署名のループ {#2-the-module-signing-loop}
 
-**Symptom:** After a distribution switched to `CONFIG_MODULE_SIG_FORCE=y`, all unsigned third-party modules refused to load. An admin enrolled a custom signing key and signed the modules. Everything worked — until the next kernel update, when the modules again refused to load:
+**症状:** あるディストリビューションが`CONFIG_MODULE_SIG_FORCE=y`に切り替えた後、署名されていないサードパーティモジュールはすべてロードを拒否された。管理者はカスタム署名鍵を登録し、モジュールに署名した。すべて正常に動作した — 次のカーネル更新までは。更新後、モジュールは再びロードを拒否された:
 
 ```
 # After kernel update:
@@ -46,52 +46,52 @@ modprobe mydriver
 # modprobe: ERROR: could not insert 'mydriver': Key was rejected by service
 ```
 
-**What happened:** The admin had enrolled the public signing certificate the only way that worked on the first try: by rebuilding the distribution's kernel source package with the certificate added to `CONFIG_SYSTEM_TRUSTED_KEYS`, so it was compiled into that one kernel image. That worked, and it kept working for as long as that image stayed the default boot entry.
+**何が起きたか:** 管理者は、最初の試行でうまくいった唯一の方法で公開署名証明書を登録していた。ディストリビューションのカーネルソースパッケージを、証明書を`CONFIG_SYSTEM_TRUSTED_KEYS`に追加した状態で再ビルドし、その1つのカーネルイメージにコンパイルして組み込んだのである。それはうまくいき、そのイメージがデフォルトのブートエントリである限りは動作し続けた。
 
-Then the distribution shipped a kernel errata update. The package manager installed a *stock* distro kernel, which became the new default boot entry, and that image had only the distribution's own signing keys built in. The custom key was gone — it had never been anywhere but inside a single locally built vmlinuz.
+その後、ディストリビューションがカーネルのエラッタ更新を出荷した。パッケージマネージャは*標準の*ディストリビューションカーネルをインストールし、それが新しいデフォルトのブートエントリになった。そしてそのイメージには、ディストリビューション自身の署名鍵しか組み込まれていなかった。カスタム鍵は消えていた — それは最初から、ローカルでビルドされた1つのvmlinuzの中以外のどこにも存在していなかったのである。
 
-The modules were still signed with the admin's private key. Their signatures were valid. But the running kernel had no record of the corresponding public key and refused to verify the modules.
+モジュールは依然として管理者の秘密鍵で署名されていた。署名は有効だった。しかし稼働中のカーネルは対応する公開鍵の記録を持っておらず、モジュールの検証を拒否した。
 
-**Why it was hard to diagnose:** The modules' signatures had not changed. `modinfo mydriver.ko | grep sig` still showed a signature. The error `Key was rejected by service` pointed to the keyring, not the signature itself. The admin initially assumed the modules needed to be re-signed.
+**診断が難しかった理由:** モジュールの署名は変わっていなかった。`modinfo mydriver.ko | grep sig`は依然として署名を表示していた。`Key was rejected by service`というエラーは、署名そのものではなくキーリングを指していた。管理者は当初、モジュールの再署名が必要だと考えた。
 
-**Fix:** Enroll the public certificate in the UEFI MOK (Machine Owner Key) database, which persists in UEFI NVRAM and survives kernel updates — but enrolling it is only half the job, because *which* kernel keyring a MOK certificate lands in decides whether module signing can use it at all.
+**修正:** 公開証明書をUEFI MOK（Machine Owner Key）データベースに登録する。これはUEFI NVRAMに永続化され、カーネル更新後も残る — ただし登録は仕事の半分にすぎない。MOK証明書が*どの*カーネルキーリングに入るかによって、モジュール署名がそれを使えるかどうかがそもそも決まるからである。
 
-`mod_verify_sig()` in `kernel/module/signing.c` verifies module signatures with `VERIFY_USE_SECONDARY_KEYRING`. That resolves to `.secondary_trusted_keys`, which has `.builtin_trusted_keys` linked into it — and, if `CONFIG_INTEGRITY_MACHINE_KEYRING=y`, `.machine` as well (`set_machine_trusted_keys()` in `certs/system_keyring.c` does that `key_link()` at boot). The `.platform` keyring is a *different* trust store. Its Kconfig help text describes it as holding platform/firmware keys "for verifying the kexec'ed kerne[l] image and, possibly, the initramfs signature" (the upstream help text itself reads "kerned"); module signature verification never consults it. `CONFIG_INTEGRITY_MACHINE_KEYRING`'s own help text draws the same line explicitly: "Unlike keys in the platform keyring, keys contained in the .machine keyring will be trusted within the kernel."
+`kernel/module/signing.c`の`mod_verify_sig()`は、`VERIFY_USE_SECONDARY_KEYRING`でモジュール署名を検証する。これは`.secondary_trusted_keys`に解決され、そこには`.builtin_trusted_keys`がリンクされている — そして`CONFIG_INTEGRITY_MACHINE_KEYRING=y`であれば`.machine`もリンクされる（`certs/system_keyring.c`の`set_machine_trusted_keys()`がブート時にその`key_link()`を行う）。`.platform`キーリングは*別の*信頼ストアである。そのKconfigのヘルプテキストは、これをプラットフォーム/ファームウェアの鍵を保持するもので、「for verifying the kexec'ed kerne[l] image and, possibly, the initramfs signature」（kexecされたカーネルイメージ、および場合によってはinitramfsの署名の検証用）と説明している（アップストリームのヘルプテキスト自体は「kerned」となっている）。モジュール署名の検証はこれを決して参照しない。`CONFIG_INTEGRITY_MACHINE_KEYRING`自身のヘルプテキストも同じ線引きを明示している: 「Unlike keys in the platform keyring, keys contained in the .machine keyring will be trusted within the kernel.」（platformキーリングの鍵とは異なり、.machineキーリングに含まれる鍵はカーネル内で信頼される。）
 
-So on a kernel built without `CONFIG_INTEGRITY_MACHINE_KEYRING` (the option landed upstream in v5.18, commit `d19967764ba8`), MOK enrollment does nothing for module loading: the key is loaded into `.platform` and sits there unused. Check the running kernel's config before assuming the MOK route is available at all:
+したがって、`CONFIG_INTEGRITY_MACHINE_KEYRING`なしでビルドされたカーネル（このオプションはv5.18でアップストリームに入った。コミット`d19967764ba8`）では、MOKへの登録はモジュールのロードに対して何の効果もない。鍵は`.platform`にロードされ、使われないままそこに置かれる。MOKの経路がそもそも使えると想定する前に、稼働中のカーネルのconfigを確認すること:
 
 ```bash
-# Does this kernel admit MOK keys to a keyring module signing can reach?
+# このカーネルは、モジュール署名が到達できるキーリングに MOK 鍵を受け入れるか?
 grep CONFIG_INTEGRITY_MACHINE_KEYRING /boot/config-$(uname -r)
 # CONFIG_INTEGRITY_MACHINE_KEYRING=y
 
-# Import the public certificate into MOK
+# 公開証明書を MOK にインポートする
 sudo mokutil --import signing_key.der
-# (system prompts for a one-time enrollment password on next reboot)
+# (次回再起動時に、システムが一回限りの登録パスワードを求める)
 
-# On UEFI, the kernel only trusts MOK keys if the MokListTrustedRT variable
-# is present -- uefi_check_trust_mok_keys() in machine_keyring.c looks for it
+# UEFI では、MokListTrustedRT 変数が存在する場合にのみカーネルは MOK 鍵を信頼する
+# -- machine_keyring.c の uefi_check_trust_mok_keys() がこれを探す
 sudo mokutil --trust-mok
 
-# After rebooting and confirming both prompts in the MOK Manager UI:
+# 再起動して MOK Manager の UI で両方のプロンプトを確認した後:
 keyctl list %:.machine | grep "your key CN"
 
-# ...and confirm it is reachable from the keyring signatures are checked
-# against -- .machine is linked into this one
+# ...そして、署名の照合先となるキーリングから到達可能であることを確認する
+# -- .machine はこのキーリングにリンクされている
 keyctl list %:.secondary_trusted_keys
 
-# Sign the module
+# モジュールに署名する
 /usr/src/linux-headers-$(uname -r)/scripts/sign-file \
     sha256 signing_key.pem signing_key.der mydriver.ko
 ```
 
-**Lesson:** Kernel-image-embedded keys are per-kernel; MOK database keys are per-machine, so MOK is the right enrollment path for a key that has to survive kernel updates. But "enrolled" is not the same as "trusted for modules." A MOK certificate only reaches module signature verification through `.machine` → `.secondary_trusted_keys`, which requires `CONFIG_INTEGRITY_MACHINE_KEYRING` in the running kernel and, on UEFI, an explicit `mokutil --trust-mok`. Landing in `.platform` looks like success in `mokutil --list-enrolled` and changes nothing about whether a module loads.
+**教訓:** カーネルイメージに埋め込まれた鍵はカーネルごとであり、MOKデータベースの鍵はマシンごとである。したがって、カーネル更新後も残る必要がある鍵には、MOKが正しい登録経路である。しかし「登録済み」は「モジュールに対して信頼されている」と同じではない。MOK証明書がモジュール署名の検証に到達するのは`.machine` → `.secondary_trusted_keys`を経由する場合だけであり、それには稼働中のカーネルで`CONFIG_INTEGRITY_MACHINE_KEYRING`が有効であること、さらにUEFIでは明示的な`mokutil --trust-mok`が必要である。`.platform`に入った場合、`mokutil --list-enrolled`では成功したように見えるが、モジュールがロードされるかどうかについては何も変わらない。
 
 ---
 
-## 3. The taint cascade {#3-the-taint-cascade}
+## 3. taintの連鎖 {#3-the-taint-cascade}
 
-**Symptom:** A production database server crashed with a NULL pointer dereference in `blk_mq_complete_request()`. The kernel oops was filed as a bug report upstream. Kernel developers closed the report within hours asking for reproduction on an untainted kernel.
+**症状:** 本番のデータベースサーバーが、`blk_mq_complete_request()`でのNULLポインタ参照によりクラッシュした。カーネルのoopsはアップストリームにバグ報告として提出された。カーネル開発者は数時間以内に、taintされていないカーネルでの再現を求めてその報告をクローズした。
 
 ```
 BUG: kernel NULL pointer dereference, address: 0000000000000008
@@ -106,38 +106,38 @@ Tainted: P           OE
 # E = unsigned module loaded
 ```
 
-**What happened:** A proprietary GPU driver had been loaded for a monitoring tool that used CUDA for metric acceleration. The GPU driver was loaded at boot, used for approximately 30 seconds during initialization, and then the monitoring tool transitioned to CPU-only mode — but the module remained loaded.
+**何が起きたか:** メトリクスの高速化にCUDAを使う監視ツールのために、プロプライエタリなGPUドライバがロードされていた。GPUドライバはブート時にロードされ、初期化中のおよそ30秒間使われた後、監視ツールはCPUのみのモードに移行した — しかしモジュールはロードされたままだった。
 
-Three days later, a completely unrelated bug in the block layer caused the crash. The bug was real, reproducible, and not caused by the GPU driver. But the taint flag `P` was set and would not clear.
+3日後、ブロック層のまったく無関係なバグがクラッシュを引き起こした。そのバグは本物で、再現可能で、GPUドライバが原因ではなかった。しかしtaintフラグ`P`が立っており、それはクリアされなかった。
 
-**Why it matters:** Global taint flags live in a single file-scope `static unsigned long tainted_mask` in `kernel/panic.c`, reachable only through `add_taint(flag, lockdep_ok)`, which does a `set_bit()`, and `get_taint()`, which returns the whole word. Per-module taint is tracked separately in `struct module::taints`. Nothing in the kernel ever clears a bit in `tainted_mask` — `proc_taint()` will accept a write to `/proc/sys/kernel/tainted`, but its own comment states that taint values can only be increased, and it ORs the new bits in. Unloading the offending module does not help either. From the upstream developers' perspective, a tainted kernel cannot be used to confirm a clean bug report because they cannot rule out that the proprietary module corrupted kernel data structures during its 30-second run.
+**なぜ問題になるか:** グローバルなtaintフラグは、`kernel/panic.c`にあるファイルスコープの`static unsigned long tainted_mask`ただ1つに格納されており、`set_bit()`を行う`add_taint(flag, lockdep_ok)`と、ワード全体を返す`get_taint()`を通してしかアクセスできない。モジュールごとのtaintは`struct module::taints`で別途追跡される。カーネル内で`tainted_mask`のビットをクリアするものは何もない — `proc_taint()`は`/proc/sys/kernel/tainted`への書き込みを受け付けるが、そのコメント自体が、taint値は増やすことしかできないと述べており、新しいビットをORで加えるだけである。問題のモジュールをアンロードしても役に立たない。アップストリームの開発者の視点からすると、taintされたカーネルはクリーンなバグ報告の確認には使えない。プロプライエタリなモジュールが30秒間の実行中にカーネルのデータ構造を破壊した可能性を排除できないからである。
 
 ```bash
-# Check current taint flags
+# 現在の taint フラグを確認する
 cat /proc/sys/kernel/tainted
-# 12289  (P + O + E: proprietary, out-of-tree, and unsigned modules loaded --
+# 12289  (P + O + E: プロプライエタリ、ツリー外、署名なしのモジュールがロードされた --
 #         bit 0 + bit 12 + bit 13 = 1 + 4096 + 8192)
-# See Documentation/admin-guide/tainted-kernels.rst for bit definitions
+# ビットの定義は Documentation/admin-guide/tainted-kernels.rst を参照
 
-# Taint bit 0 (value 1): P — proprietary module loaded
-# Taint bit 1 (value 2): forced module load
-# Taint bit 12 (value 4096): O — out-of-tree module
-# Taint bit 13 (value 8192): E — unsigned module
+# taint ビット 0 (値 1): P — プロプライエタリなモジュールがロードされた
+# taint ビット 1 (値 2): モジュールの強制ロード
+# taint ビット 12 (値 4096): O — ツリー外モジュール
+# taint ビット 13 (値 8192): E — 署名なしモジュール
 ```
 
-**Fix:** There is no runtime fix — taint bits cannot be cleared without rebooting. For upstream bug reporting:
+**修正:** 実行時の修正方法はない — taintビットは再起動しなければクリアできない。アップストリームへのバグ報告のためには:
 
-1. Reproduce the bug on a kernel that has never loaded a proprietary or out-of-tree module in the current boot. Blacklisting the module on the kernel command line (`module_blacklist=nvidia`, the comma-separated list `blacklisted()` checks in `kernel/module/main.c`) and rebooting is the only reliable way to get there; `rmmod` after the fact does nothing, because unloading a module cannot clear a bit that `add_taint()` already set.
-2. If a proprietary module is required for the workload, file the bug with the hardware vendor.
-3. Build the reporting kernel with `CONFIG_MODULE_UNLOAD_TAINT_TRACKING=y`. It does not clear taint — nothing does — but it makes taint attributable: `kernel/module/tracking.c` keeps an `unloaded_tainted_modules` list, and `print_unloaded_tainted_modules()` appends an `Unloaded tainted modules:` line to the oops, naming each module that tainted the kernel and was subsequently unloaded. That turns "something tainted this kernel three days ago" into a specific module name, which is often enough for a maintainer to decide whether the report is still worth looking at.
+1. 現在のブートでプロプライエタリなモジュールやツリー外モジュールを一度もロードしていないカーネルでバグを再現する。カーネルコマンドラインでモジュールをブラックリストに入れ（`module_blacklist=nvidia`。`kernel/module/main.c`の`blacklisted()`がチェックするカンマ区切りのリスト）、再起動するのが、そこに到達する唯一の確実な方法である。事後の`rmmod`は何の効果もない。モジュールをアンロードしても、`add_taint()`がすでに立てたビットはクリアできないからである。
+2. ワークロードにプロプライエタリなモジュールが必要な場合は、ハードウェアベンダーにバグを報告する。
+3. 報告用のカーネルを`CONFIG_MODULE_UNLOAD_TAINT_TRACKING=y`でビルドする。これはtaintをクリアしない — クリアできるものは何もない — が、taintの原因を特定可能にする。`kernel/module/tracking.c`は`unloaded_tainted_modules`リストを保持し、`print_unloaded_tainted_modules()`がoopsに`Unloaded tainted modules:`行を追加して、カーネルをtaintした後にアンロードされた各モジュールの名前を示す。これにより「3日前に何かがこのカーネルをtaintした」が具体的なモジュール名になり、メンテナがその報告をまだ調べる価値があるかどうかを判断するには、多くの場合それで十分である。
 
-**Lesson:** Taint is a session-level flag. Even a brief load of a proprietary module taints the kernel for the rest of its uptime. Production kernels used for upstream bug reporting should have a policy of never loading proprietary modules.
+**教訓:** taintはセッションレベルのフラグである。プロプライエタリなモジュールをほんの短時間ロードしただけでも、カーネルは稼働時間の残り全体にわたってtaintされる。アップストリームへのバグ報告に使う本番カーネルでは、プロプライエタリなモジュールを決してロードしないというポリシーを持つべきである。
 
 ---
 
-## 4. The init section use-after-free {#4-the-init-section-use-after-free}
+## 4. initセクションのuse-after-free {#4-the-init-section-use-after-free}
 
-**Symptom:** An embedded system ran stably for days, then crashed with a call trace pointing into unmapped memory. The crash address was different on each occurrence, and it only manifested under moderate I/O load. KASAN was not enabled in production.
+**症状:** ある組み込みシステムは何日も安定して動作した後、マップされていないメモリを指すコールトレースを出してクラッシュした。クラッシュアドレスは発生のたびに異なり、中程度のI/O負荷の下でしか現れなかった。本番ではKASANは有効になっていなかった。
 
 ```
 BUG: unable to handle kernel paging request at ffffffffc03a8120
@@ -147,19 +147,19 @@ Call Trace:
   [<ffffffffc0401f30>] my_device_event_handler+0x28/0x50 [mydriver]
 ```
 
-**What happened:** During `probe()`, the driver stored a function pointer in a persistent callback structure:
+**何が起きたか:** `probe()`の間に、ドライバは永続的なコールバック構造体に関数ポインタを格納していた:
 
 ```c
 static void __init mydriver_init_error_handler(struct my_device *dev)
 {
-    /* handles errors that can only occur during initialization */
+    /* 初期化中にしか発生し得ないエラーを処理する */
 }
 
 static int __init mydriver_probe(struct platform_device *pdev)
 {
     struct my_device *dev = /* ... */;
 
-    /* BUG: __init function pointer stored in persistent structure */
+    /* バグ: __init 関数のポインタを永続的な構造体に格納している */
     dev->error_handler = mydriver_init_error_handler;
 
     platform_set_drvdata(pdev, dev);
@@ -171,43 +171,43 @@ static struct platform_driver mydriver_driver = {
     .driver = { .name = "mydriver" },
 };
 
-/* Note: no .probe field. platform_driver_probe() takes the probe function
- * as a separate argument precisely so that it may live in __init. */
+/* 注: .probe フィールドはない。platform_driver_probe() は probe 関数を
+ * 別の引数として受け取る。まさにそれを __init に置けるようにするためである。 */
 module_platform_driver_probe(mydriver_driver, mydriver_probe);
 ```
 
-`mydriver_init_error_handler` was marked `__init`, so it lived in the `.init.text` section. For modules, the init section is freed via `do_free_init()` (a work item) immediately after **that specific module's** `mod->init()` returns successfully — not after all initcalls complete. The function pointer in `dev->error_handler` now pointed to memory the module no longer owned.
+`mydriver_init_error_handler`は`__init`とマークされていたので、`.init.text`セクションに置かれていた。モジュールの場合、initセクションは**その特定のモジュールの**`mod->init()`が正常に戻った直後に`do_free_init()`（ワークアイテム）を介して解放される — すべてのinitcallが完了した後ではない。`dev->error_handler`の関数ポインタは、もはやモジュールが所有していないメモリを指すことになった。
 
-When a device event triggered `dev->error_handler`, the CPU jumped to an address that was no longer this driver's code.
+デバイスイベントが`dev->error_handler`を起動したとき、CPUはもはやこのドライバのコードではないアドレスへジャンプした。
 
-**Why the build was silent:** `scripts/mod/modpost.c` runs `check_section_mismatch()` on every relocation at every build, and its first rule — `fromsec = { TEXT_SECTIONS, DATA_SECTIONS }`, `bad_tosec = { ALL_INIT_SECTIONS, ... }` — exists to catch exactly this. It did not fire, for two reasons that both happen to hold here. First, the offending store lives inside `mydriver_probe()`, which is itself `__init`; the relocation is `.init.text` → `.init.text`, and no rule forbids init code from referencing init code. Second, the usual way an `__init` probe *does* get caught — a `struct platform_driver` in `.data` with `.probe` pointing at `.init.text`, which is a `DATA_SECTIONS` → `ALL_INIT_SECTIONS` mismatch, and is not covered by `secref_whitelist()`'s `*_ops`/`*_console` exemptions — was sidestepped by registering through `platform_driver_probe()`, whose header comment says it exists so "probe() and its support may live in `__init` sections, conserving runtime memory." The driver used the officially blessed pattern for an `__init` probe and then violated the one invariant that pattern depends on: that nothing survives the probe holding a pointer into it.
+**なぜビルドは何も言わなかったか:** `scripts/mod/modpost.c`は、毎回のビルドですべての再配置に対して`check_section_mismatch()`を実行し、その最初のルール — `fromsec = { TEXT_SECTIONS, DATA_SECTIONS }`、`bad_tosec = { ALL_INIT_SECTIONS, ... }` — はまさにこれを捕捉するために存在する。それが発火しなかったのには2つの理由があり、ここではたまたまその両方が成り立っていた。第一に、問題の格納は`mydriver_probe()`の中にあり、それ自体が`__init`である。再配置は`.init.text` → `.init.text`であり、initコードがinitコードを参照することを禁じるルールはない。第二に、`__init`なprobeが*実際に*捕捉される通常の経路 — `.data`内の`struct platform_driver`の`.probe`が`.init.text`を指しているという、`DATA_SECTIONS` → `ALL_INIT_SECTIONS`の不一致であり、`secref_whitelist()`の`*_ops`/`*_console`の除外にも該当しないもの — は、`platform_driver_probe()`を通して登録することで回避されていた。その関数のヘッダコメントには、これは「probe() and its support may live in `__init` sections, conserving runtime memory.」（probe()とその補助コードを`__init`セクションに置き、実行時のメモリを節約できるようにする）ために存在すると書かれている。ドライバは`__init`なprobeのための公式に認められたパターンを使い、そのうえでそのパターンが依存する唯一の不変条件 — probeの後に、その中を指すポインタを保持したまま生き残るものは何もない — に違反したのである。
 
-**Why it was intermittent:** `do_free_init()` calls `execmem_free()`, and what that does depends on the kernel. Without `CONFIG_ARCH_HAS_EXECMEM_ROX`, `execmem_cache_free()` declines and `execmem_free()` falls through to `vfree()` — the range is unmapped, and a jump into it is an immediate, deterministic page fault, which is the trace above. On x86-64 with `CONFIG_ARCH_HAS_EXECMEM_ROX=y` the range instead goes back to the execmem ROX cache: `__execmem_cache_free()` fills it with trapping instructions (`INT3` on x86) and leaves it **mapped**, ready to be handed to the next module that needs executable memory. That makes the modern failure mode strictly less predictable, not more. If nothing has reused the range yet, the call lands on `INT3` and traps; if a later `insmod` has already been given that range, the call lands in the middle of an unrelated module's code and does whatever those bytes do. So the crash signature depends on what else the machine has loaded since — which is precisely why this bug hid for days and never reproduced the same way twice.
+**なぜ断続的だったか:** `do_free_init()`は`execmem_free()`を呼び出し、それが何をするかはカーネルによって異なる。`CONFIG_ARCH_HAS_EXECMEM_ROX`がなければ、`execmem_cache_free()`は処理を辞退し、`execmem_free()`は`vfree()`にフォールスルーする — その範囲はアンマップされ、そこへのジャンプは即座に、決定論的にページフォールトを起こす。上のトレースがそれである。`CONFIG_ARCH_HAS_EXECMEM_ROX=y`のx86-64では、その範囲は代わりにexecmemのROXキャッシュに戻される。`__execmem_cache_free()`はその範囲をトラップ命令（x86では`INT3`）で埋め、**マップされたまま**にして、次に実行可能メモリを必要とするモジュールに渡せるようにしておく。これにより、現代の失敗モードは予測しやすくなるどころか、厳密に予測しにくくなる。まだ誰もその範囲を再利用していなければ、呼び出しは`INT3`に着地してトラップする。後の`insmod`がすでにその範囲を受け取っていれば、呼び出しは無関係なモジュールのコードの途中に着地し、そのバイト列が行うことを何でも行う。つまりクラッシュのシグネチャは、その後マシンが他に何をロードしたかに依存する — これこそが、このバグが何日も隠れ、二度と同じ形で再現しなかった理由である。
 
-**Fix:** Never store pointers to `__init` functions in structures that outlive the init phase. Either remove the `__init` annotation from functions that may be called after init, or restructure the code so that the persistent callback points to a non-init function:
+**修正:** `__init`関数へのポインタを、init段階より長く生きる構造体に決して格納しないこと。init後に呼ばれる可能性のある関数から`__init`アノテーションを取り除くか、永続的なコールバックが非init関数を指すようにコードを再構成する:
 
 ```c
-/* Option 1: remove __init — function is kept after init */
+/* 選択肢1: __init を取り除く — 関数は init 後も保持される */
 static void mydriver_error_handler(struct my_device *dev) { /* ... */ }
 
-/* Option 2: use a non-__init wrapper that checks state */
+/* 選択肢2: 状態をチェックする非 __init のラッパーを使う */
 static void mydriver_error_handler(struct my_device *dev)
 {
     if (dev->init_complete)
-        return;  /* silently ignore post-init errors */
-    /* handle init-phase error */
+        return;  /* init 後のエラーは黙って無視する */
+    /* init 段階のエラーを処理する */
 }
 ```
 
-The build-time net for this class of bug is `modpost`, not sparse — sparse has no notion of `__init` or of ELF sections, so `make C=1` will never say a word about it. `check_section_mismatch()` runs during the MODPOST stage of every build, with no extra flag required, and catches any relocation from ordinary text or data into `.init.*`. What it cannot catch is a *runtime* store of an init pointer made from init context, as here: the relocation modpost sees is init-to-init, which is legal. Those need runtime analysis — KASAN, or code review that treats "does this pointer outlive probe?" as a question worth asking every time.
+この種のバグに対するビルド時のセーフティネットは`modpost`であり、sparseではない — sparseには`__init`やELFセクションという概念がないので、`make C=1`はこれについて一言も発しない。`check_section_mismatch()`は追加のフラグなしに毎回のビルドのMODPOST段階で実行され、通常のテキストやデータから`.init.*`への再配置をすべて捕捉する。捕捉できないのは、今回のように、initコンテキストから行われるinitポインタの*実行時の*格納である。modpostが見る再配置はinitからinitへのものであり、これは正当だからだ。そうしたものには実行時の解析が必要である — KASAN、あるいは「このポインタはprobeより長く生きるか?」を毎回問う価値のある問いとして扱うコードレビューである。
 
-**Lesson:** `__init` is a strong promise — the memory *will* be freed. Any pointer to an `__init` function that escapes into a persistent data structure is a time-delayed use-after-free.
+**教訓:** `__init`は強い約束である — そのメモリは*必ず*解放される。永続的なデータ構造に漏れ出した`__init`関数へのポインタはすべて、時間差のuse-after-freeである。
 
 ---
 
-## 5. The negative ring size {#5-the-negative-ring-size}
+## 5. 負のリングサイズ {#5-the-negative-ring-size}
 
-**Symptom:** A NIC driver crashed with a NULL-pointer dereference immediately at `insmod` time, but only on servers where an automation script had passed a non-default RX ring size. Every affected server hit it identically, at the same point in boot, on the first attempt.
+**症状:** あるNICドライバが`insmod`の時点で即座にNULLポインタ参照によりクラッシュした。ただしそれは、自動化スクリプトがデフォルト以外のRXリングサイズを渡したサーバーでのみ起きた。影響を受けたすべてのサーバーが、ブートの同じ時点で、最初の試行で、まったく同じようにクラッシュした。
 
 ```
 insmod mydriver.ko rx_ring_size=-1
@@ -218,7 +218,7 @@ dmesg | tail -4
 # BUG: kernel NULL pointer dereference, address: 0000000000000018
 ```
 
-**What happened:** The module parameter was declared as a signed `int`, and validated with an upper bound only:
+**何が起きたか:** モジュールパラメータは符号付きの`int`として宣言され、上限のみで検証されていた:
 
 ```c
 static int rx_ring_size = 256;
@@ -231,31 +231,31 @@ static int __init mydriver_init(void)
         pr_err("rx_ring_size too large\n");
         return -EINVAL;
     }
-    /* BUG: no lower-bound check */
+    /* バグ: 下限のチェックがない */
     pr_info("allocating RX ring\n");
     ring = dma_alloc_coherent(dev, rx_ring_size * sizeof(struct rx_desc),
                                &dma_handle, GFP_KERNEL);
-    ring[0].status = 0;   /* BUG: no NULL check either */
+    ring[0].status = 0;   /* バグ: NULL チェックもない */
     ...
 }
 ```
 
-An automation script deploying the driver had a template bug and passed `rx_ring_size=-1` on one class of servers. `kstrtoint()` (the parser `param_set_int()` uses) has no concept that this particular `int` is logically a count — it accepts any value that fits in a signed 32-bit integer, and `-1` fits. The `if (rx_ring_size > 4096)` check also accepts it: `-1 > 4096` is false in signed comparison, so the only validation the driver had let it straight through.
+ドライバをデプロイする自動化スクリプトにはテンプレートのバグがあり、ある種類のサーバーで`rx_ring_size=-1`を渡していた。`kstrtoint()`（`param_set_int()`が使うパーサ）は、この特定の`int`が論理的には個数であるという概念を持たない — 符号付き32ビット整数に収まる任意の値を受け付け、`-1`は収まる。`if (rx_ring_size > 4096)`のチェックもこれを受け付ける。符号付き比較では`-1 > 4096`は偽なので、ドライバが持っていた唯一の検証はそれをそのまま通してしまった。
 
-The allocation size is where it turned dangerous. `rx_ring_size * sizeof(struct rx_desc)` multiplies a **signed** `int` by an **unsigned** `size_t`. C's usual arithmetic conversions convert the `int` operand to `size_t` before the multiply — `-1` as a 32-bit int sign-extends to a 64-bit `-1` and is then reinterpreted as unsigned, becoming `0xFFFFFFFFFFFFFFFF` (`SIZE_MAX` on a 64-bit build). Multiplying that by `sizeof(struct rx_desc)` does **not** wrap to something small: the product is exactly `SIZE_MAX + 1 - |rx_ring_size| * sizeof(struct rx_desc)` — 16 bytes short of `SIZE_MAX` for this incident's `-1` and a 16-byte descriptor, and still within tens of gigabytes of `SIZE_MAX` even for a wildly larger negative value like `INT_MIN`. There is no struct-size or compiler variation that turns this into an undersized allocation — it is always astronomically, not modestly, oversized.
+危険になったのは割り当てサイズの段階である。`rx_ring_size * sizeof(struct rx_desc)`は、**符号付き**の`int`と**符号なし**の`size_t`を乗算する。Cの通常の算術変換により、乗算の前に`int`オペランドは`size_t`に変換される — 32ビットintの`-1`は64ビットの`-1`に符号拡張され、その後符号なしとして再解釈されて`0xFFFFFFFFFFFFFFFF`（64ビットビルドでの`SIZE_MAX`）になる。それに`sizeof(struct rx_desc)`を掛けても、小さな値に**ラップアラウンドはしない**。積は正確に`SIZE_MAX + 1 - |rx_ring_size| * sizeof(struct rx_desc)`である — このインシデントの`-1`と16バイトのディスクリプタでは`SIZE_MAX`より16バイト小さいだけであり、`INT_MIN`のような桁違いに大きな負の値であっても、`SIZE_MAX`から数十GB以内に収まる。構造体のサイズやコンパイラの違いによってこれが小さすぎる割り当てになることはない — 常に、ほどほどではなく天文学的に大きすぎるのである。
 
-What actually happens downstream depends on which DMA path the NIC uses, but ends the same way either time. On these servers `dma_alloc_coherent()` used the direct-DMA path: `PAGE_ALIGN()` on a value that close to `SIZE_MAX` overflows and wraps to `0`, and the resulting page order is computed at `BITS_PER_LONG - PAGE_SHIFT` — comfortably past `MAX_PAGE_ORDER`. The page allocator's own sanity check catches that and refuses the allocation outright, logging a `WARNING` and returning `NULL`. (A server with the NIC behind an IOMMU translation domain instead takes `iommu_dma_alloc()`, which computes a zero page count from the same wrapped size and fails via a different route — no `mm/page_alloc.c` warning, but the same `NULL` result.) Either way it's deterministic: every server that loads this driver with `rx_ring_size=-1` gets `NULL`, on the first call, every time.
+その先で実際に何が起きるかはNICがどのDMAパスを使うかによるが、どちらの場合も結末は同じである。これらのサーバーでは`dma_alloc_coherent()`はダイレクトDMAパスを使っていた。`SIZE_MAX`にこれほど近い値に対する`PAGE_ALIGN()`はオーバーフローして`0`にラップし、その結果のページオーダーは`BITS_PER_LONG - PAGE_SHIFT`として計算される — `MAX_PAGE_ORDER`を優に超える値である。ページアロケータ自身のサニティチェックがそれを捕捉して割り当てを即座に拒否し、`WARNING`をログに出して`NULL`を返す。（NICがIOMMUの変換ドメインの背後にあるサーバーでは代わりに`iommu_dma_alloc()`を通り、同じラップしたサイズからページ数0を計算して別の経路で失敗する — `mm/page_alloc.c`の警告は出ないが、結果は同じ`NULL`である。）いずれにせよこれは決定論的である。このドライバを`rx_ring_size=-1`でロードするすべてのサーバーが、最初の呼び出しで、毎回`NULL`を受け取る。
 
-The crash comes from what the driver does next: nothing. `ring[0].status = 0` dereferences the `NULL` `dma_alloc_coherent()` just returned, faulting immediately.
+クラッシュは、ドライバがその次に行うこと、つまり何もしないことから生じる。`ring[0].status = 0`は`dma_alloc_coherent()`が返したばかりの`NULL`を参照し、即座にフォールトする。
 
-**Why it was not caught earlier:** The driver worked correctly for every positive value up to 4096; the missing lower bound was invisible in code review because nobody tried a negative RX ring size by hand, and the missing NULL check on the allocation was invisible because `dma_alloc_coherent()` essentially never fails for the small, valid sizes the driver was tested with. Two independent, unrelated omissions — no lower bound, no failure check — had to combine before either one mattered.
+**なぜもっと早く捕捉されなかったか:** ドライバは4096までのすべての正の値で正しく動作していた。下限の欠如は、誰も手で負のRXリングサイズを試さなかったのでコードレビューでは見えなかった。また、割り当ての NULL チェックの欠如は、ドライバのテストに使われた小さく正当なサイズでは`dma_alloc_coherent()`が事実上決して失敗しないので見えなかった。互いに無関係な2つの独立した見落とし — 下限がないこと、失敗チェックがないこと — が組み合わさって初めて、どちらかが問題になったのである。
 
-**Fix:** Use the correct parameter type, validate both bounds, and check the allocation:
+**修正:** 正しいパラメータ型を使い、両方の境界を検証し、割り当てをチェックする:
 
 ```c
 static unsigned int rx_ring_size = 256;
 
-/* Use uint, not int, for a value that is logically a count */
+/* 論理的に個数である値には、int ではなく uint を使う */
 module_param(rx_ring_size, uint, 0644);
 MODULE_PARM_DESC(rx_ring_size, "Number of RX descriptors (64-4096)");
 
@@ -273,67 +273,67 @@ static int __init mydriver_init(void)
 }
 ```
 
-Switching to `unsigned int` would, by itself, have caught this specific mistake: `kstrtouint()` rejects a leading `-` outright, so `rx_ring_size=-1` would have failed to parse at `insmod` time with `-EINVAL`, well before the driver ever ran. It is not a complete fix on its own, though — `kstrtouint()` still accepts `4294967295`, an equally nonsensical ring size that no type change alone rejects — so the explicit range check still matters. For parameters that must be validated on runtime writes via sysfs as well, use `module_param_cb()` with a custom `set` function that enforces the same range on every write, not just at load time.
+`unsigned int`への切り替えだけでも、この特定のミスは捕捉できていただろう。`kstrtouint()`は先頭の`-`を即座に拒否するので、`rx_ring_size=-1`は`insmod`の時点で`-EINVAL`としてパースに失敗し、ドライバが実行されるよりずっと前に止まっていたはずである。ただし、それだけでは完全な修正ではない — `kstrtouint()`は依然として`4294967295`を受け付ける。これも同様に無意味なリングサイズであり、型の変更だけでは拒否できない — ので、明示的な範囲チェックはやはり重要である。sysfs経由の実行時の書き込みでも検証が必要なパラメータについては、ロード時だけでなくすべての書き込みで同じ範囲を強制するカスタムの`set`関数を持つ`module_param_cb()`を使うこと。
 
-**Lesson:** A signed parameter with only an upper-bound check lets every negative value through, and mixed signed/unsigned arithmetic in a size calculation turns a negative count into a value near `SIZE_MAX` rather than a small one — allocators are built to reject that cleanly, not silently accept it, so the practical risk is a `NULL` return, not a wraparound overflow. The bug that actually reaches hardware is almost always the second, unrelated mistake: not checking the allocation for failure. Validate both bounds of a count-like parameter, prefer an unsigned type as a second line of defense, and never skip the NULL check on an allocation whose size an attacker or a bad config might influence.
+**教訓:** 上限チェックしかない符号付きパラメータは、あらゆる負の値を通してしまう。そしてサイズ計算における符号付き/符号なしの混在算術は、負の個数を小さな値ではなく`SIZE_MAX`近くの値に変える — アロケータはそれを黙って受け入れるのではなく、きれいに拒否するように作られているので、実際のリスクはラップアラウンドによるオーバーフローではなく`NULL`の返却である。実際にハードウェアまで届くバグは、ほとんど常に2つ目の、無関係なミス、つまり割り当ての失敗をチェックしないことである。個数のようなパラメータは両方の境界を検証し、第二の防御線として符号なし型を優先し、攻撃者や誤った設定がサイズに影響し得る割り当てでは決してNULLチェックを省略しないこと。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()` and its `"disagrees about version of symbol"` warning, plus `check_modstruct_version()`, which looks up the CRC of the `module_layout` anchor symbol before anything else in the module is touched, behind Case 1
-- [scripts/genksyms/genksyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/genksyms/genksyms.c) — the parser that expands an exported symbol's full type definition, including nested structs, into the CRC that Case 1's vendor and upstream builds disagreed about
-- [scripts/mod/modpost.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/mod/modpost.c) — `sym_add_unresolved("module_layout", ...)` and `add_versions()`, which build the module's `__versions` CRC table from `Module.symvers` (Case 1), and `check_section_mismatch()` with its `ALL_INIT_SECTIONS` rules, the build-time check that flags non-init references into `.init.*` (Case 4)
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `resolve_symbol()`, which fails a symbol whose `check_version()` disagrees, and `do_init_module()`/`do_free_init()`, which release a module's `.init.text` right after *that* module's init function returns, behind Cases 1 and 4
-- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — `__init` expanding to `__section(".init.text")`, the annotation whose memory Case 4's driver kept a live pointer into
-- [mm/execmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/execmem.c) — `execmem_free()`, the call `do_free_init()` uses to hand module init text back, and the ROX cache that decides whether the range is unmapped or recycled, behind Case 4
-- [kernel/module/signing.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/signing.c) — `mod_verify_sig()`, which verifies module signatures with `VERIFY_USE_SECONDARY_KEYRING`, and the `sig_enforce` parameter behind `CONFIG_MODULE_SIG_FORCE`, in Case 2
-- [certs/system_keyring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/certs/system_keyring.c) — the `.builtin_trusted_keys`, `.secondary_trusted_keys`, `.machine`, and `.platform` keyrings; module signatures are checked against the secondary keyring chain, which is what Case 2's enrolled key has to reach
-- [security/integrity/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/integrity/Kconfig) — `CONFIG_INTEGRITY_MACHINE_KEYRING`, the option that admits Machine Owner Keys to the `.machine` keyring; its help text spells out that, unlike platform-keyring keys, `.machine` keys are trusted within the kernel — the distinction Case 2's fix depends on
-- [scripts/sign-file.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/sign-file.c) — the `sign-file` tool invoked in Case 2's fix
-- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — the `tainted_mask` bitmask with `add_taint()`/`get_taint()`, and `proc_taint()`, whose "Taint values can only be increased" comment is why Case 3's taint never clears
-- [include/linux/panic.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/panic.h) — the `TAINT_PROPRIETARY_MODULE` (0), `TAINT_FORCED_MODULE` (1), `TAINT_OOT_MODULE` (12), and `TAINT_UNSIGNED_MODULE` (13) bit numbers quoted in Case 3
-- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module`'s `taints` field, commented "same bits as kernel:taint_flags", the per-module taint record in Case 3
-- [kernel/module/tracking.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/tracking.c) — the `unloaded_tainted_modules` list, which preserves the identity of tainting modules that have already been unloaded, the closest thing to a remedy for Case 3
-- [kernel/params.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/params.c) — `STANDARD_PARAM_DEF(int, int, "%i", kstrtoint)`, which is all `param_set_int()` is: it validates only that the value fits in a signed `int`, with no notion that a given `int` parameter is logically non-negative, behind Case 5
-- [lib/kstrtox.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/kstrtox.c) — `kstrtoint()`, which accepts any in-range signed value including negative ones, the reason `rx_ring_size=-1` parses cleanly in Case 5
-- [kernel/dma/direct.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.c) — `dma_direct_alloc()`'s `size = PAGE_ALIGN(size)`, the overflow point behind Case 5's oversized allocation
-- [include/asm-generic/getorder.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/getorder.h) — `get_order()`, which returns `BITS_PER_LONG - PAGE_SHIFT` for the size-wrapped-to-zero value in Case 5
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — the `WARN_ON_ONCE_GFP(order > MAX_PAGE_ORDER, gfp)` guard that Case 5's allocation request actually hits, and the `NULL` it returns
+- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()`とその`"disagrees about version of symbol"`警告、およびモジュール内の他の何かに触れる前に`module_layout`アンカーシンボルのCRCを検索する`check_modstruct_version()`。事例1の背景
+- [scripts/genksyms/genksyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/genksyms/genksyms.c) — エクスポートシンボルの完全な型定義を、ネストした構造体も含めて展開し、CRCにするパーサ。事例1のベンダービルドとアップストリームビルドで食い違ったCRCである
+- [scripts/mod/modpost.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/mod/modpost.c) — `Module.symvers`からモジュールの`__versions` CRCテーブルを構築する`sym_add_unresolved("module_layout", ...)`と`add_versions()`（事例1）、および非initから`.init.*`への参照を指摘するビルド時チェックである、`ALL_INIT_SECTIONS`ルールを持つ`check_section_mismatch()`（事例4）
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `check_version()`が不一致を示したシンボルを失敗させる`resolve_symbol()`と、*その*モジュールのinit関数が戻った直後にモジュールの`.init.text`を解放する`do_init_module()`/`do_free_init()`。事例1と事例4の背景
+- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — `__section(".init.text")`に展開される`__init`。事例4のドライバが、そのメモリへの生きたポインタを保持し続けたアノテーションである
+- [mm/execmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/execmem.c) — `do_free_init()`がモジュールのinitテキストを返却するのに使う`execmem_free()`と、その範囲がアンマップされるか再利用されるかを決めるROXキャッシュ。事例4の背景
+- [kernel/module/signing.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/signing.c) — `VERIFY_USE_SECONDARY_KEYRING`でモジュール署名を検証する`mod_verify_sig()`と、`CONFIG_MODULE_SIG_FORCE`の背後にある`sig_enforce`パラメータ。事例2
+- [certs/system_keyring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/certs/system_keyring.c) — `.builtin_trusted_keys`、`.secondary_trusted_keys`、`.machine`、`.platform`の各キーリング。モジュール署名はセカンダリキーリングのチェーンに対して検証され、事例2で登録した鍵が到達しなければならないのはそこである
+- [security/integrity/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/integrity/Kconfig) — Machine Owner Keyを`.machine`キーリングに受け入れるオプション`CONFIG_INTEGRITY_MACHINE_KEYRING`。そのヘルプテキストは、platformキーリングの鍵とは異なり`.machine`の鍵はカーネル内で信頼されると明記している — 事例2の修正が依拠する区別である
+- [scripts/sign-file.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/sign-file.c) — 事例2の修正で呼び出される`sign-file`ツール
+- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `add_taint()`/`get_taint()`を伴う`tainted_mask`ビットマスクと、`proc_taint()`。その「Taint values can only be increased」というコメントが、事例3のtaintが決してクリアされない理由である
+- [include/linux/panic.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/panic.h) — 事例3で引用した`TAINT_PROPRIETARY_MODULE`（0）、`TAINT_FORCED_MODULE`（1）、`TAINT_OOT_MODULE`（12）、`TAINT_UNSIGNED_MODULE`（13）のビット番号
+- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — 「same bits as kernel:taint_flags」とコメントされた`struct module`の`taints`フィールド。事例3におけるモジュールごとのtaintの記録
+- [kernel/module/tracking.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/tracking.c) — すでにアンロードされたtaint元モジュールの識別情報を保存する`unloaded_tainted_modules`リスト。事例3に対する救済策に最も近いもの
+- [kernel/params.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/params.c) — `STANDARD_PARAM_DEF(int, int, "%i", kstrtoint)`。`param_set_int()`の実体はこれだけであり、値が符号付き`int`に収まることしか検証せず、特定の`int`パラメータが論理的に非負であるという概念を持たない。事例5の背景
+- [lib/kstrtox.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/kstrtox.c) — 負の値を含む範囲内の任意の符号付き値を受け付ける`kstrtoint()`。事例5で`rx_ring_size=-1`が問題なくパースされた理由である
+- [kernel/dma/direct.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.c) — `dma_direct_alloc()`の`size = PAGE_ALIGN(size)`。事例5の過大な割り当ての背後にあるオーバーフロー箇所
+- [include/asm-generic/getorder.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/getorder.h) — 事例5でサイズが0にラップした値に対して`BITS_PER_LONG - PAGE_SHIFT`を返す`get_order()`
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — 事例5の割り当て要求が実際に引っかかる`WARN_ON_ONCE_GFP(order > MAX_PAGE_ORDER, gfp)`ガードと、それが返す`NULL`
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — the load-time errors these cases produce: `ENOEXEC` for a module image the kernel rejects (Case 1); the man page documents `ENOKEY` for a missing signature key, but since v5.4 (commit `49fcf732bdae`, "lockdown: Enforce module signatures if the kernel is locked down") an enforcing kernel actually returns `EKEYREJECTED` — "Key was rejected by service" — behind Case 2
-- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — the unload path behind the `rmmod` advice in Case 3, and its `O_TRUNC` forced-unload flag
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — the loader used in Cases 2 and 5, including how trailing `name=value` module parameters are handed to the kernel
-- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `-F field` extraction of module attributes from a `.ko`, the inspection step in Cases 1 and 2 (the man page's own field list doesn't mention `sig*`/`vermagic`, but `modinfo` prints them in practice — see `Documentation/admin-guide/module-signing.rst`)
-- [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — `keyctl list` and the `%:<name>` keyring-by-name notation used in Case 2's verification step
+- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — これらの事例が生むロード時のエラー。カーネルが拒否したモジュールイメージに対する`ENOEXEC`（事例1）。manページは鍵が見つからない場合について`ENOKEY`を記載しているが、v5.4（コミット`49fcf732bdae`、「lockdown: Enforce module signatures if the kernel is locked down」）以降、強制モードのカーネルは実際には`EKEYREJECTED` — 「Key was rejected by service」 — を返す。事例2の背景
+- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — 事例3の`rmmod`に関する助言の背後にあるアンロードパスと、その`O_TRUNC`強制アンロードフラグ
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — 事例2と事例5で使われたローダー。末尾の`name=value`形式のモジュールパラメータがどのようにカーネルに渡されるかも含む
+- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `.ko`からモジュール属性を`-F field`で抽出する機能。事例1と事例2の調査手順である（manページ自体のフィールド一覧には`sig*`/`vermagic`は記載されていないが、実際には`modinfo`はそれらを表示する — `Documentation/admin-guide/module-signing.rst`を参照）
+- [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — 事例2の確認手順で使った`keyctl list`と、キーリングを名前で指定する`%:<name>`記法
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Module Loading Internals](module-loading-internals.md) — `load_module()`, the `__versions` CRC check, and `Module.symvers`, the machinery behind Case 1
-- [Module Signing](module-signing.md) — `CONFIG_MODULE_SIG_FORCE`, signature format, and key enrollment, behind Case 2
-- [Module Parameters, Symbols, and Kconfig](module-params.md) — `module_param()` types, `module_param_cb()`, and the same `has no CRC!`/version-mismatch symptoms, behind Cases 1 and 5
-- [Kbuild: The Kernel Build System](kbuild.md) — out-of-tree `M=` builds, the build side of Case 1's fix
-- [Writing and Loading Kernel Modules](module-basics.md) — the `__init`/`__exit` annotations and module lifecycle behind Case 4
-- [Kernel Keyring](../crypto/keyring.md) — key types and keyring search semantics behind Case 2's `keyctl` check
-- [Kernel Oops Analysis](../debugging/oops-analysis.md) — decoding the tainted call traces quoted in Cases 3 and 4
-- [Platform Drivers](../drivers/platform-driver.md) — the `probe()`/`platform_set_drvdata()` pattern Case 4's driver is built on
+- [モジュールロードの内部](module-loading-internals.md) — `load_module()`、`__versions`のCRCチェック、`Module.symvers`。事例1の背後にある仕組み
+- [モジュール署名](module-signing.md) — `CONFIG_MODULE_SIG_FORCE`、署名フォーマット、鍵の登録。事例2の背景
+- [モジュールパラメータ、シンボル、Kconfig](module-params.md) — `module_param()`の型、`module_param_cb()`、および同じ`has no CRC!`/バージョン不一致の症状。事例1と事例5の背景
+- [Kbuild: カーネルビルドシステム](kbuild.md) — ツリー外の`M=`ビルド。事例1の修正のビルド側
+- [カーネルモジュールの作成とロード](module-basics.md) — 事例4の背後にある`__init`/`__exit`アノテーションとモジュールのライフサイクル
+- [カーネルキーリング](../crypto/keyring.md) — 事例2の`keyctl`チェックの背後にある鍵の種類とキーリングの検索セマンティクス
+- [カーネルoopsの解析](../debugging/oops-analysis.md) — 事例3と事例4で引用したtaintされたコールトレースの読み解き
+- [プラットフォームドライバ](../drivers/platform-driver.md) — 事例4のドライバが基づいている`probe()`/`platform_set_drvdata()`のパターン
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The end of modversions?](https://lwn.net/Articles/707520/) (November 30, 2016) — vermagic versus modversions, and how a single changed CRC stops a module from loading into an otherwise compatible kernel, the mechanism behind Case 1
-- [A new version of modversions](https://lwn.net/Articles/986892/) (August 26, 2024) — how `genksyms` derives a symbol's checksum from its expanded type information, which is why a transitive struct change breaks Case 1's module
-- [The module signing endgame](https://lwn.net/Articles/525592/) (November 21, 2012) — how module signing and the built-in public key were wired into the kernel build and install steps, the setup Case 2 inherited
-- [Tracing unsigned modules](https://lwn.net/Articles/588799/) (March 5, 2014) — `CONFIG_MODULE_SIG_FORCE`, the `module.sig_enforce` boot parameter, and the taint flag raised for unsigned modules, spanning Cases 2 and 3
-- [module: Introduce module unload taint tracking](https://lwn.net/Articles/893584/) (May 2, 2022) — Aaron Tomlin's series adding a record of tainting modules that were later unloaded, aimed squarely at Case 3's "which module tainted this kernel?" problem
-- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) (June 8, 2023) — the proposal that became `execmem`, the allocator that now hands out and frees the module init text in Case 4
+- [The end of modversions?](https://lwn.net/Articles/707520/)（2016年11月30日） — vermagicとmodversionsの比較、そして変更されたCRCが1つあるだけで、それ以外は互換性のあるカーネルへのモジュールのロードが止まる仕組み。事例1の背後にあるメカニズム
+- [A new version of modversions](https://lwn.net/Articles/986892/)（2024年8月26日） — `genksyms`が展開された型情報からシンボルのチェックサムをどのように導出するか。推移的な構造体の変更が事例1のモジュールを壊す理由である
+- [The module signing endgame](https://lwn.net/Articles/525592/)（2012年11月21日） — モジュール署名と組み込み公開鍵が、カーネルのビルドおよびインストール手順にどのように組み込まれたか。事例2が引き継いだ構成である
+- [Tracing unsigned modules](https://lwn.net/Articles/588799/)（2014年3月5日） — `CONFIG_MODULE_SIG_FORCE`、`module.sig_enforce`ブートパラメータ、署名なしモジュールに対して立てられるtaintフラグ。事例2と事例3にまたがる
+- [module: Introduce module unload taint tracking](https://lwn.net/Articles/893584/)（2022年5月2日） — 後でアンロードされたtaint元モジュールの記録を追加するAaron Tomlinのパッチシリーズ。事例3の「どのモジュールがこのカーネルをtaintしたのか?」という問題を正面から狙ったもの
+- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/)（2023年6月8日） — `execmem`となった提案。事例4でモジュールのinitテキストを割り当て・解放するアロケータである
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — the authoritative taint bit table (4096 = externally-built module, 8192 = unsigned module) and the statement that the kernel stays tainted after the offending module is unloaded, behind Case 3
-- [Reporting issues](https://docs.kernel.org/admin-guide/reporting-issues.html) — upstream's "check the taint flag" step and its insistence on reproducing on a healthy, untainted kernel, the rule Case 3's bug report ran into
-- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — `Module.symvers`, `KBUILD_EXTRA_SYMBOLS`, and the `__versions` sections, the documented form of Case 1's fix
-- [Kernel module signing facility](https://docs.kernel.org/admin-guide/module-signing.html) — `CONFIG_MODULE_SIG_FORCE`, `CONFIG_SYSTEM_TRUSTED_KEYS`, and `scripts/sign-file`, the exact configuration Case 2 started from
+- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — 権威あるtaintビットの表（4096 = 外部ビルドのモジュール、8192 = 署名なしモジュール）と、問題のモジュールがアンロードされた後もカーネルはtaintされたままであるという記述。事例3の背景
+- [Reporting issues](https://docs.kernel.org/admin-guide/reporting-issues.html) — アップストリームの「taintフラグを確認する」手順と、正常でtaintされていないカーネルでの再現を求めるその主張。事例3のバグ報告が突き当たったルールである
+- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — `Module.symvers`、`KBUILD_EXTRA_SYMBOLS`、`__versions`セクション。事例1の修正を文書化したもの
+- [Kernel module signing facility](https://docs.kernel.org/admin-guide/module-signing.html) — `CONFIG_MODULE_SIG_FORCE`、`CONFIG_SYSTEM_TRUSTED_KEYS`、`scripts/sign-file`。事例2の出発点となった構成そのもの
