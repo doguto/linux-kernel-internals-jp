@@ -10,7 +10,7 @@
 - **デッドライン**（`sched_deadline`）: いつまでに終えなければならないか
 - **周期**（`sched_period`）: どれくらいの頻度で繰り返すか（未設定ならデッドラインと同じ）
 
-カーネルは**Constant Bandwidth Server（CBS）**を使ってこれらの範囲を強制する。各タスクは宣言したとおりの帯域をちょうど得て、それ以上は得られない。タスクが実行時間の予算を使い切ると、次の周期までスロットリングされる。
+カーネルは**Constant Bandwidth Server**（CBS）を使ってこれらの範囲を強制する。各タスクは宣言したとおりの帯域をちょうど得て、それ以上は得られない。タスクが実行時間の予算を使い切ると、次の周期までスロットリングされる。
 
 ```
 Task declares: 5ms runtime, 10ms deadline, 10ms period
@@ -168,7 +168,7 @@ static struct sched_dl_entity *pick_next_dl_entity(struct dl_rq *dl_rq)
 
 ## GRUB: 使われていない帯域の回収 {#grub-reclaiming-unused-bandwidth}
 
-予算を使い切らないDLタスクはCPU時間を無駄にしてしまう。予約された帯域を他のタスクが使えないからである。**GRUB（Greedy Reclamation of Unused Bandwidth）**がこれを解決する。
+予算を使い切らないDLタスクはCPU時間を無駄にしてしまう。予約された帯域を他のタスクが使えないからである。**GRUB**（Greedy Reclamation of Unused Bandwidth）がこれを解決する。
 
 DLタスクが非アクティブ（スリープ中）のとき、その使われていない帯域は追跡され、`extra_bw`を通じて他のタスクが利用できるようになる。これにより、タスクがアクティブなときにはすべてのデッドラインを守りつつ、厳密な帯域予約から想定されるより多くの仕事をシステムで実行できる。
 
