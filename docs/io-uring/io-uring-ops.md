@@ -1,110 +1,110 @@
-# io_uring Operations and Advanced Features {#io_uring-operations-and-advanced-features}
+# io_uringの操作と高度な機能 {#io_uring-operations-and-advanced-features}
 
-> From basic read/write to SQPOLL and linked requests
+> 基本的なread/writeからSQPOLL、リンクされたリクエストまで
 
-## Supported operations {#supported-operations}
+## サポートされる操作 {#supported-operations}
 
-io_uring supports a wide range of operations, all async:
+io_uringは幅広い操作をサポートしており、そのすべてが非同期である。
 
-### File and socket I/O {#file-and-socket-io}
+### ファイルとソケットのI/O {#file-and-socket-io}
 
 ```c
-/* Read/write (like pread64/pwrite64) */
-IORING_OP_READ        /* read from fd at offset */
-IORING_OP_WRITE       /* write to fd at offset */
-IORING_OP_READV       /* scatter read (struct iovec) */
-IORING_OP_WRITEV      /* gather write */
-IORING_OP_READ_FIXED  /* read into pre-registered buffer */
-IORING_OP_WRITE_FIXED /* write from pre-registered buffer */
+/* 読み書き（pread64/pwrite64と同様） */
+IORING_OP_READ        /* fdのオフセット位置から読み込む */
+IORING_OP_WRITE       /* fdのオフセット位置に書き込む */
+IORING_OP_READV       /* スキャッタ読み込み（struct iovec） */
+IORING_OP_WRITEV      /* ギャザー書き込み */
+IORING_OP_READ_FIXED  /* 事前登録したバッファに読み込む */
+IORING_OP_WRITE_FIXED /* 事前登録したバッファから書き込む */
 
-/* Socket operations */
-IORING_OP_ACCEPT      /* accept connection */
-IORING_OP_CONNECT     /* connect to address */
-IORING_OP_SEND        /* send on socket */
-IORING_OP_RECV        /* receive from socket */
-IORING_OP_SENDMSG     /* sendmsg (scatter/gather, ancillary data) */
+/* ソケット操作 */
+IORING_OP_ACCEPT      /* 接続を受け付ける */
+IORING_OP_CONNECT     /* アドレスに接続する */
+IORING_OP_SEND        /* ソケットで送信する */
+IORING_OP_RECV        /* ソケットから受信する */
+IORING_OP_SENDMSG     /* sendmsg（スキャッタ/ギャザー、補助データ） */
 IORING_OP_RECVMSG     /* recvmsg */
-IORING_OP_SEND_ZC     /* zero-copy send (kernel 6.0+) */
+IORING_OP_SEND_ZC     /* ゼロコピー送信（カーネル6.0以降） */
 IORING_OP_SENDMSG_ZC
 
-/* File operations */
-IORING_OP_OPENAT      /* open file */
-IORING_OP_OPENAT2     /* openat2 with how struct */
-IORING_OP_CLOSE       /* close fd */
+/* ファイル操作 */
+IORING_OP_OPENAT      /* ファイルを開く */
+IORING_OP_OPENAT2     /* how構造体付きのopenat2 */
+IORING_OP_CLOSE       /* fdを閉じる */
 IORING_OP_STATX       /* statx */
 IORING_OP_FADVISE     /* posix_fadvise */
 IORING_OP_FALLOCATE   /* fallocate */
 IORING_OP_FSYNC       /* fsync/fdatasync */
 IORING_OP_SYNC_FILE_RANGE
 
-/* Directory operations */
+/* ディレクトリ操作 */
 IORING_OP_RENAMEAT    /* rename */
 IORING_OP_UNLINKAT    /* unlink/rmdir */
 IORING_OP_MKDIRAT     /* mkdir */
 IORING_OP_LINKAT      /* link */
 IORING_OP_SYMLINKAT   /* symlink */
 
-/* Splice */
-IORING_OP_SPLICE      /* splice between fds */
+/* splice */
+IORING_OP_SPLICE      /* fd間のsplice */
 IORING_OP_TEE         /* tee */
 
-/* Timing */
-IORING_OP_TIMEOUT     /* wait for a duration, then post CQE */
-IORING_OP_TIMEOUT_REMOVE  /* cancel a timeout */
-IORING_OP_LINK_TIMEOUT    /* timeout linked to another SQE */
+/* タイミング */
+IORING_OP_TIMEOUT     /* 一定時間待ってからCQEを投稿する */
+IORING_OP_TIMEOUT_REMOVE  /* タイムアウトをキャンセルする */
+IORING_OP_LINK_TIMEOUT    /* 別のSQEにリンクされたタイムアウト */
 
-/* Polling */
-IORING_OP_POLL_ADD    /* add fd to poll */
-IORING_OP_POLL_REMOVE /* remove poll */
+/* ポーリング */
+IORING_OP_POLL_ADD    /* fdをpollに追加する */
+IORING_OP_POLL_REMOVE /* pollを削除する */
 
-/* Miscellaneous */
-IORING_OP_CANCEL      /* cancel pending operation */
+/* その他 */
+IORING_OP_CANCEL      /* 保留中の操作をキャンセルする */
 IORING_OP_ASYNC_CANCEL
-IORING_OP_MSG_RING    /* send CQE to another ring */
-IORING_OP_URING_CMD   /* driver-specific commands */
-IORING_OP_WAITID      /* async waitid() */
-IORING_OP_SOCKET      /* create a socket */
-IORING_OP_EPOLL_CTL   /* async epoll_ctl */
-IORING_OP_PROVIDE_BUFFERS /* register buffer pool */
+IORING_OP_MSG_RING    /* 別のリングにCQEを送る */
+IORING_OP_URING_CMD   /* ドライバ固有のコマンド */
+IORING_OP_WAITID      /* 非同期のwaitid() */
+IORING_OP_SOCKET      /* ソケットを作成する */
+IORING_OP_EPOLL_CTL   /* 非同期のepoll_ctl */
+IORING_OP_PROVIDE_BUFFERS /* バッファプールを登録する */
 IORING_OP_REMOVE_BUFFERS
 ```
 
-## liburing: the convenience wrapper {#liburing-the-convenience-wrapper}
+## liburing: 便利なラッパー {#liburing-the-convenience-wrapper}
 
-Most applications use `liburing` instead of raw syscalls:
+ほとんどのアプリケーションは、生のシステムコールではなく`liburing`を使う。
 
 ```c
 #include <liburing.h>
 
-/* Initialize a ring with 256 entries */
+/* 256エントリでリングを初期化する */
 struct io_uring ring;
 io_uring_queue_init(256, &ring, 0);
 
-/* Or with flags */
+/* またはフラグ付きで */
 io_uring_queue_init_params(256, &ring, &(struct io_uring_params){
     .flags = IORING_SETUP_SQPOLL | IORING_SETUP_SQ_AFF,
     .sq_thread_cpu = 2,
-    .sq_thread_idle = 2000,  /* idle 2s before sleeping */
+    .sq_thread_idle = 2000,  /* スリープするまで2秒アイドル */
 });
 ```
 
-### Batch example: submit multiple reads {#batch-example-submit-multiple-reads}
+### バッチの例: 複数のreadを投入する {#batch-example-submit-multiple-reads}
 
 ```c
 struct io_uring_sqe *sqe;
 struct io_uring_cqe *cqe;
 
-/* Submit 8 reads at once */
+/* 8つのreadを一度に投入する */
 for (int i = 0; i < 8; i++) {
     sqe = io_uring_get_sqe(&ring);
     io_uring_prep_read(sqe, fds[i], bufs[i], BUF_SIZE, 0);
-    io_uring_sqe_set_data64(sqe, (uint64_t)i);  /* tag */
+    io_uring_sqe_set_data64(sqe, (uint64_t)i);  /* タグ */
 }
 
-/* One syscall to submit all 8 */
+/* 1回のシステムコールで8つすべてを投入する */
 io_uring_submit(&ring);
 
-/* Collect completions */
+/* 完了を回収する */
 for (int i = 0; i < 8; i++) {
     io_uring_wait_cqe(&ring, &cqe);
     int idx = (int)io_uring_cqe_get_data64(cqe);
@@ -114,66 +114,66 @@ for (int i = 0; i < 8; i++) {
 }
 ```
 
-## SQPOLL: eliminating syscalls entirely {#sqpoll-eliminating-syscalls-entirely}
+## SQPOLL: システムコールを完全になくす {#sqpoll-eliminating-syscalls-entirely}
 
-With `IORING_SETUP_SQPOLL`, a dedicated kernel thread polls the SQ ring continuously. Userspace never needs to call `io_uring_enter` — it just writes SQEs and they're picked up automatically:
+`IORING_SETUP_SQPOLL`を使うと、専用のカーネルスレッドがSQリングを継続的にポーリングする。ユーザー空間は`io_uring_enter`を呼ぶ必要がなく、SQEを書き込むだけで自動的に拾われる。
 
 ```c
 io_uring_queue_init_params(256, &ring, &(struct io_uring_params){
     .flags = IORING_SETUP_SQPOLL,
-    .sq_thread_idle = 2000,  /* kernel thread sleeps after 2s of idle */
+    .sq_thread_idle = 2000,  /* カーネルスレッドは2秒アイドルが続くとスリープする */
 });
 
-/* Submit without syscall: */
+/* システムコールなしで投入する: */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read(sqe, fd, buf, len, 0);
 io_uring_sqe_set_flags(sqe, 0);
 
-/* Just update the SQ tail — no io_uring_enter() needed */
-io_uring_submit(&ring);  /* liburing: detects SQPOLL, writes directly */
+/* SQのtailを更新するだけ。io_uring_enter()は不要 */
+io_uring_submit(&ring);  /* liburing: SQPOLLを検出し、直接書き込む */
 
-/* Check if kernel thread needs wakeup */
+/* カーネルスレッドの起床が必要か確認する */
 if (io_sq_ring_needs_enter(ring_ptr))
     io_uring_enter(ring_fd, 0, 0, IORING_ENTER_SQ_WAKEUP, NULL, 0);
 ```
 
-The kernel SQPOLL thread is pinned to a CPU (`sq_thread_cpu`) and runs at normal scheduling priority (`SCHED_NORMAL`). For ultra-low latency I/O, it avoids the ~1µs overhead of a syscall.
+カーネルのSQPOLLスレッドはCPU（`sq_thread_cpu`）にピン留めされ、通常のスケジューリング優先度（`SCHED_NORMAL`）で動作する。超低レイテンシのI/Oにおいて、システムコールの約1µsのオーバーヘッドを回避できる。
 
 ```bash
-# See the SQPOLL thread
+# SQPOLLスレッドを確認する
 ps aux | grep io_uring-sq
 # root 1234  99.9  0.0  0  0 [io_uring-sq]
 ```
 
-## Fixed files (registered file descriptors) {#fixed-files-registered-file-descriptors}
+## 固定ファイル（登録済みファイルディスクリプタ） {#fixed-files-registered-file-descriptors}
 
-Registering file descriptors eliminates per-operation fd lookups:
+ファイルディスクリプタを登録すると、操作ごとのfd検索がなくなる。
 
 ```c
-/* Register up to 4096 fds with the ring */
+/* 最大4096個のfdをリングに登録する */
 int fds[4096] = { fd0, fd1, fd2, -1, -1, ... };
 io_uring_register_files(&ring, fds, 4096);
 
-/* Use fixed file index instead of fd */
+/* fdの代わりに固定ファイルのインデックスを使う */
 sqe = io_uring_get_sqe(&ring);
-io_uring_prep_read(sqe, 0, buf, len, 0);  /* 0 = fixed file index 0 */
+io_uring_prep_read(sqe, 0, buf, len, 0);  /* 0 = 固定ファイルのインデックス0 */
 io_uring_sqe_set_flags(sqe, IOSQE_FIXED_FILE);
 
-/* Update a slot without re-registering all */
+/* すべてを再登録せずに1スロットだけ更新する */
 io_uring_register_files_update(&ring, slot_index, &new_fd, 1);
 
-/* Unregister */
+/* 登録解除 */
 io_uring_unregister_files(&ring);
 ```
 
-Fixed files avoid taking a reference to the `struct file` on every operation — significant for high-IOPS workloads.
+固定ファイルを使うと、操作のたびに`struct file`への参照を取得せずに済む。これは高IOPSのワークロードでは大きな効果がある。
 
-## Fixed buffers (registered buffers) {#fixed-buffers-registered-buffers}
+## 固定バッファ（登録済みバッファ） {#fixed-buffers-registered-buffers}
 
-Pre-registered buffers avoid per-I/O pinning of pages:
+事前登録したバッファを使うと、I/Oごとのページのピン留めが不要になる。
 
 ```c
-/* Register 8 buffers */
+/* 8個のバッファを登録する */
 struct iovec iovecs[8];
 for (int i = 0; i < 8; i++) {
     iovecs[i].iov_base = bufs[i];
@@ -181,7 +181,7 @@ for (int i = 0; i < 8; i++) {
 }
 io_uring_register_buffers(&ring, iovecs, 8);
 
-/* Use IORING_OP_READ_FIXED with buffer index */
+/* バッファインデックスを指定してIORING_OP_READ_FIXEDを使う */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read_fixed(sqe, fd, bufs[0], BUF_SIZE, offset, 0);
 /*                                                              ^ buf_index */
@@ -189,80 +189,80 @@ io_uring_prep_read_fixed(sqe, fd, bufs[0], BUF_SIZE, offset, 0);
 io_uring_unregister_buffers(&ring);
 ```
 
-Fixed buffers are pinned in memory once at registration. Per-I/O page pinning/unpinning (which requires page table walks) is eliminated.
+固定バッファは登録時に一度だけメモリにピン留めされる。I/Oごとのページのピン留め/解除（ページテーブルのウォークを必要とする）がなくなる。
 
-## Linked requests {#linked-requests}
+## リンクされたリクエスト {#linked-requests}
 
-Chain SQEs so that the next one only starts when the previous completes successfully:
+SQEを連鎖させ、前のSQEが成功裏に完了したときにのみ次のSQEが開始されるようにする。
 
 ```c
-/* Sequence: connect → send → recv */
+/* 順序: connect → send → recv */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_connect(sqe, fd, addr, addrlen);
-io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);  /* link to next */
+io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);  /* 次にリンクする */
 
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_send(sqe, fd, request, req_len, 0);
-io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);  /* link to next */
+io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);  /* 次にリンクする */
 
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_recv(sqe, fd, response, resp_len, 0);
-/* no IOSQE_IO_LINK: end of chain */
+/* IOSQE_IO_LINKなし: チェーンの終端 */
 
 io_uring_submit(&ring);
-/* If connect fails → send/recv get CQE with -ECANCELED */
+/* connectが失敗すると → send/recvは-ECANCELEDのCQEを受け取る */
 ```
 
-For hard chains that ignore errors, use `IOSQE_IO_HARDLINK` instead.
+エラーを無視するハードチェーンには、代わりに`IOSQE_IO_HARDLINK`を使う。
 
-## Buffer selection: provided buffers {#buffer-selection-provided-buffers}
+## バッファ選択: 提供バッファ {#buffer-selection-provided-buffers}
 
-Instead of pre-assigning buffers to SQEs, let the kernel pick from a pool (useful when you don't know how many bytes will arrive):
+バッファをSQEに事前に割り当てる代わりに、カーネルにプールから選ばせる（何バイト届くかわからない場合に便利）。
 
 ```c
-/* Register a buffer group */
+/* バッファグループを登録する */
 struct io_uring_buf_reg reg = {
-    .ring_addr    = (uint64_t)buf_ring,  /* shared ring of buffers */
+    .ring_addr    = (uint64_t)buf_ring,  /* バッファの共有リング */
     .ring_entries = NUM_BUFS,
-    .bgid         = 0,                   /* buffer group ID */
+    .bgid         = 0,                   /* バッファグループID */
 };
 io_uring_register_buf_ring(&ring, &reg, 0);
 
-/* Add buffers to the group */
+/* グループにバッファを追加する */
 for (int i = 0; i < NUM_BUFS; i++) {
     io_uring_buf_ring_add(buf_ring, bufs[i], BUF_SIZE, i, ring_mask, i);
 }
 io_uring_buf_ring_advance(buf_ring, NUM_BUFS);
 
-/* Use buffer selection on recv */
+/* recvでバッファ選択を使う */
 sqe = io_uring_get_sqe(&ring);
-io_uring_prep_recv(sqe, fd, NULL, 0, 0);  /* NULL = kernel picks buffer */
+io_uring_prep_recv(sqe, fd, NULL, 0, 0);  /* NULL = カーネルがバッファを選ぶ */
 sqe->buf_group = 0;
 io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
 
-/* CQE tells you which buffer was used */
+/* どのバッファが使われたかはCQEが教えてくれる */
 io_uring_wait_cqe(&ring, &cqe);
 int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
 int bytes = cqe->res;
 void *data = bufs[buf_id];
-/* process data[0..bytes-1] */
-/* Return buffer to pool: */
+/* data[0..bytes-1]を処理する */
+/* バッファをプールに返す: */
 io_uring_buf_ring_add(buf_ring, bufs[buf_id], BUF_SIZE, buf_id, ring_mask, 0);
 io_uring_buf_ring_advance(buf_ring, 1);
 ```
 
-## Multishot operations {#multishot-operations}
+## マルチショット操作 {#multishot-operations}
 
-Some operations can post multiple CQEs from a single SQE:
+一部の操作は、1つのSQEから複数のCQEを投稿できる。
 
 ```c
-/* Multishot accept: use IORING_OP_ACCEPT with IORING_ACCEPT_MULTISHOT flag */
+/* マルチショットaccept: IORING_ACCEPT_MULTISHOTフラグ付きでIORING_OP_ACCEPTを使う */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_multishot_accept(sqe, listen_fd, NULL, NULL, 0);
-/* liburing sets IORING_ACCEPT_MULTISHOT flag on IORING_OP_ACCEPT */
+/* liburingはIORING_OP_ACCEPTにIORING_ACCEPT_MULTISHOTフラグを設定する */
 
-/* Each new connection posts a CQE with the new fd in cqe->res */
-/* IORING_CQE_F_MORE set while multishot is still active */
+/* 新しい接続ごとに、cqe->resに新しいfdを入れたCQEが投稿される */
+/* マルチショットが有効な間はIORING_CQE_F_MOREがセットされる */
 while (1) {
     io_uring_wait_cqe(&ring, &cqe);
     if (cqe->res >= 0) {
@@ -271,34 +271,34 @@ while (1) {
     }
     bool more = cqe->flags & IORING_CQE_F_MORE;
     io_uring_cqe_seen(&ring, cqe);
-    if (!more) break;  /* multishot ended (e.g., listen_fd closed) */
+    if (!more) break;  /* マルチショットが終了した（例: listen_fdが閉じられた） */
 }
 
-/* Also available (flags on their base opcodes, not separate opcodes): */
-/* IORING_OP_RECV + IORING_RECV_MULTISHOT flag — recv on socket continuously */
-/* IORING_OP_POLL_ADD + IORING_POLL_ADD_MULTI flag — poll fd repeatedly */
+/* ほかにも利用可能（別個のオペコードではなく、基本オペコードに付けるフラグ）: */
+/* IORING_OP_RECV + IORING_RECV_MULTISHOTフラグ: ソケットで継続的にrecvする */
+/* IORING_OP_POLL_ADD + IORING_POLL_ADD_MULTIフラグ: fdを繰り返しpollする */
 ```
 
-## io_uring and BPF {#io_uring-and-bpf}
+## io_uringとBPF {#io_uring-and-bpf}
 
-BPF programs can be attached to io_uring operations:
+BPFプログラムをio_uringの操作にアタッチできる。
 
 ```c
-/* BPF program type: BPF_PROG_TYPE_SYSCALL can intercept io_uring_enter */
-/* More commonly: io_uring + BPF via socket_filter for network paths */
+/* BPFプログラムタイプ: BPF_PROG_TYPE_SYSCALLはio_uring_enterをインターセプトできる */
+/* より一般的には: ネットワークパスではsocket_filter経由でio_uring + BPF */
 
-/* io_uring credentials: run this SQE with a different uid/caps */
+/* io_uringのクレデンシャル: このSQEを別のuid/ケーパビリティで実行する */
 sqe->personality = io_uring_register_personality(&ring);
-/* The SQE executes with the registered identity */
+/* SQEは登録されたアイデンティティで実行される */
 ```
 
-## Observing io_uring {#observing-io_uring}
+## io_uringの観測 {#observing-io_uring}
 
 ```bash
-# List io_uring instances
+# io_uringインスタンスを一覧表示する
 ls /proc/*/fdinfo/ | xargs grep -l "sq entries" 2>/dev/null
 
-# io_uring stats for a process
+# プロセスのio_uring統計
 cat /proc/<pid>/fdinfo/<ring_fd>
 # pos:     0
 # flags:   0100002
@@ -312,31 +312,31 @@ cat /proc/<pid>/fdinfo/<ring_fd>
 # cq tail:         42
 # ...
 
-# System-wide io_uring stats
+# システム全体のio_uring統計
 cat /proc/sys/fs/io_uring_groups
 cat /sys/kernel/debug/io_uring_stats 2>/dev/null
 
-# Trace io_uring events
+# io_uringのイベントをトレースする
 trace-cmd record -e io_uring:* sleep 1
 trace-cmd report
 
-# BPF tracing
+# BPFによるトレーシング
 bpftrace -e 'tracepoint:io_uring:io_uring_submit_sqe { printf("%s\n", comm); }'
 ```
 
-## Performance comparison {#performance-comparison}
+## 性能比較 {#performance-comparison}
 
-| Interface | Setup | Per-op syscall | Max IOPS (NVMe) |
+| インターフェース | セットアップ | 操作ごとのシステムコール | 最大IOPS（NVMe） |
 |-----------|-------|----------------|-----------------|
-| `read()`/`write()` | None | Yes (1 per op) | ~300K |
-| `libaio` + O_DIRECT | AIO context | `io_submit` (batched) | ~700K |
-| io_uring (no SQPOLL) | Ring init | `io_uring_enter` (batched) | ~1.5M |
-| io_uring + SQPOLL | Ring + thread | None | ~2M+ |
+| `read()`/`write()` | なし | あり（操作ごとに1回） | 約300K |
+| `libaio` + O_DIRECT | AIOコンテキスト | `io_submit`（バッチ化） | 約700K |
+| io_uring（SQPOLLなし） | リングの初期化 | `io_uring_enter`（バッチ化） | 約1.5M |
+| io_uring + SQPOLL | リング + スレッド | なし | 約2M以上 |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Architecture and Rings](io-uring-arch.md) — Ring layout and SQE/CQE structures
-- [BPF/eBPF](../bpf/README.md) — io_uring + BPF integration
-- [Block Layer: blk-mq](../block/blk-mq.md) — Where io_uring ops eventually land
-- `io_uring/` directory in the kernel tree
-- `liburing` GitHub repository — high-level C API
+- [アーキテクチャとリング](io-uring-arch.md): リングレイアウトとSQE/CQE構造体
+- [BPF/eBPF](../bpf/README.md): io_uringとBPFの統合
+- [ブロック層: blk-mq](../block/blk-mq.md): io_uringの操作が最終的に行き着く場所
+- カーネルツリーの`io_uring/`ディレクトリ
+- `liburing`のGitHubリポジトリ: 高レベルのC API

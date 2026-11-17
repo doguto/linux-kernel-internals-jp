@@ -1,31 +1,31 @@
-# io_uring Multishot, Linked Requests, and Probing {#io_uring-multishot-linked-requests-and-probing}
+# io_uringのマルチショット、リンクされたリクエスト、プローブ {#io_uring-multishot-linked-requests-and-probing}
 
-> One SQE, many CQEs — persistent operations, chained I/O, and capability detection
+> 1つのSQEから多数のCQE。永続的な操作、連鎖したI/O、機能の検出
 
-## What multishot means {#what-multishot-means}
+## マルチショットとは何か {#what-multishot-means}
 
-A normal io_uring submission follows a one-to-one model: one SQE produces exactly one CQE. The SQE is consumed, the operation runs once, the result appears in the CQ.
+通常のio_uringの投入は1対1のモデルに従う。1つのSQEはちょうど1つのCQEを生成する。SQEは消費され、操作は1回実行され、結果がCQに現れる。
 
-**Multishot** breaks that contract. One SQE stays armed in the kernel and continues producing CQEs — one per event — until it is explicitly cancelled or encounters a fatal error. The `IORING_CQE_F_MORE` flag in `cqe->flags` is the signal that more completions are still coming from the same SQE:
+**マルチショット**はこの約束を破る。1つのSQEがカーネル内で有効（armed）なまま残り、明示的にキャンセルされるか致命的なエラーに遭遇するまで、イベントごとに1つずつCQEを生成し続ける。`cqe->flags`の`IORING_CQE_F_MORE`フラグは、同じSQEからまだ完了が来ることを示すシグナルである。
 
 ```c
-/* cqe->flags interpretation */
+/* cqe->flagsの解釈 */
 if (cqe->flags & IORING_CQE_F_MORE) {
-    /* SQE is still armed — do NOT resubmit */
+    /* SQEはまだ有効。再投入してはならない */
 } else {
-    /* SQE is done — resubmit if you want to continue */
+    /* SQEは終了した。続けたい場合は再投入する */
 }
 ```
 
-When `IORING_CQE_F_MORE` is absent, the multishot SQE has been disarmed. This happens on cancellation, on certain errors, or when the underlying resource goes away. The application must resubmit if it wants to resume.
+`IORING_CQE_F_MORE`がない場合、そのマルチショットSQEは無効化（disarm）されている。これはキャンセル時、特定のエラー時、または下位のリソースがなくなったときに起こる。再開したい場合、アプリケーションは再投入しなければならない。
 
-The multishot model eliminates the round-trip of resubmitting a new SQE after every accepted connection or every received message — critical for high-connection-rate servers.
+マルチショットモデルは、接続を受け付けるたび、あるいはメッセージを受信するたびに新しいSQEを再投入する往復をなくす。これは接続レートの高いサーバーにとって決定的に重要である。
 
-## Multishot accept (`IORING_OP_ACCEPT`) {#multishot-accept-ioringopaccept}
+## マルチショットaccept（`IORING_OP_ACCEPT`） {#multishot-accept-ioringopaccept}
 
-**Added:** Linux 5.19 — `io_uring/net.c`
+**追加**: Linux 5.19。`io_uring/net.c`
 
-With `IORING_ACCEPT_MULTISHOT`, a single `IORING_OP_ACCEPT` SQE accepts connections indefinitely. Each incoming connection produces a CQE whose `res` field holds the new client file descriptor, exactly as a successful blocking `accept()` would return.
+`IORING_ACCEPT_MULTISHOT`を使うと、1つの`IORING_OP_ACCEPT` SQEが無期限に接続を受け付ける。到着した各接続は、ブロッキングの`accept()`が成功したときに返すのとまったく同じように、新しいクライアントのファイルディスクリプタを`res`フィールドに持つCQEを生成する。
 
 ```c
 #include <liburing.h>
@@ -45,12 +45,12 @@ int run_accept_loop(int listen_fd)
 
     io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
 
-    /* Submit one multishot accept — it stays armed until we cancel it */
+    /* マルチショットacceptを1つ投入する。キャンセルするまで有効なまま残る */
     sqe = io_uring_get_sqe(&ring);
     io_uring_prep_multishot_accept(sqe, listen_fd,
-                                   NULL,   /* addr: filled per-CQE if non-NULL */
+                                   NULL,   /* addr: 非NULLならCQEごとに埋められる */
                                    NULL,   /* addrlen */
-                                   0);     /* flags passed to accept4() */
+                                   0);     /* accept4()に渡されるフラグ */
     io_uring_sqe_set_data64(sqe, TAG_ACCEPT);
     io_uring_submit(&ring);
 
@@ -66,7 +66,7 @@ int run_accept_loop(int listen_fd)
 
             if (cqe->res >= 0) {
                 int client_fd = cqe->res;
-                handle_client(client_fd);   /* your per-connection handler */
+                handle_client(client_fd);   /* 接続ごとのハンドラ */
             } else if (cqe->res != -ECANCELED) {
                 fprintf(stderr, "accept error: %s\n", strerror(-cqe->res));
             }
@@ -74,14 +74,14 @@ int run_accept_loop(int listen_fd)
             io_uring_cqe_seen(&ring, cqe);
 
             if (!more) {
-                /* SQE was disarmed — resubmit to keep accepting */
+                /* SQEが無効化された。受け付けを続けるために再投入する */
                 sqe = io_uring_get_sqe(&ring);
                 io_uring_prep_multishot_accept(sqe, listen_fd, NULL, NULL, 0);
                 io_uring_sqe_set_data64(sqe, TAG_ACCEPT);
                 io_uring_submit(&ring);
             }
         } else {
-            /* handle other completions */
+            /* その他の完了を処理する */
             io_uring_cqe_seen(&ring, cqe);
         }
     }
@@ -91,30 +91,30 @@ int run_accept_loop(int listen_fd)
 }
 ```
 
-To cancel the multishot accept, submit an `IORING_OP_ASYNC_CANCEL` targeting the same `user_data`:
+マルチショットacceptをキャンセルするには、同じ`user_data`を対象とする`IORING_OP_ASYNC_CANCEL`を投入する。
 
 ```c
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_cancel64(sqe, TAG_ACCEPT, 0);
 io_uring_submit(&ring);
-/* The multishot accept will post a final CQE with res == -ECANCELED
-   and IORING_CQE_F_MORE will be absent */
+/* マルチショットacceptはres == -ECANCELEDの最後のCQEを投稿し、
+   IORING_CQE_F_MOREは付かない */
 ```
 
-The kernel implementation lives in `io_uring/net.c` (`io_accept_multishot()`). On each `inet_csk_accept()` return, the kernel posts a CQE and immediately re-arms the wait — no round-trip to userspace required between connections.
+カーネルの実装は`io_uring/net.c`（`io_accept_multishot()`）にある。`inet_csk_accept()`が返るたびに、カーネルはCQEを投稿してただちに待機を再設定する。接続と接続の間にユーザー空間への往復は必要ない。
 
-## Multishot recv (`IORING_OP_RECV`) {#multishot-recv-ioringoprecv}
+## マルチショットrecv（`IORING_OP_RECV`） {#multishot-recv-ioringoprecv}
 
-**Added:** Linux 5.20 / 6.0 — `io_uring/net.c`
+**追加**: Linux 5.20 / 6.0。`io_uring/net.c`
 
-`IORING_RECV_MULTISHOT` on `IORING_OP_RECV` keeps reading from a socket and posting a CQE on each arrival. Because the kernel doesn't know how large each message will be in advance, multishot recv **requires** provided buffers (`IOSQE_BUFFER_SELECT`): the kernel picks a buffer from a pre-registered pool for each receive, and the CQE's `flags` field carries the buffer ID via `IORING_CQE_BUFFER_SHIFT`.
+`IORING_OP_RECV`に`IORING_RECV_MULTISHOT`を付けると、ソケットからの読み込みを続け、データが到着するたびにCQEを投稿する。カーネルは各メッセージの大きさを事前に知らないため、マルチショットrecvは提供バッファ（`IOSQE_BUFFER_SELECT`）を**必要とする**。カーネルは受信ごとに事前登録されたプールからバッファを選び、CQEの`flags`フィールドが`IORING_CQE_BUFFER_SHIFT`を介してバッファIDを運ぶ。
 
 ```c
 #define NUM_BUFS   64
 #define BUF_SIZE   4096
 #define BUF_GID    0
 
-/* Step 1: allocate and register a buffer ring */
+/* ステップ1: バッファリングを割り当てて登録する */
 struct io_uring_buf_ring *buf_ring;
 void *bufs[NUM_BUFS];
 unsigned ring_mask = io_uring_buf_ring_mask(NUM_BUFS);
@@ -128,7 +128,7 @@ for (int i = 0; i < NUM_BUFS; i++) {
 }
 io_uring_buf_ring_advance(buf_ring, NUM_BUFS);
 
-/* Step 2: submit one multishot recv — stays armed across all incoming data */
+/* ステップ2: マルチショットrecvを1つ投入する。到着するすべてのデータにわたって有効なまま残る */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_recv_multishot(sqe, client_fd, NULL, 0, 0);
 sqe->buf_group = BUF_GID;
@@ -136,46 +136,46 @@ io_uring_sqe_set_flags(sqe, IOSQE_BUFFER_SELECT);
 io_uring_sqe_set_data64(sqe, TAG_RECV);
 io_uring_submit(&ring);
 
-/* Step 3: harvest CQEs */
+/* ステップ3: CQEを回収する */
 io_uring_wait_cqe(&ring, &cqe);
 if (cqe->res > 0) {
     int buf_id = cqe->flags >> IORING_CQE_BUFFER_SHIFT;
     int bytes  = cqe->res;
     process_data(bufs[buf_id], bytes);
 
-    /* Return the buffer to the pool */
+    /* バッファをプールに返す */
     io_uring_buf_ring_add(buf_ring, bufs[buf_id], BUF_SIZE,
                           buf_id, ring_mask, 0);
     io_uring_buf_ring_advance(buf_ring, 1);
 } else if (cqe->res == 0) {
-    /* EOF: peer closed connection */
+    /* EOF: 相手が接続を閉じた */
 } else {
     fprintf(stderr, "recv error: %s\n", strerror(-cqe->res));
 }
 bool more = cqe->flags & IORING_CQE_F_MORE;
 io_uring_cqe_seen(&ring, cqe);
-/* if !more: resubmit */
+/* !moreなら: 再投入する */
 ```
 
-If the buffer pool runs dry, the multishot recv is automatically disarmed and posts a CQE with `res == -ENOBUFS` and `IORING_CQE_F_MORE` absent. Refill the buffer ring and resubmit.
+バッファプールが枯渇すると、マルチショットrecvは自動的に無効化され、`res == -ENOBUFS`で`IORING_CQE_F_MORE`のないCQEを投稿する。バッファリングを補充して再投入すること。
 
-## Linked requests (`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`) {#linked-requests-iosqeiolink-iosqeiohardlink}
+## リンクされたリクエスト（`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`） {#linked-requests-iosqeiolink-iosqeiohardlink}
 
-Linked requests let you express **ordering dependencies** between SQEs without any application involvement between steps. The kernel executes the chain sequentially: SQE B does not start until SQE A completes.
+リンクされたリクエストを使うと、ステップ間にアプリケーションが一切関与することなく、SQE間の**順序の依存関係**を表現できる。カーネルはチェーンを逐次実行する。SQE Aが完了するまでSQE Bは開始されない。
 
-Set `IOSQE_IO_LINK` on each SQE that should be followed by the next. The final SQE in the chain carries no link flag.
+次のSQEが後に続くべき各SQEに`IOSQE_IO_LINK`を設定する。チェーンの最後のSQEにはリンクフラグを付けない。
 
-### `IOSQE_IO_LINK` — soft link {#iosqeiolink-soft-link}
+### `IOSQE_IO_LINK`: ソフトリンク {#iosqeiolink-soft-link}
 
-If the linked SQE fails (non-zero `res`), all subsequent SQEs in the chain receive a CQE with `res == -ECANCELED`. The chain is broken.
+リンクされたSQEが失敗する（`res`が0以外になる）と、チェーン内の後続のSQEはすべて`res == -ECANCELED`のCQEを受け取る。チェーンは切断される。
 
-### `IOSQE_IO_HARDLINK` — hard link {#iosqeiohardlink-hard-link}
+### `IOSQE_IO_HARDLINK`: ハードリンク {#iosqeiohardlink-hard-link}
 
-The chain continues regardless of whether the linked SQE succeeds or fails. Each SQE runs in sequence unconditionally. Useful when you need cleanup steps that must run even after an error.
+リンクされたSQEが成功しても失敗しても、チェーンは継続する。各SQEは無条件に順番に実行される。エラーの後でも実行しなければならない後始末のステップが必要な場合に有用である。
 
-### Example: write then fsync {#example-write-then-fsync}
+### 例: writeしてからfsync {#example-write-then-fsync}
 
-A common pattern for durable writes: persist data, then flush. A link guarantees `fsync` only runs after the write completes, and both are submitted in a single `io_uring_submit` call:
+永続的な書き込みのための一般的なパターンは、データを書き込んでからフラッシュすることである。リンクにより、`fsync`はwriteの完了後にのみ実行されることが保証され、両方が1回の`io_uring_submit`呼び出しで投入される。
 
 ```c
 #include <liburing.h>
@@ -187,22 +187,22 @@ int durable_write(struct io_uring *ring, int fd,
     struct io_uring_cqe *cqe;
     int ret;
 
-    /* SQE 1: write — linked to SQE 2 */
+    /* SQE 1: write。SQE 2にリンクされる */
     sqe = io_uring_get_sqe(ring);
     io_uring_prep_write(sqe, fd, buf, len, offset);
     io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);
-    io_uring_sqe_set_data64(sqe, 1);   /* tag: write */
+    io_uring_sqe_set_data64(sqe, 1);   /* タグ: write */
 
-    /* SQE 2: fsync — runs only if write succeeded */
+    /* SQE 2: fsync。writeが成功した場合のみ実行される */
     sqe = io_uring_get_sqe(ring);
-    io_uring_prep_fsync(sqe, fd, 0);   /* 0 = fsync (not fdatasync) */
-    /* no IOSQE_IO_LINK: end of chain */
-    io_uring_sqe_set_data64(sqe, 2);   /* tag: fsync */
+    io_uring_prep_fsync(sqe, fd, 0);   /* 0 = fsync（fdatasyncではない） */
+    /* IOSQE_IO_LINKなし: チェーンの終端 */
+    io_uring_sqe_set_data64(sqe, 2);   /* タグ: fsync */
 
-    /* Submit both in one syscall */
+    /* 両方を1回のシステムコールで投入する */
     io_uring_submit(ring);
 
-    /* Collect both completions */
+    /* 両方の完了を回収する */
     for (int i = 0; i < 2; i++) {
         ret = io_uring_wait_cqe(ring, &cqe);
         uint64_t tag = io_uring_cqe_get_data64(cqe);
@@ -217,14 +217,14 @@ int durable_write(struct io_uring *ring, int fd,
 }
 ```
 
-If the write fails, the fsync CQE arrives with `res == -ECANCELED` — no need to check the fsync result independently. To force the fsync regardless, replace `IOSQE_IO_LINK` with `IOSQE_IO_HARDLINK`.
+writeが失敗すると、fsyncのCQEは`res == -ECANCELED`で届く。fsyncの結果を個別に確認する必要はない。どんな場合でもfsyncを強制したい場合は、`IOSQE_IO_LINK`を`IOSQE_IO_HARDLINK`に置き換える。
 
-### Link timeouts {#link-timeouts}
+### リンクタイムアウト {#link-timeouts}
 
-A `IORING_OP_LINK_TIMEOUT` SQE can be appended to a chain to bound its total duration. If the linked operation doesn't complete within the timeout, it is cancelled:
+`IORING_OP_LINK_TIMEOUT` SQEをチェーンに追加すると、その全体の所要時間に上限を設けられる。リンクされた操作がタイムアウト内に完了しなければ、その操作はキャンセルされる。
 
 ```c
-/* connect with a 5-second timeout */
+/* 5秒のタイムアウト付きでconnectする */
 sqe = io_uring_get_sqe(ring);
 io_uring_prep_connect(sqe, fd, addr, addrlen);
 io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);
@@ -235,28 +235,28 @@ io_uring_prep_link_timeout(sqe, &(struct __kernel_timespec){
 }, 0);
 ```
 
-## `IORING_OP_POLL_ADD` multishot {#ioringoppoll_add-multishot}
+## `IORING_OP_POLL_ADD`のマルチショット {#ioringoppoll_add-multishot}
 
-**Added:** Linux 5.13 — `io_uring/poll.c`
+**追加**: Linux 5.13。`io_uring/poll.c`
 
-Normal `IORING_OP_POLL_ADD` fires once and is consumed. Adding `IORING_POLL_ADD_MULTI` makes it persistent: the SQE stays registered and a CQE is posted every time the polled events occur on the fd.
+通常の`IORING_OP_POLL_ADD`は1回発火すると消費される。`IORING_POLL_ADD_MULTI`を追加すると永続的になる。SQEは登録されたまま残り、fdでpoll対象のイベントが発生するたびにCQEが投稿される。
 
 ```c
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_poll_add(sqe, fd, POLLIN);
-sqe->len |= IORING_POLL_ADD_MULTI;   /* multishot poll */
+sqe->len |= IORING_POLL_ADD_MULTI;   /* マルチショットpoll */
 io_uring_sqe_set_data64(sqe, TAG_POLL);
 io_uring_submit(&ring);
 
-/* Each time fd becomes readable, a CQE arrives:
- *   cqe->res  = triggered poll events (POLLIN, POLLHUP, ...)
- *   cqe->flags & IORING_CQE_F_MORE: still armed
+/* fdが読み込み可能になるたびにCQEが届く:
+ *   cqe->res  = 発生したpollイベント（POLLIN、POLLHUP、...）
+ *   cqe->flags & IORING_CQE_F_MORE: まだ有効
  */
 ```
 
-This provides an alternative to `epoll` for persistent fd readiness notification inside an io_uring event loop — all events go through the same CQ, avoiding the context switch to `epoll_wait`.
+これは、io_uringのイベントループ内でfdのレディネスを永続的に通知するための、`epoll`に代わる手段を提供する。すべてのイベントが同じCQを通るため、`epoll_wait`へのコンテキストスイッチを避けられる。
 
-To cancel:
+キャンセルするには:
 
 ```c
 sqe = io_uring_get_sqe(&ring);
@@ -264,11 +264,11 @@ io_uring_prep_poll_remove(sqe, TAG_POLL);
 io_uring_submit(&ring);
 ```
 
-## Probing capabilities (`io_uring_probe`) {#probing-capabilities-iouringprobe}
+## 機能のプローブ（`io_uring_probe`） {#probing-capabilities-iouringprobe}
 
-io_uring adds new opcodes and features frequently — and not all kernels support all operations. Calling an unsupported opcode produces `EINVAL` or `EOPNOTSUPP`, which is difficult to distinguish from a usage error. The probe API lets you query the kernel's capabilities before committing to a code path.
+io_uringには新しいオペコードや機能が頻繁に追加されており、すべてのカーネルがすべての操作をサポートしているわけではない。サポートされていないオペコードを呼ぶと`EINVAL`または`EOPNOTSUPP`になり、使い方の誤りと区別するのは難しい。プローブAPIを使うと、コードパスを確定する前にカーネルの機能を問い合わせられる。
 
-### Raw probe via `io_uring_register` {#raw-probe-via-iouringregister}
+### `io_uring_register`による生のプローブ {#raw-probe-via-iouringregister}
 
 ```c
 #include <linux/io_uring.h>
@@ -276,7 +276,7 @@ io_uring adds new opcodes and features frequently — and not all kernels suppor
 
 struct io_uring_probe *probe_kernel(int ring_fd)
 {
-    /* Allocate space for the probe struct + opcode entries */
+    /* probe構造体 + オペコードエントリ分の領域を割り当てる */
     int nr_ops = IORING_OP_LAST;
     struct io_uring_probe *probe = calloc(1,
         sizeof(*probe) + nr_ops * sizeof(struct io_uring_probe_op));
@@ -292,7 +292,7 @@ struct io_uring_probe *probe_kernel(int ring_fd)
     return probe;
 }
 
-/* Check one opcode */
+/* 1つのオペコードを確認する */
 bool op_supported(const struct io_uring_probe *probe, unsigned op)
 {
     if (op > probe->last_op)
@@ -301,7 +301,7 @@ bool op_supported(const struct io_uring_probe *probe, unsigned op)
 }
 ```
 
-### liburing helper {#liburing-helper}
+### liburingのヘルパー {#liburing-helper}
 
 ```c
 #include <liburing.h>
@@ -312,7 +312,7 @@ io_uring_queue_init(8, &ring, 0);
 struct io_uring_probe *probe = io_uring_get_probe_ring(&ring);
 
 if (io_uring_opcode_supported(probe, IORING_OP_ACCEPT)) {
-    /* multishot accept available? check kernel version or probe flags */
+    /* マルチショットacceptは使えるか? カーネルバージョンかprobeのフラグを確認する */
 }
 if (io_uring_opcode_supported(probe, IORING_OP_SEND_ZC)) {
     printf("zero-copy send supported\n");
@@ -322,22 +322,22 @@ io_uring_free_probe(probe);
 io_uring_queue_exit(&ring);
 ```
 
-`io_uring_get_probe_ring()` calls `io_uring_register(IORING_REGISTER_PROBE)` internally and returns a heap-allocated `io_uring_probe`. Free it with `io_uring_free_probe()`.
+`io_uring_get_probe_ring()`は内部で`io_uring_register(IORING_REGISTER_PROBE)`を呼び、ヒープに割り当てた`io_uring_probe`を返す。`io_uring_free_probe()`で解放する。
 
-### Why probing matters {#why-probing-matters}
+### なぜプローブが重要か {#why-probing-matters}
 
-| Approach | Consequence of missing op |
+| アプローチ | 操作がない場合の結果 |
 |----------|--------------------------|
-| Unconditional use | `EINVAL` / `EOPNOTSUPP` at runtime, hard to diagnose |
-| Version check (`uname`) | Fragile: backports, distribution kernels |
-| Feature flag check (`params.features`) | Only covers ring-level features, not per-opcode |
-| `io_uring_register(IORING_REGISTER_PROBE)` | Definitive per-opcode answer from the running kernel |
+| 無条件に使う | 実行時に`EINVAL` / `EOPNOTSUPP`となり、診断が難しい |
+| バージョンチェック（`uname`） | 脆い: バックポート、ディストリビューションのカーネル |
+| 機能フラグのチェック（`params.features`） | リングレベルの機能しかカバーせず、オペコード単位ではない |
+| `io_uring_register(IORING_REGISTER_PROBE)` | 実行中のカーネルからのオペコード単位の確定的な答え |
 
-Probe once at startup, store the results, and branch on them. The probe syscall is cheap — one `io_uring_register` call.
+起動時に1回プローブし、結果を保存し、それに基づいて分岐する。プローブのシステムコールは安価で、`io_uring_register`を1回呼ぶだけである。
 
-## Putting it together: multishot accept with linked reads {#putting-it-together-multishot-accept-with-linked-reads}
+## まとめ: マルチショットacceptとリンクされた読み込み {#putting-it-together-multishot-accept-with-linked-reads}
 
-A sketch of a server that combines multishot accept, per-connection multishot recv, and linked write+fsync for log durability:
+マルチショットaccept、接続ごとのマルチショットrecv、ログの永続化のためのリンクされたwrite+fsyncを組み合わせたサーバーの概略:
 
 ```
 listen_fd
@@ -355,13 +355,13 @@ listen_fd
                         └─▶ linked WRITE → FSYNC (one io_uring_submit)
 ```
 
-All three operation types drain into the same CQ. A single event loop harvests them by checking `user_data` tags to dispatch each CQE to the right handler. No epoll, no thread-per-connection, no per-event syscall.
+3種類の操作はすべて同じCQに流れ込む。単一のイベントループが`user_data`タグを確認して各CQEを適切なハンドラにディスパッチすることで、それらを回収する。epollもスレッド・パー・コネクションも、イベントごとのシステムコールもない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Architecture and Rings](io-uring-arch.md) — SQE/CQE structures, ring layout, `io_uring_enter`
-- [Operations and Advanced Features](io-uring-ops.md) — SQPOLL, fixed files, provided buffers
-- `io_uring/net.c` in the kernel tree — `io_accept_multishot()`, `io_recv_multishot()`
-- `io_uring/poll.c` in the kernel tree — `io_poll_multishot()`
-- `include/uapi/linux/io_uring.h` — `IORING_ACCEPT_MULTISHOT`, `IORING_RECV_MULTISHOT`, `IORING_POLL_ADD_MULTI`, `IORING_CQE_F_MORE`
-- `liburing` GitHub repository — `io_uring_prep_multishot_accept()`, `io_uring_get_probe_ring()`
+- [アーキテクチャとリング](io-uring-arch.md): SQE/CQE構造体、リングレイアウト、`io_uring_enter`
+- [操作と高度な機能](io-uring-ops.md): SQPOLL、固定ファイル、提供バッファ
+- カーネルツリーの`io_uring/net.c`: `io_accept_multishot()`、`io_recv_multishot()`
+- カーネルツリーの`io_uring/poll.c`: `io_poll_multishot()`
+- `include/uapi/linux/io_uring.h`: `IORING_ACCEPT_MULTISHOT`、`IORING_RECV_MULTISHOT`、`IORING_POLL_ADD_MULTI`、`IORING_CQE_F_MORE`
+- `liburing`のGitHubリポジトリ: `io_uring_prep_multishot_accept()`、`io_uring_get_probe_ring()`

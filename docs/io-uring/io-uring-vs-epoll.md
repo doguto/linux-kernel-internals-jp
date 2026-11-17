@@ -1,58 +1,50 @@
 # io_uring vs epoll {#io_uring-vs-epoll}
 
-> When to replace your event loop, when to keep it, and how to migrate
+> イベントループを置き換えるべきとき、維持すべきとき、そして移行の方法
 
-## The problem both solve {#the-problem-both-solve}
+## 両者が解決する問題 {#the-problem-both-solve}
 
-Modern servers need to wait on many file descriptors at once without spinning
-or blocking. The naive approach — one thread per connection — collapses under
-load because of context-switch overhead and memory (each thread needs a stack).
+現代のサーバーは、スピンもブロックもせずに多数のファイルディスクリプタを同時に待つ必要がある。素朴なアプローチ、つまり接続ごとに1スレッドという方式は、コンテキストスイッチのオーバーヘッドとメモリ（各スレッドにスタックが必要）のために、負荷がかかると破綻する。
 
-The Unix answer has evolved through three generations:
+Unixの答えは3世代を経て進化してきた。
 
-| Interface | Introduced | Mechanism | Scalability limit |
+| インターフェース | 導入 | 仕組み | スケーラビリティの限界 |
 |-----------|-----------|-----------|-------------------|
-| `select(2)` | BSD 4.2 | bitmap scan | O(maxfd); 1024 fd cap |
-| `poll(2)` | SVR3 | linear scan of `pollfd[]` | O(N) per call |
-| `epoll(7)` | Linux 2.5.44 | red-black tree + ready list | O(1) per event |
-| `io_uring` | Linux 5.1 | shared-memory rings | O(0) syscalls (SQPOLL) |
+| `select(2)` | BSD 4.2 | ビットマップの走査 | O(maxfd)、fdの上限は1024 |
+| `poll(2)` | SVR3 | `pollfd[]`の線形走査 | 呼び出しごとにO(N) |
+| `epoll(7)` | Linux 2.5.44 | 赤黒木 + readyリスト | イベントごとにO(1) |
+| `io_uring` | Linux 5.1 | 共有メモリのリング | システムコールO(0)（SQPOLL） |
 
-`epoll` solved the scalability problem for **network sockets**: the kernel
-tracks interest in a red-black tree and pushes ready fds into a linked list
-that `epoll_wait` drains. Only *active* fds cost anything at wait time.
+`epoll`は**ネットワークソケット**についてスケーラビリティの問題を解決した。カーネルは関心のあるfdを赤黒木で管理し、readyになったfdを連結リストに入れ、`epoll_wait`がそれを取り出す。待機時にコストがかかるのは*アクティブな*fdだけである。
 
-The gaps that remained:
+残された課題:
 
-- Regular files are *always* ready in epoll — `EPOLLIN` fires immediately,
-  actual data is fetched synchronously in a follow-up `read()`.
-- Every operation still needs at least one syscall: `epoll_ctl` to register,
-  `epoll_wait` to block, then `read`/`write`/`accept` to do the I/O.
-- No way to batch submissions or results across heterogeneous operation types.
-- No kernel-side polling, no zero-copy, no integrated timers.
+- epollでは通常ファイルは*常に*readyである。`EPOLLIN`は即座に発火し、実際のデータは後続の`read()`で同期的に取得される。
+- すべての操作に依然として少なくとも1回のシステムコールが必要である。登録に`epoll_ctl`、ブロックに`epoll_wait`、そしてI/Oを行うのに`read`/`write`/`accept`。
+- 異なる種類の操作にまたがって投入や結果をバッチ化する方法がない。
+- カーネル側のポーリングも、ゼロコピーも、統合されたタイマーもない。
 
-`io_uring` adds a single unified submission/completion interface that covers
-network I/O, file I/O, timers, and cancellation. Under SQPOLL, userspace
-submits work by writing to shared memory — zero syscalls.
+`io_uring`は、ネットワークI/O、ファイルI/O、タイマー、キャンセルをカバーする単一の統一されたサブミッション/コンプリーションのインターフェースを追加する。SQPOLLのもとでは、ユーザー空間は共有メモリに書き込むだけで処理を投入できる。システムコールはゼロである。
 
 ---
 
-## epoll internals {#epoll-internals}
+## epollの内部 {#epoll-internals}
 
-### Setup {#setup}
+### セットアップ {#setup}
 
 ```c
-/* Create an epoll instance. size arg is ignored since 2.6.8 but must be > 0 */
+/* epollインスタンスを作成する。size引数は2.6.8以降無視されるが、> 0でなければならない */
 int epfd = epoll_create1(EPOLL_CLOEXEC);
 
 struct epoll_event ev = {
-    .events  = EPOLLIN | EPOLLET,  /* edge-triggered read interest */
+    .events  = EPOLLIN | EPOLLET,  /* エッジトリガの読み込み関心 */
     .data.fd = client_fd,
 };
 epoll_ctl(epfd, EPOLL_CTL_ADD, client_fd, &ev);
 ```
 
 ```c
-/* Block until events arrive (or timeout_ms elapses) */
+/* イベントが届くまで（またはtimeout_msが経過するまで）ブロックする */
 struct epoll_event events[MAX_EVENTS];
 int n = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
 for (int i = 0; i < n; i++) {
@@ -60,97 +52,81 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-### Kernel data structures {#kernel-data-structures}
+### カーネルのデータ構造 {#kernel-data-structures}
 
 ```
-epoll instance (struct eventpoll)
-  ├─ rbr: red-black tree
-  │    Each node is a struct epitem (one per registered fd)
-  │    epoll_ctl ADD/MOD/DEL = O(log N) tree operation
+epollインスタンス（struct eventpoll）
+  ├─ rbr: 赤黒木
+  │    各ノードはstruct epitem（登録されたfdごとに1つ）
+  │    epoll_ctl ADD/MOD/DEL = O(log N)の木操作
   │
-  └─ rdllist: doubly-linked ready list
-       When a socket becomes readable, the VFS wq callback fires,
-       puts the epitem on rdllist.
-       epoll_wait drains rdllist into the userspace events[] array.
+  └─ rdllist: 双方向連結のreadyリスト
+       ソケットが読み込み可能になると、VFSのwqコールバックが発火し、
+       epitemをrdllistに載せる。
+       epoll_waitはrdllistをユーザー空間のevents[]配列に取り出す。
 ```
 
-`epoll_wait` cost is O(1) in the number of *active* fds, regardless of how
-many fds are registered. That is the key insight epoll contributed.
+`epoll_wait`のコストは、登録されているfdの数に関係なく、*アクティブな*fdの数に対してO(1)である。これがepollがもたらした重要な洞察である。
 
-### Edge-triggered vs level-triggered {#edge-triggered-vs-level-triggered}
+### エッジトリガ vs レベルトリガ {#edge-triggered-vs-level-triggered}
 
-- **Level-triggered (default):** `epoll_wait` returns an fd as long as data is
-  available. Safe with standard blocking reads.
-- **Edge-triggered (`EPOLLET`):** fires only on *state change* (new data
-  arrival). Userspace must drain the fd completely with non-blocking reads.
-  Used to reduce spurious wakeups at the cost of more careful buffering.
+- **レベルトリガ（デフォルト）**: データが利用可能である限り、`epoll_wait`はそのfdを返す。標準的なブロッキング読み込みでも安全である。
+- **エッジトリガ（`EPOLLET`）**: *状態の変化*（新しいデータの到着）のときにのみ発火する。ユーザー空間はノンブロッキング読み込みでfdを完全に読み切らなければならない。より慎重なバッファリングと引き換えに、不要な起床を減らすために使われる。
 
 ### EPOLLONESHOT {#epolloneshot}
 
-`EPOLLONESHOT` disables the fd after one event. Userspace must re-arm with
-`EPOLL_CTL_MOD` after processing. Common pattern in multi-threaded servers to
-avoid two threads waking on the same fd.
+`EPOLLONESHOT`は、1回のイベントの後にそのfdを無効化する。ユーザー空間は処理後に`EPOLL_CTL_MOD`で再設定しなければならない。マルチスレッドのサーバーで、2つのスレッドが同じfdで起床するのを避けるための一般的なパターンである。
 
 ```c
 ev.events = EPOLLIN | EPOLLONESHOT;
-epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* re-arm after handling */
+epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* 処理後に再設定する */
 ```
 
 ---
 
-## Where epoll falls short {#where-epoll-falls-short}
+## epollが不十分な点 {#where-epoll-falls-short}
 
-### Regular files {#regular-files}
+### 通常ファイル {#regular-files}
 
 ```c
-/* This always returns immediately — regular files are always "ready" */
+/* これは常に即座に返る。通常ファイルは常に「ready」である */
 ev.events = EPOLLIN;
 epoll_ctl(epfd, EPOLL_CTL_ADD, open("big_file", O_RDONLY), &ev);
-/* epoll_wait fires, but read() may still block in page-fault path */
+/* epoll_waitは発火するが、read()はページフォールトのパスで依然としてブロックしうる */
 ```
 
-The kernel's poll implementation for regular files unconditionally returns
-`POLLIN | POLLOUT`. epoll cannot express "wake me when this disk read is
-done." The actual I/O happens synchronously in the `read()` call after the
-epoll event.
+カーネルの通常ファイル向けpoll実装は、無条件に`POLLIN | POLLOUT`を返す。epollは「このディスク読み込みが終わったら起こしてくれ」を表現できない。実際のI/Oは、epollイベントの後の`read()`呼び出しの中で同期的に行われる。
 
-### Syscall cost per batch {#syscall-cost-per-batch}
+### バッチあたりのシステムコールコスト {#syscall-cost-per-batch}
 
-Every I/O round-trip involves at minimum:
+I/Oの往復には、最低でも次が含まれる。
 
 ```
-epoll_wait()          — syscall 1: block/wait
-read() / recv()       — syscall 2: get data
-write() / send()      — syscall 3: send response
-epoll_ctl(MOD/ADD)    — syscall 4: re-arm if EPOLLONESHOT
+epoll_wait()          — システムコール1: ブロック/待機
+read() / recv()       — システムコール2: データを取得
+write() / send()      — システムコール3: 応答を送信
+epoll_ctl(MOD/ADD)    — システムコール4: EPOLLONESHOTなら再設定
 ```
 
-At 100 K RPS, that is 400 K+ syscalls/second. Each syscall crosses the
-user/kernel boundary, flushes the TLB partial state, and on systems with
-mitigations (KPTI, Retpoline) costs 100–300 ns.
+100 K RPSでは、これは毎秒400 K回以上のシステムコールになる。各システムコールはユーザー/カーネルの境界をまたぎ、TLBの状態を部分的にフラッシュし、緩和策（KPTI、Retpoline）が有効なシステムでは100〜300 nsかかる。
 
-### No submission batching {#no-submission-batching}
+### サブミッションのバッチ化がない {#no-submission-batching}
 
-`epoll_ctl` takes one fd at a time. Registering 1000 fds on startup means
-1000 individual syscalls.
+`epoll_ctl`は一度に1つのfdしか受け取らない。起動時に1000個のfdを登録するには、1000回の個別のシステムコールが必要になる。
 
-### No integrated timers {#no-integrated-timers}
+### 統合されたタイマーがない {#no-integrated-timers}
 
-Timeouts require a separate `timerfd_create` + `EPOLL_CTL_ADD` or careful
-use of the `epoll_wait` timeout argument — neither integrates cleanly into
-an operation-level deadline model.
+タイムアウトには、別途`timerfd_create` + `EPOLL_CTL_ADD`を使うか、`epoll_wait`のタイムアウト引数を注意深く使う必要がある。どちらも操作単位の期限モデルにはきれいに統合されない。
 
-### No cancellation {#no-cancellation}
+### キャンセルがない {#no-cancellation}
 
-There is no way to cancel a pending `epoll_wait` other than closing the fd or
-sending a signal.
+保留中の`epoll_wait`をキャンセルするには、fdを閉じるかシグナルを送る以外に方法がない。
 
 ---
 
-## io_uring's unified model {#io_urings-unified-model}
+## io_uringの統一モデル {#io_urings-unified-model}
 
-io_uring presents one ring for *all* asynchronous operations. The same
-submission path handles:
+io_uringは、*すべての*非同期操作に対して1つのリングを提供する。同じサブミッションパスが次を扱う。
 
 ```
 Network:  IORING_OP_ACCEPT, IORING_OP_RECV, IORING_OP_SEND
@@ -161,15 +137,15 @@ Other:    IORING_OP_CONNECT, IORING_OP_OPENAT, IORING_OP_CLOSE,
           IORING_OP_STATX, IORING_OP_SPLICE, IORING_OP_SEND_ZC
 ```
 
-### IORING_OP_POLL_ADD — replacing epoll_wait {#ioringoppolladd-replacing-epollwait}
+### IORING_OP_POLL_ADD: epoll_waitの置き換え {#ioringoppolladd-replacing-epollwait}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_poll_add(sqe, fd, POLLIN);
-sqe->user_data = (uintptr_t)conn;  /* context pointer */
+sqe->user_data = (uintptr_t)conn;  /* コンテキストポインタ */
 io_uring_submit(&ring);
 
-/* Later, harvest completions */
+/* 後で完了を回収する */
 struct io_uring_cqe *cqe;
 io_uring_wait_cqe(&ring, &cqe);
 if (cqe->res & POLLIN) {
@@ -178,29 +154,26 @@ if (cqe->res & POLLIN) {
 io_uring_cqe_seen(&ring, cqe);
 ```
 
-One-shot by default. Re-submit the SQE to re-arm, just like `EPOLLONESHOT`.
+デフォルトではワンショットである。`EPOLLONESHOT`と同じく、再設定するにはSQEを再投入する。
 
-### IORING_POLL_ADD_MULTI — persistent fd monitoring {#ioringpolladd_multi-persistent-fd-monitoring}
+### IORING_POLL_ADD_MULTI: 永続的なfdの監視 {#ioringpolladd_multi-persistent-fd-monitoring}
 
 ```c
-sqe->len = IORING_POLL_ADD_MULTI;  /* multishot: don't auto-cancel */
+sqe->len = IORING_POLL_ADD_MULTI;  /* マルチショット: 自動キャンセルしない */
 ```
 
-With `IORING_POLL_ADD_MULTI`, a single submission keeps generating CQEs every
-time the fd becomes ready — equivalent to level-triggered epoll without
-re-arming. Cancel with `IORING_OP_POLL_REMOVE`.
+`IORING_POLL_ADD_MULTI`を使うと、1回の投入で、fdがreadyになるたびにCQEを生成し続ける。再設定不要のレベルトリガのepollに相当する。`IORING_OP_POLL_REMOVE`でキャンセルする。
 
 ```c
-/* Cancel a multishot poll */
+/* マルチショットpollをキャンセルする */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_poll_remove(sqe, user_data_tag);
 io_uring_submit(&ring);
 ```
 
-### Pipelining: ACCEPT + RECV in one ring {#pipelining-accept-recv-in-one-ring}
+### パイプライン化: 1つのリングでACCEPT + RECV {#pipelining-accept-recv-in-one-ring}
 
-With linked SQEs (`IOSQE_IO_LINK`), a chain of operations completes in order
-without returning to userspace between steps:
+リンクされたSQE（`IOSQE_IO_LINK`）を使うと、一連の操作がステップ間でユーザー空間に戻ることなく順番に完了する。
 
 ```c
 /* SQE 0: accept */
@@ -208,7 +181,7 @@ sqe = io_uring_get_sqe(&ring);
 io_uring_prep_multishot_accept(sqe, listen_fd, NULL, NULL, 0);
 sqe->user_data = TAG_ACCEPT;
 
-/* SQE 1: recv (linked to accept via IOSQE_IO_LINK on SQE 0) */
+/* SQE 1: recv（SQE 0のIOSQE_IO_LINKによりacceptにリンクされる） */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_recv(sqe, IORING_FILE_INDEX_ALLOC, buf, sizeof(buf), 0);
 sqe->flags |= IOSQE_FIXED_FILE;
@@ -217,99 +190,94 @@ sqe->user_data = TAG_RECV;
 io_uring_submit(&ring);
 ```
 
-### File I/O without threads {#file-io-without-threads}
+### スレッドなしのファイルI/O {#file-io-without-threads}
 
 ```c
-/* Regular file read — actually async, not O_NONBLOCK faking */
+/* 通常ファイルの読み込み。O_NONBLOCKによるごまかしではなく、本当に非同期 */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_read(sqe, file_fd, buf, 4096, offset);
 sqe->user_data = TAG_FILE_READ;
 io_uring_submit(&ring);
-/* epoll_wait on this fd would have returned "ready" immediately
-   and then blocked in read(). io_uring does the actual I/O async. */
+/* このfdに対するepoll_waitなら即座に「ready」を返し、
+   その後read()でブロックしていただろう。io_uringは実際のI/Oを非同期に行う。 */
 ```
 
 ---
 
-## Feature comparison {#feature-comparison}
+## 機能比較 {#feature-comparison}
 
-| Feature | epoll | io_uring |
+| 機能 | epoll | io_uring |
 |---------|-------|---------|
-| Network socket readiness | Yes | Yes (`IORING_OP_POLL_ADD`) |
-| Network socket I/O | Via `recv`/`send` after event | `IORING_OP_RECV` / `IORING_OP_SEND` |
-| Regular file I/O | No (always ready) | Yes (`IORING_OP_READ` / `IORING_OP_WRITE`) |
-| Pipes and FIFOs | Yes | Yes |
-| `eventfd` / `timerfd` | Yes | Yes (`IORING_OP_POLL_ADD`) |
-| Zero-copy send | No | Yes (`IORING_OP_SEND_ZC`, kernel ≥ 6.0) |
-| Kernel-side polling | No | Yes (`IORING_SETUP_SQPOLL`) |
-| Batched submission | No (one fd per `epoll_ctl`) | Yes (fill ring, one submit) |
-| Batched completion harvest | Yes (`epoll_wait` returns N) | Yes (drain CQ ring) |
-| Linked/chained operations | No | Yes (`IOSQE_IO_LINK`, `IOSQE_IO_HARDLINK`) |
-| Multishot (persistent) | Yes (level-triggered default) | Yes (`IORING_POLL_ADD_MULTI`, multishot accept/recv) |
-| Integrated timeouts | Partial (`timerfd` workaround) | Yes (`IORING_OP_TIMEOUT`, timeout-linked ops) |
-| Cancellation | No | Yes (`IORING_OP_CANCEL`) |
-| Fixed buffers / registered fds | No | Yes (`IORING_REGISTER_BUFFERS` / `IORING_REGISTER_FILES`) |
-| POSIX portability | Linux only | Linux only (5.1+) |
-| BSD / macOS equivalent | `kqueue` | No equivalent |
-| Minimum kernel version | 2.5.44 | 5.1 (usable: 5.10+) |
-| Userspace library | None needed | `liburing` (highly recommended) |
+| ネットワークソケットのレディネス | 可 | 可（`IORING_OP_POLL_ADD`） |
+| ネットワークソケットのI/O | イベント後に`recv`/`send`で | `IORING_OP_RECV` / `IORING_OP_SEND` |
+| 通常ファイルのI/O | 不可（常にready） | 可（`IORING_OP_READ` / `IORING_OP_WRITE`） |
+| パイプとFIFO | 可 | 可 |
+| `eventfd` / `timerfd` | 可 | 可（`IORING_OP_POLL_ADD`） |
+| ゼロコピー送信 | 不可 | 可（`IORING_OP_SEND_ZC`、カーネル6.0以上） |
+| カーネル側のポーリング | 不可 | 可（`IORING_SETUP_SQPOLL`） |
+| バッチ化された投入 | 不可（`epoll_ctl`ごとに1つのfd） | 可（リングを埋めて1回投入） |
+| バッチ化された完了の回収 | 可（`epoll_wait`がN個返す） | 可（CQリングを読み切る） |
+| リンク/連鎖した操作 | 不可 | 可（`IOSQE_IO_LINK`、`IOSQE_IO_HARDLINK`） |
+| マルチショット（永続的） | 可（デフォルトのレベルトリガ） | 可（`IORING_POLL_ADD_MULTI`、マルチショットaccept/recv） |
+| 統合されたタイムアウト | 部分的（`timerfd`による回避策） | 可（`IORING_OP_TIMEOUT`、タイムアウトをリンクした操作） |
+| キャンセル | 不可 | 可（`IORING_OP_CANCEL`） |
+| 固定バッファ / 登録済みfd | 不可 | 可（`IORING_REGISTER_BUFFERS` / `IORING_REGISTER_FILES`） |
+| POSIXの移植性 | Linuxのみ | Linuxのみ（5.1以降） |
+| BSD / macOSでの相当機能 | `kqueue` | 相当するものなし |
+| 最低カーネルバージョン | 2.5.44 | 5.1（実用的には5.10以降） |
+| ユーザー空間ライブラリ | 不要 | `liburing`（強く推奨） |
 
 ---
 
-## Syscall overhead {#syscall-overhead}
+## システムコールのオーバーヘッド {#syscall-overhead}
 
-### epoll path (per request, echo server example) {#epoll-path-per-request-echo-server-example}
-
-```
-Client sends data:
-  1. epoll_wait()             ← wake on EPOLLIN
-  2. recv(fd, buf, len, 0)    ← read data
-  3. send(fd, buf, len, 0)    ← write response
-  [4. epoll_ctl(MOD, ...)     ← re-arm if EPOLLONESHOT]
-
-= 3–4 syscalls per request
-```
-
-### io_uring path (without SQPOLL) {#io_uring-path-without-sqpoll}
+### epollのパス（リクエストごと、エコーサーバーの例） {#epoll-path-per-request-echo-server-example}
 
 ```
-Client sends data:
-  1. io_uring_enter()         ← submit RECV + SEND SQEs, wait for CQEs
-                                 (or io_uring_submit + io_uring_wait_cqe)
+クライアントがデータを送信:
+  1. epoll_wait()             ← EPOLLINで起床
+  2. recv(fd, buf, len, 0)    ← データを読む
+  3. send(fd, buf, len, 0)    ← 応答を書く
+  [4. epoll_ctl(MOD, ...)     ← EPOLLONESHOTなら再設定]
 
-= 1 syscall per batch of N requests
+= リクエストあたり3〜4回のシステムコール
 ```
 
-### io_uring path (with SQPOLL) {#io_uring-path-with-sqpoll}
+### io_uringのパス（SQPOLLなし） {#io_uring-path-without-sqpoll}
 
 ```
-Client sends data:
-  (no syscall — kernel SQPOLL thread sees new SQEs in shared memory)
-  Completions appear in CQ ring
-  Userspace reads CQ ring directly
+クライアントがデータを送信:
+  1. io_uring_enter()         ← RECV + SEND SQEを投入し、CQEを待つ
+                                 （またはio_uring_submit + io_uring_wait_cqe）
 
-= 0 syscalls per request (while ring is active)
+= N個のリクエストのバッチあたり1回のシステムコール
 ```
 
-### Numbers from the wild {#numbers-from-the-wild}
+### io_uringのパス（SQPOLLあり） {#io_uring-path-with-sqpoll}
 
-Benchmarks on high-connection workloads (sources: io_uring author talks,
-Cloudflare blog, Nginx io_uring experiments):
+```
+クライアントがデータを送信:
+  （システムコールなし。カーネルのSQPOLLスレッドが共有メモリ内の新しいSQEを見つける）
+  完了がCQリングに現れる
+  ユーザー空間はCQリングを直接読む
 
-- At 100 K connections, epoll servers typically spend 15–25% of CPU time in
-  syscall overhead alone.
-- io_uring with SQPOLL reduces syscall count by ~80% in echo-server
-  micro-benchmarks.
-- `io_uring_enter` with batching (submit 32 SQEs, wait for 32 CQEs) brings
-  per-operation syscall cost below 10 ns on modern CPUs.
-- Zero-copy send (`IORING_OP_SEND_ZC`) removes the user→kernel buffer copy
-  on large payloads, yielding another 10–15% throughput gain for >4 KB messages.
+= リクエストあたり0回のシステムコール（リングがアクティブな間）
+```
+
+### 実環境での数値 {#numbers-from-the-wild}
+
+高接続数のワークロードでのベンチマーク（出典: io_uring作者の講演、Cloudflareのブログ、Nginxのio_uring実験）:
+
+- 100 K接続では、epollサーバーは通常、CPU時間の15〜25%をシステムコールのオーバーヘッドだけに費やす。
+- SQPOLL付きのio_uringは、エコーサーバーのマイクロベンチマークでシステムコール数を約80%削減する。
+- バッチ化した`io_uring_enter`（32個のSQEを投入し、32個のCQEを待つ）により、現代のCPUでは操作あたりのシステムコールコストが10 ns未満になる。
+- ゼロコピー送信（`IORING_OP_SEND_ZC`）は、大きなペイロードでのユーザー→カーネルのバッファコピーをなくし、4 KBを超えるメッセージではさらに10〜15%のスループット向上をもたらす。
 
 ---
 
-## Side-by-side: echo server {#side-by-side-echo-server}
+## 並べて比較: エコーサーバー {#side-by-side-echo-server}
 
-### epoll version {#epoll-version}
+### epoll版 {#epoll-version}
 
 ```c
 #include <sys/epoll.h>
@@ -343,7 +311,7 @@ int main(void) {
 
     int epfd = epoll_create1(EPOLL_CLOEXEC);
 
-    /* Register listen socket */
+    /* listenソケットを登録する */
     struct epoll_event ev = { .events = EPOLLIN, .data.fd = listen_fd };
     epoll_ctl(epfd, EPOLL_CTL_ADD, listen_fd, &ev);
 
@@ -351,26 +319,26 @@ int main(void) {
     char buf[BUF_SIZE];
 
     for (;;) {
-        int n = epoll_wait(epfd, events, MAX_EVENTS, -1); /* syscall 1 */
+        int n = epoll_wait(epfd, events, MAX_EVENTS, -1); /* システムコール1 */
         for (int i = 0; i < n; i++) {
             int fd = events[i].data.fd;
 
             if (fd == listen_fd) {
-                /* Accept new connection */
+                /* 新しい接続を受け付ける */
                 int conn = accept4(listen_fd, NULL, NULL,
-                                   SOCK_NONBLOCK | SOCK_CLOEXEC); /* syscall 2 */
+                                   SOCK_NONBLOCK | SOCK_CLOEXEC); /* システムコール2 */
                 ev.events  = EPOLLIN | EPOLLET;
                 ev.data.fd = conn;
-                epoll_ctl(epfd, EPOLL_CTL_ADD, conn, &ev); /* syscall 3 */
+                epoll_ctl(epfd, EPOLL_CTL_ADD, conn, &ev); /* システムコール3 */
             } else {
-                /* Read and echo */
+                /* 読み込んでエコーする */
                 ssize_t r;
-                while ((r = recv(fd, buf, sizeof(buf), 0)) > 0) { /* syscall 4 */
-                    send(fd, buf, r, 0);                           /* syscall 5 */
+                while ((r = recv(fd, buf, sizeof(buf), 0)) > 0) { /* システムコール4 */
+                    send(fd, buf, r, 0);                           /* システムコール5 */
                 }
                 if (r == 0 || (r < 0 && errno != EAGAIN)) {
-                    epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);      /* syscall 6 */
-                    close(fd);                                      /* syscall 7 */
+                    epoll_ctl(epfd, EPOLL_CTL_DEL, fd, NULL);      /* システムコール6 */
+                    close(fd);                                      /* システムコール7 */
                 }
             }
         }
@@ -378,7 +346,7 @@ int main(void) {
 }
 ```
 
-### io_uring version {#io_uring-version}
+### io_uring版 {#io_uring-version}
 
 ```c
 #include <liburing.h>
@@ -390,7 +358,7 @@ int main(void) {
 #define QUEUE_DEPTH  256
 #define BUF_SIZE     4096
 
-/* Tags encoded in user_data to identify CQE type */
+/* CQEの種類を識別するためにuser_dataにエンコードするタグ */
 #define TAG_ACCEPT  0x0100000000000000ULL
 #define TAG_RECV    0x0200000000000000ULL
 #define TAG_SEND    0x0300000000000000ULL
@@ -402,7 +370,7 @@ struct conn {
 
 static void submit_accept(struct io_uring *ring, int listen_fd) {
     struct io_uring_sqe *sqe = io_uring_get_sqe(ring);
-    /* multishot: keeps generating CQEs for every new connection */
+    /* マルチショット: 新しい接続ごとにCQEを生成し続ける */
     io_uring_prep_multishot_accept(sqe, listen_fd, NULL, NULL, 0);
     sqe->user_data = TAG_ACCEPT;
 }
@@ -435,31 +403,31 @@ int main(void) {
     struct io_uring ring;
     io_uring_queue_init(QUEUE_DEPTH, &ring, 0);
 
-    /* Submit multishot accept once — no re-arm needed */
+    /* マルチショットacceptを一度だけ投入する。再設定は不要 */
     submit_accept(&ring, listen_fd);
-    io_uring_submit(&ring); /* one-time setup syscall */
+    io_uring_submit(&ring); /* 1回限りのセットアップ用システムコール */
 
     for (;;) {
         struct io_uring_cqe *cqe;
-        io_uring_wait_cqe(&ring, &cqe); /* single syscall for all events */
+        io_uring_wait_cqe(&ring, &cqe); /* すべてのイベントに対して1回のシステムコール */
 
         uint64_t tag  = cqe->user_data & 0xff00000000000000ULL;
         void    *ptr  = (void *)(uintptr_t)(cqe->user_data & ~0xff00000000000000ULL);
 
         if (tag == TAG_ACCEPT) {
             if (cqe->res >= 0) {
-                /* New connection fd in cqe->res */
+                /* 新しい接続のfdはcqe->resにある */
                 struct conn *c = calloc(1, sizeof(*c));
                 c->fd = cqe->res;
-                submit_recv(&ring, c); /* post RECV immediately */
+                submit_recv(&ring, c); /* すぐにRECVを投稿する */
                 io_uring_submit(&ring);
             }
-            /* multishot: accept SQE remains active, no re-arm */
+            /* マルチショット: accept SQEは有効なまま。再設定不要 */
 
         } else if (tag == TAG_RECV) {
             struct conn *c = ptr;
             if (cqe->res > 0) {
-                submit_send(&ring, c, cqe->res); /* echo back */
+                submit_send(&ring, c, cqe->res); /* エコーバックする */
                 io_uring_submit(&ring);
             } else {
                 close(c->fd);
@@ -469,7 +437,7 @@ int main(void) {
         } else if (tag == TAG_SEND) {
             struct conn *c = ptr;
             if (cqe->res > 0) {
-                submit_recv(&ring, c); /* wait for next message */
+                submit_recv(&ring, c); /* 次のメッセージを待つ */
                 io_uring_submit(&ring);
             } else {
                 close(c->fd);
@@ -482,189 +450,145 @@ int main(void) {
 }
 ```
 
-Key differences between the two versions:
+2つの版の主な違い:
 
-- The io_uring version never calls `epoll_ctl`, `recv`, or `send` directly —
-  those are expressed as SQEs.
-- `multishot_accept` fires a CQE for every new connection without re-arming;
-  the equivalent epoll code must call `accept4` in a loop plus `epoll_ctl ADD`
-  per client.
-- At high throughput, multiple CQEs can be drained in one `io_uring_wait_cqe`
-  loop before the next submit, amortising the submit syscall across many
-  completions.
+- io_uring版は`epoll_ctl`、`recv`、`send`を直接呼ばない。それらはSQEとして表現される。
+- `multishot_accept`は再設定なしで新しい接続ごとにCQEを発火する。同等のepollコードでは、ループ内で`accept4`を呼び、さらにクライアントごとに`epoll_ctl ADD`を呼ぶ必要がある。
+- 高スループット時には、次の投入の前に1回の`io_uring_wait_cqe`ループで複数のCQEを読み切れるため、投入のシステムコールのコストが多数の完了に分散される。
 
 ---
 
-## Migration patterns {#migration-patterns}
+## 移行パターン {#migration-patterns}
 
-### Step 1: replace `epoll_wait` with CQE drain {#step-1-replace-epoll_wait-with-cqe-drain}
+### ステップ1: `epoll_wait`をCQEの読み切りに置き換える {#step-1-replace-epoll_wait-with-cqe-drain}
 
 ```c
-/* Before */
+/* 移行前 */
 int n = epoll_wait(epfd, events, MAX, -1);
 for (int i = 0; i < n; i++) { handle(events[i]); }
 
-/* After */
+/* 移行後 */
 struct io_uring_cqe *cqe;
 unsigned head;
 io_uring_for_each_cqe(&ring, head, cqe) {
     handle_cqe(cqe);
 }
-io_uring_cq_advance(&ring, count);  /* bulk-advance head */
+io_uring_cq_advance(&ring, count);  /* headをまとめて進める */
 ```
 
-### Step 2: replace `epoll_ctl ADD` with `IORING_OP_POLL_ADD` {#step-2-replace-epollctl-add-with-ioringoppolladd}
+### ステップ2: `epoll_ctl ADD`を`IORING_OP_POLL_ADD`に置き換える {#step-2-replace-epollctl-add-with-ioringoppolladd}
 
 ```c
-/* Before */
+/* 移行前 */
 struct epoll_event ev = { .events = EPOLLIN, .data.fd = fd };
 epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 
-/* After */
+/* 移行後 */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_poll_add(sqe, fd, POLLIN);
 sqe->user_data = (uintptr_t)conn;
-/* batch with other SQEs; call io_uring_submit once */
+/* 他のSQEとバッチ化し、io_uring_submitを1回呼ぶ */
 ```
 
-### Step 3: replace post-event `recv` with `IORING_OP_RECV` {#step-3-replace-post-event-recv-with-ioringoprecv}
+### ステップ3: イベント後の`recv`を`IORING_OP_RECV`に置き換える {#step-3-replace-post-event-recv-with-ioringoprecv}
 
 ```c
-/* Before (two-step: epoll says ready, then recv) */
-/* epoll_wait fires */
+/* 移行前（2段階: epollがreadyを通知し、その後recv） */
+/* epoll_waitが発火する */
 ssize_t r = recv(fd, buf, len, 0);
 
-/* After (one-step: submit RECV, get result in CQE) */
+/* 移行後（1段階: RECVを投入し、結果をCQEで受け取る） */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_recv(sqe, fd, buf, len, 0);
 sqe->user_data = TAG_RECV | ctx;
-/* result arrives as cqe->res, no separate recv() call */
+/* 結果はcqe->resとして届く。別途recv()を呼ぶ必要はない */
 ```
 
-### Step 4: optionally enable SQPOLL {#step-4-optionally-enable-sqpoll}
+### ステップ4: 必要に応じてSQPOLLを有効にする {#step-4-optionally-enable-sqpoll}
 
 ```c
 struct io_uring_params params = {
     .flags          = IORING_SETUP_SQPOLL,
-    .sq_thread_idle = 10000, /* ms before SQPOLL thread sleeps */
+    .sq_thread_idle = 10000, /* SQPOLLスレッドがスリープするまでのミリ秒 */
 };
 io_uring_queue_init_params(QUEUE_DEPTH, &ring, &params);
-/* After this, io_uring_submit() is optional — check sq_ring->flags
-   for IORING_SQ_NEED_WAKEUP before calling it */
+/* これ以降、io_uring_submit()は任意。呼ぶ前に
+   sq_ring->flagsのIORING_SQ_NEED_WAKEUPを確認する */
 ```
 
-Requires `CAP_SYS_NICE` on kernels < 5.11, or `IORING_SETUP_SQPOLL` + a
-privileged process. On 5.11+, unprivileged SQPOLL is allowed.
+5.11未満のカーネルでは`CAP_SYS_NICE`が必要であるか、`IORING_SETUP_SQPOLL` + 特権プロセスが必要である。5.11以降では、非特権のSQPOLLが許可される。
 
-### Incremental migration strategy {#incremental-migration-strategy}
+### 段階的な移行戦略 {#incremental-migration-strategy}
 
 ```
-Phase 1: introduce ring alongside epoll
-  ├─ create io_uring ring at startup
-  ├─ route new file I/O through io_uring (replace pread/pwrite threads)
-  └─ keep existing epoll loop for socket events
+フェーズ1: epollと並行してリングを導入する
+  ├─ 起動時にio_uringリングを作成する
+  ├─ 新しいファイルI/Oをio_uring経由にする（pread/pwriteスレッドを置き換える）
+  └─ ソケットイベントには既存のepollループを維持する
 
-Phase 2: migrate socket events
-  ├─ replace EPOLL_CTL_ADD with IORING_OP_POLL_ADD for new connections
-  ├─ replace recv/send after epoll event with IORING_OP_RECV / IORING_OP_SEND
-  └─ drain epoll instances as fd count drops to zero
+フェーズ2: ソケットイベントを移行する
+  ├─ 新しい接続に対してEPOLL_CTL_ADDをIORING_OP_POLL_ADDに置き換える
+  ├─ epollイベント後のrecv/sendをIORING_OP_RECV / IORING_OP_SENDに置き換える
+  └─ fd数がゼロになるにつれてepollインスタンスを縮小する
 
-Phase 3: remove epoll entirely
-  ├─ replace remaining epoll_ctl calls
-  └─ optionally enable SQPOLL once correctness is confirmed
+フェーズ3: epollを完全に取り除く
+  ├─ 残りのepoll_ctl呼び出しを置き換える
+  └─ 正しさが確認できたら、必要に応じてSQPOLLを有効にする
 ```
 
 ---
 
-## When to keep epoll {#when-to-keep-epoll}
+## epollを維持すべきとき {#when-to-keep-epoll}
 
-**Portability is required.** epoll is Linux-only, but it has been around since
-2.5.44. If the codebase must also compile on FreeBSD, macOS, or OpenBSD —
-where `kqueue` is the equivalent — an abstraction layer (libevent, libuv,
-uv__io_t) that speaks epoll on Linux and kqueue elsewhere is a better fit than
-io_uring.
+**移植性が必要な場合**。epollはLinux専用だが、2.5.44から存在している。コードベースがFreeBSD、macOS、OpenBSD（`kqueue`が相当機能）でもコンパイルできなければならないなら、Linuxではepoll、それ以外ではkqueueを使う抽象化レイヤー（libevent、libuv、uv__io_t）のほうがio_uringより適している。
 
-**Kernel version constraints.** io_uring stabilised across kernel versions:
+**カーネルバージョンの制約**。io_uringはカーネルバージョンを重ねて安定してきた。
 
 ```
-5.1   — initial release (incomplete, many bugs)
-5.6   — IORING_OP_SPLICE, fixed buffers stable
-5.10  — IOSQE_BUFFER_SELECT, good stability baseline
-5.11  — unprivileged SQPOLL
-5.19  — multishot recv, send_zc prototype
-6.0   — IORING_OP_SEND_ZC stable
-6.1   — multishot recv stable
+5.1   — 最初のリリース（不完全、多数のバグ）
+5.6   — IORING_OP_SPLICE、固定バッファが安定
+5.10  — IOSQE_BUFFER_SELECT、安定性の良いベースライン
+5.11  — 非特権のSQPOLL
+5.19  — マルチショットrecv、send_zcのプロトタイプ
+6.0   — IORING_OP_SEND_ZCが安定
+6.1   — マルチショットrecvが安定
 ```
 
-If the deployment target is RHEL 8 (kernel 4.18) or any kernel older than
-5.10, io_uring either is unavailable or lacks important features.
+デプロイ先がRHEL 8（カーネル4.18）や5.10より古いカーネルの場合、io_uringは利用できないか、重要な機能が欠けている。
 
-**Small, simple event loops.** A single-threaded daemon watching 10 sockets
-with a few thousand requests per second gets nothing from io_uring's batching
-machinery. The added complexity is not worth it.
+**小さく単純なイベントループ**。10個のソケットを監視し、毎秒数千リクエストを処理するシングルスレッドのデーモンは、io_uringのバッチ化の仕組みから何も得られない。追加される複雑さに見合わない。
 
-**`eventfd` / `signalfd` / `timerfd` heavy usage.** These are all valid epoll
-targets. While io_uring can `POLL_ADD` on them, the existing epoll integration
-is mature and well-understood. Migration offers minimal gain if the workload is
-already dominated by these special fds.
+**`eventfd` / `signalfd` / `timerfd`を多用する場合**。これらはすべてepollの正当な監視対象である。io_uringでもそれらに`POLL_ADD`できるが、既存のepollとの統合は成熟しており、よく理解されている。ワークロードがすでにこれらの特殊なfdに支配されているなら、移行による利得はごくわずかである。
 
-**Audit and debugging tools.** Tools like strace, perf, and BPF-based
-observability hooks have decades of epoll tracing support. io_uring syscall
-patterns are different enough to break naive `epoll_wait`-based profiling.
-`io_uring_register(IORING_REGISTER_ENABLE_RINGS)` and BPF tracing of
-`io_uring_enter` work, but require updated tooling.
+**監査とデバッグのツール**。strace、perf、BPFベースの可観測性フックなどのツールには、何十年にもわたるepollのトレーシングのサポートがある。io_uringのシステムコールのパターンは大きく異なるため、素朴な`epoll_wait`ベースのプロファイリングは機能しなくなる。`io_uring_register(IORING_REGISTER_ENABLE_RINGS)`や`io_uring_enter`のBPFトレーシングは機能するが、更新されたツールが必要である。
 
-**Existing large codebase with mature epoll logic.** If the event loop is
-deeply embedded in a production system (Nginx, HAProxy, Redis), the cost of
-migration and re-testing outweighs the gains unless a specific bottleneck has
-been measured.
+**成熟したepollロジックを持つ既存の大規模コードベース**。イベントループが本番システム（Nginx、HAProxy、Redis）に深く組み込まれている場合、特定のボトルネックが計測されていない限り、移行と再テストのコストが利得を上回る。
 
 ---
 
-## When io_uring wins {#when-io_uring-wins}
+## io_uringが勝るとき {#when-io_uring-wins}
 
-**New high-performance network servers.** If starting from scratch and
-targeting Linux 5.10+, io_uring is the right default. The syscall savings
-are real and compound at scale.
+**新しい高性能ネットワークサーバー**。ゼロから始めてLinux 5.10以降をターゲットにするなら、io_uringが正しいデフォルトである。システムコールの節約は本物であり、規模が大きくなるほど効いてくる。
 
-**\>50 K concurrent connections.** At this scale, the per-event syscall cost
-of epoll becomes measurable. io_uring's batched submit/complete loop amortises
-that cost across hundreds of events per syscall.
+**50 Kを超える同時接続**。この規模では、epollのイベントごとのシステムコールコストが計測可能になる。io_uringのバッチ化された投入/完了ループは、そのコストをシステムコールあたり数百のイベントに分散する。
 
-**Mixed file + network I/O.** Databases, object stores, and proxies that
-read files and serve network clients in the same loop benefit most. With epoll,
-file I/O requires a thread pool (because files are always "ready") or Linux AIO
-(`libaio`), both of which have worse integration. io_uring handles both with
-identical SQE/CQE semantics.
+**ファイルとネットワークが混在するI/O**。同じループの中でファイルを読み、ネットワーククライアントに応答するデータベース、オブジェクトストア、プロキシが最も恩恵を受ける。epollでは、ファイルI/Oにはスレッドプール（ファイルは常に「ready」なので）かLinux AIO（`libaio`）が必要で、どちらも統合性が劣る。io_uringは両方を同一のSQE/CQEセマンティクスで扱う。
 
-**Replacing Linux AIO for databases.** `libaio` only handles `O_DIRECT` reads
-and writes, has a fixed 64 KB buffer alignment requirement, and uses
-`io_submit`/`io_getevents` with suboptimal batching. io_uring supersedes it:
-PostgreSQL, RocksDB, and ScyllaDB have all moved or are moving io_uring paths.
+**データベースにおけるLinux AIOの置き換え**。`libaio`は`O_DIRECT`の読み書きしか扱えず、64 KBのバッファアラインメントという固定の要件があり、バッチ化が最適でない`io_submit`/`io_getevents`を使う。io_uringはこれに取って代わる。PostgreSQL、RocksDB、ScyllaDBはいずれもio_uringのパスに移行済みか、移行中である。
 
-**Latency-critical paths.** With SQPOLL and registered fds/buffers, the data
-path can be entirely in shared memory — no syscall crossing on the hot path.
-Measured p99 latency improvements of 20–40% are reported for in-kernel SQPOLL
-workloads vs. equivalent epoll servers.
+**レイテンシが決定的に重要なパス**。SQPOLLと登録済みのfd/バッファを使えば、データパス全体を共有メモリ上に置ける。ホットパスでシステムコールによる境界越えがない。カーネル内SQPOLLを使うワークロードでは、同等のepollサーバーと比べてp99レイテンシが20〜40%改善したと報告されている。
 
-**Zero-copy send for large payloads.** `IORING_OP_SEND_ZC` avoids the
-userspace→kernel buffer copy on `send`. For payloads ≥ 4 KB (typical HTTP
-response bodies, streaming media), this removes a significant memcpy on every
-outbound write.
+**大きなペイロードのゼロコピー送信**。`IORING_OP_SEND_ZC`は、`send`でのユーザー空間→カーネルのバッファコピーを回避する。4 KB以上のペイロード（典型的なHTTPレスポンスボディ、ストリーミングメディア）では、送信ごとの大きなmemcpyがなくなる。
 
-**Wanting to simplify the I/O threading model.** epoll-based servers often
-have a dedicated thread pool for blocking file I/O alongside the event loop
-threads. io_uring unifies both into a single ring, eliminating the synchronisation
-overhead between the thread pool and the event loop.
+**I/Oのスレッドモデルを単純にしたい場合**。epollベースのサーバーは、イベントループのスレッドとは別に、ブロッキングなファイルI/O専用のスレッドプールを持つことが多い。io_uringは両方を1つのリングに統一し、スレッドプールとイベントループ間の同期オーバーヘッドをなくす。
 
 ---
 
-## `io_uring_prep_poll_add` and `IORING_POLL_ADD_MULTI` in depth {#iouringpreppolladd-and-ioringpolladd_multi-in-depth}
+## `io_uring_prep_poll_add`と`IORING_POLL_ADD_MULTI`の詳細 {#iouringpreppolladd-and-ioringpolladd_multi-in-depth}
 
-For teams that want a minimal migration — "use io_uring as a better epoll" —
-`IORING_OP_POLL_ADD` is the entry point.
+最小限の移行、つまり「io_uringをより良いepollとして使う」ことを望むチームにとって、`IORING_OP_POLL_ADD`が入り口になる。
 
-### One-shot poll (epoll EPOLLONESHOT equivalent) {#one-shot-poll-epoll-epolloneshot-equivalent}
+### ワンショットpoll（epollのEPOLLONESHOTに相当） {#one-shot-poll-epoll-epolloneshot-equivalent}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -673,17 +597,17 @@ io_uring_sqe_set_data(sqe, conn);
 
 io_uring_submit(&ring);
 
-/* CQE arrives when fd is readable */
+/* fdが読み込み可能になるとCQEが届く */
 struct io_uring_cqe *cqe;
 io_uring_wait_cqe(&ring, &cqe);
 struct conn *c = io_uring_cqe_get_data(cqe);
-/* cqe->res contains the poll mask that fired */
+/* cqe->resには発火したpollマスクが入っている */
 io_uring_cqe_seen(&ring, cqe);
 
-/* Must re-submit to watch fd again (like EPOLLONESHOT + EPOLL_CTL_MOD) */
+/* fdを再び監視するには再投入しなければならない（EPOLLONESHOT + EPOLL_CTL_MODと同様） */
 ```
 
-### Multishot poll (epoll level-triggered equivalent) {#multishot-poll-epoll-level-triggered-equivalent}
+### マルチショットpoll（epollのレベルトリガに相当） {#multishot-poll-epoll-level-triggered-equivalent}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -691,51 +615,45 @@ io_uring_prep_poll_multishot(sqe, fd, POLLIN);
 io_uring_sqe_set_data(sqe, conn);
 io_uring_submit(&ring);
 
-/* CQEs keep arriving as long as fd remains ready.
-   Check IORING_CQE_F_MORE in cqe->flags: */
+/* fdがreadyである限りCQEが届き続ける。
+   cqe->flagsのIORING_CQE_F_MOREを確認する: */
 struct io_uring_cqe *cqe;
 io_uring_wait_cqe(&ring, &cqe);
 if (!(cqe->flags & IORING_CQE_F_MORE)) {
-    /* poll was cancelled or error — re-submit if needed */
+    /* pollがキャンセルされたかエラー。必要なら再投入する */
 }
 io_uring_cqe_seen(&ring, cqe);
 ```
 
-`IORING_CQE_F_MORE` being set means the multishot poll is still armed in the
-kernel. When it is absent (cancelled, error, or `IORING_OP_POLL_REMOVE`), the
-fd is no longer watched.
+`IORING_CQE_F_MORE`がセットされていれば、マルチショットpollはカーネル内でまだ有効である。これがない場合（キャンセル、エラー、または`IORING_OP_POLL_REMOVE`）、そのfdはもう監視されていない。
 
-### Cancelling a multishot poll {#cancelling-a-multishot-poll}
+### マルチショットpollのキャンセル {#cancelling-a-multishot-poll}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
-io_uring_prep_poll_remove(sqe, conn);  /* matches user_data */
+io_uring_prep_poll_remove(sqe, conn);  /* user_dataで照合する */
 io_uring_submit(&ring);
-/* A CQE with res == 0 confirms cancellation */
+/* res == 0のCQEがキャンセルを確認する */
 ```
 
-### poll mask reference {#poll-mask-reference}
+### pollマスクのリファレンス {#poll-mask-reference}
 
 ```c
-POLLIN      — data available to read          (EPOLLIN equivalent)
-POLLOUT     — space available to write        (EPOLLOUT equivalent)
-POLLRDHUP   — peer closed write end           (EPOLLRDHUP equivalent)
-POLLHUP     — hang-up (connection closed)     (EPOLLHUP equivalent)
-POLLERR     — error condition                 (EPOLLERR equivalent)
-POLLPRI     — urgent / out-of-band data       (EPOLLPRI equivalent)
+POLLIN      — 読み込み可能なデータがある          （EPOLLINに相当）
+POLLOUT     — 書き込み可能な空きがある            （EPOLLOUTに相当）
+POLLRDHUP   — 相手が書き込み側を閉じた            （EPOLLRDHUPに相当）
+POLLHUP     — ハングアップ（接続が閉じた）        （EPOLLHUPに相当）
+POLLERR     — エラー状態                          （EPOLLERRに相当）
+POLLPRI     — 緊急 / 帯域外データ                 （EPOLLPRIに相当）
 ```
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [io_uring Architecture and Rings](io-uring-arch.md) — SQ/CQ ring layout,
-  SQE/CQE structs, submission and completion flows
-- [io_uring Operations and Advanced Features](io-uring-ops.md) — Full op list,
-  SQPOLL, fixed buffers, registered files
-- `liburing` source — `src/` contains `io_uring_prep_*` helpers that map
-  directly to the SQE fields described above
-- `io_uring/poll.c` in the kernel tree — implementation of `IORING_OP_POLL_ADD`
-  and multishot logic
-- Jens Axboe's io_uring notes — `kernel.dk/io_uring.pdf` (original design doc)
-- `man 7 epoll`, `man 2 epoll_ctl`, `man 2 epoll_wait` — epoll reference
+- [io_uringのアーキテクチャとリング](io-uring-arch.md): SQ/CQリングのレイアウト、SQE/CQE構造体、サブミッションとコンプリーションの流れ
+- [io_uringの操作と高度な機能](io-uring-ops.md): 全操作の一覧、SQPOLL、固定バッファ、登録済みファイル
+- `liburing`のソース: `src/`には、上で説明したSQEフィールドに直接対応する`io_uring_prep_*`ヘルパーがある
+- カーネルツリーの`io_uring/poll.c`: `IORING_OP_POLL_ADD`とマルチショットのロジックの実装
+- Jens Axboeのio_uringノート: `kernel.dk/io_uring.pdf`（最初の設計文書）
+- `man 7 epoll`、`man 2 epoll_ctl`、`man 2 epoll_wait`: epollのリファレンス

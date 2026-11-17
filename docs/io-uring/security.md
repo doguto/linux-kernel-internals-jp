@@ -1,23 +1,23 @@
-# io_uring Security and Hardening {#io_uring-security-and-hardening}
+# io_uringのセキュリティと堅牢化 {#io_uring-security-and-hardening}
 
-> Attack surface, seccomp bypass, CVEs, and production lockdown
+> 攻撃対象領域、seccompのバイパス、CVE、本番環境でのロックダウン
 
-## The attack surface {#the-attack-surface}
+## 攻撃対象領域 {#the-attack-surface}
 
-io_uring executes async operations from a kernel worker thread pool called **io-wq**. When an operation cannot complete inline (blocking read, file open, etc.), the kernel queues it to an io-wq thread. That thread runs with the credentials of the submitting task — the same UID, GID, capabilities, and open file table — but it runs **outside the normal syscall path**.
+io_uringは、**io-wq**と呼ばれるカーネルのワーカースレッドプールから非同期操作を実行する。操作がインラインで完了できない場合（ブロッキングするread、ファイルのopenなど）、カーネルはそれをio-wqスレッドにキューイングする。このスレッドは投入したタスクのクレデンシャル（同じUID、GID、ケーパビリティ、オープンファイルテーブル）で動作するが、**通常のシステムコールパスの外**で動作する。
 
-This matters because every kernel security hook designed around the syscall boundary becomes irrelevant for io-wq execution:
+これが重要なのは、システムコールの境界を前提に設計されたあらゆるカーネルのセキュリティフックが、io-wqでの実行には無関係になってしまうからである。
 
-- **seccomp filters** are evaluated at syscall entry; io-wq threads perform equivalent operations without making a syscall from userspace
-- **ptrace**-based sandboxes observe system calls; io-wq work is invisible to them
-- **audit rules** keyed on syscall numbers may not fire for async paths
-- the **personality** field in an SQE allows submitting operations under a *different registered credential*, which is a legitimate feature but widens the attack surface considerably
+- **seccompフィルタ**はシステムコールの入口で評価される。io-wqスレッドは、ユーザー空間からシステムコールを発行することなく同等の操作を実行する
+- **ptrace**ベースのサンドボックスはシステムコールを観測する。io-wqの処理はそれらからは見えない
+- システムコール番号をキーにした**auditルール**は、非同期パスでは発火しない場合がある
+- SQEの**personality**フィールドを使うと、*別の登録済みクレデンシャル*で操作を投入できる。これは正当な機能だが、攻撃対象領域を大きく広げる
 
-The io-wq path through `io_uring/io-wq.c` and the core submission machinery in `io_uring/io_uring.c` form a large, complex state machine. Subtle lifetime bugs and type confusions in that state machine have been the source of several privilege-escalation CVEs.
+`io_uring/io-wq.c`を通るio-wqのパスと、`io_uring/io_uring.c`のサブミッション機構の中核は、大きく複雑なステートマシンを形成している。このステートマシンにおける微妙なライフタイムのバグや型の取り違え（type confusion）は、権限昇格のCVEの原因に何度もなってきた。
 
-## seccomp and io_uring {#seccomp-and-io_uring}
+## seccompとio_uring {#seccomp-and-io_uring}
 
-A process can install a strict seccomp filter that allows almost no syscalls, then use io_uring to perform those same operations asynchronously. The kernel does not re-evaluate the submitting process's seccomp policy when an io-wq thread executes the work.
+プロセスは、ほぼすべてのシステムコールを許可しない厳格なseccompフィルタをインストールした上で、io_uringを使って同じ操作を非同期に実行できる。io-wqスレッドが処理を実行するとき、カーネルは投入元プロセスのseccompポリシーを再評価しない。
 
 ```
 Userspace (seccomp: deny openat) ──► io_uring_enter ──► SQE: IORING_OP_OPENAT
@@ -29,43 +29,43 @@ Userspace (seccomp: deny openat) ──► io_uring_enter ──► SQE: IORING_
                                       do_filp_open()   ← opens the file
 ```
 
-`IORING_SETUP_SQPOLL` makes this worse: a dedicated kernel polling thread drains the SQ ring continuously, so the process does not even need to call `io_uring_enter` (a syscall that *could* be blocked by seccomp) after the ring is set up.
+`IORING_SETUP_SQPOLL`はこれをさらに悪化させる。専用のカーネルポーリングスレッドがSQリングを継続的に処理するため、リングのセットアップ後は、プロセスは`io_uring_enter`（seccompでブロック*できる*システムコール）を呼ぶ必要すらない。
 
-`IORING_SETUP_NO_SQTHREAD` (the default — omitting `IORING_SETUP_SQPOLL`) eliminates the polling thread, but io-wq threads still bypass seccomp for async work that cannot complete inline.
+`IORING_SETUP_NO_SQTHREAD`（デフォルト。`IORING_SETUP_SQPOLL`を省略した状態）ではポーリングスレッドはなくなるが、インラインで完了できない非同期処理については、io-wqスレッドが依然としてseccompをバイパスする。
 
-`IORING_SETUP_SINGLE_ISSUER` (Linux 6.2) restricts submission to the one thread that created the ring, but does not change the seccomp bypass property.
+`IORING_SETUP_SINGLE_ISSUER`（Linux 6.2）は、投入をリングを作成した1つのスレッドに制限するが、seccompバイパスの性質は変わらない。
 
-The practical consequence: **seccomp alone is not a sufficient sandbox for processes that have access to an io_uring file descriptor**. Android, Chrome OS, and gVisor all respond to this by disabling `io_uring_setup` outright in their seccomp policies (see below).
+実際上の帰結は、**io_uringのファイルディスクリプタにアクセスできるプロセスにとって、seccompだけでは十分なサンドボックスにならない**ということである。Android、Chrome OS、gVisorはいずれも、seccompポリシーで`io_uring_setup`を完全に無効化することでこれに対応している（後述）。
 
-## Restrictions added over time {#restrictions-added-over-time}
+## 時とともに追加された制限 {#restrictions-added-over-time}
 
-The kernel has progressively tightened io_uring's privilege boundaries:
+カーネルはio_uringの特権境界を段階的に厳しくしてきた。
 
-| Version | Change |
+| バージョン | 変更 |
 |---------|--------|
-| 5.10 | `io_uring_enter()` restricted — only the task that created the ring may call it |
-| 6.2 | `IORING_SETUP_SINGLE_ISSUER` — only one thread may submit SQEs to the ring |
-| 6.1 | `IORING_SETUP_DEFER_TASKRUN` — completions run on the submitting thread; avoids spawning any SQPOLL kernel thread |
-| all | `IORING_REGISTER_RESTRICTIONS` — whitelist the opcodes and registration operations a ring is allowed to use |
+| 5.10 | `io_uring_enter()`の制限。リングを作成したタスクだけがこれを呼べる |
+| 6.2 | `IORING_SETUP_SINGLE_ISSUER`。1つのスレッドだけがリングにSQEを投入できる |
+| 6.1 | `IORING_SETUP_DEFER_TASKRUN`。完了処理は投入したスレッド上で実行される。SQPOLLカーネルスレッドを一切生成しない |
+| すべて | `IORING_REGISTER_RESTRICTIONS`。リングが使用を許されるオペコードと登録操作をホワイトリストで指定する |
 
-`IORING_SETUP_DEFER_TASKRUN` is particularly useful for sandboxed contexts: no io-wq threads are spawned for deferred completions, keeping all execution on the known, filterable userspace thread.
+`IORING_SETUP_DEFER_TASKRUN`はサンドボックス化されたコンテキストで特に有用である。遅延された完了処理のためにio-wqスレッドが生成されず、すべての実行が既知でフィルタ可能なユーザー空間スレッド上にとどまる。
 
 ## `IORING_REGISTER_RESTRICTIONS` {#ioringregisterrestrictions}
 
-After setting up a ring, a privileged component can **lock it down** before handing the ring fd to an untrusted component. The `IORING_REGISTER_RESTRICTIONS` registration call (`io_uring_register(2)`) accepts an array of `struct io_uring_restriction` entries. Once applied, restrictions are permanent for the lifetime of the ring — they cannot be removed.
+リングをセットアップした後、特権を持つコンポーネントは、リングのfdを信頼できないコンポーネントに渡す前に**リングをロックダウン**できる。`IORING_REGISTER_RESTRICTIONS`の登録呼び出し（`io_uring_register(2)`）は、`struct io_uring_restriction`エントリの配列を受け取る。一度適用された制限はリングのライフタイムの間ずっと有効であり、削除できない。
 
-Restriction types:
+制限の種類:
 
-| Type | Effect |
+| 種類 | 効果 |
 |------|--------|
-| `IORING_RESTRICTION_REGISTER_OP` | Allow only the specified `IORING_REGISTER_*` operation |
-| `IORING_RESTRICTION_SQE_OP` | Allow only the specified `IORING_OP_*` opcode in SQEs |
-| `IORING_RESTRICTION_SQE_FLAGS_ALLOWED` | Mask of SQE flags userspace is allowed to set |
-| `IORING_RESTRICTION_SQE_FLAGS_REQUIRED` | Mask of SQE flags that must be set on every SQE |
+| `IORING_RESTRICTION_REGISTER_OP` | 指定した`IORING_REGISTER_*`操作のみを許可する |
+| `IORING_RESTRICTION_SQE_OP` | SQEで指定した`IORING_OP_*`オペコードのみを許可する |
+| `IORING_RESTRICTION_SQE_FLAGS_ALLOWED` | ユーザー空間が設定してよいSQEフラグのマスク |
+| `IORING_RESTRICTION_SQE_FLAGS_REQUIRED` | すべてのSQEに設定しなければならないSQEフラグのマスク |
 
-The implementation lives in `io_uring/rsrc.c` (resource registration) and `io_uring/io_uring.c` (`io_uring_register` dispatch and restriction enforcement).
+実装は`io_uring/rsrc.c`（リソースの登録）と`io_uring/io_uring.c`（`io_uring_register`のディスパッチと制限の強制）にある。
 
-### Example: handing a restricted ring to an untrusted component {#example-handing-a-restricted-ring-to-an-untrusted-component}
+### 例: 制限付きリングを信頼できないコンポーネントに渡す {#example-handing-a-restricted-ring-to-an-untrusted-component}
 
 ```c
 #include <linux/io_uring.h>
@@ -74,7 +74,7 @@ The implementation lives in `io_uring/rsrc.c` (resource registration) and `io_ur
 #include <string.h>
 #include <stdint.h>
 
-/* Wrapper — liburing provides io_uring_register() but this shows the raw call */
+/* ラッパー。liburingはio_uring_register()を提供しているが、ここでは生の呼び出しを示す */
 static int uring_register(int ring_fd, unsigned opcode, void *arg, unsigned nr_args)
 {
     return (int)syscall(__NR_io_uring_register, ring_fd, opcode, arg, nr_args);
@@ -86,10 +86,10 @@ int setup_restricted_ring(unsigned sq_entries)
     memset(&params, 0, sizeof(params));
 
     /*
-     * IORING_SETUP_SINGLE_ISSUER: only the creating thread may submit.
-     * IORING_SETUP_DEFER_TASKRUN: no SQPOLL thread; completions run on
-     *   the submission thread, keeping execution off io-wq.
-     * Both flags require Linux 6.2 for combined use.
+     * IORING_SETUP_SINGLE_ISSUER: 作成したスレッドだけが投入できる。
+     * IORING_SETUP_DEFER_TASKRUN: SQPOLLスレッドなし。完了処理は
+     *   投入スレッド上で実行され、実行がio-wqに移らない。
+     * 両フラグを組み合わせて使うにはLinux 6.2が必要。
      */
     params.flags = IORING_SETUP_SINGLE_ISSUER |
                    IORING_SETUP_DEFER_TASKRUN;
@@ -98,9 +98,9 @@ int setup_restricted_ring(unsigned sq_entries)
     if (ring_fd < 0)
         return ring_fd;
 
-    /* Build the restriction list */
+    /* 制限リストを構築する */
     struct io_uring_restriction restrictions[] = {
-        /* Only allow IORING_OP_READ and IORING_OP_WRITE */
+        /* IORING_OP_READとIORING_OP_WRITEのみを許可する */
         {
             .opcode     = IORING_RESTRICTION_SQE_OP,
             .sqe_op     = IORING_OP_READ,
@@ -109,7 +109,7 @@ int setup_restricted_ring(unsigned sq_entries)
             .opcode     = IORING_RESTRICTION_SQE_OP,
             .sqe_op     = IORING_OP_WRITE,
         },
-        /* Disallow IOSQE_FIXED_FILE and IOSQE_IO_DRAIN in SQE flags */
+        /* SQEフラグでIOSQE_FIXED_FILEとIOSQE_IO_DRAINを禁止する */
         {
             .opcode             = IORING_RESTRICTION_SQE_FLAGS_ALLOWED,
             .sqe_flags          = IOSQE_IO_LINK | IOSQE_ASYNC,
@@ -125,79 +125,79 @@ int setup_restricted_ring(unsigned sq_entries)
     }
 
     /*
-     * ring_fd is now locked: any SQE with an opcode other than READ or
-     * WRITE, or with disallowed flags, will be rejected with -EACCES.
-     * Hand ring_fd to the untrusted component.
+     * これでring_fdはロックされた。READかWRITE以外のオペコード、または
+     * 禁止されたフラグを持つSQEは-EACCESで拒否される。
+     * ring_fdを信頼できないコンポーネントに渡す。
      */
     return ring_fd;
 }
 ```
 
-After `IORING_REGISTER_RESTRICTIONS` is applied, the kernel checks each SQE against the restriction bitmap in `io_ring_ctx->restrictions` on the hot submission path. Attempts to use a disallowed opcode or flag return `-EACCES`.
+`IORING_REGISTER_RESTRICTIONS`が適用された後、カーネルはサブミッションのホットパスで、各SQEを`io_ring_ctx->restrictions`の制限ビットマップと照合する。禁止されたオペコードやフラグを使おうとすると`-EACCES`が返る。
 
-## CVEs and kernel hardening {#cves-and-kernel-hardening}
+## CVEとカーネルの堅牢化 {#cves-and-kernel-hardening}
 
-The complexity of the io_uring state machine — cancellation, timeouts, linked requests, fixed buffers, registered credentials — creates a large surface for subtle memory-safety bugs:
+io_uringのステートマシンの複雑さ（キャンセル、タイムアウト、リンクされたリクエスト、固定バッファ、登録済みクレデンシャル）は、微妙なメモリ安全性のバグが入り込む大きな余地を生む。
 
-**CVE-2022-29582** — use-after-free in io_uring file table handling (`io_uring/fdinfo.c`, `io_uring/rsrc.c`). A race between file table updates and async operation teardown allowed a local attacker to escalate privileges. Fixed in Linux 5.17.3 / 5.15.34. CVSS 7.8.
+**CVE-2022-29582**: io_uringのファイルテーブル処理（`io_uring/fdinfo.c`、`io_uring/rsrc.c`）におけるuse-after-free。ファイルテーブルの更新と非同期操作の後始末との間の競合状態により、ローカルの攻撃者が権限を昇格できた。Linux 5.17.3 / 5.15.34で修正。CVSS 7.8。
 
-**CVE-2023-2598** — integer overflow in fixed buffer registration. When registering fixed buffers via `IORING_REGISTER_BUFFERS`, insufficient validation of the buffer count allowed an overflow that corrupted kernel memory. Fixed in Linux 6.3. The vulnerable calculation was in `io_uring/rsrc.c:io_sqe_buffers_register()`.
+**CVE-2023-2598**: 固定バッファ登録における整数オーバーフロー。`IORING_REGISTER_BUFFERS`で固定バッファを登録する際、バッファ数の検証が不十分だったため、オーバーフローが起きてカーネルメモリが破壊された。Linux 6.3で修正。脆弱な計算は`io_uring/rsrc.c:io_sqe_buffers_register()`にあった。
 
-**General pattern**: most io_uring CVEs share the same shape — a refcount, lifetime, or size calculation goes wrong in the async teardown path, turning a freed object into an exploitable primitive. The combination of multiple io-wq threads, user-controlled lifetimes, and shared kernel objects is inherently difficult to reason about.
+**一般的なパターン**: io_uringのCVEの多くは同じ形をしている。非同期の後始末パスで参照カウント、ライフタイム、またはサイズ計算がおかしくなり、解放済みオブジェクトが悪用可能なプリミティブに変わる。複数のio-wqスレッド、ユーザーが制御するライフタイム、共有されるカーネルオブジェクトの組み合わせは、本質的に推論が難しい。
 
-Staying on a recent kernel is the most effective mitigation. The io_uring subsystem receives security fixes backported to stable trees, but only for a limited window.
+最近のカーネルを使い続けることが最も効果的な緩和策である。io_uringサブシステムはstableツリーにバックポートされたセキュリティ修正を受け取るが、それは限られた期間だけである。
 
-## Android, Chrome OS, and gVisor restrictions {#android-chrome-os-and-gvisor-restrictions}
+## Android、Chrome OS、gVisorでの制限 {#android-chrome-os-and-gvisor-restrictions}
 
-These platforms concluded that the seccomp bypass risk outweighs the performance benefit for their threat models:
+これらのプラットフォームは、自らの脅威モデルにとってseccompバイパスのリスクが性能上の利点を上回ると結論づけた。
 
-**Android** (since Android 12): `io_uring_setup` is blocked by the default seccomp policy applied to app processes (`SCMP_ACT_ERRNO`). Privileged system processes may use it, but untrusted app code cannot create a ring. This is enforced in the Bionic seccomp filter tables.
+**Android**（Android 12以降）: アプリのプロセスに適用されるデフォルトのseccompポリシーで`io_uring_setup`がブロックされる（`SCMP_ACT_ERRNO`）。特権を持つシステムプロセスは使用できるが、信頼できないアプリのコードはリングを作成できない。これはBionicのseccompフィルタテーブルで強制されている。
 
-**Chrome OS**: the Chrome sandbox uses a seccomp-bpf policy that rejects `io_uring_setup` for renderer and GPU process sandboxes. The decision was made explicitly because seccomp filters do not cover io-wq operations.
+**Chrome OS**: Chromeのサンドボックスは、レンダラーとGPUプロセスのサンドボックスで`io_uring_setup`を拒否するseccomp-bpfポリシーを使う。この判断は、seccompフィルタがio-wqの操作をカバーしないことを理由に明示的に下された。
 
-**gVisor**: the gVisor kernel (`runsc`) intercepts syscalls at the sentry boundary. Because io_uring's async execution model is fundamentally at odds with gVisor's syscall interposition architecture, `io_uring_setup` returns `ENOSYS` in gVisor containers by default. Supporting it would require the sentry to emulate the entire io-wq execution model.
+**gVisor**: gVisorのカーネル（`runsc`）はsentryの境界でシステムコールをインターセプトする。io_uringの非同期実行モデルはgVisorのシステムコール介在アーキテクチャと根本的に相容れないため、gVisorのコンテナではデフォルトで`io_uring_setup`が`ENOSYS`を返す。これをサポートするには、sentryがio-wqの実行モデル全体をエミュレートする必要がある。
 
-**Linux Security Modules**: SELinux and AppArmor can restrict io_uring operations via the `io_uring` object class (added in Linux 5.12). Policy can deny `sqpoll` (spawning the SQPOLL kernel thread) and `override_creds` (using the `personality` field to run ops under alternate credentials) independently of the general io_uring access.
+**Linux Security Modules**: SELinuxとAppArmorは、`io_uring`オブジェクトクラス（Linux 5.12で追加）を通じてio_uringの操作を制限できる。ポリシーは、一般的なio_uringへのアクセスとは独立に、`sqpoll`（SQPOLLカーネルスレッドの生成）と`override_creds`（`personality`フィールドを使って別のクレデンシャルで操作を実行すること）を拒否できる。
 
 ```
-# SELinux: deny SQPOLL thread creation for confined_t
+# SELinux: confined_tに対してSQPOLLスレッドの作成を拒否する
 deny confined_t self:io_uring sqpoll;
 
-# AppArmor: deny credential override
+# AppArmor: クレデンシャルのオーバーライドを拒否する
 deny io_uring override_creds,
 ```
 
-## Best practices for production {#best-practices-for-production}
+## 本番環境でのベストプラクティス {#best-practices-for-production}
 
-**Minimize flags**
+**フラグを最小限にする**
 
-- Default: omit `IORING_SETUP_SQPOLL` unless polling latency is critical and the process is trusted. SQPOLL spawns a kernel thread that runs continuously with the process's credentials.
-- Use `IORING_SETUP_SINGLE_ISSUER` (Linux 6.2+) for any ring accessed from a single submission thread.
-- Use `IORING_SETUP_DEFER_TASKRUN` (Linux 6.1+) alongside `IORING_SETUP_SINGLE_ISSUER` to avoid spawning io-wq threads for completion processing.
+- デフォルト: ポーリングのレイテンシが決定的に重要で、かつプロセスが信頼できる場合を除き、`IORING_SETUP_SQPOLL`は省略する。SQPOLLは、プロセスのクレデンシャルで継続的に動作するカーネルスレッドを生成する。
+- 単一の投入スレッドからアクセスされるリングには、`IORING_SETUP_SINGLE_ISSUER`（Linux 6.2以降）を使う。
+- 完了処理のためにio-wqスレッドが生成されるのを避けるため、`IORING_SETUP_SINGLE_ISSUER`と併せて`IORING_SETUP_DEFER_TASKRUN`（Linux 6.1以降）を使う。
 
-**Lock down rings in sandboxed contexts**
+**サンドボックス化されたコンテキストではリングをロックダウンする**
 
-Apply `IORING_REGISTER_RESTRICTIONS` immediately after `io_uring_setup`, before handing the ring fd to any untrusted code. Restrict to the minimum set of opcodes the component needs. This limits the blast radius of a compromised component even if the kernel has an unpatched vulnerability.
+`io_uring_setup`の直後、リングのfdを信頼できないコードに渡す前に`IORING_REGISTER_RESTRICTIONS`を適用する。コンポーネントが必要とする最小限のオペコードに制限する。これにより、カーネルに未修正の脆弱性があったとしても、侵害されたコンポーネントの被害範囲を限定できる。
 
-**Seccomp policy**
+**seccompポリシー**
 
-If the process does not need io_uring at all, block `io_uring_setup` in the seccomp filter. If the process creates a ring during initialization and then drops privileges, block `io_uring_setup` after ring creation — this prevents a compromised process from creating additional, unrestricted rings.
+プロセスがio_uringをまったく必要としないなら、seccompフィルタで`io_uring_setup`をブロックする。プロセスが初期化中にリングを作成してから特権を落とすなら、リング作成後に`io_uring_setup`をブロックする。これにより、侵害されたプロセスが制限のない追加のリングを作成することを防げる。
 
-**Avoid `personality` (registered credentials) unless necessary**
+**必要でない限り`personality`（登録済みクレデンシャル）を避ける**
 
-The `personality` field in an SQE allows operations to run under a pre-registered credential set (`IORING_REGISTER_PERSONALITY`). This is a powerful feature that is easy to misuse. Restrict its use with `IORING_RESTRICTION_REGISTER_OP` to prevent registration of new personalities after the ring is set up.
+SQEの`personality`フィールドを使うと、事前に登録したクレデンシャルセット（`IORING_REGISTER_PERSONALITY`）で操作を実行できる。これは強力な機能だが、誤用しやすい。`IORING_RESTRICTION_REGISTER_OP`でその使用を制限し、リングのセットアップ後に新しいpersonalityが登録されるのを防ぐ。
 
-**Monitor with audit**
+**auditで監視する**
 
-The kernel audit subsystem emits records for `io_uring_setup` and `io_uring_register`. In environments with auditd or a SIEM ingesting audit logs, rules on these event types surface unexpected ring creation or capability registration.
+カーネルのauditサブシステムは、`io_uring_setup`と`io_uring_register`に対してレコードを出力する。auditdやauditログを取り込むSIEMがある環境では、これらのイベント種別に対するルールにより、予期しないリングの作成やケーパビリティの登録を検出できる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Architecture and Rings](io-uring-arch.md) — SQ/CQ layout, SQE/CQE structures
-- [Operations and Advanced Features](io-uring-ops.md) — Supported ops, SQPOLL, fixed buffers
-- `io_uring/io_uring.c` — core submission path and restriction enforcement
-- `io_uring/rsrc.c` — fixed buffer and credential registration, CVE-2023-2598 site
-- `io_uring/io-wq.c` — worker thread pool implementation
-- `include/uapi/linux/io_uring.h` — `IORING_RESTRICTION_*` constants and `struct io_uring_restriction`
-- [Auditing io_uring](https://lwn.net/Articles/858023/) — LWN article on adding LSM and audit hooks to io_uring
-- [CVE-2022-29582 writeup (Qualys)](https://www.qualys.com/2022/05/02/cve-2022-29582/lpe-io-uring.txt) — detailed exploitation analysis
+- [アーキテクチャとリング](io-uring-arch.md): SQ/CQのレイアウト、SQE/CQE構造体
+- [操作と高度な機能](io-uring-ops.md): サポートされる操作、SQPOLL、固定バッファ
+- `io_uring/io_uring.c`: サブミッションパスの中核と制限の強制
+- `io_uring/rsrc.c`: 固定バッファとクレデンシャルの登録。CVE-2023-2598の発生箇所
+- `io_uring/io-wq.c`: ワーカースレッドプールの実装
+- `include/uapi/linux/io_uring.h`: `IORING_RESTRICTION_*`定数と`struct io_uring_restriction`
+- [Auditing io_uring](https://lwn.net/Articles/858023/): io_uringへのLSMとauditフックの追加に関するLWNの記事
+- [CVE-2022-29582 writeup (Qualys)](https://www.qualys.com/2022/05/02/cve-2022-29582/lpe-io-uring.txt): 詳細な悪用の分析
