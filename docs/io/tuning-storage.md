@@ -1,22 +1,22 @@
-# Tuning I/O Performance for Storage-Heavy Workloads {#tuning-io-performance-for-storage-heavy-workloads}
+# ストレージ負荷の高いワークロード向けI/O性能チューニング {#tuning-io-performance-for-storage-heavy-workloads}
 
-> Understanding what the kernel does with your I/O — and where the defaults get out of the way
+> カーネルがI/Oに対して何を行うのか、そしてデフォルト設定が邪魔にならなくなるのはどこかを理解する
 
-## Why I/O Tuning Requires a Workload Model {#why-io-tuning-requires-a-workload-model}
+## なぜI/Oチューニングにはワークロードモデルが必要か {#why-io-tuning-requires-a-workload-model}
 
-A web server, an OLTP database, a time-series ingest pipeline, and a backup job all use the same block layer, but they need entirely different configurations. Before touching a single sysctl:
+Webサーバー、OLTPデータベース、時系列データの取り込みパイプライン、バックアップジョブはいずれも同じブロック層を使うが、必要な設定はまったく異なる。sysctlを1つでも触る前に、次の点を押さえておく必要がある。
 
-- A setting that cuts NVMe latency in half for random 4K reads may reduce throughput for sequential 1MB reads.
-- Disabling readahead is essential for PostgreSQL index scans and actively harmful for log streaming.
-- The "right" I/O scheduler depends on whether you have one NVMe with 64 hardware queues or a spinning disk with a 32-entry NCQ queue.
+- ランダム4KリードでNVMeのレイテンシを半分にする設定が、シーケンシャル1Mリードのスループットを下げることがある。
+- readaheadの無効化は、PostgreSQLのインデックススキャンには不可欠だが、ログのストリーミングには明確に有害である。
+- 「正しい」I/Oスケジューラは、ハードウェアキューを64本持つNVMeが1台なのか、32エントリのNCQキューを持つ回転ディスクなのかによって変わる。
 
-Tuning without a workload model is guessing. The sections below first explain how to characterize your workload, then give concrete knobs for each workload shape.
+ワークロードモデルなしのチューニングは当て推量にすぎない。以下の節では、まずワークロードの特性を把握する方法を説明し、次にワークロードの形ごとに具体的な調整項目を示す。
 
-## Understanding Your Workload First {#understanding-your-workload-first}
+## まずワークロードを理解する {#understanding-your-workload-first}
 
-### The Four Axes {#the-four-axes}
+### 4つの軸 {#the-four-axes}
 
-Every I/O workload lives somewhere in this four-dimensional space:
+あらゆるI/Oワークロードは、次の4次元空間のどこかに位置する。
 
 ```
 1. Access pattern     random        ←————————→   sequential
@@ -25,47 +25,47 @@ Every I/O workload lives somewhere in this four-dimensional space:
 4. Queue depth        shallow (1)   ←————————→   deep (128+)
 ```
 
-These are not independent. Sequential I/O benefits from deep queues and large readahead; random I/O at low queue depth needs low per-operation latency. Choosing tunables that optimize one axis can degrade another.
+これらは独立していない。シーケンシャルI/Oは深いキューと大きなreadaheadの恩恵を受け、低いキュー深度のランダムI/Oは操作あたりのレイテンシが低いことを必要とする。ある軸を最適化するチューニング可能なパラメータを選ぶと、別の軸が悪化することがある。
 
-Common workload archetypes:
+代表的なワークロードの典型例:
 
-| Workload | Pattern | Goal | Typical Queue Depth |
+| ワークロード | パターン | 目標 | 典型的なキュー深度 |
 |----------|---------|------|---------------------|
-| OLTP database (pg, mysql) | Random 4–16K | Latency | 4–32 |
-| Data warehouse / OLAP | Sequential scan, large blocks | Throughput | 32–256 |
-| Time-series ingest | Sequential write, many small | Throughput + latency | 8–64 |
-| Backup / restore | Sequential | Throughput | 32–128 |
-| Object storage | Mixed random + sequential | Throughput | 32–256 |
-| WAL / redo log | Sequential write | Latency (fsync) | 1–4 |
+| OLTPデータベース（pg, mysql） | ランダム 4–16K | レイテンシ | 4–32 |
+| データウェアハウス / OLAP | シーケンシャルスキャン、大きなブロック | スループット | 32–256 |
+| 時系列データの取り込み | シーケンシャルライト、小さな書き込みが多数 | スループット + レイテンシ | 8–64 |
+| バックアップ / リストア | シーケンシャル | スループット | 32–128 |
+| オブジェクトストレージ | ランダムとシーケンシャルの混在 | スループット | 32–256 |
+| WAL / redoログ | シーケンシャルライト | レイテンシ（fsync） | 1–4 |
 
-### Quick Profiling with iostat {#quick-profiling-with-iostat}
+### iostatによる手早いプロファイリング {#quick-profiling-with-iostat}
 
-`iostat` from the `sysstat` package is the first tool to reach for. It reads from `/proc/diskstats`, which the block layer updates on every I/O completion.
+`sysstat` パッケージの `iostat` は、最初に手に取るべきツールである。これは `/proc/diskstats` を読み取る。このファイルはブロック層がI/Oの完了ごとに更新する。
 
 ```bash
-# 1-second intervals, extended statistics, human-readable
+# 1秒間隔、拡張統計、人間が読みやすい形式
 iostat -x -h 1
 
-# Key columns:
-#  r/s    w/s    — IOPS (completed reads/writes per second)
-#  rkB/s  wkB/s  — Throughput in kB/s
-#  r_await w_await — Average completion latency in ms
-#  aqu-sz          — Average queue depth (inflight + waiting)
-#  %util           — Fraction of time device had outstanding I/O
+# 主な列:
+#  r/s    w/s    — IOPS（1秒あたりに完了したリード/ライト数）
+#  rkB/s  wkB/s  — スループット（kB/s）
+#  r_await w_await — 平均完了レイテンシ（ms）
+#  aqu-sz          — 平均キュー深度（処理中 + 待機中）
+#  %util           — デバイスに未完了のI/Oがあった時間の割合
 ```
 
-What to look for:
+注目すべき点:
 
-- `%util` near 100% and `aqu-sz` much greater than 1 on a spinning disk means the device is saturated.
-- High `r_await` (>5ms for SSD, >20ms for HDD) with low `%util` often means the I/O scheduler is adding queuing overhead.
-- High `aqu-sz` on NVMe with `%util` well below 100% is expected — NVMe devices have deep internal queues and parallelize freely.
+- 回転ディスクで `%util` が100%近く、`aqu-sz` が1よりはるかに大きい場合、デバイスは飽和している。
+- `r_await` が高い（SSDで5ms超、HDDで20ms超）のに `%util` が低い場合、I/Oスケジューラがキューイングのオーバーヘッドを加えていることが多い。
+- NVMeで `aqu-sz` が高く `%util` が100%を大きく下回るのは想定どおりである。NVMeデバイスは深い内部キューを持ち、自由に並列処理する。
 
-### Profiling with fio {#profiling-with-fio}
+### fioによるプロファイリング {#profiling-with-fio}
 
-`fio` lets you issue controlled, reproducible workloads and measure the device's raw capability before applying any application load.
+`fio` を使うと、制御された再現可能なワークロードを発行し、アプリケーションの負荷をかける前にデバイス本来の能力を測定できる。
 
 ```bash
-# Random 4K read, queue depth 32, 30 seconds — baseline for OLTP
+# ランダム4Kリード、キュー深度32、30秒 — OLTPのベースライン
 fio --name=randread-baseline \
     --filename=/dev/nvme0n1 \
     --rw=randread \
@@ -78,7 +78,7 @@ fio --name=randread-baseline \
     --lat_percentiles=1 \
     --output-format=normal
 
-# Sequential 1M read — baseline for streaming workloads
+# シーケンシャル1Mリード — ストリーミングワークロードのベースライン
 fio --name=seqread-baseline \
     --filename=/dev/nvme0n1 \
     --rw=read \
@@ -91,49 +91,49 @@ fio --name=seqread-baseline \
     --output-format=normal
 ```
 
-!!! warning "Run against a block device, not a file, for device characterization"
-    Running `fio` against a file goes through the filesystem and page cache, which adds variability. For baseline device measurement, use the raw block device (`/dev/nvme0n1`). Only switch to files when characterizing filesystem overhead.
+!!! warning "デバイスの特性評価にはファイルではなくブロックデバイスに対して実行する"
+    ファイルに対して `fio` を実行すると、ファイルシステムとページキャッシュを経由するため、ばらつきが加わる。デバイスのベースライン測定には、生のブロックデバイス（`/dev/nvme0n1`）を使う。ファイルに切り替えるのは、ファイルシステムのオーバーヘッドを評価するときだけにする。
 
-### Deep Tracing with blktrace {#deep-tracing-with-blktrace}
+### blktraceによる詳細なトレーシング {#deep-tracing-with-blktrace}
 
-When `iostat` shows a problem but not its cause, `blktrace` records every event the block layer sees per request: queue insertion, merge, dispatch to driver, completion.
+`iostat` で問題は見えるが原因がわからない場合、`blktrace` を使うと、ブロック層がリクエストごとに観測するすべてのイベント（キューへの挿入、マージ、ドライバへのディスパッチ、完了）を記録できる。
 
 ```bash
-# Trace /dev/sda for 10 seconds
+# /dev/sda を10秒間トレースする
 blktrace -d /dev/sda -o /tmp/sda-trace -- sleep 10
 
-# Post-process into human-readable form
+# 人間が読める形式に後処理する
 blkparse -i /tmp/sda-trace.blktrace.* -o /tmp/sda-trace.txt
 
-# Generate aggregated statistics
+# 集計統計を生成する
 btt -i /tmp/sda-trace.blktrace.*
 
-# Key btt output sections:
-#  D2C  — time from dispatch to driver until completion (device latency)
-#  Q2C  — time from queue insertion to completion (total latency)
-#  Q2D  — time waiting in software queues (Q2C - D2C)
+# btt出力の主なセクション:
+#  D2C  — ドライバへのディスパッチから完了までの時間（デバイスのレイテンシ）
+#  Q2C  — キューへの挿入から完了までの時間（全体のレイテンシ）
+#  Q2D  — ソフトウェアキューでの待ち時間（Q2C - D2C）
 ```
 
-If `Q2D` is large relative to `Q2C`, the software queues are adding latency and scheduler tuning will help. If `D2C` dominates, the device itself is the bottleneck.
+`Q2C` に比べて `Q2D` が大きい場合、ソフトウェアキューがレイテンシを加えており、スケジューラのチューニングが有効である。`D2C` が支配的な場合は、デバイス自体がボトルネックである。
 
-### The Benchmark-Before-You-Tune Principle {#the-benchmark-before-you-tune-principle}
+### チューニング前にベンチマークを取るという原則 {#the-benchmark-before-you-tune-principle}
 
-Record baseline numbers before changing anything. After each change, re-run the same benchmark with the same parameters. A change that improves 99th-percentile latency while reducing throughput may or may not be an improvement depending on your workload — you need both numbers to decide.
+何かを変更する前にベースラインの数値を記録しておく。変更のたびに、同じパラメータで同じベンチマークを再実行する。99パーセンタイルのレイテンシを改善する一方でスループットを下げる変更が改善かどうかは、ワークロード次第である。判断には両方の数値が必要になる。
 
 ```bash
-# A minimal but reproducible baseline script
+# 最小限だが再現可能なベースラインスクリプト
 #!/bin/bash
 DEVICE=${1:-/dev/nvme0n1}
 echo "=== Baseline: $(date) === Device: $DEVICE ==="
 
-# Random 4K, single queue
+# ランダム4K、単一キュー
 fio --name=rand4k-qd1 --filename=$DEVICE --rw=randread \
     --bs=4k --iodepth=1 --numjobs=1 --runtime=30 \
     --time_based --direct=1 --lat_percentiles=1 \
     --output-format=terse --terse-version=5 2>/dev/null \
     | awk -F';' '{printf "rand4k-qd1: IOPS=%s lat_p99=%sµs lat_p999=%sµs\n",$49,$83,$84}'
 
-# Random 4K, deep queue
+# ランダム4K、深いキュー
 fio --name=rand4k-qd32 --filename=$DEVICE --rw=randread \
     --bs=4k --iodepth=32 --numjobs=4 --runtime=30 \
     --time_based --direct=1 --lat_percentiles=1 \
@@ -141,31 +141,31 @@ fio --name=rand4k-qd32 --filename=$DEVICE --rw=randread \
     | awk -F';' '{printf "rand4k-qd32: IOPS=%s lat_p99=%sµs lat_p999=%sµs\n",$49,$83,$84}'
 ```
 
-## I/O Scheduler Selection {#io-scheduler-selection}
+## I/Oスケジューラの選択 {#io-scheduler-selection}
 
-The I/O scheduler sits between the block layer's request queue and the device driver. On modern kernels, all schedulers run under the multi-queue block layer (`blk-mq`), which maps software queues to hardware dispatch queues.
+I/Oスケジューラは、ブロック層のリクエストキューとデバイスドライバの間に位置する。最近のカーネルでは、すべてのスケジューラがマルチキューブロック層（`blk-mq`）の下で動作する。`blk-mq` はソフトウェアキューをハードウェアのディスパッチキューに対応付ける。
 
-### Checking and Setting the Scheduler {#checking-and-setting-the-scheduler}
+### スケジューラの確認と設定 {#checking-and-setting-the-scheduler}
 
 ```bash
-# Show the active scheduler and available options for a device
+# デバイスの有効なスケジューラと選択可能なスケジューラを表示する
 cat /sys/block/nvme0n1/queue/scheduler
 # [none] mq-deadline kyber bfq
 
-# The value in brackets is the active scheduler
+# 角括弧内の値が有効なスケジューラ
 
-# Set at runtime
+# 実行時に設定する
 echo mq-deadline > /sys/block/nvme0n1/queue/scheduler
 
-# Make persistent via udev rule
+# udevルールで永続化する
 cat > /etc/udev/rules.d/60-ioscheduler.rules << 'EOF'
-# NVMe: no scheduler (passthrough)
+# NVMe: スケジューラなし（パススルー）
 ACTION=="add|change", KERNEL=="nvme[0-9]*", ATTR{queue/scheduler}="none"
 
-# SATA SSD: mq-deadline for predictable latency
+# SATA SSD: 予測可能なレイテンシのためにmq-deadline
 ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="mq-deadline"
 
-# HDD: bfq for fairness
+# HDD: 公平性のためにbfq
 ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="bfq"
 EOF
 
@@ -173,13 +173,13 @@ udevadm control --reload-rules
 udevadm trigger --type=devices --action=change
 ```
 
-### none (Passthrough) {#none-passthrough}
+### none（パススルー） {#none-passthrough}
 
-`none` disables reordering entirely. Requests are dispatched to the device in submission order. This is the right choice for NVMe because:
+`none` は並べ替えを完全に無効にする。リクエストは発行された順にデバイスへディスパッチされる。NVMeにはこれが正しい選択である。理由は次のとおり。
 
-- NVMe devices have internal command queues (up to 64K entries per queue, up to 64K queues) and perform their own reordering in firmware.
-- Software reordering adds latency without benefit — the drive is smarter than the scheduler about its own access patterns.
-- NVMe latency is already in the single-digit microsecond range; adding scheduler overhead doubles it for no gain.
+- NVMeデバイスは内部にコマンドキュー（キューあたり最大64Kエントリ、最大64Kキュー）を持ち、ファームウェア内で独自に並べ替えを行う。
+- ソフトウェアによる並べ替えは、利点なしにレイテンシを加えるだけである。ドライブは自身のアクセスパターンについてスケジューラよりも賢い。
+- NVMeのレイテンシはすでに1桁マイクロ秒の範囲にあり、スケジューラのオーバーヘッドを加えると、何の得もなくそれが倍になる。
 
 ```bash
 echo none > /sys/block/nvme0n1/queue/scheduler
@@ -187,65 +187,65 @@ echo none > /sys/block/nvme0n1/queue/scheduler
 
 ### mq-deadline {#mq-deadline}
 
-`mq-deadline` assigns an expiry deadline to each request and guarantees it is dispatched before the deadline. It also batches reads separately from writes, preventing writes from starving reads.
+`mq-deadline` は各リクエストに期限（デッドライン）を割り当て、その期限までにディスパッチされることを保証する。また、リードとライトを別々にバッチ処理し、ライトがリードを枯渇させるのを防ぐ。
 
-This is the best general-purpose scheduler for latency-sensitive workloads on SATA SSDs:
+これは、SATA SSD上のレイテンシに敏感なワークロードにとって最良の汎用スケジューラである。
 
 ```bash
 echo mq-deadline > /sys/block/sda/queue/scheduler
 
-# Tune the deadline and batch parameters
-# Read deadline in ms (default 500ms — reduce for databases)
+# デッドラインとバッチのパラメータを調整する
+# リードのデッドライン（ms、デフォルトは500ms — データベースでは減らす）
 echo 100 > /sys/block/sda/queue/iosched/read_expire
 
-# Write deadline in ms (default 5000ms)
+# ライトのデッドライン（ms、デフォルトは5000ms）
 echo 1000 > /sys/block/sda/queue/iosched/write_expire
 
-# How many sequential requests to dispatch in one batch
+# 1バッチでディスパッチするシーケンシャルなリクエストの数
 echo 16 > /sys/block/sda/queue/iosched/fifo_batch
 
-# Writes dispatched per reads (1 = one write batch per read batch)
+# リードあたりにディスパッチするライト（1 = リードバッチ1回につきライトバッチ1回）
 echo 1 > /sys/block/sda/queue/iosched/writes_starved
 ```
 
-For a database WAL disk (SATA SSD), lowering `read_expire` and `write_expire` reduces tail latency at the cost of some reordering efficiency.
+データベースのWALディスク（SATA SSD）では、`read_expire` と `write_expire` を下げると、並べ替えの効率を多少犠牲にしてテールレイテンシを減らせる。
 
 ### kyber {#kyber}
 
-`kyber` is a latency-targeting scheduler designed for fast SSDs. It maintains separate queues for reads and synchronous writes, and adjusts dispatch rates dynamically to hit a configurable latency target.
+`kyber` は高速なSSD向けに設計された、レイテンシ目標型のスケジューラである。リードと同期ライトに別々のキューを持ち、設定可能なレイテンシ目標を達成するようにディスパッチレートを動的に調整する。
 
 ```bash
 echo kyber > /sys/block/sda/queue/scheduler
 
-# Target latency in nanoseconds for reads (default 2ms)
+# リードの目標レイテンシ（ナノ秒、デフォルトは2ms）
 echo 500000 > /sys/block/sda/queue/iosched/read_lat_nsec
 
-# Target latency for sync writes (default 10ms)
+# 同期ライトの目標レイテンシ（デフォルトは10ms）
 echo 2000000 > /sys/block/sda/queue/iosched/write_lat_nsec
 ```
 
-Kyber works well when your SSD has relatively consistent device latency. If the device itself has high latency variance (common with cheaper consumer SSDs under write pressure), kyber's feedback loop may oscillate. In that case, `mq-deadline` with explicit expiry times is more predictable.
+kyberは、SSDのデバイスレイテンシが比較的安定している場合にうまく機能する。デバイス自体のレイテンシのばらつきが大きい場合（安価なコンシューマ向けSSDで書き込み負荷がかかったときによくある）、kyberのフィードバックループが振動することがある。その場合は、明示的な期限を設定した `mq-deadline` の方が予測しやすい。
 
-### bfq (Budget Fair Queuing) {#bfq-budget-fair-queuing}
+### bfq（Budget Fair Queuing） {#bfq-budget-fair-queuing}
 
-`bfq` is a proportional-share scheduler that tracks per-process I/O budgets. It is designed for desktop/interactive use where fairness between multiple processes matters more than raw throughput.
+`bfq` はプロセスごとのI/Oバジェットを追跡する比例配分型のスケジューラである。複数のプロセス間の公平性が生のスループットよりも重要な、デスクトップ／対話的用途向けに設計されている。
 
-For a dedicated database server, `bfq` adds overhead with no benefit — there is only one workload to be fair to. Use it when:
+専用のデータベースサーバーでは、`bfq` は利点なしにオーバーヘッドを加えるだけである。公平に扱うべきワークロードが1つしかないからだ。次の場合に使う。
 
-- The system runs mixed workloads (databases + backups + analytics) and you need to protect interactive I/O from background jobs.
-- The device is a spinning HDD where reordering decisions genuinely matter for throughput.
+- システムが混在ワークロード（データベース + バックアップ + 分析）を実行しており、対話的なI/Oをバックグラウンドジョブから守る必要がある。
+- デバイスが回転型HDDで、並べ替えの判断がスループットに本当に影響する。
 
 ```bash
 echo bfq > /sys/block/sda/queue/scheduler
 
-# Use cgroups v2 io.weight to control per-cgroup I/O priority with bfq
+# bfqとともにcgroups v2のio.weightを使い、cgroupごとのI/O優先度を制御する
 echo "100" > /sys/fs/cgroup/databases/io.bfq.weight
 echo "10"  > /sys/fs/cgroup/backups/io.bfq.weight
 ```
 
-### Scheduler Effect on Latency Distribution {#scheduler-effect-on-latency-distribution}
+### スケジューラがレイテンシ分布に与える影響 {#scheduler-effect-on-latency-distribution}
 
-The scheduler choice primarily affects latency distribution (p99, p999), not median latency. A well-tuned `none` on NVMe may show:
+スケジューラの選択が主に影響するのは、レイテンシの中央値ではなく分布（p99、p999）である。NVMe上でよくチューニングされた `none` は、たとえば次のようになる。
 
 ```
 Median (p50):  50µs
@@ -253,7 +253,7 @@ p99:           120µs
 p999:          200µs
 ```
 
-While `mq-deadline` on the same NVMe might show:
+一方、同じNVMe上の `mq-deadline` は次のようになることがある。
 
 ```
 Median (p50):  55µs    (slightly worse — scheduling overhead)
@@ -261,53 +261,53 @@ p99:           85µs    (better — deadline enforcement prevents outliers)
 p999:          110µs   (better — expiry prevents starvation)
 ```
 
-This trade-off — slightly higher median for better tail latency — is usually correct for databases where p99 connects to user-visible latency.
+中央値がわずかに高くなる代わりにテールレイテンシが改善するというこのトレードオフは、p99がユーザーから見えるレイテンシに直結するデータベースでは、通常は正しい選択である。
 
-## Queue Depth Tuning {#queue-depth-tuning}
+## キュー深度のチューニング {#queue-depth-tuning}
 
-Queue depth controls how many I/O requests can be in flight simultaneously. Too shallow and you underutilize the device; too deep and you increase per-request queuing latency.
+キュー深度は、同時に処理中にできるI/Oリクエストの数を制御する。浅すぎるとデバイスを使い切れず、深すぎるとリクエストあたりのキューイングレイテンシが増える。
 
-### Software Queue Depth: nr_requests {#software-queue-depth-nr_requests}
+### ソフトウェアのキュー深度: nr_requests {#software-queue-depth-nr_requests}
 
-`nr_requests` sets the maximum number of requests per software queue before back-pressure is applied to submitters.
+`nr_requests` は、発行元にバックプレッシャーがかかる前の、ソフトウェアキューあたりの最大リクエスト数を設定する。
 
 ```bash
-# Check current value
+# 現在の値を確認する
 cat /sys/block/nvme0n1/queue/nr_requests
-# 64 (default for NVMe)
+# 64（NVMeのデフォルト）
 
-# Increase for high-throughput workloads
+# 高スループットのワークロードでは増やす
 echo 256 > /sys/block/nvme0n1/queue/nr_requests
 
-# Reduce for latency-sensitive workloads (forces back-pressure sooner)
+# レイテンシに敏感なワークロードでは減らす（バックプレッシャーを早めにかける）
 echo 32 > /sys/block/nvme0n1/queue/nr_requests
 ```
 
-For NVMe devices that can sustain hundreds of thousands of IOPS, increasing `nr_requests` allows the kernel to buffer more requests for the device's internal scheduler. For SATA SSDs with much lower IOPS ceilings, the default is usually sufficient.
+数十万IOPSを持続できるNVMeデバイスでは、`nr_requests` を増やすことで、カーネルはデバイス内部のスケジューラ向けにより多くのリクエストをバッファできる。IOPSの上限がはるかに低いSATA SSDでは、通常はデフォルトで十分である。
 
-### Hardware Queue Count: nr_hw_queues {#hardware-queue-count-nrhwqueues}
+### ハードウェアキューの数: nr_hw_queues {#hardware-queue-count-nrhwqueues}
 
-NVMe devices expose multiple hardware submission queues. The kernel maps software queues to hardware queues, ideally one-to-one with CPU cores or NUMA nodes.
+NVMeデバイスは複数のハードウェア発行キューを公開する。カーネルはソフトウェアキューをハードウェアキューに対応付け、理想的にはCPUコアまたはNUMAノードと1対1にする。
 
 ```bash
-# Check hardware queue count
+# ハードウェアキューの数を確認する
 cat /sys/block/nvme0n1/queue/nr_hw_queues
-# 16 (example: 16-queue NVMe)
+# 16（例: 16キューのNVMe）
 
-# Check how blk-mq maps CPUs to queues
+# blk-mqがCPUをキューにどう対応付けているかを確認する
 cat /sys/block/nvme0n1/mq/*/cpu_list
 ```
 
-If `nr_hw_queues` is less than the number of CPU cores, multiple CPUs share a hardware queue and contend on its lock. This is visible as `nvme_irq` in `perf top` on systems with many cores and few NVMe queues.
+`nr_hw_queues` がCPUコア数より少ない場合、複数のCPUが1つのハードウェアキューを共有し、そのロックで競合する。コア数が多くNVMeキューが少ないシステムでは、これが `perf top` に `nvme_irq` として現れる。
 
 ```bash
-# Verify IRQ distribution across CPUs (each NVMe queue has one IRQ)
+# CPU間のIRQ分散を確認する（各NVMeキューに1つのIRQがある）
 grep nvme /proc/interrupts | head -20
 ```
 
-### Finding the Saturation Point with fio {#finding-the-saturation-point-with-fio}
+### fioで飽和点を見つける {#finding-the-saturation-point-with-fio}
 
-The optimal queue depth is where IOPS peak without significantly increasing per-request latency. Find it by sweeping `iodepth`:
+最適なキュー深度は、リクエストあたりのレイテンシを大きく増やさずにIOPSがピークに達する点である。`iodepth` を掃引して見つける。
 
 ```bash
 #!/bin/bash
@@ -330,7 +330,7 @@ for QD in 1 2 4 8 16 32 64 128 256; do
 done
 ```
 
-A typical NVMe result looks like:
+NVMeでの典型的な結果は次のようになる。
 
 ```
 qd=1     iops=50000    lat_p99=35 µs
@@ -341,14 +341,14 @@ qd=64    iops=540000   lat_p99=155 µs
 qd=128   iops=542000   lat_p99=290 µs    ← IOPS plateau, latency rising fast
 ```
 
-For OLTP databases, choose the queue depth where IOPS are still growing but latency is still acceptable for your SLA (p99 < 1ms is a common target).
+OLTPデータベースでは、IOPSがまだ伸びており、かつレイテンシがSLAに対してまだ許容範囲にある（p99 < 1msがよくある目標）キュー深度を選ぶ。
 
-### io_uring with Deep Queues {#io_uring-with-deep-queues}
+### 深いキューでのio_uring {#io_uring-with-deep-queues}
 
-`io_uring` is the modern async I/O interface that avoids the overhead of per-syscall context switches. It shines at high queue depths because multiple I/O requests can be submitted in a single `io_uring_enter()` call.
+`io_uring` は、システムコールごとのコンテキストスイッチのオーバーヘッドを回避する最新の非同期I/Oインターフェースである。1回の `io_uring_enter()` 呼び出しで複数のI/Oリクエストを発行できるため、高いキュー深度で真価を発揮する。
 
 ```bash
-# Benchmark io_uring vs libaio at various queue depths
+# さまざまなキュー深度でio_uringとlibaioをベンチマークする
 fio --name=io_uring_deep \
     --ioengine=io_uring \
     --filename=/dev/nvme0n1 \
@@ -361,7 +361,7 @@ fio --name=io_uring_deep \
     --direct=1 \
     --lat_percentiles=1
 
-# Compare with libaio
+# libaioと比較する
 fio --name=libaio_deep \
     --ioengine=libaio \
     --filename=/dev/nvme0n1 \
@@ -375,103 +375,103 @@ fio --name=libaio_deep \
     --lat_percentiles=1
 ```
 
-At queue depths above 32, `io_uring` typically shows 10–20% higher IOPS than `libaio` due to reduced syscall overhead and better CPU cache behavior from batched completions.
+キュー深度が32を超えると、`io_uring` は通常 `libaio` より10–20%高いIOPSを示す。システムコールのオーバーヘッドが減ることと、完了をまとめて処理することでCPUキャッシュの挙動が良くなることによる。
 
-## Readahead Tuning {#readahead-tuning}
+## readaheadのチューニング {#readahead-tuning}
 
-The kernel's readahead mechanism (described in detail in [readahead](readahead.md)) prefetches pages into the page cache before they are explicitly requested. The default `read_ahead_kb` is set per device and represents the maximum bytes to prefetch in a single window.
+カーネルのreadahead機構（詳細は[readahead](readahead.md)で説明）は、明示的に要求される前にページをページキャッシュへ先読みする。デフォルトの `read_ahead_kb` はデバイスごとに設定され、1つのウィンドウで先読みする最大バイト数を表す。
 
-### Checking and Setting read_ahead_kb {#checking-and-setting-readaheadkb}
+### read_ahead_kbの確認と設定 {#checking-and-setting-readaheadkb}
 
 ```bash
-# Check current value
+# 現在の値を確認する
 cat /sys/block/nvme0n1/queue/read_ahead_kb
-# 128 (typical default)
+# 128（典型的なデフォルト）
 
-# Check for a SATA HDD
+# SATA HDDの場合を確認する
 cat /sys/block/sda/queue/read_ahead_kb
 # 128
 
-# Set per-device
-echo 4096 > /sys/block/sda/queue/read_ahead_kb   # streaming workload on HDD
-echo 16   > /sys/block/nvme0n1/queue/read_ahead_kb # database random I/O on NVMe
+# デバイスごとに設定する
+echo 4096 > /sys/block/sda/queue/read_ahead_kb   # HDD上のストリーミングワークロード
+echo 16   > /sys/block/nvme0n1/queue/read_ahead_kb # NVMe上のデータベースのランダムI/O
 ```
 
-### When to Reduce Readahead {#when-to-reduce-readahead}
+### readaheadを減らすべきとき {#when-to-reduce-readahead}
 
-**Random I/O workloads** — Database index scans access random 8–16KB pages. Readahead prefetches adjacent pages that are never read, wasting page cache space and generating unnecessary I/O. For a PostgreSQL server, set:
+**ランダムI/Oのワークロード** — データベースのインデックススキャンは、8–16KBのページにランダムにアクセスする。readaheadは決して読まれない隣接ページを先読みし、ページキャッシュの領域を浪費し、不要なI/Oを発生させる。PostgreSQLサーバーでは次のように設定する。
 
 ```bash
-# Minimal readahead: only prefetch what the kernel's sequential detector demands
+# 最小限のreadahead: カーネルのシーケンシャル検出器が要求する分だけ先読みする
 echo 16 > /sys/block/nvme0n1/queue/read_ahead_kb
 ```
 
-**Devices with their own cache** — NVMe drives with large DRAM caches already perform internal prefetching. The kernel's readahead on top of the drive's prefetch doubles the work.
+**独自のキャッシュを持つデバイス** — 大きなDRAMキャッシュを持つNVMeドライブは、すでに内部で先読みを行っている。ドライブの先読みの上にカーネルのreadaheadを重ねると、作業が二重になる。
 
-### When to Increase Readahead {#when-to-increase-readahead}
+### readaheadを増やすべきとき {#when-to-increase-readahead}
 
-**Sequential streaming** — Log ingestion pipelines, video transcoding, and backup jobs read large files sequentially. Larger readahead windows reduce the frequency of actual I/O by filling the page cache further ahead:
+**シーケンシャルなストリーミング** — ログの取り込みパイプライン、動画のトランスコード、バックアップジョブは、大きなファイルをシーケンシャルに読む。readaheadのウィンドウを大きくすると、ページキャッシュをより先まで埋めることで実際のI/Oの頻度が減る。
 
 ```bash
-# Aggressive readahead for sequential streaming on HDD
-echo 8192 > /sys/block/sda/queue/read_ahead_kb   # 8MB window
+# HDD上のシーケンシャルなストリーミング向けの積極的なreadahead
+echo 8192 > /sys/block/sda/queue/read_ahead_kb   # 8MBのウィンドウ
 ```
 
-**Network-attached storage** — On high-latency block devices (iSCSI, NBD), even a small sequential access pattern benefits from aggressive readahead because round-trip latency dominates.
+**ネットワーク接続ストレージ** — レイテンシの高いブロックデバイス（iSCSI、NBD）では、往復のレイテンシが支配的なため、小さなシーケンシャルアクセスパターンであっても積極的なreadaheadの恩恵を受ける。
 
-### Per-File Readahead with fadvise {#per-file-readahead-with-fadvise}
+### fadviseによるファイル単位のreadahead {#per-file-readahead-with-fadvise}
 
-Applications can advise the kernel about their access pattern without changing system-wide settings. The kernel uses these hints to adjust the readahead window for the specific file description:
+アプリケーションは、システム全体の設定を変えずに、自身のアクセスパターンをカーネルに助言できる。カーネルはこれらのヒントを使い、特定のファイル記述（file description）に対するreadaheadのウィンドウを調整する。
 
 ```c
 #include <fcntl.h>
 
 int fd = open("data.db", O_RDONLY);
 
-// Tell the kernel: random access, disable readahead for this fd
+// カーネルに伝える: ランダムアクセスなので、このfdのreadaheadを無効にする
 posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
 
-// Tell the kernel: sequential access, prefetch aggressively for this fd
+// カーネルに伝える: シーケンシャルアクセスなので、このfdでは積極的に先読みする
 posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
 
-// Hint that this range will be accessed soon
+// この範囲がまもなくアクセスされることを示すヒント
 posix_fadvise(fd, offset, length, POSIX_FADV_WILLNEED);
 
-// Drop cached pages once done (avoid polluting cache for single-pass reads)
+// 使い終わったらキャッシュされたページを破棄する（1回きりの読み込みでキャッシュを汚さないため）
 posix_fadvise(fd, offset, length, POSIX_FADV_DONTNEED);
 ```
 
-PostgreSQL uses `POSIX_FADV_DONTNEED` after sequential scans to prevent the page cache from being flooded with scan data that will not be reused, protecting the buffer pool pages used by index lookups.
+PostgreSQLはシーケンシャルスキャンの後に `POSIX_FADV_DONTNEED` を使い、再利用されないスキャンデータでページキャッシュがあふれるのを防いで、インデックス検索で使われるバッファプールのページを守っている。
 
-## Dirty Writeback Tuning {#dirty-writeback-tuning}
+## dirtyページのライトバックのチューニング {#dirty-writeback-tuning}
 
-Dirty page writeback controls how quickly the kernel flushes modified page cache pages to disk. The same tunables were covered from the memory perspective in [tuning databases](../mm/tuning-databases.md); this section looks at the I/O implications.
+dirtyページのライトバックは、変更されたページキャッシュのページをカーネルがどれだけ早くディスクへフラッシュするかを制御する。同じチューニング可能なパラメータは、メモリの観点から[データベースのチューニング](../mm/tuning-databases.md)で扱った。この節ではI/Oへの影響を見る。
 
-### The Writeback Tunables {#the-writeback-tunables}
+### ライトバックのチューニング可能なパラメータ {#the-writeback-tunables}
 
 ```bash
-# Current values
+# 現在の値
 sysctl vm.dirty_ratio vm.dirty_background_ratio \
        vm.dirty_expire_centisecs vm.dirty_writeback_centisecs
 
-# Typical defaults:
+# 典型的なデフォルト:
 # vm.dirty_ratio = 20
 # vm.dirty_background_ratio = 10
-# vm.dirty_expire_centisecs = 3000   (30 seconds)
-# vm.dirty_writeback_centisecs = 500 (5 seconds)
+# vm.dirty_expire_centisecs = 3000   （30秒）
+# vm.dirty_writeback_centisecs = 500 （5秒）
 ```
 
-- **`dirty_background_ratio`**: Background writeback kicks in when dirty pages exceed this fraction of available memory. Keep it low (3–5%) to spread writeback evenly.
-- **`dirty_ratio`**: Writers are throttled when dirty pages hit this level. This is a hard stall — the writing process sleeps until writeback catches up.
-- **`dirty_expire_centisecs`**: Pages older than this are eligible for writeback even if the ratio thresholds are not met. Useful for bursty write workloads that produce many dirty pages quickly.
-- **`dirty_writeback_centisecs`**: How often the per-device writeback threads wake to check for pages to flush.
+- **`dirty_background_ratio`**: dirtyページが利用可能なメモリのこの割合を超えると、バックグラウンドのライトバックが始まる。ライトバックを均等に分散させるため、低め（3–5%）に保つ。
+- **`dirty_ratio`**: dirtyページがこの水準に達すると、書き込み側がスロットリングされる。これは強制的な停止であり、書き込み中のプロセスはライトバックが追いつくまでスリープする。
+- **`dirty_expire_centisecs`**: これより古いページは、割合のしきい値に達していなくてもライトバックの対象になる。多くのdirtyページを短時間で生み出すバースト的な書き込みワークロードで有用である。
+- **`dirty_writeback_centisecs`**: デバイスごとのライトバックスレッドが、フラッシュすべきページを確認するために起床する間隔。
 
-### Tuning for Latency-Sensitive Workloads {#tuning-for-latency-sensitive-workloads}
+### レイテンシに敏感なワークロード向けのチューニング {#tuning-for-latency-sensitive-workloads}
 
-The write-stall problem: on a 256GB server with `dirty_ratio=20`, up to 51GB of dirty data can accumulate before writers stall. When a checkpoint or sync event triggers a large flush, the resulting I/O storm saturates the device and stalls WAL writes.
+書き込み停止の問題: `dirty_ratio=20` の256GBサーバーでは、書き込み側が停止するまでに最大51GBのdirtyデータが溜まりうる。チェックポイントやsyncイベントが大規模なフラッシュを引き起こすと、その結果生じるI/Oの嵐がデバイスを飽和させ、WALの書き込みを停止させる。
 
 ```bash
-# Low dirty ratios for databases: flush early and often
+# データベース向けの低いdirty比率: 早めに頻繁にフラッシュする
 cat >> /etc/sysctl.d/io-database.conf << 'EOF'
 vm.dirty_background_ratio = 3
 vm.dirty_ratio = 8
@@ -481,21 +481,21 @@ EOF
 sysctl --system
 ```
 
-Or use absolute byte limits, which are more predictable on large-memory servers:
+あるいは、大容量メモリのサーバーでより予測しやすい、バイト単位の絶対的な上限を使う。
 
 ```bash
 cat >> /etc/sysctl.d/io-database.conf << 'EOF'
-vm.dirty_background_bytes = 134217728    # 128MB: start background writeback
-vm.dirty_bytes = 536870912               # 512MB: hard stall threshold
+vm.dirty_background_bytes = 134217728    # 128MB: バックグラウンドのライトバックを開始
+vm.dirty_bytes = 536870912               # 512MB: 強制停止のしきい値
 EOF
 ```
 
-!!! tip "Byte limits override ratio limits"
-    When both `dirty_background_bytes` and `dirty_background_ratio` are set, the byte limit takes effect and the ratio is ignored. Use byte limits on servers with more than 64GB RAM where percentage-based thresholds become too large to be meaningful.
+!!! tip "バイト単位の上限は割合による上限に優先する"
+    `dirty_background_bytes` と `dirty_background_ratio` の両方が設定されている場合、バイト単位の上限が有効になり、割合は無視される。割合ベースのしきい値が大きくなりすぎて意味をなさなくなる、64GBを超えるRAMを持つサーバーではバイト単位の上限を使う。
 
-### Tuning for Write-Heavy Throughput {#tuning-for-write-heavy-throughput}
+### 書き込み中心のスループット向けのチューニング {#tuning-for-write-heavy-throughput}
 
-For bulk-ingest pipelines where throughput matters more than latency:
+レイテンシよりスループットが重要な一括取り込みパイプラインの場合:
 
 ```bash
 cat >> /etc/sysctl.d/io-bulk.conf << 'EOF'
@@ -506,32 +506,32 @@ vm.dirty_writeback_centisecs = 1000
 EOF
 ```
 
-Larger thresholds allow writes to coalesce in the page cache and get flushed in larger sequential batches, which is more efficient for HDDs and benefits from writeback merging even on SSDs.
+しきい値を大きくすると、書き込みがページキャッシュ内でまとめられ、より大きなシーケンシャルなバッチでフラッシュされる。これはHDDにとって効率的であり、SSDでもライトバックのマージの恩恵を受ける。
 
-### Per-Device Writeback Throttling with cgroup v2 {#per-device-writeback-throttling-with-cgroup-v2}
+### cgroup v2によるデバイスごとのライトバックのスロットリング {#per-device-writeback-throttling-with-cgroup-v2}
 
-For mixed-workload servers, `io.max` in cgroup v2 allows per-device I/O rate limits independent of the system-wide dirty ratios:
+混在ワークロードのサーバーでは、cgroup v2の `io.max` を使うと、システム全体のdirty比率とは独立にデバイスごとのI/Oレート制限をかけられる。
 
 ```bash
-# Limit backup job to 100MB/s writes on /dev/sda (major:minor 8:0)
+# /dev/sda（major:minor 8:0）上でバックアップジョブの書き込みを100MB/sに制限する
 echo "8:0 wbps=104857600" > /sys/fs/cgroup/backups/io.max
 
-# Limit backup job to 1000 IOPS
+# バックアップジョブを1000 IOPSに制限する
 echo "8:0 wiops=1000" > /sys/fs/cgroup/backups/io.max
 
-# Check current limits
+# 現在の制限を確認する
 cat /sys/fs/cgroup/backups/io.max
 ```
 
-This prevents a backup job from saturating the device and affecting database write latency, without touching global dirty ratio settings.
+これにより、グローバルなdirty比率の設定に触れることなく、バックアップジョブがデバイスを飽和させてデータベースの書き込みレイテンシに影響するのを防げる。
 
-## O_DIRECT vs Buffered I/O {#o_direct-vs-buffered-io}
+## O_DIRECTとバッファードI/O {#o_direct-vs-buffered-io}
 
-The choice between `O_DIRECT` and buffered I/O is one of the most consequential decisions for database I/O performance.
+`O_DIRECT` とバッファードI/Oのどちらを選ぶかは、データベースのI/O性能にとって最も影響の大きい判断の1つである。
 
-### The Double-Buffering Problem {#the-double-buffering-problem}
+### 二重バッファリングの問題 {#the-double-buffering-problem}
 
-A database with a 32GB buffer pool and buffered I/O uses memory twice: the database buffers data in its own pool, and the OS page cache holds a second copy of the same pages. On a 128GB server, this can mean 64GB consumed by two copies of the same data.
+32GBのバッファプールを持ち、バッファードI/Oを使うデータベースは、メモリを二重に使う。データベースは自身のプールにデータをバッファし、OSのページキャッシュは同じページの2つ目のコピーを保持する。128GBのサーバーでは、同じデータの2つのコピーで64GBが消費されることもある。
 
 ```
 Buffered I/O with database:
@@ -554,55 +554,55 @@ O_DIRECT with database:
 Total: ~45GB used, 83GB available
 ```
 
-### When Databases Should Use O_DIRECT {#when-databases-should-use-o_direct}
+### データベースがO_DIRECTを使うべきとき {#when-databases-should-use-o_direct}
 
-**PostgreSQL** uses buffered I/O by default for data files but recommends `O_DIRECT`-equivalent behavior. Setting `effective_io_concurrency` and using `pg_prewarm` with direct I/O is the standard approach. For WAL, PostgreSQL's `wal_sync_method = open_datasync` uses `O_DIRECT | O_SYNC`.
+**PostgreSQL** はデータファイルに対してデフォルトでバッファードI/Oを使うが、`O_DIRECT` 相当の挙動を推奨している。`effective_io_concurrency` を設定し、ダイレクトI/Oとともに `pg_prewarm` を使うのが標準的な方法である。WALについては、PostgreSQLの `wal_sync_method = open_datasync` が `O_DIRECT | O_SYNC` を使う。
 
-**MySQL InnoDB** uses `O_DIRECT` when `innodb_flush_method = O_DIRECT`:
+**MySQL InnoDB** は `innodb_flush_method = O_DIRECT` のときに `O_DIRECT` を使う。
 
 ```ini
 # /etc/my.cnf.d/innodb.cnf
 [mysqld]
-innodb_flush_method = O_DIRECT        # O_DIRECT for data files
-# innodb_flush_method = O_DIRECT_NO_FSYNC  # Skip fsync if using battery-backed cache
+innodb_flush_method = O_DIRECT        # データファイルにO_DIRECT
+# innodb_flush_method = O_DIRECT_NO_FSYNC  # バッテリーバックアップ付きキャッシュを使う場合はfsyncを省略
 ```
 
-**Oracle** enables `O_DIRECT` by default for datafiles when the filesystem supports it.
+**Oracle** は、ファイルシステムが対応していれば、データファイルに対してデフォルトで `O_DIRECT` を有効にする。
 
-### Alignment Requirements {#alignment-requirements}
+### アライメントの要件 {#alignment-requirements}
 
-`O_DIRECT` imposes alignment requirements on the buffer address, file offset, and transfer size. All three must be aligned to the logical block size of the device (typically 512 bytes for SATA, 4096 bytes for NVMe with 4Kn format). Violating alignment returns `EINVAL`.
+`O_DIRECT` は、バッファのアドレス、ファイルオフセット、転送サイズにアライメントの要件を課す。3つすべてがデバイスの論理ブロックサイズ（通常、SATAでは512バイト、4Knフォーマットの NVMeでは4096バイト）にアラインされていなければならない。アライメントに違反すると `EINVAL` が返る。
 
 ```bash
-# Check the device's logical block size
+# デバイスの論理ブロックサイズを確認する
 cat /sys/block/nvme0n1/queue/logical_block_size
-# 512  (or 4096 for 4Kn devices)
+# 512（4Knデバイスでは4096）
 
-# Check physical block size (optimal alignment)
+# 物理ブロックサイズ（最適なアライメント）を確認する
 cat /sys/block/nvme0n1/queue/physical_block_size
 # 4096
 ```
 
-For application code, always align O_DIRECT buffers to the physical block size, not just the logical block size, to avoid internal partial-block reads in the device firmware.
+アプリケーションのコードでは、デバイスのファームウェア内で部分ブロックの読み込みが発生するのを避けるため、O_DIRECTのバッファを論理ブロックサイズだけでなく常に物理ブロックサイズにアラインする。
 
 ```c
-// Allocate an aligned buffer for O_DIRECT
+// O_DIRECT用にアラインされたバッファを割り当てる
 void *buf;
-posix_memalign(&buf, 4096, IO_SIZE);   // 4096-byte aligned, IO_SIZE multiple of 4096
+posix_memalign(&buf, 4096, IO_SIZE);   // 4096バイト境界にアライン、IO_SIZEは4096の倍数
 ```
 
-### Benchmarking O_DIRECT with fio {#benchmarking-o_direct-with-fio}
+### fioによるO_DIRECTのベンチマーク {#benchmarking-o_direct-with-fio}
 
 ```bash
-# Compare buffered vs O_DIRECT for random 4K reads
-# Buffered (first run fills cache, second run reads from cache):
+# ランダム4KリードについてバッファードとO_DIRECTを比較する
+# バッファード（1回目の実行でキャッシュが埋まり、2回目はキャッシュから読む）:
 fio --name=buffered-randread \
     --filename=/var/lib/postgresql/data/base/16384/1259 \
     --rw=randread --bs=4k --iodepth=8 --numjobs=4 \
     --runtime=30 --time_based --direct=0 \
     --lat_percentiles=1
 
-# O_DIRECT (always goes to device):
+# O_DIRECT（常にデバイスへアクセスする）:
 fio --name=odirect-randread \
     --filename=/var/lib/postgresql/data/base/16384/1259 \
     --rw=randread --bs=4k --iodepth=8 --numjobs=4 \
@@ -610,46 +610,46 @@ fio --name=odirect-randread \
     --lat_percentiles=1
 ```
 
-### Downsides of O_DIRECT {#downsides-of-o_direct}
+### O_DIRECTの欠点 {#downsides-of-o_direct}
 
-- **No readahead**: The kernel cannot prefetch adjacent pages because `O_DIRECT` bypasses the page cache entirely. Applications that mix sequential and random access in the same process may lose readahead benefits for the sequential portions.
-- **No page cache sharing**: If the same file is read by multiple processes (e.g., multiple PostgreSQL backends reading the same heap page), buffered I/O lets them share the cached page. `O_DIRECT` forces each process to go to the device independently unless the database manages its own shared buffer.
-- **Alignment complexity**: Application code must manage buffer alignment explicitly.
+- **readaheadがない**: `O_DIRECT` はページキャッシュを完全にバイパスするため、カーネルは隣接ページを先読みできない。同じプロセス内でシーケンシャルアクセスとランダムアクセスを混在させるアプリケーションは、シーケンシャルな部分でreadaheadの恩恵を失う可能性がある。
+- **ページキャッシュを共有できない**: 同じファイルを複数のプロセスが読む場合（例: 複数のPostgreSQLバックエンドが同じヒープページを読む）、バッファードI/Oならキャッシュされたページを共有できる。`O_DIRECT` では、データベースが独自の共有バッファを管理しない限り、各プロセスが個別にデバイスへアクセスすることになる。
+- **アライメントの複雑さ**: アプリケーションのコードがバッファのアライメントを明示的に管理しなければならない。
 
-For files accessed by exactly one process with its own buffer management (a database's data files), the benefits outweigh the costs. For files shared across processes or accessed sequentially without a cache (log files, temp files), buffered I/O is usually better.
+独自のバッファ管理を持つ1つのプロセスだけがアクセスするファイル（データベースのデータファイル）では、利点がコストを上回る。プロセス間で共有されるファイルや、キャッシュなしでシーケンシャルにアクセスされるファイル（ログファイル、一時ファイル）では、通常はバッファードI/Oの方が良い。
 
-## NVMe-Specific Tuning {#nvme-specific-tuning}
+## NVMe固有のチューニング {#nvme-specific-tuning}
 
-NVMe devices are qualitatively different from SATA in ways that affect how the kernel should interact with them.
+NVMeデバイスはSATAとは質的に異なり、その違いはカーネルがデバイスとどうやり取りすべきかに影響する。
 
-### IRQ Affinity for NVMe Completion Queues {#irq-affinity-for-nvme-completion-queues}
+### NVMe完了キューのIRQアフィニティ {#irq-affinity-for-nvme-completion-queues}
 
-Each NVMe hardware queue has a dedicated MSI-X interrupt. When a request completes, the NVMe controller raises this interrupt and the kernel's IRQ handler processes the completion. If this IRQ handler runs on a different CPU than the one that submitted the request, the completion data (including the result buffer) must cross CPU caches.
+各NVMeハードウェアキューには専用のMSI-X割り込みがある。リクエストが完了すると、NVMeコントローラがこの割り込みを発生させ、カーネルのIRQハンドラが完了を処理する。このIRQハンドラがリクエストを発行したCPUとは別のCPUで実行されると、完了データ（結果バッファを含む）がCPUキャッシュ間を移動しなければならない。
 
 ```bash
-# List NVMe IRQ assignments
+# NVMeのIRQ割り当てを一覧表示する
 grep nvme /proc/interrupts
 
-# Pin each NVMe queue IRQ to a specific CPU
-# IRQ 35 → CPU 0, IRQ 36 → CPU 1, etc.
+# 各NVMeキューのIRQを特定のCPUに固定する
+# IRQ 35 → CPU 0、IRQ 36 → CPU 1、など
 echo 1 > /proc/irq/35/smp_affinity_list
 echo 2 > /proc/irq/36/smp_affinity_list
 
-# Or use irqbalance with a policy hint
+# あるいはポリシーのヒント付きでirqbalanceを使う
 # /etc/sysconfig/irqbalance:
 # IRQBALANCE_ARGS="--policy=exact"
 ```
 
-For large NVMe deployments, CPU pinning reduces cross-NUMA cache misses on completion and can measurably improve p99 latency.
+大規模なNVMe環境では、CPUへの固定によって完了時のNUMAをまたぐキャッシュミスが減り、p99レイテンシが測定可能なほど改善することがある。
 
-### io_poll: Busy-Polling Without IRQs {#io_poll-busy-polling-without-irqs}
+### io_poll: IRQなしのビジーポーリング {#io_poll-busy-polling-without-irqs}
 
-For ultra-low latency applications, `io_uring` with `IORING_SETUP_IOPOLL` (io_poll mode) avoids the IRQ path entirely. Instead of waiting for the NVMe controller to raise an interrupt, the kernel busy-polls the NVMe completion queue register.
+超低レイテンシのアプリケーションでは、`io_uring` を `IORING_SETUP_IOPOLL`（io_pollモード）とともに使うことで、IRQの経路を完全に回避できる。NVMeコントローラが割り込みを発生させるのを待つ代わりに、カーネルがNVMe完了キューのレジスタをビジーポーリングする。
 
-This trades CPU cycles for latency:
+これはCPUサイクルとレイテンシを引き換えにする。
 
 ```bash
-# Benchmark io_uring HIPRI (poll) vs default IRQ path
+# io_uringのHIPRI（ポーリング）とデフォルトのIRQ経路をベンチマークする
 fio --name=uring-poll \
     --ioengine=io_uring \
     --hipri=1 \
@@ -663,7 +663,7 @@ fio --name=uring-poll \
     --direct=1 \
     --lat_percentiles=1
 
-# Compare without polling
+# ポーリングなしと比較する
 fio --name=uring-irq \
     --ioengine=io_uring \
     --hipri=0 \
@@ -678,86 +678,86 @@ fio --name=uring-irq \
     --lat_percentiles=1
 ```
 
-io_poll is only worthwhile when:
+io_pollが割に合うのは次の場合だけである。
 
-- You have dedicated CPU cores available (it pins a core at 100% while polling).
-- Latency SLA is below 100µs.
-- Queue depth is low (1–4); at high queue depths, the IRQ path amortizes overhead across more requests.
+- 専用のCPUコアを使える（ポーリング中はコアを100%占有する）。
+- レイテンシのSLAが100µs未満である。
+- キュー深度が低い（1–4）。キュー深度が高い場合は、IRQ経路がより多くのリクエストでオーバーヘッドを償却する。
 
-### nomerges for NVMe {#nomerges-for-nvme}
+### NVMeでのnomerges {#nomerges-for-nvme}
 
-The block layer's merge logic combines adjacent requests into a single larger I/O to reduce IOPS. This is valuable for slow HDDs but counterproductive for NVMe where the device can handle hundreds of thousands of individual IOPS natively:
+ブロック層のマージロジックは、隣接するリクエストを1つの大きなI/Oにまとめ、IOPSを減らす。これは低速なHDDでは有益だが、数十万の個別IOPSをネイティブに処理できるNVMeでは逆効果である。
 
 ```bash
-# Check current merge behavior
+# 現在のマージの挙動を確認する
 cat /sys/block/nvme0n1/queue/nomerges
-# 0 = merging enabled (default)
-# 1 = only contiguous merges
-# 2 = no merges at all
+# 0 = マージ有効（デフォルト）
+# 1 = 連続したマージのみ
+# 2 = マージを一切行わない
 
-# Disable merges for NVMe OLTP workloads
+# NVMeのOLTPワークロードではマージを無効にする
 echo 2 > /sys/block/nvme0n1/queue/nomerges
 ```
 
-Disabling merges reduces latency by eliminating the time the block layer spends searching the merge tree. The effect is measurable at high IOPS (>100K IOPS), where merge-tree lookups can become a bottleneck.
+マージを無効にすると、ブロック層がマージツリーの探索に費やす時間がなくなり、レイテンシが減る。この効果は、マージツリーの検索がボトルネックになりうる高IOPS（100K IOPS超）で測定可能になる。
 
-### nvme-tcp Latency {#nvme-tcp-latency}
+### nvme-tcpのレイテンシ {#nvme-tcp-latency}
 
-For NVMe-oF (NVMe over Fabrics) using TCP transport, additional tuning is needed at the network layer:
+TCPトランスポートを使うNVMe-oF（NVMe over Fabrics）では、ネットワーク層で追加のチューニングが必要である。
 
 ```bash
-# Disable Nagle's algorithm on the NVMe-TCP connection socket
-# (done via nvme-cli, not directly)
+# NVMe-TCP接続のソケットでNagleアルゴリズムを無効にする
+# （直接ではなくnvme-cli経由で行う）
 nvme connect -t tcp -a 192.168.1.100 -s 4420 -n nqn.example:storage1 \
     --reconnect-delay=1 --ctrl-loss-tmo=600
 
-# TCP optimizations for NVMe-TCP
-sysctl -w net.ipv4.tcp_nodelay=1          # Disable Nagle (reduce latency)
-sysctl -w net.core.rmem_max=134217728     # 128MB receive buffer
-sysctl -w net.core.wmem_max=134217728     # 128MB send buffer
+# NVMe-TCP向けのTCP最適化
+sysctl -w net.ipv4.tcp_nodelay=1          # Nagleを無効化（レイテンシを減らす）
+sysctl -w net.core.rmem_max=134217728     # 128MBの受信バッファ
+sysctl -w net.core.wmem_max=134217728     # 128MBの送信バッファ
 ```
 
-## Filesystem Choices for I/O {#filesystem-choices-for-io}
+## I/Oのためのファイルシステム選択 {#filesystem-choices-for-io}
 
-The filesystem layer sits above the block device and adds metadata operations, journaling, and extent management overhead to every I/O path.
+ファイルシステム層はブロックデバイスの上に位置し、あらゆるI/O経路にメタデータ操作、ジャーナリング、エクステント管理のオーバーヘッドを加える。
 
 ### XFS {#xfs}
 
-XFS is the best choice for storage-heavy workloads on large files:
+XFSは、大きなファイルを扱うストレージ負荷の高いワークロードに最適な選択である。
 
-- Extent-based allocation reduces fragmentation for large sequential files.
-- Per-inode allocation groups allow parallel writes to different files without contention.
-- Delayed allocation coalesces small writes into larger extent allocations.
-- Scalable B-tree metadata structures maintain performance as the filesystem fills up.
+- エクステントベースの割り当てにより、大きなシーケンシャルファイルの断片化が減る。
+- inodeごとのアロケーショングループにより、異なるファイルへの並列書き込みが競合なしに行える。
+- 遅延割り当てにより、小さな書き込みがより大きなエクステントの割り当てにまとめられる。
+- スケーラブルなBツリーのメタデータ構造により、ファイルシステムが埋まっていっても性能が維持される。
 
 ```bash
-# Format with optimal settings for databases (adjust agcount for your CPU count)
+# データベース向けの最適な設定でフォーマットする（agcountはCPU数に合わせて調整する）
 mkfs.xfs -f \
     -d agcount=16 \
     -l size=256m,lazy-count=1 \
     /dev/nvme0n1p1
 
-# Mount with performance options
+# 性能向けのオプションでマウントする
 mount -o noatime,nodiratime,logbufs=8,logbsize=256k /dev/nvme0n1p1 /var/lib/postgresql
 ```
 
 ### ext4 {#ext4}
 
-ext4 is a solid general-purpose choice with wide tooling support:
+ext4は、ツールのサポートが幅広い堅実な汎用の選択肢である。
 
 ```bash
-# Format for database workloads (larger journal, no lazy inode initialization delay)
+# データベースワークロード向けにフォーマットする（大きなジャーナル、inodeの遅延初期化による遅れなし）
 mkfs.ext4 -E lazy_itable_init=0,lazy_journal_init=0 \
            -J size=1024 \
            /dev/sda1
 
-# Mount options for database workloads
+# データベースワークロード向けのマウントオプション
 mount -o noatime,nodiratime,data=ordered,barrier=1 /dev/sda1 /var/lib/mysql
 ```
 
 ### btrfs {#btrfs}
 
-btrfs is generally not recommended for random-write database workloads. Its copy-on-write (CoW) design means that overwriting a page always writes to a new location, generating significantly more I/O and fragmentation than in-place-write filesystems:
+btrfsは、ランダム書き込みのデータベースワークロードには一般に推奨されない。コピーオンライト（CoW）の設計により、ページの上書きは常に新しい場所への書き込みになり、インプレース書き込みのファイルシステムよりもはるかに多くのI/Oと断片化を生む。
 
 ```
 In-place write (ext4/XFS):    single 4KB write → one 4KB I/O
@@ -765,124 +765,124 @@ CoW write (btrfs):            one 4KB write → read old block, write new block,
                                update parent tree node, possibly cascade
 ```
 
-btrfs does have legitimate uses: incremental snapshots for backup pipelines, RAID integration, and checksumming for integrity-critical workloads. But for raw I/O performance with random writes, use XFS or ext4.
+btrfsにも正当な用途はある。バックアップパイプライン向けの増分スナップショット、RAIDの統合、整合性が重要なワークロード向けのチェックサムなどである。しかし、ランダム書き込みでの生のI/O性能を求めるなら、XFSかext4を使う。
 
-### Mount Options That Matter {#mount-options-that-matter}
+### 重要なマウントオプション {#mount-options-that-matter}
 
-**`noatime` / `nodiratime`**: By default, the kernel updates the `atime` (access time) of every file and directory on every read. This turns every read into a potential write (to update the inode). `noatime` disables this entirely; `nodiratime` disables it only for directories.
+**`noatime` / `nodiratime`**: デフォルトでは、カーネルは読み込みのたびにすべてのファイルとディレクトリの `atime`（アクセス時刻）を更新する。これにより、すべての読み込みが潜在的な書き込み（inodeの更新）になる。`noatime` はこれを完全に無効にし、`nodiratime` はディレクトリについてのみ無効にする。
 
 ```bash
-# Add to /etc/fstab
+# /etc/fstab に追加する
 /dev/nvme0n1p1 /var/lib/postgresql xfs noatime,nodiratime 0 2
 ```
 
-**`nobarrier`**: Write barriers ensure journal commits are durable by forcing a cache flush to the device before marking a journal transaction complete. Disabling barriers (`nobarrier`) improves write throughput but risks filesystem corruption if the system loses power mid-write.
+**`nobarrier`**: 書き込みバリアは、ジャーナルトランザクションを完了とマークする前にデバイスへキャッシュのフラッシュを強制することで、ジャーナルのコミットが永続化されることを保証する。バリアを無効にする（`nobarrier`）と書き込みスループットは向上するが、書き込み途中でシステムの電源が落ちるとファイルシステムが破損するリスクがある。
 
 ```
 With barrier:     write data → flush → write journal commit → flush
 Without barrier:  write data + journal commit (no ordering guarantee)
 ```
 
-Only disable barriers when the storage has a battery-backed write cache (RAID controller with BBU, enterprise NVMe with power-loss protection) that guarantees ordering persistence. Never disable on consumer SSDs.
+バリアを無効にするのは、順序の永続性を保証するバッテリーバックアップ付き書き込みキャッシュ（BBU付きRAIDコントローラ、電源喪失保護付きのエンタープライズ向けNVMe）をストレージが備えている場合だけにする。コンシューマ向けSSDでは決して無効にしない。
 
-!!! warning "Data loss risk"
-    Disabling write barriers is only safe with battery-backed write cache (BBWC) or a UPS. Without hardware-level write-ordering guarantees, a power failure mid-journal-commit can silently corrupt the filesystem.
+!!! warning "データ損失のリスク"
+    書き込みバリアの無効化が安全なのは、バッテリーバックアップ付き書き込みキャッシュ（BBWC）またはUPSがある場合だけである。ハードウェアレベルで書き込み順序の保証がないと、ジャーナルのコミット途中での電源障害によって、ファイルシステムが気づかないうちに破損しうる。
 
-!!! note "ext4 syntax"
-    `barrier=0` was the ext3 syntax; ext4 uses `nobarrier`.
+!!! note "ext4の構文"
+    `barrier=0` はext3の構文であり、ext4では `nobarrier` を使う。
 
 ```bash
-# Only with battery-backed write cache:
+# バッテリーバックアップ付き書き込みキャッシュがある場合のみ:
 mount -o noatime,nobarrier /dev/nvme0n1p1 /var/lib/postgresql
 ```
 
-**`data=writeback` for WAL partitions**:
+**WALパーティション向けの `data=writeback`**:
 
-!!! warning "data=writeback is not safe for database data directories"
-    `data=writeback` decouples metadata journaling from data writeback, which can expose
-    stale data after a crash — even when the database has its own WAL. The database WAL
-    provides *logical* ordering but does not protect against the filesystem presenting
-    garbage data that predates the WAL record in newly allocated blocks.
+!!! warning "data=writebackはデータベースのデータディレクトリには安全ではない"
+    `data=writeback` はメタデータのジャーナリングをデータのライトバックから切り離すため、
+    クラッシュ後に古いデータが露出することがある。データベースが独自のWALを持っていても同様である。
+    データベースのWALは*論理的な*順序を提供するが、新たに割り当てられたブロックにおいて、
+    WALレコードより前のゴミデータをファイルシステムが見せてしまうことは防げない。
 
-    PostgreSQL documentation explicitly recommends `data=ordered` (the ext4 default) for
-    data directories. The `data=writeback` mode is generally only appropriate for scratch
-    or temporary partitions where crash consistency is not required.
+    PostgreSQLのドキュメントは、データディレクトリに対して `data=ordered`（ext4のデフォルト）を
+    明示的に推奨している。`data=writeback` モードが適切なのは、一般にクラッシュ時の整合性が
+    不要なスクラッチ用または一時的なパーティションだけである。
 
 ```bash
 mount -o noatime,data=writeback /dev/nvme1n1p1 /var/lib/postgresql/pg_wal
 ```
 
-## HDD-Specific Tuning {#hdd-specific-tuning}
+## HDD固有のチューニング {#hdd-specific-tuning}
 
-Spinning disks have fundamentally different performance characteristics that require different tuning strategies.
+回転ディスクは性能特性が根本的に異なり、異なるチューニング戦略が必要になる。
 
-### Detecting Rotational Media {#detecting-rotational-media}
+### 回転メディアの検出 {#detecting-rotational-media}
 
 ```bash
-# 1 = rotational (HDD), 0 = non-rotational (SSD/NVMe)
+# 1 = 回転型（HDD）、0 = 非回転型（SSD/NVMe）
 cat /sys/block/sda/queue/rotational
 # 1
 
-# List all block devices with their rotational status
+# すべてのブロックデバイスを回転型かどうかとともに一覧表示する
 lsblk -d -o NAME,ROTA,SCHED,RA,NR_HW_QUEUES
 ```
 
-### Scheduler Selection for HDDs {#scheduler-selection-for-hdds}
+### HDD向けのスケジューラ選択 {#scheduler-selection-for-hdds}
 
-For HDDs, the scheduler's reordering decisions directly affect throughput because the drive must physically seek between tracks. Use `bfq` for mixed workloads or `mq-deadline` for latency-sensitive single-workload databases:
+HDDでは、ドライブがトラック間を物理的にシークしなければならないため、スケジューラの並べ替えの判断がスループットに直接影響する。混在ワークロードには `bfq` を、レイテンシに敏感な単一ワークロードのデータベースには `mq-deadline` を使う。
 
 ```bash
 echo bfq > /sys/block/sda/queue/scheduler
 
-# BFQ tuning: increase maximum budget for sequential workloads
+# BFQのチューニング: シーケンシャルワークロード向けに最大バジェットを増やす
 echo 8192 > /sys/block/sda/queue/iosched/max_budget
 
-# Raise the timeout before a non-sequential request gets priority
+# 非シーケンシャルなリクエストが優先されるまでのタイムアウトを引き上げる
 echo 100 > /sys/block/sda/queue/iosched/slice_idle_us
 ```
 
-### NCQ (Native Command Queuing) Depth {#ncq-native-command-queuing-depth}
+### NCQ（Native Command Queuing）の深度 {#ncq-native-command-queuing-depth}
 
-Modern HDDs support NCQ, which allows the drive to reorder up to 32 commands internally for optimal seek scheduling. Ensure NCQ is enabled and set the queue depth to use it:
+最近のHDDはNCQに対応しており、ドライブが最大32個のコマンドを内部で並べ替えて、シークのスケジューリングを最適化できる。NCQが有効になっていることを確認し、それを活用するようにキュー深度を設定する。
 
 ```bash
-# Check NCQ depth support
+# NCQ深度の対応状況を確認する
 cat /sys/block/sda/device/queue_depth
 # 32
 
-# Set queue depth (reduce to 1 to effectively disable NCQ for testing)
+# キュー深度を設定する（テスト目的でNCQを実質的に無効にするには1に減らす）
 echo 32 > /sys/block/sda/device/queue_depth
 
-# Confirm via dmesg
+# dmesgで確認する
 dmesg | grep -i "ncq\|queue depth"
 ```
 
-### Large Readahead for HDDs {#large-readahead-for-hdds}
+### HDD向けの大きなreadahead {#large-readahead-for-hdds}
 
-On HDDs, a sequential read that triggers a seek is expensive (~5ms). Large readahead amortizes the seek cost over many pages:
+HDDでは、シークを引き起こすシーケンシャルリードは高コスト（約5ms）である。大きなreadaheadによって、シークのコストを多数のページで償却する。
 
 ```bash
-# 16MB readahead window for sequential workloads on HDD
+# HDD上のシーケンシャルワークロード向けの16MBのreadaheadウィンドウ
 echo 16384 > /sys/block/sda/queue/read_ahead_kb
 ```
 
-### Avoiding Mixed Random I/O on HDDs {#avoiding-mixed-random-io-on-hdds}
+### HDDでランダムI/Oの混在を避ける {#avoiding-mixed-random-io-on-hdds}
 
-A single HDD handling both random OLTP reads and sequential backup writes will perform poorly at both — the seek head cannot simultaneously optimize for both patterns. Use separate physical devices or at minimum separate disk arms.
+ランダムなOLTPリードとシーケンシャルなバックアップライトの両方を1台のHDDで処理すると、どちらも性能が悪くなる。シークヘッドは両方のパターンを同時に最適化できないからだ。別々の物理デバイスか、少なくとも別々のディスクアームを使う。
 
-If you must mix workloads on one HDD, use cgroup v2 `io.weight` with `bfq` to prioritize the latency-sensitive workload:
+1台のHDDでワークロードを混在させざるをえない場合は、cgroup v2の `io.weight` を `bfq` とともに使い、レイテンシに敏感なワークロードを優先する。
 
 ```bash
-# High priority for the database, low for backup
+# データベースに高い優先度、バックアップに低い優先度
 echo "8:0 100" > /sys/fs/cgroup/databases/io.bfq.weight
 echo "8:0 10"  > /sys/fs/cgroup/backups/io.bfq.weight
 ```
 
-### HDD Checklist {#hdd-checklist}
+### HDDのチェックリスト {#hdd-checklist}
 
 ```bash
 #!/bin/bash
-# hdd-check.sh: Verify HDD is configured for best performance
+# hdd-check.sh: HDDが最高の性能を出せるよう設定されているかを確認する
 DEVICE=${1:-sda}
 
 echo "=== $DEVICE HDD Configuration ==="
@@ -892,33 +892,33 @@ echo "Queue depth: $(cat /sys/block/$DEVICE/device/queue_depth 2>/dev/null || ec
 echo "Read-ahead:  $(cat /sys/block/$DEVICE/queue/read_ahead_kb) KB"
 echo "nr_requests: $(cat /sys/block/$DEVICE/queue/nr_requests)"
 
-# Check for write caching
+# 書き込みキャッシュを確認する
 hdparm -W /dev/$DEVICE 2>/dev/null | grep "write-caching"
 ```
 
-## Benchmarking Methodology {#benchmarking-methodology}
+## ベンチマークの方法論 {#benchmarking-methodology}
 
-A benchmark that produces misleading results is worse than no benchmark — it leads to tuning changes that hurt performance in production.
+誤解を招く結果を出すベンチマークは、ベンチマークがないよりも悪い。本番環境で性能を損なうチューニング変更につながるからだ。
 
-### Common Mistakes {#common-mistakes}
+### よくある間違い {#common-mistakes}
 
-1. **Not running long enough** — Storage devices have write caches. A 5-second benchmark will run entirely in the drive's DRAM cache and show unrealistically high throughput. Run for at least 60 seconds for SSDs, 120 seconds for HDDs.
+1. **実行時間が足りない** — ストレージデバイスには書き込みキャッシュがある。5秒のベンチマークは全体がドライブのDRAMキャッシュ内で実行され、非現実的に高いスループットを示す。SSDでは少なくとも60秒、HDDでは120秒実行する。
 
-2. **Not warming up** — The first several seconds of a benchmark often show different behavior as the device fills its cache or the kernel builds up readahead state. Use `--ramp_time=10` in fio.
+2. **ウォームアップをしない** — ベンチマークの最初の数秒は、デバイスがキャッシュを埋めたりカーネルがreadaheadの状態を構築したりするため、異なる挙動を示すことが多い。fioでは `--ramp_time=10` を使う。
 
-3. **Testing on tmpfs** — `tmpfs` is DRAM. Any benchmark on tmpfs measures memory bandwidth, not storage. Always use a real block device or filesystem backed by physical storage.
+3. **tmpfs上でテストする** — `tmpfs` はDRAMである。tmpfs上のベンチマークはストレージではなくメモリ帯域を測定する。常に、物理ストレージを背後に持つ実際のブロックデバイスかファイルシステムを使う。
 
-4. **Wrong block size** — Using 128K blocks to benchmark a database whose actual I/O is 8K produces useless results. Match the benchmark block size to your application's actual I/O size.
+4. **ブロックサイズが間違っている** — 実際のI/Oが8Kのデータベースを128Kのブロックでベンチマークしても、役に立たない結果しか得られない。ベンチマークのブロックサイズをアプリケーションの実際のI/Oサイズに合わせる。
 
-5. **Not isolating the device** — If the OS is installed on the same device you are benchmarking, background I/O from the OS will corrupt the results. Use a dedicated device.
+5. **デバイスを分離していない** — ベンチマーク対象と同じデバイスにOSがインストールされていると、OSからのバックグラウンドI/Oが結果を汚す。専用のデバイスを使う。
 
-6. **Not matching the access pattern** — Random read IOPS and sequential read throughput are different numbers. Benchmark the pattern that matches your workload.
+6. **アクセスパターンを合わせていない** — ランダムリードのIOPSとシーケンシャルリードのスループットは別の数値である。ワークロードに合ったパターンでベンチマークする。
 
-### fio Job Files {#fio-job-files}
+### fioのジョブファイル {#fio-job-files}
 
-Using fio job files instead of command-line flags ensures reproducibility and makes it easy to share benchmark configurations:
+コマンドラインフラグの代わりにfioのジョブファイルを使うと、再現性が確保され、ベンチマーク設定の共有も容易になる。
 
-**OLTP random 4K (simulates database random page reads)**
+**OLTPのランダム4K（データベースのランダムなページ読み込みを模擬する）**
 
 ```ini
 # oltp-randread.fio
@@ -945,7 +945,7 @@ iodepth=32
 fio oltp-randread.fio
 ```
 
-**Sequential streaming 1M (simulates backup, analytics scan, log ingest)**
+**シーケンシャルなストリーミング1M（バックアップ、分析スキャン、ログの取り込みを模擬する）**
 
 ```ini
 # sequential-1m.fio
@@ -974,7 +974,7 @@ iodepth=4
 numjobs=4
 ```
 
-**Mixed read/write (simulates OLTP with ongoing writes)**
+**リード／ライトの混在（継続的な書き込みのあるOLTPを模擬する）**
 
 ```ini
 # mixed-rw.fio
@@ -998,7 +998,7 @@ iodepth=16
 numjobs=4
 ```
 
-### Interpreting fio Output {#interpreting-fio-output}
+### fioの出力の読み方 {#interpreting-fio-output}
 
 ```
 Jobs: 4 (f=4): [r(4)][100.0%][r=1824MiB/s,w=0KiB/s][r=466k,w=0 IOPS][eta 00m:00s]
@@ -1013,22 +1013,22 @@ mixed-oltp-70r-30w: (groupid=0, jobs=4): err= 0: pid=12345: ...
      | 99.99th=[ 3195]
 ```
 
-Key metrics to record:
+記録すべき主な指標:
 
-- **IOPS**: Total throughput in operations per second.
-- **BW**: Bandwidth in MB/s (relevant for sequential workloads).
-- **clat p50**: Median completion latency — what most requests experience.
-- **clat p99**: 99th percentile — the latency budget you need for interactive queries.
-- **clat p999**: 99.9th percentile — the tail that causes connection timeouts.
+- **IOPS**: 1秒あたりの操作数で表した総スループット。
+- **BW**: MB/s単位の帯域（シーケンシャルワークロードで重要）。
+- **clat p50**: 完了レイテンシの中央値。大半のリクエストが経験する値。
+- **clat p99**: 99パーセンタイル。対話的なクエリに必要なレイテンシの予算。
+- **clat p999**: 99.9パーセンタイル。接続タイムアウトを引き起こすテール。
 
-`group_reporting=1` aggregates results across all jobs into a single summary, which makes it easier to compare runs. Without it, you get one block of output per job.
+`group_reporting=1` はすべてのジョブの結果を1つのサマリーに集約するため、実行同士の比較が容易になる。これがないと、ジョブごとに1ブロックの出力が得られる。
 
-### Warming the Cache {#warming-the-cache}
+### キャッシュのウォームアップ {#warming-the-cache}
 
-For benchmarks that include a cache-warm phase (simulating a server that has been running for hours):
+キャッシュをウォームアップするフェーズを含むベンチマーク（数時間稼働しているサーバーを模擬する）の場合:
 
 ```bash
-# Warm the page cache or device cache before measuring
+# 測定前にページキャッシュまたはデバイスのキャッシュをウォームアップする
 fio --name=warm \
     --filename=/dev/nvme0n1 \
     --rw=read \
@@ -1039,17 +1039,17 @@ fio --name=warm \
     --direct=0 \
     --loops=1
 
-# Then run the actual benchmark
+# その後、実際のベンチマークを実行する
 fio actual-workload.fio
 ```
 
-For `O_DIRECT` benchmarks, the page cache is bypassed, but the device's internal DRAM cache still needs warming. Use `--ramp_time=30` to let the device cache fill before measuring.
+`O_DIRECT` のベンチマークではページキャッシュはバイパスされるが、デバイス内部のDRAMキャッシュはやはりウォームアップが必要である。測定前にデバイスのキャッシュを埋めるため、`--ramp_time=30` を使う。
 
-## Practical Configuration Examples {#practical-configuration-examples}
+## 実践的な設定例 {#practical-configuration-examples}
 
-### Dedicated NVMe Database Server {#dedicated-nvme-database-server}
+### NVMe専用のデータベースサーバー {#dedicated-nvme-database-server}
 
-A complete I/O configuration for a server running PostgreSQL on NVMe:
+NVMe上でPostgreSQLを動かすサーバー向けの、完全なI/O設定:
 
 ```bash
 #!/bin/bash
@@ -1057,16 +1057,16 @@ A complete I/O configuration for a server running PostgreSQL on NVMe:
 
 NVME_DEV=nvme0n1
 
-# Scheduler: none (let NVMe handle its own queuing)
+# スケジューラ: none（キューイングはNVMeに任せる）
 echo none > /sys/block/$NVME_DEV/queue/scheduler
 
-# No merges (NVMe can handle fine-grained I/O natively)
+# マージなし（NVMeは細粒度のI/Oをネイティブに処理できる）
 echo 2 > /sys/block/$NVME_DEV/queue/nomerges
 
-# Minimal readahead (database manages its own prefetch)
+# 最小限のreadahead（データベースが独自に先読みを管理する）
 echo 16 > /sys/block/$NVME_DEV/queue/read_ahead_kb
 
-# Conservative dirty ratios (avoid write stalls)
+# 控えめなdirty比率（書き込み停止を避ける）
 sysctl -w vm.dirty_background_bytes=134217728  # 128MB
 sysctl -w vm.dirty_bytes=536870912             # 512MB
 sysctl -w vm.dirty_expire_centisecs=1000
@@ -1076,7 +1076,7 @@ echo "NVMe database tuning applied to $NVME_DEV"
 ```
 
 ```bash
-# Persist via udev + sysctl.d
+# udev + sysctl.d で永続化する
 cat > /etc/udev/rules.d/60-nvme-database.rules << 'EOF'
 ACTION=="add|change", KERNEL=="nvme[0-9]*n[0-9]*", \
   ATTR{queue/scheduler}="none", \
@@ -1092,9 +1092,9 @@ vm.dirty_writeback_centisecs = 200
 EOF
 ```
 
-### HDD Data Warehouse Server {#hdd-data-warehouse-server}
+### HDDのデータウェアハウスサーバー {#hdd-data-warehouse-server}
 
-For sequential-heavy analytics on HDDs:
+HDD上のシーケンシャル中心の分析向け:
 
 ```bash
 #!/bin/bash
@@ -1102,27 +1102,27 @@ For sequential-heavy analytics on HDDs:
 
 HDD_DEV=sda
 
-# BFQ scheduler for rotational media
+# 回転メディア向けのBFQスケジューラ
 echo bfq > /sys/block/$HDD_DEV/queue/scheduler
 
-# Large readahead for sequential scans
+# シーケンシャルスキャン向けの大きなreadahead
 echo 8192 > /sys/block/$HDD_DEV/queue/read_ahead_kb
 
-# Full NCQ depth
+# NCQの深度を最大にする
 echo 32 > /sys/block/$HDD_DEV/device/queue_depth
 
-# Higher dirty thresholds: let writes coalesce before flushing
+# 高めのdirtyしきい値: フラッシュ前に書き込みをまとめさせる
 sysctl -w vm.dirty_background_ratio=15
 sysctl -w vm.dirty_ratio=40
 
 echo "HDD data warehouse tuning applied to $HDD_DEV"
 ```
 
-## Monitoring I/O Health {#monitoring-io-health}
+## I/Oの健全性の監視 {#monitoring-io-health}
 
 ```bash
 #!/bin/bash
-# io-health.sh: Quick I/O subsystem health check
+# io-health.sh: I/Oサブシステムの簡易ヘルスチェック
 
 echo "=== I/O Scheduler Configuration ==="
 for dev in $(lsblk -d -n -o NAME); do
@@ -1146,18 +1146,18 @@ echo "=== Block Layer Errors ==="
 dmesg --since "1 hour ago" 2>/dev/null | grep -iE "blk_|io error|medium error|ata.*error" | tail -10
 ```
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [docs.kernel.org: block layer documentation](https://docs.kernel.org/block/index.html) — Kernel documentation for the block subsystem, schedulers, and blk-mq
-- [docs.kernel.org: admin-guide sysctl vm](https://docs.kernel.org/admin-guide/sysctl/vm.html) — Full reference for `vm.*` tunables including dirty writeback
-- [LWN: The multiqueue block layer](https://lwn.net/Articles/552904/) — Design of blk-mq, the basis for all modern I/O schedulers
-- [LWN: io_uring](https://lwn.net/Articles/776703/) — io_uring design and comparison with libaio
-- [LWN: BFQ, the budget fair queueing scheduler](https://lwn.net/Articles/601799/) — How BFQ works and when to use it
-- [fio documentation](https://fio.readthedocs.io/) — Full fio reference including all engine options and output fields
-- [block/blk-mq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c) — Multi-queue block layer implementation
-- [block/mq-deadline.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/mq-deadline.c) — mq-deadline scheduler source
-- [block/kyber-iosched.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/kyber-iosched.c) — Kyber scheduler source
-- [mm/readahead.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) — Readahead implementation
-- [Readahead](readahead.md) — How the kernel's readahead window grows and shrinks
-- [Direct I/O](direct-io.md) — O_DIRECT alignment rules and kernel path
-- [Tuning Memory for Databases](../mm/tuning-databases.md) — Companion guide covering huge pages, swappiness, and NUMA for the same workloads
+- [docs.kernel.org: block layer documentation](https://docs.kernel.org/block/index.html) — ブロックサブシステム、スケジューラ、blk-mqに関するカーネルドキュメント
+- [docs.kernel.org: admin-guide sysctl vm](https://docs.kernel.org/admin-guide/sysctl/vm.html) — dirtyページのライトバックを含む `vm.*` のチューニング可能なパラメータの完全なリファレンス
+- [LWN: The multiqueue block layer](https://lwn.net/Articles/552904/) — 最新のすべてのI/Oスケジューラの基盤であるblk-mqの設計
+- [LWN: io_uring](https://lwn.net/Articles/776703/) — io_uringの設計とlibaioとの比較
+- [LWN: BFQ, the budget fair queueing scheduler](https://lwn.net/Articles/601799/) — BFQの仕組みと使いどころ
+- [fio documentation](https://fio.readthedocs.io/) — すべてのエンジンオプションと出力フィールドを含むfioの完全なリファレンス
+- [block/blk-mq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c) — マルチキューブロック層の実装
+- [block/mq-deadline.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/mq-deadline.c) — mq-deadlineスケジューラのソース
+- [block/kyber-iosched.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/kyber-iosched.c) — Kyberスケジューラのソース
+- [mm/readahead.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) — readaheadの実装
+- [readahead](readahead.md) — カーネルのreadaheadウィンドウがどのように拡大・縮小するか
+- [ダイレクトI/O](direct-io.md) — O_DIRECTのアライメント規則とカーネル内の経路
+- [データベース向けメモリチューニング](../mm/tuning-databases.md) — 同じワークロードについてhuge page、swappiness、NUMAを扱う姉妹ガイド

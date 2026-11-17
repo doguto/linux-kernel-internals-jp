@@ -1,16 +1,16 @@
-# I/O Observability {#io-observability}
+# I/Oの可観測性 {#io-observability}
 
-> Observing and debugging I/O behavior with /proc, iostat, blktrace, ftrace, and perf
+> /proc、iostat、blktrace、ftrace、perfを使ってI/Oの挙動を観測・デバッグする
 
-The Linux kernel exposes I/O activity through several overlapping layers: pseudo-filesystem counters in `/proc` and `/sys`, block-layer tracing with `blktrace`, kernel tracepoints via ftrace, and per-process accounting in `/proc/PID/io`. This reference covers all of them, explains what each metric means, and shows how to combine them when diagnosing real problems.
+LinuxカーネルはI/Oの活動を、互いに重なり合ういくつかの層を通じて公開している。`/proc` と `/sys` の疑似ファイルシステムのカウンタ、`blktrace` によるブロック層のトレーシング、ftrace経由のカーネルtracepoint、そして `/proc/PID/io` のプロセスごとの集計である。このリファレンスはそのすべてを扱い、各メトリクスの意味を説明し、実際の問題を診断する際にそれらをどう組み合わせるかを示す。
 
 ---
 
 ## /proc/diskstats {#procdiskstats}
 
-`/proc/diskstats` is the canonical source of per-device I/O statistics. Every tool that reports disk throughput or latency — `iostat`, `sar`, `dstat`, Prometheus `node_exporter` — reads this file and computes deltas.
+`/proc/diskstats` は、デバイスごとのI/O統計の正規の情報源である。ディスクのスループットやレイテンシを報告するツール（`iostat`、`sar`、`dstat`、Prometheusの `node_exporter`）はすべて、このファイルを読んで差分を計算している。
 
-**Source**: [`block/genhd.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/genhd.c); the per-disk counters live in `struct disk_stats` inside `struct gendisk`.
+**ソース**: [`block/genhd.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/genhd.c)。ディスクごとのカウンタは `struct gendisk` 内の `struct disk_stats` にある。
 
 ```bash
 $ cat /proc/diskstats
@@ -19,44 +19,44 @@ $ cat /proc/diskstats
 259   0 nvme0n1 1284731 84203 98471824 712341 3827164 921842 241837952 14382910 0 3071428 15096084 84291 0 7831204 62831 0 0
 ```
 
-The format is: major minor name [field1 ... fieldN], where N is kernel-version dependent: 11 fields pre-4.18, 15 fields from 4.18 (discard stats added), 17 fields from 5.5 (flush stats added).
+形式は major minor name [field1 ... fieldN] であり、Nはカーネルバージョンに依存する。4.18より前は11フィールド、4.18からは15フィールド（discard統計が追加）、5.5からは17フィールド（flush統計が追加）である。
 
-### Field-by-field reference {#field-by-field-reference}
+### フィールドごとのリファレンス {#field-by-field-reference}
 
-| # | Field | Type | Description |
+| # | フィールド | 種類 | 説明 |
 |---|-------|------|-------------|
-| 1 | reads completed | counter | Total reads that completed successfully. A "completed" read means data was returned to the requesting process. |
-| 2 | reads merged | counter | Adjacent read requests that were merged in the I/O scheduler before dispatch. Merged reads reduce queue depth and improve throughput. |
-| 3 | sectors read | counter | Total 512-byte sectors read. Divide by 2 to convert to KiB. |
-| 4 | time reading (ms) | counter | Milliseconds spent in read I/Os. This is the sum of latencies for all completed reads — divide by reads completed to get average read latency. |
-| 5 | writes completed | counter | Total writes that completed successfully. |
-| 6 | writes merged | counter | Adjacent write requests merged by the I/O scheduler. |
-| 7 | sectors written | counter | Total 512-byte sectors written. |
-| 8 | time writing (ms) | counter | Milliseconds spent in write I/Os. |
-| 9 | I/Os in progress | gauge | **Current** number of I/Os issued to the device but not yet completed. This is the only gauge in diskstats; all others are counters. See below for interpretation. |
-| 10 | time doing I/Os (ms) | counter | Milliseconds during which at least one I/O was in progress (i.e., the device was "busy"). This is what `iostat %util` is derived from. |
-| 11 | weighted time doing I/Os (ms) | counter | Sum of `(I/Os in progress) × (elapsed ms)` over time. Used by `iostat` to compute `avgqu-sz` and `await`. |
-| 12 | discards completed | counter | Total discard (TRIM) requests completed. Zero on devices that do not support discards. Added in kernel 4.18. |
-| 13 | discards merged | counter | Discard requests merged. |
-| 14 | sectors discarded | counter | Total 512-byte sectors discarded. |
-| 15 | time discarding (ms) | counter | Milliseconds spent in discard I/Os. |
-| 16 | flush requests completed | counter | Total flush (cache flush/FUA barrier) requests completed. Added in kernel 5.5. |
-| 17 | time flushing (ms) | counter | Milliseconds spent in flush requests. |
+| 1 | reads completed | カウンタ | 正常に完了したリードの総数。「完了した」リードとは、要求したプロセスにデータが返されたことを意味する。 |
+| 2 | reads merged | カウンタ | ディスパッチ前にI/Oスケジューラでマージされた隣接するリードリクエストの数。マージされたリードはキュー深度を減らし、スループットを向上させる。 |
+| 3 | sectors read | カウンタ | 読み込んだ512バイトセクタの総数。2で割るとKiBに換算できる。 |
+| 4 | time reading (ms) | カウンタ | リードI/Oに費やしたミリ秒数。これは完了したすべてのリードのレイテンシの合計であり、reads completedで割ると平均リードレイテンシが得られる。 |
+| 5 | writes completed | カウンタ | 正常に完了したライトの総数。 |
+| 6 | writes merged | カウンタ | I/Oスケジューラによってマージされた隣接するライトリクエストの数。 |
+| 7 | sectors written | カウンタ | 書き込んだ512バイトセクタの総数。 |
+| 8 | time writing (ms) | カウンタ | ライトI/Oに費やしたミリ秒数。 |
+| 9 | I/Os in progress | ゲージ | デバイスに発行されたがまだ完了していないI/Oの**現在の**数。diskstatsで唯一のゲージであり、他はすべてカウンタである。解釈については後述。 |
+| 10 | time doing I/Os (ms) | カウンタ | 少なくとも1つのI/Oが進行中だった（つまりデバイスが「ビジー」だった）ミリ秒数。`iostat` の `%util` はここから導出される。 |
+| 11 | weighted time doing I/Os (ms) | カウンタ | `(I/Os in progress) × (経過ms)` の時間にわたる合計。`iostat` が `avgqu-sz` と `await` を計算するのに使う。 |
+| 12 | discards completed | カウンタ | 完了したdiscard（TRIM）リクエストの総数。discardに対応していないデバイスでは0。カーネル4.18で追加。 |
+| 13 | discards merged | カウンタ | マージされたdiscardリクエストの数。 |
+| 14 | sectors discarded | カウンタ | discardされた512バイトセクタの総数。 |
+| 15 | time discarding (ms) | カウンタ | discard I/Oに費やしたミリ秒数。 |
+| 16 | flush requests completed | カウンタ | 完了したflush（キャッシュフラッシュ/FUAバリア）リクエストの総数。カーネル5.5で追加。 |
+| 17 | time flushing (ms) | カウンタ | flushリクエストに費やしたミリ秒数。 |
 
-!!! note "Kernel version availability"
-    The field count is kernel-version dependent: 17 fields on Linux 5.5+; 15 fields on 4.18–5.4 (fields 16–17 flush stats not yet present); 11 fields pre-4.18 (fields 12–17 discard and flush stats not yet present). Tools that parse diskstats must handle variable column counts.
+!!! note "カーネルバージョンごとの利用可否"
+    フィールド数はカーネルバージョンに依存する。Linux 5.5以降は17フィールド、4.18–5.4は15フィールド（フィールド16–17のflush統計はまだない）、4.18より前は11フィールド（フィールド12–17のdiscardとflushの統計はまだない）である。diskstatsを解析するツールは、可変の列数に対応しなければならない。
 
-### Interpreting "I/Os in progress" (field 9) {#interpreting-ios-in-progress-field-9}
+### 「I/Os in progress」（フィールド9）の解釈 {#interpreting-ios-in-progress-field-9}
 
-Field 9 is the device queue depth at the instant you read the file. It reflects I/Os that have been issued to the driver but whose completion interrupt has not yet been processed.
+フィールド9は、ファイルを読んだ瞬間のデバイスのキュー深度である。ドライバに発行されたが、完了割り込みがまだ処理されていないI/Oを反映する。
 
-- **Spinning disk**: A sustained value of 1–2 is normal. Values consistently above the device's rated queue depth (typically 32–64 for modern HDDs) means the block layer has more I/O queued in software than the device can handle.
-- **NVMe**: NVMe devices expose multiple hardware queues (often one per CPU). `iostat` reports an aggregate across all queues, so `avgqu-sz` of 16 on a 16-queue NVMe device is not saturation — it may just mean one pending I/O per queue.
-- **A value of 0** despite high throughput means I/Os complete quickly; the sample just happened to hit a quiet moment. Use `avgqu-sz` from `iostat` for a time-averaged view.
+- **回転ディスク**: 1–2の値が持続するのは正常である。デバイスの定格キュー深度（最近のHDDでは通常32–64）を一貫して上回る値は、デバイスが処理できる以上のI/Oをブロック層がソフトウェアでキューに溜めていることを意味する。
+- **NVMe**: NVMeデバイスは複数のハードウェアキュー（多くの場合CPUごとに1つ）を公開する。`iostat` はすべてのキューを合算した値を報告するため、16キューのNVMeデバイスで `avgqu-sz` が16でも飽和ではない。単にキューごとに1つのI/Oが保留中であるだけかもしれない。
+- スループットが高いのに**値が0**の場合、I/Oがすぐに完了しており、たまたま静かな瞬間にサンプリングしただけである。時間平均で見るには `iostat` の `avgqu-sz` を使う。
 
-### How iostat is built on diskstats {#how-iostat-is-built-on-diskstats}
+### iostatがdiskstatsの上にどう構築されているか {#how-iostat-is-built-on-diskstats}
 
-`iostat` reads `/proc/diskstats` twice (at time T1 and T2) and computes:
+`iostat` は `/proc/diskstats` を2回（時刻T1とT2に）読み、次を計算する。
 
 ```
 interval = T2 - T1 (in milliseconds)
@@ -67,21 +67,21 @@ await    = Δtime_reading / Δreads_completed  (average latency per read)
 avgqu-sz = Δweighted_time_IOs / interval
 ```
 
-The source is in the `sysstat` package, [`iostat.c`](https://github.com/sysstat/sysstat/blob/master/iostat.c).
+ソースは `sysstat` パッケージの [`iostat.c`](https://github.com/sysstat/sysstat/blob/master/iostat.c) にある。
 
 ---
 
-## iostat -x Output {#iostat-x-output}
+## iostat -xの出力 {#iostat-x-output}
 
-`iostat -x` (extended statistics) is the most common first tool for I/O diagnosis. Run it with an interval to get deltas rather than averages since boot:
+`iostat -x`（拡張統計）は、I/O診断で最初に使われる最も一般的なツールである。起動以降の平均ではなく差分を得るために、間隔を指定して実行する。
 
 ```bash
-iostat -x 1          # 1-second intervals, all devices
-iostat -x -d sda 5   # 5-second intervals, sda only
-iostat -xz 1         # suppress devices with zero activity
+iostat -x 1          # 1秒間隔、全デバイス
+iostat -x -d sda 5   # 5秒間隔、sdaのみ
+iostat -xz 1         # 活動のないデバイスを表示しない
 ```
 
-### Realistic example output {#realistic-example-output}
+### 現実的な出力例 {#realistic-example-output}
 
 ```
 Device            r/s     rkB/s   rrqm/s  %rrqm r_await rareq-sz     w/s     wkB/s   wrqm/s  %wrqm w_await wareq-sz     d/s     dkB/s   drqm/s  %drqm d_await dareq-sz     f/s f_await  aqu-sz  %util
@@ -89,45 +89,45 @@ nvme0n1        182.00  46081.00     0.00   0.00    0.22   253.2    94.00  24318.
 sda              2.00    128.00    14.00  87.50    4.31    64.0   118.00   7432.00   243.00  67.32   42.18    63.0    0.00      0.00     0.00   0.00    0.00      0.0    0.00    0.00    4.98  87.40
 ```
 
-### Field explanations {#field-explanations}
+### フィールドの説明 {#field-explanations}
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `r/s`, `w/s` | Reads and writes completed per second (after merges). This is the device's I/O rate. |
-| `rkB/s`, `wkB/s` | Kilobytes read and written per second. Divide by 1024 for MB/s. Compare against the device's rated sequential throughput. |
-| `rrqm/s`, `wrqm/s` | Read and write requests merged per second in the I/O scheduler before dispatch. High merge rates indicate sequential or spatially-local workloads where the scheduler can coalesce requests. |
-| `%rrqm`, `%wrqm` | Percentage of read/write requests that were merged. In the example, `sda` merges 87.5% of reads and 67.3% of writes — a very sequential workload. `nvme0n1` merges almost nothing, typical for random I/O workloads. |
-| `r_await`, `w_await` | Average latency (ms) for read and write requests from submission to completion. This includes time spent in the kernel queue plus device service time. This is what users experience as I/O latency. |
-| `aqu-sz` (or `avgqu-sz` in older sysstat) | Average queue size: the time-averaged number of requests in flight. Derived from field 11 (weighted time). For spinning disks, sustained `aqu-sz > 1` indicates queuing; for NVMe it is normal to see higher values across all queues. |
-| `rareq-sz`, `wareq-sz` | Average request size in KiB for reads and writes. Small values (< 16 KiB) with high I/O rate indicates random I/O. Large values (> 128 KiB) indicates sequential or large-block I/O. |
-| `%util` | Percentage of the interval during which the device had at least one I/O in flight (from diskstats field 10). **This is not CPU utilization** — it is device busy time. |
-| `svctm` | **Deprecated and removed in recent sysstat.** Was estimated service time = `%util / (r/s + w/s)`. The estimate was unreliable for SSDs and devices with internal parallelism; do not use it. |
+| `r/s`, `w/s` | 1秒あたりに完了したリードとライトの数（マージ後）。これがデバイスのI/Oレートである。 |
+| `rkB/s`, `wkB/s` | 1秒あたりに読み書きしたキロバイト数。1024で割るとMB/sになる。デバイスの定格シーケンシャルスループットと比較する。 |
+| `rrqm/s`, `wrqm/s` | ディスパッチ前にI/Oスケジューラで1秒あたりにマージされたリードとライトのリクエスト数。マージ率が高いことは、スケジューラがリクエストをまとめられるシーケンシャルまたは空間的に局所的なワークロードであることを示す。 |
+| `%rrqm`, `%wrqm` | マージされたリード／ライトリクエストの割合。例では、`sda` はリードの87.5%、ライトの67.3%をマージしており、非常にシーケンシャルなワークロードである。`nvme0n1` はほとんどマージしておらず、ランダムI/Oのワークロードに典型的である。 |
+| `r_await`, `w_await` | リードとライトのリクエストの発行から完了までの平均レイテンシ（ms）。カーネルのキューで費やした時間とデバイスのサービス時間を含む。ユーザーがI/Oレイテンシとして体感するのはこれである。 |
+| `aqu-sz`（古いsysstatでは `avgqu-sz`） | 平均キューサイズ。処理中のリクエスト数の時間平均。フィールド11（重み付き時間）から導出される。回転ディスクでは `aqu-sz > 1` が持続するとキューイングが起きていることを示す。NVMeでは全キューにわたってより高い値になるのが普通である。 |
+| `rareq-sz`, `wareq-sz` | リードとライトの平均リクエストサイズ（KiB）。値が小さく（< 16 KiB）I/Oレートが高い場合はランダムI/Oを示す。値が大きい（> 128 KiB）場合はシーケンシャルまたは大ブロックのI/Oを示す。 |
+| `%util` | インターバルのうち、デバイスに少なくとも1つのI/Oが処理中だった時間の割合（diskstatsのフィールド10から）。**これはCPU使用率ではない**。デバイスのビジー時間である。 |
+| `svctm` | **非推奨であり、最近のsysstatでは削除された。** 推定サービス時間 = `%util / (r/s + w/s)` だった。この推定はSSDや内部並列性を持つデバイスでは信頼できないため、使ってはならない。 |
 
-### Identifying saturation {#identifying-saturation}
+### 飽和の特定 {#identifying-saturation}
 
-`%util` approaching 100% on a **spinning disk** means the device is saturated — it is busy essentially all the time and cannot absorb more I/O without increasing latency. Paired signals:
+**回転ディスク**で `%util` が100%に近づくことは、デバイスが飽和していることを意味する。実質的に常にビジーであり、レイテンシを増やさずにこれ以上のI/Oを吸収できない。あわせて現れるシグナル:
 
-- `await` rising well above the device's typical service time (1–5 ms for HDD, 0.05–0.3 ms for NVMe)
-- `aqu-sz` growing — requests accumulating in the queue faster than they complete
+- `await` がデバイスの典型的なサービス時間（HDDで1–5 ms、NVMeで0.05–0.3 ms）を大きく上回って上昇する
+- `aqu-sz` が増加する。リクエストが完了するよりも速くキューに溜まっていく
 
-On **NVMe and SSDs**, `%util` of 100% does not necessarily mean saturation because the device handles I/O in parallel internally. An NVMe drive can sustain 100% `%util` at 0.1 ms `await` because it has many hardware queues. Watch `await` (or `r_await`/`w_await`) for latency increases instead.
+**NVMeとSSD**では、デバイスが内部でI/Oを並列処理するため、`%util` が100%でも必ずしも飽和を意味しない。NVMeドライブは多数のハードウェアキューを持つため、`await` 0.1 msで `%util` 100%を持続できる。代わりに `await`（または `r_await`/`w_await`）のレイテンシ増加を監視する。
 
-**Saturation checklist**:
+**飽和のチェックリスト**:
 
-1. `%util` → 100% **and** `r_await` or `w_await` rising: device is a bottleneck
-2. `aqu-sz` > 1 on HDD: queue depth too high for device speed
-3. `rrqm/s` falling to zero on a normally-sequential workload: the workload randomized, increasing latency
-4. `wkB/s` hitting a plateau at the device's write bandwidth: writes are being throttled
+1. `%util` → 100% **かつ** `r_await` または `w_await` が上昇: デバイスがボトルネックである
+2. HDDで `aqu-sz` > 1: デバイスの速度に対してキュー深度が高すぎる
+3. 通常はシーケンシャルなワークロードで `rrqm/s` が0に落ちる: ワークロードがランダム化し、レイテンシが増えている
+4. `wkB/s` がデバイスの書き込み帯域で頭打ちになる: 書き込みがスロットリングされている
 
 ---
 
-## /proc/sys/vm/ Writeback Parameters {#procsysvm-writeback-parameters}
+## /proc/sys/vm/ のライトバック用パラメータ {#procsysvm-writeback-parameters}
 
-The VM's dirty writeback system controls when modified pages are flushed from the page cache to storage. Tuning these parameters affects write latency consistency and throughput. All values live in `/proc/sys/vm/` and are settable via `sysctl`.
+VMのdirtyライトバックの仕組みは、変更されたページをページキャッシュからストレージへいつフラッシュするかを制御する。これらのパラメータのチューニングは、書き込みレイテンシの一貫性とスループットに影響する。すべての値は `/proc/sys/vm/` にあり、`sysctl` で設定できる。
 
-**Source**: [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c).
+**ソース**: [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c)。
 
-### dirty_ratio and dirty_bytes {#dirtyratio-and-dirtybytes}
+### dirty_ratioとdirty_bytes {#dirtyratio-and-dirtybytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_ratio
@@ -136,36 +136,36 @@ $ cat /proc/sys/vm/dirty_bytes
 0
 ```
 
-`dirty_ratio` sets the maximum percentage of total system memory that can be filled with dirty (modified, not yet written) pages. When this threshold is crossed, **processes that call `write()` are throttled** — they block in the kernel until writeback makes progress. This is the hard limit; hitting it causes direct application latency.
+`dirty_ratio` は、システムの総メモリのうちdirty（変更済みでまだ書き込まれていない）ページで埋められる最大の割合を設定する。このしきい値を超えると、**`write()` を呼ぶプロセスがスロットリングされる**。ライトバックが進むまでカーネル内でブロックする。これがハードリミットであり、到達するとアプリケーションに直接レイテンシが生じる。
 
-`dirty_bytes` is the same limit expressed as an absolute byte count. If `dirty_bytes` is non-zero, it takes precedence over `dirty_ratio`. Only one of the two is active at a time.
+`dirty_bytes` は同じ上限を絶対的なバイト数で表したものである。`dirty_bytes` が0でなければ、`dirty_ratio` より優先される。同時に有効になるのは2つのうち一方だけである。
 
-**When to adjust**: On systems with many GiB of RAM, `dirty_ratio=20%` can allow tens of GiB of dirty data to accumulate. A sudden writeback of that much data causes a latency spike. Lower the ratio (5–10%) or set an absolute `dirty_bytes` cap (e.g., 1 GiB) for latency-sensitive workloads.
+**調整すべきとき**: 何GiBものRAMを持つシステムでは、`dirty_ratio=20%` によって数十GiBのdirtyデータが溜まりうる。それだけの量のデータが一気にライトバックされると、レイテンシのスパイクが生じる。レイテンシに敏感なワークロードでは、割合を下げる（5–10%）か、絶対値の `dirty_bytes` の上限（例: 1 GiB）を設定する。
 
 ```bash
-# Cap dirty data at 1 GiB absolutely
+# dirtyデータを絶対値で1 GiBに制限する
 sysctl vm.dirty_bytes=1073741824
 ```
 
-### dirty_background_ratio and dirty_background_bytes {#dirtybackgroundratio-and-dirtybackgroundbytes}
+### dirty_background_ratioとdirty_background_bytes {#dirtybackgroundratio-and-dirtybackgroundbytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_background_ratio
 10
 ```
 
-`dirty_background_ratio` sets the threshold at which the kernel starts **background writeback** via `flusher` threads (formerly `pdflush`). This is the soft limit — writeback begins here but processes are not yet blocked.
+`dirty_background_ratio` は、カーネルが `flusher` スレッド（以前の `pdflush`）による**バックグラウンドのライトバック**を開始するしきい値を設定する。これはソフトリミットであり、ここでライトバックは始まるが、プロセスはまだブロックされない。
 
-`dirty_background_bytes` is the absolute equivalent. Same precedence rule as above.
+`dirty_background_bytes` はその絶対値版である。優先順位の規則は上と同じである。
 
-The relationship between the two thresholds:
+2つのしきい値の関係:
 
 ```
 dirty_background_ratio < dirty_ratio
 (background writeback starts)    (process throttling starts)
 ```
 
-A wide gap between the two values creates a large zone in which dirty data accumulates without application throttling. A narrow gap means writeback starts sooner and the system stays closer to zero dirty pages.
+2つの値の間隔が広いと、アプリケーションがスロットリングされずにdirtyデータが溜まる大きな領域ができる。間隔が狭いと、ライトバックがより早く始まり、システムはdirtyページが0に近い状態に保たれる。
 
 ### dirty_writeback_centisecs {#dirtywritebackcentisecs}
 
@@ -174,9 +174,9 @@ $ cat /proc/sys/vm/dirty_writeback_centisecs
 500
 ```
 
-The interval (in centiseconds, i.e. hundredths of a second) at which the `wb_workfn` flusher thread wakes up and writes dirty pages. Default 500 = 5 seconds.
+`wb_workfn` のflusherスレッドが起床してdirtyページを書き込む間隔（センチ秒、すなわち100分の1秒単位）。デフォルトの500 = 5秒。
 
-Setting this to 0 disables periodic writeback entirely (not recommended for most workloads). Reducing it (e.g., 100 = 1 second) causes more frequent smaller writeback bursts, which can improve latency consistency at the cost of slightly more background I/O.
+これを0にすると定期的なライトバックが完全に無効になる（ほとんどのワークロードでは推奨されない）。減らす（例: 100 = 1秒）と、より小さなライトバックのバーストがより頻繁に起き、バックグラウンドI/Oがわずかに増える代わりにレイテンシの一貫性が向上しうる。
 
 ### dirty_expire_centisecs {#dirtyexpirecentisecs}
 
@@ -185,31 +185,31 @@ $ cat /proc/sys/vm/dirty_expire_centisecs
 3000
 ```
 
-How long (in centiseconds) a dirty page can stay in the page cache before writeback is considered "expired" and the page must be written. Default 3000 = 30 seconds.
+dirtyページがページキャッシュに留まれる時間（センチ秒）で、これを過ぎるとライトバックが「期限切れ」とみなされ、そのページは書き込まれなければならない。デフォルトの3000 = 30秒。
 
-Pages that have been dirty longer than this value are eligible for writeback on the next `dirty_writeback_centisecs` wakeup. Reducing this value causes the kernel to flush pages more aggressively as they age, keeping the dirty window smaller.
+この値より長くdirtyのままのページは、次の `dirty_writeback_centisecs` の起床時にライトバックの対象になる。この値を減らすと、カーネルはページが古くなるにつれてより積極的にフラッシュし、dirtyの窓を小さく保つ。
 
-### Checking if writeback is keeping up {#checking-if-writeback-is-keeping-up}
+### ライトバックが追いついているかの確認 {#checking-if-writeback-is-keeping-up}
 
 ```bash
-# Current dirty and writeback page counts (pages × 4 KiB = bytes)
+# 現在のdirtyページとライトバック中のページの数（ページ数 × 4 KiB = バイト数）
 grep -E "^Dirty:|^Writeback:" /proc/meminfo
 
-# Watch the writeback pipeline in real time
+# ライトバックのパイプラインをリアルタイムで監視する
 watch -n 1 'grep -E "^Dirty:|^Writeback:|^NFS_Unstable:" /proc/meminfo'
 
-# Rate of pages being dirtied and written via /proc/vmstat
+# /proc/vmstat経由で、ページがdirtyになるレートと書き込まれるレートを見る
 grep -E "nr_dirty|nr_writeback|nr_dirtied|nr_written" /proc/vmstat
 ```
 
-**Signals that writeback is not keeping up**:
+**ライトバックが追いついていないことを示すシグナル**:
 
-- `Dirty:` in `/proc/meminfo` is consistently near or above `dirty_bytes` / (`dirty_ratio` × total memory)
-- `nr_dirtied` rate in `/proc/vmstat` substantially exceeds `nr_written` rate
-- Application `write()` calls show elevated latency (strace, perf, or eBPF) — this is the signature of process throttling at the dirty limit
+- `/proc/meminfo` の `Dirty:` が、一貫して `dirty_bytes` /（`dirty_ratio` × 総メモリ）付近かそれ以上にある
+- `/proc/vmstat` の `nr_dirtied` のレートが `nr_written` のレートを大幅に上回る
+- アプリケーションの `write()` 呼び出しのレイテンシが高くなっている（strace、perf、eBPFで確認）。これはdirtyの上限でのプロセスのスロットリングの特徴である
 
 ```bash
-# Delta writeback activity (1-second samples)
+# ライトバック活動の差分（1秒ごとのサンプル）
 while true; do
     paste <(grep -E "nr_dirtied|nr_written" /proc/vmstat) \
           <(sleep 1; grep -E "nr_dirtied|nr_written" /proc/vmstat) | \
@@ -221,9 +221,9 @@ done
 
 ## /sys/class/bdi/ {#sysclassbdi}
 
-The BDI (Backing Device Info) subsystem tracks per-device writeback state. Each block device (and network filesystem mount) has an entry under `/sys/class/bdi/`.
+BDI（Backing Device Info）サブシステムは、デバイスごとのライトバックの状態を追跡する。各ブロックデバイス（およびネットワークファイルシステムのマウント）は `/sys/class/bdi/` の下にエントリを持つ。
 
-**Source**: [`include/linux/backing-dev.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/backing-dev.h) and [`mm/backing-dev.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/backing-dev.c).
+**ソース**: [`include/linux/backing-dev.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/backing-dev.h) と [`mm/backing-dev.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/backing-dev.c)。
 
 ```bash
 $ ls /sys/class/bdi/
@@ -234,90 +234,90 @@ avg_read_bandwidth  dirty    max_bytes       max_ratio     read_ahead_kb
 avg_write_bandwidth  error   max_prop_frac   min_bytes     stable_pages_required
 ```
 
-### Key files {#key-files}
+### 主なファイル {#key-files}
 
-**`read_ahead_kb`** — the per-device readahead window in KiB. The kernel's readahead algorithm reads ahead this many bytes past the current I/O position when sequential access is detected. Default is typically 128 KiB, but the kernel adjusts this dynamically based on access patterns. For large sequential reads (database backups, streaming), increasing this value reduces the number of I/O requests at the cost of reading data that may not be needed.
+**`read_ahead_kb`** — デバイスごとのreadaheadウィンドウ（KiB）。カーネルのreadaheadアルゴリズムは、シーケンシャルアクセスを検出すると、現在のI/O位置からこのバイト数だけ先まで読む。デフォルトは通常128 KiBだが、カーネルはアクセスパターンに基づいてこれを動的に調整する。大きなシーケンシャルリード（データベースのバックアップ、ストリーミング）では、この値を増やすと、必要ないかもしれないデータを読むことと引き換えにI/Oリクエストの数が減る。
 
 ```bash
-# Increase readahead for a database backup device
+# データベースのバックアップ用デバイスでreadaheadを増やす
 echo 4096 > /sys/class/bdi/8:0/read_ahead_kb
-# Or via blockdev:
-blockdev --setra 8192 /dev/sda   # 8192 × 512 bytes = 4 MiB
+# あるいはblockdev経由で:
+blockdev --setra 8192 /dev/sda   # 8192 × 512バイト = 4 MiB
 ```
 
-**`max_ratio`** — maximum percentage of total dirty memory that this device's dirty pages can occupy. Default 100 (no per-device limit). Useful when you have a fast NVMe and a slow HDD on the same system and do not want the HDD writeback to monopolize the dirty cache.
+**`max_ratio`** — 総dirtyメモリのうち、このデバイスのdirtyページが占められる最大の割合。デフォルトは100（デバイスごとの制限なし）。同じシステムに高速なNVMeと低速なHDDがあり、HDDのライトバックにdirtyキャッシュを独占させたくない場合に有用である。
 
 ```bash
-# Limit sda to 30% of the dirty pool
+# sdaをdirtyプールの30%に制限する
 echo 30 > /sys/class/bdi/8:0/max_ratio
 ```
 
-**`stable_pages_required`** — if 1, the block device requires stable pages: the kernel must not modify a page while it is under writeback. Some drivers (particularly certain network filesystems and RDMA NICs) set this. It disables the copy-on-write optimisation for dirty pages, adding CPU overhead.
+**`stable_pages_required`** — 1の場合、そのブロックデバイスはstable pageを必要とする。つまり、ページがライトバック中の間、カーネルはそのページを変更してはならない。一部のドライバ（特に特定のネットワークファイルシステムやRDMA NIC）がこれを設定する。これはdirtyページに対するコピーオンライトの最適化を無効にし、CPUのオーバーヘッドを加える。
 
-!!! warning "Removed in Linux 5.18"
-    `stable_pages_required` was removed in Linux 5.18 when stable-page requirements were eliminated from the block layer. This file does not exist on kernels 5.18+.
+!!! warning "Linux 5.18で削除"
+    `stable_pages_required` は、stable pageの要件がブロック層から取り除かれたLinux 5.18で削除された。このファイルは5.18以降のカーネルには存在しない。
 
 ```bash
-# Linux 5.17 and earlier only:
+# Linux 5.17以前のみ:
 cat /sys/class/bdi/*/stable_pages_required
 ```
 
-### bdi_stat counters {#bdi_stat-counters}
+### bdi_statカウンタ {#bdi_stat-counters}
 
-The per-BDI counters are exposed indirectly through `/proc/vmstat` fields prefixed with `nr_` (e.g., `nr_dirty`, `nr_writeback`). The BDI-level counters track:
+BDIごとのカウンタは、`nr_` で始まる `/proc/vmstat` のフィールド（例: `nr_dirty`、`nr_writeback`）を通じて間接的に公開される。BDIレベルのカウンタは次を追跡する。
 
-- **BDI_WRITEBACK**: pages currently being written back to this device
-- **BDI_RECLAIMABLE**: dirty pages associated with this device that are candidates for reclaim
-- **BDI_WRITTEN**: total pages written (monotonic counter)
+- **BDI_WRITEBACK**: 現在このデバイスへライトバック中のページ
+- **BDI_RECLAIMABLE**: このデバイスに関連付けられたdirtyページのうち、回収の候補となるもの
+- **BDI_WRITTEN**: 書き込まれたページの総数（単調増加カウンタ）
 
-These can be observed via `bpftrace` against the `writeback` tracepoint group, which includes `bdi_name` in most events.
+これらは、`writeback` tracepointグループに対して `bpftrace` を使うことで観測できる。このグループのほとんどのイベントには `bdi_name` が含まれる。
 
 ---
 
-## blktrace and blkparse {#blktrace-and-blkparse}
+## blktraceとblkparse {#blktrace-and-blkparse}
 
-`blktrace` captures every event in the block layer for a device and writes binary trace data. `blkparse` decodes it. Together they let you trace the lifecycle of individual I/O requests — from the moment they are queued to when they complete.
+`blktrace` はデバイスのブロック層におけるすべてのイベントを捕捉し、バイナリのトレースデータとして書き出す。`blkparse` はそれをデコードする。これらを組み合わせると、個々のI/Oリクエストのライフサイクルを、キューに入れられた瞬間から完了するまでトレースできる。
 
-**Installation**: usually in the `blktrace` package.
+**インストール**: 通常は `blktrace` パッケージに含まれる。
 
-**Source**: [`kernel/trace/blktrace.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/blktrace.c) (in-kernel tracing infrastructure); [`include/uapi/linux/blktrace_api.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/blktrace_api.h) (the `BLK_TA_*` action codes); [`blktrace` documentation](https://git.kernel.org/pub/scm/linux/kernel/git/axboe/blktrace.git/tree/doc) (usage guide, man pages).
+**ソース**: [`kernel/trace/blktrace.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/blktrace.c)（カーネル内のトレーシング基盤）、[`include/uapi/linux/blktrace_api.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/blktrace_api.h)（`BLK_TA_*` アクションコード）、[`blktrace` documentation](https://git.kernel.org/pub/scm/linux/kernel/git/axboe/blktrace.git/tree/doc)（使い方ガイド、manページ）。
 
-### Recording a trace {#recording-a-trace}
+### トレースの記録 {#recording-a-trace}
 
 ```bash
-# Record all block events on /dev/sda for 10 seconds
+# /dev/sda 上のすべてのブロックイベントを10秒間記録する
 blktrace -d /dev/sda -o /tmp/sda_trace -- sleep 10
 
-# This creates per-CPU files: /tmp/sda_trace.blktrace.0, .1, .2 ...
+# これによりCPUごとのファイルが作られる: /tmp/sda_trace.blktrace.0, .1, .2 ...
 
-# Parse immediately (combine per-CPU files)
+# すぐに解析する（CPUごとのファイルを結合する）
 blkparse -i /tmp/sda_trace -o /tmp/sda_trace.txt
 
-# Or pipe directly without writing files
+# あるいはファイルに書かずに直接パイプする
 blktrace -d /dev/sda -o - | blkparse -i -
 ```
 
-### Block layer actions (the action codes) {#block-layer-actions-the-action-codes}
+### ブロック層のアクション（アクションコード） {#block-layer-actions-the-action-codes}
 
-Each trace event has an action code indicating where in the block stack the event occurred. The key codes:
+各トレースイベントには、ブロックスタックのどこでイベントが発生したかを示すアクションコードがある。主なコード:
 
-| Code | Name | Description |
+| コード | 名前 | 説明 |
 |------|------|-------------|
-| `Q` | Queue | I/O request submitted to the block layer by the filesystem or application. |
-| `G` | Get request | A `struct request` was allocated from the request pool. |
-| `M` | Back merge | Request was back-merged with an existing request in the I/O scheduler queue (merged at the tail of an existing in-queue request). |
-| `I` | Insert | Request inserted into the I/O scheduler queue. |
-| `S` | Sleep | No request struct was available; the submitter had to sleep waiting for one. |
-| `D` | Dispatch | Request dispatched (sent) to the device driver. |
-| `C` | Complete | Device driver reported completion — the I/O is done. |
-| `P` | Plug | The request queue was plugged (coalescing window started). |
-| `U` | Unplug | The request queue was unplugged (coalescing window ended, I/O flushed to driver). |
-| `F` | Front merge | Request was front-merged with an existing request (merged at the head of an existing in-queue request). |
-| `X` | Split | A large bio was split into smaller requests. |
-| `A` | Remap | Request was remapped (e.g., from a device mapper device to the underlying device). |
-| `R` | Requeue | Request was requeued (returned from driver to block layer for retry). |
+| `Q` | Queue | ファイルシステムまたはアプリケーションによってI/Oリクエストがブロック層に発行された。 |
+| `G` | Get request | リクエストプールから `struct request` が割り当てられた。 |
+| `M` | Back merge | リクエストがI/Oスケジューラのキュー内の既存リクエストに後方マージされた（キュー内の既存リクエストの末尾にマージされた）。 |
+| `I` | Insert | リクエストがI/Oスケジューラのキューに挿入された。 |
+| `S` | Sleep | 利用可能なリクエスト構造体がなく、発行元がそれを待ってスリープしなければならなかった。 |
+| `D` | Dispatch | リクエストがデバイスドライバへディスパッチ（送出）された。 |
+| `C` | Complete | デバイスドライバが完了を報告した。I/Oは終わった。 |
+| `P` | Plug | リクエストキューがplugされた（まとめるための窓が始まった）。 |
+| `U` | Unplug | リクエストキューがunplugされた（まとめるための窓が終わり、I/Oがドライバへフラッシュされた）。 |
+| `F` | Front merge | リクエストが既存リクエストに前方マージされた（キュー内の既存リクエストの先頭にマージされた）。 |
+| `X` | Split | 大きなbioがより小さなリクエストに分割された。 |
+| `A` | Remap | リクエストが再マップされた（例: device mapperのデバイスから下位のデバイスへ）。 |
+| `R` | Requeue | リクエストが再キューされた（再試行のためにドライバからブロック層へ戻された）。 |
 
-### Sample blkparse output {#sample-blkparse-output}
+### blkparseの出力例 {#sample-blkparse-output}
 
 ```
   8,0    3        1     0.000000000   693  Q   W 4456448 + 256 [kworker/u8:2]
@@ -327,20 +327,20 @@ Each trace event has an action code indicating where in the block stack the even
   8,0    3        5     0.004182934     0  C   W 4456448 + 256 [swapper/3]
 ```
 
-Columns: `device  cpu  sequence  timestamp(s)  pid  action  rwbs  sector + nr_sectors  [comm]`
+列: `device  cpu  sequence  timestamp(s)  pid  action  rwbs  sector + nr_sectors  [comm]`
 
-The `rwbs` field encodes the I/O type: `R`=read, `W`=write, `D`=discard, `F`=flush, `S`=sync, `N`=none, `A`=readahead.
+`rwbs` フィールドはI/Oの種類を表す: `R`=リード、`W`=ライト、`D`=discard、`F`=flush、`S`=sync、`N`=なし、`A`=readahead。
 
-### Measuring I/O latency with blkparse {#measuring-io-latency-with-blkparse}
+### blkparseによるI/Oレイテンシの測定 {#measuring-io-latency-with-blkparse}
 
-The latency of a single I/O request is the time from `D` (dispatch to driver) to `C` (complete). The time from `Q` (queue) to `C` includes scheduler queuing time.
+1つのI/Oリクエストのレイテンシは、`D`（ドライバへのディスパッチ）から `C`（完了）までの時間である。`Q`（キュー）から `C` までの時間には、スケジューラでのキューイング時間が含まれる。
 
 ```bash
-# Use blkparse's built-in latency summary
+# blkparse組み込みのレイテンシサマリーを使う
 blkparse -i /tmp/sda_trace -d /tmp/sda_trace.bin
 btt -i /tmp/sda_trace.bin
 
-# Or extract D-to-C latency manually
+# あるいはDからCまでのレイテンシを手動で抽出する
 blkparse -i /tmp/sda_trace -f "%T %a %S\n" | \
   awk '
     /D/ { dispatch[$3] = $1 }
@@ -354,7 +354,7 @@ blkparse -i /tmp/sda_trace -f "%T %a %S\n" | \
 
 ### btt — block trace toolkit {#btt-block-trace-toolkit}
 
-`btt` is a companion tool that parses `blktrace` binary data and produces structured latency breakdowns:
+`btt` は `blktrace` のバイナリデータを解析し、構造化されたレイテンシの内訳を出力する付属ツールである。
 
 ```bash
 blktrace -d /dev/sda -o /tmp/trace -- sleep 30
@@ -362,75 +362,75 @@ blkparse -i /tmp/trace -d /tmp/trace.bin -O
 btt -i /tmp/trace.bin
 ```
 
-`btt` breaks I/O latency into components:
+`btt` はI/Oレイテンシを次の要素に分解する。
 
-- **Q2G**: Queue to Get request (allocating a request struct)
-- **G2I**: Get to Insert (I/O scheduler processing)
-- **I2D**: Insert to Dispatch (time spent in scheduler queue — this is the "queuing" portion)
-- **D2C**: Dispatch to Complete (device service time)
-- **Q2C**: Total latency (Queue to Complete)
+- **Q2G**: QueueからGet requestまで（リクエスト構造体の割り当て）
+- **G2I**: GetからInsertまで（I/Oスケジューラの処理）
+- **I2D**: InsertからDispatchまで（スケジューラのキューで費やした時間。これが「キューイング」の部分）
+- **D2C**: DispatchからCompleteまで（デバイスのサービス時間）
+- **Q2C**: 全体のレイテンシ（QueueからCompleteまで）
 
-On a healthy system, `I2D` (scheduler queuing) should be small and `D2C` should match the device's advertised latency. High `I2D` means the I/O scheduler is delaying dispatch to batch requests — this can be intentional (for HDDs) or problematic (for latency-sensitive NVMe workloads).
+健全なシステムでは、`I2D`（スケジューラでのキューイング）は小さく、`D2C` はデバイスの公称レイテンシと一致するはずである。`I2D` が大きい場合は、I/Oスケジューラがリクエストをバッチ化するためにディスパッチを遅らせている。これは意図的なこと（HDDの場合）もあれば、問題となること（レイテンシに敏感なNVMeワークロードの場合）もある。
 
 ### blkiomon {#blkiomon}
 
-`blkiomon` provides online I/O monitoring from a blktrace stream, without writing to disk:
+`blkiomon` は、ディスクに書き込むことなく、blktraceのストリームからオンラインでI/Oを監視する。
 
 ```bash
 blktrace -d /dev/nvme0n1 -o - | blkiomon -I 5 -
-# Reports D2C latency statistics every 5 seconds
+# 5秒ごとにD2Cレイテンシの統計を報告する
 ```
 
 ---
 
-## ftrace I/O Tracepoints {#ftrace-io-tracepoints}
+## ftraceのI/O tracepoint {#ftrace-io-tracepoints}
 
-The `block` and `writeback` tracepoint groups expose the same events as `blktrace` but through the standard ftrace infrastructure. This allows them to be combined with other kernel tracepoints, filtered by PID or CPU, and consumed by `perf` or `bpftrace`.
+`block` と `writeback` のtracepointグループは、`blktrace` と同じイベントを標準のftrace基盤を通じて公開する。これにより、他のカーネルtracepointと組み合わせたり、PIDやCPUでフィルタしたり、`perf` や `bpftrace` で利用したりできる。
 
-### Finding available tracepoints {#finding-available-tracepoints}
+### 利用可能なtracepointを探す {#finding-available-tracepoints}
 
 ```bash
 ls /sys/kernel/debug/tracing/events/block/
 ls /sys/kernel/debug/tracing/events/writeback/
 ls /sys/kernel/debug/tracing/events/filemap/
 
-# Or via perf
+# あるいはperf経由で
 perf list 'block:*' 'writeback:*' 'filemap:*'
 ```
 
-### Enabling with ftrace {#enabling-with-ftrace}
+### ftraceで有効にする {#enabling-with-ftrace}
 
 ```bash
-# Enable the entire writeback group
+# writebackグループ全体を有効にする
 echo 1 > /sys/kernel/debug/tracing/events/writeback/enable
 
-# Stream events
+# イベントをストリーミングする
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# Clean up
+# 後片付け
 echo 0 > /sys/kernel/debug/tracing/events/writeback/enable
 echo > /sys/kernel/debug/tracing/trace
 ```
 
-### block:block_rq_issue and block:block_rq_complete {#blockblockrqissue-and-blockblockrqcomplete}
+### block:block_rq_issueとblock:block_rq_complete {#blockblockrqissue-and-blockblockrqcomplete}
 
-`block_rq_issue` fires when a request is dispatched to the device driver (the `D` event in blktrace). `block_rq_complete` fires on completion (the `C` event).
+`block_rq_issue` は、リクエストがデバイスドライバへディスパッチされたとき（blktraceの `D` イベント）に発火する。`block_rq_complete` は完了時（`C` イベント）に発火する。
 
-These two tracepoints are the ftrace equivalent of measuring D2C latency without `blktrace`.
+この2つのtracepointは、`blktrace` を使わずにD2Cレイテンシを測定するためのftraceにおける等価物である。
 
-**Fields (block_rq_complete)**:
+**フィールド（block_rq_complete）**:
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `dev` | Device major:minor |
-| `sector` | Starting sector |
-| `nr_sector` | Number of sectors |
-| `errors` | Error code (0 = success) |
-| `rwbs` | I/O type flags (R/W/D/F) |
-| `cmd` | SCSI command string (for SCSI devices) |
+| `dev` | デバイスのmajor:minor |
+| `sector` | 開始セクタ |
+| `nr_sector` | セクタ数 |
+| `errors` | エラーコード（0 = 成功） |
+| `rwbs` | I/O種別のフラグ（R/W/D/F） |
+| `cmd` | SCSIコマンド文字列（SCSIデバイスの場合） |
 
 ```bash
-# Measure block I/O latency with bpftrace
+# bpftraceでブロックI/Oのレイテンシを測定する
 bpftrace -e '
 tracepoint:block:block_rq_issue {
     @start[args->dev, args->sector] = nsecs;
@@ -446,22 +446,22 @@ interval:s:10 { print(@latency_us); clear(@latency_us); }'
 
 ### writeback:writeback_single_inode {#writebackwritebacksingleinode}
 
-Fires when the writeback code processes the dirty pages of a single inode. This is the per-inode view of writeback activity.
+ライトバックのコードが1つのinodeのdirtyページを処理するときに発火する。これはライトバック活動をinodeごとに見たものである。
 
-**Fields**:
+**フィールド**:
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `name` | Backing device name (e.g., `sda`, `nvme0n1`) |
-| `ino` | Inode number |
-| `state` | Inode writeback state flags |
-| `dirtied_when` | Jiffies when the inode was first dirtied |
-| `writeback_index` | Page offset where writeback started |
-| `nr_to_write` | Pages requested to write |
-| `wrote` | Pages actually written |
+| `name` | バッキングデバイス名（例: `sda`、`nvme0n1`） |
+| `ino` | inode番号 |
+| `state` | inodeのライトバック状態フラグ |
+| `dirtied_when` | inodeが最初にdirtyになったときのjiffies |
+| `writeback_index` | ライトバックが開始されたページオフセット |
+| `nr_to_write` | 書き込みを要求されたページ数 |
+| `wrote` | 実際に書き込まれたページ数 |
 
 ```bash
-# Which inodes are generating the most writeback?
+# どのinodeが最も多くのライトバックを生んでいるか？
 bpftrace -e '
 tracepoint:writeback:writeback_single_inode {
     @pages[args->ino, str(args->name)] = sum(args->wrote);
@@ -472,7 +472,7 @@ interval:s:10 {
 }'
 ```
 
-If a specific inode number keeps appearing, translate it to a path:
+特定のinode番号が繰り返し現れる場合は、それをパスに変換する。
 
 ```bash
 find / -inum <inode_number> 2>/dev/null
@@ -480,46 +480,46 @@ find / -inum <inode_number> 2>/dev/null
 
 ### writeback:global_dirty_state {#writebackglobaldirtystate}
 
-Fires periodically from `balance_dirty_pages()` in the writeback throttling code. Provides a snapshot of the global dirty page state including the current limit calculations.
+ライトバックのスロットリングのコードにある `balance_dirty_pages()` から定期的に発火する。現在の上限の計算結果を含め、グローバルなdirtyページの状態のスナップショットを提供する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `nr_dirty` | Current dirty pages |
-| `nr_writeback` | Pages currently under writeback |
-| `background_thresh` | The background writeback threshold (pages) |
-| `dirty_thresh` | The hard dirty limit (pages) |
-| `dirty_limit` | Effective dirty limit after smoothing |
-| `nr_dirtied` | Monotonic dirty page counter |
-| `nr_written` | Monotonic written page counter |
+| `nr_dirty` | 現在のdirtyページ数 |
+| `nr_writeback` | 現在ライトバック中のページ数 |
+| `background_thresh` | バックグラウンドのライトバックのしきい値（ページ数） |
+| `dirty_thresh` | dirtyのハードリミット（ページ数） |
+| `dirty_limit` | 平滑化後の実効的なdirtyの上限 |
+| `nr_dirtied` | 単調増加するdirtyページのカウンタ |
+| `nr_written` | 単調増加する書き込み済みページのカウンタ |
 
 ```bash
 echo 1 > /sys/kernel/debug/tracing/events/writeback/global_dirty_state/enable
 cat /sys/kernel/debug/tracing/trace_pipe
-# Output: writeback-global_dirty_state: dirty=12345 writeback=234 bg_thresh=51200 thresh=102400
+# 出力: writeback-global_dirty_state: dirty=12345 writeback=234 bg_thresh=51200 thresh=102400
 ```
 
-This tracepoint is invaluable for understanding whether `dirty_ratio`/`dirty_background_ratio` tuning is having the intended effect. Watch `nr_dirty` relative to `dirty_thresh` — if they are consistently close, processes are being throttled.
+このtracepointは、`dirty_ratio`/`dirty_background_ratio` のチューニングが意図した効果を上げているかを理解するうえで非常に有用である。`dirty_thresh` に対する `nr_dirty` を監視する。両者が一貫して近い場合、プロセスはスロットリングされている。
 
 ### writeback:writeback_writepage {#writebackwriteback_writepage}
 
-Fires for each page written via `write_cache_pages()`. Very high frequency — enable only briefly on targeted inodes using a filter:
+`write_cache_pages()` で書き込まれる各ページについて発火する。頻度が非常に高いため、フィルタを使って対象のinodeに絞り、短時間だけ有効にする。
 
 ```bash
-# Filter to a specific device
+# 特定のデバイスに絞り込む
 echo 'name == "sda"' > /sys/kernel/debug/tracing/events/writeback/writeback_writepage/filter
 echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_writepage/enable
 ```
 
 ### filemap:mm_filemap_add_to_page_cache {#filemapmmfilemapaddtopage_cache}
 
-Fires when a page is added to the page cache — either on a read fault that brings a page in from storage, or when a file is first mmap'd or read.
+ページがページキャッシュに追加されたときに発火する。ストレージからページを読み込むリードフォールトの際や、ファイルが初めてmmapまたはreadされたときである。
 
-**Fields**: `i_ino`, `s_dev`, `index` (page index within the file), `pfn`
+**フィールド**: `i_ino`、`s_dev`、`index`（ファイル内のページインデックス）、`pfn`
 
 ```bash
-# Cache population rate by device
+# デバイスごとのキャッシュ投入レート
 bpftrace -e '
 tracepoint:filemap:mm_filemap_add_to_page_cache {
     @add[args->s_dev] = count();
@@ -529,12 +529,12 @@ interval:s:1 { print(@add); clear(@add); }'
 
 ### filemap:mm_filemap_delete_from_page_cache {#filemapmmfilemapdeletefrompage_cache}
 
-Fires when a page is evicted from the page cache — either due to memory reclaim, explicit `fadvise(POSIX_FADV_DONTNEED)`, or file truncation.
+ページがページキャッシュから追い出されたときに発火する。メモリ回収、明示的な `fadvise(POSIX_FADV_DONTNEED)`、ファイルの切り詰めのいずれかによる。
 
-**Fields**: same as add: `i_ino`, `s_dev`, `index`, `pfn`
+**フィールド**: addと同じ。`i_ino`、`s_dev`、`index`、`pfn`
 
 ```bash
-# Cache churn: additions vs evictions per second
+# キャッシュの入れ替わり: 1秒あたりの追加と追い出し
 bpftrace -e '
 tracepoint:filemap:mm_filemap_add_to_page_cache    { @add = count(); }
 tracepoint:filemap:mm_filemap_delete_from_page_cache { @del = count(); }
@@ -544,69 +544,69 @@ interval:s:5 {
 }'
 ```
 
-High eviction rates (`mm_filemap_delete_from_page_cache`) combined with high major fault rates (`pgmajfault` in `/proc/vmstat`) indicates the page cache is too small for the working set — pages are evicted and then immediately needed again, causing repeated disk reads.
+追い出しのレート（`mm_filemap_delete_from_page_cache`）が高く、同時にメジャーフォールトのレート（`/proc/vmstat` の `pgmajfault`）も高い場合、ページキャッシュがワーキングセットに対して小さすぎることを示す。ページが追い出された直後に再び必要になり、ディスクからの読み込みが繰り返されている。
 
 ---
 
-## perf for I/O {#perf-for-io}
+## I/Oのためのperf {#perf-for-io}
 
-`perf` can record, count, and sample block layer tracepoints with low overhead. It is particularly useful for attributing I/O to specific processes and call stacks.
+`perf` は、低いオーバーヘッドでブロック層のtracepointを記録、カウント、サンプリングできる。特に、I/Oを特定のプロセスやコールスタックに帰属させるのに有用である。
 
-### Counting block events {#counting-block-events}
+### ブロックイベントのカウント {#counting-block-events}
 
 ```bash
-# Count all block events for 10 seconds system-wide
+# システム全体のすべてのブロックイベントを10秒間カウントする
 perf stat -e 'block:block_rq_issue,block:block_rq_complete,block:block_bio_queue' \
            -a -- sleep 10
 
-# Example output:
+# 出力例:
 #  Performance counter stats for 'system wide':
 #     182,413      block:block_rq_issue
 #     182,389      block:block_rq_complete
 #     201,847      block:block_bio_queue
 ```
 
-The difference between `block_bio_queue` and `block_rq_issue` is the number of bios that were merged — they entered the block layer but were absorbed into existing requests.
+`block_bio_queue` と `block_rq_issue` の差は、マージされたbioの数である。これらはブロック層に入ったが、既存のリクエストに吸収された。
 
-### Recording with call stacks {#recording-with-call-stacks}
+### コールスタック付きの記録 {#recording-with-call-stacks}
 
 ```bash
-# Record block completions with kernel+user stacks for 30 seconds
+# ブロックの完了をカーネル+ユーザーのスタック付きで30秒間記録する
 perf record -e block:block_rq_complete -ag -- sleep 30
 perf report
 ```
 
-The `-a` flag records system-wide (all CPUs). `-g` captures call stacks. This shows which code paths are generating the most I/O completions.
+`-a` フラグはシステム全体（全CPU）を記録する。`-g` はコールスタックを捕捉する。これにより、どのコードパスが最も多くのI/O完了を生み出しているかがわかる。
 
 ```bash
-# perf script for post-processing
+# 後処理用のperf script
 perf script | head -50
-# Output format:
+# 出力形式:
 # kworker/u8:2   693 [003] 12345.678901: block:block_rq_complete: 8,0 W () 4456448 + 256 [0]
 ```
 
-### Finding writeback hotspots with perf top {#finding-writeback-hotspots-with-perf-top}
+### perf topでライトバックのホットスポットを見つける {#finding-writeback-hotspots-with-perf-top}
 
 ```bash
-# Live view of functions spending time in writeback
+# ライトバックで時間を費やしている関数のライブビュー
 perf top -e block:block_rq_issue --sort comm,dso,symbol
 
-# Writeback-specific: watch flusher thread CPU usage
+# ライトバック固有: flusherスレッドのCPU使用率を監視する
 perf top -p $(pgrep -d, kworker) -e cycles
 ```
 
-### Counting writeback tracepoints {#counting-writeback-tracepoints}
+### ライトバックのtracepointのカウント {#counting-writeback-tracepoints}
 
 ```bash
-# Writeback activity summary over 60 seconds
+# 60秒間のライトバック活動のサマリー
 perf stat -e 'writeback:writeback_single_inode,writeback:global_dirty_state,writeback:writeback_written' \
            -a -- sleep 60
 ```
 
-### perf with bpftrace for I/O attribution {#perf-with-bpftrace-for-io-attribution}
+### I/Oの帰属のためのperfとbpftrace {#perf-with-bpftrace-for-io-attribution}
 
 ```bash
-# Top processes by write I/O bytes (using block tracepoints)
+# 書き込みI/Oのバイト数の上位プロセス（ブロックのtracepointを使用）
 bpftrace -e '
 tracepoint:block:block_rq_issue /args->rwbs[0] == "W"/ {
     @bytes[comm] = sum(args->nr_sector * 512);
@@ -618,9 +618,9 @@ interval:s:10 { print(@bytes, 10); clear(@bytes); }'
 
 ## /proc/PID/io {#procpidio}
 
-Every process has an `/proc/PID/io` file that accounts for its I/O activity since the process started. This is distinct from `/proc/diskstats` — it attributes I/O to individual processes rather than devices.
+すべてのプロセスは、プロセスの開始以降のI/O活動を集計する `/proc/PID/io` ファイルを持つ。これは `/proc/diskstats` とは異なり、I/Oをデバイスではなく個々のプロセスに帰属させる。
 
-**Source**: [`fs/proc/base.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/base.c), accounting via `task_io_accounting` in `include/linux/task_io_accounting.h`.
+**ソース**: [`fs/proc/base.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/base.c)。集計は `include/linux/task_io_accounting.h` の `task_io_accounting` で行われる。
 
 ```bash
 $ cat /proc/$(pgrep postgres | head -1)/io
@@ -633,34 +633,34 @@ write_bytes: 3748103168
 cancelled_write_bytes: 104857600
 ```
 
-### Field-by-field reference {#field-by-field-reference_1}
+### フィールドごとのリファレンス {#field-by-field-reference_1}
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `rchar` | Bytes passed to `read()`, `pread()`, `readv()` and similar syscalls. This counts **all** bytes read regardless of whether they came from the page cache or disk. Reading a file entirely cached will still increment `rchar`. |
-| `wchar` | Bytes passed to `write()`, `pwrite()`, `writev()` and similar. Again, counts bytes passed to the syscall, not bytes that hit storage. |
-| `syscr` | Number of read system calls (read, pread64, readv, etc.). |
-| `syscw` | Number of write system calls. |
-| `read_bytes` | Bytes that actually caused block-layer reads. These are bytes read from storage (page cache misses). This counter only increments when the kernel had to fetch pages from disk. |
-| `write_bytes` | Bytes written to storage via writeback. Pages written from this process's dirty footprint that were flushed to disk. |
-| `cancelled_write_bytes` | Bytes of writeback that were "cancelled" — dirty pages that were freed without being written, typically because the process truncated or deleted a file before its dirty pages were flushed. In the example, 100 MiB of writes were avoided. |
+| `rchar` | `read()`、`pread()`、`readv()` などのシステムコールに渡されたバイト数。ページキャッシュとディスクのどちらから来たかにかかわらず、読み込んだ**すべての**バイトを数える。完全にキャッシュされたファイルを読んでも `rchar` は増加する。 |
+| `wchar` | `write()`、`pwrite()`、`writev()` などに渡されたバイト数。これも、ストレージに到達したバイトではなく、システムコールに渡されたバイトを数える。 |
+| `syscr` | 読み込みシステムコール（read、pread64、readvなど）の回数。 |
+| `syscw` | 書き込みシステムコールの回数。 |
+| `read_bytes` | 実際にブロック層の読み込みを引き起こしたバイト数。ストレージから読み込まれたバイト（ページキャッシュミス）である。このカウンタは、カーネルがディスクからページを取得しなければならなかったときにだけ増える。 |
+| `write_bytes` | ライトバックによってストレージに書き込まれたバイト数。このプロセスがdirtyにしたページのうち、ディスクへフラッシュされたもの。 |
+| `cancelled_write_bytes` | 「キャンセル」されたライトバックのバイト数。書き込まれずに解放されたdirtyページであり、典型的には、dirtyページがフラッシュされる前にプロセスがファイルを切り詰めたり削除したりした場合である。例では、100 MiBの書き込みが回避された。 |
 
-### Key distinctions {#key-distinctions}
+### 重要な区別 {#key-distinctions}
 
-**`wchar` vs `write_bytes`**: `wchar` counts bytes passed to `write()`. `write_bytes` counts bytes that actually hit storage. The gap between them is the amount of write I/O absorbed by the page cache (writes that will eventually be flushed by writeback, or that were cancelled). A process with `wchar = 10 GiB` and `write_bytes = 500 MiB` is heavily buffered — 95% of its writes stayed in cache.
+**`wchar` と `write_bytes`**: `wchar` は `write()` に渡されたバイト数を数える。`write_bytes` は実際にストレージに到達したバイト数を数える。両者の差は、ページキャッシュに吸収された書き込みI/Oの量である（いずれライトバックでフラッシュされる書き込み、またはキャンセルされた書き込み）。`wchar = 10 GiB` で `write_bytes = 500 MiB` のプロセスは強くバッファリングされており、書き込みの95%がキャッシュに留まった。
 
-**`read_bytes` is cumulative and not per-read**: A process that reads the same cached file 1000 times will have `rchar` increasing by the file size each time, but `read_bytes` only increments once (the first read that brought the page in from disk). Subsequent reads hit the page cache and do not increment `read_bytes`.
+**`read_bytes` は累積値であり、読み込みごとの値ではない**: キャッシュされた同じファイルを1000回読むプロセスでは、`rchar` は毎回ファイルサイズずつ増えるが、`read_bytes` は1回（ディスクからページを読み込んだ最初の読み込み）しか増えない。以降の読み込みはページキャッシュにヒットし、`read_bytes` を増やさない。
 
-**`cancelled_write_bytes` can reduce storage pressure**: A database that writes to a temporary file and then unlinks it before flushing may have large `wchar` but significant `cancelled_write_bytes`, meaning the actual storage traffic was much lower.
+**`cancelled_write_bytes` はストレージへの負荷を下げうる**: 一時ファイルに書き込み、フラッシュ前にそれをunlinkするデータベースは、`wchar` が大きくても `cancelled_write_bytes` も大きいことがあり、その場合、実際のストレージのトラフィックはずっと少なかったことを意味する。
 
-### Using /proc/PID/io for diagnosis {#using-procpidio-for-diagnosis}
+### /proc/PID/ioを使った診断 {#using-procpidio-for-diagnosis}
 
 ```bash
-# Snapshot I/O for a process
+# プロセスのI/Oのスナップショット
 pid=$(pgrep myapp)
 cat /proc/$pid/io
 
-# Delta over 5 seconds
+# 5秒間の差分
 a=$(cat /proc/$pid/io)
 sleep 5
 b=$(cat /proc/$pid/io)
@@ -671,23 +671,23 @@ paste <(echo "$a") <(echo "$b") | \
 
 ### iotop {#iotop}
 
-`iotop` reads `/proc/PID/io` for all processes and displays a sorted live view:
+`iotop` はすべてのプロセスの `/proc/PID/io` を読み、ソートされたライブビューを表示する。
 
 ```bash
-iotop -o        # show only processes doing I/O
-iotop -a        # accumulated I/O since iotop started
-iotop -p <pid>  # monitor a specific process
+iotop -o        # I/Oを行っているプロセスだけを表示する
+iotop -a        # iotop開始以降の累積I/O
+iotop -p <pid>  # 特定のプロセスを監視する
 ```
 
-The `DISK READ` and `DISK WRITE` columns in `iotop` come from deltas of `read_bytes` and `write_bytes` — the actual storage traffic. The `SWAPIN` and `IO%` columns indicate time the process spent blocked on I/O.
+`iotop` の `DISK READ` と `DISK WRITE` の列は、`read_bytes` と `write_bytes` の差分、つまり実際のストレージのトラフィックから来ている。`SWAPIN` と `IO%` の列は、プロセスがI/Oでブロックされていた時間を示す。
 
 ---
 
-## Pressure Stall Information (PSI) {#pressure-stall-information-psi}
+## Pressure Stall Information（PSI） {#pressure-stall-information-psi}
 
-PSI measures the fraction of time that tasks are stalled waiting for I/O. Unlike utilization metrics (which measure device busyness), PSI measures **application impact** — the actual time workloads spent waiting.
+PSIは、タスクがI/Oを待って停止している時間の割合を測定する。（デバイスのビジー度を測る）使用率のメトリクスとは異なり、PSIは**アプリケーションへの影響**、つまりワークロードが実際に待つのに費やした時間を測定する。
 
-**Source**: [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c). Requires `CONFIG_PSI=y` (enabled by default since 5.2).
+**ソース**: [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c)。`CONFIG_PSI=y` が必要（5.2以降はデフォルトで有効）。
 
 ### /proc/pressure/io {#procpressureio}
 
@@ -697,29 +697,29 @@ some avg10=0.12 avg60=0.08 avg300=0.03 total=47382910
 full avg10=0.00 avg60=0.00 avg300=0.00 total=8241033
 ```
 
-**`some`**: The fraction of time during which **at least one task** was stalled waiting for I/O. In the example, 0.12% of time in the last 10 seconds had at least one task blocked on I/O. This represents any I/O stall affecting any task.
+**`some`**: **少なくとも1つのタスク**がI/Oを待って停止していた時間の割合。例では、直近10秒間の0.12%の時間で、少なくとも1つのタスクがI/Oでブロックされていた。これはいずれかのタスクに影響するあらゆるI/O停止を表す。
 
-**`full`**: The fraction of time during which **all runnable tasks** were stalled on I/O simultaneously — the system as a whole was blocked on I/O with no runnable task able to make progress. This is a stronger signal of I/O saturation.
+**`full`**: **すべての実行可能タスク**が同時にI/Oで停止していた時間の割合。システム全体がI/Oでブロックされ、どの実行可能タスクも進めなかった状態である。これはI/O飽和のより強いシグナルである。
 
-**`avg10`, `avg60`, `avg300`**: Exponentially-weighted moving averages over 10 seconds, 60 seconds, and 300 seconds respectively. Like load average, but for I/O stall percentage.
+**`avg10`、`avg60`、`avg300`**: それぞれ10秒、60秒、300秒にわたる指数加重移動平均。ロードアベレージに似ているが、I/O停止の割合についてのものである。
 
-**`total`**: Cumulative microseconds spent in the stall state since boot. Useful for computing deltas.
+**`total`**: 起動以降に停止状態で費やした累積マイクロ秒数。差分の計算に有用である。
 
-### Interpreting PSI values {#interpreting-psi-values}
+### PSIの値の解釈 {#interpreting-psi-values}
 
-| Value | Meaning |
+| 値 | 意味 |
 |-------|---------|
-| `some` < 1% | I/O stalls are rare; no significant pressure |
-| `some` 1–10% | Moderate stall; some tasks occasionally wait on I/O |
-| `some` > 10% | Significant I/O pressure; investigate with iostat and blktrace |
-| `full` > 0% (sustained) | All runnable tasks are blocked; I/O is a hard bottleneck |
-| `full` > 1% | Severe saturation; the entire system is waiting on I/O |
+| `some` < 1% | I/O停止はまれであり、目立った負荷はない |
+| `some` 1–10% | 中程度の停止。一部のタスクがときどきI/Oを待つ |
+| `some` > 10% | 大きなI/O負荷。iostatとblktraceで調査する |
+| `full` > 0%（持続） | すべての実行可能タスクがブロックされている。I/Oが明確なボトルネックである |
+| `full` > 1% | 深刻な飽和。システム全体がI/Oを待っている |
 
-The difference between `some` and `full` is informative: a large `some` with near-zero `full` means I/O affects some tasks but others can still make progress. `full` approaching `some` means the I/O stall is affecting essentially all activity.
+`some` と `full` の差からは情報が得られる。`some` が大きく `full` がほぼ0の場合、I/Oは一部のタスクに影響しているが、他のタスクはまだ進める。`full` が `some` に近づく場合、I/O停止は実質的にすべての活動に影響している。
 
-### cgroup io.pressure {#cgroup-iopressure}
+### cgroupのio.pressure {#cgroup-iopressure}
 
-In a cgroup v2 hierarchy, each cgroup exposes its own I/O pressure:
+cgroup v2の階層では、各cgroupが独自のI/O負荷を公開する。
 
 ```bash
 cat /sys/fs/cgroup/system.slice/io.pressure
@@ -727,18 +727,18 @@ some avg10=0.43 avg60=0.21 avg300=0.09 total=1283910
 full avg10=0.00 avg60=0.00 avg300=0.00 total=29341
 ```
 
-This lets you attribute I/O pressure to specific services without system-wide instrumentation. A high `some` value in a specific cgroup while the system-level `some` is low indicates that service is I/O-bound relative to its peers.
+これにより、システム全体の計装なしに、I/O負荷を特定のサービスに帰属させられる。システムレベルの `some` が低いのに特定のcgroupの `some` が高い場合、そのサービスが他と比べてI/Oバウンドであることを示す。
 
-### Integrating with systemd-oomd {#integrating-with-systemd-oomd}
+### systemd-oomdとの統合 {#integrating-with-systemd-oomd}
 
-`systemd-oomd` monitors PSI values and can kill cgroups that exceed configurable pressure thresholds. Its configuration (`/etc/systemd/oomd.conf`) uses `DefaultMemoryPressureLimit=` and `DefaultMemoryPressureDurationSec=` — note these are memory PSI settings, but the same mechanism applies to I/O via cgroup resource control.
+`systemd-oomd` はPSIの値を監視し、設定可能な負荷のしきい値を超えたcgroupをkillできる。その設定（`/etc/systemd/oomd.conf`）は `DefaultMemoryPressureLimit=` と `DefaultMemoryPressureDurationSec=` を使う。これらはメモリのPSIの設定だが、同じ仕組みがcgroupのリソース制御を通じてI/Oにも適用される点に注意する。
 
-### Setting up PSI alerts {#setting-up-psi-alerts}
+### PSIアラートの設定 {#setting-up-psi-alerts}
 
 ```bash
-# Alert when I/O stall exceeds 5% over 10 seconds (using kernel PSI notifications)
-# Open the file with O_RDWR, write the trigger, then poll for events
-# From a shell, this is easier with a script:
+# I/O停止が10秒間で5%を超えたらアラートする（カーネルのPSI通知を使う）
+# ファイルをO_RDWRで開き、トリガーを書き込んでから、イベントをpollする
+# シェルからなら、スクリプトを使う方が簡単:
 
 while true; do
     some=$(awk '/^some/ {print $2}' /proc/pressure/io | cut -d= -f2)
@@ -749,148 +749,148 @@ while true; do
 done
 ```
 
-For production use, tools like Prometheus `node_exporter` (version 1.1+) expose PSI metrics as `node_pressure_io_stalled_seconds_total`.
+本番環境では、Prometheusの `node_exporter`（バージョン1.1以降）のようなツールが、PSIのメトリクスを `node_pressure_io_stalled_seconds_total` として公開している。
 
 ---
 
-## Practical Debugging Scenarios {#practical-debugging-scenarios}
+## 実践的なデバッグシナリオ {#practical-debugging-scenarios}
 
-### Scenario 1: "My disk is 100% utilised but latency is low" {#scenario-1-my-disk-is-100-utilised-but-latency-is-low}
+### シナリオ1: 「ディスク使用率は100%なのにレイテンシは低い」 {#scenario-1-my-disk-is-100-utilised-but-latency-is-low}
 
-**Symptom**: `iostat -x` shows `%util=100` on an NVMe device but `r_await` and `w_await` are well under 1 ms. Application performance is normal.
+**症状**: `iostat -x` がNVMeデバイスで `%util=100` を示すが、`r_await` と `w_await` は1 msを大きく下回っている。アプリケーションの性能は正常である。
 
-**Explanation**: `%util` measures whether any I/O was in flight during each millisecond of the interval — not how much headroom the device has. A high-performance NVMe device can sustain tens of thousands of IOPS across many parallel hardware queues. Each queue may service one I/O in 0.1 ms, but across 16 queues running in parallel, `%util` will show 100% even though the device is far from saturated.
+**説明**: `%util` が測るのは、インターバルの各ミリ秒の間にI/Oが処理中だったかどうかであり、デバイスにどれだけ余裕があるかではない。高性能なNVMeデバイスは、多数の並列ハードウェアキューにわたって数万IOPSを持続できる。各キューは1つのI/Oを0.1 msで処理するかもしれないが、16個のキューが並列に動いていれば、デバイスが飽和からほど遠くても `%util` は100%を示す。
 
-**Diagnosis steps**:
+**診断手順**:
 
 ```bash
-# Check actual queue depth and latency
+# 実際のキュー深度とレイテンシを確認する
 iostat -x 1
 
-# Look at aqu-sz: if it's close to 1, the device is barely queued
-# If r_await is below the device's spec, there's headroom
+# aqu-szを見る: 1に近ければ、デバイスはほとんどキューイングされていない
+# r_awaitがデバイスの仕様を下回っていれば、余裕がある
 
-# Check NVMe queue count
+# NVMeのキュー数を確認する
 ls /sys/class/nvme/nvme0/nvme0n1/
 cat /sys/class/nvme/nvme0/num_queues
 
-# Inspect per-queue depth
+# キューごとの深度を調べる
 ls /sys/block/nvme0n1/mq/
 ```
 
-**Resolution**: `%util` is not the right saturation metric for NVMe. Use `await` (ideally `r_await` and `w_await`) to assess whether latency is degrading. Add capacity or reduce I/O only if `await` is rising above your SLA threshold.
+**解決**: `%util` はNVMeにとって正しい飽和のメトリクスではない。レイテンシが悪化しているかを評価するには `await`（理想的には `r_await` と `w_await`）を使う。容量を追加したりI/Oを減らしたりするのは、`await` がSLAのしきい値を超えて上昇している場合だけにする。
 
-### Scenario 2: "Write latency spikes every 30 seconds" {#scenario-2-write-latency-spikes-every-30-seconds}
+### シナリオ2: 「書き込みレイテンシが30秒ごとにスパイクする」 {#scenario-2-write-latency-spikes-every-30-seconds}
 
-**Symptom**: Application write latency is normally 1–2 ms but spikes to 50–200 ms at regular ~30-second intervals, then recovers.
+**症状**: アプリケーションの書き込みレイテンシは通常1–2 msだが、約30秒の規則的な間隔で50–200 msにスパイクし、その後回復する。
 
-**Explanation**: The kernel's dirty page flusher (`wb_workfn`) wakes every `dirty_writeback_centisecs` (default 500 = 5 s) and writes pages that have been dirty for `dirty_expire_centisecs` (default 3000 = 30 s). If dirty pages accumulate to the point where writeback generates a large burst of I/O, requests from applications must wait in the block queue behind the writeback flush.
+**説明**: カーネルのdirtyページのflusher（`wb_workfn`）は `dirty_writeback_centisecs`（デフォルト500 = 5秒）ごとに起床し、`dirty_expire_centisecs`（デフォルト3000 = 30秒）の間dirtyだったページを書き込む。ライトバックが大きなI/Oのバーストを生むほどdirtyページが溜まると、アプリケーションからのリクエストは、ブロックキュー内でライトバックのフラッシュの後ろで待たなければならない。
 
-**Diagnosis steps**:
+**診断手順**:
 
 ```bash
-# Check the writeback interval settings
+# ライトバック間隔の設定を確認する
 sysctl vm.dirty_writeback_centisecs vm.dirty_expire_centisecs
 
-# Watch dirty page accumulation in real time
+# dirtyページの蓄積をリアルタイムで監視する
 watch -n 1 'grep -E "^Dirty:|^Writeback:|^nr_dirtied|^nr_written" /proc/meminfo /proc/vmstat 2>/dev/null'
 
-# Correlate write latency spikes with writeback events
+# 書き込みレイテンシのスパイクとライトバックのイベントを関連付ける
 echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_single_inode/enable
 cat /sys/kernel/debug/tracing/trace_pipe &
-# ... reproduce the latency spike ...
+# ... レイテンシのスパイクを再現する ...
 echo 0 > /sys/kernel/debug/tracing/events/writeback/writeback_single_inode/enable
 
-# Check if the disk is getting saturated during writeback
+# ライトバック中にディスクが飽和しているかを確認する
 iostat -x 1 | grep -E "Device|nvme|sda"
 ```
 
-**Resolution options**:
+**解決の選択肢**:
 
-1. Reduce `dirty_expire_centisecs` to flush more frequently in smaller batches:
+1. `dirty_expire_centisecs` を減らし、より小さなバッチでより頻繁にフラッシュする:
    ```bash
-   sysctl vm.dirty_expire_centisecs=500   # Flush pages after 5 seconds
-   sysctl vm.dirty_writeback_centisecs=100  # Check every 1 second
+   sysctl vm.dirty_expire_centisecs=500   # 5秒後にページをフラッシュする
+   sysctl vm.dirty_writeback_centisecs=100  # 1秒ごとに確認する
    ```
-2. Reduce `dirty_bytes` or `dirty_ratio` to cap the total dirty data that can accumulate before throttling begins.
-3. Use `sync` or `fsync` with appropriate granularity in the application to control flush timing explicitly.
-4. Use I/O scheduling: `blk-mq` with the `kyber` scheduler can prioritize foreground reads over writeback.
+2. `dirty_bytes` または `dirty_ratio` を減らし、スロットリングが始まる前に溜まりうるdirtyデータの総量に上限を設ける。
+3. アプリケーションで適切な粒度の `sync` または `fsync` を使い、フラッシュのタイミングを明示的に制御する。
+4. I/Oスケジューリングを使う: `blk-mq` で `kyber` スケジューラを使うと、フォアグラウンドの読み込みをライトバックより優先できる。
 
-### Scenario 3: "Reads are slow but disk shows no reads" {#scenario-3-reads-are-slow-but-disk-shows-no-reads}
+### シナリオ3: 「読み込みが遅いのにディスクには読み込みが見えない」 {#scenario-3-reads-are-slow-but-disk-shows-no-reads}
 
-**Symptom**: Application read latency is high. `iostat` shows near-zero read throughput. `/proc/vmstat` shows elevated `pgmajfault`. The machine has low free memory.
+**症状**: アプリケーションの読み込みレイテンシが高い。`iostat` はほぼ0の読み込みスループットを示す。`/proc/vmstat` では `pgmajfault` が高くなっている。マシンの空きメモリが少ない。
 
-**Explanation**: The application's working set was in the page cache, but memory pressure caused the kernel to evict those pages (via `mm_filemap_delete_from_page_cache`). Now each access to an evicted page generates a major page fault, which blocks the process while the kernel reads the page back from disk. The disk reads may complete quickly in isolation, but the rate of major faults creates sustained latency from the application's perspective.
+**説明**: アプリケーションのワーキングセットはページキャッシュにあったが、メモリ逼迫によってカーネルがそれらのページを追い出した（`mm_filemap_delete_from_page_cache` 経由）。今では、追い出されたページへの各アクセスがメジャーページフォールトを生み、カーネルがディスクからページを読み戻す間プロセスをブロックする。ディスクの読み込み単体はすぐに完了するかもしれないが、メジャーフォールトのレートが、アプリケーションから見て持続的なレイテンシを生み出す。
 
-**Diagnosis steps**:
+**診断手順**:
 
 ```bash
-# Confirm major fault rate
+# メジャーフォールトのレートを確認する
 grep pgmajfault /proc/vmstat
-# Watch it increase
+# 増えていく様子を監視する
 watch -n 1 'grep pgmajfault /proc/vmstat'
 
-# Check memory pressure
+# メモリ逼迫を確認する
 grep -E "^(MemAvailable|Active|Inactive|Cached|Dirty):" /proc/meminfo
 
-# Check reclaim activity
+# 回収の活動を確認する
 grep -E "pgscan_kswapd|pgscan_direct|pgsteal" /proc/vmstat
 
-# Identify which files are being evicted with filemap tracepoints
+# filemapのtracepointで、どのファイルが追い出されているかを特定する
 echo 1 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_delete_from_page_cache/enable
 cat /sys/kernel/debug/tracing/trace_pipe | head -100
 echo 0 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_delete_from_page_cache/enable
 ```
 
-**Resolution**:
+**解決**:
 
-- Identify which process or cgroup is consuming memory that displaces the cache. `smem` or `cgroup memory.stat` can show which processes are responsible.
-- Pin critical files in the page cache: `vmtouch -l /path/to/file` (userspace) or `mlock()` (application).
-- Use cgroup v2 memory limits to prevent other workloads from evicting the shared cache.
-- Add memory, or move the competing workload to a different machine.
+- キャッシュを押し出しているメモリを消費しているプロセスまたはcgroupを特定する。`smem` やcgroupの `memory.stat` で、どのプロセスが原因かがわかる。
+- 重要なファイルをページキャッシュに固定する: `vmtouch -l /path/to/file`（ユーザー空間）または `mlock()`（アプリケーション）。
+- cgroup v2のメモリ制限を使い、他のワークロードが共有キャッシュを追い出さないようにする。
+- メモリを追加するか、競合するワークロードを別のマシンに移す。
 
-### Scenario 4: "A process is doing more I/O than expected" {#scenario-4-a-process-is-doing-more-io-than-expected}
+### シナリオ4: 「プロセスが想定より多くのI/Oを行っている」 {#scenario-4-a-process-is-doing-more-io-than-expected}
 
-**Symptom**: `iotop` shows a specific process writing many MB/s. Application logs do not explain it. The volume of I/O is much higher than the expected logical write rate.
+**症状**: `iotop` で特定のプロセスが毎秒何MBも書き込んでいる。アプリケーションのログでは説明がつかない。I/Oの量が、想定される論理的な書き込みレートよりはるかに多い。
 
-**Diagnosis steps**:
+**診断手順**:
 
 ```bash
-# Get the process's I/O breakdown
+# プロセスのI/Oの内訳を取得する
 pid=$(pgrep suspect_app)
 cat /proc/$pid/io
 
-# Compare wchar (logical writes) vs write_bytes (actual storage writes)
-# If write_bytes >> wchar / (page_size): the application is writing many small I/Os
-# without buffering, or is doing excessive metadata updates (e.g., fsync on every write)
+# wchar（論理的な書き込み）とwrite_bytes（実際のストレージへの書き込み）を比較する
+# write_bytes >> wchar / (page_size) の場合: アプリケーションがバッファリングせずに
+# 小さなI/Oを大量に書いているか、過剰なメタデータ更新（例: 書き込みごとのfsync）を行っている
 
-# Check for fsync/fdatasync calls
+# fsync/fdatasync呼び出しを確認する
 strace -p $pid -e trace=fsync,fdatasync,sync_file_range -T 2>&1 | head -50
 
-# Record the call stack for block writes
+# ブロック書き込みのコールスタックを記録する
 perf record -e block:block_rq_issue -p $pid -ag -- sleep 10
 perf report
 
-# Check if another process is doing writeback on the same files
-# (e.g., a backup tool reading and causing dirty pages to flush)
-lsof -p $pid | grep -v mem   # open file descriptors
+# 同じファイルに対して別のプロセスがライトバックを行っていないかを確認する
+# （例: バックアップツールが読み込みを行い、dirtyページのフラッシュを引き起こしている）
+lsof -p $pid | grep -v mem   # 開いているファイルディスクリプタ
 ```
 
-**Common causes**:
+**よくある原因**:
 
-- Application calls `fsync()` after every write: check with `strace -e fsync`. Each fsync flushes the entire dirty page range for that file descriptor.
-- Log rotation or monitoring agents reading large files, displacing page cache and causing re-reads elsewhere.
-- `O_DIRECT` I/O bypassing the page cache: `wchar` ≈ `write_bytes` is the signature (no buffering gap).
-- SQLite or other embedded databases with aggressive WAL flushing.
+- アプリケーションが書き込みのたびに `fsync()` を呼んでいる: `strace -e fsync` で確認する。各fsyncは、そのファイルディスクリプタのdirtyページ範囲全体をフラッシュする。
+- ログのローテーションや監視エージェントが大きなファイルを読み、ページキャッシュを押し出して、別の場所での再読み込みを引き起こしている。
+- `O_DIRECT` のI/Oがページキャッシュをバイパスしている: `wchar` ≈ `write_bytes` がその特徴である（バッファリングによる差がない）。
+- SQLiteなどの組み込みデータベースが積極的にWALをフラッシュしている。
 
 ```bash
-# Check for O_DIRECT file descriptors
+# O_DIRECTのファイルディスクリプタを確認する
 ls -la /proc/$pid/fd | xargs -I{} sh -c 'fdinfo=$(cat /proc/$pid/fdinfo/{} 2>/dev/null); echo "$fdinfo" | grep -i "flags.*0100000"'
 
-# Or more conveniently:
+# あるいはもっと手軽に:
 for fd in /proc/$pid/fd/*; do
     flags=$(awk '/^flags:/{print $2}' /proc/$pid/fdinfo/$(basename $fd) 2>/dev/null)
-    # O_DIRECT is 0100000 (octal) = 0x8000
+    # O_DIRECTは0100000（8進数）= 0x8000
     [ -n "$flags" ] && printf '%d\n' "0x$flags" | grep -q '^[0-9]' && \
       echo "fd $(basename $fd): flags=$flags"
 done
@@ -898,57 +898,57 @@ done
 
 ---
 
-## Quick Reference: Tool Selection {#quick-reference-tool-selection}
+## クイックリファレンス: ツールの選び方 {#quick-reference-tool-selection}
 
-| Question | Tool |
+| 問い | ツール |
 |----------|------|
-| Is the device saturated? | `iostat -x 1` — watch `%util`, `r_await`, `w_await` |
-| Which process is doing the I/O? | `iotop -o` or `/proc/PID/io` deltas |
-| Where in the block stack is latency added? | `blktrace` + `btt` for Q2G/G2I/I2D/D2C breakdown |
-| Which inode is generating writeback? | `writeback:writeback_single_inode` tracepoint |
-| Is dirty writeback keeping up? | `Dirty:` in `/proc/meminfo`; `nr_dirtied` vs `nr_written` in `/proc/vmstat` |
-| Is I/O stalling the workload? | `/proc/pressure/io` PSI values |
-| Is the page cache being thrashed? | `filemap:mm_filemap_delete_from_page_cache` rate; `pgmajfault` in `/proc/vmstat` |
-| What call stack is causing I/O? | `perf record -e block:block_rq_issue -ag` |
-| Are writes amplified by fsync? | `strace -e fsync,fdatasync`; `block_rq_issue` count vs `write()` count |
-| Per-device writeback tuning | `/sys/class/bdi/<dev>/max_ratio`, `read_ahead_kb` |
+| デバイスは飽和しているか？ | `iostat -x 1` — `%util`、`r_await`、`w_await` を監視する |
+| どのプロセスがI/Oを行っているか？ | `iotop -o` または `/proc/PID/io` の差分 |
+| ブロックスタックのどこでレイテンシが加わっているか？ | Q2G/G2I/I2D/D2Cの内訳を得るための `blktrace` + `btt` |
+| どのinodeがライトバックを生んでいるか？ | `writeback:writeback_single_inode` tracepoint |
+| dirtyページのライトバックは追いついているか？ | `/proc/meminfo` の `Dirty:`、`/proc/vmstat` の `nr_dirtied` と `nr_written` |
+| I/Oがワークロードを停止させているか？ | `/proc/pressure/io` のPSIの値 |
+| ページキャッシュがスラッシングしているか？ | `filemap:mm_filemap_delete_from_page_cache` のレート、`/proc/vmstat` の `pgmajfault` |
+| どのコールスタックがI/Oを引き起こしているか？ | `perf record -e block:block_rq_issue -ag` |
+| fsyncによって書き込みが増幅されているか？ | `strace -e fsync,fdatasync`、`block_rq_issue` の回数と `write()` の回数 |
+| デバイスごとのライトバックのチューニング | `/sys/class/bdi/<dev>/max_ratio`、`read_ahead_kb` |
 
 ---
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`block/genhd.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/genhd.c) | `/proc/diskstats` output generation |
-| [`kernel/trace/blktrace.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/blktrace.c) | blktrace in-kernel tracing infrastructure |
-| [`include/trace/events/block.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/block.h) | Block layer tracepoint definitions |
-| [`include/trace/events/writeback.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/writeback.h) | Writeback tracepoint definitions |
-| [`include/trace/events/filemap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/filemap.h) | Page cache tracepoint definitions |
-| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | Dirty page throttling and writeback control |
-| [`mm/backing-dev.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/backing-dev.c) | BDI (backing device info) subsystem |
-| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | Pressure Stall Information implementation |
-| [`fs/proc/base.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/base.c) | `/proc/PID/io` accounting |
-| [`include/linux/task_io_accounting.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/task_io_accounting.h) | Per-task I/O accounting struct |
+| [`block/genhd.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/genhd.c) | `/proc/diskstats` の出力生成 |
+| [`kernel/trace/blktrace.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/blktrace.c) | blktraceのカーネル内トレーシング基盤 |
+| [`include/trace/events/block.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/block.h) | ブロック層のtracepoint定義 |
+| [`include/trace/events/writeback.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/writeback.h) | ライトバックのtracepoint定義 |
+| [`include/trace/events/filemap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/filemap.h) | ページキャッシュのtracepoint定義 |
+| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | dirtyページのスロットリングとライトバック制御 |
+| [`mm/backing-dev.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/backing-dev.c) | BDI（backing device info）サブシステム |
+| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | Pressure Stall Informationの実装 |
+| [`fs/proc/base.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/base.c) | `/proc/PID/io` の集計 |
+| [`include/linux/task_io_accounting.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/task_io_accounting.h) | タスクごとのI/O集計の構造体 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/block/stat.rst`](https://docs.kernel.org/block/stat.html) — official documentation for `/proc/diskstats` and `/sys/block/<dev>/stat` fields
-- [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html) — all `vm.*` sysctl parameters including dirty writeback tuning
-- [`Documentation/accounting/psi.rst`](https://docs.kernel.org/accounting/psi.html) — PSI design, interpretation, and notification interface
+- [`Documentation/block/stat.rst`](https://docs.kernel.org/block/stat.html) — `/proc/diskstats` と `/sys/block/<dev>/stat` のフィールドに関する公式ドキュメント
+- [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html) — dirtyページのライトバックのチューニングを含む、すべての `vm.*` sysctlパラメータ
+- [`Documentation/accounting/psi.rst`](https://docs.kernel.org/accounting/psi.html) — PSIの設計、解釈、通知インターフェース
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [page-cache-writeback.md](page-cache-writeback.md) — how dirty pages are managed and flushed
-- [buffered-io.md](buffered-io.md) — the full buffered write path from `write()` to storage
-- [readahead.md](readahead.md) — how the kernel prefetches pages and how to tune readahead
-- [direct-io.md](direct-io.md) — O_DIRECT I/O: bypassing the page cache and its trade-offs
+- [page-cache-writeback.md](page-cache-writeback.md) — dirtyページがどのように管理・フラッシュされるか
+- [buffered-io.md](buffered-io.md) — `write()` からストレージまでのバッファード書き込みの全経路
+- [readahead.md](readahead.md) — カーネルがページをどのように先読みするか、readaheadをどうチューニングするか
+- [direct-io.md](direct-io.md) — O_DIRECT I/O: ページキャッシュのバイパスとそのトレードオフ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Tracking pressure-stall information](https://lwn.net/Articles/759781/) — design and motivation for PSI
-- [LWN: The io.weight I/O-bandwidth controller](https://lwn.net/Articles/792256/) — cgroup v2 I/O-bandwidth controller
-- [LWN: The multiqueue block layer](https://lwn.net/Articles/552904/) — blk-mq design
+- [Tracking pressure-stall information](https://lwn.net/Articles/759781/) — PSIの設計と動機
+- [LWN: The io.weight I/O-bandwidth controller](https://lwn.net/Articles/792256/) — cgroup v2のI/O帯域コントローラ
+- [LWN: The multiqueue block layer](https://lwn.net/Articles/552904/) — blk-mqの設計
