@@ -1,8 +1,8 @@
-# Writing and Loading Kernel Modules {#writing-and-loading-kernel-modules}
+# カーネルモジュールの作成とロード {#writing-and-loading-kernel-modules}
 
-> The lifecycle of a kernel module from source to running code
+> ソースから実行中のコードに至るまでのカーネルモジュールのライフサイクル
 
-## A minimal kernel module {#a-minimal-kernel-module}
+## 最小のカーネルモジュール {#a-minimal-kernel-module}
 
 ```c
 /* hello.c */
@@ -12,8 +12,8 @@
 
 static int __init hello_init(void)
 {
-    pr_info("Hello, kernel!\n");  /* prints to kernel log */
-    return 0;                      /* non-zero = load failed */
+    pr_info("Hello, kernel!\n");  /* カーネルログに出力する */
+    return 0;                      /* 非0 = ロード失敗 */
 }
 
 static void __exit hello_exit(void)
@@ -34,7 +34,7 @@ MODULE_VERSION("1.0");
 # Makefile
 obj-m := hello.o
 
-# If source is out-of-tree:
+# ソースがツリー外にある場合:
 KDIR ?= /lib/modules/$(shell uname -r)/build
 
 all:
@@ -45,24 +45,24 @@ clean:
 ```
 
 ```bash
-# Build
+# ビルド
 make
 
-# Load
+# ロード
 sudo insmod hello.ko
 
-# Check output
+# 出力を確認
 dmesg | tail -3
 # [12345.678] Hello, kernel!
 
-# Unload
+# アンロード
 sudo rmmod hello
 
 dmesg | tail -3
 # [12346.789] Goodbye, kernel!
 ```
 
-## Module lifecycle {#module-lifecycle}
+## モジュールのライフサイクル {#module-lifecycle}
 
 ```
 insmod/modprobe                                rmmod
@@ -70,43 +70,43 @@ insmod/modprobe                                rmmod
     ▼                                              ▼
 load_module()                                  delete_module()
     │                                              │
-    ├── module_sig_check()                         ├── refcount must be 0
+    ├── module_sig_check()                         ├── 参照カウントが0でなければならない
     ├── elf_validity_cache_copy()                  │   (try_stop_module)
     ├── early_mod_check()                          ├── mod->exit()
-    │     └── parse .modinfo, check vermagic       │
+    │     └── .modinfoを解析し、vermagicを確認     │
     ├── layout_and_allocate()                      └── free_module()
     │     └── layout_sections()                        └── free_mod_mem()
     ├── add_unformed_module()                              └── module_memory_free()
     ├── module_augment_kernel_taints()                         └── execmem_free(mem->base)
-    │     └── MODULE_LICENSE check (kernel taint set here)
+    │     └── MODULE_LICENSEの確認（カーネルのtaintはここで設定される）
     ├── find_module_sections()   /* mod->syms, crcs, flagstab */
     ├── simplify_symbols() / apply_relocations()
     ├── complete_formation()
-    │     └── MODULE_STATE_COMING: module now visible in
-    │         /proc/modules; symbols exported to other modules
+    │     └── MODULE_STATE_COMING: モジュールが/proc/modulesに
+    │         見えるようになり、シンボルが他のモジュールにエクスポートされる
     │
-    └── return do_init_module(mod);   /* final statement of load_module() */
-        │  (runs mod->init)
-        ├── return 0: MODULE_STATE_LIVE
-        └── return -errno: module unloaded immediately
+    └── return do_init_module(mod);   /* load_module()の最後の文 */
+        │  (mod->initを実行)
+        ├── 0を返す: MODULE_STATE_LIVE
+        └── -errnoを返す: モジュールは即座にアンロードされる
 ```
 
-## Module sections {#module-sections}
+## モジュールのセクション {#module-sections}
 
-A module `.ko` file is an ELF with special sections:
+モジュールの `.ko` ファイルは、特殊なセクションを持つELFである。
 
 ```bash
 objdump -h hello.ko | grep -E "(\.init|\.exit|\.text|\.data|\.rodata|__param|\.modinfo)"
-# .init.text   contains hello_init() (freed after module loads)
-# .exit.text   contains hello_exit() (kept until module unloads)
-# .text        normal code
-# .data        read-write data
-# .rodata      read-only data
-# __param      module_param definitions
-# .modinfo     MODULE_LICENSE, MODULE_AUTHOR, etc.
+# .init.text   hello_init()を含む（モジュールのロード後に解放される）
+# .exit.text   hello_exit()を含む（モジュールのアンロードまで保持される）
+# .text        通常のコード
+# .data        読み書き可能なデータ
+# .rodata      読み取り専用データ
+# __param      module_paramの定義
+# .modinfo     MODULE_LICENSE、MODULE_AUTHORなど
 ```
 
-The `__init` attribute marks functions that should be freed after the module init runs (saving memory). Similarly `__exit` code can be discarded on permanent modules.
+`__init` 属性は、モジュールのinitが実行された後に解放すべき関数を示す（メモリの節約になる）。同様に `__exit` のコードは、アンロードされない常駐モジュールでは破棄できる。
 
 ## /proc/modules {#procmodules}
 
@@ -117,150 +117,151 @@ lsmod
 # ptp                   28672  1 e1000e
 
 cat /proc/modules
-# e1000e 262144 0 - Live 0xffffffffc0400000 (illustrative only -- a
-#   stock distro-signed e1000e has no taint flags; (OE) would mean an
-#   out-of-tree, unsigned build)
-# Field: name size refcount deps state address (flags)
-# Flags: O=out-of-tree, E=unsigned, F=forced
+# e1000e 262144 0 - Live 0xffffffffc0400000 （説明用の例にすぎない --
+#   ディストリビューションが署名した標準のe1000eにはtaintフラグはない。
+#   (OE)はツリー外の未署名ビルドを意味する）
+# フィールド: 名前 サイズ 参照カウント 依存 状態 アドレス (フラグ)
+# フラグ: O=ツリー外, E=未署名, F=強制ロード
 
-# See module dependencies
+# モジュールの依存関係を見る
 cat /lib/modules/$(uname -r)/modules.dep | grep e1000e
 ```
 
-## The module struct in the kernel {#the-module-struct-in-the-kernel}
+## カーネル内のmodule構造体 {#the-module-struct-in-the-kernel}
 
 ```c
 /* include/linux/module.h */
 struct module {
     enum module_state state;       /* MODULE_STATE_LIVE/COMING/GOING/UNFORMED */
-    struct list_head  list;        /* linked into modules list */
+    struct list_head  list;        /* modulesリストにつながれる */
     char              name[MODULE_NAME_LEN];
 
     struct module_kobject mkobj;   /* /sys/module/name/ */
     struct module_attribute *modinfo_attrs;
 
     const char       *version;
-    const char       *srcversion;  /* source hash */
-    const char       *imported_namespaces;  /* MODULE_IMPORT_NS() list */
+    const char       *srcversion;  /* ソースのハッシュ */
+    const char       *imported_namespaces;  /* MODULE_IMPORT_NS()のリスト */
     struct kobject   *holders_dir; /* /sys/module/name/holders/ */
 
-    /* Exported symbols — one table covers both plain and GPL-only
-     * exports; flagstab[i] holds the flag byte (KSYM_FLAG_GPL_ONLY)
-     * for syms[i]. There is no separate gpl_syms/gpl_crcs table. */
+    /* エクスポートされたシンボル — 通常のエクスポートとGPL専用の
+     * エクスポートの両方を1つのテーブルで扱う。flagstab[i]はsyms[i]の
+     * フラグバイト（KSYM_FLAG_GPL_ONLY）を保持する。gpl_syms/gpl_crcsの
+     * ような別テーブルは存在しない。 */
     const struct kernel_symbol *syms;
     const u32                  *crcs;
     const u8                   *flagstab;
     unsigned int                num_syms;
 
-    /* Parameters: */
+    /* パラメータ: */
     struct kernel_param *kp;
     unsigned int num_kp;
 
-    /* Set once this module resolves any GPL-only symbol: */
+    /* このモジュールがGPL専用シンボルを1つでも解決したら設定される: */
     bool using_gplonly_symbols;
 
-    /* Startup function (not under CONFIG_MODULE_UNLOAD): */
+    /* 起動関数（CONFIG_MODULE_UNLOADの配下ではない）: */
     int (*init)(void);
 
-    /* Module memory: one entry per region — MOD_TEXT, MOD_DATA,
+    /* モジュールのメモリ: 領域ごとに1エントリ — MOD_TEXT, MOD_DATA,
      * MOD_RODATA, MOD_RO_AFTER_INIT, MOD_INIT_TEXT, MOD_INIT_DATA,
-     * MOD_INIT_RODATA. This replaced the older core_layout/init_layout
-     * pair of struct module_layout in 6.4; struct module_layout is gone. */
+     * MOD_INIT_RODATA。6.4で、以前のstruct module_layoutによる
+     * core_layout/init_layoutの組を置き換えた。struct module_layoutは廃止された。 */
     struct module_memory mem[MOD_MEM_NUM_TYPES] __module_memory_align;
 
-    /* Tracepoints: */
+    /* tracepoint: */
 #ifdef CONFIG_TRACEPOINTS
     unsigned int      num_tracepoints;
     tracepoint_ptr_t *tracepoints_ptrs;
 #endif
 
 #ifdef CONFIG_MODULE_UNLOAD
-    struct list_head source_list;  /* modules that depend on me */
-    struct list_head target_list;  /* modules I depend on */
-    void (*exit)(void);            /* destruction function */
-    atomic_t refcnt;               /* module reference count */
+    struct list_head source_list;  /* 自分に依存するモジュール */
+    struct list_head target_list;  /* 自分が依存するモジュール */
+    void (*exit)(void);            /* 破棄関数 */
+    atomic_t refcnt;               /* モジュールの参照カウント */
 #endif
     /* ... */
 };
 ```
 
-## pr_* logging {#pr_-logging}
+## pr_* によるログ出力 {#pr_-logging}
 
 ```c
-/* Logging macros (prefer these over printk directly): */
-pr_emerg("...");   /* KERN_EMERG — system is unusable */
-pr_alert("...");   /* KERN_ALERT — action must be taken immediately */
+/* ログ出力マクロ（printkを直接使うよりこちらを推奨）: */
+pr_emerg("...");   /* KERN_EMERG — システムが使用不能 */
+pr_alert("...");   /* KERN_ALERT — 直ちに対処が必要 */
 pr_crit("...");    /* KERN_CRIT */
-pr_err("...");     /* KERN_ERR — error conditions */
+pr_err("...");     /* KERN_ERR — エラー状態 */
 pr_warn("...");    /* KERN_WARNING */
 pr_notice("...");  /* KERN_NOTICE */
 pr_info("...");    /* KERN_INFO */
-pr_debug("...");   /* KERN_DEBUG — compiled out unless CONFIG_DYNAMIC_DEBUG (runtime-switchable) or DEBUG is defined */
+pr_debug("...");   /* KERN_DEBUG — CONFIG_DYNAMIC_DEBUG（実行時に切り替え可能）またはDEBUGが定義されていない限りコンパイル時に除去される */
 
-/* Device-specific logging (prefixes with device name): */
+/* デバイス固有のログ出力（デバイス名を前置する）: */
 dev_err(&pdev->dev, "failed to allocate: %d\n", ret);
-dev_info(&pdev->dev, "initialized at %px\n", base);  /* %p alone prints a
-                                                        hashed, useless
-                                                        value since 4.15 */
+dev_info(&pdev->dev, "initialized at %px\n", base);  /* 4.15以降、%pだけでは
+                                                        ハッシュ化された役に立たない
+                                                        値が出力される */
 
-/* Rate-limited logging: */
+/* レート制限付きのログ出力: */
 pr_info_ratelimited("too many events\n");
 
-/* Dynamic debug: selectively enable at runtime */
+/* Dynamic debug: 実行時に選択的に有効化する */
 /* echo "module hello +p" > /proc/dynamic_debug/control */
 pr_debug("This only shows when enabled dynamically\n");
 ```
 
-## Module signing {#module-signing}
+## モジュール署名 {#module-signing}
 
-Modern kernels can enforce that modules are signed by a trusted key:
+最近のカーネルは、モジュールが信頼された鍵で署名されていることを強制できる。
 
 ```bash
-# Check if kernel requires signed modules
-cat /sys/module/module/parameters/sig_enforce  # Y = unsigned modules rejected
+# カーネルが署名済みモジュールを要求するか確認する
+cat /sys/module/module/parameters/sig_enforce  # Y = 未署名モジュールは拒否される
 
-# Unrelated kill switch: blocks ALL module loading *and* unloading once set
-cat /proc/sys/kernel/modules_disabled  # 0=allow, 1=no init_module/finit_module/delete_module (irreversible)
+# 無関係なキルスイッチ: 一度設定するとモジュールのロード*と*アンロードをすべて禁止する
+cat /proc/sys/kernel/modules_disabled  # 0=許可, 1=init_module/finit_module/delete_module不可（元に戻せない）
 
-# Sign a module
+# モジュールに署名する
 /usr/src/linux-headers-$(uname -r)/scripts/sign-file \
     sha256 signing_key.pem signing_key.x509 hello.ko
 
-# Check module signature
+# モジュールの署名を確認する
 modinfo hello.ko | grep sig
 
-# Kernel boot params:
-# module.sig_enforce=1   — require signature (any unsigned module is rejected)
+# カーネルのブートパラメータ:
+# module.sig_enforce=1   — 署名を要求する（未署名のモジュールはすべて拒否される）
 ```
 
-## Module debugging {#module-debugging}
+## モジュールのデバッグ {#module-debugging}
 
 ```bash
-# Dynamic debug: enable pr_debug() for a module
-# Control file: /proc/dynamic_debug/control, or the equivalent
-# /sys/kernel/debug/dynamic_debug/control when debugfs is enabled
+# Dynamic debug: モジュールのpr_debug()を有効にする
+# 制御ファイル: /proc/dynamic_debug/control、またはdebugfsが有効なら
+# 同等の/sys/kernel/debug/dynamic_debug/control
 echo "module hello +p" > /proc/dynamic_debug/control
 echo "file hello.c +p" > /proc/dynamic_debug/control
 echo "func hello_init +p" > /proc/dynamic_debug/control
 
-# Show all dynamic debug settings
+# dynamic debugの設定をすべて表示する
 cat /proc/dynamic_debug/control
 
-# KASAN for memory errors (CONFIG_KASAN=y)
-# Load module and trigger bug → KASAN reports use-after-free, etc.
+# メモリエラーにはKASAN（CONFIG_KASAN=y）
+# モジュールをロードしてバグを起こす → KASANがuse-after-freeなどを報告する
 
-# Check module's kallsyms
+# モジュールのkallsymsを確認する
 grep hello /proc/kallsyms
 # ffffffffc0401000 t hello_exit [hello]
-# Note: hello_init does NOT show up here. do_init_module() switches
-# mod->kallsyms over to core_kallsyms once init has run, and that table
-# excludes every symbol living in an init-type section — so __init
-# symbols vanish as soon as the module finishes loading.
+# 注意: hello_initはここには表示されない。do_init_module()はinitの実行後に
+# mod->kallsymsをcore_kallsymsへ切り替え、そのテーブルはinit系セクションに
+# あるシンボルをすべて除外する — そのため__initシンボルはモジュールの
+# ロードが完了した時点で消える。
 
-# Crash debugging with gdb: the section base comes from sysfs, not from a
-# symbol address (this module's only two functions are __init/__exit, so
-# .text itself is empty and has no sysfs entry -- read .exit.text instead,
-# since hello_exit is what's still resident and is what we're debugging)
+# gdbによるクラッシュのデバッグ: セクションのベースアドレスはシンボルの
+# アドレスではなくsysfsから得る（このモジュールの関数は__init/__exitの2つだけなので
+# .text自体は空でsysfsのエントリもない -- 代わりに.exit.textを読む。
+# 常駐し続けていてデバッグ対象なのはhello_exitだからである）
 cat /sys/module/hello/sections/.exit.text
 # 0xffffffffc0401000
 gdb vmlinux
@@ -268,44 +269,44 @@ gdb vmlinux
 (gdb) list hello_exit
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — the loader core: `load_module()`, `layout_sections()`, `do_init_module()` (which calls the module's `init` function), and `free_module()` on the unload path
-- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module` itself, plus the `module_init()`/`module_exit()` and `MODULE_LICENSE()`/`MODULE_AUTHOR()`/`MODULE_DESCRIPTION()`/`MODULE_VERSION()` macros used by the hello-world example
-- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — where `__init` and `__exit` are defined as `__section(".init.text")` and `__section(".exit.text")`, the attributes behind the discardable-section behaviour described above
-- [include/linux/moduleparam.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/moduleparam.h) — `MODULE_INFO()` emitting into the `.modinfo` section, and `module_param()` emitting into `__param`; the two sections `objdump` shows above
-- [kernel/module/procfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/procfs.c) — generates the `/proc/modules` line format: name, size, refcount, dependency list, `Live`/`Loading`/`Unloading` state, base address, and taint flags
-- [include/linux/printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/printk.h) — the `pr_emerg()` … `pr_debug()` family and `pr_info_ratelimited()`
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — ローダのコア: `load_module()`、`layout_sections()`、`do_init_module()`（モジュールの `init` 関数を呼ぶ）、およびアンロード経路の `free_module()`
+- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `struct module` 本体と、hello worldの例で使った `module_init()`/`module_exit()` および `MODULE_LICENSE()`/`MODULE_AUTHOR()`/`MODULE_DESCRIPTION()`/`MODULE_VERSION()` マクロ
+- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — `__init` と `__exit` が `__section(".init.text")` と `__section(".exit.text")` として定義されている場所。上で説明した破棄可能セクションの挙動の背後にある属性である
+- [include/linux/moduleparam.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/moduleparam.h) — `.modinfo` セクションに出力する `MODULE_INFO()` と、`__param` に出力する `module_param()`。上の `objdump` が示す2つのセクションである
+- [kernel/module/procfs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/procfs.c) — `/proc/modules` の行形式（名前、サイズ、参照カウント、依存リスト、`Live`/`Loading`/`Unloading` の状態、ベースアドレス、taintフラグ）を生成する
+- [include/linux/printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/printk.h) — `pr_emerg()` … `pr_debug()` のファミリーと `pr_info_ratelimited()`
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`insmod(8)`](https://man7.org/linux/man-pages/man8/insmod.8.html) — the "trivial program to insert a module"; points readers at `modprobe(8)`, which is what handles module dependencies
-- [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — unloading, and why `-f`/`--force` needs `CONFIG_MODULE_FORCE_UNLOAD`
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — dependency-aware loading via `modules.dep.bin`, and `-r` to remove a module plus its now-unused dependencies
-- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — dumps the `.modinfo` fields (`license`, `author`, `description`, `parm`, `depends`, `alias`, `filename`); note that kmod also prints the `sig*` signature fields, which this man page does not document
-- [`lsmod(8)`](https://man7.org/linux/man-pages/man8/lsmod.8.html) — the formatted view of `/proc/modules` shown above
-- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — builds the `modules.dep` file that `modprobe` reads
+- [`insmod(8)`](https://man7.org/linux/man-pages/man8/insmod.8.html) — 「モジュールを挿入する単純なプログラム」。モジュールの依存関係を扱う `modprobe(8)` を参照するよう案内している
+- [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — アンロードと、`-f`/`--force` に `CONFIG_MODULE_FORCE_UNLOAD` が必要な理由
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — `modules.dep.bin` による依存関係を考慮したロードと、モジュールとそれによって使われなくなった依存モジュールを削除する `-r`
+- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `.modinfo` のフィールド（`license`、`author`、`description`、`parm`、`depends`、`alias`、`filename`）を出力する。kmodは `sig*` の署名フィールドも出力するが、このmanページには記載されていない点に注意
+- [`lsmod(8)`](https://man7.org/linux/man-pages/man8/lsmod.8.html) — 上で示した `/proc/modules` を整形して表示する
+- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — `modprobe` が読む `modules.dep` ファイルを生成する
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Module Loading Internals](module-loading-internals.md) — what `load_module()` actually does between the ELF arriving and `init` being called
-- [Parameters, Symbols, and Kconfig](module-params.md) — `module_param()` and `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`
-- [Module Signing](module-signing.md) — the signature-enforcement machinery sketched in the signing section above
-- [Kbuild](kbuild.md) — how `obj-m` and the out-of-tree `M=$PWD` build actually work
-- [Dynamic Debug](dynamic-debug.md) — the full query syntax behind `echo "module hello +p"`
-- [Platform Drivers](../drivers/platform-driver.md) — most drivers are modules
-- [BPF Verifier](../bpf/bpf-verifier.md) — how the kernel admits untrusted extension code without the `.ko` load path: static verification instead of signature and symbol checks
+- [モジュールロードの内部](module-loading-internals.md) — ELFが届いてから `init` が呼ばれるまでの間に `load_module()` が実際に何をしているか
+- [パラメータ、シンボル、Kconfig](module-params.md) — `module_param()` と `EXPORT_SYMBOL`/`EXPORT_SYMBOL_GPL`
+- [モジュール署名](module-signing.md) — 上の署名のセクションで概略を示した署名強制の仕組み
+- [Kbuild](kbuild.md) — `obj-m` とツリー外の `M=$PWD` ビルドが実際にどう動くか
+- [Dynamic Debug](dynamic-debug.md) — `echo "module hello +p"` の背後にある完全なクエリ構文
+- [プラットフォームドライバ](../drivers/platform-driver.md) — ほとんどのドライバはモジュールである
+- [BPF検証器](../bpf/bpf-verifier.md) — `.ko` のロード経路を使わずに、カーネルが信頼できない拡張コードを受け入れる方法: 署名やシンボルの確認の代わりに静的検証を行う
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — Jonathan Corbet, November 2024: why `MODULE_LICENSE("GPL")` is a load-bearing declaration rather than a formality, covering the GPLv3-declared-as-GPL dispute and per-module symbol export namespaces
-- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — Jonathan Corbet, June 2023: how memory for module text is allocated, and the work replacing `module_alloc()` with a shared executable-memory allocator
+- [Two approaches to tightening restrictions on loadable modules](https://lwn.net/Articles/998221/) — Jonathan Corbet、2024年11月: `MODULE_LICENSE("GPL")` が形式的なものではなく実際に効力を持つ宣言である理由。GPLv3をGPLと宣言した件をめぐる論争や、モジュールごとのシンボルエクスポート名前空間を扱う
+- [Yet another memory allocator for executable code](https://lwn.net/Articles/933867/) — Jonathan Corbet、2023年6月: モジュールのテキスト用メモリがどのように割り当てられるか、そして `module_alloc()` を共有の実行可能メモリアロケータで置き換える取り組み
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Building External Modules — The Linux Kernel documentation](https://docs.kernel.org/kbuild/modules.html) — the upstream reference for the `obj-m` and `make -C $KDIR M=$PWD modules` pattern used in the Makefile above
-- [Kernel module signing facility — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/module-signing.html) — `scripts/sign-file`, `module.sig_enforce=1`, and `CONFIG_MODULE_SIG_FORCE`
-- [Dynamic debug — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — the `module`/`file`/`func` query language and `+p` flag for enabling `pr_debug()` at runtime
-- [Message logging with printk — The Linux Kernel documentation](https://docs.kernel.org/core-api/printk-basics.html) — the `KERN_*` log levels behind each `pr_*()` macro, and `pr_fmt()` for prefixing a module's messages
+- [Building External Modules — The Linux Kernel documentation](https://docs.kernel.org/kbuild/modules.html) — 上のMakefileで使った `obj-m` と `make -C $KDIR M=$PWD modules` のパターンに関するアップストリームのリファレンス
+- [Kernel module signing facility — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/module-signing.html) — `scripts/sign-file`、`module.sig_enforce=1`、`CONFIG_MODULE_SIG_FORCE`
+- [Dynamic debug — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — 実行時に `pr_debug()` を有効にするための `module`/`file`/`func` のクエリ言語と `+p` フラグ
+- [Message logging with printk — The Linux Kernel documentation](https://docs.kernel.org/core-api/printk-basics.html) — 各 `pr_*()` マクロの背後にある `KERN_*` ログレベルと、モジュールのメッセージに接頭辞を付ける `pr_fmt()`

@@ -1,47 +1,47 @@
-# Kernel Modules {#kernel-modules}
+# カーネルモジュール {#kernel-modules}
 
-> Dynamically loadable code that extends the kernel
+> カーネルを拡張する、動的にロード可能なコード
 
-## What kernel modules are {#what-kernel-modules-are}
+## カーネルモジュールとは {#what-kernel-modules-are}
 
-A kernel module is an ELF shared object loaded into the kernel at runtime. Modules:
+カーネルモジュールとは、実行時にカーネルへロードされるELF共有オブジェクトである。モジュールは次の性質を持つ。
 
-- Share the kernel's address space and run at ring 0 (full privilege)
-- Can export and use symbols from other modules or the core kernel
-- Are loaded by `insmod`/`modprobe` and removed by `rmmod`
-- Have an init function called on load and an exit function called on unload
+- カーネルのアドレス空間を共有し、ring 0（完全な特権）で動作する
+- 他のモジュールやコアカーネルのシンボルをエクスポートしたり利用したりできる
+- `insmod`/`modprobe` でロードされ、`rmmod` で削除される
+- ロード時に呼ばれるinit関数と、アンロード時に呼ばれるexit関数を持つ
 
-Most device drivers, filesystems, and network protocols ship as modules.
+ほとんどのデバイスドライバ、ファイルシステム、ネットワークプロトコルはモジュールとして提供される。
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Writing and Loading Modules](module-basics.md) | module_init/exit, lifecycle, /proc/modules, debugging |
-| [Parameters, Symbols, and Kconfig](module-params.md) | module_param, EXPORT_SYMBOL, Kconfig integration |
-| [Module Signing](module-signing.md) | CONFIG_MODULE_SIG, PKCS#7, key enrollment, verification flow |
-| [Kbuild Build System](kbuild.md) | Makefile structure, Kconfig, out-of-tree builds, cross-compilation |
-| [Module Loading Internals](module-loading-internals.md) | load_module(), ELF parsing, relocation, symbol resolution, versioning |
-| [Dynamic Debug](dynamic-debug.md) | pr_debug/dev_dbg, __dyndbg section, runtime control via debugfs |
-| [War Stories](war-stories.md) | CRC mismatches, signing failures, taint cascades, init use-after-free |
+| [モジュールの作成とロード](module-basics.md) | module_init/exit、ライフサイクル、/proc/modules、デバッグ |
+| [パラメータ、シンボル、Kconfig](module-params.md) | module_param、EXPORT_SYMBOL、Kconfigとの統合 |
+| [モジュール署名](module-signing.md) | CONFIG_MODULE_SIG、PKCS#7、鍵の登録、検証フロー |
+| [Kbuildビルドシステム](kbuild.md) | Makefileの構造、Kconfig、ツリー外ビルド、クロスコンパイル |
+| [モジュールロードの内部](module-loading-internals.md) | load_module()、ELF解析、再配置、シンボル解決、バージョニング |
+| [Dynamic Debug](dynamic-debug.md) | pr_debug/dev_dbg、__dyndbgセクション、debugfs経由の実行時制御 |
+| [事件簿](war-stories.md) | CRC不一致、署名の失敗、taintの連鎖、initのuse-after-free |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Load a module
+# モジュールをロードする
 insmod ./mymodule.ko
-modprobe e1000e      # load with dependencies
+modprobe e1000e      # 依存関係も含めてロード
 
-# Unload
+# アンロード
 rmmod mymodule
-modprobe -r e1000e   # remove with unused dependencies
+modprobe -r e1000e   # 使われなくなった依存モジュールも含めて削除
 
-# List loaded modules
+# ロード済みモジュールを一覧表示
 lsmod
 
-# Module info
+# モジュール情報
 modinfo e1000e
 
-# Check kernel log for module messages
+# モジュールのメッセージをカーネルログで確認
 dmesg | tail -20
 ```

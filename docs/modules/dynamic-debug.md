@@ -1,44 +1,44 @@
 # Dynamic Debug {#dynamic-debug}
 
-> pr_debug and dev_dbg: enabling kernel debug messages at runtime without recompilation
+> pr_debugとdev_dbg: 再コンパイルなしに実行時にカーネルのデバッグメッセージを有効にする
 
-## The problem with pr_debug {#the-problem-with-pr_debug}
+## pr_debugの問題点 {#the-problem-with-pr_debug}
 
-`pr_debug()` is controlled in two ways:
+`pr_debug()` は2通りの方法で制御される。
 
-- With `CONFIG_DYNAMIC_DEBUG=y`: each `pr_debug()` becomes a dynamically-controllable site (NOP by default, enabled at runtime).
-- Without `CONFIG_DYNAMIC_DEBUG`: `pr_debug()` expands to `printk(KERN_DEBUG ...)` if the `DEBUG` C preprocessor macro is defined for that compilation unit (via `CFLAGS_file.o += -DDEBUG` in the Makefile), or to `no_printk()` (a compile-time no-op) if `DEBUG` is not defined.
+- `CONFIG_DYNAMIC_DEBUG=y` の場合: 各 `pr_debug()` は動的に制御可能なサイトになる（デフォルトではNOPで、実行時に有効化される）。
+- `CONFIG_DYNAMIC_DEBUG` がない場合: `pr_debug()` は、そのコンパイル単位に対して `DEBUG` というCプリプロセッサマクロが定義されていれば（Makefileの `CFLAGS_file.o += -DDEBUG` によって）`printk(KERN_DEBUG ...)` に展開され、`DEBUG` が定義されていなければ `no_printk()`（コンパイル時のno-op）に展開される。
 
-Without `CONFIG_DYNAMIC_DEBUG`, this is an all-or-nothing compile-time switch that floods the log with messages from every subsystem simultaneously.
+`CONFIG_DYNAMIC_DEBUG` がない場合、これはオールオアナッシングのコンパイル時スイッチであり、あらゆるサブシステムからのメッセージが同時にログにあふれることになる。
 
-`CONFIG_DYNAMIC_DEBUG` replaces this with a per-call-site on/off switch controlled at runtime through debugfs. The cost when disabled is a single NOP instruction. There is no need to recompile or reboot to enable debug messages for a specific driver or function.
+`CONFIG_DYNAMIC_DEBUG` は、これを呼び出しサイト単位のオン/オフスイッチに置き換え、debugfsを通じて実行時に制御できるようにする。無効時のコストはNOP命令1つだけである。特定のドライバや関数のデバッグメッセージを有効にするために、再コンパイルや再起動をする必要はない。
 
-Two Kconfig symbols are involved. `CONFIG_DYNAMIC_DEBUG=y` turns the feature on kernel-wide: it selects `CONFIG_DYNAMIC_DEBUG_CORE` *and* catalogs every `pr_debug()`/`dev_dbg()` call site in the build (which costs roughly 2% of kernel text). `CONFIG_DYNAMIC_DEBUG_CORE=y` on its own builds only the machinery — the control file and the query engine — and catalogs nothing. Individual modules then opt in by adding `ccflags-y += -DDYNAMIC_DEBUG_MODULE` to their Makefile; the macros in `include/linux/dynamic_debug.h` are gated on `CONFIG_DYNAMIC_DEBUG || (CONFIG_DYNAMIC_DEBUG_CORE && DYNAMIC_DEBUG_MODULE)`. This split exists for size-sensitive builds, such as embedded systems, that want dynamic debug for a handful of drivers but cannot afford the full catalog.
+関係するKconfigシンボルは2つある。`CONFIG_DYNAMIC_DEBUG=y` はこの機能をカーネル全体で有効にする: `CONFIG_DYNAMIC_DEBUG_CORE` をselectする*とともに*、ビルド内のすべての `pr_debug()`/`dev_dbg()` 呼び出しサイトをカタログ化する（これにはカーネルテキストのおよそ2%のコストがかかる）。`CONFIG_DYNAMIC_DEBUG_CORE=y` 単独では仕組み — 制御ファイルとクエリエンジン — だけがビルドされ、何もカタログ化されない。個々のモジュールは、Makefileに `ccflags-y += -DDYNAMIC_DEBUG_MODULE` を追加することでオプトインする。`include/linux/dynamic_debug.h` のマクロは `CONFIG_DYNAMIC_DEBUG || (CONFIG_DYNAMIC_DEBUG_CORE && DYNAMIC_DEBUG_MODULE)` を条件としている。この分割は、組み込みシステムのようにサイズに敏感なビルドのために存在する。少数のドライバにはdynamic debugが欲しいが、完全なカタログを持つ余裕はない場合である。
 
-## How it works {#how-it-works}
+## 仕組み {#how-it-works}
 
-For every `pr_debug()` and `dev_dbg()` call site in the kernel, the compiler emits:
+カーネル内のすべての `pr_debug()` と `dev_dbg()` の呼び出しサイトについて、コンパイラは次のものを出力する。
 
-1. A `static struct _ddebug` descriptor in the `__dyndbg` section of the object file, containing metadata about that call site.
-2. A NOP instruction at the call site in `.text`, via the jump label (static key) infrastructure.
+1. オブジェクトファイルの `__dyndbg` セクション内の `static struct _ddebug` ディスクリプタ。その呼び出しサイトに関するメタデータを含む。
+2. jump label（static key）基盤による、`.text` 内の呼び出しサイトのNOP命令。
 
-Dynamic debug uses the jump label (static key) infrastructure (`CONFIG_JUMP_LABEL`). Each `pr_debug()` call site has a static key embedded in its `_ddebug` descriptor — the `key` union shown below. When disabled, the site is a NOP (via a `jump_label` that doesn't branch). When enabled, `static_branch_enable()` / `jump_label_update()` patches the NOP to a short jump. The patching is done by the jump label subsystem — dynamic debug itself just calls `static_branch_enable()` or `static_branch_disable()` on `dp->key.dd_key_true`. When disabled, the call site is a NOP with zero runtime overhead.
+dynamic debugはjump label（static key）基盤（`CONFIG_JUMP_LABEL`）を使う。各 `pr_debug()` の呼び出しサイトには、その `_ddebug` ディスクリプタにstatic keyが埋め込まれている — 後述の `key` 共用体である。無効時、そのサイトはNOPである（分岐しない `jump_label` による）。有効化されると、`static_branch_enable()` / `jump_label_update()` がNOPを短いジャンプに書き換える。書き換えはjump labelサブシステムが行う — dynamic debug自身は `dp->key.dd_key_true` に対して `static_branch_enable()` または `static_branch_disable()` を呼ぶだけである。無効時、呼び出しサイトは実行時オーバーヘッドゼロのNOPである。
 
-The two union members are the reason a `key` is a union at all, and the control path and the call site read it differently. `ddebug_change()` always flips `dd_key_true`. The call site, by contrast, expands `DYNAMIC_DEBUG_BRANCH()`, which picks its member from whether the translation unit was compiled with `DEBUG` defined: without it — the normal case — the branch is `static_branch_unlikely(&descriptor.key.dd_key_false)`, initialized off, so the compiler lays the debug call out on the unlikely path; with `-DDEBUG` it becomes `static_branch_likely(&descriptor.key.dd_key_true)`, initialized on, so the site starts out printing and the fast path is the one that logs. Both members alias the same underlying key, so the control file toggles either build identically.
+`key` がそもそも共用体である理由は2つの共用体メンバーにあり、制御経路と呼び出しサイトはこれを異なる方法で読む。`ddebug_change()` は常に `dd_key_true` を切り替える。一方、呼び出しサイトは `DYNAMIC_DEBUG_BRANCH()` を展開し、これは翻訳単位が `DEBUG` を定義してコンパイルされたかどうかでメンバーを選ぶ。定義されていない場合 — 通常のケース — 分岐は `static_branch_unlikely(&descriptor.key.dd_key_false)` で初期状態はオフとなり、コンパイラはデバッグ呼び出しをunlikelyな経路に配置する。`-DDEBUG` の場合は `static_branch_likely(&descriptor.key.dd_key_true)` で初期状態はオンとなり、サイトは出力する状態から始まり、ログを出す側が高速パスになる。両メンバーは同じ下位のキーを別名で参照しているので、制御ファイルはどちらのビルドも同じように切り替える。
 
 ## struct _ddebug {#struct-_ddebug}
 
-Defined in `include/linux/dynamic_debug.h`:
+`include/linux/dynamic_debug.h` で定義されている。
 
 ```c
 struct _ddebug {
-    const char *modname;    /* module name */
-    const char *function;   /* enclosing function name */
-    const char *filename;   /* source file path */
-    const char *format;     /* the format string literal */
-    unsigned int lineno:18; /* source line number */
+    const char *modname;    /* モジュール名 */
+    const char *function;   /* 囲んでいる関数の名前 */
+    const char *filename;   /* ソースファイルのパス */
+    const char *format;     /* フォーマット文字列リテラル */
+    unsigned int lineno:18; /* ソースの行番号 */
     unsigned int class_id:6;
-    unsigned int flags:8;   /* _DPRINTK_FLAGS_* bitmask */
+    unsigned int flags:8;   /* _DPRINTK_FLAGS_* のビットマスク */
 #ifdef CONFIG_JUMP_LABEL
     union {
         struct static_key_true dd_key_true;
@@ -48,9 +48,9 @@ struct _ddebug {
 } __attribute__((aligned(8)));
 ```
 
-The `flags` field tracks which output decorations are enabled for this site (print, line, file, module, thread info, and so on).
+`flags` フィールドは、このサイトでどの出力装飾が有効になっているか（出力、行番号、ファイル、モジュール、スレッド情報など）を記録する。
 
-Descriptors are not searched as one flat global array. Each loadable module carries its own `__dyndbg` section, and `lib/dynamic_debug.c` registers it as a `struct ddebug_table` on the global `ddebug_tables` linked list:
+ディスクリプタは1つのフラットなグローバル配列として検索されるわけではない。ロード可能な各モジュールは自身の `__dyndbg` セクションを持ち、`lib/dynamic_debug.c` はそれを `struct ddebug_table` としてグローバルな `ddebug_tables` 連結リストに登録する。
 
 ```c
 /* lib/dynamic_debug.c */
@@ -65,145 +65,145 @@ static DEFINE_MUTEX(ddebug_lock);
 static LIST_HEAD(ddebug_tables);
 ```
 
-Built-in code is the case where section and table stop being one-to-one. The vmlinux linker script gathers every built-in call site into a *single* bounded `__dyndbg` section, so there is one section for the whole image no matter how many built-in modules contributed to it. `dynamic_debug_init()` then walks that section from `__start___dyndbg` to `__stop___dyndbg` and carves it into many tables: because the descriptors arrive grouped by translation unit, it simply watches for `iter->modname` to change and calls `ddebug_add_module()` for each run of same-named entries. One section in, one `ddebug_table` per distinct `modname` out — matching the per-module tables that loadable modules register through the notifier.
+組み込みコードは、セクションとテーブルが1対1でなくなるケースである。vmlinuxのリンカスクリプトは、組み込みの呼び出しサイトをすべて*単一*の境界付き `__dyndbg` セクションに集めるので、いくつの組み込みモジュールが寄与していてもイメージ全体でセクションは1つである。その後 `dynamic_debug_init()` がこのセクションを `__start___dyndbg` から `__stop___dyndbg` まで走査し、多数のテーブルに切り分ける。ディスクリプタは翻訳単位ごとにまとまって並んでいるので、`iter->modname` が変わるのを監視し、同じ名前のエントリの連続ごとに `ddebug_add_module()` を呼ぶだけでよい。入力はセクション1つ、出力は異なる `modname` ごとに1つの `ddebug_table` — ロード可能モジュールがnotifierを通じて登録するモジュールごとのテーブルと対応する。
 
-So a control command is matched in two nested loops. `ddebug_change()` takes `ddebug_lock` and walks `ddebug_tables`. Per table it does two cheap rejections before looking at any call site: the table's `mod_name` is tested against the query's `module` spec — letting it skip an entire module's descriptors in one comparison — and, if the query carries a `class` spec, `ddebug_find_valid_class()` resolves that class *name* to a numeric `class_id` by searching the table's `maps` list of `ddebug_class_map`s, skipping the whole table if this module never declared that class. It then iterates the `dt->ddebugs[]` array, testing `class_id`, `filename`, `function`, `format`, and `lineno` per call site.
+したがって、制御コマンドは2重のループで照合される。`ddebug_change()` は `ddebug_lock` を取得して `ddebug_tables` を走査する。テーブルごとに、呼び出しサイトを見る前に2つの安価な除外判定を行う: テーブルの `mod_name` をクエリの `module` 指定と照合し — これにより1回の比較でモジュール全体のディスクリプタを飛ばせる — さらにクエリに `class` 指定があれば、`ddebug_find_valid_class()` がテーブルの `ddebug_class_map` の `maps` リストを検索してそのクラス*名*を数値の `class_id` に解決し、このモジュールがそのクラスを宣言していなければテーブル全体を飛ばす。その後 `dt->ddebugs[]` 配列を反復し、呼び出しサイトごとに `class_id`、`filename`、`function`、`format`、`lineno` を判定する。
 
-The class test comes first in that inner loop, and it is not optional: when the query has no `class` spec, `valid_class` defaults to `_DPRINTK_CLASS_DFLT`, and every site whose `class_id` differs is skipped. So an ordinary query never touches class'd call sites — including the `module mymodule +p` form below, which enables that module's unclassed sites only. Reaching a subsystem's classed sites (DRM's debug categories, say) always requires naming the class explicitly.
+その内側のループではクラスの判定が最初に来て、しかもこれは省略できない: クエリに `class` 指定がない場合、`valid_class` はデフォルトで `_DPRINTK_CLASS_DFLT` となり、`class_id` がそれと異なるサイトはすべて飛ばされる。そのため、通常のクエリはクラス付きの呼び出しサイトには一切触れない — 後述の `module mymodule +p` の形式も含め、これはそのモジュールのクラスなしのサイトだけを有効にする。サブシステムのクラス付きサイト（たとえばDRMのデバッグカテゴリ）に届かせるには、常にクラスを明示的に指定する必要がある。
 
-## The control interface {#the-control-interface}
+## 制御インターフェース {#the-control-interface}
 
-The control file is at `/sys/kernel/debug/dynamic_debug/control`. Writing a query string to it enables or disables matching call sites.
+制御ファイルは `/sys/kernel/debug/dynamic_debug/control` にある。これにクエリ文字列を書き込むと、一致する呼び出しサイトが有効または無効になる。
 
-Since v5.7 the same control file is also exposed at `/proc/dynamic_debug/control`, so dynamic debug stays usable on systems that build without debugfs. The two are interchangeable; the examples below use the debugfs path, but upstream documentation now leads with the procfs one.
+v5.7以降、同じ制御ファイルが `/proc/dynamic_debug/control` にも公開されているので、debugfsなしでビルドされたシステムでもdynamic debugを使い続けられる。両者は交換可能である。以下の例ではdebugfsのパスを使うが、アップストリームのドキュメントは現在procfsのほうを先に挙げている。
 
 ```bash
-# Enable a module's unclassed pr_debug() calls
-# (classed sites need an explicit "class" spec — see above)
+# モジュールのクラスなしのpr_debug()呼び出しを有効にする
+# （クラス付きのサイトには明示的な "class" 指定が必要 — 上記参照）
 echo "module mymodule +p" > /sys/kernel/debug/dynamic_debug/control
 
-# Enable by source file (relative path from kernel root)
+# ソースファイルで有効にする（カーネルルートからの相対パス）
 echo "file drivers/net/ethernet/intel/e1000/e1000_main.c +p" \
     > /sys/kernel/debug/dynamic_debug/control
 
-# Enable a line range within a file
+# ファイル内の行範囲を有効にする
 echo "file drivers/net/ethernet/intel/e1000/e1000_main.c line 100-200 +p" \
     > /sys/kernel/debug/dynamic_debug/control
 
-# Enable by function name
+# 関数名で有効にする
 echo "func tcp_recvmsg +p" > /sys/kernel/debug/dynamic_debug/control
 
-# Enable with additional output decorations
-# +p  print the message
-# +f  prefix with the function name
-# +s  prefix with the source file name
-# +l  prefix with line number
-# +m  prefix with module name
-# +t  prefix with the thread ID (or <intr>)
+# 追加の出力装飾付きで有効にする
+# +p  メッセージを出力する
+# +f  関数名を前置する
+# +s  ソースファイル名を前置する
+# +l  行番号を前置する
+# +m  モジュール名を前置する
+# +t  スレッドID（または<intr>）を前置する
 echo "module mymodule +pmfl" > /sys/kernel/debug/dynamic_debug/control
 
-# Disable all call sites in a module
+# モジュール内のすべての呼び出しサイトを無効にする
 echo "module mymodule -p" > /sys/kernel/debug/dynamic_debug/control
 
-# Show current state — one line per registered call site
+# 現在の状態を表示する — 登録された呼び出しサイトごとに1行
 cat /sys/kernel/debug/dynamic_debug/control | grep mymodule
 
-# Show only currently active (printing) sites
+# 現在有効な（出力する）サイトだけを表示する
 grep "=p" /sys/kernel/debug/dynamic_debug/control
 ```
 
-### Query syntax {#query-syntax}
+### クエリ構文 {#query-syntax}
 
-A control string has the form:
+制御文字列は次の形式を持つ。
 
 ```
 [match-spec ...] flags-spec
 ```
 
-Where `match-spec` can be:
+ここで `match-spec` は次のいずれかである。
 
-- `module <name>` — match by module name, as it appears in `lsmod` (no directory, no `.ko`, with `-` changed to `_`)
-- `file <path>` — match by source file. The value is compared against the source-root-relative pathname *or* the basename, so both `file kernel/freezer.c` and `file svcsock.c` work. Two tail forms are also accepted: `file inode.c:start_*` parses the `:tail` as a `func` spec, and `file inode.c:1-100` parses it as a `line` range.
-- `func <name>` — match by function name
-- `line <N>` or `line <N>-<M>` — match by line number or range. Either end may be omitted: `line -1605` means line 1 through 1605, `line 1600-` means line 1600 to end of file. A range must contain no spaces — `1-30` is valid, `1 - 30` is not.
-- `format <string>` — match if the format string contains this substring. A leading `^` anchors the match to the start of the format. Whitespace can be escaped as C octal (`format nfsd:\040SETATTR`) or the whole value quoted (`format "nfsd: SETATTR"`).
-- `class <name>` — match only call sites belonging to a class the module has declared (via a `ddebug_class_map`). Classes let a subsystem group its call sites into named categories that can be toggled together — DRM's debug categories, matched with queries like `class DRM_UT_KMS`, are the main user. This is what the `class_id` bitfield in `struct _ddebug` above selects. An unknown class name is a silent non-match, and class names do *not* accept wildcards.
+- `module <name>` — モジュール名で一致させる。`lsmod` に表示される名前（ディレクトリなし、`.ko` なし、`-` は `_` に変換）を使う
+- `file <path>` — ソースファイルで一致させる。値はソースルートからの相対パス名*または*ベース名と比較されるので、`file kernel/freezer.c` と `file svcsock.c` のどちらも動作する。2つの末尾形式も受け付ける: `file inode.c:start_*` は `:tail` を `func` 指定として解析し、`file inode.c:1-100` はそれを `line` の範囲として解析する。
+- `func <name>` — 関数名で一致させる
+- `line <N>` または `line <N>-<M>` — 行番号または範囲で一致させる。どちらの端も省略できる: `line -1605` は1行目から1605行目まで、`line 1600-` は1600行目からファイル末尾までを意味する。範囲には空白を含めてはならない — `1-30` は有効だが、`1 - 30` は無効である。
+- `format <string>` — フォーマット文字列がこの部分文字列を含む場合に一致する。先頭の `^` は一致をフォーマットの先頭に固定する。空白はCの8進表記でエスケープする（`format nfsd:\040SETATTR`）か、値全体を引用符で囲む（`format "nfsd: SETATTR"`）。
+- `class <name>` — モジュールが（`ddebug_class_map` によって）宣言したクラスに属する呼び出しサイトだけに一致する。クラスを使うと、サブシステムは呼び出しサイトを名前付きのカテゴリにまとめ、一括で切り替えられるようになる — `class DRM_UT_KMS` のようなクエリで一致させるDRMのデバッグカテゴリが主な利用者である。上の `struct _ddebug` の `class_id` ビットフィールドが選択するのがこれである。未知のクラス名は何も言わずに不一致となり、クラス名はワイルドカードを受け付け*ない*。
 
-Multiple match specs are ANDed, and an absent keyword behaves like `*`. Because a query with no match spec at all is legal, the flags are parsed first — so a bad flag letter masks a bad keyword in the error message.
+複数の一致指定はANDで結合され、キーワードがない場合は `*` と同様に振る舞う。一致指定がまったくないクエリも合法なので、フラグが先に解析される — そのため、不正なフラグ文字があると、エラーメッセージ上で不正なキーワードが隠れてしまう。
 
-Wildcards are not universal. The `module`, `file`, and `func` specs are the ones that go through `match_wildcard()`, so they accept globs: `*` for zero or more characters, `?` for exactly one. `module drm*` matches both `drm` and `drm_kms_helper`; `file "drivers/usb/*"` matches everything under that directory (quote it to stop the shell expanding it first). The other three specs do not glob: `format` is always a literal substring search (optionally anchored with a leading `^`), so `*` and `?` in it are ordinary characters; `line` takes only numbers and ranges, and a wildcard there is rejected as a bad line number; `class` names are matched exactly.
+ワイルドカードは全面的に使えるわけではない。`match_wildcard()` を通るのは `module`、`file`、`func` の指定なので、これらはグロブを受け付ける: `*` は0文字以上、`?` はちょうど1文字に一致する。`module drm*` は `drm` と `drm_kms_helper` の両方に一致し、`file "drivers/usb/*"` はそのディレクトリ以下のすべてに一致する（シェルが先に展開しないよう引用符で囲むこと）。他の3つの指定はグロブを使わない: `format` は常にリテラルの部分文字列検索（先頭の `^` で固定することは可能）なので、その中の `*` と `?` は普通の文字である。`line` は数値と範囲だけを受け付け、ワイルドカードは不正な行番号として拒否される。`class` の名前は完全一致で照合される。
 
-A single `write()` may carry several queries, separated by `;` or newlines, applied left to right:
+1回の `write()` で、`;` または改行で区切った複数のクエリを渡すことができ、左から右へ適用される。
 
 ```bash
-# Turn everything off, then enable just the run* functions in the main module
+# すべてをオフにしてから、mainモジュールのrun*関数だけを有効にする
 echo '-p; module main func run* +p' > /sys/kernel/debug/dynamic_debug/control
 
-# Or one query per line, from a file
+# あるいはファイルから、1行に1クエリずつ
 cat query-batch-file > /sys/kernel/debug/dynamic_debug/control
 ```
 
-Within a multi-query string, a query beginning with `#` is treated as a comment and skipped.
+複数クエリの文字列の中で、`#` で始まるクエリはコメントとして扱われ、読み飛ばされる。
 
-The `flags-spec` is `+` (add), `-` (remove), or `=` (set exactly) followed by one or more flag letters.
+`flags-spec` は、`+`（追加）、`-`（削除）、`=`（そのとおりに設定）のいずれかの後に1つ以上のフラグ文字が続くものである。
 
-### Output flag letters {#output-flag-letters}
+### 出力フラグ文字 {#output-flag-letters}
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |------|---------|
-| `p` | Enable printing (required to see output) |
-| `t` | Prefix output with the thread ID, or `<intr>` in interrupt context |
-| `m` | Prefix output with module name |
-| `f` | Prefix output with the function name |
-| `s` | Prefix output with the source file name |
-| `l` | Prefix output with line number |
-| `d` | Include a call trace |
-| `_` | No flags (use `=_` to clear everything) |
+| `p` | 出力を有効にする（出力を見るには必須） |
+| `t` | 出力にスレッドIDを前置する。割り込みコンテキストでは `<intr>` |
+| `m` | 出力にモジュール名を前置する |
+| `f` | 出力に関数名を前置する |
+| `s` | 出力にソースファイル名を前置する |
+| `l` | 出力に行番号を前置する |
+| `d` | コールトレースを含める |
+| `_` | フラグなし（すべてをクリアするには `=_` を使う） |
 
-The decorator flags (`t`, `m`, `f`, `s`, `l`, `d`) are added to the message
-prefix in that fixed order, regardless of the order you type them in the query. `d` is not a prefix decorator at all — it appends a `dump_stack()` call after the message, handled separately from `__dynamic_emit_prefix()`.
+装飾フラグ（`t`、`m`、`f`、`s`、`l`、`d`）は、クエリで入力した順序にかかわらず、
+この固定の順序でメッセージの接頭辞に追加される。`d` は実は接頭辞の装飾ではない — メッセージの後に `dump_stack()` の呼び出しを付け加えるもので、`__dynamic_emit_prefix()` とは別に処理される。
 
-## Boot-time enablement {#boot-time-enablement}
+## ブート時の有効化 {#boot-time-enablement}
 
-Some debug messages are needed before debugfs is mounted. Two boot-time mechanisms exist:
+一部のデバッグメッセージは、debugfsがマウントされる前に必要になる。ブート時の仕組みは2つある。
 
 ```bash
-# Kernel command line — applies to all call sites matching the query
+# カーネルコマンドライン — クエリに一致するすべての呼び出しサイトに適用される
 dyndbg="module mymodule +p"
 
-# Per-module parameter — applies only to that module at load time
-# Passed via the kernel command line, an /etc/modprobe.d/*.conf
-# "options" line, or directly as a modprobe argument
+# モジュールごとのパラメータ — ロード時にそのモジュールだけに適用される
+# カーネルコマンドライン、/etc/modprobe.d/*.confの
+# "options" 行、またはmodprobeの引数として直接渡す
 mymodule.dyndbg="+p"
 ```
 
-The two forms are processed differently, and the difference matters:
+2つの形式は処理のされ方が異なり、その違いは重要である。
 
-- Bare `dyndbg="QUERY"` is processed **only once**, from an `early_initcall` that runs just after the built-in ddebug tables are registered. It therefore reaches any code that runs after that early initcall — ACPI setup, PCI enumeration, and other `subsys_initcall`-and-later work — but it is never revisited, so it cannot affect a module loaded later.
-- `<module>.dyndbg="QUERY"` *is* reprocessed when the module loads. If the named module is built in, the boot-time pass applies it. If it is not built in, the boot-time pass sees it and does nothing, and the query is applied again — this time for real — at module load.
+- 単独の `dyndbg="QUERY"` は、組み込みのddebugテーブルが登録された直後に実行される `early_initcall` から、**1回だけ**処理される。そのため、そのearly initcallより後に実行されるコード — ACPIのセットアップ、PCIの列挙、その他 `subsys_initcall` 以降の処理 — には届くが、二度と再処理されることはないので、後でロードされるモジュールには影響できない。
+- `<module>.dyndbg="QUERY"` は、モジュールのロード時に再処理*される*。指定されたモジュールが組み込みであれば、ブート時の処理がそれを適用する。組み込みでなければ、ブート時の処理はそれを見ても何もせず、クエリはモジュールのロード時に改めて — 今度は実際に — 適用される。
 
-A boot-time query must not exceed 1023 characters, and a bootloader may impose a lower limit of its own. In the `<module>.dyndbg=` form the query must not include its own `module` match spec: the module name is taken from the parameter name and applied to each query in the string.
+ブート時のクエリは1023文字を超えてはならず、ブートローダが独自にそれより低い上限を課すこともある。`<module>.dyndbg=` の形式では、クエリ自体に `module` の一致指定を含めてはならない: モジュール名はパラメータ名から取られ、文字列内の各クエリに適用される。
 
-For persistence across reboots, an `/etc/modprobe.d/*.conf` file can carry the setting as a module option:
+再起動をまたいで永続化するには、`/etc/modprobe.d/*.conf` ファイルにモジュールオプションとして設定を書けばよい。
 
 ```
 options mymodule dyndbg=+pt
 ```
 
-When several sources set `dyndbg` for the same module, modprobe applies them in order — `/etc/modprobe.d/*.conf` first, then `<module>.dyndbg` from the boot command line, then arguments passed to `modprobe` itself — with the last one winning.
+複数の場所が同じモジュールの `dyndbg` を設定している場合、modprobeはそれらを順に適用する — まず `/etc/modprobe.d/*.conf`、次にブートコマンドラインの `<module>.dyndbg`、最後に `modprobe` 自体に渡された引数 — そして最後のものが優先される。
 
-## Module integration {#module-integration}
+## モジュールとの統合 {#module-integration}
 
-When a module is loaded, `find_module_sections()` in `kernel/module/main.c` locates the module's `__dyndbg` (and `__dyndbg_classes`) sections and records them in `mod->dyndbg_info`:
+モジュールがロードされると、`kernel/module/main.c` の `find_module_sections()` がモジュールの `__dyndbg`（および `__dyndbg_classes`）セクションを見つけ、`mod->dyndbg_info` に記録する。
 
 ```c
-/* kernel/module/main.c, find_module_sections() */
+/* kernel/module/main.c、find_module_sections() */
 mod->dyndbg_info.descs = section_objs(info, "__dyndbg",
                                       sizeof(*mod->dyndbg_info.descs),
                                       &mod->dyndbg_info.num_descs);
 ```
 
-Registration itself happens through the module notifier chain. `lib/dynamic_debug.c` registers `ddebug_module_nb`, whose callback calls `ddebug_add_module()` on `MODULE_STATE_COMING` and `ddebug_remove_module()` on `MODULE_STATE_GOING`:
+登録そのものはモジュールのnotifierチェーンを通じて行われる。`lib/dynamic_debug.c` は `ddebug_module_nb` を登録し、そのコールバックは `MODULE_STATE_COMING` で `ddebug_add_module()` を、`MODULE_STATE_GOING` で `ddebug_remove_module()` を呼ぶ。
 
 ```c
 /* lib/dynamic_debug.c */
@@ -223,137 +223,137 @@ static int ddebug_module_notify(struct notifier_block *self, unsigned long val,
 }
 ```
 
-The notifier block uses `.priority = 0` deliberately, so that jump labels — registered on the same chain — are initialized before dynamic debug runs. Earlier kernels used explicit `dynamic_debug_setup()` / `dynamic_debug_remove()` calls wired into the module loader; those were replaced by this notifier in v6.4.
+notifierブロックは意図的に `.priority = 0` を使っている。これにより、同じチェーンに登録されているjump labelが、dynamic debugの実行前に初期化される。以前のカーネルは、モジュールローダに組み込まれた明示的な `dynamic_debug_setup()` / `dynamic_debug_remove()` の呼び出しを使っていたが、v6.4でこのnotifierに置き換えられた。
 
-If a `dyndbg` module parameter was passed at load time (e.g., `insmod mymodule.ko dyndbg=+p`), it is not a real module parameter — the module loader's `unknown_module_param_cb()` recognizes it specially and hands it to `ddebug_dyndbg_module_param_cb()`. This happens after the descriptors are registered and before `mod->init()` runs, so debug messages from the init function itself can be captured.
+ロード時に `dyndbg` モジュールパラメータが渡された場合（例: `insmod mymodule.ko dyndbg=+p`）、それは本物のモジュールパラメータではない — モジュールローダの `unknown_module_param_cb()` がそれを特別に認識し、`ddebug_dyndbg_module_param_cb()` に渡す。これはディスクリプタが登録された後、`mod->init()` が実行される前に行われるので、init関数自体からのデバッグメッセージも捕捉できる。
 
-## pr_debug vs dev_dbg {#prdebug-vs-devdbg}
+## pr_debugとdev_dbg {#prdebug-vs-devdbg}
 
-Both use the dynamic debug infrastructure and are controlled through the same interface.
+どちらもdynamic debugの基盤を使い、同じインターフェースで制御される。
 
 ```c
-/* Generic — not tied to a device */
+/* 汎用 — デバイスに結び付かない */
 pr_debug("packet count: %d\n", count);
 
-/* Device-aware — prepends the device name to the output */
+/* デバイスを意識する — 出力の前にデバイス名を付ける */
 dev_dbg(&pdev->dev, "DMA transfer complete, status=%#x\n", status);
 ```
 
-`dev_dbg()` is preferred in driver code because the device name in the output immediately identifies which hardware instance produced the message. Both are no-ops (NOPs) when disabled.
+ドライバのコードでは `dev_dbg()` が推奨される。出力に含まれるデバイス名から、どのハードウェアインスタンスがメッセージを出したかがすぐにわかるからである。どちらも無効時はno-op（NOP）である。
 
 ## print_hex_dump_debug {#printhexdump_debug}
 
-For bulk data, `print_hex_dump_debug()` dumps a buffer in hex + ASCII format and is also controlled by dynamic debug:
+大量のデータには、`print_hex_dump_debug()` がバッファを16進 + ASCII形式でダンプする。これもdynamic debugで制御される。
 
 ```c
 print_hex_dump_debug("rx buf: ", DUMP_PREFIX_OFFSET, 16, 1,
                      buf, len, true);
 ```
 
-This produces output like:
+これは次のような出力を生成する:
 ```
 rx buf: 00000000: 45 00 00 3c 1c 46 40 00 40 06 ac 10 7f 00 00 01  E..<.F@.@.......
 ```
 
-Hex-dump call sites are a partial exception to the flag rules above: for `print_hex_dump_debug()` and `print_hex_dump_bytes()`, only `p` and `d` have any effect. The prefix decorators (`t`, `m`, `f`, `s`, `l`) are accepted by the parser but inert for these sites, because the output is produced by `print_hex_dump()` rather than by `__dynamic_emit_prefix()`, the function that builds the decorated prefix for `__dynamic_pr_debug()`. `d` still fires, though: `dump_stack()` is invoked by the `__dynamic_func_call*` wrapper macro in `include/linux/dynamic_debug.h`, which guards every dynamic debug site — hex dumps included — not by the prefix path.
+16進ダンプの呼び出しサイトは、上のフラグ規則の部分的な例外である: `print_hex_dump_debug()` と `print_hex_dump_bytes()` では、`p` と `d` だけが効果を持つ。接頭辞の装飾（`t`、`m`、`f`、`s`、`l`）はパーサに受け付けられるが、これらのサイトでは何もしない。出力が、`__dynamic_pr_debug()` 用に装飾付き接頭辞を組み立てる関数である `__dynamic_emit_prefix()` ではなく、`print_hex_dump()` によって生成されるからである。ただし `d` は依然として働く: `dump_stack()` は接頭辞の経路からではなく、16進ダンプを含むすべてのdynamic debugサイトを保護する `include/linux/dynamic_debug.h` の `__dynamic_func_call*` ラッパーマクロから呼び出されるからである。
 
-Matching them with `format` works, but on the `prefix_str` argument rather than a real format string: the descriptor records `prefix_str` if it is a constant string, and the literal `hexdump` if it is built at runtime. So the call above is selected by `format "rx buf: "`.
+`format` で一致させることはできるが、対象は本物のフォーマット文字列ではなく `prefix_str` 引数である: ディスクリプタは、`prefix_str` が定数文字列であればそれを、実行時に組み立てられるものであればリテラルの `hexdump` を記録する。そのため、上の呼び出しは `format "rx buf: "` で選択される。
 
-## Combining with ftrace for lightweight tracing {#combining-with-ftrace-for-lightweight-tracing}
+## ftraceと組み合わせた軽量トレーシング {#combining-with-ftrace-for-lightweight-tracing}
 
-Enable thread info (`+t`) in dynamic debug output and compare timestamps against ftrace's function graph tracer to correlate debug messages with kernel function calls — without writing a custom tracepoint:
+dynamic debugの出力でスレッド情報（`+t`）を有効にし、タイムスタンプをftraceのfunction graphトレーサと比較すれば、独自のtracepointを書かずに、デバッグメッセージとカーネルの関数呼び出しを関連付けられる。
 
 ```bash
-# Enable dynamic debug with thread info
+# スレッド情報付きでdynamic debugを有効にする
 echo "module mymodule +pt" > /sys/kernel/debug/dynamic_debug/control
 
-# Enable ftrace function graph for the same module.
-# set_ftrace_filter matches function names, not modules, so restrict
-# by module with the "mod:" filter command: <function>:mod:<module>
+# 同じモジュールに対してftraceのfunction graphを有効にする。
+# set_ftrace_filterはモジュールではなく関数名に一致するので、
+# "mod:" フィルタコマンドでモジュールに絞り込む: <function>:mod:<module>
 echo '*:mod:mymodule' > /sys/kernel/debug/tracing/set_ftrace_filter
 echo function_graph > /sys/kernel/debug/tracing/current_tracer
 cat /sys/kernel/debug/tracing/trace_pipe &
 
-# Run your workload — pr_debug output and ftrace appear on the same timeline
+# ワークロードを実行する — pr_debugの出力とftraceが同じタイムライン上に現れる
 ```
 
-A bare `echo mymodule > set_ftrace_filter` does *not* do this — it is read as a function-name glob. Since no function is likely to be named after the module, nothing matches, and `ftrace_process_regex()` turns a zero-match write into `-EINVAL`, so the shell reports `write error: Invalid argument` rather than silently ignoring it. (If some unrelated function does happen to share the name, the write succeeds and traces that function instead.) The `mod:` filter command takes a function glob before the module name, so `'*:mod:mymodule'` means "every function in `mymodule`", while `'e1000_tx*:mod:e1000'` narrows to a subset. Append with `>>` to add another module's functions, and prefix an entry with `!` to remove it.
+単に `echo mymodule > set_ftrace_filter` としても、これは実現*できない* — 関数名のグロブとして解釈されるからである。モジュールと同じ名前の関数はまずないので何も一致せず、`ftrace_process_regex()` は一致ゼロの書き込みを `-EINVAL` にするので、シェルは黙って無視するのではなく `write error: Invalid argument` を報告する。（無関係な関数がたまたま同じ名前を持っていた場合は、書き込みは成功し、代わりにその関数がトレースされる。）`mod:` フィルタコマンドはモジュール名の前に関数のグロブを取るので、`'*:mod:mymodule'` は「`mymodule` 内のすべての関数」を意味し、`'e1000_tx*:mod:e1000'` は一部に絞り込む。別のモジュールの関数を追加するには `>>` で追記し、エントリを削除するには先頭に `!` を付ける。
 
-## Implementation: jump label patching {#implementation-jump-label-patching}
+## 実装: jump labelの書き換え {#implementation-jump-label-patching}
 
-When a `_ddebug` entry's `p` flag is set, the kernel:
+`_ddebug` エントリの `p` フラグが設定されると、カーネルは次のことを行う。
 
-1. Updates the `flags` field in the `_ddebug` structure.
-2. Calls `static_branch_enable()` on the static key embedded in the `_ddebug` descriptor's `key` field (`dp->key.dd_key_true`).
-3. The jump label subsystem (`jump_label_update()`) patches the NOP at the call site to a short branch, directing execution to `__dynamic_pr_debug()` (or `__dynamic_dev_dbg()`).
+1. `_ddebug` 構造体の `flags` フィールドを更新する。
+2. `_ddebug` ディスクリプタの `key` フィールドに埋め込まれたstatic key（`dp->key.dd_key_true`）に対して `static_branch_enable()` を呼ぶ。
+3. jump labelサブシステム（`jump_label_update()`）が呼び出しサイトのNOPを短い分岐に書き換え、実行を `__dynamic_pr_debug()`（または `__dynamic_dev_dbg()`）に向ける。
 
-The call site address and all metadata are stored directly in the `_ddebug` descriptor at compile time — no runtime ELF debug info lookup occurs. When disabled, `static_branch_disable()` causes `jump_label_update()` to patch the branch back to a NOP. Because the patch is applied by the jump label subsystem, it is safe with respect to concurrent execution on other CPUs.
+呼び出しサイトのアドレスとすべてのメタデータは、コンパイル時に `_ddebug` ディスクリプタに直接格納される — 実行時にELFのデバッグ情報を検索することはない。無効化されると、`static_branch_disable()` によって `jump_label_update()` が分岐をNOPに書き戻す。書き換えはjump labelサブシステムによって適用されるので、他のCPU上での並行実行に対して安全である。
 
-## Checking what is enabled {#checking-what-is-enabled}
+## 何が有効になっているかの確認 {#checking-what-is-enabled}
 
 ```bash
-# All registered call sites — shows =p for enabled, =_ for disabled
+# 登録されたすべての呼び出しサイト — 有効なら=p、無効なら=_ と表示される
 cat /sys/kernel/debug/dynamic_debug/control
-# The file's own header line gives the format:
+# ファイル自身のヘッダ行が形式を示している:
 # filename:lineno [module]function flags format
 #
-# example (two of the ~109 netdev_dbg() sites the e1000 module registers,
-# one enabled; most of the rest come from the e_dbg() wrapper in e1000.h):
+# 例（e1000モジュールが登録する約109個のnetdev_dbg()サイトのうち2つで、
+# 1つは有効。残りの大半はe1000.hのe_dbg()ラッパーに由来する）:
 # drivers/net/ethernet/intel/e1000/e1000_main.c:3573 [e1000]e1000_change_mtu =p "changing MTU from %d to %d\n"
 # drivers/net/ethernet/intel/e1000/e1000_main.c:4429 [e1000]e1000_clean_rx_irq =_ "Receive packet consumed multiple buffers\n"
 
-# Count enabled sites
+# 有効なサイトを数える
 grep -c "=p" /sys/kernel/debug/dynamic_debug/control
 
-# Disable everything
+# すべて無効にする
 echo "module mymodule -p" > /sys/kernel/debug/dynamic_debug/control
 ```
 
-The line numbers above are from v7.2-rc7 and drift with every kernel release; the file, module, and function columns are the stable parts. Note also that the first column is the source-root-relative path, which is exactly the form the `file` match spec accepts — so a line from this output can be turned into a query by pasting that first column, `:lineno` tail and all, after `file`:
+上の行番号はv7.2-rc7のもので、カーネルのリリースごとにずれていく。ファイル、モジュール、関数の列が安定した部分である。また、最初の列はソースルートからの相対パスであり、これはまさに `file` の一致指定が受け付ける形式である点にも注意 — そのため、この出力の1行は、最初の列を `:lineno` の末尾ごと `file` の後に貼り付けるだけでクエリにできる。
 
 ```bash
 echo "file drivers/net/ethernet/intel/e1000/e1000_main.c:3573 +p" \
     > /sys/kernel/debug/dynamic_debug/control
 ```
 
-`ddebug_parse_query()` splits the `:3573` tail off and reparses it as a one-line range, so this selects exactly the site the output line came from. The second column, `[module]function`, is display formatting rather than query syntax — it has to be retyped as separate `module` and `func` specs to be used in a query.
+`ddebug_parse_query()` は `:3573` の末尾を切り離し、1行の範囲として解析し直すので、これは出力行の元になったサイトだけを正確に選択する。2番目の列 `[module]function` はクエリ構文ではなく表示上の書式である — クエリで使うには、`module` と `func` の別々の指定として打ち直す必要がある。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/dynamic_debug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dynamic_debug.h) — the `struct _ddebug` definition quoted above, the `_DPRINTK_FLAGS_*` bit definitions behind the flag letters, `DEFINE_DYNAMIC_DEBUG_METADATA()` / `DYNAMIC_DEBUG_BRANCH()` (the macros that emit the `__dyndbg` descriptor and the static branch), and `dynamic_hex_dump()`
-- [lib/dynamic_debug.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/dynamic_debug.c) — the whole runtime: `ddebug_change()` walks the matching call sites and flips `dp->key.dd_key_true` with `static_branch_enable()`/`static_branch_disable()`; `__dynamic_pr_debug()` and `__dynamic_dev_dbg()` build the decorated prefix; `struct ddebug_table` is the per-module registration record; `dynamic_debug_init_control()` creates both the debugfs and procfs control files
-- [include/linux/printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/printk.h) — the three-way `pr_debug()` expansion this page opens with (`dynamic_pr_debug()` under `CONFIG_DYNAMIC_DEBUG`, `printk(KERN_DEBUG …)` under `DEBUG`, `no_printk()` otherwise), plus the same pattern for `print_hex_dump_debug()` and `pr_debug_ratelimited()`
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `find_module_sections()` captures `__dyndbg`/`__dyndbg_classes` into `mod->dyndbg_info`, and `unknown_module_param_cb()` routes a load-time `dyndbg=` argument to `ddebug_dyndbg_module_param_cb()`
-- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h) — `BOUNDED_SECTION_BY(__dyndbg, ___dyndbg)`: how the vmlinux linker script gathers every built-in call site's descriptor into one bounded array
-- [commit `7deabd674988`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7deabd67498869640c937c9bd83472574b7dea0b) — "dyndbg: use the module notifier callbacks" (Jason Baron, March 2023, merged for v6.4): deleted the old `dynamic_debug_setup()`/`dynamic_debug_remove()` hooks from the module loader in favour of `ddebug_module_notify()`, and explains why the notifier priority must let jump labels initialize first
-- [commit `239a5791ffd5`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=239a5791ffd5559f51815df442c4dbbe7fc21ade) — "dynamic_debug: allow to work if debugfs is disabled" (Greg Kroah-Hartman, February 2020, merged for v5.7): the commit that added `/proc/dynamic_debug/control`
+- [include/linux/dynamic_debug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dynamic_debug.h) — 上で引用した `struct _ddebug` の定義、フラグ文字の背後にある `_DPRINTK_FLAGS_*` のビット定義、`DEFINE_DYNAMIC_DEBUG_METADATA()` / `DYNAMIC_DEBUG_BRANCH()`（`__dyndbg` ディスクリプタとstatic branchを出力するマクロ）、`dynamic_hex_dump()`
+- [lib/dynamic_debug.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/dynamic_debug.c) — 実行時処理のすべて: `ddebug_change()` は一致する呼び出しサイトを走査し、`static_branch_enable()`/`static_branch_disable()` で `dp->key.dd_key_true` を切り替える。`__dynamic_pr_debug()` と `__dynamic_dev_dbg()` は装飾付きの接頭辞を組み立てる。`struct ddebug_table` はモジュールごとの登録レコードである。`dynamic_debug_init_control()` はdebugfsとprocfsの両方の制御ファイルを作成する
+- [include/linux/printk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/printk.h) — このページの冒頭で述べた `pr_debug()` の3通りの展開（`CONFIG_DYNAMIC_DEBUG` の下では `dynamic_pr_debug()`、`DEBUG` の下では `printk(KERN_DEBUG …)`、それ以外では `no_printk()`）と、`print_hex_dump_debug()` および `pr_debug_ratelimited()` の同様のパターン
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `find_module_sections()` は `__dyndbg`/`__dyndbg_classes` を `mod->dyndbg_info` に取り込み、`unknown_module_param_cb()` はロード時の `dyndbg=` 引数を `ddebug_dyndbg_module_param_cb()` に回す
+- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h) — `BOUNDED_SECTION_BY(__dyndbg, ___dyndbg)`: vmlinuxのリンカスクリプトが、組み込みのすべての呼び出しサイトのディスクリプタを1つの境界付き配列に集める方法
+- [commit `7deabd674988`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7deabd67498869640c937c9bd83472574b7dea0b) — "dyndbg: use the module notifier callbacks"（Jason Baron、2023年3月、v6.4でマージ）: モジュールローダから古い `dynamic_debug_setup()`/`dynamic_debug_remove()` のフックを削除して `ddebug_module_notify()` に置き換え、notifierの優先度がjump labelの先行初期化を許すものでなければならない理由を説明している
+- [commit `239a5791ffd5`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=239a5791ffd5559f51815df442c4dbbe7fc21ade) — "dynamic_debug: allow to work if debugfs is disabled"（Greg Kroah-Hartman、2020年2月、v5.7でマージ）: `/proc/dynamic_debug/control` を追加したコミット
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`modprobe.d(5)`](https://man7.org/linux/man-pages/man5/modprobe.d.5.html) — the `options <modulename> <option>` directive used to make a per-module `dyndbg=` setting persistent across boots
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — how module parameters from the command line, aliases, and config files are combined before reaching `unknown_module_param_cb()`
+- [`modprobe.d(5)`](https://man7.org/linux/man-pages/man5/modprobe.d.5.html) — モジュールごとの `dyndbg=` 設定をブートをまたいで永続化するために使う `options <modulename> <option>` ディレクティブ
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — コマンドライン、エイリアス、設定ファイルからのモジュールパラメータが、`unknown_module_param_cb()` に届く前にどう結合されるか
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Writing and Loading Kernel Modules](module-basics.md) — where `pr_debug()`/`dev_dbg()` fit in the module author's logging toolkit
-- [Module Loading Internals](module-loading-internals.md) — `load_module()`, section parsing, and the `MODULE_STATE_COMING`/`MODULE_STATE_GOING` notifier chain that dynamic debug hooks
-- [Module Parameters, Symbols, and Kconfig](module-params.md) — the `module_param()` machinery that a load-time `dyndbg=` argument deliberately sidesteps by never registering itself as a parameter at all
-- [printk: Kernel Logging Internals](../kernel/printk.md) — the log buffer and loglevel filtering that debug output still has to get past once a call site is enabled
-- [ftrace: Function Tracer](../tracing/ftrace.md) — the tracer paired with dynamic debug in the correlation recipe above
+- [カーネルモジュールの作成とロード](module-basics.md) — モジュール作成者のログ出力ツール群の中で `pr_debug()`/`dev_dbg()` が占める位置
+- [モジュールロードの内部](module-loading-internals.md) — `load_module()`、セクションの解析、dynamic debugがフックする `MODULE_STATE_COMING`/`MODULE_STATE_GOING` のnotifierチェーン
+- [モジュールパラメータ、シンボル、Kconfig](module-params.md) — ロード時の `dyndbg=` 引数が、そもそもパラメータとして自身を登録しないことで意図的に回避している `module_param()` の仕組み
+- [printk: カーネルのログ出力の内部](../kernel/printk.md) — 呼び出しサイトが有効になった後も、デバッグ出力が通過しなければならないログバッファとログレベルによるフィルタリング
+- [ftrace: 関数トレーサ](../tracing/ftrace.md) — 上の関連付けのレシピでdynamic debugと組み合わせたトレーサ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The dynamic debugging interface](https://lwn.net/Articles/434833/) — Jonathan Corbet, March 22, 2011: LWN's introduction to the feature, covering `pr_debug()`/`dev_dbg()`, the debugfs control file, and the query language
-- [dynamic debug](https://lwn.net/Articles/286191/) — Jason Baron's original June 2008 patch posting, with the problem statement (`dprintk`, `pr_debug`, `DEBUGP`, and a dozen incompatible ways to enable them) that motivated a single uniform interface
-- [The perils of `pr_info()`](https://lwn.net/Articles/487437/) — Jonathan Corbet, March 21, 2012: why `pr_debug()` is preferable to a bare `printk(KERN_DEBUG …)`, since only the former is reachable from the dynamic debug control file
-- [Jump label](https://lwn.net/Articles/412072/) — Jonathan Corbet, October 27, 2010: the NOP-patching mechanism that makes a disabled dynamic debug call site free
-- [Jump label reworked](https://lwn.net/Articles/436041/) — Jonathan Corbet, March 30, 2011: the `static_branch()` API rework that eventually became the static-key interface `ddebug_change()` calls today
+- [The dynamic debugging interface](https://lwn.net/Articles/434833/) — Jonathan Corbet、2011年3月22日: LWNによるこの機能の紹介。`pr_debug()`/`dev_dbg()`、debugfsの制御ファイル、クエリ言語を扱う
+- [dynamic debug](https://lwn.net/Articles/286191/) — Jason Baronによる2008年6月の最初のパッチ投稿。単一の統一インターフェースの動機となった問題提起（`dprintk`、`pr_debug`、`DEBUGP`、そしてそれらを有効にする互換性のない十数種類の方法）を含む
+- [The perils of `pr_info()`](https://lwn.net/Articles/487437/) — Jonathan Corbet、2012年3月21日: 裸の `printk(KERN_DEBUG …)` より `pr_debug()` が望ましい理由。dynamic debugの制御ファイルから届くのは前者だけだからである
+- [Jump label](https://lwn.net/Articles/412072/) — Jonathan Corbet、2010年10月27日: 無効化されたdynamic debugの呼び出しサイトをコストゼロにするNOP書き換えの仕組み
+- [Jump label reworked](https://lwn.net/Articles/436041/) — Jonathan Corbet、2011年3月30日: `static_branch()` APIの作り直し。これが最終的に、今日 `ddebug_change()` が呼ぶstatic keyのインターフェースになった
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Dynamic debug — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — the authoritative reference for the control file: the full match-spec grammar (`func`, `file`, `module`, `format`, `class`, `line`), wildcard and line-range rules, the complete flag list and the fixed order decorators are printed in, and the `;`-separated multi-query form
-- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — the canonical `dyndbg[="val"]` and `<module>.dyndbg[="val"]` boot-parameter entries (the howto above adds the detail that a boot query must not exceed 1023 characters, and that a bare `dyndbg=` is only processed at boot while `<module>.dyndbg` is reprocessed when the module loads)
-- [Static keys — The Linux Kernel documentation](https://docs.kernel.org/staging/static-keys.html) — `static_branch_enable()`/`static_branch_disable()` semantics, with disassembly showing the NOP that a disabled call site compiles down to
-- [Message logging with printk](https://docs.kernel.org/core-api/printk-basics.html) — log levels and `console_loglevel`, which still filter enabled `pr_debug()` output on its way to the console
+- [Dynamic debug — The Linux Kernel documentation](https://docs.kernel.org/admin-guide/dynamic-debug-howto.html) — 制御ファイルの権威あるリファレンス: 一致指定の完全な文法（`func`、`file`、`module`、`format`、`class`、`line`）、ワイルドカードと行範囲の規則、完全なフラグ一覧と装飾が出力される固定の順序、`;` 区切りの複数クエリの形式
+- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — 正式な `dyndbg[="val"]` と `<module>.dyndbg[="val"]` のブートパラメータの項目（上のhowtoは、ブート時のクエリは1023文字を超えてはならないこと、単独の `dyndbg=` はブート時にのみ処理される一方 `<module>.dyndbg` はモジュールのロード時に再処理されることを補足している）
+- [Static keys — The Linux Kernel documentation](https://docs.kernel.org/staging/static-keys.html) — `static_branch_enable()`/`static_branch_disable()` の意味と、無効化された呼び出しサイトがコンパイルされた結果のNOPを示す逆アセンブル
+- [Message logging with printk](https://docs.kernel.org/core-api/printk-basics.html) — ログレベルと `console_loglevel`。これらは有効化された `pr_debug()` の出力がコンソールに届く途中で依然としてフィルタリングを行う

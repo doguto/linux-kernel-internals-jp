@@ -1,11 +1,11 @@
-# Module Parameters, Symbols, and Kconfig {#module-parameters-symbols-and-kconfig}
+# モジュールパラメータ、シンボル、Kconfig {#module-parameters-symbols-and-kconfig}
 
-> Configuring modules at load time and sharing symbols across the kernel
+> ロード時にモジュールを設定し、カーネル全体でシンボルを共有する
 
-## module_param: runtime configuration {#module_param-runtime-configuration}
+## module_param: 実行時の設定 {#module_param-runtime-configuration}
 
 ```c
-/* Declare module parameters */
+/* モジュールパラメータを宣言する */
 static int debug = 0;
 static unsigned int timeout_ms = 100;
 static char *device_name = "mydevice";
@@ -17,32 +17,32 @@ MODULE_PARM_DESC(debug, "Debug level (0=off, 1=basic, 2=verbose)");
 module_param(timeout_ms, uint, 0644);
 MODULE_PARM_DESC(timeout_ms, "Timeout in milliseconds (default: 100)");
 
-module_param(device_name, charp, 0444);  /* read-only after load */
+module_param(device_name, charp, 0444);  /* ロード後は読み取り専用 */
 MODULE_PARM_DESC(device_name, "Device name string");
 
 module_param(enable_feature, bool, 0644);
 MODULE_PARM_DESC(enable_feature, "Enable experimental feature");
 ```
 
-The third argument is the `sysfs` permission:
+3番目の引数は `sysfs` のパーミッションである。
 
-- `0644` — owner read-write, group/other read-only → visible and changeable
-- `0444` — read-only for everyone
-- `0` — not exposed in sysfs (load-time only)
+- `0644` — 所有者は読み書き可能、グループ/その他は読み取り専用 → 参照も変更もできる
+- `0444` — 全員に対して読み取り専用
+- `0` — sysfsに公開されない（ロード時のみ）
 
 ```bash
-# Set at load time
+# ロード時に設定する
 sudo modprobe mymodule debug=2 timeout_ms=500
 
-# Or with insmod
+# あるいはinsmodで
 sudo insmod mymodule.ko debug=2
 
-# Read/write via sysfs (if permission allows)
+# sysfs経由で読み書きする（パーミッションが許す場合）
 cat /sys/module/mymodule/parameters/debug
 echo 3 > /sys/module/mymodule/parameters/debug
 ```
 
-### Arrays {#arrays}
+### 配列 {#arrays}
 
 ```c
 static int irq_nums[4];
@@ -52,16 +52,16 @@ module_param_array(irq_nums, int, &irq_count, 0444);
 MODULE_PARM_DESC(irq_nums, "IRQ numbers (comma-separated)");
 ```
 
-The count variable must be `unsigned int`, not `int`: `module_param_array()`
-stores the pointer in `struct kparam_array`, whose `.num` field is declared
-`unsigned int *`, so passing an `int *` is an incompatible-pointer-type error
-the kernel build rejects. Pass `NULL` instead if you do not need the count.
+カウント変数は `int` ではなく `unsigned int` でなければならない。`module_param_array()`
+はこのポインタを `struct kparam_array` に格納し、その `.num` フィールドは
+`unsigned int *` と宣言されているため、`int *` を渡すと互換性のないポインタ型のエラーとなり、
+カーネルのビルドで拒否される。カウントが不要なら代わりに `NULL` を渡す。
 
 ```bash
-sudo insmod mymodule.ko irq_nums=5,6,7  # irq_count set to 3 by kernel
+sudo insmod mymodule.ko irq_nums=5,6,7  # カーネルがirq_countを3に設定する
 ```
 
-### Callbacks on parameter change {#callbacks-on-parameter-change}
+### パラメータ変更時のコールバック {#callbacks-on-parameter-change}
 
 ```c
 static int my_debug = 0;
@@ -83,76 +83,76 @@ static const struct kernel_param_ops debug_ops = {
     .set = debug_set,
     .get = param_get_int,
 };
-/* Note the distinct name: "debug" is already taken by the
- * module_param(debug, ...) above, and one module cannot
- * register two parameters under the same name.
+/* 別の名前にしている点に注意: "debug" は上の
+ * module_param(debug, ...) ですでに使われており、1つのモジュールで
+ * 同じ名前のパラメータを2つ登録することはできない。
  */
 module_param_cb(debug_level, &debug_ops, &my_debug, 0644);
 ```
 
-## EXPORT_SYMBOL: sharing symbols between modules {#export_symbol-sharing-symbols-between-modules}
+## EXPORT_SYMBOL: モジュール間でのシンボル共有 {#export_symbol-sharing-symbols-between-modules}
 
 ```c
-/* In module A (or core kernel): */
+/* モジュールA（またはコアカーネル）内: */
 int shared_function(int arg)
 {
     return arg * 2;
 }
-EXPORT_SYMBOL(shared_function);             /* available to any module */
+EXPORT_SYMBOL(shared_function);             /* どのモジュールからも利用可能 */
 
 int shared_function_gpl(int arg)
 {
     return arg * 3;
 }
-EXPORT_SYMBOL_GPL(shared_function_gpl);     /* GPL modules only */
+EXPORT_SYMBOL_GPL(shared_function_gpl);     /* GPLモジュールのみ */
 
 int namespaced_function(int arg)
 {
     return arg + 1;
 }
-/* Namespaced export (5.4+). The namespace is a string literal. */
+/* 名前空間付きエクスポート（5.4以降）。名前空間は文字列リテラル。 */
 EXPORT_SYMBOL_NS(namespaced_function, "MYNS");
 ```
 
-Each symbol is exported exactly once — `EXPORT_SYMBOL`, `EXPORT_SYMBOL_GPL`,
-and `EXPORT_SYMBOL_NS` are alternatives for the same symbol, not layers you
-stack on top of one another.
+各シンボルはちょうど1回だけエクスポートされる — `EXPORT_SYMBOL`、`EXPORT_SYMBOL_GPL`、
+`EXPORT_SYMBOL_NS` は同じシンボルに対する選択肢であり、重ねて
+適用する層ではない。
 
 ```c
-/* In module B: */
-extern int shared_function(int arg);  /* or just include the header */
+/* モジュールB内: */
+extern int shared_function(int arg);  /* あるいはヘッダをインクルードするだけ */
 
 static int __init moduleB_init(void)
 {
-    int result = shared_function(21);  /* works: symbol is exported */
+    int result = shared_function(21);  /* 動作する: シンボルがエクスポートされている */
     pr_info("result = %d\n", result);
     return 0;
 }
 ```
 
-### EXPORT_SYMBOL vs EXPORT_SYMBOL_GPL {#exportsymbol-vs-exportsymbol_gpl}
+### EXPORT_SYMBOLとEXPORT_SYMBOL_GPL {#exportsymbol-vs-exportsymbol_gpl}
 
-`EXPORT_SYMBOL_GPL` makes the symbol usable only by modules with `MODULE_LICENSE("GPL")` or compatible licenses. This enforces that proprietary modules can't use kernel-internal interfaces.
+`EXPORT_SYMBOL_GPL` は、`MODULE_LICENSE("GPL")` または互換ライセンスを持つモジュールだけがそのシンボルを使えるようにする。これにより、プロプライエタリなモジュールがカーネル内部のインターフェースを使えないことが強制される。
 
-When a module imports a GPL-only symbol:
+モジュールがGPL専用シンボルをインポートする場合:
 ```bash
 modinfo mymodule.ko | grep license
 # license: GPL
 ```
 
-If a module declares a GPL-incompatible license and still references a
-GPL-only symbol, the violation is caught twice. First at **build** time, by
-`modpost`:
+モジュールがGPL非互換のライセンスを宣言しているのにGPL専用シンボルを
+参照している場合、違反は2回検出される。まず**ビルド**時に
+`modpost` によって:
 
 ```
 ERROR: modpost: GPL-incompatible module mymodule.ko uses GPL-only symbol 'shared_function_gpl'
 ```
 
-And again at **load** time, if such a module is loaded anyway (a prebuilt
-`.ko`, say). The kernel does not have a dedicated "you are not GPL" error:
-`find_exported_symbol_in_section()` simply skips GPL-only symbols when the
-loading module's license is not GPL-compatible, so the symbol looks like it
-does not exist at all:
+そして、そのようなモジュールがそれでもロードされた場合（たとえばビルド済みの
+`.ko`）、**ロード**時にもう一度検出される。カーネルには「GPLではない」ことを示す専用のエラーはない。
+`find_exported_symbol_in_section()` は、ロードするモジュールのライセンスがGPL互換でない場合に
+GPL専用シンボルを単に読み飛ばすので、そのシンボルはまったく存在しないかのように
+見える:
 
 ```
 $ sudo insmod mymodule.ko
@@ -162,86 +162,86 @@ $ dmesg | tail -1
 mymodule: Unknown symbol shared_function_gpl (err -2)
 ```
 
-### Symbol versioning (CRC) {#symbol-versioning-crc}
+### シンボルのバージョニング（CRC） {#symbol-versioning-crc}
 
-When the kernel is built with `CONFIG_MODVERSIONS=y`, each exported symbol also
-gets a CRC of its type signature. If the symbol's definition changes, the CRC
-changes, and modules compiled against the old interface refuse to load:
+カーネルが `CONFIG_MODVERSIONS=y` でビルドされている場合、エクスポートされた各シンボルには
+その型シグネチャのCRCも付与される。シンボルの定義が変わるとCRCも
+変わり、古いインターフェースに対してコンパイルされたモジュールはロードを拒否される:
 
 ```
-# Load time, from check_version() in kernel/module/version.c:
+# ロード時、kernel/module/version.cのcheck_version()から:
 mymodule: disagrees about version of symbol tcp_sendmsg
 ```
 
-Build-time complaints come from `modpost`, which records a CRC for every
-symbol the module references:
+ビルド時の警告は `modpost` から出る。`modpost` はモジュールが参照するすべての
+シンボルについてCRCを記録する:
 
 ```
 WARNING: modpost: "tcp_sendmsg" [drivers/net/mydriver.ko] has no CRC!
 ```
 
-The warning means a referenced symbol had no valid CRC to record, usually
-because the exporting side was built without version information. It requires
-`CONFIG_MODVERSIONS=y`, but two different `modpost` functions emit the identical
-string: `add_versions()` returns immediately unless `CONFIG_BASIC_MODVERSIONS`
-is set (it defaults to `y` under `MODVERSIONS`), and `add_extended_versions()`
-is guarded by `CONFIG_EXTENDED_MODVERSIONS` instead — so the warning can come
-from either path depending on which version format the build emits. With
-`CONFIG_MODVERSIONS=n` there are no CRCs and therefore no CRC warnings or
-load-time version checks at all.
+この警告は、参照されたシンボルに記録すべき有効なCRCがなかったことを意味する。通常は
+エクスポート側がバージョン情報なしでビルドされたことが原因である。この警告には
+`CONFIG_MODVERSIONS=y` が必要だが、2つの異なる `modpost` の関数がまったく同じ
+文字列を出力する。`add_versions()` は `CONFIG_BASIC_MODVERSIONS` が設定されていなければ
+直ちに戻り（これは `MODVERSIONS` の下ではデフォルトで `y`）、`add_extended_versions()`
+は代わりに `CONFIG_EXTENDED_MODVERSIONS` で保護されている — そのため、ビルドがどちらのバージョン形式を
+出力するかに応じて、警告はどちらの経路からも出うる。
+`CONFIG_MODVERSIONS=n` ではCRCが存在しないので、CRCの警告もロード時の
+バージョンチェックも一切ない。
 
-## /proc/kallsyms: all kernel symbols {#prockallsyms-all-kernel-symbols}
+## /proc/kallsyms: すべてのカーネルシンボル {#prockallsyms-all-kernel-symbols}
 
 ```bash
-# Find where a function lives (as root — see the note on addresses below)
+# 関数の場所を探す（rootで — 後述のアドレスに関する注記を参照）
 sudo grep -E "tcp_sendmsg|mymodule_reset" /proc/kallsyms
-# ffffffff81a12345 T tcp_sendmsg              ← T = global code, not "exported"
-# ffffffffc0401000 t mymodule_reset [mymodule] ← t = module-local code, [module]
+# ffffffff81a12345 T tcp_sendmsg              ← T = グローバルなコード。「エクスポート済み」ではない
+# ffffffffc0401000 t mymodule_reset [mymodule] ← t = モジュールローカルなコード、[モジュール名]
 
-# Address → function name
+# アドレス → 関数名
 sudo awk '/ffffffff81a12345/{print $3}' /proc/kallsyms
 
-# All module symbols
+# モジュールのすべてのシンボル
 sudo grep "\[mymodule\]" /proc/kallsyms
 ```
 
-Addresses are hidden from unprivileged readers. `/proc/kallsyms` calls
-`kallsyms_show_value()` on the credentials of whoever opened the file, and
-`s_show()` prints a NULL address when it returns false. Without `CAP_SYSLOG`
-(and depending on `kptr_restrict`), every line reads `0000000000000000` rather
-than the real addresses shown above — hence the `sudo`.
+アドレスは非特権の読み手からは隠される。`/proc/kallsyms` はファイルを開いた者の
+資格情報に対して `kallsyms_show_value()` を呼び、それがfalseを返すと
+`s_show()` はNULLアドレスを出力する。`CAP_SYSLOG` がない場合
+（そして `kptr_restrict` の値によっては）、すべての行が上に示した実際のアドレスではなく
+`0000000000000000` となる — これが `sudo` を付けている理由である。
 
-Symbol types:
+シンボルの種類:
 
-- `T`/`t` — code (.text) — uppercase=global, lowercase=local
-- `D`/`d` — data (.data)
-- `R`/`r` — read-only data (.rodata)
-- `B`/`b` — BSS (zero-initialized)
-- `W`/`w` — weak, and `V`/`v` — weak data object
-- `A`/`a` — absolute, which for module symbols also covers per-CPU variables
-- `G`/`g` and `S`/`s` — small data and small BSS, on architectures with a
-  small-data section
+- `T`/`t` — コード（.text） — 大文字=グローバル、小文字=ローカル
+- `D`/`d` — データ（.data）
+- `R`/`r` — 読み取り専用データ（.rodata）
+- `B`/`b` — BSS（ゼロ初期化）
+- `W`/`w` — weak、`V`/`v` — weakなデータオブジェクト
+- `A`/`a` — 絶対値。モジュールのシンボルの場合はper-CPU変数も含む
+- `G`/`g` と `S`/`s` — small dataとsmall BSS。small-dataセクションを持つ
+  アーキテクチャで使われる
 
-The case convention differs slightly between the two halves of the file. For
-vmlinux symbols the letter comes straight from the `nm` output baked in at
-build time, where uppercase means global (external) linkage — `T` says nothing
-about whether the symbol was passed to `EXPORT_SYMBOL`. For module symbols,
-`s_show()` re-cases the letter itself: uppercase if the symbol is exported,
-lowercase if not.
+大文字・小文字の規則は、ファイルの前半と後半でわずかに異なる。
+vmlinuxのシンボルでは、文字はビルド時に埋め込まれた `nm` の出力をそのまま使っており、
+大文字はグローバル（外部）リンケージを意味する — `T` はそのシンボルが
+`EXPORT_SYMBOL` に渡されたかどうかについては何も示さない。モジュールのシンボルでは、
+`s_show()` 自身が文字の大文字・小文字を付け直す: エクスポートされていれば大文字、
+そうでなければ小文字である。
 
-`nm`'s `U` (undefined) isn't listed once a module has finished loading. Undefined symbols are
-filtered out when a module's symbol table is trimmed — `is_core_symbol()`
-returns false for anything with `st_shndx == SHN_UNDEF` — so imported symbols
-are simply absent from the listing rather than shown with a type of their own.
+`nm` の `U`（未定義）は、モジュールのロードが完了すると表示されない。未定義シンボルは
+モジュールのシンボルテーブルが切り詰められるときに除外される — `is_core_symbol()`
+は `st_shndx == SHN_UNDEF` のものに対してfalseを返す — そのため、インポートされたシンボルは
+独自の種類で表示されるのではなく、一覧から単に姿を消す。
 
-`__init` functions are missing for the same reason. `is_core_symbol()` also
-rejects anything living in an init-type section, and once the module's init
-function has run, `do_init_module()` swaps `mod->kallsyms` over to the trimmed
-`core_kallsyms` copy. So grepping for `mymodule_init` in a module that has
-finished loading finds nothing — only the symbols that survive into the module's
-core memory are listed.
+`__init` 関数がないのも同じ理由である。`is_core_symbol()` はinit系セクションに
+あるものもすべて拒否し、モジュールのinit関数が実行されると、
+`do_init_module()` が `mod->kallsyms` を切り詰められた `core_kallsyms` のコピーに
+切り替える。そのため、ロードが完了したモジュールで `mymodule_init` をgrepしても
+何も見つからない — モジュールのコアメモリに残ったシンボルだけが
+一覧に表示される。
 
-## Kconfig: compile-time configuration {#kconfig-compile-time-configuration}
+## Kconfig: コンパイル時の設定 {#kconfig-compile-time-configuration}
 
 ```kconfig
 # drivers/mydriver/Kconfig
@@ -264,28 +264,28 @@ config MY_DRIVER_DEBUG
       Enable verbose debug logging for MyDriver.
 ```
 
-`tristate` means: `y` (built-in), `m` (module), or `n` (disabled).
+`tristate` は `y`（組み込み）、`m`（モジュール）、`n`（無効）のいずれかを意味する。
 
 ```makefile
 # drivers/mydriver/Makefile
 obj-$(CONFIG_MY_DRIVER) += mydriver.o
 mydriver-y := mydriver_main.o mydriver_pci.o
 
-# Conditional compilation: add an object *into* the composite module
+# 条件付きコンパイル: 複合モジュールの*中に*オブジェクトを追加する
 mydriver-$(CONFIG_MY_DRIVER_DEBUG) += mydriver_debug.o
 ```
 
-Note the `mydriver-` prefix on the conditional line, not `obj-`. `obj-y +=
-mydriver_debug.o` would link that object straight into `built-in.a`, while
-`mydriver.ko` — built from the `mydriver-y` list — would still reference
-`debug_dump()` and fail to resolve it. `MY_DRIVER_DEBUG` is a `bool`, so it is
-only ever `y` or `n`; with `CONFIG_MY_DRIVER=m` the two halves would end up on
-opposite sides of the module boundary. `<module>-$(CONFIG_FOO) += file.o` is the
-idiom for optionally pulling an object into a composite module, and it does the
-right thing for `=y` builds too.
+条件付きの行の接頭辞が `obj-` ではなく `mydriver-` である点に注意。`obj-y +=
+mydriver_debug.o` とすると、そのオブジェクトは `built-in.a` に直接リンクされる一方、
+`mydriver-y` リストからビルドされる `mydriver.ko` は依然として
+`debug_dump()` を参照し、それを解決できずに失敗する。`MY_DRIVER_DEBUG` は `bool` なので
+`y` か `n` にしかならない。`CONFIG_MY_DRIVER=m` の場合、2つの部分は
+モジュール境界の反対側に分かれてしまう。`<module>-$(CONFIG_FOO) += file.o` は
+複合モジュールにオブジェクトを任意で取り込むための定石であり、`=y` のビルドでも
+正しく動作する。
 
 ```c
-/* In source: */
+/* ソース内: */
 #ifdef CONFIG_MY_DRIVER_DEBUG
 void debug_dump(void) { /* ... */ }
 #else
@@ -294,191 +294,190 @@ static inline void debug_dump(void) {}
 ```
 
 ```bash
-# Configure
+# 設定する
 make menuconfig
-# Navigate to your driver section
+# 自分のドライバのセクションに移動する
 
-# Check what's enabled
+# 何が有効になっているか確認する
 grep MY_DRIVER .config
 # CONFIG_MY_DRIVER=m
 # # CONFIG_MY_DRIVER_DEBUG is not set
 
-# Build only this directory (in-tree single target)
+# このディレクトリだけをビルドする（ツリー内の単一ターゲット）
 make drivers/mydriver/
 
-# Or one specific object / module
+# あるいは特定のオブジェクト/モジュール1つ
 make drivers/mydriver/mydriver.ko
 ```
 
-`M=` is *not* the in-tree equivalent: it names the directory of an **external**
-module, as in `make -C $KDIR M=$PWD`. For code inside the kernel tree, use the
-single-target forms above — a trailing `/` builds everything under that
-directory.
+`M=` はツリー内向けの同等手段では*ない*。これは `make -C $KDIR M=$PWD` のように、**外部**
+モジュールのディレクトリを指定するものである。カーネルツリー内のコードには、上の
+単一ターゲットの形式を使う — 末尾に `/` を付けると、そのディレクトリ以下のすべてが
+ビルドされる。
 
-## Module dependencies {#module-dependencies}
+## モジュールの依存関係 {#module-dependencies}
 
-`modprobe` reads dependency information to automatically load required modules:
+`modprobe` は依存関係情報を読み、必要なモジュールを自動的にロードする。
 
 ```bash
-# Regenerate dependency database (after installing new modules)
+# 依存関係データベースを再生成する（新しいモジュールをインストールした後）
 depmod -a
 
-# Check what mymodule requires
+# mymoduleが何を必要とするか確認する
 modinfo mymodule.ko | grep depends
 # depends: ptp,i2c-algo-bit
 
-# See full dependency tree
+# 依存関係ツリー全体を見る
 modprobe --show-depends e1000e
 # insmod /lib/modules/.../ptp.ko
 # insmod /lib/modules/.../e1000e.ko
 
-# Blacklist a module: stops *future* automatic loading by alias
-# (it does not affect an explicit `modprobe nouveau`, and does not
-#  unload anything that is already loaded)
+# モジュールをブラックリストに入れる: エイリアスによる*今後の*自動ロードを止める
+# （明示的な `modprobe nouveau` には影響せず、すでにロードされている
+#  ものをアンロードすることもない）
 echo "blacklist nouveau" >> /etc/modprobe.d/blacklist.conf
 
-# Unloading is a separate, immediate action
+# アンロードは別個の、即時の操作である
 modprobe -r nouveau
 
-# Blacklisting only takes effect for boot-time autoloading once the
-# initramfs has been regenerated (distro-specific), e.g.:
+# ブラックリストがブート時の自動ロードに効くのは、initramfsを
+# 再生成した後である（ディストリビューション依存）。例:
 # sudo dracut -f      /  sudo update-initramfs -u
 ```
 
 ```bash
-# /lib/modules/$(uname -r)/ directory
+# /lib/modules/$(uname -r)/ ディレクトリ
 ls /lib/modules/$(uname -r)/
 # build           kernel          modules.alias      modules.builtin
 # modules.dep     modules.order   modules.softdep    modules.symbols
 
-# modules.dep: generated by depmod
+# modules.dep: depmodが生成する
 cat /lib/modules/$(uname -r)/modules.dep | grep e1000e
 # kernel/drivers/net/ethernet/intel/e1000e/e1000e.ko: kernel/drivers/ptp/ptp.ko
 ```
 
-## Module loading hooks {#module-loading-hooks}
+## モジュールロードのフック {#module-loading-hooks}
 
-udev/systemd-udevd automatically loads modules based on device discovery:
+udev/systemd-udevdは、デバイスの検出に基づいてモジュールを自動的にロードする。
 
 ```c
-/* Add a MODULE_ALIAS to match hardware IDs, in source: */
-MODULE_ALIAS("pci:v00008086d00001234*");  /* Intel device 0x1234 */
+/* ハードウェアIDに一致させるため、ソースにMODULE_ALIASを追加する: */
+MODULE_ALIAS("pci:v00008086d00001234*");  /* Intelのデバイス0x1234 */
 ```
 
 ```bash
-# depmod collects it into modules.alias:
+# depmodがそれをmodules.aliasに収集する:
 grep 00001234 /lib/modules/$(uname -r)/modules.alias
 # alias pci:v00008086d00001234* e1000e
 ```
 
-The driver core does not invoke `modprobe` when a device is discovered. (Other
-subsystems do spawn it, via `request_module()` and `CONFIG_MODPROBE_PATH` — but
-not this path.) When a device appears, the kernel emits a uevent carrying a
-`MODALIAS=` variable built from the device's IDs:
+ドライバコアは、デバイスが検出されたときに `modprobe` を呼び出すわけではない。（他の
+サブシステムは `request_module()` と `CONFIG_MODPROBE_PATH` を介してそれを起動する — しかし
+この経路ではない。）デバイスが現れると、カーネルはデバイスのIDから組み立てた
+`MODALIAS=` 変数を含むueventを発行する:
 
 ```bash
 cat /sys/bus/pci/devices/0000:00:1f.6/modalias
 # pci:v00008086d00001234sv...sd...bc02sc00i00
 ```
 
-`systemd-udevd` receives that uevent and matches it against its rules. The
-standard one lives in `80-drivers.rules`:
+`systemd-udevd` はそのueventを受け取り、自身のルールと照合する。
+標準のルールは `80-drivers.rules` にある:
 
 ```
 ACTION!="add", GOTO="drivers_end"
 ENV{MODALIAS}=="?*", RUN{builtin}+="kmod load"
 ```
 
-`RUN{builtin}+=` queues the builtin to run for the event (as opposed to
-`IMPORT{builtin}=`, which runs a builtin to import device properties). Note that
-no argument follows `load`: given no module names, the `kmod` builtin reads the
-device's own `MODALIAS` property off the event.
+`RUN{builtin}+=` は、そのイベントに対してビルトインを実行するようキューに入れる（
+デバイスのプロパティをインポートするためにビルトインを実行する `IMPORT{builtin}=` とは異なる）。
+`load` の後に引数がない点に注意: モジュール名が与えられない場合、`kmod` ビルトインは
+イベントからデバイス自身の `MODALIAS` プロパティを読み取る。
 
-The builtin then resolves that alias through `modules.alias` — the
-same libkmod lookup `modprobe` performs — and loads `e1000e`. It applies
-`modprobe.d` blacklists along the way, which is why blacklisting a module
-suppresses this autoload path while leaving an explicit `modprobe nouveau`
-working.
+ビルトインは次に、そのエイリアスを `modules.alias` を通じて解決し — `modprobe` が行うのと
+同じlibkmodによる検索である — `e1000e` をロードする。その過程で
+`modprobe.d` のブラックリストを適用するので、モジュールをブラックリストに入れると
+この自動ロード経路は抑止される一方、明示的な `modprobe nouveau` は
+動作し続ける。
 
-## Symbol namespaces (5.4+) {#symbol-namespaces-54}
+## シンボル名前空間（5.4以降） {#symbol-namespaces-54}
 
-For large subsystems, symbol namespaces prevent accidental use of internal symbols:
+大規模なサブシステムでは、シンボル名前空間によって内部シンボルの誤用を防ぐ。
 
 ```c
-/* Export with a namespace */
+/* 名前空間付きでエクスポートする */
 EXPORT_SYMBOL_NS(my_internal_func, "MY_SUBSYSTEM");
 
-/* Module that uses it must import the namespace */
+/* それを使うモジュールは名前空間をインポートしなければならない */
 MODULE_IMPORT_NS("MY_SUBSYSTEM");
 
 extern int my_internal_func(void);
 ```
 
-The namespace argument is a **string literal**. It was originally a bare token
-when the feature landed in 5.4, but commit `cdd30ebb1b9f` (v6.13) converted
-the macros and every in-tree caller to quoted strings; the quoted form is the
-only one that compiles on current kernels.
+名前空間の引数は**文字列リテラル**である。5.4でこの機能が導入された当初は裸のトークンだったが、
+コミット `cdd30ebb1b9f`（v6.13）がマクロとツリー内のすべての呼び出し元を
+引用符付き文字列に変換した。現在のカーネルでコンパイルできるのは引用符付きの形式だけである。
 
-Without `MODULE_IMPORT_NS`, the build fails first, in `modpost`:
+`MODULE_IMPORT_NS` がないと、まず `modpost` でビルドが失敗する:
 
 ```
 ERROR: modpost: module mymodule uses symbol my_internal_func from namespace MY_SUBSYSTEM, but does not import it.
 ```
 
-and `verify_namespace_is_imported()` rejects the same module at load time:
+そして `verify_namespace_is_imported()` が、ロード時に同じモジュールを拒否する:
 
 ```
 mymodule: module uses symbol (my_internal_func) from namespace MY_SUBSYSTEM, but does not import it.
 ```
 
-`CONFIG_MODULE_ALLOW_MISSING_NAMESPACE_IMPORTS` downgrades both to warnings —
-it makes the kernel use `pr_warn()` instead of `pr_err()`, and passes `-N` to
-`modpost`. `make nsdeps` will add the missing `MODULE_IMPORT_NS()` lines for
-you.
+`CONFIG_MODULE_ALLOW_MISSING_NAMESPACE_IMPORTS` は両方を警告に格下げする —
+カーネルは `pr_err()` の代わりに `pr_warn()` を使うようになり、`modpost` には `-N` が
+渡される。`make nsdeps` を使えば、不足している `MODULE_IMPORT_NS()` の行を
+追加してくれる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/moduleparam.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/moduleparam.h) — every macro used above. `module_param()` is a thin wrapper over `module_param_named()`, which expands to `param_check_<type>()` + `module_param_cb()` + `__MODULE_PARM_TYPE()`; `MODULE_PARM_DESC()` is just `MODULE_INFO(parm, ...)`. Also `struct kernel_param_ops` (`.flags`, `.set`, `.get`, `.free`), `struct kparam_array` (whose `.num` field is an `unsigned int *`), and `__module_param_call()`, which places each `struct kernel_param` into the `__param` section
-- [kernel/params.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/params.c) — the per-type `kernel_param_ops` behind the `int`/`uint`/`charp`/`bool` type names — the numeric ones generated by the `STANDARD_PARAM_DEF()` macro, `param_ops_charp` and `param_ops_bool` written out by hand — plus `param_array_ops` (the code that parses `5,6,7` and writes the element count back through `nump`), and `add_sysfs_param()`/`module_param_sysfs_setup()`, which build `/sys/module/<name>/parameters/`. Note that the `perm == 0` skip lives in the callers — `module_param_sysfs_setup()` and `param_sysfs_builtin()` both `continue` past such parameters — while `add_sysfs_param()` itself opens with `BUG_ON(!kp->perm)` and only installs a `store` handler when `perm` has a write bit set
-- [include/linux/sysfs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sysfs.h) — `VERIFY_OCTAL_PERMISSIONS()`, the compile-time check `__module_param_call()` applies to the permission argument: it rejects any world-writable mode and any mode where group or other is more permissive than owner, so `0666` will not build
-- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()`, `EXPORT_SYMBOL_GPL()`, `EXPORT_SYMBOL_NS()`/`EXPORT_SYMBOL_NS_GPL()`, `DEFAULT_SYMBOL_NAMESPACE`, and the newer `EXPORT_SYMBOL_FOR_MODULES()`. The license and namespace are emitted as strings into a `.export_symbol` section, which is why the namespace argument is a quoted string literal
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `resolve_symbol()` and `find_exported_symbol_in_section()`, where a GPL-only symbol is simply made *invisible* to a module whose license is not GPL-compatible (the load then fails with `Unknown symbol`), plus `verify_namespace_is_imported()`, the source of the missing-`MODULE_IMPORT_NS` error
-- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()`: the load-time CRC comparison behind `CONFIG_MODVERSIONS`, and where the `disagrees about version of symbol` and `no symbol version for` messages come from
-- [scripts/mod/modpost.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/mod/modpost.c) — the build-time half of the same checks: `add_versions()` emits the `has no CRC!` warning, and the GPL and namespace violations are reported as `GPL-incompatible module ... uses GPL-only symbol` and `module ... uses symbol ... from namespace ..., but does not import it`
-- [kernel/module/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/kallsyms.c) — `elf_type()`, which assigns the one-letter symbol types (`t`/`d`/`r`/`b`, plus `w`/`v` for weak and `a` for absolute) shown in `/proc/kallsyms`, and `is_core_symbol()`, which decides which of a module's symbols are listed at all
-- [kernel/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kallsyms.c) — the `/proc/kallsyms` seq_file: `kallsyms_open()` records the opener's credentials and `s_show()` blanks the address when they do not pass. The predicate itself, `kallsyms_show_value()` — the `kptr_restrict`/`CAP_SYSLOG` logic that is why an unprivileged `cat` sees `0000000000000000` for every address — is defined next door in `kernel/ksyms_common.c`
+- [include/linux/moduleparam.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/moduleparam.h) — 上で使ったすべてのマクロ。`module_param()` は `module_param_named()` の薄いラッパーで、これは `param_check_<type>()` + `module_param_cb()` + `__MODULE_PARM_TYPE()` に展開される。`MODULE_PARM_DESC()` は単なる `MODULE_INFO(parm, ...)` である。ほかに `struct kernel_param_ops`（`.flags`、`.set`、`.get`、`.free`）、`struct kparam_array`（その `.num` フィールドは `unsigned int *`）、各 `struct kernel_param` を `__param` セクションに配置する `__module_param_call()` もある
+- [kernel/params.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/params.c) — `int`/`uint`/`charp`/`bool` の型名の背後にある型ごとの `kernel_param_ops`（数値型は `STANDARD_PARAM_DEF()` マクロで生成され、`param_ops_charp` と `param_ops_bool` は手書きされている）に加えて、`param_array_ops`（`5,6,7` を解析し、要素数を `nump` 経由で書き戻すコード）、および `/sys/module/<name>/parameters/` を構築する `add_sysfs_param()`/`module_param_sysfs_setup()`。`perm == 0` を読み飛ばす処理は呼び出し側にある点に注意 — `module_param_sysfs_setup()` と `param_sysfs_builtin()` はどちらもそのようなパラメータを `continue` で飛ばす — 一方で `add_sysfs_param()` 自体は冒頭で `BUG_ON(!kp->perm)` を行い、`perm` に書き込みビットが立っている場合にのみ `store` ハンドラを設定する
+- [include/linux/sysfs.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sysfs.h) — `VERIFY_OCTAL_PERMISSIONS()`。`__module_param_call()` がパーミッション引数に適用するコンパイル時チェックで、誰でも書き込み可能なモードや、グループまたはその他が所有者より緩いモードを拒否する。そのため `0666` はビルドできない
+- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()`、`EXPORT_SYMBOL_GPL()`、`EXPORT_SYMBOL_NS()`/`EXPORT_SYMBOL_NS_GPL()`、`DEFAULT_SYMBOL_NAMESPACE`、そしてより新しい `EXPORT_SYMBOL_FOR_MODULES()`。ライセンスと名前空間は文字列として `.export_symbol` セクションに出力される。これが名前空間の引数が引用符付きの文字列リテラルである理由である
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `resolve_symbol()` と `find_exported_symbol_in_section()`。ここでGPL専用シンボルは、ライセンスがGPL互換でないモジュールからは単に*見えなく*される（その後ロードは `Unknown symbol` で失敗する）。さらに、`MODULE_IMPORT_NS` 不足エラーの発生源である `verify_namespace_is_imported()` もある
+- [kernel/module/version.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/version.c) — `check_version()`: `CONFIG_MODVERSIONS` の背後にあるロード時のCRC比較であり、`disagrees about version of symbol` や `no symbol version for` のメッセージの出どころ
+- [scripts/mod/modpost.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/mod/modpost.c) — 同じチェックのビルド時側: `add_versions()` が `has no CRC!` の警告を出し、GPLと名前空間の違反は `GPL-incompatible module ... uses GPL-only symbol` および `module ... uses symbol ... from namespace ..., but does not import it` として報告される
+- [kernel/module/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/kallsyms.c) — `/proc/kallsyms` に表示される1文字のシンボル種別（`t`/`d`/`r`/`b`、加えてweakの `w`/`v` と絶対値の `a`）を割り当てる `elf_type()` と、モジュールのどのシンボルをそもそも一覧に載せるかを決める `is_core_symbol()`
+- [kernel/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/kallsyms.c) — `/proc/kallsyms` のseq_file: `kallsyms_open()` が開いた者の資格情報を記録し、それが通らなければ `s_show()` がアドレスを空にする。判定関数そのものである `kallsyms_show_value()` — 非特権の `cat` ですべてのアドレスが `0000000000000000` に見える理由である `kptr_restrict`/`CAP_SYSLOG` のロジック — は隣の `kernel/ksyms_common.c` で定義されている
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — passing `param=value` after the module name, `-r` for removal, and `--show-depends`
-- [`insmod(8)`](https://man7.org/linux/man-pages/man8/insmod.8.html) — the dependency-unaware loader used in the `insmod mymodule.ko debug=2` examples above
-- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — the `parm:` lines produced by `MODULE_PARM_DESC()`, plus the `depends`, `license`, and `alias` fields, and `-F` to extract one of them
-- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — builds `modules.dep`/`modules.dep.bin` and the map files including `modules.alias`
-- [`modules.dep(5)`](https://man7.org/linux/man-pages/man5/modules.dep.5.html) — the exact format of the `modules.dep` lines shown above
-- [`modprobe.d(5)`](https://man7.org/linux/man-pages/man5/modprobe.d.5.html) — the configuration files behind `blacklist`, plus the `options` directive for setting default module parameters persistently
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — モジュール名の後に `param=value` を渡す方法、削除用の `-r`、`--show-depends`
+- [`insmod(8)`](https://man7.org/linux/man-pages/man8/insmod.8.html) — 上の `insmod mymodule.ko debug=2` の例で使った、依存関係を考慮しないローダ
+- [`modinfo(8)`](https://man7.org/linux/man-pages/man8/modinfo.8.html) — `MODULE_PARM_DESC()` が生成する `parm:` の行、`depends`、`license`、`alias` のフィールド、そしてそのうち1つを抽出する `-F`
+- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — `modules.dep`/`modules.dep.bin` と、`modules.alias` を含むマップファイルを生成する
+- [`modules.dep(5)`](https://man7.org/linux/man-pages/man5/modules.dep.5.html) — 上に示した `modules.dep` の行の正確な形式
+- [`modprobe.d(5)`](https://man7.org/linux/man-pages/man5/modprobe.d.5.html) — `blacklist` の背後にある設定ファイルと、モジュールパラメータのデフォルトを永続的に設定する `options` ディレクティブ
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Writing and Loading Kernel Modules](module-basics.md) — `module_init()`/`module_exit()`, `MODULE_LICENSE()`, and the module lifecycle these parameters attach to
-- [Module Loading Internals](module-loading-internals.md) — where symbol resolution, relocation, and the modversions check happen inside `load_module()`
-- [Kbuild Build System](kbuild.md) — the `obj-y`/`obj-m`/`<module>-y` mechanics and Kconfig front-ends behind the Makefile fragment above
-- [Kernel Module Signing](module-signing.md) — the other load-time gate a `.ko` has to pass
-- [Platform Drivers](../drivers/platform-driver.md) — modules as drivers, and `MODULE_DEVICE_TABLE()` in the context of a real driver's match tables
-- [Linux Device Model](../drivers/device-model.md) — background on the kobject/sysfs machinery that directories like `/sys/module/<name>/parameters/` are built on
+- [カーネルモジュールの作成とロード](module-basics.md) — `module_init()`/`module_exit()`、`MODULE_LICENSE()`、そしてこれらのパラメータが関わるモジュールのライフサイクル
+- [モジュールロードの内部](module-loading-internals.md) — シンボル解決、再配置、modversionsのチェックが `load_module()` 内のどこで行われるか
+- [Kbuildビルドシステム](kbuild.md) — 上のMakefile断片の背後にある `obj-y`/`obj-m`/`<module>-y` の仕組みとKconfigのフロントエンド
+- [カーネルモジュール署名](module-signing.md) — `.ko` が通過しなければならないもう1つのロード時の関門
+- [プラットフォームドライバ](../drivers/platform-driver.md) — ドライバとしてのモジュールと、実際のドライバのマッチテーブルの文脈での `MODULE_DEVICE_TABLE()`
+- [Linuxデバイスモデル](../drivers/device-model.md) — `/sys/module/<name>/parameters/` のようなディレクトリの土台となるkobject/sysfsの仕組みの背景
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [module_param() 1/3](https://lwn.net/Articles/16550/) — Rusty Russell, November 26, 2002: the patch posting that introduced `module_param()` to replace `MODULE_PARM`, including the original explanation of the permissions argument ("for exposing parameters in sysfs (if non-zero)")
-- [Module parameters in sysfs](https://lwn.net/Articles/85443/) — Jonathan Corbet, May 18, 2004: the patch that created `/sys/module/<name>/parameters/`, establishing that a parameter appears only when its `perm` is non-zero and that `perm` becomes the file's mode. It also flags the caveat this page's callback section addresses: there is no built-in notification when a parameter is written
-- [Kernel symbol namespacing](https://lwn.net/Articles/760045/) — Jonathan Corbet, July 18, 2018: the original proposal for `EXPORT_SYMBOL_NS()` and `MODULE_IMPORT_NS()`, and why 30,000 flat exported symbols were a problem worth solving
-- [A new version of modversions](https://lwn.net/Articles/986892/) — Jonathan Corbet, August 26, 2024: the history of the symbol CRCs described above, from the original modversions in 1.1.85 (January 1995) through the `genksyms` C parser, and Sami Tolvanen's `gendwarfksyms` replacement — it reads the compiler's DWARF output instead of parsing C, because `genksyms` cannot handle Rust. The result is the `CONFIG_GENDWARFKSYMS` path referenced from `include/linux/export.h`
+- [module_param() 1/3](https://lwn.net/Articles/16550/) — Rusty Russell、2002年11月26日: `MODULE_PARM` を置き換えるために `module_param()` を導入したパッチの投稿。パーミッション引数に関する当初の説明（"for exposing parameters in sysfs (if non-zero)"）を含む
+- [Module parameters in sysfs](https://lwn.net/Articles/85443/) — Jonathan Corbet、2004年5月18日: `/sys/module/<name>/parameters/` を作ったパッチ。パラメータは `perm` が非0の場合にのみ現れ、`perm` がファイルのモードになることを確立した。このページのコールバックの節が扱う注意点も指摘している: パラメータが書き込まれたときの組み込みの通知はない
+- [Kernel symbol namespacing](https://lwn.net/Articles/760045/) — Jonathan Corbet、2018年7月18日: `EXPORT_SYMBOL_NS()` と `MODULE_IMPORT_NS()` の当初の提案と、30,000個のフラットなエクスポート済みシンボルが解決に値する問題だった理由
+- [A new version of modversions](https://lwn.net/Articles/986892/) — Jonathan Corbet、2024年8月26日: 上で説明したシンボルCRCの歴史。1.1.85（1995年1月）の最初のmodversionsから、`genksyms` のCパーサを経て、Sami Tolvanenによる代替の `gendwarfksyms` まで — これはCを解析する代わりにコンパイラのDWARF出力を読む。`genksyms` がRustを扱えないためである。その成果が、`include/linux/export.h` から参照される `CONFIG_GENDWARFKSYMS` の経路である
 
-### External {#external}
+### 外部資料 {#external}
 
-- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — the other way to set a parameter: `modulename.param=value` on the boot command line, which is the only way to set a parameter for code built in with `=y` (there is no `modprobe` invocation to attach it to), and the `echo -n value > /sys/module/${modulename}/parameters/${parm}` runtime form
-- [Symbol Namespaces](https://docs.kernel.org/core-api/symbol-namespaces.html) — the current, authoritative syntax: `EXPORT_SYMBOL_NS(usb_stor_suspend, "USB_STORAGE")` and `MODULE_IMPORT_NS("USB_STORAGE")` with quoted namespace strings, `DEFAULT_SYMBOL_NAMESPACE`, and using `make nsdeps` to add missing imports automatically
-- [Kconfig Language](https://docs.kernel.org/kbuild/kconfig-language.html) — the reference for `bool`/`tristate`, and the precise semantics of `depends on` versus `select` (a reverse dependency that ignores the selected symbol's own dependencies)
-- [Linux Kernel Makefiles](https://docs.kernel.org/kbuild/makefiles.html) — `obj-$(CONFIG_FOO)` goal definitions and composite modules built from several objects
-- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — what `M=` actually means, and the `make -C $KDIR M=$PWD modules` pattern for out-of-tree builds
+- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — パラメータを設定するもう1つの方法: ブートコマンドラインでの `modulename.param=value`。これは `=y` で組み込まれたコードのパラメータを設定する唯一の方法である（付随させる `modprobe` の呼び出しがないため）。また実行時の形式 `echo -n value > /sys/module/${modulename}/parameters/${parm}` も扱う
+- [Symbol Namespaces](https://docs.kernel.org/core-api/symbol-namespaces.html) — 現在の権威ある構文: 引用符付きの名前空間文字列を使う `EXPORT_SYMBOL_NS(usb_stor_suspend, "USB_STORAGE")` と `MODULE_IMPORT_NS("USB_STORAGE")`、`DEFAULT_SYMBOL_NAMESPACE`、不足しているインポートを自動的に追加する `make nsdeps` の使い方
+- [Kconfig Language](https://docs.kernel.org/kbuild/kconfig-language.html) — `bool`/`tristate` のリファレンスと、`depends on` と `select`（選択されたシンボル自身の依存関係を無視する逆依存）の正確な意味
+- [Linux Kernel Makefiles](https://docs.kernel.org/kbuild/makefiles.html) — `obj-$(CONFIG_FOO)` によるゴール定義と、複数のオブジェクトからビルドされる複合モジュール
+- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — `M=` が実際に何を意味するかと、ツリー外ビルドのための `make -C $KDIR M=$PWD modules` のパターン
