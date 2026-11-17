@@ -1,18 +1,18 @@
-# sk_buff: The Network Buffer {#sk_buff-the-network-buffer}
+# sk_buff: ネットワークバッファ {#sk_buff-the-network-buffer}
 
-> The central data structure of the Linux network stack
+> Linuxネットワークスタックの中心となるデータ構造
 
-## What sk_buff is {#what-sk_buff-is}
+## sk_buffとは何か {#what-sk_buff-is}
 
-`struct sk_buff` (socket buffer) is how the kernel represents a network packet. Every packet — from the moment it arrives from hardware to the moment it's delivered to a socket — lives in an `sk_buff`.
+`struct sk_buff`（ソケットバッファ）は、カーネルがネットワークパケットを表現する方法である。すべてのパケットは、ハードウェアから届いた瞬間からソケットに配送される瞬間まで、`sk_buff`の中で生きている。
 
-The structure has two parts:
-1. **Metadata header**: pointers, length fields, protocol info, timestamps
-2. **Data buffer**: the actual packet bytes (pointed to, not embedded)
+この構造体は2つの部分からなる:
+1. **メタデータヘッダ**: ポインタ、長さフィールド、プロトコル情報、タイムスタンプ
+2. **データバッファ**: 実際のパケットのバイト列（埋め込まれているのではなく、ポインタで指される）
 
-Understanding `sk_buff` is fundamental to understanding the entire network stack, since every layer operates on it.
+すべての層が`sk_buff`を操作するため、`sk_buff`を理解することはネットワークスタック全体を理解するための基礎となる。
 
-## Memory layout {#memory-layout}
+## メモリレイアウト {#memory-layout}
 
 ```
 sk_buff metadata:
@@ -39,60 +39,60 @@ As headers are consumed (pop up the stack):
   data moves right: skb_pull()
 ```
 
-The `headroom` is reserved space before `data` — lower layers (ethernet, IP) push their headers into headroom as the packet goes down the stack. This avoids copying.
+`headroom`は`data`の手前に予約された領域である。パケットがスタックを下っていくにつれ、下位の層（Ethernet、IP）はこのheadroomに自分のヘッダを押し込む。これによりコピーが避けられる。
 
-## struct sk_buff key fields {#struct-sk_buff-key-fields}
+## struct sk_buffの主要なフィールド {#struct-sk_buff-key-fields}
 
 ```c
 // include/linux/skbuff.h
 struct sk_buff {
-    // List linkage (in queues, hash chains)
+    // リストのリンク（キュー、ハッシュチェイン内）
     struct sk_buff  *next;
     struct sk_buff  *prev;
 
-    struct sock     *sk;        // owning socket (or NULL for forwarded packets)
-    struct net_device *dev;     // network device this packet arrived on / will go out
+    struct sock     *sk;        // 所有するソケット（転送パケットでは NULL）
+    struct net_device *dev;     // このパケットが届いた / 出ていくネットワークデバイス
 
-    ktime_t         tstamp;     // packet timestamp
+    ktime_t         tstamp;     // パケットのタイムスタンプ
 
-    // Per-layer scratch space: each layer stores its own data here.
-    // Only valid while the packet is at that layer.
+    // 層ごとの作業領域: 各層が自分のデータをここに格納する。
+    // パケットがその層にある間だけ有効。
     char            cb[48] __aligned(8);
 
-    unsigned int    len;        // total length (linear + paged data)
-    unsigned int    data_len;   // paged data length (scatter-gather)
-    __u16           mac_len;    // MAC header length
-    __u16           hdr_len;    // cloned header length
+    unsigned int    len;        // 全体の長さ（リニア + ページ化データ）
+    unsigned int    data_len;   // ページ化データの長さ（scatter-gather）
+    __u16           mac_len;    // MAC ヘッダの長さ
+    __u16           hdr_len;    // clone されたヘッダの長さ
 
-    __u8            cloned:1;   // shares data with another skb
-    __u8            head_frag:1; // head is a page fragment (not kmalloc)
-    __u8            pp_recycle:1; // owned by page_pool
+    __u8            cloned:1;   // 別の skb とデータを共有している
+    __u8            head_frag:1; // head がページフラグメント（kmalloc ではない）
+    __u8            pp_recycle:1; // page_pool が所有している
 
-    // Protocol info
-    __be16          protocol;   // Ethernet type (ETH_P_IP, ETH_P_IPV6, ...)
-    __u16           transport_header;  // offset to L4 header
-    __u16           network_header;    // offset to L3 header (IP)
-    __u16           mac_header;        // offset to L2 header (Ethernet)
+    // プロトコル情報
+    __be16          protocol;   // Ethernet タイプ（ETH_P_IP, ETH_P_IPV6, ...）
+    __u16           transport_header;  // L4 ヘッダへのオフセット
+    __u16           network_header;    // L3 ヘッダ（IP）へのオフセット
+    __u16           mac_header;        // L2 ヘッダ（Ethernet）へのオフセット
 
-    // Data pointers
-    sk_buff_data_t  tail;       // end of linear data
-    sk_buff_data_t  end;        // end of buffer (hard limit)
-    unsigned char   *head;      // start of buffer
-    unsigned char   *data;      // start of valid data
+    // データポインタ
+    sk_buff_data_t  tail;       // リニアデータの終端
+    sk_buff_data_t  end;        // バッファの終端（ハードリミット）
+    unsigned char   *head;      // バッファの先頭
+    unsigned char   *data;      // 有効なデータの先頭
 
-    unsigned int    truesize;   // total memory charged to socket
+    unsigned int    truesize;   // ソケットに課金される総メモリ量
 
     // ...
-    // Note: paged fragments are NOT in struct sk_buff itself.
-    // They live in struct skb_shared_info at skb->end:
+    // 注: ページ化されたフラグメントは struct sk_buff 自体の中にはない。
+    // それらは skb->end にある struct skb_shared_info に置かれる:
     //   skb_shinfo(skb)->frags[0..nr_frags-1]
 };
 ```
 
-## Data pointer manipulation {#data-pointer-manipulation}
+## データポインタの操作 {#data-pointer-manipulation}
 
 ```c
-// Push data onto the front (add a header going down the stack)
+// 先頭にデータを押し込む（スタックを下るときにヘッダを付加する）
 void *skb_push(struct sk_buff *skb, unsigned int len)
 {
     skb->data -= len;
@@ -100,7 +100,7 @@ void *skb_push(struct sk_buff *skb, unsigned int len)
     return skb->data;
 }
 
-// Pull data off the front (consume a header going up the stack)
+// 先頭からデータを取り除く（スタックを上るときにヘッダを消費する）
 void *skb_pull(struct sk_buff *skb, unsigned int len)
 {
     skb->data += len;
@@ -108,7 +108,7 @@ void *skb_pull(struct sk_buff *skb, unsigned int len)
     return skb->data;
 }
 
-// Add data at the end
+// 末尾にデータを追加する
 void *skb_put(struct sk_buff *skb, unsigned int len)
 {
     void *tmp = skb_tail_pointer(skb);
@@ -118,10 +118,10 @@ void *skb_put(struct sk_buff *skb, unsigned int len)
 }
 ```
 
-## Header access macros {#header-access-macros}
+## ヘッダアクセス用マクロ {#header-access-macros}
 
 ```c
-// Get pointer to L2/L3/L4 headers
+// L2/L3/L4 ヘッダへのポインタを得る
 static inline struct ethhdr *eth_hdr(const struct sk_buff *skb)
 {
     return (struct ethhdr *)skb_mac_header(skb);
@@ -137,105 +137,105 @@ static inline struct tcphdr *tcp_hdr(const struct sk_buff *skb)
     return (struct tcphdr *)skb_transport_header(skb);
 }
 
-// Example: reading the destination IP from a received packet
+// 例: 受信パケットから宛先 IP を読む
 struct iphdr *iph = ip_hdr(skb);
 __be32 dst = iph->daddr;
 ```
 
-## The cb[] scratch area {#the-cb-scratch-area}
+## cb[]作業領域 {#the-cb-scratch-area}
 
-Each layer has 48 bytes of private storage in `cb[]`. This is a critical design — it avoids separate allocations for per-layer metadata:
+各層は`cb[]`に48バイトのプライベートな記憶領域を持つ。これは重要な設計であり、層ごとのメタデータのための別個の割り当てを避けられる:
 
 ```c
-// TCP uses cb[] to store TCP-specific info
+// TCP は cb[] を使って TCP 固有の情報を格納する
 struct tcp_skb_cb {
     union {
         struct inet_skb_parm    h4;
         struct inet6_skb_parm   h6;
     } header;
-    __u32   seq;            // Starting sequence number
+    __u32   seq;            // 開始シーケンス番号
     __u32   end_seq;        // SEQ + FIN + SYN + datalen
-    __u8    tcp_flags;      // TCP header flags
-    __u8    sacked;         // State of sack bits
+    __u8    tcp_flags;      // TCP ヘッダのフラグ
+    __u8    sacked;         // SACK ビットの状態
     // ...
 };
 #define TCP_SKB_CB(__skb)    ((struct tcp_skb_cb *)&((__skb)->cb[0]))
 
-// Usage:
+// 使い方:
 TCP_SKB_CB(skb)->seq = tcp_seq;
 ```
 
-## Cloning and sharing {#cloning-and-sharing}
+## cloneと共有 {#cloning-and-sharing}
 
-`skb_clone()` creates a new `sk_buff` that shares the same data buffer. The `cloned` bit is set on both. Useful for sending the same packet to multiple consumers (e.g., packet sockets + forwarding):
+`skb_clone()`は、同じデータバッファを共有する新しい`sk_buff`を作成する。両方に`cloned`ビットがセットされる。同じパケットを複数の消費者に送る（例: パケットソケット＋転送）場合に便利である:
 
 ```c
 struct sk_buff *clone = skb_clone(skb, GFP_ATOMIC);
-// clone->data and skb->data point to the same buffer
-// modifying headers requires skb_copy_expand() first
+// clone->data と skb->data は同じバッファを指す
+// ヘッダを変更するには、先に skb_copy_expand() が必要
 ```
 
-`skb_copy()` creates a full independent copy.
+`skb_copy()`は完全に独立したコピーを作成する。
 
-## Fragmented packets (scatter-gather) {#fragmented-packets-scatter-gather}
+## フラグメント化されたパケット（scatter-gather） {#fragmented-packets-scatter-gather}
 
-For large packets (e.g., TCP offload), data may span multiple pages:
+大きなパケット（例: TCPオフロード）では、データが複数のページにまたがることがある:
 
 ```c
-/* Paged portion lives in skb_shared_info at skb->end: */
+/* ページ化された部分は skb->end にある skb_shared_info に置かれる: */
 struct skb_shared_info {
     skb_frag_t frags[MAX_SKB_FRAGS];
     __u8       nr_frags;
     // ...
 };
-// Access via: skb_shinfo(skb)->frags[i]
-// data_len = total length of paged portions
-// len = linear + paged
+// アクセス方法: skb_shinfo(skb)->frags[i]
+// data_len = ページ化された部分の合計長
+// len = リニア + ページ化
 
-// Total accessible data:
-// skb->data ... skb->tail  (linear)
-// + frags[0] ... frags[nr_frags-1]  (paged)
+// アクセス可能なデータの全体:
+// skb->data ... skb->tail  （リニア）
+// + frags[0] ... frags[nr_frags-1]  （ページ化）
 ```
 
-Functions like `skb_linearize()` collapse paged data into the linear portion when a driver doesn't support scatter-gather.
+`skb_linearize()`のような関数は、ドライバがscatter-gatherをサポートしていない場合に、ページ化データをリニア部分にまとめる。
 
-## Allocation and freeing {#allocation-and-freeing}
+## 割り当てと解放 {#allocation-and-freeing}
 
 ```c
-// Allocate a new sk_buff with headroom for headers
+// ヘッダ用の headroom を持つ新しい sk_buff を割り当てる
 struct sk_buff *alloc_skb(unsigned int size, gfp_t priority);
 
-// Allocate from network allocator (uses page_pool for RX paths)
+// ネットワーク用アロケータから割り当てる（RX パスでは page_pool を使う）
 struct sk_buff *napi_alloc_skb(struct napi_struct *napi, unsigned int length);
 
-// Free the sk_buff (decrements refcount, frees when zero)
+// sk_buff を解放する（参照カウントを減らし、0 になれば解放）
 void kfree_skb(struct sk_buff *skb);
 
-// Free without error accounting (normal path)
+// エラー計上なしで解放する（通常のパス）
 void consume_skb(struct sk_buff *skb);
 ```
 
-`truesize` is charged to the socket's receive buffer (`sk->sk_rmem_alloc`). If the socket buffer fills up, new packets are dropped.
+`truesize`はソケットの受信バッファ（`sk->sk_rmem_alloc`）に課金される。ソケットバッファが満杯になると、新しいパケットは破棄される。
 
-## Why this design? {#why-this-design}
+## なぜこの設計なのか {#why-this-design}
 
-### The linear + paged split {#the-linear-paged-split}
+### リニア部分とページ化部分の分割 {#the-linear-paged-split}
 
-Early sk_buff implementations stored packet data in a single contiguous `kmalloc()` buffer. This worked fine until NICs gained scatter-gather DMA capability in the early 2000s.
+初期のsk_buffの実装は、パケットデータを単一の連続した`kmalloc()`バッファに格納していた。これは、2000年代初頭にNICがscatter-gather DMAの能力を獲得するまではうまく機能していた。
 
-A NIC with scatter-gather can DMA-write a received packet into non-contiguous physical pages — the payload goes into page cache pages, the header goes into a small slab allocation. Copying everything into one contiguous buffer would waste memory and CPU cycles. The kernel needed a representation that could hold both.
+scatter-gatherに対応したNICは、受信パケットを非連続な物理ページにDMAで書き込める。ペイロードはページキャッシュのページへ、ヘッダは小さなslab割り当てへ入る。すべてを1つの連続したバッファにコピーすれば、メモリとCPUサイクルが無駄になる。カーネルには、その両方を保持できる表現が必要だった。
 
-The solution was the linear + fragment model:
+その解決策が、リニア＋フラグメントのモデルである:
 
-- The **linear portion** (`head`…`tail`) holds packet headers — small, always contiguous, fast to access.
-- The **paged fragments** (`skb_shinfo(skb)->frags[]`) hold payload — large, may be non-contiguous pages that came directly from DMA.
+- **リニア部分**（`head`…`tail`）はパケットヘッダを保持する。小さく、常に連続しており、アクセスが速い。
+- **ページ化フラグメント**（`skb_shinfo(skb)->frags[]`）はペイロードを保持する。大きく、DMAから直接来た非連続なページであることもある。
 
-TCP Segmentation Offload (TSO, ~2002) solidified this: a NIC capable of TSO can take a single large buffer (e.g., 64KB) and split it into MTU-sized Ethernet frames. The kernel sends one sk_buff with the full TCP payload in the paged fragment area; the NIC handles fragmentation. Without paged fragments, the kernel would have had to pre-fragment everything in software.
+TCP Segmentation Offload（TSO、2002年頃）がこれを確固たるものにした。TSOに対応したNICは、単一の大きなバッファ（例: 64KB）を受け取り、MTUサイズのEthernetフレームに分割できる。カーネルはTCPペイロード全体をページ化フラグメント領域に持つsk_buffを1つ送り、NICが分割を担当する。ページ化フラグメントがなければ、カーネルはすべてをソフトウェアで事前に分割しなければならなかっただろう。
 
-### Why `skb_shared_info` lives at `skb->end` {#why-skbsharedinfo-lives-at-skb-end}
+### なぜ`skb_shared_info`は`skb->end`に置かれるのか {#why-skb_shared_info-lives-at-skb-end}
 
 ```c
-/* net/core/skbuff.c: skb data layout */
+/* net/core/skbuff.c: skb のデータレイアウト */
 /*
  *  head
  *   ↓
@@ -249,17 +249,17 @@ static inline struct skb_shared_info *skb_shinfo(const struct sk_buff *skb)
 }
 ```
 
-Placing `skb_shared_info` immediately after the linear data buffer (at `skb->end`) avoids a separate heap allocation for the fragment array. The linear buffer and the fragment metadata are allocated together in one `kmalloc()` call. This matters for the hot path: every received packet allocates an sk_buff, and reducing that to one allocation saves significant overhead at high packet rates.
+`skb_shared_info`をリニアデータバッファの直後（`skb->end`）に置くことで、フラグメント配列のための別個のヒープ割り当てを避けられる。リニアバッファとフラグメントのメタデータは、1回の`kmalloc()`呼び出しでまとめて割り当てられる。これはホットパスにとって重要である。受信するすべてのパケットがsk_buffを割り当てるため、それを1回の割り当てに減らすことで、高いパケットレートでは大きなオーバーヘッドが削減される。
 
-### Cloning and the reference-counted design {#cloning-and-the-reference-counted-design}
+### cloneと参照カウント方式の設計 {#cloning-and-the-reference-counted-design}
 
-`skb_clone()` creates a new sk_buff header that shares the same data buffer. This enables sending the same packet to multiple consumers — a packet socket listener and the normal forwarding path can both "have" the same sk_buff without copying the packet data.
+`skb_clone()`は、同じデータバッファを共有する新しいsk_buffヘッダを作成する。これにより、同じパケットを複数の消費者に送ることができる。パケットソケットのリスナーと通常の転送パスの両方が、パケットデータをコピーすることなく同じsk_buffを「持つ」ことができる。
 
-The `cloned` bit signals that the data buffer is shared; any layer that wants to modify headers must call `skb_unshare()` or `pskb_expand_head()` to get its own copy first. This copy-on-write discipline prevents one subsystem from corrupting data that another is reading.
+`cloned`ビットはデータバッファが共有されていることを示す。ヘッダを変更したい層は、まず`skb_unshare()`か`pskb_expand_head()`を呼んで自分専用のコピーを得なければならない。このコピーオンライトの規律によって、あるサブシステムが、別のサブシステムが読んでいるデータを破壊することを防いでいる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Socket Layer Overview](socket-layer.md) — How sk_buff connects to sockets
-- [Network Device and NAPI](napi.md) — How sk_buffs are allocated during receive
-- [Life of a Packet (receive)](life-of-packet-rx.md) — Full receive path using sk_buff
-- [Life of a Packet (transmit)](life-of-packet-tx.md) — Full transmit path
+- [ソケット層の概要](socket-layer.md) — sk_buffがソケットとどうつながるか
+- [ネットワークデバイスとNAPI](napi.md) — 受信時にsk_buffがどう割り当てられるか
+- [パケットの一生（受信）](life-of-packet-rx.md) — sk_buffを使った完全な受信パス
+- [パケットの一生（送信）](life-of-packet-tx.md) — 完全な送信パス

@@ -26,7 +26,7 @@ kvm_arch_vcpu_ioctl_run()          arch/x86/kvm/x86.c
 
 The key contract: a handler returning `1` means KVM can re-enter the guest immediately. Returning `0` or a negative error means `KVM_RUN` ioctl returns to userspace, which inspects `struct kvm_run` to learn what happened.
 
-### vcpu_enter_guest internals {#vcpuenterguest-internals}
+### vcpu_enter_guest internals {#vcpu_enter_guest-internals}
 
 Before entering the guest on each iteration, `vcpu_enter_guest()` processes any pending work:
 
@@ -122,7 +122,7 @@ AMD SVM follows the same pattern with `svm_exit_handlers[]` in `arch/x86/kvm/svm
 
 ## Common exit reasons {#common-exit-reasons}
 
-### EXIT_REASON_IO_INSTRUCTION — port I/O {#exitreasonio_instruction-port-io}
+### EXIT_REASON_IO_INSTRUCTION — port I/O {#exit_reason_io_instruction-port-io}
 
 Port I/O instructions (`in`/`out`) exit by default; the per-VMCS I/O bitmap can be configured to let specific ports run without exiting at all. Of the ports that do exit, the fast path handles simple cases in-kernel; the slow path (string I/O) falls back to full instruction emulation.
 
@@ -160,7 +160,7 @@ struct kvm_run {
 };
 ```
 
-### EXIT_REASON_EPT_VIOLATION — EPT/NPT page fault {#exitreasonept_violation-eptnpt-page-fault}
+### EXIT_REASON_EPT_VIOLATION — EPT/NPT page fault {#exit_reason_ept_violation-eptnpt-page-fault}
 
 When the guest accesses a guest physical address (GPA) that has no valid Extended Page Table (EPT) entry, or violates access permissions, hardware raises an EPT violation exit.
 
@@ -190,11 +190,11 @@ static int handle_ept_violation(struct kvm_vcpu *vcpu)
 - **MMIO range**: the GPA maps to a device, not RAM — triggers MMIO emulation (see below).
 - **Permission fault**: guest tried a disallowed access (e.g., write to read-only page for CoW).
 
-### EXIT_REASON_CPUID {#exitreasoncpuid}
+### EXIT_REASON_CPUID {#exit_reason_cpuid}
 
 `CPUID` is always intercepted so KVM can filter or synthesize feature bits. The handler calls `kvm_emulate_cpuid()` in `arch/x86/kvm/cpuid.c`, which looks up the leaf in `vcpu->arch.cpuid_entries[]` (populated from `KVM_SET_CPUID2` ioctl). Sensitive leaves are masked — for example, the hypervisor bit is set, and certain VMX feature bits are hidden from the guest.
 
-### EXIT_REASON_HLT {#exitreasonhlt}
+### EXIT_REASON_HLT {#exit_reason_hlt}
 
 When the guest executes `HLT` and interrupts are disabled, there is nothing for the vCPU to do. KVM calls `kvm_vcpu_halt()` which calls `kvm_vcpu_block()`:
 
@@ -224,11 +224,11 @@ bool kvm_vcpu_block(struct kvm_vcpu *vcpu)
 
 The vCPU thread sleeps until `kvm_vcpu_kick()` wakes it — typically because a virtual interrupt arrived.
 
-### EXIT_REASON_MSR_READ / MSR_WRITE {#exitreasonmsrread-msrwrite}
+### EXIT_REASON_MSR_READ / MSR_WRITE {#exit_reason_msr_read-msr_write}
 
 MSR accesses can be made cheap with the **MSR bitmap**: a 4KB page (pointed to by the VMCS's `MSR_BITMAP` field, not embedded in the VMCS itself) where each bit controls whether a specific MSR causes a VM exit. Frequently-read MSRs like `IA32_TSC` or `IA32_SYSENTER_EIP` can be pass-through (no exit). For intercepted MSRs, KVM dispatches to `kvm_emulate_rdmsr()` or `kvm_emulate_wrmsr()` (in `arch/x86/kvm/x86.c`), which uses switch-based per-MSR dispatch inside `__kvm_get_msr()` / `__kvm_set_msr()`.
 
-### EXIT_REASON_EXCEPTION_NMI {#exitreasonexception_nmi}
+### EXIT_REASON_EXCEPTION_NMI {#exit_reason_exception_nmi}
 
 Guest exceptions (page faults, GPFs, breakpoints) and NMIs exit here. `handle_exception_nmi()` in `arch/x86/kvm/vmx/vmx.c` inspects the `VM_EXIT_INTR_INFO` VMCS field to determine the vector. Depending on context:
 

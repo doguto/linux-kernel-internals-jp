@@ -1,18 +1,18 @@
-# System Calls {#system-calls}
+# システムコール {#system-calls}
 
-> The contract between userspace and the kernel
+> ユーザー空間とカーネルの間の契約
 
-## What system calls are {#what-system-calls-are}
+## システムコールとは何か {#what-system-calls-are}
 
-A system call is a controlled entry point into the kernel. It:
+システムコールは、カーネルへの制御されたエントリポイントである。システムコールは次のことを行う。
 
-1. **Saves CPU state** — registers, flags
-2. **Switches privilege** — user mode (ring 3) → kernel mode (ring 0)
-3. **Validates arguments** — checks pointers, copies data from userspace
-4. **Executes kernel code** — the actual operation
-5. **Returns to userspace** — restores registers, switches back to ring 3
+1. **CPUの状態を保存する** — レジスタ、フラグ
+2. **特権レベルを切り替える** — ユーザーモード（ring 3）→ カーネルモード（ring 0）
+3. **引数を検証する** — ポインタをチェックし、ユーザー空間からデータをコピーする
+4. **カーネルコードを実行する** — 実際の処理
+5. **ユーザー空間に戻る** — レジスタを復元し、ring 3に戻る
 
-On x86-64, the `syscall` instruction triggers this transition. The kernel uses the value in `rax` as the syscall number to dispatch to the right handler.
+x86-64では、`syscall` 命令がこの遷移を引き起こす。カーネルは `rax` の値をsyscall番号として使い、適切なハンドラにディスパッチする。
 
 ```
 Userspace                    Kernel
@@ -33,35 +33,35 @@ glibc: write(fd, buf, len)
   │  return rax (bytes written, or -errno)
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 内容 |
 |------|----------------|
-| [Syscall Entry Path](syscall-entry.md) | x86-64 entry, privilege switch, argument passing, vDSO |
-| [SYSCALL_DEFINE and dispatch](syscall-define.md) | How syscalls are defined, the dispatch table, ABI |
-| [Adding a new syscall](adding-syscall.md) | Step-by-step walkthrough for kernel contributors |
-| [32-bit Compat Syscalls](compat.md) | Supporting 32-bit userspace on 64-bit kernels; compat types and helpers |
-| [ptrace and Syscall Interception](ptrace-interception.md) | How strace, debuggers, and seccomp-notify intercept syscalls |
-| [vDSO and Virtual System Calls](vdso.md) | Kernel-accelerated clock reads without ring transitions |
-| [Syscall Auditing](audit.md) | audit subsystem, audit_context, NETLINK_AUDIT, auditctl/ausearch/aureport |
-| [Syscall Restart Mechanisms](restart-block.md) | ERESTARTSYS, ERESTART_RESTARTBLOCK, restart_block, restart_syscall() |
-| [Syscall War Stories](war-stories.md) | Real bugs, ABI breaks, and lessons from the syscall interface |
+| [syscallのエントリパス](syscall-entry.md) | x86-64のエントリ、特権レベルの切り替え、引数の受け渡し、vDSO |
+| [SYSCALL_DEFINEとディスパッチ](syscall-define.md) | syscallの定義方法、ディスパッチテーブル、ABI |
+| [新しいsyscallの追加](adding-syscall.md) | カーネルコントリビュータ向けのステップバイステップ解説 |
+| [32ビット互換syscall](compat.md) | 64ビットカーネル上での32ビットユーザー空間のサポート。compat型とヘルパー |
+| [ptraceとsyscallのインターセプト](ptrace-interception.md) | strace、デバッガ、seccomp-notifyがsyscallをインターセプトする仕組み |
+| [vDSOと仮想システムコール](vdso.md) | リング遷移なしでカーネル支援による高速な時刻読み取り |
+| [syscallの監査](audit.md) | auditサブシステム、audit_context、NETLINK_AUDIT、auditctl/ausearch/aureport |
+| [syscallの再開メカニズム](restart-block.md) | ERESTARTSYS、ERESTART_RESTARTBLOCK、restart_block、restart_syscall() |
+| [syscallの事件簿](war-stories.md) | syscallインターフェースにまつわる実際のバグ、ABI破壊、教訓 |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# List all syscalls with numbers
+# 全syscallを番号付きで一覧表示する
 ausyscall --dump | head -20
 
-# Trace syscalls of a process
+# プロセスのsyscallをトレースする
 strace ls
 
-# Count syscalls
+# syscallの回数を数える
 strace -c ls 2>&1
 
-# See syscall overhead
+# syscallのオーバーヘッドを見る
 perf stat -e 'syscalls:sys_enter_*' -- ls
 
-# See syscall table in kernel
+# カーネル内のsyscallテーブルを見る
 grep -r "SYSCALL_DEFINE" kernel/sys.c | head -10
 ```

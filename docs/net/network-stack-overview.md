@@ -1,22 +1,22 @@
-# Why Is the Network Stack So Complex? {#why-is-the-network-stack-so-complex}
+# なぜネットワークスタックはこれほど複雑なのか {#why-is-the-network-stack-so-complex}
 
-> A mental model for the Linux networking subsystem
+> Linuxネットワーキングサブシステムを理解するためのメンタルモデル
 
-## The fundamental challenge {#the-fundamental-challenge}
+## 根本的な課題 {#the-fundamental-challenge}
 
-Networking is not a single problem — it's dozens of layered problems that must compose cleanly:
+ネットワーキングは単一の問題ではない。きれいに組み合わさらなければならない、何十もの階層化された問題である:
 
-- Different hardware (Ethernet, WiFi, InfiniBand, loopback)
-- Different address families (IPv4, IPv6, AF_UNIX, AF_PACKET)
-- Different transport protocols (TCP, UDP, SCTP, DCCP)
-- Different use cases (web servers, databases, real-time systems, containers)
-- Hard requirements: correctness, performance, security, extensibility
+- 異なるハードウェア（Ethernet、WiFi、InfiniBand、ループバック）
+- 異なるアドレスファミリ（IPv4、IPv6、AF_UNIX、AF_PACKET）
+- 異なるトランスポートプロトコル（TCP、UDP、SCTP、DCCP）
+- 異なるユースケース（Webサーバー、データベース、リアルタイムシステム、コンテナ）
+- 厳しい要件: 正しさ、性能、セキュリティ、拡張性
 
-The Linux network stack is complex because it solves all of these simultaneously, and has evolved over 30 years as each requirement was added.
+Linuxネットワークスタックが複雑なのは、これらすべてを同時に解決しており、要件が加わるたびに30年かけて進化してきたからである。
 
-## The layer model {#the-layer-model}
+## 階層モデル {#the-layer-model}
 
-The stack mirrors the OSI/IP model, but in kernel terms:
+スタックはOSI/IPモデルを反映しているが、カーネルの用語で表すと次のようになる:
 
 ```
 Application (userspace)
@@ -37,9 +37,9 @@ Link layer            net/core/dev.c, driver-specific
 Hardware              NIC driver, NAPI, DMA ring buffers
 ```
 
-Each layer adds/strips headers using the same `sk_buff` structure, pushing and pulling data pointers. **No data is copied between layers** — the same buffer passes through the entire stack.
+各層は同じ`sk_buff`構造体を使い、データポインタを前後に動かしてヘッダを付加・除去する。**層の間でデータはコピーされない**。同じバッファがスタック全体を通過する。
 
-## The receive path in one picture {#the-receive-path-in-one-picture}
+## 受信パスを1枚の図で {#the-receive-path-in-one-picture}
 
 ```
 NIC DMA → ring buffer
@@ -64,7 +64,7 @@ ip_rcv() → ip_rcv_finish()
               sk->sk_data_ready(sk) → wake up reader
 ```
 
-## The transmit path in one picture {#the-transmit-path-in-one-picture}
+## 送信パスを1枚の図で {#the-transmit-path-in-one-picture}
 
 ```
 write()/sendmsg()
@@ -84,93 +84,93 @@ dev_queue_xmit()
     ↓ DMA to NIC
 ```
 
-## Why multiple abstraction layers? {#why-multiple-abstraction-layers}
+## なぜ複数の抽象化層があるのか {#why-multiple-abstraction-layers}
 
-### 1. Flexibility without copying {#1-flexibility-without-copying}
+### 1. コピーなしの柔軟性 {#1-flexibility-without-copying}
 
-Each layer operates on the same `sk_buff`. TCP adds a TCP header by calling `skb_push()` — moving the `data` pointer back 20 bytes and writing the header there. IP does the same for its header. Ethernet does the same for its header. **Zero copies across layers** for the headers.
+各層は同じ`sk_buff`を操作する。TCPは`skb_push()`を呼んでTCPヘッダを付加する。これは`data`ポインタを20バイト前に戻し、そこにヘッダを書き込む操作である。IPも自分のヘッダについて同じことを行う。Ethernetも同様である。ヘッダについては**層をまたいでコピーはゼロ**である。
 
-### 2. Protocol independence {#2-protocol-independence}
+### 2. プロトコル非依存性 {#2-protocol-independence}
 
-The socket layer doesn't know if the underlying transport is TCP or UDP. `proto_ops->sendmsg()` dispatches to the right implementation. Adding a new protocol (SCTP, QUIC in kernel, etc.) requires only implementing the right interfaces.
+ソケット層は、下にあるトランスポートがTCPかUDPかを知らない。`proto_ops->sendmsg()`が適切な実装にディスパッチする。新しいプロトコル（SCTP、カーネル内QUICなど）を追加するには、適切なインターフェースを実装するだけでよい。
 
-### 3. Extensibility via hooks {#3-extensibility-via-hooks}
+### 3. フックによる拡張性 {#3-extensibility-via-hooks}
 
-**Netfilter** provides hooks at fixed points in the IP stack (PREROUTING, INPUT, FORWARD, OUTPUT, POSTROUTING). Firewalls, NAT, connection tracking, and packet mangling all attach at these hooks — without modifying the core stack.
+**Netfilter**はIPスタック内の固定された地点（PREROUTING、INPUT、FORWARD、OUTPUT、POSTROUTING）にフックを提供する。ファイアウォール、NAT、コネクショントラッキング、パケット改変はすべてこれらのフックに接続され、コアスタックを変更する必要はない。
 
-**XDP** hooks even earlier, before `sk_buff` allocation, for maximum performance.
+**XDP**は、最大の性能を得るために、さらに早い段階、つまり`sk_buff`の割り当て前にフックする。
 
-**eBPF socket programs** hook at the socket level for per-flow policy.
+**eBPFソケットプログラム**は、フロー単位のポリシーのためにソケットレベルでフックする。
 
-### 4. NAPI for high-throughput {#4-napi-for-high-throughput}
+### 4. 高スループットのためのNAPI {#4-napi-for-high-throughput}
 
-The interrupt-driven receive model doesn't scale. NAPI switches to polling under load, processing packets in batches in softirq context. GRO merges segments. RSS distributes across CPUs. All of this is layered on top of the core receive path.
+割り込み駆動の受信モデルはスケールしない。NAPIは高負荷時にポーリングに切り替え、softirqコンテキストでパケットをバッチ処理する。GROはセグメントを結合する。RSSは複数のCPUに処理を分散する。これらはすべて、コアの受信パスの上に積み重ねられている。
 
-## Key data structures at a glance {#key-data-structures-at-a-glance}
+## 主要なデータ構造の一覧 {#key-data-structures-at-a-glance}
 
-| Structure | Where | Purpose |
+| 構造体 | 場所 | 目的 |
 |-----------|-------|---------|
-| `sk_buff` | everywhere | The packet — moves through all layers |
-| `struct socket` | net/core | VFS-facing: fd → socket mapping |
-| `struct sock` | net/core | Protocol-facing: queues, state, callbacks |
-| `struct proto` | per-protocol | TCP/UDP implementation |
-| `struct net_device` | drivers | NIC abstraction |
-| `struct napi_struct` | drivers | Per-queue receive polling |
-| `struct dst_entry` | routing | Next-hop routing cache entry |
-| `struct nf_hook_ops` | netfilter | Firewall/NAT hook registration |
+| `sk_buff` | あらゆる場所 | パケットそのもの。すべての層を通過する |
+| `struct socket` | net/core | VFS側: fd → ソケットの対応付け |
+| `struct sock` | net/core | プロトコル側: キュー、状態、コールバック |
+| `struct proto` | プロトコルごと | TCP/UDPの実装 |
+| `struct net_device` | ドライバ | NICの抽象化 |
+| `struct napi_struct` | ドライバ | キューごとの受信ポーリング |
+| `struct dst_entry` | ルーティング | ネクストホップのルーティングキャッシュエントリ |
+| `struct nf_hook_ops` | netfilter | ファイアウォール/NATフックの登録 |
 
-## Complexity by design, not accident {#complexity-by-design-not-accident}
+## 複雑さは偶然ではなく設計によるもの {#complexity-by-design-not-accident}
 
-The stack's complexity reflects genuine requirements:
+スタックの複雑さは、本物の要件を反映している:
 
-- **TCP** must handle packet loss, reordering, congestion, flow control, and connection lifetime — it's inherently complex
-- **NAT** must track connection state to rewrite both directions — requires the conntrack subsystem
-- **Multi-queue NICs** with RSS, RPS, XPS, and IRQ affinity require per-CPU state at every layer
-- **Containers** with network namespaces require virtualizing the entire network stack
-- **Security** (nftables, seccomp, SELinux socket labels) requires hooks at multiple points
+- **TCP**はパケットロス、順序の入れ替わり、輻輳、フロー制御、コネクションの寿命を扱わなければならない。本質的に複雑である
+- **NAT**は双方向を書き換えるためにコネクションの状態を追跡しなければならない。conntrackサブシステムが必要になる
+- RSS、RPS、XPS、IRQアフィニティを備えた**マルチキューNIC**は、あらゆる層でCPUごとの状態を必要とする
+- ネットワークnamespaceを使う**コンテナ**は、ネットワークスタック全体の仮想化を必要とする
+- **セキュリティ**（nftables、seccomp、SELinuxのソケットラベル）は複数の地点でのフックを必要とする
 
-Understanding any one part (TCP, routing, Netfilter, NAPI) is tractable. The stack as a whole is complex because it's many tractable parts that must compose perfectly.
+どれか1つの部分（TCP、ルーティング、Netfilter、NAPI）を理解するのは手に負える範囲である。スタック全体が複雑なのは、それが手に負える多くの部品から成り、それらが完璧に組み合わさらなければならないからである。
 
-## Where to go next {#where-to-go-next}
+## 次に読むもの {#where-to-go-next}
 
-The best way to understand the stack is to follow a packet:
+スタックを理解する最良の方法は、パケットを追いかけることである:
 
-- [Life of a Packet (receive)](life-of-packet-rx.md) — NIC to application, step by step
-- [Life of a Packet (transmit)](life-of-packet-tx.md) — Application to wire
+- [パケットの一生（受信）](life-of-packet-rx.md) — NICからアプリケーションまで、ステップごとに
+- [パケットの一生（送信）](life-of-packet-tx.md) — アプリケーションから回線まで
 
-Or start with the key structures:
+あるいは主要な構造体から始める:
 
-- [sk_buff](sk-buff.md) — The packet structure used everywhere
-- [Socket Layer Overview](socket-layer.md) — The socket/sock/proto hierarchy
-- [Network Device and NAPI](napi.md) — The receive hardware interface
+- [sk_buff](sk-buff.md) — あらゆる場所で使われるパケット構造体
+- [ソケット層の概要](socket-layer.md) — socket/sock/protoの階層
+- [ネットワークデバイスとNAPI](napi.md) — 受信ハードウェアのインターフェース
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### In this repo {#in-this-repo}
+### このリポジトリ内 {#in-this-repo}
 
-- [sk-buff.md](sk-buff.md) — Deep dive into the `sk_buff` structure: headroom, tailroom, clone vs copy, and GRO
-- [socket-layer.md](socket-layer.md) — The `struct socket` / `struct sock` / `struct proto` hierarchy and VFS integration
-- [life-of-packet-rx.md](life-of-packet-rx.md) — Full annotated receive path from NIC interrupt to `recv()` returning
-- [life-of-packet-tx.md](life-of-packet-tx.md) — Full annotated transmit path from `send()` to DMA descriptor hand-off
-- [napi.md](napi.md) — NAPI polling, GRO, and multi-queue RSS/RPS/XPS mechanics
-- [tc-qdisc.md](tc-qdisc.md) — Traffic control: qdiscs, classes, filters, and the HTB/FQ schedulers
+- [sk-buff.md](sk-buff.md) — `sk_buff`構造体の詳細: headroom、tailroom、cloneとcopyの違い、GRO
+- [socket-layer.md](socket-layer.md) — `struct socket` / `struct sock` / `struct proto`の階層とVFSとの統合
+- [life-of-packet-rx.md](life-of-packet-rx.md) — NICの割り込みから`recv()`が返るまでの、注釈付きの完全な受信パス
+- [life-of-packet-tx.md](life-of-packet-tx.md) — `send()`からDMAディスクリプタの引き渡しまでの、注釈付きの完全な送信パス
+- [napi.md](napi.md) — NAPIポーリング、GRO、マルチキューのRSS/RPS/XPSの仕組み
+- [tc-qdisc.md](tc-qdisc.md) — トラフィック制御: qdisc、クラス、フィルタ、HTB/FQスケジューラ
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [`net/core/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core) — Socket layer, `sk_buff` management, `dev.c` (the central TX/RX dispatch), and NAPI
-- [`net/ipv4/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv4) — IPv4 input/output, TCP, UDP, routing, and Netfilter hook sites
-- [`include/linux/skbuff.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/skbuff.h) — Complete `sk_buff` definition and the inline helpers used at every layer
-- [`include/linux/netdevice.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/netdevice.h) — `struct net_device`, `struct napi_struct`, and the `net_device_ops` vtable
+- [`net/core/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/core) — ソケット層、`sk_buff`の管理、`dev.c`（TX/RXの中央ディスパッチ）、NAPI
+- [`net/ipv4/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/net/ipv4) — IPv4の入出力、TCP、UDP、ルーティング、Netfilterのフック箇所
+- [`include/linux/skbuff.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/skbuff.h) — `sk_buff`の完全な定義と、各層で使われるインラインヘルパー
+- [`include/linux/netdevice.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/netdevice.h) — `struct net_device`、`struct napi_struct`、`net_device_ops`の関数テーブル
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/networking/`](https://www.kernel.org/doc/html/latest/networking/index.html) — Official kernel networking docs: scaling, packet mmap, timestamping, and more
-- [`Documentation/networking/scaling.rst`](https://www.kernel.org/doc/html/latest/networking/scaling.html) — RSS, RPS, RFS, XPS, and aRFS explained with tuning guidance
-- [`Documentation/networking/kapi.rst`](https://www.kernel.org/doc/html/latest/networking/kapi.html) — Kernel networking API reference (socket buffer, device, and protocol APIs)
+- [`Documentation/networking/`](https://www.kernel.org/doc/html/latest/networking/index.html) — 公式のカーネルネットワーキングドキュメント: スケーリング、packet mmap、タイムスタンプなど
+- [`Documentation/networking/scaling.rst`](https://www.kernel.org/doc/html/latest/networking/scaling.html) — RSS、RPS、RFS、XPS、aRFSの解説とチューニングの指針
+- [`Documentation/networking/kapi.rst`](https://www.kernel.org/doc/html/latest/networking/kapi.html) — カーネルネットワーキングAPIリファレンス（ソケットバッファ、デバイス、プロトコルのAPI）
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Driver porting: Network drivers (2003)](https://lwn.net/Articles/30107/) — Introduces NAPI and the move away from pure interrupt-driven receive
-- [JLS2009: Generic receive offload](https://lwn.net/Articles/358910/) — How GRO merges segments in software, analogous to hardware LRO
-- [BPF: the universal in-kernel virtual machine (2014)](https://lwn.net/Articles/599755/) — How BPF grew from a packet-filtering language into a general-purpose in-kernel virtual machine used well beyond networking
-- [Early packet drop — and more — with BPF (2016)](https://lwn.net/Articles/682538/) — XDP design goals and the hook-before-skb model
+- [Driver porting: Network drivers (2003)](https://lwn.net/Articles/30107/) — NAPIの導入と、純粋な割り込み駆動受信からの移行
+- [JLS2009: Generic receive offload](https://lwn.net/Articles/358910/) — GROがハードウェアLROと同様に、ソフトウェアでセグメントを結合する仕組み
+- [BPF: the universal in-kernel virtual machine (2014)](https://lwn.net/Articles/599755/) — BPFがパケットフィルタリング言語から、ネットワーキングをはるかに超えて使われる汎用のカーネル内仮想マシンへと成長した経緯
+- [Early packet drop — and more — with BPF (2016)](https://lwn.net/Articles/682538/) — XDPの設計目標と、skbより前にフックするモデル

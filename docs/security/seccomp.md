@@ -204,7 +204,7 @@ The default Docker profile blocks (among others):
 - `syslog` — read kernel ring buffer
 - `uselib` — old library loading
 
-## SECCOMP_RET_USER_NOTIF: supervisor pattern {#seccompretuser_notif-supervisor-pattern}
+## SECCOMP_RET_USER_NOTIF: supervisor pattern {#seccomp_ret_user_notif-supervisor-pattern}
 
 Since Linux 5.0, a filter can defer decisions to a supervisor process. This enables:
 

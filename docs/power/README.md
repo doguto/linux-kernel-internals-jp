@@ -1,8 +1,8 @@
-# Power Management {#power-management}
+# 電源管理 {#power-management}
 
-> CPU frequency scaling, device runtime power, and system suspend in the Linux kernel
+> LinuxカーネルにおけるCPU周波数スケーリング、デバイスのランタイム電源管理、システムサスペンド
 
-## The power management stack {#the-power-management-stack}
+## 電源管理スタック {#the-power-management-stack}
 
 ```
 User space (udev, systemd, powertop)
@@ -25,40 +25,40 @@ cpufreq subsystem (drivers/cpufreq/)
 Hardware: ACPI P-states, HWP (Hardware P-state), C-states, ARM DVFS
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [cpufreq](cpufreq.md) | P-states, governors, schedutil, intel_pstate, HWP |
-| [cpuidle](cpuidle.md) | C-states, latency/power tradeoffs, menu and TEO governors |
-| [Runtime PM](runtime-pm.md) | dev_pm_ops, pm_runtime_get/put, usage counting, autosuspend |
-| [System Suspend](suspend.md) | suspend-to-RAM, hibernate, wakeup sources, PM notifiers |
-| [Thermal Management](thermal.md) | thermal zones, trip points, cooling devices, step_wise, power_allocator |
-| [Power Domains and genpd](power-domains.md) | generic_pm_domain, rail dependencies, DT binding, debugfs |
-| [Power Capping and RAPL](power-capping.md) | Intel RAPL, powercap framework, MSRs, ARM SCMI |
-| [War Stories](war-stories.md) | Suspend regressions, runtime PM deadlocks, thermal storms, RAPL surprises |
+| [cpufreq](cpufreq.md) | P-state、ガバナ、schedutil、intel_pstate、HWP |
+| [cpuidle](cpuidle.md) | C-state、レイテンシと電力のトレードオフ、menuガバナとTEOガバナ |
+| [Runtime PM](runtime-pm.md) | dev_pm_ops、pm_runtime_get/put、使用カウント、autosuspend |
+| [システムサスペンド](suspend.md) | suspend-to-RAM、ハイバネート、ウェイクアップソース、PM notifier |
+| [熱管理](thermal.md) | サーマルゾーン、トリップポイント、冷却デバイス、step_wise、power_allocator |
+| [電源ドメインとgenpd](power-domains.md) | generic_pm_domain、電源レールの依存関係、DTバインディング、debugfs |
+| [パワーキャッピングとRAPL](power-capping.md) | Intel RAPL、powercapフレームワーク、MSR、ARM SCMI |
+| [事件簿](war-stories.md) | サスペンドのリグレッション、ランタイムPMのデッドロック、サーマルストーム、RAPLの意外な挙動 |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Current CPU frequency scaling
+# 現在のCPU周波数スケーリング
 cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor
 cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq
 
-# Change governor (all CPUs)
+# ガバナを変更する（全CPU）
 echo schedutil | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-# Device runtime PM status
+# デバイスのランタイムPM状態
 cat /sys/bus/pci/devices/*/power/runtime_status
 # active / suspended / error
 
-# System suspend states available
+# 利用可能なシステムサスペンド状態
 cat /sys/power/state
 # freeze mem disk
 
-# Suspend to RAM
+# RAMへのサスペンド
 echo mem | sudo tee /sys/power/state
 
-# Who is blocking suspend?
+# 誰がサスペンドを妨げているか？
 cat /sys/kernel/debug/wakeup_sources
 ```

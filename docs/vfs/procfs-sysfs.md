@@ -1,36 +1,36 @@
-# procfs and sysfs {#procfs-and-sysfs}
+# procfsとsysfs {#procfs-and-sysfs}
 
-> How /proc and /sys expose kernel state to userspace
+> /procと/sysがカーネルの状態をユーザー空間へどう公開するか
 
-## /proc: the process filesystem {#proc-the-process-filesystem}
+## /proc: プロセスファイルシステム {#proc-the-process-filesystem}
 
-`/proc` is a virtual filesystem that exposes kernel and process information. Files in `/proc` have no on-disk representation — content is generated on-the-fly when read. The `proc` filesystem has been part of Linux since its earliest versions, inherited from Unix tradition [(man page)](https://www.man7.org/linux/man-pages/man5/proc.5.html).
+`/proc`は、カーネルとプロセスの情報を公開する仮想ファイルシステムである。`/proc`内のファイルにはディスク上の表現がなく、内容は読み込まれた時点でその場で生成される。`proc`ファイルシステムはUnixの伝統を受け継いだもので、Linuxの最初期のバージョンから存在している[(man page)](https://www.man7.org/linux/man-pages/man5/proc.5.html)。
 
 ```bash
-# Common /proc files:
-/proc/cpuinfo         # CPU description
-/proc/meminfo         # memory statistics
-/proc/interrupts      # IRQ counts per CPU
-/proc/net/dev         # network interface statistics
-/proc/sys/            # sysctl tunables
+# よく使われる /proc のファイル:
+/proc/cpuinfo         # CPUの説明
+/proc/meminfo         # メモリ統計
+/proc/interrupts      # CPUごとのIRQ回数
+/proc/net/dev         # ネットワークインターフェースの統計
+/proc/sys/            # sysctlのチューニング可能なパラメータ
 
-# Per-process (one directory per PID):
-/proc/<pid>/maps      # virtual memory areas
-/proc/<pid>/status    # task status
-/proc/<pid>/fd/       # open file descriptors (symlinks)
-/proc/<pid>/cmdline   # command line arguments
-/proc/<pid>/mem       # process memory (requires ptrace)
+# プロセスごと（PIDごとに1ディレクトリ）:
+/proc/<pid>/maps      # 仮想メモリ領域
+/proc/<pid>/status    # タスクの状態
+/proc/<pid>/fd/       # オープンされたファイルディスクリプタ（シンボリックリンク）
+/proc/<pid>/cmdline   # コマンドライン引数
+/proc/<pid>/mem       # プロセスのメモリ（ptraceが必要）
 ```
 
-## Creating a /proc entry {#creating-a-proc-entry}
+## /procエントリの作成 {#creating-a-proc-entry}
 
-### Simple single-value file {#simple-single-value-file}
+### 単純な単一値のファイル {#simple-single-value-file}
 
 ```c
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
 
-/* Show function: called on read */
+/* show関数: 読み込み時に呼ばれる */
 static int mymod_show(struct seq_file *m, void *v)
 {
     seq_printf(m, "value: %d\n", my_value);
@@ -38,7 +38,7 @@ static int mymod_show(struct seq_file *m, void *v)
     return 0;
 }
 
-/* Write function: called on write */
+/* write関数: 書き込み時に呼ばれる */
 static ssize_t mymod_write(struct file *file, const char __user *buf,
                              size_t count, loff_t *ppos)
 {
@@ -50,7 +50,7 @@ static ssize_t mymod_write(struct file *file, const char __user *buf,
     return count;
 }
 
-/* File operations: use single_open for simple one-page files */
+/* ファイル操作: 単純な1ページのファイルにはsingle_openを使う */
 static int mymod_open(struct inode *inode, struct file *file)
 {
     return single_open(file, mymod_show, NULL);
@@ -64,11 +64,11 @@ static const struct proc_ops mymod_fops = {
     .proc_release = single_release,
 };
 
-/* Create /proc/mymod on init */
+/* init時に /proc/mymod を作成する */
 static int __init mymod_init(void)
 {
     proc_create("mymod", 0644, NULL, &mymod_fops);
-    /* NULL parent = /proc/ root */
+    /* 親がNULL = /proc/ のルート */
     return 0;
 }
 
@@ -78,12 +78,12 @@ static void __exit mymod_exit(void)
 }
 ```
 
-### seq_file: multi-page iterators {#seq_file-multi-page-iterators}
+### seq_file: 複数ページのイテレータ {#seq_file-multi-page-iterators}
 
-For files with many entries (like `/proc/net/tcp`), use the seq_file iterator API:
+多数のエントリを持つファイル（`/proc/net/tcp`など）では、seq_fileのイテレータAPIを使う:
 
 ```c
-/* Iterate over a list of entries */
+/* エントリのリストを順に処理する */
 static void *mylist_seq_start(struct seq_file *m, loff_t *pos)
 {
     return seq_list_start(&my_list, *pos);
@@ -96,7 +96,7 @@ static void *mylist_seq_next(struct seq_file *m, void *v, loff_t *pos)
 
 static void mylist_seq_stop(struct seq_file *m, void *v)
 {
-    /* Cleanup if needed (unlock, etc.) */
+    /* 必要なら後始末を行う（アンロックなど） */
 }
 
 static int mylist_seq_show(struct seq_file *m, void *v)
@@ -113,39 +113,39 @@ static const struct seq_operations mylist_seq_ops = {
     .show  = mylist_seq_show,
 };
 
-/* Open: set up the seq_file */
+/* open: seq_fileをセットアップする */
 static int mylist_open(struct inode *inode, struct file *file)
 {
     return seq_open(file, &mylist_seq_ops);
 }
 ```
 
-`seq_file` handles pagination automatically: if the output doesn't fit in one page, the kernel calls `start`/`next`/`show` again with the right offset for the next read.
+`seq_file`はページ分割を自動的に処理する。出力が1ページに収まらない場合、カーネルは次の読み込みのために適切なオフセットで`start`/`next`/`show`を再度呼び出す。
 
-### /proc directory {#proc-directory}
+### /procディレクトリ {#proc-directory}
 
 ```c
 struct proc_dir_entry *mydir;
 
-/* Create /proc/mymod/ directory */
+/* /proc/mymod/ ディレクトリを作成する */
 mydir = proc_mkdir("mymod", NULL);
 
-/* Create /proc/mymod/status */
+/* /proc/mymod/status を作成する */
 proc_create("status", 0444, mydir, &status_fops);
 
-/* Create /proc/mymod/stats (read-only) */
+/* /proc/mymod/stats を作成する（読み取り専用） */
 proc_create_single("stats", 0444, mydir, stats_show);
 
-/* Remove on exit */
+/* exit時に削除する */
 remove_proc_subtree("mymod", NULL);
 ```
 
-## /proc internals: struct proc_dir_entry {#proc-internals-struct-procdirentry}
+## /procの内部: struct proc_dir_entry {#proc-internals-struct-proc_dir_entry}
 
 ```c
 /* fs/proc/internal.h */
 struct proc_dir_entry {
-    /* Inode number: assigned sequentially */
+    /* inode番号: 連番で割り当てられる */
     unsigned int    low_ino;
     nlink_t         nlink;
     kuid_t          uid;
@@ -170,11 +170,11 @@ struct proc_dir_entry {
 };
 ```
 
-The `/proc` filesystem is implemented as a regular VFS filesystem (`proc_fs_type`) that creates inodes on demand when a path is looked up.
+`/proc`ファイルシステムは、パスが検索されたときにオンデマンドでinodeを作成する、通常のVFSファイルシステム（`proc_fs_type`）として実装されている。
 
-## sysfs: the device and driver hierarchy {#sysfs-the-device-and-driver-hierarchy}
+## sysfs: デバイスとドライバの階層 {#sysfs-the-device-and-driver-hierarchy}
 
-`sysfs` was introduced in Linux 2.6.0 by Patrick Mochel as a RAM-based filesystem for exporting kernel objects (kobjects) and their attributes to userspace [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html). It is mounted at `/sys` and exposes the kernel's device model as a directory tree:
+`sysfs`は、カーネルオブジェクト（kobject）とその属性をユーザー空間へエクスポートするためのRAMベースのファイルシステムとして、Patrick MochelによってLinux 2.6.0で導入された[(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html)。`/sys`にマウントされ、カーネルのデバイスモデルをディレクトリツリーとして公開する:
 
 ```
 /sys/
@@ -189,42 +189,42 @@ The `/proc` filesystem is implemented as a regular VFS filesystem (`proc_fs_type
     └── security/
 ```
 
-## kobject: the sysfs object {#kobject-the-sysfs-object}
+## kobject: sysfsのオブジェクト {#kobject-the-sysfs-object}
 
-`kobject` is the fundamental object in the sysfs/device model hierarchy:
+`kobject`は、sysfs/デバイスモデル階層における基本的なオブジェクトである:
 
 ```c
 /* include/linux/kobject.h */
 struct kobject {
     const char          *name;
     struct list_head    entry;
-    struct kobject      *parent;         /* parent kobject */
+    struct kobject      *parent;         /* 親kobject */
     struct kset         *kset;
     const struct kobj_type *ktype;
-    struct kernfs_node  *sd;             /* sysfs directory node */
-    struct kref         kref;            /* reference count */
+    struct kernfs_node  *sd;             /* sysfsのディレクトリノード */
+    struct kref         kref;            /* 参照カウント */
     /* ... */
 };
 
-/* Create a kobject (creates a sysfs directory): */
+/* kobjectを作成する（sysfsディレクトリが作成される）: */
 struct kobject *kobj;
 kobj = kobject_create_and_add("myobject", kernel_kobj);
-/* Creates: /sys/kernel/myobject/ */
+/* 作成されるもの: /sys/kernel/myobject/ */
 
-/* Cleanup: */
-kobject_put(kobj);  /* decrement ref; frees when 0 */
+/* 後始末: */
+kobject_put(kobj);  /* 参照を減らす。0になると解放される */
 ```
 
-## Sysfs attributes: files in sysfs {#sysfs-attributes-files-in-sysfs}
+## sysfs属性: sysfs内のファイル {#sysfs-attributes-files-in-sysfs}
 
 ```c
-/* A sysfs attribute = one file in /sys/... */
+/* sysfs属性 = /sys/... 内の1つのファイル */
 struct attribute {
     const char *name;
-    umode_t     mode;   /* permissions */
+    umode_t     mode;   /* パーミッション */
 };
 
-/* For device attributes (struct device): */
+/* デバイス属性（struct device）用: */
 struct device_attribute {
     struct attribute  attr;
     ssize_t (*show)(struct device *dev, struct device_attribute *attr, char *buf);
@@ -232,7 +232,7 @@ struct device_attribute {
                       const char *buf, size_t count);
 };
 
-/* Define a device attribute: */
+/* デバイス属性を定義する: */
 static ssize_t speed_show(struct device *dev,
                            struct device_attribute *attr, char *buf)
 {
@@ -252,22 +252,22 @@ static ssize_t speed_store(struct device *dev,
     return count;
 }
 
-static DEVICE_ATTR_RW(speed);   /* creates dev_attr_speed */
-/* DEVICE_ATTR_RO(speed): read-only */
-/* DEVICE_ATTR_WO(speed): write-only */
+static DEVICE_ATTR_RW(speed);   /* dev_attr_speedを作成する */
+/* DEVICE_ATTR_RO(speed): 読み取り専用 */
+/* DEVICE_ATTR_WO(speed): 書き込み専用 */
 ```
 
-### Attribute groups {#attribute-groups}
+### 属性グループ {#attribute-groups}
 
-Drivers typically register attribute groups (multiple attributes at once):
+ドライバは通常、属性グループ（複数の属性をまとめたもの）を登録する:
 
 ```c
-/* Declare attributes */
+/* 属性を宣言する */
 static DEVICE_ATTR_RO(stats);
 static DEVICE_ATTR_RW(enable);
 static DEVICE_ATTR_RW(threshold);
 
-/* Group them */
+/* それらをグループ化する */
 static struct attribute *mydev_attrs[] = {
     &dev_attr_stats.attr,
     &dev_attr_enable.attr,
@@ -277,7 +277,7 @@ static struct attribute *mydev_attrs[] = {
 
 static const struct attribute_group mydev_attr_group = {
     .attrs = mydev_attrs,
-    /* Optional: .name = "config" → creates /sys/.../config/ subdir */
+    /* 任意: .name = "config" → /sys/.../config/ サブディレクトリを作成する */
 };
 
 static const struct attribute_group *mydev_attr_groups[] = {
@@ -285,21 +285,21 @@ static const struct attribute_group *mydev_attr_groups[] = {
     NULL,
 };
 
-/* Register with device (in probe): */
-/* Option 1: manual */
+/* デバイスに登録する（probe内で）: */
+/* 方法1: 手動 */
 device_add_group(&pdev->dev, &mydev_attr_group);
 
-/* Option 2: via device's driver_data at registration */
+/* 方法2: 登録時にデバイスのdriver_data経由で */
 struct device_driver mydev_driver = {
     .dev_groups = mydev_attr_groups,
     /* ... */
 };
-/* Attributes are created/removed automatically with the device */
+/* 属性はデバイスとともに自動的に作成/削除される */
 ```
 
-## kernfs: the sysfs backend {#kernfs-the-sysfs-backend}
+## kernfs: sysfsのバックエンド {#kernfs-the-sysfs-backend}
 
-sysfs is built on top of `kernfs`, a generic virtual filesystem infrastructure:
+sysfsは、汎用の仮想ファイルシステム基盤である`kernfs`の上に構築されている:
 
 ```c
 /* fs/kernfs/kernfs-internal.h */
@@ -310,25 +310,25 @@ struct kernfs_node {
     const char       *name;
     struct rb_node   rb;
 
-    const void       *ns;       /* namespace for per-ns files */
+    const void       *ns;       /* namespaceごとのファイル用のnamespace */
     unsigned int     hash;
 
     union {
-        struct kernfs_elem_dir    dir;      /* directory */
-        struct kernfs_elem_symlink symlink; /* symlink */
-        struct kernfs_elem_attr   attr;     /* attribute (file) */
+        struct kernfs_elem_dir    dir;      /* ディレクトリ */
+        struct kernfs_elem_symlink symlink; /* シンボリックリンク */
+        struct kernfs_elem_attr   attr;     /* 属性（ファイル） */
     };
 
-    void     *priv;       /* kobject/attribute pointer */
+    void     *priv;       /* kobject/属性へのポインタ */
     kuid_t    uid;
     kgid_t    gid;
     struct kernfs_iattrs *iattr;
 };
 ```
 
-`/sys` attributes go through: `kernfs_fop_read_iter → kernfs_seq_show → sysfs_kf_seq_show → attribute->show()`
+`/sys`の属性は次の経路を通る: `kernfs_fop_read_iter → kernfs_seq_show → sysfs_kf_seq_show → attribute->show()`
 
-## sysctl: /proc/sys via sysfs-like API {#sysctl-procsys-via-sysfs-like-api}
+## sysctl: sysfs風のAPIによる/proc/sys {#sysctl-procsys-via-sysfs-like-api}
 
 ```c
 #include <linux/sysctl.h>
@@ -347,7 +347,7 @@ static struct ctl_table mymod_table[] = {
         .extra1     = &my_min,
         .extra2     = &my_max,
     },
-    { }  /* sentinel */
+    { }  /* 番兵 */
 };
 
 static struct ctl_table_header *mymod_sysctl;
@@ -355,7 +355,7 @@ static struct ctl_table_header *mymod_sysctl;
 static int __init mymod_init(void)
 {
     mymod_sysctl = register_sysctl("mymod", mymod_table);
-    /* Creates: /proc/sys/mymod/my_value */
+    /* 作成されるもの: /proc/sys/mymod/my_value */
     return 0;
 }
 
@@ -365,12 +365,12 @@ static void __exit mymod_exit(void)
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — inode/dentry fundamentals
-- [Linux Device Model](../drivers/device-model.md) — kobject hierarchy in detail
-- [Sysctl Reference](../mm/sysctl-reference.md) — kernel tunables via /proc/sys
-- [Netlink](../net/netlink.md) — kernel-userspace messaging beyond /proc
-- `fs/proc/` — procfs implementation
-- `fs/sysfs/` and `fs/kernfs/` — sysfs/kernfs implementation
-- `include/linux/kobject.h`, `include/linux/device.h`
+- [VFSオブジェクト](vfs-objects.md) — inode/dentryの基礎
+- [Linuxデバイスモデル](../drivers/device-model.md) — kobject階層の詳細
+- [sysctlリファレンス](../mm/sysctl-reference.md) — /proc/sys経由のカーネルのチューニング可能なパラメータ
+- [Netlink](../net/netlink.md) — /procを超えたカーネルとユーザー空間のメッセージング
+- `fs/proc/` — procfsの実装
+- `fs/sysfs/`と`fs/kernfs/` — sysfs/kernfsの実装
+- `include/linux/kobject.h`、`include/linux/device.h`

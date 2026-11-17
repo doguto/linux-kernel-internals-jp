@@ -1,10 +1,10 @@
-# Network Buffer Tuning {#network-buffer-tuning}
+# ネットワークバッファのチューニング {#network-buffer-tuning}
 
-> Tuning socket buffers, ring buffers, and backpressure for high-throughput networking
+> 高スループットなネットワーキングのための、ソケットバッファ、リングバッファ、バックプレッシャーのチューニング
 
-## The buffer hierarchy {#the-buffer-hierarchy}
+## バッファの階層 {#the-buffer-hierarchy}
 
-Network data flows through several buffering layers, each of which can be a bottleneck:
+ネットワークのデータはいくつものバッファリング層を流れ、そのどれもがボトルネックになりうる:
 
 ```
 Application
@@ -30,215 +30,215 @@ Socket receive buffer (sk->sk_receive_queue)
 Application
 ```
 
-## Socket buffer tuning {#socket-buffer-tuning}
+## ソケットバッファのチューニング {#socket-buffer-tuning}
 
-### TCP auto-tuning {#tcp-auto-tuning}
+### TCPの自動チューニング {#tcp-auto-tuning}
 
-By default, TCP auto-tunes socket buffers based on observed bandwidth-delay product:
+デフォルトでは、TCPは観測された帯域幅遅延積に基づいてソケットバッファを自動チューニングする:
 
 ```bash
-# TCP buffer auto-tuning (recommended: leave on)
-cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf  # default: 1 (enabled)
+# TCPバッファの自動チューニング（推奨: 有効のままにする）
+cat /proc/sys/net/ipv4/tcp_moderate_rcvbuf  # デフォルト: 1（有効）
 
-# Auto-tuning range [min, default, max] in bytes
+# 自動チューニングの範囲 [min, default, max]（バイト単位）
 cat /proc/sys/net/ipv4/tcp_rmem  # → 4096 131072 6291456
 cat /proc/sys/net/ipv4/tcp_wmem  # → 4096 16384 4194304
 
-# For high-bandwidth, high-latency paths (e.g., 10Gbps, 50ms RTT)
-# BDP = 10Gbps × 50ms = 62.5 MB → need buffers ≥ 64MB
+# 高帯域・高レイテンシの経路の場合（例: 10Gbps、RTT 50ms）
+# BDP = 10Gbps × 50ms = 62.5 MB → 64MB以上のバッファが必要
 echo "4096 87380 67108864" > /proc/sys/net/ipv4/tcp_rmem
 echo "4096 65536 67108864" > /proc/sys/net/ipv4/tcp_wmem
 ```
 
-### Manual buffer sizing {#manual-buffer-sizing}
+### 手動でのバッファサイズ設定 {#manual-buffer-sizing}
 
 ```bash
-# Global maximum (setsockopt cannot exceed this)
-cat /proc/sys/net/core/rmem_max  # default: 212992 (208KB)
+# グローバルな最大値（setsockoptはこれを超えられない）
+cat /proc/sys/net/core/rmem_max  # デフォルト: 212992（208KB）
 cat /proc/sys/net/core/wmem_max
 
-# Increase for large buffer sockets
+# 大きなバッファを使うソケットのために増やす
 echo 67108864 > /proc/sys/net/core/rmem_max  # 64MB
 echo 67108864 > /proc/sys/net/core/wmem_max
 
-# Per-socket (application can set up to rmem_max/2 due to kernel doubling)
+# ソケットごと（カーネルが2倍にするため、アプリケーションはrmem_max/2まで設定できる）
 setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &size, sizeof(size));
 setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
 
-# Check effective buffer size
+# 実効バッファサイズを確認
 getsockopt(fd, SOL_SOCKET, SO_RCVBUF, &actual, &len);
-# actual = 2 × requested (kernel doubles for bookkeeping)
+# actual = 2 × 要求値（カーネルが管理用に2倍にする）
 ```
 
-### UDP buffer sizing {#udp-buffer-sizing}
+### UDPのバッファサイズ設定 {#udp-buffer-sizing}
 
-UDP has no flow control — if the application reads slowly, packets are dropped:
+UDPにはフロー制御がない。アプリケーションの読み取りが遅いと、パケットはドロップされる:
 
 ```bash
-# Increase UDP socket receive buffer for high-rate senders
-cat /proc/sys/net/core/rmem_default  # default receive buffer for all sockets
+# 高レートの送信元のためにUDPソケットの受信バッファを増やす
+cat /proc/sys/net/core/rmem_default  # 全ソケットのデフォルト受信バッファ
 echo 26214400 > /proc/sys/net/core/rmem_default  # 25MB
 
-# Application: increase buffer before binding
+# アプリケーション: バインドする前にバッファを増やす
 int buf_size = 25 * 1024 * 1024;
 setsockopt(fd, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size));
 ```
 
-## NIC ring buffer tuning {#nic-ring-buffer-tuning}
+## NICリングバッファのチューニング {#nic-ring-buffer-tuning}
 
-The NIC maintains DMA ring buffers for TX and RX. If they fill up, packets are dropped before they reach the kernel:
+NICはTXとRXのためにDMAリングバッファを保持している。これが満杯になると、パケットはカーネルに届く前にドロップされる:
 
 ```bash
-# Show current ring buffer sizes
+# 現在のリングバッファサイズを表示
 ethtool -g eth0
 # Ring parameters for eth0:
 # Pre-set maximums:
 # RX: 4096  TX: 4096
 # Current hardware settings:
-# RX: 256   TX: 256  ← often too small for high traffic
+# RX: 256   TX: 256  ← 高トラフィックには小さすぎることが多い
 
-# Increase ring buffers (critical for high-throughput workloads)
+# リングバッファを増やす（高スループットなワークロードでは極めて重要）
 ethtool -G eth0 rx 4096 tx 4096
 
-# Verify changes
+# 変更を確認
 ethtool -g eth0
 ```
 
-Ring buffer drops are visible in:
+リングバッファでのドロップは次で確認できる:
 
 ```bash
 ethtool -S eth0 | grep -i "drop\|miss\|discard"
-# rx_missed_errors: number of packets NIC dropped because RX ring was full
+# rx_missed_errors: RXリングが満杯だったためにNICがドロップしたパケット数
 ```
 
-## Softnet backlog {#softnet-backlog}
+## softnetバックログ {#softnet-backlog}
 
-The kernel's per-CPU receive backlog (`sd->input_pkt_queue`) sits between NAPI and protocol processing. If it fills, packets are dropped:
+カーネルのCPUごとの受信バックログ（`sd->input_pkt_queue`）は、NAPIとプロトコル処理の間に位置する。これが満杯になると、パケットはドロップされる:
 
 ```bash
-# Backlog queue length (per CPU)
-cat /proc/sys/net/core/netdev_max_backlog  # default: 1000
+# バックログキューの長さ（CPUごと）
+cat /proc/sys/net/core/netdev_max_backlog  # デフォルト: 1000
 
-# Increase for high packet rates
+# 高いパケットレートに対応するため増やす
 echo 10000 > /proc/sys/net/core/netdev_max_backlog
 
-# Check for drops (column 2 = dropped, column 3 = time_squeeze)
+# ドロップを確認（列2 = dropped、列3 = time_squeeze）
 cat /proc/net/softnet_stat
-# format: total dropped time_squeeze 0 0 0 0 0 0 cpu_collision received_rps flow_limit_count
+# 形式: total dropped time_squeeze 0 0 0 0 0 0 cpu_collision received_rps flow_limit_count
 ```
 
-### softnet_stat columns explained {#softnet_stat-columns-explained}
+### softnet_statの各列の説明 {#softnet_stat-columns-explained}
 
 ```bash
-# Show per-CPU softnet stats with labels
+# CPUごとのsoftnet統計をラベル付きで表示
 awk 'BEGIN{OFS="\t"; print "CPU","total","dropped","time_squeeze"}
      {print NR-1, strtonum("0x"$1), strtonum("0x"$2), strtonum("0x"$3)}
      ' /proc/net/softnet_stat | head -10
 ```
 
-| Column | Meaning | Fix |
+| 列 | 意味 | 対処 |
 |--------|---------|-----|
-| total | Total packets processed by softirq | Normal |
-| dropped | Packets dropped (backlog full) | Increase `netdev_max_backlog` |
-| time_squeeze | poll() ran out of budget | Increase `netdev_budget` |
-| cpu_collision | Multiple CPUs contending for CPU queue | Enable RPS/RSS |
+| total | softirqが処理したパケットの総数 | 正常 |
+| dropped | ドロップしたパケット（バックログが満杯） | `netdev_max_backlog`を増やす |
+| time_squeeze | poll()がバジェットを使い切った | `netdev_budget`を増やす |
+| cpu_collision | 複数のCPUがCPUキューを奪い合った | RPS/RSSを有効にする |
 
-## TCP memory pressure {#tcp-memory-pressure}
+## TCPのメモリプレッシャー {#tcp-memory-pressure}
 
-The kernel limits total memory used by TCP sockets:
+カーネルは、TCPソケットが使うメモリの総量を制限している:
 
 ```bash
-# TCP memory limits [pages at which pressure starts, hard limit, max]
+# TCPのメモリ制限 [プレッシャーが始まるページ数, ハードリミット, 最大]
 cat /proc/sys/net/ipv4/tcp_mem
-# → 94011 125349 188022 (in pages of 4KB = ~368MB total max)
+# → 94011 125349 188022（4KBページ単位 = 最大で合計約368MB）
 
-# Current usage
+# 現在の使用量
 cat /proc/net/sockstat | grep TCP
 # TCP: inuse 234 orphan 0 tw 12 alloc 248 mem 45
 
-# If mem approaches tcp_mem[2]: "TCP: out of memory" in dmesg
-# Fix: increase tcp_mem (or fix memory leaks/reduce connections)
+# memがtcp_mem[2]に近づくと: dmesgに"TCP: out of memory"
+# 対処: tcp_memを増やす（またはメモリリークを修正する/接続数を減らす）
 echo "768432 1024576 1536864" > /proc/sys/net/ipv4/tcp_mem
 ```
 
-## Diagnosing buffer issues {#diagnosing-buffer-issues}
+## バッファの問題の診断 {#diagnosing-buffer-issues}
 
-### RX bottleneck (application reads slowly) {#rx-bottleneck-application-reads-slowly}
+### RXのボトルネック（アプリケーションの読み取りが遅い） {#rx-bottleneck-application-reads-slowly}
 
 ```bash
-# Large Recv-Q in ss means data is waiting for the application
+# ssでRecv-Qが大きいのは、データがアプリケーションを待っていることを意味する
 ss -tn | awk '$2 > 10000 {print $2, $5}'
 
-# Monitor socket memory usage
+# ソケットのメモリ使用量を監視
 cat /proc/net/sockstat
 
-# Check UDP drops
+# UDPのドロップを確認
 netstat -s | grep "receive buffer"
 # "X packets pruned from receive queue because of socket buffer overrun"
 ```
 
-### TX bottleneck (send buffer full) {#tx-bottleneck-send-buffer-full}
+### TXのボトルネック（送信バッファが満杯） {#tx-bottleneck-send-buffer-full}
 
 ```bash
-# Large Send-Q means data is waiting to be sent (network slow or receiver window full)
+# Send-Qが大きいのは、データが送信を待っていることを意味する（ネットワークが遅いか受信側ウィンドウが満杯）
 ss -tn | awk '$3 > 0'
 
-# Check if receiver window is limiting (zero window probes)
+# 受信側ウィンドウが制約になっていないか確認（ゼロウィンドウプローブ）
 netstat -s | grep "zero window"
 ```
 
-### NIC ring buffer drops {#nic-ring-buffer-drops}
+### NICリングバッファでのドロップ {#nic-ring-buffer-drops}
 
 ```bash
-# Check for NIC-level drops
+# NICレベルのドロップを確認
 ethtool -S eth0 | grep -i drop
 watch -n 5 'ethtool -S eth0 | grep -i "drop\|miss" | awk "$2>0"'
 ```
 
-### qdisc drops (TX queue too small) {#qdisc-drops-tx-queue-too-small}
+### qdiscでのドロップ（TXキューが小さすぎる） {#qdisc-drops-tx-queue-too-small}
 
 ```bash
-# Check qdisc drops
+# qdiscのドロップを確認
 tc -s qdisc show dev eth0
-# If "dropped" is non-zero, qdisc is dropping packets
+# "dropped"が0でなければ、qdiscがパケットをドロップしている
 
-# Increase qdisc queue length
-ip link set dev eth0 txqueuelen 10000  # default 1000
+# qdiscのキュー長を増やす
+ip link set dev eth0 txqueuelen 10000  # デフォルト1000
 ```
 
-## Complete performance checklist {#complete-performance-checklist}
+## 性能チェックリスト（完全版） {#complete-performance-checklist}
 
-For high-throughput servers (10G+):
+高スループットなサーバー（10G以上）の場合:
 
 ```bash
-# 1. NIC ring buffers
+# 1. NICリングバッファ
 ethtool -G eth0 rx 4096 tx 4096
 
-# 2. Socket buffers
+# 2. ソケットバッファ
 echo 67108864 > /proc/sys/net/core/rmem_max
 echo 67108864 > /proc/sys/net/core/wmem_max
 echo "4096 87380 67108864" > /proc/sys/net/ipv4/tcp_rmem
 echo "4096 65536 67108864" > /proc/sys/net/ipv4/tcp_wmem
 
-# 3. Softnet backlog
+# 3. softnetバックログ
 echo 30000 > /proc/sys/net/core/netdev_max_backlog
 echo 1000  > /proc/sys/net/core/netdev_budget
 echo 8000  > /proc/sys/net/core/netdev_budget_usecs
 
-# 4. Connection tracking (if using NAT)
+# 4. コネクショントラッキング（NATを使う場合）
 echo 1048576 > /proc/sys/net/netfilter/nf_conntrack_max
 
-# 5. TCP memory
+# 5. TCPメモリ
 echo "768432 1024576 1536864" > /proc/sys/net/ipv4/tcp_mem
 
-# 6. Offloads (ensure enabled for high-throughput)
+# 6. オフロード（高スループットのため有効になっていることを確認）
 ethtool -k eth0 | grep -E "scatter-gather|tcp-segmentation|generic-segmentation|generic-receive"
-# All should be "on" for throughput; disable for latency/debug
+# スループットのためにはすべて"on"にする。レイテンシ重視/デバッグ時は無効にする
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Understanding /proc/net/snmp](proc-snmp.md) — Counters that reflect these drops
-- [Network Tracing](net-tracing.md) — How to diagnose drop location
-- [Network Device and NAPI](napi.md) — NAPI budget and softnet tuning
-- [TCP Implementation](tcp.md) — How TCP window and cwnd interact with buffers
+- [/proc/net/snmpを理解する](proc-snmp.md) — これらのドロップを反映するカウンタ
+- [ネットワークのトレーシング](net-tracing.md) — ドロップ箇所の診断方法
+- [ネットワークデバイスとNAPI](napi.md) — NAPIのバジェットとsoftnetのチューニング
+- [TCPの実装](tcp.md) — TCPのウィンドウとcwndがバッファとどう相互作用するか

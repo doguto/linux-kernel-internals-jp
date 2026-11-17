@@ -23,7 +23,7 @@ Timeline:
           deadline must be met ←------↑
 ```
 
-## Why SCHED_DEADLINE over SCHED_FIFO? {#why-scheddeadline-over-schedfifo}
+## Why SCHED_DEADLINE over SCHED_FIFO? {#why-sched_deadline-over-sched_fifo}
 
 | Property | SCHED_FIFO | SCHED_DEADLINE |
 |----------|------------|----------------|
@@ -37,7 +37,7 @@ SCHED_DEADLINE is suitable for tasks with provable timing requirements: video en
 
 ## Data structures {#data-structures}
 
-### struct sched_dl_entity {#struct-scheddlentity}
+### struct sched_dl_entity {#struct-sched_dl_entity}
 
 Embedded in `task_struct`, tracks per-task deadline state:
 
@@ -126,7 +126,7 @@ Each time the task runs, its remaining `runtime` decreases. When it hits zero:
 3. An hrtimer (`dl_timer`) is armed for the next replenishment time
 4. The task can no longer run until replenished
 
-### Replenishment via dl_task_timer() {#replenishment-via-dltasktimer}
+### Replenishment via dl_task_timer() {#replenishment-via-dl_task_timer}
 
 ```c
 // kernel/sched/deadline.c
@@ -199,7 +199,7 @@ if (sched_setattr(0, &attr, 0) < 0)
 
 Requires `CAP_SYS_NICE`.
 
-### sched_yield() for SCHED_DEADLINE {#schedyield-for-scheddeadline}
+### sched_yield() for SCHED_DEADLINE {#sched_yield-for-sched_deadline}
 
 A DL task should call `sched_yield()` when it finishes its work early. This tells the CBS that the task is done for this period and the remaining budget can be reclaimed:
 

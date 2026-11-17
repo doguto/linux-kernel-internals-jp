@@ -1,10 +1,10 @@
-# Power Domains and genpd {#power-domains-and-genpd}
+# 電源ドメインとgenpd {#power-domains-and-genpd}
 
-> Grouping devices under shared power rails: the generic power domain framework
+> 共有電源レールの下にデバイスをまとめる: 汎用電源ドメインフレームワーク
 
-## The problem: shared power rails {#the-problem-shared-power-rails}
+## 問題: 共有電源レール {#the-problem-shared-power-rails}
 
-On a desktop or server CPU, each core can individually gate its power. On an embedded SoC it is rarely that simple. A typical mobile SoC might power the GPU block, the display controller, and the memory interface for that display all from a single PMIC rail. Cutting that rail to save power requires that every device on it be quiescent first. If even one device is still doing DMA, powering off the rail corrupts data.
+デスクトップやサーバーのCPUでは、各コアが個別に電源をゲーティングできる。組み込みSoCでは、そう単純であることはまれである。典型的なモバイルSoCでは、GPUブロック、ディスプレイコントローラ、そのディスプレイ用のメモリインターフェースのすべてに、単一のPMICレールから電源を供給していることがある。電力を節約するためにそのレールを切るには、まずそのレール上のすべてのデバイスが静止している必要がある。1つのデバイスでもまだDMAを行っていれば、レールの電源を切るとデータが破損する。
 
 ```
 SoC power topology (simplified)
@@ -22,102 +22,102 @@ SoC power topology (simplified)
 Each rail: single switch, all devices must be idle before it can be cut.
 ```
 
-Before genpd, each SoC vendor duplicated logic to track device idleness and sequence rail power-off. The **Generic Power Domain (genpd)** framework, introduced in Linux 3.1 (2011), provides that infrastructure once and for all.
+genpd以前は、各SoCベンダーが、デバイスのアイドル状態を追跡してレールの電源断を順序立てて行うロジックを重複して実装していた。Linux 3.1（2011年）で導入された**Generic Power Domain（genpd）**フレームワークは、その基盤を一度だけ、決定版として提供する。
 
-## struct generic_pm_domain {#struct-genericpmdomain}
+## struct generic_pm_domain {#struct-generic_pm_domain}
 
-The central structure (`include/linux/pm_domain.h`):
+中心となる構造体（`include/linux/pm_domain.h`）:
 
 ```c
-/* include/linux/pm_domain.h — abridged; the real struct has ~30 fields */
+/* include/linux/pm_domain.h — 抜粋。実際の構造体には約30個のフィールドがある */
 struct generic_pm_domain {
-    struct device          dev;          /* domain's own struct device */
-    struct dev_pm_domain   domain;       /* embedded; exposes dev_pm_ops */
-    struct list_head       gpd_list_node;/* link in global gpd_list */
+    struct device          dev;          /* ドメイン自身のstruct device */
+    struct dev_pm_domain   domain;       /* 埋め込み。dev_pm_opsを公開する */
+    struct list_head       gpd_list_node;/* グローバルなgpd_list内のリンク */
 
     const char            *name;
 
-    enum gpd_status        status;       /* GENPD_STATE_ON or GENPD_STATE_OFF */
+    enum gpd_status        status;       /* GENPD_STATE_ON または GENPD_STATE_OFF */
 
     unsigned int           device_count;
-    unsigned int           device_id;        /* unique device id */
-    unsigned int           suspended_count;  /* system-suspend device counter, NOT runtime PM */
+    unsigned int           device_id;        /* 一意なデバイスID */
+    unsigned int           suspended_count;  /* システムサスペンド用のデバイスカウンタ。runtime PM用ではない */
     unsigned int           prepared_count;
-    unsigned int           performance_state; /* aggregated max performance state */
+    unsigned int           performance_state; /* 集約された最大パフォーマンス状態 */
 
-    struct dev_power_governor *gov;      /* NULL if no governor was registered */
+    struct dev_power_governor *gov;      /* ガバナが登録されていなければNULL */
 
-    /* callbacks */
+    /* コールバック */
     int (*power_off)(struct generic_pm_domain *domain);
     int (*power_on) (struct generic_pm_domain *domain);
 
-    struct list_head       dev_list;      /* struct generic_pm_domain_data per dev */
-    struct list_head       parent_links;  /* links where this domain is the parent (i.e. its subdomains) */
-    struct list_head       child_links;   /* links where this domain is the child (i.e. its parent domains) */
+    struct list_head       dev_list;      /* デバイスごとのstruct generic_pm_domain_data */
+    struct list_head       parent_links;  /* このドメインが親であるリンク（つまりそのサブドメイン） */
+    struct list_head       child_links;   /* このドメインが子であるリンク（つまりその親ドメイン） */
 
-    /* governor timing data lives in genpd->gd (struct genpd_governor_data) */
+    /* ガバナのタイミングデータはgenpd->gd（struct genpd_governor_data）にある */
 };
 ```
 
-`status` reflects whether the rail is currently powered:
+`status`は、レールに現在電源が入っているかどうかを反映する。
 
-| Value | Meaning |
+| 値 | 意味 |
 |-------|---------|
-| `GENPD_STATE_ON` | Rail on; needed by an active device attached directly to this domain, or by a powered child domain |
-| `GENPD_STATE_OFF` | Rail off; no attached device is active and no child domain needs it powered |
+| `GENPD_STATE_ON` | レールはオン。このドメインに直接接続されたアクティブなデバイス、または電源の入った子ドメインが必要としている |
+| `GENPD_STATE_OFF` | レールはオフ。接続されたデバイスはどれもアクティブでなく、電源を必要とする子ドメインもない |
 
-## Registering a power domain {#registering-a-power-domain}
+## 電源ドメインの登録 {#registering-a-power-domain}
 
 ```c
-/* platform code or SoC driver */
+/* プラットフォームコードまたはSoCドライバ */
 #include <linux/pm_domain.h>
 
 static struct generic_pm_domain gpu_domain = {
     .name      = "gpu-domain",
-    .power_off = gpu_domain_power_off,  /* cut the VDD_GPU rail */
-    .power_on  = gpu_domain_power_on,   /* assert the VDD_GPU rail */
+    .power_off = gpu_domain_power_off,  /* VDD_GPUレールを切る */
+    .power_on  = gpu_domain_power_on,   /* VDD_GPUレールを入れる */
 };
 
 static int soc_pm_init(void)
 {
-    /* Register with genpd core; third argument: is the domain initially off?
-     * NULL for the governor argument means NO governor at all, not "use
-     * the default governor" — genpd_power_off() then skips power_down_ok()
-     * entirely and always falls back to the shallowest power state. Pass
-     * &simple_qos_governor explicitly to get the QoS-aware governor. */
+    /* genpdコアに登録する。第3引数: ドメインは初期状態でオフか?
+     * ガバナ引数にNULLを渡すと「デフォルトのガバナを使う」のではなく、
+     * ガバナがまったくないことを意味する — その場合genpd_power_off()は
+     * power_down_ok()を完全に飛ばし、常に最も浅い電源状態にフォールバックする。
+     * QoSを考慮するガバナを得るには&simple_qos_governorを明示的に渡す。 */
     pm_genpd_init(&gpu_domain, &simple_qos_governor, false);
     return 0;
 }
 ```
 
-`pm_genpd_init()` links the domain into the global `gpd_list` and populates `genpd->domain.ops` (a `struct dev_pm_ops`) with genpd's own runtime-PM and system-sleep callbacks (`genpd_runtime_suspend()`, `genpd_runtime_resume()`, `genpd_suspend_noirq()`, and so on). Every device later added to this domain gets `dev->pm_domain` pointed at `&genpd->domain` via `dev_pm_domain_set()`, so those callbacks run instead of the device's bus-level ones.
+`pm_genpd_init()`は、ドメインをグローバルな`gpd_list`にリンクし、`genpd->domain.ops`（`struct dev_pm_ops`）にgenpd自身のruntime PMおよびシステムスリープ用のコールバック（`genpd_runtime_suspend()`、`genpd_runtime_resume()`、`genpd_suspend_noirq()`など）を設定する。後でこのドメインに追加されるすべてのデバイスは、`dev_pm_domain_set()`によって`dev->pm_domain`が`&genpd->domain`を指すようになるため、デバイスのバスレベルのコールバックの代わりにこれらのコールバックが実行される。
 
-## Adding devices to a domain {#adding-devices-to-a-domain}
+## ドメインへのデバイスの追加 {#adding-devices-to-a-domain}
 
 ```c
-/* Called during device probe, typically from OF glue or platform code */
+/* デバイスのprobe中に呼ばれる。通常はOFのグルーコードまたはプラットフォームコードから */
 int ret = pm_genpd_add_device(&gpu_domain, &gpu_dev->dev);
 if (ret)
     dev_err(&gpu_dev->dev, "failed to add to power domain: %d\n", ret);
 ```
 
-After this call the Runtime PM lifecycle of `gpu_dev` is managed by the domain. When `gpu_dev` calls `pm_runtime_put()`, the genpd layer intercepts `runtime_suspend` and checks whether this was the last active device. If so, it invokes `gpu_domain.power_off()`.
+この呼び出しの後、`gpu_dev`のRuntime PMのライフサイクルはドメインによって管理される。`gpu_dev`が`pm_runtime_put()`を呼ぶと、genpd層が`runtime_suspend`を横取りし、これが最後のアクティブなデバイスだったかどうかを確認する。そうであれば、`gpu_domain.power_off()`を呼び出す。
 
-On ARM SoCs using Device Tree, the binding `power-domains = <&pd_gpu>` in the DTS node causes the driver core to call `dev_pm_domain_attach()` during probe, which in turn calls `genpd_dev_pm_attach()` to parse the phandle and perform the attachment automatically — no explicit driver call is needed. (`of_genpd_add_device()` is a separate, lower-level API for platform code that already has an `of_phandle_args` and wants to add a device manually.) The `&pd_gpu` phandle refers to a power domain provider registered with `of_genpd_add_provider_simple()` or `of_genpd_add_provider_onecell()`.
+Device Treeを使うARM SoCでは、DTSノード内の`power-domains = <&pd_gpu>`というバインディングによって、ドライバコアがprobe中に`dev_pm_domain_attach()`を呼び、それがさらに`genpd_dev_pm_attach()`を呼んでphandleを解析し、自動的に接続を行う。ドライバ側で明示的に呼び出す必要はない。（`of_genpd_add_device()`は、既に`of_phandle_args`を持っていて手動でデバイスを追加したいプラットフォームコード向けの、別の低レベルAPIである。）`&pd_gpu`というphandleは、`of_genpd_add_provider_simple()`または`of_genpd_add_provider_onecell()`で登録された電源ドメインプロバイダを参照する。
 
-## Domain dependencies {#domain-dependencies}
+## ドメインの依存関係 {#domain-dependencies}
 
-Some rails have dependencies — a sub-rail cannot be on unless its parent rail is also on. genpd models this with subdomain links:
+一部のレールには依存関係がある。サブレールは、その親レールもオンでなければオンにできない。genpdはこれをサブドメインのリンクでモデル化する。
 
 ```c
 /*
- * Declare: "display_dsi_domain" cannot be powered unless
- * "display_core_domain" is already powered.
+ * 宣言: "display_dsi_domain"は、"display_core_domain"に
+ * 既に電源が入っていない限り、電源を入れられない。
  */
 ret = pm_genpd_add_subdomain(&display_core_domain, &display_dsi_domain);
 ```
 
-Internally each domain's `parent_links` list holds the links to its own subdomains (the domains it is parent of), while `child_links` holds the links to the domains it is itself a subdomain of. During power-on, the parent is powered first; during power-off, the child is powered off first.
+内部的には、各ドメインの`parent_links`リストは自身のサブドメイン（自分が親であるドメイン）へのリンクを保持し、`child_links`は自分がサブドメインとなっているドメインへのリンクを保持する。電源投入時には親が先に電源を入れられ、電源断時には子が先に電源を切られる。
 
 ```
 Dependency graph:
@@ -130,13 +130,13 @@ Power-on order:  display_core → display_dsi → mipi_phy
 Power-off order: mipi_phy → display_dsi → display_core
 ```
 
-## Runtime PM integration {#runtime-pm-integration}
+## Runtime PMとの統合 {#runtime-pm-integration}
 
-genpd integrates transparently with Runtime PM. Note that `suspended_count`
-is a **system-suspend** counter (see its comment in `struct
-generic_pm_domain` above) — it plays no part in this runtime-PM decision.
-The real check, in `genpd_power_off()`, walks `dev_list` and asks Runtime
-PM's own per-device status:
+genpdはRuntime PMと透過的に統合されている。`suspended_count`は
+**システムサスペンド**用のカウンタであり（上記の`struct
+generic_pm_domain`内のコメントを参照）、このruntime PMの判断には一切関与しないことに注意されたい。
+実際のチェックは`genpd_power_off()`の中で行われ、`dev_list`を走査して、Runtime
+PM自身のデバイスごとの状態を問い合わせる。
 
 ```
 pm_runtime_put(dev)                [device driver]
@@ -158,7 +158,7 @@ genpd_power_off(domain)
    domain->power_off()             [platform callback → cuts rail]
 ```
 
-On resume the direction reverses:
+レジューム時には向きが逆になる。
 
 ```
 pm_runtime_get_sync(dev)      [device driver]
@@ -171,15 +171,15 @@ genpd runtime_resume hook
    dev->runtime_resume()      [device driver callback]
 ```
 
-## struct gpd_timing_data {#struct-gpdtimingdata}
+## struct gpd_timing_data {#struct-gpd_timing_data}
 
-Each device can carry timing metadata used by the genpd governor to decide whether it is worth powering the domain off for a predicted idle period:
+各デバイスは、予測されるアイドル期間に対してドメインの電源を切る価値があるかどうかをgenpdガバナが判断するのに使う、タイミングのメタデータを持つことができる。
 
 ```c
 /* include/linux/pm_domain.h */
 struct gpd_timing_data {
-    s64 suspend_latency_ns;    /* time from last device suspend to rail off */
-    s64 resume_latency_ns;     /* time from power_on() call to device ready */
+    s64 suspend_latency_ns;    /* 最後のデバイスのサスペンドからレールオフまでの時間 */
+    s64 resume_latency_ns;     /* power_on()呼び出しからデバイスの準備完了までの時間 */
     s64 effective_constraint_ns;
     ktime_t next_wakeup;
     bool constraint_changed;
@@ -187,32 +187,32 @@ struct gpd_timing_data {
 };
 ```
 
-The `simple_qos_governor`'s actual comparison (in `__default_power_down_ok()`, `drivers/pmdomain/governor.c`) is not this per-device timing sum against a predicted idle time. Instead, for the domain *power state* being considered it computes `off_on_time_ns = state.power_off_latency_ns + state.power_on_latency_ns` (from `struct genpd_power_state`, the domain's own timing table) and compares that against each device's `effective_constraint_ns` — the QoS-derived maximum time that device may be left unavailable. If any device's constraint is less than or equal to `off_on_time_ns`, the power-off is rejected (the round trip would violate that device's latency budget); otherwise the smallest surviving constraint becomes the domain's `max_off_time_ns` budget for staying off.
+`simple_qos_governor`の実際の比較（`drivers/pmdomain/governor.c`の`__default_power_down_ok()`内）は、このデバイスごとのタイミングの合計を予測アイドル時間と比べるものではない。代わりに、検討中のドメインの*電源状態*について、`off_on_time_ns = state.power_off_latency_ns + state.power_on_latency_ns`（ドメイン自身のタイミング表である`struct genpd_power_state`から）を計算し、それを各デバイスの`effective_constraint_ns`（QoSから導かれる、そのデバイスが利用不能のまま置かれてよい最大時間）と比較する。いずれかのデバイスの制約が`off_on_time_ns`以下であれば、電源断は拒否される（往復にかかる時間がそのデバイスのレイテンシ予算を破るため）。そうでなければ、残った制約のうち最小のものが、オフのままでいられるドメインの予算`max_off_time_ns`となる。
 
-Drivers can supply per-state timing via the `domain-idle-state` Device Tree node using `entry-latency-us` and `exit-latency-us` properties (in microseconds; the kernel scales to nanoseconds internally).
+ドライバは、`domain-idle-state` Device Treeノードの`entry-latency-us`および`exit-latency-us`プロパティ（マイクロ秒単位。カーネルが内部でナノ秒に換算する）によって、状態ごとのタイミングを与えることができる。
 
-## genpd governors {#genpd-governors}
+## genpdガバナ {#genpd-governors}
 
-Three governors ship in-tree (`drivers/pmdomain/governor.c`):
+ツリー内には3つのガバナが含まれている（`drivers/pmdomain/governor.c`）。
 
-**`simple_qos_governor`**: the general-purpose governor most genpd backends register explicitly. It powers off the domain when all devices are suspended and the shortest QoS-constrained off-time across those devices (and subdomains) still exceeds the domain's power-off + power-on latency. It uses `effective_constraint_ns`, computed from the resume-latency QoS constraints attached to devices. It is *not* selected automatically — a domain registered with a `NULL` governor gets no governor at all.
+**`simple_qos_governor`**: ほとんどのgenpdバックエンドが明示的に登録する汎用ガバナである。すべてのデバイスがサスペンドされており、かつそれらのデバイス（およびサブドメイン）全体でQoSによって制約される最短のオフ時間が、ドメインの電源断 + 電源投入のレイテンシを依然として上回る場合に、ドメインの電源を切る。デバイスに付与されたresume-latency QoS制約から計算される`effective_constraint_ns`を使う。これは自動的には選択*されない*。`NULL`ガバナで登録されたドメインには、ガバナがまったくない。
 
-**`pm_domain_always_on_gov`**: never powers off the domain; used for domains that must stay on (e.g., always-on power rails).
+**`pm_domain_always_on_gov`**: ドメインの電源を決して切らない。オンのままでなければならないドメイン（例: 常時オンの電源レール）に使われる。
 
-**`pm_domain_cpu_gov`** (built only under `CONFIG_CPU_IDLE`): used for CPU/cluster power domains (`GENPD_FLAG_CPU_DOMAIN`); picks the deepest idle state whose residency and latency fit the predicted idle window and any CPU PM QoS constraints.
+**`pm_domain_cpu_gov`**（`CONFIG_CPU_IDLE`のときのみビルドされる）: CPU/クラスタの電源ドメイン（`GENPD_FLAG_CPU_DOMAIN`）に使われる。滞在時間とレイテンシが予測アイドル期間とCPU PM QoS制約に収まる、最も深いアイドル状態を選ぶ。
 
-The governor is selected as the second argument to `pm_genpd_init()`, which simply stores it in `genpd->gov` — there is no fallback to a default. Passing `NULL` means the domain has **no** governor at all: `genpd_power_off()` then skips `power_down_ok()` entirely and hardcodes `genpd->state_idx = 0` (the shallowest state) whenever it decides to power off. If the domain has more than one power state and no governor was given, `pm_genpd_init()` even logs `pr_warn("%s: no governor for states\n", ...)`. To get the QoS-aware behavior described above, pass `&simple_qos_governor` explicitly.
+ガバナは`pm_genpd_init()`の第2引数として選択され、この関数は単にそれを`genpd->gov`に格納するだけである。デフォルトへのフォールバックはない。`NULL`を渡すと、そのドメインにはガバナが**まったくない**ことになる。その場合`genpd_power_off()`は`power_down_ok()`を完全に飛ばし、電源断を決めるたびに`genpd->state_idx = 0`（最も浅い状態）を固定で設定する。ドメインが複数の電源状態を持つのにガバナが与えられていなければ、`pm_genpd_init()`は`pr_warn("%s: no governor for states\n", ...)`というログまで出力する。上で説明したQoSを考慮する振る舞いを得るには、`&simple_qos_governor`を明示的に渡すこと。
 
-## Debugging with debugfs {#debugging-with-debugfs}
+## debugfsによるデバッグ {#debugging-with-debugfs}
 
-The genpd core creates one directory per domain under `/sys/kernel/debug/pm_genpd/`:
+genpdコアは、`/sys/kernel/debug/pm_genpd/`以下にドメインごとに1つのディレクトリを作成する。
 
 ```bash
-# List all registered power domains
+# 登録されているすべての電源ドメインを列挙する
 ls /sys/kernel/debug/pm_genpd/
 # pm_genpd_summary  gpu-domain  display_core  display_dsi  ...
 
-# Global summary of all domains and their devices:
+# すべてのドメインとそのデバイスのグローバルな概要:
 cat /sys/kernel/debug/pm_genpd/pm_genpd_summary
 # domain                          status          children        performance
 #     /device                         runtime status                  managed by
@@ -222,45 +222,45 @@ cat /sys/kernel/debug/pm_genpd/pm_genpd_summary
 # display_core                    off-0                           0
 #     /devices/platform/soc/display   suspended                   0           SW
 
-# Per-domain directories contain: current_state, sub_domains,
-# idle_states, active_time, total_idle_time, devices
+# ドメインごとのディレクトリには次のものが含まれる: current_state、sub_domains、
+# idle_states、active_time、total_idle_time、devices
 cat /sys/kernel/debug/pm_genpd/gpu-domain/current_state
 ```
 
-The global `pm_genpd_summary` file is synthesized by `summary_show()` in `drivers/pmdomain/core.c`, which walks the global `gpd_list` and calls `genpd_summary_one()` per domain. For each domain it prints the domain name, its `on`/`off-<state_idx>` status, and aggregated `performance_state`, followed by one line per attached device giving that device's runtime-PM status via `rtpm_status_str()` (`active`/`suspending`/`suspended`/`resuming`/`unsupported`/`error`), its own performance state, and an `SW`/`HW` indicator from `mode_status_str()` showing whether that device's power state is currently managed by software or left to hardware autonomy.
+グローバルな`pm_genpd_summary`ファイルは、`drivers/pmdomain/core.c`の`summary_show()`によって合成される。この関数はグローバルな`gpd_list`を走査し、ドメインごとに`genpd_summary_one()`を呼ぶ。各ドメインについて、ドメイン名、`on`/`off-<state_idx>`の状態、集約された`performance_state`を出力し、続いて接続された各デバイスについて1行ずつ、`rtpm_status_str()`によるそのデバイスのruntime PM状態（`active`/`suspending`/`suspended`/`resuming`/`unsupported`/`error`）、デバイス自身のパフォーマンス状態、そして`mode_status_str()`による`SW`/`HW`の表示（そのデバイスの電源状態が現在ソフトウェアによって管理されているのか、ハードウェアの自律制御に任されているのか）を出力する。
 
-## Real-world implementations {#real-world-implementations}
+## 実際の実装 {#real-world-implementations}
 
-Several production genpd backends illustrate the framework:
+いくつかの実運用のgenpdバックエンドが、このフレームワークをよく示している。
 
-**Qualcomm GDSC (Globally Distributed Switch Controller, per the struct comment in `drivers/clk/qcom/gdsc.h`)** — `drivers/clk/qcom/gdsc.c`. Each GDSC controls one power domain. The `gdsc_enable()` / `gdsc_disable()` functions register directly as a `generic_pm_domain`'s `power_on`/`power_off` callbacks; they toggle the GDSC's collapse bit (via `gdsc_toggle_logic()`) and poll the hardware for the domain to settle before returning.
+**Qualcomm GDSC（Globally Distributed Switch Controller。`drivers/clk/qcom/gdsc.h`の構造体コメントによる）** — `drivers/clk/qcom/gdsc.c`。各GDSCが1つの電源ドメインを制御する。`gdsc_enable()` / `gdsc_disable()`関数は、`generic_pm_domain`の`power_on`/`power_off`コールバックとして直接登録される。これらは（`gdsc_toggle_logic()`を介して）GDSCのcollapseビットを切り替え、戻る前にドメインが安定するまでハードウェアをポーリングする。
 
-**Samsung Exynos power domains** — `drivers/pmdomain/samsung/exynos-pm-domains.c`. Gates power by writing to a `LOCAL_PWR_CFG` register and polling a status register at offset `+0x4` for the PMU's acknowledgement.
+**Samsung Exynosの電源ドメイン** — `drivers/pmdomain/samsung/exynos-pm-domains.c`。`LOCAL_PWR_CFG`レジスタに書き込むことで電源をゲーティングし、PMUからの応答を求めてオフセット`+0x4`の状態レジスタをポーリングする。
 
-**Rockchip power domains** — `drivers/pmdomain/rockchip/pm-domains.c`. Uses a power domain controller peripheral accessed via `regmap`. Subdomain dependencies are declared in Device Tree; the driver calls `pm_genpd_add_subdomain()` based on DT topology.
+**Rockchipの電源ドメイン** — `drivers/pmdomain/rockchip/pm-domains.c`。`regmap`経由でアクセスする電源ドメインコントローラ周辺機器を使う。サブドメインの依存関係はDevice Treeで宣言され、ドライバはDTのトポロジーに基づいて`pm_genpd_add_subdomain()`を呼ぶ。
 
-All three follow the same pattern: allocate `struct generic_pm_domain`, fill `power_on`/`power_off` callbacks, call `pm_genpd_init()`, and register as a DT provider.
+3つとも同じパターンに従っている。`struct generic_pm_domain`を割り当て、`power_on`/`power_off`コールバックを埋め、`pm_genpd_init()`を呼び、DTプロバイダとして登録する。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain`, `struct gpd_timing_data`, and the `pm_genpd_*`/`of_genpd_*` API
-- [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — genpd core: `pm_genpd_init()`, `genpd_add_subdomain()`, `genpd_dev_pm_attach()`, debugfs summary
-- [drivers/pmdomain/governor.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/governor.c) — `simple_qos_governor` and `pm_domain_always_on_gov`
-- [drivers/clk/qcom/gdsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/clk/qcom/gdsc.c) — Qualcomm GDSC genpd backend: `gdsc_enable()`/`gdsc_disable()`
-- [Documentation/devicetree/bindings/power/power-domain.yaml](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/devicetree/bindings/power/power-domain.yaml) — DT binding spec for `power-domains` and `#power-domain-cells`
+- [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain`、`struct gpd_timing_data`、および`pm_genpd_*`/`of_genpd_*` API
+- [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — genpdのコア: `pm_genpd_init()`、`genpd_add_subdomain()`、`genpd_dev_pm_attach()`、debugfsの概要
+- [drivers/pmdomain/governor.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/governor.c) — `simple_qos_governor`と`pm_domain_always_on_gov`
+- [drivers/clk/qcom/gdsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/clk/qcom/gdsc.c) — Qualcomm GDSCのgenpdバックエンド: `gdsc_enable()`/`gdsc_disable()`
+- [Documentation/devicetree/bindings/power/power-domain.yaml](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/devicetree/bindings/power/power-domain.yaml) — `power-domains`と`#power-domain-cells`のDTバインディング仕様
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Runtime PM](runtime-pm.md) — usage counting, autosuspend, dev_pm_ops; genpd's runtime_suspend/resume hooks build on this
-- [System Suspend](suspend.md) — system-wide sleep; genpd participates in the freeze/suspend sequence
-- [Device Tree](../drivers/device-tree.md) — phandle parsing, the mechanism the `power-domains` DT binding relies on
+- [Runtime PM](runtime-pm.md) — 使用カウント、autosuspend、dev_pm_ops。genpdのruntime_suspend/resumeフックはこれの上に構築されている
+- [システムサスペンド](suspend.md) — システム全体のスリープ。genpdはfreeze/suspendの手順に参加する
+- [デバイスツリー](../drivers/device-tree.md) — phandleの解析。`power-domains` DTバインディングが依存する仕組み
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [PM / Domains: Support for generic I/O PM domains](https://lwn.net/Articles/449302/) — Rafael J. Wysocki's original genpd patchset (2011) explaining the shared-power-resource and parent/child domain model this page describes
+- [PM / Domains: Support for generic I/O PM domains](https://lwn.net/Articles/449302/) — Rafael J. Wysockiによる最初のgenpdパッチセット（2011年）。このページで説明している共有電源リソースと親子ドメインのモデルを解説している
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/driver-api/pm/devices.rst — Device Power Management Domains](https://docs.kernel.org/driver-api/pm/devices.html#device-power-management-domains) — upstream explanation of `dev->pm_domain`, `struct dev_pm_domain`, and why power domain callbacks take precedence over subsystem callbacks
+- [Documentation/driver-api/pm/devices.rst — Device Power Management Domains](https://docs.kernel.org/driver-api/pm/devices.html#device-power-management-domains) — `dev->pm_domain`、`struct dev_pm_domain`、そして電源ドメインのコールバックがサブシステムのコールバックより優先される理由についてのアップストリームの説明

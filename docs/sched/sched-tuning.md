@@ -1,208 +1,208 @@
-# Scheduler Tuning {#scheduler-tuning}
+# スケジューラのチューニング {#scheduler-tuning}
 
-> sysctl knobs, SCHED_FEAT flags, and common tuning patterns
+> sysctlのつまみ、SCHED_FEATフラグ、よくあるチューニングのパターン
 
-## Scheduler sysctls {#scheduler-sysctls}
+## スケジューラのsysctl {#scheduler-sysctls}
 
-All scheduler tuning knobs live under `/proc/sys/kernel/`:
+スケジューラのチューニング用のつまみはすべて`/proc/sys/kernel/`の下にある:
 
 ```bash
 ls /proc/sys/kernel/sched_*
 ```
 
-### Core timing knobs {#core-timing-knobs}
+### 中核となるタイミングのつまみ {#core-timing-knobs}
 
 ```bash
-# Minimum scheduling granularity (ns)
-# Tasks run for at least this long before being preempted
-# Default: 750000 (750µs), scales with CPU count
+# 最小スケジューリング粒度（ns）
+# タスクはプリエンプトされる前に少なくともこの時間は実行される
+# デフォルト: 750000（750µs）、CPU数に応じてスケールする
 cat /proc/sys/kernel/sched_min_granularity_ns
 
-# Base scheduling slice (ns) — the target time per task per period
-# EEVDF uses this as the default slice per task
-# Default: 700000 (700µs)
+# 基本スケジューリングスライス（ns） — 周期あたりタスクあたりの目標時間
+# EEVDFはこれをタスクごとのデフォルトのスライスとして使う
+# デフォルト: 700000（700µs）
 cat /proc/sys/kernel/sched_base_slice_ns
 
-# Wakeup preemption granularity (ns)
-# A waking task must be this much more "urgent" to preempt the current task
-# Default: 1000000 (1ms)
+# 起床時プリエンプションの粒度（ns）
+# 起床したタスクが現在のタスクをプリエンプトするには、これだけ「緊急度」が高くなければならない
+# デフォルト: 1000000（1ms）
 cat /proc/sys/kernel/sched_wakeup_granularity_ns
 ```
 
-The relationship: `sched_latency_ns ≥ nr_runnable × sched_min_granularity_ns` ensures each runnable task gets at least one slice per latency period.
+両者の関係: `sched_latency_ns ≥ nr_runnable × sched_min_granularity_ns`により、実行可能な各タスクがレイテンシ周期ごとに少なくとも1つのスライスを得ることが保証される。
 
-### Migration and balancing {#migration-and-balancing}
+### マイグレーションと負荷分散 {#migration-and-balancing}
 
 ```bash
-# Task migration cost (ns)
-# If a task ran on its current CPU within this window, it's "cache hot"
-# and the load balancer avoids migrating it
-# Default: 500000 (500µs)
+# タスクのマイグレーションコスト（ns）
+# タスクがこの時間窓内に現在のCPU上で実行されていれば「キャッシュホット」とみなされ、
+# ロードバランサはそのタスクをマイグレーションするのを避ける
+# デフォルト: 500000（500µs）
 cat /proc/sys/kernel/sched_migration_cost_ns
 
-# Max tasks to migrate in one load balance call
-# Default: 32
+# 1回の負荷分散呼び出しでマイグレーションするタスクの最大数
+# デフォルト: 32
 cat /proc/sys/kernel/sched_nr_migrate
 
-# CFS bandwidth slice (µs)
-# Amount of quota a CPU grabs from the global bandwidth pool at once
-# Default: 5000 (5ms)
+# CFS帯域スライス（µs）
+# CPUがグローバルな帯域プールから一度に取得するクォータの量
+# デフォルト: 5000（5ms）
 cat /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
-### RT throttling {#rt-throttling}
+### RTスロットリング {#rt-throttling}
 
 ```bash
-# RT task period (µs): how often RT tasks' quota is refreshed
-# Default: 1000000 (1 second)
+# RTタスクの周期（µs）: RTタスクのクォータが補充される間隔
+# デフォルト: 1000000（1秒）
 cat /proc/sys/kernel/sched_rt_period_us
 
-# RT task runtime (µs): how much of the period RT tasks can consume
-# Default: 950000 (950ms = 95% of period)
-# -1 = unlimited (disables RT throttling — dangerous)
+# RTタスクの実行時間（µs）: 周期のうちRTタスクが消費できる量
+# デフォルト: 950000（950ms = 周期の95%）
+# -1 = 無制限（RTスロットリングを無効にする — 危険）
 cat /proc/sys/kernel/sched_rt_runtime_us
 ```
 
-### Schedstat {#schedstat}
+### schedstat {#schedstat}
 
 ```bash
-# Enable per-task scheduling statistics (slight overhead)
-# Default: 0 (disabled)
+# タスクごとのスケジューリング統計を有効にする（わずかなオーバーヘッドあり）
+# デフォルト: 0（無効）
 echo 1 > /proc/sys/kernel/sched_schedstats
 ```
 
-## SCHED_FEAT: compile-time feature toggles {#sched_feat-compile-time-feature-toggles}
+## SCHED_FEAT: コンパイル時の機能トグル {#sched_feat-compile-time-feature-toggles}
 
-`SCHED_FEAT` flags are booleans controlling specific scheduler behaviors. In a kernel with `CONFIG_SCHED_DEBUG`, they can be toggled at runtime:
+`SCHED_FEAT`フラグは、スケジューラの特定の挙動を制御する真偽値である。`CONFIG_SCHED_DEBUG`を有効にしたカーネルでは、実行時に切り替えられる:
 
 ```bash
-# View all features and their current state
+# すべての機能とその現在の状態を表示する
 cat /sys/kernel/debug/sched/features
 # PLACE_LAG PLACE_DEADLINE_INITIAL PLACE_REL_DEADLINE RUN_TO_PARITY
 # PREEMPT_SHORT PICK_BUDDY CACHE_HOT_BUDDY DELAY_DEQUEUE DELAY_ZERO
 # WAKEUP_PREEMPTION ...
 
-# Toggle a feature
-echo NO_WAKEUP_PREEMPTION > /sys/kernel/debug/sched/features  # disable
-echo WAKEUP_PREEMPTION > /sys/kernel/debug/sched/features      # enable
+# 機能を切り替える
+echo NO_WAKEUP_PREEMPTION > /sys/kernel/debug/sched/features  # 無効にする
+echo WAKEUP_PREEMPTION > /sys/kernel/debug/sched/features      # 有効にする
 ```
 
-Key features:
+主な機能:
 
-| Feature | Default | Effect |
+| 機能 | デフォルト | 効果 |
 |---------|---------|--------|
-| `WAKEUP_PREEMPTION` | on | Waking task can preempt the current task if it has an earlier deadline |
-| `PLACE_LAG` | on | Adjust woken task's vruntime based on its lag (how much CPU it's owed) |
-| `PLACE_DEADLINE_INITIAL` | on | Give newly enqueued tasks an initial deadline advantage |
-| `CACHE_HOT_BUDDY` | on | Don't preempt a cache-hot task just because it's been running |
-| `NEXT_BUDDY` | off | After preemption, try to run the task that just woke up |
-| `HRTICK` | off | Use hrtimers for precise preemption at timeslice expiry (more accurate, slightly higher overhead) |
-| `TTWU_QUEUE` | arch | Queue cross-CPU wakeups (reduces IPI storms) |
-| `RT_RUNTIME_SHARE` | on | Allow RT tasks to borrow runtime from sibling CPUs |
+| `WAKEUP_PREEMPTION` | on | 起床したタスクのデッドラインが早ければ、現在のタスクをプリエンプトできる |
+| `PLACE_LAG` | on | 起床したタスクのvruntimeを、そのlag（どれだけCPUの借りがあるか）に基づいて調整する |
+| `PLACE_DEADLINE_INITIAL` | on | 新しくエンキューされたタスクに初期のデッドライン上の優位を与える |
+| `CACHE_HOT_BUDDY` | on | キャッシュホットなタスクを、実行し続けているというだけでプリエンプトしない |
+| `NEXT_BUDDY` | off | プリエンプションの後、直前に起床したタスクを実行しようとする |
+| `HRTICK` | off | タイムスライスの満了時に正確にプリエンプトするためにhrtimerを使う（より正確だが、オーバーヘッドがやや高い） |
+| `TTWU_QUEUE` | arch | CPUをまたぐ起床をキューに入れる（IPIの嵐を減らす） |
+| `RT_RUNTIME_SHARE` | on | RTタスクが兄弟CPUから実行時間を借りることを許可する |
 
-## Common tuning scenarios {#common-tuning-scenarios}
+## よくあるチューニングのシナリオ {#common-tuning-scenarios}
 
-### Latency-sensitive workloads (network, trading, audio) {#latency-sensitive-workloads-network-trading-audio}
+### レイテンシに敏感なワークロード（ネットワーク、トレーディング、オーディオ） {#latency-sensitive-workloads-network-trading-audio}
 
 ```bash
-# Reduce minimum granularity: tasks get smaller slices, lower max latency
-echo 500000 > /proc/sys/kernel/sched_min_granularity_ns     # 500µs (default 750µs)
-echo 700000 > /proc/sys/kernel/sched_base_slice_ns           # keep at default
+# 最小粒度を小さくする: タスクのスライスが小さくなり、最大レイテンシが下がる
+echo 500000 > /proc/sys/kernel/sched_min_granularity_ns     # 500µs（デフォルト750µs）
+echo 700000 > /proc/sys/kernel/sched_base_slice_ns           # デフォルトのまま
 
-# Reduce wakeup granularity: waking tasks preempt more aggressively
-echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns  # 500µs (default 1ms)
+# 起床粒度を小さくする: 起床したタスクがより積極的にプリエンプトする
+echo 500000 > /proc/sys/kernel/sched_wakeup_granularity_ns  # 500µs（デフォルト1ms）
 
-# Reduce migration cost: allow more migration (less cache-hot protection)
-echo 250000 > /proc/sys/kernel/sched_migration_cost_ns      # 250µs (default 500µs)
+# マイグレーションコストを小さくする: マイグレーションを増やす（キャッシュホットの保護を弱める）
+echo 250000 > /proc/sys/kernel/sched_migration_cost_ns      # 250µs（デフォルト500µs）
 ```
 
-### Throughput-oriented workloads (batch processing, HPC) {#throughput-oriented-workloads-batch-processing-hpc}
+### スループット重視のワークロード（バッチ処理、HPC） {#throughput-oriented-workloads-batch-processing-hpc}
 
 ```bash
-# Increase minimum granularity: tasks run longer before preemption
+# 最小粒度を大きくする: タスクはプリエンプトされるまでより長く実行される
 echo 4000000 > /proc/sys/kernel/sched_min_granularity_ns   # 4ms
 
-# Increase migration cost: keep tasks cache-hot, fewer migrations
+# マイグレーションコストを大きくする: タスクをキャッシュホットに保ち、マイグレーションを減らす
 echo 5000000 > /proc/sys/kernel/sched_migration_cost_ns    # 5ms
 
-# Allow more tasks to migrate per balance call
+# 負荷分散1回あたりにマイグレーションできるタスクを増やす
 echo 64 > /proc/sys/kernel/sched_nr_migrate
 ```
 
-### Real-time workloads (SCHED_FIFO/RR tasks) {#real-time-workloads-sched_fiforr-tasks}
+### リアルタイムのワークロード（SCHED_FIFO/RRタスク） {#real-time-workloads-sched_fiforr-tasks}
 
 ```bash
-# Ensure RT tasks get priority over CFS (default: 95%)
-cat /proc/sys/kernel/sched_rt_runtime_us  # should be 950000
+# RTタスクがCFSより優先されることを確認する（デフォルト: 95%）
+cat /proc/sys/kernel/sched_rt_runtime_us  # 950000のはず
 
-# For isolated RT cores (combined with cpuset isolation):
-# Disable RT throttling on dedicated cores — RT tasks need guaranteed time
-# WARNING: only safe if RT tasks are well-behaved and CPU is fully dedicated
-echo -1 > /proc/sys/kernel/sched_rt_runtime_us  # disable throttling globally
+# 隔離されたRTコアの場合（cpusetによる隔離と組み合わせる）:
+# 専用コアでRTスロットリングを無効にする — RTタスクには保証された時間が必要
+# 警告: RTタスクが行儀よく動作し、CPUが完全に専用である場合にのみ安全
+echo -1 > /proc/sys/kernel/sched_rt_runtime_us  # スロットリングをグローバルに無効にする
 
-# Better: use per-cgroup RT limit
-echo 950000 > /sys/fs/cgroup/rt_group/cpu.rt_runtime_us   # runtime in µs
-echo 1000000 > /sys/fs/cgroup/rt_group/cpu.rt_period_us   # period in µs
+# より良い方法: cgroupごとのRT制限を使う
+echo 950000 > /sys/fs/cgroup/rt_group/cpu.rt_runtime_us   # 実行時間（µs）
+echo 1000000 > /sys/fs/cgroup/rt_group/cpu.rt_period_us   # 周期（µs）
 ```
 
-### Container/cgroup isolation {#containercgroup-isolation}
+### コンテナ/cgroupによる隔離 {#containercgroup-isolation}
 
 ```bash
-# Give a container 2 CPUs (200ms quota / 100ms period)
+# コンテナに2 CPUを与える（クォータ200ms / 周期100ms）
 echo "200000 100000" > /sys/fs/cgroup/containers/myapp/cpu.max
 
-# Reduce bandwidth slice for tighter throttle response (at cost of more lock contention)
-echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 1ms (default 5ms)
+# スロットリングの応答を細かくするために帯域スライスを小さくする（ロック競合が増える代償あり）
+echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us  # 1ms（デフォルト5ms）
 ```
 
-## CPU isolation for RT/low-latency {#cpu-isolation-for-rtlow-latency}
+## RT/低レイテンシのためのCPU隔離 {#cpu-isolation-for-rtlow-latency}
 
-For truly latency-sensitive tasks, isolate CPUs from the kernel scheduler entirely:
+真にレイテンシに敏感なタスクのためには、CPUをカーネルのスケジューラから完全に隔離する:
 
 ```bash
-# Boot parameter: remove CPUs 4-7 from general scheduling
-# Add to /etc/default/grub: GRUB_CMDLINE_LINUX="isolcpus=4-7 nohz_full=4-7 rcu_nocbs=4-7"
+# ブートパラメータ: CPU 4-7を一般のスケジューリングから外す
+# /etc/default/grubに追加: GRUB_CMDLINE_LINUX="isolcpus=4-7 nohz_full=4-7 rcu_nocbs=4-7"
 
-# At runtime: pin tasks to isolated CPUs
+# 実行時: タスクを隔離されたCPUにピン留めする
 taskset -c 4 ./latency_sensitive_app
 
-# Check isolation status
+# 隔離の状態を確認する
 cat /sys/devices/system/cpu/isolated  # → 4-7
 cat /sys/devices/system/cpu/nohz_full # → 4-7
 ```
 
-`isolcpus` removes CPUs from the load balancer. `nohz_full` disables the scheduler tick on those CPUs (tasks run without periodic interruption). `rcu_nocbs` offloads RCU callbacks to other CPUs.
+`isolcpus`はCPUをロードバランサから外す。`nohz_full`はそれらのCPU上のスケジューラティックを無効にする（タスクは周期的な割り込みなしに実行される）。`rcu_nocbs`はRCUコールバックを他のCPUにオフロードする。
 
-## Diagnosing tuning effects {#diagnosing-tuning-effects}
+## チューニングの効果を診断する {#diagnosing-tuning-effects}
 
 ```bash
-# Measure scheduling latency before and after
+# 前後でスケジューリングレイテンシを測定する
 perf sched latency -- sleep 10
 
-# Count preemptions (involuntary switches)
+# プリエンプション（非自発的なスイッチ）を数える
 perf stat -e cs ./workload 2>&1 | grep "context-switches"
 
-# Watch runqueue length (high = tasks waiting)
-runqlen 10  # from BCC toolkit, sample every 10ms
+# ランキュー長を監視する（大きい = タスクが待っている）
+runqlen 10  # BCCツールキットに含まれる。10msごとにサンプリングする
 
-# Check if tasks are being throttled (CFS bandwidth)
+# タスクがスロットリングされているか確認する（CFS帯域）
 watch -n 1 'cat /sys/fs/cgroup/myapp/cpu.stat | grep throttled'
 ```
 
-## Observability checklist {#observability-checklist}
+## 可観測性のチェックリスト {#observability-checklist}
 
-Before tuning, establish a baseline:
+チューニングの前に、ベースラインを確立する:
 
-1. **Are tasks waiting long?** → `perf sched latency` or `runqlat`
-2. **Excessive migrations?** → `perf stat -e cpu-migrations` or `schedstat`
-3. **CFS bandwidth throttling?** → `cpu.stat nr_throttled/nr_periods`
-4. **RT task monopolizing CPU?** → `htop` or `perf top` showing high RT%
-5. **NUMA inefficiency?** → `numastat`, `perf stat -e cache-misses`
+1. **タスクが長く待っているか？** → `perf sched latency`または`runqlat`
+2. **マイグレーションが過剰か？** → `perf stat -e cpu-migrations`または`schedstat`
+3. **CFS帯域スロットリングが起きているか？** → `cpu.stat nr_throttled/nr_periods`
+4. **RTタスクがCPUを独占しているか？** → RT%が高いことを示す`htop`や`perf top`
+5. **NUMAの非効率があるか？** → `numastat`、`perf stat -e cache-misses`
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Scheduler Statistics](schedstat.md) — What to measure before tuning
-- [Scheduler Tracing](sched-tracing.md) — Real-time observation tools
-- [CPU Bandwidth Control](cpu-bandwidth.md) — CFS quota/throttle tuning
-- [cpuset](cpuset.md) — CPU isolation for low-latency workloads
-- [EEVDF](eevdf.md) — How the slice/deadline parameters affect task selection
+- [スケジューラ統計](schedstat.md) — チューニングの前に何を測定すべきか
+- [スケジューラのトレーシング](sched-tracing.md) — リアルタイムの観察ツール
+- [CPU帯域制御](cpu-bandwidth.md) — CFSのクォータ/スロットリングのチューニング
+- [cpuset](cpuset.md) — 低レイテンシのワークロードのためのCPU隔離
+- [EEVDF](eevdf.md) — スライス/デッドラインのパラメータがタスク選択にどう影響するか

@@ -1,16 +1,16 @@
-# fscrypt: Per-File Encryption {#fscrypt-per-file-encryption}
+# fscrypt: ファイル単位の暗号化 {#fscrypt-per-file-encryption}
 
-> Key hierarchy, HKDF derivation, and transparent encryption in ext4/F2FS/Btrfs
+> 鍵階層、HKDFによる導出、ext4/F2FS/Btrfsにおける透過的暗号化
 
-## Overview {#overview}
+## 概要 {#overview}
 
-fscrypt provides **per-directory** transparent encryption at the VFS layer. Unlike dm-crypt (full disk), fscrypt encrypts individual files and directories, allowing:
+fscryptはVFS層で**ディレクトリ単位**の透過的暗号化を提供する。dm-crypt（ディスク全体）とは異なり、fscryptは個々のファイルとディレクトリを暗号化するため、次のことが可能になる:
 
-- Multiple users to have separate encrypted directories with different keys
-- Selective encryption (not all files need to be encrypted)
-- Fast key revocation (remove key → files become inaccessible)
+- 複数のユーザーが、異なる鍵を使う別々の暗号化ディレクトリを持つ
+- 選択的な暗号化（すべてのファイルを暗号化する必要はない）
+- 高速な鍵の失効（鍵を削除 → ファイルにアクセスできなくなる）
 
-Supported filesystems: **ext4, F2FS, UBIFS, Btrfs** (5.14+)
+対応ファイルシステム: **ext4、F2FS、UBIFS、Btrfs**（5.14以降）
 
 ```
 Application read()/write()
@@ -22,9 +22,9 @@ Application read()/write()
     Block device (ciphertext)
 ```
 
-## Key hierarchy {#key-hierarchy}
+## 鍵階層 {#key-hierarchy}
 
-fscrypt uses a two-level key hierarchy:
+fscryptは2段階の鍵階層を使う:
 
 ```
 User passphrase / TPM / hardware key
@@ -36,56 +36,56 @@ Master key (256-bit, type: ext4/logon)
          └── IV (per-block, derived from file nonce + block number)
 ```
 
-Each encrypted directory has a **policy** that records:
+暗号化された各ディレクトリは、次の内容を記録する**ポリシー**を持つ:
 
-- Which master key to use (by key descriptor or key identifier)
-- Which encryption mode (AES-256-XTS for contents, AES-256-CTS for filenames)
-- Key derivation version (v1 trusted keyring, v2 HKDF)
+- どのマスター鍵を使うか（鍵記述子または鍵識別子で指定）
+- どの暗号化モードを使うか（内容にはAES-256-XTS、ファイル名にはAES-256-CTS）
+- 鍵導出のバージョン（v1は信頼されたキーリング、v2はHKDF）
 
-## Setting up encryption (API v2) {#setting-up-encryption-api-v2}
+## 暗号化のセットアップ（API v2） {#setting-up-encryption-api-v2}
 
 ```bash
-# Step 1: Enable encryption on the filesystem (ext4):
+# ステップ1: ファイルシステムで暗号化を有効にする（ext4）:
 tune2fs -O encrypt /dev/sda1
-# or at mkfs time:
+# またはmkfs時に:
 mkfs.ext4 -O encrypt /dev/sda1
 
-# Step 2: Add master key to kernel keyring:
-# Generate a 512-bit key:
+# ステップ2: マスター鍵をカーネルのキーリングに追加する:
+# 512ビットの鍵を生成する:
 dd if=/dev/urandom bs=64 count=1 of=/tmp/master_key 2>/dev/null
 
-# Add to session keyring:
+# セッションキーリングに追加する:
 keyctl add logon fscrypt:$(xxd -p /tmp/master_key | head -c 16) \
     /tmp/master_key @s
 
-# Or using the fscrypt tool:
+# あるいはfscryptツールを使う:
 apt install fscrypt
 fscrypt setup /dev/sda1
 fscrypt encrypt /home/user/private/ --user=user
 ```
 
-### Kernel ioctl API {#kernel-ioctl-api}
+### カーネルのioctl API {#kernel-ioctl-api}
 
 ```c
 #include <linux/fscrypt.h>
 
-/* Step 1: Add master key to filesystem keyring */
+/* ステップ1: マスター鍵をファイルシステムのキーリングに追加する */
 struct fscrypt_add_key_arg {
-    struct fscrypt_key_specifier key_spec;  /* identifies the key */
-    __u32 raw_size;     /* 16-64 bytes for AES, 64 bytes for HKDF */
-    __u32 key_id;       /* output: kernel-assigned ID */
+    struct fscrypt_key_specifier key_spec;  /* 鍵を識別する */
+    __u32 raw_size;     /* AESでは16〜64バイト、HKDFでは64バイト */
+    __u32 key_id;       /* 出力: カーネルが割り当てたID */
     __u32 __reserved[8];
-    __u8  raw[];        /* key material */
+    __u8  raw[];        /* 鍵素材 */
 };
 
 struct fscrypt_key_specifier key_spec = {
-    .type = FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER,  /* v2: HKDF-based */
+    .type = FSCRYPT_KEY_SPEC_TYPE_IDENTIFIER,  /* v2: HKDFベース */
 };
 int key_fd = open("/", O_RDONLY);
 ioctl(key_fd, FS_IOC_ADD_ENCRYPTION_KEY, &add_key_arg);
-/* Returns key_spec.u.identifier (16-byte hash of key) */
+/* key_spec.u.identifier（鍵の16バイトのハッシュ）を返す */
 
-/* Step 2: Set encryption policy on a directory */
+/* ステップ2: ディレクトリに暗号化ポリシーを設定する */
 struct fscrypt_policy_v2 policy = {
     .version           = FSCRYPT_POLICY_V2,
     .contents_encryption_mode = FSCRYPT_MODE_AES_256_XTS,
@@ -95,86 +95,86 @@ struct fscrypt_policy_v2 policy = {
 };
 int dir_fd = open("/home/user/private", O_RDONLY);
 ioctl(dir_fd, FS_IOC_SET_ENCRYPTION_POLICY, &policy);
-/* From now on, all new files in this directory are encrypted */
+/* 以降、このディレクトリ内の新しいファイルはすべて暗号化される */
 ```
 
-## Key derivation internals {#key-derivation-internals}
+## 鍵導出の内部 {#key-derivation-internals}
 
 ```c
 /* fs/crypto/hkdf.c */
 
-/* HKDF-SHA512 is used to derive all per-file keys: */
+/* ファイルごとの鍵はすべてHKDF-SHA512で導出される: */
 
-/* File content key: */
-/* Input keying material (IKM) = master_key */
+/* ファイル内容の鍵: */
+/* 入力鍵素材（IKM） = master_key */
 /* Info = "fscrypt\0" + mode + filesystem UUID + file nonce */
 fscrypt_hkdf_expand(&ci->ci_master_key->mk_secret.hkdf,
                      HKDF_CONTEXT_PER_FILE_ENC_KEY,
                      info, infolen,
                      derived_key, mode->keysize);
 
-/* File nonce: random 16 bytes stored in inode on disk */
-/* Every file gets a unique nonce → unique key even if same master key */
+/* ファイルnonce: ディスク上のinodeに格納されるランダムな16バイト */
+/* 各ファイルは固有のnonceを持つ → 同じマスター鍵でも鍵は固有になる */
 
-/* Per-file key stored in: */
+/* ファイルごとの鍵の格納先: */
 struct fscrypt_inode_info {
     struct fscrypt_master_key *ci_master_key;
-    union fscrypt_iv    ci_iv;          /* per-block IV base */
-    struct crypto_skcipher *ci_enc_key; /* actual cipher */
+    union fscrypt_iv    ci_iv;          /* ブロックごとのIVの基点 */
+    struct crypto_skcipher *ci_enc_key; /* 実際の暗号 */
     /* ... */
 };
 ```
 
-### IV generation (per-block) {#iv-generation-per-block}
+### IVの生成（ブロック単位） {#iv-generation-per-block}
 
 ```c
-/* For AES-256-XTS (contents encryption, default per-file key): */
-/* IV = block_number (logical block index within the file, 0-based) */
-/* The per-file key is derived from master key + file nonce via HKDF */
+/* AES-256-XTS（内容の暗号化、デフォルトのファイルごとの鍵）の場合: */
+/* IV = block_number（ファイル内の論理ブロックインデックス、0始まり） */
+/* ファイルごとの鍵はHKDFでマスター鍵 + ファイルnonceから導出される */
 
-/* For filename encryption (AES-256-CTS-CBC): */
-/* IV = 0 (CTS-CBC, not ECB — provides diffusion across the filename) */
-/* → same filename in same directory always encrypts the same way */
-/* → directory listing is possible (if you have the key), order leaks */
+/* ファイル名の暗号化（AES-256-CTS-CBC）の場合: */
+/* IV = 0（ECBではなくCTS-CBC — ファイル名全体にわたる拡散を提供する） */
+/* → 同じディレクトリ内の同じファイル名は常に同じように暗号化される */
+/* → （鍵があれば）ディレクトリ一覧の取得が可能。順序は漏れる */
 
-/* For policy flag FSCRYPT_POLICY_FLAG_IV_INO_LBLK_64: */
-/* IV = inode_number (high bits) | block_number (low bits), packed 64-bit */
-/* Enables hardware inline encryption (one key per filesystem) */
-/* Note: FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32 uses SipHash for a 32-bit IV */
+/* ポリシーフラグFSCRYPT_POLICY_FLAG_IV_INO_LBLK_64の場合: */
+/* IV = inode_number（上位ビット） | block_number（下位ビット）、64ビットに詰める */
+/* ハードウェアのインライン暗号化を可能にする（ファイルシステムごとに1つの鍵） */
+/* 注: FSCRYPT_POLICY_FLAG_IV_INO_LBLK_32は32ビットIVにSipHashを使う */
 ```
 
-## Inline encryption hardware {#inline-encryption-hardware}
+## インライン暗号化ハードウェア {#inline-encryption-hardware}
 
 ```bash
-# Check for inline encryption support:
+# インライン暗号化のサポートを確認する:
 cat /sys/block/nvme0n1/queue/crypto_capabilities 2>/dev/null
 # AES-256-XTS, key size 64, data unit size 512/1024/2048/4096
 
-# Mount with inline encryption:
+# インライン暗号化を使ってマウントする:
 mount -o inlinecrypt /dev/nvme0n1p1 /data
-# Kernel programs NVMe keyslot; block layer does encryption in hardware
-# CPU only sets up keys — no per-block crypto overhead
+# カーネルがNVMeのキースロットを設定し、ブロック層がハードウェアで暗号化する
+# CPUは鍵を設定するだけ — ブロックごとの暗号処理のオーバーヘッドはない
 
-# Check if inlinecrypt is active:
+# inlinecryptが有効か確認する:
 cat /proc/mounts | grep inlinecrypt
 ```
 
-## Key revocation and locking {#key-revocation-and-locking}
+## 鍵の失効とロック {#key-revocation-and-locking}
 
 ```c
-/* Remove master key from filesystem (lock encrypted directories): */
+/* ファイルシステムからマスター鍵を削除する（暗号化ディレクトリをロックする）: */
 ioctl(fs_fd, FS_IOC_REMOVE_ENCRYPTION_KEY, &key_spec);
-/* All pages of encrypted files are evicted from page cache */
-/* Inode's ci_enc_key is freed → files become unreadable */
-/* On next access attempt: -ENOKEY (key not available) */
+/* 暗号化ファイルのすべてのページがページキャッシュから追い出される */
+/* inodeのci_enc_keyが解放される → ファイルは読めなくなる */
+/* 次のアクセス試行時: -ENOKEY（鍵が利用できない） */
 ```
 
 ```bash
-# Using fscrypt tool:
-fscrypt lock /home/user/private/   # lock (remove key from kernel)
-fscrypt unlock /home/user/private/ # unlock (re-add key)
+# fscryptツールを使う:
+fscrypt lock /home/user/private/   # ロック（カーネルから鍵を削除）
+fscrypt unlock /home/user/private/ # アンロック（鍵を再追加）
 
-# Check encryption status:
+# 暗号化の状態を確認する:
 fscrypt status /home/user/private/
 # "/home/user/private": encrypted
 #   Policy version:      2
@@ -183,22 +183,22 @@ fscrypt status /home/user/private/
 #   Key:                 unlocked (key identifier: abc123...)
 ```
 
-## fscrypt vs dm-crypt {#fscrypt-vs-dm-crypt}
+## fscryptとdm-cryptの比較 {#fscrypt-vs-dm-crypt}
 
 | | fscrypt | dm-crypt |
 |---|---------|----------|
-| Granularity | Per-directory | Full block device |
-| Multiple keys | Yes | No (one key per device) |
-| Key revocation | Hot-revoke (pages evicted) | Unmount required |
-| Metadata encryption | Filenames only | All metadata |
-| Performance | Slightly higher CPU | AES-NI nearly free |
-| Use case | Multi-user (Android FBE, shared laptops) | Single-user laptop, server |
-| Filesystem | ext4/F2FS/Btrfs | Any FS on top |
+| 粒度 | ディレクトリ単位 | ブロックデバイス全体 |
+| 複数の鍵 | 可 | 不可（デバイスごとに1つの鍵） |
+| 鍵の失効 | 稼働中に失効可能（ページは追い出される） | アンマウントが必要 |
+| メタデータの暗号化 | ファイル名のみ | すべてのメタデータ |
+| 性能 | CPU負荷がやや高い | AES-NIでほぼコストなし |
+| 用途 | マルチユーザー（AndroidのFBE、共有ラップトップ） | シングルユーザーのラップトップ、サーバー |
+| ファイルシステム | ext4/F2FS/Btrfs | 上に載せる任意のFS |
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Check if a file is encrypted:
+# ファイルが暗号化されているか確認する:
 fscryptctl get_policy /home/user/private/secret.txt
 # Encryption policy for /home/user/private/secret.txt:
 #   Policy version: 2
@@ -207,22 +207,22 @@ fscryptctl get_policy /home/user/private/secret.txt
 #   Filenames encryption mode: AES-256-CTS
 #   Flags: PAD_32
 
-# List all master keys in a filesystem:
+# ファイルシステム内のすべてのマスター鍵を一覧表示する:
 ioctl(fs_fd, FS_IOC_GET_ENCRYPTION_KEY_STATUS, &status)
-# (or use fscrypt status)
+# （あるいはfscrypt statusを使う）
 
-# dmesg for crypto errors:
+# 暗号関連のエラーをdmesgで確認する:
 dmesg | grep -E "fscrypt|crypto"
 
-# BPF trace key lookups:
+# BPFで鍵の検索をトレースする:
 bpftrace -e 'kprobe:fscrypt_get_encryption_info { @[comm] = count(); }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [dm-crypt](dm-crypt.md) — full-disk encryption alternative
-- [xattr](../vfs/xattr.md) — fscrypt stores policy in `trusted.fscrypt` xattr
-- [Linux Audit](audit.md) — audit fscrypt key operations
-- [Credentials](credentials.md) — per-user keyrings for master keys
-- `fs/crypto/` — fscrypt implementation
+- [dm-crypt](dm-crypt.md) — 代替手段としてのディスク全体の暗号化
+- [xattr](../vfs/xattr.md) — fscryptはポリシーを`trusted.fscrypt` xattrに格納する
+- [Linuxのaudit](audit.md) — fscryptの鍵操作を監査する
+- [クレデンシャル](credentials.md) — マスター鍵のためのユーザーごとのキーリング
+- `fs/crypto/` — fscryptの実装
 - `Documentation/filesystems/fscrypt.rst`

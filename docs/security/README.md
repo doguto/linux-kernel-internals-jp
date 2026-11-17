@@ -1,10 +1,10 @@
-# Linux Security {#linux-security}
+# Linuxのセキュリティ {#linux-security}
 
-> Privilege model, mandatory access control, and syscall filtering
+> 権限モデル、強制アクセス制御、syscallフィルタリング
 
-## Security layers {#security-layers}
+## セキュリティの階層 {#security-layers}
 
-Linux uses a layered security model:
+Linuxは階層化されたセキュリティモデルを採用している:
 
 ```
 Application
@@ -21,38 +21,38 @@ Syscall entry
     └── seccomp BPF: syscall whitelist/blacklist ─────────────────── if installed
 ```
 
-**DAC** (file permissions, uid/gid) is always enforced. **LSM** adds Mandatory Access Control policies on top. **Capabilities** split "root privilege" into 40 discrete permissions. **seccomp** restricts which syscalls a process can make.
+**DAC**（ファイルパーミッション、uid/gid）は常に適用される。**LSM**はその上に強制アクセス制御（Mandatory Access Control）ポリシーを追加する。**ケーパビリティ**は「root権限」を40個の個別の権限に分割する。**seccomp**はプロセスが発行できるsyscallを制限する。
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-### Access control {#access-control}
+### アクセス制御 {#access-control}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [LSM Framework](lsm.md) | LSM hooks, SELinux, AppArmor architecture |
-| [SELinux](selinux.md) | Labels, policy, AVC — how MAC decisions are made |
-| [Landlock](landlock.md) | Unprivileged sandboxing from userspace |
-| [Capabilities](capabilities.md) | Linux capability model, privilege dropping |
-| [Credentials](credentials.md) | struct cred, uid/euid/fsuid, credential lifecycle |
-| [User Namespaces](user-namespaces.md) | Unprivileged containers and their attack surface |
+| [LSMフレームワーク](lsm.md) | LSMフック、SELinux、AppArmorのアーキテクチャ |
+| [SELinux](selinux.md) | ラベル、ポリシー、AVC — MACの判定がどのように行われるか |
+| [Landlock](landlock.md) | ユーザー空間からの非特権サンドボックス化 |
+| [ケーパビリティ](capabilities.md) | Linuxのケーパビリティモデル、権限の放棄 |
+| [クレデンシャル](credentials.md) | struct cred、uid/euid/fsuid、クレデンシャルのライフサイクル |
+| [ユーザーnamespace](user-namespaces.md) | 非特権コンテナとその攻撃対象領域 |
 
-### Syscall & kernel hardening {#syscall-kernel-hardening}
+### syscallとカーネルのハードニング {#syscall-kernel-hardening}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [seccomp BPF](seccomp.md) | Syscall filtering, libseccomp, container profiles |
-| [Kernel Hardening](kernel-hardening.md) | Stack protector, CFI, mitigations landscape |
-| [Audit](audit.md) | The audit subsystem, rules, and its cost |
+| [seccomp BPF](seccomp.md) | syscallフィルタリング、libseccomp、コンテナ用プロファイル |
+| [カーネルのハードニング](kernel-hardening.md) | スタックプロテクタ、CFI、緩和策の全体像 |
+| [Audit](audit.md) | auditサブシステム、ルール、そのコスト |
 
-### Storage encryption {#storage-encryption}
+### ストレージ暗号化 {#storage-encryption}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [fscrypt](fscrypt.md) | Filesystem-level encryption (ext4/f2fs) |
-| [dm-crypt](dm-crypt.md) | Block-level encryption, LUKS |
+| [fscrypt](fscrypt.md) | ファイルシステムレベルの暗号化（ext4/f2fs） |
+| [dm-crypt](dm-crypt.md) | ブロックレベルの暗号化、LUKS |
 
-### War stories {#war-stories}
+### 事件簿 {#war-stories}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Security War Stories](war-stories.md) | Four real CVEs — Dirty Pipe, the fs_context overflow, stale ptracer credentials, and nested user-namespace UID mapping — root-caused and traced through whatever real disclosure record actually exists for each |
+| [セキュリティの事件簿](war-stories.md) | 実在する4つのCVE — Dirty Pipe、fs_contextのオーバーフロー、古いptracerクレデンシャル、ネストしたユーザーnamespaceのUID/GIDマッピング — の根本原因を分析し、それぞれについて実際に存在する公開記録をたどる |

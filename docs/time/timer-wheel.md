@@ -1,80 +1,80 @@
-# The Timer Wheel {#the-timer-wheel}
+# タイマーホイール {#the-timer-wheel}
 
-> jiffies, struct timer_list, and the hierarchical timer wheel for low-resolution timers
+> jiffies、struct timer_list、そして低分解能タイマーのための階層型タイマーホイール
 
-## Two timer systems {#two-timer-systems}
+## 2つのタイマーシステム {#two-timer-systems}
 
-Linux maintains two distinct timer implementations that serve different use cases:
+Linuxは、異なるユースケースに対応する2つの別個のタイマー実装を保持している。
 
-| System | Precision | Data structure | Insert cost | Typical use |
+| システム | 精度 | データ構造 | 挿入コスト | 典型的な用途 |
 |--------|-----------|---------------|-------------|-------------|
-| **hrtimer** | ~nanosecond | Per-CPU red-black tree | O(log n) | `sleep()`, audio, network pacing, real-time |
-| **timer_list** (timer wheel) | ~1/HZ (1–10 ms) | Per-CPU hierarchical wheel | O(1) | TCP retransmit, watchdogs, delayed work |
+| **hrtimer** | 約ナノ秒 | CPUごとの赤黒木 | O(log n) | `sleep()`、オーディオ、ネットワークペーシング、リアルタイム |
+| **timer_list**（タイマーホイール） | 約1/HZ（1〜10ms） | CPUごとの階層型ホイール | O(1) | TCP再送、ウォッチドッグ、遅延実行される処理 |
 
-hrtimers program hardware clockevents directly for precise wakeups. The timer wheel is designed for timeouts that are frequently cancelled before expiry (e.g., TCP retransmit timers that are cancelled when an ACK arrives). The O(1) insert and cancel cost is the key advantage — most timer-list timers never actually fire.
+hrtimerは正確なウェイクアップのためにハードウェアのclockeventを直接プログラムする。タイマーホイールは、満了前に頻繁にキャンセルされるタイムアウト（例: ACKが届いた時点でキャンセルされるTCP再送タイマー）向けに設計されている。O(1)の挿入・キャンセルコストこそが主な利点であり、timer_listのタイマーのほとんどは実際には一度も発火しない。
 
-## jiffies and HZ {#jiffies-and-hz}
+## jiffiesとHZ {#jiffies-and-hz}
 
-`jiffies` is a global counter incremented once per hardware tick. It is the fundamental unit of time for the timer wheel.
+`jiffies`は、ハードウェアのティックごとに1つずつインクリメントされるグローバルなカウンタである。これはタイマーホイールにおける時間の基本単位である。
 
 ```c
 /* include/linux/jiffies.h */
-extern unsigned long volatile jiffies;  /* wraps at ULONG_MAX */
-extern u64 jiffies_64;                  /* 64-bit, no wraparound in practice */
+extern unsigned long volatile jiffies;  /* ULONG_MAX でラップする */
+extern u64 jiffies_64;                  /* 64ビット、実用上ラップアラウンドしない */
 ```
 
-`HZ` is the number of jiffies per second, configured at compile time:
+`HZ`は1秒あたりのjiffies数であり、コンパイル時に設定される。
 
-| CONFIG_HZ | Tick period | Typical use |
+| CONFIG_HZ | ティック周期 | 典型的な用途 |
 |-----------|-------------|-------------|
-| 100 | 10 ms | Servers, embedded (CONFIG_HZ_100) |
-| 250 | 4 ms | Desktop default on many distros |
-| 1000 | 1 ms | Low-latency desktops, real-time |
+| 100 | 10ms | サーバー、組み込み（CONFIG_HZ_100） |
+| 250 | 4ms | 多くのディストリビューションでのデスクトップのデフォルト |
+| 1000 | 1ms | 低レイテンシのデスクトップ、リアルタイム |
 
-Conversion helpers:
+変換ヘルパー:
 
 ```c
-msecs_to_jiffies(500)       /* ms → jiffies; safe with HZ-independent code */
+msecs_to_jiffies(500)       /* ms → jiffies。HZ非依存のコードで安全 */
 jiffies_to_msecs(jiffies)   /* jiffies → ms */
-usecs_to_jiffies(100)       /* us → jiffies (rounds up) */
+usecs_to_jiffies(100)       /* us → jiffies（切り上げ） */
 nsecs_to_jiffies(1000000UL) /* ns → jiffies */
 ```
 
-Always use these helpers rather than computing `HZ * seconds` directly — the helpers handle rounding correctly and are portable across HZ configurations.
+`HZ * seconds`を直接計算するのではなく、常にこれらのヘルパーを使うこと。ヘルパーは丸めを正しく扱い、HZの設定をまたいで移植性がある。
 
 ## struct timer_list {#struct-timer_list}
 
 ```c
 /* include/linux/timer_types.h */
 struct timer_list {
-    struct hlist_node   entry;    /* linkage in the wheel bucket */
-    unsigned long       expires;  /* absolute expiry in jiffies */
-    void              (*function)(struct timer_list *); /* callback */
-    u32                 flags;    /* encoded CPU affinity + TIMER_* flags */
+    struct hlist_node   entry;    /* ホイールのバケット内のリンク */
+    unsigned long       expires;  /* jiffies単位の絶対満了時刻 */
+    void              (*function)(struct timer_list *); /* コールバック */
+    u32                 flags;    /* エンコードされたCPUアフィニティ + TIMER_* フラグ */
 };
 ```
 
-Key fields:
+主なフィールド:
 
-- `expires` — absolute jiffies value when the timer should fire. Set via `add_timer()` or `mod_timer()`.
-- `function` — called from softirq context (TIMER_SOFTIRQ) on the CPU the timer is pinned to. Must not sleep.
-- `flags` — encodes the target CPU in the upper bits and timer flags in the lower bits.
+- `expires` — タイマーが発火すべき絶対jiffies値。`add_timer()`または`mod_timer()`で設定する。
+- `function` — タイマーが固定されたCPU上で、softirqコンテキスト（TIMER_SOFTIRQ）から呼ばれる。スリープしてはならない。
+- `flags` — 上位ビットに対象CPUを、下位ビットにタイマーフラグをエンコードする。
 
-Initializing a timer:
+タイマーの初期化:
 
 ```c
 struct timer_list my_timer;
 
-/* Static init */
+/* 静的初期化 */
 DEFINE_TIMER(my_timer, my_callback);
 
-/* Dynamic init */
+/* 動的初期化 */
 timer_setup(&my_timer, my_callback, 0);
 ```
 
-`timer_setup()` replaced the older `init_timer()` + `setup_timer()` pattern (changed in Linux 4.14) — the callback now receives the `struct timer_list *` directly rather than an opaque `unsigned long` data argument.
+`timer_setup()`は、古い`init_timer()`+`setup_timer()`のパターンを置き換えた（Linux 4.14で変更）。コールバックは、不透明な`unsigned long`のデータ引数ではなく、`struct timer_list *`を直接受け取るようになった。
 
-## The public API {#the-public-api}
+## 公開API {#the-public-api}
 
 ### add_timer() {#add_timer}
 
@@ -82,7 +82,7 @@ timer_setup(&my_timer, my_callback, 0);
 void add_timer(struct timer_list *timer);
 ```
 
-Inserts a timer into the wheel. `timer->expires` must be set before calling. The timer fires no earlier than `expires` but may fire slightly later if the CPU is busy.
+タイマーをホイールに挿入する。呼び出す前に`timer->expires`を設定しておかなければならない。タイマーが`expires`より早く発火することはないが、CPUがビジーであればわずかに遅れて発火することがある。
 
 ```c
 timer_setup(&my_timer, my_callback, 0);
@@ -96,7 +96,7 @@ add_timer(&my_timer);
 int mod_timer(struct timer_list *timer, unsigned long expires);
 ```
 
-Changes the expiry of a pending timer atomically. If the timer is not pending, it is added. Returns 1 if the timer was pending, 0 if it was not. This is the preferred way to both add and modify a timer in one call.
+保留中のタイマーの満了時刻をアトミックに変更する。タイマーが保留中でなければ追加される。タイマーが保留中だった場合は1を、そうでなければ0を返す。1回の呼び出しでタイマーの追加と変更の両方を行う推奨の方法である。
 
 ### timer_reduce() {#timer_reduce}
 
@@ -104,65 +104,65 @@ Changes the expiry of a pending timer atomically. If the timer is not pending, i
 int timer_reduce(struct timer_list *timer, unsigned long expires);
 ```
 
-Like `mod_timer()` but only moves the expiry *earlier*. If the timer is already set to expire at or before `expires`, the call is a no-op. Added in Linux 4.15. This prevents a driver from accidentally delaying a timer that was already scheduled to fire sooner — useful when multiple code paths may arm the same timer.
+`mod_timer()`と同様だが、満了時刻を*早める*方向にしか動かさない。タイマーがすでに`expires`以前に満了するよう設定されていれば、この呼び出しは何もしない。Linux 4.15で追加された。これにより、より早く発火するようすでにスケジュールされていたタイマーを、ドライバが誤って遅らせることを防げる。複数のコードパスが同じタイマーを設定しうる場合に有用である。
 
-### timer_delete() vs timer_delete_sync() {#timerdelete-vs-timerdelete_sync}
+### timer_delete()とtimer_delete_sync() {#timer_delete-vs-timer_delete_sync}
 
 ```c
 int timer_delete(struct timer_list *timer);
 int timer_delete_sync(struct timer_list *timer);
 ```
 
-`timer_delete()` removes the timer from the wheel. If the callback is currently running on another CPU, `timer_delete()` returns immediately — the callback continues executing. This can cause use-after-free if you free data the callback touches immediately after `timer_delete()`.
+`timer_delete()`はタイマーをホイールから取り除く。コールバックが別のCPU上で実行中の場合、`timer_delete()`は即座に戻り、コールバックは実行を続ける。`timer_delete()`の直後にコールバックが触るデータを解放すると、use-after-freeを引き起こしうる。
 
-`timer_delete_sync()` waits until the callback has finished on all CPUs before returning. Always use `timer_delete_sync()` before freeing resources a timer callback accesses.
+`timer_delete_sync()`は、すべてのCPU上でコールバックが終了するまで待ってから戻る。タイマーのコールバックがアクセスする資源を解放する前には、常に`timer_delete_sync()`を使うこと。
 
 ```c
-/* Safe teardown */
+/* 安全な後始末 */
 timer_delete_sync(&my_timer);
-kfree(my_data);   /* safe: callback is done */
+kfree(my_data);   /* 安全: コールバックは完了している */
 ```
 
-Since Linux 6.2, `timer_shutdown_sync()` marks the timer as permanently dead after stopping it, so any subsequent `add_timer()` or `mod_timer()` calls are silently ignored. Use this when a timer must never fire again (e.g., during driver removal).
+Linux 6.2以降、`timer_shutdown_sync()`はタイマーを停止した後、恒久的に無効なものとしてマークするため、以降の`add_timer()`や`mod_timer()`の呼び出しは黙って無視される。タイマーを二度と発火させてはならない場合（例: ドライバの削除中）にこれを使う。
 
-## The hierarchical wheel (Linux 4.8+) {#the-hierarchical-wheel-linux-48}
+## 階層型ホイール（Linux 4.8以降） {#the-hierarchical-wheel-linux-48}
 
-Linux 4.8 replaced the old five-level cascade wheel with a hierarchical wheel design (`kernel/time/timer.c`). The old design required expensive cascade operations when the wheel's hand advanced past a level boundary; the new design uses a simpler, more cache-friendly structure.
+Linux 4.8は、古い5レベルのカスケード型ホイールを階層型ホイールの設計（`kernel/time/timer.c`）に置き換えた。古い設計では、ホイールの針がレベルの境界を越えて進むたびに高コストなカスケード処理が必要だった。新しい設計は、より単純でキャッシュに優しい構造を使う。
 
 ### struct timer_base {#struct-timer_base}
 
 ```c
-/* kernel/time/timer.c (internal) */
+/* kernel/time/timer.c（内部） */
 struct timer_base {
     raw_spinlock_t      lock;
-    struct timer_list  *running_timer;   /* callback executing now */
+    struct timer_list  *running_timer;   /* 現在実行中のコールバック */
 #ifdef CONFIG_PREEMPT_RT
     spinlock_t          expiry_lock;
     atomic_t            timer_waiters;
 #endif
-    unsigned long       clk;            /* last processed jiffies value */
-    unsigned long       next_expiry;    /* earliest pending expiry */
+    unsigned long       clk;            /* 最後に処理したjiffies値 */
+    unsigned long       next_expiry;    /* 保留中の最も早い満了時刻 */
     unsigned int        cpu;
     bool                next_expiry_recalc;
     bool                is_idle;
     bool                timers_pending;
     DECLARE_BITMAP(pending_map, WHEEL_SIZE);
-    struct hlist_head   vectors[WHEEL_SIZE]; /* the buckets */
+    struct hlist_head   vectors[WHEEL_SIZE]; /* バケット群 */
 } ____cacheline_aligned;
 ```
 
-On SMP systems with `CONFIG_NO_HZ_COMMON`, each CPU has three `timer_base` instances (`NR_BASES = 3`): `BASE_LOCAL` (for pinned timers), `BASE_GLOBAL` (for non-pinned / migratable timers), and `BASE_DEF` (for deferrable timers).
+`CONFIG_NO_HZ_COMMON`を有効にしたSMPシステムでは、各CPUが3つの`timer_base`インスタンスを持つ（`NR_BASES = 3`）。`BASE_LOCAL`（固定されたタイマー用）、`BASE_GLOBAL`（固定されていない／移動可能なタイマー用）、`BASE_DEF`（遅延可能タイマー用）である。
 
-### Wheel geometry {#wheel-geometry}
+### ホイールの形状 {#wheel-geometry}
 
-The number of levels depends on the configured `HZ`:
+レベル数は設定された`HZ`に依存する。
 
-- **HZ > 100** (e.g., HZ=250 or HZ=1000, the default for desktop/server kernels): `LVL_DEPTH = 9`, giving **9 × 64 = 576 buckets**.
-- **HZ ≤ 100** (e.g., embedded/low-power kernels): `LVL_DEPTH = 8`, giving **8 × 64 = 512 buckets**.
+- **HZ > 100**（例: HZ=250またはHZ=1000。デスクトップ/サーバー向けカーネルのデフォルト）: `LVL_DEPTH = 9`で、**9 × 64 = 576バケット**となる。
+- **HZ ≤ 100**（例: 組み込み/低消費電力向けカーネル）: `LVL_DEPTH = 8`で、**8 × 64 = 512バケット**となる。
 
-The table below shows the geometry for HZ=250 (`LVL_DEPTH = 9`), each with 64 buckets (`LVL_SIZE = 64`):
+次の表は、HZ=250（`LVL_DEPTH = 9`）における形状を示す。各レベルは64バケット（`LVL_SIZE = 64`）を持つ。
 
-| Level | Granularity | Range covered |
+| レベル | 粒度 | カバーする範囲 |
 |-------|-------------|---------------|
 | 0 | 1 jiffy | 0 – 63 jiffies |
 | 1 | 8 jiffies | 64 – 511 jiffies |
@@ -172,60 +172,60 @@ The table below shows the geometry for HZ=250 (`LVL_DEPTH = 9`), each with 64 bu
 | 5 | 32,768 jiffies | 262,144 – 2,097,151 jiffies |
 | 6 | 262,144 jiffies | 2,097,152 – 16,777,215 jiffies |
 | 7 | 2,097,152 jiffies | 16,777,216 – 134,217,727 jiffies |
-| 8 | 16,777,216 jiffies | up to ~4,294,967,295 jiffies (~17,179,869 seconds, ~198.8 days) at HZ=250 |
+| 8 | 16,777,216 jiffies | HZ=250で最大約4,294,967,295 jiffies（約17,179,869秒、約198.8日） |
 
-Each level is 8× coarser than the previous. When a timer is inserted, the kernel computes which level and bucket it belongs to based on the delta between now and `expires`. This is a pure bitmask operation — O(1) insert at any range.
+各レベルは1つ前のレベルより8倍粗い。タイマーが挿入されると、カーネルは現在時刻と`expires`の差に基づいて、それが属するレベルとバケットを計算する。これは純粋なビットマスク演算であり、どの範囲でも挿入はO(1)である。
 
-Total wheel capacity: 576 buckets (9 × 64) for HZ=250. The `pending_map` bitmap lets the kernel quickly find the next non-empty bucket without scanning all entries.
+ホイール全体の容量: HZ=250では576バケット（9 × 64）。`pending_map`ビットマップにより、カーネルはすべてのエントリを走査することなく、次の空でないバケットをすばやく見つけられる。
 
-### __run_timers() {#_runtimers}
+### __run_timers() {#__run_timers}
 
 ```c
 static void __run_timers(struct timer_base *base);
 ```
 
-Called indirectly from `run_timer_softirq()` (the TIMER_SOFTIRQ handler) via the call chain `run_timer_softirq()` → `run_timer_base()` → `__run_timer_base()` → `__run_timers()` on each tick. It advances `base->clk` to the current jiffies value, identifies all buckets that have become due, and executes their callbacks. On SMP systems with `CONFIG_NO_HZ_COMMON`, `run_timer_softirq()` runs `BASE_LOCAL`, `BASE_GLOBAL`, and `BASE_DEF`, and invokes `tmigr_handle_remote()` when the timer migration hierarchy is active.
+ティックごとに、`run_timer_softirq()`（TIMER_SOFTIRQのハンドラ）から`run_timer_softirq()` → `run_timer_base()` → `__run_timer_base()` → `__run_timers()`という呼び出しの連鎖を経て間接的に呼ばれる。`base->clk`を現在のjiffies値まで進め、期限に達したすべてのバケットを特定し、それらのコールバックを実行する。`CONFIG_NO_HZ_COMMON`を有効にしたSMPシステムでは、`run_timer_softirq()`は`BASE_LOCAL`、`BASE_GLOBAL`、`BASE_DEF`を処理し、タイマー移行の階層が有効なときは`tmigr_handle_remote()`を呼び出す。
 
-The softirq is raised by the tick interrupt handler. On a NOHZ (tickless) system, the tick may be skipped entirely when the CPU is idle, and `__run_timers()` catches up when the CPU wakes.
+softirqはティック割り込みハンドラによって発生させられる。NOHZ（ティックレス）システムでは、CPUがアイドルのときティックが完全にスキップされることがあり、CPUが起床したときに`__run_timers()`が遅れを取り戻す。
 
-## Deferrable timers {#deferrable-timers}
+## 遅延可能タイマー {#deferrable-timers}
 
 ```c
 timer_setup(&my_timer, my_callback, TIMER_DEFERRABLE);
 ```
 
-A deferrable timer is stored in `BASE_DEF` (the deferrable base). These timers expire only when the CPU is already running — they do not wake an idle CPU. If the CPU remains idle past the expiry time, the timer fires when the CPU next wakes for any reason.
+遅延可能（deferrable）タイマーは`BASE_DEF`（遅延可能ベース）に格納される。これらのタイマーはCPUがすでに動作しているときにのみ満了し、アイドル状態のCPUを起こさない。満了時刻を過ぎてもCPUがアイドルのままであれば、タイマーは何らかの理由でCPUが次に起床したときに発火する。
 
-Use deferrable timers for periodic maintenance work that is not time-critical (e.g., statistics gathering, buffer flushing). Using them reduces unnecessary wakeups and improves power efficiency on NOHZ systems.
+遅延可能タイマーは、時間的にクリティカルでない周期的な保守作業（例: 統計の収集、バッファのフラッシュ）に使う。これらを使うと不要なウェイクアップが減り、NOHZシステムでの電力効率が向上する。
 
-## Relationship to workqueues {#relationship-to-workqueues}
+## workqueueとの関係 {#relationship-to-workqueues}
 
-`schedule_delayed_work()` combines the timer wheel with the workqueue system:
+`schedule_delayed_work()`は、タイマーホイールとworkqueueの仕組みを組み合わせたものである。
 
 ```c
-/* Internally: */
+/* 内部的には: */
 struct delayed_work {
     struct work_struct  work;
-    struct timer_list   timer;  /* fires after the delay */
+    struct timer_list   timer;  /* 遅延時間の後に発火する */
     /* ... */
 };
 
 schedule_delayed_work(&my_dwork, msecs_to_jiffies(100));
 ```
 
-When the timer fires, its callback calls `queue_work()` to push `work` onto the system workqueue. The actual work runs in a workqueue thread (process context, can sleep) rather than in softirq context. Use `schedule_delayed_work()` when the deferred action needs to sleep or allocate memory — use a plain `timer_list` only when the callback is short and cannot sleep.
+タイマーが発火すると、そのコールバックは`queue_work()`を呼び出して`work`をシステムworkqueueに投入する。実際の処理はsoftirqコンテキストではなく、workqueueのスレッド（プロセスコンテキストで、スリープ可能）で実行される。遅延させる処理がスリープしたりメモリを割り当てたりする必要がある場合は`schedule_delayed_work()`を使い、コールバックが短くスリープできない場合にのみ素の`timer_list`を使うこと。
 
-## Observing timers {#observing-timers}
+## タイマーの観察 {#observing-timers}
 
-There is no direct procfs interface for inspecting pending timer-wheel entries. Use kernel tracing instead:
+保留中のタイマーホイールのエントリを調べるための直接的なprocfsインターフェースはない。代わりにカーネルのトレーシングを使う。
 
 ```bash
-# Trace __run_timers firings with ftrace
+# ftraceで __run_timers の発火をトレースする
 echo '__run_timers' > /sys/kernel/debug/tracing/set_ftrace_filter
 echo function > /sys/kernel/debug/tracing/current_tracer
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# Count timer callbacks by function with bpftrace
+# bpftraceでタイマーコールバックを関数ごとに数える
 bpftrace -e '
   kprobe:call_timer_fn {
     @[ksym(arg1)] = count();
@@ -233,72 +233,72 @@ bpftrace -e '
   interval:s:5 { print(@); clear(@); exit(); }
 '
 
-# Show per-CPU timer softirq counts
+# CPUごとのタイマーsoftirqの回数を表示する
 grep TIMER /proc/softirqs
 
-# High-level: see timer expiry latency distribution
+# 概観: タイマー満了レイテンシの分布を見る
 perf stat -e irq:softirq_entry,irq:softirq_exit -a -- sleep 5
 ```
 
-## Common pitfalls {#common-pitfalls}
+## よくある落とし穴 {#common-pitfalls}
 
-### Jiffies wraparound {#jiffies-wraparound}
+### jiffiesのラップアラウンド {#jiffies-wraparound}
 
-`jiffies` is an `unsigned long` and wraps at `ULONG_MAX`. On 32-bit kernels with HZ=1000 this happens every ~49 days. Never compare jiffies with raw `>` or `<`:
+`jiffies`は`unsigned long`であり、`ULONG_MAX`でラップする。HZ=1000の32ビットカーネルでは、これは約49日ごとに起きる。jiffiesを生の`>`や`<`で比較してはならない。
 
 ```c
-/* WRONG: breaks at wraparound */
+/* 誤り: ラップアラウンド時に壊れる */
 if (jiffies > my_timer.expires) { ... }
 
-/* CORRECT: use the wraparound-safe macros */
+/* 正しい: ラップアラウンドに安全なマクロを使う */
 if (time_after(jiffies, my_timer.expires)) { ... }
 if (time_before(jiffies, deadline)) { ... }
 if (time_after_eq(jiffies, start + HZ)) { ... }
 ```
 
-`time_after(a, b)` is defined as shown below. The subtraction happens at `unsigned long` width first, then the result is cast to `long` — this is not the same as casting each operand individually:
+`time_after(a, b)`は以下のように定義されている。減算はまず`unsigned long`の幅で行われ、その結果が`long`にキャストされる。これは各オペランドを個別にキャストするのとは異なる。
 
 ```c
 /* include/linux/jiffies.h */
-/* The subtraction is done at unsigned long width; the result is cast to long */
+/* 減算は unsigned long の幅で行われ、結果が long にキャストされる */
 #define time_after(a,b)     \
     (typecheck(unsigned long, a) && \
      typecheck(unsigned long, b) && \
      ((long)((b) - (a)) < 0))
 ```
 
-This handles unsigned wraparound correctly by interpreting the result of the unsigned subtraction as a signed value.
+符号なし減算の結果を符号付きの値として解釈することで、符号なしのラップアラウンドを正しく扱える。
 
-### Sleeping in a timer callback {#sleeping-in-a-timer-callback}
+### タイマーコールバック内でのスリープ {#sleeping-in-a-timer-callback}
 
-Timer callbacks run in softirq context. They must not sleep, call `schedule()`, or acquire any lock that could sleep (e.g., a mutex). Use `schedule_delayed_work()` if the deferred action needs to sleep.
+タイマーコールバックはsoftirqコンテキストで実行される。スリープしたり、`schedule()`を呼んだり、スリープしうるロック（例: mutex）を取得したりしてはならない。遅延させる処理がスリープする必要がある場合は`schedule_delayed_work()`を使うこと。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/timer_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timer_types.h) — public `struct timer_list` API: `timer_setup()`, `add_timer()`, `mod_timer()`, `timer_reduce()`, `timer_delete_sync()`, and `timer_shutdown_sync()`
-- [include/linux/jiffies.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/jiffies.h) — `jiffies` counter, time conversion helpers (`msecs_to_jiffies()`), and wraparound-safe comparison macros (`time_after()`, `time_before()`)
-- [kernel/time/timer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer.c) — hierarchical timer wheel implementation, `__run_timers()`, level and bucket calculation, and softirq execution
-- [kernel/time/timer_migration.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer_migration.c) — hierarchical timer pull migration (`tmigr_handle_remote()`) managing global timers across idle CPU clusters
+- [include/linux/timer_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timer_types.h) — `struct timer_list`の公開API: `timer_setup()`、`add_timer()`、`mod_timer()`、`timer_reduce()`、`timer_delete_sync()`、`timer_shutdown_sync()`
+- [include/linux/jiffies.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/jiffies.h) — `jiffies`カウンタ、時間変換ヘルパー（`msecs_to_jiffies()`）、ラップアラウンドに安全な比較マクロ（`time_after()`、`time_before()`）
+- [kernel/time/timer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer.c) — 階層型タイマーホイールの実装、`__run_timers()`、レベルとバケットの計算、softirqでの実行
+- [kernel/time/timer_migration.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timer_migration.c) — アイドルなCPUクラスタをまたいでグローバルタイマーを管理する、階層型タイマーのpull型移行（`tmigr_handle_remote()`）
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — overview of time concepts, jiffies, and kernel timer granularities
+- [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — 時間の概念、jiffies、カーネルタイマーの粒度の概要
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [High-Resolution Timers (hrtimers)](hrtimers.md) — nanosecond-precision rbtree timers vs coarse timer wheel comparison
-- [Clocksource and Clockevent Drivers](clocksource.md) — hardware tick generation and clockevent interrupt handling
-- [Time Subsystem War Stories](war-stories.md) — real-world teardown use-after-free races and 32-bit jiffies overflow bugs
-- [Workqueues: Concurrency-Managed Workqueues](../interrupts/workqueues.md) — `delayed_work` mechanisms combining timer wheels with process-context workqueues
+- [高分解能タイマー（hrtimers）](hrtimers.md) — ナノ秒精度の赤黒木タイマーと粗いタイマーホイールの比較
+- [clocksourceとclockeventのドライバ](clocksource.md) — ハードウェアによるティック生成とclockevent割り込みの処理
+- [時間サブシステムの事件簿](war-stories.md) — 実世界での後始末時のuse-after-free競合と、32ビットjiffiesのオーバーフローのバグ
+- [workqueue: 並行性管理workqueue](../interrupts/workqueues.md) — タイマーホイールとプロセスコンテキストのworkqueueを組み合わせる`delayed_work`の仕組み
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Reinventing the timer wheel](https://lwn.net/Articles/646950/) — Jonathan Corbet, June 2015: Thomas Gleixner's redesign replacing the cascade wheel with the non-cascading hierarchy
-- [The high-resolution timer API](https://lwn.net/Articles/167897/) — Jonathan Corbet, January 2006: the design and integration of the hrtimer subsystem alongside the classic timer wheel
+- [Reinventing the timer wheel](https://lwn.net/Articles/646950/) — Jonathan Corbet、2015年6月: カスケード型ホイールを非カスケードの階層に置き換えた、Thomas Gleixnerによる再設計
+- [The high-resolution timer API](https://lwn.net/Articles/167897/) — Jonathan Corbet、2006年1月: 従来型タイマーホイールと並ぶhrtimerサブシステムの設計と統合
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — official kernel guide to timer systems and timekeeping
-- [Timers Subsystem Documentation](https://docs.kernel.org/timers/index.html) — kernel documentation covering timer wheel internals, high-resolution timers, and NO_HZ operation
+- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — タイマーシステムと時刻管理に関する公式カーネルガイド
+- [Timers Subsystem Documentation](https://docs.kernel.org/timers/index.html) — タイマーホイールの内部、高分解能タイマー、NO_HZ動作を扱うカーネルドキュメント

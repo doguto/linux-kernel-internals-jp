@@ -1,28 +1,28 @@
-# Life of a Context Switch {#life-of-a-context-switch}
+# コンテキストスイッチの一生 {#life-of-a-context-switch}
 
-> What happens inside `__schedule()` from preemption to resumption
+> プリエンプションから再開まで、`__schedule()`の内部で何が起きるか
 
-## The big picture {#the-big-picture}
+## 全体像 {#the-big-picture}
 
-A context switch moves the CPU from running one task to running another. It's triggered thousands of times per second and must be as fast as possible — yet it involves locking, memory barrier ordering, architecture-specific register saving, and careful pointer gymnastics to safely hand off execution.
+コンテキストスイッチは、CPUがあるタスクの実行から別のタスクの実行へと移ることである。1秒間に何千回も発生するため可能な限り高速でなければならないが、それでいてロック、メモリバリアによる順序付け、アーキテクチャ固有のレジスタ保存、そして実行を安全に引き渡すための入念なポインタ操作を伴う。
 
 ```mermaid
 flowchart TB
-    A["TIF_NEED_RESCHED set<br/>(timer tick / wakeup / yield)"]
-    B["Preemption point reached<br/>(syscall return / interrupt exit / schedule())"]
+    A["TIF_NEED_RESCHEDがセットされる<br/>（タイマーティック / 起床 / yield）"]
+    B["プリエンプションポイントに到達<br/>（システムコール復帰 / 割り込み終了 / schedule()）"]
     C["__schedule(sched_mode)"]
-    D["Pick next task<br/>(pick_next_task → class hierarchy)"]
+    D["次のタスクを選ぶ<br/>（pick_next_task → クラス階層）"]
     E["context_switch(rq, prev, next)"]
-    F["switch_to(prev, next, prev)<br/>(assembly: save regs, swap stacks)"]
-    G["finish_task_switch(prev)<br/>(release rq lock, cleanup)"]
-    H["Next task resumes"]
+    F["switch_to(prev, next, prev)<br/>（アセンブリ: レジスタ保存、スタック交換）"]
+    G["finish_task_switch(prev)<br/>（rqロック解放、後始末）"]
+    H["次のタスクが再開する"]
 
     A --> B --> C --> D --> E --> F --> G --> H
 ```
 
-## How a task gets marked for rescheduling {#how-a-task-gets-marked-for-rescheduling}
+## タスクが再スケジュール対象としてマークされる仕組み {#how-a-task-gets-marked-for-rescheduling}
 
-Before a context switch can happen, something must decide the current task should give up the CPU. This sets `TIF_NEED_RESCHED` on the current task:
+コンテキストスイッチが起きる前に、何かが「現在のタスクはCPUを手放すべきだ」と判断しなければならない。その判断によって、現在のタスクに`TIF_NEED_RESCHED`がセットされる:
 
 ```c
 // kernel/sched/core.c
@@ -39,54 +39,54 @@ static void resched_curr(struct rq *rq)
 }
 ```
 
-Common triggers:
+主なきっかけ:
 
-- **Timer tick** (`task_tick_fair()`): current task has run too long
-- **Wakeup** (`wakeup_preempt()`): a higher-priority task became runnable
-- **Explicit yield** (`sched_yield()`): task voluntarily gives up the CPU
-- **Priority change**: task's priority lowered below a runnable task
+- **タイマーティック**（`task_tick_fair()`）: 現在のタスクが長く実行しすぎた
+- **起床**（`wakeup_preempt()`）: より優先度の高いタスクが実行可能になった
+- **明示的なyield**（`sched_yield()`）: タスクが自発的にCPUを手放す
+- **優先度の変更**: タスクの優先度が、実行可能な別タスクより低く下げられた
 
-## Voluntary vs involuntary switches {#voluntary-vs-involuntary-switches}
+## 自発的スイッチと非自発的スイッチ {#voluntary-vs-involuntary-switches}
 
-The kernel tracks two types of context switches per task:
+カーネルはタスクごとに2種類のコンテキストスイッチを追跡する:
 
 ```c
 // include/linux/sched.h
-unsigned long nvcsw;   /* voluntary context switches */
-unsigned long nivcsw;  /* involuntary (non-voluntary) context switches */
+unsigned long nvcsw;   /* 自発的なコンテキストスイッチ */
+unsigned long nivcsw;  /* 非自発的なコンテキストスイッチ */
 ```
 
-**Voluntary** (`nvcsw`): The task called `schedule()` directly because it has nothing to do — blocked on I/O, sleeping, waiting for a lock.
+**自発的**（`nvcsw`）: タスクがやることがなくなったため — I/Oでブロック、スリープ、ロック待ち — 直接`schedule()`を呼んだ。
 
-**Involuntary** (`nivcsw`): The scheduler preempted the task — its timeslice expired or a higher-priority task woke up.
+**非自発的**（`nivcsw`）: スケジューラがタスクをプリエンプトした — タイムスライスを使い切ったか、より優先度の高いタスクが起床した。
 
 ```bash
-# See voluntary/involuntary switches for a process
+# プロセスの自発的/非自発的スイッチを確認する
 cat /proc/$PID/status | grep ctxt
 # voluntary_ctxt_switches:    1234
 # nonvoluntary_ctxt_switches: 567
 ```
 
-A high involuntary count relative to voluntary means the task is being preempted frequently — it always has work to do but keeps losing the CPU to other tasks.
+自発的スイッチに比べて非自発的スイッチの回数が多いということは、そのタスクが頻繁にプリエンプトされていることを意味する — 常にやるべき仕事を抱えているのに、他のタスクにCPUを奪われ続けているのである。
 
-## Schedule modes {#schedule-modes}
+## スケジュールモード {#schedule-modes}
 
-`__schedule()` is called with a mode that determines what triggered it:
+`__schedule()`は、何がきっかけで呼ばれたかを示すモード付きで呼び出される:
 
 ```c
 // kernel/sched/core.c
-#define SM_NONE           0   // voluntary (task called schedule())
-#define SM_PREEMPT        1   // involuntary (timer/interrupt forced it)
-#define SM_RTLOCK_WAIT    2   // RT lock contention (PREEMPT_RT only)
-/* Note: there is no SM_IDLE constant; the idle loop calls __schedule(SM_NONE) */
+#define SM_NONE           0   // 自発的（タスクがschedule()を呼んだ）
+#define SM_PREEMPT        1   // 非自発的（タイマー/割り込みが強制した）
+#define SM_RTLOCK_WAIT    2   // RTロックの競合（PREEMPT_RTのみ）
+/* 注: SM_IDLE定数は存在しない。アイドルループは__schedule(SM_NONE)を呼ぶ */
 ```
 
-This affects two things: which counter is incremented (`nvcsw` vs `nivcsw`) and whether the task's state is consulted before dequeuing.
+これは2つのことに影響する: どちらのカウンタ（`nvcsw`か`nivcsw`）が増えるか、そしてデキューの前にタスクの状態を参照するかどうかである。
 
-## Inside __schedule() {#inside-__schedule}
+## __schedule()の内部 {#inside-__schedule}
 
 ```c
-// kernel/sched/core.c (simplified)
+// kernel/sched/core.c（簡略化）
 static void __sched notrace __schedule(int sched_mode)
 {
     struct task_struct *prev, *next;
@@ -97,42 +97,42 @@ static void __sched notrace __schedule(int sched_mode)
     rq = cpu_rq(cpu);
     prev = rq->curr;
 
-    // 1. Disable IRQs and lock the runqueue
+    // 1. IRQを無効化し、ランキューをロックする
     local_irq_disable();
     rcu_note_context_switch(sched_mode == SM_PREEMPT);
     rq_lock(rq, &rf);
 
-    // 2. Update the runqueue clock
+    // 2. ランキューのクロックを更新する
     update_rq_clock(rq);
 
-    // 3. If voluntary switch and task has state (it's blocking):
-    //    dequeue it from the runqueue
+    // 3. 自発的スイッチで、タスクが状態を持つ（ブロックしようとしている）場合:
+    //    ランキューからデキューする
     if (!(sched_mode & SM_MASK_PREEMPT) && prev->__state) {
-        // Task is going to sleep — remove from runqueue
+        // タスクはスリープしようとしている — ランキューから取り除く
         try_to_block_task(rq, prev, &rf);
-        switch_count = &prev->nvcsw;  // voluntary
+        switch_count = &prev->nvcsw;  // 自発的
     } else {
-        switch_count = &prev->nivcsw; // involuntary
+        switch_count = &prev->nivcsw; // 非自発的
     }
 
-    // 4. Clear the resched flag
+    // 4. 再スケジュールフラグをクリアする
     clear_tsk_need_resched(prev);
     clear_preempt_need_resched();
 
-    // 5. Pick the next task to run
+    // 5. 次に実行するタスクを選ぶ
     next = pick_next_task(rq, prev, &rf);
 
-    // 6. If same task, nothing to do
+    // 6. 同じタスクなら何もしない
     if (likely(prev != next)) {
         rq->nr_switches++;
         rq->curr = next;
         ++*switch_count;
 
-        // 7. Switch!
+        // 7. スイッチ！
         context_switch(rq, prev, next, &rf);
-        // --- execution now in 'next's context ---
-        // When we return here, we are running as
-        // whatever task resumed this CPU next.
+        // --- 実行は'next'のコンテキストに移った ---
+        // ここに戻ってきたとき、我々は次にこのCPUで
+        // 再開したタスクとして実行されている。
     } else {
         rq_unpin_lock(rq, &rf);
         __balance_callbacks(rq);
@@ -143,48 +143,48 @@ static void __sched notrace __schedule(int sched_mode)
 
 ## context_switch() {#context_switch}
 
-Once `next` is selected, `context_switch()` does the actual switch:
+`next`が選ばれると、`context_switch()`が実際のスイッチを行う:
 
 ```c
 // kernel/sched/core.c
 static __always_inline struct rq *context_switch(struct rq *rq, struct task_struct *prev,
                       struct task_struct *next, struct rq_flags *rf)
 {
-    // 1. Pre-switch bookkeeping (tracing, perf, cgroup notifications)
+    // 1. スイッチ前の記録処理（トレーシング、perf、cgroupへの通知）
     prepare_task_switch(rq, prev, next);
 
-    // 2. Switch memory mappings
+    // 2. メモリマッピングを切り替える
     if (!next->mm) {
-        // Kernel thread: borrow prev's page tables (lazy TLB)
+        // カーネルスレッド: prevのページテーブルを借りる（lazy TLB）
         next->active_mm = prev->active_mm;
         enter_lazy_tlb(prev->active_mm, next);
     } else {
-        // User task: install next's page tables
+        // ユーザータスク: nextのページテーブルを設定する
         switch_mm_irqs_off(prev->active_mm, next->mm, next);
     }
 
-    // 3. Switch CPU registers and stack
+    // 3. CPUレジスタとスタックを切り替える
     switch_to(prev, next, prev);
-    // ↑ After this line, we are running in next's context.
-    //   'prev' now refers to the task that was running
-    //   before *next* last yielded (not necessarily prev above).
+    // ↑ この行の後、我々はnextのコンテキストで実行されている。
+    //   'prev'は今や、*next*が最後にCPUを明け渡す前に
+    //   実行されていたタスク（上のprevとは限らない）を指す。
 
     barrier();
 
-    // 4. Post-switch cleanup — runs in next's context
+    // 4. スイッチ後の後始末 — nextのコンテキストで実行される
     return finish_task_switch(prev);
 }
 ```
 
-### The memory switch {#the-memory-switch}
+### メモリの切り替え {#the-memory-switch}
 
-For a user-space task, `switch_mm_irqs_off()` installs the new task's page tables. On x86-64 with PCID, this is a CR3 write with the PCID bits set — the TLB is not fully flushed if the PCID is still cached.
+ユーザー空間のタスクの場合、`switch_mm_irqs_off()`が新しいタスクのページテーブルを設定する。PCIDを持つx86-64では、これはPCIDビットをセットしたCR3への書き込みである — PCIDがまだキャッシュされていれば、TLBは完全にはフラッシュされない。
 
-For a kernel thread (no `mm`), it borrows the previous task's `active_mm` via lazy TLB: the page tables aren't switched, but the kernel thread is told "don't expect any user-space TLB entries to be valid."
+カーネルスレッド（`mm`を持たない）の場合は、lazy TLBにより直前のタスクの`active_mm`を借りる: ページテーブルは切り替えられないが、カーネルスレッドには「ユーザー空間のTLBエントリが有効であることを期待するな」と伝えられる。
 
-### switch_to(): the assembly heart {#switch_to-the-assembly-heart}
+### switch_to(): アセンブリの心臓部 {#switch_to-the-assembly-heart}
 
-`switch_to()` is architecture-specific. On x86-64:
+`switch_to()`はアーキテクチャ固有である。x86-64では:
 
 ```c
 // arch/x86/include/asm/switch_to.h
@@ -194,12 +194,12 @@ do {                                            \
 } while (0)
 ```
 
-`__switch_to_asm` (in `arch/x86/entry/entry_64.S`) saves callee-saved registers and swaps the stack pointer:
+`__switch_to_asm`（`arch/x86/entry/entry_64.S`内）は、callee-savedレジスタを保存し、スタックポインタを交換する:
 
 ```asm
-// Simplified x86-64 __switch_to_asm
+// 簡略化したx86-64の__switch_to_asm
 __switch_to_asm:
-    // Save prev's callee-saved registers
+    // prevのcallee-savedレジスタを保存する
     pushq %rbp
     pushq %rbx
     pushq %r12
@@ -207,13 +207,13 @@ __switch_to_asm:
     pushq %r14
     pushq %r15
 
-    // Save prev's stack pointer into task_struct->thread.sp
+    // prevのスタックポインタをtask_struct->thread.spに保存する
     movq %rsp, TASK_threadsp(%rdi)     // rdi = prev
 
-    // Load next's stack pointer
+    // nextのスタックポインタをロードする
     movq TASK_threadsp(%rsi), %rsp     // rsi = next
 
-    // Restore next's callee-saved registers
+    // nextのcallee-savedレジスタを復元する
     popq %r15
     popq %r14
     popq %r13
@@ -221,28 +221,28 @@ __switch_to_asm:
     popq %rbx
     popq %rbp
 
-    // Jump to __switch_to (C function) for FPU/debug reg handling
+    // FPU/デバッグレジスタの処理のため__switch_to（C関数）へジャンプする
     jmp __switch_to
 ```
 
-After `switch_to()` returns, the CPU is running on `next`'s stack with `next`'s saved registers. From the perspective of the code after `switch_to()`, "the current task" is now `next`.
+`switch_to()`から戻ると、CPUは`next`のスタック上で`next`の保存済みレジスタを使って実行している。`switch_to()`以降のコードから見れば、「現在のタスク」は今や`next`である。
 
-### The prev pointer puzzle {#the-prev-pointer-puzzle}
+### prevポインタの謎 {#the-prev-pointer-puzzle}
 
 ```c
 switch_to(prev, next, prev);
-// After this line, 'prev' is NOT what you might expect.
+// この行の後、'prev'はあなたが期待するものではない。
 ```
 
-The third argument to `switch_to` receives the **last task** that ran on this CPU before `next` was scheduled. This is necessary because:
+`switch_to`の第3引数は、`next`がスケジュールされる前にこのCPUで実行されていた**最後のタスク**を受け取る。これが必要なのは次の理由による:
 
-- When `next` eventually yields and `__schedule()` runs again, `next` is now `prev`
-- But what if `next` was previously on a different CPU? When it ran there, some other task was scheduled out
-- The `last` variable gives the code after `switch_to()` the right `prev` to pass to `finish_task_switch()`
+- `next`がいずれCPUを明け渡して`__schedule()`が再び実行されるとき、`next`が`prev`になる
+- しかし、`next`が以前は別のCPU上にいたとしたら？ そこで実行されたとき、スケジュールアウトされたのは別のタスクである
+- `last`変数によって、`switch_to()`以降のコードは`finish_task_switch()`に渡すべき正しい`prev`を得られる
 
-## finish_task_switch() {#finishtaskswitch}
+## finish_task_switch() {#finish_task_switch}
 
-`finish_task_switch()` runs in the *new* task's context, cleaning up after the task that was just switched out:
+`finish_task_switch()`は*新しい*タスクのコンテキストで実行され、直前にスイッチアウトされたタスクの後始末を行う:
 
 ```c
 // kernel/sched/core.c
@@ -253,19 +253,19 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 
     rq->prev_mm = NULL;
 
-    // Signal that prev is no longer running on any CPU
+    // prevがもうどのCPUでも実行されていないことを知らせる
     finish_task(prev);   // smp_store_release(&prev->on_cpu, 0)
 
-    // Release the runqueue lock (held since before pick_next_task)
+    // ランキューのロックを解放する（pick_next_taskの前から保持していた）
     finish_lock_switch(rq);
 
-    // Drop prev's mm if needed (lazy TLB cleanup)
+    // 必要ならprevのmmを手放す（lazy TLBの後始末）
     if (mm)
         mmdrop_lazy_tlb_sched(mm);
 
-    // If prev is dead, release its resources
+    // prevが終了していれば、そのリソースを解放する
     if (unlikely(prev->__state == TASK_DEAD)) {
-        // put_task_struct, cgroup cleanup, etc.
+        // put_task_struct、cgroupの後始末など
         put_task_struct_rcu_user(prev);
     }
 
@@ -273,55 +273,55 @@ static struct rq *finish_task_switch(struct task_struct *prev)
 }
 ```
 
-The key ordering: `prev->on_cpu = 0` is set with release semantics before the lock is dropped. Any CPU trying to wake `prev` spins on `on_cpu` — this ensures `prev` is fully off the CPU before a wakeup can re-enqueue it.
+重要な順序: `prev->on_cpu = 0`は、ロックを手放す前にreleaseセマンティクスでセットされる。`prev`を起床させようとするCPUは`on_cpu`でスピンする — これにより、起床処理が`prev`を再エンキューする前に、`prev`が完全にCPUから降りていることが保証される。
 
-## The full timeline {#the-full-timeline}
+## 全体のタイムライン {#the-full-timeline}
 
 ```mermaid
 sequenceDiagram
     participant CPU as CPU N
-    participant PrevTask as prev task
+    participant PrevTask as prevタスク
     participant Sched as __schedule()
-    participant NextTask as next task
+    participant NextTask as nextタスク
 
-    CPU->>PrevTask: Running normally
-    CPU->>PrevTask: Timer IRQ → TIF_NEED_RESCHED set
-    PrevTask->>Sched: Preemption point (syscall return / interrupt exit)
-    Sched->>Sched: Lock rq, update clock
+    CPU->>PrevTask: 通常実行中
+    CPU->>PrevTask: タイマーIRQ → TIF_NEED_RESCHEDをセット
+    PrevTask->>Sched: プリエンプションポイント（システムコール復帰 / 割り込み終了）
+    Sched->>Sched: rqをロック、クロックを更新
     Sched->>Sched: pick_next_task() → next
     Sched->>CPU: context_switch(prev, next)
-    CPU->>CPU: switch_mm (page tables)
-    CPU->>CPU: switch_to (registers, stack)
-    Note over CPU: Now running in next's context
+    CPU->>CPU: switch_mm（ページテーブル）
+    CPU->>CPU: switch_to（レジスタ、スタック）
+    Note over CPU: ここからnextのコンテキストで実行
     CPU->>NextTask: finish_task_switch(prev)
-    NextTask->>NextTask: prev->on_cpu = 0 (release)
-    NextTask->>NextTask: rq unlock
-    NextTask->>CPU: Resume executing next's code
+    NextTask->>NextTask: prev->on_cpu = 0（release）
+    NextTask->>NextTask: rqのアンロック
+    NextTask->>CPU: nextのコードの実行を再開
 ```
 
-## Measuring context switch cost {#measuring-context-switch-cost}
+## コンテキストスイッチのコストの測定 {#measuring-context-switch-cost}
 
 ```bash
-# Count context switches system-wide
+# システム全体のコンテキストスイッチ数を数える
 vmstat 1 | awk '{print "cs:", $12}'
 
-# Per-process context switches
+# プロセスごとのコンテキストスイッチ
 cat /proc/$PID/status | grep ctxt_switches
 
-# Measure context switch latency with perf
+# perfでコンテキストスイッチのレイテンシを測定する
 perf stat -e context-switches,cs ./workload
 
-# Detailed scheduling events
+# 詳細なスケジューリングイベント
 perf sched record ./workload
 perf sched latency --sort=avg
 
-# Trace scheduler switches in real time
+# スケジューラのスイッチをリアルタイムでトレースする
 trace-cmd record -e sched:sched_switch sleep 5
 trace-cmd report | head -50
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Runqueues](runqueues.md) — `struct rq`, `pick_next_task()`, and `__schedule()` structure
-- [Scheduler Classes](scheduler-classes.md) — Which class provides the `next` task
-- [What Happens When a Process Wakes Up](wakeup.md) — How tasks get back onto a runqueue
+- [ランキュー](runqueues.md) — `struct rq`、`pick_next_task()`、`__schedule()`の構造
+- [スケジューラクラス](scheduler-classes.md) — どのクラスが`next`タスクを提供するか
+- [プロセスが起床するときに何が起きるか](wakeup.md) — タスクがランキューに戻る仕組み

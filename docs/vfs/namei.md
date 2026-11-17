@@ -1,63 +1,63 @@
-# Path Resolution (namei) {#path-resolution-namei}
+# パス解決（namei） {#path-resolution-namei}
 
-> How the kernel converts a string like "/usr/bin/bash" into an inode
+> カーネルが"/usr/bin/bash"のような文字列をどのようにinodeへ変換するか
 
-## The challenge {#the-challenge}
+## 課題 {#the-challenge}
 
-Path resolution sounds simple: split the path on `/`, look up each component in the parent directory. But it must handle:
+パス解決は単純に聞こえる。パスを`/`で分割し、各構成要素を親ディレクトリの中で検索すればよい。しかし、次のものを扱わなければならない:
 
-- Symlinks (which themselves contain paths to resolve)
-- Mount points (crossing into a different filesystem)
-- Concurrent modifications (another process renames a directory while you traverse it)
-- `.` (current directory) and `..` (parent directory)
-- Permission checks at each level
+- シンボリックリンク（それ自体が解決すべきパスを含む）
+- マウントポイント（別のファイルシステムへの横断）
+- 並行する変更（走査中に別のプロセスがディレクトリをrenameする）
+- `.`（カレントディレクトリ）と`..`（親ディレクトリ）
+- 各階層でのパーミッションチェック
 
-The kernel's path resolution lives in `fs/namei.c` and is called the **namei** subsystem (from the historical Unix function name).
+カーネルのパス解決は`fs/namei.c`にあり、**namei**サブシステムと呼ばれる（歴史的なUnixの関数名に由来する）。
 
-## Entry point: filename_lookup {#entry-point-filename_lookup}
+## エントリポイント: filename_lookup {#entry-point-filename_lookup}
 
-Most VFS operations start with a path. The kernel resolves it through:
+ほとんどのVFS操作はパスから始まる。カーネルは次の経路でそれを解決する:
 
 ```c
-/* Simplified call chain for open("/usr/bin/bash", O_RDONLY) */
+/* open("/usr/bin/bash", O_RDONLY) の簡略化した呼び出しチェーン */
 do_sys_open()
   → do_filp_open()
     → path_openat()
-      → link_path_walk()   ← main resolution loop
-        → walk_component()  ← resolve one path component
-          → lookup_fast()   ← dcache lookup (RCU, lock-free)
-          → lookup_slow()   ← filesystem lookup (takes i_rwsem)
-      → do_last()          ← handle final component (open file)
+      → link_path_walk()   ← メインの解決ループ
+        → walk_component()  ← パスの構成要素を1つ解決する
+          → lookup_fast()   ← dcache検索（RCU、ロックフリー）
+          → lookup_slow()   ← ファイルシステムでの検索（i_rwsemを取る）
+      → do_last()          ← 最後の構成要素を処理する（ファイルをオープン）
 ```
 
-## The nameidata structure {#the-nameidata-structure}
+## nameidata構造体 {#the-nameidata-structure}
 
-`struct nameidata` carries state through the resolution:
+`struct nameidata`は解決処理全体を通じて状態を保持する:
 
 ```c
 /* fs/namei.c */
 struct nameidata {
-    struct path path;         /* current position: (dentry, vfsmount) */
-    struct qstr last;         /* name of last component */
-    struct path root;         /* root for this lookup */
-    struct inode *inode;      /* inode of current directory */
-    unsigned int flags;       /* LOOKUP_* flags */
-    unsigned int state;       /* ND_* state bits */
-    unsigned int depth;       /* symlink recursion depth */
+    struct path path;         /* 現在位置: (dentry, vfsmount) */
+    struct qstr last;         /* 最後の構成要素の名前 */
+    struct path root;         /* この検索のルート */
+    struct inode *inode;      /* カレントディレクトリのinode */
+    unsigned int flags;       /* LOOKUP_* フラグ */
+    unsigned int state;       /* ND_* 状態ビット */
+    unsigned int depth;       /* シンボリックリンクの再帰深度 */
     int last_type;            /* LAST_NORM, LAST_ROOT, LAST_DOT, LAST_DOTDOT */
     /* ... */
 };
 ```
 
-## link_path_walk: the main loop {#linkpathwalk-the-main-loop}
+## link_path_walk: メインループ {#link_path_walk-the-main-loop}
 
-`link_path_walk()` iterates over path components separated by `/`:
+`link_path_walk()`は`/`で区切られたパスの構成要素を順に処理する:
 
 ```c
-/* fs/namei.c (simplified) */
+/* fs/namei.c（簡略化） */
 static int link_path_walk(const char *name, struct nameidata *nd)
 {
-    /* Skip leading slashes */
+    /* 先頭のスラッシュを読み飛ばす */
     while (*name == '/')
         name++;
 
@@ -65,59 +65,59 @@ static int link_path_walk(const char *name, struct nameidata *nd)
         struct qstr this;
         int type;
 
-        /* Get next component (up to next '/') */
+        /* 次の構成要素を取得する（次の '/' まで） */
         type = hash_name(nd->path.dentry, name, &this);
 
-        /* Special cases: "." and ".." */
+        /* 特殊ケース: "." と ".." */
         if (type != LAST_NORM) {
-            /* handle . and .. */
+            /* . と .. を処理する */
         }
 
-        /* Look up the component */
+        /* 構成要素を検索する */
         err = walk_component(nd, WALK_MORE);
 
-        /* Advance past the "/" */
+        /* "/" の先へ進む */
         name += this.len;
         while (*name == '/')
             name++;
         if (!*name)
-            break;  /* end of path */
+            break;  /* パスの終端 */
     }
     return 0;
 }
 ```
 
-## walk_component: RCU-walk and ref-walk {#walk_component-rcu-walk-and-ref-walk}
+## walk_component: RCU-walkとref-walk {#walk_component-rcu-walk-and-ref-walk}
 
-Each component is looked up in two stages:
+各構成要素は2段階で検索される:
 
-### Stage 1: RCU walk (lock-free, optimistic) {#stage-1-rcu-walk-lock-free-optimistic}
+### 段階1: RCU walk（ロックフリー、楽観的） {#stage-1-rcu-walk-lock-free-optimistic}
 
-Linux 2.6.38 introduced RCU-walk by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/), which lets most path lookups complete without taking any lock or incrementing any reference count.
+Linux 2.6.38でNick PigginによるRCU-walkが導入された[(LWN)](https://lwn.net/Articles/419811/)。これにより、ほとんどのパス検索は、ロックを一切取らず、参照カウントも一切増やさずに完了できる。
 
 ```c
 static struct dentry *lookup_fast(struct nameidata *nd)
 {
     struct dentry *parent = nd->path.dentry;
 
-    /* Try to find in dcache under RCU (no locks, very fast) */
+    /* RCUの下でdcacheから探す（ロックなし、非常に高速） */
     dentry = __d_lookup_rcu(parent, &nd->last, &nd->next_seq);
     if (!dentry)
-        return NULL;  /* miss: fall through to ref-walk */
+        return NULL;  /* ミス: ref-walkにフォールスルー */
 
-    /* Validate: did the dentry get deleted while we looked? */
+    /* 検証: 検索中にdentryが削除されなかったか？ */
     if (!d_try_get_rcu(dentry, nd->next_seq))
-        return NULL;  /* invalidated: retry */
+        return NULL;  /* 無効化された: 再試行 */
 
     return dentry;
 }
 ```
 
-The RCU walk uses `d_seq` (a seqlock on each dentry) to detect concurrent modifications without taking any lock. This is the fast path — most lookups hit the dcache and return without taking a lock.
+RCU walkは`d_seq`（各dentryにあるseqlock）を使い、ロックを一切取らずに並行する変更を検出する。これが高速パスである。ほとんどの検索はdcacheにヒットし、ロックを取らずに戻る。
 
-### Stage 2: Ref walk (takes i_rwsem) {#stage-2-ref-walk-takes-i_rwsem}
+### 段階2: Ref walk（i_rwsemを取る） {#stage-2-ref-walk-takes-i_rwsem}
 
-If RCU walk fails (cache miss or retry):
+RCU walkが失敗した場合（キャッシュミスまたは再試行）:
 
 ```c
 static struct dentry *lookup_slow(const struct qstr *name,
@@ -126,16 +126,16 @@ static struct dentry *lookup_slow(const struct qstr *name,
     struct inode *inode = dir->d_inode;
     struct dentry *dentry;
 
-    /* Lock directory for reading */
+    /* ディレクトリを読み取り用にロックする */
     inode_lock_shared(inode);  /* down_read(&inode->i_rwsem) */
 
-    /* Check dcache again (race: could have been added) */
+    /* dcacheを再確認する（競合: その間に追加されたかもしれない） */
     dentry = __d_lookup(dir, name);
     if (!dentry) {
-        /* Not in cache: call filesystem */
+        /* キャッシュにない: ファイルシステムを呼び出す */
         dentry = d_alloc(dir, name);
         inode->i_op->lookup(inode, dentry, flags);
-        /* dentry is now positive (with inode) or negative */
+        /* dentryはこれでpositive（inodeあり）かnegativeになる */
     }
 
     inode_unlock_shared(inode);
@@ -143,69 +143,69 @@ static struct dentry *lookup_slow(const struct qstr *name,
 }
 ```
 
-`i_op->lookup()` calls into the filesystem (e.g., ext4) which reads the directory from disk, finds the entry, and associates its inode with the dentry.
+`i_op->lookup()`はファイルシステム（例: ext4）を呼び出し、ファイルシステムはディスクからディレクトリを読み、エントリを見つけ、そのinodeをdentryに関連付ける。
 
-## Mount point crossing {#mount-point-crossing}
+## マウントポイントの横断 {#mount-point-crossing}
 
-When resolution hits a mount point, it silently crosses into the mounted filesystem:
+解決処理がマウントポイントに達すると、マウントされたファイルシステムへ暗黙のうちに横断する:
 
 ```c
-/* At a mountpoint: switch to the new filesystem's root */
+/* マウントポイントにて: 新しいファイルシステムのルートへ切り替える */
 if (d_mountpoint(dentry)) {
-    /* Follow the mount: nd->path = mnt->mnt_root */
+    /* マウントをたどる: nd->path = mnt->mnt_root */
     follow_mount(&nd->path);
-    /* Continue resolution in the new filesystem */
+    /* 新しいファイルシステム内で解決を続ける */
 }
 ```
 
-This is why `cd /proc/net` works transparently even though `/proc` is a different filesystem from `/`.
+`/proc`が`/`とは別のファイルシステムであるにもかかわらず`cd /proc/net`が透過的に動作するのは、このためである。
 
-## Symlink resolution {#symlink-resolution}
+## シンボリックリンクの解決 {#symlink-resolution}
 
-When a component is a symlink, `link_path_walk` is called recursively with the symlink's target:
+構成要素がシンボリックリンクの場合、`link_path_walk`はシンボリックリンクのターゲットを引数に再帰的に呼び出される:
 
 ```c
-/* Symlink: get the link target and resolve it */
+/* シンボリックリンク: リンクのターゲットを取得して解決する */
 const char *link = nd->inode->i_op->get_link(nd->path.dentry,
                                                nd->inode, &delayed);
-/* Recurse into link_path_walk with link as the new path */
+/* linkを新しいパスとしてlink_path_walkへ再帰する */
 nd->depth++;
-if (nd->depth > MAXSYMLINKS)  /* default 40 */
+if (nd->depth > MAXSYMLINKS)  /* デフォルトは40 */
     return -ELOOP;
 err = link_path_walk(link, nd);
 nd->depth--;
 ```
 
-## LOOKUP flags {#lookup-flags}
+## LOOKUPフラグ {#lookup-flags}
 
 ```c
-LOOKUP_FOLLOW    /* follow final symlink */
-LOOKUP_DIRECTORY /* final component must be a directory */
-LOOKUP_OPEN      /* called from open(): prepare for file creation */
-LOOKUP_CREATE    /* create if not exists */
-LOOKUP_EXCL      /* fail if exists (for O_EXCL) */
-LOOKUP_REVAL     /* force dentry revalidation (NFS) */
-LOOKUP_RCU       /* stay in RCU walk mode if possible */
+LOOKUP_FOLLOW    /* 最後のシンボリックリンクをたどる */
+LOOKUP_DIRECTORY /* 最後の構成要素はディレクトリでなければならない */
+LOOKUP_OPEN      /* open()から呼ばれた: ファイル作成の準備をする */
+LOOKUP_CREATE    /* 存在しなければ作成する */
+LOOKUP_EXCL      /* 存在すれば失敗する（O_EXCL用） */
+LOOKUP_REVAL     /* dentryの再検証を強制する（NFS） */
+LOOKUP_RCU       /* 可能ならRCU walkモードのままでいる */
 ```
 
-## /proc/self/fd and /proc/self/fdinfo {#procselffd-and-procselffdinfo}
+## /proc/self/fdと/proc/self/fdinfo {#procselffd-and-procselffdinfo}
 
 ```bash
-# Each open file has a symlink in /proc/self/fd/
+# オープンされた各ファイルは /proc/self/fd/ にシンボリックリンクを持つ
 ls -la /proc/self/fd
 # lrwxrwxrwx 1 root 0 -> /dev/null
 # lrwxrwxrwx 1 root 1 -> /dev/pts/0
 # lrwxrwxrwx 1 root 2 -> /dev/pts/0
 
-# Reading the link resolves to the file's path
+# リンクを読むとファイルのパスに解決される
 readlink /proc/self/fd/0
 # /dev/null
 ```
 
-The `/proc/self/fd/N` symlinks use a special resolution path that goes through the process's file descriptor table rather than through the filesystem.
+`/proc/self/fd/N`のシンボリックリンクは、ファイルシステムを経由するのではなく、プロセスのファイルディスクリプタテーブルを経由する特別な解決経路を使う。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — What superblock, inode, dentry, file are
-- [Dentry and Inode Caches](dcache-icache.md) — How path lookups are cached
-- [File Operations](file-ops.md) — What happens after the path is resolved
+- [VFSオブジェクト](vfs-objects.md) — superblock、inode、dentry、fileとは何か
+- [dentryキャッシュとinodeキャッシュ](dcache-icache.md) — パス検索がどのようにキャッシュされるか
+- [ファイル操作](file-ops.md) — パスが解決された後に何が起きるか

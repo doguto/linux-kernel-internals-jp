@@ -1,10 +1,10 @@
-# Kernel Hardening: KASLR, Stack Protectors, and Spectre Mitigations {#kernel-hardening-kaslr-stack-protectors-and-spectre-mitigations}
+# カーネルのハードニング: KASLR、スタックプロテクタ、Spectreの緩和策 {#kernel-hardening-kaslr-stack-protectors-and-spectre-mitigations}
 
-> Defense-in-depth: making exploitation harder after a vulnerability is found
+> 多層防御: 脆弱性が見つかった後の悪用を困難にする
 
-## Defense layers {#defense-layers}
+## 防御の階層 {#defense-layers}
 
-Modern Linux implements multiple hardening techniques at different levels:
+現代のLinuxは、異なるレベルで複数のハードニング技術を実装している:
 
 ```
 Hardware level:      SMEP/SMAP/CET (Intel), PAN/PXN (ARM)
@@ -13,26 +13,26 @@ Runtime:             ASLR (userspace), seccomp, namespaces, SELinux
 CPU microcode:       Spectre/Meltdown mitigations, IBRS, STIBP
 ```
 
-## KASLR: Kernel Address Space Layout Randomization {#kaslr-kernel-address-space-layout-randomization}
+## KASLR: カーネルアドレス空間配置のランダム化 {#kaslr-kernel-address-space-layout-randomization}
 
-KASLR randomizes where the kernel and its modules are loaded in memory, making it harder for an attacker to use known kernel addresses in exploits:
+KASLRはカーネルとそのモジュールがメモリ上のどこにロードされるかをランダム化し、攻撃者がエクスプロイトで既知のカーネルアドレスを使うことを困難にする:
 
 ```bash
-# Check if userspace ASLR is enabled (randomize_va_space is userspace ASLR, not KASLR):
+# ユーザー空間のASLRが有効か確認する（randomize_va_spaceはKASLRではなくユーザー空間のASLR）:
 cat /proc/sys/kernel/randomize_va_space
-# 2 = full ASLR (userspace + vDSO)
+# 2 = 完全なASLR（ユーザー空間 + vDSO）
 
-# Check if KASLR (kernel address randomization) is active:
+# KASLR（カーネルアドレスのランダム化）が有効か確認する:
 dmesg | grep KASLR
 # [    0.000000] KASLR enabled
 
-# Kernel base address (available to root):
+# カーネルのベースアドレス（rootのみ参照可能）:
 cat /proc/kallsyms | grep "_text" | head -1
-# ffffffffc1000000 T _text  ← random base each boot
+# ffffffffc1000000 T _text  ← ブートごとにランダムなベース
 
-# KASLR offset from compile-time base:
-# amd64: randomizes text and module regions separately
-# range: +-512MB for text, +-1.5GB for modules
+# コンパイル時のベースからのKASLRオフセット:
+# amd64: textとモジュール領域を別々にランダム化する
+# 範囲: textは+-512MB、モジュールは+-1.5GB
 ```
 
 ```
@@ -42,37 +42,37 @@ Boot time:
   Sets up page tables with new addresses
 ```
 
-**Bypass**: KASLR is defeated by:
+**回避**: KASLRは次のものによって破られる:
 
-- Kernel pointer leaks via `/proc`, uninitialized reads, or info-disclosure bugs
-- `CONFIG_RANDOMIZE_BASE=n` in non-default configs
+- `/proc`、未初期化の読み取り、情報漏洩バグによるカーネルポインタのリーク
+- デフォルトでない設定での`CONFIG_RANDOMIZE_BASE=n`
 
 ```bash
-# Harden against pointer leaks:
-echo 2 > /proc/sys/kernel/kptr_restrict      # hide kernel pointers from all
-echo 1 > /proc/sys/kernel/dmesg_restrict     # require CAP_SYSLOG for dmesg
+# ポインタのリークに対してハードニングする:
+echo 2 > /proc/sys/kernel/kptr_restrict      # 全員からカーネルポインタを隠す
+echo 1 > /proc/sys/kernel/dmesg_restrict     # dmesgにCAP_SYSLOGを要求する
 ```
 
-## Stack canaries (stack-protector) {#stack-canaries-stack-protector}
+## スタックカナリア（stack-protector） {#stack-canaries-stack-protector}
 
-Compiler-inserted canaries detect stack buffer overflows before return:
+コンパイラが挿入するカナリアは、関数から戻る前にスタックバッファオーバーフローを検出する:
 
 ```c
-/* With CONFIG_STACKPROTECTOR: */
+/* CONFIG_STACKPROTECTORを有効にした場合: */
 void vulnerable_function(char *input)
 {
-    /* Compiler inserts: */
-    unsigned long __stack_chk_guard_local = __stack_chk_guard; /* canary */
+    /* コンパイラが挿入する: */
+    unsigned long __stack_chk_guard_local = __stack_chk_guard; /* カナリア */
 
     char buf[64];
-    strcpy(buf, input);  /* potential overflow */
+    strcpy(buf, input);  /* オーバーフローの可能性 */
 
-    /* Compiler inserts before return: */
+    /* コンパイラがreturnの前に挿入する: */
     if (__stack_chk_guard_local != __stack_chk_guard)
-        __stack_chk_fail();   /* PANIC: stack smashing detected */
+        __stack_chk_fail();   /* PANIC: スタック破壊を検出 */
 }
 
-/* __stack_chk_fail in the kernel: */
+/* カーネル内の__stack_chk_fail: */
 void __stack_chk_fail(void)
 {
     panic("stack-protector: Kernel stack is corrupted in: %pB\n",
@@ -81,66 +81,66 @@ void __stack_chk_fail(void)
 ```
 
 ```bash
-# Check if stack protector is enabled:
+# スタックプロテクタが有効か確認する:
 grep CONFIG_STACKPROTECTOR /boot/config-$(uname -r)
 # CONFIG_STACKPROTECTOR=y
-# CONFIG_STACKPROTECTOR_STRONG=y  ← protects more functions (slower)
+# CONFIG_STACKPROTECTOR_STRONG=y  ← より多くの関数を保護する（より遅い）
 
-# Verify it fires:
+# 発動することを確認する:
 dmesg | grep "stack-protector"
-# If a corruption is detected: kernel panic with function address
+# 破壊が検出された場合: 関数アドレス付きでカーネルパニック
 ```
 
-## SMEP and SMAP (Intel x86) {#smep-and-smap-intel-x86}
+## SMEPとSMAP（Intel x86） {#smep-and-smap-intel-x86}
 
-**SMEP** (Supervisor Mode Execution Prevention): prevents kernel from executing userspace code pages.
-**SMAP** (Supervisor Mode Access Prevention): prevents kernel from accessing userspace memory unexpectedly.
+**SMEP**（Supervisor Mode Execution Prevention）: カーネルがユーザー空間のコードページを実行することを防ぐ。
+**SMAP**（Supervisor Mode Access Prevention）: カーネルが予期せずユーザー空間のメモリにアクセスすることを防ぐ。
 
 ```bash
-# Check hardware support:
-grep -m1 smep /proc/cpuinfo  # smep in flags
-grep -m1 smap /proc/cpuinfo  # smap in flags
+# ハードウェアのサポートを確認する:
+grep -m1 smep /proc/cpuinfo  # flagsにsmepがある
+grep -m1 smap /proc/cpuinfo  # flagsにsmapがある
 
-# Check kernel uses them:
+# カーネルがそれらを使っているか確認する:
 grep CONFIG_X86_SMAP /boot/config-$(uname -r)
 # CONFIG_X86_SMAP=y
 
-# SMEP: CR4.SMEP bit must be set (verified at boot)
-# SMAP: kernel uses stac/clac instructions around copy_to_user
+# SMEP: CR4.SMEPビットがセットされている必要がある（ブート時に検証）
+# SMAP: カーネルはcopy_to_userの前後でstac/clac命令を使う
 
-# ARM64 equivalents:
+# ARM64での相当機能:
 # PAN (Privileged Access Never) = SMAP
 # PXN (Privileged Execute Never) = SMEP
 ```
 
 ## HARDENED_USERCOPY {#hardened_usercopy}
 
-Prevents kernel bugs that could copy too much data to/from userspace:
+ユーザー空間との間で過大なデータをコピーしうるカーネルバグを防ぐ:
 
 ```bash
 CONFIG_HARDENED_USERCOPY=y
-# Adds bounds checking to copy_to_user/copy_from_user:
-# - Is the kernel pointer pointing to a valid slab object?
-# - Is the copy size within the object's bounds?
-# - Not a stack address that we're copying?
+# copy_to_user/copy_from_userに境界チェックを追加する:
+# - カーネルポインタは有効なslabオブジェクトを指しているか
+# - コピーサイズはオブジェクトの境界内か
+# - コピー対象がスタックのアドレスではないか
 
-# If violated:
+# 違反した場合:
 # usercopy: Kernel memory overwrite attempt detected to slab ... size=xxx ...
 ```
 
 ## FORTIFY_SOURCE {#fortify_source}
 
-Compiler-inserted bounds checking for common string/memory functions:
+よく使われる文字列/メモリ関数に対する、コンパイラ挿入の境界チェック:
 
 ```c
 /* CONFIG_FORTIFY_SOURCE=y: */
-/* The kernel's memcpy becomes: */
+/* カーネルのmemcpyは次のようになる: */
 #define memcpy(dst, src, n) \
     __builtin_memcpy_chk(dst, src, n, __builtin_object_size(dst, 0))
-/* __builtin_object_size provides compile-time or runtime size of dst */
-/* If n > size(dst): __fortify_panic() */
+/* __builtin_object_sizeはdstのコンパイル時または実行時のサイズを与える */
+/* n > size(dst)なら: __fortify_panic() */
 
-/* At runtime for variable-size objects: */
+/* 可変サイズのオブジェクトに対しては実行時に: */
 static inline void *memcpy(void *dst, const void *src, size_t len)
 {
     size_t p_size = __builtin_object_size(p, 0);
@@ -150,63 +150,63 @@ static inline void *memcpy(void *dst, const void *src, size_t len)
 }
 ```
 
-## Spectre and Meltdown mitigations {#spectre-and-meltdown-mitigations}
+## SpectreとMeltdownの緩和策 {#spectre-and-meltdown-mitigations}
 
 ### Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
-Meltdown allows userspace to read kernel memory via speculative execution. Mitigated by **KPTI** (Kernel Page-Table Isolation):
+Meltdownは、ユーザー空間が投機的実行を介してカーネルメモリを読むことを可能にする。**KPTI**（Kernel Page-Table Isolation）によって緩和される:
 
 ```bash
-# Check KPTI status:
+# KPTIの状態を確認する:
 dmesg | grep -i "page table isolation\|PTI"
 # [    0.000000] Kernel/User page tables isolation: enabled
 
-# KPTI cost:
-# - Separate page tables for kernel and user mode
-# - On every syscall: TLB flush + CR3 switch (expensive)
-# - Mitigated with PCID hardware feature
+# KPTIのコスト:
+# - カーネルモードとユーザーモードで別々のページテーブル
+# - syscallのたびに: TLBフラッシュ + CR3の切り替え（高コスト）
+# - ハードウェア機能PCIDで軽減される
 
-# Check PCID support:
+# PCIDのサポートを確認する:
 grep pcid /proc/cpuinfo | head -1
-# flags: ... pcid ...  ← TLB tagged by address space, no flush needed
+# flags: ... pcid ...  ← TLBがアドレス空間でタグ付けされ、フラッシュ不要
 ```
 
 ### Spectre v1 (CVE-2017-5753): Bounds Check Bypass {#spectre-v1-cve-2017-5753-bounds-check-bypass}
 
 ```c
-/* Vulnerable pattern (Spectre v1): */
-if (index < array_size)          /* bounds check - may be speculatively bypassed */
-    return array[index];          /* speculative read of out-of-bounds data */
+/* 脆弱なパターン（Spectre v1）: */
+if (index < array_size)          /* 境界チェック - 投機的に迂回されうる */
+    return array[index];          /* 範囲外データの投機的な読み取り */
 
-/* Mitigation: array_index_nospec() */
+/* 緩和策: array_index_nospec() */
 index = array_index_nospec(index, array_size);
-/* Uses conditional move (cmov) to sanitize index without a branch */
-/* Defeats speculative bypass of the bounds check */
+/* 条件付き移動（cmov）を使い、分岐なしでindexを無害化する */
+/* 境界チェックの投機的な迂回を無効にする */
 return array[index];
 ```
 
 ### Spectre v2 (CVE-2017-5715): Branch Target Injection {#spectre-v2-cve-2017-5715-branch-target-injection}
 
 ```bash
-# Mitigation: Retpoline (return trampoline)
-# Replace indirect branch with return + trampoline:
+# 緩和策: Retpoline（return trampoline）
+# 間接分岐をreturn + トランポリンで置き換える:
 # IBRS (Indirect Branch Restricted Speculation)
-# eIBRS (Enhanced IBRS): hardware mitigation on newer CPUs
+# eIBRS（Enhanced IBRS）: 新しいCPUでのハードウェアによる緩和策
 
-# Check mitigation status:
+# 緩和策の状態を確認する:
 cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 # Mitigation: Enhanced / IBRS, IBPB: conditional, RSB filling, PBRSB-eIBRS: SW sequence
 
 # IBPB: Indirect Branch Predictor Barrier
-# Flush branch predictor on context switch (expensive: ~4000 cycles)
-grep ibpb /proc/cpuinfo   # ibpb in flags
+# コンテキストスイッチ時に分岐予測器をフラッシュする（高コスト: 約4000サイクル）
+grep ibpb /proc/cpuinfo   # flagsにibpbがある
 cat /sys/kernel/debug/x86/ibpb_enabled  # 0/1
 ```
 
-### MDS/TAA mitigations {#mdstaa-mitigations}
+### MDS/TAAの緩和策 {#mdstaa-mitigations}
 
 ```bash
-# Check all CPU vulnerability status:
+# CPUのすべての脆弱性の状態を確認する:
 cat /sys/devices/system/cpu/vulnerabilities/*
 # itlb_multihit: Not affected
 # l1tf: Mitigation: PTE Inversion
@@ -218,58 +218,58 @@ cat /sys/devices/system/cpu/vulnerabilities/*
 # srbds: Not affected
 # tsx_async_abort: Not affected
 
-# Disable mitigations for benchmarking (DANGEROUS - testing only):
-# Boot with: mitigations=off
-# or: nospectre_v1 nospectre_v2 nopti mds=off
+# ベンチマークのために緩和策を無効にする（危険 - テスト専用）:
+# 次のオプションでブート: mitigations=off
+# または: nospectre_v1 nospectre_v2 nopti mds=off
 ```
 
-## CFI: Control Flow Integrity {#cfi-control-flow-integrity}
+## CFI: 制御フロー完全性 {#cfi-control-flow-integrity}
 
-**Clang CFI** (CONFIG_CFI_CLANG) prevents control-flow hijacking by verifying indirect call targets at runtime:
+**Clang CFI**（CONFIG_CFI_CLANG）は、間接呼び出しのターゲットを実行時に検証することで制御フローの乗っ取りを防ぐ:
 
 ```c
-/* Without CFI: attacker can overwrite a function pointer to point anywhere */
-/* With CFI: indirect call target must match the declared function type */
+/* CFIなし: 攻撃者は関数ポインタを上書きして任意の場所を指させられる */
+/* CFIあり: 間接呼び出しのターゲットは宣言された関数型と一致しなければならない */
 
-/* Forward CFI: check that call target has matching type signature */
+/* Forward CFI: 呼び出し先の型シグネチャが一致するか確認する */
 void (*fn_ptr)(int, int) = get_function_pointer();
-fn_ptr(arg1, arg2);  /* CFI verifies fn_ptr points to a (int,int)->void function */
+fn_ptr(arg1, arg2);  /* CFIはfn_ptrが(int,int)->voidの関数を指していることを検証する */
 
-/* If violated: kernel panic / BUG() */
+/* 違反した場合: カーネルパニック / BUG() */
 ```
 
 ```bash
-# Check if CFI is enabled:
+# CFIが有効か確認する:
 grep CONFIG_CFI_CLANG /boot/config-$(uname -r)
 # CONFIG_CFI_CLANG=y
-# CONFIG_CFI_PERMISSIVE=n  (n = enforce, y = warn only)
+# CONFIG_CFI_PERMISSIVE=n  （n = 強制、y = 警告のみ）
 
-# Android uses CFI for all kernel modules
+# AndroidはすべてのカーネルモジュールにCFIを使う
 ```
 
-## Hardening configuration checklist {#hardening-configuration-checklist}
+## ハードニング設定のチェックリスト {#hardening-configuration-checklist}
 
 ```bash
-# Key security config options to verify:
+# 確認すべき主要なセキュリティ設定オプション:
 zcat /proc/config.gz | grep -E \
     "CONFIG_RANDOMIZE_BASE|CONFIG_STACKPROTECTOR|CONFIG_SMAP|CONFIG_SMEP|\
 CONFIG_HARDENED_USERCOPY|CONFIG_FORTIFY_SOURCE|CONFIG_CFI_CLANG|\
 CONFIG_INIT_ON_ALLOC_DEFAULT_ON|CONFIG_INIT_ON_FREE_DEFAULT_ON|\
 CONFIG_PAGE_TABLE_ISOLATION|CONFIG_RETPOLINE"
 
-# Expected: all should be =y (except INIT_* which might be =n for performance)
+# 期待値: すべて=yであるべき（性能のために=nの場合もあるINIT_*を除く）
 
-# Runtime check:
-cat /sys/devices/system/cpu/vulnerabilities/*  # all should say "Mitigation"
-grep kaslr_offset /proc/kallsyms               # should require root
+# 実行時のチェック:
+cat /sys/devices/system/cpu/vulnerabilities/*  # すべて"Mitigation"と表示されるべき
+grep kaslr_offset /proc/kallsyms               # rootが必要なはず
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LSM Framework](lsm.md) — SELinux/AppArmor security policy
-- [Credentials](credentials.md) — privilege model that hardening protects
-- [seccomp BPF](seccomp.md) — syscall filtering
-- [Page Fault Handler](../mm/page-fault.md) — SMEP/SMAP implemented via page tables
-- `Documentation/security/` — kernel security documentation
-- kernel-hardening mailing list — upstream hardening discussions
-- KSPP (Kernel Self Protection Project) config recommendations
+- [LSMフレームワーク](lsm.md) — SELinux/AppArmorのセキュリティポリシー
+- [クレデンシャル](credentials.md) — ハードニングが保護する権限モデル
+- [seccomp BPF](seccomp.md) — syscallフィルタリング
+- [ページフォールトハンドラ](../mm/page-fault.md) — ページテーブルを介して実装されるSMEP/SMAP
+- `Documentation/security/` — カーネルのセキュリティドキュメント
+- kernel-hardeningメーリングリスト — アップストリームのハードニングに関する議論
+- KSPP（Kernel Self Protection Project）の推奨設定

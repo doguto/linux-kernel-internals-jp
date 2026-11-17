@@ -1,44 +1,44 @@
-# Network Device and NAPI {#network-device-and-napi}
+# ネットワークデバイスとNAPI {#network-device-and-napi}
 
-> How the kernel receives packets from hardware: interrupt mitigation and polling
+> カーネルはハードウェアからパケットをどう受け取るか: 割り込みの緩和とポーリング
 
-## The problem NAPI solves {#the-problem-napi-solves}
+## NAPIが解決する問題 {#the-problem-napi-solves}
 
-Before NAPI (New API), each arriving packet triggered a hardware interrupt. At low traffic rates, this works fine. Under high load — say, 10 Gbps with 64-byte packets — the NIC fires hundreds of thousands of interrupts per second. The kernel spends more time handling interrupts than processing packets: **interrupt livelock**.
+NAPI（New API）以前は、到着したパケットごとにハードウェア割り込みが発生していた。トラフィックのレートが低いうちは、これでうまく動く。しかし高負荷時、例えば64バイトのパケットで10 Gbpsとなると、NICは毎秒数十万回の割り込みを発生させる。カーネルはパケットの処理よりも割り込みの処理に多くの時間を費やすことになる。これが**割り込みライブロック**である。
 
-NAPI solves this by switching to a polling model when traffic is high:
+NAPIは、トラフィックが多いときにポーリングモデルへ切り替えることでこれを解決する:
 
-1. A packet arrives → NIC fires interrupt
-2. Kernel disables further NIC interrupts
-3. Kernel polls the NIC ring buffer for more packets
-4. After processing a budget of packets, re-enable interrupts
+1. パケットが到着する → NICが割り込みを発生させる
+2. カーネルがそれ以降のNIC割り込みを無効にする
+3. カーネルがNICのリングバッファをポーリングして、さらなるパケットを取り出す
+4. バジェット分のパケットを処理したら、割り込みを再び有効にする
 
-This batches work and dramatically reduces interrupt overhead at high packet rates.
+これにより処理がバッチ化され、高いパケットレートでの割り込みのオーバーヘッドが劇的に減る。
 
 ## struct napi_struct {#struct-napi_struct}
 
-Each network device (or each queue on a multi-queue NIC) has one `napi_struct`:
+各ネットワークデバイス（またはマルチキューNICの各キュー）は、1つの`napi_struct`を持つ:
 
 ```c
 // include/linux/netdevice.h
 struct napi_struct {
-    struct list_head    poll_list;    // on this CPU's softirq poll list
-    unsigned long       state;        // NAPI_STATE_SCHED, NAPI_STATE_DISABLE, ...
-    int                 weight;       // max packets per poll() call (budget)
-    int                 (*poll)(struct napi_struct *, int);  // driver's poll function
+    struct list_head    poll_list;    // このCPUのsoftirqポーリングリスト上
+    unsigned long       state;        // NAPI_STATE_SCHED、NAPI_STATE_DISABLE、...
+    int                 weight;       // poll()呼び出し1回あたりの最大パケット数（バジェット）
+    int                 (*poll)(struct napi_struct *, int);  // ドライバのpoll関数
 
     struct net_device   *dev;
-    struct hrtimer      timer;        // for threaded NAPI or deferred processing
+    struct hrtimer      timer;        // スレッド化NAPIや遅延処理用
 
-    u32                 napi_id;      // unique ID for busy polling
-    int                 index;        // queue index on the device
+    u32                 napi_id;      // ビジーポーリング用の一意なID
+    int                 index;        // デバイス上のキューのインデックス
 
-    // GRO (Generic Receive Offload) state
+    // GRO（Generic Receive Offload）の状態
     struct gro_node     gro;
 };
 ```
 
-## The NAPI receive flow {#the-napi-receive-flow}
+## NAPIの受信フロー {#the-napi-receive-flow}
 
 ```
 1. Packet arrives in NIC ring buffer
@@ -62,21 +62,21 @@ struct napi_struct {
        return budget  → more work, stay scheduled
 ```
 
-## Driver implementation pattern {#driver-implementation-pattern}
+## ドライバの実装パターン {#driver-implementation-pattern}
 
 ```c
-// Interrupt handler
+// 割り込みハンドラ
 static irqreturn_t my_nic_interrupt(int irq, void *dev_id)
 {
     struct my_nic *nic = dev_id;
-    // Disable interrupts for this NIC queue
+    // このNICキューの割り込みを無効にする
     my_nic_disable_irq(nic);
-    // Schedule NAPI poll
+    // NAPIのpollをスケジュールする
     napi_schedule(&nic->napi);
     return IRQ_HANDLED;
 }
 
-// NAPI poll function
+// NAPIのpoll関数
 static int my_nic_poll(struct napi_struct *napi, int budget)
 {
     struct my_nic *nic = container_of(napi, struct my_nic, napi);
@@ -86,12 +86,12 @@ static int my_nic_poll(struct napi_struct *napi, int budget)
         struct sk_buff *skb = my_nic_receive_one(nic);
         if (!skb)
             break;
-        napi_gro_receive(napi, skb);  // pass to GRO + network stack
+        napi_gro_receive(napi, skb);  // GRO + ネットワークスタックへ渡す
         processed++;
     }
 
     if (processed < budget) {
-        // No more packets: exit polling mode, re-enable interrupts
+        // パケットがもうない: ポーリングモードを抜け、割り込みを再び有効にする
         napi_complete_done(napi, processed);
         my_nic_enable_irq(nic);
     }
@@ -100,131 +100,131 @@ static int my_nic_poll(struct napi_struct *napi, int budget)
 }
 ```
 
-## NAPI budget {#napi-budget}
+## NAPIのバジェット {#napi-budget}
 
-The budget (default: 64 packets per poll call) is a fairness mechanism — one heavily-loaded NIC can't monopolize the softirq CPU. After 64 packets, the softirq handler yields and lets other work run.
+バジェット（デフォルト: poll呼び出し1回あたり64パケット）は公平性のための仕組みであり、高負荷の1つのNICがsoftirqのCPUを独占できないようにする。64パケットを処理すると、softirqハンドラは譲って他の処理を実行させる。
 
 ```bash
-# Adjust NAPI budget (per device)
-ethtool -G eth0 rx 4096  # increase ring buffer size
+# NAPIのバジェットを調整（デバイスごと）
+ethtool -G eth0 rx 4096  # リングバッファサイズを増やす
 
-# The global budget is in /proc/sys/net/core/netdev_budget
-cat /proc/sys/net/core/netdev_budget  # default: 300
-echo 600 > /proc/sys/net/core/netdev_budget  # for high-throughput workloads
+# グローバルなバジェットは/proc/sys/net/core/netdev_budgetにある
+cat /proc/sys/net/core/netdev_budget  # デフォルト: 300
+echo 600 > /proc/sys/net/core/netdev_budget  # 高スループットなワークロード向け
 
-# Time limit for a single poll cycle
-cat /proc/sys/net/core/netdev_budget_usecs  # default: 2000 (2ms)
+# 1回のポーリングサイクルの時間制限
+cat /proc/sys/net/core/netdev_budget_usecs  # デフォルト: 2000（2ms）
 ```
 
 ## GRO: Generic Receive Offload {#gro-generic-receive-offload}
 
-GRO merges multiple small TCP segments into a single large `sk_buff` before passing up the stack, reducing per-packet overhead:
+GROは、スタックの上位へ渡す前に複数の小さなTCPセグメントを1つの大きな`sk_buff`に統合し、パケットごとのオーバーヘッドを削減する:
 
 ```c
-// Driver calls napi_gro_receive() instead of netif_receive_skb()
-// GRO accumulates segments from the same TCP flow
-// When done, delivers a large merged skb up the stack
+// ドライバはnetif_receive_skb()の代わりにnapi_gro_receive()を呼ぶ
+// GROは同じTCPフローのセグメントを蓄積する
+// 完了すると、統合された大きなskbをスタックの上位へ渡す
 napi_gro_receive(napi, skb);
 ```
 
 ```bash
-# Check GRO is enabled
+# GROが有効か確認
 ethtool -k eth0 | grep generic-receive-offload
 # generic-receive-offload: on
 
-# Disable GRO (for debugging or when GRO adds latency)
+# GROを無効化（デバッグ時やGROがレイテンシを増やす場合）
 ethtool -K eth0 gro off
 ```
 
 ## struct net_device {#struct-net_device}
 
 ```c
-// include/linux/netdevice.h (key fields)
+// include/linux/netdevice.h（主なフィールド）
 struct net_device {
-    char            name[IFNAMSIZ];  // "eth0", "lo", etc.
-    unsigned long   state;           // __LINK_STATE_START, etc.
-    struct netdev_queue *_tx;        // transmit queues (array)
-    struct Qdisc    *qdisc;          // traffic control qdisc
+    char            name[IFNAMSIZ];  // "eth0"、"lo"など
+    unsigned long   state;           // __LINK_STATE_STARTなど
+    struct netdev_queue *_tx;        // 送信キュー（配列）
+    struct Qdisc    *qdisc;          // トラフィック制御のqdisc
 
-    const struct net_device_ops *netdev_ops;  // driver operations
+    const struct net_device_ops *netdev_ops;  // ドライバの操作
 
-    unsigned int    flags;           // IFF_UP, IFF_BROADCAST, IFF_PROMISC, ...
-    unsigned int    mtu;             // maximum transmission unit
+    unsigned int    flags;           // IFF_UP、IFF_BROADCAST、IFF_PROMISC、...
+    unsigned int    mtu;             // 最大転送単位
 
-    // Stats
-    struct net_device_stats stats;   // rx/tx packets, bytes, errors
+    // 統計
+    struct net_device_stats stats;   // rx/txのパケット数、バイト数、エラー
     // ...
 };
 ```
 
-## Threaded NAPI {#threaded-napi}
+## スレッド化NAPI {#threaded-napi}
 
-For workloads that need predictable latency, NAPI can run in a kernel thread instead of a softirq:
+予測可能なレイテンシが必要なワークロードでは、NAPIをsoftirqではなくカーネルスレッドで実行できる:
 
 ```bash
-# Enable threaded NAPI for all NICs
+# すべてのNICでスレッド化NAPIを有効化
 echo 1 > /sys/class/net/eth0/threaded
 
-# The kernel creates "napi/eth0-0" etc. kthreads
-# These can be pinned to CPUs for better cache locality
+# カーネルは"napi/eth0-0"などのkthreadを作成する
+# キャッシュ局所性を高めるため、これらをCPUにピン留めできる
 taskset -cp 4 $(pgrep "napi/eth0-0")
 ```
 
-Threaded NAPI allows the poll function to sleep (e.g., for GRO flush timers) and gives the scheduler full control over poll CPU placement.
+スレッド化NAPIでは、poll関数がスリープでき（例えばGROのフラッシュタイマーのため）、ポーリングを行うCPUの配置をスケジューラが完全に制御できる。
 
-## Busy polling {#busy-polling}
+## ビジーポーリング {#busy-polling}
 
-For ultra-low-latency applications, busy polling bypasses softirq and polls the NIC directly from user context:
+超低レイテンシのアプリケーションでは、ビジーポーリングがsoftirqをバイパスし、ユーザーコンテキストから直接NICをポーリングする:
 
 ```bash
-# Enable busy polling
-echo 50 > /proc/sys/net/core/busy_poll    # poll for 50µs
-echo 50 > /proc/sys/net/core/busy_read    # also on recv()
+# ビジーポーリングを有効化
+echo 50 > /proc/sys/net/core/busy_poll    # 50µsポーリングする
+echo 50 > /proc/sys/net/core/busy_read    # recv()でも行う
 
-# Per-socket (SO_BUSY_POLL option)
+# ソケットごと（SO_BUSY_POLLオプション）
 setsockopt(fd, SOL_SOCKET, SO_BUSY_POLL, &timeout_us, sizeof(timeout_us));
 ```
 
-This trades CPU cycles for latency — the application spins polling the NIC instead of sleeping and being woken by softirq.
+これはCPUサイクルとレイテンシのトレードオフである。アプリケーションは、スリープしてsoftirqに起こされる代わりに、スピンしながらNICをポーリングする。
 
-## RPS/RFS: multi-CPU receive scaling {#rpsrfs-multi-cpu-receive-scaling}
+## RPS/RFS: 複数CPUでの受信スケーリング {#rpsrfs-multi-cpu-receive-scaling}
 
-A single-queue NIC delivers all packets to one CPU. **RPS (Receive Packet Steering)** distributes packets across CPUs in software:
+シングルキューのNICは、すべてのパケットを1つのCPUに届ける。**RPS（Receive Packet Steering）**は、ソフトウェアでパケットを複数のCPUに分散させる:
 
 ```bash
-# Distribute receive processing across CPUs 0-7
+# 受信処理をCPU 0〜7に分散
 echo ff > /sys/class/net/eth0/queues/rx-0/rps_cpus
 
-# RFS (Receive Flow Steering): steer packets to the CPU where the
-# application is running (improves cache locality)
+# RFS（Receive Flow Steering）: アプリケーションが動作しているCPUへ
+# パケットを振り向ける（キャッシュ局所性が向上する）
 echo 32768 > /proc/sys/net/core/rps_sock_flow_entries
 echo 2048  > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
 ```
 
-Modern multi-queue NICs with RSS (Receive Side Scaling) do this in hardware, distributing flows across hardware queues — one NAPI instance per queue.
+RSS（Receive Side Scaling）を備えた現代的なマルチキューNICは、これをハードウェアで行い、フローをハードウェアキューに分散させる。キューごとに1つのNAPIインスタンスがある。
 
-## Diagnosing receive performance {#diagnosing-receive-performance}
+## 受信性能の診断 {#diagnosing-receive-performance}
 
 ```bash
-# RX drop counters
+# RXのドロップカウンタ
 ethtool -S eth0 | grep -i drop
 
-# Softirq statistics (NET_RX_SOFTIRQ overruns)
+# softirqの統計（NET_RX_SOFTIRQのオーバーラン）
 cat /proc/net/softnet_stat
-# Columns: total, dropped, time_squeeze, [cpu_collision], [received_rps], [flow_limit_count]
-# time_squeeze: poll ran out of budget (consider increasing netdev_budget)
-# dropped: packet dropped due to backlog overflow
+# 列: total、dropped、time_squeeze、[cpu_collision]、[received_rps]、[flow_limit_count]
+# time_squeeze: pollがバジェットを使い切った（netdev_budgetの増加を検討する）
+# dropped: バックログのオーバーフローでパケットがドロップされた
 
-# Interrupts per CPU
+# CPUごとの割り込み
 cat /proc/interrupts | grep eth0
 
-# Check GRO merging stats
+# GROの統合の統計を確認
 ethtool -S eth0 | grep gro
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [sk_buff](sk-buff.md) — The packet structure built during receive
-- [Life of a Packet (receive)](life-of-packet-rx.md) — Full receive path beyond NAPI
-- [Socket Layer Overview](socket-layer.md) — Where packets go after network layer processing
-- [XDP](xdp.md) — Processing packets even earlier, before sk_buff allocation
+- [sk_buff](sk-buff.md) — 受信時に構築されるパケット構造体
+- [パケットの一生（受信）](life-of-packet-rx.md) — NAPIより先の受信パス全体
+- [ソケット層の概要](socket-layer.md) — ネットワーク層の処理の後、パケットがどこへ行くか
+- [XDP](xdp.md) — さらに早い段階、sk_buffの割り当て前でのパケット処理

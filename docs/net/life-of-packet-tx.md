@@ -1,10 +1,10 @@
-# Life of a Packet (Transmit Path) {#life-of-a-packet-transmit-path}
+# パケットの一生（送信パス） {#life-of-a-packet-transmit-path}
 
-> From application write() to NIC DMA, step by step
+> アプリケーションのwrite()からNICのDMAまで、ステップごとに
 
-## Overview {#overview}
+## 概要 {#overview}
 
-When an application writes data to a TCP socket, the kernel turns that data into one or more IP packets and transmits them. The path from `write()` to wire:
+アプリケーションがTCPソケットにデータを書き込むと、カーネルはそのデータを1つ以上のIPパケットに変換して送信する。`write()`から回線までのパスは次のとおり:
 
 ```
 Application: write() / send()
@@ -27,7 +27,7 @@ driver ndo_start_xmit() DMA to NIC
 NIC transmits packet
 ```
 
-## Phase 1: tcp_sendmsg() — data from userspace {#phase-1-tcp_sendmsg-data-from-userspace}
+## フェーズ1: tcp_sendmsg() — ユーザー空間からのデータ {#phase-1-tcp_sendmsg-data-from-userspace}
 
 ```c
 // net/ipv4/tcp.c:1460
@@ -42,50 +42,50 @@ int tcp_sendmsg(struct sock *sk, struct msghdr *msg, size_t size)
 int tcp_sendmsg_locked(struct sock *sk, struct msghdr *msg, size_t size)
 {
     while (msg_data_left(msg)) {
-        // Get or allocate a send sk_buff
+        // 送信用 sk_buff を取得、または割り当てる
         skb = tcp_write_queue_tail(sk);
         if (!skb || skb_tailroom(skb) == 0) {
             skb = sk_stream_alloc_skb(sk, 0, sk->sk_allocation, ...);
             tcp_add_write_queue_tail(sk, skb);
         }
 
-        // Copy data from userspace into skb
-        // Uses copy_from_iter() — zero-copy for MSG_ZEROCOPY if configured
+        // ユーザー空間から skb にデータをコピー
+        // copy_from_iter() を使う — 設定されていれば MSG_ZEROCOPY でゼロコピー
         copy = skb_copy_to_page_nocache(sk, &msg->msg_iter, skb, ...);
         copied += copy;
     }
 
-    // Try to send immediately
+    // すぐに送信を試みる
     tcp_push(sk, flags, mss_now, ...);
 }
 ```
 
-Data is held in `sk->sk_write_queue` until TCP decides to send it.
+データは、TCPが送信を決めるまで`sk->sk_write_queue`に保持される。
 
-## Phase 2: TCP write: tcp_write_xmit() {#phase-2-tcp-write-tcpwritexmit}
+## フェーズ2: TCPの書き出し: tcp_write_xmit() {#phase-2-tcp-write-tcp_write_xmit}
 
-TCP decides *when* to send based on:
+TCPは次の要素に基づいて*いつ*送信するかを決める:
 
-- Congestion window (`tp->snd_cwnd`)
-- Receive window advertised by peer (`tp->snd_wnd`)
-- Nagle algorithm (delay small packets)
-- Send buffer availability
+- 輻輳ウィンドウ（`tp->snd_cwnd`）
+- 相手が広告した受信ウィンドウ（`tp->snd_wnd`）
+- Nagleアルゴリズム（小さなパケットを遅らせる）
+- 送信バッファの空き
 
 ```c
 // net/ipv4/tcp_output.c
 static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, ...)
 {
     while ((skb = tcp_send_head(sk))) {
-        // Check congestion window
+        // 輻輳ウィンドウを確認
         cwnd_quota = tcp_cwnd_test(tp, skb);
         if (!cwnd_quota)
             break;
 
-        // Check receive window
+        // 受信ウィンドウを確認
         if (!tcp_snd_wnd_test(tp, skb, mss_now))
             break;
 
-        // Segment if skb is larger than MSS
+        // skb が MSS より大きければ分割する
         if (skb->len > mss_now)
             tcp_mtu_probe(sk) || tcp_fragment(sk, skb, mss_now, ...);
 
@@ -94,21 +94,21 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, ...)
 }
 ```
 
-## Phase 3: Build TCP header — tcp_transmit_skb() {#phase-3-build-tcp-header-tcptransmitskb}
+## フェーズ3: TCPヘッダの構築 — tcp_transmit_skb() {#phase-3-build-tcp-header-tcp_transmit_skb}
 
 ```c
 // net/ipv4/tcp_output.c
 static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it, ...)
 {
-    // Clone the skb (original stays in write queue for retransmit)
+    // skb を clone する（元の skb は再送のために書き込みキューに残る）
     if (clone_it)
         skb = skb_clone(skb, gfp_mask);
 
-    // Make room for TCP header
+    // TCP ヘッダ用の領域を確保
     skb_push(skb, tcp_header_size);
     skb_reset_transport_header(skb);
 
-    // Fill TCP header
+    // TCP ヘッダを埋める
     th = tcp_hdr(skb);
     th->source = inet->inet_sport;
     th->dest   = inet->inet_dport;
@@ -116,24 +116,24 @@ static int tcp_transmit_skb(struct sock *sk, struct sk_buff *skb, int clone_it, 
     th->ack_seq = htonl(tp->rcv_nxt);
     th->doff   = tcp_header_size >> 2;
     th->window = htons(tcp_select_window(sk));
-    // ... options (SACK, timestamp, etc.)
+    // ... オプション（SACK、タイムスタンプなど）
 
-    // Compute checksum (or leave for hardware offload)
+    // チェックサムを計算（またはハードウェアオフロードに任せる）
     tcp_set_skb_tso_segs(skb, mss_now);
 
-    // Hand to IP layer
+    // IP 層に渡す
     icsk->icsk_af_ops->queue_xmit(sk, skb, &inet->cork.fl);
     // → ip_queue_xmit()
 }
 ```
 
-## Phase 4: IP layer — ip_queue_xmit() {#phase-4-ip-layer-ipqueuexmit}
+## フェーズ4: IP層 — ip_queue_xmit() {#phase-4-ip-layer-ip_queue_xmit}
 
 ```c
 // net/ipv4/ip_output.c:546
 int ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
 {
-    // Route lookup (cached in sk->sk_dst_cache)
+    // 経路検索（sk->sk_dst_cache にキャッシュされる）
     rt = (struct rtable *)__sk_dst_check(sk, 0);
     if (!rt) {
         rt = ip_route_output_ports(net, fl4, sk, ...);
@@ -141,7 +141,7 @@ int ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
     }
     skb_dst_set_noref(skb, &rt->dst);
 
-    // Build IP header
+    // IP ヘッダを構築
     skb_push(skb, sizeof(struct iphdr));
     skb_reset_network_header(skb);
     iph = ip_hdr(skb);
@@ -154,17 +154,17 @@ int ip_queue_xmit(struct sock *sk, struct sk_buff *skb, struct flowi *fl)
     iph->protocol = sk->sk_protocol;
     iph->saddr    = fl4->saddr;
     iph->daddr    = fl4->daddr;
-    ip_send_check(iph);  // compute checksum
+    ip_send_check(iph);  // チェックサムを計算
 
-    // Netfilter: NF_INET_LOCAL_OUT hook (OUTPUT chain)
+    // Netfilter: NF_INET_LOCAL_OUT フック（OUTPUT チェイン）
     return NF_HOOK(NFPROTO_IPV4, NF_INET_LOCAL_OUT, sk, skb, NULL,
                    rt->dst.dev, dst_output);
 }
 ```
 
-## Phase 5: Netfilter OUTPUT and routing {#phase-5-netfilter-output-and-routing}
+## フェーズ5: NetfilterのOUTPUTとルーティング {#phase-5-netfilter-output-and-routing}
 
-`dst_output()` calls `ip_output()`:
+`dst_output()`は`ip_output()`を呼ぶ:
 
 ```c
 // net/ipv4/ip_output.c:428
@@ -174,15 +174,15 @@ int ip_output(struct net *net, struct sock *sk, struct sk_buff *skb)
     skb->dev = dev;
     skb->protocol = htons(ETH_P_IP);
 
-    // Netfilter: NF_INET_POST_ROUTING hook (POSTROUTING chain)
-    // (SNAT happens here)
+    // Netfilter: NF_INET_POST_ROUTING フック（POSTROUTING チェイン）
+    // （SNAT はここで行われる）
     return NF_HOOK_COND(NFPROTO_IPV4, NF_INET_POST_ROUTING, sk, skb,
                         NULL, dev, ip_finish_output, ...);
 }
 
 static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *skb)
 {
-    // Fragmentation if needed (skb->len > dev->mtu)
+    // 必要ならフラグメンテーション（skb->len > dev->mtu）
     if (skb->len > ip_skb_dst_mtu(sk, skb))
         return ip_fragment(net, sk, skb, mtu, ip_finish_output2);
 
@@ -190,9 +190,9 @@ static int ip_finish_output(struct net *net, struct sock *sk, struct sk_buff *sk
 }
 ```
 
-## Phase 6: ARP and Ethernet — neigh_output() {#phase-6-arp-and-ethernet-neigh_output}
+## フェーズ6: ARPとEthernet — neigh_output() {#phase-6-arp-and-ethernet-neigh_output}
 
-`ip_finish_output2()` resolves the next-hop MAC address:
+`ip_finish_output2()`はネクストホップのMACアドレスを解決する:
 
 ```c
 // net/ipv4/ip_output.c
@@ -200,19 +200,19 @@ static int ip_finish_output2(struct net *net, struct sock *sk, struct sk_buff *s
 {
     struct neighbour *neigh;
 
-    // Neighbour lookup (ARP table)
+    // 近隣エントリの検索（ARP テーブル）
     neigh = ip_neigh_for_gw(rt, skb, &is_v6gw);
 
-    // neigh->output = neigh_hh_output() if MAC known (fast path)
-    // → adds Ethernet header and calls dev_queue_xmit()
-    // If neighbour not resolved, triggers ARP and queues packet
+    // MAC が既知なら neigh->output = neigh_hh_output()（高速パス）
+    // → Ethernet ヘッダを付加し dev_queue_xmit() を呼ぶ
+    // 近隣が未解決なら ARP を発行し、パケットをキューに入れる
     return neigh_output(neigh, skb, is_v6gw);
 }
 ```
 
-If the ARP entry doesn't exist, an ARP request is sent and the packet is queued until the reply arrives.
+ARPエントリが存在しない場合、ARP要求が送信され、応答が届くまでパケットはキューに入れられる。
 
-## Phase 7: Traffic control — dev_queue_xmit() {#phase-7-traffic-control-devqueuexmit}
+## フェーズ7: トラフィック制御 — dev_queue_xmit() {#phase-7-traffic-control-dev_queue_xmit}
 
 ```c
 // net/core/dev.c
@@ -221,91 +221,91 @@ int dev_queue_xmit(struct sk_buff *skb)
     struct net_device *dev = skb->dev;
     struct netdev_queue *txq;
 
-    // Select transmit queue (XPS: Transmit Packet Steering)
+    // 送信キューを選択（XPS: Transmit Packet Steering）
     txq = netdev_core_pick_tx(dev, skb, ...);
 
-    // Pass through qdisc (traffic control, rate limiting)
-    // Default: pfifo_fast (priority FIFO)
-    // Custom: tbf, htb, fq_codel, etc.
+    // qdisc を通過させる（トラフィック制御、レート制限）
+    // デフォルト: pfifo_fast（優先度付き FIFO）
+    // カスタム: tbf、htb、fq_codel など
     rc = __dev_xmit_skb(skb, q, dev, txq);
     // q->enqueue() → q->dequeue() → dev_hard_start_xmit()
 }
 ```
 
-The qdisc can:
+qdiscは次のことができる:
 
-- Drop packets (rate limiting via TBF, policing)
-- Reorder packets (FQ scheduling)
-- Delay packets (netem for testing)
-- Shape traffic (HTB, TBF)
+- パケットを破棄する（TBFやポリシングによるレート制限）
+- パケットの順序を入れ替える（FQスケジューリング）
+- パケットを遅延させる（テスト用のnetem）
+- トラフィックをシェーピングする（HTB、TBF）
 
-## Phase 8: Driver DMA — ndo_start_xmit() {#phase-8-driver-dma-ndostartxmit}
+## フェーズ8: ドライバのDMA — ndo_start_xmit() {#phase-8-driver-dma-ndo_start_xmit}
 
 ```c
-// Driver implementation
+// ドライバの実装
 static netdev_tx_t my_nic_xmit(struct sk_buff *skb, struct net_device *dev)
 {
-    // Map skb data for DMA
+    // skb のデータを DMA 用にマップする
     dma_addr = dma_map_single(dev, skb->data, skb->len, DMA_TO_DEVICE);
 
-    // Write descriptor to TX ring
+    // TX リングにディスクリプタを書き込む
     ring->desc[tail].dma_addr = dma_addr;
     ring->desc[tail].len = skb->len;
-    ring->desc[tail].cmd = CMD_EOP | CMD_IFCS;  // end of packet, insert FCS
+    ring->desc[tail].cmd = CMD_EOP | CMD_IFCS;  // パケット末尾、FCS を挿入
 
-    // Advance ring tail
+    // リングの tail を進める
     ring->tail = (tail + 1) % ring->size;
 
-    // Ring doorbell: notify NIC of new descriptor
+    // ドアベルを鳴らす: 新しいディスクリプタを NIC に通知
     writel(ring->tail, ring->tail_reg);
 
     return NETDEV_TX_OK;
 }
 ```
 
-After the NIC transmits the packet, it generates a TX completion interrupt. The driver then calls `dev_consume_skb_any(skb)` to free the `sk_buff`.
+NICはパケットを送信した後、TX完了割り込みを発生させる。ドライバはそこで`dev_consume_skb_any(skb)`を呼んで`sk_buff`を解放する。
 
-## TX completion and write space wakeup {#tx-completion-and-write-space-wakeup}
+## TX完了と書き込み可能領域の通知 {#tx-completion-and-write-space-wakeup}
 
 ```c
-// TX completion interrupt handler
+// TX 完了割り込みハンドラ
 static void my_nic_tx_clean(struct my_nic_ring *ring)
 {
     while (ring->next_to_clean != ring->next_to_use) {
         skb = ring->tx_buf[ring->next_to_clean].skb;
         dma_unmap_single(...);
-        dev_consume_skb_any(skb);  // free sk_buff
+        dev_consume_skb_any(skb);  // sk_buff を解放
         ring->next_to_clean++;
     }
-    // If socket send buffer freed up, wake the writer
+    // ソケットの送信バッファが空いたら、書き込み側を起床させる
     netif_wake_queue(ring->dev);
 }
 ```
 
-`netif_wake_queue()` eventually calls `sk->sk_write_space(sk)`, waking any task blocked in `sendmsg()` waiting for send buffer space.
+`netif_wake_queue()`は最終的に`sk->sk_write_space(sk)`を呼び、送信バッファの空きを待って`sendmsg()`でブロックしているタスクを起床させる。
 
-## Send buffer and backpressure {#send-buffer-and-backpressure}
+## 送信バッファとバックプレッシャー {#send-buffer-and-backpressure}
 
-The kernel won't copy more data than the send buffer allows:
+カーネルは、送信バッファが許す以上のデータをコピーしない:
 
 ```bash
-# Default TCP send buffer sizes [min, default, max]
+# TCP 送信バッファのデフォルトサイズ [min, default, max]
 cat /proc/sys/net/ipv4/tcp_wmem
 # → 4096 16384 4194304
 
-# Per-socket override
+# ソケットごとの上書き
 setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &size, sizeof(size));
 
-# Check current usage (Send-Q column)
-ss -tn  # non-zero Send-Q = data in send buffer, waiting to be transmitted
+# 現在の使用量を確認（Send-Q 列）
+ss -tn  # Send-Q が 0 以外 = 送信バッファ内で送信待ちのデータがある
 ```
 
-If `sk->sk_wmem_alloc >= sk->sk_sndbuf`, `tcp_sendmsg()` blocks until TX completions free up space.
+`sk->sk_wmem_alloc >= sk->sk_sndbuf`の場合、`tcp_sendmsg()`はTX完了によって空きができるまでブロックする。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [sk_buff](sk-buff.md) — The packet structure built in tcp_sendmsg
-- [Life of a Packet (receive)](life-of-packet-rx.md) — The inbound path
-- [TCP Implementation](tcp.md) — Congestion control and window management
-- [Socket Layer Overview](socket-layer.md) — The sendmsg dispatch chain
-- [TC and qdisc](tc-qdisc.md) — Traffic control in Phase 7
+- [sk_buff](sk-buff.md) — tcp_sendmsgで構築されるパケット構造体
+- [パケットの一生（受信）](life-of-packet-rx.md) — 受信側のパス
+- [TCPの実装](tcp.md) — 輻輳制御とウィンドウ管理
+- [ソケット層の概要](socket-layer.md) — sendmsgのディスパッチの連鎖
+- [TCとqdisc](tc-qdisc.md) — フェーズ7のトラフィック制御

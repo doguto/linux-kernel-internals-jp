@@ -1,8 +1,8 @@
-# Time Subsystem {#time-subsystem}
+# 時間サブシステム {#time-subsystem}
 
-> Timekeeping, clocksources, and timers in the Linux kernel
+> Linuxカーネルにおける時刻管理、クロックソース、タイマー
 
-## The time stack {#the-time-stack}
+## 時間スタック {#the-time-stack}
 
 ```
 User space
@@ -30,40 +30,40 @@ User space
                              NOHZ idle                   (on clockevent IRQ)
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Timekeeping](timekeeping.md) | clocksources, TSC, NTP, struct timekeeper, vDSO |
-| [hrtimers](hrtimers.md) | High-resolution timers, CLOCK_MONOTONIC/REALTIME, timer slack |
-| [POSIX timers](posix-timers.md) | timer_create, clock_nanosleep, timerfd, epoll integration |
-| [The Timer Wheel](timer-wheel.md) | jiffies, struct timer_list, hierarchical wheel, deferrable timers |
-| [NTP and Clock Discipline](ntp.md) | adjtimex, PLL/FLL, leap seconds, TAI offset, chrony/ntpd |
-| [Time Namespaces](time-namespaces.md) | CLONE_NEWTIME, CLOCK_MONOTONIC isolation, CRIU use case |
-| [War Stories](war-stories.md) | TSC drift, leap second thundering herd, timer_delete vs timer_delete_sync race, jiffies wraparound |
+| [時刻管理](timekeeping.md) | クロックソース、TSC、NTP、struct timekeeper、vDSO |
+| [hrtimers](hrtimers.md) | 高分解能タイマー、CLOCK_MONOTONIC/REALTIME、タイマースラック |
+| [POSIXタイマー](posix-timers.md) | timer_create、clock_nanosleep、timerfd、epollとの統合 |
+| [タイマーホイール](timer-wheel.md) | jiffies、struct timer_list、階層型ホイール、遅延可能タイマー |
+| [NTPとクロック規律](ntp.md) | adjtimex、PLL/FLL、うるう秒、TAIオフセット、chrony/ntpd |
+| [時間namespace](time-namespaces.md) | CLONE_NEWTIME、CLOCK_MONOTONICの分離、CRIUのユースケース |
+| [事件簿](war-stories.md) | TSCドリフト、うるう秒のthundering herd、timer_deleteとtimer_delete_syncの競合、jiffiesのラップアラウンド |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Available clocksources (current in brackets)
+# 利用可能なクロックソース（現在のものは括弧内）
 cat /sys/devices/system/clocksource/clocksource0/available_clocksource
 # tsc-early tsc hpet acpi_pm
 
 cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 # tsc
 
-# TSC frequency
+# TSC周波数
 dmesg | grep "TSC.*MHz"
 # tsc: Detected 3600.000 MHz processor
 
-# Timer resolution
+# タイマー分解能
 clock_getres(CLOCK_MONOTONIC) → 1 ns on most x86 systems
 
-# hrtimer mode
+# hrtimerモード
 dmesg | grep "hrtimer"
 # Switched to high resolution mode on CPU 0
 
-# System time offset (NTP)
+# システム時刻のオフセット（NTP）
 timedatectl
 # NTP synchronized: yes
 ```

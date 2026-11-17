@@ -130,7 +130,7 @@ Classes are ordered in the section from highest to lowest priority. The `for_eac
 
 ## The five classes {#the-five-classes}
 
-### 1. stop (`stop_sched_class`) {#1-stop-stopschedclass}
+### 1. stop (`stop_sched_class`) {#1-stop-stop_sched_class}
 
 **File**: `kernel/sched/stop_task.c` | **Introduced**: [`34f971f6f798`](https://git.kernel.org/linus/34f971f6f7988be4d014eec3e3526bee6d007ffa) (Peter Zijlstra, v2.6.37)
 
@@ -148,7 +148,7 @@ DEFINE_SCHED_CLASS(stop) = {
 };
 ```
 
-### 2. deadline (`dl_sched_class`) {#2-deadline-dlschedclass}
+### 2. deadline (`dl_sched_class`) {#2-deadline-dl_sched_class}
 
 **File**: `kernel/sched/deadline.c` | **Introduced**: [`aab03e05e8f7`](https://git.kernel.org/linus/aab03e05e8f7e26f51dee792beddcb5cca9215a5) (Dario Faggioli, Juri Lelli et al., v3.14)
 
@@ -167,7 +167,7 @@ sched_setattr(0, &attr, 0);
 
 The kernel enforces admission control: it rejects `SCHED_DEADLINE` tasks if accepting them would make the system infeasible (total utilization would exceed 1.0 per CPU).
 
-### 3. rt (`rt_sched_class`) {#3-rt-rtschedclass}
+### 3. rt (`rt_sched_class`) {#3-rt-rt_sched_class}
 
 **File**: `kernel/sched/rt.c`
 
@@ -186,7 +186,7 @@ sched_setscheduler(pid, SCHED_FIFO, &param);
 
 **Danger**: An RT task that never sleeps will starve all normal tasks. The kernel protects against this with `rt_throttle`: by default, RT tasks can use at most 95% of CPU time per 1-second window (`/proc/sys/kernel/sched_rt_runtime_us` and `sched_rt_period_us`).
 
-### 4. fair (`fair_sched_class`) {#4-fair-fairschedclass}
+### 4. fair (`fair_sched_class`) {#4-fair-fair_sched_class}
 
 **File**: `kernel/sched/fair.c`
 
@@ -200,7 +200,7 @@ The fair class handles three policies:
 
 This is where CFS and EEVDF live. See [CFS](cfs.md) and [EEVDF](eevdf.md) for details.
 
-### 5. idle (`idle_sched_class`) {#5-idle-idleschedclass}
+### 5. idle (`idle_sched_class`) {#5-idle-idle_sched_class}
 
 **File**: `kernel/sched/idle.c`
 
@@ -238,7 +238,7 @@ A task's scheduling policy is stored in `task_struct->policy`. The class pointer
 
 Setting a task's policy via `sched_setscheduler()` or `sched_setattr()` also updates `task_struct->sched_class` to point to the corresponding class struct.
 
-## How pick_next_task works {#how-picknexttask-works}
+## How pick_next_task works {#how-pick_next_task-works}
 
 The core scheduling function walks the class hierarchy:
 

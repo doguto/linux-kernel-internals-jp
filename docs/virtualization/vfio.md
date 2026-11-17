@@ -1,10 +1,10 @@
-# VFIO: Virtual Function I/O and Device Passthrough {#vfio-virtual-function-io-and-device-passthrough}
+# VFIO: Virtual Function I/Oとデバイスパススルー {#vfio-virtual-function-io-and-device-passthrough}
 
-> IOMMU groups, DMA remapping, and direct PCI device access from userspace/VMs
+> IOMMUグループ、DMAリマッピング、そしてユーザー空間/VMからのPCIデバイスへの直接アクセス
 
-## What is VFIO? {#what-is-vfio}
+## VFIOとは {#what-is-vfio}
 
-VFIO (Virtual Function I/O) provides a secure mechanism to expose PCI devices directly to userspace processes or VMs, bypassing the kernel driver. A guest VM with VFIO passthrough can access the device at near-native speed:
+VFIO（Virtual Function I/O）は、カーネルドライバを迂回して、PCIデバイスをユーザー空間のプロセスやVMに直接公開する安全な仕組みを提供する。VFIOパススルーを使うゲストVMは、ネイティブに近い速度でデバイスにアクセスできる。
 
 ```
 Without passthrough:
@@ -16,39 +16,39 @@ With VFIO passthrough:
   Direct DMA: guest physical addresses remapped by IOMMU to real hardware addresses
 ```
 
-**Requirements**:
+**要件**:
 
-- IOMMU hardware (Intel VT-d or AMD-Vi)
-- Device must be in its own IOMMU group (or group isolation satisfied)
-- `intel_iommu=on` or `amd_iommu=on` boot parameter
+- IOMMUハードウェア（Intel VT-dまたはAMD-Vi）
+- デバイスが独自のIOMMUグループに属していること（またはグループの分離が満たされていること）
+- ブートパラメータ`intel_iommu=on`または`amd_iommu=on`
 
-**Two API generations**: everything through the "Userspace VFIO API" section below describes the original group/container model (`/dev/vfio/vfio` + `/dev/vfio/<group_id>`). It's still the default-enabled, majority-used path — `CONFIG_VFIO_GROUP`'s own help text calls it "the traditional model ... used by the majority of userspace applications and drivers." But the kernel's own documentation is explicit that it's a legacy interface being superseded: "Eventually the vfio_iommu_type1 driver, as well as the legacy vfio container and group model is intended to be deprecated," in favor of a newer device-cdev + IOMMUFD model — covered after the classic walkthrough below.
+**2世代のAPI**: 以下の「ユーザー空間のVFIO API」セクションまでの内容はすべて、当初のグループ/コンテナモデル（`/dev/vfio/vfio` + `/dev/vfio/<group_id>`）を説明している。これは現在もデフォルトで有効であり、大多数が使っている経路である。`CONFIG_VFIO_GROUP`自身のヘルプテキストも、これを「the traditional model ... used by the majority of userspace applications and drivers」（従来のモデルであり、大多数のユーザー空間アプリケーションとドライバが使用している）と呼んでいる。しかしカーネル自身のドキュメントは、これが置き換えられつつあるレガシーなインターフェイスであることを明言している。「Eventually the vfio_iommu_type1 driver, as well as the legacy vfio container and group model is intended to be deprecated」（最終的にはvfio_iommu_type1ドライバ、およびレガシーなvfioのコンテナとグループのモデルは非推奨とされる予定である）とあり、より新しいdevice cdev + IOMMUFDモデルへの移行が想定されている。これについては、以下の従来型の手順説明の後で扱う。
 
-## IOMMU groups {#iommu-groups}
+## IOMMUグループ {#iommu-groups}
 
-An IOMMU group is the smallest set of devices that must be isolated together for DMA safety. Devices in the same PCIe hierarchy that can peer-DMA to each other form a group:
+IOMMUグループとは、DMAの安全性のために一緒に分離しなければならないデバイスの最小の集合である。同じPCIe階層にあり、互いにピアツーピアのDMAを行えるデバイスがグループを形成する。
 
 ```bash
-# List all IOMMU groups:
+# すべてのIOMMUグループを一覧表示:
 find /sys/kernel/iommu_groups -type l | sort -V | head -20
 # /sys/kernel/iommu_groups/0/devices/0000:00:00.0
 # /sys/kernel/iommu_groups/1/devices/0000:00:01.0
 # /sys/kernel/iommu_groups/2/devices/0000:00:02.0
 # ...
 
-# Check which group a device belongs to:
+# デバイスがどのグループに属するかを確認:
 ls /sys/bus/pci/devices/0000:03:00.0/iommu_group
 # → ../../../kernel/iommu_groups/15
 
-# List all devices in a group:
+# グループ内のすべてのデバイスを一覧表示:
 ls /sys/kernel/iommu_groups/15/devices/
-# 0000:03:00.0  0000:03:00.1  ← e.g., NIC with two functions
+# 0000:03:00.0  0000:03:00.1  ← 例: 2つのファンクションを持つNIC
 
-# For passthrough, ALL devices in the group must be passed through
-# (or left to vfio-pci stub driver)
+# パススルーする場合、グループ内のすべてのデバイスをパススルーする必要がある
+# （またはvfio-pciのスタブドライバに任せる）
 ```
 
-## VFIO architecture {#vfio-architecture}
+## VFIOのアーキテクチャ {#vfio-architecture}
 
 ```
 Userspace (QEMU/application)
@@ -64,111 +64,111 @@ PCIe device BAR access (MMIO mapped to guest/userspace)
 DMA: guest GPA → IOMMU → host HPA (remapped per container)
 ```
 
-### Key objects {#key-objects}
+### 主要なオブジェクト {#key-objects}
 
 ```c
-/* 1. Container: an IOMMU address space (shared by multiple groups) */
+/* 1. コンテナ: IOMMUのアドレス空間（複数のグループで共有される） */
 /*    fd = open("/dev/vfio/vfio", O_RDWR) */
 
-/* 2. Group: a set of devices that share DMA isolation requirements */
-/*    fd = open("/dev/vfio/15", O_RDWR)  (group 15) */
+/* 2. グループ: DMA分離の要件を共有するデバイスの集合 */
+/*    fd = open("/dev/vfio/15", O_RDWR)  (グループ15) */
 
-/* 3. Device: one PCI function within a group */
+/* 3. デバイス: グループ内の1つのPCIファンクション */
 /*    fd = ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, "0000:03:00.0") */
 ```
 
-## Setting up VFIO passthrough {#setting-up-vfio-passthrough}
+## VFIOパススルーのセットアップ {#setting-up-vfio-passthrough}
 
 ```bash
-# Step 1: Enable IOMMU in boot parameters (/etc/default/grub):
+# ステップ1: ブートパラメータでIOMMUを有効にする（/etc/default/grub）:
 GRUB_CMDLINE_LINUX="intel_iommu=on iommu=pt"
-# iommu=pt: passthrough mode (better performance for non-vfio devices)
+# iommu=pt: パススルーモード（vfio以外のデバイスの性能が向上する）
 update-grub && reboot
 
-# Step 2: Load vfio-pci module:
+# ステップ2: vfio-pciモジュールをロードする:
 modprobe vfio-pci
 
-# Step 3: Unbind device from its current driver:
+# ステップ3: デバイスを現在のドライバからアンバインドする:
 echo 0000:03:00.0 > /sys/bus/pci/devices/0000:03:00.0/driver/unbind
 
-# Step 4: Bind to vfio-pci:
+# ステップ4: vfio-pciにバインドする:
 echo "10de 1234" > /sys/bus/pci/drivers/vfio-pci/new_id  # vendor:device
-# or:
+# または:
 echo 0000:03:00.0 > /sys/bus/pci/drivers/vfio-pci/bind
 
-# Step 5: Verify:
+# ステップ5: 確認する:
 ls /sys/bus/pci/devices/0000:03:00.0/driver
 # → /sys/bus/pci/drivers/vfio-pci
 
-# Step 6: Check group:
+# ステップ6: グループを確認する:
 ls /sys/kernel/iommu_groups/15/devices/
-# All devices in group must be bound to vfio-pci (or no driver)
+# グループ内のすべてのデバイスがvfio-pciにバインドされている（またはドライバなし）必要がある
 ```
 
-## QEMU device passthrough {#qemu-device-passthrough}
+## QEMUでのデバイスパススルー {#qemu-device-passthrough}
 
 ```bash
-# Pass an NVIDIA GPU to a VM:
+# NVIDIA GPUをVMに渡す:
 qemu-system-x86_64 \
     -enable-kvm \
     -m 8G \
     -cpu host \
     -device vfio-pci,host=03:00.0,multifunction=on \
-    -device vfio-pci,host=03:00.1 \   # audio function
+    -device vfio-pci,host=03:00.1 \   # オーディオファンクション
     -drive if=virtio,file=vm.img \
     -net user,hostfwd=tcp::2222-:22
 
-# Pass an NVMe SSD:
+# NVMe SSDを渡す:
 qemu-system-x86_64 \
     -enable-kvm \
-    -device vfio-pci,host=02:00.0 \   # NVMe controller
+    -device vfio-pci,host=02:00.0 \   # NVMeコントローラ
     ...
 ```
 
-## Userspace VFIO API {#userspace-vfio-api}
+## ユーザー空間のVFIO API {#userspace-vfio-api}
 
-Applications (not just VMs) can use VFIO directly for device access:
+（VMだけでなく）アプリケーションも、デバイスアクセスのためにVFIOを直接使える。
 
 ```c
 #include <linux/vfio.h>
 
-/* 1. Open container */
+/* 1. コンテナを開く */
 int container = open("/dev/vfio/vfio", O_RDWR);
-ioctl(container, VFIO_GET_API_VERSION);  /* must be VFIO_API_VERSION */
+ioctl(container, VFIO_GET_API_VERSION);  /* VFIO_API_VERSIONでなければならない */
 
-/* 2. Open IOMMU group */
+/* 2. IOMMUグループを開く */
 int group = open("/dev/vfio/15", O_RDWR);
 struct vfio_group_status status;
 ioctl(group, VFIO_GROUP_GET_STATUS, &status);
 assert(status.flags & VFIO_GROUP_FLAGS_VIABLE);
 
-/* 3. Add group to container */
+/* 3. グループをコンテナに追加する */
 ioctl(group, VFIO_GROUP_SET_CONTAINER, &container);
 
-/* 4. Set IOMMU type (creates the DMA mapping domain) */
+/* 4. IOMMUタイプを設定する（DMAマッピングのドメインを作成する） */
 ioctl(container, VFIO_SET_IOMMU, VFIO_TYPE1_IOMMU);
 
-/* 5. Map DMA buffers into IOMMU */
+/* 5. DMAバッファをIOMMUにマップする */
 struct vfio_iommu_type1_dma_map dma_map = {
     .argsz = sizeof(dma_map),
     .flags = VFIO_DMA_MAP_FLAG_READ | VFIO_DMA_MAP_FLAG_WRITE,
-    .vaddr = (uintptr_t)buf,    /* host virtual address */
-    .iova  = 0x10000000,        /* IOVA (device sees this address) */
+    .vaddr = (uintptr_t)buf,    /* ホストの仮想アドレス */
+    .iova  = 0x10000000,        /* IOVA（デバイスから見えるアドレス） */
     .size  = BUF_SIZE,
 };
 ioctl(container, VFIO_IOMMU_MAP_DMA, &dma_map);
-/* Device can now DMA to/from IOVA 0x10000000 */
+/* これでデバイスはIOVA 0x10000000との間でDMAできる */
 
-/* 6. Get device fd */
+/* 6. デバイスのfdを取得する */
 int device = ioctl(group, VFIO_GROUP_GET_DEVICE_FD, "0000:03:00.0");
 
-/* 7. Get device info (BARs, interrupts) */
+/* 7. デバイス情報（BAR、割り込み）を取得する */
 struct vfio_device_info device_info = { .argsz = sizeof(device_info) };
 ioctl(device, VFIO_DEVICE_GET_INFO, &device_info);
-/* device_info.num_regions: number of BARs/capabilities */
-/* device_info.num_irqs:    number of interrupt types */
+/* device_info.num_regions: BAR/ケーパビリティの数 */
+/* device_info.num_irqs:    割り込みタイプの数 */
 
-/* 8. Map BAR 0 (MMIO registers) into process address space */
+/* 8. BAR 0（MMIOレジスタ）をプロセスのアドレス空間にマップする */
 struct vfio_region_info reg = {
     .argsz = sizeof(reg),
     .index = VFIO_PCI_BAR0_REGION_INDEX,
@@ -176,73 +176,73 @@ struct vfio_region_info reg = {
 ioctl(device, VFIO_DEVICE_GET_REGION_INFO, &reg);
 void *mmio = mmap(NULL, reg.size, PROT_READ|PROT_WRITE,
                    MAP_SHARED, device, reg.offset);
-/* Now: read/write directly to mmio like a kernel driver would */
+/* これで: カーネルドライバと同じようにmmioを直接読み書きできる */
 ```
 
-## The newer model: device cdev + IOMMUFD {#the-newer-model-device-cdev-iommufd}
+## 新しいモデル: device cdev + IOMMUFD {#the-newer-model-device-cdev-iommufd}
 
-The classic model above ties DMA isolation to IOMMU *groups*: to get a device fd you first open its group. The newer model drops that requirement — with `CONFIG_VFIO_DEVICE_CDEV=y`, a device fd is acquired directly:
+上記の従来型モデルは、DMAの分離をIOMMU*グループ*に結び付けている。デバイスのfdを得るには、まずそのグループを開かなければならない。新しいモデルはこの要件を取り除く。`CONFIG_VFIO_DEVICE_CDEV=y`であれば、デバイスのfdを直接取得できる。
 
 ```c
-/* Classic: through the group */
+/* 従来型: グループを経由する */
 device = ioctl(group_fd, VFIO_GROUP_GET_DEVICE_FD, "0000:03:00.0");
 
-/* Newer: open the device's own character device directly */
+/* 新しい方式: デバイス自身のキャラクタデバイスを直接開く */
 device = open("/dev/vfio/devices/vfio0", O_RDWR);
 ```
 
-The device cdev only works with IOMMUFD, not the legacy container: instead of `VFIO_GROUP_SET_CONTAINER`/`VFIO_SET_IOMMU`, userspace opens `/dev/iommu` and claims DMA ownership of the device with `VFIO_DEVICE_BIND_IOMMUFD` before it can be used. IOMMUFD's compatibility mode can also front the *existing* container ioctls (by configuring `CONFIG_IOMMUFD_VFIO_CONTAINER`, or symlinking `/dev/vfio/vfio` to `/dev/iommu`), but as of this writing that compatibility path isn't feature-complete relative to `VFIO_TYPE1v2_IOMMU` — the kernel docs note MMIO DMA mapping in particular as a gap. Group semantics still apply underneath cdev access: devices in the same IOMMU group can't be bound to different `iommufd_ctx` instances or split between kernel and VFIO ownership.
+device cdevはIOMMUFDとの組み合わせでのみ動作し、レガシーなコンテナとは組み合わせられない。ユーザー空間は`VFIO_GROUP_SET_CONTAINER`/`VFIO_SET_IOMMU`の代わりに`/dev/iommu`を開き、デバイスを使う前に`VFIO_DEVICE_BIND_IOMMUFD`でデバイスのDMAの所有権を取得する。IOMMUFDの互換モードは、*既存の*コンテナのioctlを受け付けることもできる（`CONFIG_IOMMUFD_VFIO_CONTAINER`を設定するか、`/dev/vfio/vfio`を`/dev/iommu`へのシンボリックリンクにする）。ただし本稿執筆時点では、この互換経路は`VFIO_TYPE1v2_IOMMU`に比べて機能が揃っておらず、カーネルのドキュメントは特にMMIOのDMAマッピングを欠けている機能として挙げている。cdevによるアクセスの下でも、グループのセマンティクスは依然として適用される。同じIOMMUグループのデバイスを異なる`iommufd_ctx`インスタンスにバインドしたり、カーネルとVFIOの所有に分けたりすることはできない。
 
-`iommufd` also opens the door to features the legacy `vfio_iommu_type1` driver never supported, like nested IOMMU page tables (an IOMMU-level analog of nested EPT) and PASID-based sub-device isolation.
+`iommufd`は、レガシーな`vfio_iommu_type1`ドライバが一度もサポートしなかった機能への道も開く。たとえば、ネストされたIOMMUページテーブル（ネストされたEPTのIOMMUレベルにおける類似物）や、PASIDベースのサブデバイス分離である。
 
-## SR-IOV: Virtual Functions {#sr-iov-virtual-functions}
+## SR-IOV: 仮想ファンクション {#sr-iov-virtual-functions}
 
-SR-IOV (Single Root I/O Virtualization) allows one physical device to appear as multiple virtual functions (VFs):
+SR-IOV（Single Root I/O Virtualization）は、1つの物理デバイスを複数の仮想ファンクション（VF）として見せられるようにする。
 
 ```bash
-# Enable SR-IOV (create 4 VFs from one PF):
+# SR-IOVを有効にする（1つのPFから4つのVFを作成する）:
 echo 4 > /sys/bus/pci/devices/0000:03:00.0/sriov_numvfs
 
-# VFs appear as new PCI devices:
+# VFは新しいPCIデバイスとして現れる:
 lspci | grep "Virtual Function"
 # 03:00.1  VF 1
 # 03:00.2  VF 2
 # 03:00.3  VF 3
 # 03:00.4  VF 4
 
-# Bind each VF to vfio-pci and pass to different VMs:
+# 各VFをvfio-pciにバインドし、別々のVMに渡す:
 echo 0000:03:00.1 > /sys/bus/pci/drivers/vfio-pci/bind
 
-# Network SR-IOV: VF gets its own MAC/VLAN, dedicated queue rings
+# ネットワークのSR-IOV: VFは独自のMAC/VLANと専用のキューリングを持つ
 ip link set eth0 vf 0 mac 52:54:00:01:02:03 vlan 100 rate 1000
 ```
 
-## Mediated devices (mdev) {#mediated-devices-mdev}
+## Mediated device（mdev） {#mediated-devices-mdev}
 
-Some devices support mediated passthrough — the host driver slices the device and presents virtual sub-devices:
+一部のデバイスは、mediated passthroughをサポートする。ホストのドライバがデバイスを分割し、仮想的なサブデバイスを提示する。
 
 ```bash
-# Intel GVT-g: share one GPU across multiple VMs
+# Intel GVT-g: 1つのGPUを複数のVMで共有する
 ls /sys/bus/pci/devices/0000:00:02.0/mdev_supported_types/
-# i915-GVTg_V5_4  ← 4 GPU VMs sharing one GPU
+# i915-GVTg_V5_4  ← 1つのGPUを4つのGPU VMで共有
 
-# Create a mediated device instance:
-uuidgen  # e.g., 83b8f4f2-509f-382f-3c1e-e6bfe0fa1001
+# mediated deviceのインスタンスを作成する:
+uuidgen  # 例: 83b8f4f2-509f-382f-3c1e-e6bfe0fa1001
 echo "83b8f4f2-509f-382f-3c1e-e6bfe0fa1001" > \
     /sys/bus/pci/devices/0000:00:02.0/mdev_supported_types/i915-GVTg_V5_4/create
 
-# Assign to QEMU:
+# QEMUに割り当てる:
 qemu-system-x86_64 \
     -device vfio-pci,sysfsdev=/sys/bus/mdev/devices/83b8f4f2-...
 ```
 
-## VFIO kernel internals {#vfio-kernel-internals}
+## VFIOのカーネル内部 {#vfio-kernel-internals}
 
 ```c
-/* Simplified — real definitions are split across drivers/vfio/vfio.h,
- * container.c, group.c, and pci/vfio_pci_core.c */
+/* 簡略化したもの — 実際の定義はdrivers/vfio/vfio.h、
+ * container.c、group.c、pci/vfio_pci_core.cに分かれている */
 
-/* The container manages the IOMMU domain: */
+/* コンテナはIOMMUドメインを管理する: */
 struct vfio_container {
     struct kref         kref;
     struct list_head    group_list;
@@ -252,7 +252,7 @@ struct vfio_container {
     bool                noiommu;
 };
 
-/* Each group connects devices to a container: */
+/* 各グループがデバイスをコンテナに接続する: */
 struct vfio_group {
     struct iommu_group  *iommu_group;
     struct vfio_container *container;
@@ -260,83 +260,83 @@ struct vfio_group {
     struct cdev         cdev;         /* /dev/vfio/<id> */
 };
 
-/* VFIO PCI device - wraps a PCI device for userspace access: */
+/* VFIOのPCIデバイス - ユーザー空間からのアクセスのためにPCIデバイスをラップする: */
 struct vfio_pci_core_device {
     struct vfio_device  vdev;
     struct pci_dev     *pdev;
-    void __iomem       *barmap[PCI_STD_NUM_BARS]; /* BAR mappings */
-    struct xarray       ctx;          /* IRQ eventfds, indexed by IRQ vector */
+    void __iomem       *barmap[PCI_STD_NUM_BARS]; /* BARのマッピング */
+    struct xarray       ctx;          /* IRQのeventfd。IRQベクタでインデックスされる */
     /* ... */
 };
 ```
 
-### DMA mapping path {#dma-mapping-path}
+### DMAマッピングの経路 {#dma-mapping-path}
 
 ```c
-/* When userspace calls VFIO_IOMMU_MAP_DMA, vfio_iommu_type1.c's
- * vfio_dma_do_map() handles it (simplified): */
+/* ユーザー空間がVFIO_IOMMU_MAP_DMAを呼ぶと、vfio_iommu_type1.cの
+ * vfio_dma_do_map()がそれを処理する（簡略化したもの）: */
 static int vfio_dma_do_map(struct vfio_iommu *iommu,
                             struct vfio_iommu_type1_dma_map *map)
 {
-    /* 1. Pin the userspace pages */
+    /* 1. ユーザー空間のページをピン留めする */
     vfio_pin_pages_remote(dma, vaddr, npage, &pfn, limit, batch);
 
-    /* 2. Create IOMMU mapping: IOVA → physical pages, for every
-     *    IOMMU domain backing this container */
+    /* 2. IOMMUマッピングを作成する: IOVA → 物理ページ。このコンテナを
+     *    支えるすべてのIOMMUドメインに対して行う */
     iommu_map(domain->domain, iova, phys, size,
               prot | IOMMU_CACHE, GFP_KERNEL_ACCOUNT);
 
-    /* Now device DMA to IOVA goes through IOMMU → correct physical pages */
-    /* Without IOMMU: device could DMA anywhere → security hole */
+    /* これでIOVAへのデバイスのDMAはIOMMUを経由して正しい物理ページに届く */
+    /* IOMMUがなければ: デバイスはどこにでもDMAできてしまう → セキュリティホール */
 }
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Check IOMMU is active:
+# IOMMUが有効であることを確認:
 dmesg | grep -i iommu | head -5
 # [    0.234] DMAR: IOMMU enabled
 
-# Check VFIO groups:
+# VFIOグループを確認:
 ls /dev/vfio/
 # vfio  15  23  ...
 
-# IOMMU domain/device mappings (Intel VT-d):
+# IOMMUのドメイン/デバイスのマッピング（Intel VT-d）:
 cat /sys/kernel/debug/iommu/intel/dmar_translation_struct 2>/dev/null | head -20
 
-# Performance: Intel IOMMU exposes a real PMU per DMA remapping unit
-# (drivers/iommu/intel/perfmon.c), named dmar0, dmar1, ... — no
-# direct "miss" counter, but miss rate = iotlb_lookup - iotlb_hit:
+# 性能: Intel IOMMUはDMAリマッピングユニットごとに実際のPMUを公開する
+# （drivers/iommu/intel/perfmon.c）。名前はdmar0、dmar1、... — 直接の
+# "miss"カウンタはないが、ミス率 = iotlb_lookup - iotlb_hit:
 perf stat -e dmar0/iotlb_lookup/,dmar0/iotlb_hit/ -a sleep 5
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — VFIO core: device registration (`vfio_register_group_dev()`), ioctl/mmap/read/write file ops, and subsystem module init (group and container ioctl dispatch live in `group.c`/`container.c`)
-- [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group` definition (`struct vfio_container` is only forward-declared here)
-- [drivers/vfio/container.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/container.c) — `struct vfio_container` definition
-- [drivers/vfio/vfio_iommu_type1.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_iommu_type1.c) — Type1 IOMMU backend: `vfio_dma_do_map()` (handles `VFIO_IOMMU_MAP_DMA`), `vfio_pin_pages_remote()`, `iommu_map()`
-- [drivers/vfio/pci/vfio_pci_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/pci/vfio_pci_core.c) — vfio-pci core: BAR/MMIO mapping, config space, IRQ eventfds (backs `struct vfio_pci_core_device` in [include/linux/vfio_pci_core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vfio_pci_core.h))
-- [drivers/vfio/mdev/mdev_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/mdev/mdev_core.c) — mediated device (mdev) framework used by GPU-sharing drivers like Intel GVT-g
-- [drivers/iommu/iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iommu.c) — `iommu_group_alloc()` and IOMMU group management
-- [drivers/iommu/intel/perfmon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/intel/perfmon.c) — Intel IOMMU PerfMon: the per-DMAR-unit (`dmar0`, `dmar1`, ...) perf PMU and its `iotlb_lookup`/`iotlb_hit` events
-- [drivers/vfio/vfio_main.c: `VFIO_DEVICE_BIND_IOMMUFD` handling](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — the device-cdev security model that replaces group/container ownership
+- [drivers/vfio/vfio_main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — VFIOのコア: デバイスの登録（`vfio_register_group_dev()`）、ioctl/mmap/read/writeのファイル操作、サブシステムのモジュール初期化（グループとコンテナのioctlのディスパッチは`group.c`/`container.c`にある）
+- [drivers/vfio/vfio.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio.h) — `struct vfio_group`の定義（`struct vfio_container`はここでは前方宣言のみ）
+- [drivers/vfio/container.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/container.c) — `struct vfio_container`の定義
+- [drivers/vfio/vfio_iommu_type1.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_iommu_type1.c) — Type1 IOMMUバックエンド: `vfio_dma_do_map()`（`VFIO_IOMMU_MAP_DMA`を処理する）、`vfio_pin_pages_remote()`、`iommu_map()`
+- [drivers/vfio/pci/vfio_pci_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/pci/vfio_pci_core.c) — vfio-pciのコア: BAR/MMIOのマッピング、コンフィギュレーション空間、IRQのeventfd（[include/linux/vfio_pci_core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/vfio_pci_core.h)の`struct vfio_pci_core_device`を支える）
+- [drivers/vfio/mdev/mdev_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/mdev/mdev_core.c) — Intel GVT-gのようなGPU共有ドライバが使うmediated device（mdev）フレームワーク
+- [drivers/iommu/iommu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/iommu.c) — `iommu_group_alloc()`とIOMMUグループの管理
+- [drivers/iommu/intel/perfmon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu/intel/perfmon.c) — Intel IOMMU PerfMon: DMARユニットごと（`dmar0`、`dmar1`、...）のperf PMUと、その`iotlb_lookup`/`iotlb_hit`イベント
+- [drivers/vfio/vfio_main.c: `VFIO_DEVICE_BIND_IOMMUFD`の処理](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vfio/vfio_main.c) — グループ/コンテナによる所有に代わるdevice cdevのセキュリティモデル
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KVM Architecture](kvm-arch.md) — VM exits and VMCS
-- [Memory Virtualization](kvm-memory.md) — EPT and shadow paging
-- [IOMMU Architecture](../iommu/iommu-arch.md) — IOMMU hardware and DMA API
-- [PCI Drivers](../drivers/pci-driver.md) — How PCI drivers work before VFIO
+- [KVMアーキテクチャ](kvm-arch.md) — VM exitとVMCS
+- [メモリ仮想化](kvm-memory.md) — EPTとシャドウページング
+- [IOMMUアーキテクチャ](../iommu/iommu-arch.md) — IOMMUハードウェアとDMA API
+- [PCIドライバ](../drivers/pci-driver.md) — VFIO以前にPCIドライバがどう動作するか
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Jonathan Corbet's coverage of Alex Williamson's VFIO framework and IOMMU-group-based device assignment (January 3, 2012)
+- [LWN: Safe device assignment with VFIO](https://lwn.net/Articles/474088/) — Alex WilliamsonのVFIOフレームワークと、IOMMUグループに基づくデバイス割り当てについてのJonathan Corbetによる記事（2012年1月3日）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — official kernel documentation for the VFIO framework: the classic container/group/device model, the newer device-cdev model, and the IOMMUFD relationship, including the deprecation note quoted above
-- [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — official documentation for the mdev framework covered in this page's mediated-devices section
+- [VFIO — "Virtual Function I/O"](https://docs.kernel.org/driver-api/vfio.html) — VFIOフレームワークの公式カーネルドキュメント: 従来のコンテナ/グループ/デバイスモデル、新しいdevice cdevモデル、IOMMUFDとの関係。上で引用した非推奨の記述も含む
+- [VFIO Mediated devices](https://docs.kernel.org/driver-api/vfio-mediated-device.html) — 本ページのmediated deviceのセクションで扱ったmdevフレームワークの公式ドキュメント

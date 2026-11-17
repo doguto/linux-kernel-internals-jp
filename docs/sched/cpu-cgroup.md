@@ -1,94 +1,94 @@
-# CPU cgroup: v1 vs v2 {#cpu-cgroup-v1-vs-v2}
+# CPU cgroup: v1とv2 {#cpu-cgroup-v1-vs-v2}
 
-> Controlling CPU allocation with cgroups — shares, weights, and bandwidth
+> cgroupによるCPU割り当ての制御 — shares、weight、帯域
 
-## What CPU cgroups control {#what-cpu-cgroups-control}
+## CPU cgroupが制御するもの {#what-cpu-cgroups-control}
 
-CPU cgroups give you two independent controls:
+CPU cgroupは2つの独立した制御を提供する:
 
-1. **Weight** (proportional share): "This group gets 2x more CPU than that group when both are busy"
-2. **Bandwidth** (hard limit): "This group can use at most 50% of one CPU per period"
+1. **重み**（比例配分）: 「両方がビジーのとき、このグループはあのグループの2倍のCPUを得る」
+2. **帯域**（厳格な上限）: 「このグループは周期ごとに最大で1 CPUの50%までしか使えない」
 
-These are orthogonal. A group with high weight still gets throttled if it hits its bandwidth limit.
+これらは直交している。重みの高いグループでも、帯域の上限に達すればスロットリングされる。
 
-## The interface difference {#the-interface-difference}
+## インターフェースの違い {#the-interface-difference}
 
-cgroup v1 and v2 expose the same underlying mechanisms with different interfaces:
+cgroup v1とv2は、同じ基盤の仕組みを異なるインターフェースで公開している:
 
-| Control | v1 file | v2 file | Default |
+| 制御 | v1のファイル | v2のファイル | デフォルト |
 |---------|---------|---------|---------|
-| Weight | `cpu.shares` | `cpu.weight` | 1024 / 100 |
-| Bandwidth quota | `cpu.cfs_quota_us` | `cpu.max` (first field) | -1 (unlimited) |
-| Bandwidth period | `cpu.cfs_period_us` | `cpu.max` (second field) | 100000 µs |
-| Stats | `cpuacct.stat` + `cpu.stat` | `cpu.stat` | — |
+| 重み | `cpu.shares` | `cpu.weight` | 1024 / 100 |
+| 帯域のクォータ | `cpu.cfs_quota_us` | `cpu.max`（1番目のフィールド） | -1（無制限） |
+| 帯域の周期 | `cpu.cfs_period_us` | `cpu.max`（2番目のフィールド） | 100000 µs |
+| 統計 | `cpuacct.stat` + `cpu.stat` | `cpu.stat` | — |
 
-### Weight: shares vs weight {#weight-shares-vs-weight}
+### 重み: sharesとweight {#weight-shares-vs-weight}
 
-v1 `cpu.shares` and v2 `cpu.weight` differ in scale but map to the same kernel concept:
+v1の`cpu.shares`とv2の`cpu.weight`はスケールが異なるが、同じカーネルの概念に対応する:
 
 ```
 v2 weight = (v1 shares × 100) / 1024
 v1 shares = (v2 weight × 1024) / 100
 ```
 
-- v1 default: **1024 shares**
-- v2 default: **100 weight** (range: 1–10000)
+- v1のデフォルト: **1024 shares**
+- v2のデフォルト: **100 weight**（範囲: 1〜10000）
 
-Internally both set `task_group->shares` — the kernel always works in the v1 shares unit.
+内部的にはどちらも`task_group->shares`を設定する。カーネルは常にv1のshares単位で動作している。
 
 ```bash
-# v1: give group A twice the CPU of group B when both are busy
+# v1: 両方がビジーのとき、グループAにグループBの2倍のCPUを与える
 echo 2048 > /sys/fs/cgroup/cpu/groupA/cpu.shares
 echo 1024 > /sys/fs/cgroup/cpu/groupB/cpu.shares
 
-# v2: same, using weight
+# v2: 同じことをweightで行う
 echo 200 > /sys/fs/cgroup/groupA/cpu.weight
 echo 100 > /sys/fs/cgroup/groupB/cpu.weight
 ```
 
-### Bandwidth: quota/period vs cpu.max {#bandwidth-quotaperiod-vs-cpumax}
+### 帯域: quota/periodとcpu.max {#bandwidth-quotaperiod-vs-cpumax}
 
-v1 exposes quota and period as separate files; v2 combines them:
+v1はクォータと周期を別々のファイルとして公開し、v2はそれらを1つにまとめている:
 
 ```bash
-# v1: limit to 50% of one CPU (50ms every 100ms)
+# v1: 1 CPUの50%に制限する（100msごとに50ms）
 echo 50000  > /sys/fs/cgroup/cpu/mygroup/cpu.cfs_quota_us
 echo 100000 > /sys/fs/cgroup/cpu/mygroup/cpu.cfs_period_us
 
-# v2: same
+# v2: 同じ
 echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max
-# format: "quota period"
-# "max 100000" means unlimited (default)
+# 形式: "quota period"
+# "max 100000" は無制限を意味する（デフォルト）
 ```
 
-## The kernel structures {#the-kernel-structures}
+## カーネルの構造体 {#the-kernel-structures}
 
 ### struct task_group {#struct-task_group}
 
-Every cgroup maps to a `task_group` in the kernel:
+すべてのcgroupは、カーネル内の`task_group`に対応する:
 
 ```c
 // kernel/sched/sched.h
 struct task_group {
     struct cgroup_subsys_state css;
 
-    // One sched_entity and cfs_rq per CPU
+    // CPUごとに1つのsched_entityとcfs_rq
     struct sched_entity     **se;      // array[NR_CPUS]
     struct cfs_rq           **cfs_rq;  // array[NR_CPUS]
-    unsigned long             shares;  // weight (cpu.shares value)
+    unsigned long             shares;  // 重み（cpu.sharesの値）
 
-    // RT group scheduling (CONFIG_RT_GROUP_SCHED)
+    // RTグループスケジューリング（CONFIG_RT_GROUP_SCHED）
     struct sched_rt_entity  **rt_se;
     struct rt_rq            **rt_rq;
 
     struct task_group       *parent;
 
-    // CFS bandwidth (CONFIG_CFS_BANDWIDTH)
+    // CFS帯域（CONFIG_CFS_BANDWIDTH）
     struct cfs_bandwidth      cfs_bandwidth;
 };
 ```
 
-Each CPU has its own `sched_entity` representing the group in that CPU's CFS runqueue. This allows the group to be scheduled as a single unit relative to other groups and tasks on that CPU, then internally distribute time among its members.
+各CPUは、そのCPUのCFSランキュー内でグループを表す独自の`sched_entity`を持つ。これにより、グループはそのCPU上の他のグループやタスクに対して1つの単位としてスケジュールされ、その後、内部でメンバー間に時間を配分できる。
 
 ### struct cfs_bandwidth {#struct-cfs_bandwidth}
 
@@ -96,75 +96,75 @@ Each CPU has its own `sched_entity` representing the group in that CPU's CFS run
 // kernel/sched/sched.h
 struct cfs_bandwidth {
     raw_spinlock_t  lock;
-    ktime_t         period;         // bandwidth period
-    u64             quota;          // quota per period (ns)
-    u64             runtime;        // remaining runtime this period
-    u64             burst;          // allowed burst above quota
+    ktime_t         period;         // 帯域の周期
+    u64             quota;          // 周期あたりのクォータ（ns）
+    u64             runtime;        // この周期の残り実行時間
+    u64             burst;          // クォータを超えて許されるバースト
     s64             hierarchical_quota;
 
-    struct hrtimer  period_timer;   // fires at period end to refill
-    struct hrtimer  slack_timer;    // deferred unthrottle
-    struct list_head throttled_cfs_rq; // throttled per-CPU runqueues
+    struct hrtimer  period_timer;   // 周期の終わりに発火して補充する
+    struct hrtimer  slack_timer;    // 遅延されたスロットリング解除
+    struct list_head throttled_cfs_rq; // スロットリングされたCPUごとのランキュー
 
-    // Statistics
+    // 統計
     int             nr_periods;
     int             nr_throttled;
     u64             throttled_time;
 };
 ```
 
-## How bandwidth throttling works {#how-bandwidth-throttling-works}
+## 帯域スロットリングの仕組み {#how-bandwidth-throttling-works}
 
 ```mermaid
 flowchart TB
-    A["Task runs on CPU"]
-    B["update_curr() decrements cfs_rq->runtime"]
-    C{Runtime exhausted?}
-    D["throttle_cfs_rq()<br/>Task can't run — dequeued"]
-    E["period_timer fires<br/>__refill_cfs_bandwidth_runtime()"]
-    F["unthrottle_cfs_rq()<br/>Runtime refilled — re-enqueue"]
-    G["Task resumes"]
+    A["タスクがCPU上で実行される"]
+    B["update_curr()がcfs_rq->runtimeを減らす"]
+    C{"実行時間を使い切ったか？"}
+    D["throttle_cfs_rq()<br/>タスクは実行できない — デキューされる"]
+    E["period_timerが発火<br/>__refill_cfs_bandwidth_runtime()"]
+    F["unthrottle_cfs_rq()<br/>実行時間が補充される — 再エンキュー"]
+    G["タスクが再開する"]
 
     A --> B --> C
     C -->|No| A
     C -->|Yes| D --> E --> F --> G --> A
 ```
 
-### Distribution to CPUs {#distribution-to-cpus}
+### CPUへの配分 {#distribution-to-cpus}
 
-The global `cfs_b->runtime` budget is distributed to individual CPUs in slices:
+グローバルな`cfs_b->runtime`の予算は、スライス単位で個々のCPUに配分される:
 
 ```c
 // kernel/sched/fair.c
 static void assign_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 {
-    // Request a slice from the global pool
+    // グローバルプールからスライスを要求する
     __assign_cfs_rq_runtime(cfs_b, cfs_rq,
                              sched_cfs_bandwidth_slice());
-    // Default slice: 5ms (sysctl_sched_cfs_bandwidth_slice)
+    // デフォルトのスライス: 5ms（sysctl_sched_cfs_bandwidth_slice）
 }
 ```
 
-A CPU grabs a 5ms slice from the global pool. When the slice runs out, it requests another. If the global pool is exhausted (quota used up for this period), the CPU is throttled.
+CPUはグローバルプールから5msのスライスを取得する。スライスを使い切ると、別のスライスを要求する。グローバルプールが枯渇している（この周期のクォータを使い切った）場合、そのCPUはスロットリングされる。
 
-### Viewing throttling stats {#viewing-throttling-stats}
+### スロットリングの統計を見る {#viewing-throttling-stats}
 
 ```bash
-# Per-group bandwidth stats
+# グループごとの帯域の統計
 cat /sys/fs/cgroup/mygroup/cpu.stat
-# nr_periods         - how many bandwidth periods elapsed
-# nr_throttled       - how many periods were throttled
-# throttled_usec     - total time throttled (microseconds)
-# nr_bursts          - burst periods used
-# burst_usec         - total burst time
+# nr_periods         - 経過した帯域周期の数
+# nr_throttled       - スロットリングされた周期の数
+# throttled_usec     - スロットリングされた合計時間（マイクロ秒）
+# nr_bursts          - バーストを使った周期の数
+# burst_usec         - バーストの合計時間
 
-# Detect throttling in real time
+# スロットリングをリアルタイムに検出する
 watch -n 1 'cat /sys/fs/cgroup/mycontainer/cpu.stat | grep throttled'
 ```
 
-## Group scheduling hierarchy {#group-scheduling-hierarchy}
+## グループスケジューリングの階層 {#group-scheduling-hierarchy}
 
-With `CONFIG_FAIR_GROUP_SCHED`, CFS builds a two-level hierarchy:
+`CONFIG_FAIR_GROUP_SCHED`を有効にすると、CFSは2段階の階層を構築する:
 
 ```
 Top-level CFS runqueue
@@ -177,49 +177,49 @@ Top-level CFS runqueue
         └── task3 (weight=1024)
 ```
 
-Group A gets 2000/(2000+1000) = 67% of CPU. Within A, task1 gets 2/3 and task2 gets 1/3 of A's share.
+グループAはCPUの2000/(2000+1000) = 67%を得る。A内では、task1がAの取り分の2/3を、task2が1/3を得る。
 
-This nesting allows containers to have isolated CPU allocations while tasks within a container compete fairly among themselves.
+この入れ子構造により、コンテナは隔離されたCPU割り当てを持ちつつ、コンテナ内のタスクは互いに公平に競合できる。
 
-## v1 vs v2: key behavioral differences {#v1-vs-v2-key-behavioral-differences}
+## v1とv2: 挙動上の主な違い {#v1-vs-v2-key-behavioral-differences}
 
-**Hierarchical bandwidth (v2 only)**: In v2, a child cgroup's effective quota is the minimum of its own quota and its ancestors' quotas. In v1, cgroup bandwidth is per-cgroup, not inherited.
+**階層的な帯域（v2のみ）**: v2では、子cgroupの実効クォータは、自身のクォータと祖先のクォータの最小値である。v1では、cgroupの帯域はcgroupごとであり、継承されない。
 
-**Unified controller (v2)**: v2 uses a single unified hierarchy — you can't mount cpu and cpuacct separately. Both are always enabled together.
+**統合コントローラ（v2）**: v2は単一の統合階層を使う。cpuとcpuacctを別々にマウントすることはできない。両者は常に一緒に有効になる。
 
-**Weight range**: v1 shares: 2–262144. v2 weight: 1–10000. The effective range is the same proportionally.
+**重みの範囲**: v1のshares: 2〜262144。v2のweight: 1〜10000。実効的な範囲は比率としては同じである。
 
-## Practical examples {#practical-examples}
+## 実践例 {#practical-examples}
 
-### Container CPU limits (v2) {#container-cpu-limits-v2}
+### コンテナのCPU制限（v2） {#container-cpu-limits-v2}
 
 ```bash
-# Create a cgroup for a container
+# コンテナ用のcgroupを作成する
 mkdir /sys/fs/cgroup/containers/mycontainer
 
-# Give it 2 CPUs worth of quota (200ms every 100ms)
+# 2 CPU分のクォータを与える（100msごとに200ms）
 echo "200000 100000" > /sys/fs/cgroup/containers/mycontainer/cpu.max
 
-# Give it weight 200 (2x default)
+# 重み200（デフォルトの2倍）を与える
 echo 200 > /sys/fs/cgroup/containers/mycontainer/cpu.weight
 
-# Add a process
+# プロセスを追加する
 echo $PID > /sys/fs/cgroup/containers/mycontainer/cgroup.procs
 ```
 
-### Detecting CPU throttling {#detecting-cpu-throttling}
+### CPUスロットリングの検出 {#detecting-cpu-throttling}
 
 ```bash
-# Check if your container is being throttled
+# 自分のコンテナがスロットリングされているか確認する
 cat /sys/fs/cgroup/$(cat /proc/self/cgroup | grep cpu | cut -d: -f3)/cpu.stat | \
     awk '/throttled/ {print $0}'
 
-# With cgroup v1
+# cgroup v1の場合
 cat /sys/fs/cgroup/cpu/$(cat /proc/self/cgroup | grep ^7 | cut -d: -f3)/cpu.stat
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [CPU Bandwidth Control](cpu-bandwidth.md) — Deep dive into CFS bandwidth mechanics
-- [cpuset](cpuset.md) — Restricting which CPUs and NUMA nodes a cgroup can use
-- [Scheduler Classes](scheduler-classes.md) — How group scheduling fits into the class hierarchy
+- [CPU帯域制御](cpu-bandwidth.md) — CFS帯域の仕組みの詳細
+- [cpuset](cpuset.md) — cgroupが使えるCPUとNUMAノードの制限
+- [スケジューラクラス](scheduler-classes.md) — グループスケジューリングがクラス階層にどう収まるか

@@ -1,32 +1,32 @@
-# Syscall War Stories {#syscall-war-stories}
+# syscallの事件簿 {#syscall-war-stories}
 
-> Real bugs, ABI breaks, and lessons from the syscall interface
+> syscallインターフェースにまつわる実際のバグ、ABI破壊、教訓
 
-These incidents are drawn from real Linux kernel development history. Each one illustrates a constraint or
-hazard that is not obvious until you hit it in production.
+これらの事例は、実際のLinuxカーネル開発の歴史から取ったものである。いずれも、本番環境で遭遇するまでは
+明らかにならない制約や危険を示している。
 
-## The time_t overflow (Y2038) {#the-time_t-overflow-y2038}
+## time_tのオーバーフロー（Y2038） {#the-time_t-overflow-y2038}
 
-### Background {#background}
+### 背景 {#background}
 
-The original `stat()` syscall (and `time()`, `select()`, `utime()`, and many others) stored timestamps as
-`time_t`, which on 32-bit architectures is a signed 32-bit integer. A 32-bit `time_t` overflows on
-**January 19, 2038 at 03:14:07 UTC**. At that moment, the value wraps to a large negative number,
-representing a time in 1901.
+元の `stat()` syscall（および `time()`、`select()`、`utime()` など多数）は、タイムスタンプを
+`time_t` として格納していた。これは32ビットアーキテクチャでは符号付き32ビット整数である。32ビットの `time_t` は
+**2038年1月19日 03:14:07 UTC** にオーバーフローする。その瞬間、値は大きな負の数に折り返し、
+1901年の時刻を表すことになる。
 
-### What the kernel did {#what-the-kernel-did}
+### カーネルが行ったこと {#what-the-kernel-did}
 
-Adding `stat64()` and `lstat64()` helped 32-bit architectures get 64-bit file sizes, but the time fields
-in `struct stat64` on 32-bit Linux still used 32-bit `time_t`. The real fix required new syscalls with
-genuinely 64-bit timestamps throughout.
+`stat64()` と `lstat64()` の追加により、32ビットアーキテクチャでも64ビットのファイルサイズを扱えるようになったが、32ビットLinuxの
+`struct stat64` の時刻フィールドは依然として32ビットの `time_t` を使っていた。本当の修正には、
+全体を通して真に64ビットのタイムスタンプを持つ新しいsyscallが必要だった。
 
-Linux 4.11 (2017) added `statx()` (`fs/stat.c`, commit [`a528d35e8bfc`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f)), which uses `struct statx_timestamp`
-with a 64-bit `tv_sec`:
+Linux 4.11（2017年）は `statx()`（`fs/stat.c`、コミット [`a528d35e8bfc`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f)）を追加した。これは
+64ビットの `tv_sec` を持つ `struct statx_timestamp` を使う。
 
 ```c
 /* include/uapi/linux/stat.h */
 struct statx_timestamp {
-    __s64   tv_sec;    /* always 64-bit */
+    __s64   tv_sec;    /* 常に64ビット */
     __u32   tv_nsec;
     __s32   __reserved;
 };
@@ -41,54 +41,54 @@ struct statx {
 };
 ```
 
-But `statx()` alone was not enough. Any 32-bit architecture (ARM, MIPS, x86 with `CONFIG_IA32_EMULATION`)
-that called `clock_gettime()`, `select()`, `ppoll()`, `nanosleep()`, or `pselect6()` still passed 32-bit
-`struct timespec` fields, which overflow in 2038.
+しかし `statx()` だけでは不十分だった。`clock_gettime()`、`select()`、`ppoll()`、`nanosleep()`、`pselect6()` を呼ぶ
+32ビットアーキテクチャ（ARM、MIPS、`CONFIG_IA32_EMULATION` 付きのx86）はどれも、依然として32ビットの
+`struct timespec` フィールドを渡しており、これは2038年にオーバーフローする。
 
-Linux 5.1 added a family of `_time64` variants for 32-bit architectures:
-`clock_gettime64`, `clock_settime64`, `clock_adjtime64`, `clock_getres_time64`, `pselect6_time64`,
-`ppoll_time64`, `io_pgetevents_time64`, `utimensat_time64`, and several more — over 20 new syscalls just
-to fix the time type.
+Linux 5.1は、32ビットアーキテクチャ向けに一連の `_time64` 版を追加した。
+`clock_gettime64`、`clock_settime64`、`clock_adjtime64`、`clock_getres_time64`、`pselect6_time64`、
+`ppoll_time64`、`io_pgetevents_time64`、`utimensat_time64` などである — 時刻の型を直すためだけに
+20を超える新しいsyscallが追加された。
 
-### The lesson {#the-lesson}
+### 教訓 {#the-lesson}
 
-ABI decisions made in the 1970s (when `time_t` was sized for the hardware of the day) propagated for
-50 years. The fix required a coordinated effort across glibc, musl, the kernel, and every toolchain
-targeting 32-bit Linux. The syscall ABI is effectively permanent — there is no mechanism to change a
-struct field's width once it is in a shipped kernel. New syscalls are the only recourse.
+1970年代に下されたABIの判断（当時のハードウェアに合わせて `time_t` のサイズが決められた）は、50年にわたって
+引き継がれた。修正には、glibc、musl、カーネル、そして32ビットLinuxをターゲットとするすべてのツールチェーンにまたがる
+協調的な取り組みが必要だった。syscall ABIは事実上永続的である — 出荷済みのカーネルに入った構造体フィールドの幅を
+変更する仕組みは存在しない。新しいsyscallが唯一の手段である。
 
-If you define a new syscall today with a 32-bit timestamp or a 32-bit offset, you are writing the next
-Y2038.
+今日、32ビットのタイムスタンプや32ビットのオフセットを持つ新しいsyscallを定義すれば、それは次の
+Y2038を書いていることになる。
 
 ---
 
-## The futex ABI hash collision {#the-futex-abi-hash-collision}
+## futex ABIのハッシュ衝突 {#the-futex-abi-hash-collision}
 
-### Background {#background_1}
+### 背景 {#background_1}
 
-`futex()` was added in Linux 2.5.7 as a fast user-space mutex. The kernel uses the futex's address as a
-hash key to find waiters: `futex_wait(addr, val)` adds the current task to a wait queue keyed on `addr`.
-`futex_wake(addr, n)` finds waiters on `addr` and wakes them.
+`futex()` は高速なユーザー空間mutexとしてLinux 2.5.7で追加された。カーネルはfutexのアドレスを
+ハッシュキーとして使い、待機者を見つける。`futex_wait(addr, val)` は現在のタスクを `addr` をキーとする待ちキューに追加する。
+`futex_wake(addr, n)` は `addr` の待機者を見つけて起こす。
 
-### The bug {#the-bug}
+### バグ {#the-bug}
 
-The early implementation keyed on the **virtual** address. Two processes that shared a memory-mapped region
-(via `mmap(MAP_SHARED)` or a shared anonymous mapping) could both call `futex_wait()` on what was the same
-physical memory location, but with different virtual addresses. The hash lookup used the virtual address, so
-the waiter and the waker were in different wait queues — the wake had no effect, and the waiter slept
-forever.
+初期の実装は**仮想**アドレスをキーにしていた。メモリマップ領域を共有する2つのプロセス
+（`mmap(MAP_SHARED)` や共有匿名マッピングによる）は、同じ物理メモリ位置に対して、異なる仮想アドレスで
+`futex_wait()` を呼ぶことがありえた。ハッシュの検索には仮想アドレスが使われたため、
+待機者と起床者は別々の待ちキューに入り — 起床は何の効果も持たず、待機者は永遠に
+スリープした。
 
-### The fix {#the-fix}
+### 修正 {#the-fix}
 
-The fix was to key shared futexes on the identity of the underlying object — an inode sequence number,
-combined with the page offset — rather than on the virtual address at all. The kernel now computes a
-`union futex_key`:
+修正は、共有futexのキーを仮想アドレスにまったく依存させず、基盤となるオブジェクトの同一性 — inodeのシーケンス番号と
+ページオフセットの組み合わせ — にすることだった。カーネルは現在、
+`union futex_key` を計算する。
 
 ```c
 /* include/linux/futex.h */
 union futex_key {
     struct {
-        u64           i_seq;   /* inode sequence number (for file-backed) */
+        u64           i_seq;   /* inodeのシーケンス番号（ファイルバックの場合） */
         unsigned long pgoff;
         unsigned int  offset;
     } shared;
@@ -108,80 +108,80 @@ union futex_key {
 };
 ```
 
-For shared mappings, `get_futex_key()` derives the key from the backing inode's sequence number and the
-page's offset within that file — an identity that's the same no matter which process's virtual address
-space maps the page. Private mappings (anonymous, `MAP_PRIVATE`) key on the virtual address plus the
-`mm_struct` pointer, which uniquely identifies the mapping within a process.
+共有マッピングでは、`get_futex_key()` はバックするinodeのシーケンス番号と、そのファイル内での
+ページのオフセットからキーを導出する — これは、どのプロセスの仮想アドレス空間がそのページをマップしていても
+同じになる同一性である。プライベートマッピング（匿名、`MAP_PRIVATE`）は、仮想アドレスと
+`mm_struct` ポインタをキーにする。これでプロセス内のマッピングが一意に識別される。
 
-### The lesson {#the-lesson_1}
+### 教訓 {#the-lesson_1}
 
-The syscall ABI looked correct: `futex(addr, FUTEX_WAIT, val, timeout)` is a reasonable interface. The
-bug was in the implementation's semantics — the kernel's notion of "same futex" did not match the user's
-notion of "same location in shared memory." Fixing it without changing the syscall number was possible
-because the fix was purely internal. But had the wrong behavior been in the specification rather than the
-implementation, a new syscall would have been required.
+syscall ABIは正しく見えた。`futex(addr, FUTEX_WAIT, val, timeout)` は妥当なインターフェースである。
+バグは実装のセマンティクスにあった — カーネルの「同じfutex」という概念が、ユーザーの
+「共有メモリ内の同じ位置」という概念と一致していなかったのである。修正が純粋に内部的なものだったため、
+syscall番号を変えずに直すことができた。しかし誤った挙動が実装ではなく仕様にあったなら、
+新しいsyscallが必要になっていただろう。
 
-Shared-memory IPC semantics — especially anything involving equality of addresses or object identity
-across process boundaries — must be defined in terms of physical or file identity, not virtual addresses.
+共有メモリIPCのセマンティクス — 特に、プロセス境界をまたいだアドレスの等価性やオブジェクトの同一性に関わるもの —
+は、仮想アドレスではなく、物理的な同一性やファイルの同一性によって定義されなければならない。
 
 ---
 
-## The clone vs fork CLONE_FILES fd sharing {#the-clone-vs-fork-clone_files-fd-sharing}
+## cloneとforkにおけるCLONE_FILESのfd共有 {#the-clone-vs-fork-clone_files-fd-sharing}
 
-### Background {#background_2}
+### 背景 {#background_2}
 
-`clone(CLONE_FILES)` creates a new task that shares the parent's file descriptor table. Both tasks see the
-same `struct files_struct`, so an `open()` in one is immediately visible as an `fd` in the other. This is
-how `pthread_create()` works: threads share file descriptors.
+`clone(CLONE_FILES)` は、親のファイルディスクリプタテーブルを共有する新しいタスクを作成する。両方のタスクが
+同じ `struct files_struct` を参照するため、一方での `open()` は、もう一方からも直ちに `fd` として見える。これが
+`pthread_create()` の動作の仕組みである。スレッドはファイルディスクリプタを共有する。
 
-### The hazard {#the-hazard}
+### 危険 {#the-hazard}
 
-A program created a thread via `clone(CLONE_FILES | CLONE_VM | CLONE_THREAD | SIGCHLD)` and used the
-following pattern:
+あるプログラムは `clone(CLONE_FILES | CLONE_VM | CLONE_THREAD | SIGCHLD)` でスレッドを作成し、
+次のパターンを使っていた。
 
 ```c
-/* Thread: opens a file and returns the fd to the parent via a pipe */
+/* スレッド: ファイルを開き、パイプ経由で親に fd を返す */
 int fd = open("/some/file", O_RDONLY);
 write(notify_pipe[1], &fd, sizeof(fd));
 
-/* Parent: reads the fd and closes it when done */
+/* 親: fd を読み取り、使い終わったら閉じる */
 int fd;
 read(notify_pipe[0], &fd, sizeof(fd));
-/* ... use fd ... */
+/* ... fd を使う ... */
 close(fd);
 ```
 
-This worked reliably. Then `O_CLOEXEC` became widespread. The thread started opening files with
-`O_CLOEXEC` for safety. The problem: `O_CLOEXEC` is set per-file-description (in `struct file`), not
-per-descriptor. When the parent process called `execve()` — for a completely different reason, in a
-different thread — the kernel closed all `O_CLOEXEC` file descriptors in the shared table. The fd the
-parent was about to use was silently closed.
+これは確実に動作していた。その後、`O_CLOEXEC` が広く使われるようになった。スレッドは安全のために
+`O_CLOEXEC` 付きでファイルを開くようになった。問題は、`O_CLOEXEC` がファイル記述（`struct file`）単位で設定され、
+ディスクリプタ単位ではないことだった。親プロセスが — まったく別の理由で、別の
+スレッドで — `execve()` を呼ぶと、カーネルは共有テーブル内の `O_CLOEXEC` ファイルディスクリプタをすべて閉じた。
+親が使おうとしていたfdは、知らないうちに閉じられていた。
 
-A further subtle issue: `dup2(oldfd, newfd)` across threads sharing `CLONE_FILES` is not atomic. The
-kernel must hold `files->file_lock` during the operation, but if another thread calls `close(newfd)` between
-the validity check and the installation, the behavior is undefined. The `POSIX_SPAWN_FILE_ACTIONS_ADDDUP2`
-interface was specifically designed to avoid this by serializing at a higher level.
+さらに微妙な問題がある。`CLONE_FILES` を共有するスレッド間での `dup2(oldfd, newfd)` はアトミックではない。
+カーネルは操作中に `files->file_lock` を保持しなければならないが、別のスレッドが有効性チェックと
+インストールの間に `close(newfd)` を呼ぶと、挙動は未定義になる。`POSIX_SPAWN_FILE_ACTIONS_ADDDUP2`
+インターフェースは、より高いレベルで直列化することでこれを回避するよう特別に設計された。
 
-### The lesson {#the-lesson_2}
+### 教訓 {#the-lesson_2}
 
-`CLONE_FILES` threads must treat all fd operations as shared-memory operations: any close, dup, or
-`execve` in any thread immediately affects all threads. Using `O_CLOEXEC` on fds you intend to share
-across a `CLONE_FILES` boundary with a subsequent `execve` is a logic error. The correct pattern is to
-not share the fd table (`CLONE_FILES` without `CLONE_THREAD`) when fd lifecycle is managed across threads.
+`CLONE_FILES` スレッドは、すべてのfd操作を共有メモリ操作として扱わなければならない。どのスレッドでのclose、dup、
+`execve` も、直ちにすべてのスレッドに影響する。後で `execve` を行うのに、`CLONE_FILES` の境界をまたいで共有するつもりの
+fdに `O_CLOEXEC` を使うのは論理的な誤りである。fdのライフサイクルをスレッド間で管理する場合の正しいパターンは、
+fdテーブルを共有しないこと（`CLONE_THREAD` なしの `CLONE_FILES`）である。
 
 ---
 
-## The EINTR surprise {#the-eintr-surprise}
+## EINTRの不意打ち {#the-eintr-surprise}
 
-### Background {#background_3}
+### 背景 {#background_3}
 
-`poll()`, `select()`, `read()`, and most blocking syscalls return `-1` with `errno == EINTR` when
-interrupted by a signal. This is documented, well-known, and still causes production bugs regularly.
+`poll()`、`select()`、`read()` をはじめ、ほとんどのブロッキングsyscallは、シグナルによって中断されると
+`errno == EINTR` で `-1` を返す。これは文書化されており、よく知られているが、それでも本番環境のバグを頻繁に引き起こしている。
 
-### The incident {#the-incident}
+### インシデント {#the-incident}
 
-A long-running daemon used `poll()` with a multi-minute timeout to wait for network events. It installed
-a `SIGTERM` handler to initiate graceful shutdown:
+長時間稼働するデーモンが、数分のタイムアウト付きの `poll()` でネットワークイベントを待っていた。デーモンは
+グレースフルシャットダウンを開始するために `SIGTERM` ハンドラをインストールしていた。
 
 ```c
 void sigterm_handler(int sig)
@@ -197,21 +197,21 @@ int main(void)
     while (!shutdown_requested) {
         int ret = poll(fds, nfds, TIMEOUT_MS);
         if (ret < 0) {
-            perror("poll");  /* logs "Interrupted system call" and exits */
+            perror("poll");  /* "Interrupted system call" をログに出して終了する */
             exit(1);
         }
-        /* handle events */
+        /* イベントを処理する */
     }
 }
 ```
 
-When `SIGTERM` arrived during `poll()`, the handler ran, set `shutdown_requested = 1`, and returned.
-`poll()` then returned `-1` with `errno == EINTR`. The daemon treated any negative return from `poll()` as
-fatal and called `exit(1)` — bypassing the graceful shutdown it had carefully implemented.
+`poll()` 中に `SIGTERM` が届くと、ハンドラが実行され、`shutdown_requested = 1` を設定して戻った。
+その後 `poll()` は `errno == EINTR` で `-1` を返した。デーモンは `poll()` からの負の戻り値をすべて
+致命的とみなして `exit(1)` を呼んだ — 入念に実装したグレースフルシャットダウンを迂回してしまったのである。
 
-### The fix and the subtlety {#the-fix-and-the-subtlety}
+### 修正と微妙な点 {#the-fix-and-the-subtlety}
 
-The obvious fix is to check for `EINTR` and retry:
+明白な修正は、`EINTR` をチェックしてリトライすることである。
 
 ```c
 do {
@@ -219,7 +219,7 @@ do {
 } while (ret < 0 && errno == EINTR && !shutdown_requested);
 ```
 
-The less obvious fix is `SA_RESTART`:
+それほど明白でない修正は `SA_RESTART` である。
 
 ```c
 struct sigaction sa = {
@@ -228,98 +228,98 @@ struct sigaction sa = {
 };
 ```
 
-With `SA_RESTART`, the kernel automatically restarts certain slow syscalls after the signal handler
-returns, without returning `EINTR`. The interaction with `poll()` is subtler than it appears:
+`SA_RESTART` があると、カーネルは一部の低速なsyscallを、シグナルハンドラが戻った後に `EINTR` を返さずに
+自動的に再開する。`poll()` との相互作用は、見かけよりも微妙である。
 
-Since Linux 2.6.24, `poll()` returns `ERESTART_RESTARTBLOCK` when interrupted by a signal (not
-`ERESTARTSYS`). The `ERESTART_RESTARTBLOCK` mechanism causes the kernel to restart the syscall via
-`restart_syscall()`, adjusting the timeout to reflect elapsed time. This is transparent to userspace —
-`poll()` does not return `EINTR` to the process; it restarts automatically. `SA_RESTART` does not control
-this path (it only controls `ERESTARTSYS`), but the net effect is the same: `poll()` is restarted.
+Linux 2.6.24以降、`poll()` はシグナルで中断されると（`ERESTARTSYS` ではなく）`ERESTART_RESTARTBLOCK`
+を返す。`ERESTART_RESTARTBLOCK` の仕組みにより、カーネルは経過時間を反映してタイムアウトを調整し、
+`restart_syscall()` を介してsyscallを再開する。これはユーザー空間からは透過的である —
+`poll()` はプロセスに `EINTR` を返さず、自動的に再開する。`SA_RESTART` はこのパスを制御しない
+（制御するのは `ERESTARTSYS` だけ）が、最終的な効果は同じで、`poll()` は再開される。
 
-The syscalls that genuinely always return `EINTR` are those that use `ERESTARTNOHAND` (like `epoll_wait()`)
-— these return `EINTR` when any signal handler runs, even with `SA_RESTART`. In the incident above, the
-EINTR issue would arise from `epoll_wait()` or a pre-2.6.24 kernel's `poll()`, not modern `poll()`.
+本当に常に `EINTR` を返すsyscallは、`ERESTARTNOHAND` を使うもの（`epoll_wait()` など）である
+— これらは `SA_RESTART` があっても、シグナルハンドラが実行されれば `EINTR` を返す。上のインシデントでは、
+EINTRの問題は現代の `poll()` ではなく、`epoll_wait()` か2.6.24より前のカーネルの `poll()` で生じたはずである。
 
-Syscalls that **are** restarted by `SA_RESTART`: `read()`, `write()`, `wait()`, `ioctl()` (device),
-`flock()`.
+`SA_RESTART` によって再開**される**syscall: `read()`、`write()`、`wait()`、`ioctl()`（デバイス）、
+`flock()`。
 
-Syscalls that use `ERESTART_RESTARTBLOCK` (restart via `restart_syscall()`, not controlled by
-`SA_RESTART`): `poll()`, `select()`, `nanosleep()`.
+`ERESTART_RESTARTBLOCK` を使う（`SA_RESTART` の制御を受けず、`restart_syscall()` を介して再開する）syscall:
+`poll()`、`select()`、`nanosleep()`。
 
-Syscalls that are **not** restarted even with `SA_RESTART`: `epoll_wait()` and others using
-`ERESTARTNOHAND`, which always return `EINTR` when any signal handler runs.
+`SA_RESTART` があっても再開**されない**syscall: `epoll_wait()` など `ERESTARTNOHAND` を使うもの。
+これらはシグナルハンドラが実行されると常に `EINTR` を返す。
 
-The correct production pattern for daemons: use `signalfd()` or `pselect()`/`ppoll()` with a signal mask.
-`ppoll()` and `pselect6()` atomically install a signal mask and then wait, closing the race window between
-unblocking the signal and entering the wait.
+デーモンにとって正しい本番向けのパターンは、`signalfd()`、あるいはシグナルマスク付きの `pselect()`/`ppoll()` を使うことである。
+`ppoll()` と `pselect6()` はシグナルマスクのインストールと待機をアトミックに行い、シグナルのブロック解除から
+待機に入るまでの間の競合ウィンドウを塞ぐ。
 
 ---
 
-## The syscall number collision on a new architecture {#the-syscall-number-collision-on-a-new-architecture}
+## 新アーキテクチャでのsyscall番号の衝突 {#the-syscall-number-collision-on-a-new-architecture}
 
-### Background {#background_4}
+### 背景 {#background_4}
 
-RISC-V was officially merged into the Linux kernel in version 4.15 (2018). It uses the generic syscall
-table from `include/uapi/asm-generic/unistd.h` rather than a hand-maintained architecture-specific table.
-Syscall numbers are assigned sequentially as new syscalls are merged upstream.
+RISC-Vは、バージョン4.15（2018年）で正式にLinuxカーネルにマージされた。RISC-Vは、手作業で保守されるアーキテクチャ固有のテーブルではなく、
+`include/uapi/asm-generic/unistd.h` の汎用syscallテーブルを使う。
+syscall番号は、新しいsyscallがアップストリームにマージされるたびに順番に割り当てられる。
 
-### The incident {#the-incident_1}
+### インシデント {#the-incident_1}
 
-A semiconductor vendor shipped a downstream kernel for a RISC-V SoC that needed a custom interface to
-control proprietary hardware accelerator firmware. Rather than use an `ioctl()` or `netlink` interface,
-an engineer added a new out-of-tree syscall in the downstream tree:
+ある半導体ベンダーが、独自のハードウェアアクセラレータのファームウェアを制御するためのカスタムインターフェースを必要とする
+RISC-V SoC向けに、ダウンストリームカーネルを出荷した。`ioctl()` や `netlink` のインターフェースを使う代わりに、
+あるエンジニアがダウンストリームのツリーに新しいツリー外syscallを追加した。
 
 ```c
-/* vendor/downstream kernel: kernel/vendor_accel.c */
-/* Added at number 451 — the next available number at the time of the fork */
+/* ベンダー/ダウンストリームカーネル: kernel/vendor_accel.c */
+/* 451番に追加 — フォーク時点で次に空いていた番号 */
 SYSCALL_DEFINE3(vendor_accel_submit, ...)
 ```
 
-Downstream userspace tools and the accelerator SDK hard-coded `#define __NR_vendor_accel_submit 451` and
-were shipped in firmware images to end customers.
+ダウンストリームのユーザー空間ツールとアクセラレータSDKは `#define __NR_vendor_accel_submit 451` をハードコードしており、
+ファームウェアイメージに入れてエンドユーザーに出荷された。
 
-Linux 5.16 (released upstream in January 2022) added `futex_waitv()` at syscall number 449, and subsequent
-releases assigned 450 and 451 to `set_mempolicy_home_node` (5.17) and `cachestat` (6.5) respectively.
-Customers who attempted to run the vendor's userspace tools on an upstream or distribution kernel got
-incorrect behavior: calling syscall 451 invoked a completely different kernel function.
+Linux 5.16（2022年1月にアップストリームでリリース）はsyscall番号449に `futex_waitv()` を追加し、その後の
+リリースで450と451がそれぞれ `set_mempolicy_home_node`（5.17）と `cachestat`（6.5）に割り当てられた。
+ベンダーのユーザー空間ツールをアップストリームやディストリビューションのカーネルで動かそうとした顧客は、
+誤った挙動に遭遇した。syscall 451を呼ぶと、まったく別のカーネル関数が呼び出されたのである。
 
-Because the vendor's downstream branched before `futex_waitv` was merged, their numbering was offset from
-upstream. The collision was not detectable until customers started mixing vendor-provided userspace with
-upstream kernels.
+ベンダーのダウンストリームは `futex_waitv` がマージされる前に分岐していたため、その番号付けは
+アップストリームからずれていた。この衝突は、顧客がベンダー提供のユーザー空間とアップストリームのカーネルを
+混在させ始めるまで検出できなかった。
 
-### The lesson {#the-lesson_3}
+### 教訓 {#the-lesson_3}
 
-Out-of-tree syscall numbers in production are a time bomb. The kernel's syscall number space is a global
-namespace managed by the upstream `MAINTAINERS` process. Assigning a number in a downstream tree with the
-intent to merge later creates a collision risk that grows with every kernel release cycle.
+本番環境でのツリー外syscall番号は時限爆弾である。カーネルのsyscall番号空間は、アップストリームの
+`MAINTAINERS` プロセスが管理するグローバルな名前空間である。後でマージするつもりでダウンストリームのツリーで番号を割り当てると、
+カーネルのリリースサイクルを重ねるごとに大きくなる衝突リスクを生む。
 
-The correct path for vendor-specific interfaces:
-1. Use `ioctl()` on a character device — ioctl command numbers are per-device and don't collide globally.
-2. Use `netlink` (for networking and system configuration) or `sysfs` (for device attributes).
-3. If a genuine new syscall is needed, submit it upstream and wait for an assigned number before shipping
-   userspace that hard-codes the number.
+ベンダー固有のインターフェースの正しい道筋:
+1. キャラクタデバイスに対する `ioctl()` を使う — ioctlのコマンド番号はデバイスごとであり、グローバルには衝突しない。
+2. `netlink`（ネットワークとシステム設定の場合）や `sysfs`（デバイス属性の場合）を使う。
+3. 本当に新しいsyscallが必要なら、アップストリームに提出し、番号が割り当てられるのを待ってから、
+   その番号をハードコードしたユーザー空間を出荷する。
 
-The `seccomp-notify` mechanism (see [ptrace and Syscall Interception](ptrace-interception.md)) is also an
-option for implementing custom syscall-like interfaces in a privileged supervisor without any kernel
-modification.
+`seccomp-notify` の仕組み（[ptraceとsyscallのインターセプト](ptrace-interception.md)を参照）も、
+カーネルを一切変更せずに、特権を持つスーパーバイザ内でsyscall風のカスタムインターフェースを実装するための
+選択肢となる。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [SYSCALL_DEFINE and Dispatch](syscall-define.md) — ABI stability guarantees and struct-based syscalls
-- [32-bit Compat Syscalls](compat.md) — the 32-bit ABI machinery (`compat_stat`'s 32-bit time fields among them) that the Y2038 fix had to work around
-- [Syscall Restart Mechanisms](restart-block.md) — ERESTARTSYS, ERESTART_RESTARTBLOCK, and restart_syscall() in full, the mechanism behind the EINTR story above
-- [Signals](../ipc/signals.md) — signal delivery, `sigaction`, and `SA_RESTART` semantics behind the EINTR story above
-- [Futex Internals](../locking/futex.md) — how futex_wait()/futex_wake() and futex key hashing work today
-- [ptrace and Syscall Interception](ptrace-interception.md) — seccomp-notify as an alternative to custom syscalls
-- [Adding a New Syscall](adding-syscall.md) — The right way to add a syscall and avoid the pitfalls above
-- [kernel/futex/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/futex/core.c) — `get_futex_key()`: keys on the `mm_struct` pointer and address for private futexes, or an inode sequence number and page offset for shared ones — not a physical address
+- [SYSCALL_DEFINEとディスパッチ](syscall-define.md) — ABIの安定性の保証と構造体ベースのsyscall
+- [32ビット互換syscall](compat.md) — Y2038の修正が回避しなければならなかった32ビットABIの仕組み（`compat_stat` の32ビット時刻フィールドなど）
+- [syscallの再開メカニズム](restart-block.md) — ERESTARTSYS、ERESTART_RESTARTBLOCK、restart_syscall() の全容。上のEINTRの話の背景にある仕組み
+- [シグナル](../ipc/signals.md) — シグナル配送、`sigaction`、そして上のEINTRの話の背景にある `SA_RESTART` のセマンティクス
+- [futexの内部](../locking/futex.md) — futex_wait()/futex_wake() とfutexキーのハッシュが現在どう動作するか
+- [ptraceとsyscallのインターセプト](ptrace-interception.md) — カスタムsyscallの代替としてのseccomp-notify
+- [新しいsyscallの追加](adding-syscall.md) — 上の落とし穴を避けてsyscallを追加する正しい方法
+- [kernel/futex/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/futex/core.c) — `get_futex_key()`: プライベートfutexでは `mm_struct` ポインタとアドレスを、共有futexではinodeのシーケンス番号とページオフセットをキーにする — 物理アドレスではない
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [git.kernel.org: a528d35e8bfc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f) — "statx: Add a system call to make enhanced file info available," David Howells, merged for Linux 4.11 (fs/stat.c)
-- [git.kernel.org: 3075d9da0b4c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3075d9da0b4ccc88959db30de80ebd11d2dde175) — "Use ERESTART_RESTARTBLOCK if poll() is interrupted by a signal," the fs/select.c change (merged for Linux 2.6.24) behind the EINTR story's central claim about `poll()`
-- [Kernel documentation: ktime accessors](https://docs.kernel.org/core-api/timekeeping.html) — "Deprecated time interfaces" section: "all interfaces returning a 'struct timeval' or 'struct timespec' have been replaced because the tv_sec member overflows in year 2038 on 32-bit architectures"
-- [Kernel documentation: Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — upstream guidance on syscall numbering ("these numbers are liable to be changed if there are conflicts in the relevant merge window") and on preferring ioctl/sysfs/other interfaces over new syscalls
+- [git.kernel.org: a528d35e8bfc](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a528d35e8bfcc521d7cb70aaf03e1bd296c8493f) — "statx: Add a system call to make enhanced file info available"、David Howells、Linux 4.11向けにマージ（fs/stat.c）
+- [git.kernel.org: 3075d9da0b4c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3075d9da0b4ccc88959db30de80ebd11d2dde175) — "Use ERESTART_RESTARTBLOCK if poll() is interrupted by a signal"。EINTRの話の中心にある `poll()` についての主張の根拠となる fs/select.c の変更（Linux 2.6.24向けにマージ）
+- [カーネルドキュメント: ktime accessors](https://docs.kernel.org/core-api/timekeeping.html) — "Deprecated time interfaces" の節: "all interfaces returning a 'struct timeval' or 'struct timespec' have been replaced because the tv_sec member overflows in year 2038 on 32-bit architectures"（訳: 'struct timeval' や 'struct timespec' を返すインターフェースはすべて置き換えられた。32ビットアーキテクチャでは tv_sec メンバーが2038年にオーバーフローするためである）
+- [カーネルドキュメント: Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — syscallの番号付けについてのアップストリームのガイダンス（"these numbers are liable to be changed if there are conflicts in the relevant merge window"）と、新しいsyscallよりもioctl/sysfsなどのインターフェースを優先すべきことについて

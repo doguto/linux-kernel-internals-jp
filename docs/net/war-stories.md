@@ -1,69 +1,69 @@
-# War Stories: Network Stack Bugs and CVEs {#war-stories-network-stack-bugs-and-cves}
+# 事件簿: ネットワークスタックのバグとCVE {#war-stories-network-stack-bugs-and-cves}
 
-> Real vulnerabilities and production incidents from Linux networking history — what broke, why, and what the kernel learned
+> Linuxネットワーキングの歴史で実際に起きた脆弱性と本番環境のインシデント — 何が壊れ、なぜ壊れ、カーネルは何を学んだか
 
-The network stack sits at a trust boundary that most of the kernel doesn't have to deal with: its input arrives from the wire, often from a remote, unauthenticated peer, and gets parsed and acted on before any application-layer authentication happens. A bug in TCP's SACK processing, in a netfilter compat shim, or in a socket-ring-buffer size calculation is reachable by anyone who can send packets to the box — no local shell required. That's why network-stack incidents skew toward remote denial-of-service and remote-triggered memory corruption, rather than the local data-loss and performance-regression stories that dominate filesystem and I/O history.
+ネットワークスタックは、カーネルの大部分が扱わずに済む信頼境界の上に位置している。その入力は回線から、多くの場合リモートの認証されていない相手から届き、アプリケーション層の認証が行われる前に解析され、処理される。TCPのSACK処理、netfilterの互換シム、あるいはソケットのリングバッファのサイズ計算にあるバグは、そのマシンにパケットを送れる者なら誰でも到達可能である — ローカルシェルは不要だ。だからこそネットワークスタックのインシデントは、ファイルシステムやI/Oの歴史で主流となっているローカルなデータ損失や性能リグレッションの話ではなく、リモートからのサービス拒否やリモートから引き起こされるメモリ破壊に偏っている。
 
-Each incident below has its own page: root-cause analysis grounded in the actual patches, plus the real mailing-list discussion behind each fix — alternatives considered, trade-offs debated, and in a few cases genuinely notable process failures. Three are remote (reachable over the network with no local access); the other four are local — three of them reachable through capabilities (`CAP_NET_ADMIN`, `CAP_NET_RAW`) that are routinely granted to unprivileged processes inside user namespaces, and one through nothing more than an ordinary `sendmsg()` sequence. That capability angle is itself a recurring theme in how "local" bugs in this subsystem became "container escape" bugs.
+以下の各インシデントには個別のページがある。実際のパッチに基づく根本原因分析に加え、各修正の背後にある実際のメーリングリストでの議論 — 検討された代替案、議論されたトレードオフ、そしていくつかのケースでは本当に注目すべきプロセス上の失敗 — を扱う。3つはリモート（ローカルアクセスなしでネットワーク越しに到達可能）であり、残る4つはローカルである。そのうち3つは、ユーザーnamespace内の非特権プロセスに日常的に付与されるケーパビリティ（`CAP_NET_ADMIN`、`CAP_NET_RAW`）を通じて到達可能であり、1つはごく普通の`sendmsg()`の呼び出し列だけで到達可能である。このケーパビリティという観点自体が、このサブシステムの「ローカル」なバグが「コンテナエスケープ」のバグになっていった経緯において繰り返し現れるテーマである。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by disclosure date — newest first.
+公開日の新しい順（逆時系列）に並べている。
 
-### [The net/sched act_api Filter-Delete Race](war-stories/act-api-uaf.md) {#the-netsched-act_api-filter-delete-race}
-**Fixed May–June 2026, disclosed June 2026, independent 0-day write-up July 2026 · CVE-2026-53264 · CVSS 7.8 (Linux kernel CNA) / 7.0 (Red Hat)**
-A 2017 comment correctly reasoned that one reader path was RCU-safe and never checked whether a future one would be — a 2023 scalability fix added exactly that reader, unnoticed, and the resulting race sat live for over two years until an OpenAI researcher reported it through normal channels shortly before a scheduled exploit competition, while a STAR Labs intern independently found the same bug and built a working exploit for it as a 0-day for that same competition, using AI to help build the local-root exploit chain — learning of the upstream report only afterward, by their own account.
+### [net/schedのact_apiにおけるフィルタ削除の競合](war-stories/act-api-uaf.md) {#the-netsched-act_api-filter-delete-race}
+**2026年5月〜6月に修正、2026年6月に公開、2026年7月に独立した0-dayの解説記事 · CVE-2026-53264 · CVSS 7.8（Linux kernel CNA）/ 7.0（Red Hat）**
+2017年のあるコメントは、1つのリーダーパスがRCU安全であることを正しく推論していたが、将来のリーダーパスもそうであるかは一度も確認されなかった。2023年のスケーラビリティ修正がまさにそのようなリーダーを気づかれないまま追加し、その結果生じた競合は2年以上にわたって生きたまま放置された。最終的に、予定されていたエクスプロイトコンテストの直前に、OpenAIの研究者が通常のチャネルを通じて報告した。一方で、STAR Labsのインターンが同じバグを独立に発見し、同じコンテスト向けの0-dayとして、ローカルroot取得のエクスプロイトチェーンの構築にAIを活用しながら動作するエクスプロイトを作り上げていた — 本人たちの説明によれば、アップストリームへの報告を知ったのはその後のことだった。
 
-### [Netfilter x_tables Heap Overflow](war-stories/netfilter-xtables.md) {#netfilter-x_tables-heap-overflow}
-**Fixed April 2021, disclosed July 2021 · CVE-2021-22555 · CVSS 8.3 (Google) / 7.8 (NVD)**
-A 15-year-old bounds-check gap, sitting unanswered in a syzbot report for 8 months, became "Turning \x00\x00 into 10000$" and a real Kubernetes pod escape once someone built an exploit chain for it. Still being actively exploited as of late 2025, per CISA's KEV catalog.
+### [Netfilter x_tablesのヒープオーバーフロー](war-stories/netfilter-xtables.md) {#netfilter-x_tables-heap-overflow}
+**2021年4月に修正、2021年7月に公開 · CVE-2021-22555 · CVSS 8.3（Google）/ 7.8（NVD）**
+15年前からある境界チェックの穴が、syzbotの報告の中で8か月間返答されないまま放置され、誰かがそのエクスプロイトチェーンを構築したことで「Turning \x00\x00 into 10000$」となり、現実のKubernetesのPodエスケープになった。CISAのKEVカタログによれば、2025年後半の時点でも依然として実際に悪用されている。
 
-### [The TCP SACK Panic](war-stories/sack-panic.md) {#the-tcp-sack-panic}
-**June 2019 · CVE-2019-11477/78/79 · CVSS 7.5 (all three)**
-A remote peer could crash any Linux TCP endpoint by overflowing a 16-bit segment counter with a crafted sequence of SACK blocks. The fix itself then collided with legitimate high-throughput and small-buffer workloads twice more before it stopped causing production stalls.
+### [TCP SACK Panic](war-stories/sack-panic.md) {#the-tcp-sack-panic}
+**2019年6月 · CVE-2019-11477/78/79 · CVSS 7.5（3つとも）**
+リモートの相手が、細工したSACKブロックの列で16ビットのセグメントカウンタをオーバーフローさせることで、任意のLinux TCPエンドポイントをクラッシュさせることができた。その修正自体も、本番環境でのストールを引き起こさなくなるまでに、正当な高スループットのワークロードや小さなバッファのワークロードとさらに2回衝突した。
 
 ### [SegmentSmack](war-stories/segmentsmack.md) {#segmentsmack}
-**August 2018 · CVE-2018-5390 · CVSS 7.5**
-Tiny, deliberately-scattered out-of-order TCP segments could pin a CPU core at 100% with roughly 2 kilopackets/second of traffic. The public disclosure process became its own controversy, chronicled in detail on LWN.
+**2018年8月 · CVE-2018-5390 · CVSS 7.5**
+意図的にばらばらに送られた小さな順序外のTCPセグメントによって、およそ毎秒2キロパケットのトラフィックでCPUコアを100%に張り付かせることができた。公開のプロセス自体が独立した論争となり、LWNで詳しく記録されている。
 
-### [UDP Fragmentation-Offload Path-Switch Corruption](war-stories/udp-ufo.md) {#udp-fragmentation-offload-path-switch-corruption}
-**August 2017 · CVE-2017-1000112 · CVSS 7.0**
-Two `send()` calls building the same datagram could disagree about which code path was building it, twelve years after the bug was introduced. Embargo-disclosed and fixed in one week.
+### [UDPフラグメンテーションオフロードのパス切り替えによる破壊](war-stories/udp-ufo.md) {#udp-fragmentation-offload-path-switch-corruption}
+**2017年8月 · CVE-2017-1000112 · CVSS 7.0**
+同じデータグラムを組み立てる2回の`send()`呼び出しが、どちらのコードパスがそれを組み立てているかについて食い違う可能性があった。バグの混入から12年後のことである。エンバーゴ下で公開され、1週間で修正された。
 
-### [AF_PACKET TPACKET_V3 Privilege Escalation](war-stories/af-packet.md) {#afpacket-tpacketv3-privilege-escalation}
-**March 2017 · CVE-2017-7308 · CVSS 7.8**
-A single `(int)` cast around an unsigned subtraction defeated a ring-buffer bounds check — found by syzkaller, turned into local root by Project Zero.
+### [AF_PACKET TPACKET_V3の権限昇格](war-stories/af-packet.md) {#af_packet-tpacket_v3-privilege-escalation}
+**2017年3月 · CVE-2017-7308 · CVSS 7.8**
+符号なしの減算を囲むたった1つの`(int)`キャストが、リングバッファの境界チェックを無効にした — syzkallerによって発見され、Project Zeroによってローカルroot取得に仕立て上げられた。
 
-### [The TCP Challenge-ACK Side Channel](war-stories/challenge-ack.md) {#the-tcp-challenge-ack-side-channel}
-**August 2016 · CVE-2016-5696 · CVSS 4.8**
-A global rate-limit counter, meant purely as an internal implementation detail, let an off-path attacker infer TCP sequence numbers by watching how much of the shared quota a victim connection consumed.
+### [TCP Challenge-ACKのサイドチャネル](war-stories/challenge-ack.md) {#the-tcp-challenge-ack-side-channel}
+**2016年8月 · CVE-2016-5696 · CVSS 4.8**
+純粋に内部の実装詳細として意図されていたグローバルなレート制限カウンタによって、経路外の攻撃者が、被害者のコネクションが共有クォータをどれだけ消費したかを観察することでTCPのシーケンス番号を推測できた。
 
-## Common threads {#common-threads}
+## 共通する傾向 {#common-threads}
 
-| Pattern | act_api race | Netfilter x_tables | SACK panic | SegmentSmack | UFO path-switch | AF_PACKET | Challenge-ACK |
+| パターン | act_apiの競合 | Netfilter x_tables | SACK panic | SegmentSmack | UFOのパス切り替え | AF_PACKET | Challenge-ACK |
 |---------|:------------:|:-------------------:|:----------:|:-------------:|:-----------------:|:----------:|:--------------:|
-| Remotely triggerable, no local access needed | No | No | Yes | Yes | No | No | Yes |
-| Root cause is an integer/width assumption | No | No | Yes | No | Yes | Yes | No |
-| Found via fuzzing (syzkaller) or automated tooling | Partial | Partial | No | No | Yes | Yes | No |
-| Capability check defeated by user namespaces | Yes | Yes | No | No | No | Yes | No |
-| Published exploit tool exists (PoC or Metasploit module) | Yes | Yes | No | No | Yes | Yes | Yes |
-| Confirmed active exploitation (CISA KEV) | No | Yes | No | No | No | No | No |
-| Fix added an explicit cap/invariant, not just a patch to one call site | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
+| リモートから引き起こせる（ローカルアクセス不要） | No | No | Yes | Yes | No | No | Yes |
+| 根本原因が整数/ビット幅に関する前提 | No | No | Yes | No | Yes | Yes | No |
+| ファジング（syzkaller）や自動化ツールで発見 | 部分的 | 部分的 | No | No | Yes | Yes | No |
+| ケーパビリティチェックがユーザーnamespaceで無効化された | Yes | Yes | No | No | No | Yes | No |
+| 公開されたエクスプロイトツールが存在する（PoCまたはMetasploitモジュール） | Yes | Yes | No | No | Yes | Yes | Yes |
+| 実際の悪用が確認されている（CISA KEV） | No | Yes | No | No | No | No | No |
+| 修正が1か所の呼び出し元へのパッチにとどまらず、明示的な上限/不変条件を追加した | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
-Three of these seven are reachable by an attacker who has never authenticated to anything — they only need to be able to route packets to the target, which is the defining characteristic of network-stack bugs as a category. The other four (act_api, Netfilter x_tables, AF_PACKET, and the UDP UFO bug) require local execution; three of those four are gated only by capabilities (`CAP_NET_ADMIN` for act_api and Netfilter x_tables, `CAP_NET_RAW` for AF_PACKET) that are either trivially available or handed out routinely by unprivileged user namespaces, and the fourth (UDP UFO) needs nothing more than an ordinary `sendmsg()` sequence — which is why several of these ended up cited as container-escape primitives rather than filed away as low-severity local bugs.
+この7つのうち3つは、何に対しても一度も認証したことのない攻撃者が到達できる — 必要なのは標的にパケットをルーティングできることだけであり、これこそがネットワークスタックのバグというカテゴリを特徴づける性質である。残る4つ（act_api、Netfilter x_tables、AF_PACKET、UDP UFOのバグ）はローカルでの実行を必要とする。そのうち3つは、簡単に手に入るか非特権ユーザーnamespaceによって日常的に与えられるケーパビリティ（act_apiとNetfilter x_tablesでは`CAP_NET_ADMIN`、AF_PACKETでは`CAP_NET_RAW`）によってのみ守られており、4つ目（UDP UFO）はごく普通の`sendmsg()`の呼び出し列しか必要としない — だからこそ、これらのいくつかは低深刻度のローカルバグとして片付けられるのではなく、コンテナエスケープのプリミティブとして引用されることになった。
 
-The other recurring shape is **an assumption that held for years until an adversary specifically targeted it**: a 16-bit segment counter, a per-second reset boundary, a per-entry padding write, a signed cast, a per-call path decision, a 2017 comment about which reader paths an RCU grace period actually covered — each was locally reasonable and had shipped for anywhere from under two years (SegmentSmack) to fifteen years (Netfilter x_tables) before someone deliberately constructed the input (or, for act_api, the exact interleaving) that broke the assumption. Fuzzing (syzkaller, in the AF_PACKET and UFO cases), AI-assisted manual hunting (STAR Labs, for act_api — hence "Partial" rather than "Yes" in the table), and dedicated security research through ordinary channels (OpenAI on act_api; Netflix, Project Zero, and academic researchers on the others) each found different corners of this space; none of them alone would have caught all of these.
+もう1つ繰り返し現れる形は、**敵対者が特にそこを狙うまで何年も成り立っていた前提**である。16ビットのセグメントカウンタ、1秒ごとのリセット境界、エントリごとのパディング書き込み、符号付きキャスト、呼び出しごとのパス判定、RCUのグレースピリオドが実際にどのリーダーパスをカバーするかについての2017年のコメント — どれも局所的には妥当であり、誰かがその前提を破る入力（act_apiの場合は正確なインターリーブ）を意図的に組み立てるまで、2年未満（SegmentSmack）から15年（Netfilter x_tables）にわたって出荷されてきた。ファジング（AF_PACKETとUFOのケースではsyzkaller）、AIの支援を受けた手作業での探索（act_apiでのSTAR Labs — 表で「Yes」ではなく「部分的」としているのはこのため）、そして通常のチャネルを通じた専門的なセキュリティ研究（act_apiではOpenAI、その他ではNetflix、Project Zero、学術研究者）が、それぞれこの領域の異なる隅を見つけた。どれか1つだけでは、これらすべてを捕捉することはできなかっただろう。
 
-A working exploit and confirmed real-world exploitation are not the same thing, and the two don't correlate the way severity scores suggest. Five of these seven had a fully working, published exploit — a Kubernetes pod escape (Netfilter x_tables), Metasploit modules for both AF_PACKET and UDP UFO, a standalone proof-of-concept (`mountain_goat`) for the Challenge-ACK side channel, and an AI-assisted root exploit chain (STAR Labs) for the act_api race — but as of this writing, only Netfilter x_tables (added to CISA's KEV catalog in October 2025, per [NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555)) has ever been confirmed under active exploitation against real targets, years after its patch shipped. The other published exploits remain, as far as public records show, research and disclosure artifacts rather than bugs known to have been weaponized in the field.
+動作するエクスプロイトの存在と、現実世界での悪用の確認は同じものではなく、両者は深刻度スコアが示唆するような相関を持たない。7つのうち5つには、完全に動作する公開エクスプロイトがあった — Kubernetes のPodエスケープ（Netfilter x_tables）、AF_PACKETとUDP UFOの両方のMetasploitモジュール、Challenge-ACKのサイドチャネルに対する単体のPoC（`mountain_goat`）、act_apiの競合に対するAI支援のroot取得エクスプロイトチェーン（STAR Labs）である。しかし本稿執筆時点で、実際の標的に対する悪用が確認されたことがあるのはNetfilter x_tablesだけである（[NVD](https://nvd.nist.gov/vuln/detail/CVE-2021-22555)によれば2025年10月にCISAのKEVカタログに追加された）。それもパッチが出荷されてから何年も後のことだ。その他の公開エクスプロイトは、公開記録が示す限り、現場で武器化されたことが知られているバグではなく、研究と公開のための成果物にとどまっている。
 
-The two DoS bugs (SACK panic, SegmentSmack) never got a dedicated exploit tool at all — a crafted packet sequence *is* the entire attack, nothing to weaponize — but they show a different kind of impact evidence: each triggered a wide wave of downstream vendor advisories (Cisco, Oracle, F5, VMware, Siemens, and roughly two dozen others for SACK panic alone), including dedicated industrial-control-system advisories from Siemens and CISA/ICS-CERT. "No exploit tool" and "no real consequence" are not the same claim either — the scale of who had to patch is its own evidence of reach, even without a confirmed in-the-wild attack.
+2つのDoSバグ（SACK panic、SegmentSmack）には、専用のエクスプロイトツールがまったく作られなかった — 細工したパケット列*そのもの*が攻撃のすべてであり、武器化するものがないからだ — しかし、これらは別の種類の影響の証拠を示している。いずれも下流ベンダーのアドバイザリの大きな波を引き起こした（SACK panicだけでもCisco、Oracle、F5、VMware、Siemens、そのほか約20数社）。その中にはSiemensやCISA/ICS-CERTによる産業制御システム専用のアドバイザリも含まれる。「エクスプロイトツールがない」と「現実の影響がない」もまた同じ主張ではない — 現場での攻撃が確認されていなくても、誰がパッチを当てなければならなかったかの規模それ自体が、影響範囲の証拠である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [TCP Implementation](tcp.md) — SACK, the retransmit queue, and the receive path involved in the SACK panic, SegmentSmack, and Challenge-ACK cases
-- [TCP Congestion Control](tcp-congestion.md) — how MSS and segment sizing interact with the send path
-- [Netfilter Architecture](netfilter.md) — x_tables, hooks, and the compat translation layer
-- [AF_PACKET Raw Sockets](packet-socket.md) — the ring-buffer mechanics behind the AF_PACKET case
-- [UDP Socket Internals](udp.md) — the send path and UFO/segmentation behavior
-- [Network Namespaces](net-namespaces.md) — how unprivileged user+network namespaces expose `CAP_NET_ADMIN`/`CAP_NET_RAW` gated code paths
-- [Why Is the Network Stack So Complex?](network-stack-overview.md) — the broader architectural context these bugs sit within
+- [TCPの実装](tcp.md) — SACK panic、SegmentSmack、Challenge-ACKのケースに関わるSACK、再送キュー、受信パス
+- [TCPの輻輳制御](tcp-congestion.md) — MSSとセグメントサイズの決定が送信パスとどう相互作用するか
+- [Netfilterのアーキテクチャ](netfilter.md) — x_tables、フック、互換変換層
+- [AF_PACKET rawソケット](packet-socket.md) — AF_PACKETのケースの背後にあるリングバッファの仕組み
+- [UDPソケットの内部](udp.md) — 送信パスとUFO/セグメンテーションの挙動
+- [ネットワークnamespace](net-namespaces.md) — 非特権のユーザー＋ネットワークnamespaceが、`CAP_NET_ADMIN`/`CAP_NET_RAW`で守られたコードパスをどのように露出させるか
+- [なぜネットワークスタックはこれほど複雑なのか](network-stack-overview.md) — これらのバグが置かれている、より広いアーキテクチャ上の文脈

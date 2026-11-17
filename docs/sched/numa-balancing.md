@@ -1,10 +1,10 @@
-# NUMA Automatic Balancing {#numa-automatic-balancing}
+# NUMA自動バランシング {#numa-automatic-balancing}
 
-> How the scheduler detects and fixes NUMA locality mismatches
+> スケジューラがNUMAローカリティの不一致を検出し、修正する仕組み
 
-## The problem {#the-problem}
+## 問題 {#the-problem}
 
-On NUMA systems, memory access latency depends on which NUMA node holds the physical page:
+NUMAシステムでは、メモリアクセスのレイテンシは、物理ページをどのNUMAノードが保持しているかによって決まる:
 
 ```
 Node 0:                 Node 1:
@@ -18,13 +18,13 @@ Task running on CPU 2 reading pages on Node 0:
   → every cache miss → remote memory access → 2× latency!
 ```
 
-**Automatic NUMA balancing** (CONFIG_NUMA_BALANCING) detects this situation and migrates pages to the node where they're being used. Introduced in Linux 3.13 by Mel Gorman (SUSE) et al. — [`10fc05d0e551`](https://git.kernel.org/linus/10fc05d0e551146ad6feb0ab8902d28a2d3c5624).
+**NUMA自動バランシング**（CONFIG_NUMA_BALANCING）はこの状況を検出し、ページを実際に使われているノードへマイグレーションする。Linux 3.13でMel Gorman（SUSE）らによって導入された — [`10fc05d0e551`](https://git.kernel.org/linus/10fc05d0e551146ad6feb0ab8902d28a2d3c5624)。
 
-## How it works {#how-it-works}
+## 動作の仕組み {#how-it-works}
 
-### Phase 1: Mark pages as inaccessible (PROT_NONE) {#phase-1-mark-pages-as-inaccessible-prot_none}
+### フェーズ1: ページをアクセス不能にする（PROT_NONE） {#phase-1-mark-pages-as-inaccessible-prot_none}
 
-The NUMA balancer periodically scans a process's page tables and changes the PTE of accessed pages to `PROT_NONE` (unmaps them without freeing):
+NUMAバランサは定期的にプロセスのページテーブルを走査し、アクセスされたページのPTEを`PROT_NONE`に変更する（解放せずにアンマップする）:
 
 ```c
 /* kernel/sched/fair.c */
@@ -33,38 +33,38 @@ static void task_numa_work(struct callback_head *work)
     struct task_struct *p = current;
     unsigned long start = p->numa_scan_offset;
 
-    /* Walk a chunk of VA space, NUMA-fault the PTEs: */
+    /* VA空間の一部を走査し、PTEにNUMAフォールトを仕掛ける: */
     change_prot_numa(p->mm, start, start + NUMA_SCAN_SIZE);
-    /* Sets PTE to PROT_NONE with _PAGE_PROTNONE (was _PAGE_NUMA pre-3.17) */
+    /* PTEを_PAGE_PROTNONE付きのPROT_NONEに設定する（3.17より前は_PAGE_NUMA） */
 
     p->numa_scan_offset = start + NUMA_SCAN_SIZE;
     if (p->numa_scan_offset >= p->mm->highest_vm_end)
-        p->numa_scan_offset = 0;  /* wrap around */
+        p->numa_scan_offset = 0;  /* 先頭に戻る */
 }
 ```
 
-### Phase 2: Catch NUMA page faults {#phase-2-catch-numa-page-faults}
+### フェーズ2: NUMAページフォールトを捕捉する {#phase-2-catch-numa-page-faults}
 
-When the task accesses the PROT_NONE page, a page fault fires:
+タスクがPROT_NONEのページにアクセスすると、ページフォールトが発生する:
 
 ```c
 /* mm/memory.c: do_numa_page() */
 static vm_fault_t do_numa_page(struct vm_fault *vmf)
 {
     struct page *page = vm_normal_page(vmf->vma, vmf->address, vmf->orig_pte);
-    int page_nid    = page_to_nid(page);   /* current NUMA node of page */
-    int this_nid    = numa_node_id();       /* CPU's NUMA node */
+    int page_nid    = page_to_nid(page);   /* ページの現在のNUMAノード */
+    int this_nid    = numa_node_id();       /* CPUのNUMAノード */
 
-    /* Record the access for statistics */
+    /* 統計のためにアクセスを記録する */
     task_numa_fault(last_cpupid, page_nid, 1, flags);
 
-    /* Should we migrate this page? */
+    /* このページをマイグレーションすべきか？ */
     if (page_nid != this_nid) {
-        /* Migrate the page to this_nid */
+        /* ページをthis_nidへマイグレーションする */
         migrate_misplaced_page(page, vmf->vma, this_nid);
     }
 
-    /* Restore the PTE (make it accessible again) */
+    /* PTEを復元する（再びアクセス可能にする） */
     pte_t pte = pte_modify(vmf->orig_pte, vma->vm_page_prot);
     set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, pte);
 
@@ -72,9 +72,9 @@ static vm_fault_t do_numa_page(struct vm_fault *vmf)
 }
 ```
 
-### Phase 3: Task migration {#phase-3-task-migration}
+### フェーズ3: タスクのマイグレーション {#phase-3-task-migration}
 
-If the task has most of its pages on Node 1 but runs on Node 0, the scheduler may migrate the **task** instead of (or in addition to) the pages:
+タスクのページの大部分がNode 1にあるのにNode 0で実行されている場合、スケジューラはページの代わりに（あるいはページに加えて）**タスク**をマイグレーションすることがある:
 
 ```c
 /* kernel/sched/fair.c */
@@ -82,14 +82,14 @@ static bool task_numa_compare(struct task_numa_env *env,
                                long taskimp, long groupimp, bool maymove)
 {
     /*
-     * Compare: task running on preferred_node vs current_node
-     * taskimp: improvement score from moving task
-     * groupimp: improvement from moving entire task group
+     * 比較: preferred_nodeで実行するタスク vs current_nodeで実行するタスク
+     * taskimp: タスクを移動した場合の改善スコア
+     * groupimp: タスクグループ全体を移動した場合の改善
      */
     long imp = env->p->numa_group ? groupimp : taskimp;
     if (imp <= env->best_imp)
         return false;
-    /* Better NUMA locality → update best candidate */
+    /* NUMAローカリティが改善 → 最良候補を更新する */
     env->best_imp  = imp;
     env->best_task = env->dst_task;
     env->best_cpu  = env->dst_cpu;
@@ -97,30 +97,30 @@ static bool task_numa_compare(struct task_numa_env *env,
 }
 ```
 
-## NUMA statistics per task {#numa-statistics-per-task}
+## タスクごとのNUMA統計 {#numa-statistics-per-task}
 
 ```c
-/* task_struct NUMA fields: */
+/* task_structのNUMA関連フィールド: */
 struct task_struct {
     /* ... */
-    int             numa_preferred_nid;   /* preferred NUMA node */
+    int             numa_preferred_nid;   /* 優先NUMAノード */
     unsigned long   numa_migrate_retry;
-    u64             node_stamp;           /* last numa balancing work */
+    u64             node_stamp;           /* 最後のNUMAバランシング処理 */
     u64             last_task_numa_placement;
     u64             last_sum_exec_runtime;
     struct callback_head    numa_work;
 
-    struct numa_group __rcu *numa_group;  /* task group for shared memory */
+    struct numa_group __rcu *numa_group;  /* 共有メモリのためのタスクグループ */
 
-    unsigned long   *numa_faults;         /* faults per node per access type */
-    /* [2 * nr_nodes]: [local faults, remote faults] for each node */
-    /* [2]: cpu vs mem accesses */
+    unsigned long   *numa_faults;         /* ノードごと・アクセス種別ごとのフォールト数 */
+    /* [2 * nr_nodes]: 各ノードについて[ローカルフォールト, リモートフォールト] */
+    /* [2]: CPUアクセス vs メモリアクセス */
 };
 ```
 
-## NUMA groups: shared memory balancing {#numa-groups-shared-memory-balancing}
+## NUMAグループ: 共有メモリのバランシング {#numa-groups-shared-memory-balancing}
 
-When multiple tasks share memory (e.g., a multithreaded program), they form a **NUMA group**:
+複数のタスクがメモリを共有する場合（例: マルチスレッドプログラム）、それらは**NUMAグループ**を形成する:
 
 ```c
 struct numa_group {
@@ -130,7 +130,7 @@ struct numa_group {
     pid_t               gid;
     int                 active_nodes;
 
-    /* Fault statistics per node: */
+    /* ノードごとのフォールト統計: */
     unsigned long       total_faults;
     unsigned long       max_faults_cpu;
 
@@ -138,81 +138,81 @@ struct numa_group {
     unsigned long       *faults_cpu;
 
     struct rcu_head     rcu;
-    unsigned long       nodes[];       /* online nodes participating */
+    unsigned long       nodes[];       /* 参加しているオンラインノード */
 };
 
-/* Tasks in a group are migrated together to preserve shared memory locality */
+/* グループ内のタスクは、共有メモリのローカリティを保つために一緒にマイグレーションされる */
 ```
 
-## Balancing scan rate {#balancing-scan-rate}
+## バランシングの走査レート {#balancing-scan-rate}
 
-The scan rate adapts based on how many NUMA faults are found:
+走査レートは、見つかったNUMAフォールトの数に応じて適応的に変化する:
 
 ```c
-/* How often to scan (pages per second): */
-/* Controlled by: /proc/sys/kernel/numa_balancing_scan_period_min/max */
+/* 走査頻度（1秒あたりのページ数）: */
+/* 制御: /proc/sys/kernel/numa_balancing_scan_period_min/max */
 
 static void update_task_scan_period(struct task_struct *p,
                                      unsigned long shared, unsigned long private)
 {
-    /* More faults → scan more aggressively (lower period) */
-    /* Fewer faults → scan less often (higher period) */
+    /* フォールトが多い → より積極的に走査する（周期を短く） */
+    /* フォールトが少ない → 走査頻度を下げる（周期を長く） */
 
     unsigned int period = p->numa_scan_period;
     if (faults > p->numa_faults_locality[2])
-        period = max(period / 2, task_scan_min(p));  /* speed up */
+        period = max(period / 2, task_scan_min(p));  /* 速める */
     else
-        period = min(period * 2, task_scan_max(p));  /* slow down */
+        period = min(period * 2, task_scan_max(p));  /* 遅くする */
 
     p->numa_scan_period = period;
 }
 ```
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
 ```bash
-# Enable/disable automatic NUMA balancing:
-echo 1 > /proc/sys/kernel/numa_balancing   # enable (default)
-echo 0 > /proc/sys/kernel/numa_balancing   # disable
+# NUMA自動バランシングを有効化/無効化する:
+echo 1 > /proc/sys/kernel/numa_balancing   # 有効化（デフォルト）
+echo 0 > /proc/sys/kernel/numa_balancing   # 無効化
 
-# Scan period (milliseconds) — how often to scan each task's VAS:
-cat /proc/sys/kernel/numa_balancing_scan_period_min  # default 1000
-cat /proc/sys/kernel/numa_balancing_scan_period_max  # default 60000
+# 走査周期（ミリ秒） — 各タスクのVASをどのくらいの頻度で走査するか:
+cat /proc/sys/kernel/numa_balancing_scan_period_min  # デフォルト 1000
+cat /proc/sys/kernel/numa_balancing_scan_period_max  # デフォルト 60000
 
-# Scan size — bytes scanned per interval:
-cat /proc/sys/kernel/numa_balancing_scan_size  # default 256
+# 走査サイズ — 1回の間隔あたりに走査するバイト数:
+cat /proc/sys/kernel/numa_balancing_scan_size  # デフォルト 256
 
-# Tune for a database workload (aggressive):
+# データベースワークロード向けのチューニング（積極的）:
 echo 100  > /proc/sys/kernel/numa_balancing_scan_period_min
 echo 5000 > /proc/sys/kernel/numa_balancing_scan_period_max
 echo 1024 > /proc/sys/kernel/numa_balancing_scan_size
 ```
 
-## Observing NUMA balancing {#observing-numa-balancing}
+## NUMAバランシングの観測 {#observing-numa-balancing}
 
 ```bash
-# Per-process NUMA stats:
+# プロセスごとのNUMA統計:
 cat /proc/<pid>/sched  # numa_faults, numa_preferred_nid, ...
 cat /proc/<pid>/numa_maps
 # 7f1234000000 default anon=12 dirty=12 N0=8 N1=4
-#                                         ↑N0  ↑N1 = pages on each node
+#                                         ↑N0  ↑N1 = 各ノード上のページ数
 
-# System-wide NUMA balancing stats:
+# システム全体のNUMAバランシング統計:
 cat /proc/vmstat | grep numa
-# numa_hint_faults      12345   ← PROT_NONE faults triggered
-# numa_hint_faults_local 8000  ← faults already on preferred node
-# numa_pages_migrated    4345  ← pages migrated
-# numa_pte_updates       50000 ← PTEs marked PROT_NONE
+# numa_hint_faults      12345   ← 発生したPROT_NONEフォールト
+# numa_hint_faults_local 8000  ← すでに優先ノード上にあったフォールト
+# numa_pages_migrated    4345  ← マイグレーションされたページ
+# numa_pte_updates       50000 ← PROT_NONEにされたPTE
 
-# NUMA misses in perf:
+# perfでのNUMAミス:
 perf stat -e dtlb_load_misses.miss_causes_a_walk,node_loads,node_stores \
           -p <pid> sleep 5
 
-# numastat: per-node allocation stats
+# numastat: ノードごとの割り当て統計
 numastat <pid>
-numastat -m  # system memory per node
+numastat -m  # ノードごとのシステムメモリ
 
-# Trace NUMA page fault + migration:
+# NUMAページフォールトとマイグレーションをトレースする:
 bpftrace -e '
 kprobe:do_numa_page {
     @numa_faults[tid] = count();
@@ -221,7 +221,7 @@ kprobe:migrate_misplaced_page {
     @migrations = count();
 }'
 
-# Check NUMA topology:
+# NUMAトポロジを確認する:
 numactl --hardware
 # available: 2 nodes (0-1)
 # node 0 cpus: 0 1 2 3
@@ -232,54 +232,54 @@ numactl --hardware
 #   1:  21  10
 ```
 
-## When to disable NUMA balancing {#when-to-disable-numa-balancing}
+## NUMAバランシングを無効にすべき場合 {#when-to-disable-numa-balancing}
 
 ```bash
-# Disable for workloads where it hurts:
-# 1. Already NUMA-pinned workloads:
+# 逆効果になるワークロードでは無効にする:
+# 1. すでにNUMAピン留めされているワークロード:
 numactl --cpunodebind=0 --membind=0 ./myapp
-# (explicit placement beats auto-balancing)
+# （明示的な配置は自動バランシングに勝る）
 
-# 2. Latency-sensitive workloads:
-# NUMA faults add ~10µs per fault — avoid for RT tasks
+# 2. レイテンシに敏感なワークロード:
+# NUMAフォールトは1回あたり約10µsを追加する — RTタスクでは避ける
 echo 0 > /proc/sys/kernel/numa_balancing
 
-# 3. tmpfs/huge page workloads:
-# Pages in tmpfs or huge pages aren't scanned by NUMA balancer
-# No benefit to enable
+# 3. tmpfs/huge pageのワークロード:
+# tmpfsやhuge page上のページはNUMAバランサに走査されない
+# 有効にしても利点がない
 
-# 4. Mostly sequential single-node access:
-# If the app already accesses data on the local node, balancing adds
-# overhead (scan + faults) with no benefit
+# 4. ほぼ逐次的な単一ノードアクセス:
+# アプリがすでにローカルノード上のデータにアクセスしているなら、バランシングは
+# 利点なしにオーバーヘッド（走査 + フォールト）を追加するだけである
 ```
 
-## NUMA-aware memory allocation {#numa-aware-memory-allocation}
+## NUMAを意識したメモリ割り当て {#numa-aware-memory-allocation}
 
-For applications that want explicit NUMA control:
+NUMAを明示的に制御したいアプリケーション向け:
 
 ```c
-/* Link with -lnuma */
+/* -lnumaとリンクする */
 #include <numa.h>
 
-/* Allocate on node 0: */
+/* ノード0上に割り当てる: */
 void *mem = numa_alloc_onnode(size, 0);
 
-/* Allocate on the local node (where this thread runs): */
+/* ローカルノード（このスレッドが動作しているノード）上に割り当てる: */
 void *mem = numa_alloc_local(size);
 
-/* Set memory policy for subsequent allocations: */
+/* 以降の割り当てに対するメモリポリシーを設定する: */
 struct bitmask *mask = numa_bitmask_alloc(numa_num_configured_nodes());
 numa_bitmask_setbit(mask, 0);
-numa_set_membind(mask);   /* only allocate from node 0 */
+numa_set_membind(mask);   /* ノード0からのみ割り当てる */
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [NUMA](../mm/numa.md) — NUMA architecture and zonelist
-- [NUMA Distance](../mm/numa-distance.md) — ACPI SRAT and distance matrices
-- [NUMA Reclaim](../mm/numa-reclaim.md) — reclaim policies per node
-- [CFS Load Balancing](load-balancing.md) — CPU scheduler load balancing
-- [NUMA Zonelist](../mm/numa-zonelist.md) — memory allocation fallback
+- [NUMA](../mm/numa.md) — NUMAアーキテクチャとzonelist
+- [NUMA Distance](../mm/numa-distance.md) — ACPI SRATと距離行列
+- [NUMA Reclaim](../mm/numa-reclaim.md) — ノードごとの回収ポリシー
+- [CFS Load Balancing](load-balancing.md) — CPUスケジューラの負荷分散
+- [NUMA Zonelist](../mm/numa-zonelist.md) — メモリ割り当てのフォールバック
 - `kernel/sched/fair.c` — task_numa_work
 - `mm/memory.c` — do_numa_page
 - `mm/migrate.c` — migrate_misplaced_page

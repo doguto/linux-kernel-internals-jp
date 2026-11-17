@@ -1,28 +1,28 @@
-# System Suspend and Hibernate {#system-suspend-and-hibernate}
+# システムサスペンドとハイバネート {#system-suspend-and-hibernate}
 
-> System-wide power states: suspend-to-RAM, hibernate, and the PM state machine
+> システム全体の電源状態: suspend-to-RAM、ハイバネート、そしてPMの状態機械
 
-## Sleep states {#sleep-states}
+## スリープ状態 {#sleep-states}
 
-Linux supports multiple system-level sleep states, described by ACPI S-states and the kernel's internal model:
+Linuxは、ACPIのS-stateとカーネル内部のモデルで記述される、複数のシステムレベルのスリープ状態をサポートする。
 
-| Kernel state | ACPI | Description |
+| カーネルの状態 | ACPI | 説明 |
 |---|---|---|
-| `freeze` | S0 (idle) | Freeze user processes, suspend devices. CPU stays powered. Very fast resume. |
-| `standby` | S1 | Shallow sleep. CPU powered down but state retained. |
-| `mem` | S3 | **Suspend-to-RAM (STR)**. All state in DRAM, rest powered off. Common laptop sleep. |
-| `disk` | S4 | **Hibernate (STD)**. Memory image written to swap/file, power completely off. |
+| `freeze` | S0（アイドル） | ユーザープロセスをフリーズし、デバイスをサスペンドする。CPUには電源が供給されたまま。レジュームは非常に速い。 |
+| `standby` | S1 | 浅いスリープ。CPUの電源は落ちるが状態は保持される。 |
+| `mem` | S3 | **Suspend-to-RAM（STR）**。すべての状態はDRAMに置かれ、それ以外の電源は切られる。ノートパソコンの一般的なスリープ。 |
+| `disk` | S4 | **ハイバネート（STD）**。メモリイメージをスワップ/ファイルに書き出し、電源を完全に切る。 |
 
 ```bash
-# Check which states are available
+# 利用可能な状態を確認する
 cat /sys/power/state
 # freeze mem disk
 
-# Enter suspend-to-RAM
+# suspend-to-RAMに入る
 echo mem | sudo tee /sys/power/state
 ```
 
-## The suspend state machine {#the-suspend-state-machine}
+## サスペンドの状態機械 {#the-suspend-state-machine}
 
 ```
 /sys/power/state write "mem"
@@ -62,9 +62,9 @@ kernel/power/suspend.c: pm_suspend()
                Thaw processes
 ```
 
-## PM notifiers {#pm-notifiers}
+## PM notifier {#pm-notifiers}
 
-Notifiers allow subsystems to react to suspend/resume events:
+notifierを使うと、サブシステムがサスペンド/レジュームのイベントに反応できる。
 
 ```c
 #include <linux/suspend.h>
@@ -74,18 +74,18 @@ static int mysubsys_pm_notify(struct notifier_block *nb,
 {
     switch (action) {
     case PM_SUSPEND_PREPARE:
-        /* About to suspend: flush caches, stop background work */
+        /* サスペンド直前: キャッシュをフラッシュし、バックグラウンド処理を止める */
         flush_workqueue(mysubsys_wq);
         break;
     case PM_POST_SUSPEND:
-        /* Resumed: restart background work */
+        /* レジュームした: バックグラウンド処理を再開する */
         queue_delayed_work(mysubsys_wq, &mysubsys_work, HZ);
         break;
     case PM_HIBERNATION_PREPARE:
         break;
     case PM_POST_HIBERNATION:
         break;
-    case PM_RESTORE_PREPARE:   /* before loading hibernate image */
+    case PM_RESTORE_PREPARE:   /* ハイバネートイメージを読み込む前 */
         break;
     case PM_POST_RESTORE:
         break;
@@ -97,16 +97,16 @@ static struct notifier_block mysubsys_pm_nb = {
     .notifier_call = mysubsys_pm_notify,
 };
 
-/* Register */
+/* 登録 */
 register_pm_notifier(&mysubsys_pm_nb);
 
-/* Unregister */
+/* 登録解除 */
 unregister_pm_notifier(&mysubsys_pm_nb);
 ```
 
-## Device suspend callbacks {#device-suspend-callbacks}
+## デバイスのサスペンドコールバック {#device-suspend-callbacks}
 
-The full driver PM callback sequence for system suspend:
+システムサスペンドにおけるドライバのPMコールバックの完全な順序は次のとおりである。
 
 ```
 dpm_prepare()      → driver .prepare()         (optional; prepare for suspend)
@@ -120,23 +120,23 @@ dpm_resume()       → driver .resume()           (full restore)
 dpm_complete()     → driver .complete()         (post-resume cleanup)
 ```
 
-For most drivers, only `.suspend` and `.resume` need implementation. The `_noirq` and `_late/_early` variants are for hardware that requires very late/early access.
+ほとんどのドライバでは、`.suspend`と`.resume`だけを実装すればよい。`_noirq`と`_late/_early`の変種は、非常に遅い/早いタイミングでのアクセスを必要とするハードウェア向けである。
 
-### Minimal suspend implementation {#minimal-suspend-implementation}
+### 最小限のサスペンド実装 {#minimal-suspend-implementation}
 
 ```c
 static int mydriver_suspend(struct device *dev)
 {
     struct mydata *priv = dev_get_drvdata(dev);
 
-    /* Stop hardware operations */
+    /* ハードウェアの動作を停止する */
     mydriver_stop_hw(priv);
 
-    /* Save registers that hardware won't retain */
+    /* ハードウェアが保持しないレジスタを保存する */
     priv->saved_config = readl(priv->base + CONFIG_REG);
     priv->saved_irq_mask = readl(priv->base + IRQ_MASK_REG);
 
-    /* Disable clocks/power */
+    /* クロック/電源を無効にする */
     clk_disable_unprepare(priv->clk);
 
     return 0;
@@ -147,22 +147,22 @@ static int mydriver_resume(struct device *dev)
     struct mydata *priv = dev_get_drvdata(dev);
     int ret;
 
-    /* Re-enable clocks/power */
+    /* クロック/電源を再び有効にする */
     ret = clk_prepare_enable(priv->clk);
     if (ret)
         return ret;
 
-    /* Restore saved registers */
+    /* 保存したレジスタを復元する */
     writel(priv->saved_config,   priv->base + CONFIG_REG);
     writel(priv->saved_irq_mask, priv->base + IRQ_MASK_REG);
 
-    /* Reinitialize hardware */
+    /* ハードウェアを再初期化する */
     mydriver_init_hw(priv);
 
     return 0;
 }
 
-/* Shared PM ops using the SET_ macros */
+/* SET_マクロを使った共有のPM ops */
 static const struct dev_pm_ops mydriver_pm_ops = {
     SET_SYSTEM_SLEEP_PM_OPS(mydriver_suspend, mydriver_resume)
     SET_RUNTIME_PM_OPS(mydriver_runtime_suspend,
@@ -170,29 +170,29 @@ static const struct dev_pm_ops mydriver_pm_ops = {
 };
 ```
 
-## Wakeup sources {#wakeup-sources}
+## ウェイクアップソース {#wakeup-sources}
 
-A **wakeup source** is a hardware event that can wake the system from sleep. Common wakeup sources: keyboard, touchpad, NIC (Wake-on-LAN), RTC alarm, USB.
+**ウェイクアップソース**とは、システムをスリープから起こすことができるハードウェアイベントである。よくあるウェイクアップソースは、キーボード、タッチパッド、NIC（Wake-on-LAN）、RTCアラーム、USBである。
 
 ```c
-/* Driver: register a wakeup source */
+/* ドライバ: ウェイクアップソースを登録する */
 static int mydriver_probe(struct platform_device *pdev)
 {
     struct mydata *priv;
     /* ... */
 
-    device_init_wakeup(&pdev->dev, true);  /* this device can wake the system */
+    device_init_wakeup(&pdev->dev, true);  /* このデバイスはシステムを起こせる */
 
-    /* Configure hardware to assert wakeup interrupt during suspend */
+    /* サスペンド中にウェイクアップ割り込みをアサートするようハードウェアを設定する */
     /* ... */
     return 0;
 }
 
-/* Before suspend: arm the wakeup interrupt */
+/* サスペンド前: ウェイクアップ割り込みを準備する */
 static int mydriver_suspend(struct device *dev)
 {
     if (device_may_wakeup(dev))
-        enable_irq_wake(priv->irq);  /* route IRQ as wakeup source */
+        enable_irq_wake(priv->irq);  /* IRQをウェイクアップソースとして配線する */
     /* ... */
 }
 
@@ -204,12 +204,12 @@ static int mydriver_resume(struct device *dev)
 }
 ```
 
-### Wakeup source tracking {#wakeup-source-tracking}
+### ウェイクアップソースの追跡 {#wakeup-source-tracking}
 
 ```c
 #include <linux/pm_wakeup.h>
 
-/* The kernel tracks active wakeup sources */
+/* カーネルはアクティブなウェイクアップソースを追跡する */
 struct wakeup_source {
     const char           *name;
     int                    id;
@@ -235,30 +235,30 @@ struct wakeup_source {
 ```
 
 ```bash
-# Which wakeup sources are active (blocking suspend)?
+# どのウェイクアップソースがアクティブか（サスペンドを妨げているか）?
 cat /sys/kernel/debug/wakeup_sources
 # name          active_count  event_count  wakeup_count  expire_count  active_since  total_time  max_time  last_change  prevent_suspend_time
 # NETLINK       0             1234         0             0             0             0           0         12345        0
 # battery       1             5678         1             0             12345         67890       12345     67890        12345
 
-# Which IRQs can wake the system?
+# どのIRQがシステムを起こせるか?
 cat /proc/interrupts | grep -i wake
 
-# Last wakeup reason (after resume): the IRQ number that woke the system.
-# Reads "No data available" (-ENODATA) if none is recorded, not 0 -
-# pm_wakeup_irq_show() (kernel/power/main.c) treats a zero IRQ as "none".
+# 最後のウェイクアップ理由（レジューム後）: システムを起こしたIRQ番号。
+# 記録がなければ0ではなく"No data available"（-ENODATA）と表示される -
+# pm_wakeup_irq_show()（kernel/power/main.c）はIRQ 0を「なし」として扱う。
 cat /sys/power/pm_wakeup_irq
 ```
 
-## Hibernate (suspend-to-disk) {#hibernate-suspend-to-disk}
+## ハイバネート（suspend-to-disk） {#hibernate-suspend-to-disk}
 
-Hibernation saves the entire memory image to disk, then powers off. On resume, the image is read back and execution continues exactly where it left off.
+ハイバネーションは、メモリイメージ全体をディスクに保存してから電源を切る。レジューム時にはイメージが読み戻され、中断した場所から正確に実行が再開される。
 
 ```
 echo disk | sudo tee /sys/power/state
 ```
 
-### Hibernate state machine {#hibernate-state-machine}
+### ハイバネートの状態機械 {#hibernate-state-machine}
 
 ```
 1. Freeze processes
@@ -275,68 +275,68 @@ echo disk | sudo tee /sys/power/state
 9. Resume execution at hibernation point
 ```
 
-### Configuring hibernate destination {#configuring-hibernate-destination}
+### ハイバネートの保存先の設定 {#configuring-hibernate-destination}
 
 ```bash
-# Use a specific swap partition
+# 特定のスワップパーティションを使う
 echo /dev/sda2 | sudo tee /sys/power/resume
 
-# Or a swap file: /sys/power/resume_offset takes the raw <PAGE_SIZE>-unit
-# offset of the swap file's header within its partition (found via the
-# FIBMAP ioctl — see Documentation/power/swsusp-and-swap-files.rst), then
-# /sys/power/resume names the partition holding the file
+# またはスワップファイル: /sys/power/resume_offsetには、パーティション内での
+# スワップファイルのヘッダの生のオフセットを<PAGE_SIZE>単位で指定する（FIBMAP
+# ioctlで求める — Documentation/power/swsusp-and-swap-files.rstを参照）。その後
+# /sys/power/resumeにそのファイルを含むパーティションを指定する
 echo 34816 | sudo tee /sys/power/resume_offset
-echo /dev/sda1 | sudo tee /sys/power/resume  # partition containing the swap file
+echo /dev/sda1 | sudo tee /sys/power/resume  # スワップファイルを含むパーティション
 
-# Equivalently, on the kernel command line:
+# カーネルコマンドラインで同等の指定をする場合:
 # resume=/dev/sda1 resume_offset=34816
 
-# Check current hibernate device
+# 現在のハイバネートデバイスを確認する
 cat /sys/power/resume
 ```
 
-## Freeze (s2idle / S0ix) {#freeze-s2idle-s0ix}
+## フリーズ（s2idle / S0ix） {#freeze-s2idle-s0ix}
 
-Modern laptops use **s2idle** (suspend-to-idle, sometimes called S0ix or "connected standby"). Unlike S3, the CPU stays in a very shallow sleep state, allowing:
+現代のノートパソコンは**s2idle**（suspend-to-idle。S0ixや「connected standby」と呼ばれることもある）を使う。S3とは異なり、CPUは非常に浅いスリープ状態に留まるため、次のことが可能になる。
 
-- Bluetooth/WiFi to stay connected
-- Background tasks to run at reduced rate
-- Faster wake time than S3, since there's no full platform power-down/re-init to unwind — how much faster varies widely by platform and firmware
+- Bluetooth/WiFiが接続されたままでいられる
+- バックグラウンドタスクが低いレートで実行される
+- プラットフォーム全体の電源断と再初期化を元に戻す必要がないため、S3より起床が速い — どの程度速いかはプラットフォームとファームウェアによって大きく異なる
 
 ```bash
-# Force s2idle (ignore platform S3 support)
+# s2idleを強制する（プラットフォームのS3サポートを無視する）
 echo s2idle | sudo tee /sys/power/mem_sleep
 
-# Or prefer S3 if available
+# あるいは利用可能ならS3を優先する
 echo deep | sudo tee /sys/power/mem_sleep
 
 cat /sys/power/mem_sleep
 # s2idle [deep]   (brackets = current selection)
 ```
 
-## Diagnosing suspend failures {#diagnosing-suspend-failures}
+## サスペンド失敗の診断 {#diagnosing-suspend-failures}
 
 ```bash
-# Verbose suspend logging
+# 詳細なサスペンドログ
 echo 1 | sudo tee /sys/power/pm_debug_messages
 echo 1 | sudo tee /sys/power/pm_print_times
 
-# After failed suspend attempt
+# サスペンドの試行が失敗した後
 dmesg | grep -E "PM:|suspend|freeze" | tail -50
 
-# Which device failed to suspend?
+# どのデバイスがサスペンドに失敗したか?
 dmesg | grep "error during suspend"
 
-# Suspend/resume success and failure counters: a sysfs directory with one
-# file per stat (kernel/power/main.c), not a single debugfs file
+# サスペンド/レジュームの成功・失敗カウンタ: 統計ごとに1ファイルを持つ
+# sysfsディレクトリ（kernel/power/main.c）であり、単一のdebugfsファイルではない
 cat /sys/power/suspend_stats/success
 # 42
 cat /sys/power/suspend_stats/fail
 # 2
-cat /sys/power/suspend_stats/failed_suspend       # ← driver failed here
+cat /sys/power/suspend_stats/failed_suspend       # ← ここでドライバが失敗した
 # 1
-cat /sys/power/suspend_stats/last_failed_dev      # name of last device to fail
-cat /sys/power/suspend_stats/last_failed_step     # which phase it failed in
+cat /sys/power/suspend_stats/last_failed_dev      # 最後に失敗したデバイスの名前
+cat /sys/power/suspend_stats/last_failed_step     # どのフェーズで失敗したか
 ls /sys/power/suspend_stats/
 # success  fail  failed_freeze  failed_prepare  failed_suspend
 # failed_suspend_late  failed_suspend_noirq  failed_resume
@@ -344,45 +344,45 @@ ls /sys/power/suspend_stats/
 # last_failed_errno  last_failed_step  last_hw_sleep
 # total_hw_sleep  max_hw_sleep
 
-# Time each driver's suspend/resume callback takes: pm_print_times (enabled
-# above) makes this appear in dmesg — it is not itself a stats file
+# 各ドライバのサスペンド/レジュームコールバックにかかる時間: （上で有効にした）
+# pm_print_timesによりdmesgに表示される — それ自体は統計ファイルではない
 dmesg | grep "PM: .* took"
 
-# Enable PM tracepoints for detailed timeline
+# 詳細なタイムラインのためにPMのtracepointを有効にする
 echo 1 > /sys/kernel/tracing/events/power/device_pm_callback_start/enable
 echo 1 > /sys/kernel/tracing/events/power/device_pm_callback_end/enable
 cat /sys/kernel/tracing/trace_pipe > /tmp/suspend_trace &
 echo mem | sudo tee /sys/power/state
-# Ctrl-C background cat, examine /tmp/suspend_trace
+# バックグラウンドのcatをCtrl-Cで止め、/tmp/suspend_traceを調べる
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/power/suspend.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/suspend.c) — `pm_suspend()`, `enter_state()`, `suspend_devices_and_enter()`: the S1-S3/s2idle entry path
-- [kernel/power/hibernate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/hibernate.c) — `hibernate()`, `hibernation_restore()`, and the `/sys/power/resume`/`resume_offset` attributes
-- [kernel/power/snapshot.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/snapshot.c) — `swsusp_save()`: walks all pages to build the hibernation image
-- [include/linux/suspend.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/suspend.h) — `PM_SUSPEND_PREPARE`/`PM_POST_SUSPEND`/`PM_HIBERNATION_PREPARE` notifier constants, `register_pm_notifier()`
-- [include/linux/pm_wakeup.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_wakeup.h) — `struct wakeup_source`, `device_init_wakeup()`, `device_may_wakeup()`
-- [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `dpm_prepare()`/`dpm_suspend()`/`dpm_suspend_late()`/`dpm_suspend_noirq()` and their resume-side counterparts
+- [kernel/power/suspend.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/suspend.c) — `pm_suspend()`、`enter_state()`、`suspend_devices_and_enter()`: S1-S3/s2idleへの進入経路
+- [kernel/power/hibernate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/hibernate.c) — `hibernate()`、`hibernation_restore()`、および`/sys/power/resume`/`resume_offset`属性
+- [kernel/power/snapshot.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/power/snapshot.c) — `swsusp_save()`: すべてのページを走査してハイバネーションイメージを構築する
+- [include/linux/suspend.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/suspend.h) — `PM_SUSPEND_PREPARE`/`PM_POST_SUSPEND`/`PM_HIBERNATION_PREPARE`のnotifier定数、`register_pm_notifier()`
+- [include/linux/pm_wakeup.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_wakeup.h) — `struct wakeup_source`、`device_init_wakeup()`、`device_may_wakeup()`
+- [drivers/base/power/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/main.c) — `dpm_prepare()`/`dpm_suspend()`/`dpm_suspend_late()`/`dpm_suspend_noirq()`と、それらに対応するレジューム側の関数
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [cpufreq](cpufreq.md) — CPU frequency scaling
-- [Runtime PM](runtime-pm.md) — device-level power management
-- [Device Drivers: platform driver](../drivers/platform-driver.md) — dev_pm_ops integration
-- [Interrupts: Timers](../interrupts/timers.md) — `timer_list`, `hrtimer`, and the clocksource machinery timekeeping across suspend/resume depends on
+- [cpufreq](cpufreq.md) — CPU周波数スケーリング
+- [Runtime PM](runtime-pm.md) — デバイスレベルの電源管理
+- [デバイスドライバ: プラットフォームドライバ](../drivers/platform-driver.md) — dev_pm_opsとの統合
+- [割り込み: タイマー](../interrupts/timers.md) — `timer_list`、`hrtimer`、そしてサスペンド/レジュームをまたぐ時刻管理が依存するclocksourceの仕組み
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [A new suspend/hibernate infrastructure](https://lwn.net/Articles/274008/) — Jonathan Corbet, March 19, 2008; Rafael Wysocki's rework separating the suspend and hibernation device callback paths
-- [PM / Sleep: Introduce new phases of device suspend/resume](https://lwn.net/Articles/475730/) — Rafael Wysocki's linux-pm patch series (posted January 16, 2012; archived by LWN as a mailing-list thread, not a staff-written article) that added the `.suspend_late`/`.resume_early` phases described above. The `_noirq` phases already existed by the time of the 2008 rework above; this series did not introduce them.
-- [Waking systems from suspend](https://lwn.net/Articles/429925/) — John Stultz, March 2, 2011; the alarmtimer subsystem that multiplexes many userspace alarms onto a single hardware RTC alarm via a timerqueue, and the API design question of how to expose that (POSIX alarm-clock IDs like `CLOCK_REALTIME_ALARM` vs. Android's `/dev/alarm` ioctl interface)
+- [A new suspend/hibernate infrastructure](https://lwn.net/Articles/274008/) — Jonathan Corbet、2008年3月19日。サスペンドとハイバネーションのデバイスコールバック経路を分離した、Rafael Wysockiによる再設計
+- [PM / Sleep: Introduce new phases of device suspend/resume](https://lwn.net/Articles/475730/) — Rafael Wysockiによるlinux-pmのパッチシリーズ（2012年1月16日投稿。LWNのスタッフ記事ではなく、メーリングリストのスレッドとしてLWNにアーカイブされたもの）で、上で説明した`.suspend_late`/`.resume_early`フェーズを追加した。`_noirq`フェーズは上記の2008年の再設計の時点で既に存在しており、このシリーズで導入されたものではない。
+- [Waking systems from suspend](https://lwn.net/Articles/429925/) — John Stultz、2011年3月2日。多数のユーザー空間アラームをtimerqueueによって単一のハードウェアRTCアラームに多重化するalarmtimerサブシステムと、それをどう公開するかというAPI設計上の問題（`CLOCK_REALTIME_ALARM`のようなPOSIXのアラームクロックID対Androidの`/dev/alarm` ioctlインターフェース）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/driver-api/pm/devices.rst](https://docs.kernel.org/driver-api/pm/devices.html) — the full device suspend/resume phase model and the ordering guarantees across the device hierarchy
-- [Documentation/admin-guide/pm/sleep-states.rst](https://docs.kernel.org/admin-guide/pm/sleep-states.html) — the `freeze`/`standby`/`mem`/`disk` labels and their ACPI S-state mapping
-- [Documentation/admin-guide/pm/suspend-flows.rst](https://docs.kernel.org/admin-guide/pm/suspend-flows.html) — code-flow diagrams for suspend-to-idle vs. standby vs. suspend-to-RAM
-- [Documentation/power/swsusp-and-swap-files.rst](https://docs.kernel.org/power/swsusp-and-swap-files.html) — how to point hibernation at a swap file instead of a swap partition
+- [Documentation/driver-api/pm/devices.rst](https://docs.kernel.org/driver-api/pm/devices.html) — デバイスのサスペンド/レジュームのフェーズモデル全体と、デバイス階層全体にわたる順序の保証
+- [Documentation/admin-guide/pm/sleep-states.rst](https://docs.kernel.org/admin-guide/pm/sleep-states.html) — `freeze`/`standby`/`mem`/`disk`というラベルと、それらのACPI S-stateへの対応
+- [Documentation/admin-guide/pm/suspend-flows.rst](https://docs.kernel.org/admin-guide/pm/suspend-flows.html) — suspend-to-idle、standby、suspend-to-RAMのコードフロー図
+- [Documentation/power/swsusp-and-swap-files.rst](https://docs.kernel.org/power/swsusp-and-swap-files.html) — スワップパーティションの代わりにスワップファイルをハイバネーション先にする方法

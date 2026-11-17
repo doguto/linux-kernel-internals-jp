@@ -1,204 +1,204 @@
-# cpuset: CPU and Memory Pinning {#cpuset-cpu-and-memory-pinning}
+# cpuset: CPUとメモリのピン留め {#cpuset-cpu-and-memory-pinning}
 
-> How cgroups restrict which CPUs and NUMA nodes tasks can use
+> cgroupが、タスクの使えるCPUとNUMAノードをどう制限するか
 
-## What cpuset controls {#what-cpuset-controls}
+## cpusetが制御するもの {#what-cpuset-controls}
 
-`cpuset` is a cgroup subsystem that restricts which CPUs and NUMA memory nodes a group of tasks can use. It operates independently from CPU bandwidth and weight:
+`cpuset`は、タスクのグループが使えるCPUとNUMAメモリノードを制限するcgroupサブシステムである。CPUの帯域や重みとは独立して動作する:
 
-- **Bandwidth** (cpu.max): How much CPU time a group gets
-- **Weight** (cpu.weight/shares): How CPU time is divided between groups
-- **cpuset**: Which CPUs are even eligible — tasks never run on excluded CPUs
+- **帯域**（cpu.max）: グループがどれだけのCPU時間を得るか
+- **重み**（cpu.weight/shares）: CPU時間をグループ間でどう分けるか
+- **cpuset**: そもそもどのCPUが対象になるか — 除外されたCPU上でタスクが実行されることは決してない
 
-This matters for:
+これが重要になるのは次のような場面である:
 
-- **NUMA locality**: Pin tasks to CPUs close to their memory
-- **Core isolation**: Reserve specific cores for latency-sensitive workloads
-- **Hardware partitioning**: Assign CPUs to dedicated containers
+- **NUMA局所性**: タスクを、そのメモリに近いCPUにピン留めする
+- **コアの隔離**: レイテンシに敏感なワークロードのために特定のコアを確保する
+- **ハードウェアの分割**: 専用のコンテナにCPUを割り当てる
 
-## Interface {#interface}
+## インターフェース {#interface}
 
 ```bash
-# v2 (unified hierarchy)
+# v2（統合階層）
 ls /sys/fs/cgroup/mygroup/
-# cpuset.cpus              - requested CPU list
-# cpuset.mems              - requested NUMA node list
-# cpuset.cpus.effective    - actual CPUs after intersection with parent
-# cpuset.mems.effective    - actual NUMA nodes after intersection with parent
-# cpuset.cpus.exclusive    - CPUs exclusively reserved for this cgroup
-# cpuset.cpus.partition    - partition root control (member/root/isolated)
+# cpuset.cpus              - 要求したCPUのリスト
+# cpuset.mems              - 要求したNUMAノードのリスト
+# cpuset.cpus.effective    - 親との積集合を取った後の実際のCPU
+# cpuset.mems.effective    - 親との積集合を取った後の実際のNUMAノード
+# cpuset.cpus.exclusive    - このcgroup専用に確保されたCPU
+# cpuset.cpus.partition    - パーティションルートの制御（member/root/isolated）
 
-# Pin a cgroup to CPUs 0-3 and NUMA node 0
+# cgroupをCPU 0-3とNUMAノード0にピン留めする
 echo "0-3" > /sys/fs/cgroup/mygroup/cpuset.cpus
 echo "0"   > /sys/fs/cgroup/mygroup/cpuset.mems
 
-# v1 (separate mount)
+# v1（別個のマウント）
 echo "0-3" > /sys/fs/cgroup/cpuset/mygroup/cpus
 echo "0"   > /sys/fs/cgroup/cpuset/mygroup/mems
 ```
 
 ## struct cpuset {#struct-cpuset}
 
-Each cgroup maps to a `cpuset` in `kernel/cgroup/cpuset-internal.h`:
+各cgroupは、`kernel/cgroup/cpuset-internal.h`の`cpuset`に対応する:
 
 ```c
 // kernel/cgroup/cpuset-internal.h
 struct cpuset {
-    struct cgroup_subsys_state css;  // embedded cgroup state
+    struct cgroup_subsys_state css;  // 埋め込まれたcgroupの状態
 
-    unsigned long flags;             // CS_CPU_EXCLUSIVE, CS_MEM_EXCLUSIVE, etc.
+    unsigned long flags;             // CS_CPU_EXCLUSIVE、CS_MEM_EXCLUSIVEなど
 
-    // User-configured masks (written via control files)
+    // ユーザーが設定したマスク（制御ファイル経由で書き込まれる）
     cpumask_var_t cpus_allowed;
     nodemask_t    mems_allowed;
 
-    // Effective masks (actual limits applied to tasks)
-    // effective = configured & parent's effective
+    // 実効マスク（タスクに適用される実際の制限）
+    // effective = 設定値 & 親のeffective
     cpumask_var_t effective_cpus;
     nodemask_t    effective_mems;
 
-    // Exclusive CPUs (v2 partition support)
-    cpumask_var_t effective_xcpus;  // effective exclusive CPUs granted
-    cpumask_var_t exclusive_cpus;   // user-requested exclusive CPUs
+    // 排他的なCPU（v2のパーティションサポート）
+    cpumask_var_t effective_xcpus;  // 実際に与えられた排他的CPU
+    cpumask_var_t exclusive_cpus;   // ユーザーが要求した排他的CPU
 
-    int partition_root_state;       // PRS_MEMBER/ROOT/ISOLATED or negative = invalid
-    int nr_deadline_tasks;          // SCHED_DEADLINE tasks in this cpuset
+    int partition_root_state;       // PRS_MEMBER/ROOT/ISOLATED、負の値は無効
+    int nr_deadline_tasks;          // このcpuset内のSCHED_DEADLINEタスク数
 
     // ...
 };
 ```
 
-### Flags {#flags}
+### フラグ {#flags}
 
 ```c
 typedef enum {
-    CS_CPU_EXCLUSIVE,      // No sibling cgroup can overlap these CPUs
-    CS_MEM_EXCLUSIVE,      // No sibling cgroup can overlap these NUMA nodes
-    CS_MEM_HARDWALL,       // User allocations cannot use other nodes (even as fallback)
-    CS_MEMORY_MIGRATE,     // Migrate pages when mems_allowed changes
-    CS_SCHED_LOAD_BALANCE, // Enable load balancing across cpuset CPUs
-    CS_SPREAD_PAGE,        // Spread page cache across all allowed nodes
-    CS_SPREAD_SLAB,        // Spread slab cache across all allowed nodes
+    CS_CPU_EXCLUSIVE,      // 兄弟cgroupはこれらのCPUと重複できない
+    CS_MEM_EXCLUSIVE,      // 兄弟cgroupはこれらのNUMAノードと重複できない
+    CS_MEM_HARDWALL,       // ユーザーの割り当ては他のノードを使えない（フォールバックとしても）
+    CS_MEMORY_MIGRATE,     // mems_allowedが変わったときにページをマイグレーションする
+    CS_SCHED_LOAD_BALANCE, // cpusetのCPU間で負荷分散を有効にする
+    CS_SPREAD_PAGE,        // ページキャッシュを許可されたすべてのノードに分散させる
+    CS_SPREAD_SLAB,        // slabキャッシュを許可されたすべてのノードに分散させる
 } cpuset_flagbits_t;
 ```
 
-## Effective masks: intersection with parent {#effective-masks-intersection-with-parent}
+## 実効マスク: 親との積集合 {#effective-masks-intersection-with-parent}
 
-The key cpuset invariant: a child's **effective_cpus** can only be a subset of its parent's **effective_cpus**. If you write a CPU list that includes CPUs not in the parent's effective set, those CPUs are silently excluded.
+cpusetの重要な不変条件は、子の**effective_cpus**は親の**effective_cpus**の部分集合にしかなりえないということである。親の実効集合に含まれないCPUを含むCPUリストを書き込むと、それらのCPUは黙って除外される。
 
 ```
 root cpuset: effective_cpus = {0,1,2,3,4,5,6,7}
     └── mygroup: cpus_allowed = {4,5,6,7,8,9}
-                 effective_cpus = {4,5,6,7}  ← intersection with parent
+                 effective_cpus = {4,5,6,7}  ← 親との積集合
 ```
 
 ```c
-// kernel/cgroup/cpuset.c (simplified)
+// kernel/cgroup/cpuset.c（簡略化）
 static void cpuset_cpus_allowed(struct task_struct *p, struct cpumask *pmask)
 {
     struct cpuset *cs = task_cs(p);
-    // Walk up the hierarchy until we find a non-empty intersection
+    // 空でない積集合が見つかるまで階層をたどって上がる
     while (!cpumask_intersects(cs->effective_cpus, pmask))
         cs = parent_cs(cs);
     cpumask_and(pmask, pmask, cs->effective_cpus);
 }
 ```
 
-## How tasks are constrained {#how-tasks-are-constrained}
+## タスクがどう制約されるか {#how-tasks-are-constrained}
 
-When a task is added to a cgroup (`cgroup.procs`), or when the cpuset's effective_cpus changes, the kernel updates the task's affinity:
+タスクがcgroupに追加されたとき（`cgroup.procs`）、またはcpusetのeffective_cpusが変化したとき、カーネルはタスクのアフィニティを更新する:
 
-1. `cpuset_change_task_nodemask()` — updates NUMA node policy
-2. `set_cpus_allowed_ptr()` — restricts the task to `effective_cpus`
-3. If the task is currently running on an excluded CPU, it gets migrated
+1. `cpuset_change_task_nodemask()` — NUMAノードのポリシーを更新する
+2. `set_cpus_allowed_ptr()` — タスクを`effective_cpus`に制限する
+3. タスクが現在、除外されたCPU上で実行中であれば、マイグレーションされる
 
-Tasks in a cpuset can still set their own affinity (via `sched_setaffinity()`), but the result is always **intersected** with the cpuset's effective_cpus. You can't escape the cpuset through affinity.
+cpuset内のタスクは（`sched_setaffinity()`を通じて）自分のアフィニティを設定することもできるが、その結果は常にcpusetのeffective_cpusとの**積集合**が取られる。アフィニティを通じてcpusetから逃れることはできない。
 
-## Partition roots (v2) {#partition-roots-v2}
+## パーティションルート（v2） {#partition-roots-v2}
 
-v2 cpusets support **partition roots** — a mechanism to carve CPUs out of the parent's scheduling domain entirely:
+v2のcpusetは**パーティションルート**をサポートする。これは親のスケジューリングドメインからCPUを完全に切り出す仕組みである:
 
 ```bash
-# Create a partition: take CPUs 4-7 exclusively
+# パーティションを作成する: CPU 4-7を排他的に取得する
 echo "4-7" > /sys/fs/cgroup/mygroup/cpuset.cpus
 echo "root" > /sys/fs/cgroup/mygroup/cpuset.cpus.partition
-# CPUs 4-7 are now removed from the parent's scheduling domain
-# and form an isolated domain for mygroup
+# CPU 4-7は親のスケジューリングドメインから取り除かれ、
+# mygroup用の隔離されたドメインを形成する
 
-# Isolated partition: no load balancing within the partition either
+# 隔離パーティション: パーティション内でも負荷分散を行わない
 echo "isolated" > /sys/fs/cgroup/mygroup/cpuset.cpus.partition
 ```
 
-Partition states:
+パーティションの状態:
 
-- `member` (default): Normal cpuset, shares parent's scheduling domain
-- `root`: Carves out CPUs into a dedicated scheduling domain
-- `isolated`: Like root, but also disables load balancing within the partition
+- `member`（デフォルト）: 通常のcpusetで、親のスケジューリングドメインを共有する
+- `root`: CPUを専用のスケジューリングドメインに切り出す
+- `isolated`: rootと同様だが、パーティション内の負荷分散も無効にする
 
-## cpuset and scheduler domains {#cpuset-and-scheduler-domains}
+## cpusetとスケジューラドメイン {#cpuset-and-scheduler-domains}
 
-When a partition root is created or CPUs are assigned exclusively, the kernel **rebuilds the scheduling domains**:
+パーティションルートが作成されたり、CPUが排他的に割り当てられたりすると、カーネルは**スケジューリングドメインを再構築する**:
 
 ```c
 // kernel/cgroup/cpuset.c
-// After effective_cpus changes:
-rebuild_sched_domains();  // or rebuild_sched_domains_locked()
+// effective_cpusが変化した後:
+rebuild_sched_domains();  // または rebuild_sched_domains_locked()
 ```
 
-This is expensive — each rebuild tears down and reconstructs per-CPU scheduler domain hierarchies. Avoid frequent cpuset CPU changes in production.
+これはコストが高い。再構築のたびに、CPUごとのスケジューラドメインの階層を解体して作り直すからである。本番環境では、cpusetのCPUを頻繁に変更するのは避けること。
 
 ## NUMA: mems_allowed {#numa-mems_allowed}
 
-`effective_mems` controls which NUMA nodes memory allocations can use:
+`effective_mems`は、メモリ割り当てにどのNUMAノードを使えるかを制御する:
 
 ```bash
-# Restrict to node 0 only
+# ノード0のみに制限する
 echo "0" > /sys/fs/cgroup/mygroup/cpuset.mems
 
-# Allow nodes 0 and 1
+# ノード0と1を許可する
 echo "0-1" > /sys/fs/cgroup/mygroup/cpuset.mems
 ```
 
-With `CS_MEM_HARDWALL` set, tasks cannot fall back to other nodes even if their allowed nodes are full. Without it, the kernel may allocate from other nodes under memory pressure.
+`CS_MEM_HARDWALL`が設定されていると、許可されたノードが満杯でも、タスクは他のノードにフォールバックできない。設定されていなければ、メモリ圧迫下でカーネルが他のノードから割り当てることがある。
 
-With `CS_MEMORY_MIGRATE` set, existing pages are migrated to the new node set when `mems_allowed` changes.
+`CS_MEMORY_MIGRATE`が設定されていると、`mems_allowed`が変化したときに既存のページが新しいノード集合へマイグレーションされる。
 
-## Diagnosing cpuset constraints {#diagnosing-cpuset-constraints}
+## cpusetの制約を診断する {#diagnosing-cpuset-constraints}
 
 ```bash
-# See a task's cpuset
+# タスクのcpusetを確認する
 cat /proc/$PID/cpuset
 # → /mygroup/container1
 
-# Effective CPUs for a cgroup
+# cgroupの実効CPU
 cat /sys/fs/cgroup/mygroup/cpuset.cpus.effective
 
-# Check if a task's affinity is being constrained by cpuset
-taskset -p $PID  # shows the intersection of user affinity and cpuset
+# タスクのアフィニティがcpusetによって制約されているか確認する
+taskset -p $PID  # ユーザーのアフィニティとcpusetの積集合を表示する
 
-# Monitor cpuset events (cpu hotplug, partition changes)
+# cpusetのイベント（CPUホットプラグ、パーティションの変更）を監視する
 cat /sys/kernel/debug/tracing/events/cpuset/
 ```
 
 ```bash
-# Common mistake: writing CPUs not in parent's effective set
+# よくある間違い: 親の実効集合にないCPUを書き込む
 echo "0-7" > /sys/fs/cgroup/nested/cpuset.cpus
 cat /sys/fs/cgroup/nested/cpuset.cpus.effective
-# → 0-3   (silently clamped to parent's range)
+# → 0-3   （黙って親の範囲に切り詰められる）
 ```
 
-## cpuset vs sched_setaffinity {#cpuset-vs-sched_setaffinity}
+## cpusetとsched_setaffinity {#cpuset-vs-sched_setaffinity}
 
-| Mechanism | Who controls | Scope | Inheritable |
+| 仕組み | 誰が制御するか | 範囲 | 継承されるか |
 |-----------|-------------|-------|-------------|
-| cpuset | cgroup admin | All tasks in cgroup | Yes — children inherit |
-| sched_setaffinity | Process (CAP_SYS_NICE for others) | One task | No |
+| cpuset | cgroupの管理者 | cgroup内のすべてのタスク | Yes — 子が継承する |
+| sched_setaffinity | プロセス（他のプロセスに対してはCAP_SYS_NICE） | 1つのタスク | No |
 
-The effective affinity is always `user_affinity ∩ cpuset.effective_cpus`. If either restricts a CPU, the task cannot run there.
+実効アフィニティは常に`user_affinity ∩ cpuset.effective_cpus`である。どちらか一方でもあるCPUを制限していれば、タスクはそこで実行できない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [CPU cgroup: v1 vs v2](cpu-cgroup.md) — CPU bandwidth and weight controls
-- [Scheduling Domains](sched-domains.md) — How cpuset partition roots affect load balancing
-- [CPU Affinity](cpu-affinity.md) — Per-task CPU restrictions via sched_setaffinity
-- [NUMA](../mm/numa.md) — Why NUMA node pinning matters for performance
+- [CPU cgroup: v1とv2](cpu-cgroup.md) — CPUの帯域と重みの制御
+- [スケジューリングドメイン](sched-domains.md) — cpusetのパーティションルートが負荷分散にどう影響するか
+- [CPUアフィニティ](cpu-affinity.md) — sched_setaffinityによるタスクごとのCPU制限
+- [NUMA](../mm/numa.md) — NUMAノードへのピン留めが性能にとって重要な理由

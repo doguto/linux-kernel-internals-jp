@@ -114,7 +114,7 @@ emulate:
 }
 ```
 
-### struct kvm_mmu_page (shadow pages) {#struct-kvmmmupage-shadow-pages}
+### struct kvm_mmu_page (shadow pages) {#struct-kvm_mmu_page-shadow-pages}
 
 KVM tracks EPT/shadow pages via `struct kvm_mmu_page`. One struct per page table page:
 
@@ -440,7 +440,7 @@ ioctl(vm_fd, KVM_GET_DIRTY_LOG, &dirty);
 
 The EPT hardware's dirty bit (EPT PTE bit 9) is cleared when KVM resets the bitmap. Next write access causes an EPT violation → KVM marks page dirty and re-enables the dirty bit.
 
-### KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 {#kvmcapmanualdirtylog_protect2}
+### KVM_CAP_MANUAL_DIRTY_LOG_PROTECT2 {#kvm_cap_manual_dirty_log_protect2}
 
 A two-phase protocol for very large VMs that avoids races:
 

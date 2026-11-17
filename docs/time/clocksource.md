@@ -1,10 +1,10 @@
-# Clocksource and Clockevent Drivers {#clocksource-and-clockevent-drivers}
+# clocksourceとclockeventのドライバ {#clocksource-and-clockevent-drivers}
 
-> Hardware timers in the kernel: TSC, HPET, clockevents, and tick_device
+> カーネルにおけるハードウェアタイマー: TSC、HPET、clockevent、tick_device
 
-## Two clock abstractions {#two-clock-abstractions}
+## 2つのクロック抽象化 {#two-clock-abstractions}
 
-The kernel separates time into two concepts:
+カーネルは時間を2つの概念に分けている。
 
 ```
 clocksource:   reads current time (monotonic counter)
@@ -16,7 +16,7 @@ clockevent:    programs a future interrupt (one-shot or periodic)
                Example: Local APIC timer, HPET, ARM generic timer
 ```
 
-Together they implement the kernel's timekeeping:
+これらが組み合わさってカーネルの時刻管理を実現する。
 
 ```
 clocksource  →  timekeeping (clock_gettime, ktime_get)
@@ -29,17 +29,17 @@ clockevent   →  tick device  →  scheduler tick, hrtimers, timers
 /* include/linux/clocksource.h */
 struct clocksource {
     u64             (*read)(struct clocksource *cs);
-    u64             mask;          /* bitmask to handle counter wrap */
-    u32             mult;          /* cycles to ns: ns = cycles * mult >> shift */
+    u64             mask;          /* カウンタのラップを扱うためのビットマスク */
+    u32             mult;          /* サイクル→ns: ns = cycles * mult >> shift */
     u32             shift;
-    u64             max_idle_ns;   /* max time between reads before losing accuracy */
+    u64             max_idle_ns;   /* 精度を失わずに読み取りの間隔を空けられる最大時間 */
     u32             maxadj;
-    u64             max_cycles;    /* max cycles before ns calculation overflows */
+    u64             max_cycles;    /* ns計算がオーバーフローする前の最大サイクル数 */
     u64             max_raw_delta;
     const char      *name;
     struct list_head list;
     u32             freq_khz;
-    int             rating;        /* quality: 400-499 perfect, 300-399 desired, 200-299 good, 100-199 base, 1-99 unfit */
+    int             rating;        /* 品質: 400-499 完璧、300-399 望ましい、200-299 良好、100-199 基本、1-99 不適 */
     enum clocksource_ids id;
     enum vdso_clock_mode vdso_clock_mode;
     unsigned long   flags;
@@ -55,9 +55,9 @@ struct clocksource {
 };
 ```
 
-## TSC (Time Stamp Counter) {#tsc-time-stamp-counter}
+## TSC（タイムスタンプカウンタ） {#tsc-time-stamp-counter}
 
-The TSC is the primary clocksource on modern x86:
+TSCは現代のx86における主要なclocksourceである。
 
 ```c
 /* arch/x86/kernel/tsc.c */
@@ -80,51 +80,51 @@ static struct clocksource clocksource_tsc = {
 
 static u64 read_tsc(struct clocksource *cs)
 {
-    return (u64)rdtsc_ordered();  /* RDTSC instruction */
+    return (u64)rdtsc_ordered();  /* RDTSC命令 */
 }
 
-/* Convert TSC cycles to nanoseconds: */
+/* TSCサイクルをナノ秒に変換する: */
 /* ns = (cycles * mult) >> shift */
-/* mult and shift are calibrated at boot against HPET or PIT */
+/* mult と shift はブート時にHPETまたはPITと比べて較正される */
 ```
 
 ```bash
-# Check the current clocksource:
+# 現在のクロックソースを確認する:
 cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 # tsc
 
-# Available clocksources (sorted by preference):
+# 利用可能なクロックソース（優先度順）:
 cat /sys/devices/system/clocksource/clocksource0/available_clocksource
 # tsc hpet acpi_pm
 
-# TSC frequency:
+# TSC周波数:
 dmesg | grep "tsc: Detected"
 # tsc: Detected 3600.000 MHz processor
 
-# TSC stability:
+# TSCの安定性:
 dmesg | grep tsc | grep -i "unstable\|skew\|reliable"
 ```
 
-### TSC reliability issues {#tsc-reliability-issues}
+### TSCの信頼性の問題 {#tsc-reliability-issues}
 
 ```bash
-# TSC may be unreliable:
-# 1. Old multi-socket systems: TSCs not synchronized between sockets
-# 2. CPU frequency scaling: TSC rate changes with frequency (older CPUs)
-# 3. Virtualization: hypervisor may not provide stable TSC
+# TSCが信頼できない場合がある:
+# 1. 古いマルチソケットシステム: ソケット間でTSCが同期していない
+# 2. CPU周波数スケーリング: TSCのレートが周波数とともに変わる（古いCPU）
+# 3. 仮想化: ハイパーバイザが安定したTSCを提供しないことがある
 
-# Modern CPUs have invariant TSC (constant rate regardless of P-state):
+# 現代のCPUは invariant TSC を持つ（Pステートにかかわらず一定レート）:
 grep "constant_tsc\|nonstop_tsc" /proc/cpuinfo | head -2
 # flags: ... constant_tsc nonstop_tsc ...
 
-# Force a different clocksource:
+# 別のクロックソースを強制する:
 echo hpet > /sys/devices/system/clocksource/clocksource0/current_clocksource
 ```
 
-## Registering a clocksource {#registering-a-clocksource}
+## clocksourceの登録 {#registering-a-clocksource}
 
 ```c
-/* For a custom hardware counter (e.g., in a SoC driver): */
+/* 独自のハードウェアカウンタの場合（例: SoCドライバ内）: */
 #include <linux/clocksource.h>
 
 static u64 my_timer_read(struct clocksource *cs)
@@ -140,22 +140,22 @@ static struct clocksource my_clocksource = {
     .flags   = CLOCK_SOURCE_IS_CONTINUOUS,
 };
 
-/* In probe(): */
+/* probe() 内で: */
 clocksource_register_hz(&my_clocksource, 24000000); /* 24 MHz */
-/* Computes mult/shift from frequency */
+/* 周波数から mult/shift を計算する */
 ```
 
-## struct clock_event_device {#struct-clockeventdevice}
+## struct clock_event_device {#struct-clock_event_device}
 
 ```c
 /* include/linux/clockchips.h */
 struct clock_event_device {
     void (*event_handler)(struct clock_event_device *);
-    /* Called on each timer interrupt (set by tick layer) */
+    /* タイマー割り込みごとに呼ばれる（tickレイヤーが設定する） */
 
     int  (*set_next_event)(unsigned long evt,
                            struct clock_event_device *);
-    /* Program the hardware to fire in `evt` cycles */
+    /* `evt` サイクル後に発火するようハードウェアをプログラムする */
 
     int  (*set_next_ktime)(ktime_t expires,
                            struct clock_event_device *);
@@ -168,9 +168,9 @@ struct clock_event_device {
 
     enum clock_event_state  state_use_accessors;
     unsigned int        features;
-    /* CLOCK_EVT_FEAT_PERIODIC: supports periodic mode */
-    /* CLOCK_EVT_FEAT_ONESHOT:  supports one-shot mode */
-    /* CLOCK_EVT_FEAT_C3STOP:   stops in deep idle */
+    /* CLOCK_EVT_FEAT_PERIODIC: 周期モードをサポート */
+    /* CLOCK_EVT_FEAT_ONESHOT:  ワンショットモードをサポート */
+    /* CLOCK_EVT_FEAT_C3STOP:   深いアイドルで停止する */
 
     const char          *name;
     int                 rating;
@@ -181,7 +181,7 @@ struct clock_event_device {
 };
 ```
 
-## Local APIC timer (per-CPU clockevent) {#local-apic-timer-per-cpu-clockevent}
+## Local APICタイマー（CPUごとのclockevent） {#local-apic-timer-per-cpu-clockevent}
 
 ```c
 /* arch/x86/kernel/apic/apic.c */
@@ -205,67 +205,67 @@ static struct clock_event_device lapic_clockevent = {
 static int lapic_next_event(unsigned long delta,
                              struct clock_event_device *evt)
 {
-    /* Program the APIC timer to fire in `delta` cycles */
+    /* `delta` サイクル後に発火するようAPICタイマーをプログラムする */
     apic_write(APIC_TMICT, delta);
     return 0;
 }
 ```
 
-## tick device and NOHZ {#tick-device-and-nohz}
+## tickデバイスとNOHZ {#tick-device-and-nohz}
 
-Each CPU has a **tick device** — the clockevent used for the scheduling tick:
+各CPUは**tickデバイス**を持つ。これはスケジューリングティックに使われるclockeventである。
 
 ```c
 /* kernel/time/tick-sched.h */
 struct tick_device {
     struct clock_event_device *evtdev;
-    enum tick_device_mode      mode;  /* TICKDEV_MODE_PERIODIC or ONESHOT */
+    enum tick_device_mode      mode;  /* TICKDEV_MODE_PERIODIC または ONESHOT */
 };
 
-/* kernel/time/tick-common.c (declared extern in tick-internal.h) */
+/* kernel/time/tick-common.c（tick-internal.h で extern 宣言） */
 DEFINE_PER_CPU(struct tick_device, tick_cpu_device);
 ```
 
 ```bash
-# In periodic mode: tick fires every 1/HZ seconds (HZ=250 → 4ms)
+# 周期モードでは: ティックは1/HZ秒ごとに発火する（HZ=250 → 4ms）
 grep "^CONFIG_HZ=" /boot/config-$(uname -r)
 # CONFIG_HZ=250
 
-# In NOHZ (tickless) mode: tick is suppressed when CPU is idle
-# Reduces power consumption and improves real-time latency
+# NOHZ（ティックレス）モードでは: CPUがアイドルのときティックが抑制される
+# 消費電力を削減し、リアルタイムレイテンシを改善する
 
-# Check NOHZ mode:
+# NOHZモードを確認する:
 cat /sys/kernel/debug/sched/domains/cpu0/domain0/stats
-# or:
+# あるいは:
 cat /proc/timer_list | grep "Tick Device" | head -5
 
-# NOHZ_FULL (adaptive tick): suppress tick even when running
-# Requires: isolcpus + nohz_full= boot params (for RT/HPC)
+# NOHZ_FULL（適応ティック）: 実行中でもティックを抑制する
+# 必要条件: isolcpus + nohz_full= ブートパラメータ（RT/HPC向け）
 ```
 
-## Timekeeping: clocksource → wall clock {#timekeeping-clocksource-wall-clock}
+## 時刻管理: clocksource → 壁時計 {#timekeeping-clocksource-wall-clock}
 
 ```c
 /* include/linux/timekeeper_internal.h */
 struct timekeeper {
-    struct tk_read_base     tkr_mono;   /* monotonic clock (cacheline 0) */
+    struct tk_read_base     tkr_mono;   /* モノトニッククロック（キャッシュライン0） */
 
-    u64                     xtime_sec;  /* real wall-clock seconds */
-    unsigned long           ktime_sec;  /* monotonic seconds */
-    struct timespec64       wall_to_monotonic; /* offset */
-    ktime_t                 offs_real;  /* monotonic → realtime offset */
-    ktime_t                 offs_boot;  /* boot time offset */
-    ktime_t                 offs_tai;   /* TAI offset */
+    u64                     xtime_sec;  /* 実際の壁時計の秒 */
+    unsigned long           ktime_sec;  /* モノトニックの秒 */
+    struct timespec64       wall_to_monotonic; /* オフセット */
+    ktime_t                 offs_real;  /* モノトニック → リアルタイムのオフセット */
+    ktime_t                 offs_boot;  /* ブート時間のオフセット */
+    ktime_t                 offs_tai;   /* TAIオフセット */
 
-    struct tk_read_base     tkr_raw;    /* raw hardware clock (cacheline 2, not adjacent to tkr_mono) */
+    struct tk_read_base     tkr_raw;    /* 生のハードウェアクロック（キャッシュライン2、tkr_mono とは隣接しない） */
 
     unsigned int            clock_was_set_seq;
     u8                      cs_was_changed_seq;
     ktime_t                 next_leap_ktime;
-    s32                     tai_offset; /* TAI - UTC in seconds; last field in the real struct */
+    s32                     tai_offset; /* 秒単位の TAI - UTC。実際の構造体では最後のフィールド */
 };
 
-/* Reading current time (seqcount protects against concurrent updates): */
+/* 現在時刻の読み取り（seqcountが並行更新から保護する）: */
 /* kernel/time/timekeeping.c */
 ktime_t ktime_get(void)
 {
@@ -284,26 +284,26 @@ ktime_t ktime_get(void)
 }
 ```
 
-## Observing timekeeping {#observing-timekeeping}
+## 時刻管理の観察 {#observing-timekeeping}
 
 ```bash
-# Current time sources and offsets:
+# 現在の時刻ソースとオフセット:
 cat /proc/timer_list
 
-# NTP synchronization:
+# NTP同期:
 timedatectl status
 # System clock synchronized: yes
 # NTP service: active
 # RTC in local TZ: no
 
-# Clock error estimation (NTP):
+# クロック誤差の推定（NTP）:
 adjtimex -p | grep -E "offset|freq|error"
 
-# High-resolution timer benchmark:
+# 高分解能タイマーのベンチマーク:
 cyclictest -n -m -p99 -i200 -l1000000
-# Tests: time from sleep request to actual wakeup (uses hrtimer)
+# 測定内容: スリープ要求から実際のウェイクアップまでの時間（hrtimerを使用）
 
-# TSC vs HPET accuracy comparison:
+# TSCとHPETの精度比較:
 bpftrace -e '
 BEGIN { @start = nsecs; }
 interval:s:1 {
@@ -312,36 +312,36 @@ interval:s:1 {
 }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/clocksource.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clocksource.h) — definition of `struct clocksource`, the `CLOCK_SOURCE_*` flags, and frequency-to-mult/shift conversion helpers
-- [include/linux/clockchips.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clockchips.h) — `struct clock_event_device`, `CLOCK_EVT_FEAT_*` feature flags, and clockevent state accessors
-- [kernel/time/clocksource.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/clocksource.c) — clocksource registration, rating-based selection, and the `clocksource_watchdog()` stability verification framework
-- [kernel/time/clockevents.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/clockevents.c) — clockevent programming, event handler dispatch, and clockevent device registration
-- [kernel/time/tick-sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/tick-sched.h) — per-CPU `struct tick_device`, periodic tick setup, and the interface between clockevents and scheduler ticks
-- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — `clocksource_tsc`, early boot calibration against PIT/HPET, and runtime instability detection
-- [arch/x86/kernel/apic/apic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/apic/apic.c) — `lapic_clockevent`, local APIC timer programming via `APIC_TMICT`, and broadcast handling
+- [include/linux/clocksource.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clocksource.h) — `struct clocksource`、`CLOCK_SOURCE_*`フラグ、周波数からmult/shiftへの変換ヘルパーの定義
+- [include/linux/clockchips.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/clockchips.h) — `struct clock_event_device`、`CLOCK_EVT_FEAT_*`機能フラグ、clockeventの状態アクセサ
+- [kernel/time/clocksource.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/clocksource.c) — clocksourceの登録、レーティングに基づく選択、`clocksource_watchdog()`による安定性検証の枠組み
+- [kernel/time/clockevents.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/clockevents.c) — clockeventのプログラミング、イベントハンドラのディスパッチ、clockeventデバイスの登録
+- [kernel/time/tick-sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/tick-sched.h) — CPUごとの`struct tick_device`、周期ティックの設定、clockeventとスケジューラティックの間のインターフェース
+- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — `clocksource_tsc`、PIT/HPETに対するブート初期の較正、実行時の不安定性検出
+- [arch/x86/kernel/apic/apic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/apic/apic.c) — `lapic_clockevent`、`APIC_TMICT`によるlocal APICタイマーのプログラミング、ブロードキャストの処理
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — POSIX system call and vDSO fast-path for reading hardware clocksources
-- [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — kernel clock discipline interface for tuning frequency and phase offsets
+- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — ハードウェアclocksourceを読むためのPOSIXシステムコールとvDSO高速パス
+- [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — 周波数と位相オフセットを調整するためのカーネルのクロック規律インターフェース
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [High-Resolution Timers (hrtimers)](hrtimers.md) — high-resolution timers and scheduler tick emulation built on clockevents
-- [Timekeeping and Clocksources](timekeeping.md) — timekeeper architecture, `ktime_get()`, and wall-clock offsets
-- [POSIX Timers and timerfd](posix-timers.md) — user-facing timer interfaces backed by clockevents and hrtimers
-- [CPU Idle and C-States](../power/cpuidle.md) — dynamic tick suppression and `CLOCK_EVT_FEAT_C3STOP` broadcast timer management
-- [Real-Time Tuning](../sched/rt-tuning.md) — isolated CPUs and full tickless (`nohz_full`) operation for low-latency workloads
+- [高分解能タイマー（hrtimers）](hrtimers.md) — clockevent上に構築された高分解能タイマーとスケジューラティックのエミュレーション
+- [時刻管理とクロックソース](timekeeping.md) — timekeeperのアーキテクチャ、`ktime_get()`、壁時計のオフセット
+- [POSIXタイマーとtimerfd](posix-timers.md) — clockeventとhrtimerに支えられたユーザー向けタイマーインターフェース
+- [CPUアイドルとCステート](../power/cpuidle.md) — 動的なティック抑制と、`CLOCK_EVT_FEAT_C3STOP`によるブロードキャストタイマーの管理
+- [リアルタイムチューニング](../sched/rt-tuning.md) — 低レイテンシのワークロードのための分離CPUと完全ティックレス（`nohz_full`）動作
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Counting on the time stamp counter](https://lwn.net/Articles/209101/) — Jonathan Corbet, November 2006: the architectural introduction of the clocksource and clockevent abstractions
+- [Counting on the time stamp counter](https://lwn.net/Articles/209101/) — Jonathan Corbet、2006年11月: clocksourceとclockeventの抽象化のアーキテクチャ上の導入
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — upstream kernel documentation covering the clocksource, clockevent, and timekeeper subsystems
-- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — boot-time clock options: `clocksource=`, `tsc=reliable`, `nohz=`, and `nohz_full=`
+- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — clocksource、clockevent、timekeeperの各サブシステムを扱うアップストリームのカーネルドキュメント
+- [The kernel's command-line parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — ブート時のクロックオプション: `clocksource=`、`tsc=reliable`、`nohz=`、`nohz_full=`

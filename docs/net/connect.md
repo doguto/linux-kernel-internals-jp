@@ -1,10 +1,10 @@
-# What Happens When You connect() {#what-happens-when-you-connect}
+# connect()を呼ぶと何が起きるか {#what-happens-when-you-connect}
 
-> The TCP three-way handshake from a kernel perspective
+> カーネルの視点から見たTCPの3ウェイハンドシェイク
 
-## Overview {#overview}
+## 概要 {#overview}
 
-When a client calls `connect()`, the kernel initiates a TCP three-way handshake. The call may block until the connection is established (or timeout/error). The full sequence:
+クライアントが`connect()`を呼ぶと、カーネルはTCPの3ウェイハンドシェイクを開始する。この呼び出しは、コネクションが確立するまで（あるいはタイムアウトかエラーになるまで）ブロックすることがある。全体の流れは次のとおり:
 
 ```
 Client                                    Server
@@ -32,15 +32,15 @@ tcp_rcv_synsent_state_process()              │
   │                                     accept() returns new socket
 ```
 
-## Phase 1: connect() syscall → tcp_v4_connect() {#phase-1-connect-syscall-tcpv4connect}
+## フェーズ1: connect()システムコール → tcp_v4_connect() {#phase-1-connect-syscall-tcp_v4_connect}
 
 ```c
-// Userspace
+// ユーザー空間
 int fd = socket(AF_INET, SOCK_STREAM, 0);
 connect(fd, (struct sockaddr *)&addr, sizeof(addr));
 ```
 
-The syscall path:
+システムコールのパス:
 
 ```
 connect()
@@ -49,7 +49,7 @@ connect()
       → sk->sk_prot->connect()  = tcp_v4_connect()
 ```
 
-## Phase 2: tcp_v4_connect() {#phase-2-tcpv4connect}
+## フェーズ2: tcp_v4_connect() {#phase-2-tcp_v4_connect}
 
 ```c
 // net/ipv4/tcp_ipv4.c:222
@@ -57,28 +57,28 @@ int tcp_v4_connect(struct sock *sk, struct sockaddr *uaddr, int addr_len)
 {
     struct sockaddr_in *usin = (struct sockaddr_in *)uaddr;
 
-    // 1. Route lookup: find how to reach the destination
+    // 1. 経路検索: 宛先への到達方法を見つける
     rt = ip_route_connect(fl4, daddr, inet->inet_saddr, ...);
 
-    // 2. Source IP selection (if not bound)
-    // fl4->saddr is filled in by the routing subsystem
+    // 2. 送信元IPの選択（bindされていない場合）
+    // fl4->saddr はルーティングサブシステムが埋める
 
-    // 3. Ephemeral port selection (if not bound)
+    // 3. エフェメラルポートの選択（bindされていない場合）
     err = inet_hash_connect(&tcp_death_row, sk);
-    // Picks a source port from ip_local_port_range, checks for conflicts
+    // ip_local_port_range から送信元ポートを選び、衝突がないか確認する
 
-    // 4. Transition to SYN_SENT state
+    // 4. SYN_SENT 状態へ遷移
     tcp_set_state(sk, TCP_SYN_SENT);
 
-    // 5. Start the connect timer (retransmission)
+    // 5. connect タイマー（再送）を開始
     inet->inet_id = get_random_u16();
 
-    // 6. Send SYN
+    // 6. SYN を送信
     err = tcp_connect(sk);
 }
 ```
 
-## Phase 3: tcp_connect() — sending the SYN {#phase-3-tcp_connect-sending-the-syn}
+## フェーズ3: tcp_connect() — SYNの送信 {#phase-3-tcp_connect-sending-the-syn}
 
 ```c
 // net/ipv4/tcp_output.c:4296
@@ -86,123 +86,123 @@ int tcp_connect(struct sock *sk)
 {
     struct tcp_sock *tp = tcp_sk(sk);
 
-    // Initialize sequence number (random for security)
+    // シーケンス番号を初期化（セキュリティのためランダム）
     tp->write_seq = secure_tcp_seq(inet->inet_saddr, inet->inet_daddr,
                                    inet->inet_sport, inet->inet_dport);
 
-    // Allocate SYN sk_buff
+    // SYN 用の sk_buff を割り当てる
     buff = sk_stream_alloc_skb(sk, 0, sk->sk_allocation, true);
 
-    // Set up SYN packet
+    // SYN パケットを組み立てる
     tcp_init_nondata_skb(buff, tp->write_seq++, TCPHDR_SYN);
 
-    // TCP Fast Open: attach data to SYN if requested
+    // TCP Fast Open: 要求されていれば SYN にデータを付ける
     if (tp->fastopen_req)
         err = tcp_send_syn_data(sk, buff);
     else
         tcp_transmit_skb(sk, buff, 1, sk->sk_allocation);
 
-    // Start retransmit timer
+    // 再送タイマーを開始
     inet_csk_reset_xmit_timer(sk, ICSK_TIME_RETRANS, inet_csk(sk)->icsk_rto, ...);
 
     return 0;
 }
 ```
 
-SYN options set in the SYN packet:
+SYNパケットに設定されるSYNオプション:
 
-- **MSS** (Maximum Segment Size): tells the server the max segment we'll accept
-- **WSCALE**: window scaling factor for large windows
-- **SACK_PERM**: we support Selective ACK
-- **Timestamp**: for RTT measurement and PAWS (Protection Against Wrapped Sequences)
+- **MSS**（Maximum Segment Size）: こちらが受け入れる最大セグメントサイズをサーバーに伝える
+- **WSCALE**: 大きなウィンドウのためのウィンドウスケーリング係数
+- **SACK_PERM**: Selective ACKをサポートしていることを示す
+- **Timestamp**: RTT測定とPAWS（Protection Against Wrapped Sequences）のため
 
-## Phase 4: Server processes SYN → tcp_rcv_state_process() {#phase-4-server-processes-syn-tcprcvstate_process}
+## フェーズ4: サーバーがSYNを処理する → tcp_rcv_state_process() {#phase-4-server-processes-syn-tcp_rcv_state_process}
 
-On the server side:
+サーバー側では:
 
 ```c
 // net/ipv4/tcp_input.c
 int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 {
-    // Server in LISTEN state receives SYN:
+    // LISTEN 状態のサーバーが SYN を受信:
     case TCP_LISTEN:
         if (th->syn) {
-            // Create a request socket (lightweight, not a full sock yet)
+            // リクエストソケットを作成（軽量で、まだ完全な sock ではない）
             req = inet_reqsk_alloc(rsk_ops, sk, !want_cookie);
 
-            // Record client's ISN, MSS, options
+            // クライアントの ISN、MSS、オプションを記録
             tcp_parse_options(net, skb, &opt_rx, ...);
 
-            // Start SYN timeout timer (handles half-open connections)
+            // SYN タイムアウトタイマーを開始（ハーフオープンのコネクションを扱う）
             inet_csk_reqsk_queue_hash_add(sk, req, TCP_TIMEOUT_INIT);
 
-            // Send SYN-ACK
+            // SYN-ACK を送信
             af_ops->send_synack(sk, dst, &fl, req, ...);
             // → tcp_send_synack() → tcp_transmit_skb()
         }
 }
 ```
 
-The server creates a **request socket** (`struct request_sock`) — a lightweight half-open connection entry. The full `struct sock` is only allocated when the third ACK arrives.
+サーバーは**リクエストソケット**（`struct request_sock`）を作成する。これはハーフオープンのコネクションを表す軽量なエントリである。完全な`struct sock`は、3番目のACKが届いたときに初めて割り当てられる。
 
-## Phase 5: Client processes SYN-ACK → ESTABLISHED {#phase-5-client-processes-syn-ack-established}
+## フェーズ5: クライアントがSYN-ACKを処理する → ESTABLISHED {#phase-5-client-processes-syn-ack-established}
 
 ```c
 // net/ipv4/tcp_input.c
 static int tcp_rcv_synsent_state_process(struct sock *sk, struct sk_buff *skb, ...)
 {
-    // Client in SYN_SENT receives SYN-ACK:
+    // SYN_SENT 状態のクライアントが SYN-ACK を受信:
     if (th->ack) {
-        // Validate ACK number: must ACK our SYN
+        // ACK 番号を検証: 自分の SYN に対する ACK でなければならない
         if (TCP_SKB_CB(skb)->ack_seq != tp->snd_nxt)
             goto reset_and_undo;
 
-        // Accept server's ISN
+        // サーバーの ISN を受け入れる
         tp->rcv_nxt = TCP_SKB_CB(skb)->seq + 1;
 
-        // Record server's MSS, window scale, SACK support
+        // サーバーの MSS、ウィンドウスケール、SACK サポートを記録
         tcp_process_options(...);
 
-        // Transition to ESTABLISHED
+        // ESTABLISHED へ遷移
         tcp_set_state(sk, TCP_ESTABLISHED);
 
-        // Initialize congestion control
+        // 輻輳制御を初期化
         tcp_init_congestion_control(sk);
 
-        // Send ACK (completes the 3-way handshake)
+        // ACK を送信（3ウェイハンドシェイクが完了する）
         tcp_send_ack(sk);
 
-        // Wake up connect() — it can return now
+        // connect() を起床させる — これで return できる
         sk->sk_state_change(sk);
         // → wake_up_interruptible(sk->sk_wq)
     }
 }
 ```
 
-`connect()` unblocks and returns 0.
+`connect()`のブロックが解除され、0を返す。
 
-## Phase 6: Server processes ACK → accept() returns {#phase-6-server-processes-ack-accept-returns}
+## フェーズ6: サーバーがACKを処理する → accept()が返る {#phase-6-server-processes-ack-accept-returns}
 
 ```c
-// Server receives the final ACK:
-// tcp_rcv_state_process() → TCP_SYN_RECV case
+// サーバーが最後の ACK を受信:
+// tcp_rcv_state_process() → TCP_SYN_RECV のケース
 //   → inet_csk(sk)->icsk_af_ops->syn_recv_sock()
 //       → tcp_v4_syn_recv_sock()
-//           → allocate full struct sock for the new connection
-//           → move from request_sock queue to accept queue
-//   → sk_acceptq_added()  (increments accept queue length)
+//           → 新しいコネクション用に完全な struct sock を割り当てる
+//           → request_sock キューから accept キューへ移す
+//   → sk_acceptq_added()  (accept キューの長さを増やす)
 
-// accept() on the server:
+// サーバー側の accept():
 accept(listenfd, &addr, &addrlen)
   → inet_accept()
     → sk->sk_prot->accept()  = inet_csk_accept()
-      → wait for connection in accept queue
-      → dequeue and return new sock
+      → accept キューにコネクションが来るのを待つ
+      → デキューして新しい sock を返す
 ```
 
-## SYN backlog and accept queue {#syn-backlog-and-accept-queue}
+## SYNバックログとacceptキュー {#syn-backlog-and-accept-queue}
 
-The server maintains two queues:
+サーバーは2つのキューを保持する:
 
 ```
 SYN queue (incomplete connections):
@@ -214,66 +214,66 @@ Accept queue (complete connections):
   accept() dequeues from here
 ```
 
-Controlled by:
+これらは次の設定で制御される:
 
 ```bash
-# Maximum accept queue depth (SOMAXCONN)
+# accept キューの最大長（SOMAXCONN）
 cat /proc/sys/net/core/somaxconn  # default: 4096
 
-# TCP SYN backlog
+# TCP の SYN バックログ
 cat /proc/sys/net/ipv4/tcp_max_syn_backlog  # default: 512
 
-# listen() second argument sets per-socket accept queue limit
+# listen() の第2引数がソケットごとの accept キューの上限を設定する
 listen(fd, backlog);  # capped at somaxconn
 ```
 
-A full accept queue → new ACKs are dropped → client retries (appears as connection slowness, not error). A full SYN queue → SYN cookies or SYN drop.
+acceptキューが満杯 → 新しいACKが破棄される → クライアントが再試行する（エラーではなく、コネクションの遅さとして現れる）。SYNキューが満杯 → SYN cookieか、SYNの破棄となる。
 
-## SYN cookies {#syn-cookies}
+## SYN cookie {#syn-cookies}
 
-Under SYN flood attack, the SYN queue fills. SYN cookies encode connection state in the ISN, avoiding SYN queue entries:
+SYNフラッド攻撃を受けると、SYNキューが満杯になる。SYN cookieはコネクションの状態をISNにエンコードすることで、SYNキューのエントリを使わずに済ませる:
 
 ```bash
-# Enable SYN cookies (auto-activates under SYN flood)
+# SYN cookie を有効化（SYN フラッド時に自動的に作動する）
 cat /proc/sys/net/ipv4/tcp_syncookies  # 1 = enabled (default)
 ```
 
-With SYN cookies, the server doesn't create a request_sock on SYN receipt. Instead, it encodes the connection parameters in the SYN-ACK's sequence number. When the ACK arrives with the valid cookie, the connection is established without ever having been in the SYN queue.
+SYN cookieを使う場合、サーバーはSYNを受信してもrequest_sockを作成しない。代わりに、コネクションのパラメータをSYN-ACKのシーケンス番号にエンコードする。有効なcookieを含むACKが届くと、SYNキューに一度も入ることなくコネクションが確立される。
 
-## Ephemeral port selection {#ephemeral-port-selection}
+## エフェメラルポートの選択 {#ephemeral-port-selection}
 
 ```bash
-# Range for ephemeral (outbound) ports
+# エフェメラル（送信側）ポートの範囲
 cat /proc/sys/net/ipv4/ip_local_port_range
 # → 32768 60999  (default)
 
-# Count ports in use
+# 使用中のポート数を数える
 ss -tn | wc -l
 
-# If running out of ports: expand range or use SO_REUSEPORT
+# ポートが枯渇しそうなら: 範囲を広げるか SO_REUSEPORT を使う
 echo "1024 65535" > /proc/sys/net/ipv4/ip_local_port_range
 ```
 
-## Observing the connection {#observing-the-connection}
+## コネクションの観察 {#observing-the-connection}
 
 ```bash
-# See connections in all TCP states
+# すべての TCP 状態のコネクションを見る
 ss -tn state syn-sent
-ss -tn state syn-recv  # on server: half-open connections
+ss -tn state syn-recv  # サーバー側: ハーフオープンのコネクション
 
-# Count connections by state
+# 状態ごとにコネクション数を数える
 ss -tan | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
 
-# Trace the handshake
+# ハンドシェイクをトレースする
 trace-cmd record -e tcp:tcp_rcv_state_process \
                  -e tcp:tcp_send_syn \
                  -e tcp:tcp_send_synack \
                  sleep 5
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Life of a Packet (transmit)](life-of-packet-tx.md) — How the SYN packet is transmitted
-- [Life of a Packet (receive)](life-of-packet-rx.md) — How the SYN-ACK is received
-- [TCP Implementation](tcp.md) — Congestion control, flow control, retransmission
-- [Socket Layer Overview](socket-layer.md) — Socket state machine
+- [パケットの一生（送信）](life-of-packet-tx.md) — SYNパケットがどのように送信されるか
+- [パケットの一生（受信）](life-of-packet-rx.md) — SYN-ACKがどのように受信されるか
+- [TCPの実装](tcp.md) — 輻輳制御、フロー制御、再送
+- [ソケット層の概要](socket-layer.md) — ソケットの状態機械

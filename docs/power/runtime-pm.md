@@ -1,10 +1,10 @@
 # Runtime PM {#runtime-pm}
 
-> Device-level power management: suspending idle devices while the system runs
+> デバイスレベルの電源管理: システムの稼働中にアイドル状態のデバイスをサスペンドする
 
-## What is Runtime PM? {#what-is-runtime-pm}
+## Runtime PMとは何か {#what-is-runtime-pm}
 
-Runtime PM allows individual devices to enter low-power states while the rest of the system continues running. A GPU can be powered off when no display is attached; a USB device can be suspended when idle; a PCIe NIC can cut power to its PHY between bursts.
+Runtime PMは、システムの他の部分が動作を続けている間に、個々のデバイスを低電力状態に移行させる仕組みである。ディスプレイが接続されていなければGPUの電源を切ることができ、USBデバイスはアイドル時にサスペンドでき、PCIe NICはバーストとバーストの合間にPHYの電源を切ることができる。
 
 ```
 System running (S0)
@@ -15,34 +15,34 @@ System running (S0)
 └── NIC:  [active]
 ```
 
-## PM callbacks: struct dev_pm_ops {#pm-callbacks-struct-devpmops}
+## PMコールバック: struct dev_pm_ops {#pm-callbacks-struct-dev_pm_ops}
 
-Every driver can register power management callbacks:
+どのドライバも電源管理のコールバックを登録できる。
 
 ```c
-/* include/linux/pm.h — abridged; see System Suspend for the _late/_early
-   and _noirq variants (12 more callbacks) called during system sleep */
+/* include/linux/pm.h — 抜粋。システムスリープ中に呼ばれる_late/_early
+   および_noirqの変種（さらに12個のコールバック）についてはシステムサスペンドを参照 */
 struct dev_pm_ops {
-    /* System sleep: called on system suspend/resume */
+    /* システムスリープ: システムのサスペンド/レジューム時に呼ばれる */
     int (*prepare)(struct device *dev);
     void (*complete)(struct device *dev);
     int (*suspend)(struct device *dev);
     int (*resume)(struct device *dev);
-    int (*freeze)(struct device *dev);    /* hibernate snapshot */
+    int (*freeze)(struct device *dev);    /* ハイバネートのスナップショット */
     int (*thaw)(struct device *dev);
     int (*poweroff)(struct device *dev);
     int (*restore)(struct device *dev);
-    /* ... suspend_late/resume_early, freeze_late/thaw_early,
-       poweroff_late/restore_early, and the six *_noirq variants ... */
+    /* ... suspend_late/resume_early、freeze_late/thaw_early、
+       poweroff_late/restore_early、および6つの*_noirq変種 ... */
 
-    /* Runtime PM: called when device idles or resumes */
+    /* Runtime PM: デバイスがアイドルになるか再開するときに呼ばれる */
     int (*runtime_suspend)(struct device *dev);
     int (*runtime_resume)(struct device *dev);
     int (*runtime_idle)(struct device *dev);
 };
 ```
 
-A driver registers them with:
+ドライバは次のようにしてこれらを登録する。
 
 ```c
 static const struct dev_pm_ops mydriver_pm_ops = {
@@ -61,73 +61,73 @@ static struct platform_driver mydriver = {
 };
 ```
 
-## Usage counting: get and put {#usage-counting-get-and-put}
+## 使用カウント: getとput {#usage-counting-get-and-put}
 
-The core of Runtime PM is a **usage counter**. The device stays active while the counter is > 0; it may be suspended when it reaches 0.
+Runtime PMの中核は**使用カウンタ**である。カウンタが0より大きい間、デバイスはアクティブなままであり、0に達するとサスペンドされうる。
 
 ```c
 #include <linux/pm_runtime.h>
 
-/* Increment usage count and wait for device to become active.
-   If device is suspended, resumes it first. */
+/* 使用カウントをインクリメントし、デバイスがアクティブになるのを待つ。
+   デバイスがサスペンドされていれば、まずレジュームする。 */
 int ret = pm_runtime_get_sync(dev);
 if (ret < 0) {
-    /* Device could not be resumed — return error */
+    /* デバイスをレジュームできなかった — エラーを返す */
     return ret;
 }
 
-/* ... use the device ... */
+/* ... デバイスを使う ... */
 
-/* Decrement usage count. If count reaches 0, queue an idle check
-   (runs runtime_idle, then runtime_suspend if that allows it). */
+/* 使用カウントをデクリメントする。カウントが0に達したらアイドルチェックをキューに入れる
+   （runtime_idleを実行し、それが許せばruntime_suspendを実行する）。 */
 pm_runtime_put(dev);
 
-/* Or: decrement and queue suspend after the autosuspend delay */
+/* または: デクリメントして、autosuspendの遅延後にサスペンドをキューに入れる */
 pm_runtime_put_autosuspend(dev);
 ```
 
-The difference between `pm_runtime_put` variants:
+`pm_runtime_put`の各変種の違いは次のとおりである。
 
-| Function | Behavior |
+| 関数 | 振る舞い |
 |----------|---------- |
-| `pm_runtime_put_sync` | Runs the idle check synchronously if count reaches 0 — calls `runtime_idle()`, then `runtime_suspend()` immediately if nothing vetoes it |
-| `pm_runtime_put` | Queues an async idle check if count reaches 0 |
-| `pm_runtime_put_autosuspend` | Queues a suspend after the autosuspend delay if count reaches 0 |
-| `pm_runtime_put_noidle` | Decrements but does not trigger suspend |
+| `pm_runtime_put_sync` | カウントが0に達したらアイドルチェックを同期的に実行する — `runtime_idle()`を呼び、拒否されなければ直ちに`runtime_suspend()`を呼ぶ |
+| `pm_runtime_put` | カウントが0に達したら非同期のアイドルチェックをキューに入れる |
+| `pm_runtime_put_autosuspend` | カウントが0に達したら、autosuspendの遅延後のサスペンドをキューに入れる |
+| `pm_runtime_put_noidle` | デクリメントするがサスペンドは引き起こさない |
 
 ## Autosuspend {#autosuspend}
 
-Autosuspend adds a configurable delay before suspension. This prevents thrashing when a device is briefly idle between bursts of activity:
+autosuspendは、サスペンドの前に設定可能な遅延を追加する。これにより、活動のバーストの合間にデバイスが短時間アイドルになったときのスラッシングを防ぐ。
 
 ```c
-/* In probe: enable autosuspend with 2-second delay */
+/* probe内: 2秒の遅延でautosuspendを有効にする */
 pm_runtime_set_autosuspend_delay(dev, 2000 /* ms */);
 pm_runtime_use_autosuspend(dev);
 
-/* Mark the device as initially active (since probe just brought it up).
-   This MUST happen before pm_runtime_enable(): __pm_runtime_set_status()
-   returns -EAGAIN (without changing the status) once runtime PM is
-   already enabled for the device. */
+/* デバイスを初期状態でアクティブとしてマークする（probeで起動したばかりなので）。
+   これはpm_runtime_enable()より前に行わなければならない: runtime PMがそのデバイスで
+   既に有効になっていると、__pm_runtime_set_status()は
+   （状態を変更せずに）-EAGAINを返す。 */
 pm_runtime_get_noresume(dev);
 pm_runtime_set_active(dev);
 pm_runtime_enable(dev);
 pm_runtime_put_autosuspend(dev);
 ```
 
-The autosuspend delay is also exported to userspace:
+autosuspendの遅延はユーザー空間にもエクスポートされている。
 
 ```bash
-# Read/write autosuspend delay for a device (ms, -1 = disabled)
+# デバイスのautosuspend遅延を読み書きする（ms、-1 = 無効）
 cat /sys/bus/usb/devices/1-1/power/autosuspend_delay_ms
 echo 1000 | sudo tee /sys/bus/usb/devices/1-1/power/autosuspend_delay_ms
 ```
 
-## Runtime PM state machine {#runtime-pm-state-machine}
+## Runtime PMの状態機械 {#runtime-pm-state-machine}
 
-There is no `RPM_IDLE` status — idle is a *callback*, not a status the
-device parks in. The device remains `RPM_ACTIVE` the entire time its
-`runtime_idle()` callback runs; only if that callback (or the caller)
-goes on to request a suspend does the status change:
+`RPM_IDLE`という状態は存在しない。アイドルは*コールバック*であって、デバイスが
+留まる状態ではない。`runtime_idle()`コールバックが実行されている間、
+デバイスはずっと`RPM_ACTIVE`のままである。そのコールバック（または呼び出し元）が
+続けてサスペンドを要求した場合にのみ、状態が変化する。
 
 ```
            pm_runtime_enable()
@@ -160,188 +160,188 @@ goes on to request a suspend does the status change:
               [RPM_ACTIVE]
 ```
 
-The real states (`enum rpm_status` in `include/linux/pm.h`) are
-`RPM_INVALID`, `RPM_ACTIVE`, `RPM_RESUMING`, `RPM_SUSPENDED`,
-`RPM_SUSPENDING`, and `RPM_BLOCKED`.
+実際の状態（`include/linux/pm.h`の`enum rpm_status`）は、
+`RPM_INVALID`、`RPM_ACTIVE`、`RPM_RESUMING`、`RPM_SUSPENDED`、
+`RPM_SUSPENDING`、`RPM_BLOCKED`である。
 
-### The idle callback {#the-idle-callback}
+### アイドルコールバック {#the-idle-callback}
 
-The idle callback is called when usage count reaches 0. It decides whether to actually suspend:
+アイドルコールバックは、使用カウントが0に達したときに呼ばれる。実際にサスペンドするかどうかを決定する。
 
 ```c
 static int mydriver_runtime_idle(struct device *dev)
 {
     struct mydata *priv = dev_get_drvdata(dev);
 
-    /* Don't suspend if there's pending work */
+    /* 保留中の作業があればサスペンドしない */
     if (!list_empty(&priv->pending_list))
-        return -EBUSY;  /* don't suspend */
+        return -EBUSY;  /* サスペンドしない */
 
-    /* Let PM core call runtime_suspend */
+    /* PMコアにruntime_suspendを呼ばせる */
     return pm_runtime_autosuspend(dev);
-    /* or: return 0 (PM core will call runtime_suspend immediately) */
+    /* または: return 0（PMコアが直ちにruntime_suspendを呼ぶ） */
 }
 ```
 
-## struct device power fields {#struct-device-power-fields}
+## struct deviceの電源関連フィールド {#struct-device-power-fields}
 
 ```c
-/* include/linux/pm.h — abridged; the real struct has ~55 fields */
+/* include/linux/pm.h — 抜粋。実際の構造体には約55個のフィールドがある */
 struct dev_pm_info {
-    pm_message_t        power_state;    /* current power state */
-    bool                can_wakeup:1;   /* device can generate wakeup events */
+    pm_message_t        power_state;    /* 現在の電源状態 */
+    bool                can_wakeup:1;   /* デバイスがウェイクアップイベントを生成できる */
     bool                async_suspend:1;
     bool                in_dpm_list:1;
 
-    /* Runtime PM fields (under #ifdef CONFIG_PM) */
-    struct hrtimer      suspend_timer;  /* autosuspend timer */
+    /* Runtime PMのフィールド（#ifdef CONFIG_PM の内側） */
+    struct hrtimer      suspend_timer;  /* autosuspendタイマー */
     u64                 timer_expires;
     struct work_struct  work;
 
     wait_queue_head_t   wait_queue;
 
-    atomic_t            usage_count;    /* get/put counter */
-    atomic_t            child_count;    /* children that are active */
+    atomic_t            usage_count;    /* get/putのカウンタ */
+    atomic_t            child_count;    /* アクティブな子の数 */
 
-    unsigned int        disable_depth:3; /* depth of pm_runtime_disable() calls */
+    unsigned int        disable_depth:3; /* pm_runtime_disable()呼び出しの深さ */
     int                 runtime_error;
 
-    enum rpm_status     runtime_status; /* current runtime PM state */
+    enum rpm_status     runtime_status; /* 現在のruntime PM状態 */
 };
 ```
 
-## Power domains {#power-domains}
+## 電源ドメイン {#power-domains}
 
-A power domain is a hardware block that can be independently powered off. Multiple devices may share a domain — the domain stays on until all devices in it are suspended.
+電源ドメインとは、独立して電源を切ることができるハードウェアブロックである。複数のデバイスが1つのドメインを共有することがあり、ドメインはその中のすべてのデバイスがサスペンドされるまでオンのままである。
 
 ```c
 /* include/linux/pm_domain.h */
 struct generic_pm_domain {
     struct device          dev;
-    struct dev_pm_domain domain;    /* embedded — has dev_pm_ops */
+    struct dev_pm_domain domain;    /* 埋め込み — dev_pm_opsを持つ */
     struct list_head      gpd_list_node;
 
     const char           *name;
-    atomic_t              sd_count;  /* number of subdomains with power "on" */
+    atomic_t              sd_count;  /* 電源が「オン」のサブドメインの数 */
     enum gpd_status       status;    /* GENPD_STATE_ON / GENPD_STATE_OFF */
 
     unsigned int          device_count;
-    unsigned int          device_id;       /* unique device id */
+    unsigned int          device_id;       /* 一意なデバイスID */
     unsigned int          suspended_count;
     unsigned int          prepared_count;
-    unsigned int          performance_state; /* aggregated max performance state */
+    unsigned int          performance_state; /* 集約された最大パフォーマンス状態 */
 
     struct dev_power_governor *gov;
 
-    struct list_head      parent_links; /* parent domains */
-    struct list_head      child_links;  /* child domains */
-    struct list_head      dev_list;     /* devices in this domain */
+    struct list_head      parent_links; /* 親ドメイン */
+    struct list_head      child_links;  /* 子ドメイン */
+    struct list_head      dev_list;     /* このドメイン内のデバイス */
 
     int (*power_off)(struct generic_pm_domain *domain);
     int (*power_on)(struct generic_pm_domain *domain);
 };
 ```
 
-### genpd usage (ARM SoC example) {#genpd-usage-arm-soc-example}
+### genpdの使い方（ARM SoCの例） {#genpd-usage-arm-soc-example}
 
 ```c
-/* SoC power domain setup (in platform code or device tree) */
+/* SoCの電源ドメインのセットアップ（プラットフォームコードまたはデバイスツリー内） */
 static struct generic_pm_domain gpu_pd = {
     .name      = "gpu",
     .power_off = gpu_domain_power_off,
     .power_on  = gpu_domain_power_on,
 };
 
-/* Attach a device to the domain */
+/* デバイスをドメインに接続する */
 pm_genpd_add_device(&gpu_pd, &gpu_dev);
 
-/* Now: when all devices in gpu_pd are runtime-suspended,
-   power_off() is called automatically */
+/* これで: gpu_pd内のすべてのデバイスがランタイムサスペンドされると、
+   power_off()が自動的に呼ばれる */
 ```
 
-## Runtime PM in interrupt context {#runtime-pm-in-interrupt-context}
+## 割り込みコンテキストでのRuntime PM {#runtime-pm-in-interrupt-context}
 
-`pm_runtime_get_sync` may sleep (to wait for resume). This is not allowed in interrupt context. Use the non-blocking variant:
+`pm_runtime_get_sync`は（レジュームを待つために）スリープすることがある。これは割り込みコンテキストでは許されない。ノンブロッキングの変種を使う。
 
 ```c
-/* In interrupt handler: try to get, but don't sleep.
-   pm_runtime_get_if_active() is tri-valued: 1 = active (count bumped),
-   0 = not active, -EINVAL = runtime PM disabled for this device. Both
-   the "not active" and "disabled" cases must skip the device — only
-   ret == 1 bumped the usage count, so only that case may call put(). */
+/* 割り込みハンドラ内: getを試みるが、スリープはしない。
+   pm_runtime_get_if_active()は3値を返す: 1 = アクティブ（カウントが増えた）、
+   0 = アクティブでない、-EINVAL = このデバイスではruntime PMが無効。
+   「アクティブでない」と「無効」のどちらの場合もデバイスをスキップしなければならない —
+   使用カウントを増やしたのはret == 1の場合だけなので、put()を呼んでよいのもその場合だけである。 */
 ret = pm_runtime_get_if_active(dev);
 if (ret <= 0) {
-    /* Device is suspended (or runtime PM is disabled) — schedule work */
+    /* デバイスはサスペンド中（またはruntime PMが無効） — 作業をスケジュールする */
     schedule_work(&priv->deferred_work);
     return IRQ_HANDLED;
 }
 
-/* Device is active */
+/* デバイスはアクティブ */
 handle_interrupt(dev);
 pm_runtime_put(dev);
 return IRQ_HANDLED;
 ```
 
-## Observing Runtime PM {#observing-runtime-pm}
+## Runtime PMの観測 {#observing-runtime-pm}
 
 ```bash
-# Runtime PM status for all PCI devices
+# すべてのPCIデバイスのRuntime PM状態
 for d in /sys/bus/pci/devices/*/; do
     echo -n "$d: "
     cat "$d/power/runtime_status" 2>/dev/null || echo "N/A"
 done
 
-# Usage count and autosuspend
+# 使用カウントとautosuspend
 cat /sys/bus/pci/devices/0000:00:02.0/power/runtime_usage
 cat /sys/bus/pci/devices/0000:00:02.0/power/autosuspend_delay_ms
 
-# Enable runtime PM for a device (some drivers require userspace enable)
+# デバイスのruntime PMを有効にする（一部のドライバはユーザー空間からの有効化が必要）
 echo auto | sudo tee /sys/bus/usb/devices/1-1/power/control
-echo on   | sudo tee /sys/bus/usb/devices/1-1/power/control  # disable
+echo on   | sudo tee /sys/bus/usb/devices/1-1/power/control  # 無効化
 
-# PM tracepoints (rpm_suspend, rpm_resume, rpm_idle, rpm_usage,
-# rpm_return_int, rpm_status — include/trace/events/rpm.h)
+# PMのtracepoint（rpm_suspend、rpm_resume、rpm_idle、rpm_usage、
+# rpm_return_int、rpm_status — include/trace/events/rpm.h）
 echo 1 > /sys/kernel/tracing/events/rpm/enable
 cat /sys/kernel/tracing/trace_pipe
 # 0000:01:00.0 flags-0 cnt-0 dep-0 auto-1 p-0 irq-0 child-0
 # 0000:01:00.0 flags-4 cnt-0 dep-0 auto-1 p-0 irq-0 child-0
 
-# powertop shows device runtime PM activity
+# powertopはデバイスのruntime PMの活動を表示する
 sudo powertop --html=powertop.html
 ```
 
-## Common pitfalls {#common-pitfalls}
+## よくある落とし穴 {#common-pitfalls}
 
-### Forgetting pm_runtime_enable {#forgetting-pmruntimeenable}
+### pm_runtime_enableを忘れる {#forgetting-pm_runtime_enable}
 
 ```c
-/* WRONG: runtime PM is disabled by default */
+/* 誤り: runtime PMはデフォルトで無効になっている */
 static int mydriver_probe(struct platform_device *pdev)
 {
-    /* ... setup ... */
-    /* missing: pm_runtime_enable(&pdev->dev) */
+    /* ... セットアップ ... */
+    /* 欠落: pm_runtime_enable(&pdev->dev) */
     return 0;
 }
-/* Without pm_runtime_enable(), disable_depth stays at the value
- * pm_runtime_init() set it to (1). Any later pm_runtime_get_sync() call
- * on this device goes through rpm_resume(), sees disable_depth > 0,
- * and returns -EACCES. */
+/* pm_runtime_enable()がないと、disable_depthはpm_runtime_init()が
+ * 設定した値（1）のままになる。その後このデバイスに対して
+ * pm_runtime_get_sync()を呼ぶと、rpm_resume()を通ってdisable_depth > 0を見つけ、
+ * -EACCESを返す。 */
 ```
 
-### Not balancing get/put {#not-balancing-getput}
+### get/putの釣り合いが取れていない {#not-balancing-getput}
 
 ```c
-/* WRONG: skipping put on error path */
+/* 誤り: エラーパスでputを飛ばしている */
 static int mydriver_do_io(struct device *dev)
 {
     pm_runtime_get_sync(dev);
     if (error_condition)
-        return -EIO;  /* leaked get! usage_count never decremented */
+        return -EIO;  /* getがリークしている! usage_countがデクリメントされない */
     pm_runtime_put(dev);
     return 0;
 }
 
-/* RIGHT: always put */
+/* 正しい: 常にputする */
 static int mydriver_do_io(struct device *dev)
 {
     int ret;
@@ -352,35 +352,35 @@ static int mydriver_do_io(struct device *dev)
 }
 ```
 
-### Calling get_sync in atomic context {#calling-get_sync-in-atomic-context}
+### アトミックコンテキストでget_syncを呼ぶ {#calling-get_sync-in-atomic-context}
 
 ```c
-/* WRONG: pm_runtime_get_sync may sleep */
+/* 誤り: pm_runtime_get_syncはスリープすることがある */
 spin_lock_irqsave(&lock, flags);
-pm_runtime_get_sync(dev);  /* may sleep! BUG */
+pm_runtime_get_sync(dev);  /* スリープしうる! バグ */
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `struct dev_pm_ops`, `struct dev_pm_info`, and the `SET_RUNTIME_PM_OPS()`/`SET_SYSTEM_SLEEP_PM_OPS()` macros
-- [include/linux/pm_runtime.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_runtime.h) — the `pm_runtime_get*()`/`pm_runtime_put*()` inline wrappers and autosuspend helpers
-- [drivers/base/power/runtime.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/runtime.c) — the runtime PM core: `__pm_runtime_suspend()`, `__pm_runtime_resume()`, `pm_runtime_get_if_active()`, and the `RPM_*` state machine
-- [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain` and `enum gpd_status`
-- [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — `pm_genpd_add_device()` and the genpd core (moved here from `drivers/base/power/domain.c` during the driver-core reorganization)
+- [include/linux/pm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm.h) — `struct dev_pm_ops`、`struct dev_pm_info`、および`SET_RUNTIME_PM_OPS()`/`SET_SYSTEM_SLEEP_PM_OPS()`マクロ
+- [include/linux/pm_runtime.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_runtime.h) — `pm_runtime_get*()`/`pm_runtime_put*()`のインラインラッパーとautosuspendのヘルパー
+- [drivers/base/power/runtime.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/base/power/runtime.c) — runtime PMのコア: `__pm_runtime_suspend()`、`__pm_runtime_resume()`、`pm_runtime_get_if_active()`、および`RPM_*`の状態機械
+- [include/linux/pm_domain.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_domain.h) — `struct generic_pm_domain`と`enum gpd_status`
+- [drivers/pmdomain/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pmdomain/core.c) — `pm_genpd_add_device()`とgenpdのコア（ドライバコアの再編成の際に`drivers/base/power/domain.c`からここへ移された）
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Power Domains and genpd](power-domains.md) — full treatment of `struct generic_pm_domain`, governors, and the devicetree binding
-- [cpufreq](cpufreq.md) — CPU-level frequency/voltage scaling
-- [System Suspend](suspend.md) — system-wide sleep states
-- [Device Drivers: platform driver](../drivers/platform-driver.md) — devm_ and probe flow
+- [電源ドメインとgenpd](power-domains.md) — `struct generic_pm_domain`、ガバナ、デバイスツリーバインディングの詳しい解説
+- [cpufreq](cpufreq.md) — CPUレベルの周波数/電圧スケーリング
+- [システムサスペンド](suspend.md) — システム全体のスリープ状態
+- [デバイスドライバ: プラットフォームドライバ](../drivers/platform-driver.md) — devm_とprobeの流れ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Runtime power management](https://lwn.net/Articles/347573/) — Jonathan Corbet, August 19, 2009; Rafael Wysocki's original runtime PM patch set and the `runtime_suspend`/`runtime_resume`/`runtime_idle` callbacks described above
+- [Runtime power management](https://lwn.net/Articles/347573/) — Jonathan Corbet、2009年8月19日。Rafael Wysockiによる最初のruntime PMパッチセットと、上で説明した`runtime_suspend`/`runtime_resume`/`runtime_idle`コールバック
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/power/runtime_pm.rst](https://docs.kernel.org/power/runtime_pm.html) — upstream reference for the runtime PM API, usage-count rules, and locking
+- [Documentation/power/runtime_pm.rst](https://docs.kernel.org/power/runtime_pm.html) — runtime PM API、使用カウントの規則、ロックに関するアップストリームのリファレンス

@@ -1,40 +1,40 @@
-# Linux Security Module (LSM) Framework {#linux-security-module-lsm-framework}
+# Linux Security Module（LSM）フレームワーク {#linux-security-module-lsm-framework}
 
-> The kernel's hook-based Mandatory Access Control infrastructure
+> カーネルのフックベースの強制アクセス制御基盤
 
-## What LSM is {#what-lsm-is}
+## LSMとは {#what-lsm-is}
 
-The Linux Security Module framework (introduced in Linux 2.6.0, December 2003) provides a set of hooks throughout the kernel where security modules can enforce additional access controls beyond standard DAC. Designed by Crispin Cowan (WireX) with NSA, SGI, and others — presented at USENIX Security 2002: ["Linux Security Modules: General Security Support for the Linux Kernel"](https://www.usenix.org/conference/11th-usenix-security-symposium/linux-security-modules-general-security-support-linux). Kernel docs: [security/lsm.html](https://www.kernel.org/doc/html/latest/security/lsm.html).
+Linux Security Moduleフレームワーク（Linux 2.6.0、2003年12月に導入）は、カーネル全体にわたってフックの集合を提供し、セキュリティモジュールが標準のDACを超える追加のアクセス制御を適用できるようにする。Crispin Cowan（WireX）がNSA、SGIなどと共同で設計し、USENIX Security 2002で発表された: ["Linux Security Modules: General Security Support for the Linux Kernel"](https://www.usenix.org/conference/11th-usenix-security-symposium/linux-security-modules-general-security-support-linux)。カーネルドキュメント: [security/lsm.html](https://www.kernel.org/doc/html/latest/security/lsm.html)。
 
-LSM hooks are called at security-critical points:
+LSMフックはセキュリティ上重要な箇所で呼び出される:
 
-- File open/read/write/execute
-- Network socket creation and connections
-- Process creation and credential changes
-- IPC operations
-- Capability checks
+- ファイルのopen/read/write/execute
+- ネットワークソケットの作成と接続
+- プロセスの作成とクレデンシャルの変更
+- IPC操作
+- ケーパビリティのチェック
 
-Multiple LSMs can be active simultaneously (stacking, since Linux 4.2 — [`3c4ed7bdf599`](https://git.kernel.org/linus/3c4ed7bdf5997d8020cbb8d4abbef2fcfb9f1284) by Casey Schaufler). The kernel evaluates all of them: access is granted only if ALL LSMs allow it.
+複数のLSMを同時に有効にできる（スタッキング。Linux 4.2以降 — Casey Schauflerによる[`3c4ed7bdf599`](https://git.kernel.org/linus/3c4ed7bdf5997d8020cbb8d4abbef2fcfb9f1284)）。カーネルはそのすべてを評価し、*すべての*LSMが許可した場合にのみアクセスが許可される。
 
-## LSM hook architecture {#lsm-hook-architecture}
+## LSMフックのアーキテクチャ {#lsm-hook-architecture}
 
 ```c
-/* security/security.c: the hook dispatch */
+/* security/security.c: フックのディスパッチ */
 
-/* All LSM hook lists (one list per hook, not a pointer) */
+/* すべてのLSMフックリスト（フックごとに1リスト。ポインタではない） */
 static struct security_hook_heads security_hook_heads;
 
-/* Example: file_open hook */
+/* 例: file_openフック */
 int security_file_open(struct file *file)
 {
     return call_int_hook(file_open, 0, file);
-    /* calls each registered LSM's file_open handler */
-    /* returns the first non-zero result (denial) */
+    /* 登録された各LSMのfile_openハンドラを呼ぶ */
+    /* 最初の非ゼロの結果（拒否）を返す */
 }
 ```
 
 ```c
-/* A security module registers its hooks: */
+/* セキュリティモジュールは自分のフックを登録する: */
 static struct security_hook_list mymod_hooks[] __lsm_ro_after_init = {
     LSM_HOOK_INIT(file_open, mymod_file_open),
     LSM_HOOK_INIT(socket_connect, mymod_socket_connect),
@@ -53,23 +53,23 @@ DEFINE_LSM(mymod) = {
 };
 ```
 
-## Complete list of LSM hook categories {#complete-list-of-lsm-hook-categories}
+## LSMフックのカテゴリ一覧 {#complete-list-of-lsm-hook-categories}
 
 ```c
-/* include/linux/lsm_hooks.h — over 200 hooks: */
+/* include/linux/lsm_hooks.h — 200を超えるフック: */
 
-/* File and inode operations */
+/* ファイルとinodeの操作 */
 file_open, file_permission, file_ioctl, file_mmap
 inode_permission, inode_create, inode_link, inode_unlink
 inode_mkdir, inode_rmdir, inode_rename, inode_readlink
 inode_setattr, inode_getattr, inode_setxattr, inode_getxattr
 
-/* Process credentials */
+/* プロセスのクレデンシャル */
 bprm_check_security, bprm_creds_for_exec
 task_alloc, task_free, task_fix_setuid
 cred_alloc_blank, cred_prepare, cred_transfer
 
-/* Network */
+/* ネットワーク */
 socket_create, socket_bind, socket_connect
 socket_listen, socket_accept, socket_recvmsg, socket_sendmsg
 socket_sock_rcv_skb, socket_getpeersec_stream
@@ -79,10 +79,10 @@ msg_queue_associate, msg_queue_msgctl
 sem_associate, sem_semctl
 shm_associate, shm_shmctl, shm_shmat
 
-/* Capabilities */
+/* ケーパビリティ */
 capable, settime
 
-/* System */
+/* システム */
 syslog, quotactl, sysctl, getprocattr, setprocattr
 
 /* BPF */
@@ -91,44 +91,44 @@ bpf, bpf_map, bpf_prog
 
 ## SELinux {#selinux}
 
-SELinux (Security-Enhanced Linux) was developed by the NSA, open-sourced in December 2000, and merged into Linux 2.6.0-test3 (August 2003). It implements Mandatory Access Control based on **labels** and **policies**.
+SELinux（Security-Enhanced Linux）はNSAが開発し、2000年12月にオープンソース化され、Linux 2.6.0-test3（2003年8月）にマージされた。**ラベル**と**ポリシー**に基づく強制アクセス制御を実装している。
 
-### Labels {#labels}
+### ラベル {#labels}
 
-Every object (file, process, socket) has a security context:
+すべてのオブジェクト（ファイル、プロセス、ソケット）はセキュリティコンテキストを持つ:
 ```
 user:role:type:level
 system_u:system_r:httpd_t:s0
 ```
 
 ```bash
-# See file context
+# ファイルのコンテキストを見る
 ls -Z /etc/passwd
 # system_u:object_r:passwd_file_t:s0 /etc/passwd
 
-# See process context
+# プロセスのコンテキストを見る
 ps -eZ | grep httpd
 # system_u:system_r:httpd_t:s0 ... httpd
 
-# See your context
+# 自分のコンテキストを見る
 id -Z
 # unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
 ```
 
-### Policy {#policy}
+### ポリシー {#policy}
 
-The policy defines which types can perform which operations on which other types:
+ポリシーは、どのタイプがどの他のタイプに対してどの操作を行えるかを定義する:
 
 ```
-# Allow httpd to read cert files
+# httpdに証明書ファイルの読み取りを許可する
 allow httpd_t cert_t:file { read getattr open };
 
-# Allow httpd to bind to http ports
+# httpdにhttpポートへのbindを許可する
 allow httpd_t http_port_t:tcp_socket name_bind;
 ```
 
 ```bash
-# Check SELinux status
+# SELinuxの状態を確認する
 getenforce
 # Enforcing | Permissive | Disabled
 
@@ -138,23 +138,23 @@ sestatus
 # SELinux mount point:            /sys/fs/selinux
 # SELinuxfs mount:                /sys/fs/selinux
 
-# Set permissive (log but don't deny)
+# permissiveに設定する（ログは取るが拒否しない）
 setenforce 0
 
-# Check audit log for denials
+# 拒否についてauditログを確認する
 ausearch -m AVC | tail -20
 # type=AVC msg=audit(1234.567:890): avc:  denied  { read } for ...
 # pid=1234 comm="nginx" name="secret.key" scontext=httpd_t tcontext=sysadm_home_t
 
-# Fix: set correct label
+# 修正: 正しいラベルを設定する
 chcon -t httpd_sys_content_t /var/www/html/myfile
-restorecon /var/www/html/  # restore to policy default
+restorecon /var/www/html/  # ポリシーのデフォルトに戻す
 ```
 
-### SELinux internals {#selinux-internals}
+### SELinuxの内部 {#selinux-internals}
 
 ```c
-/* security/selinux/hooks.c: inode_permission hook */
+/* security/selinux/hooks.c: inode_permissionフック */
 static int selinux_inode_permission(struct inode *inode, int mask)
 {
     const struct cred *cred = current_cred();
@@ -162,14 +162,14 @@ static int selinux_inode_permission(struct inode *inode, int mask)
     struct task_security_struct *tsec;
     u32 sid, newsid, perms;
 
-    /* Get security labels */
+    /* セキュリティラベルを取得する */
     tsec = selinux_cred(cred);
     isec = selinux_inode(inode);
 
-    /* Convert access mask to SELinux permission bits */
+    /* アクセスマスクをSELinuxのパーミッションビットに変換する */
     perms = file_mask_to_av(inode->i_mode, mask);
 
-    /* Call SELinux policy engine */
+    /* SELinuxのポリシーエンジンを呼ぶ */
     rc = avc_has_perm(&selinux_state,
                       tsec->sid, isec->sid,
                       isec->sclass, perms, &ad);
@@ -179,56 +179,56 @@ static int selinux_inode_permission(struct inode *inode, int mask)
 
 ## AppArmor {#apparmor}
 
-AppArmor (originally "SubDomain" by Immunix, 1998; maintained by Canonical since 2009) was merged into Linux 2.6.36 (October 2010) by John Johansen — [`b5e95b48685e`](https://git.kernel.org/linus/b5e95b48685e3481139a5634d14d630d12c7d5ce). It uses **path-based** MAC — simpler than SELinux's label model. Profiles are plain text and specify what a program can do:
+AppArmor（元はImmunixによる「SubDomain」、1998年。2009年以降はCanonicalがメンテナンス）は、John JohansenによってLinux 2.6.36（2010年10月）にマージされた — [`b5e95b48685e`](https://git.kernel.org/linus/b5e95b48685e3481139a5634d14d630d12c7d5ce)。**パスベース**のMACを使い、SELinuxのラベルモデルより単純である。プロファイルはプレーンテキストで、プログラムに何ができるかを指定する:
 
 ```
 # /etc/apparmor.d/usr.bin.firefox
 /usr/bin/firefox {
-    # Allow reading these paths
+    # これらのパスの読み取りを許可する
     /etc/firefox/** r,
     /usr/share/firefox/** r,
     @{HOME}/.mozilla/** rw,
 
-    # Deny everything else by default
+    # それ以外はデフォルトですべて拒否する
     deny /etc/passwd r,
 
-    # Network
+    # ネットワーク
     network inet stream,
     network inet6 stream,
 }
 ```
 
 ```bash
-# Load a profile
+# プロファイルをロードする
 apparmor_parser -r /etc/apparmor.d/usr.bin.firefox
 
-# Check status
+# 状態を確認する
 aa-status
 # profiles are loaded:
 #   /usr/bin/firefox (enforce)
 #   /usr/bin/evince (complain)
 
-# Set profile to complain mode (log but don't deny)
+# プロファイルをcomplainモードにする（ログは取るが拒否しない）
 aa-complain /usr/bin/firefox
 
-# Check logs
+# ログを確認する
 journalctl -g "apparmor" | tail -20
 # apparmor="DENIED" operation="open" profile="/usr/bin/firefox"
 # name="/etc/shadow" pid=1234 comm="firefox"
 ```
 
-### AppArmor internals {#apparmor-internals}
+### AppArmorの内部 {#apparmor-internals}
 
-AppArmor stores profiles as finite automata (DFA/HFA) for efficient path matching:
+AppArmorは効率的なパスマッチングのため、プロファイルを有限オートマトン（DFA/HFA）として保持する:
 
 ```c
-/* security/apparmor/lsm.c: file_open hook */
+/* security/apparmor/lsm.c: file_openフック */
 static int apparmor_file_open(struct file *file)
 {
     struct aa_label *label = aa_current_raw_label();
     struct aa_profile *profile;
 
-    /* match path against profile DFA */
+    /* パスをプロファイルのDFAと照合する */
     aa_str_perms(profile->file.dfa,
                  profile->file.start,
                  path_name,
@@ -240,9 +240,9 @@ static int apparmor_file_open(struct file *file)
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Capabilities](capabilities.md) — Privilege splitting without full root
-- [seccomp BPF](seccomp.md) — Syscall-level filtering
-- [Cgroups & Namespaces: Container Isolation](../cgroups/container-isolation.md) — LSM in containers
-- `Documentation/security/lsm.rst` — LSM developer guide
+- [ケーパビリティ](capabilities.md) — 完全なrootを使わない権限分割
+- [seccomp BPF](seccomp.md) — syscallレベルのフィルタリング
+- [cgroupとnamespace: コンテナの隔離](../cgroups/container-isolation.md) — コンテナにおけるLSM
+- `Documentation/security/lsm.rst` — LSM開発者ガイド

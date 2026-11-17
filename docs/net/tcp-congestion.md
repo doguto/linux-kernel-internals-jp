@@ -19,7 +19,7 @@ The congestion controller runs on the sender and responds to:
 - **Loss detected**: decrease cwnd (congestion)
 - **ECN (Explicit Congestion Notification)**: decrease cwnd before loss
 
-## struct tcp_congestion_ops: the cc interface {#struct-tcpcongestionops-the-cc-interface}
+## struct tcp_congestion_ops: the cc interface {#struct-tcp_congestion_ops-the-cc-interface}
 
 All congestion control algorithms implement this interface:
 

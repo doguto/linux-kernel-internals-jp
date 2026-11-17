@@ -1,28 +1,28 @@
-# Filesystem Registration and Mounting {#filesystem-registration-and-mounting}
+# ファイルシステムの登録とマウント {#filesystem-registration-and-mounting}
 
-> How filesystems plug into VFS and how mount() works
+> ファイルシステムがVFSにどう組み込まれ、mount()がどう動作するか
 
-## Registering a filesystem type {#registering-a-filesystem-type}
+## ファイルシステムタイプの登録 {#registering-a-filesystem-type}
 
-Every filesystem must define a `file_system_type` and register it with VFS:
+すべてのファイルシステムは`file_system_type`を定義し、それをVFSに登録しなければならない:
 
 ```c
 /* include/linux/fs.h */
 struct file_system_type {
-    const char *name;       /* "ext4", "tmpfs", "proc", etc. */
-    int fs_flags;           /* FS_REQUIRES_DEV, FS_USERNS_MOUNT, etc. */
-    int (*init_fs_context)(struct fs_context *); /* fill in mount context */
-    void (*kill_sb)(struct super_block *);       /* unmount cleanup */
+    const char *name;       /* "ext4", "tmpfs", "proc" など */
+    int fs_flags;           /* FS_REQUIRES_DEV, FS_USERNS_MOUNT など */
+    int (*init_fs_context)(struct fs_context *); /* マウントコンテキストを埋める */
+    void (*kill_sb)(struct super_block *);       /* アンマウント時の後始末 */
     struct module *owner;
-    struct file_system_type *next;     /* linked list of all filesystems */
-    struct hlist_head fs_supers;       /* all superblocks of this type */
+    struct file_system_type *next;     /* 全ファイルシステムの連結リスト */
+    struct hlist_head fs_supers;       /* このタイプの全superblock */
 };
 
-/* Register at module load time */
+/* モジュールのロード時に登録する */
 static struct file_system_type my_fs_type = {
     .name           = "myfs",
     .init_fs_context = my_init_fs_context,
-    .kill_sb        = kill_litter_super,  /* for simple in-memory fs */
+    .kill_sb        = kill_litter_super,  /* 単純なインメモリfs用 */
     .owner          = THIS_MODULE,
 };
 
@@ -39,7 +39,7 @@ static void __exit myfs_exit(void)
 module_exit(myfs_exit);
 ```
 
-After registration, the filesystem appears in `/proc/filesystems`:
+登録後、ファイルシステムは`/proc/filesystems`に現れる:
 
 ```bash
 cat /proc/filesystems
@@ -52,77 +52,77 @@ cat /proc/filesystems
 #        vfat
 ```
 
-`nodev` means the filesystem doesn't require a block device.
+`nodev`は、そのファイルシステムがブロックデバイスを必要としないことを意味する。
 
-## The mount syscall {#the-mount-syscall}
+## mountシステムコール {#the-mount-syscall}
 
-The `mount(2)` system call attaches a filesystem to the directory tree [(man page)](https://man7.org/linux/man-pages/man2/mount.2.html).
+`mount(2)`システムコールは、ファイルシステムをディレクトリツリーに接続する[(man page)](https://man7.org/linux/man-pages/man2/mount.2.html)。
 
 ```c
-/* User calls: mount("/dev/sda1", "/mnt/data", "ext4", 0, "") */
+/* ユーザーの呼び出し: mount("/dev/sda1", "/mnt/data", "ext4", 0, "") */
 SYSCALL_DEFINE5(mount, ...)
     → path_mount()
         → do_new_mount()
-            1. get_fs_type("ext4")    ← find registered ext4 fs_type
-            2. fs_context_for_mount() ← allocate fs_context
+            1. get_fs_type("ext4")    ← 登録済みのext4 fs_typeを探す
+            2. fs_context_for_mount() ← fs_contextを割り当てる
             3. vfs_get_tree()
-                 → fs_type->init_fs_context(fc)  ← filesystem fills context
-                 → fc->ops->get_tree(fc)          ← create/find superblock
+                 → fs_type->init_fs_context(fc)  ← ファイルシステムがコンテキストを埋める
+                 → fc->ops->get_tree(fc)          ← superblockを作成/検索する
                     → ext4_get_tree() → mount_bdev()
-                        a. blkdev_get_by_path("/dev/sda1") ← open block device
-                        b. sget_dev(): find or create super_block for this device
-                        c. ext4_fill_super(): read superblock from disk,
-                           set s_op, s_root, etc.
-            4. do_new_mount_fc(): attach mount to the tree
-                 → graft_tree(): insert new vfsmount at mountpoint
+                        a. blkdev_get_by_path("/dev/sda1") ← ブロックデバイスをオープンする
+                        b. sget_dev(): このデバイスのsuper_blockを検索または作成する
+                        c. ext4_fill_super(): ディスクからsuperblockを読み、
+                           s_op、s_rootなどを設定する
+            4. do_new_mount_fc(): マウントをツリーに接続する
+                 → graft_tree(): マウントポイントに新しいvfsmountを挿入する
 
-/* The result: a new struct mount attached to the namespace's mount tree */
+/* 結果: namespaceのマウントツリーに新しいstruct mountが接続される */
 ```
 
-## Mount namespace and vfsmount {#mount-namespace-and-vfsmount}
+## マウントnamespaceとvfsmount {#mount-namespace-and-vfsmount}
 
-Each process has a **mount namespace** (`struct mnt_namespace`) containing a tree of `vfsmount` objects. Mount namespaces were introduced in Linux 2.4.19 [(man page)](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html); before that, all processes shared a single global mount table. Each `vfsmount` represents one mount point:
+各プロセスは、`vfsmount`オブジェクトのツリーを含む**マウントnamespace**（`struct mnt_namespace`）を持つ。マウントnamespaceはLinux 2.4.19で導入された[(man page)](https://man7.org/linux/man-pages/man7/mount_namespaces.7.html)。それ以前は、すべてのプロセスが単一のグローバルなマウントテーブルを共有していた。各`vfsmount`は1つのマウントポイントを表す:
 
 ```c
 struct vfsmount {
-    struct dentry *mnt_root;     /* root dentry of this mounted fs */
+    struct dentry *mnt_root;     /* このマウントされたfsのルートdentry */
     struct super_block *mnt_sb;  /* superblock */
-    int mnt_flags;               /* MNT_READONLY, MNT_NOSUID, etc. */
+    int mnt_flags;               /* MNT_READONLY, MNT_NOSUID など */
 };
 
 struct mount {
     struct vfsmount mnt;
-    struct mount *mnt_parent;   /* mount that this is mounted on */
-    struct dentry *mnt_mountpoint; /* dentry in parent where we're mounted */
-    struct list_head mnt_child;    /* children of mnt_parent */
+    struct mount *mnt_parent;   /* これがマウントされている先のマウント */
+    struct dentry *mnt_mountpoint; /* 親の中でマウントされている位置のdentry */
+    struct list_head mnt_child;    /* mnt_parentの子 */
 };
 ```
 
-When path resolution reaches a mountpoint dentry, `follow_mount()` switches to the mounted filesystem's root dentry, crossing into the new `vfsmount`.
+パス解決がマウントポイントのdentryに達すると、`follow_mount()`がマウントされたファイルシステムのルートdentryへ切り替え、新しい`vfsmount`へ横断する。
 
-## /proc/mounts and /proc/self/mountinfo {#procmounts-and-procselfmountinfo}
+## /proc/mountsと/proc/self/mountinfo {#procmounts-and-procselfmountinfo}
 
 ```bash
-# All current mounts
+# 現在のすべてのマウント
 cat /proc/mounts
 # sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
 # proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
 # /dev/sda1 / ext4 rw,relatime,errors=remount-ro 0 0
 # tmpfs /tmp tmpfs rw,nosuid,nodev 0 0
 
-# Detailed format with mount IDs (used by systemd)
+# マウントIDを含む詳細な形式（systemdが使用）
 cat /proc/self/mountinfo
 # 36 35 98:0 /mnt1 /mnt2 rw,noatime master:1 - ext4 /dev/sdb rw,errors=remount-ro
 # ^  ^  ^    ^     ^                ^           ^    ^
 # mount_id parent_id maj:min root  mount_point opts peer_group fstype source
 ```
 
-## Implementing a simple in-memory filesystem {#implementing-a-simple-in-memory-filesystem}
+## 単純なインメモリファイルシステムの実装 {#implementing-a-simple-in-memory-filesystem}
 
-Here's the minimal skeleton for a new filesystem:
+新しいファイルシステムの最小限のスケルトンを示す:
 
 ```c
-/* Inode operations for a directory */
+/* ディレクトリ用のinode操作 */
 static struct inode_operations myfs_dir_iops = {
     .lookup = simple_lookup,
     .create = myfs_create,
@@ -131,7 +131,7 @@ static struct inode_operations myfs_dir_iops = {
     .rmdir  = simple_rmdir,
 };
 
-/* File operations for a regular file */
+/* 通常ファイル用のファイル操作 */
 static struct file_operations myfs_file_fops = {
     .read_iter  = generic_file_read_iter,
     .write_iter = generic_file_write_iter,
@@ -140,19 +140,19 @@ static struct file_operations myfs_file_fops = {
     .fsync      = noop_fsync,
 };
 
-/* Address space operations (page cache) */
+/* アドレス空間操作（ページキャッシュ） */
 static struct address_space_operations myfs_aops = {
     .dirty_folio    = filemap_dirty_folio,
     .writepage      = simple_writepage,
 };
 
-/* Superblock operations */
+/* superblock操作 */
 static struct super_operations myfs_super_ops = {
     .statfs         = simple_statfs,
     .drop_inode     = generic_delete_inode,
 };
 
-/* Fill in the superblock (called during mount) */
+/* superblockを埋める（マウント中に呼ばれる） */
 static int myfs_fill_super(struct super_block *sb, struct fs_context *fc)
 {
     struct inode *root_inode;
@@ -163,14 +163,14 @@ static int myfs_fill_super(struct super_block *sb, struct fs_context *fc)
     sb->s_magic = 0x4D594653;  /* 'MYFS' */
     sb->s_op = &myfs_super_ops;
 
-    /* Create root inode */
+    /* ルートinodeを作成する */
     root_inode = new_inode(sb);
     root_inode->i_ino = 1;
     root_inode->i_mode = S_IFDIR | 0755;
     root_inode->i_op = &myfs_dir_iops;
     root_inode->i_fop = &simple_dir_operations;
 
-    /* Create root dentry */
+    /* ルートdentryを作成する */
     sb->s_root = d_make_root(root_inode);
 
     return 0;
@@ -199,21 +199,21 @@ static struct file_system_type myfs_type = {
 };
 ```
 
-## bind mount and move mount {#bind-mount-and-move-mount}
+## bind mountとmove mount {#bind-mount-and-move-mount}
 
 ```bash
-# Bind mount: mount a directory at another location
+# bind mount: ディレクトリを別の場所にマウントする
 mount --bind /original/path /new/path
-# Creates a new vfsmount pointing to the same dentry/inode tree
+# 同じdentry/inodeツリーを指す新しいvfsmountを作成する
 
-# Move mount: atomically change mount location
+# move mount: マウント位置をアトミックに変更する
 mount --move /old/mountpoint /new/mountpoint
 ```
 
-Bind mounts are widely used in containers to share host directories into a container's namespace [(man page)](https://man7.org/linux/man-pages/man8/mount.8.html).
+bind mountは、ホストのディレクトリをコンテナのnamespaceに共有するために、コンテナで広く使われている[(man page)](https://man7.org/linux/man-pages/man8/mount.8.html)。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — What superblock, inode, dentry, file are
-- [Path Resolution](namei.md) — How mount points are crossed during lookup
-- [Life of a write() syscall](life-of-write.md) — What happens after mounting
+- [VFSオブジェクト](vfs-objects.md) — superblock、inode、dentry、fileとは何か
+- [パス解決](namei.md) — 検索中にマウントポイントがどう横断されるか
+- [write()システムコールの一生](life-of-write.md) — マウント後に何が起きるか

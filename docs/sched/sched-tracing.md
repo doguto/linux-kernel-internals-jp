@@ -1,28 +1,28 @@
-# Scheduler Tracing {#scheduler-tracing}
+# スケジューラのトレーシング {#scheduler-tracing}
 
-> ftrace, perf, and BPF tools for observing scheduler behavior in real time
+> スケジューラの挙動をリアルタイムに観察するためのftrace、perf、BPFツール
 
-## Scheduler trace events {#scheduler-trace-events}
+## スケジューラのトレースイベント {#scheduler-trace-events}
 
-The kernel emits scheduler events through the tracepoint system (ftrace). These are defined in `include/trace/events/sched.h` and cover every significant scheduling decision.
+カーネルはtracepointの仕組み（ftrace）を通じてスケジューライベントを出力する。これらは`include/trace/events/sched.h`で定義されており、重要なスケジューリング判断のすべてを網羅している。
 
-Key events:
+主なイベント:
 
-| Event | When it fires |
+| イベント | 発火するタイミング |
 |-------|---------------|
-| `sched:sched_switch` | Every context switch |
-| `sched:sched_wakeup` | Task transitions from sleeping to runnable |
-| `sched:sched_wakeup_new` | Newly created task becomes runnable |
-| `sched:sched_waking` | Task wakeup starts (before it's on a runqueue) |
-| `sched:sched_migrate_task` | Task moves between CPUs |
+| `sched:sched_switch` | すべてのコンテキストスイッチ |
+| `sched:sched_wakeup` | タスクがスリープから実行可能に遷移したとき |
+| `sched:sched_wakeup_new` | 新しく作成されたタスクが実行可能になったとき |
+| `sched:sched_waking` | タスクの起床が始まったとき（ランキューに載る前） |
+| `sched:sched_migrate_task` | タスクがCPU間を移動したとき |
 | `sched:sched_process_fork` | fork() |
 | `sched:sched_process_exec` | exec() |
-| `sched:sched_process_exit` | Task exits |
-| `sched:sched_stat_sleep` | Task woke from voluntary sleep (CONFIG_SCHEDSTATS) |
-| `sched:sched_stat_wait` | Time spent waiting on runqueue (CONFIG_SCHEDSTATS) |
-| `sched:sched_stat_iowait` | Time spent in I/O wait (CONFIG_SCHEDSTATS) |
+| `sched:sched_process_exit` | タスクが終了したとき |
+| `sched:sched_stat_sleep` | タスクが自発的なスリープから起床したとき（CONFIG_SCHEDSTATS） |
+| `sched:sched_stat_wait` | ランキューで待っていた時間（CONFIG_SCHEDSTATS） |
+| `sched:sched_stat_iowait` | I/O待ちに費やした時間（CONFIG_SCHEDSTATS） |
 
-## sched_switch: the most important event {#sched_switch-the-most-important-event}
+## sched_switch: 最も重要なイベント {#sched_switch-the-most-important-event}
 
 ```c
 // include/trace/events/sched.h
@@ -31,120 +31,120 @@ TRACE_EVENT(sched_switch,
              struct task_struct *prev,
              struct task_struct *next,
              unsigned int prev_state),
-    // Fields:
+    // フィールド:
     // prev_comm, prev_pid, prev_prio, prev_state
     // next_comm, next_pid, next_prio
     //
-    // prev_state uses TASK_REPORT flags:
-    //   R = running/runnable (preempted)
-    //   S = interruptible sleep
-    //   D = uninterruptible sleep (I/O)
-    //   T = stopped
-    //   Z = zombie
+    // prev_stateはTASK_REPORTフラグを使う:
+    //   R = 実行中/実行可能（プリエンプトされた）
+    //   S = 割り込み可能なスリープ
+    //   D = 割り込み不可能なスリープ（I/O）
+    //   T = 停止
+    //   Z = ゾンビ
 );
 ```
 
-A `prev_state=R` means the task was preempted (involuntary switch). `prev_state=S` means it voluntarily gave up the CPU.
+`prev_state=R`は、タスクがプリエンプトされた（非自発的なスイッチ）ことを意味する。`prev_state=S`は、タスクが自発的にCPUを手放したことを意味する。
 
-## Recording with ftrace {#recording-with-ftrace}
+## ftraceで記録する {#recording-with-ftrace}
 
 ```bash
-# Enable specific events and record for 5 seconds
+# 特定のイベントを有効にして5秒間記録する
 trace-cmd record -e sched:sched_switch \
                  -e sched:sched_wakeup \
                  -e sched:sched_migrate_task \
                  sleep 5
 
-# View the recording
+# 記録を表示する
 trace-cmd report | head -50
 
-# Filter by PID
+# PIDで絞り込む
 trace-cmd record -e sched:sched_switch \
                  --filter 'next_pid == 1234 || prev_pid == 1234' \
                  sleep 5
 ```
 
-### Direct ftrace interface {#direct-ftrace-interface}
+### ftraceのインターフェースを直接使う {#direct-ftrace-interface}
 
 ```bash
-# Enable events via debugfs
+# debugfs経由でイベントを有効にする
 echo 1 > /sys/kernel/debug/tracing/events/sched/sched_switch/enable
 echo 1 > /sys/kernel/debug/tracing/events/sched/sched_wakeup/enable
 
-# Read the ring buffer
+# リングバッファを読む
 cat /sys/kernel/debug/tracing/trace
 
-# Or stream it
+# あるいはストリームとして読む
 cat /sys/kernel/debug/tracing/trace_pipe &
 
-# Filter by comm (task name)
+# comm（タスク名）で絞り込む
 echo 'next_comm == "myapp"' > \
     /sys/kernel/debug/tracing/events/sched/sched_switch/filter
 
-# Clean up
+# 後片付け
 echo 0 > /sys/kernel/debug/tracing/events/sched/sched_switch/enable
 echo > /sys/kernel/debug/tracing/trace
 ```
 
-## perf sched: high-level scheduling analysis {#perf-sched-high-level-scheduling-analysis}
+## perf sched: 高レベルのスケジューリング解析 {#perf-sched-high-level-scheduling-analysis}
 
-`perf sched` records scheduling activity and produces latency reports:
+`perf sched`はスケジューリングの活動を記録し、レイテンシのレポートを生成する:
 
 ```bash
-# Record scheduling events for 10 seconds
+# スケジューリングイベントを10秒間記録する
 perf sched record -- sleep 10
 
-# Show latency report: per-task scheduling delay
+# レイテンシのレポートを表示する: タスクごとのスケジューリング遅延
 perf sched latency
 # Task                  |   Runtime ms  | Switches | Average delay ms | Maximum delay ms
 # myapp:(2)             |     4500.123  |     1042  |          0.234   |         12.456
 # kworker/0:1           |      123.456  |      567  |          0.012   |          0.234
 
-# Replay the recording to see exact scheduling order
+# 記録を再生して正確なスケジューリング順序を確認する
 perf sched replay
 
-# Show all scheduling events in order
+# すべてのスケジューリングイベントを順に表示する
 perf sched script | head -20
 ```
 
 ### perf sched latency {#perf-sched-latency}
 
-High "Maximum delay" for a task means it was occasionally stuck waiting for the CPU for a long time. Common causes:
+あるタスクの「Maximum delay」が大きいことは、そのタスクがときどき長時間CPUを待って足止めされていたことを意味する。よくある原因:
 
-- CPU temporarily saturated
-- Lock contention in the scheduler (rare)
-- NUMA migration overhead
-- RT task monopolizing the CPU
+- CPUが一時的に飽和している
+- スケジューラ内のロック競合（まれ）
+- NUMAマイグレーションのオーバーヘッド
+- RTタスクがCPUを独占している
 
 ```bash
-# Show tasks with highest maximum latency
+# 最大レイテンシが最も大きいタスクを表示する
 perf sched latency --sort max
 ```
 
-## perf stat for scheduling counters {#perf-stat-for-scheduling-counters}
+## スケジューリングカウンタのためのperf stat {#perf-stat-for-scheduling-counters}
 
 ```bash
-# Count context switches and migrations
+# コンテキストスイッチとマイグレーションを数える
 perf stat -e context-switches,cpu-migrations ./workload
 
-# Count scheduler events system-wide
+# システム全体のスケジューライベントを数える
 perf stat -e sched:sched_switch,sched:sched_wakeup,sched:sched_migrate_task \
           -a sleep 10
 
-# Compare voluntary vs involuntary switches (requires cs breakdowns)
+# 自発的と非自発的なスイッチを比較する（csの内訳が必要）
 perf stat -e sched:sched_switch -a sleep 5
 ```
 
-## BPF tracing with bpftrace {#bpf-tracing-with-bpftrace}
+## bpftraceによるBPFトレーシング {#bpf-tracing-with-bpftrace}
 
 ```bash
-# Trace context switches: show who switched to whom
+# コンテキストスイッチをトレースする: 誰から誰へ切り替わったかを表示する
 bpftrace -e '
 tracepoint:sched:sched_switch {
     printf("%s -> %s\n", args->prev_comm, args->next_comm);
 }'
 
-# Show tasks with the longest scheduler wait time (time in runqueue)
+# スケジューラの待ち時間（ランキューにいた時間）が最も長いタスクを表示する
 bpftrace -e '
 tracepoint:sched:sched_wakeup { @start[args->pid] = nsecs; }
 tracepoint:sched:sched_switch {
@@ -154,84 +154,84 @@ tracepoint:sched:sched_switch {
     }
 }'
 
-# Count migrations per task
+# タスクごとのマイグレーション回数を数える
 bpftrace -e '
 tracepoint:sched:sched_migrate_task {
     @[args->comm] = count();
 }'
 ```
 
-## Wakeup latency: runqlat (BCC) {#wakeup-latency-runqlat-bcc}
+## 起床レイテンシ: runqlat（BCC） {#wakeup-latency-runqlat-bcc}
 
-`runqlat` (from the BCC toolkit) measures how long tasks wait in the runqueue before running:
+`runqlat`（BCCツールキットに含まれる）は、タスクが実行されるまでにランキューでどれだけ待つかを測定する:
 
 ```bash
-# Show runqueue latency histogram system-wide
+# システム全体のランキューレイテンシのヒストグラムを表示する
 runqlat
 
-# Per-PID histogram
+# PIDごとのヒストグラム
 runqlat -p $PID
 
-# Example output:
+# 出力例:
 # usecs               : count     distribution
 # 0 -> 1              : 12345     |********************|
 # 2 -> 3              : 4567      |*******             |
 # 4 -> 7              : 234       |                    |
 # 8 -> 15             : 89        |                    |
 # 16 -> 31            : 45        |                    |
-# 32 -> 63            : 12        |                    |  ← latency spikes here
+# 32 -> 63            : 12        |                    |  ← ここでレイテンシのスパイク
 ```
 
-`runqlen` shows the distribution of runqueue lengths:
+`runqlen`はランキュー長の分布を表示する:
 
 ```bash
-runqlen  # shows how many tasks are typically in the runqueue
+runqlen  # ランキューに通常何個のタスクがいるかを表示する
 ```
 
-## Wakeup tracing with ftrace function graph {#wakeup-tracing-with-ftrace-function-graph}
+## ftraceのfunction graphによる起床のトレース {#wakeup-tracing-with-ftrace-function-graph}
 
-To trace the full wakeup path including kernel functions:
+カーネル関数を含む起床パス全体をトレースするには:
 
 ```bash
-# Trace the wakeup path for a specific PID
+# 特定のPIDの起床パスをトレースする
 echo function_graph > /sys/kernel/debug/tracing/current_tracer
 echo $PID > /sys/kernel/debug/tracing/set_ftrace_pid
 echo 1 > /sys/kernel/debug/tracing/tracing_on
-# ... run workload ...
+# ... ワークロードを実行する ...
 cat /sys/kernel/debug/tracing/trace > /tmp/wakeup_trace.txt
 echo 0 > /sys/kernel/debug/tracing/tracing_on
 echo nop > /sys/kernel/debug/tracing/current_tracer
 ```
 
-Or use the built-in wakeup tracers:
+あるいは組み込みのwakeupトレーサを使う:
 
 ```bash
-# Trace latency from wakeup to first run (worst case)
+# 起床から最初の実行までのレイテンシをトレースする（最悪ケース）
 echo wakeup > /sys/kernel/debug/tracing/current_tracer
-# Finds the maximum wakeup latency in microseconds
+# 最大の起床レイテンシをマイクロ秒単位で求める
 cat /sys/kernel/debug/tracing/tracing_max_latency
 ```
 
-## Reading sched_switch output {#reading-sched_switch-output}
+## sched_switchの出力を読む {#reading-sched_switch-output}
 
-A typical `trace-cmd report` line:
+典型的な`trace-cmd report`の行:
 
 ```
 myapp-1234 [002] 12345.678901: sched_switch: prev_comm=myapp prev_pid=1234
     prev_prio=120 prev_state=S ==> next_comm=kworker/2:1 next_pid=5678 next_prio=120
 ```
 
-Interpretation:
+解釈:
 
-- `myapp` (pid 1234) on CPU 2 switched to sleep (`prev_state=S`)
-- `kworker/2:1` (pid 5678) is now running on CPU 2
-- Both at priority 120 (nice 0)
+- CPU 2上の`myapp`（pid 1234）がスリープに切り替わった（`prev_state=S`）
+- `kworker/2:1`（pid 5678）が今CPU 2上で実行されている
+- どちらも優先度120（nice 0）である
 
-If `prev_state=R`, myapp was preempted — it wanted to keep running but something higher priority took over.
+`prev_state=R`であれば、myappはプリエンプトされたことになる。実行を続けたかったが、より優先度の高い何かが取って代わったのである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Scheduler Statistics](schedstat.md) — Cumulative per-task stats in /proc
-- [Scheduler Tuning](sched-tuning.md) — Knobs that affect the behavior you're observing
-- [Context Switch](context-switch.md) — What the kernel does on each sched_switch event
-- [Wakeup](wakeup.md) — The full wakeup path from hardware interrupt to task running
+- [スケジューラ統計](schedstat.md) — /procにあるタスクごとの累積統計
+- [スケジューラのチューニング](sched-tuning.md) — 観察している挙動に影響するつまみ
+- [コンテキストスイッチ](context-switch.md) — sched_switchイベントごとにカーネルが何をするか
+- [起床](wakeup.md) — ハードウェア割り込みからタスクの実行までの起床パス全体

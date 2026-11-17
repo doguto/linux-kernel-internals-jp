@@ -1,64 +1,64 @@
-# Network Debugging with ss and ip {#network-debugging-with-ss-and-ip}
+# ssとipによるネットワークのデバッグ {#network-debugging-with-ss-and-ip}
 
-> Essential tools for inspecting network state without looking at source code
+> ソースコードを見ずにネットワークの状態を調べるための必須ツール
 
-## ss: socket statistics {#ss-socket-statistics}
+## ss: ソケット統計 {#ss-socket-statistics}
 
-`ss` (socket statistics) is the modern replacement for `netstat`. It reads directly from kernel data structures instead of parsing `/proc/net/tcp`, making it significantly faster.
+`ss`（socket statistics）は`netstat`の現代的な代替である。`/proc/net/tcp`をパースする代わりにカーネルのデータ構造から直接読み取るため、大幅に高速である。
 
-### Basic usage {#basic-usage}
+### 基本的な使い方 {#basic-usage}
 
 ```bash
-# All TCP sockets
+# すべてのTCPソケット
 ss -tn
 
-# With process info
+# プロセス情報付き
 ss -tnp
 
-# All socket types
+# すべての種類のソケット
 ss -a
 
-# Listening sockets only
+# listen中のソケットのみ
 ss -tnl
 
-# UDP sockets
+# UDPソケット
 ss -un
 
-# Unix domain sockets
+# Unixドメインソケット
 ss -x
 ```
 
-### Filter by state and address {#filter-by-state-and-address}
+### 状態とアドレスによる絞り込み {#filter-by-state-and-address}
 
 ```bash
-# Specific state
+# 特定の状態
 ss -tn state established
 ss -tn state time-wait
 ss -tn state syn-sent
 
-# Multiple states
+# 複数の状態
 ss -tn state established state close-wait
 
-# Filter by port
-ss -tn sport = :22         # source port 22
-ss -tn dport = :80         # destination port 80
+# ポートで絞り込み
+ss -tn sport = :22         # 送信元ポート22
+ss -tn dport = :80         # 宛先ポート80
 ss -tn '( dport = :443 or sport = :443 )'
 
-# Filter by address
+# アドレスで絞り込み
 ss -tn dst 8.8.8.8
 ss -tn src 10.0.0.0/8
 
-# Count TIME_WAIT sockets (common performance issue)
+# TIME_WAITソケットを数える（よくある性能問題）
 ss -tn state time-wait | wc -l
 ```
 
-### Detailed socket info {#detailed-socket-info}
+### ソケットの詳細情報 {#detailed-socket-info}
 
 ```bash
-# Show internal TCP info (congestion state, cwnd, RTT, etc.)
+# TCPの内部情報を表示（輻輳状態、cwnd、RTTなど）
 ss -tni
 
-# Example output for an ESTABLISHED connection:
+# ESTABLISHED接続の出力例:
 # ESTAB 0 0 10.0.0.1:22 10.0.0.2:54321
 #  cubic wscale:7,7 rto:208 rtt:4.2/0.5 ato:40 mss:1448 pmtu:1500
 #  rcvmss:931 advmss:1448 cwnd:10 ssthresh:2147483647
@@ -69,141 +69,141 @@ ss -tni
 #  reord_seen:0 lost:0 retrans:0/0 dsack_dups:0
 #  rcv_rtt:4.2 rcv_space:14600 rcv_ssthresh:87380 minrtt:3.8
 
-# Key fields:
-#   rtt/rtt_var: smoothed RTT and variance
-#   cwnd: congestion window (segments)
-#   ssthresh: slow start threshold
-#   retrans: cumulative/current retransmissions
-#   delivery_rate: actual send rate
+# 主なフィールド:
+#   rtt/rtt_var: 平滑化RTTとその分散
+#   cwnd: 輻輳ウィンドウ（セグメント数）
+#   ssthresh: スロースタート閾値
+#   retrans: 累積/現在の再送数
+#   delivery_rate: 実際の送信レート
 ```
 
-### Socket memory usage {#socket-memory-usage}
+### ソケットのメモリ使用量 {#socket-memory-usage}
 
 ```bash
-# Show send/receive queue sizes and memory
+# 送信/受信キューのサイズとメモリを表示
 ss -tm
 
-# Output columns:
-# Recv-Q: bytes received but not read by application
-# Send-Q: bytes sent but not yet acknowledged
+# 出力の列:
+# Recv-Q: 受信済みだがアプリケーションがまだ読んでいないバイト数
+# Send-Q: 送信済みだがまだACKされていないバイト数
 
-# Large Recv-Q: application not reading fast enough
-# Large Send-Q: network is slow / receiver window is small
+# Recv-Qが大きい: アプリケーションの読み取りが追いついていない
+# Send-Qが大きい: ネットワークが遅い / 受信側ウィンドウが小さい
 ```
 
-## ip: network configuration and state {#ip-network-configuration-and-state}
+## ip: ネットワークの設定と状態 {#ip-network-configuration-and-state}
 
-### Interface information {#interface-information}
+### インターフェース情報 {#interface-information}
 
 ```bash
-# Show all interfaces with statistics
+# 統計付きで全インターフェースを表示
 ip -s link show
-# → shows rx/tx packets, bytes, errors, drops per interface
+# → インターフェースごとのrx/txパケット数、バイト数、エラー、ドロップを表示
 
-# Show a specific interface
+# 特定のインターフェースを表示
 ip link show eth0
 
-# Show IP addresses
+# IPアドレスを表示
 ip addr show
 ip addr show dev eth0
 
-# Monitor interface events (link up/down, address changes)
+# インターフェースのイベント（リンクのup/down、アドレス変更）を監視
 ip monitor link
 ip monitor address
 ```
 
-### Route inspection {#route-inspection}
+### ルートの調査 {#route-inspection}
 
 ```bash
-# Show routing table
+# ルーティングテーブルを表示
 ip route show
-ip route show table all  # all routing tables
+ip route show table all  # すべてのルーティングテーブル
 
-# Routing lookup (simulate what the kernel would do)
+# ルーティング検索（カーネルが行う処理をシミュレート）
 ip route get 8.8.8.8
 # → 8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.100 uid 0
 
-# Watch route changes
+# ルートの変更を監視
 ip monitor route
 
-# Show cached routes
+# キャッシュされたルートを表示
 ip route show cache
 ```
 
-### ARP/neighbor table {#arpneighbor-table}
+### ARP/近隣テーブル {#arpneighbor-table}
 
 ```bash
-# Show ARP table
+# ARPテーブルを表示
 ip neigh show
 # → 192.168.1.1 dev eth0 lladdr 52:54:00:12:34:56 REACHABLE
 
-# Filter by state
-ip neigh show nud reachable  # only confirmed entries
-ip neigh show nud stale      # entries that need reconfirmation
+# 状態で絞り込み
+ip neigh show nud reachable  # 確認済みのエントリのみ
+ip neigh show nud stale      # 再確認が必要なエントリ
 
-# Flush stale entries
+# staleエントリをフラッシュ
 ip neigh flush dev eth0
 
-# Add static entry
+# 静的エントリを追加
 ip neigh add 10.0.0.5 lladdr 52:54:00:11:22:33 dev eth0
 
-# Watch ARP events
+# ARPイベントを監視
 ip monitor neigh
 ```
 
-## /proc/net: reading socket tables {#procnet-reading-socket-tables}
+## /proc/net: ソケットテーブルを読む {#procnet-reading-socket-tables}
 
 ```bash
-# TCP socket table (hex addresses)
+# TCPソケットテーブル（16進アドレス）
 cat /proc/net/tcp
 # local_address rem_address state tx_queue rx_queue uid inode
-# 0101007F:0035 00000000:0000 0A ...  ← 127.0.0.1:53 listening
+# 0101007F:0035 00000000:0000 0A ...  ← 127.0.0.1:53 listen中
 # 010011AC:01BB 02010A0A:E76C 01 ...  ← ESTABLISHED
 
-# Convert hex address:port
+# 16進のアドレス:ポートを変換
 python3 -c "import socket; print(socket.inet_ntoa(bytes.fromhex('010011AC')[::-1]))"
 # → 172.17.0.1
 
-# UDP sockets
+# UDPソケット
 cat /proc/net/udp
 
-# Network interface stats
+# ネットワークインターフェースの統計
 cat /proc/net/dev
 # eth0: 12345678 23456 0 0 0 0 0 0  98765432 12345 0 0 0 0 0 0
 #       ↑rx bytes ↑rx pkts ↑err     ↑tx bytes ↑tx pkts
 
-# ARP table
+# ARPテーブル
 cat /proc/net/arp
 ```
 
-## Quick diagnostic patterns {#quick-diagnostic-patterns}
+## 手早い診断パターン {#quick-diagnostic-patterns}
 
 ```bash
-# Count connections by state (overall health check)
+# 状態ごとの接続数を数える（全体的なヘルスチェック）
 ss -tan | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
 
-# Top 10 remote IPs by connection count
+# 接続数の多いリモートIP上位10件
 ss -tn | awk '{print $5}' | grep -v Peer | sed 's/:[0-9]*$//' | sort | uniq -c | sort -rn | head
 
-# Find what's listening (with process names)
+# 何がlistenしているかを調べる（プロセス名付き）
 ss -tnlp
 
-# Check if port is in use
+# ポートが使用中か確認する
 ss -tnlp | grep ':8080'
 
-# Monitor socket queue buildup in real time
+# ソケットキューの蓄積をリアルタイムで監視
 watch -n 1 'ss -tn | awk "NR==1 || \$2>0 || \$3>0"'
 
-# Sockets with large send queues (possible network issue)
+# 送信キューが大きいソケット（ネットワークの問題の可能性）
 ss -tn | awk '$3 > 0'  # Send-Q > 0
 
-# Sockets with large receive queues (slow application)
+# 受信キューが大きいソケット（アプリケーションが遅い）
 ss -tn | awk '$2 > 10000'  # Recv-Q > 10KB
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Understanding /proc/net/snmp](proc-snmp.md) — Protocol counters in depth
-- [Network Tracing](net-tracing.md) — ftrace and BPF for packet-level debugging
-- [TCP Implementation](tcp.md) — What the ss -tni fields mean internally
-- [Socket Layer Overview](socket-layer.md) — The socket structures ss reads
+- [/proc/net/snmpを理解する](proc-snmp.md) — プロトコルカウンタの詳細
+- [ネットワークのトレーシング](net-tracing.md) — パケットレベルのデバッグのためのftraceとBPF
+- [TCPの実装](tcp.md) — ss -tniの各フィールドが内部的に何を意味するか
+- [ソケット層の概要](socket-layer.md) — ssが読み取るソケット構造体

@@ -1,50 +1,50 @@
-# CPU Bandwidth Control {#cpu-bandwidth-control}
+# CPU帯域制御 {#cpu-bandwidth-control}
 
-> CFS bandwidth throttling: how the kernel enforces hard CPU limits
+> CFS帯域スロットリング: カーネルがCPUの厳格な上限をどう強制するか
 
-## What bandwidth control does {#what-bandwidth-control-does}
+## 帯域制御が行うこと {#what-bandwidth-control-does}
 
-CPU weight (shares) controls the *proportion* of CPU a group gets when the system is busy. Bandwidth control caps the *absolute* amount — a group set to 50% will be throttled to 50% even if the other 99% of CPU is idle.
+CPUの重み（shares）は、システムがビジーのときにグループが得るCPUの*割合*を制御する。帯域制御は*絶対的な*量に上限を設ける。50%に設定されたグループは、たとえCPUの残り99%がアイドルであっても、50%にスロットリングされる。
 
-This matters for:
+これが重要になるのは次のような場面である:
 
-- **Predictable latency**: Ensure a group never monopolizes the CPU
-- **Multi-tenant isolation**: Prevent one tenant from starving others
-- **Resource accounting**: Know exactly how much CPU a container is using
+- **予測可能なレイテンシ**: グループがCPUを独占することが決してないようにする
+- **マルチテナントの隔離**: あるテナントが他のテナントを飢餓状態に陥らせるのを防ぐ
+- **リソースの会計**: コンテナがどれだけのCPUを使っているかを正確に把握する
 
-## How it's configured {#how-its-configured}
+## 設定方法 {#how-its-configured}
 
 ```bash
-# v2 interface (unified)
-# Format: "quota_us period_us" or "max period_us" for unlimited
+# v2のインターフェース（統合）
+# 形式: "quota_us period_us"、無制限なら "max period_us"
 cat /sys/fs/cgroup/mygroup/cpu.max
-# 200000 100000  → 200ms every 100ms = 2 CPUs worth
+# 200000 100000  → 100msごとに200ms = 2 CPU分
 
-echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max  # 50% of 1 CPU
+echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max  # 1 CPUの50%
 
-# v1 interface (separate files)
+# v1のインターフェース（別々のファイル）
 echo 50000  > /sys/fs/cgroup/cpu/mygroup/cpu.cfs_quota_us
 echo 100000 > /sys/fs/cgroup/cpu/mygroup/cpu.cfs_period_us
 ```
 
-The **bandwidth** is `quota / period`. For a quota of 200ms and period of 100ms, the group can use 2 CPUs concurrently (200% utilization). The quota is a wall-clock budget, not per-CPU.
+**帯域**は`quota / period`である。クォータが200msで周期が100msなら、グループは2つのCPUを同時に使える（使用率200%）。クォータは実時間ベースの予算であり、CPUごとのものではない。
 
-## The bandwidth pool: struct cfs_bandwidth {#the-bandwidth-pool-struct-cfs_bandwidth}
+## 帯域プール: struct cfs_bandwidth {#the-bandwidth-pool-struct-cfs_bandwidth}
 
-Each cgroup has one global `cfs_bandwidth` pool:
+各cgroupは1つのグローバルな`cfs_bandwidth`プールを持つ:
 
 ```c
 // kernel/sched/sched.h
 struct cfs_bandwidth {
     raw_spinlock_t   lock;
-    ktime_t          period;          // e.g., 100ms
-    u64              quota;           // e.g., 50ms (in ns)
-    u64              runtime;         // remaining this period
-    u64              burst;           // burst allowance above quota
+    ktime_t          period;          // 例: 100ms
+    u64              quota;           // 例: 50ms（ns単位）
+    u64              runtime;         // この周期の残り
+    u64              burst;           // クォータを超えて許されるバースト量
 
-    struct hrtimer   period_timer;    // refills runtime at period end
-    struct hrtimer   slack_timer;     // deferred unthrottle batching
-    struct list_head throttled_cfs_rq; // per-CPU rqs that are throttled
+    struct hrtimer   period_timer;    // 周期の終わりにruntimeを補充する
+    struct hrtimer   slack_timer;     // 遅延されたスロットリング解除のバッチ処理
+    struct list_head throttled_cfs_rq; // スロットリングされているCPUごとのrq
 
     int nr_periods;
     int nr_throttled;
@@ -52,36 +52,36 @@ struct cfs_bandwidth {
 };
 ```
 
-At the start of each period, `runtime` is reset to `quota`. As tasks run, `runtime` drains. When `runtime` hits zero, all CPUs running tasks from this group are throttled.
+各周期の開始時に、`runtime`は`quota`にリセットされる。タスクが実行されるにつれて`runtime`は減っていく。`runtime`がゼロになると、このグループのタスクを実行しているすべてのCPUがスロットリングされる。
 
-## Distribution: pool → per-CPU slice {#distribution-pool-per-cpu-slice}
+## 配分: プール → CPUごとのスライス {#distribution-pool-per-cpu-slice}
 
-Tasks don't drain the global pool directly. Instead, each CPU grabs a **slice** from the pool when needed:
+タスクはグローバルプールを直接減らすわけではない。その代わり、各CPUが必要に応じてプールから**スライス**を取得する:
 
 ```c
 // kernel/sched/fair.c
 static u64 sched_cfs_bandwidth_slice(void)
 {
     return (u64)sysctl_sched_cfs_bandwidth_slice * NSEC_PER_USEC;
-    // Default: 5ms (sysctl: /proc/sys/kernel/sched_cfs_bandwidth_slice_us)
+    // デフォルト: 5ms（sysctl: /proc/sys/kernel/sched_cfs_bandwidth_slice_us）
 }
 ```
 
 ```mermaid
 flowchart LR
-    POOL["Global pool<br/>runtime = 50ms remaining"]
-    CPU0["CPU 0's cfs_rq<br/>local_runtime = 5ms"]
-    CPU1["CPU 1's cfs_rq<br/>local_runtime = 5ms"]
-    CPU2["CPU 2's cfs_rq<br/>exhausted → throttled"]
+    POOL["グローバルプール<br/>runtime = 残り50ms"]
+    CPU0["CPU 0のcfs_rq<br/>local_runtime = 5ms"]
+    CPU1["CPU 1のcfs_rq<br/>local_runtime = 5ms"]
+    CPU2["CPU 2のcfs_rq<br/>枯渇 → スロットリング"]
 
-    POOL -->|"assign 5ms slice"| CPU0
-    POOL -->|"assign 5ms slice"| CPU1
-    POOL -->|"pool empty"| CPU2
+    POOL -->|"5msのスライスを割り当て"| CPU0
+    POOL -->|"5msのスライスを割り当て"| CPU1
+    POOL -->|"プールが空"| CPU2
 ```
 
-When a CPU's local runtime runs out, it calls `assign_cfs_rq_runtime()` to grab another slice. If the pool is empty, the CPU is throttled.
+CPUのローカルの実行時間がなくなると、そのCPUは`assign_cfs_rq_runtime()`を呼び出して別のスライスを取得する。プールが空なら、そのCPUはスロットリングされる。
 
-### assign_cfs_rq_runtime() {#assigncfsrq_runtime}
+### assign_cfs_rq_runtime() {#assign_cfs_rq_runtime}
 
 ```c
 // kernel/sched/fair.c
@@ -95,45 +95,45 @@ static void assign_cfs_rq_runtime(struct cfs_rq *cfs_rq)
 }
 ```
 
-## Throttling: throttle_cfs_rq() {#throttling-throttlecfsrq}
+## スロットリング: throttle_cfs_rq() {#throttling-throttle_cfs_rq}
 
-When a CPU's local runtime drains to zero and the global pool is empty:
+CPUのローカルの実行時間がゼロまで減り、グローバルプールも空の場合:
 
 ```c
 // kernel/sched/fair.c
 static bool throttle_cfs_rq(struct cfs_rq *cfs_rq)
 {
-    // Add to group's throttled list
+    // グループのスロットリング済みリストに追加する
     list_add_tail(&cfs_rq->throttled_list,
                   &cfs_b->throttled_cfs_rq);
     cfs_rq->throttled = 1;
 
-    // Walk up the group scheduling hierarchy via for_each_sched_entity:
-    // dequeue the group's sched_entity from parent runqueues
-    // so tasks in this group can no longer be selected
+    // for_each_sched_entityでグループスケジューリングの階層をたどって上がり、
+    // 親のランキューからグループのsched_entityをデキューする。
+    // これにより、このグループのタスクはもう選択されなくなる
 
     return true;
 }
 ```
 
-After throttling, the group's `sched_entity` is removed from the parent runqueue. `pick_next_task()` will never select a task from this group until it's unthrottled.
+スロットリングの後、グループの`sched_entity`は親のランキューから取り除かれる。スロットリングが解除されるまで、`pick_next_task()`がこのグループのタスクを選ぶことは決してない。
 
-## Refill: the period timer {#refill-the-period-timer}
+## 補充: 周期タイマー {#refill-the-period-timer}
 
-At the end of each period, `period_timer` fires and refills the pool:
+各周期の終わりに、`period_timer`が発火してプールを補充する:
 
 ```c
 // kernel/sched/fair.c
 static void __refill_cfs_bandwidth_runtime(struct cfs_bandwidth *cfs_b)
 {
-    cfs_b->runtime = cfs_b->quota;  /* reset to quota each period */
+    cfs_b->runtime = cfs_b->quota;  /* 周期ごとにクォータにリセットする */
 
-    // Cap at quota + burst (allow burst credit to accumulate)
+    // quota + burstを上限とする（バーストのクレジットの蓄積を許す）
     cfs_b->runtime = min(cfs_b->runtime, cfs_b->quota + cfs_b->burst);
 }
 ```
 
-After refilling, `unthrottle_cfs_rq()` is called for each throttled CPU:
+補充の後、スロットリングされている各CPUに対して`unthrottle_cfs_rq()`が呼び出される:
 
 ```c
 // kernel/sched/fair.c
@@ -141,92 +141,92 @@ static void unthrottle_cfs_rq(struct cfs_rq *cfs_rq)
 {
     cfs_rq->throttled = 0;
 
-    // Re-enqueue the group's sched_entity back into parent runqueues
-    // via for_each_sched_entity loop
+    // for_each_sched_entityループで、グループのsched_entityを
+    // 親のランキューに再エンキューする
 
-    // Tasks can run again
+    // タスクは再び実行できる
 }
 ```
 
-## Burst: absorbing transient spikes {#burst-absorbing-transient-spikes}
+## バースト: 一時的なスパイクを吸収する {#burst-absorbing-transient-spikes}
 
-`cpu.max.burst` (v2) / `cpu.cfs_burst_us` (v1) allows a group to temporarily exceed its quota by consuming saved-up credit:
+`cpu.max.burst`（v2）/`cpu.cfs_burst_us`（v1）は、蓄えたクレジットを消費することで、グループが一時的にクォータを超えることを許す:
 
 ```bash
-# Allow 20ms burst above the 50ms quota (max 70ms in a period)
+# 50msのクォータを超えて20msのバーストを許す（1周期で最大70ms）
 echo "50000 100000" > /sys/fs/cgroup/mygroup/cpu.max        # quota period
-echo "20000"        > /sys/fs/cgroup/mygroup/cpu.max.burst  # burst (separate file)
+echo "20000"        > /sys/fs/cgroup/mygroup/cpu.max.burst  # バースト（別ファイル）
 ```
 
-This helps workloads with bursty behavior (startup, GC pauses) avoid throttling while still maintaining average rate limits.
+これにより、バースト的な挙動（起動時やGCの停止時）を持つワークロードが、平均的なレート制限を維持しつつスロットリングを避けられる。
 
-## Slack timer: batching unthrottles {#slack-timer-batching-unthrottles}
+## スラックタイマー: スロットリング解除のバッチ処理 {#slack-timer-batching-unthrottles}
 
-Unthrottling each CPU individually as soon as runtime becomes available would cause many small lock acquisitions. The **slack timer** batches unthrottles:
+実行時間が利用可能になった途端に各CPUのスロットリングを個別に解除すると、小さなロック取得が多数発生してしまう。**スラックタイマー**はスロットリング解除をバッチ処理する:
 
 ```c
-// When runtime is returned to the pool (e.g., task blocks before using its slice),
-// instead of unthrottling immediately, arm the slack timer for 5ms
-// and batch multiple unthrottles together.
+// 実行時間がプールに返却されたとき（例: タスクがスライスを使い切る前にブロックした）、
+// すぐにスロットリングを解除する代わりに、スラックタイマーを5msで設定し、
+// 複数のスロットリング解除をまとめて行う。
 ```
 
-This reduces lock contention on `cfs_b->lock` at the cost of up to 5ms extra throttle time.
+これにより、最大5msの余分なスロットリング時間と引き換えに、`cfs_b->lock`のロック競合が減る。
 
-## Diagnosing throttling {#diagnosing-throttling}
+## スロットリングの診断 {#diagnosing-throttling}
 
-### Reading cpu.stat {#reading-cpustat}
+### cpu.statを読む {#reading-cpustat}
 
 ```bash
 cat /sys/fs/cgroup/mygroup/cpu.stat
-nr_periods      100    # bandwidth periods elapsed
-nr_throttled     23    # periods where group was throttled
-throttled_usec  450000 # total throttle time (450ms)
-nr_bursts         5    # periods where burst was used
-burst_usec      15000  # total burst time (15ms)
+nr_periods      100    # 経過した帯域周期
+nr_throttled     23    # グループがスロットリングされた周期
+throttled_usec  450000 # スロットリングされた合計時間（450ms）
+nr_bursts         5    # バーストが使われた周期
+burst_usec      15000  # バーストの合計時間（15ms）
 ```
 
-A high `nr_throttled / nr_periods` ratio (say, >10%) indicates the quota is too low for the workload.
+`nr_throttled / nr_periods`の比率が高い（例えば10%超）場合、そのワークロードにとってクォータが低すぎることを示している。
 
-### Tracing bandwidth events {#tracing-bandwidth-events}
+### 帯域イベントのトレース {#tracing-bandwidth-events}
 
 ```bash
-# Trace throttle/unthrottle events
+# スロットリング/スロットリング解除のイベントをトレースする
 trace-cmd record -e sched:sched_stat_throttled \
                  -e cgroup:cgroup_throttle_cfs_rq \
                  sleep 10
 trace-cmd report
 ```
 
-### Common causes of unexpected throttling {#common-causes-of-unexpected-throttling}
+### 予期しないスロットリングのよくある原因 {#common-causes-of-unexpected-throttling}
 
-**Multi-threaded workloads**: If a group has 4 threads all running simultaneously, they collectively consume 4x the per-thread rate. A quota of 100ms/100ms = 100% is only 1 CPU — 4 threads will consume it in 25ms and be throttled for 75ms.
+**マルチスレッドのワークロード**: グループに4つのスレッドがあり、すべて同時に実行されていると、それらは合計でスレッドあたりのレートの4倍を消費する。100ms/100ms = 100%のクォータは1 CPU分にすぎない。4つのスレッドは25msでそれを使い切り、75msの間スロットリングされる。
 
-**Solution**: Set quota = `target_utilization × period × number_of_CPUs_you_want_to_use`.
+**解決策**: クォータ = `target_utilization × period × number_of_CPUs_you_want_to_use`と設定する。
 
 ```bash
-# Allow 2 CPUs: 200ms quota / 100ms period = 2.0 CPUs
+# 2 CPUを許可する: クォータ200ms / 周期100ms = 2.0 CPU
 echo "200000 100000" > /sys/fs/cgroup/mygroup/cpu.max
 ```
 
-**Short-lived bursts**: Tasks that do heavy work for 50ms then sleep will hit throttling during the heavy phase. Burst budget can absorb this.
+**短時間のバースト**: 50ms間重い処理をしてからスリープするタスクは、重いフェーズの間にスロットリングにぶつかる。バーストの予算でこれを吸収できる。
 
-## Bandwidth slice tuning {#bandwidth-slice-tuning}
+## 帯域スライスのチューニング {#bandwidth-slice-tuning}
 
-The default 5ms slice is a trade-off between:
+デフォルトの5msのスライスは、次の間のトレードオフである:
 
-- **Too small** (< 1ms): High lock contention on `cfs_b->lock`
-- **Too large** (> 10ms): CPU gets 10ms of budget it may never use; throttle response is slow
+- **小さすぎる**（1ms未満）: `cfs_b->lock`でのロック競合が多くなる
+- **大きすぎる**（10ms超）: CPUが決して使わないかもしれない10msの予算を得てしまう。スロットリングの応答も遅い
 
 ```bash
-# Default: 5000 µs
+# デフォルト: 5000 µs
 cat /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 
-# For latency-sensitive workloads, reduce to 1ms:
+# レイテンシに敏感なワークロードでは、1msに減らす:
 echo 1000 > /proc/sys/kernel/sched_cfs_bandwidth_slice_us
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [CPU cgroup v1 vs v2](cpu-cgroup.md) — The cgroup interface for bandwidth and weight
-- [cpuset](cpuset.md) — Restrict which CPUs bandwidth is counted against
-- [CFS](cfs.md) — The fair scheduler that bandwidth control wraps around
+- [CPU cgroup v1とv2](cpu-cgroup.md) — 帯域と重みのためのcgroupインターフェース
+- [cpuset](cpuset.md) — 帯域が計上されるCPUを制限する
+- [CFS](cfs.md) — 帯域制御が包み込んでいるfairスケジューラ

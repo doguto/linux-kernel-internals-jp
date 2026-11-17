@@ -1,34 +1,34 @@
-# Landlock: Unprivileged Sandboxing {#landlock-unprivileged-sandboxing}
+# Landlock: 非特権サンドボックス {#landlock-unprivileged-sandboxing}
 
-> Restrict a process's filesystem and network access without root — the new Linux sandbox LSM
+> rootなしでプロセスのファイルシステムとネットワークへのアクセスを制限する — Linuxの新しいサンドボックスLSM
 
-## What is Landlock? {#what-is-landlock}
+## Landlockとは {#what-is-landlock}
 
-Landlock (merged in Linux 5.13 by Mickaël Salaün — [`17ae69aba89d`](https://git.kernel.org/linus/17ae69aba89dbfa2139b7f8024b757ab3cc42f59), [LWN](https://lwn.net/Articles/859908/)) is a Linux Security Module that allows **unprivileged processes** to restrict their own access to the filesystem (since 5.13) and TCP network ports (since Linux 6.7, ABI v4). Unlike seccomp which filters syscalls, Landlock controls resource access at a semantic level.
+Landlock（Mickaël SalaünによってLinux 5.13でマージされた — [`17ae69aba89d`](https://git.kernel.org/linus/17ae69aba89dbfa2139b7f8024b757ab3cc42f59)、[LWN](https://lwn.net/Articles/859908/)）は、**非特権プロセス**が自分自身のファイルシステム（5.13以降）とTCPネットワークポート（Linux 6.7、ABI v4以降）へのアクセスを制限できるようにするLinux Security Moduleである。syscallをフィルタするseccompとは異なり、Landlockはリソースへのアクセスを意味的なレベルで制御する。
 
-Key properties:
+主な特性:
 
-- **No root required**: any process can create a Landlock sandbox for itself
-- **Irreversible**: once rules are enforced, they cannot be loosened
-- **Inherited**: child processes inherit the restrictions
-- **Stacked**: rules can only be restricted, never expanded
+- **rootは不要**: どのプロセスも自分用のLandlockサンドボックスを作成できる
+- **不可逆**: 一度ルールが適用されると、緩めることはできない
+- **継承される**: 子プロセスは制限を継承する
+- **積み重ね**: ルールはさらに制限することしかできず、拡張することはできない
 
-## Use cases {#use-cases}
+## ユースケース {#use-cases}
 
-- Browsers sandboxing renderer processes
-- Language runtimes restricting downloaded code
-- Security-sensitive daemons reducing attack surface
-- Container runtimes as a defense-in-depth layer
+- ブラウザによるレンダラプロセスのサンドボックス化
+- 言語ランタイムによるダウンロードしたコードの制限
+- セキュリティ上重要なデーモンによる攻撃対象領域の縮小
+- 多層防御の一層としてのコンテナランタイム
 
-## API overview {#api-overview}
+## APIの概要 {#api-overview}
 
 ```c
 #include <linux/landlock.h>
 #include <sys/syscall.h>
 
-/* The three steps: create ruleset → add rules → enforce */
+/* 3つのステップ: ルールセットの作成 → ルールの追加 → 適用 */
 
-/* Step 1: Create a ruleset */
+/* ステップ1: ルールセットを作成する */
 struct landlock_ruleset_attr ruleset_attr = {
     .handled_access_fs =
         LANDLOCK_ACCESS_FS_EXECUTE |
@@ -44,8 +44,8 @@ struct landlock_ruleset_attr ruleset_attr = {
         LANDLOCK_ACCESS_FS_MAKE_SOCK |
         LANDLOCK_ACCESS_FS_MAKE_FIFO |
         LANDLOCK_ACCESS_FS_MAKE_BLOCK |
-        LANDLOCK_ACCESS_FS_REFER |      /* rename across dirs (v2) */
-        LANDLOCK_ACCESS_FS_TRUNCATE,    /* truncate (v3) */
+        LANDLOCK_ACCESS_FS_REFER |      /* ディレクトリをまたぐrename（v2） */
+        LANDLOCK_ACCESS_FS_TRUNCATE,    /* truncate（v3） */
     .handled_access_net =
         LANDLOCK_ACCESS_NET_BIND_TCP |
         LANDLOCK_ACCESS_NET_CONNECT_TCP,
@@ -55,10 +55,10 @@ int ruleset_fd = syscall(SYS_landlock_create_ruleset,
                           &ruleset_attr, sizeof(ruleset_attr), 0);
 ```
 
-### Step 2: Add rules {#step-2-add-rules}
+### ステップ2: ルールを追加する {#step-2-add-rules}
 
 ```c
-/* Allow read access to /usr: */
+/* /usrへの読み取りアクセスを許可する: */
 int path_fd = open("/usr", O_PATH | O_CLOEXEC);
 
 struct landlock_path_beneath_attr path_attr = {
@@ -75,7 +75,7 @@ syscall(SYS_landlock_add_rule,
         &path_attr, 0);
 close(path_fd);
 
-/* Allow read-write to /tmp: */
+/* /tmpへの読み書きを許可する: */
 path_fd = open("/tmp", O_PATH | O_CLOEXEC);
 path_attr.allowed_access =
     LANDLOCK_ACCESS_FS_READ_FILE |
@@ -89,7 +89,7 @@ syscall(SYS_landlock_add_rule,
         ruleset_fd, LANDLOCK_RULE_PATH_BENEATH, &path_attr, 0);
 close(path_fd);
 
-/* Allow TCP connect to port 443: */
+/* ポート443へのTCP connectを許可する: */
 struct landlock_net_port_attr net_attr = {
     .allowed_access = LANDLOCK_ACCESS_NET_CONNECT_TCP,
     .port = 443,
@@ -98,21 +98,21 @@ syscall(SYS_landlock_add_rule,
         ruleset_fd, LANDLOCK_RULE_NET_PORT, &net_attr, 0);
 ```
 
-### Step 3: Enforce {#step-3-enforce}
+### ステップ3: 適用する {#step-3-enforce}
 
 ```c
-/* Drop ambient capabilities (needed before enforce): */
+/* ambientケーパビリティを放棄する（適用前に必要）: */
 prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0);
 
-/* Apply the ruleset to this process (and all its children): */
+/* ルールセットをこのプロセス（とそのすべての子）に適用する: */
 syscall(SYS_landlock_restrict_self, ruleset_fd, 0);
 close(ruleset_fd);
 
-/* From this point: filesystem and network accesses are restricted */
-/* Any access not covered by a rule → EACCES */
+/* これ以降: ファイルシステムとネットワークへのアクセスは制限される */
+/* ルールでカバーされないアクセスはすべて → EACCES */
 ```
 
-## Complete sandbox example {#complete-sandbox-example}
+## サンドボックスの完全な例 {#complete-sandbox-example}
 
 ```c
 #include <fcntl.h>
@@ -141,16 +141,16 @@ static inline int landlock_restrict_self(int ruleset_fd, __u32 flags)
 
 int sandbox_init(void)
 {
-    /* Check ABI version: */
+    /* ABIバージョンを確認する: */
     int abi = syscall(__NR_landlock_create_ruleset, NULL, 0,
                        LANDLOCK_CREATE_RULESET_VERSION);
     if (abi < 1) {
-        /* Kernel doesn't support Landlock — fall back gracefully */
+        /* カーネルがLandlockをサポートしていない — 穏便にフォールバックする */
         fprintf(stderr, "Landlock not supported (abi=%d)\n", abi);
         return 0;
     }
 
-    /* Use only features available in the kernel's ABI version: */
+    /* カーネルのABIバージョンで利用可能な機能だけを使う: */
     __u64 fs_access =
         LANDLOCK_ACCESS_FS_EXECUTE |
         LANDLOCK_ACCESS_FS_READ_FILE |
@@ -177,7 +177,7 @@ int sandbox_init(void)
     if (ruleset_fd < 0)
         return -errno;
 
-    /* Allow read-only access to /usr and /lib: */
+    /* /usrと/libへの読み取り専用アクセスを許可する: */
     const char *ro_paths[] = { "/usr", "/lib", "/lib64", NULL };
     for (int i = 0; ro_paths[i]; i++) {
         int fd = open(ro_paths[i], O_PATH | O_CLOEXEC);
@@ -192,7 +192,7 @@ int sandbox_init(void)
         close(fd);
     }
 
-    /* Allow read-write to /tmp: */
+    /* /tmpへの読み書きを許可する: */
     int tmp_fd = open("/tmp", O_PATH | O_CLOEXEC);
     if (tmp_fd >= 0) {
         struct landlock_path_beneath_attr pa = {
@@ -214,34 +214,34 @@ int sandbox_init(void)
 }
 ```
 
-## Filesystem access rights {#filesystem-access-rights}
+## ファイルシステムのアクセス権 {#filesystem-access-rights}
 
 ```c
-/* File access rights: */
-LANDLOCK_ACCESS_FS_EXECUTE      /* execute a file */
-LANDLOCK_ACCESS_FS_WRITE_FILE   /* write to a file */
-LANDLOCK_ACCESS_FS_READ_FILE    /* open/read a file */
-LANDLOCK_ACCESS_FS_READ_DIR     /* list a directory (opendir) */
+/* ファイルのアクセス権: */
+LANDLOCK_ACCESS_FS_EXECUTE      /* ファイルを実行する */
+LANDLOCK_ACCESS_FS_WRITE_FILE   /* ファイルに書き込む */
+LANDLOCK_ACCESS_FS_READ_FILE    /* ファイルをopen/readする */
+LANDLOCK_ACCESS_FS_READ_DIR     /* ディレクトリを一覧する（opendir） */
 LANDLOCK_ACCESS_FS_REMOVE_DIR   /* rmdir */
 LANDLOCK_ACCESS_FS_REMOVE_FILE  /* unlink */
-LANDLOCK_ACCESS_FS_MAKE_CHAR    /* mknod char device */
+LANDLOCK_ACCESS_FS_MAKE_CHAR    /* キャラクタデバイスをmknodする */
 LANDLOCK_ACCESS_FS_MAKE_DIR     /* mkdir */
-LANDLOCK_ACCESS_FS_MAKE_REG     /* create regular file (creat/open O_CREAT) */
-LANDLOCK_ACCESS_FS_MAKE_SOCK    /* create Unix socket */
+LANDLOCK_ACCESS_FS_MAKE_REG     /* 通常ファイルを作成する（creat/open O_CREAT） */
+LANDLOCK_ACCESS_FS_MAKE_SOCK    /* Unixソケットを作成する */
 LANDLOCK_ACCESS_FS_MAKE_FIFO    /* mkfifo */
-LANDLOCK_ACCESS_FS_MAKE_BLOCK   /* mknod block device */
+LANDLOCK_ACCESS_FS_MAKE_BLOCK   /* ブロックデバイスをmknodする */
 LANDLOCK_ACCESS_FS_MAKE_SYM     /* symlink */
-LANDLOCK_ACCESS_FS_REFER        /* rename/link across directories (v2+) */
-LANDLOCK_ACCESS_FS_TRUNCATE     /* truncate (v3+) */
+LANDLOCK_ACCESS_FS_REFER        /* ディレクトリをまたぐrename/link（v2以降） */
+LANDLOCK_ACCESS_FS_TRUNCATE     /* truncate（v3以降） */
 
-/* Network access rights (v4+): */
-LANDLOCK_ACCESS_NET_BIND_TCP    /* bind() a TCP socket to a port */
-LANDLOCK_ACCESS_NET_CONNECT_TCP /* connect() a TCP socket to a port */
+/* ネットワークのアクセス権（v4以降）: */
+LANDLOCK_ACCESS_NET_BIND_TCP    /* TCPソケットをポートにbind()する */
+LANDLOCK_ACCESS_NET_CONNECT_TCP /* TCPソケットでポートにconnect()する */
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルの実装 {#kernel-implementation}
 
-### LSM hook {#lsm-hook}
+### LSMフック {#lsm-hook}
 
 ```c
 /* security/landlock/fs.c */
@@ -251,72 +251,72 @@ static int hook_path_link(struct dentry *old_dentry,
 {
     const struct landlock_ruleset *dom = landlock_get_current_domain();
     if (!dom)
-        return 0;  /* not sandboxed */
+        return 0;  /* サンドボックス化されていない */
 
-    /* Check that the process is allowed to create links in new_dir: */
+    /* プロセスがnew_dirにリンクを作成することを許可されているか確認する: */
     return check_access_path(dom, new_dir,
                              LANDLOCK_ACCESS_FS_MAKE_REG);
 }
 ```
 
-### Rule storage {#rule-storage}
+### ルールの格納 {#rule-storage}
 
 ```c
-/* Rules are stored in a red-black tree keyed by inode number: */
+/* ルールはinode番号をキーとする赤黒木に格納される: */
 struct landlock_ruleset {
-    struct rb_root_cached  root_inode;  /* FS rules */
-    struct rb_root_cached  root_net;    /* net rules */
+    struct rb_root_cached  root_inode;  /* FSのルール */
+    struct rb_root_cached  root_net;    /* ネットワークのルール */
     /* ... */
 };
 
-/* On landlock_add_rule with LANDLOCK_RULE_PATH_BENEATH: */
-/* - open the path_fd → get the inode number */
-/* - insert a node in root_inode with allowed_access bitmask */
-/* - All paths under that inode get the access rights */
+/* LANDLOCK_RULE_PATH_BENEATHでのlandlock_add_rule時: */
+/* - path_fdを開く → inode番号を得る */
+/* - allowed_accessビットマスクを持つノードをroot_inodeに挿入する */
+/* - そのinode配下のすべてのパスがそのアクセス権を得る */
 ```
 
-## Landlock vs seccomp vs AppArmor {#landlock-vs-seccomp-vs-apparmor}
+## Landlock、seccomp、AppArmorの比較 {#landlock-vs-seccomp-vs-apparmor}
 
-| Feature | seccomp | Landlock | AppArmor |
+| 機能 | seccomp | Landlock | AppArmor |
 |---------|---------|----------|----------|
-| Requires root | No | No | Yes (policy load) |
-| Granularity | Syscall | Resource semantic | Path/capability |
-| Stackable | Yes (AND) | Yes (most restrictive) | No |
-| Runtime performance | Fast (BPF) | Fast (rb-tree) | Fast |
-| Policy language | C/BPF | C API | Text profiles |
-| Filesystem | Via syscall | Direct FS semantic | Yes |
-| Network | Via syscall | TCP port (v4+) | Yes |
+| rootが必要 | 不要 | 不要 | 必要（ポリシーのロード） |
+| 粒度 | syscall | リソースの意味 | パス/ケーパビリティ |
+| スタック可能 | 可（AND） | 可（最も厳しいものが優先） | 不可 |
+| 実行時の性能 | 高速（BPF） | 高速（赤黒木） | 高速 |
+| ポリシー言語 | C/BPF | C API | テキストのプロファイル |
+| ファイルシステム | syscall経由 | FSの意味を直接扱う | 可 |
+| ネットワーク | syscall経由 | TCPポート（v4以降） | 可 |
 
-## Debugging {#debugging}
+## デバッグ {#debugging}
 
 ```bash
-# Check Landlock support:
+# Landlockのサポートを確認する:
 grep LANDLOCK /boot/config-$(uname -r)
 # CONFIG_SECURITY_LANDLOCK=y
 
-# Trace Landlock denials (shows as EACCES with LSM audit):
+# Landlockの拒否をトレースする（LSMのauditでEACCESとして表示される）:
 ausearch -m AVC | grep landlock
-# or:
+# または:
 dmesg | grep "landlock"
 
-# Test a sandbox:
-# (requires landlock-abi >= 1)
+# サンドボックスをテストする:
+# （landlock-abi >= 1が必要）
 unshare --user -- bash -c '
   python3 -c "
 import ctypes, os
-# ... simplified landlock in Python ...
+# ... Pythonによる簡略化したlandlock ...
 "'
 
-# strace shows EACCES for denied operations:
+# straceは拒否された操作に対してEACCESを表示する:
 strace -e open,openat,write ./sandboxed_program 2>&1 | grep EACCES
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [seccomp](seccomp.md) — syscall-level filtering
-- [LSM Framework](lsm.md) — how Landlock hooks into the LSM stack
-- [Capabilities](capabilities.md) — privilege reduction
-- [User Namespaces](user-namespaces.md) — unprivileged isolation
-- `security/landlock/` — kernel implementation
-- `Documentation/userspace-api/landlock.rst` — official kernel docs
-- `samples/landlock/sandboxer.c` — example in kernel tree
+- [seccomp](seccomp.md) — syscallレベルのフィルタリング
+- [LSMフレームワーク](lsm.md) — LandlockがLSMスタックにどのようにフックするか
+- [ケーパビリティ](capabilities.md) — 権限の削減
+- [ユーザーnamespace](user-namespaces.md) — 非特権での隔離
+- `security/landlock/` — カーネルの実装
+- `Documentation/userspace-api/landlock.rst` — カーネルの公式ドキュメント
+- `samples/landlock/sandboxer.c` — カーネルツリー内の例

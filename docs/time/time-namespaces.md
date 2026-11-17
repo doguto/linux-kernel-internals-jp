@@ -1,37 +1,37 @@
-# Time Namespaces {#time-namespaces}
+# 時間namespace {#time-namespaces}
 
-> Per-container clock offsets: CLOCK_MONOTONIC and CLOCK_BOOTTIME isolation
+> コンテナごとのクロックオフセット: CLOCK_MONOTONICとCLOCK_BOOTTIMEの分離
 
-## Motivation {#motivation}
+## 動機 {#motivation}
 
-Linux namespaces isolate kernel resources per container. Most namespaces (network, mount, PID) can be created by calling `unshare()` or `clone()` from within the process that will use them. Time namespaces (`CLONE_NEWTIME`) solve a different problem: making `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` appear continuous across a checkpoint/restore cycle.
+Linuxのnamespaceは、カーネル資源をコンテナごとに分離する。ほとんどのnamespace（ネットワーク、マウント、PID）は、それを使うプロセス自身の中から`unshare()`や`clone()`を呼び出して作成できる。時間namespace（`CLONE_NEWTIME`）は別の問題を解決する。それは、チェックポイント/リストアのサイクルをまたいでも`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`が連続しているように見せることである。
 
-Without time namespaces, a container checkpointed at t=1000 and restored 3600 seconds later would see `CLOCK_MONOTONIC` jump from 1000 to 4600 — the 3600 seconds of real elapsed time while it was frozen. Any timeout or deadline computed against the monotonic clock before checkpoint would be wildly wrong after restore. Time namespaces allow CRIU and similar tools to give the container the illusion that no time passed during the suspension.
+時間namespaceがなければ、t=1000でチェックポイントされ3600秒後にリストアされたコンテナからは、`CLOCK_MONOTONIC`が1000から4600へジャンプして見える。この3600秒は、コンテナが凍結されていた間に実際に経過した時間である。チェックポイント前にモノトニッククロックを基準に計算されたタイムアウトや期限は、リストア後には大きく狂ってしまう。時間namespaceにより、CRIUや同様のツールは、中断中に時間が経過しなかったかのような錯覚をコンテナに与えられる。
 
-## CLONE_NEWTIME (Linux 5.6) {#clone_newtime-linux-56}
+## CLONE_NEWTIME（Linux 5.6） {#clone_newtime-linux-56}
 
 ```c
-/* Create a new time namespace */
+/* 新しい時間namespaceを作成する */
 unshare(CLONE_NEWTIME);
 
-/* Or at process creation */
+/* あるいはプロセス作成時に */
 clone(child_fn, stack, CLONE_NEWTIME | SIGCHLD, NULL);
 ```
 
-`CLONE_NEWTIME` was introduced in Linux 5.6. It is unique among namespace types in one important way: **the offsets in `/proc/<pid>/timens_offsets` must be written before any process enters the new time namespace**. Calling `unshare(CLONE_NEWTIME)` creates a new time namespace for *future child processes* (`time_ns_for_children`), while the calling process itself remains in its original time namespace. When the first child process is forked or spawned, `timens_on_fork()` commits the namespace, sets up the per-namespace vvar page, and permanently sets `frozen_offsets = true`. Any attempt to write to `timens_offsets` after a process has entered the namespace fails with `-EACCES`.
+`CLONE_NEWTIME`はLinux 5.6で導入された。これはnamespaceの種類の中で、ある重要な点で特異である。**`/proc/<pid>/timens_offsets`のオフセットは、いずれかのプロセスが新しい時間namespaceに入る前に書き込まなければならない**。`unshare(CLONE_NEWTIME)`を呼ぶと、*将来の子プロセス*のための新しい時間namespace（`time_ns_for_children`）が作られるが、呼び出したプロセス自身は元の時間namespaceにとどまる。最初の子プロセスがforkまたはspawnされると、`timens_on_fork()`がnamespaceを確定させ、namespaceごとのvvarページを設定し、`frozen_offsets = true`を恒久的にセットする。プロセスがnamespaceに入った後で`timens_offsets`に書き込もうとすると、`-EACCES`で失敗する。
 
-## What is and is not namespaced {#what-is-and-is-not-namespaced}
+## namespace化されるもの・されないもの {#what-is-and-is-not-namespaced}
 
-| Clock | Namespaced? |
+| クロック | namespace化されるか |
 |-------|-------------|
-| `CLOCK_MONOTONIC` | Yes — offset applied |
-| `CLOCK_BOOTTIME` | Yes — offset applied |
-| `CLOCK_REALTIME` | No — always global UTC |
-| `CLOCK_TAI` | No — always global TAI |
-| `CLOCK_PROCESS_CPUTIME_ID` | No — per-process CPU time |
-| `CLOCK_THREAD_CPUTIME_ID` | No — per-thread CPU time |
+| `CLOCK_MONOTONIC` | される — オフセットが適用される |
+| `CLOCK_BOOTTIME` | される — オフセットが適用される |
+| `CLOCK_REALTIME` | されない — 常にグローバルなUTC |
+| `CLOCK_TAI` | されない — 常にグローバルなTAI |
+| `CLOCK_PROCESS_CPUTIME_ID` | されない — プロセスごとのCPU時間 |
+| `CLOCK_THREAD_CPUTIME_ID` | されない — スレッドごとのCPU時間 |
 
-`CLOCK_REALTIME` is intentionally not namespaced. Wall clock time is shared across all containers on a host; only the monotonic and boot-time clocks — which measure elapsed time since some reference point — are given per-namespace offsets.
+`CLOCK_REALTIME`は意図的にnamespace化されていない。壁時計時刻はホスト上のすべてのコンテナで共有される。namespaceごとのオフセットが与えられるのは、ある基準点からの経過時間を測るモノトニッククロックとブート時間クロックだけである。
 
 ## struct time_namespace {#struct-time_namespace}
 
@@ -41,36 +41,36 @@ struct time_namespace {
     struct user_namespace   *user_ns;
     struct ucounts          *ucounts;
     struct ns_common         ns;
-    struct timens_offsets    offsets;   /* the clock adjustments */
+    struct timens_offsets    offsets;   /* クロックの調整値 */
 #ifdef CONFIG_TIME_NS_VDSO
-    struct page             *vvar_page; /* per-namespace vDSO data page */
+    struct page             *vvar_page; /* namespaceごとのvDSOデータページ */
 #endif
-    bool                     frozen_offsets; /* true after any process joins the namespace */
+    bool                     frozen_offsets; /* いずれかのプロセスがnamespaceに入った後はtrue */
 } __randomize_layout;
 ```
 
-The `offsets` field holds the addends applied to `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` reads:
+`offsets`フィールドは、`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`の読み取りに加算される値を保持する。
 
 ```c
 struct timens_offsets {
-    struct timespec64 monotonic; /* added to CLOCK_MONOTONIC reads */
-    struct timespec64 boottime;  /* added to CLOCK_BOOTTIME reads */
+    struct timespec64 monotonic; /* CLOCK_MONOTONIC の読み取りに加算 */
+    struct timespec64 boottime;  /* CLOCK_BOOTTIME の読み取りに加算 */
 };
 ```
 
-These are plain `timespec64` values — seconds and nanoseconds added to the base clock value before returning to userspace.
+これらは単純な`timespec64`値であり、ユーザー空間に返す前にベースのクロック値に秒とナノ秒が加算される。
 
-## vDSO integration {#vdso-integration}
+## vDSOとの統合 {#vdso-integration}
 
-`clock_gettime(CLOCK_MONOTONIC)` is implemented in the vDSO (virtual dynamic shared object) — a kernel-mapped page in every process's address space that allows the call to execute without a syscall. For time namespaces to work transparently with the vDSO, each time namespace gets its own vvar (vDSO variables) page.
+`clock_gettime(CLOCK_MONOTONIC)`はvDSO（virtual dynamic shared object）で実装されている。vDSOはすべてのプロセスのアドレス空間にカーネルがマップするページであり、システムコールなしで呼び出しを実行できるようにする。時間namespaceをvDSOと透過的に連携させるため、各時間namespaceは独自のvvar（vDSO変数）ページを持つ。
 
-When a process enters a new time namespace, the kernel maps the namespace-specific vvar page into the process's address space. The vDSO clock functions read clock data from this per-namespace page, which contains the base time plus the namespace's offset already incorporated into the `basetime` fields. The offset is applied at namespace setup time into the vvar page, so the vDSO path pays no extra cost at runtime compared to the non-namespaced case.
+プロセスが新しい時間namespaceに入ると、カーネルはそのnamespace固有のvvarページをプロセスのアドレス空間にマップする。vDSOのクロック関数はこのnamespaceごとのページからクロックデータを読む。このページには、ベース時刻にnamespaceのオフセットがあらかじめ組み込まれた`basetime`フィールドが含まれている。オフセットはnamespace設定時にvvarページへ適用されるため、vDSOのパスは実行時に、namespace化されていない場合と比べて余分なコストを払わない。
 
-This means `clock_gettime(CLOCK_MONOTONIC)` inside a container with a time namespace remains a vDSO call (no syscall) and returns the offset-adjusted time without kernel involvement.
+つまり、時間namespaceを持つコンテナ内の`clock_gettime(CLOCK_MONOTONIC)`は引き続きvDSO呼び出し（システムコールなし）のままであり、カーネルの関与なしにオフセット調整済みの時刻を返す。
 
-## Setting offsets {#setting-offsets}
+## オフセットの設定 {#setting-offsets}
 
-Offsets are configured by writing to `/proc/<pid>/timens_offsets` from outside the namespace, before any child process enters the new namespace:
+オフセットは、いずれかの子プロセスが新しいnamespaceに入る前に、namespaceの外から`/proc/<pid>/timens_offsets`に書き込んで設定する。
 
 ```
 # Format: <clock_name> <seconds> <nanoseconds>
@@ -78,106 +78,106 @@ monotonic <sec> <nsec>
 boottime  <sec> <nsec>
 ```
 
-Example — give a container the illusion that it started 1000 seconds ago:
+例 — コンテナに、1000秒前に起動したかのような錯覚を与える:
 
 ```bash
-# Unshare time namespace for future children
+# 将来の子プロセスのために時間namespaceをunshareする
 unshare --time bash -c '
-    # Parent writes offsets for its future children into its own timens_offsets
+    # 親は将来の子のためのオフセットを自身の timens_offsets に書き込む
     echo "monotonic 1000 0" > /proc/self/timens_offsets
     echo "boottime 1000 0"  > /proc/self/timens_offsets
 
-    # Now fork a child into the new namespace
-    # timens_on_fork() will freeze offsets on fork
+    # ここで子を新しいnamespaceにforkする
+    # timens_on_fork() がfork時にオフセットを凍結する
     python3 -c "import time; print(time.monotonic())"
 '
 ```
 
-Once any process enters the namespace (e.g. on `fork()` after `unshare(CLONE_NEWTIME)`), `timens_on_fork()` commits the namespace and freezes the offsets. Further writes to `timens_offsets` return `EACCES`.
+いずれかのプロセスがnamespaceに入ると（例: `unshare(CLONE_NEWTIME)`後の`fork()`時）、`timens_on_fork()`がnamespaceを確定させ、オフセットを凍結する。それ以降の`timens_offsets`への書き込みは`EACCES`を返す。
 
-The offsets can be negative (the container sees time as earlier than the host's monotonic clock — useful for CRIU restore when the container was created before the host's monotonic baseline).
+オフセットは負の値にもできる（コンテナからはホストのモノトニッククロックより早い時刻に見える。コンテナがホストのモノトニックの基準点より前に作られていた場合のCRIUリストアで有用である）。
 
-## CRIU use case {#criu-use-case}
+## CRIUのユースケース {#criu-use-case}
 
-CRIU (Checkpoint/Restore In Userspace) is the primary consumer of time namespaces. When CRIU restores a checkpoint:
+CRIU（Checkpoint/Restore In Userspace）は時間namespaceの主要な利用者である。CRIUがチェックポイントをリストアするときは次のようになる。
 
-1. The CRIU restore process calls `unshare(CLONE_NEWTIME)`.
-2. Before forking the target container process, CRIU writes the appropriate offsets to `/proc/self/timens_offsets`. The offsets encode the difference between the container's monotonic time at checkpoint and the host's current monotonic time.
-3. CRIU forks the target process into the new namespace (`timens_on_fork()` commits the offsets and maps the per-namespace VVAR page). The restored process sees a continuous `CLOCK_MONOTONIC` — the jump in wall time that occurred during suspension is hidden.
+1. CRIUのリストアプロセスが`unshare(CLONE_NEWTIME)`を呼ぶ。
+2. 対象のコンテナプロセスをforkする前に、CRIUは適切なオフセットを`/proc/self/timens_offsets`に書き込む。オフセットは、チェックポイント時点のコンテナのモノトニック時刻と、ホストの現在のモノトニック時刻との差を表す。
+3. CRIUは対象プロセスを新しいnamespaceにforkする（`timens_on_fork()`がオフセットを確定させ、namespaceごとのVVARページをマップする）。リストアされたプロセスからは`CLOCK_MONOTONIC`が連続して見え、中断中に起きた壁時計時刻のジャンプは隠される。
 
-Without time namespaces, any timer, timeout, or deadline the container computed against `CLOCK_MONOTONIC` before checkpoint would expire immediately or have a wildly wrong remaining duration after restore.
+時間namespaceがなければ、チェックポイント前にコンテナが`CLOCK_MONOTONIC`を基準に計算したタイマー、タイムアウト、期限は、リストア後に即座に満了するか、残り時間が大きく狂ってしまう。
 
-## timerfd interaction {#timerfd-interaction}
+## timerfdとの相互作用 {#timerfd-interaction}
 
-A `timerfd` created with `CLOCK_MONOTONIC` inside a time namespace uses the namespaced clock:
+時間namespace内で`CLOCK_MONOTONIC`を指定して作成した`timerfd`は、namespace化されたクロックを使う。
 
 ```c
-/* Inside the container */
+/* コンテナ内 */
 int fd = timerfd_create(CLOCK_MONOTONIC, 0);
 struct itimerspec its = {
     .it_value = { .tv_sec = 5, .tv_nsec = 0 },
 };
 timerfd_settime(fd, TFD_TIMER_ABSTIME, &its, NULL);
-/* Fires when namespaced CLOCK_MONOTONIC reaches 5 seconds from now */
+/* namespace化された CLOCK_MONOTONIC が今から5秒後に達したときに発火 */
 ```
 
-The kernel tracks the timerfd expiry against the namespace-adjusted clock. After a CRIU restore, timers that had not yet expired continue to count down correctly from their original relative positions.
+カーネルはtimerfdの満了をnamespace調整済みのクロックに対して追跡する。CRIUのリストア後、まだ満了していなかったタイマーは、元の相対位置から正しくカウントダウンを続ける。
 
-## Current limitations {#current-limitations}
+## 現在の制限 {#current-limitations}
 
-- Only `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` are offset. All other clocks are not namespaced.
-- The offsets are integers (seconds + nanoseconds) — there is no per-namespace frequency correction or drift compensation.
-- A process can be in at most one time namespace at a time; there is no stacking.
-- Time namespaces do not affect the RTC, NTP synchronization, or `adjtimex()` — those are global.
-- `/proc/uptime` is affected by the `CLOCK_BOOTTIME` offset within the namespace, so `uptime` inside a container shows the namespace-adjusted boot time.
+- オフセットが適用されるのは`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`だけである。その他のクロックはnamespace化されない。
+- オフセットは整数（秒+ナノ秒）であり、namespaceごとの周波数補正やドリフト補償はない。
+- プロセスが同時に属せる時間namespaceは高々1つであり、入れ子（スタッキング）はない。
+- 時間namespaceはRTC、NTP同期、`adjtimex()`には影響しない。これらはグローバルである。
+- `/proc/uptime`はnamespace内の`CLOCK_BOOTTIME`オフセットの影響を受けるため、コンテナ内の`uptime`はnamespace調整済みのブート時刻を表示する。
 
-## Inspecting time namespaces {#inspecting-time-namespaces}
+## 時間namespaceの調査 {#inspecting-time-namespaces}
 
 ```bash
-# See which time namespace a process is in
+# プロセスがどの時間namespaceにいるかを見る
 ls -la /proc/<pid>/ns/time
 
-# Compare two processes
+# 2つのプロセスを比較する
 readlink /proc/1/ns/time
 readlink /proc/$$/ns/time
 
-# Show offsets for a process
+# プロセスのオフセットを表示する
 cat /proc/<pid>/timens_offsets
 # monotonic 1000 0
 # boottime  1000 0
 
-# Verify clock isolation from inside
-# (requires nsenter or running inside the namespace)
+# 内側からクロックの分離を確認する
+# （nsenter またはnamespace内での実行が必要）
 nsenter --time=/proc/<pid>/ns/time -- \
     python3 -c "import time; print(time.monotonic())"
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/time_namespace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/time_namespace.h) — definition of `struct time_namespace`, `struct timens_offsets`, and the `timens_on_fork()` hook
-- [kernel/time/namespace.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/namespace.c) — time namespace lifecycle, `/proc/[pid]/timens_offsets` parsing, permission checking, and clock offset translation (`do_timens_ktime_to_host()`)
-- [kernel/time/namespace_vdso.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/namespace_vdso.c) — per-namespace VVAR page setup (`timens_setup_vdso_clock_data()`), VVAR page fault handling, and `timens_commit()`
+- [include/linux/time_namespace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/time_namespace.h) — `struct time_namespace`、`struct timens_offsets`、`timens_on_fork()`フックの定義
+- [kernel/time/namespace.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/namespace.c) — 時間namespaceのライフサイクル、`/proc/[pid]/timens_offsets`の解析、権限チェック、クロックオフセットの変換（`do_timens_ktime_to_host()`）
+- [kernel/time/namespace_vdso.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/namespace_vdso.c) — namespaceごとのVVARページの設定（`timens_setup_vdso_clock_data()`）、VVARページフォールトの処理、`timens_commit()`
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`time_namespaces(7)`](https://man7.org/linux/man-pages/man7/time_namespaces.7.html) — overview of Linux time namespaces, `/proc/[pid]/timens_offsets` syntax, and offset freezing rules
-- [`unshare(2)`](https://man7.org/linux/man-pages/man2/unshare.2.html) — disassociating execution context and creating a new time namespace with `CLONE_NEWTIME`
-- [`setns(2)`](https://man7.org/linux/man-pages/man2/setns.2.html) — joining an existing time namespace via file descriptor
-- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — reading `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` inside time namespaces
+- [`time_namespaces(7)`](https://man7.org/linux/man-pages/man7/time_namespaces.7.html) — Linuxの時間namespaceの概要、`/proc/[pid]/timens_offsets`の構文、オフセット凍結の規則
+- [`unshare(2)`](https://man7.org/linux/man-pages/man2/unshare.2.html) — 実行コンテキストの分離と、`CLONE_NEWTIME`による新しい時間namespaceの作成
+- [`setns(2)`](https://man7.org/linux/man-pages/man2/setns.2.html) — ファイルディスクリプタを介した既存の時間namespaceへの参加
+- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — 時間namespace内での`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`の読み取り
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Timekeeping and Clocksources](timekeeping.md) — the baseline `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` mechanisms and vDSO data layout
-- [POSIX Timers and timerfd](posix-timers.md) — timerfd expiry adjustment inside time namespaces
-- [vDSO Fast System Calls](../mm/vdso.md) — kernel-to-user shared data pages and architecture of VVAR mappings
+- [時刻管理とクロックソース](timekeeping.md) — 基本となる`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`の仕組みと、vDSOデータのレイアウト
+- [POSIXタイマーとtimerfd](posix-timers.md) — 時間namespace内でのtimerfd満了時刻の調整
+- [vDSO高速システムコール](../mm/vdso.md) — カーネルとユーザー間の共有データページと、VVARマッピングのアーキテクチャ
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Time namespaces](https://lwn.net/Articles/766089/) — Jonathan Corbet, September 2018: containerized clock offsets for CRIU checkpoint/restore and virtualization
-- [The 5.6 merge window opens](https://lwn.net/Articles/810780/) — Jonathan Corbet, January 30, 2020: official merging of time namespaces (`CLONE_NEWTIME`) into mainline Linux
+- [Time namespaces](https://lwn.net/Articles/766089/) — Jonathan Corbet、2018年9月: CRIUのチェックポイント/リストアと仮想化のための、コンテナ化されたクロックオフセット
+- [The 5.6 merge window opens](https://lwn.net/Articles/810780/) — Jonathan Corbet、2020年1月30日: 時間namespace（`CLONE_NEWTIME`）のメインラインLinuxへの正式なマージ
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Namespaces in the Linux Kernel](https://docs.kernel.org/admin-guide/namespaces/index.html) — official kernel documentation covering namespaces and virtualization
+- [Namespaces in the Linux Kernel](https://docs.kernel.org/admin-guide/namespaces/index.html) — namespaceと仮想化を扱う公式カーネルドキュメント

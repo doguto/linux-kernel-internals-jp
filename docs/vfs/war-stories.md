@@ -1,53 +1,53 @@
-# War Stories: VFS Bugs and Regressions {#war-stories-vfs-bugs-and-regressions}
+# 事件簿: VFSのバグとリグレッション {#war-stories-vfs-bugs-and-regressions}
 
-> Four CVEs from the dentry cache, `seq_file`, and OverlayFS — a livelock in the generic tree walker, an integer truncation seven years in the making, and two variants of the same OverlayFS copy-up trusting something it shouldn't have
+> dentryキャッシュ、`seq_file`、OverlayFSに由来する4件のCVE — 汎用ツリーウォーカーのライブロック、7年がかりで露呈した整数の切り詰め、そして本来信用すべきでないものを信用した同じOverlayFS copy-upの2つの変種
 
-Unlike [GPU/DRM's incident record](../drm/war-stories.md), every incident here is a CVE — VFS sits directly on a security boundary: it's the layer that decides what an unprivileged process can read, write, or become. Two of the four involve OverlayFS's copy-up path specifically, and both stem from the same underlying shape of mistake: copy-up acted on a value — a UID, a capability xattr — that needed a security-relevant check on the way out, and either the check silently didn't run at all, or it ran but nobody confirmed it actually succeeded.
+[GPU/DRMのインシデント記録](../drm/war-stories.md)とは異なり、ここに挙げるインシデントはすべてCVEである。VFSはセキュリティ境界の真上に位置している。非特権プロセスが何を読み、何を書き、何になれるかを決めるのがこのレイヤなのだ。4件のうち2件は特にOverlayFSのcopy-upパスに関わるもので、どちらも同じ根本的な誤りの形に由来する。copy-upは、出口でセキュリティ上重要なチェックを必要とする値（UID、ケーパビリティxattr）に基づいて動作したが、そのチェックが黙って一切実行されなかったか、実行されたものの実際に成功したかを誰も確認しなかったのである。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by when the fix landed in mainline — newest first.
+修正がメインラインに入った時期の新しい順に並べている。
 
-### [OverlayFS: The Copy-Up That Trusted an Unmapped UID](war-stories/overlayfs-uid-confusion.md) {#overlayfs-the-copy-up-that-trusted-an-unmapped-uid}
-**Linux 6.2 (February 2023) · CVE-2023-0386**
-Copy-up read a lower file's UID/GID through the mounter's namespace mapping and took the result at face value — never checking whether the mapping had actually succeeded or silently collapsed to the ambiguous overflow value every unmapped ID shares.
+### [OverlayFS: マップされていないUIDを信用したcopy-up](war-stories/overlayfs-uid-confusion.md) {#overlayfs-the-copy-up-that-trusted-an-unmapped-uid}
+**Linux 6.2（2023年2月）· CVE-2023-0386**
+copy-upは、下位ファイルのUID/GIDをマウント実行者のnamespaceマッピングを通して読み取り、その結果を額面どおりに受け取った。マッピングが実際に成功したのか、それともマップされていないすべてのIDが共有する曖昧なオーバーフロー値に黙って潰れてしまったのかを、一度も確認しなかった。
 
-### [Sequoia: The seq_file Size-Truncation Overflow](war-stories/sequoia-seq-file-overflow.md) {#sequoia-the-seq_file-size-truncation-overflow}
-**Disclosed July 2021, fixed in Linux 5.14 · CVE-2021-33909**
-A `size_t` buffer size, silently narrowed to a 32-bit `int` since the day `dentry_path()` was written, stayed unreachable until an unrelated 2014 fix made it possible to grow a buffer large enough to trigger it — and then sat unreachable-in-practice for seven more years until someone went looking, turning "make a very long directory path" into an exact, attacker-chosen out-of-bounds write.
+### [Sequoia: seq_fileのサイズ切り詰めによるオーバーフロー](war-stories/sequoia-seq-file-overflow.md) {#sequoia-the-seq_file-size-truncation-overflow}
+**2021年7月公開、Linux 5.14で修正 · CVE-2021-33909**
+`size_t`のバッファサイズが、`dentry_path()`が書かれた当日から32ビットの`int`へ黙って縮小変換されていた。これは2014年の無関係な修正によってトリガーできるほど大きなバッファを確保できるようになるまで到達不能であり、その後も誰かが探しに行くまでさらに7年間、事実上到達不能のまま放置されていた。結果として「非常に長いディレクトリパスを作る」ことが、攻撃者が正確に選べる範囲外書き込みへと変わった。
 
-### [OverlayFS: The Capability Check That Only One Caller Made](war-stories/overlayfs-capability-bypass.md) {#overlayfs-the-capability-check-that-only-one-caller-made}
-**Fixed December 2020, shipped in Linux 5.11 (February 2021) · CVE-2021-3493**
-The permission check for setting a namespaced capability xattr lived in the `setxattr(2)` syscall handler instead of the generic `vfs_setxattr()` every filesystem is supposed to trust — so OverlayFS's copy-up path, which calls the latter directly, skipped it entirely.
+### [OverlayFS: 1つの呼び出し元だけが行っていたケーパビリティチェック](war-stories/overlayfs-capability-bypass.md) {#overlayfs-the-capability-check-that-only-one-caller-made}
+**2020年12月修正、Linux 5.11（2021年2月）で出荷 · CVE-2021-3493**
+namespace化されたケーパビリティxattrを設定する際のパーミッションチェックが、すべてのファイルシステムが信頼するはずの汎用`vfs_setxattr()`ではなく、`setxattr(2)`システムコールのハンドラ内に置かれていた。そのため、後者を直接呼び出すOverlayFSのcopy-upパスは、このチェックを完全に素通りしていた。
 
-### [The Dentry-Cache Walk Livelock](war-stories/dentry-cache-livelock.md) {#the-dentry-cache-walk-livelock}
-**Linux 3.19 (February 2015) · CVE-2014-8559**
-`d_walk()`'s rename-detection restart couldn't tell "a rename happened" from "a sibling got killed," so a concurrent dentry prune could make the walker deadlock against itself and hang every rename on the machine.
+### [dentryキャッシュ走査のライブロック](war-stories/dentry-cache-livelock.md) {#the-dentry-cache-walk-livelock}
+**Linux 3.19（2015年2月）· CVE-2014-8559**
+`d_walk()`のrename検出による再試行は「renameが起きた」ことと「兄弟エントリがkillされた」ことを区別できなかった。そのため、並行して行われるdentryの刈り込みによってウォーカーが自分自身とデッドロックし、マシン上のすべてのrenameがハングし得た。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | UID confusion | Sequoia | Capability bypass | Dentry livelock |
+| パターン | UID混同 | Sequoia | ケーパビリティ回避 | dentryライブロック |
 |---------|:---:|:---:|:---:|:---:|
-| Involves OverlayFS copy-up specifically | Yes | No | Yes | No |
-| Root cause: a security check on copy-up either silently skipped or its success never confirmed | Yes | No | Yes | No |
-| Root cause: two events conflated because they looked identical from inside the check | No | No | No | Yes |
-| Root cause: silent numeric truncation | No | Yes | No | No |
-| Required unprivileged user namespaces to reach | Yes | Yes (bind mount inside one) | Yes | No |
-| Caught by an automated detector (lockdep) rather than manual audit | No | No | No | Yes |
-| CISA KEV-listed | Yes (Jun 2025) | No | Yes (Oct 2022) | No |
-| Public exploit tool published | Yes | Crasher PoC public; full exploit private | Yes | No |
+| 特にOverlayFSのcopy-upに関わる | Yes | No | Yes | No |
+| 根本原因: copy-up時のセキュリティチェックが黙ってスキップされた、またはその成功が確認されなかった | Yes | No | Yes | No |
+| 根本原因: チェックの内側からは同一に見えた2つのイベントが混同された | No | No | No | Yes |
+| 根本原因: 黙って行われる数値の切り詰め | No | Yes | No | No |
+| 到達に非特権user namespaceが必要 | Yes | Yes（その中でのbind mount） | Yes | No |
+| 手作業の監査ではなく自動検出器（lockdep）で発見された | No | No | No | Yes |
+| CISA KEVに掲載 | Yes（2025年6月） | No | Yes（2022年10月） | No |
+| 公開されたエクスプロイトツール | Yes | クラッシュさせるPoCは公開、完全なエクスプロイトは非公開 | Yes | No |
 
-**Two of four are the same OverlayFS mistake wearing different clothes.** The UID-confusion bug and the capability-check bypass both involve copy-up setting something security-relevant on the new upper file — an ownership ID, a capability xattr — without a security check on that specific value actually running and succeeding at copy-up time. In the UID case the mapping ran but nobody checked it hadn't silently degraded to the overflow placeholder; in the capability case the permission check never ran on that path at all. Neither is a logic error in the classic sense; both are a *trust boundary drawn one layer too early*.
+**4件のうち2件は、装いを変えた同じOverlayFSの誤りである。** UID混同バグとケーパビリティチェック回避はどちらも、copy-upが新しい上位ファイルにセキュリティ上重要な何か（所有者ID、ケーパビリティxattr）を設定する際に、その値に対するセキュリティチェックがcopy-up時点で実際に実行され成功することがなかった、というものである。UIDのケースではマッピングは実行されたが、それがオーバーフロー用のプレースホルダーに黙って劣化していないかを誰も確認しなかった。ケーパビリティのケースでは、そのパス上でパーミッションチェックがそもそも一度も実行されなかった。どちらも古典的な意味での論理エラーではない。どちらも*1レイヤ早すぎる位置に引かれた信頼境界*である。
 
-**The dentry livelock is the odd one out, and the only one caught by tooling before it shipped a fix.** Jaegeuk Kim's lockdep report predates Red Hat's later bug report by eight months — an independent discovery that traced the exact same root cause, without either report causing the other. Sequoia and the two OverlayFS bugs were all found by researchers reading code and reasoning about attacker-controlled inputs, not by a detector firing during ordinary testing.
+**dentryライブロックは異質な存在であり、修正が出荷される前にツールによって発見された唯一の例である。** Jaegeuk Kimのlockdepレポートは、Red Hatによる後のバグレポートより8か月早い。両者は独立した発見であり、どちらのレポートももう一方のきっかけにはなっていないが、まったく同じ根本原因にたどり着いている。Sequoiaと2件のOverlayFSバグはいずれも、通常のテスト中に検出器が反応したのではなく、研究者がコードを読み、攻撃者が制御できる入力について推論することで発見された。
 
-**Sequoia stands alone as a pure integer-width bug, and has the longest documented dormancy of the incidents on this page that state one.** The vulnerable narrowing conversion in `dentry_path()` existed from the function's original design; it took a 2014 fix to a completely unrelated allocation-failure problem to make it reachable at all, and seven more years before anyone went looking for exactly this class of bug.
+**Sequoiaは純粋な整数幅のバグとして単独で際立っており、潜伏期間を明記しているこのページのインシデントの中で、記録上最も長い潜伏期間を持つ。** `dentry_path()`における脆弱な縮小変換は、この関数の当初の設計から存在していた。それが到達可能になるには、まったく無関係な割り当て失敗問題に対する2014年の修正が必要であり、さらに誰かがまさにこの種類のバグを探しに行くまでに7年を要した。
 
-**Every incident here is a local-privilege or local-denial-of-service bug, not a remote one.** VFS's CVE history reflects what the layer actually guards: not the network-facing attack surface [BPF](../bpf/war-stories.md) or [networking](../net/war-stories.md) deal with, but the boundary between what one unprivileged local user can do versus what they can trick the kernel into doing on their behalf.
+**ここに挙げたインシデントはすべて、リモートではなくローカルの権限昇格またはローカルのサービス拒否のバグである。** VFSのCVE履歴は、このレイヤが実際に守っているものを反映している。[BPF](../bpf/war-stories.md)や[ネットワーク](../net/war-stories.md)が扱うネットワーク側の攻撃対象領域ではなく、1人の非特権ローカルユーザーが自分でできることと、カーネルをだまして自分の代わりにやらせることができることとの間の境界である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [VFS Overview](README.md) — the dentry cache, path resolution, and the generic superblock/inode/dentry/file objects every incident here operates on
-- [Security: LSMs, Capabilities, and Seccomp](../security/README.md) — the capability and permission-check machinery two of these incidents bypassed
-- [Locking](../locking/README.md) — `rename_lock`, seqlocks, and the lockdep machinery that caught the dentry livelock
-- [BPF War Stories](../bpf/war-stories.md), [Network War Stories](../net/war-stories.md), [Security War Stories](../security/war-stories.md), [GPU/DRM War Stories](../drm/war-stories.md) — the same site's other incident pages, for comparison across subsystems
+- [VFSの概要](README.md) — dentryキャッシュ、パス解決、そしてここに挙げたすべてのインシデントが操作対象とする汎用superblock/inode/dentry/fileオブジェクト
+- [セキュリティ: LSM、ケーパビリティ、seccomp](../security/README.md) — これらのインシデントのうち2件が回避したケーパビリティとパーミッションチェックの仕組み
+- [ロック](../locking/README.md) — `rename_lock`、seqlock、そしてdentryライブロックを捕捉したlockdepの仕組み
+- [BPFの事件簿](../bpf/war-stories.md)、[ネットワークの事件簿](../net/war-stories.md)、[セキュリティの事件簿](../security/war-stories.md)、[GPU/DRMの事件簿](../drm/war-stories.md) — サブシステム間で比較するための、同サイトの他のインシデントページ

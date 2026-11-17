@@ -1,10 +1,10 @@
-# Virtualization: KVM {#virtualization-kvm}
+# 仮想化: KVM {#virtualization-kvm}
 
-> Hardware-accelerated virtual machines in the Linux kernel
+> Linuxカーネルにおけるハードウェア支援型の仮想マシン
 
-## KVM architecture overview {#kvm-architecture-overview}
+## KVMアーキテクチャの概要 {#kvm-architecture-overview}
 
-KVM (Kernel-based Virtual Machine) is a hypervisor built into the Linux kernel. It uses hardware virtualization extensions (Intel VT-x / AMD-V) to run virtual machines at near-native speed.
+KVM（Kernel-based Virtual Machine）は、Linuxカーネルに組み込まれたハイパーバイザである。ハードウェア仮想化拡張（Intel VT-x / AMD-V）を使い、ネイティブに近い速度で仮想マシンを実行する。
 
 ```
 Host (Linux + KVM)
@@ -28,36 +28,36 @@ Host (Linux + KVM)
 └────────────────────────────────────────────────────────────┘
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [KVM Architecture](kvm-arch.md) | /dev/kvm API, vCPU, VM exits, VMCS |
-| [Memory Virtualization](kvm-memory.md) | EPT/NPT, shadow paging, balloon, huge pages |
-| [virtio](virtio.md) | Paravirtualized I/O, virtqueue, vhost acceleration |
-| [VFIO Device Passthrough](vfio.md) | IOMMU groups, DMA remapping, VFIO container hierarchy |
-| [KVM Exit Handling](kvm-exits.md) | Exit reasons, I/O emulation, MMIO, interrupt injection |
-| [KVM Live Migration](live-migration.md) | Dirty logging, pre-copy, CPU state transfer, post-copy |
-| [Nested Virtualization](nested-virt.md) | L0/L1/L2, vmcs12, vmcs02 merge, two-level EPT |
-| [War Stories](war-stories.md) | VENOM, L1TF, a nested-VMX UAF, a vhost overflow, and the MDS mitigation's five-year timing gap |
+| [KVMアーキテクチャ](kvm-arch.md) | /dev/kvm API、vCPU、VM exit、VMCS |
+| [メモリ仮想化](kvm-memory.md) | EPT/NPT、シャドウページング、バルーン、huge page |
+| [virtio](virtio.md) | 準仮想化I/O、virtqueue、vhostによる高速化 |
+| [VFIOデバイスパススルー](vfio.md) | IOMMUグループ、DMAリマッピング、VFIOのコンテナ階層 |
+| [KVMのexit処理](kvm-exits.md) | exit理由、I/Oエミュレーション、MMIO、割り込み注入 |
+| [KVMライブマイグレーション](live-migration.md) | ダーティログ、プレコピー、CPU状態の転送、ポストコピー |
+| [ネストされた仮想化](nested-virt.md) | L0/L1/L2、vmcs12、vmcs02へのマージ、2段階EPT |
+| [事件簿](war-stories.md) | VENOM、L1TF、nested VMXのUAF、vhostのオーバーフロー、そしてMDS緩和策の5年越しのタイミングの隙 |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Check KVM support
+# KVMサポートを確認
 lsmod | grep kvm
 # kvm_intel   or  kvm_amd
 # kvm
 
-ls /dev/kvm  # must exist
+ls /dev/kvm  # 存在している必要がある
 
-# Check hardware virtualization
+# ハードウェア仮想化を確認
 grep -m1 -E "vmx|svm" /proc/cpuinfo
 
-# List running VMs (QEMU/KVM)
+# 実行中のVMを一覧表示（QEMU/KVM）
 virsh list --all
 qemu-img info disk.qcow2
 
-# VM memory usage
+# VMのメモリ使用量
 virsh domstats --list-running --balloon
 ```

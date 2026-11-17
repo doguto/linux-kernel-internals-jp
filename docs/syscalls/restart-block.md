@@ -1,30 +1,29 @@
-# Syscall Restart Mechanisms {#syscall-restart-mechanisms}
+# syscallの再開メカニズム {#syscall-restart-mechanisms}
 
-> How interrupted syscalls restart transparently — ERESTARTSYS, ERESTART_RESTARTBLOCK, and restart_syscall()
+> 中断されたsyscallが透過的に再開される仕組み — ERESTARTSYS、ERESTART_RESTARTBLOCK、restart_syscall()
 
-## The problem {#the-problem}
+## 問題 {#the-problem}
 
-A process calls `read()` on a slow device. The kernel blocks the task,
-waiting for data. While it is blocked, a signal arrives: a `SIGCHLD` from a
-child process, or a `SIGALRM` from a timer. The kernel wakes the task to
-deliver the signal. But what should happen to the `read()`?
+あるプロセスが低速なデバイスに対して `read()` を呼ぶ。カーネルはタスクをブロックし、
+データを待つ。ブロック中にシグナルが届く。子プロセスからの `SIGCHLD` や、
+タイマーからの `SIGALRM` である。カーネルはシグナルを配送するためにタスクを起こす。
+では、`read()` はどうなるべきか？
 
-Three outcomes are possible:
+考えられる結果は3つある。
 
-1. Return `-EINTR` to userspace. The caller must retry manually if it wants to.
-2. Restart the `read()` transparently, as if the signal had not interrupted it.
-3. Restart the `read()` but with adjusted arguments — for example, a
-   `nanosleep()` that should sleep for the *remaining* time rather than the
-   original duration.
+1. ユーザー空間に `-EINTR` を返す。呼び出し元は、必要なら手動でリトライしなければならない。
+2. シグナルによる中断がなかったかのように、`read()` を透過的に再開する。
+3. 引数を調整したうえで `read()` を再開する — たとえば `nanosleep()` は、
+   元の期間ではなく*残りの*時間だけスリープすべきである。
 
-Which outcome occurs depends on which restart code the syscall returns, and on
-whether the signal handler was installed with `SA_RESTART`.
+どの結果になるかは、syscallがどの再開コードを返すか、そしてシグナルハンドラが
+`SA_RESTART` 付きでインストールされたかどうかで決まる。
 
-## The four restart codes {#the-four-restart-codes}
+## 4つの再開コード {#the-four-restart-codes}
 
-These are special negative error values, all below `-MAX_ERRNO` (defined as
-4096). Because they are outside the normal error range, they never reach
-userspace — the signal delivery path intercepts them before `sysretq`.
+これらは特別な負のエラー値であり、すべて `-MAX_ERRNO`（4096と定義）より小さい。
+通常のエラー範囲の外にあるため、ユーザー空間に届くことはない
+— シグナル配送パスが `sysretq` の前にこれらを横取りする。
 
 ```c
 /* include/linux/errno.h */
@@ -34,44 +33,44 @@ userspace — the signal delivery path intercepts them before `sysretq`.
 #define ERESTART_RESTARTBLOCK 516
 ```
 
-As negative values in `regs->ax` after a syscall returns:
+syscallから戻った後の `regs->ax` に入る負の値としては、次のようになる。
 
-| Code | Value | Meaning |
+| コード | 値 | 意味 |
 |------|-------|---------|
-| `ERESTARTSYS` | -512 | Restart if `SA_RESTART` is set on the signal handler; return `-EINTR` otherwise |
-| `ERESTARTNOINTR` | -513 | Always restart, regardless of `SA_RESTART`; transparent to userspace |
-| `ERESTARTNOHAND` | -514 | Return `-EINTR` if a handler ran; restart only if no handler is installed |
-| `ERESTART_RESTARTBLOCK` | -516 | Restart via `restart_syscall()` — for syscalls that must adjust arguments |
+| `ERESTARTSYS` | -512 | シグナルハンドラに `SA_RESTART` が設定されていれば再開し、そうでなければ `-EINTR` を返す |
+| `ERESTARTNOINTR` | -513 | `SA_RESTART` に関係なく常に再開する。ユーザー空間からは透過的 |
+| `ERESTARTNOHAND` | -514 | ハンドラが実行されたら `-EINTR` を返す。ハンドラがインストールされていない場合のみ再開する |
+| `ERESTART_RESTARTBLOCK` | -516 | `restart_syscall()` を介して再開する — 引数を調整しなければならないsyscall用 |
 
-`EINTR` (-4) is not a restart code. It is the ordinary error returned to
-userspace when the kernel has decided the syscall should not restart.
+`EINTR`（-4）は再開コードではない。カーネルがsyscallを再開すべきでないと
+判断したときにユーザー空間へ返される、通常のエラーである。
 
-## How the signal path uses restart codes {#how-the-signal-path-uses-restart-codes}
+## シグナルパスが再開コードをどう使うか {#how-the-signal-path-uses-restart-codes}
 
-After a signal handler returns, the architecture signal code calls
-`arch_do_signal_or_restart()` (x86: `arch/x86/kernel/signal.c`). It inspects
-`regs->ax` to determine what to do:
+シグナルハンドラが戻った後、アーキテクチャのシグナルコードは
+`arch_do_signal_or_restart()`（x86: `arch/x86/kernel/signal.c`）を呼ぶ。これは
+`regs->ax` を調べて、何をすべきかを決める。
 
 ```c
-/* arch/x86/kernel/signal.c — simplified */
+/* arch/x86/kernel/signal.c — 簡略化 */
 static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
 {
-    /* ... set up signal frame on userstack ... */
+    /* ... ユーザースタック上にシグナルフレームを設定する ... */
 
     /*
-     * If the syscall was interrupted, decide whether to restart:
-     * regs->orig_ax holds the syscall number; regs->ax holds the
-     * interrupted syscall's return value (one of the ERESTART* codes).
+     * syscallが中断された場合、再開するかどうかを決める:
+     * regs->orig_ax はsyscall番号を保持し、regs->ax は
+     * 中断されたsyscallの戻り値（ERESTART* コードのいずれか）を保持する。
      *
-     * When handle_signal() runs, a signal handler IS being delivered.
-     * ERESTART_RESTARTBLOCK is converted to -EINTR here, same as
-     * ERESTARTNOHAND — the syscall is NOT restarted.
+     * handle_signal() が実行されるとき、シグナルハンドラは実際に配送されている。
+     * ここでは ERESTART_RESTARTBLOCK は ERESTARTNOHAND と同様に
+     * -EINTR に変換される — syscallは再開されない。
      */
     if (regs->orig_ax != -1) {
         switch ((int)regs->ax) {
         case -ERESTART_RESTARTBLOCK:
         case -ERESTARTNOHAND:
-            regs->ax = -EINTR;   /* return EINTR to userspace */
+            regs->ax = -EINTR;   /* ユーザー空間に EINTR を返す */
             break;
         case -ERESTARTSYS:
             if (!(ksig->ka.sa.sa_flags & SA_RESTART)) {
@@ -80,47 +79,47 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs)
             }
             fallthrough;
         case -ERESTARTNOINTR:
-            /* Restart: rewind rip to re-execute the syscall instruction */
+            /* 再開: rip を巻き戻して syscall 命令を再実行する */
             regs->ax  = regs->orig_ax;
-            regs->ip -= 2;   /* back up over the two-byte syscall instruction */
+            regs->ip -= 2;   /* 2バイトの syscall 命令の分だけ戻す */
             break;
         }
     }
 }
 ```
 
-`ERESTART_RESTARTBLOCK` causes `restart_syscall()` to run **only when no
-signal handler runs** (the no-handler path inside `arch_do_signal_or_restart()`):
+`ERESTART_RESTARTBLOCK` によって `restart_syscall()` が実行されるのは、**シグナルハンドラが
+実行されない場合のみ**である（`arch_do_signal_or_restart()` 内のハンドラなしのパス）。
 
 ```c
-/* Only in the no-handler path (arch_do_signal_or_restart): */
+/* ハンドラなしのパス（arch_do_signal_or_restart）でのみ: */
 case -ERESTART_RESTARTBLOCK:
     regs->ax  = get_nr_restart_syscall(regs);
     regs->ip -= 2;
-    /* rip is already pointing at the syscall instruction */
+    /* rip はすでに syscall 命令を指している */
     break;
 ```
 
-`get_nr_restart_syscall()` isn't always plain `__NR_restart_syscall`: for a 32-bit
-compat task (`restart_block.arch_data & TS_COMPAT` — the same `arch_data` field
-from the struct above) it returns `__NR_ia32_restart_syscall` instead, and for
-the x32 ABI it ORs in `__X32_SYSCALL_BIT`. This is why `arch_data` has to be
-captured at the point the restart is set up: the CPU needs the *right* syscall
-number to re-dispatch through, native or compat.
+`get_nr_restart_syscall()` は常に単純な `__NR_restart_syscall` を返すわけではない。32ビット
+compatタスク（`restart_block.arch_data & TS_COMPAT` — 上の構造体と同じ `arch_data` フィールド）
+の場合は代わりに `__NR_ia32_restart_syscall` を返し、
+x32 ABIの場合は `__X32_SYSCALL_BIT` をORで加える。`arch_data` を再開の設定時点で
+取得しておかなければならないのはこのためである。CPUは、ネイティブかcompatかに応じて、
+再ディスパッチに使う*正しい*syscall番号を必要とする。
 
-When a signal handler IS delivered, `handle_signal()` converts
-`ERESTART_RESTARTBLOCK` to `-EINTR` instead (see the switch above).
+シグナルハンドラが実際に配送される場合は、`handle_signal()` が代わりに
+`ERESTART_RESTARTBLOCK` を `-EINTR` に変換する（上のswitchを参照）。
 
 ## struct restart_block {#struct-restart_block}
 
-`struct restart_block` is embedded directly in `struct task_struct`
-(`include/linux/sched.h`). It stores the restart function and all arguments
-needed to resume the syscall:
+`struct restart_block` は `struct task_struct`（`include/linux/sched.h`）に直接
+埋め込まれている。これは再開関数と、syscallの再開に必要なすべての引数を
+格納する。
 
 ```c
 /* include/linux/restart_block.h */
 struct restart_block {
-    unsigned long arch_data;   /* arch-specific flags, e.g., x86 TS_COMPAT */
+    unsigned long arch_data;   /* アーキテクチャ固有のフラグ。例: x86 の TS_COMPAT */
     long (*fn)(struct restart_block *);
 
     union {
@@ -139,8 +138,8 @@ struct restart_block {
             clockid_t           clockid;
             enum timespec_type  type;
             union {
-                struct __kernel_timespec __user *rmtp;      /* native (64-bit) */
-                struct old_timespec32 __user    *compat_rmtp; /* 32-bit compat */
+                struct __kernel_timespec __user *rmtp;      /* ネイティブ（64ビット） */
+                struct old_timespec32 __user    *compat_rmtp; /* 32ビット互換 */
             };
             ktime_t             expires;
         } nanosleep;
@@ -156,15 +155,15 @@ struct restart_block {
 };
 ```
 
-There is one `restart_block` per task, reused across interrupted syscalls.
-Before returning `ERESTART_RESTARTBLOCK`, the syscall fills in `fn` and the
-appropriate union member with the adjusted arguments.
+`restart_block` はタスクごとに1つあり、中断されたsyscallの間で使い回される。
+`ERESTART_RESTARTBLOCK` を返す前に、syscallは `fn` と、適切な共用体メンバーに
+調整済みの引数を書き込む。
 
-## restart_syscall(): the re-entry point {#restart_syscall-the-re-entry-point}
+## restart_syscall(): 再入ポイント {#restart_syscall-the-re-entry-point}
 
-`restart_syscall()` is a real syscall — syscall number `__NR_restart_syscall`
-(219 on x86-64). It has no arguments; it reads everything it needs from
-`current->restart_block`:
+`restart_syscall()` は本物のsyscallである — syscall番号は `__NR_restart_syscall`
+（x86-64では219）。引数はなく、必要なものはすべて
+`current->restart_block` から読み取る。
 
 ```c
 /* kernel/signal.c */
@@ -175,16 +174,16 @@ SYSCALL_DEFINE0(restart_syscall)
 }
 ```
 
-The `fn` pointer is set by the interrupted syscall before it returns
-`ERESTART_RESTARTBLOCK`. When `restart_syscall()` fires, it calls that function
-with the pre-filled `restart_block`, which contains already-adjusted arguments
-(such as the remaining sleep time).
+`fn` ポインタは、中断されたsyscallが `ERESTART_RESTARTBLOCK` を返す前に
+設定する。`restart_syscall()` が発火すると、事前に書き込まれた `restart_block` を
+引数にその関数を呼ぶ。`restart_block` にはすでに調整済みの引数
+（残りのスリープ時間など）が入っている。
 
-Userspace never sees `__NR_restart_syscall` in normal operation. It appears in
-`strace` output as `restart_syscall()` when a `nanosleep`, `poll`, `select`, or
-`futex_wait` is restarted after signal delivery.
+通常の動作でユーザー空間が `__NR_restart_syscall` を目にすることはない。これは
+`nanosleep`、`poll`、`select`、`futex_wait` がシグナル配送後に再開されたとき、
+`strace` の出力に `restart_syscall()` として現れる。
 
-## nanosleep() restart: a complete walkthrough {#nanosleep-restart-a-complete-walkthrough}
+## nanosleep() の再開: 完全な解説 {#nanosleep-restart-a-complete-walkthrough}
 
 ```
 1.  Userspace calls nanosleep({.tv_sec=5, .tv_nsec=0}, &rem)
@@ -225,34 +224,34 @@ Userspace never sees `__NR_restart_syscall` in normal operation. It appears in
     remaining time.
 ```
 
-The userspace process sees the original `nanosleep()` call eventually return
-0 — it is unaware of the restart. The `rem` pointer is updated with the time
-remaining at each interruption, in case the program inspects it.
+ユーザー空間のプロセスから見ると、元の `nanosleep()` 呼び出しが最終的に
+0を返す — 再開には気づかない。`rem` ポインタは、プログラムが調べる場合に備えて、
+中断のたびにその時点の残り時間で更新される。
 
-## Which syscalls use which mechanism {#which-syscalls-use-which-mechanism}
+## どのsyscallがどのメカニズムを使うか {#which-syscalls-use-which-mechanism}
 
-| Restart code | Examples | When handler runs | When no handler runs |
+| 再開コード | 例 | ハンドラが実行された場合 | ハンドラが実行されない場合 |
 |---|---|---|---|
-| `ERESTARTSYS` | `read`, `write`, `accept`, `connect`, `waitpid`, `select` (short wait) | EINTR (unless SA_RESTART → restart) | Always restarts |
-| `ERESTARTNOINTR` | Wait states entered during page faults, some internal waits | Always restarts | Always restarts |
-| `ERESTARTNOHAND` | `pause`, `sigsuspend`, `epoll_wait` (with signal mask change) | Always EINTR | Always restarts |
-| `ERESTART_RESTARTBLOCK` | `nanosleep`, `clock_nanosleep`, `poll`, `ppoll`, `select` (with timeout), `futex` (FUTEX_WAIT) | Always EINTR | Restarts via `restart_syscall()` |
+| `ERESTARTSYS` | `read`、`write`、`accept`、`connect`、`waitpid`、`select`（短い待ち） | EINTR（SA_RESTART があれば再開） | 常に再開 |
+| `ERESTARTNOINTR` | ページフォールト中に入る待ち状態、一部の内部的な待ち | 常に再開 | 常に再開 |
+| `ERESTARTNOHAND` | `pause`、`sigsuspend`、`epoll_wait`（シグナルマスクの変更を伴う） | 常にEINTR | 常に再開 |
+| `ERESTART_RESTARTBLOCK` | `nanosleep`、`clock_nanosleep`、`poll`、`ppoll`、`select`（タイムアウト付き）、`futex`（FUTEX_WAIT） | 常にEINTR | `restart_syscall()` を介して再開 |
 
-`SA_RESTART` only controls the behavior of `ERESTARTSYS`. `ERESTART_RESTARTBLOCK`
-restarts via `restart_syscall()` **only when no signal handler runs**. When a
-signal handler IS delivered, `ERESTART_RESTARTBLOCK` is converted to `-EINTR`,
-the same as `ERESTARTNOHAND`. The distinction is whether a handler actually ran,
-not whether `SA_RESTART` is set. A common mistake is installing a signal handler
-with `SA_RESTART` and expecting that `nanosleep()` will restart — it will not;
-it will return `-EINTR`. Without a handler, it restarts via `restart_syscall()`
-with the remaining time, not the original duration.
+`SA_RESTART` が制御するのは `ERESTARTSYS` の挙動だけである。`ERESTART_RESTARTBLOCK`
+が `restart_syscall()` を介して再開するのは、**シグナルハンドラが実行されない場合のみ**である。
+シグナルハンドラが実際に配送される場合、`ERESTART_RESTARTBLOCK` は `ERESTARTNOHAND`
+と同様に `-EINTR` に変換される。違いを決めるのは、ハンドラが実際に実行されたかどうかであり、
+`SA_RESTART` が設定されているかどうかではない。よくある間違いは、`SA_RESTART` 付きで
+シグナルハンドラをインストールし、`nanosleep()` が再開されると期待することである — 再開はされず、
+`-EINTR` が返る。ハンドラがなければ、元の期間ではなく残り時間で
+`restart_syscall()` を介して再開される。
 
-## Debugging restarts {#debugging-restarts}
+## 再開のデバッグ {#debugging-restarts}
 
 ### strace {#strace}
 
-`strace` shows `restart_syscall()` explicitly whenever a restarted syscall
-is invoked:
+`strace` は、再開されたsyscallが呼び出されるたびに `restart_syscall()` を
+明示的に表示する。
 
 ```
 nanosleep({tv_sec=5, tv_nsec=0}, 0x7ffd...)  = ? ERESTART_RESTARTBLOCK (Interrupted by signal)
@@ -263,17 +262,17 @@ restart_syscall(<... resuming interrupted nanosleep ...>) = 0
 
 ### perf trace {#perf-trace}
 
-`perf trace` records syscall entry and exit events including restarts:
+`perf trace` は、再開を含むsyscallのエントリとイグジットのイベントを記録する。
 
 ```bash
-# Trace all syscalls of a process, showing restart_syscall entries
+# プロセスの全syscallをトレースし、restart_syscall のエントリを表示する
 perf trace -p <pid> 2>&1 | grep -E 'restart|nanosleep|poll'
 ```
 
 ### /proc/pid/syscall {#procpidsyscall}
 
-`/proc/<pid>/syscall` shows the syscall a task is currently blocked in. If it
-reads `219` (on x86-64), the task is inside `restart_syscall()`:
+`/proc/<pid>/syscall` は、タスクが現在ブロックしているsyscallを表示する。
+`219`（x86-64の場合）と表示されたら、そのタスクは `restart_syscall()` の中にいる。
 
 ```bash
 cat /proc/$(pgrep myapp)/syscall
@@ -281,30 +280,30 @@ cat /proc/$(pgrep myapp)/syscall
 # ^219 = __NR_restart_syscall
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`, `ERESTARTNOINTR`, `ERESTARTNOHAND`, `ERESTART_RESTARTBLOCK` definitions
-- [include/linux/restart_block.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/restart_block.h) — `struct restart_block` definition, including the `futex`, `nanosleep`, and `poll` union members
-- [include/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched.h) — `restart_block` embedded directly in `struct task_struct`
-- [include/linux/thread_info.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/thread_info.h) — `set_restart_fn()`: sets `restart->fn` and returns `-ERESTART_RESTARTBLOCK`
-- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `SYSCALL_DEFINE0(restart_syscall)` and `do_no_restart_syscall()`
-- [arch/x86/kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal.c) — `handle_signal()` and `arch_do_signal_or_restart()`: where the `ERESTART*` codes in `regs->ax` are inspected and dispatched; `get_nr_restart_syscall()`: picks the correct restart syscall number (native, `__NR_ia32_restart_syscall` for 32-bit compat, or x32) based on `restart_block.arch_data`
-- [kernel/time/hrtimer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/hrtimer.c) — `hrtimer_nanosleep_restart()`: the restart handler `nanosleep()`/`clock_nanosleep()` register in `restart_block.fn`
+- [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`、`ERESTARTNOINTR`、`ERESTARTNOHAND`、`ERESTART_RESTARTBLOCK` の定義
+- [include/linux/restart_block.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/restart_block.h) — `struct restart_block` の定義。`futex`、`nanosleep`、`poll` の共用体メンバーを含む
+- [include/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched.h) — `struct task_struct` に直接埋め込まれた `restart_block`
+- [include/linux/thread_info.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/thread_info.h) — `set_restart_fn()`: `restart->fn` を設定して `-ERESTART_RESTARTBLOCK` を返す
+- [kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/signal.c) — `SYSCALL_DEFINE0(restart_syscall)` と `do_no_restart_syscall()`
+- [arch/x86/kernel/signal.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/signal.c) — `handle_signal()` と `arch_do_signal_or_restart()`: `regs->ax` 内の `ERESTART*` コードが調べられ、振り分けられる場所。`get_nr_restart_syscall()`: `restart_block.arch_data` に基づいて正しい再開syscall番号（ネイティブ、32ビット互換用の `__NR_ia32_restart_syscall`、またはx32）を選ぶ
+- [kernel/time/hrtimer.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/hrtimer.c) — `hrtimer_nanosleep_restart()`: `nanosleep()`/`clock_nanosleep()` が `restart_block.fn` に登録する再開ハンドラ
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`signal(7)`](https://man7.org/linux/man-pages/man7/signal.7.html) — see "Interruption of system calls and library functions by signal handlers" for the userspace-visible effects of `SA_RESTART`
-- [`restart_syscall(2)`](https://man7.org/linux/man-pages/man2/restart_syscall.2.html) — the syscall this page's walkthrough dispatches into; note its "no manual invocation" behavior
+- [`signal(7)`](https://man7.org/linux/man-pages/man7/signal.7.html) — `SA_RESTART` のユーザー空間から見える効果については "Interruption of system calls and library functions by signal handlers" を参照
+- [`restart_syscall(2)`](https://man7.org/linux/man-pages/man2/restart_syscall.2.html) — このページの解説でディスパッチ先となるsyscall。「手動で呼び出さない」という挙動に注意
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Syscall Entry Path](syscall-entry.md) — `syscall_exit_to_user_mode()`, signal path, `pt_regs`
-- [Signals](../ipc/signals.md) — signal delivery, `sigaction`, `SA_RESTART`
-- [Futex Internals](../locking/futex.md) — `FUTEX_WAIT`/`FUTEX_WAKE` mechanics and futex key hashing; this page's `restart_block.futex` member stores the arguments needed to resume a `FUTEX_WAIT` interrupted by a signal
+- [syscallのエントリパス](syscall-entry.md) — `syscall_exit_to_user_mode()`、シグナルパス、`pt_regs`
+- [シグナル](../ipc/signals.md) — シグナル配送、`sigaction`、`SA_RESTART`
+- [futexの内部](../locking/futex.md) — `FUTEX_WAIT`/`FUTEX_WAKE` の仕組みとfutexキーのハッシュ。このページの `restart_block.futex` メンバーは、シグナルで中断された `FUTEX_WAIT` の再開に必要な引数を格納する
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [A new system call restart mechanism](https://lwn.net/Articles/17744/) (2002) — Jonathan Corbet on why the restart-block mechanism was added: `nanosleep()` needs to restart with an *adjusted* (remaining) duration, not the original one, which a plain `-ERESTARTSYS` retry-from-scratch can't express
-- [\[braindump\]\[RFC\] signals and syscall restarts](https://lwn.net/Articles/528935/) (2012) — Al Viro's detailed technical notes on `ERESTARTSYS`/`ERESTARTNOINTR`/`SA_RESTART` semantics and the ways architecture signal-delivery code has gotten them wrong
+- [A new system call restart mechanism](https://lwn.net/Articles/17744/)（2002）— restart-blockメカニズムが追加された理由についてのJonathan Corbetの記事。`nanosleep()` は元の期間ではなく*調整済みの*（残りの）期間で再開する必要があり、単純な `-ERESTARTSYS` による最初からのリトライではそれを表現できない
+- [\[braindump\]\[RFC\] signals and syscall restarts](https://lwn.net/Articles/528935/)（2012）— `ERESTARTSYS`/`ERESTARTNOINTR`/`SA_RESTART` のセマンティクスと、アーキテクチャのシグナル配送コードがそれらを誤って実装してきた事例についてのAl Viroの詳細な技術メモ

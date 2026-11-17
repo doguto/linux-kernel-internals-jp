@@ -1,55 +1,55 @@
-# Timekeeping and Clocksources {#timekeeping-and-clocksources}
+# 時刻管理とクロックソース {#timekeeping-and-clocksources}
 
-> How the kernel tracks time: TSC, HPET, clocksources, and NTP
+> カーネルはどのように時間を追跡するか: TSC、HPET、クロックソース、NTP
 
-## Two abstractions: clocksource and clockevent {#two-abstractions-clocksource-and-clockevent}
+## 2つの抽象化: clocksourceとclockevent {#two-abstractions-clocksource-and-clockevent}
 
-The kernel splits time hardware into two roles:
+カーネルは時間関連のハードウェアを2つの役割に分ける。
 
-| Abstraction | Role | Examples |
+| 抽象化 | 役割 | 例 |
 |-------------|------|---------|
-| **clocksource** | Free-running counter to *read* elapsed time | TSC, HPET, ACPI PM timer |
-| **clockevent** | Programmable device to *generate* interrupts at a future time | LAPIC timer, HPET, ARM generic timer |
+| **clocksource** | 経過時間を*読み取る*ための自走カウンタ | TSC、HPET、ACPI PMタイマー |
+| **clockevent** | 将来の時刻に割り込みを*発生させる*プログラム可能なデバイス | LAPICタイマー、HPET、ARM generic timer |
 
-A clocksource is polled; a clockevent fires interrupts. Both are needed: the clocksource provides nanosecond-resolution reads; the clockevent drives the scheduler tick and hrtimers.
+clocksourceはポーリングされ、clockeventは割り込みを発生させる。両方が必要である。clocksourceはナノ秒分解能の読み取りを提供し、clockeventはスケジューラティックとhrtimerを駆動する。
 
 ## struct clocksource {#struct-clocksource}
 
 ```c
 /* include/linux/clocksource.h */
 struct clocksource {
-    u64             (*read)(struct clocksource *cs);  /* read hardware counter */
-    u64             mask;          /* bitmask for counter width */
-    u32             mult;          /* counter→nanoseconds multiplier */
-    u32             shift;         /* fractional shift for mult */
-    u64             max_idle_ns;   /* max time without a read (for wrap detection) */
-    u32             maxadj;        /* max adjustment to mult */
-    u64             max_cycles;    /* max counter delta before overflow */
+    u64             (*read)(struct clocksource *cs);  /* ハードウェアカウンタを読む */
+    u64             mask;          /* カウンタ幅のビットマスク */
+    u32             mult;          /* カウンタ→ナノ秒の乗数 */
+    u32             shift;         /* mult の小数部シフト */
+    u64             max_idle_ns;   /* 読み取りなしでよい最大時間（ラップ検出用） */
+    u32             maxadj;        /* mult の最大調整量 */
+    u64             max_cycles;    /* オーバーフロー前のカウンタ差分の最大値 */
     const char     *name;
-    int             rating;        /* quality: 400-499 perfect, 300-399 desired, 200-299 good, 100-199 base, 1-99 unfit */
+    int             rating;        /* 品質: 400-499 完璧、300-399 望ましい、200-299 良好、100-199 基本、1-99 不適 */
     /* ... */
 };
 
-/* TSC clocksource (arch/x86/kernel/tsc.c) */
+/* TSCのclocksource（arch/x86/kernel/tsc.c） */
 static struct clocksource clocksource_tsc = {
     .name           = "tsc",
     .rating         = 300,
     .read           = read_tsc,   /* rdtsc */
     .mask           = CLOCKSOURCE_MASK(64),
     .flags          = CLOCK_SOURCE_IS_CONTINUOUS | CLOCK_SOURCE_MUST_VERIFY,
-    /* mult/shift calibrated at boot */
+    /* mult/shift はブート時に較正される */
 };
 ```
 
-### Counter → nanoseconds conversion {#counter-nanoseconds-conversion}
+### カウンタ→ナノ秒の変換 {#counter-nanoseconds-conversion}
 
-The `mult` and `shift` fields avoid division in the hot path:
+`mult`と`shift`フィールドにより、ホットパスでの除算を避ける。
 
 ```c
 /*
  * ns = (cycles * mult) >> shift
  *
- * mult is computed so that:
+ * mult は次を満たすように計算される:
  *   (10^9 * 2^shift) / frequency = mult
  */
 static inline s64 clocksource_cyc2ns(u64 cycles, u32 mult, u32 shift)
@@ -58,19 +58,19 @@ static inline s64 clocksource_cyc2ns(u64 cycles, u32 mult, u32 shift)
 }
 ```
 
-For a 3.6 GHz TSC: `mult ≈ 1165084`, `shift = 22`. Each call to `clock_gettime` does one `rdtsc` + one multiply + one shift — no division, no lock.
+3.6GHzのTSCの場合: `mult ≈ 1165084`、`shift = 22`。`clock_gettime`の各呼び出しは、`rdtsc`1回+乗算1回+シフト1回を行うだけであり、除算もロックもない。
 
 ## struct timekeeper {#struct-timekeeper}
 
-The timekeeper holds the current time state and is updated on every tick and NTP adjustment:
+timekeeperは現在の時刻状態を保持し、ティックごととNTP調整ごとに更新される。
 
 ```c
 /* include/linux/timekeeper_internal.h */
 struct timekeeper {
-    /* Cacheline 0 (together with prepended seqcount of timekeeper core): */
+    /* キャッシュライン0（timekeeperコアの前置seqcountとともに）: */
     struct tk_read_base    tkr_mono;
 
-    /* Cacheline 1: */
+    /* キャッシュライン1: */
     u64                    xtime_sec;
     unsigned long          ktime_sec;
     struct timespec64      wall_to_monotonic;
@@ -83,11 +83,11 @@ struct timekeeper {
     u32                    coarse_nsec;
     enum timekeeper_ids    id;
 
-    /* Cacheline 2: */
+    /* キャッシュライン2: */
     struct tk_read_base    tkr_raw;
     u64                    raw_sec;
 
-    /* Cachline 3 and 4 (timekeeping internal variables): */
+    /* キャッシュライン3と4（時刻管理の内部変数）: */
     enum clocksource_ids   cs_id;
     u32                    cs_ns_to_cyc_mult;
     u32                    cs_ns_to_cyc_shift;
@@ -119,40 +119,40 @@ struct timekeeper {
 struct tk_read_base {
     struct clocksource  *clock;
     u64                  mask;
-    u64                  cycle_last;   /* last read counter value */
-    u32                  mult;         /* adjusted mult (NTP modifies this) */
+    u64                  cycle_last;   /* 最後に読んだカウンタ値 */
+    u32                  mult;         /* 調整済みの mult（NTPがこれを変更する） */
     u32                  shift;
-    u64                  xtime_nsec;   /* accumulated nanoseconds (fractional) */
-    ktime_t              base;         /* nanoseconds base */
+    u64                  xtime_nsec;   /* 累積ナノ秒（小数部） */
+    ktime_t              base;         /* ナノ秒のベース */
     u64                  base_real;
 };
 ```
 
-### Clock IDs {#clock-ids}
+### クロックID {#clock-ids}
 
-| Clock ID | Description | Affected by |
+| クロックID | 説明 | 影響を受けるもの |
 |----------|-------------|------------|
-| `CLOCK_REALTIME` | Wall clock (UTC) | settimeofday, NTP jumps |
-| `CLOCK_MONOTONIC` | Monotonically increasing from boot | NTP rate adjustment only; never jumps |
-| `CLOCK_MONOTONIC_RAW` | Like MONOTONIC but no NTP adjustment | Nothing — pure hardware |
-| `CLOCK_BOOTTIME` | Like MONOTONIC but includes suspend time | Nothing |
-| `CLOCK_TAI` | International Atomic Time (no leap seconds) | Leap second offset only |
-| `CLOCK_PROCESS_CPUTIME_ID` | Process CPU time | |
-| `CLOCK_THREAD_CPUTIME_ID` | Thread CPU time | |
+| `CLOCK_REALTIME` | 壁時計（UTC） | settimeofday、NTPによるジャンプ |
+| `CLOCK_MONOTONIC` | ブートから単調増加 | NTPによるレート調整のみ。ジャンプしない |
+| `CLOCK_MONOTONIC_RAW` | MONOTONICと同様だがNTP調整なし | なし — 純粋なハードウェア |
+| `CLOCK_BOOTTIME` | MONOTONICと同様だがサスペンド時間を含む | なし |
+| `CLOCK_TAI` | 国際原子時（うるう秒なし） | うるう秒オフセットのみ |
+| `CLOCK_PROCESS_CPUTIME_ID` | プロセスのCPU時間 | |
+| `CLOCK_THREAD_CPUTIME_ID` | スレッドのCPU時間 | |
 
 ```c
 struct timespec64 ts;
-clock_gettime(CLOCK_MONOTONIC, &ts);  /* nanosecond precision */
-clock_gettime(CLOCK_REALTIME, &ts);   /* wall clock */
+clock_gettime(CLOCK_MONOTONIC, &ts);  /* ナノ秒精度 */
+clock_gettime(CLOCK_REALTIME, &ts);   /* 壁時計 */
 ```
 
-## TSC: Time Stamp Counter {#tsc-time-stamp-counter}
+## TSC: タイムスタンプカウンタ {#tsc-time-stamp-counter}
 
-The TSC is the primary clocksource on x86. It's a 64-bit counter incremented every CPU cycle.
+TSCはx86における主要なclocksourceである。CPUサイクルごとにインクリメントされる64ビットのカウンタである。
 
-### TSC calibration {#tsc-calibration}
+### TSCの較正 {#tsc-calibration}
 
-At boot, the kernel calibrates the TSC frequency against a known-good reference (HPET, PIT, or ACPI PM timer):
+ブート時、カーネルはTSCの周波数を、信頼できる既知の基準（HPET、PIT、ACPI PMタイマー）と比べて較正する。
 
 ```c
 /* arch/x86/kernel/tsc.c */
@@ -161,54 +161,54 @@ static unsigned long pit_calibrate_tsc(u32 latch, unsigned long ms, int loopmin)
     u64 tsc, t1, t2, delta;
     unsigned long tscmin, tscmax;
 
-    /* Program PIT channel 2 for a known interval */
+    /* PITチャネル2を既知の間隔にプログラムする */
     outb((inb(0x61) & ~0x02) | 0x01, 0x61);
 
-    /* Measure TSC ticks in that interval */
+    /* その間隔におけるTSCのティック数を測る */
     t1 = get_cycles();
-    /* ... wait for PIT ... */
+    /* ... PITを待つ ... */
     t2 = get_cycles();
 
     delta = t2 - t1;
-    /* delta / ms = TSC frequency in kHz */
+    /* delta / ms = kHz単位のTSC周波数 */
     return delta / ms;
 }
 ```
 
-### TSC invariance {#tsc-invariance}
+### TSCの不変性 {#tsc-invariance}
 
-Modern CPUs have an **invariant TSC** (`CPUID[0x80000007] bit 8`) that runs at a fixed rate regardless of P-states or C-states. This makes TSC a reliable clocksource even on laptops with frequency scaling.
+現代のCPUは**invariant TSC**（`CPUID[0x80000007] bit 8`）を持ち、PステートやCステートにかかわらず固定レートで動作する。これにより、周波数スケーリングを行うラップトップでもTSCは信頼できるclocksourceとなる。
 
 ```bash
-# Check invariant TSC support
+# invariant TSC のサポートを確認する
 grep "constant_tsc nonstop_tsc" /proc/cpuinfo
 ```
 
-Without invariant TSC, TSC drifts when the CPU frequency changes — unreliable for timekeeping.
+invariant TSCがなければ、CPU周波数が変化するとTSCがドリフトするため、時刻管理には信頼できない。
 
-## NTP: adjusting the clock {#ntp-adjusting-the-clock}
+## NTP: クロックの調整 {#ntp-adjusting-the-clock}
 
-NTP runs in userspace (ntpd/chronyd) but applies corrections to the kernel clock via `adjtimex(2)`:
+NTPはユーザー空間（ntpd/chronyd）で動作するが、`adjtimex(2)`を介してカーネルのクロックに補正を適用する。
 
 ```c
-/* Userspace NTP daemon calls: */
+/* ユーザー空間のNTPデーモンが呼ぶ: */
 struct timex tx = {
     .modes  = ADJ_FREQUENCY | ADJ_OFFSET,
-    .freq   = ppm_scaled,   /* frequency error in scaled PPM */
-    .offset = offset_ns,    /* time offset in nanoseconds */
+    .freq   = ppm_scaled,   /* スケーリングされたPPM単位の周波数誤差 */
+    .offset = offset_ns,    /* ナノ秒単位の時刻オフセット */
 };
 adjtimex(&tx);
 ```
 
-The kernel applies the frequency correction by adjusting the clocksource `mult` value:
+カーネルは、clocksourceの`mult`値を調整することで周波数補正を適用する。
 
 ```
 new_mult = orig_mult + (freq_error * orig_mult) / NSEC_PER_SEC
 ```
 
-This makes the counter-to-nanosecond conversion run slightly faster or slower without any visible jumps.
+これにより、カウンタからナノ秒への変換が、目に見えるジャンプなしにわずかに速く、あるいは遅く進むようになる。
 
-### NTP phase-locked loop (PLL) {#ntp-phase-locked-loop-pll}
+### NTPの位相同期ループ（PLL） {#ntp-phase-locked-loop-pll}
 
 ```c
 /* kernel/time/ntp.c */
@@ -225,26 +225,26 @@ static void ntp_update_frequency(struct ntp_data *ntpdata)
     new_base             = div_u64(second_length, NTP_INTERVAL_FREQ);
 
     /*
-     * Don't wait for the next second_overflow, apply the change to the
-     * tick length immediately:
+     * 次の second_overflow を待たず、ティック長に変更を
+     * 即座に適用する:
      */
     ntpdata->tick_length = new_base;
 }
 ```
 
-## vDSO: time without a syscall {#vdso-time-without-a-syscall}
+## vDSO: システムコールなしの時刻取得 {#vdso-time-without-a-syscall}
 
-`clock_gettime(CLOCK_MONOTONIC)` is the most-called libc function. The kernel optimizes it via the **vDSO** (virtual dynamic shared object) — a read-only page mapped into every process that contains the timekeeping fast path.
+`clock_gettime(CLOCK_MONOTONIC)`は最も頻繁に呼ばれるlibc関数である。カーネルはこれを**vDSO**（virtual dynamic shared object）によって最適化している。vDSOはすべてのプロセスにマップされる読み取り専用ページで、時刻管理の高速パスを含む。
 
 ```c
-/* lib/vdso/gettimeofday.c — runs in userspace without syscall */
+/* lib/vdso/gettimeofday.c — システムコールなしでユーザー空間で動作する */
 static __always_inline int
 do_hres(const struct vdso_time_data *vd, const struct vdso_clock *vc, clockid_t clk, struct __kernel_timespec *ts)
 {
     u64 sec, ns;
     u32 seq;
 
-    /* Allows to compile the high resolution parts out */
+    /* 高分解能部分をコンパイルから除外できるようにする */
     if (!__arch_vdso_hres_capable())
         return false;
 
@@ -262,65 +262,65 @@ do_hres(const struct vdso_time_data *vd, const struct vdso_clock *vc, clockid_t 
 }
 ```
 
-The vDSO page is updated by the kernel on every tick. User reads are entirely in userspace — no ring transitions, no TLB misses to kernel pages.
+vDSOページはティックごとにカーネルによって更新される。ユーザーの読み取りは完全にユーザー空間で行われ、リング遷移もカーネルページへのTLBミスもない。
 
-## Observing timekeeping {#observing-timekeeping}
+## 時刻管理の観察 {#observing-timekeeping}
 
 ```bash
-# Current clocksource and available alternatives
+# 現在のクロックソースと利用可能な代替
 cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 cat /sys/devices/system/clocksource/clocksource0/available_clocksource
 
-# Force a different clocksource (for testing/debugging)
+# 別のクロックソースを強制する（テスト/デバッグ用）
 echo hpet | sudo tee /sys/devices/system/clocksource/clocksource0/current_clocksource
 
-# TSC frequency and stability
+# TSCの周波数と安定性
 dmesg | grep -E "TSC|tsc"
 # tsc: Detected 3600.000 MHz processor
 # tsc: Detected 3600.000 MHz TSC
 # clocksource: tsc: mask: 0xffffffffffffffff max_cycles: 0x...
 
-# NTP synchronization status
+# NTPの同期状態
 timedatectl show | grep NTP
 chronyc tracking
 
-# Time namespace (containers may have their own offset)
-# /proc/<pid>/timens_offsets shows MONOTONIC/BOOTTIME offsets
+# 時間namespace（コンテナは独自のオフセットを持ちうる）
+# /proc/<pid>/timens_offsets は MONOTONIC/BOOTTIME のオフセットを示す
 
-# Kernel time debugging
+# カーネルの時刻のデバッグ
 cat /proc/timer_list | head -50
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/timekeeper_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timekeeper_internal.h) — definitions of `struct timekeeper` and `struct tk_read_base` with cacheline alignment comments
-- [kernel/time/timekeeping.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping.c) — timekeeping core: `ktime_get()`, `timekeeping_advance()`, `timekeeping_update_from_shadow()`, and leap-second processing
-- [kernel/time/timekeeping_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping_internal.h) — internal timekeeping definitions, fast time getters, and vDSO updater prototypes
-- [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — architecture-generic vDSO clock reading loop (`do_hres()`, `do_coarse()`) using lockless seqlock reads
-- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — x86 TSC calibration (`pit_calibrate_tsc()`, `native_calibrate_tsc()`) and stability testing
+- [include/linux/timekeeper_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/timekeeper_internal.h) — キャッシュライン配置のコメント付きの`struct timekeeper`と`struct tk_read_base`の定義
+- [kernel/time/timekeeping.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping.c) — 時刻管理のコア: `ktime_get()`、`timekeeping_advance()`、`timekeeping_update_from_shadow()`、うるう秒の処理
+- [kernel/time/timekeeping_internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/time/timekeeping_internal.h) — 時刻管理の内部定義、高速な時刻取得関数、vDSO更新関数のプロトタイプ
+- [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — ロックレスなseqlock読み取りを使う、アーキテクチャ非依存のvDSOクロック読み取りループ（`do_hres()`、`do_coarse()`）
+- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — x86のTSC較正（`pit_calibrate_tsc()`、`native_calibrate_tsc()`）と安定性テスト
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — retrieving clock timestamps across supported clock domains
-- [`clock_settime(2)`](https://man7.org/linux/man-pages/man2/clock_settime.2.html) — setting `CLOCK_REALTIME` and triggering `clock_was_set()` notifications
-- [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — adjusting kernel clock parameters and retrieving synchronization status
-- [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — overview of time and timer APIs in Linux
+- [`clock_gettime(2)`](https://man7.org/linux/man-pages/man2/clock_gettime.2.html) — サポートされる各クロックドメインのタイムスタンプを取得する
+- [`clock_settime(2)`](https://man7.org/linux/man-pages/man2/clock_settime.2.html) — `CLOCK_REALTIME`を設定し、`clock_was_set()`通知をトリガーする
+- [`adjtimex(2)`](https://man7.org/linux/man-pages/man2/adjtimex.2.html) — カーネルのクロックパラメータを調整し、同期状態を取得する
+- [`time(7)`](https://man7.org/linux/man-pages/man7/time.7.html) — Linuxにおける時間とタイマーのAPIの概要
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Clocksource and Clockevent Drivers](clocksource.md) — hardware clocksource registration, rating, and cycle-to-ns conversion
-- [NTP and Clock Discipline](ntp.md) — PLL/FLL frequency corrections, leap-second insertion, and 11-minute RTC sync
-- [High-Resolution Timers (hrtimers)](hrtimers.md) — nanosecond-precision timer queues driven by timekeeper bases
-- [Time Namespaces](time-namespaces.md) — container-isolated `CLOCK_MONOTONIC` and `CLOCK_BOOTTIME` offsets
-- [vDSO Fast System Calls](../mm/vdso.md) — shared data pages and architecture of userspace vDSO acceleration
+- [clocksourceとclockeventのドライバ](clocksource.md) — ハードウェアclocksourceの登録、レーティング、サイクルからnsへの変換
+- [NTPとクロック規律](ntp.md) — PLL/FLLによる周波数補正、うるう秒の挿入、11分ごとのRTC同期
+- [高分解能タイマー（hrtimers）](hrtimers.md) — timekeeperのベースによって駆動されるナノ秒精度のタイマーキュー
+- [時間namespace](time-namespaces.md) — コンテナごとに分離された`CLOCK_MONOTONIC`と`CLOCK_BOOTTIME`のオフセット
+- [vDSO高速システムコール](../mm/vdso.md) — 共有データページと、ユーザー空間vDSO高速化のアーキテクチャ
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Introduce CLOCK_REALTIME_COARSE](https://lwn.net/Articles/347811/) — John Stultz, August 2009: the introduction of CLOCK_REALTIME_COARSE and CLOCK_MONOTONIC_COARSE vDSO clocks
-- [The trouble with the TSC](https://lwn.net/Articles/388188/) — Jake Edge, May 2010: invariant TSC guarantees, frequency scaling drift, and hardware clock calibration
+- [Introduce CLOCK_REALTIME_COARSE](https://lwn.net/Articles/347811/) — John Stultz、2009年8月: vDSOクロックであるCLOCK_REALTIME_COARSEとCLOCK_MONOTONIC_COARSEの導入
+- [The trouble with the TSC](https://lwn.net/Articles/388188/) — Jake Edge、2010年5月: invariant TSCの保証、周波数スケーリングによるドリフト、ハードウェアクロックの較正
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — official kernel guide to the timekeeping subsystem and clock interfaces
+- [Timekeeping and Timers in Linux](https://docs.kernel.org/core-api/timekeeping.html) — 時刻管理サブシステムとクロックインターフェースに関する公式カーネルガイド

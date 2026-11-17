@@ -1,20 +1,20 @@
-# Syscall Entry Path {#syscall-entry-path}
+# syscallのエントリパス {#syscall-entry-path}
 
-> From the `syscall` instruction to kernel code — and back
+> `syscall` 命令からカーネルコードへ — そして戻るまで
 
-## x86-64 hardware mechanism {#x86-64-hardware-mechanism}
+## x86-64のハードウェア機構 {#x86-64-hardware-mechanism}
 
-When userspace executes `syscall`:
+ユーザー空間が `syscall` を実行すると、次のことが起こる。
 
-1. **CPU saves**: `rip` → `rcx`, `rflags` → `r11`, then clears IF
-2. **CPU loads**: `rip` from `IA32_LSTAR` MSR (set to `entry_SYSCALL_64` at boot)
-3. **CPU switches**: CS/SS from `IA32_STAR` MSR (kernel segments)
+1. **CPUが保存する**: `rip` → `rcx`、`rflags` → `r11`。その後IFをクリアする
+2. **CPUがロードする**: `IA32_LSTAR` MSRから `rip` を（ブート時に `entry_SYSCALL_64` に設定される）
+3. **CPUが切り替える**: `IA32_STAR` MSRからCS/SSを（カーネルセグメント）
 
-The `rax` register holds the syscall number. Arguments go in: `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` (note: `r10` not `rcx` — `rcx` is clobbered by `syscall`).
+`rax` レジスタはsyscall番号を保持する。引数は `rdi`、`rsi`、`rdx`、`r10`、`r8`、`r9` に入る（注意: `rcx` ではなく `r10` である — `rcx` は `syscall` によって上書きされる）。
 
-Return value comes back in `rax`. On error, the kernel negates errno and userspace glibc converts it.
+戻り値は `rax` で返ってくる。エラー時には、カーネルはerrnoを符号反転した値を返し、ユーザー空間のglibcがそれを変換する。
 
-## entry_SYSCALL_64: the assembly entry point {#entrysyscall64-the-assembly-entry-point}
+## entry_SYSCALL_64: アセンブリのエントリポイント {#entry_syscall_64-the-assembly-entry-point}
 
 ```asm
 /* arch/x86/entry/entry_64.S */
@@ -22,36 +22,36 @@ SYM_CODE_START(entry_SYSCALL_64)
     UNWIND_HINT_ENTRY
     ENDBR
 
-    swapgs                  /* load kernel GS (points to per-CPU data) */
-    /* Set up kernel stack using per-CPU cpu_current_top_of_stack */
+    swapgs                  /* カーネルのGSをロードする（per-CPUデータを指す） */
+    /* per-CPUの cpu_current_top_of_stack を使ってカーネルスタックを設定する */
     movq    %rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
     SWITCH_TO_KERNEL_CR3 scratch_reg=%rsp
     movq    PER_CPU_VAR(cpu_current_top_of_stack), %rsp
 
-    /* Push pt_regs — save all user registers */
+    /* pt_regs をプッシュする — ユーザーのレジスタをすべて保存 */
     pushq   $__USER_DS                  /* ss */
     pushq   PER_CPU_VAR(cpu_tss_rw + TSS_sp2)  /* rsp */
     pushq   %r11                        /* rflags */
     pushq   $__USER_CS                  /* cs */
     pushq   %rcx                        /* rip */
-    pushq   %rax                        /* syscall number (orig_rax) */
-    PUSH_AND_CLEAR_REGS rax=$-ENOSYS    /* rax=-ENOSYS as default return */
+    pushq   %rax                        /* syscall番号（orig_rax） */
+    PUSH_AND_CLEAR_REGS rax=$-ENOSYS    /* デフォルトの戻り値として rax=-ENOSYS */
 
-    /* ... (IBRS mitigation, context tracking) ... */
+    /* ...（IBRS緩和策、コンテキストトラッキング）... */
 
-    movq    %rsp, %rdi                  /* pt_regs pointer as first arg */
-    movslq  %eax, %rsi                  /* sign-extend syscall number into second arg */
+    movq    %rsp, %rdi                  /* 第1引数として pt_regs へのポインタ */
+    movslq  %eax, %rsi                  /* syscall番号を符号拡張して第2引数へ */
     call    do_syscall_64
-    /* ... return path ... */
+    /* ... 復帰パス ... */
 SYM_CODE_END(entry_SYSCALL_64)
 ```
 
-## struct pt_regs: saved register state {#struct-pt_regs-saved-register-state}
+## struct pt_regs: 保存されたレジスタ状態 {#struct-pt_regs-saved-register-state}
 
 ```c
-/* arch/x86/include/asm/ptrace.h — field names are unprefixed
- * (ax, cx, ... not rax, rcx); the register width is still 64-bit,
- * "r"-prefixing them in illustrative code is a common but wrong habit. */
+/* arch/x86/include/asm/ptrace.h — フィールド名には接頭辞が付かない
+ * （rax, rcx, ... ではなく ax, cx, ...）。レジスタ幅は64ビットのままであり、
+ * 説明用コードで "r" を付けるのはよくあるが誤った習慣である。 */
 struct pt_regs {
     unsigned long r15;
     unsigned long r14;
@@ -63,21 +63,21 @@ struct pt_regs {
     unsigned long r10;
     unsigned long r9;
     unsigned long r8;
-    unsigned long ax;       /* syscall number / return value */
-    unsigned long cx;       /* saved rip (from syscall instruction) */
+    unsigned long ax;       /* syscall番号 / 戻り値 */
+    unsigned long cx;       /* 保存された rip（syscall 命令による） */
     unsigned long dx;
     unsigned long si;
     unsigned long di;
-    unsigned long orig_ax;  /* original syscall number (ax before call) */
-    unsigned long ip;       /* userspace instruction pointer */
-    u16           cs;       /* actually a union with a FRED CS extension */
+    unsigned long orig_ax;  /* 元のsyscall番号（呼び出し前の ax） */
+    unsigned long ip;       /* ユーザー空間の命令ポインタ */
+    u16           cs;       /* 実際にはFRED CS拡張との共用体 */
     unsigned long flags;
-    unsigned long sp;       /* userspace stack pointer */
-    u16           ss;       /* actually a union with a FRED SS extension */
+    unsigned long sp;       /* ユーザー空間のスタックポインタ */
+    u16           ss;       /* 実際にはFRED SS拡張との共用体 */
 };
 ```
 
-## do_syscall_64: the dispatch {#dosyscall64-the-dispatch}
+## do_syscall_64: ディスパッチ {#do_syscall_64-the-dispatch}
 
 ```c
 /* arch/x86/entry/syscall_64.c */
@@ -89,13 +89,13 @@ __visible noinstr bool do_syscall_64(struct pt_regs *regs, int nr)
     add_random_kstack_offset();
 
     if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
-        /* syscall number out of range */
+        /* syscall番号が範囲外 */
         regs->ax = __x64_sys_ni_syscall(regs);  /* -ENOSYS */
     }
 
     instrumentation_end();
     syscall_exit_to_user_mode(regs);
-    /* ... SYSRET-vs-IRET decision, see below ... */
+    /* ... SYSRETかIRETかの判断、後述 ... */
 }
 
 static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
@@ -103,18 +103,18 @@ static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
     unsigned int unr = nr;
 
     if (likely(unr < NR_syscalls)) {
-        unr = array_index_nospec(unr, NR_syscalls);  /* Spectre mitigation */
-        regs->ax = x64_sys_call(regs, unr);           /* dispatch! */
+        unr = array_index_nospec(unr, NR_syscalls);  /* Spectre緩和策 */
+        regs->ax = x64_sys_call(regs, unr);           /* ディスパッチ！ */
         return true;
     }
     return false;
 }
 ```
 
-`do_syscall_64()` returns `bool` — its final lines (elided above) decide whether the fast `SYSRET`
-instruction is safe to use for the return to userspace, or whether the slower `IRET` path is needed.
+`do_syscall_64()` は `bool` を返す — その最後の数行（上では省略）は、ユーザー空間への復帰に高速な `SYSRET`
+命令を安全に使えるか、それとも低速な `IRET` パスが必要かを判断する。
 
-## x64_sys_call: the dispatch switch {#x64syscall-the-dispatch-switch}
+## x64_sys_call: ディスパッチのswitch {#x64_sys_call-the-dispatch-switch}
 
 ```c
 /* arch/x86/entry/syscall_64.c */
@@ -128,12 +128,12 @@ long x64_sys_call(const struct pt_regs *regs, unsigned int nr)
 }
 ```
 
-A `sys_call_table[]` array is also built in the same file from the same `syscalls_64.h`, but — per the
-kernel's own comment above its definition — "is no longer used for system calls;
-`kernel/trace/trace_syscalls.c` still wants to know the system call address." Actual dispatch is the
-switch statement above.
+同じファイルでは、同じ `syscalls_64.h` から `sys_call_table[]` 配列も構築されるが、その定義の上にあるカーネル自身のコメントによれば、
+"is no longer used for system calls;
+`kernel/trace/trace_syscalls.c` still wants to know the system call address."（訳: もはやシステムコールには使われていないが、`kernel/trace/trace_syscalls.c` がまだシステムコールのアドレスを知りたがっている）という。実際のディスパッチは
+上のswitch文で行われる。
 
-The `syscalls_64.h` is generated from `syscall_64.tbl`:
+`syscalls_64.h` は `syscall_64.tbl` から生成される。
 
 ```
 # syscall_64.tbl (arch/x86/entry/syscalls/syscall_64.tbl)
@@ -148,37 +148,37 @@ The `syscalls_64.h` is generated from `syscall_64.tbl`:
 435        common  clone3            sys_clone3
 ```
 
-## Argument passing and copying {#argument-passing-and-copying}
+## 引数の受け渡しとコピー {#argument-passing-and-copying}
 
-Syscall arguments come in registers. For pointers into userspace, the kernel must **copy** them in — it can never directly dereference a userspace pointer:
+syscallの引数はレジスタで渡される。ユーザー空間を指すポインタについては、カーネルはそれを**コピー**して取り込まなければならない — ユーザー空間のポインタを直接参照外しすることは決してできない。
 
 ```c
-/* Copying from userspace */
+/* ユーザー空間からのコピー */
 copy_from_user(kernel_buf, user_ptr, size)
-    → access_ok(user_ptr, size)        /* is address in user range? */
-    → __copy_from_user()               /* architecture-specific copy */
-    → returns bytes NOT copied (0 = success)
+    → access_ok(user_ptr, size)        /* アドレスはユーザー範囲内か？ */
+    → __copy_from_user()               /* アーキテクチャ固有のコピー */
+    → コピーされなかったバイト数を返す（0 = 成功）
 
-/* Copying to userspace */
+/* ユーザー空間へのコピー */
 copy_to_user(user_ptr, kernel_buf, size)
 
-/* Copying a string from userspace (stops at NUL or len) */
+/* ユーザー空間から文字列をコピーする（NUL または len で停止） */
 strncpy_from_user(kernel_buf, user_ptr, max_len)
 
-/* Single value helpers (inlined, optimized) */
+/* 単一値用のヘルパー（インライン化、最適化済み） */
 get_user(x, user_ptr)   /* x = *user_ptr */
 put_user(x, user_ptr)   /* *user_ptr = x */
 ```
 
-Why mandatory copies?
+なぜコピーが必須なのか？
 
-- User pointers might be NULL or invalid
-- Kernel and user address spaces are separate (KPTI)
-- Userspace can change the pointed-to memory after the check (TOCTOU)
+- ユーザーのポインタはNULLや無効な値かもしれない
+- カーネルとユーザーのアドレス空間は分離されている（KPTI）
+- ユーザー空間は、チェックの後でポインタの指すメモリを変更できる（TOCTOU）
 
-## KPTI and CR3 switching {#kpti-and-cr3-switching}
+## KPTIとCR3の切り替え {#kpti-and-cr3-switching}
 
-Kernel Page Table Isolation (KPTI) prevents Meltdown by using different page tables in user mode vs kernel mode:
+Kernel Page Table Isolation（KPTI）は、ユーザーモードとカーネルモードで異なるページテーブルを使うことでMeltdownを防ぐ。
 
 ```
 User mode:  CR3 → user page tables (kernel not mapped, only entry stubs)
@@ -189,30 +189,30 @@ Kernel mode: SWITCH_TO_KERNEL_CR3 (expensive TLB flush!)
 User mode:  SWITCH_TO_USER_CR3
 ```
 
-On modern CPUs with PCID support, KPTI uses Process Context IDs to avoid full TLB flushes, keeping each address space's TLB entries tagged.
+PCIDをサポートする最新のCPUでは、KPTIはProcess Context IDを使って各アドレス空間のTLBエントリにタグを付けたまま保持し、TLBの全フラッシュを回避する。
 
-## The vDSO: avoiding syscalls for fast operations {#the-vdso-avoiding-syscalls-for-fast-operations}
+## vDSO: 高速な操作のためにsyscallを回避する {#the-vdso-avoiding-syscalls-for-fast-operations}
 
-Some syscalls are called millions of times per second (e.g., `gettimeofday`, `clock_gettime`). The kernel exports a virtual Dynamic Shared Object (vDSO) — a small piece of code mapped into every process — that implements these without entering kernel mode:
+一部のsyscallは毎秒何百万回も呼び出される（例: `gettimeofday`、`clock_gettime`）。カーネルは仮想動的共有オブジェクト（vDSO）をエクスポートする — これはすべてのプロセスにマップされる小さなコード片であり、カーネルモードに入らずにこれらを実装する。
 
 ```bash
-# See the vDSO mapped in a process
+# プロセスにマップされたvDSOを見る
 cat /proc/self/maps | grep vdso
 # 7fff12345000-7fff12346000 r-xp 00000000 00:00 0  [vdso]
 
-# Functions in the vDSO
-nm /proc/self/maps  # doesn't work, but:
+# vDSO内の関数
+nm /proc/self/maps  # これは動かないが、代わりに:
 objdump -T /lib/x86_64-linux-gnu/vdso.so.1 2>/dev/null | grep -i clock
 ```
 
-The vDSO reads kernel timekeeping data from a shared memory page (`vvar`) that the kernel updates atomically. The vDSO function reads the data directly, with no privilege switch:
+vDSOは、カーネルがアトミックに更新する共有メモリページ（`vvar`）からカーネルの時刻管理データを読む。vDSO関数は特権レベルの切り替えなしにデータを直接読む。
 
 ```c
-/* lib/vdso/gettimeofday.c — architecture-shared, not x86-specific.
- * The single struct vdso_data of older kernels is now split in two:
- * vdso_time_data (the top-level vvar page, arch clocksource state) and
- * vdso_clock (per-clock basetime/mult/shift, one instance per clock,
- * needed since time namespaces gave each namespace its own clock data). */
+/* lib/vdso/gettimeofday.c — アーキテクチャ共通であり、x86固有ではない。
+ * 古いカーネルの単一の struct vdso_data は、現在は2つに分割されている:
+ * vdso_time_data（最上位の vvar ページ、アーキテクチャのクロックソース状態）と
+ * vdso_clock（クロックごとの basetime/mult/shift、クロックごとに1インスタンス。
+ * 時間namespaceが各namespaceに独自のクロックデータを持たせたため必要になった）。 */
 bool do_hres(const struct vdso_time_data *vd, const struct vdso_clock *vc,
              clockid_t clk, struct __kernel_timespec *ts)
 {
@@ -220,40 +220,40 @@ bool do_hres(const struct vdso_time_data *vd, const struct vdso_clock *vc,
     u32 seq;
 
     do {
-        /* A time-namespace'd task gets its own vdso_clock and a
-         * different (still seqlock-protected) read path here. */
+        /* 時間namespaceに属するタスクは独自の vdso_clock を持ち、
+         * ここで別の（やはりseqlockで保護された）読み取りパスを通る。 */
         if (vdso_read_begin_timens(vc, &seq))
             return do_hres_timens(vd, vc, clk, ts);
 
-        /* TSC read + cycle-delta-to-ns math now lives in this shared
-         * helper, used by every clock read path (hres, coarse, timens): */
+        /* TSCの読み取りとサイクル差分からnsへの計算は、現在この共有
+         * ヘルパーにあり、すべてのクロック読み取りパス（hres、coarse、timens）で使われる: */
         if (!vdso_get_timestamp(vd, vc, clk, &sec, &ns))
             return false;
-    } while (vdso_read_retry(vc, seq));  /* seqlock retry */
+    } while (vdso_read_retry(vc, seq));  /* seqlockのリトライ */
 
-    vdso_set_timespec(ts, sec, ns);  /* sec/ns -> tv_sec/tv_nsec, carrying ns overflow into sec */
+    vdso_set_timespec(ts, sec, ns);  /* sec/ns -> tv_sec/tv_nsec、nsの桁あふれを sec に繰り上げる */
     return true;
 }
 ```
 
-(Simplified: the real function also has an early `__arch_vdso_hres_capable()` bailout, and `vdso_get_timestamp()` itself does the TSC read and the clocksource validity check that older versions inlined directly into `do_hres()`.)
+（簡略化している: 実際の関数には早期の `__arch_vdso_hres_capable()` による脱出もあり、`vdso_get_timestamp()` 自体が、古いバージョンでは `do_hres()` に直接インライン化されていたTSCの読み取りとクロックソースの有効性チェックを行う。）
 
-Syscalls fast-pathed through the vDSO (no ring switch):
+vDSOを通じて高速パス化されているsyscall（リングの切り替えなし）:
 
 - `clock_gettime(CLOCK_REALTIME/MONOTONIC/...)`
 - `gettimeofday()`
 - `clock_getres()`
 - `getcpu()`
 
-## Seccomp: restricting syscalls {#seccomp-restricting-syscalls}
+## Seccomp: syscallの制限 {#seccomp-restricting-syscalls}
 
-The seccomp filter runs on every syscall before the dispatch table:
+seccompフィルタは、すべてのsyscallでディスパッチテーブルの前に実行される。
 
 ```c
-/* Simplified: the real chain runs through several functions —
- * syscall_enter_from_user_mode_work() (include/linux/entry-common.h)
- * checks the SYSCALL_WORK_SECCOMP bit and calls syscall_trace_enter(),
- * which reaches __seccomp_filter() in kernel/seccomp.c: */
+/* 簡略化: 実際の連鎖はいくつかの関数を経由する —
+ * syscall_enter_from_user_mode_work()（include/linux/entry-common.h）が
+ * SYSCALL_WORK_SECCOMP ビットをチェックして syscall_trace_enter() を呼び、
+ * それが kernel/seccomp.c の __seccomp_filter() に到達する: */
 unsigned long work = READ_ONCE(current_thread_info()->syscall_work);
 
 if (work & SYSCALL_WORK_SECCOMP) {
@@ -263,60 +263,60 @@ if (work & SYSCALL_WORK_SECCOMP) {
     populate_seccomp_data(&sd);
     u32 filter_ret = seccomp_run_filters(&sd, &match);
     u32 action = filter_ret & SECCOMP_RET_ACTION_FULL;
-    /* action can be: SECCOMP_RET_ALLOW, SECCOMP_RET_KILL_(PROCESS|THREAD),
+    /* action は次のいずれか: SECCOMP_RET_ALLOW, SECCOMP_RET_KILL_(PROCESS|THREAD),
        SECCOMP_RET_ERRNO, SECCOMP_RET_TRACE, SECCOMP_RET_LOG, SECCOMP_RET_TRAP */
 }
 ```
 
-## Signals and restarts {#signals-and-restarts}
+## シグナルと再開 {#signals-and-restarts}
 
-Some syscalls can be interrupted by signals (`EINTR`). The kernel supports automatic restart for these:
+一部のsyscallはシグナルによって中断されうる（`EINTR`）。カーネルはこれらの自動再開をサポートする。
 
 ```c
-/* ERESTARTSYS: restart if no signal handler, return EINTR if one */
+/* ERESTARTSYS: シグナルハンドラがなければ再開し、あれば EINTR を返す */
 return -ERESTARTSYS;
 
-/* ERESTARTNOINTR: always restart, transparent to userspace */
+/* ERESTARTNOINTR: 常に再開し、ユーザー空間からは透過的 */
 return -ERESTARTNOINTR;
 
-/* ERESTARTNOHAND: restart if no handler installed */
+/* ERESTARTNOHAND: ハンドラがインストールされていなければ再開する */
 return -ERESTARTNOHAND;
 ```
 
-These special codes (`< -MAX_ERRNO`) never reach userspace — the signal path converts them to either `EINTR` or re-queues the syscall.
+これらの特殊なコード（`< -MAX_ERRNO`）がユーザー空間に届くことはない — シグナルパスがこれらを `EINTR` に変換するか、syscallを再度キューに入れる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64`: the assembly syscall entry point (swapgs, `pt_regs` construction, call to `do_syscall_64`)
-- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()` and `do_syscall_x64()`: the current dispatch path. Note: in current mainline this file (not `common.c`) is where these functions live, and dispatch itself goes through `x64_sys_call()`, a `switch` statement — `sys_call_table[]` is kept only for `kernel/trace/trace_syscalls.c`, not for dispatch
-- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — the syscall number table that `syscalls_64.h` is generated from
-- [arch/x86/include/asm/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/ptrace.h) — `struct pt_regs`: the saved register frame
-- [include/linux/uaccess.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/uaccess.h) — `copy_from_user()`, `copy_to_user()`, `access_ok()`
-- [kernel/seccomp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/seccomp.c) — `seccomp_run_filters()`: BPF filter evaluation on syscall entry
-- [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — `do_hres()`: the architecture-shared vDSO high-resolution clock read
-- [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`, `ERESTARTNOINTR`, `ERESTARTNOHAND`: the internal syscall-restart codes
+- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64`: アセンブリのsyscallエントリポイント（swapgs、`pt_regs` の構築、`do_syscall_64` の呼び出し）
+- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()` と `do_syscall_x64()`: 現在のディスパッチパス。注意: 現在のメインラインでは、これらの関数があるのはこのファイル（`common.c` ではない）であり、ディスパッチ自体は `switch` 文である `x64_sys_call()` を通る — `sys_call_table[]` は `kernel/trace/trace_syscalls.c` のためだけに残されており、ディスパッチには使われない
+- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — `syscalls_64.h` の生成元となるsyscall番号テーブル
+- [arch/x86/include/asm/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/ptrace.h) — `struct pt_regs`: 保存されたレジスタフレーム
+- [include/linux/uaccess.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/uaccess.h) — `copy_from_user()`、`copy_to_user()`、`access_ok()`
+- [kernel/seccomp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/seccomp.c) — `seccomp_run_filters()`: syscallエントリ時のBPFフィルタ評価
+- [lib/vdso/gettimeofday.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/vdso/gettimeofday.c) — `do_hres()`: アーキテクチャ共通のvDSO高分解能クロック読み取り
+- [include/linux/errno.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/errno.h) — `ERESTARTSYS`、`ERESTARTNOINTR`、`ERESTARTNOHAND`: 内部的なsyscall再開コード
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — raw syscall invocation and the x86-64 register calling convention
-- [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — the virtual dynamic shared object
+- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — 生のsyscall呼び出しと、x86-64のレジスタ呼び出し規約
+- [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — 仮想動的共有オブジェクト
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [SYSCALL_DEFINE and dispatch](syscall-define.md) — Defining syscalls in C
-- [Adding a new syscall](adding-syscall.md) — Practical guide for kernel contributors
-- [vDSO and Virtual System Calls](vdso.md) — the shared `vvar` timekeeping page and fast-path clock reads
-- [Syscall Restart Mechanisms](restart-block.md) — `ERESTARTSYS`, `ERESTART_RESTARTBLOCK`, and `restart_syscall()`
-- [32-bit Compat Syscalls](compat.md) — the ia32 compat layer that handles true 32-bit userspace, a conceptual sibling to `do_syscall_x32()`'s x32 path (64-bit mode, ILP32 pointers) but dispatched through its own separate entry point (`ia32_sys_call()`), not through `do_syscall_64()`/`do_syscall_x32()`
+- [SYSCALL_DEFINEとディスパッチ](syscall-define.md) — Cでのsyscallの定義
+- [新しいsyscallの追加](adding-syscall.md) — カーネルコントリビュータ向けの実践ガイド
+- [vDSOと仮想システムコール](vdso.md) — 共有の `vvar` 時刻管理ページと高速パスでのクロック読み取り
+- [syscallの再開メカニズム](restart-block.md) — `ERESTARTSYS`、`ERESTART_RESTARTBLOCK`、`restart_syscall()`
+- [32ビット互換syscall](compat.md) — 真の32ビットユーザー空間を扱うia32 compat層。`do_syscall_x32()` のx32パス（64ビットモード、ILP32ポインタ）と概念的には兄弟関係にあるが、`do_syscall_64()`/`do_syscall_x32()` を経由せず、独自の別のエントリポイント（`ia32_sys_call()`）を通じてディスパッチされる
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [LWN: The current state of kernel page-table isolation](https://lwn.net/Articles/741878/) — Jonathan Corbet on KPTI, the Meltdown mitigation behind the CR3 switching described on this page
+- [LWN: The current state of kernel page-table isolation](https://lwn.net/Articles/741878/) — Jonathan CorbetによるKPTIの解説。このページで説明したCR3切り替えの背景にあるMeltdown緩和策
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Kernel Entries](https://docs.kernel.org/arch/x86/entry_64.html) — the canonical kernel documentation for `arch/x86/entry/entry_64.S`, covering swapgs and the different x86-64 entry paths
-- [Page Table Isolation (PTI)](https://docs.kernel.org/arch/x86/pti.html) — the Meltdown mitigation behind the CR3 switching described on this page
-- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — kernel documentation for contributors
+- [Kernel Entries](https://docs.kernel.org/arch/x86/entry_64.html) — `arch/x86/entry/entry_64.S` についての正式なカーネルドキュメント。swapgsとx86-64のさまざまなエントリパスを扱う
+- [Page Table Isolation (PTI)](https://docs.kernel.org/arch/x86/pti.html) — このページで説明したCR3切り替えの背景にあるMeltdown緩和策
+- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — コントリビュータ向けのカーネルドキュメント

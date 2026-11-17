@@ -1,10 +1,10 @@
-# VFS Objects: superblock, inode, dentry, file {#vfs-objects-superblock-inode-dentry-file}
+# VFSオブジェクト: superblock、inode、dentry、file {#vfs-objects-superblock-inode-dentry-file}
 
-> The four data structures that represent every file system object in Linux
+> Linuxにおけるあらゆるファイルシステムオブジェクトを表す4つのデータ構造
 
-## Overview {#overview}
+## 概要 {#overview}
 
-VFS defines four objects that together represent any filesystem resource [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/vfs.html):
+VFSは、組み合わせてあらゆるファイルシステム資源を表す4つのオブジェクトを定義している[(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/vfs.html):
 
 ```
 Mounted filesystem
@@ -24,23 +24,23 @@ Mounted filesystem
                                  (one per open() call)
 ```
 
-## struct super_block: the mounted filesystem {#struct-super_block-the-mounted-filesystem}
+## struct super_block: マウントされたファイルシステム {#struct-super_block-the-mounted-filesystem}
 
-A `super_block` exists for each mounted filesystem instance. It holds the global state of the mounted filesystem:
+`super_block`は、マウントされたファイルシステムのインスタンスごとに1つ存在する。マウントされたファイルシステムのグローバルな状態を保持する:
 
 ```c
 /* include/linux/fs.h */
 struct super_block {
-    dev_t                    s_dev;       /* device identifier */
-    unsigned long            s_blocksize; /* block size in bytes */
-    loff_t                   s_maxbytes;  /* maximum file size */
-    struct file_system_type *s_type;      /* filesystem type */
-    const struct super_operations *s_op; /* superblock operations vtable */
-    unsigned long            s_flags;    /* SB_RDONLY etc (SB_* flags since 4.17) */
-    unsigned long            s_magic;    /* filesystem magic number */
-    struct dentry           *s_root;     /* root directory dentry */
-    struct rw_semaphore      s_umount;   /* unmount semaphore */
-    void                    *s_fs_info;  /* filesystem-private data */
+    dev_t                    s_dev;       /* デバイス識別子 */
+    unsigned long            s_blocksize; /* バイト単位のブロックサイズ */
+    loff_t                   s_maxbytes;  /* 最大ファイルサイズ */
+    struct file_system_type *s_type;      /* ファイルシステムタイプ */
+    const struct super_operations *s_op; /* superblock操作のvtable */
+    unsigned long            s_flags;    /* SB_RDONLYなど（4.17以降はSB_*フラグ） */
+    unsigned long            s_magic;    /* ファイルシステムのマジックナンバー */
+    struct dentry           *s_root;     /* ルートディレクトリのdentry */
+    struct rw_semaphore      s_umount;   /* アンマウント用セマフォ */
+    void                    *s_fs_info;  /* ファイルシステム固有のデータ */
 };
 
 struct super_operations {
@@ -56,30 +56,30 @@ struct super_operations {
 };
 ```
 
-`s_fs_info` is the "escape hatch" — the filesystem stores its own private data here. For ext4, it's a `struct ext4_sb_info` with journal handle, block group descriptors, etc.
+`s_fs_info`は「抜け道」であり、ファイルシステムはここに独自のプライベートデータを格納する。ext4の場合、これはジャーナルハンドルやブロックグループディスクリプタなどを持つ`struct ext4_sb_info`である。
 
-## struct inode: a file system object {#struct-inode-a-file-system-object}
+## struct inode: ファイルシステムオブジェクト {#struct-inode-a-file-system-object}
 
-An `inode` represents a file, directory, symlink, device node, or socket — any named object in the filesystem. One inode can have multiple names (hard links) but a single set of metadata.
+`inode`は、ファイル、ディレクトリ、シンボリックリンク、デバイスノード、ソケットなど、ファイルシステム内の名前付きオブジェクトを表す。1つのinodeは複数の名前（ハードリンク）を持てるが、メタデータは1組だけである。
 
 ```c
 /* include/linux/fs.h */
 struct inode {
-    umode_t              i_mode;     /* file type + permissions */
-    unsigned int         i_flags;    /* S_IMMUTABLE, S_APPEND, etc. */
-    kuid_t               i_uid;      /* owner UID */
-    kgid_t               i_gid;      /* owner GID */
-    const struct inode_operations *i_op;  /* inode operations vtable */
-    struct super_block  *i_sb;       /* the filesystem this belongs to */
-    struct address_space *i_mapping; /* page cache for this file */
-    unsigned long        i_ino;      /* inode number */
-    unsigned int         i_nlink;    /* number of hard links */
-    loff_t               i_size;     /* file size in bytes */
-    blkcnt_t             i_blocks;   /* number of 512-byte blocks */
-    spinlock_t           i_lock;     /* protects i_blocks, i_bytes, i_size */
-    struct timespec64    __i_atime;  /* access time */
-    struct timespec64    __i_mtime;  /* modification time */
-    struct timespec64    __i_ctime;  /* change time */
+    umode_t              i_mode;     /* ファイル種別 + パーミッション */
+    unsigned int         i_flags;    /* S_IMMUTABLE, S_APPEND など */
+    kuid_t               i_uid;      /* 所有者のUID */
+    kgid_t               i_gid;      /* 所有者のGID */
+    const struct inode_operations *i_op;  /* inode操作のvtable */
+    struct super_block  *i_sb;       /* これが属するファイルシステム */
+    struct address_space *i_mapping; /* このファイルのページキャッシュ */
+    unsigned long        i_ino;      /* inode番号 */
+    unsigned int         i_nlink;    /* ハードリンクの数 */
+    loff_t               i_size;     /* バイト単位のファイルサイズ */
+    blkcnt_t             i_blocks;   /* 512バイトブロックの数 */
+    spinlock_t           i_lock;     /* i_blocks、i_bytes、i_sizeを保護する */
+    struct timespec64    __i_atime;  /* アクセス時刻 */
+    struct timespec64    __i_mtime;  /* 変更時刻 */
+    struct timespec64    __i_ctime;  /* 状態変更時刻 */
 };
 
 struct inode_operations {
@@ -97,59 +97,59 @@ struct inode_operations {
                    struct kstat *, u32, unsigned int);
     int (*permission)(struct mnt_idmap *, struct inode *, int);
     const char *(*get_link)(struct dentry *, struct inode *,
-                             struct delayed_call *);  /* for symlinks */
+                             struct delayed_call *);  /* シンボリックリンク用 */
 };
 ```
 
-The `i_mapping` field points to the `address_space` structure that links this inode to its pages in the page cache. When you `read()` a file, data goes into pages indexed by this `address_space`.
+`i_mapping`フィールドは、このinodeとページキャッシュ内のページとを結び付ける`address_space`構造体を指す。ファイルを`read()`すると、データはこの`address_space`によってインデックス付けされたページに入る。
 
-## struct dentry: a path component {#struct-dentry-a-path-component}
+## struct dentry: パスの構成要素 {#struct-dentry-a-path-component}
 
-A `dentry` (directory entry) caches the mapping from a name to an inode. The **dentry cache** (dcache) is VFS's primary lookup cache — before going to disk, the kernel checks if the path component is already in the dcache. Since Linux 2.6.38, most dcache lookups use an RCU-based lock-free fast path introduced by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/); the `d_seq` seqlock detects concurrent modifications without ever taking a spinlock on the common (cache-hit) path.
+`dentry`（ディレクトリエントリ）は、名前からinodeへの対応をキャッシュする。**dentryキャッシュ**（dcache）はVFSの主要な検索キャッシュであり、カーネルはディスクへ行く前に、パスの構成要素がすでにdcacheにあるかを確認する。Linux 2.6.38以降、ほとんどのdcache検索は、Nick Pigginが導入したRCUベースのロックフリーな高速パスを使う[(LWN)](https://lwn.net/Articles/419811/)。`d_seq` seqlockは、一般的な（キャッシュヒットの）経路ではspinlockを一切取らずに、並行する変更を検出する。
 
 ```c
 /* include/linux/dcache.h */
 struct dentry {
-    unsigned int              d_flags;    /* state flags */
-    seqcount_spinlock_t       d_seq;      /* seqlock for RCU walks (added Linux 2.6.38) */
-    struct hlist_bl_node      d_hash;     /* hash table for lookup */
-    struct dentry            *d_parent;   /* parent directory dentry */
-    struct qstr               d_name;     /* name (quick string with hash) */
-    struct inode             *d_inode;    /* inode this name refers to
-                                            (NULL = negative dentry) */
+    unsigned int              d_flags;    /* 状態フラグ */
+    seqcount_spinlock_t       d_seq;      /* RCU walk用のseqlock（Linux 2.6.38で追加） */
+    struct hlist_bl_node      d_hash;     /* 検索用ハッシュテーブル */
+    struct dentry            *d_parent;   /* 親ディレクトリのdentry */
+    struct qstr               d_name;     /* 名前（ハッシュ付きのquick string） */
+    struct inode             *d_inode;    /* この名前が指すinode
+                                            （NULL = negative dentry） */
     const struct dentry_operations *d_op;
-    struct super_block       *d_sb;       /* filesystem superblock */
-    struct lockref            d_lockref;  /* refcount + spinlock */
-    struct list_head          d_lru;      /* LRU eviction list */
-    struct hlist_head         d_children; /* child dentries */
+    struct super_block       *d_sb;       /* ファイルシステムのsuperblock */
+    struct lockref            d_lockref;  /* 参照カウント + spinlock */
+    struct list_head          d_lru;      /* LRU追い出しリスト */
+    struct hlist_head         d_children; /* 子dentry */
 };
 ```
 
-Key distinction:
+重要な区別:
 
-- **Positive dentry**: `d_inode != NULL` — the name exists in the filesystem
-- **Negative dentry**: `d_inode == NULL` — the name was looked up but doesn't exist (cached to avoid repeated failed lookups)
+- **positive dentry**: `d_inode != NULL` — その名前はファイルシステム内に存在する
+- **negative dentry**: `d_inode == NULL` — その名前は検索されたが存在しない（失敗する検索の繰り返しを避けるためにキャッシュされる）
 
-Multiple dentries can point to the same inode (hard links). When you `link("a", "b")`, you create a new dentry `b` pointing to the same inode as `a`.
+複数のdentryが同じinodeを指すことができる（ハードリンク）。`link("a", "b")`を実行すると、`a`と同じinodeを指す新しいdentry `b`が作成される。
 
-## struct file: an open file description {#struct-file-an-open-file-description}
+## struct file: オープンファイル記述 {#struct-file-an-open-file-description}
 
-A `file` is created each time `open()` is called. Multiple `file` structs can refer to the same inode (from different processes or multiple opens in the same process):
+`file`は`open()`が呼ばれるたびに作成される。複数の`file`構造体が同じinodeを参照することがある（異なるプロセスから、または同じプロセス内での複数回のオープンによって）:
 
 ```c
 /* include/linux/fs.h */
 struct file {
     spinlock_t                    f_lock;
     fmode_t                       f_mode;     /* FMODE_READ, FMODE_WRITE */
-    const struct file_operations *f_op;       /* file operations vtable */
-    struct address_space         *f_mapping;  /* page cache */
-    struct inode                 *f_inode;    /* the inode */
-    unsigned int                  f_flags;    /* O_RDONLY, O_NONBLOCK, etc. */
-    const struct cred            *f_cred;     /* credentials at open time */
+    const struct file_operations *f_op;       /* ファイル操作のvtable */
+    struct address_space         *f_mapping;  /* ページキャッシュ */
+    struct inode                 *f_inode;    /* inode */
+    unsigned int                  f_flags;    /* O_RDONLY, O_NONBLOCK など */
+    const struct cred            *f_cred;     /* オープン時のクレデンシャル */
     struct path                   f_path;     /* dentry + vfsmount */
-    loff_t                        f_pos;      /* current file position */
-    file_ref_t                    f_ref;      /* reference count */
-    void                         *private_data; /* filesystem-private per-open state */
+    loff_t                        f_pos;      /* 現在のファイル位置 */
+    file_ref_t                    f_ref;      /* 参照カウント */
+    void                         *private_data; /* オープンごとのファイルシステム固有の状態 */
 };
 
 struct file_operations {
@@ -160,16 +160,16 @@ struct file_operations {
     ssize_t (*write_iter)(struct kiocb *, struct iov_iter *);
     int     (*mmap)(struct file *, struct vm_area_struct *);
     int     (*open)(struct inode *, struct file *);
-    int     (*release)(struct inode *, struct file *);  /* called on last close */
+    int     (*release)(struct inode *, struct file *);  /* 最後のclose時に呼ばれる */
     int     (*fsync)(struct file *, loff_t, loff_t, int datasync);
     long    (*unlocked_ioctl)(struct file *, unsigned int, unsigned long);
     int     (*iterate_shared)(struct file *, struct dir_context *);  /* readdir */
 };
 ```
 
-`f_pos` is per-open-file, which is why two processes with the same `open()` of the same file can read at different positions. But after `fork()`, parent and child share the same `struct file` (and thus the same `f_pos`) until one of them calls `open()` again.
+`f_pos`はオープンされたファイルごとに存在する。そのため、同じファイルをそれぞれ`open()`した2つのプロセスは、異なる位置から読むことができる。ただし`fork()`の後は、どちらかが再び`open()`を呼ぶまで、親と子は同じ`struct file`（したがって同じ`f_pos`）を共有する。
 
-## How the four objects relate to user operations {#how-the-four-objects-relate-to-user-operations}
+## 4つのオブジェクトとユーザー操作の関係 {#how-the-four-objects-relate-to-user-operations}
 
 ```
 open("/usr/bin/bash", O_RDONLY)
@@ -197,9 +197,9 @@ file->f_op->read_iter()
   → page cache lookup → disk read if miss
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Path Resolution](namei.md) — How VFS walks from "/" to the target dentry
-- [File Operations](file-ops.md) — The file_operations vtable in detail
-- [Dentry and Inode Caches](dcache-icache.md) — How VFS caches lookups
-- [Page Cache](../mm/page-cache.md) — Where file data lives in memory
+- [パス解決](namei.md) — VFSが"/"からターゲットのdentryまでどう辿るか
+- [ファイル操作](file-ops.md) — file_operations vtableの詳細
+- [dentryキャッシュとinodeキャッシュ](dcache-icache.md) — VFSが検索をどうキャッシュするか
+- [ページキャッシュ](../mm/page-cache.md) — ファイルデータがメモリ内のどこに置かれるか

@@ -1,12 +1,12 @@
 # virtio {#virtio}
 
-> Paravirtualized I/O for KVM guests
+> KVMゲストのための準仮想化I/O
 
-## Why paravirtualization? {#why-paravirtualization}
+## なぜ準仮想化か {#why-paravirtualization}
 
-Emulating real hardware (e.g., Intel e1000 NIC, IDE disk) inside QEMU works but is slow: every device register access by the guest causes a VM exit, QEMU decodes the access, updates emulated state, and returns. This happens thousands of times per packet.
+QEMUの中で実際のハードウェア（例: Intel e1000 NIC、IDEディスク）をエミュレートする方式は動作はするが遅い。ゲストによるデバイスレジスタへのアクセスのたびにVM exitが発生し、QEMUがアクセスをデコードし、エミュレートされた状態を更新して戻る。これがパケット1つにつき何千回も起こる。
 
-virtio replaces emulated hardware registers with a shared-memory protocol. The guest knows it's in a VM and cooperates — far fewer VM exits, much higher throughput.
+virtioは、エミュレートされたハードウェアレジスタを共有メモリのプロトコルに置き換える。ゲストは自分がVMの中にいることを知っていて協調する。VM exitははるかに少なく、スループットはずっと高い。
 
 ```
 Emulated hardware path:
@@ -18,7 +18,7 @@ virtio path:
   Host processes batch → notifies guest
 ```
 
-## virtio architecture {#virtio-architecture}
+## virtioのアーキテクチャ {#virtio-architecture}
 
 ```
 Guest kernel                          Host (QEMU / vhost)
@@ -38,44 +38,44 @@ Guest kernel                          Host (QEMU / vhost)
 └────────────────────────────┘        └────────────────────────────┘
 ```
 
-## The virtqueue / vring {#the-virtqueue-vring}
+## virtqueue / vring {#the-virtqueue-vring}
 
-A virtqueue is a split ring buffer with three regions in shared memory:
+virtqueueは、共有メモリ上の3つの領域からなる分割型のリングバッファである。
 
 ```c
 /* include/uapi/linux/virtio_ring.h */
 
-/* One descriptor: points to a buffer segment */
+/* 1つのディスクリプタ: バッファのセグメントを指す */
 struct vring_desc {
-    __virtio64 addr;   /* physical address (GPA) of buffer */
-    __virtio32 len;    /* buffer length */
+    __virtio64 addr;   /* バッファの物理アドレス（GPA） */
+    __virtio32 len;    /* バッファの長さ */
     __virtio16 flags;  /* VRING_DESC_F_NEXT | VRING_DESC_F_WRITE | VRING_DESC_F_INDIRECT */
-    __virtio16 next;   /* index of next descriptor (if NEXT flag set) */
+    __virtio16 next;   /* 次のディスクリプタのインデックス（NEXTフラグがセットされている場合） */
 };
 
-/* Available ring: driver (guest) adds here, device (host) reads */
+/* availableリング: ドライバ（ゲスト）がここに追加し、デバイス（ホスト）が読む */
 struct vring_avail {
-    __virtio16 flags;  /* VRING_AVAIL_F_NO_INTERRUPT: suppress interrupts */
-    __virtio16 idx;    /* where driver will put next entry */
-    __virtio16 ring[]; /* descriptor chain head indices */
+    __virtio16 flags;  /* VRING_AVAIL_F_NO_INTERRUPT: 割り込みを抑制する */
+    __virtio16 idx;    /* ドライバが次のエントリを置く位置 */
+    __virtio16 ring[]; /* ディスクリプタチェーンの先頭インデックス */
 };
 
-/* Used ring: device (host) adds here, driver (guest) reads */
+/* usedリング: デバイス（ホスト）がここに追加し、ドライバ（ゲスト）が読む */
 struct vring_used_elem {
-    __virtio32 id;     /* index of used descriptor chain */
-    __virtio32 len;    /* bytes written (for reads; 0 for writes) */
+    __virtio32 id;     /* 使用済みディスクリプタチェーンのインデックス */
+    __virtio32 len;    /* 書き込まれたバイト数（読み込みの場合。書き込みでは0） */
 };
 
 struct vring_used {
-    __virtio16 flags;  /* VRING_USED_F_NO_NOTIFY: suppress kicks */
-    __virtio16 idx;    /* where device will put next entry */
+    __virtio16 flags;  /* VRING_USED_F_NO_NOTIFY: キックを抑制する */
+    __virtio16 idx;    /* デバイスが次のエントリを置く位置 */
     struct vring_used_elem ring[];
 };
 ```
 
-This is the **split ring** layout — three separate regions (descriptor table, avail ring, used ring), the classic/default virtqueue format. Negotiating `VIRTIO_F_RING_PACKED` (see feature bits below) switches to the **packed ring** layout instead: a single combined ring of `struct vring_packed_desc` entries that fold descriptor, availability, and completion state into one cache-line-friendly structure, avoiding the split layout's three-region indirection.
+これは**split ring**のレイアウトであり、3つの別々の領域（ディスクリプタテーブル、availリング、usedリング）からなる、従来型/デフォルトのvirtqueueの形式である。`VIRTIO_F_RING_PACKED`をネゴシエートすると（下の機能ビットを参照）、代わりに**packed ring**のレイアウトに切り替わる。これは`struct vring_packed_desc`エントリからなる単一の統合されたリングで、ディスクリプタ、利用可能状態、完了状態を1つのキャッシュラインに優しい構造にまとめており、split ringの3領域にまたがる間接参照を避ける。
 
-### virtqueue lifecycle {#virtqueue-lifecycle}
+### virtqueueのライフサイクル {#virtqueue-lifecycle}
 
 ```
 Guest (driver side):                   Host (device side):
@@ -109,16 +109,16 @@ Guest (driver side):                   Host (device side):
    }
 ```
 
-### Descriptor chaining {#descriptor-chaining}
+### ディスクリプタのチェーン {#descriptor-chaining}
 
-Large buffers (e.g., a 64KB network packet with header + payload) can be represented as a chain:
+大きなバッファ（例: ヘッダとペイロードからなる64KBのネットワークパケット）は、チェーンとして表現できる。
 
 ```
 desc[0]: header   → flags = NEXT, next = 1
 desc[1]: payload  → flags = WRITE, next = 0  (end of chain)
 ```
 
-The host reads desc[0], follows `next` to desc[1], processes both as one logical buffer.
+ホストはdesc[0]を読み、`next`をたどってdesc[1]に進み、両方を1つの論理的なバッファとして処理する。
 
 ## virtio-net {#virtio-net}
 
@@ -126,64 +126,64 @@ The host reads desc[0], follows `next` to desc[1], processes both as one logical
 /* drivers/net/virtio_net.c */
 struct virtnet_info {
     struct virtio_device    *vdev;
-    struct virtqueue        *cvq;           /* control virtqueue */
+    struct virtqueue        *cvq;           /* 制御用virtqueue */
     struct net_device       *dev;
-    struct send_queue       *sq;            /* one per TX queue */
-    struct receive_queue    *rq;            /* one per RX queue */
+    struct send_queue       *sq;            /* TXキューごとに1つ */
+    struct receive_queue    *rq;            /* RXキューごとに1つ */
     unsigned int            max_queue_pairs;
 
-    /* Offload features negotiated with host */
+    /* ホストとネゴシエートしたオフロード機能 */
     bool                    mergeable_rx_bufs;
     bool                    has_rss;
 };
 
-/* TX path: enqueue packet (conceptual sketch — the real xmit_skb() in
- * drivers/net/virtio_net.c has grown to handle a whole family of header
- * variants, tunneling, and a header-push optimization; see below) */
+/* TXの経路: パケットをキューに入れる（概念的なスケッチ — drivers/net/virtio_net.cの
+ * 実際のxmit_skb()は、ヘッダのバリアント一式、トンネリング、ヘッダpushの
+ * 最適化を扱うように拡張されている。下を参照） */
 static int xmit_skb(struct send_queue *sq, struct sk_buff *skb)
 {
     struct virtio_net_hdr *hdr;
     struct virtnet_info *vi = sq->vq->vdev->priv;
     int num_sg;
 
-    /* Prepend virtio_net header */
+    /* virtio_netヘッダを先頭に付ける */
     hdr = skb_push(skb, vi->hdr_len);
     memset(hdr, 0, vi->hdr_len);
 
-    /* Fill in checksum/GSO offload fields from the skb's own state */
+    /* skb自身の状態からチェックサム/GSOオフロードのフィールドを埋める */
     virtio_net_hdr_from_skb(skb, hdr, virtio_is_little_endian(vi->vdev), false, 0);
 
-    /* Build scatter-gather list from skb frags */
+    /* skbのフラグメントからスキャッタギャザーリストを構築する */
     num_sg = skb_to_sgvec(skb, sq->sg, 0, skb->len);
 
     return virtqueue_add_outbuf(sq->vq, sq->sg, num_sg, skb, GFP_ATOMIC);
 }
 ```
 
-The real `xmit_skb()` (which now also takes an `orphan` flag) doesn't hand-roll the checksum/GSO logic shown above inline — that's factored into the `virtio_net_hdr_from_skb()` helper (`include/linux/virtio_net.h`), which is what actually sets `VIRTIO_NET_HDR_F_NEEDS_CSUM`/`csum_start`/`csum_offset` when `skb->ip_summed == CHECKSUM_PARTIAL`, and fills in GSO fields when the skb is a GSO packet. The real function also picks from several header variants depending on negotiated features — plain `struct virtio_net_hdr`, the mergeable-rx-buffers variant below, or (for the newer hash/tunnel offloads) `struct virtio_net_hdr_v1_hash_tunnel` — and enqueues through a `virtnet_add_outbuf()` wrapper rather than calling `virtqueue_add_outbuf()` directly. The sketch above keeps the core idea — prepend a header, let the skb's own checksum/GSO state drive it, hand the buffer to the ring — without the header-variant dispatch and TX batching logic.
+実際の`xmit_skb()`（現在は`orphan`フラグも受け取る）は、上に示したチェックサム/GSOのロジックをインラインで手書きしているわけではない。それは`virtio_net_hdr_from_skb()`ヘルパー（`include/linux/virtio_net.h`）に切り出されており、実際に`skb->ip_summed == CHECKSUM_PARTIAL`のときに`VIRTIO_NET_HDR_F_NEEDS_CSUM`/`csum_start`/`csum_offset`を設定し、skbがGSOパケットのときにGSOのフィールドを埋めるのはこのヘルパーである。実際の関数はまた、ネゴシエートされた機能に応じて複数のヘッダのバリアント、つまり素の`struct virtio_net_hdr`、下のmergeable-rx-buffersのバリアント、あるいは（新しいハッシュ/トンネルのオフロード向けの）`struct virtio_net_hdr_v1_hash_tunnel`から選択し、`virtqueue_add_outbuf()`を直接呼ぶのではなく`virtnet_add_outbuf()`ラッパーを通じてキューに入れる。上のスケッチは、ヘッダのバリアントのディスパッチとTXのバッチ処理のロジックを省き、中核となる考え方、すなわちヘッダを先頭に付け、skb自身のチェックサム/GSOの状態でそれを決め、バッファをリングに渡すという点だけを残している。
 
-### virtio-net header {#virtio-net-header}
+### virtio-netヘッダ {#virtio-net-header}
 
 ```c
 /* include/uapi/linux/virtio_net.h */
 struct virtio_net_hdr {
-    __u8       flags;       /* VIRTIO_NET_HDR_F_NEEDS_CSUM, etc. */
-    __u8       gso_type;    /* VIRTIO_NET_HDR_GSO_TCPV4/6, etc. */
-    __virtio16 hdr_len;     /* ethernet+IP+TCP header length */
-    __virtio16 gso_size;    /* max segment size for GSO */
-    __virtio16 csum_start;  /* offset to start of checksum */
-    __virtio16 csum_offset; /* offset within csum_start to place checksum */
+    __u8       flags;       /* VIRTIO_NET_HDR_F_NEEDS_CSUMなど */
+    __u8       gso_type;    /* VIRTIO_NET_HDR_GSO_TCPV4/6など */
+    __virtio16 hdr_len;     /* イーサネット+IP+TCPのヘッダ長 */
+    __virtio16 gso_size;    /* GSOの最大セグメントサイズ */
+    __virtio16 csum_start;  /* チェックサムの開始位置へのオフセット */
+    __virtio16 csum_offset; /* チェックサムを置く、csum_startからのオフセット */
 };
 
-/* Negotiating VIRTIO_NET_F_MRG_RXBUF (below) adds one field on top —
- * still the live, current wire format for receive-side buffer merging: */
+/* VIRTIO_NET_F_MRG_RXBUF（下記）をネゴシエートすると、その上に1つのフィールドが加わる —
+ * 受信側のバッファのマージにおいて、現在も使われている最新のワイヤーフォーマットである: */
 struct virtio_net_hdr_mrg_rxbuf {
     struct virtio_net_hdr hdr;
-    __virtio16 num_buffers; /* number of merged RX buffers this packet spans */
+    __virtio16 num_buffers; /* このパケットがまたがるマージされたRXバッファの数 */
 };
 ```
 
-These 16-bit fields are `__virtio16`, not a fixed-endian type — virtio's wire byte order depends on which VIRTIO_F_VERSION_1 mode was negotiated (modern devices are always little-endian; legacy ones use the guest's native order), so the header itself can't commit to `__le16` at the type level. This header lets the host/guest negotiate hardware offloads: checksum, segmentation (TSO), receive-side coalescing (LRO).
+これらの16ビットのフィールドは`__virtio16`であり、エンディアンが固定された型ではない。virtioのワイヤー上のバイトオーダーは、どのVIRTIO_F_VERSION_1モードがネゴシエートされたかに依存する（モダンなデバイスは常にリトルエンディアン、レガシーなデバイスはゲストのネイティブなオーダーを使う）ため、ヘッダ自体は型のレベルで`__le16`に決め打ちできない。このヘッダにより、ホストとゲストはハードウェアオフロード、すなわちチェックサム、セグメンテーション（TSO）、受信側の結合（LRO）をネゴシエートできる。
 
 ## virtio-blk {#virtio-blk}
 
@@ -192,61 +192,61 @@ These 16-bit fields are `__virtio16`, not a fixed-endian type — virtio's wire 
 struct virtio_blk_outhdr {
     __virtio32 type;    /* VIRTIO_BLK_T_IN / T_OUT / T_FLUSH / T_DISCARD */
     __virtio32 ioprio;
-    __virtio64 sector;  /* 512-byte sector number */
+    __virtio64 sector;  /* 512バイトセクタの番号 */
 };
 
-/* A complete I/O request descriptor chain:
-   [0] virtio_blk_outhdr header (device-readable)
-   [1] data buffer              (device-writable for read, device-readable for write)
-   [2] status byte              (device-writable: VIRTIO_BLK_S_OK=0, S_IOERR=1, S_UNSUPP=2) */
+/* 1つの完全なI/Oリクエストのディスクリプタチェーン:
+   [0] virtio_blk_outhdrヘッダ  （デバイスが読み取り可能）
+   [1] データバッファ           （readではデバイスが書き込み可能、writeではデバイスが読み取り可能）
+   [2] ステータスバイト         （デバイスが書き込み可能: VIRTIO_BLK_S_OK=0、S_IOERR=1、S_UNSUPP=2） */
 ```
 
-### Why virtio-blk is fast {#why-virtio-blk-is-fast}
+### なぜvirtio-blkは速いか {#why-virtio-blk-is-fast}
 
-- One virtqueue per vCPU (multi-queue support)
-- Guest batches multiple requests before kicking
-- Host processes full batch, posts all completions
-- With `VIRTIO_BLK_F_FLUSH`: explicit flush ordering
+- vCPUごとに1つのvirtqueue（マルチキューのサポート）
+- ゲストはキックする前に複数のリクエストをバッチにまとめる
+- ホストはバッチ全体を処理し、すべての完了を通知する
+- `VIRTIO_BLK_F_FLUSH`により、明示的なフラッシュの順序付けが可能
 
-## Feature negotiation {#feature-negotiation}
+## 機能のネゴシエーション {#feature-negotiation}
 
-virtio devices negotiate features before use:
+virtioデバイスは、使用前に機能をネゴシエートする。
 
 ```c
-/* Guest reads host-supported features */
+/* ゲストはホストがサポートする機能を読む */
 u64 host_features = vdev->config->get_features(vdev);
 
-/* Guest decides what it wants */
+/* ゲストは何を使いたいかを決める */
 u64 guest_features = 0;
 if (host_features & (1ULL << VIRTIO_NET_F_CSUM))
-    guest_features |= (1ULL << VIRTIO_NET_F_CSUM);   /* checksum offload */
+    guest_features |= (1ULL << VIRTIO_NET_F_CSUM);   /* チェックサムオフロード */
 if (host_features & (1ULL << VIRTIO_NET_F_MRG_RXBUF))
-    guest_features |= (1ULL << VIRTIO_NET_F_MRG_RXBUF); /* mergeable RX */
+    guest_features |= (1ULL << VIRTIO_NET_F_MRG_RXBUF); /* マージ可能なRX */
 if (host_features & (1ULL << VIRTIO_F_RING_PACKED))
-    guest_features |= (1ULL << VIRTIO_F_RING_PACKED); /* packed ring layout */
+    guest_features |= (1ULL << VIRTIO_F_RING_PACKED); /* packed ringのレイアウト */
 
-/* Write accepted features back */
+/* 受け入れた機能を書き戻す */
 vdev->config->finalize_features(vdev);
 ```
 
-Key feature bits:
+主要な機能ビット:
 ```c
-VIRTIO_F_VERSION_1         /* modern virtio (mandatory for new devices) */
-VIRTIO_F_RING_PACKED       /* packed ring layout (avoids avail/used split) */
-VIRTIO_F_IN_ORDER          /* host completes requests in order */
-VIRTIO_NET_F_CSUM          /* checksum offload */
-VIRTIO_NET_F_HOST_TSO4     /* TCP segmentation offload (IPv4) */
-VIRTIO_NET_F_MRG_RXBUF     /* mergeable receive buffers */
-VIRTIO_NET_F_RSS           /* receive-side scaling (multi-queue) */
-VIRTIO_BLK_F_SEG_MAX       /* max segments per request */
-VIRTIO_BLK_F_SIZE_MAX      /* max segment size */
-VIRTIO_BLK_F_DISCARD       /* TRIM/discard support */
-VIRTIO_BLK_F_WRITE_ZEROES  /* write-zeroes command */
+VIRTIO_F_VERSION_1         /* モダンなvirtio（新しいデバイスでは必須） */
+VIRTIO_F_RING_PACKED       /* packed ringのレイアウト（avail/usedの分割を避ける） */
+VIRTIO_F_IN_ORDER          /* ホストはリクエストを順番どおりに完了する */
+VIRTIO_NET_F_CSUM          /* チェックサムオフロード */
+VIRTIO_NET_F_HOST_TSO4     /* TCPセグメンテーションオフロード（IPv4） */
+VIRTIO_NET_F_MRG_RXBUF     /* マージ可能な受信バッファ */
+VIRTIO_NET_F_RSS           /* receive-side scaling（マルチキュー） */
+VIRTIO_BLK_F_SEG_MAX       /* リクエストあたりの最大セグメント数 */
+VIRTIO_BLK_F_SIZE_MAX      /* 最大セグメントサイズ */
+VIRTIO_BLK_F_DISCARD       /* TRIM/discardのサポート */
+VIRTIO_BLK_F_WRITE_ZEROES  /* write-zeroesコマンド */
 ```
 
-## vhost-net: kernel-space acceleration {#vhost-net-kernel-space-acceleration}
+## vhost-net: カーネル空間による高速化 {#vhost-net-kernel-space-acceleration}
 
-vhost-net moves the virtio-net backend from QEMU userspace into the kernel, eliminating the QEMU → host kernel round trip for each packet.
+vhost-netは、virtio-netのバックエンドをQEMUのユーザー空間からカーネルへ移し、パケットごとのQEMU → ホストカーネルの往復をなくす。
 
 ```
 Without vhost-net:
@@ -258,50 +258,50 @@ With vhost-net:
   reads vring → writes to TAP directly (no QEMU in data path)
 ```
 
-### vhost kernel internals {#vhost-kernel-internals}
+### vhostのカーネル内部 {#vhost-kernel-internals}
 
 ```c
 /* drivers/vhost/net.c */
 struct vhost_net {
-    struct vhost_dev dev;           /* the generic vhost core (worker, iotlb, ...) */
+    struct vhost_dev dev;           /* 汎用のvhostコア（ワーカー、iotlb、...） */
     struct vhost_net_virtqueue vqs[VHOST_NET_VQ_MAX];
     /* ... */
 };
 
 struct vhost_dev {
-    struct mm_struct *mm;           /* guest mm for GPA→HVA translation */
+    struct mm_struct *mm;           /* GPA→HVA変換のためのゲストのmm */
     struct mutex mutex;
     struct vhost_virtqueue **vqs;
     int nvqs;
-    struct xarray worker_xa;        /* registry of this device's worker(s) */
+    struct xarray worker_xa;        /* このデバイスのワーカーの登録簿 */
     bool use_worker;
     /* ... */
 };
 
-/* Illustrative only — not a real function. The general vhost worker
- * pattern: read descriptors off the guest's avail ring, do the I/O,
- * post completions to the used ring, signal the guest. In
- * drivers/vhost/net.c this is spread across handle_tx() (a thin
- * dispatcher), get_tx_bufs(), and handle_tx_copy()/handle_tx_zerocopy(),
- * which add TX batching, XDP, and busy-polling this sketch leaves out: */
+/* 説明用のみ — 実在する関数ではない。vhostワーカーの一般的な
+ * パターン: ゲストのavailリングからディスクリプタを読み、I/Oを行い、
+ * 完了をusedリングに通知し、ゲストにシグナルを送る。
+ * drivers/vhost/net.cでは、これはhandle_tx()（薄いディスパッチャ）、
+ * get_tx_bufs()、handle_tx_copy()/handle_tx_zerocopy()に分散しており、
+ * このスケッチが省いているTXのバッチ処理、XDP、ビジーポーリングが加わる: */
 static void vhost_worker_tx_sketch(struct vhost_net *net, struct vhost_virtqueue *vq)
 {
     unsigned int head;
 
     while ((head = vhost_get_vq_desc(vq, ...)) != vq->num) {
-        /* GPA → HVA translation using guest mm */
-        /* write to socket / TAP fd */
+        /* ゲストのmmを使ったGPA → HVA変換 */
+        /* ソケット / TAPのfdに書き込む */
         vhost_add_used(vq, head, 0);
     }
-    vhost_signal(&net->dev, vq);  /* interrupt guest */
+    vhost_signal(&net->dev, vq);  /* ゲストに割り込む */
 }
 ```
 
-`struct vhost_dev` used to own a single `struct task_struct *worker` directly; it's since been refactored so a device can register multiple workers (`worker_xa`, keyed for cases like per-vq worker assignment), created via `vhost_task_create()` rather than a raw kthread — the worker's `comm` is still `vhost-<owner-pid>`, so `pgrep vhost` (further down) still finds it.
+`struct vhost_dev`はかつて単一の`struct task_struct *worker`を直接所有していた。その後リファクタリングされ、デバイスが複数のワーカー（`worker_xa`。virtqueueごとのワーカー割り当てのようなケースのためにキーが付けられる）を登録できるようになり、ワーカーは素のkthreadではなく`vhost_task_create()`で作成されるようになった。ワーカーの`comm`は依然として`vhost-<owner-pid>`なので、（後述の）`pgrep vhost`で今でも見つけられる。
 
-### vhost-user: userspace vhost {#vhost-user-userspace-vhost}
+### vhost-user: ユーザー空間のvhost {#vhost-user-userspace-vhost}
 
-vhost-user moves the backend to a separate userspace process (e.g., DPDK, OVS) using a Unix socket for control and shared memory for the rings:
+vhost-userは、制御にUnixソケット、リングに共有メモリを使い、バックエンドを別のユーザー空間プロセス（例: DPDK、OVS）に移す。
 
 ```
 Guest (KVM) ──► vring (shared memory) ◄── vhost-user process (DPDK/OVS)
@@ -309,81 +309,81 @@ Guest (KVM) ──► vring (shared memory) ◄── vhost-user process (DPDK/O
           eventfd for kick/interrupt
 ```
 
-Used by Open vSwitch + DPDK for line-rate switching without kernel involvement.
+Open vSwitch + DPDKで、カーネルを介さずにラインレートのスイッチングを行うために使われる。
 
-## virtio-mmio vs PCI transport {#virtio-mmio-vs-pci-transport}
+## virtio-mmioとPCIトランスポート {#virtio-mmio-vs-pci-transport}
 
-virtio devices are exposed over two transports:
+virtioデバイスは2種類のトランスポートで公開される。
 
-| Transport | Usage | Discovery |
+| トランスポート | 用途 | 検出方法 |
 |-----------|-------|-----------|
-| PCI | x86 VMs, standard | PCI config space scan |
-| MMIO | ARM/embedded VMs, containers | Device tree / ACPI |
+| PCI | x86のVM、標準 | PCIコンフィギュレーション空間のスキャン |
+| MMIO | ARM/組み込みのVM、コンテナ | デバイスツリー / ACPI |
 
 ```bash
-# In a Linux guest: see virtio devices
+# Linuxゲスト内で: virtioデバイスを確認する
 lspci | grep -i virtio
 # 00:01.0 Ethernet controller: Red Hat, Inc. Virtio network device
 # 00:02.0 SCSI storage controller: Red Hat, Inc. Virtio block device
 
-# Or via virtio-mmio:
+# またはvirtio-mmio経由で:
 cat /proc/device-tree/virtio_mmio@*/compatible
 # virtio,mmio
 ```
 
-## Observing virtio performance {#observing-virtio-performance}
+## virtioの性能の観測 {#observing-virtio-performance}
 
 ```bash
-# In guest: virtio-net stats
+# ゲスト内で: virtio-netの統計
 ethtool -S eth0 | grep -E "queue|vq"
 
-# virtio-blk device statistics
+# virtio-blkデバイスの統計
 cat /sys/block/vda/stat
 
-# vhost-net stats (on host)
-cat /proc/net/dev   # TAP interface throughput
+# vhost-netの統計（ホスト上で）
+cat /proc/net/dev   # TAPインターフェイスのスループット
 
-# Kick/interrupt frequency (low = batching, high = latency-sensitive):
-# virtio/vring expose no debugfs or tracepoint interface for this, so
-# count calls to the real kick/interrupt entry points directly instead:
+# キック/割り込みの頻度（低い = バッチ処理、高い = レイテンシ重視）:
+# virtio/vringにはこのためのdebugfsやtracepointのインターフェイスがないので、
+# 代わりに実際のキック/割り込みのエントリポイントの呼び出しを直接数える:
 perf probe -a virtqueue_notify
 perf probe -a vring_interrupt
 perf stat -e probe:virtqueue_notify,probe:vring_interrupt -a sleep 5
 
-# perf: vhost worker CPU usage
+# perf: vhostワーカーのCPU使用率
 perf top -p $(pgrep vhost)
 
-# Interrupt coalescing: check if interrupts are suppressed
-# (VRING_AVAIL_F_NO_INTERRUPT tells host not to interrupt guest)
+# 割り込みの結合: 割り込みが抑制されているか確認する
+# （VRING_AVAIL_F_NO_INTERRUPTはホストにゲストへ割り込まないよう伝える）
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/virtio/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio) — the virtio core bus: device registration and feature negotiation (`virtio_add_status()`)
-- [drivers/virtio/virtio_ring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_ring.c) — `virtqueue_add_outbuf()` and `virtqueue_kick()`: the split- and packed-ring implementation behind the vring diagrams above
-- [include/uapi/linux/virtio_ring.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_ring.h) — `struct vring_desc`, `vring_avail`, `vring_used`: the on-the-wire descriptor/available/used ring layout
-- [drivers/net/virtio_net.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/net/virtio_net.c) — the virtio-net driver: `struct virtnet_info`, `xmit_skb()`
-- [include/linux/virtio_net.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/virtio_net.h) — `virtio_net_hdr_from_skb()`: fills the checksum/GSO offload fields `xmit_skb()` writes into the header
-- [include/uapi/linux/virtio_net.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_net.h) — `struct virtio_net_hdr`, `struct virtio_net_hdr_mrg_rxbuf`, and the `VIRTIO_NET_F_*` feature bits
-- [drivers/block/virtio_blk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/block/virtio_blk.c) — the virtio-blk driver
-- [include/uapi/linux/virtio_blk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_blk.h) — `struct virtio_blk_outhdr` and the `VIRTIO_BLK_F_*` feature bits (`DISCARD`, `WRITE_ZEROES`, `FLUSH`)
-- [drivers/vhost/net.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/net.c) — the vhost-net kernel backend: `struct vhost_net`, `handle_tx()` dispatching to `handle_tx_copy()`/`handle_tx_zerocopy()`
-- [drivers/vhost/vhost.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/vhost.h) — `struct vhost_dev`: the generic vhost core shared by vhost-net, vhost-scsi, and vhost-vsock
+- [drivers/virtio/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio) — virtioのコアバス: デバイスの登録と機能のネゴシエーション（`virtio_add_status()`）
+- [drivers/virtio/virtio_ring.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virtio/virtio_ring.c) — `virtqueue_add_outbuf()`と`virtqueue_kick()`: 上のvringの図の背後にあるsplit ringとpacked ringの実装
+- [include/uapi/linux/virtio_ring.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_ring.h) — `struct vring_desc`、`vring_avail`、`vring_used`: ワイヤー上のディスクリプタ/available/usedリングのレイアウト
+- [drivers/net/virtio_net.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/net/virtio_net.c) — virtio-netドライバ: `struct virtnet_info`、`xmit_skb()`
+- [include/linux/virtio_net.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/virtio_net.h) — `virtio_net_hdr_from_skb()`: `xmit_skb()`がヘッダに書き込むチェックサム/GSOオフロードのフィールドを埋める
+- [include/uapi/linux/virtio_net.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_net.h) — `struct virtio_net_hdr`、`struct virtio_net_hdr_mrg_rxbuf`、`VIRTIO_NET_F_*`機能ビット
+- [drivers/block/virtio_blk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/block/virtio_blk.c) — virtio-blkドライバ
+- [include/uapi/linux/virtio_blk.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/virtio_blk.h) — `struct virtio_blk_outhdr`と`VIRTIO_BLK_F_*`機能ビット（`DISCARD`、`WRITE_ZEROES`、`FLUSH`）
+- [drivers/vhost/net.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/net.c) — vhost-netのカーネルバックエンド: `struct vhost_net`、`handle_tx_copy()`/`handle_tx_zerocopy()`にディスパッチする`handle_tx()`
+- [drivers/vhost/vhost.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/vhost/vhost.h) — `struct vhost_dev`: vhost-net、vhost-scsi、vhost-vsockが共有する汎用のvhostコア
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KVM Architecture](kvm-arch.md) — VM exits, hypercalls
-- [Memory Virtualization](kvm-memory.md) — EPT, balloon driver
+- [KVMアーキテクチャ](kvm-arch.md) — VM exit、ハイパーコール
+- [メモリ仮想化](kvm-memory.md) — EPT、バルーンドライバ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [An API for virtual I/O: virtio](https://lwn.net/Articles/239238/) — LWN's 2007 coverage of Rusty Russell's introduction of virtio: the `add_buf()`/`sync()`/`get_buf()` operations vector that became the virtqueue, and worked examples from the block and network drivers
-- [Standardizing virtio](https://lwn.net/Articles/580186/) — Jonathan Corbet, 2014: why virtio moved to OASIS standardization and what changed in the 1.0 specification (mandatory version feature bit, fixed little-endian byte order, flexible virtqueue memory layout)
+- [An API for virtual I/O: virtio](https://lwn.net/Articles/239238/) — Rusty Russellによるvirtioの導入を扱った2007年のLWNの記事: virtqueueとなった`add_buf()`/`sync()`/`get_buf()`の操作ベクタと、ブロックドライバおよびネットワークドライバの実例
+- [Standardizing virtio](https://lwn.net/Articles/580186/) — Jonathan Corbet、2014年: virtioがOASISでの標準化に移った理由と、1.0仕様で何が変わったか（必須のバージョン機能ビット、リトルエンディアンに固定されたバイトオーダー、柔軟なvirtqueueのメモリレイアウト）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Virtual I/O Device (VIRTIO) Version 1.2](https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html) — the OASIS committee specification: split and packed virtqueue formats, device types (net, block, and others), and the PCI/MMIO/CCW transports
-- [Virtio on Linux](https://docs.kernel.org/driver-api/virtio/virtio.html) — kernel documentation for the virtio subsystem: the core bus, virtqueues, and transport drivers
-- [Writing Virtio Drivers](https://docs.kernel.org/driver-api/virtio/writing_virtio_drivers.html) — kernel documentation covering `virtqueue_add_outbuf()`, `virtqueue_add_inbuf()`, `virtqueue_kick()`, and the driver probe/remove lifecycle
+- [Virtual I/O Device (VIRTIO) Version 1.2](https://docs.oasis-open.org/virtio/virtio/v1.2/virtio-v1.2.html) — OASISの委員会仕様: splitとpackedのvirtqueue形式、デバイスタイプ（net、blockなど）、PCI/MMIO/CCWトランスポート
+- [Virtio on Linux](https://docs.kernel.org/driver-api/virtio/virtio.html) — virtioサブシステムのカーネルドキュメント: コアバス、virtqueue、トランスポートドライバ
+- [Writing Virtio Drivers](https://docs.kernel.org/driver-api/virtio/writing_virtio_drivers.html) — `virtqueue_add_outbuf()`、`virtqueue_add_inbuf()`、`virtqueue_kick()`、ドライバのprobe/removeのライフサイクルを扱うカーネルドキュメント

@@ -1,10 +1,10 @@
-# Runqueues and Task Selection {#runqueues-and-task-selection}
+# ランキューとタスク選択 {#runqueues-and-task-selection}
 
-> Per-CPU runqueues, struct rq, and how the scheduler picks the next task
+> CPUごとのランキュー、struct rq、そしてスケジューラが次のタスクを選ぶ仕組み
 
-## The per-CPU design {#the-per-cpu-design}
+## CPUごとの設計 {#the-per-cpu-design}
 
-Every CPU has its own runqueue. There is no global queue of runnable tasks — each CPU independently manages its own set and picks from it. This design scales: CPUs never contend on a shared lock just to pick the next task.
+各CPUはそれぞれ独自のランキューを持つ。実行可能タスクのグローバルなキューは存在しない — 各CPUは自分のタスク集合を独立して管理し、そこから選択する。この設計はスケールする: 次のタスクを選ぶためだけにCPUが共有ロックを奪い合うことは決してない。
 
 ```
 CPU 0             CPU 1             CPU 2             CPU 3
@@ -17,73 +17,73 @@ CPU 0             CPU 1             CPU 2             CPU 3
 └──────────┘     └──────────┘     └──────────┘     └──────────┘
 ```
 
-Load balancing periodically migrates tasks between CPUs to keep them busy, but that's separate from the per-CPU selection path.
+負荷分散は、CPUを遊ばせないよう定期的にCPU間でタスクをマイグレーションするが、これはCPUごとの選択パスとは別のものである。
 
 ## struct rq {#struct-rq}
 
-`struct rq` is the central per-CPU scheduler state, defined in `kernel/sched/sched.h`:
+`struct rq`はCPUごとのスケジューラ状態の中心であり、`kernel/sched/sched.h`で定義されている:
 
 ```c
 // kernel/sched/sched.h
 struct rq {
-    /* Runqueue lock */
+    /* ランキューのロック */
     raw_spinlock_t      __lock;
 
-    /* Number of runnable tasks (all classes) */
+    /* 実行可能タスク数（全クラス） */
     unsigned int        nr_running;
 
-    /* Currently running task */
+    /* 現在実行中のタスク */
     struct task_struct __rcu *curr;
 
-    /* Idle thread for this CPU */
+    /* このCPUのアイドルスレッド */
     struct task_struct  *idle;
 
-    /* Stop task (migration/hotplug) */
+    /* stopタスク（マイグレーション/ホットプラグ） */
     struct task_struct  *stop;
 
-    /* Runqueue clock (ns) */
+    /* ランキューのクロック（ns） */
     u64                 clock;
     u64                 clock_task;
 
-    /* Per-class sub-queues */
+    /* クラスごとのサブキュー */
     struct cfs_rq       cfs;   // fair_sched_class
     struct rt_rq        rt;    // rt_sched_class
     struct dl_rq        dl;    // dl_sched_class
 
-    /* CPU this runqueue belongs to */
+    /* このランキューが属するCPU */
     int                 cpu;
 
-    /* Load tracking */
+    /* 負荷の追跡 */
     struct sched_avg    avg_rt;
     struct sched_avg    avg_dl;
 
-    /* ... (many more fields for load balancing, energy, stats) */
+    /* ...（負荷分散、エネルギー、統計のためのフィールドが他に多数） */
 };
 ```
 
-### Key fields {#key-fields}
+### 主要なフィールド {#key-fields}
 
-| Field | Type | Purpose |
+| フィールド | 型 | 目的 |
 |-------|------|---------|
-| `__lock` | `raw_spinlock_t` | Protects runqueue modifications |
-| `nr_running` | `unsigned int` | Total runnable tasks across all classes |
-| `curr` | `struct task_struct *` | Currently executing task |
-| `idle` | `struct task_struct *` | The idle thread (swapper/N) |
-| `clock` | `u64` | Monotonic nanosecond clock for this CPU |
-| `cfs` | `struct cfs_rq` | CFS/EEVDF runqueue (fair tasks) |
-| `rt` | `struct rt_rq` | RT runqueue (FIFO/RR tasks) |
-| `dl` | `struct dl_rq` | Deadline runqueue (SCHED_DEADLINE tasks) |
+| `__lock` | `raw_spinlock_t` | ランキューの変更を保護する |
+| `nr_running` | `unsigned int` | 全クラスを通じた実行可能タスクの総数 |
+| `curr` | `struct task_struct *` | 現在実行中のタスク |
+| `idle` | `struct task_struct *` | アイドルスレッド（swapper/N） |
+| `clock` | `u64` | このCPUの単調増加ナノ秒クロック |
+| `cfs` | `struct cfs_rq` | CFS/EEVDFランキュー（fairタスク） |
+| `rt` | `struct rt_rq` | RTランキュー（FIFO/RRタスク） |
+| `dl` | `struct dl_rq` | デッドラインランキュー（SCHED_DEADLINEタスク） |
 
-## Accessing runqueues {#accessing-runqueues}
+## ランキューへのアクセス {#accessing-runqueues}
 
-The runqueues are declared as a per-CPU variable:
+ランキューはCPUごとの変数として宣言されている:
 
 ```c
 // kernel/sched/sched.h
 DECLARE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 ```
 
-Access macros:
+アクセス用マクロ:
 
 ```c
 // kernel/sched/sched.h
@@ -92,65 +92,65 @@ Access macros:
 #define task_rq(p)     cpu_rq(task_cpu(p))
 ```
 
-Most scheduler code uses `this_rq()` — the runqueue for the currently executing CPU. Accessing another CPU's runqueue requires holding that CPU's `rq->__lock`.
+スケジューラのコードの大半は`this_rq()` — 現在実行中のCPUのランキュー — を使う。別のCPUのランキューにアクセスするには、そのCPUの`rq->__lock`を保持する必要がある。
 
-## The three sub-queues {#the-three-sub-queues}
+## 3つのサブキュー {#the-three-sub-queues}
 
-### struct cfs_rq (fair tasks) {#struct-cfs_rq-fair-tasks}
+### struct cfs_rq（fairタスク） {#struct-cfs_rq-fair-tasks}
 
 ```c
 // kernel/sched/sched.h
 struct cfs_rq {
-    struct rb_root_cached tasks_timeline; // RB-tree keyed by vruntime/deadline
-    struct sched_entity  *curr;           // running entity
-    struct sched_entity  *next;           // next candidate (wakeup hint)
-    unsigned int          nr_queued;      // runnable task count
-    s64                   avg_vruntime;   // weighted vruntime sum (eligibility)
-    long                  avg_load;       // total load weight of queued tasks
+    struct rb_root_cached tasks_timeline; // vruntime/deadlineをキーとするRBツリー
+    struct sched_entity  *curr;           // 実行中のエンティティ
+    struct sched_entity  *next;           // 次の候補（起床時のヒント）
+    unsigned int          nr_queued;      // 実行可能タスク数
+    s64                   avg_vruntime;   // 重み付きvruntimeの合計（適格性判定用）
+    long                  avg_load;       // キュー内タスクの負荷重みの合計
     // ...
 };
 ```
 
-The `tasks_timeline` RB-tree holds all runnable fair tasks, ordered by `vruntime`. The `rb_root_cached` variant caches the leftmost node for O(1) access, though since EEVDF the leftmost node is no longer always selected — but the cache remains useful as a starting point for the tree walk.
+`tasks_timeline` RBツリーは、実行可能なすべてのfairタスクを`vruntime`順に保持する。`rb_root_cached`版はO(1)でアクセスできるよう最左ノードをキャッシュする。EEVDF以降は最左ノードが常に選ばれるわけではなくなったが、それでもキャッシュはツリー探索の出発点として有用である。
 
-### struct rt_rq (RT tasks) {#struct-rt_rq-rt-tasks}
+### struct rt_rq（RTタスク） {#struct-rt_rq-rt-tasks}
 
 ```c
 // kernel/sched/sched.h
 struct rt_rq {
-    struct rt_prio_array active;    // 100-level priority bitmap + queues
+    struct rt_prio_array active;    // 100段階の優先度ビットマップ + キュー
     unsigned int         rt_nr_running;
-    int                  rt_queued; // is this rq on the overload list?
-    // throttling fields...
+    int                  rt_queued; // このrqはオーバーロードリストに載っているか？
+    // スロットリング関連のフィールド...
 };
 
 struct rt_prio_array {
-    DECLARE_BITMAP(bitmap, MAX_RT_PRIO + 1); // 101 bits
-    struct list_head queue[MAX_RT_PRIO];     // per-priority FIFO queues
+    DECLARE_BITMAP(bitmap, MAX_RT_PRIO + 1); // 101ビット
+    struct list_head queue[MAX_RT_PRIO];     // 優先度ごとのFIFOキュー
 };
 ```
 
-RT task selection is O(1): `sched_find_first_bit(bitmap)` finds the highest-priority non-empty queue, then takes the head of that queue.
+RTタスクの選択はO(1)である: `sched_find_first_bit(bitmap)`が空でない最高優先度のキューを見つけ、そのキューの先頭を取り出す。
 
-### struct dl_rq (deadline tasks) {#struct-dl_rq-deadline-tasks}
+### struct dl_rq（デッドラインタスク） {#struct-dl_rq-deadline-tasks}
 
 ```c
 // kernel/sched/sched.h
 struct dl_rq {
-    struct rb_root_cached root;      // RB-tree ordered by deadline
+    struct rb_root_cached root;      // デッドライン順のRBツリー
     unsigned int          dl_nr_running;
-    // CBS bandwidth tracking fields...
+    // CBSの帯域追跡フィールド...
 };
 ```
 
-Deadline task selection picks the task with the earliest `dl_deadline` from the RB-tree — similar to EEVDF but for absolute (not virtual) deadlines.
+デッドラインタスクの選択では、RBツリーから最も早い`dl_deadline`を持つタスクを選ぶ — EEVDFに似ているが、仮想デッドラインではなく絶対デッドラインを用いる。
 
-## The scheduling decision {#the-scheduling-decision}
+## スケジューリングの決定 {#the-scheduling-decision}
 
-The core of the scheduler lives in `__schedule()` in `kernel/sched/core.c`:
+スケジューラの中核は`kernel/sched/core.c`の`__schedule()`にある:
 
 ```c
-// kernel/sched/core.c (simplified)
+// kernel/sched/core.c（簡略化）
 static void __sched notrace __schedule(int sched_mode)
 {
     struct task_struct *prev, *next;
@@ -159,19 +159,19 @@ static void __sched notrace __schedule(int sched_mode)
     rq = this_rq();
     prev = rq->curr;
 
-    // Update runqueue clock
+    // ランキューのクロックを更新する
     update_rq_clock(rq);
 
-    // If prev is going to sleep, dequeue it
+    // prevがスリープしようとしているなら、デキューする
     if (!(sched_mode & SM_MASK_PREEMPT) && prev->__state) {
-        // task is blocking
+        // タスクはブロックしようとしている
         deactivate_task(rq, prev, DEQUEUE_SLEEP | DEQUEUE_NOCLOCK);
     }
 
-    // Pick the next task (walks sched_class hierarchy)
+    // 次のタスクを選ぶ（sched_classの階層をたどる）
     next = pick_next_task(rq, prev, &rf);
 
-    // If same task, no switch needed
+    // 同じタスクならスイッチは不要
     if (likely(prev != next)) {
         rq->nr_switches++;
         rq->curr = next;
@@ -180,19 +180,19 @@ static void __sched notrace __schedule(int sched_mode)
 }
 ```
 
-### pick_next_task() {#picknexttask}
+### pick_next_task() {#pick_next_task}
 
-Walks the scheduler class hierarchy until a class has a task:
+いずれかのクラスがタスクを持つまで、スケジューラクラスの階層をたどる:
 
 ```c
-// kernel/sched/core.c (simplified)
+// kernel/sched/core.c（簡略化）
 static struct task_struct *
 pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
 {
     const struct sched_class *class;
     struct task_struct *p;
 
-    // Fast path: all tasks are fair class
+    // 高速パス: すべてのタスクがfairクラス
     if (likely(!sched_class_above(prev->sched_class, &fair_sched_class) &&
                rq->nr_running == rq->cfs.h_nr_running)) {
         p = pick_next_task_fair(rq, prev, rf);
@@ -202,21 +202,21 @@ pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
     }
 
 restart:
-    // General path: stop → deadline → rt → fair → idle
+    // 一般パス: stop → deadline → rt → fair → idle
     for_each_class(class) {
         p = class->pick_next_task(rq, prev, rf);
         if (p)
             return p;
     }
-    BUG(); /* idle_sched_class always returns idle thread */
+    BUG(); /* idle_sched_classは常にアイドルスレッドを返す */
 }
 ```
 
-The fast path skips the class walk entirely when all tasks are SCHED_NORMAL (the common case on most systems). This saves checking three higher-priority classes that almost never have tasks.
+高速パスは、すべてのタスクがSCHED_NORMALである場合（ほとんどのシステムで一般的なケース）にクラスのたどりを完全に省略する。これにより、ほぼタスクを持つことのない3つの上位クラスの確認を省ける。
 
 ## context_switch() {#context_switch}
 
-Once `next` is selected, `context_switch()` switches execution:
+`next`が選ばれると、`context_switch()`が実行を切り替える:
 
 ```c
 // kernel/sched/core.c
@@ -226,17 +226,17 @@ context_switch(struct rq *rq, struct task_struct *prev,
 {
     prepare_task_switch(rq, prev, next);
 
-    // Switch memory mapping if different process
+    // 別プロセスならメモリマッピングを切り替える
     if (!next->mm) {
-        // kernel thread: borrow prev's page tables
+        // カーネルスレッド: prevのページテーブルを借りる
         next->active_mm = prev->active_mm;
         enter_lazy_tlb(prev->active_mm, next);
     } else {
-        // user process: switch page tables
+        // ユーザープロセス: ページテーブルを切り替える
         switch_mm_irqs_off(prev->active_mm, next->mm, next);
     }
 
-    // Switch CPU registers and stack
+    // CPUレジスタとスタックを切り替える
     switch_to(prev, next, prev);
     barrier();
 
@@ -244,44 +244,44 @@ context_switch(struct rq *rq, struct task_struct *prev,
 }
 ```
 
-`switch_to()` is architecture-specific. On x86-64 it saves/restores registers and switches the stack pointer. After `switch_to()`, execution continues in `next`'s context — `prev` is whatever task ran before `next` last yielded.
+`switch_to()`はアーキテクチャ固有である。x86-64ではレジスタを保存/復元し、スタックポインタを切り替える。`switch_to()`の後、実行は`next`のコンテキストで継続する — `prev`は、`next`が最後にCPUを明け渡す前に実行されていたタスクとなる。
 
-## Runqueue clock {#runqueue-clock}
+## ランキューのクロック {#runqueue-clock}
 
-`rq->clock` is a nanosecond-precision monotonic clock per CPU, updated at each scheduling event:
+`rq->clock`はCPUごとのナノ秒精度の単調増加クロックであり、スケジューリングイベントのたびに更新される:
 
 ```c
-// Update the clock (called at the start of __schedule)
+// クロックを更新する（__scheduleの冒頭で呼ばれる）
 update_rq_clock(rq);
 
-// Tasks use rq_clock_task() which excludes time stolen by guests (VMs)
+// タスクはゲスト（VM）に奪われた時間を除外するrq_clock_task()を使う
 u64 now = rq_clock_task(rq);
 ```
 
-CFS uses `rq_clock_task()` (not wall time) for vruntime updates, which means time spent in a VM guest doesn't count toward the host task's CPU consumption.
+CFSはvruntimeの更新に（実時間ではなく）`rq_clock_task()`を使う。つまり、VMゲスト内で費やされた時間は、ホストのタスクのCPU消費としてカウントされない。
 
-## Observing runqueue state {#observing-runqueue-state}
+## ランキュー状態の観測 {#observing-runqueue-state}
 
 ```bash
-# Tasks currently running or runnable per CPU
+# CPUごとの現在実行中または実行可能なタスク
 cat /proc/schedstat | head -20
 
-# Number of runnable tasks per CPU right now
+# 現時点でのCPUごとの実行可能タスク数
 for cpu in /sys/devices/system/cpu/cpu*/; do
   echo -n "$(basename $cpu): "
   cat "$cpu/cpufreq/stats/time_in_state" 2>/dev/null | head -1
 done
 
-# Real-time runqueue visualization
+# リアルタイムのランキュー可視化
 watch -n 0.5 'cat /proc/$(pgrep stress | head -1)/sched 2>/dev/null'
 
-# Per-CPU task counts from schedstat
+# schedstatからのCPUごとのタスク数
 awk '/^cpu[0-9]/ {print $1, "running:", $2, "switches:", $8}' /proc/schedstat
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Scheduler Classes](scheduler-classes.md) — The five classes that populate these queues
-- [CFS](cfs.md) — `struct cfs_rq` and the fair class in depth
-- [EEVDF](eevdf.md) — How `pick_next_entity()` works inside the fair class
-- [Life of a Context Switch](context-switch.md) — The full path through `__schedule()`
+- [スケジューラクラス](scheduler-classes.md) — これらのキューにタスクを入れる5つのクラス
+- [CFS](cfs.md) — `struct cfs_rq`とfairクラスの詳細
+- [EEVDF](eevdf.md) — fairクラス内部で`pick_next_entity()`がどう動くか
+- [コンテキストスイッチの一生](context-switch.md) — `__schedule()`を通る全経路

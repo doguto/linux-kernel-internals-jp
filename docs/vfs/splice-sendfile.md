@@ -1,10 +1,10 @@
-# splice, sendfile, and copy_file_range {#splice-sendfile-and-copyfilerange}
+# splice、sendfile、copy_file_range {#splice-sendfile-and-copy_file_range}
 
-> Zero-copy data transfer between file descriptors
+> ファイルディスクリプタ間のゼロコピーデータ転送
 
-## The problem: data movement overhead {#the-problem-data-movement-overhead}
+## 問題: データ移動のオーバーヘッド {#the-problem-data-movement-overhead}
 
-Normal `read()` + `write()` copies data through userspace:
+通常の`read()` + `write()`は、データをユーザー空間経由でコピーする:
 
 ```
 Disk → kernel page cache → [copy] → userspace buffer → [copy] → kernel socket buffer → NIC
@@ -12,18 +12,18 @@ Disk → kernel page cache → [copy] → userspace buffer → [copy] → kernel
                                Two copies through CPU
 ```
 
-For large data transfers (serving files over HTTP, piping data between processes), these copies are wasteful. Linux provides several zero-copy alternatives.
+大量のデータ転送（HTTPでのファイル配信、プロセス間でのデータのパイプ処理）では、これらのコピーは無駄である。Linuxはいくつかのゼロコピーの代替手段を提供している。
 
-## sendfile: file-to-socket zero-copy {#sendfile-file-to-socket-zero-copy}
+## sendfile: ファイルからソケットへのゼロコピー {#sendfile-file-to-socket-zero-copy}
 
-`sendfile()` was introduced in Linux 2.2 [(man page)](https://www.man7.org/linux/man-pages/man2/sendfile.2.html) and sends a file directly to a socket without copying through userspace:
+`sendfile()`はLinux 2.2で導入された[(man page)](https://www.man7.org/linux/man-pages/man2/sendfile.2.html)。ユーザー空間を経由してコピーすることなく、ファイルを直接ソケットへ送る:
 
 ```c
 #include <sys/sendfile.h>
 
 ssize_t sendfile(int out_fd, int in_fd, off_t *offset, size_t count);
 
-/* Example: serve a file over HTTP */
+/* 例: HTTPでファイルを配信する */
 int file_fd = open("file.dat", O_RDONLY);
 int sock_fd = accept(listen_fd, NULL, NULL);
 
@@ -31,7 +31,7 @@ off_t offset = 0;
 ssize_t sent = sendfile(sock_fd, file_fd, &offset, file_size);
 ```
 
-Data path with sendfile:
+sendfileでのデータ経路:
 ```
 Disk → page cache → [DMA] → NIC (with scatter-gather DMA)
               ↑
@@ -39,16 +39,16 @@ Disk → page cache → [DMA] → NIC (with scatter-gather DMA)
     No copy through socket buffer (with NIC scatter-gather)
 ```
 
-### sendfile limitations {#sendfile-limitations}
+### sendfileの制限 {#sendfile-limitations}
 
-- `out_fd` must be a socket (or pipe on some kernels)
-- `in_fd` must support `mmap`-like operations (regular files, not sockets)
-- Does not work for file-to-file copies
-- Requires NIC scatter-gather for true zero-copy; otherwise one kernel→kernel copy
+- `out_fd`はソケットでなければならない（一部のカーネルではパイプも可）
+- `in_fd`は`mmap`のような操作をサポートしていなければならない（通常ファイル。ソケットは不可）
+- ファイルからファイルへのコピーには使えない
+- 真のゼロコピーにはNICのscatter-gatherが必要。そうでない場合はカーネル→カーネルのコピーが1回発生する
 
-## splice: pipe-based zero-copy {#splice-pipe-based-zero-copy}
+## splice: パイプベースのゼロコピー {#splice-pipe-based-zero-copy}
 
-`splice()` was introduced in Linux 2.6.17 by Jens Axboe [(commit)](https://git.kernel.org/linus/5274f052e7b3dbd81935772eb551dfd0325dfa9d) [(LWN)](https://lwn.net/Articles/178199/), based on an earlier concept by Larry McVoy. It moves data between a pipe and a file descriptor using page references — no data copying:
+`splice()`は、Larry McVoyによる以前の構想に基づき、Jens AxboeによってLinux 2.6.17で導入された[(commit)](https://git.kernel.org/linus/5274f052e7b3dbd81935772eb551dfd0325dfa9d) [(LWN)](https://lwn.net/Articles/178199/)。ページ参照を使ってパイプとファイルディスクリプタの間でデータを移動する。データのコピーは発生しない:
 
 ```c
 #define _GNU_SOURCE
@@ -60,45 +60,45 @@ ssize_t splice(int fd_in, loff_t *off_in,
 /* flags: SPLICE_F_MOVE, SPLICE_F_NONBLOCK, SPLICE_F_MORE */
 ```
 
-At least one of `fd_in` or `fd_out` must be a pipe. The pipe acts as a staging buffer:
+`fd_in`と`fd_out`の少なくとも一方はパイプでなければならない。パイプは中継用のバッファとして働く:
 
 ```c
-/* File to socket via pipe (zero-copy) */
+/* パイプ経由でファイルからソケットへ（ゼロコピー） */
 int pipefd[2];
 pipe(pipefd);
 
-/* Stage 1: file → pipe (moves page references, no copy) */
+/* 段階1: ファイル → パイプ（ページ参照を移動、コピーなし） */
 splice(file_fd, &file_offset, pipefd[1], NULL, len, SPLICE_F_MOVE);
 
-/* Stage 2: pipe → socket (zero-copy with scatter-gather NIC) */
+/* 段階2: パイプ → ソケット（scatter-gather対応NICならゼロコピー） */
 splice(pipefd[0], NULL, sock_fd, NULL, len, SPLICE_F_MOVE | SPLICE_F_MORE);
 ```
 
-### tee: duplicate pipe data {#tee-duplicate-pipe-data}
+### tee: パイプのデータを複製する {#tee-duplicate-pipe-data}
 
-`tee()` duplicates data between two pipes without consuming from the source:
+`tee()`は、ソースから消費することなく、2つのパイプ間でデータを複製する:
 
 ```c
 ssize_t tee(int fd_in, int fd_out, size_t len, unsigned int flags);
 
-/* Duplicate a stream: log and forward simultaneously */
+/* ストリームを複製する: ログと転送を同時に行う */
 int log_pipe[2], fwd_pipe[2];
 pipe(log_pipe); pipe(fwd_pipe);
 
-/* Source → log_pipe */
+/* ソース → log_pipe */
 splice(source_fd, NULL, log_pipe[1], NULL, len, 0);
 
-/* Duplicate log_pipe → fwd_pipe (no copy, pages shared) */
+/* log_pipe → fwd_pipe に複製する（コピーなし、ページを共有） */
 tee(log_pipe[0], fwd_pipe[1], len, 0);
 
-/* Consume from both independently */
+/* 両方から独立に消費する */
 splice(log_pipe[0], NULL, logfile_fd, NULL, len, 0);
 splice(fwd_pipe[0], NULL, socket_fd, NULL, len, 0);
 ```
 
-## copy_file_range: kernel-side file copy {#copyfilerange-kernel-side-file-copy}
+## copy_file_range: カーネル側でのファイルコピー {#copy_file_range-kernel-side-file-copy}
 
-`copy_file_range()` copies between two files without touching userspace. On modern filesystems it can use **server-side copy** (e.g., NFS, SMB, Btrfs reflinking):
+`copy_file_range()`は、ユーザー空間に触れることなく2つのファイル間でコピーする。最近のファイルシステムでは**サーバーサイドコピー**（例: NFS、SMB、Btrfsのreflink）を使うことができる:
 
 ```c
 #define _GNU_SOURCE
@@ -108,7 +108,7 @@ ssize_t copy_file_range(int fd_in, loff_t *off_in,
                          int fd_out, loff_t *off_out,
                          size_t len, unsigned int flags);
 
-/* Fast file copy (may be instantaneous with reflink) */
+/* 高速なファイルコピー（reflinkなら一瞬で終わることもある） */
 int src = open("src.dat", O_RDONLY);
 int dst = open("dst.dat", O_WRONLY | O_CREAT, 0644);
 
@@ -116,9 +116,9 @@ off_t off_in = 0, off_out = 0;
 copy_file_range(src, &off_in, dst, &off_out, file_size, 0);
 ```
 
-### Btrfs reflink {#btrfs-reflink}
+### Btrfsのreflink {#btrfs-reflink}
 
-On Btrfs (and XFS with reflink), `copy_file_range` does a **reflink** — the destination shares the same extents as the source with copy-on-write semantics:
+Btrfs（およびreflink対応のXFS）では、`copy_file_range`は**reflink**を行う。コピー先は、copy-on-writeのセマンティクスでコピー元と同じエクステントを共有する:
 
 ```
 Before copy_file_range:
@@ -133,14 +133,14 @@ No data copied — instantaneous regardless of file size!
 ```
 
 ```bash
-# Check if filesystem supports reflink
-cp --reflink=always src.dat dst.dat   # fails if not supported
-cp --reflink=auto   src.dat dst.dat   # falls back to copy if needed
+# ファイルシステムがreflinkをサポートしているか確認する
+cp --reflink=always src.dat dst.dat   # サポートされていなければ失敗する
+cp --reflink=auto   src.dat dst.dat   # 必要なら通常のコピーにフォールバックする
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルの実装 {#kernel-implementation}
 
-### sendfile kernel path {#sendfile-kernel-path}
+### sendfileのカーネル内経路 {#sendfile-kernel-path}
 
 ```c
 /* fs/read_write.c */
@@ -150,22 +150,22 @@ SYSCALL_DEFINE4(sendfile64, int, out_fd, int, in_fd,
     struct fd in = fdget(in_fd);
     struct fd out = fdget(out_fd);
 
-    /* Delegate to do_sendfile */
+    /* do_sendfileに委譲する */
     return do_sendfile(out.file, in.file, ppos, count, 0);
 }
 
 /* fs/read_write.c */
 static ssize_t do_sendfile(struct file *out_file, struct file *in_file, loff_t *ppos, size_t count, loff_t max)
 {
-    /* Uses file->f_op->splice_read to get pages from in_file */
-    /* Uses sock_sendpage (or generic_file_splice_write) for out_file */
+    /* in_fileからページを得るためにfile->f_op->splice_readを使う */
+    /* out_fileにはsock_sendpage（またはgeneric_file_splice_write）を使う */
 
-    /* For sockets: calls tcp_sendpage → skb_fill_page_desc */
-    /* Page reference is added to skb — no copy if NIC has scatter-gather */
+    /* ソケットの場合: tcp_sendpage → skb_fill_page_descを呼ぶ */
+    /* ページ参照がskbに追加される — NICがscatter-gatherを持っていればコピーなし */
 }
 ```
 
-### splice kernel path {#splice-kernel-path}
+### spliceのカーネル内経路 {#splice-kernel-path}
 
 ```c
 /* fs/splice.c */
@@ -174,20 +174,20 @@ SYSCALL_DEFINE6(splice, int, fd_in, loff_t __user *, off_in,
                 size_t, len, unsigned int, flags)
 {
     if (ipipe && opipe) {
-        /* pipe-to-pipe: just move the pipe_buffer references */
+        /* パイプからパイプ: pipe_bufferの参照を移動するだけ */
         return splice_pipe_to_pipe(ipipe, opipe, len, flags);
     }
     if (ipipe) {
-        /* pipe-to-file: write pipe buffers to file */
+        /* パイプからファイル: パイプのバッファをファイルへ書き込む */
         return do_splice_from(ipipe, out, &offset, len, flags);
     }
     if (opipe) {
-        /* file-to-pipe: add page references to pipe */
+        /* ファイルからパイプ: ページ参照をパイプに追加する */
         return do_splice_to(in, &offset, opipe, len, flags);
     }
 }
 
-/* pipe_buffer: a reference to a page, no data copy */
+/* pipe_buffer: ページへの参照。データのコピーはない */
 struct pipe_buffer {
     struct page      *page;
     unsigned int     offset, len;
@@ -196,13 +196,13 @@ struct pipe_buffer {
 };
 ```
 
-### copy_file_range kernel path {#copyfilerange-kernel-path}
+### copy_file_rangeのカーネル内経路 {#copy_file_range-kernel-path}
 
 ```c
 /* fs/read_write.c */
 SYSCALL_DEFINE6(copy_file_range, ...)
 {
-    /* Try filesystem-specific implementation first */
+    /* まずファイルシステム固有の実装を試す */
     if (out_file->f_op->copy_file_range) {
         ret = out_file->f_op->copy_file_range(file_in, pos_in,
                                                file_out, pos_out,
@@ -211,46 +211,46 @@ SYSCALL_DEFINE6(copy_file_range, ...)
             return ret;
     }
 
-    /* Fallback: generic_copy_file_range (splice-based) */
+    /* フォールバック: generic_copy_file_range（spliceベース） */
     return generic_copy_file_range(file_in, pos_in,
                                     file_out, pos_out, len, flags);
 }
 
-/* Btrfs implementation: */
+/* Btrfsの実装: */
 static ssize_t btrfs_copy_file_range(...)
 {
-    /* btrfs_clone_file_range → create shared extents */
+    /* btrfs_clone_file_range → 共有エクステントを作成する */
     ret = btrfs_clone(src, dst, off, len, len, destoff, 0);
 }
 ```
 
-## Comparison {#comparison}
+## 比較 {#comparison}
 
-| API | Zero-copy? | Use case | Kernel → userspace copy |
+| API | ゼロコピーか | 用途 | カーネル → ユーザー空間のコピー |
 |-----|-----------|----------|------------------------|
-| `read()` + `write()` | No | Universal | 2 copies |
-| `sendfile()` | Yes (with NIC SG) | File → socket | 0 copies |
-| `splice()` | Yes | Any fd ↔ pipe | 0 copies |
-| `tee()` | Yes | Pipe duplication | 0 copies |
-| `copy_file_range()` | Yes (reflink) | File → file | 0 copies (reflink) |
-| `mmap()` + `write()` | Partial | File → socket | 1 copy (page → SKB) |
+| `read()` + `write()` | いいえ | 汎用 | 2回のコピー |
+| `sendfile()` | はい（NICのSGがあれば） | ファイル → ソケット | コピー0回 |
+| `splice()` | はい | 任意のfd ↔ パイプ | コピー0回 |
+| `tee()` | はい | パイプの複製 | コピー0回 |
+| `copy_file_range()` | はい（reflink） | ファイル → ファイル | コピー0回（reflink） |
+| `mmap()` + `write()` | 部分的 | ファイル → ソケット | 1回のコピー（page → SKB） |
 
-## Performance tips {#performance-tips}
+## 性能に関するヒント {#performance-tips}
 
 ```bash
-# Verify sendfile is used (strace a file server):
+# sendfileが使われていることを確認する（ファイルサーバーをstraceする）:
 strace -e sendfile64,splice nginx -g 'daemon off;' 2>&1 | head -20
 
-# Check NIC scatter-gather support (required for true zero-copy):
+# NICのscatter-gatherサポートを確認する（真のゼロコピーに必要）:
 ethtool -k eth0 | grep scatter-gather
 # scatter-gather: on
 
-# For large files: sendfile outperforms read+write significantly
-# Typical: 2-4x throughput improvement for 100MB+ files
+# 大きなファイルでは: sendfileはread+writeより大幅に高性能
+# 典型的には: 100MB以上のファイルでスループットが2〜4倍向上する
 ```
 
 ```c
-/* io_uring splice: zero-copy without blocking */
+/* io_uringのsplice: ブロックしないゼロコピー */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_splice(sqe,
     file_fd, file_offset,
@@ -258,7 +258,7 @@ io_uring_prep_splice(sqe,
     len, SPLICE_F_MOVE);
 io_uring_sqe_set_flags(sqe, IOSQE_IO_LINK);
 
-/* Chain: pipe → socket */
+/* チェーン: パイプ → ソケット */
 sqe = io_uring_get_sqe(&ring);
 io_uring_prep_splice(sqe,
     pipe_fd[0], -1,
@@ -268,11 +268,11 @@ io_uring_prep_splice(sqe,
 io_uring_submit(&ring);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [File Operations](file-ops.md) — read/write VFS path
-- [Page Cache](../mm/page-cache.md) — page references in splice
-- [Direct I/O](../io/direct-io.md) — bypassing page cache entirely
-- [io_uring Operations](../io-uring/io-uring-ops.md) — `IORING_OP_SPLICE`
-- `fs/splice.c` — splice/sendfile/tee implementation
+- [ファイル操作](file-ops.md) — read/writeのVFS経路
+- [ページキャッシュ](../mm/page-cache.md) — spliceにおけるページ参照
+- [Direct I/O](../io/direct-io.md) — ページキャッシュを完全に迂回する
+- [io_uringの操作](../io-uring/io-uring-ops.md) — `IORING_OP_SPLICE`
+- `fs/splice.c` — splice/sendfile/teeの実装
 - `include/linux/splice.h`

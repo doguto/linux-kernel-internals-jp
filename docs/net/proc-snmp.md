@@ -1,15 +1,15 @@
-# Understanding /proc/net/snmp and netstat {#understanding-procnetsnmp-and-netstat}
+# /proc/net/snmpとnetstatを理解する {#understanding-procnetsnmp-and-netstat}
 
-> Protocol-level counters for diagnosing TCP, UDP, and IP issues
+> TCP、UDP、IPの問題を診断するためのプロトコルレベルのカウンタ
 
 ## /proc/net/snmp {#procnetsnmp}
 
-`/proc/net/snmp` exposes MIB (Management Information Base) counters from the SNMP RFC. Each counter tells you about a specific protocol event at the IP, TCP, or UDP level.
+`/proc/net/snmp`は、SNMPのRFCに由来するMIB（Management Information Base）カウンタを公開する。各カウンタは、IP、TCP、UDPのいずれかのレベルにおける特定のプロトコルイベントについて教えてくれる。
 
 ```bash
 cat /proc/net/snmp
 # Ip: Forwarding DefaultTTL InReceives InHdrErrors ...
-# Ip: 2 64 1234567 0 ...        ← values
+# Ip: 2 64 1234567 0 ...        ← 値
 # Icmp: InMsgs InErrors InCsumErrors ...
 # Icmp: 123 0 0 ...
 # Tcp: RtoAlgorithm RtoMin RtoMax MaxConn ActiveOpens ...
@@ -18,38 +18,38 @@ cat /proc/net/snmp
 # Udp: 12345 0 0 23456 ...
 ```
 
-## Key IP counters {#key-ip-counters}
+## 主要なIPカウンタ {#key-ip-counters}
 
 ```bash
-# Extract IP stats
+# IPの統計を抽出
 awk '/^Ip:/ && /[0-9]/' /proc/net/snmp | head -1
 
-# Important fields:
-# InReceives       - packets received by IP layer
-# InHdrErrors      - IP header checksum errors
-# InAddrErrors     - destination address invalid (no such IP on this host)
-# ForwDatagrams    - packets forwarded (router only)
-# InDiscards       - dropped despite valid header (buffer pressure)
-# InDelivers       - packets delivered to transport layer
-# OutRequests      - packets originated locally
-# OutDiscards      - packets dropped due to send queue overflow
-# OutNoRoutes      - packets dropped because no route to destination
-# ReasmOKs         - fragments reassembled successfully
-# ReasmFails       - fragment reassembly failures
-# FragOKs          - fragmented outbound packets
-# FragFails        - fragmentation failures (DF bit set but MTU exceeded)
+# 重要なフィールド:
+# InReceives       - IP層が受信したパケット
+# InHdrErrors      - IPヘッダのチェックサムエラー
+# InAddrErrors     - 宛先アドレスが不正（このホストにそのIPがない）
+# ForwDatagrams    - 転送したパケット（ルーターのみ）
+# InDiscards       - ヘッダは正しいがドロップされた（バッファの逼迫）
+# InDelivers       - トランスポート層に配送したパケット
+# OutRequests      - ローカルで発生したパケット
+# OutDiscards      - 送信キューのオーバーフローでドロップしたパケット
+# OutNoRoutes      - 宛先へのルートがないためドロップしたパケット
+# ReasmOKs         - 再構築に成功したフラグメント
+# ReasmFails       - フラグメント再構築の失敗
+# FragOKs          - フラグメント化した送信パケット
+# FragFails        - フラグメント化の失敗（DFビットが立っているがMTUを超えた）
 ```
 
 ```bash
-# One-liner: show IP counters with labels
+# ワンライナー: IPカウンタをラベル付きで表示
 paste <(head -1 /proc/net/snmp | tr ' ' '\n') \
       <(sed -n '2p' /proc/net/snmp | tr ' ' '\n') | grep -v "^Ip"
 ```
 
-## Key TCP counters {#key-tcp-counters}
+## 主要なTCPカウンタ {#key-tcp-counters}
 
 ```bash
-# Extract TCP stats with labels (using python for clarity)
+# TCPの統計をラベル付きで抽出（わかりやすさのためpythonを使う）
 python3 -c "
 data = open('/proc/net/snmp').read()
 lines = [l.split() for l in data.split('\n') if l.startswith('Tcp')]
@@ -59,24 +59,24 @@ for k, v in zip(lines[0][1:], lines[1][1:]):
 "
 ```
 
-| Counter | What it means | Common cause |
+| カウンタ | 意味 | よくある原因 |
 |---------|---------------|--------------|
-| `ActiveOpens` | TCP connections initiated (connect()) | Normal outbound |
-| `PassiveOpens` | TCP connections accepted (accept()) | Normal inbound |
-| `AttemptFails` | Connections that failed during setup | Refused connections, SYN timeouts |
-| `EstabResets` | ESTABLISHED connections reset | Application crash, network issue |
-| `CurrEstab` | Currently established connections | Current load |
-| `InSegs` | Total segments received | Traffic volume |
-| `OutSegs` | Total segments sent | Traffic volume |
-| `RetransSegs` | Retransmitted segments | **Network quality issue** |
-| `InErrs` | Segments received with errors (bad checksum) | Hardware/NIC issue |
-| `OutRsts` | RST segments sent | Connection rejections |
-| `InCsumErrors` | Checksum errors | NIC offload bug, hardware issue |
+| `ActiveOpens` | 開始したTCP接続（connect()） | 通常の送信方向の接続 |
+| `PassiveOpens` | 受け付けたTCP接続（accept()） | 通常の受信方向の接続 |
+| `AttemptFails` | 確立処理中に失敗した接続 | 接続拒否、SYNのタイムアウト |
+| `EstabResets` | リセットされたESTABLISHED接続 | アプリケーションのクラッシュ、ネットワークの問題 |
+| `CurrEstab` | 現在確立している接続 | 現在の負荷 |
+| `InSegs` | 受信したセグメントの総数 | トラフィック量 |
+| `OutSegs` | 送信したセグメントの総数 | トラフィック量 |
+| `RetransSegs` | 再送したセグメント | **ネットワーク品質の問題** |
+| `InErrs` | エラー（不正なチェックサム）付きで受信したセグメント | ハードウェア/NICの問題 |
+| `OutRsts` | 送信したRSTセグメント | 接続の拒否 |
+| `InCsumErrors` | チェックサムエラー | NICオフロードのバグ、ハードウェアの問題 |
 
-A rising `RetransSegs/OutSegs` ratio (>1-2%) indicates network packet loss:
+`RetransSegs/OutSegs`の比率が上昇している（1〜2%超）なら、ネットワークでパケットロスが起きていることを示す:
 
 ```bash
-# Calculate retransmit ratio
+# 再送率を計算
 python3 -c "
 import re
 data = open('/proc/net/snmp').read()
@@ -89,52 +89,52 @@ print(f'OutSegs: {tcp[\"OutSegs\"]}')
 "
 ```
 
-## Key UDP counters {#key-udp-counters}
+## 主要なUDPカウンタ {#key-udp-counters}
 
-| Counter | What it means |
+| カウンタ | 意味 |
 |---------|---------------|
-| `InDatagrams` | UDP datagrams received and delivered |
-| `NoPorts` | Received UDP with no socket listening → ICMP port unreachable sent |
-| `InErrors` | Buffer overflow, checksum errors |
-| `OutDatagrams` | UDP datagrams sent |
-| `RcvbufErrors` | Dropped because socket receive buffer was full |
-| `SndbufErrors` | Dropped because socket send buffer was full |
+| `InDatagrams` | 受信して配送したUDPデータグラム |
+| `NoPorts` | listenしているソケットのないUDPを受信した → ICMP port unreachableを送信 |
+| `InErrors` | バッファオーバーフロー、チェックサムエラー |
+| `OutDatagrams` | 送信したUDPデータグラム |
+| `RcvbufErrors` | ソケットの受信バッファが満杯だったためドロップした |
+| `SndbufErrors` | ソケットの送信バッファが満杯だったためドロップした |
 
-High `NoPorts` means something is sending to UDP ports with no listener. High `RcvbufErrors` means applications aren't reading fast enough.
+`NoPorts`が大きいなら、何かがリスナーのいないUDPポートへ送信している。`RcvbufErrors`が大きいなら、アプリケーションの読み取りが追いついていない。
 
-## /proc/net/netstat: extended TCP stats {#procnetnetstat-extended-tcp-stats}
+## /proc/net/netstat: 拡張TCP統計 {#procnetnetstat-extended-tcp-stats}
 
-More detailed TCP counters (not in SNMP MIB):
+より詳細なTCPカウンタ（SNMP MIBには含まれない）:
 
 ```bash
 cat /proc/net/netstat
 # TcpExt: SyncookiesSent SyncookiesRecv SyncookiesFailed EmbryonicRsts ...
 ```
 
-Key `TcpExt` counters:
+主要な`TcpExt`カウンタ:
 
-| Counter | What it means |
+| カウンタ | 意味 |
 |---------|---------------|
-| `SyncookiesSent` | SYN cookies sent (SYN queue was full) |
-| `SyncookiesRecv` | Valid SYN cookie ACKs received |
-| `SyncookiesFailed` | SYN cookies that were invalid (possible attack) |
-| `EmbryonicRsts` | RSTs sent to SYN_RECV connections |
-| `ListenDrops` | Connections dropped because accept queue was full |
-| `ListenOverflows` | Accept queue overflow count |
-| `TCPHPHits` | Header prediction hits (fast path for established conns) |
-| `TCPPureAcks` | Pure ACKs received |
-| `TCPHPAcks` | ACKs processed via header prediction fast path |
-| `TCPRenoRecovery` | Reno-style loss recovery episodes |
-| `TCPSackRecovery` | SACK loss recovery episodes |
-| `TCPFastRetrans` | Fast retransmits triggered |
-| `TCPTimeouts` | RTO timeouts (slow recovery) |
-| `TCPLostRetransmit` | Retransmitted segments lost again |
-| `TCPDSACKOldSent` | Duplicate SACKs for old data |
-| `TCPAbortOnTimeout` | Connections aborted due to retry limit |
-| `TCPAbortOnData` | Connections aborted because data arrived on closing connection |
+| `SyncookiesSent` | 送信したSYN cookie（SYNキューが満杯だった） |
+| `SyncookiesRecv` | 受信した正当なSYN cookieのACK |
+| `SyncookiesFailed` | 不正だったSYN cookie（攻撃の可能性） |
+| `EmbryonicRsts` | SYN_RECV状態の接続に送信したRST |
+| `ListenDrops` | acceptキューが満杯だったためドロップした接続 |
+| `ListenOverflows` | acceptキューのオーバーフロー回数 |
+| `TCPHPHits` | ヘッダ予測のヒット（確立済み接続の高速パス） |
+| `TCPPureAcks` | 受信した純粋なACK |
+| `TCPHPAcks` | ヘッダ予測の高速パスで処理したACK |
+| `TCPRenoRecovery` | Reno方式のロス回復の回数 |
+| `TCPSackRecovery` | SACKによるロス回復の回数 |
+| `TCPFastRetrans` | 発生した高速再送 |
+| `TCPTimeouts` | RTOタイムアウト（遅い回復） |
+| `TCPLostRetransmit` | 再送したセグメントが再び失われた |
+| `TCPDSACKOldSent` | 古いデータに対する重複SACK |
+| `TCPAbortOnTimeout` | 再試行の上限によって中断された接続 |
+| `TCPAbortOnData` | クローズ中の接続にデータが到着したため中断された接続 |
 
 ```bash
-# Watch for TCP issues in real time
+# TCPの問題をリアルタイムで監視
 watch -n 2 'awk "/^TcpExt:/ && NR==2 {
     split(\$0, a, \" \"); for(i=1;i<=NF;i++) print a[i]
 }" /proc/net/netstat | paste - <(
@@ -143,68 +143,68 @@ awk "/^TcpExt:/ && NR==1 {
 }" /proc/net/netstat) | grep -v "^0"'
 ```
 
-## netstat (the tool) {#netstat-the-tool}
+## netstat（ツール） {#netstat-the-tool}
 
-`netstat` reads from `/proc/net/` and presents counters in a readable format:
+`netstat`は`/proc/net/`から読み取り、カウンタを読みやすい形式で表示する:
 
 ```bash
-# Protocol statistics (from /proc/net/snmp and /proc/net/netstat)
+# プロトコル統計（/proc/net/snmpと/proc/net/netstatから）
 netstat -s
 
-# Filter to TCP stats
+# TCPの統計に絞り込む
 netstat -s | grep -i -E "retransmit|error|fail|drop|reset"
 
-# Active connections
-netstat -tn          # like ss -tn
+# アクティブな接続
+netstat -tn          # ss -tnと同様
 
-# Listen sockets
+# listenソケット
 netstat -tnl
 ```
 
-`netstat` is deprecated in favor of `ss` for connection listing, but `netstat -s` remains useful for statistics.
+接続の一覧表示については`netstat`は非推奨で`ss`が推奨されるが、`netstat -s`は統計を見るのに引き続き有用である。
 
-## Diagnosing with counters: common issues {#diagnosing-with-counters-common-issues}
+## カウンタによる診断: よくある問題 {#diagnosing-with-counters-common-issues}
 
-### Packet loss {#packet-loss}
+### パケットロス {#packet-loss}
 
 ```bash
-# Rising RetransSegs indicates loss
+# RetransSegsの上昇はロスを示す
 watch -n 5 'cat /proc/net/snmp | grep ^Tcp | awk "NR==2 {print \"Retrans:\", \$13, \"OutSegs:\", \$12}"'
 
-# Also check NIC drops
+# NICのドロップも確認する
 ethtool -S eth0 | grep -i drop
 ```
 
-### Accept queue overflow {#accept-queue-overflow}
+### acceptキューのオーバーフロー {#accept-queue-overflow}
 
 ```bash
-# ListenOverflows: connections dropped because backlog was full
+# ListenOverflows: backlogが満杯だったためドロップした接続
 netstat -s | grep "listen"
-# If non-zero:
-#   increase listen() backlog: listen(fd, 4096)
-#   increase /proc/sys/net/core/somaxconn
+# 0でない場合:
+#   listen()のbacklogを増やす: listen(fd, 4096)
+#   /proc/sys/net/core/somaxconnを増やす
 ```
 
-### SYN flood detection {#syn-flood-detection}
+### SYNフラッドの検出 {#syn-flood-detection}
 
 ```bash
-# SyncookiesSent > 0 means SYN queue was full
+# SyncookiesSent > 0はSYNキューが満杯だったことを意味する
 netstat -s | grep "syncookies"
-# Or watch for large SYN-RECV count:
+# あるいはSYN-RECVの数が多くないかを監視する:
 ss -tn state syn-recv | wc -l
 ```
 
-### UDP buffer drops {#udp-buffer-drops}
+### UDPバッファのドロップ {#udp-buffer-drops}
 
 ```bash
-# RcvbufErrors: application not reading fast enough
+# RcvbufErrors: アプリケーションの読み取りが追いついていない
 netstat -s | grep "receive buffer"
-# Fix: increase socket buffer (SO_RCVBUF) or increase read frequency
+# 対処: ソケットバッファ（SO_RCVBUF）を増やすか、読み取り頻度を上げる
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Network Debugging with ss and ip](net-debugging.md) — Per-connection inspection
-- [Network Tracing](net-tracing.md) — Event-based debugging
-- [TCP Implementation](tcp.md) — What these counters measure internally
-- [Network Buffer Tuning](net-buffer-tuning.md) — Fixing buffer overflow issues
+- [ssとipによるネットワークのデバッグ](net-debugging.md) — 接続ごとの調査
+- [ネットワークのトレーシング](net-tracing.md) — イベントベースのデバッグ
+- [TCPの実装](tcp.md) — これらのカウンタが内部的に何を測っているか
+- [ネットワークバッファのチューニング](net-buffer-tuning.md) — バッファオーバーフロー問題の解決

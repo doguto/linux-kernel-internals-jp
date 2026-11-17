@@ -1,21 +1,21 @@
-# epoll Internals {#epoll-internals}
+# epollの内部 {#epoll-internals}
 
-> How epoll monitors thousands of file descriptors efficiently
+> epollが何千ものファイルディスクリプタをいかに効率よく監視するか
 
-## The problem with poll/select {#the-problem-with-pollselect}
+## poll/selectの問題点 {#the-problem-with-pollselect}
 
-`select()` and `poll()` require passing the entire set of monitored file descriptors on every call. For N fds:
+`select()`と`poll()`は、呼び出しのたびに監視対象のファイルディスクリプタの集合全体を渡す必要がある。N個のfdに対して:
 
-- Userspace → kernel copy: O(N)
-- Kernel scans all fds for readiness: O(N)
-- Kernel → userspace copy of ready fds: O(N)
-- Total per-call: O(N), even if only 1 fd is ready
+- ユーザー空間 → カーネルへのコピー: O(N)
+- カーネルがすべてのfdの準備状態を走査: O(N)
+- 準備完了したfdのカーネル → ユーザー空間へのコピー: O(N)
+- 1回の呼び出しの合計: 準備完了したfdが1つだけでもO(N)
 
-With 10,000 connections this is unacceptable.
+コネクションが10,000あれば、これは許容できない。
 
-## epoll: O(1) per event {#epoll-o1-per-event}
+## epoll: イベントあたりO(1) {#epoll-o1-per-event}
 
-epoll uses a **kernel-resident interest list** — registered once, no re-copying:
+epollは**カーネル内に常駐する関心リスト**を使う。一度登録すれば、再コピーは不要である:
 
 ```
 epoll workflow:
@@ -27,31 +27,31 @@ epoll workflow:
   epoll_wait returns → copy only ready events (O(ready), not O(N))
 ```
 
-## Creating an epoll instance {#creating-an-epoll-instance}
+## epollインスタンスの作成 {#creating-an-epoll-instance}
 
 ```c
 #include <sys/epoll.h>
 
-/* Create epoll instance */
+/* epoll インスタンスを作成 */
 int epfd = epoll_create1(EPOLL_CLOEXEC);
 
-/* Add a file descriptor */
+/* ファイルディスクリプタを追加 */
 struct epoll_event ev = {
     .events  = EPOLLIN | EPOLLERR | EPOLLHUP,
-    .data.fd = sock_fd,   /* or .data.ptr = &mydata */
+    .data.fd = sock_fd,   /* または .data.ptr = &mydata */
 };
 epoll_ctl(epfd, EPOLL_CTL_ADD, sock_fd, &ev);
 
-/* Modify */
+/* 変更 */
 ev.events = EPOLLIN | EPOLLOUT;
 epoll_ctl(epfd, EPOLL_CTL_MOD, sock_fd, &ev);
 
-/* Remove */
+/* 削除 */
 epoll_ctl(epfd, EPOLL_CTL_DEL, sock_fd, NULL);
 
-/* Wait: returns up to maxevents ready fds */
+/* 待機: 最大 maxevents 個の準備完了 fd を返す */
 struct epoll_event events[64];
-int n = epoll_wait(epfd, events, 64, -1);   /* -1 = no timeout */
+int n = epoll_wait(epfd, events, 64, -1);   /* -1 = タイムアウトなし */
 for (int i = 0; i < n; i++) {
     int fd = events[i].data.fd;
     if (events[i].events & EPOLLIN)
@@ -61,43 +61,43 @@ for (int i = 0; i < n; i++) {
 }
 ```
 
-## Level-triggered vs edge-triggered {#level-triggered-vs-edge-triggered}
+## レベルトリガーとエッジトリガー {#level-triggered-vs-edge-triggered}
 
-### Level-triggered (LT) — default {#level-triggered-lt-default}
+### レベルトリガー（LT）— デフォルト {#level-triggered-lt-default}
 
-`epoll_wait` returns as long as the fd is ready:
+`epoll_wait`は、fdが準備完了である限り返る:
 
 ```c
-/* LT: no flag needed, it's the default */
+/* LT: フラグは不要、これがデフォルト */
 ev.events = EPOLLIN;
 
-/* Behavior: */
-/* recv buffer has 100 bytes */
-/* epoll_wait returns fd=5 (EPOLLIN) */
-/* read only 50 bytes */
-/* epoll_wait returns fd=5 (EPOLLIN) again */
-/* read remaining 50 bytes */
-/* epoll_wait blocks (buffer empty) */
+/* 挙動: */
+/* 受信バッファに 100 バイトある */
+/* epoll_wait は fd=5 (EPOLLIN) を返す */
+/* 50 バイトだけ読む */
+/* epoll_wait は再び fd=5 (EPOLLIN) を返す */
+/* 残りの 50 バイトを読む */
+/* epoll_wait はブロックする（バッファが空） */
 ```
 
-Safe: even if you don't drain the buffer in one call, you'll get notified again.
+安全である: 1回の呼び出しでバッファを空にしなくても、再び通知される。
 
-### Edge-triggered (ET) {#edge-triggered-et}
+### エッジトリガー（ET） {#edge-triggered-et}
 
-`epoll_wait` returns only when the fd **transitions** from not-ready to ready:
+`epoll_wait`は、fdが準備未完了から準備完了へ**遷移**したときにだけ返る:
 
 ```c
 ev.events = EPOLLIN | EPOLLET;
 
-/* Behavior: */
-/* recv buffer has 100 bytes */
-/* epoll_wait returns fd=5 (EPOLLIN) — transition: empty → data */
-/* read only 50 bytes */
-/* epoll_wait does NOT return fd=5 again (still ready, no transition) */
-/* More data arrives: new transition → epoll_wait returns */
+/* 挙動: */
+/* 受信バッファに 100 バイトある */
+/* epoll_wait は fd=5 (EPOLLIN) を返す — 遷移: 空 → データあり */
+/* 50 バイトだけ読む */
+/* epoll_wait は fd=5 を再び返さない（まだ準備完了だが、遷移がない） */
+/* さらにデータが届く: 新たな遷移 → epoll_wait が返る */
 ```
 
-With EPOLLET you **must** read until `EAGAIN` in a non-blocking loop:
+EPOLLETを使う場合は、ノンブロッキングのループで`EAGAIN`になるまで読み続け**なければならない**:
 
 ```c
 void handle_read_et(int fd) {
@@ -111,7 +111,7 @@ void handle_read_et(int fd) {
             break;
         } else {
             if (errno == EAGAIN || errno == EWOULDBLOCK)
-                break;  /* all data read */
+                break;  /* すべてのデータを読んだ */
             if (errno == EINTR)
                 continue;
             handle_error(fd);
@@ -121,57 +121,57 @@ void handle_read_et(int fd) {
 }
 ```
 
-### EPOLLONESHOT: single notification {#epolloneshot-single-notification}
+### EPOLLONESHOT: 1回だけの通知 {#epolloneshot-single-notification}
 
-Receive one notification, then the fd is automatically disabled:
+通知を1回受け取ると、そのfdは自動的に無効化される:
 
 ```c
 ev.events = EPOLLIN | EPOLLONESHOT;
 epoll_ctl(epfd, EPOLL_CTL_ADD, fd, &ev);
 
-/* After one event, must re-arm to get more: */
-epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* re-enable */
+/* 1回のイベントの後、さらに受け取るには再設定が必要: */
+epoll_ctl(epfd, EPOLL_CTL_MOD, fd, &ev);  /* 再有効化 */
 ```
 
-Useful for multi-threaded epoll where only one thread should handle each event.
+各イベントを1つのスレッドだけが処理すべきマルチスレッドのepollで有用である。
 
-## Kernel data structures {#kernel-data-structures}
+## カーネルのデータ構造 {#kernel-data-structures}
 
 ### struct eventpoll {#struct-eventpoll}
 
 ```c
 /* fs/eventpoll.c */
 struct eventpoll {
-    /* Protects the access to this structure */
+    /* この構造体へのアクセスを保護する */
     spinlock_t        lock;
     struct mutex      mtx;
 
-    /* Wait queue used by sys_epoll_wait() */
+    /* sys_epoll_wait() が使う待ちキュー */
     wait_queue_head_t   wq;
 
-    /* Wait queue used by file->poll() */
+    /* file->poll() が使う待ちキュー */
     wait_queue_head_t   poll_wait;
 
-    /* List of ready file descriptors */
+    /* 準備完了したファイルディスクリプタのリスト */
     struct list_head    rdllist;
 
-    /* RB tree root used to store monitored fds */
+    /* 監視対象の fd を格納する RB ツリーのルート */
     struct rb_root_cached rbr;
 
-    /* This is a single linked list that chains all the "struct epitem"
-       that happened while transferring ready events to userspace */
+    /* 準備完了イベントをユーザー空間へ転送している間に発生した
+       すべての "struct epitem" をつなぐ単方向リンクリスト */
     struct epitem      *ovflist;
 
-    /* wakeup_source used when ep_scan_ready_list is running */
+    /* ep_scan_ready_list の実行中に使われる wakeup_source */
     struct wakeup_source *ws;
 
-    /* The user that created the eventpoll descriptor */
+    /* eventpoll ディスクリプタを作成したユーザー */
     struct user_struct *user;
 
-    /* The epoll file itself */
+    /* epoll ファイル自体 */
     struct file        *file;
 
-    /* Used to optimize the readiness check */
+    /* 準備状態チェックの最適化に使われる */
     int                napi_id;
     u64                gen;
     struct hlist_head  refs;
@@ -180,47 +180,47 @@ struct eventpoll {
 
 ### struct epitem {#struct-epitem}
 
-One `epitem` per monitored fd:
+監視対象のfdごとに1つの`epitem`がある:
 
 ```c
 struct epitem {
-    /* RB tree node used to link this structure to the eventpoll rb-tree */
+    /* この構造体を eventpoll の RB ツリーにつなぐためのノード */
     union {
         struct rb_node  rbn;
         struct rcu_head rcu;
     };
 
-    /* List header used to link this item to the eventpoll ready list */
+    /* この項目を eventpoll の準備完了リストにつなぐためのリストヘッダ */
     struct list_head    rdllink;
 
-    /* Works as temporary storage for the pointer when the
-       ovflist is used */
+    /* ovflist が使われるときに、ポインタの一時的な
+       格納場所として働く */
     struct epitem      *next;
 
-    /* The file descriptor information this item refers to */
-    struct epoll_filefd  ffd;   /* {file*, fd} pair */
+    /* この項目が参照するファイルディスクリプタの情報 */
+    struct epoll_filefd  ffd;   /* {file*, fd} の組 */
 
-    /* Number of active wait queue attached to poll operations */
+    /* poll 操作にアタッチされたアクティブな待ちキューの数 */
     int                 nwait;
 
-    /* List containing poll wait queues */
+    /* poll の待ちキューを含むリスト */
     struct list_head    pwqlist;
 
-    /* The "container" of this item */
+    /* この項目の「コンテナ」 */
     struct eventpoll   *ep;
 
-    /* List header used to link this item to the ep->items list */
+    /* この項目を ep->items リストにつなぐためのリストヘッダ */
     struct list_head    fllink;
 
-    /* epoll_event structure from epoll_ctl(EPOLL_CTL_ADD/MOD) */
+    /* epoll_ctl(EPOLL_CTL_ADD/MOD) からの epoll_event 構造体 */
     __poll_t            revents;
     struct epoll_event  event;
 };
 ```
 
-### ep_poll_callback: the critical wakeup path {#eppollcallback-the-critical-wakeup-path}
+### ep_poll_callback: 重要な起床パス {#ep_poll_callback-the-critical-wakeup-path}
 
-When a monitored fd becomes ready, this callback runs from the fd's wait queue:
+監視対象のfdが準備完了になると、このコールバックがfdの待ちキューから実行される:
 
 ```c
 /* fs/eventpoll.c */
@@ -235,18 +235,18 @@ static int ep_poll_callback(wait_queue_entry_t *wait, unsigned mode,
 
     spin_lock_irqsave(&ep->wq.lock, flags);
 
-    /* If the event we wait for is not here, try next one in the chain */
+    /* 待っているイベントがここになければ、チェイン内の次を試す */
     if (pollflags && !(pollflags & epi->event.events))
         goto out_unlock;
 
-    /* If this file is already in the ready list, we exit soon */
+    /* このファイルがすでに準備完了リストにあれば、すぐに抜ける */
     if (!ep_is_linked(epi)) {
         list_add_tail(&epi->rdllink, &ep->rdllist);
         ep_pm_stay_awake_rcu(epi);
     }
 
-    /* Wake up (if active) both the eventpoll wait list and the ->poll()
-       wait list. */
+    /* eventpoll の待ちリストと ->poll() の待ちリストの両方を
+       （アクティブであれば）起床させる。 */
     if (waitqueue_active(&ep->wq)) {
         if ((epi->event.events & EPOLLEXCLUSIVE) &&
             !(pollflags & POLLFREE)) {
@@ -268,7 +268,7 @@ out_unlock:
 }
 ```
 
-### epoll_ctl(ADD) kernel path {#epoll_ctladd-kernel-path}
+### epoll_ctl(ADD)のカーネルパス {#epoll_ctladd-kernel-path}
 
 ```c
 /* fs/eventpoll.c */
@@ -277,59 +277,59 @@ static int ep_insert(struct eventpoll *ep, const struct epoll_event *event,
 {
     struct epitem *epi;
 
-    /* Allocate the epitem structure */
+    /* epitem 構造体を割り当てる */
     epi = kmem_cache_zalloc(epi_cache, GFP_KERNEL);
 
-    /* Initialize the poll table using the queue callback */
+    /* キューコールバックを使って poll テーブルを初期化する */
     epq.epi = epi;
     init_poll_funcptr(&epq.pt, ep_ptable_queue_proc);
 
-    /* Attach to the file's wait queue via ->poll() */
+    /* ->poll() 経由でファイルの待ちキューにアタッチする */
     revents = ep_item_poll(epi, &epq.pt, 1);
-    /* This calls file->f_op->poll(file, &epq.pt) */
-    /* poll_wait() inside the driver's poll adds ep_ptable_queue_proc
-       as a wait queue callback */
+    /* これは file->f_op->poll(file, &epq.pt) を呼ぶ */
+    /* ドライバの poll 内の poll_wait() が ep_ptable_queue_proc を
+       待ちキューのコールバックとして追加する */
 
-    /* Insert into eventpoll's rb-tree */
+    /* eventpoll の RB ツリーに挿入する */
     ep_rbtree_insert(ep, epi);
 
-    /* If already ready, add to ready list immediately */
+    /* すでに準備完了なら、すぐに準備完了リストに追加する */
     if (revents & event->events) {
         list_add_tail(&epi->rdllink, &ep->rdllist);
-        /* Wake any epoll_wait that's sleeping */
+        /* スリープ中の epoll_wait を起床させる */
         wake_up(&ep->wq);
     }
 }
 ```
 
-## Thundering herd and EPOLLEXCLUSIVE {#thundering-herd-and-epollexclusive}
+## thundering herdとEPOLLEXCLUSIVE {#thundering-herd-and-epollexclusive}
 
-When many threads all `epoll_wait` on the same epfd and one event arrives, all threads wake up but only one handles it — **thundering herd**.
+多数のスレッドが同じepfdで`epoll_wait`しているときに1つのイベントが届くと、すべてのスレッドが起床するが、それを処理するのは1つだけである。これが**thundering herd**（群発的起床）である。
 
-`EPOLLEXCLUSIVE` (4.5+) prevents this: only one waiter is woken per event:
+`EPOLLEXCLUSIVE`（4.5以降）はこれを防ぐ。イベントごとに1つの待機者だけが起床する:
 
 ```c
-/* Server: one epfd per accept socket, multiple worker threads */
+/* サーバー: accept ソケットごとに1つの epfd、複数のワーカースレッド */
 ev.events = EPOLLIN | EPOLLEXCLUSIVE;
 epoll_ctl(shared_epfd, EPOLL_CTL_ADD, listen_fd, &ev);
 
-/* Only one of the N epoll_wait threads wakes per connection */
+/* コネクションごとに、N 個の epoll_wait スレッドのうち1つだけが起床する */
 ```
 
-Alternative: use separate epfds per thread, each with its own `accept()` thread on a `SO_REUSEPORT` socket:
+代替策: スレッドごとに別々のepfdを使い、それぞれが`SO_REUSEPORT`ソケット上で自身の`accept()`スレッドを持つようにする:
 
 ```c
-/* Per-thread accept: each thread has its own listening socket */
+/* スレッドごとの accept: 各スレッドが自身の listen ソケットを持つ */
 setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &(int){1}, sizeof(int));
-/* Kernel load-balances new connections across all SO_REUSEPORT sockets */
+/* カーネルは新しいコネクションをすべての SO_REUSEPORT ソケットに負荷分散する */
 ```
 
-## epoll with eventfd, signalfd, timerfd {#epoll-with-eventfd-signalfd-timerfd}
+## eventfd、signalfd、timerfdとepoll {#epoll-with-eventfd-signalfd-timerfd}
 
-epoll works with any fd that implements `->poll`:
+epollは`->poll`を実装する任意のfdで動作する:
 
 ```c
-/* Unified event loop: I/O + signals + timers + events */
+/* 統一されたイベントループ: I/O + シグナル + タイマー + イベント */
 epoll_ctl(epfd, EPOLL_CTL_ADD, sock_fd,   &ev_socket);
 epoll_ctl(epfd, EPOLL_CTL_ADD, signalfd,  &ev_signal);
 epoll_ctl(epfd, EPOLL_CTL_ADD, timerfd,   &ev_timer);
@@ -337,40 +337,40 @@ epoll_ctl(epfd, EPOLL_CTL_ADD, eventfd,   &ev_event);
 epoll_ctl(epfd, EPOLL_CTL_ADD, pipe_rfd,  &ev_pipe);
 ```
 
-All block on a single `epoll_wait`. No polling loop, no busy-waiting.
+すべてが単一の`epoll_wait`でブロックする。ポーリングループもビジーウェイトも不要である。
 
-## epoll limitations {#epoll-limitations}
+## epollの制限 {#epoll-limitations}
 
-- **Regular files**: always "ready" — cannot use epoll for disk file I/O (use io_uring)
-- **Directories**: not pollable
-- **No timeout per fd**: epoll_wait has one timeout for all
-- **Notification only**: epoll tells you a fd is ready but doesn't do the I/O (unlike io_uring)
+- **通常ファイル**: 常に「準備完了」である。ディスクファイルのI/Oにはepollを使えない（io_uringを使う）
+- **ディレクトリ**: poll可能ではない
+- **fdごとのタイムアウトがない**: epoll_waitのタイムアウトは全体で1つ
+- **通知のみ**: epollはfdが準備完了であることを伝えるだけで、I/Oそのものは行わない（io_uringとは異なる）
 
-## Observing epoll {#observing-epoll}
+## epollの観察 {#observing-epoll}
 
 ```bash
-# Count epoll instances per process
+# プロセスごとの epoll インスタンス数を数える
 ls -l /proc/<pid>/fd | grep eventpoll
 
-# See epoll fds in /proc
+# /proc で epoll の fd を見る
 cat /proc/<pid>/fdinfo/<epfd>
 # pos: 0
 # flags: 02
 # mnt_id: 9
 # tfd:   3 events: 19 data: 3000000003  pos:0 ino:7 stype:0x8001
 
-# Trace epoll_wait calls
+# epoll_wait の呼び出しをトレース
 strace -e epoll_wait,epoll_ctl nginx &
 
-# Perf: time spent in epoll_wait
+# perf: epoll_wait に費やした時間
 perf stat -e syscalls:sys_enter_epoll_wait nginx
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Socket Layer Overview](socket-layer.md) — socket poll() implementation
-- [eventfd and signalfd](../ipc/eventfd-signalfd.md) — epoll-compatible event fds
-- [POSIX Timers and timerfd](../time/posix-timers.md) — timerfd with epoll
-- [io_uring Architecture](../io-uring/io-uring-arch.md) — io_uring solves epoll's file I/O limitation
-- [Completions and Wait Queues](../locking/completions.md) — the wait_queue mechanism epoll uses
-- `fs/eventpoll.c` — complete epoll implementation
+- [ソケット層の概要](socket-layer.md) — ソケットのpoll()の実装
+- [eventfdとsignalfd](../ipc/eventfd-signalfd.md) — epollと互換性のあるイベントfd
+- [POSIXタイマーとtimerfd](../time/posix-timers.md) — epollとtimerfdの併用
+- [io_uringのアーキテクチャ](../io-uring/io-uring-arch.md) — io_uringはepollのファイルI/Oに関する制限を解決する
+- [completionと待ちキュー](../locking/completions.md) — epollが使う待ちキューの仕組み
+- `fs/eventpoll.c` — epollの完全な実装

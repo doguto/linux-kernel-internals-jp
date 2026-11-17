@@ -1,36 +1,36 @@
-# Dentry and Inode Caches {#dentry-and-inode-caches}
+# dentryキャッシュとinodeキャッシュ {#dentry-and-inode-caches}
 
-> How VFS caches filesystem lookups for performance
+> VFSが性能のためにファイルシステムの検索をどうキャッシュするか
 
-## Why three separate caches? {#why-three-separate-caches}
+## なぜ3つの別々のキャッシュなのか {#why-three-separate-caches}
 
-Linux maintains three distinct caches for filesystem data: the **dentry cache** (path lookups), the **inode cache** (file metadata), and the **page cache** (file contents). Understanding why they're separate — rather than one unified cache — explains many VFS design decisions.
+Linuxはファイルシステムのデータについて3つの別個のキャッシュを保持している。**dentryキャッシュ**（パス検索）、**inodeキャッシュ**（ファイルのメタデータ）、そして**ページキャッシュ**（ファイルの内容）である。これらが1つの統合されたキャッシュではなく別々になっている理由を理解すると、VFSの多くの設計判断が説明できる。
 
-### Different data, different access patterns {#different-data-different-access-patterns}
+### 異なるデータ、異なるアクセスパターン {#different-data-different-access-patterns}
 
-| Cache | What it stores | Typical size | Access pattern |
+| キャッシュ | 格納するもの | 典型的なサイズ | アクセスパターン |
 |-------|---------------|-------------|----------------|
-| dcache | `(parent_dir, name) → inode number` | ~200 bytes per entry | Every `open()`, `stat()`, `exec()` — extremely high frequency |
-| icache | Inode metadata (size, permissions, timestamps, block locations) | ~600 bytes per entry | Accessed when a file is open or its metadata is needed |
-| page cache | File contents (4KB pages) | Variable (up to GBs for a hot file) | Accessed on `read()`/`write()`/`mmap()` |
+| dcache | `(parent_dir, name) → inode number` | エントリあたり約200バイト | すべての`open()`、`stat()`、`exec()` — 極めて高頻度 |
+| icache | inodeのメタデータ（サイズ、パーミッション、タイムスタンプ、ブロック位置） | エントリあたり約600バイト | ファイルがオープンされているとき、またはそのメタデータが必要なときにアクセスされる |
+| ページキャッシュ | ファイルの内容（4KBのページ） | 可変（ホットなファイルでは最大数GB） | `read()`/`write()`/`mmap()`でアクセスされる |
 
-A `stat()` call needs dentry + inode but no page cache pages. A `read()` needs all three. An `ls -l` in a large directory needs many dentries and inodes but few or no page cache pages. Unifying the caches would require storing vastly different-sized objects in one structure, defeating slab allocation efficiency.
+`stat()`呼び出しはdentryとinodeを必要とするが、ページキャッシュのページは必要としない。`read()`は3つすべてを必要とする。大きなディレクトリでの`ls -l`は多数のdentryとinodeを必要とするが、ページキャッシュのページはほとんど、あるいはまったく必要としない。キャッシュを統合すると、サイズが大きく異なるオブジェクトを1つの構造に格納しなければならず、slab割り当ての効率性が損なわれる。
 
-### Why cache "file not found"? {#why-cache-file-not-found}
+### なぜ「ファイルが見つからない」をキャッシュするのか {#why-cache-file-not-found}
 
-The dcache stores **negative dentries**: entries where the lookup returned ENOENT. This seems wasteful — why cache a failure?
+dcacheは**negative dentry**、つまり検索がENOENTを返したエントリを格納する。これは無駄に思える。なぜ失敗をキャッシュするのか？
 
-Compilers generate negative lookups constantly. A C compiler searching for `<stdio.h>` tries each directory in the include path: `/usr/local/include/stdio.h`, `/usr/include/stdio.h`, etc. Without negative caching, each failed lookup would hit the filesystem. With it, the kernel returns ENOENT from the dcache without a disk read. On build servers compiling thousands of files, this is a significant win.
+コンパイラは絶えずnegativeな検索を発生させる。`<stdio.h>`を探すCコンパイラは、インクルードパス内の各ディレクトリを試す: `/usr/local/include/stdio.h`、`/usr/include/stdio.h`など。negativeキャッシュがなければ、失敗した検索のたびにファイルシステムへアクセスすることになる。negativeキャッシュがあれば、カーネルはディスクを読まずにdcacheからENOENTを返す。何千ものファイルをコンパイルするビルドサーバーでは、これは大きな効果がある。
 
-Negative dentries are evicted under memory pressure just like positive ones, and they're invalidated immediately when the file is created (`d_instantiate()` replaces the negative dentry).
+negative dentryは、positiveなものと同様にメモリ逼迫時に追い出され、ファイルが作成されると即座に無効化される（`d_instantiate()`がnegative dentryを置き換える）。
 
-### Why caches are essential {#why-caches-are-essential}
+### なぜキャッシュが不可欠なのか {#why-caches-are-essential}
 
-Without caching, every path component lookup would require a disk read to find the directory entry. On a system doing thousands of `open()` calls per second, that would be catastrophically slow. VFS caches path lookups in the **dentry cache (dcache)** and stores open inodes in the **inode cache (icache)**.
+キャッシュがなければ、パスの構成要素を検索するたびに、ディレクトリエントリを見つけるためのディスク読み込みが必要になる。毎秒何千回も`open()`を呼ぶシステムでは、それは壊滅的に遅くなる。VFSはパス検索を**dentryキャッシュ（dcache）**にキャッシュし、オープンされたinodeを**inodeキャッシュ（icache）**に格納する。
 
-## The dentry cache (dcache) {#the-dentry-cache-dcache}
+## dentryキャッシュ（dcache） {#the-dentry-cache-dcache}
 
-The dcache is a hash table mapping `(parent_dentry, name) → dentry`. Once a path component is looked up, its dentry is cached so subsequent lookups skip the filesystem:
+dcacheは`(parent_dentry, name) → dentry`を対応付けるハッシュテーブルである。パスの構成要素が一度検索されると、そのdentryがキャッシュされ、以降の検索ではファイルシステムを経由しなくて済む:
 
 ```
 First lookup of "/usr/bin/bash":
@@ -46,7 +46,7 @@ Second lookup of "/usr/bin/bash":
   "bash" → hit (entire path resolved from cache, no disk I/O)
 ```
 
-### Dentry states {#dentry-states}
+### dentryの状態 {#dentry-states}
 
 ```
 In-use (d_lockref.count > 0):
@@ -62,67 +62,67 @@ Negative (d_inode == NULL):
   Avoids repeated filesystem lookups for non-existent files.
 ```
 
-### dcache operations {#dcache-operations}
+### dcacheの操作 {#dcache-operations}
 
-Linux 2.6.38 added an RCU-based lock-free fast path for dcache lookups, contributed by Nick Piggin [(LWN)](https://lwn.net/Articles/419811/). Most path lookups now complete without acquiring any lock or modifying any reference count; a seqlock on each dentry detects concurrent modifications and triggers a fallback to the slower reference-counted walk only when needed.
+Linux 2.6.38で、Nick Pigginの貢献により、dcache検索のためのRCUベースのロックフリーな高速パスが追加された[(LWN)](https://lwn.net/Articles/419811/)。現在では、ほとんどのパス検索はロックを一切取得せず、参照カウントも一切変更せずに完了する。各dentryのseqlockが並行する変更を検出し、必要な場合にのみ、より低速な参照カウント付きの走査へのフォールバックを引き起こす。
 
 ```c
-/* Look up in dcache (RCU, lock-free fast path; introduced in Linux 2.6.38 by Nick Piggin) */
+/* dcacheを検索する（RCU、ロックフリーの高速パス。Linux 2.6.38でNick Pigginが導入） */
 struct dentry *__d_lookup_rcu(const struct dentry *parent,
                                const struct qstr *name, unsigned *seqp);
 
-/* Full lookup with reference */
+/* 参照を取る完全な検索 */
 struct dentry *d_lookup(const struct dentry *parent, const struct qstr *name);
 
-/* Add a new dentry to the cache */
+/* 新しいdentryをキャッシュに追加する */
 void d_add(struct dentry *entry, struct inode *inode);
 
-/* Mark a dentry as unused (release reference) */
+/* dentryを未使用にする（参照を解放する） */
 dput(dentry);
 
-/* Invalidate and remove from cache */
+/* 無効化してキャッシュから削除する */
 d_invalidate(dentry);
 
-/* Check if a dentry is a mountpoint */
+/* dentryがマウントポイントか確認する */
 d_mountpoint(dentry);
 ```
 
-### dcache size and statistics {#dcache-size-and-statistics}
+### dcacheのサイズと統計 {#dcache-size-and-statistics}
 
 ```bash
-# Current dcache size
+# 現在のdcacheのサイズ
 cat /proc/sys/fs/dentry-state
 # 234567 198765 45 0 0 0
 # nr_dentry nr_unused age_limit want_pages nr_negative nr_unused
 
-# Memory used by dcache
+# dcacheが使用しているメモリ
 cat /proc/slabinfo | grep dentry
 # dentry  198765  198765   192  21  1 : tunables  0  0  0 : slabdata  9465  9465  0
 
-# Tune dcache: keep more entries (default: auto-sized)
-echo 1000000 > /proc/sys/fs/dentry-state  # not directly writable; tuned via vfs_cache_pressure
+# dcacheのチューニング: より多くのエントリを保持する（デフォルト: 自動サイズ調整）
+echo 1000000 > /proc/sys/fs/dentry-state  # 直接は書き込めない。vfs_cache_pressureで調整する
 ```
 
-### vfs_cache_pressure {#vfscachepressure}
+### vfs_cache_pressure {#vfs_cache_pressure}
 
-Controls how aggressively the kernel reclaims dcache and icache under memory pressure:
+メモリ逼迫時に、カーネルがdcacheとicacheをどれだけ積極的に回収するかを制御する:
 
 ```bash
-# Default: 100 (balanced)
+# デフォルト: 100（バランス）
 cat /proc/sys/vm/vfs_cache_pressure
 
-# Higher: more aggressive reclaim (lower memory usage, more cache misses)
+# 高くする: より積極的に回収する（メモリ使用量は減り、キャッシュミスは増える）
 echo 200 > /proc/sys/vm/vfs_cache_pressure
 
-# Lower: keep more entries (faster lookups, more memory used)
+# 低くする: より多くのエントリを保持する（検索は速くなり、メモリ使用量は増える）
 echo 50 > /proc/sys/vm/vfs_cache_pressure
 ```
 
-## The inode cache (icache) {#the-inode-cache-icache}
+## inodeキャッシュ（icache） {#the-inode-cache-icache}
 
-When a dentry's inode is loaded from disk (or created), it's stored in the inode cache. The inode stays in cache as long as it's referenced (either by a dentry or an open file).
+dentryのinodeがディスクからロードされる（または作成される）と、inodeキャッシュに格納される。inodeは、参照されている限り（dentryまたはオープンされたファイルによって）キャッシュに残る。
 
-### Inode states {#inode-states}
+### inodeの状態 {#inode-states}
 
 ```
 In-use: referenced by at least one dentry or open file
@@ -135,96 +135,96 @@ Unreferenced: no dentries, no open files
   On the inode LRU list, eligible for eviction
 ```
 
-### Inode lifecycle {#inode-lifecycle}
+### inodeのライフサイクル {#inode-lifecycle}
 
 ```c
-/* Allocate a new inode (called by filesystem) */
+/* 新しいinodeを割り当てる（ファイルシステムから呼ばれる） */
 struct inode *new_inode(struct super_block *sb)
 {
     struct inode *inode = alloc_inode(sb);
-    /* sb->s_op->alloc_inode() called if defined */
+    /* 定義されていればsb->s_op->alloc_inode()が呼ばれる */
     inode->i_sb = sb;
     inode_init_always(sb, inode);
     return inode;
 }
 
-/* Get an existing inode (or create if not in cache) */
+/* 既存のinodeを取得する（キャッシュになければ作成する） */
 struct inode *iget_locked(struct super_block *sb, unsigned long ino)
 {
-    /* Hash lookup by (sb, ino) */
+    /* (sb, ino)によるハッシュ検索 */
     inode = find_inode(sb, ino);
     if (inode)
-        return inode;  /* cache hit */
+        return inode;  /* キャッシュヒット */
 
-    /* Cache miss: allocate and mark I_NEW */
+    /* キャッシュミス: 割り当ててI_NEWをマークする */
     inode = alloc_inode(sb);
     insert_inode_hash(inode);
-    /* Caller must fill in inode fields and call unlock_new_inode() */
+    /* 呼び出し元はinodeのフィールドを埋めてunlock_new_inode()を呼ばなければならない */
     return inode;
 }
 
-/* Release inode reference */
+/* inodeの参照を解放する */
 iput(inode)
     → if (--i_count == 0) {
-        /* No more references: call evict_inode */
+        /* 参照がなくなった: evict_inodeを呼ぶ */
         if (inode->i_nlink == 0)
-            sb->s_op->evict_inode(inode);  /* delete from filesystem */
-        /* If nlink > 0: move to LRU for potential reclaim */
+            sb->s_op->evict_inode(inode);  /* ファイルシステムから削除する */
+        /* nlink > 0の場合: 回収候補としてLRUへ移動する */
     }
 ```
 
-### Eviction {#eviction}
+### 追い出し {#eviction}
 
-When memory is low, the kernel calls `prune_icache()` to free unused inodes:
+メモリが少なくなると、カーネルは`prune_icache()`を呼び出して未使用のinodeを解放する:
 
 ```c
-/* Called by the shrinker */
+/* shrinkerから呼ばれる */
 static long super_cache_scan(struct shrinker *shrink,
                               struct shrink_control *sc)
 {
     struct super_block *sb = shrink->private_data;
-    /* Evict unused dentries and inodes */
+    /* 未使用のdentryとinodeを追い出す */
     prune_dcache_sb(sb, sc);
     prune_icache_sb(sb, sc);
 }
 ```
 
-Before an inode is freed, `evict_inode()` is called. For ext4, this writes back dirty data and releases journal resources.
+inodeが解放される前に、`evict_inode()`が呼ばれる。ext4の場合、これはダーティデータを書き戻し、ジャーナルのリソースを解放する。
 
-## Cache statistics {#cache-statistics}
+## キャッシュの統計 {#cache-statistics}
 
 ```bash
-# Slab allocator stats (incl. dentry and inode caches)
+# slabアロケータの統計（dentryキャッシュとinodeキャッシュを含む）
 cat /proc/slabinfo | grep -E "^dentry|^inode_cache|ext4_inode"
 
-# Total slab memory breakdown
+# slabメモリ全体の内訳
 cat /proc/meminfo | grep -E "Slab|SReclaimable|SUnreclaim"
 # Slab:           2345678 kB
-# SReclaimable:   1234567 kB  ← can be reclaimed under pressure (dcache, icache)
-# SUnreclaim:     1111111 kB  ← cannot be reclaimed
+# SReclaimable:   1234567 kB  ← 逼迫時に回収可能（dcache、icache）
+# SUnreclaim:     1111111 kB  ← 回収不可能
 
-# How much dcache/icache is actually using:
+# dcache/icacheが実際にどれだけ使っているか:
 vmstat -m | grep -E "dentry|inode"
 ```
 
-## Forcing cache drop (for testing) {#forcing-cache-drop-for-testing}
+## キャッシュの強制破棄（テスト用） {#forcing-cache-drop-for-testing}
 
 ```bash
-# Drop all caches (pagecache + dcache + icache) — don't use in production
+# すべてのキャッシュを破棄する（pagecache + dcache + icache） — 本番環境では使わないこと
 echo 3 > /proc/sys/vm/drop_caches
 
-# Only drop dentries and inodes
+# dentryとinodeだけを破棄する
 echo 2 > /proc/sys/vm/drop_caches
 
-# Only drop pagecache
+# pagecacheだけを破棄する
 echo 1 > /proc/sys/vm/drop_caches
 ```
 
-This is useful for benchmarking to ensure you're measuring cold-cache performance. It doesn't free any dirty pages (they would be flushed first anyway).
+これは、コールドキャッシュの性能を確実に測定するためのベンチマークに役立つ。ダーティページは一切解放しない（いずれにせよ先にフラッシュされる）。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — What dentries and inodes are
-- [Path Resolution](namei.md) — How the dcache is used during lookup
-- [Page Cache](../mm/page-cache.md) — The analogous cache for file data
-- [Shrinker API](../mm/shrinker.md) — How caches register with the memory reclaim system
+- [VFSオブジェクト](vfs-objects.md) — dentryとinodeとは何か
+- [パス解決](namei.md) — 検索中にdcacheがどう使われるか
+- [ページキャッシュ](../mm/page-cache.md) — ファイルデータのための類似のキャッシュ
+- [Shrinker API](../mm/shrinker.md) — キャッシュがメモリ回収システムにどう登録されるか

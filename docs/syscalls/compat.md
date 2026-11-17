@@ -18,7 +18,7 @@ syscalls like `read()`, the difference is minor. For syscalls that pass structs 
 embedded pointers (like `sendmsg()`, `stat()`, `select()`), the kernel needs entirely separate handlers to
 translate the 32-bit layout into the kernel's internal representation.
 
-## The COMPAT_SYSCALL_DEFINE macro {#the-compatsyscalldefine-macro}
+## The COMPAT_SYSCALL_DEFINE macro {#the-compat_syscall_define-macro}
 
 Compat syscall handlers are defined with `COMPAT_SYSCALL_DEFINE`, which lives in `include/linux/compat.h`:
 
@@ -100,7 +100,7 @@ struct old_timespec32 {
 `old_timespec32` aligns at 4 bytes rather than 8, matching the layout a 32-bit compiler would produce.
 This is the fundamental reason 32-bit `clock_gettime()` cannot share the 64-bit handler.
 
-## compat_ptr() and ptr_to_compat() {#compatptr-and-ptrto_compat}
+## compat_ptr() and ptr_to_compat() {#compat_ptr-and-ptr_to_compat}
 
 `compat_ptr()` converts a `compat_uptr_t` (u32) into a kernel `void __user *` by zero-extending:
 
@@ -124,7 +124,7 @@ static inline compat_uptr_t ptr_to_compat(void __user *uptr)
 }
 ```
 
-## in_compat_syscall() {#incompatsyscall}
+## in_compat_syscall() {#in_compat_syscall}
 
 Code that needs to behave differently for 32-bit callers (e.g., to pick the right struct size) uses
 `in_compat_syscall()`. On x86, it isn't a single check but a three-level chain down to a per-syscall status
@@ -163,7 +163,7 @@ static inline bool in_compat_syscall(void)
 the VFS and networking stack so that a single in-kernel code path can serve both 32-bit and 64-bit callers
 where only minor differences exist.
 
-## Struct layout differences: compat_iovec and compat_stat {#struct-layout-differences-compatiovec-and-compatstat}
+## Struct layout differences: compat_iovec and compat_stat {#struct-layout-differences-compat_iovec-and-compat_stat}
 
 ### compat_iovec {#compat_iovec}
 
@@ -275,14 +275,14 @@ static long my_compat_ioctl(struct file *file, unsigned int cmd,
 }
 ```
 
-## Practical example: compat_sys_read vs sys_read {#practical-example-compatsysread-vs-sys_read}
+## Practical example: compat_sys_read vs sys_read {#practical-example-compat_sys_read-vs-sys_read}
 
 `read()` only passes a 32-bit pointer and a 32-bit count. On x86-64, the kernel handles this transparently:
 `ia32_sys_call()`'s `read` case dispatches straight to the native `sys_read` handler, because `compat_ptr()` of the
 32-bit buffer address produces the correct 64-bit user pointer, and `compat_size_t` (u32) fits in `size_t`.
 No separate compat handler is needed.
 
-## Practical example: compat_sys_sendmsg vs sys_sendmsg {#practical-example-compatsyssendmsg-vs-sys_sendmsg}
+## Practical example: compat_sys_sendmsg vs sys_sendmsg {#practical-example-compat_sys_sendmsg-vs-sys_sendmsg}
 
 `sendmsg()` passes `struct msghdr __user *`, which contains an embedded `struct iovec __user *` and a
 `void __user *` for the control message. Because both are pointers, they differ in size between 32-bit and
@@ -327,7 +327,7 @@ file /proc/$(pidof myapp)/exe
 Inside the kernel, `task_pt_regs(task)->cs` is compared to `__USER32_CS` to determine the execution mode of
 a traced task.
 
-## The old compat_alloc_user_space() pattern — removed in Linux 5.15 {#the-old-compatallocuser_space-pattern-removed-in-linux-515}
+## The old compat_alloc_user_space() pattern — removed in Linux 5.15 {#the-old-compat_alloc_user_space-pattern-removed-in-linux-515}
 
 Older compat handlers used a different strategy from the shared-helper pattern above: build a native-layout
 struct in a scratch region carved out below the user's own stack pointer, then call the *native* syscall

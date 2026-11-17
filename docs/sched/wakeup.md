@@ -1,42 +1,42 @@
-# What Happens When a Process Wakes Up {#what-happens-when-a-process-wakes-up}
+# プロセスが起床するときに何が起きるか {#what-happens-when-a-process-wakes-up}
 
-> From `wake_up_process()` to running on a CPU
+> `wake_up_process()`からCPU上での実行まで
 
-## Overview {#overview}
+## 概要 {#overview}
 
-A process wakes up when something it was waiting for becomes available — a lock is released, data arrives on a socket, a timer fires, or a signal is delivered. The wakeup path must transition the task from sleeping to runnable, place it on the right CPU, and potentially preempt whatever is currently running there.
+プロセスが起床するのは、待っていたものが利用可能になったとき — ロックが解放された、ソケットにデータが届いた、タイマーが発火した、シグナルが配送された — である。起床パスは、タスクをスリープ状態から実行可能状態へ遷移させ、適切なCPUに配置し、場合によってはそのCPUで現在実行中のものをプリエンプトしなければならない。
 
 ```mermaid
 flowchart TB
-    A["Event occurs<br/>(I/O complete, lock release, timer)"]
-    B["wake_up_process(p)<br/>or wake_up_interruptible()"]
+    A["イベント発生<br/>（I/O完了、ロック解放、タイマー）"]
+    B["wake_up_process(p)<br/>または wake_up_interruptible()"]
     C["try_to_wake_up(p, state, flags)"]
-    D["select_task_rq(p)<br/>Pick target CPU"]
+    D["select_task_rq(p)<br/>ターゲットCPUを選ぶ"]
     E["ttwu_queue(p, cpu, flags)"]
-    F["activate_task()<br/>enqueue_task() via sched class"]
-    G["wakeup_preempt()<br/>Should we preempt current?"]
-    H["TIF_NEED_RESCHED set<br/>on target CPU"]
-    I["Task runs at next<br/>scheduling point"]
+    F["activate_task()<br/>schedクラス経由でenqueue_task()"]
+    G["wakeup_preempt()<br/>currentをプリエンプトすべきか？"]
+    H["ターゲットCPUに<br/>TIF_NEED_RESCHEDをセット"]
+    I["次のスケジューリング<br/>ポイントでタスクが実行される"]
 
     A --> B --> C --> D --> E --> F --> G --> H --> I
 ```
 
-## Task states {#task-states}
+## タスクの状態 {#task-states}
 
-Before diving in, the relevant sleeping states:
+詳しく見る前に、関係するスリープ状態を確認しておく:
 
 ```c
 // include/linux/sched.h
-#define TASK_INTERRUPTIBLE      0x00000001  // can be woken by signals
-#define TASK_UNINTERRUPTIBLE    0x00000002  // only explicit wakeup
-#define TASK_WAKING             0x00000200  // being woken right now
+#define TASK_INTERRUPTIBLE      0x00000001  // シグナルで起床可能
+#define TASK_UNINTERRUPTIBLE    0x00000002  // 明示的な起床のみ
+#define TASK_WAKING             0x00000200  // まさに起床処理中
 ```
 
-`TASK_INTERRUPTIBLE` is the most common sleep state — used when waiting for I/O, locks, or events that might never come (so signals should be able to abort the wait). `TASK_UNINTERRUPTIBLE` is for waits that must complete — disk I/O in progress, kernel critical sections. This is the "D" state in `ps` output.
+`TASK_INTERRUPTIBLE`は最も一般的なスリープ状態であり、I/O、ロック、あるいは永遠に来ないかもしれないイベント（だからシグナルで待機を中断できるべき）を待つときに使われる。`TASK_UNINTERRUPTIBLE`は、完了しなければならない待機 — 進行中のディスクI/O、カーネルのクリティカルセクション — のためのものである。これは`ps`の出力における「D」状態である。
 
-`wake_up_process()` uses `TASK_NORMAL = TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE` and will wake either.
+`wake_up_process()`は`TASK_NORMAL = TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE`を使い、どちらの状態も起床させる。
 
-## Entry: wake_up_process() {#entry-wakeupprocess}
+## 入口: wake_up_process() {#entry-wake_up_process}
 
 ```c
 // kernel/sched/core.c
@@ -46,18 +46,18 @@ int wake_up_process(struct task_struct *p)
 }
 ```
 
-The kernel has several `wake_up_*` variants depending on which sleep states to wake:
+カーネルには、どのスリープ状態を起床させるかに応じて、いくつかの`wake_up_*`の変種がある:
 
-| Function | Wakes |
+| 関数 | 起床させる対象 |
 |----------|-------|
 | `wake_up_process(p)` | `TASK_INTERRUPTIBLE \| TASK_UNINTERRUPTIBLE` |
-| `wake_up_interruptible(x)` | `TASK_INTERRUPTIBLE` only |
-| `wake_up(x)` | `TASK_NORMAL` (via wait queue) |
-| `wake_up_all(x)` | All tasks on a wait queue |
+| `wake_up_interruptible(x)` | `TASK_INTERRUPTIBLE`のみ |
+| `wake_up(x)` | `TASK_NORMAL`（待ちキュー経由） |
+| `wake_up_all(x)` | 待ちキュー上のすべてのタスク |
 
-## try_to_wake_up() {#trytowake_up}
+## try_to_wake_up() {#try_to_wake_up}
 
-The core wakeup function:
+起床処理の中核となる関数:
 
 ```c
 // kernel/sched/core.c
@@ -65,7 +65,7 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
 {
     wake_flags |= WF_TTWU;
 
-    // Fast path: waking ourselves (rare but valid)
+    // 高速パス: 自分自身を起床させる（まれだが正当）
     if (p == current) {
         if (!(READ_ONCE(p->__state) & state))
             return 0;
@@ -73,33 +73,33 @@ int try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags)
         return 1;
     }
 
-    // Acquire p->pi_lock to serialize with other wakers
+    // 他の起床者と直列化するためにp->pi_lockを獲得する
     raw_spin_lock_irqsave(&p->pi_lock, flags);
 
-    // Check if the task is actually in a wakeable state
+    // タスクが本当に起床可能な状態にあるかを確認する
     if (!(READ_ONCE(p->__state) & state))
         goto unlock;
 
     trace_sched_waking(p);
 
-    // Mark transitioning: prevents signal-based double wakeup
+    // 遷移中であることを示す: シグナルによる二重起床を防ぐ
     WRITE_ONCE(p->__state, TASK_WAKING);
 
-    // If already on a runqueue, just fix up preemption
+    // すでにランキュー上にあるなら、プリエンプションの調整だけ行う
     if (READ_ONCE(p->on_rq)) {
         ttwu_runnable(p, wake_flags);
         goto unlock;
     }
 
-    // Wait for task to be fully off the CPU it was running on
-    smp_cond_load_acquire(&p->on_cpu, !VAL);  // spin until on_cpu == 0
+    // タスクがそれまで実行されていたCPUから完全に降りるのを待つ
+    smp_cond_load_acquire(&p->on_cpu, !VAL);  // on_cpu == 0になるまでスピン
 
-    // Select target CPU
+    // ターゲットCPUを選ぶ
     cpu = select_task_rq(p, p->wake_cpu, &wake_flags);
     if (task_cpu(p) != cpu)
         set_task_cpu(p, cpu);
 
-    // Enqueue on target CPU
+    // ターゲットCPUにエンキューする
     ttwu_queue(p, cpu, wake_flags);
 
 unlock:
@@ -109,17 +109,17 @@ unlock:
 }
 ```
 
-### The on_cpu spin {#the-on_cpu-spin}
+### on_cpuでのスピン {#the-on_cpu-spin}
 
 ```c
 smp_cond_load_acquire(&p->on_cpu, !VAL);
 ```
 
-If the task is still executing on another CPU (in the middle of `__schedule()` or running), `smp_cond_load_acquire` spins until `p->on_cpu` becomes 0. `finish_task_switch()` clears it with `smp_store_release()` after the task is fully off the CPU. This prevents placing the task on a new runqueue while it's still executing somewhere.
+タスクがまだ別のCPU上で実行中（`__schedule()`の途中、あるいは実行中）である場合、`smp_cond_load_acquire`は`p->on_cpu`が0になるまでスピンする。`finish_task_switch()`は、タスクがCPUから完全に降りた後に`smp_store_release()`でこれをクリアする。これにより、タスクがまだどこかで実行中であるうちに新しいランキューへ置かれることを防ぐ。
 
-## CPU selection: select_task_rq() {#cpu-selection-selecttaskrq}
+## CPUの選択: select_task_rq() {#cpu-selection-select_task_rq}
 
-The scheduler must decide which CPU to place the woken task on. For `SCHED_NORMAL` tasks, `select_task_rq_fair()` makes this decision:
+スケジューラは、起床したタスクをどのCPUに配置するかを決めなければならない。`SCHED_NORMAL`タスクについては、`select_task_rq_fair()`がこの判断を行う:
 
 ```c
 // kernel/sched/core.c
@@ -134,22 +134,22 @@ int select_task_rq(struct task_struct *p, int cpu, int wake_flags)
 }
 ```
 
-`select_task_rq_fair()` considers several factors:
+`select_task_rq_fair()`はいくつかの要素を考慮する:
 
-**Wake affinity**: If the waker and wakee communicate frequently, placing the wakee near the waker improves cache locality. This is especially effective when the waker calls `wake_up()` and then blocks — the wakee can reuse the waker's cache contents.
+**起床アフィニティ（wake affinity）**: 起床させる側（waker）と起床させられる側（wakee）が頻繁に通信する場合、wakeeをwakerの近くに置くとキャッシュローカリティが向上する。これは、wakerが`wake_up()`を呼んだ直後にブロックする場合に特に効果的である — wakeeはwakerのキャッシュ内容を再利用できる。
 
-**Load balancing**: The selected CPU should be idle or lightly loaded. The function walks scheduling domains (SMT → LLC → NUMA node → system) looking for a suitable CPU.
+**負荷分散**: 選ばれるCPUはアイドルか、負荷の軽いものであるべきである。この関数はスケジューリングドメイン（SMT → LLC → NUMAノード → システム）をたどって適切なCPUを探す。
 
-**The `WF_SYNC` flag**: Set when the waking task is about to block immediately after the wakeup (e.g., a producer sending to a consumer). In this case, the wakee might be placed on the waker's CPU since the waker is vacating it.
+**`WF_SYNC`フラグ**: 起床させるタスクが起床処理の直後にブロックしようとしている場合（例: プロデューサがコンシューマへ送信する場合）にセットされる。この場合、wakerがCPUを空けるので、wakeeはwakerのCPUに配置されることがある。
 
 ```c
 // kernel/sched/sched.h
-#define WF_SYNC         0x10  // waker goes to sleep after wakeup
-#define WF_FORK         0x02  // new task (fork)
-#define WF_MIGRATED     0x20  // task was migrated to new CPU
+#define WF_SYNC         0x10  // wakerは起床処理の後にスリープする
+#define WF_FORK         0x02  // 新しいタスク（fork）
+#define WF_MIGRATED     0x20  // タスクは新しいCPUへマイグレーションされた
 ```
 
-## Enqueuing: ttwu_queue() and activate_task() {#enqueuing-ttwuqueue-and-activatetask}
+## エンキュー: ttwu_queue()とactivate_task() {#enqueuing-ttwu_queue-and-activate_task}
 
 ```c
 // kernel/sched/core.c
@@ -168,22 +168,22 @@ static void ttwu_do_activate(struct rq *rq, struct task_struct *p,
 {
     int en_flags = ENQUEUE_WAKEUP | ENQUEUE_NOCLOCK;
 
-    // Activate (enqueue into sched class data structures)
+    // アクティブ化する（schedクラスのデータ構造にエンキューする）
     activate_task(rq, p, en_flags);
 
-    // Check if newly runnable task should preempt current
+    // 新たに実行可能になったタスクがcurrentをプリエンプトすべきかを確認する
     wakeup_preempt(rq, p, wake_flags);
 
-    // Mark as runnable
-    ttwu_do_wakeup(p);   // sets p->__state = TASK_RUNNING
+    // 実行可能としてマークする
+    ttwu_do_wakeup(p);   // p->__state = TASK_RUNNINGに設定する
 }
 ```
 
-`activate_task()` calls `p->sched_class->enqueue_task()`. For fair tasks this puts the task into the CFS RB-tree with a vruntime adjusted for how long it slept (via `place_entity()`).
+`activate_task()`は`p->sched_class->enqueue_task()`を呼ぶ。fairタスクの場合、これはスリープしていた時間に応じて（`place_entity()`によって）調整されたvruntimeでタスクをCFSのRBツリーに入れる。
 
-### Vruntime placement on wakeup {#vruntime-placement-on-wakeup}
+### 起床時のvruntimeの配置 {#vruntime-placement-on-wakeup}
 
-A task that slept for a long time has a stale (low) vruntime. If it returned to the RB-tree at that old vruntime, it could monopolize the CPU catching up. Instead, `place_entity()` places the waking task at approximately `avg_vruntime - half_slice`:
+長時間スリープしていたタスクは、古い（低い）vruntimeを持っている。その古いvruntimeのままRBツリーに戻ると、追いつくまでCPUを独占してしまいかねない。そこで`place_entity()`は、起床したタスクをおおよそ`avg_vruntime - half_slice`の位置に配置する:
 
 ```
 Before sleep:  [A: vr=100] [B: vr=105] [C: vr=110]
@@ -191,34 +191,34 @@ After A sleeps for 500ms:  avg_vruntime ≈ 300
 A wakes, placed at: 300 - half_slice ≈ 297
 ```
 
-A gets to run soon (it's near the front) but doesn't starve B and C (it's not so far back that it needs to run for 200ms straight to "catch up").
+Aはすぐに実行される（先頭近くにいる）が、BとCを飢餓状態にはしない（「追いつく」ために200ms連続で実行する必要があるほど後ろにはいない）。
 
-## Preemption check: wakeup_preempt() {#preemption-check-wakeup_preempt}
+## プリエンプションの確認: wakeup_preempt() {#preemption-check-wakeup_preempt}
 
-After enqueueing, the scheduler checks whether the newly runnable task should preempt whatever is currently running on the target CPU:
+エンキューの後、スケジューラは新たに実行可能になったタスクが、ターゲットCPUで現在実行中のものをプリエンプトすべきかを確認する:
 
 ```c
 // kernel/sched/core.c
 void wakeup_preempt(struct rq *rq, struct task_struct *p, int flags)
 {
-    // Delegate to the running task's sched class
+    // 実行中タスクのschedクラスに委譲する
     rq->curr->sched_class->wakeup_preempt(rq, p, flags);
 }
 ```
 
-For `fair_sched_class`, `wakeup_preempt_fair()` checks whether the woken task's virtual deadline is earlier than the current task's. If so, it calls `resched_curr(rq)` to set `TIF_NEED_RESCHED`.
+`fair_sched_class`の場合、`wakeup_preempt_fair()`は起床したタスクの仮想デッドラインが現在のタスクのものより早いかを確認する。早ければ`resched_curr(rq)`を呼んで`TIF_NEED_RESCHED`をセットする。
 
-The target CPU won't preempt immediately — it sets the flag and waits for the next preemption point (interrupt exit, syscall return, or explicit `schedule()` call).
+ターゲットCPUは即座にはプリエンプトしない — フラグをセットし、次のプリエンプションポイント（割り込みの終了、システムコールからの復帰、または明示的な`schedule()`呼び出し）を待つ。
 
-## Cross-CPU wakeup {#cross-cpu-wakeup}
+## CPUをまたぐ起床 {#cross-cpu-wakeup}
 
-When waking a task on a different CPU:
+別のCPU上のタスクを起床させる場合:
 
 ```mermaid
 sequenceDiagram
-    participant W as Waker (CPU 0)
-    participant T as Target (CPU 1)
-    participant P as Prev task on CPU 1
+    participant W as 起床させる側（CPU 0）
+    participant T as ターゲット（CPU 1）
+    participant P as CPU 1上の直前のタスク
 
     W->>W: try_to_wake_up(p)
     W->>T: set_task_cpu(p, 1)
@@ -226,51 +226,51 @@ sequenceDiagram
     T->>T: rq_lock(cpu_rq(1))
     T->>T: activate_task → enqueue_task_fair
     T->>T: wakeup_preempt → resched_curr(rq)
-    T->>P: TIF_NEED_RESCHED set
+    T->>P: TIF_NEED_RESCHEDをセット
     T->>T: rq_unlock
-    P->>T: Hits preemption point
-    T->>T: __schedule() → context_switch to p
+    P->>T: プリエンプションポイントに到達
+    T->>T: __schedule() → pへcontext_switch
 ```
 
-The waker enqueues the task and sets TIF_NEED_RESCHED on the target CPU using an inter-processor interrupt (IPI) if needed via `smp_send_reschedule()`.
+wakerはタスクをエンキューし、必要であれば`smp_send_reschedule()`によるプロセッサ間割り込み（IPI）を使ってターゲットCPUにTIF_NEED_RESCHEDをセットする。
 
-## Wait queues {#wait-queues}
+## 待ちキュー {#wait-queues}
 
-Most kernel code doesn't call `wake_up_process()` directly — it uses **wait queues**:
+カーネルのコードの大半は`wake_up_process()`を直接呼ばず、**待ちキュー**を使う:
 
 ```c
-// Kernel side: wake all tasks waiting on a queue
-wake_up(&wq_head);            // wake TASK_NORMAL tasks
-wake_up_interruptible(&wq);   // wake TASK_INTERRUPTIBLE only
+// カーネル側: キューで待っているすべてのタスクを起床させる
+wake_up(&wq_head);            // TASK_NORMALのタスクを起床させる
+wake_up_interruptible(&wq);   // TASK_INTERRUPTIBLEのみ起床させる
 
-// User side (inside driver/subsystem code):
+// 待つ側（ドライバ/サブシステムのコード内）:
 wait_event(wq, condition);           // TASK_UNINTERRUPTIBLE
 wait_event_interruptible(wq, cond);  // TASK_INTERRUPTIBLE
 ```
 
-Wait queues serialize access to the condition variable, ensuring that wakeups aren't lost between when the condition is checked and when the task sleeps.
+待ちキューは条件変数へのアクセスを直列化し、条件を確認してからタスクがスリープするまでの間に起床が失われないことを保証する。
 
-## Observing wakeups {#observing-wakeups}
+## 起床の観測 {#observing-wakeups}
 
 ```bash
-# Wakeup latency: time from wakeup to first execution
+# 起床レイテンシ: 起床から最初の実行までの時間
 perf sched record -a sleep 5
 perf sched latency --sort=max
 
-# Trace individual wakeup events
+# 個々の起床イベントをトレースする
 trace-cmd record -e sched:sched_wakeup -e sched:sched_switch ./workload
 trace-cmd report
 
-# See which CPUs tasks are waking up on
+# タスクがどのCPUで起床しているかを確認する
 perf script -i perf.data | grep sched_wakeup | awk '{print $NF}' | sort | uniq -c
 
-# /proc/PID/schedstat: wakeup stats per task
+# /proc/PID/schedstat: タスクごとの起床統計
 cat /proc/$PID/schedstat
-# Fields: cpu_time, runqueue_wait, timeslices_run
+# フィールド: cpu_time, runqueue_wait, timeslices_run
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Life of a Context Switch](context-switch.md) — What happens after TIF_NEED_RESCHED is set
-- [CFS](cfs.md) — How vruntime is adjusted on wakeup via `place_entity()`
-- [EEVDF](eevdf.md) — How eligibility and deadlines affect wakeup preemption decisions
+- [コンテキストスイッチの一生](context-switch.md) — TIF_NEED_RESCHEDがセットされた後に何が起きるか
+- [CFS](cfs.md) — 起床時に`place_entity()`でvruntimeがどう調整されるか
+- [EEVDF](eevdf.md) — 適格性とデッドラインが起床時のプリエンプション判断にどう影響するか

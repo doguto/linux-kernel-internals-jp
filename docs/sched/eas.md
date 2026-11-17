@@ -72,7 +72,7 @@ static void update_cpu_capacity(unsigned int cpu)
 
 A LITTLE core running at 1.0 GHz vs a big core at 2.5 GHz might have capacity 400 vs 1024.
 
-## find_energy_efficient_cpu {#findenergyefficient_cpu}
+## find_energy_efficient_cpu {#find_energy_efficient_cpu}
 
 The core EAS function selects the CPU that minimizes total system energy:
 

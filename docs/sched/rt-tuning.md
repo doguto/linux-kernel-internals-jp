@@ -1,153 +1,153 @@
-# Real-Time Linux Tuning Guide {#real-time-linux-tuning-guide}
+# リアルタイムLinuxチューニングガイド {#real-time-linux-tuning-guide}
 
-> Achieving deterministic low-latency with PREEMPT_RT: CPU isolation, memory locking, and IRQ management
+> PREEMPT_RTで決定論的な低レイテンシを実現する: CPU分離、メモリロック、IRQ管理
 
-See [PREEMPT_RT: Twenty Years to Mainline](../locking/preempt-rt.md) for how this kernel option went from a two-decade out-of-tree patch set to fully mainline in Linux 6.12 — this page covers using it, not its history.
+このカーネルオプションが、20年にわたるツリー外のパッチセットからLinux 6.12で完全にメインライン入りするまでの経緯については、[PREEMPT_RT: メインラインまでの20年](../locking/preempt-rt.md)を参照。このページは歴史ではなく、その使い方を扱う。
 
-## What "real-time" means on Linux {#what-real-time-means-on-linux}
+## Linuxにおける「リアルタイム」の意味 {#what-real-time-means-on-linux}
 
-A real-time system guarantees a **worst-case response time** — not just average latency. Linux with PREEMPT_RT can achieve:
+リアルタイムシステムは、平均レイテンシだけでなく**最悪ケースの応答時間**を保証する。PREEMPT_RTを使ったLinuxでは次のことを達成できる:
 
-- `cyclictest` worst-case latency: **10-100µs** (vs 1-100ms without RT) — see [PREEMPT_RT latency benchmarks](https://wiki.linuxfoundation.org/realtime/documentation/howto/tools/cyclictest/start)
-- Suitable for: audio processing, industrial control, motor drives, trading systems
+- `cyclictest`の最悪ケースレイテンシ: **10-100µs**（RTなしでは1-100ms） — [PREEMPT_RTのレイテンシベンチマーク](https://wiki.linuxfoundation.org/realtime/documentation/howto/tools/cyclictest/start)を参照
+- 適した用途: オーディオ処理、産業制御、モータードライブ、トレーディングシステム
 
-The key components:
-1. `PREEMPT_RT` kernel (sleeping spinlocks, threaded IRQs)
-2. CPU isolation (no kernel threads, no interrupts)
-3. Memory locking (no page faults)
-4. High-priority SCHED_FIFO tasks
-5. Disabled CPU frequency scaling
+主要な構成要素:
+1. `PREEMPT_RT`カーネル（スリープ可能なspinlock、スレッド化されたIRQ）
+2. CPU分離（カーネルスレッドなし、割り込みなし）
+3. メモリロック（ページフォールトなし）
+4. 高優先度のSCHED_FIFOタスク
+5. CPU周波数スケーリングの無効化
 
-## Step 1: Install PREEMPT_RT kernel {#step-1-install-preempt_rt-kernel}
+## ステップ1: PREEMPT_RTカーネルをインストールする {#step-1-install-preempt_rt-kernel}
 
 ```bash
-# Check if current kernel has RT:
+# 現在のカーネルがRTかを確認する:
 uname -v | grep -i preempt
-# #1 SMP PREEMPT_RT ... → RT kernel
-# #1 SMP PREEMPT ...    → non-RT full preemption
+# #1 SMP PREEMPT_RT ... → RTカーネル
+# #1 SMP PREEMPT ...    → 非RTの完全プリエンプション
 
-# Debian/Ubuntu: install RT kernel
+# Debian/Ubuntu: RTカーネルをインストールする
 apt-get install linux-image-rt-amd64
-# or build from source with CONFIG_PREEMPT_RT=y
+# あるいはCONFIG_PREEMPT_RT=yでソースからビルドする
 
-# Verify RT features:
+# RT機能を確認する:
 zcat /proc/config.gz | grep -E "PREEMPT_RT|PREEMPT_LAZY"
 # CONFIG_PREEMPT_RT=y
 
-# Check for RT patches not in mainline:
-# For older kernels: https://wiki.linuxfoundation.org/realtime/start
+# メインラインに入っていないRTパッチを確認する:
+# 古いカーネル向け: https://wiki.linuxfoundation.org/realtime/start
 ```
 
-## Step 2: CPU isolation with boot parameters {#step-2-cpu-isolation-with-boot-parameters}
+## ステップ2: ブートパラメータによるCPU分離 {#step-2-cpu-isolation-with-boot-parameters}
 
 ```bash
 # /etc/default/grub:
 GRUB_CMDLINE_LINUX="isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3 irqaffinity=0,1"
-# Update grub:
+# grubを更新する:
 update-grub && reboot
 
-# After reboot:
-# - CPUs 2,3: isolated from load balancer, tickless
-# - CPUs 0,1: handle all interrupts, kernel threads
-# - irqaffinity=0,1: IRQs only on CPUs 0,1
+# 再起動後:
+# - CPU 2,3: ロードバランサから分離され、tickless
+# - CPU 0,1: すべての割り込みとカーネルスレッドを処理する
+# - irqaffinity=0,1: IRQはCPU 0,1のみ
 
-# Verify isolation:
+# 分離を確認する:
 cat /sys/devices/system/cpu/isolated    # 2,3
 cat /sys/devices/system/cpu/nohz_full   # 2,3
 ```
 
-## Step 3: Move kernel threads off RT CPUs {#step-3-move-kernel-threads-off-rt-cpus}
+## ステップ3: カーネルスレッドをRT用CPUから移動する {#step-3-move-kernel-threads-off-rt-cpus}
 
 ```bash
-# Move all movable kernel threads to CPUs 0,1:
+# 移動可能なすべてのカーネルスレッドをCPU 0,1へ移動する:
 for pid in $(ps -eo pid,comm | grep -E "^\s*[0-9]+ \[" | awk '{print $1}'); do
-    taskset -p 3 $pid 2>/dev/null  # mask=0x3 = CPUs 0,1
+    taskset -p 3 $pid 2>/dev/null  # mask=0x3 = CPU 0,1
 done
 
-# Or use tuna (recommended):
-tuna --cpus=2,3 --isolate   # moves all non-isolated tasks away
+# あるいはtunaを使う（推奨）:
+tuna --cpus=2,3 --isolate   # 分離されていないタスクをすべて移動する
 
-# Verify: no kernel threads on CPUs 2,3
+# 確認: CPU 2,3上にカーネルスレッドがないこと
 ps -eo pid,psr,comm | awk '$2==2 || $2==3' | grep "\["
-# (should be empty or only [irq/...] which will be moved next)
+# （空であるか、次に移動する[irq/...]のみであるべき）
 ```
 
-## Step 4: IRQ affinity {#step-4-irq-affinity}
+## ステップ4: IRQアフィニティ {#step-4-irq-affinity}
 
 ```bash
-# Move all interrupts to CPUs 0,1:
+# すべての割り込みをCPU 0,1へ移動する:
 for irq_dir in /proc/irq/*/; do
     irq=$(basename $irq_dir)
-    [ "$irq" = "0" ] && continue  # keep timer on CPU 0
+    [ "$irq" = "0" ] && continue  # タイマーはCPU 0に残す
     cat $irq_dir/smp_affinity_list 2>/dev/null | grep -q "[23]" && \
         echo "0,1" > $irq_dir/smp_affinity_list 2>/dev/null
 done
 
-# Stop irqbalance from undoing this:
+# irqbalanceがこれを元に戻さないよう停止する:
 systemctl stop irqbalance
 systemctl disable irqbalance
 
-# Verify:
+# 確認:
 cat /proc/interrupts | awk 'NR>1{print $1, $NF}' | head -20
 ```
 
-## Step 5: Memory locking (prevent page faults) {#step-5-memory-locking-prevent-page-faults}
+## ステップ5: メモリロック（ページフォールトを防ぐ） {#step-5-memory-locking-prevent-page-faults}
 
-Page faults are unpredictable. Real-time applications must lock all memory:
+ページフォールトは予測できない。リアルタイムアプリケーションはすべてのメモリをロックしなければならない:
 
 ```c
 #include <sys/mman.h>
 #include <sched.h>
 
-/* Lock all current and future pages */
+/* 現在および将来のすべてのページをロックする */
 mlockall(MCL_CURRENT | MCL_FUTURE);
-/* MCL_CURRENT: lock existing mappings */
-/* MCL_FUTURE: lock all future mmap/malloc */
+/* MCL_CURRENT: 既存のマッピングをロックする */
+/* MCL_FUTURE: 将来のすべてのmmap/mallocをロックする */
 
-/* Pre-fault the stack */
+/* スタックを事前にフォールトさせる */
 #define STACK_SIZE (8 * 1024 * 1024)  /* 8MB */
 char stack_prefault[STACK_SIZE];
 memset(stack_prefault, 0, sizeof(stack_prefault));
 
-/* Pre-fault heap (malloc will use pages already touched) */
+/* ヒープを事前にフォールトさせる（mallocはすでに触れたページを使う） */
 void *heap = malloc(HEAP_SIZE);
 memset(heap, 0, HEAP_SIZE);
 
-/* Now: no page faults during RT operation */
+/* これで: RT動作中にページフォールトは起きない */
 ```
 
 ```bash
-# System-wide: allow unlimited locked memory for RT tasks
+# システム全体: RTタスクに無制限のロックメモリを許可する
 # /etc/security/limits.conf:
 echo "@realtime - memlock unlimited" >> /etc/security/limits.conf
-# Or just for root (already unlimited usually)
+# あるいはrootのみ（通常はすでに無制限）
 ```
 
-## Step 6: SCHED_FIFO task priority {#step-6-sched_fifo-task-priority}
+## ステップ6: SCHED_FIFOタスクの優先度 {#step-6-sched_fifo-task-priority}
 
 ```c
 #include <sched.h>
 
-/* Set SCHED_FIFO priority 80 (out of 1-99) */
+/* SCHED_FIFOの優先度80（1-99の範囲）を設定する */
 struct sched_param param = { .sched_priority = 80 };
 sched_setscheduler(0, SCHED_FIFO, &param);
-/* SCHED_FIFO: runs until it blocks or yields; preempts SCHED_OTHER */
-/* SCHED_RR: like FIFO but with a time quantum (round-robin within priority) */
+/* SCHED_FIFO: ブロックするかyieldするまで実行される。SCHED_OTHERをプリエンプトする */
+/* SCHED_RR: FIFOに似ているがタイムクォンタムがある（同一優先度内でラウンドロビン） */
 
-/* Pin to isolated CPU 2 */
+/* 分離したCPU 2にピン留めする */
 cpu_set_t cpuset;
 CPU_ZERO(&cpuset);
 CPU_SET(2, &cpuset);
 sched_setaffinity(0, sizeof(cpuset), &cpuset);
 
-/* Main RT loop */
+/* RTのメインループ */
 while (1) {
     clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &next_activation, NULL);
 
-    /* Do real-time work here */
+    /* ここでリアルタイム処理を行う */
     do_work();
 
-    /* Calculate next activation */
+    /* 次の起動時刻を計算する */
     next_activation.tv_nsec += PERIOD_NS;
     if (next_activation.tv_nsec >= 1000000000LL) {
         next_activation.tv_nsec -= 1000000000LL;
@@ -157,75 +157,75 @@ while (1) {
 ```
 
 ```bash
-# Set process priority from shell:
-chrt -f 80 ./my_rt_program    # SCHED_FIFO prio 80
-chrt -r 80 ./my_rt_program    # SCHED_RR prio 80
+# シェルからプロセスの優先度を設定する:
+chrt -f 80 ./my_rt_program    # SCHED_FIFO 優先度80
+chrt -r 80 ./my_rt_program    # SCHED_RR 優先度80
 chrt -d --sched-deadline 1000000 --sched-period 10000000 --sched-runtime 500000 ./my_rt_prog
 
-# Check:
+# 確認:
 chrt -p <pid>
 # scheduling policy: SCHED_FIFO
 # scheduling priority: 80
 ```
 
-## Step 7: Disable CPU frequency scaling {#step-7-disable-cpu-frequency-scaling}
+## ステップ7: CPU周波数スケーリングを無効化する {#step-7-disable-cpu-frequency-scaling}
 
-CPU frequency changes add latency:
+CPU周波数の変更はレイテンシを増やす:
 
 ```bash
-# Set performance governor on all CPUs:
+# すべてのCPUでperformanceガバナを設定する:
 for cpu in /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor; do
     echo performance > $cpu 2>/dev/null
 done
 
-# Disable turbo boost (can cause frequency spikes):
+# ターボブーストを無効化する（周波数の急変を起こしうる）:
 echo 1 > /sys/devices/system/cpu/intel_pstate/no_turbo
-# or:
+# または:
 echo 0 > /sys/devices/system/cpu/cpufreq/boost
 
-# Verify:
+# 確認:
 cat /sys/devices/system/cpu/cpu2/cpufreq/scaling_governor
 # performance
 cat /proc/cpuinfo | grep MHz | head -4
-# All CPUs at max fixed frequency
+# すべてのCPUが最大の固定周波数になっている
 ```
 
-## Measuring latency with cyclictest {#measuring-latency-with-cyclictest}
+## cyclictestによるレイテンシの測定 {#measuring-latency-with-cyclictest}
 
-`cyclictest` is the standard tool for measuring scheduling latency:
+`cyclictest`は、スケジューリングレイテンシを測定する標準的なツールである:
 
 ```bash
-# Install:
+# インストール:
 apt install rt-tests
 
-# Basic test: measure wakeup latency on isolated CPU 2
+# 基本テスト: 分離したCPU 2で起床レイテンシを測定する
 cyclictest --cpu=2 --priority=80 --policy=fifo \
            --interval=1000 --duration=60 \
            --mlockall --threads=1 \
            --histogram=200 --histfile=/tmp/hist.dat
 
-# Output:
+# 出力:
 # T: 0 ( 1234) P:80 I:1000 C:  60000 Min:      8 Act:     12 Avg:     11 Max:      87
 #                                                      ↑           ↑           ↑
 #                                                   min µs      avg µs      max µs
 
-# With RT kernel + isolation: Max should be < 100µs
-# Without: Max can be > 1ms
+# RTカーネル + 分離: Maxは100µs未満であるべき
+# なしの場合: Maxは1msを超えることがある
 
-# Stress test: run with load to find worst case
+# ストレステスト: 負荷をかけて最悪ケースを探す
 cyclictest --cpu=2 -p80 -i1000 -d60 -m -q &
-# Simultaneously generate load:
+# 同時に負荷を生成する:
 hackbench -l 100000 &
 stress-ng --cpu 6 --io 4 --vm 2 --vm-bytes 256M &
 ```
 
-### Generating latency histogram {#generating-latency-histogram}
+### レイテンシのヒストグラムを生成する {#generating-latency-histogram}
 
 ```bash
-# Run with histogram output
+# ヒストグラム出力付きで実行する
 cyclictest -p80 -m -n -i200 -l1000000 --histogram=200 > /tmp/histogram.dat
 
-# Plot with gnuplot:
+# gnuplotでプロットする:
 cat << 'EOF' > plot.gp
 set terminal png
 set output "latency_histogram.png"
@@ -236,15 +236,15 @@ EOF
 gnuplot plot.gp
 ```
 
-## Diagnosing latency spikes {#diagnosing-latency-spikes}
+## レイテンシスパイクの診断 {#diagnosing-latency-spikes}
 
 ```bash
-# Trace long preemption-disabled periods (> threshold µs):
+# プリエンプション無効期間が長いもの（閾値µs超）をトレースする:
 echo preemptirqsoff > /sys/kernel/debug/tracing/current_tracer
-echo 50 > /sys/kernel/debug/tracing/tracing_thresh  # 50µs threshold
+echo 50 > /sys/kernel/debug/tracing/tracing_thresh  # 閾値50µs
 cat /sys/kernel/debug/tracing/trace | head -30
 
-# Trace scheduling latency with bpftrace:
+# bpftraceでスケジューリングレイテンシをトレースする:
 bpftrace -e '
 tracepoint:sched:sched_wakeup
 /args->pid == target_pid/
@@ -257,33 +257,33 @@ tracepoint:sched:sched_switch
     delete(@wakeup_ts);
 }'
 
-# hwlatdetect: detect hardware-caused latencies (SMI, BIOS)
+# hwlatdetect: ハードウェア起因のレイテンシ（SMI、BIOS）を検出する
 hwlatdetect --duration=60 --threshold=50
-# Detects System Management Interrupts (SMIs) that stall the CPU
+# CPUを停止させるSystem Management Interrupt（SMI）を検出する
 ```
 
-## SMI: the worst enemy of real-time {#smi-the-worst-enemy-of-real-time}
+## SMI: リアルタイムの最大の敵 {#smi-the-worst-enemy-of-real-time}
 
-**System Management Interrupts (SMIs)** are generated by the BIOS/UEFI and run in System Management Mode (SMM) — completely invisible to the OS and cannot be disabled by the kernel ([Intel SDM Vol. 3, Chapter 34](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)):
+**System Management Interrupt（SMI）**はBIOS/UEFIによって生成され、System Management Mode（SMM）で実行される — OSからは完全に見えず、カーネルが無効化することもできない（[Intel SDM Vol. 3, Chapter 34](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html)）:
 
 ```bash
-# Detect SMI activity:
+# SMIの活動を検出する:
 hwlatdetect --duration=60 --threshold=100
 # DETECTED: 3 latency spikes above threshold
 # Spike: duration=150µs
 # This is likely an SMI!
 
-# Workaround: disable SMIs in BIOS/UEFI settings
-# (vendor-specific, often under "System Management Mode" or "Intel TXT")
+# 回避策: BIOS/UEFIの設定でSMIを無効化する
+# （ベンダー固有。多くは"System Management Mode"や"Intel TXT"の項目にある）
 
-# Intel: can use MSR to monitor SMI count:
-rdmsr -a 0x34  # MSR_SMI_COUNT (per-CPU SMI counter)
+# Intel: MSRでSMIの回数を監視できる:
+rdmsr -a 0x34  # MSR_SMI_COUNT（CPUごとのSMIカウンタ）
 ```
 
-## Full RT configuration checklist {#full-rt-configuration-checklist}
+## RT設定の完全なチェックリスト {#full-rt-configuration-checklist}
 
 ```bash
-# Check all RT prerequisites:
+# RTの前提条件をすべて確認する:
 cat << 'EOF' > check_rt.sh
 #!/bin/bash
 echo "=== Kernel PREEMPT_RT ==="
@@ -311,12 +311,12 @@ EOF
 bash check_rt.sh
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Preemption Model](preemption.md) — PREEMPT_RT internals
-- [IRQ Affinity and CPU Isolation](../interrupts/irq-affinity.md) — IRQ management
-- [CPU Affinity](cpu-affinity.md) — SCHED_FIFO and task pinning
-- [SCHED_DEADLINE](deadline.md) — EDF scheduling for hard real-time
-- [RT Scheduler](rt-scheduler.md) — SCHED_FIFO/SCHED_RR internals
-- [The Scheduling Tick](sched-tick.md) — NOHZ_FULL for tickless CPUs
-- `rtl/cyclictest` — latency measurement tool
+- [プリエンプションモデル](preemption.md) — PREEMPT_RTの内部
+- [IRQアフィニティとCPU分離](../interrupts/irq-affinity.md) — IRQの管理
+- [CPUアフィニティ](cpu-affinity.md) — SCHED_FIFOとタスクのピン留め
+- [SCHED_DEADLINE](deadline.md) — ハードリアルタイムのためのEDFスケジューリング
+- [RTスケジューラ](rt-scheduler.md) — SCHED_FIFO/SCHED_RRの内部
+- [スケジューリングティック](sched-tick.md) — ticklessなCPUのためのNOHZ_FULL
+- `rtl/cyclictest` — レイテンシ測定ツール

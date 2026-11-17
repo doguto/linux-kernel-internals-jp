@@ -1,31 +1,31 @@
-# EEVDF Scheduler {#eevdf-scheduler}
+# EEVDFスケジューラ {#eevdf-scheduler}
 
-> Earliest Eligible Virtual Deadline First: adding latency guarantees to fairness
+> Earliest Eligible Virtual Deadline First: 公平性にレイテンシの保証を加える
 
-## The problem with CFS {#the-problem-with-cfs}
+## CFSの問題点 {#the-problem-with-cfs}
 
-CFS selects the task with the smallest `vruntime`. This is fair but not deadline-aware.
+CFSは、`vruntime`が最も小さいタスクを選ぶ。これは公平ではあるが、デッドラインを意識していない。
 
-Consider a task that just woke from I/O. Its vruntime may be behind the pack, so it runs quickly — but CFS has no concept of *urgency*. A task processing a network packet that needs a 1ms response has the same scheduling priority as a batch task that just happened to sleep briefly.
+I/Oから起床したばかりのタスクを考えてみよう。そのvruntimeは他のタスクより遅れているかもしれないので、すぐに実行される。しかし、CFSには*緊急性*という概念がない。1msでの応答が必要なネットワークパケットを処理するタスクも、たまたま少しの間スリープしていただけのバッチタスクも、スケジューリング上の優先度は同じである。
 
-EEVDF fixes this by replacing CFS's "minimum vruntime" selection with **"earliest deadline among eligible tasks"**.
+EEVDFは、CFSの「最小のvruntime」による選択を**「適格なタスクの中で最も早いデッドライン」**による選択に置き換えることで、これを解決する。
 
-## Background {#background}
+## 背景 {#background}
 
-EEVDF is based on the 1995 technical report ["Earliest Eligible Virtual Deadline First: A Flexible and Accurate Mechanism for Proportional Share Resource Allocation"](https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=805acf7726282721504c8f00575d91ebfd750564) by Ion Stoica and Hussein Abdel-Wahab (William & Mary).
+EEVDFは、Ion StoicaとHussein Abdel-Wahab（William & Mary）による1995年の技術レポート["Earliest Eligible Virtual Deadline First: A Flexible and Accurate Mechanism for Proportional Share Resource Allocation"](https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=805acf7726282721504c8f00575d91ebfd750564)に基づいている。
 
-It was implemented for Linux by Peter Zijlstra (Intel) and merged in kernel 6.6 (October 2023). **Patch series**: [lore.kernel.org, May 2023](https://lore.kernel.org/lkml/20230531115839.089944915@infradead.org/)
+Linux向けにはPeter Zijlstra（Intel）が実装し、カーネル6.6（2023年10月）でマージされた。**パッチシリーズ**: [lore.kernel.org, May 2023](https://lore.kernel.org/lkml/20230531115839.089944915@infradead.org/)
 
-**Commits**:
+**コミット**:
 
 - [`147f3efaa241`](https://git.kernel.org/linus/147f3efaa24182a21706bca15eab2f3f4630b5fe) — `sched/fair: Implement an EEVDF-like scheduling algorithm`
-- [`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c) — `sched/fair: Commit to EEVDF` (makes EEVDF unconditional in `pick_next_entity`)
+- [`5e963f2bd465`](https://git.kernel.org/linus/5e963f2bd4654a202a8a05aa3a86cb0300b10e6c) — `sched/fair: Commit to EEVDF`（`pick_next_entity`でEEVDFを無条件に使うようにする）
 
-## Two concepts: eligibility and virtual deadline {#two-concepts-eligibility-and-virtual-deadline}
+## 2つの概念: 適格性と仮想デッドライン {#two-concepts-eligibility-and-virtual-deadline}
 
-### Eligibility {#eligibility}
+### 適格性 {#eligibility}
 
-A task is **eligible** if it hasn't consumed more than its fair share of CPU up to the current virtual time. Informally: a task that has been running too much is ineligible and shouldn't preempt others.
+タスクが現在の仮想時間までに、CPUの公平な取り分を超えて消費していなければ、そのタスクは**適格（eligible）**である。くだけた言い方をすれば、実行しすぎているタスクは不適格であり、他のタスクをプリエンプトすべきではない。
 
 ```c
 // kernel/sched/fair.c
@@ -42,45 +42,45 @@ static bool vruntime_eligible(struct cfs_rq *cfs_rq, u64 vruntime)
 }
 ```
 
-A task is eligible if its `vruntime` is at or behind the weighted average vruntime of the runqueue.
+タスクの`vruntime`がランキューの重み付き平均vruntime以下であれば、そのタスクは適格である。
 
-### Virtual deadline {#virtual-deadline}
+### 仮想デッドライン {#virtual-deadline}
 
-Each task has a `deadline` — the virtual time by which it should have run. When a task is placed on the runqueue, its deadline is set as:
+各タスクは`deadline`を持つ。これは、そのタスクがそれまでに実行されているべき仮想時間である。タスクがランキューに配置されるとき、そのデッドラインは次のように設定される:
 
 ```c
 // kernel/sched/fair.c
 se->deadline = se->vruntime + calc_delta_fair(se->slice, se);
 ```
 
-This means: "I want to run for `slice` worth of virtual time starting from my current vruntime." The deadline is the end of that window.
+これは「現在のvruntimeから始めて、`slice`分の仮想時間だけ実行したい」という意味である。デッドラインはその時間窓の終わりである。
 
-A task with a short `slice` gets an early deadline and runs sooner. A task with a long `slice` gets a later deadline and may wait.
+`slice`が短いタスクは早いデッドラインを得て、より早く実行される。`slice`が長いタスクは遅いデッドラインを得て、待たされることがある。
 
-## The new fields in sched_entity {#the-new-fields-in-sched_entity}
+## sched_entityの新しいフィールド {#the-new-fields-in-sched_entity}
 
-EEVDF added several fields to `struct sched_entity` (in `include/linux/sched.h`):
+EEVDFは`struct sched_entity`（`include/linux/sched.h`）にいくつかのフィールドを追加した:
 
 ```c
 struct sched_entity {
-    // ... existing CFS fields ...
-    u64 vruntime;       // virtual runtime (still central)
-    u64 deadline;       // virtual deadline for this request
-    u64 slice;          // requested time slice
-    u64 vlag;           // virtual lag: how far behind/ahead of ideal
+    // ... 既存のCFSのフィールド ...
+    u64 vruntime;       // 仮想実行時間（依然として中心的）
+    u64 deadline;       // この要求の仮想デッドライン
+    u64 slice;          // 要求したタイムスライス
+    u64 vlag;           // 仮想lag: 理想からどれだけ遅れている/進んでいるか
     // ...
 };
 ```
 
 ### vlag {#vlag}
 
-`vlag` tracks the task's lag relative to the ideal fair-share schedule. Positive lag means the task is behind its ideal share (hasn't gotten enough CPU); negative lag means it's ahead.
+`vlag`は、理想的な公平配分スケジュールに対するタスクのlagを追跡する。正のlagは、タスクが理想の取り分より遅れている（十分なCPUを得ていない）ことを意味し、負のlagは進んでいることを意味する。
 
-When a task wakes up, `vlag` is used to place its `vruntime` appropriately — preventing sleeping tasks from either starving (getting nothing) or bursting (monopolizing CPU after a long sleep).
+タスクが起床するとき、`vlag`はその`vruntime`を適切に配置するために使われる。これにより、スリープしていたタスクが飢餓状態に陥る（何も得られない）ことも、バーストする（長いスリープの後にCPUを独占する）ことも防がれる。
 
-## Selection: __pick_eevdf() {#selection-_pickeevdf}
+## 選択: __pick_eevdf() {#selection-__pick_eevdf}
 
-The core selection function:
+中核となる選択関数:
 
 ```c
 // kernel/sched/fair.c
@@ -93,15 +93,15 @@ __pick_eevdf(struct cfs_rq *cfs_rq)
     while (node) {
         se = __node_2_se(node);
 
-        // Is this task eligible?
+        // このタスクは適格か？
         if (entity_eligible(cfs_rq, se)) {
-            // Is this the earliest deadline among eligible tasks?
+            // 適格なタスクの中で最も早いデッドラインか？
             if (!best || deadline_gt(best->deadline, se->deadline))
                 best = se;
         }
 
-        // Prune the search using subtree min_deadline
-        // (not all subtrees need to be searched)
+        // 部分木のmin_deadlineを使って探索を枝刈りする
+        // （すべての部分木を探索する必要はない）
         if (node->rb_left &&
             __node_2_se(node->rb_left)->min_deadline <= se->deadline)
             node = node->rb_left;
@@ -118,13 +118,13 @@ static struct sched_entity *pick_eevdf(struct cfs_rq *cfs_rq)
 }
 ```
 
-The algorithm walks the RB-tree, finds all eligible tasks, and returns the one with the earliest (smallest) deadline. Non-eligible tasks are skipped. The tree traversal is pruned using cached `min_deadline` subtree values for efficiency.
+このアルゴリズムは赤黒木をたどって適格なタスクをすべて見つけ、その中でデッドラインが最も早い（最も小さい）ものを返す。適格でないタスクはスキップされる。効率のため、木の走査は部分木ごとにキャッシュされた`min_deadline`の値を使って枝刈りされる。
 
-## How EEVDF improves latency {#how-eevdf-improves-latency}
+## EEVDFがレイテンシをどう改善するか {#how-eevdf-improves-latency}
 
-### Scenario: batch + interactive task {#scenario-batch-interactive-task}
+### シナリオ: バッチタスク + 対話型タスク {#scenario-batch-interactive-task}
 
-With CFS (simplified):
+CFSの場合（簡略化）:
 ```
 Time:    0   1   2   3   4   5   6   7   8ms
 Batch:   ████████░░░░░░░░████████
@@ -132,7 +132,7 @@ Network: ░░░░░░░░████████
                 ↑ woke here, had to wait for batch's vruntime to be overtaken
 ```
 
-With EEVDF:
+EEVDFの場合:
 ```
 Time:    0   1   2   3   4   5   6   7   8ms
 Batch:   ████████░░░░░░░░░░░░░░░░
@@ -140,56 +140,56 @@ Network: ░░░░░░░░████░░░░░░░░░░░�
                 ↑ eligible + earliest deadline → runs immediately
 ```
 
-The network task has an early deadline (small requested slice) and is eligible (just woke). EEVDF schedules it immediately without waiting for vruntime to drift.
+ネットワークタスクは早いデッドラインを持ち（要求したスライスが小さい）、適格である（起床したばかり）。EEVDFは、vruntimeがずれていくのを待たずに、それをすぐにスケジュールする。
 
-## Time slice and sched_base_slice_ns {#time-slice-and-schedbaseslice_ns}
+## タイムスライスとsched_base_slice_ns {#time-slice-and-sched_base_slice_ns}
 
-When EEVDF was merged in 6.6, the old `sched_latency_ns` / `sched_min_granularity_ns` tunables were deprecated in favor of `sched_base_slice_ns` ([`e4ec3318a17f`](https://git.kernel.org/linus/e4ec3318a17f5dcf11bc23b2d2c1da4c1c5bb507), Peter Zijlstra); the sysctls still exist but `sched_base_slice_ns` is now the primary knob. The base time slice is now controlled by a single knob:
+EEVDFが6.6でマージされたとき、古い`sched_latency_ns`/`sched_min_granularity_ns`のチューニング可能なパラメータは、`sched_base_slice_ns`に置き換えられる形で非推奨になった（[`e4ec3318a17f`](https://git.kernel.org/linus/e4ec3318a17f5dcf11bc23b2d2c1da4c1c5bb507)、Peter Zijlstra）。これらのsysctlはまだ存在するが、今では`sched_base_slice_ns`が主要なつまみである。基本タイムスライスは現在、単一のつまみで制御される:
 
 ```bash
-# Base time slice (default: 3ms = 3000000ns)
+# 基本タイムスライス（デフォルト: 3ms = 3000000ns）
 cat /proc/sys/kernel/sched_base_slice_ns
 ```
 
-Each task's `slice` is set to `sched_base_slice_ns` scaled by the task's weight relative to the average. Tasks with larger requested slices get later deadlines; tasks with smaller slices get earlier deadlines and lower latency.
+各タスクの`slice`は、`sched_base_slice_ns`を平均に対するそのタスクの重みでスケールした値に設定される。要求するスライスが大きいタスクは遅いデッドラインを得る。スライスが小さいタスクは早いデッドラインを得て、レイテンシが低くなる。
 
-Applications can request a specific latency hint via `sched_setattr()` with `SCHED_FLAG_UTIL_CLAMP_MIN`/`SCHED_FLAG_UTIL_CLAMP_MAX` for frequency scaling, but direct slice control from userspace is not yet exposed.
+アプリケーションは、周波数スケーリングのために`SCHED_FLAG_UTIL_CLAMP_MIN`/`SCHED_FLAG_UTIL_CLAMP_MAX`を付けた`sched_setattr()`で特定のレイテンシのヒントを要求できるが、ユーザー空間からスライスを直接制御する手段はまだ公開されていない。
 
-## Comparing CFS and EEVDF selection {#comparing-cfs-and-eevdf-selection}
+## CFSとEEVDFの選択の比較 {#comparing-cfs-and-eevdf-selection}
 
-| Aspect | CFS | EEVDF |
+| 観点 | CFS | EEVDF |
 |--------|-----|-------|
-| Selection criterion | `min(vruntime)` — leftmost RB-tree node | `min(deadline)` among eligible tasks |
-| Eligibility check | None | `vruntime ≤ avg_vruntime` |
-| Latency for waking tasks | Depends on vruntime gap | Immediate if eligible + early deadline |
-| Starvation prevention | Via vruntime convergence | Via eligibility + deadline together |
-| Worst-case selection | O(1) (leftmost node) | O(log n) (tree walk, pruned) |
-| Time slice | Implicit, from latency target | Explicit (`se->slice`) |
+| 選択基準 | `min(vruntime)` — 赤黒木の最左ノード | 適格なタスクの中での`min(deadline)` |
+| 適格性のチェック | なし | `vruntime ≤ avg_vruntime` |
+| 起床したタスクのレイテンシ | vruntimeの差に依存する | 適格かつデッドラインが早ければ即座 |
+| 飢餓の防止 | vruntimeの収束による | 適格性とデッドラインの組み合わせによる |
+| 最悪ケースの選択 | O(1)（最左ノード） | O(log n)（枝刈りされた木の走査） |
+| タイムスライス | 暗黙的、レイテンシの目標から導かれる | 明示的（`se->slice`） |
 
-## What didn't change {#what-didnt-change}
+## 変わらなかったもの {#what-didnt-change}
 
-EEVDF replaced the *selection* inside `fair_sched_class` — the vruntime machinery, weight calculations, group scheduling, load balancing, and enqueue/dequeue paths are largely unchanged. The `sched_prio_to_weight` table, `calc_delta_fair()`, `update_curr()`, and cgroup integration all remain from CFS.
+EEVDFが置き換えたのは`fair_sched_class`内の*選択*である。vruntimeの仕組み、重みの計算、グループスケジューリング、負荷分散、エンキュー/デキューのパスはほとんど変わっていない。`sched_prio_to_weight`テーブル、`calc_delta_fair()`、`update_curr()`、cgroupとの統合はすべてCFSから引き継がれている。
 
-This means EEVDF is an evolution of CFS, not a replacement. The name "CFS" is increasingly a misnomer for what's actually EEVDF — but the `fair_sched_class` still carries the name.
+つまり、EEVDFはCFSの置き換えではなく進化である。実際にはEEVDFであるものを「CFS」と呼ぶのはますます誤称になりつつあるが、`fair_sched_class`は今もその名前を保っている。
 
-## Checking EEVDF behavior {#checking-eevdf-behavior}
+## EEVDFの挙動を確認する {#checking-eevdf-behavior}
 
 ```bash
-# Per-task sched info (includes vruntime, deadline, slice)
+# タスクごとのsched情報（vruntime、deadline、sliceを含む）
 cat /proc/$PID/sched
 
-# Scheduler wakeup and switch latencies
+# スケジューラの起床とスイッチのレイテンシ
 perf sched record -a sleep 10
 perf sched latency --sort=max
 
-# Watch scheduling decisions in real time
+# スケジューリングの判断をリアルタイムに監視する
 trace-cmd record -e sched:sched_switch -e sched:sched_wakeup ./workload
 trace-cmd report
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [CFS](cfs.md) — The vruntime foundation that EEVDF builds on
-- [Runqueues](runqueues.md) — The per-CPU context EEVDF runs within
-- [LWN: An EEVDF CPU scheduler for Linux](https://lwn.net/Articles/925371/) — Peter Zijlstra's explanation
-- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — `__pick_eevdf()` at line 1010
+- [CFS](cfs.md) — EEVDFが土台にしているvruntimeの基盤
+- [ランキュー](runqueues.md) — EEVDFが動作するCPUごとのコンテキスト
+- [LWN: An EEVDF CPU scheduler for Linux](https://lwn.net/Articles/925371/) — Peter Zijlstraによる解説
+- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — 1010行目の`__pick_eevdf()`

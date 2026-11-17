@@ -1,196 +1,196 @@
-# IP Routing {#ip-routing}
+# IPルーティング {#ip-routing}
 
-> How the kernel decides where packets go: routing tables, lookups, and the FIB
+> カーネルはパケットの行き先をどう決めるか: ルーティングテーブル、検索、そしてFIB
 
-## What routing does {#what-routing-does}
+## ルーティングが行うこと {#what-routing-does}
 
-For every packet — inbound or outbound — the kernel asks: "where should this go?" The routing subsystem answers:
+受信・送信を問わずすべてのパケットについて、カーネルは「これはどこへ行くべきか?」と問う。ルーティングサブシステムはこう答える:
 
-- **Local delivery**: This packet is for us, send it up to a socket
-- **Forward**: This packet is for someone else, find the next hop and transmit
-- **Unreachable**: No route to destination, send ICMP unreachable
+- **ローカル配送**: このパケットは自分宛てなので、ソケットへ上げる
+- **転送**: このパケットは他者宛てなので、ネクストホップを見つけて送信する
+- **到達不能**: 宛先へのルートがないので、ICMP unreachableを送る
 
-The answer comes from the **FIB (Forwarding Information Base)** — the kernel's routing table.
+この答えは**FIB（Forwarding Information Base）**、すなわちカーネルのルーティングテーブルから得られる。
 
-## The routing tables {#the-routing-tables}
+## ルーティングテーブル {#the-routing-tables}
 
-Linux supports multiple routing tables (for policy routing):
+Linuxは（ポリシールーティングのために）複数のルーティングテーブルをサポートする:
 
 ```bash
-# Main table (table 254) — standard routes
+# mainテーブル（テーブル254）— 標準のルート
 ip route show
 
-# All tables
+# すべてのテーブル
 ip route show table all
 
-# Lookup a specific destination
+# 特定の宛先を検索
 ip route get 8.8.8.8
 # → 8.8.8.8 via 192.168.1.1 dev eth0 src 192.168.1.100
 
-# Add a route
+# ルートを追加
 ip route add 10.0.0.0/8 via 192.168.1.254 dev eth0
 
-# Policy rules: route by source IP, mark, or interface
+# ポリシールール: 送信元IP、マーク、インターフェースによってルーティングする
 ip rule show
 ```
 
-## FIB internals: LC-trie {#fib-internals-lc-trie}
+## FIBの内部: LC-trie {#fib-internals-lc-trie}
 
-The kernel implements the FIB as an **LC-trie** (Level Compressed trie, a.k.a. Patricia trie) for efficient longest-prefix matching:
+カーネルは、最長プレフィックス一致を効率的に行うため、FIBを**LC-trie**（Level Compressed trie。Patricia trieとも呼ばれる）として実装している:
 
 ```c
 // include/net/ip_fib.h
 struct fib_table {
     struct hlist_node   tb_hlist;
-    u32                 tb_id;      // table ID (254 = main, 255 = local)
+    u32                 tb_id;      // テーブルID（254 = main、255 = local）
     int                 tb_num_default;
     struct rcu_head     rcu;
-    unsigned long       *tb_data;   // the trie
+    unsigned long       *tb_data;   // trie本体
 };
 
 struct fib_result {
     __be32          prefix;
     unsigned char   prefixlen;
-    struct fib_info *fi;    // next-hop info: gateway, device, metrics
-    struct fib_nh_common *nhc; // selected next hop (for ECMP)
+    struct fib_info *fi;    // ネクストホップ情報: ゲートウェイ、デバイス、メトリック
+    struct fib_nh_common *nhc; // 選択されたネクストホップ（ECMP用）
     // ...
 };
 ```
 
-Lookup is `fib_table_lookup()`:
+検索は`fib_table_lookup()`で行う:
 
 ```c
 // net/ipv4/fib_trie.c:1420
 int fib_table_lookup(struct fib_table *tb, const struct flowi4 *flp,
                      struct fib_result *res, int fib_flags)
 {
-    // Walk the LC-trie from root
-    // At each node, extract bits from the destination address
-    // Follow the matching child
-    // At a leaf: longest-prefix match found
-    // Fill res with the fib_info (gateway, interface, etc.)
+    // ルートからLC-trieをたどる
+    // 各ノードで宛先アドレスからビットを取り出す
+    // 一致する子をたどる
+    // 葉に到達: 最長プレフィックス一致が見つかった
+    // resにfib_info（ゲートウェイ、インターフェースなど）を格納する
 }
 ```
 
-## Route lookup: ip_route_input_noref() {#route-lookup-iprouteinput_noref}
+## ルート検索: ip_route_input_noref() {#route-lookup-ip_route_input_noref}
 
-On receive, routing is called from `ip_rcv_finish()`:
+受信時には、ルーティングは`ip_rcv_finish()`から呼ばれる:
 
 ```c
 // net/ipv4/route.c
 int ip_route_input_noref(struct sk_buff *skb, __be32 daddr, __be32 saddr,
                           dscp_t dscp, struct net_device *dev)
 {
-    // 1. FIB lookup (no route cache since Linux 3.6)
+    // 1. FIB検索（Linux 3.6以降ルートキャッシュはない）
     err = fib_lookup(net, &fl4, &res, 0);
 
-    // 2. Determine input action
+    // 2. 入力時の動作を決定する
     if (res.type == RTN_LOCAL) {
-        // Packet is for us — create rtable with input = ip_local_deliver
-        // skb->_skb_refdst set to &rt->dst
+        // 自分宛てのパケット — input = ip_local_deliverでrtableを作成
+        // skb->_skb_refdstに&rt->dstを設定
     } else if (res.type == RTN_UNICAST) {
-        // Packet should be forwarded
+        // パケットは転送されるべき
         ip_route_input_slow(skb, daddr, saddr, ...);
     } else {
-        // RTN_UNREACHABLE, RTN_BLACKHOLE, RTN_PROHIBIT
+        // RTN_UNREACHABLE、RTN_BLACKHOLE、RTN_PROHIBIT
         goto martian_destination;
     }
 }
 ```
 
-## Route cache: dst_entry {#route-cache-dst_entry}
+## ルートキャッシュ: dst_entry {#route-cache-dst_entry}
 
-Routing decisions are cached in `struct dst_entry`:
+ルーティングの判断は`struct dst_entry`にキャッシュされる:
 
 ```c
 // include/net/dst.h
 struct dst_entry {
-    struct net_device *dev;         // output device
-    struct  dst_ops   *ops;         // ip_dst_ops, etc.
+    struct net_device *dev;         // 出力デバイス
+    struct  dst_ops   *ops;         // ip_dst_opsなど
     void (*output)(struct net *, struct sock *, struct sk_buff *);
-    // → ip_output() for local, ip_forward() for forwarded
+    // → ローカルならip_output()、転送ならip_forward()
 
-    unsigned long     _metrics;     // MTU, RTT, etc.
-    unsigned long     expires;      // cache expiry
+    unsigned long     _metrics;     // MTU、RTTなど
+    unsigned long     expires;      // キャッシュの有効期限
 };
 ```
 
-On the transmit path, the route is cached in `sk->sk_dst_cache`:
+送信パスでは、ルートは`sk->sk_dst_cache`にキャッシュされる:
 
 ```c
-// ip_queue_xmit() checks this first:
+// ip_queue_xmit()はまずこれを確認する:
 rt = (struct rtable *)__sk_dst_check(sk, 0);
 if (!rt) {
     rt = ip_route_output_ports(net, fl4, sk, daddr, saddr, ...);
-    sk_setup_caps(sk, &rt->dst);  // cache it
+    sk_setup_caps(sk, &rt->dst);  // キャッシュする
 }
 ```
 
-## Policy routing {#policy-routing}
+## ポリシールーティング {#policy-routing}
 
-Linux supports multiple routing tables and **rules** that select which table to use:
+Linuxは複数のルーティングテーブルと、どのテーブルを使うかを選択する**ルール**をサポートする:
 
 ```bash
-# Add a rule: packets from 10.0.0.0/24 use table 100
+# ルールを追加: 10.0.0.0/24からのパケットはテーブル100を使う
 ip rule add from 10.0.0.0/24 table 100
 ip route add default via 192.168.2.1 table 100
 
-# Rules are evaluated in priority order
+# ルールは優先度順に評価される
 ip rule show
-# 0:      from all lookup local   (local table: localhost, broadcast)
-# 32766:  from all lookup main    (main table: normal routes)
-# 32767:  from all lookup default (default table: usually empty)
+# 0:      from all lookup local   (localテーブル: localhost、ブロードキャスト)
+# 32766:  from all lookup main    (mainテーブル: 通常のルート)
+# 32767:  from all lookup default (defaultテーブル: 通常は空)
 ```
 
-Rules can match on:
+ルールは次のものにマッチできる:
 
-- Source address (`from`)
-- Destination address (`to`)
-- Incoming interface (`iif`)
-- Firewall mark (`fwmark`)
-- TOS/DSCP field
+- 送信元アドレス（`from`）
+- 宛先アドレス（`to`）
+- 受信インターフェース（`iif`）
+- ファイアウォールマーク（`fwmark`）
+- TOS/DSCPフィールド
 
-## ECMP: Equal Cost Multipath {#ecmp-equal-cost-multipath}
+## ECMP: 等コストマルチパス {#ecmp-equal-cost-multipath}
 
-Multiple routes to the same destination with equal metric = ECMP:
+同じ宛先に対してメトリックが等しいルートが複数ある = ECMP:
 
 ```bash
-# Add two equal-cost routes (traffic split across eth0 and eth1)
+# 2つの等コストルートを追加（トラフィックはeth0とeth1に分散される）
 ip route add 10.0.0.0/8 nexthop via 192.168.1.1 dev eth0 weight 1 \
                          nexthop via 192.168.2.1 dev eth1 weight 1
 
-# Default hash: 5-tuple (src/dst IP, src/dst port, protocol)
-# L4 hash ensures same flow always takes the same path
+# デフォルトのハッシュ: 5タプル（送信元/宛先IP、送信元/宛先ポート、プロトコル）
+# L4ハッシュにより、同じフローは常に同じ経路を通る
 ```
 
 ```bash
-# Check ECMP hashing algorithm
+# ECMPのハッシュアルゴリズムを確認
 cat /proc/sys/net/ipv4/fib_multipath_hash_policy
-# 0 = L3 (src+dst IP)
-# 1 = L4 (5-tuple)
+# 0 = L3（送信元+宛先IP）
+# 1 = L4（5タプル）
 # 2 = L3+L4
 ```
 
-## Neighbor subsystem: ARP {#neighbor-subsystem-arp}
+## 近隣サブシステム: ARP {#neighbor-subsystem-arp}
 
-IP routing resolves to a next-hop IP, but transmission requires a MAC address. The **neighbor subsystem** maps IP → MAC via ARP:
+IPルーティングはネクストホップのIPを解決するが、送信にはMACアドレスが必要である。**近隣サブシステム**がARPによってIP → MACの対応付けを行う:
 
 ```c
 // net/core/neighbour.c
 struct neighbour {
     struct neighbour __rcu *next;
-    struct neigh_table  *tbl;       // arp_tbl for IPv4
+    struct neigh_table  *tbl;       // IPv4ではarp_tbl
     struct neigh_parms  *parms;
-    unsigned long       confirmed;  // last time we confirmed reachability
+    unsigned long       confirmed;  // 最後に到達可能性を確認した時刻
     u8                  flags;
-    u8                  nud_state;  // NUD_REACHABLE, NUD_STALE, NUD_PROBE, ...
-    u8                  ha[ALIGN(MAX_ADDR_LEN, sizeof(unsigned long))]; // MAC addr
-    struct hh_cache     hh;         // cached L2 header for fast path
+    u8                  nud_state;  // NUD_REACHABLE、NUD_STALE、NUD_PROBE、...
+    u8                  ha[ALIGN(MAX_ADDR_LEN, sizeof(unsigned long))]; // MACアドレス
+    struct hh_cache     hh;         // 高速パス用にキャッシュされたL2ヘッダ
     int (*output)(struct neighbour *, struct sk_buff *);
 };
 ```
 
-NUD (Neighbor Unreachability Detection) states:
+NUD（Neighbor Unreachability Detection）の状態:
 
 ```
 INCOMPLETE → REACHABLE (ARP reply received)
@@ -200,43 +200,43 @@ PROBE → REACHABLE (got reply) or FAILED (no reply)
 ```
 
 ```bash
-# View ARP table
+# ARPテーブルを表示
 ip neigh show
 
-# Add static ARP entry
+# 静的ARPエントリを追加
 ip neigh add 10.0.0.5 lladdr 52:54:00:12:34:56 dev eth0
 
-# Flush stale entries
+# staleエントリをフラッシュ
 ip neigh flush dev eth0
 
-# Tune ARP cache lifetime
-cat /proc/sys/net/ipv4/neigh/default/gc_stale_time  # default: 60s
+# ARPキャッシュの寿命を調整
+cat /proc/sys/net/ipv4/neigh/default/gc_stale_time  # デフォルト: 60秒
 ```
 
-## Diagnosing routing issues {#diagnosing-routing-issues}
+## ルーティング問題の診断 {#diagnosing-routing-issues}
 
 ```bash
-# Simulate routing decision
+# ルーティング判断をシミュレート
 ip route get 8.8.8.8
 
-# Watch routing table changes
+# ルーティングテーブルの変更を監視
 ip monitor route
 
-# Count route cache misses (if applicable)
-cat /proc/net/rt_cache_stat  # (removed in newer kernels)
+# ルートキャッシュのミス数を数える（該当する場合）
+cat /proc/net/rt_cache_stat  # （新しいカーネルでは削除済み）
 
-# FIB table statistics
+# FIBテーブルの統計
 cat /proc/net/fib_triestat
-# Aver depth: how deep the trie is
-# Max depth: worst case lookup depth
+# Aver depth: trieの平均の深さ
+# Max depth: 最悪ケースの検索の深さ
 
-# ICMP unreachable messages (routing failures)
+# ICMP unreachableメッセージ（ルーティングの失敗）
 netstat -s | grep "destination unreachable"
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Life of a Packet (receive)](life-of-packet-rx.md) — Where routing fits in ip_rcv_finish
-- [Life of a Packet (transmit)](life-of-packet-tx.md) — Where ip_queue_xmit uses routing
-- [Netfilter Architecture](netfilter.md) — Hooks run alongside routing decisions
-- [TCP Implementation](tcp.md) — How TCP uses routing for source IP selection
+- [パケットの一生（受信）](life-of-packet-rx.md) — ip_rcv_finishの中でルーティングがどこに位置するか
+- [パケットの一生（送信）](life-of-packet-tx.md) — ip_queue_xmitがルーティングをどこで使うか
+- [Netfilterのアーキテクチャ](netfilter.md) — ルーティング判断と並んで実行されるフック
+- [TCPの実装](tcp.md) — TCPが送信元IPの選択にルーティングをどう使うか

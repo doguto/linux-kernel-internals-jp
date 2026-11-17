@@ -1,45 +1,45 @@
-# CPU Affinity {#cpu-affinity}
+# CPUアフィニティ {#cpu-affinity}
 
-> Per-task CPU pinning: sched_setaffinity() and how it interacts with cpusets
+> タスクごとのCPUピン留め: sched_setaffinity()と、それがcpusetとどう相互作用するか
 
-## What CPU affinity controls {#what-cpu-affinity-controls}
+## CPUアフィニティが制御するもの {#what-cpu-affinity-controls}
 
-CPU affinity lets a task (or an admin) restrict which CPUs a specific task may run on. Unlike cpuset — which applies to an entire cgroup — affinity is **per-task**.
+CPUアフィニティを使うと、タスク自身（または管理者）が、特定のタスクがどのCPU上で実行してよいかを制限できる。cgroup全体に適用されるcpusetとは異なり、アフィニティは**タスクごと**である。
 
-Common uses:
+一般的な用途:
 
-- **Cache locality**: Pin a task to CPUs sharing an L3 cache
-- **Interrupt binding**: Keep a task on the same CPU as the NIC interrupt it processes
-- **Benchmarking**: Eliminate CPU-to-CPU variation by pinning to one core
-- **Real-time**: Reserve cores for latency-sensitive tasks
+- **キャッシュ局所性**: L3キャッシュを共有するCPUにタスクをピン留めする
+- **割り込みとの結び付け**: タスクを、それが処理するNIC割り込みと同じCPU上に保つ
+- **ベンチマーク**: 1つのコアにピン留めして、CPU間のばらつきを排除する
+- **リアルタイム**: レイテンシに敏感なタスクのためにコアを確保する
 
-## The syscall {#the-syscall}
+## システムコール {#the-syscall}
 
 ```c
-// Restrict a task to specific CPUs
+// タスクを特定のCPUに制限する
 int sched_setaffinity(pid_t pid, size_t cpusetsize, const cpu_set_t *mask);
 
-// Read a task's current affinity mask
+// タスクの現在のアフィニティマスクを読み取る
 int sched_getaffinity(pid_t pid, size_t cpusetsize, cpu_set_t *mask);
 ```
 
-From the command line:
+コマンドラインからは次のようにする:
 
 ```bash
-# Run a command pinned to CPUs 0 and 1
+# CPU 0と1にピン留めしてコマンドを実行する
 taskset -c 0,1 my_program
 
-# Pin an existing process
+# 既存のプロセスをピン留めする
 taskset -cp 0,1 $PID
 
-# Show current affinity
+# 現在のアフィニティを表示する
 taskset -p $PID
-# → pid 1234's current affinity mask: f  (CPUs 0-3 on a 4-core system)
+# → pid 1234's current affinity mask: f  (4コアのシステムでCPU 0-3)
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルの実装 {#kernel-implementation}
 
-### The syscall path {#the-syscall-path}
+### システムコールのパス {#the-syscall-path}
 
 ```c
 // kernel/sched/syscalls.c:1256
@@ -47,33 +47,33 @@ SYSCALL_DEFINE3(sched_setaffinity, pid_t, pid, unsigned int, len,
                 unsigned long __user *, user_mask_ptr)
 {
     cpumask_var_t new_mask;
-    get_user_cpu_mask(user_mask_ptr, len, new_mask);  // copy from userspace
+    get_user_cpu_mask(user_mask_ptr, len, new_mask);  // ユーザー空間からコピー
     return sched_setaffinity(pid, new_mask);
 }
 ```
 
-`sched_setaffinity()` validates the mask, checks permissions, and calls `__sched_setaffinity()` which calls `set_cpus_allowed_ptr()`.
+`sched_setaffinity()`はマスクを検証し、権限をチェックしてから`__sched_setaffinity()`を呼び出し、それが`set_cpus_allowed_ptr()`を呼び出す。
 
-### Affinity fields in task_struct {#affinity-fields-in-task_struct}
+### task_structのアフィニティ関連フィールド {#affinity-fields-in-task_struct}
 
 ```c
 // include/linux/sched.h
 struct task_struct {
     // ...
-    int            nr_cpus_allowed;  // popcount of cpus_ptr
-    const cpumask_t *cpus_ptr;       // effective affinity (points to cpus_mask
-                                     // or a temporary mask during migration)
-    cpumask_t      *user_cpus_ptr;   // user-set affinity (NULL if not set)
-    cpumask_t       cpus_mask;       // storage for cpus_ptr (usually)
+    int            nr_cpus_allowed;  // cpus_ptrのpopcount
+    const cpumask_t *cpus_ptr;       // 実効アフィニティ（cpus_maskを指すか、
+                                     // マイグレーション中は一時的なマスクを指す）
+    cpumask_t      *user_cpus_ptr;   // ユーザーが設定したアフィニティ（未設定ならNULL）
+    cpumask_t       cpus_mask;       // cpus_ptrの格納先（通常）
     // ...
 };
 ```
 
-- `cpus_ptr` is what the scheduler reads. It normally points to `cpus_mask`.
-- During temporary CPU restriction (e.g., migration helpers), `cpus_ptr` may point elsewhere.
-- `user_cpus_ptr` tracks the user's requested mask, separate from any cpuset-imposed restrictions.
+- `cpus_ptr`はスケジューラが読むものである。通常は`cpus_mask`を指す。
+- 一時的なCPU制限の間（例: マイグレーションのヘルパー）、`cpus_ptr`は別の場所を指すことがある。
+- `user_cpus_ptr`は、cpusetによって課される制限とは別に、ユーザーが要求したマスクを追跡する。
 
-### Reading back affinity {#reading-back-affinity}
+### アフィニティの読み戻し {#reading-back-affinity}
 
 ```c
 // kernel/sched/syscalls.c:1275
@@ -81,100 +81,100 @@ long sched_getaffinity(pid_t pid, struct cpumask *mask)
 {
     // ...
     cpumask_and(mask, &p->cpus_mask, cpu_active_mask);
-    // Note: intersects with active CPUs, excluding offline/hotplugged-out CPUs
+    // 注: アクティブなCPUとの積集合を取り、オフライン/ホットプラグで外されたCPUを除外する
 }
 ```
 
-The returned mask is always intersected with `cpu_active_mask` — offline CPUs are excluded even if they're in `cpus_mask`.
+返されるマスクは常に`cpu_active_mask`との積集合が取られる。オフラインのCPUは、たとえ`cpus_mask`に含まれていても除外される。
 
-## Affinity and cpuset intersection {#affinity-and-cpuset-intersection}
+## アフィニティとcpusetの積集合 {#affinity-and-cpuset-intersection}
 
-When a task is in a cpuset, the effective affinity is:
+タスクがcpusetに属している場合、実効アフィニティは次のとおりである:
 
 ```
 effective = user_affinity ∩ cpuset.effective_cpus
 ```
 
-If you call `sched_setaffinity()` with a mask that includes CPUs outside the cpuset, those CPUs are silently excluded. The task cannot escape its cpuset through affinity.
+cpusetの外にあるCPUを含むマスクで`sched_setaffinity()`を呼び出すと、それらのCPUは黙って除外される。タスクはアフィニティを通じてcpusetから逃れることはできない。
 
 ```bash
-# Example: task in a cpuset restricted to CPUs 4-7
-taskset -cp 0-7 $PID      # try to use all CPUs
-taskset -p $PID            # effective: only 4-7 (cpuset intersection)
+# 例: CPU 4-7に制限されたcpuset内のタスク
+taskset -cp 0-7 $PID      # すべてのCPUを使おうとする
+taskset -p $PID            # 実効: 4-7のみ（cpusetとの積集合）
 ```
 
-The kernel stores both masks separately:
+カーネルは両方のマスクを別々に保持する:
 
-- `user_cpus_ptr`: what the user asked for
-- `cpus_mask`: the intersection with cpuset (what's actually enforced)
+- `user_cpus_ptr`: ユーザーが要求したもの
+- `cpus_mask`: cpusetとの積集合（実際に強制されるもの）
 
-This separation lets the kernel recompute the effective mask if the cpuset changes, without losing the user's original intent.
+この分離により、cpusetが変化したときに、ユーザーの元の意図を失うことなく、カーネルは実効マスクを再計算できる。
 
-## Migration: what happens when affinity changes {#migration-what-happens-when-affinity-changes}
+## マイグレーション: アフィニティが変わると何が起きるか {#migration-what-happens-when-affinity-changes}
 
-When `set_cpus_allowed_ptr()` is called:
+`set_cpus_allowed_ptr()`が呼び出されると:
 
-1. If the task's current CPU is still in the new mask → nothing changes immediately
-2. If the current CPU is excluded → the task is migrated to an allowed CPU
-3. Migration goes through `migration_cpu_stop()` — a stop-machine mechanism that runs on the target CPU to safely move the task
+1. タスクの現在のCPUがまだ新しいマスクに含まれている場合 → すぐには何も変わらない
+2. 現在のCPUが除外された場合 → タスクは許可されたCPUへマイグレーションされる
+3. マイグレーションは`migration_cpu_stop()`を通じて行われる。これはタスクを安全に移動させるためにターゲットCPU上で実行されるstop-machineの仕組みである
 
 ```bash
-# Observe affinity-triggered migrations
+# アフィニティによって引き起こされたマイグレーションを観察する
 perf stat -e migrations ./my_program
 ```
 
-## Kernel threads and affinity {#kernel-threads-and-affinity}
+## カーネルスレッドとアフィニティ {#kernel-threads-and-affinity}
 
-Kernel threads start with affinity set to all online CPUs (`cpu_all_mask`). You can restrict them:
+カーネルスレッドは、すべてのオンラインCPU（`cpu_all_mask`）に設定されたアフィニティで開始する。これを制限することもできる:
 
 ```bash
-# Pin kernel worker thread (e.g., kworker)
+# カーネルのワーカースレッド（例: kworker）をピン留めする
 taskset -cp 0 $(pgrep "kworker/0:1")
 ```
 
-Some kernel threads explicitly set their own affinity (e.g., interrupt threads, per-CPU kthreads) and resist external changes. Check `/proc/PID/status` for `Cpus_allowed`.
+一部のカーネルスレッドは自分のアフィニティを明示的に設定しており（例: 割り込みスレッド、CPUごとのkthread）、外部からの変更を受け付けない。`/proc/PID/status`の`Cpus_allowed`を確認すること。
 
-## NUMA-aware affinity {#numa-aware-affinity}
+## NUMAを意識したアフィニティ {#numa-aware-affinity}
 
-On NUMA systems, pinning to specific CPUs also affects memory allocation:
+NUMAシステムでは、特定のCPUへのピン留めはメモリ割り当てにも影響する:
 
 ```bash
-# Pin to NUMA node 1's CPUs (assuming CPUs 4-7 are on node 1)
+# NUMAノード1のCPUにピン留めする（CPU 4-7がノード1にあると仮定）
 taskset -c 4-7 ./my_program
 
-# Better: use numactl to set both CPU and memory affinity
+# より良い方法: numactlを使ってCPUとメモリの両方のアフィニティを設定する
 numactl --cpunodebind=1 --membind=1 ./my_program
 ```
 
-`numactl` combines CPU affinity (`sched_setaffinity`) with NUMA memory policy (`set_mempolicy`). For NUMA-sensitive workloads, setting both is essential — pinning CPUs without pinning memory can still result in remote memory accesses.
+`numactl`はCPUアフィニティ（`sched_setaffinity`）とNUMAメモリポリシー（`set_mempolicy`）を組み合わせる。NUMAに敏感なワークロードでは、両方を設定することが不可欠である。メモリをピン留めせずにCPUだけをピン留めしても、依然としてリモートメモリアクセスが発生しうる。
 
-## Checking affinity in /proc {#checking-affinity-in-proc}
+## /procでアフィニティを確認する {#checking-affinity-in-proc}
 
 ```bash
-# CPU affinity as a hex bitmask
+# 16進ビットマスクとしてのCPUアフィニティ
 cat /proc/$PID/status | grep Cpus_allowed
-# → Cpus_allowed: 000f  (CPUs 0-3)
-# → Cpus_allowed_list: 0-3  (human-readable)
+# → Cpus_allowed: 000f  (CPU 0-3)
+# → Cpus_allowed_list: 0-3  (人間が読める形式)
 
-# For threads in a process
+# プロセス内のスレッドについて
 for tid in /proc/$PID/task/*/; do
     echo -n "TID $(basename $tid): "
     cat ${tid}/status | grep Cpus_allowed_list
 done
 ```
 
-## Affinity vs cpuset vs scheduling domains {#affinity-vs-cpuset-vs-scheduling-domains}
+## アフィニティ対cpuset対スケジューリングドメイン {#affinity-vs-cpuset-vs-scheduling-domains}
 
-| Mechanism | Granularity | Scope | Hard limit? |
+| 仕組み | 粒度 | 範囲 | 厳格な制限か？ |
 |-----------|-------------|-------|-------------|
-| `sched_setaffinity` | Per-task | Selected CPUs | Yes — task never runs elsewhere |
-| cpuset | Per-cgroup | Group of CPUs | Yes — intersected with all tasks |
-| Sched domains | Global | Topology levels | No — affects load balancing preferences |
-| `nice`/priority | Per-task | CPU time share | No — just affects scheduling preference |
+| `sched_setaffinity` | タスクごと | 選択したCPU | Yes — タスクは他の場所では決して実行されない |
+| cpuset | cgroupごと | CPUのグループ | Yes — すべてのタスクと積集合が取られる |
+| スケジューリングドメイン | グローバル | トポロジのレベル | No — 負荷分散の優先度に影響する |
+| `nice`/優先度 | タスクごと | CPU時間の配分 | No — スケジューリングの優先度に影響するだけ |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [cpuset](cpuset.md) — Group-level CPU restriction; intersects with per-task affinity
-- [Scheduling Domains](sched-domains.md) — How load balancing respects topology
-- [CPU Bandwidth Control](cpu-bandwidth.md) — Hard CPU time limits via cgroup quota
-- [NUMA](../mm/numa.md) — Why NUMA node affinity matters alongside CPU affinity
+- [cpuset](cpuset.md) — グループ単位のCPU制限。タスクごとのアフィニティと積集合が取られる
+- [スケジューリングドメイン](sched-domains.md) — 負荷分散がトポロジをどう考慮するか
+- [CPU帯域制御](cpu-bandwidth.md) — cgroupのクォータによる厳格なCPU時間の制限
+- [NUMA](../mm/numa.md) — CPUアフィニティと並んでNUMAノードのアフィニティが重要な理由

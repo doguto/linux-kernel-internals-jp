@@ -1,10 +1,10 @@
-# SELinux: Mandatory Access Control {#selinux-mandatory-access-control}
+# SELinux: 強制アクセス制御 {#selinux-mandatory-access-control}
 
-> Security contexts, AVC cache, type enforcement policy, and audit2allow
+> セキュリティコンテキスト、AVCキャッシュ、Type Enforcementポリシー、audit2allow
 
-## What is SELinux? {#what-is-selinux}
+## SELinuxとは {#what-is-selinux}
 
-SELinux (Security-Enhanced Linux) implements **Mandatory Access Control (MAC)**: access decisions are made by a central security policy, not by object owners. Even root cannot override the policy without explicit permission.
+SELinux（Security-Enhanced Linux）は**強制アクセス制御（MAC）**を実装する。アクセスの判定はオブジェクトの所有者ではなく、中央のセキュリティポリシーによって行われる。rootでさえ、明示的な許可なしにはポリシーを上書きできない。
 
 ```
 Traditional DAC (Discretionary Access Control):
@@ -17,11 +17,11 @@ SELinux MAC:
   Even compromised root process → bounded by its security context
 ```
 
-SELinux was developed by the NSA, open-sourced in December 2000, and merged into Linux 2.6.0-test3 (August 2003). It is built on the **LSM (Linux Security Module)** framework. Every security-sensitive kernel operation calls an LSM hook which SELinux intercepts.
+SELinuxはNSAが開発し、2000年12月にオープンソース化され、Linux 2.6.0-test3（2003年8月）にマージされた。**LSM（Linux Security Module）**フレームワークの上に構築されている。セキュリティ上重要なカーネル操作はすべてLSMフックを呼び出し、SELinuxがそれを横取りする。
 
-## Security contexts {#security-contexts}
+## セキュリティコンテキスト {#security-contexts}
 
-Every process and file has a **security context** (also called label):
+すべてのプロセスとファイルは**セキュリティコンテキスト**（ラベルとも呼ぶ）を持つ:
 
 ```
 Format: user:role:type:level
@@ -35,40 +35,40 @@ Examples:
 ```
 
 ```bash
-# View process context:
+# プロセスのコンテキストを表示する:
 ps -eZ | grep httpd
 # system_u:system_r:httpd_t:s0     1234 httpd
 
-# View file context:
+# ファイルのコンテキストを表示する:
 ls -Z /var/www/html/index.html
 # system_u:object_r:httpd_content_t:s0 /var/www/html/index.html
 
-# Your current context:
+# 現在の自分のコンテキスト:
 id -Z
 # unconfined_u:unconfined_r:unconfined_t:s0-s0:c0.c1023
 
-# Change context temporarily:
-runcon -t httpd_t /bin/bash    # run shell as httpd_t
+# 一時的にコンテキストを変更する:
+runcon -t httpd_t /bin/bash    # httpd_tとしてシェルを実行する
 
-# View all contexts:
-seinfo -t | grep httpd    # all httpd types
+# すべてのコンテキストを表示する:
+seinfo -t | grep httpd    # すべてのhttpdタイプ
 ```
 
-## Access Vector Cache (AVC) {#access-vector-cache-avc}
+## Access Vector Cache（AVC） {#access-vector-cache-avc}
 
-Every access check goes through the **AVC** (Access Vector Cache). The AVC is a hash table that caches recent allow/deny decisions:
+すべてのアクセスチェックは**AVC**（Access Vector Cache）を通る。AVCは最近の許可/拒否の判定をキャッシュするハッシュテーブルである:
 
 ```c
 /* security/selinux/avc.c */
 
 struct avc_entry {
-    u32             ssid;       /* source security ID */
-    u32             tsid;       /* target security ID */
-    u16             tclass;     /* target class (file, process, socket...) */
-    struct av_decision avd;     /* allow/audit/etc bitmask */
+    u32             ssid;       /* ソースのセキュリティID */
+    u32             tsid;       /* ターゲットのセキュリティID */
+    u16             tclass;     /* ターゲットのクラス（file、process、socket……） */
+    struct av_decision avd;     /* allow/auditなどのビットマスク */
 };
 
-/* Cache lookup: */
+/* キャッシュの検索: */
 static inline int avc_lookup(struct selinux_avc *avc,
                               u32 ssid, u32 tsid, u16 tclass,
                               struct av_decision *avd)
@@ -79,93 +79,93 @@ static inline int avc_lookup(struct selinux_avc *avc,
     node = avc_cache_lookup(avc, ssid, tsid, tclass);
     if (node) {
         *avd = node->ae.avd;
-        /* cache hit: no need to consult policy */
+        /* キャッシュヒット: ポリシーを参照する必要はない */
         return 0;
     }
-    /* cache miss: slow path → consult policy database */
+    /* キャッシュミス: 低速パス → ポリシーデータベースを参照する */
     return avc_compute_av(ssid, tsid, tclass, avd);
 }
 ```
 
 ```bash
-# AVC statistics:
+# AVCの統計:
 cat /sys/fs/selinux/avc/cache_stats
 # lookups hits misses allocations reclaims frees
 # 1234567 1200000 34567 34567 0 0
-# ~97% hit rate typical
+# 典型的なヒット率は約97%
 
-# AVC cache size:
+# AVCキャッシュのサイズ:
 cat /sys/fs/selinux/avc/cache_threshold
-# 512 (entries)
+# 512（エントリ）
 ```
 
-## Type Enforcement (TE) policy {#type-enforcement-te-policy}
+## Type Enforcement（TE）ポリシー {#type-enforcement-te-policy}
 
-The most important policy mechanism. Rules grant access between types:
+最も重要なポリシーの仕組みである。ルールはタイプ間のアクセスを許可する:
 
 ```
 allow <source_type> <target_type>:<class> { <permissions> };
 
 Examples:
-# httpd can read httpd_content_t files:
+# httpdはhttpd_content_tのファイルを読める:
 allow httpd_t httpd_content_t:file { read getattr open };
 
-# httpd cannot write to /etc (etc_t):
-# (no allow rule → denied)
+# httpdは/etc（etc_t）に書き込めない:
+# （allowルールがない → 拒否）
 
-# httpd can bind to http_port_t ports:
+# httpdはhttp_port_tのポートにbindできる:
 allow httpd_t http_port_t:tcp_socket { name_bind };
 
-# Allow httpd to connect to mysql:
+# httpdにmysqlへの接続を許可する:
 allow httpd_t mysqld_port_t:tcp_socket name_connect;
 ```
 
-### Policy source files {#policy-source-files}
+### ポリシーのソースファイル {#policy-source-files}
 
 ```bash
-# Policy is compiled from .te (type enforcement) files:
-ls /usr/share/selinux/targeted/*.pp    # compiled policy modules
+# ポリシーは.te（type enforcement）ファイルからコンパイルされる:
+ls /usr/share/selinux/targeted/*.pp    # コンパイル済みのポリシーモジュール
 
-# View policy for httpd:
+# httpdのポリシーを表示する:
 sesearch --allow -s httpd_t /etc/selinux/targeted/policy/policy.33
 # allow httpd_t httpd_config_t:file { read getattr open };
 # allow httpd_t httpd_log_t:file { append create write ioctl lock };
 # ...
 
-# Check what a type can do:
+# あるタイプに何ができるかを確認する:
 sesearch --allow -s httpd_t -c file /etc/selinux/targeted/policy/policy.33
 
-# What types can access a file type:
+# あるファイルタイプにどのタイプがアクセスできるか:
 sesearch --allow -t httpd_content_t /etc/selinux/targeted/policy/policy.33
 ```
 
-## File context labeling {#file-context-labeling}
+## ファイルコンテキストのラベル付け {#file-context-labeling}
 
 ```bash
-# Default contexts come from file_contexts files:
+# デフォルトのコンテキストはfile_contextsファイルから来る:
 cat /etc/selinux/targeted/contexts/files/file_contexts | grep www
 # /var/www(/.*)?       system_u:object_r:httpd_content_t:s0
 # /var/www/cgi-bin(/.*)? system_u:object_r:httpd_exec_t:s0
 
-# Restore context to policy default:
+# コンテキストをポリシーのデフォルトに戻す:
 restorecon -Rv /var/www/html/
 
-# Set context manually:
+# コンテキストを手動で設定する:
 chcon -t httpd_content_t /tmp/webpage.html
 semanage fcontext -a -t httpd_content_t "/custom/web(/.*)?"
 restorecon -Rv /custom/web/
 
-# Check what the policy says a file's context should be:
+# ポリシー上、ファイルのコンテキストがどうあるべきかを確認する:
 matchpathcon /var/www/html/index.html
 # /var/www/html/index.html system_u:object_r:httpd_content_t:s0
 ```
 
-## Audit and audit2allow {#audit-and-audit2allow}
+## auditとaudit2allow {#audit-and-audit2allow}
 
-When SELinux denies an access, it logs to the audit log:
+SELinuxはアクセスを拒否すると、auditログに記録する:
 
 ```bash
-# View recent denials:
+# 最近の拒否を表示する:
 audit2allow -w -a 2>/dev/null | head -30
 # type=AVC msg=audit(1234567890.123:456): avc: denied { name_connect }
 #     for pid=1234 comm="httpd" dest=3306
@@ -173,112 +173,112 @@ audit2allow -w -a 2>/dev/null | head -30
 #     tcontext=system_u:object_r:mysqld_port_t:s0
 #     tclass=tcp_socket permissive=0
 
-# Raw audit log:
+# 生のauditログ:
 ausearch -m AVC,USER_AVC -ts recent | audit2allow
 
-# Generate policy to allow a denial:
-audit2allow -a -M myhttpd    # creates myhttpd.pp module
-semodule -i myhttpd.pp       # install the module
+# 拒否を許可するポリシーを生成する:
+audit2allow -a -M myhttpd    # myhttpd.ppモジュールを作成する
+semodule -i myhttpd.pp       # モジュールをインストールする
 
-# Or interactively suggest what to add:
+# あるいは追加すべきものを対話的に提案させる:
 audit2allow -a
 # allow httpd_t mysqld_port_t:tcp_socket name_connect;
 ```
 
-## Boolean switches {#boolean-switches}
+## booleanスイッチ {#boolean-switches}
 
-Booleans allow tunable policy without recompiling:
+booleanにより、再コンパイルせずにポリシーを調整できる:
 
 ```bash
-# List all booleans:
+# すべてのbooleanを一覧表示する:
 getsebool -a | grep httpd | head -10
 # httpd_can_network_connect --> off
 # httpd_can_network_connect_db --> off
 # httpd_can_send_mail --> off
 # httpd_enable_cgi --> on
 
-# Enable httpd → database connections:
+# httpd → データベースの接続を有効にする:
 setsebool -P httpd_can_network_connect_db on
-# -P = persistent (survives reboot)
+# -P = 永続的（再起動後も維持される）
 
-# Common web application booleans:
-setsebool -P httpd_unified on          # allow httpd to read any httpd type
-setsebool -P httpd_enable_homedirs on  # allow ~user/public_html
+# Webアプリケーションでよく使うboolean:
+setsebool -P httpd_unified on          # httpdに任意のhttpdタイプの読み取りを許可する
+setsebool -P httpd_enable_homedirs on  # ~user/public_htmlを許可する
 ```
 
-## SELinux modes {#selinux-modes}
+## SELinuxのモード {#selinux-modes}
 
 ```bash
-# Check current mode:
+# 現在のモードを確認する:
 getenforce
 # Enforcing
 
-# Modes:
-# Enforcing:  policy enforced, violations denied + audited
-# Permissive: policy not enforced, but violations audited (AVC denials logged)
-# Disabled:   SELinux completely off (requires reboot to re-enable)
+# モード:
+# Enforcing:  ポリシーを適用し、違反は拒否 + 監査される
+# Permissive: ポリシーは適用されないが、違反は監査される（AVCの拒否が記録される）
+# Disabled:   SELinuxは完全にオフ（再び有効にするには再起動が必要）
 
-# Temporarily switch to permissive (for debugging):
+# 一時的にpermissiveに切り替える（デバッグ用）:
 setenforce 0   # permissive
 setenforce 1   # enforcing
 
-# Per-domain permissive (process type runs permissive, others enforcing):
-semanage permissive -a httpd_t   # httpd_t in permissive mode
-semanage permissive -d httpd_t   # remove permissive
+# ドメインごとのpermissive（そのプロセスタイプはpermissive、他はenforcing）:
+semanage permissive -a httpd_t   # httpd_tをpermissiveモードにする
+semanage permissive -d httpd_t   # permissiveを解除する
 ```
 
-## selinuxfs: kernel interface {#selinuxfs-kernel-interface}
+## selinuxfs: カーネルインターフェース {#selinuxfs-kernel-interface}
 
 ```bash
-# SELinux exposes its interface via selinuxfs:
+# SELinuxはselinuxfs経由でインターフェースを公開する:
 ls /sys/fs/selinux/
 # access  avc  booleans  class  commit_pending_bools  context
 # create  deny_unknown  disable  enforce  load  mls  null  policy
 # policyvers  relabel  status  user
 
-# Check SELinux is enabled:
+# SELinuxが有効か確認する:
 cat /sys/fs/selinux/enforce
 # 1 = enforcing
 
-# Load a new policy:
+# 新しいポリシーをロードする:
 cat /etc/selinux/targeted/policy/policy.33 > /sys/fs/selinux/load
 
-# Check policy version:
+# ポリシーのバージョンを確認する:
 cat /sys/fs/selinux/policyvers
 # 33
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルの実装 {#kernel-implementation}
 
 ```c
 /* security/selinux/hooks.c */
 
-/* SELinux hooks into every security-sensitive VFS operation: */
+/* SELinuxはセキュリティ上重要なすべてのVFS操作にフックする: */
 static int selinux_inode_permission(struct inode *inode, int mask)
 {
     const struct cred *cred = current_cred();
     u32 perms;
     int rc;
 
-    /* Get security IDs for current process and target inode */
+    /* 現在のプロセスと対象inodeのセキュリティIDを取得する */
     u32 ssid = selinux_cred(cred)->sid;
     u32 tsid = selinux_inode(inode)->sid;
     u16 sclass = inode_mode_to_security_class(inode->i_mode);
 
     perms = file_mask_to_av(inode->i_mode, mask);
 
-    /* AVC check: is ssid allowed perms on tsid:sclass? */
+    /* AVCチェック: ssidはtsid:sclassに対してpermsを許可されているか */
     rc = avc_has_perm(ssid, tsid, sclass, perms, &ad);
-    return rc;  /* 0 = allowed, -EACCES = denied */
+    return rc;  /* 0 = 許可、-EACCES = 拒否 */
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LSM Framework](lsm.md) — the security hook infrastructure SELinux uses
-- [Capabilities](capabilities.md) — SELinux and capabilities interact
-- [Linux Audit](audit.md) — SELinux denials go to audit log
-- [Credentials](credentials.md) — process SIDs derived from credentials
-- `security/selinux/` — SELinux implementation
-- `man semanage, restorecon, audit2allow` — policy management tools
-- Red Hat SELinux Guide — comprehensive policy writing documentation
+- [LSMフレームワーク](lsm.md) — SELinuxが使うセキュリティフック基盤
+- [ケーパビリティ](capabilities.md) — SELinuxとケーパビリティの相互作用
+- [Linuxのaudit](audit.md) — SELinuxの拒否はauditログに送られる
+- [クレデンシャル](credentials.md) — クレデンシャルから導出されるプロセスのSID
+- `security/selinux/` — SELinuxの実装
+- `man semanage, restorecon, audit2allow` — ポリシー管理ツール
+- Red Hat SELinux Guide — ポリシー記述に関する包括的なドキュメント

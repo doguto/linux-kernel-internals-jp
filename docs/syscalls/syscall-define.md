@@ -1,18 +1,18 @@
-# SYSCALL_DEFINE and Dispatch {#syscall_define-and-dispatch}
+# SYSCALL_DEFINEとディスパッチ {#syscall_define-and-dispatch}
 
-> How syscalls are defined in C and wired into the dispatch table
+> syscallがCでどのように定義され、ディスパッチテーブルに組み込まれるか
 
-## SYSCALL_DEFINE macro {#syscall_define-macro}
+## SYSCALL_DEFINEマクロ {#syscall_define-macro}
 
-Every syscall in the kernel is defined using a macro that:
-1. Creates a function with the right signature (`asmlinkage`)
-2. Handles argument extraction from `struct pt_regs`
-3. Provides instrumentation hooks (tracepoints, audit)
+カーネル内のすべてのsyscallは、次のことを行うマクロを使って定義される。
+1. 正しいシグネチャ（`asmlinkage`）を持つ関数を作成する
+2. `struct pt_regs` からの引数の取り出しを処理する
+3. 計装用のフック（tracepoint、audit）を提供する
 
 ```c
 /* include/linux/syscalls.h */
 
-/* SYSCALL_DEFINE<N> where N is the number of arguments */
+/* SYSCALL_DEFINE<N>。N は引数の数 */
 SYSCALL_DEFINE0(getpid)
 SYSCALL_DEFINE1(close, unsigned int, fd)
 SYSCALL_DEFINE3(write, unsigned int, fd,
@@ -26,40 +26,40 @@ SYSCALL_DEFINE6(mmap, unsigned long, addr,
                 unsigned long, off)
 ```
 
-The `__user` annotation marks pointers that point into userspace (not kernel memory). The sparse tool uses this to catch missing `copy_from_user` calls.
+`__user` アノテーションは、（カーネルメモリではなく）ユーザー空間を指すポインタであることを示す。sparseツールはこれを使って `copy_from_user` 呼び出しの欠落を検出する。
 
-### What SYSCALL_DEFINE expands to {#what-syscall_define-expands-to}
+### SYSCALL_DEFINEは何に展開されるか {#what-syscall_define-expands-to}
 
 ```c
 /* SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf, size_t, count)
-   expands to approximately: */
+   はおおよそ次のように展開される: */
 
 static long __do_sys_write(unsigned int fd, const char __user *buf, size_t count);
 
-/* Outer wrapper: extracts args from pt_regs */
+/* 外側のラッパー: pt_regs から引数を取り出す */
 __visible long __x64_sys_write(const struct pt_regs *regs)
 {
     return __do_sys_write(
-        (unsigned int)regs->di,    /* rdi = first arg */
+        (unsigned int)regs->di,    /* rdi = 第1引数 */
         (const char __user *)regs->si,  /* rsi */
         (size_t)regs->dx           /* rdx */
     );
 }
 
-/* Also creates __ia32_sys_write for 32-bit compat */
+/* 32ビット互換用の __ia32_sys_write も作成される */
 
-/* And the actual implementation: */
+/* そして実際の実装: */
 static long __do_sys_write(unsigned int fd, const char __user *buf, size_t count)
 {
-    /* implementation here */
+    /* ここに実装 */
 }
 
-/* SYSCALL_METADATA() emits the struct syscall_metadata + trace events
- * ftrace's syscall tracepoints use — it's tracing-only, not audit; the
- * audit hooks are wired in separately (see Syscall Auditing) */
+/* SYSCALL_METADATA() は、ftrace のsyscall tracepointが使う
+ * struct syscall_metadata とトレースイベントを生成する — これはトレーシング専用であり、
+ * auditではない。auditのフックは別途組み込まれる（syscallの監査を参照） */
 ```
 
-### Full example: sys_write {#full-example-sys_write}
+### 完全な例: sys_write {#full-example-sys_write}
 
 ```c
 /* fs/read_write.c */
@@ -71,7 +71,7 @@ SYSCALL_DEFINE3(write, unsigned int, fd, const char __user *, buf,
 
 ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 {
-    CLASS(fd_pos, f)(fd);  /* cleanup-guard: auto fdput_pos() on return */
+    CLASS(fd_pos, f)(fd);  /* クリーンアップガード: 戻るときに自動で fdput_pos() */
     ssize_t ret = -EBADF;
 
     if (!fd_empty(f)) {
@@ -89,13 +89,13 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 }
 ```
 
-Note the `ksys_write()` wrapper: it allows calling the syscall logic from within the kernel (e.g., in `init` code) without going through the syscall entry path. This pattern is used for syscalls that the kernel itself needs to call internally.
+`ksys_write()` ラッパーに注目してほしい。これにより、syscallのエントリパスを経由せずに、カーネル内部（例: `init` のコード）からsyscallのロジックを呼び出せる。このパターンは、カーネル自身が内部的に呼び出す必要のあるsyscallに使われる。
 
-`CLASS(fd_pos, f)(fd)` replaced the older `struct fd f = fdget_pos(fd); ... fdput_pos(f);` pattern: it's a scope-based cleanup guard (`DEFINE_CLASS`-generated) that calls `fdput_pos()` automatically when `f` goes out of scope, so every return path releases the reference without an explicit call. `fd_empty(f)`/`fd_file(f)` are the accessors for the guarded fd, replacing direct `f.file` access.
+`CLASS(fd_pos, f)(fd)` は、古い `struct fd f = fdget_pos(fd); ... fdput_pos(f);` パターンを置き換えたものである。これはスコープベースのクリーンアップガード（`DEFINE_CLASS` で生成される）であり、`f` がスコープを抜けると自動的に `fdput_pos()` を呼ぶので、どの復帰パスでも明示的な呼び出しなしに参照が解放される。`fd_empty(f)`/`fd_file(f)` は、ガードされたfdのアクセサであり、`f.file` への直接アクセスを置き換える。
 
-## The syscall table {#the-syscall-table}
+## syscallテーブル {#the-syscall-table}
 
-### 64-bit: arch/x86/entry/syscalls/syscall_64.tbl {#64-bit-archx86entrysyscallssyscall_64tbl}
+### 64ビット: arch/x86/entry/syscalls/syscall_64.tbl {#64-bit-archx86entrysyscallssyscall_64tbl}
 
 ```
 # <number>  <abi>   <name>         <entry point>
@@ -106,17 +106,17 @@ Note the `ksys_write()` wrapper: it allows calling the syscall logic from within
 ...
 ```
 
-ABI can be `64` (only for 64-bit), `x32` (x32 ABI), or `common` (both). The build system generates `arch/x86/include/generated/asm/syscalls_64.h`:
+ABIは `64`（64ビットのみ）、`x32`（x32 ABI）、`common`（両方）のいずれかである。ビルドシステムは `arch/x86/include/generated/asm/syscalls_64.h` を生成する。
 
 ```c
-/* Auto-generated */
+/* 自動生成 */
 __SYSCALL(0,  sys_read)
 __SYSCALL(1,  sys_write)
 __SYSCALL(2,  sys_open)
 ...
 ```
 
-Which is included in the syscall table array:
+これがsyscallテーブルの配列にインクルードされる。
 
 ```c
 /* arch/x86/entry/syscall_64.c */
@@ -125,11 +125,11 @@ const sys_call_ptr_t sys_call_table[] = {
 };
 ```
 
-`sys_call_table[]` is no longer how dispatch actually happens — real dispatch (`do_syscall_64()` in the same file) goes through `x64_sys_call()`, a `switch` statement built from the same `<asm/syscalls_64.h>` include (`case nr: return __x64_##sym(regs);`). This replaced an indexed call through the function-pointer array specifically to avoid an *indirect* call: as [the commit that made the change](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2) explains, a `switch` lets the compiler emit conditional branches instead, and a misprediction there only speculatively runs the *wrong syscall* — a bounded, harmless outcome — rather than an indirect call mispredicting to attacker-influenced code. The array itself is kept only because `kernel/trace/trace_syscalls.c` still wants each syscall's address.
+`sys_call_table[]` は、もはや実際のディスパッチの仕組みではない — 実際のディスパッチ（同じファイルの `do_syscall_64()`）は、同じ `<asm/syscalls_64.h>` のインクルード（`case nr: return __x64_##sym(regs);`）から構築される `switch` 文である `x64_sys_call()` を通る。これは、関数ポインタ配列を通じたインデックス呼び出しを置き換えたもので、その目的は特に*間接*呼び出しを避けることだった。[この変更を行ったコミット](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2)が説明しているように、`switch` ならコンパイラは代わりに条件分岐を生成でき、そこでの予測ミスは*誤ったsyscall*を投機的に実行するだけで済む — 限定的で無害な結果である — 一方、間接呼び出しの予測ミスは攻撃者の影響下にあるコードへ飛びうる。配列自体が残されているのは、`kernel/trace/trace_syscalls.c` がまだ各syscallのアドレスを必要としているからにすぎない。
 
-### Architecture-independent: include/uapi/asm-generic/unistd.h {#architecture-independent-includeuapiasm-genericunistdh}
+### アーキテクチャ非依存: include/uapi/asm-generic/unistd.h {#architecture-independent-includeuapiasm-genericunistdh}
 
-For architectures without their own syscall tables:
+独自のsyscallテーブルを持たないアーキテクチャ向け:
 
 ```c
 /* include/uapi/asm-generic/unistd.h */
@@ -140,32 +140,32 @@ __SYSCALL(__NR_io_destroy, sys_io_destroy)
 ...
 ```
 
-## Syscall ABI stability {#syscall-abi-stability}
+## syscall ABIの安定性 {#syscall-abi-stability}
 
-Once a syscall is merged, its number and argument semantics are **never changed**. This is a hard kernel rule: user-space must not break.
+syscallは一度マージされると、その番号と引数のセマンティクスが**変更されることは決してない**。これはカーネルの厳格なルールである。ユーザー空間を壊してはならない。
 
-Specific guarantees:
+具体的な保証:
 
-- Syscall numbers don't change
-- Existing arguments are never reinterpreted
-- Structs passed by pointer only grow (new fields at the end, with zero meaning "not set")
+- syscall番号は変わらない
+- 既存の引数が別の意味に解釈し直されることはない
+- ポインタで渡される構造体は大きくなるだけである（新しいフィールドは末尾に追加され、ゼロは「未設定」を意味する）
 
-For new features, the kernel adds new syscalls rather than extend old ones in incompatible ways:
+新機能のために、カーネルは古いsyscallを互換性のない形で拡張するのではなく、新しいsyscallを追加する。
 
-- `clone()` → `clone3()` (struct-based, extensible)
-- `open()` → `openat()` → `openat2()` (added `how` struct)
-- `read()` → `pread64()`, `readv()`, `preadv()`, `preadv2()`
+- `clone()` → `clone3()`（構造体ベース、拡張可能）
+- `open()` → `openat()` → `openat2()`（`how` 構造体を追加）
+- `read()` → `pread64()`、`readv()`、`preadv()`、`preadv2()`
 
-## struct-based syscalls (modern pattern) {#struct-based-syscalls-modern-pattern}
+## 構造体ベースのsyscall（現代的なパターン） {#struct-based-syscalls-modern-pattern}
 
-The modern approach passes arguments in a struct, allowing future extension without new syscalls:
+現代的なアプローチは引数を構造体で渡し、新しいsyscallなしで将来の拡張を可能にする。
 
 ```c
-/* struct-based syscall: clone3 (kernel/fork.c) */
+/* 構造体ベースのsyscall: clone3（kernel/fork.c） */
 SYSCALL_DEFINE2(clone3, struct clone_args __user *, uargs, size_t, size)
 {
     int err;
-    struct kernel_clone_args kargs;   /* NOT struct clone_args — see below */
+    struct kernel_clone_args kargs;   /* struct clone_args ではない — 後述 */
     pid_t set_tid[MAX_PID_NS_LEVEL];
 
     kargs.set_tid = set_tid;
@@ -181,24 +181,24 @@ SYSCALL_DEFINE2(clone3, struct clone_args __user *, uargs, size_t, size)
 }
 ```
 
-Two distinct structs are involved, easy to conflate because both are visible here:
+ここには2つの異なる構造体が関わっており、どちらもここに現れるので混同しやすい。
 
-- `struct clone_args` (`include/uapi/linux/sched.h`) is the fixed, versioned, userspace-shaped layout `uargs` points to — the ABI contract, all `__aligned_u64` fields.
-- `struct kernel_clone_args` (`include/linux/sched/task.h`) is the kernel's internal representation `kargs` — a superset used everywhere clone happens (`fork()`, `vfork()`, kernel threads, `io_uring` workers, not just `clone3()`), with kernel-only fields like `fn`/`fn_arg` that have no userspace equivalent.
+- `struct clone_args`（`include/uapi/linux/sched.h`）は、`uargs` が指す、固定でバージョン付きのユーザー空間向けレイアウトである — ABIの契約であり、フィールドはすべて `__aligned_u64` である。
+- `struct kernel_clone_args`（`include/linux/sched/task.h`）は、カーネル内部の表現 `kargs` である — `clone3()` だけでなく、cloneが起こるあらゆる場所（`fork()`、`vfork()`、カーネルスレッド、`io_uring` ワーカー）で使われるスーパーセットであり、`fn`/`fn_arg` のようにユーザー空間に対応物のないカーネル専用のフィールドを持つ。
 
-`copy_clone_args_from_user()` (also in `kernel/fork.c`) is what bridges them: it calls `copy_struct_from_user(&args, sizeof(args), uargs, usize)` into a local `struct clone_args`, handling the versioning —
+両者を橋渡しするのが `copy_clone_args_from_user()`（これも `kernel/fork.c` にある）である。これはローカルの `struct clone_args` に対して `copy_struct_from_user(&args, sizeof(args), uargs, usize)` を呼び、バージョン管理を処理する —
 
-- If `usize < sizeof(args)`: copies what's there, zeros the rest (old userspace, new kernel)
-- If `usize > sizeof(args)`: checks that the extension bytes are zero (new userspace, old kernel)
+- `usize < sizeof(args)` の場合: あるものをコピーし、残りをゼロにする（古いユーザー空間、新しいカーネル）
+- `usize > sizeof(args)` の場合: 拡張部分のバイトがゼロであることをチェックする（新しいユーザー空間、古いカーネル）
 
-— then copies the validated fields across into the `struct kernel_clone_args` the rest of the clone path uses.
+— そのうえで、検証済みのフィールドを、clone処理の残りの部分が使う `struct kernel_clone_args` にコピーする。
 
-## 32-bit compat syscalls {#32-bit-compat-syscalls}
+## 32ビット互換syscall {#32-bit-compat-syscalls}
 
-64-bit kernels support 32-bit userspace binaries. Where argument layout or size actually differs between ABIs, `COMPAT_SYSCALL_DEFINEx()` defines a separate compat entry point. But that's only needed when it's needed — `mmap2` is a useful counter-example: it doesn't need a compat variant at all, because its arguments are already the same width and meaning on every ABI:
+64ビットカーネルは32ビットのユーザー空間バイナリをサポートする。ABI間で引数のレイアウトやサイズが実際に異なる場合、`COMPAT_SYSCALL_DEFINEx()` は別のcompatエントリポイントを定義する。しかしそれが必要なのは本当に必要な場合だけである — `mmap2` は有用な反例である。その引数はすべてのABIですでに同じ幅と意味を持つため、compat版はまったく必要ない。
 
 ```c
-/* mm/mmap.c — this is a NATIVE syscall, not COMPAT_SYSCALL_DEFINE: */
+/* mm/mmap.c — これはネイティブのsyscallであり、COMPAT_SYSCALL_DEFINE ではない: */
 SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
                 unsigned long, prot, unsigned long, flags,
                 unsigned long, fd, unsigned long, pgoff)
@@ -207,44 +207,44 @@ SYSCALL_DEFINE6(mmap_pgoff, unsigned long, addr, unsigned long, len,
 }
 ```
 
-`mmap2` (i386 syscall 192) is wired directly to `sys_mmap_pgoff` in `arch/x86/entry/syscalls/syscall_32.tbl`, with no separate compat entry point at all — unlike legacy `mmap` (i386 syscall 90), which does have one (`compat_sys_ia32_mmap`). `mmap2` takes the offset in page units already (`pgoff`, not bytes), so it needs no ABI-specific translation of its own. The 64-bit `mmap` syscall (a *different* entry point, `SYSCALL_DEFINE6(mmap, ...)` in `arch/x86/kernel/sys_x86_64.c`) does the byte-to-page-unit conversion its own ABI requires — right-shifting the byte offset by `PAGE_SHIFT` — before calling into the same shared internal helper, `ksys_mmap_pgoff()`, that `sys_mmap_pgoff` also calls.
+`mmap2`（i386のsyscall 192）は、`arch/x86/entry/syscalls/syscall_32.tbl` で `sys_mmap_pgoff` に直接結び付けられており、別のcompatエントリポイントはまったくない — 一方、レガシーな `mmap`（i386のsyscall 90）にはcompatエントリポイント（`compat_sys_ia32_mmap`）がある。`mmap2` はオフセットをすでにページ単位（バイトではなく `pgoff`）で受け取るので、独自のABI固有の変換を必要としない。64ビットの `mmap` syscall（*別の*エントリポイントで、`arch/x86/kernel/sys_x86_64.c` の `SYSCALL_DEFINE6(mmap, ...)`）は、自身のABIが要求するバイトからページ単位への変換 — バイトオフセットを `PAGE_SHIFT` だけ右シフトする — を行ってから、`sys_mmap_pgoff` も呼ぶ同じ共通の内部ヘルパー `ksys_mmap_pgoff()` を呼ぶ。
 
-There's no separate `ia32_sys_call_table` symbol — `arch/x86/entry/syscall_32.c` mirrors `syscall_64.c`'s pattern exactly: a vestigial `sys_call_table[]` array (only built for pure 32-bit kernels, kept for tracing) alongside the real dispatcher, `ia32_sys_call()`, another `switch` statement built from `<asm/syscalls_32.h>`.
+独立した `ia32_sys_call_table` シンボルは存在しない — `arch/x86/entry/syscall_32.c` は `syscall_64.c` のパターンをそのまま踏襲している。名残の `sys_call_table[]` 配列（純粋な32ビットカーネルでのみビルドされ、トレーシングのために残されている）と並んで、`<asm/syscalls_32.h>` から構築されるもう1つの `switch` 文である、実際のディスパッチャ `ia32_sys_call()` がある。
 
-## Syscall tracing and audit {#syscall-tracing-and-audit}
+## syscallのトレーシングとaudit {#syscall-tracing-and-audit}
 
-The SYSCALL_DEFINE macro automatically generates tracepoints:
+SYSCALL_DEFINEマクロは自動的にtracepointを生成する。
 
 ```bash
-# Available syscall tracepoints
+# 利用可能なsyscall tracepoint
 ls /sys/kernel/tracing/events/syscalls/
 # sys_enter_read  sys_exit_read  sys_enter_write  sys_exit_write ...
 
-# Trace all write() calls
+# すべての write() 呼び出しをトレースする
 echo 1 > /sys/kernel/tracing/events/syscalls/sys_enter_write/enable
 cat /sys/kernel/tracing/trace_pipe
 # bash-1234 [000] sys_enter_write: fd=1, buf=0x7fff..., count=6
 
-# strace uses ptrace, which intercepts at a different level
+# strace は ptrace を使い、別のレベルでインターセプトする
 strace -e write ls
 ```
 
-The `audit` subsystem also hooks into syscall entry/exit for security logging:
+`audit` サブシステムも、セキュリティのためのログ記録を目的としてsyscallのエントリ/イグジットにフックする。
 
 ```bash
-# Audit all opens by uid 1000
+# uid 1000 によるすべての open を監査する
 auditctl -a always,exit -F arch=b64 -S open,openat -F uid=1000
 ausearch -k access
 ```
 
-## Slow path vs fast path {#slow-path-vs-fast-path}
+## 低速パスと高速パス {#slow-path-vs-fast-path}
 
-Some syscalls go through a "slow path" that handles signals, scheduling, restart:
+一部のsyscallは、シグナル、スケジューリング、再開を処理する「低速パス」を通る。
 
 ```c
-/* kernel/entry/common.c (simplified — the real loop is split into an
- * outer exit_to_user_mode_loop() and this inline helper, and covers
- * more work items than shown: uprobes, livepatch, arch-specific work) */
+/* kernel/entry/common.c（簡略化 — 実際のループは外側の
+ * exit_to_user_mode_loop() とこのインラインヘルパーに分かれており、
+ * ここに示したより多くの作業項目を扱う: uprobes、livepatch、アーキテクチャ固有の作業） */
 static unsigned long __exit_to_user_mode_loop(struct pt_regs *regs,
                                                unsigned long ti_work)
 {
@@ -252,60 +252,60 @@ static unsigned long __exit_to_user_mode_loop(struct pt_regs *regs,
         local_irq_enable();
 
         if (ti_work & (_TIF_NEED_RESCHED | _TIF_NEED_RESCHED_LAZY))
-            schedule();                        /* preemption point */
+            schedule();                        /* プリエンプションポイント */
 
         if (ti_work & (_TIF_SIGPENDING | _TIF_NOTIFY_SIGNAL))
-            arch_do_signal_or_restart(regs);    /* deliver signal */
+            arch_do_signal_or_restart(regs);    /* シグナルを配送する */
 
         if (ti_work & _TIF_NOTIFY_RESUME)
-            resume_user_mode_work(regs);        /* seccomp, ptrace notify */
+            resume_user_mode_work(regs);        /* seccomp、ptrace の通知 */
 
         local_irq_disable();
-        ti_work = read_thread_flags();          /* re-check for new work */
+        ti_work = read_thread_flags();          /* 新しい作業がないか再チェック */
     }
 
     return ti_work;
 }
 ```
 
-This is why syscalls are preemption and signal delivery points — the kernel checks thread-info work flags on every syscall return. The real flag set also includes `_TIF_UPROBE` (pending uprobe callback) and `_TIF_PATCH_PENDING` (livepatch transition), each with their own handler in the loop.
+これが、syscallがプリエンプションとシグナル配送のポイントとなる理由である — カーネルは、syscallから戻るたびにthread-infoのワークフラグをチェックする。実際のフラグセットには `_TIF_UPROBE`（保留中のuprobeコールバック）と `_TIF_PATCH_PENDING`（livepatchの遷移）も含まれ、それぞれループ内に独自のハンドラを持つ。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — `SYSCALL_DEFINEx()`/`__SYSCALL_DEFINEx()` macro definitions and the `__MAP()` argument-marshaling machinery
-- [arch/x86/include/asm/syscall_wrapper.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/syscall_wrapper.h) — x86's override of `__SYSCALL_DEFINEx()`: decodes `pt_regs` into the `__x64_sys_*()`/`__ia32_sys_*()` stubs
-- [fs/read_write.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) — `SYSCALL_DEFINE3(write, ...)` and `ksys_write()`, the worked example on this page
-- [kernel/fork.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) — `SYSCALL_DEFINE2(clone3, ...)` and `copy_clone_args_from_user()`: the struct-based, extensible syscall pattern
-- [include/uapi/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/sched.h) — `struct clone_args`, the versioned userspace ABI struct `clone3()` copies from
-- [include/linux/sched/task.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/task.h) — `struct kernel_clone_args`, the internal struct shared by every clone path (`fork()`, `vfork()`, kernel threads), not just `clone3()`
-- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `SYSCALL_DEFINE6(mmap_pgoff, ...)`, the native (non-compat) syscall `mmap2` is wired to directly
-- [arch/x86/entry/syscalls/syscall_32.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_32.tbl) — the i386 syscall table showing `mmap2` → `sys_mmap_pgoff` with no compat entry point, versus legacy `mmap` → `sys_old_mmap`/`compat_sys_ia32_mmap`
-- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — the syscall number → entry point table that `sys_call_table` is generated from
-- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()` and `x64_sys_call()`: the real `switch`-based dispatch that replaced indexing `sys_call_table[]` directly
-- [arch/x86/entry/syscall_32.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_32.c) — the 32-bit/IA32-compat mirror of `syscall_64.c`: `ia32_sys_call()`, the same `switch`-based dispatch pattern
-- [commit 1e3ad78334a6](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2) — "x86/syscall: Don't force use of indirect calls for system calls", the change and its stated Spectre-mitigation rationale
-- [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`/`__exit_to_user_mode_loop()`: the slow-path signal/reschedule/uprobe/livepatch checks on syscall return
+- [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — `SYSCALL_DEFINEx()`/`__SYSCALL_DEFINEx()` マクロの定義と、`__MAP()` による引数マーシャリングの仕組み
+- [arch/x86/include/asm/syscall_wrapper.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/syscall_wrapper.h) — x86による `__SYSCALL_DEFINEx()` のオーバーライド: `pt_regs` をデコードして `__x64_sys_*()`/`__ia32_sys_*()` スタブにする
+- [fs/read_write.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) — `SYSCALL_DEFINE3(write, ...)` と `ksys_write()`。このページの例題
+- [kernel/fork.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) — `SYSCALL_DEFINE2(clone3, ...)` と `copy_clone_args_from_user()`: 構造体ベースの拡張可能なsyscallパターン
+- [include/uapi/linux/sched.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/sched.h) — `struct clone_args`。`clone3()` のコピー元となる、バージョン付きのユーザー空間ABI構造体
+- [include/linux/sched/task.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/sched/task.h) — `struct kernel_clone_args`。`clone3()` だけでなく、すべてのclone処理（`fork()`、`vfork()`、カーネルスレッド）が共有する内部構造体
+- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `SYSCALL_DEFINE6(mmap_pgoff, ...)`。`mmap2` が直接結び付けられている、ネイティブの（compatでない）syscall
+- [arch/x86/entry/syscalls/syscall_32.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_32.tbl) — i386のsyscallテーブル。compatエントリポイントのない `mmap2` → `sys_mmap_pgoff` と、レガシーな `mmap` → `sys_old_mmap`/`compat_sys_ia32_mmap` の対比がわかる
+- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — `sys_call_table` の生成元となる、syscall番号 → エントリポイントのテーブル
+- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()` と `x64_sys_call()`: `sys_call_table[]` を直接インデックスする方式を置き換えた、実際の `switch` ベースのディスパッチ
+- [arch/x86/entry/syscall_32.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_32.c) — `syscall_64.c` の32ビット/IA32互換版: `ia32_sys_call()`。同じ `switch` ベースのディスパッチパターン
+- [commit 1e3ad78334a6](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=1e3ad78334a69b36e107232e337f9d693dcc9df2) — "x86/syscall: Don't force use of indirect calls for system calls"。この変更と、そこで述べられているSpectre緩和策としての根拠
+- [kernel/entry/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/entry/common.c) — `exit_to_user_mode_loop()`/`__exit_to_user_mode_loop()`: syscallからの復帰時に低速パスで行われるシグナル/再スケジュール/uprobe/livepatchのチェック
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — overview of Linux system calls and the wrapper-function naming convention
-- [`strace(1)`](https://man7.org/linux/man-pages/man1/strace.1.html) — user-space syscall tracing via `ptrace`, as used in this page's tracing example
+- [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — Linuxシステムコールの概要と、ラッパー関数の命名規則
+- [`strace(1)`](https://man7.org/linux/man-pages/man1/strace.1.html) — このページのトレーシング例で使った、`ptrace` によるユーザー空間からのsyscallトレーシング
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Syscall Entry Path](syscall-entry.md) — Hardware mechanism and entry assembly
-- [Adding a new syscall](adding-syscall.md) — Step-by-step guide
-- [32-bit Compat Syscalls](compat.md) — how `COMPAT_SYSCALL_DEFINEx()` and the compat table actually work
-- [ptrace and Syscall Interception](ptrace-interception.md) — how strace, debuggers, and seccomp-notify intercept syscalls
-- [Syscall Auditing](audit.md) — the Linux Audit subsystem referenced in the tracing/audit section
-- [Syscall Restart Mechanisms](restart-block.md) — how the slow path's signal handling leads to `ERESTARTSYS`/`restart_syscall()`
+- [syscallのエントリパス](syscall-entry.md) — ハードウェアの仕組みとエントリのアセンブリ
+- [新しいsyscallの追加](adding-syscall.md) — ステップバイステップのガイド
+- [32ビット互換syscall](compat.md) — `COMPAT_SYSCALL_DEFINEx()` とcompatテーブルが実際にどう動作するか
+- [ptraceとsyscallのインターセプト](ptrace-interception.md) — strace、デバッガ、seccomp-notifyがsyscallをインターセプトする仕組み
+- [syscallの監査](audit.md) — トレーシング/auditの節で触れたLinux Auditサブシステム
+- [syscallの再開メカニズム](restart-block.md) — 低速パスのシグナル処理がどのように `ERESTARTSYS`/`restart_syscall()` につながるか
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — David Drysdale, LWN.net (2014); walks through `SYSCALL_DEFINEn()`, using `read()`'s `fs/read_write.c` definition as the example
+- [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — David Drysdale、LWN.net（2014）。`read()` の `fs/read_write.c` での定義を例に、`SYSCALL_DEFINEn()` を解説する
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — the kernel's official process guide (`Documentation/process/adding-syscalls.rst`)
+- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — カーネルの公式プロセスガイド（`Documentation/process/adding-syscalls.rst`）

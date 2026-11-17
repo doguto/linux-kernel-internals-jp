@@ -1,130 +1,130 @@
-# Extended Attributes (xattr) {#extended-attributes-xattr}
+# 拡張属性（xattr） {#extended-attributes-xattr}
 
-> Attaching arbitrary metadata to files and directories
+> ファイルやディレクトリに任意のメタデータを付与する
 
-## What are extended attributes? {#what-are-extended-attributes}
+## 拡張属性とは何か {#what-are-extended-attributes}
 
-Extended attributes (xattr) allow attaching name-value pairs to files and directories. They extend the traditional POSIX metadata (owner, permissions, timestamps) with arbitrary key-value data. Xattr support was introduced in Linux 2.4 [(man page)](https://www.man7.org/linux/man-pages/man2/getxattr.2.html).
+拡張属性（xattr）を使うと、ファイルやディレクトリに名前と値の組を付与できる。これは従来のPOSIXメタデータ（所有者、パーミッション、タイムスタンプ）を任意のキーと値のデータで拡張するものである。xattrのサポートはLinux 2.4で導入された[(man page)](https://www.man7.org/linux/man-pages/man2/getxattr.2.html)。
 
 ```c
 #include <sys/xattr.h>
 
-/* Set an extended attribute */
+/* 拡張属性を設定する */
 setxattr("/path/to/file", "user.comment", "reviewed", 8, 0);
 
-/* Get an extended attribute */
+/* 拡張属性を取得する */
 char value[256];
 ssize_t len = getxattr("/path/to/file", "user.comment", value, sizeof(value));
 
-/* List all attributes */
+/* すべての属性を列挙する */
 char list[4096];
 ssize_t list_len = listxattr("/path/to/file", list, sizeof(list));
-/* list is NUL-separated: "user.comment\0user.author\0" */
+/* listはNUL区切り: "user.comment\0user.author\0" */
 
-/* Remove an attribute */
+/* 属性を削除する */
 removexattr("/path/to/file", "user.comment");
 ```
 
-There are also `l` variants (`lgetxattr`, `lsetxattr`) that don't follow symlinks, and `f` variants (`fgetxattr`, `fsetxattr`) that operate on open file descriptors.
+シンボリックリンクをたどらない`l`系の変種（`lgetxattr`、`lsetxattr`）や、オープンされたファイルディスクリプタに対して動作する`f`系の変種（`fgetxattr`、`fsetxattr`）もある。
 
-## Namespace prefixes {#namespace-prefixes}
+## 名前空間プレフィックス {#namespace-prefixes}
 
-Every xattr name must begin with a recognized namespace prefix:
+すべてのxattr名は、認識される名前空間プレフィックスで始まらなければならない:
 
-| Namespace | Prefix | Who can set/get | Purpose |
+| 名前空間 | プレフィックス | 設定/取得できる者 | 目的 |
 |-----------|--------|----------------|---------|
-| `user` | `user.` | Any process (with write permission on file) | General application use |
-| `system` | `system.` | Kernel and privileged processes | NFSv4 ACLs, POSIX ACLs |
-| `security` | `security.` | Kernel security modules (LSMs) | SELinux labels, AppArmor |
-| `trusted` | `trusted.` | CAP_SYS_ADMIN only | Container runtimes, OverlayFS |
+| `user` | `user.` | 任意のプロセス（ファイルへの書き込み権限があれば） | アプリケーションの一般的な用途 |
+| `system` | `system.` | カーネルと特権プロセス | NFSv4 ACL、POSIX ACL |
+| `security` | `security.` | カーネルのセキュリティモジュール（LSM） | SELinuxラベル、AppArmor |
+| `trusted` | `trusted.` | CAP_SYS_ADMINのみ | コンテナランタイム、OverlayFS |
 
-### `user` namespace {#user-namespace}
+### `user`名前空間 {#user-namespace}
 
-Any process with write permission on the file can set `user.*` attributes:
+ファイルへの書き込み権限を持つ任意のプロセスが`user.*`属性を設定できる:
 
 ```bash
-# Tag a file for application use
+# アプリケーション用途でファイルにタグを付ける
 setfattr -n user.reviewed -v "2024-01-15" report.pdf
 getfattr -n user.reviewed report.pdf
 # file: report.pdf
 # user.reviewed="2024-01-15"
 
-# List all user attributes
+# すべてのuser属性を列挙する
 getfattr -d report.pdf
 ```
 
-Restrictions:
+制限:
 
-- Not supported on symlinks or device files (to prevent privilege escalation via root-owned devices)
-- Subject to filesystem quota if enabled
+- シンボリックリンクやデバイスファイルではサポートされない（rootが所有するデバイスを介した権限昇格を防ぐため）
+- 有効であればファイルシステムのクォータの対象になる
 
-### `security` namespace {#security-namespace}
+### `security`名前空間 {#security-namespace}
 
-Used by Linux Security Modules. You rarely set these directly:
+Linux Security Modulesが使用する。これらを直接設定することはまれである:
 
 ```bash
-# SELinux file context label
+# SELinuxのファイルコンテキストラベル
 getfattr -n security.selinux /etc/passwd
 # security.selinux="system_u:object_r:passwd_file_t:s0"
 
-# AppArmor (uses security.apparmor)
+# AppArmor（security.apparmorを使う）
 getfattr -n security.apparmor /usr/bin/python3
 ```
 
-Setting `security.*` requires `CAP_SYS_ADMIN` or LSM-specific permissions.
+`security.*`の設定には、`CAP_SYS_ADMIN`またはLSM固有の権限が必要である。
 
-### `trusted` namespace {#trusted-namespace}
+### `trusted`名前空間 {#trusted-namespace}
 
-Requires `CAP_SYS_ADMIN`. Used by:
+`CAP_SYS_ADMIN`が必要である。次のものが使用する:
 
-- **OverlayFS**: `trusted.overlay.opaque`, `trusted.overlay.whiteout` for directory/file hiding
-- **Container runtimes**: Store container metadata on image layers
-- **Quota systems**: Some implementations store quota data in `trusted.*`
+- **OverlayFS**: ディレクトリ/ファイルを隠すための`trusted.overlay.opaque`、`trusted.overlay.whiteout`
+- **コンテナランタイム**: イメージレイヤ上にコンテナのメタデータを格納する
+- **クォータシステム**: 一部の実装はクォータデータを`trusted.*`に格納する
 
 ```bash
-# OverlayFS opaque directory marker
+# OverlayFSのopaqueディレクトリマーカー
 getfattr -n trusted.overlay.opaque /some/overlayfs/dir
 # trusted.overlay.opaque="y"
 ```
 
-### `system` namespace {#system-namespace}
+### `system`名前空間 {#system-namespace}
 
-Used for POSIX ACLs (NFSv4 and traditional):
+POSIX ACL（NFSv4および従来のもの）に使用される:
 
 ```bash
-# POSIX ACL stored as system.posix_acl_access
+# POSIX ACLはsystem.posix_acl_accessとして格納される
 setfacl -m u:alice:rw /shared/file
 getfattr -n system.posix_acl_access /shared/file
-# Returns binary ACL encoding
+# バイナリ形式のACLエンコーディングが返る
 ```
 
-## Filesystem support {#filesystem-support}
+## ファイルシステムのサポート {#filesystem-support}
 
 ```bash
-# Check if filesystem supports xattr
+# ファイルシステムがxattrをサポートしているか確認する
 mount | grep " / " | grep -o 'user_xattr\|xattr'
-# or
+# または
 tune2fs -l /dev/sda1 | grep "Default mount options"
 
-# ext4: supports all namespaces by default
-# tmpfs: supports user.* and trusted.* (no security by default)
-# btrfs: full xattr support
-# XFS: full xattr support (uses B-tree per inode for many attrs)
-# NFS: depends on server; NFSv4.2 has native xattr support
-# OverlayFS: delegates to upper/lower filesystem
+# ext4: デフォルトですべての名前空間をサポート
+# tmpfs: user.*とtrusted.*をサポート（デフォルトではsecurityなし）
+# btrfs: 完全なxattrサポート
+# XFS: 完全なxattrサポート（属性が多い場合はinodeごとにB-treeを使う）
+# NFS: サーバーに依存。NFSv4.2はネイティブのxattrサポートを持つ
+# OverlayFS: 上位/下位のファイルシステムに委譲する
 ```
 
-## Kernel implementation {#kernel-implementation}
+## カーネルの実装 {#kernel-implementation}
 
-### xattr dispatch: struct xattr_handler {#xattr-dispatch-struct-xattr_handler}
+### xattrのディスパッチ: struct xattr_handler {#xattr-dispatch-struct-xattr_handler}
 
-Each filesystem registers handlers for each namespace:
+各ファイルシステムは、名前空間ごとにハンドラを登録する:
 
 ```c
 /* include/linux/xattr.h */
 struct xattr_handler {
-    const char *name;    /* exact name match (e.g., "system.posix_acl_access") */
-    const char *prefix;  /* prefix match (e.g., "user.")  */
+    const char *name;    /* 名前の完全一致（例: "system.posix_acl_access"） */
+    const char *prefix;  /* プレフィックス一致（例: "user."）  */
     int flags;
 
     bool (*list)(struct dentry *dentry);
@@ -137,7 +137,7 @@ struct xattr_handler {
 };
 ```
 
-ext4's xattr handler table:
+ext4のxattrハンドラテーブル:
 
 ```c
 /* fs/ext4/xattr.c */
@@ -153,7 +153,7 @@ static const struct xattr_handler * const ext4_xattr_handler_map[] = {
 const struct xattr_handler * const *ext4_xattr_handlers = ext4_xattr_handler_map;
 ```
 
-### VFS xattr syscall path {#vfs-xattr-syscall-path}
+### VFSのxattrシステムコール経路 {#vfs-xattr-syscall-path}
 
 ```c
 /* fs/xattr.c */
@@ -170,21 +170,21 @@ int setxattr(struct mnt_idmap *idmap, struct dentry *dentry,
              const char __user *name, const void __user *value,
              size_t size, int flags)
 {
-    /* Parse namespace prefix: "user.", "security.", etc. */
+    /* 名前空間プレフィックスを解析する: "user."、"security." など */
     handler = xattr_resolve_name(dentry->d_inode, &kname);
 
-    /* Check namespace-specific permissions */
+    /* 名前空間固有の権限を確認する */
     error = handler->set(handler, idmap, dentry, inode, kname,
                           kvalue, size, flags);
 }
 ```
 
-### Storage in ext4 {#storage-in-ext4}
+### ext4での格納 {#storage-in-ext4}
 
-ext4 stores xattrs in two places:
+ext4はxattrを2つの場所に格納する:
 
-1. **Inode body** (EA inode inline): small attributes stored directly in inode's unused space
-2. **Dedicated xattr block**: a 4KB block holding multiple attributes in a key-value format
+1. **inode本体**（EA inodeインライン）: 小さな属性はinodeの未使用領域に直接格納される
+2. **専用のxattrブロック**: 複数の属性をキーと値の形式で保持する4KBのブロック
 
 ```
 ext4 inode
@@ -200,15 +200,15 @@ ext4 inode
 ```
 
 ```bash
-# Inspect xattr storage in ext4
+# ext4のxattr格納状況を調べる
 debugfs -R "stat <inode_number>" /dev/sda1
 # i_extra_isize: 28
 # Extended attributes stored in inode body / block
 ```
 
-## Security module integration {#security-module-integration}
+## セキュリティモジュールとの統合 {#security-module-integration}
 
-SELinux and other LSMs use `security.*` xattrs to label files:
+SELinuxやその他のLSMは、ファイルにラベルを付けるために`security.*` xattrを使う:
 
 ```c
 /* security/selinux/hooks.c */
@@ -219,63 +219,63 @@ static int selinux_inode_init_security(struct inode *inode,
                                         void **value,
                                         size_t *len)
 {
-    /* Set security.selinux on new file based on parent context */
+    /* 親のコンテキストに基づいて新しいファイルにsecurity.selinuxを設定する */
     xattrs[0].name  = XATTR_SELINUX_SUFFIX;  /* "selinux" */
     xattrs[0].value = context;
     xattrs[0].value_len = clen;
     return 0;
 }
 
-/* Called from vfs_create → security_inode_init_security */
+/* vfs_create → security_inode_init_security から呼ばれる */
 ```
 
 ```bash
-# Relabel a file (restore SELinux context from policy):
+# ファイルのラベルを付け直す（ポリシーからSELinuxコンテキストを復元する）:
 restorecon /path/to/file
 
-# Check context:
+# コンテキストを確認する:
 ls -Z /etc/passwd
 # system_u:object_r:passwd_file_t:s0 /etc/passwd
 
-# Recursively relabel after restore:
+# 復元後に再帰的にラベルを付け直す:
 restorecon -R /var/www/html/
 ```
 
-## fscrypt and xattr {#fscrypt-and-xattr}
+## fscryptとxattr {#fscrypt-and-xattr}
 
-fscrypt stores its per-file encryption policy as an xattr:
+fscryptは、ファイルごとの暗号化ポリシーをxattrとして格納する:
 
 ```c
 /* fs/crypto/policy.c */
-/* fscrypt stores the encryption context via the filesystem's set_context op: */
+/* fscryptはファイルシステムのset_context操作を介して暗号化コンテキストを格納する: */
 static int fscrypt_set_context(struct inode *inode, void *fs_data)
 {
-    /* Stored using a filesystem-internal xattr index (EXT4_XATTR_INDEX_ENCRYPTION),
-     * not directly accessible as a named user/trusted xattr */
+    /* ファイルシステム内部のxattrインデックス（EXT4_XATTR_INDEX_ENCRYPTION）を使って格納され、
+     * 名前付きのuser/trusted xattrとして直接アクセスすることはできない */
     return inode->i_sb->s_cop->set_context(inode, &ci->ci_policy,
                                             fscrypt_context_size(&ci->ci_policy), fs_data);
 }
 
-/* ext4 uses: EXT4_XATTR_INDEX_ENCRYPTION → internal xattr, not exposed as trusted.fscrypt */
+/* ext4が使うもの: EXT4_XATTR_INDEX_ENCRYPTION → 内部xattr。trusted.fscryptとしては公開されない */
 ```
 
 ```bash
-# Check if a file is encrypted (use fscrypt tools, not getfattr):
+# ファイルが暗号化されているか確認する（getfattrではなくfscryptのツールを使う）:
 fscryptctl get_policy /encrypted/file
-# or:
+# または:
 lsattr /encrypted/file | grep -o 'E'
 ```
 
-## OverlayFS whiteout and opaque markers {#overlayfs-whiteout-and-opaque-markers}
+## OverlayFSのwhiteoutとopaqueマーカー {#overlayfs-whiteout-and-opaque-markers}
 
-OverlayFS uses `trusted.*` xattrs to implement its layering:
+OverlayFSは、レイヤ構造を実装するために`trusted.*` xattrを使う:
 
 ```bash
-# Opaque directory: tells overlayfs to stop looking at lower layers
+# opaqueディレクトリ: overlayfsに下位レイヤの探索をやめるよう伝える
 getfattr -n trusted.overlay.opaque /overlay/upper/somedir
 # trusted.overlay.opaque="y"
 
-# Origin: tracks which lower inode this was copied from
+# origin: これがどの下位inodeからコピーされたかを追跡する
 getfattr -n trusted.overlay.origin /overlay/upper/file
 ```
 
@@ -289,11 +289,11 @@ int ovl_check_setxattr(struct ovl_fs *ofs, struct dentry *upperdentry,
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [VFS Objects](vfs-objects.md) — inodes that store xattrs
-- [OverlayFS](../filesystems/overlayfs.md) — uses trusted.overlay.* xattrs
-- [dm-crypt and fscrypt](../crypto/encryption.md) — fscrypt encryption policy xattr
-- [LSM Framework](../security/lsm.md) — SELinux/AppArmor use security.* xattrs
-- `fs/xattr.c` — VFS xattr dispatch
-- `fs/ext4/xattr.c` — ext4 xattr storage implementation
+- [VFSオブジェクト](vfs-objects.md) — xattrを格納するinode
+- [OverlayFS](../filesystems/overlayfs.md) — trusted.overlay.* xattrを使う
+- [dm-cryptとfscrypt](../crypto/encryption.md) — fscryptの暗号化ポリシーxattr
+- [LSMフレームワーク](../security/lsm.md) — SELinux/AppArmorはsecurity.* xattrを使う
+- `fs/xattr.c` — VFSのxattrディスパッチ
+- `fs/ext4/xattr.c` — ext4のxattr格納の実装

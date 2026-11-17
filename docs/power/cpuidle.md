@@ -1,10 +1,10 @@
-# cpuidle: CPU C-states and Idle Power Management {#cpuidle-cpu-c-states-and-idle-power-management}
+# cpuidle: CPUのC-stateとアイドル電源管理 {#cpuidle-cpu-c-states-and-idle-power-management}
 
-> Hardware sleep states, latency/power tradeoffs, and the cpuidle governor framework
+> ハードウェアのスリープ状態、レイテンシと電力のトレードオフ、そしてcpuidleガバナフレームワーク
 
-## CPU C-states {#cpu-c-states}
+## CPUのC-state {#cpu-c-states}
 
-When a CPU has no work to do, it enters a **C-state** (idle state). Each state trades deeper power savings for higher wake-up latency:
+CPUに実行すべき仕事がないとき、CPUは**C-state**（アイドル状態）に入る。各状態は、より深い省電力と引き換えに、より大きなウェイクアップレイテンシを伴う。
 
 ```
 C-state hierarchy (x86, representative intel_idle/skl_cstates[] values --
@@ -25,7 +25,7 @@ instead of S3 suspend, with its own coarser latency budget.
 ```
 
 ```bash
-# Check available C-states:
+# 利用可能なC-stateを確認する:
 cat /sys/devices/system/cpu/cpu0/cpuidle/state*/name
 # POLL
 # C1
@@ -37,7 +37,7 @@ cat /sys/devices/system/cpu/cpu0/cpuidle/state*/name
 # C9
 # C10
 
-# Check C-state latency and power:
+# C-stateのレイテンシと電力を確認する:
 for state in /sys/devices/system/cpu/cpu0/cpuidle/state*; do
     echo -n "$(cat $state/name): "
     echo -n "latency=$(cat $state/latency)µs "
@@ -48,61 +48,61 @@ done
 # C6: latency=85µs power=0mW
 ```
 
-## cpuidle framework {#cpuidle-framework}
+## cpuidleフレームワーク {#cpuidle-framework}
 
-The Linux cpuidle framework selects which C-state to enter when the CPU is idle:
+Linuxのcpuidleフレームワークは、CPUがアイドルのときにどのC-stateに入るかを選択する。
 
 ```c
 /* include/linux/cpuidle.h */
 
-/* Describes one C-state: */
+/* 1つのC-stateを記述する: */
 struct cpuidle_state {
     char        name[CPUIDLE_NAME_LEN];
     char        desc[CPUIDLE_DESC_LEN];
 
-    s64         exit_latency_ns;      /* worst-case wake-up latency */
-    s64         target_residency_ns;  /* min time to justify entering */
-    unsigned int flags;               /* CPUIDLE_FLAG_TIMER_STOP etc. */
+    s64         exit_latency_ns;      /* 最悪ケースのウェイクアップレイテンシ */
+    s64         target_residency_ns;  /* 入る価値があるための最小滞在時間 */
+    unsigned int flags;               /* CPUIDLE_FLAG_TIMER_STOP など */
 
-    /* legacy µs-granularity fields -- most drivers (e.g. intel_idle) still
-     * populate these; the core derives the _ns fields above from them */
-    unsigned int exit_latency;        /* in US */
-    int          power_usage;         /* in mW */
-    unsigned int target_residency;    /* in US */
+    /* 旧来のµs粒度のフィールド -- ほとんどのドライバ（例: intel_idle）は今も
+     * これらを設定する。コアはこれらから上記の_nsフィールドを導出する */
+    unsigned int exit_latency;        /* 単位はµs */
+    int          power_usage;         /* 単位はmW */
+    unsigned int target_residency;    /* 単位はµs */
 
     int (*enter)(struct cpuidle_device *dev,
                  struct cpuidle_driver *drv, int index);
-    /* ... enter_dead(), enter_s2idle() also omitted here ... */
+    /* ... enter_dead()、enter_s2idle() もここでは省略 ... */
 };
 
-/* Per-CPU idle device: */
+/* CPUごとのアイドルデバイス: */
 struct cpuidle_device {
     unsigned int    registered:1;
     unsigned int    enabled:1;
     unsigned int    poll_time_limit:1;
     unsigned int    cpu;
-    ktime_t         next_hrtimer;          /* next timer expiry */
+    ktime_t         next_hrtimer;          /* 次のタイマー満了時刻 */
     struct cpuidle_state_usage states_usage[CPUIDLE_STATE_MAX];
-    /* states_usage[i].time_ns: total ns spent in state i */
-    /* states_usage[i].usage:   number of times state i entered */
+    /* states_usage[i].time_ns: 状態iで過ごした合計ns */
+    /* states_usage[i].usage:   状態iに入った回数 */
 };
 
-/* Driver: describes all C-states for a platform: */
+/* ドライバ: プラットフォームのすべてのC-stateを記述する: */
 struct cpuidle_driver {
     const char          *name;
     struct module       *owner;
     struct cpuidle_state states[CPUIDLE_STATE_MAX];
     int                  state_count;
-    int                  safe_state_index; /* shallow state used while a CPU
-                                             * waits for coupled CPUs during
-                                             * synchronized (COUPLED) idle
-                                             * entry, see drivers/cpuidle/coupled.c */
+    int                  safe_state_index; /* 同期（COUPLED）アイドル進入の際に、
+                                             * CPUが連動するCPUを待つ間に使う
+                                             * 浅い状態。drivers/cpuidle/coupled.c
+                                             * を参照 */
 };
 ```
 
-### intel_idle driver {#intel_idle-driver}
+### intel_idleドライバ {#intel_idle-driver}
 
-The `intel_idle` driver provides Intel-specific C-states with known latencies:
+`intel_idle`ドライバは、レイテンシが既知のIntel固有のC-stateを提供する。
 
 ```c
 /* drivers/idle/intel_idle.c */
@@ -139,11 +139,11 @@ static struct cpuidle_state skl_cstates[] = {
         .enter = intel_idle,
         .flags = MWAIT2flg(0x20) | CPUIDLE_FLAG_TLB_FLUSHED,
     },
-    /* ... more states ... */
+    /* ... さらに状態が続く ... */
 };
 
-/* Entering a C-state via MWAIT instruction: */
-#define flg2MWAIT(flags) (((flags) >> 24) & 0xFF)  /* hint packed in top byte of .flags */
+/* MWAIT命令によってC-stateに入る: */
+#define flg2MWAIT(flags) (((flags) >> 24) & 0xFF)  /* ヒントは.flagsの最上位バイトに格納される */
 
 static __always_inline int __intel_idle(struct cpuidle_device *dev,
                                         struct cpuidle_driver *drv,
@@ -151,9 +151,9 @@ static __always_inline int __intel_idle(struct cpuidle_device *dev,
 {
     struct cpuidle_state *state = &drv->states[index];
     unsigned int eax = flg2MWAIT(state->flags);
-    unsigned int ecx = 1 * irqoff; /* break on interrupt */
+    unsigned int ecx = 1 * irqoff; /* 割り込みで抜ける */
 
-    mwait_idle_with_hints(eax, ecx);  /* issues MONITOR/MWAIT */
+    mwait_idle_with_hints(eax, ecx);  /* MONITOR/MWAITを発行する */
     return index;
 }
 
@@ -164,13 +164,13 @@ static __cpuidle int intel_idle(struct cpuidle_device *dev,
 }
 ```
 
-## cpuidle governors {#cpuidle-governors}
+## cpuidleガバナ {#cpuidle-governors}
 
-The governor decides which C-state to enter based on expected idle duration:
+ガバナは、予想されるアイドル時間に基づいてどのC-stateに入るかを決定する。
 
-### ladder governor {#ladder-governor}
+### ladderガバナ {#ladder-governor}
 
-Simple: tries to stay at or near the current state; moves up/down by comparing the *actual* residency in the last state entered against the neighboring states' exit latencies (`drivers/cpuidle/governors/ladder.c`):
+単純である。現在の状態またはその近くに留まろうとし、最後に入った状態での*実際の*滞在時間を隣接する状態の脱出レイテンシと比較して、上下に移動する（`drivers/cpuidle/governors/ladder.c`）。
 
 ```
 last_residency = actual_time_in_last_state - exit_latency[last_state]
@@ -186,73 +186,73 @@ elif last_residency < exit_latency[last_state]:
     → demote to last_state - 1  (DEMOTION_COUNT == 1, so this is immediate)
 ```
 
-### menu governor (default for tickless systems) {#menu-governor-default-for-tickless-systems}
+### menuガバナ（ticklessシステムでのデフォルト） {#menu-governor-default-for-tickless-systems}
 
-Predicts idle duration using the next timer event and historical data. As of current mainline, `menu_select()` no longer has an iowait-based correction input (an older iowaiters-aware `which_bucket()` variant was removed) -- the prediction is now purely timer- and history-driven:
+次のタイマーイベントと過去のデータを用いてアイドル時間を予測する。現在のメインラインでは、`menu_select()`はもはやiowaitに基づく補正入力を持たない（iowaiterを考慮する古い`which_bucket()`の変種は削除された）。予測は今では純粋にタイマーと履歴によって駆動される。
 
 ```c
 /* drivers/cpuidle/governors/menu.c */
 
-/* Inputs to prediction: */
-/* 1. Time to next timer event (tick_nohz_get_sleep_length()) */
-/* 2. Per-magnitude correction factor: an EWMA, bucketed by which_bucket()
- *    on the predicted duration alone (6 buckets, by order of magnitude) --
- *    corrects for wakeups (e.g. interrupts) that beat the next timer */
-/* 3. Repeatable-interval detector: get_typical_interval() looks at the
- *    last 8 idle intervals; if their stddev is low, their average is used
- *    as the prediction instead of the next-timer estimate */
-/* 4. pm_qos latency constraint (cpuidle_governor_latency_req()): caps how
- *    deep a state may be selected regardless of the duration prediction */
+/* 予測への入力: */
+/* 1. 次のタイマーイベントまでの時間（tick_nohz_get_sleep_length()） */
+/* 2. 桁ごとの補正係数: EWMAであり、予測時間のみに基づいてwhich_bucket()で
+ *    バケット分けされる（桁ごとに6バケット）-- 次のタイマーより先に
+ *    起こるウェイクアップ（例: 割り込み）を補正する */
+/* 3. 繰り返し間隔検出器: get_typical_interval()は直近8回のアイドル間隔を
+ *    調べ、標準偏差が小さければ、次タイマーによる見積もりの代わりに
+ *    その平均値を予測として使う */
+/* 4. pm_qosのレイテンシ制約（cpuidle_governor_latency_req()）: 時間の予測に
+ *    かかわらず、選択できる状態の深さに上限を設ける */
 
-/* Output: selected C-state index */
+/* 出力: 選択されたC-stateのインデックス */
 ```
 
-### TEO governor (Timer Events Oriented, Linux 5.1+) {#teo-governor-timer-events-oriented-linux-51}
+### TEOガバナ（Timer Events Oriented、Linux 5.1以降） {#teo-governor-timer-events-oriented-linux-51}
 
-More accurate for modern tickless systems:
+最近のticklessシステムでは、より正確である。
 
 ```bash
-# Check/set current governor:
+# 現在のガバナを確認/設定する:
 cat /sys/devices/system/cpu/cpuidle/current_governor
 # menu
 
 echo teo > /sys/devices/system/cpu/cpuidle/current_governor
 ```
 
-## Disabling C-states {#disabling-c-states}
+## C-stateの無効化 {#disabling-c-states}
 
-For latency-sensitive workloads, disable deep C-states:
+レイテンシに敏感なワークロードでは、深いC-stateを無効にする。
 
 ```bash
-# Disable C6 and deeper. With the state ordering used above
-# (state0=POLL, state1=C1, state2=C1E, state3=C3, state4=C6, ...),
-# C6 is state4:
+# C6以降を無効にする。上で使った状態の並び
+# （state0=POLL, state1=C1, state2=C1E, state3=C3, state4=C6, ...）では、
+# C6はstate4である:
 for cpu in /sys/devices/system/cpu/cpu*/cpuidle/state[4-9]*/; do
     echo 1 > $cpu/disable 2>/dev/null
 done
 
-# Permanent: add "processor.max_cstate=1" to kernel boot params
-# or: "intel_idle.max_cstate=1"
+# 恒久的に: カーネルのブートパラメータに"processor.max_cstate=1"を追加する
+# または: "intel_idle.max_cstate=1"
 
-# For RT systems: disable all C-states except C0/POLL:
+# RTシステム向け: C0/POLL以外のすべてのC-stateを無効にする:
 for cpu in /sys/devices/system/cpu/cpu*/cpuidle/state[1-9]*/; do
     echo 1 > $cpu/disable 2>/dev/null
 done
 
-# Check pm_qos latency constraint (set by applications/drivers):
+# pm_qosのレイテンシ制約を確認する（アプリケーション/ドライバが設定する）:
 cat /sys/devices/system/cpu/cpu0/power/pm_qos_resume_latency_us
-# 0 = no constraint, other value = max acceptable wakeup latency
+# 0 = 制約なし、それ以外の値 = 許容できる最大ウェイクアップレイテンシ
 
-# Application: prevent deep C-states (e.g., audio daemon).
+# アプリケーション: 深いC-stateを防ぐ（例: オーディオデーモン）。
 #
-# /dev/cpu_dma_latency requires a *binary* 4-byte s32, not a decimal string:
-# cpu_latency_qos_write() (kernel/power/qos.c) only string-parses a write
-# when its length is NOT exactly sizeof(s32) == 4 bytes. "100\n" from
-# `echo 100` is exactly 4 bytes, so it's reinterpreted as a raw binary value
-# instead of the string "100" -- producing a garbage latency, not 100us.
-# A shell redirect (or `tee`) also closes the fd right after writing, which
-# drops the constraint immediately -- it only lasts as long as the fd stays
-# open, so a real daemon holds it open for its own lifetime:
+# /dev/cpu_dma_latencyには10進数の文字列ではなく、*バイナリの*4バイトs32が必要:
+# cpu_latency_qos_write()（kernel/power/qos.c）は、書き込みの長さが
+# ちょうどsizeof(s32) == 4バイトで「ない」ときにのみ文字列として解析する。
+# `echo 100`による"100\n"はちょうど4バイトなので、文字列"100"ではなく
+# 生のバイナリ値として再解釈され、100usではなくでたらめなレイテンシになる。
+# シェルのリダイレクト（や`tee`）は書き込み直後にfdを閉じるため、
+# 制約もすぐに破棄される -- 制約はfdが開いている間しか持続しないので、
+# 実際のデーモンは自身の生存期間中ずっとfdを開いたままにする:
 python3 -c "
 import os, struct, time
 fd = os.open('/dev/cpu_dma_latency', os.O_WRONLY)
@@ -262,15 +262,15 @@ os.close(fd)
 "
 ```
 
-## Statistics and observability {#statistics-and-observability}
+## 統計と可観測性 {#statistics-and-observability}
 
 ```bash
-# Per-CPU per-state time and usage:
+# CPUごと・状態ごとの時間と使用回数:
 cat /sys/devices/system/cpu/cpu0/cpuidle/state*/usage
 cat /sys/devices/system/cpu/cpu0/cpuidle/state*/time   # µs
 cat /sys/devices/system/cpu/cpu0/cpuidle/state*/name
 
-# cpupower tool:
+# cpupowerツール:
 cpupower idle-info
 # CPUidle driver: intel_idle
 # CPUidle governor: menu
@@ -292,23 +292,23 @@ cpupower idle-info
 # Usage: 5127004
 # Duration: 981234501122
 
-cpupower monitor -i 5  # 5-second sample
+cpupower monitor -i 5  # 5秒間のサンプル
 # Mperf | C0   Cx   Freq | POLL C1   C1E  C3   C6   C7s  C8   C9   C10
 #      0| 25%  75% 3.2G  |   0%   0%   0%   0%   0%  10%  20%  45%   0%
 
-# Turbostat: per-CPU C-state residency:
+# turbostat: CPUごとのC-state滞在率:
 turbostat --interval 1 --show CPU,Busy%,Bzy_MHz,PkgWatt,C1%,C6%,C8%
 # CPU   Busy%  Bzy_MHz  PkgWatt  C1%    C6%    C8%
 #   0    5.2   3400.0   18.4    2.3    3.1   89.4
 #   1    2.1   3400.0            1.2    1.8   94.9
 
-# BPF trace cpuidle events:
+# BPFでcpuidleイベントをトレースする:
 bpftrace -e '
 tracepoint:power:cpu_idle
 { @[args->state, cpu] = count(); }'
-# [state, cpu] → entry count
+# [state, cpu] → 進入回数
 
-# CPU wake-up latency histogram (time between idle entry and next event):
+# CPUウェイクアップレイテンシのヒストグラム（アイドル進入から次のイベントまでの時間）:
 bpftrace -e '
 tracepoint:power:cpu_idle /args->state != 4294967295/
 { @start[cpu] = nsecs; }
@@ -319,43 +319,43 @@ tracepoint:power:cpu_idle /args->state == 4294967295 && @start[cpu]/
 }'
 ```
 
-## Power consumption impact {#power-consumption-impact}
+## 消費電力への影響 {#power-consumption-impact}
 
 ```bash
-# Measure power with powertop:
-powertop --auto-tune   # apply recommended power settings
-powertop --csv=power.csv --time=60  # 60-second measurement
+# powertopで電力を計測する:
+powertop --auto-tune   # 推奨される電源設定を適用する
+powertop --csv=power.csv --time=60  # 60秒間の計測
 
-# RAPL (Running Average Power Limit) energy counters:
-cat /sys/class/powercap/intel-rapl:0/energy_uj       # package energy
-cat /sys/class/powercap/intel-rapl:0:0/energy_uj     # core energy
-cat /sys/class/powercap/intel-rapl:0:1/energy_uj     # uncore energy
+# RAPL（Running Average Power Limit）のエネルギーカウンタ:
+cat /sys/class/powercap/intel-rapl:0/energy_uj       # パッケージのエネルギー
+cat /sys/class/powercap/intel-rapl:0:0/energy_uj     # コアのエネルギー
+cat /sys/class/powercap/intel-rapl:0:1/energy_uj     # uncoreのエネルギー
 
-# turbostat shows instantaneous watts per package
+# turbostatはパッケージごとの瞬時ワット数を表示する
 turbostat --show PkgWatt,PkgTmp --interval 1
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/cpuidle.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpuidle.h) — `struct cpuidle_state`, `struct cpuidle_device`, `struct cpuidle_driver`
-- [drivers/idle/intel_idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/idle/intel_idle.c) — Intel C-state driver: `skl_cstates[]` table and the `intel_idle()`/MWAIT entry path
-- [drivers/cpuidle/governors/menu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpuidle/governors/menu.c) — the `menu` governor's idle-duration prediction
-- [drivers/cpuidle/governors/teo.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpuidle/governors/teo.c) — the Timer Events Oriented governor
-- [kernel/sched/idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/idle.c) — `cpuidle_idle_call()`, the idle loop that invokes the governor and driver
+- [include/linux/cpuidle.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpuidle.h) — `struct cpuidle_state`、`struct cpuidle_device`、`struct cpuidle_driver`
+- [drivers/idle/intel_idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/idle/intel_idle.c) — IntelのC-stateドライバ: `skl_cstates[]`テーブルと`intel_idle()`/MWAITによる進入経路
+- [drivers/cpuidle/governors/menu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpuidle/governors/menu.c) — `menu`ガバナによるアイドル時間の予測
+- [drivers/cpuidle/governors/teo.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpuidle/governors/teo.c) — Timer Events Orientedガバナ
+- [kernel/sched/idle.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/idle.c) — `cpuidle_idle_call()`。ガバナとドライバを呼び出すアイドルループ
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [cpufreq and P-states](cpufreq.md) — frequency scaling (orthogonal to C-states)
-- [Real-Time Tuning](../sched/rt-tuning.md) — CPU isolation and frequency-scaling tuning for RT tasks
-- [The Scheduling Tick](../sched/sched-tick.md) — NOHZ interaction with cpuidle
-- [hrtimers](../time/hrtimers.md) — timers that interrupt idle
+- [cpufreqとP-state](cpufreq.md) — 周波数スケーリング（C-stateとは直交する）
+- [リアルタイムチューニング](../sched/rt-tuning.md) — RTタスクのためのCPU分離と周波数スケーリングのチューニング
+- [スケジューリングティック](../sched/sched-tick.md) — NOHZとcpuidleの相互作用
+- [hrtimer](../time/hrtimers.md) — アイドルを中断させるタイマー
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: cpuidle: New timer events oriented governor for tickless systems](https://lwn.net/Articles/769571/) — Rafael Wysocki's original patch and rationale for the TEO governor, merged in Linux 5.1
+- [LWN: cpuidle: New timer events oriented governor for tickless systems](https://lwn.net/Articles/769571/) — TEOガバナに関するRafael Wysockiの最初のパッチとその根拠。Linux 5.1でマージされた
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/admin-guide/pm/cpuidle.rst](https://docs.kernel.org/admin-guide/pm/cpuidle.html) — upstream CPUIdle subsystem admin guide: governors, drivers, the `disable` and `pm_qos_resume_latency_us` sysfs knobs
+- [Documentation/admin-guide/pm/cpuidle.rst](https://docs.kernel.org/admin-guide/pm/cpuidle.html) — アップストリームのCPUIdleサブシステム管理者ガイド: ガバナ、ドライバ、`disable`および`pm_qos_resume_latency_us`のsysfsノブ

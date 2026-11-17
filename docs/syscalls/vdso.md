@@ -55,7 +55,7 @@ The vvar page is mapped read-only in userspace but read-write in the kernel. The
 `[vvar]`; the kernel timer interrupt writes to it. No ring transition is needed because reading a
 mapped page is a plain memory access.
 
-## struct vdso_time_data and struct vdso_clock {#struct-vdsotimedata-and-struct-vdso_clock}
+## struct vdso_time_data and struct vdso_clock {#struct-vdso_time_data-and-struct-vdso_clock}
 
 There is no single combined `struct vdso_data` in current kernels. The vvar page is `struct vdso_time_data`,
 and the per-clocksource seqlock state it holds an array of is `struct vdso_clock` — both defined in
@@ -213,7 +213,7 @@ during the update.
 Coarse clocks skip the TSC read entirely; they return the pre-computed `basetime` directly (resolution is
 one jiffy, ~1–4 ms). This makes them even cheaper than the TSC-based clocks.
 
-## VDSO_CLOCKMODE_NONE: fallback to real syscall {#vdsoclockmodenone-fallback-to-real-syscall}
+## VDSO_CLOCKMODE_NONE: fallback to real syscall {#vdso_clockmode_none-fallback-to-real-syscall}
 
 If the TSC is not reliable — for example, after live VM migration (the TSC may jump), during CPU hotplug,
 or when the kernel detects TSC instability — the kernel sets `clock_mode` to `VDSO_CLOCKMODE_NONE`. The

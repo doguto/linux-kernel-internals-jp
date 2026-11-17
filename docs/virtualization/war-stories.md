@@ -1,55 +1,55 @@
-# War Stories: Virtualization (KVM) Bugs and Escapes {#war-stories-virtualization-kvm-bugs-and-escapes}
+# 事件簿: 仮想化（KVM）のバグとエスケープ {#war-stories-virtualization-kvm-bugs-and-escapes}
 
-> Five incidents spanning the whole KVM/QEMU stack — a guest-to-host escape through a device nobody configured, two speculative-execution mitigations whose exact timing turned out to matter as much as their existence, a use-after-free born from a refactor that quietly dropped an implicit invariant, and a heap overflow born from the same kind of gap in an edge case nobody had reasoned about
+> KVM/QEMUスタック全体にまたがる5つのインシデント。誰も設定していないデバイスを経由したゲストからホストへのエスケープ、存在すること自体と同じくらい正確なタイミングが重要だと判明した2つの投機的実行の緩和策、暗黙の不変条件を黙って落としたリファクタリングから生まれたuse-after-free、そして誰も検討していなかったエッジケースにおける同種の隙から生まれたヒープオーバーフロー
 
-Virtualization's trust boundary is the sharpest one this site covers: a guest is, by design, an untrusted tenant that the host must contain completely, across both the device-emulation layer (QEMU, in userspace) and the hypervisor kernel module (KVM) that gives it hardware-accelerated CPU access. The five incidents below span that entire boundary — one lives entirely in QEMU's userspace device model, two are host-kernel memory-corruption bugs (a use-after-free born from a refactor, and a heap overflow born from an edge case) that each dropped an implicit invariant, and two are CPU speculative-execution mitigations where getting the *mechanism* right wasn't enough — the exact placement and timing of the fix mattered just as much.
+仮想化の信頼境界は、本サイトが扱う中で最も鋭いものである。ゲストは設計上、ホストが完全に封じ込めなければならない信頼できないテナントであり、その封じ込めはデバイスエミュレーション層（ユーザー空間のQEMU）と、ハードウェア支援によるCPUアクセスを提供するハイパーバイザのカーネルモジュール（KVM）の両方にまたがる。以下の5つのインシデントはその境界全体に及ぶ。1つは完全にQEMUのユーザー空間デバイスモデルの中にあり、2つはホストカーネルのメモリ破壊バグ（リファクタリングから生まれたuse-after-freeと、エッジケースから生まれたヒープオーバーフロー）でそれぞれ暗黙の不変条件を落としたもの、残る2つはCPUの投機的実行に対する緩和策で、*仕組み*を正しくするだけでは不十分であり、修正の正確な配置とタイミングが同じくらい重要だったものである。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by when the fix landed — newest first.
+修正が取り込まれた時期の新しい順に並べている。
 
-### [MDS: The Mitigation That Flushed the Buffers Too Early](war-stories/mds-verw-timing-gap.md) {#mds-the-mitigation-that-flushed-the-buffers-too-early}
-**Original mitigation 2019, real fix committed Feb 2024 (Linux 6.8, March 2024) · CVE-2018-12130**
-KVM's original defense against Microarchitectural Data Sampling flushed CPU buffers several instructions before actually entering the guest — and every register spill and stack push in between could refill those buffers with fresh host data. The gap sat unexamined for five years until a routine hardening pass closed it as a side effect.
+### [MDS: バッファを早すぎるタイミングでフラッシュした緩和策](war-stories/mds-verw-timing-gap.md) {#mds-the-mitigation-that-flushed-the-buffers-too-early}
+**当初の緩和策は2019年、本当の修正は2024年2月にコミット（Linux 6.8、2024年3月）· CVE-2018-12130**
+Microarchitectural Data Samplingに対するKVMの当初の防御は、実際にゲストへ入る数命令前にCPUバッファをフラッシュしていた。そしてその間のレジスタの退避やスタックへのpushのひとつひとつが、新たなホストのデータでバッファを再び満たし得た。この隙は5年間誰にも検証されないまま放置され、日常的なハードニング作業が副作用として塞ぐまで残っていた。
 
-### [vhost: The Dirty-Log Counter That Forgot Zero-Length Descriptors](war-stories/vhost-migration-log-overflow.md) {#vhost-the-dirty-log-counter-that-forgot-zero-length-descriptors}
-**Linux 5.3 (September 2019) · CVE-2019-14835**
-Live-migration dirty-page logging assumed one log entry per descriptor could never outrun the descriptor count itself — an invariant a single guest-supplied zero-length descriptor could break, turning a routine migration into a guest-controlled kernel heap overflow.
+### [vhost: 長さゼロのディスクリプタを忘れたダーティログのカウンタ](war-stories/vhost-migration-log-overflow.md) {#vhost-the-dirty-log-counter-that-forgot-zero-length-descriptors}
+**Linux 5.3（2019年9月）· CVE-2019-14835**
+ライブマイグレーションのダーティページのロギングは、ディスクリプタ1つにつきログエントリ1つなので、ログがディスクリプタ数そのものを超えることはあり得ないと仮定していた。この不変条件は、ゲストが渡す長さゼロのディスクリプタ1つで崩れ得るもので、日常的なマイグレーションをゲストが制御できるカーネルヒープオーバーフローへと変えてしまった。
 
-### [The Nested-VMX Refactor That Forgot One Field on the Error Path](war-stories/nested-vmx-posted-interrupt-uaf.md) {#the-nested-vmx-refactor-that-forgot-one-field-on-the-error-path}
-**Linux 4.20 (December 2018) · CVE-2018-16882**
-Removing a trivial wrapper function restructured a posted-interrupt setup path around an early return on failure — and that early return skipped resetting a pointer that used to be reset unconditionally on every call, dangling straight into a later use-after-free.
+### [エラーパスでフィールドを1つ忘れたnested VMXのリファクタリング](war-stories/nested-vmx-posted-interrupt-uaf.md) {#the-nested-vmx-refactor-that-forgot-one-field-on-the-error-path}
+**Linux 4.20（2018年12月）· CVE-2018-16882**
+些細なラッパー関数の削除によって、posted interruptのセットアップパスが失敗時の早期returnを中心に再構成された。その早期returnは、かつては呼び出しのたびに無条件にリセットされていたポインタのリセットを飛ばしてしまい、そのダングリングポインタがそのまま後のuse-after-freeにつながった。
 
-### [L1TF: When a Not-Present Page Table Entry Wasn't Not-Present Enough](war-stories/l1tf-foreshadow-vmm.md) {#l1tf-when-a-not-present-page-table-entry-wasnt-not-present-enough}
-**Linux 4.19 (August 2018) · CVE-2018-3646**
-A terminal page fault on a not-present EPT entry still let the CPU speculatively forward stale L1 data-cache contents — and in a virtualized guest, that cache is shared across every sibling hyperthread on the core, host and guests alike.
+### [L1TF: not-presentのページテーブルエントリが十分にnot-presentではなかったとき](war-stories/l1tf-foreshadow-vmm.md) {#l1tf-when-a-not-present-page-table-entry-wasnt-not-present-enough}
+**Linux 4.19（2018年8月）· CVE-2018-3646**
+not-presentのEPTエントリに対する終端的なページフォールトであっても、CPUは古いL1データキャッシュの内容を投機的にフォワードできてしまった。そして仮想化されたゲストでは、そのキャッシュはコア上のすべての兄弟ハイパースレッドで、ホストとゲストの区別なく共有されている。
 
-### [VENOM: The Floppy Controller Nobody Turned Off](war-stories/venom-fdc-overflow.md) {#venom-the-floppy-controller-nobody-turned-off}
-**QEMU, May 2015 · CVE-2015-3456**
-QEMU's floppy disk controller emulation is instantiated for every default x86 machine type whether or not a guest has a floppy drive configured, and its command FIFO had no bounds check at all — a guest that never touched a floppy could still overflow it straight into the host's heap.
+### [VENOM: 誰もオフにしなかったフロッピーコントローラ](war-stories/venom-fdc-overflow.md) {#venom-the-floppy-controller-nobody-turned-off}
+**QEMU、2015年5月 · CVE-2015-3456**
+QEMUのフロッピーディスクコントローラのエミュレーションは、ゲストにフロッピードライブが設定されているかどうかにかかわらず、デフォルトのすべてのx86マシンタイプでインスタンス化される。しかもそのコマンドFIFOには境界チェックがまったくなかった。フロッピーに一度も触れないゲストでも、それをオーバーフローさせてホストのヒープに直接書き込むことができた。
 
-## Common threads {#common-threads}
+## 共通する傾向 {#common-threads}
 
-| Pattern | MDS timing gap | vhost log overflow | Nested-VMX UAF | L1TF | VENOM |
+| パターン | MDSのタイミングの隙 | vhostのログオーバーフロー | nested VMXのUAF | L1TF | VENOM |
 |---------|:---:|:---:|:---:|:---:|:---:|
-| Lives in QEMU userspace, not the Linux kernel | No | No | No | No | Yes |
-| Root cause: an implicit invariant a refactor or edge case quietly broke | No | Yes | Yes | — | Yes |
-| Root cause: a correct mechanism placed at the wrong point in the execution path | Yes | No | No | Partial (SMT sharing, not placement) | No |
-| Guest-to-host memory corruption (not just information disclosure) | No | Yes | Yes (UAF) | No (side channel only) | Yes |
-| Fix required understanding hardware microarchitecture, not just software logic | Yes | No | No | Yes | No |
-| CISA KEV-listed | No | No | No | No | No |
-| Years between introduction and (eventual, full) fix | 5 (2019→2024) | 9 (2010→2019) | 1.3 (2017→2018) | N/A (hardware behavior) | 12+ (code dated 2003 at latest→2015) |
+| Linuxカーネルではなく、QEMUのユーザー空間に存在する | No | No | No | No | Yes |
+| 根本原因: リファクタリングやエッジケースが黙って壊した暗黙の不変条件 | No | Yes | Yes | — | Yes |
+| 根本原因: 正しい仕組みが実行パス上の誤った位置に置かれていた | Yes | No | No | 部分的（配置ではなくSMTの共有） | No |
+| ゲストからホストへのメモリ破壊（単なる情報漏えいではない） | No | Yes | Yes（UAF） | No（サイドチャネルのみ） | Yes |
+| 修正にはソフトウェアのロジックだけでなく、ハードウェアのマイクロアーキテクチャの理解が必要だった | Yes | No | No | Yes | No |
+| CISA KEVに掲載 | No | No | No | No | No |
+| 混入から（最終的な、完全な）修正までの年数 | 5（2019→2024） | 9（2010→2019） | 1.3（2017→2018） | N/A（ハードウェアの挙動） | 12+（コードは遅くとも2003年のもの→2015） |
 
-**Three of the five are the same shape of mistake: an invariant that held by construction, until a refactor or an edge case broke the thing nobody was checking directly.** The nested-VMX UAF lost an implicit reset-on-failure behavior when a wrapper-removal refactor changed unconditional assignment into an early return. The vhost overflow lost the "log_num tracks in_num" invariant to a completely ordinary, spec-legal zero-length descriptor nobody had reasoned about. VENOM is the same pattern one layer down, at the device-emulation level: buffer-access code trusted command handlers to reset an index that two of them, each independently reasonable on its own terms, didn't.
+**5つのうち3つは同じ形の誤りである。構造上成り立っていた不変条件が、誰も直接チェックしていなかった部分をリファクタリングやエッジケースが壊すまでは成り立っていた、というものだ**。 nested VMXのUAFは、ラッパー削除のリファクタリングが無条件の代入を早期returnに変えたことで、失敗時にリセットするという暗黙の挙動を失った。vhostのオーバーフローは、「log_numはin_numに追随する」という不変条件を、誰も検討していなかった、ごく普通で仕様上も正当な長さゼロのディスクリプタによって失った。VENOMは1層下、デバイスエミュレーションのレベルにおける同じパターンである。バッファアクセスのコードはコマンドハンドラがインデックスをリセットすることを信頼していたが、そのうち2つは、それぞれ単独では妥当な理由により、リセットしなかった。
 
-**MDS and L1TF are both speculative-execution mitigations where getting the concept right wasn't the hard part — getting the exact mechanics right was.** L1TF's flush-on-VM-entry doesn't help against a sibling hyperthread sharing the same physical core; the kernel had to add SMT-disable as a separate, costlier lever for the cases that actually need it. MDS's VERW-based flush was conceptually correct from day one in 2019, but its literal position in the compiled code left a window where ordinary memory writes could undo the flush before the guest ever ran — a bug in *placement*, not in the mitigation's logic, that took five years to actually close, and nearly two years longer before anyone recognized what the closing commit had actually fixed.
+**MDSとL1TFはどちらも投機的実行の緩和策であり、難しかったのは概念を正しくすることではなく、正確な仕組みを正しくすることだった。** L1TFのVM entry時のフラッシュは、同じ物理コアを共有する兄弟ハイパースレッドに対しては役に立たない。カーネルは、それが本当に必要なケースのために、別のよりコストの高い手段としてSMTの無効化を追加しなければならなかった。MDSのVERWによるフラッシュは2019年の初日から概念的には正しかったが、コンパイル後のコード内での文字どおりの位置のせいで、ゲストが実行される前に通常のメモリ書き込みがフラッシュを無効にしてしまうウィンドウが残っていた。これは緩和策のロジックではなく*配置*のバグであり、実際に塞がれるまでに5年かかり、塞いだコミットが実際に何を修正したのかを誰かが認識するまでにはさらに2年近くかかった。
 
-**VENOM is the only incident here that isn't a Linux kernel bug at all.** It's included because the guest-facing trust boundary this site documents doesn't stop at KVM's kernel module — QEMU is the other half of the stack every KVM guest actually runs against, and a guest-to-host escape through QEMU's device emulation is exactly as real a break of the virtualization boundary as a bug in KVM itself.
+**VENOMは、ここで唯一Linuxカーネルのバグではまったくないインシデントである。** それでも取り上げているのは、本サイトが扱うゲスト向けの信頼境界がKVMのカーネルモジュールで終わらないからだ。QEMUは、すべてのKVMゲストが実際に相手にしているスタックのもう半分であり、QEMUのデバイスエミュレーションを経由したゲストからホストへのエスケープは、KVM自体のバグとまったく同じく、仮想化境界の現実の破綻である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [KVM Architecture](kvm-arch.md) — the `/dev/kvm` API and QEMU's role as the userspace half of the stack
-- [Nested Virtualization](nested-virt.md) — L0/L1/L2, vmcs12/vmcs02, the model behind the posted-interrupt UAF
-- [KVM Live Migration](live-migration.md) — dirty-page logging, the feature whose logging path the vhost bug lives in
-- [Locking War Stories](../locking/war-stories.md) and [VFS War Stories](../vfs/war-stories.md) — comparable local-CVE collections from other subsystems, for contrasting root-cause shapes
-- [GPU/DRM War Stories](../drm/war-stories.md) — reliability-only incidents (no CVEs) from a different kind of shared kernel-internal resource contention
+- [KVMアーキテクチャ](kvm-arch.md) — `/dev/kvm` APIと、スタックのユーザー空間側の半分としてのQEMUの役割
+- [ネストされた仮想化](nested-virt.md) — L0/L1/L2、vmcs12/vmcs02、posted interruptのUAFの背景にあるモデル
+- [KVMライブマイグレーション](live-migration.md) — ダーティページのロギング。vhostのバグが存在するロギングパスを持つ機能
+- [ロックの事件簿](../locking/war-stories.md)と[VFSの事件簿](../vfs/war-stories.md) — 他のサブシステムにおける同様のローカルCVE集。根本原因の形を対比するために
+- [GPU/DRMの事件簿](../drm/war-stories.md) — 別種の共有カーネル内部リソースの競合に起因する、信頼性のみに関わるインシデント（CVEなし）

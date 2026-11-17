@@ -75,7 +75,7 @@ p->static_prio = current->static_prio;  // nice-derived base priority
 
 If the parent has nice -10, the child starts at nice -10. This is intentional — a high-priority build system forking compilation workers should still run them at high priority.
 
-### sched_reset_on_fork {#schedreseton_fork}
+### sched_reset_on_fork {#sched_reset_on_fork}
 
 Some container runtimes use `sched_reset_on_fork` to prevent privilege escalation via fork:
 
@@ -99,7 +99,7 @@ static void task_fork_fair(struct task_struct *p)
 
 This sets the maximum CPU capacity the task is allowed to use (for energy-aware scheduling on asymmetric CPU topologies like big.LITTLE). The actual vruntime initialization happens later in `wake_up_new_task()`.
 
-## wake_up_new_task(): putting the child on a CPU {#wakeupnew_task-putting-the-child-on-a-cpu}
+## wake_up_new_task(): putting the child on a CPU {#wake_up_new_task-putting-the-child-on-a-cpu}
 
 After `copy_process()` completes and the child is fully initialized, `wake_up_new_task()` makes it runnable:
 

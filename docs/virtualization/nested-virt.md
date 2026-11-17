@@ -1,10 +1,10 @@
-# Nested Virtualization {#nested-virtualization}
+# ネストされた仮想化 {#nested-virtualization}
 
-> Running a hypervisor inside a VM: L0, L1, L2, and the vmcs12
+> VMの中でハイパーバイザを動かす: L0、L1、L2、そしてvmcs12
 
-## Terminology {#terminology}
+## 用語 {#terminology}
 
-Nested virtualization adds a second layer to the usual host/guest split:
+ネストされた仮想化は、通常のホスト/ゲストの区分にもう1つの層を加える。
 
 ```
 L0: The real hardware host, running Linux + KVM
@@ -17,95 +17,95 @@ L2: A virtual machine created by L1
     (nested guest — two levels of virtualization deep)
 ```
 
-Without nested virtualization support, L1's attempt to execute `VMLAUNCH` would cause a `#UD` (undefined instruction) or a `#GP` (general protection fault) because the guest is not in VMX root mode. KVM nested virtualization makes `VMLAUNCH` and related instructions work from inside L1.
+ネストされた仮想化のサポートがなければ、L1が`VMLAUNCH`を実行しようとすると、ゲストはVMX root modeにいないため、`#UD`（未定義命令）または`#GP`（一般保護例外）が発生する。KVMのネストされた仮想化は、`VMLAUNCH`や関連する命令をL1の内部から動作するようにする。
 
-Enabling nested virtualization:
+ネストされた仮想化を有効にする:
 
 ```bash
 # Intel
 modprobe kvm-intel nested=1
-# or permanently:
+# または恒久的に:
 echo "options kvm-intel nested=1" > /etc/modprobe.d/kvm.conf
 
 # AMD
 modprobe kvm-amd nested=1
 
-# Verify the feature is exposed to L1
+# 機能がL1に公開されていることを確認する
 cat /sys/module/kvm_intel/parameters/nested   # Y
-grep -m1 vmx /proc/cpuinfo                    # vmx flag visible inside L1 guest
+grep -m1 vmx /proc/cpuinfo                    # L1ゲスト内でvmxフラグが見える
 ```
 
-## The problem: L1 executes VMLAUNCH {#the-problem-l1-executes-vmlaunch}
+## 問題: L1がVMLAUNCHを実行する {#the-problem-l1-executes-vmlaunch}
 
-When KVM creates L1, it exposes the `vmx` CPUID flag so L1 believes it has VT-x. L1 can execute `VMPTRLD`, `VMWRITE`, `VMLAUNCH`, and `VMRESUME`. On real hardware these are privileged instructions only available in VMX root mode. L1 is running in VMX non-root mode — so they all cause VM exits to L0.
+KVMはL1を作成するとき、`vmx` CPUIDフラグを公開するので、L1は自分がVT-xを持っていると信じる。L1は`VMPTRLD`、`VMWRITE`、`VMLAUNCH`、`VMRESUME`を実行できる。実際のハードウェアでは、これらはVMX root modeでのみ使える特権命令である。L1はVMX non-root modeで動作しているので、これらはすべてL0へのVM exitを引き起こす。
 
-L0 must respond to each of these exits by emulating what the hardware would do if L1 were a real hypervisor:
+L0は、これらのexitのそれぞれに対して、L1が本物のハイパーバイザであった場合にハードウェアが行うことをエミュレートして応答しなければならない。
 
-| L1 instruction | Exit to L0 | L0 action |
+| L1の命令 | L0へのexit | L0の動作 |
 |---------------|-----------|-----------|
-| `VMXON` | `EXIT_REASON_VMXON` | `handle_vmxon()` — enable nested VMX state for this vCPU |
-| `VMPTRLD` (set current VMCS) | `EXIT_REASON_VMPTRLD` | `handle_vmptrld()` — record which vmcs12 L1 is working with |
-| `VMWRITE` | `EXIT_REASON_VMWRITE` | `handle_vmwrite()` — write field to vmcs12 in memory |
-| `VMREAD` | `EXIT_REASON_VMREAD` | `handle_vmread()` — read field from vmcs12 in memory |
-| `VMLAUNCH` | `EXIT_REASON_VMLAUNCH` | `handle_vmlaunch()` → `nested_vmx_run()` — synthesize L2 entry |
-| `VMRESUME` | `EXIT_REASON_VMRESUME` | `handle_vmresume()` → `nested_vmx_run()` — re-enter L2 |
-| `VMXOFF` | `EXIT_REASON_VMXOFF` | `handle_vmxoff()` — disable nested VMX state |
+| `VMXON` | `EXIT_REASON_VMXON` | `handle_vmxon()` — このvCPUのネストされたVMXの状態を有効にする |
+| `VMPTRLD`（カレントVMCSの設定） | `EXIT_REASON_VMPTRLD` | `handle_vmptrld()` — L1がどのvmcs12を扱っているかを記録する |
+| `VMWRITE` | `EXIT_REASON_VMWRITE` | `handle_vmwrite()` — メモリ上のvmcs12にフィールドを書き込む |
+| `VMREAD` | `EXIT_REASON_VMREAD` | `handle_vmread()` — メモリ上のvmcs12からフィールドを読み出す |
+| `VMLAUNCH` | `EXIT_REASON_VMLAUNCH` | `handle_vmlaunch()` → `nested_vmx_run()` — L2へのentryを合成する |
+| `VMRESUME` | `EXIT_REASON_VMRESUME` | `handle_vmresume()` → `nested_vmx_run()` — L2に再び入る |
+| `VMXOFF` | `EXIT_REASON_VMXOFF` | `handle_vmxoff()` — ネストされたVMXの状態を無効にする |
 
-All of the above handlers live in `arch/x86/kvm/vmx/nested.c`.
+上記のハンドラはすべて`arch/x86/kvm/vmx/nested.c`にある。
 
-## struct vmcs12: L1's view of the VMCS {#struct-vmcs12-l1s-view-of-the-vmcs}
+## struct vmcs12: L1から見たVMCS {#struct-vmcs12-l1s-view-of-the-vmcs}
 
-L0 keeps an in-memory copy of what L1 believes the VMCS contains. This is `struct vmcs12`, defined in `arch/x86/kvm/vmx/vmcs12.h`:
+L0は、L1がVMCSに入っていると信じている内容のメモリ上のコピーを保持する。これが`arch/x86/kvm/vmx/vmcs12.h`で定義される`struct vmcs12`である。
 
 ```c
-/* arch/x86/kvm/vmx/vmcs12.h (selected fields) */
-typedef u64 natural_width;  /* aliased so vmcs12 has a fixed layout across 32/64-bit L1s */
+/* arch/x86/kvm/vmx/vmcs12.h（一部のフィールド） */
+typedef u64 natural_width;  /* vmcs12が32/64ビットのL1間で固定レイアウトを持つように別名にしている */
 
 struct __packed vmcs12 {
-    /* Header: must match the hardware VMCS revision identifier */
+    /* ヘッダ: ハードウェアのVMCSリビジョン識別子と一致しなければならない */
     struct vmcs_hdr hdr;   /* revision_id:31, shadow_vmcs:1 */
     u32 abort;
 
-    /* Guest state area: what L1 puts here is L2's state */
+    /* ゲスト状態領域: L1がここに置くものはL2の状態である */
     natural_width guest_cr0, guest_cr3, guest_cr4;
     natural_width guest_rsp, guest_rip, guest_rflags;
     u64 guest_ia32_efer;
     u16 guest_cs_selector, guest_ss_selector;
-    /* ... all segment registers, descriptor table regs ... */
+    /* ... すべてのセグメントレジスタ、ディスクリプタテーブルレジスタ ... */
 
-    /* Host state area: where L1 wants to return after L2 exits */
+    /* ホスト状態領域: L2がexitした後にL1が戻りたい場所 */
     natural_width host_cr0, host_cr3, host_cr4;
     natural_width host_rsp, host_rip;
     u64 host_ia32_efer;
 
-    /* Control fields: what L1 wants to intercept for L2 */
+    /* 制御フィールド: L1がL2に対してインターセプトしたいもの */
     u32 pin_based_vm_exec_control;
     u32 cpu_based_vm_exec_control;
     u32 secondary_vm_exec_control;
-    u64 ept_pointer;          /* L1's EPT for L2 (GPA → L1 HPA mapping) */
-    u64 msr_bitmap;           /* L1's MSR bitmap for L2 */
+    u64 ept_pointer;          /* L2のためのL1のEPT（GPA → L1 HPAのマッピング） */
+    u64 msr_bitmap;           /* L2のためのL1のMSRビットマップ */
 
-    /* Exit/entry info: filled by L0 when synthesizing exits to L1 */
+    /* exit/entryの情報: L1へのexitを合成するときにL0が埋める */
     u32 vm_exit_reason;
     natural_width exit_qualification;
-    u64 guest_physical_address;  /* GPA that caused an EPT violation */
+    u64 guest_physical_address;  /* EPT violationを引き起こしたGPA */
     u32 vm_instruction_error;
     /* ... */
 };
 ```
 
-`natural_width` is a `u64` typedef, not a distinct machine type — the comment in `vmcs12.h` explains why: to migrate an L1 (and its L2 guests) between hosts of different natural widths (32-bit vs. 64-bit), these fields can't be plain `unsigned long`, so KVM fixes them at 64 bits and relies on x86 being little-endian.
+`natural_width`は`u64`のtypedefであり、独立したマシン型ではない。`vmcs12.h`のコメントがその理由を説明している。natural width（ネイティブのワード幅）が異なるホスト間（32ビットと64ビット）でL1（とそのL2ゲスト）をマイグレーションするには、これらのフィールドを素の`unsigned long`にはできない。そのためKVMはこれらを64ビットに固定し、x86がリトルエンディアンであることに依存している。
 
-L0 allocates one `struct vmcs12` per L1 vCPU and stores a pointer in `struct vcpu_vmx.nested.cached_vmcs12` (in `arch/x86/kvm/vmx/vmx.h`). When L1 executes `VMREAD`/`VMWRITE`, L0 reads/writes fields of this in-memory structure rather than touching a real VMCS.
+L0はL1のvCPUごとに1つの`struct vmcs12`を割り当て、そのポインタを`struct vcpu_vmx.nested.cached_vmcs12`（`arch/x86/kvm/vmx/vmx.h`内）に格納する。L1が`VMREAD`/`VMWRITE`を実行すると、L0は実際のVMCSに触れるのではなく、このメモリ上の構造体のフィールドを読み書きする。
 
-## The merge: vmcs01 + vmcs12 = vmcs02 {#the-merge-vmcs01-vmcs12-vmcs02}
+## マージ: vmcs01 + vmcs12 = vmcs02 {#the-merge-vmcs01-vmcs12-vmcs02}
 
-L0 has its own VMCS for running L1 — call it **vmcs01**. When L1 launches L2, L0 cannot simply use L1's vmcs12 as-is, because:
+L0は、L1を動かすための自身のVMCSを持っている。これを**vmcs01**と呼ぶ。L1がL2を起動するとき、L0はL1のvmcs12をそのまま使うことはできない。理由は次のとおりである。
 
-- vmcs12 describes L2's state in L1's terms (L1 HPAs may be L0 GPAs).
-- L0 needs to add its own controls (e.g., L0's own EPT pointer, L0's MSR bitmaps).
+- vmcs12は、L2の状態をL1の観点で記述している（L1のHPAはL0のGPAであり得る）。
+- L0は自身の制御（例: L0自身のEPTポインタ、L0のMSRビットマップ）を加える必要がある。
 
-Instead, L0 creates **vmcs02**: a real VMCS that merges L1's intent with L0's requirements.
+代わりに、L0は**vmcs02**を作成する。これは、L1の意図とL0の要件をマージした本物のVMCSである。
 
 ```
 vmcs01 (L0 → L1):        vmcs12 (L1's intent for L2):     vmcs02 (L0 → L2 on real hardware):
@@ -115,36 +115,36 @@ vmcs01 (L0 → L1):        vmcs12 (L1's intent for L2):     vmcs02 (L0 → L2 on
   L1 guest state            L2 guest state                   L2 guest state
 ```
 
-The merge is performed via `nested_vmx_run()` → `nested_vmx_enter_non_root_mode()` → `prepare_vmcs02_early()` and `prepare_vmcs02()`, all in `arch/x86/kvm/vmx/nested.c`. Control-field merging happens first, in `prepare_vmcs02_early()`:
+マージは`nested_vmx_run()` → `nested_vmx_enter_non_root_mode()` → `prepare_vmcs02_early()`および`prepare_vmcs02()`を通じて行われ、いずれも`arch/x86/kvm/vmx/nested.c`にある。制御フィールドのマージが先に、`prepare_vmcs02_early()`で行われる。
 
 ```c
-/* arch/x86/kvm/vmx/nested.c (simplified) */
+/* arch/x86/kvm/vmx/nested.c（簡略化したもの） */
 static void prepare_vmcs02_early(struct vcpu_vmx *vmx, struct loaded_vmcs *vmcs01,
                                   struct vmcs12 *vmcs12)
 {
     u32 exec_control;
 
-    /* PIN CONTROLS: union of what L0 wants for L1 and what L1 wants for L2 */
+    /* PIN CONTROLS: L0がL1に対して望むものと、L1がL2に対して望むものの和集合 */
     exec_control = __pin_controls_get(vmcs01);
     exec_control |= (vmcs12->pin_based_vm_exec_control &
                       ~PIN_BASED_VMX_PREEMPTION_TIMER);
     pin_controls_set(vmx, exec_control);
-    /* EXEC CONTROLS and SECONDARY EXEC CONTROLS are merged the same way */
+    /* EXEC CONTROLSとSECONDARY EXEC CONTROLSも同じ方法でマージされる */
 }
 ```
 
-Guest state and the EPT switch happen afterward, in `prepare_vmcs02()`:
+ゲスト状態とEPTの切り替えは、その後の`prepare_vmcs02()`で行われる。
 
 ```c
-/* arch/x86/kvm/vmx/nested.c (simplified) */
+/* arch/x86/kvm/vmx/nested.c（簡略化したもの） */
 static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
                            bool from_vmentry, enum vm_entry_failure_code *entry_failure_code)
 {
     struct vcpu_vmx *vmx = to_vmx(vcpu);
 
-    /* Load L2 guest state from vmcs12 into vmcs02 */
+    /* vmcs12からvmcs02へL2のゲスト状態をロードする */
     vmx_set_rflags(vcpu, vmcs12->guest_rflags);
-    /* ... all other guest state fields ... */
+    /* ... 他のすべてのゲスト状態フィールド ... */
 
     if (nested_cpu_has_ept(vmcs12))
         nested_ept_init_mmu_context(vcpu);
@@ -153,45 +153,45 @@ static int prepare_vmcs02(struct kvm_vcpu *vcpu, struct vmcs12 *vmcs12,
 }
 ```
 
-The EPT setup is not a direct `EPT_POINTER` write — `nested_ept_init_mmu_context()` switches the vCPU to a *shadow* EPT MMU (`kvm_init_shadow_ept_mmu()`), which builds its own single, flattened EPT table for hardware to walk. See the walk-cost section below for what that actually means for performance.
+EPTのセットアップは`EPT_POINTER`への直接の書き込みではない。`nested_ept_init_mmu_context()`はvCPUを*シャドウ*EPTのMMU（`kvm_init_shadow_ept_mmu()`）に切り替え、これがハードウェアがたどるための独自の単一のフラット化されたEPTテーブルを構築する。これが性能上実際に何を意味するかについては、下のウォークのコストのセクションを参照。
 
-## L2 exit handling: who handles what? {#l2-exit-handling-who-handles-what}
+## L2のexit処理: 誰が何を処理するか {#l2-exit-handling-who-handles-what}
 
-When L2 causes a VM exit, the exit first arrives at L0 (hardware always exits to the true host). L0 must decide:
+L2がVM exitを引き起こすと、exitはまずL0に届く（ハードウェアは常に本当のホストへexitする）。L0は次のどちらかを判断しなければならない。
 
-1. **L0 handles it**: the exit is caused by L0's own interception (e.g., L0's EPT violation for memory not yet mapped in L0's EPT). L0 handles it and re-enters L2 without L1 ever seeing it.
-2. **L1 should handle it**: the exit matches a condition in vmcs12's control fields that L1 configured. L0 synthesizes a vmexit to L1.
+1. **L0が処理する**: exitはL0自身のインターセプトによって引き起こされた（例: L0のEPTにまだマップされていないメモリに対するL0のEPT violation）。L0はそれを処理し、L1に一度も見せることなくL2に再び入る。
+2. **L1が処理すべき**: exitはL1が設定したvmcs12の制御フィールドの条件に一致する。L0はL1へのvmexitを合成する。
 
 ```c
 /* arch/x86/kvm/vmx/nested.c */
 static int vmx_check_nested_events(struct kvm_vcpu *vcpu)
 {
-    /* Determine if a pending event should be injected to L2
-       or cause a synthetic exit to L1 */
+    /* 保留中のイベントをL2に注入すべきか、
+       L1への合成exitを引き起こすべきかを判断する */
     ...
 }
 
 bool nested_vmx_reflect_vmexit(struct kvm_vcpu *vcpu)
 {
     /*
-     * Returns true if this exit should be "reflected" (forwarded) to L1.
-     * Decision is based on vmcs12's execution controls.
+     * このexitをL1に"reflect"（転送）すべきならtrueを返す。
+     * 判断はvmcs12の実行制御に基づく。
      *
-     * Examples:
-     *   EXIT_REASON_CPUID  → always reflected if L1 set CPU_BASED_CPUID_EXITING
-     *   EXIT_REASON_IO     → reflected if the I/O port is in L1's I/O bitmap
-     *   EXIT_REASON_EPT_VIOLATION → reflected if L1 enabled EPT for L2
+     * 例:
+     *   EXIT_REASON_CPUID  → L1がCPU_BASED_CPUID_EXITINGを設定していれば常にreflectされる
+     *   EXIT_REASON_IO     → I/OポートがL1のI/Oビットマップにあればreflectされる
+     *   EXIT_REASON_EPT_VIOLATION → L1がL2に対してEPTを有効にしていればreflectされる
      */
     ...
 }
 ```
 
-When L0 decides to reflect the exit to L1:
+L0がexitをL1にreflectすると判断した場合:
 
 ```c
-/* nested_vmx_vmexit() itself is just an inline wrapper that computes
- * exit_insn_len and forwards to __nested_vmx_vmexit() — the real work
- * (simplified here) happens in the latter: */
+/* nested_vmx_vmexit()自体は、exit_insn_lenを計算して__nested_vmx_vmexit()に
+ * 転送するだけのインラインのラッパーである — 実際の処理
+ * （ここでは簡略化している）は後者で行われる: */
 void __nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
                           u32 exit_intr_info, unsigned long exit_qualification,
                           u32 exit_insn_len)
@@ -201,114 +201,114 @@ void __nested_vmx_vmexit(struct kvm_vcpu *vcpu, u32 vm_exit_reason,
 
     leave_guest_mode(vcpu);
 
-    /* prepare_vmcs12() writes vm_exit_reason/exit_qualification/vm_exit_intr_info
-     * into vmcs12 so L1 can read them back via VMREAD. guest_physical_address is
-     * set separately, only on EPT-violation exits, before this function runs. */
+    /* prepare_vmcs12()はvm_exit_reason/exit_qualification/vm_exit_intr_infoを
+     * vmcs12に書き込み、L1がVMREADで読み戻せるようにする。guest_physical_addressは
+     * EPT violationのexitの場合にのみ、この関数の実行前に別途設定される。 */
     prepare_vmcs12(vcpu, vmcs12, vm_exit_reason, exit_intr_info, exit_qualification, 0);
 
-    /* Switch from vmcs02 back to vmcs01 (restore L1 as the active guest) */
+    /* vmcs02からvmcs01に戻す（L1をアクティブなゲストとして復元する） */
     vmx->loaded_vmcs = &vmx->vmcs01;
     vmcs_load(vmx->loaded_vmcs->vmcs);
 
-    /* Restore L1 host (= L0 guest) state from vmcs12->host_* fields */
-    /* L1 will resume at vmcs12->host_rip (its vmexit handler) */
+    /* vmcs12->host_*フィールドからL1のホスト（= L0のゲスト）状態を復元する */
+    /* L1はvmcs12->host_rip（自身のvmexitハンドラ）から再開する */
 }
 ```
 
-## AMD-V nested virtualization {#amd-v-nested-virtualization}
+## AMD-Vのネストされた仮想化 {#amd-v-nested-virtualization}
 
-AMD uses the VMCB (Virtual Machine Control Block) instead of the VMCS. The nested analogs are:
+AMDはVMCSの代わりにVMCB（Virtual Machine Control Block）を使う。ネストにおける対応物は次のとおりである。
 
-| Intel (VMX) | AMD (SVM) |
+| Intel（VMX） | AMD（SVM） |
 |------------|-----------|
-| `struct vmcs12` (L0's copy of L1's VMCS) | Not a struct copy — L0 caches L1's control/save-area fields in `nested.ctl`/`nested.save`, keyed by the guest-physical address `nested.vmcb12_gpa` |
-| `prepare_vmcs02_early()`/`prepare_vmcs02()` | `nested_vmcb02_prepare_control()`/`nested_vmcb02_prepare_save()`, called from `nested_svm_vmrun()` in `arch/x86/kvm/svm/nested.c` |
-| vmcs02 | vmcb02 — the merged VMCB used to run L2 |
-| Two-level (shadow) EPT | Two-level (shadow) NPT — same multi-dimensional-paging technique |
+| `struct vmcs12`（L0が持つL1のVMCSのコピー） | 構造体のコピーではない — L0はL1の制御/セーブ領域のフィールドを`nested.ctl`/`nested.save`にキャッシュし、ゲスト物理アドレス`nested.vmcb12_gpa`をキーとする |
+| `prepare_vmcs02_early()`/`prepare_vmcs02()` | `nested_vmcb02_prepare_control()`/`nested_vmcb02_prepare_save()`。`arch/x86/kvm/svm/nested.c`の`nested_svm_vmrun()`から呼ばれる |
+| vmcs02 | vmcb02 — L2を動かすために使われるマージ済みのVMCB |
+| 2段階（シャドウ）EPT | 2段階（シャドウ）NPT — 同じ多次元ページングの手法 |
 | `VMLAUNCH`/`VMRESUME` | `VMRUN` |
-| `VMPTRLD`/`VMREAD`/`VMWRITE` | *(no equivalent needed — see below)* |
+| `VMPTRLD`/`VMREAD`/`VMWRITE` | *（相当するものは不要 — 下記参照）* |
 
-AMD's approach is conceptually similar — L1 executes `VMRUN` which exits to L0; L0 merges L1's VMCB (vmcb12) with its own (vmcb01) to produce vmcb02 and loads that to run L2 on real hardware — but the instruction-level mechanics differ from Intel in one important way: **the VMCB has a fixed, publicly documented in-memory layout**, unlike Intel's opaque VMCS. So there's no AMD analog of `VMPTRLD`/`VMREAD`/`VMWRITE` — L1 (and L0, emulating it) can read and write VMCB fields with ordinary memory loads and stores. `VMLOAD`/`VMSAVE` are unrelated, real SVM instructions that copy a small set of state *not* covered by the VMCB save area (segment bases for FS/GS/LDTR/TR, `KernelGSBase`, `STAR`/`LSTAR`/`CSTAR`/`SFMASK`, the SYSENTER MSRs) between memory and the processor — every SVM hypervisor uses them, nested or not.
+AMDのアプローチは概念的には似ている。L1が`VMRUN`を実行するとL0にexitし、L0はL1のVMCB（vmcb12）を自身のもの（vmcb01）とマージしてvmcb02を作り、それをロードして実際のハードウェア上でL2を動かす。しかし命令レベルの仕組みは、ある重要な点でIntelと異なる。**VMCBは、Intelの不透明なVMCSと異なり、固定された公開文書化済みのメモリ上のレイアウトを持つ**。そのため、`VMPTRLD`/`VMREAD`/`VMWRITE`に相当するものはAMDにはない。L1（およびそれをエミュレートするL0）は、通常のメモリのロードとストアでVMCBのフィールドを読み書きできる。`VMLOAD`/`VMSAVE`は無関係の、実在するSVM命令であり、VMCBのセーブ領域で扱われ*ない*少数の状態（FS/GS/LDTR/TRのセグメントベース、`KernelGSBase`、`STAR`/`LSTAR`/`CSTAR`/`SFMASK`、SYSENTERのMSR）をメモリとプロセッサの間でコピーする。ネストしているかどうかにかかわらず、すべてのSVMハイパーバイザがこれらを使う。
 
-## Two-level EPT: not what hardware does, what KVM builds {#two-level-ept-not-what-hardware-does-what-kvm-builds}
+## 2段階EPT: ハードウェアが行うことではなく、KVMが構築するもの {#two-level-ept-not-what-hardware-does-what-kvm-builds}
 
-Neither VMX nor SVM gives hardware a way to walk two EPT/NPT tables back to back for a single memory access — there is no "EPT-on-EPT" instruction-level feature. If L0 naively let L1 use its own emulated EPT for L2, every L2 memory access would need software to resolve L2 GPA → L1 HPA (via `vmcs12->ept_pointer`) and then L1 HPA (which is really an L0 GPA) → L0 HPA (via L0's own EPT) — the "shadow-on-EPT" approach, which is correct but slow because every L2 page fault and page-table write has to trap up to L1 for handling.
+VMXもSVMも、1回のメモリアクセスのために2つのEPT/NPTテーブルを続けてたどる手段をハードウェアに与えていない。「EPT-on-EPT」のような命令レベルの機能は存在しない。もしL0が素朴にL1自身のエミュレートされたEPTをL2に使わせたなら、L2のすべてのメモリアクセスについて、ソフトウェアがL2 GPA → L1 HPA（`vmcs12->ept_pointer`経由）を解決し、続いてL1 HPA（実際にはL0 GPAである）→ L0 HPA（L0自身のEPT経由）を解決する必要がある。これが「shadow-on-EPT」のアプローチであり、正しいが遅い。L2のすべてのページフォールトとページテーブルへの書き込みを、処理のためにL1までトラップしなければならないからである。
 
-KVM instead uses **multi-dimensional paging**: `nested_ept_init_mmu_context()` (`arch/x86/kvm/vmx/nested.c`) switches the vCPU to a *shadow* EPT MMU (`kvm_init_shadow_ept_mmu()`, `arch/x86/kvm/mmu/mmu.c`) that flattens the two levels into a single EPT table — call it EPT02 — that hardware walks directly, at the same cost as an ordinary non-nested EPT walk. L0 builds EPT02 lazily: on each EPT violation it walks L1's EPT structures (`vmcs12->ept_pointer`) in software to compose the entry, exactly like classic shadow paging. AMD's nested SVM code uses the same technique for NPT.
+KVMは代わりに**多次元ページング**を使う。`nested_ept_init_mmu_context()`（`arch/x86/kvm/vmx/nested.c`）は、vCPUを*シャドウ*EPTのMMU（`kvm_init_shadow_ept_mmu()`、`arch/x86/kvm/mmu/mmu.c`）に切り替える。これは2つの段階を1つのEPTテーブル（EPT02と呼ぶ）にフラット化し、ハードウェアはそれを通常のネストしていないEPTのウォークと同じコストで直接たどる。L0はEPT02を遅延的に構築する。EPT violationが起きるたびに、L1のEPT構造（`vmcs12->ept_pointer`）をソフトウェアでたどってエントリを組み立てる。これは古典的なシャドウページングとまったく同じである。AMDのネストされたSVMのコードも、NPTに対して同じ手法を使う。
 
-So the overhead isn't paid on every memory access — it's paid when a shadow EPT02 entry has to be constructed or invalidated (first touch of a page, or after L1 modifies its EPT / executes `INVEPT`). This is also why the specific instruction mix matters: a workload that causes many page faults sees much more nested overhead than one that mostly hits already-built EPT02 entries.
+したがって、オーバーヘッドはメモリアクセスのたびに支払われるのではなく、シャドウEPT02のエントリを構築または無効化しなければならないとき（ページへの最初のアクセス時、またはL1が自身のEPTを変更した後や`INVEPT`を実行した後）に支払われる。これは、具体的な命令の組み合わせが重要である理由でもある。多くのページフォールトを引き起こすワークロードは、構築済みのEPT02エントリにほぼヒットするワークロードよりも、はるかに大きなネストのオーバーヘッドを被る。
 
-For measured numbers: IBM's Turtles project — the paper [kernel documentation for nested VMX](https://docs.kernel.org/virt/kvm/x86/nested-vmx.html) itself cites for "the theory behind the nested VMX feature, its implementation and its performance characteristics" — reported nested KVM within **6–8% of single-level virtualization for common workloads** using this multi-dimensional-paging technique, with their CPU-bound macro-benchmarks (`kernbench`, `SPECjbb`) measuring 6–15% overhead depending on optimization level. The same paper measured a *~3x* speedup from multi-dimensional paging over the naive shadow-on-EPT approach on page-fault-heavy workloads, and found I/O-intensive nested workloads (particularly interrupt-heavy ones) considerably more expensive than CPU-bound ones. See [The Turtles Project](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Ben-Yehuda.pdf) (USENIX OSDI 2010) for the full measurements.
+測定値について: IBMのTurtlesプロジェクト — [ネストされたVMXのカーネルドキュメント](https://docs.kernel.org/virt/kvm/x86/nested-vmx.html)自身が「the theory behind the nested VMX feature, its implementation and its performance characteristics」（ネストされたVMX機能の背後にある理論、その実装、性能特性）について引用している論文 — は、この多次元ページングの手法を用いて、ネストされたKVMが**一般的なワークロードにおいて単一レベルの仮想化の6～8%以内**に収まると報告しており、CPUバウンドのマクロベンチマーク（`kernbench`、`SPECjbb`）では最適化レベルに応じて6～15%のオーバーヘッドを測定している。同じ論文は、ページフォールトの多いワークロードにおいて多次元ページングが素朴なshadow-on-EPTのアプローチに比べて*約3倍*高速になることを測定し、またI/Oの多いネストされたワークロード（特に割り込みの多いもの）がCPUバウンドのものよりかなり高コストであることを見出している。完全な測定結果は[The Turtles Project](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Ben-Yehuda.pdf)（USENIX OSDI 2010）を参照。
 
-## KVM_CAP_NESTED_STATE: migrating nested guests {#kvmcapnested_state-migrating-nested-guests}
+## KVM_CAP_NESTED_STATE: ネストされたゲストのマイグレーション {#kvm_cap_nested_state-migrating-nested-guests}
 
-A VM that is itself running a hypervisor (L1) requires saving the nested VMX/SVM state for live migration. The state includes vmcs12, vmcb12, and related control structures.
+自身がハイパーバイザ（L1）を動かしているVMをライブマイグレーションするには、ネストされたVMX/SVMの状態を保存する必要がある。この状態には、vmcs12、vmcb12、および関連する制御構造が含まれる。
 
 ```c
-/* Check nested state size */
+/* ネストされた状態のサイズを確認する */
 int size = ioctl(vcpu_fd, KVM_CHECK_EXTENSION, KVM_CAP_NESTED_STATE);
 
-/* Get nested state */
+/* ネストされた状態を取得する */
 struct kvm_nested_state *state = malloc(size);
 state->size = size;
 ioctl(vcpu_fd, KVM_GET_NESTED_STATE, state);
-/* state->format distinguishes VMX from SVM; followed by vmcs12 data, etc. */
+/* state->formatがVMXとSVMを区別する。その後にvmcs12のデータなどが続く */
 
-/* Restore on destination */
+/* 移行先で復元する */
 ioctl(vcpu_fd, KVM_SET_NESTED_STATE, state);
 ```
 
-`struct kvm_nested_state` is defined in `arch/x86/include/uapi/asm/kvm.h`. The `format` field distinguishes VMX (`KVM_STATE_NESTED_FORMAT_VMX`) from SVM (`KVM_STATE_NESTED_FORMAT_SVM`). The variable-length data following the header contains the vmcs12/vmcb12 content and any shadow VMCS.
+`struct kvm_nested_state`は`arch/x86/include/uapi/asm/kvm.h`で定義される。`format`フィールドは、VMX（`KVM_STATE_NESTED_FORMAT_VMX`）とSVM（`KVM_STATE_NESTED_FORMAT_SVM`）を区別する。ヘッダに続く可変長のデータには、vmcs12/vmcb12の内容と、あればシャドウVMCSが含まれる。
 
-## Observing nested virtualization {#observing-nested-virtualization}
+## ネストされた仮想化の観測 {#observing-nested-virtualization}
 
 ```bash
-# Confirm L2 is running (inside L1 guest)
-cat /proc/cpuinfo | grep hypervisor   # hypervisor flag present in L2
+# L2が動作していることを確認する（L1ゲスト内で）
+cat /proc/cpuinfo | grep hypervisor   # L2ではhypervisorフラグが存在する
 
-# L0: see that nested exits are happening
+# L0: ネストされたexitが発生していることを確認する
 echo 1 > /sys/kernel/tracing/events/kvm/kvm_nested_vmexit/enable
 cat /sys/kernel/tracing/trace_pipe
 # qemu-1234 [000] kvm_nested_vmexit: rip=... reason=EPT_VIOLATION ...
 
-# perf: compare exit rates nested vs non-nested
-perf kvm stat report   # look for elevated EPT_VIOLATION, VMLAUNCH/VMRESUME counts
+# perf: ネストあり/なしでexitの頻度を比較する
+perf kvm stat report   # EPT_VIOLATION、VMLAUNCH/VMRESUMEのカウントの増加を探す
 
-# L0 debugfs: per-vCPU nested-run counter (see the vcpuN/ hierarchy in KVM Architecture)
+# L0のdebugfs: vCPUごとのnested-runカウンタ（KVMアーキテクチャのvcpuN/階層を参照）
 cat /sys/kernel/debug/kvm/<pid>-<vm-fd-name>/vcpuN/nested_run
 
-# Module parameter (read-only after boot; set at load time)
-cat /sys/module/kvm_intel/parameters/nested   # Y or N
-cat /sys/module/kvm_amd/parameters/nested     # 1 or 0
+# モジュールパラメータ（ブート後は読み取り専用。ロード時に設定する）
+cat /sys/module/kvm_intel/parameters/nested   # YまたはN
+cat /sys/module/kvm_amd/parameters/nested     # 1または0
 ```
 
-## Security considerations {#security-considerations}
+## セキュリティ上の考慮事項 {#security-considerations}
 
-Nested virtualization exposes a large attack surface. L1 can craft arbitrary VMCS/VMCB values and attempt to confuse L0:
+ネストされた仮想化は大きな攻撃対象領域を露出させる。L1は任意のVMCS/VMCBの値を細工してL0を混乱させようとすることができる。
 
-- **vmcs12 field validation**: `nested_vmx_check_controls()`, `nested_vmx_check_host_state()`, and `nested_vmx_check_guest_state()` validate all vmcs12 control and state fields before entering L2. Invalid combinations cause `VM_FAIL` with `VM_INSTRUCTION_ERROR` set, matching hardware behavior.
-- **EPT pointer sanity**: L0 verifies `vmcs12->ept_pointer` alignment and reserved bits.
-- **Spectre/Meltdown mitigations**: L0 must flush branch predictor state on L2 → L1 → L0 transitions to prevent L2 from influencing L0's branch prediction through L1.
+- **vmcs12のフィールドの検証**: `nested_vmx_check_controls()`、`nested_vmx_check_host_state()`、`nested_vmx_check_guest_state()`は、L2に入る前にvmcs12のすべての制御フィールドと状態フィールドを検証する。不正な組み合わせは、ハードウェアの挙動に合わせて、`VM_INSTRUCTION_ERROR`を設定した`VM_FAIL`を引き起こす。
+- **EPTポインタの健全性**: L0は`vmcs12->ept_pointer`のアラインメントと予約ビットを検証する。
+- **Spectre/Meltdownの緩和策**: L2がL1を通じてL0の分岐予測に影響を与えるのを防ぐため、L0はL2 → L1 → L0の遷移時に分岐予測器の状態をフラッシュしなければならない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/kvm/vmx/nested.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/nested.c) — Intel nested VMX: `handle_vmxon()`, `handle_vmptrld()`, `handle_vmlaunch()`/`handle_vmresume()` → `nested_vmx_run()`, `prepare_vmcs02_early()`/`prepare_vmcs02()`, `vmx_check_nested_events()`, `nested_vmx_reflect_vmexit()`, `nested_vmx_vmexit()`/`__nested_vmx_vmexit()`
-- [arch/x86/kvm/vmx/vmcs12.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmcs12.h) — `struct vmcs12` definition, L1's view of the VMCS for L2
-- [arch/x86/kvm/svm/nested.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/svm/nested.c) — AMD nested SVM: `nested_svm_vmrun()`, `nested_vmcb02_prepare_control()`/`nested_vmcb02_prepare_save()` (SVM's analog of `prepare_vmcs02_early()`/`prepare_vmcs02()`)
-- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `KVM_GET_NESTED_STATE`/`KVM_SET_NESTED_STATE` ioctl definitions and `KVM_CAP_NESTED_STATE`
-- [arch/x86/include/uapi/asm/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/uapi/asm/kvm.h) — `struct kvm_nested_state` and the `KVM_STATE_NESTED_FORMAT_VMX`/`KVM_STATE_NESTED_FORMAT_SVM` format constants
+- [arch/x86/kvm/vmx/nested.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/nested.c) — IntelのネストされたVMX: `handle_vmxon()`、`handle_vmptrld()`、`handle_vmlaunch()`/`handle_vmresume()` → `nested_vmx_run()`、`prepare_vmcs02_early()`/`prepare_vmcs02()`、`vmx_check_nested_events()`、`nested_vmx_reflect_vmexit()`、`nested_vmx_vmexit()`/`__nested_vmx_vmexit()`
+- [arch/x86/kvm/vmx/vmcs12.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/vmx/vmcs12.h) — `struct vmcs12`の定義。L2のためのVMCSをL1から見たもの
+- [arch/x86/kvm/svm/nested.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kvm/svm/nested.c) — AMDのネストされたSVM: `nested_svm_vmrun()`、`nested_vmcb02_prepare_control()`/`nested_vmcb02_prepare_save()`（SVMにおける`prepare_vmcs02_early()`/`prepare_vmcs02()`の対応物）
+- [include/uapi/linux/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/kvm.h) — `KVM_GET_NESTED_STATE`/`KVM_SET_NESTED_STATE` ioctlの定義と`KVM_CAP_NESTED_STATE`
+- [arch/x86/include/uapi/asm/kvm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/uapi/asm/kvm.h) — `struct kvm_nested_state`と、`KVM_STATE_NESTED_FORMAT_VMX`/`KVM_STATE_NESTED_FORMAT_SVM`のフォーマット定数
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KVM Architecture](kvm-arch.md) — VMCS structure, vCPU run loop
-- [KVM Exit Handling](kvm-exits.md) — exit dispatch table, exit reason handling
-- [Live Migration](live-migration.md) — `KVM_GET_NESTED_STATE` for migrating L1 hypervisors
-- [Memory Virtualization](kvm-memory.md) — EPT/NPT, two-level page table walking
+- [KVMアーキテクチャ](kvm-arch.md) — VMCSの構造、vCPUの実行ループ
+- [KVMのexit処理](kvm-exits.md) — exitのディスパッチテーブル、exit理由の処理
+- [ライブマイグレーション](live-migration.md) — L1ハイパーバイザをマイグレーションするための`KVM_GET_NESTED_STATE`
+- [メモリ仮想化](kvm-memory.md) — EPT/NPT、2段階のページテーブルウォーク
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Nested VMX](https://docs.kernel.org/virt/kvm/x86/nested-vmx.html) — kernel documentation for Intel nested VMX: the L0/L1/L2 model, vmcs01/vmcs12/vmcs02, and the full `struct vmcs12` field layout
-- [KVM API docs: `KVM_GET_NESTED_STATE`/`KVM_SET_NESTED_STATE`](https://docs.kernel.org/virt/kvm/api.html#kvm-get-nested-state) — the `struct kvm_nested_state` layout and `KVM_CAP_NESTED_STATE` used for live migration of nested guests
-- [The Turtles Project: Design and Implementation of Nested Virtualization](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Ben-Yehuda.pdf) (USENIX OSDI 2010) — multi-dimensional paging, the shadow-EPT/NPT mechanism, and the measured performance overhead of nested virtualization
+- [Nested VMX](https://docs.kernel.org/virt/kvm/x86/nested-vmx.html) — IntelのネストされたVMXのカーネルドキュメント: L0/L1/L2モデル、vmcs01/vmcs12/vmcs02、`struct vmcs12`の全フィールドのレイアウト
+- [KVM API docs: `KVM_GET_NESTED_STATE`/`KVM_SET_NESTED_STATE`](https://docs.kernel.org/virt/kvm/api.html#kvm-get-nested-state) — ネストされたゲストのライブマイグレーションに使われる`struct kvm_nested_state`のレイアウトと`KVM_CAP_NESTED_STATE`
+- [The Turtles Project: Design and Implementation of Nested Virtualization](https://www.usenix.org/legacy/event/osdi10/tech/full_papers/Ben-Yehuda.pdf)（USENIX OSDI 2010） — 多次元ページング、シャドウEPT/NPTの仕組み、ネストされた仮想化の性能オーバーヘッドの測定値

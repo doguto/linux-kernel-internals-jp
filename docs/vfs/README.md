@@ -1,48 +1,48 @@
-# Virtual Filesystem (VFS) {#virtual-filesystem-vfs}
+# 仮想ファイルシステム（VFS） {#virtual-filesystem-vfs}
 
-> The kernel's filesystem abstraction layer
+> カーネルのファイルシステム抽象化レイヤ
 
-## What is VFS? {#what-is-vfs}
+## VFSとは何か {#what-is-vfs}
 
-The Virtual Filesystem Switch (VFS) is an abstraction layer that allows the kernel to support many different filesystems (ext4, btrfs, tmpfs, procfs, NFS...) through a common interface. When your program calls `read()`, it goes through VFS, which dispatches to the appropriate filesystem implementation.
+Virtual Filesystem Switch（VFS）は、カーネルが多種多様なファイルシステム（ext4、btrfs、tmpfs、procfs、NFS...）を共通のインターフェースを通じてサポートできるようにする抽象化レイヤである。プログラムが`read()`を呼ぶと、その呼び出しはVFSを経由し、VFSが適切なファイルシステム実装へディスパッチする。
 
-VFS makes the following possible:
+VFSによって次のことが可能になる:
 
-- A single `open()`, `read()`, `write()` API works for ext4, NFS, /proc, /sys, pipes, and sockets
-- Files can be accessed across mounted filesystems transparently
-- Filesystems can be developed as kernel modules
+- 単一の`open()`、`read()`、`write()` APIが、ext4、NFS、/proc、/sys、パイプ、ソケットのいずれでも動作する
+- マウントされたファイルシステムをまたいで、ファイルに透過的にアクセスできる
+- ファイルシステムをカーネルモジュールとして開発できる
 
-## The four VFS objects {#the-four-vfs-objects}
+## 4つのVFSオブジェクト {#the-four-vfs-objects}
 
-VFS defines four core objects:
+VFSは4つの中核オブジェクトを定義している:
 
-| Object | Represents | Kernel struct |
+| オブジェクト | 表すもの | カーネル構造体 |
 |--------|-----------|---------------|
-| Superblock | A mounted filesystem instance | `struct super_block` |
-| Inode | A file or directory | `struct inode` |
-| Dentry | A path component (name → inode mapping) | `struct dentry` |
-| File | An open file (open() creates one) | `struct file` |
+| Superblock | マウントされたファイルシステムのインスタンス | `struct super_block` |
+| Inode | ファイルまたはディレクトリ | `struct inode` |
+| Dentry | パスの構成要素（名前 → inodeの対応） | `struct dentry` |
+| File | オープンされたファイル（open()が1つ作成する） | `struct file` |
 
-Each has an associated operations table (vtable) that the filesystem must implement:
+それぞれに、ファイルシステムが実装しなければならない操作テーブル（vtable）が関連付けられている:
 
-| Object | Operations struct |
+| オブジェクト | 操作構造体 |
 |--------|------------------|
 | Superblock | `struct super_operations` |
 | Inode | `struct inode_operations` |
 | Dentry | `struct dentry_operations` |
 | File | `struct file_operations` |
 
-## Contents {#contents}
+## 目次 {#contents}
 
-### Fundamentals {#fundamentals}
-- [VFS Objects: superblock, inode, dentry, file](vfs-objects.md) — The four core objects in detail
-- [Path Resolution](namei.md) — How `/usr/bin/bash` becomes an inode
-- [File Operations](file-ops.md) — The file_operations vtable and open/read/write
-- [Filesystem Registration and Mounting](mounting.md) — How filesystems plug into VFS
+### 基礎 {#fundamentals}
+- [VFSオブジェクト: superblock、inode、dentry、file](vfs-objects.md) — 4つの中核オブジェクトの詳細
+- [パス解決](namei.md) — `/usr/bin/bash`がどのようにinodeになるか
+- [ファイル操作](file-ops.md) — file_operations vtableとopen/read/write
+- [ファイルシステムの登録とマウント](mounting.md) — ファイルシステムがVFSにどう組み込まれるか
 
-### Lifecycle {#lifecycle}
-- [Life of a write() syscall](life-of-write.md) — From write() to disk
-- [Dentry and Inode Caches](dcache-icache.md) — Caching for performance
+### ライフサイクル {#lifecycle}
+- [write()システムコールの一生](life-of-write.md) — write()からディスクまで
+- [dentryキャッシュとinodeキャッシュ](dcache-icache.md) — 性能のためのキャッシング
 
-### War stories {#war-stories}
-- [War Stories](war-stories.md) — four CVEs from the dentry cache, `seq_file`, and OverlayFS's copy-up path
+### 事件簿 {#war-stories}
+- [事件簿](war-stories.md) — dentryキャッシュ、`seq_file`、OverlayFSのcopy-upパスに由来する4件のCVE

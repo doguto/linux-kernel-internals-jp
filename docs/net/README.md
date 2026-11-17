@@ -1,100 +1,100 @@
-# Networking {#networking}
+# ネットワーキング {#networking}
 
-> From socket() to the wire: how packets traverse the Linux network stack
+> socket()から回線まで: パケットがLinuxネットワークスタックをどう通り抜けるか
 
-## The stack at a glance {#the-stack-at-a-glance}
+## スタックの概観 {#the-stack-at-a-glance}
 
 ```
 Application: send(fd, buf, len)
         │
         ▼
-   Socket layer          ← struct socket, protocol-agnostic API
+   Socket layer          ← struct socket、プロトコル非依存のAPI
         │
         ▼
-   TCP / UDP             ← congestion control, retransmission, ports
+   TCP / UDP             ← 輻輳制御、再送、ポート
         │
         ▼
-   IP / routing          ← FIB lookup, netfilter hooks, fragmentation
+   IP / routing          ← FIB検索、netfilterフック、フラグメンテーション
         │
         ▼
-   Traffic control       ← qdiscs, shaping, prioritization
+   Traffic control       ← qdisc、シェーピング、優先度付け
         │
         ▼
-   Device driver         ← NAPI, ring buffers, offloads
+   Device driver         ← NAPI、リングバッファ、オフロード
         │
         ▼
-      NIC                ← DMA, interrupts / polling
+      NIC                ← DMA、割り込み / ポーリング
 ```
 
-Every packet is carried by an [sk_buff](sk-buff.md) — start there if you read only one page.
+すべてのパケットは[sk_buff](sk-buff.md)によって運ばれる。1ページだけ読むなら、そこから始めるとよい。
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-### Fundamentals {#fundamentals}
+### 基礎 {#fundamentals}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Network Stack Overview](network-stack-overview.md) | The layers and how they connect |
-| [Socket Layer](socket-layer.md) | struct socket, file descriptors, protocol families |
-| [sk_buff](sk-buff.md) | The packet data structure everything else shares |
-| [NAPI](napi.md) | Interrupt mitigation: from IRQ storm to polling |
+| [ネットワークスタックの概要](network-stack-overview.md) | 各層と、それらがどうつながるか |
+| [ソケット層](socket-layer.md) | struct socket、ファイルディスクリプタ、プロトコルファミリ |
+| [sk_buff](sk-buff.md) | 他のすべてが共有するパケットのデータ構造 |
+| [NAPI](napi.md) | 割り込みの緩和: IRQストームからポーリングへ |
 
-### Packet lifecycle {#packet-lifecycle}
+### パケットのライフサイクル {#packet-lifecycle}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Life of a Packet: RX](life-of-packet-rx.md) | NIC to application, step by step |
-| [Life of a Packet: TX](life-of-packet-tx.md) | Application to NIC, step by step |
-| [What Happens in connect()](connect.md) | Three-way handshake from the kernel's side |
+| [パケットの一生: RX](life-of-packet-rx.md) | NICからアプリケーションまで、ステップごとに |
+| [パケットの一生: TX](life-of-packet-tx.md) | アプリケーションからNICまで、ステップごとに |
+| [connect()で何が起きるか](connect.md) | カーネル側から見たスリーウェイハンドシェイク |
 
 ### TCP/IP {#tcpip}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [TCP Internals](tcp.md) | State machine, buffers, timers |
-| [TCP Congestion Control](tcp-congestion.md) | CUBIC, BBR, pluggable algorithms |
-| [UDP](udp.md) | The thin path, and where it still surprises |
-| [IP Routing](ip-routing.md) | FIB, rules, multipath |
-| [epoll](epoll.md) | Readiness notification at scale |
+| [TCPの内部](tcp.md) | ステートマシン、バッファ、タイマー |
+| [TCP輻輳制御](tcp-congestion.md) | CUBIC、BBR、プラガブルなアルゴリズム |
+| [UDP](udp.md) | 薄いパス、そしてそれでもなお驚かされる点 |
+| [IPルーティング](ip-routing.md) | FIB、ルール、マルチパス |
+| [epoll](epoll.md) | 大規模なレディネス通知 |
 
-### Filtering & traffic control {#filtering-traffic-control}
+### フィルタリングとトラフィック制御 {#filtering-traffic-control}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Netfilter](netfilter.md) | Hooks, tables, chains |
-| [nftables vs iptables](nftables-iptables.md) | Why the replacement happened |
-| [Connection Tracking](conntrack.md) | conntrack entries, NAT, helpers |
-| [Traffic Control (tc/qdisc)](tc-qdisc.md) | Queuing disciplines, shaping, fq_codel |
+| [Netfilter](netfilter.md) | フック、テーブル、チェーン |
+| [nftables対iptables](nftables-iptables.md) | なぜ置き換えが起きたか |
+| [コネクショントラッキング](conntrack.md) | conntrackエントリ、NAT、ヘルパー |
+| [トラフィック制御（tc/qdisc）](tc-qdisc.md) | キューイングディシプリン、シェーピング、fq_codel |
 
-### High performance & offload {#high-performance-offload}
+### 高性能化とオフロード {#high-performance-offload}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [XDP](xdp.md) | Processing packets before the stack |
-| [AF_XDP](af-xdp.md) | Zero-copy userspace packet I/O |
-| [kTLS](ktls.md) | TLS record processing in the kernel |
-| [Packet Sockets](packet-socket.md) | AF_PACKET, tcpdump's view of the world |
+| [XDP](xdp.md) | スタックより前でのパケット処理 |
+| [AF_XDP](af-xdp.md) | ゼロコピーのユーザー空間パケットI/O |
+| [kTLS](ktls.md) | カーネル内でのTLSレコード処理 |
+| [パケットソケット](packet-socket.md) | AF_PACKET、tcpdumpから見た世界 |
 
-### Namespaces & virtualization {#namespaces-virtualization}
+### namespaceと仮想化 {#namespaces-virtualization}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Network Namespaces](net-namespaces.md) | Per-namespace stacks, veth pairs |
-| [Container Networking](container-networking.md) | Bridges, NAT, overlay basics |
-| [TUN/TAP](tun-tap.md) | Userspace network devices, VPNs |
+| [ネットワークnamespace](net-namespaces.md) | namespaceごとのスタック、vethペア |
+| [コンテナネットワーキング](container-networking.md) | ブリッジ、NAT、オーバーレイの基礎 |
+| [TUN/TAP](tun-tap.md) | ユーザー空間のネットワークデバイス、VPN |
 
-### Interfaces & observability {#interfaces-observability}
+### インターフェースと可観測性 {#interfaces-observability}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Netlink](netlink.md) | The kernel's network configuration API |
-| [Network Debugging](net-debugging.md) | ss, ethtool, drop diagnostics |
-| [Network Tracing](net-tracing.md) | Tracepoints and BPF on the data path |
-| [Buffer Tuning](net-buffer-tuning.md) | Socket buffers, rmem/wmem, autotuning |
-| [/proc/net/snmp Reference](proc-snmp.md) | Reading the protocol counters |
+| [Netlink](netlink.md) | カーネルのネットワーク設定API |
+| [ネットワークのデバッグ](net-debugging.md) | ss、ethtool、ドロップの診断 |
+| [ネットワークのトレーシング](net-tracing.md) | データパス上のtracepointとBPF |
+| [バッファのチューニング](net-buffer-tuning.md) | ソケットバッファ、rmem/wmem、自動チューニング |
+| [/proc/net/snmpリファレンス](proc-snmp.md) | プロトコルカウンタの読み方 |
 
-### War stories {#war-stories}
+### 事件簿 {#war-stories}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Network War Stories](war-stories.md) | Six real CVEs, root-caused and traced through the actual mailing-list discussion behind each fix |
+| [ネットワークの事件簿](war-stories.md) | 6件の実際のCVEを、根本原因を突き止め、各修正の背後にある実際のメーリングリストでの議論をたどって解説する |

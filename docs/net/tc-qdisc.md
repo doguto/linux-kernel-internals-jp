@@ -1,30 +1,30 @@
-# TC (Traffic Control) and qdisc {#tc-traffic-control-and-qdisc}
+# TC（トラフィック制御）とqdisc {#tc-traffic-control-and-qdisc}
 
-> How the kernel shapes, schedules, and polices outbound traffic
+> カーネルは送信トラフィックをどうシェーピングし、スケジューリングし、ポリシングするか
 
-## What TC does {#what-tc-does}
+## TCが行うこと {#what-tc-does}
 
-Traffic Control (TC) is the kernel's framework for controlling packet transmission. It sits between `dev_queue_xmit()` and the NIC driver, and handles:
+トラフィック制御（TC）は、パケットの送信を制御するためのカーネルのフレームワークである。`dev_queue_xmit()`とNICドライバの間に位置し、次のことを扱う:
 
-- **Shaping**: Rate-limit outbound traffic (TBF, HTB)
-- **Scheduling**: Control which packets go next (PRIO, FQ)
-- **Policing**: Drop packets exceeding a rate (policer)
-- **Classification**: Map packets to treatment classes
+- **シェーピング**: 送信トラフィックのレートを制限する（TBF、HTB）
+- **スケジューリング**: 次にどのパケットを送るかを制御する（PRIO、FQ）
+- **ポリシング**: レートを超えたパケットをドロップする（ポリサー）
+- **分類**: パケットを処理クラスに対応付ける
 
-TC only controls **egress** (outbound) by default. Ingress shaping requires redirect tricks (IFB device).
+TCはデフォルトでは**egress**（送信）しか制御しない。ingressのシェーピングには、リダイレクトの工夫（IFBデバイス）が必要である。
 
-## The qdisc hierarchy {#the-qdisc-hierarchy}
+## qdiscの階層 {#the-qdisc-hierarchy}
 
-Every network device has a root **qdisc** (queuing discipline). When a packet is transmitted, it goes through the qdisc before reaching the driver:
+すべてのネットワークデバイスはルート**qdisc**（queuing discipline、キューイングディシプリン）を持つ。パケットが送信されるとき、ドライバに届く前にqdiscを通過する:
 
 ```
 dev_queue_xmit(skb)
-    → q->enqueue(skb, q)   // qdisc enqueue
-    → q->dequeue(q)         // qdisc selects next packet
-    → dev_hard_start_xmit() // driver DMA
+    → q->enqueue(skb, q)   // qdiscへのエンキュー
+    → q->dequeue(q)         // qdiscが次のパケットを選ぶ
+    → dev_hard_start_xmit() // ドライバのDMA
 ```
 
-Qdiscs can be hierarchical:
+qdiscは階層化できる:
 
 ```
 root qdisc (HTB)
@@ -36,37 +36,37 @@ root qdisc (HTB)
     └── leaf qdisc (sfq)
 ```
 
-## Viewing current qdisc {#viewing-current-qdisc}
+## 現在のqdiscを確認する {#viewing-current-qdisc}
 
 ```bash
-# Show qdisc on an interface
+# インターフェースのqdiscを表示
 tc qdisc show dev eth0
 
-# Default (most interfaces): pfifo_fast
-# → 3-band FIFO based on TOS bits
-# Handle "0:" is the root
+# デフォルト（ほとんどのインターフェース）: pfifo_fast
+# → TOSビットに基づく3バンドのFIFO
+# ハンドル"0:"がルート
 
-# Show full hierarchy
+# 階層全体を表示
 tc qdisc show dev eth0
 tc class show dev eth0
 tc filter show dev eth0
 ```
 
-## Common qdiscs {#common-qdiscs}
+## よく使われるqdisc {#common-qdiscs}
 
-### pfifo_fast (default) {#pfifo_fast-default}
+### pfifo_fast（デフォルト） {#pfifo_fast-default}
 
-Three priority bands (0=high, 1=med, 2=low) based on the packet's DSCP/TOS field. Simple FIFO within each band. No rate limiting.
+パケットのDSCP/TOSフィールドに基づく3つの優先度バンド（0=高、1=中、2=低）。各バンド内は単純なFIFO。レート制限はない。
 
 ```bash
-# Default on most interfaces
+# ほとんどのインターフェースでのデフォルト
 tc qdisc show dev eth0
 # qdisc pfifo_fast 0: root refcnt 2 bands 3 priomap 1 2 2 2 1 2 0 0 1 1 1 1 1 1 1 1
 ```
 
-### fq_codel (modern default on Linux desktops) {#fq_codel-modern-default-on-linux-desktops}
+### fq_codel（Linuxデスクトップでの現代的なデフォルト） {#fq_codel-modern-default-on-linux-desktops}
 
-**Fair Queueing + Controlled Delay (CoDel)**. Combines fair per-flow scheduling with active queue management (AQM) to reduce bufferbloat:
+**Fair Queueing + Controlled Delay（CoDel）**。フローごとの公平なスケジューリングとアクティブキュー管理（AQM）を組み合わせ、バッファブロートを軽減する:
 
 ```bash
 tc qdisc add dev eth0 root fq_codel
@@ -75,88 +75,88 @@ tc qdisc show dev eth0
 #   quantum 1514 target 5ms interval 100ms memory_limit 32Mb ecn
 ```
 
-Parameters:
+パラメータ:
 
-- `target`: acceptable minimum standing queue delay (default 5ms)
-- `interval`: control loop interval for CoDel (default 100ms)
-- `flows`: number of hash buckets for fair queueing (default 1024)
-- `ecn`: mark packets instead of dropping when possible
+- `target`: 許容される最小の滞留キュー遅延（デフォルト5ms）
+- `interval`: CoDelの制御ループの間隔（デフォルト100ms）
+- `flows`: 公平キューイングのためのハッシュバケット数（デフォルト1024）
+- `ecn`: 可能な場合はドロップする代わりにパケットにマークを付ける
 
-### fq (Fair Queue — default for BBR) {#fq-fair-queue-default-for-bbr}
+### fq（Fair Queue — BBRのデフォルト） {#fq-fair-queue-default-for-bbr}
 
-Per-flow fair queuing with pacing. Allows each flow to specify its desired send rate. Required for TCP BBR congestion control's accurate pacing:
+ペーシング付きのフローごとの公平キューイング。各フローが望む送信レートを指定できる。TCP BBR輻輳制御の正確なペーシングに必要:
 
 ```bash
 tc qdisc replace dev eth0 root fq
 
-# After enabling BBR:
+# BBRを有効にした後:
 echo bbr > /proc/sys/net/ipv4/tcp_congestion_control
-tc qdisc replace dev eth0 root fq  # fq enables accurate rate pacing
+tc qdisc replace dev eth0 root fq  # fqによって正確なレートペーシングが可能になる
 ```
 
-### TBF (Token Bucket Filter) {#tbf-token-bucket-filter}
+### TBF（Token Bucket Filter） {#tbf-token-bucket-filter}
 
-Rate-limits traffic to a specific bandwidth with burst allowance:
+バーストを許容しつつ、トラフィックを特定の帯域幅にレート制限する:
 
 ```bash
-# Limit to 1Mbit/s with 10KB burst
+# 10KBのバースト付きで1Mbit/sに制限
 tc qdisc add dev eth0 root tbf rate 1mbit burst 10k latency 50ms
 
-# Parameters:
-#   rate:    sustained rate
-#   burst:   maximum burst (traffic above rate drains tokens accumulated here)
-#   latency: maximum queuing latency (used to calculate queue size)
+# パラメータ:
+#   rate:    持続レート
+#   burst:   最大バースト（rateを超えるトラフィックは、ここに蓄積されたトークンを消費する）
+#   latency: 最大キューイングレイテンシ（キューサイズの計算に使われる）
 ```
 
-### HTB (Hierarchical Token Bucket) {#htb-hierarchical-token-bucket}
+### HTB（Hierarchical Token Bucket） {#htb-hierarchical-token-bucket}
 
-The standard choice for multi-class rate limiting. Supports a hierarchy of classes with guaranteed and ceiling rates:
+複数クラスのレート制限における標準的な選択肢。保証レートと上限レートを持つクラスの階層をサポートする:
 
 ```bash
-# Root HTB qdisc
+# ルートのHTB qdisc
 tc qdisc add dev eth0 root handle 1: htb default 30
 
-# Classes: guaranteed rate + ceiling
+# クラス: 保証レート + 上限
 tc class add dev eth0 parent 1:  classid 1:1 htb rate 100mbit
 tc class add dev eth0 parent 1:1 classid 1:10 htb rate 80mbit ceil 100mbit
 tc class add dev eth0 parent 1:1 classid 1:20 htb rate 15mbit ceil 100mbit
 tc class add dev eth0 parent 1:1 classid 1:30 htb rate  5mbit ceil 100mbit
 
-# Leaf qdiscs for each class
+# 各クラスのリーフqdisc
 tc qdisc add dev eth0 parent 1:10 handle 10: fq_codel
 tc qdisc add dev eth0 parent 1:20 handle 20: fq_codel
 tc qdisc add dev eth0 parent 1:30 handle 30: fq_codel
 ```
 
-When class 1:10 uses less than 80Mbit, its unused bandwidth can be borrowed by 1:20 and 1:30, up to their ceiling (100Mbit).
+クラス1:10の使用量が80Mbit未満のとき、その未使用の帯域幅は1:20と1:30が、それぞれの上限（100Mbit）まで借用できる。
 
-## TC filters: classifying packets {#tc-filters-classifying-packets}
+## TCフィルタ: パケットの分類 {#tc-filters-classifying-packets}
 
-Filters determine which class a packet goes to:
+フィルタは、パケットがどのクラスに入るかを決定する:
 
 ```bash
-# Match by destination port → class 1:10
+# 宛先ポートでマッチ → クラス1:10
 tc filter add dev eth0 parent 1: protocol ip prio 1 \
     u32 match ip dport 80 0xffff flowid 1:10
 
-# Match by source IP
+# 送信元IPでマッチ
 tc filter add dev eth0 parent 1: protocol ip prio 2 \
     u32 match ip src 10.0.0.0/8 flowid 1:20
 
-# Match by fwmark (from iptables MARK)
+# fwmark（iptablesのMARKによるもの）でマッチ
 tc filter add dev eth0 parent 1: protocol ip prio 3 \
     handle 0x1 fw flowid 1:10
 
-# eBPF classifier (modern approach)
+# eBPF分類器（現代的なアプローチ）
 tc filter add dev eth0 parent 1: bpf obj tc_prog.o sec tc flowid 1:10
 ```
 
-## TC eBPF (TC-BPF) {#tc-ebpf-tc-bpf}
+## TC eBPF（TC-BPF） {#tc-ebpf-tc-bpf}
 
-eBPF programs can be attached to TC as classifiers or actions. Unlike XDP, TC-BPF runs **after `sk_buff` allocation**, enabling full packet modification:
+eBPFプログラムは、分類器またはアクションとしてTCにアタッチできる。XDPと異なり、TC-BPFは**`sk_buff`の割り当て後**に実行されるため、パケットを完全に書き換えられる:
 
 ```c
-// TC egress program: add VLAN tag
+// TC egressプログラム: VLANタグを付加する
 SEC("tc")
 int tc_add_vlan(struct __sk_buff *skb)
 {
@@ -166,76 +166,76 @@ int tc_add_vlan(struct __sk_buff *skb)
 ```
 
 ```bash
-# Attach TC-BPF program to egress
+# TC-BPFプログラムをegressにアタッチ
 tc qdisc add dev eth0 clsact
 tc filter add dev eth0 egress bpf obj tc_prog.o sec tc direct-action
 
-# Can also attach to ingress (for shaping incoming traffic)
+# ingressにもアタッチできる（受信トラフィックのシェーピング用）
 tc filter add dev eth0 ingress bpf obj tc_ingress.o sec tc direct-action
 ```
 
-TC-BPF verdicts:
+TC-BPFの判定結果:
 
-- `TC_ACT_OK` (= 0): pass to next stage
-- `TC_ACT_SHOT` (= 2): drop
-- `TC_ACT_REDIRECT` (= 7): redirect to another interface
+- `TC_ACT_OK`（= 0）: 次の段階へ渡す
+- `TC_ACT_SHOT`（= 2）: ドロップする
+- `TC_ACT_REDIRECT`（= 7）: 別のインターフェースへリダイレクトする
 
-## Ingress shaping with IFB {#ingress-shaping-with-ifb}
+## IFBによるingressシェーピング {#ingress-shaping-with-ifb}
 
-TC only shapes egress natively. For ingress shaping:
+TCがネイティブにシェーピングできるのはegressのみである。ingressをシェーピングするには:
 
 ```bash
-# Create IFB (Intermediate Functional Block) device
+# IFB（Intermediate Functional Block）デバイスを作成
 modprobe ifb
 ip link set dev ifb0 up
 
-# Redirect all ingress traffic to IFB
+# すべてのingressトラフィックをIFBへリダイレクト
 tc qdisc add dev eth0 ingress handle ffff:
 tc filter add dev eth0 parent ffff: protocol all u32 \
     match u32 0 0 action mirred egress redirect dev ifb0
 
-# Now shape ifb0's egress (= eth0's ingress)
+# ここでifb0のegress（= eth0のingress）をシェーピングする
 tc qdisc add dev ifb0 root tbf rate 10mbit burst 20k latency 100ms
 ```
 
-## netem: network emulation {#netem-network-emulation}
+## netem: ネットワークエミュレーション {#netem-network-emulation}
 
-`netem` adds artificial delay, jitter, packet loss, and corruption — useful for testing:
+`netem`は人為的な遅延、ジッタ、パケットロス、データ破損を加える。テストに有用である:
 
 ```bash
-# Add 100ms delay with 10ms jitter
+# 10msのジッタ付きで100msの遅延を加える
 tc qdisc add dev eth0 root netem delay 100ms 10ms
 
-# Add 5% packet loss
+# 5%のパケットロスを加える
 tc qdisc add dev eth0 root netem loss 5%
 
-# Combine: 50ms delay + 1% loss + 0.1% corruption
+# 組み合わせ: 50msの遅延 + 1%のロス + 0.1%の破損
 tc qdisc add dev eth0 root netem delay 50ms loss 1% corrupt 0.1%
 
-# Remove
+# 削除
 tc qdisc del dev eth0 root
 ```
 
-## Statistics {#statistics}
+## 統計 {#statistics}
 
 ```bash
-# Show qdisc statistics
+# qdiscの統計を表示
 tc -s qdisc show dev eth0
 # qdisc fq_codel 8001: root ...
 #  Sent 12345 bytes 100 pkt (dropped 0, overlimits 0 requeues 0)
 #  backlog 0b 0p requeues 0
 #  maxpacket 1514 drop_overlimit 0 new_flow_count 50
 
-# Show class statistics (HTB)
+# クラスの統計を表示（HTB）
 tc -s class show dev eth0
 
-# Watch in real time
+# リアルタイムで監視
 watch -n 1 'tc -s qdisc show dev eth0'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [XDP](xdp.md) — Pre-stack packet processing (higher performance than TC for drops)
-- [AF_XDP Sockets](af-xdp.md) — Userspace packet I/O without full kernel bypass
-- [Life of a Packet (transmit)](life-of-packet-tx.md) — Where TC fits in the transmit path
-- [CPU Bandwidth Control](../sched/cpu-bandwidth.md) — Analogous control for CPU time
+- [XDP](xdp.md) — スタック前でのパケット処理（ドロップについてはTCより高性能）
+- [AF_XDPソケット](af-xdp.md) — 完全なカーネルバイパスなしのユーザー空間パケットI/O
+- [パケットの一生（送信）](life-of-packet-tx.md) — 送信パスの中でTCがどこに位置するか
+- [CPU帯域制御](../sched/cpu-bandwidth.md) — CPU時間に対する類似の制御

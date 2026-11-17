@@ -105,7 +105,7 @@ STA_PPSFREQ | STA_PPSTIME   ← PPS-disciplined (highest accuracy)
 
 `STA_UNSYNC` is set by the kernel when it has not received a valid time update recently. A userspace daemon clears `STA_UNSYNC` when it starts locking to a reference. The return value of `adjtimex()` reports the current sync state as `TIME_OK`, `TIME_INS`, `TIME_DEL`, `TIME_OOP`, `TIME_WAIT`, or `TIME_ERROR`.
 
-## ntp_tick_length() {#ntpticklength}
+## ntp_tick_length() {#ntp_tick_length}
 
 On every tick, `timekeeping_adjust()` and `__timekeeping_advance()` (both in `kernel/time/timekeeping.c`) call into the NTP code to retrieve the correction to apply:
 

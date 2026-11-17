@@ -1,10 +1,10 @@
-# cpufreq: CPU Frequency Scaling {#cpufreq-cpu-frequency-scaling}
+# cpufreq: CPU周波数スケーリング {#cpufreq-cpu-frequency-scaling}
 
-> P-states, governors, and hardware-coordinated frequency management
+> P-state、ガバナ、そしてハードウェア協調型の周波数管理
 
-## Why CPU frequency scaling? {#why-cpu-frequency-scaling}
+## なぜCPU周波数スケーリングか {#why-cpu-frequency-scaling}
 
-Modern CPUs can run at different voltage-frequency operating points called **P-states** (performance states). Lower frequency = lower voltage = less power. The kernel's cpufreq subsystem selects the operating point based on current load.
+現代のCPUは、**P-state**（パフォーマンス状態）と呼ばれる、電圧と周波数の異なる動作点で動作できる。周波数が低い = 電圧が低い = 消費電力が少ない。カーネルのcpufreqサブシステムは、現在の負荷に基づいて動作点を選択する。
 
 ```
 P0 (max turbo): 4.5 GHz, 1.4V  — high throughput, high power
@@ -14,7 +14,7 @@ P2:             2.5 GHz, 1.0V
 Pn (minimum):   0.8 GHz, 0.7V  — idle, minimal power
 ```
 
-## Architecture {#architecture}
+## アーキテクチャ {#architecture}
 
 ```
 cpufreq core (drivers/cpufreq/cpufreq.c)
@@ -31,42 +31,42 @@ cpufreq core (drivers/cpufreq/cpufreq.c)
 ```c
 /* include/linux/cpufreq.h */
 struct cpufreq_policy {
-    /* CPUs sharing this policy (e.g., SMT siblings or all cores on a die) */
+    /* このポリシーを共有するCPU（例: SMTの兄弟スレッドやダイ上の全コア） */
     cpumask_var_t   cpus;
     cpumask_var_t   related_cpus;
 
     unsigned int    shared_type;   /* CPUFREQ_SHARED_TYPE_ALL/ANY/HW */
 
-    unsigned int    cpu;           /* managing CPU */
+    unsigned int    cpu;           /* 管理を担うCPU */
     struct clk     *clk;
 
-    struct cpufreq_cpuinfo cpuinfo; /* min/max freq, transition latency */
+    struct cpufreq_cpuinfo cpuinfo; /* 最小/最大周波数、遷移レイテンシ */
 
-    unsigned int    min;     /* current policy min (kHz) */
-    unsigned int    max;     /* current policy max (kHz) */
-    unsigned int    cur;     /* current frequency */
+    unsigned int    min;     /* 現在のポリシーの最小値（kHz） */
+    unsigned int    max;     /* 現在のポリシーの最大値（kHz） */
+    unsigned int    cur;     /* 現在の周波数 */
     unsigned int    suspend_freq;
 
-    unsigned int    policy;  /* CPUFREQ_POLICY_PERFORMANCE or _POWERSAVE */
+    unsigned int    policy;  /* CPUFREQ_POLICY_PERFORMANCE または _POWERSAVE */
     unsigned int    last_policy;
 
     struct cpufreq_governor *governor;
     void            *governor_data;
 
-    /* embedded, not pointers -- QoS constraints tracked in-line */
+    /* ポインタではなく埋め込み -- QoS制約はインラインで追跡される */
     struct freq_qos_request min_freq_req;
     struct freq_qos_request max_freq_req;
-    /* ... additional fields (stats, kobject, locking) omitted ... */
+    /* ... 追加のフィールド（統計、kobject、ロック）は省略 ... */
 };
 ```
 
-## Governors {#governors}
+## ガバナ {#governors}
 
-A governor observes CPU utilization and selects a target frequency.
+ガバナはCPU使用率を観測し、目標周波数を選択する。
 
-### schedutil (recommended, 4.7+) {#schedutil-recommended-47}
+### schedutil（推奨、4.7以降） {#schedutil-recommended-47}
 
-schedutil integrates with the scheduler's per-CPU utilization tracking. It's called directly from the scheduler path when utilization changes — no polling needed.
+schedutilは、スケジューラのCPUごとの使用率追跡と統合されている。使用率が変化したときにスケジューラのパスから直接呼び出されるため、ポーリングは不要である。
 
 ```c
 /* kernel/sched/cpufreq_schedutil.c */
@@ -81,11 +81,11 @@ static void sugov_update_single_freq(struct update_util_data *hook, u64 time,
 
     max_cap = arch_scale_cpu_capacity(sg_cpu->cpu);
 
-    /* Refresh utilization, apply iowait boost, honor the rate limit */
+    /* 使用率を更新し、iowaitブーストを適用し、レート制限に従う */
     if (!sugov_update_single_common(sg_cpu, time, max_cap, flags))
         return;
 
-    /* Map utilization → target frequency */
+    /* 使用率 → 目標周波数への対応付け */
     next_f = get_next_freq(sg_policy, sg_cpu->util, max_cap);
 
     if (sugov_hold_freq(sg_cpu) && next_f < sg_policy->next_freq &&
@@ -100,12 +100,12 @@ static void sugov_update_single_freq(struct update_util_data *hook, u64 time,
     if (sg_policy->policy->fast_switch_enabled)
         cpufreq_driver_fast_switch(sg_policy->policy, next_f);
     else
-        sugov_deferred_update(sg_policy);  /* wakes the sugov kthread */
+        sugov_deferred_update(sg_policy);  /* sugov kthreadを起こす */
 }
 
 /*
- * get_next_freq() - target frequency proportional to utilization:
- *   next_freq = C * ref_freq * util / max   (C = 1.25 margin)
+ * get_next_freq() - 使用率に比例した目標周波数:
+ *   next_freq = C * ref_freq * util / max   （C = 1.25 のマージン）
  */
 static unsigned int get_next_freq(struct sugov_policy *sg_policy,
                                   unsigned long util, unsigned long max)
@@ -125,31 +125,31 @@ static unsigned int get_next_freq(struct sugov_policy *sg_policy,
 
 ### ondemand {#ondemand}
 
-Polls CPU idle time periodically, scales frequency proportionally to non-idle fraction. The sampling interval is not a fixed 10ms: it defaults to `max(2 * tick_period, 1.5 * transition_latency)` (falling back to 1ms if the driver reports no transition latency) — see `cpufreq_policy_transition_delay_us()` in `drivers/cpufreq/cpufreq.c` and the default computed in `drivers/cpufreq/cpufreq_governor.c`. It's tunable at runtime via the governor's `sampling_rate` sysfs file:
+CPUのアイドル時間を定期的にポーリングし、非アイドルの割合に比例して周波数をスケーリングする。サンプリング間隔は固定の10msではない。デフォルトは`max(2 * tick_period, 1.5 * transition_latency)`である（ドライバが遷移レイテンシを報告しない場合は1msにフォールバックする）。`drivers/cpufreq/cpufreq.c`の`cpufreq_policy_transition_delay_us()`と、`drivers/cpufreq/cpufreq_governor.c`で計算されるデフォルト値を参照のこと。実行時にはガバナの`sampling_rate` sysfsファイルで調整できる。
 
 ```
 target_freq = max_freq * (non_idle_time / sample_time)
 ```
 
-Slower to react than schedutil (polling vs event-driven), but simpler and still widely used.
+schedutilより反応が遅い（イベント駆動ではなくポーリングであるため）が、より単純で、今でも広く使われている。
 
 ### performance / powersave {#performance-powersave}
 
-Static governors: always select the maximum (performance) or minimum (powersave) frequency in the policy range. No utilization sampling at all.
+静的なガバナである。ポリシー範囲内の最大周波数（performance）または最小周波数（powersave）を常に選択する。使用率のサンプリングは一切行わない。
 
 ```bash
-# Use performance governor for latency-critical workloads
+# レイテンシが重要なワークロードにはperformanceガバナを使う
 echo performance | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 
-# Use powersave for battery/thermal savings
+# バッテリー/熱の節約にはpowersaveを使う
 echo powersave | sudo tee /sys/devices/system/cpu/cpu*/cpufreq/scaling_governor
 ```
 
-## cpufreq drivers {#cpufreq-drivers}
+## cpufreqドライバ {#cpufreq-drivers}
 
 ### acpi-cpufreq {#acpi-cpufreq}
 
-Uses ACPI _PCT (Performance Control) and _PSS (Performance Supported States) objects to enumerate and switch P-states. The OS writes to MSR_IA32_PERF_CTL:
+ACPIの_PCT（Performance Control）と_PSS（Performance Supported States）オブジェクトを使ってP-stateを列挙し、切り替える。OSはMSR_IA32_PERF_CTLに書き込む。
 
 ```c
 /* drivers/cpufreq/acpi-cpufreq.c */
@@ -160,17 +160,17 @@ static void drv_write(struct acpi_cpufreq_data *data,
     struct drv_cmd cmd = {
         .reg = &perf->control_register,
         .val = val,
-        .func.write = data->cpu_freq_write,  /* usually writes MSR_IA32_PERF_CTL */
+        .func.write = data->cpu_freq_write,  /* 通常はMSR_IA32_PERF_CTLに書き込む */
     };
 
-    /* Runs do_drv_write() -> cmd.func.write() on every CPU in @mask */
+    /* @mask内のすべてのCPUでdo_drv_write() -> cmd.func.write()を実行する */
     on_each_cpu_mask(mask, do_drv_write, &cmd, true);
 }
 ```
 
 ### intel_pstate {#intel_pstate}
 
-Intel's native driver for Sandy Bridge and later. It bypasses the traditional governor hierarchy for CPUs with HWP (Hardware P-state control, Broadwell+):
+Sandy Bridge以降向けのIntelのネイティブドライバである。HWP（Hardware P-state control、Broadwell以降）を持つCPUでは、従来のガバナ階層をバイパスする。
 
 ```
 Without HWP: intel_pstate governor → write PERF_CTL MSR every ~10ms
@@ -190,7 +190,7 @@ static void intel_pstate_hwp_set(unsigned int cpu)
     max = cpu_data->max_perf_ratio;
     min = cpu_data->min_perf_ratio;
     if (cpu_data->policy == CPUFREQ_POLICY_PERFORMANCE)
-        min = max;  /* pin to max in the "performance" policy */
+        min = max;  /* "performance"ポリシーでは最大値に固定する */
 
     rdmsrq_on_cpu(cpu, MSR_HWP_REQUEST, &value);
     value &= ~HWP_MIN_PERF(~0L);
@@ -198,29 +198,29 @@ static void intel_pstate_hwp_set(unsigned int cpu)
     value &= ~HWP_MAX_PERF(~0L);
     value |= HWP_MAX_PERF(max);
 
-    /* EPP itself comes from intel_pstate_get_epp() / epp_powersave,
-     * not from the min/max perf ratios computed above */
+    /* EPP自体はintel_pstate_get_epp() / epp_powersaveから得られ、
+     * 上で計算したmin/maxのperf比からではない */
     epp = intel_pstate_get_epp(cpu_data, value);
-    /* ... encode epp into bits [31:24] of value, then: */
+    /* ... epp を value のビット[31:24]にエンコードしてから: */
     wrmsrq_on_cpu(cpu, MSR_HWP_REQUEST, value);
 }
 ```
 
-There's no `HWP_DESIRED_PERF` field set here: leaving the MSR's desired-performance bits at 0 tells the hardware to autonomously pick between `HWP_MIN_PERF` and `HWP_MAX_PERF`.
+ここでは`HWP_DESIRED_PERF`フィールドは設定されない。MSRのdesired-performanceビットを0のままにしておくと、ハードウェアは`HWP_MIN_PERF`と`HWP_MAX_PERF`の間で自律的に選択する。
 
-#### Energy Performance Preference (EPP) {#energy-performance-preference-epp}
+#### Energy Performance Preference（EPP） {#energy-performance-preference-epp}
 
-EPP is a hint to the hardware about the performance/power tradeoff:
+EPPは、性能と電力のトレードオフについてハードウェアに与えるヒントである。
 
-| EPP value | Hint | Typical use |
+| EPP値 | ヒント | 典型的な用途 |
 |-----------|------|-------------|
-| 0 | performance | latency-critical |
-| 128 | balance_performance | default |
+| 0 | performance | レイテンシが重要な場合 |
+| 128 | balance_performance | デフォルト |
 | 192 | balance_power | |
-| 255 | power | battery saving |
+| 255 | power | バッテリーの節約 |
 
 ```bash
-# Read/write EPP for CPU 0
+# CPU 0のEPPを読み書きする
 cat /sys/devices/system/cpu/cpu0/cpufreq/energy_performance_preference
 # balance_performance
 
@@ -229,61 +229,61 @@ echo performance | sudo tee /sys/devices/system/cpu/cpu0/cpufreq/energy_performa
 
 ### ARM / cppc_cpufreq {#arm-cppc_cpufreq}
 
-ARM servers use ACPI CPPC (Collaborative Processor Performance Control) for firmware-assisted frequency scaling. Similar to HWP: the OS writes desired performance, firmware adjusts clocks.
+ARMサーバーは、ファームウェア支援による周波数スケーリングのためにACPI CPPC（Collaborative Processor Performance Control）を使う。HWPと同様に、OSは希望する性能を書き込み、ファームウェアがクロックを調整する。
 
-## Frequency QoS (Quality of Service) {#frequency-qos-quality-of-service}
+## 周波数QoS（Quality of Service） {#frequency-qos-quality-of-service}
 
-Devices and drivers can impose constraints on CPU frequency via the frequency QoS API:
+デバイスやドライバは、周波数QoS APIを通じてCPU周波数に制約を課すことができる。
 
 ```c
 #include <linux/pm_qos.h>
 
-/* Request minimum frequency of 1 GHz for a latency-sensitive device */
+/* レイテンシに敏感なデバイスのために最小周波数1 GHzを要求する */
 struct freq_qos_request req;
 freq_qos_add_request(&policy->constraints, &req,
                      FREQ_QOS_MIN, 1000000 /* kHz */);
 
-/* Later: remove constraint */
+/* 後で: 制約を取り除く */
 freq_qos_remove_request(&req);
 ```
 
-Constraints from multiple requestors are combined (highest min / lowest max wins).
+複数の要求元からの制約は統合される（最も高い最小値 / 最も低い最大値が優先される）。
 
-## C-states: idle power {#c-states-idle-power}
+## C-state: アイドル時の電力 {#c-states-idle-power}
 
-Separate from P-states, C-states are CPU idle states (when there's no work):
+P-stateとは別に、C-stateはCPUのアイドル状態（仕事がないとき）である。
 
-| C-state | Name | Wake latency | Power saved |
+| C-state | 名前 | ウェイクレイテンシ | 節約される電力 |
 |---------|------|-------------|-------------|
-| C0 | Active | 0 | none |
-| C1 | Halt | ~2µs | low |
-| C1E | Enhanced halt | ~10µs | moderate |
-| C3 | Sleep | ~70µs | high |
-| C6 | Deep power down | ~85µs | highest |
-| C10 | Deepest core idle | ~0.9ms | maximum |
+| C0 | Active | 0 | なし |
+| C1 | Halt | ~2µs | 低 |
+| C1E | Enhanced halt | ~10µs | 中 |
+| C3 | Sleep | ~70µs | 高 |
+| C6 | Deep power down | ~85µs | 最高 |
+| C10 | Deepest core idle | ~0.9ms | 最大 |
 
-(Figures are representative `intel_idle` values for a Skylake-class core, from `skl_cstates[]` in `drivers/idle/intel_idle.c`; exact numbers vary by CPU generation.)
+（数値はSkylakeクラスのコアにおける代表的な`intel_idle`の値で、`drivers/idle/intel_idle.c`の`skl_cstates[]`から取ったものである。正確な数値はCPUの世代によって異なる。）
 
-Note that C10 here is a per-core ACPI C-state, distinct from **Modern Standby** (also called S0ix / Low Power Idle), which is a *platform-wide* low-power mode entered instead of S3 suspend when every core, and the chipset, agree conditions are met. Modern Standby is not part of the per-core C-state ladder and has its own, much coarser-grained latency budget — don't conflate the two.
+ここでのC10はコアごとのACPI C-stateであり、**Modern Standby**（S0ix / Low Power Idleとも呼ばれる）とは別物であることに注意されたい。Modern Standbyは、すべてのコアとチップセットが条件を満たしていると合意したときに、S3サスペンドの代わりに入る*プラットフォーム全体の*低電力モードである。Modern StandbyはコアごとのC-stateの階段の一部ではなく、独自の、はるかに粒度の粗いレイテンシ予算を持つ。この2つを混同してはならない。
 
-The cpuidle subsystem selects C-states. The governor (`menu` or `teo`) predicts next wakeup time and picks the deepest C-state with acceptable latency.
+C-stateを選択するのはcpuidleサブシステムである。ガバナ（`menu`または`teo`）は次のウェイクアップ時刻を予測し、許容可能なレイテンシを持つ最も深いC-stateを選ぶ。
 
 ```bash
-# C-state statistics per CPU
+# CPUごとのC-state統計
 grep . /sys/devices/system/cpu/cpu0/cpuidle/state*/name
 grep . /sys/devices/system/cpu/cpu0/cpuidle/state*/usage
-grep . /sys/devices/system/cpu/cpu0/cpuidle/state*/time  # microseconds
+grep . /sys/devices/system/cpu/cpu0/cpuidle/state*/time  # マイクロ秒
 
-# Prevent deep C-states (latency-sensitive workloads)
-# Set latency QoS: max allowed exit latency in µs
+# 深いC-stateを防ぐ（レイテンシに敏感なワークロード）
+# レイテンシQoSを設定する: 許容される最大の脱出レイテンシ（µs）
 #
-# /dev/cpu_dma_latency requires a *binary* 4-byte s32, not a decimal string:
-# cpu_latency_qos_write() (kernel/power/qos.c) only string-parses a write
-# when its length is NOT exactly sizeof(s32) == 4 bytes. "100\n" from
-# `echo 100` is exactly 4 bytes, so it's reinterpreted as a raw binary value
-# instead of the string "100" -- producing a garbage latency, not 100us.
-# `sudo tee` also closes the fd right after writing, which drops the
-# constraint immediately (it only lasts as long as the fd stays open).
+# /dev/cpu_dma_latencyには10進数の文字列ではなく、*バイナリの*4バイトs32が必要:
+# cpu_latency_qos_write()（kernel/power/qos.c）は、書き込みの長さが
+# ちょうどsizeof(s32) == 4バイトで「ない」ときにのみ文字列として解析する。
+# `echo 100`による"100\n"はちょうど4バイトなので、文字列"100"ではなく
+# 生のバイナリ値として再解釈され、100usではなくでたらめなレイテンシになる。
+# `sudo tee`も書き込み直後にfdを閉じるため、制約はすぐに破棄される
+# （制約はfdが開いている間しか持続しない）。
 sudo python3 -c "
 import os, struct, time
 fd = os.open('/dev/cpu_dma_latency', os.O_WRONLY)
@@ -293,13 +293,13 @@ os.close(fd)
 "
 ```
 
-## Observing cpufreq {#observing-cpufreq}
+## cpufreqの観測 {#observing-cpufreq}
 
 ```bash
-# Current frequencies (all CPUs)
+# 現在の周波数（全CPU）
 grep MHz /proc/cpuinfo
 
-# Frequency transition statistics
+# 周波数遷移の統計
 cat /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state
 # 800000   12345678   (freq_kHz  time_in_10ms_units)
 # 1000000  8765432
@@ -307,42 +307,42 @@ cat /sys/devices/system/cpu/cpu0/cpufreq/stats/time_in_state
 
 cat /sys/devices/system/cpu/cpu0/cpufreq/stats/total_trans
 
-# turbostat: per-CPU P-state and C-state distribution
+# turbostat: CPUごとのP-stateとC-stateの分布
 sudo turbostat --interval 5
 
-# perf: CPU frequency events
+# perf: CPU周波数関連のイベント
 perf stat -e power/energy-pkg/,power/energy-cores/ sleep 10
 
-# trace frequency transitions
+# 周波数遷移をトレースする
 echo 1 > /sys/kernel/tracing/events/power/cpu_frequency/enable
 cat /sys/kernel/tracing/trace_pipe
 # kworker/0:1-42 [000] cpu_frequency: state=2400000 cpu_id=0
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/cpufreq.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpufreq.h) — `struct cpufreq_policy`, `struct cpufreq_driver`, and the governor registration API
-- [drivers/cpufreq/cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cpufreq.c) — the cpufreq core: policy lifecycle, sysfs, driver/governor registration
-- [kernel/sched/cpufreq_schedutil.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/cpufreq_schedutil.c) — schedutil governor: `sugov_update_single_freq()`, `get_next_freq()`
-- [drivers/cpufreq/intel_pstate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/intel_pstate.c) — Intel's native driver, including `intel_pstate_hwp_set()` and EPP handling
-- [drivers/cpufreq/acpi-cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/acpi-cpufreq.c) — ACPI `_PSS`/`_PCT`-driven P-state switching via `drv_write()`
-- [drivers/cpufreq/cppc_cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cppc_cpufreq.c) — ACPI CPPC driver used on ARM servers
-- [include/linux/pm_qos.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_qos.h) — `freq_qos_add_request()` / `freq_qos_remove_request()` and `struct freq_qos_request`
+- [include/linux/cpufreq.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpufreq.h) — `struct cpufreq_policy`、`struct cpufreq_driver`、およびガバナ登録API
+- [drivers/cpufreq/cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cpufreq.c) — cpufreqのコア: ポリシーのライフサイクル、sysfs、ドライバ/ガバナの登録
+- [kernel/sched/cpufreq_schedutil.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/cpufreq_schedutil.c) — schedutilガバナ: `sugov_update_single_freq()`、`get_next_freq()`
+- [drivers/cpufreq/intel_pstate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/intel_pstate.c) — Intelのネイティブドライバ。`intel_pstate_hwp_set()`とEPPの処理を含む
+- [drivers/cpufreq/acpi-cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/acpi-cpufreq.c) — ACPIの`_PSS`/`_PCT`に基づく、`drv_write()`によるP-state切り替え
+- [drivers/cpufreq/cppc_cpufreq.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cpufreq/cppc_cpufreq.c) — ARMサーバーで使われるACPI CPPCドライバ
+- [include/linux/pm_qos.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pm_qos.h) — `freq_qos_add_request()` / `freq_qos_remove_request()`と`struct freq_qos_request`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [cpuidle: CPU C-states](cpuidle.md) — the idle-time counterpart to cpufreq's active-time scaling
-- [Runtime PM](runtime-pm.md) — device-level power management
-- [System Suspend](suspend.md) — system-wide power states
-- [Scheduler: EEVDF](../sched/eevdf.md) — schedutil reads utilization straight from the scheduler's per-CPU tracking
+- [cpuidle: CPUのC-state](cpuidle.md) — cpufreqの稼働時スケーリングに対応する、アイドル時側の仕組み
+- [Runtime PM](runtime-pm.md) — デバイスレベルの電源管理
+- [システムサスペンド](suspend.md) — システム全体の電源状態
+- [スケジューラ: EEVDF](../sched/eevdf.md) — schedutilはスケジューラのCPUごとの追跡から直接使用率を読み取る
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Improvements in CPU frequency management](https://lwn.net/Articles/682391/) — covers the 4.7-cycle work that introduced the schedutil governor and its scheduler integration
+- [LWN: Improvements in CPU frequency management](https://lwn.net/Articles/682391/) — schedutilガバナとそのスケジューラ統合を導入した4.7サイクルの作業を扱う
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/admin-guide/pm/cpufreq.rst](https://docs.kernel.org/admin-guide/pm/cpufreq.html) — upstream CPUFreq subsystem admin guide: governors, drivers, sysfs interface
-- [Documentation/admin-guide/pm/intel_pstate.rst](https://docs.kernel.org/admin-guide/pm/intel_pstate.html) — `intel_pstate` driver details: active/passive mode, HWP, EPP
+- [Documentation/admin-guide/pm/cpufreq.rst](https://docs.kernel.org/admin-guide/pm/cpufreq.html) — アップストリームのCPUFreqサブシステム管理者ガイド: ガバナ、ドライバ、sysfsインターフェース
+- [Documentation/admin-guide/pm/intel_pstate.rst](https://docs.kernel.org/admin-guide/pm/intel_pstate.html) — `intel_pstate`ドライバの詳細: active/passiveモード、HWP、EPP

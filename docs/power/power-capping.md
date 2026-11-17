@@ -1,33 +1,33 @@
-# Power Capping and RAPL {#power-capping-and-rapl}
+# パワーキャッピングとRAPL {#power-capping-and-rapl}
 
-> Intel RAPL, the powercap framework, and constraining CPU power consumption
+> Intel RAPL、powercapフレームワーク、そしてCPU消費電力の制限
 
-## What is RAPL? {#what-is-rapl}
+## RAPLとは何か {#what-is-rapl}
 
-**Running Average Power Limit (RAPL)** is an Intel hardware feature introduced with Sandy Bridge (2011) that does two things:
+**Running Average Power Limit**（RAPL）は、Sandy Bridge（2011年）で導入されたIntelのハードウェア機能であり、次の2つを行う。
 
-1. **Measures** energy consumption of major hardware domains using on-die counters
-2. **Limits** sustained power draw by throttling clock frequencies when a domain's rolling average exceeds a configured cap
+1. ダイ上のカウンタを用いて、主要なハードウェアドメインのエネルギー消費を**計測する**
+2. ドメインの移動平均が設定された上限を超えたときにクロック周波数をスロットリングすることで、持続的な消費電力を**制限する**
 
-RAPL is not a software power meter — the counters are built into the package's power management unit and are accurate to roughly 15.3 µJ per tick (the default energy unit, 2⁻¹⁶ J, from `MSR_RAPL_POWER_UNIT`). It is the basis for `perf stat -e power/energy-pkg/`, powertop's package power display, and many data-center power management tools.
+RAPLはソフトウェアによる電力計ではない。カウンタはパッケージの電源管理ユニットに組み込まれており、1ティックあたりおよそ15.3 µJ（デフォルトのエネルギー単位である2⁻¹⁶ J。`MSR_RAPL_POWER_UNIT`から得られる）の精度を持つ。これは`perf stat -e power/energy-pkg/`、powertopのパッケージ電力表示、そして多くのデータセンター向け電源管理ツールの基盤となっている。
 
-## RAPL domains {#rapl-domains}
+## RAPLドメイン {#rapl-domains}
 
-Each power domain covers a different physical scope:
+各電力ドメインは、それぞれ異なる物理的範囲をカバーする。
 
-| Domain | Scope | Available since |
+| ドメイン | 範囲 | 利用可能になった世代 |
 |--------|-------|----------------|
-| `package` | Entire CPU socket (cores + uncore + LLC) | Sandy Bridge |
-| `core` | CPU cores + L1/L2 caches only | Sandy Bridge |
-| `uncore` | GPU (integrated graphics / ring bus) | Sandy Bridge |
-| `dram` | DRAM power consumption | Sandy Bridge EP |
-| `psys` | Platform-wide (SoC + VR losses) | Skylake |
+| `package` | CPUソケット全体（コア + uncore + LLC） | Sandy Bridge |
+| `core` | CPUコア + L1/L2キャッシュのみ | Sandy Bridge |
+| `uncore` | GPU（統合グラフィックス / リングバス） | Sandy Bridge |
+| `dram` | DRAMの消費電力 | Sandy Bridge EP |
+| `psys` | プラットフォーム全体（SoC + VRの損失） | Skylake |
 
-On a dual-socket server you will see `intel-rapl:0` and `intel-rapl:1` for the two packages, each with child zones for their sub-domains.
+デュアルソケットのサーバーでは、2つのパッケージに対応する`intel-rapl:0`と`intel-rapl:1`が見え、それぞれがサブドメイン用の子ゾーンを持つ。
 
-## The MSR interface {#the-msr-interface}
+## MSRインターフェース {#the-msr-interface}
 
-At the hardware level RAPL is exposed through Model-Specific Registers:
+ハードウェアレベルでは、RAPLはモデル固有レジスタ（Model-Specific Register）を通じて公開されている。
 
 ```
 MSR_PKG_ENERGY_STATUS   (0x611)  — rolling energy counter, ~15.3 µJ units
@@ -40,17 +40,17 @@ MSR_DRAM_ENERGY_STATUS  (0x619)  — DRAM domain energy
 MSR_PLATFORM_ENERGY_STATUS (0x64d) — psys domain energy (Skylake+)
 ```
 
-The energy unit (Joules per LSB) is read from `MSR_RAPL_POWER_UNIT (0x606)`, bits [12:8]. The power unit (Watts per LSB) comes from bits [3:0] of the same MSR, typically 1/8 W.
+エネルギー単位（LSBあたりのジュール）は`MSR_RAPL_POWER_UNIT (0x606)`のビット[12:8]から読み取る。電力単位（LSBあたりのワット）は同じMSRのビット[3:0]から得られ、通常は1/8 Wである。
 
-Direct MSR access requires `CAP_SYS_RAWIO` and the `msr` kernel module. The powercap sysfs interface is the preferred path for userspace.
+MSRへの直接アクセスには`CAP_SYS_RAWIO`と`msr`カーネルモジュールが必要である。ユーザー空間からはpowercapのsysfsインターフェースを使うのが推奨される経路である。
 
-## The powercap framework {#the-powercap-framework}
+## powercapフレームワーク {#the-powercap-framework}
 
-`drivers/powercap/` provides a generic abstraction for power-capping hardware. The framework:
+`drivers/powercap/`は、パワーキャッピング用ハードウェアのための汎用的な抽象化を提供する。このフレームワークは次のことを行う。
 
-- Represents each hardware domain as a **powercap zone** (`struct powercap_zone`)
-- Exposes zones as directories under `/sys/class/powercap/`
-- Allows drivers for different hardware (Intel RAPL, ARM SCMI) to register zones without duplicating sysfs code
+- 各ハードウェアドメインを**powercapゾーン**（`struct powercap_zone`）として表現する
+- ゾーンを`/sys/class/powercap/`以下のディレクトリとして公開する
+- 異なるハードウェア（Intel RAPL、ARM SCMI）向けのドライバが、sysfsのコードを重複させることなくゾーンを登録できるようにする
 
 ```c
 /* include/linux/powercap.h */
@@ -78,75 +78,75 @@ struct powercap_zone_ops {
 };
 ```
 
-A control type (e.g., `intel-rapl`) is registered first with `powercap_register_control_type()`, then each RAPL domain is registered as a zone with `powercap_register_zone()`. Child zones (core, dram, uncore) are registered with the package zone as parent.
+まずコントロールタイプ（例: `intel-rapl`）が`powercap_register_control_type()`で登録され、続いて各RAPLドメインが`powercap_register_zone()`でゾーンとして登録される。子ゾーン（core、dram、uncore）は、パッケージゾーンを親として登録される。
 
-## The intel_rapl driver {#the-intel_rapl-driver}
+## intel_raplドライバ {#the-intel_rapl-driver}
 
-`drivers/powercap/intel_rapl_common.c` is the driver that bridges RAPL MSRs to the powercap framework. It:
+`drivers/powercap/intel_rapl_common.c`は、RAPLのMSRとpowercapフレームワークを橋渡しするドライバである。このドライバは次のことを行う。
 
-1. Enumerates RAPL domains by probing MSRs for each CPU package
-2. Reads the energy/power unit from `MSR_RAPL_POWER_UNIT`
-3. Registers each domain as a `powercap_zone`
-4. Implements `get_energy_uj` by reading the appropriate energy MSR and scaling
+1. CPUパッケージごとにMSRをプローブしてRAPLドメインを列挙する
+2. `MSR_RAPL_POWER_UNIT`からエネルギー単位と電力単位を読み取る
+3. 各ドメインを`powercap_zone`として登録する
+4. 適切なエネルギーMSRを読み取ってスケーリングすることで`get_energy_uj`を実装する
 
-Two interface drivers load on top of the common code:
+この共通コードの上に、2つのインターフェースドライバがロードされる。
 
-- `intel_rapl_msr.c` — accesses RAPL via MSRs directly (bare metal, the traditional path since Sandy Bridge)
-- `intel_rapl_tpmi.c` — accesses RAPL via TPMI (Topology Aware Register and PM Capsule Interface), a PCIe-VSEC-exposed MMIO region that avoids the per-CPU scheduling MSR access requires; used on newer Xeon platforms with PMT/TPMI hardware
+- `intel_rapl_msr.c` — MSR経由で直接RAPLにアクセスする（ベアメタル。Sandy Bridge以来の従来の経路）
+- `intel_rapl_tpmi.c` — TPMI（Topology Aware Register and PM Capsule Interface）経由でRAPLにアクセスする。TPMIはPCIe VSECで公開されるMMIO領域であり、MSRアクセスで必要となるCPUごとのスケジューリングを回避できる。PMT/TPMIハードウェアを備えた新しいXeonプラットフォームで使われる
 
-On systems with the driver loaded, `lsmod | grep rapl` should show `intel_rapl_common` plus either `intel_rapl_msr` or `intel_rapl_tpmi` depending on the interface, and (on some platforms) `rapl` for the perf event backend.
+ドライバがロードされたシステムでは、`lsmod | grep rapl`を実行すると、`intel_rapl_common`に加えて、インターフェースに応じて`intel_rapl_msr`または`intel_rapl_tpmi`のいずれか、そして（一部のプラットフォームでは）perfイベントのバックエンドである`rapl`が表示されるはずである。
 
-## sysfs interface {#sysfs-interface}
+## sysfsインターフェース {#sysfs-interface}
 
 ```bash
-# List all powercap zones
+# すべてのpowercapゾーンを列挙する
 ls /sys/class/powercap/
 # intel-rapl  intel-rapl:0  intel-rapl:0:0  intel-rapl:0:1  intel-rapl:0:2
 
-# Zone names
+# ゾーン名
 cat /sys/class/powercap/intel-rapl:0/name          # "package-0"
 cat /sys/class/powercap/intel-rapl:0:0/name        # "core"
 cat /sys/class/powercap/intel-rapl:0:1/name        # "uncore" or "dram"
 
-# Read current accumulated energy (µJ; wrap-around counter)
+# 現在の累積エネルギーを読む（µJ。ラップアラウンドするカウンタ）
 cat /sys/class/powercap/intel-rapl:0/energy_uj
 # 4882348230
 
-# Compute power: read energy_uj twice, 1 second apart
+# 電力を計算する: energy_ujを1秒間隔で2回読む
 E1=$(cat /sys/class/powercap/intel-rapl:0/energy_uj)
 sleep 1
 E2=$(cat /sys/class/powercap/intel-rapl:0/energy_uj)
 echo "Package power: $(( (E2 - E1) / 1000000 )) W"
 
-# Read current long-term power limit (µW)
+# 現在の長期電力制限を読む（µW）
 cat /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
 # 45000000  (= 45 W)
 
-# Set a 35 W long-term power limit on package 0
+# パッケージ0に35 Wの長期電力制限を設定する
 echo 35000000 > /sys/class/powercap/intel-rapl:0/constraint_0_power_limit_uw
 
-# Enable the zone (may already be enabled) -- enabled is a zone-level
-# attribute, not per-constraint; there is no constraint_0_enabled file
+# ゾーンを有効にする（既に有効な場合もある）-- enabledはゾーン単位の
+# 属性であり、制約ごとではない。constraint_0_enabledというファイルは存在しない
 echo 1 > /sys/class/powercap/intel-rapl:0/enabled
 
-# Read the time window over which the limit is averaged
+# 制限の平均化に使われる時間窓を読む
 cat /sys/class/powercap/intel-rapl:0/constraint_0_time_window_us
 # 999424  (~1 second)
 ```
 
-## Constraint 0 vs Constraint 1 {#constraint-0-vs-constraint-1}
+## Constraint 0とConstraint 1 {#constraint-0-vs-constraint-1}
 
-RAPL supports two independent power constraints per zone:
+RAPLはゾーンごとに2つの独立した電力制約をサポートする。
 
-| Constraint | Name | Typical time window | Behavior |
+| 制約 | 名前 | 典型的な時間窓 | 振る舞い |
 |-----------|------|---------------------|----------|
-| `constraint_0` | Long-term (PL1) | 1 s – 28 s | Sustained cap; hardware throttles if rolling average exceeds this |
-| `constraint_1` | Short-term (PL2) | 1 ms – 7 ms | Burst cap; allows exceeding PL1 briefly for responsiveness |
+| `constraint_0` | 長期（PL1） | 1 s – 28 s | 持続的な上限。移動平均がこれを超えるとハードウェアがスロットリングする |
+| `constraint_1` | 短期（PL2） | 1 ms – 7 ms | バースト用の上限。応答性のためにPL1を短時間超えることを許す |
 
-PL2 is always ≥ PL1. A typical OEM configuration: PL1 = 15 W (thermal envelope), PL2 = 25 W (burst for a few milliseconds, per the `constraint_1` time window above). After the burst window expires, the processor clamps to PL1.
+PL2は常にPL1以上である。典型的なOEMの設定はPL1 = 15 W（熱設計上の上限）、PL2 = 25 W（上記の`constraint_1`の時間窓に従い数ミリ秒間のバースト）である。バースト窓が過ぎると、プロセッサはPL1に制限される。
 
 ```bash
-# Short-term (burst) limit
+# 短期（バースト）制限
 cat /sys/class/powercap/intel-rapl:0/constraint_1_name
 # "short_term"
 cat /sys/class/powercap/intel-rapl:0/constraint_1_power_limit_uw
@@ -155,18 +155,18 @@ cat /sys/class/powercap/intel-rapl:0/constraint_1_time_window_us
 # 2440       (~2.4 ms)
 ```
 
-## Measuring energy with perf {#measuring-energy-with-perf}
+## perfによるエネルギー計測 {#measuring-energy-with-perf}
 
-The `perf` tool can read RAPL energy counters via the `power` PMU, which uses the same MSRs under the hood but integrates with the perf event infrastructure:
+`perf`ツールは`power` PMUを通じてRAPLのエネルギーカウンタを読み取れる。これは内部的には同じMSRを使うが、perfイベント基盤と統合されている。
 
 ```bash
-# Measure package energy for a workload
+# ワークロードのパッケージエネルギーを計測する
 perf stat -e power/energy-pkg/ -- ./my_workload
 #  Performance counter stats for './my_workload':
 #        24.35 Joules power/energy-pkg/
 #       3.152370284 seconds time elapsed
 
-# All available RAPL events
+# 利用可能なすべてのRAPLイベント
 perf list | grep power
 #  power/energy-cores/     [Kernel PMU event]
 #  power/energy-gpu/       [Kernel PMU event]
@@ -174,25 +174,25 @@ perf list | grep power
 #  power/energy-ram/       [Kernel PMU event]
 ```
 
-The perf backend is in `arch/x86/events/rapl.c` and registers a PMU named `power` that maps `energy-pkg` to `MSR_PKG_ENERGY_STATUS`, `energy-cores` to `MSR_PP0_ENERGY_STATUS`, and so on.
+perfのバックエンドは`arch/x86/events/rapl.c`にあり、`power`という名前のPMUを登録して、`energy-pkg`を`MSR_PKG_ENERGY_STATUS`に、`energy-cores`を`MSR_PP0_ENERGY_STATUS`に、といった具合に対応付ける。
 
-## ARM equivalent: SCMI power capping {#arm-equivalent-scmi-power-capping}
+## ARMでの相当機能: SCMIパワーキャッピング {#arm-equivalent-scmi-power-capping}
 
-On ARM platforms, SCMI (System Control and Management Interface) provides a comparable capability via the platform firmware. The driver `drivers/powercap/arm_scmi_powercap.c` registers zones from the dedicated SCMI **Powercap** protocol (`SCMI_PROTOCOL_POWERCAP`, protocol ID `0x18`) as powercap zones, so the same `/sys/class/powercap/` interface works on any ARM platform whose firmware implements it. This is a distinct SCMI protocol from **Power domain management** (`SCMI_PROTOCOL_POWER`, protocol ID `0x11`), which is what backs Linux's generic power-domain (genpd) framework, not powercap. Each zone's name comes straight from the SCMI power-capping domain descriptor the firmware reports (`spz->info->name` in the driver) — it's platform-defined, not a fixed kernel string.
+ARMプラットフォームでは、SCMI（System Control and Management Interface）がプラットフォームファームウェアを介して同等の機能を提供する。ドライバ`drivers/powercap/arm_scmi_powercap.c`は、専用のSCMI **Powercap**プロトコル（`SCMI_PROTOCOL_POWERCAP`、プロトコルID `0x18`）のゾーンをpowercapゾーンとして登録するため、ファームウェアがこれを実装しているARMプラットフォームであれば、同じ`/sys/class/powercap/`インターフェースが使える。これは**Power domain management**（`SCMI_PROTOCOL_POWER`、プロトコルID `0x11`）とは別のSCMIプロトコルであり、後者はpowercapではなくLinuxの汎用電源ドメイン（genpd）フレームワークを支えるものである。各ゾーンの名前は、ファームウェアが報告するSCMIパワーキャッピングドメインのディスクリプタ（ドライバ内の`spz->info->name`）からそのまま取られる。つまりプラットフォームが定義するものであり、カーネル内の固定文字列ではない。
 
 ```bash
-# On an ARM platform with SCMI powercap support
+# SCMI powercapをサポートするARMプラットフォーム上で
 ls /sys/class/powercap/
 # arm-scmi  arm-scmi:0  ...
 cat /sys/class/powercap/arm-scmi:0/name
 # whatever name the platform firmware assigned this domain
 ```
 
-The SCMI protocol (defined in Arm DEN0056) runs over shared memory or mailbox between Linux and the SCP (System Control Processor). SCMI message type `POWERCAP_CAP_GET` / `POWERCAP_CAP_SET` map directly to the powercap zone ops.
+SCMIプロトコル（Arm DEN0056で定義）は、LinuxとSCP（System Control Processor）の間で共有メモリまたはメールボックスを介して動作する。SCMIのメッセージタイプ`POWERCAP_CAP_GET` / `POWERCAP_CAP_SET`は、powercapゾーンのopsに直接対応する。
 
-## Interaction with thermal management {#interaction-with-thermal-management}
+## 熱管理との相互作用 {#interaction-with-thermal-management}
 
-RAPL power limits and the thermal framework are complementary, not overlapping:
+RAPLの電力制限と熱フレームワークは補完関係にあり、重複するものではない。
 
 ```
 Temperature-based:  Thermal zone → trip point → cpufreq cooling → frequency drop
@@ -203,50 +203,50 @@ Thermal acts on sustained temperature (software, second granularity).
 PROCHOT (thermal limit from temperature sensor) overrides both.
 ```
 
-Setting a RAPL limit lower than TDP controls steady-state power without relying on temperature sensors. This is useful in power-capped environments (data centers with per-rack power limits) where thermal headroom is not the constraint.
+RAPLの制限をTDPより低く設定すると、温度センサーに頼ることなく定常状態の電力を制御できる。これは、熱的な余裕が制約にならない電力上限付きの環境（ラックごとに電力制限があるデータセンターなど）で有用である。
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# turbostat shows per-package RAPL data continuously
+# turbostatはパッケージごとのRAPLデータを継続的に表示する
 sudo turbostat --show PkgWatt,CorWatt,RAMWatt --interval 1
 
-# Watch energy counters directly
+# エネルギーカウンタを直接監視する
 watch -n 1 'for z in /sys/class/powercap/intel-rapl:*/; do
     echo -n "$(cat $z/name): $(cat $z/energy_uj) µJ  "; done; echo'
 
-# Check if a constraint is currently active/throttling
-# (no direct sysfs node; infer from cpu frequency drop or perf counters)
+# 制約が現在有効になっている（スロットリングしている）かを確認する
+# （直接のsysfsノードはない。CPU周波数の低下やperfカウンタから推測する）
 perf stat -e cpu-cycles,ref-cycles -- sleep 1
-# If ref-cycles >> cpu-cycles, the CPU is being throttled
+# ref-cycles >> cpu-cyclesなら、CPUはスロットリングされている
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/powercap.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/powercap.h) — `struct powercap_zone`, `struct powercap_zone_ops`, and the control-type/zone registration API
-- [drivers/powercap/intel_rapl_common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_common.c) — shared RAPL domain/constraint logic used by both interface drivers
-- [drivers/powercap/intel_rapl_msr.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_msr.c) — MSR-based RAPL interface driver
-- [arch/x86/include/asm/msr-index.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/msr-index.h) — `MSR_RAPL_POWER_UNIT`, `MSR_PKG_ENERGY_STATUS`, and the other MSR offsets used on this page
-- [drivers/powercap/arm_scmi_powercap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/arm_scmi_powercap.c) — ARM SCMI powercap driver, registering SCMI power-capping domains as powercap zones
-- [arch/x86/events/rapl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/events/rapl.c) — the `power` PMU backend that exposes RAPL counters to `perf stat -e power/energy-*/`
+- [include/linux/powercap.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/powercap.h) — `struct powercap_zone`、`struct powercap_zone_ops`、およびコントロールタイプ/ゾーンの登録API
+- [drivers/powercap/intel_rapl_common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_common.c) — 両方のインターフェースドライバが使う、共通のRAPLドメイン/制約ロジック
+- [drivers/powercap/intel_rapl_msr.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/intel_rapl_msr.c) — MSRベースのRAPLインターフェースドライバ
+- [arch/x86/include/asm/msr-index.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/msr-index.h) — `MSR_RAPL_POWER_UNIT`、`MSR_PKG_ENERGY_STATUS`、およびこのページで使われるその他のMSRオフセット
+- [drivers/powercap/arm_scmi_powercap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/powercap/arm_scmi_powercap.c) — ARM SCMI powercapドライバ。SCMIのパワーキャッピングドメインをpowercapゾーンとして登録する
+- [arch/x86/events/rapl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/events/rapl.c) — RAPLカウンタを`perf stat -e power/energy-*/`に公開する`power` PMUのバックエンド
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [perf-stat(1)](https://man7.org/linux/man-pages/man1/perf-stat.1.html) — `-e` event-selection syntax used to read RAPL energy counters through the `power` PMU
+- [perf-stat(1)](https://man7.org/linux/man-pages/man1/perf-stat.1.html) — `power` PMUを通じてRAPLのエネルギーカウンタを読むのに使う`-e`のイベント選択構文
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [cpufreq and P-states](cpufreq.md) — frequency scaling; a separate control path from RAPL's own hardware throttling
-- [Thermal Management](thermal.md) — temperature-based throttling; complements RAPL's power-based limits
-- [Power Management War Stories](war-stories.md) — a RAPL DRAM-domain power-limit incident
+- [cpufreqとP-state](cpufreq.md) — 周波数スケーリング。RAPL自身のハードウェアによるスロットリングとは別の制御経路
+- [熱管理](thermal.md) — 温度ベースのスロットリング。RAPLの電力ベースの制限を補完する
+- [電源管理の事件簿](war-stories.md) — RAPLのDRAMドメイン電力制限に関するインシデント
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Power Capping Framework](https://lwn.net/Articles/562015/) — Srinivas Pandruvada's original RFC patch series (2013) that introduced the generic `drivers/powercap/` sysfs framework RAPL registers against
+- [Power Capping Framework](https://lwn.net/Articles/562015/) — Srinivas Pandruvadaによる最初のRFCパッチシリーズ（2013年）。RAPLが登録先とする汎用の`drivers/powercap/` sysfsフレームワークを導入した
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/power/powercap/powercap.rst](https://docs.kernel.org/power/powercap/powercap.html) — upstream powercap framework documentation: terminology, sysfs tree layout, control types and zones
-- Intel 64 and IA-32 Architectures Software Developer's Manual, Volume 3B, Chapter 15 (Power and Thermal Management) — RAPL MSR definitions
+- [Documentation/power/powercap/powercap.rst](https://docs.kernel.org/power/powercap/powercap.html) — アップストリームのpowercapフレームワークのドキュメント: 用語、sysfsツリーの構成、コントロールタイプとゾーン
+- Intel 64 and IA-32 Architectures Software Developer's Manual, Volume 3B, Chapter 15 (Power and Thermal Management) — RAPLのMSR定義

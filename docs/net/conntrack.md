@@ -1,100 +1,100 @@
-# Connection Tracking (conntrack) {#connection-tracking-conntrack}
+# コネクショントラッキング（conntrack） {#connection-tracking-conntrack}
 
-> How the kernel tracks the state of network connections for stateful firewalling and NAT
+> ステートフルなファイアウォールとNATのために、カーネルはネットワーク接続の状態をどう追跡するか
 
-## What conntrack does {#what-conntrack-does}
+## conntrackが行うこと {#what-conntrack-does}
 
-Connection tracking maintains a table of all active network flows. For every packet, the kernel looks up its flow in this table to determine its state (new, established, related, invalid). This enables:
+コネクショントラッキングは、アクティブなすべてのネットワークフローのテーブルを維持する。カーネルはパケットごとにこのテーブルでそのフローを検索し、状態（new、established、related、invalid）を判定する。これにより次のことが可能になる:
 
-- **Stateful firewalling**: Accept replies to outbound connections without explicit rules
-- **NAT**: Track both directions of a rewritten connection
-- **Helper modules**: Track related connections (FTP data channel, SIP RTP, etc.)
+- **ステートフルなファイアウォール**: 明示的なルールなしに、送信方向の接続への応答を受け入れる
+- **NAT**: 書き換えられた接続の両方向を追跡する
+- **ヘルパーモジュール**: 関連する接続（FTPのデータチャネル、SIPのRTPなど）を追跡する
 
-Conntrack is implemented in `net/netfilter/nf_conntrack_core.c` and hooks at PREROUTING and OUTPUT (before routing and before NAT).
+conntrackは`net/netfilter/nf_conntrack_core.c`に実装されており、PREROUTINGとOUTPUT（ルーティングの前、NATの前）にフックする。
 
 ## struct nf_conn {#struct-nf_conn}
 
-Each tracked connection is a `struct nf_conn`:
+追跡される各接続は`struct nf_conn`である:
 
 ```c
 // include/net/netfilter/nf_conntrack.h
 struct nf_conn {
-    struct nf_conntrack ct_general;  // reference count
+    struct nf_conntrack ct_general;  // 参照カウント
 
-    u32 timeout;  // expiry time (jiffies32)
+    u32 timeout;  // 有効期限（jiffies32）
 
-    // Two tuples: how we see it in each direction
-    // For TCP connection: client 10.0.0.1:54321 → server 8.8.8.8:80
+    // 2つのタプル: 各方向からどう見えるか
+    // TCP接続の場合: クライアント10.0.0.1:54321 → サーバー8.8.8.8:80
     //   tuplehash[ORIGINAL]: src=10.0.0.1:54321 dst=8.8.8.8:80  proto=TCP
     //   tuplehash[REPLY]:    src=8.8.8.8:80 dst=10.0.0.1:54321  proto=TCP
     struct nf_conntrack_tuple_hash tuplehash[IP_CT_DIR_MAX];
 
-    unsigned long status;  // IPS_* bitmask
+    unsigned long status;  // IPS_*のビットマスク
 
-    u_int32_t mark;    // connmark (can be set by iptables CONNMARK target)
-    u_int32_t secmark; // SELinux security mark
+    u_int32_t mark;    // connmark（iptablesのCONNMARKターゲットで設定できる）
+    u_int32_t secmark; // SELinuxのセキュリティマーク
 
-    union nf_conntrack_proto proto;  // per-protocol state (TCP: state machine)
+    union nf_conntrack_proto proto;  // プロトコルごとの状態（TCP: ステートマシン）
 };
 ```
 
-### Connection status bits (IPS_*) {#connection-status-bits-ips_}
+### 接続のステータスビット（IPS_*） {#connection-status-bits-ips_}
 
 ```c
-IPS_EXPECTED      // was expected by a helper (e.g., FTP data)
-IPS_SEEN_REPLY    // seen traffic in both directions
-IPS_ASSURED       // will survive GC under memory pressure (long-lived)
-IPS_CONFIRMED     // inserted into hash table (survived packet processing)
-IPS_SRC_NAT       // source address was NATted
-IPS_DST_NAT       // destination address was NATted
-IPS_DYING         // being removed
-IPS_FIXED_TIMEOUT // timeout was explicitly set
+IPS_EXPECTED      // ヘルパーによって予期されていた（例: FTPのデータ）
+IPS_SEEN_REPLY    // 両方向のトラフィックを観測した
+IPS_ASSURED       // メモリ逼迫時のGCでも生き残る（長寿命）
+IPS_CONFIRMED     // ハッシュテーブルに挿入された（パケット処理を生き延びた）
+IPS_SRC_NAT       // 送信元アドレスがNATされた
+IPS_DST_NAT       // 宛先アドレスがNATされた
+IPS_DYING         // 削除中
+IPS_FIXED_TIMEOUT // タイムアウトが明示的に設定された
 ```
 
-### TCP-specific state {#tcp-specific-state}
+### TCP固有の状態 {#tcp-specific-state}
 
 ```c
-// TCP state tracked per connection
+// 接続ごとに追跡されるTCPの状態
 union nf_conntrack_proto {
     struct ip_ct_tcp {
-        enum tcp_conntrack state;  // TCP_CONNTRACK_SYN_SENT, ESTABLISHED, etc.
+        enum tcp_conntrack state;  // TCP_CONNTRACK_SYN_SENT、ESTABLISHEDなど
         enum tcp_conntrack last_dir;
-        u_int32_t seen[2];         // window info for both directions
+        u_int32_t seen[2];         // 両方向のウィンドウ情報
     } tcp;
-    // UDP, ICMP, SCTP state...
+    // UDP、ICMP、SCTPの状態...
 };
 ```
 
-## Conntrack tuple {#conntrack-tuple}
+## conntrackのタプル {#conntrack-tuple}
 
-A **tuple** uniquely identifies a packet in one direction:
+**タプル**は、一方向のパケットを一意に識別する:
 
 ```c
 struct nf_conntrack_tuple {
     struct nf_conntrack_man {
-        union nf_inet_addr u3;    // src IP (IPv4 or IPv6)
+        union nf_inet_addr u3;    // 送信元IP（IPv4またはIPv6）
         union nf_conntrack_man_proto {
-            __be16 port;  // TCP/UDP source port
-            // ICMP id, etc.
+            __be16 port;  // TCP/UDPの送信元ポート
+            // ICMPのidなど
         } u;
     } src;
 
     struct {
-        union nf_inet_addr u3;    // dst IP
+        union nf_inet_addr u3;    // 宛先IP
         union {
-            __be16 port;           // TCP/UDP destination port
+            __be16 port;           // TCP/UDPの宛先ポート
         } u;
-        u_int8_t protonum;         // IPPROTO_TCP, IPPROTO_UDP, ...
-        u_int8_t dir;              // ORIGINAL or REPLY
+        u_int8_t protonum;         // IPPROTO_TCP、IPPROTO_UDP、...
+        u_int8_t dir;              // ORIGINALまたはREPLY
     } dst;
 };
 ```
 
-Two tuples are stored per `nf_conn`: the original direction and the reply direction (which is the original reversed). This is how NAT works — NAT modifies one or both tuples, and conntrack uses the reply tuple to match return traffic.
+`nf_conn`ごとに2つのタプルが保存される。元の方向のものと、応答方向のもの（元の方向を反転したもの）である。NATはこれによって機能する。NATは一方または両方のタプルを変更し、conntrackは応答タプルを使って戻りのトラフィックをマッチさせる。
 
-## Conntrack lifecycle {#conntrack-lifecycle}
+## conntrackのライフサイクル {#conntrack-lifecycle}
 
-### 1. First packet (NEW) {#1-first-packet-new}
+### 1. 最初のパケット（NEW） {#1-first-packet-new}
 
 ```
 Packet arrives → PREROUTING hook → nf_conntrack_in()
@@ -104,7 +104,7 @@ Packet arrives → PREROUTING hook → nf_conntrack_in()
     → Attach nf_conn to skb->_nfct
 ```
 
-### 2. Confirmed (at POSTROUTING or LOCAL_IN) {#2-confirmed-at-postrouting-or-local_in}
+### 2. 確定（POSTROUTINGまたはLOCAL_INで） {#2-confirmed-at-postrouting-or-local_in}
 
 ```
 nf_conntrack_confirm()
@@ -113,7 +113,7 @@ nf_conntrack_confirm()
     → Status: IPS_CONFIRMED
 ```
 
-### 3. Subsequent packets (ESTABLISHED) {#3-subsequent-packets-established}
+### 3. 後続のパケット（ESTABLISHED） {#3-subsequent-packets-established}
 
 ```
 Packet arrives → lookup by tuple → nf_conn found
@@ -122,39 +122,39 @@ Packet arrives → lookup by tuple → nf_conn found
     → Set IPS_ASSURED when connection is long-lived
 ```
 
-### 4. Timeout and cleanup {#4-timeout-and-cleanup}
+### 4. タイムアウトとクリーンアップ {#4-timeout-and-cleanup}
 
-Connections time out if no packets are seen. Timeouts vary by protocol and state:
+パケットが観測されなければ、接続はタイムアウトする。タイムアウトはプロトコルと状態によって異なる:
 
 ```bash
-# TCP timeouts
-cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established  # 432000s (5 days)
-cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_syn_sent      # 120s
-cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait     # 120s
-cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close          # 10s
+# TCPのタイムアウト
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_established  # 432000秒（5日）
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_syn_sent      # 120秒
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait     # 120秒
+cat /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_close          # 10秒
 
-# UDP timeout (no state, just expiry)
-cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout                # 30s
-cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream         # 180s
+# UDPのタイムアウト（状態はなく、有効期限のみ）
+cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout                # 30秒
+cat /proc/sys/net/netfilter/nf_conntrack_udp_timeout_stream         # 180秒
 
 # ICMP
-cat /proc/sys/net/netfilter/nf_conntrack_icmp_timeout               # 30s
+cat /proc/sys/net/netfilter/nf_conntrack_icmp_timeout               # 30秒
 ```
 
-## Conntrack states for firewall rules {#conntrack-states-for-firewall-rules}
+## ファイアウォールルールのためのconntrackの状態 {#conntrack-states-for-firewall-rules}
 
-States visible to iptables/nftables:
+iptables/nftablesから見える状態:
 
-| State | Meaning |
+| 状態 | 意味 |
 |-------|---------|
-| `NEW` | First packet of a new connection (SYN for TCP) |
-| `ESTABLISHED` | Reply seen; connection is going both ways |
-| `RELATED` | New connection related to an existing one (FTP data, ICMP error) |
-| `INVALID` | Doesn't match any connection; could be malformed |
-| `UNTRACKED` | Explicitly bypassed via `NOTRACK`/`raw` table |
+| `NEW` | 新しい接続の最初のパケット（TCPならSYN） |
+| `ESTABLISHED` | 応答を観測した。接続は双方向に通信している |
+| `RELATED` | 既存の接続に関連する新しい接続（FTPのデータ、ICMPエラー） |
+| `INVALID` | どの接続にもマッチしない。不正な形式の可能性がある |
+| `UNTRACKED` | `NOTRACK`/`raw`テーブルによって明示的にバイパスされた |
 
 ```bash
-# iptables: accept established/related, drop invalid
+# iptables: established/relatedを受け入れ、invalidをドロップする
 iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 iptables -A INPUT -m conntrack --ctstate INVALID -j DROP
 
@@ -163,97 +163,97 @@ nft add rule inet filter input ct state established,related accept
 nft add rule inet filter input ct state invalid drop
 ```
 
-## Conntrack helpers: tracking related connections {#conntrack-helpers-tracking-related-connections}
+## conntrackヘルパー: 関連する接続の追跡 {#conntrack-helpers-tracking-related-connections}
 
-Some protocols open secondary connections (FTP data channel, SIP RTP media). **Conntrack helpers** parse protocol messages to `EXPECT` these secondary connections:
+プロトコルによっては、二次的な接続（FTPのデータチャネル、SIPのRTPメディア）を開くものがある。**conntrackヘルパー**はプロトコルのメッセージを解析して、これらの二次的な接続を`EXPECT`する:
 
 ```bash
-# Load FTP helper
+# FTPヘルパーをロード
 modprobe nf_conntrack_ftp
-# Now FTP data connections are automatically RELATED and accepted
+# これでFTPのデータ接続は自動的にRELATEDとなり受け入れられる
 ```
 
-The helper creates an **expectation** — a placeholder that matches the expected secondary connection:
+ヘルパーは**エクスペクテーション**を作成する。これは、予期される二次的な接続にマッチするプレースホルダである:
 
 ```c
-// When FTP server sends "PORT x,x,x,x,a,b":
-// Helper creates expectation: src=server dst=client dport=(a*256+b)
-// When data connection arrives → matches expectation → state=RELATED
+// FTPサーバーが"PORT x,x,x,x,a,b"を送ったとき:
+// ヘルパーはエクスペクテーションを作成する: src=server dst=client dport=(a*256+b)
+// データ接続が到着すると → エクスペクテーションにマッチ → state=RELATED
 ```
 
 ```bash
-# View current expectations
+# 現在のエクスペクテーションを表示
 cat /proc/net/nf_conntrack | grep RELATED
 conntrack -L expect
 ```
 
-## Conntrack marks (connmark) {#conntrack-marks-connmark}
+## conntrackのマーク（connmark） {#conntrack-marks-connmark}
 
-Marks allow correlating firewall rules with routing or QoS:
+マークによって、ファイアウォールルールをルーティングやQoSと関連付けられる:
 
 ```bash
-# Mark all HTTP connections
+# すべてのHTTP接続にマークを付ける
 iptables -t mangle -A POSTROUTING -p tcp --dport 80 \
     -j CONNMARK --set-mark 0x1
 
-# Restore mark from conntrack to packet mark (on subsequent packets)
+# conntrackのマークをパケットマークに復元する（後続のパケットで）
 iptables -t mangle -A PREROUTING -j CONNMARK --restore-mark
 
-# Use mark in routing (policy routing table 100)
+# マークをルーティングで使う（ポリシールーティングのテーブル100）
 ip rule add fwmark 0x1 table 100
 ```
 
-## Monitoring and debugging {#monitoring-and-debugging}
+## 監視とデバッグ {#monitoring-and-debugging}
 
 ```bash
-# List all connections
+# すべての接続を一覧表示
 conntrack -L
 conntrack -L --proto tcp --state ESTABLISHED
 
-# Count connections by state
+# 状態ごとに接続数を数える
 conntrack -L 2>/dev/null | awk '{print $4}' | sort | uniq -c
 
-# Watch events in real time
+# イベントをリアルタイムで監視
 conntrack -E
 
-# Statistics per CPU (count lookups, inserts, found, etc.)
+# CPUごとの統計（検索、挿入、発見などの回数）
 conntrack -S
-# or
+# または
 cat /proc/net/stat/nf_conntrack
 
-# Dump conntrack table size
+# conntrackテーブルのサイズを出力
 cat /proc/sys/net/netfilter/nf_conntrack_count
 cat /proc/sys/net/netfilter/nf_conntrack_max
 
-# Manual delete
+# 手動で削除
 conntrack -D -p tcp --src 10.0.0.1 --sport 54321
 
-# Flush entire table (WARNING: drops all active connections' state)
+# テーブル全体をフラッシュ（警告: すべてのアクティブな接続の状態が失われる）
 conntrack -F
 ```
 
-## Tuning for high-connection-rate environments {#tuning-for-high-connection-rate-environments}
+## 接続レートの高い環境向けのチューニング {#tuning-for-high-connection-rate-environments}
 
 ```bash
-# Increase table size (at the cost of memory)
+# テーブルサイズを増やす（メモリと引き換えに）
 echo 1048576 > /proc/sys/net/netfilter/nf_conntrack_max
-# Memory per entry: ~300 bytes → 1M entries ≈ 300MB
+# エントリあたりのメモリ: 約300バイト → 100万エントリで約300MB
 
-# Hash table size (set at module load time)
-# nf_conntrack hashsize = nf_conntrack_max / 8 (typical)
+# ハッシュテーブルのサイズ（モジュールのロード時に設定）
+# nf_conntrackのhashsize = nf_conntrack_max / 8（典型的な値）
 modprobe nf_conntrack hashsize=131072
 
-# Reduce TIME_WAIT entries (major consumer on busy servers)
+# TIME_WAITエントリを減らす（混雑したサーバーでの主要な消費源）
 echo 60 > /proc/sys/net/netfilter/nf_conntrack_tcp_timeout_time_wait
 
-# For SYN floods: don't track half-open connections (raw table)
+# SYNフラッド対策: ハーフオープン接続を追跡しない（rawテーブル）
 iptables -t raw -A PREROUTING -p tcp --syn -j NOTRACK
 iptables -A INPUT -p tcp --syn -m conntrack --ctstate UNTRACKED -j ACCEPT
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Netfilter Architecture](netfilter.md) — The hook framework conntrack lives within
-- [nftables vs iptables](nftables-iptables.md) — How to write conntrack rules
-- [Life of a Packet (receive)](life-of-packet-rx.md) — Where conntrack runs in the receive path
-- [Network Debugging with ss and ip](net-debugging.md) — Tools for inspecting connections
+- [Netfilterのアーキテクチャ](netfilter.md) — conntrackが属するフックフレームワーク
+- [nftables対iptables](nftables-iptables.md) — conntrackルールの書き方
+- [パケットの一生（受信）](life-of-packet-rx.md) — 受信パスのどこでconntrackが実行されるか
+- [ssとipによるネットワークのデバッグ](net-debugging.md) — 接続を調査するためのツール

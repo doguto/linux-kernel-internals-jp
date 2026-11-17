@@ -1,75 +1,75 @@
 # Netlink {#netlink}
 
-> Kernel-userspace communication for network configuration tools
+> ネットワーク設定ツールのためのカーネルとユーザー空間の通信
 
-## What is Netlink? {#what-is-netlink}
+## Netlinkとは何か {#what-is-netlink}
 
-Netlink is a socket-based IPC mechanism for communication between userspace and the kernel. It's how most network configuration tools work:
+Netlinkは、ユーザー空間とカーネルの間で通信するための、ソケットベースのIPC機構である。ほとんどのネットワーク設定ツールはこれを使って動作している:
 
-| Tool | Netlink family | Purpose |
+| ツール | Netlinkファミリ | 目的 |
 |------|---------------|---------|
-| `ip link`, `ip addr` | `NETLINK_ROUTE` (rtnetlink) | Interface/address/route management |
-| `ss`, `netstat` | `NETLINK_SOCK_DIAG` | Socket statistics |
-| `ethtool` | `NETLINK_GENERIC` (ethtool_nl) | NIC configuration |
-| `iw`, `nmcli` | `NETLINK_GENERIC` (nl80211) | WiFi configuration |
-| `tc` | `NETLINK_ROUTE` | Traffic control |
-| `nftables` | `NETLINK_NETFILTER` | Firewall rules |
-| `audit` | `NETLINK_AUDIT` | Audit subsystem |
-| `uevent` | `NETLINK_KOBJECT_UEVENT` | Device hotplug events |
+| `ip link`, `ip addr` | `NETLINK_ROUTE` (rtnetlink) | インターフェース/アドレス/経路の管理 |
+| `ss`, `netstat` | `NETLINK_SOCK_DIAG` | ソケットの統計 |
+| `ethtool` | `NETLINK_GENERIC` (ethtool_nl) | NICの設定 |
+| `iw`, `nmcli` | `NETLINK_GENERIC` (nl80211) | WiFiの設定 |
+| `tc` | `NETLINK_ROUTE` | トラフィック制御 |
+| `nftables` | `NETLINK_NETFILTER` | ファイアウォールルール |
+| `audit` | `NETLINK_AUDIT` | 監査サブシステム |
+| `uevent` | `NETLINK_KOBJECT_UEVENT` | デバイスのホットプラグイベント |
 
-## Netlink socket basics {#netlink-socket-basics}
+## Netlinkソケットの基本 {#netlink-socket-basics}
 
 ```c
 #include <linux/netlink.h>
 #include <sys/socket.h>
 
-/* Open a Netlink socket */
+/* Netlink ソケットを開く */
 int fd = socket(AF_NETLINK, SOCK_RAW, NETLINK_ROUTE);
 
-/* Bind: register our PID */
+/* bind: 自分の PID を登録する */
 struct sockaddr_nl addr = {
     .nl_family = AF_NETLINK,
-    .nl_pid    = getpid(),   /* 0 = kernel assigns */
-    .nl_groups = 0,          /* multicast groups (see below) */
+    .nl_pid    = getpid(),   /* 0 = カーネルが割り当てる */
+    .nl_groups = 0,          /* マルチキャストグループ（後述） */
 };
 bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 ```
 
-## Netlink message format {#netlink-message-format}
+## Netlinkのメッセージ形式 {#netlink-message-format}
 
-Every Netlink message has a fixed header:
+すべてのNetlinkメッセージは固定のヘッダを持つ:
 
 ```c
 /* include/uapi/linux/netlink.h */
 struct nlmsghdr {
-    __u32 nlmsg_len;    /* Total length including header */
-    __u16 nlmsg_type;   /* Message type (family-specific) */
-    __u16 nlmsg_flags;  /* Flags: NLM_F_REQUEST, NLM_F_ACK, NLM_F_DUMP, ... */
-    __u32 nlmsg_seq;    /* Sequence number (for matching replies) */
-    __u32 nlmsg_pid;    /* Sender PID (0 = kernel) */
-    /* Payload follows: family-specific struct + attributes */
+    __u32 nlmsg_len;    /* ヘッダを含む全体の長さ */
+    __u16 nlmsg_type;   /* メッセージタイプ（ファミリ固有） */
+    __u16 nlmsg_flags;  /* フラグ: NLM_F_REQUEST, NLM_F_ACK, NLM_F_DUMP, ... */
+    __u32 nlmsg_seq;    /* シーケンス番号（応答との対応付け用） */
+    __u32 nlmsg_pid;    /* 送信元 PID（0 = カーネル） */
+    /* この後にペイロードが続く: ファミリ固有の構造体 + 属性 */
 };
 ```
 
-Common flags:
+よく使われるフラグ:
 
-- `NLM_F_REQUEST`: this is a request to the kernel
-- `NLM_F_ACK`: request an acknowledgement
-- `NLM_F_DUMP`: dump all objects of this type
-- `NLM_F_CREATE`: create if not exists (add operations)
-- `NLM_F_EXCL`: fail if exists (add operations)
+- `NLM_F_REQUEST`: カーネルへの要求であることを示す
+- `NLM_F_ACK`: 確認応答を要求する
+- `NLM_F_DUMP`: この種類のオブジェクトをすべてダンプする
+- `NLM_F_CREATE`: 存在しなければ作成する（追加操作）
+- `NLM_F_EXCL`: 存在すれば失敗する（追加操作）
 
-## rtnetlink: network interface management {#rtnetlink-network-interface-management}
+## rtnetlink: ネットワークインターフェースの管理 {#rtnetlink-network-interface-management}
 
-`NETLINK_ROUTE` (rtnetlink) is used by `ip` to manage interfaces, addresses, and routes.
+`NETLINK_ROUTE`（rtnetlink）は、`ip`がインターフェース、アドレス、経路を管理するために使う。
 
-### List all interfaces (GETLINK dump) {#list-all-interfaces-getlink-dump}
+### すべてのインターフェースを一覧表示する（GETLINKダンプ） {#list-all-interfaces-getlink-dump}
 
 ```c
 #include <linux/rtnetlink.h>
 #include <net/if.h>
 
-/* Build a RTM_GETLINK dump request */
+/* RTM_GETLINK のダンプ要求を組み立てる */
 struct {
     struct nlmsghdr nlh;
     struct ifinfomsg ifi;
@@ -87,7 +87,7 @@ struct {
 
 send(fd, &req, req.nlh.nlmsg_len, 0);
 
-/* Read replies (multiple messages, one per interface) */
+/* 応答を読む（複数のメッセージ、インターフェースごとに1つ） */
 char buf[8192];
 while (1) {
     ssize_t n = recv(fd, buf, sizeof(buf), 0);
@@ -98,7 +98,7 @@ while (1) {
             goto done;
         if (nlh->nlmsg_type == RTM_NEWLINK) {
             struct ifinfomsg *ifi = NLMSG_DATA(nlh);
-            /* Parse attributes */
+            /* 属性を解析する */
             struct rtattr *rta = IFLA_RTA(ifi);
             int len = IFLA_PAYLOAD(nlh);
             for (; RTA_OK(rta, len); rta = RTA_NEXT(rta, len)) {
@@ -113,32 +113,32 @@ while (1) {
 done:;
 ```
 
-### Netlink attributes (rtattr / nlattr) {#netlink-attributes-rtattr-nlattr}
+### Netlinkの属性（rtattr / nlattr） {#netlink-attributes-rtattr-nlattr}
 
-Netlink uses a TLV (Type-Length-Value) attribute format:
+NetlinkはTLV（Type-Length-Value）形式の属性を使う:
 
 ```c
-/* rtattr format: */
+/* rtattr の形式: */
 struct rtattr {
-    unsigned short rta_len;   /* Total length including header */
-    unsigned short rta_type;  /* Attribute type */
-    /* Data follows */
+    unsigned short rta_len;   /* ヘッダを含む全体の長さ */
+    unsigned short rta_type;  /* 属性タイプ */
+    /* この後にデータが続く */
 };
 
-/* Parse: RTA_DATA(rta) points to the attribute data */
-/* Nested: RTA_DATA(rta) is itself a list of rtatrr */
+/* 解析: RTA_DATA(rta) は属性データを指す */
+/* ネスト: RTA_DATA(rta) 自体が rtatrr のリストになる */
 
-/* Modern generic netlink uses nlattr with same layout: */
+/* 現代の generic netlink は同じレイアウトの nlattr を使う: */
 struct nlattr {
     __u16 nla_len;
-    __u16 nla_type;  /* Top 2 bits: NLA_F_NESTED, NLA_F_NET_BYTEORDER */
+    __u16 nla_type;  /* 上位2ビット: NLA_F_NESTED, NLA_F_NET_BYTEORDER */
 };
 ```
 
-### RTM_NEWROUTE: add a route {#rtm_newroute-add-a-route}
+### RTM_NEWROUTE: 経路の追加 {#rtm_newroute-add-a-route}
 
 ```c
-/* Add route: 10.0.0.0/8 via 192.168.1.1 dev eth0 */
+/* 経路を追加: 10.0.0.0/8 via 192.168.1.1 dev eth0 */
 struct {
     struct nlmsghdr  nlh;
     struct rtmsg     rtm;
@@ -151,31 +151,31 @@ req.nlh.nlmsg_flags = NLM_F_REQUEST | NLM_F_CREATE | NLM_F_ACK;
 req.nlh.nlmsg_seq   = 2;
 
 req.rtm.rtm_family   = AF_INET;
-req.rtm.rtm_dst_len  = 8;   /* prefix length */
+req.rtm.rtm_dst_len  = 8;   /* プレフィックス長 */
 req.rtm.rtm_table    = RT_TABLE_MAIN;
 req.rtm.rtm_protocol = RTPROT_STATIC;
 req.rtm.rtm_scope    = RT_SCOPE_UNIVERSE;
 req.rtm.rtm_type     = RTN_UNICAST;
 
-/* Add destination: RTA_DST */
+/* 宛先を追加: RTA_DST */
 uint32_t dst = inet_addr("10.0.0.0");
 addattr_l(&req.nlh, sizeof(req), RTA_DST, &dst, 4);
 
-/* Add gateway: RTA_GATEWAY */
+/* ゲートウェイを追加: RTA_GATEWAY */
 uint32_t gw = inet_addr("192.168.1.1");
 addattr_l(&req.nlh, sizeof(req), RTA_GATEWAY, &gw, 4);
 
-/* Add interface index: RTA_OIF */
+/* インターフェースインデックスを追加: RTA_OIF */
 int ifidx = if_nametoindex("eth0");
 addattr32(&req.nlh, sizeof(req), RTA_OIF, ifidx);
 
 send(fd, &req, req.nlh.nlmsg_len, 0);
-/* Read ACK to confirm success */
+/* ACK を読んで成功を確認する */
 ```
 
-## Generic Netlink (genetlink) {#generic-netlink-genetlink}
+## Generic Netlink（genetlink） {#generic-netlink-genetlink}
 
-Generic Netlink is a multiplexer that allows kernel subsystems to define their own message families without using a reserved `NETLINK_*` protocol number.
+Generic Netlinkはマルチプレクサであり、カーネルのサブシステムが予約済みの`NETLINK_*`プロトコル番号を使わずに独自のメッセージファミリを定義できるようにする。
 
 ```
 AF_NETLINK + NETLINK_GENERIC
@@ -187,9 +187,9 @@ genetlink dispatcher
     └── family "devlink"   → devlink handlers
 ```
 
-### Using libnl3 {#using-libnl3}
+### libnl3の利用 {#using-libnl3}
 
-Most tools use `libnl3` rather than raw sockets:
+ほとんどのツールは生のソケットではなく`libnl3`を使う:
 
 ```c
 #include <netlink/netlink.h>
@@ -199,10 +199,10 @@ Most tools use `libnl3` rather than raw sockets:
 struct nl_sock *sock = nl_socket_alloc();
 genl_connect(sock);
 
-/* Resolve family name to ID */
+/* ファミリ名を ID に解決する */
 int family = genl_ctrl_resolve(sock, "nl80211");
 
-/* Build and send a message */
+/* メッセージを組み立てて送信する */
 struct nl_msg *msg = nlmsg_alloc();
 genlmsg_put(msg, NL_AUTO_PORT, NL_AUTO_SEQ, family, 0, 0,
             NL80211_CMD_GET_INTERFACE, 0);
@@ -211,14 +211,14 @@ nla_put_u32(msg, NL80211_ATTR_IFINDEX, if_nametoindex("wlan0"));
 nl_send_auto(sock, msg);
 nlmsg_free(msg);
 
-/* Receive and parse reply */
+/* 応答を受信して解析する */
 nl_recvmsgs_default(sock);
 ```
 
-## Kernel side: registering a genetlink family {#kernel-side-registering-a-genetlink-family}
+## カーネル側: genetlinkファミリの登録 {#kernel-side-registering-a-genetlink-family}
 
 ```c
-/* net/wireless/nl80211.c (simplified) */
+/* net/wireless/nl80211.c（簡略版） */
 #include <net/genetlink.h>
 
 static const struct genl_ops nl80211_ops[] = {
@@ -231,9 +231,9 @@ static const struct genl_ops nl80211_ops[] = {
     {
         .cmd    = NL80211_CMD_SET_INTERFACE,
         .doit   = nl80211_set_interface,
-        .flags  = GENL_ADMIN_PERM,  /* requires CAP_NET_ADMIN */
+        .flags  = GENL_ADMIN_PERM,  /* CAP_NET_ADMIN が必要 */
     },
-    /* ... many more ... */
+    /* ... ほかにも多数 ... */
 };
 
 static struct genl_family nl80211_fam __ro_after_init = {
@@ -244,7 +244,7 @@ static struct genl_family nl80211_fam __ro_after_init = {
     .module   = THIS_MODULE,
     .ops      = nl80211_ops,
     .n_ops    = ARRAY_SIZE(nl80211_ops),
-    .mcgrps   = nl80211_mcgrps,      /* multicast groups */
+    .mcgrps   = nl80211_mcgrps,      /* マルチキャストグループ */
     .n_mcgrps = ARRAY_SIZE(nl80211_mcgrps),
 };
 
@@ -254,50 +254,50 @@ static int __init nl80211_init(void)
 }
 ```
 
-## Netlink multicast: event notifications {#netlink-multicast-event-notifications}
+## Netlinkマルチキャスト: イベント通知 {#netlink-multicast-event-notifications}
 
-Netlink multicast allows the kernel to push events to interested userspace processes:
+Netlinkマルチキャストにより、カーネルは関心のあるユーザー空間プロセスにイベントをプッシュできる:
 
 ```c
-/* Subscribe to route change events */
+/* 経路変更イベントを購読する */
 struct sockaddr_nl addr = {
     .nl_family = AF_NETLINK,
-    .nl_groups = RTMGRP_LINK        /* interface changes */
-              | RTMGRP_IPV4_IFADDR  /* address changes */
-              | RTMGRP_IPV4_ROUTE,  /* route changes */
+    .nl_groups = RTMGRP_LINK        /* インターフェースの変更 */
+              | RTMGRP_IPV4_IFADDR  /* アドレスの変更 */
+              | RTMGRP_IPV4_ROUTE,  /* 経路の変更 */
 };
 bind(fd, (struct sockaddr *)&addr, sizeof(addr));
 
-/* Now recv() will receive RTM_NEWLINK, RTM_NEWADDR, RTM_NEWROUTE events
-   without sending any request */
+/* これで recv() は、要求を送らなくても RTM_NEWLINK、RTM_NEWADDR、
+   RTM_NEWROUTE のイベントを受信するようになる */
 
-/* systemd-networkd, NetworkManager, and dhclient use this to detect
-   cable plug/unplug, DHCP lease changes, etc. */
+/* systemd-networkd、NetworkManager、dhclient はこれを使って
+   ケーブルの抜き差しや DHCP リースの変更などを検出する */
 ```
 
-### Kernel side: sending a multicast notification {#kernel-side-sending-a-multicast-notification}
+### カーネル側: マルチキャスト通知の送信 {#kernel-side-sending-a-multicast-notification}
 
 ```c
 /* net/core/rtnetlink.c */
-/* Called when an interface comes up: */
+/* インターフェースが up になったときに呼ばれる: */
 void rtmsg_ifinfo(int type, struct net_device *dev, unsigned int change,
                    gfp_t flags)
 {
     struct sk_buff *skb = rtmsg_ifinfo_build_skb(type, dev, change,
                                                     0, flags, NULL, 0, 0);
     if (skb) {
-        /* Send to RTNLGRP_LINK multicast group */
+        /* RTNLGRP_LINK マルチキャストグループに送る */
         rtnl_notify(skb, dev_net(dev), 0, RTNLGRP_LINK, NULL, flags);
     }
 }
 ```
 
-## NETLINK_SOCK_DIAG: socket statistics {#netlinksockdiag-socket-statistics}
+## NETLINK_SOCK_DIAG: ソケットの統計 {#netlink_sock_diag-socket-statistics}
 
-Used by `ss` to list sockets faster than `/proc/net/tcp`:
+`ss`が`/proc/net/tcp`より高速にソケットを一覧表示するために使う:
 
 ```c
-/* Request TCP socket dump */
+/* TCP ソケットのダンプを要求する */
 struct {
     struct nlmsghdr nlh;
     struct inet_diag_req_v2 req;
@@ -311,20 +311,20 @@ struct {
         .sdiag_family   = AF_INET,
         .sdiag_protocol = IPPROTO_TCP,
         .idiag_states   = (1 << TCP_ESTABLISHED) | (1 << TCP_LISTEN),
-        .idiag_ext      = (1 << (INET_DIAG_INFO - 1)),  /* get tcp_info */
+        .idiag_ext      = (1 << (INET_DIAG_INFO - 1)),  /* tcp_info を取得 */
     },
 };
 send(fd, &request, sizeof(request), 0);
-/* Receive: one INET_DIAG_INFO per socket */
+/* 受信: ソケットごとに1つの INET_DIAG_INFO */
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Socket Layer Overview](socket-layer.md) — AF_NETLINK socket implementation
-- [procfs and sysfs](../vfs/procfs-sysfs.md) — alternative kernel-userspace interfaces
-- [XDP and AF_XDP](af-xdp.md) — socket-based packet processing
-- [Network Debugging](net-debugging.md) — `ss` and `ip` command internals
-- `net/netlink/` — core netlink implementation
+- [ソケット層の概要](socket-layer.md) — AF_NETLINKソケットの実装
+- [procfsとsysfs](../vfs/procfs-sysfs.md) — カーネルとユーザー空間の間の別のインターフェース
+- [XDPとAF_XDP](af-xdp.md) — ソケットベースのパケット処理
+- [ネットワークのデバッグ](net-debugging.md) — `ss`と`ip`コマンドの内部
+- `net/netlink/` — netlinkのコア実装
 - `net/core/rtnetlink.c` — rtnetlink
-- `net/wireless/nl80211.c` — nl80211 genetlink family
-- `libnl3` documentation — userspace netlink library
+- `net/wireless/nl80211.c` — nl80211のgenetlinkファミリ
+- `libnl3`のドキュメント — ユーザー空間のnetlinkライブラリ

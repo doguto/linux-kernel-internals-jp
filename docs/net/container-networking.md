@@ -1,14 +1,14 @@
-# Container Networking {#container-networking}
+# コンテナネットワーキング {#container-networking}
 
-> How Docker, Kubernetes, and container runtimes implement network isolation
+> Docker、Kubernetes、コンテナランタイムはネットワーク分離をどう実装しているか
 
-## The building blocks {#the-building-blocks}
+## 構成要素 {#the-building-blocks}
 
-Container networking is built from three Linux primitives:
+コンテナネットワーキングは、3つのLinuxプリミティブから構築される:
 
-1. **Network namespaces** — isolated network stacks (interfaces, routes, iptables)
-2. **veth pairs** — virtual Ethernet cable connecting two namespaces
-3. **Linux bridge** — software switch connecting veth pairs
+1. **ネットワークnamespace** — 分離されたネットワークスタック（インターフェース、ルート、iptables）
+2. **vethペア** — 2つのnamespaceをつなぐ仮想Ethernetケーブル
+3. **Linuxブリッジ** — vethペアをつなぐソフトウェアスイッチ
 
 ```
 Host network namespace                 Container namespace
@@ -21,42 +21,42 @@ Host network namespace                 Container namespace
 └─────────────────────────┘
 ```
 
-## veth pairs {#veth-pairs}
+## vethペア {#veth-pairs}
 
-A veth pair is two virtual interfaces connected back-to-back. Packets sent to one end emerge from the other:
+vethペアは、背中合わせに接続された2つの仮想インターフェースである。一方の端に送られたパケットは、もう一方の端から出てくる:
 
 ```bash
-# Create a veth pair
+# vethペアを作成
 ip link add veth0 type veth peer name veth1
 
-# veth0 stays in host namespace
-# veth1 is moved to container's network namespace
+# veth0はホストのnamespaceに残る
+# veth1はコンテナのネットワークnamespaceに移動する
 ip link set veth1 netns <container_pid>
 
-# Configure both ends
+# 両端を設定
 ip addr add 10.0.0.1/24 dev veth0
 ip link set veth0 up
 
-# Inside container:
+# コンテナ内で:
 nsenter -t <container_pid> -n ip addr add 10.0.0.2/24 dev veth1
 nsenter -t <container_pid> -n ip link set veth1 up
 nsenter -t <container_pid> -n ip route add default via 10.0.0.1
 ```
 
-### veth in the kernel {#veth-in-the-kernel}
+### カーネル内のveth {#veth-in-the-kernel}
 
 ```c
 /* drivers/net/veth.c */
 struct veth_priv {
-    struct net_device __rcu *peer;      /* the other end */
+    struct net_device __rcu *peer;      /* もう一方の端 */
     atomic64_t               dropped;
-    struct veth_rq          *rq;        /* RX queues */
+    struct veth_rq          *rq;        /* RXキュー */
     unsigned int             requested_headroom;
     bool                     rx_notify_masked;
-    struct ptr_ring         *xdp_ring;  /* XDP ring buffer */
+    struct ptr_ring         *xdp_ring;  /* XDPリングバッファ */
 };
 
-/* TX: just deliver to the peer's RX */
+/* TX: 単にピアのRXへ届けるだけ */
 static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     struct veth_priv *rcv_priv, *priv = netdev_priv(dev);
@@ -66,7 +66,7 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
     if (!rcv)
         goto drop;
 
-    /* Deliver directly to peer's softirq RX path */
+    /* ピアのsoftirq RXパスへ直接届ける */
     if (veth_forward_skb(rcv, skb, rq, use_napi) == NET_RX_DROP) {
         /* ... */
     }
@@ -74,81 +74,81 @@ static netdev_tx_t veth_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 ```
 
-No actual hardware involved — packets cross from one namespace to another via `netif_rx()`.
+実際のハードウェアは一切関与しない。パケットは`netif_rx()`を介して、あるnamespaceから別のnamespaceへ渡る。
 
-## Linux bridge {#linux-bridge}
+## Linuxブリッジ {#linux-bridge}
 
-The bridge acts as a software L2 switch. veth host-side interfaces are attached as bridge ports:
+ブリッジはソフトウェアのL2スイッチとして動作する。vethのホスト側インターフェースは、ブリッジのポートとして接続される:
 
 ```bash
-# Create a bridge (docker0 equivalent)
+# ブリッジを作成（docker0に相当）
 ip link add docker0 type bridge
 ip addr add 172.17.0.1/16 dev docker0
 ip link set docker0 up
 
-# Attach veth host-sides to the bridge
+# vethのホスト側をブリッジに接続
 ip link set veth0 master docker0
 ip link set veth2 master docker0
 
-# Now: containers connected to docker0 can communicate with each other
-# and through the host's routing table
+# これで、docker0に接続されたコンテナ同士が通信でき、
+# ホストのルーティングテーブルを経由した通信もできる
 ```
 
-### Bridge forwarding {#bridge-forwarding}
+### ブリッジの転送 {#bridge-forwarding}
 
 ```c
 /* net/bridge/br_forward.c */
-/* When a frame arrives on a bridge port: */
+/* ブリッジのポートにフレームが到着したとき: */
 void br_forward(const struct net_bridge_port *to, struct sk_buff *skb,
                 bool local_rcv, bool local_orig)
 {
-    /* Look up destination MAC in FDB (forwarding database) */
+    /* FDB（転送データベース）で宛先MACを検索する */
     struct net_bridge_fdb_entry *dst = br_fdb_find_rcu(to->br, dest, vid);
     if (dst) {
-        /* Unicast: forward to specific port */
+        /* ユニキャスト: 特定のポートへ転送する */
         __br_forward(dst->dst, skb, local_orig);
     } else {
-        /* Unknown unicast: flood to all ports */
+        /* 未知のユニキャスト: すべてのポートへフラッディングする */
         br_flood(to->br, skb, BR_PKT_UNICAST, local_rcv, local_orig);
     }
 }
 ```
 
-The bridge maintains a MAC→port forwarding database (FDB), learning from incoming packets. `bridge fdb show` displays it.
+ブリッジは、受信パケットから学習してMAC→ポートの転送データベース（FDB）を維持する。`bridge fdb show`でこれを表示できる。
 
-## NAT / masquerade {#nat-masquerade}
+## NAT / マスカレード {#nat-masquerade}
 
-Containers need to reach the internet. The host NATs outgoing traffic:
+コンテナはインターネットに到達する必要がある。ホストは送信トラフィックをNATする:
 
 ```bash
-# iptables NAT masquerade (what Docker adds)
+# iptablesのNATマスカレード（Dockerが追加するもの）
 iptables -t nat -A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE
 
-# nftables equivalent
+# nftablesでの同等の設定
 nft add rule ip nat POSTROUTING ip saddr 172.17.0.0/16 oif != "docker0" masquerade
 ```
 
-When container `172.17.0.2` sends to `8.8.8.8`:
-1. Packet leaves container via `eth0` → veth → bridge → host routing
-2. Host sees source `172.17.0.2` → matches MASQUERADE rule
-3. Connection tracking records the mapping: `172.17.0.2:54321 → host_ip:RANDOM`
-4. Source IP rewritten to host IP
-5. Reply comes back to host IP → conntrack → translated back → forwarded to container
+コンテナ`172.17.0.2`が`8.8.8.8`へ送信するとき:
+1. パケットはコンテナから`eth0` → veth → ブリッジ → ホストのルーティングを経て出ていく
+2. ホストは送信元`172.17.0.2`を見る → MASQUERADEルールにマッチする
+3. コネクショントラッキングが対応関係を記録する: `172.17.0.2:54321 → host_ip:RANDOM`
+4. 送信元IPがホストのIPに書き換えられる
+5. 応答はホストのIPに戻ってくる → conntrack → 逆変換される → コンテナへ転送される
 
-## Port publishing {#port-publishing}
+## ポートの公開 {#port-publishing}
 
 ```bash
-# Docker: map host port 8080 → container port 80
+# Docker: ホストのポート8080 → コンテナのポート80に対応付ける
 docker run -p 8080:80 nginx
 
-# Translates to iptables rules:
+# iptablesのルールに変換される:
 iptables -t nat -A PREROUTING -p tcp --dport 8080 -j DNAT --to-destination 172.17.0.2:80
 iptables -t filter -A DOCKER -d 172.17.0.2 -p tcp --dport 80 -j ACCEPT
 ```
 
-## Overlay networks (VXLAN) {#overlay-networks-vxlan}
+## オーバーレイネットワーク（VXLAN） {#overlay-networks-vxlan}
 
-For multi-host container networking (Kubernetes, Docker Swarm), overlay networks encapsulate container traffic in UDP/VXLAN:
+複数ホストにまたがるコンテナネットワーキング（Kubernetes、Docker Swarm）では、オーバーレイネットワークがコンテナのトラフィックをUDP/VXLANでカプセル化する:
 
 ```
 Node 1 (10.0.0.1)                    Node 2 (10.0.0.2)
@@ -163,7 +163,7 @@ Container A (192.168.0.1)            Container B (192.168.0.2)
 ```
 
 ```bash
-# Create a VXLAN overlay (Flannel/Calico/Cilium do this automatically)
+# VXLANオーバーレイを作成（Flannel/Calico/Ciliumはこれを自動的に行う）
 ip link add vxlan0 type vxlan id 100 \
     local 10.0.0.1 \
     remote 10.0.0.2 \
@@ -172,11 +172,11 @@ ip link add vxlan0 type vxlan id 100 \
 ip link set vxlan0 up
 ip addr add 192.168.0.1/24 dev vxlan0
 
-# Add a route for container B
+# コンテナB向けのルートを追加
 ip route add 192.168.0.2/32 via 10.0.0.2 dev vxlan0
 ```
 
-### VXLAN in the kernel {#vxlan-in-the-kernel}
+### カーネル内のVXLAN {#vxlan-in-the-kernel}
 
 ```c
 /* drivers/net/vxlan/vxlan_core.c */
@@ -184,10 +184,10 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 {
     struct vxlan_dev *vxlan = netdev_priv(dev);
 
-    /* Look up VTEP for destination */
+    /* 宛先のVTEPを検索する */
     struct vxlan_fdb *f = vxlan_find_mac(vxlan, eth_hdr(skb)->h_dest, vni);
 
-    /* Encapsulate: inner Ethernet frame → VXLAN header → UDP → outer IP */
+    /* カプセル化: 内側のEthernetフレーム → VXLANヘッダ → UDP → 外側のIP */
     vxlan_encap_bypass(skb, vxlan, dst, vni, ...);
     udp_tunnel_xmit_skb(vxlan->vn4_sock, rt, skb,
                          src, remote_ip, ...);
@@ -195,62 +195,62 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 }
 ```
 
-## Network policies (iptables vs eBPF) {#network-policies-iptables-vs-ebpf}
+## ネットワークポリシー（iptables対eBPF） {#network-policies-iptables-vs-ebpf}
 
-Traditional container firewalling uses iptables rules inserted by the runtime. For thousands of pods, this becomes a bottleneck (O(n) rule traversal):
+従来のコンテナのファイアウォールは、ランタイムが挿入するiptablesルールを使う。Podが数千になると、これがボトルネックになる（O(n)のルール走査）:
 
 ```bash
-# kube-proxy (traditional): thousands of iptables rules
+# kube-proxy（従来型）: 数千のiptablesルール
 iptables -L -n | wc -l
-# 5000+  ← one rule per service endpoint
+# 5000+  ← サービスのエンドポイントごとに1ルール
 
-# Cilium (eBPF-based): O(1) BPF map lookup
-# No iptables at all — policy enforced via XDP/TC BPF hooks
+# Cilium（eBPFベース）: O(1)のBPFマップ検索
+# iptablesを一切使わない — ポリシーはXDP/TCのBPFフックで適用される
 bpf_redirect_map(&cilium_lb4_backends, backend_id, 0)
 ```
 
-Cilium and other eBPF-based CNI plugins (Calico with eBPF, Flannel with VXLAN-on-eBPF) replace iptables with BPF maps — constant-time lookups regardless of rule count.
+Ciliumやその他のeBPFベースのCNIプラグイン（eBPFを使うCalico、VXLAN-on-eBPFを使うFlannel）は、iptablesをBPFマップで置き換える。ルール数にかかわらず定数時間で検索できる。
 
-## Observing container networking {#observing-container-networking}
+## コンテナネットワーキングの観察 {#observing-container-networking}
 
 ```bash
-# List all network namespaces
+# すべてのネットワークnamespaceを一覧表示
 lsns -t net
 
-# Enter a container's network namespace
+# コンテナのネットワークnamespaceに入る
 ip netns exec <ns_name> ip addr show
-# or
+# または
 nsenter -t <container_pid> -n ip addr show
 
-# Show veth peer relationship
+# vethのピア関係を表示
 ip link show | grep -A1 "veth"
-# Or:
+# あるいは:
 for dev in /sys/class/net/veth*; do
-    peer_idx=$(cat "$dev/ifindex")  # wrong — it's actually iflink
+    peer_idx=$(cat "$dev/ifindex")  # 誤り — 実際にはiflinkである
     echo "$(basename $dev) → peer ifindex $(cat $dev/iflink)"
 done
 
-# Bridge FDB (MAC learning table)
+# ブリッジのFDB（MAC学習テーブル）
 bridge fdb show dev docker0
 
-# Watch packet flow through the bridge
+# ブリッジを通るパケットの流れを監視
 tcpdump -i docker0 -n
 
-# NAT connection tracking
+# NATのコネクショントラッキング
 conntrack -L -p tcp | head -20
 
-# Per-veth stats
+# vethごとの統計
 ip -s link show veth0
 
-# VXLAN tunnel stats
+# VXLANトンネルの統計
 ip -s link show vxlan0
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Netfilter Architecture](netfilter.md) — iptables/nftables hooks
-- [Connection Tracking](conntrack.md) — NAT state tracking
-- [XDP](xdp.md) — eBPF networking acceleration
-- [AF_XDP](af-xdp.md) — zero-copy userspace packet processing
-- [Cgroups: Namespaces](../cgroups/namespaces.md) — network namespace internals
-- [Cgroups: Container Isolation](../cgroups/container-isolation.md) — full container setup
+- [Netfilterのアーキテクチャ](netfilter.md) — iptables/nftablesのフック
+- [コネクショントラッキング](conntrack.md) — NATの状態追跡
+- [XDP](xdp.md) — eBPFによるネットワーキングの高速化
+- [AF_XDP](af-xdp.md) — ゼロコピーのユーザー空間パケット処理
+- [cgroup: namespace](../cgroups/namespaces.md) — ネットワークnamespaceの内部
+- [cgroup: コンテナの分離](../cgroups/container-isolation.md) — コンテナの完全なセットアップ

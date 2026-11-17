@@ -1,13 +1,13 @@
-# Thermal Management: Thermal Zones and Cooling {#thermal-management-thermal-zones-and-cooling}
+# 熱管理: サーマルゾーンと冷却 {#thermal-management-thermal-zones-and-cooling}
 
-> Linux thermal framework, trip points, cooling devices, and thermal governors
+> Linuxの熱フレームワーク、トリップポイント、冷却デバイス、サーマルガバナ
 
-## Overview {#overview}
+## 概要 {#overview}
 
-Modern SoCs and CPUs generate heat. Without thermal management, they would throttle or shut down unexpectedly. The Linux thermal framework provides a structured way to:
-1. **Monitor** temperatures via thermal zones
-2. **Define** thermal policies via trip points and governors
-3. **Enforce** cooling via cooling devices (CPU frequency scaling, fan control)
+現代のSoCやCPUは熱を発生させる。熱管理がなければ、予期せずスロットリングしたりシャットダウンしたりしてしまう。Linuxの熱フレームワークは、次のことを行うための構造化された方法を提供する。
+1. サーマルゾーンを介して温度を**監視する**
+2. トリップポイントとガバナを介して熱ポリシーを**定義する**
+3. 冷却デバイス（CPU周波数スケーリング、ファン制御）を介して冷却を**実施する**
 
 ```
 Hardware sensor → thermal zone → governor → cooling device
@@ -16,37 +16,37 @@ Hardware sensor → thermal zone → governor → cooling device
                           trip points: warning/critical/throttle
 ```
 
-## Thermal zones {#thermal-zones}
+## サーマルゾーン {#thermal-zones}
 
-A **thermal zone** represents a sensor and its associated policy:
+**サーマルゾーン**は、センサーとそれに関連付けられたポリシーを表す。
 
 ```bash
-# List all thermal zones:
+# すべてのサーマルゾーンを列挙する:
 ls /sys/class/thermal/
 # thermal_zone0  thermal_zone1  thermal_zone2  ...  cooling_device0  ...
 
-# Check a zone:
+# ゾーンを確認する:
 cat /sys/class/thermal/thermal_zone0/type          # "x86_pkg_temp"
-cat /sys/class/thermal/thermal_zone0/temp          # current temp in millidegrees
+cat /sys/class/thermal/thermal_zone0/temp          # 現在の温度（ミリ度単位）
 # 45000 = 45°C
-cat /sys/class/thermal/thermal_zone0/mode          # "enabled" or "disabled"
-cat /sys/class/thermal/thermal_zone0/policy        # "step_wise" etc.
+cat /sys/class/thermal/thermal_zone0/mode          # "enabled" または "disabled"
+cat /sys/class/thermal/thermal_zone0/policy        # "step_wise" など
 
-# List trip points:
+# トリップポイントを列挙する:
 for trip in /sys/class/thermal/thermal_zone0/trip_point_*_temp; do
     type=$(echo $trip | sed 's/_temp/_type/')
     echo "$(cat $type): $(cat $trip)m°C"
 done
-# passive: 95000m°C   ← throttle at 95°C
-# critical: 105000m°C ← emergency shutdown at 105°C
+# passive: 95000m°C   ← 95°Cでスロットリング
+# critical: 105000m°C ← 105°Cで緊急シャットダウン
 ```
 
-### Kernel structures {#kernel-structures}
+### カーネルの構造体 {#kernel-structures}
 
 ```c
-/* drivers/thermal/thermal_core.h — struct thermal_zone_device is private to
- * the thermal subsystem, not exposed via include/linux/thermal.h; drivers
- * only ever see an opaque pointer returned by the registration functions. */
+/* drivers/thermal/thermal_core.h — struct thermal_zone_device は熱サブシステムに
+ * 非公開であり、include/linux/thermal.h では公開されていない。ドライバが
+ * 目にするのは、登録関数が返す不透明なポインタだけである。 */
 
 struct thermal_zone_device {
     int                 id;
@@ -56,40 +56,40 @@ struct thermal_zone_device {
     void                *devdata;
     int                 num_trips;
 
-    int                 temperature;        /* current temp in millidegrees */
+    int                 temperature;        /* 現在の温度（ミリ度単位） */
     int                 last_temperature;
-    int                 emul_temperature;   /* for testing */
-    int                 passive;            /* passive cooling active? */
+    int                 emul_temperature;   /* テスト用 */
+    int                 passive;            /* パッシブ冷却が有効か? */
 
     struct thermal_zone_device_ops  ops;    /* .get_temp, .set_trips */
-    struct thermal_zone_params      *tzp;   /* governor params */
+    struct thermal_zone_params      *tzp;   /* ガバナのパラメータ */
     struct thermal_governor         *governor;
 
-    struct list_head    trips_high;         /* trips above current temp */
-    struct list_head    trips_reached;      /* trips currently crossed */
+    struct list_head    trips_high;         /* 現在温度より上のトリップ */
+    struct list_head    trips_reached;      /* 現在越えているトリップ */
     struct mutex        lock;
-    struct thermal_trip_desc trips[];       /* flexible array, one per trip */
+    struct thermal_trip_desc trips[];       /* フレキシブル配列。トリップごとに1つ */
     /* ... */
 };
 
-/* Trip point types: include/uapi/linux/thermal.h */
+/* トリップポイントの種類: include/uapi/linux/thermal.h */
 enum thermal_trip_type {
-    THERMAL_TRIP_ACTIVE = 0,    /* activate cooling device (fan) */
-    THERMAL_TRIP_PASSIVE,       /* reduce performance (cpufreq) */
-    THERMAL_TRIP_HOT,           /* driver-defined action */
-    THERMAL_TRIP_CRITICAL,      /* emergency shutdown */
+    THERMAL_TRIP_ACTIVE = 0,    /* 冷却デバイス（ファン）を作動させる */
+    THERMAL_TRIP_PASSIVE,       /* 性能を下げる（cpufreq） */
+    THERMAL_TRIP_HOT,           /* ドライバ定義の動作 */
+    THERMAL_TRIP_CRITICAL,      /* 緊急シャットダウン */
 };
 ```
 
-## Registering a thermal zone (driver) {#registering-a-thermal-zone-driver}
+## サーマルゾーンの登録（ドライバ） {#registering-a-thermal-zone-driver}
 
 ```c
-/* Driver: register a temperature sensor as a thermal zone */
+/* ドライバ: 温度センサーをサーマルゾーンとして登録する */
 static int my_get_temp(struct thermal_zone_device *tzd, int *temp)
 {
-    /* struct thermal_zone_device is private to the thermal core (see
-     * above), so drivers can't dereference tzd->devdata directly —
-     * use the accessor exported by include/linux/thermal.h instead. */
+    /* struct thermal_zone_device は熱コアに非公開なので（上記参照）、
+     * ドライバはtzd->devdataを直接参照できない —
+     * 代わりにinclude/linux/thermal.hがエクスポートするアクセサを使う。 */
     struct my_sensor *sensor = thermal_zone_device_priv(tzd);
     *temp = read_sensor_millidegrees(sensor);
     return 0;
@@ -99,29 +99,29 @@ static struct thermal_zone_device_ops my_tz_ops = {
     .get_temp = my_get_temp,
 };
 
-/* At probe time: */
+/* probe時: */
 struct thermal_trip trips[] = {
     { .temperature = 80000, .type = THERMAL_TRIP_PASSIVE },    /* 80°C */
     { .temperature = 100000, .type = THERMAL_TRIP_CRITICAL },  /* 100°C */
 };
 
 struct thermal_zone_device *tzd = thermal_zone_device_register_with_trips(
-    "my_sensor",           /* type string */
-    trips,                 /* array of trip points */
-    ARRAY_SIZE(trips),     /* number of trip points */
-    sensor_data,           /* driver private data */
+    "my_sensor",           /* typeの文字列 */
+    trips,                 /* トリップポイントの配列 */
+    ARRAY_SIZE(trips),     /* トリップポイントの数 */
+    sensor_data,           /* ドライバのプライベートデータ */
     &my_tz_ops,
-    NULL,                  /* thermal zone params */
-    1000,                  /* passive_delay ms */
-    5000                   /* polling_delay ms */
+    NULL,                  /* サーマルゾーンのパラメータ */
+    1000,                  /* passive_delay（ms） */
+    5000                   /* polling_delay（ms） */
 );
 thermal_zone_device_enable(tzd);
 ```
 
-## Cooling devices {#cooling-devices}
+## 冷却デバイス {#cooling-devices}
 
 ```c
-/* A cooling device can reduce power: e.g., CPU frequency */
+/* 冷却デバイスは電力を減らすことができる: 例えばCPU周波数 */
 struct thermal_cooling_device {
     int         id;
     const char  *type;
@@ -136,131 +136,131 @@ struct thermal_cooling_device_ops {
     int (*set_cur_state)(struct thermal_cooling_device *, unsigned long);
 };
 
-/* CPU frequency scaling cooling device (cpufreq_cooling): */
-/* state 0 = max frequency, state N = minimum frequency */
+/* CPU周波数スケーリングによる冷却デバイス（cpufreq_cooling）: */
+/* state 0 = 最大周波数、state N = 最小周波数 */
 struct thermal_cooling_device *cdev =
     cpufreq_cooling_register(cpu_policy);
-/* This is how cpufreq thermal throttling works */
+/* これがcpufreqによる熱スロットリングの仕組みである */
 ```
 
 ```bash
-# View cooling devices:
+# 冷却デバイスを見る:
 ls /sys/class/thermal/cooling_device*/
-cat /sys/class/thermal/cooling_device0/type    # "Processor" or "cpufreq-cpu0"
-cat /sys/class/thermal/cooling_device0/max_state  # e.g., 3 (4 levels)
-cat /sys/class/thermal/cooling_device0/cur_state  # current level (0=off)
+cat /sys/class/thermal/cooling_device0/type    # "Processor" または "cpufreq-cpu0"
+cat /sys/class/thermal/cooling_device0/max_state  # 例: 3（4段階）
+cat /sys/class/thermal/cooling_device0/cur_state  # 現在のレベル（0=オフ）
 ```
 
-## Thermal governors {#thermal-governors}
+## サーマルガバナ {#thermal-governors}
 
-The governor decides **when** to activate cooling and **how much**:
+ガバナは、冷却を**いつ**作動させ、**どの程度**行うかを決定する。
 
-### step_wise (default on many platforms) {#step_wise-default-on-many-platforms}
+### step_wise（多くのプラットフォームでのデフォルト） {#step_wise-default-on-many-platforms}
 
-Raises cooling level by 1 when temperature exceeds a trip point, lowers by 1 when below:
+温度がトリップポイントを超えると冷却レベルを1上げ、下回ると1下げる。
 
 ```
 temp rising:  trip reached → cooling_state++
 temp falling: temp < (trip - hysteresis) → cooling_state--
 ```
 
-### power_allocator (IPA — Intelligent Power Allocation) {#power_allocator-ipa-intelligent-power-allocation}
+### power_allocator（IPA — Intelligent Power Allocation） {#power_allocator-ipa-intelligent-power-allocation}
 
-A PID controller that distributes a power budget across cooling devices:
+電力予算を冷却デバイス間に配分するPIDコントローラである。
 
 ```c
 /* drivers/thermal/gov_power_allocator.c */
-/* Parameters (tunable via /sys/class/thermal/thermal_zone*/
-/*                             /sustainable_power etc.):  */
-/* sustainable_power: maximum sustainable power (mW)      */
-/* k_po, k_pu, k_i, k_d: PID controller gains — proportional */
-/* (overshoot/undershoot), integral, and derivative terms.   */
-/* Stored as fixed-point (mul_frac()/int_to_frac() in the    */
-/* driver), not plain integers, even though the sysfs files  */
-/* below show/accept decimal integers.                       */
-/* Estimate: (current_temp - control_temp) → power_budget */
-/* → allocate proportionally to each cooling device       */
+/* パラメータ（/sys/class/thermal/thermal_zone*/
+/*            /sustainable_power などで調整可能）:   */
+/* sustainable_power: 持続可能な最大電力（mW）        */
+/* k_po, k_pu, k_i, k_d: PIDコントローラのゲイン — 比例 */
+/* （オーバーシュート/アンダーシュート）、積分、微分項。 */
+/* 下記のsysfsファイルは10進整数を表示・受け付けるが、   */
+/* 値は単純な整数ではなく固定小数点（ドライバ内の        */
+/* mul_frac()/int_to_frac()）として格納される。          */
+/* 見積もり: (current_temp - control_temp) → power_budget */
+/* → 各冷却デバイスに比例配分する                       */
 ```
 
 ```bash
-# Tune power_allocator governor:
+# power_allocatorガバナを調整する:
 echo power_allocator > /sys/class/thermal/thermal_zone0/policy
-echo 3000 > /sys/class/thermal/thermal_zone0/sustainable_power  # 3W budget
-echo 100  > /sys/class/thermal/thermal_zone0/k_po  # proportional gain (overshoot)
-echo 100  > /sys/class/thermal/thermal_zone0/k_pu  # proportional gain (undershoot)
-echo 10   > /sys/class/thermal/thermal_zone0/k_i   # integral gain
-echo 0    > /sys/class/thermal/thermal_zone0/k_d   # derivative gain
+echo 3000 > /sys/class/thermal/thermal_zone0/sustainable_power  # 3Wの予算
+echo 100  > /sys/class/thermal/thermal_zone0/k_po  # 比例ゲイン（オーバーシュート）
+echo 100  > /sys/class/thermal/thermal_zone0/k_pu  # 比例ゲイン（アンダーシュート）
+echo 10   > /sys/class/thermal/thermal_zone0/k_i   # 積分ゲイン
+echo 0    > /sys/class/thermal/thermal_zone0/k_d   # 微分ゲイン
 ```
 
 ### user_space {#user_space}
 
-Delegates decisions to a userspace daemon (e.g., thermald):
+判断をユーザー空間のデーモン（例: thermald）に委ねる。
 
 ```bash
 echo user_space > /sys/class/thermal/thermal_zone0/policy
-# thermald or thermal daemon reads temperature and sets:
+# thermaldなどの熱管理デーモンが温度を読み取り、次のように設定する:
 echo 1 > /sys/class/thermal/cooling_device0/cur_state
 ```
 
-## ACPI thermal zones {#acpi-thermal-zones}
+## ACPIサーマルゾーン {#acpi-thermal-zones}
 
-On x86, ACPI defines thermal zones in DSDT/SSDT:
+x86では、ACPIがDSDT/SSDTの中でサーマルゾーンを定義する。
 
 ```bash
-# ACPI thermal zones (separate from Linux thermal framework initially):
+# ACPIサーマルゾーン（当初はLinuxの熱フレームワークとは別）:
 cat /sys/class/thermal/thermal_zone*/type | grep -i acpi
 # acpitz
 
-# ACPI trip points come from ACPI _PSV (passive), _CRT (critical), _HOT.
-# ThermalZone is an ASL keyword, not present in the raw AML binary, so it
-# won't show up in a raw dump — disassemble first:
+# ACPIのトリップポイントはACPIの_PSV（パッシブ）、_CRT（クリティカル）、_HOTから来る。
+# ThermalZoneはASLのキーワードであり、生のAMLバイナリには現れないので、
+# 生のダンプには出てこない — まず逆アセンブルする:
 acpidump -n DSDT -o dsdt.dat
-iasl -d dsdt.dat            # produces dsdt.dsl (ASL source)
+iasl -d dsdt.dat            # dsdt.dsl（ASLソース）を生成する
 grep -A 20 "ThermalZone" dsdt.dsl
 ```
 
-## Fan control {#fan-control}
+## ファン制御 {#fan-control}
 
 ```bash
-# Fan cooling devices:
+# ファンの冷却デバイス:
 cat /sys/class/thermal/cooling_device*/type | grep -i fan
 # Fan
 
-# Manual fan control (bypass thermal framework):
-# (varies by platform; common methods:)
+# 手動のファン制御（熱フレームワークをバイパスする）:
+# （プラットフォームによって異なる。よくある方法:）
 
-# Dell laptops (i8k): /proc/i8k is read-only status output (drivers/hwmon/dell-smm-hwmon.c
-# registers a .proc_ioctl handler, but no .proc_write); setting the fan level
-# requires the I8K_SET_FAN ioctl (e.g. via the `i8kutils`/`i8kfan` userspace tools),
-# not a plain sysfs-style write.
+# Dellのノートパソコン（i8k）: /proc/i8kは読み取り専用の状態出力である（drivers/hwmon/dell-smm-hwmon.c
+# は.proc_ioctlハンドラを登録するが、.proc_writeは登録しない）。ファンレベルの設定には
+# I8K_SET_FAN ioctlが必要であり（例: `i8kutils`/`i8kfan`ユーザー空間ツール経由）、
+# 単純なsysfs風の書き込みではできない。
 
-# ACPI fans via hwmon:
+# hwmon経由のACPIファン:
 cat /sys/class/hwmon/hwmon*/name
 cat /sys/class/hwmon/hwmon0/fan1_input  # RPM
-echo 200 > /sys/class/hwmon/hwmon0/pwm1  # 0-255 speed
+echo 200 > /sys/class/hwmon/hwmon0/pwm1  # 0-255の速度
 
-# Check fan is thermal-controlled:
+# ファンが熱制御されているか確認する:
 cat /sys/class/hwmon/hwmon0/pwm1_enable
-# 0 = full speed, 1 = manual, 2 = auto (thermal)
-echo 2 > /sys/class/hwmon/hwmon0/pwm1_enable  # auto mode
+# 0 = 全速、1 = 手動、2 = 自動（熱制御）
+echo 2 > /sys/class/hwmon/hwmon0/pwm1_enable  # 自動モード
 ```
 
-## Observability and debugging {#observability-and-debugging}
+## 可観測性とデバッグ {#observability-and-debugging}
 
 ```bash
-# Watch thermal zones in real time:
+# サーマルゾーンをリアルタイムで監視する:
 watch -n 1 'for z in /sys/class/thermal/thermal_zone*/; do
     echo -n "$(cat $z/type): $(cat $z/temp)m°C  "; done; echo'
 
-# Kernel thermal tracepoints (drivers/thermal/thermal_trace.h):
+# カーネルの熱関連tracepoint（drivers/thermal/thermal_trace.h）:
 echo 1 > /sys/kernel/debug/tracing/events/thermal/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 # thermal_temperature: thermal_zone=x86_pkg_temp id=0 temp_prev=44000 temp=45000
 # thermal_zone_trip: thermal_zone=x86_pkg_temp id=0 trip=0 trip_type=passive
-# (thermal_zone_trip carries the trip index and type, not a temperature —
-#  read the current temp from the paired thermal_temperature event or /sys)
+# （thermal_zone_tripが持つのはトリップのインデックスと種類であり、温度ではない —
+#  現在の温度は対になるthermal_temperatureイベントか/sysから読む）
 
-# BPF trace thermal throttling:
+# BPFで熱スロットリングをトレースする:
 bpftrace -e '
 tracepoint:thermal:thermal_zone_trip
 {
@@ -269,65 +269,65 @@ tracepoint:thermal:thermal_zone_trip
            args->trip_type);
 }'
 
-# Check if CPU is thermally throttled (PROCHOT): the info lives in the
-# *names* of numeric counter files under thermal_throttle/, not in their
-# contents, so grepping for a string won't match — cat the counters instead:
+# CPUが熱スロットリング（PROCHOT）されているか確認する: 情報はthermal_throttle/以下の
+# 数値カウンタファイルの*名前*にあり、中身にはないので、文字列をgrepしても
+# 一致しない — 代わりにカウンタをcatする:
 cat /sys/devices/system/cpu/cpu0/thermal_throttle/core_throttle_count
 cat /sys/devices/system/cpu/cpu0/thermal_throttle/core_power_limit_count
 cat /sys/devices/system/cpu/cpu0/thermal_throttle/package_throttle_count
 
-# MSR-based throttling on Intel (IA32_THERM_STATUS bits, per SDM Vol 3B §15.7):
-rdmsr -p0 0x19c   # IA32_THERM_STATUS (per-core)
-# bit 0: Thermal Status — currently being throttled due to temperature
-# bit 1: Thermal Status Log — sticky "has this happened since last clear" flag
-# bit 2: PROCHOT#/FORCEPR Event — currently throttled by an external PROCHOT# assertion
-# bit 3: PROCHOT#/FORCEPR Log — sticky version of bit 2
-# (bit 0 = current thermal-status throttling; bit 2 = current PROCHOT# throttling — distinct events)
+# IntelでのMSRベースのスロットリング（IA32_THERM_STATUSのビット、SDM Vol 3B §15.7による）:
+rdmsr -p0 0x19c   # IA32_THERM_STATUS（コアごと）
+# bit 0: Thermal Status — 現在、温度によりスロットリングされている
+# bit 1: Thermal Status Log — 「前回のクリア以降に発生したか」を示すスティッキーフラグ
+# bit 2: PROCHOT#/FORCEPR Event — 現在、外部からのPROCHOT#アサートによりスロットリングされている
+# bit 3: PROCHOT#/FORCEPR Log — bit 2のスティッキー版
+# （bit 0 = 現在の熱状態によるスロットリング、bit 2 = 現在のPROCHOT#によるスロットリング — 別々のイベント）
 
-# Package-wide equivalent:
-rdmsr -p0 0x1b1   # IA32_PACKAGE_THERM_STATUS: same bit layout, package-wide
+# パッケージ全体の相当物:
+rdmsr -p0 0x1b1   # IA32_PACKAGE_THERM_STATUS: 同じビット配置、パッケージ全体
 ```
 
-## ARM thermal: SCMI and TF-A {#arm-thermal-scmi-and-tf-a}
+## ARMの熱管理: SCMIとTF-A {#arm-thermal-scmi-and-tf-a}
 
-On ARM SoCs, temperature management often involves the firmware:
+ARM SoCでは、温度管理にファームウェアが関与することが多い。
 
 ```bash
-# SCMI thermal (System Control and Management Interface):
-# DT-described zones get their sysfs "type" from the thermal-zones node
-# name itself (thermal_zone_device_register_with_trips(np->name, ...) in
-# drivers/thermal/thermal_of.c) — an SCMI-backed zone's sensor comes from
-# a "thermal-sensors = <&scmi_sensors N>" reference, not a fixed type string.
+# SCMIによる熱管理（System Control and Management Interface）:
+# DTで記述されたゾーンは、sysfsの"type"をthermal-zonesノード名そのものから
+# 得る（drivers/thermal/thermal_of.c内のthermal_zone_device_register_with_trips(np->name, ...)）。
+# SCMIを使うゾーンのセンサーは、固定のtype文字列ではなく、
+# "thermal-sensors = <&scmi_sensors N>"という参照から得られる。
 cat /sys/class/thermal/thermal_zone*/type
 
-# TF-A (Trusted Firmware-A) handles critical shutdown;
-# Linux gets temperature via SCMI protocol to secure world
+# TF-A（Trusted Firmware-A）がクリティカルシャットダウンを処理する。
+# LinuxはセキュアワールドへのSCMIプロトコル経由で温度を取得する
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/thermal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/thermal.h) — `struct thermal_trip`, `struct thermal_zone_device_ops`, and `thermal_zone_device_register_with_trips()` — the actual registration API (the older `thermal_zone_device_register()` no longer exists)
-- [drivers/thermal/thermal_core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_core.h) — the real, subsystem-private `struct thermal_zone_device` layout (it is not in `include/linux/thermal.h`; drivers only ever hold an opaque pointer)
-- [drivers/thermal/gov_step_wise.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_step_wise.c) — `get_target_state()`, the `cur_state ± 1` throttling logic behind `step_wise`
-- [drivers/thermal/gov_power_allocator.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_power_allocator.c) — the PID controller (`k_po`, `k_pu`, `k_d`, `sustainable_power`) behind `power_allocator`
-- [include/linux/cpu_cooling.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpu_cooling.h) — `cpufreq_cooling_register()`, the cpufreq cooling device constructor
-- [drivers/thermal/thermal_trace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_trace.h) — the `thermal_temperature` and `thermal_zone_trip` tracepoint field definitions
-- [arch/x86/include/asm/msr-index.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/msr-index.h) — `MSR_IA32_THERM_STATUS` (0x19c, per-core) vs `MSR_IA32_PACKAGE_THERM_STATUS` (0x1b1), both with PROCHOT at bit 0
+- [include/linux/thermal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/thermal.h) — `struct thermal_trip`、`struct thermal_zone_device_ops`、そして実際の登録APIである`thermal_zone_device_register_with_trips()`（古い`thermal_zone_device_register()`はもう存在しない）
+- [drivers/thermal/thermal_core.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_core.h) — サブシステムに非公開の、実際の`struct thermal_zone_device`のレイアウト（`include/linux/thermal.h`にはない。ドライバが持つのは不透明なポインタだけである）
+- [drivers/thermal/gov_step_wise.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_step_wise.c) — `get_target_state()`。`step_wise`の背後にある`cur_state ± 1`のスロットリングロジック
+- [drivers/thermal/gov_power_allocator.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/gov_power_allocator.c) — `power_allocator`の背後にあるPIDコントローラ（`k_po`、`k_pu`、`k_d`、`sustainable_power`）
+- [include/linux/cpu_cooling.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/cpu_cooling.h) — cpufreq冷却デバイスのコンストラクタである`cpufreq_cooling_register()`
+- [drivers/thermal/thermal_trace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/thermal/thermal_trace.h) — `thermal_temperature`および`thermal_zone_trip` tracepointのフィールド定義
+- [arch/x86/include/asm/msr-index.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/msr-index.h) — `MSR_IA32_THERM_STATUS`（0x19c、コアごと）と`MSR_IA32_PACKAGE_THERM_STATUS`（0x1b1）。どちらもPROCHOTはビット0
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [cpufreq and P-states](cpufreq.md) — CPU frequency scaling (thermal cooling device)
-- [cpuidle](cpuidle.md) — C-states reduce power to prevent thermal issues
-- [Runtime PM](runtime-pm.md) — device power management
-- [Device Tree](../drivers/device-tree.md) — thermal zones defined in DTS on ARM
+- [cpufreqとP-state](cpufreq.md) — CPU周波数スケーリング（熱の冷却デバイス）
+- [cpuidle](cpuidle.md) — C-stateは電力を減らして熱の問題を防ぐ
+- [Runtime PM](runtime-pm.md) — デバイスの電源管理
+- [デバイスツリー](../drivers/device-tree.md) — ARMではDTSでサーマルゾーンが定義される
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The power allocator thermal governor](https://lwn.net/Articles/602517/) (June 17, 2014) — the PID-controller design and multi-actor power budgeting behind `power_allocator`/IPA
+- [The power allocator thermal governor](https://lwn.net/Articles/602517/)（2014年6月17日） — `power_allocator`/IPAの背後にあるPIDコントローラの設計と、複数アクターにわたる電力予算配分
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Generic Thermal Sysfs driver How To](https://docs.kernel.org/driver-api/thermal/sysfs-api.html) — the thermal zone and cooling device registration API and full sysfs ABI (trip points, `policy`, `mode`)
-- [Power allocator governor tunables](https://docs.kernel.org/driver-api/thermal/power_allocator.html) — what `k_po`, `k_pu`, `k_d`, and `sustainable_power` actually control
+- [Generic Thermal Sysfs driver How To](https://docs.kernel.org/driver-api/thermal/sysfs-api.html) — サーマルゾーンと冷却デバイスの登録API、およびsysfs ABIの全体（トリップポイント、`policy`、`mode`）
+- [Power allocator governor tunables](https://docs.kernel.org/driver-api/thermal/power_allocator.html) — `k_po`、`k_pu`、`k_d`、`sustainable_power`が実際に何を制御するか

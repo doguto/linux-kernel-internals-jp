@@ -1,28 +1,28 @@
-# Adding a New System Call {#adding-a-new-system-call}
+# 新しいシステムコールの追加 {#adding-a-new-system-call}
 
-> A complete walkthrough for kernel contributors
+> カーネルコントリビュータ向けの完全な解説
 
-## When to add a new syscall {#when-to-add-a-new-syscall}
+## 新しいsyscallを追加すべきとき {#when-to-add-a-new-syscall}
 
-A new syscall is the right approach when:
+新しいsyscallが適切なアプローチとなるのは、次のような場合である。
 
-- Exposing a new kernel capability to userspace
-- The operation requires privilege or atomic semantics unavailable in userspace
-- It needs access to kernel-internal state
+- 新しいカーネルの機能をユーザー空間に公開する
+- その操作に、ユーザー空間では得られない特権やアトミックなセマンティクスが必要である
+- カーネル内部の状態へのアクセスが必要である
 
-Avoid adding syscalls for things that can be done via:
+次の手段で実現できることのためにsyscallを追加するのは避ける。
 
-- `ioctl` on an existing device/file (for device-specific operations)
-- `sysfs`/`procfs` (for configuration and observation)
-- Netlink (for networking-related configuration)
-- An existing syscall extension (e.g., `fcntl` with a new `cmd`)
+- 既存のデバイス/ファイルに対する `ioctl`（デバイス固有の操作の場合）
+- `sysfs`/`procfs`（設定や観測の場合）
+- Netlink（ネットワーク関連の設定の場合）
+- 既存のsyscallの拡張（例: 新しい `cmd` を持つ `fcntl`）
 
-## Step 1: Define the syscall {#step-1-define-the-syscall}
+## ステップ1: syscallを定義する {#step-1-define-the-syscall}
 
-Use the modern struct-based pattern for new syscalls:
+新しいsyscallには、構造体ベースの現代的なパターンを使う。
 
 ```c
-/* Example: a hypothetical "hello" syscall in kernel/hello.c */
+/* 例: kernel/hello.c にある架空の "hello" syscall */
 #include <linux/syscalls.h>
 #include <linux/uaccess.h>
 #include <uapi/linux/hello.h>
@@ -40,23 +40,23 @@ SYSCALL_DEFINE2(hello, struct hello_args __user *, uargs, size_t, size)
     char kernel_name[64];
     int ret;
 
-    /* Validate and copy the struct */
+    /* 構造体を検証してコピーする */
     if (size < HELLO_ARGS_SIZE_VER0)
         return -EINVAL;
     if (copy_struct_from_user(&args, sizeof(args), uargs, size))
         return -EFAULT;
 
-    /* Validate flags: only known flags allowed */
+    /* フラグを検証する: 既知のフラグのみ許可 */
     if (args.flags & ~HELLO_FLAG_LOUD)
         return -EINVAL;
 
-    /* Copy the name string from userspace */
+    /* ユーザー空間から名前文字列をコピーする */
     if (strncpy_from_user(kernel_name, u64_to_user_ptr(args.name),
                           sizeof(kernel_name)) < 0)
         return -EFAULT;
     kernel_name[sizeof(kernel_name) - 1] = '\0';
 
-    /* Do the work */
+    /* 実際の処理を行う */
     pr_info("Hello, %s!\n", kernel_name);
     if (args.flags & HELLO_FLAG_LOUD)
         pr_info("HELLO, %s!!!\n", kernel_name);
@@ -65,9 +65,9 @@ SYSCALL_DEFINE2(hello, struct hello_args __user *, uargs, size_t, size)
 }
 ```
 
-## Step 2: Define the UAPI struct {#step-2-define-the-uapi-struct}
+## ステップ2: UAPI構造体を定義する {#step-2-define-the-uapi-struct}
 
-Put userspace-visible types in `include/uapi/linux/hello.h`:
+ユーザー空間から見える型は `include/uapi/linux/hello.h` に置く。
 
 ```c
 /* include/uapi/linux/hello.h */
@@ -76,38 +76,38 @@ Put userspace-visible types in `include/uapi/linux/hello.h`:
 
 #include <linux/types.h>
 
-/* Flags for hello() */
+/* hello() 用のフラグ */
 #define HELLO_FLAG_LOUD  (1 << 0)
 
-/* Version 0 struct size */
+/* バージョン0の構造体サイズ */
 #define HELLO_ARGS_SIZE_VER0  (sizeof(struct hello_args))
 
 struct hello_args {
     __u32   flags;      /* HELLO_FLAG_* */
-    __u32   pad;        /* explicit padding (never leave implicit gaps) */
-    __u64   name;       /* pointer to name string (use __u64 for 64/32-bit compat) */
+    __u32   pad;        /* 明示的なパディング（暗黙の隙間を決して残さない） */
+    __u64   name;       /* 名前文字列へのポインタ（64/32ビット互換のため __u64 を使う） */
 };
 
 #endif /* _UAPI_LINUX_HELLO_H */
 ```
 
-Key rules for UAPI structs:
+UAPI構造体の重要なルール:
 
-- Use `__u8`, `__u16`, `__u32`, `__u64` (not `int`, `long`, etc.)
-- Add explicit padding (`__u32 pad`) for alignment — never rely on implicit struct holes
-- Use `__u64` for pointer-sized fields (enables compat with 32-bit userspace)
-- The struct is an ABI — once merged it cannot be changed incompatibly
+- `__u8`、`__u16`、`__u32`、`__u64` を使う（`int`、`long` などは使わない）
+- アラインメントのために明示的なパディング（`__u32 pad`）を追加する — 構造体の暗黙の穴に決して頼らない
+- ポインタサイズのフィールドには `__u64` を使う（32ビットユーザー空間との互換性が得られる）
+- 構造体はABIである — 一度マージされたら、互換性のない形で変更することはできない
 
-## Step 3: Add to the syscall table {#step-3-add-to-the-syscall-table}
+## ステップ3: syscallテーブルに追加する {#step-3-add-to-the-syscall-table}
 
-### For x86-64: `arch/x86/entry/syscalls/syscall_64.tbl` {#for-x86-64-archx86entrysyscallssyscall_64tbl}
+### x86-64の場合: `arch/x86/entry/syscalls/syscall_64.tbl` {#for-x86-64-archx86entrysyscallssyscall_64tbl}
 
 ```
 # Append at the end (after the highest existing number)
 451     common  hello           sys_hello
 ```
 
-### For generic architectures: `include/uapi/asm-generic/unistd.h` {#for-generic-architectures-includeuapiasm-genericunistdh}
+### 汎用アーキテクチャの場合: `include/uapi/asm-generic/unistd.h` {#for-generic-architectures-includeuapiasm-genericunistdh}
 
 ```c
 #define __NR_hello 451
@@ -116,25 +116,25 @@ __SYSCALL(__NR_hello, sys_hello)
 #define __NR_syscalls 452
 ```
 
-### For ARM64: `arch/arm64/include/asm/unistd.h` {#for-arm64-archarm64includeasmunistdh}
+### ARM64の場合: `arch/arm64/include/asm/unistd.h` {#for-arm64-archarm64includeasmunistdh}
 
-ARM64 uses the generic table, so `include/uapi/asm-generic/unistd.h` covers it.
+ARM64は汎用テーブルを使うので、`include/uapi/asm-generic/unistd.h` でカバーされる。
 
-### For 32-bit compat {#for-32-bit-compat}
+### 32ビット互換の場合 {#for-32-bit-compat}
 
-If the syscall takes a struct with pointers (stored as `__u64`), it already works correctly for 32-bit processes — no compat version needed. If it uses architecture-specific types, add a compat version:
+syscallがポインタを（`__u64` として格納した）構造体で受け取るなら、32ビットプロセスでもすでに正しく動作する — compat版は不要である。アーキテクチャ固有の型を使う場合は、compat版を追加する。
 
 ```c
-/* Only if needed (most modern syscalls don't need this) */
+/* 必要な場合のみ（現代的なsyscallのほとんどはこれを必要としない） */
 #ifdef CONFIG_COMPAT
 COMPAT_SYSCALL_DEFINE2(hello, compat_uptr_t, uargs, compat_size_t, size)
 {
-    /* handle 32-bit callers */
+    /* 32ビットの呼び出し元を処理する */
 }
 #endif
 ```
 
-## Step 4: Add the kernel header {#step-4-add-the-kernel-header}
+## ステップ4: カーネルヘッダを追加する {#step-4-add-the-kernel-header}
 
 ```c
 /* include/linux/hello.h */
@@ -143,32 +143,32 @@ COMPAT_SYSCALL_DEFINE2(hello, compat_uptr_t, uargs, compat_size_t, size)
 
 #include <uapi/linux/hello.h>
 
-/* kernel-internal declarations (not exported to userspace) */
+/* カーネル内部の宣言（ユーザー空間にはエクスポートされない） */
 long ksys_hello(struct hello_args __user *uargs, size_t size);
 
 #endif
 ```
 
-## Step 5: Wire it up in the build {#step-5-wire-it-up-in-the-build}
+## ステップ5: ビルドに組み込む {#step-5-wire-it-up-in-the-build}
 
-Add to the appropriate `Makefile`:
+適切な `Makefile` に追加する。
 
 ```makefile
 # kernel/Makefile
 obj-y += hello.o
 ```
 
-Or add it to an existing file if it's small enough.
+小さければ、既存のファイルに追加してもよい。
 
-## Step 6: Add a man page stub {#step-6-add-a-man-page-stub}
+## ステップ6: manページの雛形を追加する {#step-6-add-a-man-page-stub}
 
 ```
 man2/hello.2  ← syscall man pages live in section 2
 ```
 
-The man-pages project (not in the kernel tree) documents syscalls. Submit a patch there too.
+syscallはman-pagesプロジェクト（カーネルツリー外）が文書化している。そちらにもパッチを送ること。
 
-## Step 7: Write a selftest {#step-7-write-a-selftest}
+## ステップ7: selftestを書く {#step-7-write-a-selftest}
 
 ```c
 /* tools/testing/selftests/hello/hello_test.c */
@@ -194,12 +194,12 @@ int main(void)
     long ret = syscall(__NR_hello, &args, sizeof(args));
     assert(ret == 0);
 
-    /* Test: unknown flag should fail */
+    /* テスト: 未知のフラグは失敗するはず */
     args.flags = 0xdeadbeef;
     ret = syscall(__NR_hello, &args, sizeof(args));
     assert(ret == -1 && errno == EINVAL);
 
-    /* Test: NULL pointer should fail */
+    /* テスト: NULLポインタは失敗するはず */
     args.flags = 0;
     args.name = 0;
     ret = syscall(__NR_hello, &args, sizeof(args));
@@ -216,120 +216,120 @@ TEST_GEN_PROGS := hello_test
 include ../lib.mk
 ```
 
-## Common mistakes {#common-mistakes}
+## よくある間違い {#common-mistakes}
 
-### Forgetting to validate struct size {#forgetting-to-validate-struct-size}
+### 構造体サイズの検証を忘れる {#forgetting-to-validate-struct-size}
 
 ```c
-/* WRONG: assumes struct is exactly this size */
+/* 誤り: 構造体がちょうどこのサイズであると仮定している */
 if (copy_from_user(&args, uargs, sizeof(args)))
 
-/* RIGHT: use copy_struct_from_user for versioned structs */
+/* 正しい: バージョン付き構造体には copy_struct_from_user を使う */
 if (copy_struct_from_user(&args, sizeof(args), uargs, size))
 ```
 
-### Leaving implicit padding in structs {#leaving-implicit-padding-in-structs}
+### 構造体に暗黙のパディングを残す {#leaving-implicit-padding-in-structs}
 
 ```c
-/* WRONG: compiler adds 4 bytes of padding after flags */
+/* 誤り: コンパイラが flags の後に4バイトのパディングを追加する */
 struct bad_args {
     __u32 flags;
-    __u64 ptr;   /* 8-byte alignment requires 4 bytes padding before this */
+    __u64 ptr;   /* 8バイトアラインメントのため、この前に4バイトのパディングが必要 */
 };
 
-/* RIGHT: explicit padding, no surprises */
+/* 正しい: 明示的なパディングで、驚きがない */
 struct good_args {
     __u32 flags;
-    __u32 pad;   /* explicit padding */
+    __u32 pad;   /* 明示的なパディング */
     __u64 ptr;
 };
 ```
 
-### Using kernel types in UAPI {#using-kernel-types-in-uapi}
+### UAPIでカーネルの型を使う {#using-kernel-types-in-uapi}
 
 ```c
-/* WRONG: size_t is 4 or 8 bytes depending on arch */
+/* 誤り: size_t はアーキテクチャによって4バイトにも8バイトにもなる */
 struct bad {
     size_t size;
 };
 
-/* RIGHT: explicitly sized */
+/* 正しい: サイズが明示されている */
 struct good {
     __u64 size;
 };
 ```
 
-### Directly dereferencing userspace pointers {#directly-dereferencing-userspace-pointers}
+### ユーザー空間のポインタを直接参照外しする {#directly-dereferencing-userspace-pointers}
 
 ```c
-/* WRONG: UB + security vulnerability */
+/* 誤り: 未定義動作 + セキュリティ脆弱性 */
 int result = *(int *)uargs->ptr;
 
-/* RIGHT: use copy_from_user or get_user */
+/* 正しい: copy_from_user または get_user を使う */
 int value;
 if (get_user(value, (int __user *)uargs->ptr))
     return -EFAULT;
 ```
 
-### Missing capability check {#missing-capability-check}
+### ケーパビリティチェックの欠落 {#missing-capability-check}
 
 ```c
-/* If the syscall requires privilege: */
+/* syscallが特権を必要とする場合: */
 if (!capable(CAP_SYS_ADMIN))
     return -EPERM;
 
-/* For namespace-scoped privilege: */
+/* namespaceスコープの特権の場合: */
 if (!ns_capable(current_user_ns(), CAP_SYS_ADMIN))
     return -EPERM;
 ```
 
-## Testing without merging {#testing-without-merging}
+## マージせずにテストする {#testing-without-merging}
 
 ```bash
-# Build the kernel with your changes
+# 変更を加えたカーネルをビルドする
 make -j$(nproc) LOCALVERSION="-test"
 
-# Install in a VM
+# VMにインストールする
 make INSTALL_MOD_PATH=/tmp/modules modules_install
 make INSTALL_PATH=/boot install
 
-# Test with the selftest
+# selftestでテストする
 cd tools/testing/selftests/hello
 make
 sudo ./run_kselftest.sh
 ```
 
-## The review process {#the-review-process}
+## レビュープロセス {#the-review-process}
 
-Expect these questions from reviewers:
-1. **Why a new syscall?** Can't this be done with ioctl/sysfs/etc.?
-2. **ABI review**: Is the struct future-proof? Does it have explicit padding?
-3. **Security**: Are all pointers validated? Can a malicious value cause harm?
-4. **Error handling**: All paths return meaningful errno?
-5. **Compat**: Does it work for 32-bit processes on 64-bit kernels?
-6. **Documentation**: man page? kernel-doc comments?
-7. **Tests**: selftests included?
+レビュアーからは次のような質問が来ると考えておくこと。
+1. **なぜ新しいsyscallなのか？** ioctl/sysfsなどでは実現できないのか？
+2. **ABIレビュー**: 構造体は将来にわたって通用するか？ 明示的なパディングがあるか？
+3. **セキュリティ**: すべてのポインタが検証されているか？ 悪意のある値で害を及ぼせないか？
+4. **エラー処理**: すべてのパスが意味のあるerrnoを返すか？
+5. **互換性**: 64ビットカーネル上の32ビットプロセスで動作するか？
+6. **ドキュメント**: manページは？ kernel-docコメントは？
+7. **テスト**: selftestは含まれているか？
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — the `SYSCALL_DEFINE0`...`SYSCALL_DEFINE6` macros and the `SYSCALL_DEFINEx`/`__SYSCALL_DEFINEx` chain they expand into
-- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — the x86-64 syscall number table (`<number> <abi> <name> <entry point>`)
-- [include/uapi/asm-generic/unistd.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/unistd.h) — the generic syscall table shared by ARM64 and other architectures; `__NR_syscalls` and the `__SYSCALL()` macro
-- [include/linux/uaccess.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/uaccess.h) — `copy_struct_from_user()`, the versioned-struct copy helper for extensible syscall ABIs
+- [include/linux/syscalls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/syscalls.h) — `SYSCALL_DEFINE0`...`SYSCALL_DEFINE6` マクロと、それらが展開される `SYSCALL_DEFINEx`/`__SYSCALL_DEFINEx` の連鎖
+- [arch/x86/entry/syscalls/syscall_64.tbl](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscalls/syscall_64.tbl) — x86-64のsyscall番号テーブル（`<number> <abi> <name> <entry point>`）
+- [include/uapi/asm-generic/unistd.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/unistd.h) — ARM64などのアーキテクチャが共有する汎用syscallテーブル。`__NR_syscalls` と `__SYSCALL()` マクロ
+- [include/linux/uaccess.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/uaccess.h) — `copy_struct_from_user()`。拡張可能なsyscall ABIのための、バージョン付き構造体のコピーヘルパー
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — low-level syscall invocation from C, and the `SYS_*` number macros
-- [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — the full list of Linux system calls, by kernel version and architecture availability
+- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — Cからの低レベルなsyscall呼び出しと、`SYS_*` 番号マクロ
+- [`syscalls(2)`](https://man7.org/linux/man-pages/man2/syscalls.2.html) — Linuxシステムコールの全一覧。カーネルバージョンとアーキテクチャごとの利用可否付き
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Syscall Entry Path](syscall-entry.md) — how the new syscall gets called
-- [SYSCALL_DEFINE and dispatch](syscall-define.md) — the dispatch mechanism
-- [32-bit Compat Syscalls](compat.md) — the compat layer referenced in Step 3
+- [syscallのエントリパス](syscall-entry.md) — 新しいsyscallがどのように呼び出されるか
+- [SYSCALL_DEFINEとディスパッチ](syscall-define.md) — ディスパッチの仕組み
+- [32ビット互換syscall](compat.md) — ステップ3で触れたcompat層
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — the authoritative kernel guide (`Documentation/process/adding-syscalls.rst`), covering syscall alternatives, ABI extensibility, table wiring, and compat entry points
+- [Adding a New System Call](https://docs.kernel.org/process/adding-syscalls.html) — 権威あるカーネルのガイド（`Documentation/process/adding-syscalls.rst`）。syscallの代替手段、ABIの拡張性、テーブルへの登録、compatエントリポイントを扱う

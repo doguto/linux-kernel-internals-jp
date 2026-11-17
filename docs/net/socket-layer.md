@@ -1,10 +1,10 @@
-# Socket Layer Overview {#socket-layer-overview}
+# ソケット層の概要 {#socket-layer-overview}
 
-> How the kernel maps userspace socket calls to protocol implementations
+> カーネルはユーザー空間のソケット呼び出しをプロトコル実装にどう対応付けるか
 
-## The socket abstraction {#the-socket-abstraction}
+## ソケットという抽象化 {#the-socket-abstraction}
 
-A socket is a bidirectional communication endpoint. From userspace, it's just a file descriptor. Internally, it's a stack of three structures:
+ソケットは双方向の通信エンドポイントである。ユーザー空間からは、単なるファイルディスクリプタに見える。内部的には、3つの構造体が積み重なったものである:
 
 ```
 userspace:   fd (int)
@@ -18,23 +18,23 @@ sock:        struct sock (protocol view: receive queues, buffers, state machine)
 protocol:    struct proto (TCP/UDP/RAW-specific operations)
 ```
 
-## struct socket — the VFS-facing layer {#struct-socket-the-vfs-facing-layer}
+## struct socket — VFS側の層 {#struct-socket-the-vfs-facing-layer}
 
 ```c
 // include/linux/net.h
 struct socket {
-    socket_state        state;   // SS_FREE, SS_UNCONNECTED, SS_CONNECTING,
-                                  // SS_CONNECTED, SS_DISCONNECTING
-    short               type;    // SOCK_STREAM, SOCK_DGRAM, SOCK_RAW, ...
+    socket_state        state;   // SS_FREE、SS_UNCONNECTED、SS_CONNECTING、
+                                  // SS_CONNECTED、SS_DISCONNECTING
+    short               type;    // SOCK_STREAM、SOCK_DGRAM、SOCK_RAW、...
     unsigned long       flags;
-    struct file         *file;   // associated file (for fd → socket lookup)
-    struct sock         *sk;     // the protocol-level socket
-    const struct proto_ops *ops; // VFS-to-protocol dispatch table
-    struct socket_wq    *wq;     // wait queue for poll/select
+    struct file         *file;   // 対応するファイル（fd → socketの検索用）
+    struct sock         *sk;     // プロトコルレベルのソケット
+    const struct proto_ops *ops; // VFSからプロトコルへのディスパッチテーブル
+    struct socket_wq    *wq;     // poll/select用の待ちキュー
 };
 ```
 
-`proto_ops` is the dispatch table mapping socket syscalls to protocol code:
+`proto_ops`は、ソケットのシステムコールをプロトコルのコードに対応付けるディスパッチテーブルである:
 
 ```c
 // include/linux/net.h
@@ -53,47 +53,47 @@ struct proto_ops {
 };
 ```
 
-For TCP/IPv4, `proto_ops = inet_stream_ops`. For UDP, `proto_ops = inet_dgram_ops`. For AF_UNIX, `proto_ops = unix_stream_ops`.
+TCP/IPv4では`proto_ops = inet_stream_ops`。UDPでは`proto_ops = inet_dgram_ops`。AF_UNIXでは`proto_ops = unix_stream_ops`である。
 
-## struct sock — the protocol-facing layer {#struct-sock-the-protocol-facing-layer}
+## struct sock — プロトコル側の層 {#struct-sock-the-protocol-facing-layer}
 
 ```c
 // include/net/sock.h
 struct sock {
-    struct sock_common __sk_common; // address/port/family/state
-    // Common macros expose these fields:
-    // sk_daddr, sk_rcv_saddr  (IPv4 addresses)
-    // sk_dport, sk_num        (ports)
-    // sk_state                (TCP_ESTABLISHED, TCP_CLOSE_WAIT, ...)
-    // sk_prot                 (points to struct proto)
+    struct sock_common __sk_common; // アドレス/ポート/ファミリ/状態
+    // 共通のマクロがこれらのフィールドを公開する:
+    // sk_daddr, sk_rcv_saddr  （IPv4アドレス）
+    // sk_dport, sk_num        （ポート）
+    // sk_state                （TCP_ESTABLISHED、TCP_CLOSE_WAIT、...）
+    // sk_prot                 （struct protoを指す）
 
-    // Receive path
-    struct sk_buff_head sk_receive_queue; // received but not yet read
+    // 受信パス
+    struct sk_buff_head sk_receive_queue; // 受信済みだがまだ読まれていない
     struct {
         atomic_t rmem_alloc;
         struct sk_buff *head, *tail;
-    } sk_backlog;               // packets arrived while lock was held
+    } sk_backlog;               // ロック保持中に到着したパケット
 
-    // Memory limits
-    int           sk_rcvbuf;    // receive buffer size limit
-    int           sk_sndbuf;    // send buffer size limit
-    atomic_t      sk_rmem_alloc; // currently allocated for receive
-    atomic_t      sk_wmem_alloc; // currently allocated for send
+    // メモリの上限
+    int           sk_rcvbuf;    // 受信バッファサイズの上限
+    int           sk_sndbuf;    // 送信バッファサイズの上限
+    atomic_t      sk_rmem_alloc; // 受信用に現在割り当てられている量
+    atomic_t      sk_wmem_alloc; // 送信用に現在割り当てられている量
 
-    // Callbacks (set by protocol)
-    void    (*sk_data_ready)(struct sock *sk);    // data arrived
-    void    (*sk_write_space)(struct sock *sk);   // send buffer freed up
-    void    (*sk_state_change)(struct sock *sk);  // TCP state changed
-    void    (*sk_error_report)(struct sock *sk);  // error (ICMP, etc.)
+    // コールバック（プロトコルが設定する）
+    void    (*sk_data_ready)(struct sock *sk);    // データが到着した
+    void    (*sk_write_space)(struct sock *sk);   // 送信バッファに空きができた
+    void    (*sk_state_change)(struct sock *sk);  // TCPの状態が変わった
+    void    (*sk_error_report)(struct sock *sk);  // エラー（ICMPなど）
 
-    // Protocol-specific extension (TCP uses tcp_sock, etc.)
-    // Accessed by container_of() from the protocol layer
+    // プロトコル固有の拡張（TCPはtcp_sockを使う、など）
+    // プロトコル層からcontainer_of()でアクセスされる
 };
 ```
 
-## struct proto — the protocol implementation {#struct-proto-the-protocol-implementation}
+## struct proto — プロトコルの実装 {#struct-proto-the-protocol-implementation}
 
-Each protocol registers a `struct proto` that contains the actual work:
+各プロトコルは、実際の処理を含む`struct proto`を登録する:
 
 ```c
 // include/net/sock.h
@@ -104,19 +104,19 @@ struct proto {
     struct sock *(*accept)(struct sock *, struct proto_accept_arg *);
     int   (*sendmsg)   (struct sock *, struct msghdr *, size_t);
     int   (*recvmsg)   (struct sock *, struct msghdr *, size_t, int, int *);
-    int   (*backlog_rcv)(struct sock *, struct sk_buff *);  // process backlog
-    int   (*hash)      (struct sock *);   // add to protocol hash table
+    int   (*backlog_rcv)(struct sock *, struct sk_buff *);  // バックログを処理する
+    int   (*hash)      (struct sock *);   // プロトコルのハッシュテーブルに追加する
     void  (*unhash)    (struct sock *);
-    int   (*get_port)  (struct sock *, unsigned short);     // port binding
-    char  name[32];   // "TCP", "UDP", "RAW"
+    int   (*get_port)  (struct sock *, unsigned short);     // ポートのバインド
+    char  name[32];   // "TCP"、"UDP"、"RAW"
     // ...
 };
 ```
 
-TCP: `struct proto tcp_prot` at `net/ipv4/tcp_ipv4.c`
-UDP: `struct proto udp_prot` at `net/ipv4/udp.c`
+TCP: `net/ipv4/tcp_ipv4.c`の`struct proto tcp_prot`
+UDP: `net/ipv4/udp.c`の`struct proto udp_prot`
 
-## Creating a socket: socket(2) {#creating-a-socket-socket2}
+## ソケットの作成: socket(2) {#creating-a-socket-socket2}
 
 ```
 socket(AF_INET, SOCK_STREAM, 0)
@@ -131,16 +131,16 @@ socket(AF_INET, SOCK_STREAM, 0)
         → sock_map_fd()  # install in fd table
 ```
 
-## The two dispatch levels {#the-two-dispatch-levels}
+## 2段階のディスパッチ {#the-two-dispatch-levels}
 
-The double-layer dispatch (proto_ops → proto) exists because:
+二重のディスパッチ（proto_ops → proto）が存在するのは、次の理由による:
 
-- `proto_ops` handles the **VFS interface** (file descriptor semantics, socket states, address family dispatch)
-- `proto` handles the **protocol implementation** (TCP state machine, UDP demux, etc.)
+- `proto_ops`は**VFSインターフェース**（ファイルディスクリプタのセマンティクス、ソケットの状態、アドレスファミリによるディスパッチ）を扱う
+- `proto`は**プロトコルの実装**（TCPのステートマシン、UDPの振り分けなど）を扱う
 
-A single layer can't serve both: `sendmsg()` on a TCP socket needs different behavior from `sendmsg()` on a UDP socket, but both go through the same VFS file operations.
+1つの層で両方を担うことはできない。TCPソケットへの`sendmsg()`とUDPソケットへの`sendmsg()`は異なる動作を必要とするが、どちらも同じVFSのファイル操作を通るからである。
 
-## Receive path: how data reaches the socket {#receive-path-how-data-reaches-the-socket}
+## 受信パス: データがソケットに届くまで {#receive-path-how-data-reaches-the-socket}
 
 ```
 NIC interrupt → NAPI poll → __netif_receive_skb()
@@ -151,27 +151,27 @@ NIC interrupt → NAPI poll → __netif_receive_skb()
                     → read()/recv() returns data
 ```
 
-The `sk_backlog` handles the case where a packet arrives while the socket lock is held (e.g., during another syscall). Packets are held in the backlog and processed when the lock is released.
+`sk_backlog`は、ソケットのロックが保持されている間（例えば別のシステムコールの実行中）にパケットが到着した場合を扱う。パケットはバックログに保持され、ロックが解放されたときに処理される。
 
-## Socket buffers and memory {#socket-buffers-and-memory}
+## ソケットバッファとメモリ {#socket-buffers-and-memory}
 
 ```bash
-# Default receive/send buffer sizes
-cat /proc/sys/net/core/rmem_default  # bytes
+# デフォルトの受信/送信バッファサイズ
+cat /proc/sys/net/core/rmem_default  # バイト単位
 cat /proc/sys/net/core/wmem_default
 
-# Maximum (upper bound for setsockopt SO_RCVBUF/SO_SNDBUF)
+# 最大値（setsockoptのSO_RCVBUF/SO_SNDBUFの上限）
 cat /proc/sys/net/core/rmem_max
 cat /proc/sys/net/core/wmem_max
 
-# TCP-specific auto-tuning range [min, default, max]
+# TCP固有の自動チューニング範囲 [min, default, max]
 cat /proc/sys/net/ipv4/tcp_rmem
 cat /proc/sys/net/ipv4/tcp_wmem
 ```
 
-`sk->sk_rmem_alloc` tracks memory currently held in `sk_receive_queue`. When it exceeds `sk_rcvbuf`, new incoming packets are silently dropped by the kernel — for TCP the sender retransmits, but for UDP the data is simply lost.
+`sk->sk_rmem_alloc`は、`sk_receive_queue`に現在保持されているメモリ量を追跡する。これが`sk_rcvbuf`を超えると、新たに到着したパケットはカーネルによって黙って破棄される。TCPなら送信側が再送するが、UDPではデータは単に失われる。
 
-## Socket state machine (TCP) {#socket-state-machine-tcp}
+## ソケットのステートマシン（TCP） {#socket-state-machine-tcp}
 
 ```
                    connect()
@@ -182,30 +182,30 @@ cat /proc/sys/net/ipv4/tcp_wmem
                                   accept() returns a new ESTABLISHED socket; listening socket remains in LISTEN
 ```
 
-`sk->sk_state` (accessed via `sk->__sk_common.skc_state`) tracks this. The TCP protocol implementation transitions these states and calls `sk->sk_state_change()` to notify waiting pollers.
+これは`sk->sk_state`（`sk->__sk_common.skc_state`経由でアクセスされる）が追跡する。TCPプロトコルの実装がこれらの状態を遷移させ、`sk->sk_state_change()`を呼んで待機中のポーラーに通知する。
 
-## Inspecting sockets {#inspecting-sockets}
+## ソケットの調査 {#inspecting-sockets}
 
 ```bash
-# List all TCP sockets
+# すべてのTCPソケットを一覧表示
 ss -tnap
 
-# Show socket memory usage
+# ソケットのメモリ使用量を表示
 ss -tm
 
-# Show internal kernel state for a socket (Linux 5.1+)
+# ソケットのカーネル内部状態を表示（Linux 5.1以降）
 ss --diag
 
-# /proc/net/tcp shows socket table
-cat /proc/net/tcp  # hex: local_addr:port remote_addr:port state tx_queue rx_queue uid
+# /proc/net/tcpはソケットテーブルを示す
+cat /proc/net/tcp  # 16進: local_addr:port remote_addr:port state tx_queue rx_queue uid
 
-# Count sockets by state
+# 状態ごとにソケットを数える
 ss -tan | awk 'NR>1 {print $1}' | sort | uniq -c | sort -rn
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [sk_buff](sk-buff.md) — The packet structure passed between layers
-- [Network Device and NAPI](napi.md) — How packets arrive from hardware
-- [Life of a Packet (receive)](life-of-packet-rx.md) — Full path from NIC to socket
-- [TCP Implementation](tcp.md) — TCP state machine and congestion control
+- [sk_buff](sk-buff.md) — 層の間で受け渡されるパケット構造体
+- [ネットワークデバイスとNAPI](napi.md) — パケットがハードウェアからどう届くか
+- [パケットの一生（受信）](life-of-packet-rx.md) — NICからソケットまでの全経路
+- [TCPの実装](tcp.md) — TCPのステートマシンと輻輳制御

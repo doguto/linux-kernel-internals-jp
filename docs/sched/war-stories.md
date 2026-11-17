@@ -1,52 +1,52 @@
-# War Stories: Scheduler Bugs and Design Tensions {#war-stories-scheduler-bugs-and-design-tensions}
+# 事件簿: スケジューラのバグと設計上の緊張関係 {#war-stories-scheduler-bugs-and-design-tensions}
 
-> Two CVEs, two performance regressions with a real fix, and one heuristic tension that was never cleanly resolved — five incidents that show the scheduler's hardest bugs are as often about *stale assumptions* as about memory safety
+> 2つのCVE、本当の修正が入った2つの性能リグレッション、そしてきれいに解決されることのなかった1つのヒューリスティックの緊張関係。この5つのインシデントは、スケジューラの最も厄介なバグが、メモリ安全性と同じくらい頻繁に*古くなった前提*に関わるものであることを示している
 
-Only two of the five incidents below are CVEs. The other three are reliability and performance sagas — cases where a fix for one bug quietly exposed a design flaw that had been masked for years, or where a heuristic's cost-avoidance shortcut turned out to hurt a workload it was never tuned against. That mix is itself representative of scheduler bugs generally: getting task placement and bandwidth accounting *correct* under every workload shape is hard enough that most of the scheduler's most interesting incidents never needed a memory-safety bug to be worth telling.
+以下の5つのインシデントのうち、CVEは2つだけである。残りの3つは信頼性と性能をめぐる物語であり、あるバグの修正が、何年も覆い隠されていた設計上の欠陥を静かに露呈させたケースや、あるヒューリスティックのコスト回避の近道が、それが一度もチューニングの対象としていなかったワークロードを害すると判明したケースである。この組み合わせ自体が、スケジューラのバグ全般を代表している。あらゆる形のワークロードの下でタスク配置と帯域の会計を*正しく*行うことは非常に難しく、スケジューラの最も興味深いインシデントの大半は、語る価値を持つためにメモリ安全性のバグを必要としなかったのである。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by when the fix (or, for the unresolved case, the cited discussion) landed — newest first.
+修正（未解決のケースについては引用した議論）が入った時期の新しい順に並べている。
 
-### [The DEADLINE Lock Holder That Forgot to Inherit on the Way Down](war-stories/deadline-pi-deboost.md) {#the-deadline-lock-holder-that-forgot-to-inherit-on-the-way-down}
+### [降格の途中で継承を忘れたDEADLINEのロック保持者](war-stories/deadline-pi-deboost.md) {#the-deadline-lock-holder-that-forgot-to-inherit-on-the-way-down}
 **CVE-2026-23371**
-A SCHED_DEADLINE task holding a priority-inheritance mutex, demoted to a lower scheduling class mid-hold, could skip inheriting the waiting donor's deadline parameters — corrupting the kernel's own bandwidth accounting.
+優先度継承mutexを保持しているSCHED_DEADLINEタスクが、保持中に下位のスケジューリングクラスへ降格されると、待機中のドナーのデッドラインパラメータの継承をスキップすることがあった。その結果、カーネル自身の帯域の会計が破壊された。
 
-### [The Cost of Asking "Is There Any Work For Me?" Too Often](war-stories/newidle-balance-cost.md) {#the-cost-of-asking-is-there-any-work-for-me-too-often}
-**First fix in Linux 6.17 (September 2025), reverted after a database-workload regression, replaced by a different approach in Linux 6.19 (February 2026)**
-Removing a stale condition around newidle-balance cost tracking revealed that a wakeup-storm workload could spend a fifth of its CPU time on failed checks for work that almost never existed — the first fix for that regressed a different class of workload badly enough to be reverted before a probability-based approach shipped instead.
+### [「自分にできる仕事はあるか？」と問いすぎるコスト](war-stories/newidle-balance-cost.md) {#the-cost-of-asking-is-there-any-work-for-me-too-often}
+**最初の修正はLinux 6.17（2025年9月）、データベースワークロードでのリグレッションの後にrevertされ、Linux 6.19（2026年2月）で別のアプローチに置き換えられた**
+newidle-balanceのコスト追跡を取り巻く古くなった条件を取り除いたところ、起床が嵐のように発生するワークロードが、ほとんど存在しない仕事を探す失敗したチェックにCPU時間の5分の1を費やしうることが明らかになった。それに対する最初の修正は別の種類のワークロードをひどく劣化させたため、確率ベースのアプローチが代わりに出荷される前にrevertされた。
 
-### [PSI Polling: A Waitqueue That Outlived the cgroup That Owned It](war-stories/psi-trigger-uaf.md) {#psi-polling-a-waitqueue-that-outlived-the-cgroup-that-owned-it}
-**Linux 6.2 (February 2023) · CVE-2023-52707**
-A pressure-monitoring trigger's waitqueue followed its cgroup's teardown lifecycle, not the polling file descriptor's — so removing the cgroup while a thread still had the file open left `epoll`'s own release path dereferencing freed memory.
+### [PSIポーリング: 所有者のcgroupより長生きした待ちキュー](war-stories/psi-trigger-uaf.md) {#psi-polling-a-waitqueue-that-outlived-the-cgroup-that-owned-it}
+**Linux 6.2（2023年2月）· CVE-2023-52707**
+圧力監視トリガーの待ちキューは、ポーリングしているファイルディスクリプタではなく、cgroupの破棄のライフサイクルに従っていた。そのため、スレッドがまだファイルを開いたままcgroupを削除すると、`epoll`自身の解放パスが解放済みメモリを参照してしまった。
 
-### [The CFS Bandwidth Slice That Expired Before It Was Spent](war-stories/cfs-bandwidth-throttling.md) {#the-cfs-bandwidth-slice-that-expired-before-it-was-spent}
-**Linux 5.4 (November 2019)**
-A multi-threaded, non-CPU-bound application under `cpu.cfs_quota_us` could be throttled while never using its full quota, because unused per-CPU bandwidth slices expired at every period boundary — a design flaw an unrelated bug had accidentally been masking for five years.
+### [使い切る前に失効したCFS帯域スライス](war-stories/cfs-bandwidth-throttling.md) {#the-cfs-bandwidth-slice-that-expired-before-it-was-spent}
+**Linux 5.4（2019年11月）**
+`cpu.cfs_quota_us`の下にある、マルチスレッドでCPUバウンドでないアプリケーションが、クォータを使い切っていないのにスロットリングされることがあった。使われなかったCPUごとの帯域スライスが周期の境界ごとに失効していたためである。これは、無関係なバグが5年間にわたって偶然覆い隠していた設計上の欠陥であった。
 
-### [wake_wide(): A Packing Shortcut Two Workloads Wanted Removed, and Nobody Could Prove Was Safe To Remove](war-stories/wake-wide-heuristic.md) {#wake_wide-a-packing-shortcut-two-workloads-wanted-removed-and-nobody-could-prove-was-safe-to-remove}
-**LKML discussion, July 2017 — unresolved**
-A heuristic rewritten in 2015 to make the scheduler search wide for Facebook's producer-consumer workload also had a packing fallback that hurt `hackbench`'s all-to-all pattern — and a proposal to loosen that fallback, with no measured downside for either named workload, still stalled over an unquantified power-management cost.
+### [wake_wide(): 2つのワークロードが削除を望み、誰も削除しても安全だと証明できなかった詰め込みの近道](war-stories/wake-wide-heuristic.md) {#wake_wide-a-packing-shortcut-two-workloads-wanted-removed-and-nobody-could-prove-was-safe-to-remove}
+**LKMLでの議論、2017年7月 — 未解決**
+FacebookのProducer-Consumerワークロードのためにスケジューラが広く探索するよう2015年に書き直されたヒューリスティックには、`hackbench`の全対全パターンを害する詰め込みのフォールバックもあった。そのフォールバックを緩める提案は、名前の挙がったどちらのワークロードにも測定された欠点がなかったにもかかわらず、定量化されていない電力管理上のコストをめぐってなお停滞した。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | DEADLINE PI de-boost | newidle-balance cost | PSI waitqueue UAF | CFS bandwidth | wake_wide() |
+| パターン | DEADLINE PIの降格 | newidle-balanceのコスト | PSI待ちキューのUAF | CFS帯域 | wake_wide() |
 |---------|:---:|:---:|:---:|:---:|:---:|
 | CVE | Yes | No | Yes | No | No |
-| Root cause: state computed correctly once, then never re-derived after conditions changed | Yes | No | No | No | No |
-| Root cause: two subsystems' lifecycle assumptions didn't match | No | No | Yes | No | No |
-| Root cause: a fix for one bug masked (or exposed) an unrelated design flaw | No | Yes | No | Yes | No |
-| A clean fix exists and shipped | Yes | Yes | Yes | Yes | **No** |
-| Affects correctness of kernel-internal accounting, not just user-visible behavior | Yes | No | No | Yes | No |
+| 根本原因: 状態は一度正しく計算されたが、条件が変わった後に再導出されなかった | Yes | No | No | No | No |
+| 根本原因: 2つのサブシステムのライフサイクルに関する前提が食い違っていた | No | No | Yes | No | No |
+| 根本原因: あるバグの修正が無関係な設計上の欠陥を覆い隠した（または露呈させた） | No | Yes | No | Yes | No |
+| きれいな修正が存在し、出荷された | Yes | Yes | Yes | Yes | **No** |
+| ユーザーから見える挙動だけでなく、カーネル内部の会計の正しさに影響する | Yes | No | No | Yes | No |
 
-**Two of the five are genuine security bugs, and they fail in opposite ways.** The PSI waitqueue bug is a lifecycle mismatch between two subsystems that each manage a resource correctly on their own terms but disagree about when a shared object should die. The DEADLINE PI bug is a single subsystem's own state going stale across a transition it didn't know it needed to watch for. Neither is a classic bounds-check or type-confusion bug — both are consistency bugs in bookkeeping that only mattered once a specific sequence of otherwise-legitimate operations lined up.
+**5つのうち2つは本物のセキュリティバグであり、両者は正反対の形で失敗している。** PSI待ちキューのバグは、2つのサブシステム間のライフサイクルの不一致である。どちらのサブシステムも自分の流儀ではリソースを正しく管理しているが、共有オブジェクトがいつ消滅すべきかについて意見が食い違っている。DEADLINE PIのバグは、単一のサブシステム自身の状態が、監視が必要だと知らなかった遷移をまたいで古くなってしまったものである。どちらも古典的な境界チェックや型混同のバグではない。どちらも帳簿管理における一貫性のバグであり、それ自体は正当な操作の特定の並びが揃ったときにはじめて問題になった。
 
-**The two performance stories (CFS bandwidth, newidle-balance) share a shape: a fix for bug A silently changed the cost or availability of resource B, and nobody was specifically testing for that interaction until a real, unusual production workload found it.** Both took a genuinely non-CPU-bound, wakeup-heavy workload — Kubernetes-style interactive containers in one case, an intentionally do-nothing `schbench` configuration in the other — to surface, because both regressions are invisible to CPU-bound benchmarks.
+**2つの性能の物語（CFS帯域とnewidle-balance）は同じ形をしている。バグAの修正がリソースBのコストや可用性を黙って変え、本物の一風変わった本番ワークロードがそれを見つけるまで、誰もその相互作用を特にテストしていなかった。** どちらも表面化するには、本当にCPUバウンドでない、起床の多いワークロードが必要だった。一方はKubernetes的な対話型コンテナ、もう一方は意図的に何もしない`schbench`の構成である。どちらのリグレッションもCPUバウンドなベンチマークからは見えないからである。
 
-**wake_wide() is the odd one out, and included deliberately: not every scheduler war story ends with a commit hash.** It's the clearest illustration on this page that a fix which clearly helps the workload driving the discussion can still stall — not because it measurably hurts some other named workload, but because a cost nobody had data for (power management, in this case) was enough to make a widely-exercised heuristic too risky to touch.
+**wake_wide()は異色の存在であり、意図的に含めている。スケジューラの事件簿がすべてコミットハッシュで終わるわけではない。** これは、議論を牽引しているワークロードを明らかに助ける修正であっても停滞しうることを、このページで最も明確に示す例である。停滞したのは、他の名前の挙がったワークロードを測定可能なほど害するからではなく、誰もデータを持たないコスト（この場合は電力管理）があるだけで、広く使われているヒューリスティックに手を触れるのはリスクが高すぎるとされたからである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Scheduler Overview](README.md) — CFS, EEVDF, SCHED_DEADLINE, and load balancing
-- [Locking War Stories](../locking/war-stories.md) — priority-inheritance bugs from the mutex side of the same PI protocol the DEADLINE incident above depends on
-- [BPF War Stories](../bpf/war-stories.md) — a different kind of scheduler-adjacent subsystem's incident history, for contrast
+- [スケジューラの概要](README.md) — CFS、EEVDF、SCHED_DEADLINE、負荷分散
+- [ロックの事件簿](../locking/war-stories.md) — 上のDEADLINEのインシデントが依存しているのと同じPIプロトコルの、mutex側から見た優先度継承のバグ
+- [BPFの事件簿](../bpf/war-stories.md) — 対比のために、スケジューラに隣接する別種のサブシステムのインシデントの歴史

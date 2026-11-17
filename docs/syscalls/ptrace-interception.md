@@ -1,38 +1,38 @@
-# ptrace and Syscall Interception {#ptrace-and-syscall-interception}
+# ptraceとsyscallのインターセプト {#ptrace-and-syscall-interception}
 
-> How strace, debuggers, and seccomp-notify intercept syscalls
+> strace、デバッガ、seccomp-notifyがsyscallをインターセプトする仕組み
 
-## ptrace overview {#ptrace-overview}
+## ptraceの概要 {#ptrace-overview}
 
-`ptrace(2)` is the kernel mechanism that powers debuggers (`gdb`), tracers (`strace`), and system call
-supervisors. It lets one process (the tracer) inspect and modify the register state and memory of another
-(the tracee), and pause the tracee at specific events.
+`ptrace(2)` は、デバッガ（`gdb`）、トレーサ（`strace`）、システムコールスーパーバイザを支える
+カーネルの仕組みである。あるプロセス（トレーサ）が別のプロセス（トレーシー）のレジスタ状態とメモリを調べたり変更したりでき、
+特定のイベントでトレーシーを一時停止させることができる。
 
-Two ways to attach:
+アタッチ方法は2つある。
 
 ```c
-/* Tracee opts in — used by a process that forks a child to debug */
+/* トレーシー側がオプトインする — デバッグ対象の子をforkするプロセスが使う */
 ptrace(PTRACE_TRACEME, 0, NULL, NULL);
 
-/* Tracer attaches to an existing process (sends SIGSTOP) */
+/* トレーサが既存のプロセスにアタッチする（SIGSTOP を送る） */
 ptrace(PTRACE_ATTACH, target_pid, NULL, NULL);
-/* Modern equivalent (doesn't require SIGSTOP to stabilize) */
+/* 現代的な同等手段（安定化のための SIGSTOP を必要としない） */
 ptrace(PTRACE_SEIZE, target_pid, NULL, 0);
 ```
 
-After attachment, the tracee enters a **ptrace-stop** when it hits a watched event (syscall, signal, exec,
-fork, clone). In ptrace-stop, the tracee is paused and the tracer can call `waitpid()` to collect the stop
-reason, then inspect or modify state before resuming.
+アタッチ後、トレーシーは監視対象のイベント（syscall、シグナル、exec、
+fork、clone）に到達すると**ptrace-stop**に入る。ptrace-stop中のトレーシーは一時停止しており、トレーサは `waitpid()` を呼んで停止理由を
+取得し、再開する前に状態を調べたり変更したりできる。
 
-## PTRACE_SYSCALL: how strace works {#ptrace_syscall-how-strace-works}
+## PTRACE_SYSCALL: straceの仕組み {#ptrace_syscall-how-strace-works}
 
 ```c
-/* Resume the tracee, but stop again at the next syscall entry or exit */
+/* トレーシーを再開するが、次のsyscallのエントリまたはイグジットで再び停止させる */
 ptrace(PTRACE_SYSCALL, pid, NULL, NULL);
 ```
 
-This causes the kernel to stop the tracee **twice per syscall**: once on entry (before the syscall executes)
-and once on exit (after the kernel sets the return value). `strace` uses this to log every syscall:
+これにより、カーネルはトレーシーを**syscallごとに2回**停止させる。1回はエントリ時（syscallの実行前）、
+もう1回はイグジット時（カーネルが戻り値を設定した後）である。`strace` はこれを使ってすべてのsyscallを記録する。
 
 ```
 waitpid(pid, &status)     /* wait for entry-stop */
@@ -46,32 +46,32 @@ ptrace(PTRACE_GETREGS, pid, NULL, &regs)
 ptrace(PTRACE_SYSCALL, pid, NULL, NULL)  /* resume to next entry-stop */
 ```
 
-Because `strace` calls `waitpid()` twice per syscall, tracing doubles the number of context switches and is
-costly. A traced process can be 100x slower on syscall-heavy workloads.
+`strace` はsyscallごとに `waitpid()` を2回呼ぶので、トレーシングによってコンテキストスイッチの回数は倍になり、
+コストが高い。syscallを多用するワークロードでは、トレースされたプロセスは100倍遅くなることもある。
 
-## Syscall-stops: entry and exit {#syscall-stops-entry-and-exit}
+## syscall-stop: エントリとイグジット {#syscall-stops-entry-and-exit}
 
-The kernel notifies ptrace of syscall boundaries via two functions declared as `static inline` in
-`include/linux/ptrace.h` (both call into the shared `ptrace_report_syscall()` helper):
+カーネルは、`include/linux/ptrace.h` で `static inline` として宣言された2つの関数を介して、syscallの境界を
+ptraceに通知する（どちらも共通の `ptrace_report_syscall()` ヘルパーを呼ぶ）。
 
-- `ptrace_report_syscall_permit_entry(regs)` — called from `syscall_enter_from_user_mode_work()` before the syscall handler runs. Returns `bool`: if it returns false, the caller must abort the syscall entirely rather than dispatch it.
-- `ptrace_report_syscall_exit(regs, step)` — called from `syscall_exit_to_user_mode_work()` after the return value is set. If `step` is nonzero (single-step/block-step is active), it reports via `user_single_step_report()` instead of the normal syscall-stop path.
+- `ptrace_report_syscall_permit_entry(regs)` — syscallハンドラの実行前に `syscall_enter_from_user_mode_work()` から呼ばれる。`bool` を返し、falseが返された場合、呼び出し元はsyscallをディスパッチせずに完全に中止しなければならない。
+- `ptrace_report_syscall_exit(regs, step)` — 戻り値が設定された後に `syscall_exit_to_user_mode_work()` から呼ばれる。`step` が非ゼロ（シングルステップ/ブロックステップが有効）の場合、通常のsyscall-stopのパスではなく `user_single_step_report()` を介して報告する。
 
-`ptrace_report_syscall()` calls `ptrace_notify()`, which sets the tracee's stop code to `(SIGTRAP | 0x80)` (the high bit
-distinguishes a syscall-stop from a plain signal-stop) and sends `SIGCHLD` to the tracer.
+`ptrace_report_syscall()` は `ptrace_notify()` を呼ぶ。これはトレーシーの停止コードを `(SIGTRAP | 0x80)` に設定し（最上位ビットは
+syscall-stopを通常のシグナル停止と区別する）、トレーサに `SIGCHLD` を送る。
 
-## Reading and modifying syscall args {#reading-and-modifying-syscall-args}
+## syscall引数の読み取りと変更 {#reading-and-modifying-syscall-args}
 
-At entry-stop, the syscall arguments are in `pt_regs`:
+エントリ停止時点では、syscallの引数は `pt_regs` にある。
 
 ```c
 struct user_regs_struct regs;
 ptrace(PTRACE_GETREGS, pid, NULL, &regs);
 
-/* Syscall number */
+/* syscall番号 */
 long syscall_nr = regs.orig_rax;
 
-/* Arguments (x86-64 calling convention for syscalls) */
+/* 引数（syscallにおけるx86-64の呼び出し規約） */
 unsigned long arg1 = regs.rdi;
 unsigned long arg2 = regs.rsi;
 unsigned long arg3 = regs.rdx;
@@ -80,38 +80,38 @@ unsigned long arg5 = regs.r8;
 unsigned long arg6 = regs.r9;
 ```
 
-To change the syscall number (e.g., to replace `unlink` with a no-op):
+syscall番号を変更するには（例: `unlink` を何もしない処理に置き換える）:
 
 ```c
-regs.orig_rax = __NR_getpid;   /* substitute a harmless syscall */
+regs.orig_rax = __NR_getpid;   /* 無害なsyscallに差し替える */
 ptrace(PTRACE_SETREGS, pid, NULL, &regs);
 ```
 
-To cancel the syscall entirely, set `orig_rax` to `-1`. `do_syscall_64()` only falls back to
-`__x64_sys_ni_syscall()` (`-ENOSYS`) for an out-of-range syscall number *other than* `-1` — a `-1`
-number skips dispatch entirely, leaving `regs->ax` exactly as the tracer set it. This is the actual
-mechanism for injecting a return value or no-op'ing a syscall via ptrace: set `orig_rax = -1` and set
-`rax` to whatever return value you want the traced process to see.
+syscallを完全に取り消すには、`orig_rax` を `-1` に設定する。`do_syscall_64()` が
+`__x64_sys_ni_syscall()`（`-ENOSYS`）にフォールバックするのは、`-1` *以外の*範囲外のsyscall番号の場合だけである — `-1`
+の番号はディスパッチを完全にスキップし、`regs->ax` はトレーサが設定したとおりのまま残る。これが、
+ptraceを介して戻り値を注入したりsyscallを無効化したりするための実際の仕組みである。`orig_rax = -1` を設定し、
+トレース対象のプロセスに見せたい戻り値を `rax` に設定すればよい。
 
-## SYSCALL_WORK_SYSCALL_TRACE {#syscallworksyscall_trace}
+## SYSCALL_WORK_SYSCALL_TRACE {#syscall_work_syscall_trace}
 
-The flag that triggers ptrace syscall-stops is `SYSCALL_WORK_SYSCALL_TRACE` in the task's
-`thread_info.syscall_work`. It is set by `ptrace_resume()` when a `PTRACE_SYSCALL` request is issued
-(not at attach time — a plain `PTRACE_CONT` never sets it), and cleared in `__ptrace_unlink()` when the
-tracer detaches. The kernel checks this flag in `syscall_enter_from_user_mode()` and
-`syscall_exit_to_user_mode()`:
+ptraceのsyscall-stopを引き起こすフラグは、タスクの `thread_info.syscall_work` にある
+`SYSCALL_WORK_SYSCALL_TRACE` である。これは `PTRACE_SYSCALL` リクエストが発行されたときに `ptrace_resume()` が設定し
+（アタッチ時ではない — 単なる `PTRACE_CONT` では設定されない）、トレーサがデタッチするときに `__ptrace_unlink()` でクリアされる。
+カーネルはこのフラグを `syscall_enter_from_user_mode()` と
+`syscall_exit_to_user_mode()` でチェックする。
 
 ```c
-/* include/linux/entry-common.h (simplified — the real function also handles
- * syscall user dispatch and rseq time-slice extensions, omitted here) */
+/* include/linux/entry-common.h（簡略化 — 実際の関数はsyscall user dispatchと
+ * rseqのタイムスライス拡張も扱うが、ここでは省略） */
 static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned long work,
                                                  long syscall)
 {
     if (work & (SYSCALL_WORK_SYSCALL_TRACE | SYSCALL_WORK_SYSCALL_EMU)) {
         if (!arch_ptrace_report_syscall_permit_entry(regs) ||
             (work & SYSCALL_WORK_SYSCALL_EMU))
-            return false;   /* caller must abort the syscall */
-        work = READ_ONCE(current_thread_info()->syscall_work); /* ptrace may have changed it */
+            return false;   /* 呼び出し元はsyscallを中止しなければならない */
+        work = READ_ONCE(current_thread_info()->syscall_work); /* ptrace が変更したかもしれない */
     }
     if (work & SYSCALL_WORK_SECCOMP && !__seccomp_permit_syscall())
         return false;
@@ -119,19 +119,19 @@ static __always_inline long syscall_trace_enter(struct pt_regs *regs, unsigned l
         trace_syscall_enter(regs);
     if (audit_context())
         syscall_enter_audit(regs);
-    return true;   /* proceed with the syscall */
+    return true;   /* syscallを続行する */
 }
 ```
 
-`arch_ptrace_report_syscall_permit_entry()` is an architecture override point that, unless an arch defines its own, falls back directly to `ptrace_report_syscall_permit_entry()` from the previous section.
+`arch_ptrace_report_syscall_permit_entry()` はアーキテクチャによるオーバーライドポイントであり、アーキテクチャが独自に定義しない限り、前節の `ptrace_report_syscall_permit_entry()` にそのままフォールバックする。
 
-The same work-flags mechanism also carries `SYSCALL_WORK_SECCOMP` (for seccomp filtering) and
-`SYSCALL_WORK_SYSCALL_AUDIT` (for the audit subsystem), so all three can coexist.
+同じワークフラグの仕組みは、`SYSCALL_WORK_SECCOMP`（seccompフィルタリング用）と
+`SYSCALL_WORK_SYSCALL_AUDIT`（auditサブシステム用）も運ぶので、3つすべてが共存できる。
 
-## PTRACE_GET_SYSCALL_INFO (Linux 5.3) {#ptracegetsyscall_info-linux-53}
+## PTRACE_GET_SYSCALL_INFO（Linux 5.3） {#ptrace_get_syscall_info-linux-53}
 
-Before Linux 5.3, tracers had to call `PTRACE_GETREGS` and infer the stop type from the waitpid status.
-Linux 5.3 added `PTRACE_GET_SYSCALL_INFO` (commit `201766a20e30f982ccfe36bebfad9602c3ff574a`), which returns a structured description:
+Linux 5.3より前は、トレーサは `PTRACE_GETREGS` を呼び、waitpidのステータスから停止の種類を推測しなければならなかった。
+Linux 5.3は `PTRACE_GET_SYSCALL_INFO`（コミット `201766a20e30f982ccfe36bebfad9602c3ff574a`）を追加した。これは構造化された記述を返す。
 
 ```c
 /* include/uapi/linux/ptrace.h */
@@ -143,7 +143,7 @@ struct ptrace_syscall_info {
     __u64 instruction_pointer;
     __u64 stack_pointer;
     union {
-        struct { /* PTRACE_SYSCALL_INFO_ENTRY or SECCOMP */
+        struct { /* PTRACE_SYSCALL_INFO_ENTRY または SECCOMP */
             __u64 nr;
             __u64 args[6];
         } entry;
@@ -160,7 +160,7 @@ struct ptrace_syscall_info {
     };
 };
 
-/* Usage */
+/* 使用例 */
 struct ptrace_syscall_info info;
 ptrace(PTRACE_GET_SYSCALL_INFO, pid, sizeof(info), &info);
 if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
@@ -168,116 +168,116 @@ if (info.op == PTRACE_SYSCALL_INFO_ENTRY) {
 }
 ```
 
-This is the interface used by modern `strace` (5.1+) instead of `PTRACE_GETREGS`.
+これは、現代の `strace`（5.1以降）が `PTRACE_GETREGS` の代わりに使っているインターフェースである。
 
-## ptrace events: PTRACE_O_TRACEFORK and friends {#ptrace-events-ptraceotracefork-and-friends}
+## ptraceイベント: PTRACE_O_TRACEFORKとその仲間 {#ptrace-events-ptrace_o_tracefork-and-friends}
 
-The tracer can request events beyond syscall-stops by setting ptrace options:
+トレーサは、ptraceオプションを設定することで、syscall-stop以外のイベントも要求できる。
 
 ```c
 ptrace(PTRACE_SETOPTIONS, pid, 0,
-       PTRACE_O_TRACEFORK   |  /* stop on fork() */
-       PTRACE_O_TRACEVFORK  |  /* stop on vfork() */
-       PTRACE_O_TRACECLONE  |  /* stop on clone() */
-       PTRACE_O_TRACEEXEC   |  /* stop after execve() */
-       PTRACE_O_TRACEEXIT   |  /* stop before process exit */
-       PTRACE_O_TRACESECCOMP); /* stop on SECCOMP_RET_TRACE */
+       PTRACE_O_TRACEFORK   |  /* fork() で停止 */
+       PTRACE_O_TRACEVFORK  |  /* vfork() で停止 */
+       PTRACE_O_TRACECLONE  |  /* clone() で停止 */
+       PTRACE_O_TRACEEXEC   |  /* execve() の後に停止 */
+       PTRACE_O_TRACEEXIT   |  /* プロセス終了の前に停止 */
+       PTRACE_O_TRACESECCOMP); /* SECCOMP_RET_TRACE で停止 */
 ```
 
-When one of these events fires, `waitpid()` returns a status where
-`(status >> 8) == (SIGTRAP | (PTRACE_EVENT_xxx << 8))`. For example, a fork event returns
-`PTRACE_EVENT_FORK`. The tracer can then call `ptrace(PTRACE_GETEVENTMSG, pid, NULL, &msg)` to retrieve
-the new child's PID.
+これらのイベントのいずれかが発生すると、`waitpid()` は
+`(status >> 8) == (SIGTRAP | (PTRACE_EVENT_xxx << 8))` となるステータスを返す。たとえば、forkイベントでは
+`PTRACE_EVENT_FORK` が返る。その後、トレーサは `ptrace(PTRACE_GETEVENTMSG, pid, NULL, &msg)` を呼んで
+新しい子のPIDを取得できる。
 
-## seccomp-notify: a modern alternative to ptrace {#seccomp-notify-a-modern-alternative-to-ptrace}
+## seccomp-notify: ptraceの現代的な代替 {#seccomp-notify-a-modern-alternative-to-ptrace}
 
-`SECCOMP_RET_USER_NOTIF` (added in Linux 5.0, `include/uapi/linux/seccomp.h`) lets a privileged supervisor
-intercept syscalls without the overhead of ptrace. Instead of stopping the tracee and waking the tracer, the
-kernel sends a notification to a file descriptor, and the tracee sleeps until the supervisor replies.
+`SECCOMP_RET_USER_NOTIF`（Linux 5.0で追加、`include/uapi/linux/seccomp.h`）により、特権を持つスーパーバイザは
+ptraceのオーバーヘッドなしにsyscallをインターセプトできる。トレーシーを停止してトレーサを起こす代わりに、
+カーネルはファイルディスクリプタに通知を送り、トレーシーはスーパーバイザが応答するまでスリープする。
 
-### Installing the filter {#installing-the-filter}
+### フィルタのインストール {#installing-the-filter}
 
 ```c
-/* In the process to be supervised (or before exec) */
+/* 監視対象のプロセス内で（または exec の前に） */
 int notif_fd = seccomp(SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_NEW_LISTENER,
                        &prog);
-/* notif_fd is a new file descriptor — pass it to the supervisor via SCM_RIGHTS */
+/* notif_fd は新しいファイルディスクリプタ — SCM_RIGHTS でスーパーバイザに渡す */
 ```
 
-The BPF program returns `SECCOMP_RET_USER_NOTIF` for syscalls to intercept and `SECCOMP_RET_ALLOW` for
-everything else.
+BPFプログラムは、インターセプトするsyscallに対しては `SECCOMP_RET_USER_NOTIF` を、
+それ以外のすべてに対しては `SECCOMP_RET_ALLOW` を返す。
 
-### Receiving and responding to notifications {#receiving-and-responding-to-notifications}
+### 通知の受信と応答 {#receiving-and-responding-to-notifications}
 
 ```c
 /* include/uapi/linux/seccomp.h */
 struct seccomp_notif {
-    __u64   id;         /* unique notification ID */
-    __u32   pid;        /* PID of the triggering task */
+    __u64   id;         /* 一意な通知ID */
+    __u32   pid;        /* 通知を引き起こしたタスクのPID */
     __u32   flags;
-    struct seccomp_data data;  /* syscall number + args + arch */
+    struct seccomp_data data;  /* syscall番号 + 引数 + アーキテクチャ */
 };
 
 struct seccomp_notif_resp {
-    __u64   id;         /* must match the request */
-    __s64   val;        /* return value to inject */
-    __s32   error;      /* errno to inject (0 = use val) */
+    __u64   id;         /* リクエストと一致しなければならない */
+    __s64   val;        /* 注入する戻り値 */
+    __s32   error;      /* 注入するerrno（0 = val を使う） */
     __u32   flags;      /* SECCOMP_USER_NOTIF_FLAG_CONTINUE */
 };
 
-/* Supervisor loop */
+/* スーパーバイザのループ */
 struct seccomp_notif req;
 struct seccomp_notif_resp resp = {};
 
-ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_RECV, &req);   /* blocks */
-/* Inspect req.data.nr (syscall nr) and req.data.args[] */
+ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_RECV, &req);   /* ブロックする */
+/* req.data.nr（syscall番号）と req.data.args[] を調べる */
 
 resp.id    = req.id;
 resp.error = 0;
-resp.val   = 42;   /* inject return value */
+resp.val   = 42;   /* 戻り値を注入する */
 ioctl(notif_fd, SECCOMP_IOCTL_NOTIF_SEND, &resp);
 ```
 
-The suspended task in the supervised process wakes up and sees `42` as the syscall return value. This
-avoids the two context switches per syscall that ptrace requires.
+監視対象プロセス内の一時停止していたタスクが起き、syscallの戻り値として `42` を受け取る。これにより、
+ptraceが必要とするsyscallごとの2回のコンテキストスイッチが回避される。
 
-Container managers such as `bubblewrap` and `systemd`'s `RootDirectory=` sandboxing use seccomp-notify to
-implement syscall emulation (e.g., faking `mount()` for unprivileged containers).
+`bubblewrap` や `systemd` の `RootDirectory=` サンドボックスなどのコンテナマネージャは、seccomp-notifyを使って
+syscallのエミュレーション（例: 非特権コンテナ向けに `mount()` を偽装する）を実装している。
 
-### SECCOMP_USER_NOTIF_FLAG_CONTINUE {#seccompusernotifflagcontinue}
+### SECCOMP_USER_NOTIF_FLAG_CONTINUE {#seccomp_user_notif_flag_continue}
 
-If the supervisor sets `SECCOMP_USER_NOTIF_FLAG_CONTINUE` in `resp.flags`, the kernel executes the syscall
-normally instead of injecting a return value. This is used when the supervisor just wants to log the call
-without blocking it.
+スーパーバイザが `resp.flags` に `SECCOMP_USER_NOTIF_FLAG_CONTINUE` を設定すると、カーネルは戻り値を注入する代わりに
+syscallを通常どおり実行する。これは、スーパーバイザが呼び出しをブロックせずに記録だけしたい場合に
+使われる。
 
-## perf syscall tracing {#perf-syscall-tracing}
+## perfによるsyscallトレーシング {#perf-syscall-tracing}
 
 ```bash
-# Raw syscall tracepoints (all syscalls, entry only)
+# 生のsyscall tracepoint（全syscall、エントリのみ）
 perf record -e raw_syscalls:sys_enter -- my_program
 
-# Fine-grained: only openat() entry
+# きめ細かく: openat() のエントリのみ
 perf record -e syscalls:sys_enter_openat -- my_program
 
-# Count syscalls during an ls
+# ls 実行中のsyscallを数える
 perf stat -e 'syscalls:sys_enter_*' -- ls 2>&1 | head -20
 ```
 
-`raw_syscalls:sys_enter` fires on every syscall and provides the number and first argument. The
-`syscalls:sys_enter_<name>` tracepoints fire only for the named syscall and decode all arguments
-symbolically. Both are standard ftrace tracepoints, defined by the `SYSCALL_METADATA` macro that
-`SYSCALL_DEFINE` emits.
+`raw_syscalls:sys_enter` はすべてのsyscallで発火し、番号と第1引数を提供する。
+`syscalls:sys_enter_<name>` tracepointは指定したsyscallでのみ発火し、すべての引数を
+シンボリックにデコードする。どちらも標準のftrace tracepointであり、`SYSCALL_DEFINE` が生成する
+`SYSCALL_METADATA` マクロによって定義される。
 
-## eBPF tracepoints for syscalls {#ebpf-tracepoints-for-syscalls}
+## syscall用のeBPF tracepoint {#ebpf-tracepoints-for-syscalls}
 
-BPF programs can attach to syscall tracepoints using libbpf:
+BPFプログラムは、libbpfを使ってsyscallのtracepointにアタッチできる。
 
 ```c
-/* BPF program — attach to openat() entry */
+/* BPFプログラム — openat() のエントリにアタッチする */
 SEC("tracepoint/syscalls/sys_enter_openat")
 int trace_openat_entry(struct trace_event_raw_sys_enter *ctx)
 {
-    /* ctx->args[0] = dirfd, ctx->args[1] = filename ptr,
+    /* ctx->args[0] = dirfd, ctx->args[1] = ファイル名へのポインタ,
        ctx->args[2] = flags, ctx->args[3] = mode */
     char fname[256];
     bpf_probe_read_user_str(fname, sizeof(fname), (void *)ctx->args[1]);
@@ -286,71 +286,71 @@ int trace_openat_entry(struct trace_event_raw_sys_enter *ctx)
 }
 ```
 
-The struct `trace_event_raw_sys_enter` is generated by BTF from the tracepoint format file at
-`/sys/kernel/tracing/events/syscalls/sys_enter_openat/format`. The `args[]` array contains the raw
-register values in argument order.
+構造体 `trace_event_raw_sys_enter` は、
+`/sys/kernel/tracing/events/syscalls/sys_enter_openat/format` にあるtracepointのフォーマットファイルからBTFによって生成される。`args[]` 配列には、
+引数の順に生のレジスタ値が入っている。
 
-For syscall exit:
+syscallのイグジットの場合:
 
 ```c
 SEC("tracepoint/syscalls/sys_exit_openat")
 int trace_openat_exit(struct trace_event_raw_sys_exit *ctx)
 {
-    long ret = ctx->ret;   /* return value (negative = -errno) */
+    long ret = ctx->ret;   /* 戻り値（負 = -errno） */
     if (ret < 0)
         bpf_printk("openat failed: %ld\n", ret);
     return 0;
 }
 ```
 
-## ftrace: tracing syscall handler functions {#ftrace-tracing-syscall-handler-functions}
+## ftrace: syscallハンドラ関数のトレーシング {#ftrace-tracing-syscall-handler-functions}
 
 ```bash
-# Trace the sys_openat function via function tracer
+# function トレーサで sys_openat 関数をトレースする
 echo sys_openat > /sys/kernel/tracing/set_ftrace_filter
 echo function > /sys/kernel/tracing/current_tracer
 echo 1 > /sys/kernel/tracing/tracing_on
 cat /sys/kernel/tracing/trace_pipe
 ```
 
-Note that the function tracer traces `__x64_sys_openat` (the pt_regs wrapper), not `do_sys_openat2()` (the
-actual implementation). To trace the implementation, add it explicitly:
+functionトレーサがトレースするのは `__x64_sys_openat`（pt_regsラッパー）であり、`do_sys_openat2()`（
+実際の実装）ではないことに注意すること。実装をトレースするには、明示的に追加する。
 
 ```bash
 echo '__x64_sys_openat do_sys_openat2' > /sys/kernel/tracing/set_ftrace_filter
 ```
 
-For syscall function graphs (showing the entire call tree under a syscall):
+syscallの関数グラフ（syscall配下の呼び出しツリー全体を表示する）の場合:
 
 ```bash
 echo function_graph > /sys/kernel/tracing/current_tracer
 echo __x64_sys_openat > /sys/kernel/tracing/set_graph_function
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ptrace.h) — `ptrace_report_syscall_permit_entry()`, `ptrace_report_syscall_exit()`, and the shared `ptrace_report_syscall()` helper that calls `ptrace_notify()`
-- [include/linux/entry-common.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/entry-common.h) — `syscall_trace_enter()`, `syscall_enter_from_user_mode_work()`, and `syscall_exit_to_user_mode_work()`, which check `SYSCALL_WORK_SYSCALL_TRACE` and drive ptrace, seccomp, and audit in sequence
-- [include/uapi/linux/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/ptrace.h) — `struct ptrace_syscall_info` and the `PTRACE_GET_SYSCALL_INFO` request
-- [include/uapi/linux/seccomp.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/seccomp.h) — `struct seccomp_notif` / `struct seccomp_notif_resp`, `SECCOMP_RET_USER_NOTIF`, `SECCOMP_USER_NOTIF_FLAG_CONTINUE`
-- [kernel/seccomp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/seccomp.c) — `seccomp_do_user_notification()` and the `SECCOMP_IOCTL_NOTIF_RECV`/`SECCOMP_IOCTL_NOTIF_SEND` ioctl handling
-- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()`/`do_syscall_x64()`: how a tracer-modified `orig_rax` is dispatched (or skipped)
-- Commit [`201766a20e30f982ccfe36bebfad9602c3ff574a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=201766a20e30f982ccfe36bebfad9602c3ff574a) ("ptrace: add PTRACE_GET_SYSCALL_INFO request") — landed in the Linux 5.3 merge window
+- [include/linux/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ptrace.h) — `ptrace_report_syscall_permit_entry()`、`ptrace_report_syscall_exit()`、および `ptrace_notify()` を呼ぶ共通の `ptrace_report_syscall()` ヘルパー
+- [include/linux/entry-common.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/entry-common.h) — `syscall_trace_enter()`、`syscall_enter_from_user_mode_work()`、`syscall_exit_to_user_mode_work()`。`SYSCALL_WORK_SYSCALL_TRACE` をチェックし、ptrace、seccomp、auditを順に駆動する
+- [include/uapi/linux/ptrace.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/ptrace.h) — `struct ptrace_syscall_info` と `PTRACE_GET_SYSCALL_INFO` リクエスト
+- [include/uapi/linux/seccomp.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/seccomp.h) — `struct seccomp_notif` / `struct seccomp_notif_resp`、`SECCOMP_RET_USER_NOTIF`、`SECCOMP_USER_NOTIF_FLAG_CONTINUE`
+- [kernel/seccomp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/seccomp.c) — `seccomp_do_user_notification()` と、`SECCOMP_IOCTL_NOTIF_RECV`/`SECCOMP_IOCTL_NOTIF_SEND` のioctl処理
+- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — `do_syscall_64()`/`do_syscall_x64()`: トレーサが変更した `orig_rax` がどのようにディスパッチされる（またはスキップされる）か
+- コミット [`201766a20e30f982ccfe36bebfad9602c3ff574a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=201766a20e30f982ccfe36bebfad9602c3ff574a)（"ptrace: add PTRACE_GET_SYSCALL_INFO request"）— Linux 5.3のマージウィンドウで取り込まれた
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`ptrace(2)`](https://man7.org/linux/man-pages/man2/ptrace.2.html) — full interface reference: syscall-stop, `PTRACE_SETOPTIONS`, `PTRACE_O_TRACESYSGOOD`, `PTRACE_GET_SYSCALL_INFO`
-- [`seccomp(2)`](https://man7.org/linux/man-pages/man2/seccomp.2.html) — `SECCOMP_SET_MODE_FILTER`, `SECCOMP_FILTER_FLAG_NEW_LISTENER`, `SECCOMP_RET_USER_NOTIF`
-- [`seccomp_unotify(2)`](https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html) — the user-space notification protocol: `SECCOMP_IOCTL_NOTIF_RECV`/`SEND`, `struct seccomp_notif`/`seccomp_notif_resp`, `SECCOMP_USER_NOTIF_FLAG_CONTINUE`
+- [`ptrace(2)`](https://man7.org/linux/man-pages/man2/ptrace.2.html) — インターフェースの完全なリファレンス: syscall-stop、`PTRACE_SETOPTIONS`、`PTRACE_O_TRACESYSGOOD`、`PTRACE_GET_SYSCALL_INFO`
+- [`seccomp(2)`](https://man7.org/linux/man-pages/man2/seccomp.2.html) — `SECCOMP_SET_MODE_FILTER`、`SECCOMP_FILTER_FLAG_NEW_LISTENER`、`SECCOMP_RET_USER_NOTIF`
+- [`seccomp_unotify(2)`](https://man7.org/linux/man-pages/man2/seccomp_unotify.2.html) — ユーザー空間通知のプロトコル: `SECCOMP_IOCTL_NOTIF_RECV`/`SEND`、`struct seccomp_notif`/`seccomp_notif_resp`、`SECCOMP_USER_NOTIF_FLAG_CONTINUE`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Syscall Entry Path](syscall-entry.md) — `entry_SYSCALL_64`, `pt_regs`, and the `do_syscall_64()` dispatch this page's tracer hooks run inside
-- [SYSCALL_DEFINE and Dispatch](syscall-define.md) — how `SYSCALL_DEFINE` wires a syscall into the dispatch table
-- [Syscall Auditing](audit.md) — `SYSCALL_WORK_SYSCALL_AUDIT` and the audit subsystem's own entry/exit hooks
+- [syscallのエントリパス](syscall-entry.md) — `entry_SYSCALL_64`、`pt_regs`、そしてこのページのトレーサフックが実行される場である `do_syscall_64()` のディスパッチ
+- [SYSCALL_DEFINEとディスパッチ](syscall-define.md) — `SYSCALL_DEFINE` がsyscallをディスパッチテーブルにどう組み込むか
+- [syscallの監査](audit.md) — `SYSCALL_WORK_SYSCALL_AUDIT` と、auditサブシステム独自のエントリ/イグジットフック
 
-### External {#external}
+### 外部資料 {#external}
 
-- [seccomp BPF (SECCOMP_MODE_FILTER)](https://docs.kernel.org/userspace-api/seccomp_filter.html) — kernel documentation for `SECCOMP_RET_USER_NOTIF`, the notification structs, and the ioctl protocol
+- [seccomp BPF (SECCOMP_MODE_FILTER)](https://docs.kernel.org/userspace-api/seccomp_filter.html) — `SECCOMP_RET_USER_NOTIF`、通知用の構造体、ioctlプロトコルについてのカーネルドキュメント

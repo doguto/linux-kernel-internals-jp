@@ -1,65 +1,65 @@
-# RT Scheduler: SCHED_FIFO and SCHED_RR {#rt-scheduler-schedfifo-and-schedrr}
+# RTスケジューラ: SCHED_FIFOとSCHED_RR {#rt-scheduler-sched_fifo-and-sched_rr}
 
-> Hard real-time scheduling with priority-based preemption
+> 優先度ベースのプリエンプションによるハードリアルタイムスケジューリング
 
-## What the RT scheduler provides {#what-the-rt-scheduler-provides}
+## RTスケジューラが提供するもの {#what-the-rt-scheduler-provides}
 
-The RT scheduler (`rt_sched_class`) gives tasks strict priority guarantees: an RT task at priority N will always preempt any fair-class task and any RT task at priority < N. There is no fairness, no vruntime, no time-sharing between tasks of different priorities — the highest-priority runnable task runs, period.
+RTスケジューラ（`rt_sched_class`）は、タスクに厳格な優先度の保証を与える。優先度NのRTタスクは、どのfairクラスのタスクよりも、また優先度がNより低いどのRTタスクよりも、常に優先してプリエンプトする。異なる優先度のタスク間には、公平性も、vruntimeも、時分割もない。実行可能なタスクのうち最も優先度の高いものが実行される、ただそれだけである。
 
-Two policies share the RT class:
+2つのポリシーがRTクラスを共有している:
 
-| Policy | Timeslice | Preemption |
+| ポリシー | タイムスライス | プリエンプション |
 |--------|-----------|------------|
-| `SCHED_FIFO` | None — runs until it blocks or yields | By higher-priority task only |
-| `SCHED_RR` | 100ms (default) | By higher-priority task, or same-priority task when slice expires |
+| `SCHED_FIFO` | なし — ブロックするかyieldするまで実行される | より高い優先度のタスクによってのみ |
+| `SCHED_RR` | 100ms（デフォルト） | より高い優先度のタスクによって、またはスライスが満了したときに同じ優先度のタスクによって |
 
-RT priorities range from 1 (lowest) to 99 (highest). This is the reverse of nice values: higher number = higher priority.
+RTの優先度は1（最低）から99（最高）の範囲である。これはnice値の逆で、数値が大きいほど優先度が高い。
 
-## The RT runqueue {#the-rt-runqueue}
+## RTランキュー {#the-rt-runqueue}
 
 ```c
 // kernel/sched/sched.h
 struct rt_prio_array {
-    DECLARE_BITMAP(bitmap, MAX_RT_PRIO + 1); // 101-bit bitmap (+1 for delimiter)
-    struct list_head queue[MAX_RT_PRIO];     // 100 per-priority FIFO queues
+    DECLARE_BITMAP(bitmap, MAX_RT_PRIO + 1); // 101ビットのビットマップ（+1は区切り用）
+    struct list_head queue[MAX_RT_PRIO];     // 優先度ごとの100個のFIFOキュー
 };
 
 struct rt_rq {
-    struct rt_prio_array active;    // ready-to-run tasks by priority
-    unsigned int         rt_nr_running;  // total runnable RT tasks
-    int                  rt_queued;      // is this rq on the overload list?
-    // (throttling fields when CONFIG_RT_GROUP_SCHED)
+    struct rt_prio_array active;    // 優先度ごとの実行可能なタスク
+    unsigned int         rt_nr_running;  // 実行可能なRTタスクの総数
+    int                  rt_queued;      // このrqはオーバーロードリストに載っているか？
+    // （CONFIG_RT_GROUP_SCHEDのときはスロットリング用のフィールド）
 };
 ```
 
-`MAX_RT_PRIO = 100` (defined in `include/linux/sched/prio.h`). The bitmap has one bit per priority level — when a task at priority P becomes runnable, bit P is set. Task selection is:
+`MAX_RT_PRIO = 100`（`include/linux/sched/prio.h`で定義）。ビットマップは優先度レベルごとに1ビットを持つ。優先度Pのタスクが実行可能になると、ビットPがセットされる。タスクの選択は次のとおりである:
 
 ```c
 int idx = sched_find_first_bit(rt_rq->active.bitmap);
-// idx is the highest-priority non-empty queue
+// idxは空でないキューのうち最も優先度が高いもの
 next = list_first_entry(&rt_rq->active.queue[idx], ...);
 ```
 
-This is O(1) regardless of how many RT tasks exist — the bitmap scan is a single hardware instruction (`bsf`/`bsr` on x86).
+これはRTタスクがいくつあってもO(1)である。ビットマップの走査は1つのハードウェア命令（x86では`bsf`/`bsr`）で済む。
 
-## struct sched_rt_entity {#struct-schedrtentity}
+## struct sched_rt_entity {#struct-sched_rt_entity}
 
-Every RT task has a `sched_rt_entity` embedded in its `task_struct`:
+すべてのRTタスクは、`task_struct`に埋め込まれた`sched_rt_entity`を持つ:
 
 ```c
 // include/linux/sched.h
 struct sched_rt_entity {
-    struct list_head    run_list;       // node in priority queue
-    unsigned long       timeout;        // RLIMIT_RTTIME watchdog
-    unsigned long       watchdog_stamp; // jiffies at last check
-    unsigned int        time_slice;     // remaining RR timeslice
-    unsigned short      on_rq;          // currently queued?
-    unsigned short      on_list;        // on active priority list?
-    // (group scheduling fields when CONFIG_RT_GROUP_SCHED)
+    struct list_head    run_list;       // 優先度キュー内のノード
+    unsigned long       timeout;        // RLIMIT_RTTIMEのウォッチドッグ
+    unsigned long       watchdog_stamp; // 最後にチェックしたときのjiffies
+    unsigned int        time_slice;     // RRタイムスライスの残り
+    unsigned short      on_rq;          // 現在キューに入っているか？
+    unsigned short      on_list;        // アクティブな優先度リストに載っているか？
+    // （CONFIG_RT_GROUP_SCHEDのときはグループスケジューリング用のフィールド）
 };
 ```
 
-## Task selection: pick_next_task_rt() {#task-selection-picknexttask_rt}
+## タスクの選択: pick_next_task_rt() {#task-selection-pick_next_task_rt}
 
 ```c
 // kernel/sched/rt.c
@@ -72,11 +72,11 @@ static struct task_struct *pick_task_rt(struct rq *rq)
 }
 ```
 
-`pick_next_rt_entity()` finds the first-set bit in the priority bitmap, then returns the head of that queue. For SCHED_RR tasks at equal priority, the queue is FIFO — the task at the front ran least recently (has been waiting longest) and goes to the back after its slice.
+`pick_next_rt_entity()`は優先度ビットマップで最初にセットされたビットを見つけ、そのキューの先頭を返す。同じ優先度のSCHED_RRタスクについては、キューはFIFOである。先頭のタスクは最も長い間実行されていない（最も長く待っている）タスクであり、スライスを使い終えると末尾に回る。
 
-## SCHED_RR timeslice rotation {#sched_rr-timeslice-rotation}
+## SCHED_RRのタイムスライスのローテーション {#sched_rr-timeslice-rotation}
 
-On each timer tick, `task_tick_rt()` runs:
+タイマーティックごとに`task_tick_rt()`が実行される:
 
 ```c
 // kernel/sched/rt.c
@@ -84,68 +84,68 @@ static void task_tick_rt(struct rq *rq, struct task_struct *p, int queued)
 {
     struct sched_rt_entity *rt_se = &p->rt;
 
-    // Watchdog: kill task if it exceeds RLIMIT_RTTIME
+    // ウォッチドッグ: RLIMIT_RTTIMEを超えたらタスクをkillする
     watchdog(rq, p);
 
-    // Only SCHED_RR uses timeslices
+    // タイムスライスを使うのはSCHED_RRだけ
     if (p->policy != SCHED_RR)
         return;
 
     if (--rt_se->time_slice)
-        return;   // still has time left
+        return;   // まだ時間が残っている
 
-    // Timeslice expired: reset and requeue at back
+    // タイムスライスが満了: リセットして末尾に再キューする
     rt_se->time_slice = sched_rr_timeslice;
 
     if (rt_se->run_list.prev != rt_se->run_list.next) {
-        // Other tasks at same priority: move to back of queue
+        // 同じ優先度の他のタスクがいる: キューの末尾に移動する
         requeue_task_rt(rq, p, 0);
         resched_curr(rq);
     }
 }
 ```
 
-The default SCHED_RR timeslice is 100ms:
+SCHED_RRのデフォルトのタイムスライスは100msである:
 ```c
 // include/linux/sched/rt.h
 #define RR_TIMESLICE    (100 * HZ / 1000)
 
-// Configurable via sysctl:
-// /proc/sys/kernel/sched_rr_timeslice_ms (default: 100)
+// sysctlで設定可能:
+// /proc/sys/kernel/sched_rr_timeslice_ms（デフォルト: 100）
 int sched_rr_timeslice = RR_TIMESLICE;
 ```
 
-## RT throttling {#rt-throttling}
+## RTスロットリング {#rt-throttling}
 
-An RT task that never sleeps will starve all normal tasks. The kernel protects against this with **RT throttling**:
+決してスリープしないRTタスクは、すべての通常タスクを飢餓状態に陥らせる。カーネルは**RTスロットリング**によってこれを防ぐ:
 
 ```c
 // kernel/sched/rt.c
-int sysctl_sched_rt_period  = 1000000;  // 1 second (µs)
-int sysctl_sched_rt_runtime =  950000;  // 950ms (µs)
+int sysctl_sched_rt_period  = 1000000;  // 1秒（µs）
+int sysctl_sched_rt_runtime =  950000;  // 950ms（µs）
 ```
 
-RT tasks collectively can use at most `rt_runtime / rt_period` = 95% of CPU time. The remaining 5% is reserved for SCHED_NORMAL tasks (including the shell, so you can `kill -9` a runaway RT task).
+RTタスクは合計で最大`rt_runtime / rt_period` = CPU時間の95%までしか使えない。残りの5%はSCHED_NORMALタスク（シェルを含むので、暴走したRTタスクを`kill -9`できる）のために確保されている。
 
 ```bash
-# View/change RT throttle settings
-cat /proc/sys/kernel/sched_rt_period_us    # default: 1000000 (1s)
-cat /proc/sys/kernel/sched_rt_runtime_us   # default: 950000 (950ms)
+# RTスロットリングの設定を表示/変更する
+cat /proc/sys/kernel/sched_rt_period_us    # デフォルト: 1000000（1秒）
+cat /proc/sys/kernel/sched_rt_runtime_us   # デフォルト: 950000（950ms）
 
-# Disable throttling (dangerous — can freeze the system)
+# スロットリングを無効にする（危険 — システムがフリーズしうる）
 echo -1 > /proc/sys/kernel/sched_rt_runtime_us
 ```
 
-Setting `sched_rt_runtime_us` to -1 disables throttling entirely. Only do this if you fully trust your RT tasks.
+`sched_rt_runtime_us`を-1に設定すると、スロットリングが完全に無効になる。RTタスクを完全に信頼できる場合にのみ行うこと。
 
-## Setting RT policy {#setting-rt-policy}
+## RTポリシーの設定 {#setting-rt-policy}
 
 ```c
-// Set SCHED_FIFO at priority 50
+// 優先度50でSCHED_FIFOを設定する
 struct sched_param param = { .sched_priority = 50 };
 sched_setscheduler(pid, SCHED_FIFO, &param);
 
-// Or via sched_setattr (more flexible)
+// あるいはsched_setattrを使う（より柔軟）
 struct sched_attr attr = {
     .sched_policy   = SCHED_FIFO,
     .sched_priority = 50,
@@ -153,24 +153,24 @@ struct sched_attr attr = {
 sched_setattr(0, &attr, 0);
 ```
 
-Requires `CAP_SYS_NICE` (or running as root). Unprivileged users cannot set RT policies.
+`CAP_SYS_NICE`（またはrootとしての実行）が必要である。非特権ユーザーはRTポリシーを設定できない。
 
 ```bash
-# Set process to SCHED_FIFO priority 80
+# プロセスをSCHED_FIFO優先度80に設定する
 chrt -f 80 ./my_realtime_app
 
-# Set existing process
+# 既存のプロセスに設定する
 chrt -f -p 80 $PID
 
-# Check scheduling policy
+# スケジューリングポリシーを確認する
 chrt -p $PID
 ```
 
-## SMP considerations: pushable tasks {#smp-considerations-pushable-tasks}
+## SMPでの考慮事項: pushableタスク {#smp-considerations-pushable-tasks}
 
-On multi-CPU systems, the RT scheduler maintains a **pushable tasks** list — RT tasks that could be migrated to another CPU if their current CPU is occupied by a higher-priority RT task.
+マルチCPUシステムでは、RTスケジューラは**pushableタスク**のリストを管理する。これは、現在のCPUがより高い優先度のRTタスクに占有されている場合に、別のCPUへマイグレーションできるRTタスクである。
 
-When a higher-priority RT task arrives on a CPU that's already running an RT task, the lower-priority task is "pushed" to another CPU:
+すでにRTタスクを実行しているCPUに、より優先度の高いRTタスクが到着すると、優先度の低いタスクは別のCPUへ「プッシュ」される:
 
 ```
 Before:                          After:
@@ -180,20 +180,20 @@ CPU 1: RT-70 (running)          CPU 1: RT-80 (running, migrated here)
 CPU 2: normal task              CPU 2: RT-70 (migrated)
 ```
 
-The `push_rt_task()` and `pull_rt_task()` functions handle this migration.
+`push_rt_task()`関数と`pull_rt_task()`関数がこのマイグレーションを処理する。
 
-## Practical patterns {#practical-patterns}
+## 実践的なパターン {#practical-patterns}
 
-### Audio/video processing {#audiovideo-processing}
+### オーディオ/ビデオ処理 {#audiovideo-processing}
 
 ```c
-// Realtime audio thread: SCHED_FIFO, priority ~70
-// High enough to preempt all normal tasks,
-// low enough for SCHED_DEADLINE tasks to preempt if needed
+// リアルタイムのオーディオスレッド: SCHED_FIFO、優先度は約70
+// すべての通常タスクをプリエンプトするには十分に高く、
+// 必要ならSCHED_DEADLINEタスクがプリエンプトできる程度に低い
 struct sched_param param = { .sched_priority = 70 };
 sched_setscheduler(0, SCHED_FIFO, &param);
 
-// Process audio in tight loop, sleep on condition variable
+// タイトなループでオーディオを処理し、条件変数でスリープする
 while (running) {
     pthread_mutex_lock(&buf_lock);
     while (buf_empty)
@@ -203,9 +203,9 @@ while (running) {
 }
 ```
 
-### Avoiding PI issues {#avoiding-pi-issues}
+### PIの問題を避ける {#avoiding-pi-issues}
 
-When using mutexes in RT tasks, use `pthread_mutexattr_setprotocol(PTHREAD_PRIO_INHERIT)` to enable priority inheritance:
+RTタスクでmutexを使うときは、`pthread_mutexattr_setprotocol(PTHREAD_PRIO_INHERIT)`を使って優先度継承を有効にする:
 
 ```c
 pthread_mutexattr_t attr;
@@ -214,10 +214,10 @@ pthread_mutexattr_setprotocol(&attr, PTHREAD_PRIO_INHERIT);
 pthread_mutex_init(&mutex, &attr);
 ```
 
-Without PI, a low-priority task holding a mutex can block a high-priority RT task indefinitely — the classic priority inversion problem. See [Priority Inversion and PI Mutexes](pi-mutexes.md).
+PIがないと、mutexを保持している低優先度のタスクが、高優先度のRTタスクを無期限にブロックしうる。これが古典的な優先度逆転の問題である。[優先度逆転とPI mutex](pi-mutexes.md)を参照のこと。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [SCHED_DEADLINE](deadline.md) — Even stricter guarantees with bandwidth enforcement
-- [Priority Inversion and PI Mutexes](pi-mutexes.md) — The RT locking problem and solution
-- [Scheduler Classes](scheduler-classes.md) — RT class in the class hierarchy
+- [SCHED_DEADLINE](deadline.md) — 帯域の強制によるさらに厳格な保証
+- [優先度逆転とPI mutex](pi-mutexes.md) — RTにおけるロックの問題とその解決策
+- [スケジューラクラス](scheduler-classes.md) — クラス階層におけるRTクラス
