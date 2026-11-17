@@ -1,27 +1,27 @@
-# Kernel Core War Stories {#kernel-core-war-stories}
+# カーネルコアの事件簿 {#kernel-core-war-stories}
 
-> Init ordering, boot parameter bugs, panic loops, and more
+> 初期化順序、ブートパラメータのバグ、パニックループ、その他
 
-The kernel core infrastructure — initcalls, boot parameters, `__init` sections, panic/kdump, module loading — is mature and well-tested. But the interaction between these mechanisms and real-world drivers, configurations, and deployment assumptions produces bugs that are genuinely hard to diagnose. The failures tend to be silent, delayed, or self-concealing.
+カーネルコアの基盤 — initcall、ブートパラメータ、`__init`セクション、panic/kdump、モジュールのロード — は成熟しており、十分にテストされている。しかし、これらの機構と、現実のドライバ、設定、デプロイ上の前提との相互作用は、本当に診断の難しいバグを生み出す。その失敗は、無症状であったり、遅れて現れたり、自らを隠蔽したりする傾向がある。
 
-!!! note "How these are written"
-    These aren't write-ups of a single named incident tied to one commit or CVE — they illustrate real, recurring bug patterns that appear repeatedly across different drivers and distributions over time. The references at the end of the page verify the underlying kernel mechanisms against current source and documentation. See the [BPF](../bpf/war-stories.md), [scheduler](../sched/war-stories.md), or [interrupts](../interrupts/war-stories.md) war-stories pages for the site's usual format: specific, datable incidents, most (though not all — see [wake_wide()](../sched/war-stories/wake-wide-heuristic.md)) tied to a fix commit or CVE.
+!!! note "これらの事例の書き方について"
+    これらは、1つのコミットやCVEに結び付いた特定の名前付きインシデントの記録ではない — 長年にわたり、さまざまなドライバやディストリビューションで繰り返し現れてきた、実在の反復的なバグパターンを例示するものである。ページ末尾の参考資料は、根底にあるカーネルの機構を現在のソースとドキュメントに照らして検証している。このサイトの通常の形式 — 特定の、日付を特定できるインシデントで、そのほとんど（すべてではない — [wake_wide()](../sched/war-stories/wake-wide-heuristic.md)を参照）が修正コミットやCVEに結び付いているもの — については、[BPF](../bpf/war-stories.md)、[スケジューラ](../sched/war-stories.md)、[割り込み](../interrupts/war-stories.md)の事件簿ページを参照。
 
-Each case below illustrates a fundamental property of how the kernel core works — and what happens when code makes the wrong assumption about it.
+以下の各事例は、カーネルコアの動作に関する基本的な性質と、コードがそれについて誤った前提を置いたときに何が起こるかを示している。
 
 ---
 
-## Case 1: initcall ordering bug breaking the network stack {#case-1-initcall-ordering-bug-breaking-the-network-stack}
+## 事例1: ネットワークスタックを壊すinitcallの順序バグ {#case-1-initcall-ordering-bug-breaking-the-network-stack}
 
-### The problem {#the-problem}
+### 問題 {#the-problem}
 
-A team was integrating a new Ethernet driver into their embedded product. The driver registered a netdev and immediately called into the network core to set up some statistics infrastructure during its initialization function. On their development kernel the driver worked fine. On the production kernel — built with a slightly different Kconfig — the system hung at boot with a NULL pointer dereference in `net_device_ops`.
+あるチームが、新しいEthernetドライバを組み込み製品に統合していた。そのドライバは初期化関数の中でnetdevを登録し、すぐにネットワークコアを呼び出して統計情報の基盤をセットアップしていた。開発用カーネルではドライバは問題なく動作した。しかし、わずかに異なるKconfigでビルドされた本番用カーネルでは、`net_device_ops`でのNULLポインタ参照によりシステムがブート時にハングした。
 
-The oops appeared during the `calling ... returned ...` initcall debug output, partway through the `core_initcall` level (level 1), before any `device_initcall` drivers had run.
+oopsは`calling ... returned ...`というinitcallのデバッグ出力の途中、`core_initcall`レベル（レベル1）の途中で、`device_initcall`のドライバがまだ1つも実行されていない時点で発生していた。
 
-### Diagnosis {#diagnosis}
+### 診断 {#diagnosis}
 
-With `initcall_debug` enabled on the production kernel, the oops trace looked like this:
+本番用カーネルで`initcall_debug`を有効にすると、oopsのトレースは次のようになった:
 
 ```
 calling  mydriver_core_init+0x0/0x68 @ 1
@@ -32,42 +32,42 @@ Call Trace:
  do_one_initcall+0x58/0x190
 ```
 
-The driver's init function was calling `mydriver_net_stats_init()`, which called into the network subsystem. But the oops showed the driver was running at `core_initcall` level (level 1). The networking core initializes at `subsys_initcall` level (level 4) via `net_dev_init()` in `net/core/dev.c`.
+ドライバのinit関数は`mydriver_net_stats_init()`を呼び出しており、それがネットワークサブシステムを呼び出していた。しかしoopsは、ドライバが`core_initcall`レベル（レベル1）で実行されていたことを示していた。ネットワークコアは`net/core/dev.c`の`net_dev_init()`によって`subsys_initcall`レベル（レベル4）で初期化される。
 
-Level 1 runs before level 4. The network subsystem's internal state — in particular the per-CPU softnet_data structures — had not been allocated yet. The driver was reaching into uninitialized memory.
+レベル1はレベル4より前に実行される。ネットワークサブシステムの内部状態 — 特にper-CPUのsoftnet_data構造体 — はまだ割り当てられていなかった。ドライバは未初期化のメモリに手を伸ばしていたのである。
 
-### Root cause {#root-cause}
+### 根本原因 {#root-cause}
 
-The driver's registration macro read:
+ドライバの登録マクロは次のようになっていた:
 
 ```c
-/* WRONG: runs before networking is ready */
+/* 誤り: ネットワークの準備ができる前に実行される */
 core_initcall(mydriver_core_init);
 ```
 
-It had been written as `core_initcall` because the developer confused "core" to mean "this is a core part of our system" rather than "this runs at initcall level 1, before subsystems like networking."
+`core_initcall`と書かれていたのは、開発者が「core」を「これはinitcallレベル1で、ネットワークのようなサブシステムより前に実行される」という意味ではなく、「これは我々のシステムの中核部分である」という意味に取り違えたためだった。
 
-### Fix {#fix}
+### 修正 {#fix}
 
 ```c
-/* CORRECT: runs at level 6, after all subsystem init */
+/* 正しい: すべてのサブシステム初期化の後、レベル 6 で実行される */
 module_init(mydriver_core_init);
-/* or equivalently: device_initcall(mydriver_core_init); */
+/* または同等に: device_initcall(mydriver_core_init); */
 ```
 
-Moving to `device_initcall` (or equivalently `module_init`) places the driver at initcall level 6, after `subsys_initcall` level 4 where `net_dev_init()` runs. The initialization succeeded immediately.
+`device_initcall`（または同等の`module_init`）に変更すると、ドライバはinitcallレベル6に配置され、`net_dev_init()`が実行される`subsys_initcall`レベル4より後になる。初期化はただちに成功した。
 
-### Lesson {#lesson}
+### 教訓 {#lesson}
 
-The initcall level names are not descriptive of what *your* code is — they describe when your code runs relative to other things. Most drivers belong at `device_initcall` (`module_init`). Use an earlier level only when you have an explicit reason to run before a specific subsystem, and verify that every subsystem you call into initializes at an earlier level. The `initcall_debug` boot parameter makes this visible at runtime.
+initcallレベルの名前は、*あなたの*コードが何であるかを記述するものではない — 他のものと比べてあなたのコードがいつ実行されるかを記述するものである。ほとんどのドライバは`device_initcall`（`module_init`）に属する。特定のサブシステムより前に実行する明示的な理由がある場合にのみ、より早いレベルを使い、呼び出すすべてのサブシステムがより早いレベルで初期化されることを確認すること。`initcall_debug`ブートパラメータを使えば、これを実行時に可視化できる。
 
 ---
 
-## Case 2: "Freeing init memory" crash due to `__init` section misuse {#case-2-freeing-init-memory-crash-due-to-__init-section-misuse}
+## 事例2: `__init`セクションの誤用による「Freeing init memory」クラッシュ {#case-2-freeing-init-memory-crash-due-to-__init-section-misuse}
 
-### The problem {#the-problem_1}
+### 問題 {#the-problem_1}
 
-A storage driver had worked correctly for several kernel versions. After a refactoring pass, a field engineer reported that systems loaded with the driver would oops approximately 30 minutes after boot — specifically whenever the driver processed a certain type of I/O request under memory pressure. The oops showed:
+あるストレージドライバは、いくつものカーネルバージョンにわたって正しく動作していた。リファクタリングを行った後、フィールドエンジニアから、そのドライバをロードしたシステムがブートから約30分後にoopsするという報告があった — 具体的には、メモリ逼迫時にドライバが特定の種類のI/Oリクエストを処理したときである。oopsは次のとおりだった:
 
 ```
 BUG: Bad page state in process kworker/u8:2 pfn:12a4b0
@@ -80,39 +80,39 @@ Call Trace:
  my_driver_handle_io+0x7c/0x1a0
 ```
 
-`Bad page state` with `flags: reserved` is a signature of accessing memory that has been freed by `free_initmem()`.
+`flags: reserved`を伴う`Bad page state`は、`free_initmem()`によって解放されたメモリにアクセスしたことを示す特徴的なシグネチャである。
 
-### Diagnosis {#diagnosis_1}
+### 診断 {#diagnosis_1}
 
-The `reserved` flag is set on pages that belong to the init sections. After `free_initmem()` runs, these pages are returned to the allocator and the `reserved` flag is cleared. A "Bad page state" oops on a reserved-flagged page means code was holding a pointer into init memory and tried to use it after those pages had been freed and reallocated.
+`reserved`フラグは、initセクションに属するページに設定される。`free_initmem()`が実行されると、これらのページはアロケータに返却され、`reserved`フラグはクリアされる。reservedフラグ付きページでの「Bad page state」oopsは、コードがinitメモリへのポインタを保持しており、そのページが解放・再割り当てされた後に使おうとしたことを意味する。
 
-Searching the driver for anything stored during init and used later, the offending pattern emerged:
+初期化中に保存されて後で使われるものをドライバ内で探したところ、問題のパターンが浮かび上がった:
 
 ```c
-/* In the driver header: */
+/* ドライバのヘッダ内: */
 struct my_driver_ops {
     int (*handle_compressed)(struct request *rq, const u8 *buf, size_t len);
     /* ... */
 };
 
-/* In the driver: */
+/* ドライバ内: */
 static struct my_driver_ops global_ops;
 
 static int __init decompress_init_helper(struct request *rq,
                                           const u8 *buf, size_t len)
 {
-    /* used only during init to process compressed firmware */
+    /* 圧縮されたファームウェアを処理するために初期化中のみ使われる */
     return decompress_and_store(rq, buf, len);
 }
 
 static int __init mydriver_init(void)
 {
-    global_ops.handle_compressed = decompress_init_helper; /* BUG */
+    global_ops.handle_compressed = decompress_init_helper; /* バグ */
     /* ... */
     return 0;
 }
 
-/* Later, at runtime: */
+/* 後で、実行時に: */
 static void my_driver_handle_io(struct request *rq)
 {
     if (rq->flags & MY_COMPRESSED)
@@ -120,20 +120,20 @@ static void my_driver_handle_io(struct request *rq)
 }
 ```
 
-`decompress_init_helper` was marked `__init`, placing it in `.init.text`. The function pointer was stored in `global_ops`, which lives in `.data` (not freed). After `free_initmem()` ran, the init text pages were returned to the allocator. Eventually one was reallocated for something else. When `handle_compressed` was called under memory pressure (triggering a code path that hadn't been exercised before), the function pointer pointed to a page that was now being used as a slab object. Calling it as a function produced the bad page state oops.
+`decompress_init_helper`には`__init`が付けられており、`.init.text`に配置されていた。関数ポインタは、（解放されない）`.data`にある`global_ops`に格納されていた。`free_initmem()`が実行された後、initテキストのページはアロケータに返却された。やがてそのうちの1つが別の用途に再割り当てされた。メモリ逼迫時に（それまで実行されたことのなかったコードパスを通って）`handle_compressed`が呼ばれたとき、関数ポインタは、その時点でslabオブジェクトとして使われていたページを指していた。それを関数として呼び出した結果、bad page stateのoopsが発生した。
 
-The bug was latent for the entire uptime and only triggered when certain requests arrived — making it look unrelated to the refactoring.
+このバグは稼働時間中ずっと潜伏しており、特定のリクエストが到着したときにのみ発現した — そのため、リファクタリングとは無関係に見えた。
 
-### Root cause {#root-cause_1}
+### 根本原因 {#root-cause_1}
 
-The refactoring had moved `decompress_init_helper` to a new file and a developer added `__init` to it, reasoning that it was "only used during initialization." This is true for the case of processing compressed firmware at probe time, but the function pointer was stored for potential later use.
+リファクタリングで`decompress_init_helper`は新しいファイルに移され、ある開発者が「初期化中にしか使われない」と考えて`__init`を付け加えた。プローブ時に圧縮ファームウェアを処理するケースについてはそれは正しいが、関数ポインタは後で使われる可能性に備えて保存されていた。
 
-### Fix {#fix_1}
+### 修正 {#fix_1}
 
-Remove `__init` from any function whose pointer might be stored and called after boot:
+ポインタが保存されてブート後に呼ばれる可能性のある関数からは、`__init`を外す:
 
 ```c
-/* CORRECT: no __init annotation, stays in .text permanently */
+/* 正しい: __init アノテーションなし。恒久的に .text に留まる */
 static int decompress_init_helper(struct request *rq,
                                    const u8 *buf, size_t len)
 {
@@ -141,25 +141,25 @@ static int decompress_init_helper(struct request *rq,
 }
 ```
 
-Alternatively, if the function truly is only needed during init, do not store its pointer anywhere that persists past the init phase. Use the pointer immediately and set it to NULL afterward — but this is fragile. The safe rule is: if a function pointer is stored in a data structure with `__data` lifetime, the pointed-to function must not be `__init`.
+あるいは、その関数が本当に初期化中にしか必要ないのであれば、初期化フェーズを越えて残る場所にそのポインタを保存してはならない。ポインタはすぐに使い、その後NULLに設定する — ただしこれは壊れやすい。安全なルールは次のとおり: 関数ポインタが`__data`のライフタイムを持つデータ構造に格納されるなら、指し先の関数は`__init`であってはならない。
 
-### Lesson {#lesson_1}
+### 教訓 {#lesson_1}
 
-The `__init` annotation has a deceptively simple appearance. It is not just a hint to the compiler — it changes the physical page that contains the function, and that page is freed after boot. Any stored function pointer to `__init` code is a time bomb. KASAN will not catch this if the page gets reallocated to something other than slab memory. The correct detection strategies are: enabling generic KASAN (`CONFIG_KASAN_GENERIC`), which will report the invalid access if the freed init page is reclaimed as slab memory; or a compile-time/load-time audit using `init_section_contains()` to verify that no function pointer stored in persistent data points into the `.init.text` range. (`CONFIG_KASAN_VMALLOC` is not applicable here — `__init` text lives in the direct-mapped kernel image, not in vmalloc space.)
+`__init`アノテーションは、見かけはだまされるほど単純である。これはコンパイラへの単なるヒントではない — 関数を含む物理ページそのものを変え、そのページはブート後に解放される。`__init`コードへの関数ポインタを保存すれば、それは時限爆弾になる。ページがslabメモリ以外のものに再割り当てされた場合、KASANはこれを捕捉しない。正しい検出戦略は次のとおり: generic KASAN（`CONFIG_KASAN_GENERIC`）を有効にすること — 解放されたinitページがslabメモリとして再利用された場合に不正アクセスを報告する — あるいは、`init_section_contains()`を使ったコンパイル時/ロード時の監査で、永続的なデータに格納された関数ポインタが`.init.text`の範囲を指していないことを検証することである。（`CONFIG_KASAN_VMALLOC`はここでは該当しない — `__init`テキストはvmalloc空間ではなく、ダイレクトマップされたカーネルイメージ内にある。）
 
 ---
 
-## Case 3: panic loop — kdump not capturing the crash {#case-3-panic-loop-kdump-not-capturing-the-crash}
+## 事例3: パニックループ — kdumpがクラッシュを捕捉しない {#case-3-panic-loop-kdump-not-capturing-the-crash}
 
-### The problem {#the-problem_2}
+### 問題 {#the-problem_2}
 
-A production server began exhibiting a reboot loop. The system would come up, run for a while, panic (for an unrelated reason — a buggy NIC driver under development), and then reboot without leaving a vmcore for analysis. The operations team had set up kdump for exactly this purpose: the crash kernel was configured, the `kexec -p` was run at boot time by a systemd unit, and `/proc/vmcore` was expected to appear in the crash kernel environment. Instead the system just rebooted cleanly.
+ある本番サーバーが再起動ループを起こし始めた。システムは起動し、しばらく動作し、パニックし（無関係な理由 — 開発中のバグのあるNICドライバ — による）、解析用のvmcoreを残さずに再起動した。運用チームはまさにこの目的のためにkdumpをセットアップしていた: クラッシュカーネルは設定済みで、`kexec -p`はブート時にsystemdユニットによって実行され、クラッシュカーネル環境には`/proc/vmcore`が現れるはずだった。ところが、システムはただきれいに再起動するだけだった。
 
-Without a vmcore, diagnosing the underlying NIC driver bug was nearly impossible.
+vmcoreがなければ、根底にあるNICドライバのバグを診断することはほぼ不可能だった。
 
-### Diagnosis {#diagnosis_2}
+### 診断 {#diagnosis_2}
 
-The first clue was in the crash kernel's `dmesg`, captured via serial console. The serial console logged the crash kernel's boot sequence but it ended abruptly:
+最初の手がかりは、シリアルコンソール経由で取得したクラッシュカーネルの`dmesg`にあった。シリアルコンソールにはクラッシュカーネルのブートシーケンスが記録されていたが、それは唐突に終わっていた:
 
 ```
 [    0.342819] Booting crash kernel...
@@ -171,104 +171,104 @@ The first clue was in the crash kernel's `dmesg`, captured via serial console. T
 [    2.215011] Kernel panic - not syncing: System is deadlocked on memory
 ```
 
-The crash kernel itself was OOMing. `makedumpfile` (the tool that copies `/proc/vmcore` to disk) was being killed because it needed to read and filter the vmcore of the original kernel, which required significant memory. But the crash kernel had been allocated only 128 MB via `crashkernel=128M`.
+クラッシュカーネル自体がOOMを起こしていた。`makedumpfile`（`/proc/vmcore`をディスクにコピーするツール）は、元のカーネルのvmcoreを読み取ってフィルタリングする必要があり、それには相当なメモリが必要だったためにkillされていた。しかし、クラッシュカーネルには`crashkernel=128M`で128MBしか割り当てられていなかった。
 
-The original kernel had 256 GB of RAM. A vmcore of a 256 GB system — even after filtering out free pages — was tens of gigabytes. `makedumpfile` needed enough memory to buffer its working set and the kernel's page table analysis structures. 128 MB was not nearly enough.
+元のカーネルは256GBのRAMを持っていた。256GBのシステムのvmcoreは — 空きページを除外した後でさえ — 数十ギガバイトになる。`makedumpfile`には、そのワーキングセットとカーネルのページテーブル解析用の構造体をバッファリングできるだけのメモリが必要だった。128MBではまったく足りなかった。
 
-The crash kernel panicked, triggering `emergency_restart()`, and the system rebooted cleanly as if nothing had happened.
+クラッシュカーネルはパニックし、`emergency_restart()`が起動され、システムは何事もなかったかのようにきれいに再起動した。
 
-### Root cause {#root-cause_2}
+### 根本原因 {#root-cause_2}
 
-The `crashkernel=128M` reservation was set when the system had 16 GB of RAM and was never updated when the system was upgraded to 256 GB. The rule of thumb for `crashkernel` sizing scales with the amount of RAM in the system because:
+`crashkernel=128M`の予約は、システムのRAMが16GBだったときに設定され、システムが256GBにアップグレードされたときに更新されていなかった。`crashkernel`のサイズの目安はシステムのRAM量に応じてスケールする。その理由は次のとおり:
 
-1. The crash kernel needs enough memory to boot (kernel + initramfs + basic infrastructure): typically 64–128 MB on its own
-2. `makedumpfile` needs working memory proportional to the number of pages it must analyze and filter (roughly 1 byte of metadata per page = 64 MB for 256 GB at 4KB pages)
-3. Buffer space for I/O and the vmcore filtering process
+1. クラッシュカーネルはブートするのに十分なメモリ（カーネル + initramfs + 基本的なインフラ）を必要とする: それだけで典型的には64〜128MB
+2. `makedumpfile`は、解析・フィルタリングすべきページ数に比例したワーキングメモリを必要とする（おおよそページあたり1バイトのメタデータ = 4KBページで256GBなら64MB）
+3. I/Oとvmcoreのフィルタリング処理のためのバッファ領域
 
-Total: for a 256 GB system, `crashkernel=512M` or more is appropriate.
+合計: 256GBのシステムでは、`crashkernel=512M`以上が適切である。
 
-### Fix {#fix_2}
+### 修正 {#fix_2}
 
 ```bash
-# In /etc/default/grub:
+# /etc/default/grub 内:
 GRUB_CMDLINE_LINUX="... crashkernel=512M"
 
-# Regenerate grub config and reboot:
+# grub の設定を再生成して再起動する:
 update-grub
 reboot
 ```
 
-Test the kdump configuration before relying on it in production:
+本番環境で頼りにする前に、kdumpの設定をテストすること:
 
 ```bash
-# Trigger a test panic (nondestructive way to test kdump):
+# テスト用のパニックを発生させる（kdump をテストする非破壊的な方法）:
 echo c > /proc/sysrq-trigger
-# (system will panic and attempt to capture vmcore)
+# （システムはパニックし、vmcore の取得を試みる）
 ```
 
-`crashkernel=auto` is not a value the mainline kernel's own command-line parser understands — `kernel/crash_reserve.c` has no special case for the string "auto"; it expects a concrete size. The auto-sizing some distributions expose is done by their own userspace tooling (e.g. dracut/kdump installer scripts), which computes a size from installed RAM and writes a concrete `crashkernel=N` value into the bootloader config. Whatever size a given distribution's tooling picks, it is still a fixed reservation from the last time it ran — it does not adapt automatically if RAM is later added, which is exactly the failure mode in this case.
+`crashkernel=auto`は、メインラインカーネル自身のコマンドラインパーサが理解する値ではない — `kernel/crash_reserve.c`には文字列「auto」に対する特別扱いはなく、具体的なサイズを期待している。一部のディストリビューションが提供する自動サイズ設定は、それぞれのユーザー空間ツール（たとえばdracut/kdumpのインストーラスクリプト）によって行われ、搭載RAMからサイズを計算して具体的な`crashkernel=N`の値をブートローダの設定に書き込む。あるディストリビューションのツールがどのサイズを選ぶにせよ、それは最後にツールが実行された時点での固定的な予約にすぎない — 後でRAMが追加されても自動的には追従しない。これこそがこの事例の失敗モードである。
 
-### Lesson {#lesson_2}
+### 教訓 {#lesson_2}
 
-kdump is a second kernel bootstrapped from reserved memory. That reservation must be sized for the work the crash kernel will do, which scales with the RAM of the production kernel, not a fixed value. The kdump configuration must be tested — the worst time to discover it does not work is during an actual production incident. Run periodic `echo c > /proc/sysrq-trigger` tests in a maintenance window and verify that vmcore files are produced and analyzable.
+kdumpは、予約されたメモリから起動される第2のカーネルである。その予約は、クラッシュカーネルが行う作業に見合ったサイズでなければならず、それは固定値ではなく本番カーネルのRAMに応じてスケールする。kdumpの設定はテストしなければならない — 動かないことに気付くのに最悪のタイミングは、実際の本番インシデントの最中である。メンテナンスウィンドウ中に定期的に`echo c > /proc/sysrq-trigger`のテストを実行し、vmcoreファイルが生成されて解析可能であることを確認すること。
 
 ---
 
-## Case 4: boot parameter typo causing silent SMP misconfiguration {#case-4-boot-parameter-typo-causing-silent-smp-misconfiguration}
+## 事例4: ブートパラメータのタイプミスによる無症状のSMP設定ミス {#case-4-boot-parameter-typo-causing-silent-smp-misconfiguration}
 
-### The problem {#the-problem_3}
+### 問題 {#the-problem_3}
 
-A sysadmin managing a fleet of QEMU virtual machines added a kernel command line parameter intended to limit each VM to 4 CPUs. The parameter was added to the VM's GRUB configuration:
+QEMU仮想マシン群を管理するシステム管理者が、各VMを4 CPUに制限するつもりでカーネルコマンドラインパラメータを追加した。パラメータはVMのGRUB設定に追加された:
 
 ```
 GRUB_CMDLINE_LINUX="... mxcpus=4"
 ```
 
-The VMs booted without error. `dmesg` showed no warnings at a glance. Application performance monitoring showed the VMs were using more CPU than expected — a workload that should run on 4 CPUs was clearly using all 8 available. On investigation, `nproc` returned 8 and `/proc/cpuinfo` showed all 8 CPUs.
+VMはエラーなくブートした。`dmesg`には一見したところ警告はなかった。アプリケーションの性能監視では、VMが想定以上にCPUを使っていることが示された — 4 CPUで動くはずのワークロードが、明らかに利用可能な8 CPUすべてを使っていた。調べてみると、`nproc`は8を返し、`/proc/cpuinfo`には8 CPUすべてが表示されていた。
 
-### Diagnosis {#diagnosis_3}
+### 診断 {#diagnosis_3}
 
-The correct parameter is `maxcpus=4`, not `mxcpus=4`. The kernel does not recognize `mxcpus`, so `parse_args()` reaches its fallback handler. Since the parameter does not match any `__setup()` handler, and does not contain a `.` (which would indicate a module parameter), it is logged and passed to the init process as an environment variable:
+正しいパラメータは`mxcpus=4`ではなく`maxcpus=4`である。カーネルは`mxcpus`を認識しないので、`parse_args()`はフォールバックハンドラに到達する。このパラメータはどの`__setup()`ハンドラにも一致せず、（モジュールパラメータを示す）`.`も含まないので、ログに記録されたうえで環境変数としてinitプロセスに渡される:
 
 ```bash
-# In the kernel boot log (easily missed among hundreds of lines):
+# カーネルのブートログ内（数百行に埋もれて見落としやすい）:
 dmesg | grep -i 'unknown\|mxcpus'
 # Unknown kernel command line parameters "mxcpus=4", will be passed to userspace
 ```
 
-The message is logged via `pr_notice()` (`KERN_NOTICE`, level 5) — not `KERN_WARNING` — but at a console loglevel of 4, as many distributions configure for a quiet boot (the upstream Kconfig default, `CONFIG_CONSOLE_LOGLEVEL_DEFAULT`, is actually 7), it still does not appear on the screen: only messages below the console loglevel are printed. The message goes only to the ring buffer. The SMP initialization code never saw the parameter, so all 8 CPUs came online.
+このメッセージは`KERN_WARNING`ではなく`pr_notice()`（`KERN_NOTICE`、レベル5）でログに記録される — しかし、多くのディストリビューションが静かなブートのために設定するコンソールログレベル4では（アップストリームのKconfigデフォルト`CONFIG_CONSOLE_LOGLEVEL_DEFAULT`は実際には7である）、やはり画面には表示されない: コンソールログレベルより小さいメッセージだけが出力されるからである。メッセージはリングバッファにしか入らない。SMP初期化コードはこのパラメータを一度も目にしなかったので、8 CPUすべてがオンラインになった。
 
-### Root cause {#root-cause_3}
+### 根本原因 {#root-cause_3}
 
-The kernel's policy for unknown parameters is to pass them to the init process as environment variables, not to fail. This is intentional: some parameters are genuinely meant for the init system (e.g., `systemd.unit=emergency.target`), and the kernel cannot distinguish between "a user typo" and "a valid init parameter." The failure is silent from the kernel's perspective.
+未知のパラメータに対するカーネルの方針は、失敗させることではなく、環境変数としてinitプロセスに渡すことである。これは意図的なものである: 一部のパラメータは本当にinitシステム向けのもの（たとえば`systemd.unit=emergency.target`）であり、カーネルは「ユーザーのタイプミス」と「正当なinitパラメータ」を区別できない。カーネルの視点から見れば、この失敗は無症状である。
 
-### Detection {#detection}
+### 検出 {#detection}
 
 ```bash
-# Check for unknown parameters that were passed to userspace:
+# ユーザー空間に渡された未知のパラメータを確認する:
 dmesg | grep "Unknown kernel command line"
 
-# Validate the command line before rebooting:
-# (Check against the documented parameter list)
-grep -w 'mxcpus' /proc/cmdline  # returns nothing if not present
+# 再起動前にコマンドラインを検証する:
+# （ドキュメント化されたパラメータ一覧と照合する）
+grep -w 'mxcpus' /proc/cmdline  # 存在しなければ何も返さない
 
-# The canonical parameter list:
+# 正式なパラメータ一覧:
 grep 'maxcpus' Documentation/admin-guide/kernel-parameters.txt
 ```
 
-Some distributions include `bootparamchk` or similar tools in their initramfs to validate command line parameters against a known-good list. For automated deployments, comparing `nproc` against the expected CPU count in a post-boot health check catches this class of error immediately.
+一部のディストリビューションは、コマンドラインパラメータを既知の正しい一覧に照らして検証する`bootparamchk`などのツールをinitramfsに含めている。自動化されたデプロイでは、ブート後のヘルスチェックで`nproc`を期待されるCPU数と比較すれば、この種のエラーをただちに捕捉できる。
 
-### Lesson {#lesson_3}
+### 教訓 {#lesson_3}
 
-The kernel silently accepts unknown parameters — by design. A typo in a critical boot parameter produces no error, only a log message buried in hundreds of lines of dmesg output. Operational processes should verify that the expected effect occurred (check CPU count, memory limits, etc.) rather than assuming the parameter took effect. For fleet management, define the expected post-boot state in a configuration management tool and assert it.
+カーネルは未知のパラメータを黙って受け入れる — 設計上そうなっている。重要なブートパラメータのタイプミスはエラーを生まず、dmesg出力の数百行に埋もれたログメッセージを1つ残すだけである。運用プロセスでは、パラメータが効いたと仮定するのではなく、期待した効果が生じたこと（CPU数、メモリ制限などを確認する）を検証すべきである。フリート管理においては、ブート後の期待される状態を構成管理ツールで定義し、それをアサートすること。
 
 ---
 
-## Case 5: module init returning wrong error code {#case-5-module-init-returning-wrong-error-code}
+## 事例5: 誤ったエラーコードを返すモジュール初期化 {#case-5-module-init-returning-wrong-error-code}
 
-### The problem {#the-problem_4}
+### 問題 {#the-problem_4}
 
-A driver for a custom PCIe device passed code review and was merged into the company's internal tree. During integration testing, the driver appeared to load successfully — `modprobe` returned exit code 0, `lsmod` showed the driver loaded, and the device responded to initial commands. But over the following days, sporadic memory leak reports appeared in the kernel log:
+カスタムPCIeデバイス用のドライバがコードレビューを通過し、社内ツリーにマージされた。統合テスト中、ドライバは正常にロードされたように見えた — `modprobe`は終了コード0を返し、`lsmod`にはドライバがロード済みと表示され、デバイスは初期コマンドに応答した。しかしその後の数日間、カーネルログに散発的なメモリリークの報告が現れた:
 
 ```
 unreferenced object 0xffff9d4b81234500 (size 512):
@@ -280,11 +280,11 @@ unreferenced object 0xffff9d4b81234500 (size 512):
     mydriver_probe+0x60/0x180
 ```
 
-`kmemleak` (enabled in the debug kernel) was tracking allocations that were never freed.
+（デバッグ用カーネルで有効にしていた）`kmemleak`が、解放されることのない割り当てを追跡していた。
 
-### Diagnosis {#diagnosis_4}
+### 診断 {#diagnosis_4}
 
-The driver's `init()` function allocated internal state, registered a character device, and registered a PCI driver. If the PCI driver registration failed (because the device was not present on some test machines), the function was supposed to clean up and return an error. Instead:
+ドライバの`init()`関数は、内部状態を割り当て、キャラクタデバイスを登録し、PCIドライバを登録していた。PCIドライバの登録が失敗した場合（一部のテストマシンにはデバイスが存在しなかったため）、関数はクリーンアップしてエラーを返すはずだった。ところが実際は次のとおりだった:
 
 ```c
 static int __init mydriver_init(void)
@@ -305,21 +305,21 @@ static int __init mydriver_init(void)
     if (ret) {
         cdev_del(&mydriver_cdev);
         kfree(mydriver_state);
-        return 1;  /* BUG: should be a negative errno */
+        return 1;  /* バグ: 負の errno であるべき */
     }
 
     return 0;
 }
 ```
 
-The `return 1` on PCI registration failure returned a *positive* value instead of a negative errno. For a loadable module, `init()` runs via `do_one_initcall(mod->init)`, which just calls the function and returns whatever it returned — no success/failure interpretation happens there. That interpretation happens back in the caller, `do_init_module()`:
+PCI登録失敗時の`return 1`は、負のerrnoではなく*正の*値を返していた。ロード可能モジュールの場合、`init()`は`do_one_initcall(mod->init)`経由で実行されるが、これは単に関数を呼び出してその戻り値をそのまま返すだけであり、そこでは成功/失敗の解釈は行われない。解釈が行われるのは呼び出し元の`do_init_module()`に戻ってからである:
 
 ```c
 /* kernel/module/main.c */
 if (mod->init != NULL)
     ret = do_one_initcall(mod->init);
 if (ret < 0) {
-    /* ... module load fails, unwinds ... */
+    /* ... モジュールのロードは失敗し、巻き戻される ... */
     goto fail_free_freeinit;
 }
 if (ret > 0)
@@ -330,28 +330,28 @@ if (ret > 0)
 mod->state = MODULE_STATE_LIVE;
 ```
 
-A return value `> 0` only triggers a warning — it does *not* fail the load. The module was reported as loaded. But because `pci_register_driver()` had actually failed, the `cdev_del()` and `kfree()` cleanup branches ran — freeing the character device registration and the allocated state. The module was in a state where `init()` returned "success" but had cleaned up everything, leaving a partially-initialized shell.
+戻り値が`> 0`の場合は警告が出るだけで、ロードを失敗させることは*ない*。モジュールはロード済みとして報告された。しかし`pci_register_driver()`は実際には失敗していたので、`cdev_del()`と`kfree()`のクリーンアップ分岐が実行されていた — キャラクタデバイスの登録と割り当てた状態を解放していたのである。モジュールは、`init()`が「成功」を返したにもかかわらずすべてをクリーンアップしてしまった状態、つまり中途半端に初期化された抜け殻になっていた。
 
-Subsequent access through the character device (or driver framework callbacks) reached freed memory or missing registrations. The kmemleaks came from a slightly different path: on machines where the PCI device was present but returned a transient error, `cdev_add` had registered the device but `pci_register_driver` failed. The `cdev_del` ran, but a racing process had already opened the character device, preventing the `cdev_del` from fully completing. The state allocation (`mydriver_state`) was freed while references to it still existed.
+その後のキャラクタデバイス経由（またはドライバフレームワークのコールバック経由）のアクセスは、解放済みのメモリや存在しない登録に到達した。kmemleakの報告は少し異なる経路から来ていた: PCIデバイスは存在するが一時的なエラーを返したマシンでは、`cdev_add`がデバイスを登録したが`pci_register_driver`が失敗した。`cdev_del`は実行されたが、競合するプロセスがすでにキャラクタデバイスをオープンしていたため、`cdev_del`は完全には完了しなかった。状態の割り当て（`mydriver_state`）は、それへの参照がまだ存在している間に解放された。
 
-### Root cause {#root-cause_4}
+### 根本原因 {#root-cause_4}
 
-`return 1` is not a valid return code for a module init function. The kernel's convention is: 0 = success, negative errno = failure. A positive return is treated as success but is meaningless — it is neither a valid errno nor documented as a success code variant. The mistake was compounded by the half-cleanup that ran: the function freed resources but reported success, leaving the module in an impossible state.
+`return 1`は、モジュールinit関数の戻り値として有効なものではない。カーネルの規約は、0 = 成功、負のerrno = 失敗である。正の戻り値は成功として扱われるが、意味を持たない — 有効なerrnoでもなく、成功コードの変種としてドキュメント化されてもいない。この誤りは、実行された中途半端なクリーンアップによってさらに悪化した: 関数はリソースを解放しながら成功を報告し、モジュールをありえない状態に置き去りにした。
 
-### Fix {#fix_3}
+### 修正 {#fix_3}
 
 ```c
     ret = pci_register_driver(&mydriver_pci_driver);
     if (ret) {
         cdev_del(&mydriver_cdev);
         kfree(mydriver_state);
-        return ret;  /* pci_register_driver returns negative errno on failure */
+        return ret;  /* pci_register_driver は失敗時に負の errno を返す */
     }
 ```
 
-`pci_register_driver()` already returns a negative errno on failure; passing it through directly is correct. If generating a local error code, use a negative value: `return -ENODEV;`, never `return 1;`.
+`pci_register_driver()`はすでに失敗時に負のerrnoを返すので、それをそのまま返すのが正しい。独自のエラーコードを生成する場合は負の値を使う: `return -ENODEV;`とし、決して`return 1;`としてはならない。
 
-The cleanup order should also be the reverse of the allocation order (LIFO), and it should be factored into a single error path:
+クリーンアップの順序も割り当ての逆順（LIFO）であるべきで、単一のエラーパスにまとめるべきである:
 
 ```c
 static int __init mydriver_init(void)
@@ -380,30 +380,30 @@ err_free_state:
 }
 ```
 
-### Lesson {#lesson_4}
+### 教訓 {#lesson_4}
 
-Module init functions must return 0 on success or a negative errno on failure. A positive return is treated as success and the module is considered loaded, even if internal state is inconsistent. Positive values from kernel API functions (like a device minor number or a count) must not be returned directly from `init()`. The `goto`-based error path pattern (sometimes called "gotos for error handling") makes the cleanup order explicit and hard to get wrong. Tools like `kmemleak` and KASAN are invaluable for catching the resulting inconsistencies in development and CI.
+モジュールinit関数は、成功時には0を、失敗時には負のerrnoを返さなければならない。正の戻り値は成功として扱われ、内部状態が不整合であってもモジュールはロード済みとみなされる。カーネルAPI関数からの正の値（デバイスのマイナー番号や個数など）を`init()`からそのまま返してはならない。`goto`ベースのエラーパスのパターン（「エラー処理のためのgoto」と呼ばれることもある）は、クリーンアップの順序を明示的にし、間違えにくくする。`kmemleak`やKASANのようなツールは、開発やCIで結果として生じる不整合を捕捉するうえで非常に貴重である。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Early Boot and start_kernel()](early-boot.md) — initcall levels and ordering
-- [Module Init and Initcalls](initcalls-modules.md) — `load_module()`, error code handling
-- [Kernel Panic and Oops](panic-oops.md) — crash analysis and kdump setup
-- [Boot Parameters](boot-params.md) — `__setup()`, `early_param()`, unknown parameter handling
-- [Kmemleak](../mm/kmemleak.md) — detecting memory leaks like Case 5
-- [KASAN](../mm/kasan.md) — `CONFIG_KASAN_GENERIC`, `CONFIG_KASAN_SW_TAGS`, and `CONFIG_KASAN_HW_TAGS`, the detection strategies behind Case 2 (see the External reference below for the `CONFIG_KASAN_VMALLOC` distinction specifically)
-- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — the initcall level macros: `core_initcall()` = level 1, `subsys_initcall()` = level 4, `device_initcall()` = level 6, confirming the ordering behind Case 1
-- [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `do_one_initcall()` and the level-by-level initcall dispatch (`do_initcall_level()`), plus `unknown_bootoption()`/`print_unknown_bootoptions()` behind Case 4
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `do_init_module()`: `if (ret > 0) pr_warn("%s: init suspiciously returned %d, it should follow 0/-E convention\n", ...)`, the real kernel code that would have caught Case 5's bug at load time
+- [初期ブートとstart_kernel()](early-boot.md) — initcallレベルと順序
+- [モジュール初期化とinitcall](initcalls-modules.md) — `load_module()`、エラーコードの扱い
+- [カーネルパニックとOops](panic-oops.md) — クラッシュ解析とkdumpのセットアップ
+- [ブートパラメータ](boot-params.md) — `__setup()`、`early_param()`、未知のパラメータの扱い
+- [Kmemleak](../mm/kmemleak.md) — 事例5のようなメモリリークの検出
+- [KASAN](../mm/kasan.md) — 事例2の背後にある検出戦略である`CONFIG_KASAN_GENERIC`、`CONFIG_KASAN_SW_TAGS`、`CONFIG_KASAN_HW_TAGS`（`CONFIG_KASAN_VMALLOC`の区別については、特に下の外部参考資料を参照）
+- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — initcallレベルのマクロ: `core_initcall()` = レベル1、`subsys_initcall()` = レベル4、`device_initcall()` = レベル6。事例1の背後にある順序を裏付ける
+- [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `do_one_initcall()`とレベルごとのinitcallディスパッチ（`do_initcall_level()`）、および事例4の背後にある`unknown_bootoption()`/`print_unknown_bootoptions()`
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `do_init_module()`: `if (ret > 0) pr_warn("%s: init suspiciously returned %d, it should follow 0/-E convention\n", ...)`。事例5のバグをロード時に捕捉できたはずの実際のカーネルコード
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [Kernel documentation: Kdump Support](https://docs.kernel.org/admin-guide/kdump/kdump.html) — `crashkernel=` sizing syntax and guidance (e.g. `crashkernel=512M-2G:64M,2G-:128M`), the scaling-with-RAM rule behind Case 3
-- [Kernel documentation: Kernel Parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — "if it doesn't recognize a parameter and it doesn't contain a '.', the parameter gets passed to init: parameters with '=' go into init's environment" — the exact mechanism behind Case 4's silent `mxcpus=4` typo
-- [Kernel documentation: Linux kernel coding style, §16 "Function return values and names"](https://docs.kernel.org/process/coding-style.html) — the 0-success/negative-errno convention that Case 5's `return 1;` violated
-- [Kernel documentation: KASAN](https://docs.kernel.org/dev-tools/kasan.html) — by default, only the linear mapping gets real shadow memory; vmalloc space gets a read-only placeholder shadow page with no real detection, and `CONFIG_KASAN_VMALLOC` is what makes vmalloc allocations individually shadow-tracked — confirming Case 2's claim that `CONFIG_KASAN_VMALLOC` doesn't apply to a direct-mapped `__init` text page in the first place, since that page was never in vmalloc space to begin with
-- [Kernel documentation: Kmemleak](https://docs.kernel.org/dev-tools/kmemleak.html) — "detecting possible kernel memory leaks ... the orphan objects are not freed but only reported," the tool that surfaces the bug in Case 5
+- [Kernel documentation: Kdump Support](https://docs.kernel.org/admin-guide/kdump/kdump.html) — `crashkernel=`のサイズ指定構文とガイダンス（例: `crashkernel=512M-2G:64M,2G-:128M`）。事例3の背後にある、RAMに応じてスケールするというルール
+- [Kernel documentation: Kernel Parameters](https://docs.kernel.org/admin-guide/kernel-parameters.html) — 「if it doesn't recognize a parameter and it doesn't contain a '.', the parameter gets passed to init: parameters with '=' go into init's environment」（パラメータを認識できず、'.'も含まない場合、そのパラメータはinitに渡される: '='を含むパラメータはinitの環境に入る）— 事例4の無症状な`mxcpus=4`タイプミスの背後にあるまさにその機構
+- [Kernel documentation: Linux kernel coding style, §16 "Function return values and names"](https://docs.kernel.org/process/coding-style.html) — 事例5の`return 1;`が違反した、0が成功・負のerrnoが失敗という規約
+- [Kernel documentation: KASAN](https://docs.kernel.org/dev-tools/kasan.html) — デフォルトでは、実際のシャドウメモリを持つのはリニアマッピングだけであり、vmalloc空間には実際の検出能力を持たない読み取り専用のプレースホルダのシャドウページが割り当てられる。vmallocの割り当てを個別にシャドウで追跡できるようにするのが`CONFIG_KASAN_VMALLOC`である — これは、ダイレクトマップされた`__init`テキストページにはそもそも`CONFIG_KASAN_VMALLOC`が当てはまらないという事例2の主張を裏付ける。そのページは最初からvmalloc空間にはなかったからである
+- [Kernel documentation: Kmemleak](https://docs.kernel.org/dev-tools/kmemleak.html) — 「detecting possible kernel memory leaks ... the orphan objects are not freed but only reported」（カーネルのメモリリークの可能性を検出する……孤立したオブジェクトは解放されず、報告されるだけである）。事例5のバグを表面化させるツール
 
-As noted at the top of this page, no specific commit hashes, CVE numbers, or kernel-version-tied feature claims appear in the prose above — the references above instead verify the underlying kernel mechanisms (initcall ordering, `__init`/KASAN, kdump/crashkernel sizing, unknown-boot-parameter handling, and module init return codes) against current mainline source and documentation.
+このページの冒頭で述べたとおり、上の本文には特定のコミットハッシュ、CVE番号、カーネルバージョンに結び付いた機能の主張は登場しない — 上の参考資料は代わりに、根底にあるカーネルの機構（initcallの順序、`__init`/KASAN、kdump/crashkernelのサイズ設定、未知のブートパラメータの扱い、モジュールinitの戻り値）を、現在のメインラインのソースとドキュメントに照らして検証している。

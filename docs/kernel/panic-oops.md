@@ -1,23 +1,23 @@
-# Kernel Panic and Oops {#kernel-panic-and-oops}
+# カーネルパニックとOops {#kernel-panic-and-oops}
 
-> Oops handling, `panic()`, call stack decoding, and kdump
+> Oopsの処理、`panic()`、コールスタックのデコード、kdump
 
-## What triggers an oops? {#what-triggers-an-oops}
+## 何がoopsを引き起こすか {#what-triggers-an-oops}
 
-An "oops" is the kernel's report of a fault it cannot safely recover from in the current context. Common triggers on x86-64:
+「oops」とは、現在のコンテキストでは安全に回復できないフォルトについてのカーネルの報告である。x86-64でよくある原因:
 
-- **NULL pointer dereference** — accessing address `0x0` through `0xfff` (the first page, 4 KB, is unmapped)
-- **Use-after-free** — accessing memory that has been returned to the allocator and possibly reallocated
-- **Stack corruption** — stack smash overwrites the return address; detected by the stack canary or ORC unwinder
-- **Invalid opcode (#UD)** — executing `ud2` (used by `BUG()`) or a truly invalid instruction
-- **General protection fault (#GP)** — misaligned access to a privileged resource, segment limit violation
-- **Double fault (#DF)** — fault while handling a fault, often a stack overflow
+- **NULLポインタ参照** — アドレス`0x0`から`0xfff`へのアクセス（最初のページ4KBはマップされていない）
+- **use-after-free** — アロケータに返却され、再割り当てされている可能性のあるメモリへのアクセス
+- **スタック破壊** — スタックスマッシュによる戻りアドレスの上書き。スタックカナリアやORCアンワインダによって検出される
+- **無効オペコード（#UD）** — `ud2`（`BUG()`で使われる）や本当に無効な命令の実行
+- **一般保護例外（#GP）** — 特権リソースへの不正なアクセス、セグメントリミット違反
+- **ダブルフォルト（#DF）** — フォルト処理中のフォルト。多くの場合スタックオーバーフロー
 
-The CPU raises an exception, the IDT handler runs, and control reaches `do_page_fault()`, `do_general_protection()`, or similar. If the fault occurred in kernel code (not a user program), the handler calls `die()`.
+CPUが例外を発生させ、IDTハンドラが実行され、制御は`do_page_fault()`や`do_general_protection()`などに到達する。フォルトが（ユーザープログラムではなく）カーネルコードで発生した場合、ハンドラは`die()`を呼び出す。
 
 ---
 
-## `die()` and the oops path {#die-and-the-oops-path}
+## `die()`とoopsのパス {#die-and-the-oops-path}
 
 ```c
 /* arch/x86/kernel/dumpstack.c */
@@ -27,22 +27,22 @@ void die(const char *str, struct pt_regs *regs, long err)
     unsigned long flags = oops_begin();
     int sig = SIGSEGV;
 
-    if (__die(str, regs, err))   /* formats and prints the oops message */
+    if (__die(str, regs, err))   /* oops メッセージを整形して出力する */
         sig = 0;
 
-    oops_end(flags, regs, sig);  /* decides: kill task or panic */
+    oops_end(flags, regs, sig);  /* タスクを kill するかパニックするかを決める */
 }
 ```
 
 ### `oops_begin()` / `oops_end()` {#oopsbegin-oopsend}
 
-`oops_begin()` takes a raw spinlock (`die_lock`) to serialize concurrent oopses across CPUs — nested oopses on the *same* CPU (tracked via `die_owner`/`die_nest_count`) are allowed through rather than deadlocking — then calls `console_verbose()` and `bust_spinlocks(1)` to flush any spinning console writers. It returns the saved interrupt flags so `oops_end()` can restore them. Neither function touches any watchdog, and there is no `oops_count` sysctl.
+`oops_begin()`はraw spinlock（`die_lock`）を取得して、CPU間で同時に発生するoopsを直列化する — *同じ*CPU上でのネストしたoops（`die_owner`/`die_nest_count`で追跡される）はデッドロックさせずに通過させる — そして`console_verbose()`と`bust_spinlocks(1)`を呼び出して、スピンしているコンソールの書き手をフラッシュする。保存した割り込みフラグを返し、`oops_end()`がそれを復元できるようにする。どちらの関数もウォッチドッグには一切触れず、`oops_count`というsysctlも存在しない。
 
-`oops_end()` is where `kexec_should_crash()`/`crash_kexec()` are actually invoked (not inside `die()` itself), followed by releasing `die_lock`, tainting the kernel (`TAINT_DIE`), and — if `signr` is nonzero — deciding whether to `panic()` (always in interrupt context, or if `panic_on_oops` is set) or otherwise kill the offending task.
+`kexec_should_crash()`/`crash_kexec()`が実際に呼び出されるのは（`die()`自体の中ではなく）`oops_end()`であり、その後`die_lock`を解放し、カーネルをtaint状態にし（`TAINT_DIE`）、そして — `signr`が非ゼロなら — `panic()`するか（割り込みコンテキストでは常に、あるいは`panic_on_oops`が設定されている場合）、そうでなければ問題を起こしたタスクをkillするかを決める。
 
 ---
 
-## Anatomy of an oops message {#anatomy-of-an-oops-message}
+## oopsメッセージの解剖 {#anatomy-of-an-oops-message}
 
 ```
 BUG: unable to handle kernel NULL pointer dereference at 0000000000000008
@@ -71,96 +71,96 @@ Call Trace:
  </TASK>
 ```
 
-Key fields:
+主要なフィールド:
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `BUG: unable to handle kernel NULL pointer dereference at 0000000000000008` | Fault type and faulting address |
-| `Oops: 0002 [#1]` | Error code (0002 = write fault); `[#1]` = first oops in this boot |
-| `Tainted: G ... O` | Taint flags (see below) |
-| `RIP: 0010:my_driver_read+0x2c/0x80` | Instruction pointer: function + offset / function size |
-| `CR2` | The address that caused the page fault (faulting virtual address) |
-| `Call Trace` | Stack unwinding from current frame to syscall entry |
+| `BUG: unable to handle kernel NULL pointer dereference at 0000000000000008` | フォルトの種類とフォルトしたアドレス |
+| `Oops: 0002 [#1]` | エラーコード（0002 = 書き込みフォルト）。`[#1]` = このブートで最初のoops |
+| `Tainted: G ... O` | taintフラグ（後述） |
+| `RIP: 0010:my_driver_read+0x2c/0x80` | 命令ポインタ: 関数 + オフセット / 関数サイズ |
+| `CR2` | ページフォールトを引き起こしたアドレス（フォルトした仮想アドレス） |
+| `Call Trace` | 現在のフレームからシステムコールのエントリまでのスタックアンワインド |
 
 ---
 
-## Taint flags {#taint-flags}
+## taintフラグ {#taint-flags}
 
-The `Tainted:` line summarizes kernel integrity state. A "tainted" kernel has been modified in ways that may make bug reports less reliable.
+`Tainted:`行は、カーネルの完全性の状態を要約する。「tainted」なカーネルとは、バグ報告の信頼性を下げるかもしれない形で改変されたカーネルである。
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |------|---------|
-| `G` | All loaded modules are GPL-licensed (no taint from this) |
-| `P` | A proprietary (non-GPL) module has been loaded |
-| `O` | An out-of-tree (not mainline) module has been loaded |
-| `W` | A WARN() was triggered |
-| `D` | `die()` has been called at least once |
-| `E` | An unsigned module was loaded |
-| `C` | A staging driver is loaded |
-| `X` | Auxiliary taint (architecture-specific) |
+| `G` | ロードされたすべてのモジュールがGPLライセンスである（これによるtaintはない） |
+| `P` | プロプライエタリ（非GPL）モジュールがロードされた |
+| `O` | ツリー外（メインラインにない）モジュールがロードされた |
+| `W` | WARN()が発生した |
+| `D` | `die()`が少なくとも1回呼ばれた |
+| `E` | 署名のないモジュールがロードされた |
+| `C` | stagingドライバがロードされている |
+| `X` | 補助的なtaint（アーキテクチャ固有） |
 
 ```bash
-# Check taint state from userspace:
+# ユーザー空間から taint 状態を確認する:
 cat /proc/sys/kernel/tainted
-# 0 = untainted
-# Each bit corresponds to a flag; see Documentation/admin-guide/tainted-kernels.rst
+# 0 = taint なし
+# 各ビットがフラグに対応する。Documentation/admin-guide/tainted-kernels.rst を参照
 ```
 
 ---
 
-## Stack unwinding: ORC {#stack-unwinding-orc}
+## スタックアンワインド: ORC {#stack-unwinding-orc}
 
-Since Linux 4.14, x86-64 uses the **ORC (Oops Rewind Capability) unwinder** instead of frame pointer-based unwinding. ORC is more reliable because it works even when the compiler omits frame pointers (which is common with optimization).
+Linux 4.14以降、x86-64はフレームポインタベースのアンワインドの代わりに**ORC（Oops Rewind Capability）アンワインダ**を使う。ORCは、コンパイラがフレームポインタを省略する場合（最適化を有効にすると一般的）でも動作するため、より信頼性が高い。
 
-At build time, `objtool` analyzes each function and generates an ORC entry describing the stack layout at every instruction:
+ビルド時に`objtool`が各関数を解析し、すべての命令位置におけるスタックレイアウトを記述するORCエントリを生成する:
 
 ```c
 /* arch/x86/include/asm/orc_types.h */
 struct orc_entry {
-    s16     sp_offset;   /* stack pointer offset from the CFA */
-    s16     bp_offset;   /* base pointer offset */
-    unsigned int sp_reg:4;   /* register containing the CFA */
+    s16     sp_offset;   /* CFA からのスタックポインタのオフセット */
+    s16     bp_offset;   /* ベースポインタのオフセット */
+    unsigned int sp_reg:4;   /* CFA を保持するレジスタ */
     unsigned int bp_reg:4;
     unsigned int type:3;
     unsigned int signal:1;
 };
 ```
 
-These entries are stored in `.orc_unwind` and `.orc_unwind_ip` ELF sections. The unwinder (`arch/x86/kernel/unwind_orc.c`) looks up the ORC entry for the current RIP and uses it to unwind one frame at a time, producing the `Call Trace` in the oops message.
+これらのエントリは`.orc_unwind`と`.orc_unwind_ip` ELFセクションに格納される。アンワインダ（`arch/x86/kernel/unwind_orc.c`）は現在のRIPに対応するORCエントリを検索し、それを使って1フレームずつアンワインドして、oopsメッセージ内の`Call Trace`を生成する。
 
-On arm64, the kernel uses a frame-pointer-based unwinder. arm64 requires `CONFIG_FRAME_POINTER`, ensuring the frame pointer chain is always intact, so the unwinder can walk frames without architecture-specific unwind tables.
+arm64では、カーネルはフレームポインタベースのアンワインダを使う。arm64は`CONFIG_FRAME_POINTER`を必須としており、フレームポインタのチェーンが常に保たれることが保証されるので、アンワインダはアーキテクチャ固有のアンワインドテーブルなしにフレームをたどれる。
 
 ---
 
-## `WARN()`, `BUG()`, and their variants {#warn-bug-and-their-variants}
+## `WARN()`、`BUG()`とその変種 {#warn-bug-and-their-variants}
 
 ```c
 /* include/linux/bug.h, include/asm-generic/bug.h */
 
-/* Print stack trace and continue. Does NOT kill the task. */
+/* スタックトレースを出力して続行する。タスクを kill しない。 */
 WARN(condition, fmt, ...)
-WARN_ON(condition)          /* no format string */
-WARN_ONCE(condition, fmt, ...)  /* fires at most once */
+WARN_ON(condition)          /* フォーマット文字列なし */
+WARN_ONCE(condition, fmt, ...)  /* 最大 1 回だけ発火する */
 WARN_ON_ONCE(condition)
 
-/* Trigger an oops (invalid opcode on x86; kills task or panics). */
+/* oops を引き起こす（x86 では無効オペコード。タスクを kill するかパニックする）。 */
 BUG()
 BUG_ON(condition)
 ```
 
-`BUG()` on x86 expands to the `ud2` instruction (undefined instruction opcode `0x0f 0x0b`). This raises a `#UD` exception, which reaches the kernel's `invalid_op` handler, which calls `die()`.
+x86の`BUG()`は`ud2`命令（未定義命令オペコード`0x0f 0x0b`）に展開される。これは`#UD`例外を発生させ、カーネルの`invalid_op`ハンドラに到達し、そこから`die()`が呼ばれる。
 
-On x86 (and other architectures defining `__WARN_FLAGS`), `WARN()` expands to a `ud2` trap instruction rather than a direct function call — the resulting invalid-opcode exception is caught by `exc_invalid_op()`, which recognizes the `ud2` as a warning site and calls `report_bug()` → `__warn()`. (`warn_slowpath_fmt()` is the fallback path for architectures without trap-based warnings; it's dead code on x86.) Either way, `__warn()` calls `dump_stack()` and `print_oops_end_marker()` but does not trigger `die()` — execution continues after `WARN()`.
+x86（および`__WARN_FLAGS`を定義する他のアーキテクチャ）では、`WARN()`は直接の関数呼び出しではなく`ud2`トラップ命令に展開される — 結果として生じる無効オペコード例外は`exc_invalid_op()`で捕捉され、それが`ud2`を警告箇所として認識して`report_bug()` → `__warn()`を呼び出す。（`warn_slowpath_fmt()`はトラップベースの警告を持たないアーキテクチャ向けのフォールバックパスであり、x86ではデッドコードである。）いずれの場合も、`__warn()`は`dump_stack()`と`print_oops_end_marker()`を呼び出すが`die()`は引き起こさない — 実行は`WARN()`の後も続く。
 
 ---
 
-## `panic()`: the point of no return {#panic-the-point-of-no-return}
+## `panic()`: 引き返せない地点 {#panic-the-point-of-no-return}
 
-`panic()` itself is a thin variadic wrapper; all of the actual logic lives in `vpanic()`, which it calls with a `va_list`:
+`panic()`自体は薄い可変長引数のラッパーにすぎない。実際のロジックはすべて`vpanic()`にあり、`panic()`は`va_list`を渡してそれを呼び出す:
 
 ```c
-/* kernel/panic.c (simplified — the real vpanic() also handles multi-CPU
- * panic redirection, kgdb, sysinfo dumping, and console flushing) */
+/* kernel/panic.c（簡略化 — 実際の vpanic() はマルチ CPU での
+ * パニックのリダイレクト、kgdb、sysinfo のダンプ、コンソールのフラッシュも扱う） */
 void panic(const char *fmt, ...)
 {
     va_list args;
@@ -172,29 +172,29 @@ void panic(const char *fmt, ...)
 
 void vpanic(const char *fmt, va_list args)
 {
-    /* 1. Disable local IRQs and preemption */
+    /* 1. ローカル IRQ とプリエンプションを無効化する */
     local_irq_disable();
     preempt_disable_notrace();
 
-    /* 2. Format and print the panic message */
+    /* 2. パニックメッセージを整形して出力する */
     console_verbose();
     bust_spinlocks(1);
     static char buf[PANIC_MSG_BUFSZ];
     vscnprintf(buf, sizeof(buf), fmt, args);
     pr_emerg("Kernel panic - not syncing: %s\n", buf);
 
-    /* 3. Attempt to kexec into the crash kernel *before* the notifier
-     *    chain runs, unless the crash_kexec_post_notifiers boot param
-     *    asked to defer it until after step 4 instead */
+    /* 3. notifier チェーンが実行される*前に*クラッシュカーネルへの kexec を
+     *    試みる。ただし crash_kexec_post_notifiers ブートパラメータで
+     *    ステップ 4 の後まで遅らせるよう指定されている場合を除く */
     if (!crash_kexec_post_notifiers)
-        __crash_kexec(NULL);  /* bypasses public crash_kexec()'s panic-cpu check */
+        __crash_kexec(NULL);  /* 公開版 crash_kexec() のパニック CPU チェックを迂回する */
 
-    /* 4. Trigger any registered panic notifiers */
+    /* 4. 登録されたパニック notifier を起動する */
     atomic_notifier_call_chain(&panic_notifier_list, 0, buf);
 
-    /* 5. If kdump didn't take over, try to reboot — using mdelay(),
-     *    since normal timers don't work post-panic, while repeatedly
-     *    touching the NMI watchdog so it doesn't fire during the wait */
+    /* 5. kdump が制御を引き継がなかった場合、再起動を試みる — パニック後は
+     *    通常のタイマーが動かないので mdelay() を使い、待機中に NMI ウォッチドッグが
+     *    発火しないよう繰り返しタッチする */
     if (panic_timeout > 0) {
         pr_emerg("Rebooting in %d seconds..\n", panic_timeout);
         for (long i = 0; i < panic_timeout * 1000; i += PANIC_TIMER_STEP) {
@@ -205,8 +205,8 @@ void vpanic(const char *fmt, va_list args)
     if (panic_timeout != 0)
         emergency_restart();
 
-    /* 6. Halt: loop forever, touching the softlockup watchdog instead
-     *    (the NMI watchdog would otherwise fire and reboot the box) */
+    /* 6. 停止: 代わりに softlockup ウォッチドッグをタッチしながら無限ループする
+     *   （そうしないと NMI ウォッチドッグが発火してマシンを再起動してしまう） */
     for (long i = 0; ; i += PANIC_TIMER_STEP) {
         touch_softlockup_watchdog();
         mdelay(PANIC_TIMER_STEP);
@@ -214,23 +214,23 @@ void vpanic(const char *fmt, va_list args)
 }
 ```
 
-The `panic_notifier_list` allows subsystems to register callbacks that run before the system halts. netconsole, pstore, and kdump all hook into this chain.
+`panic_notifier_list`により、サブシステムはシステムが停止する前に実行されるコールバックを登録できる。netconsole、pstore、kdumpはいずれもこのチェーンにフックしている。
 
 ### `panic_on_oops` sysctl {#paniconoops-sysctl}
 
 ```bash
-# Read current value:
+# 現在の値を読む:
 cat /proc/sys/kernel/panic_on_oops
-# 0 = try to recover (kill task)
-# 1 = panic on oops
+# 0 = 回復を試みる（タスクを kill する）
+# 1 = oops でパニックする
 
-# Set for production (many sites do this):
+# 本番環境向けに設定する（多くのサイトがこうしている）:
 echo 1 > /proc/sys/kernel/panic_on_oops
 ```
 
-When `panic_on_oops = 1`, `oops_end()` calls `panic()` instead of attempting to continue. This is appropriate in production environments where a partially-corrupted kernel state is worse than a clean reboot.
+`panic_on_oops = 1`の場合、`oops_end()`は続行を試みる代わりに`panic()`を呼び出す。これは、部分的に破損したカーネル状態がクリーンな再起動よりも悪い本番環境に適している。
 
-### `panic=N` boot parameter {#panicn-boot-parameter}
+### `panic=N`ブートパラメータ {#panicn-boot-parameter}
 
 ```
 panic=30    # reboot 30 seconds after panic
@@ -240,86 +240,86 @@ panic=0     # do not reboot (halt forever, default)
 
 ---
 
-## kdump: capturing crash memory {#kdump-capturing-crash-memory}
+## kdump: クラッシュ時のメモリの取得 {#kdump-capturing-crash-memory}
 
-kdump allows the kernel to save a complete memory dump when it panics. The mechanism uses `kexec(2)` to boot a pre-loaded "crash kernel" from a reserved memory region, bypassing normal boot.
+kdumpにより、カーネルはパニック時に完全なメモリダンプを保存できる。この機構は`kexec(2)`を使い、予約されたメモリ領域から事前にロードされた「クラッシュカーネル」を、通常のブートを経ずに起動する。
 
-### Setup {#setup}
+### セットアップ {#setup}
 
 ```bash
-# Reserve memory for the crash kernel at boot time:
-# (add to GRUB_CMDLINE_LINUX in /etc/default/grub)
+# ブート時にクラッシュカーネル用のメモリを予約する:
+# （/etc/default/grub の GRUB_CMDLINE_LINUX に追加する）
 crashkernel=256M
 
-# Load the crash kernel (run at boot via initscript or systemd unit):
+# クラッシュカーネルをロードする（initscript や systemd ユニットでブート時に実行する）:
 kexec -p /boot/vmlinuz-$(uname -r) \
     --initrd=/boot/initrd.img-$(uname -r) \
     --append="root=/dev/sda1 irqpoll maxcpus=1 reset_devices"
 ```
 
-### What happens on panic {#what-happens-on-panic}
+### パニック時に何が起こるか {#what-happens-on-panic}
 
-1. kdump is triggered from `panic()` (via the internal `__crash_kexec()`) or from `die()`'s `oops_end()` (via the public `crash_kexec()`)
-2. kexec switches to the crash kernel's page tables and jumps to its entry point
-3. The crash kernel boots as a fresh kernel (using only the reserved memory region)
-4. The crash kernel exposes the original kernel's memory as `/proc/vmcore` (an ELF core dump)
-5. A userspace tool (typically `makedumpfile`) copies `/proc/vmcore` to disk
+1. kdumpは、`panic()`から（内部の`__crash_kexec()`経由で）、または`die()`の`oops_end()`から（公開版の`crash_kexec()`経由で）起動される
+2. kexecがクラッシュカーネルのページテーブルに切り替え、そのエントリポイントへジャンプする
+3. クラッシュカーネルが新しいカーネルとしてブートする（予約されたメモリ領域のみを使う）
+4. クラッシュカーネルは、元のカーネルのメモリを`/proc/vmcore`（ELFコアダンプ）として公開する
+5. ユーザー空間のツール（典型的には`makedumpfile`）が`/proc/vmcore`をディスクにコピーする
 
-### Analyzing the dump {#analyzing-the-dump}
+### ダンプの解析 {#analyzing-the-dump}
 
 ```bash
-# On the crashed system (or a system with the same kernel):
+# クラッシュしたシステム上で（または同じカーネルを持つシステム上で）:
 crash /usr/lib/debug/lib/modules/$(uname -r)/vmlinux vmcore
 
-# Inside crash:
-crash> bt         # backtrace of the crashed task
-crash> log        # kernel log ring buffer
-crash> ps         # all processes at time of crash
-crash> vm         # virtual memory state
+# crash の中で:
+crash> bt         # クラッシュしたタスクのバックトレース
+crash> log        # カーネルログのリングバッファ
+crash> ps         # クラッシュ時点の全プロセス
+crash> vm         # 仮想メモリの状態
 ```
 
-The `crash` utility (from `crash-utility` package) is the standard tool for post-mortem analysis of Linux kernel vmcores.
+`crash`ユーティリティ（`crash-utility`パッケージ）は、Linuxカーネルのvmcoreを事後解析するための標準ツールである。
 
 ---
 
-## Decoding oops output {#decoding-oops-output}
+## oops出力のデコード {#decoding-oops-output}
 
 ### `faddr2line` {#faddr2line}
 
 ```bash
-# Decode a function+offset from the oops:
+# oops 中の関数+オフセットをデコードする:
 scripts/faddr2line vmlinux my_driver_read+0x2c
 
-# Output:
+# 出力:
 # my_driver_read (drivers/mydriver/mydriver.c:142)
 ```
 
 ### `addr2line` {#addr2line}
 
 ```bash
-# Decode a raw address (requires debug symbols):
+# 生のアドレスをデコードする（デバッグシンボルが必要）:
 addr2line -e vmlinux -a ffffffff81234567
 
-# Or with the offset from the oops RIP:
+# または oops の RIP のオフセットを使って:
 addr2line -e vmlinux -i -f ffffffff81234567
 ```
 
 ### `decode_stacktrace.sh` {#decode_stacktracesh}
 
 ```bash
-# Pipe dmesg through the kernel's decode script:
+# dmesg をカーネルのデコードスクリプトにパイプする:
 dmesg | ./scripts/decode_stacktrace.sh vmlinux . /path/to/modules
 
-# Before:
+# 変換前:
 # my_driver_read+0x2c/0x80 [mydriver]
-# After:
+# 変換後:
 # my_driver_read (drivers/mydriver/mydriver.c:142)
 ```
 
-### `objdump` for instruction-level analysis {#objdump-for-instruction-level-analysis}
+### 命令レベルの解析のための`objdump` {#objdump-for-instruction-level-analysis}
 
 ```bash
-# Disassemble around the faulting instruction:
+# フォルトした命令の周辺を逆アセンブルする:
 objdump -d --start-address=0xffffffff81234540 \
            --stop-address=0xffffffff812345a0 vmlinux
 ```
@@ -328,9 +328,9 @@ objdump -d --start-address=0xffffffff81234540 \
 
 ## KASAN: Kernel Address SANitizer {#kasan-kernel-address-sanitizer}
 
-KASAN (`CONFIG_KASAN`) is a compile-time instrumentation tool that detects use-after-free and out-of-bounds accesses. It maintains a "shadow memory" region where each byte tracks the validity of 8 bytes of real memory.
+KASAN（`CONFIG_KASAN`）は、use-after-freeと範囲外アクセスを検出するコンパイル時計装ツールである。各バイトが実メモリ8バイト分の有効性を追跡する「シャドウメモリ」領域を維持する。
 
-When an access is made, the compiler-inserted instrumentation checks the shadow byte. An invalid access produces an oops-style report:
+アクセスが行われると、コンパイラが挿入した計装コードがシャドウバイトをチェックする。不正なアクセスはoops形式のレポートを生成する:
 
 ```
 BUG: KASAN: use-after-free in my_driver_read+0x2c/0x80
@@ -353,19 +353,19 @@ The buggy address belongs to the object at ffff888012345600
  which belongs to the cache kmalloc-256 of size 256
 ```
 
-Generic KASAN uses one shadow byte per 8 bytes of real memory, adding approximately 12.5% memory overhead (for the shadow region), plus 2–3x CPU/execution overhead from the compiler-inserted instrumentation. It is used in development and CI, not production. Two variants exist:
+Generic KASANは実メモリ8バイトあたり1シャドウバイトを使い、（シャドウ領域のために）約12.5%のメモリオーバーヘッドに加え、コンパイラが挿入した計装による2〜3倍のCPU/実行オーバーヘッドを伴う。開発やCIで使われ、本番では使われない。2つの変種が存在する:
 
-- **Generic KASAN** (`CONFIG_KASAN_GENERIC`): full shadow memory, highest overhead
-- **SW tag KASAN** (`CONFIG_KASAN_SW_TAGS`): uses ARM64 top-byte ignore for lower overhead
-- **HW tag KASAN** (`CONFIG_KASAN_HW_TAGS`): uses ARM64 MTE hardware, very low overhead
+- **Generic KASAN**（`CONFIG_KASAN_GENERIC`）: 完全なシャドウメモリ。オーバーヘッドが最も大きい
+- **SW tag KASAN**（`CONFIG_KASAN_SW_TAGS`）: ARM64のtop-byte ignoreを使い、オーバーヘッドを抑える
+- **HW tag KASAN**（`CONFIG_KASAN_HW_TAGS`）: ARM64 MTEハードウェアを使う。オーバーヘッドは非常に小さい
 
 ---
 
 ## KFENCE: Kernel Electric-Fence {#kfence-kernel-electric-fence}
 
-KFENCE (`CONFIG_KFENCE`, Linux 5.12+) is a sampling-based memory safety detector designed for production use. Instead of instrumenting every allocation, it periodically intercepts a small percentage of `kmalloc` and `kmem_cache_alloc` calls and places the returned object on a special "guarded" page flanked by guard pages.
+KFENCE（`CONFIG_KFENCE`、Linux 5.12以降）は、本番環境での利用を想定して設計された、サンプリングベースのメモリ安全性検出器である。すべての割り当てを計装する代わりに、`kmalloc`と`kmem_cache_alloc`の呼び出しのうちごく一部を定期的に横取りし、返すオブジェクトを、ガードページに挟まれた特別な「保護された」ページに配置する。
 
-Any access to the guard pages triggers a page fault, caught by KFENCE's fault handler, which reports the violation:
+ガードページへのアクセスはページフォールトを引き起こし、それをKFENCEのフォルトハンドラが捕捉して違反を報告する:
 
 ```
 BUG: KFENCE: use-after-free in my_driver_read+0x2c/0x80
@@ -381,44 +381,44 @@ kfence-#42 [0x...-0x...], size=256, cache=kmalloc-256
   my_driver_free+0x... at ...
 ```
 
-The sampling rate is controlled by `CONFIG_KFENCE_SAMPLE_INTERVAL` (default 100ms) and can be tuned at runtime via `/sys/module/kfence/parameters/sample_interval`. The overhead is low enough for production systems: typically less than 1% CPU impact.
+サンプリングレートは`CONFIG_KFENCE_SAMPLE_INTERVAL`（デフォルト100ms）で制御され、実行時に`/sys/module/kfence/parameters/sample_interval`で調整できる。オーバーヘッドは本番システムで使えるほど小さく、典型的にはCPUへの影響は1%未満である。
 
-KFENCE does not catch every bug (only sampled allocations are guarded), but it provides continuous coverage over time in production, often catching bugs that KASAN would miss due to its development-only deployment.
+KFENCEはすべてのバグを捕捉するわけではない（保護されるのはサンプリングされた割り当てだけである）が、本番環境で長期にわたって継続的なカバレッジを提供し、開発時にしか使われないKASANでは見逃されるバグを捕捉することも多い。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic()`/`vpanic()`: message formatting, the panic notifier chain, and the reboot/halt sequence
-- [kernel/crash_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_core.c) — `kexec_should_crash()` and `crash_kexec()`: the kdump entry point; `oops_end()` calls the public `crash_kexec()`, while `vpanic()` calls the internal `__crash_kexec()` directly to bypass the panic-cpu check
-- [arch/x86/kernel/dumpstack.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/dumpstack.c) — `die()`, `oops_begin()`, `oops_end()`: the actual x86 oops path
-- [arch/x86/kernel/traps.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/traps.c) — exception entry points (`exc_general_protection()`, `exc_invalid_op()`, `exc_double_fault()`, etc.) that call `die()`
-- [arch/x86/kernel/unwind_orc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/unwind_orc.c) — `orc_find()`: ORC entry lookup used to produce `Call Trace`
-- [arch/x86/include/asm/orc_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/orc_types.h) — `struct orc_entry` layout
-- [include/asm-generic/bug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/bug.h) — `WARN()`/`BUG()` family and the `__warn()` declaration; on x86 the trap-based path (`report_bug()`, called from `exc_invalid_op()`) is what actually reaches it, not `warn_slowpath_fmt()`
-- [lib/bust_spinlocks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/bust_spinlocks.c) — `bust_spinlocks()`: the `oops_in_progress` counter used to keep console output readable during an oops
+- [kernel/panic.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/panic.c) — `panic()`/`vpanic()`: メッセージの整形、パニックnotifierチェーン、再起動/停止のシーケンス
+- [kernel/crash_core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/crash_core.c) — `kexec_should_crash()`と`crash_kexec()`: kdumpのエントリポイント。`oops_end()`は公開版の`crash_kexec()`を呼び出し、`vpanic()`はパニックCPUチェックを迂回するために内部の`__crash_kexec()`を直接呼び出す
+- [arch/x86/kernel/dumpstack.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/dumpstack.c) — `die()`、`oops_begin()`、`oops_end()`: 実際のx86のoopsパス
+- [arch/x86/kernel/traps.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/traps.c) — `die()`を呼び出す例外エントリポイント（`exc_general_protection()`、`exc_invalid_op()`、`exc_double_fault()`など）
+- [arch/x86/kernel/unwind_orc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/unwind_orc.c) — `orc_find()`: `Call Trace`の生成に使われるORCエントリの検索
+- [arch/x86/include/asm/orc_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/orc_types.h) — `struct orc_entry`のレイアウト
+- [include/asm-generic/bug.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/bug.h) — `WARN()`/`BUG()`ファミリと`__warn()`の宣言。x86で実際にそこへ到達するのは`warn_slowpath_fmt()`ではなく、トラップベースのパス（`exc_invalid_op()`から呼ばれる`report_bug()`）である
+- [lib/bust_spinlocks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/bust_spinlocks.c) — `bust_spinlocks()`: oops中にコンソール出力を読める状態に保つために使われる`oops_in_progress`カウンタ
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — the underlying syscall behind `kexec -p`; documents `KEXEC_ON_CRASH`, the flag that registers a crash kernel
+- [`kexec_load(2)`](https://man7.org/linux/man-pages/man2/kexec_load.2.html) — `kexec -p`の背後にあるシステムコール。クラッシュカーネルを登録するフラグ`KEXEC_ON_CRASH`を説明している
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Oops Analysis](../debugging/oops-analysis.md) — step-by-step guide to reading an oops
-- [kdump and crash](../debugging/kdump.md) — setting up and using kdump in depth
-- [KASAN](../mm/kasan.md) — KASAN configuration and use
-- [KFENCE](../mm/kfence.md) — KFENCE in production
+- [Oops解析](../debugging/oops-analysis.md) — oopsの読み方のステップバイステップガイド
+- [kdumpとcrash](../debugging/kdump.md) — kdumpのセットアップと利用の詳細
+- [KASAN](../mm/kasan.md) — KASANの設定と利用
+- [KFENCE](../mm/kfence.md) — 本番環境でのKFENCE
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [ORC unwinder](https://lwn.net/Articles/728721/) — Josh Poimboeuf's patch series and design writeup introducing the ORC unwinder and objtool-generated unwind tables (2017)
-- [Crash dumps with kexec](https://lwn.net/Articles/108595/) — Jonathan Corbet on the original kexec-based crash dump design (2004)
-- [The kernel address sanitizer](https://lwn.net/Articles/612153/) — Jake Edge's introduction to KASAN (2014)
-- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — Marco Elver's design writeup for KFENCE (2020)
+- [ORC unwinder](https://lwn.net/Articles/728721/) — ORCアンワインダとobjtoolが生成するアンワインドテーブルを導入した、Josh Poimboeufのパッチシリーズと設計の解説（2017年）
+- [Crash dumps with kexec](https://lwn.net/Articles/108595/) — 元祖のkexecベースのクラッシュダンプ設計についてのJonathan Corbetの記事（2004年）
+- [The kernel address sanitizer](https://lwn.net/Articles/612153/) — Jake EdgeによるKASANの紹介（2014年）
+- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — Marco ElverによるKFENCEの設計解説（2020年）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — full taint flag reference
-- [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — kdump setup guide
+- [Tainted kernels](https://docs.kernel.org/admin-guide/tainted-kernels.html) — taintフラグの完全なリファレンス
+- [Kdump](https://docs.kernel.org/admin-guide/kdump/kdump.html) — kdumpのセットアップガイド

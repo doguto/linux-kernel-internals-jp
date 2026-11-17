@@ -1,18 +1,18 @@
-# Early Boot and start_kernel() {#early-boot-and-start_kernel}
+# 初期ブートとstart_kernel() {#early-boot-and-start_kernel}
 
-> Subsystem initialization order, initcalls, and `__init` sections
+> サブシステムの初期化順序、initcall、`__init`セクション
 
-## Overview {#overview}
+## 概要 {#overview}
 
-After the bootloader decompresses the kernel and the architecture-specific assembly entry point (`startup_64` on x86-64, `primary_entry` on arm64) sets up the bare minimum — early page tables, a valid stack, and a GDT — control passes to `start_kernel()` in `init/main.c`. This is the C entry point, and every subsystem in the kernel traces its initialization back to a call made directly or indirectly from this function.
+ブートローダがカーネルを展開し、アーキテクチャ固有のアセンブリのエントリポイント（x86-64では`startup_64`、arm64では`primary_entry`）が必要最小限のもの — 初期ページテーブル、有効なスタック、GDT — をセットアップした後、制御は`init/main.c`の`start_kernel()`に移る。これがCのエントリポイントであり、カーネル内のすべてのサブシステムは、その初期化をたどっていくと、この関数から直接または間接に行われる呼び出しに行き着く。
 
-`start_kernel()` is a long, ordered sequence of function calls. The ordering is deliberate: some subsystems require that others are already operational before they can initialize. Memory allocation must come before anything that allocates memory. Interrupts must be disabled until the interrupt controller is configured. The console must be set up before diagnostic messages are useful.
+`start_kernel()`は、長く順序付けられた関数呼び出しのシーケンスである。この順序は意図的なものである: あるサブシステムが初期化できるようになるには、他のサブシステムがすでに動作している必要がある場合がある。メモリ割り当ては、メモリを割り当てるあらゆるものより前に来なければならない。割り込みは、割り込みコントローラが設定されるまで無効にしておかなければならない。診断メッセージが役に立つためには、その前にコンソールがセットアップされていなければならない。
 
 ---
 
-## start_kernel(): the initialization sequence {#start_kernel-the-initialization-sequence}
+## start_kernel(): 初期化シーケンス {#start_kernel-the-initialization-sequence}
 
-The following is the initialization order as it appears in `init/main.c` (Linux 6.x). Not every call is listed — only the ones that matter for understanding the system.
+以下は、`init/main.c`（Linux 6.x）に現れる初期化の順序である。すべての呼び出しを挙げてはいない — システムを理解するうえで重要なものだけである。
 
 ```
 start_kernel()
@@ -57,132 +57,132 @@ start_kernel()
     rest_init()                            [27]
 ```
 
-`setup_arch()` genuinely runs before `early_security_init()` — swapped from an earlier version of this page. Between them, `start_kernel()` also calls `mm_core_init_early()` (an early memory-init split described under step [13] below), `jump_label_init()`, and `static_call_init()`; `setup_boot_config()` runs between `early_security_init()` and `setup_command_line()`. None of these get their own step number, same as the other unnumbered calls above.
+`setup_arch()`は実際に`early_security_init()`より前に実行される — このページの以前の版から順序を入れ替えた。両者の間で、`start_kernel()`は`mm_core_init_early()`（後述のステップ[13]で説明する、初期メモリ初期化の分割部分）、`jump_label_init()`、`static_call_init()`も呼び出す。`setup_boot_config()`は`early_security_init()`と`setup_command_line()`の間で実行される。これらはいずれも、上の他の番号なしの呼び出しと同様に、独自のステップ番号を持たない。
 
-`build_all_zonelists(NULL)` and (the renamed) `page_alloc_init_cpuhp()` are no longer called directly from `start_kernel()` at all — both moved inside `mm_core_init()` (step [13]), alongside `kmem_cache_init()`.
+`build_all_zonelists(NULL)`と（改名された）`page_alloc_init_cpuhp()`は、もはや`start_kernel()`から直接呼ばれることは一切ない — どちらも`kmem_cache_init()`とともに`mm_core_init()`（ステップ[13]）の内部に移された。
 
-### Key steps explained {#key-steps-explained}
+### 主要なステップの解説 {#key-steps-explained}
 
 **[1] `set_task_stack_end_magic(&init_task)`**
 
-Places a canary value (`STACK_END_MAGIC = 0x57AC6E9F`) at the bottom of `init_task`'s kernel stack. If the stack overflows and overwrites this value, the kernel can detect it and panic rather than silently corrupting memory. `init_task` is a statically allocated `struct task_struct` — it is the idle thread (PID 0) and the ancestor of all processes.
+`init_task`のカーネルスタックの底にカナリア値（`STACK_END_MAGIC = 0x57AC6E9F`）を置く。スタックがオーバーフローしてこの値を上書きすると、カーネルはそれを検出し、黙ってメモリを破壊する代わりにパニックできる。`init_task`は静的に割り当てられた`struct task_struct`であり、アイドルスレッド（PID 0）であり、すべてのプロセスの祖先である。
 
 **[2] `smp_setup_processor_id()`**
 
-Records the boot CPU's hardware ID. On x86 this reads the APIC ID; on arm64 it reads MPIDR. This must happen before any code that uses `smp_processor_id()`.
+ブートCPUのハードウェアIDを記録する。x86ではAPIC IDを、arm64ではMPIDRを読み取る。これは`smp_processor_id()`を使うあらゆるコードより前に行わなければならない。
 
-**[3] `boot_cpu_init()`** (`kernel/cpu.c`)
+**[3] `boot_cpu_init()`**（`kernel/cpu.c`）
 
-Marks the boot CPU as present, possible, active, and online in the CPU bitmasks (`cpu_present_mask`, `cpu_possible_mask`, etc.). Secondary CPUs are brought online later during SMP bringup; the boot CPU must be registered first.
+CPUビットマスク（`cpu_present_mask`、`cpu_possible_mask`など）において、ブートCPUをpresent、possible、active、onlineとしてマークする。セカンダリCPUは後のSMP立ち上げ中にオンラインになるが、ブートCPUは最初に登録されていなければならない。
 
 **[4] `page_address_init()`**
 
-Initializes the page address hash table used to convert `struct page *` to virtual addresses for highmem pages. On 64-bit kernels with direct mapping this is mostly a no-op, but it must be called before any page address lookups.
+highmemページについて`struct page *`を仮想アドレスに変換するために使うページアドレスのハッシュテーブルを初期化する。ダイレクトマッピングを持つ64ビットカーネルではほとんど何もしないが、あらゆるページアドレスの検索より前に呼ばれなければならない。
 
 **[5] `pr_notice(linux_banner)`**
 
-The first human-readable log line: `Linux version 6.x.y (compiler) #N SMP ...`. This is the version string seen at the top of `dmesg`. At this point `printk` writes to an in-memory buffer; nothing appears on a console yet.
+人間が読める最初のログ行: `Linux version 6.x.y (compiler) #N SMP ...`。これが`dmesg`の先頭に見えるバージョン文字列である。この時点では`printk`はメモリ内のバッファに書き込むだけで、コンソールにはまだ何も表示されない。
 
-**[6] `setup_arch(&command_line)`** (`arch/x86/kernel/setup.c` or `arch/arm64/kernel/setup.c`)
+**[6] `setup_arch(&command_line)`**（`arch/x86/kernel/setup.c`または`arch/arm64/kernel/setup.c`）
 
-The largest and most architecture-specific call in `start_kernel()`. On x86-64 this includes:
+`start_kernel()`の中で最も大きく、最もアーキテクチャ固有の呼び出しである。x86-64では次のものが含まれる:
 
-- Parsing the e820 memory map from the bootloader
-- Setting up the initial kernel page tables
-- Initializing memblock (the boot-time memory allocator)
-- Parsing ACPI tables (MADT, SRAT, SLIT) for CPU and NUMA topology
-- Setting up the initial command line pointer
-- Configuring the kernel's virtual address layout
+- ブートローダからのe820メモリマップのパース
+- 初期カーネルページテーブルのセットアップ
+- memblock（ブート時のメモリアロケータ）の初期化
+- CPUとNUMAトポロジのためのACPIテーブル（MADT、SRAT、SLIT）のパース
+- 初期コマンドラインポインタのセットアップ
+- カーネルの仮想アドレスレイアウトの設定
 
-After `setup_arch()` returns, the kernel knows how much physical memory it has and where it is.
+`setup_arch()`から戻った後、カーネルは物理メモリがどれだけあり、どこにあるかを把握している。
 
-**[7] `early_security_init()`** (`security/lsm_init.c`)
+**[7] `early_security_init()`**（`security/lsm_init.c`）
 
-Runs after `setup_arch()`, not before it. Walks the LSMs flagged "early" (`lsm_early_for_each_raw()`) and initializes each one via `lsm_init_single()` — this is what lets integrity-measurement and similar early-hooking LSMs register before most of the kernel is up. `security_init()`, which initializes the rest of the (non-early) LSMs, runs much later, well after `console_init()`.
+`setup_arch()`の前ではなく、後に実行される。「early」とフラグ付けされたLSMを走査し（`lsm_early_for_each_raw()`）、それぞれを`lsm_init_single()`で初期化する — これにより、完全性計測や同様の早期フックを行うLSMが、カーネルの大部分が立ち上がる前に登録できる。残りの（early以外の）LSMを初期化する`security_init()`は、ずっと後、`console_init()`よりかなり後に実行される。
 
 **[8] `setup_command_line(command_line)`**
 
-Copies the command line into two static buffers: `boot_command_line[]` (for reference, never modified) and `saved_command_line[]` (also preserved). The working copy in `command_line` may be modified by subsequent parsers.
+コマンドラインを2つの静的バッファにコピーする: `boot_command_line[]`（参照用で、決して変更されない）と`saved_command_line[]`（これも保持される）。`command_line`内の作業用コピーは、後続のパーサによって変更されることがある。
 
 **[9] `setup_nr_cpu_ids()`**
 
-Computes `nr_cpu_ids` from the CPU possible bitmask. This tells the rest of the kernel the maximum CPU index it will ever see, allowing per-CPU arrays to be sized correctly.
+CPUのpossibleビットマスクから`nr_cpu_ids`を計算する。これにより、カーネルの残りの部分は、今後目にすることになる最大のCPUインデックスを知り、per-CPU配列のサイズを正しく決められる。
 
 **[10] `setup_per_cpu_areas()`**
 
-Allocates memory for per-CPU data. The linker places per-CPU variables in a `.data..percpu` section; at runtime, `setup_per_cpu_areas()` creates one copy of this section per possible CPU, separated by enough padding to prevent false sharing. After this call, `this_cpu_*()` macros work correctly.
+per-CPUデータ用のメモリを割り当てる。リンカはper-CPU変数を`.data..percpu`セクションに配置する。実行時に`setup_per_cpu_areas()`は、このセクションのコピーをpossibleなCPUごとに1つずつ、偽共有を防ぐのに十分なパディングを挟んで作成する。この呼び出しの後、`this_cpu_*()`マクロが正しく動作する。
 
 **[11] `smp_prepare_boot_cpu()`**
 
-Performs any SMP-specific initialization needed on the boot CPU before secondary CPUs start. On x86 this sets up the boot CPU's GS segment for per-CPU access.
+セカンダリCPUが起動する前に、ブートCPU上で必要なSMP固有の初期化を行う。x86では、per-CPUアクセスのためにブートCPUのGSセグメントをセットアップする。
 
-**[12] `trap_init()`** (`arch/x86/kernel/traps.c`)
+**[12] `trap_init()`**（`arch/x86/kernel/traps.c`）
 
-On x86, sets up the Interrupt Descriptor Table (IDT) with handlers for all CPU exceptions: divide error (#DE), page fault (#PF), general protection fault (#GP), double fault (#DF), etc. After this call, the CPU can handle exceptions properly. Before this, any fault is fatal.
+x86では、すべてのCPU例外 — 除算エラー（#DE）、ページフォールト（#PF）、一般保護例外（#GP）、ダブルフォルト（#DF）など — に対するハンドラを持つ割り込み記述子テーブル（IDT）をセットアップする。この呼び出しの後、CPUは例外を正しく処理できる。これより前は、あらゆるフォルトが致命的である。
 
-**[13] `mm_core_init()`** (`mm/mm_init.c`)
+**[13] `mm_core_init()`**（`mm/mm_init.c`）
 
-Initializes the core memory management infrastructure: `mem_init()` (converts memblock to the buddy allocator), `kmem_cache_init()` (bootstraps the slab allocator), page table caches, and more. It's also where `build_all_zonelists(NULL)` (`mm/page_alloc.c` — constructs the NUMA zone fallback lists, in NUMA-distance order from `mm/numa.c`) and `page_alloc_init_cpuhp()` (registers the CPU hotplug callback that sets up each secondary CPU's per-CPU page frames/pcplists — renamed from the older `page_alloc_init()`) are called; neither is a standalone `start_kernel()` step any more. After `mm_core_init()`, the general-purpose page allocator (`alloc_pages()`) and `kmalloc()` are both operational. Note: `kmem_cache_init_late()` (step [25] below) is a separate, later, plain direct call from `start_kernel()` — not called from within `mm_core_init()`, and not registered via any `core_initcall()`/initcall-level mechanism.
+コアのメモリ管理インフラを初期化する: `mem_init()`（memblockからバディアロケータへの移行）、`kmem_cache_init()`（slabアロケータのブートストラップ）、ページテーブルキャッシュなど。`build_all_zonelists(NULL)`（`mm/page_alloc.c` — `mm/numa.c`のNUMA距離順に、NUMAゾーンのフォールバックリストを構築する）と`page_alloc_init_cpuhp()`（各セカンダリCPUのper-CPUページフレーム/pcplistをセットアップするCPUホットプラグのコールバックを登録する — 以前の`page_alloc_init()`から改名された）が呼ばれるのもここであり、どちらももはや独立した`start_kernel()`のステップではない。`mm_core_init()`の後、汎用のページアロケータ（`alloc_pages()`）と`kmalloc()`の両方が動作する。注意: `kmem_cache_init_late()`（後述のステップ[25]）は、`start_kernel()`から行われる別個の、より後の、単純な直接呼び出しである — `mm_core_init()`の内部から呼ばれるのではなく、`core_initcall()`やinitcallレベルの機構を通じて登録されるものでもない。
 
 **[14] `poking_init()`**
 
-Initializes the text-poking infrastructure used by kprobes, ftrace, and live patching to safely modify kernel text at runtime. On x86 this sets up a temporary mapping mechanism to write to read-only kernel pages.
+kprobe、ftrace、ライブパッチが実行時にカーネルテキストを安全に書き換えるために使う、テキストポーキング基盤を初期化する。x86では、読み取り専用のカーネルページに書き込むための一時的なマッピング機構をセットアップする。
 
 **[15] `ftrace_init()`**
 
-Prepares the function tracer's internal data structures (the `ftrace_ops` list, the mcount call sites recorded in `__mcount_loc`). The tracer is not yet active but the infrastructure is ready.
+関数トレーサの内部データ構造（`ftrace_ops`リスト、`__mcount_loc`に記録されたmcount呼び出し箇所）を準備する。トレーサはまだ有効ではないが、基盤は準備が整う。
 
 **[16] `early_trace_init()`**
 
-Initializes the tracing ring buffer and trace clock before most subsystems are up, so that trace events from early boot can be captured.
+ほとんどのサブシステムが立ち上がる前にトレーシングのリングバッファとトレースクロックを初期化し、初期ブート中のトレースイベントを取得できるようにする。
 
-**[17] `sched_init()`** (`kernel/sched/core.c`)
+**[17] `sched_init()`**（`kernel/sched/core.c`）
 
-Initializes the scheduler: allocates per-CPU runqueues (`struct rq`), sets up the CFS, RT, and deadline scheduling classes, and makes `init_task` runnable. After `sched_init()`, context switching is possible.
+スケジューラを初期化する: per-CPUのランキュー（`struct rq`）を割り当て、CFS、RT、deadlineのスケジューリングクラスをセットアップし、`init_task`を実行可能にする。`sched_init()`の後、コンテキストスイッチが可能になる。
 
 **[18] `radix_tree_init()`**
 
-Initializes the kmem_cache for radix tree nodes. The radix tree (now maple tree for VMAs, but radix tree still used elsewhere) is used by the page cache, the inode cache, and many other subsystems.
+radix treeノード用のkmem_cacheを初期化する。radix tree（VMAについては現在maple treeになっているが、radix treeは他の場所でまだ使われている）は、ページキャッシュ、inodeキャッシュ、その他多くのサブシステムで使われる。
 
-**[19] `workqueue_init_early()`** (`kernel/workqueue.c`)
+**[19] `workqueue_init_early()`**（`kernel/workqueue.c`）
 
-Creates the early workqueue infrastructure. Full workqueue initialization (`workqueue_init()`) happens later via a core_initcall; this early call sets up the data structures so that `schedule_work()` can be queued even before worker threads exist.
+初期のworkqueue基盤を作成する。workqueueの完全な初期化（`workqueue_init()`）は後でcore_initcall経由で行われる。この早期の呼び出しはデータ構造をセットアップし、ワーカースレッドが存在する前でも`schedule_work()`でキューに入れられるようにする。
 
-**[20] `rcu_init()`** (`kernel/rcu/tree.c`)
+**[20] `rcu_init()`**（`kernel/rcu/tree.c`）
 
-Initializes RCU (Read-Copy-Update). Sets up the RCU tree (rcu_node hierarchy), per-CPU state, and the rcu_tasks mechanism. After this, `rcu_read_lock()` / `rcu_read_unlock()` and `call_rcu()` are safe to use.
+RCU（Read-Copy-Update）を初期化する。RCUツリー（rcu_node階層）、per-CPUの状態、rcu_tasks機構をセットアップする。この後、`rcu_read_lock()` / `rcu_read_unlock()`と`call_rcu()`を安全に使えるようになる。
 
-**[21] `init_IRQ()`** (`arch/x86/kernel/irqinit.c`)
+**[21] `init_IRQ()`**（`arch/x86/kernel/irqinit.c`）
 
-Initializes the interrupt controller. On x86 this sets up the legacy 8259 PIC (or APIC if present), allocates IRQ descriptors, and prepares the interrupt handling framework. After this, `request_irq()` is possible.
+割り込みコントローラを初期化する。x86では、レガシーの8259 PIC（存在すればAPIC）をセットアップし、IRQ記述子を割り当て、割り込み処理フレームワークを準備する。この後、`request_irq()`が可能になる。
 
-**[22] `tick_init()`** (`kernel/time/tick-common.c`)
+**[22] `tick_init()`**（`kernel/time/tick-common.c`）
 
-Initializes the tick framework (NO_HZ, HRTICK, broadcast clock event). Must precede timekeeping.
+ティックフレームワーク（NO_HZ、HRTICK、ブロードキャストクロックイベント）を初期化する。時刻管理より前に行わなければならない。
 
-**[23] `timekeeping_init()`** (`kernel/time/timekeeping.c`)
+**[23] `timekeeping_init()`**（`kernel/time/timekeeping.c`）
 
-Reads the hardware clock source and initializes `timekeeper`. After this, `ktime_get()` and `ktime_get_real_ts64()` work. This is the kernel's internal clock, not the wall clock.
+ハードウェアのクロックソースを読み取り、`timekeeper`を初期化する。この後、`ktime_get()`と`ktime_get_real_ts64()`が動作する。これはカーネルの内部クロックであり、壁時計ではない。
 
-**[24] `time_init()`** (`arch/x86/kernel/time.c`)
+**[24] `time_init()`**（`arch/x86/kernel/time.c`）
 
-Architecture-specific time initialization. On x86 this calibrates the TSC against the PIT or HPET and sets up the clock event device for the timer interrupt.
+アーキテクチャ固有の時間の初期化。x86では、PITまたはHPETを基準にTSCを較正し、タイマー割り込み用のクロックイベントデバイスをセットアップする。
 
-**[25] `kmem_cache_init_late()`** (`mm/slub.c` — SLAB has been removed; SLUB is the only allocator remaining)
+**[25] `kmem_cache_init_late()`**（`mm/slub.c` — SLABは削除されており、残っているアロケータはSLUBだけである）
 
-Not the slab bootstrap — that's `kmem_cache_init()`, already done inside `mm_core_init()` (step [13]), and `kmalloc()` has worked since then. `kmem_cache_init_late()` runs much later, right before `console_init()`: it allocates the `slub_flushwq` workqueue SLUB uses to flush per-CPU partial-slab caches, and (when `CONFIG_SLAB_FREELIST_RANDOM` is enabled) seeds the per-boot freelist-randomization state via `prandom_init_once()`.
+これはslabのブートストラップではない — それは`kmem_cache_init()`であり、すでに`mm_core_init()`（ステップ[13]）の内部で済んでおり、`kmalloc()`はその時点から動作している。`kmem_cache_init_late()`はずっと後、`console_init()`の直前に実行される: SLUBがper-CPUのpartial slabキャッシュをフラッシュするために使う`slub_flushwq` workqueueを割り当て、（`CONFIG_SLAB_FREELIST_RANDOM`が有効な場合）`prandom_init_once()`によってブートごとのフリーリストランダム化の状態をシードする。
 
-**[26] `console_init()`** (`kernel/printk/printk.c`)
+**[26] `console_init()`**（`kernel/printk/printk.c`）
 
-Initializes the console subsystem and calls registered console drivers. After this call, `printk` output goes to the serial console or VGA — this is when the boot messages that were buffered in the log ring actually appear on screen.
+コンソールサブシステムを初期化し、登録されたコンソールドライバを呼び出す。この呼び出しの後、`printk`の出力はシリアルコンソールやVGAに出る — ログリングにバッファリングされていたブートメッセージが実際に画面に現れるのはこのときである。
 
-**[27] `rest_init()`** (`init/main.c`)
+**[27] `rest_init()`**（`init/main.c`）
 
-The last call in `start_kernel()`. Creates kernel threads and enters the idle loop (see below).
+`start_kernel()`の最後の呼び出し。カーネルスレッドを作成し、アイドルループに入る（後述）。
 
 ---
 
-## rest_init(): spawning PID 1 and PID 2 {#rest_init-spawning-pid-1-and-pid-2}
+## rest_init(): PID 1とPID 2の生成 {#rest_init-spawning-pid-1-and-pid-2}
 
 ```c
 /* init/main.c */
@@ -241,35 +241,35 @@ static noinline void __ref __noreturn rest_init(void)
 }
 ```
 
-- **PID 1 (`kernel_init`)**: spawned via `kernel_clone()` with a `struct kernel_clone_args` requesting `CLONE_VM | CLONE_UNTRACED` (not the generic `kernel_thread()` — PID 1 needs a real userspace return path; an older version of this code called a dedicated `user_mode_thread()` helper for the same purpose, but `rest_init()` builds the `kernel_clone_args` directly now). Runs `do_initcalls()` to execute all registered initcalls, then mounts the root filesystem and execs `/sbin/init` (or whatever `init=` specifies on the command line).
-- **PID 2 (`kthreadd`)**: the kernel thread daemon, spawned via `kernel_thread()`. All subsequent kernel threads are created by `kthreadd` in response to `kernel_thread()` calls.
-- **CPU 0 idle**: after `rest_init()` finishes, CPU 0 enters `cpu_startup_entry()` and becomes the idle thread, running `do_idle()` in a loop. `rest_init()` itself never returns to `start_kernel()`.
+- **PID 1（`kernel_init`）**: `CLONE_VM | CLONE_UNTRACED`を要求する`struct kernel_clone_args`を指定して`kernel_clone()`で生成される（汎用の`kernel_thread()`ではない — PID 1には本物のユーザー空間への復帰パスが必要である。このコードの古い版では同じ目的のために専用の`user_mode_thread()`ヘルパを呼んでいたが、現在の`rest_init()`は`kernel_clone_args`を直接組み立てる）。`do_initcalls()`を実行して登録されたすべてのinitcallを実行し、その後ルートファイルシステムをマウントして`/sbin/init`（またはコマンドラインの`init=`で指定されたもの）をexecする。
+- **PID 2（`kthreadd`）**: カーネルスレッドデーモンで、`kernel_thread()`で生成される。以降のすべてのカーネルスレッドは、`kernel_thread()`呼び出しに応じて`kthreadd`によって作成される。
+- **CPU 0のアイドル**: `rest_init()`が終わると、CPU 0は`cpu_startup_entry()`に入ってアイドルスレッドになり、`do_idle()`をループで実行する。`rest_init()`自体が`start_kernel()`に戻ることはない。
 
 ---
 
-## Initcall levels {#initcall-levels}
+## initcallレベル {#initcall-levels}
 
-Built-in kernel subsystems register initialization functions using initcall macros. These functions are called by `do_initcalls()` in `kernel_init()`, after `start_kernel()` has completed. The levels define ordering:
+組み込みのカーネルサブシステムは、initcallマクロを使って初期化関数を登録する。これらの関数は、`start_kernel()`が完了した後、`kernel_init()`内の`do_initcalls()`によって呼び出される。レベルが順序を定める:
 
-| Macro | Level | Typical use |
+| マクロ | レベル | 典型的な用途 |
 |-------|-------|-------------|
-| `early_initcall(fn)` | early | Very early, before pure |
-| `pure_initcall(fn)` | 0 | Pure infrastructure, no hardware |
-| `core_initcall(fn)` | 1 | Core kernel infrastructure (workqueues, etc.) |
-| `core_initcall_sync(fn)` | 1s | Synchronization point after core |
-| `postcore_initcall(fn)` | 2 | After core subsystems |
-| `arch_initcall(fn)` | 3 | Architecture-specific init |
-| `subsys_initcall(fn)` | 4 | Subsystem init (PCI, USB core, networking) |
+| `early_initcall(fn)` | early | 非常に早い段階。pureより前 |
+| `pure_initcall(fn)` | 0 | 純粋なインフラ。ハードウェアには触れない |
+| `core_initcall(fn)` | 1 | コアカーネルのインフラ（workqueueなど） |
+| `core_initcall_sync(fn)` | 1s | coreの後の同期ポイント |
+| `postcore_initcall(fn)` | 2 | コアサブシステムの後 |
+| `arch_initcall(fn)` | 3 | アーキテクチャ固有の初期化 |
+| `subsys_initcall(fn)` | 4 | サブシステムの初期化（PCI、USBコア、ネットワーク） |
 | `subsys_initcall_sync(fn)` | 4s | |
-| `fs_initcall(fn)` | 5 | Filesystem registration |
-| `rootfs_initcall(fn)` | rootfs | Root filesystem (initramfs population) |
-| `device_initcall(fn)` | 6 | Most drivers; `module_init()` is an alias |
+| `fs_initcall(fn)` | 5 | ファイルシステムの登録 |
+| `rootfs_initcall(fn)` | rootfs | ルートファイルシステム（initramfsの展開） |
+| `device_initcall(fn)` | 6 | ほとんどのドライバ。`module_init()`はこのエイリアス |
 | `device_initcall_sync(fn)` | 6s | |
-| `late_initcall(fn)` | 7 | After all devices initialized |
+| `late_initcall(fn)` | 7 | すべてのデバイスが初期化された後 |
 
-### How it works {#how-it-works}
+### 仕組み {#how-it-works}
 
-Each macro (e.g. `core_initcall(fn)`) expands through a chain: `__define_initcall(fn, id)` → `___define_initcall(fn, id, .initcall##id)` → `__unique_initcall(fn, id, __sec, __iid)` → `____define_initcall(...)`, the layer that actually emits the section entry:
+各マクロ（たとえば`core_initcall(fn)`）は、次の連鎖を通じて展開される: `__define_initcall(fn, id)` → `___define_initcall(fn, id, .initcall##id)` → `__unique_initcall(fn, id, __sec, __iid)` → `____define_initcall(...)`。最後のものが、実際にセクションエントリを出力する層である:
 
 ```c
 /* include/linux/init.h */
@@ -299,9 +299,9 @@ Each macro (e.g. `core_initcall(fn)`) expands through a chain: `__define_initcal
 #define __define_initcall(fn, id) ___define_initcall(fn, id, .initcall##id)
 ```
 
-Most 64-bit architectures (including x86-64 and arm64) build with `CONFIG_HAVE_ARCH_PREL32_RELOCATIONS=y` today. On that path, each initcall entry isn't a plain function pointer — `__define_initcall_stub()` emits a small wrapper function (`__stub`) that just calls `fn()`, and the `asm()` block stores a **PC-relative 32-bit offset** to that stub, resolved back to a real address only when read (`initcall_from_entry()`, used below). This trades a small amount of decode overhead for a smaller `initcall*.init` section, since a 4-byte relative offset is half the size of a full pointer on 64-bit. Without `CONFIG_HAVE_ARCH_PREL32_RELOCATIONS`, `____define_initcall()` falls back to the plain static function-pointer array this section used to show exclusively.
+現在、ほとんどの64ビットアーキテクチャ（x86-64とarm64を含む）は`CONFIG_HAVE_ARCH_PREL32_RELOCATIONS=y`でビルドされる。このパスでは、各initcallエントリは単純な関数ポインタではない — `__define_initcall_stub()`が`fn()`を呼ぶだけの小さなラッパー関数（`__stub`）を出力し、`asm()`ブロックがそのスタブへの**PC相対の32ビットオフセット**を格納する。これは読み出されるときにだけ実アドレスに解決される（下で使われる`initcall_from_entry()`）。64ビットでは4バイトの相対オフセットは完全なポインタの半分のサイズなので、わずかなデコードのオーバーヘッドと引き換えに`initcall*.init`セクションを小さくできる。`CONFIG_HAVE_ARCH_PREL32_RELOCATIONS`がない場合、`____define_initcall()`は、このセクションでかつて唯一示していた単純な静的関数ポインタ配列にフォールバックする。
 
-The linker script (`arch/x86/kernel/vmlinux.lds.S`, via `include/asm-generic/vmlinux.lds.h`) collects all `.initcall*.init` sections in level order. `do_initcalls()` iterates this array and calls each function pointer:
+リンカスクリプト（`arch/x86/kernel/vmlinux.lds.S`。`include/asm-generic/vmlinux.lds.h`経由）は、すべての`.initcall*.init`セクションをレベル順にまとめる。`do_initcalls()`はこの配列を走査し、各関数ポインタを呼び出す:
 
 ```c
 /* init/main.c */
@@ -331,7 +331,7 @@ static void __init do_initcalls(void)
         panic("%s: Failed to allocate %zu bytes\n", __func__, len);
 
     for (level = 0; level < ARRAY_SIZE(initcall_levels) - 1; level++) {
-        /* Parser modifies command_line, restore it each time */
+        /* パーサが command_line を変更するので、毎回元に戻す */
         strcpy(command_line, saved_command_line);
         do_initcall_level(level, command_line);
     }
@@ -340,17 +340,17 @@ static void __init do_initcalls(void)
 }
 ```
 
-Two things worth noting beyond the obvious level-by-level dispatch: `do_initcall_level()` re-runs `parse_args()` against each level's own module-parameter slice (so `module.param=value`-style boot arguments are matched against the right level, not just once globally at `parse_early_param()` time), and `do_initcalls()` re-copies `saved_command_line` into its scratch buffer before every level because `parse_args()` mutates the string it's given as it walks it — without the restore, only the first level would see the full, unmodified command line.
+レベルごとのディスパッチという明白な点以外に、注目すべき点が2つある: `do_initcall_level()`は各レベル固有のモジュールパラメータの区画に対して`parse_args()`を再実行する（そのため`module.param=value`形式のブート引数は、`parse_early_param()`の時点で一度だけグローバルに照合されるのではなく、正しいレベルに対して照合される）。そして`do_initcalls()`は、各レベルの前に`saved_command_line`を作業用バッファにコピーし直す。`parse_args()`は与えられた文字列を走査しながら書き換えるからである — この復元がなければ、完全で未変更のコマンドラインを見られるのは最初のレベルだけになってしまう。
 
-The initcall return value matters: a non-zero return causes a `pr_warn` message but does not stop the boot process (unless `initcall_debug` is set to a stricter mode). An initcall that returns an error is simply logged and skipped.
+initcallの戻り値は重要である: 非ゼロの戻り値は`pr_warn`メッセージを出すが、ブート処理を止めることはない（`initcall_debug`がより厳格なモードに設定されている場合を除く）。エラーを返したinitcallは、単にログに記録されてスキップされる。
 
 ---
 
-## `__init` and `__exit` sections {#init-and-exit-sections}
+## `__init`と`__exit`セクション {#init-and-exit-sections}
 
 ### `__init` {#__init}
 
-Functions annotated with `__init` are placed in the `.init.text` ELF section. After `do_initcalls()` completes and the init process starts, the kernel frees the entire `.init.text` and `.init.data` sections:
+`__init`アノテーションを付けた関数は、`.init.text` ELFセクションに配置される。`do_initcalls()`が完了してinitプロセスが始まると、カーネルは`.init.text`と`.init.data`セクション全体を解放する:
 
 ```c
 /* init/main.c */
@@ -362,62 +362,62 @@ static int __ref kernel_init(void *unused)
 }
 ```
 
-`kernel_init()` is annotated `__ref`, not `__init` — it can't be `__init` itself, because it's the function that calls `free_initmem()` to free the `.init.text`/`.init.data` sections. A function placed in `.init.text` that's still running when that section gets freed would be calling for its own page to be reclaimed out from under it. `__ref` tells modpost "yes, this function references `__init` code/data on purpose, don't warn about it."
+`kernel_init()`には`__init`ではなく`__ref`が付けられている — それ自体が`__init`であることはできない。なぜなら、`free_initmem()`を呼んで`.init.text`/`.init.data`セクションを解放するのがこの関数だからである。`.init.text`に置かれた関数が、そのセクションが解放されるときにまだ実行中であれば、自分自身が載っているページを足元から回収させることになる。`__ref`はmodpostに対して「この関数は意図的に`__init`のコード/データを参照しているので、警告しないでほしい」と伝える。
 
-`free_initmem()` calls `free_reserved_area()` to return these pages to the buddy allocator. This is why the boot log contains a message like:
+`free_initmem()`は`free_reserved_area()`を呼び出して、これらのページをバディアロケータに返却する。ブートログに次のようなメッセージが含まれるのはこのためである:
 
 ```
 Freeing unused kernel image (initmem) memory: 2548K
 ```
 
-The practical consequence: **never call an `__init` function after boot**. The page containing it has been freed and may be reused. A stored function pointer to an `__init` function is a time bomb.
+実際上の帰結: **ブート後に`__init`関数を決して呼んではならない**。それを含むページは解放されており、再利用されている可能性がある。`__init`関数への関数ポインタを保存することは時限爆弾である。
 
 ```c
-/* WRONG: storing a pointer to __init function */
+/* 誤り: __init 関数へのポインタを保存している */
 static int (*saved_fn)(void);
 
 static int __init my_init(void)
 {
-    saved_fn = some_init_helper;  /* some_init_helper is __init */
+    saved_fn = some_init_helper;  /* some_init_helper は __init */
     return 0;
 }
 
-/* Calling saved_fn after boot → use-after-free, oops */
+/* ブート後に saved_fn を呼ぶ → use-after-free、oops */
 ```
 
 ### `__exit` {#__exit}
 
-Functions annotated with `__exit` are placed in `.exit.text`. For built-in code (not a loadable module), the `.exit.text` section is discarded at link time — the linker does not include it in the final image because built-in code can never be unloaded. For loadable modules, `.exit.text` is kept and called when the module is removed.
+`__exit`アノテーションを付けた関数は`.exit.text`に配置される。組み込みコード（ロード可能モジュールではないもの）の場合、`.exit.text`セクションはリンク時に破棄される — 組み込みコードは決してアンロードできないので、リンカはそれを最終イメージに含めない。ロード可能モジュールの場合、`.exit.text`は保持され、モジュールが削除されるときに呼び出される。
 
-### Data sections {#data-sections}
+### データセクション {#data-sections}
 
-| Annotation | Section | Freed after boot? |
+| アノテーション | セクション | ブート後に解放されるか |
 |-----------|---------|------------------|
-| `__init` | `.init.text` | Yes |
-| `__initdata` | `.init.data` | Yes |
-| `__initconst` | `.init.rodata` | Yes |
-| `__exit` | `.exit.text` | Discarded (built-in) / kept (module) |
-| `__exitdata` | `.exit.data` | Same |
+| `__init` | `.init.text` | はい |
+| `__initdata` | `.init.data` | はい |
+| `__initconst` | `.init.rodata` | はい |
+| `__exit` | `.exit.text` | 破棄（組み込み） / 保持（モジュール） |
+| `__exitdata` | `.exit.data` | 同上 |
 
-### Size savings {#size-savings}
+### サイズの節約 {#size-savings}
 
-The `__init` mechanism recovers a meaningful amount of memory. On a typical x86-64 kernel the init sections total 1–3 MB. On memory-constrained embedded systems this matters significantly.
+`__init`機構は、無視できない量のメモリを取り戻す。典型的なx86-64カーネルでは、initセクションは合計1〜3MBになる。メモリの限られた組み込みシステムでは、これは非常に重要である。
 
 ---
 
-## Observing boot order {#observing-boot-order}
+## ブート順序を観測する {#observing-boot-order}
 
-### dmesg with timestamps {#dmesg-with-timestamps}
+### タイムスタンプ付きのdmesg {#dmesg-with-timestamps}
 
 ```bash
-dmesg -T          # human-readable timestamps
-dmesg --color     # colored output by level
-dmesg | head -50  # first 50 lines (arch init, version, memory map)
+dmesg -T          # 人間が読めるタイムスタンプ
+dmesg --color     # レベルごとに色付けした出力
+dmesg | head -50  # 最初の 50 行（アーキテクチャ初期化、バージョン、メモリマップ）
 ```
 
-### initcall_debug boot parameter {#initcall_debug-boot-parameter}
+### initcall_debugブートパラメータ {#initcall_debug-boot-parameter}
 
-Add `initcall_debug` to the kernel command line (in GRUB: `linux ... initcall_debug`). The kernel will print every initcall with its execution time:
+カーネルコマンドラインに`initcall_debug`を追加する（GRUBでは`linux ... initcall_debug`）。カーネルはすべてのinitcallをその実行時間とともに出力する:
 
 ```
 calling  e1000e_init_module+0x0/0x3c [e1000e] @ 2
@@ -426,21 +426,21 @@ calling  ahci_init+0x0/0x28 @ 2
 initcall ahci_init+0x0/0x28 returned 0 after 87 usecs
 ```
 
-The number after `@` is the CPU on which the initcall ran.
+`@`の後の数字は、そのinitcallが実行されたCPUである。
 
 ### /proc/kallsyms {#prockallsyms}
 
 ```bash
-# See registered initcall symbols in section order:
+# 登録された initcall シンボルをセクション順に見る:
 grep '__initcall_' /proc/kallsyms | head -20
 ```
 
-These symbols correspond to the function pointer entries placed in `.initcall*.init` sections.
+これらのシンボルは、`.initcall*.init`セクションに配置された関数ポインタのエントリに対応する。
 
-### Tracing with ftrace {#tracing-with-ftrace}
+### ftraceによるトレーシング {#tracing-with-ftrace}
 
 ```bash
-# Trace all calls made during boot (requires early ftrace setup)
+# ブート中に行われたすべての呼び出しをトレースする（早期の ftrace セットアップが必要）
 echo function > /sys/kernel/debug/tracing/current_tracer
 echo 1 > /sys/kernel/debug/tracing/tracing_on
 cat /sys/kernel/debug/tracing/trace | grep 'do_one_initcall'
@@ -448,37 +448,37 @@ cat /sys/kernel/debug/tracing/trace | grep 'do_one_initcall'
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `start_kernel()`, `rest_init()`, `kernel_init()`, and `do_initcalls()`
-- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — the `__init`/`__exit` section macros and the `early_initcall()` … `late_initcall()` level macros
-- [arch/x86/kernel/head_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/head_64.S) — `startup_64`, the x86-64 assembly entry point that runs before `start_kernel()`
-- [arch/arm64/kernel/head.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/head.S) — `primary_entry`, the arm64 equivalent
-- [arch/x86/kernel/setup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/setup.c) — `setup_arch()` on x86-64: e820 parsing, memblock and page table setup, ACPI table parsing
+- [init/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/init/main.c) — `start_kernel()`、`rest_init()`、`kernel_init()`、`do_initcalls()`
+- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — `__init`/`__exit`セクションのマクロと、`early_initcall()` … `late_initcall()`のレベルマクロ
+- [arch/x86/kernel/head_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/head_64.S) — `startup_64`。`start_kernel()`より前に実行されるx86-64のアセンブリのエントリポイント
+- [arch/arm64/kernel/head.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/head.S) — `primary_entry`。arm64での相当物
+- [arch/x86/kernel/setup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/setup.c) — x86-64の`setup_arch()`: e820のパース、memblockとページテーブルのセットアップ、ACPIテーブルのパース
 - [kernel/cpu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/cpu.c) — `boot_cpu_init()`
 - [mm/mm_init.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mm_init.c) — `mm_core_init()`
 - [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `build_all_zonelists()`
-- [mm/slub.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) — `kmem_cache_init()`, the SLUB bootstrap, and `kmem_cache_init_late()`, the later `slub_flushwq`/freelist-randomization setup
-- [security/lsm_init.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/lsm_init.c) — `early_security_init()`: initializes the LSMs flagged "early"
+- [mm/slub.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) — SLUBのブートストラップである`kmem_cache_init()`と、後の`slub_flushwq`/フリーリストランダム化のセットアップを行う`kmem_cache_init_late()`
+- [security/lsm_init.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/security/lsm_init.c) — `early_security_init()`: 「early」とフラグ付けされたLSMを初期化する
 - [kernel/sched/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/core.c) — `sched_init()`
 - [kernel/rcu/tree.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/rcu/tree.c) — `rcu_init()`
 - [kernel/workqueue.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/workqueue.c) — `workqueue_init_early()`
 - [kernel/printk/printk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk.c) — `console_init()`
-- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h) — `INIT_CALLS`/`INIT_CALLS_LEVEL`, the linker macros that lay out `.initcall*.init` sections in level order
+- [include/asm-generic/vmlinux.lds.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/vmlinux.lds.h) — `INIT_CALLS`/`INIT_CALLS_LEVEL`。`.initcall*.init`セクションをレベル順に配置するリンカマクロ
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Boot Parameters](boot-params.md) — how `early_param` and `__setup` are parsed
-- [Module Init and Initcalls](initcalls-modules.md) — the module side of `module_init()`
-- [printk and Kernel Logging](printk.md) — why printk works after `console_init()` but not before
-- [memblock: The Boot-Time Memory Allocator](../mm/memblock.md) — the allocator `setup_arch()` initializes, used before the buddy allocator exists
-- [SLUB Allocator Internals](../mm/slab-internals.md) — `struct kmem_cache`, freelist mechanics, and per-CPU caches: the runtime machinery `kmem_cache_init()` bootstraps
-- [Runqueues and Task Selection](../sched/runqueues.md) — the per-CPU `struct rq` that `sched_init()` allocates
-- [RCU (Read-Copy-Update)](../locking/rcu.md) — what becomes safe to use after `rcu_init()`
+- [カーネルブートパラメータ](boot-params.md) — `early_param`と`__setup`がどのようにパースされるか
+- [モジュール初期化とinitcall](initcalls-modules.md) — `module_init()`のモジュール側
+- [printkとカーネルロギング](printk.md) — printkが`console_init()`の後では動作し、前では動作しない理由
+- [memblock: ブート時のメモリアロケータ](../mm/memblock.md) — `setup_arch()`が初期化し、バディアロケータが存在する前に使われるアロケータ
+- [SLUBアロケータの内部構造](../mm/slab-internals.md) — `struct kmem_cache`、フリーリストの仕組み、per-CPUキャッシュ: `kmem_cache_init()`がブートストラップする実行時の機構
+- [ランキューとタスク選択](../sched/runqueues.md) — `sched_init()`が割り当てるper-CPUの`struct rq`
+- [RCU（Read-Copy-Update）](../locking/rcu.md) — `rcu_init()`の後に安全に使えるようになるもの
 
-### External {#external}
+### 外部資料 {#external}
 
-- [The Linux/x86 Boot Protocol](https://docs.kernel.org/arch/x86/boot.html) — the boot loader/kernel handoff that precedes `startup_64`
-- [Kernel Parameters: `initcall_debug`](https://docs.kernel.org/admin-guide/kernel-parameters.html) — official description of the boot parameter covered in "Observing boot order"
+- [The Linux/x86 Boot Protocol](https://docs.kernel.org/arch/x86/boot.html) — `startup_64`に先立つ、ブートローダ/カーネル間の引き渡し
+- [Kernel Parameters: `initcall_debug`](https://docs.kernel.org/admin-guide/kernel-parameters.html) — 「ブート順序を観測する」で扱ったブートパラメータの公式説明

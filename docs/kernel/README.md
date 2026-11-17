@@ -1,50 +1,50 @@
-# Kernel Core Internals {#kernel-core-internals}
+# カーネルコアの内部構造 {#kernel-core-internals}
 
-> The glue that holds every subsystem together: boot, logging, parameters, panics, and module init
+> すべてのサブシステムをつなぎ合わせる接着剤: ブート、ロギング、パラメータ、パニック、モジュール初期化
 
-## What is "kernel core"? {#what-is-kernel-core}
+## 「カーネルコア」とは何か {#what-is-kernel-core}
 
-The kernel core is the collection of infrastructure that does not belong to any single subsystem but that every subsystem depends on. It lives primarily in `init/`, `kernel/`, and `arch/x86/kernel/` (and the equivalent arch directories), and it answers the question: *how does a compressed binary become a running operating system that can schedule tasks, respond to interrupts, and load drivers?*
+カーネルコアとは、特定のサブシステムには属さないが、すべてのサブシステムが依存しているインフラストラクチャの集まりである。主に`init/`、`kernel/`、`arch/x86/kernel/`（および他アーキテクチャの対応するディレクトリ）に存在し、次の問いに答えるものである: *圧縮されたバイナリが、どのようにしてタスクをスケジュールし、割り込みに応答し、ドライバをロードできる稼働中のオペレーティングシステムになるのか？*
 
-Topics covered here include:
+ここで扱うトピックは次のとおり:
 
-- The C entry point (`start_kernel()`) and the ordered sequence of subsystem initialization calls it drives
-- How the kernel receives and parses boot parameters from the bootloader
-- How modules and built-in subsystems register their initialization functions through the initcall mechanism
-- What happens when something goes catastrophically wrong — oops, panic, and crash dump collection
-- The `printk` logging infrastructure that underpins every diagnostic message in the kernel
+- Cのエントリポイント（`start_kernel()`）と、それが駆動するサブシステム初期化呼び出しの順序付けられたシーケンス
+- カーネルがブートローダからブートパラメータを受け取り、パースする仕組み
+- モジュールと組み込みサブシステムが、initcall機構を通じて初期化関数を登録する仕組み
+- 何かが致命的に失敗したときに起こること — oops、パニック、クラッシュダンプの収集
+- カーネル内のあらゆる診断メッセージを支える`printk`ロギング基盤
 
-This is not memory management, not the scheduler, not networking — it is the machinery that sets up all of those before handing control off to them.
+これはメモリ管理でもスケジューラでもネットワークでもない — それらすべてをセットアップしてから制御を引き渡す機構である。
 
 ---
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|---------------|
-| [printk and Kernel Logging](printk.md) | Log levels, ring buffer, rate limiting, dynamic debug, dmesg |
-| [Early Boot and start_kernel()](early-boot.md) | C entry point, subsystem init order, initcalls, `__init` sections |
-| [Kernel Boot Parameters](boot-params.md) | Command-line parsing, `__setup`, `early_param`, module params |
-| [Kernel Panic and Oops](panic-oops.md) | Oops handling, `panic()`, stack unwinding, kdump, KASAN/KFENCE |
-| [Module Init and Initcalls](initcalls-modules.md) | `module_init`/`module_exit`, struct module, loading flow, signing |
-| [Kernel Core War Stories](war-stories.md) | Init ordering bugs, `__init` misuse, panic loops |
+| [printkとカーネルロギング](printk.md) | ログレベル、リングバッファ、レート制限、dynamic debug、dmesg |
+| [初期ブートとstart_kernel()](early-boot.md) | Cエントリポイント、サブシステム初期化順序、initcall、`__init`セクション |
+| [カーネルブートパラメータ](boot-params.md) | コマンドラインのパース、`__setup`、`early_param`、モジュールパラメータ |
+| [カーネルパニックとOops](panic-oops.md) | Oops処理、`panic()`、スタックアンワインド、kdump、KASAN/KFENCE |
+| [モジュール初期化とinitcall](initcalls-modules.md) | `module_init`/`module_exit`、struct module、ロードの流れ、署名 |
+| [カーネルコアの事件簿](war-stories.md) | 初期化順序のバグ、`__init`の誤用、パニックループ |
 
 ---
 
-## Suggested reading order {#suggested-reading-order}
+## 推奨する読む順序 {#suggested-reading-order}
 
-If you are new to kernel internals, read these in order:
+カーネル内部構造に初めて触れる場合は、次の順序で読むとよい:
 
-1. **[Early Boot and start_kernel()](early-boot.md)** — understand the init sequence before anything else
-2. **[Kernel Boot Parameters](boot-params.md)** — how the kernel is configured before any code runs
-3. **[Module Init and Initcalls](initcalls-modules.md)** — how subsystems and drivers hook into the boot sequence
-4. **[printk and Kernel Logging](printk.md)** — observability infrastructure used by everything else
-5. **[Kernel Panic and Oops](panic-oops.md)** — what happens when something goes wrong
-6. **[Kernel Core War Stories](war-stories.md)** — real-world examples that tie the concepts together
+1. **[初期ブートとstart_kernel()](early-boot.md)** — 何よりも先に初期化シーケンスを理解する
+2. **[カーネルブートパラメータ](boot-params.md)** — コードが実行される前にカーネルがどのように設定されるか
+3. **[モジュール初期化とinitcall](initcalls-modules.md)** — サブシステムとドライバがどのようにブートシーケンスにフックするか
+4. **[printkとカーネルロギング](printk.md)** — 他のすべてが利用する可観測性の基盤
+5. **[カーネルパニックとOops](panic-oops.md)** — 何かが失敗したときに起こること
+6. **[カーネルコアの事件簿](war-stories.md)** — 概念を結び付ける実例
 
 ---
 
-## Kernel boot flow {#kernel-boot-flow}
+## カーネルのブートフロー {#kernel-boot-flow}
 
 ```
 Power on / bootloader (GRUB/EFI)
@@ -101,24 +101,24 @@ userspace init system (systemd / sysvinit)
 
 ---
 
-## Quick reference: key kernel globals {#quick-reference-key-kernel-globals}
+## クイックリファレンス: 主要なカーネルグローバル変数 {#quick-reference-key-kernel-globals}
 
-| Symbol | Header | Description |
+| シンボル | ヘッダ | 説明 |
 |--------|--------|-------------|
-| `init_task` | `<linux/init_task.h>` | The static task_struct for PID 0 (idle thread); the root of all process lineage |
-| `jiffies` | `<linux/jiffies.h>` | Monotonically increasing tick counter; wraps after ~497 days on 32-bit |
-| `HZ` | `<asm/param.h>` | Timer interrupt frequency in ticks per second; typically 100, 250, or 1000 |
-| `nr_cpu_ids` | `<linux/threads.h>` | Number of possible CPUs (set by `setup_nr_cpu_ids()` during early boot) |
-| `NUMA_NO_NODE` | `<linux/numa.h>` | Sentinel value (-1) meaning "no specific NUMA node"; used in allocator APIs |
-| `boot_command_line[]` | `<linux/init.h>` | Copy of the command line received from the bootloader |
-| `system_state` | `<linux/kernel.h>` | Current boot phase: `SYSTEM_BOOTING`, `SYSTEM_RUNNING`, `SYSTEM_HALT`, etc. |
+| `init_task` | `<linux/init_task.h>` | PID 0（アイドルスレッド）の静的なtask_struct。すべてのプロセスの系譜の根 |
+| `jiffies` | `<linux/jiffies.h>` | 単調増加するティックカウンタ。32ビットでは約497日でラップアラウンドする |
+| `HZ` | `<asm/param.h>` | タイマー割り込みの周波数（1秒あたりのティック数）。通常は100、250、1000のいずれか |
+| `nr_cpu_ids` | `<linux/threads.h>` | possibleなCPUの数（初期ブート中に`setup_nr_cpu_ids()`によって設定される） |
+| `NUMA_NO_NODE` | `<linux/numa.h>` | 「特定のNUMAノードなし」を意味する番兵値（-1）。アロケータAPIで使われる |
+| `boot_command_line[]` | `<linux/init.h>` | ブートローダから受け取ったコマンドラインのコピー |
+| `system_state` | `<linux/kernel.h>` | 現在のブートフェーズ: `SYSTEM_BOOTING`、`SYSTEM_RUNNING`、`SYSTEM_HALT`など |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel Modules](../modules/README.md) — writing and loading out-of-tree modules
-- [printk](printk.md) — logging in depth
-- [Kernel Debugging](../debugging/README.md) — KGDB, kdump, oops analysis
-- `init/main.c` — the canonical source for `start_kernel()` and `rest_init()`
-- `Documentation/admin-guide/kernel-parameters.txt` — exhaustive list of boot parameters
+- [カーネルモジュール](../modules/README.md) — ツリー外モジュールの作成とロード
+- [printk](printk.md) — ロギングの詳細
+- [カーネルデバッグ](../debugging/README.md) — KGDB、kdump、oops解析
+- `init/main.c` — `start_kernel()`と`rest_init()`の正典となるソース
+- `Documentation/admin-guide/kernel-parameters.txt` — ブートパラメータの網羅的な一覧

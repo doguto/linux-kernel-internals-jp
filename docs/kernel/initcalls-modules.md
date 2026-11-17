@@ -1,10 +1,10 @@
-# Module Init and Initcalls {#module-init-and-initcalls}
+# モジュール初期化とinitcall {#module-init-and-initcalls}
 
-> How kernel modules and built-in subsystems initialize
+> カーネルモジュールと組み込みサブシステムはどのように初期化されるか
 
-## `module_init()` and `module_exit()` {#moduleinit-and-moduleexit}
+## `module_init()`と`module_exit()` {#moduleinit-and-moduleexit}
 
-Every kernel module or built-in subsystem declares its initialization and cleanup functions using two macros:
+すべてのカーネルモジュールや組み込みサブシステムは、2つのマクロを使って初期化関数とクリーンアップ関数を宣言する:
 
 ```c
 #include <linux/module.h>
@@ -13,26 +13,26 @@ Every kernel module or built-in subsystem declares its initialization and cleanu
 static int __init mydriver_init(void)
 {
     pr_info("mydriver: initializing\n");
-    /* ... register device, allocate resources ... */
-    return 0;  /* 0 = success; negative errno = failure */
+    /* ... デバイスを登録し、リソースを割り当てる ... */
+    return 0;  /* 0 = 成功、負の errno = 失敗 */
 }
 
 static void __exit mydriver_exit(void)
 {
     pr_info("mydriver: exiting\n");
-    /* ... release resources ... */
+    /* ... リソースを解放する ... */
 }
 
 module_init(mydriver_init);
 module_exit(mydriver_exit);
 ```
 
-### What these macros expand to {#what-these-macros-expand-to}
+### これらのマクロが展開される内容 {#what-these-macros-expand-to}
 
-For a **loadable module** (`.ko` file), `module_init()` creates an alias:
+**ロード可能モジュール**（`.ko`ファイル）の場合、`module_init()`はエイリアスを作成する:
 
 ```c
-/* include/linux/module.h (loadable module case) */
+/* include/linux/module.h（ロード可能モジュールの場合） */
 #define module_init(initfn)                         \
     static inline initcall_t __maybe_unused         \
     __inittest(void) { return initfn; }             \
@@ -40,10 +40,10 @@ For a **loadable module** (`.ko` file), `module_init()` creates an alias:
         __attribute__((alias(#initfn)));
 ```
 
-The resulting `init_module` symbol is what the kernel's module loader calls after loading the `.ko`.
+こうしてできた`init_module`シンボルが、`.ko`をロードした後にカーネルのモジュールローダが呼び出すものである。
 
-For a **built-in module** (`y` in Kconfig), `module_init()` doesn't expand directly to `device_initcall()` —
-there's an indirection layer in between:
+**組み込みモジュール**（Kconfigで`y`）の場合、`module_init()`は直接`device_initcall()`に展開されるわけではない —
+間に間接層が1つ挟まる:
 
 ```c
 #define module_init(x)     __initcall(x);
@@ -51,81 +51,81 @@ there's an indirection layer in between:
 #define device_initcall(fn) __define_initcall(fn, 6)
 ```
 
-`__initcall(fn)` is itself just an alias for `device_initcall(fn)` (no behavioral difference — both land in
-initcall level 6), but it's the macro `module_init()` actually invokes. `__define_initcall(fn, 6)` is what
-places the function pointer in the `.initcall6.init` ELF section, called by `do_initcalls()` during boot. See
-[Early Boot and start_kernel()](early-boot.md) for the full initcall level table.
+`__initcall(fn)`自体は`device_initcall(fn)`の単なるエイリアスである（動作上の違いはない — どちらも
+initcallレベル6に入る）が、`module_init()`が実際に呼び出すのはこのマクロである。`__define_initcall(fn, 6)`が
+関数ポインタを`.initcall6.init` ELFセクションに配置し、それがブート中に`do_initcalls()`によって呼び出される。initcallレベルの
+完全な表は[初期ブートとstart_kernel()](early-boot.md)を参照。
 
-`module_exit()` for built-in code expands to nothing — built-in code can never be unloaded, so the exit function is not needed (and is discarded by the linker from `.exit.text`).
+組み込みコードに対する`module_exit()`は何も展開しない — 組み込みコードは決してアンロードできないので、exit関数は不要である（そしてリンカによって`.exit.text`から破棄される）。
 
 ---
 
 ## `struct module` {#struct-module}
 
-Every loaded module is represented by a `struct module` allocated in module memory:
+ロードされた各モジュールは、モジュールメモリに割り当てられた`struct module`で表現される:
 
 ```c
-/* include/linux/module.h (simplified) */
+/* include/linux/module.h（簡略化） */
 struct module {
-    enum module_state state;        /* COMING, LIVE, GOING, UNFORMED */
+    enum module_state state;        /* COMING、LIVE、GOING、UNFORMED */
 
-    struct list_head list;          /* linked into modules list */
+    struct list_head list;          /* modules リストにつながれる */
 
-    char name[MODULE_NAME_LEN];     /* module name (e.g., "e1000e") */
+    char name[MODULE_NAME_LEN];     /* モジュール名（例: "e1000e"） */
 
-    /* Exported symbols (GPL and non-GPL share one unified table;
-     * each entry's license is carried in flagstab, not a separate array) */
+    /* エクスポートされたシンボル（GPL と非 GPL は 1 つの統合テーブルを共有する。
+     * 各エントリのライセンスは別の配列ではなく flagstab に保持される） */
     const struct kernel_symbol *syms;
     const u32 *crcs;
     const u8 *flagstab;
     unsigned int num_syms;
 
-    /* Init and exit functions */
+    /* init 関数と exit 関数 */
     int (*init)(void);
     void (*exit)(void);
 
-    /* Reference counting */
+    /* 参照カウント */
     atomic_t refcnt;
 
-    /* Module dependencies */
-    struct list_head source_list;   /* modules that use this one (dependents) */
-    struct list_head target_list;   /* modules this one depends on */
+    /* モジュールの依存関係 */
+    struct list_head source_list;   /* このモジュールを使うモジュール（依存元） */
+    struct list_head target_list;   /* このモジュールが依存するモジュール */
 
-    /* Source section information (for /sys/module/<name>/sections/) */
+    /* ソースセクション情報（/sys/module/<name>/sections/ 用） */
     struct module_sect_attrs *sect_attrs;
 
-    /* Parameters (for /sys/module/<name>/parameters/) */
+    /* パラメータ（/sys/module/<name>/parameters/ 用） */
     struct kernel_param *kp;
     unsigned int num_kp;
 
-    /* Build ID */
+    /* ビルド ID */
     unsigned char build_id[BUILD_ID_SIZE_MAX];
 };
 ```
 
-Module states (`enum module_state`):
+モジュールの状態（`enum module_state`）:
 
-| State | Meaning |
+| 状態 | 意味 |
 |-------|---------|
-| `MODULE_STATE_LIVE` | Fully loaded and operational |
-| `MODULE_STATE_COMING` | Being loaded, `init()` not yet called |
-| `MODULE_STATE_GOING` | Being unloaded, `exit()` not yet called |
-| `MODULE_STATE_UNFORMED` | Partially constructed (early allocations done) |
+| `MODULE_STATE_LIVE` | 完全にロードされ、動作中 |
+| `MODULE_STATE_COMING` | ロード中。`init()`はまだ呼ばれていない |
+| `MODULE_STATE_GOING` | アンロード中。`exit()`はまだ呼ばれていない |
+| `MODULE_STATE_UNFORMED` | 部分的に構築された状態（初期の割り当ては完了） |
 
 ---
 
-## Module loading flow {#module-loading-flow}
+## モジュールのロードの流れ {#module-loading-flow}
 
-The kernel exposes two syscalls for loading modules:
+カーネルはモジュールをロードするための2つのシステムコールを公開している:
 
-- `init_module(buf, len, params)` — loads a module image from a buffer in userspace memory
-- `finit_module(fd, params, flags)` — loads a module from an already-open file descriptor rather than a userspace buffer (preferred since 3.8, especially by container runtimes and systemd); both syscalls funnel into the same `load_module()`, so `module_sig_check()` runs identically either way — `finit_module` doesn't change signature handling, it changes how the module image gets to the kernel
+- `init_module(buf, len, params)` — ユーザー空間メモリ上のバッファからモジュールイメージをロードする
+- `finit_module(fd, params, flags)` — ユーザー空間のバッファではなく、すでにオープンされたファイルディスクリプタからモジュールをロードする（3.8以降、特にコンテナランタイムやsystemdで推奨される）。どちらのシステムコールも同じ`load_module()`に集約されるので、`module_sig_check()`はどちらの場合も同じように実行される — `finit_module`は署名の扱いを変えるのではなく、モジュールイメージがカーネルに届く方法を変えるものである
 
-`insmod` uses `init_module`; `modprobe` uses `finit_module`.
+`insmod`は`init_module`を、`modprobe`は`finit_module`を使う。
 
-### `load_module()`: step by step {#load_module-step-by-step}
+### `load_module()`: ステップごとの解説 {#load_module-step-by-step}
 
-`load_module()` in `kernel/module/main.c` does the heavy lifting:
+`kernel/module/main.c`の`load_module()`が主な処理を担う:
 
 ```
 load_module()
@@ -180,13 +180,13 @@ load_module()
          module freed, error returned to userspace
 ```
 
-### Module memory layout {#module-memory-layout}
+### モジュールのメモリレイアウト {#module-memory-layout}
 
-Module code is loaded into a special virtual address range distinct from the main kernel text. On x86-64 this is in the range `0xffffffffc0000000` and above (the module space). The separation ensures that a module cannot be confused with core kernel code in stack traces and makes it easier to deallocate module memory on unload.
+モジュールのコードは、メインのカーネルテキストとは別の特別な仮想アドレス範囲にロードされる。x86-64では、これは`0xffffffffc0000000`以上の範囲（モジュール空間）である。この分離により、スタックトレースでモジュールがコアカーネルのコードと混同されることがなくなり、アンロード時にモジュールメモリを解放しやすくなる。
 
 ---
 
-## Module unloading {#module-unloading}
+## モジュールのアンロード {#module-unloading}
 
 ```
 rmmod mydriver
@@ -216,13 +216,13 @@ rmmod mydriver
     7. free_mod_mem(): return memory to vmalloc allocator
 ```
 
-Modules cannot be unloaded while any code is executing in them (tracked by `refcnt`) or while any other module depends on them (tracked by the `source_list`).
+モジュールは、その中で何らかのコードが実行中である間（`refcnt`で追跡される）や、他のモジュールがそれに依存している間（`source_list`で追跡される）はアンロードできない。
 
 ---
 
-## Symbol export {#symbol-export}
+## シンボルのエクスポート {#symbol-export}
 
-Only explicitly exported symbols are accessible to loadable modules. Both macros funnel into the same underlying `__EXPORT_SYMBOL()`, differing only in the license string each entry carries:
+ロード可能モジュールからアクセスできるのは、明示的にエクスポートされたシンボルだけである。どちらのマクロも同じ下位の`__EXPORT_SYMBOL()`に集約され、違いは各エントリが持つライセンス文字列だけである:
 
 ```c
 /* include/linux/export.h */
@@ -231,45 +231,45 @@ Only explicitly exported symbols are accessible to loadable modules. Both macros
 #define EXPORT_SYMBOL_GPL(sym)        _EXPORT_SYMBOL(sym, "GPL")
 ```
 
-Each export creates a `struct kernel_symbol` in a single unified `__ksymtab` section (`kernel/module/internal.h`):
+各エクスポートは、単一の統合された`__ksymtab`セクションに`struct kernel_symbol`を作成する（`kernel/module/internal.h`）:
 
 ```c
 struct kernel_symbol {
-    int value_offset;    /* offset from this struct to the symbol */
-    int name_offset;     /* offset from this struct to the name string */
+    int value_offset;    /* この構造体からシンボルへのオフセット */
+    int name_offset;     /* この構造体から名前文字列へのオフセット */
     int namespace_offset;
 };
 ```
 
-The license string itself lives in the module's `flagstab` array (see `struct module` above), not a separate symbol table — there is no `__ksymtab_gpl`. During module loading, the relocation step resolves undefined symbols by searching `__ksymtab` (and the `__ksymtab` of already-loaded modules). If a resolved symbol's license is GPL-only and the loading module's `MODULE_LICENSE` is not GPL-compatible, the load fails:
+ライセンス文字列自体は、別のシンボルテーブルではなく、モジュールの`flagstab`配列（上の`struct module`を参照）に置かれる — `__ksymtab_gpl`は存在しない。モジュールのロード中、再配置ステップは`__ksymtab`（およびロード済みモジュールの`__ksymtab`）を検索して未定義シンボルを解決する。解決したシンボルのライセンスがGPL限定で、ロードしようとしているモジュールの`MODULE_LICENSE`がGPL互換でない場合、ロードは失敗する:
 
 ```
 ERROR: "some_gpl_function" [drivers/mydriver/mydriver.ko] undefined!
 ```
 
-From userspace:
+ユーザー空間から:
 ```bash
-# List all exported kernel symbols:
-cat /proc/kallsyms | grep ' T '    # T = global text symbol
+# エクスポートされたすべてのカーネルシンボルを一覧表示:
+cat /proc/kallsyms | grep ' T '    # T = グローバルなテキストシンボル
 
-# List symbols exported by a specific module:
+# 特定のモジュールがエクスポートしたシンボルを一覧表示:
 cat /proc/kallsyms | grep '\[mydriver\]'
 
-# List what symbols a .ko exports:
+# .ko がエクスポートするシンボルを一覧表示:
 nm mydriver.ko | grep '__ksymtab'
 
-# List what symbols a .ko imports (needs from other modules):
+# .ko がインポートする（他のモジュールから必要とする）シンボルを一覧表示:
 modinfo mydriver.ko
-# or
-nm mydriver.ko | grep ' U '  # U = undefined (imported)
+# または
+nm mydriver.ko | grep ' U '  # U = 未定義（インポート）
 ```
 
 ---
 
-## Module parameters during load {#module-parameters-during-load}
+## ロード時のモジュールパラメータ {#module-parameters-during-load}
 
 ```c
-/* In the module source: */
+/* モジュールのソース内で: */
 static int timeout_ms = 100;
 module_param(timeout_ms, int, 0644);
 MODULE_PARM_DESC(timeout_ms, "Timeout in milliseconds (default 100)");
@@ -280,122 +280,122 @@ MODULE_PARM_DESC(device_name, "Target device name");
 ```
 
 ```bash
-# Pass parameters at load time:
+# ロード時にパラメータを渡す:
 modprobe mydriver timeout_ms=500 device_name=eth0
 insmod mydriver.ko timeout_ms=500
 
-# Read/write parameters at runtime (if permissions allow):
+# 実行時にパラメータを読み書きする（パーミッションが許せば）:
 cat /sys/module/mydriver/parameters/timeout_ms
 echo 200 > /sys/module/mydriver/parameters/timeout_ms
 ```
 
-The `module_param()` macro registers a `struct kernel_param` in the `.data..param` section. `load_module()` calls `parse_args()` on the parameter string passed to `finit_module()` before calling `init()`, so parameters are set before the driver initializes.
+`module_param()`マクロは`.data..param`セクションに`struct kernel_param`を登録する。`load_module()`は`init()`を呼び出す前に、`finit_module()`に渡されたパラメータ文字列に対して`parse_args()`を呼び出すので、パラメータはドライバが初期化される前に設定される。
 
 ---
 
-## Module dependencies {#module-dependencies}
+## モジュールの依存関係 {#module-dependencies}
 
-`modprobe` (from the `kmod` package) handles dependency resolution. The dependency database is built by `depmod`:
+依存関係の解決は`modprobe`（`kmod`パッケージに含まれる）が行う。依存関係データベースは`depmod`によって構築される:
 
 ```bash
-# Rebuild module dependency database after installing new modules:
+# 新しいモジュールをインストールした後、モジュール依存関係データベースを再構築する:
 depmod -a
 
-# The result:
+# 結果:
 cat /lib/modules/$(uname -r)/modules.dep
 # drivers/net/ethernet/intel/e1000e/e1000e.ko.xz: \
 #     kernel/drivers/pci/pci.ko.xz
 ```
 
-`depmod` reads each `.ko` file's undefined symbols and cross-references them against the exported symbols of other modules, producing a directed dependency graph. `modprobe` traverses this graph to ensure prerequisites are loaded first.
+`depmod`は各`.ko`ファイルの未定義シンボルを読み取り、他のモジュールのエクスポートシンボルと突き合わせて、有向の依存関係グラフを生成する。`modprobe`はこのグラフをたどり、前提となるモジュールが先にロードされるようにする。
 
 ```bash
-# Show dependencies of a module:
+# モジュールの依存関係を表示する:
 modinfo e1000e | grep depends
 
-# Load a module and all its dependencies:
+# モジュールとそのすべての依存先をロードする:
 modprobe e1000e
 
-# Remove a module and modules that depend on it (if not in use):
+# モジュールと、それに依存するモジュールを削除する（使用中でなければ）:
 modprobe -r e1000e
 ```
 
 ---
 
-## /sys/module/ and /proc/modules {#sysmodule-and-procmodules}
+## /sys/module/と/proc/modules {#sysmodule-and-procmodules}
 
 ```bash
-# List all loaded modules with size and reference count:
+# ロード済みの全モジュールをサイズと参照カウント付きで一覧表示:
 cat /proc/modules
 # e1000e 290816 0 - Live 0xffffffffc0234000
-# Format: name size refcount dependencies state memaddr
+# 形式: name size refcount dependencies state memaddr
 
-# Or with lsmod (prettier):
+# または lsmod で（より見やすい）:
 lsmod
 
-# Detailed module information:
+# モジュールの詳細情報:
 ls /sys/module/e1000e/
 # coresize  initsize  initstate  notes  parameters  refcnt  sections  srcversion  taint
 
 cat /sys/module/e1000e/initstate
 # live
 
-# Module parameters:
+# モジュールパラメータ:
 ls /sys/module/e1000e/parameters/
 cat /sys/module/e1000e/parameters/debug
 
-# Section addresses (useful for debugging):
+# セクションアドレス（デバッグに有用）:
 cat /sys/module/e1000e/sections/.text
 ```
 
 ---
 
-## Module signing {#module-signing}
+## モジュール署名 {#module-signing}
 
-`CONFIG_MODULE_SIG` enables cryptographic signature verification on module load. The kernel embeds a public key; modules are signed with the corresponding private key during the build.
+`CONFIG_MODULE_SIG`は、モジュールのロード時に暗号学的な署名検証を有効にする。カーネルは公開鍵を埋め込んでおり、モジュールはビルド時に対応する秘密鍵で署名される。
 
 ```bash
-# Sign a module manually (key must match kernel's built-in public key):
+# モジュールに手動で署名する（鍵はカーネルに組み込まれた公開鍵と一致している必要がある）:
 scripts/sign-file sha256 signing_key.pem signing_key.x509 mydriver.ko
 
-# Confirm a signature is present (does not validate it):
+# 署名が存在することを確認する（検証はしない）:
 modinfo mydriver.ko | grep sig
-tail -c 28 mydriver.ko   # should read "~Module signature appended~"
+tail -c 28 mydriver.ko   # "~Module signature appended~" と表示されるはず
 ```
 
-With `CONFIG_MODULE_SIG_FORCE`, any unsigned or incorrectly signed module is rejected. With `CONFIG_MODULE_SIG` but not `_FORCE`, unsigned modules are accepted with a taint flag:
+`CONFIG_MODULE_SIG_FORCE`を有効にすると、署名のないモジュールや署名が正しくないモジュールはすべて拒否される。`CONFIG_MODULE_SIG`のみで`_FORCE`がない場合、署名のないモジュールはtaintフラグ付きで受け入れられる:
 
 ```
 mydriver: module verification failed: signature and/or required key missing
 Tainted: G           E
 ```
 
-The signature is a small, kernel-specific `struct module_signature` trailer appended after the ELF data —
-not a PKCS#7 (or any other industrial-standard) container. Per the kernel's own documentation: "the
-signatures are not themselves encoded in any industrial standard type." That trailer's `id_type` field does
-name a payload format for the signature bytes it wraps — currently only `PKCS7` is defined — but there's no
-general-purpose `openssl`-style command that verifies it offline; validation only happens inside the kernel,
-against its built-in public key, at load time.
+署名は、ELFデータの後ろに付加される小さなカーネル独自の`struct module_signature`トレーラであり、
+PKCS#7（やその他の業界標準）のコンテナではない。カーネル自身のドキュメントによれば、「the
+signatures are not themselves encoded in any industrial standard type」（署名自体はいかなる業界標準の形式でもエンコードされていない）。このトレーラの`id_type`フィールドは、
+包んでいる署名バイト列のペイロード形式を示しはする — 現在定義されているのは`PKCS7`のみ — が、それをオフラインで検証する
+汎用の`openssl`風コマンドは存在しない。検証はロード時にカーネル内部でのみ、カーネルに組み込まれた公開鍵に対して
+行われる。
 
 ---
 
-## Initcall debugging {#initcall-debugging}
+## initcallのデバッグ {#initcall-debugging}
 
 ```bash
-# Boot with initcall_debug to see every initcall and its duration:
-# Add to kernel command line:
+# initcall_debug 付きでブートし、すべての initcall とその所要時間を確認する:
+# カーネルコマンドラインに追加:
 initcall_debug
 
-# In dmesg:
+# dmesg 内:
 # calling  e1000e_init_module+0x0/0x3c [e1000e] @ 3
 # initcall e1000e_init_module+0x0/0x3c [e1000e] returned 0 after 1243 usecs
 
-# The "@ N" is the CPU number; this helps identify parallelism issues.
+# "@ N" は CPU 番号であり、並列性の問題を特定するのに役立つ。
 
-# Find which initcall level a function is at:
+# 関数がどの initcall レベルにあるかを調べる:
 grep '__initcall_' /proc/kallsyms | grep 'mydriver'
 
-# Trace the module load path:
+# モジュールのロードパスをトレースする:
 bpftrace -e '
 kprobe:do_init_module {
     printf("loading module: %s\n",
@@ -405,39 +405,39 @@ kprobe:do_init_module {
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `module_init()` / `module_exit()` macros and the `struct module` definition
-- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — the initcall level macros (`early_initcall()` through `late_initcall()`) and `__define_initcall()`
-- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `load_module()` and the steps it calls in order: `module_sig_check()`, `elf_validity_cache_copy()`, `layout_and_allocate()`, `add_unformed_module()`, `apply_relocations()`, `post_relocation()`, `complete_formation()`, `do_init_module()`; unloading via `SYSCALL_DEFINE2(delete_module, ...)` → `try_stop_module()` → `free_module()` (`mod_sysfs_teardown()`, `synchronize_rcu()`, `free_mod_mem()`)
-- [include/uapi/linux/module_signature.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/module_signature.h) — `struct module_signature`, the custom trailer appended to a signed `.ko`
-- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()` and `EXPORT_SYMBOL_GPL()`
-- [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — the current `struct kernel_symbol` definition and the `__ksymtab` boundary symbols
+- [include/linux/module.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/module.h) — `module_init()` / `module_exit()`マクロと`struct module`の定義
+- [include/linux/init.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/init.h) — initcallレベルのマクロ（`early_initcall()`から`late_initcall()`まで）と`__define_initcall()`
+- [kernel/module/main.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/main.c) — `load_module()`と、それが順に呼び出すステップ: `module_sig_check()`、`elf_validity_cache_copy()`、`layout_and_allocate()`、`add_unformed_module()`、`apply_relocations()`、`post_relocation()`、`complete_formation()`、`do_init_module()`。アンロードは`SYSCALL_DEFINE2(delete_module, ...)` → `try_stop_module()` → `free_module()`（`mod_sysfs_teardown()`、`synchronize_rcu()`、`free_mod_mem()`）
+- [include/uapi/linux/module_signature.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/module_signature.h) — `struct module_signature`。署名済み`.ko`に付加される独自のトレーラ
+- [include/linux/export.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/export.h) — `EXPORT_SYMBOL()`と`EXPORT_SYMBOL_GPL()`
+- [kernel/module/internal.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/module/internal.h) — 現在の`struct kernel_symbol`の定義と`__ksymtab`の境界シンボル
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — loads a module from a userspace buffer
-- [`finit_module(2)`](https://man7.org/linux/man-pages/man2/finit_module.2.html) — loads a module from a file descriptor; added in Linux 3.8
-- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — the syscall behind `rmmod`
-- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — dependency-aware module loading/removal
-- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — builds `modules.dep` from each module's undefined symbols
+- [`init_module(2)`](https://man7.org/linux/man-pages/man2/init_module.2.html) — ユーザー空間のバッファからモジュールをロードする
+- [`finit_module(2)`](https://man7.org/linux/man-pages/man2/finit_module.2.html) — ファイルディスクリプタからモジュールをロードする。Linux 3.8で追加
+- [`delete_module(2)`](https://man7.org/linux/man-pages/man2/delete_module.2.html) — `rmmod`の背後にあるシステムコール
+- [`modprobe(8)`](https://man7.org/linux/man-pages/man8/modprobe.8.html) — 依存関係を考慮したモジュールのロード/削除
+- [`depmod(8)`](https://man7.org/linux/man-pages/man8/depmod.8.html) — 各モジュールの未定義シンボルから`modules.dep`を構築する
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Early Boot and start_kernel()](early-boot.md) — the initcall levels and `do_initcalls()`
-- [Kernel Modules](../modules/README.md) — writing and building out-of-tree modules
-- [Module Signing](../modules/module-signing.md) — key generation and signing workflow
-- [Parameters, Symbols, and Kconfig](../modules/module-params.md) — `module_param()` in depth
+- [初期ブートとstart_kernel()](early-boot.md) — initcallレベルと`do_initcalls()`
+- [カーネルモジュール](../modules/README.md) — ツリー外モジュールの作成とビルド
+- [モジュール署名](../modules/module-signing.md) — 鍵の生成と署名のワークフロー
+- [パラメータ、シンボル、Kconfig](../modules/module-params.md) — `module_param()`の詳細
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [LWN: Enforcement (or not) for module-specific exported symbols](https://lwn.net/Articles/1029492/) — the debate over restricting exports to a named set of in-tree modules; the macro discussed was proposed as `EXPORT_SYMBOL_GPL_FOR_MODULES()` and merged as `EXPORT_SYMBOL_FOR_MODULES()`, dropping the `GPL_` (see the Kernel source entry above)
-- [LWN: The proper use of EXPORT_SYMBOL_GPL()](https://lwn.net/Articles/769471/) — how maintainers decide when an exported symbol should be GPL-only
+- [LWN: Enforcement (or not) for module-specific exported symbols](https://lwn.net/Articles/1029492/) — エクスポートを名前で指定したツリー内モジュールの集合に制限することをめぐる議論。議論されたマクロは`EXPORT_SYMBOL_GPL_FOR_MODULES()`として提案され、`GPL_`を外した`EXPORT_SYMBOL_FOR_MODULES()`としてマージされた（上のカーネルソースの項を参照）
+- [LWN: The proper use of EXPORT_SYMBOL_GPL()](https://lwn.net/Articles/769471/) — エクスポートシンボルをGPL限定にすべきときをメンテナがどう判断するか
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Kernel module signing facility](https://docs.kernel.org/admin-guide/module-signing.html) — `CONFIG_MODULE_SIG`, key generation, and `scripts/sign-file`
-- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — kbuild mechanics for out-of-tree modules
-- [Symbol Namespaces](https://docs.kernel.org/core-api/symbol-namespaces.html) — `EXPORT_SYMBOL_NS()` for namespaced exports
+- [Kernel module signing facility](https://docs.kernel.org/admin-guide/module-signing.html) — `CONFIG_MODULE_SIG`、鍵の生成、`scripts/sign-file`
+- [Building External Modules](https://docs.kernel.org/kbuild/modules.html) — ツリー外モジュールのためのkbuildの仕組み
+- [Symbol Namespaces](https://docs.kernel.org/core-api/symbol-namespaces.html) — 名前空間付きエクスポートのための`EXPORT_SYMBOL_NS()`
