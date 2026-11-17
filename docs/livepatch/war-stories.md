@@ -1,128 +1,128 @@
-# Live Patching War Stories {#live-patching-war-stories}
+# ライブパッチの事件簿 {#live-patching-war-stories}
 
-> Real incidents, tricky edge cases, and lessons learned
+> 実際のインシデント、厄介なエッジケース、そして得られた教訓
 
-## 1. The stuck transition {#1-the-stuck-transition}
+## 1. 停滞した遷移 {#1-the-stuck-transition}
 
-### Scenario {#scenario}
+### シナリオ {#scenario}
 
-A live patch was applied to a production system to fix a bug in a network
-processing function used by a kthread. The patch loaded successfully and
-`enabled` read `1`, but `transition` remained `1` for hours:
+kthreadが使うネットワーク処理関数のバグを修正するために、本番システムに
+ライブパッチが適用された。パッチは正常にロードされ、
+`enabled`は`1`を返したが、`transition`は何時間も`1`のままだった。
 
 ```bash
 cat /sys/kernel/livepatch/net-fix/transition
-# 1   (still stuck after 4 hours)
+# 1   （4時間経ってもまだ停滞）
 ```
 
-### Root cause {#root-cause}
+### 根本原因 {#root-cause}
 
-The kthread in question ran a tight polling loop:
+問題のkthreadはタイトなポーリングループを実行していた。
 
 ```c
-/* Simplified: the buggy kthread */
+/* 簡略化: バグのあるkthread */
 static int net_kthread(void *arg)
 {
     while (!kthread_should_stop()) {
-        process_pending_work();   /* calls old (buggy) function */
-        /* No sleep, no cond_resched() — never schedules out */
+        process_pending_work();   /* 古い（バグのある）関数を呼ぶ */
+        /* スリープもcond_resched()もない — 決してスケジュールアウトしない */
     }
     return 0;
 }
 ```
 
-Because the kthread never yielded the CPU voluntarily and never entered sleep,
-it never hit a context switch where `klp_sched_try_switch()` could try it —
-that scheduler-path check only runs when the outgoing task is entering a
-freezable sleep state, exactly what this kthread never did. `klp_send_signals()`
-calls `wake_up_state(task, TASK_INTERRUPTIBLE)` for kthreads — this can only
-wake tasks in interruptible sleep, not tasks actively running in a tight loop.
-The kthread's tight loop without `cond_resched()` prevented both the
-scheduler-path check and the `TASK_INTERRUPTIBLE` wakeup from taking effect.
+このkthreadは自発的にCPUを明け渡すことも、スリープに入ることもなかったため、
+`klp_sched_try_switch()`がそれを試せるコンテキストスイッチに一度も到達しなかった。
+このスケジューラ経路のチェックは、切り替えで出ていくタスクがfreezableなスリープ状態に
+入ろうとしているときにのみ実行されるが、それこそこのkthreadが決してしなかったことである。`klp_send_signals()`は
+kthreadに対して`wake_up_state(task, TASK_INTERRUPTIBLE)`を呼ぶが、これは割り込み可能な
+スリープ中のタスクしか起こせず、タイトなループで実際に実行中のタスクには効かない。
+`cond_resched()`のないkthreadのタイトなループが、スケジューラ経路のチェックと
+`TASK_INTERRUPTIBLE`の起床の両方を無効にしていた。
 
-The kthread's stack confirmed it:
+kthreadのスタックがそれを裏付けていた。
 
 ```bash
 cat /proc/<kthread_pid>/stack
-# [<0>] process_pending_work+0x3a/0x120  ← old function, still on stack
+# [<0>] process_pending_work+0x3a/0x120  ← 古い関数がまだスタック上にある
 # [<0>] net_kthread+0x18/0x50
 # [<0>] kthread+0xd6/0x100
 # [<0>] ret_from_fork+0x22/0x30
 ```
 
-### Resolution {#resolution}
+### 解決 {#resolution}
 
-Two options were available:
+選択肢は2つあった。
 
-1. **Force the transition** (chosen as a stopgap): after verifying the new
-   function was safe to call even mid-execution in this specific case, the
-   force file was written:
+1. **遷移を強制する**（応急処置として選択）: この特定のケースでは、実行途中であっても
+   新しい関数を呼んで安全であることを確認したうえで、forceファイルに
+   書き込んだ。
 
    ```bash
    echo 1 > /sys/kernel/livepatch/net-fix/force
    ```
 
-   The kernel was already tainted with `TAINT_LIVEPATCH` from loading the
-   module — forcing adds no additional taint of its own. The unsafety of the
-   force itself was accepted as a stopgap, and the system was marked for a
-   planned reboot within 24 hours.
+   カーネルはモジュールをロードした時点で既に`TAINT_LIVEPATCH`でtaintされていた。
+   強制すること自体が追加のtaintを付けることはない。強制そのものの
+   危険性は応急処置として受け入れられ、システムは24時間以内の
+   計画的なリブートの対象としてマークされた。
 
-2. **Make the kthread sleep** (permanent fix): a follow-up patch made the loop
-   sleep between iterations instead of spinning. That gives the transition two
-   ways in — the kthread is now off-CPU when the periodic workqueue scan runs
-   (so `klp_check_and_switch_task()` no longer returns `-EBUSY`) and its stack
-   no longer holds the patched function while it waits.
+2. **kthreadをスリープさせる**（恒久的な修正）: 後続のパッチで、ループが空回りする
+   代わりに反復の合間にスリープするようにした。これにより遷移には2つの
+   入口ができる。定期的なworkqueueの走査が実行されるときにkthreadはCPUから外れている
+   （そのため`klp_check_and_switch_task()`はもう`-EBUSY`を返さない）し、待っている間は
+   スタックにパッチ対象の関数がもう載っていない。
 
-   On current kernels the sleep has to be a real sleep. A bare
-   `cond_resched()` is not enough: since commit
+   現在のカーネルでは、そのスリープは本物のスリープでなければならない。単なる
+   `cond_resched()`では不十分である。コミット
    [`676e8cf70cb0`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=676e8cf70cb0)
-   ("sched,livepatch: Untangle cond_resched() and live-patching", 2025-05-09)
-   the livepatch hook hangs off `TASK_FREEZABLE` sleeps in `__schedule()`
-   rather than off `cond_resched()`, so a loop that only yields still never
-   reaches `__klp_sched_try_switch()`.
+   （"sched,livepatch: Untangle cond_resched() and live-patching"、2025-05-09）以降、
+   livepatchのフックは`cond_resched()`ではなく`__schedule()`内の`TASK_FREEZABLE`スリープに
+   ぶら下がっているので、譲歩するだけのループは依然として
+   `__klp_sched_try_switch()`に到達しない。
 
-### Lesson {#lesson}
+### 教訓 {#lesson}
 
-Kthreads that loop without ever sleeping are the hardest targets for live
-patching: they never return to userspace, they never enter the freezable sleep
-the scheduler-path check keys off, and they are always on-CPU when the
-workqueue scan tries them. Before writing a patch that covers such a function:
+一度もスリープせずにループするkthreadは、ライブパッチにとって最も手強い対象である。
+ユーザー空間へ戻ることはなく、スケジューラ経路のチェックが鍵とするfreezableなスリープに
+入ることもなく、workqueueの走査が試すときには常にCPU上にいる。
+そのような関数をカバーするパッチを書く前に:
 
-- Give the kthread a real sleep — a brief `msleep()`, or better a freezable
-  wait — if you control its source (via a separate preparatory patch). Yielding
-  with `cond_resched()` alone no longer helps the transition.
+- kthreadのソースを管理しているなら（別の準備用パッチを通じて）、本物のスリープを与えること。
+  短い`msleep()`、より良いのはfreezableな待機である。`cond_resched()`で
+  譲歩するだけでは、もはや遷移の助けにならない。
 
-  Note: the `nop` field in `struct klp_func` is used by the cumulative replace
-  mechanism (`klp_add_nops()`) to create placeholder entries that call through
-  to the original function for functions covered by older patches but not
-  explicitly patched by the new cumulative patch. It is not a tool for draining
-  stacks in this scenario.
+  注: `struct klp_func`の`nop`フィールドは、累積的な置き換えの
+  仕組み（`klp_add_nops()`）が、古いパッチがカバーしているが新しい累積パッチが
+  明示的にパッチしていない関数について、元の関数へそのまま呼び出しを通す
+  プレースホルダーのエントリを作るために使うものである。このシナリオでスタックを
+  空にするための道具ではない。
 
-## 2. Shadow variable lifecycle bug {#2-shadow-variable-lifecycle-bug}
+## 2. shadow変数のライフサイクルのバグ {#2-shadow-variable-lifecycle-bug}
 
-### Scenario {#scenario_1}
+### シナリオ {#scenario_1}
 
-A live patch added per-socket state to track a new security attribute. The
-patch allocated a shadow variable during `connect()` and read it during
-`send()`. The patch was deployed and worked correctly — but over the following
-week, memory use on the affected hosts crept upward and never stabilized.
+あるライブパッチは、新しいセキュリティ属性を追跡するためにソケットごとの状態を追加した。
+パッチは`connect()`の際にshadow変数を割り当て、`send()`の際にそれを読んだ。
+パッチはデプロイされて正しく動作した。しかしその後の1週間で、影響を受けたホストの
+メモリ使用量はじわじわと増え続け、決して安定しなかった。
 
 ```bash
-# Unreclaimable slab climbing and never coming back down
+# 回収不能なslabが増え続け、決して減らない
 grep -E '^(Slab|SReclaimable|SUnreclaim):' /proc/meminfo
 # Slab:            1842160 kB
 # SReclaimable:     732876 kB
-# SUnreclaim:      1109284 kB   ← ~40 MB/day, tracking connection churn
+# SUnreclaim:      1109284 kB   ← 1日約40 MB、接続の入れ替わりに比例
 ```
 
-### Root cause {#root-cause_1}
+### 根本原因 {#root-cause_1}
 
-Shadow variables are stored in a global hash table, `klp_shadow_hash`,
-keyed by (object pointer, ID). The patch allocated a shadow for each new
-socket but never freed it when the socket was closed:
+shadow変数は、（オブジェクトポインタ, ID）をキーとするグローバルなハッシュテーブル
+`klp_shadow_hash`に格納される。パッチは新しいソケットごとにshadowを割り当てたが、
+ソケットがクローズされたときにそれを解放していなかった。
 
 ```c
-/* Patch code — the bug */
+/* パッチのコード — バグ */
 static int patched_tcp_connect(struct sock *sk, struct sockaddr *uaddr,
                                 int addr_len)
 {
@@ -133,58 +133,57 @@ static int patched_tcp_connect(struct sock *sk, struct sockaddr *uaddr,
                                  NULL, NULL);
     s->attr = compute_security_attr(uaddr);
 
-    /* Call original logic ... */
+    /* 元のロジックを呼ぶ ... */
 }
 
-/* Missing: klp_shadow_free() in the socket release path */
+/* 欠落: ソケット解放経路でのklp_shadow_free() */
 ```
 
-Every closed socket left an orphaned `struct klp_shadow` in the hash table.
-The hash table itself is a file-scope `DEFINE_HASHTABLE(klp_shadow_hash, 12)`
-in `kernel/livepatch/shadow.c`, and nothing ever shrinks it: the only two exits
-are `klp_shadow_free()` (one `<obj, id>` pair) and `klp_shadow_free_all()`
-(every shadow with a given `id`). Both must be called by the patch.
+クローズされたソケットのそれぞれが、ハッシュテーブル内に孤立した`struct klp_shadow`を残した。
+ハッシュテーブル自体は`kernel/livepatch/shadow.c`内のファイルスコープの
+`DEFINE_HASHTABLE(klp_shadow_hash, 12)`であり、それを縮めるものは何もない。出口は2つだけで、
+`klp_shadow_free()`（1つの`<obj, id>`の組）と`klp_shadow_free_all()`
+（指定した`id`を持つすべてのshadow）である。どちらもパッチが呼ばなければならない。
 
-### Detection {#detection}
+### 検出 {#detection}
 
-This is the awkward part: there is no `klp_shadow` slab cache to grep for.
-`kernel/livepatch/shadow.c` contains no `kmem_cache_create()` at all — every
-shadow variable comes out of a plain `kmalloc`:
+ここが厄介な部分である。grepで探せる`klp_shadow`のslabキャッシュは存在しない。
+`kernel/livepatch/shadow.c`には`kmem_cache_create()`が一切含まれておらず、すべての
+shadow変数は単なる`kmalloc`から割り当てられる。
 
 ```c
 /* kernel/livepatch/shadow.c — __klp_shadow_get_or_alloc() */
 new_shadow = kzalloc(size + sizeof(*new_shadow), gfp_flags);
 ```
 
-so the allocations land in the shared generic `kmalloc-*` buckets with
-everything else of that size, and `/proc/slabinfo` has no livepatch-specific
-line. `struct klp_shadow` is 48 bytes of header on 64-bit (`hlist_node`,
-`rcu_head`, `obj`, `id`) plus the patch's own payload — here a single 32-bit
-attribute, for 52 bytes total — so these shadows came out of `kmalloc-64`.
-Watching that bucket is corroborating evidence, never proof:
+そのため割り当ては、同じサイズの他のすべてのものと共有される汎用の`kmalloc-*`バケットに
+入り、`/proc/slabinfo`にはlivepatch固有の行がない。`struct klp_shadow`は64ビットでは
+48バイトのヘッダ（`hlist_node`、`rcu_head`、`obj`、`id`）に、パッチ自身のペイロード
+（ここでは32ビットの属性1つ）を加えた合計52バイトなので、これらのshadowは`kmalloc-64`から
+割り当てられていた。そのバケットを監視することは裏付けの証拠にはなるが、決して証明にはならない。
 
 ```bash
-# Generic, shared bucket — a hint, not an attribution
+# 汎用の共有バケット — ヒントであって、帰属の特定ではない
 watch -n 60 "grep -E '^kmalloc-64 ' /proc/slabinfo"
 ```
 
-kmemleak is no help either. The orphans are still linked into
-`klp_shadow_hash`, and `struct klp_shadow`'s `hlist_node` is its first member,
-so a pointer to the start of every allocation is sitting in a live kernel data
-structure. Kmemleak only reports objects for which no such pointer can be
-found, so it never flags them. This is a lifecycle leak, not an
-unreferenced-memory leak.
+kmemleakも役に立たない。孤立したオブジェクトはまだ
+`klp_shadow_hash`にリンクされており、`struct klp_shadow`の`hlist_node`は最初のメンバなので、
+すべての割り当ての先頭を指すポインタが生きたカーネルデータ構造の中に存在している。
+kmemleakはそのようなポインタが見つからないオブジェクトしか報告しないので、
+これらに印を付けることは決してない。これはライフサイクルのリークであり、
+参照されていないメモリのリークではない。
 
-What actually closed the case was a two-step process. First, correlate: plot
-`SUnreclaim:` from `/proc/meminfo` against the host's socket open/close rate
-and confirm the slope only appeared after the patch was loaded, and only on
-hosts that had it. Second, confirm by walking the hash table directly.
-`klp_shadow_hash` is `static`, with no procfs, sysfs, or debugfs interface, so
-this needs a debug-info kernel and a tool that can read kernel data
-structures — `drgn` against the live kernel, or `crash` against a dump:
+実際に事件を解決したのは2段階のプロセスだった。まず相関を取る。
+`/proc/meminfo`の`SUnreclaim:`をホストのソケットのオープン/クローズ率に対してプロットし、
+その傾きがパッチのロード後にのみ、そしてパッチを持つホストでのみ現れたことを確認した。
+次に、ハッシュテーブルを直接たどって確認した。
+`klp_shadow_hash`は`static`で、procfs、sysfs、debugfsのインターフェースもないので、
+これにはデバッグ情報付きのカーネルと、カーネルのデータ構造を読めるツールが必要である。
+稼働中のカーネルに対しては`drgn`、ダンプに対しては`crash`を使う。
 
 ```python
-# drgn, on a kernel built with debug info
+# drgn、デバッグ情報付きでビルドされたカーネル上で
 from collections import Counter
 from drgn.helpers.linux.list import hlist_for_each_entry
 
@@ -194,63 +193,63 @@ for bucket in prog["klp_shadow_hash"]:
                                   bucket.address_of_(), "node"):
         counts[hex(int(s.id))] += 1
 print(counts)
-# Counter({'0x1': 41823})   ← the host had ~1200 live sockets
+# Counter({'0x1': 41823})   ← ホスト上の生きたソケットは約1200個だった
 ```
 
-### Resolution {#resolution_1}
+### 解決 {#resolution_1}
 
-A follow-up patch hooked the socket release path and freed the shadow:
+後続のパッチでソケット解放経路をフックし、shadowを解放した。
 
 ```c
-/* Fix patch — added to socket release */
+/* 修正パッチ — ソケット解放に追加 */
 static void patched_sock_release(struct socket *sock)
 {
-    /* Free the shadow variable we attached in patched_tcp_connect */
+    /* patched_tcp_connectで付加したshadow変数を解放する */
     klp_shadow_free(sock->sk, KLP_MY_SHADOW_ID, NULL);
 
     /*
-     * ... rest of sock_release()'s body, copied verbatim from
-     * net/socket.c, elided here. KLP has no klp_call_orig() — see
-     * klp.md — so the patch module carries the whole body.
+     * ... net/socket.cからそのままコピーしたsock_release()の本体の残り。
+     * ここでは省略する。KLPにはklp_call_orig()はない（klp.mdを参照）
+     * ので、パッチモジュールは本体全体を持つ。
      */
 }
 ```
 
-### Lesson {#lesson_1}
+### 教訓 {#lesson_1}
 
-Every `klp_shadow_get_or_alloc()` must have a corresponding
-`klp_shadow_free()`. Map out the full lifecycle of the kernel object before
-writing the patch:
+すべての`klp_shadow_get_or_alloc()`には、対応する
+`klp_shadow_free()`がなければならない。パッチを書く前に、カーネルオブジェクトの
+ライフサイクル全体を洗い出すこと。
 
-- **Allocated** in: `connect()` — must call `klp_shadow_get_or_alloc()`
-- **Used** in: `send()`, `recv()` — must call `klp_shadow_get()`
-- **Freed** in: `sock_release()`, `tcp_close()` — must call `klp_shadow_free()`
+- **割り当て**: `connect()` — `klp_shadow_get_or_alloc()`を呼ぶ必要がある
+- **使用**: `send()`、`recv()` — `klp_shadow_get()`を呼ぶ必要がある
+- **解放**: `sock_release()`、`tcp_close()` — `klp_shadow_free()`を呼ぶ必要がある
 
-If the object's destructor is in a different module from where the shadow is
-created, both the creator and destructor paths must be patched together.
-See [Kernel Live Patching](klp.md) for the shadow variable API.
+オブジェクトのデストラクタがshadowを作成する場所とは別のモジュールにある場合、
+作成側とデストラクタ側の両方の経路を一緒にパッチしなければならない。
+shadow変数のAPIについては[カーネルライブパッチ](klp.md)を参照。
 
-## 3. The compat syscall miss {#3-the-compat-syscall-miss}
+## 3. compatシステムコールの見落とし {#3-the-compat-syscall-miss}
 
-### Scenario {#scenario_2}
+### シナリオ {#scenario_2}
 
-A CVE was discovered in the legacy XFS-compatible space-reservation ioctls —
-`FS_IOC_RESVSP`, `FS_IOC_UNRESVSP`, and `FS_IOC_ZERO_RANGE`. A live patch was
-deployed to all production hosts within two hours, fixing `ioctl_preallocate()`
-in `fs/ioctl.c`. The vulnerability was considered remediated. Three days
-later, a security audit found that 32-bit processes on x86_64 hosts were
-still exploitable through the exact same ioctl commands.
+レガシーなXFS互換の領域予約ioctl、すなわち
+`FS_IOC_RESVSP`、`FS_IOC_UNRESVSP`、`FS_IOC_ZERO_RANGE`にCVEが発見された。ライブパッチが
+2時間以内にすべての本番ホストへデプロイされ、`fs/ioctl.c`の`ioctl_preallocate()`を
+修正した。脆弱性は修復されたとみなされた。3日後、
+セキュリティ監査で、x86_64ホスト上の32ビットプロセスがまったく同じioctlコマンドを通じて
+依然として悪用可能であることが判明した。
 
-### Root cause {#root-cause_2}
+### 根本原因 {#root-cause_2}
 
-The patch targeted only the native ioctl path. On `CONFIG_X86_64`, the 32-bit
-compat entry point, `compat_sys_ioctl()`, dispatches the equivalent
-`_32`-suffixed command codes (`FS_IOC_RESVSP_32`, `FS_IOC_UNRESVSP_32`,
-`FS_IOC_ZERO_RANGE_32`) straight to a separate function,
-`compat_ioctl_preallocate()`, which the patch never touched:
+パッチはネイティブのioctl経路だけを対象にしていた。`CONFIG_X86_64`では、32ビットの
+compatエントリポイントである`compat_sys_ioctl()`は、同等の`_32`接尾辞付きのコマンドコード
+（`FS_IOC_RESVSP_32`、`FS_IOC_UNRESVSP_32`、
+`FS_IOC_ZERO_RANGE_32`）を、別の関数である`compat_ioctl_preallocate()`へ直接
+ディスパッチしていた。パッチはこの関数に一切触れていなかった。
 
 ```c
-/* Native path — patched */
+/* ネイティブ経路 — パッチ適用済み */
 static int ioctl_preallocate(struct file *filp, int mode, void __user *argp)
 {
     struct space_resv sr;
@@ -259,79 +258,79 @@ static int ioctl_preallocate(struct file *filp, int mode, void __user *argp)
         return -EFAULT;
     ...
     return vfs_fallocate(filp, mode | FALLOC_FL_KEEP_SIZE,
-                          sr.l_start, sr.l_len);   /* ← patched */
+                          sr.l_start, sr.l_len);   /* ← パッチ適用済み */
 }
 
-/* 32-bit compat path on x86_64 — NOT patched */
+/* x86_64上の32ビットcompat経路 — パッチ未適用 */
 #if defined CONFIG_COMPAT && defined(CONFIG_X86_64)
-/* on ia32 l_start is on a 32-bit boundary; just account for the
- * different alignment */
+/* ia32ではl_startは32ビット境界にある。アライメントの違いを
+ * 考慮するだけでよい */
 static int compat_ioctl_preallocate(struct file *file, int mode,
                                     struct space_resv_32 __user *argp)
 {
-    struct space_resv_32 sr;   /* distinct, packed 32-bit layout */
+    struct space_resv_32 sr;   /* 別個の、packedな32ビットレイアウト */
 
     if (copy_from_user(&sr, argp, sizeof(sr)))
         return -EFAULT;
     ...
     return vfs_fallocate(file, mode | FALLOC_FL_KEEP_SIZE,
-                          sr.l_start, sr.l_len);   /* ← same call, but... */
+                          sr.l_start, sr.l_len);   /* ← 同じ呼び出しだが... */
 }
 #endif
 ```
 
-`compat_ioctl_preallocate()` exists because `struct space_resv`'s 64-bit
-`l_start`/`l_len` fields are 8-byte aligned, but on ia32 they're only 4-byte
-aligned — so the compat path defines its own packed `struct space_resv_32`
-and its own copy-in routine (`include/linux/falloc.h`). Inside
-`COMPAT_SYSCALL_DEFINE3(ioctl...)`, the `_32` command codes are handled
-directly by `compat_ioctl_preallocate()` and never reach `do_vfs_ioctl()` →
-`file_ioctl()` → `ioctl_preallocate()`, the function the patch had hooked.
+`compat_ioctl_preallocate()`が存在するのは、`struct space_resv`の64ビットの
+`l_start`/`l_len`フィールドが8バイト境界にアラインされているのに対し、ia32では4バイト境界にしか
+アラインされていないからである。そのためcompat経路は独自のpackedな`struct space_resv_32`と
+独自のコピーインのルーチンを定義している（`include/linux/falloc.h`）。
+`COMPAT_SYSCALL_DEFINE3(ioctl...)`の中で、`_32`のコマンドコードは
+`compat_ioctl_preallocate()`によって直接処理され、パッチがフックした関数である
+`do_vfs_ioctl()` → `file_ioctl()` → `ioctl_preallocate()`には決して到達しない。
 
-### Detection {#detection_1}
+### 検出 {#detection_1}
 
 ```bash
-# Check /proc/kallsyms for the compat counterpart
+# /proc/kallsymsでcompat版の対応物を確認する
 grep -i preallocate /proc/kallsyms
 # ffffffff812a1050 t ioctl_preallocate
-# ffffffff812a1120 t compat_ioctl_preallocate   ← separate symbol, unpatched
+# ffffffff812a1120 t compat_ioctl_preallocate   ← 別のシンボル、パッチ未適用
 
-# Confirm the compat dispatch in the source
+# ソースでcompatのディスパッチを確認する
 grep -n "compat_ioctl_preallocate\|FS_IOC_RESVSP_32" fs/ioctl.c
 ```
 
-### Resolution {#resolution_2}
+### 解決 {#resolution_2}
 
-A second patch was deployed that also hooked `compat_ioctl_preallocate()`.
-Going forward, the team added a checklist item for every ioctl-handler patch:
+`compat_ioctl_preallocate()`もフックする2つ目のパッチがデプロイされた。
+以後、チームはioctlハンドラのパッチごとにチェックリスト項目を追加した。
 
-1. Does the ioctl command have a `_32` compat variant, and does a
-   `CONFIG_X86_64`-guarded struct like `space_resv_32` exist for it?
-2. Does the compat path — either a driver's separate `f_op->compat_ioctl`,
-   or, as here, a branch inside `compat_sys_ioctl()` in `fs/ioctl.c` — call a
-   genuinely different function, rather than forwarding to the native
-   handler?
-3. Is the vulnerability present in both the native and compat parsing
-   routines?
+1. そのioctlコマンドに`_32`のcompat版はあるか。そしてそれ用に、`space_resv_32`のような
+   `CONFIG_X86_64`でガードされた構造体は存在するか。
+2. compat経路（ドライバの別個の`f_op->compat_ioctl`、
+   あるいはこの例のように`fs/ioctl.c`の`compat_sys_ioctl()`内の分岐）は、
+   ネイティブのハンドラへ転送するのではなく、本当に別の関数を
+   呼んでいるか。
+3. 脆弱性はネイティブとcompatの両方の解析ルーチンに
+   存在するか。
 
-### Lesson {#lesson_2}
+### 教訓 {#lesson_2}
 
-For any patch targeting a function reached through `do_vfs_ioctl()` or
-`f_op->unlocked_ioctl`, check whether the same command number has a compat
-counterpart that runs different code. Not every `compat_ioctl` diverges —
-generic ones like `compat_ptr_ioctl()` just forward to the native handler
-after a pointer conversion — but any handler with a genuinely different
-compat argument layout, like `space_resv` vs. `space_resv_32` here, needs its
-own livepatch target. `grep -i <name> /proc/kallsyms` for the function's
-name family is a fast first check; the source is the definitive answer.
+`do_vfs_ioctl()`または`f_op->unlocked_ioctl`を通じて到達する関数を対象とするパッチでは、
+同じコマンド番号に、異なるコードを実行するcompat版の対応物があるかどうかを確認すること。
+すべての`compat_ioctl`が分岐するわけではない。
+`compat_ptr_ioctl()`のような汎用的なものは、ポインタ変換の後にネイティブのハンドラへ
+転送するだけである。しかし、この例の`space_resv`と`space_resv_32`のように、
+本当に異なるcompat引数レイアウトを持つハンドラには、それ専用の
+livepatchの対象が必要である。関数名の系列について`grep -i <name> /proc/kallsyms`するのは
+素早い最初のチェックであり、決定的な答えはソースにある。
 
-## 4. The wrong occurrence of a duplicated symbol {#4-the-wrong-occurrence-of-a-duplicated-symbol}
+## 4. 重複シンボルの間違った出現 {#4-the-wrong-occurrence-of-a-duplicated-symbol}
 
-### Scenario {#scenario_3}
+### シナリオ {#scenario_3}
 
-A bug was traced to `rx_ring_refill()`, a small `static` helper in a built-in
-network driver. A live patch was written against it. The first `insmod` failed
-outright:
+あるバグが、組み込みネットワークドライバ内の小さな`static`ヘルパーである`rx_ring_refill()`に
+たどり着いた。それに対するライブパッチが書かれた。最初の`insmod`は
+あっさり失敗した。
 
 ```bash
 insmod rx-fix.ko
@@ -341,37 +340,37 @@ dmesg | tail -1
 # livepatch: unresolvable ambiguity for symbol 'rx_ring_refill' in object '(null)'
 ```
 
-That message is `klp_find_object_symbol()` refusing to guess: `old_sympos` was
-left at its default of `0`, which means "this symbol must be unique," and a
-second built-in driver defined its own `static rx_ring_refill()`. (The object
-prints as `(null)` because a `vmlinux` target is passed to
-`klp_find_object_symbol()` as a NULL `objname`.)
+このメッセージは、`klp_find_object_symbol()`が推測を拒否したものである。`old_sympos`は
+デフォルトの`0`のままで、これは「このシンボルは一意でなければならない」を意味する。そして
+2つ目の組み込みドライバが独自の`static rx_ring_refill()`を定義していた。（オブジェクトが
+`(null)`と表示されるのは、`vmlinux`を対象とする場合、`klp_find_object_symbol()`には
+NULLの`objname`が渡されるからである。）
 
-The engineer disambiguated, set `.old_sympos = 1`, rebuilt, and reloaded. This
-time everything came up clean:
+エンジニアは曖昧さを解消するため`.old_sympos = 1`を設定し、リビルドして再ロードした。今度は
+すべてが問題なく立ち上がった。
 
 ```bash
 insmod rx-fix.ko
-# No errors
+# エラーなし
 
 cat /sys/kernel/livepatch/rx-fix/enabled      # 1
-cat /sys/kernel/livepatch/rx-fix/transition   # 0 — completed
+cat /sys/kernel/livepatch/rx-fix/transition   # 0 — 完了
 cat /sys/kernel/livepatch/rx-fix/vmlinux/patched
-# 1  ← the hook really is installed
+# 1  ← フックは確かにインストールされている
 ```
 
-The original bug kept reproducing anyway. Worse, an unrelated wireless
-interface on the same hosts started dropping frames under load.
+それでも元のバグは再現し続けた。さらに悪いことに、同じホスト上の無関係な無線
+インターフェースが負荷時にフレームを落とし始めた。
 
-### Root cause {#root-cause_3}
+### 根本原因 {#root-cause_3}
 
-The patch was live, the transition had finished, and the ftrace hook was
-installed — on the wrong function. `old_sympos` selected the other driver's
-`rx_ring_refill()`.
+パッチは有効で、遷移は完了しており、ftraceフックはインストールされていた。
+ただし間違った関数に。`old_sympos`はもう一方のドライバの
+`rx_ring_refill()`を選択していた。
 
-The occurrence numbering is not arbitrary, and it is not the order `nm` prints.
-`scripts/kallsyms.c` sorts the name index with `compare_names()`, which breaks
-ties between identical names by **ascending address**:
+出現の番号付けは恣意的なものではなく、`nm`が表示する順序でもない。
+`scripts/kallsyms.c`は名前のインデックスを`compare_names()`でソートし、これは
+同じ名前同士のタイを**アドレスの昇順**で決める。
 
 ```c
 /* scripts/kallsyms.c — compare_names() */
@@ -385,21 +384,21 @@ if (!ret) {
 }
 ```
 
-For a `vmlinux` target, `klp_find_object_symbol()` walks that index via
-`kallsyms_on_each_match_symbol()` and stops when its running count reaches
-`sympos`, so *sympos N is the Nth occurrence in ascending address order*. (A
-module target takes the other branch, `module_kallsyms_on_each_symbol()`, which
-walks that module's ELF symbol table in index order and skips `SHN_UNDEF`
-entries — a different ordering, and one to verify rather than assume.) The
-engineer had derived the position from `nm vmlinux | grep rx_ring_refill`, and
-`nm` sorts alphabetically by name unless given `-n` — for two identically named
-symbols, `strcmp()` returns 0 and the tie order is whatever `qsort()` leaves
-it as, which here did not match address order. Position 1 was the wireless
-driver's copy.
+`vmlinux`を対象とする場合、`klp_find_object_symbol()`は
+`kallsyms_on_each_match_symbol()`経由でそのインデックスをたどり、累計が
+`sympos`に達したところで止まる。したがって*sympos Nはアドレスの昇順でN番目の出現*である。（モジュールを
+対象とする場合はもう一方の分岐である`module_kallsyms_on_each_symbol()`を通る。これは
+そのモジュールのELFシンボルテーブルをインデックス順にたどり、`SHN_UNDEF`の
+エントリを飛ばす。これは別の順序であり、仮定せずに検証すべきものである。）
+エンジニアは位置を`nm vmlinux | grep rx_ring_refill`から導いていたが、
+`nm`は`-n`を指定しない限り名前のアルファベット順にソートする。同じ名前の2つの
+シンボルについては`strcmp()`が0を返し、タイの順序は`qsort()`が残した
+ままになり、ここではそれがアドレス順と一致しなかった。位置1は無線
+ドライバのコピーだった。
 
-Nothing in the kernel objects to this. A `sympos` that is in range resolves to
-*some* real function and patching proceeds normally; only an out-of-range value
-is rejected, with a different message:
+カーネルはこれに何の異議も唱えない。範囲内の`sympos`は*何らかの*実在する関数に
+解決され、パッチ適用は普通に進む。拒否されるのは範囲外の値だけであり、
+その場合は別のメッセージが出る。
 
 ```c
 /* kernel/livepatch/core.c — klp_find_object_symbol() */
@@ -409,118 +408,116 @@ is rejected, with a different message:
 }
 ```
 
-So the ambiguity that fails loudly is the safe one. A wrong-but-valid
-`old_sympos` is the silent one.
+つまり、大きな音を立てて失敗する曖昧さは安全な方である。間違っているが有効な
+`old_sympos`こそが、音もなく失敗する方である。
 
-### Detection {#detection_2}
+### 検出 {#detection_2}
 
-`dmesg` was clean, which was itself the clue — this was not a resolution
-failure, so the question was *what* had been resolved. `old_func` is
-deliberately not exposed through sysfs, but the effective position is, in the
-per-function directory name — the directory is named `"%s,%lu"` with
-`old_sympos ? old_sympos : 1`, so a `.old_sympos` of `0` also shows as `,1`
-(the struct field itself stays `0`; only the directory name substitutes the
-effective position):
+`dmesg`はきれいだった。それ自体が手がかりだった。これは解決の失敗ではないので、
+問題は*何に*解決されたかだった。`old_func`は意図的にsysfsでは公開されていないが、
+実際に使われた位置は関数ごとのディレクトリ名に現れる。ディレクトリは
+`old_sympos ? old_sympos : 1`を使って`"%s,%lu"`という名前が付けられるので、
+`.old_sympos`が`0`の場合も`,1`と表示される
+（構造体のフィールド自体は`0`のままで、ディレクトリ名だけが実際の位置に置き換えられる）。
 
 ```bash
 ls /sys/kernel/livepatch/rx-fix/vmlinux/
 # patched  rx_ring_refill,1     ← "<function>,<sympos>"
 ```
 
-From there the mapping was rebuilt offline. `/proc/kallsyms` is emitted in
-address order, so its listing *is* the kernel's numbering:
+そこから、対応関係をオフラインで再構築した。`/proc/kallsyms`はアドレス順に出力されるので、
+その一覧が*そのまま*カーネルの番号付けである。
 
 ```bash
 grep ' rx_ring_refill$' /proc/kallsyms
 # ffffffff81a4c210 t rx_ring_refill    ← sympos 1
 # ffffffff81b0e8c0 t rx_ring_refill    ← sympos 2
 
-# Map each address back to its compilation unit
+# 各アドレスをコンパイル単位に対応づける
 addr2line -f -e /usr/lib/debug/lib/modules/$(uname -r)/vmlinux \
     0xffffffff81a4c210 0xffffffff81b0e8c0
 # rx_ring_refill
-# drivers/net/wireless/.../rx.c:412        ← what got patched
+# drivers/net/wireless/.../rx.c:412        ← パッチが当たったもの
 # rx_ring_refill
-# drivers/net/ethernet/.../rx.c:88         ← what was meant
+# drivers/net/ethernet/.../rx.c:88         ← 意図していたもの
 ```
 
-### Resolution {#resolution_3}
+### 解決 {#resolution_3}
 
-The patch was rebuilt with `.old_sympos = 2` and redeployed. The sysfs
-directory name confirmed the new target before anyone waited on behaviour:
+パッチは`.old_sympos = 2`でリビルドされ、再デプロイされた。挙動を待つ前に、
+sysfsのディレクトリ名が新しい対象を確認した。
 
 ```bash
 ls /sys/kernel/livepatch/rx-fix/vmlinux/
 # patched  rx_ring_refill,2
 ```
 
-The team then added a build-time check: for every `klp_func`, resolve
-`old_name` against an address-sorted symbol listing, and fail the build unless
-the occurrence at the configured `old_sympos` maps back — via `addr2line` — to
-the source file the patch was written against.
+その後チームはビルド時のチェックを追加した。各`klp_func`について、
+`old_name`をアドレス順にソートしたシンボル一覧に対して解決し、設定された`old_sympos`の
+出現が`addr2line`経由でパッチを書いた対象のソースファイルに対応しない限り、
+ビルドを失敗させるというものである。
 
-### Lesson {#lesson_3}
+### 教訓 {#lesson_3}
 
-`old_sympos` is a 1-based index counted per object — in ascending address order
-for `vmlinux` — and getting it wrong is one of the few livepatch mistakes the
-kernel cannot catch for you:
+`old_sympos`はオブジェクトごとに数える1始まりのインデックスであり（`vmlinux`では
+アドレスの昇順）、これを間違えることは、カーネルが代わりに捕まえてくれない
+数少ないlivepatchのミスの1つである。
 
-- For a `vmlinux` target, derive it from an **address-ordered** listing:
-  `/proc/kallsyms` is already in that order, and `nm -n vmlinux` can be made to
-  be. Plain `nm` sorts alphabetically by name and tells you nothing about
-  position.
-- Always verify what was actually resolved, not just that the patch enabled.
-  The `<function>,<sympos>` directory name plus an `addr2line` of the matching
-  `/proc/kallsyms` entry is the whole check.
-- Leaving `old_sympos` at `0` is the safe default precisely because it fails
-  the load when the name is not unique. Do not set a position to silence that
-  error; set it because you have confirmed which occurrence you want.
+- `vmlinux`を対象とする場合は、**アドレス順**の一覧から導くこと。
+  `/proc/kallsyms`は既にその順序であり、`nm -n vmlinux`もその順序にできる。
+  単なる`nm`は名前のアルファベット順にソートし、位置については何も教えてくれない。
+- パッチが有効になったことだけでなく、実際に何に解決されたかを常に確認すること。
+  `<function>,<sympos>`のディレクトリ名と、対応する`/proc/kallsyms`のエントリの
+  `addr2line`がチェックのすべてである。
+- `old_sympos`を`0`のままにすることが安全なデフォルトであるのは、まさに名前が一意でないときに
+  ロードを失敗させるからである。そのエラーを黙らせるために位置を設定してはならない。
+  どの出現が欲しいのかを確認したから設定するのである。
 
-Before any of this, confirm the function exists as a symbol at all:
+これらすべての前に、その関数がそもそもシンボルとして存在することを確認すること。
 
 ```bash
 grep " <function_name>$" /proc/kallsyms
 ```
 
-If it is absent — inlined from a header, a macro, or compiled out under the
-running config — `klp_find_object_symbol()` prints `symbol '%s' not found in
-symbol table` and returns `-EINVAL`, which propagates through
-`klp_init_object_loaded()` and `klp_init_patch()` to `klp_enable_patch()`, so
-the `insmod` fails and the module never loads. There is no partially applied
-state to discover later; you simply have to patch the callers instead.
+存在しない場合（ヘッダからインライン展開された、マクロである、あるいは稼働中の設定で
+コンパイルから除外されている）、`klp_find_object_symbol()`は`symbol '%s' not found in
+symbol table`を出力して`-EINVAL`を返し、これは
+`klp_init_object_loaded()`と`klp_init_patch()`を通じて`klp_enable_patch()`まで伝播するので、
+`insmod`は失敗し、モジュールはロードされない。後で発見されるような部分的に適用された
+状態は存在しない。単に呼び出し元の方にパッチを当てるしかない。
 
-## 5. The cumulative patch that forgot `.replace` {#5-the-cumulative-patch-that-forgot-replace}
+## 5. `.replace`を忘れた累積パッチ {#5-the-cumulative-patch-that-forgot-replace}
 
-### Scenario {#scenario_4}
+### シナリオ {#scenario_4}
 
-A fleet had accumulated three live patches: P1 fixing `tcp_sendmsg`, P2 fixing
-`ip_output`, and P3 fixing `nf_conntrack_in`. P2's fix was later identified as
-the cause of a throughput regression and was slated to be dropped.
+あるフリートには3つのライブパッチが蓄積していた。`tcp_sendmsg`を修正するP1、
+`ip_output`を修正するP2、`nf_conntrack_in`を修正するP3である。P2の修正は後に
+スループットのリグレッションの原因と特定され、取り下げる予定になった。
 
-The plan was a single cumulative patch, P4, carrying the P1 and P3 fixes plus a
-new security fix in `udp_sendmsg`, and *not* carrying P2's change — so that
-after P4 was applied,
-`ip_output` would run the original upstream code again. P4 was built, rolled
-out, and everything reported healthy:
+計画は、P1とP3の修正に加えて`udp_sendmsg`の新しいセキュリティ修正を持ち、
+P2の変更は*持たない*単一の累積パッチP4を作ることだった。そうすれば
+P4の適用後、
+`ip_output`は再び元のアップストリームのコードを実行するはずだった。P4はビルドされ、展開され、
+すべてが正常と報告された。
 
 ```bash
 insmod p4-cumulative.ko
 cat /sys/kernel/livepatch/p4-cumulative/enabled      # 1
-cat /sys/kernel/livepatch/p4-cumulative/transition   # 0 — completed
+cat /sys/kernel/livepatch/p4-cumulative/transition   # 0 — 完了
 ```
 
-A week of throughput graphs later, the regression was still there on every
-patched host.
+1週間分のスループットのグラフを見た後も、パッチを当てたすべてのホストでリグレッションは
+残っていた。
 
-### Root cause {#root-cause_4}
+### 根本原因 {#root-cause_4}
 
-`.replace` had been left at its default of `false` in P4's `struct klp_patch`.
-The line that set it had been dropped in a refactor of the patch module's
-source template, and nothing at build or load time complained: a non-cumulative
-patch is a perfectly legal patch.
+P4の`struct klp_patch`で、`.replace`はデフォルトの`false`のままになっていた。
+それを設定する行はパッチモジュールのソーステンプレートのリファクタリングで落ちており、
+ビルド時にもロード時にも何も文句を言わなかった。非累積の
+パッチは完全に正当なパッチだからである。
 
-Without `.replace`, none of the replace machinery runs. In
-`klp_init_patch()` the nop generation is guarded:
+`.replace`がなければ、置き換えの仕組みは一切動かない。
+`klp_init_patch()`では、nopの生成がガードされている。
 
 ```c
 /* kernel/livepatch/core.c — klp_init_patch() */
@@ -531,8 +528,8 @@ if (patch->replace) {
 }
 ```
 
-and in `klp_complete_transition()` the teardown of superseded patches is
-guarded the same way:
+そして`klp_complete_transition()`では、置き換えられたパッチの後始末が
+同じようにガードされている。
 
 ```c
 /* kernel/livepatch/transition.c — klp_complete_transition() */
@@ -542,123 +539,122 @@ if (klp_transition_patch->replace && klp_target_state == KLP_TRANSITION_PATCHED)
 }
 ```
 
-So P4 did the only thing a plain patch does: for each function it named, it
-pushed its own `klp_func` onto the head of that function's `ops->func_stack`
-(`list_add_rcu()` in `klp_patch_func()`), and stopped there. P1, P2 and P3
-stayed enabled. `tcp_sendmsg` and `nf_conntrack_in` now had two-deep stacks
-whose heads happened to be P4's equivalent implementations, which is why
-nothing looked wrong. But `ip_output` was not named by P4 at all — P4 had
-deliberately dropped it — so nothing was pushed for it, and the head of its
-`func_stack` was still P2's `klp_func`. The regression could not revert,
-because nothing had asked it to.
+そのためP4は、通常のパッチがすることだけを行った。名指しした各関数について、
+自身の`klp_func`をその関数の`ops->func_stack`の先頭にプッシュし
+（`klp_patch_func()`内の`list_add_rcu()`）、そこで止まった。P1、P2、P3は
+有効なままだった。`tcp_sendmsg`と`nf_conntrack_in`は2段のスタックになり、
+その先頭はたまたまP4の同等の実装だったので、何もおかしく見えなかった。しかし
+`ip_output`はP4によってまったく名指しされていなかった（P4は意図的にそれを外していた）ので、
+それについては何もプッシュされず、その`func_stack`の先頭はP2の`klp_func`のままだった。
+リグレッションが元に戻ることはありえなかった。誰もそれを求めていなかったからである。
 
-Reverting a function that an older patch touched is exactly what `.replace`
-buys, and only `.replace`. Upstream's own list of what atomic replace makes
-possible leads with it: "Atomically revert some functions in a previous patch
-while upgrading other functions."
+古いパッチが触れた関数を元に戻すことは、まさに`.replace`がもたらすものであり、
+`.replace`だけがもたらすものである。アトミックリプレースが可能にすることについての
+アップストリーム自身の一覧も、それを筆頭に挙げている。「Atomically revert some functions in a previous patch
+while upgrading other functions.」（他の関数を更新しつつ、以前のパッチの一部の関数をアトミックに元に戻す）
 
-### Detection {#detection_3}
+### 検出 {#detection_3}
 
-The tell is that the superseded patches were all still present. After a real
-atomic replace they would not be: once the transition settles,
-`klp_try_complete_transition()` calls `klp_free_replaced_patches_async()` for a
-`.replace` patch, and that walks every patch ahead of the new one through
-`klp_free_patch_start()` (`list_del()` from `klp_patches`) and
-`klp_free_patch_finish()` (`kobject_put()`), so their sysfs directories
-disappear entirely.
+決定的な兆候は、置き換えられたはずのパッチがすべてまだ存在していたことである。本当の
+アトミックリプレースの後であれば、それらは存在しないはずである。遷移が落ち着くと、
+`klp_try_complete_transition()`は`.replace`パッチについて`klp_free_replaced_patches_async()`を
+呼び、これが新しいパッチより前にあるすべてのパッチを
+`klp_free_patch_start()`（`klp_patches`からの`list_del()`）と
+`klp_free_patch_finish()`（`kobject_put()`）に通すので、それらのsysfsディレクトリは
+完全に消える。
 
 ```bash
-# Four directories, four enabled patches — no replacement happened
+# 4つのディレクトリ、4つの有効なパッチ — 置き換えは起きていない
 grep . /sys/kernel/livepatch/*/enabled
 # /sys/kernel/livepatch/p1/enabled:1
 # /sys/kernel/livepatch/p2/enabled:1
 # /sys/kernel/livepatch/p3/enabled:1
 # /sys/kernel/livepatch/p4-cumulative/enabled:1
 
-# The flag is exposed read-only, per patch
+# フラグはパッチごとに読み取り専用で公開されている
 cat /sys/kernel/livepatch/p4-cumulative/replace
-# 0   ← it was never a cumulative patch
+# 0   ← 一度も累積パッチではなかった
 
-# stack_order is the patch's 1-based position in klp_patches; a successful
-# atomic replace leaves the new patch alone at 1
+# stack_orderはklp_patches内でのパッチの1始まりの位置。アトミックリプレースが
+# 成功すれば、新しいパッチだけが1の位置に残る
 cat /sys/kernel/livepatch/p4-cumulative/stack_order
-# 4   ← stacked on top of three patches, not replacing them
+# 4   ← 3つのパッチを置き換えるのではなく、その上に積み重なっている
 
-# And ip_output is still owned by p2
+# そしてip_outputはまだp2のものである
 ls /sys/kernel/livepatch/p2/vmlinux/
 # ip_output,1  patched
 ls /sys/kernel/livepatch/p4-cumulative/vmlinux/
 # nf_conntrack_in,1  patched  tcp_sendmsg,1  udp_sendmsg,1
 ```
 
-### Resolution {#resolution_4}
+### 解決 {#resolution_4}
 
-P4 was rebuilt unchanged except for `.replace = true` and reloaded as P5. This
-time `klp_add_nops()` ran: it walked every function covered by P1 through P4,
-found `ip_output` had no counterpart in the new patch, and allocated a dynamic
-`nop` `klp_func` for it — an entry that the ftrace handler deliberately does
-nothing for, so the original `ip_output` runs. When the transition finished,
-the four older patches were unpatched, removed from `klp_patches`, and their
-modules became removable.
+P4は`.replace = true`以外は変更せずにリビルドされ、P5として再ロードされた。
+今度は`klp_add_nops()`が実行された。P1からP4がカバーするすべての関数をたどり、
+`ip_output`には新しいパッチ内に対応物がないことを見つけ、それ用に動的な
+`nop`の`klp_func`を割り当てた。ftraceハンドラが意図的に何もしないエントリであり、
+そのため元の`ip_output`が実行される。遷移が終わると、
+4つの古いパッチはパッチを外され、`klp_patches`から取り除かれ、それらの
+モジュールは削除可能になった。
 
 ```bash
 insmod p5-cumulative.ko
-cat /sys/kernel/livepatch/p5-cumulative/transition   # wait for 0
+cat /sys/kernel/livepatch/p5-cumulative/transition   # 0になるのを待つ
 
 cat /sys/kernel/livepatch/p5-cumulative/replace      # 1
 cat /sys/kernel/livepatch/p5-cumulative/stack_order  # 1
 ls /sys/kernel/livepatch/
-# p5-cumulative        ← the older directories are gone
+# p5-cumulative        ← 古いディレクトリは消えている
 ```
 
-### Lesson {#lesson_4}
+### 教訓 {#lesson_4}
 
-A patch is cumulative only because you said so. Nothing infers it from the
-patch's contents, and a missing `.replace` produces no warning at any stage.
+パッチが累積パッチなのは、あなたがそう宣言したからにすぎない。パッチの内容からそれを
+推論するものは何もなく、`.replace`が欠けていてもどの段階でも警告は出ない。
 
-- Follow the upstream advice from
-  `Documentation/livepatch/cumulative-patches.rst`: "A good practice is to set
-  .replace flag in any released livepatch." A patch that replaces everything is
-  correct even when there is nothing to replace.
-- Gate deployment on the observable outcome, not on `enabled` and `transition`.
-  After the transition settles, `replace` should read `1`, `stack_order` should
-  read `1`, and `/sys/kernel/livepatch/` should contain exactly one directory.
-- Remember what "replace" does not do: only the new cumulative patch's
-  (un)patching callbacks run, and the superseded patches' callbacks are
-  skipped. Anything the patches you are superseding did in a callback, the
-  cumulative patch must do itself.
+- `Documentation/livepatch/cumulative-patches.rst`のアップストリームの助言に従うこと。
+  「A good practice is to set .replace flag in any released livepatch.」（リリースするすべての
+  livepatchで.replaceフラグを設定するのが良い習慣である）。すべてを置き換えるパッチは、
+  置き換えるものが何もない場合でも正しい。
+- デプロイの合否は、`enabled`と`transition`ではなく、観察可能な結果で判断すること。
+  遷移が落ち着いた後、`replace`は`1`、`stack_order`は`1`を返すべきであり、
+  `/sys/kernel/livepatch/`にはちょうど1つのディレクトリだけがあるべきである。
+- 「replace」がしないことを覚えておくこと。実行されるのは新しい累積パッチの
+  (un)patchingコールバックだけであり、置き換えられたパッチのコールバックは
+  飛ばされる。置き換え対象のパッチがコールバックで行っていたことは何であれ、
+  累積パッチが自分で行わなければならない。
 
-See [Cumulative Patches and Atomic Replace](klp-cumulative.md) for the full
-description of the `func_stack`, the `nop` funcs, and the atomic replace flow.
+`func_stack`、`nop` func、アトミックリプレースの流れについての完全な説明は
+[累積パッチとアトミックリプレース](klp-cumulative.md)を参照。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — `klp_send_signals()`, whose `wake_up_state(task, TASK_INTERRUPTIBLE)` only wakes kthreads in interruptible sleep, and `klp_try_complete_transition()`, behind Case 1
-- [kernel/livepatch/shadow.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/shadow.c) — the `klp_shadow_hash` hashtable and the `klp_shadow_get_or_alloc()`/`klp_shadow_free()` pairing that Case 2's patch got wrong
-- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `klp_find_object_symbol()`, whose `old_sympos` counting and "unresolvable ambiguity"/"symbol position ... not found" errors drive Case 4, and the `if (patch->replace)` guard around `klp_add_nops()` behind Case 5
-- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_patch_func()`'s `list_add_rcu()` onto `ops->func_stack`, the plain stacking that Case 5's patch got instead of a replace, and `klp_ftrace_handler()`'s `if (func->nop)` early exit
-- [scripts/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/kallsyms.c) — `compare_names()`, which breaks ties between identically named symbols by ascending address and so defines what `old_sympos` counts in Case 4
-- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`'s `nop` and `old_sympos` fields, including the comment stating that a zero `old_sympos` requires a unique symbol, behind Cases 1 and 4
-- [Documentation/livepatch/cumulative-patches.rst](https://docs.kernel.org/livepatch/cumulative-patches.html) — the upstream atomic replace guide: the "atomically revert some functions" feature and the "set .replace flag in any released livepatch" advice Case 5 turns on
-- [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `ioctl_preallocate()` and the separate x86_64 `compat_ioctl_preallocate()` entry point, the two functions behind Case 3
-- [include/linux/falloc.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/falloc.h) — `struct space_resv`/`struct space_resv_32`, the native/compat layout mismatch behind Case 3
+- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — 割り込み可能なスリープ中のkthreadしか起こさない`wake_up_state(task, TASK_INTERRUPTIBLE)`を使う`klp_send_signals()`と、`klp_try_complete_transition()`。事例1の背景
+- [kernel/livepatch/shadow.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/shadow.c) — `klp_shadow_hash`ハッシュテーブルと、事例2のパッチが間違えた`klp_shadow_get_or_alloc()`/`klp_shadow_free()`の対応関係
+- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `old_sympos`の数え方と"unresolvable ambiguity"/"symbol position ... not found"エラーが事例4を引き起こす`klp_find_object_symbol()`、および事例5の背景にある`klp_add_nops()`周りの`if (patch->replace)`ガード
+- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `ops->func_stack`への`klp_patch_func()`の`list_add_rcu()`（事例5のパッチが置き換えの代わりに得た単純な積み重ね）と、`klp_ftrace_handler()`の`if (func->nop)`による早期脱出
+- [scripts/kallsyms.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/scripts/kallsyms.c) — 同名シンボル間のタイをアドレスの昇順で決め、それによって事例4で`old_sympos`が何を数えるかを定義する`compare_names()`
+- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`の`nop`と`old_sympos`フィールド。`old_sympos`が0なら一意なシンボルが必要であることを述べるコメントを含む。事例1と4の背景
+- [Documentation/livepatch/cumulative-patches.rst](https://docs.kernel.org/livepatch/cumulative-patches.html) — アップストリームのアトミックリプレースのガイド: 事例5の鍵となる「atomically revert some functions」機能と「set .replace flag in any released livepatch」という助言
+- [fs/ioctl.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ioctl.c) — `ioctl_preallocate()`と、x86_64の別個のエントリポイントである`compat_ioctl_preallocate()`。事例3の背景にある2つの関数
+- [include/linux/falloc.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/falloc.h) — `struct space_resv`/`struct space_resv_32`。事例3の背景にあるネイティブとcompatのレイアウトの不一致
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Live Patching](klp.md) — the ftrace redirection mechanism and shadow variable API these incidents build on
-- [KLP Consistency Model](klp-consistency.md) — per-task transition states and stack checking behind Case 1
-- [Cumulative Patches and Atomic Replace](klp-cumulative.md) — `.replace=true`, the `nop` funcs, and `func_stack` stacking behind Case 5
-- [KLP State: Custom Consistency Checks](klp-state.md) — the API for carrying state between cumulative patches, the companion problem to Case 5's callback caveat
-- [kexec](kexec.md) — reboot without a full firmware POST, an alternative to live patching when a fix requires downtime
+- [カーネルライブパッチ](klp.md) — これらのインシデントの土台となるftraceのリダイレクト機構とshadow変数API
+- [KLP一貫性モデル](klp-consistency.md) — 事例1の背景にあるタスクごとの遷移状態とスタック検査
+- [累積パッチとアトミックリプレース](klp-cumulative.md) — 事例5の背景にある`.replace=true`、`nop` func、`func_stack`の積み重ね
+- [KLP State: 独自の一貫性チェック](klp-state.md) — 累積パッチ間で状態を引き継ぐためのAPI。事例5のコールバックに関する注意点と対になる問題
+- [kexec](kexec.md) — ファームウェアのPOSTを完全には経ずにリブートする。修正にダウンタイムが必要な場合のライブパッチの代替手段
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [livepatch: consistency model](https://lwn.net/Articles/632582/) (February 9, 2015) — the original per-task consistency model RFC and per-task transition design behind Case 1
-- [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/) (August 21, 2017) — Joe Lawrence's patch introducing `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()` and the `(obj, id)`-keyed hashtable behind Case 2
-- [livepatch: introduce atomic replace](https://lwn.net/Articles/734997/) (September 27, 2017) — the atomic replace / cumulative patch design discussed in Case 5
+- [livepatch: consistency model](https://lwn.net/Articles/632582/)（2015年2月9日） — 事例1の背景にある、タスクごとの一貫性モデルの最初のRFCとタスクごとの遷移の設計
+- [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/)（2017年8月21日） — `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()`と、事例2の背景にある`(obj, id)`をキーとするハッシュテーブルを導入したJoe Lawrenceのパッチ
+- [livepatch: introduce atomic replace](https://lwn.net/Articles/734997/)（2017年9月27日） — 事例5で論じたアトミックリプレース/累積パッチの設計
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Shadow variables](https://docs.kernel.org/livepatch/shadow-vars.html) — upstream documentation on matching a shadow variable's lifecycle to its parent object's, the rule Case 2's patch violated
+- [Shadow variables](https://docs.kernel.org/livepatch/shadow-vars.html) — shadow変数のライフサイクルを親オブジェクトのライフサイクルに合わせることについてのアップストリームのドキュメント。事例2のパッチが破った規則

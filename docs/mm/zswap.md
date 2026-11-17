@@ -1,122 +1,122 @@
-# zswap Internals: Compressed Swap Cache {#zswap-internals-compressed-swap-cache}
+# zswapの内部構造: 圧縮スワップキャッシュ {#zswap-internals-compressed-swap-cache}
 
-> A compressed RAM cache that intercepts pages on their way to the swap device — trading CPU cycles for I/O reduction
+> スワップデバイスへ向かう途中のpageを横取りする、RAM上の圧縮キャッシュ。CPUサイクルと引き換えにI/Oを削減する
 
-## What zswap Is (and Is Not) {#what-zswap-is-and-is-not}
+## zswapとは何か（そして何ではないか） {#what-zswap-is-and-is-not}
 
-zswap is a **write-back compressed cache** that sits in front of the swap device. When the kernel decides to swap out an anonymous page, zswap intercepts it, compresses it, and stores the compressed data in a RAM-based pool. If the compressed pool fills up, zswap evicts the coldest entries back to the backing swap device.
+zswapは、スワップデバイスの手前に位置する**ライトバック型の圧縮キャッシュ**である。カーネルが無名pageをスワップアウトすると決めると、zswapはそのpageを横取りして圧縮し、圧縮データをRAMベースのプールに格納する。圧縮プールが満杯になると、zswapは最もコールドなエントリを裏側のスワップデバイスへ追い出す。
 
-The key insight: reading from compressed RAM is orders of magnitude faster than a disk or even SSD read. zswap trades CPU cycles for I/O reduction, which is usually a favorable trade.
+重要な洞察は、圧縮されたRAMからの読み出しはディスクはもちろんSSDからの読み出しと比べても桁違いに速いということである。zswapはCPUサイクルと引き換えにI/Oを削減するが、これは通常、割に合うトレードオフである。
 
-!!! note "zswap vs zram — they are not the same thing"
-    These two are frequently confused:
+!!! note "zswapとzramは別物である"
+    この2つはしばしば混同される。
 
-    - **zswap**: A compressed *cache* in front of any swap device. It does not appear as a block device. The backing swap device (disk, SSD, or even a zram device) still exists.
-    - **zram**: A compressed *block device* that acts as the swap device itself. It replaces the swap device entirely in memory.
+    - **zswap**: 任意のスワップデバイスの手前に置かれる圧縮*キャッシュ*。ブロックデバイスとしては現れない。裏側のスワップデバイス（ディスク、SSD、あるいはzramデバイス）は依然として存在する。
+    - **zram**: それ自体がスワップデバイスとして動作する圧縮*ブロックデバイス*。スワップデバイスを完全にメモリ内で置き換える。
 
-    You can stack them: use zram as the swap device and zswap in front of it. However, this means pages get compressed twice — once by zswap and once by zram — which wastes CPU with minimal additional benefit. See [Interaction with zram](#interaction-with-zram).
+    両者を重ねることもできる。zramをスワップデバイスとして使い、その手前にzswapを置くのである。ただしこの場合、pageは2回圧縮される（zswapで1回、zramで1回）ことになり、追加の利益がほとんどないままCPUを浪費する。[zramとの相互作用](#interaction-with-zram)を参照。
 
-## Architecture Overview {#architecture-overview}
+## アーキテクチャ概要 {#architecture-overview}
 
 ```mermaid
 graph TD
-    subgraph "Store path (swap-out)"
-        A[Anonymous page\nneeds reclaim] --> B{zswap enabled\nand pool not full?}
-        B -- No --> G[Write to swap device\ndirectly]
+    subgraph "格納パス（スワップアウト）"
+        A[回収が必要な\n無名page] --> B{zswapが有効で\nプールが満杯でない?}
+        B -- No --> G[スワップデバイスへ\n直接書き込む]
         B -- Yes --> C[zswap_store]
         C --> D[zswap_compress\nper-CPU acomp_ctx]
-        D --> E{Compresses\nsmaller than PAGE_SIZE?}
-        E -- Yes --> F[zs_malloc + zs_obj_write\ninto zsmalloc pool]
-        E -- No --> F2[Store uncompressed\nlength == PAGE_SIZE]
-        F --> H[zswap_entry added\nto xarray + LRU]
+        D --> E{PAGE_SIZEより\n小さく圧縮できた?}
+        E -- Yes --> F[zs_malloc + zs_obj_write\nでzsmallocプールへ]
+        E -- No --> F2[非圧縮で格納\nlength == PAGE_SIZE]
+        F --> H[zswap_entryを\nxarray + LRUに追加]
         F2 --> H
     end
 
-    subgraph "Fault path (swap-in)"
-        I[Page fault on\nswap PTE] --> J[zswap_load]
-        J --> K{Entry in\nxarray?}
-        K -- No --> L[Read from swap device]
-        K -- Yes --> M[zswap_decompress\ninto target folio]
-        M --> N[Invalidate entry,\nfree from pool]
+    subgraph "フォールトパス（スワップイン）"
+        I[スワップPTEでの\nページフォールト] --> J[zswap_load]
+        J --> K{xarrayに\nエントリがある?}
+        K -- No --> L[スワップデバイスから読む]
+        K -- Yes --> M[zswap_decompress\nで対象folioへ]
+        M --> N[エントリを無効化し\nプールから解放]
     end
 
-    subgraph "Writeback path (pool full)"
-        O[shrink_worker /\nzswap_shrinker] --> P[Walk LRU,\nshrink_memcg_cb]
+    subgraph "ライトバックパス（プール満杯）"
+        O[shrink_worker /\nzswap_shrinker] --> P[LRUを走査\nshrink_memcg_cb]
         P --> Q{entry.referenced?}
-        Q -- Yes --> R[Clear referenced,\nrotate in LRU]
+        Q -- Yes --> R[referencedをクリアし\nLRU内でローテート]
         Q -- No --> S[zswap_writeback_entry]
-        S --> T[Decompress into\nswap cache folio]
-        T --> U[__swap_writepage\nto backing device]
+        S --> T[スワップキャッシュの\nfolioへ展開]
+        T --> U[__swap_writepage\nで裏側デバイスへ]
         T --> V[zswap_entry_free]
     end
 
-    H -.->|pool full| O
+    H -.->|プール満杯| O
 ```
 
-!!! info "Frontswap is gone"
-    Prior to Linux 6.x, zswap hooked into the kernel via the **frontswap** interface (`frontswap_store`, `frontswap_load`, etc.). That interface was removed. zswap now integrates directly: `zswap_store()` and `zswap_load()` are called explicitly from the swap writeback and swapin code paths. The entry points are declared in `include/linux/zswap.h`.
+!!! info "frontswapは廃止された"
+    Linux 6.x以前、zswapは**frontswap**インターフェース（`frontswap_store`、`frontswap_load`など）を介してカーネルにフックしていた。このインターフェースは削除された。現在のzswapは直接統合されており、`zswap_store()`と`zswap_load()`はスワップのライトバックおよびスワップインのコードパスから明示的に呼び出される。エントリポイントは`include/linux/zswap.h`で宣言されている。
 
-## Key Data Structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
 ### `struct zswap_pool` {#struct-zswap_pool}
 
 ```c
 struct zswap_pool {
-    struct zs_pool *zs_pool;              /* zsmalloc pool for compressed data */
-    struct crypto_acomp_ctx __percpu *acomp_ctx; /* per-CPU compression contexts */
-    struct percpu_ref ref;                /* reference count */
-    struct list_head list;               /* entry in global zswap_pools list */
+    struct zs_pool *zs_pool;              /* 圧縮データ用のzsmallocプール */
+    struct crypto_acomp_ctx __percpu *acomp_ctx; /* per-CPUの圧縮コンテキスト */
+    struct percpu_ref ref;                /* 参照カウント */
+    struct list_head list;               /* グローバルなzswap_poolsリスト内のエントリ */
     struct work_struct release_work;
-    struct hlist_node node;              /* for cpuhp callback */
-    char tfm_name[CRYPTO_MAX_ALG_NAME]; /* compressor name */
+    struct hlist_node node;              /* cpuhpコールバック用 */
+    char tfm_name[CRYPTO_MAX_ALG_NAME]; /* 圧縮器の名前 */
 };
 ```
 
-Each pool is tied to a single compression algorithm. When you change the compressor at runtime, a new pool is created. The old pool lives on until all its entries are evicted or loaded, then it is destroyed via `zswap_pool_destroy()`.
+各プールは単一の圧縮アルゴリズムに結び付いている。実行時に圧縮器を変更すると、新しいプールが作成される。古いプールは、そのエントリがすべて追い出されるかロードされるまで存続し、その後`zswap_pool_destroy()`によって破棄される。
 
 ### `struct zswap_entry` {#struct-zswap_entry}
 
 ```c
 struct zswap_entry {
-    swp_entry_t swpentry;    /* swap type + offset — the lookup key */
-    unsigned int length;     /* compressed size in bytes;
-                                == PAGE_SIZE means incompressible */
-    bool referenced;         /* second-chance bit for LRU writeback */
-    struct zswap_pool *pool; /* owning pool */
-    unsigned long handle;    /* zsmalloc allocation handle */
-    struct obj_cgroup *objcg;/* cgroup charge */
-    struct list_head lru;    /* position in global zswap_list_lru */
+    swp_entry_t swpentry;    /* スワップタイプ + オフセット — 検索キー */
+    unsigned int length;     /* 圧縮後のバイト数;
+                                == PAGE_SIZE は圧縮不能を意味する */
+    bool referenced;         /* LRUライトバック用のセカンドチャンスビット */
+    struct zswap_pool *pool; /* 所有するプール */
+    unsigned long handle;    /* zsmallocの割り当てハンドル */
+    struct obj_cgroup *objcg;/* cgroupへの課金 */
+    struct list_head lru;    /* グローバルなzswap_list_lru内の位置 */
 };
 ```
 
-Each compressed page stored in zswap has one `zswap_entry`. Entries are stored in per-swap-type xarrays, sharded into 64 MiB regions:
+zswapに格納された圧縮pageごとに`zswap_entry`が1つある。エントリはスワップタイプごとのxarrayに格納され、64 MiB単位の領域にシャーディングされる。
 
 ```c
-#define ZSWAP_ADDRESS_SPACE_SHIFT  14   /* 2^14 = 16384 pages = 64 MiB */
+#define ZSWAP_ADDRESS_SPACE_SHIFT  14   /* 2^14 = 16384ページ = 64 MiB */
 static struct xarray *zswap_trees[MAX_SWAPFILES];
 ```
 
-The `swap_zswap_tree()` helper maps a `swp_entry_t` to the right xarray shard.
+ヘルパー`swap_zswap_tree()`は、`swp_entry_t`を適切なxarrayシャードに対応付ける。
 
 ### `struct crypto_acomp_ctx` {#struct-cryptoacompctx}
 
 ```c
 struct crypto_acomp_ctx {
-    struct crypto_acomp *acomp; /* async compression transform */
-    struct acomp_req    *req;   /* pre-allocated request */
-    struct crypto_wait   wait;  /* completion wait */
-    u8                  *buffer;/* PAGE_SIZE scratch buffer */
-    struct mutex         mutex; /* one operation at a time per CPU */
+    struct crypto_acomp *acomp; /* 非同期圧縮トランスフォーム */
+    struct acomp_req    *req;   /* 事前に割り当てたリクエスト */
+    struct crypto_wait   wait;  /* 完了待ち */
+    u8                  *buffer;/* PAGE_SIZEの作業用バッファ */
+    struct mutex         mutex; /* CPUごとに一度に1操作 */
 };
 ```
 
-One context per CPU per pool. `acomp_ctx_get_cpu_lock()` acquires the mutex for the current CPU's context; `acomp_ctx_put_unlock()` releases it.
+コンテキストはプールごと・CPUごとに1つある。`acomp_ctx_get_cpu_lock()`は現在のCPUのコンテキストのmutexを獲得し、`acomp_ctx_put_unlock()`はそれを解放する。
 
-## The Compression Pipeline {#the-compression-pipeline}
+## 圧縮パイプライン {#the-compression-pipeline}
 
-### Store Path: `zswap_store()` {#store-path-zswap_store}
+### 格納パス: `zswap_store()` {#store-path-zswap_store}
 
-When the MM subsystem wants to swap out a folio, it calls `zswap_store(struct folio *folio)`:
+MMサブシステムがfolioをスワップアウトしようとすると、`zswap_store(struct folio *folio)`を呼び出す。
 
 ```
 zswap_store(folio)
@@ -137,81 +137,81 @@ zswap_store(folio)
           └── zswap_lru_add()  ← entry.referenced = true
 ```
 
-If the store fails for any reason (pool full, allocation failure, compression error), any previously stored entry for that swap slot is invalidated via `xa_erase()` + `zswap_entry_free()`. This prevents stale compressed data from being written over by a new version of the page.
+何らかの理由（プール満杯、割り当て失敗、圧縮エラー）で格納に失敗した場合、そのスワップスロットに以前格納されていたエントリは`xa_erase()` + `zswap_entry_free()`によって無効化される。これにより、新しい版のpageが書き込まれた後に古い圧縮データが残って使われることを防ぐ。
 
-### Compression: `zswap_compress()` {#compression-zswap_compress}
+### 圧縮: `zswap_compress()` {#compression-zswap_compress}
 
-zswap uses the kernel's **async compression API** (`crypto/acompress.h`):
+zswapはカーネルの**非同期圧縮API**（`crypto/acompress.h`）を使う。
 
-1. The input scatter-gather list is set to the source page.
-2. `crypto_acomp_compress()` is called — despite the async API, zswap waits synchronously via `crypto_wait_req()`.
-3. If `dlen >= PAGE_SIZE` (incompressible) and writeback is permitted for this cgroup, the page is stored **uncompressed** (`entry->length == PAGE_SIZE`). This preserves LRU ordering so cold incompressible pages can still be written back.
-4. `zs_malloc()` allocates space in the zsmalloc pool; `zs_obj_write()` writes the compressed bytes.
+1. 入力のscatter-gatherリストに元pageを設定する。
+2. `crypto_acomp_compress()`を呼び出す。APIは非同期だが、zswapは`crypto_wait_req()`で同期的に待つ。
+3. `dlen >= PAGE_SIZE`（圧縮不能）で、かつこのcgroupでライトバックが許可されている場合、pageは**非圧縮のまま**格納される（`entry->length == PAGE_SIZE`）。これによりLRUの順序が保たれ、コールドな圧縮不能pageも引き続きライトバックできる。
+4. `zs_malloc()`がzsmallocプール内に領域を割り当て、`zs_obj_write()`が圧縮されたバイト列を書き込む。
 
-!!! note "Incompressible pages"
-    When a page cannot be compressed below PAGE_SIZE, zswap stores the raw content using `kmap_local_page()` and copies it directly. The entry is tracked as incompressible via `zswap_stored_incompressible_pages`. This counter is exposed in debugfs.
+!!! note "圧縮不能なpage"
+    pageをPAGE_SIZE未満に圧縮できない場合、zswapは`kmap_local_page()`を使って生の内容を直接コピーして格納する。このエントリは`zswap_stored_incompressible_pages`によって圧縮不能として追跡される。このカウンタはdebugfsで公開されている。
 
-    If writeback is disabled for the cgroup (`memory.zswap.writeback=0`), incompressible pages are **rejected** outright — there is no point storing an uncompressible page if it can never be evicted.
+    cgroupでライトバックが無効化されている場合（`memory.zswap.writeback=0`）、圧縮不能pageは即座に**拒否**される。決して追い出せないのであれば、圧縮不能pageを格納する意味はないからである。
 
-### Decompression: `zswap_decompress()` {#decompression-zswap_decompress}
+### 展開: `zswap_decompress()` {#decompression-zswap_decompress}
 
-Called from both `zswap_load()` (fault path) and `zswap_writeback_entry()` (writeback path):
+`zswap_load()`（フォールトパス）と`zswap_writeback_entry()`（ライトバックパス）の両方から呼ばれる。
 
 ```c
-zs_obj_read_sg_begin()   // map zsmalloc object as scatter-gather
+zs_obj_read_sg_begin()   // zsmallocオブジェクトをscatter-gatherとしてマップ
 if entry->length == PAGE_SIZE:
-    memcpy_from_sglist()  // incompressible: straight copy
+    memcpy_from_sglist()  // 圧縮不能: そのままコピー
 else:
     crypto_acomp_decompress() + crypto_wait_req()
 zs_obj_read_sg_end()
 ```
 
-zsmalloc objects can span page boundaries, so the input is always a scatter-gather list of 1–2 entries.
+zsmallocのオブジェクトはpage境界をまたぐことがあるため、入力は常に1〜2エントリのscatter-gatherリストとなる。
 
-### Load Path: `zswap_load()` {#load-path-zswap_load}
+### ロードパス: `zswap_load()` {#load-path-zswap_load}
 
-On a page fault, swapin code calls `zswap_load(struct folio *folio)`:
+ページフォールト時、スワップインのコードは`zswap_load(struct folio *folio)`を呼び出す。
 
-1. Look up `swp_entry_t` in the xarray → get `zswap_entry`.
-2. Call `zswap_decompress()` into the fault's target folio.
-3. If loading into the swap cache (the common case), **invalidate** the zswap entry immediately — the swap cache becomes the authoritative owner.
-4. Mark the folio up-to-date and unlock it.
+1. xarrayで`swp_entry_t`を検索し、`zswap_entry`を得る。
+2. `zswap_decompress()`を呼び出し、フォールトの対象folioへ展開する。
+3. スワップキャッシュへロードする場合（一般的なケース）は、zswapエントリを直ちに**無効化**する。以後はスワップキャッシュが正式な所有者になる。
+4. folioをup-to-dateとしてマークし、アンロックする。
 
-!!! warning "Large folio limitation"
-    `zswap_load()` explicitly rejects large folios with `WARN_ON_ONCE(folio_test_large(folio))` and returns `-EINVAL`. Large folios may be only partially stored in zswap (each constituent page independently), and the load path does not handle this case. The result is a `SIGBUS` from `do_swap_page()`.
+!!! warning "large folioの制限"
+    `zswap_load()`は`WARN_ON_ONCE(folio_test_large(folio))`でlarge folioを明示的に拒否し、`-EINVAL`を返す。large folioはzswapに部分的にしか格納されていない可能性があり（構成する各pageが独立に扱われる）、ロードパスはこのケースを扱わない。その結果、`do_swap_page()`から`SIGBUS`が発生する。
 
-## Pool Backend: zsmalloc {#pool-backend-zsmalloc}
+## プールのバックエンド: zsmalloc {#pool-backend-zsmalloc}
 
-In current kernels, zswap **exclusively** uses **zsmalloc** as its memory allocator. The older backends (zbud, z3fold) are no longer used by zswap.
+現在のカーネルでは、zswapはメモリアロケータとして**zsmallocのみ**を使う。古いバックエンド（zbud、z3fold）はもはやzswapでは使われない。
 
-`CONFIG_ZSWAP` selects `CONFIG_ZSMALLOC` automatically.
+`CONFIG_ZSWAP`は`CONFIG_ZSMALLOC`を自動的に選択する。
 
-### How zsmalloc Works {#how-zsmalloc-works}
+### zsmallocの仕組み {#how-zsmalloc-works}
 
-zsmalloc is a variable-size slab allocator designed for compressed page storage. Its key properties:
+zsmallocは、圧縮pageの格納向けに設計された可変サイズのslabアロケータである。主な特性は次のとおり。
 
-| Property | Detail |
+| 特性 | 詳細 |
 |----------|--------|
-| Allocation granularity | 8-byte aligned size classes from ~32 bytes to PAGE_SIZE |
-| Internal structure | Groups of physical pages called **zspages** |
-| Addressing | Objects are not directly addressable — accessed via opaque `handle` |
-| Fragmentation control | Pages grouped by fullness ratio (0%, 10%, …, 99%, 100%) |
-| Maximum pages per zspage | Configurable via `CONFIG_ZSMALLOC_CHAIN_SIZE` |
+| 割り当て粒度 | 約32バイトからPAGE_SIZEまでの、8バイト境界のサイズクラス |
+| 内部構造 | **zspage**と呼ばれる物理pageのグループ |
+| アドレッシング | オブジェクトは直接アドレス指定できず、不透明な`handle`を介してアクセスする |
+| 断片化の制御 | 充填率（0%, 10%, …, 99%, 100%）ごとにpageをグループ化 |
+| zspageあたりの最大page数 | `CONFIG_ZSMALLOC_CHAIN_SIZE`で設定可能 |
 
-Because zsmalloc objects are not directly addressable, `zs_obj_write()` and `zs_obj_read_sg_begin()` handle the mapping and scatter-gather setup internally.
+zsmallocのオブジェクトは直接アドレス指定できないため、`zs_obj_write()`と`zs_obj_read_sg_begin()`が内部でマッピングとscatter-gatherの設定を行う。
 
 ```mermaid
 graph LR
-    subgraph "zsmalloc pool"
-        subgraph "size class: 128 bytes"
-            Z1[zspage\n4KB physical\n→ 31 objects]
-            Z2[zspage\n4KB physical\n→ 31 objects]
+    subgraph "zsmallocプール"
+        subgraph "サイズクラス: 128バイト"
+            Z1[zspage\n4KB物理\n→ 31オブジェクト]
+            Z2[zspage\n4KB物理\n→ 31オブジェクト]
         end
-        subgraph "size class: 512 bytes"
-            Z3[zspage\n4KB physical\n→ 7 objects]
+        subgraph "サイズクラス: 512バイト"
+            Z3[zspage\n4KB物理\n→ 7オブジェクト]
         end
-        subgraph "size class: 3840 bytes"
-            Z4[zspage\n8KB physical\n→ 2 objects]
+        subgraph "サイズクラス: 3840バイト"
+            Z4[zspage\n8KB物理\n→ 2オブジェクト]
         end
     end
 
@@ -219,17 +219,17 @@ graph LR
     E2[zswap_entry\nhandle=H2] -->|zs_obj_write| Z3
 ```
 
-The high object density of zsmalloc (especially for small compressed outputs) is why it replaced zbud (2 pages per physical page) and z3fold (up to 3 pages per physical page) — workloads with good compression ratios benefit enormously.
+zsmallocのオブジェクト密度の高さ（特に小さな圧縮出力の場合）こそが、zbud（物理page 1つにつき2 page）やz3fold（物理page 1つにつき最大3 page）を置き換えた理由である。圧縮率の良いワークロードは大きな恩恵を受ける。
 
-## Pool Management and Writeback {#pool-management-and-writeback}
+## プール管理とライトバック {#pool-management-and-writeback}
 
-### Global Pool Size Limit {#global-pool-size-limit}
+### グローバルなプールサイズ上限 {#global-pool-size-limit}
 
 ```c
 static unsigned int zswap_max_pool_percent = 20;
 ```
 
-The pool is limited to `totalram_pages() * zswap_max_pool_percent / 100` physical pages of compressed storage. `zswap_check_limits()` is called on every store:
+プールは、圧縮ストレージとして`totalram_pages() * zswap_max_pool_percent / 100`個の物理pageに制限される。`zswap_check_limits()`は格納のたびに呼ばれる。
 
 ```c
 static bool zswap_check_limits(void)
@@ -248,55 +248,55 @@ static bool zswap_check_limits(void)
 }
 ```
 
-When the pool hits the limit, `zswap_pool_reached_full = true`. New stores are rejected until the pool drains back below `accept_threshold_percent` of the maximum (default 90%). This hysteresis prevents thrashing at the boundary.
+プールが上限に達すると`zswap_pool_reached_full = true`となる。プールが最大値の`accept_threshold_percent`（デフォルト90%）を下回るまで減るまで、新しい格納は拒否される。このヒステリシスにより、境界付近でのスラッシングを防ぐ。
 
-When the pool is full and a store fails, `zswap_store()` queues `zswap_shrink_work` to trigger background writeback.
+プールが満杯で格納に失敗すると、`zswap_store()`は`zswap_shrink_work`をキューに入れ、バックグラウンドのライトバックを起動する。
 
-### The Global LRU {#the-global-lru}
+### グローバルLRU {#the-global-lru}
 
-All `zswap_entry` objects across all pools share a single global `list_lru`:
+すべてのプールにまたがるすべての`zswap_entry`オブジェクトは、単一のグローバルな`list_lru`を共有する。
 
 ```c
 static struct list_lru zswap_list_lru;
 ```
 
-The LRU is NUMA-aware and memcg-aware. Entries are added to the LRU at store time with `entry->referenced = true`.
+このLRUはNUMAとmemcgを認識する。エントリは格納時に`entry->referenced = true`の状態でLRUに追加される。
 
-### The Shrinker and Writeback: `shrink_worker()` {#the-shrinker-and-writeback-shrink_worker}
+### シュリンカとライトバック: `shrink_worker()` {#the-shrinker-and-writeback-shrink_worker}
 
-Two mechanisms trigger writeback to the backing swap device:
+裏側のスワップデバイスへのライトバックを起動する仕組みは2つある。
 
-**1. Memory pressure shrinker** (`zswap_shrinker`):
-Registered as a standard kernel shrinker (`SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_AWARE`). When the memory allocator sees pressure, it calls `zswap_shrinker_scan()` → `list_lru_shrink_walk()` → `shrink_memcg_cb()` for each LRU entry.
+**1. メモリ圧迫シュリンカ**（`zswap_shrinker`）:
+標準的なカーネルシュリンカとして登録される（`SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_AWARE`）。メモリアロケータが圧迫を検知すると、`zswap_shrinker_scan()` → `list_lru_shrink_walk()` → 各LRUエントリに対する`shrink_memcg_cb()`を呼び出す。
 
-**2. Pool-full work queue** (`shrink_worker`):
-When `zswap_pool_reached_full` is set and a store fails, `shrink_worker()` is queued on the `zswap-shrink` workqueue. It iterates memcgs round-robin and calls `shrink_memcg()` on each, continuing until the pool drains below `zswap_accept_thr_pages()`.
+**2. プール満杯時のワークキュー**（`shrink_worker`）:
+`zswap_pool_reached_full`がセットされた状態で格納に失敗すると、`shrink_worker()`が`zswap-shrink` workqueueにキューイングされる。これはmemcgをラウンドロビンで巡回して各memcgに対して`shrink_memcg()`を呼び出し、プールが`zswap_accept_thr_pages()`を下回るまで続ける。
 
-### Second-Chance LRU Algorithm {#second-chance-lru-algorithm}
+### セカンドチャンスLRUアルゴリズム {#second-chance-lru-algorithm}
 
-`shrink_memcg_cb()` implements a **second-chance** eviction policy:
+`shrink_memcg_cb()`は**セカンドチャンス**方式の追い出しポリシーを実装している。
 
 ```c
 if (entry->referenced) {
     entry->referenced = false;
-    return LRU_ROTATE;  /* give it another chance */
+    return LRU_ROTATE;  /* もう一度チャンスを与える */
 }
-/* referenced == false: write back to swap device */
+/* referenced == false: スワップデバイスへライトバックする */
 writeback_result = zswap_writeback_entry(entry, swpentry);
 ```
 
-New entries start with `referenced = true`. The shrinker clears this flag on first encounter and rotates the entry to the tail. Only on the second encounter (when `referenced` is already false) does writeback happen.
+新しいエントリは`referenced = true`で始まる。シュリンカは最初に遭遇したときにこのフラグをクリアし、エントリを末尾へローテートする。2回目に遭遇したとき（`referenced`がすでにfalseのとき）にのみライトバックが行われる。
 
-### Shrinker Calibration {#shrinker-calibration}
+### シュリンカの較正 {#shrinker-calibration}
 
-`zswap_shrinker_count()` scales the number of shrinkable objects by several factors to avoid over-shrinking:
+`zswap_shrinker_count()`は、過剰な縮小を避けるため、縮小可能なオブジェクト数をいくつかの係数でスケーリングする。
 
-1. **Compression ratio**: `mult_frac(nr_freeable, nr_backing, nr_stored)` — if the pool compresses 4:1, fewer physical pages are freed per writeback, so fewer candidates are reported.
-2. **Disk swapin penalty**: `nr_disk_swapins` (tracked in `zswap_lruvec_state.nr_disk_swapins`) is subtracted from `nr_freeable`. If we observe swapins from disk, it means we previously over-evicted from zswap, so we slow down.
+1. **圧縮率**: `mult_frac(nr_freeable, nr_backing, nr_stored)`。プールが4:1で圧縮している場合、ライトバック1回あたりに解放される物理pageは少なくなるため、報告される候補数も少なくなる。
+2. **ディスクからのスワップインのペナルティ**: `nr_disk_swapins`（`zswap_lruvec_state.nr_disk_swapins`で追跡される）が`nr_freeable`から差し引かれる。ディスクからのスワップインが観測されるということは、以前にzswapから追い出しすぎたことを意味するので、ペースを落とす。
 
 ### `zswap_writeback_entry()` {#zswapwritebackentry}
 
-The writeback of a single entry:
+単一エントリのライトバックは次のとおり。
 
 ```
 zswap_writeback_entry(entry, swpentry)
@@ -309,145 +309,145 @@ zswap_writeback_entry(entry, swpentry)
   └── __swap_writepage()         ← issue write to backing swap device
 ```
 
-If a concurrent swapin allocated the folio first (`!folio_was_allocated`), writeback is skipped — the page just became hot, so evicting it would be wrong.
+並行するスワップインが先にfolioを割り当てていた場合（`!folio_was_allocated`）、ライトバックはスキップされる。そのpageはちょうどホットになったところなので、追い出すのは誤りだからである。
 
-## Same-Filled Page Detection {#same-filled-page-detection}
+## 同一値で埋められたpageの検出 {#same-filled-page-detection}
 
-!!! info "Note on this kernel version"
-    The upstream kernel documentation for older versions describes a same-value-filled (zero page) optimization where pages are checked for uniform content before compression, and only the fill pattern is stored. However, searching the current `mm/zswap.c` source reveals that this optimization **is not present in this version** of the code. There is no `page_same_filled()` call or similar logic in `zswap_store_page()` or `zswap_compress()`. Incompressible pages are handled (stored uncompressed at full PAGE_SIZE when writeback is enabled), but there is no separate path for same-value detection.
+!!! info "このカーネルバージョンに関する注記"
+    古いバージョン向けのアップストリームのカーネルドキュメントには、同一値で埋められた（ゼロページの）最適化が記述されている。これは圧縮前にpageの内容が均一かどうかを調べ、埋め値のパターンだけを格納するものである。しかし現在の`mm/zswap.c`のソースを調べると、この最適化は**このバージョンのコードには存在しない**。`zswap_store_page()`や`zswap_compress()`には`page_same_filled()`の呼び出しや類似のロジックはない。圧縮不能pageは扱われる（ライトバックが有効なときはPAGE_SIZEのまま非圧縮で格納される）が、同一値検出のための別経路は存在しない。
 
-    The `stored_incompressible_pages` debugfs counter tracks pages stored at full size.
+    debugfsのカウンタ`stored_incompressible_pages`は、フルサイズで格納されたpageを追跡する。
 
-## Per-Cgroup Limits {#per-cgroup-limits}
+## cgroupごとの上限 {#per-cgroup-limits}
 
-Three cgroup v2 files control zswap per cgroup:
+cgroup v2の3つのファイルが、cgroupごとにzswapを制御する。
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| `memory.zswap.max` | Maximum bytes of compressed memory this cgroup can use in zswap. Default: `max` (unlimited). |
-| `memory.zswap.current` | Read-only: current bytes used in zswap by this cgroup. |
-| `memory.zswap.writeback` | Whether pages can be written back from zswap to the swap device. `0` disables writeback for this cgroup. Default: `1`. |
+| `memory.zswap.max` | このcgroupがzswapで使用できる圧縮メモリの最大バイト数。デフォルト: `max`（無制限）。 |
+| `memory.zswap.current` | 読み取り専用: このcgroupが現在zswapで使用しているバイト数。 |
+| `memory.zswap.writeback` | zswapからスワップデバイスへpageをライトバックできるかどうか。`0`にするとこのcgroupのライトバックが無効になる。デフォルト: `1`。 |
 
-`obj_cgroup_may_zswap()` checks `memory.zswap.max` before each store. If the cgroup is over its limit, `zswap_store()` first tries to shrink this cgroup's pages via `shrink_memcg()`. If shrinking fails, the store is rejected and the folio goes directly to the swap device.
+`obj_cgroup_may_zswap()`は格納のたびに`memory.zswap.max`を確認する。cgroupが上限を超えている場合、`zswap_store()`はまず`shrink_memcg()`でこのcgroupのpageを縮小しようとする。縮小に失敗すると格納は拒否され、folioはスワップデバイスへ直接送られる。
 
 ```bash
-# Limit a cgroup to 512 MiB of zswap usage
+# cgroupのzswap使用量を512 MiBに制限する
 echo 536870912 > /sys/fs/cgroup/myapp/memory.zswap.max
 
-# Disable zswap writeback for a cgroup (pages stay in zswap or are rejected)
+# cgroupのzswapライトバックを無効にする（pageはzswapに留まるか拒否される）
 echo 0 > /sys/fs/cgroup/myapp/memory.zswap.writeback
 ```
 
-!!! warning "writeback=0 and incompressible pages"
-    If `memory.zswap.writeback=0` and a page is incompressible, zswap **rejects the store entirely** (returns `false` from `zswap_compress()`). The page then falls through to the swap device. This can cause a feedback loop: the same incompressible page may be rejected repeatedly by zswap and keep triggering swap I/O.
+!!! warning "writeback=0と圧縮不能page"
+    `memory.zswap.writeback=0`でpageが圧縮不能な場合、zswapは**格納そのものを拒否**する（`zswap_compress()`から`false`を返す）。そのpageはスワップデバイスへと落ちていく。これはフィードバックループを引き起こしうる。同じ圧縮不能pageがzswapに繰り返し拒否され、スワップI/Oを起こし続ける可能性がある。
 
-## Sysfs Tunables {#sysfs-tunables}
+## sysfsのチューニング可能なパラメータ {#sysfs-tunables}
 
-All tunables live under `/sys/module/zswap/parameters/`:
+すべてのチューニング可能なパラメータは`/sys/module/zswap/parameters/`以下にある。
 
-| Parameter | Default | Description |
+| パラメータ | デフォルト | 説明 |
 |-----------|---------|-------------|
-| `enabled` | `CONFIG_ZSWAP_DEFAULT_ON` | Enable/disable zswap at runtime. Disabling stops new stores but does not flush existing entries. |
-| `compressor` | `CONFIG_ZSWAP_COMPRESSOR_DEFAULT` (lzo) | Compression algorithm. Changing creates a new pool; old pools drain and are freed. |
-| `max_pool_percent` | `20` | Maximum percentage of total RAM the compressed pool may occupy. |
-| `accept_threshold_percent` | `90` | After hitting `max_pool_percent`, resume accepting pages only when pool drops to this percentage of max. Setting to `100` disables hysteresis. |
-| `shrinker_enabled` | `CONFIG_ZSWAP_SHRINKER_DEFAULT_ON` (off) | Enable the memory-pressure-driven shrinker. When off, writeback only happens when the pool is full. |
+| `enabled` | `CONFIG_ZSWAP_DEFAULT_ON` | 実行時にzswapを有効化・無効化する。無効化すると新規の格納は止まるが、既存のエントリはフラッシュされない。 |
+| `compressor` | `CONFIG_ZSWAP_COMPRESSOR_DEFAULT` (lzo) | 圧縮アルゴリズム。変更すると新しいプールが作成され、古いプールは空になった後に解放される。 |
+| `max_pool_percent` | `20` | 圧縮プールが占有できる総RAMの最大割合。 |
+| `accept_threshold_percent` | `90` | `max_pool_percent`に達した後、プールが最大値のこの割合まで下がったときにのみpageの受け入れを再開する。`100`に設定するとヒステリシスが無効になる。 |
+| `shrinker_enabled` | `CONFIG_ZSWAP_SHRINKER_DEFAULT_ON` (off) | メモリ圧迫駆動のシュリンカを有効にする。オフの場合、ライトバックはプールが満杯のときにのみ起こる。 |
 
 ```bash
-# Enable zswap at runtime
+# 実行時にzswapを有効にする
 echo 1 > /sys/module/zswap/parameters/enabled
 
-# Switch compressor to zstd (creates a new pool; old entries remain in lzo pool)
+# 圧縮器をzstdに切り替える（新しいプールが作られ、古いエントリはlzoプールに残る）
 echo zstd > /sys/module/zswap/parameters/compressor
 
-# Increase pool limit to 30% of RAM
+# プール上限をRAMの30%に引き上げる
 echo 30 > /sys/module/zswap/parameters/max_pool_percent
 
-# Enable the memory pressure shrinker
+# メモリ圧迫シュリンカを有効にする
 echo Y > /sys/module/zswap/parameters/shrinker_enabled
 
-# Reduce hysteresis — resume accepting when pool is at 70% of max
+# ヒステリシスを縮める — プールが最大値の70%になったら受け入れを再開する
 echo 70 > /sys/module/zswap/parameters/accept_threshold_percent
 ```
 
-Alternatively, set these at boot time:
+あるいは、ブート時にこれらを設定することもできる。
 
 ```
 zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=25
 ```
 
-## Kconfig Options {#kconfig-options}
+## Kconfigオプション {#kconfig-options}
 
-| Option | Description |
+| オプション | 説明 |
 |--------|-------------|
-| `CONFIG_ZSWAP` | Enable zswap support. Automatically selects `CONFIG_ZSMALLOC`. |
-| `CONFIG_ZSWAP_DEFAULT_ON` | Enable zswap by default at boot. |
-| `CONFIG_ZSWAP_SHRINKER_DEFAULT_ON` | Enable the memory pressure shrinker by default. |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZO` | Default compressor: LZO |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4` | Default compressor: LZ4 |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4HC` | Default compressor: LZ4HC |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD` | Default compressor: zstd |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_DEFLATE` | Default compressor: deflate |
-| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_842` | Default compressor: 842 |
-| `CONFIG_ZSMALLOC` | zsmalloc allocator (required by zswap). |
-| `CONFIG_ZSMALLOC_STAT` | Export per-size-class statistics for zsmalloc via debugfs. |
+| `CONFIG_ZSWAP` | zswapサポートを有効にする。`CONFIG_ZSMALLOC`を自動的に選択する。 |
+| `CONFIG_ZSWAP_DEFAULT_ON` | ブート時にデフォルトでzswapを有効にする。 |
+| `CONFIG_ZSWAP_SHRINKER_DEFAULT_ON` | メモリ圧迫シュリンカをデフォルトで有効にする。 |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZO` | デフォルトの圧縮器: LZO |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4` | デフォルトの圧縮器: LZ4 |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_LZ4HC` | デフォルトの圧縮器: LZ4HC |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_ZSTD` | デフォルトの圧縮器: zstd |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_DEFLATE` | デフォルトの圧縮器: deflate |
+| `CONFIG_ZSWAP_COMPRESSOR_DEFAULT_842` | デフォルトの圧縮器: 842 |
+| `CONFIG_ZSMALLOC` | zsmallocアロケータ（zswapに必須）。 |
+| `CONFIG_ZSMALLOC_STAT` | zsmallocのサイズクラスごとの統計をdebugfs経由で公開する。 |
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ### debugfs: `/sys/kernel/debug/zswap/` {#debugfs-syskerneldebugzswap}
 
-All counters are read-only and approximate (not atomically consistent with each other, but individually accurate to `u64`):
+すべてのカウンタは読み取り専用かつ近似値である（互いにアトミックに整合しているわけではないが、個々の値は`u64`として正確である）。
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| `pool_total_size` | Total bytes of physical RAM consumed by all zswap pools (compressed data only). |
-| `stored_pages` | Number of pages currently stored in zswap (compressed + incompressible). |
-| `stored_incompressible_pages` | Pages stored at full PAGE_SIZE (could not be compressed below PAGE_SIZE). |
-| `pool_limit_hit` | Times a store was rejected because the pool was at `max_pool_percent`. |
-| `written_back_pages` | Pages successfully written back to the backing swap device. |
-| `reject_reclaim_fail` | Store rejected: pool was full and background writeback failed. |
-| `reject_alloc_fail` | Store rejected: `zs_malloc()` returned an error (pool exhausted). |
-| `reject_kmemcache_fail` | Store rejected: `zswap_entry` metadata allocation failed (rare). |
-| `reject_compress_fail` | Store rejected: compression algorithm returned an error. |
-| `reject_compress_poor` | Store rejected: compressed output did not fit in the allocator (ENOSPC). |
-| `decompress_fail` | Decompression failed during load or writeback (data corruption indicator). |
+| `pool_total_size` | すべてのzswapプールが消費している物理RAMの総バイト数（圧縮データのみ）。 |
+| `stored_pages` | 現在zswapに格納されているpage数（圧縮済み + 圧縮不能）。 |
+| `stored_incompressible_pages` | フルPAGE_SIZEで格納されたpage（PAGE_SIZE未満に圧縮できなかったもの）。 |
+| `pool_limit_hit` | プールが`max_pool_percent`に達していたために格納が拒否された回数。 |
+| `written_back_pages` | 裏側のスワップデバイスへのライトバックに成功したpage数。 |
+| `reject_reclaim_fail` | 格納拒否: プールが満杯で、バックグラウンドのライトバックが失敗した。 |
+| `reject_alloc_fail` | 格納拒否: `zs_malloc()`がエラーを返した（プールの枯渇）。 |
+| `reject_kmemcache_fail` | 格納拒否: `zswap_entry`メタデータの割り当てに失敗した（まれ）。 |
+| `reject_compress_fail` | 格納拒否: 圧縮アルゴリズムがエラーを返した。 |
+| `reject_compress_poor` | 格納拒否: 圧縮出力がアロケータに収まらなかった（ENOSPC）。 |
+| `decompress_fail` | ロードまたはライトバック中に展開が失敗した（データ破損の兆候）。 |
 
 ```bash
-# Quick zswap health check
+# zswapの簡易ヘルスチェック
 for f in /sys/kernel/debug/zswap/*; do
     printf "%-40s %s\n" "$(basename $f)" "$(cat $f)"
 done
 ```
 
-### vmstat Events {#vmstat-events}
+### vmstatイベント {#vmstat-events}
 
-Three events are counted in `/proc/vmstat`:
+`/proc/vmstat`では3つのイベントが数えられる。
 
-| Event | Description |
+| イベント | 説明 |
 |-------|-------------|
-| `zswpout` | Pages stored into zswap (successful `zswap_store()`). |
-| `zswpin` | Pages loaded from zswap (successful `zswap_load()`). |
-| `zswpwb` | Pages written back from zswap to the swap device. |
+| `zswpout` | zswapに格納されたpage（`zswap_store()`の成功）。 |
+| `zswpin` | zswapからロードされたpage（`zswap_load()`の成功）。 |
+| `zswpwb` | zswapからスワップデバイスへライトバックされたpage。 |
 
 ```bash
-# Watch zswap activity in real time
+# zswapの活動をリアルタイムで監視する
 watch -n1 'grep -E "^zswp" /proc/vmstat'
 ```
 
-### Per-Cgroup Stats {#per-cgroup-stats}
+### cgroupごとの統計 {#per-cgroup-stats}
 
-For cgroup v2, `memory.stat` includes:
+cgroup v2では、`memory.stat`に次の項目が含まれる。
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `zswap` | Bytes of compressed memory used in zswap by this cgroup. |
-| `zswapped` | Number of pages currently stored in zswap by this cgroup. |
+| `zswap` | このcgroupがzswapで使用している圧縮メモリのバイト数。 |
+| `zswapped` | このcgroupが現在zswapに格納しているpage数。 |
 
 ```bash
 cat /sys/fs/cgroup/myapp/memory.stat | grep zswap
 ```
 
-### Estimating Compression Ratio {#estimating-compression-ratio}
+### 圧縮率の見積もり {#estimating-compression-ratio}
 
 ```bash
 stored=$(cat /sys/kernel/debug/zswap/stored_pages)
@@ -463,34 +463,34 @@ if [ "$stored" -gt 0 ]; then
 fi
 ```
 
-## Interaction with zram {#interaction-with-zram}
+## zramとの相互作用 {#interaction-with-zram}
 
-zswap can sit in front of a zram device. The full stack looks like this:
+zswapはzramデバイスの手前に置くことができる。スタック全体は次のようになる。
 
 ```mermaid
 graph TD
-    A[Anonymous page\nneeds to be swapped] --> B[zswap_store]
-    B -->|compressed + stored| C[zswap pool\nin RAM]
-    B -->|pool full / rejected| D[swap_writepage]
-    D --> E[zram block device\n/dev/zram0]
-    E -->|compressed again!| F[zram pool\nin RAM]
-    C -->|writeback| D
+    A[スワップされる必要のある\n無名page] --> B[zswap_store]
+    B -->|圧縮 + 格納| C[RAM上の\nzswapプール]
+    B -->|プール満杯 / 拒否| D[swap_writepage]
+    D --> E[zramブロックデバイス\n/dev/zram0]
+    E -->|再び圧縮!| F[RAM上の\nzramプール]
+    C -->|ライトバック| D
 ```
 
-!!! warning "Double compression"
-    When zswap sits in front of zram, pages that miss the zswap pool (or get written back by the shrinker) are compressed a **second time** by zram. This means:
+!!! warning "二重圧縮"
+    zswapがzramの手前にある場合、zswapプールに入らなかった（あるいはシュリンカによってライトバックされた）pageは、zramによって**2回目の**圧縮を受ける。これは次のことを意味する。
 
-    - **CPU overhead is doubled** for those pages.
-    - The additional compression benefit is minimal — data already compressed by zswap will not compress meaningfully again.
-    - Memory saving is marginal because zswap already compressed the data.
+    - それらのpageについて**CPUオーバーヘッドが2倍になる**。
+    - 追加の圧縮効果はごくわずかである。zswapですでに圧縮されたデータは、再圧縮してもほとんど小さくならない。
+    - zswapがすでにデータを圧縮しているため、メモリ節約効果はわずかである。
 
-    **Recommendation**: Use either zswap (with a real swap device) or zram, not both. If your goal is to avoid all disk I/O, zram alone is simpler and more efficient. If you have a swap device and want to reduce I/O, use zswap in front of it.
+    **推奨**: zswap（実際のスワップデバイスと組み合わせる）かzramのどちらか一方を使い、両方は使わないこと。ディスクI/Oを完全に避けることが目的なら、zram単体の方が単純で効率的である。スワップデバイスがあり、I/Oを減らしたいのであれば、その手前でzswapを使う。
 
-    If you must use both (e.g., the system has both a zram swap and a disk swap), consider disabling zswap for the zram swap type.
+    どうしても両方を使う必要がある場合（例: システムにzramスワップとディスクスワップの両方がある）、zramのスワップタイプに対してはzswapを無効にすることを検討すること。
 
-## Performance Tradeoffs {#performance-tradeoffs}
+## 性能上のトレードオフ {#performance-tradeoffs}
 
-### CPU vs. Memory vs. I/O {#cpu-vs-memory-vs-io}
+### CPU vs. メモリ vs. I/O {#cpu-vs-memory-vs-io}
 
 ```
 Low compression ratio (data is random, already compressed):
@@ -506,56 +506,56 @@ High compression ratio (text, code, zeroed pages):
   → Net result: CPU overhead well justified
 ```
 
-### Compressor Comparison {#compressor-comparison}
+### 圧縮器の比較 {#compressor-comparison}
 
-| Algorithm | Speed | Ratio | Best for |
+| アルゴリズム | 速度 | 圧縮率 | 最適な用途 |
 |-----------|-------|-------|----------|
-| `lzo` | Fastest | Moderate | Interactive desktops, latency-sensitive |
-| `lz4` | Very fast | Moderate | High-throughput servers, low-overhead environments |
-| `lz4hc` | Moderate | Better than lz4 | Balanced; slower compression, same decompression speed as lz4 |
-| `zstd` | Moderate | Best | High memory pressure; worth the CPU cost for good ratios |
-| `deflate` | Slow | Good | Legacy; generally superseded by zstd |
-| `842` | Hardware-accelerated (IBM POWER) | Moderate | POWER systems with hardware offload |
+| `lzo` | 最速 | 中程度 | 対話的なデスクトップ、レイテンシ重視 |
+| `lz4` | 非常に高速 | 中程度 | 高スループットのサーバー、低オーバーヘッドな環境 |
+| `lz4hc` | 中程度 | lz4より良い | バランス型。圧縮は遅いが、展開速度はlz4と同じ |
+| `zstd` | 中程度 | 最良 | 強いメモリ圧迫。良い圧縮率のためにCPUコストを払う価値がある |
+| `deflate` | 低速 | 良い | レガシー。一般にzstdに取って代わられている |
+| `842` | ハードウェアアクセラレーション（IBM POWER） | 中程度 | ハードウェアオフロードを備えたPOWERシステム |
 
-!!! tip "Choosing a compressor"
-    - For **latency-sensitive** workloads: `lzo` or `lz4` — fast decompression keeps fault latency low.
-    - For **memory-constrained** systems where saving RAM matters most: `zstd` — highest density.
-    - The default `lzo` is a safe middle ground for most use cases.
+!!! tip "圧縮器の選び方"
+    - **レイテンシ重視**のワークロード: `lzo`または`lz4`。高速な展開によりフォールトのレイテンシを低く保てる。
+    - RAMの節約が最優先の**メモリ制約の厳しい**システム: `zstd`。最も高い密度が得られる。
+    - デフォルトの`lzo`は、ほとんどの用途で無難な中間点である。
 
-    The compressor can be changed at runtime without flushing existing entries:
+    圧縮器は、既存のエントリをフラッシュせずに実行時に変更できる。
     ```bash
     echo zstd > /sys/module/zswap/parameters/compressor
     ```
-    Old entries remain in their old pool and are decompressed with the old algorithm until they are evicted.
+    古いエントリは古いプールに残り、追い出されるまで古いアルゴリズムで展開される。
 
-### When to Enable the Shrinker {#when-to-enable-the-shrinker}
+### シュリンカを有効にすべきとき {#when-to-enable-the-shrinker}
 
-By default (`CONFIG_ZSWAP_SHRINKER_DEFAULT_ON=n`), writeback only triggers when the pool hits `max_pool_percent`. This means cold pages can accumulate in the pool indefinitely until the limit is reached.
+デフォルト（`CONFIG_ZSWAP_SHRINKER_DEFAULT_ON=n`）では、ライトバックはプールが`max_pool_percent`に達したときにのみ起こる。つまり、上限に達するまで、コールドなpageがプール内にいつまでも溜まりうる。
 
-Enabling the shrinker (`shrinker_enabled=Y`) allows the memory allocator to proactively write cold zswap pages to the backing swap device under memory pressure — before the pool fills. This:
+シュリンカを有効にする（`shrinker_enabled=Y`）と、メモリアロケータはメモリ圧迫下で、プールが満杯になる前に、コールドなzswap pageを裏側のスワップデバイスへ先回りして書き出せるようになる。これには次の効果がある。
 
-- Reduces the risk of the pool becoming a "black hole" for cold memory.
-- Introduces more swap I/O under sustained memory pressure.
-- Is governed by the compression ratio and disk swapin penalty to avoid over-eviction.
+- プールがコールドなメモリの「ブラックホール」になるリスクを減らす。
+- 持続的なメモリ圧迫下ではスワップI/Oが増える。
+- 過剰な追い出しを避けるため、圧縮率とディスクからのスワップインのペナルティによって制御される。
 
 ```bash
 echo Y > /sys/module/zswap/parameters/shrinker_enabled
 ```
 
-### Pool Size Tuning {#pool-size-tuning}
+### プールサイズのチューニング {#pool-size-tuning}
 
-The default `max_pool_percent=20` is conservative. On systems with ample RAM and slow swap (spinning disk), a larger pool is beneficial:
+デフォルトの`max_pool_percent=20`は控えめである。RAMが潤沢でスワップが遅い（回転ディスク）システムでは、より大きなプールが有益である。
 
 ```bash
-# For systems with fast RAM and slow swap
+# 高速なRAMと低速なスワップを持つシステム向け
 echo 40 > /sys/module/zswap/parameters/max_pool_percent
 ```
 
-On systems where RAM is more precious (containers, embedded), keep the default or reduce it.
+RAMがより貴重なシステム（コンテナ、組み込み）では、デフォルトのままにするか、値を減らす。
 
-## Initialization and Lifecycle {#initialization-and-lifecycle}
+## 初期化とライフサイクル {#initialization-and-lifecycle}
 
-zswap initializes lazily via `late_initcall(zswap_init)`. This ensures the crypto subsystem is available:
+zswapは`late_initcall(zswap_init)`によって遅延初期化される。これによりcryptoサブシステムが利用可能であることが保証される。
 
 ```
 zswap_init()
@@ -571,30 +571,30 @@ zswap_init()
         └── zswap_debugfs_init()
 ```
 
-CPU hotplug callbacks (`zswap_cpu_comp_prepare` / `zswap_cpu_comp_dead`) allocate and free the per-CPU `crypto_acomp_ctx` as CPUs come online and offline.
+CPUホットプラグのコールバック（`zswap_cpu_comp_prepare` / `zswap_cpu_comp_dead`）は、CPUがオンライン・オフラインになるのに合わせて、per-CPUの`crypto_acomp_ctx`を割り当て・解放する。
 
-When a swap device is enabled (`swapon`), `zswap_swapon()` allocates the xarray shards for that swap type. When disabled (`swapoff`), `zswap_swapoff()` frees them (all entries must have been invalidated by `try_to_unuse()` first).
+スワップデバイスが有効化されると（`swapon`）、`zswap_swapon()`がそのスワップタイプ用のxarrayシャードを割り当てる。無効化されると（`swapoff`）、`zswap_swapoff()`がそれらを解放する（その前に、すべてのエントリが`try_to_unuse()`によって無効化されている必要がある）。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 目的 |
 |------|---------|
-| `mm/zswap.c` | Main zswap implementation: store, load, writeback, shrinker, pool management, debugfs |
-| `include/linux/zswap.h` | Public API: `zswap_store()`, `zswap_load()`, `zswap_invalidate()`, `zswap_swapon()`, `zswap_swapoff()`; `struct zswap_lruvec_state` with `nr_disk_swapins` |
-| `mm/zsmalloc.c` | zsmalloc allocator: variable-size compressed object pool used by zswap |
-| `include/linux/zsmalloc.h` | zsmalloc API: `zs_create_pool()`, `zs_malloc()`, `zs_obj_write()`, `zs_obj_read_sg_begin()`, `zs_free()`, `zs_destroy_pool()` |
-| `mm/memcontrol.c` | Per-cgroup zswap limits: `memory.zswap.max`, `memory.zswap.current`, `memory.zswap.writeback`, `obj_cgroup_may_zswap()` |
-| `mm/Kconfig` | Kconfig options: `CONFIG_ZSWAP`, `CONFIG_ZSWAP_DEFAULT_ON`, `CONFIG_ZSWAP_SHRINKER_DEFAULT_ON`, compressor defaults |
-| `include/linux/vm_event_item.h` | vmstat events: `ZSWPIN`, `ZSWPOUT`, `ZSWPWB` |
-| `include/linux/memcontrol.h` | `MEMCG_ZSWAP_B`, `MEMCG_ZSWAPPED`, `obj_cgroup_may_zswap()`, `mem_cgroup_zswap_writeback_enabled()`; `zswap_max` field in `struct mem_cgroup` |
-| `Documentation/admin-guide/mm/zswap.rst` | Upstream admin guide (may lag the source) |
+| `mm/zswap.c` | zswapの主な実装: 格納、ロード、ライトバック、シュリンカ、プール管理、debugfs |
+| `include/linux/zswap.h` | 公開API: `zswap_store()`、`zswap_load()`、`zswap_invalidate()`、`zswap_swapon()`、`zswap_swapoff()`。`nr_disk_swapins`を持つ`struct zswap_lruvec_state` |
+| `mm/zsmalloc.c` | zsmallocアロケータ: zswapが使う可変サイズの圧縮オブジェクトプール |
+| `include/linux/zsmalloc.h` | zsmallocのAPI: `zs_create_pool()`、`zs_malloc()`、`zs_obj_write()`、`zs_obj_read_sg_begin()`、`zs_free()`、`zs_destroy_pool()` |
+| `mm/memcontrol.c` | cgroupごとのzswap上限: `memory.zswap.max`、`memory.zswap.current`、`memory.zswap.writeback`、`obj_cgroup_may_zswap()` |
+| `mm/Kconfig` | Kconfigオプション: `CONFIG_ZSWAP`、`CONFIG_ZSWAP_DEFAULT_ON`、`CONFIG_ZSWAP_SHRINKER_DEFAULT_ON`、圧縮器のデフォルト |
+| `include/linux/vm_event_item.h` | vmstatイベント: `ZSWPIN`、`ZSWPOUT`、`ZSWPWB` |
+| `include/linux/memcontrol.h` | `MEMCG_ZSWAP_B`、`MEMCG_ZSWAPPED`、`obj_cgroup_may_zswap()`、`mem_cgroup_zswap_writeback_enabled()`。`struct mem_cgroup`の`zswap_max`フィールド |
+| `Documentation/admin-guide/mm/zswap.rst` | アップストリームの管理者ガイド（ソースより遅れている場合がある） |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — complete zswap implementation: store, load, writeback, shrinker, pool management, and debugfs counters
-- `Documentation/admin-guide/mm/zswap.rst` — upstream admin guide covering tunables, cgroup controls, and observability
-- [swap](swap.md) — swap architecture overview including how zswap fits into the broader swap stack alongside zram and disk swap
-- [swap-thrashing](swap-thrashing.md) — how enabling zswap or zram can reduce I/O-driven thrashing by keeping compressed pages in RAM
-- [slab](slab.md) — the zsmalloc allocator used internally by zswap to store variable-size compressed objects with high density
-- [zswap: compressed swap caching](https://lwn.net/Articles/537422/) (LWN, 2013) — original LWN coverage of Seth Jennings's zswap patch at the time of its v3.11 merge
-- [Cleancache and frontswap](https://lwn.net/Articles/454795/) (LWN, 2011) — background on the frontswap interface that zswap originally used (since removed in favor of direct integration)
+- [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — zswapの完全な実装: 格納、ロード、ライトバック、シュリンカ、プール管理、debugfsカウンタ
+- `Documentation/admin-guide/mm/zswap.rst` — チューニング可能なパラメータ、cgroupによる制御、可観測性を扱うアップストリームの管理者ガイド
+- [swap](swap.md) — スワップアーキテクチャの概要。zram やディスクスワップと並んで、zswapがスワップスタック全体の中でどう位置付けられるかを含む
+- [swap-thrashing](swap-thrashing.md) — zswapやzramを有効にして圧縮pageをRAMに保持することで、I/O起因のスラッシングをどう減らせるか
+- [slab](slab.md) — zswapが可変サイズの圧縮オブジェクトを高密度に格納するために内部で使うzsmallocアロケータ
+- [zswap: compressed swap caching](https://lwn.net/Articles/537422/) （LWN, 2013）— v3.11でマージされた当時の、Seth JenningsによるzswapパッチについてのLWNの記事
+- [Cleancache and frontswap](https://lwn.net/Articles/454795/) （LWN, 2011）— zswapが当初使っていたfrontswapインターフェース（その後、直接統合に置き換えられて削除された）の背景

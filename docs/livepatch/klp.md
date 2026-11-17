@@ -1,10 +1,10 @@
-# Kernel Live Patching (KLP) {#kernel-live-patching-klp}
+# カーネルライブパッチ（KLP） {#kernel-live-patching-klp}
 
-> Applying security fixes and bug fixes to a running kernel without rebooting
+> 稼働中のカーネルに、再起動せずにセキュリティ修正やバグ修正を適用する
 
-## What KLP does {#what-klp-does}
+## KLPが行うこと {#what-klp-does}
 
-KLP redirects calls from the original (buggy) function to a replacement (patched) function at runtime, using ftrace's function entry hook:
+KLPは、ftraceの関数エントリフックを使って、元の（バグのある）関数への呼び出しを実行時に置き換え先の（パッチ適用済みの）関数へリダイレクトする。
 
 ```
 Before patch:           After patch:
@@ -17,70 +17,70 @@ Before patch:           After patch:
                                         └─► executes patch
 ```
 
-The original function's body is never rewritten and no jump is inserted into it. KLP reuses the ftrace call site the compiler already emitted at function entry (via `-mfentry`, or `-fpatchable-function-entry` on arm64), and `klp_ftrace_handler()` redirects execution by changing the saved instruction pointer, not by patching code.
+元の関数の本体が書き換えられることはなく、そこにジャンプ命令が挿入されることもない。KLPは、コンパイラが関数エントリに既に出力しているftraceの呼び出し箇所（`-mfentry`、arm64では`-fpatchable-function-entry`による）を再利用し、`klp_ftrace_handler()`はコードにパッチを当てるのではなく、保存された命令ポインタを変更することで実行をリダイレクトする。
 
-## Architecture {#architecture}
+## アーキテクチャ {#architecture}
 
 ```c
 /* include/linux/livepatch.h */
 
-/* Describes one patched function */
+/* パッチ対象の関数1つを記述する */
 struct klp_func {
-    /* external */
-    const char       *old_name;     /* name of function to patch */
-    void             *new_func;     /* replacement function */
-    unsigned long     old_sympos;   /* which occurrence (for duplicates) */
+    /* 外部（パッチ作成者が設定） */
+    const char       *old_name;     /* パッチ対象の関数名 */
+    void             *new_func;     /* 置き換え先の関数 */
+    unsigned long     old_sympos;   /* 何番目の出現か（重複名の場合） */
 
-    /* internal */
-    void             *old_func;     /* resolved via kallsyms at patch time */
+    /* 内部 */
+    void             *old_func;     /* パッチ適用時にkallsyms経由で解決される */
     struct kobject    kobj;
-    struct list_head  node;         /* list node for klp_object->func_list */
-    struct list_head  stack_node;   /* position in klp_ops->func_stack */
-    unsigned long     old_size, new_size;  /* sizes of old/new function */
-    bool              nop;          /* temporary patch to use the original code
-                                       again; dynamically allocated by atomic
-                                       replace (klp-cumulative.md) */
-    bool              patched;      /* currently active */
-    bool              transition;   /* in consistency transition */
+    struct list_head  node;         /* klp_object->func_list用のリストノード */
+    struct list_head  stack_node;   /* klp_ops->func_stack内での位置 */
+    unsigned long     old_size, new_size;  /* 古い/新しい関数のサイズ */
+    bool              nop;          /* 元のコードを再び使うための一時的なパッチ。
+                                       アトミックリプレースによって動的に
+                                       割り当てられる（klp-cumulative.md） */
+    bool              patched;      /* 現在有効 */
+    bool              transition;   /* 一貫性の遷移中 */
 };
 
-/* A set of functions that form one complete patch */
+/* 1つの完全なパッチを構成する関数の集合 */
 struct klp_patch {
-    /* external */
-    struct module     *mod;         /* the live patch module */
-    struct klp_object *objs;        /* array of objects (modules/vmlinux) */
-    struct klp_state  *states;      /* system states the patch may modify (klp-state.md) */
-    bool               replace;     /* atomic-replace: supersede other patches (klp-cumulative.md) */
+    /* 外部 */
+    struct module     *mod;         /* ライブパッチモジュール */
+    struct klp_object *objs;        /* オブジェクト（モジュール/vmlinux）の配列 */
+    struct klp_state  *states;      /* パッチが変更しうるシステム状態（klp-state.md） */
+    bool               replace;     /* アトミックリプレース: 他のパッチを置き換える（klp-cumulative.md） */
 
-    /* internal */
+    /* 内部 */
     struct list_head    list;
     struct kobject       kobj;
     struct list_head    obj_list;
     bool                 enabled;
-    bool                 forced;    /* was involved in a forced transition —
-                                        module can never be unloaded */
+    bool                 forced;    /* 強制遷移に関与した。
+                                        モジュールは二度とアンロードできない */
     struct work_struct   free_work;
     struct completion    finish;
 };
 
-/* Functions grouped by the kernel module (or vmlinux) they patch */
+/* パッチ対象のカーネルモジュール（またはvmlinux）ごとにまとめた関数群 */
 struct klp_object {
-    /* external */
-    const char           *name;      /* NULL for vmlinux */
-    struct klp_func       *funcs;    /* array of functions to patch */
-    struct klp_callbacks  callbacks; /* pre/post-(un)patch hooks */
+    /* 外部 */
+    const char           *name;      /* vmlinuxの場合はNULL */
+    struct klp_func       *funcs;    /* パッチ対象の関数の配列 */
+    struct klp_callbacks  callbacks; /* pre/post-(un)patchフック */
 
-    /* internal */
+    /* 内部 */
     struct kobject       kobj;
-    struct list_head     func_list;  /* dynamic list of func entries */
+    struct list_head     func_list;  /* funcエントリの動的リスト */
     struct list_head     node;
-    struct module        *mod;       /* resolved target module */
-    bool                  dynamic;   /* for dynamically added funcs */
+    struct module        *mod;       /* 解決済みの対象モジュール */
+    bool                  dynamic;   /* 動的に追加されたfunc用 */
     bool                  patched;
 };
 ```
 
-## Writing a live patch module {#writing-a-live-patch-module}
+## ライブパッチモジュールを書く {#writing-a-live-patch-module}
 
 ```c
 #include <linux/module.h>
@@ -88,43 +88,43 @@ struct klp_object {
 #include <linux/livepatch.h>
 
 /*
- * The replacement function. Its prototype must match the original exactly:
- * include/linux/fs.h declares
+ * 置き換え先の関数。プロトタイプは元の関数と完全に一致しなければならない:
+ * include/linux/fs.hでの宣言は
  *   ssize_t vfs_read(struct file *, char __user *, size_t, loff_t *);
- * Getting this wrong is silent — .new_func is a void *, so a mismatched
- * return type (int here) would compile without a warning and truncate
- * every result the patched function hands back to its callers.
+ * これを間違えても何も警告されない。.new_funcはvoid *なので、戻り値の型が
+ * 一致しなくても（ここではint）警告なしにコンパイルされ、パッチ適用後の
+ * 関数が呼び出し元に返すすべての結果が切り詰められてしまう。
  */
 static ssize_t patched_vfs_read(struct file *file, char __user *buf,
                                 size_t count, loff_t *pos)
 {
-    /* New implementation with the bug fixed */
+    /* バグを修正した新しい実装 */
     if (!file || !file->f_op)
-        return -EBADF;   /* was: NULL deref here */
+        return -EBADF;   /* 以前はここでNULL参照していた */
 
     /*
-     * ... rest of vfs_read()'s body, copied verbatim from fs/read_write.c,
-     * elided here. KLP has no klp_call_orig(): there is no supported way to
-     * chain back into the original function, so the patch module carries the
-     * whole body and applies the fix inside its own copy.
+     * ... fs/read_write.cからそのままコピーしたvfs_read()の本体の残り。
+     * ここでは省略する。KLPにはklp_call_orig()はない。元の関数へ
+     * 連鎖して戻るためのサポートされた方法はないため、パッチモジュールは
+     * 本体全体を持ち、自身のコピーの中で修正を適用する。
      */
 }
 
-/* Patch descriptor */
+/* パッチ記述子 */
 static struct klp_func funcs[] = {
     {
         .old_name = "vfs_read",
         .new_func = patched_vfs_read,
     },
-    {}  /* sentinel */
+    {}  /* 番兵 */
 };
 
 static struct klp_object objs[] = {
     {
-        .name  = NULL,  /* NULL = patch vmlinux */
+        .name  = NULL,  /* NULL = vmlinuxにパッチを当てる */
         .funcs = funcs,
     },
-    {}  /* sentinel */
+    {}  /* 番兵 */
 };
 
 static struct klp_patch patch = {
@@ -139,7 +139,7 @@ static int __init livepatch_init(void)
 
 static void __exit livepatch_exit(void)
 {
-    /* KLP modules are sticky by default — can only unload after disabling */
+    /* KLPモジュールはデフォルトで居座る。無効化した後でのみアンロードできる */
 }
 
 module_init(livepatch_init);
@@ -148,18 +148,18 @@ MODULE_INFO(livepatch, "Y");
 MODULE_LICENSE("GPL");
 ```
 
-### Calling the original function {#calling-the-original-function}
+### 元の関数を呼び出す {#calling-the-original-function}
 
-The KLP API does not provide a `klp_call_orig()` helper. A live patch replacement
-must either fully re-implement the function or use `klp_shadow_*` to carry extra
-state. If you need access to the original logic, copy it into the patch module and
-apply only the targeted fix.
+KLPのAPIは`klp_call_orig()`ヘルパーを提供していない。ライブパッチの置き換え関数は、
+関数を完全に再実装するか、追加の状態を持たせるために`klp_shadow_*`を使う必要がある。
+元のロジックが必要なら、それをパッチモジュールにコピーし、
+狙った修正だけを適用すること。
 
-## ftrace-based redirection {#ftrace-based-redirection}
+## ftraceベースのリダイレクト {#ftrace-based-redirection}
 
-KLP registers an `ftrace_ops` per patched function with `FTRACE_OPS_FL_IPMODIFY`
-(permission to change the instruction pointer) and `klp_ftrace_handler()` redirects
-execution to whichever patch is on top of the target function's `func_stack`:
+KLPはパッチ対象の関数ごとに`FTRACE_OPS_FL_IPMODIFY`（命令ポインタを変更する許可）付きの
+`ftrace_ops`を登録し、`klp_ftrace_handler()`は対象関数の`func_stack`の最上位にあるパッチへ
+実行をリダイレクトする。
 
 ```c
 /* kernel/livepatch/patch.c */
@@ -175,16 +175,17 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
     ops = container_of(fops, struct klp_ops, fops);
 
-    /* Recursion guard. It also disables preemption, which is required by
-       kernel/livepatch/transition.c's klp_synchronize_transition() — a
-       schedule_on_each_cpu()-based stand-in for synchronize_rcu(), used
-       because livepatch must also patch functions where RCU isn't watching
-       (e.g. before user_exit()), so it can't rely on RCU itself */
+    /* 再帰ガード。これはプリエンプションも無効化する。これは
+       kernel/livepatch/transition.cのklp_synchronize_transition()が
+       必要とするものである。klp_synchronize_transition()は
+       synchronize_rcu()の代わりとなるschedule_on_each_cpu()ベースの処理で、
+       livepatchはRCUが監視していない関数（例: user_exit()の前）にも
+       パッチを当てる必要があるため、RCU自体には頼れないことから使われる */
     bit = ftrace_test_recursion_trylock(ip, parent_ip);
     if (WARN_ON_ONCE(bit < 0))
         return;
 
-    /* Top of func_stack is the most recently applied patch for this function */
+    /* func_stackの先頭は、この関数に最後に適用されたパッチ */
     func = list_first_or_null_rcu(&ops->func_stack, struct klp_func, stack_node);
     if (WARN_ON_ONCE(!func))
         goto unlock;
@@ -195,9 +196,9 @@ static void notrace klp_ftrace_handler(unsigned long ip,
 
         if (patch_state == KLP_TRANSITION_UNPATCHED) {
             /*
-             * This task hasn't transitioned yet. Fall back to the
-             * next-oldest patch still on the stack (if any); with no
-             * older patch, fall through to the original function.
+             * このタスクはまだ遷移していない。スタック上に残っている
+             * 次に古いパッチ（あれば）にフォールバックする。それより古い
+             * パッチがなければ、元の関数へそのまま進む。
              */
             func = list_entry_rcu(func->stack_node.next,
                                    struct klp_func, stack_node);
@@ -206,7 +207,7 @@ static void notrace klp_ftrace_handler(unsigned long ip,
         }
     }
 
-    /* NOPs restore the original code — leave the instruction pointer alone */
+    /* NOPは元のコードを復元する。命令ポインタには触れない */
     if (func->nop)
         goto unlock;
 
@@ -217,15 +218,15 @@ unlock:
 }
 ```
 
-Because `func_stack` is a stack, this is also how patch **stacking** works: if
-patch B is applied on top of patch A and a task hasn't transitioned to B yet,
-the handler walks past B to A's version of the function rather than the
-original — so already-patched behavior from A is preserved during B's
-transition.
+`func_stack`はスタックなので、これはパッチの**積み重ね**の仕組みでもある。
+パッチAの上にパッチBが適用され、あるタスクがまだBへ遷移していない場合、
+ハンドラはBを飛ばして元の関数ではなくAの版の関数へ進む。
+そのため、Bの遷移中もAによって既にパッチ適用された挙動が
+維持される。
 
-## The consistency model {#the-consistency-model}
+## 一貫性モデル {#the-consistency-model}
 
-KLP can't simply redirect calls immediately — a task might be in the middle of executing the old function. The **consistency model** ensures all tasks have transitioned before the patch is considered active:
+KLPは単純に呼び出しを即座にリダイレクトすることはできない。あるタスクが古い関数を実行している最中かもしれないからである。**一貫性モデル**は、パッチが有効とみなされる前にすべてのタスクが遷移を終えていることを保証する。
 
 ```
 State: KLP_TRANSITION_UNPATCHED → (patch applied) → KLP_TRANSITION_PATCHED
@@ -245,35 +246,35 @@ During transition:
 ```
 
 ```bash
-# Check transition status
+# 遷移の状態を確認する
 cat /sys/kernel/livepatch/mypatch/transition
-# 1 = still transitioning (some tasks not yet patched)
-# 0 = complete
+# 1 = まだ遷移中（パッチ未適用のタスクが残っている）
+# 0 = 完了
 
-# Force completion (skips consistency check — may be unsafe!)
+# 完了を強制する（一貫性チェックを飛ばす。安全でない可能性がある！）
 echo 1 > /sys/kernel/livepatch/mypatch/force
 ```
 
-### Sleepy tasks {#sleepy-tasks}
+### 眠り続けるタスク {#sleepy-tasks}
 
-A task blocked in `D` state (`TASK_UNINTERRUPTIBLE`) inside the old function will delay the transition, and the livepatch core cannot shorten that wait: `klp_send_signals()` reaches only tasks in interruptible sleep (`wake_up_state(task, TASK_INTERRUPTIBLE)` for kthreads, `set_notify_signal()` — itself only a `TASK_INTERRUPTIBLE` wakeup — for user tasks). A D-state task has to leave that state on its own; the periodic workqueue just re-checks until it does. See [KLP Consistency Model](klp-consistency.md):
+古い関数の中で`D`状態（`TASK_UNINTERRUPTIBLE`）でブロックしているタスクは遷移を遅らせ、livepatchコアはその待ち時間を短縮できない。`klp_send_signals()`が届くのは割り込み可能なスリープ中のタスクだけだからである（kthreadには`wake_up_state(task, TASK_INTERRUPTIBLE)`、ユーザータスクには`set_notify_signal()`。後者もそれ自体`TASK_INTERRUPTIBLE`の起床にすぎない）。D状態のタスクは自力でその状態を抜けるしかなく、定期的なworkqueueは抜けるまで再チェックを繰り返すだけである。[KLP一貫性モデル](klp-consistency.md)を参照。
 
 ```bash
-# If transition is stuck: find who's blocking it
+# 遷移が停滞している場合: 何が妨げているかを探す
 cat /sys/kernel/livepatch/mypatch/transition
 # 1
 
-# Find tasks in the old function's call stack
-ps aux | grep ' D '  # uninterruptible sleep tasks
-cat /proc/<pid>/stack  # check if in the old function
+# 古い関数がコールスタックにあるタスクを探す
+ps aux | grep ' D '  # 割り込み不可能なスリープ中のタスク
+cat /proc/<pid>/stack  # 古い関数内にいるか確認する
 ```
 
-## Shadow variables {#shadow-variables}
+## shadow変数 {#shadow-variables}
 
-Shadow variables attach extra data to existing kernel objects without modifying their structure — useful when a patch needs to add state:
+shadow変数は、既存のカーネルオブジェクトの構造を変更せずに追加データを付加する。パッチが状態を追加する必要がある場合に有用である。
 
 ```c
-/* Add a "magic" field to struct file without changing the struct */
+/* 構造体を変更せずにstruct fileへ"magic"フィールドを追加する */
 #define KLP_SHADOW_MAGIC 0xdeadbeef
 
 struct my_shadow_data {
@@ -281,94 +282,94 @@ struct my_shadow_data {
     int new_state;
 };
 
-/* On first use: allocate and attach shadow data */
+/* 初回使用時: shadowデータを割り当てて付加する */
 struct my_shadow_data *data;
-data = klp_shadow_get_or_alloc(file,  /* attached to this object */
+data = klp_shadow_get_or_alloc(file,  /* このオブジェクトに付加する */
                                  KLP_SHADOW_MAGIC,
                                  sizeof(*data), GFP_KERNEL,
                                  shadow_init_fn, NULL);
 data->new_state = 42;
 
-/* On subsequent uses: retrieve */
+/* 以降の使用時: 取得する */
 data = klp_shadow_get(file, KLP_SHADOW_MAGIC);
 
-/* On cleanup (e.g., file close): free */
+/* 後始末時（例: ファイルのclose）: 解放する */
 klp_shadow_free(file, KLP_SHADOW_MAGIC, NULL);
 ```
 
-Shadow data is stored in a global hash table keyed by (object pointer, ID).
+shadowデータは、（オブジェクトポインタ, ID）をキーとするグローバルなハッシュテーブルに格納される。
 
-## Building a live patch {#building-a-live-patch}
+## ライブパッチのビルド {#building-a-live-patch}
 
 ```bash
-# Kernel build tree required
+# カーネルのビルドツリーが必要
 make -C /lib/modules/$(uname -r)/build M=$(pwd) modules
 
-# Or: use kpatch-build (automated live patch creation)
+# あるいは: kpatch-buildを使う（ライブパッチの自動作成）
 kpatch-build -t vmlinux fix.patch
 
-# Install
+# インストール
 insmod mypatch.ko
 lsmod | grep livepatch
 
-# Verify active
+# 有効になっていることを確認する
 cat /sys/kernel/livepatch/mypatch/enabled
 # 1
 ```
 
-## Observing live patches {#observing-live-patches}
+## ライブパッチの観察 {#observing-live-patches}
 
 ```bash
-# All active patches
+# 有効なすべてのパッチ
 for p in /sys/kernel/livepatch/*/; do
     echo "Patch: $(basename $p)"
     echo "  enabled: $(cat $p/enabled)"
     echo "  transition: $(cat $p/transition)"
 done
 
-# Which objects (vmlinux or a module) are patched
+# どのオブジェクト（vmlinuxまたはモジュール）にパッチが当たっているか
 cat /sys/kernel/livepatch/*/*/patched
-# Note: the per-function directory (<object>/<function,sympos>/) exists but
-# currently exposes no attributes of its own.
+# 注: 関数ごとのディレクトリ（<object>/<function,sympos>/）は存在するが、
+# 現在のところ独自の属性は何も公開していない。
 
-# Kernel taint from live patch
+# ライブパッチによるカーネルのtaint
 cat /proc/sys/kernel/tainted
-# bit 15 set (TAINT_LIVEPATCH: KLP patch applied)
+# ビット15がセットされる（TAINT_LIVEPATCH: KLPパッチ適用済み）
 
-# Verify with dmesg
+# dmesgで確認する
 dmesg | grep livepatch
 # livepatch: enabling patch 'mypatch'
 # livepatch: 'mypatch': starting patching transition
 # livepatch: 'mypatch': patching complete
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`, `struct klp_object`, `struct klp_patch`, and the `klp_shadow_*()` prototypes
-- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_ftrace_handler()`, the ftrace ops registration (`FTRACE_OPS_FL_IPMODIFY`), and the func-stack redirection logic
-- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — the consistency-model state machine, `klp_try_complete_transition()`, and `klp_send_signals()`
-- [kernel/livepatch/shadow.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/shadow.c) — the shadow-variable hash table and the `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()` implementation
-- [samples/livepatch/livepatch-sample.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/samples/livepatch/livepatch-sample.c) — the canonical minimal live patch module (patches `cmdline_proc_show`)
-- [Documentation/ABI/testing/sysfs-kernel-livepatch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ABI/testing/sysfs-kernel-livepatch) — the authoritative `/sys/kernel/livepatch/` attribute list (`enabled`, `transition`, `force`, `replace`, `stack_order`, and per-object `patched`)
+- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_func`、`struct klp_object`、`struct klp_patch`、および`klp_shadow_*()`のプロトタイプ
+- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_ftrace_handler()`、ftrace opsの登録（`FTRACE_OPS_FL_IPMODIFY`）、func-stackによるリダイレクトのロジック
+- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — 一貫性モデルのステートマシン、`klp_try_complete_transition()`、`klp_send_signals()`
+- [kernel/livepatch/shadow.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/shadow.c) — shadow変数のハッシュテーブルと`klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()`の実装
+- [samples/livepatch/livepatch-sample.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/samples/livepatch/livepatch-sample.c) — 標準的な最小のライブパッチモジュール（`cmdline_proc_show`にパッチを当てる）
+- [Documentation/ABI/testing/sysfs-kernel-livepatch](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/ABI/testing/sysfs-kernel-livepatch) — `/sys/kernel/livepatch/`の属性の正式な一覧（`enabled`、`transition`、`force`、`replace`、`stack_order`、およびオブジェクトごとの`patched`）
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KLP Consistency Model](klp-consistency.md) — deep dive on per-task patch state, stack checking, and the transition workqueue
-- [Cumulative Patches and Atomic Replace](klp-cumulative.md) — patch stacking, `.replace`, and `struct klp_ops`
-- [KLP State: Custom Consistency Checks](klp-state.md) — the `klp_state` API for consistency checks beyond stack scanning
-- [kexec](kexec.md) — loading and booting a new kernel, the alternative to live patching for changes KLP can't express
-- [Kernel Modules](../modules/module-basics.md) — KLP patches are distributed and loaded as regular kernel modules
-- [Tracing: ftrace](../tracing/ftrace.md) — the function-entry hook mechanism KLP builds on
+- [KLP一貫性モデル](klp-consistency.md) — タスクごとのパッチ状態、スタック検査、遷移workqueueの詳細
+- [累積パッチとアトミックリプレース](klp-cumulative.md) — パッチの積み重ね、`.replace`、`struct klp_ops`
+- [KLP State: 独自の一貫性チェック](klp-state.md) — スタック走査を超えた一貫性チェックのための`klp_state` API
+- [kexec](kexec.md) — 新しいカーネルのロードと起動。KLPで表現できない変更に対するライブパッチの代替手段
+- [カーネルモジュール](../modules/module-basics.md) — KLPパッチは通常のカーネルモジュールとして配布・ロードされる
+- [トレーシング: ftrace](../tracing/ftrace.md) — KLPが基盤とする関数エントリフックの機構
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Kernel Live Patching](https://lwn.net/Articles/619390/) — Seth Jennings' original 2014 writeup of the ftrace-based core: the pre-merge `lp_patch`-based design (renamed `klp_` before merge) and the original sysfs interface
-- [livepatch: hybrid consistency model](https://lwn.net/Articles/685464/) — Josh Poimboeuf's 2016 series introducing per-task transitions, stack-reliability checking, and `TIF_PATCH_PENDING`
-- [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/) — Joe Lawrence's 2017 patch introducing `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()`
+- [Kernel Live Patching](https://lwn.net/Articles/619390/) — Seth Jenningsによる、ftraceベースのコアについての2014年の最初の解説。マージ前の`lp_patch`ベースの設計（マージ前に`klp_`へ改名）と、元のsysfsインターフェース
+- [livepatch: hybrid consistency model](https://lwn.net/Articles/685464/) — タスクごとの遷移、スタックの信頼性チェック、`TIF_PATCH_PENDING`を導入したJosh Poimboeufの2016年のシリーズ
+- [livepatch: introduce shadow variable API](https://lwn.net/Articles/731585/) — `klp_shadow_alloc()`/`klp_shadow_get()`/`klp_shadow_free()`を導入したJoe Lawrenceの2017年のパッチ
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Livepatch — The Linux Kernel documentation](https://docs.kernel.org/livepatch/livepatch.html) — official documentation: motivation, the consistency model, module life-cycle, and known limitations
-- [Shadow Variables — The Linux Kernel documentation](https://docs.kernel.org/livepatch/shadow-vars.html) — official shadow-variable API reference and usage notes
+- [Livepatch — The Linux Kernel documentation](https://docs.kernel.org/livepatch/livepatch.html) — 公式ドキュメント: 動機、一貫性モデル、モジュールのライフサイクル、既知の制限
+- [Shadow Variables — The Linux Kernel documentation](https://docs.kernel.org/livepatch/shadow-vars.html) — shadow変数APIの公式リファレンスと使用上の注意

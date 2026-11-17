@@ -1,89 +1,97 @@
-# kGraft vs. kpatch: How Two Rivals Became One Upstream {#kgraft-vs-kpatch-how-two-rivals-became-one-upstream}
+# kGraftとkpatch: 2つのライバルはいかにして1つのアップストリームになったか {#kgraft-vs-kpatch-how-two-rivals-became-one-upstream}
 
-> SUSE and Red Hat each built a live-patching mechanism in 2014, on genuinely different technical models — the merged result kept both, and took until 2017 to actually finish
+> SUSEとRed Hatは2014年、本質的に異なる技術モデルに基づくライブパッチ機構をそれぞれ構築した。マージされた結果は両方を取り込み、実際に完成するのは2017年までかかった
 
-## Two answers to the same question, weeks apart {#two-answers-to-the-same-question-weeks-apart}
+## 数週間違いで現れた、同じ問いへの2つの答え {#two-answers-to-the-same-question-weeks-apart}
 
-The problem both projects set out to solve wasn't new: the Ksplice patch set had offered live kernel patching since 2008, but it never reached mainline, and after Oracle acquired the company behind it in 2011 it largely disappeared from the Linux ecosystem — leaving the underlying need unmet ([LWN, "The initial kGraft submission"](https://lwn.net/Articles/596854/)). In 2014, SUSE and Red Hat each independently built and open-sourced a new mechanism to fill that gap, and the two were not compatible with each other.
+両プロジェクトが解決しようとした問題は新しいものではなかった。Kspliceのパッチセットは2008年からカーネルのライブパッチを提供していたが、メインラインに入ることはなく、2011年にOracleがその開発元企業を買収した後はLinuxエコシステムからほぼ姿を消し、根本的なニーズは満たされないまま残された（[LWN, "The initial kGraft submission"](https://lwn.net/Articles/596854/)）。2014年、SUSEとRed Hatはその穴を埋める新たな機構をそれぞれ独自に構築してオープンソース化したが、両者に互換性はなかった。
 
-SUSE announced **kGraft** first: [LWN's coverage is dated February 3, 2014](https://lwn.net/Articles/584016/), quoting SUSE's own description of building on "ftrace and its mcount-based reserved space in function headers, the INT3/IPI-NMI patching also used in jumplabels, and RCU-like update of code that does not require stopping the kernel." The actual code followed about three months later — Jonathan Corbet's coverage of ["the initial kGraft submission"](https://lwn.net/Articles/596854/) (April 30, 2014) is direct about authorship: "KGraft is the work of Jiří Kosina and Jiří Slaby, both working at SUSE." The basic kGraft mechanism was, in Corbet's own qualified phrase, "only a 600-line patch" — a description of that initial patch itself, not of everything kGraft would go on to include.
+先に発表したのはSUSEの**kGraft**である。[LWNの記事は2014年2月3日付](https://lwn.net/Articles/584016/)で、SUSE自身の説明として「ftraceと、関数ヘッダ内のmcountベースの予約領域、jumplabelでも使われるINT3/IPI-NMIによるパッチ適用、そしてカーネルを停止させる必要のないRCU風のコード更新」の上に構築したと引用している。実際のコードはその約3か月後に続いた。Jonathan Corbetによる[「the initial kGraft submission」](https://lwn.net/Articles/596854/)の記事（2014年4月30日）は作者について明快で、「KGraftはJiří KosinaとJiří Slabyの仕事であり、2人ともSUSEに勤務している」と書いている。基本的なkGraftの機構は、Corbet自身の留保付きの表現を借りれば「わずか600行のパッチ」であった。これはその最初のパッチ自体についての記述であり、kGraftが後に含むことになるすべてについての記述ではない。
 
-Red Hat's **kpatch** followed within days. Corbet's coverage of ["the first kpatch submission"](https://lwn.net/Articles/597407/) (May 7, 2014) opens by noting the timing directly: "Last week saw the posting of SUSE's kGraft live-patching mechanism; shortly thereafter, developers at Red Hat came forward with their competing kpatch mechanism," and names the two authors directly: "kpatch developer Josh Poimboeuf" and "kGraft developer Jiri Kosina." Poimboeuf's own cover letter — ["\[RFC PATCH 0/2\] kpatch: dynamic kernel patching"](https://lkml.iu.edu/hypermail/linux/kernel/1405.0/00278.html), posted to the kernel mailing list on 1 May 2014 — opens "Since Jiri posted the kGraft patches, I wanted to share an alternative live patching solution called kpatch." (The Seth Jennings commit discussed below, by contrast, is the later, separate *merged* livepatch core that both projects' code fed into — not kpatch itself.) Both mechanisms used the same underlying primitive — ftrace's function-entry hook, the same mechanism [covered in depth on this site's own KLP page](klp.md) — but they solved the hard problem, *when is it safe to switch a task from the old function to the new one*, in genuinely different ways.
+Red Hatの**kpatch**は数日のうちに続いた。Corbetによる[「the first kpatch submission」](https://lwn.net/Articles/597407/)の記事（2014年5月7日）は冒頭でそのタイミングに直接触れ、「先週、SUSEのkGraftライブパッチ機構が投稿された。その直後、Red Hatの開発者たちが競合するkpatch機構を携えて名乗り出た」と述べ、2人の作者を「kpatch developer Josh Poimboeuf」「kGraft developer Jiri Kosina」と直接名指ししている。Poimboeuf自身のカバーレター（[「\[RFC PATCH 0/2\] kpatch: dynamic kernel patching」](https://lkml.iu.edu/hypermail/linux/kernel/1405.0/00278.html)、2014年5月1日にカーネルメーリングリストへ投稿）は「JiriがkGraftのパッチを投稿したので、kpatchという別のライブパッチソリューションを共有したいと思った」という一文で始まる。（対照的に、後述するSeth Jenningsのコミットは、後に両プロジェクトのコードが流れ込んだ、別個の*マージされた*livepatchコアであり、kpatchそのものではない。）両機構とも同じ基盤プリミティブ、すなわちftraceの関数エントリフック（[このサイトのKLPページで詳しく扱っている](klp.md)のと同じ機構）を使っていたが、難しい問題、つまり*タスクを古い関数から新しい関数へ切り替えて安全なのはいつか*を、本質的に異なる方法で解いていた。
 
-## Two different answers to "when is it safe to switch" {#two-different-answers-to-when-is-it-safe-to-switch}
+## 「いつ切り替えれば安全か」への2つの異なる答え {#two-different-answers-to-when-is-it-safe-to-switch}
 
-LWN's later retrospective on the unification effort lays out the technical distinction precisely:
+統合の取り組みを振り返ったLWNの後の記事は、技術的な違いを正確に説明している。
 
 > As originally developed, kpatch worked by calling `stop_machine()` to bring the entire system to a halt. It then would check the stack of every process in the system to ensure that none are running within the function(s) to be patched; if the affected functions are not currently running, the patch can proceed, otherwise the operation fails. KGraft, instead, used a "two-universe" model where every process in the system is switched from the old code to the new at a "safe" point. The most common safe point is exit from a system call; at that point, the process cannot be running in any kernel code.
+>
+> （訳: 当初開発されたkpatchは、`stop_machine()`を呼んでシステム全体を停止させることで動作した。その後、システム内の全プロセスのスタックを検査し、パッチ対象の関数内で実行中のものがないことを確認する。対象関数が現在実行中でなければパッチを進められ、そうでなければ操作は失敗する。一方kGraftは「2つの宇宙（two-universe）」モデルを使い、システム内の各プロセスを「安全な」地点で古いコードから新しいコードへ切り替えた。最も一般的な安全地点はシステムコールからの復帰であり、その時点でプロセスがカーネルコードのどこかを実行していることはありえない。）
 
 — [LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)
 
-Neither approach was strictly better, and each had a real failure mode the other didn't. kpatch's stack-check bought precision — a task could be patched the instant it was provably safe — at the cost of a stop-the-world pause and an outright hard failure case: as Corbet put it, "if kernel code is running inside one of the target functions, kpatch will simply fail," and some functions (`schedule()`, `do_wait()`, `irq_thread()` among the examples given) are essentially always running somewhere in the kernel, meaning kpatch alone could never apply a patch that touched them — though Corbet also gave the practical scope: "on a typical system, there will probably be a few dozen functions that can block a live patch in this way — a pretty small subset of the thousands of functions in the kernel" ([LWN](https://lwn.net/Articles/597407/)). kGraft's per-task, syscall-exit migration avoided that hard failure, but the cost it paid was more than bookkeeping: because a task only transitions at a safe point like syscall exit, "the process of trapping every process in a safe place can take an unbounded period of time during which the system is in a weird intermediate state" ([LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)). That guarantee also had a real implementation cost — kGraft hand-modified `kthread_should_stop()` and inserted `kgr_task_safe()` calls by hand into the kernel threads that don't make that call — and an unresolved edge case: a process blocked on I/O "could remain in the kernel for a long time, preventing the cleanup of the graft operation," with no forced-transition mechanism actually present in the posted patch set ([LWN, "The initial kGraft submission"](https://lwn.net/Articles/596854/)).
+どちらのアプローチも厳密に優れていたわけではなく、それぞれが相手にはない現実の失敗モードを抱えていた。kpatchのスタック検査は精密さをもたらした。タスクは安全であることが証明できた瞬間にパッチを適用できる。その代償は、全体を止めるstop-the-worldの一時停止と、明確なハード失敗のケースであった。Corbetの言葉では「カーネルコードが対象関数のいずれかの中で実行中であれば、kpatchは単に失敗する」。そして一部の関数（例として挙げられたのは`schedule()`、`do_wait()`、`irq_thread()`）は事実上常にカーネルのどこかで実行中であり、kpatch単独ではそれらに触れるパッチを決して適用できないことを意味した。ただしCorbetは実際の影響範囲も示しており、「典型的なシステムでは、このようにライブパッチを阻む関数はおそらく数十個程度だろう。カーネル内の何千もの関数のうちのごく小さな部分集合である」と述べている（[LWN](https://lwn.net/Articles/597407/)）。kGraftのタスクごと・システムコール復帰時の移行はこのハード失敗を回避したが、その代償は単なる管理の手間にとどまらなかった。タスクはシステムコール復帰のような安全地点でしか遷移しないため、「すべてのプロセスを安全な場所で捕まえる過程には際限のない時間がかかりうり、その間システムは奇妙な中間状態に置かれる」（[LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)）。この保証には実装上の現実的なコストもあった。kGraftは`kthread_should_stop()`を手作業で修正し、その呼び出しを行わないカーネルスレッドには`kgr_task_safe()`呼び出しを手で挿入していた。さらに未解決のエッジケースもあった。I/Oでブロックしているプロセスは「長時間カーネル内にとどまる可能性があり、graft操作の後始末を妨げる」が、投稿されたパッチセットには強制遷移の機構は実際には存在しなかった（[LWN, "The initial kGraft submission"](https://lwn.net/Articles/596854/)）。
 
-## The unification: LPC 2014, and a proposal before the merge {#the-unification-lpc-2014-and-a-proposal-before-the-merge}
+## 統合: LPC 2014と、マージ前の提案 {#the-unification-lpc-2014-and-a-proposal-before-the-merge}
 
-The two projects converged in public at the [2014 Linux Plumbers Conference](https://blog.linuxplumbersconf.org/2014/), held October 15–17 in Düsseldorf, Germany — Seth Jennings' own cover letter for the eventual merged patch set says so directly: "This solution was discussed in the Live Patching Mini-conference at LPC 2014" ([LWN, "Kernel Live Patching"](https://lwn.net/Articles/619390/), a mirror of the patch posting dated 6 November 2014).
+2つのプロジェクトは、ドイツのデュッセルドルフで10月15〜17日に開催された[2014 Linux Plumbers Conference](https://blog.linuxplumbersconf.org/2014/)で公の場で収束した。最終的にマージされたパッチセットに付けたSeth Jennings自身のカバーレターが、そのことを直接述べている。「このソリューションはLPC 2014のLive Patching Mini-conferenceで議論された」（[LWN, "Kernel Live Patching"](https://lwn.net/Articles/619390/)、2014年11月6日付のパッチ投稿のミラー）。
 
-That November posting — sent by Jennings to Josh Poimboeuf, Jiri Kosina, Vojtech Pavlik, and ftrace maintainer Steven Rostedt — is the actual merger proposal, and its own description of the scope is blunt about what it does and doesn't attempt: "It represents the greatest common functionality set between kpatch \[...\] and kGraft \[...\] and can accept patches built using either method." It's also explicit that this first version implements no consistency model at all — the same disclaimer, word for word, carried over into the commit message when the patch was actually merged, quoted in full below.
+この11月の投稿（JenningsからJosh Poimboeuf、Jiri Kosina、Vojtech Pavlik、そしてftraceメンテナのSteven Rostedtに送られた）こそが実際の統合提案であり、その範囲についての記述は、何をして何をしないかについて率直である。「これはkpatch \[...\]とkGraft \[...\]の最大公約数的な機能セットを表しており、どちらの方法でビルドされたパッチも受け付けられる」。また、この最初のバージョンが一貫性モデルをまったく実装していないことも明示している。同じ但し書きは、パッチが実際にマージされた際のコミットメッセージに一字一句そのまま引き継がれており、以下に全文を引用する。
 
-## What actually landed first: no consistency model at all {#what-actually-landed-first-no-consistency-model-at-all}
+## 最初に実際に入ったもの: 一貫性モデルはまったくなし {#what-actually-landed-first-no-consistency-model-at-all}
 
-The code that became upstream `kernel/livepatch/` was authored by Seth Jennings on 16 December 2014 and committed six days later by SUSE's Jiri Kosina, as committer of record, into the `jikos/livepatching` subsystem tree on 22 December 2014 — the patch's own ABI documentation stamps `KernelVersion: 3.19.0`, meaning it was aimed at whatever release was then in development. It didn't reach mainline immediately: Linus pulled the `jikos/livepatching` tree on 10 February 2015, during the 4.0 merge window, which is why `kernel/livepatch/core.c` is absent from the Linux **v3.19** tag and present at **v4.0** (released 12 April 2015). The commit's own message is explicit about a real limitation this first cut accepted:
+アップストリームの`kernel/livepatch/`となるコードは、2014年12月16日にSeth Jenningsが作成し、その6日後の2014年12月22日に、SUSEのJiri Kosinaがコミッタとして`jikos/livepatching`サブシステムツリーへコミットした。パッチ自身のABIドキュメントには`KernelVersion: 3.19.0`と記されており、当時開発中だったリリースを狙っていたことがわかる。ただし、すぐにメインラインに入ったわけではない。Linusが`jikos/livepatching`ツリーをpullしたのは2015年2月10日、4.0のマージウィンドウ中であり、そのため`kernel/livepatch/core.c`はLinux **v3.19**タグには存在せず、**v4.0**（2015年4月12日リリース）には存在する。コミットメッセージ自体が、この最初の版が受け入れた現実的な制限を明示している。
 
 > This first version does not implement any consistency mechanism that ensures that old and new code do not run together. In practice, ~90% of CVEs are safe to apply in this way, since they simply add a conditional check. However, any function change that can not execute safely with the old version of the function can *not* be safely applied in this version.
+>
+> （訳: この最初のバージョンは、古いコードと新しいコードが同時に実行されないことを保証する一貫性機構を一切実装していない。実際には、CVEの約90%は単に条件チェックを追加するだけなので、この方法で安全に適用できる。しかし、古いバージョンの関数と一緒に安全に実行できない関数変更は、このバージョンでは安全に適用*できない*。）
 
 — [commit `b700e7f03df5`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b700e7f03df5d92f85fa5247fe1f557528d3363d), Seth Jennings
 
-Kosina's own note on the commit explains why SUSE ended up as co-copyright holder despite Jennings (Red Hat) being the patch's author: "due to the number of contributions that got folded into this original patch from Seth Jennings, add SUSE's copyright as well, as discussed via e-mail." Kosina (SUSE) is the committer of record. The commit's trailers, in order, read as a joint SUSE/Red Hat roster: Signed-off-by from Jennings and Poimboeuf (Red Hat, kpatch), then Reviewed-by from Miroslav Beneš, Petr Mladek (both SUSE), and Masami Hiramatsu (Hitachi — neither SUSE nor Red Hat), then a second round of Signed-off-by from Beneš, Mladek, and Kosina (all SUSE) — Beneš and Mladek show up twice, both reviewing the patch and signing off on it.
+このコミットに付けられたKosina自身の注記は、パッチの作者がJennings（Red Hat）であるにもかかわらずSUSEが共同著作権者になった理由を説明している。「Seth Jenningsのこの元のパッチに取り込まれた貢献の数を考慮し、メールで議論したとおり、SUSEの著作権表示も追加する」。Kosina（SUSE）はコミッタとして記録されている。コミットのトレーラーは順に、SUSEとRed Hatの共同名簿のように読める。まずJenningsとPoimboeuf（Red Hat、kpatch）のSigned-off-by、次にMiroslav Beneš、Petr Mladek（ともにSUSE）、Masami Hiramatsu（日立。SUSEでもRed Hatでもない）のReviewed-by、そしてBeneš、Mladek、Kosina（全員SUSE）による2回目のSigned-off-byが続く。BenešとMladekは2回登場しており、パッチのレビューとサインオフの両方を行っている。
 
-## The real hybrid took over two years to land {#the-real-hybrid-took-over-two-years-to-land}
+## 本当のハイブリッドが入るまでには2年以上かかった {#the-real-hybrid-took-over-two-years-to-land}
 
-A proper consistency model — one that actually combined the two projects' techniques rather than deferring the question — was proposed on 9 February 2015: Josh Poimboeuf posted his RFC patch set the day *before* the livepatch core itself actually reached mainline. LWN reported that the patch set "retains the two-universe model from kGraft, but it uses the stack-trace checking from kpatch to accelerate the task of switching processes to the new code" ([LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)) — but getting it upstream took far longer than the initial merge had.
+問題を先送りするのではなく、両プロジェクトの手法を実際に組み合わせた本格的な一貫性モデルは、2015年2月9日に提案された。Josh PoimboeufがRFCパッチセットを投稿したのは、livepatchコア自体が実際にメインラインに入る*前日*である。LWNは、このパッチセットが「kGraftの2つの宇宙モデルを保持しつつ、プロセスを新しいコードへ切り替える作業を加速するためにkpatchのスタックトレース検査を使う」と報じた（[LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)）。しかし、これをアップストリームに入れるには最初のマージよりはるかに長い時間がかかった。
 
-`kernel/livepatch/transition.c`, the file that implements this per-task consistency model, is absent from the Linux **v4.11** tag and present at **v4.12** — the mechanism didn't actually ship until kernel 4.12, released 2 July 2017, roughly two and a half years after both the RFC and the 4.0 mainline merge (the two events landed a single day apart). The final commit's message states its lineage without ambiguity:
+このタスクごとの一貫性モデルを実装するファイルである`kernel/livepatch/transition.c`は、Linux **v4.11**タグには存在せず、**v4.12**には存在する。つまりこの機構が実際に出荷されたのは2017年7月2日リリースのカーネル4.12であり、RFCと4.0でのメインラインマージ（この2つの出来事はわずか1日違い）の両方から約2年半後のことであった。最終的なコミットのメッセージは、その系譜を曖昧さなく述べている。
 
 > This code stems from the design proposal made by Vojtech \[1\] in November 2014. It's a hybrid of kGraft and kpatch: it uses kGraft's per-task consistency and syscall barrier switching combined with kpatch's stack trace switching.
+>
+> （訳: このコードは、2014年11月にVojtechが行った設計提案 \[1\] に由来する。kGraftとkpatchのハイブリッドであり、kGraftのタスクごとの一貫性とシステムコール境界での切り替えを、kpatchのスタックトレースによる切り替えと組み合わせて使う。）
 
-— [commit `d83a7cb375ee`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2), "livepatch: change to a per-task consistency model," Josh Poimboeuf, authored 13 February 2017
+— [commit `d83a7cb375ee`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2), "livepatch: change to a per-task consistency model," Josh Poimboeuf, 2017年2月13日作成
 
-That footnoted "\[1\]" points to a specific document — Vojtech Pavlik's own design proposal, [posted to the kernel mailing list on 7 November 2014](https://lkml.kernel.org/r/20141107140458.GA21774@suse.cz) — a separate posting from Jennings' merger cover letter one day earlier; the two are easy to conflate but describe different things (Jennings proposed merging the two existing mechanisms as-is; Pavlik proposed the hybrid design that `d83a7cb375ee` actually implemented two and a half years later). Notably, the final commit also carries `Acked-by: Ingo Molnar <mingo@kernel.org> # for the scheduler changes` — the same Molnar who, as covered below, argued the entire live-patching premise was misguided.
+この脚注「\[1\]」は特定の文書を指している。Vojtech Pavlik自身の設計提案で、[2014年11月7日にカーネルメーリングリストへ投稿された](https://lkml.kernel.org/r/20141107140458.GA21774@suse.cz)ものである。これはその1日前のJenningsによる統合カバーレターとは別の投稿であり、両者は混同しやすいが別のことを述べている（Jenningsは既存の2つの機構をそのまま統合することを提案し、Pavlikは`d83a7cb375ee`が2年半後に実際に実装したハイブリッド設計を提案した）。注目すべきことに、最終コミットには`Acked-by: Ingo Molnar <mingo@kernel.org> # for the scheduler changes`も付いている。後述するように、ライブパッチという前提そのものが誤っていると主張したのと同じMolnarである。
 
-Concretely, the shipped mechanism (`klp_try_switch_task()`, `klp_check_stack()` in `kernel/livepatch/transition.c`) tries kpatch's stack-check first — if none of a sleeping task's stack frames are in a patched function, it's switched immediately — and falls back to kGraft's syscall-exit/interrupt-return safe points for tasks that don't sleep predictably. [This site's own KLP Consistency Model page](klp-consistency.md) covers that mechanism — the `patch_state` field, the transition states, and the fallback rules — in full technical depth; this page is the story of how it came to exist as a merger of two competing designs rather than a single invention.
+具体的には、出荷された機構（`kernel/livepatch/transition.c`の`klp_try_switch_task()`、`klp_check_stack()`）はまずkpatchのスタック検査を試みる。スリープ中のタスクのスタックフレームがどれもパッチ対象関数内になければ、そのタスクは即座に切り替えられる。そして予測可能な形でスリープしないタスクについては、kGraftのシステムコール復帰・割り込み復帰という安全地点にフォールバックする。[このサイトのKLP一貫性モデルのページ](klp-consistency.md)では、この機構（`patch_state`フィールド、遷移状態、フォールバックの規則）を技術的に詳しく扱っている。このページは、それが単一の発明ではなく、競合する2つの設計の統合としていかにして生まれたかという物語である。
 
-## Why the gap: nobody trusted the stack unwinder yet {#why-the-gap-nobody-trusted-the-stack-unwinder-yet}
+## なぜ空白期間があったのか: まだ誰もスタックアンワインダを信用していなかった {#why-the-gap-nobody-trusted-the-stack-unwinder-yet}
 
-The two-and-a-half-year gap wasn't inertia — Poimboeuf's hybrid design ran into real, specific technical objections almost immediately, and they took years to actually resolve, not just negotiate away. Corbet's February 2015 coverage of the proposal names the objection precisely: adopting kpatch's stack-trace check meant depending on the stack unwinder for *correctness*, not just for debug output, and Peter Zijlstra said so bluntly:
+2年半の空白は惰性によるものではなかった。Poimboeufのハイブリッド設計はほぼ即座に、現実的で具体的な技術的反論に直面し、それらは交渉で片付くものではなく、実際に解決するまでに何年もかかった。2015年2月のCorbetによるこの提案の記事は、反論を正確に挙げている。kpatchのスタックトレース検査を採用するということは、スタックアンワインダにデバッグ出力のためだけでなく*正しさ*のために依存することを意味し、Peter Zijlstraはそれを率直に指摘した。
 
 > So far stack unwinding has basically been a best effort debug output kind of thing, you're wanting to make the integrity of the kernel depend on it. You require an absolute 100% correctness of the stack unwinder — where today it is; as stated above; a best effort debug output thing. That is a *big* change.
+>
+> （訳: これまでスタックアンワインドは基本的にベストエフォートのデバッグ出力のようなものだった。あなたはカーネルの完全性をそれに依存させようとしている。スタックアンワインダに絶対的な100%の正しさを要求している。現状は、上で述べたとおり、ベストエフォートのデバッグ出力に過ぎないのに。これは*大きな*変更だ。）
 
 — [LWN, "A rough patch for live patching"](https://lwn.net/Articles/634649/)
 
-Ingo Molnar raised the same concern from a different angle — getting a genuinely reliable stack trace out of a process running in kernel space was known to be hard, with a real history of bugs and per-architecture quirks — and then went further, proposing to abandon both projects' designs entirely: "I think they are fundamentally misguided in both implementation and in design, which turns them into an (unwilling) extended arm of the security theater," suggesting live-state kexec (saving system state, booting a new kernel, and restoring it) as an alternative to any consistency model at all ([LWN](https://lwn.net/Articles/634649/)). That proposal didn't win, but it underlines that the disagreement wasn't cosmetic — a respected kernel developer was arguing the entire live-patching premise was the wrong approach, not just quibbling over which project's technique to keep.
+Ingo Molnarも別の角度から同じ懸念を表明した。カーネル空間で実行中のプロセスから真に信頼できるスタックトレースを得ることは難しいと知られており、バグとアーキテクチャごとの癖の現実の歴史があった。そして彼はさらに踏み込み、両プロジェクトの設計を完全に放棄することを提案した。「両者は実装においても設計においても根本的に誤っており、それによって（不本意ながら）セキュリティシアターの延長された腕になっていると思う」と述べ、一貫性モデルそのものの代替として、状態を保持したkexec（システム状態を保存し、新しいカーネルを起動し、状態を復元する）を提案したのである（[LWN](https://lwn.net/Articles/634649/)）。この提案は採用されなかったが、意見の相違が表面的なものではなかったことを裏付けている。尊敬されるカーネル開発者が、どちらのプロジェクトの手法を残すかについてのささいな言い争いではなく、ライブパッチという前提そのものが誤ったアプローチだと主張していたのである。
 
-That's the real reason the final 2017 commit gates the whole stack-check path behind a specific, named capability: "This option is only available if the architecture has reliable stacks (`HAVE_RELIABLE_STACKTRACE`)" ([commit `d83a7cb375ee`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2)). Making stack unwinding provably reliable — not merely best-effort — was the actual multi-year prerequisite hiding behind the "consistency model" line item, not a lack of agreement on what to build. At the moment of the 4.12 merge, though, only x86_64 actually cleared that bar: `arch/x86/Kconfig` gates `HAVE_RELIABLE_STACKTRACE` behind `X86_64 && FRAME_POINTER && STACK_VALIDATION`, and arm64, powerpc, and s390 didn't declare support for years afterward. "Finished in 2017" means the mechanism and its x86_64 gate landed then, not that every architecture could use it from day one.
+だからこそ、2017年の最終コミットはスタック検査の経路全体を、名前の付いた特定のケーパビリティの背後に置いている。「このオプションは、アーキテクチャが信頼できるスタック（`HAVE_RELIABLE_STACKTRACE`）を持つ場合にのみ利用できる」（[commit `d83a7cb375ee`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2)）。スタックアンワインドを、単なるベストエフォートではなく証明可能な形で信頼できるものにすること。それが「一貫性モデル」という項目の陰に隠れた、何年もかかる実際の前提条件だったのであり、何を作るべきかについて合意がなかったわけではない。ただし4.12のマージ時点で、実際にその基準を満たしていたのはx86_64だけであった。`arch/x86/Kconfig`は`HAVE_RELIABLE_STACKTRACE`を`X86_64 && FRAME_POINTER && STACK_VALIDATION`の条件の背後に置いており、arm64、powerpc、s390がサポートを宣言したのはその何年も後である。「2017年に完成した」とは、機構とそのx86_64向けの条件がその時に入ったという意味であり、初日からすべてのアーキテクチャで使えたという意味ではない。
 
-The 4.12 merge wasn't the end of this mechanism's own evolution, either: the `immediate` flag it shipped with (an escape hatch to apply a patch with no consistency model at all, for patches that don't need one) was removed in Linux 4.16; the manual `SIGSTOP`/`SIGCONT` administrator workaround for stuck tasks was replaced by a "fake signal" mechanism in 4.15; and atomic replace, which removed the separate registration step this page's cited commits still require, landed in 5.1.
+4.12のマージは、この機構自体の進化の終わりでもなかった。同機構とともに出荷された`immediate`フラグ（一貫性モデルを必要としないパッチ向けに、一貫性モデルなしでパッチを適用するための抜け道）はLinux 4.16で削除された。停滞したタスクに対して管理者が手動で`SIGSTOP`/`SIGCONT`を送る回避策は、4.15で「偽シグナル（fake signal）」機構に置き換えられた。そして、このページで引用したコミットがまだ必要としていた個別の登録ステップを不要にしたアトミックリプレースは、5.1で入った。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — the original merged interface (kernel 4.0)
-- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — the per-task consistency model (kernel 4.12): `klp_try_switch_task()`, `klp_check_stack()`
-- [commit b700e7f03df5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b700e7f03df5d92f85fa5247fe1f557528d3363d) — the initial merge, Seth Jennings, December 2014
-- [commit d83a7cb375ee](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2) — the per-task consistency model, Josh Poimboeuf, 2017
+- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — 最初にマージされたインターフェース（カーネル4.0）
+- [kernel/livepatch/transition.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/transition.c) — タスクごとの一貫性モデル（カーネル4.12）: `klp_try_switch_task()`、`klp_check_stack()`
+- [commit b700e7f03df5](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=b700e7f03df5d92f85fa5247fe1f557528d3363d) — 最初のマージ、Seth Jennings、2014年12月
+- [commit d83a7cb375ee](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d83a7cb375eec21f04c83542395d08b2f6641da2) — タスクごとの一貫性モデル、Josh Poimboeuf、2017年
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [kGraft — live kernel patching from SUSE](https://lwn.net/Articles/584016/) — the initial kGraft coverage, February 2014
-- [The first kpatch submission](https://lwn.net/Articles/597407/) — the initial kpatch coverage, May 2014
-- [Kernel Live Patching](https://lwn.net/Articles/619390/) — Seth Jennings' November 2014 merger proposal, mirrored on LWN
-- [A rough patch for live patching](https://lwn.net/Articles/634649/) — the technical comparison of kpatch's stack-checking vs. kGraft's two-universe model, and Poimboeuf's hybrid proposal
-- [livepatch: consistency model](https://lwn.net/Articles/632582/) — Josh Poimboeuf's February 2015 RFC patch set, mirrored on LWN
-- [Vojtech Pavlik's November 2014 design proposal](https://lkml.kernel.org/r/20141107140458.GA21774@suse.cz) — the direct ancestor of the hybrid design `d83a7cb375ee` implemented
+- [kGraft — live kernel patching from SUSE](https://lwn.net/Articles/584016/) — kGraftについての最初の記事、2014年2月
+- [The first kpatch submission](https://lwn.net/Articles/597407/) — kpatchについての最初の記事、2014年5月
+- [Kernel Live Patching](https://lwn.net/Articles/619390/) — Seth Jenningsによる2014年11月の統合提案（LWNのミラー）
+- [A rough patch for live patching](https://lwn.net/Articles/634649/) — kpatchのスタック検査とkGraftの2つの宇宙モデルの技術的比較、およびPoimboeufのハイブリッド提案
+- [livepatch: consistency model](https://lwn.net/Articles/632582/) — Josh Poimboeufによる2015年2月のRFCパッチセット（LWNのミラー）
+- [Vojtech Pavlikの2014年11月の設計提案](https://lkml.kernel.org/r/20141107140458.GA21774@suse.cz) — `d83a7cb375ee`が実装したハイブリッド設計の直接の祖先
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Live Patching (KLP)](klp.md) — the ftrace-based redirection mechanism both kGraft and kpatch built on
-- [KLP Consistency Model](klp-consistency.md) — the shipped per-task consistency mechanism this page's history led to
-- [Cumulative Patches and Atomic Replace](klp-cumulative.md) — later evolution of the same framework
+- [カーネルライブパッチ（KLP）](klp.md) — kGraftとkpatchの両方が基盤としたftraceベースのリダイレクト機構
+- [KLP一貫性モデル](klp-consistency.md) — このページの歴史がたどり着いた、出荷済みのタスクごとの一貫性機構
+- [累積パッチとアトミックリプレース](klp-cumulative.md) — 同じフレームワークのその後の進化

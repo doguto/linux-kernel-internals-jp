@@ -1,38 +1,37 @@
-# Cumulative Patches and Atomic Replace {#cumulative-patches-and-atomic-replace}
+# 累積パッチとアトミックリプレース {#cumulative-patches-and-atomic-replace}
 
-> Stacking live patches and replacing them atomically
+> ライブパッチを積み重ね、それらをアトミックに置き換える
 
-## The accumulation problem {#the-accumulation-problem}
+## 蓄積の問題 {#the-accumulation-problem}
 
-In a long-running production environment, a kernel may accumulate several live
-patches over time. Patch P1 fixes a bug in `tcp_sendmsg`. Two weeks later,
-patch P2 fixes a different function, `ip_output`. A month after that, patch P3
-fixes `vfs_write`.
+長期間稼働する本番環境では、カーネルに時間とともに複数のライブパッチが蓄積することがある。
+パッチP1は`tcp_sendmsg`のバグを修正する。2週間後、パッチP2は別の関数`ip_output`を修正する。
+その1か月後、パッチP3は`vfs_write`を修正する。
 
-Each patch is independent, but they must all stay loaded simultaneously — the
-system now carries three patch modules, three transition histories, and the
-cognitive overhead of tracking which functions are patched by which module.
-When a fourth security patch arrives that updates `tcp_sendmsg` again, things
-get complicated: P4 must be written knowing P1 is also active.
+各パッチは独立しているが、すべて同時にロードされたままでなければならない。
+システムは今や3つのパッチモジュール、3つの遷移の履歴を抱え、どの関数がどのモジュールによって
+パッチされているかを追跡する認知的なオーバーヘッドを負う。
+`tcp_sendmsg`を再び更新する4つ目のセキュリティパッチが届くと、事態は複雑になる。
+P4はP1も有効であることを前提に書かなければならない。
 
-*Cumulative patches* solve this. A cumulative patch replaces all previous
-patches in a single atomic operation rather than layering on top of them.
+*累積パッチ*はこれを解決する。累積パッチは、以前のパッチの上に重ねるのではなく、
+単一のアトミックな操作で以前のすべてのパッチを置き換える。
 
-## struct klp_patch: the .replace flag {#struct-klp_patch-the-replace-flag}
+## struct klp_patch: .replaceフラグ {#struct-klp_patch-the-replace-flag}
 
-The `.replace` field, added to `struct klp_patch` in Linux 5.1, marks a
-patch as cumulative:
+Linux 5.1で`struct klp_patch`に追加された`.replace`フィールドは、
+パッチを累積パッチとしてマークする。
 
 ```c
 /* include/linux/livepatch.h */
 struct klp_patch {
-    /* external (set by patch module author): */
-    struct module       *mod;       /* the live patch module */
-    struct klp_object   *objs;      /* array of patched objects */
-    struct klp_state    *states;    /* optional consistency states (5.5+) */
-    bool                 replace;   /* true = cumulative replace (5.1+) */
+    /* 外部（パッチモジュールの作者が設定する）: */
+    struct module       *mod;       /* ライブパッチモジュール */
+    struct klp_object   *objs;      /* パッチ対象オブジェクトの配列 */
+    struct klp_state    *states;    /* 任意の一貫性状態（5.5以降） */
+    bool                 replace;   /* true = 累積的な置き換え（5.1以降） */
 
-    /* internal (managed by the livepatch core): */
+    /* 内部（livepatchコアが管理する）: */
     struct list_head     list;
     struct kobject       kobj;
     struct list_head     obj_list;
@@ -43,27 +42,27 @@ struct klp_patch {
 };
 ```
 
-A cumulative patch declares every function that should be patched after it is
-applied — including functions that earlier patches touched. When
-`.replace = true`, the KLP core replaces the entire set of active patches, not
-just adds one more.
+累積パッチは、適用後にパッチされているべきすべての関数を宣言する。
+以前のパッチが触れた関数も含めてである。
+`.replace = true`のとき、KLPコアはパッチを1つ追加するだけでなく、
+有効なパッチの集合全体を置き換える。
 
-## Writing a cumulative patch {#writing-a-cumulative-patch}
+## 累積パッチを書く {#writing-a-cumulative-patch}
 
 ```c
-/* Cumulative patch: replaces P1 (tcp_sendmsg) and P2 (ip_output) */
+/* 累積パッチ: P1（tcp_sendmsg）とP2（ip_output）を置き換える */
 
 static int patched_tcp_sendmsg(struct sock *sk, struct msghdr *msg,
                                 size_t size)
 {
-    /* Latest fix: combines fix from P1 and any new changes */
+    /* 最新の修正: P1の修正と新たな変更を組み合わせる */
     ...
 }
 
 static int patched_ip_output(struct net *net, struct sock *sk,
                               struct sk_buff *skb)
 {
-    /* Re-implements fix from P2 */
+    /* P2の修正を再実装する */
     ...
 }
 
@@ -87,7 +86,7 @@ static struct klp_object objs[] = {
 static struct klp_patch cumulative_patch = {
     .mod     = THIS_MODULE,
     .objs    = objs,
-    .replace = true,    /* <-- this is a cumulative patch */
+    .replace = true,    /* <-- これが累積パッチである */
 };
 
 static int __init cumulative_patch_init(void)
@@ -96,137 +95,136 @@ static int __init cumulative_patch_init(void)
 }
 ```
 
-There is no `klp_atomic_replace()` function. The mechanism for cumulative replace is:
+`klp_atomic_replace()`という関数は存在しない。累積的な置き換えの仕組みは次のとおりである。
 
-When `patch->replace == true`, `klp_init_patch()` calls `klp_add_nops(patch)` to dynamically allocate `klp_func` "nop" entries for every function that currently-active patches cover but the new cumulative patch does not explicitly patch. These nop entries, when active, call through to the original function. This ensures that when the transition completes and old patches are removed from the func_stack, all previously-patched functions are still covered (by a nop).
+`patch->replace == true`のとき、`klp_init_patch()`は`klp_add_nops(patch)`を呼び、現在有効なパッチがカバーしているが新しい累積パッチが明示的にパッチしていないすべての関数について、`klp_func`の「nop」エントリを動的に割り当てる。これらのnopエントリは、有効なときには元の関数へそのまま呼び出しを通す。これにより、遷移が完了して古いパッチがfunc_stackから取り除かれたとき、以前パッチされていたすべての関数が引き続き（nopによって）カバーされることが保証される。
 
-The "atomic" part is that the entire switch — enabling the new patch and removing old patches — happens atomically from userspace's perspective: old patches are removed inside `klp_complete_transition()` after the transition finishes.
+「アトミック」なのは、新しいパッチの有効化と古いパッチの削除という切り替え全体が、ユーザー空間から見てアトミックに起こるという点である。古いパッチは、遷移が終わった後に`klp_complete_transition()`の中で取り除かれる。
 
 ```c
-/* The cumulative replace flow (simplified): */
+/* 累積的な置き換えの流れ（簡略化）: */
 
-/* 1. Patch author sets .replace = true in klp_patch */
+/* 1. パッチ作成者がklp_patchで.replace = trueを設定する */
 /* 2. klp_enable_patch() → klp_init_patch() → klp_add_nops()
- *    allocates nop funcs for any functions in active patches
- *    not covered by the new patch */
-/* 3. Normal transition begins (same as any patch) */
+ *    が、有効なパッチに含まれ新しいパッチがカバーしていない
+ *    関数についてnop funcを割り当てる */
+/* 3. 通常の遷移が始まる（他のパッチと同じ） */
 /* 4. klp_complete_transition() → klp_unpatch_replaced_patches()
- *    → klp_unpatch_objects() (per old patch) removes all replaced
- *    patches from the func_stack */
+ *    → klp_unpatch_objects()（古いパッチごと）が、置き換えられた
+ *    すべてのパッチをfunc_stackから取り除く */
 ```
 
-## struct klp_ops: the per-function hook {#struct-klp_ops-the-per-function-hook}
+## struct klp_ops: 関数ごとのフック {#struct-klp_ops-the-per-function-hook}
 
-There is exactly one `struct klp_ops` for each (object, function-name) pair,
-no matter how many patches target that function:
+`struct klp_ops`は、その関数を対象とするパッチがいくつあっても、
+（オブジェクト, 関数名）の組ごとにちょうど1つ存在する。
 
 ```c
 /* kernel/livepatch/patch.h */
 struct klp_ops {
-    struct list_head  node;        /* global klp_ops list */
-    struct list_head  func_stack;  /* klp_func entries — newest at head */
-    struct ftrace_ops fops;        /* single ftrace registration */
+    struct list_head  node;        /* グローバルなklp_opsリスト */
+    struct list_head  func_stack;  /* klp_funcエントリ。最新のものが先頭 */
+    struct ftrace_ops fops;        /* 単一のftrace登録 */
 };
 ```
 
-All patches that touch the same function share one `klp_ops` and therefore one
-ftrace hook. The `func_stack` is the arbiter: the head entry is the active
-replacement. A newer patch's `klp_func` is always pushed to the head when it
-is enabled:
+同じ関数に触れるすべてのパッチは1つの`klp_ops`を共有し、したがって1つの
+ftraceフックを共有する。`func_stack`が裁定者であり、先頭のエントリが有効な
+置き換え先である。新しいパッチの`klp_func`は、有効化されるときに常に先頭へ
+プッシュされる。
 
 ```c
 /* kernel/livepatch/patch.c — klp_patch_func() */
 list_add_rcu(&func->stack_node, &ops->func_stack);
 ```
 
-And removed from the head (or wherever it sits) when disabled:
+そして無効化されるときには、先頭（あるいはどこにあっても）から取り除かれる。
 
 ```c
 /* kernel/livepatch/patch.c — klp_unpatch_func() */
 list_del_rcu(&func->stack_node);
 ```
 
-If the stack becomes empty, the ftrace hook is unregistered and the original
-function resumes executing without any trampoline overhead.
+スタックが空になると、ftraceフックは登録解除され、元の関数は
+トランポリンのオーバーヘッドなしに再び実行されるようになる。
 
-## Disabling a patch {#disabling-a-patch}
+## パッチの無効化 {#disabling-a-patch}
 
-Disabling a patch starts a *reverse transition*: tasks are moved from
-`KLP_TRANSITION_PATCHED` back to `KLP_TRANSITION_UNPATCHED`. The `enabled` sysfs file triggers this:
+パッチを無効化すると*逆方向の遷移*が始まる。タスクは
+`KLP_TRANSITION_PATCHED`から`KLP_TRANSITION_UNPATCHED`へ戻される。sysfsの`enabled`ファイルがこれを起動する。
 
 ```bash
 echo 0 > /sys/kernel/livepatch/<patch>/enabled
 ```
 
-The kernel sets `klp_target_state = KLP_TRANSITION_UNPATCHED` and queues
-`klp_transition_work`. The stack check still applies — tasks that are executing
-inside the *new* (patched) function cannot be reversed until they return.
+カーネルは`klp_target_state = KLP_TRANSITION_UNPATCHED`を設定し、
+`klp_transition_work`をキューに入れる。スタック検査は引き続き適用される。*新しい*（パッチ適用済みの）関数の
+内部を実行中のタスクは、そこから戻るまで逆遷移できない。
 
-Observing a disable transition:
+無効化の遷移を観察する:
 
 ```bash
 cat /sys/kernel/livepatch/mypatch/transition
-# 1 = reverse transition in progress
+# 1 = 逆方向の遷移が進行中
 
-# Wait for it to complete
+# 完了を待つ
 while [ "$(cat /sys/kernel/livepatch/mypatch/transition)" = "1" ]; do
     sleep 1
 done
 
 cat /sys/kernel/livepatch/mypatch/enabled
-# 0 = fully disabled
+# 0 = 完全に無効化された
 ```
 
-## Removing a patch {#removing-a-patch}
+## パッチの削除 {#removing-a-patch}
 
-Once a patch is disabled, its module can be unloaded. `klp_enable_patch()` is
-the primary entry point a livepatch module calls, but it is not the only
-public livepatch API exported via `EXPORT_SYMBOL_GPL` — `core.c` also exports
-`klp_find_section_by_name()`, `shadow.c` exports `klp_shadow_get()`,
-`klp_shadow_alloc()`, `klp_shadow_get_or_alloc()`, `klp_shadow_free()`, and
-`klp_shadow_free_all()`, and `state.c` exports `klp_get_state()` and
-`klp_get_prev_state()`. A livepatch module's `module_exit` should be empty or
-omitted entirely — the teardown already happened when the patch was disabled:
-`klp_complete_transition()` calls `klp_unpatch_objects()`, which pops each
-function off its `func_stack` and unregisters the ftrace hook once that stack
-is empty, and `klp_free_patch_async()` then frees the `struct klp_patch` and
-drops the module reference. There is nothing left to clean up by the time
-`rmmod` runs.
+パッチが無効化されると、そのモジュールはアンロードできる。`klp_enable_patch()`は
+livepatchモジュールが呼ぶ主要なエントリポイントだが、`EXPORT_SYMBOL_GPL`で
+エクスポートされる公開livepatch APIはそれだけではない。`core.c`は
+`klp_find_section_by_name()`も、`shadow.c`は`klp_shadow_get()`、
+`klp_shadow_alloc()`、`klp_shadow_get_or_alloc()`、`klp_shadow_free()`、
+`klp_shadow_free_all()`を、`state.c`は`klp_get_state()`と
+`klp_get_prev_state()`をエクスポートしている。livepatchモジュールの`module_exit`は
+空にするか完全に省略すべきである。後始末はパッチが無効化された時点で既に済んでいる。
+`klp_complete_transition()`が`klp_unpatch_objects()`を呼び、これが各関数を
+その`func_stack`から取り出し、スタックが空になったらftraceフックを登録解除する。
+その後`klp_free_patch_async()`が`struct klp_patch`を解放し、
+モジュール参照を手放す。`rmmod`が実行される時点では、
+後始末すべきものは何も残っていない。
 
-(`klp_module_going()`, called directly by `kernel/module/main.c` during
-module load/unload — not via the module notifier chain — is a different
-mechanism: it reverts a patch applied to some *other*, target module that is
-itself being unloaded, not the livepatch module's own cleanup.)
+（`klp_module_going()`は、モジュールのロード/アンロード中に`kernel/module/main.c`から
+モジュール通知チェーン経由ではなく直接呼ばれるもので、別の仕組みである。
+これは、それ自体がアンロードされつつある*別の*対象モジュールに適用されたパッチを
+元に戻すものであり、livepatchモジュール自身の後始末ではない。）
 
 ```c
-/* Livepatch module exit: no explicit unregister needed. The transition
- * already tore down the ftrace hooks and freed the patch when it was
- * disabled below.
- * Before unloading, disable the patch via sysfs:
+/* livepatchモジュールのexit: 明示的な登録解除は不要。パッチが下記の方法で
+ * 無効化されたとき、遷移が既にftraceフックを取り外し、パッチを解放している。
+ * アンロードする前に、sysfs経由でパッチを無効化する:
  *   echo 0 > /sys/kernel/livepatch/<patch>/enabled
- * Then: rmmod <patch_module>
+ * その後: rmmod <patch_module>
  */
 static void __exit livepatch_exit(void) { }
 module_exit(livepatch_exit);
 ```
 
-A live patch module cannot be unloaded while enabled — the module loader
-checks this:
+ライブパッチモジュールは有効な間はアンロードできない。モジュールローダが
+これをチェックする。
 
 ```bash
-# This will fail if the patch is still enabled:
+# パッチがまだ有効なら、これは失敗する:
 rmmod mypatch
 # ERROR: Module mypatch is in use
 
-# Correct sequence:
+# 正しい手順:
 echo 0 > /sys/kernel/livepatch/mypatch/enabled
-# wait for transition=0
+# transition=0になるのを待つ
 rmmod mypatch
 ```
 
-## klp_patch lifecycle {#klp_patch-lifecycle}
+## klp_patchのライフサイクル {#klp_patch-lifecycle}
 
-`struct klp_patch` has no state enum. State is tracked via boolean fields: `patch->enabled` (bool) and `patch->forced` (bool). The lifecycle in terms of sysfs-observable state is: unloaded → `enabled=0` (loaded, not yet active) → `enabled=1, transition=1` (transitioning) → `enabled=1, transition=0` (fully active) → `enabled=0` (disabled, can unload).
+`struct klp_patch`には状態を表すenumはない。状態はブール型のフィールド、`patch->enabled`（bool）と`patch->forced`（bool）によって追跡される。sysfsから観察できる状態で表すと、ライフサイクルは次のとおりである: 未ロード → `enabled=0`（ロード済み、まだ有効でない） → `enabled=1, transition=1`（遷移中） → `enabled=1, transition=0`（完全に有効） → `enabled=0`（無効化済み、アンロード可能）。
 
 ```
 insmod mypatch.ko
@@ -253,91 +251,90 @@ enabled=0, transition=0 (disabled, can unload)
 (patch module unloaded; ftrace hooks were already removed when the patch was disabled)
 ```
 
-## Observing the func_stack {#observing-the-func_stack}
+## func_stackの観察 {#observing-the-func_stack}
 
-The sysfs hierarchy exposes the state of each patched object, and lists each
-patched function's directory, but a per-function `patched` file does not
-exist — `patched` is an object-level attribute only:
+sysfsの階層は、パッチ対象の各オブジェクトの状態を公開し、パッチ対象の各関数の
+ディレクトリを列挙するが、関数ごとの`patched`ファイルは存在しない。
+`patched`はオブジェクトレベルの属性のみである。
 
 ```bash
-# Check if the vmlinux object (core kernel) is patched by mypatch
+# vmlinuxオブジェクト（コアカーネル）がmypatchによってパッチされているか確認する
 cat /sys/kernel/livepatch/mypatch/vmlinux/patched
-# 1 = this patch's functions in this object are currently hooked
+# 1 = このオブジェクト内のこのパッチの関数が現在フックされている
 
-# Each patched function shows up as a directory named "<function>,<sympos>"
-# under the object — its mere presence is the signal, it has no attribute
-# files of its own:
+# パッチ対象の各関数は、オブジェクトの下に"<function>,<sympos>"という
+# 名前のディレクトリとして現れる。存在すること自体がシグナルであり、
+# 独自の属性ファイルは持たない:
 ls /sys/kernel/livepatch/mypatch/vmlinux/
 # patched  tcp_sendmsg,1
 
-# old_addr is NOT exposed via sysfs
-# To find the original function address, use /proc/kallsyms:
+# old_addrはsysfsでは公開されていない
+# 元の関数のアドレスを知るには/proc/kallsymsを使う:
 grep " tcp_sendmsg$" /proc/kallsyms
 
-# If two patches cover the same function, func_stack order (not sysfs) is
-# the arbiter — see "stack_order" for each patch's position:
-cat /sys/kernel/livepatch/p1/stack_order  # 1 (older, shadowed by p2)
-cat /sys/kernel/livepatch/p2/stack_order  # 2 (newer, active)
+# 2つのパッチが同じ関数をカバーしている場合、裁定するのは（sysfsではなく）
+# func_stackの順序である。各パッチの位置は"stack_order"を参照:
+cat /sys/kernel/livepatch/p1/stack_order  # 1（古い。p2に覆い隠されている）
+cat /sys/kernel/livepatch/p2/stack_order  # 2（新しい。有効）
 ```
 
-## Practical workflow with kpatch {#practical-workflow-with-kpatch}
+## kpatchを使った実践的なワークフロー {#practical-workflow-with-kpatch}
 
-`kpatch` is the most widely used toolchain for building and distributing
-cumulative live patches. The standard workflow for a security patch release:
+`kpatch`は、累積ライブパッチのビルドと配布に最も広く使われているツールチェーンである。
+セキュリティパッチをリリースする際の標準的なワークフローは次のとおり。
 
 ```bash
-# 1. Build a cumulative patch from a source diff
-#    kpatch-build creates a .ko that patches all functions touched by the diff
+# 1. ソースのdiffから累積パッチをビルドする
+#    kpatch-buildは、diffが触れるすべての関数にパッチを当てる.koを作成する
 kpatch-build -t vmlinux security-fix.patch
 
-# 2. The resulting module embeds all functions from the diff
-#    If this is a third patch after p1 and p2, set .replace=true in the module
+# 2. 生成されたモジュールはdiffのすべての関数を含む
+#    これがp1、p2に続く3つ目のパッチなら、モジュール内で.replace=trueを設定する
 
-# 3. Load the cumulative patch
+# 3. 累積パッチをロードする
 insmod kpatch-security-fix.ko
 
-# 4. Verify it replaced previous patches
+# 4. 以前のパッチを置き換えたことを確認する
 cat /sys/kernel/livepatch/kpatch-security-fix/transition
-# wait for 0
+# 0になるのを待つ
 
 cat /sys/kernel/livepatch/kpatch-security-fix/enabled
 # 1
 
-# Previous patches are now disabled and their modules can be unloaded:
+# 以前のパッチは無効化され、そのモジュールはアンロードできる:
 echo 0 > /sys/kernel/livepatch/kpatch-prev-patch/enabled
-# wait, then rmmod
+# 待ってからrmmodする
 
-# 5. Persist across reboots (using kpatch service)
+# 5. リブート後も維持する（kpatchサービスを使う）
 kpatch install kpatch-security-fix.ko
 systemctl enable kpatch
 ```
 
-## Cumulative patch ordering rules {#cumulative-patch-ordering-rules}
+## 累積パッチの順序規則 {#cumulative-patch-ordering-rules}
 
-The ordering rule that matters most is enforced by the kernel, not by the
-operator. Only one transition may be in flight at a time, and both the enable
-and the disable path bail out early if one already is:
+最も重要な順序規則は、オペレータではなくカーネルによって強制される。
+一度に進行中にできる遷移は1つだけであり、有効化と無効化の経路はどちらも、
+既に遷移が進行中であれば早期に処理を打ち切る。
 
 ```c
-/* kernel/livepatch/core.c — __klp_enable_patch() and __klp_disable_patch()
- * both bail out early on the same guard */
+/* kernel/livepatch/core.c — __klp_enable_patch()と__klp_disable_patch()は
+ * どちらも同じガードで早期に打ち切る */
 if (klp_transition_patch)
         return -EBUSY;
 ```
 
-So loading a cumulative patch while another patch is still transitioning does
-not corrupt the `func_stack` — the `klp_enable_patch()` call from the new
-module's `init` returns `-EBUSY`, the `insmod` fails, and the module never
-loads. The same guard rejects an `echo 0 > .../enabled` aimed at a *different*
-patch while one is transitioning — but not one aimed at the transitioning
-patch itself: `enabled_store()` routes that case to `klp_reverse_transition()`
-instead, deliberately reversing the in-flight transition rather than
-rejecting the write (see [KLP State](klp-state.md), which relies on exactly
-this to make its callbacks re-entrant). Checking first only saves you a
-failed deployment step on a genuinely different patch:
+したがって、別のパッチがまだ遷移中に累積パッチをロードしても、
+`func_stack`が壊れることはない。新しいモジュールの`init`から呼ばれる`klp_enable_patch()`が
+`-EBUSY`を返し、`insmod`は失敗し、モジュールはロードされない。同じガードは、
+あるパッチが遷移中のときに*別の*パッチに向けた`echo 0 > .../enabled`も拒否する。
+ただし遷移中のパッチ自身に向けたものは拒否しない。`enabled_store()`はそのケースを
+`klp_reverse_transition()`へ回し、書き込みを拒否するのではなく、進行中の遷移を
+意図的に逆転させる（[KLP State](klp-state.md)を参照。このページはまさにこの挙動に依存して
+コールバックを再入可能にしている）。事前にチェックしても、本当に別のパッチに対する
+デプロイ手順の失敗を1つ省けるだけである。
 
 ```bash
-# Avoid a spurious EBUSY: wait for any in-flight transition to finish
+# 無用なEBUSYを避ける: 進行中の遷移が終わるのを待つ
 for p in /sys/kernel/livepatch/*/; do
     t=$(cat "$p/transition")
     if [ "$t" = "1" ]; then
@@ -346,48 +343,47 @@ for p in /sys/kernel/livepatch/*/; do
 done
 ```
 
-The rule the kernel does *not* enforce is that a patch you intended to be
-cumulative actually is one. `klp_add_nops()` runs only under
-`if (patch->replace)`, and `klp_unpatch_replaced_patches()` only when
-`klp_transition_patch->replace` is set, so a patch that forgets
-`.replace = true` silently stacks on top of the patches it was meant to
-supersede — and any function those patches touched that the new one does not
-name keeps running the old replacement. Verify the outcome after every
-deployment:
+カーネルが強制*しない*規則は、累積パッチのつもりのパッチが実際に累積パッチであるか
+どうかである。`klp_add_nops()`は`if (patch->replace)`の下でのみ実行され、
+`klp_unpatch_replaced_patches()`は`klp_transition_patch->replace`がセットされている
+ときにのみ実行される。そのため`.replace = true`を付け忘れたパッチは、
+置き換えるはずだったパッチの上に黙って積み重なる。そして、それらのパッチが触れたが
+新しいパッチが名指ししていない関数は、古い置き換え関数を実行し続ける。
+デプロイのたびに結果を確認すること。
 
 ```bash
-cat /sys/kernel/livepatch/mypatch/replace       # want 1
-cat /sys/kernel/livepatch/mypatch/stack_order   # want 1 — replaced patches are
-                                                # removed from klp_patches
-ls /sys/kernel/livepatch/                       # want only mypatch
+cat /sys/kernel/livepatch/mypatch/replace       # 1であるべき
+cat /sys/kernel/livepatch/mypatch/stack_order   # 1であるべき。置き換えられたパッチは
+                                                # klp_patchesから取り除かれる
+ls /sys/kernel/livepatch/                       # mypatchだけであるべき
 ```
 
-See [war stories](war-stories.md) for a real incident where a cumulative patch
-shipped without `.replace` and a superseded fix never reverted.
+累積パッチが`.replace`なしで出荷され、置き換えられたはずの修正が元に戻らなかった
+実際の事例については[事件簿](war-stories.md)を参照。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_patch`, `struct klp_func`, `struct klp_object`, and the `KLP_TRANSITION_IDLE`/`KLP_TRANSITION_UNPATCHED`/`KLP_TRANSITION_PATCHED` task-state constants
-- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `klp_enable_patch()`, `klp_add_nops()`, `klp_unpatch_replaced_patches()`, `klp_module_going()` (reverts a patch on a target module being unloaded), the `if (klp_transition_patch) return -EBUSY;` guard shared by `__klp_enable_patch()`/`__klp_disable_patch()`, and a comment block documenting the full `/sys/kernel/livepatch/...` sysfs layout
-- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_patch_func()`/`klp_unpatch_func()`: pushing and popping `klp_func` entries on `ops->func_stack` via `list_add_rcu()`/`list_del_rcu()`
-- [kernel/livepatch/patch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.h) — `struct klp_ops` definition (`node`, `func_stack`, `fops`)
-- [Documentation/livepatch/cumulative-patches.rst](https://docs.kernel.org/livepatch/cumulative-patches.html) — the upstream usage guide for atomic replace, including the callback and shadow-variable limitations
-- [`e1452b607c48` — livepatch: Add atomic replace](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e1452b607c48c642caf57299f4da83aa002f8533) — Jason Baron's commit (reworked/split by Petr Mladek) adding the `.replace` field to `struct klp_patch`, merged for Linux 5.1
+- [include/linux/livepatch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/livepatch.h) — `struct klp_patch`、`struct klp_func`、`struct klp_object`、およびタスク状態の定数`KLP_TRANSITION_IDLE`/`KLP_TRANSITION_UNPATCHED`/`KLP_TRANSITION_PATCHED`
+- [kernel/livepatch/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/core.c) — `klp_enable_patch()`、`klp_add_nops()`、`klp_unpatch_replaced_patches()`、`klp_module_going()`（アンロードされる対象モジュールへのパッチを元に戻す）、`__klp_enable_patch()`/`__klp_disable_patch()`が共有する`if (klp_transition_patch) return -EBUSY;`のガード、そして`/sys/kernel/livepatch/...`のsysfsレイアウト全体を説明するコメントブロック
+- [kernel/livepatch/patch.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.c) — `klp_patch_func()`/`klp_unpatch_func()`: `list_add_rcu()`/`list_del_rcu()`による`ops->func_stack`への`klp_func`エントリのプッシュとポップ
+- [kernel/livepatch/patch.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/livepatch/patch.h) — `struct klp_ops`の定義（`node`、`func_stack`、`fops`）
+- [Documentation/livepatch/cumulative-patches.rst](https://docs.kernel.org/livepatch/cumulative-patches.html) — アトミックリプレースについてのアップストリームの利用ガイド。コールバックとshadow変数に関する制限も含む
+- [`e1452b607c48` — livepatch: Add atomic replace](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=e1452b607c48c642caf57299f4da83aa002f8533) — `struct klp_patch`に`.replace`フィールドを追加したJason Baronのコミット（Petr Mladekが手直し・分割）。Linux 5.1でマージされた
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — module removal; the `-f`/`--force` option bypasses the in-use refcount check this page warns is dangerous — the danger applies to a still-enabled live patch just as to any in-use module
+- [`rmmod(8)`](https://man7.org/linux/man-pages/man8/rmmod.8.html) — モジュールの削除。`-f`/`--force`オプションは、このページが危険だと警告している使用中の参照カウントのチェックを迂回する。この危険は、使用中のあらゆるモジュールと同様に、まだ有効なライブパッチにも当てはまる
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [KLP Consistency Model](klp-consistency.md) — per-task states, stack checking, forced transitions
-- [Kernel Live Patching](klp.md) — struct klp_func/klp_patch, ftrace redirection, shadow variables
-- [KLP State](klp-state.md) — the `struct klp_state`/`klp_get_state()` API referenced by `struct klp_patch`'s `.states` field
-- [Kernel Modules](../modules/module-basics.md) — KLP modules use the standard module infrastructure
-- [War Stories](war-stories.md) — a real incident from shipping a "cumulative" patch that was missing `.replace = true`
+- [KLP一貫性モデル](klp-consistency.md) — タスクごとの状態、スタック検査、強制遷移
+- [カーネルライブパッチ](klp.md) — struct klp_func/klp_patch、ftraceによるリダイレクト、shadow変数
+- [KLP State](klp-state.md) — `struct klp_patch`の`.states`フィールドが参照する`struct klp_state`/`klp_get_state()` API
+- [カーネルモジュール](../modules/module-basics.md) — KLPモジュールは標準的なモジュール基盤を使う
+- [事件簿](war-stories.md) — `.replace = true`が欠けた「累積」パッチを出荷したことによる実際の事例
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [livepatch: Atomic replace feature](https://lwn.net/Articles/776290/) — Petr Mladek's v15 patch series introducing atomic replace, mirrored on LWN (January 9, 2019); the cover letter explains the cumulative-patch design and the problems it replaced (patch-ordering dependencies, no way to revert a single stacked patch)
+- [livepatch: Atomic replace feature](https://lwn.net/Articles/776290/) — アトミックリプレースを導入したPetr Mladekのv15パッチシリーズ（LWNのミラー、2019年1月9日）。カバーレターでは累積パッチの設計と、それが解消した問題（パッチの順序の依存関係、積み重ねたパッチを1つだけ元に戻す方法がないこと）を説明している

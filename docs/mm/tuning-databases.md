@@ -1,18 +1,18 @@
-# Tuning Memory for Databases {#tuning-memory-for-databases}
+# データベース向けのメモリチューニング {#tuning-memory-for-databases}
 
-> Why databases fight the kernel's defaults, and how to fix it
+> なぜデータベースはカーネルのデフォルト設定とぶつかるのか、そしてそれをどう直すか
 
-## Why Databases Need Special Memory Tuning {#why-databases-need-special-memory-tuning}
+## なぜデータベースには特別なメモリチューニングが必要か {#why-databases-need-special-memory-tuning}
 
-A general-purpose Linux kernel is tuned for a mix of workloads: compiling code, serving web pages, running containers. Databases break nearly every assumption those defaults are built on.
+汎用のLinuxカーネルは、コードのコンパイル、Webページの配信、コンテナの実行といった多様なワークロードの混在を想定してチューニングされている。データベースは、そうしたデフォルト設定が前提とする仮定のほぼすべてを覆す。
 
-Three properties make databases different:
+データベースを特別なものにしている性質は3つある。
 
-1. **Large shared buffers** - A production PostgreSQL instance might allocate 25% of RAM (32GB+) as a single shared memory region. MySQL's InnoDB buffer pool can be even larger. These are long-lived, heavily accessed allocations that the kernel must not fragment or swap out.
+1. **巨大な共有バッファ** - 本番環境のPostgreSQLインスタンスは、RAMの25%（32GB以上）を単一の共有メモリ領域として割り当てることがある。MySQLのInnoDBバッファプールはさらに大きくなりうる。これらは長寿命で頻繁にアクセスされる割り当てであり、カーネルはこれを断片化させたりスワップアウトしたりしてはならない。
 
-2. **Random I/O patterns** - The kernel's readahead and page cache heuristics assume sequential access. Databases perform random lookups by primary key, index scans that jump across pages, and hash joins. The page cache wastes memory prefetching data that is never read.
+2. **ランダムI/Oパターン** - カーネルの先読み（readahead）やページキャッシュのヒューリスティクスは、シーケンシャルアクセスを前提としている。データベースは主キーによるランダムな検索、page間を飛び回るインデックススキャン、ハッシュ結合を行う。ページキャッシュは、決して読まれないデータを先読みしてメモリを浪費する。
 
-3. **Latency sensitivity** - A web server can absorb a 50ms stall without anyone noticing. A database holding row locks during a 50ms compaction stall causes cascading lock waits, connection pile-ups, and visible application latency. Predictability matters more than throughput.
+3. **レイテンシへの敏感さ** - Webサーバーであれば、50msのストールは誰にも気付かれずに吸収できる。データベースが行ロックを保持したまま50msのコンパクションストールに陥ると、ロック待ちの連鎖、接続の滞留、そしてアプリケーションから見えるレイテンシ悪化を引き起こす。スループットよりも予測可能性の方が重要である。
 
 ```
 General-purpose workload:              Database workload:
@@ -25,30 +25,30 @@ General-purpose workload:              Database workload:
 └─────────────────────────┘            └─────────────────────────┘
 ```
 
-The rest of this page walks through the kernel tunables that address each of these problems, with practical examples for PostgreSQL, MySQL/MariaDB, and Redis.
+本ページの残りでは、これらの問題それぞれに対処するカーネルのチューニング可能なパラメータを、PostgreSQL、MySQL/MariaDB、Redisの実例とともに順に見ていく。
 
-## Huge Pages for Shared Buffers {#huge-pages-for-shared-buffers}
+## 共有バッファ用のhuge page {#huge-pages-for-shared-buffers}
 
-### The Problem {#the-problem}
+### 問題 {#the-problem}
 
-A 32GB shared buffer pool backed by 4KB pages means 8,388,608 page table entries. Every TLB miss during a buffer pool lookup triggers a multi-level page table walk. On a busy OLTP system, TLB misses on the shared buffer become a measurable overhead.
+32GBの共有バッファプールを4KBのpageで裏付けると、8,388,608個のページテーブルエントリが必要になる。バッファプールの検索中にTLBミスが起きるたびに、多段のページテーブルウォークが発生する。高負荷のOLTPシステムでは、共有バッファでのTLBミスが計測可能なオーバーヘッドとなる。
 
-Huge pages (2MB) reduce the page table entry count by 512x. For a 32GB buffer pool, that is 16,384 entries instead of 8 million.
+huge page（2MB）を使うと、ページテーブルエントリの数は1/512になる。32GBのバッファプールであれば、800万個ではなく16,384個のエントリで済む。
 
-### hugetlbfs: Static Huge Pages {#hugetlbfs-static-huge-pages}
+### hugetlbfs: 静的なhuge page {#hugetlbfs-static-huge-pages}
 
-Unlike [THP](thp.md), hugetlbfs pages are pre-allocated at boot and never fragmented or reclaimed. This is exactly what databases want: guaranteed, stable huge page backing for their shared buffers.
+[THP](thp.md)とは異なり、hugetlbfsのpageはブート時に事前割り当てされ、断片化したり回収されたりすることがない。これこそがデータベースの求めるもの、すなわち共有バッファを確実かつ安定してhuge pageで裏付けることである。
 
-#### Reserve Huge Pages {#reserve-huge-pages}
+#### huge pageを予約する {#reserve-huge-pages}
 
 ```bash
-# Reserve 16384 huge pages (32GB with 2MB pages)
+# 16384個のhuge pageを予約する（2MB pageで32GB）
 echo 16384 > /proc/sys/vm/nr_hugepages
 
-# Or at boot via kernel command line (more reliable for large reservations):
+# あるいはブート時にカーネルコマンドラインで指定する（大きな予約ではこちらの方が確実）:
 # hugepages=16384
 
-# Verify allocation:
+# 割り当てを確認する:
 cat /proc/meminfo | grep -i huge
 # HugePages_Total:   16384
 # HugePages_Free:    16384
@@ -56,88 +56,88 @@ cat /proc/meminfo | grep -i huge
 # Hugepagesize:       2048 kB
 ```
 
-!!! warning "Reserve early"
-    Huge page reservation can fail after the system has been running because physical memory becomes fragmented. For production databases, reserve at boot via the kernel command line or via a systemd unit that runs before the database starts.
+!!! warning "早めに予約する"
+    システムがしばらく稼働した後では、物理メモリが断片化するため、huge pageの予約に失敗することがある。本番のデータベースでは、カーネルコマンドラインで、あるいはデータベースの起動前に実行されるsystemdユニットで、ブート時に予約すること。
 
-The kernel's hugetlb subsystem is implemented in [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c). The `set_max_huge_pages()` function handles the reservation logic and will attempt compaction if contiguous memory is not immediately available.
+カーネルのhugetlbサブシステムは[mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c)で実装されている。`set_max_huge_pages()`関数が予約のロジックを担い、連続したメモリがすぐに得られない場合はコンパクションを試みる。
 
-#### PostgreSQL with hugetlbfs {#postgresql-with-hugetlbfs}
+#### PostgreSQLとhugetlbfs {#postgresql-with-hugetlbfs}
 
-PostgreSQL uses System V shared memory or `mmap` for its shared buffers. The `huge_pages` GUC parameter was introduced in PostgreSQL 9.4 ([release notes](https://www.postgresql.org/docs/9.4/release-9-4.html)).
+PostgreSQLは共有バッファにSystem V共有メモリまたは`mmap`を使う。GUCパラメータ`huge_pages`はPostgreSQL 9.4で導入された（[リリースノート](https://www.postgresql.org/docs/9.4/release-9-4.html)）。
 
 ```bash
-# 1. Reserve huge pages (shared_buffers / hugepage size + some overhead)
-#    For shared_buffers = 32GB: 32768MB / 2MB = 16384 pages
-#    Add ~5% overhead for internal structures
+# 1. huge pageを予約する（shared_buffers / hugepageサイズ + 若干のオーバーヘッド）
+#    shared_buffers = 32GB の場合: 32768MB / 2MB = 16384 page
+#    内部構造用に約5%のオーバーヘッドを加える
 echo 17000 > /proc/sys/vm/nr_hugepages
 
-# 2. Allow the postgres user to use huge pages
-#    Option A: sysctl (preferred)
+# 2. postgresユーザーがhuge pageを使えるようにする
+#    方法A: sysctl（推奨）
 echo "vm.hugetlb_shm_group = $(id -g postgres)" > /etc/sysctl.d/hugepages.conf
 sysctl --system
 
-#    Option B: Set memlock limit in /etc/security/limits.conf
+#    方法B: /etc/security/limits.conf でmemlock上限を設定する
 #    postgres  soft  memlock  unlimited
 #    postgres  hard  memlock  unlimited
 
-# 3. Configure PostgreSQL
-# In postgresql.conf:
+# 3. PostgreSQLを設定する
+# postgresql.conf 内で:
 #   shared_buffers = '32GB'
 #   huge_pages = on        # 'on' = require, 'try' = best-effort, 'off' = disable
 ```
 
-When `huge_pages = on`, PostgreSQL calls `shmget()` with `SHM_HUGETLB` (or uses `mmap` with `MAP_HUGETLB` in newer versions). If the kernel cannot satisfy the request from the hugetlb pool, PostgreSQL refuses to start, which is the correct behavior: you want to know at startup, not discover degraded performance later.
+`huge_pages = on`の場合、PostgreSQLは`SHM_HUGETLB`付きで`shmget()`を呼び出す（新しいバージョンでは`MAP_HUGETLB`付きの`mmap`を使う）。カーネルがhugetlbプールから要求を満たせない場合、PostgreSQLは起動を拒否する。これは正しい振る舞いである。性能の劣化に後から気付くのではなく、起動時に知りたいからである。
 
-#### Oracle with hugetlbfs {#oracle-with-hugetlbfs}
+#### Oracleとhugetlbfs {#oracle-with-hugetlbfs}
 
-Oracle's SGA (System Global Area) benefits enormously from huge pages. Oracle calls this "HugePages" in its documentation and it has been a best practice since Oracle 11g.
+OracleのSGA（System Global Area）はhuge pageから大きな恩恵を受ける。Oracleはドキュメントでこれを「HugePages」と呼んでおり、Oracle 11g以来のベストプラクティスとなっている。
 
 ```bash
-# 1. Calculate pages needed: SGA target / hugepage size
-#    For sga_target = 64GB: 65536MB / 2MB = 32768
+# 1. 必要なpage数を計算する: SGAターゲット / hugepageサイズ
+#    sga_target = 64GB の場合: 65536MB / 2MB = 32768
 echo 33000 > /proc/sys/vm/nr_hugepages
 
-# 2. Set memlock for the oracle user
+# 2. oracleユーザーのmemlockを設定する
 #    /etc/security/limits.conf:
 #    oracle  soft  memlock  unlimited
 #    oracle  hard  memlock  unlimited
 
-# 3. Oracle automatically uses huge pages for the SGA if:
-#    - USE_LARGE_PAGES = ONLY (init.ora, recommended)
-#    - Sufficient huge pages are available
-#    - memlock limits are set
+# 3. 次の条件を満たせば、OracleはSGAに自動的にhuge pageを使う:
+#    - USE_LARGE_PAGES = ONLY（init.ora、推奨）
+#    - 十分なhuge pageが利用可能
+#    - memlock上限が設定されている
 ```
 
-#### MySQL/InnoDB with hugetlbfs {#mysqlinnodb-with-hugetlbfs}
+#### MySQL/InnoDBとhugetlbfs {#mysqlinnodb-with-hugetlbfs}
 
 ```bash
-# 1. Reserve huge pages for the InnoDB buffer pool
-#    For innodb_buffer_pool_size = 48GB: 49152MB / 2MB = 24576
+# 1. InnoDBバッファプール用にhuge pageを予約する
+#    innodb_buffer_pool_size = 48GB の場合: 49152MB / 2MB = 24576
 echo 25000 > /proc/sys/vm/nr_hugepages
 
-# 2. Set memlock for the mysql user
+# 2. mysqlユーザーのmemlockを設定する
 #    /etc/security/limits.conf:
 #    mysql  soft  memlock  unlimited
 #    mysql  hard  memlock  unlimited
 
-# 3. Enable in my.cnf:
+# 3. my.cnf で有効にする:
 #    [mysqld]
 #    large-pages
 
-# 4. MySQL must also have CAP_IPC_LOCK capability, or run with sufficient
-#    memlock limits. Check:
+# 4. MySQLにはCAP_IPC_LOCKケーパビリティも必要である。あるいは十分な
+#    memlock上限で実行すること。確認方法:
 cat /proc/$(pidof mysqld)/status | grep HugetlbPages
 ```
 
-## THP: Why Databases Often Disable It {#thp-why-databases-often-disable-it}
+## THP: なぜデータベースはしばしばこれを無効にするのか {#thp-why-databases-often-disable-it}
 
-[Transparent Huge Pages](thp.md) sound like they solve the same problem as hugetlbfs, but the "transparent" part is where the trouble starts.
+[Transparent Huge Pages](thp.md)は、hugetlbfsと同じ問題を解決するように聞こえる。しかし、問題が始まるのはまさに「transparent（透過的）」な部分である。
 
-### The Compaction Problem {#the-compaction-problem}
+### コンパクションの問題 {#the-compaction-problem}
 
-When THP is enabled, the kernel runs `khugepaged` to collapse 4KB pages into 2MB huge pages. To do this, it must find or create 2MB-aligned contiguous free regions. This triggers [compaction](compaction.md) -- moving pages around in physical memory to defragment it.
+THPが有効な場合、カーネルは`khugepaged`を走らせて4KBのpageを2MBのhuge pageにまとめる（collapse）。そのためには、2MB境界に揃った連続空き領域を見つけるか作り出す必要がある。これが[コンパクション](compaction.md)、つまり物理メモリ内でpageを移動して断片化を解消する処理を引き起こす。
 
-Compaction holds zone locks and can stall allocations. For a database handling thousands of queries per second, a compaction stall during a page fault means:
+コンパクションはzoneロックを保持し、割り当てをストールさせることがある。毎秒数千のクエリを処理するデータベースにとって、ページフォールト中のコンパクションストールは次のことを意味する。
 
 ```
 Query arrives
@@ -164,62 +164,62 @@ Other queries waiting on those locks pile up
 Latency spike visible to application
 ```
 
-This is documented in many database vendor guides. MongoDB, Redis, and Oracle all recommend disabling THP. PostgreSQL recommends hugetlbfs instead of THP.
+これは多くのデータベースベンダーのガイドに記載されている。MongoDB、Redis、OracleはいずれもTHPの無効化を推奨している。PostgreSQLはTHPではなくhugetlbfsを推奨している。
 
-The compaction code lives in [mm/compaction.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c). The `compact_zone()` function is where stalls occur -- it migrates pages while holding the zone lock, and cannot be interrupted mid-migration.
+コンパクションのコードは[mm/compaction.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c)にある。ストールが起こるのは`compact_zone()`関数である。この関数はzoneロックを保持したままpageを移行し、移行の途中で中断することはできない。
 
-### Disabling THP {#disabling-thp}
+### THPを無効にする {#disabling-thp}
 
 ```bash
-# Disable immediately (runtime)
+# 即座に無効にする（実行時）
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 
-# Verify
+# 確認する
 cat /sys/kernel/mm/transparent_hugepage/enabled
 # always madvise [never]
 
-# Make persistent via kernel command line:
+# カーネルコマンドラインで永続化する:
 # transparent_hugepage=never
 ```
 
-!!! note "THP madvise mode"
-    Setting THP to `madvise` instead of `never` allows applications to opt-in to THP via `madvise(MADV_HUGEPAGE)` while keeping the default behavior as 4KB pages. This can be a reasonable middle ground on systems running mixed workloads, but most database-dedicated servers use `never` for simplicity.
+!!! note "THPのmadviseモード"
+    THPを`never`ではなく`madvise`に設定すると、デフォルトの振る舞いを4KB pageのままにしつつ、アプリケーションが`madvise(MADV_HUGEPAGE)`でTHPをオプトインできるようになる。混在ワークロードを実行するシステムではこれが妥当な妥協点になりうるが、データベース専用サーバーの多くは単純さのために`never`を使っている。
 
-### When THP Might Be Acceptable {#when-thp-might-be-acceptable}
+### THPが許容されうる場合 {#when-thp-might-be-acceptable}
 
-THP is not universally bad. Analytical/OLAP databases that perform large sequential scans over column stores may benefit from THP because their access patterns align with huge page boundaries. The issue is specifically with random-access OLTP workloads where compaction latency is unpredictable.
+THPが常に悪いわけではない。カラムストアに対して大規模なシーケンシャルスキャンを行う分析系/OLAPデータベースは、アクセスパターンがhuge pageの境界と揃うため、THPの恩恵を受けることがある。問題となるのは、特にコンパクションのレイテンシが予測できないランダムアクセス主体のOLTPワークロードである。
 
 ## vm.swappiness {#vmswappiness}
 
-### Why Databases Set This Low {#why-databases-set-this-low}
+### なぜデータベースはこれを低く設定するのか {#why-databases-set-this-low}
 
-`vm.swappiness` controls how aggressively the kernel reclaims anonymous pages (process memory) versus file-backed pages (page cache). The value ranges from 0 to 200, with the default at 60.
+`vm.swappiness`は、カーネルがファイルバックのpage（ページキャッシュ）と比べて無名page（プロセスのメモリ）をどれだけ積極的に回収するかを制御する。値の範囲は0〜200で、デフォルトは60である。
 
-For databases, the shared buffer pool is anonymous memory. The kernel has no way to know that those anonymous pages contain hot B-tree index nodes that are accessed thousands of times per second. With the default swappiness, the kernel may decide to swap out buffer pool pages to make room for page cache entries from sequential file reads.
+データベースにとって、共有バッファプールは無名メモリである。カーネルには、それらの無名pageに毎秒数千回アクセスされるホットなBツリーのインデックスノードが入っていることを知る術がない。デフォルトのswappinessでは、カーネルはシーケンシャルなファイル読み出しによるページキャッシュのエントリのために場所を空けようと、バッファプールのpageをスワップアウトすると判断することがある。
 
-The swappiness value feeds into the reclaim scanner's cost calculation in [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c). Higher values make the scanner more willing to scan and reclaim anonymous pages; lower values bias toward reclaiming file pages.
+swappinessの値は、[mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c)にある回収スキャナのコスト計算に組み込まれる。値が大きいほどスキャナは無名pageをスキャン・回収しやすくなり、値が小さいほどファイルpageの回収に偏る。
 
 ```bash
-# Set swappiness to 1 (strongly prefer reclaiming file pages)
+# swappinessを1に設定する（ファイルpageの回収を強く優先する）
 sysctl -w vm.swappiness=1
 
-# Make persistent
+# 永続化する
 echo "vm.swappiness = 1" >> /etc/sysctl.d/database.conf
 ```
 
-**Why 1 and not 0?**
+**なぜ0ではなく1なのか？**
 
-Setting `vm.swappiness = 0` tells the kernel to avoid swapping anonymous pages unless the system is under severe memory pressure (free + file pages below the high watermark of a zone). This sounds ideal, but in practice it means the kernel goes directly from "no swap" to "OOM pressure" with no graceful middle ground. A value of 1 provides a minimal but non-zero willingness to swap, giving the kernel a pressure release valve before reaching OOM conditions.
+`vm.swappiness = 0`に設定すると、カーネルはシステムが深刻なメモリ圧迫状態（空きpage + ファイルpageがzoneのhighウォーターマークを下回る）にない限り、無名pageのスワップを避けるようになる。これは理想的に聞こえるが、実際にはカーネルが「スワップなし」から「OOMの圧迫」へと、穏やかな中間段階なしに一気に移行することを意味する。値を1にすると、最小限ではあるがゼロではないスワップの意思が残り、OOM状態に達する前の圧力逃がし弁をカーネルに与えることになる。
 
-!!! info "Databases that manage their own cache"
-    PostgreSQL, MySQL, and Oracle all have their own buffer management with LRU eviction, write-behind, and prefetching. They are better at managing their hot set than the kernel's generic LRU. Keeping `vm.swappiness` low lets the database's own cache management do its job without the kernel second-guessing it.
+!!! info "独自のキャッシュを管理するデータベース"
+    PostgreSQL、MySQL、Oracleはいずれも、LRUによる追い出し、遅延書き込み（write-behind）、先読みを備えた独自のバッファ管理を持っている。これらはホットな集合の管理において、カーネルの汎用LRUよりも優れている。`vm.swappiness`を低く保つことで、カーネルに横から口出しされることなく、データベース自身のキャッシュ管理がその役割を果たせるようになる。
 
-## vm.dirty_ratio and vm.dirty_background_ratio {#vmdirtyratio-and-vmdirtybackground_ratio}
+## vm.dirty_ratioとvm.dirty_background_ratio {#vmdirtyratio-and-vmdirtybackground_ratio}
 
-### The Write-Ahead Log Pattern {#the-write-ahead-log-pattern}
+### ログ先行書き込みのパターン {#the-write-ahead-log-pattern}
 
-Databases use write-ahead logging (WAL): every data modification is first written sequentially to a log file, then `fsync()`'d. The actual data files are written asynchronously later (checkpointing). This creates two distinct I/O patterns:
+データベースはログ先行書き込み（WAL）を使う。すべてのデータ変更はまずログファイルにシーケンシャルに書き込まれ、`fsync()`される。実際のデータファイルは後で非同期に書き込まれる（チェックポイント処理）。これにより、2つの異なるI/Oパターンが生まれる。
 
 ```
 WAL writes:                         Data file writes:
@@ -231,47 +231,47 @@ WAL writes:                         Data file writes:
 └──────────────────┘                └──────────────────┘
 ```
 
-The kernel's dirty page writeback is controlled by two ratios:
+カーネルのダーティページのライトバックは、2つの比率によって制御される。
 
-- **`vm.dirty_background_ratio`** (default: 10%) - When dirty pages exceed this percentage of available memory, the kernel starts background writeback via per-device writeback threads (`bdi_writeback`).
-- **`vm.dirty_ratio`** (default: 20%) - When dirty pages exceed this, processes performing writes are **blocked** until writeback catches up. This is a synchronous stall.
+- **`vm.dirty_background_ratio`**（デフォルト: 10%）- ダーティページが利用可能メモリのこの割合を超えると、カーネルはデバイスごとのライトバックスレッド（`bdi_writeback`）によるバックグラウンドのライトバックを開始する。
+- **`vm.dirty_ratio`**（デフォルト: 20%）- ダーティページがこの値を超えると、書き込みを行うプロセスはライトバックが追いつくまで**ブロック**される。これは同期的なストールである。
 
-The writeback logic is in [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c). The `balance_dirty_pages()` function is where processes get throttled when dirty pages exceed the threshold.
+ライトバックのロジックは[mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c)にある。ダーティページがしきい値を超えたときにプロセスがスロットリングされるのは`balance_dirty_pages()`関数においてである。
 
-### Why the Defaults Hurt Databases {#why-the-defaults-hurt-databases}
+### なぜデフォルト値がデータベースに害を与えるのか {#why-the-defaults-hurt-databases}
 
-On a 128GB server, 20% means 25GB of dirty pages can accumulate before processes stall. When a checkpoint flushes 25GB of dirty data at once, it creates a thundering herd of I/O that saturates the disk and stalls WAL writes.
+128GBのサーバーでは、20%は、プロセスがストールするまでに25GBのダーティページが溜まりうることを意味する。チェックポイントが25GBのダーティデータを一度にフラッシュすると、ディスクを飽和させてWALの書き込みをストールさせるI/Oの殺到（thundering herd）が生じる。
 
 ```bash
-# Lower the ratios for database workloads
+# データベースワークロード向けに比率を下げる
 sysctl -w vm.dirty_background_ratio=3
 sysctl -w vm.dirty_ratio=10
 
-# Or use absolute byte values for more predictable behavior:
+# あるいは、より予測可能な振る舞いのために絶対的なバイト値を使う:
 sysctl -w vm.dirty_background_bytes=268435456   # 256MB
 sysctl -w vm.dirty_bytes=1073741824              # 1GB
 
-# Make persistent
+# 永続化する
 cat >> /etc/sysctl.d/database.conf << 'EOF'
 vm.dirty_background_ratio = 3
 vm.dirty_ratio = 10
 EOF
 ```
 
-Lowering these values causes the kernel to write back dirty pages more frequently in smaller batches, which:
+これらの値を下げると、カーネルはダーティページをより頻繁に、より小さな単位でライトバックするようになる。その結果、次の効果がある。
 
-- Reduces checkpoint I/O spikes
-- Keeps WAL write latency more predictable
-- Avoids the cliff where processes hit `dirty_ratio` and stall
+- チェックポイントのI/Oスパイクが減る
+- WAL書き込みのレイテンシがより予測可能になる
+- プロセスが`dirty_ratio`に達してストールするという崖を避けられる
 
-!!! tip "Byte values vs ratios"
-    On large-memory servers (256GB+), even 3% is ~8GB of dirty data. Using `vm.dirty_background_bytes` and `vm.dirty_bytes` gives you absolute control regardless of total RAM. The byte values override the ratio values when both are set.
+!!! tip "バイト値と比率"
+    大容量メモリのサーバー（256GB以上）では、3%でさえ約8GBのダーティデータになる。`vm.dirty_background_bytes`と`vm.dirty_bytes`を使うと、総RAM量に関係なく絶対値で制御できる。両方が設定されている場合、バイト値が比率の値より優先される。
 
-## NUMA Pinning {#numa-pinning}
+## NUMAピニング {#numa-pinning}
 
-### The Problem with Database Shared Buffers on NUMA {#the-problem-with-database-shared-buffers-on-numa}
+### NUMA上でのデータベース共有バッファの問題 {#the-problem-with-database-shared-buffers-on-numa}
 
-On a [NUMA](numa.md) system, the default memory allocation policy is "local allocation" -- memory is allocated on the node where the requesting CPU runs. For a database shared buffer pool, this means:
+[NUMA](numa.md)システムでは、デフォルトのメモリ割り当てポリシーは「ローカル割り当て」、つまり要求したCPUが動いているノード上にメモリを割り当てるというものである。データベースの共有バッファプールにとって、これは次のことを意味する。
 
 ```
 Node 0 (CPUs 0-15)           Node 1 (CPUs 16-31)
@@ -283,144 +283,144 @@ Node 0 (CPUs 0-15)           Node 1 (CPUs 16-31)
 └──────────────────┘          └──────────────────┘
 ```
 
-If PostgreSQL's postmaster starts on Node 0 and allocates shared buffers there, every backend running on Node 1 pays the cross-node latency penalty for every buffer pool access. Since the buffer pool is the most frequently accessed data structure in a database, this is devastating for throughput.
+PostgreSQLのpostmasterがNode 0で起動してそこに共有バッファを割り当てると、Node 1で動作するすべてのバックエンドは、バッファプールへのアクセスのたびにノード間のレイテンシのペナルティを払うことになる。バッファプールはデータベースで最も頻繁にアクセスされるデータ構造であるため、これはスループットにとって壊滅的である。
 
 ### numactl --interleave {#numactl-interleave}
 
-The fix is to interleave the shared buffer allocation across all NUMA nodes so that, on average, each CPU has equal local/remote access:
+解決策は、共有バッファの割り当てをすべてのNUMAノードにインターリーブすることである。そうすれば、平均的に各CPUのローカル/リモートアクセスが均等になる。
 
 ```bash
-# Start PostgreSQL with interleaved memory allocation
+# メモリ割り当てをインターリーブしてPostgreSQLを起動する
 numactl --interleave=all pg_ctl start -D /var/lib/postgresql/data
 
-# For MySQL
+# MySQLの場合
 numactl --interleave=all mysqld_safe &
 
-# For systemd services, add to the unit file:
+# systemdサービスの場合は、ユニットファイルに次を追加する:
 # [Service]
 # ExecStart=/usr/bin/numactl --interleave=all /usr/bin/postgres -D /var/lib/postgresql/data
 ```
 
-Interleaving distributes pages round-robin across nodes. No single CPU gets optimal locality, but no CPU gets worst-case remote access for the majority of the buffer pool either. This is the right trade-off for shared data structures accessed by all CPUs.
+インターリーブはpageをノード間にラウンドロビンで分散させる。どのCPUも最適な局所性は得られないが、バッファプールの大部分に対して最悪のリモートアクセスとなるCPUもない。これは、すべてのCPUからアクセスされる共有データ構造にとって正しいトレードオフである。
 
-Linux 6.3 introduced NUMA memory balancing improvements (see [LWN: NUMA balancing gets some tweaks](https://lwn.net/Articles/920920/)) that can automatically migrate pages toward their accessing CPUs. However, for large shared buffers accessed by many CPUs, interleaving remains the recommended approach because automatic balancing cannot satisfy all accessors simultaneously.
+Linux 6.3では、アクセスするCPUの方へpageを自動的に移行できるNUMAメモリバランシングの改良が導入された（[LWN: NUMA balancing gets some tweaks](https://lwn.net/Articles/920920/)を参照）。しかし、多数のCPUからアクセスされる大きな共有バッファについては、自動バランシングではすべてのアクセス元を同時に満足させることができないため、インターリーブが引き続き推奨される方法である。
 
-### Verifying NUMA Distribution {#verifying-numa-distribution}
+### NUMAの分布を確認する {#verifying-numa-distribution}
 
 ```bash
-# Check per-node memory usage for a process
+# プロセスのノードごとのメモリ使用量を確認する
 numastat $(pidof postgres) 2>/dev/null || numastat -p $(pidof postgres)
 
-# Look for roughly equal distribution across nodes:
+# ノード間でおおむね均等に分布しているかを見る:
 #                  Node 0      Node 1
 # Heap             15360       15680    <-- interleaved: good
 # Stack               4           0
 # Total            16200       16100
 
-# If you see heavy skew (90%+ on one node), interleaving is not working
+# 大きな偏り（1つのノードに90%以上）がある場合、インターリーブは機能していない
 ```
 
 ## vm.overcommit_memory {#vmovercommit_memory}
 
-### Why Strict Overcommit for Databases {#why-strict-overcommit-for-databases}
+### なぜデータベースには厳格なオーバーコミットなのか {#why-strict-overcommit-for-databases}
 
-As described in [Memory Overcommit](overcommit.md), Linux defaults to heuristic overcommit (mode 0). This is fine for general workloads, but databases have a specific problem: they allocate large shared buffers at startup and expect that memory to be available for the lifetime of the process.
+[メモリオーバーコミット](overcommit.md)で説明したように、Linuxのデフォルトはヒューリスティックなオーバーコミット（モード0）である。これは一般的なワークロードには問題ないが、データベースには特有の問題がある。データベースは起動時に大きな共有バッファを割り当て、そのメモリがプロセスの生存期間中ずっと利用可能であることを期待する。
 
-With heuristic overcommit, the kernel may allow more total allocations than physical memory can support. If this happens, the [OOM killer](oom.md) wakes up and picks a victim -- and a database with a 64GB shared buffer pool is an attractive target due to its high RSS.
+ヒューリスティックなオーバーコミットでは、カーネルは物理メモリが支えられる以上の総割り当てを許してしまうことがある。そうなると[OOM killer](oom.md)が起動して犠牲者を選ぶ。そして64GBの共有バッファプールを持つデータベースは、RSSが大きいために格好の標的となる。
 
 ```bash
-# Mode 2: strict accounting
+# モード2: 厳格なアカウンティング
 sysctl -w vm.overcommit_memory=2
 
-# Set the ratio to allow enough for the database + OS
-# On a 128GB server with 32GB swap:
+# データベース + OSに十分な量を許すよう比率を設定する
+# 128GBのサーバーで32GBのスワップがある場合:
 # CommitLimit = (128GB * overcommit_ratio/100) + 32GB
 sysctl -w vm.overcommit_ratio=80
 # CommitLimit = (128 * 0.80) + 32 = 134.4GB
 
-# Make persistent
+# 永続化する
 cat >> /etc/sysctl.d/database.conf << 'EOF'
 vm.overcommit_memory = 2
 vm.overcommit_ratio = 80
 EOF
 ```
 
-The accounting logic is in [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) (`__vm_enough_memory()`). In mode 2, every `mmap()` and `brk()` call checks the commit charge against the commit limit. If the new allocation would exceed the limit, the syscall fails with `ENOMEM`.
+アカウンティングのロジックは[mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c)（`__vm_enough_memory()`）にある。モード2では、すべての`mmap()`と`brk()`呼び出しがコミット量をコミット上限と照合する。新しい割り当てが上限を超える場合、システムコールは`ENOMEM`で失敗する。
 
-**The trade-off:** Mode 2 means `fork()` from a large process can fail because the child's address space counts against the commit limit, even with copy-on-write. PostgreSQL forks a backend for each connection, so `overcommit_ratio` must be high enough to account for the apparent (not actual) memory cost of all those forked backends. Monitor `Committed_AS` in `/proc/meminfo` to verify headroom.
+**トレードオフ:** モード2では、大きなプロセスからの`fork()`が失敗しうる。copy-on-writeであっても、子プロセスのアドレス空間がコミット上限に対して計上されるからである。PostgreSQLは接続ごとにバックエンドをforkするため、`overcommit_ratio`は、forkされたすべてのバックエンドの見かけ上の（実際のではない）メモリコストを賄えるだけ高くしなければならない。`/proc/meminfo`の`Committed_AS`を監視して、余裕があることを確認すること。
 
-!!! warning "Commit accounting and fork()"
-    A PostgreSQL server with 32GB `shared_buffers` and 200 connections may show a `Committed_AS` much larger than actual RAM usage because each forked backend inherits the parent's address space in the commit accounting. Set `overcommit_ratio` conservatively and monitor `Committed_AS` vs `CommitLimit`.
+!!! warning "コミットアカウンティングとfork()"
+    `shared_buffers`が32GBで接続数が200のPostgreSQLサーバーでは、実際のRAM使用量よりはるかに大きな`Committed_AS`が表示されることがある。forkされた各バックエンドが、コミットアカウンティング上で親のアドレス空間を継承するためである。`overcommit_ratio`は控えめに設定し、`Committed_AS`と`CommitLimit`を比較して監視すること。
 
 ## vm.zone_reclaim_mode {#vmzonereclaimmode}
 
-### Why Databases Should Disable Zone Reclaim {#why-databases-should-disable-zone-reclaim}
+### なぜデータベースはzone reclaimを無効にすべきなのか {#why-databases-should-disable-zone-reclaim}
 
-On NUMA systems, `vm.zone_reclaim_mode` controls whether the kernel tries to reclaim memory from the local node before falling back to remote nodes. When enabled, the kernel may evict page cache or even swap out pages from the local zone rather than allocate from a remote node.
+NUMAシステムでは、`vm.zone_reclaim_mode`は、リモートノードにフォールバックする前に、カーネルがローカルノードからメモリを回収しようとするかどうかを制御する。有効な場合、カーネルはリモートノードから割り当てる代わりに、ローカルzoneのページキャッシュを追い出したり、pageをスワップアウトしたりすることさえある。
 
-This is exactly wrong for databases. Database buffer pools are not page cache -- they are anonymous memory that is expensive to reconstruct. Even for page cache, evicting a hot cached WAL segment to satisfy a local allocation is worse than paying the cross-node latency.
+これはデータベースにとってまさに間違った振る舞いである。データベースのバッファプールはページキャッシュではなく、再構築にコストのかかる無名メモリである。ページキャッシュについても、ローカル割り当てを満たすためにホットなWALセグメントのキャッシュを追い出すのは、ノード間のレイテンシを払うより悪い。
 
 ```bash
-# Disable zone reclaim (default on most modern distros, but verify)
+# zone reclaimを無効にする（最近のほとんどのディストリビューションではデフォルトだが、確認すること）
 sysctl -w vm.zone_reclaim_mode=0
 
-# Make persistent
+# 永続化する
 echo "vm.zone_reclaim_mode = 0" >> /etc/sysctl.d/database.conf
 ```
 
-The zone reclaim logic lives in [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) (`node_reclaim()`). When mode is 0, the allocator skips local reclaim and falls back to remote nodes immediately. When mode is non-zero, it attempts local reclaim first, which can cause latency spikes on NUMA database workloads.
+zone reclaimのロジックは[mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c)（`node_reclaim()`）にある。モードが0の場合、アロケータはローカルでの回収をスキップして直ちにリモートノードにフォールバックする。モードが0以外の場合は、まずローカルでの回収を試みるため、NUMA上のデータベースワークロードではレイテンシスパイクを引き起こすことがある。
 
-The kernel changed the default from 1 to 0 in commit [4f9b16a6 ("mm: disable zone_reclaim_mode by default")](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4f9b16a64753d0bb607454347036dc997fd03b82), recognizing that the old behavior caused more harm than good for most workloads. Verify your system has the sane default:
+カーネルはコミット[4f9b16a6 ("mm: disable zone_reclaim_mode by default")](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=4f9b16a64753d0bb607454347036dc997fd03b82)でデフォルト値を1から0に変更した。古い振る舞いはほとんどのワークロードにとって益より害の方が大きいと認められたためである。システムが妥当なデフォルト値になっていることを確認すること。
 
 ```bash
 cat /proc/sys/vm/zone_reclaim_mode
-# Should be: 0
+# 0 であるべき
 ```
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
-### Key /proc/meminfo Fields {#key-procmeminfo-fields}
+### /proc/meminfoの主要フィールド {#key-procmeminfo-fields}
 
 ```bash
-# Essential fields for database workloads
+# データベースワークロードにとって必須のフィールド
 cat /proc/meminfo | grep -E \
   'MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree|Dirty|Writeback|AnonPages|Mapped|Shmem|HugePages|Committed_AS|CommitLimit'
 ```
 
-| Field | What It Tells You | Warning Sign |
+| フィールド | 何が分かるか | 警告サイン |
 |-------|-------------------|--------------|
-| `MemAvailable` | How much memory can be allocated without swapping | Dropping below database buffer pool size |
-| `SwapFree` | Remaining swap space | Any swap usage on a tuned database server is a red flag |
-| `Dirty` | Pages modified but not yet written to disk | Sustained high values mean writeback cannot keep up |
-| `Writeback` | Pages currently being written to disk | Sustained non-zero means I/O bottleneck |
-| `AnonPages` | Non-file-backed pages (includes buffer pools) | Should be stable once database is warmed up |
-| `Shmem` | Shared memory (PostgreSQL shared buffers use this) | Should match your shared_buffers roughly |
-| `HugePages_Free` | Unused huge pages | Should drop after database starts, stay stable |
-| `Committed_AS` | Total committed address space | Approaching `CommitLimit` means new allocations will fail (mode 2) |
+| `MemAvailable` | スワップせずに割り当て可能なメモリ量 | データベースのバッファプールサイズを下回る |
+| `SwapFree` | 残りのスワップ領域 | チューニング済みのデータベースサーバーでは、スワップの使用は少しでも危険信号 |
+| `Dirty` | 変更されたがまだディスクに書き込まれていないpage | 高い値が続くのは、ライトバックが追いついていないことを意味する |
+| `Writeback` | 現在ディスクに書き込み中のpage | 非ゼロが続くのはI/Oのボトルネックを意味する |
+| `AnonPages` | ファイルバックでないpage（バッファプールを含む） | データベースのウォームアップ後は安定しているべき |
+| `Shmem` | 共有メモリ（PostgreSQLの共有バッファはこれを使う） | shared_buffersとおおむね一致するべき |
+| `HugePages_Free` | 未使用のhuge page | データベースの起動後に減り、その後は安定しているべき |
+| `Committed_AS` | コミット済みのアドレス空間の合計 | `CommitLimit`に近づくと、新しい割り当てが失敗する（モード2） |
 
-### Key /proc/vmstat Fields {#key-procvmstat-fields}
+### /proc/vmstatの主要フィールド {#key-procvmstat-fields}
 
 ```bash
-# Real-time monitoring of reclaim and compaction
+# 回収とコンパクションのリアルタイム監視
 watch -n 1 'cat /proc/vmstat | grep -E \
   "pgscan_direct|pgsteal_direct|pgscan_kswapd|pgsteal_kswapd|pswpin|pswpout|compact_stall|compact_fail|thp_fault_alloc|thp_fault_fallback|numa_hit|numa_miss|numa_foreign"'
 ```
 
-| Counter | What It Tells You | Warning Sign |
+| カウンタ | 何が分かるか | 警告サイン |
 |---------|-------------------|--------------|
-| `pgscan_direct` | Direct reclaim scanning (process stalled) | Any increase under normal load |
-| `pgsteal_direct` | Pages reclaimed by direct reclaim | Process had to wait for memory |
-| `pswpin` / `pswpout` | Pages swapped in/out | Any activity on a tuned server |
-| `compact_stall` | Processes stalled waiting for compaction | Increasing = THP or hugepage allocation issues |
-| `compact_fail` | Failed compaction attempts | High ratio to compact_stall = fragmentation |
-| `thp_fault_fallback` | THP allocations that fell back to 4KB | Indicates fragmentation if THP is enabled |
-| `numa_hit` / `numa_miss` | Local vs remote NUMA allocations | High `numa_miss` = memory policy misconfiguration |
+| `pgscan_direct` | 直接回収によるスキャン（プロセスがストールしている） | 通常負荷下での増加はすべて |
+| `pgsteal_direct` | 直接回収によって回収されたpage | プロセスがメモリを待たなければならなかった |
+| `pswpin` / `pswpout` | スワップイン/アウトされたpage | チューニング済みサーバーでの活動はすべて |
+| `compact_stall` | コンパクションを待ってストールしたプロセス | 増加 = THPまたはhugepageの割り当ての問題 |
+| `compact_fail` | 失敗したコンパクションの試行 | compact_stallに対する比率が高い = 断片化 |
+| `thp_fault_fallback` | 4KBにフォールバックしたTHPの割り当て | THPが有効な場合、断片化を示す |
+| `numa_hit` / `numa_miss` | ローカル対リモートのNUMA割り当て | `numa_miss`が高い = メモリポリシーの設定ミス |
 
-### A Practical Monitoring Script {#a-practical-monitoring-script}
+### 実用的な監視スクリプト {#a-practical-monitoring-script}
 
 ```bash
 #!/bin/bash
-# db-memcheck.sh: Quick health check for database memory configuration
+# db-memcheck.sh: データベースのメモリ設定の簡易ヘルスチェック
 
 echo "=== Huge Pages ==="
 grep -i huge /proc/meminfo
@@ -453,29 +453,29 @@ echo "Enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
 echo "Defrag:  $(cat /sys/kernel/mm/transparent_hugepage/defrag)"
 ```
 
-## Practical Examples {#practical-examples}
+## 実践例 {#practical-examples}
 
 ### PostgreSQL {#postgresql}
 
-A complete sysctl and configuration for a 128GB server dedicated to PostgreSQL:
+PostgreSQL専用の128GBサーバー向けの、完全なsysctlと設定の例:
 
 ```bash
 # /etc/sysctl.d/postgresql.conf
 
-# Huge pages: reserve for 32GB shared_buffers + overhead
+# huge page: 32GBのshared_buffers + オーバーヘッド分を予約
 vm.nr_hugepages = 17000
 
-# Swap: strongly prefer keeping anonymous pages in RAM
+# スワップ: 無名pageをRAMに保持することを強く優先
 vm.swappiness = 1
 
-# Dirty pages: frequent small flushes instead of large bursts
+# ダーティページ: 大きなバーストではなく頻繁で小さなフラッシュ
 vm.dirty_background_ratio = 3
 vm.dirty_ratio = 10
 
-# NUMA: disable zone reclaim
+# NUMA: zone reclaimを無効化
 vm.zone_reclaim_mode = 0
 
-# Overcommit: strict accounting
+# オーバーコミット: 厳格なアカウンティング
 vm.overcommit_memory = 2
 vm.overcommit_ratio = 80
 ```
@@ -484,12 +484,12 @@ vm.overcommit_ratio = 80
 # postgresql.conf
 shared_buffers = '32GB'
 huge_pages = on
-effective_cache_size = '80GB'    # Tells planner about OS cache, not an allocation
+effective_cache_size = '80GB'    # プランナにOSキャッシュの量を伝えるもので、割り当てではない
 wal_buffers = '64MB'
 ```
 
 ```bash
-# systemd override: /etc/systemd/system/postgresql.service.d/numa.conf
+# systemdのオーバーライド: /etc/systemd/system/postgresql.service.d/numa.conf
 [Service]
 ExecStart=
 ExecStart=/usr/bin/numactl --interleave=all /usr/bin/postgres -D /var/lib/postgresql/data
@@ -497,22 +497,22 @@ LimitMEMLOCK=infinity
 ```
 
 ```bash
-# Disable THP
+# THPを無効にする
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 
-# Or via kernel command line (persistent):
+# あるいはカーネルコマンドラインで（永続的）:
 # transparent_hugepage=never
 ```
 
 ### MySQL / MariaDB {#mysql-mariadb}
 
-A complete configuration for a 64GB server dedicated to MySQL:
+MySQL専用の64GBサーバー向けの完全な設定例:
 
 ```bash
 # /etc/sysctl.d/mysql.conf
 
-# Huge pages for 40GB InnoDB buffer pool
+# 40GBのInnoDBバッファプール用のhuge page
 vm.nr_hugepages = 21000
 
 vm.swappiness = 1
@@ -527,66 +527,66 @@ vm.overcommit_ratio = 85
 # /etc/my.cnf.d/server.cnf
 [mysqld]
 innodb_buffer_pool_size = 40G
-innodb_buffer_pool_instances = 8    # Reduce mutex contention
-large-pages                         # Enable huge pages
+innodb_buffer_pool_instances = 8    # mutex競合を減らす
+large-pages                         # huge pageを有効にする
 
-# InnoDB manages its own flushing; these complement the sysctl settings:
-innodb_flush_method = O_DIRECT      # Bypass page cache for data files
-innodb_io_capacity = 2000           # Match your storage IOPS
+# InnoDBは独自にフラッシュを管理する。以下はsysctlの設定を補完する:
+innodb_flush_method = O_DIRECT      # データファイルについてページキャッシュをバイパスする
+innodb_io_capacity = 2000           # ストレージのIOPSに合わせる
 innodb_io_capacity_max = 4000
 ```
 
-Using `O_DIRECT` for InnoDB is important: it tells the kernel to bypass the page cache for data file I/O, since InnoDB maintains its own buffer pool. This avoids double-caching and reduces memory pressure. The interaction between `O_DIRECT` and the page cache is implemented in [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c).
+InnoDBで`O_DIRECT`を使うことは重要である。InnoDBは独自のバッファプールを持っているので、`O_DIRECT`はデータファイルのI/Oについてページキャッシュをバイパスするようカーネルに指示する。これにより二重キャッシュを避け、メモリ圧迫を減らせる。`O_DIRECT`とページキャッシュの相互作用は[mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c)で実装されている。
 
 ```bash
-# Start with NUMA interleaving
+# NUMAインターリーブで起動する
 numactl --interleave=all mysqld_safe &
 
-# Disable THP
+# THPを無効にする
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
 ### Redis {#redis}
 
-Redis is single-threaded (per shard) and keeps its entire dataset in anonymous memory. Its tuning needs are different from disk-based databases but the memory management concerns overlap.
+Redisは（シャードごとに）シングルスレッドで、データセット全体を無名メモリに保持する。チューニングの要件はディスクベースのデータベースとは異なるが、メモリ管理上の懸念は重なる部分がある。
 
 ```bash
 # /etc/sysctl.d/redis.conf
 
-# Redis does not use huge pages for its main data structures
-# (it uses jemalloc with small allocations), but if you use
-# large Redis instances, huge pages can still help.
-# vm.nr_hugepages = ...  # Usually not needed for Redis
+# Redisは主要なデータ構造にhuge pageを使わない
+# （小さな割り当てを行うjemallocを使う）が、大きな
+# Redisインスタンスを使う場合はhuge pageが役立つこともある。
+# vm.nr_hugepages = ...  # Redisでは通常不要
 
-# Critical: Redis forks for BGSAVE/BGREWRITEAOF
-# Overcommit must allow fork() to succeed
-vm.overcommit_memory = 1    # Redis recommends mode 1, not mode 2!
+# 重要: RedisはBGSAVE/BGREWRITEAOFのためにforkする
+# オーバーコミットの設定はfork()の成功を許さなければならない
+vm.overcommit_memory = 1    # Redisはモード2ではなくモード1を推奨している!
 
 vm.swappiness = 1
 vm.zone_reclaim_mode = 0
 
-# Lower dirty ratios help BGSAVE complete faster
+# ダーティ比率を下げるとBGSAVEが速く完了しやすくなる
 vm.dirty_background_ratio = 3
 vm.dirty_ratio = 10
 ```
 
-!!! warning "Redis and overcommit mode 2"
-    Unlike PostgreSQL and MySQL, Redis recommends `vm.overcommit_memory = 1` (always overcommit). This is because Redis uses `fork()` for background persistence (BGSAVE, BGREWRITEAOF). A Redis instance using 50GB of RAM needs to fork, creating a child with a 50GB address space. With mode 2, this fork will fail unless `CommitLimit` has 50GB of headroom, which defeats the purpose of strict accounting. Mode 1 allows the fork to succeed, relying on copy-on-write to avoid actually needing 100GB.
+!!! warning "Redisとオーバーコミットのモード2"
+    PostgreSQLやMySQLとは異なり、Redisは`vm.overcommit_memory = 1`（常にオーバーコミット）を推奨している。これはRedisがバックグラウンドの永続化（BGSAVE、BGREWRITEAOF）に`fork()`を使うためである。50GBのRAMを使うRedisインスタンスはforkする必要があり、50GBのアドレス空間を持つ子プロセスが作られる。モード2では、`CommitLimit`に50GBの余裕がない限りこのforkは失敗し、厳格なアカウンティングの意味がなくなってしまう。モード1ではforkが成功し、copy-on-writeによって実際に100GBを必要とすることを避ける。
 
 ```bash
-# Disable THP: Redis strongly recommends this
-# Redis will log a warning at startup if THP is enabled
+# THPを無効にする: Redisはこれを強く推奨している
+# THPが有効な場合、Redisは起動時に警告をログに出す
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Check Your Current Settings {#check-your-current-settings}
+### 現在の設定を確認する {#check-your-current-settings}
 
 ```bash
-# Display all relevant sysctl values at once
+# 関連するsysctlの値をまとめて表示する
 echo "=== Current Database Memory Tunables ==="
 sysctl vm.swappiness vm.dirty_ratio vm.dirty_background_ratio \
        vm.overcommit_memory vm.overcommit_ratio vm.zone_reclaim_mode \
@@ -595,50 +595,50 @@ echo ""
 echo "THP enabled: $(cat /sys/kernel/mm/transparent_hugepage/enabled)"
 ```
 
-### Observe Swap Behavior Under Memory Pressure {#observe-swap-behavior-under-memory-pressure}
+### メモリ圧迫下のスワップの振る舞いを観察する {#observe-swap-behavior-under-memory-pressure}
 
 ```bash
-# Terminal 1: Monitor swap activity
+# 端末1: スワップの活動を監視する
 watch -n 1 'grep -E "SwapTotal|SwapFree|SwapCached" /proc/meminfo; echo "---"; grep -E "pswpin|pswpout" /proc/vmstat'
 
-# Terminal 2: Create memory pressure (adjust size for your system)
+# 端末2: メモリ圧迫を作り出す（サイズはシステムに合わせて調整する）
 stress-ng --vm 2 --vm-bytes 80% --timeout 30s
 
-# Compare behavior with vm.swappiness=60 vs vm.swappiness=1
+# vm.swappiness=60 と vm.swappiness=1 で振る舞いを比較する
 ```
 
-### Measure NUMA Effects {#measure-numa-effects}
+### NUMAの影響を測定する {#measure-numa-effects}
 
 ```bash
-# Allocate memory on a specific node vs interleaved
-# and measure access latency with numactl:
+# 特定のノード上とインターリーブとでメモリを割り当て、
+# numactlでアクセスレイテンシを測定する:
 numactl --membind=0 -- stress-ng --vm 1 --vm-bytes 1G --timeout 10s --metrics
 numactl --interleave=all -- stress-ng --vm 1 --vm-bytes 1G --timeout 10s --metrics
 
-# Check where a running process has its memory:
+# 実行中のプロセスのメモリがどこにあるかを確認する:
 numastat -p $(pidof postgres)
 ```
 
-### Watch Dirty Page Writeback {#watch-dirty-page-writeback}
+### ダーティページのライトバックを観察する {#watch-dirty-page-writeback}
 
 ```bash
-# Terminal 1: Watch dirty page count
+# 端末1: ダーティページ数を監視する
 watch -n 0.5 'grep -E "^Dirty|^Writeback" /proc/meminfo'
 
-# Terminal 2: Generate writes
+# 端末2: 書き込みを発生させる
 dd if=/dev/zero of=/tmp/testfile bs=1M count=2048 conv=fdatasync
 
-# Observe how dirty pages accumulate up to dirty_background_ratio
-# then writeback kicks in, and how they are capped at dirty_ratio
+# ダーティページがdirty_background_ratioまで溜まってから
+# ライトバックが始まる様子と、dirty_ratioで頭打ちになる様子を観察する
 ```
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [docs.kernel.org: vm.overcommit_memory](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) - Kernel documentation for all vm sysctl tunables
-- [docs.kernel.org: hugetlbpage](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) - Kernel documentation for huge page configuration
-- [LWN: NUMA in a hurry](https://lwn.net/Articles/473440/) - Overview of NUMA memory management in Linux
-- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) - Original THP design and trade-offs
-- [LWN: Better active/inactive list balancing](https://lwn.net/Articles/495543/) - How the kernel decides what to reclaim
-- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) - Reclaim, swappiness, and zone reclaim logic
-- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) - Dirty page writeback and throttling
-- [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) - Huge page reservation and allocation
+- [docs.kernel.org: vm.overcommit_memory](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) - vm sysctlのすべてのチューニング可能なパラメータに関するカーネルドキュメント
+- [docs.kernel.org: hugetlbpage](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) - huge pageの設定に関するカーネルドキュメント
+- [LWN: NUMA in a hurry](https://lwn.net/Articles/473440/) - LinuxにおけるNUMAメモリ管理の概要
+- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) - THPの当初の設計とトレードオフ
+- [LWN: Better active/inactive list balancing](https://lwn.net/Articles/495543/) - カーネルが何を回収するかをどう決めるか
+- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) - 回収、swappiness、zone reclaimのロジック
+- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) - ダーティページのライトバックとスロットリング
+- [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) - huge pageの予約と割り当て

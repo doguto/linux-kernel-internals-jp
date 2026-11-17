@@ -1,26 +1,26 @@
-# memory.stat Field Reference {#memorystat-field-reference}
+# memory.statフィールドリファレンス {#memorystat-field-reference}
 
-> A complete field-by-field breakdown of /sys/fs/cgroup/*/memory.stat (cgroup v2)
+> /sys/fs/cgroup/*/memory.stat（cgroup v2）の全フィールドを1つずつ詳しく解説する
 
-## What is memory.stat? {#what-is-memorystat}
+## memory.statとは何か? {#what-is-memorystat}
 
-`/sys/fs/cgroup/<cgroup>/memory.stat` is the most detailed memory accounting file the kernel exposes for a cgroup. It is produced by `memory_stat_show()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c), which reads from the cgroup's per-cpu stat counters and formats them as name/value pairs.
+`/sys/fs/cgroup/<cgroup>/memory.stat`は、カーネルがcgroupについて公開しているメモリアカウンティングのファイルの中で最も詳細なものである。これは[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c)の`memory_stat_show()`によって生成される。この関数はcgroupのper-CPU統計カウンタを読み取り、名前/値のペアとして整形する。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.stat
 ```
 
-All byte values are exact byte counts (not pages, not kilobytes). All event counters are monotonically increasing since the cgroup was created.
+バイト値はすべて正確なバイト数である（page数でもキロバイトでもない）。イベントカウンタはすべて、cgroupが作成されてから単調増加する。
 
-The authoritative source for field definitions is [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files).
+フィールド定義の正式な情報源は[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)である。
 
 ---
 
-## A Note on Hierarchical vs. Flat Accounting {#a-note-on-hierarchical-vs-flat-accounting}
+## 階層的アカウンティングとフラットなアカウンティングに関する注記 {#a-note-on-hierarchical-vs-flat-accounting}
 
-Every field in `memory.stat` reports the **hierarchical total** — the sum of the cgroup itself plus all its descendant cgroups. There is no flat/local-only variant exposed through this file.
+`memory.stat`のすべてのフィールドは**階層的な合計**、つまりcgroup自身とそのすべての子孫cgroupの合計を報告する。このファイルを通じて、フラットな（そのcgroupローカルのみの）値は公開されていない。
 
-This means if you have:
+つまり、次のような構成の場合:
 
 ```
 /myapp (memory.stat: anon = 600 MiB)
@@ -28,9 +28,9 @@ This means if you have:
 └── /myapp/worker-2 (local anon = 200 MiB)
 ```
 
-Reading `/myapp/memory.stat` gives `anon 629145600` (the total). Each child's `memory.stat` reports only its own subtotal.
+`/myapp/memory.stat`を読むと`anon 629145600`（合計）が得られる。各子cgroupの`memory.stat`は、それ自身の小計のみを報告する。
 
-`memory.current` is similarly hierarchical. The per-cgroup local contribution to a field is not directly exposed, but you can calculate it as:
+`memory.current`も同様に階層的である。あるフィールドに対するcgroupごとのローカルな寄与は直接公開されていないが、次のように計算できる。
 
 ```
 local = parent_stat_field - sum(child_stat_fields)
@@ -38,26 +38,26 @@ local = parent_stat_field - sum(child_stat_fields)
 
 ---
 
-## Field Groups {#field-groups}
+## フィールドのグループ {#field-groups}
 
-### Anonymous Memory {#anonymous-memory}
+### 無名メモリ {#anonymous-memory}
 
-Anonymous pages are not backed by a file. They back heap allocations, stack growth, and `mmap(MAP_ANONYMOUS)` regions.
+無名pageはファイルに裏付けられていない。ヒープの割り当て、スタックの伸長、`mmap(MAP_ANONYMOUS)`の領域を裏付ける。
 
 ---
 
 #### `anon` {#anon}
 
-**What it counts**: Bytes of anonymous memory currently resident in RAM — heap, stack, anonymous `mmap()` regions, and `MAP_PRIVATE` copy-on-write pages that have been dirtied.
+**何を数えるか**: 現在RAMに常駐している無名メモリのバイト数。ヒープ、スタック、無名の`mmap()`領域、およびダーティになった`MAP_PRIVATE`のcopy-on-write pageが含まれる。
 
-**Kernel counter**: `NR_ANON_MAPPED` in the cgroup's `vmstats`, updated in `mod_lruvec_state()` whenever an anonymous page is mapped or unmapped. Defined in `include/linux/mmzone.h`.
+**カーネルのカウンタ**: cgroupの`vmstats`内の`NR_ANON_MAPPED`。無名pageがマップまたはアンマップされるたびに`mod_lruvec_state()`で更新される。`include/linux/mmzone.h`で定義されている。
 
-**Hierarchical**: Yes — includes all descendant cgroups.
+**階層的**: はい。すべての子孫cgroupを含む。
 
-**Diagnostic use**: The primary indicator of application heap/stack size. If `anon` is growing unboundedly, suspect a memory leak. Compare to `anon_thp` to see what fraction is in huge pages.
+**診断での使い方**: アプリケーションのヒープ/スタックのサイズを示す主要な指標である。`anon`が際限なく増えている場合はメモリリークを疑う。`anon_thp`と比較すれば、どれだけの割合がhuge pageにあるかが分かる。
 
 ```bash
-# Heap and stack memory of all processes in the cgroup
+# cgroup内の全プロセスのヒープとスタックのメモリ
 grep '^anon ' /sys/fs/cgroup/mycontainer/memory.stat
 ```
 
@@ -65,49 +65,49 @@ grep '^anon ' /sys/fs/cgroup/mycontainer/memory.stat
 
 #### `anon_thp` {#anon_thp}
 
-**What it counts**: Bytes of anonymous memory backed by Transparent Huge Pages (THP). This is a subset of `anon`.
+**何を数えるか**: Transparent Huge Pages（THP）で裏付けられた無名メモリのバイト数。`anon`の部分集合である。
 
-**Kernel counter**: `NR_ANON_THPS` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_ANON_THPS`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Shows how much of the anonymous footprint is in 2 MiB huge pages. A high `anon_thp / anon` ratio means THP is working well for this cgroup (better TLB coverage). An unexpectedly low ratio may indicate fragmentation preventing THP allocation. See [Transparent Huge Pages](thp.md).
+**診断での使い方**: 無名メモリのフットプリントのうち、どれだけが2 MiBのhuge pageにあるかを示す。`anon_thp / anon`の比率が高ければ、このcgroupではTHPがうまく機能している（TLBのカバー範囲が広い）ことを意味する。比率が予想外に低い場合は、断片化によってTHPの割り当てが妨げられている可能性がある。[Transparent Huge Pages](thp.md)を参照。
 
 ---
 
 #### `shmem` {#shmem}
 
-**What it counts**: Bytes of shared memory (`shmget`, `shm_open`, tmpfs) and `mmap(MAP_SHARED)` pages of anonymous files, currently resident in RAM. Also includes `/dev/shm` usage.
+**何を数えるか**: 現在RAMに常駐している共有メモリ（`shmget`、`shm_open`、tmpfs）と、無名ファイルの`mmap(MAP_SHARED)` pageのバイト数。`/dev/shm`の使用量も含む。
 
-**Kernel counter**: `NR_SHMEM` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SHMEM`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: High `shmem` with low `anon` often indicates inter-process communication via shared memory (e.g., PostgreSQL shared buffer pool, Redis AOF shared memory). Shared pages are charged to the cgroup that first faulted them in.
+**診断での使い方**: `shmem`が高く`anon`が低い場合、多くは共有メモリを介したプロセス間通信を示している（例: PostgreSQLの共有バッファプール、RedisのAOF共有メモリ）。共有pageは、最初にそれをフォールトインしたcgroupに課金される。
 
-!!! note "shmem and charge attribution"
-    When two cgroups both map the same shared memory region, only one cgroup is charged for the physical pages. The page is charged to whichever cgroup first caused the page fault. This can cause surprising accounting if shared memory is created in one container and mapped in another.
+!!! note "shmemと課金の帰属"
+    2つのcgroupが同じ共有メモリ領域をマップしている場合、物理pageの課金は一方のcgroupにのみ行われる。pageは、最初にページフォールトを起こしたcgroupに課金される。そのため、共有メモリをあるコンテナで作成し、別のコンテナでマップすると、意外なアカウンティング結果になることがある。
 
 ---
 
-### File-Backed Memory (Page Cache) {#file-backed-memory-page-cache}
+### ファイルバックのメモリ（ページキャッシュ） {#file-backed-memory-page-cache}
 
-File-backed pages are backed by files on disk. They can be reclaimed without writing to swap — either discarded (if clean) or flushed to disk (if dirty).
+ファイルバックのpageはディスク上のファイルに裏付けられている。スワップへの書き込みなしに回収でき、（クリーンなら）破棄されるか、（ダーティなら）ディスクへフラッシュされる。
 
 ---
 
 #### `file` {#file}
 
-**What it counts**: Bytes of file-backed memory currently in the page cache and attributed to this cgroup — clean and dirty pages for regular files, `mmap(MAP_SHARED)` file mappings, and read-ahead pages.
+**何を数えるか**: 現在ページキャッシュにあり、このcgroupに帰属するファイルバックのメモリのバイト数。通常ファイルのクリーンページとダーティページ、`mmap(MAP_SHARED)`によるファイルマッピング、先読みされたpageが含まれる。
 
-**Kernel counter**: `NR_FILE_PAGES` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_FILE_PAGES`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The most reclaimable memory in the cgroup. If `file` is large and `anon` is small, the cgroup is doing heavy file I/O and caching results. This is normal and healthy — `file` pages will be evicted under pressure before anonymous pages are swapped. However, if `memory.high` throttling is happening and `file` is large, consider increasing `memory.high` to accommodate the cache.
+**診断での使い方**: cgroup内で最も回収しやすいメモリである。`file`が大きく`anon`が小さい場合、そのcgroupは大量のファイルI/Oを行って結果をキャッシュしている。これは正常かつ健全である。圧迫時には、無名pageがスワップされる前に`file`のpageが追い出される。ただし、`memory.high`によるスロットリングが起きていて`file`が大きい場合は、キャッシュを収められるよう`memory.high`を引き上げることを検討する。
 
 ```bash
-# Is memory usage mostly cache or real working set?
+# メモリ使用量の大半はキャッシュか、それとも本物のワーキングセットか?
 awk '/^anon / {anon=$2} /^file / {file=$2} END {
     total = anon + file
     printf "anon: %.0f MiB (%.0f%%)\nfile: %.0f MiB (%.0f%%)\n",
@@ -119,213 +119,213 @@ awk '/^anon / {anon=$2} /^file / {file=$2} END {
 
 #### `file_mapped` {#file_mapped}
 
-**What it counts**: Bytes of file-backed pages that are currently mapped into at least one process's virtual address space (i.e., they are in a VMA). This is a subset of `file`.
+**何を数えるか**: 少なくとも1つのプロセスの仮想アドレス空間に現在マップされている（つまりVMAに含まれている）ファイルバックのpageのバイト数。`file`の部分集合である。
 
-**Kernel counter**: `NR_FILE_MAPPED` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_FILE_MAPPED`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The portion of file cache that is actively used via `mmap()`. Unmapped file cache can be reclaimed immediately with no cost to running processes. Mapped file cache requires unmapping first and may trigger major faults when accessed again. High `file_mapped / file` ratio means most of your file cache is memory-mapped rather than just read-ahead cache.
+**診断での使い方**: ファイルキャッシュのうち、`mmap()`を介して能動的に使われている部分である。マップされていないファイルキャッシュは、実行中のプロセスにコストをかけずに直ちに回収できる。マップされたファイルキャッシュは、まずアンマップが必要であり、再びアクセスされるとメジャーフォールトを引き起こすことがある。`file_mapped / file`の比率が高い場合、ファイルキャッシュの大部分が単なる先読みキャッシュではなくメモリマップされていることを意味する。
 
 ---
 
 #### `file_dirty` {#file_dirty}
 
-**What it counts**: Bytes of file-backed pages that have been modified but not yet written to disk.
+**何を数えるか**: 変更されたがまだディスクに書き込まれていないファイルバックのpageのバイト数。
 
-**Kernel counter**: `NR_FILE_DIRTY` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_FILE_DIRTY`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Dirty pages cannot be reclaimed without first writing to disk (writeback). Under memory pressure, the kernel wakes `flush` threads to write them out before reclaiming. High `file_dirty` under pressure leads to high I/O and slower reclaim. Compare with `pglazyfreed` events — if that counter is rising, pages are being reclaimed without writeback (valid only for clean pages).
+**診断での使い方**: ダーティページは、まずディスクに書き込む（ライトバックする）ことなしには回収できない。メモリ圧迫下では、カーネルは回収の前に`flush`スレッドを起こしてそれらを書き出す。圧迫下で`file_dirty`が高いと、I/Oが増えて回収が遅くなる。`pglazyfreed`イベントと比較すること。このカウンタが増えている場合、pageはライトバックなしに回収されている（クリーンなpageにのみ当てはまる）。
 
 ---
 
 #### `file_writeback` {#file_writeback}
 
-**What it counts**: Bytes of file-backed pages currently being written back to disk by `flush` kernel threads.
+**何を数えるか**: `flush`カーネルスレッドによって現在ディスクへライトバック中のファイルバックのpageのバイト数。
 
-**Kernel counter**: `NR_WRITEBACK` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_WRITEBACK`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Nonzero `file_writeback` under memory pressure is normal and expected — the kernel is cleaning dirty pages so they can be reclaimed. A persistently high value means the storage I/O path is a bottleneck in reclaim. Cross-reference with I/O PSI (`$CGROUP/io.pressure`) to confirm.
+**診断での使い方**: メモリ圧迫下で`file_writeback`が非ゼロなのは正常で想定どおりである。カーネルはダーティページを回収できるようにクリーンにしているのである。値が持続的に高い場合、ストレージのI/Oパスが回収のボトルネックになっていることを意味する。確認には、I/OのPSI（`$CGROUP/io.pressure`）と突き合わせる。
 
 ---
 
 #### `shmem_thp` {#shmem_thp}
 
-**What it counts**: Bytes of shared memory (`shmem` / tmpfs) backed by Transparent Huge Pages. Subset of `shmem`.
+**何を数えるか**: Transparent Huge Pagesで裏付けられた共有メモリ（`shmem` / tmpfs）のバイト数。`shmem`の部分集合である。
 
-**Kernel counter**: `NR_SHMEM_THPS` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SHMEM_THPS`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Relevant for workloads that use large anonymous shared memory regions (databases, scientific computing). Shows whether THP is being used for shmem, which reduces TLB pressure.
+**診断での使い方**: 大きな無名共有メモリ領域を使うワークロード（データベース、科学技術計算）に関係する。shmemにTHPが使われているかどうかを示す。THPはTLBの圧迫を減らす。
 
 ---
 
 #### `file_thp` {#file_thp}
 
-**What it counts**: Bytes of file-backed pages backed by Transparent Huge Pages (read-only file THP, introduced for non-anonymous mappings). Subset of `file`.
+**何を数えるか**: Transparent Huge Pagesで裏付けられたファイルバックのpageのバイト数（無名でないマッピング向けに導入された、読み取り専用のファイルTHP）。`file`の部分集合である。
 
-**Kernel counter**: `NR_FILE_THPS` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_FILE_THPS`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Indicates that read-only file mappings (e.g., shared libraries, executables) are using huge pages. This reduces TLB pressure for text-heavy workloads.
+**診断での使い方**: 読み取り専用のファイルマッピング（例: 共有ライブラリ、実行ファイル）がhuge pageを使っていることを示す。これにより、テキスト（コード）の比重が大きいワークロードでTLBの圧迫が減る。
 
 ---
 
-### Kernel Memory {#kernel-memory}
+### カーネルメモリ {#kernel-memory}
 
-Kernel memory is allocated by kernel code on behalf of cgroup processes — slab objects, page tables, kernel stacks, socket buffers. In cgroup v2, kernel memory is charged to the cgroup by default ([background: new slab memory controller](https://lwn.net/Articles/798605/)).
+カーネルメモリは、cgroupのプロセスに代わってカーネルコードが割り当てるメモリである。slabオブジェクト、ページテーブル、カーネルスタック、ソケットバッファなどがある。cgroup v2では、カーネルメモリはデフォルトでcgroupに課金される（[背景: 新しいslabメモリコントローラ](https://lwn.net/Articles/798605/)）。
 
 ---
 
 #### `kernel` {#kernel}
 
-**What it counts**: Total bytes of kernel memory attributed to this cgroup: the sum of `kernel_stack`, `pagetables`, `percpu`, `sec_pagetables`, and slab memory (`slab_reclaimable` + `slab_unreclaimable`). Note: socket buffers (`sock`) are tracked separately and are **not** included in this total.
+**何を数えるか**: このcgroupに帰属するカーネルメモリの総バイト数。`kernel_stack`、`pagetables`、`percpu`、`sec_pagetables`、およびslabメモリ（`slab_reclaimable` + `slab_unreclaimable`）の合計である。注意: ソケットバッファ（`sock`）は別に追跡されており、この合計には**含まれない**。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Use `kernel` to understand the overhead of kernel data structures for processes in this cgroup. In containers running many short-lived processes, `kernel` can be significant. It counts against `memory.current`.
+**診断での使い方**: `kernel`を使うと、このcgroup内のプロセスのためのカーネルデータ構造のオーバーヘッドを把握できる。短命なプロセスを多数実行するコンテナでは、`kernel`が無視できない大きさになることがある。これは`memory.current`に計上される。
 
-!!! note "Kernel memory counts against memory.current"
-    In cgroup v2, `memory.current = anon + file + kernel + ...`. This is a frequent surprise: a container may hit its limit not because of application heap, but because of kernel slab growth (e.g., large dentry caches from filesystem traversal).
+!!! note "カーネルメモリはmemory.currentに計上される"
+    cgroup v2では`memory.current = anon + file + kernel + ...`である。これはよく驚かれる点である。コンテナが上限に達する原因がアプリケーションのヒープではなく、カーネルのslabの増加（例: ファイルシステムの走査による巨大なdentryキャッシュ）である場合がある。
 
 ---
 
 #### `kernel_stack` {#kernel_stack}
 
-**What it counts**: Bytes of kernel stacks for tasks in this cgroup. Each task has a kernel stack (typically 8 KiB on x86-64, or 16 KiB when `KASAN` is enabled).
+**何を数えるか**: このcgroup内のタスクのカーネルスタックのバイト数。各タスクはカーネルスタックを1つ持つ（x86-64では通常8 KiB、`KASAN`が有効な場合は16 KiB）。
 
-**Kernel counter**: `NR_KERNEL_STACK_KB` (in KiB) in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_KERNEL_STACK_KB`（KiB単位）。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Proportional to the number of live threads in the cgroup. Spikes indicate a thread creation burst (fork bomb, connection storm). A container with 10,000 threads uses ~80 MiB of kernel stack memory.
+**診断での使い方**: cgroup内の生存スレッド数に比例する。スパイクはスレッド生成のバースト（フォーク爆弾、接続の殺到）を示す。10,000スレッドを持つコンテナは、約80 MiBのカーネルスタックメモリを使う。
 
 ---
 
 #### `pagetables` {#pagetables}
 
-**What it counts**: Bytes of page table memory for processes in this cgroup. Page tables translate virtual addresses to physical addresses and are allocated by the kernel as a process's VMA expands.
+**何を数えるか**: このcgroup内のプロセスのページテーブルメモリのバイト数。ページテーブルは仮想アドレスを物理アドレスに変換するもので、プロセスのVMAが拡大するにつれてカーネルが割り当てる。
 
-**Kernel counter**: `NR_PAGETABLE` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_PAGETABLE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Large `pagetables` with many small anonymous mappings suggests a process with a highly fragmented virtual address space (many small `mmap()` calls without `munmap()`). With THP, page tables are smaller because one huge-page entry covers 2 MiB instead of 512 individual 4 KiB entries.
+**診断での使い方**: 小さな無名マッピングが多数あって`pagetables`が大きい場合、仮想アドレス空間が高度に断片化したプロセス（`munmap()`なしに多数の小さな`mmap()`呼び出しを行う）が示唆される。THPを使うと、1つのhuge pageエントリが512個の個別の4 KiBエントリの代わりに2 MiBをカバーするため、ページテーブルは小さくなる。
 
 ---
 
 #### `sec_pagetables` {#sec_pagetables}
 
-**What it counts**: Bytes of secondary page tables (e.g., shadow page tables for KVM guests, IOMMU page tables for device I/O virtualization) attributed to this cgroup.
+**何を数えるか**: このcgroupに帰属するセカンダリページテーブル（例: KVMゲスト用のシャドウページテーブル、デバイスI/O仮想化のためのIOMMUページテーブル）のバイト数。
 
-**Kernel counter**: `NR_SECONDARY_PAGETABLE` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SECONDARY_PAGETABLE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Relevant primarily for cgroups running KVM virtual machines. Non-zero in containers using device passthrough with IOMMU.
+**診断での使い方**: 主にKVM仮想マシンを実行するcgroupに関係する。IOMMUを使ったデバイスパススルーを行うコンテナでは非ゼロになる。
 
 ---
 
 #### `percpu` {#percpu}
 
-**What it counts**: Bytes of per-cpu kernel memory allocated by kernel code running on behalf of processes in this cgroup.
+**何を数えるか**: このcgroup内のプロセスに代わって実行されるカーネルコードが割り当てたper-CPUカーネルメモリのバイト数。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Rarely significant in practice for most workloads. Appears mainly in accounting completeness.
+**診断での使い方**: ほとんどのワークロードでは、実際上大きな値になることはまれである。主にアカウンティングの完全性のために現れる。
 
 ---
 
 #### `sock` {#sock}
 
-**What it counts**: Bytes of memory allocated for network socket buffers (send and receive buffers, sk_buff structures) for sockets owned by processes in this cgroup.
+**何を数えるか**: このcgroup内のプロセスが所有するソケットのために割り当てられたネットワークソケットバッファ（送信バッファと受信バッファ、sk_buff構造体）のメモリのバイト数。
 
-**Kernel counter**: `MEMCG_SOCK` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`MEMCG_SOCK`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: High `sock` in a network-heavy container (proxy, load balancer, gRPC server) indicates buffer pressure. If socket buffers are growing unboundedly, a process may not be draining its receive buffers (slow consumer). Cross-reference with `memory.current` to understand what fraction is networking overhead.
+**診断での使い方**: ネットワーク負荷の高いコンテナ（プロキシ、ロードバランサ、gRPCサーバー）で`sock`が高い場合、バッファの圧迫を示す。ソケットバッファが際限なく増えている場合、プロセスが受信バッファを消費しきれていない（遅いコンシューマ）可能性がある。どれだけの割合がネットワークのオーバーヘッドかを把握するには、`memory.current`と突き合わせる。
 
 ---
 
 #### `slab_reclaimable` {#slab_reclaimable}
 
-**What it counts**: Bytes of reclaimable kernel slab memory charged to this cgroup — primarily `dentry` (directory entry cache) and `inode_cache` objects that the kernel can free under memory pressure via `shrink_slab()`.
+**何を数えるか**: このcgroupに課金された回収可能なカーネルslabメモリのバイト数。主に`dentry`（ディレクトリエントリキャッシュ）と`inode_cache`のオブジェクトで、カーネルはメモリ圧迫下で`shrink_slab()`によってこれらを解放できる。
 
-**Kernel counter**: `NR_SLAB_RECLAIMABLE_B` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SLAB_RECLAIMABLE_B`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: A container doing heavy filesystem traversal (e.g., `find`, recursive builds, log scanners) accumulates large `slab_reclaimable`. This is healthy — it will be freed under pressure. However, if `memory.high` is set tight, this reclaimable slab may cause throttling even though the memory can be freed at any time.
+**診断での使い方**: ファイルシステムを大量に走査するコンテナ（例: `find`、再帰的なビルド、ログスキャナ）では、`slab_reclaimable`が大きく溜まる。これは健全であり、圧迫下で解放される。ただし`memory.high`がきつく設定されていると、このメモリはいつでも解放できるにもかかわらず、この回収可能なslabがスロットリングを引き起こすことがある。
 
 ---
 
 #### `slab_unreclaimable` {#slab_unreclaimable}
 
-**What it counts**: Bytes of unreclaimable kernel slab memory charged to this cgroup — kernel objects that cannot be freed until the process explicitly releases them (e.g., `task_struct`, `mm_struct`, open file descriptors, network connections, `struct socket`).
+**何を数えるか**: このcgroupに課金された回収不能なカーネルslabメモリのバイト数。プロセスが明示的に解放するまで解放できないカーネルオブジェクトである（例: `task_struct`、`mm_struct`、オープン中のファイルディスクリプタ、ネットワーク接続、`struct socket`）。
 
-**Kernel counter**: `NR_SLAB_UNRECLAIMABLE_B` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SLAB_UNRECLAIMABLE_B`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Bounded growth is expected. Continuous growth suggests a kernel-level resource leak — a process opening file descriptors, network connections, or sockets without closing them. Unlike userspace leaks, `slab_unreclaimable` does not appear in process RSS, making it harder to diagnose with `top` or `ps`.
+**診断での使い方**: 上限のある増加は想定内である。増加し続ける場合は、カーネルレベルのリソースリーク、つまりファイルディスクリプタ、ネットワーク接続、ソケットを開いたまま閉じないプロセスが示唆される。ユーザー空間のリークとは異なり、`slab_unreclaimable`はプロセスのRSSに現れないため、`top`や`ps`での診断が難しい。
 
 ---
 
-### Swap {#swap}
+### スワップ {#swap}
 
-Swap fields appear only when swap is available to the cgroup (`memory.swap.max` is not zero and the host has swap configured).
+スワップのフィールドは、cgroupがスワップを利用できる場合（`memory.swap.max`がゼロでなく、ホストにスワップが設定されている）にのみ現れる。
 
 ---
 
 #### `swapcached` {#swapcached}
 
-**What it counts**: Bytes of anonymous memory that is simultaneously in swap and in RAM (i.e., it was swapped out, then faulted back in but not yet removed from the swap device). These pages are counted in both `anon` and `swapcached`.
+**何を数えるか**: スワップとRAMの両方に同時に存在する無名メモリのバイト数（つまり、スワップアウトされた後にフォールトで読み戻されたが、まだスワップデバイスから削除されていないもの）。これらのpageは`anon`と`swapcached`の両方に計上される。
 
-**Kernel counter**: `NR_SWAPCACHE` in the cgroup's vmstats.
+**カーネルのカウンタ**: cgroupのvmstats内の`NR_SWAPCACHE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Non-zero `swapcached` means the cgroup is actively using swap — pages have been swapped out and at least some have been read back. This is a signal of memory pressure: the cgroup needed swap recently. A large `swapcached` that is not decreasing means pages are being faulted back in but the cgroup is still under pressure.
+**診断での使い方**: `swapcached`が非ゼロの場合、cgroupがスワップを能動的に使っていることを意味する。pageがスワップアウトされ、少なくともその一部が読み戻されている。これはメモリ圧迫の兆候であり、cgroupが最近スワップを必要としたことを示す。`swapcached`が大きいまま減らない場合、pageはフォールトで読み戻されているが、cgroupは依然として圧迫下にあることを意味する。
 
 ---
 
-### Reclaim Events {#reclaim-events}
+### 回収イベント {#reclaim-events}
 
-These are monotonically increasing event counters. They do not measure current state — they record things that have happened since the cgroup was created.
+これらは単調増加するイベントカウンタである。現在の状態を測定するものではなく、cgroupの作成以降に起きた事象を記録する。
 
 ---
 
 #### `pgfault` {#pgfault}
 
-**What it counts**: Total number of minor page faults in this cgroup — faults that were satisfied without disk I/O (page was in RAM, just not mapped: e.g., copy-on-write, accessing a page that was in page cache).
+**何を数えるか**: このcgroupにおけるマイナーページフォールトの総数。ディスクI/Oなしに解決されたフォールトである（pageはRAMにあったが、マップされていなかっただけ。例: copy-on-write、ページキャッシュにあったpageへのアクセス）。
 
-**Kernel counter**: `PGFAULT` (in `memcg_vm_event_stat[]`).
+**カーネルのカウンタ**: `PGFAULT`（`memcg_vm_event_stat[]`内）。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: A baseline indicator of memory access patterns. Very high `pgfault` rates are normal for workloads that access many pages. Compare `pgfault` rates before and after a code change to detect regressions.
+**診断での使い方**: メモリアクセスパターンの基礎的な指標である。多くのpageにアクセスするワークロードでは、`pgfault`の頻度が非常に高いのは正常である。コード変更の前後で`pgfault`の頻度を比較すれば、リグレッションを検出できる。
 
 ---
 
 #### `pgmajfault` {#pgmajfault}
 
-**What it counts**: Total number of major page faults — faults that required disk I/O to satisfy (page was not in RAM and had to be read from disk or swap).
+**何を数えるか**: メジャーページフォールトの総数。解決にディスクI/Oを必要としたフォールトである（pageがRAMになく、ディスクまたはスワップから読み込まなければならなかった）。
 
-**Kernel counter**: `MEMCG_PGMAJFAULT`.
+**カーネルのカウンタ**: `MEMCG_PGMAJFAULT`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The most direct indicator of swap pressure or file I/O caused by working-set eviction. A container with a sustained high `pgmajfault` rate is thrashing — it keeps reading pages from disk that were previously evicted. Correlate with `memory.pressure` `full` values.
+**診断での使い方**: スワップの圧迫や、ワーキングセットの追い出しによって引き起こされたファイルI/Oの最も直接的な指標である。`pgmajfault`の頻度が持続的に高いコンテナはスラッシングしている。以前に追い出されたpageをディスクから読み続けているのである。`memory.pressure`の`full`値と相関を取ること。
 
 ```bash
-# Compute pgmajfault rate (sample twice, divide by interval)
+# pgmajfaultの頻度を計算する（2回サンプリングし、間隔で割る）
 S1=$(grep pgmajfault /sys/fs/cgroup/mycontainer/memory.stat | awk '{print $2}')
 sleep 10
 S2=$(grep pgmajfault /sys/fs/cgroup/mycontainer/memory.stat | awk '{print $2}')
@@ -336,216 +336,216 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 #### `pgrefill` {#pgrefill}
 
-**What it counts**: Number of pages scanned during LRU refill — pages moved from the active LRU list to the inactive list during reclaim. Each page moved counts as one event.
+**何を数えるか**: LRUの補充（refill）中にスキャンされたpage数。回収中にactive LRUリストからinactiveリストへ移されたpageである。移されたpage 1つにつき1イベントと数える。
 
-**Kernel counter**: `MEMCG_PGREFILL`.
+**カーネルのカウンタ**: `MEMCG_PGREFILL`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Rising `pgrefill` indicates active reclaim pressure — the kernel is demoting pages from active to inactive LRU. Cross-reference with `pgscan` and `pgsteal` to understand the full reclaim pipeline.
+**診断での使い方**: `pgrefill`が増えているのは、能動的な回収の圧力を示す。カーネルがpageをactiveからinactiveのLRUへ降格させているのである。回収パイプライン全体を把握するには、`pgscan`や`pgsteal`と突き合わせる。
 
 ---
 
 #### `pgscan` {#pgscan}
 
-**What it counts**: Number of pages scanned by the page reclaim code while looking for pages to free — both from direct reclaim (triggered by process allocations) and from kswapd (background reclaim daemon).
+**何を数えるか**: ページ回収のコードが解放するpageを探す間にスキャンしたpage数。直接回収（プロセスの割り当てが引き起こす）とkswapd（バックグラウンド回収デーモン）の両方を含む。
 
-**Kernel counter**: `MEMCG_PGSCAN`.
+**カーネルのカウンタ**: `MEMCG_PGSCAN`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The "work done" metric for reclaim. A high `pgscan` rate means reclaim is running hard. Comparing `pgscan` to `pgsteal` gives the reclaim efficiency ratio.
+**診断での使い方**: 回収の「作業量」を表すメトリクスである。`pgscan`の頻度が高い場合、回収が激しく動いていることを意味する。`pgscan`と`pgsteal`を比較すると、回収効率の比率が得られる。
 
 ---
 
 #### `pgsteal` {#pgsteal}
 
-**What it counts**: Number of pages actually reclaimed (freed or swapped out) by the page reclaim code. Always less than or equal to `pgscan` — some pages scanned cannot be reclaimed immediately (dirty, locked, referenced).
+**何を数えるか**: ページ回収のコードによって実際に回収された（解放またはスワップアウトされた）page数。常に`pgscan`以下である。スキャンされたpageの一部は直ちには回収できない（ダーティ、ロック中、参照されている）からである。
 
-**Kernel counter**: `MEMCG_PGSTEAL`.
+**カーネルのカウンタ**: `MEMCG_PGSTEAL`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The actual yield of reclaim. A high `pgscan` with a low `pgsteal` means reclaim scanning many pages but freeing few — this is the thrashing signature. The ratio `pgsteal / pgscan` (as a heuristic) indicates reclaim efficiency; a ratio below ~50% under pressure suggests a working set larger than available memory.
+**診断での使い方**: 回収の実際の成果である。`pgscan`が高いのに`pgsteal`が低い場合、回収は多くのpageをスキャンしているのにわずかしか解放できていない。これはスラッシングの特徴である。`pgsteal / pgscan`の比率は（ヒューリスティックとして）回収効率を示す。圧迫下でこの比率が約50%を下回る場合、ワーキングセットが利用可能なメモリより大きいことが示唆される。
 
 ---
 
 #### `pgactivate` {#pgactivate}
 
-**What it counts**: Number of pages promoted from the inactive LRU list to the active LRU list because they were accessed again before eviction.
+**何を数えるか**: 追い出される前に再びアクセスされたために、inactive LRUリストからactive LRUリストへ昇格したpage数。
 
-**Kernel counter**: `MEMCG_PGACTIVATE`.
+**カーネルのカウンタ**: `MEMCG_PGACTIVATE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Shows that the working set is being preserved — pages accessed frequently are being protected. Very low `pgactivate` during heavy reclaim may indicate the working set has been fully evicted.
+**診断での使い方**: ワーキングセットが保たれていること、つまり頻繁にアクセスされるpageが保護されていることを示す。激しい回収の最中に`pgactivate`が非常に低い場合、ワーキングセットが完全に追い出されてしまったことを示している可能性がある。
 
 ---
 
 #### `pgdeactivate` {#pgdeactivate}
 
-**What it counts**: Number of pages moved from the active LRU to the inactive LRU, making them eligible for reclaim. This is the opposite of `pgactivate`.
+**何を数えるか**: active LRUからinactive LRUへ移され、回収の対象となったpage数。`pgactivate`の逆である。
 
-**Kernel counter**: `MEMCG_PGDEACTIVATE`.
+**カーネルのカウンタ**: `MEMCG_PGDEACTIVATE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Indicates memory pressure forcing the kernel to consider reclaiming previously active pages. A sustained high rate of `pgdeactivate` followed by `pgsteal` on the same pages means thrashing.
+**診断での使い方**: メモリ圧迫によって、カーネルが以前はactiveだったpageの回収を検討せざるを得なくなっていることを示す。同じpageに対して`pgdeactivate`が持続的に高い頻度で起き、その後`pgsteal`が続く場合、スラッシングを意味する。
 
 ---
 
 #### `pglazyfreed` {#pglazyfreed}
 
-**What it counts**: Number of anonymous pages reclaimed via the "lazy free" path — pages freed without writeback because they were associated with a process that exited (the pages were in swap, the in-memory copy was discarded).
+**何を数えるか**: 「lazy free」パスで回収された無名page数。終了したプロセスに関連付けられていたため、ライトバックなしに解放されたpageである（pageはスワップにあり、メモリ上のコピーは破棄された）。
 
-**Kernel counter**: `MEMCG_PGLAZYFREED`.
+**カーネルのカウンタ**: `MEMCG_PGLAZYFREED`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Counts "free lunches" in reclaim — pages that could be discarded without I/O. Rarely significant on its own, but useful to understand total reclaim breakdown.
+**診断での使い方**: 回収における「タダ飯」、つまりI/Oなしに破棄できたpageを数える。単独で重要になることはまれだが、回収の内訳全体を把握するのに役立つ。
 
 ---
 
 #### `thp_fault_alloc` {#thpfaultalloc}
 
-**What it counts**: Number of Transparent Huge Page 2 MiB allocations that succeeded on page fault (i.e., a huge page was allocated for an anonymous mapping when the process touched a new region).
+**何を数えるか**: ページフォールト時に成功したTransparent Huge Pageの2 MiB割り当ての回数（つまり、プロセスが新しい領域に触れたときに、無名マッピングに対してhuge pageが割り当てられた）。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Indicates THP is actively being used. If this is zero in a workload that should benefit from THP, check `/sys/kernel/mm/transparent_hugepage/enabled` and fragmentation.
+**診断での使い方**: THPが能動的に使われていることを示す。THPの恩恵を受けるはずのワークロードでこれがゼロの場合は、`/sys/kernel/mm/transparent_hugepage/enabled`と断片化を確認する。
 
 ---
 
 #### `thp_collapse_alloc` {#thpcollapsealloc}
 
-**What it counts**: Number of times `khugepaged` successfully collapsed multiple 4 KiB pages into a single 2 MiB huge page for this cgroup.
+**何を数えるか**: このcgroupについて、`khugepaged`が複数の4 KiB pageを1つの2 MiB huge pageへまとめる（collapse）ことに成功した回数。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Shows background THP optimization is working. Zero may indicate fragmentation preventing collapse or `khugepaged` being disabled.
+**診断での使い方**: バックグラウンドのTHP最適化が機能していることを示す。ゼロの場合は、断片化によってcollapseが妨げられているか、`khugepaged`が無効化されている可能性がある。
 
 ---
 
-### Memory Protection {#memory-protection}
+### メモリ保護 {#memory-protection}
 
-These fields reflect the protection configuration and whether it is taking effect.
+これらのフィールドは、保護の設定と、それが効果を発揮しているかどうかを反映する。
 
 ---
 
 #### `workingset_refault_anon` {#workingsetrefaultanon}
 
-**What it counts**: Number of anonymous pages that were faulted back in after being evicted from RAM (refaulted). Incremented when a page that was previously swapped out is accessed again.
+**何を数えるか**: RAMから追い出された後に、フォールトで再び読み込まれた（refaultした）無名page数。以前にスワップアウトされたpageが再びアクセスされたときに加算される。
 
-**Kernel counter**: `WORKINGSET_REFAULT_ANON`.
+**カーネルのカウンタ**: `WORKINGSET_REFAULT_ANON`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: The definitive thrashing indicator for anonymous memory. If `workingset_refault_anon` is rising, anonymous pages are being evicted and then re-faulted — the working set does not fit in the available memory. Paired with high `pgmajfault`, this confirms you need more RAM or a larger swap.
+**診断での使い方**: 無名メモリにおけるスラッシングの決定的な指標である。`workingset_refault_anon`が増えている場合、無名pageが追い出されては再びフォールトしている。つまり、ワーキングセットが利用可能なメモリに収まっていない。`pgmajfault`の高さと組み合わされば、より多くのRAMかより大きなスワップが必要であることが確定する。
 
 ---
 
 #### `workingset_refault_file` {#workingsetrefaultfile}
 
-**What it counts**: Number of file-backed pages that were faulted back in after being evicted from the page cache.
+**何を数えるか**: ページキャッシュから追い出された後に、フォールトで再び読み込まれたファイルバックのpage数。
 
-**Kernel counter**: `WORKINGSET_REFAULT_FILE`.
+**カーネルのカウンタ**: `WORKINGSET_REFAULT_FILE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Thrashing indicator for file-backed memory. High values mean your I/O working set (databases reading from disk, web servers reading static files) does not fit in the page cache. Increasing `memory.high` or the container's memory limit to give more room for file cache will reduce this.
+**診断での使い方**: ファイルバックのメモリにおけるスラッシングの指標である。値が高い場合、I/Oのワーキングセット（ディスクから読むデータベース、静的ファイルを読むWebサーバー）がページキャッシュに収まっていないことを意味する。`memory.high`やコンテナのメモリ上限を引き上げてファイルキャッシュにより多くの余地を与えれば、これは減る。
 
 ---
 
 #### `workingset_activate_anon` {#workingsetactivateanon}
 
-**What it counts**: Number of anonymous refaulted pages that were immediately promoted to the active LRU after refault, because they were deemed part of the working set.
+**何を数えるか**: refaultした無名pageのうち、ワーキングセットの一部と判断されたために、refault後すぐにactive LRUへ昇格したpage数。
 
-**Kernel counter**: `WORKINGSET_ACTIVATE_ANON`.
+**カーネルのカウンタ**: `WORKINGSET_ACTIVATE_ANON`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Shows the kernel's working set detection is operating on anonymous pages. A page that refaults quickly is likely in the hot working set; `workingset_activate_anon` counts those.
+**診断での使い方**: カーネルのワーキングセット検出が無名pageに対して動作していることを示す。すぐにrefaultするpageはホットなワーキングセットにある可能性が高く、`workingset_activate_anon`はそうしたpageを数える。
 
 ---
 
 #### `workingset_activate_file` {#workingsetactivatefile}
 
-**What it counts**: Number of file-backed refaulted pages promoted to the active LRU after refault.
+**何を数えるか**: refaultしたファイルバックのpageのうち、refault後にactive LRUへ昇格したpage数。
 
-**Kernel counter**: `WORKINGSET_ACTIVATE_FILE`.
+**カーネルのカウンタ**: `WORKINGSET_ACTIVATE_FILE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Same as above for file-backed pages.
+**診断での使い方**: ファイルバックのpageについて、上と同じ。
 
 ---
 
 #### `workingset_restore_anon` {#workingsetrestoreanon}
 
-**What it counts**: Number of anonymous pages that were "restored" from eviction — they were promoted to the active list before the refault shadow expired (meaning they faulted back in quickly enough to be recognized as active).
+**何を数えるか**: 追い出しから「復元（restore）」された無名page数。refaultのシャドウエントリが失効する前にactiveリストへ昇格したpageである（つまり、activeと認識されるほど早くフォールトで読み戻された）。
 
-**Kernel counter**: `WORKINGSET_RESTORE_ANON`.
+**カーネルのカウンタ**: `WORKINGSET_RESTORE_ANON`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
 ---
 
 #### `workingset_restore_file` {#workingsetrestorefile}
 
-**What it counts**: Number of file-backed pages restored (promoted active before shadow expiry).
+**何を数えるか**: 復元された（シャドウの失効前にactiveへ昇格した）ファイルバックのpage数。
 
-**Kernel counter**: `WORKINGSET_RESTORE_FILE`.
+**カーネルのカウンタ**: `WORKINGSET_RESTORE_FILE`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
 ---
 
 #### `workingset_nodereclaim` {#workingset_nodereclaim}
 
-**What it counts**: Number of times a node's reclaim was avoided because the workingset was recognized as active. This counter records when the refault distance detection machinery decided a page's shadow indicated it was in the active working set.
+**何を数えるか**: ワーキングセットがactiveと認識されたために、ノードの回収が回避された回数。このカウンタは、refault距離の検出機構が、pageのシャドウからそのpageがactiveなワーキングセットにあると判断したときを記録する。
 
-**Kernel counter**: `WORKINGSET_NODERECLAIM`.
+**カーネルのカウンタ**: `WORKINGSET_NODERECLAIM`。
 
-**Hierarchical**: Yes.
+**階層的**: はい。
 
-**Diagnostic use**: Advanced diagnostic. Low values relative to `workingset_refault_*` suggests the working set detection is not helping much — the workload may be accessing pages in patterns the kernel's LRU approximation does not handle well (e.g., large sequential scans).
+**診断での使い方**: 上級者向けの診断である。`workingset_refault_*`に比べて値が低い場合、ワーキングセット検出があまり役立っていないことが示唆される。ワークロードが、カーネルのLRU近似ではうまく扱えないパターン（例: 大規模なシーケンシャルスキャン）でpageにアクセスしている可能性がある。
 
 ---
 
-## Worked Example: Accounting Identity {#worked-example-accounting-identity}
+## 計算例: アカウンティングの恒等式 {#worked-example-accounting-identity}
 
-`memory.current` should equal the sum of resident memory types. The exact relationship, as documented in [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html):
+`memory.current`は、常駐しているメモリ種別の合計に等しくなるはずである。[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html)に記載されている正確な関係は次のとおり。
 
 ```
 memory.current ≈ anon + file + kernel + swapcached + sock + (children's contributions)
 ```
 
-In practice, due to per-cpu counter batching and timing, `memory.current` may differ slightly from the sum of `memory.stat` fields at any instant. This is expected — the kernel batches counter updates in `mod_lruvec_state()` to avoid cache-line contention on hot paths.
+実際には、per-CPUカウンタのバッチ処理とタイミングのため、ある瞬間の`memory.current`は`memory.stat`のフィールドの合計とわずかに異なることがある。これは想定内である。カーネルは、ホットパスでのキャッシュラインの競合を避けるため、`mod_lruvec_state()`でカウンタの更新をバッチ処理している。
 
-### Example snapshot {#example-snapshot}
+### スナップショットの例 {#example-snapshot}
 
 ```bash
 $ cat /sys/fs/cgroup/myapp/memory.stat
-anon 549453824          # ~524 MiB of heap/stack
-file 157286400          # ~150 MiB of page cache
+anon 549453824          # 約524 MiBのヒープ/スタック
+file 157286400          # 約150 MiBのページキャッシュ
 shmem 0
-kernel_stack 2097152    # 2 MiB (256 threads × 8 KiB)
+kernel_stack 2097152    # 2 MiB（256スレッド × 8 KiB）
 pagetables 4194304      # 4 MiB
-slab_reclaimable 20971520   # ~20 MiB (dentry, inode caches)
-slab_unreclaimable 8388608  # ~8 MiB (task structs, file structs)
-sock 10485760           # ~10 MiB (socket buffers)
-swapcached 0            # no swap activity
+slab_reclaimable 20971520   # 約20 MiB（dentry、inodeキャッシュ）
+slab_unreclaimable 8388608  # 約8 MiB（task構造体、file構造体）
+sock 10485760           # 約10 MiB（ソケットバッファ）
+swapcached 0            # スワップの活動なし
 ...
 workingset_refault_anon 0
 workingset_refault_file 123456
 
 $ cat /sys/fs/cgroup/myapp/memory.current
-753207296               # ~718 MiB
+753207296               # 約718 MiB
 ```
 
-Accounting:
+アカウンティング:
 
-| Component | Bytes | MiB |
+| 構成要素 | バイト | MiB |
 |-----------|-------|-----|
 | `anon` | 549,453,824 | 524 |
 | `file` | 157,286,400 | 150 |
@@ -554,67 +554,67 @@ Accounting:
 | `slab_reclaimable` | 20,971,520 | 20 |
 | `slab_unreclaimable` | 8,388,608 | 8 |
 | `sock` | 10,485,760 | 10 |
-| **Sum** | **752,877,568** | **718** |
+| **合計** | **752,877,568** | **718** |
 | `memory.current` | 753,207,296 | ~718 |
 
-The ~330 KiB gap is from `percpu` counters and batching delay — well within normal. `workingset_refault_file` at 123,456 events indicates this container has experienced file cache eviction and refaults, suggesting `memory.high` may be set too tight for its I/O working set.
+約330 KiBの差は、`percpu`カウンタとバッチ処理の遅延によるもので、十分に正常の範囲内である。`workingset_refault_file`が123,456イベントであることは、このコンテナがファイルキャッシュの追い出しとrefaultを経験していることを示しており、`memory.high`がI/Oのワーキングセットに対してきつすぎる可能性を示唆している。
 
-### What memory.stat does not include {#what-memorystat-does-not-include}
+### memory.statに含まれないもの {#what-memorystat-does-not-include}
 
-| Item | Why it is absent |
+| 項目 | 含まれない理由 |
 |------|-----------------|
-| Pages in swap (not in RAM) | `memory.swap.current` tracks this separately |
-| Hugetlb pages | Managed by the `hugetlb` controller, not `memory` |
-| Memory-mapped device I/O | Not tracked by memcg (no page struct backing) |
-| Kernel memory outside slab | e.g., ioremap'd or physically-contiguous allocations with no `struct page` backing |
+| スワップ上の（RAMにない）page | `memory.swap.current`が別に追跡する |
+| hugetlbのpage | `memory`ではなく`hugetlb`コントローラが管理する |
+| メモリマップされたデバイスI/O | memcgでは追跡されない（page構造体による裏付けがない） |
+| slab以外のカーネルメモリ | 例: `struct page`による裏付けのない、ioremapされた割り当てや物理的に連続した割り当て |
 
 ---
 
-## Quick Reference Table {#quick-reference-table}
+## クイックリファレンス表 {#quick-reference-table}
 
-| Field | Type | Reclaimable? | Kernel counter |
+| フィールド | 種別 | 回収可能か? | カーネルのカウンタ |
 |-------|------|-------------|----------------|
-| `anon` | Anonymous | Only via swap | `NR_ANON_MAPPED` |
-| `anon_thp` | Anonymous THP | Only via swap | `NR_ANON_THPS` |
-| `shmem` | Shared memory | Yes (to swap) | `NR_SHMEM` |
-| `shmem_thp` | Shared memory THP | Yes (to swap) | `NR_SHMEM_THPS` |
-| `file` | Page cache | Yes (clean: discard; dirty: writeback) | `NR_FILE_PAGES` |
-| `file_mapped` | Mapped file pages | Yes (after unmap) | `NR_FILE_MAPPED` |
-| `file_dirty` | Dirty page cache | After writeback | `NR_FILE_DIRTY` |
-| `file_writeback` | Under writeback | After writeback completes | `NR_WRITEBACK` |
-| `file_thp` | File THP | Yes | `NR_FILE_THPS` |
-| `kernel` | Kernel overhead total | Partially | (derived sum) |
-| `kernel_stack` | Thread kernel stacks | No (freed on exit) | `NR_KERNEL_STACK_KB` |
-| `pagetables` | Page table pages | No (freed on exit) | `NR_PAGETABLE` |
-| `sec_pagetables` | Secondary PT | No | `NR_SECONDARY_PAGETABLE` |
-| `percpu` | Per-cpu allocations | No | (memcg-specific counter) |
-| `sock` | Socket buffers | No (freed on close) | `MEMCG_SOCK` |
-| `slab_reclaimable` | Reclaimable slab | Yes | `NR_SLAB_RECLAIMABLE_B` |
-| `slab_unreclaimable` | Unreclaimable slab | No | `NR_SLAB_UNRECLAIMABLE_B` |
-| `swapcached` | Swap cache | Yes (discard the swap copy) | `NR_SWAPCACHE` |
-| `pgfault` | Event counter | — | `PGFAULT` |
-| `pgmajfault` | Event counter | — | `PGMAJFAULT` |
-| `pgrefill` | Event counter | — | `PGREFILL` |
-| `pgscan` | Event counter | — | sum of `PGSCAN_KSWAPD` + `PGSCAN_DIRECT` + `PGSCAN_PROACTIVE` + `PGSCAN_KHUGEPAGED` |
-| `pgsteal` | Event counter | — | sum of `PGSTEAL_KSWAPD` + `PGSTEAL_DIRECT` + ... |
-| `pgactivate` | Event counter | — | `PGACTIVATE` |
-| `pgdeactivate` | Event counter | — | `PGDEACTIVATE` |
-| `pglazyfreed` | Event counter | — | `PGLAZYFREED` |
-| `thp_fault_alloc` | Event counter | — | (memcg THP counter) |
-| `thp_collapse_alloc` | Event counter | — | (memcg THP counter) |
-| `workingset_refault_anon` | Event counter | — | `WORKINGSET_REFAULT_ANON` |
-| `workingset_refault_file` | Event counter | — | `WORKINGSET_REFAULT_FILE` |
-| `workingset_activate_anon` | Event counter | — | `WORKINGSET_ACTIVATE_ANON` |
-| `workingset_activate_file` | Event counter | — | `WORKINGSET_ACTIVATE_FILE` |
-| `workingset_restore_anon` | Event counter | — | `WORKINGSET_RESTORE_ANON` |
-| `workingset_restore_file` | Event counter | — | `WORKINGSET_RESTORE_FILE` |
-| `workingset_nodereclaim` | Event counter | — | `WORKINGSET_NODERECLAIM` |
+| `anon` | 無名 | スワップ経由でのみ | `NR_ANON_MAPPED` |
+| `anon_thp` | 無名THP | スワップ経由でのみ | `NR_ANON_THPS` |
+| `shmem` | 共有メモリ | はい（スワップへ） | `NR_SHMEM` |
+| `shmem_thp` | 共有メモリのTHP | はい（スワップへ） | `NR_SHMEM_THPS` |
+| `file` | ページキャッシュ | はい（クリーン: 破棄、ダーティ: ライトバック） | `NR_FILE_PAGES` |
+| `file_mapped` | マップされたファイルpage | はい（アンマップ後） | `NR_FILE_MAPPED` |
+| `file_dirty` | ダーティなページキャッシュ | ライトバック後 | `NR_FILE_DIRTY` |
+| `file_writeback` | ライトバック中 | ライトバック完了後 | `NR_WRITEBACK` |
+| `file_thp` | ファイルTHP | はい | `NR_FILE_THPS` |
+| `kernel` | カーネルオーバーヘッドの合計 | 部分的に | （導出された合計） |
+| `kernel_stack` | スレッドのカーネルスタック | いいえ（終了時に解放） | `NR_KERNEL_STACK_KB` |
+| `pagetables` | ページテーブルのpage | いいえ（終了時に解放） | `NR_PAGETABLE` |
+| `sec_pagetables` | セカンダリページテーブル | いいえ | `NR_SECONDARY_PAGETABLE` |
+| `percpu` | per-CPU割り当て | いいえ | （memcg固有のカウンタ） |
+| `sock` | ソケットバッファ | いいえ（close時に解放） | `MEMCG_SOCK` |
+| `slab_reclaimable` | 回収可能なslab | はい | `NR_SLAB_RECLAIMABLE_B` |
+| `slab_unreclaimable` | 回収不能なslab | いいえ | `NR_SLAB_UNRECLAIMABLE_B` |
+| `swapcached` | スワップキャッシュ | はい（スワップ側のコピーを破棄） | `NR_SWAPCACHE` |
+| `pgfault` | イベントカウンタ | — | `PGFAULT` |
+| `pgmajfault` | イベントカウンタ | — | `PGMAJFAULT` |
+| `pgrefill` | イベントカウンタ | — | `PGREFILL` |
+| `pgscan` | イベントカウンタ | — | `PGSCAN_KSWAPD` + `PGSCAN_DIRECT` + `PGSCAN_PROACTIVE` + `PGSCAN_KHUGEPAGED`の合計 |
+| `pgsteal` | イベントカウンタ | — | `PGSTEAL_KSWAPD` + `PGSTEAL_DIRECT` + ...の合計 |
+| `pgactivate` | イベントカウンタ | — | `PGACTIVATE` |
+| `pgdeactivate` | イベントカウンタ | — | `PGDEACTIVATE` |
+| `pglazyfreed` | イベントカウンタ | — | `PGLAZYFREED` |
+| `thp_fault_alloc` | イベントカウンタ | — | （memcgのTHPカウンタ） |
+| `thp_collapse_alloc` | イベントカウンタ | — | （memcgのTHPカウンタ） |
+| `workingset_refault_anon` | イベントカウンタ | — | `WORKINGSET_REFAULT_ANON` |
+| `workingset_refault_file` | イベントカウンタ | — | `WORKINGSET_REFAULT_FILE` |
+| `workingset_activate_anon` | イベントカウンタ | — | `WORKINGSET_ACTIVATE_ANON` |
+| `workingset_activate_file` | イベントカウンタ | — | `WORKINGSET_ACTIVATE_FILE` |
+| `workingset_restore_anon` | イベントカウンタ | — | `WORKINGSET_RESTORE_ANON` |
+| `workingset_restore_file` | イベントカウンタ | — | `WORKINGSET_RESTORE_FILE` |
+| `workingset_nodereclaim` | イベントカウンタ | — | `WORKINGSET_NODERECLAIM` |
 
 ---
 
-## Diagnostic Recipes {#diagnostic-recipes}
+## 診断レシピ {#diagnostic-recipes}
 
-### Is the container memory limit set too tight for its file cache? {#is-the-container-memory-limit-set-too-tight-for-its-file-cache}
+### コンテナのメモリ上限はファイルキャッシュに対してきつすぎないか? {#is-the-container-memory-limit-set-too-tight-for-its-file-cache}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -625,10 +625,10 @@ REFAULT=$(grep '^workingset_refault_file' $STAT | awk '{print $2}')
 echo "File cache: $(( FILE / 1048576 )) MiB"
 echo "File refaults (lifetime): $REFAULT"
 echo "memory.high: $(( HIGH / 1048576 )) MiB"
-# If REFAULT is high and FILE is near HIGH, raise memory.high to give cache more room
+# REFAULTが高くFILEがHIGHに近い場合は、memory.highを引き上げてキャッシュに余地を与える
 ```
 
-### Is slab growth hiding a kernel resource leak? {#is-slab-growth-hiding-a-kernel-resource-leak}
+### slabの増加がカーネルのリソースリークを隠していないか? {#is-slab-growth-hiding-a-kernel-resource-leak}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -642,10 +642,10 @@ echo "file: $(( FILE / 1048576 )) MiB"
 echo "slab_unreclaimable: $(( SLAB_U / 1048576 )) MiB"
 echo "memory.current: $(( CURRENT / 1048576 )) MiB"
 echo "unexplained: $(( (CURRENT - ANON - FILE - SLAB_U) / 1048576 )) MiB"
-# Large unexplained gap or rising slab_unreclaimable = potential kernel leak
+# 説明のつかない差が大きい、またはslab_unreclaimableが増え続けている = カーネルリークの可能性
 ```
 
-### Is the container actively thrashing? {#is-the-container-actively-thrashing}
+### コンテナは現在スラッシングしているか? {#is-the-container-actively-thrashing}
 
 ```bash
 STAT=/sys/fs/cgroup/mycontainer/memory.stat
@@ -659,27 +659,27 @@ echo "pgscan/pgsteal ratio (lifetime): $SCAN / $STEAL"
 echo "workingset_refault_anon: $REFAULT_A"
 echo "workingset_refault_file: $REFAULT_F"
 echo "pgmajfault: $MAJFAULT"
-# High refaults + high pgmajfault + pgscan >> pgsteal = thrashing
+# refaultが多い + pgmajfaultが高い + pgscan >> pgsteal = スラッシング
 ```
 
 ---
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Relevance |
+| ファイル | 関連 |
 |------|-----------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `memory_stat_show()` produces `memory.stat`; `mod_lruvec_state()` updates counters |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `mem_cgroup` struct; `MEMCG_*` stat enum; `mem_cgroup_stat_names[]` |
-| [`include/linux/mm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h) | `NR_*` enum values for global and per-lruvec stats |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Updates `pgscan`, `pgsteal`, `pgrefill`, `pgactivate`, `pgdeactivate` |
-| [`mm/workingset.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/workingset.c) | Updates `workingset_refault_*`, `workingset_activate_*` |
-| [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) | Authoritative field descriptions |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `memory_stat_show()`が`memory.stat`を生成する。`mod_lruvec_state()`がカウンタを更新する |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `mem_cgroup`構造体、`MEMCG_*`統計のenum、`mem_cgroup_stat_names[]` |
+| [`include/linux/mm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h) | グローバルおよびlruvecごとの統計のための`NR_*` enumの値 |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `pgscan`、`pgsteal`、`pgrefill`、`pgactivate`、`pgdeactivate`を更新する |
+| [`mm/workingset.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/workingset.c) | `workingset_refault_*`、`workingset_activate_*`を更新する |
+| [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) | フィールドの正式な説明 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Memory Cgroups](memcg.md) — What is charged to a cgroup and how
-- [Tuning Containers](tuning-containers.md) — Using memory.stat data to size memory.high and memory.max
-- [/proc/meminfo](proc-meminfo.md) — The system-wide equivalent of memory.stat
-- [Container Memory Limits](container-memory-limits.md) — What happens when memory.stat numbers approach the limit
+- [メモリcgroup](memcg.md) — 何がどのようにcgroupに課金されるか
+- [コンテナのチューニング](tuning-containers.md) — memory.statのデータを使ってmemory.highとmemory.maxのサイズを決める
+- [/proc/meminfo](proc-meminfo.md) — memory.statのシステム全体版
+- [コンテナのメモリ上限](container-memory-limits.md) — memory.statの数値が上限に近づくと何が起こるか

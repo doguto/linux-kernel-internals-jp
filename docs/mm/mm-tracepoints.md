@@ -1,99 +1,99 @@
-# Memory Subsystem Tracepoints {#memory-subsystem-tracepoints}
+# メモリサブシステムのtracepoint {#memory-subsystem-tracepoints}
 
-> Runtime tracing of kernel memory events with perf, ftrace, and BPF
+> perf、ftrace、BPFによる、カーネルのメモリイベントの実行時トレーシング
 
-The kernel's memory management subsystem exposes dozens of tracepoints that let you observe page allocation, reclaim, OOM decisions, page faults, compaction, huge pages, and slab activity at runtime — without recompilation and with very low overhead when disabled.
+カーネルのメモリ管理サブシステムは数十個のtracepointを公開しており、ページ割り当て、回収、OOMの判断、ページフォールト、コンパクション、huge page、slabの活動を実行時に観測できる。再コンパイルは不要で、無効時のオーバーヘッドも非常に小さい。
 
-This reference covers the tracepoints grouped by category, their available fields, and practical diagnostic examples using ftrace, `perf`, and BPF (via `bpftrace`).
+このリファレンスでは、tracepointをカテゴリごとにまとめ、利用可能なフィールドと、ftrace、`perf`、BPF（`bpftrace`経由）を使った実践的な診断例を扱う。
 
-## Prerequisites and General Usage {#prerequisites-and-general-usage}
+## 前提条件と一般的な使い方 {#prerequisites-and-general-usage}
 
-### Finding Available Tracepoints {#finding-available-tracepoints}
+### 利用可能なtracepointを探す {#finding-available-tracepoints}
 
 ```bash
-# List all mm-related tracepoints
+# mm関連のtracepointをすべて列挙する
 ls /sys/kernel/debug/tracing/events/kmem/
 ls /sys/kernel/debug/tracing/events/vmscan/
 ls /sys/kernel/debug/tracing/events/compaction/
 ls /sys/kernel/debug/tracing/events/huge_memory/
 
-# Or via perf
+# あるいはperfで
 perf list 'mm:*' 'kmem:*' 'vmscan:*' 'compaction:*' 2>/dev/null
 ```
 
-### Enabling with ftrace {#enabling-with-ftrace}
+### ftraceで有効にする {#enabling-with-ftrace}
 
 ```bash
-# Enable a single tracepoint
+# 単一のtracepointを有効にする
 echo 1 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 
-# Enable an entire subsystem
+# サブシステム全体を有効にする
 echo 1 > /sys/kernel/debug/tracing/events/vmscan/enable
 
-# Read the trace buffer
+# トレースバッファを読む
 cat /sys/kernel/debug/tracing/trace
 
-# Stream events live
+# イベントをライブでストリーミングする
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# Clean up
+# 後片付け
 echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
-echo > /sys/kernel/debug/tracing/trace   # clear the buffer
+echo > /sys/kernel/debug/tracing/trace   # バッファをクリアする
 ```
 
-### Enabling with perf {#enabling-with-perf}
+### perfで有効にする {#enabling-with-perf}
 
 ```bash
-# Record mm tracepoints for 10 seconds
+# mmのtracepointを10秒間記録する
 perf record -e 'kmem:mm_page_alloc,kmem:mm_page_free' -a -- sleep 10
 perf script
 
-# Count events per second
+# 毎秒のイベント数を数える
 perf stat -e 'kmem:mm_page_alloc,kmem:mm_page_free' -a -- sleep 5
 ```
 
-### Enabling with bpftrace {#enabling-with-bpftrace}
+### bpftraceで有効にする {#enabling-with-bpftrace}
 
 ```bash
-# bpftrace uses the same tracepoint names
+# bpftraceは同じtracepoint名を使う
 bpftrace -e 'tracepoint:kmem:mm_page_alloc { @[comm] = count(); }'
 ```
 
 ---
 
-## Page Allocation Tracepoints {#page-allocation-tracepoints}
+## ページ割り当てのtracepoint {#page-allocation-tracepoints}
 
-**Source**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
+**ソース**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
 ### mm_page_alloc {#mmpagealloc}
 
-Fires whenever the page allocator (`__alloc_pages()` in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)) successfully returns a page or compound page.
+ページアロケータ（[`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)の`__alloc_pages()`）がpageまたはcompound pageを正常に返すたびに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pfn` | `unsigned long` | PFN of the first page (use `pfn_to_page()` to get the `struct page *`) |
-| `order` | `unsigned int` | Allocation order (0 = single page, 1 = 2 pages, ...) |
-| `gfp_flags` | `gfp_t` | GFP flags used for the allocation |
-| `migratetype` | `int` | Migrate type of the allocation (UNMOVABLE, MOVABLE, RECLAIMABLE) |
+| `pfn` | `unsigned long` | 先頭pageのPFN（`struct page *`を得るには`pfn_to_page()`を使う） |
+| `order` | `unsigned int` | 割り当てのorder（0 = 単一page、1 = 2 page、...） |
+| `gfp_flags` | `gfp_t` | 割り当てに使われたGFPフラグ |
+| `migratetype` | `int` | 割り当てのmigrate type（UNMOVABLE、MOVABLE、RECLAIMABLE） |
 
-**Format string** (from `/sys/kernel/debug/tracing/events/kmem/mm_page_alloc/format`):
+**フォーマット文字列**（`/sys/kernel/debug/tracing/events/kmem/mm_page_alloc/format`より）:
 
 ```
 page=%p pfn=%lu order=%d migratetype=%d gfp_flags=%s
 ```
 
-**Enabling**:
+**有効化**:
 
 ```bash
 echo 1 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 ```
 
-**Diagnostic use**: Measure page allocation rate and distribution by order. A high rate of order > 0 allocations that fail (falling back to `mm_page_alloc_extfrag`) signals fragmentation pressure.
+**診断での使い方**: ページ割り当ての頻度とorderごとの分布を測定する。order > 0の割り当てが高い頻度で失敗する（`mm_page_alloc_extfrag`にフォールバックする）場合、断片化の圧力を示している。
 
 ```bash
-# bpftrace: histogram of allocation orders
+# bpftrace: 割り当てorderのヒストグラム
 bpftrace -e '
 tracepoint:kmem:mm_page_alloc {
     @order_hist = hist(args->order);
@@ -106,77 +106,77 @@ interval:s:5 {
 
 ### mm_page_free {#mmpagefree}
 
-Fires when a page (or compound page) is returned to the page allocator via `free_pages()` / `__free_pages()`.
+page（またはcompound page）が`free_pages()` / `__free_pages()`を介してページアロケータに返却されたときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pfn` | `unsigned long` | PFN of the page being freed |
-| `order` | `unsigned int` | Order of the compound page being freed |
+| `pfn` | `unsigned long` | 解放されるpageのPFN |
+| `order` | `unsigned int` | 解放されるcompound pageのorder |
 
-**Diagnostic use**: Paired with `mm_page_alloc`, you can track the net allocation rate (allocs minus frees). A diverging count indicates a memory leak or accumulation.
+**診断での使い方**: `mm_page_alloc`と組み合わせると、正味の割り当て率（割り当て数 − 解放数）を追跡できる。両者の数が乖離していく場合、メモリリークまたは蓄積を示している。
 
 ```bash
-# perf: count alloc vs free over 30 seconds
+# perf: 30秒間の割り当て数と解放数を数える
 perf stat -e kmem:mm_page_alloc,kmem:mm_page_free -a -- sleep 30
 ```
 
 ### mm_page_alloc_zone_locked {#mmpagealloczonelocked}
 
-Fires when the page allocator falls back to the zone lock path — typically when the per-CPU page set (PCP) is empty and must be refilled from the zone's free lists.
+ページアロケータがzoneロックのパスにフォールバックしたときに発火する。典型的には、per-CPUページセット（PCP）が空で、zoneのフリーリストから補充しなければならない場合である。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pfn` | `unsigned long` | PFN of the allocated page |
-| `order` | `unsigned int` | Allocation order |
-| `migratetype` | `int` | Migration type |
+| `pfn` | `unsigned long` | 割り当てられたpageのPFN |
+| `order` | `unsigned int` | 割り当てのorder |
+| `migratetype` | `int` | migration type |
 
-**Diagnostic use**: Frequent `mm_page_alloc_zone_locked` events relative to `mm_page_alloc` mean the PCP lists are frequently being exhausted. This can happen under allocation bursts or if `vm.percpu_pagelist_high_fraction` is set too conservatively.
+**診断での使い方**: `mm_page_alloc`に対して`mm_page_alloc_zone_locked`イベントが頻繁な場合、PCPリストが頻繁に枯渇していることを意味する。これは割り当てのバースト時や、`vm.percpu_pagelist_high_fraction`が控えめに設定されすぎている場合に起こりうる。
 
 ### mm_page_alloc_extfrag {#mmpagealloc_extfrag}
 
-Fires when the allocator satisfies a request by **stealing** pages from a different migratetype freelist. This is the main indicator of fragmentation.
+アロケータが、別のmigratetypeのフリーリストからpageを**盗む**ことで要求を満たしたときに発火する。これは断片化の主要な指標である。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `page` | `struct page *` | The stolen page |
-| `alloc_order` | `int` | The order originally requested |
-| `fallback_order` | `int` | The order that was actually used from the fallback list |
-| `alloc_migratetype` | `int` | The requested migration type |
-| `fallback_migratetype` | `int` | The migration type stolen from |
-| `change_ownership` | `int` | Whether the pageblock's migratetype was changed |
+| `page` | `struct page *` | 盗まれたpage |
+| `alloc_order` | `int` | 本来要求されたorder |
+| `fallback_order` | `int` | フォールバックリストから実際に使われたorder |
+| `alloc_migratetype` | `int` | 要求されたmigration type |
+| `fallback_migratetype` | `int` | 盗まれた側のmigration type |
+| `change_ownership` | `int` | pageblockのmigratetypeが変更されたかどうか |
 
-**Diagnostic use**: Sustained `mm_page_alloc_extfrag` events with `change_ownership=1` mean unmovable allocations are permanently colonizing movable pageblocks. This leads to compaction failures. See [Compaction](compaction.md).
+**診断での使い方**: `change_ownership=1`の`mm_page_alloc_extfrag`イベントが持続する場合、移動不可能な割り当てが移動可能なpageblockを恒久的に侵食していることを意味する。これはコンパクションの失敗につながる。[コンパクション](compaction.md)を参照。
 
 ---
 
-## Page Reclaim Tracepoints {#page-reclaim-tracepoints}
+## ページ回収のtracepoint {#page-reclaim-tracepoints}
 
-**Source**: [`include/trace/events/vmscan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h)
+**ソース**: [`include/trace/events/vmscan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h)
 
-These tracepoints cover both background reclaim (kswapd) and synchronous direct reclaim, which blocks the allocating process.
+これらのtracepointは、バックグラウンドの回収（kswapd）と、割り当てを行うプロセスをブロックする同期的な直接回収の両方をカバーする。
 
 ### mm_vmscan_kswapd_wake {#mmvmscankswapd_wake}
 
-Fires when `kswapd` is woken up to begin background page reclaim.
+バックグラウンドのページ回収を開始するために`kswapd`が起床したときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `nid` | `int` | NUMA node ID |
-| `zid` | `int` | Zone index |
-| `order` | `int` | Allocation order that triggered the wakeup |
+| `nid` | `int` | NUMAノードID |
+| `zid` | `int` | zoneインデックス |
+| `order` | `int` | 起床のきっかけとなった割り当てのorder |
 
-**Diagnostic use**: Count how often kswapd wakes per second. A high wake rate means the system is under memory pressure but still in the background reclaim phase (before direct reclaim kicks in). If this is frequent, check `vm.min_free_kbytes` — raising it gives kswapd more headroom.
+**診断での使い方**: kswapdが毎秒何回起床するかを数える。起床頻度が高いのは、システムがメモリ圧迫下にあるものの、まだバックグラウンド回収の段階（直接回収が始まる前）にあることを意味する。これが頻繁であれば`vm.min_free_kbytes`を確認する。この値を上げるとkswapdにより多くの余裕を与えられる。
 
 ```bash
-# Rate of kswapd wakeups by NUMA node
+# NUMAノードごとのkswapd起床頻度
 bpftrace -e '
 tracepoint:vmscan:mm_vmscan_kswapd_wake {
     @[args->nid] = count();
@@ -186,33 +186,33 @@ interval:s:1 { print(@); clear(@); }'
 
 ### mm_vmscan_kswapd_sleep {#mmvmscankswapd_sleep}
 
-Fires when kswapd goes back to sleep after reclaiming enough memory.
+十分なメモリを回収した後、kswapdが再びスリープするときに発火する。
 
-**Fields**: `nid` (NUMA node ID)
+**フィールド**: `nid`（NUMAノードID）
 
-**Diagnostic use**: Time between `mm_vmscan_kswapd_wake` and `mm_vmscan_kswapd_sleep` gives the duration of each reclaim cycle.
+**診断での使い方**: `mm_vmscan_kswapd_wake`から`mm_vmscan_kswapd_sleep`までの時間が、各回収サイクルの所要時間となる。
 
 ### mm_vmscan_direct_reclaim_begin / mm_vmscan_direct_reclaim_end {#mmvmscandirectreclaimbegin-mmvmscandirectreclaimend}
 
-Fires when an allocation triggers **direct reclaim** — the allocating task itself must reclaim pages before it can proceed. Direct reclaim causes allocation latency visible to applications.
+割り当てが**直接回収**を引き起こしたときに発火する。直接回収では、割り当てを行うタスク自身が、処理を進める前にpageを回収しなければならない。直接回収は、アプリケーションから見える割り当てレイテンシを引き起こす。
 
-**Fields** (begin):
+**フィールド**（begin）:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `order` | `int` | Order being allocated |
-| `gfp_flags` | `gfp_t` | GFP flags of the allocation |
+| `order` | `int` | 割り当て中のorder |
+| `gfp_flags` | `gfp_t` | 割り当てのGFPフラグ |
 
-**Fields** (end):
+**フィールド**（end）:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `nr_reclaimed` | `unsigned long` | Number of pages reclaimed |
+| `nr_reclaimed` | `unsigned long` | 回収されたpage数 |
 
-**Diagnostic use**: Measure direct reclaim frequency and duration. Frequent direct reclaim is a strong signal of memory pressure — it directly adds latency to kernel and application code paths. Correlate with `allocstall_normal` in `/proc/vmstat` (described in [proc vmstat](understanding-proc-vmstat.md)).
+**診断での使い方**: 直接回収の頻度と所要時間を測定する。頻繁な直接回収はメモリ圧迫の強い兆候であり、カーネルとアプリケーションのコードパスに直接レイテンシを加える。`/proc/vmstat`の`allocstall_normal`（[proc vmstat](understanding-proc-vmstat.md)で説明）と相関を取ること。
 
 ```bash
-# Measure direct reclaim latency (nanoseconds) per task
+# タスクごとの直接回収レイテンシ（ナノ秒）を測定する
 bpftrace -e '
 tracepoint:vmscan:mm_vmscan_direct_reclaim_begin {
     @start[tid] = nsecs;
@@ -226,95 +226,95 @@ interval:s:10 { print(@latency_ns); }'
 
 ### mm_vmscan_lru_isolate {#mmvmscanlru_isolate}
 
-Fires when pages are isolated from the LRU list for reclaim consideration.
+回収の検討対象としてpageがLRUリストから隔離されたときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `highest_zoneidx` | `int` | The highest zone being reclaimed |
-| `order` | `int` | Requested allocation order |
-| `nr_requested` | `unsigned long` | Pages requested for isolation |
-| `nr_scanned` | `unsigned long` | Pages scanned |
-| `nr_skipped` | `unsigned long` | Pages skipped (e.g., busy pages) |
-| `nr_taken` | `unsigned long` | Pages actually isolated |
-| `lru` | `unsigned int` | Which LRU list (active/inactive anon/file) |
+| `highest_zoneidx` | `int` | 回収対象の最上位zone |
+| `order` | `int` | 要求された割り当てのorder |
+| `nr_requested` | `unsigned long` | 隔離を要求されたpage数 |
+| `nr_scanned` | `unsigned long` | スキャンされたpage数 |
+| `nr_skipped` | `unsigned long` | スキップされたpage数（例: ビジーなpage） |
+| `nr_taken` | `unsigned long` | 実際に隔離されたpage数 |
+| `lru` | `unsigned int` | どのLRUリストか（active/inactive、anon/file） |
 
-**Diagnostic use**: A high `nr_skipped` / `nr_taken` ratio means many pages are temporarily busy (under writeback, locked, etc.) and cannot be reclaimed. This can cause reclaim to stall.
+**診断での使い方**: `nr_skipped` / `nr_taken`の比率が高い場合、多くのpageが一時的にビジー（ライトバック中、ロック中など）で回収できないことを意味する。これは回収のストールを引き起こしうる。
 
 ### mm_vmscan_lru_shrink_inactive {#mmvmscanlrushrinkinactive}
 
-Fires when the inactive LRU list is shrunk (pages are being reclaimed or moved to the active list after reference check).
+inactive LRUリストが縮小されたとき（pageが回収されるか、参照チェックの結果activeリストへ移される）に発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `nid` | `int` | NUMA node |
-| `nr_scanned` | `unsigned long` | Pages scanned on inactive list |
-| `nr_reclaimed` | `unsigned long` | Pages actually freed |
-| `nr_dirty` | `unsigned long` | Dirty pages encountered |
-| `nr_writeback` | `unsigned long` | Pages currently under writeback |
-| `nr_congested` | `unsigned long` | Pages waiting on congested backing device |
-| `nr_immediate` | `unsigned long` | Pages eligible for immediate reclaim |
-| `nr_activate0` | `unsigned long` | Anonymous pages promoted back to active list |
-| `nr_activate1` | `unsigned long` | File-backed pages promoted back to active list |
-| `nr_ref_keep` | `unsigned long` | Pages kept due to reference |
-| `nr_unmap_fail` | `unsigned long` | Pages that failed unmapping |
-| `priority` | `int` | Reclaim urgency (lower = more urgent) |
+| `nid` | `int` | NUMAノード |
+| `nr_scanned` | `unsigned long` | inactiveリスト上でスキャンされたpage数 |
+| `nr_reclaimed` | `unsigned long` | 実際に解放されたpage数 |
+| `nr_dirty` | `unsigned long` | 遭遇したダーティページ数 |
+| `nr_writeback` | `unsigned long` | 現在ライトバック中のpage数 |
+| `nr_congested` | `unsigned long` | 輻輳した裏側デバイスを待っているpage数 |
+| `nr_immediate` | `unsigned long` | 即時回収の対象となるpage数 |
+| `nr_activate0` | `unsigned long` | activeリストへ昇格し直した無名page数 |
+| `nr_activate1` | `unsigned long` | activeリストへ昇格し直したファイルバックのpage数 |
+| `nr_ref_keep` | `unsigned long` | 参照されていたために保持されたpage数 |
+| `nr_unmap_fail` | `unsigned long` | アンマップに失敗したpage数 |
+| `priority` | `int` | 回収の緊急度（低いほど緊急） |
 
-**Diagnostic use**: A large `nr_dirty` combined with low `nr_reclaimed` means reclaim is hitting dirty pages and having to wait for writeback. This is a common source of reclaim latency. The `priority` field (from 12 at start down to 0 at desperation) shows how aggressively the kernel is trying.
+**診断での使い方**: `nr_dirty`が大きく`nr_reclaimed`が小さい場合、回収がダーティページに突き当たってライトバックを待たなければならないことを意味する。これは回収レイテンシのよくある原因である。`priority`フィールド（開始時の12から、追い詰められると0まで下がる）は、カーネルがどれだけ積極的に回収しようとしているかを示す。
 
 ### mm_vmscan_write_folio {#mmvmscanwrite_folio}
 
-!!! note "Renamed in recent kernels"
-    This tracepoint was originally called `mm_vmscan_writepage` and was renamed to `mm_vmscan_write_folio` during the folio conversion. Check `/sys/kernel/debug/tracing/events/vmscan/` on your running kernel for the exact name.
+!!! note "最近のカーネルでは名前が変わっている"
+    このtracepointは元々`mm_vmscan_writepage`という名前だったが、folio化の際に`mm_vmscan_write_folio`に改名された。正確な名前は、実行中のカーネルの`/sys/kernel/debug/tracing/events/vmscan/`で確認すること。
 
-Fires when the reclaim path decides to write a dirty page/folio to swap or backing storage.
+回収パスが、ダーティなpage/folioをスワップまたは裏側のストレージに書き出すと判断したときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pfn` | `unsigned long` | PFN of the folio being written |
-| `reclaim_flags` | `int` | Flags describing the writeback context |
+| `pfn` | `unsigned long` | 書き出されるfolioのPFN |
+| `reclaim_flags` | `int` | ライトバックの文脈を表すフラグ |
 
-**Diagnostic use**: High rates mean the system is swap-writing or syncing dirty file pages due to memory pressure — I/O-driven reclaim that significantly impacts application latency.
+**診断での使い方**: 頻度が高い場合、システムがメモリ圧迫のためにスワップへ書き出したり、ダーティなファイルpageを同期したりしていることを意味する。これはI/O駆動の回収であり、アプリケーションのレイテンシに大きく影響する。
 
 ---
 
-## OOM Tracepoints {#oom-tracepoints}
+## OOMのtracepoint {#oom-tracepoints}
 
-**Source**: [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h)
+**ソース**: [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h)
 
 ### oom_score_adj_update {#oomscoreadj_update}
 
-Fires when a process's `oom_score_adj` value is changed (via `/proc/PID/oom_score_adj`).
+プロセスの`oom_score_adj`の値が（`/proc/PID/oom_score_adj`を介して）変更されたときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pid` | `int` | Process ID being adjusted |
-| `comm` | `char[]` | Process name |
-| `oom_score_adj` | `short` | New oom_score_adj value |
+| `pid` | `int` | 調整されるプロセスのID |
+| `comm` | `char[]` | プロセス名 |
+| `oom_score_adj` | `short` | 新しいoom_score_adjの値 |
 
-**Diagnostic use**: Audit which processes are adjusting their OOM scores, and when. A process repeatedly setting itself to -1000 (fully protected) as it starts can leave the system without viable OOM victims.
+**診断での使い方**: どのプロセスがいつOOMスコアを調整しているかを監査する。起動時に自分自身を繰り返し-1000（完全に保護）に設定するプロセスがあると、システムにOOMの犠牲者として妥当な候補がいなくなることがある。
 
 ### mark_victim {#mark_victim}
 
-Fires when the OOM killer selects a process to kill.
+OOM killerがkillするプロセスを選択したときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `pid` | `int` | PID of the victim process |
+| `pid` | `int` | 犠牲となるプロセスのPID |
 
-**Diagnostic use**: This is the single most useful OOM tracepoint for production monitoring. Subscribe to `mark_victim` to get a structured event every time the OOM killer fires, including which process was selected and why.
+**診断での使い方**: これは本番環境の監視において最も有用なOOMのtracepointである。`mark_victim`を購読すれば、OOM killerが発動するたびに、どのプロセスがなぜ選ばれたかを含む構造化されたイベントが得られる。
 
 ```bash
-# Alert on OOM kills with process details (RSS values are in kB)
+# プロセスの詳細付きでOOM killを通知する（RSSの値はkB単位）
 bpftrace -e '
 tracepoint:oom:mark_victim {
     $rss_kb = args->anon_rss + args->file_rss + args->shmem_rss;
@@ -323,63 +323,63 @@ tracepoint:oom:mark_victim {
 }'
 ```
 
-For the full OOM debugging workflow, see [OOM Debugging](oom-debugging.md).
+OOMデバッグの完全なワークフローについては、[OOMのデバッグ](oom-debugging.md)を参照。
 
 ---
 
-## Page Fault Tracepoints {#page-fault-tracepoints}
+## ページフォールトのtracepoint {#page-fault-tracepoints}
 
-The kernel does not expose generic mm-level page fault tracepoints. Page fault observation is architecture-specific:
+カーネルは、mmレベルの汎用的なページフォールトのtracepointを公開していない。ページフォールトの観測はアーキテクチャ固有である。
 
-- **x86/x86_64**: `exceptions:page_fault_user` and `exceptions:page_fault_kernel`
-- **ARM64**: `exceptions:page_fault_user` and `exceptions:page_fault_kernel`
+- **x86/x86_64**: `exceptions:page_fault_user`と`exceptions:page_fault_kernel`
+- **ARM64**: `exceptions:page_fault_user`と`exceptions:page_fault_kernel`
 
 ```bash
-# Count user-space page faults (all architectures that support it)
+# ユーザー空間のページフォールトを数える（これをサポートするすべてのアーキテクチャ）
 perf stat -e exceptions:page_fault_user -a -- sleep 10
 
-# Or use /proc/vmstat counters (architecture-independent)
-grep pgfault /proc/vmstat     # minor faults
-grep pgmajfault /proc/vmstat  # major faults (required I/O)
+# あるいは/proc/vmstatのカウンタを使う（アーキテクチャ非依存）
+grep pgfault /proc/vmstat     # マイナーフォールト
+grep pgmajfault /proc/vmstat  # メジャーフォールト（I/Oが必要だったもの）
 ```
 
-For page fault analysis, `/proc/vmstat` counters (`pgfault`, `pgmajfault`) and per-process `/proc/<pid>/stat` fields (minflt, majflt) are generally more portable than tracepoints.
+ページフォールトの分析には、一般にtracepointよりも`/proc/vmstat`のカウンタ（`pgfault`、`pgmajfault`）やプロセスごとの`/proc/<pid>/stat`のフィールド（minflt、majflt）の方が移植性が高い。
 
 ---
 
-## Compaction Tracepoints {#compaction-tracepoints}
+## コンパクションのtracepoint {#compaction-tracepoints}
 
-**Source**: [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h)
+**ソース**: [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h)
 
 ### mm_compaction_begin / mm_compaction_end {#mmcompactionbegin-mmcompactionend}
 
-Fires when a compaction pass starts and ends.
+コンパクションのパスが開始・終了したときに発火する。
 
-**Fields** (begin):
+**フィールド**（begin）:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `zone_start` | `unsigned long` | Start PFN of the zone being compacted |
-| `migrate_pfn` | `unsigned long` | Current migration scanner position |
-| `free_pfn` | `unsigned long` | Current free-page scanner position |
-| `zone_end` | `unsigned long` | End PFN |
-| `sync` | `bool` | Whether this is synchronous (blocking) compaction |
+| `zone_start` | `unsigned long` | コンパクション対象zoneの開始PFN |
+| `migrate_pfn` | `unsigned long` | 現在の移行スキャナの位置 |
+| `free_pfn` | `unsigned long` | 現在の空きpageスキャナの位置 |
+| `zone_end` | `unsigned long` | 終了PFN |
+| `sync` | `bool` | 同期的（ブロッキング）なコンパクションかどうか |
 
-**Fields** (end):
+**フィールド**（end）:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `zone_start` | `unsigned long` | Zone start PFN |
-| `migrate_pfn` | `unsigned long` | Final migration scanner position |
-| `free_pfn` | `unsigned long` | Final free-page scanner position |
-| `zone_end` | `unsigned long` | Zone end PFN |
-| `sync` | `bool` | Synchronous compaction |
-| `status` | `int` | Result: `COMPACT_SUCCESS`, `COMPACT_PARTIAL_SKIPPED`, `COMPACT_CONTINUE`, `COMPACT_SKIPPED`, `COMPACT_DEFERRED`, `COMPACT_NOT_SUITABLE_ZONE`, `COMPACT_CONTENDED` |
+| `zone_start` | `unsigned long` | zoneの開始PFN |
+| `migrate_pfn` | `unsigned long` | 最終的な移行スキャナの位置 |
+| `free_pfn` | `unsigned long` | 最終的な空きpageスキャナの位置 |
+| `zone_end` | `unsigned long` | zoneの終了PFN |
+| `sync` | `bool` | 同期的なコンパクション |
+| `status` | `int` | 結果: `COMPACT_SUCCESS`、`COMPACT_PARTIAL_SKIPPED`、`COMPACT_CONTINUE`、`COMPACT_SKIPPED`、`COMPACT_DEFERRED`、`COMPACT_NOT_SUITABLE_ZONE`、`COMPACT_CONTENDED` |
 
-**Diagnostic use**: Track compaction duration and success rate. Frequent `COMPACT_DEFERRED` statuses mean the kernel has given up trying to compact a zone (too many failed attempts). `COMPACT_SUCCESS` followed by a successful high-order allocation confirms fragmentation was the root cause.
+**診断での使い方**: コンパクションの所要時間と成功率を追跡する。`COMPACT_DEFERRED`のステータスが頻繁な場合、カーネルがそのzoneのコンパクションを諦めた（失敗した試行が多すぎる）ことを意味する。`COMPACT_SUCCESS`の後に高orderの割り当てが成功していれば、断片化が根本原因だったことが確認できる。
 
 ```bash
-# How often does compaction succeed vs fail?
+# コンパクションはどれくらいの頻度で成功・失敗しているか?
 bpftrace -e '
 tracepoint:compaction:mm_compaction_end {
     @status[args->status] = count();
@@ -389,54 +389,54 @@ interval:s:10 { print(@status); }'
 
 ### mm_compaction_isolate_migratepages / mm_compaction_isolate_freepages {#mmcompactionisolatemigratepages-mmcompactionisolatefreepages}
 
-Fires when pages are isolated for migration or as free targets during compaction.
+コンパクション中に、移行対象として、あるいは空きの移行先としてpageが隔離されたときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `start_pfn` | `unsigned long` | Start of the scanned range |
-| `end_pfn` | `unsigned long` | End of the scanned range |
-| `nr_scanned` | `unsigned long` | Pages scanned |
-| `nr_taken` | `unsigned long` | Pages isolated |
+| `start_pfn` | `unsigned long` | スキャンした範囲の開始 |
+| `end_pfn` | `unsigned long` | スキャンした範囲の終了 |
+| `nr_scanned` | `unsigned long` | スキャンされたpage数 |
+| `nr_taken` | `unsigned long` | 隔離されたpage数 |
 
-**Diagnostic use**: A low `nr_taken / nr_scanned` ratio means most pages in the zone are pinned (unmovable) and cannot be compacted. This indicates fundamental fragmentation that compaction cannot resolve — consider [CMA](cma.md) or huge page reservation changes.
+**診断での使い方**: `nr_taken / nr_scanned`の比率が低い場合、zone内のほとんどのpageがピン留めされて（移動不可能で）おり、コンパクションできないことを意味する。これはコンパクションでは解決できない根本的な断片化を示しているので、[CMA](cma.md)やhuge pageの予約の変更を検討すること。
 
 ### mm_compaction_migratepages {#mmcompactionmigratepages}
 
-Fires when isolated pages are actually migrated to new locations.
+隔離されたpageが実際に新しい位置へ移行されたときに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `nr_migrated` | `unsigned long` | Pages successfully moved |
-| `nr_failed` | `unsigned long` | Pages that failed migration |
+| `nr_migrated` | `unsigned long` | 正常に移動されたpage数 |
+| `nr_failed` | `unsigned long` | 移行に失敗したpage数 |
 
 ---
 
-## Huge Page Tracepoints {#huge-page-tracepoints}
+## huge pageのtracepoint {#huge-page-tracepoints}
 
-**Source**: [`include/trace/events/huge_memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h)
+**ソース**: [`include/trace/events/huge_memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h)
 
-The available tracepoints cover khugepaged's collapse activity. Check `/sys/kernel/debug/tracing/events/huge_memory/` on your running kernel for the full list, as names evolve with folio and file-THP work.
+利用可能なtracepointは、khugepagedのcollapse（まとめ上げ）の活動をカバーする。名前はfolioやファイルTHPの作業に伴って変化するので、完全な一覧は実行中のカーネルの`/sys/kernel/debug/tracing/events/huge_memory/`で確認すること。
 
 ### mm_collapse_huge_page {#mmcollapsehuge_page}
 
-Fires when the khugepaged daemon finishes a collapse attempt (success or failure).
+khugepagedデーモンがcollapseの試行を終えたとき（成功・失敗を問わず）に発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `mm` | `struct mm_struct *` | The process address space |
-| `isolated` | `int` | Number of pages isolated for collapse |
-| `status` | `int` | Result: 0 = success, non-zero = failure |
+| `mm` | `struct mm_struct *` | プロセスのアドレス空間 |
+| `isolated` | `int` | collapseのために隔離されたpage数 |
+| `status` | `int` | 結果: 0 = 成功、0以外 = 失敗 |
 
-**Diagnostic use**: Track THP collapse activity. Frequent failures (`status != 0`) may indicate the process's memory is too fragmented for khugepaged to make progress. Collapsed THPs appear as `AnonHugePages` in `/proc/meminfo`.
+**診断での使い方**: THPのcollapse活動を追跡する。頻繁な失敗（`status != 0`）は、プロセスのメモリが断片化しすぎていてkhugepagedが処理を進められないことを示している可能性がある。collapseされたTHPは`/proc/meminfo`の`AnonHugePages`に現れる。
 
 ```bash
-# Count THP collapses per minute, split by outcome
+# 毎分のTHP collapse数を、結果別に数える
 bpftrace -e '
 tracepoint:huge_memory:mm_collapse_huge_page {
     @[args->status == 0 ? "success" : "fail"] = count();
@@ -446,43 +446,43 @@ interval:s:60 { print(@); clear(@); }'
 
 ### mm_collapse_huge_page_isolate {#mmcollapsehugepageisolate}
 
-Fires when pages are isolated from the LRU as part of a collapse attempt.
+collapseの試行の一環としてpageがLRUから隔離されたときに発火する。
 
-**Fields**: `pfn`, `none_or_zero`, `referenced`, `status`
+**フィールド**: `pfn`、`none_or_zero`、`referenced`、`status`
 
-**Diagnostic use**: A non-zero `status` here means the isolation step itself failed — the pages were busy (under I/O, locked, etc.) and could not be moved.
+**診断での使い方**: ここで`status`が0以外の場合、隔離のステップ自体が失敗したことを意味する。pageがビジー（I/O中、ロック中など）で移動できなかったのである。
 
 ### mm_khugepaged_scan_pmd {#mmkhugepagedscan_pmd}
 
-Fires when khugepaged scans a PMD entry looking for collapse opportunities.
+khugepagedがcollapseの機会を探してPMDエントリをスキャンしたときに発火する。
 
-**Fields**: `mm`, `pfn`, `referenced`, `none_or_zero`, `status`, `unmapped`
+**フィールド**: `mm`、`pfn`、`referenced`、`none_or_zero`、`status`、`unmapped`
 
 ---
 
-## Slab Tracepoints {#slab-tracepoints}
+## slabのtracepoint {#slab-tracepoints}
 
-**Source**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
+**ソース**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
 ### kmem_cache_alloc {#kmemcachealloc}
 
-Fires on every allocation from a named slab cache (`kmem_cache_alloc()`, `kmem_cache_alloc_node()`).
+名前付きslabキャッシュからの割り当て（`kmem_cache_alloc()`、`kmem_cache_alloc_node()`）のたびに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `call_site` | `unsigned long` | Return address of the caller (instruction pointer) |
-| `ptr` | `const void *` | Pointer to the allocated object |
-| `bytes_req` | `size_t` | Bytes requested |
-| `bytes_alloc` | `size_t` | Bytes actually allocated (may be larger due to alignment) |
-| `gfp_flags` | `gfp_t` | Allocation flags |
-| `node` | `int` | NUMA node allocated from (-1 = any) |
+| `call_site` | `unsigned long` | 呼び出し元の戻りアドレス（命令ポインタ） |
+| `ptr` | `const void *` | 割り当てられたオブジェクトへのポインタ |
+| `bytes_req` | `size_t` | 要求されたバイト数 |
+| `bytes_alloc` | `size_t` | 実際に割り当てられたバイト数（アライメントのため大きくなることがある） |
+| `gfp_flags` | `gfp_t` | 割り当てフラグ |
+| `node` | `int` | 割り当て元のNUMAノード（-1 = 任意） |
 
-**Diagnostic use**: Identify which allocation sites are most active and which slab caches are growing fastest. The `call_site` field gives a raw instruction pointer — symbolize it with `addr2line` or `perf script` to get a function name.
+**診断での使い方**: どの割り当て箇所が最も活発か、どのslabキャッシュが最も速く成長しているかを特定する。`call_site`フィールドは生の命令ポインタなので、`addr2line`や`perf script`でシンボル化して関数名を得る。
 
 ```bash
-# Top 10 slab allocation call sites
+# slab割り当ての呼び出し箇所トップ10
 bpftrace -e '
 tracepoint:kmem:kmem_cache_alloc {
     @[ksym(args->call_site)] = count();
@@ -495,49 +495,49 @@ interval:s:10 {
 
 ### kmem_cache_free {#kmemcachefree}
 
-Fires on every slab object free (`kmem_cache_free()`).
+slabオブジェクトの解放（`kmem_cache_free()`）のたびに発火する。
 
-**Fields**:
+**フィールド**:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `call_site` | `unsigned long` | Caller instruction pointer |
-| `ptr` | `const void *` | Pointer being freed |
+| `call_site` | `unsigned long` | 呼び出し元の命令ポインタ |
+| `ptr` | `const void *` | 解放されるポインタ |
 
-**Diagnostic use**: Pair with `kmem_cache_alloc` to find allocation sites that allocate but never free — a slab-level leak.
+**診断での使い方**: `kmem_cache_alloc`と組み合わせて、割り当てるだけで決して解放しない割り当て箇所、つまりslabレベルのリークを見つける。
 
 ```bash
-# Net slab balance: allocations minus frees per call site
+# slabの正味の収支: 呼び出し箇所ごとの割り当て数 − 解放数
 bpftrace -e '
 tracepoint:kmem:kmem_cache_alloc { @net[ksym(args->call_site)]++; }
 tracepoint:kmem:kmem_cache_free  { @net[ksym(args->call_site)]--; }
 interval:s:30 {
-    print(@net);  # positive = more allocs than frees
+    print(@net);  # 正 = 解放より割り当てが多い
     clear(@net);
 }'
 ```
 
 ### kmalloc / kfree {#kmalloc-kfree}
 
-**`kmalloc`** fires on `kmalloc()` / `kzalloc()` allocations (general-purpose slab).
+**`kmalloc`**は`kmalloc()` / `kzalloc()`による割り当て（汎用slab）で発火する。
 
-**`kfree`** fires on `kfree()`.
+**`kfree`**は`kfree()`で発火する。
 
-**Fields** (kmalloc):
+**フィールド**（kmalloc）:
 
-| Field | Type | Description |
+| フィールド | 型 | 説明 |
 |-------|------|-------------|
-| `call_site` | `unsigned long` | Caller IP |
-| `ptr` | `const void *` | Allocated pointer |
-| `bytes_req` | `size_t` | Bytes requested |
-| `bytes_alloc` | `size_t` | Bytes allocated (next power of two) |
-| `gfp_flags` | `gfp_t` | GFP flags |
-| `node` | `int` | NUMA node |
+| `call_site` | `unsigned long` | 呼び出し元のIP |
+| `ptr` | `const void *` | 割り当てられたポインタ |
+| `bytes_req` | `size_t` | 要求されたバイト数 |
+| `bytes_alloc` | `size_t` | 割り当てられたバイト数（次の2のべき乗） |
+| `gfp_flags` | `gfp_t` | GFPフラグ |
+| `node` | `int` | NUMAノード |
 
-**Diagnostic use**: The difference between `bytes_req` and `bytes_alloc` reveals internal fragmentation. A call site that always requests 33 bytes gets 64 bytes — nearly 2x waste. This is a signal to adjust the allocation size or use a dedicated `kmem_cache`.
+**診断での使い方**: `bytes_req`と`bytes_alloc`の差から内部断片化が分かる。常に33バイトを要求する呼び出し箇所は64バイトを得るので、ほぼ2倍の無駄になる。これは割り当てサイズを調整するか、専用の`kmem_cache`を使うべきだという兆候である。
 
 ```bash
-# Show average waste ratio by call site
+# 呼び出し箇所ごとの平均的な無駄の比率を表示する
 bpftrace -e '
 tracepoint:kmem:kmalloc {
     @req[ksym(args->call_site)]  = sum(args->bytes_req);
@@ -551,17 +551,17 @@ interval:s:15 {
 
 ---
 
-## Practical Diagnostic Recipes {#practical-diagnostic-recipes}
+## 実践的な診断レシピ {#practical-diagnostic-recipes}
 
-### Recipe 1: Is Memory Pressure Causing Application Latency? {#recipe-1-is-memory-pressure-causing-application-latency}
+### レシピ1: メモリ圧迫がアプリケーションのレイテンシを引き起こしているか? {#recipe-1-is-memory-pressure-causing-application-latency}
 
-Determine whether direct reclaim is adding latency to your process:
+直接回収がプロセスにレイテンシを加えているかどうかを判定する。
 
 ```bash
-# Step 1: Check if direct reclaim is happening at all
+# ステップ1: そもそも直接回収が起きているかを確認する
 grep allocstall /proc/vmstat
 
-# Step 2: If yes, measure how long it lasts using tracepoints
+# ステップ2: 起きていれば、tracepointでその持続時間を測定する
 bpftrace -e '
 tracepoint:vmscan:mm_vmscan_direct_reclaim_begin {
     @start[tid] = nsecs;
@@ -575,32 +575,32 @@ tracepoint:vmscan:mm_vmscan_direct_reclaim_end /@start[tid]/ {
 }'
 ```
 
-If you see your application's task name in the output with high latency values, memory pressure is directly adding latency to your workload.
+出力にアプリケーションのタスク名が高いレイテンシ値とともに現れるなら、メモリ圧迫がワークロードに直接レイテンシを加えている。
 
-### Recipe 2: Finding the Source of Memory Growth {#recipe-2-finding-the-source-of-memory-growth}
+### レシピ2: メモリ増加の原因を見つける {#recipe-2-finding-the-source-of-memory-growth}
 
-Identify which code path is allocating the most memory:
+どのコードパスが最も多くのメモリを割り当てているかを特定する。
 
 ```bash
-# Top kmalloc call sites by total bytes allocated over 60 seconds
+# 60秒間に割り当てた総バイト数によるkmalloc呼び出し箇所のランキング
 bpftrace -e '
 tracepoint:kmem:kmalloc {
     @bytes[ksym(args->call_site)] = sum(args->bytes_alloc);
 }
 interval:s:60 {
-    print(@bytes, 20);  # top 20
+    print(@bytes, 20);  # 上位20件
     exit();
 }'
 ```
 
-Cross-reference with [KASAN](kasan.md) if the growth is unexpected — it may be a legitimate feature allocating memory, or it may be a leak.
+増加が予期しないものであれば、[KASAN](kasan.md)と突き合わせること。正当な機能がメモリを割り当てている場合もあれば、リークである場合もある。
 
-### Recipe 3: Diagnosing THP Collapse Failures {#recipe-3-diagnosing-thp-collapse-failures}
+### レシピ3: THPのcollapse失敗を診断する {#recipe-3-diagnosing-thp-collapse-failures}
 
-If you expect THP to be helping but are not seeing `AnonHugePages` grow in `/proc/meminfo`:
+THPが役立っているはずなのに、`/proc/meminfo`の`AnonHugePages`が増えていない場合:
 
 ```bash
-# Monitor collapse outcomes
+# collapseの結果を監視する
 bpftrace -e '
 tracepoint:huge_memory:mm_collapse_huge_page {
     @result[args->status] = count();
@@ -612,11 +612,11 @@ interval:s:30 {
 }'
 ```
 
-A `status` of 0 is success. Non-zero values map to `SCAN_*` enum values in `mm/khugepaged.c` — check the source for the current mapping (e.g., `SCAN_ALLOC_HUGE_PAGE_FAIL`, `SCAN_CGROUP_CHARGE_FAIL`). If collapses are consistently failing, also check `/sys/kernel/mm/transparent_hugepage/khugepaged/pages_collapsed` and `full_scans` for a longer-term view.
+`status`が0なら成功である。0以外の値は`mm/khugepaged.c`の`SCAN_*` enumの値に対応する（例: `SCAN_ALLOC_HUGE_PAGE_FAIL`、`SCAN_CGROUP_CHARGE_FAIL`）。現在の対応関係はソースで確認すること。collapseが一貫して失敗している場合は、より長期的な視点として`/sys/kernel/mm/transparent_hugepage/khugepaged/pages_collapsed`と`full_scans`も確認する。
 
-### Recipe 4: Watching the OOM Killer {#recipe-4-watching-the-oom-killer}
+### レシピ4: OOM killerを監視する {#recipe-4-watching-the-oom-killer}
 
-Set up a persistent monitor that logs every OOM kill with process details:
+すべてのOOM killをプロセスの詳細付きで記録する常駐モニタを設定する。
 
 ```bash
 bpftrace -e '
@@ -632,14 +632,14 @@ tracepoint:oom:mark_victim {
 }'
 ```
 
-See [OOM Debugging](oom-debugging.md) for the full investigation workflow after an OOM event.
+OOMイベント後の調査ワークフロー全体については、[OOMのデバッグ](oom-debugging.md)を参照。
 
-### Recipe 5: Compaction Health Check {#recipe-5-compaction-health-check}
+### レシピ5: コンパクションのヘルスチェック {#recipe-5-compaction-health-check}
 
-Determine whether compaction is keeping up with high-order allocation demand:
+コンパクションが高orderの割り当て需要に追いついているかどうかを判定する。
 
 ```bash
-# Run for 60 seconds, then report
+# 60秒間実行してから報告する
 bpftrace -e '
 tracepoint:compaction:mm_compaction_end {
     @[args->status] = count();
@@ -659,76 +659,76 @@ interval:s:60 {
 }'
 ```
 
-High `@ownership_stolen` combined with frequent `COMPACT_DEFERRED` results is a strong signal to consider `vm.min_free_kbytes` tuning or workload changes that reduce unmovable allocations.
+`@ownership_stolen`が高く、かつ`COMPACT_DEFERRED`の結果が頻繁な場合は、`vm.min_free_kbytes`のチューニングや、移動不可能な割り当てを減らすワークロードの変更を検討すべき強い兆候である。
 
 ---
 
-## Tracepoint Quick Reference {#tracepoint-quick-reference}
+## tracepointクイックリファレンス {#tracepoint-quick-reference}
 
-| Category | Tracepoint | Key Use |
+| カテゴリ | tracepoint | 主な用途 |
 |----------|-----------|---------|
-| Allocation | `kmem:mm_page_alloc` | Page allocation rate and order distribution |
-| Allocation | `kmem:mm_page_free` | Page free rate (pair with alloc for net growth) |
-| Allocation | `kmem:mm_page_alloc_extfrag` | Fragmentation: migratetype stealing |
-| Allocation | `kmem:mm_page_alloc_zone_locked` | PCP list exhaustion |
-| Reclaim | `vmscan:mm_vmscan_kswapd_wake` | Background reclaim pressure |
-| Reclaim | `vmscan:mm_vmscan_direct_reclaim_begin/end` | Allocation latency from reclaim |
-| Reclaim | `vmscan:mm_vmscan_lru_shrink_inactive` | Reclaim efficiency (dirty page bottlenecks) |
-| Reclaim | `vmscan:mm_vmscan_write_folio` | Swap/writeback rate from reclaim (was `mm_vmscan_writepage` pre-folio) |
-| OOM | `oom:mark_victim` | OOM kills: victim selection |
-| OOM | `oom:oom_score_adj_update` | OOM score manipulation audit |
-| Compaction | `compaction:mm_compaction_begin/end` | Compaction duration and success |
-| Compaction | `compaction:mm_compaction_migratepages` | Pages moved per compaction pass |
-| Huge pages | `huge_memory:mm_collapse_huge_page` | khugepaged collapse outcomes |
-| Huge pages | `huge_memory:mm_collapse_huge_page_isolate` | Page isolation step of collapse |
-| Huge pages | `huge_memory:mm_khugepaged_scan_pmd` | khugepaged PMD scan activity |
-| Slab | `kmem:kmem_cache_alloc` | Named-cache allocation by call site |
-| Slab | `kmem:kmem_cache_free` | Named-cache frees |
-| Slab | `kmem:kmalloc` | General kmalloc by call site and size |
-| Slab | `kmem:kfree` | kfree call sites |
+| 割り当て | `kmem:mm_page_alloc` | ページ割り当ての頻度とorderの分布 |
+| 割り当て | `kmem:mm_page_free` | ページ解放の頻度（allocと組み合わせて正味の増加を見る） |
+| 割り当て | `kmem:mm_page_alloc_extfrag` | 断片化: migratetypeの盗用 |
+| 割り当て | `kmem:mm_page_alloc_zone_locked` | PCPリストの枯渇 |
+| 回収 | `vmscan:mm_vmscan_kswapd_wake` | バックグラウンド回収の圧力 |
+| 回収 | `vmscan:mm_vmscan_direct_reclaim_begin/end` | 回収による割り当てレイテンシ |
+| 回収 | `vmscan:mm_vmscan_lru_shrink_inactive` | 回収の効率（ダーティページによるボトルネック） |
+| 回収 | `vmscan:mm_vmscan_write_folio` | 回収によるスワップ/ライトバックの頻度（folio以前は`mm_vmscan_writepage`） |
+| OOM | `oom:mark_victim` | OOM kill: 犠牲者の選択 |
+| OOM | `oom:oom_score_adj_update` | OOMスコア操作の監査 |
+| コンパクション | `compaction:mm_compaction_begin/end` | コンパクションの所要時間と成功 |
+| コンパクション | `compaction:mm_compaction_migratepages` | コンパクションのパスごとに移動されたpage数 |
+| huge page | `huge_memory:mm_collapse_huge_page` | khugepagedのcollapseの結果 |
+| huge page | `huge_memory:mm_collapse_huge_page_isolate` | collapseにおけるpage隔離のステップ |
+| huge page | `huge_memory:mm_khugepaged_scan_pmd` | khugepagedのPMDスキャン活動 |
+| slab | `kmem:kmem_cache_alloc` | 呼び出し箇所ごとの名前付きキャッシュの割り当て |
+| slab | `kmem:kmem_cache_free` | 名前付きキャッシュの解放 |
+| slab | `kmem:kmalloc` | 呼び出し箇所とサイズごとの汎用kmalloc |
+| slab | `kmem:kfree` | kfreeの呼び出し箇所 |
 
 ---
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h) | Page allocator and slab tracepoint definitions |
-| [`include/trace/events/vmscan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h) | Reclaim tracepoint definitions |
-| [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h) | Compaction tracepoint definitions |
-| [`include/trace/events/huge_memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h) | THP/huge page tracepoint definitions |
-| [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h) | OOM tracepoint definitions |
-| [`include/trace/events/mmflags.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/mmflags.h) | GFP flag name strings used in tracepoint output |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Page allocator — calls `trace_mm_page_alloc()` etc. |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Reclaim engine — calls vmscan trace events |
-| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Compaction — calls compaction trace events |
-| [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | khugepaged daemon — calls huge_memory trace events |
+| [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h) | ページアロケータとslabのtracepoint定義 |
+| [`include/trace/events/vmscan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h) | 回収のtracepoint定義 |
+| [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h) | コンパクションのtracepoint定義 |
+| [`include/trace/events/huge_memory.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h) | THP/huge pageのtracepoint定義 |
+| [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h) | OOMのtracepoint定義 |
+| [`include/trace/events/mmflags.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/mmflags.h) | tracepointの出力で使われるGFPフラグ名の文字列 |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | ページアロケータ — `trace_mm_page_alloc()`などを呼び出す |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | 回収エンジン — vmscanのトレースイベントを呼び出す |
+| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | コンパクション — compactionのトレースイベントを呼び出す |
+| [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | khugepagedデーモン — huge_memoryのトレースイベントを呼び出す |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/trace/events/mmflags.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/mmflags.h) — GFP flag name strings (`gfp_flag_names[]`) used to decode `gfp_flags` fields in tracepoint output
-- [include/trace/events/kmem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h) — page allocator and slab tracepoint definitions
-- [include/trace/events/vmscan.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h) — reclaim tracepoint definitions
-- [include/trace/events/compaction.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h) — compaction tracepoint definitions
-- [include/trace/events/huge_memory.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h) — THP and khugepaged tracepoint definitions
+- [include/trace/events/mmflags.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/mmflags.h) — tracepointの出力の`gfp_flags`フィールドをデコードするのに使われるGFPフラグ名の文字列（`gfp_flag_names[]`）
+- [include/trace/events/kmem.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h) — ページアロケータとslabのtracepoint定義
+- [include/trace/events/vmscan.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/vmscan.h) — 回収のtracepoint定義
+- [include/trace/events/compaction.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h) — コンパクションのtracepoint定義
+- [include/trace/events/huge_memory.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/huge_memory.h) — THPとkhugepagedのtracepoint定義
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/trace/ftrace.rst`](https://docs.kernel.org/trace/ftrace.html) — full reference for the ftrace infrastructure: ring buffer, filter syntax, and function tracing
-- [`Documentation/trace/tracepoints.rst`](https://docs.kernel.org/trace/tracepoints.html) — how tracepoints are defined with `TRACE_EVENT()` and how to add new ones
-- [`Documentation/trace/events.rst`](https://docs.kernel.org/trace/events.html) — enabling and filtering events via `/sys/kernel/debug/tracing/events/`
-- [`Documentation/bpf/index.rst`](https://docs.kernel.org/bpf/index.html) — BPF subsystem documentation including `tracepoint` program type
+- [`Documentation/trace/ftrace.rst`](https://docs.kernel.org/trace/ftrace.html) — ftrace基盤の完全なリファレンス: リングバッファ、フィルタ構文、関数トレーシング
+- [`Documentation/trace/tracepoints.rst`](https://docs.kernel.org/trace/tracepoints.html) — `TRACE_EVENT()`によるtracepointの定義方法と、新しいtracepointの追加方法
+- [`Documentation/trace/events.rst`](https://docs.kernel.org/trace/events.html) — `/sys/kernel/debug/tracing/events/`を介したイベントの有効化とフィルタリング
+- [`Documentation/bpf/index.rst`](https://docs.kernel.org/bpf/index.html) — `tracepoint`プログラムタイプを含むBPFサブシステムのドキュメント
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [understanding-proc-vmstat.md](understanding-proc-vmstat.md) — aggregate counters that summarize what individual tracepoints observe
-- [oom-debugging.md](oom-debugging.md) — using `oom:mark_victim` and PSI together for post-OOM investigation
-- [why-is-my-process-slow.md](why-is-my-process-slow.md) — using `mm_vmscan_direct_reclaim_begin/end` to attribute latency to memory pressure
-- [kasan.md](kasan.md) — memory bug detection to pair with allocation tracing when hunting use-after-free
+- [understanding-proc-vmstat.md](understanding-proc-vmstat.md) — 個々のtracepointが観測する内容を要約する集計カウンタ
+- [oom-debugging.md](oom-debugging.md) — OOM後の調査で`oom:mark_victim`とPSIを組み合わせて使う
+- [why-is-my-process-slow.md](why-is-my-process-slow.md) — `mm_vmscan_direct_reclaim_begin/end`を使ってレイテンシをメモリ圧迫に帰属させる
+- [kasan.md](kasan.md) — use-after-freeを探す際に割り当てのトレーシングと組み合わせるメモリバグ検出
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Tracepoints in the Linux kernel](https://lwn.net/Articles/379903/) — original introduction to the `TRACE_EVENT()` macro and the design philosophy behind static tracepoints
-- [LWN: Dynamic tracing with BPF](https://lwn.net/Articles/740157/) — using `bpftrace` and BCC to attach to kernel tracepoints with low overhead
+- [LWN: Tracepoints in the Linux kernel](https://lwn.net/Articles/379903/) — `TRACE_EVENT()`マクロと、静的tracepointの背後にある設計思想の最初の紹介
+- [LWN: Dynamic tracing with BPF](https://lwn.net/Articles/740157/) — `bpftrace`とBCCを使い、低オーバーヘッドでカーネルのtracepointにアタッチする

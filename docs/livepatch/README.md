@@ -1,40 +1,40 @@
-# Live Patching and kexec {#live-patching-and-kexec}
+# ライブパッチとkexec {#live-patching-and-kexec}
 
-> Updating a running kernel without rebooting
+> 稼働中のカーネルを再起動せずに更新する
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Kernel Live Patching](klp.md) | KLP, struct klp_patch, ftrace redirection, consistency model |
-| [KLP Consistency Model](klp-consistency.md) | Per-task patch state, stack checking, transition workqueue, forced transitions |
-| [Cumulative Patches and Atomic Replace](klp-cumulative.md) | Patch stacking, .replace=true, struct klp_ops, disabling and removing patches |
-| [KLP State: Custom Consistency Checks](klp-state.md) | klp_state API, transition callbacks, pre/post patch hooks, cumulative state inheritance |
-| [kGraft vs. kpatch History](kgraft-vs-kpatch-history.md) | How SUSE's kGraft and Red Hat's kpatch converged into upstream livepatch, and why the consistency model took years to land |
-| [kexec](kexec.md) | kexec_load, machine_kexec, kdump integration, fast reboot |
-| [War Stories](war-stories.md) | Stuck transitions, shadow variable leaks, compat syscall misses, `old_sympos` ambiguity, missing `.replace` |
+| [カーネルライブパッチ](klp.md) | KLP、struct klp_patch、ftraceによるリダイレクト、一貫性モデル |
+| [KLP一貫性モデル](klp-consistency.md) | タスクごとのパッチ状態、スタック検査、遷移workqueue、強制遷移 |
+| [累積パッチとアトミックリプレース](klp-cumulative.md) | パッチの積み重ね、.replace=true、struct klp_ops、パッチの無効化と削除 |
+| [KLP State: 独自の一貫性チェック](klp-state.md) | klp_state API、遷移コールバック、pre/postパッチフック、累積パッチにおける状態の継承 |
+| [kGraftとkpatchの歴史](kgraft-vs-kpatch-history.md) | SUSEのkGraftとRed Hatのkpatchがどのようにアップストリームのlivepatchに収束したか、そして一貫性モデルのマージになぜ何年もかかったか |
+| [kexec](kexec.md) | kexec_load、machine_kexec、kdumpとの統合、高速リブート |
+| [事件簿](war-stories.md) | 遷移の停滞、shadow変数のリーク、compatシステムコールの見落とし、`old_sympos`の曖昧さ、`.replace`の付け忘れ |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Check if live patching is supported
+# ライブパッチがサポートされているか確認する
 grep CONFIG_LIVEPATCH /boot/config-$(uname -r)
 # CONFIG_LIVEPATCH=y
 
-# List active live patches
+# 有効なライブパッチを一覧表示する
 cat /sys/kernel/livepatch/*/enabled
 
-# Apply a live patch (kernel module)
+# ライブパッチを適用する（カーネルモジュール）
 insmod mypatch.ko
 cat /sys/kernel/livepatch/mypatch/enabled
-# 1 = enabled (check transition=0 for fully consistent)
+# 1 = 有効（完全に一貫した状態かは transition=0 で確認する）
 
-# Disable a live patch
+# ライブパッチを無効化する
 echo 0 > /sys/kernel/livepatch/mypatch/enabled
 
-# kexec: load a new kernel
+# kexec: 新しいカーネルをロードする
 kexec -l /boot/vmlinuz --initrd=/boot/initrd.img --reuse-cmdline
 
-# Execute the loaded kernel (immediate, no POST)
+# ロードしたカーネルを実行する（即時、POSTなし）
 kexec -e
 ```
