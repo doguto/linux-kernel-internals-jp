@@ -1,4 +1,4 @@
-# AF_PACKET TPACKET_V3 の権限昇格 {#afpacket-tpacketv3-privilege-escalation}
+# AF_PACKET TPACKET_V3 の権限昇格 {#af_packet-tpacket_v3-privilege-escalation}
 
 > CVE-2017-7308 — 符号なしの減算を囲むたった1つの `(int)` キャストが、リングバッファの境界チェックを無力化した。syzkaller によって発見され、Project Zero によってローカル root に仕立てられた
 

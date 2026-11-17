@@ -101,7 +101,7 @@ static inline unsigned long high_wmark_pages(const struct zone *z) { return wmar
 
 ウォーターマークの値は`vm.min_free_kbytes`から導出される。このsysctlを引き上げると、すべてのzoneの3つのレベルすべてが比例して上がる。
 
-### ウォーターマークの確認: `zone_watermark_fast()`と`zone_watermark_ok()` {#checking-watermarks-zonewatermarkfast-and-zonewatermarkok}
+### ウォーターマークの確認: `zone_watermark_fast()`と`zone_watermark_ok()` {#checking-watermarks-zone_watermark_fast-and-zone_watermark_ok}
 
 アロケータはホットパスで`zone_watermark_fast()`を呼び、より低速な完全チェックには`zone_watermark_ok()`にフォールバックする。どちらも`mm/page_alloc.c`にある。
 
@@ -152,7 +152,7 @@ ZONE_NORMAL and ZONE_DMA32 and ZONE_DMA in the same pass.
 
 ---
 
-## `node_reclaim()`と`vm.zone_reclaim_mode` {#nodereclaim-and-vmzonereclaim_mode}
+## `node_reclaim()`と`vm.zone_reclaim_mode` {#node_reclaim-and-vmzone_reclaim_mode}
 
 ### sysctl {#the-sysctl}
 
@@ -191,7 +191,7 @@ static inline bool node_reclaim_enabled(void)
 }
 ```
 
-### `get_page_from_freelist()`内の呼び出し箇所 {#the-call-site-in-getpagefrom_freelist}
+### `get_page_from_freelist()`内の呼び出し箇所 {#the-call-site-in-get_page_from_freelist}
 
 フックは`mm/page_alloc.c`の`get_page_from_freelist()`内にあり、これが主要な割り当てパスである。あるzoneがウォーターマークのチェックに失敗すると、アロケータはノード回収を試す価値があるかどうかを確認する。
 
@@ -251,7 +251,7 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 
 ---
 
-## なぜ`zone_reclaim_mode`はデフォルトで無効なのか {#why-zonereclaimmode-is-disabled-by-default}
+## なぜ`zone_reclaim_mode`はデフォルトで無効なのか {#why-zone_reclaim_mode-is-disabled-by-default}
 
 `zone_reclaim_mode=1`のとき、カーネルはリモートのNUMAノードからの割り当てにフォールバックする前に、ローカルメモリからpageを回収することを優先する。その意図はNUMAの局所性を保つことだったが、実際には重大な問題を引き起こす。
 
@@ -276,7 +276,7 @@ int node_reclaim(struct pglist_data *pgdat, gfp_t gfp_mask, unsigned int order)
 
 ---
 
-## `RECLAIM_DISTANCE`と`zone_allows_reclaim()` {#reclaimdistance-and-zoneallows_reclaim}
+## `RECLAIM_DISTANCE`と`zone_allows_reclaim()` {#reclaim_distance-and-zone_allows_reclaim}
 
 `zone_reclaim_mode`が非ゼロであっても、カーネルは要求元ノードとトポロジ的に近いzoneに対してしか`node_reclaim()`を呼ばない。その閾値が、`include/linux/topology.h`で定義された`RECLAIM_DISTANCE`である。
 

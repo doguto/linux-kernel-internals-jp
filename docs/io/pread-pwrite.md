@@ -239,7 +239,7 @@ ssize_t pwritev2(int fd, const struct iovec *iov, int iovcnt,
 
 フラグは`include/uapi/linux/fs.h`で定義されている。
 
-### フラグがファイルシステムに届く仕組み: kiocb_set_rw_flags {#how-flags-reach-the-filesystem-kiocbsetrw_flags}
+### フラグがファイルシステムに届く仕組み: kiocb_set_rw_flags {#how-flags-reach-the-filesystem-kiocb_set_rw_flags}
 
 カーネル内のすべてのI/O操作は`struct kiocb`（kernel I/O control block）で表される。`RWF_*`フラグは`IOCB_*`フラグに変換され、`kiocb.ki_flags`に格納される。
 
@@ -347,7 +347,7 @@ if (flags & RWF_NOWAIT) {
 
 ---
 
-## RWF_DSYNCとRWF_SYNC {#rwfdsync-and-rwfsync}
+## RWF_DSYNCとRWF_SYNC {#rwf_dsync-and-rwf_sync}
 
 `O_DSYNC`と`O_SYNC`は、オープン時に設定されるfdごとのフラグである。これらは各書き込みが戻る前に、データ（および場合によってはメタデータ）を安定ストレージへ書き込むよう強制する。呼び出しごとの同等機能を使えば、一部の書き込みだけが永続性を必要とする場合に、ファイルをこれらのフラグ付きで開くオーバーヘッドを避けられる。
 
@@ -532,7 +532,7 @@ static inline loff_t *file_ppos(struct file *file)
 }
 ```
 
-### fdget_pos / fdput_pos {#fdgetpos-fdputpos}
+### fdget_pos / fdput_pos {#fdget_pos-fdput_pos}
 
 ```c
 /* fs/read_write.c */
@@ -557,7 +557,7 @@ static inline void fdput_pos(struct fd f)
 
 ロックは`f_count > 1`（複数のfdが同じオープンファイル記述を参照している）の場合にのみ取られる。シングルスレッドのプロセスが開き、`dup`/`fork`で共有されていないファイルが`f_pos_lock`で競合することはない。
 
-### まとめ: f_pos_lockはいつ取られるか {#summary-when-does-fposlock-fire}
+### まとめ: f_pos_lockはいつ取られるか {#summary-when-does-f_pos_lock-fire}
 
 | シナリオ | f_pos_lockを取るか |
 |---|---|

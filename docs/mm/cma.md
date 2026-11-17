@@ -245,7 +245,7 @@ CmaFree:         245760 kB    # デバイスに割り当てられていない CM
 
 `CmaTotal` と `CmaFree` はそれぞれ `MemTotal` と `MemFree` に含まれていることに注意。システムから見て、CMA メモリが「消えている」わけではない。
 
-### debugfs（CONFIG_CMA_DEBUGFS） {#debugfs-configcmadebugfs}
+### debugfs（CONFIG_CMA_DEBUGFS） {#debugfs-config_cma_debugfs}
 
 ```bash
 $ ls /sys/kernel/debug/cma/

@@ -88,7 +88,7 @@ extern pgd_t init_top_pgt[];
 
 これらと並んで、64個の作業用PMDテーブルのプール（`early_dynamic_pgts[EARLY_DYNAMIC_PAGE_TABLES]`）が宣言されている。`__startup_64()`はこのプールから切り出して一時的なアイデンティティマッピングを構築する。
 
-### `__startup_64()`が行うこと {#what-_startup64-does}
+### `__startup_64()`が行うこと {#what-__startup_64-does}
 
 最初に実行されるC関数は、`arch/x86/boot/startup/map_kernel.c`の`__startup_64()`である。これは`CR3`にカーネル自身のテーブルがロードされる前に、`startup_64`から呼ばれる。
 
@@ -191,7 +191,7 @@ Virtual address range                    Size   Region
 
 ---
 
-## `init_mem_mapping()` — ダイレクト物理マップの構築 {#initmemmapping-building-the-direct-physical-map}
+## `init_mem_mapping()` — ダイレクト物理マップの構築 {#init_mem_mapping-building-the-direct-physical-map}
 
 ダイレクト物理マップは、カーネルが`page_offset_base`からの単純なポインタ演算のオフセットでRAMの任意のバイトをアドレス指定できるようにするものである。これがなければ、カーネルは静的な`level2_kernel_pgt`のPMDがカバーするメモリ、つまりカーネルイメージ周辺のおよそ1 GBにしかアクセスできない。
 
@@ -406,7 +406,7 @@ x86_64の`paging_init()`（`arch/x86/mm/init_64.c:834`）は意図的に最小�
 
 ## ブート時ページテーブルのデバッグ {#debugging-boot-page-tables}
 
-### `CONFIG_PTDUMP_DEBUGFS` {#configptdumpdebugfs}
+### `CONFIG_PTDUMP_DEBUGFS` {#config_ptdump_debugfs}
 
 `CONFIG_PTDUMP_DEBUGFS=y`の場合、カーネルは`/sys/kernel/debug/page_tables/`の下にdebugfsファイルを登録する（`arch/x86/mm/debug_pagetables.c`で実装）:
 

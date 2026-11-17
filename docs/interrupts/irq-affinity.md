@@ -89,7 +89,7 @@ irqbalance --debug --foreground 2>&1 | head -50
 
 レイテンシに敏感なワークロードでは、irqbalanceを停止してアフィニティを手動で設定する。
 
-## カーネルAPI: irq_set_affinity_hint {#kernel-api-irqsetaffinity_hint}
+## カーネルAPI: irq_set_affinity_hint {#kernel-api-irq_set_affinity_hint}
 
 ドライバは、自分のIRQに対して望ましいCPUを提案できる。
 
@@ -161,7 +161,7 @@ GRUB_CMDLINE_LINUX="isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3"
 watch -n1 'cat /proc/interrupts | head -5'
 ```
 
-### irq_default_affinity: 分離されたCPUを除外する {#irqdefaultaffinity-exclude-isolated-cpus}
+### irq_default_affinity: 分離されたCPUを除外する {#irq_default_affinity-exclude-isolated-cpus}
 
 ```bash
 # システム全体のデフォルトアフィニティをCPU 2,3を除外するように設定する

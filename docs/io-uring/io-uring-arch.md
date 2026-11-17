@@ -13,7 +13,7 @@
 
 io_uringの解決策は、**共有メモリ上の2つのロックフリーなリング**である。ユーザー空間はサブミッションキューに書き込み、カーネルはコンプリーションキューに結果を投稿する。操作ごとのシステムコールは不要である（特にSQPOLLを使う場合）。
 
-## io_uring_setup {#iouringsetup}
+## io_uring_setup {#io_uring_setup}
 
 ```c
 #include <linux/io_uring.h>
@@ -82,7 +82,7 @@ CQ ring (at IORING_OFF_CQ_RING):
   └─────────────────────────────────────────┘
 ```
 
-## struct io_uring_sqe {#struct-iouringsqe}
+## struct io_uring_sqe {#struct-io_uring_sqe}
 
 サブミッションキューエントリ（SQE）は1つのI/O操作を記述する。
 
@@ -152,7 +152,7 @@ struct io_uring_sqe {
 };
 ```
 
-## struct io_uring_cqe {#struct-iouringcqe}
+## struct io_uring_cqe {#struct-io_uring_cqe}
 
 コンプリーションキューエントリ（CQE）は結果を運ぶ。
 
@@ -211,7 +211,7 @@ struct io_uring_cqe {
    smp_store_release(&cq_ring->head, cq_ring->head + 1)
 ```
 
-## io_uring_enter: システムコール {#iouringenter-the-syscall}
+## io_uring_enter: システムコール {#io_uring_enter-the-syscall}
 
 ```c
 int io_uring_enter(unsigned int fd,    /* リングのfd */
@@ -224,7 +224,7 @@ int io_uring_enter(unsigned int fd,    /* リングのfd */
 
 バッチ化により、1回の`io_uring_enter`で多数の操作を投入し、多数の完了を待つことができる。これにより、システムコールのオーバーヘッドが並行するすべてのI/Oに分散（償却）される。
 
-## カーネル側: struct io_ring_ctx {#kernel-side-struct-ioringctx}
+## カーネル側: struct io_ring_ctx {#kernel-side-struct-io_ring_ctx}
 
 ```c
 /* io_uring/io_uring.h */

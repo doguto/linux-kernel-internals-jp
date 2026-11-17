@@ -406,7 +406,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `thp_fault_alloc` {#thpfaultalloc}
+#### `thp_fault_alloc` {#thp_fault_alloc}
 
 **何を数えるか**: ページフォールト時に成功したTransparent Huge Pageの2 MiB割り当ての回数（つまり、プロセスが新しい領域に触れたときに、無名マッピングに対してhuge pageが割り当てられた）。
 
@@ -416,7 +416,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `thp_collapse_alloc` {#thpcollapsealloc}
+#### `thp_collapse_alloc` {#thp_collapse_alloc}
 
 **何を数えるか**: このcgroupについて、`khugepaged`が複数の4 KiB pageを1つの2 MiB huge pageへまとめる（collapse）ことに成功した回数。
 
@@ -432,7 +432,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_refault_anon` {#workingsetrefaultanon}
+#### `workingset_refault_anon` {#workingset_refault_anon}
 
 **何を数えるか**: RAMから追い出された後に、フォールトで再び読み込まれた（refaultした）無名page数。以前にスワップアウトされたpageが再びアクセスされたときに加算される。
 
@@ -444,7 +444,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_refault_file` {#workingsetrefaultfile}
+#### `workingset_refault_file` {#workingset_refault_file}
 
 **何を数えるか**: ページキャッシュから追い出された後に、フォールトで再び読み込まれたファイルバックのpage数。
 
@@ -456,7 +456,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_activate_anon` {#workingsetactivateanon}
+#### `workingset_activate_anon` {#workingset_activate_anon}
 
 **何を数えるか**: refaultした無名pageのうち、ワーキングセットの一部と判断されたために、refault後すぐにactive LRUへ昇格したpage数。
 
@@ -468,7 +468,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_activate_file` {#workingsetactivatefile}
+#### `workingset_activate_file` {#workingset_activate_file}
 
 **何を数えるか**: refaultしたファイルバックのpageのうち、refault後にactive LRUへ昇格したpage数。
 
@@ -480,7 +480,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_restore_anon` {#workingsetrestoreanon}
+#### `workingset_restore_anon` {#workingset_restore_anon}
 
 **何を数えるか**: 追い出しから「復元（restore）」された無名page数。refaultのシャドウエントリが失効する前にactiveリストへ昇格したpageである（つまり、activeと認識されるほど早くフォールトで読み戻された）。
 
@@ -490,7 +490,7 @@ echo "pgmajfault rate: $(( (S2 - S1) / 10 )) faults/sec"
 
 ---
 
-#### `workingset_restore_file` {#workingsetrestorefile}
+#### `workingset_restore_file` {#workingset_restore_file}
 
 **何を数えるか**: 復元された（シャドウの失効前にactiveへ昇格した）ファイルバックのpage数。
 

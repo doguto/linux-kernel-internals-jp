@@ -40,7 +40,7 @@ KLP_TRANSITION_IDLE)`でこれを表明してさえいる。
 `KLP_TRANSITION_UNPATCHED` → `KLP_TRANSITION_PATCHED`）と逆方向（パッチの無効化:
 `KLP_TRANSITION_PATCHED` → `KLP_TRANSITION_UNPATCHED`）のどちらもありうる。
 
-### klp_update_patch_state()の仕組み {#how-klpupdatepatch_state-works}
+### klp_update_patch_state()の仕組み {#how-klp_update_patch_state-works}
 
 `klp_update_patch_state()`は、単一のタスクをある状態から次の状態へ移す
 関数である。
@@ -70,7 +70,7 @@ void klp_update_patch_state(struct task_struct *task)
 `current`に対して呼ばれる。また強制遷移の際には`klp_force_transition()`から
 すべてのタスクに対して直接呼ばれる。
 
-## スタック検査: klp_check_stack() {#stack-checking-klpcheckstack}
+## スタック検査: klp_check_stack() {#stack-checking-klp_check_stack}
 
 `klp_update_patch_state()`はスタック検査を**行わない**。これは無条件の
 フラグ検査とクリアである。カーネルからユーザー空間へ戻る経路ではそれで安全である。
@@ -275,7 +275,7 @@ void klp_try_complete_transition(void)
 
 定期的な再チェックはおよそ1秒ごと（1 HZ）に実行される。
 
-## klp_send_signals(): ブロック中のタスクを促す {#klpsendsignals-nudging-blocked-tasks}
+## klp_send_signals(): ブロック中のタスクを促す {#klp_send_signals-nudging-blocked-tasks}
 
 `klp_send_signals()`はPOSIXシグナルを**一切送らない**。実際の仕組みは次のとおり。
 
@@ -288,7 +288,7 @@ void klp_try_complete_transition(void)
 およそ15秒ごとに呼ばれる（上述の1ラウンドあたり約1秒の間隔で、未完了の再試行ラウンドの
 `SIGNALS_TIMEOUT`回ごと）。
 
-## パッチの積み重ね: func_stackとstruct klp_ops {#patch-stacking-funcstack-and-struct-klpops}
+## パッチの積み重ね: func_stackとstruct klp_ops {#patch-stacking-func_stack-and-struct-klp_ops}
 
 複数のライブパッチが同時に有効で、それぞれが同じ関数にパッチを当てている場合、
 カーネルはどの置き換え関数が現在有効なのかを知る必要がある。これは
@@ -387,7 +387,7 @@ else if (klp_transition_patch->replace) {
 `/proc/<pid>/stack`を読んで確認したうえで、最後の手段としてのみ
 使うこと。
 
-## klp_complete_transition(): パッチの確定 {#klpcompletetransition-finalizing-the-patch}
+## klp_complete_transition(): パッチの確定 {#klp_complete_transition-finalizing-the-patch}
 
 すべてのタスクが遷移を終えると、`klp_complete_transition()`が呼ばれる。
 

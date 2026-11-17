@@ -18,7 +18,7 @@
 
 ## 短い事例 {#quick-cases}
 
-### 事例1: PCMの`hw_params`/`hw_free`競合 — CVE-2022-1048 {#case-1-the-pcm-hwparamshwfree-race-cve-2022-1048}
+### 事例1: PCMの`hw_params`/`hw_free`競合 — CVE-2022-1048 {#case-1-the-pcm-hw_paramshw_free-race-cve-2022-1048}
 
 ALSA PCMには、`hw_params`/`hw_free`のioctl呼び出し全体を覆うクリティカルセクションがなかった。既存の`snd_pcm_stream_lock`では呼び出し全体をカバーできなかった。両ioctlともスリープする必要があるからである（特にメモリ割り当てのため）。同じsubstreamに対して2つのスレッドが`hw_params`と`hw_free`を並行して発行すると（あるいは同じioctlを2つのスレッドから競合させても）、一方のスレッドの`hw_free`がバッファの裏付けメモリを解放している間に、もう一方のスレッドの`hw_params`がまだそれを使っている、という状況が起こりえた。これは境界チェックの欠落ではなく、ロックの欠落によるuse-after-freeである。
 

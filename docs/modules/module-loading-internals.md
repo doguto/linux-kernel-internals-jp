@@ -467,7 +467,7 @@ struct module {
 
 参照カウント自体は単純な`atomic_t refcnt`である。それが置き換えたper-CPUの`struct module_ref __percpu *refptr`は、v3.19以降存在しない。
 
-## MODULE_STATE_*のライフサイクル {#modulestate-lifecycle}
+## MODULE_STATE_*のライフサイクル {#module_state_-lifecycle}
 
 ```
 insmod / modprobe

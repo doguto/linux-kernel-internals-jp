@@ -88,7 +88,7 @@ PROT_NONE    /* アクセス不可（ガードページ、userfaultfd） */
 読み出し専用のファイルI/Oには`PROT_READ`を使う。
 読み書きするファイルI/Oには`PROT_READ | PROT_WRITE`を使う。
 
-### MAP_SHAREDとMAP_PRIVATE {#mapshared-vs-mapprivate}
+### MAP_SHAREDとMAP_PRIVATE {#map_shared-vs-map_private}
 
 `MAP_SHARED` — 書き込みはページキャッシュに直接入る。変更されたページは、同じファイルをマップしている（またはそのファイルに対して`read()`を呼ぶ）他のすべてのプロセスから見える。カーネルは、ライトバック中または`msync()`が呼ばれたときに、ダーティページをディスクに書き戻す。
 
@@ -510,7 +510,7 @@ fsync(fd);
 
 ---
 
-## F_SEAL_*によるファイルシーリング {#file-sealing-with-fseal}
+## F_SEAL_*によるファイルシーリング {#file-sealing-with-f_seal_}
 
 ファイルシーリング（Linux 3.17で導入）により、プロセスはファイルディスクリプタに対する操作を恒久的に制限し、不変または部分的に不変な共有メモリ領域を作ることができる。最も有用なのは`memfd_create()`と組み合わせた場合だが、シーリングが有効な任意の`tmpfs`ファイルに適用できる。
 
@@ -608,7 +608,7 @@ mmapとread/writeの損益分岐点は、次の要素に依存する。
 - **再利用** — 同じデータを何度も走査する場合はmmapに強く有利（フォールトが償却される）
 - **CPUアーキテクチャ** — TLBのサイズが重要。x86は大きなTLBを持つが、ARMはそれより小さいことが多い
 
-### copy_to_userの除去 {#the-copytouser-elimination}
+### copy_to_userの除去 {#the-copy_to_user-elimination}
 
 `read()`は`copy_to_user()`を呼んで、ページキャッシュからユーザーバッファへデータを移す。ERMS（Enhanced REP MOVSB）を備えた最近のx86では高速だが、無償ではない。4KBのページでは、キャッシュの状態に応じておおよそ400〜1000nsかかる。
 
@@ -694,7 +694,7 @@ madvise(map + processed_offset, CHUNK_SIZE, MADV_DONTNEED);
 
 **MADV_FREE**（Linux 4.5） — `MADV_DONTNEED`に似ているが遅延的である。ページは解放候補としてマークされるが、すぐには回収されない。メモリ圧迫が低ければ、次のアクセス時にもまだメモリ上にあるかもしれない（フォールトを避けられる）。呼び出し元がデータを再び必要と「するかもしれない」再利用パターンで有用である。
 
-### MADV_POPULATE_READとMADV_POPULATE_WRITE（Linux 5.14） {#madvpopulateread-and-madvpopulatewrite-linux-514}
+### MADV_POPULATE_READとMADV_POPULATE_WRITE（Linux 5.14） {#madv_populate_read-and-madv_populate_write-linux-514}
 
 これらのヒントは、呼び出し元のスレッドが各ページにアクセスすることなく、フォールトをシミュレートして範囲を明示的に事前に埋める。
 

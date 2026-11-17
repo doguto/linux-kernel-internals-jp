@@ -138,7 +138,7 @@ do_hres(const struct vdso_data *vd, clockid_t clk, struct __kernel_timespec *ts)
 
 鍵となるのはリトライループである。読み取り中にカーネルが `vdso_data` を更新した（seqが変わった）場合はリトライする。通常リトライは0回である。
 
-## AT_SYSINFO_EHDR: vDSOの位置を知る {#atsysinfoehdr-finding-the-vdso}
+## AT_SYSINFO_EHDR: vDSOの位置を知る {#at_sysinfo_ehdr-finding-the-vdso}
 
 カーネルはvDSOのアドレスをELFの補助ベクタ（auxiliary vector）経由で渡す。
 

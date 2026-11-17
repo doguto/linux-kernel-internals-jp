@@ -1,4 +1,4 @@
-# 2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同 {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
+# 2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同 {#the-hid_validate_values-type-confusion-that-a-2014-bug-fix-introduced}
 
 > 壊れていた report ID 0 の検索を直す2014年の修正は、安全なハッシュテーブルの読み出しを、チェックのないリストのたどりに置き換えた — その副作用として型混同を持ち込み、それはメモリレイアウトの幸運だけで、ほぼ9年間悪用されないまま残った。
 

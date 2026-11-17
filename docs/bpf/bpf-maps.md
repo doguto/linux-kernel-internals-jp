@@ -42,7 +42,7 @@ int map_fd = bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
 
 ## mapタイプ {#map-types}
 
-### BPF_MAP_TYPE_HASH {#bpfmaptype_hash}
+### BPF_MAP_TYPE_HASH {#bpf_map_type_hash}
 
 任意のキー/値サイズを持つ汎用ハッシュmap。
 
@@ -66,7 +66,7 @@ if (count) {
 
 内部構造: ロックベースのハッシュテーブルを使い、エントリごとに`htab_elem`を持つ。複数CPUからの並行アクセスをサポートする。
 
-### BPF_MAP_TYPE_ARRAY {#bpfmaptype_array}
+### BPF_MAP_TYPE_ARRAY {#bpf_map_type_array}
 
 u32でインデックス付けされる固定サイズの配列。事前に割り当てられ、実行時に動的メモリを使わない。値はゼロクリアする必要がある（削除はできない）。
 
@@ -85,7 +85,7 @@ if (val)
     __sync_fetch_and_add(val, 1);  /* アトミックなインクリメント */
 ```
 
-### BPF_MAP_TYPE_PERCPU_HASH / BPF_MAP_TYPE_PERCPU_ARRAY {#bpfmaptypepercpuhash-bpfmaptypepercpuarray}
+### BPF_MAP_TYPE_PERCPU_HASH / BPF_MAP_TYPE_PERCPU_ARRAY {#bpf_map_type_percpu_hash-bpf_map_type_percpu_array}
 
 CPUごとに1つの値を持つ — CPUごとのカウンタでアトミック操作が不要になる。
 
@@ -113,7 +113,7 @@ for (int i = 0; i < nr_cpus; i++)
     total += values[i];
 ```
 
-### BPF_MAP_TYPE_RINGBUF {#bpfmaptype_ringbuf}
+### BPF_MAP_TYPE_RINGBUF {#bpf_map_type_ringbuf}
 
 BPFからユーザー空間へ可変長イベントを送るための推奨される仕組み（ほとんどのユースケースでperf_event_outputを置き換える）。
 
@@ -171,7 +171,7 @@ perf_event出力よりringbufを選ぶ理由:
 - コピーなし — ユーザー空間はリングのメモリから直接読む
 - 可変長エントリ
 
-### BPF_MAP_TYPE_LRU_HASH {#bpfmaptypelruhash}
+### BPF_MAP_TYPE_LRU_HASH {#bpf_map_type_lru_hash}
 
 満杯になるとLRUで追い出しを行うハッシュmap。明示的なクリーンアップなしでコネクションを追跡するのに便利である。
 
@@ -185,7 +185,7 @@ struct {
 /* 最も長く使われていないエントリを自動的に追い出す */
 ```
 
-### BPF_MAP_TYPE_PROG_ARRAY {#bpfmaptypeprogarray}
+### BPF_MAP_TYPE_PROG_ARRAY {#bpf_map_type_prog_array}
 
 テールコール用のBPFプログラムのファイルディスクリプタの配列。スタックを伸ばさずにプログラムを連鎖させられる。
 
@@ -206,7 +206,7 @@ bpf_tail_call(ctx, &jump_table, index);
 
 テールコールはコールスタックの深さを増やさない。現在のプログラムを置き換えるのである。連鎖の最大長は33である。
 
-### BPF_MAP_TYPE_HASH_OF_MAPS / BPF_MAP_TYPE_ARRAY_OF_MAPS {#bpfmaptypehashofmaps-bpfmaptypearrayofmaps}
+### BPF_MAP_TYPE_HASH_OF_MAPS / BPF_MAP_TYPE_ARRAY_OF_MAPS {#bpf_map_type_hash_of_maps-bpf_map_type_array_of_maps}
 
 map-in-map: 値が別のmapのファイルディスクリプタである。CPUごと、あるいはnamespaceごとのmap分離に便利である。
 
@@ -221,7 +221,7 @@ struct {
 } per_netns_stats SEC(".maps");
 ```
 
-### BPF_MAP_TYPE_SOCKMAP / BPF_MAP_TYPE_SOCKHASH {#bpfmaptypesockmap-bpfmaptypesockhash}
+### BPF_MAP_TYPE_SOCKMAP / BPF_MAP_TYPE_SOCKHASH {#bpf_map_type_sockmap-bpf_map_type_sockhash}
 
 ソケットへの参照を格納する。sk_msgおよびsk_skbプログラムタイプでのソケットリダイレクトに使われる。
 

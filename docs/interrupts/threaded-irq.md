@@ -23,7 +23,7 @@ Gleixnerがメインライン向けに提案したものは、RTツリーのや�
 
 同じ記事は、期待される見返りがレイテンシにとどまらないことにも触れている。*"Threaded handlers will also help the debuggability of the kernel and may eventually lead to the removal of tasklets from Linux."*（訳: スレッド化ハンドラはカーネルのデバッグ容易性も高め、最終的にはLinuxからtaskletを削除することにつながるかもしれない）。このつながりこそが、[taskletがスレッド化IRQを優先して非推奨になった](tasklets.md#the-deprecation-nobody-planned-to-start-then-couldnt-finish)理由である。2008年の提案は、実際の削除の動きが始まる10年以上前に、いずれtaskletを削除可能にする仕組みをすでに名指ししていたのである。
 
-## request_threaded_irq {#requestthreadedirq}
+## request_threaded_irq {#request_threaded_irq}
 
 ```c
 int request_threaded_irq(unsigned int irq,

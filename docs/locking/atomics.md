@@ -14,7 +14,7 @@ Result: x = 6 (should be 7)
 
 アトミック操作は、読み込み・変更・書き込みを単一の不可分な単位として実行するハードウェア命令である。他のCPUが中間状態を見ることはできない。
 
-## atomic_tとatomic64_t {#atomict-and-atomic64t}
+## atomic_tとatomic64_t {#atomic_t-and-atomic64_t}
 
 ```c
 /* include/linux/atomic.h */
@@ -86,7 +86,7 @@ void push(struct node *node)
 }
 ```
 
-## atomic_long_t {#atomiclongt}
+## atomic_long_t {#atomic_long_t}
 
 `atomic_long_t`はポインタサイズのアトミック型であり、すべてのアーキテクチャでポインタに収まる必要がある64ビット値に便利である。
 
@@ -98,7 +98,7 @@ atomic_long_add(n, &v);
 atomic_long_cmpxchg(&v, old, new);
 ```
 
-## READ_ONCEとWRITE_ONCE {#readonce-and-writeonce}
+## READ_ONCEとWRITE_ONCE {#read_once-and-write_once}
 
 2つのCPUが同時に1つの変数にアクセスすることは、Cでは未定義動作である。`READ_ONCE`と`WRITE_ONCE`は、コンパイラが次のことをするのを防ぐ。
 

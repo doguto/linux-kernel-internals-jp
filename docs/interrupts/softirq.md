@@ -165,7 +165,7 @@ static void my_softirq_action(void)
 
 ドライバは代わりにtaskletかworkqueueを使うべきであり、新しいsoftirqの種類を追加してはならない。
 
-## local_bh_disable / local_bh_enable {#localbhdisable-localbhenable}
+## local_bh_disable / local_bh_enable {#local_bh_disable-local_bh_enable}
 
 softirqハンドラとデータを共有するコードは、そのデータにアクセスする間、ローカルCPUでsoftirqを無効にしなければならない。
 

@@ -224,7 +224,7 @@ Migration succeeds     Migration fails
 
 ---
 
-## zone_reclaim_mode {#zonereclaimmode}
+## zone_reclaim_mode {#zone_reclaim_mode}
 
 ### それは何だったか {#what-it-was}
 
@@ -422,7 +422,7 @@ NUMAの固定とTHPを併用するアプリケーションでは:
 !!!tip
     システム全体には空きメモリがあるのに、あるノードのkswapdが他より常に活発な場合、まず確認すべきは、単一のプロセスや共有セグメントがそのノードに割り当てを集中させていないかである。`numastat -p <pid>`は、プロセスの仮想マッピングがノード間でどう分布しているかを示す。
 
-### node_reclaim_distanceの調整 {#adjusting-nodereclaimdistance}
+### node_reclaim_distanceの調整 {#adjusting-node_reclaim_distance}
 
 AMD EPYCや類似のマルチダイプラットフォームでは、2ホップのNUMA距離が32と報告され（デフォルトの`RECLAIM_DISTANCE`である30を上回る）、ソケット内のファブリックを介したアクセスは比較的高速であるにもかかわらず、カーネルがそれをまたいだローカル回収を拒むことがある。距離の閾値は調整できる。
 

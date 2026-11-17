@@ -216,7 +216,7 @@ static unsigned int shrink_folio_list(struct list_head *folio_list, ...)
 }
 ```
 
-### add_to_swap()関数 {#the-addtoswap-function}
+### add_to_swap()関数 {#the-add_to_swap-function}
 
 ```c
 // mm/swap_state.c
@@ -353,7 +353,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 }
 ```
 
-### do_swap_page()がpageを戻す {#doswappage-brings-the-page-back}
+### do_swap_page()がpageを戻す {#do_swap_page-brings-the-page-back}
 
 ```c
 // mm/memory.c（簡略化）

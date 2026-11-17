@@ -106,7 +106,7 @@ int trace_write_exit(struct trace_event_raw_sys_exit *ctx)
 }
 ```
 
-### bpf_ringbuf_output: 1回で済ませる代替手段 {#bpfringbufoutput-one-shot-alternative}
+### bpf_ringbuf_output: 1回で済ませる代替手段 {#bpf_ringbuf_output-one-shot-alternative}
 
 reserve+submitが大げさな、小さな固定長イベントの場合:
 
@@ -214,7 +214,7 @@ while (1) {
 }
 ```
 
-## BPF_MAP_TYPE_RINGBUFとPERF_EVENT_ARRAYの比較 {#bpfmaptyperingbuf-vs-perfevent_array}
+## BPF_MAP_TYPE_RINGBUFとPERF_EVENT_ARRAYの比較 {#bpf_map_type_ringbuf-vs-perf_event_array}
 
 | 機能 | PERF_EVENT_ARRAY | RINGBUF |
 |---------|-----------------|---------|

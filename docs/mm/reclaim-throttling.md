@@ -131,7 +131,7 @@ page数（`pgdat->nr_reclaim_start`）も追跡する。これにより、`__acc
 
 ---
 
-## `throttle_direct_reclaim()` — pfmemallocリザーブのスロットリング {#throttledirectreclaim-pfmemalloc-reserve-throttle}
+## `throttle_direct_reclaim()` — pfmemallocリザーブのスロットリング {#throttle_direct_reclaim-pfmemalloc-reserve-throttle}
 
 これは目的の異なる別のスロットリングパスである。カーネルは、ネットワーク越しのスワップに必要な
 ネットワークスタックの割り当てのために、低位ゾーンのpageの一部（`pfmemalloc`リザーブ）を
@@ -177,7 +177,7 @@ else
 
 ---
 
-## `consider_reclaim_throttle()` — 進捗なしのスロットリング {#considerreclaimthrottle-no-progress-throttle}
+## `consider_reclaim_throttle()` — 進捗なしのスロットリング {#consider_reclaim_throttle-no-progress-throttle}
 
 直接回収中の各`shrink_zones()`パスの後、
 `consider_reclaim_throttle()`がスロットリングが妥当かどうかを評価する:
@@ -289,7 +289,7 @@ reclaim_throttle(pgdat, VMSCAN_THROTTLE_WRITEBACK);
 これは最大100 ms、または十分なpageがライトバックを完了した後に
 `__acct_reclaim_writeback()`がキューを起こすまでスリープする。
 
-### `LRUVEC_NODE_CONGESTED`と`VMSCAN_THROTTLE_CONGESTED` {#lruvecnodecongested-and-vmscanthrottlecongested}
+### `LRUVEC_NODE_CONGESTED`と`VMSCAN_THROTTLE_CONGESTED` {#lruvec_node_congested-and-vmscan_throttle_congested}
 
 スキャンしたすべてのdirty pageがdirtyかつ輻輳している場合
 （`sc->nr.dirty == sc->nr.congested`）、ノードは`LRUVEC_NODE_CONGESTED`（kswapdがセット）
@@ -304,7 +304,7 @@ kswapd自身はここではスロットリングされない。kswapdを停滞�
 止まってしまうため、kswapdは自由にスキャンを続けられる。スリープするのは
 ユーザーコンテキストの直接回収者だけである。
 
-### `balance_dirty_pages()` — 上流側のスロットリング {#balancedirtypages-the-upstream-throttle}
+### `balance_dirty_pages()` — 上流側のスロットリング {#balance_dirty_pages-the-upstream-throttle}
 
 `mm/page-writeback.c`の書き込みスロットリングパスは、ライトバックが掃き出せるより速く
 pageをdirtyにするプロセスを減速させる主要なメカニズムである。`balance_dirty_pages()`は
@@ -463,7 +463,7 @@ sysctl -w vm.swappiness=10
 echo "vm.swappiness = 10" >> /etc/sysctl.d/99-memory.conf
 ```
 
-### `vm.vfs_cache_pressure` {#vmvfscachepressure}
+### `vm.vfs_cache_pressure` {#vmvfs_cache_pressure}
 
 ページキャッシュに対して、カーネルがdentryとinode（VFSのslabキャッシュ）をどれだけ積極的に
 回収するかを制御する。内部変数は`fs/dcache.c`の`sysctl_vfs_cache_pressure`で、
@@ -480,7 +480,7 @@ sysctl vm.vfs_cache_pressure
 sysctl -w vm.vfs_cache_pressure=50
 ```
 
-### `vm.dirty_ratio`と`vm.dirty_background_ratio` {#vmdirtyratio-and-vmdirtybackground_ratio}
+### `vm.dirty_ratio`と`vm.dirty_background_ratio` {#vmdirty_ratio-and-vmdirty_background_ratio}
 
 これらは、主要な書き込みスロットリングである`balance_dirty_pages()`がいつ作動するかを制御する。
 回収がライトバック中のpageに遭遇するかどうか、したがって`VMSCAN_THROTTLE_WRITEBACK`が

@@ -127,7 +127,7 @@ VMのdirtyライトバックの仕組みは、変更されたページをペー�
 
 **ソース**: [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c)。
 
-### dirty_ratioとdirty_bytes {#dirtyratio-and-dirtybytes}
+### dirty_ratioとdirty_bytes {#dirty_ratio-and-dirty_bytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_ratio
@@ -147,7 +147,7 @@ $ cat /proc/sys/vm/dirty_bytes
 sysctl vm.dirty_bytes=1073741824
 ```
 
-### dirty_background_ratioとdirty_background_bytes {#dirtybackgroundratio-and-dirtybackgroundbytes}
+### dirty_background_ratioとdirty_background_bytes {#dirty_background_ratio-and-dirty_background_bytes}
 
 ```bash
 $ cat /proc/sys/vm/dirty_background_ratio
@@ -167,7 +167,7 @@ dirty_background_ratio < dirty_ratio
 
 2つの値の間隔が広いと、アプリケーションがスロットリングされずにdirtyデータが溜まる大きな領域ができる。間隔が狭いと、ライトバックがより早く始まり、システムはdirtyページが0に近い状態に保たれる。
 
-### dirty_writeback_centisecs {#dirtywritebackcentisecs}
+### dirty_writeback_centisecs {#dirty_writeback_centisecs}
 
 ```bash
 $ cat /proc/sys/vm/dirty_writeback_centisecs
@@ -178,7 +178,7 @@ $ cat /proc/sys/vm/dirty_writeback_centisecs
 
 これを0にすると定期的なライトバックが完全に無効になる（ほとんどのワークロードでは推奨されない）。減らす（例: 100 = 1秒）と、より小さなライトバックのバーストがより頻繁に起き、バックグラウンドI/Oがわずかに増える代わりにレイテンシの一貫性が向上しうる。
 
-### dirty_expire_centisecs {#dirtyexpirecentisecs}
+### dirty_expire_centisecs {#dirty_expire_centisecs}
 
 ```bash
 $ cat /proc/sys/vm/dirty_expire_centisecs
@@ -412,7 +412,7 @@ echo 0 > /sys/kernel/debug/tracing/events/writeback/enable
 echo > /sys/kernel/debug/tracing/trace
 ```
 
-### block:block_rq_issueとblock:block_rq_complete {#blockblockrqissue-and-blockblockrqcomplete}
+### block:block_rq_issueとblock:block_rq_complete {#blockblock_rq_issue-and-blockblock_rq_complete}
 
 `block_rq_issue` は、リクエストがデバイスドライバへディスパッチされたとき（blktraceの `D` イベント）に発火する。`block_rq_complete` は完了時（`C` イベント）に発火する。
 
@@ -444,7 +444,7 @@ tracepoint:block:block_rq_complete
 interval:s:10 { print(@latency_us); clear(@latency_us); }'
 ```
 
-### writeback:writeback_single_inode {#writebackwritebacksingleinode}
+### writeback:writeback_single_inode {#writebackwriteback_single_inode}
 
 ライトバックのコードが1つのinodeのdirtyページを処理するときに発火する。これはライトバック活動をinodeごとに見たものである。
 
@@ -478,7 +478,7 @@ interval:s:10 {
 find / -inum <inode_number> 2>/dev/null
 ```
 
-### writeback:global_dirty_state {#writebackglobaldirtystate}
+### writeback:global_dirty_state {#writebackglobal_dirty_state}
 
 ライトバックのスロットリングのコードにある `balance_dirty_pages()` から定期的に発火する。現在の上限の計算結果を含め、グローバルなdirtyページの状態のスナップショットを提供する。
 
@@ -512,7 +512,7 @@ echo 'name == "sda"' > /sys/kernel/debug/tracing/events/writeback/writeback_writ
 echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_writepage/enable
 ```
 
-### filemap:mm_filemap_add_to_page_cache {#filemapmmfilemapaddtopage_cache}
+### filemap:mm_filemap_add_to_page_cache {#filemapmm_filemap_add_to_page_cache}
 
 ページがページキャッシュに追加されたときに発火する。ストレージからページを読み込むリードフォールトの際や、ファイルが初めてmmapまたはreadされたときである。
 
@@ -527,7 +527,7 @@ tracepoint:filemap:mm_filemap_add_to_page_cache {
 interval:s:1 { print(@add); clear(@add); }'
 ```
 
-### filemap:mm_filemap_delete_from_page_cache {#filemapmmfilemapdeletefrompage_cache}
+### filemap:mm_filemap_delete_from_page_cache {#filemapmm_filemap_delete_from_page_cache}
 
 ページがページキャッシュから追い出されたときに発火する。メモリ回収、明示的な `fadvise(POSIX_FADV_DONTNEED)`、ファイルの切り詰めのいずれかによる。
 

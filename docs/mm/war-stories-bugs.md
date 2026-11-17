@@ -14,7 +14,7 @@
 
 ---
 
-## バグ1: zone_reclaim_mode — デフォルトで性能を破壊したNUMA回収ポリシー {#bug-1-zonereclaimmode-the-numa-reclaim-policy-that-destroyed-performance-by-default}
+## バグ1: zone_reclaim_mode — デフォルトで性能を破壊したNUMA回収ポリシー {#bug-1-zone_reclaim_mode-the-numa-reclaim-policy-that-destroyed-performance-by-default}
 
 *v2.6.16（2006年）頃に導入。v3.16（2014年）でデフォルト無効化。コミット: [4f9b16a64753](https://git.kernel.org/linus/4f9b16a64753)。*
 

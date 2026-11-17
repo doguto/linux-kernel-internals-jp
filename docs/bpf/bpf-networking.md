@@ -125,7 +125,7 @@ int tc_redirect(struct __sk_buff *skb)
 
 cgroup BPFプログラムはcgroupにアタッチされ、そのcgroup階層内のすべてのソケット/パケットに作用する。コンテナランタイム（Kubernetes、containerd）がネットワークポリシーに使っている。
 
-### BPF_CGROUP_INET_INGRESS/EGRESS: パケットフィルタリング {#bpfcgroupinet_ingressegress-packet-filtering}
+### BPF_CGROUP_INET_INGRESS/EGRESS: パケットフィルタリング {#bpf_cgroup_inet_ingressegress-packet-filtering}
 
 ```c
 SEC("cgroup_skb/ingress")
@@ -163,7 +163,7 @@ bpftool cgroup attach /sys/fs/cgroup/system.slice/mycontainer.scope \
 bpftool cgroup tree /sys/fs/cgroup/system.slice/
 ```
 
-### BPF_CGROUP_SOCK_OPS: TCPソケットオプションの制御 {#bpfcgroupsock_ops-tcp-socket-option-control}
+### BPF_CGROUP_SOCK_OPS: TCPソケットオプションの制御 {#bpf_cgroup_sock_ops-tcp-socket-option-control}
 
 ```c
 SEC("sockops")

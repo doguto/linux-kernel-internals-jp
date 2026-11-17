@@ -178,7 +178,7 @@ struct file_ra_state {
 };
 ```
 
-## MAP_PRIVATEとMAP_SHARED {#mapprivate-vs-mapshared}
+## MAP_PRIVATEとMAP_SHARED {#map_private-vs-map_shared}
 
 ### MAP_PRIVATE（copy-on-write） {#map_private-copy-on-write}
 

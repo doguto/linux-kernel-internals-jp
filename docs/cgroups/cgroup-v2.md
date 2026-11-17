@@ -90,7 +90,7 @@ struct cgroup {
 };
 ```
 
-### struct cgroup_subsys_state（CSS） {#struct-cgroupsubsysstate-css}
+### struct cgroup_subsys_state（CSS） {#struct-cgroup_subsys_state-css}
 
 各コントローラは、CSS を介して cgroup ごとの状態をアタッチする:
 

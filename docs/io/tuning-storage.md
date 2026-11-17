@@ -285,7 +285,7 @@ echo 32 > /sys/block/nvme0n1/queue/nr_requests
 
 数十万IOPSを持続できるNVMeデバイスでは、`nr_requests` を増やすことで、カーネルはデバイス内部のスケジューラ向けにより多くのリクエストをバッファできる。IOPSの上限がはるかに低いSATA SSDでは、通常はデフォルトで十分である。
 
-### ハードウェアキューの数: nr_hw_queues {#hardware-queue-count-nrhwqueues}
+### ハードウェアキューの数: nr_hw_queues {#hardware-queue-count-nr_hw_queues}
 
 NVMeデバイスは複数のハードウェア発行キューを公開する。カーネルはソフトウェアキューをハードウェアキューに対応付け、理想的にはCPUコアまたはNUMAノードと1対1にする。
 
@@ -381,7 +381,7 @@ fio --name=libaio_deep \
 
 カーネルのreadahead機構（詳細は[readahead](readahead.md)で説明）は、明示的に要求される前にページをページキャッシュへ先読みする。デフォルトの `read_ahead_kb` はデバイスごとに設定され、1つのウィンドウで先読みする最大バイト数を表す。
 
-### read_ahead_kbの確認と設定 {#checking-and-setting-readaheadkb}
+### read_ahead_kbの確認と設定 {#checking-and-setting-read_ahead_kb}
 
 ```bash
 # 現在の値を確認する

@@ -74,7 +74,7 @@ Software Queue (blk_mq_ctx)  ← per-CPU, no contention between CPUs
     └─────────────┘   └──────────────┘
 ```
 
-### ソフトウェアキュー（blk_mq_ctx） {#software-queues-blkmqctx}
+### ソフトウェアキュー（blk_mq_ctx） {#software-queues-blk_mq_ctx}
 
 CPUごとに1つ。requestは最初、ロックなしでここにキューイングされる（各CPUが独自のキューを持つ）。
 
@@ -93,7 +93,7 @@ struct blk_mq_ctx {
 };
 ```
 
-### ハードウェアキュー（blk_mq_hw_ctx） {#hardware-queues-blkmqhw_ctx}
+### ハードウェアキュー（blk_mq_hw_ctx） {#hardware-queues-blk_mq_hw_ctx}
 
 ハードウェアキュー（NVMeのnamespace、virtioのキューなど）ごとに1つ。
 

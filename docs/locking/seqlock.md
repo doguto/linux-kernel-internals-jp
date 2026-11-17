@@ -25,7 +25,7 @@ Reader:
 
 これにより、**並行する書き込みがない場合の読み込みはコストゼロ**になり、そうでない場合も安価なリトライで済む。
 
-## 2つの型: seqcount_tとseqlock_t {#two-types-seqcountt-and-seqlockt}
+## 2つの型: seqcount_tとseqlock_t {#two-types-seqcount_t-and-seqlock_t}
 
 ```c
 /* seqcount_t: 生のカウンタ。書き手の直列化は組み込まれていない。

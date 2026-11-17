@@ -137,7 +137,7 @@ Other:    IORING_OP_CONNECT, IORING_OP_OPENAT, IORING_OP_CLOSE,
           IORING_OP_STATX, IORING_OP_SPLICE, IORING_OP_SEND_ZC
 ```
 
-### IORING_OP_POLL_ADD: epoll_waitの置き換え {#ioringoppolladd-replacing-epollwait}
+### IORING_OP_POLL_ADD: epoll_waitの置き換え {#ioring_op_poll_add-replacing-epoll_wait}
 
 ```c
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
@@ -156,7 +156,7 @@ io_uring_cqe_seen(&ring, cqe);
 
 デフォルトではワンショットである。`EPOLLONESHOT`と同じく、再設定するにはSQEを再投入する。
 
-### IORING_POLL_ADD_MULTI: 永続的なfdの監視 {#ioringpolladd_multi-persistent-fd-monitoring}
+### IORING_POLL_ADD_MULTI: 永続的なfdの監視 {#ioring_poll_add_multi-persistent-fd-monitoring}
 
 ```c
 sqe->len = IORING_POLL_ADD_MULTI;  /* マルチショット: 自動キャンセルしない */
@@ -476,7 +476,7 @@ io_uring_for_each_cqe(&ring, head, cqe) {
 io_uring_cq_advance(&ring, count);  /* headをまとめて進める */
 ```
 
-### ステップ2: `epoll_ctl ADD`を`IORING_OP_POLL_ADD`に置き換える {#step-2-replace-epollctl-add-with-ioringoppolladd}
+### ステップ2: `epoll_ctl ADD`を`IORING_OP_POLL_ADD`に置き換える {#step-2-replace-epoll_ctl-add-with-ioring_op_poll_add}
 
 ```c
 /* 移行前 */
@@ -490,7 +490,7 @@ sqe->user_data = (uintptr_t)conn;
 /* 他のSQEとバッチ化し、io_uring_submitを1回呼ぶ */
 ```
 
-### ステップ3: イベント後の`recv`を`IORING_OP_RECV`に置き換える {#step-3-replace-post-event-recv-with-ioringoprecv}
+### ステップ3: イベント後の`recv`を`IORING_OP_RECV`に置き換える {#step-3-replace-post-event-recv-with-ioring_op_recv}
 
 ```c
 /* 移行前（2段階: epollがreadyを通知し、その後recv） */
@@ -584,7 +584,7 @@ io_uring_queue_init_params(QUEUE_DEPTH, &ring, &params);
 
 ---
 
-## `io_uring_prep_poll_add`と`IORING_POLL_ADD_MULTI`の詳細 {#iouringpreppolladd-and-ioringpolladd_multi-in-depth}
+## `io_uring_prep_poll_add`と`IORING_POLL_ADD_MULTI`の詳細 {#io_uring_prep_poll_add-and-ioring_poll_add_multi-in-depth}
 
 最小限の移行、つまり「io_uringをより良いepollとして使う」ことを望むチームにとって、`IORING_OP_POLL_ADD`が入り口になる。
 

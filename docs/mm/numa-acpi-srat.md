@@ -159,7 +159,7 @@ x86_numa_init()
   └─ numa_init(dummy_numa_init)           [last resort: single node 0]
 ```
 
-### acpi_numa_init()でのSRATのパース {#srat-parsing-in-acpinumainit}
+### acpi_numa_init()でのSRATのパース {#srat-parsing-in-acpi_numa_init}
 
 `drivers/acpi/numa/srat.c`の`acpi_numa_init()`が、SRAT/SLITのパース処理全体を駆動する:
 

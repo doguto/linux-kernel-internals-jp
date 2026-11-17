@@ -1,4 +1,4 @@
-# request_irqとfree_irq {#requestirq-and-freeirq}
+# request_irqとfree_irq {#request_irq-and-free_irq}
 
 > 割り込みハンドラをカーネルに登録する
 
@@ -147,7 +147,7 @@ request_irq(irq, handler_b, IRQF_SHARED, "device-b", dev_b);
 2. `dev_id`は一意でなければならない（通常はデバイス構造体へのポインタ）
 3. 各ハンドラは、それが自分のデバイスからのものかを判定できなければならない
 
-## disable_irq / enable_irq {#disableirq-enableirq}
+## disable_irq / enable_irq {#disable_irq-enable_irq}
 
 ```c
 /* IRQを無効にし、実行中のハンドラの完了を待つ */

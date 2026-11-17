@@ -46,19 +46,19 @@ Mask type bits, invert: size = 4096 bytes
 #define PCI_BASE_ADDRESS_MEM_PREFETCH  0x08  /* プリフェッチ可能か */
 ```
 
-### メモリBAR（`PCI_BASE_ADDRESS_SPACE_MEMORY`） {#memory-bars-pcibaseaddressspacememory}
+### メモリBAR（`PCI_BASE_ADDRESS_SPACE_MEMORY`） {#memory-bars-pci_base_address_space_memory}
 
 一般的なケースである。BARは、デバイスのレジスタやデバイスローカルメモリに直接対応する物理アドレス空間のウィンドウを記述する。このウィンドウへのCPUアクセスはPCIeバスに出て、デバイスに届く。カーネルはこれらの領域を`ioremap()`またはその変種の1つを使ってマップする。
 
-### I/O BAR（`PCI_BASE_ADDRESS_SPACE_IO`） {#io-bars-pcibaseaddressspaceio}
+### I/O BAR（`PCI_BASE_ADDRESS_SPACE_IO`） {#io-bars-pci_base_address_space_io}
 
 x86固有のレガシーな種類である。デバイスはx86のI/Oポートアドレス空間の範囲を占有し、通常のメモリのロード／ストアではなく`inb()`/`outb()`命令でアクセスされる。現代のデバイスがI/O BARを使うことはまれである。PCIeのファームウェアはしばしばI/O BARを割り当てるが、デバイスは実際には必要としていないことがある。`pci_iomap()`は両方の種類を透過的に扱う。
 
-### プリフェッチ可能なBAR（`PCI_BASE_ADDRESS_MEM_PREFETCH`） {#prefetchable-bars-pcibaseaddressmemprefetch}
+### プリフェッチ可能なBAR（`PCI_BASE_ADDRESS_MEM_PREFETCH`） {#prefetchable-bars-pci_base_address_mem_prefetch}
 
 読み出しに副作用がなく、CPUやPCIeファブリックが安全にデータをプリフェッチし、書き込みを結合できることが保証されたメモリBARである。これは、シーケンシャルな書き込みがライトコンバイニングの恩恵を受けるGPUのフレームバッファのような領域にのみ設定される。プリフェッチ不可のBARを投機的に読み出してはならない -- 副作用（読み出し時にステータスレジスタがクリアされるなど）が誤って引き起こされてしまう。
 
-### 64ビットBAR（`PCI_BASE_ADDRESS_MEM_TYPE_64`） {#64-bit-bars-pcibaseaddressmemtype_64}
+### 64ビットBAR（`PCI_BASE_ADDRESS_MEM_TYPE_64`） {#64-bit-bars-pci_base_address_mem_type_64}
 
 64ビットのメモリBARは、64ビットのベースアドレス全体を格納するために**連続する2つのBARスロット**を使う。下位32ビットはBAR `n`に、上位32ビットはBAR `n+1`に格納される。つまり、デバイスは最大3つの64ビットBARを持てる（6つのスロットすべてをペアで使う）。また`pci_resource_start(dev, n)`でリソースにアクセスすると、完全な64ビットの物理アドレスが正しく得られる -- カーネルは`pci_read_bases()`の中で2つのレジスタの組み立てを透過的に処理する。
 

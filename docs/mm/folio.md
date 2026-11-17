@@ -145,7 +145,7 @@ order-0（一般的なケース）では、`folio_order()`は余分なフィー�
 
 単純なポインタ演算である。`folio_page(folio, 0)`はheadページ、`folio_page(folio, folio_nr_pages(folio) - 1)`は最後のページである。境界チェックは行われない。呼び出し元が参照を保持していることが前提である。
 
-### folio_file_page() — 指定したファイルインデックスに対応するページ {#foliofilepage-page-for-a-given-file-index}
+### folio_file_page() — 指定したファイルインデックスに対応するページ {#folio_file_page-page-for-a-given-file-index}
 
 large folioが複数のページキャッシュインデックスにまたがる場合、`folio_file_page()`はファイルオフセットを正しいサブページに対応付ける:
 
@@ -154,7 +154,7 @@ large folioが複数のページキャッシュインデックスにまたがる
 static inline struct page *folio_file_page(struct folio *folio, pgoff_t index);
 ```
 
-### folio_pfn()とfolio_address() {#foliopfn-and-folioaddress}
+### folio_pfn()とfolio_address() {#folio_pfn-and-folio_address}
 
 ```c
 /* folio内の最初のページのページフレーム番号 */
@@ -181,7 +181,7 @@ static inline struct folio *pfn_folio(unsigned long pfn)
 
 参照カウントはfolio（headページ）の`_refcount`にある。tailページは独立した参照カウントを持たない。すべての参照操作はfolioを通じて行われる。
 
-### folio_get()とfolio_put() {#folioget-and-folioput}
+### folio_get()とfolio_put() {#folio_get-and-folio_put}
 
 ```c
 /* include/linux/mm.h */
@@ -210,7 +210,7 @@ static inline void put_page(struct page *page)
 }
 ```
 
-### folio_ref_count() {#foliorefcount}
+### folio_ref_count() {#folio_ref_count}
 
 ```c
 /* include/linux/page_ref.h */
@@ -219,7 +219,7 @@ static inline int folio_ref_count(const struct folio *folio);
 
 生の参照カウントを返す。カーネルのドキュメントは`_refcount`に直接アクセスしないよう警告しており、常にこのアクセサを使うべきである。
 
-### folio_try_get() {#foliotryget}
+### folio_try_get() {#folio_try_get}
 
 まだ参照を保持しておらず、投機的に参照を取得する必要がある場合にこれを使う:
 

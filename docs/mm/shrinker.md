@@ -113,7 +113,7 @@ struct shrink_control {
 
 **`memcg`** — 対象となるメモリcgroup。memcgごとのshrinkerを走査する際にコアが設定する。グローバル（ルートmemcg）経路では`NULL`である。`SHRINKER_MEMCG_AWARE`が設定されているときにのみ意味を持つ。
 
-## `count_objects`と`scan_objects` {#countobjects-vs-scanobjects}
+## `count_objects`と`scan_objects` {#count_objects-vs-scan_objects}
 
 この2つのコールバックは、2段階の契約を実装している。
 
@@ -203,7 +203,7 @@ Memory pressure (allocation fails or watermark crossed)
                                              or SHRINK_STOP returned
 ```
 
-### `do_shrink_slab`における優先度スケーリング {#priority-scaling-in-doshrinkslab}
+### `do_shrink_slab`における優先度スケーリング {#priority-scaling-in-do_shrink_slab}
 
 `priority`パラメータ（`mm/vmscan.c`の`sc->priority`由来）は、shrinkerをどれだけ積極的に呼び出すかを制御する。優先度が高いほど、メモリ逼迫が大きいことを意味する。
 

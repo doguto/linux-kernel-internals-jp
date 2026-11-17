@@ -24,7 +24,7 @@ Lunar LakeでのXe TDRバグの1つに対する修正が、20か月後に未開�
 **2026年4月（Linux 7.1） · CVEではない**
 GPUハングのリカバリワーカーが、固まったリングのジョブスレッドが必要とするロックを保持したまま、クラッシュダンプ用のメモリを割り当てた。そしてその割り当てがシュリンカを起動し、シュリンカは固まったジョブがシグナルするはずだったまさにそのfenceを待った。
 
-### [`drm_sched_entity_kill_jobs_cb` のlockdepデッドロック](war-stories/entity-kill-jobs-deadlock.md) {#the-drmschedentitykilljobs_cb-lockdep-deadlock}
+### [`drm_sched_entity_kill_jobs_cb` のlockdepデッドロック](war-stories/entity-kill-jobs-deadlock.md) {#the-drm_sched_entity_kill_jobs_cb-lockdep-deadlock}
 **2025年11月 · CVEではない**
 クリーンアップのコールバックが割り込みコンテキストで実行され、通常のプロセスコンテキストのコードが割り込みを無効化せずに保持していたロックを取得した。さらに同じ関数内に、独立した2つ目のデッドロックもあった。どちらも、ロジックをシグナルコールバックから完全に追い出すことで修正された。
 

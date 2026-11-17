@@ -146,7 +146,7 @@ add_memory_resource()
 
 `online_pages()` はメモリモデルの作業を行う。PFN範囲を要求されたゾーンに関連付け、ドライバやサブシステムが反応できるようメモリ通知を発行し、`online_pages_range()` でページをバディアロケータに追加し、それから `undo_isolate_page_range()` を呼んで範囲を通常の割り当てに開放する。
 
-### 新しいメモリにはZONE_MOVABLEかZONE_NORMALか {#zonemovable-vs-zonenormal-for-new-memory}
+### 新しいメモリにはZONE_MOVABLEかZONE_NORMALか {#zone_movable-vs-zone_normal-for-new-memory}
 
 オンライン化の際には、ゾーンを選ばなければならない:
 
@@ -289,7 +289,7 @@ extern int offline_and_remove_memory(u64 start, u64 size);
 
 ## メモリのオンライン化ポリシー {#memory-onlining-policies}
 
-### auto_online_blocks {#autoonlineblocks}
+### auto_online_blocks {#auto_online_blocks}
 
 `/sys/devices/system/memory/auto_online_blocks` にあるsysfs属性 `auto_online_blocks` は、新しいメモリブロックが現れたときに何が起きるか（自動的にオンライン化されるか、どのゾーンにか）を制御する:
 
@@ -540,7 +540,7 @@ x86-64とia64向けに基本的なメモリホットアドのサポートがマ�
 
 **LWNの記事**: [virtio-mem: paravirtualized memory hot(un)plug](https://lwn.net/Articles/820428/)
 
-### memmap_on_memory（v5.14、2021年） {#memmaponmemory-v514-2021}
+### memmap_on_memory（v5.14、2021年） {#memmap_on_memory-v514-2021}
 
 `MHP_MEMMAP_ON_MEMORY` フラグと `memory_hotplug.memmap_on_memory` パラメータにより、ホットプラグされたメモリの `struct page` メタデータを、既存のRAMを消費するのではなく、ホットプラグされたメモリ自体の中に格納できるようになった。
 

@@ -130,7 +130,7 @@ Device owns buffer → dma_unmap_single() → CPU owns buffer
 
 デバイスがバッファを所有している間（マップからアンマップまで）、CPUはそれを読み書きしてはならない。この規則に違反すると、非コヒーレントなプラットフォームでデータ破壊が起きる。
 
-### dma_map_single() / dma_unmap_single() {#dmamapsingle-dmaunmapsingle}
+### dma_map_single() / dma_unmap_single() {#dma_map_single-dma_unmap_single}
 
 ```c
 /* 仮想的に連続したバッファをマップする */
@@ -166,7 +166,7 @@ dev_kfree_skb(skb);
 !!! warning "常に`dma_mapping_error()`を確認すること"
     `dma_map_single()`は失敗しうる（IOMMUの枯渇、デバイスのアドレス範囲のオーバーフロー）。戻り値は必ず`dma_mapping_error(dev, addr)`で確認すること。`DMA_MAPPING_ERROR`をデバイスアドレスとして使うと、ハードウェアフォルトや気付かれないデータ破壊が起きる。
 
-### dma_map_page() {#dmamappage}
+### dma_map_page() {#dma_map_page}
 
 ```c
 dma_addr_t dma_map_page(struct device *dev, struct page *page,
@@ -179,7 +179,7 @@ void dma_unmap_page(struct device *dev, dma_addr_t addr,
 
 バッファが仮想アドレスではなく`struct page`で表される場合に使う。ページベースのskbフラグメントに受信するネットワークドライバでよく使われる。
 
-### dma_map_sg() / dma_unmap_sg() {#dmamapsg-dmaunmapsg}
+### dma_map_sg() / dma_unmap_sg() {#dma_map_sg-dma_unmap_sg}
 
 ```c
 unsigned int dma_map_sg(struct device *dev, struct scatterlist *sg,
@@ -193,7 +193,7 @@ void dma_unmap_sg(struct device *dev, struct scatterlist *sg,
 
 `dma_map_sg()`はDMAセグメントの数を返す。IOMMUが隣接するエントリを結合した場合、これは`nents`より少なくなることがある。
 
-## dma_sync_*: 部分的な所有権の移譲 {#dmasync-partial-ownership-transfers}
+## dma_sync_*: 部分的な所有権の移譲 {#dma_sync_-partial-ownership-transfers}
 
 アクセスのたびに完全にアンマップして再マップするのは高コストである。`dma_sync_*`関数を使うと、CPUはマップされたバッファをアンマップせずに一時的に所有権を取り戻せる。これは高性能なディスクリプタリングにとって正しいパターンである。
 

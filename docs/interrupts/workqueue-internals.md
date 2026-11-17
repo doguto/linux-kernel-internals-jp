@@ -292,7 +292,7 @@ kprobe:process_one_work {
 echo 60 > /sys/module/workqueue/parameters/watchdog_thresh
 ```
 
-## WQ_MEM_RECLAIMとレスキューワーカー {#wqmemreclaim-and-rescue-workers}
+## WQ_MEM_RECLAIMとレスキューワーカー {#wq_mem_reclaim-and-rescue-workers}
 
 ```c
 /*

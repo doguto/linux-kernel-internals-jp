@@ -76,7 +76,7 @@ lspci -vvv -s 0000:00:1c.0 | grep "Access Control"
 #   ACSCtl: SrcValid+ TransBlk+ ReqRedir+ CmpltRedir+ UpstreamFwd- EgressCtrl- DirectTrans-
 ```
 
-## io_pgtable_ops: ページテーブルの抽象化 {#iopgtableops-the-page-table-abstraction}
+## io_pgtable_ops: ページテーブルの抽象化 {#io_pgtable_ops-the-page-table-abstraction}
 
 IOMMUハードウェアによってページテーブルの形式は異なる。Intel VT-dは独自の多段ページテーブルを使い、AMD-Viは別の形式を使う。ARM SMMU v3はネイティブ形式とARM64 CPUのページテーブル形式の両方をサポートする（これがARMでSVAを効率的にしている。デバイスは文字どおりCPUと同じテーブルをウォークする）。
 

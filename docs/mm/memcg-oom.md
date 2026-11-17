@@ -109,7 +109,7 @@ kill のログには追加の行が含まれる:
 | サイドカー付きのマイクロサービス | 有効にする — アプリを kill してプロキシを残すとゾンビ状態になる |
 | 対話的なシェルセッション | 有効にしない — 1つの悪いコマンドのためにセッション全体が kill される |
 
-## oom_score_adj と cgroup OOM の相互作用 {#oomscoreadj-interaction-with-cgroup-oom}
+## oom_score_adj と cgroup OOM の相互作用 {#oom_score_adj-interaction-with-cgroup-oom}
 
 `oom_score_adj` はプロセスごとに（`/proc/<pid>/oom_score_adj` を介して）設定され、範囲は -1000 から +1000 である。これは計算された OOM スコアを修正する:
 
@@ -127,7 +127,7 @@ echo 1000 > /proc/$(pgrep disposable-worker)/oom_score_adj
 !!! warning "免除されたプロセスは OOM ループを引き起こしうる"
     cgroup 内のすべてのプロセスが `oom_score_adj = -1000` の場合、OOM killer は犠牲者を選べない。何かを kill する代わりに、割り当てが `-ENOMEM` で失敗する。これにより、OOM を引き起こしたプロセスで `ENOMEM` エラーや割り当てのハングが起こりうる。
 
-### systemd と oom_score_adj {#systemd-and-oomscoreadj}
+### systemd と oom_score_adj {#systemd-and-oom_score_adj}
 
 systemd はユニットファイルで `OOMScoreAdjust` を設定し、これは `/proc/<pid>/oom_score_adj` に直接対応する。システムにとって重要なサービス（journald、udevd）はデフォルトで -1000 に設定されている。コンテナのワークロードでは、サービスごとに `OOMScoreAdjust` を設定して、cgroup 内での犠牲者の優先度を制御する。
 
@@ -303,7 +303,7 @@ python3 -c "x = bytearray(100 * 1024 * 1024)"
 dmesg | grep -A 30 "Memory cgroup out of memory"
 ```
 
-### oom_score_adj の影響を比較する {#compare-oomscoreadj-impact}
+### oom_score_adj の影響を比較する {#compare-oom_score_adj-impact}
 
 ```bash
 # cgroup 内に2つのプロセスを置き、どちらが選ばれるかを観察

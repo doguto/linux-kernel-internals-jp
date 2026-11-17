@@ -34,7 +34,7 @@ CVE-2021-3490が告知されたのと同じ日に投稿された。`kernel.unpri
 **2020年3月 · CVE-2020-8835 · CVSS 7.8**
 stableに入れることを意図していなかった精度改善が、それを修正と取り違えた機械学習の分類器によって、5.4長期サポート系列に自動的に選ばれた。Manfred Paulはそれを使ってPwn2Ownにエントリした。修正は19行の純粋な削除であり、動作する修復案よりもそちらが選ばれた。
 
-### [`check_alu_op()`における符号拡張](war-stories/sign-extension.md) {#sign-extension-in-checkaluop}
+### [`check_alu_op()`における符号拡張](war-stories/sign-extension.md) {#sign-extension-in-check_alu_op}
 **2017年12月 · CVE-2017-16995 · CVSS 7.8**
 Verifierは、マシンがゼロ埋めする32ビット即値を符号拡張していたため、レジスタに関するモデルが最初の命令から誤っていた。Jann Hornが1通のメッセージで報告した8つのVerifierバグの1つ — Verifierの算術処理を、セキュリティレビューの対象となる攻撃面として確立した一連の監査である。Metasploitモジュールを含む3つの公開エクスプロイトがある。
 

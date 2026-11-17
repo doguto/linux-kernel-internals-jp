@@ -62,7 +62,7 @@ ISA バスのデバイス向けのレガシーなゾーンである。ISA バス
 
 カーネルは、アーキテクチャや IOMMU の違いを抽象化する統一的な DMA API を提供している。API は [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) にあり、中核の実装は [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma) にある。
 
-### dma_alloc_coherent() {#dmaalloccoherent}
+### dma_alloc_coherent() {#dma_alloc_coherent}
 
 CPU とデバイスの両方から同時にアクセスでき、ハードウェアによってコヒーレンシが保証される（手動でのキャッシュ管理が不要な）バッファを割り当てる。
 
@@ -79,7 +79,7 @@ void dma_free_coherent(struct device *dev, size_t size,
 
 **トレードオフ**: ハードウェアによるキャッシュコヒーレンシを持たないアーキテクチャ（例: 一部の ARM SoC）では、コヒーレントメモリはキャッシュ不可であることが多い。このため CPU からのアクセスが遅くなる。CPU が集中的に読み書きする大きなデータバッファには使わないこと。
 
-### dma_map_single() {#dmamapsingle}
+### dma_map_single() {#dma_map_single}
 
 既存のカーネルバッファを、デバイスが DMA でアクセスできるようにマップする。これは「ストリーミング」マッピングであり、方向とライフサイクルを持つ。
 
@@ -100,7 +100,7 @@ void dma_unmap_single(struct device *dev, dma_addr_t dma_addr,
 
 **使うべきとき**: 一時的な転送 — ネットワークパケットの送信、ディスク I/O 要求の発行。転送の前にマップし、完了したらアンマップする。
 
-### dma_map_sg() {#dmamapsg}
+### dma_map_sg() {#dma_map_sg}
 
 スキャッタギャザーリスト — 連続していない複数のメモリ領域 — を、単一の DMA 操作のためにマップする。カーネルは、複数のページにまたがる I/O をこの方法で処理する。
 
@@ -286,7 +286,7 @@ dma_unmap_single(dev, dma_handle, len, DMA_FROM_DEVICE);
 memcpy(dest, buf, len);  /* 安全: アンマップがキャッシュを無効化した */
 ```
 
-### DMA に virt_to_phys() を使う {#using-virttophys-for-dma}
+### DMA に virt_to_phys() を使う {#using-virt_to_phys-for-dma}
 
 仮想アドレスを物理アドレスに変換してデバイスに渡してはならない。これは IOMMU を迂回し、バウンスバッファリングをスキップし、デバイスの DMA マスクを無視する。常に DMA API を使うこと。
 

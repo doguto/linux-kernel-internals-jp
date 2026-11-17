@@ -1,4 +1,4 @@
-# `drm_sched_entity_kill_jobs_cb` のlockdepデッドロック {#the-drmschedentitykilljobs_cb-lockdep-deadlock}
+# `drm_sched_entity_kill_jobs_cb` のlockdepデッドロック {#the-drm_sched_entity_kill_jobs_cb-lockdep-deadlock}
 
 > 割り込みコンテキストで実行されるフェンスシグナルのコールバックが、通常のプロセスコンテキストが割り込みを無効化せずに保持しているロックを取ろうとしていた。典型的な割り込み非安全なロックのバグであり、実際のユーザーのマシン上でlockdepが捕まえた
 

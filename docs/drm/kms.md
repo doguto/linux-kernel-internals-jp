@@ -152,7 +152,7 @@ int (*detect_ctx)(struct drm_connector *connector,
 
 ## アトミックコミットは実際にどう動くか {#how-an-atomic-commit-actually-works}
 
-### コンテナ: `drm_atomic_state` → `drm_atomic_commit` {#the-container-drmatomicstate-drmatomiccommit}
+### コンテナ: `drm_atomic_state` → `drm_atomic_commit` {#the-container-drm_atomic_state-drm_atomic_commit}
 
 アトミックコアは、何かに触れる前に、提案された構成を1つのコンテナオブジェクトにまとめ上げる。2014年からLinux 7.1まで、この構造体は `struct drm_atomic_state` という名前だった。上で挙げたLWNの記事や、現在も広く展開されているドライバコードの大半で目にするのはこの名前である。2026年4月、[`5164f7e7ff8e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5164f7e7ff8ec7d41065d3862630c2ba09854328)（"drm: Rename struct drm_atomic_state to drm_atomic_commit"、Maxime Ripard）によって `struct drm_atomic_commit` に改名された。コミットメッセージが挙げる理由は、`drm_atomic_state` が*オブジェクトごと*の状態構造体（`drm_plane_state`、`drm_crtc_state` など）と混同されやすいが、実際にはデバイスの「状態」ではなく、新旧のオブジェクトごとの状態を参照する進行中のコミットだから、というものである。このページでは現在の名前を使う。2026年以前のカーネルソースやドキュメントを読む場合は、頭の中で `drm_atomic_state` に置き換えてほしい。同じオブジェクトである。
 

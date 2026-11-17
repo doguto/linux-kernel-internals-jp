@@ -55,7 +55,7 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 }
 ```
 
-### システムコールからVFSへ: ksys_writeとvfs_write {#from-syscall-to-vfs-ksyswrite-and-vfswrite}
+### システムコールからVFSへ: ksys_writeとvfs_write {#from-syscall-to-vfs-ksys_write-and-vfs_write}
 
 システムコールのスタブは単に`ksys_write()`を呼ぶだけである。`ksys_write()`はfdの解決をラップしており、同じロジックを`SYSCALL_DEFINE`を経由せずにカーネルコードから呼べるようにしている。`vfs_write()`はパーミッションチェックを行い、ファイルシステムへディスパッチする:
 
@@ -272,7 +272,7 @@ static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
 
 部分書き込み時の読み込みは、性能上の重要な懸念事項である。アプリケーションが常に4 KB境界に揃ったページ全体単位で書き込むなら、カーネルはこの余分な読み込みを省略する。データベースや書き込みに最適化されたアプリケーションが書き込みをアラインするのは、まさにこの理由による場合が多い。
 
-### copy_page_from_iter_atomic: 実際のコピー {#copypagefromiteratomic-the-actual-copy}
+### copy_page_from_iter_atomic: 実際のコピー {#copy_page_from_iter_atomic-the-actual-copy}
 
 ページがロックされ、uptodateになった状態で、カーネルはユーザーのイテレータからページへコピーする:
 
@@ -324,7 +324,7 @@ static int iomap_write_end(struct iomap_iter *iter, loff_t pos, unsigned len,
 
 ページをダーティにすることは、「メモリに書かれたデータ」と「ディスクに書かれたデータ」を分ける重要な出来事である。カーネルはダーティページを、グローバル、ノード単位、cgroup単位で追跡する。
 
-### folio_mark_dirtyとSetPageDirty {#foliomarkdirty-and-setpagedirty}
+### folio_mark_dirtyとSetPageDirty {#folio_mark_dirty-and-setpagedirty}
 
 ```c
 // include/linux/pagemap.h / mm/page-writeback.c
@@ -420,7 +420,7 @@ grep -E "^Dirty:|^Writeback:" /proc/meminfo
 grep -E "nr_dirty|nr_writeback" /proc/vmstat
 ```
 
-### __mark_inode_dirty: inodeのダーティリスト {#_markinode_dirty-the-inode-dirty-list}
+### __mark_inode_dirty: inodeのダーティリスト {#__mark_inode_dirty-the-inode-dirty-list}
 
 ページをダーティにすると、それを所有するinodeもダーティになる。ライトバックワーカーは、これによってどのinodeにフラッシュすべきページがあるかを知る:
 
@@ -483,7 +483,7 @@ stateDiagram-v2
 
 > **注:** `HardThrottle`状態は単一の遷移ではない。`balance_dirty_pages()`は内部でループする。書き込み側をスリープさせ、起床し、ダーティ数を再チェックし、まだしきい値を超えていれば再びスリープする。書き込み側のブロックが解除されるのは、ダーティページがリミットを下回るまで掃けたときだけである。
 
-### balance_dirty_pages_ratelimited {#balancedirtypages_ratelimited}
+### balance_dirty_pages_ratelimited {#balance_dirty_pages_ratelimited}
 
 レート制限付きのラッパーは、書き込みのたびに`balance_dirty_pages()`を呼ぶことを避ける。それではコストが高すぎるからである。代わりにチェックのコストを償却する:
 
@@ -502,7 +502,7 @@ void balance_dirty_pages_ratelimited(struct address_space *mapping)
 }
 ```
 
-### balance_dirty_pages: スロットリングのループ {#balancedirtypages-the-throttling-loop}
+### balance_dirty_pages: スロットリングのループ {#balance_dirty_pages-the-throttling-loop}
 
 ダーティページがハードリミットを超えると、`balance_dirty_pages()`はリミットをどれだけ超えているかに比例したスリープ時間を計算し、書き込み側を一時停止させる:
 
@@ -676,7 +676,7 @@ void wb_workfn(struct work_struct *work)
 }
 ```
 
-### writeback_sb_inodes: inodeごとのループ {#writebacksbinodes-the-per-inode-loop}
+### writeback_sb_inodes: inodeごとのループ {#writeback_sb_inodes-the-per-inode-loop}
 
 ```c
 // fs/fs-writeback.c（簡略化）
@@ -746,7 +746,7 @@ enum wb_reason {
 
 これはライトバックのtracepointで確認でき、予期しない書き込みの嵐を診断するのに役立つ。
 
-### do_writepagesとa_ops->writepages {#dowritepages-and-aops-writepages}
+### do_writepagesとa_ops->writepages {#do_writepages-and-a_ops-writepages}
 
 ライトバックのコールチェーンの最下部で、`do_writepages()`がファイルシステムを呼び出す:
 
@@ -799,7 +799,7 @@ struct bio {
 };
 ```
 
-### submit_bioからblk_mq_submit_bioへ {#submitbio-to-blkmqsubmitbio}
+### submit_bioからblk_mq_submit_bioへ {#submit_bio-to-blk_mq_submit_bio}
 
 ```c
 // block/blk-core.c
@@ -830,7 +830,7 @@ static void __submit_bio(struct bio *bio)
 
 ## ステージ8: バリアと永続性の保証 {#stage-8-barriers-and-persistence-guarantees}
 
-### O_SYNCとO_DSYNC {#osync-and-odsync}
+### O_SYNCとO_DSYNC {#o_sync-and-o_dsync}
 
 ファイルを`O_SYNC`で開くと、すべての`write()`呼び出しが同期的になる。データとメタデータが永続化されたことをストレージデバイスが確認するまで戻らない。`O_DSYNC`はデータのみの同等版である（書き込みのたびに`fdatasync()`を行うようなもの）:
 

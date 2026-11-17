@@ -99,7 +99,7 @@ cat /sys/class/bdi/8:0/stats
 
 カーネルは、蓄積できるダーティデータの量を制御するため、利用可能なメモリに対する割合で表される2つのしきい値を設けている。
 
-### `dirty_background_ratio`（デフォルト: 10%） {#dirtybackgroundratio-default-10}
+### `dirty_background_ratio`（デフォルト: 10%） {#dirty_background_ratio-default-10}
 
 **ソフトリミット**である。ダーティpageがメモリのこの割合を超えると、バックグラウンドのフラッシャー（`wb_workfn`）が起こされて書き込みを開始する。新しいデータを書き込んでいるプロセスは停止させられない — ライトバックは並行して実行される。
 
@@ -306,7 +306,7 @@ static int do_fsync(unsigned int fd, int datasync)
 
 `fsync()`が戻った後でも、永続性はストレージデバイスが書き込み順序を守るかどうかに依存する。カーネルは**ライトバリア**を使って、順序の要件をブロック層に伝える。
 
-### `O_SYNC`と`O_DSYNC` {#osync-and-odsync}
+### `O_SYNC`と`O_DSYNC` {#o_sync-and-o_dsync}
 
 `O_SYNC`でファイルを開くと、すべての`write()`が`write()` + `fsync()`のように振る舞う — データとメタデータが永続ストレージにフラッシュされるまで呼び出しは戻らない。
 

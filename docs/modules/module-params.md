@@ -130,7 +130,7 @@ static int __init moduleB_init(void)
 }
 ```
 
-### EXPORT_SYMBOLとEXPORT_SYMBOL_GPL {#exportsymbol-vs-exportsymbol_gpl}
+### EXPORT_SYMBOLとEXPORT_SYMBOL_GPL {#export_symbol-vs-export_symbol_gpl}
 
 `EXPORT_SYMBOL_GPL` は、`MODULE_LICENSE("GPL")` または互換ライセンスを持つモジュールだけがそのシンボルを使えるようにする。これにより、プロプライエタリなモジュールがカーネル内部のインターフェースを使えないことが強制される。
 

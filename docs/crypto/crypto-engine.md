@@ -67,7 +67,7 @@ struct crypto_engine {
 
 専用のkthreadワーカー（`kworker`）が `pump_requests` を実行し、リクエストをデキューしてハードウェアにディスパッチする — 汎用のworkqueueではない。ほとんどのドライバはハードウェアチャネルごとに1つのエンジンを割り当てるか、ハードウェアがシングルチャネルならデバイスごとに1つ割り当てる。この構造体にはバッチ処理用のコールバックはない。後述の「バッチ処理」を参照。
 
-## ドライバのコールバック: crypto_engine_op {#driver-callbacks-cryptoengineop}
+## ドライバのコールバック: crypto_engine_op {#driver-callbacks-crypto_engine_op}
 
 crypto_engineに登録される各アルゴリズムは `struct crypto_engine_op` を提供する:
 
@@ -87,7 +87,7 @@ struct crypto_engine_op {
 
 > **注**: カーネル6.5までは、`struct crypto_engine_op` は（リクエストタイプ別に分かれていない）単一の汎用構造体で、`prepare_request`、`unprepare_request`、`do_one_request` の3つのコールバックを持っていた。現在のモデル — `do_one_request` のみで、`skcipher_engine_alg` のようなタイプ別の構造体にラップされる — へのリファクタリングは6.5と6.6の間に入った。
 
-## アルゴリズムの登録: skcipher_engine_alg {#algorithm-registration-skcipherenginealg}
+## アルゴリズムの登録: skcipher_engine_alg {#algorithm-registration-skcipher_engine_alg}
 
 エンジンのopは、変換ごとのコンテキスト構造体ではなく、アルゴリズム記述子の構造体に埋め込まれる。たとえば `struct skcipher_engine_alg` は、`struct skcipher_alg` に `struct crypto_engine_op op` を付け加えてラップしたものである:
 
@@ -212,7 +212,7 @@ static int mydrv_aes_decrypt(struct skcipher_request *req)
 }
 ```
 
-### ステップ4: do_one_requestがハードウェアをプログラムする {#step-4-doonerequest-programs-the-hardware}
+### ステップ4: do_one_requestがハードウェアをプログラムする {#step-4-do_one_request-programs-the-hardware}
 
 ```c
 static int mydrv_do_one_request(struct crypto_engine *engine, void *areq)

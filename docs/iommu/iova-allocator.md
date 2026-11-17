@@ -114,7 +114,7 @@ done:
 
 マガジン方式のper-CPUキャッシュこそが、高速パスでのIOVA割り当てをrbtreeのロックから切り離す鍵である。
 
-### struct iova_rcacheとstruct iova_cpu_rcache {#struct-iovarcache-and-struct-iovacpu_rcache}
+### struct iova_rcacheとstruct iova_cpu_rcache {#struct-iova_rcache-and-struct-iova_cpu_rcache}
 
 ```c
 /* drivers/iommu/iova.c — これらはすべて iova.c の内部にあり、

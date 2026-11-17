@@ -10,7 +10,7 @@
 
 [`bio`](bio-request.md)は1つのI/Oを記述する。対象デバイス、開始セクタ、方向、そして読み込み先または書き込み元となるメモリセグメントのリストである。I/Oを必要とする者 — ファイルシステム、[ページキャッシュのライトバック](../io/page-cache-writeback.md)パス、スワップ、あるいは`O_DIRECT`の発行者 — は`bio`を埋めて`submit_bio()`を呼ぶ。
 
-## 1. 発行: `submit_bio()` → `blk_mq_submit_bio()` {#1-submission-submitbio-blkmqsubmitbio}
+## 1. 発行: `submit_bio()` → `blk_mq_submit_bio()` {#1-submission-submit_bio-blk_mq_submit_bio}
 
 `submit_bio()`は`submit_bio_noacct()`に流れ込み、そこで検証とI/Oの計上を行った後、`bio`を`blk_mq_submit_bio()`に渡す — これがマルチキュー機構への入口である。ここからブロック層が最初にとる本能的な行動は、新しいrequestを作ることでは*なく*、それを避けることである。
 

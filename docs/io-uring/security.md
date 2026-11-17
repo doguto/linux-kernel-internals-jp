@@ -50,7 +50,7 @@ Userspace (seccomp: deny openat) ──► io_uring_enter ──► SQE: IORING_
 
 `IORING_SETUP_DEFER_TASKRUN`はサンドボックス化されたコンテキストで特に有用である。遅延された完了処理のためにio-wqスレッドが生成されず、すべての実行が既知でフィルタ可能なユーザー空間スレッド上にとどまる。
 
-## `IORING_REGISTER_RESTRICTIONS` {#ioringregisterrestrictions}
+## `IORING_REGISTER_RESTRICTIONS` {#ioring_register_restrictions}
 
 リングをセットアップした後、特権を持つコンポーネントは、リングのfdを信頼できないコンポーネントに渡す前に**リングをロックダウン**できる。`IORING_REGISTER_RESTRICTIONS`の登録呼び出し（`io_uring_register(2)`）は、`struct io_uring_restriction`エントリの配列を受け取る。一度適用された制限はリングのライフタイムの間ずっと有効であり、削除できない。
 

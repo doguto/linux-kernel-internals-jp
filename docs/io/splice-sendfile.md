@@ -323,7 +323,7 @@ struct pipe_inode_info {
 
 バイトが最終的にマシンを離れるのは、送信リング内のスキャッタギャザーディスクリプタに従って、NICのDMAエンジンがページキャッシュのページを直接読み出すときである。
 
-### splice_from_pipeとsplice_to_pipe {#splicefrompipe-and-splicetopipe}
+### splice_from_pipeとsplice_to_pipe {#splice_from_pipe-and-splice_to_pipe}
 
 カーネルは、ファイルシステムやソケットのドライバが使う2つのヘルパーをエクスポートしている。
 
@@ -353,7 +353,7 @@ ssize_t splice_to_pipe(struct pipe_inode_info *pipe,
 
 ---
 
-## 比較: sendfile、splice、io_uring、MSG_ZEROCOPY {#comparison-sendfile-vs-splice-vs-iouring-vs-msgzerocopy}
+## 比較: sendfile、splice、io_uring、MSG_ZEROCOPY {#comparison-sendfile-vs-splice-vs-io_uring-vs-msg_zerocopy}
 
 | 機能 | `sendfile` | `splice` | `io_uring IORING_OP_SPLICE` | `MSG_ZEROCOPY` |
 |---------|-----------|---------|----------------------------|----------------|
@@ -439,7 +439,7 @@ ssize_t vmsplice(int fd, const struct iovec *iov,
 
 `fd`はパイプの書き込み端でなければならない。各`iovec`は呼び出し元の仮想アドレス空間の範囲を表す。
 
-### SPLICE_F_GIFT {#splicefgift}
+### SPLICE_F_GIFT {#splice_f_gift}
 
 `SPLICE_F_GIFT`がない場合、カーネルはページがパイプに入る前にコピーする（パイプのコンシューマが読む前にユーザーが変更するかもしれないため）。`SPLICE_F_GIFT`を指定すると、ユーザーはページを変更も解放もしないと約束し、カーネルはそれらを贈り物として受け取ってパイプリングに直接マップする。
 
@@ -654,7 +654,7 @@ NICとページキャッシュが異なるNUMAノード上にある場合、NIC�
 
 ---
 
-## `copy_file_range(2)` — サーバー側でのファイルコピー {#copyfilerange2-server-side-file-copy}
+## `copy_file_range(2)` — サーバー側でのファイルコピー {#copy_file_range2-server-side-file-copy}
 
 `copy_file_range`はLinux 4.5で追加された。2つのファイルディスクリプタ間で、完全にカーネル内でバイトをコピーする。ユーザー空間のバッファは一切関与しない。
 
@@ -727,7 +727,7 @@ xfs_info /mount/point | grep reflink
 # Btrfs: 最近のカーネルでは常にサポートされている
 ```
 
-### copy_file_rangeとファイルシステムをまたぐコピー {#copyfilerange-and-cross-filesystem-copies}
+### copy_file_rangeとファイルシステムをまたぐコピー {#copy_file_range-and-cross-filesystem-copies}
 
 `copy_file_range`は、`fd_in`と`fd_out`が異なるファイルシステム（または同じファイルシステムの異なるマウント）上にある場合に`-EXDEV`を返す。Linux 5.3以降、この場合カーネルは`do_splice_direct`にフォールバックする。それ以前のカーネルはエラーをユーザー空間に返していた。
 

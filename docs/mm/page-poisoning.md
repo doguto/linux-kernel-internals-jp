@@ -14,7 +14,7 @@ Linux カーネルは、使用前または使用後にメモリを既知のパ�
 
 これらは独立した機構である。組み合わせることもできるが、一部の組み合わせは冗長になる（例: `CONFIG_PAGE_POISONING` と `init_on_free=1` を両方有効にすると、同じページを2回ゼロ化する）。
 
-## CONFIG_PAGE_POISONING: デバッグ用ポイズニング {#configpagepoisoning-debug-poisoning}
+## CONFIG_PAGE_POISONING: デバッグ用ポイズニング {#config_page_poisoning-debug-poisoning}
 
 ### 何をするのか {#what-it-does}
 
@@ -120,7 +120,7 @@ Call Trace:
 - 単純でコンパイラに依存しないチェックが欲しい（KASAN と違い、特別なコンパイラフラグは不要）
 - KASAN のオーバーヘッドが大きすぎる VM や低性能なシステムで実行している
 
-## init_on_alloc と init_on_free: セキュリティのためのゼロ化 {#initonalloc-and-initonfree-security-zeroing}
+## init_on_alloc と init_on_free: セキュリティのためのゼロ化 {#init_on_alloc-and-init_on_free-security-zeroing}
 
 ### 何をするのか {#what-they-do}
 
@@ -333,11 +333,11 @@ use-after-free の疑い
 
 ## 歴史 {#history}
 
-### CONFIG_PAGE_POISONING {#configpagepoisoning}
+### CONFIG_PAGE_POISONING {#config_page_poisoning}
 
 ページポイズニングは、git による体系的な履歴管理よりも前から存在する。`PAGE_POISONING` 設定オプションと `0xAA` パターンは、デバッグ支援として長年カーネルに存在してきた。現在の `mm/page_poison.c` ファイルは、以前は `mm/page_alloc.c` に散らばっていたロジックをまとめたものである。
 
-### init_on_alloc / init_on_free（v5.3、2019年） {#initonalloc-initonfree-v53-2019}
+### init_on_alloc / init_on_free（v5.3、2019年） {#init_on_alloc-init_on_free-v53-2019}
 
 **コミット**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6)（"mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options"）
 **作者**: Alexander Potapenko

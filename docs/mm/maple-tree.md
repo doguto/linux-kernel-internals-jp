@@ -306,7 +306,7 @@ struct vma_iterator {
 
 ## 主要な操作 {#key-operations}
 
-### ツリーのライフサイクル: `mt_init()`と`mtree_destroy()` {#tree-lifecycle-mtinit-and-mtreedestroy}
+### ツリーのライフサイクル: `mt_init()`と`mtree_destroy()` {#tree-lifecycle-mt_init-and-mtree_destroy}
 
 ```c
 /* デフォルトのフラグ（外部ロックなし、RCUなし）で空のツリーを初期化する */
@@ -368,7 +368,7 @@ void *mas_find(struct ma_state *mas, unsigned long max);
 
 ---
 
-### `mas_store()` / `mas_store_gfp()` — 範囲マッピングの挿入または更新 {#masstore-masstore_gfp-insert-or-update-a-range-mapping}
+### `mas_store()` / `mas_store_gfp()` — 範囲マッピングの挿入または更新 {#mas_store-mas_store_gfp-insert-or-update-a-range-mapping}
 
 ```c
 /* [mas->index, mas->last]にentryを格納する。事前割り当てされたノードが必要。 */
@@ -422,7 +422,7 @@ static inline void vma_iter_clear(struct vma_iterator *vmi)
 
 ---
 
-### `mt_for_each()` — 単純なツリー全体の走査 {#mtforeach-simple-full-tree-iteration}
+### `mt_for_each()` — 単純なツリー全体の走査 {#mt_for_each-simple-full-tree-iteration}
 
 ```c
 /* include/linux/maple_tree.h */
@@ -518,7 +518,7 @@ addr = mas.index;
 
 これらのファイルは`mm->mm_mt`を直接走査して生成される。読むために必要な変更はない。maple treeが正式な情報源である。
 
-### `CONFIG_DEBUG_MAPLE_TREE` {#configdebugmaple_tree}
+### `CONFIG_DEBUG_MAPLE_TREE` {#config_debug_maple_tree}
 
 `lib/Kconfig.debug`で有効にする。
 

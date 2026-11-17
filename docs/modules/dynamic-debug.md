@@ -227,7 +227,7 @@ notifierブロックは意図的に `.priority = 0` を使っている。これ�
 
 ロード時に `dyndbg` モジュールパラメータが渡された場合（例: `insmod mymodule.ko dyndbg=+p`）、それは本物のモジュールパラメータではない — モジュールローダの `unknown_module_param_cb()` がそれを特別に認識し、`ddebug_dyndbg_module_param_cb()` に渡す。これはディスクリプタが登録された後、`mod->init()` が実行される前に行われるので、init関数自体からのデバッグメッセージも捕捉できる。
 
-## pr_debugとdev_dbg {#prdebug-vs-devdbg}
+## pr_debugとdev_dbg {#pr_debug-vs-dev_dbg}
 
 どちらもdynamic debugの基盤を使い、同じインターフェースで制御される。
 
@@ -241,7 +241,7 @@ dev_dbg(&pdev->dev, "DMA transfer complete, status=%#x\n", status);
 
 ドライバのコードでは `dev_dbg()` が推奨される。出力に含まれるデバイス名から、どのハードウェアインスタンスがメッセージを出したかがすぐにわかるからである。どちらも無効時はno-op（NOP）である。
 
-## print_hex_dump_debug {#printhexdump_debug}
+## print_hex_dump_debug {#print_hex_dump_debug}
 
 大量のデータには、`print_hex_dump_debug()` がバッファを16進 + ASCII形式でダンプする。これもdynamic debugで制御される。
 

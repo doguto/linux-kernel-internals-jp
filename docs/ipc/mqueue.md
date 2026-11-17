@@ -183,7 +183,7 @@ cat /dev/mqueue/myqueue  # 表示内容: QSIZE:0 NOTIFY:0 SIGNO:0 NOTIFY_PID:0
 
 ## カーネルでの実装 {#kernel-implementation}
 
-### struct mqueue_inode_info {#struct-mqueueinodeinfo}
+### struct mqueue_inode_info {#struct-mqueue_inode_info}
 
 ```c
 /* ipc/mqueue.c */

@@ -28,7 +28,7 @@ cat /proc/cmdline
 
 カーネルはコマンドラインを3つの異なるフェーズでパースする。フェーズによって、どのパラメータがいつ見えるかが決まる。
 
-### フェーズ1: `parse_early_param()` — 非常に早い段階 {#phase-1-parseearlyparam-very-early}
+### フェーズ1: `parse_early_param()` — 非常に早い段階 {#phase-1-parse_early_param-very-early}
 
 メモリアロケータが初期化される前に`start_kernel()`から呼ばれる。このフェーズでは、ブートの残りを進める前に知っておく必要があるパラメータ — たとえば使用可能なRAMの量や、どのコンソールを使うか — を処理する。
 

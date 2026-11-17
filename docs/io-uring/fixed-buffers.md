@@ -12,7 +12,7 @@
 
 固定バッファと固定ファイルは、登録時にコストを一度だけ支払い、それを後続のすべてのI/Oに分散させることで、これらの問題を解決する。
 
-## 固定バッファ（`IORING_REGISTER_BUFFERS`） {#fixed-buffers-ioringregisterbuffers}
+## 固定バッファ（`IORING_REGISTER_BUFFERS`） {#fixed-buffers-ioring_register_buffers}
 
 ### 登録 {#registration}
 
@@ -111,7 +111,7 @@ io_uring_unregister_buffers(&ring);
 
 ピン留めされたページはすべて解放される。登録解除が成功するには、バッファを参照している実行中の操作がすべて完了していなければならない。
 
-## 固定ファイル（`IORING_REGISTER_FILES`） {#fixed-files-ioringregisterfiles}
+## 固定ファイル（`IORING_REGISTER_FILES`） {#fixed-files-ioring_register_files}
 
 ### 登録 {#registration_1}
 

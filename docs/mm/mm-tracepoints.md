@@ -65,7 +65,7 @@ bpftrace -e 'tracepoint:kmem:mm_page_alloc { @[comm] = count(); }'
 
 **ソース**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
-### mm_page_alloc {#mmpagealloc}
+### mm_page_alloc {#mm_page_alloc}
 
 ページアロケータ（[`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)の`__alloc_pages()`）がpageまたはcompound pageを正常に返すたびに発火する。
 
@@ -104,7 +104,7 @@ interval:s:5 {
 }'
 ```
 
-### mm_page_free {#mmpagefree}
+### mm_page_free {#mm_page_free}
 
 page（またはcompound page）が`free_pages()` / `__free_pages()`を介してページアロケータに返却されたときに発火する。
 
@@ -122,7 +122,7 @@ page（またはcompound page）が`free_pages()` / `__free_pages()`を介して
 perf stat -e kmem:mm_page_alloc,kmem:mm_page_free -a -- sleep 30
 ```
 
-### mm_page_alloc_zone_locked {#mmpagealloczonelocked}
+### mm_page_alloc_zone_locked {#mm_page_alloc_zone_locked}
 
 ページアロケータがzoneロックのパスにフォールバックしたときに発火する。典型的には、per-CPUページセット（PCP）が空で、zoneのフリーリストから補充しなければならない場合である。
 
@@ -136,7 +136,7 @@ perf stat -e kmem:mm_page_alloc,kmem:mm_page_free -a -- sleep 30
 
 **診断での使い方**: `mm_page_alloc`に対して`mm_page_alloc_zone_locked`イベントが頻繁な場合、PCPリストが頻繁に枯渇していることを意味する。これは割り当てのバースト時や、`vm.percpu_pagelist_high_fraction`が控えめに設定されすぎている場合に起こりうる。
 
-### mm_page_alloc_extfrag {#mmpagealloc_extfrag}
+### mm_page_alloc_extfrag {#mm_page_alloc_extfrag}
 
 アロケータが、別のmigratetypeのフリーリストからpageを**盗む**ことで要求を満たしたときに発火する。これは断片化の主要な指標である。
 
@@ -161,7 +161,7 @@ perf stat -e kmem:mm_page_alloc,kmem:mm_page_free -a -- sleep 30
 
 これらのtracepointは、バックグラウンドの回収（kswapd）と、割り当てを行うプロセスをブロックする同期的な直接回収の両方をカバーする。
 
-### mm_vmscan_kswapd_wake {#mmvmscankswapd_wake}
+### mm_vmscan_kswapd_wake {#mm_vmscan_kswapd_wake}
 
 バックグラウンドのページ回収を開始するために`kswapd`が起床したときに発火する。
 
@@ -184,7 +184,7 @@ tracepoint:vmscan:mm_vmscan_kswapd_wake {
 interval:s:1 { print(@); clear(@); }'
 ```
 
-### mm_vmscan_kswapd_sleep {#mmvmscankswapd_sleep}
+### mm_vmscan_kswapd_sleep {#mm_vmscan_kswapd_sleep}
 
 十分なメモリを回収した後、kswapdが再びスリープするときに発火する。
 
@@ -192,7 +192,7 @@ interval:s:1 { print(@); clear(@); }'
 
 **診断での使い方**: `mm_vmscan_kswapd_wake`から`mm_vmscan_kswapd_sleep`までの時間が、各回収サイクルの所要時間となる。
 
-### mm_vmscan_direct_reclaim_begin / mm_vmscan_direct_reclaim_end {#mmvmscandirectreclaimbegin-mmvmscandirectreclaimend}
+### mm_vmscan_direct_reclaim_begin / mm_vmscan_direct_reclaim_end {#mm_vmscan_direct_reclaim_begin-mm_vmscan_direct_reclaim_end}
 
 割り当てが**直接回収**を引き起こしたときに発火する。直接回収では、割り当てを行うタスク自身が、処理を進める前にpageを回収しなければならない。直接回収は、アプリケーションから見える割り当てレイテンシを引き起こす。
 
@@ -224,7 +224,7 @@ tracepoint:vmscan:mm_vmscan_direct_reclaim_end /@start[tid]/ {
 interval:s:10 { print(@latency_ns); }'
 ```
 
-### mm_vmscan_lru_isolate {#mmvmscanlru_isolate}
+### mm_vmscan_lru_isolate {#mm_vmscan_lru_isolate}
 
 回収の検討対象としてpageがLRUリストから隔離されたときに発火する。
 
@@ -242,7 +242,7 @@ interval:s:10 { print(@latency_ns); }'
 
 **診断での使い方**: `nr_skipped` / `nr_taken`の比率が高い場合、多くのpageが一時的にビジー（ライトバック中、ロック中など）で回収できないことを意味する。これは回収のストールを引き起こしうる。
 
-### mm_vmscan_lru_shrink_inactive {#mmvmscanlrushrinkinactive}
+### mm_vmscan_lru_shrink_inactive {#mm_vmscan_lru_shrink_inactive}
 
 inactive LRUリストが縮小されたとき（pageが回収されるか、参照チェックの結果activeリストへ移される）に発火する。
 
@@ -265,7 +265,7 @@ inactive LRUリストが縮小されたとき（pageが回収されるか、参�
 
 **診断での使い方**: `nr_dirty`が大きく`nr_reclaimed`が小さい場合、回収がダーティページに突き当たってライトバックを待たなければならないことを意味する。これは回収レイテンシのよくある原因である。`priority`フィールド（開始時の12から、追い詰められると0まで下がる）は、カーネルがどれだけ積極的に回収しようとしているかを示す。
 
-### mm_vmscan_write_folio {#mmvmscanwrite_folio}
+### mm_vmscan_write_folio {#mm_vmscan_write_folio}
 
 !!! note "最近のカーネルでは名前が変わっている"
     このtracepointは元々`mm_vmscan_writepage`という名前だったが、folio化の際に`mm_vmscan_write_folio`に改名された。正確な名前は、実行中のカーネルの`/sys/kernel/debug/tracing/events/vmscan/`で確認すること。
@@ -287,7 +287,7 @@ inactive LRUリストが縮小されたとき（pageが回収されるか、参�
 
 **ソース**: [`include/trace/events/oom.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/oom.h)
 
-### oom_score_adj_update {#oomscoreadj_update}
+### oom_score_adj_update {#oom_score_adj_update}
 
 プロセスの`oom_score_adj`の値が（`/proc/PID/oom_score_adj`を介して）変更されたときに発火する。
 
@@ -351,7 +351,7 @@ grep pgmajfault /proc/vmstat  # メジャーフォールト（I/Oが必要だっ
 
 **ソース**: [`include/trace/events/compaction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/compaction.h)
 
-### mm_compaction_begin / mm_compaction_end {#mmcompactionbegin-mmcompactionend}
+### mm_compaction_begin / mm_compaction_end {#mm_compaction_begin-mm_compaction_end}
 
 コンパクションのパスが開始・終了したときに発火する。
 
@@ -387,7 +387,7 @@ tracepoint:compaction:mm_compaction_end {
 interval:s:10 { print(@status); }'
 ```
 
-### mm_compaction_isolate_migratepages / mm_compaction_isolate_freepages {#mmcompactionisolatemigratepages-mmcompactionisolatefreepages}
+### mm_compaction_isolate_migratepages / mm_compaction_isolate_freepages {#mm_compaction_isolate_migratepages-mm_compaction_isolate_freepages}
 
 コンパクション中に、移行対象として、あるいは空きの移行先としてpageが隔離されたときに発火する。
 
@@ -402,7 +402,7 @@ interval:s:10 { print(@status); }'
 
 **診断での使い方**: `nr_taken / nr_scanned`の比率が低い場合、zone内のほとんどのpageがピン留めされて（移動不可能で）おり、コンパクションできないことを意味する。これはコンパクションでは解決できない根本的な断片化を示しているので、[CMA](cma.md)やhuge pageの予約の変更を検討すること。
 
-### mm_compaction_migratepages {#mmcompactionmigratepages}
+### mm_compaction_migratepages {#mm_compaction_migratepages}
 
 隔離されたpageが実際に新しい位置へ移行されたときに発火する。
 
@@ -421,7 +421,7 @@ interval:s:10 { print(@status); }'
 
 利用可能なtracepointは、khugepagedのcollapse（まとめ上げ）の活動をカバーする。名前はfolioやファイルTHPの作業に伴って変化するので、完全な一覧は実行中のカーネルの`/sys/kernel/debug/tracing/events/huge_memory/`で確認すること。
 
-### mm_collapse_huge_page {#mmcollapsehuge_page}
+### mm_collapse_huge_page {#mm_collapse_huge_page}
 
 khugepagedデーモンがcollapseの試行を終えたとき（成功・失敗を問わず）に発火する。
 
@@ -444,7 +444,7 @@ tracepoint:huge_memory:mm_collapse_huge_page {
 interval:s:60 { print(@); clear(@); }'
 ```
 
-### mm_collapse_huge_page_isolate {#mmcollapsehugepageisolate}
+### mm_collapse_huge_page_isolate {#mm_collapse_huge_page_isolate}
 
 collapseの試行の一環としてpageがLRUから隔離されたときに発火する。
 
@@ -452,7 +452,7 @@ collapseの試行の一環としてpageがLRUから隔離されたときに発�
 
 **診断での使い方**: ここで`status`が0以外の場合、隔離のステップ自体が失敗したことを意味する。pageがビジー（I/O中、ロック中など）で移動できなかったのである。
 
-### mm_khugepaged_scan_pmd {#mmkhugepagedscan_pmd}
+### mm_khugepaged_scan_pmd {#mm_khugepaged_scan_pmd}
 
 khugepagedがcollapseの機会を探してPMDエントリをスキャンしたときに発火する。
 
@@ -464,7 +464,7 @@ khugepagedがcollapseの機会を探してPMDエントリをスキャンした�
 
 **ソース**: [`include/trace/events/kmem.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/trace/events/kmem.h)
 
-### kmem_cache_alloc {#kmemcachealloc}
+### kmem_cache_alloc {#kmem_cache_alloc}
 
 名前付きslabキャッシュからの割り当て（`kmem_cache_alloc()`、`kmem_cache_alloc_node()`）のたびに発火する。
 
@@ -493,7 +493,7 @@ interval:s:10 {
 }'
 ```
 
-### kmem_cache_free {#kmemcachefree}
+### kmem_cache_free {#kmem_cache_free}
 
 slabオブジェクトの解放（`kmem_cache_free()`）のたびに発火する。
 

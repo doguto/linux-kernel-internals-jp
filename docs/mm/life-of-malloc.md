@@ -581,7 +581,7 @@ void vulnerable() {
 
 ---
 
-### ケース3: mmap_min_addrの迂回（CVE-2009-2695） {#case-3-mmapminaddr-bypass-cve-2009-2695}
+### ケース3: mmap_min_addrの迂回（CVE-2009-2695） {#case-3-mmap_min_addr-bypass-cve-2009-2695}
 
 #### 何が起きたか {#what-happened_2}
 

@@ -206,7 +206,7 @@ mkdir -p /dev/hugepages-1G
 mount -t hugetlbfs -o pagesize=1G nodev /dev/hugepages-1G
 ```
 
-### MAP_HUGE_1GBを指定したmmap() {#mmap-with-maphuge1gb}
+### MAP_HUGE_1GBを指定したmmap() {#mmap-with-map_huge_1gb}
 
 ```c
 #include <sys/mman.h>
@@ -321,7 +321,7 @@ x86-64での1GBページのサポートはLinux 2.6.26で導入された。AMD B
 
 **LWNの記事**: [Huge pages part 3: Administration](https://lwn.net/Articles/376606/)は、1GBページのサポートに伴うNUMAプールの管理を扱っている。
 
-### MAP_HUGE_1GBフラグ（v3.8、2013年） {#maphuge1gb-flag-v38-2013}
+### MAP_HUGE_1GBフラグ（v3.8、2013年） {#map_huge_1gb-flag-v38-2013}
 
 **コミット**: [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) ("mm: support more pagesizes for MAP_HUGETLB/SHM_HUGETLB")
 

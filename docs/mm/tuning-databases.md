@@ -215,7 +215,7 @@ echo "vm.swappiness = 1" >> /etc/sysctl.d/database.conf
 !!! info "独自のキャッシュを管理するデータベース"
     PostgreSQL、MySQL、Oracleはいずれも、LRUによる追い出し、遅延書き込み（write-behind）、先読みを備えた独自のバッファ管理を持っている。これらはホットな集合の管理において、カーネルの汎用LRUよりも優れている。`vm.swappiness`を低く保つことで、カーネルに横から口出しされることなく、データベース自身のキャッシュ管理がその役割を果たせるようになる。
 
-## vm.dirty_ratioとvm.dirty_background_ratio {#vmdirtyratio-and-vmdirtybackground_ratio}
+## vm.dirty_ratioとvm.dirty_background_ratio {#vmdirty_ratio-and-vmdirty_background_ratio}
 
 ### ログ先行書き込みのパターン {#the-write-ahead-log-pattern}
 
@@ -352,7 +352,7 @@ EOF
 !!! warning "コミットアカウンティングとfork()"
     `shared_buffers`が32GBで接続数が200のPostgreSQLサーバーでは、実際のRAM使用量よりはるかに大きな`Committed_AS`が表示されることがある。forkされた各バックエンドが、コミットアカウンティング上で親のアドレス空間を継承するためである。`overcommit_ratio`は控えめに設定し、`Committed_AS`と`CommitLimit`を比較して監視すること。
 
-## vm.zone_reclaim_mode {#vmzonereclaimmode}
+## vm.zone_reclaim_mode {#vmzone_reclaim_mode}
 
 ### なぜデータベースはzone reclaimを無効にすべきなのか {#why-databases-should-disable-zone-reclaim}
 

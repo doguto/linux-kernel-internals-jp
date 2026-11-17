@@ -60,7 +60,7 @@ static __always_inline int memblock_reserve_kern(phys_addr_t base, phys_addr_t s
 
 memblock内部の割り当てはすべて、自動的に`MEMBLOCK_RSRV_KERN`を設定する。
 
-### memblock_phys_alloc() {#memblockphysalloc}
+### memblock_phys_alloc() {#memblock_phys_alloc}
 
 バディアロケータが使えるようになる前に、カーネルは自身のデータ構造（ページテーブル、`struct page`配列、zone構造体）のためのメモリを割り当てなければならない。`memblock_phys_alloc()`はこうした要求を満たし、物理アドレスを返す。
 
@@ -74,7 +74,7 @@ static __always_inline phys_addr_t memblock_phys_alloc(phys_addr_t size,
 
 この呼び出しは割り当てを行うと同時に、`MEMBLOCK_RSRV_KERN`付きの`__memblock_reserve()`を介して暗黙的にその領域を予約済みとしてマークする。マップ済み仮想アドレスを返す派生版の`memblock_alloc()`も、カーネルのデータ構造の初期化で広く使われている。
 
-### memblock_mark_nomap() {#memblockmarknomap}
+### memblock_mark_nomap() {#memblock_mark_nomap}
 
 予約された領域にも、デフォルトではstruct pageが割り当てられ、カーネルのダイレクトマップでカバーされる。`memblock_mark_nomap()`はさらに踏み込んで`MEMBLOCK_NOMAP`フラグを設定し、その領域がカーネルのダイレクト物理マッピングにまったく含まれないようにする。
 
@@ -105,7 +105,7 @@ int __init_memblock memblock_mark_nomap(phys_addr_t base, phys_addr_t size)
 
 `arch/x86/kernel/setup.c`の`setup_arch()`が、x86における物理メモリの予約をすべて統括する。順序が重要であり、後の段階は先の予約がすでに済んでいることを前提とする。
 
-### フェーズ1: early_reserve_memory() {#phase-1-earlyreservememory}
+### フェーズ1: early_reserve_memory() {#phase-1-early_reserve_memory}
 
 `e820__memory_setup()`がRAMを`memblock.memory`に追加する前に呼ばれるため、これらの領域の上に何かが割り当てられることはない。
 
@@ -350,7 +350,7 @@ struct page *page = alloc_pages(GFP_KERNEL, order);
 
 ---
 
-## ZONE_MOVABLEとmovable_node {#zonemovable-and-movablenode}
+## ZONE_MOVABLEとmovable_node {#zone_movable-and-movable_node}
 
 ハードな予約以外にも、カーネルはよりソフトな形のメモリ隔離をサポートしている。それは、あるzoneやNUMAノード全体のメモリを`ZONE_MOVABLE`に配置することを保証するものである。`ZONE_MOVABLE`内のpageはmovableな割り当てにしか使われないため、それらを外へマイグレーションできることが保証され、このzoneはメモリのオフライン化やホットプラグに適したものとなる。
 

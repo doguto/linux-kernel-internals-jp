@@ -306,13 +306,13 @@ bio_vec[2]: page=0x7f000, offset=512, len=3584 ─┘
 
 物理pageは連続している必要はなく、DMAエンジンのスキャッタ・ギャザー機能が非連続なリストを扱う。これが、`iov_iter`を使った`O_DIRECT`読み出しを効率的にしている点である。ユーザーの`iovec`からピン留めされたpageが`bio_vec`エントリとなり、DMAエンジンがそこへ直接書き込む。
 
-### `iov_iter` ↔ `bio_vec`の変換 {#ioviter-biovec-conversion}
+### `iov_iter` ↔ `bio_vec`の変換 {#iov_iter-bio_vec-conversion}
 
 `iomap_dio_rw`がダイレクトI/O要求を処理するとき、`iov_iter_get_pages2`を呼んでユーザーのpageをピン留めし、それらから`bio_vec`エントリを構築する。`iov_iter`の仕組みがこの変換を透過的に処理する。
 
 ---
 
-## `process_vm_readv` / `process_vm_writev` {#processvmreadv-processvmwritev}
+## `process_vm_readv` / `process_vm_writev` {#process_vm_readv-process_vm_writev}
 
 Linux 3.2では、プロセス間のベクタI/Oのための2つのシステムコールが追加された。
 

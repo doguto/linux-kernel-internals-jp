@@ -388,7 +388,7 @@ rmmod intel_qat
 
 根本原因は、特定のQATリビジョンにおけるファームウェアのバグで、4GBの物理アドレス境界をまたぐscatter-gatherリストを正しく扱えないというものだった。
 
-### 根本原因: CRYPTO_ALG_TESTEDとセルフテストフレームワーク {#root-cause-cryptoalgtested-and-the-self-test-framework}
+### 根本原因: CRYPTO_ALG_TESTEDとセルフテストフレームワーク {#root-cause-crypto_alg_tested-and-the-self-test-framework}
 
 カーネルの暗号サブシステムには必須のセルフテストフレームワーク（`crypto/testmgr.c`）があり、登録されたすべてのアルゴリズムに対して、使用可能とマークする前に既知解テスト（known-answer test）を実行する。セルフテストに失敗したアルゴリズムには `CRYPTO_ALG_TESTED` フラグが付与されず、使用できない:
 

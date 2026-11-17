@@ -21,7 +21,7 @@ if (cqe->flags & IORING_CQE_F_MORE) {
 
 マルチショットモデルは、接続を受け付けるたび、あるいはメッセージを受信するたびに新しいSQEを再投入する往復をなくす。これは接続レートの高いサーバーにとって決定的に重要である。
 
-## マルチショットaccept（`IORING_OP_ACCEPT`） {#multishot-accept-ioringopaccept}
+## マルチショットaccept（`IORING_OP_ACCEPT`） {#multishot-accept-ioring_op_accept}
 
 **追加**: Linux 5.19。`io_uring/net.c`
 
@@ -103,7 +103,7 @@ io_uring_submit(&ring);
 
 カーネルの実装は`io_uring/net.c`（`io_accept_multishot()`）にある。`inet_csk_accept()`が返るたびに、カーネルはCQEを投稿してただちに待機を再設定する。接続と接続の間にユーザー空間への往復は必要ない。
 
-## マルチショットrecv（`IORING_OP_RECV`） {#multishot-recv-ioringoprecv}
+## マルチショットrecv（`IORING_OP_RECV`） {#multishot-recv-ioring_op_recv}
 
 **追加**: Linux 5.20 / 6.0。`io_uring/net.c`
 
@@ -159,17 +159,17 @@ io_uring_cqe_seen(&ring, cqe);
 
 バッファプールが枯渇すると、マルチショットrecvは自動的に無効化され、`res == -ENOBUFS`で`IORING_CQE_F_MORE`のないCQEを投稿する。バッファリングを補充して再投入すること。
 
-## リンクされたリクエスト（`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`） {#linked-requests-iosqeiolink-iosqeiohardlink}
+## リンクされたリクエスト（`IOSQE_IO_LINK` / `IOSQE_IO_HARDLINK`） {#linked-requests-iosqe_io_link-iosqe_io_hardlink}
 
 リンクされたリクエストを使うと、ステップ間にアプリケーションが一切関与することなく、SQE間の**順序の依存関係**を表現できる。カーネルはチェーンを逐次実行する。SQE Aが完了するまでSQE Bは開始されない。
 
 次のSQEが後に続くべき各SQEに`IOSQE_IO_LINK`を設定する。チェーンの最後のSQEにはリンクフラグを付けない。
 
-### `IOSQE_IO_LINK`: ソフトリンク {#iosqeiolink-soft-link}
+### `IOSQE_IO_LINK`: ソフトリンク {#iosqe_io_link-soft-link}
 
 リンクされたSQEが失敗する（`res`が0以外になる）と、チェーン内の後続のSQEはすべて`res == -ECANCELED`のCQEを受け取る。チェーンは切断される。
 
-### `IOSQE_IO_HARDLINK`: ハードリンク {#iosqeiohardlink-hard-link}
+### `IOSQE_IO_HARDLINK`: ハードリンク {#iosqe_io_hardlink-hard-link}
 
 リンクされたSQEが成功しても失敗しても、チェーンは継続する。各SQEは無条件に順番に実行される。エラーの後でも実行しなければならない後始末のステップが必要な場合に有用である。
 
@@ -235,7 +235,7 @@ io_uring_prep_link_timeout(sqe, &(struct __kernel_timespec){
 }, 0);
 ```
 
-## `IORING_OP_POLL_ADD`のマルチショット {#ioringoppoll_add-multishot}
+## `IORING_OP_POLL_ADD`のマルチショット {#ioring_op_poll_add-multishot}
 
 **追加**: Linux 5.13。`io_uring/poll.c`
 
@@ -264,11 +264,11 @@ io_uring_prep_poll_remove(sqe, TAG_POLL);
 io_uring_submit(&ring);
 ```
 
-## 機能のプローブ（`io_uring_probe`） {#probing-capabilities-iouringprobe}
+## 機能のプローブ（`io_uring_probe`） {#probing-capabilities-io_uring_probe}
 
 io_uringには新しいオペコードや機能が頻繁に追加されており、すべてのカーネルがすべての操作をサポートしているわけではない。サポートされていないオペコードを呼ぶと`EINVAL`または`EOPNOTSUPP`になり、使い方の誤りと区別するのは難しい。プローブAPIを使うと、コードパスを確定する前にカーネルの機能を問い合わせられる。
 
-### `io_uring_register`による生のプローブ {#raw-probe-via-iouringregister}
+### `io_uring_register`による生のプローブ {#raw-probe-via-io_uring_register}
 
 ```c
 #include <linux/io_uring.h>

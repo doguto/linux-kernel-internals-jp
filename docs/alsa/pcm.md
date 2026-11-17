@@ -8,7 +8,7 @@
 
 ALSAの答えは`snd_pcm`である。USBヘッドセットからHDMIコーデック、ハードウェアDSPに至るまで、あらゆるサウンドドライバが実装の対象とするPCM（"Pulse-Code Modulation"）層だ。これはストリームの方向ごとに1つのリングバッファであり、そのバッファを割り込みの粒度を決める**period**に固定的に分割したものと、2つの位置、すなわちハードウェアがどこまで進んだかとアプリケーションがどこまで進んだかをそれぞれ追跡する`hw_ptr`と`appl_ptr`からなる。このページではその仕組みを扱う。ドライバとユーザー空間が実際に触れる構造体（`struct snd_pcm_substream`、`struct snd_pcm_runtime`）、periodサイズとバッファサイズがどのようにネゴシエートされるか、ユーザー空間がどのようにバッファのゼロコピーな`mmap()`ビューを得るか、そしてドライバの割り込みハンドラがどのように全体を前に進めるかである。
 
-## `struct snd_pcm_substream`と`struct snd_pcm_runtime` {#struct-sndpcmsubstream-and-struct-sndpcmruntime}
+## `struct snd_pcm_substream`と`struct snd_pcm_runtime` {#struct-snd_pcm_substream-and-struct-snd_pcm_runtime}
 
 `struct snd_pcm`はサウンドカードのPCMデバイス（たとえばカードのデフォルトのオーディオデバイスである「デバイス0」）であり、再生方向、録音方向、またはその両方を、それぞれ`struct snd_pcm_str`として公開できる。デバイスの再生方向または録音方向を開くと、プロセスは`struct snd_pcm_substream`（`include/sound/pcm.h`）を得る。同時に開かれたストリームごとに1つである。
 
@@ -147,7 +147,7 @@ periodのサイズはレイテンシとオーバーヘッドの直接的なト�
 
 ## hw_paramsのネゴシエーション {#hw_params-negotiation}
 
-### ドライバが宣言する能力: `struct snd_pcm_hardware` {#the-drivers-declared-capability-struct-sndpcmhardware}
+### ドライバが宣言する能力: `struct snd_pcm_hardware` {#the-drivers-declared-capability-struct-snd_pcm_hardware}
 
 `.open`の時点で、ドライバは`runtime->hw`に自身のハードウェアが実際にできることを書き込む。
 
@@ -322,7 +322,7 @@ struct snd_pcm_mmap_control {
 
 `struct snd_pcm_runtime`の`runtime->status`と`runtime->control`は、これと同じ構造体を指している。カーネルとユーザー空間のmmapされたビューは同じメモリである。`hw_ptr`はカーネルだけが書き込む（ドライバの`.pointer`コールバックから更新される。次の節を参照）。`appl_ptr`はユーザー空間が（mmapでない`read()`/`write()`のストリームでは、アプリケーションに代わってカーネルが）書き込み、どこまで消費または生成したかを示す。
 
-### `appl_ptr`と`hw_ptr`: 生産者と消費者の位置 {#applptr-and-hwptr-producer-and-consumer-position}
+### `appl_ptr`と`hw_ptr`: 生産者と消費者の位置 {#appl_ptr-and-hw_ptr-producer-and-consumer-position}
 
 どちらも単調増加するフレームオフセットであり、`buffer_size`ではなく`runtime->boundary`で折り返す。リング内の実際の位置は`pointer % buffer_size`だが、カウンタをバッファサイズを超えても折り返さずに保つことで、コアは「ハードウェアが開始位置から1.5バッファ先にいる」と「ハードウェアがちょうど1バッファ位置先にいる」とを区別できる。これにより、健全に動作しているストリームと、気づかないうちに余分に1回折り返したストリームとを見分けられる。再生では、`hw_ptr`はハードウェアがバッファをどこまで*消費*（再生）したかであり、`appl_ptr`はユーザー空間がどこまで*書き込んだ*かである。その間隔はまさにキューに入っているがまだ再生されていないデータであり、`snd_pcm_playback_avail()`（`include/sound/pcm.h`）ではその逆、つまりまだ書き込める空き領域として計算される。
 
@@ -370,7 +370,7 @@ static inline snd_pcm_uframes_t snd_pcm_playback_avail(struct snd_pcm_runtime *r
   One IRQ per period boundary crossed -> snd_pcm_period_elapsed()
 ```
 
-## 割り込み駆動の更新: `snd_pcm_period_elapsed()` {#the-interrupt-driven-update-sndpcmperiod_elapsed}
+## 割り込み駆動の更新: `snd_pcm_period_elapsed()` {#the-interrupt-driven-update-snd_pcm_period_elapsed}
 
 ループのドライバ側はこうである。DMAエンジンがperiodを終えるとIRQが発生し、ドライバのハンドラが`snd_pcm_period_elapsed()`（`sound/core/pcm_lib.c`）を呼ぶ。
 
@@ -421,7 +421,7 @@ if (new_hw_ptr < old_hw_ptr) {
 
 位置が更新されると、`snd_pcm_update_hw_ptr0()`自身が`snd_pcm_update_state()`に処理を渡す。十分なフレームが利用可能になったときに、`runtime->sleep`/`runtime->tsleep`で眠っているもの（ブロックしている`read()`/`write()`や、`avail_min`を超えた`poll()`）を実際に起こすのはこれである。`snd_pcm_period_elapsed_under_stream_lock()`に戻ると、`CONFIG_SND_PCM_TIMER`が有効なら、その方法でperiod経過イベントを購読しているもののために、PCMに関連付けられたALSAタイマーも刻む。XRUNとDRAINの処理があるのもまさにこの地点である。`.pointer`が`SNDRV_PCM_POS_XRUN`を報告すると、`__snd_pcm_xrun()`がまさにここで、割り込みコンテキストのまま、ストリームを`SNDRV_PCM_STATE_XRUN`に遷移させ、ユーザー空間は次にストリームに触れたときにそれを知る。
 
-## ドライバ側のコールバック操作: `struct snd_pcm_ops` {#driver-side-callback-ops-struct-sndpcmops}
+## ドライバ側のコールバック操作: `struct snd_pcm_ops` {#driver-side-callback-ops-struct-snd_pcm_ops}
 
 ドライバがPCMコアに差し込むものはすべて、1つのvtable、`substream->ops`を通る。
 

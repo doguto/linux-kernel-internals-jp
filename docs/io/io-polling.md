@@ -98,7 +98,7 @@ int ring_fd = io_uring_setup(128, &params);
 
 どちらも`O_DIRECT`を必要とする。バッファードファイルに対するHIPRIは拒否される。ブロック層にはページキャッシュの充填をポーリングする手段がないからである。
 
-### RWF_HIPRIがIOCB_HIPRIになるまで {#how-rwfhipri-becomes-iocbhipri}
+### RWF_HIPRIがIOCB_HIPRIになるまで {#how-rwf_hipri-becomes-iocb_hipri}
 
 `preadv2()`や`pwritev2()`に渡された`RWF_*`フラグは、そのまま`IOCB_*`フラグにコピーされる。値は意図的に同じにしてある。
 
@@ -177,7 +177,7 @@ struct file_operations {
 };
 ```
 
-### iocb_bio_iopoll: 共通実装 {#iocbbioiopoll-the-common-implementation}
+### iocb_bio_iopoll: 共通実装 {#iocb_bio_iopoll-the-common-implementation}
 
 ext4とXFSはどちらもiomap層に処理を委ねる。iomap層は発行時にbioのポインタを`kiocb->private`に保存する。
 
@@ -335,7 +335,7 @@ int result = cqe->res;
 io_uring_cqe_seen(&ring, cqe);
 ```
 
-### io_do_iopoll()の内部 {#inside-iodoiopoll}
+### io_do_iopoll()の内部 {#inside-io_do_iopoll}
 
 IOPOLLリングに対して`IORING_ENTER_GETEVENTS`付きで`io_uring_enter()`が呼ばれると、カーネルはポーリングループに入る。
 

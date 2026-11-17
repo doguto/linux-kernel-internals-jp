@@ -1,4 +1,4 @@
-# `check_alu_op()`における符号拡張 {#sign-extension-in-checkaluop}
+# `check_alu_op()`における符号拡張 {#sign-extension-in-check_alu_op}
 
 > CVE-2017-16995 — verifierは、マシンがゼロ拡張する32ビット即値を符号拡張していたため、レジスタについてのverifierのモデルとレジスタそのものが最初の命令から食い違っていた
 

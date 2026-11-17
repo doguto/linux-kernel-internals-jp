@@ -175,7 +175,7 @@ KVM in-kernel irqchip (APIC emulation)
 vCPU interrupt injection → guest ISR
 ```
 
-### vfio_irq_ctxとeventfd {#vfioirqctx-and-eventfd}
+### vfio_irq_ctxとeventfd {#vfio_irq_ctx-and-eventfd}
 
 ```c
 /* drivers/vfio/pci/vfio_pci_intrs.c */
@@ -256,7 +256,7 @@ ls /sys/bus/mdev/devices/
 # $UUID
 ```
 
-### struct vfio_device_ops（カーネル5.19以降） {#struct-vfiodeviceops-kernel-519}
+### struct vfio_device_ops（カーネル5.19以降） {#struct-vfio_device_ops-kernel-519}
 
 Linux 5.19で、古い`mdev_parent_ops`インターフェースは`struct vfio_device_ops`に統合された（コミット`6b42f491e17c`、"vfio/mdev: Remove mdev_parent_ops"）。mdevをサポートする物理デバイスのドライバは、現在では`vfio_device_ops`を直接実装する。
 
@@ -330,7 +330,7 @@ Runtime:
   Device MSI:    Device → IOMMU interrupt remap → host IRQ → irqfd → vCPU
 ```
 
-### VFIO_IOMMU_MAP_DMAの詳細 {#vfioiommumap_dma-in-detail}
+### VFIO_IOMMU_MAP_DMAの詳細 {#vfio_iommu_map_dma-in-detail}
 
 QEMUはゲストの起動時に、ゲストのRAM全体をIOMMUドメインにマップする。4 GBのゲストの場合は次のようになる。
 

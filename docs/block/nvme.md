@@ -154,7 +154,7 @@ static const struct blk_mq_ops nvme_mq_ops = {
 };
 ```
 
-### nvme_queue_rq: requestの発行 {#nvmequeuerq-submitting-a-request}
+### nvme_queue_rq: requestの発行 {#nvme_queue_rq-submitting-a-request}
 
 ```c
 static blk_status_t nvme_queue_rq(struct blk_mq_hw_ctx *hctx,

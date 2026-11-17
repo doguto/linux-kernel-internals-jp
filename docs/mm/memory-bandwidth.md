@@ -109,7 +109,7 @@ numactl --interleave=0,1 ./myapp
     - **ML学習のデータローダ**: 大規模データセットをGPUメモリへストリーミングする前処理パイプライン
     - **分析エンジン**: フルテーブルスキャンを行うインメモリのカラムナストア（DuckDB、DRAM上のSpark）
 
-### MPOL_WEIGHTED_INTERLEAVE {#mpolweightedinterleave}
+### MPOL_WEIGHTED_INTERLEAVE {#mpol_weighted_interleave}
 
 Linux 6.9で`MPOL_WEIGHTED_INTERLEAVE`が追加された（[commit fa3bea4e1f82](https://git.kernel.org/linus/fa3bea4e1f82)）。これはpageを均等ではなく比例的に分配する。ノード0が256 GB、ノード1が128 GBを持つなら、利用可能な容量に合わせて割り当てを2:1に重み付けできる。重みは`/sys/kernel/mm/mempolicy/weighted_interleave/nodeN`で設定する。
 

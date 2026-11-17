@@ -143,7 +143,7 @@ if (cpu_has(&boot_cpu_data, X86_FEATURE_PCID)) {
 
 `cpu_has()`は実行時チェックである — `x86_capability`配列から読み取る。（ブートCPUだけでなく）特定のCPUをチェックする必要がある場合や、alternativeがパッチされる前のブート初期段階では、これを使う。
 
-### 2. boot_cpu_has(): ブート時チェック {#2-bootcpuhas-boot-time-check}
+### 2. boot_cpu_has(): ブート時チェック {#2-boot_cpu_has-boot-time-check}
 
 ```c
 #define boot_cpu_has(bit) cpu_has(&boot_cpu_data, bit)
@@ -155,7 +155,7 @@ if (boot_cpu_has(X86_FEATURE_PCID))
 
 `boot_cpu_has()`はブートCPUの機能フラグをチェックする。ブート中の一度きりのセットアップ判断に使われる。これらの呼び出しはalternative機構によってパッチされない。
 
-### 3. static_cpu_has(): コンパイル時に用意されパッチされる {#3-staticcpuhas-compile-time-patched}
+### 3. static_cpu_has(): コンパイル時に用意されパッチされる {#3-static_cpu_has-compile-time-patched}
 
 ```c
 #define static_cpu_has(bit) __static_cpu_has(bit)
@@ -318,7 +318,7 @@ void __init check_bugs(void)
 
 ## カーネルにおける主要なCPU機能 {#key-cpu-features-in-the-kernel}
 
-### X86_FEATURE_FSGSBASE {#x86featurefsgsbase}
+### X86_FEATURE_FSGSBASE {#x86_feature_fsgsbase}
 
 `RDFSBASE`、`WRFSBASE`、`RDGSBASE`、`WRGSBASE`命令を追加する — MSRインターフェースを経由せずに、FSおよびGSセグメントのベースレジスタを高速に読み書きできる。
 
@@ -327,7 +327,7 @@ void __init check_bugs(void)
 
 カーネルは、CPUがサポートしていればFSGSBASEを有効にする（`CR4.FSGSBASE`をセットする）。このサポートは**Linux 5.9**で追加された。
 
-### X86_FEATURE_INVPCID {#x86featureinvpcid}
+### X86_FEATURE_INVPCID {#x86_feature_invpcid}
 
 `INVPCID`（Invalidate Process-Context Identifier）命令: PCIDと仮想アドレスを指定してTLBエントリを選択的に無効化する、または特定のPCIDのグローバルでないエントリをすべてフラッシュする。
 
@@ -335,19 +335,19 @@ INVPCIDがない場合、PCIDのフラッシュにはCR3への書き込みが必
 
 初期のHaswell CPUの一部はPCIDをサポートするがINVPCIDはサポートしない — カーネルはこれを検出し、CR3ベースのフラッシュにフォールバックする。
 
-### X86_FEATURE_PKU {#x86featurepku}
+### X86_FEATURE_PKU {#x86_feature_pku}
 
 **Protection Keys for Userspace（PKU）**: ユーザー空間のコードがメモリ領域に4ビットの「保護キー」を付けられるようにする。`PKRU`レジスタは、システムコールやページテーブルの変更を必要とせずに、16通りあるキーそれぞれのアクセス権（読み取り/書き込みの禁止）を制御する。
 
 プロセス内の機密データ（例: OpenSSLの秘密鍵）を隔離するのに役立つ。カーネルのサポートは**Linux 4.6**で追加された。
 
-### X86_FEATURE_UMIP {#x86featureumip}
+### X86_FEATURE_UMIP {#x86_feature_umip}
 
 **User-Mode Instruction Prevention**: `CR4.UMIP = 1`のとき、ring 3で`SGDT`、`SIDT`、`SLDT`、`SMSW`、`STR`を実行すると、ハードウェアのディスクリプタテーブルのアドレスを返す代わりに#GPが発生する。
 
 ユーザープロセスがIDT、GDT、LDTのアドレスを知ることを防ぐ — ASLRの回避を阻止するのに役立つ。Linuxは利用可能であればUMIPを自動的に有効にする。
 
-### X86_FEATURE_RDRAND {#x86featurerdrand}
+### X86_FEATURE_RDRAND {#x86_feature_rdrand}
 
 `RDRAND`命令: 暗号学的に安全な乱数値を返すハードウェア乱数生成器である。カーネルはこれを`/dev/random`などのエントロピー源として使う。注意: カーネルでは`RDRAND`単独では唯一のエントロピー源として信頼されない（一部のIvy Bridgeシステムで、Intelの`RDRAND`実装に定数値を返すバグが見つかった）。
 

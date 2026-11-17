@@ -72,7 +72,7 @@ static void ma_free_rcu(struct maple_node *node)
 
 したがって、`rcu_read_lock()`を保持するリーダーはツリーのノードを安全にたどることができる。リーダーが見たノードはどれも、読み込みセクションが終わるまでは割り当てられたまま（ツリー内にあるとは限らないが）であることが保証される。
 
-### `lock_vma_under_rcu()` {#lockvmaunder_rcu}
+### `lock_vma_under_rcu()` {#lock_vma_under_rcu}
 
 `mm/mmap_lock.c`の`lock_vma_under_rcu()`は、v6.4以降ページフォールトで使われている高速パスのVMA検索である。maple treeの走査のためのRCU読み込みセクションと、見つかったVMAを安定させるためのVMAごとの参照カウントを組み合わせる:
 
@@ -117,7 +117,7 @@ inval:
 !!! note "重要: `vma_start_read()`は失敗時にRCUロックを解放することがある"
     ソース中のコメントは明確である。`vma_start_read()`がエラーを返したとき、すでに`rcu_read_unlock()`を呼んでいる。呼び出し元は、`vma_start_read()`が失敗した後のエラーパスで再び`rcu_read_unlock()`を呼んではならない。この非対称性は、コードを読む際によくある混乱の原因である。
 
-### `vma_start_read()` {#vmastartread}
+### `vma_start_read()` {#vma_start_read}
 
 `vma_start_read()`（同じく`mm/mmap_lock.c`内）は、VMAごとの読み込みロックの取得である。`vm_lock_seq`と`mm_lock_seq`を使って、VMAが現在書き込み中かどうかを検出する:
 
@@ -186,9 +186,9 @@ lock_mmap:
 
 ---
 
-## `struct vm_area_struct`とRCU {#struct-vmareastruct-and-rcu}
+## `struct vm_area_struct`とRCU {#struct-vm_area_struct-and-rcu}
 
-### 割り当て: `SLAB_TYPESAFE_BY_RCU` {#allocation-slabtypesafeby_rcu}
+### 割り当て: `SLAB_TYPESAFE_BY_RCU` {#allocation-slab_typesafe_by_rcu}
 
 `vm_area_struct`オブジェクトは、`mm/vma_init.c`で作成される専用のslabキャッシュ（`vm_area_cachep`）から割り当てられる:
 
@@ -224,7 +224,7 @@ void vm_area_free(struct vm_area_struct *vma)
 
 グレースピリオドを扱うのは呼び出し元ではなくslabである。
 
-### RCU下で（`vma_start_read()`の前に）アクセスできるフィールド {#fields-accessible-under-rcu-before-vmastartread}
+### RCU下で（`vma_start_read()`の前に）アクセスできるフィールド {#fields-accessible-under-rcu-before-vma_start_read}
 
 `include/linux/mm_types.h`の`struct vm_area_struct`定義にあるコメントは次のように述べている:
 
@@ -254,7 +254,7 @@ void vm_area_free(struct vm_area_struct *vma)
 
 ## RCU下でのページテーブルの走査 {#page-table-walks-under-rcu}
 
-### `follow_page_mask()`と`vma_pgtable_walk_begin()` {#followpagemask-and-vmapgtablewalk_begin}
+### `follow_page_mask()`と`vma_pgtable_walk_begin()` {#follow_page_mask-and-vma_pgtable_walk_begin}
 
 `mm/gup.c`の`follow_page_mask()`は、ユーザー仮想アドレスに対応する物理pageを検索する（`get_user_pages()`などで使われる）。この関数はページテーブルの走査を次のように囲む:
 
@@ -336,7 +336,7 @@ int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 
 走査には`hlist_for_each_entry_rcu()`が使われる。notifierの登録と登録解除は`mmap_write_lock()` + SRCUの同期の下でリストを変更するので、これは安全である。リーダーは`srcu_read_lock()`だけを必要とする。
 
-### `mmu_notifier_get()`と`mmu_notifier_put()` {#mmunotifierget-and-mmunotifierput}
+### `mmu_notifier_get()`と`mmu_notifier_put()` {#mmu_notifier_get-and-mmu_notifier_put}
 
 ```c
 /* include/linux/mmu_notifier.h */
@@ -426,7 +426,7 @@ unsigned filemap_get_folios_contig(struct address_space *mapping,
 | MMU notifierの登録解除 | `synchronize_srcu(&srcu)` | notifierを解放する前に、実行中のすべてのコールバックが完了していることを保証しなければならない |
 | `mmap_write_unlock()` | `vma_end_write_all()` → `mm_lock_seqcount_end()`を呼ぶ | `mm_lock_seq`をインクリメントしてVMAごとのすべての読み込みロックを無効化する。グレースピリオドは不要 |
 
-### `mmap_write_lock()`に隠れたコスト {#the-hidden-cost-in-mmapwritelock}
+### `mmap_write_lock()`に隠れたコスト {#the-hidden-cost-in-mmap_write_lock}
 
 `mmap_write_lock()`が`mmap_lock`の書き込み側を取得するとき、それ自体はRCUのグレースピリオドを*待たない*。しかし書き込みロックは、現在のすべての`mmap_read_lock()`保持者が解放するまでブロックし、それらの読み込み保持者自身がフォールトパスで`rcu_read_lock()`セクション内にいる可能性がある。実質的に、書き込みロックは進行中のフォールト処理の完了を待つことになる。
 
@@ -436,7 +436,7 @@ unsigned filemap_get_folios_contig(struct address_space *mapping,
 
 ## mmにおけるRCUの問題のデバッグ {#debugging-rcu-issues-in-mm}
 
-### `CONFIG_PROVE_RCU` {#configprovercu}
+### `CONFIG_PROVE_RCU` {#config_prove_rcu}
 
 `CONFIG_PROVE_RCU`（`CONFIG_PROVE_LOCKING`によって暗黙に有効になる）を有効にすると、RCUの使用に対してlockdepによるチェックが得られる。このオプションでは、RCUアノテーション付きのポインタが有効なRCU読み込みセクションの外でアクセスされると、`RCU_LOCKDEP_WARN()`の呼び出しが警告を出す。
 
@@ -450,7 +450,7 @@ RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu lock held");
 RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu read lock held");
 ```
 
-### `lockdep_assert_in_rcu_read_lock()` {#lockdepassertinrcuread_lock}
+### `lockdep_assert_in_rcu_read_lock()` {#lockdep_assert_in_rcu_read_lock}
 
 `include/linux/rcupdate.h`は`lockdep_assert_in_rcu_read_lock()`（`CONFIG_PROVE_RCU`が必要）を定義しており、これはRCU読み込みセクションの外で呼ばれると警告を出す。RCUによる保護を前提とする新しいコードではこれを使うとよい。
 

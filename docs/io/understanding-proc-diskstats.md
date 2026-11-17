@@ -111,7 +111,7 @@ awk '/^nvme0n1 /{
 
 ---
 
-## フィールド12: `ios_in_progress` {#field-12-iosinprogress}
+## フィールド12: `ios_in_progress` {#field-12-ios_in_progress}
 
 現在デバイスに対して実行中のI/Oの数 — ドライバに発行されたがまだ完了していないもの。これは**スナップショット**（累積値ではない）であり、瞬間的なキュー深度を反映する。
 
@@ -129,7 +129,7 @@ watch -n 0.5 "awk '/^nvme0n1 /{print \"in-flight:\", \$12}' /proc/diskstats"
 
 ---
 
-## フィールド13: `ms_doing_io` {#field-13-msdoingio}
+## フィールド13: `ms_doing_io` {#field-13-ms_doing_io}
 
 少なくとも1つのI/Oが実行中だった合計ミリ秒。これは`iostat`の`%util`メトリクスの元データである:
 
@@ -149,7 +149,7 @@ echo "util: $(( (curr - prev) ))%"   # 間隔がちょうど 1000ms の場合
 
 ---
 
-## フィールド14: `ms_weighted_io`（I/Oの重み付き時間） {#field-14-msweightedio-weighted-time-in-ios}
+## フィールド14: `ms_weighted_io`（I/Oの重み付き時間） {#field-14-ms_weighted_io-weighted-time-in-ios}
 
 このフィールドは、BIOがキューに入れられるか完了するたびに`(current_ios_in_progress × elapsed_ms)`だけ増加する。キュー深度で重み付けされた時間 — キュー深度の時間積分 — である。
 

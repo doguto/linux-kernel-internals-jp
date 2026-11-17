@@ -88,7 +88,7 @@ if (fallocate(fd, 0, 0, 512UL << 20) == -1)
 - 未書き込みの領域を読むとゼロが返るが、I/Oは必要ない。ファイルシステムはエクステントを「割り当て済みだが未書き込み」としてマークしている。
 - その範囲への後続の`write()`呼び出しは新しいブロックを割り当てる必要がなく、その範囲について`ENOSPC`で失敗することはない。
 
-### `st_size`と`st_blocks`への影響 {#effect-on-stsize-vs-stblocks}
+### `st_size`と`st_blocks`への影響 {#effect-on-st_size-vs-st_blocks}
 
 ```
 Before fallocate:
@@ -130,7 +130,7 @@ du -sh preallocated.bin    # 1.1G  （実際のディスク使用量）
 
 **tmpfs**: メモリ上のファイルに対して`fallocate`をサポートする。ブロックはDRAMのpageである。ホールパンチもサポートされる。
 
-## `FALLOC_FL_KEEP_SIZE`: 拡張せずに事前割り当てする {#fallocflkeep_size-preallocate-without-extending}
+## `FALLOC_FL_KEEP_SIZE`: 拡張せずに事前割り当てする {#falloc_fl_keep_size-preallocate-without-extending}
 
 このモードは物理ブロックを割り当てるが、`st_size`は変更しない。これは先行書き込みログ（WAL）の事前割り当てにおける定番のパターンである。
 
@@ -161,7 +161,7 @@ int preallocate_wal_segment(const char *path, size_t segment_size)
 
 なぜサイズをゼロのままにするのか。消費側のプロセス（WALを適用する側）は、WALの書き込み側がそう告げるまで、ファイルにデータがあると見てはならないからである。`st_size`は「ここにどれだけのデータがあるか」を示す正式なシグナルであり、`st_blocks`はストレージ層の詳細にすぎない。
 
-## `FALLOC_FL_PUNCH_HOLE`: ファイル内の領域を回収する {#fallocflpunch_hole-reclaiming-space-within-a-file}
+## `FALLOC_FL_PUNCH_HOLE`: ファイル内の領域を回収する {#falloc_fl_punch_hole-reclaiming-space-within-a-file}
 
 ホールパンチは、`st_size`を変えずにファイルの途中のブロックの割り当てを解除する。パンチされた領域はスパースなホールになる。読み出しはゼロを返すが、ディスクブロックは消費されない。
 
@@ -193,7 +193,7 @@ punch_hole(log_fd, 0, consumed_offset);
 
 **大きなメディアファイル**: 動画編集ツールは、削除されたフレームの範囲にホールをパンチし、ファイル構造をそのまま保ちながら領域を回収できる。
 
-### `SEEK_HOLE` / `SEEK_DATA`によるホールの走査 {#iterating-holes-with-seekhole-seekdata}
+### `SEEK_HOLE` / `SEEK_DATA`によるホールの走査 {#iterating-holes-with-seek_hole-seek_data}
 
 ホールをパンチした後は、`SEEK_HOLE`と`SEEK_DATA`を指定した`lseek(2)`を使って、データ領域とスパース領域の境界を見つける。
 
@@ -243,7 +243,7 @@ void print_extents(int fd, off_t file_size)
 
 `SEEK_HOLE`と`SEEK_DATA`はPOSIX 2013で標準化され、ext4、XFS、btrfs、tmpfsでサポートされている。これらをサポートしないファイルシステムでは、`SEEK_HOLE`は`st_size`を返す（ファイル全体がデータであるように見える）。
 
-## `FALLOC_FL_ZERO_RANGE`: パンチせずにゼロ化する {#fallocflzero_range-zeroing-without-punching}
+## `FALLOC_FL_ZERO_RANGE`: パンチせずにゼロ化する {#falloc_fl_zero_range-zeroing-without-punching}
 
 `FALLOC_FL_ZERO_RANGE`は、ファイルの領域を効率的にゼロにする。ホールパンチと異なり、ブロックは割り当てられたままである。`write()`でゼロを書き込む場合と異なり、領域がブロック境界にアラインされていれば、ファイルシステムはこれをメタデータのみの操作として実装できる。
 
@@ -257,7 +257,7 @@ fallocate(fd, FALLOC_FL_ZERO_RANGE | FALLOC_FL_KEEP_SIZE, offset, len);
 
 ext4とXFSでは、アラインされたゼロ範囲の要求は、エクステントツリー内の書き込み済みエクステントを未書き込みエクステントに変換する。これは新しく事前割り当てされたブロックと同じ表現である。実際のゼロバイトがディスクに書かれることはなく、ファイルシステムの読み出し経路がそれを合成する。アラインされていない端の部分については、部分ブロックが読み込まれ、ゼロにされ、書き戻される。
 
-## `FALLOC_FL_COLLAPSE_RANGE`: ファイルの一部を取り除く {#fallocflcollapse_range-removing-a-file-section}
+## `FALLOC_FL_COLLAPSE_RANGE`: ファイルの一部を取り除く {#falloc_fl_collapse_range-removing-a-file-section}
 
 `FALLOC_FL_COLLAPSE_RANGE`は、ファイルの`offset`から始まる`len`バイトを取り除き、後続のデータをすべて前方へずらす。ホールは残らず、ファイルは`len`バイト縮む。`offset`と`len`はともにファイルシステムのブロックサイズの倍数でなければならない。
 
@@ -268,7 +268,7 @@ fallocate(fd, FALLOC_FL_COLLAPSE_RANGE, 4UL << 20, 1UL << 20);
 
 これはインプレースでのログの圧縮に役立つ。残りのデータを新しいファイルにコピーする代わりに、消費済みの先頭部分を取り除けばよい。ext4（3.15以降）とXFS（3.15以降）でサポートされている。btrfsはサポートしていない。
 
-## `FALLOC_FL_INSERT_RANGE`: 領域を挿入する {#fallocflinsert_range-inserting-space}
+## `FALLOC_FL_INSERT_RANGE`: 領域を挿入する {#falloc_fl_insert_range-inserting-space}
 
 collapseの逆で、`FALLOC_FL_INSERT_RANGE`は`offset`に`len`バイトのゼロを挿入し、後続のデータを後方へずらす。ファイルは`len`だけ大きくなる。どちらの値もブロックサイズにアラインされていなければならない。
 
@@ -279,7 +279,7 @@ fallocate(fd, FALLOC_FL_INSERT_RANGE, 2UL << 20, 512UL << 10);
 
 ext4（4.1以降）とXFS（4.1以降）でサポートされている。実際に使われることはまれである。
 
-## `FALLOC_FL_UNSHARE_RANGE`: reflinkの共有を解消する {#fallocflunshare_range-breaking-reflink-sharing}
+## `FALLOC_FL_UNSHARE_RANGE`: reflinkの共有を解消する {#falloc_fl_unshare_range-breaking-reflink-sharing}
 
 reflinkをサポートするコピーオンライト型ファイルシステム（btrfs、XFS）では、`cp --reflink`は元のファイルとエクステントツリーのエントリを共有するファイルを作成する。どちらかのファイルへの書き込みは、新しいエクステントへのコピーオンライトを引き起こす。
 
@@ -547,7 +547,7 @@ du -sh original.bin copy.bin   # どちらも約 1GiB と表示されるが、�
 
 reflinkされたブロックに書き込まれると、ファイルシステムはコピーオンライトを行う。書き込んだプロセスは新しいプライベートなエクステントを得て、もう一方のファイルのエクステントは変わらない。
 
-### `copy_file_range`とカーネル側のreflink {#copyfilerange-and-kernel-side-reflinks}
+### `copy_file_range`とカーネル側のreflink {#copy_file_range-and-kernel-side-reflinks}
 
 `copy_file_range(2)`は、ファイル間で範囲をコピーするようカーネルに依頼する。reflinkに対応したファイルシステムでは、カーネルはバイトをコピーする代わりに、メタデータのみのクローン操作としてこれを満たすことがある。
 

@@ -150,7 +150,7 @@ ssize_t iomap_dio_rw(struct kiocb *iocb, struct iov_iter *iter,
 | スキャッタ・ギャザー | `preadv(fd, iov, n, offset)` | 自然に可能（ポインタ演算） |
 | 典型的な用途 | データベース | 検索エンジン、キーバリューストア |
 
-## O_DSYNCとO_SYNC: 書き込みの永続性 {#odsync-and-osync-write-durability}
+## O_DSYNCとO_SYNC: 書き込みの永続性 {#o_dsync-and-o_sync-write-durability}
 
 ```c
 /* O_SYNC: 毎回の書き込み後に fsync()（メタデータ + データが永続化） */

@@ -280,7 +280,7 @@ udevadm monitor --kernel --udev
 
 カーネルの`kobject_uevent()`はnetlinkメッセージを送る。udevdはそれを受け取ってルールを実行する。
 
-## 電源管理: dev_pm_ops {#power-management-devpmops}
+## 電源管理: dev_pm_ops {#power-management-dev_pm_ops}
 
 ```c
 static const struct dev_pm_ops my_pm_ops = {

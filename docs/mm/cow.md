@@ -164,7 +164,7 @@ Original 2MB THP (after fork, shared):
 
 この分割の挙動は、カーネル4.5頃から無名THPのデフォルトである。しかし**hugetlbfs**のpage（`mmap(..., MAP_HUGETLB)`による明示的なヒュージページ）は分割*されない*。共有された2MBのhugetlbfs pageに1バイト書き込むと、2MB全体がコピーされる。
 
-### 問題5: GUP（get_user_pages）とCOW {#problem-5-gup-getuserpages-and-cow}
+### 問題5: GUP（get_user_pages）とCOW {#problem-5-gup-get_user_pages-and-cow}
 
 カーネルが（`get_user_pages()`を通じて）DMAのためにユーザーpageをピン留めすると、COWは複雑になる。[Dirty COW脆弱性](https://dirtycow.ninja/)（CVE-2016-5195）はこの領域の競合状態を突いたものだった。
 
@@ -254,7 +254,7 @@ COWと`get_user_pages()`の間の競合状態により、特権のないユー�
 
 （訳: これは古くからあるバグで、実は11年前に私が一度（まずいやり方で）修正しようとしたものだ……その間にVMはよりスケーラブルになり、当時は純粋に理論上の競合だったものが、より簡単に引き起こせるようになった。）
 
-### FOLL_PINとpin_user_pages()（v5.6、2020年） {#follpin-and-pinuser_pages-v56-2020}
+### FOLL_PINとpin_user_pages()（v5.6、2020年） {#foll_pin-and-pin_user_pages-v56-2020}
 
 **コミット**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79)（"mm/gup: introduce pin_user_pages*() and FOLL_PIN"） | [LKML](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/)
 
@@ -267,7 +267,7 @@ Dirty COWの後、カーネルには次の2つを明確に区別する必要が�
 
 これにより、COWの仕組みは、pageがDMAのためにピン留めされているときにそれを知り、より慎重に扱えるようになった。
 
-### PG_anon_exclusive（v5.19、2022年） {#pganonexclusive-v519-2022}
+### PG_anon_exclusive（v5.19、2022年） {#pg_anon_exclusive-v519-2022}
 
 **コミット**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56)（"mm: remember exclusively mapped anonymous pages with PG_anon_exclusive"） | [LKML](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/)
 

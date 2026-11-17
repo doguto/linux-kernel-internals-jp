@@ -32,7 +32,7 @@ flowchart TD
 
 ## SQEの準備 {#preparing-the-sqe}
 
-### struct io_uring_sqeのフィールドレイアウト {#struct-iouringsqe-field-layout}
+### struct io_uring_sqeのフィールドレイアウト {#struct-io_uring_sqe-field-layout}
 
 SQEは`include/uapi/linux/io_uring.h`で定義された64バイトの構造体である。
 
@@ -74,7 +74,7 @@ struct io_uring_sqe {
 
 read操作で意味を持つフィールドは、`opcode`、`fd`、`off`、`addr`、`len`、`rw_flags`、`user_data`である。
 
-### io_uring_prep_readが設定するもの {#what-iouringprep_read-sets}
+### io_uring_prep_readが設定するもの {#what-io_uring_prep_read-sets}
 
 liburingの`io_uring_prep_read()`は、これらのフィールドを設定する薄いラッパーである。
 
@@ -161,7 +161,7 @@ SQ ring in shared memory:
 
 ## 投入 — カーネルへの進入 {#submission-entering-the-kernel}
 
-### io_uring_enter(2) {#iouringenter2}
+### io_uring_enter(2) {#io_uring_enter2}
 
 SQ tailを進めた後、アプリケーションは次を呼び出す。
 
@@ -209,7 +209,7 @@ SYSCALL_DEFINE6(io_uring_enter, unsigned int, fd, u32, to_submit,
 }
 ```
 
-### io_submit_sqes → io_queue_sqe → io_issue_sqe {#iosubmitsqes-ioqueuesqe-ioissuesqe}
+### io_submit_sqes → io_queue_sqe → io_issue_sqe {#io_submit_sqes-io_queue_sqe-io_issue_sqe}
 
 `io_submit_sqes()`は`to_submit`個のエントリをループし、それぞれについて`io_queue_sqe()`を呼ぶ。これがさらに`io_issue_sqe()`を呼ぶ。
 
@@ -271,7 +271,7 @@ static int io_sq_thread(void *data)
 
 ## リクエストのディスパッチ — インライン高速パス {#request-dispatch-the-inline-fast-path}
 
-### io_uring/rw.cのio_read {#ioread-in-iouringrwc}
+### io_uring/rw.cのio_read {#io_read-in-io_uringrwc}
 
 `IORING_OP_READ`の場合、`io_issue_sqe()`は`io_uring/rw.c`の`io_read`ハンドラを呼ぶ。
 
@@ -472,7 +472,7 @@ io-wqワーカーは`folio_wait_locked()`の中でスリープする。ブロッ
 
 ## 完了 — CQEの投稿 {#completion-posting-the-cqe}
 
-### io_req_complete_post {#ioreqcomplete_post}
+### io_req_complete_post {#io_req_complete_post}
 
 `io_read()`が（インラインでもio-wqでも）終わると、`io_req_complete_post()`を呼ぶ。
 
@@ -493,7 +493,7 @@ void io_req_complete_post(struct io_kiocb *req, s32 res)
 }
 ```
 
-### io_fill_cqe_req {#iofillcqe_req}
+### io_fill_cqe_req {#io_fill_cqe_req}
 
 これがCQEをリングに書き込む。
 
@@ -519,7 +519,7 @@ static bool io_fill_cqe_req(struct io_ring_ctx *ctx,
 }
 ```
 
-### io_commit_cqring — store-release {#iocommitcqring-the-store-release}
+### io_commit_cqring — store-release {#io_commit_cqring-the-store-release}
 
 CQEのフィールドを書き込んだ後、`io_commit_cqring()`がstore-releaseでCQ tailを進め、エントリをユーザー空間から見えるようにする。
 
@@ -547,7 +547,7 @@ CQ ring in shared memory:
 
 ユーザー空間の処理が遅すぎてCQリングが満杯になると、カーネルは`cq_ring->overflow`（「CQオーバーフロー」カウンタ）をインクリメントする。`IORING_SETUP_CQ_NODROP`（対応カーネルでは`IORING_FEAT_NODROP`によって暗黙に有効）がある場合、オーバーフローしたCQEは内部にバッファリングされ、空きができたときに排出される。
 
-### マルチショット操作のためのIORING_CQE_F_MORE {#ioringcqef_more-for-multishot-operations}
+### マルチショット操作のためのIORING_CQE_F_MORE {#ioring_cqe_f_more-for-multishot-operations}
 
 マルチショット操作（例: `IORING_RECV_MULTISHOT`付きの`IORING_OP_RECV`）では、カーネルは1つのSQEから複数のCQEを投稿することがある。操作がまだ有効である限り、各CQEの`cqe->flags`には`IORING_CQE_F_MORE`が設定される。（エラーまたは明示的なキャンセルにより）最後のCQEが届くと、`IORING_CQE_F_MORE`はクリアされている。
 
@@ -561,7 +561,7 @@ struct io_uring_cqe {
 
 ## CQEの回収 {#reaping-the-cqe}
 
-### io_uring_peek_cqeとio_uring_wait_cqe {#iouringpeekcqe-and-iouringwaitcqe}
+### io_uring_peek_cqeとio_uring_wait_cqe {#io_uring_peek_cqe-and-io_uring_wait_cqe}
 
 liburingは完了を回収するための2つのプリミティブを提供する。
 
@@ -593,7 +593,7 @@ static inline int io_uring_peek_cqe(struct io_uring *ring,
 
 `io_uring_wait_cqe()`は、リングが空であれば`IORING_ENTER_GETEVENTS`と`min_complete=1`を指定した`io_uring_enter()`にフォールバックし、カーネルがCQEを投稿するまでタスクをスリープさせる。
 
-### io_uring_cqe_seen — CQ headを進める {#iouringcqe_seen-advancing-the-cq-head}
+### io_uring_cqe_seen — CQ headを進める {#io_uring_cqe_seen-advancing-the-cq-head}
 
 CQEを処理した後、アプリケーションは`io_uring_cqe_seen()`を呼んで消費済みとしてマークしなければならない。
 
@@ -673,7 +673,7 @@ liburingの`io_uring_submit()`はこのチェックを自動的に行う。
 
 ## 主要なデータ構造 {#key-data-structures}
 
-### struct io_ring_ctx — カーネル側のリングコンテキスト {#struct-ioringctx-the-kernel-side-ring-context}
+### struct io_ring_ctx — カーネル側のリングコンテキスト {#struct-io_ring_ctx-the-kernel-side-ring-context}
 
 `struct io_ring_ctx`は`io_uring_setup()`の呼び出しごとに1つ割り当てられ、カーネル側のすべての状態の拠り所となる。
 
@@ -802,7 +802,7 @@ strace -e trace=io_uring_setup,io_uring_enter,io_uring_register ./your-program
 
 SQPOLLを有効にすると、`io_uring_setup`と最初のmmapは見えるが、個々の操作に対する`io_uring_enter`は現れない。
 
-### /proc/PID/fdinfo/\<ring_fd\> {#procpidfdinfo}
+### /proc/PID/fdinfo/\<ring_fd\> {#procpidfdinforing_fd}
 
 カーネルはfdinfoを通じてリングの状態を公開している。
 

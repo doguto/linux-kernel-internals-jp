@@ -14,7 +14,7 @@
 - カーネルは、オープンファイル記述ごとに**先読みウィンドウ** — プリフェッチするpageの連続した範囲 — を追跡する。
 - ウィンドウはシーケンシャルなアクセスが確認されると拡大し、ランダムアクセスが検出されると縮小する（または無効になる）。
 
-## `struct file_ra_state` {#struct-filerastate}
+## `struct file_ra_state` {#struct-file_ra_state}
 
 すべての`struct file`は、そのオープンファイル記述の先読みウィンドウを記録する`file_ra_state`を持っている。
 
@@ -58,7 +58,7 @@ read()
               → page_cache_ra_unbounded()
 ```
 
-### `page_cache_ra_unbounded()` {#pagecachera_unbounded}
+### `page_cache_ra_unbounded()` {#page_cache_ra_unbounded}
 
 `page_cache_ra_unbounded()`は低レベルの主力関数である。この関数は次のことを行う:
 
@@ -203,22 +203,22 @@ int posix_fadvise(int fd, off_t offset, off_t len, int advice);
 | `POSIX_FADV_DONTNEED` | 範囲内のpageをページキャッシュから破棄する |
 | `POSIX_FADV_NOREUSE` | pageが再利用されないことを示すヒント（助言的なもので、カーネルのサポートは限定的） |
 
-### `POSIX_FADV_SEQUENTIAL` {#posixfadvsequential}
+### `POSIX_FADV_SEQUENTIAL` {#posix_fadv_sequential}
 
 BDIのデフォルトに対して`ra->ra_pages`を2倍にする — 2回呼んでもウィンドウは4倍にはならない。ファイルを最初から最後までストリーミングし、I/Oレイテンシを隠すためにより大きなプリフェッチウィンドウを望むアプリケーションに有用である。
 
-### `POSIX_FADV_RANDOM` {#posixfadvrandom}
+### `POSIX_FADV_RANDOM` {#posix_fadv_random}
 
 `ra->ra_pages = 0`に設定する。カーネルはこのファイルディスクリプタについて先読みのロジックをすべてスキップする。キャッシュにミスしたページフォールトや`read()`は、要求されたpageだけを取得する — それ以上は取得しない。独自のI/Oスケジューリングを行うデータベースや、プリフェッチしたpageが使われる前に追い出されてしまうような真にランダムなアクセスパターンのワークロードに適している。
 
-### `POSIX_FADV_WILLNEED` {#posixfadvwillneed}
+### `POSIX_FADV_WILLNEED` {#posix_fadv_willneed}
 
 現在のアクセスパターンにかかわらず、指定した範囲の先読みを即座にスケジュールする。この呼び出しはI/Oの完了前に戻る（ノンブロッキングである）。次の用途に有用である:
 
 - シーケンシャルスキャンを開始する前にファイルを事前に読み込む
 - レイテンシに敏感な操作の前に、アイドル期間中にキャッシュを温めておく
 
-### `POSIX_FADV_DONTNEED` {#posixfadvdontneed}
+### `POSIX_FADV_DONTNEED` {#posix_fadv_dontneed}
 
 範囲内のクリーンなpageをページキャッシュから破棄する。ファイルを一度だけ読み、キャッシュの汚染を避けたいストリーミングアプリケーションに有用である（`O_DIRECT`に似ているが、アライメントの制約がない）。
 
@@ -302,7 +302,7 @@ madvise(addr, length, MADV_DONTNEED);
 
 ## 実践的なチューニング {#practical-tuning}
 
-### `/sys/block/<dev>/queue/read_ahead_kb` {#sysblockqueuereadaheadkb}
+### `/sys/block/<dev>/queue/read_ahead_kb` {#sysblockdevqueueread_ahead_kb}
 
 デバイスごとの先読みサイズは、そのデバイス上のすべてのファイルのデフォルトの`ra_pages`を決める:
 

@@ -98,7 +98,7 @@ static struct xarray *zswap_trees[MAX_SWAPFILES];
 
 ヘルパー`swap_zswap_tree()`は、`swp_entry_t`を適切なxarrayシャードに対応付ける。
 
-### `struct crypto_acomp_ctx` {#struct-cryptoacompctx}
+### `struct crypto_acomp_ctx` {#struct-crypto_acomp_ctx}
 
 ```c
 struct crypto_acomp_ctx {
@@ -294,7 +294,7 @@ writeback_result = zswap_writeback_entry(entry, swpentry);
 1. **圧縮率**: `mult_frac(nr_freeable, nr_backing, nr_stored)`。プールが4:1で圧縮している場合、ライトバック1回あたりに解放される物理pageは少なくなるため、報告される候補数も少なくなる。
 2. **ディスクからのスワップインのペナルティ**: `nr_disk_swapins`（`zswap_lruvec_state.nr_disk_swapins`で追跡される）が`nr_freeable`から差し引かれる。ディスクからのスワップインが観測されるということは、以前にzswapから追い出しすぎたことを意味するので、ペースを落とす。
 
-### `zswap_writeback_entry()` {#zswapwritebackentry}
+### `zswap_writeback_entry()` {#zswap_writeback_entry}
 
 単一エントリのライトバックは次のとおり。
 

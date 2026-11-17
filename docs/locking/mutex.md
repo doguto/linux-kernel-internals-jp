@@ -185,7 +185,7 @@ BKLには変わった性質があった。`schedule()`で自動的に解放さ�
 - 残りのネットワークドライバ、サウンド: 2011〜2013年頃に変換
 - BKLはLinux 2.6.39（2011年5月）で完全に削除された。Arnd Bergmannによる[`4ba8216cd905`](https://git.kernel.org/linus/4ba8216cd90560bc402f52076f64d8546e8aefcb)（"BKL: That's all, folks"）— [LWNの背景記事](https://lwn.net/Articles/384855/)
 
-### PREEMPT_RTとrt_mutex {#preemptrt-and-rtmutex}
+### PREEMPT_RTとrt_mutex {#preempt_rt-and-rt_mutex}
 
 `CONFIG_PREEMPT_RT`カーネル（リアルタイムLinuxの導入環境で使われる）では、`spinlock_t`自体が`rt_mutex`の上に実装される。spinlockは、完全な優先度継承を伴い、より高優先度のRTタスクにプリエンプトされうるスリープするロックになる。ネストしたロックのシナリオでも、PIチェーンをたどることで優先度の上限は正しく保たれる。
 

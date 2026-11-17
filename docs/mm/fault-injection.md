@@ -241,7 +241,7 @@ tools/testing/fault-injection/failcmd.sh --probability=20 -- modprobe my_driver
 
 このスクリプトはdebugfsのパラメータをセットアップし、プロセスに`make-it-fail`をマークし、コマンドを実行して、後片付けを行う。debugfsファイルを手作業で管理せずに対象を絞った注入を行うための推奨手段である。カーネルソースの[`tools/testing/fault-injection/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection)を参照。
 
-## fail_make_request: ブロックI/Oの失敗注入 {#failmakerequest-block-io-failure-injection}
+## fail_make_request: ブロックI/Oの失敗注入 {#fail_make_request-block-io-failure-injection}
 
 `CONFIG_FAIL_MAKE_REQUEST`は、ブロックI/O層（`submit_bio()`のパス）で失敗を注入する。これはファイルシステムやブロックドライバがI/Oエラーをどう処理するかをテストするもので、メモリ割り当ての失敗とは別物である。
 

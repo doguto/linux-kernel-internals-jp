@@ -34,7 +34,7 @@ void die(const char *str, struct pt_regs *regs, long err)
 }
 ```
 
-### `oops_begin()` / `oops_end()` {#oopsbegin-oopsend}
+### `oops_begin()` / `oops_end()` {#oops_begin-oops_end}
 
 `oops_begin()`はraw spinlock（`die_lock`）を取得して、CPU間で同時に発生するoopsを直列化する — *同じ*CPU上でのネストしたoops（`die_owner`/`die_nest_count`で追跡される）はデッドロックさせずに通過させる — そして`console_verbose()`と`bust_spinlocks(1)`を呼び出して、スピンしているコンソールの書き手をフラッシュする。保存した割り込みフラグを返し、`oops_end()`がそれを復元できるようにする。どちらの関数もウォッチドッグには一切触れず、`oops_count`というsysctlも存在しない。
 
@@ -216,7 +216,7 @@ void vpanic(const char *fmt, va_list args)
 
 `panic_notifier_list`により、サブシステムはシステムが停止する前に実行されるコールバックを登録できる。netconsole、pstore、kdumpはいずれもこのチェーンにフックしている。
 
-### `panic_on_oops` sysctl {#paniconoops-sysctl}
+### `panic_on_oops` sysctl {#panic_on_oops-sysctl}
 
 ```bash
 # 現在の値を読む:

@@ -326,7 +326,7 @@ sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
 
 ---
 
-## 事例4: ダーティスロットリングによるライトバックの停止 — balance_dirty_pagesによる書き込みレイテンシのスパイク {#case-4-dirty-throttling-writeback-stalls-write-latency-spikes-from-balancedirtypages}
+## 事例4: ダーティスロットリングによるライトバックの停止 — balance_dirty_pagesによる書き込みレイテンシのスパイク {#case-4-dirty-throttling-writeback-stalls-write-latency-spikes-from-balance_dirty_pages}
 
 ### 事前の状態 {#before-state_3}
 

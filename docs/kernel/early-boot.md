@@ -346,7 +346,7 @@ initcallの戻り値は重要である: 非ゼロの戻り値は`pr_warn`メッ�
 
 ---
 
-## `__init`と`__exit`セクション {#init-and-exit-sections}
+## `__init`と`__exit`セクション {#__init-and-__exit-sections}
 
 ### `__init` {#__init}
 

@@ -137,7 +137,7 @@ When Worker B wakes:
 
 これにより、CPUの使用率低下（ワーカーがスリープしたとき）とスレッドの爆発的増加（cmwqはワーカーを賢く再利用する）の両方を避けられる。
 
-## flush_workとcancel_work {#flushwork-vs-cancelwork}
+## flush_workとcancel_work {#flush_work-vs-cancel_work}
 
 ```c
 /* 特定のワークアイテムの完了を待つ */

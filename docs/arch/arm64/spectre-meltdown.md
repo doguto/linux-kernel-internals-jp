@@ -82,7 +82,7 @@ if (index < array_size) {
 
 Spectre v1は、すべてのARM64実装を含め、分岐予測を持つ**すべての**CPUに影響する。
 
-### 緩和策: array_index_nospec() {#mitigation-arrayindexnospec}
+### 緩和策: array_index_nospec() {#mitigation-array_index_nospec}
 
 カーネル内の主な緩和策は、`include/linux/nospec.h`の`array_index_nospec()`を使う。このマクロは、CPUが投機的に回避できる条件分岐を使わずに、インデックスが範囲内ならすべて1、そうでなければすべて0となるマスクを計算する。
 

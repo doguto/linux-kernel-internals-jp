@@ -43,7 +43,7 @@ struct kexec_segment {
 };
 ```
 
-### kexec_file_load: 署名検証付きのロード {#kexecfileload-signature-verified-loading}
+### kexec_file_load: 署名検証付きのロード {#kexec_file_load-signature-verified-loading}
 
 `kexec_file_load`は生のメモリセグメントの代わりにファイルディスクリプタを受け取り、カーネルイメージの署名検証を可能にする。
 

@@ -70,7 +70,7 @@ struct kmem_cache {
 };
 ```
 
-## struct kmem_cache_cpu（CPUごとの高速パス） {#struct-kmemcachecpu-per-cpu-fast-path}
+## struct kmem_cache_cpu（CPUごとの高速パス） {#struct-kmem_cache_cpu-per-cpu-fast-path}
 
 ```c
 struct kmem_cache_cpu {
@@ -94,7 +94,7 @@ Slab page layout (objects = 128 bytes, SLUB):
 cpu_slab->freelist = &obj[0] → obj[2] → obj[3] → NULL
 ```
 
-## kmallocの経路（alloc_cache_obj） {#kmalloc-path-alloccacheobj}
+## kmallocの経路（alloc_cache_obj） {#kmalloc-path-alloc_cache_obj}
 
 ```c
 /* mm/slub.c（簡略化） */
@@ -178,7 +178,7 @@ static void slab_free(struct kmem_cache *s, struct slab *slab,
 }
 ```
 
-## kmem_cache_create（名前付きキャッシュ） {#kmemcachecreate-named-caches}
+## kmem_cache_create（名前付きキャッシュ） {#kmem_cache_create-named-caches}
 
 ```c
 /* 特定の型を持ち、頻繁に割り当てられるオブジェクト向け: */

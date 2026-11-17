@@ -62,7 +62,7 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 
 ## zonelistの構築方法 {#how-zonelists-are-built}
 
-### エントリポイント: `build_all_zonelists()` {#entry-point-buildallzonelists}
+### エントリポイント: `build_all_zonelists()` {#entry-point-build_all_zonelists}
 
 zonelistはカーネルの生存期間中の2つの時点で構築される。
 
@@ -117,7 +117,7 @@ static void build_zonelists(pg_data_t *pgdat)
 
 カーネルはブート時に、結果の順序を`Fallback order for Node N: 0 1 2 ...`のように出力する。
 
-### 次に最適なノードの選択: `find_next_best_node()` {#choosing-the-next-best-node-findnextbest_node}
+### 次に最適なノードの選択: `find_next_best_node()` {#choosing-the-next-best-node-find_next_best_node}
 
 `find_next_best_node()`は、未訪問のすべてのノードを複合的な指標でスコア付けする。
 
@@ -127,7 +127,7 @@ static void build_zonelists(pg_data_t *pgdat)
 
 優先（ローカル）ノードは常に先頭に置かれる。
 
-### `numa_zonelist_order` sysctl {#the-numazonelistorder-sysctl}
+### `numa_zonelist_order` sysctl {#the-numa_zonelist_order-sysctl}
 
 カーネルは`/proc/sys/vm/numa_zonelist_order`を公開している。現在のカーネルでは`"Node"`順のみが実装されている。以前のゾーンベースの順序付けモードは、実際には役に立たなかったため削除された。このsysctlは互換性のために残されているが、`'d'`、`'D'`、`'n'`、`'N'`のいずれかで始まらない値（`"Default"`と`"Node"`に一致するもの以外）は無視し、その場合は警告を出す。
 
@@ -188,7 +188,7 @@ ZONE_MOVABLE → ZONE_NORMAL → ZONE_DMA32 → ZONE_DMA
 
 ## フォールバックのアルゴリズム: zonelistの走査 {#fallback-algorithm-iterating-the-zonelist}
 
-### `for_each_zone_zonelist`ファミリ {#the-foreachzone_zonelist-family}
+### `for_each_zone_zonelist`ファミリ {#the-for_each_zone_zonelist-family}
 
 アロケータの高速パス（`get_page_from_freelist()`）は、次のものを使ってzonelistを走査する。
 

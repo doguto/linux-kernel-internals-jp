@@ -62,7 +62,7 @@ void syscall_init(void)
 
 ---
 
-## entry_SYSCALL_64（`arch/x86/entry/entry_64.S`） {#entrysyscall64-archx86entryentry_64s}
+## entry_SYSCALL_64（`arch/x86/entry/entry_64.S`） {#entry_syscall_64-archx86entryentry_64s}
 
 `entry_SYSCALL_64`は、すべての64ビットシステムコールのアセンブリによるエントリポイントである。これは次のことを行わなければならない。
 1. ユーザーの状態を保存する
@@ -161,7 +161,7 @@ struct pt_regs {
 
 ---
 
-## do_syscall_64()とシステムコールテーブル {#dosyscall64-and-the-syscall-table}
+## do_syscall_64()とシステムコールテーブル {#do_syscall_64-and-the-syscall-table}
 
 `do_syscall_64()`は実際のシステムコールハンドラへディスパッチする。
 
@@ -422,7 +422,7 @@ cat /proc/<pid>/status | grep Seccomp
 # Seccomp: 2  (2 = フィルタモード)
 ```
 
-### 実行中のカーネルでentry_SYSCALL_64を見つける {#finding-entrysyscall64-in-the-running-kernel}
+### 実行中のカーネルでentry_SYSCALL_64を見つける {#finding-entry_syscall_64-in-the-running-kernel}
 
 ```bash
 # システムコールのエントリポイントのアドレス

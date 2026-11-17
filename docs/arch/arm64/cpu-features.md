@@ -89,7 +89,7 @@ cpu_enable() hooks run per-CPU (e.g., enable SSBS, PAN)
 
 ---
 
-## struct arm64_cpu_capabilities {#struct-arm64cpucapabilities}
+## struct arm64_cpu_capabilities {#struct-arm64_cpu_capabilities}
 
 ARM64のすべての機能またはエラッタは、`struct arm64_cpu_capabilities`（`arch/arm64/include/asm/cpufeature.h`）の1エントリで記述される。
 
@@ -140,7 +140,7 @@ static const struct arm64_cpu_capabilities arm64_errata[];
 
 ## 実行時のケーパビリティ確認 {#checking-capabilities-at-runtime}
 
-### システム全体: cpus_have_cap() {#system-wide-cpushavecap}
+### システム全体: cpus_have_cap() {#system-wide-cpus_have_cap}
 
 ```c
 /* arch/arm64/include/asm/cpufeature.h */
@@ -157,7 +157,7 @@ if (cpus_have_cap(ARM64_HAS_LSE_ATOMICS))
     use_lse_path();
 ```
 
-### CPUごと: this_cpu_has_cap() {#per-cpu-thiscpuhas_cap}
+### CPUごと: this_cpu_has_cap() {#per-cpu-this_cpu_has_cap}
 
 ```c
 static inline bool this_cpu_has_cap(unsigned int cap)
@@ -170,7 +170,7 @@ static inline bool this_cpu_has_cap(unsigned int cap)
 
 機能が全CPUで一様でない可能性がある場合（例: SSBS、FPMR）に使われる。
 
-### static key: cpus_have_const_cap() {#static-keys-cpushaveconst_cap}
+### static key: cpus_have_const_cap() {#static-keys-cpus_have_const_cap}
 
 極めてホットなパス向けに、ケーパビリティは`static_key_false`エントリでも裏付けられており、チェックはブート時に分岐へパッチされる単一のNOPにコンパイルされる。
 
@@ -243,7 +243,7 @@ asm volatile(ALTERNATIVE("nop", "isb", ARM64_WORKAROUND_1542419));
 
 ケーパビリティのインデックス`ARM64_HAS_LSE_ATOMICS`は`arch/arm64/include/asm/cpucaps.h`で定義されており、`arm64_features[]`にあるその検出エントリは`ID_AA64ISAR0_EL1.Atomic` >= 2をチェックする。
 
-### apply_alternatives_all() {#applyalternativesall}
+### apply_alternatives_all() {#apply_alternatives_all}
 
 ```c
 /* arch/arm64/kernel/alternative.c */

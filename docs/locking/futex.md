@@ -200,7 +200,7 @@ void pi_mutex_lock(int *uaddr)
 }
 ```
 
-## 条件変数（FUTEX_WAIT + FUTEX_WAKE） {#condition-variables-futexwait-futexwake}
+## 条件変数（FUTEX_WAIT + FUTEX_WAKE） {#condition-variables-futex_wait-futex_wake}
 
 `pthread_cond_wait`は次のように実装されている。
 1. 関連付けられたmutexを解放する（ユーザー空間のアトミック操作）

@@ -287,7 +287,7 @@ struct kmem_cache {
 };
 ```
 
-### struct kmem_cache_cpu {#struct-kmemcachecpu}
+### struct kmem_cache_cpu {#struct-kmem_cache_cpu}
 
 ```c
 /* mm/slub.c より */

@@ -71,11 +71,11 @@ devm_memremap_pages(dev, &pgmap);
 /* これで: デバイスメモリのページに対してpfn_to_page(pfn)が機能する */
 ```
 
-## mmu_interval_notifier: CPU→GPUのページテーブル同期 {#mmuintervalnotifier-cpugpu-page-table-synchronization}
+## mmu_interval_notifier: CPU→GPUのページテーブル同期 {#mmu_interval_notifier-cpugpu-page-table-synchronization}
 
 ドライバは `mmu_interval_notifier`（Linux 5.5で導入され、以前の `hmm_mirror` が5.10で削除されて唯一のAPIとなった）を使い、仮想アドレス範囲のCPUページテーブルが変化したときにコールバックを受け取る。
 
-### mmu_interval_notifier（Linux 5.5+） {#mmuintervalnotifier-linux-55}
+### mmu_interval_notifier（Linux 5.5+） {#mmu_interval_notifier-linux-55}
 
 ```c
 /* 推奨される新しいAPI: 完全なミラーではなく、範囲の通知だけ */

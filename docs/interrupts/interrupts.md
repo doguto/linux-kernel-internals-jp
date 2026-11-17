@@ -39,7 +39,7 @@ Vectors 129-255: Other IPIs, local APIC, MSI
 
 各IDTエントリは、特権レベル、セグメント、ハンドラのアドレスを指定する。割り込みが発火すると、CPUはIDTを索引してハンドラを見つける。
 
-## 割り込みの入口: irq_enterとirq_exit {#interrupt-entry-irqenter-and-irqexit}
+## 割り込みの入口: irq_enterとirq_exit {#interrupt-entry-irq_enter-and-irq_exit}
 
 カーネルは、自分が割り込みコンテキストにいるかどうかを`preempt_count`内のper-CPUカウンタで追跡する。
 

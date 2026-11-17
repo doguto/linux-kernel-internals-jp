@@ -206,7 +206,7 @@ Slab = SReclaimable + SUnreclaim
 
 ## ヒュージページのフィールド {#huge-page-fields}
 
-### HugePages_Total / HugePages_Free / Hugepagesize {#hugepagestotal-hugepagesfree-hugepagesize}
+### HugePages_Total / HugePages_Free / Hugepagesize {#hugepages_total-hugepages_free-hugepagesize}
 
 事前割り当てされたヒュージページ（hugetlbfs）、その空き数、およびデフォルトサイズ（x86-64では2MB）。
 

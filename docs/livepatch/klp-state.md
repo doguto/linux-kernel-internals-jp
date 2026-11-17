@@ -130,7 +130,7 @@ struct klp_callbacks {
    成功していた場合にのみ呼ばれる。`klp_pre_patch_callback()`がそれを
    `post_unpatch_enabled`フラグ（`kernel/livepatch/core.h`）に記録する。
 
-## klp_get_state()とklp_get_prev_state() {#klpgetstate-and-klpgetprev_state}
+## klp_get_state()とklp_get_prev_state() {#klp_get_state-and-klp_get_prev_state}
 
 2つのヘルパーが、コールバック内から状態データへのアクセスを提供する。
 

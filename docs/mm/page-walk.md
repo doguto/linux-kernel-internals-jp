@@ -154,7 +154,7 @@ static int wp_pte(pte_t *pte, unsigned long addr,
 }
 ```
 
-## apply_to_page_range: マッピングの設定 {#applytopage_range-set-up-mappings}
+## apply_to_page_range: マッピングの設定 {#apply_to_page_range-set-up-mappings}
 
 `apply_to_page_range` は必要に応じてページテーブル用のpageを割り当て、各PTEに対して関数を呼び出す。
 

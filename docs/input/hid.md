@@ -81,7 +81,7 @@ End Collection
 
 `Input`/`Output`/`Feature` アイテムはそれぞれ1つの**フィールド**を確定させる。その時点で有効な `Usage`、`Logical Minimum`/`Maximum`、`Report Size`、`Report Count` がそのフィールドの形となり、アイテム自身のフラグ（`Data`/`Constant`、`Variable`/`Array`、`Absolute`/`Relative`）がビットの解釈方法を示す。このマウスの例は3バイトの入力レポートを生成する。バイト0の下位3ビットがボタンの状態（その上に5ビットのパディング）、バイト1と2が符号付きの相対的なXとYの差分である。この形はどのカーネルドライバにもハードコードされていない。以下で説明するディスクリプタのパースが再構築するのは、まさにこの形である。
 
-## パース: `hid_open_report()` と `struct hid_parser` {#parsing-hidopenreport-and-struct-hid_parser}
+## パース: `hid_open_report()` と `struct hid_parser` {#parsing-hid_open_report-and-struct-hid_parser}
 
 すべてのHIDドライバの `probe()` は、何よりも先に `hid_parse()`（`hid_open_report()` の薄いラッパー）を呼ぶ。
 
@@ -375,7 +375,7 @@ struct hid_driver {
 - **`.raw_event`** — フィールドの抽出が行われる前に、届いたすべてのレポートについて、生のレポートのバイトを渡して呼ばれる。汎用処理の前にレポートを横取りする必要があるドライバや、汎用のフィールド抽出ロジックではまったく解釈できないバイトから入力イベントを合成したいドライバのための抜け道である。
 - **`.event`** — 抽出されたフィールドの*値*ごとに一度、汎用のフィールド抽出の後、汎用の `hidinput_hid_event()` による `input_event()` への変換の前に（あるいはその代わりに）呼ばれる。
 
-## トランスポートの階層化: `struct hid_ll_driver` {#transport-layering-struct-hidlldriver}
+## トランスポートの階層化: `struct hid_ll_driver` {#transport-layering-struct-hid_ll_driver}
 
 ここまで説明したもの（ディスクリプタのパース、`struct hid_device`、`hid-input.c` のマッピング）はどれも、レポートのバイトが実際にどうやってカーネルに届いたかを知らず、気にもしない。それは意図的に `struct hid_ll_driver`（「low-level driver」）として切り出されている。これは、トランスポートが一度実装し、そのトランスポート上のすべてのデバイスについてコアが呼び出すインターフェースである。
 
@@ -451,7 +451,7 @@ static const struct hid_ll_driver hidp_hid_driver = {
 
 カーネル自身のトランスポートのドキュメントは、この抽象化が対象として作られた実在の3つのトランスポートすべてを挙げている。ワイヤレベルでは「USB, I2C, Bluetooth-l2cap」であり、それらは「USB-HID, I2C-HID, BT-HIDP」ドライバを通じて表に出る（`Documentation/hid/hid-transport.rst`）。I2C-HID（`drivers/hid/i2c-hid/`）が3つ目で、ノートPCのタッチパッドやタッチスクリーンでよく使われる。BT-HIDPの2つの別々のL2CAPチャネルや、USB-HIDの別々の制御/割り込みエンドポイントの代わりに、単一のI2Cバストランザクションプロトコルを使う（I2C-HIDはMicrosoftが作成したクラスへの追加であり、元のUSB HID仕様の一部ではない）。ドライバの作者は、あるレポートのバイトを実際に運んだのがこれらのどれなのかを気にする必要がない。`struct hid_device->ll_driver` は、このデバイスをアタッチしたものを指しているだけである。
 
-## evdevへのマッピング: `hid_map_usage()` と `hid-input.c` {#mapping-to-evdev-hidmapusage-and-hid-inputc}
+## evdevへのマッピング: `hid_map_usage()` と `hid-input.c` {#mapping-to-evdev-hid_map_usage-and-hid-inputc}
 
 パースが生み出すのは、生の `usage->hid` コードだけを持つ `struct hid_usage` で満たされた `struct hid_field` であり、`usage->type`/`usage->code` は未設定である。それを `evdev` が理解できるもの（`EV_KEY`/`KEY_A` のペアや `EV_ABS`/`ABS_X` のペア）に変換するのが `hid-input.c` の仕事であり、接続時に `hidinput_configure_usage()` でusageごとに一度行われる。マッピング自体は、小さな汎用のインラインヘルパーである。
 

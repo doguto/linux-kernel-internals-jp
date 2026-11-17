@@ -228,7 +228,7 @@ keyctl show @s      # セッションkeyring
 
 `fork()` では、子は親のセッションkeyringとユーザーkeyringを継承する。`exec()` では、スレッドkeyringがクリアされる。`CLONE_NEWUSER` では、新しいuser namespace用に新しいユーザーkeyringが作成される。
 
-## 鍵のパーミッション: key_perm_t {#key-permissions-keypermt}
+## 鍵のパーミッション: key_perm_t {#key-permissions-key_perm_t}
 
 パーミッションは、4つの主体 × 6つのパーミッションビットをエンコードした32ビット値である:
 

@@ -379,7 +379,7 @@ SYSCALL_DEFINE1(syncfs, int, fd)
 
 ---
 
-## O_SYNCとO_DSYNC {#osync-and-odsync}
+## O_SYNCとO_DSYNC {#o_sync-and-o_dsync}
 
 ### fd単位の同期I/O {#per-fd-synchronous-io}
 
@@ -390,7 +390,7 @@ int fd = open("wal.log", O_WRONLY | O_CREAT | O_DSYNC, 0644);
 write(fd, record, len);  /* データが安定ストレージに載るまでブロックする */
 ```
 
-### IOCBフラグとgeneric_write_sync {#iocb-flags-and-genericwritesync}
+### IOCBフラグとgeneric_write_sync {#iocb-flags-and-generic_write_sync}
 
 ファイルに`O_SYNC`または`O_DSYNC`が設定されていると、VFSは`write_iter`を呼ぶ前に、`kiocb`構造体に対応するフラグを設定する:
 
@@ -465,7 +465,7 @@ static inline ssize_t generic_write_sync(struct kiocb *iocb, ssize_t count)
 
 ランダム4KB書き込みの比率が大きいのは、各書き込みがドライブとの往復を伴い（NVMeでのコミットレイテンシは~100 µs）、パイプライン化が行われないためである。
 
-### O_SYNC / O_DSYNCを使うべきとき {#when-to-use-osync-odsync}
+### O_SYNC / O_DSYNCを使うべきとき {#when-to-use-o_sync-o_dsync}
 
 - **WALファイルとredoログ**: コミットを確認応答する前にすべてのログレコードを永続化する必要があるデータベース。WALファイルに`O_DSYNC`を使えば、別途`fdatasync()`を呼ぶ必要がなくなり、システムコールの回数が減る。
 - **監査ログ**: すべてのイベントがクラッシュを生き延びなければならない、セキュリティ上重要なログ。
@@ -638,7 +638,7 @@ POSIXが保証するのは次のことである:
 
 このアトミック性は、1回の`write()`呼び出しで完了する書き込みについて成り立つ。書き込みが複数ページにまたがり、部分書き込み（例: シグナルによる中断や`PIPE_BUF`の制限による）を必要とする場合、カーネルはページの書き込みの合間にinodeロックを解放して再取得することがあり、アトミック性が崩れる。
 
-### io_uring RWF_ATOMIC（Linux 6.11以降） {#iouring-rwfatomic-linux-611}
+### io_uring RWF_ATOMIC（Linux 6.11以降） {#io_uring-rwf_atomic-linux-611}
 
 Linux 6.11はio_uring経由で`RWF_ATOMIC`を導入し、`stx_atomic_write_unit_max`バイト（`statx(2)`で報告される）までの真のアトミック書き込みを提供した:
 
@@ -718,7 +718,7 @@ WALモードでは、SQLiteはトランザクションをWALファイルに書�
 
 この2段階のバリアパターンにより、どの時点でクラッシュしても、WALかデータベースファイルのどちらかが一貫した状態に保たれる。
 
-### MySQL InnoDB: innodb_flush_method {#mysql-innodb-innodbflushmethod}
+### MySQL InnoDB: innodb_flush_method {#mysql-innodb-innodb_flush_method}
 
 InnoDBは、データファイルとログファイルをどのようにフラッシュするかを制御する`innodb_flush_method`を公開している:
 

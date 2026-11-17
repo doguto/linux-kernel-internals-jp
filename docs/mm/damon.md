@@ -587,7 +587,7 @@ echo on > $ADMIN/kdamonds/0/state
 
 ## 組み込みのDAMOSモジュール {#built-in-damos-modules}
 
-### CONFIG_DAMON_RECLAIM {#configdamonreclaim}
+### CONFIG_DAMON_RECLAIM {#config_damon_reclaim}
 
 `DAMON_RECLAIM`（`mm/damon/reclaim.c`）は、物理アドレス空間に対して`DAMOS_PAGEOUT`スキームを実行する、あらかじめ用意されたカーネルモジュールである。軽度のメモリ圧迫下での予防的で軽量な回収を目的として設計されており、`kswapd`の事後的なスキャンを補完する。
 
@@ -622,7 +622,7 @@ echo Y > /sys/module/damon_reclaim/parameters/commit_inputs
 !!! warning "DAMON_RECLAIMとsysfsによる直接設定の使い分け"
     `DAMON_RECLAIM`は、システム全体の予防的回収のための粗粒度のつまみである。細かい制御 — cgroup単位の対象指定、独自のウォーターマーク、複数のスキーム、スワップではなくマイグレーション — が必要なら、sysfsインターフェース経由でDAMONを直接設定する。
 
-### CONFIG_DAMON_LRU_SORT {#configdamonlru_sort}
+### CONFIG_DAMON_LRU_SORT {#config_damon_lru_sort}
 
 `DAMON_LRU_SORT`（`mm/damon/lru_sort.c`）は、2つのDAMOSスキームを使って、`kswapd`が見る前にLRUリストに影響を与える。ホットなpageは優先され（`DAMOS_LRU_PRIO`）、コールドなpageは劣後させられる（`DAMOS_LRU_DEPRIO`）。これにより、LRUの仕組みを迂回することなく、その後のkswapdによる回収がより正確になる。
 
@@ -636,7 +636,7 @@ echo Y > /sys/module/damon_reclaim/parameters/commit_inputs
 | `active_mem_bp` | 0（無効） | このactive/全体のLRU比率を達成するように自動チューニングする |
 | `autotune_monitoring_intervals` | `N` | sample/aggr間隔を自動的にチューニングする |
 
-### CONFIG_DAMON_STAT {#configdamonstat}
+### CONFIG_DAMON_STAT {#config_damon_stat}
 
 `DAMON_STAT`（`mm/damon/stat.c`）は物理アドレス空間に対してDAMONを実行し、集約されたアクセス統計を単純なメトリクスとして公開する。メモリ管理のアクションを一切行わずに可観測性を得るのに有用である。
 

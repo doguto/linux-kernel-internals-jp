@@ -205,7 +205,7 @@ SYM_FUNC_START_LOCAL(__enable_mmu)
 SYM_FUNC_END(__enable_mmu)
 ```
 
-## MMU有効化の後: __primary_switched {#after-mmu-enable-_primaryswitched}
+## MMU有効化の後: __primary_switched {#after-mmu-enable-__primary_switched}
 
 ```asm
 SYM_FUNC_START_LOCAL(__primary_switched)

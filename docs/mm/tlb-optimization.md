@@ -338,7 +338,7 @@ static void consider_global_asid(struct mm_struct *mm)
 
 `mmu_gather`のバッチ化はこのコストを直接償却する。IPIの数はアンマップされたページ数ではなく、異なるフラッシュイベントの数で上限が決まる。1回の`munmap()`でアンマップされるのが1ページでも1,000,000ページでも、必要なフラッシュIPIの往復は高々1回である。
 
-### `tlb_single_page_flush_ceiling` {#tlbsinglepageflushceiling}
+### `tlb_single_page_flush_ceiling` {#tlb_single_page_flush_ceiling}
 
 小さな範囲では、個別の`INVLPG`命令（1ページに1つ）のほうが完全フラッシュより安い。大きな範囲では完全フラッシュが有利になる。カーネルは`tlb_single_page_flush_ceiling`ページ（デフォルト: 33）を境に戦略を切り替える。
 
@@ -363,7 +363,7 @@ unsigned long tlb_single_page_flush_ceiling __read_mostly = 33;
 
 `vmalloc()`で割り当てられたカーネル仮想メモリは、グローバルなページテーブル領域を使う。カーネルマッピングはプロセスごとにタグ付けされず、共有されたカーネルPGDエントリを通じてすべてのアドレス空間に現れる。カーネルのTLBエントリをフラッシュするには、どのプロセスが実行中かにかかわらず **すべてのCPU** で無効化する必要がある。
 
-### `flush_tlb_kernel_range()` {#flushtlbkernel_range}
+### `flush_tlb_kernel_range()` {#flush_tlb_kernel_range}
 
 ```c
 void flush_tlb_kernel_range(unsigned long start, unsigned long end)

@@ -309,7 +309,7 @@ echo $$ > /sys/fs/cgroup/cgroup.procs
 rmdir /sys/fs/cgroup/oom-test
 ```
 
-### oom_score_adjの操作 {#oomscoreadj-manipulation}
+### oom_score_adjの操作 {#oom_score_adj-manipulation}
 
 ```bash
 # 特定のプロセスを OOM の標的にする

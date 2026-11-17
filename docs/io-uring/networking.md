@@ -29,7 +29,7 @@
 
 すべてのネットワーク操作は同じSQEモデルに従う。liburingのヘルパーが生の構造体フィールドを覆い隠してくれる。
 
-### `IORING_OP_ACCEPT` {#ioringopaccept}
+### `IORING_OP_ACCEPT` {#ioring_op_accept}
 
 `accept4(2)`に相当する。成功時、CQEの`res`には新しいクライアントのファイルディスクリプタが入る。
 
@@ -47,7 +47,7 @@ io_uring_sqe_set_data64(sqe, TAG_ACCEPT);
 
 マルチショットaccept（Linux 5.19）には`io_uring_prep_multishot_accept`を使う。詳しくは次の節で扱う。
 
-### `IORING_OP_CONNECT` {#ioringopconnect}
+### `IORING_OP_CONNECT` {#ioring_op_connect}
 
 `connect(2)`に相当する。ノンブロッキングであり、SQEを投入すると、接続が完了した（または失敗した）ときにCQEが届く。成功時は`res == 0`である。
 
@@ -65,7 +65,7 @@ io_uring_prep_connect(sqe, sock_fd,
 io_uring_sqe_set_data64(sqe, TAG_CONNECT);
 ```
 
-### `IORING_OP_SEND`と`IORING_OP_RECV` {#ioringopsend-and-ioringoprecv}
+### `IORING_OP_SEND`と`IORING_OP_RECV` {#ioring_op_send-and-ioring_op_recv}
 
 `send(2)`と`recv(2)`の直接の相当物である。`res`には転送したバイト数または`-errno`が入る。
 
@@ -83,7 +83,7 @@ io_uring_sqe_set_data64(sqe, TAG_RECV);
 
 マルチショットrecvには、`IORING_RECV_MULTISHOT`と`IOSQE_BUFFER_SELECT`を設定する。提供バッファの節で扱う。
 
-### `IORING_OP_SENDMSG`と`IORING_OP_RECVMSG` {#ioringopsendmsg-and-ioringoprecvmsg}
+### `IORING_OP_SENDMSG`と`IORING_OP_RECVMSG` {#ioring_op_sendmsg-and-ioring_op_recvmsg}
 
 `sendmsg(2)`と`recvmsg(2)`に相当する。`sqe->addr`に`struct msghdr`へのポインタを受け取る。スキャッタ/ギャザーI/Oや補助データの送信に有用である。
 
@@ -300,15 +300,15 @@ void handle_recv_cqe(struct io_uring_cqe *cqe,
 
 `NUM_BUFS`を想定される並行度に合わせて調整すれば、`ENOBUFS`を完全に避けられる。有用な目安は、アクティブな接続ごとに少なくとも1つのバッファに、バーストトラフィック用の余裕を加えることである。
 
-## `IORING_OP_SEND_ZC`: ゼロコピー送信（Linux 6.1） {#ioringopsend_zc-zero-copy-send-linux-61}
+## `IORING_OP_SEND_ZC`: ゼロコピー送信（Linux 6.1） {#ioring_op_send_zc-zero-copy-send-linux-61}
 
-### 背景: io_uring以前のMSG_ZEROCOPY {#background-msgzerocopy-before-iouring}
+### 背景: io_uring以前のMSG_ZEROCOPY {#background-msg_zerocopy-before-io_uring}
 
 カーネルの`MSG_ZEROCOPY`フラグ（Linux 4.14で追加）は、`send()`がユーザーデータをカーネルバッファにコピーするのを避けられるようにする。代わりに、カーネルはユーザーページをピン留めして直接転送する。送信が完了してページのピン留めを解除できるようになると、カーネルはソケットのエラーキューのメッセージでアプリケーションに通知し、アプリケーションはそれを`recvmsg(MSG_ERRQUEUE)`で読まなければならない。
 
 結果として動作はするが、扱いにくい。送信が1回のシステムコールで、完了通知の回収は別のコードパスでの2回目の`recvmsg`呼び出しになる。ゼロコピーは、利点に見合うだけの複雑さを加える。
 
-### `IORING_OP_SEND_ZC`の仕組み {#how-ioringopsend_zc-works}
+### `IORING_OP_SEND_ZC`の仕組み {#how-ioring_op_send_zc-works}
 
 `IORING_OP_SEND_ZC`は、ゼロコピーをio_uringのモデルに直接統合する。1回のSQEの投入で**2つのCQE**が生成される。
 
@@ -375,7 +375,7 @@ void adaptive_send(struct io_uring *ring, int fd,
 }
 ```
 
-## `IORING_OP_SENDMSG_ZC`: ゼロコピーsendmsg {#ioringopsendmsg_zc-zero-copy-sendmsg}
+## `IORING_OP_SENDMSG_ZC`: ゼロコピーsendmsg {#ioring_op_sendmsg_zc-zero-copy-sendmsg}
 
 `IORING_OP_SENDMSG_ZC`（Linux 6.1）は、`struct msghdr`を介したスキャッタ/ギャザーI/Oにゼロコピーを拡張する。`IORING_OP_SEND_ZC`と同じ2つのCQEのプロトコルに従う。結果のCQEの後に、`IORING_CQE_F_NOTIF`の解放CQEが来る。
 
@@ -395,7 +395,7 @@ io_uring_sqe_set_data64(sqe, TAG_SENDMSG_ZC);
 io_uring_submit(&ring);
 ```
 
-### 固定バッファと`IORING_OP_SENDMSG_ZC`を併用する {#using-ioringopsendmsg_zc-with-fixed-buffers}
+### 固定バッファと`IORING_OP_SENDMSG_ZC`を併用する {#using-ioring_op_sendmsg_zc-with-fixed-buffers}
 
 `io_uring_register_buffers()`でバッファを事前登録すると、カーネルは送信ごとではなく登録時に一度だけそれをピン留めできる。`sqe->ioprio`の`IORING_SENDMSG_FIXED_BUF`と組み合わせて、iovecが登録済みバッファを参照していることを示す。
 

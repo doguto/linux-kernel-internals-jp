@@ -175,7 +175,7 @@ void go_to_protected_mode(void)
 
 ## プロテクトモード → ロングモード {#protected-mode-long-mode}
 
-### startup_32（`arch/x86/boot/compressed/head_32.S`） {#startup32-archx86bootcompressedhead32s}
+### startup_32（`arch/x86/boot/compressed/head_32.S`） {#startup_32-archx86bootcompressedhead_32s}
 
 `startup_32`は32ビットのプロテクトモードで動作する。その仕事は次のとおりである。
 
@@ -216,7 +216,7 @@ movl    %eax, %cr0
 lret    /* スタックからcs:eipをポップする。csは64ビットディスクリプタを選択する */
 ```
 
-### startup_64（`arch/x86/boot/compressed/head_64.S`） {#startup64-archx86bootcompressedhead64s}
+### startup_64（`arch/x86/boot/compressed/head_64.S`） {#startup_64-archx86bootcompressedhead_64s}
 
 `startup_64`は最初の64ビットコードである。この時点では次のとおりである。
 
@@ -293,7 +293,7 @@ efibootmgr -v               # ブート順序とエントリを表示する
 
 ---
 
-## カーネル自身のstartup_64（`arch/x86/kernel/head_64.S`） {#the-kernels-own-startup64-archx86kernelhead64s}
+## カーネル自身のstartup_64（`arch/x86/kernel/head_64.S`） {#the-kernels-own-startup_64-archx86kernelhead_64s}
 
 展開後、展開済みカーネルの`startup_64`が実行される。これは圧縮スタブの`startup_64`とは別物である。これはカーネルの恒久的なページテーブルと中核の基盤を用意する。
 
@@ -333,7 +333,7 @@ SYM_CODE_END(startup_64)
 
 ---
 
-## x86_64_start_kernel() → start_kernel() {#x8664startkernel-startkernel}
+## x86_64_start_kernel() → start_kernel() {#x86_64_start_kernel-start_kernel}
 
 ```c
 /* arch/x86/kernel/head64.c */

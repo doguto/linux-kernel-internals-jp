@@ -154,7 +154,7 @@ echo 200M > /sys/fs/cgroup/mycontainer/memory.reclaim
 
 スロットリングパスからの回収で`memory.current`を`memory.high`未満に保てず、使用量が増え続けて`memory.max`に達すると、カーネルは別のパス、すなわちcgroup OOM killerを起動する。
 
-### エントリポイント: mem_cgroup_out_of_memory() {#entry-point-memcgroupoutofmemory}
+### エントリポイント: mem_cgroup_out_of_memory() {#entry-point-mem_cgroup_out_of_memory}
 
 cgroupの回収を使い果たした後に割り当てが失敗すると、[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c)の`mem_cgroup_oom()`が呼び出される。これは次のことを行う:
 

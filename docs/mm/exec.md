@@ -214,7 +214,7 @@ Address           Perms  Name
 /* 各共有ライブラリはそれぞれ独自のVMA群を持つ */
 ```
 
-## begin_new_exec: 引き返せない地点 {#beginnewexec-the-point-of-no-return}
+## begin_new_exec: 引き返せない地点 {#begin_new_exec-the-point-of-no-return}
 
 ```c
 /* fs/exec.c */

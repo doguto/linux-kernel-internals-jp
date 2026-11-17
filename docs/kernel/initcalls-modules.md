@@ -2,7 +2,7 @@
 
 > カーネルモジュールと組み込みサブシステムはどのように初期化されるか
 
-## `module_init()`と`module_exit()` {#moduleinit-and-moduleexit}
+## `module_init()`と`module_exit()` {#module_init-and-module_exit}
 
 すべてのカーネルモジュールや組み込みサブシステムは、2つのマクロを使って初期化関数とクリーンアップ関数を宣言する:
 

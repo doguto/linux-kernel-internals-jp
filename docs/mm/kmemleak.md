@@ -232,7 +232,7 @@ ps aux | grep kmemleak
 
 Kmemleakは、スキャンできない方法でポインタが格納されている割り当て、たとえばXOR連結リスト、エンコードされたポインタ、ハードウェアのディスクリプタリング、あるいはプログラマが意図的なものとわかっている長寿命の割り当てに対して、誤検出を報告することがある。[`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h)のAPIは、こうした報告を抑制するためのアノテーションを提供している。
 
-### kmemleak_not_leak {#kmemleaknotleak}
+### kmemleak_not_leak {#kmemleak_not_leak}
 
 ```c
 #include <linux/kmemleak.h>
@@ -254,7 +254,7 @@ kmemleak_ignore(scratch);
 
 `kmemleak_ignore(ptr)`は、この特定の割り当てについての報告を抑制し、その内容のスキャンも抑制する。決して解放されない、本当に意図的な一度きりの割り当て（例: カーネルの生存期間中ずっと存在するブート初期のデータ構造）に使う。
 
-### kmemleak_no_scan {#kmemleaknoscan}
+### kmemleak_no_scan {#kmemleak_no_scan}
 
 ```c
 kmemleak_no_scan(ptr);
@@ -270,7 +270,7 @@ kmemleak_erase(&global_ptr);
 
 `kmemleak_erase(ptr)`は、スキャン時の検討対象からポインタを明示的に取り除く。割り当てへのポインタはクリアされたが、その割り当ては後で別の仕組みによって解放される場合に使う。これにより、kmemleakがスキャン中に今やnullとなったポインタをたどるのを防ぐ。
 
-### kmemleak_alloc / kmemleak_free（手動登録） {#kmemleakalloc-kmemleakfree-manual-registration}
+### kmemleak_alloc / kmemleak_free（手動登録） {#kmemleak_alloc-kmemleak_free-manual-registration}
 
 `kmalloc`/`vmalloc`ではなく独自のアロケータで管理されるメモリについては、オブジェクトを手動で登録・登録解除できる:
 

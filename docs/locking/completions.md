@@ -66,7 +66,7 @@ if (try_wait_for_completion(&c)) {
 }
 ```
 
-## struct wait_queue_head_t {#struct-waitqueuehead_t}
+## struct wait_queue_head_t {#struct-wait_queue_head_t}
 
 `wait_queue_head_t`は、`completion`の土台となる低レベルのプリミティブである。次をサポートする。
 
@@ -132,7 +132,7 @@ finish_wait(&wq, &__wait);
 
 これは競合を正しく扱う。チェックと`schedule()`の間に条件が真になった場合、wake_upがタスクの状態をTASK_RUNNINGに戻しているはずである。
 
-## 独自の待機: prepare_to_wait / finish_wait {#custom-wait-preparetowait-finish_wait}
+## 独自の待機: prepare_to_wait / finish_wait {#custom-wait-prepare_to_wait-finish_wait}
 
 より複雑なパターンの場合:
 
@@ -202,7 +202,7 @@ void mydev_data_arrived(struct mydev *dev)
 
 `poll_wait`は待ちキューをpollテーブルに追加し、epollがそれを監視できるようにする。`wake_up`が発火すると、epollは呼び出し元のプロセスを起床させる。
 
-## wait_queue_entry: 独自のコールバック {#waitqueueentry-custom-callbacks}
+## wait_queue_entry: 独自のコールバック {#wait_queue_entry-custom-callbacks}
 
 高度な使い方として、起床時に呼ぶ独自の関数を追加できる。
 

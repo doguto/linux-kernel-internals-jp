@@ -36,7 +36,7 @@ bool bpf_token_capable(const struct bpf_token *token, int cap)
 
 上の`token`引数は飾りではない。`kernel/bpf/token.c`（v6.8には存在せず、v6.9には存在することを確認済み）を使うと、ホスト上で本物のケーパビリティを持つプロセスが、`delegate_cmds=`、`delegate_maps=`、`delegate_progs=`、`delegate_attachs=`オプション（`kernel/bpf/inode.c`）付きで`bpffs`インスタンスをマウントし、そのマウントのファイルディスクリプタを、別のuser namespaceにいる非特権プロセス — たとえばコンテナ — に渡すことができる。そのプロセスは`BPF_TOKEN_CREATE`を指定して`bpf()`を呼び、そのfdからトークンを発行し、以降の`BPF_MAP_CREATE`/`BPF_PROG_LOAD`呼び出しでそのトークンを渡す。通常のケーパビリティチェックが走る前に、`bpf_token_get_from_fd()`、`bpf_token_allow_cmd()`、`bpf_token_allow_prog_type()`、`bpf_token_allow_map_type()`（いずれも`kernel/bpf/token.c`）が、要求された特定のコマンド、プログラムタイプ、mapタイプをそのトークンがカバーしているかどうかを判定する。これは、マウントした側自身の信頼境界を緩めることなく、「コンテナがrootでなくても*この特定の*XDPプログラムをロードできる」ことを可能にする仕組みである。
 
-## `unprivileged_bpf_disabled`: 2状態ではなく3状態 {#unprivilegedbpfdisabled-three-states-not-two}
+## `unprivileged_bpf_disabled`: 2状態ではなく3状態 {#unprivileged_bpf_disabled-three-states-not-two}
 
 `kernel.unprivileged_bpf_disabled` sysctl（`kernel/bpf/syscall.c`）は、`CAP_BPF`を持たないプロセスがそもそもBPF mapを作成したりBPFプログラムをロードしたりできるかどうかを制御する — `map_create_alloc()`（`BPF_MAP_CREATE`のハンドラである`map_create()`から呼ばれ、`sysctl_unprivileged_bpf_disabled && !bpf_token_capable(token, CAP_BPF)`をチェックする）と`bpf_prog_load()`（`sysctl_unprivileged_bpf_disabled && !bpf_cap`をチェックする）は、これが真であれば即座に拒否する。`map_create_alloc()`はmap作成パスを最近分割してできたものであり、古いカーネルでは同等のチェックが`map_create()`内に直接置かれている。ただし、この値はブール値ではない。3つの状態があり、そのうち2つの違いが重要である。
 

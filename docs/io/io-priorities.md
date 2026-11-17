@@ -20,7 +20,7 @@ CPUスケジューリングには強制的なプリエンプションがある�
 
 ---
 
-## ioprio_set()とioprio_get() {#ioprioset-and-ioprioget}
+## ioprio_set()とioprio_get() {#ioprio_set-and-ioprio_get}
 
 glibcのラッパーはなく、これらは生のシステムコールである。
 
@@ -171,7 +171,7 @@ Scheduler (BFQ) enqueue
   → weight within BE class derived from ioprio level
 ```
 
-### get_current_ioprio() {#getcurrentioprio}
+### get_current_ioprio() {#get_current_ioprio}
 
 ```c
 /* include/linux/ioprio.h */

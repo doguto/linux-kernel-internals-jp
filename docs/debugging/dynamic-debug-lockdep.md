@@ -81,7 +81,7 @@ splat中の各ロックには`{+.+.}-{3:3}`のようなアノテーションが�
 
 ---
 
-## ロッククラスと`lock_class_key` {#lock-classes-and-lockclasskey}
+## ロッククラスと`lock_class_key` {#lock-classes-and-lock_class_key}
 
 lockdepは個々のインスタンスではなく**クラス**を追跡する。同じ種類のロックのインスタンスはすべて1つのクラスを共有し、lockdepはクラス間のエッジだけを追跡する。
 
@@ -172,7 +172,7 @@ void init_inode(struct inode *inode, bool is_dir)
 
 ## 実行時アサーション {#runtime-assertions}
 
-### `lockdep_assert_held()` {#lockdepassertheld}
+### `lockdep_assert_held()` {#lockdep_assert_held}
 
 現在のタスクが特定のロックを保持していることをアサートする。呼び出し元がロックを保持している必要がある関数の先頭で使う:
 
@@ -188,7 +188,7 @@ static void inode_pin_lru_isolating(struct inode *inode)
 
 アサーションが失敗すると（ロックが保持されていないと）、lockdepは`WARNING`とスタックトレースを出力する。`CONFIG_PROVE_LOCKING=n`の場合、このマクロはコンパイル時に消える。
 
-### `lockdep_assert_not_held()` {#lockdepassertnot_held}
+### `lockdep_assert_not_held()` {#lockdep_assert_not_held}
 
 ロックが保持されて**いない**ことをアサートする。特定のロックの下では呼び出せない関数に使う:
 
@@ -202,7 +202,7 @@ void some_mm_operation(struct mm_struct *mm)
 }
 ```
 
-### `lockdep_assert_held_write()` / `lockdep_assert_held_read()` {#lockdepassertheldwrite-lockdepassertheldread}
+### `lockdep_assert_held_write()` / `lockdep_assert_held_read()` {#lockdep_assert_held_write-lockdep_assert_held_read}
 
 rwsemの場合は、特定のロックモードをアサートする:
 
@@ -262,7 +262,7 @@ void my_lock_release(struct my_lock *l)
 
 ## 誤検知の抑制（控えめに使うこと） {#suppressing-false-positives-use-sparingly}
 
-### `lockdep_set_novalidate_class()` {#lockdepsetnovalidate_class}
+### `lockdep_set_novalidate_class()` {#lockdep_set_novalidate_class}
 
 ロッククラスを検証の対象外としてマークする。**どうしても必要な場合以外は避けること**。誤検知とともに本物のバグも隠してしまう:
 
@@ -270,7 +270,7 @@ void my_lock_release(struct my_lock *l)
 lockdep_set_novalidate_class(&my_lock);
 ```
 
-### `lockdep_off()` / `lockdep_on()` {#lockdepoff-lockdepon}
+### `lockdep_off()` / `lockdep_on()` {#lockdep_off-lockdep_on}
 
 正当に順序に違反するコード領域（例: 意図的に循環を作るセルフテスト）で、lockdepを一時的に停止する:
 

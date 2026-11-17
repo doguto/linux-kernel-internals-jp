@@ -10,7 +10,7 @@
 **2024年10月（CVE公開は2024年11月）· CVE-2024-50302 · CISA Known Exploited Vulnerabilities カタログ**
 1語の修正（`kmalloc` は `kzalloc` であるべきだった）で、ヒープのリークが塞がれた。Googleは、このリークがフォレンジック機器メーカーのハードウェアが携帯電話のロック解除チェーンで使った複数のゼロデイの1つであった可能性が高いと評価しており、その経緯はAmnesty InternationalのSecurity Labが文書化している。
 
-### [2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同](war-stories/hid-validate-values-type-confusion.md) {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
+### [2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同](war-stories/hid-validate-values-type-confusion.md) {#the-hid_validate_values-type-confusion-that-a-2014-bug-fix-introduced}
 **2023年1月（CVE公開は2023年3月）· CVE-2023-1073**
 壊れていたレポートID 0の検索を直す2014年の修正が、安全なハッシュテーブルの読み出しを、チェックのないリスト走査に置き換えた。その副作用として型混同が持ち込まれ、それはメモリレイアウトの運だけで、ほぼ9年間悪用されずに残っていた。
 

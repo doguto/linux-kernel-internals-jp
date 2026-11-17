@@ -207,7 +207,7 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 | VMA: 書き込み権限なし | 書き込み | SIGSEGV | アクセス拒否 |
 | VMA: 実行権限なし | フェッチ | SIGSEGV | NX違反 |
 
-## do_anonymous_page: デマンドゼロページ {#doanonymouspage-demand-zero-page}
+## do_anonymous_page: デマンドゼロページ {#do_anonymous_page-demand-zero-page}
 
 ```c
 /* mm/memory.c */
@@ -242,7 +242,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 }
 ```
 
-## do_wp_page: コピーオンライト {#dowppage-copy-on-write}
+## do_wp_page: コピーオンライト {#do_wp_page-copy-on-write}
 
 ```c
 /* mm/memory.c */
