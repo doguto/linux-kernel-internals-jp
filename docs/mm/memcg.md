@@ -1,10 +1,10 @@
-# Memory Cgroups (memcg) {#memory-cgroups-memcg}
+# メモリcgroup（memcg） {#memory-cgroups-memcg}
 
-> Container memory limits and accounting
+> コンテナのメモリ制限と計上
 
-## What Is memcg? {#what-is-memcg}
+## memcgとは何か {#what-is-memcg}
 
-[Memory cgroups](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory) (memcg) allow limiting and tracking memory usage for groups of processes. They're the foundation of container memory limits (Docker, Kubernetes, systemd).
+[メモリcgroup](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)（memcg）は、プロセスのグループに対してメモリ使用量の制限と追跡を可能にする。これはコンテナのメモリ制限（Docker、Kubernetes、systemd）の土台である。
 
 ```
 Container A (limit: 1GB)      Container B (limit: 2GB)
@@ -20,70 +20,70 @@ Container A (limit: 1GB)      Container B (limit: 2GB)
               (tracks & enforces)
 ```
 
-## cgroup v1 vs v2 {#cgroup-v1-vs-v2}
+## cgroup v1とv2の比較 {#cgroup-v1-vs-v2}
 
-Linux has two cgroup implementations:
+Linuxには2つのcgroup実装がある。
 
-| Feature | v1 | v2 |
+| 機能 | v1 | v2 |
 |---------|----|----|
-| Hierarchy | Multiple (one per controller) | Single unified |
-| Memory+IO coordination | Difficult | Integrated |
-| Pressure notification | Limited | PSI (Pressure Stall Info) |
-| Default (modern systems) | Legacy | Preferred |
+| 階層 | 複数（コントローラごとに1つ） | 単一の統合階層 |
+| メモリとIOの連携 | 困難 | 統合されている |
+| 逼迫の通知 | 限定的 | PSI（Pressure Stall Info） |
+| デフォルト（現代のシステム） | レガシー | 推奨 |
 
-**[v2 is recommended](https://lwn.net/Articles/679786/)** for new deployments (declared production-ready in v4.5). This document focuses on v2.
+新規の導入には**[v2が推奨される](https://lwn.net/Articles/679786/)**（v4.5で本番利用可能と宣言された）。このドキュメントはv2に焦点を当てる。
 
 ```bash
-# Check which version is mounted
+# どちらのバージョンがマウントされているか確認
 mount | grep cgroup
 
-# v1: /sys/fs/cgroup/memory, /sys/fs/cgroup/cpu, etc.
-# v2: /sys/fs/cgroup (unified)
+# v1: /sys/fs/cgroup/memory, /sys/fs/cgroup/cpu など
+# v2: /sys/fs/cgroup (統合)
 ```
 
-## Basic Operations {#basic-operations}
+## 基本操作 {#basic-operations}
 
-### Create a cgroup {#create-a-cgroup}
+### cgroupを作成する {#create-a-cgroup}
 
 ```bash
-# Create a new cgroup
+# 新しいcgroupを作成
 mkdir /sys/fs/cgroup/mygroup
 
-# Move a process into it
+# プロセスをその中へ移動
 echo $PID > /sys/fs/cgroup/mygroup/cgroup.procs
 
-# Enable memory controller
+# メモリコントローラを有効化
 echo "+memory" > /sys/fs/cgroup/cgroup.subtree_control
 ```
 
-### Set Memory Limit {#set-memory-limit}
+### メモリ制限を設定する {#set-memory-limit}
 
 ```bash
-# Set 500MB limit (cgroup v2)
+# 500MBの制限を設定 (cgroup v2)
 echo 500M > /sys/fs/cgroup/mygroup/memory.max
 
-# Set soft limit (reclaim target)
+# ソフトリミット (回収の目標) を設定
 echo 400M > /sys/fs/cgroup/mygroup/memory.high
 ```
 
-### View Usage {#view-usage}
+### 使用量を見る {#view-usage}
 
 ```bash
-# Current memory usage
+# 現在のメモリ使用量
 cat /sys/fs/cgroup/mygroup/memory.current
 
-# Detailed statistics
+# 詳細な統計
 cat /sys/fs/cgroup/mygroup/memory.stat
 ```
 
-## Memory Limits (v2) {#memory-limits-v2}
+## メモリ制限（v2） {#memory-limits-v2}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| `memory.max` | Hard limit. OOM kill if exceeded. |
-| `memory.high` | Soft limit. Throttle and reclaim aggressively. |
-| `memory.low` | Protection. [Best-effort preservation](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) under pressure. |
-| `memory.min` | Hard protection. [Never reclaim below this](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files). |
+| `memory.max` | ハードリミット。超えるとOOM killされる。 |
+| `memory.high` | ソフトリミット。スロットリングし、積極的に回収する。 |
+| `memory.low` | 保護。逼迫時に[ベストエフォートで保持する](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)。 |
+| `memory.min` | ハードな保護。[これ以下には決して回収しない](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)。 |
 
 ```
                     memory.max
@@ -105,44 +105,44 @@ cat /sys/fs/cgroup/mygroup/memory.stat
       reclaim
 ```
 
-### Example: Container Limits {#example-container-limits}
+### 例: コンテナの制限 {#example-container-limits}
 
 ```bash
-# Production container setup
-echo 1G > /sys/fs/cgroup/container/memory.max    # Hard limit
-echo 800M > /sys/fs/cgroup/container/memory.high # Start throttling
-echo 200M > /sys/fs/cgroup/container/memory.low  # Protect this much
+# 本番コンテナの設定
+echo 1G > /sys/fs/cgroup/container/memory.max    # ハードリミット
+echo 800M > /sys/fs/cgroup/container/memory.high # スロットリング開始
+echo 200M > /sys/fs/cgroup/container/memory.low  # この量を保護
 ```
 
-## What's Accounted {#whats-accounted}
+## 計上されるもの {#whats-accounted}
 
-memcg tracks:
+memcgが追跡するもの:
 
-| Type | Accounted | Notes |
+| 種類 | 計上されるか | 備考 |
 |------|-----------|-------|
-| Anonymous pages | Yes | Heap, stack, mmap(MAP_ANONYMOUS) |
-| File cache | Yes | Pages from file reads |
-| Slab (kmem) | Yes (v2) | Kernel objects for this cgroup |
-| Huge pages | Separate | Via `hugetlb` controller |
-| Kernel stacks | Yes (v2) | Per-task kernel stacks |
+| 匿名ページ | はい | ヒープ、スタック、mmap(MAP_ANONYMOUS) |
+| ファイルキャッシュ | はい | ファイルの読み込みによるページ |
+| slab（kmem） | はい（v2） | このcgroupのためのカーネルオブジェクト |
+| huge page | 別扱い | `hugetlb`コントローラ経由 |
+| カーネルスタック | はい（v2） | タスクごとのカーネルスタック |
 
-### Memory Statistics {#memory-statistics}
+### メモリの統計 {#memory-statistics}
 
 ```bash
 cat /sys/fs/cgroup/mygroup/memory.stat
 
-# Key fields:
-# anon        - Anonymous memory
-# file        - File cache
-# slab        - Kernel slab objects
-# sock        - Network socket buffers
-# pgfault     - Page faults
-# pgmajfault  - Major page faults (disk I/O)
+# 主なフィールド:
+# anon        - 匿名メモリ
+# file        - ファイルキャッシュ
+# slab        - カーネルのslabオブジェクト
+# sock        - ネットワークソケットのバッファ
+# pgfault     - ページフォールト
+# pgmajfault  - メジャーページフォールト (ディスクI/O)
 ```
 
-## Per-cgroup Reclaim {#per-cgroup-reclaim}
+## cgroupごとの回収 {#per-cgroup-reclaim}
 
-When a cgroup approaches its limit, reclaim happens within that cgroup first.
+cgroupが制限に近づくと、まずそのcgroupの中で回収が行われる。
 
 ```
 Global memory OK
@@ -155,81 +155,81 @@ Reclaim from Cgroup A only
 (other cgroups unaffected)
 ```
 
-### memory.reclaim ([v5.19+](https://lwn.net/Articles/894849/)) {#memoryreclaim-v519}
+### memory.reclaim（[v5.19+](https://lwn.net/Articles/894849/)） {#memoryreclaim-v519}
 
-Proactively trigger reclaim ([commit 94968384dde1](https://git.kernel.org/linus/94968384dde1)):
+先回りして回収をトリガする（[commit 94968384dde1](https://git.kernel.org/linus/94968384dde1)）。
 
 ```bash
-# Reclaim 100MB from cgroup
+# cgroupから100MBを回収
 echo 100M > /sys/fs/cgroup/mygroup/memory.reclaim
 ```
 
-Useful for:
+次の用途に役立つ。
 
-- Pre-warming before load spike
-- Reducing memory before migration
-- Testing reclaim behavior
+- 負荷のスパイクに備えた事前のウォームアップ
+- マイグレーション前のメモリ削減
+- 回収の挙動のテスト
 
-## OOM Handling {#oom-handling}
+## OOMの処理 {#oom-handling}
 
-When a cgroup exceeds `memory.max`:
+cgroupが`memory.max`を超えると、次のようになる。
 
-1. Kernel tries reclaim within cgroup
-2. If insufficient, triggers cgroup OOM
-3. OOM killer selects process within cgroup
-4. Selected process is killed
+1. カーネルがcgroup内で回収を試みる
+2. 不十分なら、cgroup OOMをトリガする
+3. OOM killerがcgroup内のプロセスを選ぶ
+4. 選ばれたプロセスがkillされる
 
 ```bash
-# View OOM events
+# OOMイベントを見る
 cat /sys/fs/cgroup/mygroup/memory.events
 
-# Fields:
-# oom        - OOM events count
-# oom_kill   - Processes killed by OOM
-# max        - Times memory.max was hit
-# high       - Times memory.high was hit
+# フィールド:
+# oom        - OOMイベントの回数
+# oom_kill   - OOMによってkillされたプロセス数
+# max        - memory.maxに達した回数
+# high       - memory.highに達した回数
 ```
 
-### OOM Group Kill (v4.19+) {#oom-group-kill-v419}
+### OOMグループkill（v4.19+） {#oom-group-kill-v419}
 
-**Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
+**コミット**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
 
-**Author**: Roman Gushchin
+**作者**: Roman Gushchin
 
-Kill entire cgroup instead of single process:
+単一のプロセスではなく、cgroup全体をkillする。
 
 ```bash
 echo 1 > /sys/fs/cgroup/mygroup/memory.oom.group
 ```
 
-Useful for containers where killing one process leaves others broken.
+1つのプロセスをkillすると他のプロセスが壊れた状態で残ってしまうコンテナで有用である。
 
-## Pressure Stall Information (PSI) {#pressure-stall-information-psi}
+## Pressure Stall Information（PSI） {#pressure-stall-information-psi}
 
-PSI shows how much time tasks spend waiting for memory:
+PSIは、タスクがメモリを待って費やした時間を示す。
 
 ```bash
 cat /sys/fs/cgroup/mygroup/memory.pressure
 
 # avg10=0.00 avg60=0.00 avg300=0.00 total=12345
-# some: percentage of time at least one task was stalled
-# full: percentage of time all tasks were stalled
+# some: 少なくとも1つのタスクがストールしていた時間の割合
+# full: すべてのタスクがストールしていた時間の割合
 ```
 
-### Use Cases {#use-cases}
+### 用途 {#use-cases}
 
-- **Autoscaling**: Scale up when pressure increases
-- **Health checks**: Detect memory-constrained containers
-- **Load balancing**: Move workloads from pressured nodes
+- **オートスケーリング**: 逼迫が強まったらスケールアップする
+- **ヘルスチェック**: メモリが不足しているコンテナを検出する
+- **ロードバランシング**: 逼迫しているノードからワークロードを移す
 
 ```bash
-# Monitor system-wide pressure
+# システム全体の逼迫を監視
 cat /proc/pressure/memory
 ```
 
-## Hierarchical Limits {#hierarchical-limits}
+## 階層的な制限 {#hierarchical-limits}
 
-Cgroups are hierarchical. Child limits can't exceed parent:
+cgroupは階層的である。子の制限は親を超えられない。
 
 ```
 root (limit: 8GB)
@@ -239,152 +239,152 @@ root (limit: 8GB)
 └── container-b (limit: 4GB)
 ```
 
-## Swap Control {#swap-control}
+## スワップの制御 {#swap-control}
 
 ```bash
-# Limit swap usage (v2)
-echo 0 > /sys/fs/cgroup/mygroup/memory.swap.max    # No swap
-echo 500M > /sys/fs/cgroup/mygroup/memory.swap.max # 500MB swap
+# スワップ使用量を制限 (v2)
+echo 0 > /sys/fs/cgroup/mygroup/memory.swap.max    # スワップなし
+echo 500M > /sys/fs/cgroup/mygroup/memory.swap.max # 500MBのスワップ
 
-# View swap usage
+# スワップ使用量を見る
 cat /sys/fs/cgroup/mygroup/memory.swap.current
 ```
 
-## History {#history}
+## 歴史 {#history}
 
-### Memory Controller Introduction (v2.6.25, 2008) {#memory-controller-introduction-v2625-2008}
+### メモリコントローラの導入（v2.6.25、2008年） {#memory-controller-introduction-v2625-2008}
 
-**Commit**: [8cdea7c05454](https://git.kernel.org/linus/8cdea7c05454) ("Memory controller: cgroups setup")
+**コミット**: [8cdea7c05454](https://git.kernel.org/linus/8cdea7c05454) ("Memory controller: cgroups setup")
 
-**Author**: Balbir Singh
+**作者**: Balbir Singh
 
-*Note: Pre-2009 LKML archives on lore.kernel.org are sparse. The commit message documents the design.*
+*注: lore.kernel.orgにある2009年以前のLKMLアーカイブはまばらである。設計はコミットメッセージに記されている。*
 
-Initial memory cgroup implementation for cgroup v1.
+cgroup v1向けの最初のメモリcgroup実装。
 
-### Unified Hierarchy (cgroup v2, v4.5, 2016) {#unified-hierarchy-cgroup-v2-v45-2016}
+### 統合階層（cgroup v2、v4.5、2016年） {#unified-hierarchy-cgroup-v2-v45-2016}
 
-The cgroup v2 unified hierarchy was [marked non-experimental in v4.5](https://lwn.net/Articles/679786/) ([commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)), with the memory controller considered stable for production use. The memory controller was reworked significantly from v1, with cleaner semantics and integrated pressure stall information.
+cgroup v2の統合階層は[v4.5で実験的扱いが外され](https://lwn.net/Articles/679786/)（[commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)）、メモリコントローラは本番利用に耐える安定したものとみなされた。メモリコントローラはv1から大幅に作り直され、セマンティクスが整理され、pressure stall informationが統合された。
 
-### Kernel Memory Accounting (v4.5+) {#kernel-memory-accounting-v45}
+### カーネルメモリの計上（v4.5+） {#kernel-memory-accounting-v45}
 
-Kernel memory (slab, stacks) [included in memory.current by default](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory) in v2 ([background: the new slab memory controller](https://lwn.net/Articles/798605/)).
+v2では、カーネルメモリ（slab、スタック）が[デフォルトでmemory.currentに含まれる](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory)（[背景: 新しいslabメモリコントローラ](https://lwn.net/Articles/798605/)）。
 
-### memory.reclaim (v5.19, 2022) {#memoryreclaim-v519-2022}
+### memory.reclaim（v5.19、2022年） {#memoryreclaim-v519-2022}
 
-**Commit**: [94968384dde1](https://git.kernel.org/linus/94968384dde1) ("memcg: introduce per-memcg reclaim interface") | [LKML](https://lore.kernel.org/linux-mm/20220421234426.3494842-2-yosryahmed@google.com/)
+**コミット**: [94968384dde1](https://git.kernel.org/linus/94968384dde1) ("memcg: introduce per-memcg reclaim interface") | [LKML](https://lore.kernel.org/linux-mm/20220421234426.3494842-2-yosryahmed@google.com/)
 
-**Author**: Shakeel Butt
+**作者**: Shakeel Butt
 
-Proactive reclaim interface.
+プロアクティブな回収のインターフェース。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Create a Memory-Limited Shell {#create-a-memory-limited-shell}
+### メモリを制限したシェルを作る {#create-a-memory-limited-shell}
 
 ```bash
-# Create cgroup
+# cgroupを作成
 sudo mkdir /sys/fs/cgroup/test
 
-# Enable memory controller (if needed)
+# メモリコントローラを有効化 (必要なら)
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 
-# Set 100MB limit
+# 100MBの制限を設定
 echo 100M | sudo tee /sys/fs/cgroup/test/memory.max
 
-# Move current shell into cgroup
+# 現在のシェルをcgroupへ移動
 echo $$ | sudo tee /sys/fs/cgroup/test/cgroup.procs
 
-# Now try to allocate more than 100MB
-python3 -c "x = 'a' * 150_000_000"  # Will be OOM killed
+# 100MBを超える割り当てを試す
+python3 -c "x = 'a' * 150_000_000"  # OOM killされる
 ```
 
-### Monitor a Container {#monitor-a-container}
+### コンテナを監視する {#monitor-a-container}
 
 ```bash
-# Find container's cgroup
+# コンテナのcgroupを探す
 CGROUP=$(cat /proc/<container-pid>/cgroup | cut -d: -f3)
 
-# Watch memory usage
+# メモリ使用量を観察
 watch -n 1 cat /sys/fs/cgroup/$CGROUP/memory.current
 
-# View detailed stats
+# 詳細な統計を見る
 cat /sys/fs/cgroup/$CGROUP/memory.stat
 ```
 
-### Simulate Memory Pressure {#simulate-memory-pressure}
+### メモリ逼迫をシミュレートする {#simulate-memory-pressure}
 
 ```bash
-# Create cgroup with low limit
+# 低い制限でcgroupを作成
 sudo mkdir /sys/fs/cgroup/pressure-test
 echo 50M | sudo tee /sys/fs/cgroup/pressure-test/memory.max
 
-# Run memory-hungry process
+# メモリを大量に使うプロセスを実行
 echo $$ | sudo tee /sys/fs/cgroup/pressure-test/cgroup.procs
 stress --vm 1 --vm-bytes 100M
 
-# Watch pressure
+# 逼迫を観察
 cat /sys/fs/cgroup/pressure-test/memory.pressure
 ```
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Container OOM Despite Free System Memory {#container-oom-despite-free-system-memory}
+### システムのメモリに空きがあるのにコンテナがOOMになる {#container-oom-despite-free-system-memory}
 
-Container hit its `memory.max` limit.
+コンテナが自身の`memory.max`の制限に達した。
 
-**Debug**: Check `memory.events` for `oom` count.
+**デバッグ**: `memory.events`の`oom`のカウントを確認する。
 
-**Solutions**:
+**対策**:
 
-- Increase limit
-- Optimize application memory usage
-- Add swap and `memory.swap.max`
+- 制限を引き上げる
+- アプリケーションのメモリ使用量を最適化する
+- スワップと`memory.swap.max`を追加する
 
-### Slow Container Startup {#slow-container-startup}
+### コンテナの起動が遅い {#slow-container-startup}
 
-Memory being reclaimed during startup.
+起動中にメモリが回収されている。
 
-**Debug**: Check `memory.pressure`
+**デバッグ**: `memory.pressure`を確認する
 
-**Solutions**:
+**対策**:
 
-- Increase `memory.high`
-- Pre-warm with `memory.reclaim`
-- Check if limit is too low
+- `memory.high`を引き上げる
+- `memory.reclaim`で事前にウォームアップする
+- 制限が低すぎないか確認する
 
-### Kernel Memory Growing Unbounded (v1) {#kernel-memory-growing-unbounded-v1}
+### カーネルメモリが際限なく増える（v1） {#kernel-memory-growing-unbounded-v1}
 
-In cgroup v1, kernel memory wasn't limited by default.
+cgroup v1では、カーネルメモリはデフォルトで制限されていなかった。
 
-**Solution**: Use cgroup v2, or set `memory.kmem.limit_in_bytes` in v1.
+**対策**: cgroup v2を使うか、v1で`memory.kmem.limit_in_bytes`を設定する。
 
-## References {#references}
+## リファレンス {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory controller implementation |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg API |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | メモリコントローラの実装 |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcgのAPI |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - Authoritative cgroup v2 docs
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - cgroup v2の公式ドキュメント
 
-### Related {#related}
+### 関連 {#related}
 
-- [reclaim](reclaim.md) - How memory is reclaimed
-- [page-allocator](page-allocator.md) - Global memory allocation
-- [glossary](glossary.md) - cgroup, OOM definitions
+- [reclaim](reclaim.md) - メモリがどのように回収されるか
+- [page-allocator](page-allocator.md) - グローバルなメモリ割り当て
+- [glossary](glossary.md) - cgroup、OOMの定義
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — the entire memory controller implementation: charge/uncharge paths, limit enforcement, PSI integration, and the `memory.reclaim` interface
-- `Documentation/admin-guide/cgroup-v2.rst` — authoritative kernel reference for every `memory.*` interface file, including semantics, units, and version requirements
-- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — covers why cgroup v2 was redesigned and what changed for the memory controller compared to v1
-- [LWN: The new slab memory controller](https://lwn.net/Articles/798605/) — explains how kernel memory (slab, stacks) was brought under unified `memory.current` accounting in v2
-- [LWN: Proactive reclaim for memory cgroups](https://lwn.net/Articles/894849/) — design and motivation behind `memory.reclaim`, the interface for userspace-driven proactive reclaim
-- [memcg-hierarchy](memcg-hierarchy.md) — how `memory.max`, `memory.high`, `memory.min`, and `memory.low` interact when cgroups are nested
-- [memcg-oom](memcg-oom.md) — what happens inside the kernel when a cgroup exhausts its `memory.max` after reclaim fails
-- [memcg-swap](memcg-swap.md) — per-cgroup swap accounting with `memory.swap.max` and `memory.zswap.max`
+- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — メモリコントローラの実装全体：charge/unchargeのパス、制限の強制、PSIとの統合、`memory.reclaim`インターフェース
+- `Documentation/admin-guide/cgroup-v2.rst` — すべての`memory.*`インターフェースファイルについて、セマンティクス、単位、必要なバージョンを含めて記した公式のカーネルリファレンス
+- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — cgroup v2がなぜ再設計されたのか、そしてメモリコントローラがv1と比べて何が変わったのかを扱う
+- [LWN: The new slab memory controller](https://lwn.net/Articles/798605/) — v2でカーネルメモリ（slab、スタック）がどのように統合された`memory.current`の計上に含まれるようになったかを説明する
+- [LWN: Proactive reclaim for memory cgroups](https://lwn.net/Articles/894849/) — ユーザー空間主導のプロアクティブな回収のためのインターフェースである`memory.reclaim`の設計と動機
+- [memcg-hierarchy](memcg-hierarchy.md) — cgroupが入れ子になったときに`memory.max`、`memory.high`、`memory.min`、`memory.low`がどう相互作用するか
+- [memcg-oom](memcg-oom.md) — 回収が失敗した後にcgroupが`memory.max`を使い果たしたとき、カーネル内部で何が起きるか
+- [memcg-swap](memcg-swap.md) — `memory.swap.max`と`memory.zswap.max`によるcgroupごとのスワップの計上

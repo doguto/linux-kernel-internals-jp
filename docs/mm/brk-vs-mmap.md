@@ -1,21 +1,21 @@
-# brk vs mmap: Two Ways to Get Memory {#brk-vs-mmap-two-ways-to-get-memory}
+# brk対mmap: メモリを得る2つの方法 {#brk-vs-mmap-two-ways-to-get-memory}
 
-> The kernel provides two mechanisms; userspace allocators choose between them
+> カーネルは2つの仕組みを提供し、ユーザー空間のアロケータがその間で選択する
 
-## Kernel Mechanisms vs Userspace Policy {#kernel-mechanisms-vs-userspace-policy}
+## カーネルの仕組みとユーザー空間のポリシー {#kernel-mechanisms-vs-userspace-policy}
 
-The kernel provides two system calls for obtaining memory:
+カーネルはメモリを得るための2つのシステムコールを提供している。
 
-1. **`brk()`** - Extend a single contiguous heap region
-2. **`mmap()`** - Create arbitrary memory mappings anywhere
+1. **`brk()`** - 単一の連続したヒープ領域を拡張する
+2. **`mmap()`** - 任意の場所に任意のメモリマッピングを作る
 
-The kernel doesn't care which one you use. It just implements both and lets userspace decide. This document covers both the kernel mechanisms and how glibc uses them - clearly separated.
+カーネルはどちらが使われるかを気にしない。両方を実装し、ユーザー空間に決めさせるだけである。このドキュメントでは、カーネルの仕組みとglibcがそれをどう使うかの両方を、明確に分けて扱う。
 
-## The Two Approaches {#the-two-approaches}
+## 2つのアプローチ {#the-two-approaches}
 
-### brk(): The Heap {#brk-the-heap}
+### brk(): ヒープ {#brk-the-heap}
 
-`brk()` moves the "program break" - historically called the end of the "data segment," though on modern systems it's just another VMA that grows upward (see `do_brk_flags()` in [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c)):
+`brk()` は「プログラムブレーク」を移動する。歴史的には「データセグメント」の終端と呼ばれてきたが、現代のシステムでは上方向に伸びる単なるVMAの1つにすぎない（[mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) の `do_brk_flags()` を参照）。
 
 ```
 ┌─────────────────┐ High addresses
@@ -33,27 +33,27 @@ The kernel doesn't care which one you use. It just implements both and lets user
 ```
 
 ```c
-// The brk syscall sets the program break
+// brk システムコールはプログラムブレークを設定する
 #include <unistd.h>
 #include <sys/syscall.h>
 
-unsigned long current_brk = syscall(SYS_brk, 0);  // Get current break
-syscall(SYS_brk, current_brk + 4096);             // Extend by 4KB
-// New memory is between old and new break
+unsigned long current_brk = syscall(SYS_brk, 0);  // 現在のブレークを取得
+syscall(SYS_brk, current_brk + 4096);             // 4KB 拡張する
+// 新しいメモリは古いブレークと新しいブレークの間にある
 
-// Note: sbrk() is the libc wrapper; brk is the actual syscall
+// 注: sbrk() は libc のラッパーであり、brk が実際のシステムコール
 ```
 
-**Characteristics:**
+**特徴:**
 
-- Single contiguous region
-- Grows upward
-- Cannot release memory in the middle
-- Lower overhead than mmap (but still a syscall - involves VMA updates, security checks, rlimit checks)
+- 単一の連続した領域
+- 上方向に伸びる
+- 途中のメモリを解放できない
+- mmapよりオーバーヘッドが小さい（ただしシステムコールであることに変わりはなく、VMAの更新、セキュリティチェック、rlimitチェックを伴う）
 
-### mmap(): Anonymous Mappings {#mmap-anonymous-mappings}
+### mmap(): 匿名マッピング {#mmap-anonymous-mappings}
 
-`mmap()` creates a new region anywhere in the address space:
+`mmap()` はアドレス空間の任意の場所に新しい領域を作る。
 
 ```
 ┌─────────────────┐
@@ -80,85 +80,85 @@ void *p = mmap(NULL, size,
                -1, 0);
 ```
 
-See [`do_mmap()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) for the kernel implementation.
+カーネルの実装については [`do_mmap()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) を参照。
 
-**Characteristics:**
+**特徴:**
 
-- Arbitrary location in address space
-- Each mapping independent
-- Can release (`munmap`) individually
-- More overhead per allocation
+- アドレス空間の任意の位置
+- 各マッピングは独立している
+- 個別に解放（`munmap`）できる
+- 割り当てごとのオーバーヘッドが大きい
 
-## Userspace Policy: How glibc Chooses {#userspace-policy-how-glibc-chooses}
+## ユーザー空間のポリシー: glibcはどう選ぶか {#userspace-policy-how-glibc-chooses}
 
-This is where userspace makes its own decisions - the kernel isn't involved.
+ここではユーザー空間が独自に判断を下す。カーネルは関与しない。
 
-glibc's malloc uses a **dynamic threshold** that adjusts based on allocation patterns:
+glibcのmallocは、割り当てパターンに基づいて調整される**動的しきい値**を使う。
 
 ```
 Allocation size < threshold → brk (main arena heap)
 Allocation size ≥ threshold → mmap
 ```
 
-The threshold starts at 128KB and can grow up to 32MB (on 64-bit systems) as the allocator observes large allocations being freed. This dynamic behavior was added to reduce mmap/munmap syscall overhead for programs with consistent large allocation patterns.
+しきい値は128KBから始まり、大きな割り当てが解放されるのをアロケータが観測するにつれて、最大32MB（64ビットシステムの場合）まで増加しうる。この動的な挙動は、一貫して大きな割り当てを行うプログラムのmmap/munmapシステムコールのオーバーヘッドを減らすために追加された。
 
-**Note:** These thresholds are `glibc`-specific. Other C libraries (`musl`, `bionic`) use different strategies, and some distributions patch `glibc` defaults.
+**注:** これらのしきい値は `glibc` 固有のものである。他のCライブラリ（`musl`、`bionic`）は異なる戦略を使い、一部のディストリビューションは `glibc` のデフォルトにパッチを当てている。
 
 ```c
-// Simplified glibc logic
+// 簡略化した glibc のロジック
 void *malloc(size_t size) {
     if (size < mmap_threshold) {
-        return allocate_from_arena();  // Main arena uses brk
+        return allocate_from_arena();  // メインアリーナは brk を使う
     } else {
-        return mmap(...);              // Direct mmap
+        return mmap(...);              // 直接 mmap
     }
 }
 ```
 
-Check or override the threshold:
+しきい値の確認または上書き:
 ```bash
-# Default starts at 128KB (131072 bytes), grows dynamically
-# Can disable dynamic behavior and set fixed threshold:
+# デフォルトは 128KB（131072 バイト）から始まり、動的に増加する
+# 動的な挙動を無効にして固定しきい値を設定できる:
 $ MALLOC_MMAP_THRESHOLD_=65536 ./myprogram
 
-# Or in code:
+# あるいはコード内で:
 mallopt(M_MMAP_THRESHOLD, 65536);
 ```
 
-See [glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/Memory-Allocation-Tunables.html) for details.
+詳細は[glibc malloc tunables](https://www.gnu.org/software/libc/manual/html_node/Memory-Allocation-Tunables.html)を参照。
 
-## Why the Threshold? {#why-the-threshold}
+## なぜしきい値があるのか {#why-the-threshold}
 
-### Small allocations → brk (heap) {#small-allocations-brk-heap}
+### 小さな割り当て → brk（ヒープ） {#small-allocations-brk-heap}
 
-**Pros:**
+**利点:**
 
-- Lower syscall overhead (glibc extends heap in large chunks, serves many mallocs per brk call)
-- Good locality (allocations are adjacent)
-- Fast allocation from free lists
+- システムコールのオーバーヘッドが小さい（glibcはヒープを大きな塊で拡張し、1回のbrk呼び出しで多数のmallocに応える）
+- 局所性が良い（割り当てが隣接する）
+- フリーリストからの高速な割り当て
 
-**Cons:**
+**欠点:**
 
-- Memory fragmentation over time
-- Harder to return memory to OS (requires free space at top of heap)
+- 時間とともにメモリが断片化する
+- OSにメモリを返しにくい（ヒープの先頭に空き領域が必要）
 
-### Large allocations → mmap {#large-allocations-mmap}
+### 大きな割り当て → mmap {#large-allocations-mmap}
 
-**Pros:**
+**利点:**
 
-- Memory returned to OS immediately on free (`munmap()`)
-- No heap fragmentation from large blocks
-- Predictable cleanup
+- 解放時にメモリが即座にOSに返される（`munmap()`）
+- 大きなブロックによるヒープの断片化がない
+- 予測可能な後始末
 
-**Cons:**
+**欠点:**
 
-- Per-allocation syscall overhead
-- TLB pressure (each mapping needs entries)
-- Potential address space fragmentation
+- 割り当てごとのシステムコールのオーバーヘッド
+- TLBへの負荷（各マッピングにエントリが必要）
+- アドレス空間が断片化する可能性
 
-## The Fragmentation Problem {#the-fragmentation-problem}
+## 断片化の問題 {#the-fragmentation-problem}
 
-Consider this scenario with brk-only allocation:
+brkのみで割り当てる次のシナリオを考える。
 
 ```
 Initial heap:
@@ -174,7 +174,7 @@ Even if C and D are freed:
        └─ Still can't shrink brk past A
 ```
 
-With mmap for large allocations:
+大きな割り当てにmmapを使う場合:
 ```
 Heap: [  A  ][ B ][ C ]   (small allocations)
 
@@ -183,33 +183,33 @@ mmap regions:
 [ Large E ]   ← Independent of heap
 ```
 
-## Real-World Example {#real-world-example}
+## 実際の例 {#real-world-example}
 
 ```c
 #include <stdlib.h>
 #include <stdio.h>
 
 int main() {
-    // Small allocation - goes to heap (brk)
+    // 小さな割り当て - ヒープ（brk）に行く
     void *small = malloc(1024);
     printf("Small (1KB): %p\n", small);
 
-    // Large allocation - uses mmap
+    // 大きな割り当て - mmap を使う
     void *large = malloc(256 * 1024);
     printf("Large (256KB): %p\n", large);
 
-    // Notice the address difference
-    // small: near heap (lower address)
-    // large: mmap region (higher, separate)
+    // アドレスの違いに注目
+    // small: ヒープの近く（低いアドレス）
+    // large: mmap 領域（高く、別の場所）
 
-    free(large);  // glibc calls munmap() → returns to OS
-    free(small);  // Goes to malloc's free list (no syscall)
+    free(large);  // glibc が munmap() を呼ぶ → OS に返る
+    free(small);  // malloc のフリーリストに行く（システムコールなし）
 
     return 0;
 }
 ```
 
-Trace the syscalls:
+システムコールをトレースする:
 ```bash
 $ strace -e brk,mmap,munmap ./test
 brk(NULL)                               = 0x55a8b8c49000
@@ -218,167 +218,167 @@ mmap(NULL, 266240, ..., MAP_ANONYMOUS)  = 0x7f8b12345000  # Large alloc
 munmap(0x7f8b12345000, 266240)          = 0              # Large free
 ```
 
-## When glibc Returns Memory {#when-glibc-returns-memory}
+## glibcがメモリを返すとき {#when-glibc-returns-memory}
 
-### Heap (brk) memory: {#heap-brk-memory}
+### ヒープ（brk）のメモリ: {#heap-brk-memory}
 
-- Freed blocks go to malloc's free list for reuse
-- `glibc` automatically trims the heap when free space at the top exceeds `M_TRIM_THRESHOLD` (default 128KB)
-- `malloc_trim()` can force trimming, but only releases memory at the top of the heap
-- Memory in the middle of the heap cannot be returned to the OS
+- 解放されたブロックは再利用のためmallocのフリーリストに入る
+- ヒープ先頭の空き領域が `M_TRIM_THRESHOLD`（デフォルト128KB）を超えると、`glibc` は自動的にヒープをトリムする
+- `malloc_trim()` でトリムを強制できるが、解放されるのはヒープ先頭のメモリだけである
+- ヒープの途中にあるメモリはOSに返せない
 
-### mmap memory: {#mmap-memory}
+### mmapのメモリ: {#mmap-memory}
 
-- `munmap()` on free → immediate return to OS
-- RSS decreases visibly
-- Clean release regardless of allocation order
+- 解放時に `munmap()` → 即座にOSに返る
+- RSSが目に見えて減る
+- 割り当て順序にかかわらずきれいに解放される
 
 ```c
-// Force heap trimming (only affects top of heap)
+// ヒープのトリムを強制する（ヒープの先頭にのみ影響する）
 #include <malloc.h>
-malloc_trim(0);  // Returns free memory at heap top to OS
+malloc_trim(0);  // ヒープ先頭の空きメモリを OS に返す
 
-// Alternatively, use MADV_DONTNEED on specific ranges
-madvise(addr, len, MADV_DONTNEED);  // Release pages, keep mapping
+// あるいは、特定の範囲に MADV_DONTNEED を使う
+madvise(addr, len, MADV_DONTNEED);  // page を解放し、マッピングは保持する
 ```
 
-## Tuning the Threshold {#tuning-the-threshold}
+## しきい値のチューニング {#tuning-the-threshold}
 
 ```c
 #include <malloc.h>
 
-// Increase threshold: fewer mmaps, bigger heap
+// しきい値を上げる: mmap が減り、ヒープが大きくなる
 mallopt(M_MMAP_THRESHOLD, 512 * 1024);  // 512KB
 
-// Decrease threshold: more mmaps, smaller heap
+// しきい値を下げる: mmap が増え、ヒープが小さくなる
 mallopt(M_MMAP_THRESHOLD, 64 * 1024);   // 64KB
 ```
 
-Or via environment:
+あるいは環境変数で:
 ```bash
-# All allocations ≥64KB use mmap
+# 64KB 以上のすべての割り当てが mmap を使う
 export MALLOC_MMAP_THRESHOLD_=65536
 ./myprogram
 ```
 
-## Trade-offs Summary {#trade-offs-summary}
+## トレードオフのまとめ {#trade-offs-summary}
 
-| Factor | brk (heap) | mmap |
+| 要素 | brk（ヒープ） | mmap |
 |--------|------------|------|
-| Syscall overhead | Low | Per-allocation |
-| Memory return to OS | Difficult | Immediate |
-| Fragmentation | Can accumulate | Per-region only |
-| Locality | Good | Scattered |
-| TLB pressure | Low | Higher |
-| Best for | Many small allocs | Large allocs |
+| システムコールのオーバーヘッド | 小さい | 割り当てごと |
+| OSへのメモリ返却 | 難しい | 即時 |
+| 断片化 | 蓄積しうる | 領域ごとのみ |
+| 局所性 | 良い | 散らばる |
+| TLBへの負荷 | 小さい | 大きい |
+| 適した用途 | 多数の小さな割り当て | 大きな割り当て |
 
-## Historical Context {#historical-context}
+## 歴史的背景 {#historical-context}
 
-These two system calls come from different eras and were designed for different purposes.
+この2つのシステムコールは異なる時代に生まれ、異なる目的のために設計された。
 
-### brk(): The Original (1979) {#brk-the-original-1979}
+### brk(): 元祖（1979年） {#brk-the-original-1979}
 
-`brk()` appeared in [**Version 7 AT&T Unix (1979)**](https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/man/man2/brk.2) - one of the earliest Unix system calls. In the 1970s, address spaces were tiny (often 64KB total). The "program break" literally divided the program's code from its data, and you grew the heap by moving this boundary upward.
+`brk()` は[**Version 7 AT&T Unix（1979年）**](https://www.tuhs.org/cgi-bin/utree.pl?file=V7/usr/man/man2/brk.2)で登場した。最初期のUnixシステムコールの1つである。1970年代、アドレス空間はごく小さかった（合計64KBということも多かった）。「プログラムブレーク」は文字どおりプログラムのコードとデータを分けるものであり、この境界を上に動かすことでヒープを拡張した。
 
-For over a decade, `brk()` was the **only** way for applications to acquire heap memory. Every `malloc()` implementation used it.
+10年以上にわたり、`brk()` はアプリケーションがヒープメモリを得る**唯一の**方法だった。すべての `malloc()` 実装がこれを使っていた。
 
-The call is now considered a historical artifact:
+この呼び出しは今では歴史的遺物とみなされている。
 
-- Marked **LEGACY** in Single UNIX Specification v2
-- **Removed** from POSIX.1-2001
-- Linux keeps it for compatibility, but modern allocators use it less
+- Single UNIX Specification v2で**LEGACY**とされた
+- POSIX.1-2001から**削除**された
+- Linuxは互換性のために残しているが、現代のアロケータはあまり使わなくなっている
 
-### mmap(): File Mapping First (1983-1988) {#mmap-file-mapping-first-1983-1988}
+### mmap(): 最初はファイルマッピング（1983〜1988年） {#mmap-file-mapping-first-1983-1988}
 
-`mmap()` was designed for a completely different purpose: **memory-mapped files**.
+`mmap()` はまったく異なる目的のために設計された。**メモリマップドファイル**である。
 
-Timeline:
+年表:
 
-- **1983 (4.2BSD)**: API designed and documented, but not implemented
-- **~1988 (SunOS 4.0)**: First working implementation by Sun Microsystems
-- **4.3BSD-Reno**: BSD implementation (based on Mach VM, after Sun refused to share their code)
-- **4.4BSD**: Official BSD release with mmap
+- **1983年（4.2BSD）**: APIが設計・文書化されたが、実装はされなかった
+- **1988年頃（SunOS 4.0）**: Sun Microsystemsによる最初の動作する実装
+- **4.3BSD-Reno**: BSDの実装（Sunがコードの共有を拒んだため、Mach VMをベースにした）
+- **4.4BSD**: mmapを含む公式なBSDリリース
 
-The original use case was mapping file contents directly into memory - read a file by accessing memory addresses instead of calling `read()`. This had nothing to do with heap allocation.
+元々の用途は、ファイルの内容を直接メモリにマップすることだった。`read()` を呼ぶ代わりにメモリアドレスにアクセスしてファイルを読むのである。これはヒープ割り当てとは何の関係もなかった。
 
-### MAP_ANONYMOUS: The Game Changer {#map_anonymous-the-game-changer}
+### MAP_ANONYMOUS: ゲームチェンジャー {#map_anonymous-the-game-changer}
 
-The feature that made `mmap()` useful for heap allocation: **`MAP_ANONYMOUS`** (or `MAP_ANON`).
+`mmap()` をヒープ割り当てに使えるようにした機能が **`MAP_ANONYMOUS`**（または `MAP_ANON`）である。
 
-- Allows memory mappings **not backed by any file**
-- Before this existed, the workaround was `mmap("/dev/zero", ...)`
-- **`MAP_ANONYMOUS` with `MAP_PRIVATE`**: Available in early Linux (concept from [BSD's `MAP_ANON`](https://man.freebsd.org/cgi/man.cgi?query=mmap&sektion=2))
+- **どのファイルにも裏付けられていない**メモリマッピングを可能にする
+- これが存在する前は、`mmap("/dev/zero", ...)` が回避策だった
+- **`MAP_PRIVATE` と組み合わせた `MAP_ANONYMOUS`**: 初期のLinuxから利用可能（概念は[BSDの `MAP_ANON`](https://man.freebsd.org/cgi/man.cgi?query=mmap&sektion=2)に由来）
 
-#### The "Monstrosity" That Took Years {#the-monstrosity-that-took-years}
+#### 何年もかかった「怪物」 {#the-monstrosity-that-took-years}
 
-**`MAP_ANONYMOUS` with `MAP_SHARED`** has a contentious history:
+**`MAP_SHARED` と組み合わせた `MAP_ANONYMOUS`** には論争の歴史がある。
 
-**July 1996**: A.N. Kuznetsov [discovered](https://lkml.iu.edu/hypermail/linux/kernel/9607.3/0055.html) Linux 2.0 lacked this feature:
-> *"Unpleasant discovery, 2.0 has no shared anonymous mmap ??? I do not believe to my eyes..."*
+**1996年7月**: A.N. KuznetsovがLinux 2.0にこの機能がないことを[発見した](https://lkml.iu.edu/hypermail/linux/kernel/9607.3/0055.html)。
+> *"Unpleasant discovery, 2.0 has no shared anonymous mmap ??? I do not believe to my eyes..."*（訳: 不愉快な発見だ。2.0には共有匿名mmapがない？？？　自分の目が信じられない…）
 
-**Linus Torvalds [replied](https://lkml.iu.edu/hypermail/linux/kernel/9607.3/0107.html)** dismissively:
-> *"a monstrosity (even the name is a oxymoron [sic]), and it's hard to implement to boot"*
-> *"definitely 2.1, if even that"*
+**Linus Torvaldsは冷ややかに[返信した](https://lkml.iu.edu/hypermail/linux/kernel/9607.3/0107.html)**。
+> *"a monstrosity (even the name is a oxymoron [sic]), and it's hard to implement to boot"*（訳: 怪物だ（名前すら撞着語法だ [原文ママ]）。おまけに実装も難しい）
+> *"definitely 2.1, if even that"*（訳: やるとしても間違いなく2.1だ）
 
-He recommended SysV shared memory instead and wanted to "avoid shared anonymous mmap altogether."
+彼は代わりにSysV共有メモリを推奨し、「共有匿名mmapを完全に避けたい」と考えていた。
 
-**2000-2001**: **Christoph Rohland** (SAP AG) finally implemented the solution in the 2.3/2.4 development cycle by creating the **[`shmem`/`tmpfs`](https://docs.kernel.org/filesystems/tmpfs.html)** filesystem (see [`mm/shmem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c)). The clever trick: Linux creates an "artificial file-backing for anonymous pages using a RAM-based filesystem." Shared anonymous mappings aren't truly anonymous - they're backed by an invisible `tmpfs` file.
+**2000〜2001年**: **Christoph Rohland**（SAP AG）が2.3/2.4の開発サイクルで、**[`shmem`/`tmpfs`](https://docs.kernel.org/filesystems/tmpfs.html)** ファイルシステムを作ることでついに解決策を実装した（[`mm/shmem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) を参照）。巧妙な秘訣は、Linuxが「RAMベースのファイルシステムを使って匿名pageに人工的なファイルの裏付けを作る」ことである。共有匿名マッピングは本当の意味で匿名なのではなく、目に見えない `tmpfs` ファイルに裏付けられているのだ。
 
-*Note: Linux 2.4 predates git (kernel switched to git in April 2005 with 2.6.12). No commit IDs exist for pre-git history.*
+*注: Linux 2.4はgit以前のものである（カーネルがgitに移行したのは2005年4月、2.6.12のとき）。git以前の歴史にはコミットIDが存在しない。*
 
-Once `MAP_ANONYMOUS` existed, allocators could use `mmap()` for large allocations with a key advantage: `munmap()` returns memory to the OS immediately, unlike `brk()` where you can only shrink the heap from the top.
+`MAP_ANONYMOUS` が存在するようになると、アロケータは大きな割り当てに `mmap()` を使えるようになった。その重要な利点は、ヒープを先頭からしか縮められない `brk()` と異なり、`munmap()` がメモリを即座にOSに返すことである。
 
-### Why Both Survive {#why-both-survive}
+### なぜ両方が生き残っているのか {#why-both-survive}
 
-Today we have two mechanisms because they evolved for different purposes:
+今日2つの仕組みがあるのは、それぞれが異なる目的のために進化してきたからである。
 
-| Era | Mechanism | Purpose |
+| 時代 | 仕組み | 目的 |
 |-----|-----------|---------|
-| 1979 | `brk()` | Grow a single heap (the only option) |
-| 1983-88 | `mmap()` | Map files into memory |
-| 1990s+ | `mmap()` + `MAP_ANONYMOUS` | Alternative to `brk()` for heap |
+| 1979 | `brk()` | 単一のヒープを伸ばす（唯一の選択肢） |
+| 1983-88 | `mmap()` | ファイルをメモリにマップする |
+| 1990年代以降 | `mmap()` + `MAP_ANONYMOUS` | ヒープ用の `brk()` の代替 |
 
-Modern allocators like `glibc`'s `malloc` use **both**: `brk()` for the main arena (small allocations benefit from locality), `mmap()` for large allocations (clean release back to OS). This isn't elegant design - it's historical accident turned pragmatic engineering.
+`glibc` の `malloc` のような現代のアロケータは**両方**を使う。メインアリーナには `brk()`（小さな割り当ては局所性の恩恵を受ける）、大きな割り当てには `mmap()`（OSへのきれいな返却）である。これはエレガントな設計ではなく、歴史的な偶然が実用的なエンジニアリングになったものである。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
 ```bash
-# Watch brk vs mmap in action
+# brk と mmap の動作を観察する
 strace -e brk,mmap,munmap ./myprogram
 
-# See heap size
+# ヒープのサイズを見る
 cat /proc/<pid>/maps | grep heap
 
-# See all anonymous mappings
+# すべての匿名マッピングを見る
 cat /proc/<pid>/maps | grep anon
 
-# Compare RSS before/after large allocation free
+# 大きな割り当ての解放前後で RSS を比較する
 watch -n 0.5 "grep -E 'VmRSS|VmData' /proc/<pid>/status"
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `do_mmap()` and anonymous mapping implementation
-- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — `do_brk_flags()`: the kernel side of heap extension
-- [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — tmpfs backing for `MAP_SHARED | MAP_ANONYMOUS` mappings
+- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `do_mmap()` と匿名マッピングの実装
+- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — `do_brk_flags()`: ヒープ拡張のカーネル側
+- [mm/shmem.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shmem.c) — `MAP_SHARED | MAP_ANONYMOUS` マッピングのtmpfsによる裏付け
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`brk(2)`](https://man7.org/linux/man-pages/man2/brk.2.html) — system call interface; notes its POSIX legacy status
-- [`mmap(2)`](https://man7.org/linux/man-pages/man2/mmap.2.html) — full flag reference including `MAP_ANONYMOUS`, `MAP_POPULATE`, and `MAP_HUGETLB`
-- [`mallopt(3)`](https://man7.org/linux/man-pages/man3/mallopt.3.html) — glibc tuning: `M_MMAP_THRESHOLD`, `M_TRIM_THRESHOLD`
+- [`brk(2)`](https://man7.org/linux/man-pages/man2/brk.2.html) — システムコールのインターフェース。POSIXでのレガシーという位置付けについての記述がある
+- [`mmap(2)`](https://man7.org/linux/man-pages/man2/mmap.2.html) — `MAP_ANONYMOUS`、`MAP_POPULATE`、`MAP_HUGETLB` を含む全フラグのリファレンス
+- [`mallopt(3)`](https://man7.org/linux/man-pages/man3/mallopt.3.html) — glibcのチューニング: `M_MMAP_THRESHOLD`、`M_TRIM_THRESHOLD`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [mmap.md](mmap.md) — VMA structure, `mm_struct`, and the full address space layout
-- [overcommit.md](overcommit.md) — why `mmap()` can succeed even when physical RAM is insufficient
+- [mmap.md](mmap.md) — VMA構造体、`mm_struct`、アドレス空間のレイアウト全体
+- [overcommit.md](overcommit.md) — 物理RAMが足りなくても `mmap()` が成功しうる理由
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Fun with `mmap()`](https://lwn.net/Articles/657338/) — deep dive into anonymous and file-backed mappings
+- [LWN: Fun with `mmap()`](https://lwn.net/Articles/657338/) — 匿名マッピングとファイルに裏付けられたマッピングの詳解
 
-### External {#external}
+### 外部資料 {#external}
 
-- [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) — arena design, per-thread caches, and the dynamic mmap threshold algorithm
+- [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) — アリーナの設計、スレッドごとのキャッシュ、動的なmmapしきい値のアルゴリズム

@@ -1,10 +1,10 @@
-# Page Cache {#page-cache}
+# ページキャッシュ {#page-cache}
 
-> Caching file data in memory
+> ファイルデータをメモリにキャッシュする
 
-## What Is the Page Cache? {#what-is-the-page-cache}
+## ページキャッシュとは何か {#what-is-the-page-cache}
 
-The page cache keeps recently accessed file data in RAM. When you read a file, the data stays in memory - subsequent reads come from RAM instead of disk.
+ページキャッシュは、最近アクセスされたファイルデータをRAMに保持する。ファイルを読むとデータはメモリに残り、以降の読み取りはディスクではなくRAMから行われる。
 
 ```
 First read:
@@ -18,31 +18,31 @@ Application ──► Kernel ──► Page Cache (fast, ~100ns)
                            (storage not touched)
 ```
 
-## Why Page Cache? {#why-page-cache}
+## なぜページキャッシュか {#why-page-cache}
 
-### The Speed Gap {#the-speed-gap}
+### 速度の差 {#the-speed-gap}
 
-| Storage | Latency | Bandwidth |
+| ストレージ | レイテンシ | 帯域幅 |
 |---------|---------|-----------|
 | RAM | ~100ns | ~100 GB/s |
 | NVMe SSD | ~100µs | ~7 GB/s |
 | SATA SSD | ~100µs | ~600 MB/s |
 | HDD | ~10ms | ~200 MB/s |
 
-(Order-of-magnitude figures; see [Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html).)
+（桁感を示す数値である。[Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html)を参照。）
 
-RAM is 1000-100,000x faster than storage. Caching exploits temporal locality - recently accessed data is likely to be accessed again.
+RAMはストレージより1000〜100,000倍速い。キャッシュは時間的局所性、すなわち最近アクセスされたデータは再びアクセスされやすいという性質を利用する。
 
-### Benefits {#benefits}
+### 利点 {#benefits}
 
-- **Read performance**: Hot data served from RAM
-- **Write buffering**: Writes batched, not synchronous
-- **Shared data**: Multiple processes share cached pages
-- **Memory efficiency**: Unused RAM becomes cache
+- **読み取り性能**: ホットなデータはRAMから提供される
+- **書き込みのバッファリング**: 書き込みは同期的ではなくまとめて行われる
+- **データの共有**: 複数のプロセスがキャッシュされたページを共有する
+- **メモリ効率**: 使われていないRAMがキャッシュになる
 
-## How It Works {#how-it-works}
+## 仕組み {#how-it-works}
 
-### Reading Files {#reading-files}
+### ファイルの読み取り {#reading-files}
 
 ```
 read(fd, buf, 4096)
@@ -65,7 +65,7 @@ Add to page cache
 Copy to user buffer
 ```
 
-### Writing Files {#writing-files}
+### ファイルへの書き込み {#writing-files}
 
 ```
 write(fd, buf, 4096)
@@ -86,27 +86,27 @@ Return to application (write "complete")
 Writeback thread flushes to disk
 ```
 
-Writes return immediately - data is in cache, marked dirty. Background writeback handles actual disk I/O.
+書き込みは即座に戻る。データはキャッシュ内にあり、dirtyとマークされている。実際のディスクI/Oはバックグラウンドのライトバックが処理する。
 
-### The address_space Structure {#the-address_space-structure}
+### address_space構造体 {#the-address_space-structure}
 
-Each file (inode) has an `address_space` managing its cached pages:
+各ファイル（inode）は、キャッシュされたページを管理する`address_space`を持つ。
 
 ```c
 struct address_space {
-    struct inode *host;           /* Owning inode */
-    struct xarray i_pages;        /* Cached pages */
-    unsigned long nrpages;        /* Number of cached pages */
-    const struct address_space_operations *a_ops;  /* Operations */
+    struct inode *host;           /* 所有するinode */
+    struct xarray i_pages;        /* キャッシュされたページ */
+    unsigned long nrpages;        /* キャッシュされたページ数 */
+    const struct address_space_operations *a_ops;  /* 操作 */
     /* ... */
 };
 ```
 
-Pages are indexed by file offset in the XArray, enabling fast lookup.
+ページはXArray内でファイルオフセットによってインデックス付けされ、高速な検索が可能になっている。
 
-## Dirty Pages and Writeback {#dirty-pages-and-writeback}
+## dirtyページとライトバック {#dirty-pages-and-writeback}
 
-### Dirty Page Lifecycle {#dirty-page-lifecycle}
+### dirtyページのライフサイクル {#dirty-page-lifecycle}
 
 ```
 Clean page ──► write() ──► Dirty page ──► writeback ──► Clean page
@@ -115,50 +115,50 @@ Clean page ──► write() ──► Dirty page ──► writeback ──► 
                      Tracked in dirty lists
 ```
 
-### Writeback Triggers {#writeback-triggers}
+### ライトバックのトリガ {#writeback-triggers}
 
-| Trigger | When |
+| トリガ | タイミング |
 |---------|------|
-| Periodic | Every `dirty_writeback_centisecs` (default: 5s) |
-| Memory pressure | Reclaim needs to free pages |
-| sync/fsync | Explicit flush request |
-| Dirty threshold | Too many dirty pages system-wide |
-| Dirty age | Page dirty longer than `dirty_expire_centisecs` |
+| 定期 | `dirty_writeback_centisecs`ごと（デフォルト: 5秒） |
+| メモリ逼迫 | 回収がページを解放する必要があるとき |
+| sync/fsync | 明示的なフラッシュ要求 |
+| dirtyしきい値 | システム全体でdirtyページが多すぎるとき |
+| dirtyの経過時間 | ページが`dirty_expire_centisecs`より長くdirtyのままのとき |
 
-### Dirty Page Limits {#dirty-page-limits}
+### dirtyページの上限 {#dirty-page-limits}
 
-Defaults defined in [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c); tunables documented in the [vm sysctl docs](https://docs.kernel.org/admin-guide/sysctl/vm.html):
+デフォルト値は[`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c)で定義され、チューニング可能なパラメータは[vm sysctlのドキュメント](https://docs.kernel.org/admin-guide/sysctl/vm.html)に記載されている。
 
 ```bash
-# Percentage of memory that can be dirty
+# dirtyにできるメモリの割合
 cat /proc/sys/vm/dirty_ratio
-# 20 (default) - start blocking writers at 20%
+# 20 (デフォルト) - 20%で書き込み側のブロックを開始
 
-# Background writeback threshold
+# バックグラウンドライトバックのしきい値
 cat /proc/sys/vm/dirty_background_ratio
-# 10 (default) - start background writeback at 10%
+# 10 (デフォルト) - 10%でバックグラウンドライトバックを開始
 
-# Time-based settings (centiseconds)
+# 時間ベースの設定 (センチ秒)
 cat /proc/sys/vm/dirty_expire_centisecs
-# 3000 (30s) - pages older than this get written
+# 3000 (30秒) - これより古いページは書き出される
 
 cat /proc/sys/vm/dirty_writeback_centisecs
-# 500 (5s) - writeback thread wakes this often
+# 500 (5秒) - ライトバックスレッドが起床する間隔
 ```
 
-### Writeback Threads {#writeback-threads}
+### ライトバックスレッド {#writeback-threads}
 
 ```bash
-# Per-device writeback threads
+# デバイスごとのライトバックスレッド
 ps aux | grep writeback
-# kworker/u8:0+flush-8:0   (for device 8:0)
+# kworker/u8:0+flush-8:0   (デバイス8:0用)
 ```
 
-## Reading Strategies {#reading-strategies}
+## 読み取りの戦略 {#reading-strategies}
 
-### Readahead {#readahead}
+### 先読み（readahead） {#readahead}
 
-The kernel predicts sequential access and reads ahead:
+カーネルはシーケンシャルなアクセスを予測して先読みする。
 
 ```
 Application reads page 0
@@ -174,214 +174,214 @@ When application reads page 1, it's already cached
 ```
 
 ```bash
-# Default readahead (KB)
+# デフォルトの先読み量 (KB)
 cat /sys/block/sda/queue/read_ahead_kb
-# 128 (default)
+# 128 (デフォルト)
 
-# Adjust for workload
+# ワークロードに合わせて調整
 echo 256 > /sys/block/sda/queue/read_ahead_kb
 ```
 
-### mmap vs read() {#mmap-vs-read}
+### mmapとread()の比較 {#mmap-vs-read}
 
-| Method | Mechanism | Best For |
+| 方式 | 仕組み | 適した用途 |
 |--------|-----------|----------|
-| `read()` | Copy from cache to user buffer | Sequential, simple |
-| `mmap()` | Map cache pages into process address space | Random access, large files |
+| `read()` | キャッシュからユーザーバッファへコピー | シーケンシャル、単純な用途 |
+| `mmap()` | キャッシュのページをプロセスのアドレス空間にマップ | ランダムアクセス、大きなファイル |
 
-With `mmap()`, page cache pages can be directly mapped into the process address space:
+`mmap()`では、ページキャッシュのページをプロセスのアドレス空間に直接マップできる。
 
 ```c
 void *ptr = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
-/* ptr directly references page cache pages - true zero-copy */
+/* ptrはページキャッシュのページを直接参照する - 真のゼロコピー */
 
-/* With MAP_PRIVATE, writes trigger COW (copy-on-write) */
+/* MAP_PRIVATEでは、書き込みでCOW (コピーオンライト) が起きる */
 void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_PRIVATE, fd, 0);
-/* Reads are zero-copy, but writes get a private copy */
+/* 読み取りはゼロコピーだが、書き込みではプライベートなコピーが作られる */
 ```
 
-## Memory Pressure {#memory-pressure}
+## メモリ逼迫 {#memory-pressure}
 
-### Page Cache as "Free" Memory {#page-cache-as-free-memory}
+### 「空き」メモリとしてのページキャッシュ {#page-cache-as-free-memory}
 
-Linux uses "free" RAM for page cache. When applications need memory:
+Linuxは「空いている」RAMをページキャッシュに使う。アプリケーションがメモリを必要とすると、次のようになる。
 
-1. Clean cache pages are dropped immediately
-2. Dirty cache pages are written out, then dropped
-3. Application gets the memory
+1. cleanなキャッシュページは即座に破棄される
+2. dirtyなキャッシュページは書き出されてから破棄される
+3. アプリケーションがメモリを得る
 
 ```bash
-# View memory breakdown
+# メモリの内訳を見る
 cat /proc/meminfo | grep -E "MemFree|Cached|Buffers|Available"
-# MemFree:     1234567 kB   (truly free)
-# Cached:      8765432 kB   (page cache)
-# MemAvailable: 9876543 kB  (free + reclaimable cache)
+# MemFree:     1234567 kB   (本当に空いている)
+# Cached:      8765432 kB   (ページキャッシュ)
+# MemAvailable: 9876543 kB  (空き + 回収可能なキャッシュ)
 ```
 
-### Drop Caches (Testing Only) {#drop-caches-testing-only}
+### キャッシュの破棄（テスト専用） {#drop-caches-testing-only}
 
 ```bash
-# Drop clean caches (for benchmarking)
-sync  # Write dirty pages first
+# cleanなキャッシュを破棄 (ベンチマーク用)
+sync  # 先にdirtyページを書き出す
 echo 3 > /proc/sys/vm/drop_caches
-# 1 = page cache
-# 2 = dentries/inodes
-# 3 = both
+# 1 = ページキャッシュ
+# 2 = dentry/inode
+# 3 = 両方
 ```
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
-### System-Wide Cache Statistics {#system-wide-cache-statistics}
+### システム全体のキャッシュ統計 {#system-wide-cache-statistics}
 
 ```bash
-# Disk I/O counters (not direct cache hit/miss - includes readahead, direct I/O)
+# ディスクI/Oカウンタ (直接のキャッシュヒット/ミスではない - 先読みやダイレクトI/Oを含む)
 cat /proc/vmstat | grep -E "pgpgin|pgpgout"
-# pgpgin   - Pages read from disk (KB)
-# pgpgout  - Pages written to disk (KB)
+# pgpgin   - ディスクから読み込んだページ (KB)
+# pgpgout  - ディスクへ書き出したページ (KB)
 
-# Page cache size and state
+# ページキャッシュのサイズと状態
 cat /proc/meminfo | grep -E "Cached|Buffers|Dirty|Writeback"
-# Cached:      Page cache size (file-backed pages in memory)
-# Buffers:     Block device metadata cache
-# Dirty:       Pages modified, waiting to be written
-# Writeback:   Pages currently being written to disk
+# Cached:      ページキャッシュのサイズ (メモリ上のファイルバックページ)
+# Buffers:     ブロックデバイスのメタデータキャッシュ
+# Dirty:       変更され、書き出しを待っているページ
+# Writeback:   現在ディスクへ書き出し中のページ
 ```
 
-Note: Linux doesn't expose a direct "cache hit ratio" counter. High pgpgin with low Cached growth suggests cache pressure.
+注: Linuxは直接的な「キャッシュヒット率」のカウンタを公開していない。pgpginが多いのにCachedがあまり増えない場合は、キャッシュが逼迫していることを示唆する。
 
-### Per-File Cache Status {#per-file-cache-status}
+### ファイルごとのキャッシュ状態 {#per-file-cache-status}
 
 ```bash
-# Check if file is cached (using vmtouch or fincore)
+# ファイルがキャッシュされているか確認 (vmtouchまたはfincoreを使用)
 vmtouch -v /path/to/file
 # Files: 1
 # Pages: 1000 (cached: 800)
 
-# Or with fincore (coreutils)
+# あるいはfincore (coreutils) で
 fincore /path/to/file
 ```
 
-### Tracing {#tracing}
+### トレーシング {#tracing}
 
 ```bash
-# Trace page cache events
+# ページキャッシュのイベントをトレース
 echo 1 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_add_to_page_cache/enable
 echo 1 > /sys/kernel/debug/tracing/events/writeback/writeback_dirty_page/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Evolution {#evolution}
+## 変遷 {#evolution}
 
-### Origins (1990s) {#origins-1990s}
+### 起源（1990年代） {#origins-1990s}
 
-Page cache has existed since early Linux. Originally separate from the "buffer cache" (for block devices).
+ページキャッシュは初期のLinuxから存在する。当初は（ブロックデバイス用の）「バッファキャッシュ」とは別物だった。
 
-### Unified Page Cache (v2.4, 2001) {#unified-page-cache-v24-2001}
+### 統合ページキャッシュ（v2.4、2001年） {#unified-page-cache-v24-2001}
 
-Buffer cache merged into page cache. All file I/O goes through one cache.
+バッファキャッシュがページキャッシュに統合された。すべてのファイルI/Oが1つのキャッシュを通るようになった。
 
-### Radix Tree (v2.6) {#radix-tree-v26}
+### Radix Tree（v2.6） {#radix-tree-v26}
 
-Pages indexed in radix tree for fast lookup by file offset.
+ファイルオフセットで高速に検索できるよう、ページがradix treeでインデックス付けされるようになった。
 
-### XArray (v4.20, 2018) {#xarray-v420-2018}
+### XArray（v4.20、2018年） {#xarray-v420-2018}
 
-**Commit**: [a28334862993](https://git.kernel.org/linus/a28334862993) ("page cache: Finish XArray conversion") | [LKML](https://lore.kernel.org/lkml/20180611140639.17215-1-willy@infradead.org/)
+**コミット**: [a28334862993](https://git.kernel.org/linus/a28334862993) ("page cache: Finish XArray conversion") | [LKML](https://lore.kernel.org/lkml/20180611140639.17215-1-willy@infradead.org/)
 
-**Author**: Matthew Wilcox
+**作者**: Matthew Wilcox
 
-Radix tree replaced with XArray - cleaner API, same performance.
+radix treeがXArrayに置き換えられた。APIはより整理され、性能は同等である。
 
-### Folios (v5.16, 2022) {#folios-v516-2022}
+### folio（v5.16、2022年） {#folios-v516-2022}
 
-**Commit**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210430180740.2707166-1-willy@infradead.org/)
+**コミット**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210430180740.2707166-1-willy@infradead.org/)
 
-**Author**: Matthew Wilcox
+**作者**: Matthew Wilcox
 
-Folios represent one or more contiguous pages as a single unit. This abstraction reduces overhead for huge pages in the page cache and eliminates confusion about whether a function operates on a head page or any page.
+folioは1つ以上の連続したページを単一の単位として表す。この抽象化により、ページキャッシュ内のhuge pageのオーバーヘッドが減り、関数がヘッドページを扱うのか任意のページを扱うのかという混乱がなくなる。
 
-## Direct I/O (Bypassing Cache) {#direct-io-bypassing-cache}
+## ダイレクトI/O（キャッシュのバイパス） {#direct-io-bypassing-cache}
 
-Some applications bypass page cache entirely:
+アプリケーションによってはページキャッシュを完全にバイパスする。
 
 ```c
 int fd = open("file", O_RDWR | O_DIRECT);
-/* Reads/writes bypass page cache */
-/* Requires aligned buffers and sizes */
+/* 読み書きはページキャッシュをバイパスする */
+/* アラインされたバッファとサイズが必要 */
 ```
 
-**Use cases**:
+**用途**:
 
-- Databases with their own caching
-- Avoiding double-caching
-- Predictable latency
+- 独自のキャッシュを持つデータベース
+- 二重キャッシュの回避
+- 予測可能なレイテンシ
 
-**Trade-offs**:
+**トレードオフ**:
 
-- No readahead benefits
-- No write buffering
-- Application must handle caching
+- 先読みの恩恵がない
+- 書き込みのバッファリングがない
+- アプリケーションがキャッシュを扱う必要がある
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Cache Thrashing {#cache-thrashing}
+### キャッシュのスラッシング {#cache-thrashing}
 
-Working set larger than available RAM.
+ワーキングセットが利用可能なRAMより大きい。
 
-**Symptoms**: High `pgpgin`/`pgpgout`, slow I/O
+**症状**: `pgpgin`/`pgpgout`が多い、I/Oが遅い
 
-**Solutions**:
+**対策**:
 
-- Add RAM
-- Reduce working set
-- Use O_DIRECT for some workloads
+- RAMを増やす
+- ワーキングセットを減らす
+- 一部のワークロードでO_DIRECTを使う
 
-### Dirty Page Buildup {#dirty-page-buildup}
+### dirtyページの蓄積 {#dirty-page-buildup}
 
-Too many dirty pages causing write stalls.
+dirtyページが多すぎて書き込みのストールが起きる。
 
-**Symptoms**: Processes blocked in `balance_dirty_pages`
+**症状**: プロセスが`balance_dirty_pages`でブロックされる
 
-**Solutions**:
+**対策**:
 
-- Lower `dirty_ratio`
-- Faster storage
-- Reduce write rate
+- `dirty_ratio`を下げる
+- より高速なストレージ
+- 書き込みレートを下げる
 
-### Readahead Mismatch {#readahead-mismatch}
+### 先読みのミスマッチ {#readahead-mismatch}
 
-Sequential readahead hurts random workloads.
+シーケンシャルな先読みがランダムアクセスのワークロードに悪影響を与える。
 
-**Solutions**:
+**対策**:
 
-- Use `posix_fadvise(POSIX_FADV_RANDOM)`
-- Reduce `read_ahead_kb`
-- Use `madvise(MADV_RANDOM)` for mmap
+- `posix_fadvise(POSIX_FADV_RANDOM)`を使う
+- `read_ahead_kb`を減らす
+- mmapには`madvise(MADV_RANDOM)`を使う
 
-## References {#references}
+## リファレンス {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | Page cache core |
-| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | Readahead logic |
-| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | Dirty page handling |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | ページキャッシュのコア |
+| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | 先読みのロジック |
+| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | dirtyページの処理 |
 
-### Related {#related}
+### 関連 {#related}
 
-- [reclaim](reclaim.md) - How cache pages are reclaimed
-- [mmap](mmap.md) - Memory-mapped file I/O
-- [swap](swap.md) - When anonymous pages go to disk
+- [reclaim](reclaim.md) - キャッシュページがどのように回収されるか
+- [mmap](mmap.md) - メモリマップトファイルI/O
+- [swap](swap.md) - 匿名ページがディスクへ行くとき
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) — page cache core: `filemap_read()`, `filemap_fault()`, `add_to_page_cache_lru()`, and the address_space operations
-- [mm/readahead.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) — readahead logic: sequential detection, window sizing, and `page_cache_async_ra()`
-- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) — dirty page accounting and writeback throttling: `balance_dirty_pages()`, dirty ratio enforcement
-- `Documentation/admin-guide/mm/concepts.rst` — kernel documentation overview of the page cache, dirty pages, and their role in the memory lifecycle
-- [reclaim](reclaim.md) — how the kernel reclaims clean and dirty page cache pages under memory pressure
-- [mmap](mmap.md) — how file-backed mmap regions map page cache pages directly into process address space
-- [folio](folio.md) — the folio abstraction that replaced raw pages in the page cache to better support large contiguous file extents
-- [The page cache](https://lwn.net/Articles/712467/) (LWN, 2016) — detailed walkthrough of page cache internals, the address_space structure, and writeback mechanics
-- [Folios](https://lwn.net/Articles/849538/) (LWN, 2021) — rationale and design of the folio abstraction that underpins the modern page cache API
+- [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) — ページキャッシュのコア：`filemap_read()`、`filemap_fault()`、`add_to_page_cache_lru()`、およびaddress_spaceの操作
+- [mm/readahead.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) — 先読みのロジック：シーケンシャル検出、ウィンドウサイズの決定、`page_cache_async_ra()`
+- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) — dirtyページの計上とライトバックのスロットリング：`balance_dirty_pages()`、dirty ratioの強制
+- `Documentation/admin-guide/mm/concepts.rst` — ページキャッシュ、dirtyページ、およびメモリのライフサイクルにおけるその役割を概説するカーネルドキュメント
+- [reclaim](reclaim.md) — メモリ逼迫時にカーネルがcleanおよびdirtyなページキャッシュのページをどのように回収するか
+- [mmap](mmap.md) — ファイルバックのmmap領域がページキャッシュのページをプロセスのアドレス空間に直接マップする仕組み
+- [folio](folio.md) — 大きな連続したファイルエクステントをよりよくサポートするため、ページキャッシュで生のページに取って代わったfolio抽象化
+- [The page cache](https://lwn.net/Articles/712467/) (LWN, 2016) — ページキャッシュの内部、address_space構造体、ライトバックの仕組みの詳しい解説
+- [Folios](https://lwn.net/Articles/849538/) (LWN, 2021) — 現代のページキャッシュAPIの基盤となるfolio抽象化の動機と設計

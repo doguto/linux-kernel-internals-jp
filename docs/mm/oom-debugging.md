@@ -1,170 +1,170 @@
-# OOM scenarios and debugging guide {#oom-scenarios-and-debugging-guide}
+# OOMのシナリオとデバッグガイド {#oom-scenarios-and-debugging-guide}
 
-> Practical playbook for preventing, detecting, and diagnosing out-of-memory kills
+> メモリ不足によるキルを防ぎ、検出し、診断するための実践的なプレイブック
 
-This is the hands-on companion to [Running out of memory](oom.md), which covers the kernel internals. This page focuses on what to do in practice.
+これはカーネル内部を扱う[メモリ不足](oom.md)の実践編である。このページでは、実際に何をすべきかに焦点を当てる。
 
-## Preventing OOM {#preventing-oom}
+## OOMを防ぐ {#preventing-oom}
 
-### Size memory for your workload {#size-memory-for-your-workload}
+### ワークロードに合わせてメモリを見積もる {#size-memory-for-your-workload}
 
 ```bash
-# Baseline: check current usage and headroom
+# ベースライン: 現在の使用量と余裕を確認する
 free -h
 cat /proc/meminfo | grep -E "MemTotal|MemAvailable|SwapTotal|SwapFree"
 
-# Per-process RSS (top consumers)
+# プロセスごとの RSS（上位の消費者）
 ps aux --sort=-%mem | head -20
 
-# Sum of all process RSS (approximate committed memory)
+# 全プロセスの RSS の合計（おおよそのコミット済みメモリ）
 awk '/Rss:/ {sum += $2} END {print sum/1024, "MB"}' /proc/[0-9]*/smaps_rollup 2>/dev/null
 ```
 
-Rule of thumb: keep `MemAvailable` above 10-15% of `MemTotal` during peak load. If it regularly drops below that, add RAM or reduce workload.
+目安: ピーク負荷時に `MemAvailable` を `MemTotal` の10〜15%以上に保つこと。日常的にそれを下回るなら、RAMを増やすかワークロードを減らす。
 
-### Add swap {#add-swap}
+### スワップを追加する {#add-swap}
 
-Running without swap is the single most common cause of unnecessary OOM kills. Even a small swap gives the kernel a pressure valve for cold anonymous pages.
+スワップなしで運用することは、不要なOOMキルの唯一最大の原因である。小さなスワップでも、コールドな匿名pageのための圧力弁をカーネルに与える。
 
 ```bash
-# Check for existing swap
+# 既存のスワップを確認する
 swapon --show
 
-# Create a swap file (4 GB example)
-# Note: fallocate may not work on Btrfs or XFS with reflinks.
-# Use dd as a portable alternative: dd if=/dev/zero of=/swapfile bs=1M count=4096
+# スワップファイルを作成する（4GB の例）
+# 注: fallocate は Btrfs や reflink 付きの XFS では機能しないことがある。
+# 移植性のある代替として dd を使う: dd if=/dev/zero of=/swapfile bs=1M count=4096
 fallocate -l 4G /swapfile
 chmod 600 /swapfile
 mkswap /swapfile
 swapon /swapfile
 
-# Make permanent
+# 永続化する
 echo '/swapfile none swap sw 0 0' >> /etc/fstab
 
-# Tune swappiness (default 60; lower = prefer reclaiming page cache)
+# swappiness を調整する（デフォルト 60。低いほどページキャッシュの回収を優先）
 sysctl vm.swappiness=30
 ```
 
-See [What happens during swapping](swapping.md) for details on how the kernel uses swap.
+カーネルがスワップをどう使うかの詳細は[スワップ中に何が起きるか](swapping.md)を参照。
 
-### Set cgroup memory limits {#set-cgroup-memory-limits}
+### cgroupのメモリ制限を設定する {#set-cgroup-memory-limits}
 
-Cgroup limits contain runaway processes before they pressure the entire system. See [Memory Cgroups](memcg.md) for the full picture.
+cgroupの制限は、暴走したプロセスがシステム全体に圧力をかける前に封じ込める。全体像は[メモリcgroup](memcg.md)を参照。
 
 ```bash
-# systemd service (recommended)
-# In the unit file [Service] section:
+# systemd サービス（推奨）
+# ユニットファイルの [Service] セクションで:
 #   MemoryMax=2G
 #   MemoryHigh=1800M
 
-# Manual cgroup v2
+# 手動の cgroup v2
 echo 2G > /sys/fs/cgroup/myservice/memory.max
 echo 1800M > /sys/fs/cgroup/myservice/memory.high
 ```
 
-`memory.high` is a soft throttle -- the kernel slows allocations before hitting the hard `memory.max` limit. Always set both.
+`memory.high` はソフトなスロットリングである。カーネルはハードな `memory.max` 制限に達する前に割り当てを遅くする。常に両方を設定すること。
 
-### Tune watermarks {#tune-watermarks}
+### ウォーターマークをチューニングする {#tune-watermarks}
 
 ```bash
-# Give kswapd more room to work (default is often too small for servers)
+# kswapd が動く余地を増やす（デフォルトはサーバーには小さすぎることが多い）
 sysctl vm.min_free_kbytes=262144    # 256 MB
-sysctl vm.watermark_scale_factor=50 # 0.5% of zone memory per step
+sysctl vm.watermark_scale_factor=50 # 1 段階あたりゾーンメモリの 0.5%
 ```
 
-See the watermark discussion in [Running out of memory](oom.md#stage-1-watermarks-and-pressure-detection).
+[メモリ不足](oom.md#stage-1-watermarks-and-pressure-detection)のウォーターマークについての議論を参照。
 
-## Detecting approaching OOM {#detecting-approaching-oom}
+## 迫りくるOOMを検出する {#detecting-approaching-oom}
 
-Catching memory pressure before OOM fires is far better than debugging after the fact.
+OOMが発動する前にメモリ逼迫を捉える方が、事後にデバッグするよりはるかに良い。
 
-### Monitor PSI (Pressure Stall Information) {#monitor-psi-pressure-stall-information}
+### PSI（Pressure Stall Information）を監視する {#monitor-psi-pressure-stall-information}
 
-PSI (available since kernel 4.20) is the best single metric for memory pressure.
+PSI（カーネル4.20以降で利用可能）は、メモリ逼迫について唯一最良の指標である。
 
 ```bash
-# Current pressure (some = at least one task stalled, full = all tasks stalled)
+# 現在の逼迫度（some = 少なくとも 1 つのタスクがストール、full = すべてのタスクがストール）
 cat /proc/pressure/memory
 # some avg10=0.00 avg60=0.00 avg300=0.00 total=0
 # full avg10=0.00 avg60=0.00 avg300=0.00 total=0
 
-# Per-cgroup pressure
+# cgroup ごとの逼迫度
 cat /sys/fs/cgroup/myservice/memory.pressure
 ```
 
-Operational guidelines (these are heuristics, not kernel-defined limits — tune for your workload):
+運用上の指針（これらは経験則であり、カーネルが定義した制限ではない。ワークロードに合わせて調整すること）:
 
-| `some avg10` | Meaning |
+| `some avg10` | 意味 |
 |-------------|---------|
-| < 5%  | Healthy |
-| 5-20% | Moderate pressure, investigate |
-| > 20% | Severe pressure, OOM likely if sustained |
+| < 5%  | 健全 |
+| 5-20% | 中程度の逼迫、調査すべき |
+| > 20% | 深刻な逼迫、持続すればOOMの可能性が高い |
 
-**PSI trigger for automated response** (cgroup v2):
+**自動対応のためのPSIトリガー**（cgroup v2）:
 
 ```bash
-# PSI triggers require holding the fd open — a shell echo will not work
-# because closing the fd destroys the trigger (psi_fop_release() calls
-# psi_trigger_destroy()). Use a program that holds the fd open and
-# calls poll()/epoll(). Example trigger format:
-#   "some 500000 2000000"  (500ms of stall time within a 2s window)
-# See kernel docs: Documentation/accounting/psi.rst
+# PSI トリガーは fd を開いたままにする必要がある — シェルの echo では機能しない。
+# fd を閉じるとトリガーが破棄されるからである（psi_fop_release() が
+# psi_trigger_destroy() を呼ぶ）。fd を開いたまま保持し、
+# poll()/epoll() を呼ぶプログラムを使うこと。トリガーの形式の例:
+#   "some 500000 2000000"  （2 秒のウィンドウ内で 500ms のストール時間）
+# カーネルドキュメントを参照: Documentation/accounting/psi.rst
 ```
 
-### Track MemAvailable {#track-memavailable}
+### MemAvailableを追跡する {#track-memavailable}
 
 ```bash
-# One-liner: log MemAvailable every 10 seconds
+# ワンライナー: 10 秒ごとに MemAvailable を記録する
 while true; do
   date +%H:%M:%S | tr '\n' ' '
   awk '/MemAvailable/ {print $2/1024, "MB"}' /proc/meminfo
   sleep 10
 done
 
-# Alert if MemAvailable drops below 5%
+# MemAvailable が 5% を下回ったら警告する
 awk '/MemTotal/ {total=$2} /MemAvailable/ {avail=$2}
      END {pct=avail*100/total; if (pct < 5) print "WARNING: MemAvailable at " pct "%"}' /proc/meminfo
 ```
 
-### Watch vmstat counters {#watch-vmstat-counters}
+### vmstatのカウンタを監視する {#watch-vmstat-counters}
 
 ```bash
-# Real-time view (1-second interval)
+# リアルタイム表示（1 秒間隔）
 vmstat 1
 
-# Key columns:
-#   si/so  = swap in/out (KB/s) -- nonzero means active swapping
-#   free   = free memory (KB)
-#   buff/cache = reclaimable memory
+# 主な列:
+#   si/so  = スワップイン/アウト（KB/s）-- 非ゼロは活発にスワップしていることを意味する
+#   free   = 空きメモリ（KB）
+#   buff/cache = 回収可能なメモリ
 
-# Detailed counters for reclaim activity
+# 回収活動の詳細なカウンタ
 watch -n 1 'grep -E "allocstall|pgscan_direct|pgsteal|oom_kill" /proc/vmstat'
 ```
 
-| Counter | What it means |
+| カウンタ | 意味 |
 |---------|---------------|
-| `allocstall_normal` | Direct reclaim events (allocating process blocked) |
-| `pgscan_direct` | Pages scanned during direct reclaim |
-| `pgsteal_direct` | Pages successfully reclaimed in direct reclaim |
-| `oom_kill` | Total OOM kills since boot |
+| `allocstall_normal` | 直接回収のイベント（割り当てたプロセスがブロックされる） |
+| `pgscan_direct` | 直接回収中にスキャンされたpage |
+| `pgsteal_direct` | 直接回収で回収に成功したpage |
+| `oom_kill` | 起動以降のOOMキルの総数 |
 
-If `allocstall` is rising, the system is under memory pressure and headed toward OOM.
+`allocstall` が増加しているなら、システムはメモリ逼迫状態にあり、OOMに向かっている。
 
-## Analyzing OOM after the fact {#analyzing-oom-after-the-fact}
+## 事後にOOMを分析する {#analyzing-oom-after-the-fact}
 
-### Reading the OOM kill log {#reading-the-oom-kill-log}
+### OOMキルのログを読む {#reading-the-oom-kill-log}
 
 ```bash
-# Find OOM events in kernel log
+# カーネルログから OOM イベントを探す
 dmesg -T | grep -i "out of memory"
 dmesg -T | grep -i "oom"
 
-# On systemd systems (persisted across reboots)
+# systemd のシステムでは（再起動をまたいで保持される）
 journalctl -k --grep="Out of memory"
 journalctl -k --grep="oom" --since="2024-01-01"
 ```
 
-A typical OOM message looks like:
+典型的なOOMメッセージは次のようになる。
 
 ```
 [Thu Jan  4 03:14:15 2024] myapp invoked oom-killer: gfp_mask=0x100cca(GFP_HIGHUSER_MOVABLE), order=0, oom_score_adj=0
@@ -176,62 +176,62 @@ A typical OOM message looks like:
                            shmem-rss:0kB, UID:1000 pgtables:8192kB oom_score_adj:0
 ```
 
-Key fields to check:
+確認すべき主なフィールド:
 
-| Field | What to look for |
+| フィールド | 見るべき点 |
 |-------|-----------------|
-| `gfp_mask` | Allocation type that triggered OOM. `GFP_KERNEL` = kernel allocation, `GFP_HIGHUSER_MOVABLE` = userspace page |
-| `order` | 0 = single page (real OOM). Higher orders may be fragmentation, not true OOM |
-| `anon-rss` | Anonymous resident memory of the killed process |
-| `oom_score_adj` | Was the victim protected or targeted? |
-| `Mem-Info` section | System-wide memory state at time of kill |
+| `gfp_mask` | OOMを引き起こした割り当ての種類。`GFP_KERNEL` = カーネルの割り当て、`GFP_HIGHUSER_MOVABLE` = ユーザー空間のpage |
+| `order` | 0 = 単一page（本当のOOM）。それより高いorderは本当のOOMではなく断片化の可能性がある |
+| `anon-rss` | キルされたプロセスの匿名常駐メモリ |
+| `oom_score_adj` | 犠牲者は保護されていたか、標的にされていたか？ |
+| `Mem-Info` セクション | キル時点のシステム全体のメモリ状態 |
 
-!!! tip "order > 0 kills"
-    If `order` is greater than 0, the system may not actually be out of memory -- it could be a fragmentation issue. Check if `MemAvailable` was still reasonable in the Mem-Info dump. See [Compaction](compaction.md) for details.
+!!! tip "order > 0でのキル"
+    `order` が0より大きい場合、システムは実際にはメモリ不足ではないかもしれない。断片化の問題である可能性がある。Mem-Infoダンプで `MemAvailable` がまだ妥当な値だったかを確認すること。詳細は[コンパクション](compaction.md)を参照。
 
-### Correlate with monitoring {#correlate-with-monitoring}
+### 監視データと突き合わせる {#correlate-with-monitoring}
 
-The OOM log only captures a snapshot. Correlate with external monitoring to understand the trend:
+OOMログはスナップショットしか捉えない。傾向を理解するには、外部の監視データと突き合わせること。
 
 ```bash
-# Check if the cgroup hit its limit (not system-wide OOM)
+# cgroup が制限に達したかを確認する（システム全体の OOM ではない）
 cat /sys/fs/cgroup/myservice/memory.events
-# Look for oom and oom_kill counters > 0
+# oom と oom_kill のカウンタが 0 より大きいかを見る
 
-# Check peak usage
+# ピーク使用量を確認する
 cat /sys/fs/cgroup/myservice/memory.peak
 
-# Was swap available?
+# スワップは利用可能だったか？
 dmesg -T | grep -A 50 "invoked oom-killer" | grep -i swap
 ```
 
-Questions to answer:
+答えるべき問い:
 
-1. **Was it system-wide or cgroup-scoped?** Check if the OOM log mentions a specific cgroup.
-2. **Was swap available?** If `SwapFree` was 0 in the Mem-Info dump, adding swap would have helped.
-3. **Was memory steadily growing (leak) or did it spike?** Correlate with your time-series monitoring.
-4. **Which process was actually consuming memory?** The killed process is the largest, not necessarily the leaker.
+1. **システム全体か、cgroupスコープか？** OOMログが特定のcgroupに言及しているか確認する。
+2. **スワップは利用可能だったか？** Mem-Infoダンプで `SwapFree` が0だったなら、スワップを追加していれば助けになっただろう。
+3. **メモリは着実に増えていたか（リーク）、それとも急増したか？** 時系列の監視データと突き合わせる。
+4. **実際にメモリを消費していたのはどのプロセスか？** キルされたプロセスは最大のものであって、リークしているものとは限らない。
 
-## Common misconfigurations {#common-misconfigurations}
+## よくある設定ミス {#common-misconfigurations}
 
-### No swap {#no-swap}
+### スワップなし {#no-swap}
 
-Without swap, anonymous pages (heap, stack) cannot be reclaimed at all. The kernel can only reclaim page cache, and once that is exhausted, OOM is immediate.
+スワップがないと、匿名page（ヒープ、スタック）はまったく回収できない。カーネルはページキャッシュしか回収できず、それが尽きるとすぐにOOMになる。
 
 ```bash
-# Check
+# 確認する
 swapon --show
-# If empty, you have no swap -- add some (see above)
+# 空ならスワップがない -- 追加すること（上記参照）
 ```
 
-Even SSDs benefit from swap. The kernel preferentially swaps cold pages that haven't been touched in minutes or hours.
+SSDでもスワップの恩恵はある。カーネルは何分も何時間も触れられていないコールドなpageを優先的にスワップする。
 
-### Too many OOM-protected processes {#too-many-oom-protected-processes}
+### OOM保護されたプロセスが多すぎる {#too-many-oom-protected-processes}
 
-Setting `oom_score_adj=-1000` on multiple processes leaves the OOM killer with no good victims.
+複数のプロセスに `oom_score_adj=-1000` を設定すると、OOMキラーに良い犠牲者が残らなくなる。
 
 ```bash
-# Find all OOM-protected processes
+# OOM 保護されたプロセスをすべて探す
 for pid in /proc/[0-9]*; do
   adj=$(cat "$pid/oom_score_adj" 2>/dev/null)
   if [ "$adj" = "-1000" ]; then
@@ -241,173 +241,173 @@ for pid in /proc/[0-9]*; do
 done
 ```
 
-If the only killable processes are tiny (low RSS), the OOM killer may loop without freeing enough memory, or the system may hang. Protect only the one or two truly critical processes (e.g., database, init).
+キル可能なプロセスが小さなもの（RSSが少ないもの）だけだと、OOMキラーは十分なメモリを解放できずにループするか、システムがハングするかもしれない。本当に重要な1つか2つのプロセス（例: データベース、init）だけを保護すること。
 
-### Cgroup limits too tight {#cgroup-limits-too-tight}
+### cgroupの制限が厳しすぎる {#cgroup-limits-too-tight}
 
-A cgroup limit that matches normal usage with no headroom causes OOM kills during minor spikes.
+通常の使用量に合わせて余裕なしに設定したcgroupの制限は、わずかな急増でOOMキルを引き起こす。
 
 ```bash
-# Check how close the cgroup is to its limit
+# cgroup が制限にどれだけ近いかを確認する
 echo "Current: $(cat /sys/fs/cgroup/myservice/memory.current)"
 echo "Max:     $(cat /sys/fs/cgroup/myservice/memory.max)"
 echo "Peak:    $(cat /sys/fs/cgroup/myservice/memory.peak)"
 
-# Check for throttling events (memory.high breaches)
+# スロットリングのイベント（memory.high の超過）を確認する
 cat /sys/fs/cgroup/myservice/memory.events | grep high
 ```
 
-Set `memory.max` at least 20-30% above typical peak usage. Use `memory.high` at the actual target to get throttling (graceful slowdown) rather than kills.
+`memory.max` は典型的なピーク使用量より少なくとも20〜30%上に設定すること。実際の目標値には `memory.high` を使い、キルではなくスロットリング（緩やかな減速）が起きるようにする。
 
-### Overcommit misconfiguration {#overcommit-misconfiguration}
+### オーバーコミットの設定ミス {#overcommit-misconfiguration}
 
 ```bash
-# Check overcommit policy
+# オーバーコミットポリシーを確認する
 cat /proc/sys/vm/overcommit_memory
-# 0 = heuristic (default, usually fine)
-# 1 = always overcommit (dangerous: no malloc failures, just OOM kills)
-# 2 = strict accounting (may reject allocations too aggressively)
+# 0 = ヒューリスティック（デフォルト、通常は問題ない）
+# 1 = 常にオーバーコミット（危険: malloc は失敗せず、OOM キルになるだけ）
+# 2 = 厳格なアカウンティング（割り当てを過度に拒否することがある）
 
-cat /proc/sys/vm/overcommit_ratio  # Used with mode 2 (percentage of RAM)
+cat /proc/sys/vm/overcommit_ratio  # モード 2 で使われる（RAM に対する割合）
 ```
 
-See [Memory Overcommit](overcommit.md) for the full explanation.
+詳しい説明は[メモリのオーバーコミット](overcommit.md)を参照。
 
-## Testing OOM handling {#testing-oom-handling}
+## OOM処理をテストする {#testing-oom-handling}
 
-### stress-ng: controlled memory pressure {#stress-ng-controlled-memory-pressure}
+### stress-ng: 制御されたメモリ逼迫 {#stress-ng-controlled-memory-pressure}
 
 ```bash
-# Allocate 90% of available memory across 4 workers
+# 4 つのワーカーで利用可能なメモリの 90% を割り当てる
 stress-ng --vm 4 --vm-bytes 90% --vm-keep --timeout 60s
 
-# Trigger OOM deliberately (allocate more than available)
+# 意図的に OOM を起こす（利用可能量より多く割り当てる）
 stress-ng --vm 2 --vm-bytes 120% --vm-keep --timeout 30s
 
-# Gradual pressure ramp (useful with monitoring)
+# 段階的に逼迫を高める（監視と組み合わせると有用）
 stress-ng --vm 1 --vm-bytes 50% --vm-method all --vm-keep --timeout 120s
 ```
 
-### Cgroup-based controlled OOM {#cgroup-based-controlled-oom}
+### cgroupによる制御されたOOM {#cgroup-based-controlled-oom}
 
-Test OOM within a cgroup without risking the host:
+ホストを危険にさらさずに、cgroup内でOOMをテストする。
 
 ```bash
-# Create a test cgroup with a small limit
+# 小さな制限のテスト用 cgroup を作成する
 mkdir -p /sys/fs/cgroup/oom-test
 echo 100M > /sys/fs/cgroup/oom-test/memory.max
 echo $$ > /sys/fs/cgroup/oom-test/cgroup.procs
 
-# Allocate more than the limit (will trigger cgroup OOM)
+# 制限より多く割り当てる（cgroup の OOM を引き起こす）
 stress-ng --vm 1 --vm-bytes 200M --vm-keep --timeout 10s
 
-# Check that OOM fired within the cgroup
+# cgroup 内で OOM が発動したことを確認する
 cat /sys/fs/cgroup/oom-test/memory.events | grep oom
 
-# Clean up: move shell back to root cgroup
+# 後片付け: シェルをルート cgroup に戻す
 echo $$ > /sys/fs/cgroup/cgroup.procs
 rmdir /sys/fs/cgroup/oom-test
 ```
 
-### oom_score_adj manipulation {#oomscoreadj-manipulation}
+### oom_score_adjの操作 {#oomscoreadj-manipulation}
 
 ```bash
-# Make a specific process the OOM target
+# 特定のプロセスを OOM の標的にする
 echo 1000 > /proc/$PID/oom_score_adj
 
-# Verify scores
+# スコアを確認する
 for pid in $(pgrep -x myapp); do
   echo "PID $pid: score=$(cat /proc/$pid/oom_score) adj=$(cat /proc/$pid/oom_score_adj)"
 done
 ```
 
-### Verify your application handles OOM gracefully {#verify-your-application-handles-oom-gracefully}
+### アプリケーションがOOMを適切に処理するか確認する {#verify-your-application-handles-oom-gracefully}
 
 ```bash
-# Check if a process restarted after OOM (systemd)
+# OOM の後にプロセスが再起動したかを確認する（systemd）
 systemctl status myservice
-# Look for: "Main process exited, code=killed, status=9/KILL"
+# 探すもの: "Main process exited, code=killed, status=9/KILL"
 
-# Confirm systemd will restart it
+# systemd が再起動することを確認する
 systemctl show myservice | grep Restart=
 ```
 
-## Userspace OOM handlers {#userspace-oom-handlers}
+## ユーザー空間のOOMハンドラ {#userspace-oom-handlers}
 
 ### systemd-oomd {#systemd-oomd}
 
-`systemd-oomd` (introduced in [systemd 247](https://github.com/systemd/systemd/blob/v247/NEWS), stabilized in [248](https://github.com/systemd/systemd/blob/v248/NEWS)) kills processes based on PSI pressure and swap usage before the kernel OOM killer fires. It acts earlier and more predictably.
+`systemd-oomd`（[systemd 247](https://github.com/systemd/systemd/blob/v247/NEWS)で導入され、[248](https://github.com/systemd/systemd/blob/v248/NEWS)で安定化）は、カーネルのOOMキラーが発動する前に、PSIの逼迫度とスワップ使用量に基づいてプロセスをキルする。より早く、より予測可能に動作する。
 
 ```bash
-# Check if running
+# 動作しているか確認する
 systemctl status systemd-oomd
 
-# View configuration
+# 設定を表示する
 cat /etc/systemd/oomd.conf
 # [OOM]
 # SwapUsedLimit=90%
 # DefaultMemoryPressureDurationSec=20s
 
-# Per-service overrides (in unit file)
+# サービスごとの上書き（ユニットファイル内）
 # [Service]
 # ManagedOOMSwap=kill
 # ManagedOOMMemoryPressure=kill
 # ManagedOOMMemoryPressureLimit=80%
 ```
 
-How it differs from the kernel OOM killer:
+カーネルのOOMキラーとの違い:
 
-| Aspect | Kernel OOM | systemd-oomd |
+| 観点 | カーネルのOOM | systemd-oomd |
 |--------|-----------|--------------|
-| Trigger | Allocation failure after reclaim exhaustion | PSI threshold or swap usage |
-| Scope | System-wide or per-cgroup | Per-cgroup (systemd slices) |
-| Reaction time | Last resort (late) | Configurable (early) |
-| Victim selection | Highest `oom_score` | Highest memory usage in cgroup |
-| Configuration | `/proc/*/oom_score_adj` | Unit file directives |
+| トリガー | 回収を尽くした後の割り当て失敗 | PSIのしきい値またはスワップ使用量 |
+| スコープ | システム全体またはcgroupごと | cgroupごと（systemdのスライス） |
+| 反応時間 | 最後の手段（遅い） | 設定可能（早い） |
+| 犠牲者の選択 | `oom_score` が最大のもの | cgroup内でメモリ使用量が最大のもの |
+| 設定 | `/proc/*/oom_score_adj` | ユニットファイルのディレクティブ |
 
-### Other userspace handlers {#other-userspace-handlers}
+### その他のユーザー空間ハンドラ {#other-userspace-handlers}
 
-**earlyoom** -- lightweight daemon, popular on desktops:
+**earlyoom** -- 軽量なデーモンで、デスクトップで人気がある:
 
 ```bash
-# Install and configure
-# earlyoom monitors MemAvailable% and SwapFree%
-# Default: kill when both drop below 10%
-earlyoom -m 5 -s 5    # Kill at 5% memory and 5% swap remaining
+# インストールして設定する
+# earlyoom は MemAvailable% と SwapFree% を監視する
+# デフォルト: 両方が 10% を下回るとキルする
+earlyoom -m 5 -s 5    # メモリ残り 5%、スワップ残り 5% でキルする
 ```
 
-**nohang** -- more configurable alternative to earlyoom, supports PSI triggers and custom actions per-process.
+**nohang** -- earlyoomよりも設定の自由度が高い代替で、PSIトリガーとプロセスごとのカスタムアクションをサポートする。
 
-### When to use userspace OOM handlers {#when-to-use-userspace-oom-handlers}
+### ユーザー空間のOOMハンドラをいつ使うか {#when-to-use-userspace-oom-handlers}
 
-- Desktops/workstations: earlyoom or systemd-oomd prevent the system from becoming unresponsive.
-- Container hosts: systemd-oomd with per-slice policies gives predictable behavior.
-- Servers with critical services: userspace handlers can make smarter kill decisions than the kernel.
+- デスクトップ/ワークステーション: earlyoomやsystemd-oomdはシステムが応答しなくなるのを防ぐ。
+- コンテナホスト: スライスごとのポリシーを持つsystemd-oomdは予測可能な挙動をもたらす。
+- 重要なサービスを持つサーバー: ユーザー空間のハンドラはカーネルより賢いキルの判断を下せる。
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
-### One-page diagnostic checklist {#one-page-diagnostic-checklist}
+### 1ページの診断チェックリスト {#one-page-diagnostic-checklist}
 
 ```bash
-# 1. Is swap available?
+# 1. スワップは利用可能か？
 swapon --show
 
-# 2. Current memory state
+# 2. 現在のメモリ状態
 free -h
 
-# 3. Memory pressure (kernel 4.20+)
+# 3. メモリ逼迫度（カーネル 4.20 以降）
 cat /proc/pressure/memory
 
-# 4. Top memory consumers
+# 4. メモリ消費の上位
 ps aux --sort=-%mem | head -10
 
-# 5. Recent OOM events
+# 5. 最近の OOM イベント
 dmesg -T | grep -i "out of memory"
 
-# 6. Direct reclaim activity (rising = trouble)
+# 6. 直接回収の活動（増加 = 問題あり）
 grep -E "allocstall|oom_kill" /proc/vmstat
 
-# 7. Cgroup limits and events
+# 7. cgroup の制限とイベント
 for cg in /sys/fs/cgroup/*/; do
   if [ -f "$cg/memory.max" ]; then
     max=$(cat "$cg/memory.max")
@@ -415,14 +415,14 @@ for cg in /sys/fs/cgroup/*/; do
   fi
 done
 
-# 8. OOM-protected processes
+# 8. OOM 保護されたプロセス
 grep "^-1000$" /proc/*/oom_score_adj 2>/dev/null | head -20
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Running out of memory](oom.md) -- kernel OOM internals (watermarks, reclaim stages, OOM killer scoring)
-- [Memory Cgroups](memcg.md) -- cgroup memory limits and accounting
-- [Memory Overcommit](overcommit.md) -- how Linux promises more memory than it has
-- [What happens during swapping](swapping.md) -- the swap subsystem in detail
-- [Page Reclaim](reclaim.md) -- how the kernel reclaims memory before resorting to OOM
+- [メモリ不足](oom.md) -- カーネルのOOMの内部（ウォーターマーク、回収の段階、OOMキラーのスコアリング）
+- [メモリcgroup](memcg.md) -- cgroupのメモリ制限とアカウンティング
+- [メモリのオーバーコミット](overcommit.md) -- Linuxが持っている以上のメモリをどう約束するか
+- [スワップ中に何が起きるか](swapping.md) -- スワップサブシステムの詳細
+- [ページ回収](reclaim.md) -- OOMに頼る前にカーネルがどうメモリを回収するか

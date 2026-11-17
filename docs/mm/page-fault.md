@@ -1,10 +1,10 @@
-# Page Fault Handler {#page-fault-handler}
+# ページフォールトハンドラ {#page-fault-handler}
 
-> From hardware exception to page mapped: the complete fault path
+> ハードウェア例外からページのマッピングまで：フォールト処理パスの全体像
 
-## Hardware page fault {#hardware-page-fault}
+## ハードウェアページフォールト {#hardware-page-fault}
 
-When the CPU encounters a virtual address that isn't mapped in the page tables, it raises a **page fault exception** (#PF on x86):
+CPUがページテーブルにマッピングされていない仮想アドレスに遭遇すると、**ページフォールト例外**（x86では#PF）を発生させる。
 
 ```
 CPU accesses virtual address 0x7fff1234
@@ -14,9 +14,9 @@ CPU accesses virtual address 0x7fff1234
   → jumps to IDT entry 14 → kernel's fault handler
 ```
 
-## x86 page fault error codes {#x86-page-fault-error-codes}
+## x86のページフォールトエラーコード {#x86-page-fault-error-codes}
 
-The error code pushed by the CPU describes the fault:
+CPUがスタックに積むエラーコードがフォールトの内容を表す。
 
 ```
 Bit 0 (P):   0 = not present (PTE absent)
@@ -35,23 +35,23 @@ Bit 15 (SS): 1 = shadow stack access
 
 ```c
 /* arch/x86/mm/fault.c */
-#define X86_PF_PROT   (1 << 0)   /* PTE present: protection violation */
-#define X86_PF_WRITE  (1 << 1)   /* write access */
-#define X86_PF_USER   (1 << 2)   /* from userspace */
-#define X86_PF_RSVD   (1 << 3)   /* reserved bit in PTE */
-#define X86_PF_INSTR  (1 << 4)   /* instruction fetch */
-#define X86_PF_PK     (1 << 5)   /* protection key */
+#define X86_PF_PROT   (1 << 0)   /* PTEは存在: 保護違反 */
+#define X86_PF_WRITE  (1 << 1)   /* 書き込みアクセス */
+#define X86_PF_USER   (1 << 2)   /* ユーザー空間から */
+#define X86_PF_RSVD   (1 << 3)   /* PTEの予約ビット */
+#define X86_PF_INSTR  (1 << 4)   /* 命令フェッチ */
+#define X86_PF_PK     (1 << 5)   /* 保護キー */
 ```
 
-`CR2` register holds the **faulting virtual address** at the time of the fault.
+`CR2`レジスタには、フォールト発生時の**フォールトを起こした仮想アドレス**が格納される。
 
-## Kernel entry point {#kernel-entry-point}
+## カーネルのエントリポイント {#kernel-entry-point}
 
 ```c
 /* arch/x86/mm/fault.c */
 DEFINE_IDTENTRY_RAW_ERRORCODE(exc_page_fault)
 {
-    unsigned long address = read_cr2();  /* faulting virtual address */
+    unsigned long address = read_cr2();  /* フォールトを起こした仮想アドレス */
 
     irqentry_state_t state = irqentry_enter(regs);
     handle_page_fault(regs, error_code, address);
@@ -63,9 +63,9 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
                    unsigned long address)
 {
     if (unlikely(kmmio_fault(regs, address)))
-        return;  /* MMIO trace: handled */
+        return;  /* MMIOトレース: 処理済み */
 
-    /* Was fault in kernel space? */
+    /* フォールトはカーネル空間で起きたか? */
     if (unlikely(fault_in_kernel_space(address)))
         do_kern_addr_fault(regs, error_code, address);
     else
@@ -73,7 +73,7 @@ handle_page_fault(struct pt_regs *regs, unsigned long error_code,
 }
 ```
 
-## User-space fault path {#user-space-fault-path}
+## ユーザー空間のフォールトパス {#user-space-fault-path}
 
 ```c
 /* arch/x86/mm/fault.c */
@@ -86,36 +86,36 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
     struct mm_struct *mm = tsk->mm;
     vm_fault_t fault;
 
-    /* 1. Check for obvious non-canonical addresses */
+    /* 1. 明らかに非カノニカルなアドレスを確認 */
     if (unlikely(error_code & X86_PF_RSVD))
         goto bad_area;
 
-    /* 2. Don't handle faults while holding mmap_lock for write */
+    /* 2. mmap_lockを書き込みで保持している間はフォールトを処理しない */
     if (unlikely(faulthandler_disabled() || !mm))
         goto bad_area_nosemaphore;
 
-    /* 3. Find the VMA that should contain 'address' */
+    /* 3. 'address'を含むはずのVMAを探す */
     vma = lock_vma_under_rcu(mm, address);
     if (!vma) {
-        /* No VMA: try mmap_lock path */
+        /* VMAなし: mmap_lockのパスを試す */
         mmap_read_lock(mm);
         vma = find_vma(mm, address);
     }
 
-    /* 4. Check the VMA covers the faulting address */
+    /* 4. VMAがフォールトアドレスをカバーしているか確認 */
     if (unlikely(!vma || address < vma->vm_start))
         goto bad_area;
 
-    /* 5. Check access permissions against VMA flags */
+    /* 5. VMAフラグに対してアクセス権を確認 */
     if (unlikely(access_error(error_code, vma)))
         goto bad_area;
 
-    /* 6. Handle the fault */
+    /* 6. フォールトを処理 */
     fault = handle_mm_fault(vma, address, flags, regs);
 
-    /* 7. Check for fault completion */
+    /* 7. フォールトの完了状態を確認 */
     if (fault_signal_pending(fault, regs))
-        return;  /* signal arrived during fault */
+        return;  /* フォールト処理中にシグナルが到着 */
 
     if (unlikely(fault & VM_FAULT_ERROR)) {
         if (fault & VM_FAULT_OOM)
@@ -128,17 +128,17 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
     return;
 
 bad_area:
-    /* VMA not found or permission denied */
+    /* VMAが見つからない、またはアクセス拒否 */
     force_sig_fault(SIGSEGV, SEGV_MAPERR, (void __user *)address);
     return;
 
 do_sigbus:
-    /* Hardware error or VM_FAULT_HWPOISON */
+    /* ハードウェアエラーまたはVM_FAULT_HWPOISON */
     force_sig_fault(SIGBUS, BUS_ADRERR, (void __user *)address);
 }
 ```
 
-## Fault types and their handling {#fault-types-and-their-handling}
+## フォールトの種類とその処理 {#fault-types-and-their-handling}
 
 ```c
 /* mm/memory.c */
@@ -147,11 +147,11 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma,
                              unsigned int flags,
                              struct pt_regs *regs)
 {
-    /* Handle huge page faults first */
+    /* まずhuge pageのフォールトを処理 */
     if (unlikely(is_vm_hugetlb_page(vma)))
         return hugetlb_fault(vma->vm_mm, vma, address, flags);
 
-    /* THP: transparent huge page fault */
+    /* THP: transparent huge pageのフォールト */
     if (pmd_none(*vmf.pmd) && hugepage_vma_check(vma, vm_flags))
         return create_huge_pmd(vmf);
 
@@ -171,43 +171,43 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
     }
 
     if (!vmf->pte || pte_none(entry)) {
-        /* No PTE: anonymous or file-backed fault */
+        /* PTEなし: 匿名またはファイルバックのフォールト */
         if (vma_is_anonymous(vmf->vma))
-            return do_anonymous_page(vmf);  /* demand-zero page */
+            return do_anonymous_page(vmf);  /* デマンドゼロページ */
         else
-            return do_fault(vmf);           /* file-backed: filemap_fault */
+            return do_fault(vmf);           /* ファイルバック: filemap_fault */
     }
 
     if (!pte_present(entry)) {
-        /* PTE exists but page not present: swapped out */
-        return do_swap_page(vmf);           /* swap in the page */
+        /* PTEはあるがページが存在しない: スワップアウト済み */
+        return do_swap_page(vmf);           /* ページをスワップイン */
     }
 
-    /* Present PTE: must be a write fault on read-only PTE */
+    /* PTEが存在: 読み取り専用PTEへの書き込みフォールトのはず */
     if (vmf->flags & FAULT_FLAG_WRITE) {
         if (!pte_write(entry))
-            return do_wp_page(vmf);         /* copy-on-write */
+            return do_wp_page(vmf);         /* コピーオンライト */
     }
 
-    /* Spurious fault or soft dirty tracking */
+    /* スプリアスフォールトまたはsoft dirty追跡 */
     return 0;
 }
 ```
 
-## Fault types summary {#fault-types-summary}
+## フォールトの種類のまとめ {#fault-types-summary}
 
-| PTE state | Access type | Handler | Description |
+| PTEの状態 | アクセス種別 | ハンドラ | 説明 |
 |-----------|------------|---------|-------------|
-| No PTE, anonymous VMA | Read/Write | `do_anonymous_page` | Demand-zero page |
-| No PTE, file VMA | Read | `do_read_fault` → `filemap_fault` | Demand page from file |
-| No PTE, file VMA | Write | `do_cow_fault` | Copy-on-write from file |
-| Swap PTE | Any | `do_swap_page` | Swap in from disk |
-| Present, read-only | Write | `do_wp_page` | COW or shared dirty |
-| No VMA | Any | SIGSEGV | Segmentation fault |
-| VMA: no write perm | Write | SIGSEGV | Permission denied |
-| VMA: no exec perm | Fetch | SIGSEGV | NX violation |
+| PTEなし、匿名VMA | 読み取り/書き込み | `do_anonymous_page` | デマンドゼロページ |
+| PTEなし、ファイルVMA | 読み取り | `do_read_fault` → `filemap_fault` | ファイルからのデマンドページング |
+| PTEなし、ファイルVMA | 書き込み | `do_cow_fault` | ファイルからのコピーオンライト |
+| スワップPTE | 任意 | `do_swap_page` | ディスクからスワップイン |
+| 存在、読み取り専用 | 書き込み | `do_wp_page` | COWまたは共有dirty化 |
+| VMAなし | 任意 | SIGSEGV | セグメンテーション違反 |
+| VMA: 書き込み権限なし | 書き込み | SIGSEGV | アクセス拒否 |
+| VMA: 実行権限なし | フェッチ | SIGSEGV | NX違反 |
 
-## do_anonymous_page: demand-zero page {#doanonymouspage-demand-zero-page}
+## do_anonymous_page: デマンドゼロページ {#doanonymouspage-demand-zero-page}
 
 ```c
 /* mm/memory.c */
@@ -218,20 +218,20 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
     pte_t entry;
 
     if (read_fault) {
-        /* Read of unwritten anonymous page: map the zero page */
-        /* (shared physical zero page — copy-on-write if written later) */
+        /* 未書き込みの匿名ページの読み取り: ゼロページをマップ */
+        /* （共有の物理ゼロページ — 後で書き込まれたらコピーオンライト） */
         entry = pte_mkspecial(pfn_pte(my_zero_pfn(vmf->address),
                                        vmf->vma->vm_page_prot));
         set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, entry);
         return 0;
     }
 
-    /* Write: allocate a real zeroed page */
+    /* 書き込み: ゼロクリアした実ページを割り当てる */
     page = alloc_zeroed_user_highpage_movable(vma, vmf->address);
     if (!page)
         return VM_FAULT_OOM;
 
-    /* Install the PTE */
+    /* PTEを設定 */
     entry = mk_pte(page, vma->vm_page_prot);
     entry = pte_sw_mkyoung(entry);
     if (vma->vm_flags & VM_WRITE)
@@ -242,7 +242,7 @@ static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 }
 ```
 
-## do_wp_page: copy-on-write {#dowppage-copy-on-write}
+## do_wp_page: コピーオンライト {#dowppage-copy-on-write}
 
 ```c
 /* mm/memory.c */
@@ -252,88 +252,88 @@ static vm_fault_t do_wp_page(struct vm_fault *vmf)
     struct page *old_page = vm_normal_page(vma, vmf->address, vmf->orig_pte);
 
     if (PageAnon(old_page)) {
-        /* Anonymous page: can we reuse it? */
+        /* 匿名ページ: 再利用できるか? */
         if (page_count(old_page) == 1) {
-            /* We're the only owner: make it writable in-place */
+            /* 所有者は自分だけ: その場で書き込み可能にする */
             wp_page_reuse(vmf);
             return VM_FAULT_WRITE;
         }
-        /* Shared: allocate a new copy */
+        /* 共有されている: 新しいコピーを割り当てる */
         return wp_page_copy(vmf);
     }
 
     if (vma->vm_flags & VM_SHARED) {
-        /* Shared mapping: dirty the page in-place */
+        /* 共有マッピング: その場でページをdirtyにする */
         return wp_page_shared(vmf);
     }
 
-    /* Private file mapping: COW */
+    /* プライベートなファイルマッピング: COW */
     return wp_page_copy(vmf);
 }
 
 static vm_fault_t wp_page_copy(struct vm_fault *vmf)
 {
-    /* Allocate new page */
+    /* 新しいページを割り当てる */
     new_page = alloc_page_vma(GFP_HIGHUSER_MOVABLE, vmf->vma, vmf->address);
 
-    /* Copy old page content */
+    /* 古いページの内容をコピー */
     cow_user_page(new_page, old_page, vmf);
 
-    /* Install new writable PTE */
+    /* 書き込み可能な新しいPTEを設定 */
     new_entry = mk_pte(new_page, vma->vm_page_prot);
     new_entry = pte_mkwrite(pte_mkdirty(new_entry));
     set_pte_at_notify(vmf->vma->vm_mm, vmf->address, vmf->pte, new_entry);
 
-    /* Decrement reference to old page */
+    /* 古いページへの参照を減らす */
     put_page(old_page);
     return VM_FAULT_WRITE;
 }
 ```
 
-## Kernel page faults {#kernel-page-faults}
+## カーネルのページフォールト {#kernel-page-faults}
 
 ```c
-/* Kernel-space fault: usually a bug */
+/* カーネル空間のフォールト: 通常はバグ */
 static noinline void
 do_kern_addr_fault(struct pt_regs *regs, unsigned long error_code,
                     unsigned long address)
 {
-    /* vmalloc fault: mapping not synced from init_mm */
+    /* vmallocフォールト: init_mmからマッピングが同期されていない */
     if (!(error_code & X86_PF_USER) &&
         !(error_code & X86_PF_PROT) &&
         vmalloc_fault(address) >= 0)
         return;
 
-    /* fixup_exception: expected fault from copy_to_user etc. */
+    /* fixup_exception: copy_to_userなどで想定されたフォールト */
     if (!user_mode(regs) && fixup_exception(regs, X86_TRAP_PF,
                                               error_code, address))
         return;
 
-    /* Unrecoverable: kernel bug */
+    /* 回復不能: カーネルのバグ */
     oops_begin();
     show_fault_oops(regs, error_code, address);
     oops_end(flags, regs, SIGKILL);
 }
 ```
 
-Common kernel fault: `copy_to_user` / `copy_from_user` with an invalid user pointer. The `fixup_exception` mechanism uses a table of `{fault_address → recovery_address}` pairs — if the fault address is in the table, execution jumps to the recovery code (returns `-EFAULT`).
+よくあるカーネルフォールトは、無効なユーザーポインタを渡された`copy_to_user` / `copy_from_user`である。`fixup_exception`の仕組みは`{fault_address → recovery_address}`のペアの表を使う。フォールトアドレスが表にあれば、実行は回復コードへジャンプする（`-EFAULT`を返す）。
 
-## Observing page faults {#observing-page-faults}
+## ページフォールトの観測 {#observing-page-faults}
 
 ```bash
-# Per-process fault statistics
+# プロセスごとのフォールト統計
 cat /proc/<pid>/stat | awk '{print "minor:", $10, "major:", $12}'
-# minor: 12345  (page was in cache; just needed mapping)
-# major: 42     (page was not in memory; required I/O)
+# minor: 12345  (ページはキャッシュにあり、マッピングだけが必要だった)
+# major: 42     (ページがメモリになく、I/Oが必要だった)
 
-# System-wide fault rates (perf)
+# システム全体のフォールト率 (perf)
 perf stat -e page-faults,major-faults -- my_program
 
-# Trace specific faults with ftrace
+# ftraceで特定のフォールトをトレース
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 cat /sys/kernel/debug/tracing/trace
 
-# perf-record to find where faults happen
+# perf recordでフォールトの発生箇所を探す
 perf record -e page-faults -- my_program
 perf report
 
@@ -343,12 +343,12 @@ bpftrace -e 'tracepoint:exceptions:page_fault_user {
 }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [File-backed mmap and page faults](file-mmap.md) — do_fault/filemap_fault path
-- [Copy-on-Write](cow.md) — do_wp_page mechanics
-- [Process Address Space](mmap.md) — VMA structure
-- [Swap](swap.md) — do_swap_page path
-- [KASAN](kasan.md) — detecting invalid kernel memory accesses
-- `arch/x86/mm/fault.c` — x86 page fault entry
-- `mm/memory.c` — handle_mm_fault, do_anonymous_page, do_wp_page
+- [ファイルバックmmapとページフォールト](file-mmap.md) — do_fault/filemap_faultのパス
+- [コピーオンライト](cow.md) — do_wp_pageの仕組み
+- [プロセスのアドレス空間](mmap.md) — VMAの構造
+- [スワップ](swap.md) — do_swap_pageのパス
+- [KASAN](kasan.md) — 不正なカーネルメモリアクセスの検出
+- `arch/x86/mm/fault.c` — x86のページフォールトのエントリ
+- `mm/memory.c` — handle_mm_fault、do_anonymous_page、do_wp_page

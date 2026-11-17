@@ -1,40 +1,40 @@
-# Why can't I allocate contiguous memory? {#why-cant-i-allocate-contiguous-memory}
+# なぜ連続メモリを割り当てられないのか {#why-cant-i-allocate-contiguous-memory}
 
-> The fragmentation problem that plagues every long-running system
+> 長時間稼働するすべてのシステムを悩ませる断片化の問題
 
-## The question {#the-question}
+## 問い {#the-question}
 
-You have 4GB of free memory. You need a 4MB contiguous buffer for DMA. The allocation fails. Why?
+空きメモリは4GBある。DMA用に4MBの連続バッファが必要だ。しかし割り当ては失敗する。なぜか？
 
 ```c
-// This might fail even with gigabytes free
+// 何ギガバイトも空いていても失敗することがある
 struct page *pages = alloc_pages(GFP_KERNEL, 10);  // order 10 = 4MB (1024 pages)
 
-// kmalloc for large sizes falls back to the page allocator internally,
-// so it's subject to the same fragmentation limits
+// 大きなサイズの kmalloc は内部でページアロケータにフォールバックするため、
+// 同じ断片化の制約を受ける
 void *buf = kmalloc(4 * 1024 * 1024, GFP_KERNEL);
 ```
 
-*Note: [`MAX_PAGE_ORDER`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) is typically 10 (4MB with 4KB pages) on most configs. `kmalloc()` doesn't have a separate size cap - large requests become high-order page allocations internally (see `__kmalloc_large_noprof()` in mm/slub.c).*
+*注: [`MAX_PAGE_ORDER`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) はほとんどの構成で通常10（4KBページで4MB）である。`kmalloc()` には個別のサイズ上限はなく、大きな要求は内部で高次（high-order）ページ割り当てになる（mm/slub.c の `__kmalloc_large_noprof()` を参照）。*
 
-The answer is **external fragmentation** - free memory exists, but not in contiguous chunks.
+答えは**外部断片化**である。空きメモリは存在するが、連続した塊になっていないのだ。
 
-## Why contiguous memory matters {#why-contiguous-memory-matters}
+## なぜ連続メモリが重要か {#why-contiguous-memory-matters}
 
-Most kernel allocations don't need physical contiguity. Virtual memory lets you map scattered physical pages into a contiguous virtual address range (that's what `vmalloc()` does).
+カーネルの割り当ての大半は物理的な連続性を必要としない。仮想メモリを使えば、散らばった物理pageを連続した仮想アドレス範囲にマップできる（それが `vmalloc()` の仕事である）。
 
-But some things genuinely need physically contiguous memory:
+しかし、本当に物理的に連続したメモリを必要とするものもある。
 
-| Use case | Why contiguous? |
+| ユースケース | なぜ連続が必要か |
 |----------|-----------------|
-| DMA buffers | Many devices can't handle scatter-gather lists |
-| Huge pages | 2MB/1GB pages require aligned contiguous regions |
-| Network buffers | Some devices/paths benefit from contiguity (though many use scatter-gather) |
-| GPU memory | Graphics drivers often need large contiguous allocations |
+| DMAバッファ | 多くのデバイスはscatter-gatherリストを扱えない |
+| ヒュージページ | 2MB/1GBのpageはアラインされた連続領域を必要とする |
+| ネットワークバッファ | 一部のデバイスや経路では連続性が有利になる（ただし多くはscatter-gatherを使う） |
+| GPUメモリ | グラフィックスドライバは大きな連続割り当てを必要とすることが多い |
 
-## The fragmentation problem {#the-fragmentation-problem}
+## 断片化の問題 {#the-fragmentation-problem}
 
-The buddy allocator divides memory into power-of-2 blocks. After running for days or weeks, a system's memory looks like this:
+バディアロケータはメモリを2のべき乗のブロックに分割する。数日から数週間稼働した後、システムのメモリは次のようになる。
 
 ```
 Physical memory after extended use:
@@ -48,20 +48,20 @@ Free pages: 14 (56KB)
 Largest contiguous block: 3 pages (12KB)
 ```
 
-You have 56KB free but can't allocate a 16KB block. This is external fragmentation.
+56KBの空きがあるのに16KBのブロックを割り当てられない。これが外部断片化である。
 
-### How it happens {#how-it-happens}
+### どのように起きるか {#how-it-happens}
 
-1. System boots with large contiguous free regions
-2. Allocations of various sizes come and go
-3. Some allocations persist (kernel structures, pinned pages)
-4. Free memory becomes scattered around persistent allocations
+1. システムは大きな連続した空き領域を持った状態で起動する
+2. さまざまなサイズの割り当てが行われては解放される
+3. 一部の割り当ては残り続ける（カーネル構造体、ピン留めされたpage）
+4. 空きメモリは残り続ける割り当ての周りに散らばっていく
 
-The persistent allocations act like rocks in a stream - free memory flows around them but can't coalesce.
+残り続ける割り当ては川の中の岩のように振る舞う。空きメモリはその周りを流れるが、合体することはできない。
 
-## Migrate types: the kernel's first defense {#migrate-types-the-kernels-first-defense}
+## マイグレートタイプ: カーネルの最初の防御策 {#migrate-types-the-kernels-first-defense}
 
-The kernel groups pages by **mobility** to reduce fragmentation:
+カーネルは断片化を減らすため、pageを**移動可能性**（mobility）によってグループ化する。
 
 ```
 MIGRATE_UNMOVABLE   - Kernel structures that can't move
@@ -69,7 +69,7 @@ MIGRATE_MOVABLE     - User pages that can be migrated
 MIGRATE_RECLAIMABLE - Caches that can be freed
 ```
 
-The buddy allocator maintains separate free lists per migrate type ([mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)):
+バディアロケータはマイグレートタイプごとに別々のフリーリストを保持する（[mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)）。
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -80,17 +80,17 @@ The buddy allocator maintains separate free lists per migrate type ([mm/page_all
 └───────────────────┴────────────────────┴────────────────────┘
 ```
 
-This helps because:
+これが役立つ理由は次のとおりである。
 
-- Movable pages can be migrated to create contiguous free space
-- Reclaimable pages can be freed under pressure
-- Unmovable pages are grouped together, limiting fragmentation spread
+- 移動可能なpageはマイグレーションして連続した空き領域を作れる
+- 回収可能なpageはメモリ逼迫時に解放できる
+- 移動不可能なpageはまとめてグループ化され、断片化の広がりを抑える
 
-But it's not perfect. Under pressure, the allocator will "steal" pages from other migrate types, polluting movable regions with unmovable allocations.
+しかし完璧ではない。メモリ逼迫時には、アロケータは他のマイグレートタイプからpageを「盗み」、移動可能な領域を移動不可能な割り当てで汚染してしまう。
 
-## Memory compaction: defragmentation for Linux {#memory-compaction-defragmentation-for-linux}
+## メモリコンパクション: Linuxのデフラグ {#memory-compaction-defragmentation-for-linux}
 
-When high-order allocations fail, the kernel can try **compaction** - moving pages to create contiguous free regions.
+高次の割り当てが失敗すると、カーネルは**コンパクション**、すなわちpageを移動して連続した空き領域を作ることを試みられる。
 
 ```
 Before compaction:
@@ -104,13 +104,13 @@ After compaction:
 └───┴───┴───┴───┴───┴───┴───┴───┘
 ```
 
-Compaction was added by Mel Gorman in kernel 2.6.35 ([commit 748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/), 2010). Before this, high-order allocation failures on long-running systems were common and the only solution was rebooting.
+コンパクションはMel Gormanによってカーネル2.6.35で追加された（[commit 748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)、2010年）。それ以前は、長時間稼働するシステムで高次割り当ての失敗はよくあることで、唯一の解決策は再起動だった。
 
-See [compaction](compaction.md) for details on the algorithm.
+アルゴリズムの詳細は[コンパクション](compaction.md)を参照。
 
-### Limitations of compaction {#limitations-of-compaction}
+### コンパクションの限界 {#limitations-of-compaction}
 
-Compaction can only move **movable** pages. Unmovable pages (kernel allocations, pinned memory) are permanent obstacles:
+コンパクションは**移動可能な**pageしか移動できない。移動不可能なpage（カーネルの割り当て、ピン留めされたメモリ）は恒久的な障害物となる。
 
 ```
 ┌───┬───┬───┬───┬───┬───┬───┬───┐
@@ -123,12 +123,12 @@ Compaction can only move **movable** pages. Unmovable pages (kernel allocations,
 └───┴───┴───┴───┴───┴───┴───┴───┘
 ```
 
-## CMA: the solution for device drivers {#cma-the-solution-for-device-drivers}
+## CMA: デバイスドライバのための解決策 {#cma-the-solution-for-device-drivers}
 
-The **Contiguous Memory Allocator** (CMA) solves the device driver problem by reserving regions that serve double duty:
+**Contiguous Memory Allocator**（CMA）は、二重の役割を果たす領域を予約することでデバイスドライバの問題を解決する。
 
-1. Normally used for movable pages (page cache, user memory)
-2. Reclaimed for contiguous allocation when devices need them
+1. 通常時は移動可能なpage（ページキャッシュ、ユーザーメモリ）に使われる
+2. デバイスが必要とするときに連続割り当てのために回収される
 
 ```
 CMA region:
@@ -142,30 +142,30 @@ CMA region:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-CMA was developed by Marek Szyprowski at Samsung and merged in kernel 3.5 ([commit c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e), 2012). See the [LWN article](https://lwn.net/Articles/486301/) for design discussion.
+CMAはSamsungのMarek Szyprowskiが開発し、カーネル3.5でマージされた（[commit c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e)、2012年）。設計の議論については[LWNの記事](https://lwn.net/Articles/486301/)を参照。
 
-### Using CMA {#using-cma}
+### CMAを使う {#using-cma}
 
-From a driver:
+ドライバからは次のように使う。
 
 ```c
 #include <linux/dma-mapping.h>
 
-// Allocate from CMA (DMA API handles this automatically)
+// CMA から割り当てる（DMA API が自動的に処理する）
 void *buf = dma_alloc_coherent(dev, size, &dma_handle, GFP_KERNEL);
 
-// Or directly (rarely needed):
+// あるいは直接（必要になることはまれ）:
 #include <linux/cma.h>
 struct page *pages = cma_alloc(cma, count, align, false /* no_warn */);
 ```
 
-CMA regions are configured at boot:
+CMA領域はブート時に設定する。
 
 ```bash
-# Reserve 256MB for CMA
+# CMA 用に 256MB を予約する
 cma=256M
 
-# Or in device tree (ARM):
+# あるいはデバイスツリーで (ARM):
 reserved-memory {
     linux,cma {
         compatible = "shared-dma-pool";
@@ -175,145 +175,145 @@ reserved-memory {
 };
 ```
 
-## Best practices for driver developers {#best-practices-for-driver-developers}
+## ドライバ開発者のためのベストプラクティス {#best-practices-for-driver-developers}
 
-### 1. Use the DMA API {#1-use-the-dma-api}
+### 1. DMA APIを使う {#1-use-the-dma-api}
 
-Don't allocate contiguous memory directly. Use `dma_alloc_coherent()` or `dma_alloc_attrs()`:
+連続メモリを直接割り当てないこと。`dma_alloc_coherent()` または `dma_alloc_attrs()` を使う。
 
 ```c
-// Good: Let the DMA API handle it
+// 良い例: DMA API に任せる
 void *buf = dma_alloc_coherent(dev, size, &dma_handle, GFP_KERNEL);
 
-// Avoid: Direct contiguous allocation
-void *buf = kmalloc(size, GFP_KERNEL);  // May fail with large sizes
+// 避けるべき例: 連続メモリの直接割り当て
+void *buf = kmalloc(size, GFP_KERNEL);  // 大きなサイズでは失敗しうる
 ```
 
-The DMA API can use CMA, IOMMU remapping, or bounce buffers as appropriate.
+DMA APIは状況に応じてCMA、IOMMUによるリマッピング、バウンスバッファを使い分けられる。
 
-### 2. Use scatter-gather when possible {#2-use-scatter-gather-when-possible}
+### 2. 可能ならscatter-gatherを使う {#2-use-scatter-gather-when-possible}
 
-Many modern devices support scatter-gather DMA:
+最近の多くのデバイスはscatter-gather DMAをサポートしている。
 
 ```c
-// Instead of one large contiguous buffer
+// 1つの大きな連続バッファの代わりに
 struct scatterlist sg[MAX_SEGS];
 sg_init_table(sg, nents);
 
-// Map scattered pages
+// 散らばった page をマップする
 dma_map_sg(dev, sg, nents, direction);
 ```
 
-This eliminates the contiguous memory requirement entirely.
+これにより連続メモリの要件そのものがなくなる。
 
-### 3. Allocate early or use CMA {#3-allocate-early-or-use-cma}
+### 3. 早期に割り当てるかCMAを使う {#3-allocate-early-or-use-cma}
 
-If you need large contiguous buffers:
+大きな連続バッファが必要な場合は次のようにする。
 
-- Reserve memory at boot (via `memblock` or CMA)
-- Use CMA regions sized for your needs
-- Allocate during driver probe, not on-demand
+- ブート時にメモリを予約する（`memblock` またはCMAで）
+- 必要に応じたサイズのCMA領域を使う
+- オンデマンドではなく、ドライバのprobe時に割り当てる
 
-### 4. Handle allocation failures gracefully {#4-handle-allocation-failures-gracefully}
+### 4. 割り当て失敗を適切に処理する {#4-handle-allocation-failures-gracefully}
 
-High-order allocations can fail. Don't use `__GFP_NOFAIL` for large allocations:
+高次の割り当ては失敗しうる。大きな割り当てに `__GFP_NOFAIL` を使ってはならない。
 
 ```c
-// Bad: Can hang the system
+// 悪い例: システムをハングさせうる
 void *buf = kmalloc(large_size, GFP_KERNEL | __GFP_NOFAIL);
 
-// Good: Handle failure
+// 良い例: 失敗を処理する
 void *buf = kmalloc(large_size, GFP_KERNEL | __GFP_RETRY_MAYFAIL);
 if (!buf)
     return -ENOMEM;
 ```
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
 ```bash
-# View fragmentation per order
+# order ごとの断片化を見る
 cat /proc/buddyinfo
-# Example: Node 0, zone Normal  1024  512  256  128  64  32  16  8  4  2  1
-#          (counts at each order 0-10)
+# 例: Node 0, zone Normal  1024  512  256  128  64  32  16  8  4  2  1
+#          (order 0-10 それぞれの個数)
 
-# View fragmentation index (debugfs required, may not exist on all configs)
+# 断片化指数を見る（debugfs が必要。構成によっては存在しない）
 cat /sys/kernel/debug/extfrag/extfrag_index
-# 0.0 = no fragmentation, 1.0 = severe fragmentation
+# 0.0 = 断片化なし、1.0 = 深刻な断片化
 
-# View CMA regions
+# CMA 領域を見る
 cat /proc/meminfo | grep Cma
 # CmaTotal:        262144 kB
 # CmaFree:         131072 kB
 
-# Trigger manual compaction
+# 手動でコンパクションを起動する
 echo 1 > /proc/sys/vm/compact_memory
 
-# Watch compaction statistics
+# コンパクションの統計を監視する
 watch -n 1 'grep -E "compact_" /proc/vmstat'
 ```
 
-## Evolution {#evolution}
+## 変遷 {#evolution}
 
-The kernel's approach to contiguous allocation has evolved significantly:
+連続割り当てに対するカーネルのアプローチは大きく進化してきた。
 
-### ZONE_MOVABLE (v2.6.23, 2007) {#zone_movable-v2623-2007}
+### ZONE_MOVABLE（v2.6.23、2007年） {#zone_movable-v2623-2007}
 
-**Commit**: [2a1e274acf0b](https://git.kernel.org/linus/2a1e274acf0b) ("Create the ZONE_MOVABLE zone")
+**コミット**: [2a1e274acf0b](https://git.kernel.org/linus/2a1e274acf0b) ("Create the ZONE_MOVABLE zone")
 
-**Author**: Mel Gorman
+**作者**: Mel Gorman
 
-*Note: This commit predates modern LKML archiving on lore.kernel.org.*
+*注: このコミットはlore.kernel.orgでの現代的なLKMLアーカイブ以前のものである。*
 
-The first major anti-fragmentation feature. Created a zone that only accepts movable allocations, guaranteeing that memory in this zone can always be migrated or reclaimed. Configured via `kernelcore=` or `movablecore=` boot parameters.
+最初の主要な断片化対策機能である。移動可能な割り当てのみを受け付けるゾーンを作り、このゾーンのメモリが常にマイグレーションまたは回収できることを保証した。`kernelcore=` または `movablecore=` ブートパラメータで設定する。
 
 ```bash
-# Reserve 4GB for unmovable kernel allocations, rest is ZONE_MOVABLE
+# 移動不可能なカーネル割り当て用に 4GB を予約し、残りを ZONE_MOVABLE にする
 kernelcore=4G
 
-# Or specify movable zone size directly
+# あるいは movable ゾーンのサイズを直接指定する
 movablecore=8G
 ```
 
-### Migrate types (v2.6.24, 2007) {#migrate-types-v2624-2007}
+### マイグレートタイプ（v2.6.24、2007年） {#migrate-types-v2624-2007}
 
-**Commit**: [b2a0ac8875a0](https://git.kernel.org/linus/b2a0ac8875a0) ("Split the free lists for movable and unmovable allocations")
+**コミット**: [b2a0ac8875a0](https://git.kernel.org/linus/b2a0ac8875a0) ("Split the free lists for movable and unmovable allocations")
 
-**Author**: Mel Gorman
+**作者**: Mel Gorman
 
-*Note: This commit predates modern LKML archiving on lore.kernel.org.*
+*注: このコミットはlore.kernel.orgでの現代的なLKMLアーカイブ以前のものである。*
 
-Split the buddy allocator free lists by page mobility. This was a less invasive alternative to ZONE_MOVABLE that works automatically without boot parameters. The two approaches complement each other.
+バディアロケータのフリーリストをpageの移動可能性によって分割した。これはZONE_MOVABLEより侵襲性の低い代替策で、ブートパラメータなしで自動的に機能する。2つのアプローチは互いに補完し合う。
 
-### Memory compaction (v2.6.35, 2010) {#memory-compaction-v2635-2010}
+### メモリコンパクション（v2.6.35、2010年） {#memory-compaction-v2635-2010}
 
-**Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
+**コミット**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
-**Author**: Mel Gorman
+**作者**: Mel Gorman
 
-Active defragmentation by migrating pages. Before this, the kernel could only *prevent* fragmentation (via migrate types), not *fix* it. Compaction made THP viable on long-running systems.
+pageのマイグレーションによる能動的なデフラグである。それ以前のカーネルは（マイグレートタイプによって）断片化を*防ぐ*ことしかできず、*修復する*ことはできなかった。コンパクションにより、長時間稼働するシステムでTHPが実用的になった。
 
-### CMA (v3.5, 2012) {#cma-v35-2012}
+### CMA（v3.5、2012年） {#cma-v35-2012}
 
-**Commit**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
+**コミット**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
 
-**Author**: Marek Szyprowski (Samsung)
+**作者**: Marek Szyprowski (Samsung)
 
-*Note: The original patch series is not archived on lore.kernel.org; see [LWN coverage](https://lwn.net/Articles/486301/) for discussion.*
+*注: 元のパッチシリーズはlore.kernel.orgにアーカイブされていない。議論については[LWNの記事](https://lwn.net/Articles/486301/)を参照。*
 
-Solved the device driver problem by creating regions that serve double duty - used for movable pages normally, reclaimed for contiguous DMA buffers on demand. See [LWN article](https://lwn.net/Articles/486301/).
+二重の役割を果たす領域を作ることでデバイスドライバの問題を解決した。通常は移動可能なpageに使い、必要に応じて連続DMAバッファのために回収する。[LWNの記事](https://lwn.net/Articles/486301/)を参照。
 
-### Proactive compaction (v5.9, 2020) {#proactive-compaction-v59-2020}
+### プロアクティブコンパクション（v5.9、2020年） {#proactive-compaction-v59-2020}
 
-**Commit**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
+**コミット**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
 
-**Author**: Nitin Gupta (NVIDIA)
+**作者**: Nitin Gupta (NVIDIA)
 
-Background compaction based on fragmentation levels, reducing direct compaction stalls. Controlled via `vm.compaction_proactiveness`.
+断片化レベルに基づくバックグラウンドのコンパクションで、直接コンパクションによるストールを減らす。`vm.compaction_proactiveness` で制御する。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Memory compaction](compaction.md) - How compaction works
-- [Page allocator](page-allocator.md) - Buddy system and migrate types
-- [LWN: CMA](https://lwn.net/Articles/486301/) - CMA design and rationale
-- [LWN: Memory compaction](https://lwn.net/Articles/368869/) - Original compaction proposal
-- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) - Using the DMA API correctly
+- [メモリコンパクション](compaction.md) - コンパクションの仕組み
+- [ページアロケータ](page-allocator.md) - バディシステムとマイグレートタイプ
+- [LWN: CMA](https://lwn.net/Articles/486301/) - CMAの設計と根拠
+- [LWN: Memory compaction](https://lwn.net/Articles/368869/) - 最初のコンパクション提案
+- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) - DMA APIの正しい使い方

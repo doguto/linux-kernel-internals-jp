@@ -1,21 +1,21 @@
-# Page Allocator (Buddy System) {#page-allocator-buddy-system}
+# ページアロケータ（バディシステム） {#page-allocator-buddy-system}
 
-> The foundation of Linux memory management - allocating physical page frames
+> Linuxのメモリ管理の土台 — 物理ページフレームの割り当て
 
-## What is the Page Allocator? {#what-is-the-page-allocator}
+## ページアロケータとは何か {#what-is-the-page-allocator}
 
-The page allocator manages physical memory at the page granularity (typically `4KB`). It's the lowest-level allocator in the kernel - every other allocator (SLUB, vmalloc) ultimately gets pages from here.
+ページアロケータは、物理メモリをページ単位（通常は`4KB`）で管理する。カーネルで最も低レベルのアロケータであり、他のすべてのアロケータ（SLUB、vmalloc）も最終的にはここからページを得る。
 
 ```c
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
 void free_pages(unsigned long addr, unsigned int order);
 ```
 
-## The Buddy System {#the-buddy-system}
+## バディシステム {#the-buddy-system}
 
-Linux uses a **buddy allocator**, an algorithm dating back to 1965 ([Knowlton, CACM](https://dl.acm.org/doi/10.1145/365628.365655)). The key insight: manage memory in power-of-2 sized blocks, and when you free memory, merge it with its "buddy" if also free.
+Linuxは**バディアロケータ**を使う。これは1965年にまで遡るアルゴリズムである（[Knowlton, CACM](https://dl.acm.org/doi/10.1145/365628.365655)）。核となる考え方は、メモリを2のべき乗サイズのブロックで管理し、メモリを解放するときに、その「バディ（相方）」も空いていれば結合するというものである。
 
-### How It Works {#how-it-works}
+### 仕組み {#how-it-works}
 
 ```
 Memory divided into blocks of order 0, 1, 2, ... 10
@@ -35,9 +35,9 @@ Free lists per order:
 +-------------------------------------------+
 ```
 
-### Allocation Example {#allocation-example}
+### 割り当ての例 {#allocation-example}
 
-Request for 3 pages (needs order 2 = 4 pages):
+3ページの要求（order 2 = 4ページが必要）:
 
 ```
 1. Check order 2 free list
@@ -51,9 +51,9 @@ Request for 3 pages (needs order 2 = 4 pages):
 3. Continue splitting from higher orders if needed
 ```
 
-### Free Example (Buddy Merging) {#free-example-buddy-merging}
+### 解放の例（バディの結合） {#free-example-buddy-merging}
 
-Freeing a 4-page block at address 0x4000 (order-2 blocks must be 4-page aligned):
+アドレス0x4000にある4ページのブロックを解放する場合（order-2のブロックは4ページ境界にアラインされていなければならない）:
 
 ```
 1. Find buddy address: 0x4000 XOR (4 * PAGE_SIZE) = 0x0000
@@ -65,61 +65,61 @@ Freeing a 4-page block at address 0x4000 (order-2 blocks must be 4-page aligned)
 Merging continues up to MAX_ORDER or until buddy isn't free
 ```
 
-### Why Buddies? {#why-buddies}
+### なぜバディなのか {#why-buddies}
 
-The buddy's address can be computed with a single XOR operation - no searching required. Two adjacent blocks of the same size are buddies only if they came from splitting the same larger block.
+バディのアドレスは1回のXOR演算で計算でき、探索は不要である。同じサイズの隣接する2つのブロックがバディになるのは、同じ大きなブロックを分割して生まれた場合に限られる。
 
-## Memory Zones {#memory-zones}
+## メモリゾーン {#memory-zones}
 
-Physical memory is divided into zones based on hardware constraints:
+物理メモリは、ハードウェアの制約に基づいてゾーンに分割される。
 
-| Zone | Purpose | Typical Range (x86-64) |
+| ゾーン | 目的 | 典型的な範囲（x86-64） |
 |------|---------|------------------------|
-| `ZONE_DMA` | Legacy 16-bit DMA devices | 0 - 16MB |
-| `ZONE_DMA32` | 32-bit DMA devices | 16MB - 4GB |
-| `ZONE_NORMAL` | Regular kernel allocations | Above 4GB |
-| `ZONE_MOVABLE` | Migratable pages (memory hotplug, isolation) | Configurable |
+| `ZONE_DMA` | レガシーな16ビットDMAデバイス | 0 - 16MB |
+| `ZONE_DMA32` | 32ビットDMAデバイス | 16MB - 4GB |
+| `ZONE_NORMAL` | 通常のカーネル割り当て | 4GB以上 |
+| `ZONE_MOVABLE` | 移動可能なページ（メモリホットプラグ、分離） | 設定可能 |
 
-Each zone has its own set of buddy free lists.
+各ゾーンは独自のバディのフリーリスト群を持つ。
 
-## GFP Flags {#gfp-flags}
+## GFPフラグ {#gfp-flags}
 
-GFP (Get Free Pages) flags control allocation behavior:
+GFP（Get Free Pages）フラグは割り当ての挙動を制御する。
 
 ```c
-/* Common combinations */
-GFP_KERNEL    /* Normal allocation, can sleep, can reclaim */
-GFP_ATOMIC    /* Cannot sleep (interrupt context) */
-GFP_USER      /* User-space allocation */
-GFP_DMA       /* Must be in ZONE_DMA */
-GFP_DMA32     /* Must be in ZONE_DMA32 */
+/* よく使われる組み合わせ */
+GFP_KERNEL    /* 通常の割り当て。スリープ可、回収可 */
+GFP_ATOMIC    /* スリープ不可 (割り込みコンテキスト) */
+GFP_USER      /* ユーザー空間向けの割り当て */
+GFP_DMA       /* ZONE_DMAから割り当てる必要がある */
+GFP_DMA32     /* ZONE_DMA32から割り当てる必要がある */
 
-/* Modifiers */
-__GFP_ZERO    /* Zero the memory */
-__GFP_NOWARN  /* Suppress allocation failure warnings */
-__GFP_RETRY_MAYFAIL  /* Try hard but may fail */
-__GFP_NOFAIL  /* Never fail - use sparingly, can deadlock */
+/* 修飾子 */
+__GFP_ZERO    /* メモリをゼロクリアする */
+__GFP_NOWARN  /* 割り当て失敗の警告を抑制する */
+__GFP_RETRY_MAYFAIL  /* 粘り強く試すが失敗することもある */
+__GFP_NOFAIL  /* 決して失敗しない - 控えめに使うこと。デッドロックしうる */
 ```
 
-See [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) for the full list.
+全一覧は[`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h)を参照。
 
-## History & Evolution {#history-evolution}
+## 歴史と変遷 {#history-evolution}
 
-### Origins (1991) {#origins-1991}
+### 起源（1991年） {#origins-1991}
 
-The buddy allocator has been in Linux since the beginning. The basic algorithm is from:
+バディアロケータはLinuxの最初期から存在する。基本アルゴリズムの出典は次のとおり。
 
 > Knowlton, K. C. "A Fast Storage Allocator" Communications of the ACM, 1965
 
-*Note: Pre-LKML era. Early implementation details are in the git history starting from v2.6.12.*
+*注: LKML以前の時代のものである。初期の実装の詳細は、v2.6.12以降のgit履歴にある。*
 
-### Per-CPU Page Lists (v2.5/2.6) {#per-cpu-page-lists-v2526}
+### per-CPUページリスト（v2.5/2.6） {#per-cpu-page-lists-v2526}
 
-**Problem**: The zone lock became a bottleneck on SMP systems - every allocation/free needed it.
+**問題**: SMPシステムでは、すべての割り当て/解放でゾーンロックが必要になり、これがボトルネックになった。
 
-**Solution**: Per-CPU page lists (`per_cpu_pages`) cache single pages, reducing lock contention.
+**解決策**: per-CPUページリスト（`per_cpu_pages`）が単一ページをキャッシュし、ロック競合を減らす。
 
-*Note: Developed incrementally during 2.5 cycle. Predates searchable git history (v2.6.12+).*
+*注: 2.5の開発サイクル中に段階的に開発された。検索可能なgit履歴（v2.6.12+）より前のものである。*
 
 ```
 CPU 0: [page] [page] [page] ...  (hot cache)
@@ -130,98 +130,98 @@ CPU 1: [page] [page] ...
    Zone free lists (locked)
 ```
 
-### NUMA Awareness (v2.6) {#numa-awareness-v26}
+### NUMA対応（v2.6） {#numa-awareness-v26}
 
-**Problem**: On NUMA systems, accessing remote memory is slower than local memory.
+**問題**: NUMAシステムでは、リモートメモリへのアクセスはローカルメモリより遅い。
 
-**Solution**: Per-node zones. Allocations prefer local node memory.
+**解決策**: ノードごとのゾーン。割り当てはローカルノードのメモリを優先する。
 
 ```c
-/* Allocate from specific node */
+/* 特定のノードから割り当てる */
 alloc_pages_node(node_id, gfp, order);
 ```
 
-*Note: NUMA support evolved over many releases. See `mm/mempolicy.c` for allocation policies.*
+*注: NUMAサポートは多くのリリースを経て発展してきた。割り当てポリシーについては`mm/mempolicy.c`を参照。*
 
-### Compaction (v2.6.35, 2010) {#compaction-v2635-2010}
+### コンパクション（v2.6.35、2010年） {#compaction-v2635-2010}
 
-**Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
+**コミット**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
-**Author**: Mel Gorman
+**作者**: Mel Gorman
 
-**Problem**: External fragmentation - free pages scattered, can't satisfy high-order allocations.
+**問題**: 外部断片化 — 空きページが散らばり、高次の割り当てを満たせない。
 
-**Solution**: Memory compaction - move pages to create contiguous free blocks.
+**解決策**: メモリコンパクション — ページを移動して連続した空きブロックを作る。
 
-### CMA (Contiguous Memory Allocator, v3.5, 2012) {#cma-contiguous-memory-allocator-v35-2012}
+### CMA（Contiguous Memory Allocator、v3.5、2012年） {#cma-contiguous-memory-allocator-v35-2012}
 
-**Commit**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
+**コミット**: [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) ("drivers: add Contiguous Memory Allocator")
 
-**Author**: Marek Szyprowski (Samsung)
+**作者**: Marek Szyprowski (Samsung)
 
-*Note: Pre-2013 LKML archives on lore.kernel.org are sparse. See [LWN article](https://lwn.net/Articles/486301/) for design discussion.*
+*注: lore.kernel.orgにある2013年以前のLKMLアーカイブはまばらである。設計に関する議論は[LWNの記事](https://lwn.net/Articles/486301/)を参照。*
 
-**Problem**: Devices need large contiguous buffers but memory fragments over time.
+**問題**: デバイスは大きな連続バッファを必要とするが、メモリは時間とともに断片化する。
 
-**Solution**: Reserve regions that can be used by movable pages normally, but reclaimed for contiguous allocation when needed.
+**解決策**: 通常は移動可能なページが使えるが、必要になったら連続割り当てのために取り戻せる領域を予約しておく。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### View Buddy Allocator State {#view-buddy-allocator-state}
+### バディアロケータの状態を見る {#view-buddy-allocator-state}
 
 ```bash
-# Free blocks per order, per zone
+# ゾーンごと、orderごとの空きブロック
 cat /proc/buddyinfo
 
-# Example output:
+# 出力例:
 # Node 0, zone   Normal  1024  512  256  128   64   32   16    8    4    2    1
 #                        ^order 0              ^order 5                    ^order 10
 
-# Each number = count of free blocks at that order
+# 各数値 = そのorderの空きブロック数
 ```
 
-### View Zone Information {#view-zone-information}
+### ゾーン情報を見る {#view-zone-information}
 
 ```bash
-# Detailed zone stats
+# ゾーンの詳細な統計
 cat /proc/zoneinfo
 
-# Key fields:
-# - min/low/high: watermarks for reclaim
-# - free: current free pages
-# - managed: pages managed by this zone
+# 主なフィールド:
+# - min/low/high: 回収のためのウォーターマーク
+# - free: 現在の空きページ数
+# - managed: このゾーンが管理するページ数
 ```
 
-### Memory Pressure Test {#memory-pressure-test}
+### メモリ逼迫テスト {#memory-pressure-test}
 
 ```bash
-# Watch buddy state while allocating memory
+# メモリを割り当てながらバディの状態を観察
 watch -n 1 cat /proc/buddyinfo
 
-# In another terminal, consume memory
+# 別の端末でメモリを消費する
 stress --vm 1 --vm-bytes 1G
 ```
 
-### Trace Allocations {#trace-allocations}
+### 割り当てのトレース {#trace-allocations}
 
 ```bash
-# Enable page allocation tracing (requires debugfs)
+# ページ割り当てのトレーシングを有効化 (debugfsが必要)
 echo 1 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# Output shows: page address, order, gfp flags, migratetype
+# 出力にはページアドレス、order、gfpフラグ、migratetypeが表示される
 ```
 
-## Key Data Structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
 ### struct zone {#struct-zone}
 
 ```c
 struct zone {
-    unsigned long watermark[NR_WMARK];     /* min/low/high thresholds */
+    unsigned long watermark[NR_WMARK];     /* min/low/highのしきい値 */
     unsigned long nr_reserved_highatomic;
     struct per_cpu_pages __percpu *per_cpu_pageset;
-    struct free_area free_area[NR_PAGE_ORDERS];  /* buddy free lists */
+    struct free_area free_area[NR_PAGE_ORDERS];  /* バディのフリーリスト */
     unsigned long zone_start_pfn;
     unsigned long managed_pages;
     unsigned long spanned_pages;
@@ -231,115 +231,115 @@ struct zone {
 };
 ```
 
-*Note: `NR_PAGE_ORDERS` [replaced `MAX_ORDER`](https://git.kernel.org/linus/fd37721803c6) in v6.8. When reading older code, `MAX_ORDER` is the same concept.*
+*注: v6.8で`NR_PAGE_ORDERS`が[`MAX_ORDER`を置き換えた](https://git.kernel.org/linus/fd37721803c6)。古いコードを読むときは、`MAX_ORDER`が同じ概念である。*
 
-### Watermarks {#watermarks}
+### ウォーターマーク {#watermarks}
 
-Each zone has watermarks that control reclaim behavior:
+各ゾーンには、回収の挙動を制御するウォーターマークがある。
 
-| Watermark | When Reached |
+| ウォーターマーク | 到達したとき |
 |-----------|--------------|
-| `high` | Zone is healthy, no action needed |
-| `low` | Wake `kswapd` to reclaim pages in background |
-| `min` | Direct reclaim - allocating process must help free pages |
-| `promo` | For tiered memory (CXL/NUMA), controls page promotion |
+| `high` | ゾーンは健全で、何もする必要はない |
+| `low` | `kswapd`を起こしてバックグラウンドでページを回収する |
+| `min` | 直接回収 — 割り当てを行うプロセス自身がページの解放を手伝う必要がある |
+| `promo` | 階層型メモリ（CXL/NUMA）向けで、ページの昇格（promotion）を制御する |
 
-Watermarks are derived from `vm.min_free_kbytes`:
+ウォーターマークは`vm.min_free_kbytes`から導出される。
 
 ```bash
-# View watermarks
+# ウォーターマークを見る
 cat /proc/zoneinfo | grep -E "pages free|min|low|high"
 
-# Adjust minimum free memory (affects all watermarks)
+# 最小空きメモリを調整する (すべてのウォーターマークに影響)
 sysctl vm.min_free_kbytes=65536
 ```
 
-**Zone fallback**: When a zone is exhausted, allocations fall back to other zones in order: NORMAL → DMA32 → DMA (preferring higher zones first).
+**ゾーンのフォールバック**: あるゾーンが枯渇すると、割り当ては NORMAL → DMA32 → DMA の順に他のゾーンへフォールバックする（上位のゾーンが優先される）。
 
 ### struct free_area {#struct-free_area}
 
 ```c
 struct free_area {
-    struct list_head free_list[MIGRATE_TYPES];  /* per-migratetype lists */
+    struct list_head free_list[MIGRATE_TYPES];  /* migratetypeごとのリスト */
     unsigned long nr_free;
 };
 ```
 
-### Migrate Types {#migrate-types}
+### マイグレートタイプ {#migrate-types}
 
-Pages are grouped by mobility to reduce fragmentation:
+断片化を減らすため、ページは移動可能性によってグループ化される。
 
-| Type | Description |
+| タイプ | 説明 |
 |------|-------------|
-| `MIGRATE_UNMOVABLE` | Kernel allocations that can't move |
-| `MIGRATE_MOVABLE` | User pages, can be migrated/compacted |
-| `MIGRATE_RECLAIMABLE` | Caches that can be freed under pressure |
-| `MIGRATE_HIGHATOMIC` | Reserved for high-priority atomic allocations |
-| `MIGRATE_CMA` | Contiguous Memory Allocator regions |
-| `MIGRATE_ISOLATE` | Pages being isolated for migration/offlining |
+| `MIGRATE_UNMOVABLE` | 移動できないカーネルの割り当て |
+| `MIGRATE_MOVABLE` | ユーザーページ。マイグレーション/コンパクションが可能 |
+| `MIGRATE_RECLAIMABLE` | 逼迫時に解放できるキャッシュ |
+| `MIGRATE_HIGHATOMIC` | 優先度の高いアトミック割り当てのために予約 |
+| `MIGRATE_CMA` | Contiguous Memory Allocatorの領域 |
+| `MIGRATE_ISOLATE` | マイグレーション/オフライン化のために分離中のページ |
 
 ```bash
-# View migrate type distribution
+# マイグレートタイプの分布を見る
 cat /proc/pagetypeinfo
 ```
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### High-Order Allocation Failures {#high-order-allocation-failures}
+### 高次割り当ての失敗 {#high-order-allocation-failures}
 
-Large contiguous allocations (order > 3) can fail due to fragmentation even with free memory.
+大きな連続割り当て（order > 3）は、空きメモリがあっても断片化のために失敗することがある。
 
-**Solutions**:
+**対策**:
 
-- Use `__GFP_RETRY_MAYFAIL` to try harder
-- Use vmalloc instead (virtual contiguity)
-- Enable compaction (`/proc/sys/vm/compact_memory`)
+- `__GFP_RETRY_MAYFAIL`を使ってより粘り強く試す
+- 代わりにvmallocを使う（仮想的な連続性）
+- コンパクションを有効にする（`/proc/sys/vm/compact_memory`）
 
-### Zone Imbalance {#zone-imbalance}
+### ゾーンの不均衡 {#zone-imbalance}
 
-Memory pressure in one zone while others have free memory.
+他のゾーンに空きメモリがあるのに、あるゾーンだけメモリが逼迫している。
 
-**Check**: `cat /proc/zoneinfo | grep -E "zone|free|min"`
+**確認**: `cat /proc/zoneinfo | grep -E "zone|free|min"`
 
-### OOM Despite Free Pages {#oom-despite-free-pages}
+### 空きページがあるのにOOM {#oom-despite-free-pages}
 
-Free pages exist but in wrong zone or wrong migratetype.
+空きページは存在するが、ゾーンやmigratetypeが合っていない。
 
-**Debug**: Check `/proc/buddyinfo` and `/proc/pagetypeinfo`
+**デバッグ**: `/proc/buddyinfo`と`/proc/pagetypeinfo`を確認する
 
-## References {#references}
+## リファレンス {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Core allocator |
-| [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) | GFP flags |
-| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | Zone structures |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | アロケータのコア |
+| [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) | GFPフラグ |
+| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | ゾーンの構造体 |
 
-### Key Commits {#key-commits}
+### 主要なコミット {#key-commits}
 
-| Commit | Kernel | Description |
+| コミット | カーネル | 説明 |
 |--------|--------|-------------|
-| [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) | v2.6.35 | Memory compaction |
-| [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) | v3.5 | CMA introduction |
+| [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) | v2.6.35 | メモリコンパクション |
+| [c64be2bb1c6e](https://git.kernel.org/linus/c64be2bb1c6e) | v3.5 | CMAの導入 |
 
-### Related {#related}
+### 関連 {#related}
 
-- [overview](overview.md) - How page allocator fits with other allocators
-- [slab](slab.md) - SLUB uses pages from buddy allocator
-- [vmalloc](vmalloc.md) - Gets individual pages from buddy
+- [overview](overview.md) - ページアロケータが他のアロケータとどう組み合わさるか
+- [slab](slab.md) - SLUBはバディアロケータからページを得る
+- [vmalloc](vmalloc.md) - バディから個々のページを得る
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [slab.md](slab.md) — SLUB sits directly on top of the buddy allocator for sub-page allocations
-- [compaction.md](compaction.md) — How the kernel defragments physical memory to satisfy high-order requests
-- [memblock.md](memblock.md) — The boot-time allocator that hands memory to the buddy system at startup
-- [thp.md](thp.md) — Transparent huge pages: the main consumer of high-order (order-9) buddy allocations
-- [numa.md](numa.md) — NUMA-aware allocation policies built on top of per-node zones
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — Core buddy allocator; `__alloc_pages()` is the main entry point
-- [include/linux/gfp.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) — Full GFP flag definitions and zone selection logic
-- [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zone`, `struct free_area`, watermark definitions
-- [LWN: Memory compaction](https://lwn.net/Articles/368869/) — Mel Gorman's explanation of fragmentation and the compaction solution
-- [LWN: Grouping pages by mobility](https://lwn.net/Articles/224254/) — How migrate types were introduced to reduce permanent fragmentation
-- `Documentation/admin-guide/mm/concepts.rst` — Kernel documentation covering zones, watermarks, and the buddy system
+- [slab.md](slab.md) — SLUBはページ未満の割り当てのために、バディアロケータのすぐ上に位置する
+- [compaction.md](compaction.md) — 高次の要求を満たすためにカーネルが物理メモリをデフラグする方法
+- [memblock.md](memblock.md) — 起動時にメモリをバディシステムへ引き渡すブート時アロケータ
+- [thp.md](thp.md) — Transparent huge pages：高次（order-9）のバディ割り当ての主な利用者
+- [numa.md](numa.md) — ノードごとのゾーンの上に構築されたNUMA対応の割り当てポリシー
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — バディアロケータのコア。`__alloc_pages()`が主な入り口
+- [include/linux/gfp.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) — GFPフラグの全定義とゾーン選択のロジック
+- [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zone`、`struct free_area`、ウォーターマークの定義
+- [LWN: Memory compaction](https://lwn.net/Articles/368869/) — Mel Gormanによる断片化とコンパクションという解決策の解説
+- [LWN: Grouping pages by mobility](https://lwn.net/Articles/224254/) — 恒久的な断片化を減らすためにマイグレートタイプがどのように導入されたか
+- `Documentation/admin-guide/mm/concepts.rst` — ゾーン、ウォーターマーク、バディシステムを扱うカーネルドキュメント

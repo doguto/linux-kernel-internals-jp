@@ -1,61 +1,61 @@
-# Memory Overcommit: Why It's the Only Sane Default {#memory-overcommit-why-its-the-only-sane-default}
+# メモリのオーバーコミット: なぜそれが唯一まともなデフォルトなのか {#memory-overcommit-why-its-the-only-sane-default}
 
-> The real question isn't "why overcommit" - it's "why would you NOT overcommit"
+> 本当の問いは「なぜオーバーコミットするのか」ではない。「なぜオーバーコミット*しない*理由があるのか」である
 
-## The Real Question {#the-real-question}
+## 本当の問い {#the-real-question}
 
-You have 8GB of RAM. A program calls `malloc(16GB)`. Should the kernel refuse?
+RAMが8GBあるとする。プログラムが`malloc(16GB)`を呼び出す。カーネルは拒否すべきだろうか。
 
-On most Linux systems (with default settings), this allocation is allowed. But the question isn't "why does Linux do this crazy thing?" The question is: **what's the alternative?**
+ほとんどのLinuxシステムでは（デフォルト設定のままなら）、この割り当ては許可される。しかし問うべきは「なぜLinuxはこんな無茶なことをするのか?」ではない。問うべきは**代わりにどうするのか?**である。
 
-## Without Overcommit, fork() Breaks {#without-overcommit-fork-breaks}
+## オーバーコミットがなければfork()が破綻する {#without-overcommit-fork-breaks}
 
-The answer starts with `fork()` and [copy-on-write](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) (COW).
+答えは`fork()`と[コピーオンライト](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c)（COW）から始まる。
 
-When you `fork()`, the child gets a copy of the parent's address space - but no pages are actually copied until one process writes to them (see `copy_present_pte()`). This is COW, and it's essential for Unix.
+`fork()`すると、子は親のアドレス空間のコピーを得る。しかし、どちらかのプロセスが書き込むまで実際にはページは1つもコピーされない（`copy_present_pte()`を参照）。これがCOWであり、Unixにとって不可欠なものである。
 
-But here's the problem: without overcommit, the kernel must **reserve** physical memory for all those potential copies at fork time. A 3GB process on a 4GB system couldn't fork - even if the child immediately calls `exec()` and discards everything.
+だがここに問題がある。オーバーコミットがなければ、カーネルはfork時に、それら潜在的なコピーすべてのための物理メモリを**予約**しなければならない。4GBのシステム上の3GBのプロセスは、たとえ子がすぐに`exec()`を呼んですべてを破棄するとしても、forkできなくなる。
 
-That would be insane. So overcommit exists.
+それは正気の沙汰ではない。だからオーバーコミットが存在する。
 
-Once you accept overcommit for fork(), extending it to general allocations is a small step:
-1. Sparse arrays work (map 1GB, touch 10MB)
-2. Memory-mapped files don't require RAM for unread pages
-3. Programs that reserve-then-use (like JVMs) don't waste memory
+fork()のためにオーバーコミットを受け入れてしまえば、それを一般の割り当てに広げるのは小さな一歩である。
+1. 疎な配列が機能する（1GBをマップし、10MBに触れる）
+2. メモリマップトファイルは、読まれていないページのためにRAMを必要としない
+3. 予約してから使うプログラム（JVMなど）がメモリを無駄にしない
 
-## The fork() Example {#the-fork-example}
+## fork()の例 {#the-fork-example}
 
-Consider `fork()`:
+`fork()`を考えてみよう。
 
 ```c
-// Parent process using 4GB of RAM
+// 4GBのRAMを使っている親プロセス
 pid_t pid = fork();
-// Child is created with a copy of 4GB address space
+// 4GBのアドレス空間のコピーを持つ子が作られる
 if (pid == 0) {
     char *args[] = {"/bin/ls", NULL};
-    execve("/bin/ls", args, NULL);  // Immediately replaces address space
+    execve("/bin/ls", args, NULL);  // ただちにアドレス空間を置き換える
 }
 ```
 
-Without overcommit, `fork()` would need 8GB total (4GB parent + 4GB child) even though the child immediately calls `exec()` and discards its copy.
+オーバーコミットがなければ、子がすぐに`exec()`を呼んでコピーを破棄するにもかかわらず、`fork()`には合計8GB（親4GB + 子4GB）が必要になる。
 
-With copy-on-write and overcommit:
+コピーオンライトとオーバーコミットがあれば、次のようになる。
 
-- Child shares parent's pages (no copy yet)
-- `exec()` replaces address space before any copy happens
-- Actual memory needed: ~4GB (not 8GB)
+- 子は親のページを共有する（まだコピーしない）
+- コピーが起きる前に`exec()`がアドレス空間を置き換える
+- 実際に必要なメモリ: 約4GB（8GBではない）
 
-## How Overcommit Works {#how-overcommit-works}
+## オーバーコミットの仕組み {#how-overcommit-works}
 
-When a process requests memory via `mmap()` or `brk()` (the actual syscalls - `malloc()` is a userspace wrapper that calls these), the kernel:
+プロセスが`mmap()`や`brk()`（実際のシステムコール。`malloc()`はこれらを呼び出すユーザー空間のラッパーである）でメモリを要求すると、カーネルは次のことを行う。
 
-1. **Creates a VMA** - A `vm_area_struct` describing the region (defined in [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h), operations in [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c))
-2. **Doesn't allocate physical RAM** - No pages assigned yet
-3. **Returns success** - The process can use the addresses
+1. **VMAを作成する** - 領域を記述する`vm_area_struct`（定義は[include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h)、操作は[mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c)）
+2. **物理RAMは割り当てない** - まだページは割り当てられない
+3. **成功を返す** - プロセスはそのアドレスを使える
 
-Note: Page tables are **not** populated at mmap time. They're created on-demand when pages are first accessed (page fault).
+注: ページテーブルはmmap時には作られ**ない**。ページに初めてアクセスしたとき（ページフォールト）にオンデマンドで作られる。
 
-Physical RAM is allocated later, on first access (demand paging):
+物理RAMは後で、最初のアクセス時に割り当てられる（デマンドページング）。
 
 ```
 mmap(1GB)            First write to page
@@ -75,46 +75,46 @@ mmap(1GB)            First write to page
                     └─────────────┘
 ```
 
-## Overcommit Modes {#overcommit-modes}
+## オーバーコミットのモード {#overcommit-modes}
 
-Linux provides three modes via `/proc/sys/vm/overcommit_memory`:
+Linuxは`/proc/sys/vm/overcommit_memory`で3つのモードを提供する。
 
-### Mode 0: Heuristic (Default) {#mode-0-heuristic-default}
+### モード0: ヒューリスティック（デフォルト） {#mode-0-heuristic-default}
 
 ```bash
 $ cat /proc/sys/vm/overcommit_memory
 0
 ```
 
-**Behavior:** Linux uses heuristics to decide if an allocation is "reasonable."
+**挙動:** Linuxはヒューリスティックを使って、割り当てが「妥当」かどうかを判断する。
 
-- Rejects obviously excessive allocations
-- Allows moderate overcommit
-- Considers available RAM, swap, and current usage
+- 明らかに過大な割り当ては拒否する
+- 適度なオーバーコミットは許可する
+- 利用可能なRAM、スワップ、現在の使用量を考慮する
 
-The heuristic is implemented in `__vm_enough_memory()` ([mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c)). It considers total RAM, swap, hugetlb reservations, admin/user reserves, and existing commitments. The simplified rule: reject if obviously excessive, allow if plausibly satisfiable.
+このヒューリスティックは`__vm_enough_memory()`（[mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c)）に実装されている。RAMの総量、スワップ、hugetlbの予約、管理者/ユーザー向けの予備、既存のコミットを考慮する。単純化したルールは、明らかに過大なら拒否し、満たせそうなら許可する、というものである。
 
-### Mode 1: Always Overcommit {#mode-1-always-overcommit}
+### モード1: 常にオーバーコミット {#mode-1-always-overcommit}
 
 ```bash
 $ echo 1 > /proc/sys/vm/overcommit_memory
 ```
 
-**Behavior:** Never refuse an allocation based on memory availability.
+**挙動:** メモリの空き状況を理由に割り当てを拒否することは決してない。
 
-- A 1TB `mmap()` succeeds on a 16GB system
-- Useful for sparse arrays, memory-mapped files
-- Dangerous if programs actually touch what they allocate
+- 16GBのシステムで1TBの`mmap()`が成功する
+- 疎な配列やメモリマップトファイルに有用
+- プログラムが割り当てた分に実際に触れる場合は危険
 
-### Mode 2: Strict Accounting {#mode-2-strict-accounting}
+### モード2: 厳格な計上 {#mode-2-strict-accounting}
 
 ```bash
 $ echo 2 > /proc/sys/vm/overcommit_memory
 ```
 
-**Behavior:** Track commit charge, refuse if over limit.
+**挙動:** コミット量を追跡し、上限を超えたら拒否する。
 
-Commit limit is calculated in [mm/util.c:vm_commit_limit()](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c):
+コミット上限は[mm/util.c:vm_commit_limit()](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c)で計算される。
 
 ```
 If overcommit_kbytes is set:
@@ -126,25 +126,25 @@ Otherwise:
 
 ```bash
 $ cat /proc/sys/vm/overcommit_ratio
-50  # Default: 50%
+50  # デフォルト: 50%
 
-# Alternatively, set an absolute limit ([added in kernel 3.14](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=49f0ce5f9232)):
+# あるいは絶対値の上限を設定する ([added in kernel 3.14](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=49f0ce5f9232)):
 $ echo 8388608 > /proc/sys/vm/overcommit_kbytes  # 8GB
 
-# On an 8GB RAM + 2GB swap system with default ratio:
+# デフォルトの比率で、RAM 8GB + スワップ2GBのシステムの場合:
 # Commit limit = (8GB * 0.5) + 2GB = 6GB
 ```
 
-Check current status:
+現在の状態を確認する。
 ```bash
 $ cat /proc/meminfo | grep Commit
 CommitLimit:    6291456 kB
 Committed_AS:   2145678 kB
 ```
 
-## When Overcommit Fails: The OOM Killer {#when-overcommit-fails-the-oom-killer}
+## オーバーコミットが破綻したとき: OOM killer {#when-overcommit-fails-the-oom-killer}
 
-If programs actually use more memory than available, someone must die:
+プログラムが利用可能な量を超えるメモリを実際に使うと、誰かが死ななければならない。
 
 ```
 Physical RAM exhausted
@@ -163,168 +163,168 @@ Physical RAM exhausted
 └───────────────────┘
 ```
 
-The OOM killer selects a victim based on ([mm/oom_kill.c:oom_badness()](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c)):
+OOM killerは次の要素に基づいて犠牲者を選ぶ（[mm/oom_kill.c:oom_badness()](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c)）。
 
-- **`RSS`** - Resident memory usage
-- **Swap entries** - Memory swapped out
-- **Page tables** - Memory used for page tables
-- **oom_score_adj** - User-tunable adjustment (-1000 to 1000)
+- **`RSS`** - 常駐メモリの使用量
+- **スワップエントリ** - スワップアウトされたメモリ
+- **ページテーブル** - ページテーブルに使われているメモリ
+- **oom_score_adj** - ユーザーが調整可能な補正値（-1000〜1000）
 
-Earlier kernels considered process age and child processes, but these heuristics were [removed in 2019](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=bbbe48029720) as unreliable. See the [LKML discussion](https://lore.kernel.org/lkml/20190225065854.30027-1-shakeelb@google.com/) for the rationale.
+以前のカーネルはプロセスの経過時間や子プロセスも考慮していたが、これらのヒューリスティックは信頼性が低いとして[2019年に削除された](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=bbbe48029720)。その根拠は[LKMLでの議論](https://lore.kernel.org/lkml/20190225065854.30027-1-shakeelb@google.com/)を参照。
 
 ```bash
-# View OOM score for a process
+# プロセスのOOMスコアを見る
 $ cat /proc/<pid>/oom_score
 150
 
-# Protect a critical process
+# 重要なプロセスを保護する
 $ echo -500 > /proc/<pid>/oom_score_adj
 ```
 
-## Why Not Just Disable Overcommit? {#why-not-just-disable-overcommit}
+## オーバーコミットを単に無効にすればよいのでは? {#why-not-just-disable-overcommit}
 
-Strict mode (mode 2) sounds safer. Why isn't it default?
+厳格モード（モード2）のほうが安全に聞こえる。なぜデフォルトではないのか。
 
-**Problem 1: `fork()` becomes expensive**
+**問題1: `fork()`が高くつくようになる**
 
-Without overcommit, every `fork()` must reserve memory for potential COW copies, even if `exec()` follows immediately.
+オーバーコミットがなければ、すぐ後に`exec()`が続く場合でも、すべての`fork()`が潜在的なCOWコピーのためにメモリを予約しなければならない。
 
-**Problem 2: Sparse data structures fail**
+**問題2: 疎なデータ構造が失敗する**
 
 ```c
-// Sparse array: reserve 1GB address space, use 10MB
+// 疎な配列: 1GBのアドレス空間を予約し、10MBを使う
 void *sparse = mmap(NULL, 1UL << 30,  // 1GB
                     PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
-// Only pages actually written consume physical RAM
-// Without overcommit: allocation might fail or reserve 1GB
-// With overcommit: works fine, RSS reflects actual usage
+// 実際に書き込まれたページだけが物理RAMを消費する
+// オーバーコミットなし: 割り当てが失敗するか、1GBを予約する
+// オーバーコミットあり: 問題なく動き、RSSは実際の使用量を反映する
 ```
 
-**Problem 3: Memory-mapped files**
+**問題3: メモリマップトファイル**
 
 ```c
-// Map 10GB file, read 100 bytes
+// 10GBのファイルをマップし、100バイトを読む
 void *p = mmap(NULL, 10UL*1024*1024*1024,
                PROT_READ, MAP_PRIVATE, fd, 0);
-// Without overcommit: might fail
-// With overcommit: only accessed pages loaded
+// オーバーコミットなし: 失敗するかもしれない
+// オーバーコミットあり: アクセスされたページだけがロードされる
 ```
 
-**Problem 4: JVM and similar runtimes**
+**問題4: JVMや同様のランタイム**
 
 ```bash
-# JVM reserves max heap at startup
+# JVMは起動時に最大ヒープを予約する
 java -Xmx8g -jar app.jar
-# Actual usage might be 500MB
+# 実際の使用量は500MBかもしれない
 ```
 
-## The Trade-off {#the-trade-off}
+## トレードオフ {#the-trade-off}
 
-| Approach | Pros | Cons |
+| アプローチ | 長所 | 短所 |
 |----------|------|------|
-| Overcommit (default) | More programs run, `fork()` works, sparse structures | OOM killer may strike |
-| Strict (mode 2) | Predictable failures | Wastes memory, `fork()` heavy, breaks sparse usage |
+| オーバーコミット（デフォルト） | より多くのプログラムが動く、`fork()`が機能する、疎な構造が使える | OOM killerが発動しうる |
+| 厳格（モード2） | 失敗が予測可能 | メモリを無駄にする、`fork()`が重い、疎な使い方が破綻する |
 
-## Historical Context {#historical-context}
+## 歴史的背景 {#historical-context}
 
-### Before Linux: Traditional Unix {#before-linux-traditional-unix}
+### Linux以前: 伝統的なUnix {#before-linux-traditional-unix}
 
-Early Unix systems (1970s-80s) typically used **strict memory accounting**. When you called `malloc()`, the system checked if physical memory (or swap) was available. This was simpler but wasteful - memory reserved but unused by one process couldn't be used by others.
+初期のUnixシステム（1970〜80年代）は、一般に**厳格なメモリ計上**を使っていた。`malloc()`を呼ぶと、システムは物理メモリ（またはスワップ）が利用可能かどうかを確認した。これは単純だったが無駄が多かった。あるプロセスが予約したが使っていないメモリを、他のプロセスが使えなかったからである。
 
-### Linux's Aggressive Approach (1990s) {#linuxs-aggressive-approach-1990s}
+### Linuxの積極的なアプローチ（1990年代） {#linuxs-aggressive-approach-1990s}
 
-Linux chose a different path from the start. Linus Torvalds favored **optimistic allocation** - let programs allocate freely, deal with shortages when they actually occur. This matched how programs really behave: they often allocate more than they use.
+Linuxは当初から別の道を選んだ。Linus Torvaldsは**楽観的な割り当て**を好んだ。プログラムには自由に割り当てさせ、不足は実際に起きたときに対処する。これはプログラムの実際の振る舞い、つまり使う以上に割り当てることが多いという性質に合っていた。
 
-Why this made sense:
-1. **Memory was expensive** - Maximize utilization of scarce RAM
-2. **`fork()`/`exec()` pattern** - The dominant Unix pattern, benefits enormously from COW + overcommit
-3. **Sparse usage is common** - Real programs don't touch all allocated memory
+これが理にかなっていた理由:
+1. **メモリは高価だった** - 希少なRAMの利用率を最大化する
+2. **`fork()`/`exec()`パターン** - Unixで支配的なパターンであり、COW + オーバーコミットから莫大な恩恵を受ける
+3. **疎な使い方は一般的** - 実際のプログラムは割り当てたメモリのすべてに触れるわけではない
 
-### The OOM Killer (1998) {#the-oom-killer-1998}
+### OOM killer（1998年） {#the-oom-killer-1998}
 
-The inevitable consequence of optimistic allocation: sometimes the bet fails. Rik van Riel created the OOM killer in [**August 1998**](https://lwn.net/1998/0903/a/oom.html) (Linux 2.1.x development series, see [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c)) to handle this:
+楽観的な割り当ての避けられない帰結として、賭けが外れることもある。Rik van Rielは、これに対処するために[**1998年8月**](https://lwn.net/1998/0903/a/oom.html)にOOM killerを作った（Linux 2.1.x開発シリーズ。[`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c)を参照）。
 
 > *"Copyright (C) 1998,2000 Rik van Riel"*
 > *"Thanks go out to Claus Fischer for some serious inspiration and for goading me into coding this file."*
 
-The OOM killer was controversial from day one. But the alternatives are worse:
+OOM killerは最初から議論の的だった。しかし、代替案はもっと悪い。
 
-- **(a)** Return `ENOMEM` and have programs crash anyway
-- **(b)** Never overcommit and waste enormous amounts of memory
-- **(c)** Kill something and let the system recover
+- **(a)** `ENOMEM`を返し、どのみちプログラムをクラッシュさせる
+- **(b)** 決してオーバーコミットせず、膨大な量のメモリを無駄にする
+- **(c)** 何かをkillしてシステムを回復させる
 
-Option (c) is the least bad. That's engineering reality.
+選択肢(c)が最も悪くない。それがエンジニアリングの現実である。
 
-### Evolution of Overcommit Controls {#evolution-of-overcommit-controls}
+### オーバーコミット制御の変遷 {#evolution-of-overcommit-controls}
 
-- **Linux 2.4**: Formalized `vm.overcommit_memory` sysctl (modes 0, 1, 2)
-- **Linux 2.6**: Added `vm.overcommit_ratio` for strict mode tuning
-- **Linux 3.14**: Added `vm.overcommit_kbytes` as alternative to ratio ([commit 49f0ce5f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=49f0ce5f9232))
-- **2010**: OOM killer [rewritten by David Rientjes](https://lwn.net/Articles/391222/) (Google)
-- **Linux 4.6 (2016)**: OOM reaper introduced ([commit aac4536355](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=aac453635549)) - reclaims memory from OOM victims faster
-- **Linux 4.19 (2018)**: `cgroup`-aware OOM killer ([commit 3d8b38eb81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3d8b38eb81ca)) - can kill entire `cgroup` as a unit
+- **Linux 2.4**: `vm.overcommit_memory` sysctl（モード0、1、2）が正式化された
+- **Linux 2.6**: 厳格モードの調整用に`vm.overcommit_ratio`が追加された
+- **Linux 3.14**: ratioの代替として`vm.overcommit_kbytes`が追加された（[commit 49f0ce5f](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=49f0ce5f9232)）
+- **2010年**: OOM killerが[David Rientjes（Google）によって書き直された](https://lwn.net/Articles/391222/)
+- **Linux 4.6（2016年）**: OOM reaperが導入された（[commit aac4536355](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=aac453635549)） - OOMの犠牲者からより速くメモリを回収する
+- **Linux 4.19（2018年）**: `cgroup`対応のOOM killer（[commit 3d8b38eb81](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3d8b38eb81ca)） - `cgroup`全体を1単位としてkillできる
 
-## Recommendations {#recommendations}
+## 推奨事項 {#recommendations}
 
-**For most workloads:** Keep default (mode 0)
+**ほとんどのワークロード:** デフォルト（モード0）のままにする
 
-**For databases/critical services:**
+**データベース/重要なサービス:**
 ```bash
-# Protect from OOM killer
+# OOM killerから保護する
 echo -1000 > /proc/<pid>/oom_score_adj
 ```
 
-**For containers:**
+**コンテナ:**
 
-- Use memory cgroups to limit and isolate
-- Let container runtime handle OOM
+- メモリcgroupを使って制限・分離する
+- OOMの処理はコンテナランタイムに任せる
 
-**For strict environments:**
+**厳格な環境:**
 ```bash
-# Mode 2 with careful ratio
+# 慎重に選んだ比率でモード2を使う
 echo 2 > /proc/sys/vm/overcommit_memory
 echo 80 > /proc/sys/vm/overcommit_ratio
 ```
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
 ```bash
-# Check current mode
+# 現在のモードを確認
 cat /proc/sys/vm/overcommit_memory
 
-# See commit limit and usage
+# コミット上限と使用量を見る
 grep -i commit /proc/meminfo
 
-# View OOM scores
+# OOMスコアを見る
 for pid in /proc/[0-9]*; do
     echo "$(cat $pid/oom_score 2>/dev/null) $(cat $pid/comm 2>/dev/null)"
 done | sort -rn | head -10
 
-# Watch for OOM events
+# OOMイベントを監視
 dmesg -w | grep -i oom
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — calls `__vm_enough_memory()` during `mmap()` and `brk()` to enforce overcommit policy
-- [mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c) — `__vm_enough_memory()` heuristic (mode 0) and `vm_commit_limit()` calculation (mode 2)
-- [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()`: how victims are scored and selected
+- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `mmap()`と`brk()`の際に`__vm_enough_memory()`を呼び出し、オーバーコミットのポリシーを強制する
+- [mm/util.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/util.c) — `__vm_enough_memory()`のヒューリスティック（モード0）と`vm_commit_limit()`の計算（モード2）
+- [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()`：犠牲者がどのようにスコア付けされ選ばれるか
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/mm/overcommit-accounting.rst`](https://docs.kernel.org/mm/overcommit-accounting.html) — official explanation of the three modes and commit limit formula
-- [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) — sysctl knobs: `overcommit_memory`, `overcommit_ratio`, `overcommit_kbytes`
+- [`Documentation/mm/overcommit-accounting.rst`](https://docs.kernel.org/mm/overcommit-accounting.html) — 3つのモードとコミット上限の式についての公式の説明
+- [`Documentation/admin-guide/sysctl/vm.rst`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) — sysctlのノブ：`overcommit_memory`、`overcommit_ratio`、`overcommit_kbytes`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [oom.md](oom.md) — OOM killer scoring, `oom_score_adj`, and cgroup-aware OOM
-- [mmap.md](mmap.md) — VMA creation and demand paging: why address space is cheap
+- [oom.md](oom.md) — OOM killerのスコア付け、`oom_score_adj`、cgroup対応のOOM
+- [mmap.md](mmap.md) — VMAの作成とデマンドページング：なぜアドレス空間は安価なのか
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Toward better OOM handling](https://lwn.net/Articles/391222/) — David Rientjes's 2010 OOM killer rewrite at Google
-- [LWN: The OOM killer](https://lwn.net/Articles/317814/) — deep dive into victim selection heuristics
-- [LWN: Smarter out-of-memory handling](https://lwn.net/Articles/761118/) — cgroup-aware OOM and the OOM reaper
+- [LWN: Toward better OOM handling](https://lwn.net/Articles/391222/) — 2010年のGoogleでのDavid RientjesによるOOM killerの書き直し
+- [LWN: The OOM killer](https://lwn.net/Articles/317814/) — 犠牲者選択のヒューリスティックの詳細な解説
+- [LWN: Smarter out-of-memory handling](https://lwn.net/Articles/761118/) — cgroup対応のOOMとOOM reaper

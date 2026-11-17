@@ -1,222 +1,222 @@
-# What happens during swapping {#what-happens-during-swapping}
+# スワップ時に何が起こるか {#what-happens-during-swapping}
 
-> The journey of a page from memory to disk and back
+> メモリからディスクへ、そして再びメモリへと戻るpageの旅
 
-## What is swapping? {#what-is-swapping}
+## スワップとは何か {#what-is-swapping}
 
-When memory runs low, the kernel can move anonymous pages (heap, stack, private mappings) to a swap device - either a disk partition or a swap file. This frees physical memory for other uses while preserving the page's contents.
+メモリが不足すると、カーネルは匿名page（ヒープ、スタック、プライベートマッピング）をスワップデバイス — ディスクパーティションまたはスワップファイル — に移動できる。これにより、pageの内容を保持したまま、物理メモリを他の用途のために解放できる。
 
 ```mermaid
 flowchart LR
-    subgraph SwapOut["Swap Out (Memory → Disk)"]
+    subgraph SwapOut["スワップアウト（メモリ → ディスク）"]
         direction LR
-        subgraph PM1["Process Memory"]
-            AP["Anonymous Page"]
+        subgraph PM1["プロセスのメモリ"]
+            AP["匿名page"]
         end
-        subgraph SS1["Swap Space (disk)"]
-            SL1["Swap slot (copy)"]
+        subgraph SS1["スワップ領域（ディスク）"]
+            SL1["スワップスロット（コピー）"]
         end
-        AP -->|write| SL1
-        PM1 -.->|Page freed!| PM1
+        AP -->|書き込み| SL1
+        PM1 -.->|pageが解放される!| PM1
     end
 ```
 
 ```mermaid
 flowchart RL
-    subgraph SwapIn["Swap In (Disk → Memory)"]
+    subgraph SwapIn["スワップイン（ディスク → メモリ）"]
         direction RL
-        subgraph SS2["Swap Space (disk)"]
-            SL2["Swap slot"]
+        subgraph SS2["スワップ領域（ディスク）"]
+            SL2["スワップスロット"]
         end
-        subgraph PM2["Process Memory"]
-            NP["New Page (restored)"]
+        subgraph PM2["プロセスのメモリ"]
+            NP["新しいpage（復元済み）"]
         end
-        SL2 -->|read| NP
+        SL2 -->|読み込み| NP
     end
 ```
 
-Unlike file pages (which can be re-read from their backing file), anonymous pages have nowhere to go except swap space.
+ファイルpage（バッキングファイルから再読み込みできる）とは異なり、匿名pageにはスワップ領域以外に行き場がない。
 
-## Why this page was chosen {#why-this-page-was-chosen}
+## なぜこのpageが選ばれたか {#why-this-page-was-chosen}
 
-The kernel doesn't randomly pick pages to swap. It uses the [LRU (Least Recently Used)](reclaim.md) lists to find cold pages - pages that haven't been accessed recently.
+カーネルはスワップするpageをランダムに選ぶわけではない。[LRU（Least Recently Used）](reclaim.md)リストを使ってコールドなpage — 最近アクセスされていないpage — を見つける。
 
-### The selection process {#the-selection-process}
+### 選択の過程 {#the-selection-process}
 
 ```mermaid
 flowchart TB
-    subgraph PageReclaimScanning["Page Reclaim Scanning"]
-        ActiveLRU["<b>Active Anonymous LRU</b><br/>(hot pages - recently used)<br/><i>Not scanned first - these pages are in use</i>"]
-        InactiveLRU["<b>Inactive Anonymous LRU</b><br/>(cold pages - candidates for swap)<br/><i>Scanned during reclaim</i>"]
-        Selection["<b>Selection Criteria:</b><br/>- Not recently accessed (PG_referenced clear)<br/>- Not locked (PG_locked clear)<br/>- Not being written back already<br/>- Can be unmapped from all page tables"]
+    subgraph PageReclaimScanning["page回収のスキャン"]
+        ActiveLRU["<b>Active Anonymous LRU</b><br/>（ホットなpage - 最近使われた）<br/><i>最初にはスキャンされない - これらのpageは使用中</i>"]
+        InactiveLRU["<b>Inactive Anonymous LRU</b><br/>（コールドなpage - スワップ候補）<br/><i>回収中にスキャンされる</i>"]
+        Selection["<b>選択基準:</b><br/>- 最近アクセスされていない（PG_referencedがクリア）<br/>- ロックされていない（PG_lockedがクリア）<br/>- すでにライトバック中ではない<br/>- すべてのページテーブルからアンマップできる"]
 
-        ActiveLRU -->|"demote (if not recently accessed)"| InactiveLRU
+        ActiveLRU -->|"降格（最近アクセスされていなければ）"| InactiveLRU
         InactiveLRU --> Selection
     end
 ```
 
-### The referenced flag check {#the-referenced-flag-check}
+### referencedフラグのチェック {#the-referenced-flag-check}
 
-Pages get a "second chance" via the referenced flag:
+pageはreferencedフラグによって「セカンドチャンス」を得る。
 
 ```mermaid
 flowchart TB
-    subgraph ReferencedFlagCheck["Page on Inactive LRU"]
-        Scan["Reclaim scan finds page"]
-        Check{"PG_referenced<br/>set?"}
-        Accessed["Page was accessed since last scan:<br/>- Clear PG_referenced<br/>- Rotate to end of list (give it more time)"]
-        Cold["Page is truly cold:<br/>- Select for swap out"]
+    subgraph ReferencedFlagCheck["Inactive LRU上のpage"]
+        Scan["回収スキャンがpageを見つける"]
+        Check{"PG_referenced<br/>がセットされている?"}
+        Accessed["前回のスキャン以降にpageがアクセスされた:<br/>- PG_referencedをクリア<br/>- リストの末尾へローテート（もっと時間を与える）"]
+        Cold["pageは本当にコールド:<br/>- スワップアウト対象に選択"]
 
         Scan --> Check
-        Check -->|Yes| Accessed
-        Check -->|No| Cold
+        Check -->|はい| Accessed
+        Check -->|いいえ| Cold
     end
 ```
 
-This prevents swapping out pages that are still being used occasionally.
+これにより、まだ時折使われているpageがスワップアウトされるのを防ぐ。
 
-## Swap space organization {#swap-space-organization}
+## スワップ領域の構成 {#swap-space-organization}
 
-Linux supports two types of swap:
+Linuxは2種類のスワップをサポートする。
 
-| Type | Device | Characteristics |
+| 種類 | デバイス | 特徴 |
 |------|--------|-----------------|
-| Swap partition | `/dev/sda2` | Dedicated, fixed size |
-| Swap file | `/swapfile` | Flexible, can resize, easier to manage |
+| スワップパーティション | `/dev/sda2` | 専用、固定サイズ |
+| スワップファイル | `/swapfile` | 柔軟、サイズ変更可能、管理が容易 |
 
-On modern kernels (2.6+), the kernel [maps swap file blocks to disk sectors at swapon time](https://lwn.net/Articles/2668/) and performs [direct block I/O, bypassing all filesystem code](https://lkml.org/lkml/2005/7/7/326). Performance between partition and file swap is effectively identical for non-fragmented files on non-COW filesystems (ext4, XFS). On SSDs, even fragmented swap files show negligible overhead since seek penalties don't apply.
+現代のカーネル（2.6以降）では、カーネルは[swapon時にスワップファイルのブロックをディスクセクタにマップし](https://lwn.net/Articles/2668/)、[ファイルシステムのコードをすべて迂回して直接ブロックI/Oを行う](https://lkml.org/lkml/2005/7/7/326)。COWでないファイルシステム（ext4、XFS）上の断片化していないファイルであれば、パーティションとファイルのスワップの性能は実質的に同じである。SSDでは、シークのペナルティがないため、断片化したスワップファイルでもオーバーヘッドは無視できる程度である。
 
-### Swap area structure {#swap-area-structure}
+### スワップ領域の構造 {#swap-area-structure}
 
 ```c
-// From include/linux/swap.h
+// include/linux/swap.h より
 struct swap_info_struct {
-    unsigned long flags;        // SWP_USED, SWP_WRITEOK, etc.
-    signed char prio;           // Priority (higher = used first)
-    struct file *swap_file;     // The swap file/device
-    struct block_device *bdev;  // Block device (if partition)
-    unsigned long *swap_map;    // Usage count per slot
-    unsigned long lowest_bit;   // Optimization: first free slot hint
-    unsigned long highest_bit;  // Optimization: last used slot
-    unsigned int pages;         // Total slots in this area
-    unsigned int inuse_pages;   // Currently used slots
+    unsigned long flags;        // SWP_USED、SWP_WRITEOKなど
+    signed char prio;           // 優先度（高いほど先に使われる）
+    struct file *swap_file;     // スワップファイル/デバイス
+    struct block_device *bdev;  // ブロックデバイス（パーティションの場合）
+    unsigned long *swap_map;    // スロットごとの使用カウント
+    unsigned long lowest_bit;   // 最適化: 最初の空きスロットのヒント
+    unsigned long highest_bit;  // 最適化: 最後に使われたスロット
+    unsigned int pages;         // この領域の総スロット数
+    unsigned int inuse_pages;   // 現在使用中のスロット数
     // ...
 };
 ```
 
-### Swap slots {#swap-slots}
+### スワップスロット {#swap-slots}
 
-Swap space is divided into page-sized slots:
+スワップ領域はpageサイズのスロットに分割されている。
 
 ```mermaid
 flowchart TB
-    subgraph SwapArea["Swap Area (e.g., 1GB)"]
+    subgraph SwapArea["スワップ領域（例: 1GB）"]
         direction LR
-        subgraph Slots["Slot Numbers"]
-            S0["0<br/>used"]
-            S1["1<br/>free"]
-            S2["2<br/>used"]
-            S3["3<br/>free"]
-            S4["4<br/>free"]
-            S5["5<br/>used"]
-            S6["6<br/>used"]
-            S7["7<br/>free"]
+        subgraph Slots["スロット番号"]
+            S0["0<br/>使用中"]
+            S1["1<br/>空き"]
+            S2["2<br/>使用中"]
+            S3["3<br/>空き"]
+            S4["4<br/>空き"]
+            S5["5<br/>使用中"]
+            S6["6<br/>使用中"]
+            S7["7<br/>空き"]
             SDOTS["..."]
-            SN["N-1<br/>free"]
+            SN["N-1<br/>空き"]
         end
     end
 
-    subgraph SwapMap["swap_map[] tracks usage count for each slot"]
-        M0["0: count=2 (shared by 2 processes after fork)"]
-        M1["1: count=0 (free)"]
-        M2["2: count=1 (one owner)"]
+    subgraph SwapMap["swap_map[]は各スロットの使用カウントを追跡する"]
+        M0["0: count=2（fork後に2つのプロセスで共有）"]
+        M1["1: count=0（空き）"]
+        M2["2: count=1（所有者は1つ）"]
         M3["..."]
     end
 ```
 
-### Viewing swap status {#viewing-swap-status}
+### スワップの状態を確認する {#viewing-swap-status}
 
 ```bash
-# View swap areas
+# スワップ領域を表示する
 cat /proc/swaps
 # Filename          Type        Size      Used    Priority
 # /dev/nvme0n1p3    partition   8388604   12345   -2
 
-# Detailed swap info
+# 詳細なスワップ情報
 swapon --show
 
-# System-wide swap usage
+# システム全体のスワップ使用量
 free -h
 ```
 
-## Stage 1: Swap slot allocation {#stage-1-swap-slot-allocation}
+## 段階1: スワップスロットの割り当て {#stage-1-swap-slot-allocation}
 
-When the kernel decides to swap out a page, it first allocates a slot:
+カーネルがpageをスワップアウトすると決めると、まずスロットを割り当てる。
 
 ```c
-// mm/swap_slots.c / mm/swapfile.c (simplified)
+// mm/swap_slots.c / mm/swapfile.c（簡略化）
 swp_entry_t folio_alloc_swap(struct folio *folio)
 {
     struct swap_info_struct *si;
     swp_entry_t entry;
 
-    // Find a swap area with free slots
-    // Higher priority areas are checked first
-    si = swap_info[...];  // Based on priority
+    // 空きスロットのあるスワップ領域を探す
+    // 優先度の高い領域から先にチェックされる
+    si = swap_info[...];  // 優先度に基づく
 
-    // Allocate a slot
+    // スロットを割り当てる
     offset = scan_swap_map_slots(si, ...);
 
-    // Create swap entry (type + offset encoded)
+    // スワップエントリを作成する（type + offsetをエンコード）
     entry = swp_entry(si->type, offset);
 
     return entry;
 }
 ```
 
-### Swap entry encoding {#swap-entry-encoding}
+### スワップエントリのエンコーディング {#swap-entry-encoding}
 
-A swap entry packs the swap area type and offset into a single value:
+スワップエントリは、スワップ領域のtypeとoffsetを1つの値に詰め込む。
 
 ```mermaid
 flowchart LR
-    subgraph SwapEntry["Swap Entry (64-bit)"]
+    subgraph SwapEntry["スワップエントリ（64ビット）"]
         direction TB
-        B0["Bits 0: Present = 0<br/>(not a valid page mapping)"]
-        B1["Bits 1-5: Swap type<br/>(which swap area, 0-31)"]
-        B2["Bits 6-57: Swap offset<br/>(slot number within the area)"]
-        B3["Bits 58-63: Flags and reserved"]
+        B0["ビット0: Present = 0<br/>（有効なpageマッピングではない）"]
+        B1["ビット1-5: スワップtype<br/>（どのスワップ領域か、0-31）"]
+        B2["ビット6-57: スワップoffset<br/>（領域内のスロット番号）"]
+        B3["ビット58-63: フラグと予約"]
     end
 ```
 
-This entry will replace the page table entry (PTE) after the page is written out.
+このエントリは、pageが書き出された後にページテーブルエントリ（PTE）を置き換える。
 
-## Stage 2: Writing to swap {#stage-2-writing-to-swap}
+## 段階2: スワップへの書き込み {#stage-2-writing-to-swap}
 
-Once a slot is allocated, the page content is written to the swap device:
+スロットが割り当てられると、pageの内容がスワップデバイスに書き込まれる。
 
 ```c
-// mm/vmscan.c shrink_folio_list() (simplified)
+// mm/vmscan.c shrink_folio_list()（簡略化）
 static unsigned int shrink_folio_list(struct list_head *folio_list, ...)
 {
-    // For each folio...
+    // 各folioについて...
 
-    // 1. Unmap from all page tables first
-    //    (so no one can access while we're writing)
+    // 1. まずすべてのページテーブルからアンマップする
+    //    （書き込み中に誰もアクセスできないように）
     try_to_unmap(folio, TTU_BATCH_FLUSH);
 
-    // 2. If anonymous and we can swap...
+    // 2. 匿名pageでスワップ可能なら...
     if (folio_test_anon(folio)) {
         if (!add_to_swap(folio))
-            goto activate;  // Can't swap, keep in memory
+            goto activate;  // スワップできない、メモリに残す
 
-        // 3. Write page to swap device
+        // 3. pageをスワップデバイスに書き込む
         pageout(folio, mapping);
     }
 }
 ```
 
-### The add_to_swap() function {#the-addtoswap-function}
+### add_to_swap()関数 {#the-addtoswap-function}
 
 ```c
 // mm/swap_state.c
@@ -224,16 +224,16 @@ bool add_to_swap(struct folio *folio)
 {
     swp_entry_t entry;
 
-    // 1. Get a swap slot
+    // 1. スワップスロットを取得する
     entry = folio_alloc_swap(folio);
     if (!entry.val)
-        return false;  // No swap space available
+        return false;  // 利用可能なスワップ領域がない
 
-    // 2. Set up folio for swap
+    // 2. folioをスワップ用に設定する
     folio_set_swapcache(folio);
     folio->swap = entry;
 
-    // 3. Add to swap cache (so others can find it during I/O)
+    // 3. スワップキャッシュに追加する（I/O中に他から見つけられるように）
     __folio_set_swap_entry(folio, entry);
     xa_store(&swap_address_space->i_pages, ...);
 
@@ -241,35 +241,35 @@ bool add_to_swap(struct folio *folio)
 }
 ```
 
-### Writing to disk {#writing-to-disk}
+### ディスクへの書き込み {#writing-to-disk}
 
 ```c
-// Simplified I/O path
+// 簡略化したI/Oパス
 static int pageout(struct folio *folio, struct address_space *mapping)
 {
-    // Submit write I/O to swap device
-    // This is asynchronous - we don't wait here
+    // スワップデバイスへの書き込みI/Oを発行する
+    // これは非同期 - ここでは待たない
 
     struct writeback_control wbc = {
-        .sync_mode = WB_SYNC_NONE,  // Don't wait
+        .sync_mode = WB_SYNC_NONE,  // 待たない
     };
 
     return mapping->a_ops->writepage(&folio->page, &wbc);
 }
 ```
 
-The actual I/O goes through the block layer:
+実際のI/Oはブロック層を通る。
 
 ```mermaid
 flowchart TB
-    subgraph PageWritePath["Page Write Path"]
+    subgraph PageWritePath["pageの書き込みパス"]
         pageout["pageout()"]
         swap_writepage["swap_writepage()"]
         __swap_writepage["__swap_writepage()"]
         submit_bio["submit_bio()"]
-        block["Block layer"]
-        driver["Device driver"]
-        disk["Disk"]
+        block["ブロック層"]
+        driver["デバイスドライバ"]
+        disk["ディスク"]
 
         pageout --> swap_writepage
         swap_writepage --> __swap_writepage
@@ -280,60 +280,60 @@ flowchart TB
     end
 ```
 
-## Stage 3: Page table update {#stage-3-page-table-update}
+## 段階3: ページテーブルの更新 {#stage-3-page-table-update}
 
-After the write completes, the PTE is updated to contain the swap entry instead of a page mapping:
+書き込みが完了すると、PTEはpageマッピングの代わりにスワップエントリを持つように更新される。
 
 ```mermaid
 flowchart LR
-    subgraph Before["Before swap out"]
+    subgraph Before["スワップアウト前"]
         direction LR
-        PTE1["<b>Page Table Entry (PTE)</b><br/>Present=1<br/>PFN=0x12345"]
-        PP["<b>Physical Page</b><br/>Frame 0x12345<br/>[page data]"]
+        PTE1["<b>ページテーブルエントリ（PTE）</b><br/>Present=1<br/>PFN=0x12345"]
+        PP["<b>物理page</b><br/>フレーム 0x12345<br/>[pageデータ]"]
         PTE1 --> PP
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph After["After swap out"]
+    subgraph After["スワップアウト後"]
         direction LR
-        SE["<b>Swap Entry</b><br/>Present=0<br/>Type=0<br/>Offset=0x789"]
-        SD["<b>Swap Device</b><br/>Slot 0x789<br/>[page data]"]
+        SE["<b>スワップエントリ</b><br/>Present=0<br/>Type=0<br/>Offset=0x789"]
+        SD["<b>スワップデバイス</b><br/>スロット 0x789<br/>[pageデータ]"]
         SE --> SD
     end
-    Freed["Physical page returned to buddy allocator!"]
+    Freed["物理pageはバディアロケータに返される!"]
 ```
 
-### The swap cache {#the-swap-cache}
+### スワップキャッシュ {#the-swap-cache}
 
-During I/O, the page stays in the **swap cache** - an address space that allows finding in-flight pages:
+I/O中、pageは**スワップキャッシュ** — 処理中のpageを見つけられるようにするアドレス空間 — に留まる。
 
 ```mermaid
 flowchart LR
-    subgraph SwapCachePurpose["Swap Cache Purpose: While page is being written to swap"]
-        ProcessA["Process A"]
-        SwapCache["Swap Cache<br/>(finds it!)"]
-        Page["Page"]
+    subgraph SwapCachePurpose["スワップキャッシュの目的: pageがスワップに書き込まれている間"]
+        ProcessA["プロセスA"]
+        SwapCache["スワップキャッシュ<br/>（見つかる!）"]
+        Page["page"]
 
-        ProcessA -->|tries to access| SwapCache
+        ProcessA -->|アクセスしようとする| SwapCache
         SwapCache --> Page
     end
 
-    Note["Without swap cache, Process A would have to wait for write<br/>to complete, then read it back immediately (wasteful!)"]
+    Note["スワップキャッシュがなければ、プロセスAは書き込みの完了を待ち、<br/>その直後に読み戻さなければならない（無駄!）"]
 ```
 
-After I/O completes successfully:
+I/Oが正常に完了した後:
 
-- Page is removed from swap cache
-- Physical page is freed
-- Only the swap slot remains with the data
+- pageはスワップキャッシュから削除される
+- 物理pageは解放される
+- データを持つのはスワップスロットだけになる
 
-## Stage 4: Process accesses swapped page {#stage-4-process-accesses-swapped-page}
+## 段階4: プロセスがスワップされたpageにアクセスする {#stage-4-process-accesses-swapped-page}
 
-Later, when a process accesses a swapped-out address, a page fault brings it back.
+後でプロセスがスワップアウトされたアドレスにアクセスすると、ページフォールトによってpageが戻される。
 
-### The fault handler detects a swap entry {#the-fault-handler-detects-a-swap-entry}
+### フォールトハンドラがスワップエントリを検出する {#the-fault-handler-detects-a-swap-entry}
 
 ```c
 // arch/x86/mm/fault.c → mm/memory.c
@@ -343,59 +343,59 @@ static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 
     if (!pte_present(entry)) {
         if (pte_none(entry))
-            return do_anonymous_page(vmf);  // New page
+            return do_anonymous_page(vmf);  // 新しいpage
 
-        // PTE has swap entry
-        return do_swap_page(vmf);  // ← Our path!
+        // PTEはスワップエントリを持っている
+        return do_swap_page(vmf);  // ← ここが今回のパス!
     }
 
-    // ... handle other cases
+    // ... 他のケースを処理する
 }
 ```
 
-### do_swap_page() brings the page back {#doswappage-brings-the-page-back}
+### do_swap_page()がpageを戻す {#doswappage-brings-the-page-back}
 
 ```c
-// mm/memory.c (simplified)
+// mm/memory.c（簡略化）
 vm_fault_t do_swap_page(struct vm_fault *vmf)
 {
     swp_entry_t entry = pte_to_swp_entry(vmf->orig_pte);
     struct folio *folio;
 
-    // 1. Check swap cache first (maybe another thread faulted already)
+    // 1. まずスワップキャッシュをチェックする（別のスレッドがすでにフォールトしたかもしれない）
     folio = swap_cache_get_folio(entry, ...);
 
     if (!folio) {
-        // 2. Not in cache - need to read from swap
+        // 2. キャッシュにない - スワップから読む必要がある
         folio = swapin_readahead(entry, ...);
     }
 
-    // 3. Wait for page to be ready
+    // 3. pageの準備ができるのを待つ
     folio_lock(folio);
 
-    // 4. Verify swap entry still valid (race check)
+    // 4. スワップエントリがまだ有効か確認する（競合チェック）
     // ...
 
-    // 5. Update page table: swap entry → page mapping
+    // 5. ページテーブルを更新する: スワップエントリ → pageマッピング
     pte = mk_pte(&folio->page, vmf->vma->vm_page_prot);
     if (vmf->flags & FAULT_FLAG_WRITE)
         pte = pte_mkwrite(pte_mkdirty(pte), vmf->vma);
 
     set_pte_at(vmf->vma->vm_mm, vmf->address, vmf->pte, pte);
 
-    // 6. Update LRU
+    // 6. LRUを更新する
     folio_add_lru(folio);
 
-    // 7. Free swap slot (if we're the last user)
+    // 7. スワップスロットを解放する（最後の利用者であれば）
     swap_free(entry);
 
     return 0;
 }
 ```
 
-### Swap-in readahead {#swap-in-readahead}
+### スワップインのリードアヘッド {#swap-in-readahead}
 
-Like file readahead, the kernel predicts you might access nearby swapped pages:
+ファイルのリードアヘッドと同様に、カーネルは近くのスワップされたpageにもアクセスするかもしれないと予測する。
 
 ```c
 // mm/swap_state.c
@@ -404,10 +404,10 @@ struct folio *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 {
     struct page *page;
 
-    // Read the requested page
+    // 要求されたpageを読む
     page = read_swap_cache_async(entry, ...);
 
-    // Also read nearby pages (readahead)
+    // 近くのpageも読む（リードアヘッド）
     if (should_readahead(...)) {
         for (offset = -readahead_win; offset <= readahead_win; offset++) {
             swp_entry_t ra_entry = swp_entry(type, entry_offset + offset);
@@ -419,9 +419,9 @@ struct folio *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 }
 ```
 
-## Stage 5: Swap slot freed {#stage-5-swap-slot-freed}
+## 段階5: スワップスロットの解放 {#stage-5-swap-slot-freed}
 
-After successful swap-in, the swap slot can be freed:
+スワップインが成功した後、スワップスロットは解放できる。
 
 ```c
 // mm/swapfile.c
@@ -429,63 +429,63 @@ void swap_free(swp_entry_t entry)
 {
     struct swap_info_struct *si = swap_info[swp_type(entry)];
 
-    // Decrement usage count
-    // (might be >1 if COW shared the slot)
+    // 使用カウントをデクリメントする
+    // （COWがスロットを共有していれば1より大きい可能性がある）
     count = swap_map[swp_offset(entry)]--;
 
     if (count == 0) {
-        // Slot is now free for reuse
+        // スロットは再利用可能になった
         si->inuse_pages--;
     }
 }
 ```
 
-### Swap slots and COW {#swap-slots-and-cow}
+### スワップスロットとCOW {#swap-slots-and-cow}
 
-When processes share a swapped page (after fork + swap):
+プロセスがスワップされたpageを共有している場合（fork + スワップの後）:
 
 ```mermaid
 flowchart TB
-    subgraph SharedSlot["Parent and Child share swap slot"]
-        SwapSlot["<b>Swap slot 0x789</b><br/>swap_map[0x789] = 2 (two users)<br/>Contents: page data"]
-        ParentPTE["Parent's PTE: swap entry: slot 0x789"]
-        ChildPTE["Child's PTE: swap entry: slot 0x789"]
+    subgraph SharedSlot["親と子がスワップスロットを共有する"]
+        SwapSlot["<b>スワップスロット 0x789</b><br/>swap_map[0x789] = 2（2つの利用者）<br/>内容: pageデータ"]
+        ParentPTE["親のPTE: スワップエントリ: スロット 0x789"]
+        ChildPTE["子のPTE: スワップエントリ: スロット 0x789"]
 
         ParentPTE --> SwapSlot
         ChildPTE --> SwapSlot
     end
 
-    subgraph ParentSwapIn["When parent swaps in"]
-        P1["Reads from slot 0x789"]
-        P2["swap_map[0x789] = 1 (still used by child)"]
-        P3["Parent's PTE → physical page"]
-        P4["Slot NOT freed yet"]
+    subgraph ParentSwapIn["親がスワップインしたとき"]
+        P1["スロット 0x789 から読む"]
+        P2["swap_map[0x789] = 1（まだ子が使用中）"]
+        P3["親のPTE → 物理page"]
+        P4["スロットはまだ解放されない"]
         P1 --> P2 --> P3 --> P4
     end
 
-    subgraph ChildSwapIn["When child swaps in"]
-        C1["Reads from slot 0x789"]
+    subgraph ChildSwapIn["子がスワップインしたとき"]
+        C1["スロット 0x789 から読む"]
         C2["swap_map[0x789] = 0"]
-        C3["Slot is now free"]
+        C3["スロットは空きになる"]
         C1 --> C2 --> C3
     end
 
     SharedSlot --> ParentSwapIn --> ChildSwapIn
 ```
 
-## The complete swap cycle {#the-complete-swap-cycle}
+## スワップサイクルの全体 {#the-complete-swap-cycle}
 
-Putting it all together:
+すべてをまとめると次のようになる。
 
 ```mermaid
 flowchart TB
-    subgraph SwapOutPhase["Swap Out Phase"]
-        Step1["<b>1. Memory Pressure</b><br/>kswapd wakes or direct reclaim starts"]
-        Step2["<b>2. Page Selection</b> (mm/vmscan.c)<br/>Scan inactive anonymous LRU<br/>Find cold page without PG_referenced"]
-        Step3["<b>3. Unmap Page</b><br/>Remove from all page tables via rmap<br/>Page now inaccessible to processes"]
-        Step4["<b>4. Allocate Swap Slot</b><br/>folio_alloc_swap() finds free slot<br/>Add page to swap cache"]
-        Step5["<b>5. Write to Swap</b><br/>submit_bio() queues I/O<br/>Async write to swap device"]
-        Step6["<b>6. Complete Swap Out</b><br/>PTEs now contain swap entries<br/>Physical page freed to buddy<br/>Page removed from swap cache"]
+    subgraph SwapOutPhase["スワップアウトフェーズ"]
+        Step1["<b>1. メモリ圧迫</b><br/>kswapdが起床するか直接回収が始まる"]
+        Step2["<b>2. pageの選択</b>（mm/vmscan.c）<br/>inactive anonymous LRUをスキャン<br/>PG_referencedのないコールドなpageを見つける"]
+        Step3["<b>3. pageのアンマップ</b><br/>rmap経由ですべてのページテーブルから削除<br/>pageはプロセスからアクセス不能になる"]
+        Step4["<b>4. スワップスロットの割り当て</b><br/>folio_alloc_swap()が空きスロットを見つける<br/>pageをスワップキャッシュに追加"]
+        Step5["<b>5. スワップへの書き込み</b><br/>submit_bio()がI/Oをキューに入れる<br/>スワップデバイスへの非同期書き込み"]
+        Step6["<b>6. スワップアウトの完了</b><br/>PTEはスワップエントリを持つようになる<br/>物理pageはバディに解放される<br/>pageはスワップキャッシュから削除される"]
 
         Step1 --> Step2
         Step2 --> Step3
@@ -494,13 +494,13 @@ flowchart TB
         Step5 --> Step6
     end
 
-    TimePasses["--- Time passes ---"]
+    TimePasses["--- 時間が経過 ---"]
 
-    subgraph SwapInPhase["Swap In Phase"]
-        Step7["<b>7. Process Accesses Address</b><br/>Page fault (PTE not present)<br/>do_swap_page() handles it"]
-        Step8["<b>8. Swap In</b><br/>Allocate new physical page<br/>Read from swap device<br/>Add to swap cache during I/O"]
-        Step9["<b>9. Restore Mapping</b><br/>Update PTE: swap entry → page mapping<br/>Add page to active LRU"]
-        Step10["<b>10. Free Swap Slot</b><br/>swap_free() decrements count<br/>Slot available for reuse (if count=0)"]
+    subgraph SwapInPhase["スワップインフェーズ"]
+        Step7["<b>7. プロセスがアドレスにアクセス</b><br/>ページフォールト（PTEがpresentでない）<br/>do_swap_page()が処理する"]
+        Step8["<b>8. スワップイン</b><br/>新しい物理pageを割り当てる<br/>スワップデバイスから読む<br/>I/O中はスワップキャッシュに追加"]
+        Step9["<b>9. マッピングの復元</b><br/>PTEを更新: スワップエントリ → pageマッピング<br/>pageをactive LRUに追加"]
+        Step10["<b>10. スワップスロットの解放</b><br/>swap_free()がカウントをデクリメント<br/>スロットが再利用可能に（count=0なら）"]
 
         Step7 --> Step8
         Step8 --> Step9
@@ -511,182 +511,182 @@ flowchart TB
     TimePasses --> Step7
 ```
 
-## Swap tunables {#swap-tunables}
+## スワップのチューニング可能なパラメータ {#swap-tunables}
 
-### Swappiness {#swappiness}
+### swappiness {#swappiness}
 
-Controls how aggressively the kernel swaps:
+カーネルがどれだけ積極的にスワップするかを制御する。
 
 ```bash
-# View current value
+# 現在の値を表示する
 cat /proc/sys/vm/swappiness
-# Default: 60
+# デフォルト: 60
 
-# Reduce swapping (prefer reclaiming file cache)
+# スワップを減らす（ファイルキャッシュの回収を優先する）
 sysctl vm.swappiness=10
 
-# Avoid swapping almost entirely
+# スワップをほぼ完全に避ける
 sysctl vm.swappiness=1
 ```
 
-| Value | Effect |
+| 値 | 効果 |
 |-------|--------|
-| 0 | Swap only to avoid OOM |
-| 1-30 | Prefer file cache reclaim |
-| 60 | Default balance |
-| 100 | Aggressive swapping |
+| 0 | OOMを避けるためだけにスワップする |
+| 1-30 | ファイルキャッシュの回収を優先する |
+| 60 | デフォルトのバランス |
+| 100 | 積極的にスワップする |
 
-### Swap priority {#swap-priority}
+### スワップの優先度 {#swap-priority}
 
-Multiple swap areas can have different priorities:
+複数のスワップ領域にそれぞれ異なる優先度を設定できる。
 
 ```bash
-# Higher priority = used first
-swapon -p 10 /dev/fast_ssd     # Priority 10 (used first)
-swapon -p 5 /dev/slow_hdd      # Priority 5 (used when fast is full)
+# 優先度が高い = 先に使われる
+swapon -p 10 /dev/fast_ssd     # 優先度10（先に使われる）
+swapon -p 5 /dev/slow_hdd      # 優先度5（fastが満杯のときに使われる）
 
-# Same priority = round-robin
+# 同じ優先度 = ラウンドロビン
 swapon -p 10 /dev/ssd1
-swapon -p 10 /dev/ssd2         # Striped across both
+swapon -p 10 /dev/ssd2         # 両方にストライプされる
 ```
 
-### VFS cache pressure {#vfs-cache-pressure}
+### VFSキャッシュ圧力 {#vfs-cache-pressure}
 
-Affects the balance between reclaiming file cache vs swapping:
+ファイルキャッシュの回収とスワップのバランスに影響する。
 
 ```bash
 cat /proc/sys/vm/vfs_cache_pressure
-# Default: 100
+# デフォルト: 100
 
-# Lower = keep file caches longer (swap more)
-# Higher = drop file caches more readily (swap less)
+# 低い = ファイルキャッシュを長く保持する（スワップが増える）
+# 高い = ファイルキャッシュをより積極的に破棄する（スワップが減る）
 ```
 
-## Swap performance considerations {#swap-performance-considerations}
+## スワップの性能に関する考慮事項 {#swap-performance-considerations}
 
-### SSD vs HDD {#ssd-vs-hdd}
+### SSD対HDD {#ssd-vs-hdd}
 
-| Metric | HDD | SSD |
+| 指標 | HDD | SSD |
 |--------|-----|-----|
-| Random read | ~10ms | ~0.1ms |
-| Sequential read | ~100MB/s | ~500-3000MB/s |
-| Write endurance | Unlimited | Limited (but usually fine) |
+| ランダム読み取り | 約10ms | 約0.1ms |
+| シーケンシャル読み取り | 約100MB/s | 約500-3000MB/s |
+| 書き込み耐久性 | 無制限 | 有限（ただし通常は問題ない） |
 
-SSDs dramatically improve swap performance, making swapping much less painful.
+SSDはスワップの性能を劇的に向上させ、スワップの苦痛を大幅に軽減する。
 
-### Swap thrashing {#swap-thrashing}
+### スワップのスラッシング {#swap-thrashing}
 
-When the working set exceeds RAM, the system constantly swaps pages in and out:
+ワーキングセットがRAMを超えると、システムは絶えずpageをスワップインおよびスワップアウトする。
 
 ```mermaid
 flowchart LR
-    subgraph Thrashing["Thrashing"]
+    subgraph Thrashing["スラッシング"]
         direction TB
-        TimeArrow["Time →"]
+        TimeArrow["時間 →"]
 
-        subgraph PageA["Page A"]
-            A1["in memory"] --> A2["swap out"] --> A3["swap in"] --> A4["swap out"] --> A5["..."]
+        subgraph PageA["page A"]
+            A1["メモリ上"] --> A2["スワップアウト"] --> A3["スワップイン"] --> A4["スワップアウト"] --> A5["..."]
         end
 
-        subgraph PageB["Page B"]
-            B1["swap in"] --> B2["swap out"] --> B3["swap in"] --> B4["swap out"] --> B5["..."]
+        subgraph PageB["page B"]
+            B1["スワップイン"] --> B2["スワップアウト"] --> B3["スワップイン"] --> B4["スワップアウト"] --> B5["..."]
         end
 
-        subgraph PageC["Page C"]
-            C1["swap out"] --> C2["swap in"] --> C3["swap out"] --> C4["swap in"] --> C5["..."]
+        subgraph PageC["page C"]
+            C1["スワップアウト"] --> C2["スワップイン"] --> C3["スワップアウト"] --> C4["スワップイン"] --> C5["..."]
         end
 
-        Result["System spends more time swapping than doing useful work!"]
+        Result["システムは有用な仕事よりもスワップに多くの時間を費やす!"]
     end
 ```
 
-**Signs of thrashing**:
+**スラッシングの兆候**:
 
-- High swap I/O (`vmstat` si/so columns)
-- High CPU time in kernel (`top` shows high sy/wa)
-- Application responsiveness drops drastically
+- 高いスワップI/O（`vmstat`のsi/so列）
+- カーネル内の高いCPU時間（`top`でsy/waが高い）
+- アプリケーションの応答性が劇的に低下する
 
-**Solutions**:
+**解決策**:
 
-- Add more RAM
-- Reduce memory usage
-- Use zswap or zram for compression
+- RAMを増設する
+- メモリ使用量を減らす
+- 圧縮のためにzswapまたはzramを使う
 
-### zswap and zram {#zswap-and-zram}
+### zswapとzram {#zswap-and-zram}
 
-**zswap**: Compresses pages before writing to swap device:
+**zswap**: スワップデバイスに書き込む前にpageを圧縮する。
 
 ```mermaid
 flowchart LR
-    subgraph NormalSwap["Normal swap"]
-        NS_Page["Page"] --> NS_Device["Swap device"]
+    subgraph NormalSwap["通常のスワップ"]
+        NS_Page["page"] --> NS_Device["スワップデバイス"]
     end
 ```
 
 ```mermaid
 flowchart LR
-    subgraph WithZswap["With zswap"]
-        ZS_Page["Page"] --> ZS_Compress["Compress"] --> ZS_RAM["RAM pool"] -.->|if needed| ZS_Device["Swap device"]
+    subgraph WithZswap["zswapあり"]
+        ZS_Page["page"] --> ZS_Compress["圧縮"] --> ZS_RAM["RAMプール"] -.->|必要なら| ZS_Device["スワップデバイス"]
     end
 ```
 
-**zram**: Creates a compressed RAM disk as swap:
+**zram**: 圧縮されたRAMディスクをスワップとして作成する。
 
 ```bash
-# Enable zram
+# zramを有効にする
 modprobe zram
 echo lz4 > /sys/block/zram0/comp_algorithm
 echo 2G > /sys/block/zram0/disksize
 mkswap /dev/zram0
-swapon -p 100 /dev/zram0  # High priority
+swapon -p 100 /dev/zram0  # 高い優先度
 ```
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Monitor swap activity {#monitor-swap-activity}
+### スワップの活動を監視する {#monitor-swap-activity}
 
 ```bash
-# Real-time swap I/O
+# リアルタイムのスワップI/O
 vmstat 1
-# si = swap in (KB/s)
-# so = swap out (KB/s)
+# si = スワップイン（KB/s）
+# so = スワップアウト（KB/s）
 
-# Detailed swap stats
+# 詳細なスワップ統計
 cat /proc/vmstat | grep -E "pswp|swap"
-# pswpin  - pages swapped in
-# pswpout - pages swapped out
+# pswpin  - スワップインされたpage数
+# pswpout - スワップアウトされたpage数
 ```
 
-### Watch a swap operation {#watch-a-swap-operation}
+### スワップ操作を観察する {#watch-a-swap-operation}
 
 ```bash
-# Terminal 1: Monitor swap
+# 端末1: スワップを監視する
 watch -n 1 'free -h; echo; cat /proc/swaps'
 
-# Terminal 2: Force swapping
+# 端末2: スワップを強制する
 stress --vm 1 --vm-bytes 90% --vm-keep &
 
-# Terminal 3: Watch specific process swap usage
+# 端末3: 特定プロセスのスワップ使用量を観察する
 for pid in $(pgrep stress); do
     echo "PID $pid: $(grep VmSwap /proc/$pid/status)"
 done
 ```
 
-### Trace swap events {#trace-swap-events}
+### スワップイベントをトレースする {#trace-swap-events}
 
 ```bash
-# Enable swap tracing
+# スワップのトレーシングを有効にする
 echo 1 > /sys/kernel/debug/tracing/events/vmscan/mm_vmscan_writepage/enable
 echo 1 > /sys/kernel/debug/tracing/events/swap/swap_readpage/enable
 
-# Watch events
+# イベントを観察する
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Examine swap contents {#examine-swap-contents}
+### スワップの内容を調べる {#examine-swap-contents}
 
 ```bash
-# Per-process swap usage
+# プロセスごとのスワップ使用量
 for pid in /proc/[0-9]*; do
     comm=$(cat $pid/comm 2>/dev/null)
     swap=$(grep VmSwap $pid/status 2>/dev/null | awk '{print $2}')
@@ -694,10 +694,10 @@ for pid in /proc/[0-9]*; do
 done | sort -t: -k2 -n -r | head -10
 ```
 
-### Test swap in/out explicitly {#test-swap-inout-explicitly}
+### スワップイン/アウトを明示的にテストする {#test-swap-inout-explicitly}
 
 ```bash
-# Allocate memory and force swap
+# メモリを割り当ててスワップを強制する
 cat > /tmp/swap_test.c << 'EOF'
 #include <stdio.h>
 #include <stdlib.h>
@@ -708,19 +708,19 @@ int main() {
     size_t size = 200 * 1024 * 1024;  // 200MB
     char *buf = malloc(size);
 
-    // Touch all pages
+    // すべてのpageに触れる
     memset(buf, 'A', size);
     printf("Allocated and touched %zuMB\n", size / 1024 / 1024);
     printf("Press Enter to trigger memory pressure...\n");
     getchar();
 
-    // Let system swap it out
+    // システムにスワップアウトさせる
     printf("Sleeping - watch with vmstat...\n");
     sleep(30);
 
-    // Access again (swap in)
+    // 再びアクセスする（スワップイン）
     printf("Accessing memory (swap in)...\n");
-    volatile char c = buf[0];  // Force access
+    volatile char c = buf[0];  // アクセスを強制する
 
     printf("Done. Press Enter to exit.\n");
     getchar();
@@ -731,290 +731,292 @@ gcc -o /tmp/swap_test /tmp/swap_test.c
 /tmp/swap_test
 ```
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/swapfile.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swapfile.c) | Swap area management, slot allocation |
-| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | Swap cache operations |
-| [`mm/page_io.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_io.c) | Swap I/O operations |
-| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | do_swap_page() - swap-in handling |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Page reclaim, swap-out path |
-| [`include/linux/swap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/swap.h) | Swap data structures |
+| [`mm/swapfile.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swapfile.c) | スワップ領域の管理、スロットの割り当て |
+| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | スワップキャッシュの操作 |
+| [`mm/page_io.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_io.c) | スワップのI/O操作 |
+| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | do_swap_page() - スワップインの処理 |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | page回収、スワップアウトのパス |
+| [`include/linux/swap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/swap.h) | スワップのデータ構造 |
 
-## History {#history}
+## 歴史 {#history}
 
-### Swap evolution {#swap-evolution}
+### スワップの進化 {#swap-evolution}
 
-**Early Linux**: Basic swap support from the beginning.
+**初期のLinux**: 当初から基本的なスワップをサポート。
 
-**v2.6**: Swap clustering for better sequential I/O.
+**v2.6**: シーケンシャルI/Oを改善するためのスワップクラスタリング。
 
-**v3.11 (2013)**: zswap - compressed swap cache.
+**v3.11（2013年）**: zswap - 圧縮スワップキャッシュ。
 
-**Commit**: [2b2811178e85](https://git.kernel.org/linus/2b2811178e85) ("zswap: add to mm/") | [LKML](https://lore.kernel.org/lkml/1368636374-13292-1-git-send-email-sjenning@linux.vnet.ibm.com/)
+**コミット**: [2b2811178e85](https://git.kernel.org/linus/2b2811178e85)（"zswap: add to mm/"） | [LKML](https://lore.kernel.org/lkml/1368636374-13292-1-git-send-email-sjenning@linux.vnet.ibm.com/)
 
-**Author**: Seth Jennings (IBM)
+**作者**: Seth Jennings (IBM)
 
-In the swap-out flow (Stage 2-3 above), zswap intercepts pages before they hit the swap device. It compresses them and stores them in a RAM pool. Only when the pool fills up do pages get written to the actual swap device. This dramatically reduces swap I/O for compressible workloads.
+スワップアウトの流れ（上記の段階2-3）において、zswapはpageがスワップデバイスに到達する前に横取りする。pageを圧縮してRAMプールに格納する。プールが満杯になったときだけ、pageが実際のスワップデバイスに書き込まれる。これにより、圧縮可能なワークロードではスワップI/Oが劇的に減少する。
 
-**v3.14 (2014)**: zram moved from staging to mainline.
+**v3.14（2014年）**: zramがstagingからメインラインに移動。
 
-**Commit**: [cd67e10ac699](https://git.kernel.org/linus/cd67e10ac699) ("zram: promote zram from staging")
+**コミット**: [cd67e10ac699](https://git.kernel.org/linus/cd67e10ac699)（"zram: promote zram from staging"）
 
-**Author**: Minchan Kim (LG Electronics)
+**作者**: Minchan Kim (LG Electronics)
 
-Unlike zswap (which caches before a real swap device), zram *is* the swap device - a compressed RAM disk. The entire swap flow above happens, but the "disk" is actually compressed memory. This is popular on memory-constrained systems like Android phones and Chromebooks.
+（実際のスワップデバイスの手前でキャッシュする）zswapとは異なり、zramはスワップデバイス*そのもの* — 圧縮されたRAMディスク — である。上記のスワップの流れはすべて起こるが、「ディスク」は実際には圧縮されたメモリである。これはAndroidスマートフォンやChromebookのようなメモリ制約のあるシステムで広く使われている。
 
-**v5.8 (2020)**: Swap slot allocation improvements for SSD performance.
+**v5.8（2020年）**: SSDの性能のためのスワップスロット割り当ての改善。
 
-**Commit**: [490705888107](https://git.kernel.org/linus/490705888107) ("swap: reduce lock contention on swap cache from swap slots allocation")
+**コミット**: [490705888107](https://git.kernel.org/linus/490705888107)（"swap: reduce lock contention on swap cache from swap slots allocation"）
 
-**Author**: Huang Ying (Intel)
+**作者**: Huang Ying (Intel)
 
-In Stage 1 (slot allocation) above, the kernel now uses a swap slot cache to batch slot allocations, reducing contention on SSDs where swap I/O is fast enough that allocation overhead becomes significant.
+上記の段階1（スロットの割り当て）において、カーネルは現在スワップスロットキャッシュを使ってスロット割り当てをバッチ化し、スワップI/Oが高速なため割り当てのオーバーヘッドが無視できなくなるSSDでの競合を減らしている。
 
-### Modern swap improvements {#modern-swap-improvements}
+### 現代のスワップの改善 {#modern-swap-improvements}
 
-The swap subsystem continues to evolve for better SSD utilization and reduced latency:
+スワップサブシステムは、SSDのより良い活用とレイテンシ削減のために進化を続けている。
 
-- Better slot allocation algorithms
-- Improved swap readahead
-- Integration with memory cgroups for per-cgroup swap accounting
+- より良いスロット割り当てアルゴリズム
+- スワップリードアヘッドの改善
+- cgroup単位のスワップ計上のためのメモリcgroupとの統合
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-Swap involves complex interactions between page tables, swap slots, and caching. Race conditions in this code can cause data corruption or security vulnerabilities.
+スワップには、ページテーブル、スワップスロット、キャッシュの間の複雑な相互作用が関わる。このコードにおける競合状態は、データ破損やセキュリティ脆弱性を引き起こし得る。
 
 ---
 
-### Case 1: The swap slot ABA problem (CVE-2024-26759) {#case-1-the-swap-slot-aba-problem-cve-2024-26759}
+### ケース1: スワップスロットのABA問題（CVE-2024-26759） {#case-1-the-swap-slot-aba-problem-cve-2024-26759}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-In early 2024, Huang Ying (Intel) discovered a race condition in the "skip swapcache" optimization path that could cause data corruption.
+2024年初め、Huang Ying（Intel）は、「skip swapcache」最適化パスにおいて、データ破損を引き起こし得る競合状態を発見した。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-The [LKML discussion](https://lkml.org/lkml/2024/2/16/426) explains the ABA problem:
+[LKMLでの議論](https://lkml.org/lkml/2024/2/16/426)がABA問題を説明している。
 
-When `SWP_SYNCHRONOUS_IO` is enabled (common on fast NVMe drives), the kernel skips the swap cache for performance. But this creates a race:
+`SWP_SYNCHRONOUS_IO`が有効な場合（高速なNVMeドライブでは一般的）、カーネルは性能のためにスワップキャッシュをスキップする。しかしこれは競合を生む。
 
-1. **Thread T0**: Starts swapping in entry X, allocates page A
-2. **Thread T1**: Also starts swapping in entry X (same entry), allocates page B
-3. **Thread T1**: Finishes first, installs page B, frees entry X via `swap_free()`
-4. **Thread T1**: Later swaps out a *modified* page, **reuses** entry X
-5. **Thread T0**: Finishes, sees PTE unchanged (still points to entry X)
-6. **Thread T0**: Installs **stale** page A into PTE
+1. **スレッドT0**: エントリXのスワップインを開始し、page Aを割り当てる
+2. **スレッドT1**: 同じくエントリX（同じエントリ）のスワップインを開始し、page Bを割り当てる
+3. **スレッドT1**: 先に完了し、page Bをインストールし、`swap_free()`でエントリXを解放する
+4. **スレッドT1**: 後で*変更された*pageをスワップアウトし、エントリXを**再利用**する
+5. **スレッドT0**: 完了し、PTEが変わっていない（まだエントリXを指している）のを見る
+6. **スレッドT0**: **古い**page AをPTEにインストールする
 
 ```mermaid
 sequenceDiagram
-    participant T0 as Thread 0
-    participant T1 as Thread 1
-    participant Swap as Swap Slot X
+    participant T0 as スレッド0
+    participant T1 as スレッド1
+    participant Swap as スワップスロットX
 
-    T0->>Swap: Read entry X → Page A
-    T1->>Swap: Read entry X → Page B
-    T1->>Swap: Installs B, frees X
-    Note over Swap: Slot X is FREE
-    T1->>Swap: Swap out modified page → reuses X
-    Note over Swap: Slot X has NEW data
-    T0->>T0: PTE still says "swap entry X"
-    T0->>T0: Installs STALE page A
-    Note over T0: DATA CORRUPTION!
+    T0->>Swap: エントリXを読む → page A
+    T1->>Swap: エントリXを読む → page B
+    T1->>Swap: Bをインストールし、Xを解放
+    Note over Swap: スロットXは空き
+    T1->>Swap: 変更されたpageをスワップアウト → Xを再利用
+    Note over Swap: スロットXには新しいデータ
+    T0->>T0: PTEはまだ "swap entry X" のまま
+    T0->>T0: 古いpage Aをインストール
+    Note over T0: データ破損!
 ```
 
-The PTE value hasn't changed (still `swp_entry_t` for slot X), so the `pte_same()` check passes, but the data is completely different.
+PTEの値は変わっていない（スロットXに対する`swp_entry_t`のまま）ので`pte_same()`チェックは通るが、データはまったく異なる。
 
-#### Real-world implications {#real-world-implications}
+#### 現実世界への影響 {#real-world-implications}
 
-This is **silent data corruption** - applications would see old data instead of current data, with no errors reported. Databases, filesystems, or any application relying on data consistency could be affected.
+これは**サイレントなデータ破損**である — アプリケーションは現在のデータではなく古いデータを見ることになり、エラーは一切報告されない。データベース、ファイルシステム、あるいはデータの一貫性に依存するあらゆるアプリケーションが影響を受け得る。
 
-#### The fix {#the-fix}
+#### 修正 {#the-fix}
 
-**Commit**: [13ddaf26be32](https://git.kernel.org/linus/13ddaf26be32) ("mm/swap: fix race when skipping swapcache")
+**コミット**: [13ddaf26be32](https://git.kernel.org/linus/13ddaf26be32)（"mm/swap: fix race when skipping swapcache"）
 
-**Author**: Kairui Song
+**作者**: Kairui Song
 
-The fix adds proper locking and verification to prevent the ABA scenario when bypassing the swap cache.
+この修正は、スワップキャッシュを迂回するときにABAのシナリオを防ぐため、適切なロックと検証を追加する。
 
-Fixes commit: [0bcac06f27d7](https://git.kernel.org/linus/0bcac06f27d7) ("mm, swap: skip swapcache for swapin of synchronous device")
-
----
-
-### Case 2: ZSWAP race conditions {#case-2-zswap-race-conditions}
-
-#### What happened {#what-happened_1}
-
-The zswap compressed swap cache introduced concurrency challenges. [LKML bug reports](https://linux.kernel.narkive.com/0AHtSnDW/bug-report-zswap-theoretical-race-condition-issues) documented theoretical races.
-
-#### The bug {#the-bug_1}
-
-When a duplicate store and reclaim happen concurrently:
-
-1. Entry X with offset A exists in zswap
-2. **Thread 0**: Starts reclaiming entry X
-3. **Thread 1**: Stores a *new* page at offset A, allocates new entry Y
-4. **Thread 0**: Calls `zswap_get_swap_cache_page()` but gets the old data
-
-The swap cache now contains old data for offset A instead of the new data.
-
-#### Real-world implications {#real-world-implications_1}
-
-If `do_swap_page()` retrieves the page from swap cache, it returns stale data - another silent corruption scenario.
-
-#### Mitigations {#mitigations}
-
-Zswap has undergone multiple locking improvements to address these races. The interactions between:
-
-- Zswap entry lifecycle
-- Swap cache operations
-- Page writeback
-
-...all need careful synchronization.
+修正対象のコミット: [0bcac06f27d7](https://git.kernel.org/linus/0bcac06f27d7)（"mm, swap: skip swapcache for swapin of synchronous device"）
 
 ---
 
-### Case 3: Swap-over-NFS instability {#case-3-swap-over-nfs-instability}
+### ケース2: ZSWAPの競合状態 {#case-2-zswap-race-conditions}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_1}
 
-Swapping to NFS has historically been problematic. When the system is under memory pressure and needs to swap, it also needs memory for network I/O.
+zswapの圧縮スワップキャッシュは、並行性の課題をもたらした。[LKMLのバグ報告](https://linux.kernel.narkive.com/0AHtSnDW/bug-report-zswap-theoretical-race-condition-issues)は理論上の競合を記録している。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_1}
 
-The classic deadlock scenario:
+重複したストアと回収が並行して起きると:
 
-1. System under memory pressure
-2. Kernel tries to swap out pages to NFS
-3. NFS needs to allocate memory for network packets
-4. Memory allocation triggers more reclaim
-5. Deadlock: can't free memory without network, can't do network without memory
+1. オフセットAを持つエントリXがzswapに存在する
+2. **スレッド0**: エントリXの回収を開始する
+3. **スレッド1**: オフセットAに*新しい*pageをストアし、新しいエントリYを割り当てる
+4. **スレッド0**: `zswap_get_swap_cache_page()`を呼び出すが、古いデータを得る
 
-#### Mitigations {#mitigations_1}
+スワップキャッシュには、オフセットAについて新しいデータではなく古いデータが入ることになる。
 
-**`PF_MEMALLOC` and memory reserves**: The kernel reserves memory for critical I/O paths. Processes doing swap I/O can dip into reserves.
+#### 現実世界への影響 {#real-world-implications_1}
 
-**Swap-over-NBD patches**: Multiple patches over the years improved network swap reliability.
+`do_swap_page()`がスワップキャッシュからpageを取得すると、古いデータを返す — これもサイレントな破損のシナリオである。
 
-**Practical advice**: Don't swap to NFS in production. Use local swap or zram.
+#### 緩和策 {#mitigations}
 
----
+zswapは、これらの競合に対処するために何度もロックの改善を受けてきた。次のものの間の相互作用は、
 
-### Case 4: Swap partition vs. swap file races {#case-4-swap-partition-vs-swap-file-races}
+- zswapエントリのライフサイクル
+- スワップキャッシュの操作
+- pageのライトバック
 
-#### What happened {#what-happened_3}
-
-Swap files introduce additional complexity compared to swap partitions because the filesystem layer is involved.
-
-#### The bug {#the-bug_3}
-
-With swap files, `swap_writepage()` must go through the filesystem. This can race with:
-
-- Filesystem operations on the same device
-- Filesystem metadata updates
-- Journal commits
-
-#### Historical issues {#historical-issues}
-
-- **XFS + swap**: Early XFS had issues with swap files due to delayed allocation
-- **Btrfs + swap**: Only supported swap files from kernel 5.0 due to COW complexity
-- **F2FS**: Added swap file support in kernel 5.10
-
-#### Modern status {#modern-status}
-
-Most filesystems now support swap files correctly, but the added complexity means more potential for bugs compared to raw partitions.
+...すべて慎重な同期を必要とする。
 
 ---
 
-### Case 5: The swap readahead trap {#case-5-the-swap-readahead-trap}
+### ケース3: NFS上のスワップの不安定性 {#case-3-swap-over-nfs-instability}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_2}
 
-Swap readahead (reading more than one page on swap-in) is an optimization that can backfire.
+NFSへのスワップは歴史的に問題が多かった。システムがメモリ圧迫下にあってスワップする必要があるとき、ネットワークI/Oのためにもメモリが必要になる。
 
-#### The problem {#the-problem}
+#### バグ {#the-bug_2}
 
-Unlike file readahead (where sequential access is common), swap access patterns are often random - especially on systems with many processes. Aggressive swap readahead:
+古典的なデッドロックのシナリオ:
 
-1. Reads pages that won't be used
-2. Evicts useful pages from memory
-3. Increases swap I/O
-4. Makes memory pressure worse
+1. システムがメモリ圧迫下にある
+2. カーネルがpageをNFSにスワップアウトしようとする
+3. NFSはネットワークパケットのためにメモリを割り当てる必要がある
+4. メモリ割り当てがさらなる回収を引き起こす
+5. デッドロック: ネットワークなしにメモリを解放できず、メモリなしにネットワークを使えない
 
-#### The bug class {#the-bug-class}
+#### 緩和策 {#mitigations_1}
 
-Readahead tuning issues have caused performance regressions across kernel versions. The heuristics for "should we readahead?" are imperfect.
+**`PF_MEMALLOC`とメモリ予約**: カーネルは重要なI/Oパスのためにメモリを予約している。スワップI/Oを行うプロセスは予約領域を使える。
 
-#### Mitigation {#mitigation}
+**Swap-over-NBDパッチ**: 長年にわたる複数のパッチがネットワークスワップの信頼性を向上させた。
+
+**実践的な助言**: 本番環境ではNFSにスワップしないこと。ローカルのスワップかzramを使う。
+
+---
+
+### ケース4: スワップパーティション対スワップファイルの競合 {#case-4-swap-partition-vs-swap-file-races}
+
+#### 何が起きたか {#what-happened_3}
+
+スワップファイルはファイルシステム層が関与するため、スワップパーティションに比べて複雑さが増す。
+
+#### バグ {#the-bug_3}
+
+スワップファイルでは、`swap_writepage()`はファイルシステムを経由しなければならない。これは次のものと競合し得る。
+
+- 同じデバイス上でのファイルシステム操作
+- ファイルシステムのメタデータ更新
+- ジャーナルのコミット
+
+#### 歴史的な問題 {#historical-issues}
+
+- **XFS + スワップ**: 初期のXFSは遅延割り当てのためにスワップファイルで問題があった
+- **Btrfs + スワップ**: COWの複雑さのため、スワップファイルをサポートしたのはカーネル5.0からだった
+- **F2FS**: カーネル5.10でスワップファイルのサポートを追加した
+
+#### 現在の状況 {#modern-status}
+
+現在ほとんどのファイルシステムはスワップファイルを正しくサポートしているが、複雑さが増す分、生のパーティションに比べてバグの可能性は高くなる。
+
+---
+
+### ケース5: スワップリードアヘッドの罠 {#case-5-the-swap-readahead-trap}
+
+#### 何が起きたか {#what-happened_4}
+
+スワップリードアヘッド（スワップイン時に複数のpageを読むこと）は、裏目に出ることがある最適化である。
+
+#### 問題 {#the-problem}
+
+（シーケンシャルアクセスが一般的な）ファイルのリードアヘッドと異なり、スワップのアクセスパターンはしばしばランダムである — 特に多数のプロセスがあるシステムでは。積極的なスワップリードアヘッドは:
+
+1. 使われないpageを読む
+2. 有用なpageをメモリから追い出す
+3. スワップI/Oを増やす
+4. メモリ圧迫を悪化させる
+
+#### バグの類型 {#the-bug-class}
+
+リードアヘッドのチューニングの問題は、カーネルバージョンをまたいで性能のリグレッションを引き起こしてきた。「リードアヘッドすべきか?」のヒューリスティックは不完全である。
+
+#### 緩和策 {#mitigation}
 
 ```bash
-# Check current readahead (pages)
+# 現在のリードアヘッドを確認する（page数）
 cat /proc/sys/vm/page-cluster
-# Default: 3 (meaning 2^3 = 8 pages readahead)
+# デフォルト: 3（2^3 = 8 pageのリードアヘッドを意味する）
 
-# Disable swap readahead
+# スワップリードアヘッドを無効にする
 echo 0 > /proc/sys/vm/page-cluster
 
-# On SSDs, readahead matters less (fast random access)
-# On HDDs, readahead helps if access is sequential
+# SSDではリードアヘッドの重要性は低い（高速なランダムアクセス）
+# HDDではアクセスがシーケンシャルならリードアヘッドが役立つ
 ```
 
 ---
 
-### Case 6: Large folio + swap = data loss (2023) {#case-6-large-folio-swap-data-loss-2023}
+### ケース6: large folio + スワップ = データ損失（2023年） {#case-6-large-folio-swap-data-loss-2023}
 
-#### What happened {#what-happened_5}
+#### 何が起きたか {#what-happened_5}
 
-The large folio support (kernel 6.1+) introduced a data loss bug affecting XFS and other filesystems. Organizations reported [active data loss](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/) in production.
+large folioのサポート（カーネル6.1以降）は、XFSや他のファイルシステムに影響するデータ損失バグを持ち込んだ。複数の組織が本番環境での[実際のデータ損失](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/)を報告した。
 
-#### The bug {#the-bug_4}
+#### バグ {#the-bug_4}
 
-Large folios change how pages are tracked and written back. Interactions with the swap and writeback paths led to pages being marked clean when they were actually dirty, resulting in data loss.
+large folioは、pageの追跡とライトバックの方法を変える。スワップやライトバックのパスとの相互作用により、実際にはdirtyなpageがcleanとマークされ、データ損失が生じた。
 
-From the LKML report:
+LKMLの報告より:
 
 > *"At least 16 instances of data loss in a fleet of 1.5k VMs... happens mostly on nodes running database or storage-oriented workloads, including PostgreSQL, MySQL, RocksDB."*
 
-#### Real-world implications {#real-world-implications_2}
+（訳: 1.5k台のVM群で少なくとも16件のデータ損失… 主にPostgreSQL、MySQL、RocksDBなど、データベースやストレージ指向のワークロードを実行しているノードで起きている。）
 
-This is catastrophic for databases and storage systems. Data written to memory but not yet persisted could simply disappear.
+#### 現実世界への影響 {#real-world-implications_2}
 
-#### The fix {#the-fix_1}
+これはデータベースやストレージシステムにとって壊滅的である。メモリに書き込まれたがまだ永続化されていないデータが、ただ消えてしまう可能性がある。
 
-Meta and other companies disabled large folios while fixes were developed:
+#### 修正 {#the-fix_1}
 
-**Commit**: [a48d5bdc877b](https://git.kernel.org/linus/a48d5bdc877b) ("mm: fix for negative counter: nr_file_hugepages")
+Metaなどの企業は、修正が開発される間large folioを無効にした。
 
-**Author**: Stefan Roesch
+**コミット**: [a48d5bdc877b](https://git.kernel.org/linus/a48d5bdc877b)（"mm: fix for negative counter: nr_file_hugepages"）
 
-Multiple patches were required to fully address the issue.
+**作者**: Stefan Roesch
+
+問題に完全に対処するには複数のパッチが必要だった。
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 学んだ教訓 {#summary-lessons-learned}
 
-| Bug | Year | Root Cause | Impact | Prevention |
+| バグ | 年 | 根本原因 | 影響 | 予防策 |
 |-----|------|------------|--------|------------|
-| **Swap slot ABA** | 2024 | Skip-swapcache race | Data corruption | Fixed in mainline |
-| **ZSWAP races** | Ongoing | Compression + swap cache | Data corruption | Multiple fixes |
-| **Swap-over-NFS** | Historical | Memory deadlock | System hang | Use local swap |
-| **Large folio + swap** | 2023 | Writeback tracking | Data loss | Disable large folios or update kernel |
-| **Readahead trap** | Ongoing | Wrong heuristics | Performance | Tune `page-cluster` |
+| **スワップスロットのABA** | 2024 | skip-swapcacheの競合 | データ破損 | メインラインで修正済み |
+| **ZSWAPの競合** | 継続中 | 圧縮 + スワップキャッシュ | データ破損 | 複数の修正 |
+| **NFS上のスワップ** | 歴史的 | メモリのデッドロック | システムハング | ローカルのスワップを使う |
+| **large folio + スワップ** | 2023 | ライトバックの追跡 | データ損失 | large folioを無効にするかカーネルを更新する |
+| **リードアヘッドの罠** | 継続中 | 誤ったヒューリスティック | 性能 | `page-cluster`をチューニングする |
 
-The common thread: **swap is a "slow path" that gets less testing than the normal memory path**. When the system is under memory pressure, it's already in a degraded state, and bugs in swap handling compound the problem.
+共通点: **スワップは通常のメモリパスよりもテストが少ない「低速パス」である**。システムがメモリ圧迫下にあるとき、それはすでに劣化した状態であり、スワップ処理のバグは問題をさらに悪化させる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Swap](swap.md) - Swap configuration and management
-- [Page reclaim](reclaim.md) - How pages are selected for swap
-- [Life of a page](life-of-page.md) - Complete page lifecycle
-- [Running out of memory](oom.md) - What happens when swap isn't enough
+- [スワップ](swap.md) - スワップの設定と管理
+- [page回収](reclaim.md) - スワップ対象のpageがどのように選ばれるか
+- [pageの一生](life-of-page.md) - pageのライフサイクル全体
+- [メモリ不足](oom.md) - スワップが足りないときに何が起こるか
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [In defense of swap](https://lwn.net/Articles/690079/) (2016) - Why swap matters
-- [zswap: compressed swap caching](https://lwn.net/Articles/537422/) (2013) - Compressed swap
-- [Large folios for anonymous memory](https://lwn.net/Articles/908023/) (2022) - The large folio work that led to bugs
+- [In defense of swap](https://lwn.net/Articles/690079/)（2016年） - なぜスワップが重要か
+- [zswap: compressed swap caching](https://lwn.net/Articles/537422/)（2013年） - 圧縮スワップ
+- [Large folios for anonymous memory](https://lwn.net/Articles/908023/)（2022年） - バグにつながったlarge folioの作業

@@ -1,54 +1,53 @@
-# Reclaim Throttling and Balancing {#reclaim-throttling-and-balancing}
+# 回収のスロットリングとバランシング {#reclaim-throttling-and-balancing}
 
-> How the kernel slows down allocators when reclaim can't keep up
+> 回収が追いつかないとき、カーネルはどのようにアロケータを減速させるか
 
-When memory pressure is high, two things must not happen simultaneously: a single
-allocating process must not monopolize the CPU burning through reclaim, and
-reclaim must not be overwhelmed while allocators continue charging ahead. The
-kernel solves both problems with throttling — temporarily pausing allocating
-processes to let reclaim make progress, and coordinating between kswapd and
-direct reclaimers to balance the load.
+メモリ逼迫が激しいとき、2つのことが同時に起きてはならない。すなわち、
+割り当てを行う単一のプロセスが回収に没頭してCPUを独占してはならず、
+またアロケータが突き進み続ける間に回収が圧倒されてもならない。
+カーネルはスロットリングによって両方の問題を解決する。割り当てを行うプロセスを
+一時的に停止させて回収を進行させ、kswapdと直接回収を行う側（direct reclaimer）の
+間を調整して負荷を分散させるのである。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Relevant functions |
+| ファイル | 関連する関数 |
 |------|--------------------|
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `reclaim_throttle()` — core throttle sleep; `throttle_direct_reclaim()` — pfmemalloc-reserve throttle; `consider_reclaim_throttle()` — NOPROGRESS path; `balance_pgdat()` — kswapd node balancing; `shrink_node()` — per-node reclaim; `allow_direct_reclaim()` — wakeup condition; `pgdat_balanced()` — watermark check; `writeback_throttling_sane()` — dirty throttle availability |
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `__mem_cgroup_handle_over_high()` — memory.high enforcement; `reclaim_high()` — cgroup reclaim loop; `calculate_high_delay()` — proportional penalty; `mem_find_max_overage()` / `swap_find_max_overage()` — ancestor overage scan |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `__alloc_pages_slowpath()` — slow allocation path; `__alloc_pages_direct_reclaim()` / `__perform_reclaim()` — direct reclaim entry; `try_to_free_pages()` call site |
-| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | `enum vmscan_throttle_state`, `enum pgdat_flags`, `enum lruvec_flags`, `reclaim_wait[]` waitqueues, `pfmemalloc_wait` waitqueue |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `reclaim_throttle()` — スロットリングの中核となるスリープ; `throttle_direct_reclaim()` — pfmemallocリザーブのスロットリング; `consider_reclaim_throttle()` — NOPROGRESSパス; `balance_pgdat()` — kswapdのノードバランシング; `shrink_node()` — ノードごとの回収; `allow_direct_reclaim()` — 起床条件; `pgdat_balanced()` — ウォーターマークのチェック; `writeback_throttling_sane()` — dirtyスロットリングの利用可否 |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `__mem_cgroup_handle_over_high()` — memory.highの強制; `reclaim_high()` — cgroupの回収ループ; `calculate_high_delay()` — 比例ペナルティ; `mem_find_max_overage()` / `swap_find_max_overage()` — 祖先の超過量スキャン |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `__alloc_pages_slowpath()` — 割り当ての低速パス; `__alloc_pages_direct_reclaim()` / `__perform_reclaim()` — 直接回収の入口; `try_to_free_pages()`の呼び出し箇所 |
+| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | `enum vmscan_throttle_state`、`enum pgdat_flags`、`enum lruvec_flags`、`reclaim_wait[]`待ちキュー、`pfmemalloc_wait`待ちキュー |
 
 ---
 
-## Why Throttling Exists {#why-throttling-exists}
+## なぜスロットリングが存在するか {#why-throttling-exists}
 
-Without throttling, an application that allocates memory rapidly could cycle
-continuously through direct reclaim, consuming entire CPU cores in an attempt
-to free pages. Other processes would be starved and forward progress on actual
-work would stall. More subtly, reclaim itself can reach a state where it cannot
-recover: if every page it finds is under writeback, scanning more aggressively
-just wastes CPU. The right answer is to pause and wait.
+スロットリングがなければ、高速にメモリを割り当てるアプリケーションは
+直接回収を延々と繰り返し、pageを解放しようとしてCPUコアを丸ごと消費しかねない。
+他のプロセスは飢餓状態に陥り、実際の仕事の進行は停滞する。より微妙な点として、
+回収自体が回復できない状態に陥ることがある。見つかるpageがすべてライトバック中であれば、
+より積極的にスキャンしてもCPUを浪費するだけである。正しい対応は、一時停止して待つことである。
 
-Throttling achieves two goals:
+スロットリングは2つの目的を達成する:
 
-1. **Fairness** — prevents one process from monopolising the reclaim path.
-2. **Backpressure** — when reclaim cannot keep up, slow the allocators rather than spin on futile work.
+1. **公平性** — 1つのプロセスが回収パスを独占することを防ぐ。
+2. **バックプレッシャー** — 回収が追いつかないとき、無駄な作業でスピンするのではなくアロケータを減速させる。
 
-The kernel distinguishes several distinct reasons for throttling, each with its own
-wait queue and timeout:
+カーネルはスロットリングの理由をいくつか区別しており、それぞれが独自の
+待ちキューとタイムアウトを持つ:
 
 ```
 enum vmscan_throttle_state {
-    VMSCAN_THROTTLE_WRITEBACK,   /* pages cycling through LRU faster than writeback */
-    VMSCAN_THROTTLE_ISOLATED,    /* too many parallel reclaimers isolating pages */
-    VMSCAN_THROTTLE_NOPROGRESS,  /* reclaim making no headway at high priority */
-    VMSCAN_THROTTLE_CONGESTED,   /* dirty pages backed by a congested device */
+    VMSCAN_THROTTLE_WRITEBACK,   /* pageがライトバックより速くLRUを循環している */
+    VMSCAN_THROTTLE_ISOLATED,    /* pageを隔離している並列回収者が多すぎる */
+    VMSCAN_THROTTLE_NOPROGRESS,  /* 高い優先度で回収がまったく進まない */
+    VMSCAN_THROTTLE_CONGESTED,   /* 輻輳したデバイスを背後に持つdirty page */
     NR_VMSCAN_THROTTLE,
 };
 ```
 
-The `pg_data_t` structure (one per NUMA node) holds one wait queue per throttle
-reason, plus a separate queue for direct-reclaim pfmemalloc throttling:
+`pg_data_t`構造体（NUMAノードごとに1つ）は、スロットリングの理由ごとに1つの待ちキューを持ち、
+さらに直接回収のpfmemallocスロットリング用に別のキューを持つ:
 
 ```c
 /* include/linux/mmzone.h */
@@ -58,9 +57,9 @@ wait_queue_head_t pfmemalloc_wait;
 
 ---
 
-## Direct Reclaim vs. kswapd {#direct-reclaim-vs-kswapd}
+## 直接回収とkswapd {#direct-reclaim-vs-kswapd}
 
-The kernel has two reclaim actors:
+カーネルには2つの回収の担い手がある:
 
 ```
 Allocation path                     Background
@@ -80,69 +79,64 @@ alloc_pages()                       kswapd (per-node kernel thread)
                                        └─ shrink_node()
 ```
 
-**kswapd** runs in the background and reclaims pages until each zone's free
-pages rise above the `high` watermark. It does not block any allocating
-process.
+**kswapd**はバックグラウンドで動作し、各ゾーンの空きpageが`high`ウォーターマークを
+上回るまでpageを回収する。割り当てを行うプロセスをブロックすることはない。
 
-**Direct reclaim** runs in the context of the allocating process itself when
-`__alloc_pages_slowpath()` cannot satisfy an allocation from existing free
-pages. The process calling `alloc_pages()` enters `try_to_free_pages()` and
-may be throttled there.
+**直接回収**は、`__alloc_pages_slowpath()`が既存の空きpageから割り当てを満たせないときに、
+割り当てを行うプロセス自身のコンテキストで実行される。`alloc_pages()`を呼び出したプロセスは
+`try_to_free_pages()`に入り、そこでスロットリングされることがある。
 
-!!! note "Priority escalation"
-    Both paths use a reclaim priority that starts at `DEF_PRIORITY` (12) and
-    descends toward 0. At priority *p*, each LRU list scan covers
-    `list_size >> p` pages — lower priorities scan larger fractions of memory
-    until the full list is examined at priority 0.
+!!! note "優先度の段階的上昇"
+    どちらのパスも、`DEF_PRIORITY`（12）から始まり0に向かって下がっていく
+    回収優先度を使う。優先度*p*では、各LRUリストのスキャンは
+    `list_size >> p`個のpageを対象とする。優先度が低いほどメモリのより大きな割合をスキャンし、
+    優先度0でリスト全体が調べられる。
 
 ---
 
-## `reclaim_throttle()` — Core Sleep Function {#reclaim_throttle-core-sleep-function}
+## `reclaim_throttle()` — 中核となるスリープ関数 {#reclaim_throttle-core-sleep-function}
 
-`reclaim_throttle()` in `mm/vmscan.c` is the single function through which
-all non-pfmemalloc throttling passes:
+`mm/vmscan.c`の`reclaim_throttle()`は、pfmemalloc以外のすべてのスロットリングが
+通過する唯一の関数である:
 
 ```c
 void reclaim_throttle(pg_data_t *pgdat, enum vmscan_throttle_state reason)
 ```
 
-It selects the appropriate wait queue from `pgdat->reclaim_wait[reason]` and
-puts the calling task to sleep with `TASK_UNINTERRUPTIBLE` for a reason-dependent
-timeout:
+この関数は`pgdat->reclaim_wait[reason]`から適切な待ちキューを選び、
+呼び出し元タスクを`TASK_UNINTERRUPTIBLE`で、理由に応じたタイムアウトの間スリープさせる:
 
-| Throttle reason | Timeout | When triggered |
+| スロットリングの理由 | タイムアウト | 発動条件 |
 |-----------------|---------|----------------|
-| `VMSCAN_THROTTLE_WRITEBACK` | `HZ/10` (100 ms) | Pages cycling the LRU faster than writeback can drain them (`sc->nr.immediate` non-zero) |
-| `VMSCAN_THROTTLE_ISOLATED` | `HZ/50` (20 ms) | Too many parallel reclaimers have isolated pages from the LRU simultaneously |
-| `VMSCAN_THROTTLE_NOPROGRESS` | 1 jiffy | Direct reclaim at priority 1 with zero pages reclaimed |
-| `VMSCAN_THROTTLE_CONGESTED` | 1 jiffy | All dirty pages backed by a congested device (`LRUVEC_CGROUP_CONGESTED` or `LRUVEC_NODE_CONGESTED` set) |
+| `VMSCAN_THROTTLE_WRITEBACK` | `HZ/10`（100 ms） | ライトバックが掃き出せるより速くpageがLRUを循環している（`sc->nr.immediate`が非ゼロ） |
+| `VMSCAN_THROTTLE_ISOLATED` | `HZ/50`（20 ms） | 多すぎる並列回収者が同時にLRUからpageを隔離している |
+| `VMSCAN_THROTTLE_NOPROGRESS` | 1 jiffy | 優先度1の直接回収で回収されたpageがゼロ |
+| `VMSCAN_THROTTLE_CONGESTED` | 1 jiffy | すべてのdirty pageが輻輳したデバイスを背後に持つ（`LRUVEC_CGROUP_CONGESTED`または`LRUVEC_NODE_CONGESTED`がセットされている） |
 
-!!! info "Kernel threads are exempt"
-    `reclaim_throttle()` skips throttling for any task with `PF_USER_WORKER` or
-    `PF_KTHREAD` set (except kswapd itself). Journalling threads, writeback
-    workers, and other kernel threads must remain free to run because reclaim
-    depends on them to make forward progress.
+!!! info "カーネルスレッドは免除される"
+    `reclaim_throttle()`は、`PF_USER_WORKER`または`PF_KTHREAD`がセットされた
+    タスク（kswapd自身を除く）に対してはスロットリングをスキップする。ジャーナリングスレッド、
+    ライトバックワーカー、その他のカーネルスレッドは、回収が前進するために依存しているので、
+    自由に実行できなければならない。
 
-For `VMSCAN_THROTTLE_WRITEBACK`, the code also tracks how many pages have
-completed writeback since throttling began (`pgdat->nr_reclaim_start`), so
-that `__acct_reclaim_writeback()` can wake throttled tasks early once enough
-pages have been cleaned — rather than always waiting the full timeout.
+`VMSCAN_THROTTLE_WRITEBACK`では、コードはスロットリング開始以降にライトバックを完了した
+page数（`pgdat->nr_reclaim_start`）も追跡する。これにより、`__acct_reclaim_writeback()`は
+十分なpageがcleanになった時点で、常にタイムアウトいっぱいまで待つのではなく、
+スロットリングされたタスクを早めに起こすことができる。
 
-**Who wakes throttled tasks?**  `balance_pgdat()` in kswapd wakes the
-`pfmemalloc_wait` queue when `allow_direct_reclaim()` becomes true. The
-`reclaim_wait[]` queues are woken by `consider_reclaim_throttle()` when
-reclaim efficiency exceeds 12% (scanned-to-reclaimed ratio `> 1/8`), and by
-kswapd when it clears the congested state.
+**スロットリングされたタスクを誰が起こすのか**?  kswapdの`balance_pgdat()`は、
+`allow_direct_reclaim()`が真になると`pfmemalloc_wait`キューを起こす。
+`reclaim_wait[]`キューは、回収効率が12%を超えたとき（スキャン数に対する回収数の比が`> 1/8`）に
+`consider_reclaim_throttle()`によって起こされ、またkswapdが輻輳状態をクリアしたときにも起こされる。
 
 ---
 
-## `throttle_direct_reclaim()` — pfmemalloc Reserve Throttle {#throttledirectreclaim-pfmemalloc-reserve-throttle}
+## `throttle_direct_reclaim()` — pfmemallocリザーブのスロットリング {#throttledirectreclaim-pfmemalloc-reserve-throttle}
 
-This is a separate throttle path with a different purpose. The kernel reserves
-a portion of low-zone pages (`pfmemalloc` reserves) for network stack
-allocations needed to swap over the network. If those reserves are depleted,
-allowing further direct reclaim would be counterproductive — kswapd should
-handle it unimpeded.
+これは目的の異なる別のスロットリングパスである。カーネルは、ネットワーク越しのスワップに必要な
+ネットワークスタックの割り当てのために、低位ゾーンのpageの一部（`pfmemalloc`リザーブ）を
+予約している。これらのリザーブが枯渇した場合、さらなる直接回収を許すと逆効果になる。
+kswapdが妨げられずに処理すべきである。
 
 ```c
 static bool throttle_direct_reclaim(gfp_t gfp_mask,
@@ -150,72 +144,71 @@ static bool throttle_direct_reclaim(gfp_t gfp_mask,
                                     nodemask_t *nodemask)
 ```
 
-The function is called at the top of `try_to_free_pages()`, before any
-reclaim work begins. It immediately returns (no throttle) if:
+この関数は、回収作業が始まる前に`try_to_free_pages()`の先頭で呼ばれる。
+次の場合は直ちに（スロットリングせずに）戻る:
 
-- The calling task has `PF_KTHREAD` set (kernel thread).
-- A fatal signal is pending (let the process exit and free its memory
-  naturally).
-- `allow_direct_reclaim()` returns true — the sum of free pages across all zones up to and including `ZONE_NORMAL` exceeds half the accumulated pfmemalloc reserve across those same zones.
+- 呼び出し元タスクに`PF_KTHREAD`がセットされている（カーネルスレッド）。
+- 致命的なシグナルが保留中である（プロセスを終了させ、自然にメモリを
+  解放させる）。
+- `allow_direct_reclaim()`が真を返す — `ZONE_NORMAL`以下のすべてのゾーンにわたる空きpageの合計が、それらのゾーンにわたって累積したpfmemallocリザーブの半分を超えている。
 
-When throttling is applied, the process sleeps on `pgdat->pfmemalloc_wait`:
+スロットリングが適用されると、プロセスは`pgdat->pfmemalloc_wait`でスリープする:
 
 ```c
-/* Caller cannot enter filesystem — might be holding a journal lock */
+/* 呼び出し元はファイルシステムに入れない — ジャーナルロックを保持しているかもしれない */
 if (!(gfp_mask & __GFP_FS))
     wait_event_interruptible_timeout(pgdat->pfmemalloc_wait,
                                      allow_direct_reclaim(pgdat), HZ);
 else
-    /* Block until kswapd makes progress */
+    /* kswapd が前進するまでブロックする */
     wait_event_killable(pgdat->pfmemalloc_wait,
                         allow_direct_reclaim(pgdat));
 ```
 
-Each throttle event increments the `PGSCAN_DIRECT_THROTTLE` vmstat counter
-(visible as `pgscan_direct_throttle` in `/proc/vmstat`).
+スロットリングのイベントごとに`PGSCAN_DIRECT_THROTTLE` vmstatカウンタがインクリメントされる
+（`/proc/vmstat`では`pgscan_direct_throttle`として見える）。
 
-`allow_direct_reclaim()` iterates all zones from the lowest up through `ZONE_NORMAL`, accumulating both free pages and pfmemalloc reserves, then checks if `free_pages > pfmemalloc_reserve / 2`. If the node is in a hopeless state (`kswapd_test_hopeless()`), direct reclaim is always permitted.
+`allow_direct_reclaim()`は最下位から`ZONE_NORMAL`までのすべてのゾーンを走査し、空きpageとpfmemallocリザーブの両方を累積したうえで、`free_pages > pfmemalloc_reserve / 2`かどうかを確認する。ノードが絶望的な状態（`kswapd_test_hopeless()`）にある場合、直接回収は常に許可される。
 
-!!! warning "Fatal signal handling"
-    If `throttle_direct_reclaim()` returns `true`, a fatal signal arrived
-    during the sleep. `try_to_free_pages()` returns 1 in that case, and the
-    page allocator skips the OOM killer — the process is already dying.
+!!! warning "致命的シグナルの扱い"
+    `throttle_direct_reclaim()`が`true`を返した場合、スリープ中に致命的なシグナルが
+    届いたことを意味する。その場合`try_to_free_pages()`は1を返し、
+    ページアロケータはOOM killerをスキップする。プロセスはすでに死につつあるからである。
 
 ---
 
-## `consider_reclaim_throttle()` — No-Progress Throttle {#considerreclaimthrottle-no-progress-throttle}
+## `consider_reclaim_throttle()` — 進捗なしのスロットリング {#considerreclaimthrottle-no-progress-throttle}
 
-After each `shrink_zones()` pass during direct reclaim,
-`consider_reclaim_throttle()` evaluates whether throttling is warranted:
+直接回収中の各`shrink_zones()`パスの後、
+`consider_reclaim_throttle()`がスロットリングが妥当かどうかを評価する:
 
 ```c
 static void consider_reclaim_throttle(pg_data_t *pgdat,
                                       struct scan_control *sc)
 ```
 
-- If reclaim efficiency is above 12.5% (`sc->nr_reclaimed > sc->nr_scanned >> 3`),
-  it wakes any tasks already sleeping on `VMSCAN_THROTTLE_NOPROGRESS`.
-- If we are at priority 1 (one step from scanning the entire LRU) and
-  `sc->nr_reclaimed` is still zero, it calls
-  `reclaim_throttle(pgdat, VMSCAN_THROTTLE_NOPROGRESS)`.
-- kswapd and cgroup reclaim are exempt — they use `VMSCAN_THROTTLE_WRITEBACK`
-  instead when stalled on I/O.
+- 回収効率が12.5%を上回る場合（`sc->nr_reclaimed > sc->nr_scanned >> 3`）、
+  `VMSCAN_THROTTLE_NOPROGRESS`ですでにスリープしているタスクを起こす。
+- 優先度1（LRU全体をスキャンする1段階手前）にあり、
+  `sc->nr_reclaimed`がまだゼロであれば、
+  `reclaim_throttle(pgdat, VMSCAN_THROTTLE_NOPROGRESS)`を呼ぶ。
+- kswapdとcgroupの回収は免除される。これらはI/Oで停滞したときに代わりに
+  `VMSCAN_THROTTLE_WRITEBACK`を使う。
 
 ---
 
-## Memory Cgroup Throttling — the `memory.high` Path {#memory-cgroup-throttling-the-memoryhigh-path}
+## メモリcgroupのスロットリング — `memory.high`パス {#memory-cgroup-throttling-the-memoryhigh-path}
 
-### The Proportional Delay {#the-proportional-delay}
+### 比例遅延 {#the-proportional-delay}
 
-cgroup v2's `memory.high` is a soft limit. Exceeding it does not immediately
-kill or hard-stop the cgroup. Instead, the exceeding process is slowed down
-proportionally to how far over the limit the cgroup (or any of its ancestors)
-has drifted.
+cgroup v2の`memory.high`はソフトリミットである。これを超えても、cgroupが直ちに
+killされたり強制停止されたりはしない。代わりに、超過したプロセスは、
+cgroup（またはその祖先のいずれか）がリミットをどれだけ超えたかに比例して減速させられる。
 
-When an allocation causes a cgroup to exceed `memory.high`, the charge path
-sets `current->memcg_nr_pages_over_high`. On the return to userspace (or
-sooner if the count exceeds `MEMCG_CHARGE_BATCH`),
-`__mem_cgroup_handle_over_high()` is called:
+割り当てによってcgroupが`memory.high`を超えると、チャージパスは
+`current->memcg_nr_pages_over_high`をセットする。ユーザー空間に戻る際に（あるいは
+カウントが`MEMCG_CHARGE_BATCH`を超えた場合はそれより早く）、
+`__mem_cgroup_handle_over_high()`が呼ばれる:
 
 ```
 Allocation exceeds memory.high
@@ -234,124 +227,117 @@ Allocation exceeds memory.high
            └── schedule_timeout_killable(penalty_jiffies)
 ```
 
-`reclaim_high()` walks up the cgroup hierarchy reclaiming from each ancestor
-that is over its `memory.high` limit. After up to `MAX_RECLAIM_RETRIES` (16)
-attempts at reclaim, if usage is still above the limit,
-`calculate_high_delay()` computes a sleep duration.
+`reclaim_high()`はcgroup階層を上へたどり、自身の`memory.high`リミットを超えている
+各祖先から回収する。最大`MAX_RECLAIM_RETRIES`（16）回の回収を試みた後も
+使用量がリミットを超えていれば、`calculate_high_delay()`がスリープ時間を計算する。
 
-### The Delay Formula {#the-delay-formula}
+### 遅延の計算式 {#the-delay-formula}
 
-The penalty is calculated by `calculate_high_delay()`:
+ペナルティは`calculate_high_delay()`によって計算される:
 
 ```c
 penalty_jiffies = max_overage * max_overage * HZ;
-penalty_jiffies >>= MEMCG_DELAY_PRECISION_SHIFT;   /* 20 bits */
-penalty_jiffies >>= MEMCG_DELAY_SCALING_SHIFT;     /* 14 bits */
+penalty_jiffies >>= MEMCG_DELAY_PRECISION_SHIFT;   /* 20ビット */
+penalty_jiffies >>= MEMCG_DELAY_SCALING_SHIFT;     /* 14ビット */
 
-/* Scale by nr_pages relative to MEMCG_CHARGE_BATCH */
+/* MEMCG_CHARGE_BATCH に対する nr_pages の比でスケールする */
 return penalty_jiffies * nr_pages / MEMCG_CHARGE_BATCH;
 ```
 
-`max_overage` is a fixed-point ratio of how far over `memory.high` the cgroup
-(or its worst ancestor) is, computed as:
+`max_overage`は、cgroup（またはその最悪の祖先）が`memory.high`をどれだけ超えているかを示す
+固定小数点の比率であり、次のように計算される:
 
 ```c
 overage = (usage - high) << MEMCG_DELAY_PRECISION_SHIFT;
-overage = overage / high;   /* fraction of the limit */
+overage = overage / high;   /* リミットに対する割合 */
 ```
 
-The quadratic term means the penalty grows quickly with overage: a cgroup
-that is 2× over its limit is penalised far more than one just barely over.
-The final result is clamped to `MEMCG_MAX_HIGH_DELAY_JIFFIES` (2 seconds) per
-return-to-userspace batch, so the application never hangs permanently — it
-just runs very slowly.
+2乗の項があるため、ペナルティは超過量とともに急速に増大する。リミットの2倍を超えた
+cgroupは、わずかに超えただけのものよりはるかに重いペナルティを受ける。
+最終結果はユーザー空間への復帰1バッチあたり`MEMCG_MAX_HIGH_DELAY_JIFFIES`（2秒）に
+制限されるので、アプリケーションが永久にハングすることはなく、
+非常に遅く動くだけである。
 
-!!! note "Separate memory and swap penalties"
-    `calculate_high_delay()` is called twice: once with the result of
-    `mem_find_max_overage()` (memory overage) and once with
-    `swap_find_max_overage()` (swap overage). Both ancestors in the hierarchy
-    are walked independently and the penalties are additive.
+!!! note "メモリとスワップのペナルティは別々"
+    `calculate_high_delay()`は2回呼ばれる。1回は`mem_find_max_overage()`の結果
+    （メモリの超過量）で、もう1回は`swap_find_max_overage()`の結果（スワップの超過量）で
+    呼ばれる。階層内の祖先はそれぞれ独立にたどられ、ペナルティは加算される。
 
-!!! note "Small overages are free"
-    If `penalty_jiffies <= HZ/100` (10 ms), the task is not slept at all.
-    This avoids penalising cgroups that drifted only slightly over their limit
-    and may already be reclaiming successfully.
+!!! note "わずかな超過は無料"
+    `penalty_jiffies <= HZ/100`（10 ms）であれば、タスクはまったくスリープさせられない。
+    これにより、リミットをわずかに超えただけで、すでに回収に成功しつつあるかもしれない
+    cgroupにペナルティを課すことを避ける。
 
 ---
 
-## Write Throttling and Reclaim Stalls {#write-throttling-and-reclaim-stalls}
+## 書き込みのスロットリングと回収の停滞 {#write-throttling-and-reclaim-stalls}
 
-### `PGDAT_WRITEBACK` and the Writeback Throttle {#pgdat_writeback-and-the-writeback-throttle}
+### `PGDAT_WRITEBACK`とライトバックのスロットリング {#pgdat_writeback-and-the-writeback-throttle}
 
-When `shrink_node()` finds that every page it examined is under writeback
-(`sc->nr.writeback == sc->nr.taken`), it sets the `PGDAT_WRITEBACK` flag on
-the node. This signals to kswapd that dirty writeback is keeping pace with
-LRU scanning and that pages are cycling through the list faster than the
-storage can drain them.
+`shrink_node()`が、調べたすべてのpageがライトバック中であること
+（`sc->nr.writeback == sc->nr.taken`）を見つけると、ノードに`PGDAT_WRITEBACK`フラグを
+セットする。これはkswapdに対し、dirtyのライトバックがLRUスキャンと同じペースで進んでおり、
+pageがストレージの掃き出し速度よりも速くリストを循環していることを知らせる。
 
-If `sc->nr.immediate` is non-zero — pages both under writeback *and* already
-recycled back to the tail of the inactive LRU — `shrink_node()` calls:
+`sc->nr.immediate`が非ゼロ — すなわちpageがライトバック中で*かつ*すでに
+非アクティブLRUの末尾に戻ってきている — の場合、`shrink_node()`は次を呼ぶ:
 
 ```c
 reclaim_throttle(pgdat, VMSCAN_THROTTLE_WRITEBACK);
 ```
 
-This sleeps for up to 100 ms or until `__acct_reclaim_writeback()` wakes the
-queue after enough pages complete writeback.
+これは最大100 ms、または十分なpageがライトバックを完了した後に
+`__acct_reclaim_writeback()`がキューを起こすまでスリープする。
 
-### `LRUVEC_NODE_CONGESTED` and `VMSCAN_THROTTLE_CONGESTED` {#lruvecnodecongested-and-vmscanthrottlecongested}
+### `LRUVEC_NODE_CONGESTED`と`VMSCAN_THROTTLE_CONGESTED` {#lruvecnodecongested-and-vmscanthrottlecongested}
 
-If all dirty pages scanned are both dirty and congested
-(`sc->nr.dirty == sc->nr.congested`), the node is marked congested via
-`LRUVEC_NODE_CONGESTED` (set by kswapd) or `LRUVEC_CGROUP_CONGESTED` (set by
-cgroup reclaim). Direct reclaimers that detect either flag then call:
+スキャンしたすべてのdirty pageがdirtyかつ輻輳している場合
+（`sc->nr.dirty == sc->nr.congested`）、ノードは`LRUVEC_NODE_CONGESTED`（kswapdがセット）
+または`LRUVEC_CGROUP_CONGESTED`（cgroupの回収がセット）によって輻輳状態とマークされる。
+いずれかのフラグを検出した直接回収者は、次を呼ぶ:
 
 ```c
 reclaim_throttle(pgdat, VMSCAN_THROTTLE_CONGESTED);
 ```
 
-kswapd itself is not throttled here — it is free to keep scanning since
-stalling kswapd would stop all reclaim progress. Only user-context direct
-reclaimers sleep.
+kswapd自身はここではスロットリングされない。kswapdを停滞させると回収の進行がすべて
+止まってしまうため、kswapdは自由にスキャンを続けられる。スリープするのは
+ユーザーコンテキストの直接回収者だけである。
 
-### `balance_dirty_pages()` — the Upstream Throttle {#balancedirtypages-the-upstream-throttle}
+### `balance_dirty_pages()` — 上流側のスロットリング {#balancedirtypages-the-upstream-throttle}
 
-The write-throttle path in `mm/page-writeback.c` is the primary mechanism
-for slowing down processes that dirty pages faster than writeback can drain
-them. `balance_dirty_pages()` is called by the filesystem write path — it is
-not called directly by the reclaim path. However, the two interact: if
-`balance_dirty_pages()` is unavailable (for example with legacy cgroup v1
-memory controllers where writeback and memcg are decoupled),
-`writeback_throttling_sane()` returns `false` and `shrink_folio_list()` falls
-back to stalling directly on writeback I/O, which lacks the fairness and
-bandwidth-proportionality of the normal dirty throttle.
+`mm/page-writeback.c`の書き込みスロットリングパスは、ライトバックが掃き出せるより速く
+pageをdirtyにするプロセスを減速させる主要なメカニズムである。`balance_dirty_pages()`は
+ファイルシステムの書き込みパスから呼ばれ、回収パスから直接呼ばれることはない。
+しかし両者は相互作用する。`balance_dirty_pages()`が利用できない場合（たとえばライトバックと
+memcgが切り離されているレガシーなcgroup v1メモリコントローラ）、
+`writeback_throttling_sane()`は`false`を返し、`shrink_folio_list()`はライトバックI/Oで
+直接停滞する方法にフォールバックする。この方法には、通常のdirtyスロットリングが持つ
+公平性や帯域比例性がない。
 
 ---
 
-## Fair Reclaim Under Pressure {#fair-reclaim-under-pressure}
+## 逼迫下での公平な回収 {#fair-reclaim-under-pressure}
 
-### Reclaim Priority and the Cgroup Hierarchy {#reclaim-priority-and-the-cgroup-hierarchy}
+### 回収優先度とcgroup階層 {#reclaim-priority-and-the-cgroup-hierarchy}
 
-When multiple cgroups are all under memory pressure, the kernel does not
-simply reclaim from the cgroup with the most memory. `shrink_node_memcgs()`
-iterates all memcgs in the node's lruvec tree and calls
-`shrink_lruvec()` on each one. The amount scanned from each cgroup is
-proportional to that cgroup's share of reclaimable pages on the node, modified
-by its configured `swappiness`.
+複数のcgroupがすべてメモリ逼迫下にあるとき、カーネルは単純に最も多くのメモリを持つ
+cgroupから回収するわけではない。`shrink_node_memcgs()`はノードのlruvecツリー内の
+すべてのmemcgを走査し、それぞれに対して`shrink_lruvec()`を呼ぶ。各cgroupからスキャンされる量は、
+ノード上の回収可能なpageに占めるそのcgroupの割合に比例し、設定された`swappiness`によって
+調整される。
 
-Reclaim priority starts at `DEF_PRIORITY` (12) and decrements toward 0 as
-pressure increases. At each priority level, the scan visits a fraction
-`1 >> priority` of each LRU list. Lower priorities scan larger fractions —
-priority 0 scans the entire list.
+回収優先度は`DEF_PRIORITY`（12）から始まり、逼迫が強まるにつれて0に向かって
+デクリメントされる。各優先度レベルで、スキャンは各LRUリストの`1 >> priority`の割合を訪れる。
+優先度が低いほど大きな割合をスキャンし、
+優先度0ではリスト全体をスキャンする。
 
-### Cgroup Hierarchy Walk in `reclaim_high()` {#cgroup-hierarchy-walk-in-reclaim_high}
+### `reclaim_high()`でのcgroup階層の走査 {#cgroup-hierarchy-walk-in-reclaim_high}
 
-For `memory.high` enforcement, `reclaim_high()` does not just reclaim from
-the directly exceeding cgroup. It walks up to the root via
-`parent_mem_cgroup()`, reclaiming from each ancestor that is also over its
-own `memory.high`. This prevents a deeply nested cgroup from escaping its
-ancestors' limits just because the immediate parent happens to be within its
-own limit.
+`memory.high`の強制において、`reclaim_high()`は直接超過したcgroupから回収するだけではない。
+`parent_mem_cgroup()`を介してルートまでたどり、自身の`memory.high`も超えている各祖先から
+回収する。これにより、直接の親がたまたま自身のリミット内に収まっているというだけで、
+深くネストしたcgroupが祖先のリミットから逃れることを防ぐ。
 
 ```c
 do {
@@ -361,172 +347,167 @@ do {
          !mem_cgroup_is_root(memcg));
 ```
 
-The `mem_find_max_overage()` function performs a similar ancestor walk when
-computing the penalty delay, picking the worst (most over-limit) ancestor to
-determine the penalty magnitude.
+`mem_find_max_overage()`関数は、ペナルティの遅延を計算する際に同様の祖先の走査を行い、
+最悪の（最もリミットを超えている）祖先を選んでペナルティの大きさを決める。
 
 ---
 
-## `balance_pgdat()` — kswapd Node Balancing {#balance_pgdat-kswapd-node-balancing}
+## `balance_pgdat()` — kswapdのノードバランシング {#balance_pgdat-kswapd-node-balancing}
 
-kswapd's main loop calls `balance_pgdat()` to reclaim pages on a node until
-at least one zone is balanced. A zone is balanced when its free pages pass
-the `high` watermark as tested by `pgdat_balanced()`:
+kswapdのメインループは`balance_pgdat()`を呼び、少なくとも1つのゾーンがバランスするまで
+ノード上のpageを回収する。ゾーンは、`pgdat_balanced()`による判定で空きpageが
+`high`ウォーターマークを超えたときにバランスしたとみなされる:
 
 ```c
 static bool pgdat_balanced(pg_data_t *pgdat, int order, int highest_zoneidx)
 ```
 
-It checks zones from lowest to highest, returning `true` as soon as one zone
-satisfies `__zone_watermark_ok()` at the `high_wmark_pages()` threshold.
+この関数はゾーンを下位から上位へ確認し、いずれか1つのゾーンが`high_wmark_pages()`の
+しきい値で`__zone_watermark_ok()`を満たした時点で`true`を返す。
 
-Once `pgdat_balanced()` is true, kswapd calls `prepare_kswapd_sleep()` which:
+`pgdat_balanced()`が真になると、kswapdは`prepare_kswapd_sleep()`を呼び、これは次を行う:
 
-1. Wakes any processes sleeping on `pgdat->pfmemalloc_wait` (they were
-   waiting for pfmemalloc reserves to be replenished).
-2. Calls `clear_pgdat_congested()` to clear `PGDAT_WRITEBACK`,
-   `LRUVEC_NODE_CONGESTED`, and `LRUVEC_CGROUP_CONGESTED`.
+1. `pgdat->pfmemalloc_wait`でスリープしているプロセスを起こす（それらは
+   pfmemallocリザーブが補充されるのを待っていた）。
+2. `clear_pgdat_congested()`を呼んで`PGDAT_WRITEBACK`、
+   `LRUVEC_NODE_CONGESTED`、`LRUVEC_CGROUP_CONGESTED`をクリアする。
 
-`balance_pgdat()` also wakes `pfmemalloc_wait` mid-loop whenever
-`allow_direct_reclaim()` becomes true, so throttled allocators are not
-forced to wait until kswapd has fully balanced the node.
+`balance_pgdat()`は、`allow_direct_reclaim()`が真になるたびにループの途中でも
+`pfmemalloc_wait`を起こすので、スロットリングされたアロケータはkswapdがノードを
+完全にバランスさせるまで待たされることはない。
 
 ---
 
-## Observing Throttling {#observing-throttling}
+## スロットリングの観察 {#observing-throttling}
 
-### PSI — the Most Direct Signal {#psi-the-most-direct-signal}
+### PSI — 最も直接的なシグナル {#psi-the-most-direct-signal}
 
-Pressure Stall Information captures exactly the phenomenon throttling
-addresses: tasks stalled waiting for memory. See [PSI](psi.md) for a full
-explanation. During reclaim throttling, tasks waiting in `reclaim_throttle()`
-or `throttle_direct_reclaim()` are accounted as memory stalls by
-`psi_memstall_enter()` / `psi_memstall_leave()`.
+Pressure Stall Informationは、スロットリングが対処する現象、すなわちメモリを待って
+停滞しているタスクをそのまま捉える。詳しい説明は[PSI](psi.md)を参照。回収のスロットリング中、
+`reclaim_throttle()`や`throttle_direct_reclaim()`で待っているタスクは、
+`psi_memstall_enter()` / `psi_memstall_leave()`によってメモリストールとして計上される。
 
 ```bash
-# Snapshot — "full" means every runnable task was stalled
+# スナップショット — "full" は実行可能なすべてのタスクが停滞していたことを意味する
 cat /proc/pressure/memory
 # some avg10=8.42 avg60=3.11 avg300=1.05 total=12450183
 # full avg10=2.17 avg60=0.84 avg300=0.27 total=3241885
 ```
 
-Rising `full` memory pressure is a reliable indicator that throttling is
-active and the system cannot reclaim fast enough.
+`full`のメモリプレッシャーの上昇は、スロットリングが作動しており、システムが十分な速さで
+回収できていないことの信頼できる指標である。
 
-### `/proc/vmstat` Counters {#procvmstat-counters}
+### `/proc/vmstat`のカウンタ {#procvmstat-counters}
 
 ```bash
 grep -E 'pgscan|pgsteal|allocstall|throttle' /proc/vmstat
 ```
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `pgscan_kswapd` | Pages scanned by kswapd |
-| `pgsteal_kswapd` | Pages reclaimed by kswapd |
-| `pgscan_direct` | Pages scanned during direct reclaim |
-| `pgsteal_direct` | Pages reclaimed during direct reclaim |
-| `pgscan_direct_throttle` | Times `throttle_direct_reclaim()` blocked a process |
-| `allocstall_*` | Times `try_to_free_pages()` was entered per zone class |
+| `pgscan_kswapd` | kswapdがスキャンしたpage数 |
+| `pgsteal_kswapd` | kswapdが回収したpage数 |
+| `pgscan_direct` | 直接回収中にスキャンされたpage数 |
+| `pgsteal_direct` | 直接回収中に回収されたpage数 |
+| `pgscan_direct_throttle` | `throttle_direct_reclaim()`がプロセスをブロックした回数 |
+| `allocstall_*` | ゾーンクラスごとに`try_to_free_pages()`に入った回数 |
 
-**Interpreting the ratios:**
+**比率の解釈**:
 
-- A healthy system has `pgscan_kswapd` far exceeding `pgscan_direct`. kswapd
-  is handling pressure in the background and direct reclaim rarely activates.
-- High `pgscan_direct` relative to `pgscan_kswapd` means kswapd cannot keep
-  up and allocating processes are doing their own reclaim. This is a sign of
-  sustained memory pressure.
-- Rising `pgscan_direct_throttle` means pfmemalloc reserves are repeatedly
-  depleted — the system may be near the edge of what kswapd can handle.
-- High `allocstall_*` counts indicate `try_to_free_pages()` is entered
-  frequently. Each increment corresponds to a process entering direct reclaim
-  (not a throttle event itself, but a reclaim entry).
+- 健全なシステムでは、`pgscan_kswapd`が`pgscan_direct`を大きく上回る。kswapdが
+  バックグラウンドで逼迫を処理しており、直接回収はめったに作動しない。
+- `pgscan_kswapd`に対して`pgscan_direct`が高い場合は、kswapdが追いつけず、
+  割り当てを行うプロセスが自ら回収を行っていることを意味する。これは
+  持続的なメモリ逼迫の兆候である。
+- `pgscan_direct_throttle`の上昇は、pfmemallocリザーブが繰り返し枯渇していることを意味する。
+  システムはkswapdが処理できる限界に近いかもしれない。
+- `allocstall_*`のカウントが高いことは、`try_to_free_pages()`に頻繁に入っていることを示す。
+  各インクリメントは、プロセスが直接回収に入ったことに対応する
+  （スロットリングのイベントそのものではなく、回収への進入である）。
 
-!!! tip "Watch the steal/scan ratio"
-    `pgsteal / pgscan` is the reclaim efficiency. A ratio below ~50% means
-    reclaim is scanning many pages it cannot free — often due to referenced
-    pages, pinned pages, or heavy write pressure. This low efficiency is what
-    drives `VMSCAN_THROTTLE_NOPROGRESS`.
+!!! tip "steal/scanの比率に注目する"
+    `pgsteal / pgscan`は回収効率である。この比率がおよそ50%を下回る場合、
+    回収は解放できない多くのpageをスキャンしていることを意味する。原因は多くの場合、参照された
+    page、ピン留めされたpage、または激しい書き込み負荷である。この低い効率こそが
+    `VMSCAN_THROTTLE_NOPROGRESS`を引き起こす。
 
 ---
 
-## Tuning {#tuning}
+## チューニング {#tuning}
 
 ### `vm.swappiness` {#vmswappiness}
 
-Controls the relative cost the kernel assigns to reclaiming anonymous
-(swap-backed) pages versus file-backed pages. The internal variable is
-`vm_swappiness` with a default of 60.
+カーネルが匿名（スワップバック）pageの回収とファイルバックpageの回収に割り当てる
+相対的なコストを制御する。内部変数は`vm_swappiness`で、デフォルトは60である。
 
-- **0** — strongly prefer reclaiming file cache; anonymous pages are only
-  swapped when there is no alternative (note: does not disable swap entirely
-  since Linux 3.5).
-- **60** — default balance; anonymous and file pages are both candidates with
-  a slight preference for file.
-- **100** — treat anonymous and file pages as equally costly to reclaim.
-- **200** — aggressively swap anonymous pages even when file cache is
-  reclaimable (introduced in 5.8 for proactive reclaim scenarios).
+- **0** — ファイルキャッシュの回収を強く優先する。匿名pageは他に選択肢がない場合にのみ
+  スワップされる（注: Linux 3.5以降、スワップを完全に無効化するわけではない）。
+- **60** — デフォルトのバランス。匿名pageとファイルpageの両方が候補となり、
+  ファイルがやや優先される。
+- **100** — 匿名pageとファイルpageの回収コストを等しく扱う。
+- **200** — ファイルキャッシュが回収可能な場合でも匿名pageを積極的にスワップする
+  （プロアクティブな回収シナリオのために5.8で導入された）。
 
-A lower `swappiness` reduces I/O from swapping at the cost of dropping more
-file cache. On systems with abundant swap and slow disks this can increase
-`VMSCAN_THROTTLE_WRITEBACK` events if file writes dominate.
+`swappiness`を低くすると、より多くのファイルキャッシュを破棄する代償として、スワップによるI/Oが減る。
+スワップが豊富でディスクが遅いシステムでは、ファイル書き込みが支配的な場合に
+`VMSCAN_THROTTLE_WRITEBACK`イベントが増えることがある。
 
 ```bash
-# Read current value
+# 現在の値を読む
 sysctl vm.swappiness
 
-# Set temporarily
+# 一時的に設定する
 sysctl -w vm.swappiness=10
 
-# Persist across reboots
+# 再起動後も維持する
 echo "vm.swappiness = 10" >> /etc/sysctl.d/99-memory.conf
 ```
 
 ### `vm.vfs_cache_pressure` {#vmvfscachepressure}
 
-Governs how aggressively the kernel reclaims dentries and inodes (VFS slab
-caches) relative to page cache. The internal variable is
-`sysctl_vfs_cache_pressure` in `fs/dcache.c`, default 100.
+ページキャッシュに対して、カーネルがdentryとinode（VFSのslabキャッシュ）をどれだけ積極的に
+回収するかを制御する。内部変数は`fs/dcache.c`の`sysctl_vfs_cache_pressure`で、
+デフォルトは100である。
 
-- **< 100** — the kernel reclaims slab caches less aggressively than page
-  cache. Metadata-heavy workloads (many small files) benefit from a lower
-  value.
-- **100** — default; slab and page cache are weighted equally.
-- **> 100** — slab caches are reclaimed more aggressively. Reduces dentry/inode
-  memory at the cost of more VFS lookup overhead when metadata is evicted.
+- **< 100** — カーネルはslabキャッシュをページキャッシュほど積極的には回収しない。
+  メタデータの多いワークロード（多数の小さなファイル）は、低い値の恩恵を受ける。
+- **100** — デフォルト。slabとページキャッシュは等しく重み付けされる。
+- **> 100** — slabキャッシュがより積極的に回収される。メタデータが追い出されたときの
+  VFSルックアップのオーバーヘッドが増える代わりに、dentry/inodeのメモリが減る。
 
 ```bash
 sysctl vm.vfs_cache_pressure
 sysctl -w vm.vfs_cache_pressure=50
 ```
 
-### `vm.dirty_ratio` and `vm.dirty_background_ratio` {#vmdirtyratio-and-vmdirtybackground_ratio}
+### `vm.dirty_ratio`と`vm.dirty_background_ratio` {#vmdirtyratio-and-vmdirtybackground_ratio}
 
-These control when `balance_dirty_pages()` — the primary write throttle —
-activates. They directly affect whether reclaim encounters pages under
-writeback and thus how often `VMSCAN_THROTTLE_WRITEBACK` is triggered.
+これらは、主要な書き込みスロットリングである`balance_dirty_pages()`がいつ作動するかを制御する。
+回収がライトバック中のpageに遭遇するかどうか、したがって`VMSCAN_THROTTLE_WRITEBACK`が
+どれだけ頻繁に発動するかに直接影響する。
 
-| Sysctl | Internal variable | Default | Meaning |
+| sysctl | 内部変数 | デフォルト | 意味 |
 |--------|------------------|---------|---------|
-| `vm.dirty_background_ratio` | `dirty_background_ratio` | 10% | Fraction of dirtyable memory at which `flusher` threads begin background writeback |
-| `vm.dirty_ratio` | `vm_dirty_ratio` | 20% | Fraction at which writing processes are throttled in `balance_dirty_pages()` |
+| `vm.dirty_background_ratio` | `dirty_background_ratio` | 10% | `flusher`スレッドがバックグラウンドライトバックを開始する、dirty化可能なメモリの割合 |
+| `vm.dirty_ratio` | `vm_dirty_ratio` | 20% | 書き込みを行うプロセスが`balance_dirty_pages()`でスロットリングされる割合 |
 
-- Lowering `dirty_background_ratio` starts background writeback sooner,
-  keeping the dirty pool smaller and reducing reclaim stalls on writeback.
-- Lowering `dirty_ratio` throttles writers sooner, at the cost of higher
-  write latency for the application.
-- On systems with large RAM (hundreds of GB), percentage-based ratios can
-  allow enormous dirty pools. Consider using `vm.dirty_bytes` and
-  `vm.dirty_background_bytes` for absolute limits instead.
+- `dirty_background_ratio`を下げるとバックグラウンドライトバックが早く始まり、
+  dirtyプールが小さく保たれ、ライトバックによる回収の停滞が減る。
+- `dirty_ratio`を下げると書き込み側が早くスロットリングされるが、
+  アプリケーションの書き込みレイテンシが高くなる。
+- 大容量RAM（数百GB）を持つシステムでは、割合ベースの比率では巨大なdirtyプールを
+  許してしまうことがある。代わりに絶対値の制限として`vm.dirty_bytes`と
+  `vm.dirty_background_bytes`の使用を検討するとよい。
 
 ```bash
-# Keep dirty data bounded on a 256 GB system
+# 256 GB のシステムで dirty データを上限内に保つ
 sysctl -w vm.dirty_background_bytes=1073741824   # 1 GB
 sysctl -w vm.dirty_bytes=4294967296              # 4 GB
 ```
 
 ---
 
-## Putting It Together: A Pressure Escalation Sequence {#putting-it-together-a-pressure-escalation-sequence}
+## まとめ: 逼迫の段階的エスカレーション {#putting-it-together-a-pressure-escalation-sequence}
 
 ```
 1. Allocation demand rises; kswapd wakes and runs balance_pgdat().
@@ -555,15 +536,15 @@ sysctl -w vm.dirty_bytes=4294967296              # 4 GB
    └── Direct reclaimers wake and retry allocations.
 ```
 
-At step 3 and beyond, PSI `memory.full` pressure rises. Monitoring this
-sequence via `/proc/vmstat` counter deltas and PSI gives an accurate picture
-of which throttle stage the system has reached and how long it spends there.
+ステップ3以降では、PSIの`memory.full`プレッシャーが上昇する。この一連の流れを
+`/proc/vmstat`のカウンタの差分とPSIで監視すれば、システムがどのスロットリング段階に達し、
+そこでどれだけの時間を費やしているかを正確に把握できる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `reclaim_throttle()`, `throttle_direct_reclaim()`, `consider_reclaim_throttle()`, `balance_pgdat()`, `allow_direct_reclaim()`, and `pgdat_balanced()` — the complete throttling and kswapd balancing implementation
-- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `__mem_cgroup_handle_over_high()`, `reclaim_high()`, `calculate_high_delay()`, `mem_find_max_overage()`, and `swap_find_max_overage()` — the `memory.high` proportional penalty path
-- `Documentation/admin-guide/cgroup-v2.rst` — `memory.high` semantics, throttling behaviour when the soft limit is exceeded, and the relationship to `memory.max`
-- [LWN: Throttling memory-hungry cgroups](https://lwn.net/Articles/758781/) — the original design discussion for the proportional `memory.high` delay, explaining the quadratic penalty formula and why a simple hard stop was rejected
-- [reclaim](reclaim.md) — the broader reclaim picture: kswapd, direct reclaim, watermarks, LRU lists, and swappiness
-- [memcg](memcg.md) — `memory.high` and `memory.max` from the operator perspective: how to set limits and interpret `memory.events`
+- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `reclaim_throttle()`、`throttle_direct_reclaim()`、`consider_reclaim_throttle()`、`balance_pgdat()`、`allow_direct_reclaim()`、`pgdat_balanced()` — スロットリングとkswapdのバランシングの完全な実装
+- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `__mem_cgroup_handle_over_high()`、`reclaim_high()`、`calculate_high_delay()`、`mem_find_max_overage()`、`swap_find_max_overage()` — `memory.high`の比例ペナルティパス
+- `Documentation/admin-guide/cgroup-v2.rst` — `memory.high`のセマンティクス、ソフトリミット超過時のスロットリング動作、`memory.max`との関係
+- [LWN: Throttling memory-hungry cgroups](https://lwn.net/Articles/758781/) — `memory.high`の比例遅延の元となった設計議論。2乗のペナルティ式と、単純な強制停止が却下された理由を説明している
+- [回収](reclaim.md) — 回収の全体像: kswapd、直接回収、ウォーターマーク、LRUリスト、swappiness
+- [memcg](memcg.md) — 運用者の視点から見た`memory.high`と`memory.max`: リミットの設定方法と`memory.events`の解釈

@@ -1,10 +1,10 @@
-# Memory Compaction {#memory-compaction}
+# メモリコンパクション {#memory-compaction}
 
-> Defragmenting physical memory for large allocations
+> 大きな割り当てのために物理メモリをデフラグする
 
-## What Is Compaction? {#what-is-compaction}
+## コンパクションとは何か {#what-is-compaction}
 
-Memory compaction moves pages to create contiguous free regions. Over time, free memory becomes fragmented - scattered in small pieces throughout physical memory. Compaction consolidates these fragments.
+メモリコンパクションは、ページを移動して連続した空き領域を作り出す。時間が経つにつれ、空きメモリは断片化し、物理メモリ全体に小さな断片として散らばる。コンパクションはこれらの断片を集約する。
 
 ```
 Before Compaction:
@@ -20,36 +20,36 @@ After Compaction:
   Contiguous free region created
 ```
 
-## Why Compaction? {#why-compaction}
+## なぜコンパクションか {#why-compaction}
 
-### The Fragmentation Problem {#the-fragmentation-problem}
+### 断片化の問題 {#the-fragmentation-problem}
 
-The buddy allocator needs physically contiguous pages for high-order allocations:
+バディアロケータは、高次（high-order）の割り当てに物理的に連続したページを必要とする。
 
-| Order | Size | Use Cases |
+| order | サイズ | 用途 |
 |-------|------|-----------|
-| 0 | 4KB | Regular pages |
-| 1 | 8KB | Some kernel allocations |
-| 2 | 16KB | Jumbo frames |
-| 3+ | 32KB+ | Huge pages, DMA buffers |
+| 0 | 4KB | 通常のページ |
+| 1 | 8KB | 一部のカーネル割り当て |
+| 2 | 16KB | ジャンボフレーム |
+| 3+ | 32KB+ | huge page、DMAバッファ |
 
-After running for days/weeks, a system may have plenty of free memory but no contiguous regions for high-order allocations.
+数日〜数週間稼働した後のシステムでは、空きメモリが十分にあっても高次割り当てに使える連続領域がないことがある。
 
-### Before Compaction {#before-compaction}
+### コンパクション以前 {#before-compaction}
 
-Prior to compaction, high-order allocation failures were common:
+コンパクションが導入される前は、高次割り当ての失敗はよくあることだった。
 
-- THP couldn't allocate 2MB pages
-- DMA buffers failed
-- Network jumbo frames unavailable
+- THPが2MBのページを割り当てられない
+- DMAバッファの割り当てが失敗する
+- ネットワークのジャンボフレームが使えない
 
-The only solutions were rebooting or reserving memory at boot.
+解決策は再起動するか、ブート時にメモリを予約しておくことしかなかった。
 
-## How Compaction Works {#how-compaction-works}
+## コンパクションの仕組み {#how-compaction-works}
 
-### The Algorithm {#the-algorithm}
+### アルゴリズム {#the-algorithm}
 
-Compaction uses two scanners moving toward each other:
+コンパクションは、互いに向かって進む2つのスキャナを使う。
 
 ```
 Zone start                                              Zone end
@@ -66,28 +66,28 @@ Zone start                                              Zone end
                      Meet in middle
 ```
 
-1. **Free scanner**: Starts at zone end, moves backward, finds free pages
-2. **Migration scanner**: Starts at zone start, moves forward, finds movable pages
-3. **Migration**: Move pages from migration scanner to free scanner locations
-4. **Result**: Free space consolidated at one end
+1. **フリースキャナ**: ゾーンの末尾から開始して後方へ進み、空きページを探す
+2. **マイグレーションスキャナ**: ゾーンの先頭から開始して前方へ進み、移動可能なページを探す
+3. **マイグレーション**: マイグレーションスキャナが見つけたページを、フリースキャナが見つけた位置へ移動する
+4. **結果**: 空き領域が一方の端に集約される
 
-### Page Mobility {#page-mobility}
+### ページの移動可能性 {#page-mobility}
 
-Not all pages can be moved:
+すべてのページが移動できるわけではない。
 
-| Migrate Type | Movable? | Examples |
+| マイグレートタイプ | 移動可能か | 例 |
 |--------------|----------|----------|
-| `MIGRATE_MOVABLE` | Yes | User pages, page cache |
-| `MIGRATE_RECLAIMABLE` | Sometimes | Caches (can be freed instead) |
-| `MIGRATE_UNMOVABLE` | No | Kernel allocations, DMA |
+| `MIGRATE_MOVABLE` | はい | ユーザーページ、ページキャッシュ |
+| `MIGRATE_RECLAIMABLE` | 場合による | キャッシュ（代わりに解放できる） |
+| `MIGRATE_UNMOVABLE` | いいえ | カーネルの割り当て、DMA |
 
-Compaction only works with movable pages. Unmovable pages create permanent fragmentation.
+コンパクションは移動可能なページにしか作用しない。移動不能なページは恒久的な断片化を生む。
 
-## Compaction Triggers {#compaction-triggers}
+## コンパクションのトリガ {#compaction-triggers}
 
-### 1. Direct Compaction (Synchronous) {#1-direct-compaction-synchronous}
+### 1. 直接コンパクション（同期） {#1-direct-compaction-synchronous}
 
-When a high-order allocation fails, the allocating process runs compaction:
+高次割り当てが失敗すると、割り当てを行っているプロセス自身がコンパクションを実行する。
 
 ```
 alloc_pages(order=9)  /* 2MB for THP */
@@ -102,202 +102,202 @@ alloc_pages(order=9)  /* 2MB for THP */
     Retry allocation
 ```
 
-### 2. kcompactd (Asynchronous) {#2-kcompactd-asynchronous}
+### 2. kcompactd（非同期） {#2-kcompactd-asynchronous}
 
-Background kernel thread that compacts proactively:
+先回りしてコンパクションを行うバックグラウンドのカーネルスレッドである。
 
 ```bash
-# One kcompactd per NUMA node
+# NUMAノードごとに1つのkcompactd
 ps aux | grep kcompactd
 # kcompactd0, kcompactd1, ...
 ```
 
-Woken when:
+起床するのは次のときである。
 
-- Watermarks indicate fragmentation
-- High-order allocations are failing
-- Explicitly triggered
+- ウォーターマークが断片化を示しているとき
+- 高次割り当てが失敗しているとき
+- 明示的にトリガされたとき
 
-### 3. Manual Trigger {#3-manual-trigger}
+### 3. 手動トリガ {#3-manual-trigger}
 
 ```bash
-# Trigger compaction on all nodes
+# 全ノードでコンパクションをトリガ
 echo 1 > /proc/sys/vm/compact_memory
 
-# Per-node trigger
+# ノード単位のトリガ
 echo 1 > /sys/devices/system/node/node0/compact
 ```
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
-### Proactive Compaction (v5.9+) {#proactive-compaction-v59}
+### プロアクティブコンパクション（v5.9+） {#proactive-compaction-v59}
 
-Compacts in the background before allocations need it:
+割り当てで必要になる前に、バックグラウンドでコンパクションを行う。
 
 ```bash
-# Enable proactive compaction (0-100, 0=disabled)
+# プロアクティブコンパクションを有効化 (0-100、0=無効)
 cat /proc/sys/vm/compaction_proactiveness
 echo 20 > /proc/sys/vm/compaction_proactiveness
 
-# Higher = more aggressive background compaction
-# Lower = less CPU usage, more direct compaction
+# 高い = より積極的なバックグラウンドコンパクション
+# 低い = CPU使用量は少ないが、直接コンパクションが増える
 ```
 
-### Compaction Behavior {#compaction-behavior}
+### コンパクションの挙動 {#compaction-behavior}
 
 ```bash
-# Fragmentation index threshold for compaction
-# Compaction triggers when fragmentation_index > extfrag_threshold
-# Index 0 = failure due to lack of memory, 1000 = due to fragmentation
+# コンパクションの断片化インデックスしきい値
+# fragmentation_index > extfrag_threshold のときコンパクションが起動する
+# インデックス0 = メモリ不足による失敗、1000 = 断片化による失敗
 cat /proc/sys/vm/extfrag_threshold
-# 500 (default) - lower = more aggressive (compact at lower fragmentation)
+# 500 (デフォルト) - 低いほど積極的 (より低い断片化度でコンパクションする)
 
-# View fragmentation index per order
+# orderごとの断片化インデックスを見る
 cat /sys/kernel/debug/extfrag/extfrag_index
 ```
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
-### Compaction Statistics {#compaction-statistics}
+### コンパクションの統計 {#compaction-statistics}
 
 ```bash
 cat /proc/vmstat | grep compact
-# compact_migrate_scanned  - Pages scanned for migration
-# compact_free_scanned     - Pages scanned for free space
-# compact_isolated         - Pages isolated for migration
-# compact_stall            - Direct compaction stalls
-# compact_fail             - Compaction failures
-# compact_success          - Successful compactions
+# compact_migrate_scanned  - マイグレーションのためにスキャンしたページ数
+# compact_free_scanned     - 空き領域を探してスキャンしたページ数
+# compact_isolated         - マイグレーションのために分離したページ数
+# compact_stall            - 直接コンパクションによるストール
+# compact_fail             - コンパクションの失敗
+# compact_success          - コンパクションの成功
 ```
 
-### Fragmentation Index {#fragmentation-index}
+### 断片化インデックス {#fragmentation-index}
 
 ```bash
-# Per-order fragmentation (0.0 = no fragmentation, 1.0 = severe)
+# orderごとの断片化 (0.0 = 断片化なし、1.0 = 深刻)
 cat /sys/kernel/debug/extfrag/extfrag_index
 
-# Example:
+# 例:
 # Node 0, zone   Normal
 #     order   0   1   2   3   4   5   6   7   8   9  10
 #     index 0.0 0.0 0.0 0.0 0.1 0.2 0.4 0.6 0.8 0.9 1.0
 ```
 
-### Tracing {#tracing}
+### トレーシング {#tracing}
 
 ```bash
-# Trace compaction events
+# コンパクションイベントをトレース
 echo 1 > /sys/kernel/debug/tracing/events/compaction/mm_compaction_begin/enable
 echo 1 > /sys/kernel/debug/tracing/events/compaction/mm_compaction_end/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Evolution {#evolution}
+## 変遷 {#evolution}
 
-### Introduction (v2.6.35, 2010) {#introduction-v2635-2010}
+### 導入（v2.6.35、2010年） {#introduction-v2635-2010}
 
-**Commit**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
+**コミット**: [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) ("mm: compaction: memory compaction core") | [LKML](https://lore.kernel.org/lkml/1269347146-7461-1-git-send-email-mel@csn.ul.ie/)
 
-**Author**: Mel Gorman
+**作者**: Mel Gorman
 
-Initial compaction implementation to support THP and reduce high-order allocation failures.
+THPをサポートし、高次割り当ての失敗を減らすための最初のコンパクション実装。
 
-### kcompactd (v4.6, 2016) {#kcompactd-v46-2016}
+### kcompactd（v4.6、2016年） {#kcompactd-v46-2016}
 
-**Commit**: [698b1b30642f](https://git.kernel.org/linus/698b1b30642f) ("mm, compaction: introduce kcompactd") | [LKML](https://lore.kernel.org/lkml/1454938691-2197-1-git-send-email-vbabka@suse.cz/)
+**コミット**: [698b1b30642f](https://git.kernel.org/linus/698b1b30642f) ("mm, compaction: introduce kcompactd") | [LKML](https://lore.kernel.org/lkml/1454938691-2197-1-git-send-email-vbabka@suse.cz/)
 
-**Author**: Vlastimil Babka
+**作者**: Vlastimil Babka
 
-Background compaction daemon, similar to kswapd for reclaim.
+回収におけるkswapdに相当する、バックグラウンドのコンパクションデーモン。
 
-### Proactive Compaction (v5.9, 2020) {#proactive-compaction-v59-2020}
+### プロアクティブコンパクション（v5.9、2020年） {#proactive-compaction-v59-2020}
 
-**Commit**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
+**コミット**: [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) ("mm: proactive compaction") | [LKML](https://lore.kernel.org/linux-mm/20200428221055.598-1-nigupta@nvidia.com/)
 
-**Author**: Nitin Gupta
+**作者**: Nitin Gupta
 
-Compact proactively based on fragmentation levels, reducing direct compaction stalls.
+断片化の度合いに基づいて先回りしてコンパクションを行い、直接コンパクションによるストールを減らす。
 
-## Compaction vs Reclaim {#compaction-vs-reclaim}
+## コンパクションと回収の比較 {#compaction-vs-reclaim}
 
-Both run under memory pressure, but serve different purposes:
+どちらもメモリ逼迫時に動作するが、目的が異なる。
 
-| Aspect | Reclaim | Compaction |
+| 観点 | 回収 | コンパクション |
 |--------|---------|------------|
-| Goal | Free memory | Create contiguous regions |
-| When | Low free pages | High-order allocation fails |
-| Action | Evict/swap pages | Move pages |
-| Daemon | kswapd | kcompactd |
+| 目的 | メモリを解放する | 連続領域を作る |
+| タイミング | 空きページが少ないとき | 高次割り当てが失敗したとき |
+| 動作 | ページを追い出す/スワップする | ページを移動する |
+| デーモン | kswapd | kcompactd |
 
-They often work together: reclaim frees pages, compaction arranges them.
+両者はしばしば協調して働く。回収がページを解放し、コンパクションがそれを並べ直す。
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Direct Compaction Stalls {#direct-compaction-stalls}
+### 直接コンパクションによるストール {#direct-compaction-stalls}
 
-Processes blocked waiting for compaction.
+プロセスがコンパクションを待ってブロックされる。
 
-**Symptoms**: Latency spikes, high `compact_stall` count
+**症状**: レイテンシのスパイク、`compact_stall`のカウントが多い
 
-**Solutions**:
+**対策**:
 
-- Enable proactive compaction
-- Tune `compaction_proactiveness`
-- Reduce high-order allocations
+- プロアクティブコンパクションを有効にする
+- `compaction_proactiveness`を調整する
+- 高次割り当てを減らす
 
-### Compaction Failures {#compaction-failures}
+### コンパクションの失敗 {#compaction-failures}
 
-Can't create contiguous regions.
+連続領域を作り出せない。
 
-**Symptoms**: High `compact_fail`, THP allocation failures
+**症状**: `compact_fail`が多い、THPの割り当て失敗
 
-**Causes**:
+**原因**:
 
-- Too many unmovable pages
-- Severe fragmentation
+- 移動不能なページが多すぎる
+- 断片化が深刻
 
-**Solutions**:
+**対策**:
 
-- Reduce kernel memory usage
-- Increase movable zone size
-- Consider memory hotplug for isolation
+- カーネルのメモリ使用量を減らす
+- movableゾーンのサイズを増やす
+- 分離のためにメモリホットプラグを検討する
 
-### High CPU from kcompactd {#high-cpu-from-kcompactd}
+### kcompactdによる高いCPU使用率 {#high-cpu-from-kcompactd}
 
-Background compaction consuming CPU.
+バックグラウンドのコンパクションがCPUを消費している。
 
-**Debug**: `top`, `perf top`
+**デバッグ**: `top`、`perf top`
 
-**Solutions**:
+**対策**:
 
-- Reduce `compaction_proactiveness`
-- Accept more direct compaction instead
+- `compaction_proactiveness`を下げる
+- 代わりに直接コンパクションが増えることを受け入れる
 
-## References {#references}
+## リファレンス {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Compaction implementation |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Compaction triggers |
+| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | コンパクションの実装 |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | コンパクションのトリガ |
 
-### Related {#related}
+### 関連 {#related}
 
-- [page-allocator](page-allocator.md) - Buddy system, migrate types
-- [thp](thp.md) - Primary consumer of compaction
-- [reclaim](reclaim.md) - Works alongside compaction
-- [contiguous-memory](contiguous-memory.md) - Why contiguous allocations fail and solutions
+- [page-allocator](page-allocator.md) - バディシステム、マイグレートタイプ
+- [thp](thp.md) - コンパクションの主な利用者
+- [reclaim](reclaim.md) - コンパクションと並行して動作する
+- [contiguous-memory](contiguous-memory.md) - 連続割り当てが失敗する理由と解決策
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [page-allocator.md](page-allocator.md) — Buddy allocator migrate types (`MIGRATE_MOVABLE`, `MIGRATE_UNMOVABLE`) that determine what compaction can move
-- [thp.md](thp.md) — Transparent huge pages: the primary driver for compaction; requires order-9 contiguous physical pages
-- [reclaim.md](reclaim.md) — kswapd and direct reclaim; compaction and reclaim coordinate under the same watermark logic
-- [cma.md](cma.md) — Contiguous Memory Allocator; uses migration-based compaction to reclaim reserved CMA regions
-- [mm/compaction.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) — Full compaction implementation; `compact_zone()` runs the two-scanner algorithm
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `try_to_compact_pages()` is where direct compaction is triggered on allocation failure
-- [LWN: Memory compaction](https://lwn.net/Articles/368869/) — Mel Gorman's introduction of the two-scanner algorithm and fragmentation index
-- [LWN: Proactive compaction](https://lwn.net/Articles/817905/) — Nitin Gupta's v5.9 proactive compaction and the `compaction_proactiveness` tunable
-- [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) — Original compaction core commit by Mel Gorman in v2.6.35
-- [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) — Proactive compaction added in v5.9 to reduce direct compaction stalls
-- `Documentation/admin-guide/mm/transhuge.rst` — Covers THP allocation, compaction tuning, and the `compact_memory` sysctl
+- [page-allocator.md](page-allocator.md) — コンパクションが何を移動できるかを決める、バディアロケータのマイグレートタイプ（`MIGRATE_MOVABLE`、`MIGRATE_UNMOVABLE`）
+- [thp.md](thp.md) — Transparent huge pages：コンパクションの主な動機。order-9の連続した物理ページを必要とする
+- [reclaim.md](reclaim.md) — kswapdと直接回収。コンパクションと回収は同じウォーターマークのロジックのもとで連携する
+- [cma.md](cma.md) — Contiguous Memory Allocator。予約されたCMA領域を取り戻すためにマイグレーションベースのコンパクションを使う
+- [mm/compaction.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) — コンパクションの実装全体。`compact_zone()`が2スキャナのアルゴリズムを実行する
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — 割り当て失敗時に直接コンパクションがトリガされる場所は`try_to_compact_pages()`
+- [LWN: Memory compaction](https://lwn.net/Articles/368869/) — Mel Gormanによる2スキャナのアルゴリズムと断片化インデックスの紹介
+- [LWN: Proactive compaction](https://lwn.net/Articles/817905/) — Nitin Guptaによるv5.9のプロアクティブコンパクションと`compaction_proactiveness`パラメータ
+- [748446bb6b5a](https://git.kernel.org/linus/748446bb6b5a) — v2.6.35でのMel Gormanによる最初のコンパクションコアのコミット
+- [facdaa917c4d](https://git.kernel.org/linus/facdaa917c4d) — 直接コンパクションによるストールを減らすためにv5.9で追加されたプロアクティブコンパクション
+- `Documentation/admin-guide/mm/transhuge.rst` — THPの割り当て、コンパクションの調整、`compact_memory` sysctlを扱う

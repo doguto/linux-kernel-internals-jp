@@ -1,389 +1,389 @@
-# CVE War Stories: Memory Management Lessons {#cve-war-stories-memory-management-lessons}
+# CVE事件簿: メモリ管理の教訓 {#cve-war-stories-memory-management-lessons}
 
-> Four vulnerabilities that reshaped how the kernel thinks about memory safety — told as narratives from discovery to design change
+> カーネルのメモリ安全性に対する考え方を作り変えた4つの脆弱性を、発見から設計変更までの物語として語る
 
-The bugs covered here are all documented technically in other pages of this site. This page is the **narrative companion**: where each CVE came from, what exploitation actually looked like in practice, why the immediate fix was necessary but not sufficient, and what lasting changes the mm subsystem absorbed as a result.
+ここで扱うバグはいずれも、このサイトの他のページで技術的に詳しく解説されている。このページはその**物語編**である。各CVEがどこから来たのか、実際の悪用はどのようなものだったのか、なぜ即座の修正は必要だったが十分ではなかったのか、そしてその結果mmサブシステムがどのような永続的な変化を取り込んだのかを語る。
 
-Each story follows the same arc:
+各ストーリーは同じ流れをたどる。
 
-1. Discovery — who found it and how
-2. The vulnerability — a brief restatement of what was wrong (with a cross-reference to the technical doc)
-3. The exploitation primitive — what an attacker could concretely do
-4. The fix — the specific kernel change
-5. Design changes — the hardening work that followed
-6. What it taught the mm subsystem — the lasting lesson
+1. 発見 — 誰がどのように見つけたか
+2. 脆弱性 — 何が問題だったかの簡潔な再説明（技術文書への相互参照付き）
+3. 悪用プリミティブ — 攻撃者が具体的に何をできたか
+4. 修正 — 具体的なカーネルの変更
+5. 設計変更 — その後に続いたハードニング作業
+6. mmサブシステムが学んだこと — 永続的な教訓
 
 ---
 
 ## Dirty COW (CVE-2016-5195) {#dirty-cow-cve-2016-5195}
 
-*Race condition in copy-on-write — nine years in the tree*
+*copy-on-writeにおける競合状態 — ツリー内に9年間存在した*
 
-### Discovery {#discovery}
+### 発見 {#discovery}
 
-In October 2016, Phil Oester was performing routine forensic analysis on a compromised production web server. Inside the exploit binary left by the attacker, he identified a previously unknown privilege escalation. The code was exploiting a race condition in the kernel's copy-on-write path. Oester contacted kernel security team members, and the bug was publicly disclosed on October 19, 2016.
+2016年10月、Phil Oesterは侵害された本番Webサーバーに対して定例のフォレンジック分析を行っていた。攻撃者が残したエクスプロイトバイナリの中に、彼は未知の権限昇格を発見した。そのコードはカーネルのcopy-on-writeパスにおける競合状態を悪用していた。Oesterはカーネルセキュリティチームのメンバーに連絡し、このバグは2016年10月19日に公開された。
 
-The race condition itself had been introduced with kernel 2.6.22 in July 2007. Linus Torvalds had attempted a fix in 2005 — before it even shipped in that form — but the fix was reverted due to compatibility problems on s390. The window between creation and discovery: **nine years**.
+競合状態そのものは、2007年7月のカーネル2.6.22で混入した。Linus Torvaldsは2005年に — その形で出荷される前に — 修正を試みていたが、その修正はs390での互換性問題のためにリバートされていた。混入から発見までの期間は**9年**である。
 
-The name "Dirty COW" comes from the dirty bit in the COW path, plus the bug's interaction with copy-on-write. It acquired its own logo and website (dirtycow.ninja), a rarity for kernel CVEs.
+「Dirty COW」という名前は、COWパスにおけるdirtyビットと、このバグがcopy-on-writeと相互作用することに由来する。カーネルのCVEとしては珍しく、独自のロゴとWebサイト（dirtycow.ninja）まで作られた。
 
-### The vulnerability {#the-vulnerability}
+### 脆弱性 {#the-vulnerability}
 
-The technical mechanism is described in [cow.md — the Dirty COW section](cow.md#the-dirty-cow-vulnerability-2016). In brief: two threads could race to confuse the kernel into writing data to a read-only page instead of a private copy. One thread wrote through a `/proc/self/mem` path; the other called `madvise(MADV_DONTNEED)` to discard the COW copy the first thread was creating. Done rapidly enough, the kernel would drop the copy and retry the write — this time against the original read-only mapping.
+技術的なメカニズムは[cow.md — Dirty COWの節](cow.md#the-dirty-cow-vulnerability-2016)で説明している。簡潔に言えば、2つのスレッドが競合することで、カーネルを混乱させ、データをプライベートコピーではなく読み取り専用のpageに書き込ませることができた。一方のスレッドは`/proc/self/mem`パス経由で書き込み、もう一方は`madvise(MADV_DONTNEED)`を呼び出して、最初のスレッドが作成中のCOWコピーを破棄する。これを十分に高速に行うと、カーネルはコピーを破棄して書き込みを再試行する — 今度は元の読み取り専用マッピングに対して。
 
-The root cause was in `__get_user_pages()`. The function used `FOLL_WRITE` to indicate that a write was intended, but when the first attempt failed (due to the page being read-only and needing COW), it retried *without* `FOLL_WRITE`. The retry succeeded — but now the kernel no longer knew a write was coming, so it handed back the original page without performing COW. The madvise thread's job was to keep forcing these retries.
+根本原因は`__get_user_pages()`にあった。この関数は書き込みを意図していることを示すために`FOLL_WRITE`を使っていたが、最初の試行が（pageが読み取り専用でCOWが必要なために）失敗すると、`FOLL_WRITE`*なしで*再試行していた。再試行は成功する — しかしこのときカーネルはもはや書き込みが来ることを知らないため、COWを行わずに元のpageを返してしまう。madviseスレッドの役割は、この再試行を強制し続けることだった。
 
-### The exploitation primitive {#the-exploitation-primitive}
+### 悪用プリミティブ {#the-exploitation-primitive}
 
-The primitive is a write-anywhere-to-a-read-only-file-mapping. On a typical Linux system, this means:
+このプリミティブは、読み取り専用ファイルマッピングへの任意書き込みである。典型的なLinuxシステムでは、これは次のことを意味する。
 
-- **Overwrite `/etc/passwd`** — add a root-equivalent user with no password, or replace root's password hash
-- **Patch a setuid binary** — inject shellcode into `/usr/bin/sudo` or any other setuid-root binary in place on disk
-- **Root Android before Nougat** — the Android kernel did not receive the patch for several months; Android 6.x and earlier devices were widely exploited in the wild
+- **`/etc/passwd`の上書き** — パスワードなしのroot相当ユーザーを追加する、またはrootのパスワードハッシュを置き換える
+- **setuidバイナリのパッチ** — `/usr/bin/sudo`や他の任意のsetuid-rootバイナリに、ディスク上でそのままシェルコードを注入する
+- **Nougat以前のAndroidのroot化** — Androidカーネルには数か月間パッチが届かず、Android 6.x以前のデバイスは実環境で広く悪用された
 
-Exploitation was reliable. The race window is narrow but the loop runs thousands of times per second, and the operation is idempotent — you can keep trying until you win. Public proof-of-concept exploits appeared within hours of disclosure. Red Hat noted that the bug was already being exploited before the patch was published.
+悪用は確実だった。競合ウィンドウは狭いが、ループは毎秒数千回実行され、操作は冪等である — 勝つまで試行し続けられる。公開の概念実証エクスプロイトは公開から数時間以内に現れた。Red Hatは、このバグがパッチ公開前からすでに悪用されていたことを指摘した。
 
-The `userfaultfd` syscall (available since kernel 4.3) further widened the race window: an attacker could pause the kernel precisely in the middle of the fault path by triggering a user-handled fault, giving the madvise thread reliable timing. See [fork.md — userfaultfd races](fork.md#case-5-fork-and-userfaultfd-races) for the general pattern.
+`userfaultfd`システムコール（カーネル4.3以降で利用可能）は競合ウィンドウをさらに広げた。攻撃者はユーザーが処理するフォールトを発生させることで、フォールトパスのちょうど途中でカーネルを一時停止させ、madviseスレッドに確実なタイミングを与えることができた。一般的なパターンについては[fork.md — userfaultfdの競合](fork.md#case-5-fork-and-userfaultfd-races)を参照。
 
-### The fix {#the-fix}
+### 修正 {#the-fix}
 
-**Commit**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — "mm: remove gup_flags FOLL_WRITE games from `__get_user_pages()`"
-**Author**: Linus Torvalds
-**Date**: October 19, 2016
+**コミット**: [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — "mm: remove gup_flags FOLL_WRITE games from `__get_user_pages()`"
+**作者**: Linus Torvalds
+**日付**: 2016年10月19日
 
-The fix is three lines of substantive change. The `FOLL_WRITE` flag is set at the start of `__get_user_pages()` if a write was requested, and it stays set throughout all retries. There is no longer a retry path that drops write intent. If the page cannot be made writable, the fault fails — it does not silently fall back to handing out the read-only page.
+修正の実質的な変更は3行である。`FOLL_WRITE`フラグは、書き込みが要求された場合に`__get_user_pages()`の冒頭でセットされ、すべての再試行を通じてセットされたままになる。書き込み意図を落とす再試行パスはもはや存在しない。pageを書き込み可能にできなければフォールトは失敗する — 黙って読み取り専用pageを返すことにフォールバックしたりはしない。
 
-Linus's commit message: *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago in commit 4ceb5db9757a ('Fix get_user_pages() race for write access') but that was then reverted in f33ea7f404e5 due to problems on s390."*
+Linusのコミットメッセージ: *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago in commit 4ceb5db9757a ('Fix get_user_pages() race for write access') but that was then reverted in f33ea7f404e5 due to problems on s390."*（訳: これは古いバグで、実は11年前に私がコミット4ceb5db9757a（'Fix get_user_pages() race for write access'）で一度（まずいやり方で）修正しようとしたが、s390での問題のためにf33ea7f404e5でリバートされたものだ。）
 
-The backport went to every stable kernel in active support within 24 hours. The patch for stable kernels was coordinated by Greg Kroah-Hartman.
+バックポートは24時間以内に、アクティブにサポートされているすべてのstableカーネルに入った。stableカーネル向けパッチの調整はGreg Kroah-Hartmanが行った。
 
-### Design changes {#design-changes}
+### 設計変更 {#design-changes}
 
-The immediate fix closed the FOLL_WRITE gap, but the underlying problem — the kernel having no reliable way to distinguish short-term GUP pins from long-term DMA pins — continued to produce related bugs.
+即座の修正はFOLL_WRITEの穴を塞いだが、根底にある問題 — カーネルが短期的なGUPピンと長期的なDMAピンを確実に区別する方法を持たないこと — は関連するバグを生み続けた。
 
-Two major structural changes followed over the next six years:
+その後6年にわたって、2つの大きな構造的変更が続いた。
 
-**FOLL_PIN and `pin_user_pages()` (v5.6, 2020)**
+**FOLL_PINと`pin_user_pages()`（v5.6、2020年）**
 
-**Commit**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) — "mm/gup: introduce `pin_user_pages*()` and FOLL_PIN"
-**Author**: John Hubbard (NVIDIA)
+**コミット**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) — "mm/gup: introduce `pin_user_pages*()` and FOLL_PIN"
+**作者**: John Hubbard (NVIDIA)
 
-The kernel now has two distinct APIs for pinning user pages. `get_user_pages()` is for short-term references (the page will be released quickly, before userspace can observe the difference). `pin_user_pages()` is for long-term pins such as DMA operations — pages will be held for an extended period while the hardware operates on them. The two APIs differ in how they account for the pin in the refcount, allowing the COW machinery to detect long-term pins and handle them correctly.
+カーネルは現在、ユーザーpageをピンするための2つの異なるAPIを持つ。`get_user_pages()`は短期的な参照用である（pageはユーザー空間が違いを観測できる前に速やかに解放される）。`pin_user_pages()`はDMA操作のような長期的なピン用である — ハードウェアがpageを操作している間、pageは長期間保持される。2つのAPIはrefcountにおけるピンの計上方法が異なり、これによりCOWの仕組みが長期的なピンを検出して正しく扱えるようになる。
 
-**`PG_anon_exclusive` (v5.19, 2022)**
+**`PG_anon_exclusive`（v5.19、2022年）**
 
-**Commit**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) — "mm: remember exclusively mapped anonymous pages with `PG_anon_exclusive`"
-**Author**: David Hildenbrand (Red Hat)
+**コミット**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) — "mm: remember exclusively mapped anonymous pages with `PG_anon_exclusive`"
+**作者**: David Hildenbrand (Red Hat)
 
-The definitive closure. A new page flag tracks whether an anonymous page is exclusively owned by one process. The COW machinery previously inferred exclusivity from refcount > 1 — a heuristic that failed under GUP pins. With `PG_anon_exclusive`, exclusivity is explicit state. A pinned page that a COW operation would normally reuse is now correctly identified as shared, and the COW copy is always made. The commit message: *"Let's mark exclusively mapped anonymous pages with PG_anon_exclusive as exclusive, and use that information to make GUP pins reliable."*
+決定的な解決策である。新しいpageフラグが、匿名pageが1つのプロセスに排他的に所有されているかどうかを追跡する。COWの仕組みは以前はrefcount > 1から排他性を推測していた — GUPピンの下では破綻するヒューリスティックである。`PG_anon_exclusive`により、排他性は明示的な状態になった。COW操作が通常なら再利用するはずのピンされたpageは、今では正しく共有されていると識別され、COWコピーが常に作成される。コミットメッセージ: *"Let's mark exclusively mapped anonymous pages with PG_anon_exclusive as exclusive, and use that information to make GUP pins reliable."*（訳: 排他的にマップされた匿名pageをPG_anon_exclusiveで排他的とマークし、その情報を使ってGUPピンを信頼できるものにしよう。）
 
-### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem}
+### mmサブシステムが学んだこと {#what-it-taught-the-mm-subsystem}
 
-!!! note "Lesson: Write intent must be an invariant, not a hint that retries can drop"
+!!! note "教訓: 書き込み意図は不変条件でなければならず、再試行で落としてよいヒントであってはならない"
 
-    The FOLL_WRITE race existed because the retry path was written as an optimization: on the first failed attempt, drop the write requirement to avoid a COW fault, then retry. The optimization assumed the retry would trigger the COW on second access. Under concurrent madvise, that assumption was false.
+    FOLL_WRITEの競合が存在したのは、再試行パスが最適化として書かれていたからである。最初の試行が失敗したら、COWフォールトを避けるために書き込み要件を落とし、再試行する。この最適化は、再試行が2回目のアクセスでCOWを発生させると仮定していた。並行するmadviseの下では、その仮定は誤りだった。
 
-    The broader principle: when a caller states intent at the entry point of a syscall or kernel API (write, pin, fault), that intent must be carried through every retry and every slow path. Code that silently softens requirements during retry is a reliability hazard in single-threaded code and a security hazard in concurrent code.
+    より広い原則: 呼び出し元がシステムコールやカーネルAPIのエントリポイントで意図（書き込み、ピン、フォールト）を表明したら、その意図はすべての再試行とすべての低速パスを通じて引き継がれなければならない。再試行中に黙って要件を緩めるコードは、シングルスレッドのコードでは信頼性上の危険であり、並行コードではセキュリティ上の危険である。
 
-    GUP in particular acquired a reputation as a trap for this class of bug. The FOLL_PIN / pin_user_pages() redesign was a direct architectural response: make the contract explicit in the API rather than inferred from context.
+    特にGUPは、この種のバグの罠として評判を得た。FOLL_PIN / pin_user_pages()の再設計は直接的なアーキテクチャ上の対応だった。契約を文脈から推測させるのではなく、APIの中で明示的にするのである。
 
 ---
 
 ## StackRot (CVE-2023-3269) {#stackrot-cve-2023-3269}
 
-*Use-after-free via maple tree rotation — new data structure, new invariant class*
+*maple treeのローテーションによるuse-after-free — 新しいデータ構造、新しい種類の不変条件*
 
-### Discovery {#discovery_1}
+### 発見 {#discovery_1}
 
-In June 2023, Ruihan Li, a graduate student at Peking University, was auditing the maple tree — the interval tree that replaced red-black trees for VMA management in kernel 6.1. He was specifically looking at the interaction between the maple tree's RCU-safe rotation logic and the MM locking model.
+2023年6月、北京大学の大学院生Ruihan Liは、maple tree — カーネル6.1でVMA管理用の赤黒木を置き換えた区間木 — を監査していた。彼は特に、maple treeのRCU安全なローテーションロジックとMMのロックモデルとの相互作用に注目していた。
 
-The disclosure was published on the oss-security mailing list on July 5, 2023 ([link](https://www.openwall.com/lists/oss-security/2023/07/05/1)), after coordinated fixes landed in 6.1.37, 6.3.11, 6.4.1, and the 6.5-rc4 development tree. Unusually, Li had also developed a working privilege escalation exploit before disclosure, which he described in his GitHub writeup ([github.com/lrh2000/StackRot](https://github.com/lrh2000/StackRot)).
+この開示は、6.1.37、6.3.11、6.4.1、および6.5-rc4開発ツリーに協調した修正が入った後、2023年7月5日にoss-securityメーリングリストで公開された（[リンク](https://www.openwall.com/lists/oss-security/2023/07/05/1)）。珍しいことに、Liは開示前に動作する権限昇格エクスプロイトも開発しており、それをGitHubの解説記事で説明している（[github.com/lrh2000/StackRot](https://github.com/lrh2000/StackRot)）。
 
-The bug was introduced with the maple tree merge in kernel 6.1 (December 2022). The window between introduction and disclosure was approximately seven months.
+このバグはカーネル6.1（2022年12月）でのmaple treeのマージとともに混入した。混入から開示までの期間はおよそ7か月だった。
 
-### The vulnerability {#the-vulnerability_1}
+### 脆弱性 {#the-vulnerability_1}
 
-The technical mechanism is described in [fork.md — StackRot](fork.md#case-2-stackrot-cve-2023-3269). In brief: when the user stack grows downward (via a `MAP_GROWSDOWN` VMA), the kernel extends the VMA by lowering its start address. This modification updates the maple tree that stores VMAs — but the update did not hold the MM write lock. Because maple trees are designed for RCU-safe access, modifying a tree node creates a new node and schedules the old one for freeing via an RCU callback. Any thread holding the MM read lock at the time of the modification still holds a pointer to the old node, which will be freed when the RCU grace period expires.
+技術的なメカニズムは[fork.md — StackRot](fork.md#case-2-stackrot-cve-2023-3269)で説明している。簡潔に言えば、ユーザースタックが（`MAP_GROWSDOWN` VMA経由で）下方向に伸びるとき、カーネルはVMAの開始アドレスを下げることでVMAを拡張する。この変更はVMAを格納するmaple treeを更新する — しかしその更新はMMの書き込みロックを保持していなかった。maple treeはRCU安全なアクセスのために設計されているため、ツリーノードを変更すると新しいノードが作られ、古いノードはRCUコールバック経由で解放されるようスケジュールされる。変更時点でMMの読み取りロックを保持しているスレッドは、まだ古いノードへのポインタを保持しており、そのノードはRCUグレースピリオドが終わると解放される。
 
-The result is a use-after-free on a maple tree node. The object is freed while a live pointer to it exists in another kernel thread's stack frame.
+結果はmaple treeノードに対するuse-after-freeである。そのオブジェクトは、別のカーネルスレッドのスタックフレームに有効なポインタが存在している間に解放される。
 
-### The exploitation primitive {#the-exploitation-primitive_1}
+### 悪用プリミティブ {#the-exploitation-primitive_1}
 
-UAF on a maple tree node is a controlled heap object reuse primitive. Li's exploit demonstrated:
+maple treeノードに対するUAFは、制御されたヒープオブジェクト再利用プリミティブである。Liのエクスプロイトは次のことを示した。
 
-1. Trigger the UAF to free the maple tree node
-2. Spray the freed slab slot with a controlled object (a `pipe_buffer` or similar well-understood kernel heap object)
-3. The kernel code that still holds the stale maple tree node pointer now reads attacker-controlled data as if it were tree metadata
-4. Use the corrupted tree metadata to achieve arbitrary kernel read/write
-5. Overwrite credential structure to escalate to root
+1. UAFを発生させてmaple treeノードを解放する
+2. 解放されたslabスロットを、制御されたオブジェクト（`pipe_buffer`や同様によく理解されたカーネルヒープオブジェクト）でスプレーする
+3. 古いmaple treeノードポインタをまだ保持しているカーネルコードが、攻撃者が制御するデータをツリーのメタデータであるかのように読み取る
+4. 破損したツリーメタデータを使って任意のカーネル読み書きを実現する
+5. クレデンシャル構造体を上書きしてrootに昇格する
 
-The exploit required only unprivileged local access — no special capabilities. It worked on any system running kernel 6.1 through 6.4, which included all major distributions that had shipped 6.1+ kernels (notably Debian 12 "Bookworm", which shipped with 6.1).
+このエクスプロイトは非特権のローカルアクセスしか必要としなかった — 特別なケーパビリティは不要である。カーネル6.1から6.4を実行するあらゆるシステムで動作し、これには6.1以降のカーネルを出荷していた主要ディストリビューションすべてが含まれていた（特に6.1を搭載して出荷されたDebian 12 "Bookworm"）。
 
-Li noted the exploit was reliable on x86-64 with CONFIG_SLAB_FREELIST_HARDENED disabled, and that KFENCE could detect the UAF during development. The window between stack growth and RCU free is wide enough on loaded systems to be consistently winnable.
+Liは、このエクスプロイトがCONFIG_SLAB_FREELIST_HARDENEDを無効にしたx86-64で確実に動作すること、そしてKFENCEは開発中にUAFを検出できることを指摘した。スタックの伸長からRCUによる解放までのウィンドウは、負荷のかかったシステムでは一貫して勝てるほど十分に広い。
 
-### The fix {#the-fix_1}
+### 修正 {#the-fix_1}
 
-The fix was merged by Linus Torvalds on June 28, 2023, during the 6.5 merge window.
+修正は2023年6月28日、6.5のマージウィンドウ中にLinus Torvaldsによってマージされた。
 
-The core change: stack VMA expansion now holds the MM write lock while modifying the maple tree. This prevents any concurrent reader from holding a stale RCU pointer to a node that is about to be freed — because modifications that require write lock cannot overlap with readers that hold read lock.
+中核となる変更: スタックVMAの拡張は、maple treeを変更する間MMの書き込みロックを保持するようになった。これにより、並行するどの読み取り側も、これから解放されるノードへの古いRCUポインタを保持できなくなる — 書き込みロックを必要とする変更は、読み取りロックを保持する読み取り側と重なり得ないからである。
 
-Additionally, the fix ensured that maple tree node replacements triggered by stack expansion take place in a context where the old node cannot be freed until all readers have released the MM lock.
+さらに修正では、スタック拡張によって引き起こされるmaple treeノードの置き換えが、すべての読み取り側がMMロックを解放するまで古いノードを解放できないコンテキストで行われることを保証した。
 
-Linus's merge message provided a detailed explanation of the locking invariant that had been violated and the reasoning for the chosen fix over alternatives.
+Linusのマージメッセージには、破られていたロックの不変条件と、他の選択肢ではなくこの修正を選んだ理由についての詳しい説明が記されていた。
 
-### Design changes {#design-changes_1}
+### 設計変更 {#design-changes_1}
 
-StackRot triggered a broader review of the maple tree's correctness under the kernel's MM locking model.
+StackRotをきっかけに、カーネルのMMロックモデルの下でのmaple treeの正しさについて、より広範なレビューが行われた。
 
-**`LOCKDEP` annotations for maple tree operations** — several patches added or tightened lockdep assertions to ensure that tree modifications that can produce RCU-freeable nodes always happen under the appropriate lock. This makes future violations detectable in debug builds before they reach production.
+**maple tree操作に対する`LOCKDEP`アノテーション** — いくつかのパッチが、RCUで解放可能なノードを生み出し得るツリー変更が常に適切なロックの下で行われることを保証するために、lockdepアサーションを追加または厳格化した。これにより、将来の違反を本番環境に到達する前にデバッグビルドで検出できるようになる。
 
-**Maple tree stress testing expansion** — the maple tree test suite (`lib/test_maple_tree.c`) was expanded with concurrency tests specifically exercising the scenario that StackRot exploited. Syzbot coverage of the maple tree/VMA interaction was explicitly broadened in the fuzzer configurations maintained by Google and the kernel security team.
+**maple treeストレステストの拡張** — maple treeのテストスイート（`lib/test_maple_tree.c`）が、StackRotが悪用したシナリオを具体的に試す並行性テストで拡張された。Googleとカーネルセキュリティチームが保守するファザー設定において、maple tree/VMAの相互作用に対するSyzbotのカバレッジが明示的に拡大された。
 
-**Audit of other `MAP_GROWSDOWN` paths** — the stack growth path was audited for other sites where VMA metadata is modified outside of full MM write lock protection. No additional UAFs were found immediately, but the audit produced several tightening patches for adjacent code.
+**他の`MAP_GROWSDOWN`パスの監査** — スタック伸長パスについて、完全なMM書き込みロックの保護外でVMAメタデータが変更される箇所が他にないか監査された。追加のUAFはすぐには見つからなかったが、監査によって隣接するコードを厳格化するいくつかのパッチが生まれた。
 
-### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_1}
+### mmサブシステムが学んだこと {#what-it-taught-the-mm-subsystem_1}
 
-!!! note "Lesson: RCU-safe does not mean lock-free for all callers — the locking domain must match the object lifetime"
+!!! note "教訓: RCU安全は、すべての呼び出し元にとってロックフリーという意味ではない — ロックドメインはオブジェクトの寿命と一致しなければならない"
 
-    The maple tree's designers built careful RCU-safe node replacement: old nodes are freed via `kfree_rcu()` rather than immediately. This is correct within RCU's memory model. The error was that VMA readers use the MM read lock — not RCU read-lock — for their protection, so the RCU grace period does not protect them.
+    maple treeの設計者は、注意深くRCU安全なノード置き換えを構築した。古いノードは即座にではなく`kfree_rcu()`経由で解放される。これはRCUのメモリモデルの中では正しい。誤りは、VMAの読み取り側が保護のためにRCU読み取りロックではなくMMの読み取りロックを使っていたため、RCUグレースピリオドが彼らを保護しないことだった。
 
-    When a new data structure is adopted in a subsystem with an existing locking model, the new structure's memory reclamation story must be audited against every existing protection primitive used by callers. "The tree is RCU-safe" and "all callers of the tree hold the correct lock" are separate properties. StackRot collapsed when the two were conflated.
+    既存のロックモデルを持つサブシステムに新しいデータ構造を採用するときは、新しい構造のメモリ回収の仕組みを、呼び出し元が使う既存のすべての保護プリミティブに照らして監査しなければならない。「ツリーはRCU安全である」と「ツリーのすべての呼び出し元が正しいロックを保持している」は別々の性質である。StackRotは、この2つが混同されたときに崩壊した。
 
-    This is a recurring hazard when upgrading or replacing core data structures in the mm subsystem. The red-black tree that maple trees replaced had been in place for over a decade; its locking invariants were universally understood. A new structure starts with only the understanding of its authors.
+    これは、mmサブシステムの中核データ構造をアップグレードしたり置き換えたりするときに繰り返し現れる危険である。maple treeが置き換えた赤黒木は10年以上使われてきたものであり、そのロックの不変条件は広く理解されていた。新しい構造は、その作者たちの理解だけを持って出発するのである。
 
 ---
 
 ## Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
 
-*Hardware speculation defeats software isolation — KPTI and the permanent reshaping of kernel mapping policy*
+*ハードウェアの投機実行がソフトウェアによる分離を打ち破る — KPTIとカーネルマッピング方針の恒久的な再構築*
 
-### Discovery {#discovery_2}
+### 発見 {#discovery_2}
 
-The Meltdown and Spectre vulnerabilities were discovered independently by multiple research groups in 2017, then coordinated for simultaneous public disclosure on January 3, 2018.
+MeltdownとSpectreの脆弱性は2017年に複数の研究グループによって独立に発見され、その後2018年1月3日の同時公開に向けて協調された。
 
-Meltdown specifically was discovered by Jann Horn (Google Project Zero), and independently by Moritz Lipp, Michael Schwarz, Daniel Gruss, and colleagues at Graz University of Technology. The Graz group had been studying cache side-channel attacks against operating system isolation mechanisms; Horn came at it from the angle of speculative execution semantics and what the processor's out-of-order engine would actually do when asked to access a kernel address from user mode.
+Meltdownについて具体的には、Jann Horn（Google Project Zero）が発見し、独立にMoritz Lipp、Michael Schwarz、Daniel Grussらグラーツ工科大学の研究者たちも発見した。グラーツのグループはOSの分離機構に対するキャッシュサイドチャネル攻撃を研究していた。Hornは投機実行のセマンティクスと、ユーザーモードからカーネルアドレスへのアクセスを求められたときにプロセッサのアウトオブオーダーエンジンが実際に何をするのかという角度から取り組んだ。
 
-The coordinated disclosure was unusually complex. Intel, AMD, and ARM were notified in June 2017. OS vendors (Linux, Windows, macOS, FreeBSD) received notification under embargo. Coordinating patches across an entire operating system ecosystem — all of which needed to ship simultaneously to prevent any one vendor's patch from revealing the vulnerability before the others were ready — over a six-month embargo period is one of the largest coordinated disclosure operations in the history of software security.
+協調開示は異例なほど複雑だった。Intel、AMD、ARMには2017年6月に通知された。OSベンダー（Linux、Windows、macOS、FreeBSD）はエンバーゴの下で通知を受けた。オペレーティングシステムのエコシステム全体にわたってパッチを調整すること — どれか1つのベンダーのパッチが他の準備が整う前に脆弱性を明らかにしてしまわないよう、すべてを同時に出荷する必要があった — を6か月のエンバーゴ期間にわたって行うことは、ソフトウェアセキュリティの歴史の中でも最大級の協調開示作業である。
 
-The embargo broke early. Google's Project Zero policy requires public disclosure within 90 days of vendor notification. The 90-day window expired before the coordinated date. Disclosure was moved to January 3, 2018 — earlier than originally planned.
+エンバーゴは早めに破れた。GoogleのProject Zeroのポリシーでは、ベンダーへの通知から90日以内の公開が求められる。90日の期間は協調日より前に満了した。公開は当初の予定より早い2018年1月3日に前倒しされた。
 
-### The vulnerability {#the-vulnerability_2}
+### 脆弱性 {#the-vulnerability_2}
 
-The technical mechanism is described in [page-tables.md — Meltdown](page-tables.md#case-1-meltdown-cve-2017-5754). In brief: Intel CPUs (and some ARM cores) speculatively execute instructions past a privilege check failure. When a user-mode process reads a kernel virtual address, the CPU raises a page fault — but before it does, it may have already speculatively read the kernel memory and placed the data in a register, and the memory access has left a trace in the L1/L2 cache. The fault is delivered and the register value is discarded, but the cache state persists. Using a Flush+Reload side channel, the attacker can measure which cache lines were populated by the speculative load and reconstruct the value that was briefly in the register.
+技術的なメカニズムは[page-tables.md — Meltdown](page-tables.md#case-1-meltdown-cve-2017-5754)で説明している。簡潔に言えば、IntelのCPU（および一部のARMコア）は、特権チェックの失敗を越えて命令を投機的に実行する。ユーザーモードのプロセスがカーネルの仮想アドレスを読み取ると、CPUはページフォールトを発生させる — しかしその前に、すでにカーネルメモリを投機的に読み取ってデータをレジスタに置いている可能性があり、そのメモリアクセスはL1/L2キャッシュに痕跡を残している。フォールトが配送されてレジスタの値は破棄されるが、キャッシュの状態は残る。Flush+Reloadサイドチャネルを使うと、攻撃者は投機的ロードによってどのキャッシュラインが埋められたかを測定し、一時的にレジスタにあった値を再構築できる。
 
-The exploit is a loop: read one kernel byte speculatively, measure the cache side channel to recover the value, advance to the next byte.
+エクスプロイトはループである。カーネルの1バイトを投機的に読み、キャッシュサイドチャネルを測定して値を復元し、次のバイトに進む。
 
-### The exploitation primitive {#the-exploitation-primitive_2}
+### 悪用プリミティブ {#the-exploitation-primitive_2}
 
-Meltdown's primitive is **arbitrary kernel memory read from user space**, with no kernel code execution required, no memory corruption, and no race window to win. The attack is a pure observation of hardware behavior.
+Meltdownのプリミティブは**ユーザー空間からの任意のカーネルメモリ読み取り**であり、カーネルコードの実行も、メモリ破壊も、勝たなければならない競合ウィンドウも必要としない。この攻撃はハードウェアの挙動を純粋に観測するものである。
 
-On a vulnerable system, an unprivileged process can read:
+脆弱なシステムでは、非特権プロセスが次のものを読み取れる。
 
-- The entire kernel image (defeating KASLR trivially — the kernel's virtual address is readable directly)
-- Any other process's memory that is mapped in the kernel (via `copy_to_user` / `copy_from_user` buffers, page tables, pipe buffers, etc.)
-- Cryptographic keys, TLS session data, or process secrets that happened to be in kernel memory at the time
+- カーネルイメージ全体（KASLRを簡単に無効化する — カーネルの仮想アドレスを直接読める）
+- カーネルにマップされている他のプロセスのメモリ（`copy_to_user` / `copy_from_user`のバッファ、ページテーブル、パイプバッファなど経由）
+- その時点でたまたまカーネルメモリにあった暗号鍵、TLSセッションデータ、プロセスの機密情報
 
-The Graz team demonstrated reading `/etc/shadow` passwords from kernel memory at approximately 500 KB/s. The Project Zero PoC demonstrated reading kernel memory without privileges on a standard Linux desktop. No special hardware, no root, no kernel exploit — just careful timing of cache reads.
+グラーツのチームは、カーネルメモリから`/etc/shadow`のパスワードをおよそ500 KB/sで読み取るデモを行った。Project ZeroのPoCは、標準的なLinuxデスクトップ上で特権なしにカーネルメモリを読み取るデモを行った。特別なハードウェアも、rootも、カーネルエクスプロイトも不要 — キャッシュ読み取りのタイミングを注意深く測るだけである。
 
-Cloud environments were the most immediately alarming target. On a shared host, one VM's kernel memory could potentially be read from another VM on the same physical CPU, breaking the fundamental tenant isolation promise of public cloud infrastructure. Amazon, Google, and Microsoft all scrambled to patch their hypervisor fleets before disclosure.
+最も差し迫って懸念された標的はクラウド環境だった。共有ホスト上では、あるVMのカーネルメモリが同じ物理CPU上の別のVMから読み取られる可能性があり、パブリッククラウドインフラのテナント分離という根本的な約束が破られる。Amazon、Google、Microsoftはいずれも、公開前にハイパーバイザ群へのパッチ適用に奔走した。
 
-### The fix: KPTI {#the-fix-kpti}
+### 修正: KPTI {#the-fix-kpti}
 
-**Commit**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — "x86/mm/pti: Add infrastructure for page table isolation"
-**Author**: Thomas Gleixner
+**コミット**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — "x86/mm/pti: Add infrastructure for page table isolation"
+**作者**: Thomas Gleixner
 
-KPTI — Kernel Page Table Isolation — is the only viable software mitigation for Meltdown. The principle: if kernel virtual addresses are not mapped in the user-mode page tables at all, speculative reads of kernel addresses from user mode will fault before they can populate the cache.
+KPTI — Kernel Page Table Isolation — は、Meltdownに対する唯一の実用的なソフトウェア緩和策である。原理: カーネルの仮想アドレスがユーザーモードのページテーブルにまったくマップされていなければ、ユーザーモードからのカーネルアドレスの投機的読み取りは、キャッシュを埋める前にフォールトする。
 
-Before KPTI, Linux maintained a single set of page tables per process. The kernel's virtual address space was mapped in the upper portion of every process's page table, allowing the kernel to access user memory directly during system calls without switching page tables. This was a deliberate performance optimization stretching back decades.
+KPTI以前、Linuxはプロセスごとに1組のページテーブルを維持していた。カーネルの仮想アドレス空間はすべてのプロセスのページテーブルの上位部分にマップされており、カーネルはシステムコール中にページテーブルを切り替えることなくユーザーメモリに直接アクセスできた。これは何十年も前から続く意図的な性能最適化だった。
 
-KPTI creates two sets of page tables per process:
+KPTIはプロセスごとに2組のページテーブルを作る。
 
-- A **user-mode table** that contains only the process's own mappings plus a minimal kernel stub — just enough to enter the kernel (the syscall entry trampoline) but no kernel data whatsoever
-- A **kernel-mode table** that contains the full kernel virtual address space, used only while the CPU is in kernel mode
+- **ユーザーモード用テーブル**: プロセス自身のマッピングと最小限のカーネルスタブだけを含む — カーネルに入るのに必要な分（システムコールのエントリトランポリン）だけで、カーネルデータは一切含まない
+- **カーネルモード用テーブル**: カーネルの仮想アドレス空間全体を含み、CPUがカーネルモードにある間だけ使われる
 
-Transitioning from user to kernel mode now requires a CR3 switch (page table switch). Returning to user mode requires another. Every system call, every interrupt, every exception pays this cost.
+ユーザーモードからカーネルモードへの遷移には、CR3の切り替え（ページテーブルの切り替え）が必要になった。ユーザーモードに戻るときにも、もう一度必要である。すべてのシステムコール、すべての割り込み、すべての例外がこのコストを支払う。
 
-The performance impact was immediately controversial. Benchmarks showed:
+性能への影響はすぐに論争になった。ベンチマークは次を示した。
 
-- **Database workloads** (many system calls): 5–15% throughput reduction
-- **I/O-heavy workloads**: 3–10% reduction
-- **CPU-bound workloads**: 0–1% (few system calls)
-- **Syscall microbenchmarks**: up to 30% latency increase for very fast syscalls
+- **データベースワークロード**（システムコールが多い）: スループットが5〜15%低下
+- **I/O中心のワークロード**: 3〜10%低下
+- **CPUバウンドのワークロード**: 0〜1%（システムコールが少ない）
+- **システムコールのマイクロベンチマーク**: 非常に高速なシステムコールでは最大30%のレイテンシ増加
 
-Intel's subsequent hardware (Ice Lake and later) added PCID (Process-Context Identifiers) support, allowing TLB entries to be tagged by address space so that the CR3 switch does not require a full TLB flush. With PCID, KPTI overhead drops to roughly 1–3% on most workloads.
+Intelのその後のハードウェア（Ice Lake以降）はPCID（Process-Context Identifiers）をサポートし、TLBエントリにアドレス空間のタグを付けられるようにしたため、CR3の切り替えで完全なTLBフラッシュが不要になった。PCIDがあれば、KPTIのオーバーヘッドはほとんどのワークロードでおよそ1〜3%に下がる。
 
-There is no patch that fixes the CPU itself. Microcode updates improved some behaviors but did not eliminate the fundamental speculation vulnerability on existing hardware. KPTI remains the authoritative mitigation on all Intel hardware that predates eIBRS (Enhanced Indirect Branch Restricted Speculation, Ice Lake 2019).
+CPUそのものを直すパッチは存在しない。マイクロコードの更新は一部の挙動を改善したが、既存ハードウェアにおける根本的な投機実行の脆弱性を除去するものではなかった。KPTIは、eIBRS（Enhanced Indirect Branch Restricted Speculation、2019年のIce Lake）以前のすべてのIntelハードウェアにおいて、正式な緩和策であり続けている。
 
-### Design changes {#design-changes_2}
+### 設計変更 {#design-changes_2}
 
-Meltdown and KPTI produced changes at every level of the kernel's memory mapping philosophy. Several are permanent.
+MeltdownとKPTIは、カーネルのメモリマッピングの考え方のあらゆるレベルに変化をもたらした。そのいくつかは恒久的なものである。
 
-**The "mapping the kernel in userspace is wrong" principle**
+**「カーネルをユーザー空間にマップするのは誤り」という原則**
 
-Before Meltdown, mapping kernel virtual addresses in user-mode page tables was not considered a security boundary. The protection was the supervisor bit on the PTEs — user mode could see the mappings but the CPU would fault if it tried to access them. Meltdown proved that "the CPU will fault" was insufficient: the speculative engine read the data before delivering the fault.
+Meltdown以前、ユーザーモードのページテーブルにカーネルの仮想アドレスをマップすることは、セキュリティ境界とは見なされていなかった。保護はPTEのスーパーバイザビットだった — ユーザーモードはマッピングを見ることはできるが、アクセスしようとするとCPUがフォールトする。Meltdownは「CPUがフォールトする」だけでは不十分であることを証明した。投機エンジンはフォールトを配送する前にデータを読み取っていたのである。
 
-KPTI enshrined a new invariant: kernel addresses must not appear in user-mode page tables. This is now a design requirement, not an optimization decision.
+KPTIは新しい不変条件を確立した。カーネルアドレスはユーザーモードのページテーブルに現れてはならない。これは今や最適化上の判断ではなく、設計上の要件である。
 
-**`/sys/devices/system/cpu/vulnerabilities/` sysfs interface**
+**`/sys/devices/system/cpu/vulnerabilities/` sysfsインターフェース**
 
-Meltdown disclosure created a need to communicate CPU vulnerability status to users and administrators. The kernel added the `vulnerabilities/` sysfs directory, reporting per-vulnerability status (`Not affected`, `Mitigation: PTI`, `Vulnerable`) for each known CPU side-channel. This interface is now populated for Meltdown, Spectre v1, Spectre v2, MDS, TAA, and several other hardware vulnerabilities discovered after 2018.
+Meltdownの開示により、CPUの脆弱性の状態をユーザーと管理者に伝える必要が生じた。カーネルは`vulnerabilities/` sysfsディレクトリを追加し、既知のCPUサイドチャネルそれぞれについて脆弱性ごとの状態（`Not affected`、`Mitigation: PTI`、`Vulnerable`）を報告するようにした。このインターフェースには現在、Meltdown、Spectre v1、Spectre v2、MDS、TAA、および2018年以降に発見された他のいくつかのハードウェア脆弱性の情報が含まれている。
 
-**Spectre mitigations and the `nospec` barrier family**
+**Spectreの緩和策と`nospec`バリアファミリー**
 
-Spectre (CVE-2017-5753, CVE-2017-5715), disclosed alongside Meltdown, is technically distinct but shares the speculative execution root cause. The mitigations for Spectre introduced a family of barrier macros — `array_index_nospec()`, `barrier_nospec()`, `__builtin_ia32_lfence()` wrappers — that the mm subsystem now uses wherever array bounds checks are followed by array accesses that could be speculated. See [page-tables.md — Spectre](page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715) for the technical details.
+Meltdownと同時に公開されたSpectre（CVE-2017-5753、CVE-2017-5715）は技術的には別物だが、投機実行という根本原因を共有している。Spectreの緩和策はバリアマクロのファミリー — `array_index_nospec()`、`barrier_nospec()`、`__builtin_ia32_lfence()`ラッパー — を導入し、mmサブシステムは現在、配列の境界チェックの後に投機実行され得る配列アクセスが続く箇所でそれらを使っている。技術的な詳細は[page-tables.md — Spectre](page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715)を参照。
 
-**Retpoline and the indirect-call hardening pass**
+**Retpolineと間接呼び出しのハードニング**
 
-Spectre v2 requires replacing indirect calls and indirect jumps with retpoline sequences — an artifice that uses a return stack loop to trap speculative execution rather than letting it follow the branch predictor to an attacker-chosen target. A large fraction of the kernel's indirect calls went through mm code paths (VMA operations, page fault handlers, page allocator callbacks). The retpoline audit produced a pass over mm code to eliminate or annotate indirect calls that could be targeted.
+Spectre v2では、間接呼び出しと間接ジャンプをretpolineシーケンスに置き換える必要がある。retpolineは、投機実行が分岐予測器に従って攻撃者が選んだターゲットへ進むのを許す代わりに、リターンスタックのループを使って投機実行を閉じ込める仕掛けである。カーネルの間接呼び出しの大部分はmmのコードパス（VMA操作、ページフォールトハンドラ、ページアロケータのコールバック）を通っていた。retpolineの監査により、標的にされ得る間接呼び出しを除去またはアノテートするためのmmコード全体の見直しが行われた。
 
-**KPTI as a template for future hardware mitigations**
+**将来のハードウェア緩和策のテンプレートとしてのKPTI**
 
-After Meltdown, two further hardware vulnerabilities required KPTI-like page table manipulation: MDS (Microarchitectural Data Sampling, CVE-2018-12126 family) and TAA (TSX Asynchronous Abort, CVE-2019-11135). The infrastructure KPTI added for maintaining dual page tables, handling CR3 switches in the syscall and interrupt paths, and communicating mitigation status via sysfs was reused directly. The pattern — software isolation layer over a hardware-unfixable vulnerability — has become a recurring design idiom.
+Meltdownの後、さらに2つのハードウェア脆弱性がKPTIに似たページテーブル操作を必要とした。MDS（Microarchitectural Data Sampling、CVE-2018-12126ファミリー）とTAA（TSX Asynchronous Abort、CVE-2019-11135）である。KPTIが追加した、二重のページテーブルの維持、システムコールと割り込みのパスでのCR3切り替えの処理、sysfs経由での緩和策の状態の伝達のための基盤は、そのまま再利用された。このパターン — ハードウェアで修正不能な脆弱性の上にソフトウェアの分離層を置く — は繰り返し使われる設計イディオムになった。
 
-### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_2}
+### mmサブシステムが学んだこと {#what-it-taught-the-mm-subsystem_2}
 
-!!! note "Lesson: Hardware assumptions are the hardest axioms to defend — isolation must be physical, not logical"
+!!! note "教訓: ハードウェアに関する仮定は最も守りにくい公理である — 分離は論理的ではなく物理的でなければならない"
 
-    The entire premise of kernel memory safety on x86 — that user-mode processes could not read kernel memory because the CPU would fault on the access — turned out to be conditional on the CPU not speculatively executing the read first. This conditional was not documented. It was not in the x86 architecture manual. It was discovered empirically by people who asked: what does the CPU *actually do*, not what does the architecture *say it does*.
+    x86におけるカーネルのメモリ安全性の前提全体 — CPUがアクセスに対してフォールトするので、ユーザーモードのプロセスはカーネルメモリを読めない — は、CPUが先に読み取りを投機実行しないことを条件としていたことが判明した。この条件は文書化されていなかった。x86アーキテクチャマニュアルにも載っていなかった。それは、アーキテクチャが*何をすると言っているか*ではなく、CPUが*実際に何をするのか*と問うた人々によって経験的に発見された。
 
-    For the mm subsystem, the lesson operates on two levels.
+    mmサブシステムにとって、この教訓は2つのレベルで作用する。
 
-    At the hardware level: any security property that depends on a CPU raising a fault *before* the side effects of an instruction are visible must be treated as suspect on out-of-order hardware. The CPU may have already done the work. The fault arrives late.
+    ハードウェアのレベルでは、命令の副作用が見えるようになる*前に*CPUがフォールトを発生させることに依存するセキュリティ特性は、アウトオブオーダーのハードウェアでは疑わしいものとして扱わなければならない。CPUはすでに仕事を済ませているかもしれない。フォールトは遅れて届く。
 
-    At the design level: KPTI is proof that "logical separation" (supervisor bit on PTEs) is weaker than "physical absence" (the kernel virtual address does not exist in the user-mode page table). When a security boundary matters, the right implementation is to make crossing it require explicit work, not to rely on hardware to enforce it automatically. The kernel now maps nothing in user-mode page tables that does not need to be there.
+    設計のレベルでは、KPTIは「論理的な分離」（PTEのスーパーバイザビット）が「物理的な不在」（カーネルの仮想アドレスがユーザーモードのページテーブルに存在しない）より弱いことの証明である。セキュリティ境界が重要な場合、正しい実装は、それを越えるのに明示的な作業を必要とすることであり、ハードウェアが自動的に強制してくれることに頼ることではない。カーネルは現在、ユーザーモードのページテーブルに、そこにある必要のないものを何もマップしていない。
 
-    This is not cheap. Every system call on a patched Intel CPU is meaningfully slower than before 2018. That cost is paid permanently, on every Linux server and workstation, for hardware that will never be patched. It is the longest-lasting performance tax ever levied by a security vulnerability on the Linux kernel.
+    これは安くはない。パッチを当てたIntel CPUでは、すべてのシステムコールが2018年以前より目に見えて遅い。そのコストは、パッチが当たることのないハードウェアのために、すべてのLinuxサーバーとワークステーションで恒久的に支払われる。これは、セキュリティ脆弱性がLinuxカーネルに課した中で最も長く続く性能税である。
 
 ---
 
-## THP COW Race (CVE-2020-29368) {#thp-cow-race-cve-2020-29368}
+## THP COW競合 (CVE-2020-29368) {#thp-cow-race-cve-2020-29368}
 
-*Mapcount atomicity in huge page splitting — an optimization assumption that broke under concurrency*
+*ヒュージページ分割におけるmapcountの原子性 — 並行性の下で崩れた最適化の仮定*
 
-### Discovery {#discovery_3}
+### 発見 {#discovery_3}
 
-In November 2020, Jann Horn of Google Project Zero filed CVE-2020-29368 following analysis of the THP (Transparent Huge Page) copy-on-write path. Horn had been systematically reviewing copy-on-write interactions in the mm subsystem in the aftermath of Dirty COW and its follow-on fixes. The bug was a race condition in mapcount checking during huge PMD splitting, a code path introduced years earlier as part of the THP performance optimization work.
+2020年11月、Google Project ZeroのJann Hornは、THP（Transparent Huge Page）のcopy-on-writeパスを分析した結果としてCVE-2020-29368を登録した。HornはDirty COWとその後続の修正を受けて、mmサブシステムにおけるcopy-on-writeの相互作用を体系的にレビューしていた。このバグは、ヒュージPMDの分割中のmapcountチェックにおける競合状態であり、そのコードパスはTHPの性能最適化作業の一環として何年も前に導入されたものだった。
 
-This was not a production incident or a forensic discovery. It was a targeted code audit by a researcher with deep knowledge of mm internals and a specific research question: after FOLL_WRITE and FOLL_PIN, are there remaining cases where COW can be bypassed?
+これは本番環境のインシデントでもフォレンジックによる発見でもなかった。mmの内部に深い知識を持つ研究者による、具体的な研究上の問い — FOLL_WRITEとFOLL_PINの後も、COWを回避できるケースは残っているか? — に基づく標的型のコード監査だった。
 
-### The vulnerability {#the-vulnerability_3}
+### 脆弱性 {#the-vulnerability_3}
 
-The technical mechanism is described in [thp.md — THP COW race](thp.md#case-1-thp-cow-race-cve-2020-29368). In brief: when a write fault occurs on a shared 2MB THP, the kernel must split the huge page into 512 4KB pages before performing COW on the specific page that was written. The split decision is gated on `mapcount` — if the huge page is only mapped once (mapcount == 1), the kernel skips the COW copy and writes directly to the page, reusing it as a "private" page since no one else is sharing it.
+技術的なメカニズムは[thp.md — THP COW競合](thp.md#case-1-thp-cow-race-cve-2020-29368)で説明している。簡潔に言えば、共有された2MBのTHPで書き込みフォールトが起きると、カーネルは書き込まれた特定のpageに対してCOWを行う前に、ヒュージページを512個の4KB pageに分割しなければならない。分割の判断は`mapcount`によって決まる — ヒュージページが1回だけマップされている（mapcount == 1）なら、カーネルはCOWコピーを省略してpageに直接書き込み、他に共有している者がいないので「プライベート」pageとして再利用する。
 
-The problem: `mapcount` is read and the COW decision is made, and then the page table is modified — but these two operations are not atomic. Another thread can map the same huge page between the mapcount read and the page table update, making the mapcount stale. The kernel writes to the page believing it has exclusive ownership; the second thread now shares a page that was supposed to be private.
+問題: `mapcount`が読まれてCOWの判断が下され、その後ページテーブルが変更される — しかしこの2つの操作はアトミックではない。mapcountの読み取りとページテーブルの更新の間に、別のスレッドが同じヒュージページをマップでき、mapcountが古くなる。カーネルは排他的所有権があると信じてpageに書き込み、2つ目のスレッドはプライベートであるはずのpageを共有することになる。
 
-### The exploitation primitive {#the-exploitation-primitive_3}
+### 悪用プリミティブ {#the-exploitation-primitive_3}
 
-The primitive is a COW bypass for anonymous THP. Unlike Dirty COW, which targeted read-only file mappings, this race targets anonymous private mappings — the kind created by `malloc()`, stack allocation, and anonymous `mmap()`.
+このプリミティブは、匿名THPに対するCOWの回避である。読み取り専用ファイルマッピングを標的にしたDirty COWと異なり、この競合は匿名プライベートマッピング — `malloc()`、スタック割り当て、匿名`mmap()`によって作られる種類のもの — を標的にする。
 
-The exploit primitive:
+悪用プリミティブ:
 
-1. Allocate a large anonymous buffer (backed by THP) in process A
-2. Fork — now both parent and child share the THP under COW semantics
-3. In the child: trigger a write fault on the THP while a racing thread in the parent maps the same huge page
-4. Win the race: the child writes directly to the shared physical page rather than making a copy
-5. Both processes now see each other's writes to what they each believe is a private mapping
+1. プロセスAで大きな匿名バッファ（THPでバックされる）を割り当てる
+2. forkする — これで親と子の両方がCOWセマンティクスの下でTHPを共有する
+3. 子で: 親の競合するスレッドが同じヒュージページをマップしている間に、THPに対する書き込みフォールトを発生させる
+4. 競合に勝つ: 子はコピーを作る代わりに、共有された物理pageに直接書き込む
+5. 両プロセスは、それぞれがプライベートマッピングだと信じているものへの互いの書き込みを見ることになる
 
-This breaks the fundamental process isolation guarantee for anonymous memory. In practice, the race window is narrow — the mapcount check and the PTE update happen within a single fault handler invocation — but with userfaultfd or FUSE to control fault timing, the window can be reliably widened.
+これは匿名メモリに対するプロセス分離の根本的な保証を破る。実際には競合ウィンドウは狭い — mapcountのチェックとPTEの更新は1回のフォールトハンドラ呼び出しの中で起こる — が、userfaultfdやFUSEでフォールトのタイミングを制御すれば、ウィンドウを確実に広げられる。
 
-The impact: an attacker who can run code in a process that shares a THP with a privileged process (via fork, or via a deliberate memory sharing arrangement) can potentially read or write that privileged process's private memory. In container environments where a host process forks worker children, this could allow a container escape or cross-container read.
+影響: 特権プロセスとTHPを共有するプロセス（fork経由、または意図的なメモリ共有の取り決め経由）でコードを実行できる攻撃者は、その特権プロセスのプライベートメモリを読み書きできる可能性がある。ホストプロセスがワーカーの子プロセスをforkするコンテナ環境では、これによりコンテナエスケープやコンテナ間の読み取りが可能になり得る。
 
-### The fix {#the-fix_2}
+### 修正 {#the-fix_2}
 
-**Commit**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — "mm: thp: make the THP mapcount atomic against `__split_huge_pmd_locked()`"
-**Author**: Andrea Arcangeli (reported by Jann Horn)
+**コミット**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — "mm: thp: make the THP mapcount atomic against `__split_huge_pmd_locked()`"
+**作者**: Andrea Arcangeli（報告者: Jann Horn）
 
-The fix makes the mapcount read and the PTE update atomic with respect to each other by holding the page table lock across both operations. The mapcount is re-read under the lock, and the COW decision is made only when the kernel can guarantee no new mapping can be added while it proceeds with the direct write.
+この修正は、両方の操作にわたってページテーブルロックを保持することで、mapcountの読み取りとPTEの更新を互いに対してアトミックにする。mapcountはロックの下で再度読み取られ、COWの判断は、直接書き込みを進めている間に新しいマッピングが追加されないことをカーネルが保証できる場合にのみ下される。
 
-This is a small patch — the change is a lock scope extension and a re-check under the lock — but it requires care because the page table lock is already held in related code paths and acquiring it twice is a deadlock risk. Horn's fix carefully identifies the precise site where the lock must be widened.
+これは小さなパッチである — 変更はロック範囲の拡張とロック下での再チェックだけである — が、ページテーブルロックは関連するコードパスですでに保持されており、2回取得するとデッドロックの危険があるため、注意を要する。Hornの修正は、ロックを広げなければならない正確な箇所を注意深く特定している。
 
-### Design changes {#design-changes_3}
+### 設計変更 {#design-changes_3}
 
-CVE-2020-29368 was part of a series of COW-related audits and fixes in 2020–2022 that treated the GUP / COW interaction as a subsystem in need of systematic hardening rather than point fixes.
+CVE-2020-29368は、2020〜2022年にかけて行われた一連のCOW関連の監査と修正の一部であり、それらはGUP / COWの相互作用を、個別の修正ではなく体系的なハードニングを必要とするサブシステムとして扱った。
 
-**`wp_page_reuse()` audit**
+**`wp_page_reuse()`の監査**
 
-The function `wp_page_reuse()` is the kernel's page reuse optimization: when COW detects that the page has only one user, it avoids the copy and promotes the existing page directly to writable status. Every caller of this function was audited for correct mapcount accounting. Several adjacent callers were tightened or annotated.
+関数`wp_page_reuse()`は、カーネルのpage再利用の最適化である。pageの利用者が1つだけであることをCOWが検出すると、コピーを避けて既存のpageを直接書き込み可能な状態に昇格させる。この関数のすべての呼び出し元について、mapcountの計上が正しいか監査された。隣接するいくつかの呼び出し元が厳格化またはアノテートされた。
 
-**THP-specific COW reuse (v6.15, 2025)**
+**THP固有のCOW再利用（v6.15、2025年）**
 
-**Commit**: [1da190f4d0a6](https://git.kernel.org/linus/1da190f4d0a6) — "mm: Copy-on-Write (COW) reuse support for PTE-mapped THP"
-**Author**: David Hildenbrand (Red Hat)
+**コミット**: [1da190f4d0a6](https://git.kernel.org/linus/1da190f4d0a6) — "mm: Copy-on-Write (COW) reuse support for PTE-mapped THP"
+**作者**: David Hildenbrand (Red Hat)
 
-After `PG_anon_exclusive` was established as the authoritative ownership tracker for anonymous pages (see [the Dirty COW design changes above](#design-changes)), THP COW could be re-optimized more safely. A PTE-mapped THP subpage that is `PG_anon_exclusive` — exclusively owned — can be reused on COW without a copy, because the ownership tracking is now explicit state rather than an inferred heuristic from mapcount. The optimization that CVE-2020-29368 exploited has been rebuilt on a sound foundation.
+`PG_anon_exclusive`が匿名pageの所有権を追跡する正式な手段として確立された後（[上記のDirty COWの設計変更](#design-changes)を参照）、THPのCOWはより安全に再最適化できるようになった。`PG_anon_exclusive`である — 排他的に所有されている — PTEマップされたTHPのサブpageは、所有権の追跡がmapcountから推測されるヒューリスティックではなく明示的な状態になったため、コピーなしにCOWで再利用できる。CVE-2020-29368が悪用した最適化は、健全な基盤の上に再構築された。
 
-**Syzbot THP coverage expansion**
+**SyzbotのTHPカバレッジ拡張**
 
-Following the CVE, the Google syzbot continuous fuzzing infrastructure added specific THP-related fault injection scenarios. These cover the split path, the mapcount check, and concurrent fork/write/madvise races against THP regions. As of 2024, syzbot runs multiple THP-targeted kernels continuously.
+このCVEの後、GoogleのSyzbot継続的ファジング基盤は、THPに関する具体的なフォールト注入シナリオを追加した。これらは分割パス、mapcountチェック、THP領域に対する並行したfork/write/madviseの競合をカバーする。2024年時点で、SyzbotはTHPを標的にした複数のカーネルを継続的に実行している。
 
-### What it taught the mm subsystem {#what-it-taught-the-mm-subsystem_3}
+### mmサブシステムが学んだこと {#what-it-taught-the-mm-subsystem_3}
 
-!!! note "Lesson: Optimizations that skip copies based on ownership heuristics need atomic ownership checks"
+!!! note "教訓: 所有権のヒューリスティックに基づいてコピーを省略する最適化には、アトミックな所有権チェックが必要である"
 
-    The `mapcount == 1` optimization was sound in a world where checking the count and acting on it could be considered instantaneous. In a concurrent kernel with preemption and SMP, the window between "check the count" and "act on the result" is long enough to fit a racing thread's map operation.
+    `mapcount == 1`の最適化は、カウントのチェックとそれに基づく行動が瞬時に行われると見なせる世界では健全だった。プリエンプションとSMPのある並行カーネルでは、「カウントをチェックする」と「結果に基づいて行動する」の間のウィンドウは、競合するスレッドのマップ操作が入り込むのに十分な長さがある。
 
-    This is a specific instance of the check-then-act TOCTOU class. The general principle: any decision of the form "because X is true, I will skip the safety operation Y" requires that X remain true for the entire duration of the decision's consequence. If X can change between the check and the act, the check must be performed under a lock that prevents X from changing.
+    これはcheck-then-act型TOCTOUの具体例である。一般原則: 「Xが真なので、安全のための操作Yを省略する」という形の判断はすべて、その判断の帰結が続く間ずっとXが真であり続けることを必要とする。チェックと行動の間にXが変わり得るなら、チェックはXの変化を防ぐロックの下で行わなければならない。
 
-    The broader lesson for THP: huge pages are performance optimizations that introduce concurrency hazards that do not exist at 4KB granularity. A 2MB page is shared by 512 times more PTEs than a 4KB page, making racing operations 512 times more likely to interfere with each other at a given access rate. The complexity multiplier of THP is not just in the code — it is in the space of possible interleavings.
+    THPについてのより広い教訓: ヒュージページは性能最適化であり、4KBの粒度には存在しない並行性の危険をもたらす。2MBのpageは4KBのpageの512倍のPTEに共有されるため、同じアクセス頻度において競合する操作が互いに干渉する可能性は512倍高くなる。THPの複雑さの倍率は、コードの中だけにあるのではない — あり得るインターリーブの空間の中にある。
 
 ---
 
-## Cross-cutting lessons {#cross-cutting-lessons}
+## 横断的な教訓 {#cross-cutting-lessons}
 
-The four CVEs above span hardware speculation, race conditions in COW, data structure locking invariants, and ownership tracking. Despite their differences, they share structural patterns that repeat across mm security bugs.
+上の4つのCVEは、ハードウェアの投機実行、COWにおける競合状態、データ構造のロックの不変条件、所有権の追跡にまたがっている。違いはあるものの、mmのセキュリティバグ全体で繰り返し現れる構造的なパターンを共有している。
 
-### The patterns {#the-patterns}
+### パターン {#the-patterns}
 
-| CVE | Root pattern | Where it appears again |
+| CVE | 根本パターン | 再び現れる場所 |
 |-----|-------------|----------------------|
-| Dirty COW | Write intent dropped during retry | Any retry loop that weakens preconditions |
-| StackRot | Protection domain mismatch (RCU vs lock) | Any new data structure with different reclamation semantics |
-| Meltdown | Hardware behavior contradicts architecture spec | Any security property depending on a CPU fault arriving before side effects |
-| THP COW race | TOCTOU on ownership heuristic | Any optimization that skips a safety operation based on a non-atomic check |
+| Dirty COW | 再試行中に書き込み意図が落とされる | 事前条件を弱めるあらゆる再試行ループ |
+| StackRot | 保護ドメインの不一致（RCU対ロック） | 異なるメモリ回収セマンティクスを持つあらゆる新しいデータ構造 |
+| Meltdown | ハードウェアの挙動がアーキテクチャ仕様と矛盾する | 副作用より先にCPUフォールトが届くことに依存するあらゆるセキュリティ特性 |
+| THP COW競合 | 所有権ヒューリスティックに対するTOCTOU | 非アトミックなチェックに基づいて安全のための操作を省略するあらゆる最適化 |
 
-### Defense in depth after 2020 {#defense-in-depth-after-2020}
+### 2020年以降の多層防御 {#defense-in-depth-after-2020}
 
-Each CVE described here contributed one or more components to the current layered defense model for mm:
+ここで述べた各CVEは、mmに対する現在の多層防御モデルに1つ以上の要素を提供した。
 
-- **Explicit ownership tracking** (`PG_anon_exclusive`) rather than inferred ownership from refcount heuristics — closes the class of COW bypass bugs
-- **Separate GUP APIs** (`pin_user_pages` vs `get_user_pages`) with accounting — makes long-term pins visible to COW
-- **KPTI** — makes kernel virtual addresses physically absent from user-mode page tables
-- **Lockdep annotations on maple tree operations** — makes protection domain violations detectable in debug builds
-- **`unprivileged_userfaultfd = 0`** in most distributions — reduces the race window amplification primitive available to exploits
-- **KFENCE and KASAN** — detect UAF in development and staging before production
+- **明示的な所有権追跡**（`PG_anon_exclusive`） — refcountのヒューリスティックから所有権を推測する代わりに使う。COW回避バグの種類全体を塞ぐ
+- **分離されたGUP API**（`pin_user_pages`対`get_user_pages`）と計上 — 長期的なピンをCOWから見えるようにする
+- **KPTI** — カーネルの仮想アドレスをユーザーモードのページテーブルから物理的に不在にする
+- **maple tree操作に対するlockdepアノテーション** — 保護ドメインの違反をデバッグビルドで検出可能にする
+- ほとんどのディストリビューションでの**`unprivileged_userfaultfd = 0`** — エクスプロイトが利用できる、競合ウィンドウを増幅するプリミティブを減らす
+- **KFENCEとKASAN** — 本番環境の前に、開発環境やステージング環境でUAFを検出する
 
-No single mitigation is complete. The value is in the combination: an attacker who wins a race condition but cannot amplify the window (no userfaultfd), cannot reliably reuse the freed object (KFENCE detects it in testing), and cannot read kernel memory to build an exploit chain (KPTI, kptr_restrict) faces a substantially harder problem than the same attacker in 2016.
+単独で完全な緩和策はない。価値は組み合わせにある。競合状態に勝ってもウィンドウを増幅できず（userfaultfdがない）、解放されたオブジェクトを確実に再利用できず（KFENCEがテストで検出する）、エクスプロイトチェーンを組み立てるためにカーネルメモリを読めない（KPTI、kptr_restrict）攻撃者は、2016年の同じ攻撃者よりも大幅に難しい問題に直面する。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Original disclosures {#original-disclosures}
+### 元の開示 {#original-disclosures}
 
-- [dirtycow.ninja](https://dirtycow.ninja/) — Dirty COW disclosure, October 2016
-- [meltdownattack.com](https://meltdownattack.com/) — Meltdown paper and PoC, January 2018
-- [StackRot disclosure](https://github.com/lrh2000/StackRot) — CVE-2023-3269, July 2023
-- [oss-security: CVE-2020-29368](https://www.openwall.com/lists/oss-security/2020/12/03/2) — THP COW race
+- [dirtycow.ninja](https://dirtycow.ninja/) — Dirty COWの開示、2016年10月
+- [meltdownattack.com](https://meltdownattack.com/) — Meltdownの論文とPoC、2018年1月
+- [StackRotの開示](https://github.com/lrh2000/StackRot) — CVE-2023-3269、2023年7月
+- [oss-security: CVE-2020-29368](https://www.openwall.com/lists/oss-security/2020/12/03/2) — THP COW競合
 
-### LWN coverage {#lwn-coverage}
+### LWNの記事 {#lwn-coverage}
 
-- [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/) (2016) — Jonathan Corbet on the Dirty COW race and its fix
-- [The current state of kernel page-table isolation](https://lwn.net/Articles/741878/) (2017) — KPTI design, the Meltdown mitigation
-- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) (2021) — Vlastimil Babka on the GUP-pin vs. COW problem
-- [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/) (2022) — David Hildenbrand's PG_anon_exclusive solution
+- [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/)（2016年） — Dirty COWの競合とその修正についてのJonathan Corbetの記事
+- [The current state of kernel page-table isolation](https://lwn.net/Articles/741878/)（2017年） — Meltdownの緩和策であるKPTIの設計
+- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/)（2021年） — GUPピン対COWの問題についてのVlastimil Babkaの記事
+- [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/)（2022年） — David HildenbrandのPG_anon_exclusiveによる解決策
 
-### Key kernel commits {#key-kernel-commits}
+### 主要なカーネルコミット {#key-kernel-commits}
 
-- [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — Dirty COW fix
-- [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — KPTI initial infrastructure
-- [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) — FOLL_PIN introduction
+- [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) — Dirty COWの修正
+- [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) — KPTIの初期基盤
+- [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) — FOLL_PINの導入
 - [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) — PG_anon_exclusive
-- [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — THP mapcount atomicity fix
+- [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) — THP mapcountの原子性の修正
 
-### Technical docs on this site {#technical-docs-on-this-site}
+### このサイトの技術文書 {#technical-docs-on-this-site}
 
-- [Copy-on-Write](cow.md) — COW mechanics, GUP, and the full FOLL_PIN/PG_anon_exclusive evolution
-- [What happens when you fork](fork.md) — Dirty COW and StackRot technical walkthrough
-- [Page Tables](page-tables.md) — Meltdown, KPTI, and Spectre technical details
-- [Transparent Huge Pages](thp.md) — THP COW race and khugepaged bugs
-- [Bug Index](bugs/README.md) — full CVE catalog with links to all technical analyses
+- [Copy-on-Write](cow.md) — COWの仕組み、GUP、そしてFOLL_PIN/PG_anon_exclusiveの進化の全体
+- [forkしたときに何が起こるか](fork.md) — Dirty COWとStackRotの技術的な解説
+- [ページテーブル](page-tables.md) — Meltdown、KPTI、Spectreの技術的な詳細
+- [Transparent Huge Pages](thp.md) — THP COW競合とkhugepagedのバグ
+- [バグ索引](bugs/README.md) — すべての技術分析へのリンク付きの完全なCVEカタログ

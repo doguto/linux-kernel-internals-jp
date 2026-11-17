@@ -1,65 +1,65 @@
-# RCU in Memory Management {#rcu-in-memory-management}
+# メモリ管理におけるRCU {#rcu-in-memory-management}
 
-> How Read-Copy-Update lets page faults find VMAs without taking a lock
+> Read-Copy-Updateによって、ページフォールトがロックを取らずにVMAを見つけられる仕組み
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 目的 |
 |------|---------|
-| `mm/mmap_lock.c` | `lock_vma_under_rcu()`, `vma_start_read()` |
+| `mm/mmap_lock.c` | `lock_vma_under_rcu()`、`vma_start_read()` |
 | `include/linux/mmap_lock.h` | `vma_end_write_all()` |
-| `mm/vma_init.c` | `vm_area_alloc()`, `vm_area_free()`, `SLAB_TYPESAFE_BY_RCU` slab setup |
-| `lib/maple_tree.c` | `ma_free_rcu()`, `mt_free_walk()` — RCU-deferred node freeing |
-| `include/linux/mm_types.h` | `struct vm_area_struct` — `vm_freeptr`, `vm_lock_seq`, `vm_refcnt` |
-| `include/linux/rcupdate.h` | `rcu_read_lock()`, `rcu_dereference()`, `call_rcu()`, `kfree_rcu()`, `synchronize_rcu()` |
-| `mm/mmu_notifier.c` | SRCU-protected notifier list; `srcu_read_lock()` / `srcu_read_unlock()` |
-| `mm/filemap.c` | `filemap_get_folios_contig()`, `filemap_get_folios_tag()` — RCU page-cache iteration |
-| `arch/x86/mm/fault.c` | Page fault entry: `lock_vma_under_rcu()` fast path before `lock_mm_and_find_vma()` |
+| `mm/vma_init.c` | `vm_area_alloc()`、`vm_area_free()`、`SLAB_TYPESAFE_BY_RCU`のslab設定 |
+| `lib/maple_tree.c` | `ma_free_rcu()`、`mt_free_walk()` — RCUで遅延させたノードの解放 |
+| `include/linux/mm_types.h` | `struct vm_area_struct` — `vm_freeptr`、`vm_lock_seq`、`vm_refcnt` |
+| `include/linux/rcupdate.h` | `rcu_read_lock()`、`rcu_dereference()`、`call_rcu()`、`kfree_rcu()`、`synchronize_rcu()` |
+| `mm/mmu_notifier.c` | SRCUで保護されたnotifierリスト; `srcu_read_lock()` / `srcu_read_unlock()` |
+| `mm/filemap.c` | `filemap_get_folios_contig()`、`filemap_get_folios_tag()` — RCUによるページキャッシュの走査 |
+| `arch/x86/mm/fault.c` | ページフォールトの入口: `lock_mm_and_find_vma()`の前の`lock_vma_under_rcu()`による高速パス |
 
 ---
 
-## Why RCU in memory management {#why-rcu-in-memory-management}
+## なぜメモリ管理にRCUを使うか {#why-rcu-in-memory-management}
 
-Every process's virtual address space is a collection of VMAs (Virtual Memory Areas) stored in the maple tree at `mm->mm_mt`. Every page fault needs to find the right VMA for the faulting address before it can install a page table entry. Until Linux 6.4 this lookup always required taking `mmap_lock` for read.
+すべてのプロセスの仮想アドレス空間は、`mm->mm_mt`のmaple treeに格納されたVMA（Virtual Memory Area）の集合である。すべてのページフォールトは、ページテーブルエントリを設置する前に、フォールトしたアドレスに対応する正しいVMAを見つける必要がある。Linux 6.4までは、この検索には常に`mmap_lock`を読み込み用に取得する必要があった。
 
-`mmap_lock` is a per-`mm_struct` read-write semaphore. Read locks are shared, so parallel faults in the same process can proceed together — up to the point where any writer (an `mmap()`, `munmap()`, `mprotect()`, or `mremap()` call in any thread) takes the write lock and **blocks every concurrent fault**. On systems with many threads all faulting simultaneously, even brief writer windows serialise large bursts of fault handling.
+`mmap_lock`は`mm_struct`ごとの読み書きセマフォである。読み込みロックは共有されるので、同じプロセス内の並列なフォールトは一緒に進行できる。しかしそれは、いずれかの書き込み側（任意のスレッドでの`mmap()`、`munmap()`、`mprotect()`、`mremap()`呼び出し）が書き込みロックを取って**並行するすべてのフォールトをブロックする**までの話である。多数のスレッドが同時にフォールトするシステムでは、書き込み側のわずかな時間枠でさえ、フォールト処理の大きなバーストを直列化してしまう。
 
-The problem is also structural: `mmap_lock` is coarse-grained, guarding the entire VMA tree. Two threads faulting into completely separate memory regions still contend on it.
+問題は構造的でもある。`mmap_lock`は粒度が粗く、VMAツリー全体を保護している。まったく別々のメモリ領域にフォールトする2つのスレッドでさえ、このロックで競合する。
 
-RCU (Read-Copy-Update) breaks this bottleneck. The maple tree is RCU-safe — its nodes are freed via `call_rcu()` rather than immediately. This means a reader holding `rcu_read_lock()` can walk the tree and access its nodes safely, knowing no node it has already observed can be freed under it. Combined with per-VMA reference counting, the common case — finding a VMA that is not being modified right now — becomes entirely lock-free from the reader's perspective.
+RCU（Read-Copy-Update）はこのボトルネックを打破する。maple treeはRCUセーフであり、そのノードは即座にではなく`call_rcu()`を介して解放される。つまり、`rcu_read_lock()`を保持するリーダーは、すでに観測したノードが足元で解放されることはないと分かっているので、ツリーをたどってノードに安全にアクセスできる。VMAごとの参照カウントと組み合わせることで、よくあるケース、すなわち今まさに変更されていないVMAを見つけるケースは、リーダーの視点から見て完全にロックフリーになる。
 
 ---
 
-## RCU basics {#rcu-basics}
+## RCUの基本 {#rcu-basics}
 
-RCU is a synchronisation mechanism optimised for read-heavy workloads. The core contract:
+RCUは読み込みが多いワークロード向けに最適化された同期メカニズムである。中核となる約束事は次のとおり:
 
-- **Readers** call `rcu_read_lock()` before accessing RCU-protected data and `rcu_read_unlock()` when done. The reader section cannot sleep (it disables preemption in non-PREEMPT kernels, holds a special token in PREEMPT_RCU).
-- **Readers dereference pointers** with `rcu_dereference()`, which inserts the appropriate memory barrier to prevent the compiler or CPU from speculating loads of dependent data before the pointer itself is loaded.
-- **Writers** update data using `rcu_assign_pointer()` to publish a new pointer, then wait for all current readers to finish their RCU read sections before freeing the old version. This waiting period is called a **grace period**.
+- **リーダー**は、RCUで保護されたデータにアクセスする前に`rcu_read_lock()`を呼び、終わったら`rcu_read_unlock()`を呼ぶ。リーダーのセクションではスリープできない（非PREEMPTカーネルではプリエンプションを無効化し、PREEMPT_RCUでは特別なトークンを保持する）。
+- **リーダーはポインタを`rcu_dereference()`で参照外しする**。これは適切なメモリバリアを挿入し、ポインタ自体がロードされる前に、コンパイラやCPUが依存データのロードを投機的に行うことを防ぐ。
+- **ライター**は`rcu_assign_pointer()`を使って新しいポインタを公開することでデータを更新し、その後、現在のすべてのリーダーがRCU読み込みセクションを終えるのを待ってから古いバージョンを解放する。この待ち期間を**グレースピリオド**と呼ぶ。
 
-There are two ways to wait for a grace period:
+グレースピリオドを待つ方法は2つある:
 
 ```c
-/* Synchronous: blocks the caller until all readers have completed */
+/* 同期的: すべてのリーダーが完了するまで呼び出し元をブロックする */
 synchronize_rcu();
 
-/* Asynchronous: schedules a callback for after the grace period */
+/* 非同期: グレースピリオド後に実行されるコールバックをスケジュールする */
 call_rcu(&obj->rcu_head, my_free_function);
 
-/* Convenience wrapper: frees the object after the grace period */
+/* 便利なラッパー: グレースピリオド後にオブジェクトを解放する */
 kfree_rcu(ptr, rcu_head_field);
 ```
 
-The key insight is that `synchronize_rcu()` can take milliseconds — readers across all CPUs must each finish their current RCU read section. `call_rcu()` and `kfree_rcu()` return immediately, deferring the free to an RCU callback thread. Memory management code chooses between them based on whether it can afford to wait.
+重要なポイントは、`synchronize_rcu()`には数ミリ秒かかりうるということである。すべてのCPU上のリーダーがそれぞれ現在のRCU読み込みセクションを終えなければならないからである。`call_rcu()`と`kfree_rcu()`は直ちに戻り、解放をRCUコールバックスレッドに委ねる。メモリ管理のコードは、待つ余裕があるかどうかに基づいてこれらを使い分ける。
 
 ---
 
-## VMA lookup under RCU {#vma-lookup-under-rcu}
+## RCU下でのVMA検索 {#vma-lookup-under-rcu}
 
-### The maple tree is RCU-safe {#the-maple-tree-is-rcu-safe}
+### maple treeはRCUセーフ {#the-maple-tree-is-rcu-safe}
 
-The maple tree (`mm->mm_mt`) stores VMAs keyed on address range. When a VMA is removed or a tree node is replaced, the old node is not freed immediately. Instead, `ma_free_rcu()` in `lib/maple_tree.c` calls `kfree_rcu(node, rcu)`, which defers the free until after a grace period:
+maple tree（`mm->mm_mt`）はアドレス範囲をキーとしてVMAを格納する。VMAが削除されたり、ツリーのノードが置き換えられたりしても、古いノードは即座には解放されない。代わりに、`lib/maple_tree.c`の`ma_free_rcu()`が`kfree_rcu(node, rcu)`を呼び、解放をグレースピリオド後まで遅延させる:
 
 ```c
 /* lib/maple_tree.c */
@@ -70,11 +70,11 @@ static void ma_free_rcu(struct maple_node *node)
 }
 ```
 
-Readers holding `rcu_read_lock()` can therefore walk tree nodes safely — any node they see is guaranteed to remain allocated (though not necessarily in the tree) until after the read section ends.
+したがって、`rcu_read_lock()`を保持するリーダーはツリーのノードを安全にたどることができる。リーダーが見たノードはどれも、読み込みセクションが終わるまでは割り当てられたまま（ツリー内にあるとは限らないが）であることが保証される。
 
 ### `lock_vma_under_rcu()` {#lockvmaunder_rcu}
 
-`lock_vma_under_rcu()` in `mm/mmap_lock.c` is the fast-path VMA lookup used by page faults since v6.4. It combines an RCU read section for the maple tree walk with a per-VMA reference count to stabilise the found VMA:
+`mm/mmap_lock.c`の`lock_vma_under_rcu()`は、v6.4以降ページフォールトで使われている高速パスのVMA検索である。maple treeの走査のためのRCU読み込みセクションと、見つかったVMAを安定させるためのVMAごとの参照カウントを組み合わせる:
 
 ```c
 /* mm/mmap_lock.c */
@@ -86,27 +86,27 @@ struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 
 retry:
     rcu_read_lock();
-    vma = mas_walk(&mas);           /* RCU-protected maple tree walk */
+    vma = mas_walk(&mas);           /* RCU で保護された maple tree の走査 */
     if (!vma) {
         rcu_read_unlock();
         goto inval;
     }
 
-    vma = vma_start_read(mm, vma);  /* attempt per-VMA read lock */
+    vma = vma_start_read(mm, vma);  /* VMA ごとの読み込みロックを試みる */
     if (IS_ERR_OR_NULL(vma)) {
         if (PTR_ERR(vma) == -EAGAIN)
-            goto retry;             /* VMA was detached, retry */
-        goto inval;                 /* rcu_read_unlock() already called */
+            goto retry;             /* VMA が切り離された、リトライ */
+        goto inval;                 /* rcu_read_unlock() は呼び出し済み */
     }
 
     rcu_read_unlock();
 
-    /* Validate that the locked VMA actually covers the address */
+    /* ロックした VMA が実際にそのアドレスをカバーしているか検証 */
     if (unlikely(address < vma->vm_start || address >= vma->vm_end)) {
         vma_end_read(vma);
         goto inval;
     }
-    return vma;   /* Stable, per-VMA-locked VMA, no mmap_lock held */
+    return vma;   /* 安定した、VMA ごとにロックされた VMA。mmap_lock は保持していない */
 
 inval:
     count_vm_vma_lock_event(VMA_LOCK_ABORT);
@@ -114,25 +114,25 @@ inval:
 }
 ```
 
-!!! note "IMPORTANT: `vma_start_read()` may release the RCU lock on failure"
-    The comment in the source is explicit: when `vma_start_read()` returns an error, it has already called `rcu_read_unlock()`. Callers must not call `rcu_read_unlock()` again in error paths after `vma_start_read()` fails. This asymmetry is a common source of confusion when reading the code.
+!!! note "重要: `vma_start_read()`は失敗時にRCUロックを解放することがある"
+    ソース中のコメントは明確である。`vma_start_read()`がエラーを返したとき、すでに`rcu_read_unlock()`を呼んでいる。呼び出し元は、`vma_start_read()`が失敗した後のエラーパスで再び`rcu_read_unlock()`を呼んではならない。この非対称性は、コードを読む際によくある混乱の原因である。
 
 ### `vma_start_read()` {#vmastartread}
 
-`vma_start_read()` (also in `mm/mmap_lock.c`) is the per-VMA read lock acquisition. It uses `vm_lock_seq` and `mm_lock_seq` to detect whether the VMA is currently being written:
+`vma_start_read()`（同じく`mm/mmap_lock.c`内）は、VMAごとの読み込みロックの取得である。`vm_lock_seq`と`mm_lock_seq`を使って、VMAが現在書き込み中かどうかを検出する:
 
 ```c
 /* mm/mmap_lock.c */
 static inline struct vm_area_struct *vma_start_read(struct mm_struct *mm,
                                                     struct vm_area_struct *vma)
 {
-    /* Fast bail-out: if lock sequences match, VMA is write-locked */
+    /* 早期脱出: ロックシーケンスが一致すれば、VMA は書き込みロックされている */
     if (READ_ONCE(vma->vm_lock_seq) == READ_ONCE(mm->mm_lock_seq.sequence)) {
         vma = NULL;
-        goto err;   /* also calls rcu_read_unlock() */
+        goto err;   /* rcu_read_unlock() も呼ぶ */
     }
 
-    /* Increment vm_refcnt with acquire fence */
+    /* acquire フェンス付きで vm_refcnt をインクリメント */
     if (unlikely(!__refcount_inc_not_zero_limited_acquire(&vma->vm_refcnt,
                                                           &oldcnt,
                                                           VM_REFCNT_LIMIT))) {
@@ -140,7 +140,7 @@ static inline struct vm_area_struct *vma_start_read(struct mm_struct *mm,
         goto err;
     }
 
-    /* Re-check lock sequence under the reference count */
+    /* 参照カウントを保持した状態でロックシーケンスを再確認 */
     if (unlikely(vma->vm_lock_seq == raw_read_seqcount(&mm->mm_lock_seq))) {
         vma_refcount_put(vma);
         vma = NULL;
@@ -151,23 +151,23 @@ static inline struct vm_area_struct *vma_start_read(struct mm_struct *mm,
 }
 ```
 
-The logic:
+ロジックは次のとおり:
 
-1. If `vma->vm_lock_seq == mm->mm_lock_seq.sequence`, the VMA is currently write-locked — bail.
-2. Increment `vm_refcnt` with acquire semantics to prevent loads of VMA fields from being reordered before the count increment.
-3. Re-check `vm_lock_seq` under the reference count, because the sequence number could have changed between step 1 and step 2.
+1. `vma->vm_lock_seq == mm->mm_lock_seq.sequence`であれば、VMAは現在書き込みロックされているので、脱出する。
+2. acquireセマンティクスで`vm_refcnt`をインクリメントし、VMAのフィールドのロードがカウントのインクリメントより前に並べ替えられることを防ぐ。
+3. ステップ1とステップ2の間でシーケンス番号が変わった可能性があるので、参照カウントを保持した状態で`vm_lock_seq`を再確認する。
 
-For the full per-VMA lock state machine and the write-side (`vma_end_write_all()`), see [Per-VMA Locks](per-vma-locks.md).
+VMAごとのロックの完全な状態機械と書き込み側（`vma_end_write_all()`）については、[VMA単位のロック](per-vma-locks.md)を参照。
 
-### The page fault fast path (x86) {#the-page-fault-fast-path-x86}
+### ページフォールトの高速パス（x86） {#the-page-fault-fast-path-x86}
 
-The architecture fault handler in `arch/x86/mm/fault.c` tries the RCU path first:
+`arch/x86/mm/fault.c`のアーキテクチャのフォールトハンドラは、まずRCUパスを試みる:
 
 ```c
 /* arch/x86/mm/fault.c */
 vma = lock_vma_under_rcu(mm, address);
 if (!vma)
-    goto lock_mmap;   /* fall back to mmap_lock */
+    goto lock_mmap;   /* mmap_lock にフォールバック */
 
 if (unlikely(access_error(error_code, vma))) {
     bad_area_access_error(...);
@@ -179,18 +179,18 @@ if (!(fault & (VM_FAULT_RETRY | VM_FAULT_COMPLETED)))
     vma_end_read(vma);
 ...
 lock_mmap:
-    vma = lock_mm_and_find_vma(mm, address, regs);  /* slow path */
+    vma = lock_mm_and_find_vma(mm, address, regs);  /* 低速パス */
 ```
 
-The `FAULT_FLAG_VMA_LOCK` flag tells `handle_mm_fault()` which lock is held. ARM64, ARM, PowerPC, s390, LoongArch, and RISC-V all implement the same pattern.
+`FAULT_FLAG_VMA_LOCK`フラグは、どのロックが保持されているかを`handle_mm_fault()`に伝える。ARM64、ARM、PowerPC、s390、LoongArch、RISC-Vはすべて同じパターンを実装している。
 
 ---
 
-## `struct vm_area_struct` and RCU {#struct-vmareastruct-and-rcu}
+## `struct vm_area_struct`とRCU {#struct-vmareastruct-and-rcu}
 
-### Allocation: `SLAB_TYPESAFE_BY_RCU` {#allocation-slabtypesafeby_rcu}
+### 割り当て: `SLAB_TYPESAFE_BY_RCU` {#allocation-slabtypesafeby_rcu}
 
-`vm_area_struct` objects are allocated from a dedicated slab cache (`vm_area_cachep`) created in `mm/vma_init.c`:
+`vm_area_struct`オブジェクトは、`mm/vma_init.c`で作成される専用のslabキャッシュ（`vm_area_cachep`）から割り当てられる:
 
 ```c
 /* mm/vma_init.c */
@@ -200,15 +200,15 @@ vm_area_cachep = kmem_cache_create("vm_area_struct",
         SLAB_ACCOUNT);
 ```
 
-`SLAB_TYPESAFE_BY_RCU` is the key flag. It means:
+`SLAB_TYPESAFE_BY_RCU`が鍵となるフラグである。これは次のことを意味する:
 
-- Objects are **not freed immediately** to the system when released; instead they are kept until after a grace period.
-- Critically, the slab allocator may **reuse** a freed object for a new allocation once the grace period elapses, but it will not return the memory to the OS or a different slab.
-- A reader holding `rcu_read_lock()` can safely read from a `vm_area_struct` pointer it obtained from the maple tree — the struct's memory will remain allocated (though possibly reused) until the read section ends.
+- オブジェクトは解放されても**即座には**システムに**返されず**、グレースピリオド後まで保持される。
+- 決定的に重要なのは、グレースピリオドが経過すると、slabアロケータは解放されたオブジェクトを新しい割り当てのために**再利用**しうるが、そのメモリをOSや別のslabに返すことはないという点である。
+- `rcu_read_lock()`を保持するリーダーは、maple treeから得た`vm_area_struct`ポインタから安全に読み込むことができる。構造体のメモリは、読み込みセクションが終わるまで割り当てられたまま（再利用されている可能性はあるが）である。
 
-This differs from `call_rcu()` with a free callback: with `SLAB_TYPESAFE_BY_RCU`, the type of the object (`struct vm_area_struct`) is preserved across the grace period. Readers must still validate that the VMA they found is still the one they expected (via `vma_start_read()`).
+これは解放コールバック付きの`call_rcu()`とは異なる。`SLAB_TYPESAFE_BY_RCU`では、オブジェクトの型（`struct vm_area_struct`）がグレースピリオドをまたいで保たれる。リーダーは依然として、見つけたVMAが期待したものであることを（`vma_start_read()`によって）検証しなければならない。
 
-`vm_area_free()` in `mm/vma_init.c` is the public VMA destruction function:
+`mm/vma_init.c`の`vm_area_free()`は、公開されたVMA破棄関数である:
 
 ```c
 /* mm/vma_init.c */
@@ -218,43 +218,45 @@ void vm_area_free(struct vm_area_struct *vma)
     vma_numab_state_free(vma);
     free_anon_vma_name(vma);
     vma_pfnmap_track_ctx_release(vma);
-    kmem_cache_free(vm_area_cachep, vma);  /* returns to SLAB_TYPESAFE_BY_RCU slab */
+    kmem_cache_free(vm_area_cachep, vma);  /* SLAB_TYPESAFE_BY_RCU の slab に戻す */
 }
 ```
 
-The slab, not the caller, handles the grace period.
+グレースピリオドを扱うのは呼び出し元ではなくslabである。
 
-### Fields accessible under RCU (before `vma_start_read()`) {#fields-accessible-under-rcu-before-vmastartread}
+### RCU下で（`vma_start_read()`の前に）アクセスできるフィールド {#fields-accessible-under-rcu-before-vmastartread}
 
-The comment in `include/linux/mm_types.h` at the `struct vm_area_struct` definition states:
+`include/linux/mm_types.h`の`struct vm_area_struct`定義にあるコメントは次のように述べている:
 
 > Only explicitly marked struct members may be accessed by RCU readers before getting a stable reference.
 
-Fields that an unstable RCU reader (before `vma_start_read()` succeeds) may access:
+（訳: 安定した参照を得る前にRCUリーダーがアクセスしてよいのは、明示的にマークされた構造体メンバーだけである。）
 
-| Field | Why stable |
+不安定なRCUリーダー（`vma_start_read()`が成功する前）がアクセスしてよいフィールド:
+
+| フィールド | 安定している理由 |
 |-------|-----------|
-| `vm_start`, `vm_end` | Unioned with `vm_freeptr`; stable once the VMA is in the maple tree |
-| `vm_mm` | Explicitly documented as accessible to unstable RCU readers |
-| `vm_lock_seq` | Read with `READ_ONCE()` in `vma_start_read()` for the optimistic check |
-| `vm_refcnt` | Accessed atomically throughout the locking protocol |
+| `vm_start`、`vm_end` | `vm_freeptr`とunionになっている。VMAがmaple treeに入った後は安定 |
+| `vm_mm` | 不安定なRCUリーダーがアクセス可能であると明示的に文書化されている |
+| `vm_lock_seq` | 楽観的チェックのために`vma_start_read()`内で`READ_ONCE()`で読まれる |
+| `vm_refcnt` | ロックプロトコル全体を通じてアトミックにアクセスされる |
 
-Fields that are **not** safe without a successful `vma_start_read()` (per-VMA read lock):
+`vma_start_read()`（VMAごとの読み込みロック）の成功なしでは安全**でない**フィールド:
 
-- `vm_flags` — may be changing due to `mprotect()`
-- `vm_file`, `vm_pgoff`, `anon_vma` — may change on unmap or remap
-- `vm_ops`, `vm_private_data` — tied to the underlying file/device
+- `vm_flags` — `mprotect()`によって変更中かもしれない
+- `vm_file`、`vm_pgoff`、`anon_vma` — アンマップやリマップで変わる可能性がある
+- `vm_ops`、`vm_private_data` — 背後のファイル/デバイスに結びついている
 
-!!! warning "Field reuse via `vm_freeptr`"
-    `vm_start` and `vm_end` share a union with `vm_freeptr`, the SLAB free-list pointer. When a VMA is freed back to the slab, the allocator may write to `vm_freeptr`, clobbering `vm_start`/`vm_end`. This is exactly why `vma_start_read()` validates address bounds *after* acquiring the per-VMA lock: if the lock fails, the struct may already be in an undefined state.
+!!! warning "`vm_freeptr`によるフィールドの再利用"
+    `vm_start`と`vm_end`は、SLABのフリーリストポインタである`vm_freeptr`とunionを共有している。VMAがslabに解放されると、アロケータが`vm_freeptr`に書き込み、`vm_start`/`vm_end`を上書きすることがある。これこそが、`vma_start_read()`がVMAごとのロックを取得した*後*にアドレス範囲を検証する理由である。ロックが失敗した場合、構造体はすでに未定義の状態にあるかもしれない。
 
 ---
 
-## Page table walks under RCU {#page-table-walks-under-rcu}
+## RCU下でのページテーブルの走査 {#page-table-walks-under-rcu}
 
-### `follow_page_mask()` and `vma_pgtable_walk_begin()` {#followpagemask-and-vmapgtablewalk_begin}
+### `follow_page_mask()`と`vma_pgtable_walk_begin()` {#followpagemask-and-vmapgtablewalk_begin}
 
-`follow_page_mask()` in `mm/gup.c` looks up a physical page for a user virtual address (used by `get_user_pages()` and friends). It wraps the page table walk with:
+`mm/gup.c`の`follow_page_mask()`は、ユーザー仮想アドレスに対応する物理pageを検索する（`get_user_pages()`などで使われる）。この関数はページテーブルの走査を次のように囲む:
 
 ```c
 /* mm/gup.c */
@@ -270,7 +272,7 @@ static struct page *follow_page_mask(struct vm_area_struct *vma,
 }
 ```
 
-`vma_pgtable_walk_begin()` in `mm/memory.c` acquires a hugetlb VMA read lock if the VMA is a HugeTLB mapping:
+`mm/memory.c`の`vma_pgtable_walk_begin()`は、VMAがHugeTLBマッピングの場合、hugetlbのVMA読み込みロックを取得する:
 
 ```c
 /* mm/memory.c */
@@ -287,39 +289,39 @@ void vma_pgtable_walk_end(struct vm_area_struct *vma)
 }
 ```
 
-For normal (non-hugetlb) VMAs these are no-ops; the protection comes from the page table lock (`pte_offset_map_lock()`) and the fact that page table pages are reference-counted via `mm->pgtables_bytes` tracking in `mm_inc_nr_ptes()` / `mm_dec_nr_ptes()`.
+通常の（hugetlbでない）VMAではこれらは何もしない。保護はページテーブルロック（`pte_offset_map_lock()`）と、ページテーブル用pageが`mm_inc_nr_ptes()` / `mm_dec_nr_ptes()`での`mm->pgtables_bytes`の追跡によって参照カウントされていることから得られる。
 
-### Page table page lifetime {#page-table-page-lifetime}
+### ページテーブル用pageの寿命 {#page-table-page-lifetime}
 
-Page table pages (the physical pages that *hold* PTEs) are tracked by:
+ページテーブル用page（PTEを*保持する*物理page）は、次によって追跡される:
 
-- `mm_inc_nr_ptes()` / `mm_dec_nr_ptes()` on alloc and free, updating `mm->pgtables_bytes`.
-- A `page_table_lock` spinlock in `mm_struct` for some global page table operations.
-- Per-page-table spinlocks obtained via `pte_offset_map_lock()` for PTE-level operations.
+- 割り当てと解放時の`mm_inc_nr_ptes()` / `mm_dec_nr_ptes()`。`mm->pgtables_bytes`を更新する。
+- 一部のグローバルなページテーブル操作のための、`mm_struct`内の`page_table_lock` spinlock。
+- PTEレベルの操作のために`pte_offset_map_lock()`で取得される、ページテーブルごとのspinlock。
 
-When `follow_page_pte()` walks to the PTE level, it uses `pte_offset_map_lock()` to take the per-page-table spinlock, preventing the page table page from being freed (via `mm_dec_nr_ptes()`) while the PTE is being read.
+`follow_page_pte()`がPTEレベルまでたどると、`pte_offset_map_lock()`を使ってページテーブルごとのspinlockを取得し、PTEの読み込み中にページテーブル用pageが（`mm_dec_nr_ptes()`を介して）解放されることを防ぐ。
 
-RCU alone does not protect page table pages from being freed. The layered design is: RCU protects the *VMA* (so the fault handler can find the right VMA without `mmap_lock`); the per-VMA lock then stabilises the VMA; and normal page table locking (`pte_offset_map_lock()`) protects the PTE contents.
+RCUだけではページテーブル用pageの解放を防げない。階層化された設計は次のとおりである。RCUは*VMA*を保護し（フォールトハンドラが`mmap_lock`なしで正しいVMAを見つけられるように）、次にVMAごとのロックがVMAを安定させ、そして通常のページテーブルのロック（`pte_offset_map_lock()`）がPTEの内容を保護する。
 
 ---
 
-## MMU notifiers and SRCU {#mmu-notifiers-and-srcu}
+## MMU notifierとSRCU {#mmu-notifiers-and-srcu}
 
-MMU notifiers allow subsystems like KVM and RDMA to be informed when the kernel is about to invalidate page table entries. KVM uses this to flush guest physical → host virtual mappings whenever the host tears down or remaps a region.
+MMU notifierにより、KVMやRDMAのようなサブシステムは、カーネルがページテーブルエントリを無効化しようとしていることを知ることができる。KVMはこれを使い、ホストが領域を破棄またはリマップするたびに、ゲスト物理 → ホスト仮想のマッピングをフラッシュする。
 
-### The notifier list uses SRCU, not plain RCU {#the-notifier-list-uses-srcu-not-plain-rcu}
+### notifierリストは素のRCUではなくSRCUを使う {#the-notifier-list-uses-srcu-not-plain-rcu}
 
-The mmu notifier list in `mm/mmu_notifier.c` uses **SRCU (Sleepable RCU)** rather than classic RCU. The key difference: SRCU permits sleeping inside the read-side critical section, which notifier callbacks (like KVM's TLB flush path) may need.
+`mm/mmu_notifier.c`のmmu notifierリストは、従来のRCUではなく**SRCU**（Sleepable RCU）を使う。重要な違いは、SRCUでは読み込み側のクリティカルセクション内でスリープが許されることであり、notifierのコールバック（KVMのTLBフラッシュパスなど）はそれを必要とすることがある。
 
 ```c
 /* mm/mmu_notifier.c */
-DEFINE_STATIC_SRCU(srcu);   /* one global SRCU domain for all MMs */
+DEFINE_STATIC_SRCU(srcu);   /* すべての MM に対して1つのグローバルな SRCU ドメイン */
 ```
 
-When the kernel needs to notify subscribers (for example, during page table teardown in `unmap_vmas()`):
+カーネルが購読者に通知する必要があるとき（たとえば`unmap_vmas()`でのページテーブル破棄中）:
 
 ```c
-/* mm/mmu_notifier.c — simplified */
+/* mm/mmu_notifier.c — 簡略化 */
 int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 {
     int id = srcu_read_lock(&srcu);
@@ -332,9 +334,9 @@ int __mmu_notifier_invalidate_range_start(struct mmu_notifier_range *range)
 }
 ```
 
-The iteration uses `hlist_for_each_entry_rcu()`, which is safe because notifier registrations and unregistrations modify the list under `mmap_write_lock()` + SRCU synchronisation. Readers only need `srcu_read_lock()`.
+走査には`hlist_for_each_entry_rcu()`が使われる。notifierの登録と登録解除は`mmap_write_lock()` + SRCUの同期の下でリストを変更するので、これは安全である。リーダーは`srcu_read_lock()`だけを必要とする。
 
-### `mmu_notifier_get()` and `mmu_notifier_put()` {#mmunotifierget-and-mmunotifierput}
+### `mmu_notifier_get()`と`mmu_notifier_put()` {#mmunotifierget-and-mmunotifierput}
 
 ```c
 /* include/linux/mmu_notifier.h */
@@ -343,7 +345,7 @@ mmu_notifier_get(const struct mmu_notifier_ops *ops, struct mm_struct *mm)
 {
     struct mmu_notifier *ret;
     mmap_write_lock(mm);
-    ret = mmu_notifier_get_locked(ops, mm);   /* calls __mmu_notifier_register() */
+    ret = mmu_notifier_get_locked(ops, mm);   /* __mmu_notifier_register() を呼ぶ */
     mmap_write_unlock(mm);
     return ret;
 }
@@ -351,21 +353,21 @@ mmu_notifier_get(const struct mmu_notifier_ops *ops, struct mm_struct *mm)
 void mmu_notifier_put(struct mmu_notifier *subscription);
 ```
 
-`mmu_notifier_get()` requires `mmap_write_lock` — registration modifies the notifier list and must be serialised. `mmu_notifier_put()` uses SRCU to defer the final cleanup until all in-progress `invalidate_range_start` callbacks have completed.
+`mmu_notifier_get()`には`mmap_write_lock`が必要である。登録はnotifierリストを変更するので、直列化されなければならない。`mmu_notifier_put()`はSRCUを使い、進行中のすべての`invalidate_range_start`コールバックが完了するまで最終的な後始末を遅延させる。
 
-### Why this matters for KVM {#why-this-matters-for-kvm}
+### KVMにとってなぜ重要か {#why-this-matters-for-kvm}
 
-Without SRCU, KVM's invalidation callback would have to complete without sleeping, which is impractical for cross-hypervisor TLB flushes or IPI-based shootdowns that need to synchronize with vCPU threads. SRCU allows KVM to sleep inside `invalidate_range_start()` while still being protected against concurrent list modification.
+SRCUがなければ、KVMの無効化コールバックはスリープせずに完了しなければならない。これは、vCPUスレッドと同期する必要があるハイパーバイザ横断のTLBフラッシュやIPIベースのシュートダウンにとって現実的ではない。SRCUにより、KVMは並行するリストの変更から保護されたまま、`invalidate_range_start()`の中でスリープできる。
 
 ---
 
-## Folio and page cache RCU {#folio-and-page-cache-rcu}
+## folioとページキャッシュのRCU {#folio-and-page-cache-rcu}
 
-The page cache maps file offsets to folios (contiguous groups of pages) using an XArray (`mapping->i_pages`). The XArray is internally RCU-safe: its `xa_head` pointer is `__rcu`-annotated and node slots are RCU-protected.
+ページキャッシュは、XArray（`mapping->i_pages`）を使ってファイルオフセットをfolio（連続したpageのまとまり）に対応付ける。XArrayは内部的にRCUセーフであり、その`xa_head`ポインタは`__rcu`アノテーション付きで、ノードのスロットはRCUで保護されている。
 
-### RCU lookups in `filemap.c` {#rcu-lookups-in-filemapc}
+### `filemap.c`におけるRCU検索 {#rcu-lookups-in-filemapc}
 
-Several functions iterate the page cache under `rcu_read_lock()` and use `folio_try_get()` to atomically acquire a reference before the RCU section ends:
+いくつかの関数は`rcu_read_lock()`の下でページキャッシュを走査し、RCUセクションが終わる前に`folio_try_get()`を使ってアトミックに参照を取得する:
 
 ```c
 /* mm/filemap.c — filemap_get_folios_contig() */
@@ -379,12 +381,12 @@ unsigned filemap_get_folios_contig(struct address_space *mapping,
             folio = xas_next(&xas)) {
         if (xas_retry(&xas, folio))
             continue;
-        if (xa_is_value(folio))   /* swap/shadow entry */
+        if (xa_is_value(folio))   /* スワップ/シャドウエントリ */
             goto update_start;
         if (!folio_try_get(folio))
             goto retry;
         if (unlikely(folio != xas_reload(&xas)))
-            goto put_folio;       /* folio was replaced while we grabbed it */
+            goto put_folio;       /* 取得している間に folio が置き換えられた */
         folio_batch_add(fbatch, folio);
         ...
     }
@@ -393,52 +395,52 @@ unsigned filemap_get_folios_contig(struct address_space *mapping,
 }
 ```
 
-The pattern is:
+パターンは次のとおり:
 
-1. `rcu_read_lock()` — prevents XArray node freeing.
-2. `xas_load()` / `xas_next()` — walk under RCU protection.
-3. `folio_try_get()` — atomically increment the folio's reference count; returns false if the count was already zero (folio being freed).
-4. `xas_reload()` — verify the XArray slot still points to the same folio (it could have been replaced by a new folio between `xas_next()` and `folio_try_get()`).
-5. `rcu_read_unlock()` — the folio is now held by a reference count and safe to use outside the RCU section.
+1. `rcu_read_lock()` — XArrayのノードの解放を防ぐ。
+2. `xas_load()` / `xas_next()` — RCUの保護下で走査する。
+3. `folio_try_get()` — folioの参照カウントをアトミックにインクリメントする。カウントがすでにゼロだった場合（folioが解放中）はfalseを返す。
+4. `xas_reload()` — XArrayのスロットがまだ同じfolioを指していることを確認する（`xas_next()`と`folio_try_get()`の間に新しいfolioに置き換えられた可能性がある）。
+5. `rcu_read_unlock()` — folioは参照カウントによって保持されているので、RCUセクションの外で安全に使える。
 
-`filemap_get_folio()` (single-folio lookup) ultimately calls `filemap_get_entry()` which uses the same `rcu_read_lock()` + `folio_try_get()` + `xas_reload()` sequence.
+`filemap_get_folio()`（単一folioの検索）は、最終的に`filemap_get_entry()`を呼び、これも同じ`rcu_read_lock()` + `folio_try_get()` + `xas_reload()`の手順を使う。
 
-### Why not just a spinlock? {#why-not-just-a-spinlock}
+### なぜ単なるspinlockではないのか? {#why-not-just-a-spinlock}
 
-The page cache is read far more often than it is modified. Under load, a spinlock on every lookup would bounce the cache line across CPUs. RCU with `folio_try_get()` allows all CPUs to read the XArray concurrently, at the cost of slightly more complex retry logic on the rare occasions a folio is being evicted simultaneously.
+ページキャッシュは変更されるよりもはるかに頻繁に読まれる。負荷がかかった状態では、検索のたびにspinlockを取るとキャッシュラインがCPU間を行き来してしまう。`folio_try_get()`を伴うRCUにより、すべてのCPUがXArrayを並行して読めるようになる。その代償は、folioが同時に追い出されているまれな場合に、リトライのロジックがやや複雑になることである。
 
 ---
 
-## Grace period costs {#grace-period-costs}
+## グレースピリオドのコスト {#grace-period-costs}
 
-### `synchronize_rcu()` is slow {#synchronize_rcu-is-slow}
+### `synchronize_rcu()`は遅い {#synchronize_rcu-is-slow}
 
-`synchronize_rcu()` blocks until every CPU has passed through a quiescent state (a point where no RCU read section is active on that CPU). On a large NUMA system this can take several milliseconds.
+`synchronize_rcu()`は、すべてのCPUが静止状態（そのCPU上でRCU読み込みセクションがアクティブでない時点）を通過するまでブロックする。大規模なNUMAシステムでは、これに数ミリ秒かかることがある。
 
-Memory management code avoids synchronous grace periods on performance-critical paths:
+メモリ管理のコードは、性能が重要なパスでは同期的なグレースピリオドを避ける:
 
-| Operation | Mechanism | Reason |
+| 操作 | メカニズム | 理由 |
 |-----------|-----------|--------|
-| Maple tree node removal | `kfree_rcu(node, rcu)` via `ma_free_rcu()` | VMA unmap must be fast |
-| VMA slab free | `SLAB_TYPESAFE_BY_RCU` (implicit grace period in slab) | Avoids per-VMA `call_rcu` overhead |
-| MMU notifier unregister | `synchronize_srcu(&srcu)` | Must ensure all in-flight callbacks are done before freeing the notifier |
-| `mmap_write_unlock()` | Calls `vma_end_write_all()` → `mm_lock_seqcount_end()` | Invalidates all per-VMA read locks by incrementing `mm_lock_seq`; no grace period needed |
+| maple treeのノード削除 | `ma_free_rcu()`経由の`kfree_rcu(node, rcu)` | VMAのアンマップは高速でなければならない |
+| VMAのslab解放 | `SLAB_TYPESAFE_BY_RCU`（slab内の暗黙のグレースピリオド） | VMAごとの`call_rcu`のオーバーヘッドを避ける |
+| MMU notifierの登録解除 | `synchronize_srcu(&srcu)` | notifierを解放する前に、実行中のすべてのコールバックが完了していることを保証しなければならない |
+| `mmap_write_unlock()` | `vma_end_write_all()` → `mm_lock_seqcount_end()`を呼ぶ | `mm_lock_seq`をインクリメントしてVMAごとのすべての読み込みロックを無効化する。グレースピリオドは不要 |
 
-### The hidden cost in `mmap_write_lock()` {#the-hidden-cost-in-mmapwritelock}
+### `mmap_write_lock()`に隠れたコスト {#the-hidden-cost-in-mmapwritelock}
 
-When `mmap_write_lock()` acquires the write side of `mmap_lock`, it does *not* itself wait for an RCU grace period — but the write lock will block until all current `mmap_read_lock()` holders release, and those read holders may themselves be sitting inside `rcu_read_lock()` sections in the fault path. Effectively, the write lock waits for in-progress fault handling to complete.
+`mmap_write_lock()`が`mmap_lock`の書き込み側を取得するとき、それ自体はRCUのグレースピリオドを*待たない*。しかし書き込みロックは、現在のすべての`mmap_read_lock()`保持者が解放するまでブロックし、それらの読み込み保持者自身がフォールトパスで`rcu_read_lock()`セクション内にいる可能性がある。実質的に、書き込みロックは進行中のフォールト処理の完了を待つことになる。
 
-When `mmap_write_unlock()` is called, it calls `vma_end_write_all()` which increments `mm_lock_seq`, atomically invalidating all outstanding per-VMA read locks. Any thread that subsequently calls `vma_start_read()` will see the updated sequence number and fall back to the `mmap_lock` slow path for the next fault.
+`mmap_write_unlock()`が呼ばれると、`vma_end_write_all()`を呼び、これが`mm_lock_seq`をインクリメントして、未解放のVMAごとの読み込みロックをすべてアトミックに無効化する。その後に`vma_start_read()`を呼ぶスレッドは、更新されたシーケンス番号を見て、次のフォールトでは`mmap_lock`の低速パスにフォールバックする。
 
 ---
 
-## Debugging RCU issues in mm {#debugging-rcu-issues-in-mm}
+## mmにおけるRCUの問題のデバッグ {#debugging-rcu-issues-in-mm}
 
 ### `CONFIG_PROVE_RCU` {#configprovercu}
 
-Enable `CONFIG_PROVE_RCU` (implied by `CONFIG_PROVE_LOCKING`) to get lockdep coverage of RCU usage. With this option, `RCU_LOCKDEP_WARN()` calls emit warnings when RCU-annotated pointers are accessed outside a valid RCU read section.
+`CONFIG_PROVE_RCU`（`CONFIG_PROVE_LOCKING`によって暗黙に有効になる）を有効にすると、RCUの使用に対してlockdepによるチェックが得られる。このオプションでは、RCUアノテーション付きのポインタが有効なRCU読み込みセクションの外でアクセスされると、`RCU_LOCKDEP_WARN()`の呼び出しが警告を出す。
 
-The mm code uses `RCU_LOCKDEP_WARN` liberally:
+mmのコードは`RCU_LOCKDEP_WARN`を多用している:
 
 ```c
 /* mm/mmap_lock.c — vma_start_read() */
@@ -450,34 +452,34 @@ RCU_LOCKDEP_WARN(!rcu_read_lock_held(), "no rcu read lock held");
 
 ### `lockdep_assert_in_rcu_read_lock()` {#lockdepassertinrcuread_lock}
 
-`include/linux/rcupdate.h` defines `lockdep_assert_in_rcu_read_lock()` (requires `CONFIG_PROVE_RCU`), which triggers a warning if called outside an RCU read section. Use this in new code that assumes RCU protection.
+`include/linux/rcupdate.h`は`lockdep_assert_in_rcu_read_lock()`（`CONFIG_PROVE_RCU`が必要）を定義しており、これはRCU読み込みセクションの外で呼ばれると警告を出す。RCUによる保護を前提とする新しいコードではこれを使うとよい。
 
-### Sparse and `__rcu` annotations {#sparse-and-__rcu-annotations}
+### sparseと`__rcu`アノテーション {#sparse-and-__rcu-annotations}
 
-Pointer fields that are RCU-protected are annotated `__rcu` in their declarations (e.g., `void __rcu *xa_head` in `struct xarray`). Building with `sparse` (`make C=1`) will warn if such a pointer is dereferenced without `rcu_dereference()`.
+RCUで保護されるポインタフィールドは、宣言で`__rcu`とアノテーションされる（例: `struct xarray`の`void __rcu *xa_head`）。`sparse`でビルドする（`make C=1`）と、そのようなポインタが`rcu_dereference()`なしで参照外しされた場合に警告が出る。
 
-### Common bugs in mm RCU code {#common-bugs-in-mm-rcu-code}
+### mmのRCUコードでよくあるバグ {#common-bugs-in-mm-rcu-code}
 
-**Sleeping inside `rcu_read_lock()`.**
-Classic RCU does not permit sleeping. In the page fault path, `lock_vma_under_rcu()` holds `rcu_read_lock()` only for the maple tree walk — it releases it before calling `handle_mm_fault()`. If a code path acquires `rcu_read_lock()` and then calls something that can sleep (memory allocation, file I/O, a mutex), `CONFIG_PROVE_RCU` will fire.
+**`rcu_read_lock()`の中でスリープする**。
+従来のRCUではスリープは許されない。ページフォールトパスでは、`lock_vma_under_rcu()`はmaple treeの走査の間だけ`rcu_read_lock()`を保持し、`handle_mm_fault()`を呼ぶ前に解放する。コードパスが`rcu_read_lock()`を取得した後にスリープしうるもの（メモリ割り当て、ファイルI/O、mutex）を呼ぶと、`CONFIG_PROVE_RCU`が発動する。
 
 ```
 BUG: sleeping function called from invalid context
 in_atomic(): 1, irqs_disabled(): 0, ...
 ```
 
-**Accessing VMA fields without a stable reference.**
-Reading `vma->vm_flags` or `vma->vm_file` under only `rcu_read_lock()` (without a successful `vma_start_read()`) is incorrect — those fields may be changing concurrently. The `SLAB_TYPESAFE_BY_RCU` guarantee only means the *memory* is not freed, not that the *fields* are stable.
+**安定した参照なしにVMAのフィールドにアクセスする**。
+`rcu_read_lock()`だけの下で（`vma_start_read()`の成功なしに）`vma->vm_flags`や`vma->vm_file`を読むのは誤りである。それらのフィールドは並行して変更されている可能性がある。`SLAB_TYPESAFE_BY_RCU`の保証は、*メモリ*が解放されないことを意味するだけで、*フィールド*が安定していることは意味しない。
 
-**Reuse confusion with `SLAB_TYPESAFE_BY_RCU`.**
-Because slab objects can be reused after a grace period, a reader that obtains a `vm_area_struct *` from the maple tree and then sleeps (outside the RCU section) may wake to find the same memory now describes a completely different VMA in a different `mm`. Always validate with `vma_start_read()` — it checks `vma->vm_mm == mm` and the lock sequence numbers.
+**`SLAB_TYPESAFE_BY_RCU`による再利用の混乱**。
+slabオブジェクトはグレースピリオド後に再利用されうるので、maple treeから`vm_area_struct *`を得た後に（RCUセクションの外で）スリープしたリーダーは、目覚めたときに同じメモリが別の`mm`のまったく別のVMAを表していることに気づくかもしれない。常に`vma_start_read()`で検証すること。この関数は`vma->vm_mm == mm`とロックシーケンス番号を確認する。
 
-**Forgetting `vma_end_read()` on all paths.**
-`vma_start_read()` increments `vm_refcnt`. Every successful return from `lock_vma_under_rcu()` must be balanced by exactly one `vma_end_read()`. Missing it leaks a reference, which eventually stalls any writer that needs to drain all readers (e.g., `munmap()`).
+**すべてのパスで`vma_end_read()`を忘れる**。
+`vma_start_read()`は`vm_refcnt`をインクリメントする。`lock_vma_under_rcu()`からの成功した戻りはすべて、ちょうど1回の`vma_end_read()`で釣り合わなければならない。これを忘れると参照がリークし、最終的にはすべてのリーダーを排出する必要のあるライター（例: `munmap()`）が停滞する。
 
 ---
 
-## Putting it together: a read fault on a normal VMA {#putting-it-together-a-read-fault-on-a-normal-vma}
+## まとめ: 通常のVMAでの読み込みフォールト {#putting-it-together-a-read-fault-on-a-normal-vma}
 
 ```
 User thread takes a page fault
@@ -497,38 +499,38 @@ User thread takes a page fault
 └─ vma_end_read(vma)               → decrements vm_refcnt
 ```
 
-No `mmap_lock` is taken in the common case. The VMA tree walk, the VMA stability, and the PTE update are each protected by the appropriate narrow-scope lock or RCU section.
+よくあるケースでは`mmap_lock`はまったく取得されない。VMAツリーの走査、VMAの安定性、PTEの更新は、それぞれ適切な狭い範囲のロックまたはRCUセクションによって保護される。
 
 ---
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Per-VMA Locks](per-vma-locks.md) — detailed coverage of `vm_lock_seq`, `vm_refcnt`, and the write-side protocol
-- [Maple Tree](maple-tree.md) — the RCU-safe B-tree that stores VMAs
-- [Page Tables](page-tables.md) — PTE locking, `pte_offset_map_lock()`, and page table page lifetime
-- [Page Cache](page-cache.md) — XArray-based folio storage and the broader file-backed fault path
+- [VMA単位のロック](per-vma-locks.md) — `vm_lock_seq`、`vm_refcnt`、書き込み側プロトコルの詳しい解説
+- [Maple Tree](maple-tree.md) — VMAを格納するRCUセーフなBツリー
+- [ページテーブル](page-tables.md) — PTEのロック、`pte_offset_map_lock()`、ページテーブル用pageの寿命
+- [ページキャッシュ](page-cache.md) — XArrayベースのfolio格納と、より広いファイルバックのフォールトパス
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `mmap_write_lock()` / `mmap_write_unlock()` and `vma_end_write_all()` that bumps `mm_lock_seq`
-- [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()` and `vma_start_read()` implementations
-- [include/linux/rcupdate.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/rcupdate.h) — `rcu_read_lock()`, `rcu_dereference()`, `call_rcu()`, `kfree_rcu()`, `synchronize_rcu()`
+- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `mmap_write_lock()` / `mmap_write_unlock()`と、`mm_lock_seq`を増やす`vma_end_write_all()`
+- [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()`と`vma_start_read()`の実装
+- [include/linux/rcupdate.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/rcupdate.h) — `rcu_read_lock()`、`rcu_dereference()`、`call_rcu()`、`kfree_rcu()`、`synchronize_rcu()`
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/RCU/whatisRCU.rst`](https://docs.kernel.org/RCU/whatisRCU.html) — the authoritative introduction to RCU semantics and the read-copy-update contract
-- [`Documentation/RCU/rcu_dereference.rst`](https://docs.kernel.org/RCU/rcu_dereference.html) — rules for safely dereferencing RCU-protected pointers
-- [`Documentation/RCU/Design/Requirements/Requirements.rst` — Sleepable RCU](https://docs.kernel.org/RCU/Design/Requirements/Requirements.html#sleepable-rcu) — when and why to use sleepable RCU (as used by MMU notifiers)
+- [`Documentation/RCU/whatisRCU.rst`](https://docs.kernel.org/RCU/whatisRCU.html) — RCUのセマンティクスとread-copy-updateの約束事についての公式な入門
+- [`Documentation/RCU/rcu_dereference.rst`](https://docs.kernel.org/RCU/rcu_dereference.html) — RCUで保護されたポインタを安全に参照外しするためのルール
+- [`Documentation/RCU/Design/Requirements/Requirements.rst` — Sleepable RCU](https://docs.kernel.org/RCU/Design/Requirements/Requirements.html#sleepable-rcu) — sleepable RCU（MMU notifierで使われるもの）をいつ、なぜ使うか
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [../locking/rcu.md](../locking/rcu.md) — general RCU concepts, quiescent states, and grace period mechanics
-- [per-vma-locks.md](per-vma-locks.md) — the per-VMA locking layer that sits above the RCU VMA lookup
+- [../locking/rcu.md](../locking/rcu.md) — RCUの一般的な概念、静止状態、グレースピリオドの仕組み
+- [per-vma-locks.md](per-vma-locks.md) — RCUによるVMA検索の上に位置する、VMA単位のロック層
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: What is RCU, fundamentally?](https://lwn.net/Articles/262464/) — Paul McKenney's definitive series on RCU design
-- [LWN: RCU usage in the Linux kernel](https://lwn.net/Articles/573424/) — survey of how subsystems use RCU, including memory management patterns
-- [LWN: `SLAB_TYPESAFE_BY_RCU`](https://lwn.net/Articles/878104/) — explains the subtle guarantee (type-safe, not value-stable) and common pitfalls
+- [LWN: What is RCU, fundamentally?](https://lwn.net/Articles/262464/) — Paul McKenneyによるRCU設計についての決定版シリーズ
+- [LWN: RCU usage in the Linux kernel](https://lwn.net/Articles/573424/) — メモリ管理のパターンを含む、各サブシステムがRCUをどう使っているかの概観
+- [LWN: `SLAB_TYPESAFE_BY_RCU`](https://lwn.net/Articles/878104/) — 微妙な保証（型安全であって値が安定しているわけではない）とよくある落とし穴の解説

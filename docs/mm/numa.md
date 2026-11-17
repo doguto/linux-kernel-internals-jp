@@ -1,10 +1,10 @@
-# NUMA Memory Management {#numa-memory-management}
+# NUMAのメモリ管理 {#numa-memory-management}
 
-> Managing memory across multiple nodes
+> 複数のノードにまたがるメモリを管理する
 
-## What Is NUMA? {#what-is-numa}
+## NUMAとは何か {#what-is-numa}
 
-NUMA (Non-Uniform Memory Access) describes systems where memory access time depends on which CPU accesses which memory. Each CPU has "local" memory (fast) and "remote" memory (slower).
+NUMA（Non-Uniform Memory Access）は、どのCPUがどのメモリにアクセスするかによってメモリアクセス時間が変わるシステムを指す。各CPUには「ローカル」メモリ（高速）と「リモート」メモリ（低速）がある。
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -26,33 +26,33 @@ CPU 0 accessing Node 1 memory: ~130-150ns (1.5-1.7x slower, varies by platform)
 (measured with Intel MLC; see Lameter, "NUMA: An Overview", ACM Queue 2013)
 ```
 
-## Why NUMA Matters {#why-numa-matters}
+## なぜNUMAが重要か {#why-numa-matters}
 
-### The Scalability Problem {#the-scalability-problem}
+### スケーラビリティの問題 {#the-scalability-problem}
 
-As systems grew beyond 4-8 CPUs, a single memory bus became a bottleneck. Every CPU competed for the same memory bandwidth.
+システムが4〜8 CPUを超えて大きくなるにつれ、単一のメモリバスがボトルネックになった。すべてのCPUが同じメモリ帯域を奪い合っていた。
 
-### NUMA as Solution {#numa-as-solution}
+### 解決策としてのNUMA {#numa-as-solution}
 
-NUMA divides memory into nodes, each with dedicated bandwidth. Local access is fast; remote access crosses an interconnect but the system scales.
+NUMAはメモリをノードに分割し、それぞれに専用の帯域を持たせる。ローカルアクセスは高速で、リモートアクセスはインターコネクトを経由するが、システムはスケールする。
 
-| System Type | CPUs | Memory Bandwidth |
+| システムの種類 | CPU数 | メモリ帯域 |
 |-------------|------|------------------|
-| UMA (single bus) | 1-8 | Shared, contended |
-| NUMA (2 nodes) | 8-32 | 2x bandwidth |
-| NUMA (8 nodes) | 32-128+ | 8x bandwidth |
+| UMA（単一バス） | 1-8 | 共有、競合あり |
+| NUMA（2ノード） | 8-32 | 2倍の帯域 |
+| NUMA（8ノード） | 32-128+ | 8倍の帯域 |
 
-## Linux NUMA Support {#linux-numa-support}
+## LinuxのNUMAサポート {#linux-numa-support}
 
-### Topology Discovery {#topology-discovery}
+### トポロジの検出 {#topology-discovery}
 
-Linux discovers NUMA topology from firmware (ACPI SRAT/SLIT tables):
+LinuxはファームウェアからNUMAトポロジを検出する（ACPIのSRAT/SLITテーブル）。
 
 ```bash
-# View NUMA topology
+# NUMA トポロジを表示する
 numactl --hardware
 
-# Example output:
+# 出力例:
 # available: 2 nodes (0-1)
 # node 0 cpus: 0 1 2 3 4 5 6 7
 # node 0 size: 65536 MB
@@ -62,82 +62,82 @@ numactl --hardware
 #   1:  21  10
 ```
 
-The distance matrix shows relative access latency (10 = local, higher = remote).
+距離行列は相対的なアクセスレイテンシを示す（10 = ローカル、それより大きい = リモート）。
 
-### Default Allocation Policy {#default-allocation-policy}
+### デフォルトの割り当てポリシー {#default-allocation-policy}
 
-By default, Linux allocates memory from the node where the task is running ("local allocation"):
+デフォルトでは、Linuxはタスクが実行されているノードからメモリを割り当てる（「ローカル割り当て」）。
 
 ```c
-/* Default: allocate from current node */
-void *ptr = malloc(size);  /* Goes to local node */
+/* デフォルト: 現在のノードから割り当てる */
+void *ptr = malloc(size);  /* ローカルノードに行く */
 ```
 
-## Memory Policies {#memory-policies}
+## メモリポリシー {#memory-policies}
 
-Linux provides fine-grained control over NUMA placement via memory policies.
+Linuxはメモリポリシーを通じて、NUMA配置をきめ細かく制御する手段を提供する。
 
-### Policy Types {#policy-types}
+### ポリシーの種類 {#policy-types}
 
-| Policy | Behavior |
+| ポリシー | 挙動 |
 |--------|----------|
-| `MPOL_DEFAULT` | Local allocation (system default) |
-| `MPOL_BIND` | Only allocate from specified nodes |
-| `MPOL_PREFERRED` | Prefer specified node, fall back to others |
-| `MPOL_INTERLEAVE` | Round-robin across specified nodes |
-| `MPOL_LOCAL` | Always allocate from local node |
+| `MPOL_DEFAULT` | ローカル割り当て（システムのデフォルト） |
+| `MPOL_BIND` | 指定されたノードからのみ割り当てる |
+| `MPOL_PREFERRED` | 指定されたノードを優先し、他にフォールバックする |
+| `MPOL_INTERLEAVE` | 指定されたノード間でラウンドロビンする |
+| `MPOL_LOCAL` | 常にローカルノードから割り当てる |
 
-### Setting Policies {#setting-policies}
+### ポリシーの設定 {#setting-policies}
 
-**Process-wide (set_mempolicy)**:
+**プロセス全体（set_mempolicy）**:
 ```c
 #include <numaif.h>
 
-unsigned long nodemask = 0x1;  /* Node 0 */
+unsigned long nodemask = 0x1;  /* ノード 0 */
 set_mempolicy(MPOL_BIND, &nodemask, sizeof(nodemask) * 8);
-/* All future allocations from node 0 only */
+/* 以降の割り当てはすべてノード 0 のみから */
 ```
 
-**Per-region (mbind)**:
+**領域ごと（mbind）**:
 ```c
 #include <numaif.h>
 
 void *ptr = mmap(...);
-unsigned long nodemask = 0x3;  /* Nodes 0 and 1 */
+unsigned long nodemask = 0x3;  /* ノード 0 と 1 */
 mbind(ptr, size, MPOL_INTERLEAVE, &nodemask,
       sizeof(nodemask) * 8, 0);
-/* This region interleaved across nodes 0-1 */
+/* この領域はノード 0-1 にインターリーブされる */
 ```
 
-**Command line (numactl)**:
+**コマンドライン（numactl）**:
 ```bash
-# Run on specific CPUs and memory nodes
+# 特定の CPU とメモリノードで実行する
 numactl --cpunodebind=0 --membind=0 ./myapp
 
-# Interleave memory across all nodes
+# すべてのノードにメモリをインターリーブする
 numactl --interleave=all ./myapp
 ```
 
-### When to Use Each Policy {#when-to-use-each-policy}
+### 各ポリシーをいつ使うか {#when-to-use-each-policy}
 
-| Use Case | Recommended Policy |
+| ユースケース | 推奨ポリシー |
 |----------|-------------------|
-| General applications | `MPOL_DEFAULT` (let kernel decide) |
-| Memory-bandwidth bound | `MPOL_INTERLEAVE` |
-| Latency-sensitive | `MPOL_BIND` to local node |
-| Large shared buffers | `MPOL_INTERLEAVE` |
-| Database buffer pools | `MPOL_BIND` or `MPOL_INTERLEAVE` |
+| 一般的なアプリケーション | `MPOL_DEFAULT`（カーネルに任せる） |
+| メモリ帯域律速 | `MPOL_INTERLEAVE` |
+| レイテンシ重視 | ローカルノードへの `MPOL_BIND` |
+| 大きな共有バッファ | `MPOL_INTERLEAVE` |
+| データベースのバッファプール | `MPOL_BIND` または `MPOL_INTERLEAVE` |
 
-## Automatic NUMA Balancing {#automatic-numa-balancing}
+## 自動NUMAバランシング {#automatic-numa-balancing}
 
-Since v3.8, Linux can automatically migrate pages to be closer to the CPUs accessing them.
+v3.8以降、Linuxはpageを、それにアクセスするCPUの近くへ自動的にマイグレーションできる。
 
-### How It Works {#how-it-works}
+### 仕組み {#how-it-works}
 
-1. Kernel periodically unmaps pages (marks PTEs as "NUMA hint faults")
-2. When accessed, a NUMA hint fault occurs
-3. Kernel records which node accessed the page
-4. If page is frequently accessed from remote node, migrate it
+1. カーネルは定期的にpageをアンマップする（PTEを「NUMAヒントフォールト」用にマークする）
+2. アクセスされると、NUMAヒントフォールトが発生する
+3. カーネルはどのノードがそのpageにアクセスしたかを記録する
+4. pageがリモートノードから頻繁にアクセスされていれば、マイグレーションする
 
 ```
 Page on Node 0, accessed by CPU on Node 1
@@ -155,36 +155,36 @@ Page on Node 0, accessed by CPU on Node 1
     Future accesses are local (fast)
 ```
 
-### Configuration {#configuration}
+### 設定 {#configuration}
 
 ```bash
-# Enable/disable NUMA balancing
+# NUMA バランシングの有効化/無効化
 cat /proc/sys/kernel/numa_balancing
 echo 1 > /proc/sys/kernel/numa_balancing
 
-# Scan period bounds (milliseconds between scans)
-cat /proc/sys/kernel/numa_balancing_scan_period_min_ms  # Min time between scans
-cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # Max time between scans
-# Kernel adjusts scan rate within these bounds based on migration activity
+# スキャン周期の上下限（スキャン間隔のミリ秒）
+cat /proc/sys/kernel/numa_balancing_scan_period_min_ms  # スキャン間の最小時間
+cat /proc/sys/kernel/numa_balancing_scan_period_max_ms  # スキャン間の最大時間
+# カーネルはマイグレーションの活動に基づき、この範囲内でスキャン頻度を調整する
 ```
 
-### Trade-offs {#trade-offs}
+### トレードオフ {#trade-offs}
 
-**Benefits**:
+**利点**:
 
-- No application changes needed
-- Adapts to changing access patterns
-- Helps poorly-placed workloads
+- アプリケーションの変更が不要
+- 変化するアクセスパターンに適応する
+- 配置の悪いワークロードを助ける
 
-**Costs**:
+**コスト**:
 
-- CPU overhead from fault handling
-- Migration overhead
-- Can fight with explicit policies
+- フォールト処理によるCPUオーバーヘッド
+- マイグレーションのオーバーヘッド
+- 明示的なポリシーと衝突しうる
 
-## Memory Tiering (CXL Era) {#memory-tiering-cxl-era}
+## メモリ階層化（CXL時代） {#memory-tiering-cxl-era}
 
-Modern systems add new memory tiers via CXL (Compute Express Link):
+現代のシステムはCXL（Compute Express Link）によって新しいメモリ階層を追加する。
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -196,166 +196,166 @@ Modern systems add new memory tiers via CXL (Compute Express Link):
 └─────────────────────────────────────────────┘
 ```
 
-Linux treats CXL memory as additional NUMA nodes with higher distances. The kernel can demote cold pages to slower tiers and promote hot pages to faster tiers.
+LinuxはCXLメモリを、距離の大きい追加のNUMAノードとして扱う。カーネルはコールドなpageを低速な階層へ降格（demote）し、ホットなpageを高速な階層へ昇格（promote）できる。
 
 ```bash
-# View memory tiers (v6.1+)
+# メモリ階層を表示する（v6.1 以降）
 cat /sys/devices/virtual/memory_tiering/memory_tier*/nodelist
 ```
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
-### Per-Node Statistics {#per-node-statistics}
+### ノードごとの統計 {#per-node-statistics}
 
 ```bash
-# Memory per node
+# ノードごとのメモリ
 cat /sys/devices/system/node/node*/meminfo
 
-# NUMA hits/misses
+# NUMA のヒット/ミス
 cat /proc/vmstat | grep numa
-# numa_hit        - Allocations satisfied from preferred node
-# numa_miss       - Allocations from non-preferred node
-# numa_foreign    - Pages intended for this node, placed elsewhere
-# numa_interleave - Interleaved allocations
-# numa_local      - Local allocations
-# numa_other      - Non-local allocations
+# numa_hit        - 優先ノードで満たされた割り当て
+# numa_miss       - 優先ノード以外からの割り当て
+# numa_foreign    - このノード向けだったが他に配置された page
+# numa_interleave - インターリーブされた割り当て
+# numa_local      - ローカルな割り当て
+# numa_other      - ローカルでない割り当て
 ```
 
-### Per-Process NUMA Map {#per-process-numa-map}
+### プロセスごとのNUMAマップ {#per-process-numa-map}
 
 ```bash
-# Show which nodes hold a process's pages
+# プロセスの page がどのノードにあるかを表示する
 cat /proc/<pid>/numa_maps
 
-# Example:
+# 例:
 # 7f8a1000 default file=/lib/libc.so anon=1 dirty=1 N0=1
 # 7f8a2000 interleave:0-1 anon=512 N0=256 N1=256
 ```
 
-## Evolution {#evolution}
+## 変遷 {#evolution}
 
-### Early NUMA (v2.5-2.6, 2003-2004) {#early-numa-v25-26-2003-2004}
+### 初期のNUMA（v2.5-2.6、2003-2004年） {#early-numa-v25-26-2003-2004}
 
-Basic NUMA support added by SGI, IBM and others for their large systems. Memory policies ([`set_mempolicy`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html), `mbind`) [introduced by Andi Kleen](https://lwn.net/Articles/79100/) (see also [Kleen's NUMA API paper](https://halobates.de/numaapi3.pdf)). The mempolicy code predates git history (included in initial v2.6.12 import).
+SGI、IBMなどが自社の大規模システムのために基本的なNUMAサポートを追加した。メモリポリシー（[`set_mempolicy`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html)、`mbind`）は[Andi Kleenによって導入された](https://lwn.net/Articles/79100/)（[KleenのNUMA API論文](https://halobates.de/numaapi3.pdf)も参照）。mempolicyのコードはgitの歴史より古い（v2.6.12の最初のインポートに含まれている）。
 
-### cpusets Integration (v2.6.16, 2005) {#cpusets-integration-v2616-2005}
+### cpusetsとの統合（v2.6.16、2005年） {#cpusets-integration-v2616-2005}
 
-**Commit**: [68860ec10bcc](https://git.kernel.org/linus/68860ec10bcc) ("cpusets: automatic numa mempolicy rebinding")
+**コミット**: [68860ec10bcc](https://git.kernel.org/linus/68860ec10bcc) ("cpusets: automatic numa mempolicy rebinding")
 
-**Author**: Paul Jackson (SGI)
+**作者**: Paul Jackson (SGI)
 
-*Note: Pre-2008 LKML archives on lore.kernel.org are sparse. The commit message documents the design.*
+*注: lore.kernel.org上の2008年以前のLKMLアーカイブはまばらである。コミットメッセージに設計が記されている。*
 
-cpusets allowed constraining processes to specific nodes, enabling NUMA-aware container isolation.
+cpusetsによってプロセスを特定のノードに制約できるようになり、NUMAを意識したコンテナの分離が可能になった。
 
-### Automatic NUMA Balancing (v3.8, 2013) {#automatic-numa-balancing-v38-2013}
+### 自動NUMAバランシング（v3.8、2013年） {#automatic-numa-balancing-v38-2013}
 
-**Merge**: [3d59eebc5e13](https://git.kernel.org/linus/3d59eebc5e13) ("Merge tag 'balancenuma-v11'")
+**マージ**: [3d59eebc5e13](https://git.kernel.org/linus/3d59eebc5e13) ("Merge tag 'balancenuma-v11'")
 
-**Authors**: Mel Gorman, Rik van Riel, Ingo Molnar, Peter Zijlstra
+**作者**: Mel Gorman, Rik van Riel, Ingo Molnar, Peter Zijlstra
 
-*Note: Pre-2013 LKML archives on lore.kernel.org have limited indexing. See [LWN article](https://lwn.net/Articles/568870/) for design discussion.*
+*注: lore.kernel.org上の2013年以前のLKMLアーカイブはインデックスが限られている。設計の議論については[LWNの記事](https://lwn.net/Articles/568870/)を参照。*
 
-Kernel-level automatic page migration based on access patterns.
+アクセスパターンに基づくカーネルレベルの自動pageマイグレーション。
 
-### Memory Tiering (v5.18+, 2022) {#memory-tiering-v518-2022}
+### メモリ階層化（v5.18以降、2022年） {#memory-tiering-v518-2022}
 
-**Commit**: [c574bbe91703](https://git.kernel.org/linus/c574bbe91703) ("NUMA balancing: optimize page placement for memory tiering system") | [LKML](https://lore.kernel.org/linux-mm/20220128082751.593478-1-ying.huang@intel.com/)
+**コミット**: [c574bbe91703](https://git.kernel.org/linus/c574bbe91703) ("NUMA balancing: optimize page placement for memory tiering system") | [LKML](https://lore.kernel.org/linux-mm/20220128082751.593478-1-ying.huang@intel.com/)
 
-**Author**: Huang Ying (Intel)
+**作者**: Huang Ying (Intel)
 
-Support for heterogeneous memory (CXL, persistent memory) as additional NUMA tiers with automatic promotion/demotion. Further refined in v6.1 with explicit memory tier framework ([992bf77591cb](https://git.kernel.org/linus/992bf77591cb)).
+異種メモリ（CXL、永続メモリ）を、自動的な昇格/降格を伴う追加のNUMA階層としてサポートする。v6.1で明示的なメモリ階層フレームワークによってさらに改良された（[992bf77591cb](https://git.kernel.org/linus/992bf77591cb)）。
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Remote Memory Pressure {#remote-memory-pressure}
+### リモートメモリへの圧力 {#remote-memory-pressure}
 
-Allocations forced to remote nodes due to local exhaustion.
+ローカルの枯渇により、割り当てがリモートノードに強制される。
 
-**Symptoms**: High `numa_miss` in `/proc/vmstat`
+**症状**: `/proc/vmstat` の `numa_miss` が高い
 
-**Solutions**:
+**解決策**:
 
-- Balance workload memory across nodes
-- Use `MPOL_INTERLEAVE` for large allocations
-- Reserve memory on each node
+- ワークロードのメモリをノード間でバランスさせる
+- 大きな割り当てに `MPOL_INTERLEAVE` を使う
+- 各ノードでメモリを予約する
 
-### NUMA Balancing Overhead {#numa-balancing-overhead}
+### NUMAバランシングのオーバーヘッド {#numa-balancing-overhead}
 
-Excessive migration and fault handling.
+過剰なマイグレーションとフォールト処理。
 
-**Symptoms**: High CPU in `task_numa_fault`, many page migrations
+**症状**: `task_numa_fault` でのCPU使用率が高く、pageのマイグレーションが多い
 
-**Solutions**:
+**解決策**:
 
-- Disable if workload has stable access patterns: `echo 0 > /proc/sys/kernel/numa_balancing`
-- Tune scan rates
-- Use explicit memory policies
+- ワークロードのアクセスパターンが安定しているなら無効にする: `echo 0 > /proc/sys/kernel/numa_balancing`
+- スキャン頻度をチューニングする
+- 明示的なメモリポリシーを使う
 
-### Unbalanced Node Usage {#unbalanced-node-usage}
+### ノード使用量の偏り {#unbalanced-node-usage}
 
-One node exhausted while others have free memory.
+他のノードに空きメモリがあるのに、1つのノードが枯渇する。
 
-**Debug**: Check `/sys/devices/system/node/node*/meminfo`
+**デバッグ**: `/sys/devices/system/node/node*/meminfo` を確認する
 
-**Solutions**:
+**解決策**:
 
-- Use `MPOL_INTERLEAVE` for large allocations
-- Improve workload distribution
+- 大きな割り当てに `MPOL_INTERLEAVE` を使う
+- ワークロードの分散を改善する
 
-## References {#references}
+## リファレンス {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | Memory policy implementation |
-| [`kernel/sched/fair.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) | NUMA balancing in scheduler |
-| [`mm/migrate.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) | Page migration |
+| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | メモリポリシーの実装 |
+| [`kernel/sched/fair.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) | スケジューラ内のNUMAバランシング |
+| [`mm/migrate.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) | pageのマイグレーション |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/numa_memory_policy.rst`](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)
 
-### Mailing List Discussions {#mailing-list-discussions}
+### メーリングリストでの議論 {#mailing-list-discussions}
 
-- [Automatic NUMA Balancing V3 (RFC)](https://lore.kernel.org/linux-mm/20121116160852.GA4302@gmail.com/t/) - Mel Gorman's 2012 RFC laying out the four-stage design
-- [NUMA balancing sysctls documentation](https://lore.kernel.org/lkml/1373065742-9753-2-git-send-email-mgorman@suse.de/) - July 2013 patch series
+- [Automatic NUMA Balancing V3 (RFC)](https://lore.kernel.org/linux-mm/20121116160852.GA4302@gmail.com/t/) - 4段階の設計を示したMel Gormanの2012年のRFC
+- [NUMA balancing sysctls documentation](https://lore.kernel.org/lkml/1373065742-9753-2-git-send-email-mgorman@suse.de/) - 2013年7月のパッチシリーズ
 
-### Related {#related}
+### 関連 {#related}
 
-- [page-allocator](page-allocator.md) - Per-node zones
-- [reclaim](reclaim.md) - Per-node reclaim
-- [glossary](glossary.md) - NUMA terminology
+- [page-allocator](page-allocator.md) - ノードごとのゾーン
+- [reclaim](reclaim.md) - ノードごとの回収
+- [glossary](glossary.md) - NUMAの用語
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `set_mempolicy()`, `mbind()`, `MPOL_BIND`, `MPOL_INTERLEAVE`, and the full memory policy implementation
-- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — automatic NUMA balancing: `task_numa_work()`, `task_numa_fault()`, `task_numa_migrate()`
-- [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()` and the page migration engine
+- [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `set_mempolicy()`、`mbind()`、`MPOL_BIND`、`MPOL_INTERLEAVE`、およびメモリポリシーの実装全体
+- [kernel/sched/fair.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/fair.c) — 自動NUMAバランシング: `task_numa_work()`、`task_numa_fault()`、`task_numa_migrate()`
+- [mm/migrate.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/migrate.c) — `migrate_misplaced_folio()` とpageマイグレーションのエンジン
 
-### Kernel documentation {#kernel-documentation_1}
+### カーネルドキュメント {#kernel-documentation_1}
 
-- `Documentation/admin-guide/mm/numa_memory_policy.rst` — official reference for memory policy modes, `set_mempolicy(2)`, `mbind(2)`, and numactl integration ([rendered](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html))
+- `Documentation/admin-guide/mm/numa_memory_policy.rst` — メモリポリシーのモード、`set_mempolicy(2)`、`mbind(2)`、numactlとの連携についての公式リファレンス（[レンダリング版](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)）
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`numactl(8)`](https://man7.org/linux/man-pages/man8/numactl.8.html) — command-line interface for CPU and memory node binding
-- [`set_mempolicy(2)`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html) — process-wide NUMA memory policy
-- [`mbind(2)`](https://man7.org/linux/man-pages/man2/mbind.2.html) — per-region NUMA memory policy
+- [`numactl(8)`](https://man7.org/linux/man-pages/man8/numactl.8.html) — CPUとメモリノードのバインドのためのコマンドラインインターフェース
+- [`set_mempolicy(2)`](https://man7.org/linux/man-pages/man2/set_mempolicy.2.html) — プロセス全体のNUMAメモリポリシー
+- [`mbind(2)`](https://man7.org/linux/man-pages/man2/mbind.2.html) — 領域ごとのNUMAメモリポリシー
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [NUMA in a hurry](https://lwn.net/Articles/486858/) — overview of NUMA concepts and the Linux memory policy API
-- [Automatic NUMA balancing](https://lwn.net/Articles/568870/) — design and implementation of the kernel's automatic page migration (v3.8)
-- [Memory tiering and CXL](https://lwn.net/Articles/898766/) — how CXL expands the NUMA node model with explicit memory tiers
+- [NUMA in a hurry](https://lwn.net/Articles/486858/) — NUMAの概念とLinuxのメモリポリシーAPIの概要
+- [Automatic NUMA balancing](https://lwn.net/Articles/568870/) — カーネルの自動pageマイグレーションの設計と実装（v3.8）
+- [Memory tiering and CXL](https://lwn.net/Articles/898766/) — CXLが明示的なメモリ階層によってNUMAノードモデルをどう拡張するか
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [NUMA Topology Discovery: ACPI SRAT and SLIT](numa-acpi-srat.md) — how firmware tables are parsed to build the node topology
-- [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how the kernel quantifies and uses inter-node distances
-- [NUMA Zonelist Construction and Fallback Ordering](numa-zonelist.md) — how the page allocator's fallback list is built from NUMA distances
-- [NUMA Effects on Memory Reclaim](numa-reclaim.md) — per-node kswapd, watermarks, and NUMA balancing interaction
-- [Zone Reclaim Policy](zone-reclaim.md) — `vm.zone_reclaim_mode` and when local reclaim beats remote allocation
+- [NUMAトポロジの検出: ACPI SRATとSLIT](numa-acpi-srat.md) — ファームウェアのテーブルがどう解析されてノードトポロジが構築されるか
+- [NUMA距離とソケット間レイテンシ](numa-distance.md) — カーネルがノード間距離をどう定量化し、利用するか
+- [NUMAのzonelist構築とフォールバック順序](numa-zonelist.md) — ページアロケータのフォールバックリストがNUMA距離からどう構築されるか
+- [NUMAがメモリ回収に与える影響](numa-reclaim.md) — ノードごとのkswapd、ウォーターマーク、NUMAバランシングとの相互作用
+- [ゾーン回収ポリシー](zone-reclaim.md) — `vm.zone_reclaim_mode` と、ローカルでの回収がリモート割り当てに勝るのはいつか

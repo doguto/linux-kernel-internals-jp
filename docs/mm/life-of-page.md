@@ -1,44 +1,44 @@
-# Life of a page {#life-of-a-page}
+# pageの一生 {#life-of-a-page}
 
-> Following a physical page from allocation through reclaim and reuse
+> 物理pageを割り当てから回収、そして再利用まで追いかける
 
-## The journey of a page {#the-journey-of-a-page}
+## pageの旅路 {#the-journey-of-a-page}
 
-A physical page in Linux leads an eventful life. It's born in the buddy allocator, assigned to serve a process or cache, tracked for activity, and eventually reclaimed when memory runs low. This document follows that journey.
+Linuxの物理pageは波乱に満ちた一生を送る。buddyアロケータの中で生まれ、プロセスやキャッシュのために割り当てられ、アクティビティを追跡され、最終的にはメモリが不足したときに回収される。本ドキュメントはその旅路を追う。
 
 ```mermaid
 flowchart TD
-    subgraph lifecycle["Page Lifecycle"]
-        FREE["Free Pool<br/>(Buddy Allocator)"]
-        ACTIVE["Active Use"]
-        INACTIVE["Inactive LRU"]
-        RECLAIM["Reclaim Decision"]
-        SWAP["Swap Out"]
-        SWAPSPACE["Swap Space"]
+    subgraph lifecycle["pageのライフサイクル"]
+        FREE["空きプール<br/>(buddyアロケータ)"]
+        ACTIVE["アクティブに使用中"]
+        INACTIVE["非アクティブLRU"]
+        RECLAIM["回収の判断"]
+        SWAP["スワップアウト"]
+        SWAPSPACE["スワップ領域"]
 
         FREE -->|"alloc_pages()"| ACTIVE
         ACTIVE --> INACTIVE
         INACTIVE --> RECLAIM
         RECLAIM -->|"free_pages()"| FREE
-        ACTIVE -->|"anonymous page"| SWAP
+        ACTIVE -->|"匿名page"| SWAP
         RECLAIM --> SWAP
         SWAP --> SWAPSPACE
     end
 ```
 
-## Birth: Page allocation {#birth-page-allocation}
+## 誕生: pageの割り当て {#birth-page-allocation}
 
-Every page's life begins in the buddy allocator's free lists. When the kernel needs a page - for a process, page cache, or kernel data structure - it calls [`alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c):
+すべてのpageの一生はbuddyアロケータのフリーリストから始まる。カーネルがpageを必要とするとき（プロセス用、ページキャッシュ用、カーネルのデータ構造用など）、[`alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)を呼び出す:
 
 ```c
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
 ```
 
-### From free list to assigned {#from-free-list-to-assigned}
+### フリーリストから割り当て済みへ {#from-free-list-to-assigned}
 
 ```mermaid
 flowchart TD
-    subgraph buddy["Buddy Allocator Free Lists"]
+    subgraph buddy["buddyアロケータのフリーリスト"]
         O0["Order 0: [page][page][page]..."]
         O1["Order 1: [    ][    ]..."]
         O2["..."]
@@ -46,88 +46,88 @@ flowchart TD
 
     buddy -->|"alloc_pages(GFP_USER, 0)"| page
 
-    subgraph page["struct page (Fresh)"]
+    subgraph page["struct page (新品)"]
         P1["flags = 0"]
         P2["_refcount = 1"]
-        P3["_mapcount = -1 (unmapped)"]
+        P3["_mapcount = -1 (未マップ)"]
         P4["mapping = NULL"]
         P5["index = 0"]
     end
 ```
 
-The page starts with a clean slate: refcount of 1 (the allocator holds it), no mappings, no flags indicating special state.
+pageはまっさらな状態から始まる。refcountは1（アロケータが保持している）、マッピングはなく、特別な状態を示すフラグも立っていない。
 
-### Page initialization {#page-initialization}
+### pageの初期化 {#page-initialization}
 
-Depending on use, the page gets initialized differently:
+用途に応じて、pageは異なる方法で初期化される:
 
-| Use Case | Initialization |
+| 用途 | 初期化 |
 |----------|----------------|
-| Anonymous (heap/stack) | Zeroed, added to anon rmap |
-| Page cache | Linked to file's address_space |
-| Slab object | Added to slab cache's freelist |
-| Kernel buffer | May or may not be zeroed |
+| 匿名（ヒープ/スタック） | ゼロクリアされ、匿名rmapに追加される |
+| ページキャッシュ | ファイルのaddress_spaceにリンクされる |
+| slabオブジェクト | slabキャッシュのフリーリストに追加される |
+| カーネルバッファ | ゼロクリアされる場合もされない場合もある |
 
-For anonymous pages (the most common case from [malloc](life-of-malloc.md)), the kernel zeros the page and sets up reverse mappings:
+匿名page（[malloc](life-of-malloc.md)から生じる最も一般的なケース）では、カーネルはpageをゼロクリアし、逆マッピングを設定する:
 
 ```c
-// From mm/memory.c do_anonymous_page()
+// mm/memory.c の do_anonymous_page() より
 folio = vma_alloc_zeroed_movable_folio(vma, addr);
 folio_add_new_anon_rmap(folio, vma, addr);
-folio_add_lru(folio);  // Add to LRU for tracking
+folio_add_lru(folio);  // 追跡のためにLRUに追加
 ```
 
-## The page structure {#the-page-structure}
+## page構造体 {#the-page-structure}
 
-Every physical page frame is represented by a `struct page` (or `struct folio` for compound pages):
+すべての物理ページフレームは`struct page`（複合pageの場合は`struct folio`）で表現される:
 
 ```c
-// Simplified from include/linux/mm_types.h
+// include/linux/mm_types.h を簡略化
 struct page {
-    unsigned long flags;        // Page state flags (PG_locked, PG_dirty, etc.)
-    atomic_t _refcount;         // Reference count
-    atomic_t _mapcount;         // How many page tables map this page
-    struct address_space *mapping;  // Owner (file or anon_vma)
-    pgoff_t index;              // Offset within mapping
-    struct list_head lru;       // LRU list linkage
-    // ... many more fields via unions
+    unsigned long flags;        // pageの状態フラグ (PG_locked, PG_dirty など)
+    atomic_t _refcount;         // 参照カウント
+    atomic_t _mapcount;         // このpageをマップしているページテーブルの数
+    struct address_space *mapping;  // 所有者 (ファイルまたは anon_vma)
+    pgoff_t index;              // マッピング内のオフセット
+    struct list_head lru;       // LRUリストへのリンク
+    // ... unionを介したさらに多くのフィールド
 };
 ```
 
-### Key page flags {#key-page-flags}
+### 主要なpageフラグ {#key-page-flags}
 
-Flags track the page's state through its lifecycle:
+フラグはライフサイクルを通じてpageの状態を追跡する:
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |------|---------|
-| `PG_locked` | Page is locked for I/O or other exclusive operation |
-| `PG_referenced` | Page was recently accessed |
-| `PG_uptodate` | Page content is valid |
-| `PG_dirty` | Page modified, needs writeback |
-| `PG_lru` | Page is on an LRU list |
-| `PG_active` | Page is on active LRU list |
-| `PG_swapbacked` | Page can be swapped (anonymous) |
-| `PG_swapcache` | Page is in swap cache |
-| `PG_writeback` | Page is being written to disk |
-| `PG_reclaim` | Page is being reclaimed |
+| `PG_locked` | I/Oなどの排他的操作のためにpageがロックされている |
+| `PG_referenced` | pageが最近アクセスされた |
+| `PG_uptodate` | pageの内容が有効である |
+| `PG_dirty` | pageが変更されており、ライトバックが必要 |
+| `PG_lru` | pageがLRUリスト上にある |
+| `PG_active` | pageがアクティブLRUリスト上にある |
+| `PG_swapbacked` | pageをスワップできる（匿名） |
+| `PG_swapcache` | pageがスワップキャッシュ内にある |
+| `PG_writeback` | pageをディスクに書き込み中 |
+| `PG_reclaim` | pageを回収中 |
 
-View a page's flags in debugfs:
+debugfsでpageのフラグを確認する:
 
 ```bash
-# For a specific PFN (page frame number)
-cat /sys/kernel/debug/page_owner  # If CONFIG_PAGE_OWNER enabled
+# 特定のPFN (ページフレーム番号) について
+cat /sys/kernel/debug/page_owner  # CONFIG_PAGE_OWNER が有効な場合
 ```
 
-### Reference counting {#reference-counting}
+### 参照カウント {#reference-counting}
 
-The page's `_refcount` tracks how many users hold the page:
+pageの`_refcount`は、何人の利用者がpageを保持しているかを追跡する:
 
 ```mermaid
 flowchart LR
-    subgraph refcount["_refcount transitions"]
-        R0["0: Free in buddy allocator"]
-        R1["1: Allocated, single owner"]
-        R2["2+: Multiple references"]
+    subgraph refcount["_refcount の遷移"]
+        R0["0: buddyアロケータ内で空き"]
+        R1["1: 割り当て済み、所有者は1つ"]
+        R2["2+: 複数の参照"]
     end
 
     R0 -->|"alloc_pages()"| R1
@@ -136,273 +136,273 @@ flowchart LR
     R1 -->|"put_page()"| R0
 ```
 
-The [`_mapcount`](https://lwn.net/Articles/974223/) tracks page table mappings specifically (see [`include/linux/mm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h)):
+[`_mapcount`](https://lwn.net/Articles/974223/)は特にページテーブルのマッピングを追跡する（[`include/linux/mm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h)を参照）:
 
-- `-1`: Not mapped in any page table
-- `0`: Mapped in exactly one page table
-- `N`: Mapped in N+1 page tables (shared)
+- `-1`: どのページテーブルにもマップされていない
+- `0`: ちょうど1つのページテーブルにマップされている
+- `N`: N+1個のページテーブルにマップされている（共有）
 
-## Active use: Working set {#active-use-working-set}
+## アクティブな使用: ワーキングセット {#active-use-working-set}
 
-Once allocated and mapped, the page enters the working set. The kernel tracks access patterns to make reclaim decisions later.
+割り当てられてマップされると、pageはワーキングセットに入る。カーネルは後の回収判断のためにアクセスパターンを追跡する。
 
-### LRU lists {#lru-lists}
+### LRUリスト {#lru-lists}
 
-Pages are organized into LRU (Least Recently Used) lists per memory node:
+pageはメモリノードごとのLRU（Least Recently Used）リストに整理される:
 
 ```mermaid
 flowchart TD
-    subgraph node0["Node 0 LRU Lists"]
-        subgraph anon["Anonymous Pages"]
-            AA["Active Anonymous<br/>[page]─[page]─[page]─[page]"]
-            IA["Inactive Anonymous<br/>[page]─[page]─[page]─[page]"]
-            IA -->|"promote"| AA
-            IA -->|"reclaim"| R1["Reclaim"]
+    subgraph node0["Node 0 のLRUリスト"]
+        subgraph anon["匿名page"]
+            AA["アクティブ匿名<br/>[page]─[page]─[page]─[page]"]
+            IA["非アクティブ匿名<br/>[page]─[page]─[page]─[page]"]
+            IA -->|"昇格"| AA
+            IA -->|"回収"| R1["回収"]
         end
-        subgraph file["File Pages"]
-            AF["Active File<br/>[page]─[page]─[page]"]
-            IF["Inactive File<br/>[page]─[page]─[page]─[page]"]
-            IF -->|"promote"| AF
-            IF -->|"reclaim"| R2["Reclaim"]
+        subgraph file["ファイルpage"]
+            AF["アクティブファイル<br/>[page]─[page]─[page]"]
+            IF["非アクティブファイル<br/>[page]─[page]─[page]─[page]"]
+            IF -->|"昇格"| AF
+            IF -->|"回収"| R2["回収"]
         end
     end
 ```
 
-Pages move between lists based on access:
+pageはアクセス状況に応じてリスト間を移動する:
 
-1. **New pages**: Start on inactive list
-2. **Accessed on inactive**: Get `PG_referenced` flag set
-3. **Accessed again**: Promoted to active list
-4. **Active but not accessed**: Demoted to inactive
-5. **Inactive and not accessed**: Candidates for reclaim
+1. **新しいpage**: 非アクティブリストから始まる
+2. **非アクティブ上でアクセスされた**: `PG_referenced`フラグがセットされる
+3. **再びアクセスされた**: アクティブリストに昇格する
+4. **アクティブだがアクセスされない**: 非アクティブに降格する
+5. **非アクティブでアクセスされない**: 回収の候補になる
 
-### The referenced flag dance {#the-referenced-flag-dance}
+### referencedフラグのダンス {#the-referenced-flag-dance}
 
-The `PG_referenced` flag implements a second-chance algorithm:
+`PG_referenced`フラグはセカンドチャンスアルゴリズムを実装している:
 
 ```mermaid
 flowchart LR
-    subgraph first["First access"]
-        A1["PG_referenced=0"] -->|"access"| A2["PG_referenced=1"]
+    subgraph first["1回目のアクセス"]
+        A1["PG_referenced=0"] -->|"アクセス"| A2["PG_referenced=1"]
     end
 
-    subgraph second["Second access while referenced"]
-        B1["PG_referenced=1"] -->|"access"| B2["Move to Active"]
+    subgraph second["referenced状態での2回目のアクセス"]
+        B1["PG_referenced=1"] -->|"アクセス"| B2["アクティブへ移動"]
     end
 
-    subgraph scan["Reclaim scan"]
-        C1["PG_referenced=1"] -->|"scan"| C2["PG_referenced=0<br/>(gets second chance)"]
+    subgraph scan["回収スキャン"]
+        C1["PG_referenced=1"] -->|"スキャン"| C2["PG_referenced=0<br/>(セカンドチャンスを得る)"]
     end
 ```
 
-This prevents single accesses from keeping cold pages in memory while still protecting genuinely hot pages.
+これにより、1回きりのアクセスでコールドなpageがメモリに居座ることを防ぎつつ、本当にホットなpageは保護される。
 
 ### Multi-Gen LRU (MGLRU) {#multi-gen-lru-mglru}
 
-Kernel v6.1 introduced [MGLRU](https://docs.kernel.org/admin-guide/mm/multigen_lru.html) as an alternative to the classic two-list model ([commit ec1c86b25f4b](https://git.kernel.org/linus/ec1c86b25f4b), [LWN coverage](https://lwn.net/Articles/910608/)):
+カーネルv6.1は、従来の2リストモデルの代替として[MGLRU](https://docs.kernel.org/admin-guide/mm/multigen_lru.html)を導入した（[commit ec1c86b25f4b](https://git.kernel.org/linus/ec1c86b25f4b)、[LWNの記事](https://lwn.net/Articles/910608/)）:
 
 ```mermaid
 flowchart LR
-    subgraph classic["Classic LRU"]
-        CA["Active"] --> CI["Inactive"] --> CR["Reclaim"]
+    subgraph classic["従来のLRU"]
+        CA["アクティブ"] --> CI["非アクティブ"] --> CR["回収"]
     end
 
     subgraph mglru["MGLRU"]
-        G3["Gen 3<br/>(newest)"] --> G2["Gen 2"] --> G1["Gen 1"] --> G0["Gen 0<br/>(oldest)"]
-        G0 --> MR["Reclaim"]
+        G3["Gen 3<br/>(最新)"] --> G2["Gen 2"] --> G1["Gen 1"] --> G0["Gen 0<br/>(最古)"]
+        G0 --> MR["回収"]
     end
 ```
 
-MGLRU uses multiple generations instead of two lists, providing finer-grained aging and better performance under memory pressure.
+MGLRUは2つのリストの代わりに複数の世代を使い、よりきめ細かいエイジングとメモリ逼迫時のより良い性能を提供する。
 
 ```bash
-# Check if MGLRU is enabled
+# MGLRU が有効か確認する
 cat /sys/kernel/mm/lru_gen/enabled
-# 0x0007 = fully enabled
+# 0x0007 = 完全に有効
 ```
 
-See [page reclaim](reclaim.md) for details on MGLRU.
+MGLRUの詳細は[page回収](reclaim.md)を参照。
 
-## Reclaim: The page's twilight {#reclaim-the-pages-twilight}
+## 回収: pageの黄昏 {#reclaim-the-pages-twilight}
 
-When memory runs low, the kernel must reclaim pages. A page's fate depends on its type and state.
+メモリが不足すると、カーネルはpageを回収しなければならない。pageの運命はその種類と状態によって決まる。
 
-### The reclaim decision tree {#the-reclaim-decision-tree}
+### 回収の決定木 {#the-reclaim-decision-tree}
 
 ```mermaid
 flowchart TD
-    START["Is page reclaimable?"] --> LOCKED{"Page locked?"}
-    LOCKED -->|"yes"| SKIP["Skip (in use)"]
-    LOCKED -->|"no"| DIRTY{"Page dirty?"}
-    DIRTY -->|"yes"| WRITEBACK["Writeback first"]
-    DIRTY -->|"no"| MAPPED{"Page mapped?"}
-    MAPPED -->|"yes"| UNMAP["Unmap from page tables"]
-    MAPPED -->|"no"| ANON{"Anonymous page?"}
-    ANON -->|"yes"| SWAPOUT["Swap out (if swap available)"]
-    ANON -->|"no (file page)"| FREE["Free the page"]
+    START["pageは回収可能か?"] --> LOCKED{"pageはロック中?"}
+    LOCKED -->|"はい"| SKIP["スキップ (使用中)"]
+    LOCKED -->|"いいえ"| DIRTY{"pageはdirty?"}
+    DIRTY -->|"はい"| WRITEBACK["先にライトバック"]
+    DIRTY -->|"いいえ"| MAPPED{"pageはマップ済み?"}
+    MAPPED -->|"はい"| UNMAP["ページテーブルからアンマップ"]
+    MAPPED -->|"いいえ"| ANON{"匿名page?"}
+    ANON -->|"はい"| SWAPOUT["スワップアウト (スワップがあれば)"]
+    ANON -->|"いいえ (ファイルpage)"| FREE["pageを解放"]
 ```
 
-### File-backed pages: Easy reclaim {#file-backed-pages-easy-reclaim}
+### ファイルバックpage: 回収は簡単 {#file-backed-pages-easy-reclaim}
 
-File pages (page cache) are relatively easy to reclaim:
+ファイルpage（ページキャッシュ）は比較的簡単に回収できる:
 
 ```mermaid
 flowchart LR
-    subgraph clean["Clean file page"]
-        C1["Page cache<br/>(clean)"] -->|"reclaim"| C2["Free to<br/>buddy"]
+    subgraph clean["cleanなファイルpage"]
+        C1["ページキャッシュ<br/>(clean)"] -->|"回収"| C2["buddyへ<br/>解放"]
     end
 
-    subgraph dirty["Dirty file page"]
-        D1["Page cache<br/>(dirty)"] -->|"writeback"| D2["Wait for<br/>I/O"] -->|"complete"| D3["Free to<br/>buddy"]
+    subgraph dirty["dirtyなファイルpage"]
+        D1["ページキャッシュ<br/>(dirty)"] -->|"ライトバック"| D2["I/Oを<br/>待つ"] -->|"完了"| D3["buddyへ<br/>解放"]
     end
 ```
 
-*Can re-read from disk if needed later*
+*後で必要になればディスクから再読み込みできる*
 
-The page can always be re-read from the backing file if needed again.
+再び必要になれば、pageはいつでもバッキングファイルから再読み込みできる。
 
-### Anonymous pages: Swap or die {#anonymous-pages-swap-or-die}
+### 匿名page: スワップか死か {#anonymous-pages-swap-or-die}
 
-Anonymous pages (heap, stack) have no backing file. Without swap, they can't be reclaimed:
+匿名page（ヒープ、スタック）にはバッキングファイルがない。スワップがなければ回収できない:
 
 ```mermaid
 flowchart LR
-    subgraph withswap["With swap available"]
-        A1["Anonymous<br/>page"] -->|"write to swap"| A2["Swap cache"] -->|"complete"| A3["Free to<br/>buddy"]
+    subgraph withswap["スワップがある場合"]
+        A1["匿名<br/>page"] -->|"スワップに書き込み"| A2["スワップキャッシュ"] -->|"完了"| A3["buddyへ<br/>解放"]
     end
 
-    subgraph noswap["Without swap"]
-        B1["Anonymous<br/>page"] -->|"❌"| B2["Cannot reclaim<br/>without killing owner"]
+    subgraph noswap["スワップがない場合"]
+        B1["匿名<br/>page"] -->|"❌"| B2["所有者をkillしない限り<br/>回収できない"]
     end
 ```
 
-*Page content preserved in swap space*
+*pageの内容はスワップ領域に保存される*
 
-This is why running without swap can lead to OOM kills even with "free" file cache pages.
+これが、スワップなしで動かすと「空いている」ファイルキャッシュpageがあってもOOM killに至りうる理由である。
 
-### The swap-out process {#the-swap-out-process}
+### スワップアウトの過程 {#the-swap-out-process}
 
-When an anonymous page is chosen for swap-out:
+匿名pageがスワップアウト対象に選ばれると:
 
 ```c
-// Simplified from mm/vmscan.c shrink_folio_list()
+// mm/vmscan.c の shrink_folio_list() を簡略化
 static unsigned int shrink_folio_list(struct list_head *folio_list, ...)
 {
-    // For each folio on the list...
+    // リスト上の各folioについて...
 
-    // 1. Try to unmap from all page tables
+    // 1. すべてのページテーブルからアンマップを試みる
     try_to_unmap(folio, ...);
 
-    // 2. If anonymous and unmapped, add to swap
+    // 2. 匿名でアンマップ済みなら、スワップに追加
     if (folio_test_anon(folio) && !folio_mapped(folio)) {
         if (!add_to_swap(folio))
-            goto activate_locked;  // Failed, keep the page
+            goto activate_locked;  // 失敗、pageを保持する
 
-        // 3. Write to swap device
+        // 3. スワップデバイスに書き込む
         pageout(folio, ...);
     }
 
-    // 4. If writeback complete, free the page
+    // 4. ライトバックが完了していれば、pageを解放
     if (!folio_test_writeback(folio))
         free_unref_folios(...);
 }
 ```
 
-The page table entry is replaced with a swap entry:
+ページテーブルエントリはスワップエントリに置き換えられる:
 
 ```mermaid
 flowchart LR
-    subgraph before["Before swap-out"]
-        PTE1["Page Table Entry<br/>[present=1]"] --> PP["Physical Page<br/>(data here)"]
+    subgraph before["スワップアウト前"]
+        PTE1["ページテーブルエントリ<br/>[present=1]"] --> PP["物理page<br/>(データはここ)"]
     end
 
-    subgraph after["After swap-out"]
-        SE["Swap Entry<br/>[present=0]<br/>[swap type+offset]"] --> SS["Swap Space<br/>(data here)"]
+    subgraph after["スワップアウト後"]
+        SE["スワップエントリ<br/>[present=0]<br/>[swap type+offset]"] --> SS["スワップ領域<br/>(データはここ)"]
     end
 
-    before -->|"swap-out"| after
-    PP -->|"returned to"| BUDDY["Buddy Allocator"]
+    before -->|"スワップアウト"| after
+    PP -->|"返却先"| BUDDY["buddyアロケータ"]
 ```
 
-## Resurrection: Swap-in {#resurrection-swap-in}
+## 復活: スワップイン {#resurrection-swap-in}
 
-When a process accesses a swapped page, a page fault brings it back:
+プロセスがスワップアウトされたpageにアクセスすると、ページフォールトがそれを呼び戻す:
 
 ```mermaid
 flowchart TD
-    A["Process accesses swapped address"] --> B["Page fault: PTE has swap entry"]
+    A["プロセスがスワップされたアドレスにアクセス"] --> B["ページフォールト: PTEにスワップエントリ"]
     B --> C["do_swap_page()"]
 
     subgraph C["do_swap_page()"]
-        C1["1. Allocate new physical page"]
-        C2["2. Read from swap device"]
-        C3["3. Add to swap cache"]
-        C4["4. Update page table"]
-        C5["5. Add to LRU"]
+        C1["1. 新しい物理pageを割り当てる"]
+        C2["2. スワップデバイスから読み込む"]
+        C3["3. スワップキャッシュに追加"]
+        C4["4. ページテーブルを更新"]
+        C5["5. LRUに追加"]
     end
 
-    C --> D["Page restored, process continues"]
+    C --> D["pageが復元され、プロセスが続行"]
 ```
 
-### Swap cache {#swap-cache}
+### スワップキャッシュ {#swap-cache}
 
-The swap cache avoids redundant I/O when multiple processes share a swapped page:
+スワップキャッシュは、複数のプロセスがスワップされたpageを共有する場合の冗長なI/Oを回避する:
 
 ```mermaid
 flowchart LR
-    subgraph without["Without swap cache"]
-        WA["Process A faults"] --> WR1["Read from swap"] --> WM1["Page in memory"]
-        WB["Process B faults"] --> WR2["Read from swap"] --> WM2["Another copy!"]
+    subgraph without["スワップキャッシュなし"]
+        WA["プロセスAがフォールト"] --> WR1["スワップから読み込み"] --> WM1["pageがメモリ上に"]
+        WB["プロセスBがフォールト"] --> WR2["スワップから読み込み"] --> WM2["もう1つのコピー!"]
     end
 
-    subgraph with["With swap cache"]
-        XA["Process A faults"] --> XR["Read from swap"] --> XC["Page in swap cache + memory"]
-        XB["Process B faults"] --> XF["Find in swap cache"] --> XC
+    subgraph with["スワップキャッシュあり"]
+        XA["プロセスAがフォールト"] --> XR["スワップから読み込み"] --> XC["pageがスワップキャッシュ + メモリ上に"]
+        XB["プロセスBがフォールト"] --> XF["スワップキャッシュで発見"] --> XC
     end
 ```
 
-The page stays in swap cache until:
+pageは次のいずれかまでスワップキャッシュに留まる:
 
-- All processes have private copies (after COW)
-- Or the swap slot is needed
+- すべてのプロセスがプライベートコピーを持つ（COW後）
+- またはスワップスロットが必要になる
 
-## Death and rebirth {#death-and-rebirth}
+## 死と再生 {#death-and-rebirth}
 
-Eventually, a page's content is no longer needed. The page returns to the buddy allocator:
+やがて、pageの内容は不要になる。pageはbuddyアロケータに戻る:
 
 ```c
-// Final path
-put_page(page);  // Decrement refcount
+// 最終パス
+put_page(page);  // refcount をデクリメント
   → folio_put()
     → if (refcount == 0)
         → free_unref_page()
-          → Return to per-CPU freelist or buddy
+          → per-CPUフリーリストまたはbuddyに戻す
 ```
 
-### Page reuse {#page-reuse}
+### pageの再利用 {#page-reuse}
 
-The freed page doesn't stay free for long:
+解放されたpageが空いたままでいる時間は長くない:
 
 ```mermaid
 flowchart TD
-    FREE["Page freed"] --> PCPU["Per-CPU freelist: [page]<br/>(Hot cache)"]
-    PCPU -->|"Next allocation (same CPU)"| GRAB["Grab from per-CPU list (fast!)"]
-    PCPU -->|"Eventually"| BUDDY["Return to buddy, merge with buddies"]
+    FREE["pageが解放される"] --> PCPU["per-CPUフリーリスト: [page]<br/>(ホットキャッシュ)"]
+    PCPU -->|"次の割り当て (同じCPU)"| GRAB["per-CPUリストから取得 (高速!)"]
+    PCPU -->|"いずれ"| BUDDY["buddyに戻り、buddy同士で結合"]
 ```
 
-Per-CPU lists keep recently-freed pages hot in cache for immediate reuse.
+per-CPUリストは、最近解放されたpageをキャッシュ上でホットに保ち、すぐに再利用できるようにする。
 
-## The complete lifecycle {#the-complete-lifecycle}
+## ライフサイクルの全体像 {#the-complete-lifecycle}
 
-Putting it all together for a typical anonymous page:
+典型的な匿名pageについてすべてをまとめると:
 
 ```mermaid
 flowchart LR
-    A["malloc()<br/>VMA create"] --> B["first access<br/>Page fault alloc"]
-    B --> C["used actively<br/>Active LRU"]
-    C --> D["memory pressure<br/>Inactive LRU"]
-    D --> E["swap out<br/>Swap space"]
-    E --> F["access again<br/>Swap in"]
+    A["malloc()<br/>VMA作成"] --> B["最初のアクセス<br/>ページフォールトで割り当て"]
+    B --> C["アクティブに使用<br/>アクティブLRU"]
+    C --> D["メモリ逼迫<br/>非アクティブLRU"]
+    D --> E["スワップアウト<br/>スワップ領域"]
+    E --> F["再アクセス<br/>スワップイン"]
 
     style A fill:#e1f5fe
     style B fill:#b3e5fc
@@ -412,69 +412,69 @@ flowchart LR
     style F fill:#03a9f4
 ```
 
-**State transitions:**
+**状態遷移**:
 
-| Stage | refcount | mapcount |
+| 段階 | refcount | mapcount |
 |-------|----------|----------|
-| Page fault alloc | 1→2 | -1→0 |
-| Active/Inactive LRU | 2 | 0 |
-| Swap out | 0 | -1 |
-| Swap in | 1→2 | -1→0 |
+| ページフォールトでの割り当て | 1→2 | -1→0 |
+| アクティブ/非アクティブLRU | 2 | 0 |
+| スワップアウト | 0 | -1 |
+| スワップイン | 1→2 | -1→0 |
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Watch page state changes {#watch-page-state-changes}
+### pageの状態変化を観察する {#watch-page-state-changes}
 
 ```bash
-# View system-wide page statistics
+# システム全体のpage統計を表示
 cat /proc/vmstat | grep -E "^pg|^ps"
 
-# Key metrics:
-# pgalloc_*     - Pages allocated
-# pgfree        - Pages freed
-# pgactivate    - Pages moved to active list
-# pgdeactivate  - Pages moved to inactive list
-# pswpin/pswpout - Swap activity
+# 主要なメトリクス:
+# pgalloc_*     - 割り当てられたpage
+# pgfree        - 解放されたpage
+# pgactivate    - アクティブリストへ移動したpage
+# pgdeactivate  - 非アクティブリストへ移動したpage
+# pswpin/pswpout - スワップの動き
 ```
 
-### Monitor LRU activity {#monitor-lru-activity}
+### LRUの動きを監視する {#monitor-lru-activity}
 
 ```bash
-# Watch LRU list sizes
+# LRUリストのサイズを監視
 watch -n 1 'cat /proc/meminfo | grep -E "Active|Inactive"'
 
-# Per-node LRU stats
+# ノードごとのLRU統計
 cat /sys/devices/system/node/node0/meminfo
 ```
 
-### Trace page lifecycle events {#trace-page-lifecycle-events}
+### pageライフサイクルのイベントをトレースする {#trace-page-lifecycle-events}
 
 ```bash
-# Enable page allocation tracing
+# page割り当てのトレースを有効化
 echo 1 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 echo 1 > /sys/kernel/debug/tracing/events/kmem/mm_page_free/enable
 
-# Watch allocations and frees
+# 割り当てと解放を監視
 cat /sys/kernel/debug/tracing/trace_pipe
 
-# Disable when done
+# 終わったら無効化
 echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_alloc/enable
 echo 0 > /sys/kernel/debug/tracing/events/kmem/mm_page_free/enable
 ```
 
-### Observe swap behavior {#observe-swap-behavior}
+### スワップの挙動を観察する {#observe-swap-behavior}
 
 ```bash
-# Watch swap activity in real-time
+# スワップの動きをリアルタイムで監視
 vmstat 1
 
-# Columns si/so show swap in/out per second
+# si/so 列は1秒あたりのスワップイン/アウトを示す
 
-# Detailed swap info
+# スワップの詳細情報
 cat /proc/swaps
 swapon --show
 
-# Per-process swap usage
+# プロセスごとのスワップ使用量
 for pid in /proc/[0-9]*; do
     name=$(cat $pid/comm 2>/dev/null)
     swap=$(grep VmSwap $pid/status 2>/dev/null | awk '{print $2}')
@@ -482,278 +482,286 @@ for pid in /proc/[0-9]*; do
 done | sort -t: -k2 -n -r | head
 ```
 
-### Force reclaim to observe page lifecycle {#force-reclaim-to-observe-page-lifecycle}
+### 回収を強制してpageライフサイクルを観察する {#force-reclaim-to-observe-page-lifecycle}
 
 ```bash
-# Drop clean caches (doesn't affect anonymous pages)
-echo 1 > /proc/sys/vm/drop_caches  # Page cache
-echo 2 > /proc/sys/vm/drop_caches  # Dentries and inodes
-echo 3 > /proc/sys/vm/drop_caches  # Both
+# cleanなキャッシュを破棄 (匿名pageには影響しない)
+echo 1 > /proc/sys/vm/drop_caches  # ページキャッシュ
+echo 2 > /proc/sys/vm/drop_caches  # dentry と inode
+echo 3 > /proc/sys/vm/drop_caches  # 両方
 
-# Force memory pressure (careful on production!)
+# メモリ逼迫を強制する (本番環境では注意!)
 stress --vm 1 --vm-bytes 90% --vm-keep &
 watch -n 1 'cat /proc/meminfo | grep -E "MemFree|SwapUsed|Active|Inactive"'
 ```
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | struct page, struct folio definitions |
-| [`include/linux/page-flags.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/page-flags.h) | PG_* flag definitions |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Buddy allocator, page allocation |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Page reclaim, LRU management |
-| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | Swap cache |
-| [`mm/rmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/rmap.c) | Reverse mapping, finding page table entries |
+| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | struct page、struct folioの定義 |
+| [`include/linux/page-flags.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/page-flags.h) | PG_*フラグの定義 |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | buddyアロケータ、pageの割り当て |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | page回収、LRU管理 |
+| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | スワップキャッシュ |
+| [`mm/rmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/rmap.c) | 逆マッピング、ページテーブルエントリの探索 |
 
-## History {#history}
+## 歴史 {#history}
 
-### struct page evolution {#struct-page-evolution}
+### struct pageの進化 {#struct-page-evolution}
 
-The `struct page` has grown and changed significantly over the years:
+`struct page`は長年にわたって大きく成長し、変化してきた:
 
-**Early Linux**: Simple structure tracking basic page state.
+**初期のLinux**: 基本的なpageの状態を追跡する単純な構造体。
 
-**v2.5/2.6**: Added reverse mapping (rmap) support - the ability to find all page table entries pointing to a page. Essential for reclaim.
+**v2.5/2.6**: 逆マッピング（rmap）のサポートが追加された。これはpageを指すすべてのページテーブルエントリを見つける能力であり、回収に不可欠である。
 
-**v4.x-5.x**: Increasing use of compound pages (multi-page allocations treated as one unit).
+**v4.x-5.x**: 複合page（1つの単位として扱われる複数pageの割り当て）の利用が増加した。
 
-**v5.16 (2022)**: Introduction of `struct folio` to formalize compound page handling:
+**v5.16 (2022)**: 複合pageの扱いを形式化するために`struct folio`が導入された:
 
-**Commit**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
+**コミット**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
 
-**Author**: Matthew Wilcox (Oracle)
+**作者**: Matthew Wilcox (Oracle)
 
-Throughout the lifecycle above, you see `folio` instead of `page` in modern code:
+上で見たライフサイクル全体を通じて、現代のコードでは`page`ではなく`folio`が使われている:
 
-- **Stage 1**: `vma_alloc_zeroed_movable_folio()` allocates a folio
-- **Stage 4**: `shrink_folio_list()` processes folios during reclaim
-- **Why it matters**: A folio explicitly represents one or more contiguous pages as a unit, eliminating ambiguity about whether a function receives a head page, tail page, or single page
+- **ステージ1**: `vma_alloc_zeroed_movable_folio()`がfolioを割り当てる
+- **ステージ4**: `shrink_folio_list()`が回収中にfolioを処理する
+- **なぜ重要か**: folioは1つ以上の連続したpageを1つの単位として明示的に表現するので、関数が受け取るのがhead pageなのかtail pageなのか単一pageなのかという曖昧さがなくなる
 
-### LRU evolution {#lru-evolution}
+### LRUの進化 {#lru-evolution}
 
-The LRU system described in Stage 2 (page tracking) has evolved significantly:
+ステージ2（pageの追跡）で説明したLRUシステムは大きく進化してきた:
 
-**Classic LRU (pre-v2.6.28)**: Single active/inactive list for all pages.
+**従来のLRU**（v2.6.28より前）: すべてのpageに対して単一のアクティブ/非アクティブリスト。
 
-**Split LRU (v2.6.28, 2008)**: Separate lists for anonymous and file pages, as shown in the diagrams above.
+**分割LRU**（v2.6.28、2008年）: 上の図に示したように、匿名pageとファイルpageで別々のリスト。
 
-**MGLRU (v6.1, 2022)**: Multi-generational LRU (covered in the MGLRU section above) replaces two lists with multiple generations for finer-grained aging.
+**MGLRU**（v6.1、2022年）: Multi-generational LRU（上のMGLRUの節で扱った）は、2つのリストを複数の世代で置き換え、よりきめ細かいエイジングを実現する。
 
-**Commit**: [ac35a4902374](https://git.kernel.org/linus/ac35a4902374) ("mm: multi-gen LRU: minimal implementation") | [LKML](https://lore.kernel.org/linux-mm/20220815071332.627393-1-yuzhao@google.com/)
+**コミット**: [ac35a4902374](https://git.kernel.org/linus/ac35a4902374) ("mm: multi-gen LRU: minimal implementation") | [LKML](https://lore.kernel.org/linux-mm/20220815071332.627393-1-yuzhao@google.com/)
 
-**Author**: Yu Zhao (Google)
+**作者**: Yu Zhao (Google)
 
-MGLRU significantly improves performance under memory pressure by avoiding the "refault" problem where useful pages get evicted too aggressively.
+MGLRUは、有用なpageが過度に積極的に追い出される「refault」問題を回避することで、メモリ逼迫時の性能を大きく改善する。
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-Page lifecycle management involves reference counting, LRU tracking, and writeback coordination. Bugs here cause use-after-free, data corruption, or system crashes.
+pageのライフサイクル管理には、参照カウント、LRUの追跡、ライトバックの協調が関わる。ここでのバグはuse-after-free、データ破損、システムクラッシュを引き起こす。
 
 ---
 
-### Case 1: Page refcount underflow/overflow {#case-1-page-refcount-underflowoverflow}
+### ケース1: pageのrefcountのアンダーフロー/オーバーフロー {#case-1-page-refcount-underflowoverflow}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-Page reference counting bugs are a perennial source of kernel vulnerabilities. A refcount going negative (underflow) or wrapping around (overflow) [leads to use-after-free](https://lwn.net/Articles/786044/).
+pageの参照カウントのバグは、カーネルの脆弱性の尽きない発生源である。refcountが負になる（アンダーフロー）か一周して戻る（オーバーフロー）と、[use-after-freeにつながる](https://lwn.net/Articles/786044/)。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-From [Project Zero research](https://projectzero.google/2021/10/how-simple-linux-kernel-memory.html):
+[Project Zeroの研究](https://projectzero.google/2021/10/how-simple-linux-kernel-memory.html)より:
 
 > *"A bug allowing probabilistic skewing of the refcount of a struct pid down was documented, where colliding TIOCSPGRP calls from two threads repeatedly could mess up the refcount."*
 
-The pattern:
-1. Bug causes refcount to decrement one extra time
-2. Refcount hits 0 prematurely
-3. Page is freed while still in use
-4. Another allocation reuses the page
-5. Original user writes to "freed" page → **memory corruption**
+（訳: 2つのスレッドからTIOCSPGRP呼び出しを繰り返し衝突させることでrefcountを狂わせ、struct pidのrefcountを確率的に減らす方向へずらせるバグが報告された。）
 
-#### Real-world implications {#real-world-implications}
+パターン:
+1. バグによりrefcountが余分に1回デクリメントされる
+2. refcountが早すぎるタイミングで0になる
+3. まだ使用中なのにpageが解放される
+4. 別の割り当てがそのpageを再利用する
+5. 元の利用者が「解放済み」pageに書き込む → **メモリ破損**
 
-[Research from Fudan University](https://yuanxzhang.github.io/paper/cid-security21.pdf) found:
+#### 現実世界への影響 {#real-world-implications}
+
+[復旦大学の研究](https://yuanxzhang.github.io/paper/cid-security21.pdf)は次のことを明らかにした:
 
 > *"UAF vulnerabilities from refcount bugs can be exploited for local privilege escalation... such vulnerabilities can be stealthy - hiding in the kernel for about 4 years until discovered, affecting tens of millions of Linux PCs/servers including 66% of Android devices."*
 
-#### Mitigations {#mitigations}
+（訳: refcountバグに起因するUAF脆弱性はローカル権限昇格に悪用されうる……こうした脆弱性は発見されにくく、発見されるまで約4年間カーネル内に潜み、Androidデバイスの66%を含む数千万台のLinux PC/サーバーに影響する。）
 
-- **`refcount_t` type**: Saturates on overflow/underflow instead of wrapping
-- **KASAN**: Detects use-after-free in debug builds
-- **Page poisoning**: Fills freed pages with patterns to detect misuse
+#### 緩和策 {#mitigations}
+
+- **`refcount_t`型**: 一周する代わりに、オーバーフロー/アンダーフローで飽和する
+- **KASAN**: デバッグビルドでuse-after-freeを検出する
+- **Page poisoning**: 解放されたpageをパターンで埋め、誤用を検出する
 
 ---
 
-### Case 2: Large folio data loss (2023) {#case-2-large-folio-data-loss-2023}
+### ケース2: large folioによるデータ消失（2023年） {#case-2-large-folio-data-loss-2023}
 
-#### What happened {#what-happened_1}
+#### 何が起きたか {#what-happened_1}
 
-The large folio feature (kernel 6.1+) introduced a bug causing silent data loss on XFS and other filesystems.
+large folio機能（カーネル6.1以降）が、XFSなどのファイルシステムで静かなデータ消失を引き起こすバグを持ち込んだ。
 
-#### The bug {#the-bug_1}
+#### バグ {#the-bug_1}
 
-From the [LKML report](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/):
+[LKMLの報告](https://lore.kernel.org/linux-mm/CAHk-=wjty_0NfiZn2HVzT0Ye-RR09+Rqbd1azwJLOTJrX+V5MQ@mail.gmail.com/T/)より:
 
 > *"At least 16 instances of data loss in a fleet of 1.5k VMs... happens mostly on nodes running database or storage-oriented workloads, including PostgreSQL, MySQL, RocksDB."*
 
-Large folios changed how pages are tracked through the writeback path. The bug caused pages to be marked clean when they were actually dirty.
+（訳: 1.5k台のVM群で少なくとも16件のデータ消失……主にPostgreSQL、MySQL、RocksDBなどデータベースやストレージ指向のワークロードを動かすノードで起きている。）
+
+large folioは、ライトバックパスを通じたpageの追跡方法を変えた。このバグにより、実際にはdirtyなpageがcleanとしてマークされた。
 
 ```mermaid
 flowchart LR
-    A["Page modified"] --> B["Marked dirty"]
-    B --> C["Large folio writeback bug"]
-    C --> D["Page marked clean<br/>WITHOUT writing!"]
-    D --> E["DATA LOSS"]
+    A["pageが変更される"] --> B["dirtyとマーク"]
+    B --> C["large folioのライトバックバグ"]
+    C --> D["書き込まずに<br/>cleanとマーク!"]
+    D --> E["データ消失"]
 ```
 
-#### Real-world implications {#real-world-implications_1}
+#### 現実世界への影響 {#real-world-implications_1}
 
-Meta disabled large folios in their kernels. Jens Axboe noted: *"Meta ran into this issue and have been reverting it since our 5.19 release."*
+Metaは自社カーネルでlarge folioを無効化した。Jens Axboeは次のように述べている: *"Meta ran into this issue and have been reverting it since our 5.19 release."*（訳: Metaはこの問題に遭遇し、5.19リリース以降これをrevertしている。）
 
-#### The fix {#the-fix}
+#### 修正 {#the-fix}
 
-**Commit**: [a48d5bdc877b](https://git.kernel.org/linus/a48d5bdc877b) ("mm: fix for negative counter: nr_file_hugepages")
+**コミット**: [a48d5bdc877b](https://git.kernel.org/linus/a48d5bdc877b) ("mm: fix for negative counter: nr_file_hugepages")
 
-**Author**: Stefan Roesch
-
----
-
-### Case 3: LRU list corruption {#case-3-lru-list-corruption}
-
-#### What happened {#what-happened_2}
-
-Pages must be properly added to and removed from LRU lists. Bugs in this code cause list corruption, leading to crashes or infinite loops in reclaim.
-
-#### The bug class {#the-bug-class}
-
-Common patterns:
-
-- Adding a page to LRU twice
-- Removing a page not on LRU
-- Racing between LRU add/remove and page free
-
-From a [Red Hat bug report](https://access.redhat.com/solutions/5773601):
-
-> *"kernel BUG at mm/filemap.c:240!"* - triggered by corrupted page cache state.
-
-#### Why it's hard {#why-its-hard}
-
-LRU operations happen from multiple contexts:
-
-- Page allocation (add to LRU)
-- Page reclaim (remove from LRU)
-- Page migration (move between LRUs)
-- Memory cgroup changes (reparent LRU)
-
-All must coordinate correctly, often under memory pressure when the system is already stressed.
-
-#### Mitigations {#mitigations_1}
-
-- **LRU lock**: Per-node locking protects LRU lists
-- **Page flags**: `PG_lru` flag tracks LRU membership
-- **Debug checks**: `CONFIG_DEBUG_VM` enables assertions
+**作者**: Stefan Roesch
 
 ---
 
-### Case 4: Reverse mapping (rmap) bugs {#case-4-reverse-mapping-rmap-bugs}
+### ケース3: LRUリストの破損 {#case-3-lru-list-corruption}
 
-#### What happened {#what-happened_3}
+#### 何が起きたか {#what-happened_2}
 
-Reverse mapping tracks which page table entries point to a page. Bugs here cause missed unmaps or corrupted page tables.
+pageはLRUリストに正しく追加・削除されなければならない。このコードのバグはリストの破損を引き起こし、クラッシュや回収中の無限ループにつながる。
 
-#### The bug {#the-bug_2}
+#### バグの類型 {#the-bug-class}
 
-When reclaiming a page, the kernel must:
-1. Find all PTEs pointing to the page (via rmap)
-2. Unmap each PTE
-3. Only then free the page
+よくあるパターン:
 
-If rmap is corrupted or incomplete:
+- pageをLRUに2回追加する
+- LRU上にないpageを削除する
+- LRUの追加/削除とpageの解放との間の競合
 
-- PTEs point to freed pages → **use-after-free**
-- Pages can't be reclaimed → **memory leak**
+[Red Hatのバグ報告](https://access.redhat.com/solutions/5773601)より:
 
-#### Historical example {#historical-example}
+> *"kernel BUG at mm/filemap.c:240!"* - 破損したページキャッシュの状態によって引き起こされた。
 
-Early rmap implementations had scalability issues. A page mapped by 1000 processes required walking 1000 entries. This led to:
+#### なぜ難しいか {#why-its-hard}
 
-- Long reclaim latencies
-- Lock contention
-- Livelock under pressure
+LRU操作は複数のコンテキストから行われる:
 
-#### Modern solutions {#modern-solutions}
+- pageの割り当て（LRUに追加）
+- pageの回収（LRUから削除）
+- pageのマイグレーション（LRU間で移動）
+- メモリcgroupの変更（LRUのreparent）
 
-- **Anonymous VMA (anon_vma)**: Chain structure for efficient anonymous page tracking
-- **Object-based reverse mapping**: File pages tracked via address_space
-- **Batched operations**: Process multiple pages together
+これらすべてが正しく協調しなければならず、しかもシステムがすでに負荷を受けているメモリ逼迫時に行われることが多い。
+
+#### 緩和策 {#mitigations_1}
+
+- **LRUロック**: ノードごとのロックがLRUリストを保護する
+- **pageフラグ**: `PG_lru`フラグがLRUへの所属を追跡する
+- **デバッグチェック**: `CONFIG_DEBUG_VM`がアサーションを有効にする
 
 ---
 
-### Case 5: hwpoison and page refcount {#case-5-hwpoison-and-page-refcount}
+### ケース4: 逆マッピング（rmap）のバグ {#case-4-reverse-mapping-rmap-bugs}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_3}
 
-Memory hardware errors (hwpoison) require special handling. A page with an uncorrectable error must be isolated without corrupting other data.
+逆マッピングは、どのページテーブルエントリがpageを指しているかを追跡する。ここでのバグはアンマップ漏れやページテーブルの破損を引き起こす。
 
-#### The bug {#the-bug_3}
+#### バグ {#the-bug_2}
 
-From a kernel fix for `mm/hwpoison`:
+pageを回収するとき、カーネルは次のことをしなければならない:
+1. （rmapを介して）pageを指すすべてのPTEを見つける
+2. 各PTEをアンマップする
+3. その後で初めてpageを解放する
+
+rmapが破損していたり不完全だったりすると:
+
+- PTEが解放済みpageを指す → **use-after-free**
+- pageを回収できない → **メモリリーク**
+
+#### 歴史的な例 {#historical-example}
+
+初期のrmap実装にはスケーラビリティの問題があった。1000個のプロセスにマップされたpageは、1000個のエントリをたどる必要があった。これは次のことにつながった:
+
+- 長い回収レイテンシ
+- ロック競合
+- 逼迫時のライブロック
+
+#### 現代の解決策 {#modern-solutions}
+
+- **Anonymous VMA (anon_vma)**: 匿名pageを効率的に追跡するためのチェーン構造
+- **オブジェクトベースの逆マッピング**: ファイルpageはaddress_spaceを介して追跡される
+- **バッチ操作**: 複数のpageをまとめて処理する
+
+---
+
+### ケース5: hwpoisonとpageのrefcount {#case-5-hwpoison-and-page-refcount}
+
+#### 何が起きたか {#what-happened_4}
+
+メモリのハードウェアエラー（hwpoison）には特別な扱いが必要である。訂正不能なエラーを持つpageは、他のデータを破損させることなく隔離されなければならない。
+
+#### バグ {#the-bug_3}
+
+`mm/hwpoison`に対するカーネルの修正より:
 
 > *"After trying to drain pages from pagevec/pageset, the reference count of the page was not reduced if the page was still not on the LRU list."*
 
-Hwpoison must handle pages in various states:
+（訳: pagevec/pagesetからpageをドレインしようとした後、pageがまだLRUリスト上にない場合、pageの参照カウントが減らされていなかった。）
 
-- On LRU, can be isolated normally
-- In pagevec (batched, not yet on LRU)
-- Being migrated
-- Mapped by userspace
+hwpoisonはさまざまな状態のpageを扱わなければならない:
 
-Each case requires different handling, and missing any leads to refcount leaks or premature frees.
+- LRU上にあり、通常どおり隔離できる
+- pagevec内にある（バッチ化されており、まだLRU上にない）
+- マイグレーション中
+- ユーザー空間にマップされている
 
-#### The fix {#the-fix_1}
+各ケースで異なる扱いが必要であり、どれか1つでも漏れるとrefcountのリークや早すぎる解放につながる。
 
-**Commit**: [4f32be677b12](https://git.kernel.org/linus/4f32be677b12) ("mm/hwpoison: fix page refcount of unknown non LRU page")
+#### 修正 {#the-fix_1}
 
-**Author**: Wanpeng Li
+**コミット**: [4f32be677b12](https://git.kernel.org/linus/4f32be677b12) ("mm/hwpoison: fix page refcount of unknown non LRU page")
 
-The fix adds `put_page()` to drop the page reference from `__get_any_page()` when the page is still not on the LRU list after draining.
+**作者**: Wanpeng Li
 
-#### Why this matters {#why-this-matters}
+この修正は、ドレイン後もpageがまだLRUリスト上にない場合に、`__get_any_page()`で取得したpage参照を落とすための`put_page()`を追加する。
 
-Hardware errors are rare but when they occur:
+#### なぜ重要か {#why-this-matters}
 
-- Page must be isolated immediately
-- Processes mapping the page need `SIGBUS`
-- Page must never be reallocated
+ハードウェアエラーはまれだが、発生した場合は:
 
-Getting this wrong means either data corruption (reusing bad memory) or memory leaks (good memory marked bad forever).
+- pageを直ちに隔離しなければならない
+- そのpageをマップしているプロセスには`SIGBUS`が必要
+- pageを二度と再割り当てしてはならない
+
+これを誤ると、データ破損（不良メモリの再利用）かメモリリーク（正常なメモリが永久に不良とマークされる）のどちらかになる。
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Root Cause | Impact | Prevention |
+| バグ | 根本原因 | 影響 | 予防策 |
 |-----|------------|--------|------------|
-| **Refcount bugs** | Inc/dec mismatch | Use-after-free | `refcount_t`, KASAN |
-| **Large folio writeback** | Dirty tracking error | Data loss | Kernel update, disable large folios |
-| **LRU corruption** | Race conditions | Crash, memory leak | Proper locking, debug checks |
-| **rmap corruption** | Incomplete tracking | Use-after-free | Careful audit |
-| **hwpoison handling** | Edge case mishandling | Data corruption | Comprehensive testing |
+| **refcountのバグ** | インクリメント/デクリメントの不一致 | use-after-free | `refcount_t`、KASAN |
+| **large folioのライトバック** | dirty追跡のエラー | データ消失 | カーネル更新、large folioの無効化 |
+| **LRUの破損** | 競合状態 | クラッシュ、メモリリーク | 適切なロック、デバッグチェック |
+| **rmapの破損** | 不完全な追跡 | use-after-free | 注意深い監査 |
+| **hwpoisonの処理** | エッジケースの扱いの誤り | データ破損 | 網羅的なテスト |
 
-The common thread: **pages pass through many states and subsystems**. Every transition is a potential bug site.
+共通点は、**pageは多くの状態とサブシステムを通過する**ということである。あらゆる遷移が潜在的なバグの発生箇所となる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Page allocator](page-allocator.md) - Buddy system details
-- [Page reclaim](reclaim.md) - Reclaim mechanisms in depth
-- [Swap](swap.md) - Swap subsystem details
-- [Life of a malloc](life-of-malloc.md) - How pages get allocated for userspace
+- [Pageアロケータ](page-allocator.md) - buddyシステムの詳細
+- [page回収](reclaim.md) - 回収メカニズムの詳細
+- [スワップ](swap.md) - スワップサブシステムの詳細
+- [mallocの一生](life-of-malloc.md) - ユーザー空間のためにpageがどのように割り当てられるか
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The folio pull request](https://lwn.net/Articles/849538/) (2021) - Why folios were introduced
-- [Multi-generational LRU: the basics](https://lwn.net/Articles/851184/) (2021) - MGLRU design
-- [A deep dive into CMA](https://lwn.net/Articles/486301/) (2012) - Contiguous memory and page migration
+- [The folio pull request](https://lwn.net/Articles/849538/) (2021) - folioが導入された理由
+- [Multi-generational LRU: the basics](https://lwn.net/Articles/851184/) (2021) - MGLRUの設計
+- [A deep dive into CMA](https://lwn.net/Articles/486301/) (2012) - 連続メモリとpageマイグレーション

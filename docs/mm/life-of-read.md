@@ -1,71 +1,71 @@
-# Life of a file read {#life-of-a-file-read}
+# ファイル読み込みの一生 {#life-of-a-file-read}
 
-> Tracing a read() syscall through the page cache
+> read()システムコールをページキャッシュを通して追跡する
 
-## What happens when you read a file? {#what-happens-when-you-read-a-file}
+## ファイルを読むと何が起きるか? {#what-happens-when-you-read-a-file}
 
-When a program reads a file, the data rarely comes directly from disk. The kernel maintains a **page cache** - a cache of file data in memory. Most reads are satisfied from this cache without touching the disk at all.
+プログラムがファイルを読むとき、データがディスクから直接来ることはめったにない。カーネルは**ページキャッシュ**、すなわちファイルデータのメモリ上のキャッシュを維持している。ほとんどの読み込みは、ディスクにまったく触れることなくこのキャッシュから満たされる。
 
 ```mermaid
 flowchart TD
     A["read(fd, buf, 4096)"] --> B
 
-    B["<b>VFS Layer</b><br/>- Find file from fd<br/>- Check permissions<br/>- Call file system's read method"]
+    B["<b>VFS層</b><br/>- fdからファイルを見つける<br/>- パーミッションを確認<br/>- ファイルシステムのreadメソッドを呼ぶ"]
     B --> C
 
-    C["<b>Page Cache Lookup</b><br/>- Search file's address_space for page at offset<br/>- Using xarray (radix tree)"]
-    C --> D{Cache Result}
+    C["<b>ページキャッシュの検索</b><br/>- ファイルのaddress_spaceからオフセットのpageを探す<br/>- xarray (radix tree) を使用"]
+    C --> D{キャッシュの結果}
 
-    D -->|Cache HIT| E["Return cached<br/>data immediately<br/>(no disk I/O!)"]
-    D -->|Cache MISS| F["Allocate page<br/>Submit I/O to disk<br/>Wait for completion<br/>Add page to cache<br/>Return data"]
+    D -->|キャッシュヒット| E["キャッシュされた<br/>データを即座に返す<br/>(ディスクI/Oなし!)"]
+    D -->|キャッシュミス| F["pageを割り当てる<br/>ディスクにI/Oを発行<br/>完了を待つ<br/>pageをキャッシュに追加<br/>データを返す"]
 
     E --> G
     F --> G
 
-    G["<b>Copy to User Buffer</b><br/>copy_to_user(buf, page_address + offset, count)"]
-    G --> H["read() returns bytes read"]
+    G["<b>ユーザーバッファへのコピー</b><br/>copy_to_user(buf, page_address + offset, count)"]
+    G --> H["read() が読んだバイト数を返す"]
 ```
 
-The key insight: **the page cache makes most reads fast**. Once the kernel detects a sequential pattern, it [prefetches pages asynchronously](https://lwn.net/Articles/888715/) so that most subsequent reads are served from cache rather than disk. In steady state, readahead can achieve cache hit rates [above 90%](https://lwn.net/Articles/155510/) for sequential workloads.
+重要なポイントは、**ページキャッシュがほとんどの読み込みを高速にする**ということである。カーネルはシーケンシャルなパターンを検出すると、[pageを非同期にプリフェッチ](https://lwn.net/Articles/888715/)するので、後続の読み込みのほとんどはディスクではなくキャッシュから提供される。定常状態では、シーケンシャルなワークロードに対してリードアヘッドは[90%を超える](https://lwn.net/Articles/155510/)キャッシュヒット率を達成しうる。
 
-## The page cache {#the-page-cache}
+## ページキャッシュ {#the-page-cache}
 
-The page cache is the kernel's cache of file contents. Every file read goes through it.
+ページキャッシュは、カーネルによるファイル内容のキャッシュである。すべてのファイル読み込みはここを通る。
 
-### Why cache file data? {#why-cache-file-data}
+### なぜファイルデータをキャッシュするか? {#why-cache-file-data}
 
-| Operation | Latency |
+| 操作 | レイテンシ |
 |-----------|---------|
-| Memory access | ~100 nanoseconds |
-| SSD read | ~100 microseconds (1000x slower) |
-| HDD read | ~10 milliseconds (100,000x slower) |
+| メモリアクセス | 約100ナノ秒 |
+| SSDの読み込み | 約100マイクロ秒（1000倍遅い） |
+| HDDの読み込み | 約10ミリ秒（100,000倍遅い） |
 
-(Order-of-magnitude figures from [Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html), originally Jeff Dean via Peter Norvig.)
+（桁数レベルの数値は[Latency Numbers Every Programmer Should Know](https://colin-scott.github.io/personal_website/research/interactive_latency.html)より。元はJeff DeanのものをPeter Norvigが紹介したもの。）
 
-Even with fast SSDs, memory is orders of magnitude faster. The page cache exploits temporal locality - data read once is likely to be read again soon.
+高速なSSDであっても、メモリは桁違いに速い。ページキャッシュは時間的局所性、つまり一度読まれたデータはすぐにまた読まれる可能性が高いという性質を利用する。
 
-### Page cache organization {#page-cache-organization}
+### ページキャッシュの構成 {#page-cache-organization}
 
-Each open file has an `address_space` that manages its cached pages:
+開かれた各ファイルは、キャッシュされたpageを管理する`address_space`を持つ:
 
 ```c
-// From include/linux/fs.h
+// include/linux/fs.h より
 struct address_space {
-    struct inode *host;           // Owning inode
-    struct xarray i_pages;        // Cached pages (xarray/radix tree)
-    atomic_t i_mmap_writable;     // Writable mappings
-    struct rb_root_cached i_mmap; // Tree of private/shared mappings
-    unsigned long nrpages;        // Number of cached pages
-    const struct address_space_operations *a_ops;  // Operations
+    struct inode *host;           // 所有する inode
+    struct xarray i_pages;        // キャッシュされた page (xarray/radix tree)
+    atomic_t i_mmap_writable;     // 書き込み可能なマッピング
+    struct rb_root_cached i_mmap; // プライベート/共有マッピングのツリー
+    unsigned long nrpages;        // キャッシュされた page の数
+    const struct address_space_operations *a_ops;  // 操作
     // ...
 };
 ```
 
-Pages are indexed by file offset:
+pageはファイルオフセットでインデックス付けされる:
 
 ```mermaid
 flowchart LR
-    subgraph file["File (offset in pages)"]
+    subgraph file["ファイル (page単位のオフセット)"]
         direction LR
         P0["[0]"]
         P1["[1]"]
@@ -77,30 +77,30 @@ flowchart LR
         P7["..."]
     end
 
-    subgraph xarray["address_space xarray"]
+    subgraph xarray["address_space の xarray"]
         direction LR
         O0["offset 0"] --> PG0["page_0"]
         O1["offset 1"] --> PG1["page_1"]
-        O2["offset 2"] --> EMPTY["(empty - not cached)"]
+        O2["offset 2"] --> EMPTY["(空 - キャッシュされていない)"]
         O3["offset 3"] --> PG3["page_3"]
         O4["..."]
     end
 ```
 
-## Stage 1: System call entry {#stage-1-system-call-entry}
+## ステージ1: システムコールへの進入 {#stage-1-system-call-entry}
 
-A user program calls `read()`:
+ユーザープログラムが`read()`を呼ぶ:
 
 ```c
-// User space
+// ユーザー空間
 ssize_t n = read(fd, buffer, 4096);
 
-// Kernel entry: fs/read_write.c
+// カーネルへの入口: fs/read_write.c
 SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 {
     struct fd f = fdget_pos(fd);
 
-    // ... permission checks ...
+    // ... パーミッションチェック ...
 
     ret = vfs_read(f.file, buf, count, &pos);
 
@@ -109,51 +109,51 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 }
 ```
 
-### From fd to file {#from-fd-to-file}
+### fdからfileへ {#from-fd-to-file}
 
-The kernel translates the file descriptor to a `struct file`:
+カーネルはファイルディスクリプタを`struct file`に変換する:
 
 ```mermaid
 flowchart LR
-    subgraph fdtable["Process File Descriptor Table"]
+    subgraph fdtable["プロセスのファイルディスクリプタテーブル"]
         direction LR
         FD0["fd 0"] --> STDIN["stdin"]
         FD1["fd 1"] --> STDOUT["stdout"]
         FD2["fd 2"] --> STDERR["stderr"]
-        FD3["fd 3"] --> FILE["/home/user/data.txt<br/>(Our file)"]
+        FD3["fd 3"] --> FILE["/home/user/data.txt<br/>(対象のファイル)"]
         FD4["..."]
     end
 ```
 
 ```c
 struct file {
-    struct path f_path;           // Dentry and mount
-    struct inode *f_inode;        // Inode (file metadata)
-    const struct file_operations *f_op;  // read/write operations
-    loff_t f_pos;                 // Current file position
-    struct address_space *f_mapping;  // Page cache
+    struct path f_path;           // dentry とマウント
+    struct inode *f_inode;        // inode (ファイルのメタデータ)
+    const struct file_operations *f_op;  // read/write 操作
+    loff_t f_pos;                 // 現在のファイル位置
+    struct address_space *f_mapping;  // ページキャッシュ
     // ...
 };
 ```
 
-## Stage 2: VFS read dispatch {#stage-2-vfs-read-dispatch}
+## ステージ2: VFSによるreadのディスパッチ {#stage-2-vfs-read-dispatch}
 
-`vfs_read()` calls the file system's read implementation:
+`vfs_read()`はファイルシステムのread実装を呼び出す:
 
 ```c
 // fs/read_write.c
 ssize_t vfs_read(struct file *file, char __user *buf,
                  size_t count, loff_t *pos)
 {
-    // Check we can read
+    // 読み込み可能か確認
     if (!(file->f_mode & FMODE_READ))
         return -EBADF;
 
-    // Check buffer is valid user memory
+    // バッファが有効なユーザーメモリか確認
     if (!access_ok(buf, count))
         return -EFAULT;
 
-    // Call file system's read method
+    // ファイルシステムの read メソッドを呼ぶ
     if (file->f_op->read)
         ret = file->f_op->read(file, buf, count, pos);
     else if (file->f_op->read_iter)
@@ -163,47 +163,47 @@ ssize_t vfs_read(struct file *file, char __user *buf,
 }
 ```
 
-Most file systems use the generic `read_iter` path, which goes through `generic_file_read_iter()`:
+ほとんどのファイルシステムは汎用の`read_iter`パスを使い、これは`generic_file_read_iter()`を通る:
 
 ```c
 // mm/filemap.c
 ssize_t generic_file_read_iter(struct kiocb *iocb, struct iov_iter *iter)
 {
     if (iocb->ki_flags & IOCB_DIRECT)
-        return mapping_direct_IO(...);  // Bypass cache
+        return mapping_direct_IO(...);  // キャッシュをバイパス
 
-    return filemap_read(iocb, iter, 0);  // Normal path
+    return filemap_read(iocb, iter, 0);  // 通常のパス
 }
 ```
 
-## Stage 3: Page cache lookup {#stage-3-page-cache-lookup}
+## ステージ3: ページキャッシュの検索 {#stage-3-page-cache-lookup}
 
-The core of file reading is [`filemap_read()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c):
+ファイル読み込みの中核は[`filemap_read()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c)である:
 
 ```c
-// mm/filemap.c (simplified)
+// mm/filemap.c (簡略化)
 ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
                      ssize_t already_read)
 {
     struct file *file = iocb->ki_filp;
     struct address_space *mapping = file->f_mapping;
-    pgoff_t index = iocb->ki_pos >> PAGE_SHIFT;  // Page index from offset
+    pgoff_t index = iocb->ki_pos >> PAGE_SHIFT;  // オフセットから page インデックスを求める
 
     for (;;) {
-        // 1. Try to find page in cache
+        // 1. キャッシュ内の page を探す
         folio = filemap_get_folio(mapping, index);
 
         if (IS_ERR(folio)) {
-            // Cache miss - need to read from disk
+            // キャッシュミス - ディスクから読む必要がある
             folio = page_cache_sync_readahead(...);
         }
 
-        // 2. Wait for page to be up-to-date
+        // 2. page が最新になるのを待つ
         folio_wait_locked(folio);
         if (!folio_test_uptodate(folio))
             goto error;
 
-        // 3. Copy data to user buffer
+        // 3. データをユーザーバッファにコピー
         copied = copy_folio_to_iter(folio, offset, bytes, iter);
 
         folio_put(folio);
@@ -212,12 +212,12 @@ ssize_t filemap_read(struct kiocb *iocb, struct iov_iter *iter,
 }
 ```
 
-### The xarray lookup {#the-xarray-lookup}
+### xarrayの検索 {#the-xarray-lookup}
 
-Finding a page in the cache uses the xarray (evolved from radix tree):
+キャッシュ内のpageを見つけるにはxarray（radix treeから発展したもの）を使う:
 
 ```c
-// Finding page at index
+// インデックスの page を見つける
 struct folio *filemap_get_folio(struct address_space *mapping,
                                  pgoff_t index)
 {
@@ -230,620 +230,626 @@ struct folio *__filemap_get_folio(struct address_space *mapping,
 {
     struct folio *folio;
 
-    // Lock-free lookup in xarray
+    // xarray でのロックフリーな検索
     folio = xa_load(&mapping->i_pages, index);
 
     if (!folio || xa_is_value(folio))
-        return ERR_PTR(-ENOENT);  // Not in cache
+        return ERR_PTR(-ENOENT);  // キャッシュにない
 
-    // Found - increment reference
+    // 見つかった - 参照をインクリメント
     folio_get(folio);
     return folio;
 }
 ```
 
-The lookup is effectively `O(1)` for practical file sizes - [`xarray`](https://docs.kernel.org/core-api/xarray.html) is a radix tree with bounded height, not a balanced tree, so performance doesn't degrade with more pages.
+この検索は実用的なファイルサイズでは事実上`O(1)`である。[`xarray`](https://docs.kernel.org/core-api/xarray.html)は平衡木ではなく高さが制限されたradix treeであるため、pageが増えても性能は劣化しない。
 
-## Stage 4: Cache hit (fast path) {#stage-4-cache-hit-fast-path}
+## ステージ4: キャッシュヒット（高速パス） {#stage-4-cache-hit-fast-path}
 
-When the page is in cache and up-to-date, reading is fast (order-of-magnitude estimates; actual latency depends on CPU and workload):
+pageがキャッシュ内にあり最新である場合、読み込みは高速である（桁数レベルの見積もり。実際のレイテンシはCPUとワークロードに依存する）:
 
 ```mermaid
 flowchart TD
-    subgraph cachehit["Cache Hit"]
+    subgraph cachehit["キャッシュヒット"]
         direction TB
-        S1["1. xa_load() finds page in xarray<br/>~50-100ns"]
-        S1 --> S2["2. Check page is uptodate (PG_uptodate set)<br/>~10ns"]
-        S2 --> S3["3. copy_to_user() copies data<br/>~1-10us<br/>(depends on size, may need multiple pages)"]
-        S3 --> S4["<b>Total: ~1-10 microseconds for typical read</b>"]
+        S1["1. xa_load() がxarray内でpageを見つける<br/>~50-100ns"]
+        S1 --> S2["2. pageが最新か確認 (PG_uptodate がセット)<br/>~10ns"]
+        S2 --> S3["3. copy_to_user() がデータをコピー<br/>~1-10us<br/>(サイズに依存、複数pageが必要な場合も)"]
+        S3 --> S4["<b>合計: 典型的な読み込みで ~1-10 マイクロ秒</b>"]
     end
 ```
 
-No disk I/O, no waiting, just memory copies.
+ディスクI/Oも待ちもなく、メモリコピーだけである。
 
-### The copy to userspace {#the-copy-to-userspace}
+### ユーザー空間へのコピー {#the-copy-to-userspace}
 
 ```c
-// Copy from kernel page to user buffer
+// カーネルの page からユーザーバッファへコピー
 size_t copy_folio_to_iter(struct folio *folio, size_t offset,
                           size_t bytes, struct iov_iter *i)
 {
-    // Map the page temporarily
-    // Copy bytes to user buffer
-    // Handle partial pages (offset within page)
+    // page を一時的にマップする
+    // バイトをユーザーバッファにコピーする
+    // 部分的な page (page 内のオフセット) を扱う
 }
 ```
 
-This is the primary cost of cached reads - copying data from kernel memory to user memory.
+これがキャッシュされた読み込みの主なコスト、すなわちカーネルメモリからユーザーメモリへのデータのコピーである。
 
-## Stage 5: Cache miss (slow path) {#stage-5-cache-miss-slow-path}
+## ステージ5: キャッシュミス（低速パス） {#stage-5-cache-miss-slow-path}
 
-When the page isn't in cache, the kernel must read from disk:
+pageがキャッシュにない場合、カーネルはディスクから読まなければならない:
 
 ```c
-// Page not in cache - allocate and read
+// page がキャッシュにない - 割り当てて読む
 static struct folio *page_cache_sync_readahead(...)
 {
-    // 1. Allocate a new folio
+    // 1. 新しい folio を割り当てる
     folio = filemap_alloc_folio(gfp, 0);
 
-    // 2. Add to page cache
+    // 2. ページキャッシュに追加
     error = filemap_add_folio(mapping, folio, index, gfp);
 
-    // 3. Submit I/O to read from disk
-    folio_mark_uptodate(folio);  // After I/O completes
+    // 3. ディスクから読むためにI/Oを発行
+    folio_mark_uptodate(folio);  // I/O完了後
 
     return folio;
 }
 ```
 
-### I/O submission {#io-submission}
+### I/Oの発行 {#io-submission}
 
-The actual disk read goes through the file system and block layer:
+実際のディスク読み込みはファイルシステムとブロック層を通る:
 
 ```mermaid
 flowchart TD
-    subgraph cachemiss["Cache Miss Path"]
+    subgraph cachemiss["キャッシュミスのパス"]
         direction TB
         A["filemap_read()"] --> B["page_cache_sync_readahead()"]
-        B --> C["Address space operations<br/>(a_ops->readahead)"]
-        C --> D["File system:<br/>ext4_readahead() / xfs_vm_readahead() / etc."]
-        D --> E["Block layer:<br/>submit_bio()"]
-        E --> F["Device driver:<br/>NVMe / SATA / etc."]
-        F --> G["Physical disk I/O"]
+        B --> C["アドレス空間の操作<br/>(a_ops->readahead)"]
+        C --> D["ファイルシステム:<br/>ext4_readahead() / xfs_vm_readahead() / など"]
+        D --> E["ブロック層:<br/>submit_bio()"]
+        E --> F["デバイスドライバ:<br/>NVMe / SATA / など"]
+        F --> G["物理ディスクI/O"]
     end
 ```
 
-The process blocks until I/O completes (unless using async I/O).
+プロセスはI/Oが完了するまでブロックする（非同期I/Oを使っていない場合）。
 
-### Waiting for I/O {#waiting-for-io}
+### I/Oを待つ {#waiting-for-io}
 
 ```c
-// Block until page is ready
+// page の準備ができるまでブロック
 folio_wait_locked(folio);
 
-// Check it completed successfully
+// 正常に完了したか確認
 if (!folio_test_uptodate(folio)) {
     folio_put(folio);
     return -EIO;
 }
 ```
 
-## Stage 6: Readahead {#stage-6-readahead}
+## ステージ6: リードアヘッド {#stage-6-readahead}
 
-The kernel doesn't just read the requested page - it reads ahead, predicting you'll want subsequent pages:
+カーネルは要求されたpageだけを読むのではない。後続のpageも必要になると予測して先読みする:
 
 ```mermaid
 flowchart TD
-    subgraph request["Read request for page 5"]
+    subgraph request["page 5 の読み込み要求"]
         direction TB
-        subgraph without["Without readahead"]
+        subgraph without["リードアヘッドなし"]
             direction LR
-            W1["Read: [5]"]
-            W2["Cache: [5]"]
+            W1["読み込み: [5]"]
+            W2["キャッシュ: [5]"]
         end
-        subgraph with["With readahead (window = 8)"]
+        subgraph with["リードアヘッドあり (ウィンドウ = 8)"]
             direction LR
-            R1["Read: [5][6][7][8][9][10][11][12]"]
-            R2["Cache: [5][6][7][8][9][10][11][12]"]
+            R1["読み込み: [5][6][7][8][9][10][11][12]"]
+            R2["キャッシュ: [5][6][7][8][9][10][11][12]"]
         end
-        subgraph next["Next read for page 6"]
-            N1["Cache hit! No disk I/O needed."]
+        subgraph next["次の page 6 の読み込み"]
+            N1["キャッシュヒット! ディスクI/Oは不要。"]
         end
     end
 ```
 
-### Readahead algorithm {#readahead-algorithm}
+### リードアヘッドのアルゴリズム {#readahead-algorithm}
 
-The kernel uses an adaptive readahead algorithm:
+カーネルは適応的なリードアヘッドアルゴリズムを使う:
 
 ```c
-// mm/readahead.c (simplified)
+// mm/readahead.c (簡略化)
 void page_cache_sync_readahead(struct address_space *mapping,
                                 struct file_ra_state *ra,
                                 struct file *file,
                                 pgoff_t index,
                                 unsigned long req_count)
 {
-    // Check if sequential access pattern
+    // シーケンシャルなアクセスパターンか確認
     if (index == ra->prev_pos + 1) {
-        // Sequential - expand readahead window
+        // シーケンシャル - リードアヘッドのウィンドウを拡大
         ra->size = min(ra->size * 2, ra->ra_pages);
     } else {
-        // Random - shrink window
-        ra->size = 4;  // Start small
+        // ランダム - ウィンドウを縮小
+        ra->size = 4;  // 小さく始める
     }
 
-    // Submit readahead I/O
+    // リードアヘッドのI/Oを発行
     do_page_cache_ra(ractl, ra->size, ra->async_size);
 }
 ```
 
-### Readahead state {#readahead-state}
+### リードアヘッドの状態 {#readahead-state}
 
-Each file has readahead state tracking its access pattern:
+各ファイルは、アクセスパターンを追跡するリードアヘッドの状態を持つ:
 
 ```c
 struct file_ra_state {
-    pgoff_t start;          // Where readahead started
-    unsigned int size;      // Current window size
-    unsigned int async_size;// Async portion (trigger next readahead)
-    unsigned int ra_pages;  // Maximum window
-    unsigned int mmap_miss; // Cache miss in mmap
-    loff_t prev_pos;        // Previous read position
+    pgoff_t start;          // リードアヘッドの開始位置
+    unsigned int size;      // 現在のウィンドウサイズ
+    unsigned int async_size;// 非同期部分 (次のリードアヘッドのトリガー)
+    unsigned int ra_pages;  // 最大ウィンドウ
+    unsigned int mmap_miss; // mmap でのキャッシュミス
+    loff_t prev_pos;        // 前回の読み込み位置
 };
 ```
 
-### Tuning readahead {#tuning-readahead}
+### リードアヘッドのチューニング {#tuning-readahead}
 
 ```bash
-# View default readahead size (in 512-byte sectors)
+# デフォルトのリードアヘッドサイズを表示 (512バイトセクタ単位)
 cat /sys/block/sda/queue/read_ahead_kb
 
-# Adjust (e.g., for sequential workloads)
+# 調整する (例: シーケンシャルなワークロード向け)
 echo 256 > /sys/block/sda/queue/read_ahead_kb
 
-# Per-file readahead via posix_fadvise
-posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);  // Hint: sequential
-posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);      // Hint: random
+# posix_fadvise によるファイルごとのリードアヘッド
+posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);  // ヒント: シーケンシャル
+posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);      // ヒント: ランダム
 ```
 
-## mmap vs read {#mmap-vs-read}
+## mmapとread {#mmap-vs-read}
 
-There's another way to read files - memory-mapping with `mmap()`:
+ファイルを読むもう1つの方法として、`mmap()`によるメモリマッピングがある:
 
 ```c
-// read() approach
+// read() のアプローチ
 char buf[4096];
 read(fd, buf, 4096);
 
-// mmap() approach
+// mmap() のアプローチ
 char *ptr = mmap(NULL, file_size, PROT_READ, MAP_PRIVATE, fd, 0);
-// Access ptr directly - page faults load data
+// ptr に直接アクセス - ページフォールトがデータをロードする
 ```
 
-Both use the same page cache:
+どちらも同じページキャッシュを使う:
 
 ```mermaid
 flowchart BT
-    subgraph pagecache["Page Cache<br/>(single cache for file, regardless of access method)"]
+    subgraph pagecache["ページキャッシュ<br/>(アクセス方法によらずファイルごとに単一のキャッシュ)"]
     end
 
     subgraph readmethod["read()"]
-        R1["Explicit<br/>copy to<br/>user buf"]
+        R1["ユーザーバッファへの<br/>明示的な<br/>コピー"]
     end
 
     subgraph mmapmethod["mmap()"]
-        M1["On-demand<br/>via page<br/>faults"]
+        M1["ページフォールト<br/>によるオン<br/>デマンド"]
     end
 
     readmethod --> pagecache
     mmapmethod --> pagecache
 ```
 
-**read()**: Explicit copy from page cache to user buffer.
-**mmap()**: Map page cache pages directly into process address space; no copy needed.
+**read()**: ページキャッシュからユーザーバッファへの明示的なコピー。
+**mmap()**: ページキャッシュのpageをプロセスのアドレス空間に直接マップする。コピーは不要。
 
-See [page cache](page-cache.md) and [process address space](mmap.md) for details.
+詳細は[ページキャッシュ](page-cache.md)と[プロセスのアドレス空間](mmap.md)を参照。
 
-## Direct I/O {#direct-io}
+## ダイレクトI/O {#direct-io}
 
-Sometimes you want to bypass the page cache entirely:
+ページキャッシュを完全にバイパスしたい場合もある:
 
 ```c
-// Open with O_DIRECT
+// O_DIRECT で開く
 int fd = open("file.dat", O_RDONLY | O_DIRECT);
 
-// Read bypasses page cache - goes directly to/from user buffer
+// 読み込みはページキャッシュをバイパスし、ユーザーバッファと直接やり取りする
 read(fd, aligned_buffer, size);
 ```
 
-**When to use direct I/O**:
+**ダイレクトI/Oを使うべきとき**:
 
-- Database engines (they have their own caching)
-- Very large sequential reads (cache would be wasteful)
-- When you need predictable I/O timing
+- データベースエンジン（独自のキャッシュを持つ）
+- 非常に大きなシーケンシャル読み込み（キャッシュが無駄になる）
+- 予測可能なI/Oタイミングが必要なとき
 
-**Requirements**:
+**要件**:
 
-- Buffer must be aligned (typically 512 bytes or 4KB)
-- Offset and size often must be aligned too
+- バッファはアラインされていなければならない（通常は512バイトまたは4KB）
+- オフセットとサイズもアラインが必要なことが多い
 
-## The complete picture {#the-complete-picture}
+## 全体像 {#the-complete-picture}
 
-Here's the full flow for a `read()` call:
+`read()`呼び出しの完全な流れは次のとおり:
 
 ```mermaid
 flowchart TD
-    A["read(fd, buf, 4096)"] --> B["fdget_pos(fd)<br/><i>Get struct file from fd table</i>"]
-    B --> C["vfs_read()<br/><i>Permission checks, dispatch</i>"]
-    C --> D["generic_file_read_iter()<br/><i>Most file systems</i>"]
-    D --> E["filemap_read()<br/><i>Page cache logic</i>"]
-    E --> F{Page in cache?}
+    A["read(fd, buf, 4096)"] --> B["fdget_pos(fd)<br/><i>fdテーブルからstruct fileを取得</i>"]
+    B --> C["vfs_read()<br/><i>パーミッションチェック、ディスパッチ</i>"]
+    C --> D["generic_file_read_iter()<br/><i>ほとんどのファイルシステム</i>"]
+    D --> E["filemap_read()<br/><i>ページキャッシュのロジック</i>"]
+    E --> F{pageはキャッシュ内?}
 
-    F -->|YES| G["Page in cache"]
-    F -->|NO| H["Not in cache"]
+    F -->|はい| G["pageはキャッシュ内"]
+    F -->|いいえ| H["キャッシュにない"]
 
-    H --> I["<b>Readahead:</b><br/>- Allocate pages<br/>- Submit I/O<br/>- Wait for I/O<br/>- Add to cache"]
+    H --> I["<b>リードアヘッド:</b><br/>- pageを割り当てる<br/>- I/Oを発行<br/>- I/Oを待つ<br/>- キャッシュに追加"]
 
-    G --> J["folio_wait_locked()<br/><i>ensure page is ready</i>"]
+    G --> J["folio_wait_locked()<br/><i>pageの準備ができていることを保証</i>"]
     I --> J
 
-    J --> K["copy_folio_to_iter()<br/><i>copy to user buffer</i>"]
+    J --> K["copy_folio_to_iter()<br/><i>ユーザーバッファへコピー</i>"]
     K --> L["return bytes_read"]
 ```
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Watch cache hit ratio {#watch-cache-hit-ratio}
+### キャッシュヒット率を観察する {#watch-cache-hit-ratio}
 
 ```bash
-# Clear the page cache (requires root)
+# ページキャッシュをクリア (root が必要)
 echo 3 > /proc/sys/vm/drop_caches
 
-# Read a file
+# ファイルを読む
 cat /path/to/large/file > /dev/null
 
-# Check cache stats
+# キャッシュ統計を確認
 cat /proc/vmstat | grep -E "pgpg|pgfault"
-# pgpgin  - pages read from disk
-# pgpgout - pages written to disk
+# pgpgin  - ディスクから読まれた page
+# pgpgout - ディスクに書かれた page
 ```
 
-### Compare cached vs uncached reads {#compare-cached-vs-uncached-reads}
+### キャッシュあり/なしの読み込みを比較する {#compare-cached-vs-uncached-reads}
 
 ```bash
-# First read (cold cache)
+# 1回目の読み込み (コールドキャッシュ)
 time cat /path/to/large/file > /dev/null
 
-# Second read (warm cache)
+# 2回目の読み込み (ウォームキャッシュ)
 time cat /path/to/large/file > /dev/null
 
-# The second read should be much faster
+# 2回目の読み込みははるかに速いはず
 ```
 
-### Monitor readahead {#monitor-readahead}
+### リードアヘッドを監視する {#monitor-readahead}
 
 ```bash
-# Watch readahead activity
+# リードアヘッドの動きを監視
 cat /proc/vmstat | grep -E "pgread|pgalloc"
 
-# Trace readahead events
+# リードアヘッドのイベントをトレース
 echo 1 > /sys/kernel/debug/tracing/events/filemap/mm_filemap_add_to_page_cache/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### View cache contents for a file {#view-cache-contents-for-a-file}
+### ファイルのキャッシュ内容を見る {#view-cache-contents-for-a-file}
 
 ```bash
-# Using fincore (part of util-linux)
+# fincore を使う (util-linux の一部)
 fincore /path/to/file
 
-# Shows which pages of the file are in cache
+# ファイルのどの page がキャッシュ内にあるかを表示する
 
-# Using vmtouch (third-party tool)
+# vmtouch を使う (サードパーティ製ツール)
 vmtouch -v /path/to/file
 ```
 
-### Test direct I/O {#test-direct-io}
+### ダイレクトI/Oを試す {#test-direct-io}
 
 ```bash
-# Read with direct I/O (bypasses cache)
+# ダイレクトI/Oで読む (キャッシュをバイパス)
 dd if=/path/to/file of=/dev/null bs=4096 iflag=direct
 
-# Compare with buffered I/O
+# バッファードI/Oと比較
 dd if=/path/to/file of=/dev/null bs=4096
 
-# Direct I/O timing is more consistent but potentially slower
-# for cached data
+# ダイレクトI/Oのタイミングはより安定しているが、キャッシュ済みの
+# データに対しては遅くなる可能性がある
 ```
 
-### Observe page cache size {#observe-page-cache-size}
+### ページキャッシュのサイズを観察する {#observe-page-cache-size}
 
 ```bash
-# Current cache usage
+# 現在のキャッシュ使用量
 cat /proc/meminfo | grep -E "Cached|Buffers"
 
-# Watch it grow as you read files
+# ファイルを読むにつれて増えていく様子を観察
 watch -n 1 'cat /proc/meminfo | grep -E "Cached|Buffers"'
 
-# Read a large file in another terminal
+# 別のターミナルで大きなファイルを読む
 cat /path/to/large/file > /dev/null
 ```
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | Page cache operations, filemap_read() |
-| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | Readahead algorithm |
-| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | VFS read/write entry points |
-| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | struct address_space, file operations |
-| [`include/linux/pagemap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pagemap.h) | Page cache APIs |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | ページキャッシュの操作、filemap_read() |
+| [`mm/readahead.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/readahead.c) | リードアヘッドのアルゴリズム |
+| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | VFSのread/writeの入口 |
+| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | struct address_space、ファイル操作 |
+| [`include/linux/pagemap.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pagemap.h) | ページキャッシュのAPI |
 
-## History {#history}
+## 歴史 {#history}
 
-### Page cache evolution {#page-cache-evolution}
+### ページキャッシュの進化 {#page-cache-evolution}
 
-**Early Linux**: Simple page cache with manual readahead.
+**初期のLinux**: 手動のリードアヘッドを持つ単純なページキャッシュ。
 
-**v2.4**: Unified buffer cache and page cache.
+**v2.4**: バッファキャッシュとページキャッシュが統合された。
 
-**v2.6**: Radix tree for page cache lookup, adaptive readahead.
+**v2.6**: ページキャッシュ検索のためのradix tree、適応的リードアヘッド。
 
-**v4.20 (2018)**: XArray replaced radix tree for page cache indexing.
+**v4.20 (2018)**: ページキャッシュのインデックス付けでXArrayがradix treeを置き換えた。
 
-**Commit**: [4c7472c0df2f](https://git.kernel.org/linus/4c7472c0df2f) ("page cache: Convert find_get_entry to XArray") | [LKML](https://lore.kernel.org/linux-mm/20181205145239.17953-1-willy@infradead.org/)
+**コミット**: [4c7472c0df2f](https://git.kernel.org/linus/4c7472c0df2f) ("page cache: Convert find_get_entry to XArray") | [LKML](https://lore.kernel.org/linux-mm/20181205145239.17953-1-willy@infradead.org/)
 
-**Author**: Matthew Wilcox
+**作者**: Matthew Wilcox
 
-In the flow above, `filemap_get_folio()` uses the `xarray` to look up cached pages by file offset. The `xarray` provides better cache utilization than the radix tree it replaced, speeding up the cache hit path.
+上の流れでは、`filemap_get_folio()`が`xarray`を使って、ファイルオフセットによってキャッシュされたpageを検索する。`xarray`は置き換えられたradix treeよりも優れたキャッシュ利用効率を提供し、キャッシュヒットのパスを高速化する。
 
-### Folio conversion (v5.16+) {#folio-conversion-v516}
+### folioへの変換（v5.16以降） {#folio-conversion-v516}
 
-In the flow above, functions like `filemap_get_folio()` and `filemap_read()` work with `struct folio` rather than raw `struct page`:
+上の流れでは、`filemap_get_folio()`や`filemap_read()`などの関数は、生の`struct page`ではなく`struct folio`を扱う:
 
-**Commit**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
+**コミット**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
 
-**Author**: Matthew Wilcox
+**作者**: Matthew Wilcox
 
-- **What it enables**: The page cache can now store large folios (e.g., 64KB or larger) for files, reducing metadata overhead and improving I/O efficiency for large sequential reads
-- **In our flow**: When `read()` triggers a cache miss, `filemap_alloc_folio()` may allocate a large folio, and readahead fills it with multiple pages worth of file data in a single I/O operation
+- **何が可能になるか**: ページキャッシュがファイルのためにlarge folio（例: 64KB以上）を保持できるようになり、メタデータのオーバーヘッドが減り、大きなシーケンシャル読み込みのI/O効率が向上する
+- **我々の流れでは**: `read()`がキャッシュミスを起こすと、`filemap_alloc_folio()`がlarge folioを割り当てることがあり、リードアヘッドは複数page分のファイルデータを1回のI/O操作でそこに埋める
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-The page cache and read path involve complex interactions between filesystems, memory management, and I/O. Bugs here cause data corruption, stale reads, or crashes.
+ページキャッシュと読み込みパスには、ファイルシステム、メモリ管理、I/Oの間の複雑な相互作用が関わる。ここでのバグはデータ破損、古いデータの読み込み、クラッシュを引き起こす。
 
 ---
 
-### Case 1: filemap_fault() race conditions {#case-1-filemap_fault-race-conditions}
+### ケース1: filemap_fault()の競合状態 {#case-1-filemap_fault-race-conditions}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-The `filemap_fault()` function handles page faults for memory-mapped files. Race conditions between invalidation and fault handling have caused multiple bugs.
+`filemap_fault()`関数は、メモリマップされたファイルのページフォールトを処理する。無効化とフォールト処理の間の競合状態が、複数のバグを引き起こしてきた。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-From [kernel discussions](https://linux.kernel.narkive.com/8lKSc68j/potential-fix-to-filemap-fault):
+[カーネルの議論](https://linux.kernel.narkive.com/8lKSc68j/potential-fix-to-filemap-fault)より:
 
-A race can occur between:
-1. **Thread A**: Handling a page fault, reading file data into page cache
-2. **Thread B**: Invalidating/truncating the file
+競合は次の間で起こりうる:
+1. **スレッドA**: ページフォールトを処理し、ファイルデータをページキャッシュに読み込んでいる
+2. **スレッドB**: ファイルを無効化/truncateしている
 
-If Thread B truncates the file while Thread A is faulting in a page, Thread A might install a page beyond the new file end, or see stale data.
+スレッドAがpageをフォールトインしている間にスレッドBがファイルをtruncateすると、スレッドAは新しいファイル末尾より先にpageを設置したり、古いデータを見たりする可能性がある。
 
 > *"We see a blank page from time to time, when we should be seeing valid data."*
 
-#### Real-world implications {#real-world-implications}
+（訳: 有効なデータが見えるべきところで、ときどき空白のpageが見える。）
 
-Applications using mmap'd files (databases, VMs, etc.) could see:
+#### 現実世界への影響 {#real-world-implications}
 
-- Stale data after truncation
-- Blank pages
-- Crashes on invalid access
+mmapされたファイルを使うアプリケーション（データベース、VMなど）は次のような事態に遭遇しうる:
 
-#### Mitigations {#mitigations}
+- truncate後の古いデータ
+- 空白のpage
+- 不正なアクセスによるクラッシュ
 
-- Proper page lock ordering between fault and truncate paths
-- `page_mkwrite()` coordination for writable mappings
-- Filesystem-specific locking (e.g., i_rwsem)
+#### 緩和策 {#mitigations}
 
----
-
-### Case 2: 9p read corruption (2025) {#case-2-9p-read-corruption-2025}
-
-#### What happened {#what-happened_1}
-
-[Recent LKML discussion](https://lkml.org/lkml/2025/12/19/689) documented read corruption with 9p filesystem and mmapped content.
-
-#### The bug {#the-bug_1}
-
-The 9p filesystem's splice implementation had a bug where page pinning during data transfer could race with page cache operations, causing:
-
-- Incorrect data being read
-- Data appearing in wrong file positions
-- Silent corruption without errors
-
-#### Why this matters {#why-this-matters}
-
-Any filesystem implementing custom I/O paths (splice, direct I/O, io_uring) must coordinate carefully with the page cache. Bugs in this coordination are difficult to detect because:
-
-1. They require specific timing
-2. Corruption is silent
-3. Standard I/O testing doesn't trigger them
+- フォールトパスとtruncateパスの間の適切なpageロックの順序
+- 書き込み可能なマッピングのための`page_mkwrite()`による協調
+- ファイルシステム固有のロック（例: i_rwsem）
 
 ---
 
-### Case 3: Poisoned page cache data loss {#case-3-poisoned-page-cache-data-loss}
+### ケース2: 9pの読み込み破損（2025年） {#case-2-9p-read-corruption-2025}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_1}
 
-When a hardware memory error (hwpoison) affects a page cache page, the kernel must handle it carefully to avoid silent data loss.
+[最近のLKMLの議論](https://lkml.org/lkml/2025/12/19/689)で、9pファイルシステムとmmapされた内容での読み込み破損が報告された。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_1}
 
-From [kernel patch discussion](https://www.spinics.net/lists/linux-fsdevel/msg204546.html):
+9pファイルシステムのsplice実装には、データ転送中のpageのピン留めがページキャッシュの操作と競合しうるバグがあり、次のことを引き起こした:
+
+- 誤ったデータの読み込み
+- 誤ったファイル位置にデータが現れる
+- エラーなしの静かな破損
+
+#### なぜ重要か {#why-this-matters}
+
+独自のI/Oパス（splice、ダイレクトI/O、io_uring）を実装するファイルシステムは、ページキャッシュと慎重に協調しなければならない。この協調におけるバグは、次の理由で検出が難しい:
+
+1. 特定のタイミングを必要とする
+2. 破損が静かに起こる
+3. 標準的なI/Oテストでは発生しない
+
+---
+
+### ケース3: poisonされたページキャッシュによるデータ消失 {#case-3-poisoned-page-cache-data-loss}
+
+#### 何が起きたか {#what-happened_2}
+
+ハードウェアのメモリエラー（hwpoison）がページキャッシュのpageに影響すると、カーネルは静かなデータ消失を避けるために慎重に扱わなければならない。
+
+#### バグ {#the-bug_2}
+
+[カーネルパッチの議論](https://www.spinics.net/lists/linux-fsdevel/msg204546.html)より:
 
 > *"Solve silent data loss caused by poisoned page cache (shmem/tmpfs)"*
 
-If a page in the page cache gets a hardware error:
-1. The page is marked poisoned
-2. But readers might still see cached (potentially corrupted) data
-3. Writes might silently fail
+（訳: poisonされたページキャッシュ（shmem/tmpfs）が引き起こす静かなデータ消失を解決する）
 
-For tmpfs/shmem, there's no backing store to recover from - the data is simply lost.
+ページキャッシュ内のpageがハードウェアエラーを受けると:
+1. pageはpoisonedとマークされる
+2. しかし読み込み側はまだキャッシュされた（破損している可能性のある）データを見るかもしれない
+3. 書き込みが静かに失敗するかもしれない
 
-#### Real-world implications {#real-world-implications_1}
+tmpfs/shmemには回復元となるバッキングストアがないので、データは単に失われる。
 
-Hardware errors in RAM used for page cache could cause:
+#### 現実世界への影響 {#real-world-implications_1}
 
-- Database corruption
-- Lost user data
-- Inconsistent filesystem state
+ページキャッシュに使われるRAMのハードウェアエラーは次を引き起こしうる:
 
-#### Mitigation {#mitigation}
+- データベースの破損
+- ユーザーデータの消失
+- ファイルシステムの不整合な状態
 
-The patches ensure:
+#### 緩和策 {#mitigation}
 
-- Poisoned pages are immediately evicted from cache
-- Subsequent reads go to disk (if file-backed)
-- Errors are properly propagated to userspace
+パッチは次を保証する:
+
+- poisonされたpageは直ちにキャッシュから追い出される
+- 後続の読み込みは（ファイルバックであれば）ディスクに行く
+- エラーはユーザー空間に適切に伝播される
 
 ---
 
-### Case 4: Readahead window explosion {#case-4-readahead-window-explosion}
+### ケース4: リードアヘッドウィンドウの爆発 {#case-4-readahead-window-explosion}
 
-#### What happened {#what-happened_3}
+#### 何が起きたか {#what-happened_3}
 
-The adaptive readahead algorithm tries to predict access patterns. Bugs in the heuristics can cause excessive I/O.
+適応的リードアヘッドアルゴリズムはアクセスパターンを予測しようとする。そのヒューリスティクスのバグは過剰なI/Oを引き起こしうる。
 
-#### The bug {#the-bug_3}
+#### バグ {#the-bug_3}
 
-If readahead incorrectly predicts sequential access:
-1. Kernel reads many pages ahead
-2. Application doesn't use them
-3. Useful pages get evicted to make room
-4. Application triggers more I/O for the evicted pages
-5. System thrashes despite available memory
+リードアヘッドがシーケンシャルアクセスを誤って予測すると:
+1. カーネルが多数のpageを先読みする
+2. アプリケーションはそれらを使わない
+3. 場所を空けるために有用なpageが追い出される
+4. アプリケーションは追い出されたpageのためにさらにI/Oを引き起こす
+5. メモリに余裕があるにもかかわらずシステムがスラッシングする
 
-#### Historical examples {#historical-examples}
+#### 歴史的な例 {#historical-examples}
 
-- **Random access on large files**: Readahead assumes sequential, wastes bandwidth
-- **Multiple streams**: Readahead doesn't track per-reader state well (improved in recent kernels)
-- **SSD vs HDD**: Optimal readahead differs; default often wrong
+- **大きなファイルへのランダムアクセス**: リードアヘッドはシーケンシャルを仮定し、帯域を浪費する
+- **複数のストリーム**: リードアヘッドは読み手ごとの状態をうまく追跡できない（最近のカーネルで改善された）
+- **SSDとHDD**: 最適なリードアヘッドは異なり、デフォルトはしばしば不適切
 
-#### Tuning {#tuning}
+#### チューニング {#tuning}
 
 ```bash
-# Check default readahead (KB)
+# デフォルトのリードアヘッドを確認 (KB)
 blockdev --getra /dev/sda
-# Typical: 256 (KB)
+# 典型的には: 256 (KB)
 
-# Reduce for random workloads
+# ランダムなワークロード向けに減らす
 blockdev --setra 64 /dev/sda
 
-# Per-file hint in application
+# アプリケーションでのファイルごとのヒント
 posix_fadvise(fd, 0, 0, POSIX_FADV_RANDOM);
 ```
 
 ---
 
-### Case 5: Page cache coherency with direct I/O {#case-5-page-cache-coherency-with-direct-io}
+### ケース5: ダイレクトI/Oとのページキャッシュのコヒーレンシ {#case-5-page-cache-coherency-with-direct-io}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_4}
 
-Applications mixing buffered I/O (page cache) and direct I/O can see stale data.
+バッファードI/O（ページキャッシュ）とダイレクトI/Oを混在させるアプリケーションは、古いデータを見ることがある。
 
-#### The bug {#the-bug_4}
+#### バグ {#the-bug_4}
 
 ```c
-// Thread A: buffered write
+// スレッドA: バッファード書き込み
 write(fd, "AAAA", 4);
 
-// Thread B: direct read (bypasses page cache)
+// スレッドB: ダイレクト読み込み (ページキャッシュをバイパス)
 char buf[4];
-pread(fd_dio, buf, 4, 0);  // Might see old data!
+pread(fd_dio, buf, 4, 0);  // 古いデータが見えるかもしれない!
 
-// Why: Page cache is dirty but not yet written to disk
-// Direct I/O reads from disk, sees old data
+// 理由: ページキャッシュは dirty だがまだディスクに書かれていない
+// ダイレクトI/Oはディスクから読むので、古いデータが見える
 ```
 
-#### Real-world implications {#real-world-implications_2}
+#### 現実世界への影響 {#real-world-implications_2}
 
-Databases often use:
+データベースはしばしば次を使う:
 
-- Direct I/O for data files (predictable latency)
-- Buffered I/O for logs (better small-write performance)
+- データファイルにはダイレクトI/O（予測可能なレイテンシ）
+- ログにはバッファードI/O（小さな書き込みの性能が良い）
 
-If not carefully coordinated, one subsystem sees stale data from the other.
+慎重に協調しないと、一方のサブシステムが他方から古いデータを見てしまう。
 
-#### Mitigation {#mitigation_1}
+#### 緩和策 {#mitigation_1}
 
 ```c
-// Before direct read, flush buffered writes
-fsync(fd);  // Ensure page cache written to disk
+// ダイレクト読み込みの前に、バッファードの書き込みをフラッシュする
+fsync(fd);  // ページキャッシュがディスクに書かれたことを保証
 
-// Or use O_DSYNC for writes
+// または書き込みに O_DSYNC を使う
 int fd = open(path, O_WRONLY | O_DSYNC);
 
-// Or invalidate cache before direct read
+// またはダイレクト読み込みの前にキャッシュを無効化する
 posix_fadvise(fd, 0, 0, POSIX_FADV_DONTNEED);
 ```
 
 ---
 
-### Case 6: BDI (Backing Device Info) writeback bugs {#case-6-bdi-backing-device-info-writeback-bugs}
+### ケース6: BDI（Backing Device Info）のライトバックのバグ {#case-6-bdi-backing-device-info-writeback-bugs}
 
-#### What happened {#what-happened_5}
+#### 何が起きたか {#what-happened_5}
 
-The BDI tracks per-device writeback state. Bugs in BDI handling have caused writeback stalls and data loss.
+BDIはデバイスごとのライトバックの状態を追跡する。BDIの扱いにおけるバグは、ライトバックの停滞やデータ消失を引き起こしてきた。
 
-#### The bug {#the-bug_5}
+#### バグ {#the-bug_5}
 
-From a [kernel BUG report](https://access.redhat.com/solutions/5773601):
+[カーネルのBUG報告](https://access.redhat.com/solutions/5773601)より:
 
 > *"Kernel panic in __delete_from_page_cache() with a message 'kernel BUG at mm/filemap.c:240!'"*
 
-When a device is removed while dirty pages exist:
-1. BDI structure may be freed
-2. Writeback worker still references it
-3. Use-after-free → crash
+（訳: __delete_from_page_cache()で'kernel BUG at mm/filemap.c:240!'というメッセージとともにカーネルパニック）
 
-#### Why this matters {#why-this-matters_1}
+dirty pageが存在する間にデバイスが取り外されると:
+1. BDI構造体が解放される可能性がある
+2. ライトバックワーカーがまだそれを参照している
+3. use-after-free → クラッシュ
 
-Hot-pluggable storage (USB, SATA hotplug, NVMe hot remove) must coordinate with the page cache. The page cache may hold dirty data for the device, and removing the device without proper synchronization causes:
+#### なぜ重要か {#why-this-matters_1}
 
-- Lost dirty data
-- Kernel crash
-- Filesystem corruption
+ホットプラグ可能なストレージ（USB、SATAホットプラグ、NVMeのホットリムーブ）は、ページキャッシュと協調しなければならない。ページキャッシュはデバイスのdirtyデータを保持している可能性があり、適切な同期なしにデバイスを取り外すと次を引き起こす:
+
+- dirtyデータの消失
+- カーネルのクラッシュ
+- ファイルシステムの破損
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Root Cause | Impact | Prevention |
+| バグ | 根本原因 | 影響 | 予防策 |
 |-----|------------|--------|------------|
-| **filemap_fault race** | Truncate vs fault race | Stale data | Proper lock ordering |
-| **9p splice corruption** | Page pinning bug | Data corruption | Careful splice implementation |
-| **Poisoned page cache** | hwpoison handling | Silent data loss | Error propagation |
-| **Readahead explosion** | Wrong heuristics | Thrashing | Tune readahead, use fadvise |
-| **DIO cache coherency** | Buffered vs direct mix | Stale reads | fsync before DIO |
-| **BDI removal** | Device hot-remove race | Crash, data loss | Proper teardown sequence |
+| **filemap_faultの競合** | truncateとフォールトの競合 | 古いデータ | 適切なロック順序 |
+| **9pのsplice破損** | pageのピン留めのバグ | データ破損 | 慎重なsplice実装 |
+| **poisonされたページキャッシュ** | hwpoisonの扱い | 静かなデータ消失 | エラーの伝播 |
+| **リードアヘッドの爆発** | 誤ったヒューリスティクス | スラッシング | リードアヘッドの調整、fadviseの使用 |
+| **DIOのキャッシュコヒーレンシ** | バッファードとダイレクトの混在 | 古いデータの読み込み | DIO前のfsync |
+| **BDIの取り外し** | デバイスのホットリムーブの競合 | クラッシュ、データ消失 | 適切な破棄手順 |
 
-The common thread: **the page cache is a critical performance optimization that adds complexity**. Any operation that bypasses, invalidates, or races with the cache is a potential bug site.
+共通点は、**ページキャッシュは複雑さを増す重要な性能最適化である**ということである。キャッシュをバイパスしたり、無効化したり、キャッシュと競合したりする操作はすべて、潜在的なバグの発生箇所となる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Page cache](page-cache.md) - Page cache internals
-- [Life of a malloc](life-of-malloc.md) - Contrast with anonymous memory
-- [Life of a page](life-of-page.md) - Page lifecycle including cache pages
-- [Process address space](mmap.md) - mmap alternative to read()
+- [ページキャッシュ](page-cache.md) - ページキャッシュの内部
+- [mallocの一生](life-of-malloc.md) - 匿名メモリとの対比
+- [pageの一生](life-of-page.md) - キャッシュpageを含むpageのライフサイクル
+- [プロセスのアドレス空間](mmap.md) - read()の代替としてのmmap
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Readahead: the theory](https://lwn.net/Articles/155510/) (2005) - Readahead concepts
-- [The XArray data structure](https://lwn.net/Articles/745073/) (2017) - Radix tree replacement
-- [Filesystem I/O and the page cache](https://lwn.net/Articles/712467/) (2016) - Overview
-- [Fixing page-writeback races](https://lwn.net/Articles/326552/) (2009) - Writeback coordination
+- [Readahead: the theory](https://lwn.net/Articles/155510/) (2005) - リードアヘッドの概念
+- [The XArray data structure](https://lwn.net/Articles/745073/) (2017) - radix treeの置き換え
+- [Filesystem I/O and the page cache](https://lwn.net/Articles/712467/) (2016) - 概要
+- [Fixing page-writeback races](https://lwn.net/Articles/326552/) (2009) - ライトバックの協調
