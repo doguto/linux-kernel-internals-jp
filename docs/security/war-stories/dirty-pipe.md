@@ -1,82 +1,82 @@
 # Dirty Pipe {#dirty-pipe}
 
-> CVE-2022-0847 — one missing `buf->flags = 0;` let any user who could *read* a file overwrite it in the page cache, including immutable files, read-only btrfs snapshots, and read-only mounts
+> CVE-2022-0847 — `buf->flags = 0;`が1行欠けていたために、ファイルを*読める*ユーザーなら誰でも、イミュータブルなファイル、読み取り専用のbtrfsスナップショット、読み取り専用マウントを含め、そのファイルをページキャッシュ上で上書きできた
 
-Disclosed
-:   March 7, 2022 (fix merged February 22, 2022)
+公開日
+:   2022年3月7日（修正のマージは2022年2月22日）
 
-Reported by
+報告者
 :   Max Kellermann, CM4all GmbH / IONOS SE
 
 CVSS
-:   7.8 HIGH (`AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H` — NVD's primary score; Red Hat's own CNA scoring, per [access.redhat.com](https://access.redhat.com/security/cve/cve-2022-0847), agrees)
+:   7.8 HIGH（`AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H` — NVDの主スコア。[access.redhat.com](https://access.redhat.com/security/cve/cve-2022-0847)によれば、Red Hat独自のCNA評価も一致している）
 
-Bug present since
-:   4.9 (2016)
+バグの存在期間
+:   4.9以降（2016年）
 
-Exploitable since
-:   5.8 (2020)
+悪用可能になった時期
+:   5.8以降（2020年）
 
-Fixed in
-:   5.16.11, 5.15.25, 5.10.102 (all released February 23, 2022)
+修正バージョン
+:   5.16.11、5.15.25、5.10.102（いずれも2022年2月23日リリース）
 
-Exploit tool
-:   yes — the reporter published a working PoC in the disclosure itself
+エクスプロイトツール
+:   あり — 報告者が開示文書そのものの中で動作するPoCを公開した
 
-Actively exploited
-:   yes — added to CISA's KEV catalog April 25, 2022 (per [NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0847))
+実際の悪用
+:   あり — 2022年4月25日にCISAのKEVカタログに追加（[NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0847)による）
 
-*Part of [War Stories: Linux Security Bugs and CVEs](../war-stories.md).*
+*[事件簿: LinuxセキュリティのバグとCVE](../war-stories.md)の一部。*
 
-## What happened {#what-happened}
+## 何が起きたか {#what-happened}
 
-A missing initializer — `buf->flags = 0;` — sat dormant for four years in a pair of `lib/iov_iter.c` functions that hand-populate pipe buffers, before an unrelated, well-reasoned refactor turned it into one of the most severe local-privilege-escalation bugs in the kernel's history: CVE-2022-0847, exploitable with no capabilities and no write permission at all.
+欠けていた初期化 — `buf->flags = 0;` — は、パイプバッファを手作業で埋める`lib/iov_iter.c`の2つの関数の中で4年間眠っていた。その後、無関係で十分に考え抜かれたリファクタリングによって、それはカーネル史上最も深刻なローカル権限昇格バグの1つ、CVE-2022-0847になった。ケーパビリティも書き込み権限も一切なしに悪用可能なバグである。
 
-A hosting company's engineer found it while investigating what looked like ordinary data corruption in customer log files, not while hunting for kernel bugs — and once he understood the mechanism, turning it into a working exploit took five syscalls in a fixed order, no race and no privileges required.
+これを見つけたのはホスティング企業のエンジニアで、カーネルのバグを探していたのではなく、顧客のログファイルで起きていたありふれたデータ破損に見えるものを調査している最中だった — そして仕組みを理解してしまえば、それを動作するエクスプロイトに仕立てるのは、決まった順序の5つのシステムコールで済み、競合も特権も必要なかった。
 
-## How it was found {#how-it-was-found}
+## どのように発見されたか {#how-it-was-found}
 
-For nearly a year, nobody knew this was a security bug — the first support ticket landed April 29, 2021, and the corruption wasn't identified as a kernel bug until February 19, 2022. Kellermann's own account of the mystery runs through the usual hardware suspects before that: "Is this caused by flaky hardware? Bad RAM? Bad storage? Cosmic rays?"
+1年近くの間、誰もこれがセキュリティバグだとは知らなかった — 最初のサポートチケットは2021年4月29日に届き、破損がカーネルのバグだと特定されたのは2022年2月19日のことだった。その前段の謎について、Kellermann自身の説明はお決まりのハードウェアの容疑者を順にたどっている: "Is this caused by flaky hardware? Bad RAM? Bad storage? Cosmic rays?"（訳: 不安定なハードウェアのせいか？ 壊れたRAM？ 壊れたストレージ？ 宇宙線？）
 
-CM4all's hosting platform compresses daily web access logs with zlib and serves a month's worth as one concatenated `.gz` — or, for Windows users, wrapped in a ZIP container — using `splice()` to push file data straight into the HTTP connection. Starting April 2021, customers occasionally reported that downloaded logs failed CRC validation. The first ticket was closed by hand-patching the CRC.
+CM4allのホスティングプラットフォームは、日々のWebアクセスログをzlibで圧縮し、1か月分を1つの連結された`.gz`として — Windowsユーザー向けにはZIPコンテナに包んで — 提供しており、`splice()`を使ってファイルデータを直接HTTP接続に送り込んでいた。2021年4月から、ダウンロードしたログがCRC検証に失敗するという報告が顧客から時折寄せられるようになった。最初のチケットは、CRCを手作業で修正することで解決扱いになった。
 
-The corruption had a signature: every affected file's last eight bytes were replaced by the same wrong bytes, visible at the tail of a hex dump:
+破損には特徴があった。影響を受けたすべてのファイルの最後の8バイトが同じ誤ったバイト列に置き換わっており、16進ダンプの末尾にそれが見える:
 
 ```
 000005f0  81 d6 94 39 8a 05 b0 ed  e9 c0 fd 07 00 00 ff ff
 00000600  03 00 50 4b 01 02 1e 03  14 00
 ```
 
-`50 4b` is `PK`. `01 02` is a ZIP central directory file header. The bytes overwriting the log files were the ZIP header that the *web service* wrote to its pipe after splicing all the daily files — a process running as a different user, with no write permission on those files, which never opened them for writing at all.
+`50 4b`は`PK`である。`01 02`はZIPのセントラルディレクトリのファイルヘッダである。ログファイルを上書きしていたバイト列は、*Webサービス*がすべての日次ファイルをspliceした後に自分のパイプに書き込んだZIPヘッダだった — 別のユーザーとして動作し、それらのファイルへの書き込み権限を持たず、そもそも書き込み用に開いたことすらないプロセスである。
 
-A full-disk scan turned up 37 corrupt files over three months, clustered hard on the last day of each month — because the download loop sends days in order, so the last day's file is always the one immediately followed by the `PK` header. Only the server actually serving HTTP downloads was affected; its standby, running the identical log-splitting job, had zero corruptions.
+ディスク全体をスキャンすると、3か月で37個の破損ファイルが見つかり、それらは各月の最終日に強く集中していた — ダウンロードのループは日付順にファイルを送るので、最終日のファイルは常に`PK`ヘッダの直前に来るからである。影響を受けたのは実際にHTTPダウンロードを提供しているサーバーだけで、同じログ分割ジョブを実行していた待機系のサーバーでは破損はゼロだった。
 
-Kellermann's minimal reproducer is two small programs: one that loops `write(1, "AAAAA", 5)` into a file, and one that loops `splice()` from that file into a pipe followed by `write(1, "BBBBB", 5)`. "BBBBB" started appearing inside the file. A bisect across the 185,011 commits between v4.19 and v5.10 — which git bisect reduces to roughly 17 steps — landed on `f6dd975583bd`.
+Kellermannの最小再現コードは2つの小さなプログラムである。1つはファイルに`write(1, "AAAAA", 5)`をループで書き込み、もう1つはそのファイルからパイプへの`splice()`と、それに続く`write(1, "BBBBB", 5)`をループで実行する。するとファイルの中に"BBBBB"が現れ始めた。v4.19からv5.10までの185,011個のコミットにわたるbisect — git bisectにかかればおよそ17ステップに縮まる — は`f6dd975583bd`にたどり着いた。
 
-His initial read was that this required a concurrent privileged writer and depended on winning a race. Once he understood the actual mechanism, the hole widened enormously: no writer, no race, arbitrary data at almost arbitrary offsets in any file the attacker can read. `/etc/passwd`, a setuid binary, `authorized_keys` — anything.
+当初の見立ては、並行して書き込む特権を持つプロセスが必要で、競合に勝つことに依存するというものだった。実際の仕組みを理解すると、穴は一気に大きく広がった。書き込み手も競合も不要で、攻撃者が読めるあらゆるファイルの、ほぼ任意のオフセットに任意のデータを書ける。`/etc/passwd`、setuidバイナリ、`authorized_keys` — 何でもである。
 
-## The impact {#the-impact}
+## 影響 {#the-impact}
 
-One property of the overwrite makes it especially nasty operationally: it never marks the page dirty, so writeback never runs. The change is live for every process that reads the file, and it evaporates on reboot or reclaim without ever touching the disk. Kellermann's understated note — "This allows interesting attacks without leaving a trace on hard disk" — describes an incident that leaves no forensic artifact in the filesystem.
+上書きのある性質が、運用面でこれを特にたちの悪いものにしている。ページをdirtyにしないので、ライトバックが一切行われないのである。変更はそのファイルを読むすべてのプロセスに対して有効だが、ディスクに一度も触れることなく、再起動やメモリ回収で消えてしまう。Kellermannの控えめな注記 — "This allows interesting attacks without leaving a trace on hard disk"（訳: これにより、ハードディスクに痕跡を残さない興味深い攻撃が可能になる）— は、ファイルシステムに何のフォレンジック上の痕跡も残さないインシデントを表している。
 
-Exploitation in the wild followed quickly and is well documented:
+実環境での悪用はすぐに続き、よく文書化されている:
 
-- **CISA** added CVE-2022-0847 to the Known Exploited Vulnerabilities catalog on **April 25, 2022**, confirmed via [NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0847), seven weeks after disclosure, with a federal remediation deadline of May 16, 2022.
-- **Google's [Android Security Bulletin for May 2022](https://source.android.com/docs/security/bulletin/2022-05-01)** lists CVE-2022-0847 (component: `pipes`, EoP, High, bug A-220741611) and flags it under "There are indications that the following may be under limited, targeted exploitation." Kellermann had reproduced the bug on a Google Pixel 6 the day after reporting it.
-- **Exploit-DB** carries entry [50808](https://www.exploit-db.com/exploits/50808), "Linux Kernel 5.8 < 5.16.11 - Local Privilege Escalation (DirtyPipe)," published March 8, 2022 — the day after public disclosure. NVD's reference list additionally tags three Packet Storm entries as `Exploit`, one of them a SUID-binary hijack variant and the other two generic local-privilege-escalation writeups of the same bug.
+- **CISA**は**2022年4月25日**にCVE-2022-0847をKnown Exploited Vulnerabilitiesカタログに追加した。[NVD](https://nvd.nist.gov/vuln/detail/CVE-2022-0847)で確認でき、開示から7週間後のことで、連邦機関向けの対応期限は2022年5月16日だった。
+- **Googleの[Android Security Bulletin（2022年5月）](https://source.android.com/docs/security/bulletin/2022-05-01)**はCVE-2022-0847（コンポーネント: `pipes`、EoP、High、バグA-220741611）を掲載し、"There are indications that the following may be under limited, targeted exploitation."（訳: 以下は限定的・標的型の悪用を受けている可能性を示す兆候がある。）の下に挙げている。Kellermannは報告の翌日にGoogle Pixel 6でこのバグを再現していた。
+- **Exploit-DB**にはエントリ[50808](https://www.exploit-db.com/exploits/50808)、"Linux Kernel 5.8 < 5.16.11 - Local Privilege Escalation (DirtyPipe)"が、公開開示の翌日の2022年3月8日に掲載されている。NVDの参考資料リストはさらに3件のPacket Stormのエントリに`Exploit`のタグを付けており、うち1件はSUIDバイナリ乗っ取りの変種、残り2件は同じバグの汎用的なローカル権限昇格の解説である。
 
-The rough analogy is CVE-2016-5195, Dirty COW, which Kellermann invokes in the name — but he is explicit that this one "is easier to exploit," and it is: Dirty COW needed a race window, this needs five syscalls in a fixed order.
+大まかな類例はCVE-2016-5195、Dirty COWであり、Kellermannも名前の中でそれに言及している — しかし彼はこちらのほうが"is easier to exploit"（悪用が容易だ）と明言しており、実際そのとおりである。Dirty COWは競合の窓を必要としたが、こちらは決まった順序の5つのシステムコールで済む。
 
-## How the code was vulnerable {#how-the-code-was-vulnerable}
+## コードはどのように脆弱だったか {#how-the-code-was-vulnerable}
 
-To see how that gap produced all of that, start with how pipes actually work. A Linux pipe is a ring of `struct pipe_buffer` entries, each pointing at a page. See [Pipes and FIFOs](../../ipc/pipes.md) for the ring mechanics and [splice, sendfile, and Zero-Copy](../../io/splice-sendfile.md) for how `splice()` moves pages into that ring without copying.
+その穴がどうしてこれらすべてを生んだのかを見るには、パイプが実際にどう動作するかから始める。Linuxのパイプは`struct pipe_buffer`エントリのリングであり、各エントリが1つのpageを指している。リングの仕組みについては[パイプとFIFO](../../ipc/pipes.md)を、`splice()`がコピーせずにpageをそのリングに移す方法については[splice、sendfile、ゼロコピー](../../io/splice-sendfile.md)を参照のこと。
 
-The relevant optimization is **merging**. If the last write to a pipe didn't fill its page, the next `write()` can append into the same page rather than allocating a new one. That is safe for *anonymous* pipe buffers, whose pages the pipe owns outright. It is emphatically not safe for buffers created by `splice()` from a file, because those point directly into the **page cache** — the page belongs to the file, not to the pipe, and appending to it would be writing to the file.
+関係する最適化は**マージ**である。パイプへの直前の書き込みがそのpageを埋めきっていなければ、次の`write()`は新しいpageを割り当てる代わりに同じpageに追記できる。これは*匿名*パイプバッファについては安全である。そのpageはパイプが完全に所有しているからだ。しかしファイルから`splice()`で作られたバッファについては断じて安全ではない。それらは**ページキャッシュ**を直接指しているからである — そのpageはパイプではなくファイルのものであり、それに追記することはファイルに書き込むことになる。
 
-So the kernel has always had a "can this buffer be merged into?" check. What changed over the years is *where that check reads its answer from*:
+そのため、カーネルには常に「このバッファにマージしてよいか？」というチェックがあった。年月を経て変わったのは、*そのチェックがどこから答えを読むか*である:
 
-- **2.6.17 (2006)** — [`5274f052e7b3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5274f052e7b3dbd81935772eb551dfd0325dfa9d) introduced `splice()` along with `page_cache_pipe_buf_ops`, the first `struct pipe_buf_operations` with `can_merge = 0`. The answer lived in the **ops vector**.
-- **5.1 (2019)** — [`01e7187b4119`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=01e7187b41191376cee8bea8de9f907b001e87b4) ("pipe: stop using ->can_merge", Jann Horn, at Al Viro's suggestion) dropped the flag and replaced it with a pointer comparison, since only one ops vector had ever set it. This traces back to a real bug Horn found and [reported in October 2018](https://lore.kernel.org/linux-fsdevel/CAG48ez1wN=oC_uWkHHhboDvfVt8p9O98ZMFZyh=AK6D=eHU7MA@mail.gmail.com/): `tee()`'ing from a pipe with a partial-page buffer could let two independent pipes end up sharing — and corrupting — the same page. His [first fix attempt](https://lore.kernel.org/linux-fsdevel/20181015150420.2096-1-jannh@google.com/) went through a round of review from Eric Biggers before a [revised v2](https://lore.kernel.org/linux-fsdevel/20190123141918.238286-2-jannh@google.com/) landed three months later. The answer still came from the **ops pointer**:
+- **2.6.17（2006年）** — [`5274f052e7b3`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5274f052e7b3dbd81935772eb551dfd0325dfa9d)が`splice()`を導入し、同時に`page_cache_pipe_buf_ops`を導入した。これは`can_merge = 0`を持つ最初の`struct pipe_buf_operations`である。答えは**opsベクタ**にあった。
+- **5.1（2019年）** — [`01e7187b4119`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=01e7187b41191376cee8bea8de9f907b001e87b4)（"pipe: stop using ->can_merge"、Jann Horn、Al Viroの提案による）はこのフラグを廃止し、ポインタ比較に置き換えた。それを設定していたopsベクタは1つしかなかったからである。これはHornが見つけて[2018年10月に報告した](https://lore.kernel.org/linux-fsdevel/CAG48ez1wN=oC_uWkHHhboDvfVt8p9O98ZMFZyh=AK6D=eHU7MA@mail.gmail.com/)本物のバグにさかのぼる。部分的なpageのバッファを持つパイプから`tee()`すると、2つの独立したパイプが同じpageを共有し — そして破損させ — うるというものだった。彼の[最初の修正の試み](https://lore.kernel.org/linux-fsdevel/20181015150420.2096-1-jannh@google.com/)はEric Biggersによるレビューを一巡し、その3か月後に[改訂版v2](https://lore.kernel.org/linux-fsdevel/20190123141918.238286-2-jannh@google.com/)が取り込まれた。答えは依然として**opsポインタ**から得られていた:
 
     ```c
     static bool pipe_buf_can_merge(struct pipe_buffer *buf)
@@ -85,26 +85,26 @@ So the kernel has always had a "can this buffer be merged into?" check. What cha
     }
     ```
 
-- **5.8 (2020)** — [`f6dd975583bd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f6dd975583bd8ce088400648fd9819e4691c8958) ("pipe: merge anon_pipe_buf*_ops", Christoph Hellwig) noticed that `anon_pipe_buf_ops`, `anon_pipe_buf_nomerge_ops`, and `packet_pipe_buf_ops` had byte-identical function tables and existed only to encode behavior. It deleted two of the three and moved the answer into a **per-buffer flag**:
+- **5.8（2020年）** — [`f6dd975583bd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f6dd975583bd8ce088400648fd9819e4691c8958)（"pipe: merge anon_pipe_buf*_ops"、Christoph Hellwig）は、`anon_pipe_buf_ops`、`anon_pipe_buf_nomerge_ops`、`packet_pipe_buf_ops`がバイト単位で同一の関数テーブルを持ち、振る舞いを符号化するためだけに存在していることに気づいた。3つのうち2つを削除し、答えを**バッファごとのフラグ**に移した:
 
     ```c
-    #define PIPE_BUF_FLAG_CAN_MERGE	0x10	/* can merge buffers */
+    #define PIPE_BUF_FLAG_CAN_MERGE	0x10	/* バッファをマージできる */
     ```
 
     ```c
-    /* fs/pipe.c, pipe_write() after f6dd975583bd */
+    /* fs/pipe.c、f6dd975583bd以降のpipe_write() */
     if ((buf->flags & PIPE_BUF_FLAG_CAN_MERGE) &&
         offset + chars <= PAGE_SIZE) {
     ```
 
-Hellwig's commit message called out that inverting the sense of the old `nomerge` special case "actually allows for much nicer code," and it did — the diff removes 48 lines and adds 11.
+Hellwigのコミットメッセージは、古い`nomerge`の特殊ケースの意味を反転させることが"actually allows for much nicer code"（実際にずっと良いコードにできる）と述べており、実際そうなった — diffは48行を削除し11行を追加している。
 
-It reached mainline through the kernel's normal maintainer-tree path rather than a standalone posting: one of seven patches in [Al Viro's "assorted splice cleanups" pull request](https://lore.kernel.org/lkml/20200603192615.GY23230@ZenIV.linux.org.uk/), reviewed by Viro as the subsystem maintainer rather than debated patch-by-patch on the list; the thread's only reply is an automated merge-tracker acknowledgment.
+これは単独の投稿ではなく、カーネルの通常のメンテナツリー経由でメインラインに到達した。[Al Viroの"assorted splice cleanups"プルリクエスト](https://lore.kernel.org/lkml/20200603192615.GY23230@ZenIV.linux.org.uk/)に含まれる7つのパッチの1つで、メーリングリスト上でパッチごとに議論されたのではなく、サブシステムのメンテナとしてのViroによってレビューされた。そのスレッドの唯一の返信は自動のマージトラッカーによる受領通知である。
 
-Separately — and earlier, in 2016 — an entirely different file had gained the actual bug: [`241699cd72a8`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=241699cd72a8489c9446ae3910ddd243e9b9061b) ("new iov_iter flavour: pipe-backed", Al Viro, 4.9, 2016) had added two functions in `lib/iov_iter.c` that allocate a fresh `pipe_buffer` from the ring and populate it by hand:
+それとは別に — そしてそれより前、2016年に — まったく別のファイルに実際のバグが入り込んでいた。[`241699cd72a8`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=241699cd72a8489c9446ae3910ddd243e9b9061b)（"new iov_iter flavour: pipe-backed"、Al Viro、4.9、2016年）が`lib/iov_iter.c`に2つの関数を追加しており、それらはリングから新しい`pipe_buffer`を割り当てて手作業で埋めていた:
 
 ```c
-/* copy_page_to_iter_pipe(), lib/iov_iter.c, pre-fix, as it stood by 2022 */
+/* copy_page_to_iter_pipe()、lib/iov_iter.c、修正前、2022年時点の状態 */
 buf->ops = &page_cache_pipe_buf_ops;
 get_page(page);
 buf->page = page;
@@ -112,47 +112,47 @@ buf->offset = offset;
 buf->len = bytes;
 ```
 
-`ops`, `page`, `offset`, `len` — all set. `flags` — never touched, so it retained whatever the *previous* occupant of that ring slot had left behind.
+`ops`、`page`、`offset`、`len` — すべて設定されている。`flags` — 一度も触れられておらず、そのため、そのリングスロットを*以前に*使っていたものが残した値をそのまま保持していた。
 
-This patch was reviewed publicly, and reviewed carefully. On the [second posting](https://lore.kernel.org/linux-fsdevel/20160924040117.GP2356@ZenIV.linux.org.uk/) to linux-fsdevel, Miklos Szeredi — who would fix this same bug class in two other callers five months later, see below — wrote: "This is the hardest part of the whole set. I've been trying to understand it, but the modular arithmetic makes it really tricky to read... Specific comments inline," then quoted four excerpts and commented inline, mostly on unrelated points — missing `EFAULT` handling and unexpected zero returns in `copy_page_to_iter_pipe()` and `push_pipe()`, a dead store in `pipe_advance()`, and the page accounting in `iov_iter_npages()`.
+このパッチは公の場で、しかも注意深くレビューされていた。linux-fsdevelへの[2回目の投稿](https://lore.kernel.org/linux-fsdevel/20160924040117.GP2356@ZenIV.linux.org.uk/)で、Miklos Szeredi — 後述するように、5か月後に同じ種類のバグを他の2つの呼び出し元で修正することになる人物 — は次のように書いた: "This is the hardest part of the whole set. I've been trying to understand it, but the modular arithmetic makes it really tricky to read... Specific comments inline"（訳: これはシリーズ全体で最も難しい部分だ。理解しようとしてきたが、剰余演算のせいで本当に読みにくい……具体的なコメントはインラインで）。そして4つの抜粋を引用してインラインでコメントしたが、その大半は無関係な点についてだった — `copy_page_to_iter_pipe()`と`push_pipe()`における`EFAULT`処理の欠如と予期しない0の戻り値、`pipe_advance()`の無駄な代入、`iov_iter_npages()`におけるpageの勘定である。
 
-The two excerpts taken from the vulnerable functions both stop just one statement short of the field-by-field assignment block (`pipe->nrbufs++;` intervenes in each), so that block, and the `flags` line missing from it, never appeared anywhere in the thread's quoted code at all. Nothing in the thread suggests that block should have drawn scrutiny on its own terms — it simply never came up.
+脆弱な関数から取られた2つの抜粋は、どちらもフィールドごとの代入ブロックのちょうど1文手前で終わっている（それぞれ`pipe->nrbufs++;`が間に入る）ため、そのブロックと、そこから欠けている`flags`の行は、スレッド内の引用コードのどこにも一度も現れなかった。スレッドの中に、そのブロックがそれ自体として精査されるべきだったことを示唆するものは何もない — 単に話題に上らなかったのである。
 
-From 2016 to 2020 this was a latent, inert bug. Every flag that existed at the time (`PIPE_BUF_FLAG_LRU`, `_ATOMIC`, `_GIFT`, `_PACKET`) was, in Kellermann's words, "rather boring," and the merge decision was being read out of `ops`, which *was* initialized. The uninitialized field simply didn't matter yet.
+2016年から2020年まで、これは潜在的で無害なバグだった。当時存在していたフラグ（`PIPE_BUF_FLAG_LRU`、`_ATOMIC`、`_GIFT`、`_PACKET`）はどれも、Kellermannの言葉では"rather boring"（かなり退屈）なものであり、マージの判定は初期化*されていた*`ops`から読まれていた。初期化されていないフィールドは、まだ単に問題にならなかったのである。
 
-## The trigger {#the-trigger}
+## トリガー {#the-trigger}
 
-`f6dd975583bd` made it matter, by moving the merge decision onto the one field these two functions forgot to write. A stale `PIPE_BUF_FLAG_CAN_MERGE` bit inherited from a recycled ring slot now told `pipe_write()` that a page-cache page was safe to append to.
+`f6dd975583bd`は、マージの判定を、この2つの関数が書き忘れていたまさにそのフィールドに移すことで、それを問題にした。再利用されたリングスロットから引き継がれた古い`PIPE_BUF_FLAG_CAN_MERGE`ビットが、今や`pipe_write()`に対して、ページキャッシュのpageに追記しても安全だと告げるようになった。
 
-Kellermann's proof-of-concept, published in full in [the disclosure writeup](https://dirtypipe.cm4all.com/), is five steps and needs no capabilities at all:
+[開示文書](https://dirtypipe.cm4all.com/)で全文が公開されたKellermannの概念実証は5ステップで、ケーパビリティは一切必要ない:
 
-1. Create a pipe.
-2. Fill it completely with arbitrary data — every `pipe_buffer` in the ring now has `PIPE_BUF_FLAG_CAN_MERGE` set, because that is what the normal anonymous write path does.
-3. Drain the pipe. The buffers are released, but the ring slots keep their `flags` values.
-4. `splice()` a single byte from the target file — opened `O_RDONLY` — into the pipe, positioned just before the offset you want to overwrite. `copy_page_to_iter_pipe()` fills in a page-cache reference and leaves the stale merge bit standing.
-5. `write()` your data to the pipe. It merges into the page-cache page instead of allocating a new buffer.
+1. パイプを作成する。
+2. 任意のデータでパイプを完全に満たす — これでリング内のすべての`pipe_buffer`に`PIPE_BUF_FLAG_CAN_MERGE`が設定される。通常の匿名書き込みパスがそうするからである。
+3. パイプを空にする。バッファは解放されるが、リングスロットは`flags`の値を保持したままである。
+4. 対象ファイル — `O_RDONLY`で開いたもの — から、上書きしたいオフセットの直前の位置で1バイトをパイプに`splice()`する。`copy_page_to_iter_pipe()`はページキャッシュへの参照を埋め、古いマージビットをそのまま残す。
+5. データをパイプに`write()`する。新しいバッファを割り当てる代わりに、ページキャッシュのpageにマージされる。
 
-The exploit's own comment on the `open()` call — `open(path, O_RDONLY); // yes, read-only! :-)` — is the whole vulnerability in one line. There are three real constraints: the offset can't sit on a page boundary (one byte before it must be spliced in), the write can't cross a page boundary (the remainder would land in a new anonymous buffer), and the file can't be extended (the pipe never tells the page cache the file grew). The PoC's own comments call out the first two as its "major limitations"; the third it enforces with an explicit "cannot enlarge the file" check, and Kellermann's writeup lists it alongside the others.
+`open()`呼び出しに付けられたエクスプロイト自身のコメント — `open(path, O_RDONLY); // yes, read-only! :-)` — は、この脆弱性全体を1行で表している。実際の制約は3つある。オフセットはpage境界上には置けない（その1バイト前をspliceしなければならないため）、書き込みはpage境界をまたげない（残りは新しい匿名バッファに入ってしまうため）、そしてファイルを拡張できない（パイプはファイルが大きくなったことをページキャッシュに決して伝えないため）。PoC自身のコメントは最初の2つを"major limitations"（主要な制限）として挙げており、3つ目は明示的な"cannot enlarge the file"（ファイルを拡張できない）のチェックで強制している。Kellermannの開示文書はそれを他の制約と並べて挙げている。
 
-As Kellermann put it: it "not only works without write permissions, it also works with immutable files, on read-only btrfs snapshots and on read-only mounts (including CD-ROM mounts). That is because the page cache is always writable (by the kernel), and writing to a pipe never checks any permissions."
+Kellermannの言葉では、これは"not only works without write permissions, it also works with immutable files, on read-only btrfs snapshots and on read-only mounts (including CD-ROM mounts). That is because the page cache is always writable (by the kernel), and writing to a pipe never checks any permissions."（訳: 書き込み権限なしで動作するだけでなく、イミュータブルなファイル、読み取り専用のbtrfsスナップショット、読み取り専用マウント（CD-ROMマウントを含む）でも動作する。ページキャッシュは（カーネルにとっては）常に書き込み可能であり、パイプへの書き込みは一切の権限チェックを行わないからだ。）
 
-## Why it went unnoticed {#why-it-went-unnoticed}
+## なぜ気づかれなかったか {#why-it-went-unnoticed}
 
-The proximate cause is two missing initializers. The interesting cause is *why nobody noticed them for six years*.
+直接の原因は2つの欠けた初期化である。興味深い原因は、*なぜ6年間誰もそれに気づかなかったのか*である。
 
-**The safety check moved from a field that was always initialized to one that wasn't.** Every version of the merge check was correct at the time it was written. `copy_page_to_iter_pipe()` and `push_pipe()` had always set `buf->ops` correctly, so for as long as the answer was derived from `ops`, they were fine — accidentally. `f6dd975583bd` was a clean, well-reasoned dead-code cleanup that read the merge decision out of `flags` instead. It could not have known that two functions in `lib/iov_iter.c` — a different file, a different subsystem, added by a different author four years earlier — happened to populate `pipe_buffer` by hand and skipped that one member. Kellermann is unambiguous in the PoC's own comments: "The commit did not introduce the bug, it was there before, it just provided an easy way to exploit it."
+**安全性チェックが、常に初期化されるフィールドから、そうでないフィールドへ移った。** マージチェックのどのバージョンも、書かれた時点では正しかった。`copy_page_to_iter_pipe()`と`push_pipe()`は常に`buf->ops`を正しく設定していたので、答えが`ops`から導かれている限り、それらは問題なかった — 偶然に。`f6dd975583bd`は、マージの判定を代わりに`flags`から読むようにした、クリーンで十分に考え抜かれたデッドコードの整理だった。`lib/iov_iter.c`の2つの関数 — 別のファイル、別のサブシステム、4年前に別の作者によって追加されたもの — がたまたま`pipe_buffer`を手作業で埋めており、そのメンバー1つを飛ばしていたことを、このコミットが知り得たはずはない。KellermannはPoC自身のコメントで明確に述べている: "The commit did not introduce the bug, it was there before, it just provided an easy way to exploit it."（訳: このコミットがバグを持ち込んだのではない。バグはそれ以前からあり、このコミットはそれを悪用する簡単な方法を提供しただけだ。）
 
-**The polarity flipped from fail-closed to fail-open.** Under the old scheme, an unset/garbage `flags` value was harmless because merging required an affirmative `ops == &anon_pipe_buf_ops` match. Under the new scheme, merging is granted by a bit being *set*, so garbage that happens to contain `0x10` grants permission. A struct field whose zero value means "deny" tolerates sloppy initialization; one whose set value means "allow" does not. Nothing about the refactor made this distinction visible at the call sites that mattered.
+**極性がフェイルクローズからフェイルオープンに反転した。** 古い方式では、未設定やゴミの`flags`値は無害だった。マージには`ops == &anon_pipe_buf_ops`という肯定的な一致が必要だったからである。新しい方式では、マージはビットが*設定されている*ことによって許可されるので、たまたま`0x10`を含むゴミ値が許可を与えてしまう。0の値が「拒否」を意味する構造体フィールドはずさんな初期化を許容するが、設定された値が「許可」を意味するものは許容しない。リファクタリングのどこにも、重要な呼び出し箇所でこの違いを見えるようにするものはなかった。
 
-**Hand-populating a struct field-by-field has no compiler backstop.** Both vulnerable functions assign members individually rather than using a designated initializer or memset, so an omitted member produces no warning — it silently inherits whatever the recycled ring slot held. `struct pipe_buffer` sits in a long-lived ring that is deliberately reused, which turns "uninitialized" into "attacker-influenced" rather than "random."
+**構造体をフィールドごとに手作業で埋めることには、コンパイラによる歯止めがない。** 脆弱な2つの関数はどちらも、指示付き初期化子やmemsetを使わずにメンバーを個別に代入しているので、省略されたメンバーは何の警告も生まない — 再利用されたリングスロットが保持していたものを黙って引き継ぐ。`struct pipe_buffer`は意図的に再利用される長寿命のリングの中にあり、それが「未初期化」を「ランダム」ではなく「攻撃者の影響下にある」ものに変える。
 
-**This exact bug class had already surfaced and been fixed in two sibling callers five years earlier — the second fix landing within minutes of the first, on the same day.** In February 2017, Miklos Szeredi committed [`84588a93d097`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=84588a93d097bace24b9233930f82511d4f34210), titled — word for word — "fuse: fix uninitialized flags in pipe_buffer." Its one-line diff adds `bufs[page_nr].flags = 0;` right after a `bufs[page_nr].ops = ...` assignment in `fuse_dev_splice_read()`, and its `Fixes:` tag points at [`d82718e348fe`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d82718e348fee15dbce8f578ff2588982b7cc7ca) ("fuse_dev_splice_read(): switch to add_to_pipe()"), part of the same 4.9-era pipe-backed-iov_iter conversion that introduced the `lib/iov_iter.c` instances. The fuse fix never got a standalone posting of its own — it reached Linus inside a [pull request](https://lore.kernel.org/linux-fsdevel/20170216164335.GB30656@veci.piliscsaba.szeredi.hu/) Szeredi sent that same day.
+**まさにこの種類のバグは、5年前に2つの兄弟の呼び出し元ですでに表面化し、修正されていた — しかも2つ目の修正は1つ目の数分以内、同じ日に取り込まれていた。** 2017年2月、Miklos Szerediは[`84588a93d097`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=84588a93d097bace24b9233930f82511d4f34210)をコミットした。そのタイトルは — 一字一句 — "fuse: fix uninitialized flags in pipe_buffer"である。その1行のdiffは、`fuse_dev_splice_read()`の中の`bufs[page_nr].ops = ...`の代入の直後に`bufs[page_nr].flags = 0;`を追加するもので、その`Fixes:`タグは[`d82718e348fe`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d82718e348fee15dbce8f578ff2588982b7cc7ca)（"fuse_dev_splice_read(): switch to add_to_pipe()"）を指している。これは`lib/iov_iter.c`の箇所を持ち込んだのと同じ、4.9時代のpipe-backed iov_iterへの変換の一部である。fuseの修正は単独の投稿にはならず — Szerediが同じ日に送った[プルリクエスト](https://lore.kernel.org/linux-fsdevel/20170216164335.GB30656@veci.piliscsaba.szeredi.hu/)の中に含まれてLinusに届いた。
 
-Five minutes later, [Szeredi posted a second fix](https://lore.kernel.org/linux-fsdevel/20170216164902.GC30656@veci.piliscsaba.szeredi.hu/): a near-identical one-line fix for `splice_to_pipe()`, whose commit message notes the uninitialized flags "appears to have been there from the introduction of the splice syscall" — i.e. since 2006. Two callers of the same pattern got audited and patched on the same day; the two in `lib/iov_iter.c`, written by the same 2016 conversion, did not. At the time it made no difference. Three years later it made all the difference.
+その5分後、[Szerediは2つ目の修正を投稿した](https://lore.kernel.org/linux-fsdevel/20170216164902.GC30656@veci.piliscsaba.szeredi.hu/)。`splice_to_pipe()`に対するほぼ同一の1行修正で、そのコミットメッセージは、未初期化のflagsが"appears to have been there from the introduction of the splice syscall"（spliceシステムコールの導入時から存在していたようだ）— つまり2006年から — と記している。同じパターンの2つの呼び出し元が同じ日に監査され修正されたが、同じ2016年の変換で書かれた`lib/iov_iter.c`の2つはそうならなかった。当時はそれは何の違いも生まなかった。3年後、それがすべての違いを生んだ。
 
-## How it was fixed {#how-it-was-fixed}
+## どのように修正されたか {#how-it-was-fixed}
 
-The fix, [`9d2231c5d74e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9d2231c5d74e13b2a0546fee6737ee4446017903) ("lib/iov_iter: initialize \"flags\" in new pipe_buffer", Max Kellermann), is two lines:
+修正[`9d2231c5d74e`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9d2231c5d74e13b2a0546fee6737ee4446017903)（"lib/iov_iter: initialize \"flags\" in new pipe_buffer"、Max Kellermann）は2行である:
 
 ```diff
 @@ -414,6 +414,7 @@ static size_t copy_page_to_iter_pipe(struct page *page, size_t offset, size_t by
@@ -165,78 +165,80 @@ The fix, [`9d2231c5d74e`](https://git.kernel.org/pub/scm/linux/kernel/git/torval
  		buf->page = page;
 ```
 
-The commit carries `Fixes: 241699cd72a8 ("new iov_iter flavour: pipe-backed")` and `Cc: stable@vger.kernel.org`, correctly attributing the omission to the 2016 commit rather than to the 5.8 refactor that weaponized it.
+このコミットには`Fixes: 241699cd72a8 ("new iov_iter flavour: pipe-backed")`と`Cc: stable@vger.kernel.org`が付いており、この欠落を、それを武器化した5.8のリファクタリングではなく、2016年のコミットに正しく帰属させている。
 
-**On the public mailing list, there was no debate — deliberately.** The [LKML thread](https://lore.kernel.org/lkml/20220221100313.1504449-1-max.kellermann@ionos.com/) is exactly two messages long. Kellermann posted the patch on February 21, 2022 with a body that says only "The functions `copy_page_to_iter_pipe()` and `push_pipe()` can both allocate a new `pipe_buffer`, but the 'flags' member initializer is missing." Five hours later, Al Viro replied in full:
+**公開メーリングリスト上では議論はなかった — 意図的に。** [LKMLのスレッド](https://lore.kernel.org/lkml/20220221100313.1504449-1-max.kellermann@ionos.com/)はちょうど2通のメッセージしかない。Kellermannは2022年2月21日にパッチを投稿し、その本文は"The functions `copy_page_to_iter_pipe()` and `push_pipe()` can both allocate a new `pipe_buffer`, but the 'flags' member initializer is missing."（訳: 関数`copy_page_to_iter_pipe()`と`push_pipe()`はどちらも新しい`pipe_buffer`を割り当てうるが、'flags'メンバーの初期化が欠けている。）とだけ述べていた。5時間後、Al Viroの返信は次がすべてだった:
 
 > Applied, will push to Linus...
 
-That brevity is the story rather than an absence of one. This next part isn't in the public LKML archive at all — it comes from the timeline in [Kellermann's own disclosure writeup](https://dirtypipe.cm4all.com/): the bug report, exploit, and patch went to the closed `security@kernel.org` list on February 20, and the LKML posting the next day was made **"(without vulnerability details) as suggested by Linus Torvalds, Willy Tarreau and Al Viro"** — a patch that reads as a trivial missing-initializer cleanup, merged on its own merits, with the exploitability discussion kept off the public archive until fixes had shipped. Anyone searching lore for a design argument about this CVE will not find one, and that is the intended outcome of the [kernel's security-bug process](https://docs.kernel.org/process/security-bugs.html), not a gap in the record.
+（訳: 適用した。Linusにpushする……）
 
-The rest of the timeline, from Kellermann's disclosure:
+その簡潔さこそが物語であって、物語の不在ではない。ここから先の部分は公開のLKMLアーカイブには一切なく — [Kellermann自身の開示文書](https://dirtypipe.cm4all.com/)の時系列による。バグ報告、エクスプロイト、パッチは2月20日に非公開の`security@kernel.org`リストに送られ、翌日のLKMLへの投稿は**"(without vulnerability details) as suggested by Linus Torvalds, Willy Tarreau and Al Viro"**（脆弱性の詳細なしで、Linus Torvalds、Willy Tarreau、Al Viroの提案どおりに）行われた — 些細な初期化漏れの整理に見えるパッチとして、それ自体の妥当性によってマージされ、悪用可能性についての議論は修正が出荷されるまで公開アーカイブから遠ざけられた。このCVEについての設計上の議論をloreで探す人は何も見つけられないだろうが、それは[カーネルのセキュリティバグ対応プロセス](https://docs.kernel.org/process/security-bugs.html)が意図した結果であって、記録の欠落ではない。
 
-| Date | Event |
+Kellermannの開示文書による、残りの時系列:
+
+| 日付 | 出来事 |
 | --- | --- |
-| 2021-04-29 | First support ticket about corrupt log files |
-| 2022-02-19 | Corruption identified as a kernel bug, and as exploitable |
-| 2022-02-20 | Report, exploit, and patch sent to `security@kernel.org` |
-| 2022-02-21 | Reproduced on a Google Pixel 6; reported to the Android Security Team |
-| 2022-02-21 | Patch posted to LKML without vulnerability details; Al Viro applies it |
-| 2022-02-23 | Stable releases [5.16.11](https://lore.kernel.org/stable/1645618039140207@kroah.com/), [5.15.25](https://lore.kernel.org/stable/164561803311588@kroah.com/), and 5.10.102 ship the fix |
-| 2022-02-24 | Google merges the fix into the Android common kernel |
-| 2022-02-28 | `linux-distros` notified |
-| 2022-03-07 | Public disclosure |
+| 2021-04-29 | 破損したログファイルについての最初のサポートチケット |
+| 2022-02-19 | 破損がカーネルのバグであり、悪用可能であると特定される |
+| 2022-02-20 | 報告、エクスプロイト、パッチを`security@kernel.org`に送付 |
+| 2022-02-21 | Google Pixel 6で再現。Androidセキュリティチームに報告 |
+| 2022-02-21 | 脆弱性の詳細なしでパッチをLKMLに投稿。Al Viroが適用 |
+| 2022-02-23 | stableリリース[5.16.11](https://lore.kernel.org/stable/1645618039140207@kroah.com/)、[5.15.25](https://lore.kernel.org/stable/164561803311588@kroah.com/)、5.10.102が修正を含めて出荷 |
+| 2022-02-24 | GoogleがAndroid共通カーネルに修正をマージ |
+| 2022-02-28 | `linux-distros`に通知 |
+| 2022-03-07 | 公開開示 |
 
-Three days from private report to shipped stable kernels; fifteen days to public disclosure. Because the fix is a two-line initializer with no behavioral risk, there were no follow-up regressions to walk back — a rare case where the corrective patch needed no corrections.
+非公開の報告から修正済みstableカーネルの出荷まで3日、公開開示まで15日。修正は振る舞い上のリスクのない2行の初期化なので、取り消すべき後続のリグレッションはなかった — 修正パッチ自体に修正が要らなかった珍しいケースである。
 
-There is no meaningful runtime mitigation. `splice()` and `pipe()` are unprivileged core syscalls used by ordinary software, and the bug needs neither capabilities nor namespaces; blocking the syscalls via [seccomp BPF](../seccomp.md) protects only sandboxed processes that opt in. Patching was the only real answer, which is exactly why CISA attached a three-week federal deadline to it.
+意味のある実行時の緩和策はない。`splice()`と`pipe()`は普通のソフトウェアが使う非特権の基本的なシステムコールであり、このバグはケーパビリティもnamespaceも必要としない。[seccomp BPF](../seccomp.md)でシステムコールをブロックしても、それを選択したサンドボックス化されたプロセスしか守れない。パッチ適用が唯一の現実的な答えであり、だからこそCISAはこれに3週間という連邦機関向けの期限を付けたのである。
 
 ```bash
-# Vulnerable range is 5.8 through 5.16.10 / 5.15.24 / 5.10.101.
-# Distro kernels backport, so the upstream version alone is not conclusive —
-# check the vendor's changelog for the CVE ID.
+# 脆弱な範囲は5.8から5.16.10 / 5.15.24 / 5.10.101まで。
+# ディストリビューションのカーネルはバックポートするので、アップストリームのバージョンだけでは決定的でない —
+# ベンダーの変更履歴でCVE IDを確認すること。
 uname -r
 ```
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**Refactoring where a decision reads its answer from silently re-scopes which initializers are load-bearing.** `f6dd975583bd` was a good cleanup: it deleted two identical ops vectors and made the code shorter and clearer. Its only defect was invisible from its own diff — that moving the merge decision from `ops` to `flags` promoted a long-dormant missing initializer in another subsystem into a privilege escalation. When a check changes which struct member it consults, every site that constructs that struct by hand becomes newly relevant, including the ones the refactor never touched.
+**判定が答えを読む場所をリファクタリングすると、どの初期化が決定的に重要かの範囲が黙って変わる。** `f6dd975583bd`は良い整理だった。同一の2つのopsベクタを削除し、コードを短く明快にした。その唯一の欠陥はそれ自身のdiffからは見えなかった — マージの判定を`ops`から`flags`に移したことで、別のサブシステムで長く眠っていた初期化漏れが権限昇格に格上げされたのである。チェックが参照する構造体メンバーが変わるとき、その構造体を手作業で構築するすべての箇所が新たに関係するようになる。リファクタリングが一切触れなかった箇所も含めて。
 
-**A flag whose set bit grants permission is far less forgiving than one whose set bit denies it.** For fourteen years the merge decision was fail-closed: you needed a positive match to append. `PIPE_BUF_FLAG_CAN_MERGE` inverted that, and inverted sense turns "we forgot to zero this" from a cosmetic defect into an authorization bypass. Capability bits in reused, kernel-owned structures should be spelled as denials, or the structure should be zeroed on allocation so the safe state is the default.
+**ビットが設定されていると許可を与えるフラグは、ビットが設定されていると拒否するフラグよりもはるかに寛容でない。** 14年間、マージの判定はフェイルクローズだった。追記するには肯定的な一致が必要だった。`PIPE_BUF_FLAG_CAN_MERGE`はそれを反転させ、意味の反転は「これを0にし忘れた」を見た目だけの欠陥から認可の回避へと変える。再利用される、カーネルが所有する構造体のケーパビリティビットは拒否として表現するか、あるいは安全な状態がデフォルトになるよう、構造体を割り当て時に0にすべきである。
 
-**"Harmless today" is a claim about the current codebase, not about the code.** The missing initializer was genuinely inconsequential from 2016 to 2020, and treating it that way was reasonable at the time. But latent bugs don't decay — their severity is set by code written years later by people who never saw them. The 2017 fuse fix shows the class was known and patched in one caller while its siblings, added by the same conversion, went unaudited. When you fix an uninitialized-field bug, the fix is auditing every construction site of that struct, not the one that reported the crash.
+**「今日は無害」は現在のコードベースについての主張であって、コードそのものについての主張ではない。** 初期化漏れは2016年から2020年まで本当に何の影響もなく、当時そのように扱ったのは妥当だった。しかし潜在的なバグは朽ちていかない — その深刻度は、それを見たこともない人々が何年も後に書くコードによって決まる。2017年のfuseの修正は、この種類のバグが既知であり、1つの呼び出し元では修正されたにもかかわらず、同じ変換で追加された兄弟たちは監査されないままだったことを示している。未初期化フィールドのバグを修正するときは、クラッシュを報告した1箇所ではなく、その構造体を構築するすべての箇所を監査することこそが修正である。
 
-**A CVSS base score is a description of the attack vector, not of the blast radius.** 7.8 HIGH is correct — `AV:L` and `PR:L` cap it there, because you need a local unprivileged account. But within that constraint the bug is essentially unbounded: no capabilities, no namespaces, no race, no timing, a fully public five-syscall exploit, and it defeats read-only mounts, immutable files, and read-only snapshots. CISA listed it as actively exploited and Google flagged targeted exploitation on Android within weeks. If you triage by score alone, this ranks the same as a great many local bugs that are nothing like it.
+**CVSS基本値は攻撃ベクタの記述であって、被害範囲の記述ではない。** 7.8 HIGHは正しい — ローカルの非特権アカウントが必要なので、`AV:L`と`PR:L`がそこを上限にする。しかしその制約の範囲内では、このバグは本質的に無制限である。ケーパビリティも、namespaceも、競合も、タイミングも不要で、完全に公開された5システムコールのエクスプロイトがあり、読み取り専用マウント、イミュータブルなファイル、読み取り専用スナップショットを打ち破る。CISAは実際に悪用されているものとして掲載し、Googleは数週間以内にAndroidでの標的型の悪用を指摘した。スコアだけで優先順位を付けると、これはまったく似ていない数多くのローカルバグと同じ順位になってしまう。
 
-!!! warning "Pattern to watch for"
-    Audit any code that builds a kernel struct by assigning members one at a time out of a long-lived, recycled pool — pipe buffer rings, skb control blocks, request structures, per-CPU caches. An omitted member there does not read as zero; it reads as whatever the previous user left, and if an attacker controlled the previous user, the "uninitialized" value is attacker-chosen. Prefer designated initializers (`*buf = (struct pipe_buffer){ ... };`) or an explicit memset over field-by-field assignment, and treat every `Fixes:`-tagged uninitialized-field patch as a prompt to grep for the same pattern in sibling call sites rather than as a closed ticket.
+!!! warning "注意すべきパターン"
+    長寿命で再利用されるプール — パイプバッファのリング、skbの制御ブロック、リクエスト構造体、per-CPUキャッシュ — から取り出したカーネル構造体を、メンバーを1つずつ代入して構築するコードはすべて監査すること。そこで省略されたメンバーは0としてではなく、直前の利用者が残したものとして読まれる。そして攻撃者が直前の利用者を制御していたなら、「未初期化」の値は攻撃者が選んだものになる。フィールドごとの代入よりも、指示付き初期化子（`*buf = (struct pipe_buffer){ ... };`）や明示的なmemsetを好むこと。そして`Fixes:`タグの付いた未初期化フィールドのパッチはすべて、閉じたチケットとしてではなく、兄弟の呼び出し箇所で同じパターンをgrepするきっかけとして扱うこと。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Linux Capabilities](../capabilities.md) — the privilege model this bug bypassed entirely; unlike most local escalations, Dirty Pipe required no capability at all, only read access
-- [Kernel Hardening](../kernel-hardening.md) — why exploit mitigations (KASLR, stack protectors) offer nothing against a bug that needs no memory corruption
-- [seccomp BPF](../seccomp.md) — the only practical containment for `splice()`-based attacks, and only for processes that opt in
-- [Linux Security Module (LSM) Framework](../lsm.md) — why access-control hooks raised no objection: every syscall in the exploit (`open()` read-only, `splice()`, `write()` to a pipe) is individually legitimate
-- [Pipes and FIFOs](../../ipc/pipes.md) — the `pipe_buffer` ring and the merge optimization at the center of this bug
-- [splice, sendfile, and Zero-Copy](../../io/splice-sendfile.md) — how `splice()` puts page-cache references into a pipe
-- [Page Cache](../../mm/page-cache.md) — why an overwritten page that is never marked dirty leaves no on-disk trace
+- [Linuxケーパビリティ](../capabilities.md) — このバグが完全に迂回した特権モデル。大半のローカル権限昇格と異なり、Dirty Pipeはケーパビリティを一切必要とせず、読み取りアクセスだけで済んだ
+- [カーネルハードニング](../kernel-hardening.md) — メモリ破壊を必要としないバグに対して、エクスプロイト緩和策（KASLR、スタックプロテクタ）が何の役にも立たない理由
+- [seccomp BPF](../seccomp.md) — `splice()`ベースの攻撃に対する唯一の実用的な封じ込め手段。ただしそれを選択したプロセスに対してのみ
+- [Linux Security Module（LSM）フレームワーク](../lsm.md) — アクセス制御フックが何の異議も唱えなかった理由。エクスプロイト中のすべてのシステムコール（読み取り専用の`open()`、`splice()`、パイプへの`write()`）は個々には正当である
+- [パイプとFIFO](../../ipc/pipes.md) — このバグの中心にある`pipe_buffer`のリングとマージ最適化
+- [splice、sendfile、ゼロコピー](../../io/splice-sendfile.md) — `splice()`がページキャッシュへの参照をどのようにパイプに入れるか
+- [ページキャッシュ](../../mm/page-cache.md) — dirtyにされない上書きされたpageが、なぜディスク上に痕跡を残さないのか
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
-- [The Dirty Pipe Vulnerability](https://dirtypipe.cm4all.com/) — Max Kellermann's disclosure writeup: the primary source for the mechanism, the year-long corruption investigation, the proof-of-concept exploit, and the timeline
-- [NVD: CVE-2022-0847](https://nvd.nist.gov/vuln/detail/CVE-2022-0847) — CVE record, CVSS 7.8 HIGH (`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`), published March 10, 2022; confirms the CISA KEV listing, added April 25, 2022, remediation due May 16, 2022
-- [git.kernel.org: 9d2231c5d74e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9d2231c5d74e13b2a0546fee6737ee4446017903) — "lib/iov_iter: initialize \"flags\" in new pipe_buffer", the two-line fix
-- [lore.kernel.org: the LKML patch thread](https://lore.kernel.org/lkml/20220221100313.1504449-1-max.kellermann@ionos.com/) — the entire public discussion: Kellermann's patch and Al Viro's "Applied, will push to Linus..."
-- [git.kernel.org: 241699cd72a8](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=241699cd72a8489c9446ae3910ddd243e9b9061b) — "new iov_iter flavour: pipe-backed" (4.9, 2016), the commit the fix's `Fixes:` tag names as the origin
-- [lore.kernel.org: new iov_iter flavour: pipe-backed](https://lore.kernel.org/linux-fsdevel/20160924040117.GP2356@ZenIV.linux.org.uk/) — the 2016 review thread, including Miklos Szeredi's inline review of the two functions that turned out to be missing the initializer
-- [git.kernel.org: f6dd975583bd](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f6dd975583bd8ce088400648fd9819e4691c8958) — "pipe: merge anon_pipe_buf*_ops" (5.8, 2020), which moved the merge check onto `flags` and made the dormant bug exploitable
-- [lore.kernel.org: Al Viro's "assorted splice cleanups" pull request](https://lore.kernel.org/lkml/20200603192615.GY23230@ZenIV.linux.org.uk/) — where `f6dd975583bd` reached mainline; no separate posting of the patch appears in the archives
-- [git.kernel.org: 01e7187b4119](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=01e7187b41191376cee8bea8de9f907b001e87b4) — "pipe: stop using ->can_merge" (5.1, 2019), the intermediate refactor that replaced the ops flag with a pointer comparison
-- [lore.kernel.org: sys_tee() bug report](https://lore.kernel.org/linux-fsdevel/CAG48ez1wN=oC_uWkHHhboDvfVt8p9O98ZMFZyh=AK6D=eHU7MA@mail.gmail.com/) and [the v2 fix](https://lore.kernel.org/linux-fsdevel/20190123141918.238286-2-jannh@google.com/) — Jann Horn's original bug report and the patch it produced
-- [git.kernel.org: 84588a93d097](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=84588a93d097bace24b9233930f82511d4f34210) — "fuse: fix uninitialized flags in pipe_buffer" (2017), the same bug class found and fixed in a sibling caller five years earlier
-- [lore.kernel.org: vfs: fix uninitialized flags in splice_to_pipe()](https://lore.kernel.org/linux-fsdevel/20170216164902.GC30656@veci.piliscsaba.szeredi.hu/) — the second, near-identical fix Szeredi posted five minutes after the pull request carrying the fuse one
-- [Android Security Bulletin, May 2022](https://source.android.com/docs/security/bulletin/2022-05-01) — lists CVE-2022-0847 (`pipes`, EoP, High) and notes indications of "limited, targeted exploitation"
-- [Exploit-DB 50808](https://www.exploit-db.com/exploits/50808) — "Linux Kernel 5.8 < 5.16.11 - Local Privilege Escalation (DirtyPipe)", published March 8, 2022
-- [lore.kernel.org: Linux 5.16.11](https://lore.kernel.org/stable/1645618039140207@kroah.com/) and [Linux 5.15.25](https://lore.kernel.org/stable/164561803311588@kroah.com/) — Greg Kroah-Hartman's stable release announcements carrying the fix, February 23, 2022
-- [Red Hat Bugzilla 2060795](https://bugzilla.redhat.com/show_bug.cgi?id=2060795) — the CNA's tracking bug and impact analysis
-- [kernel.org: Security bugs](https://docs.kernel.org/process/security-bugs.html) — the `security@kernel.org` process that kept the exploitability discussion off the public list until fixes shipped
+- [The Dirty Pipe Vulnerability](https://dirtypipe.cm4all.com/) — Max Kellermannの開示文書。仕組み、1年にわたる破損の調査、概念実証エクスプロイト、時系列についての一次資料
+- [NVD: CVE-2022-0847](https://nvd.nist.gov/vuln/detail/CVE-2022-0847) — CVEレコード、CVSS 7.8 HIGH（`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`）、2022年3月10日公開。CISA KEVへの掲載（2022年4月25日追加、対応期限2022年5月16日）を確認できる
+- [git.kernel.org: 9d2231c5d74e](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=9d2231c5d74e13b2a0546fee6737ee4446017903) — "lib/iov_iter: initialize \"flags\" in new pipe_buffer"。2行の修正
+- [lore.kernel.org: LKMLのパッチスレッド](https://lore.kernel.org/lkml/20220221100313.1504449-1-max.kellermann@ionos.com/) — 公の議論のすべて。Kellermannのパッチと、Al Viroの"Applied, will push to Linus..."
+- [git.kernel.org: 241699cd72a8](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=241699cd72a8489c9446ae3910ddd243e9b9061b) — "new iov_iter flavour: pipe-backed"（4.9、2016年）。修正の`Fixes:`タグが発端として名指ししているコミット
+- [lore.kernel.org: new iov_iter flavour: pipe-backed](https://lore.kernel.org/linux-fsdevel/20160924040117.GP2356@ZenIV.linux.org.uk/) — 2016年のレビュースレッド。初期化が欠けていることが後に判明した2つの関数に対する、Miklos Szerediのインラインレビューを含む
+- [git.kernel.org: f6dd975583bd](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=f6dd975583bd8ce088400648fd9819e4691c8958) — "pipe: merge anon_pipe_buf*_ops"（5.8、2020年）。マージチェックを`flags`に移し、眠っていたバグを悪用可能にした
+- [lore.kernel.org: Al Viroの"assorted splice cleanups"プルリクエスト](https://lore.kernel.org/lkml/20200603192615.GY23230@ZenIV.linux.org.uk/) — `f6dd975583bd`がメインラインに到達した経路。アーカイブにはこのパッチの個別の投稿は見当たらない
+- [git.kernel.org: 01e7187b4119](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=01e7187b41191376cee8bea8de9f907b001e87b4) — "pipe: stop using ->can_merge"（5.1、2019年）。opsのフラグをポインタ比較に置き換えた中間のリファクタリング
+- [lore.kernel.org: sys_tee()のバグ報告](https://lore.kernel.org/linux-fsdevel/CAG48ez1wN=oC_uWkHHhboDvfVt8p9O98ZMFZyh=AK6D=eHU7MA@mail.gmail.com/)と[v2の修正](https://lore.kernel.org/linux-fsdevel/20190123141918.238286-2-jannh@google.com/) — Jann Hornによる元のバグ報告と、それから生まれたパッチ
+- [git.kernel.org: 84588a93d097](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=84588a93d097bace24b9233930f82511d4f34210) — "fuse: fix uninitialized flags in pipe_buffer"（2017年）。同じ種類のバグが5年前に兄弟の呼び出し元で見つかり修正されたもの
+- [lore.kernel.org: vfs: fix uninitialized flags in splice_to_pipe()](https://lore.kernel.org/linux-fsdevel/20170216164902.GC30656@veci.piliscsaba.szeredi.hu/) — fuseの修正を含むプルリクエストの5分後にSzerediが投稿した、ほぼ同一の2つ目の修正
+- [Android Security Bulletin（2022年5月）](https://source.android.com/docs/security/bulletin/2022-05-01) — CVE-2022-0847（`pipes`、EoP、High）を掲載し、"limited, targeted exploitation"（限定的・標的型の悪用）の兆候に言及している
+- [Exploit-DB 50808](https://www.exploit-db.com/exploits/50808) — "Linux Kernel 5.8 < 5.16.11 - Local Privilege Escalation (DirtyPipe)"、2022年3月8日公開
+- [lore.kernel.org: Linux 5.16.11](https://lore.kernel.org/stable/1645618039140207@kroah.com/)と[Linux 5.15.25](https://lore.kernel.org/stable/164561803311588@kroah.com/) — 修正を含むGreg Kroah-Hartmanのstableリリースのアナウンス、2022年2月23日
+- [Red Hat Bugzilla 2060795](https://bugzilla.redhat.com/show_bug.cgi?id=2060795) — CNAのトラッキングバグと影響分析
+- [kernel.org: Security bugs](https://docs.kernel.org/process/security-bugs.html) — 修正が出荷されるまで悪用可能性の議論を公開リストから遠ざけた`security@kernel.org`のプロセス

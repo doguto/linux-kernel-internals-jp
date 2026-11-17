@@ -1,10 +1,10 @@
-# x86 Exception and Interrupt Handling {#x86-exception-and-interrupt-handling}
+# x86の例外と割り込みの処理 {#x86-exception-and-interrupt-handling}
 
-> IDT, exception entry, hardware exceptions, and the page fault handler path
+> IDT、例外エントリ、ハードウェア例外、そしてページフォールトハンドラのパス
 
-## x86 exception fundamentals {#x86-exception-fundamentals}
+## x86の例外の基礎 {#x86-exception-fundamentals}
 
-On x86, all exceptions and interrupts are delivered via the **Interrupt Descriptor Table (IDT)**. The IDT has 256 entries:
+x86では、すべての例外と割り込みは**割り込みディスクリプタテーブル（IDT: Interrupt Descriptor Table）**を介して配送される。IDTには256個のエントリがある。
 
 ```
 IDT entry layout (gate descriptor, 16 bytes on x86-64):
@@ -23,42 +23,42 @@ DPL = descriptor privilege level (0=kernel, 3=user)
 Type= 0xE = interrupt gate (clears IF), 0xF = trap gate (keeps IF)
 ```
 
-Entries 0-31 are reserved for CPU exceptions. Entries 32-255 are for external interrupts and software traps (syscalls use int 0x80 historically, or SYSCALL instruction on x86-64).
+エントリ0-31はCPU例外用に予約されている。エントリ32-255は外部割り込みとソフトウェアトラップ用である（システムコールは歴史的にはint 0x80を使い、x86-64ではSYSCALL命令を使う）。
 
-## CPU exception vectors {#cpu-exception-vectors}
+## CPU例外ベクタ {#cpu-exception-vectors}
 
-| Vector | Mnemonic | Name | Error code | Fault/Trap/Abort |
+| ベクタ | ニーモニック | 名称 | エラーコード | フォルト/トラップ/アボート |
 |--------|----------|------|------------|-----------------|
-| 0 | #DE | Divide Error | No | Fault |
-| 1 | #DB | Debug | No | Fault/Trap |
-| 2 | NMI | Non-Maskable Interrupt | No | Interrupt |
-| 3 | #BP | Breakpoint | No | Trap |
-| 4 | #OF | Overflow | No | Trap |
-| 5 | #BR | BOUND Range Exceeded | No | Fault |
-| 6 | #UD | Invalid Opcode | No | Fault |
-| 7 | #NM | Device Not Available | No | Fault |
-| 8 | #DF | Double Fault | Zero | Abort |
-| 10 | #TS | Invalid TSS | Yes | Fault |
-| 11 | #NP | Segment Not Present | Yes | Fault |
-| 12 | #SS | Stack-Segment Fault | Yes | Fault |
-| 13 | #GP | General Protection | Yes | Fault |
-| 14 | #PF | Page Fault | Yes | Fault |
-| 16 | #MF | x87 FPU Error | No | Fault |
-| 17 | #AC | Alignment Check | Zero | Fault |
-| 18 | #MC | Machine Check | No | Abort |
-| 19 | #XM | SIMD FP Exception | No | Fault |
-| 20 | #VE | Virtualization Exception | No | Fault |
+| 0 | #DE | Divide Error（除算エラー） | なし | フォルト |
+| 1 | #DB | Debug（デバッグ） | なし | フォルト/トラップ |
+| 2 | NMI | Non-Maskable Interrupt（マスク不可能割り込み） | なし | 割り込み |
+| 3 | #BP | Breakpoint（ブレークポイント） | なし | トラップ |
+| 4 | #OF | Overflow（オーバーフロー） | なし | トラップ |
+| 5 | #BR | BOUND Range Exceeded（BOUND範囲超過） | なし | フォルト |
+| 6 | #UD | Invalid Opcode（無効オペコード） | なし | フォルト |
+| 7 | #NM | Device Not Available（デバイス使用不可） | なし | フォルト |
+| 8 | #DF | Double Fault（ダブルフォルト） | ゼロ | アボート |
+| 10 | #TS | Invalid TSS（無効TSS） | あり | フォルト |
+| 11 | #NP | Segment Not Present（セグメント不在） | あり | フォルト |
+| 12 | #SS | Stack-Segment Fault（スタックセグメントフォルト） | あり | フォルト |
+| 13 | #GP | General Protection（一般保護） | あり | フォルト |
+| 14 | #PF | Page Fault（ページフォールト） | あり | フォルト |
+| 16 | #MF | x87 FPU Error（x87 FPUエラー） | なし | フォルト |
+| 17 | #AC | Alignment Check（アライメントチェック） | ゼロ | フォルト |
+| 18 | #MC | Machine Check（マシンチェック） | なし | アボート |
+| 19 | #XM | SIMD FP Exception（SIMD浮動小数点例外） | なし | フォルト |
+| 20 | #VE | Virtualization Exception（仮想化例外） | なし | フォルト |
 
-**Fault**: saved CS:RIP points to the faulting instruction (re-executed after handler).
-**Trap**: saved CS:RIP points to the instruction after the trap.
-**Abort**: unrecoverable; saved state may be corrupted.
+**フォルト**: 保存されたCS:RIPはフォルトを起こした命令を指す（ハンドラの後に再実行される）。
+**トラップ**: 保存されたCS:RIPはトラップの次の命令を指す。
+**アボート**: 回復不能。保存された状態が壊れている可能性がある。
 
-## IDT initialization {#idt-initialization}
+## IDTの初期化 {#idt-initialization}
 
 ```c
 /* arch/x86/kernel/idt.c */
 
-/* IDT gate descriptor in kernel code */
+/* カーネルコード内のIDTゲートディスクリプタ */
 struct idt_data {
     unsigned int    vector;
     unsigned int    segment;
@@ -66,12 +66,12 @@ struct idt_data {
     const void      *addr;
 };
 
-/* Early IDT setup (before C code) */
+/* 初期のIDT設定（Cコードより前） */
 static const __initconst struct idt_data def_idts[] = {
     INTG(X86_TRAP_DE,       asm_exc_divide_error),
     INTG(X86_TRAP_NMI,      asm_exc_nmi),
-    SYSG(X86_TRAP_BP,       asm_exc_int3),     /* DPL=3: user can trigger INT3 */
-    SYSG(X86_TRAP_OF,       asm_exc_overflow), /* DPL=3: user can trigger INTO */
+    SYSG(X86_TRAP_BP,       asm_exc_int3),     /* DPL=3: ユーザーがINT3を発生させられる */
+    SYSG(X86_TRAP_OF,       asm_exc_overflow), /* DPL=3: ユーザーがINTOを発生させられる */
     INTG(X86_TRAP_UD,       asm_exc_invalid_op),
     INTG(X86_TRAP_NM,       asm_exc_device_not_available),
     INTG(X86_TRAP_GP,       asm_exc_general_protection),
@@ -82,15 +82,15 @@ static const __initconst struct idt_data def_idts[] = {
 void __init idt_setup_early_traps(void)
 {
     idt_setup_from_table(idt_table, early_idts, ARRAY_SIZE(early_idts), true);
-    load_idt(&idt_descr);  /* LIDT instruction */
+    load_idt(&idt_descr);  /* LIDT命令 */
 }
 ```
 
-The `LIDT` instruction loads the IDT register (IDTR) with the base address and limit of the IDT table.
+`LIDT`命令は、IDTレジスタ（IDTR）にIDTテーブルのベースアドレスとリミットをロードする。
 
-## Exception entry: hardware behavior {#exception-entry-hardware-behavior}
+## 例外エントリ: ハードウェアの動作 {#exception-entry-hardware-behavior}
 
-When the CPU delivers an exception to ring 0 (from ring 3 userspace):
+CPUが（ring 3のユーザー空間から）ring 0へ例外を配送するとき:
 
 ```
 Hardware actions (automatic, before any software):
@@ -108,20 +108,20 @@ Hardware actions (automatic, before any software):
   6. Jump to handler address from IDT entry
 ```
 
-For ring-0 → ring-0 exceptions (kernel taking a fault):
+ring 0 → ring 0の例外（カーネルがフォルトを受ける場合）では:
 
-- No stack switch (stays on current kernel stack)
-- On x86-64, SS/RSP are **always** pushed even for same-privilege exceptions (unlike 32-bit x86)
-- Still pushes SS/RSP/RFLAGS/CS/RIP and error code (if applicable)
+- スタックの切り替えは行われない（現在のカーネルスタックに留まる）
+- x86-64では、同じ特権レベルの例外であってもSS/RSPが**常に**プッシュされる（32ビットx86とは異なる）
+- SS/RSP/RFLAGS/CS/RIPと（該当する場合は）エラーコードは同様にプッシュされる
 
-## Exception entry assembly (x86-64) {#exception-entry-assembly-x86-64}
+## 例外エントリのアセンブリ（x86-64） {#exception-entry-assembly-x86-64}
 
-Linux uses `DEFINE_IDTENTRY_*` macros to generate exception entry stubs:
+Linuxは`DEFINE_IDTENTRY_*`マクロを使って例外エントリスタブを生成する。
 
 ```c
 /* arch/x86/include/asm/idtentry.h */
 
-/* Generates the asm entry stub + C handler declaration */
+/* asmのエントリスタブ + Cハンドラの宣言を生成する */
 #define DEFINE_IDTENTRY_ERRORCODE(func)                         \
     __visible noinstr void func(struct pt_regs *regs, long error_code)
 
@@ -160,22 +160,22 @@ DEFINE_IDTENTRY_ERRORCODE(exc_general_protection)
 
 ## struct pt_regs {#struct-pt_regs}
 
-All exception handlers receive a `struct pt_regs` that captures the full register state:
+すべての例外ハンドラは、レジスタ状態全体を記録した`struct pt_regs`を受け取る。
 
 ```c
 /* arch/x86/include/asm/ptrace.h */
 struct pt_regs {
-    /* Callee-saved registers (pushed by entry asm) */
+    /* 呼び出し先保存レジスタ（エントリのasmがプッシュする） */
     unsigned long r15, r14, r13, r12;
     unsigned long bp;
     unsigned long bx;
 
-    /* Argument registers */
+    /* 引数レジスタ */
     unsigned long r11, r10, r9, r8;
     unsigned long ax, cx, dx, si, di;
 
-    /* CPU-pushed on exception entry */
-    unsigned long orig_ax;  /* syscall number or error code */
+    /* 例外エントリ時にCPUがプッシュする */
+    unsigned long orig_ax;  /* システムコール番号またはエラーコード */
     unsigned long ip;
     unsigned long cs;
     unsigned long flags;
@@ -184,21 +184,21 @@ struct pt_regs {
 };
 ```
 
-The entry assembly (`arch/x86/entry/entry_64.S`) saves all registers to build this structure before calling the C handler.
+エントリのアセンブリ（`arch/x86/entry/entry_64.S`）は、Cハンドラを呼ぶ前にすべてのレジスタを保存してこの構造体を構築する。
 
-## Task State Segment (TSS) {#task-state-segment-tss}
+## タスクステートセグメント（TSS） {#task-state-segment-tss}
 
-The TSS is critical for stack switching on exception delivery:
+TSSは、例外配送時のスタック切り替えにとって極めて重要である。
 
 ```c
 /* arch/x86/include/asm/processor.h */
 struct x86_hw_tss {
     u32         reserved1;
-    u64         sp0;    /* RSP0: kernel stack pointer (used for ring-0 target) */
+    u64         sp0;    /* RSP0: カーネルスタックポインタ（ring 0が遷移先の場合に使われる） */
     u64         sp1;
     u64         sp2;
     u64         reserved2;
-    u64         ist[7]; /* IST1-IST7: Interrupt Stack Table entries */
+    u64         ist[7]; /* IST1-IST7: Interrupt Stack Tableのエントリ */
     u32         reserved3;
     u32         reserved4;
     u16         reserved5;
@@ -206,20 +206,20 @@ struct x86_hw_tss {
 } __attribute__((packed));
 ```
 
-**IST (Interrupt Stack Table)**: Some critical exceptions use dedicated stacks from IST to handle faults even when the regular kernel stack is corrupted:
+**IST（Interrupt Stack Table）**: 一部の重要な例外は、通常のカーネルスタックが壊れていてもフォルトを処理できるよう、IST由来の専用スタックを使う。
 
-| Exception | IST | Reason |
+| 例外 | IST | 理由 |
 |-----------|-----|--------|
-| NMI | IST1 | Can interrupt any code including exception handlers |
-| #DF (double fault) | IST2 | Stack pointer might be corrupted |
-| #MC (machine check) | IST3 | Hardware may be completely broken |
-| #DB (debug) | IST4 | Can fire in weird contexts |
+| NMI | IST1 | 例外ハンドラを含むあらゆるコードに割り込みうる |
+| #DF（ダブルフォルト） | IST2 | スタックポインタが壊れている可能性がある |
+| #MC（マシンチェック） | IST3 | ハードウェアが完全に壊れている可能性がある |
+| #DB（デバッグ） | IST4 | 奇妙なコンテキストで発生しうる |
 
-## Page fault handler (#PF) {#page-fault-handler-pf}
+## ページフォールトハンドラ（#PF） {#page-fault-handler-pf}
 
-The page fault is the most important exception in a running system:
+ページフォールトは、稼働中のシステムで最も重要な例外である。
 
-### Error code bits {#error-code-bits}
+### エラーコードのビット {#error-code-bits}
 
 ```
 #PF error code:
@@ -232,25 +232,25 @@ The page fault is the most important exception in a running system:
   bit 6: SGX — SGX-related fault
 ```
 
-### Handler entry {#handler-entry}
+### ハンドラの入口 {#handler-entry}
 
 ```c
 /* arch/x86/mm/fault.c */
 
 /*
- * CR2 contains the faulting linear address.
- * Called from asm_exc_page_fault after saving pt_regs.
+ * CR2にはフォルトを起こしたリニアアドレスが入っている。
+ * pt_regsを保存した後、asm_exc_page_faultから呼ばれる。
  */
 DEFINE_IDTENTRY_RAW_ERRORCODE(exc_page_fault)
 {
-    unsigned long address = read_cr2();  /* faulting virtual address */
+    unsigned long address = read_cr2();  /* フォルトを起こした仮想アドレス */
     irqentry_state_t state;
 
     prefetchw(&current->mm->mmap_lock);
 
     /*
-     * KVM: notify before running page fault handler.
-     * Allows hypervisor to handle EPT-related faults first.
+     * KVM: ページフォールトハンドラを実行する前に通知する。
+     * ハイパーバイザがEPT関連のフォルトを先に処理できるようにする。
      */
     if (kvm_handle_async_pf(regs, (u32)error_code))
         return;
@@ -263,25 +263,25 @@ DEFINE_IDTENTRY_RAW_ERRORCODE(exc_page_fault)
 }
 ```
 
-### Fault classification {#fault-classification}
+### フォルトの分類 {#fault-classification}
 
 ```c
 static noinline void
 handle_page_fault(struct pt_regs *regs, unsigned long error_code,
                                unsigned long address)
 {
-    /* Fault from kernel mode? */
+    /* カーネルモードからのフォルトか？ */
     if (unlikely(fault_in_kernel_space(address))) {
         do_kern_addr_fault(regs, error_code, address);
         return;
     }
 
-    /* Fault from user mode or kernel accessing user memory */
+    /* ユーザーモードからのフォルト、またはカーネルがユーザーメモリにアクセスした場合 */
     do_user_addr_fault(regs, error_code, address);
 }
 ```
 
-### User address fault path {#user-address-fault-path}
+### ユーザーアドレスのフォルトパス {#user-address-fault-path}
 
 ```c
 static inline void
@@ -294,13 +294,13 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
     vm_fault_t fault;
     unsigned int flags = FAULT_FLAG_DEFAULT;
 
-    /* Spurious fault? Check if address is in a valid VMA */
+    /* 偽のフォルトか？ アドレスが有効なVMA内にあるか確認する */
     if (unlikely(!mm)) {
         bad_area_nosemaphore(regs, error_code, address);
         return;
     }
 
-    /* Indicate this is a write or instruction fetch */
+    /* 書き込みまたは命令フェッチであることを示す */
     if (error_code & X86_PF_WRITE)
         flags |= FAULT_FLAG_WRITE;
     if (error_code & X86_PF_INSTR)
@@ -308,9 +308,9 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
     if (error_code & X86_PF_USER)
         flags |= FAULT_FLAG_USER;
 
-    /* Acquire mmap_lock (shared for reads, exclusive if needed) */
+    /* mmap_lockを取得する（読み取りは共有、必要なら排他） */
     if (unlikely(!mmap_read_trylock(mm))) {
-        /* If in interrupt context or killed, can't wait */
+        /* 割り込みコンテキスト内、またはkillされている場合は待てない */
         if (unlikely(faulthandler_disabled() || !user_mode(regs))) {
             bad_area_nosemaphore(regs, error_code, address);
             return;
@@ -318,7 +318,7 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
         mmap_read_lock(mm);
     }
 
-    /* Find the VMA containing the faulting address */
+    /* フォルトを起こしたアドレスを含むVMAを探す */
     vma = find_vma(mm, address);
     if (unlikely(!vma)) {
         bad_area(regs, error_code, address, NULL);
@@ -327,7 +327,7 @@ do_user_addr_fault(struct pt_regs *regs, unsigned long error_code,
     if (likely(vma->vm_start <= address))
         goto good_area;
 
-    /* Address is in a hole between VMAs — check if it's a stack growth */
+    /* アドレスがVMA間の隙間にある — スタックの伸長か確認する */
     if (unlikely(!(vma->vm_flags & VM_GROWSDOWN))) {
         bad_area(regs, error_code, address, vma);
         goto done;
@@ -346,62 +346,62 @@ done:
 }
 ```
 
-### Kernel address fault path {#kernel-address-fault-path}
+### カーネルアドレスのフォルトパス {#kernel-address-fault-path}
 
 ```c
 static noinline void
 do_kern_addr_fault(struct pt_regs *regs, unsigned long hw_error_code,
                    unsigned long address)
 {
-    /* Check the fixup table: expected faults in kernel code */
+    /* fixupテーブルを確認する: カーネルコード内で想定されたフォルト */
     if (fixup_exception(regs, X86_TRAP_PF, hw_error_code, address))
         return;
 
-    /* KASAN/KFENCE shadow memory? */
+    /* KASAN/KFENCEのシャドウメモリか？ */
     if (kfence_handle_page_fault(address, hw_error_code & X86_PF_WRITE, regs))
         return;
 
-    /* vmalloc fault? (lazy mapping, VMALLOC_START to VMALLOC_END) */
+    /* vmallocのフォルトか？（遅延マッピング、VMALLOC_STARTからVMALLOC_END） */
     if (!(hw_error_code & (X86_PF_RSVD | X86_PF_USER | X86_PF_PK))) {
         if (vmalloc_fault(address) >= 0)
             return;
     }
 
-    /* Oops: unexpected kernel fault */
+    /* Oops: 想定外のカーネルフォルト */
     bad_area_nosemaphore(regs, hw_error_code, address);
 }
 ```
 
-## Exception fixup table {#exception-fixup-table}
+## 例外fixupテーブル {#exception-fixup-table}
 
-The kernel's exception fixup table maps faulting instruction addresses to recovery code. Used for `copy_from_user`/`copy_to_user`:
+カーネルの例外fixupテーブルは、フォルトを起こした命令のアドレスを回復用コードに対応付ける。`copy_from_user`/`copy_to_user`で使われる。
 
 ```c
 /* arch/x86/lib/usercopy_64.S */
-/* If this copy instruction faults: */
+/* このコピー命令がフォルトを起こした場合: */
 1:  rep movsb
     /* ... */
 2:  ret
-    /* Fixup entry: if [1] faults, jump to [3] */
+    /* fixupエントリ: [1]がフォルトを起こしたら[3]へジャンプする */
     _ASM_EXTABLE_UA(1b, 3f)
-3:  mov %ecx, %eax   /* Return number of bytes not copied */
+3:  mov %ecx, %eax   /* コピーされなかったバイト数を返す */
     ret
 
-/* In C: */
+/* Cでは: */
 unsigned long copy_from_user(void *to, const void __user *from, unsigned long n)
 {
     /*
-     * If the copy faults (bad user pointer), the CPU exception
-     * handler checks the fixup table and jumps to the error path
-     * instead of oopsing.
+     * コピーがフォルトを起こした場合（不正なユーザーポインタ）、CPUの例外
+     * ハンドラはfixupテーブルを確認し、oopsする代わりに
+     * エラーパスへジャンプする。
      */
     return raw_copy_from_user(to, from, n);
 }
 ```
 
-## NMI handling {#nmi-handling}
+## NMIの処理 {#nmi-handling}
 
-Non-Maskable Interrupts cannot be masked with `cli`. They require careful handling because they can interrupt *any* code including interrupt handlers:
+マスク不可能割り込み（NMI）は`cli`でマスクできない。割り込みハンドラを含む*あらゆる*コードに割り込みうるため、慎重な処理が必要になる。
 
 ```c
 /* arch/x86/kernel/nmi.c */
@@ -410,11 +410,11 @@ DEFINE_IDTENTRY_NMI(exc_nmi)
     irqentry_state_t irq_state;
 
     /*
-     * NMI uses its own IST stack. Since NMI can nest (NMI within NMI
-     * handling), the kernel uses a careful "NMI nesting" protocol:
+     * NMIは専用のISTスタックを使う。NMIはネストしうる（NMI処理中のNMI）
+     * ため、カーネルは慎重な「NMIネスト」プロトコルを使う:
      */
 
-    /* Check if we interrupted an NMI handler itself */
+    /* NMIハンドラ自体に割り込んだかを確認する */
     if (this_cpu_read(nmi_state) != NMI_NOT_RUNNING) {
         this_cpu_write(nmi_cr2, read_cr2());
         this_cpu_write(nmi_state, NMI_LATCHED);
@@ -429,22 +429,22 @@ DEFINE_IDTENTRY_NMI(exc_nmi)
     do_nmi(regs, 0);
     irqentry_nmi_exit(regs, irq_state);
 
-    /* Check if NMI was latched while handling */
+    /* 処理中にNMIがラッチされたかを確認する */
     if (this_cpu_cmpxchg(nmi_state, NMI_EXECUTING, NMI_NOT_RUNNING) != NMI_EXECUTING)
-        goto nmi_restart;  /* state changed to NMI_LATCHED by nested NMI */
+        goto nmi_restart;  /* ネストしたNMIによって状態がNMI_LATCHEDに変わった */
 }
 ```
 
-NMIs are used for:
+NMIは次の用途に使われる。
 
-- Hardware errors (MCE, watchdog)
-- Perf PMU overflow interrupts (PEBS/LBR)
-- kdump NMI shootdown (crash on one CPU, NMI all others)
-- Kernel watchdog (`CONFIG_HARDLOCKUP_DETECTOR`)
+- ハードウェアエラー（MCE、ウォッチドッグ）
+- perfのPMUオーバーフロー割り込み（PEBS/LBR）
+- kdumpのNMIシュートダウン（あるCPUでクラッシュしたら、他の全CPUにNMIを送る）
+- カーネルのウォッチドッグ（`CONFIG_HARDLOCKUP_DETECTOR`）
 
-## SYSCALL/SYSRET (fast system call) {#syscallsysret-fast-system-call}
+## SYSCALL/SYSRET（高速システムコール） {#syscallsysret-fast-system-call}
 
-Modern x86-64 uses the `SYSCALL` instruction instead of `int 0x80`:
+現代のx86-64は`int 0x80`の代わりに`SYSCALL`命令を使う。
 
 ```
 SYSCALL (user → kernel):
@@ -463,44 +463,44 @@ SYSRET (kernel → user):
 ```c
 /* arch/x86/entry/entry_64.S */
 SYM_CODE_START(entry_SYSCALL_64)
-    /* Switch from user stack to kernel stack: */
-    swapgs                          /* swap GS with MSR_KERNEL_GS_BASE */
+    /* ユーザースタックからカーネルスタックに切り替える: */
+    swapgs                          /* GSとMSR_KERNEL_GS_BASEを交換する */
     movq    %rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
     SWITCH_TO_KERNEL_CR3 scratch_reg=%rsp
     movq    PER_CPU_VAR(cpu_current_top_of_stack), %rsp
 
-    /* Save user state: */
+    /* ユーザーの状態を保存する: */
     pushq   $__USER_DS              /* ss */
     pushq   PER_CPU_VAR(cpu_tss_rw + TSS_sp2)  /* rsp */
     pushq   %r11                   /* rflags */
     pushq   $__USER_CS             /* cs */
-    pushq   %rcx                   /* rip (saved by SYSCALL) */
+    pushq   %rcx                   /* rip（SYSCALLが保存したもの） */
 
-    /* ... save remaining regs, call do_syscall_64() ... */
+    /* ... 残りのレジスタを保存し、do_syscall_64()を呼ぶ ... */
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Count exceptions per type (perf)
+# 例外を種類ごとに数える（perf）
 perf stat -e exceptions:page_fault_user,exceptions:page_fault_kernel \
           -p <pid> sleep 5
 
-# Watch page fault rate (vmstat)
+# ページフォールトの発生率を監視する（vmstat）
 vmstat 1
-# pgfault: minor faults (page in from cache or anon)
-# pgmajfault: major faults (disk read)
+# pgfault: マイナーフォールト（キャッシュまたは匿名メモリからのページイン）
+# pgmajfault: メジャーフォールト（ディスク読み込み）
 
-# Trace all page faults (heavy!)
+# すべてのページフォールトをトレースする（重い！）
 bpftrace -e '
 tracepoint:exceptions:page_fault_user {
     @[ustack] = count();
 }'
 
-# Decode IDT
+# IDTをデコードする
 crash> idt
 
-# Show exception handler address for vector 14 (#PF)
+# ベクタ14（#PF）の例外ハンドラのアドレスを表示する
 python3 -c "
 import struct, sys
 # /sys/kernel/debug/x86/idt_table is a binary dump of the IDT
@@ -513,18 +513,18 @@ addr = lo16 | (hi16 << 16) | (hi32 << 32)
 print(f'#PF handler: {addr:#x}')
 "
 
-# /proc/interrupts shows interrupt counts per CPU
+# /proc/interruptsはCPUごとの割り込み回数を表示する
 cat /proc/interrupts | head -5
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ARM64 Exception Model](../arm64/exception-model.md) — equivalent AArch64 mechanisms
-- [Page Fault Handler](../../mm/page-fault.md) — handle_mm_fault and VMA resolution
-- [IRQ Handling](../../interrupts/interrupts.md) — external interrupt delivery
-- [Syscall Entry](../../syscalls/syscall-entry.md) — SYSCALL/SYSRET path in detail
-- [Kernel Hardening](../../security/kernel-hardening.md) — SMEP/SMAP, KPTI
-- [arch/x86/kernel/traps.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/traps.c) — exception handler implementations
-- [arch/x86/mm/fault.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/fault.c) — page fault handler
-- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — exception/syscall entry assembly
-- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) Vol 3A, Chapter 6 — Interrupt and Exception Handling
+- [ARM64の例外モデル](../arm64/exception-model.md) — AArch64における同等の機構
+- [ページフォールトハンドラ](../../mm/page-fault.md) — handle_mm_faultとVMAの解決
+- [IRQ処理](../../interrupts/interrupts.md) — 外部割り込みの配送
+- [システムコールエントリ](../../syscalls/syscall-entry.md) — SYSCALL/SYSRETパスの詳細
+- [カーネルのハードニング](../../security/kernel-hardening.md) — SMEP/SMAP、KPTI
+- [arch/x86/kernel/traps.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/traps.c) — 例外ハンドラの実装
+- [arch/x86/mm/fault.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/fault.c) — ページフォールトハンドラ
+- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — 例外/システムコールエントリのアセンブリ
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) Vol 3A、第6章 — Interrupt and Exception Handling

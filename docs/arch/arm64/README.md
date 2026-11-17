@@ -1,54 +1,54 @@
-# ARM64 Architecture {#arm64-architecture}
+# ARM64アーキテクチャ {#arm64-architecture}
 
-> Exception levels, memory model, and ARM-specific kernel internals
+> 例外レベル、メモリモデル、そしてARM固有のカーネル内部構造
 
-## Why ARM64? {#why-arm64}
+## なぜARM64か {#why-arm64}
 
-ARM64 (AArch64) is the dominant architecture for:
+ARM64（AArch64）は次の分野で支配的なアーキテクチャである。
 
-- Mobile (Android, iOS)
-- Embedded and IoT (Raspberry Pi, NXP, TI)
-- Servers (AWS Graviton, Ampere Altra)
-- Laptops (Apple Silicon, Qualcomm Snapdragon X)
+- モバイル（Android、iOS）
+- 組み込みおよびIoT（Raspberry Pi、NXP、TI）
+- サーバー（AWS Graviton、Ampere Altra）
+- ノートPC（Apple Silicon、Qualcomm Snapdragon X）
 
-Understanding ARM64-specific behavior is essential for kernel work on these platforms.
+これらのプラットフォームでカーネルを扱うには、ARM64固有の挙動を理解することが不可欠である。
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Boot Sequence](boot.md) | Head.S, identity mapping, decompressor, MMU enable, SMP bringup |
-| [Exception Model](exception-model.md) | EL0-EL3, VBAR_EL1, syndrome registers, GIC |
-| [Memory Model](memory-model.md) | Weak ordering, barriers, load-acquire/store-release, LDAR/STLR |
-| [Page Tables](page-tables.md) | TTBR0/TTBR1, granule sizes, PTE format, ASID, MAIR_EL1, stage 2 |
-| [Syscall Entry](syscall-entry.md) | SVC instruction, el0_svc, syscall table, vDSO, compat |
-| [CPU Features and Alternatives](cpu-features.md) | Feature detection, alternatives patching, hwcaps, errata, SVE/BTI/MTE |
-| [Spectre and Meltdown](spectre-meltdown.md) | Spectre v1/v2/BHB/v4, SSBS, CSV2, BHB clearing, KPTI |
-| [War Stories](war-stories.md) | SVE context switch, TLB ordering, DMA coherency, BTI crash, errata range bug |
+| [ブートシーケンス](boot.md) | Head.S、アイデンティティマッピング、デコンプレッサ、MMU有効化、SMPの立ち上げ |
+| [例外モデル](exception-model.md) | EL0-EL3、VBAR_EL1、シンドロームレジスタ、GIC |
+| [メモリモデル](memory-model.md) | 弱い順序付け、バリア、load-acquire/store-release、LDAR/STLR |
+| [ページテーブル](page-tables.md) | TTBR0/TTBR1、グラニュールサイズ、PTE形式、ASID、MAIR_EL1、stage 2 |
+| [システムコールのエントリ](syscall-entry.md) | SVC命令、el0_svc、システムコールテーブル、vDSO、compat |
+| [CPU機能とalternatives](cpu-features.md) | 機能検出、alternativesによるパッチ適用、hwcaps、エラッタ、SVE/BTI/MTE |
+| [SpectreとMeltdown](spectre-meltdown.md) | Spectre v1/v2/BHB/v4、SSBS、CSV2、BHBクリア、KPTI |
+| [事件簿](war-stories.md) | SVEのコンテキストスイッチ、TLBの順序付け、DMAコヒーレンシ、BTIクラッシュ、エラッタ範囲のバグ |
 
-## ARM64 vs x86 key differences {#arm64-vs-x86-key-differences}
+## ARM64とx86の主な違い {#arm64-vs-x86-key-differences}
 
-| Feature | x86-64 | ARM64 |
+| 機能 | x86-64 | ARM64 |
 |---------|--------|-------|
-| Memory ordering | TSO (total store order) | Weak (RVWMO relaxed) |
-| Privilege levels | ring 0-3 | EL0-EL3 |
-| Interrupt controller | APIC | GIC (Generic Interrupt Controller) |
-| System registers | MSR/RDMSR | MRS/MSR instructions |
+| メモリ順序付け | TSO（total store order） | 弱い（RVWMO relaxed） |
+| 特権レベル | ring 0-3 | EL0-EL3 |
+| 割り込みコントローラ | APIC | GIC（Generic Interrupt Controller） |
+| システムレジスタ | MSR/RDMSR | MRS/MSR命令 |
 | SIMD | SSE/AVX | NEON / SVE / SME |
-| Page sizes | 4K/2M/1G | 4K/16K/64K base + 2M/1G huge |
-| TLB shootdown | IPI to other CPUs | TLBI broadcast via DSB |
+| ページサイズ | 4K/2M/1G | 4K/16K/64Kベース + 2M/1G huge |
+| TLBシュートダウン | 他のCPUへのIPI | DSBを介したTLBIブロードキャスト |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# CPU features on ARM64
+# ARM64のCPU機能
 cat /proc/cpuinfo | grep Features
 # Features: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics ...
 
-# ARM64-specific system registers (via perf or MSR equivalent)
-# Read CNTVCT_EL0 (virtual counter — ARM equivalent of RDTSC)
+# ARM64固有のシステムレジスタ（perfまたはMSR相当の手段で）
+# CNTVCT_EL0を読む（仮想カウンタ — RDTSCのARM版）
 # mrs x0, CNTVCT_EL0
 
-# Exception level of running code
-# EL0 = userspace, EL1 = kernel, EL2 = hypervisor, EL3 = secure monitor
+# 実行中のコードの例外レベル
+# EL0 = ユーザー空間、EL1 = カーネル、EL2 = ハイパーバイザ、EL3 = セキュアモニタ
 ```

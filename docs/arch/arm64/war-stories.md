@@ -1,43 +1,43 @@
-# ARM64 War Stories {#arm64-war-stories}
+# ARM64 事件簿 {#arm64-war-stories}
 
-> Cache coherency bugs, TLB shootdown ordering, BTI enforcement, and SVE context corruption
+> キャッシュコヒーレンシのバグ、TLB shootdown の順序、BTI の強制、SVE コンテキストの破損
 
-Each story follows a real bug class rooted in ARM64 architecture specifics — weak memory ordering, hardware coherency requirements, CPU feature enforcement, and errata handling.
+各事例は、ARM64 アーキテクチャ固有の事情 — 弱いメモリ順序付け、ハードウェアのコヒーレンシ要件、CPU 機能の強制、エラッタ対応 — に根ざした実在のバグの類型を追う。
 
-!!! note "How these are written"
-    These aren't write-ups of a single named incident tied to one commit or CVE — they're realistic scenarios built from failure patterns that actually occur on ARM64 systems. Names and products are illustrative; the failure modes are real. The references at the end of the page verify the underlying ARM64 mechanisms each case relies on (lazy/context-switched FPSIMD state, TLB/barrier ordering, MIDR-based errata matching, BTI enforcement) against current kernel source and architecture documentation. See the [BPF](../../bpf/war-stories.md), [scheduler](../../sched/war-stories.md), or [interrupts](../../interrupts/war-stories.md) war-stories pages for the site's usual format: specific, datable incidents, most (though not all — see [wake_wide()](../../sched/war-stories/wake-wide-heuristic.md)) tied to a fix commit or CVE.
+!!! note "これらの事例の書き方について"
+    これらは、1つのコミットや CVE に結びついた特定の名前付きインシデントの記録ではない。ARM64 システムで実際に起こる障害パターンから組み立てた、現実的なシナリオである。名前や製品は説明のための架空のものだが、障害の様態は本物である。ページ末尾の参考文献では、各事例が依拠する ARM64 の基盤メカニズム（遅延/コンテキストスイッチされる FPSIMD 状態、TLB/バリアの順序付け、MIDR ベースのエラッタ照合、BTI の強制）を、現行のカーネルソースとアーキテクチャ文書に照らして検証している。サイトの通常の形式 — 日付を特定できる具体的なインシデントで、そのほとんど（すべてではない — [wake_wide()](../../sched/war-stories/wake-wide-heuristic.md) を参照）が修正コミットや CVE に結びついているもの — については、[BPF](../../bpf/war-stories.md)、[スケジューラ](../../sched/war-stories.md)、[割り込み](../../interrupts/war-stories.md)の事件簿ページを参照のこと。
 
 ---
 
-## 1. The SVE Context Switch Bug {#1-the-sve-context-switch-bug}
+## 1. SVE コンテキストスイッチのバグ {#1-the-sve-context-switch-bug}
 
-### Setup {#setup}
+### 状況 {#setup}
 
-A storage driver was optimized to use SIMD to accelerate CRC32 checksums on data blocks during I/O completion. The developer correctly called `kernel_neon_begin()` and `kernel_neon_end()` in the checksum path — or so they thought. A refactoring pass moved some of the checksum logic into a helper function called from a workqueue. In that helper, `kernel_neon_begin()` was present, but an early-return error path skipped `kernel_neon_end()`.
+あるストレージドライバは、I/O 完了時にデータブロックの CRC32 チェックサム計算を SIMD で高速化するよう最適化されていた。開発者はチェックサムのパスで `kernel_neon_begin()` と `kernel_neon_end()` を正しく呼んでいた — 少なくとも本人はそう思っていた。リファクタリングの過程で、チェックサムロジックの一部が workqueue から呼ばれるヘルパー関数に移された。そのヘルパーには `kernel_neon_begin()` はあったが、早期リターンするエラーパスが `kernel_neon_end()` を飛ばしていた。
 
-The kernel was running on an ARMv8.2 platform with SVE support. Several userspace threads were using SVE for BLAS routines in a scientific computing workload, and the storage driver's checksum work ran on the same CPUs under heavy load.
+カーネルは SVE をサポートする ARMv8.2 プラットフォーム上で動いていた。科学技術計算のワークロードで、複数のユーザー空間スレッドが BLAS ルーチンに SVE を使っており、高負荷時にはストレージドライバのチェックサム処理が同じ CPU 上で実行されていた。
 
-### What Happened {#what-happened}
+### 何が起きたか {#what-happened}
 
-On a heavily loaded system, kworker threads doing checksum work would occasionally corrupt seemingly unrelated local state a few calls later — a garbled local variable, or in the worst cases a corrupted return address leading to a crash with a backtrace that made no sense. The corruption was silent at the point it happened and only surfaced later, in different code entirely.
+高負荷のシステムで、チェックサム処理を行う kworker スレッドが、数回後の呼び出しで一見無関係なローカル状態を時折破壊した — ローカル変数が化けたり、最悪の場合はリターンアドレスが破壊されて、意味をなさないバックトレース付きでクラッシュしたりした。破損は発生時点では無症状で、後になってまったく別のコードで初めて表面化した。
 
-The mechanism, once found:
+突き止められたメカニズムは次のとおりである。
 
-1. A kernel function calling `kernel_neon_begin()` from process or softirq context (like this workqueue handler) must supply a caller-owned buffer — `struct user_fpsimd_state`, typically declared on the stack — because kernel-mode NEON use in these contexts is **preemptible**, not run with preemption held off for the duration. `kernel_neon_begin(&state)` records that buffer in `current->thread.kernel_fpsimd_state` and sets the `TIF_KERNEL_FPSTATE` thread flag, so that if this task is scheduled out while it still "owns" the NEON registers, the scheduler knows how to save and restore that state across the switch.
-2. `kernel_neon_end(&state)` is the other half of that contract: it clears `TIF_KERNEL_FPSTATE` and resets `current->thread.kernel_fpsimd_state` to `NULL`, telling the scheduler this task no longer has live kernel-mode NEON state to preserve.
-3. The early-return path skipped `kernel_neon_end()`. The function returned — unwinding the stack frame that held `state` — while `TIF_KERNEL_FPSTATE` was still set and `current->thread.kernel_fpsimd_state` still pointed at that now-dead stack address.
-4. If this kworker thread was preempted before anything cleared that state, `fpsimd_thread_switch()` (called from `__switch_to()`) saw `TIF_KERNEL_FPSTATE` set and called `fpsimd_save_kernel_state(current)`, which writes the live NEON register contents into `*current->thread.kernel_fpsimd_state` — the stale stack address. By then, that stack region had very likely been reused by whatever the kworker thread called next, so the write silently clobbered a local variable, a saved register, or a return address belonging to completely different code.
+1. プロセスコンテキストまたは softirq コンテキスト（この workqueue ハンドラのような）から `kernel_neon_begin()` を呼ぶカーネル関数は、呼び出し元が所有するバッファ — `struct user_fpsimd_state`、通常はスタック上に宣言される — を渡さなければならない。これらのコンテキストでのカーネルモード NEON の使用は **プリエンプト可能** であり、その期間中ずっとプリエンプションを禁止して実行されるわけではないからである。`kernel_neon_begin(&state)` はそのバッファを `current->thread.kernel_fpsimd_state` に記録し、`TIF_KERNEL_FPSTATE` スレッドフラグをセットする。これにより、このタスクが NEON レジスタをまだ「所有」している間にスケジュールアウトされても、スケジューラはスイッチをまたいでその状態を保存・復元する方法を知ることができる。
+2. `kernel_neon_end(&state)` はその契約のもう半分である。`TIF_KERNEL_FPSTATE` をクリアし、`current->thread.kernel_fpsimd_state` を `NULL` にリセットして、このタスクにはもう保存すべき生きたカーネルモード NEON 状態がないことをスケジューラに伝える。
+3. 早期リターンのパスは `kernel_neon_end()` を飛ばしていた。関数は `state` を保持していたスタックフレームを巻き戻してリターンしたが、`TIF_KERNEL_FPSTATE` はセットされたままで、`current->thread.kernel_fpsimd_state` は今や無効になったスタックアドレスを指したままだった。
+4. その状態がクリアされる前にこの kworker スレッドがプリエンプトされると、（`__switch_to()` から呼ばれる）`fpsimd_thread_switch()` が `TIF_KERNEL_FPSTATE` のセットを検出して `fpsimd_save_kernel_state(current)` を呼び、生きている NEON レジスタの内容を `*current->thread.kernel_fpsimd_state` — つまり古いスタックアドレス — に書き込む。その時点では、そのスタック領域は kworker スレッドが次に呼んだ何かによって再利用されている可能性が非常に高く、この書き込みはまったく別のコードに属するローカル変数、保存済みレジスタ、あるいはリターンアドレスを黙って上書きしてしまった。
 
-The key registers and functions (`arch/arm64/kernel/fpsimd.c`):
+関係する主要なレジスタと関数（`arch/arm64/kernel/fpsimd.c`）:
 
-- `TIF_KERNEL_FPSTATE` — thread flag marking that this task's kernel-mode FPSIMD/NEON state must be saved and restored across a context switch
-- `current->thread.kernel_fpsimd_state` — pointer to the caller-provided buffer backing that state; set by `kernel_neon_begin()`, cleared by `kernel_neon_end()`
-- `get_cpu_fpsimd_context()` / `put_cpu_fpsimd_context()` — a brief `local_bh_disable()`/`local_bh_enable()` pair (or `preempt_disable()`/`preempt_enable()` under `CONFIG_PREEMPT_RT`) held only while `kernel_neon_begin()`/`kernel_neon_end()` update this bookkeeping — not held for the whole NEON critical section
-- `fpsimd_thread_switch()` — called from `__switch_to()`; if the outgoing task has `TIF_KERNEL_FPSTATE` set, calls `fpsimd_save_kernel_state()`, which saves into `task->thread.kernel_fpsimd_state`
+- `TIF_KERNEL_FPSTATE` — このタスクのカーネルモード FPSIMD/NEON 状態をコンテキストスイッチをまたいで保存・復元しなければならないことを示すスレッドフラグ
+- `current->thread.kernel_fpsimd_state` — その状態を格納する、呼び出し元が提供したバッファへのポインタ。`kernel_neon_begin()` でセットされ、`kernel_neon_end()` でクリアされる
+- `get_cpu_fpsimd_context()` / `put_cpu_fpsimd_context()` — 短時間の `local_bh_disable()`/`local_bh_enable()` のペア（`CONFIG_PREEMPT_RT` では `preempt_disable()`/`preempt_enable()`）。`kernel_neon_begin()`/`kernel_neon_end()` がこの管理情報を更新する間だけ保持され、NEON のクリティカルセクション全体では保持されない
+- `fpsimd_thread_switch()` — `__switch_to()` から呼ばれる。切り替え元のタスクに `TIF_KERNEL_FPSTATE` がセットされていれば `fpsimd_save_kernel_state()` を呼び、`task->thread.kernel_fpsimd_state` へ保存する
 
 ```c
-/* WRONG: early return skips kernel_neon_end(), leaving kernel_fpsimd_state
- * pointing at &state after this stack frame is gone */
+/* 誤り: 早期リターンが kernel_neon_end() を飛ばし、このスタックフレームが
+ * 消えた後も kernel_fpsimd_state が &state を指したままになる */
 static int checksum_block(struct request *rq)
 {
     struct user_fpsimd_state state;
@@ -47,15 +47,15 @@ static int checksum_block(struct request *rq)
 
     ret = validate_header(rq);
     if (ret < 0)
-        return ret;   /* BUG: kernel_neon_end() not called */
+        return ret;   /* バグ: kernel_neon_end() が呼ばれない */
 
     do_neon_checksum(rq);
     kernel_neon_end(&state);
     return 0;
 }
 
-/* CORRECT: every return path calls kernel_neon_end() before the
- * stack-allocated state buffer goes out of scope */
+/* 正しい: スタック上に確保した state バッファがスコープを外れる前に、
+ * すべてのリターンパスで kernel_neon_end() を呼ぶ */
 static int checksum_block(struct request *rq)
 {
     struct user_fpsimd_state state;
@@ -74,136 +74,136 @@ out:
 }
 ```
 
-### Diagnosis {#diagnosis}
+### 診断 {#diagnosis}
 
-The bug was silent and non-deterministic, and the corruption surfaced far from its cause. Diagnosis steps:
+このバグは無症状かつ非決定的で、破損は原因から遠く離れた場所で表面化した。診断の手順は次のとおりである。
 
-1. **Reproduce with a stress test**: run the checksum workload under heavy load so this kworker thread is frequently preempted while its stack still holds a live (but abandoned) `kernel_fpsimd_state` pointer.
-2. **Add an assertion**: audit every return path out of a `kernel_neon_begin()`-protected function for a matching `kernel_neon_end()`; a task that returns to userspace, blocks for a long time, or exits while `TIF_KERNEL_FPSTATE` is still set has leaked the pairing.
-3. **Tracing**: add `ftrace` hooks around `kernel_neon_begin()`/`kernel_neon_end()` to log call sites and their `state` pointers; a `begin` whose `state` address never shows up in a matching `end` on the same task is the smoking gun.
-4. **KASAN/stack-protector signal**: since the corrupted memory is a reused stack slot, a stack-protector canary failure or a KASAN stack-out-of-bounds report in a completely unrelated function on the same kworker is consistent with this bug — don't assume the crash site is the bug site.
+1. **ストレステストで再現する**: チェックサムのワークロードを高負荷で実行し、この kworker スレッドが、スタックに生きた（しかし放棄された）`kernel_fpsimd_state` ポインタを抱えたまま頻繁にプリエンプトされるようにする。
+2. **アサーションを追加する**: `kernel_neon_begin()` で保護された関数から抜けるすべてのリターンパスに対応する `kernel_neon_end()` があるかを監査する。`TIF_KERNEL_FPSTATE` がセットされたままユーザー空間に戻る、長時間ブロックする、または終了するタスクは、ペアリングを漏らしている。
+3. **トレーシング**: `kernel_neon_begin()`/`kernel_neon_end()` の前後に `ftrace` フックを追加し、呼び出し箇所とその `state` ポインタを記録する。同じタスク上で、`state` アドレスが対応する `end` に一度も現れない `begin` が決定的な証拠となる。
+4. **KASAN/stack-protector のシグナル**: 破損したメモリは再利用されたスタックスロットなので、同じ kworker 上のまったく無関係な関数での stack-protector のカナリア違反や KASAN の stack-out-of-bounds レポートは、このバグと矛盾しない — クラッシュした場所がバグの場所だと思い込まないこと。
 
-### Fix {#fix}
+### 修正 {#fix}
 
-Ensure every kernel code path that calls `kernel_neon_begin()` has a matching `kernel_neon_end()` on all exit paths, using the same `state` buffer on both calls. A common pattern is the `goto out` idiom shown above. If the NEON usage can fail partway through, keep `kernel_neon_end()` in a single cleanup label.
+`kernel_neon_begin()` を呼ぶすべてのカーネルコードパスで、すべての出口パスに対応する `kernel_neon_end()` があり、両方の呼び出しで同じ `state` バッファを使うようにする。よくあるパターンは、上に示した `goto out` イディオムである。NEON の使用が途中で失敗しうる場合は、`kernel_neon_end()` を単一のクリーンアップラベルにまとめておく。
 
-Kernel NEON use guarded this way is preemptible on non-`PREEMPT_RT` kernels — that's the reason a caller-provided buffer is required in process/softirq context in the first place. Don't assume preemption is held off for the whole region between `kernel_neon_begin()` and `kernel_neon_end()`; the only thing briefly held off is the internal bookkeeping update inside those two calls themselves.
+このように保護されたカーネルの NEON 使用は、非 `PREEMPT_RT` カーネルではプリエンプト可能である — そもそもプロセス/softirq コンテキストで呼び出し元提供のバッファが必要なのはそのためである。`kernel_neon_begin()` と `kernel_neon_end()` の間の領域全体でプリエンプションが禁止されていると思い込まないこと。短時間だけ禁止されるのは、その2つの呼び出し自体の内部での管理情報の更新だけである。
 
-### Lesson {#lesson}
+### 教訓 {#lesson}
 
-ARM64's context-switchable kernel-mode NEON state makes kernel NEON use both efficient and preemptible, but the correctness contract is strict: `kernel_neon_begin()` and `kernel_neon_end()` must be perfectly paired, using the same caller-owned buffer. Missing a `kernel_neon_end()` doesn't fail immediately — it leaves a dangling pointer in `current->thread.kernel_fpsimd_state` that only causes damage on the next context switch, and the damage lands wherever the stack happens to be reused, not at the site of the bug. Code review must treat these pairs as carefully as mutex lock/unlock — more so, since the failure mode here is a wild write, not a deadlock.
+ARM64 のコンテキストスイッチ可能なカーネルモード NEON 状態により、カーネルでの NEON 使用は効率的かつプリエンプト可能になっているが、正しさの契約は厳格である。`kernel_neon_begin()` と `kernel_neon_end()` は、呼び出し元が所有する同じバッファを使って、完全にペアにしなければならない。`kernel_neon_end()` を欠いてもすぐには失敗しない — `current->thread.kernel_fpsimd_state` にダングリングポインタを残し、それが次のコンテキストスイッチで初めて被害をもたらす。しかもその被害は、バグの箇所ではなく、たまたまスタックが再利用された場所に及ぶ。コードレビューではこれらのペアを mutex の lock/unlock と同じくらい慎重に — いや、それ以上に — 扱わなければならない。ここでの障害の様態はデッドロックではなく、無秩序な書き込み（wild write）だからである。
 
 ---
 
-## 2. The Missing DSB Before TLBI {#2-the-missing-dsb-before-tlbi}
+## 2. TLBI の前の DSB の欠落 {#2-the-missing-dsb-before-tlbi}
 
-!!! note "This one is now historical"
-    As of Linux 6.16, `set_pte()` itself calls `queue_pte_barriers()`/`emit_pte_barriers()` — `dsb(ishst); isb();` — automatically for any valid, non-user PTE (confirmed by tag-diff: absent in `arch/arm64/include/asm/pgtable.h` at v6.15, present at v6.16). The specific bug below, reached through the ordinary `set_pte()` helper the driver uses, cannot happen on a 6.16+ kernel. It's included because the underlying ordering rule is still real and still binds any code that bypasses `set_pte()` — a driver-maintained page-table format for an IOMMU or accelerator with its own PTE layout, for instance — and because the "why did this only show up on a 16-core server" reasoning below hasn't changed.
+!!! note "この事例は今では過去のもの"
+    Linux 6.16 以降、`set_pte()` 自体が、有効な非ユーザー PTE に対して自動的に `queue_pte_barriers()`/`emit_pte_barriers()` — `dsb(ishst); isb();` — を呼ぶ（タグ間の差分で確認: `arch/arm64/include/asm/pgtable.h` で v6.15 には存在せず、v6.16 には存在する）。以下の具体的なバグは、ドライバが使う通常の `set_pte()` ヘルパー経由で発生するものなので、6.16 以降のカーネルでは起こりえない。それでも掲載しているのは、根底にある順序付けのルールは今も有効で、`set_pte()` を迂回するあらゆるコード — たとえば独自の PTE レイアウトを持つ IOMMU やアクセラレータ向けに、ドライバが管理するページテーブル形式 — を今も拘束するからであり、また以下の「なぜ 16 コアのサーバーでだけ現れたのか」という推論が今も変わらないからである。
 
-### Setup {#setup_1}
+### 状況 {#setup_1}
 
-A driver for a custom DMA remapping engine maintained its own set of page table entries to map device-visible buffers into a restricted VA space, predating Linux 6.16's automatic PTE barrier batching. When a buffer was replaced, the driver updated the PTE, then called `flush_tlb_range()` to shoot down stale TLB entries on all CPUs. The code was written by an engineer with x86 experience and tested on a single-core development board before being deployed to a 16-core ARM64 server.
+独自の DMA リマッピングエンジン用のドライバが、デバイスから見えるバッファを制限された VA 空間にマッピングするため、独自のページテーブルエントリ群を管理していた。これは Linux 6.16 の自動的な PTE バリアのバッチ処理より前のものである。バッファが差し替えられると、ドライバは PTE を更新し、次に `flush_tlb_range()` を呼んで全 CPU の古い TLB エントリを shootdown していた。このコードは x86 の経験を持つエンジニアが書いたもので、16 コアの ARM64 サーバーにデプロイされる前に、シングルコアの開発ボードでテストされていた。
 
-### What Happened {#what-happened_1}
+### 何が起きたか {#what-happened_1}
 
-On the 16-core system, about once every few hours, a CPU would take a fault on an address that should have been remapped. The fault was a translation fault at the new VA — the MMU page table walker was fetching a stale PTE that pointed to the old physical page, which had already been freed.
+16 コアのシステムでは、数時間に1回程度、ある CPU が、リマップされているはずのアドレスでフォールトを起こした。そのフォールトは新しい VA での変換フォールトだった — MMU のページテーブルウォーカーが、すでに解放された古い物理ページを指す古い PTE を取得していたのである。
 
-The root cause was a missing `dsb(ishst)` between the PTE write and the TLBI instruction.
+根本原因は、PTE の書き込みと TLBI 命令の間に `dsb(ishst)` が欠けていたことだった。
 
-ARM64 has a **weak memory model**. A store to a PTE is a normal memory write. The TLB invalidate (`TLBI` instruction) is a broadcast operation that signals other CPUs' TLBs to flush the entry. But the ARM architecture only guarantees that the TLBI takes effect with respect to TLB entries — it does **not** guarantee that a preceding PTE store is visible to another CPU's MMU walker before the TLBI completes on that CPU, unless a `DSB` (Data Synchronization Barrier) is issued first.
+ARM64 は **弱いメモリモデル** を持つ。PTE へのストアは通常のメモリ書き込みである。TLB 無効化（`TLBI` 命令）は、他の CPU の TLB にエントリをフラッシュするよう通知するブロードキャスト操作である。しかし ARM アーキテクチャが保証するのは、TLBI が TLB エントリに関して効力を持つことだけである — 先に `DSB`（Data Synchronization Barrier）を発行しない限り、先行する PTE ストアが、その CPU で TLBI が完了する前に他の CPU の MMU ウォーカーから見えることは保証 **されない**。
 
-The required sequence for a PTE update on ARM64 is:
+ARM64 での PTE 更新に必要な手順は次のとおりである。
 
 ```
-1. Write the new PTE to memory                 (str  x1, [x0])
-2. DSB ISHST — Inner Shareable Store barrier    (dsb  ishst)
-   Ensures the PTE store is globally visible
-   to all MMU page table walkers before TLBI
-3. Issue TLBI for the affected VA range         (TLBI ASIDE1IS / VAAE1IS / etc.)
-4. DSB ISH — Inner Shareable barrier            (dsb  ish)
-   Ensures the TLBI has completed on all CPUs
-5. ISB — Instruction Synchronization Barrier    (isb)
-   Ensures subsequent instructions fetch from
-   updated mappings
+1. 新しい PTE をメモリに書き込む                (str  x1, [x0])
+2. DSB ISHST — Inner Shareable ストアバリア     (dsb  ishst)
+   TLBI の前に、PTE ストアがすべての MMU
+   ページテーブルウォーカーから見えることを保証する
+3. 対象の VA 範囲に対して TLBI を発行する        (TLBI ASIDE1IS / VAAE1IS / etc.)
+4. DSB ISH — Inner Shareable バリア             (dsb  ish)
+   TLBI が全 CPU で完了したことを保証する
+5. ISB — 命令同期バリア                          (isb)
+   後続の命令が更新後のマッピングから
+   フェッチすることを保証する
 ```
 
-The driver's code, expressed at the C level:
+ドライバのコードを C レベルで表すと次のようになる。
 
 ```c
-/* WRONG: no DSB between PTE write and TLB flush */
+/* 誤り: PTE 書き込みと TLB フラッシュの間に DSB がない */
 static void remap_buffer(struct my_dev *dev, unsigned long va,
                          phys_addr_t new_pa)
 {
     pte_t *ptep = lookup_pte(dev, va);
     set_pte(ptep, pfn_pte(new_pa >> PAGE_SHIFT, PAGE_KERNEL));
-    /* Missing: dsb(ishst) here */
+    /* 欠落: ここに dsb(ishst) が必要 */
     flush_tlb_range(&dev->vma, va, va + PAGE_SIZE);
 }
 
-/* CORRECT: barrier ensures PTE store is visible before TLBI */
+/* 正しい: バリアにより TLBI の前に PTE ストアが見えることが保証される */
 static void remap_buffer(struct my_dev *dev, unsigned long va,
                          phys_addr_t new_pa)
 {
     pte_t *ptep = lookup_pte(dev, va);
     set_pte(ptep, pfn_pte(new_pa >> PAGE_SHIFT, PAGE_KERNEL));
-    dsb(ishst);   /* ARM64: store barrier before TLBI broadcast */
+    dsb(ishst);   /* ARM64: TLBI ブロードキャストの前のストアバリア */
     flush_tlb_range(&dev->vma, va, va + PAGE_SIZE);
-    /* flush_tlb_range issues dsb(ish) + isb internally on ARM64 */
+    /* ARM64 では flush_tlb_range が内部で dsb(ish) + isb を発行する */
 }
 ```
 
-Why did it work on x86? x86 uses **Total Store Order (TSO)**: all store operations are visible to other processors in program order before any subsequent serializing instruction (like the `INVLPG` or IPI used for TLB shootdown). TSO gives the DSB-equivalent for free. ARM64's relaxed model does not.
+なぜ x86 では動いたのか。x86 は **Total Store Order（TSO）** を採用している。すべてのストア操作は、後続のシリアライズ命令（TLB shootdown に使われる `INVLPG` や IPI など）より前に、プログラム順で他のプロセッサから見えるようになる。TSO は DSB 相当のものを無償で提供してくれる。ARM64 の緩いモデルはそうではない。
 
-Why did it work on a single core? With one CPU, there is no other MMU walker to race with. The local TLB invalidate sees the updated PTE from the local store buffer.
+なぜシングルコアでは動いたのか。CPU が1つなら、競合する他の MMU ウォーカーは存在しない。ローカルの TLB 無効化は、ローカルのストアバッファから更新後の PTE を見る。
 
-### Diagnosis {#diagnosis_1}
+### 診断 {#diagnosis_1}
 
-1. **Intermittent translation faults** at addresses that should be valid; `dmesg` shows `do_page_fault` for kernel addresses.
-2. The fault VA matches a recently remapped region, and the physical address in the stale PTE matches the old mapping.
-3. Narrow down by adding `dsb(ishst)` as a diagnostic and observing that the fault rate drops to zero.
-4. Review all driver PTE-update paths against the ARM ARM (Architecture Reference Manual) required sequence for "break-before-make" and PTE updates.
+1. 有効であるはずのアドレスで **断続的な変換フォールト** が発生する。`dmesg` にはカーネルアドレスに対する `do_page_fault` が表示される。
+2. フォールトした VA は最近リマップされた領域と一致し、古い PTE 内の物理アドレスは古いマッピングと一致する。
+3. 診断用に `dsb(ishst)` を追加し、フォールト率がゼロに下がることを観察して絞り込む。
+4. ドライバのすべての PTE 更新パスを、ARM ARM（Architecture Reference Manual）が「break-before-make」と PTE 更新について要求する手順と照らし合わせてレビューする。
 
-### Fix {#fix_1}
+### 修正 {#fix_1}
 
-Insert `dsb(ishst)` between PTE writes and any TLBI or `flush_tlb_*` call. In most cases, drivers should not be manipulating PTEs directly — using the kernel's `remap_pfn_range()`, `vm_insert_page()`, or `io_remap_pfn_range()` handles barriers correctly, and as of Linux 6.16 even a direct `set_pte()` call handles this specific ordering automatically. If a driver maintains its own page-table format entirely outside the generic `set_pte()`/`pte_t` machinery — an IOMMU or accelerator with a private table layout — none of that automatic handling applies, and the full ARM64 sequence must still be followed explicitly.
+PTE の書き込みと、あらゆる TLBI または `flush_tlb_*` の呼び出しの間に `dsb(ishst)` を挿入する。ほとんどの場合、ドライバは PTE を直接操作すべきではない — カーネルの `remap_pfn_range()`、`vm_insert_page()`、`io_remap_pfn_range()` を使えばバリアは正しく処理され、Linux 6.16 以降は `set_pte()` を直接呼んでもこの特定の順序付けは自動的に処理される。ドライバが汎用の `set_pte()`/`pte_t` の仕組みの完全に外側で独自のページテーブル形式を管理している場合 — 独自のテーブルレイアウトを持つ IOMMU やアクセラレータなど — こうした自動処理は一切適用されず、ARM64 の完全な手順を明示的に守らなければならない。
 
-### Lesson {#lesson_1}
+### 教訓 {#lesson_1}
 
-The ARM64 memory model requires explicit store barriers before TLB invalidates. Code ported from x86 or tested only on uniprocessor systems will appear to work, then fail under load on multi-core ARM64. The `dsb(ishst)` before TLBI is not a performance hint — it is architecturally required for correctness, for any page-table format the generic kernel PTE helpers don't already cover.
+ARM64 のメモリモデルでは、TLB 無効化の前に明示的なストアバリアが必要である。x86 から移植されたコードや、ユニプロセッサシステムでしかテストされていないコードは、動いているように見えて、マルチコアの ARM64 で負荷がかかると失敗する。TLBI の前の `dsb(ishst)` はパフォーマンス上のヒントではない — 汎用カーネルの PTE ヘルパーがまだカバーしていないあらゆるページテーブル形式にとって、正しさのためにアーキテクチャ上必須のものである。
 
 ---
 
-## 3. The Cache Coherency Trap: DMA from a Non-Coherent Device {#3-the-cache-coherency-trap-dma-from-a-non-coherent-device}
+## 3. キャッシュコヒーレンシの罠: 非コヒーレントデバイスからの DMA {#3-the-cache-coherency-trap-dma-from-a-non-coherent-device}
 
-### Setup {#setup_2}
+### 状況 {#setup_2}
 
-An embedded SoC (a custom ARM64 board for industrial control) had a PCIe endpoint with a proprietary DMA engine. Unlike commodity PCIe cards, whose reads and writes are ordinarily kept coherent because the root complex snoops the CPU caches on their behalf (with a device able to opt out per-transaction via the PCIe "No Snoop" TLP attribute), this DMA engine accessed DRAM directly through the SoC's bus fabric — bypassing that snooping path entirely. The SoC datasheet documented this, but the driver author assumed that "PCIe = cache coherent" and wrote the driver accordingly.
+ある組み込み SoC（産業制御用のカスタム ARM64 ボード）は、独自の DMA エンジンを持つ PCIe エンドポイントを備えていた。汎用の PCIe カードでは、ルートコンプレックスがカードに代わって CPU キャッシュをスヌープするため、その読み書きは通常コヒーレントに保たれる（デバイスは PCIe の「No Snoop」TLP 属性によってトランザクション単位でこれを無効にできる）。しかしこの DMA エンジンはそれと異なり、SoC のバスファブリックを通じて DRAM に直接アクセスしており、そのスヌープ経路を完全に迂回していた。SoC のデータシートにはこのことが記載されていたが、ドライバの作者は「PCIe = キャッシュコヒーレント」と思い込み、それを前提にドライバを書いた。
 
-### What Happened {#what-happened_2}
+### 何が起きたか {#what-happened_2}
 
-The driver allocated a transmit buffer with `kmalloc()`, filled it with packet data, then programmed the DMA engine to read the buffer and transmit it over the custom fabric link. The device would occasionally transmit zeros or stale data instead of the intended packet contents.
+ドライバは `kmalloc()` で送信バッファを割り当て、パケットデータで埋めてから、DMA エンジンにそのバッファを読み出してカスタムファブリックリンク経由で送信するようプログラムした。デバイスは時折、意図したパケット内容の代わりにゼロや古いデータを送信した。
 
-The sequence:
+その流れは次のとおりである。
 
-1. `kmalloc()` returns a pointer to a kernel virtual address backed by a physical page. The buffer is **cacheable** — the CPU's L1/L2 cache is enabled for this region.
-2. The driver writes packet data into the buffer. These writes go into the CPU's L1 (and possibly L2) cache. They may not yet have been written back (flushed) to DRAM.
-3. The driver writes the physical address of the buffer into the DMA engine's descriptor register.
-4. The DMA engine fetches data from DRAM — bypassing CPU caches — and reads zeros or old values because the CPU's writes are still sitting in cache.
+1. `kmalloc()` は、物理ページに裏付けられたカーネル仮想アドレスへのポインタを返す。このバッファは **キャッシュ可能** であり、この領域に対して CPU の L1/L2 キャッシュが有効になっている。
+2. ドライバはバッファにパケットデータを書き込む。これらの書き込みは CPU の L1（場合によっては L2）キャッシュに入る。まだ DRAM にライトバック（フラッシュ）されていない可能性がある。
+3. ドライバはバッファの物理アドレスを DMA エンジンのディスクリプタレジスタに書き込む。
+4. DMA エンジンは CPU キャッシュを迂回して DRAM からデータを取得し、CPU の書き込みがまだキャッシュに留まっているため、ゼロや古い値を読み出す。
 
-The fix the DMA API provides:
+DMA API が提供する修正方法:
 
 ```c
-/* WRONG: using kmalloc buffer directly for non-coherent DMA */
+/* 誤り: 非コヒーレント DMA で kmalloc バッファを直接使っている */
 static int bad_driver_tx(struct my_dev *dev, void *data, size_t len)
 {
     void *buf = kmalloc(len, GFP_KERNEL);
     memcpy(buf, data, len);
-    /* CPU writes are in cache; device will read stale DRAM */
+    /* CPU の書き込みはキャッシュにある。デバイスは古い DRAM を読む */
     program_dma(dev, virt_to_phys(buf), len, DMA_TO_DEVICE);
     return 0;
 }
 
-/* CORRECT: use dma_map_single() which flushes cache on non-coherent arches */
+/* 正しい: 非コヒーレントなアーキテクチャでキャッシュをフラッシュする dma_map_single() を使う */
 static int good_driver_tx(struct my_dev *dev, void *data, size_t len)
 {
     void *buf = kmalloc(len, GFP_KERNEL);
@@ -216,236 +216,237 @@ static int good_driver_tx(struct my_dev *dev, void *data, size_t len)
         kfree(buf);
         return -EIO;
     }
-    /* dma_map_single() with DMA_TO_DEVICE cleans (but does not invalidate)
-     * the affected cache lines on non-coherent platforms.
-     * On ARM64 this issues: dc cvac (Data Cache Clean by VA to PoC)
-     * for each cache line in the buffer — clean only, not clean+invalidate. */
+    /* DMA_TO_DEVICE での dma_map_single() は、非コヒーレントなプラットフォームで
+     * 該当するキャッシュラインをクリーンする（無効化はしない）。
+     * ARM64 ではバッファ内の各キャッシュラインに対して
+     * dc cvac（Data Cache Clean by VA to PoC）を発行する — クリーンのみで、
+     * クリーン+無効化ではない。 */
     program_dma(dev, dma_addr, len, DMA_TO_DEVICE);
     return 0;
 }
 ```
 
-For buffers that the **device writes** and the **CPU reads** (`DMA_FROM_DEVICE`), the inverse applies: after DMA completes, `dma_unmap_single()` (or `dma_sync_single_for_cpu()`) must invalidate the cache lines so the CPU does not read stale cached data instead of what the device wrote to DRAM.
+**デバイスが書き込み**、**CPU が読み出す** バッファ（`DMA_FROM_DEVICE`）では逆になる。DMA の完了後、`dma_unmap_single()`（または `dma_sync_single_for_cpu()`）でキャッシュラインを無効化し、デバイスが DRAM に書いた内容の代わりに CPU がキャッシュ上の古いデータを読まないようにしなければならない。
 
-For frequently used shared buffers, `dma_alloc_coherent()` is the right tool — it allocates memory mapped as non-cacheable (or with cache-bypassing attributes), so neither side needs explicit flush/invalidate calls:
+頻繁に使われる共有バッファには、`dma_alloc_coherent()` が適切な手段である — キャッシュ不可（またはキャッシュを迂回する属性）としてマッピングされたメモリを割り当てるので、どちらの側も明示的なフラッシュ/無効化の呼び出しを必要としない。
 
 ```c
-/* Best for rings/descriptors: allocate as coherent from the start */
+/* リングやディスクリプタに最適: 最初からコヒーレントとして割り当てる */
 buf = dma_alloc_coherent(dev->dev, size, &dma_addr, GFP_KERNEL);
-/* CPU and device both see a consistent view; no flush needed */
+/* CPU とデバイスの両方が一貫したビューを見る。フラッシュは不要 */
 ```
 
-Whether a device requires explicit cache management depends on `dev->dma_coherent` (set from DT or ACPI describing the platform's coherency fabric) or the presence of an IOMMU that provides snooping. On platforms with a fully coherent interconnect, `dma_map_single()` is a no-op for cache management; on non-coherent platforms it does the necessary `dc cvac` sequence.
+デバイスに明示的なキャッシュ管理が必要かどうかは、`dev->dma_coherent`（プラットフォームのコヒーレンシファブリックを記述する DT または ACPI から設定される）、またはスヌープを提供する IOMMU の有無によって決まる。完全にコヒーレントなインターコネクトを持つプラットフォームでは、`dma_map_single()` はキャッシュ管理に関しては何もしない。非コヒーレントなプラットフォームでは、必要な `dc cvac` の手順を実行する。
 
-### Diagnosis {#diagnosis_2}
+### 診断 {#diagnosis_2}
 
-1. Device transmits wrong data — zeros, old values, or garbage — not random corruption.
-2. The bug is **consistent at low speed** (cache lines always flushed before the race) and **worse under load** (cache lines less likely to have been evicted naturally).
-3. A temporary workaround: mark the buffer memory as non-cacheable using `pgprot_noncached()` or `pgprot_writecombine()` — if the bug disappears, cache coherency is confirmed as the cause.
-4. Check the SoC TRM (Technical Reference Manual) and Linux DTS for `dma-coherent` property on the device node.
-5. Audit all `virt_to_phys()` calls in the driver — any direct physical address use that bypasses `dma_map_*` is a red flag on a non-coherent platform.
+1. デバイスが誤ったデータ — ゼロ、古い値、またはゴミ — を送信する。ランダムな破損ではない。
+2. このバグは **低速時には一貫している**（競合の前にキャッシュラインが常にフラッシュされている）が、**負荷時に悪化する**（キャッシュラインが自然に追い出されている可能性が低い）。
+3. 一時的な回避策: `pgprot_noncached()` や `pgprot_writecombine()` を使ってバッファのメモリをキャッシュ不可にする — バグが消えれば、キャッシュコヒーレンシが原因だと確定する。
+4. SoC の TRM（Technical Reference Manual）と Linux の DTS で、デバイスノードに `dma-coherent` プロパティがあるかを確認する。
+5. ドライバ内のすべての `virt_to_phys()` 呼び出しを監査する — 非コヒーレントなプラットフォームでは、`dma_map_*` を迂回して物理アドレスを直接使っている箇所はすべて危険信号である。
 
-### Fix {#fix_2}
+### 修正 {#fix_2}
 
-Replace all direct `virt_to_phys()` + register programming with the DMA API (`dma_map_single()` / `dma_unmap_single()` or `dma_alloc_coherent()`). Ensure the device node in the DTS does **not** have `dma-coherent` unless the hardware actually supports it. For descriptor rings and control structures, use `dma_alloc_coherent()`.
+`virt_to_phys()` を直接使ったレジスタのプログラミングをすべて DMA API（`dma_map_single()` / `dma_unmap_single()` または `dma_alloc_coherent()`）に置き換える。ハードウェアが実際にサポートしていない限り、DTS のデバイスノードに `dma-coherent` を **付けない** ようにする。ディスクリプタリングと制御構造体には `dma_alloc_coherent()` を使う。
 
-### Lesson {#lesson_2}
+### 教訓 {#lesson_2}
 
-Cache coherency is not guaranteed for all DMA-capable devices, even on sophisticated SoCs. The Linux DMA API exists precisely to abstract the coherency requirement: it is a no-op on coherent platforms and does the right cache operations on non-coherent ones. Using `virt_to_phys()` directly instead of `dma_map_single()` is always wrong in a portable driver — it fails silently on non-coherent hardware.
+洗練された SoC であっても、DMA 可能なすべてのデバイスでキャッシュコヒーレンシが保証されるわけではない。Linux の DMA API は、まさにコヒーレンシの要件を抽象化するために存在する。コヒーレントなプラットフォームでは何もせず、非コヒーレントなプラットフォームでは正しいキャッシュ操作を行う。ポータブルなドライバで `dma_map_single()` の代わりに `virt_to_phys()` を直接使うのは常に誤りである — 非コヒーレントなハードウェアでは黙って失敗する。
 
 ---
 
-## 4. The BTI Enforcement Crash in a JIT Compiler {#4-the-bti-enforcement-crash-in-a-jit-compiler}
+## 4. JIT コンパイラにおける BTI 強制によるクラッシュ {#4-the-bti-enforcement-crash-in-a-jit-compiler}
 
-### Setup {#setup_3}
+### 状況 {#setup_3}
 
-A language runtime embedded in a container orchestration agent generated native ARM64 code at runtime to evaluate policy expressions. The JIT deliberately mapped its generated code with `mmap(PROT_READ | PROT_EXEC | PROT_BTI)` — opting the pages into BTI (Branch Target Identification) enforcement on purpose, for the security benefit of blocking arbitrary indirect-branch landing points into JIT-emitted code. The system was a modern ARM64 server running a distribution kernel compiled with BTI support.
+コンテナオーケストレーションエージェントに組み込まれた言語ランタイムが、ポリシー式を評価するために実行時にネイティブの ARM64 コードを生成していた。この JIT は、生成したコードを意図的に `mmap(PROT_READ | PROT_EXEC | PROT_BTI)` でマッピングしていた — JIT が出力したコードへの任意の間接分岐の着地点をブロックするというセキュリティ上の利点のために、わざとそのページを BTI（Branch Target Identification）の強制対象にしていたのである。システムは、BTI サポート付きでビルドされたディストリビューションカーネルを動かす最新の ARM64 サーバーだった。
 
-### What Happened {#what-happened_3}
+### 何が起きたか {#what-happened_3}
 
-The runtime crashed with a signal. `dmesg` showed:
+ランタイムはシグナルを受けてクラッシュした。`dmesg` には次のように表示された。
 
 ```
 agent[4321]: unhandled exception: BTI, ESR 0x0000000034000002, undefined instruction in agent[7f3a0000+1000]
 ```
 
-The crash occurred precisely when the runtime invoked the JIT-compiled function pointer. BTI (ARMv8.5-A) protection was rejecting the indirect branch into the JIT code, because the JIT itself had opted its pages into that enforcement.
+クラッシュは、ランタイムが JIT コンパイル済みの関数ポインタを呼び出したまさにその瞬間に発生した。BTI（ARMv8.5-A）の保護が JIT コードへの間接分岐を拒否していたのである。JIT 自身がそのページを強制対象にしていたためである。
 
-**How BTI works:**
+**BTI の仕組み:**
 
-BTI adds a new mechanism to enforce that indirect branches (calls via function pointer, `blr`, `br`) may only land on designated landing pad instructions. It is controlled by:
+BTI は、間接分岐（関数ポインタ経由の呼び出し、`blr`、`br`）が指定されたランディングパッド命令にしか着地できないことを強制する新しいメカニズムを追加する。これは次のものによって制御される。
 
-- `SCTLR_EL1.BT0` — enables BTI enforcement for EL0 (userspace)
-- `SCTLR_EL1.BT1` — enables BTI enforcement for EL1 (kernel)
-- The `BTYPE` field in `PSTATE` — tracks what type of branch was just taken (none / call / jump)
+- `SCTLR_EL1.BT0` — EL0（ユーザー空間）に対する BTI 強制を有効にする
+- `SCTLR_EL1.BT1` — EL1（カーネル）に対する BTI 強制を有効にする
+- `PSTATE` の `BTYPE` フィールド — 直前に行われた分岐の種類（なし / call / jump）を追跡する
 
-When an indirect branch is executed, the CPU sets `BTYPE` to record the branch type. The instruction at the landing address must be one of:
+間接分岐が実行されると、CPU は分岐の種類を記録するために `BTYPE` をセットする。着地先アドレスの命令は、次のいずれかでなければならない。
 
-- `BTI c` — landing pad for calls (`blr`, `bl` indirect)
-- `BTI j` — landing pad for jumps (`br`, `b` indirect)
-- `BTI jc` — landing pad for both
-- `NOP` — only valid in some configurations
+- `BTI c` — 呼び出し（`blr`、間接 `bl`）用のランディングパッド
+- `BTI j` — ジャンプ（`br`、間接 `b`）用のランディングパッド
+- `BTI jc` — 両方用のランディングパッド
+- `NOP` — 一部の構成でのみ有効
 
-If the landing address does not have the correct `BTI` instruction, the CPU raises a Branch Target Exception. The ESR_EL1 encodes this with EC=`0x0D` (`ESR_ELx_EC_BTI`), defined in `arch/arm64/include/asm/esr.h`. This is distinct from a data abort (EC=`0x24`) — BTI exceptions have their own exception class and ISS encoding.
+着地先アドレスに正しい `BTI` 命令がない場合、CPU は Branch Target Exception を発生させる。ESR_EL1 はこれを EC=`0x0D`（`ESR_ELx_EC_BTI`、`arch/arm64/include/asm/esr.h` で定義）としてエンコードする。これはデータアボート（EC=`0x24`）とは別物であり、BTI 例外は独自の例外クラスと ISS エンコーディングを持つ。
 
-The kernel enables BTI for a process when the ELF binary has the `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` bit set in its `.note.gnu.property` section. You can check this:
+カーネルは、ELF バイナリの `.note.gnu.property` セクションに `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` ビットがセットされている場合に、そのプロセスで BTI を有効にする。これは次のように確認できる。
 
 ```bash
 readelf -n /usr/bin/agent | grep -A2 "AArch64 Instruction Set Architecture"
-# Output shows: BTI enabled
+# 出力には次のように表示される: BTI enabled
 ```
 
-The language runtime's main binary had BTI declared and enabled. Its JIT emitter, however, generated raw ARM64 instructions without any `BTI` preamble:
+言語ランタイムのメインバイナリでは BTI が宣言され有効になっていた。しかし、その JIT エミッタは `BTI` のプリアンブルなしに生の ARM64 命令を生成していた。
 
 ```c
-/* WRONG: JIT prologue missing BTI landing pad */
+/* 誤り: JIT のプロローグに BTI ランディングパッドがない */
 static void emit_function_prologue(struct jit_ctx *ctx)
 {
-    /* First instruction emitted is the actual function body */
+    /* 最初に出力される命令が実際の関数本体になっている */
     emit(ctx, STP_X29_X30_SP_M16);  /* stp x29, x30, [sp, #-16]! */
     emit(ctx, MOV_X29_SP);          /* mov x29, sp                 */
-    /* ... rest of function */
+    /* ... 関数の残り */
 }
 
-/* CORRECT: emit BTI c as first instruction */
+/* 正しい: 最初の命令として BTI c を出力する */
 static void emit_function_prologue(struct jit_ctx *ctx)
 {
-    emit(ctx, BTI_C);               /* bti c  — call landing pad   */
+    emit(ctx, BTI_C);               /* bti c  — 呼び出し用ランディングパッド */
     emit(ctx, STP_X29_X30_SP_M16); /* stp x29, x30, [sp, #-16]!   */
     emit(ctx, MOV_X29_SP);          /* mov x29, sp                  */
-    /* ... rest of function */
+    /* ... 関数の残り */
 }
 ```
 
-The encoding of `BTI c` is `0xd503245f` (a hint-space instruction). `BTI j` is `0xd503249f`. `BTI jc` is `0xd50324df`.
+`BTI c` のエンコーディングは `0xd503245f`（hint 空間の命令）である。`BTI j` は `0xd503249f`、`BTI jc` は `0xd50324df` である。
 
-BTI enforcement is a per-page property, not a whole-process one: it only applies to pages explicitly mapped as "Guarded Pages" (`PTE_GP`), which the kernel sets when a mapping is created or changed with `PROT_BTI` — either directly via `mmap()`/`mprotect()`, as this JIT does, or automatically for the main executable and its shared libraries when the ELF `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` note is present and the whole binary was built BTI-aware. A JIT that maps its generated code with plain `PROT_READ | PROT_EXEC` (no `PROT_BTI`) gets no BTI enforcement on that memory at all, regardless of whether the calling binary itself is BTI-enabled — enforcement follows the target page, not the caller. This JIT asked for that enforcement deliberately, which is exactly what exposed the missing landing pad.
+BTI の強制はプロセス全体ではなくページ単位の性質である。明示的に「Guarded Page」（`PTE_GP`）としてマッピングされたページにのみ適用される。カーネルがこれをセットするのは、マッピングが `PROT_BTI` 付きで作成または変更されたとき — この JIT のように `mmap()`/`mprotect()` で直接指定した場合か、ELF の `GNU_PROPERTY_AARCH64_FEATURE_1_BTI` ノートが存在しバイナリ全体が BTI 対応でビルドされている場合にメイン実行ファイルとその共有ライブラリに対して自動的に — である。生成コードを素の `PROT_READ | PROT_EXEC`（`PROT_BTI` なし）でマッピングする JIT は、呼び出し元のバイナリ自体が BTI 有効かどうかにかかわらず、そのメモリに対して BTI の強制をまったく受けない — 強制は呼び出し元ではなく、分岐先のページに従う。この JIT は意図的にその強制を求めており、まさにそれが欠けたランディングパッドを露呈させたのである。
 
-### Diagnosis {#diagnosis_3}
+### 診断 {#diagnosis_3}
 
-1. The crash backtrace points to the instruction immediately after `blr xN` where `xN` holds the JIT code address.
-2. Decode the ESR_EL1 from the signal info or `dmesg`: `EC=0x0D` (`ESR_ELx_EC_BTI`), reported by the kernel's `esr_class_str[]` table as `"BTI"`. This raises `SIGILL` with `si_code` `ILL_ILLOPC` (`do_el0_bti()`, `arch/arm64/kernel/traps.c`) — not a segmentation fault, even though the trigger is a branch-target check.
-3. Inspect the first 4 bytes of the JIT buffer: they should be `5f 24 03 d5` (`bti c`) but instead show the first instruction of the function body.
-4. Confirm the JIT pages are Guarded: `grep -E '^VmFlags.*\bbt\b' /proc/$(pidof agent)/smaps` (the kernel's smaps `VmFlags` token for `VM_ARM64_BTI` is the two-letter `bt`, not the string "BTI") or check `/proc/cpuinfo` for `bti` in the Features line to confirm CPU support.
-5. Verify the binary's BTI note: `readelf -n /usr/bin/agent`.
+1. クラッシュのバックトレースは、`xN` が JIT コードのアドレスを保持している `blr xN` の直後の命令を指している。
+2. シグナル情報または `dmesg` から ESR_EL1 をデコードする: `EC=0x0D`（`ESR_ELx_EC_BTI`）で、カーネルの `esr_class_str[]` テーブルでは `"BTI"` と報告される。これは `si_code` `ILL_ILLOPC` 付きの `SIGILL` を発生させる（`do_el0_bti()`、`arch/arm64/kernel/traps.c`）— トリガーは分岐先のチェックであるにもかかわらず、セグメンテーションフォールトではない。
+3. JIT バッファの先頭 4 バイトを調べる: `5f 24 03 d5`（`bti c`）であるべきところが、関数本体の最初の命令になっている。
+4. JIT のページが Guarded であることを確認する: `grep -E '^VmFlags.*\bbt\b' /proc/$(pidof agent)/smaps`（`VM_ARM64_BTI` に対応するカーネルの smaps の `VmFlags` トークンは2文字の `bt` であり、文字列 "BTI" ではない）。また、CPU のサポートを確認するには `/proc/cpuinfo` の Features 行に `bti` があるかを確認する。
+5. バイナリの BTI ノートを確認する: `readelf -n /usr/bin/agent`。
 
-### Fix {#fix_3}
+### 修正 {#fix_3}
 
-The JIT emitter must emit `BTI c` as the very first instruction of every function entry point that may be reached via an indirect call (`blr`). For jump tables and indirect `br` targets, emit `BTI j` instead. The change is a single-word addition to the function prologue emitter.
+JIT エミッタは、間接呼び出し（`blr`）で到達しうるすべての関数エントリポイントの最初の命令として、`BTI c` を出力しなければならない。ジャンプテーブルや間接 `br` の分岐先には、代わりに `BTI j` を出力する。この変更は、関数プロローグのエミッタに1ワードを追加するだけである。
 
-If a JIT targets a mixed environment (some callers may be BTI-unaware), `BTI jc` at all entry points provides maximum compatibility.
+JIT が混在環境（一部の呼び出し元が BTI 非対応でありうる）を対象とする場合、すべてのエントリポイントで `BTI jc` を使えば最大限の互換性が得られる。
 
-A JIT that instead starts out mapping its code with plain `PROT_READ | PROT_EXEC` can opt into the same enforcement later with `mprotect(buf, size, PROT_READ | PROT_EXEC | PROT_BTI)` (Linux 5.8+) — worth doing deliberately for the security benefit, but only once every code-generation path actually emits the required landing pads first.
+逆に、最初はコードを素の `PROT_READ | PROT_EXEC` でマッピングする JIT は、後から `mprotect(buf, size, PROT_READ | PROT_EXEC | PROT_BTI)`（Linux 5.8 以降）で同じ強制を有効にできる — セキュリティ上の利点のために意図的に行う価値はあるが、それはすべてのコード生成パスが必要なランディングパッドを実際に出力するようになってからにすべきである。
 
-### Lesson {#lesson_3}
+### 教訓 {#lesson_3}
 
-BTI is a forward-edge CFI (Control Flow Integrity) mechanism baked into ARMv8.5, and it's enforced per-page, not per-process: only memory explicitly mapped `PROT_BTI` (or, in the common case, a BTI-aware executable's own code and its shared libraries) gets landing-pad checks on indirect branches into it. A JIT that opts its generated code into that enforcement gets a real security benefit — but every code-generation path must then emit `BTI c` / `BTI j` preambles, including runtime-generated code, eBPF back-ends, and FFI stubs. This is a one-instruction-per-function-entry fix, but it requires the JIT to actually know about the BTI ABI before it turns enforcement on.
+BTI は ARMv8.5 に組み込まれた前方エッジの CFI（Control Flow Integrity）メカニズムであり、プロセス単位ではなくページ単位で強制される。明示的に `PROT_BTI` でマッピングされたメモリ（または、よくあるケースとして、BTI 対応の実行ファイル自身のコードとその共有ライブラリ）だけが、そこへの間接分岐に対してランディングパッドのチェックを受ける。生成コードをその強制対象にする JIT は本物のセキュリティ上の利点を得るが、その場合はすべてのコード生成パス — 実行時生成コード、eBPF のバックエンド、FFI スタブを含む — が `BTI c` / `BTI j` のプリアンブルを出力しなければならない。これは関数エントリごとに1命令で済む修正だが、強制を有効にする前に JIT が BTI の ABI を実際に理解している必要がある。
 
 ---
 
-## 5. The Erratum Workaround with the Wrong MIDR Range {#5-the-erratum-workaround-with-the-wrong-midr-range}
+## 5. MIDR 範囲を誤ったエラッタ回避策 {#5-the-erratum-workaround-with-the-wrong-midr-range}
 
-!!! note "Deliberately generic hardware"
-    This case uses a placeholder core name and part number rather than a real ARM design, specifically so the erratum, MIDR value, and revision range below don't get mapped back onto any real, documented silicon erratum — the mechanism (a MIDR revision range in `arm64_errata[]`) is completely generic and doesn't depend on which real core it's protecting.
+!!! note "意図的に汎用化したハードウェア"
+    この事例では、実在の ARM 設計ではなくプレースホルダーのコア名とパーツ番号を使っている。以下のエラッタ、MIDR 値、リビジョン範囲が、実在の文書化されたシリコンエラッタに結び付けられないようにするためである — メカニズム（`arm64_errata[]` 内の MIDR リビジョン範囲）は完全に汎用的であり、どの実在のコアを保護しているかには依存しない。
 
-### Setup {#setup_4}
+### 状況 {#setup_4}
 
-A SoC vendor licensed an ARM Cortex-family core (referred to here as "MyCore," since the specific real core doesn't matter to the bug). Revision r0p2 of the core had an erratum: under specific conditions, a spurious event in the memory pipeline could generate a fault for an address that was not actually being accessed, causing a kernel oops. The upstream kernel fix applied a workaround via an implementation-defined register when the erratum was detected.
+ある SoC ベンダーが ARM Cortex 系のコア（具体的な実在のコアはバグには関係ないので、ここでは「MyCore」と呼ぶ）をライセンスしていた。このコアのリビジョン r0p2 にはエラッタがあった。特定の条件下で、メモリパイプライン内の偽のイベントが、実際にはアクセスされていないアドレスに対するフォールトを発生させ、カーネル oops を引き起こしうるというものである。アップストリームのカーネルの修正は、エラッタが検出されたときに実装定義レジスタを介して回避策を適用していた。
 
-A downstream vendor kernel team backported this fix. The erratum workaround was conditional on the MIDR_EL1 value — it should apply to r0p0, r0p1, and r0p2 of the affected core. However, the backport had a transcription error: the revision range in the errata table covered only r0p0 and r0p1.
+下流のベンダーカーネルチームがこの修正をバックポートした。エラッタ回避策は MIDR_EL1 の値に応じて適用されるもので、影響を受けるコアの r0p0、r0p1、r0p2 に適用されるべきだった。ところが、バックポートには転記ミスがあり、エラッタテーブルのリビジョン範囲は r0p0 と r0p1 しかカバーしていなかった。
 
-### What Happened {#what-happened_4}
+### 何が起きたか {#what-happened_4}
 
-Production devices, which shipped with r0p2 silicon, hit spurious kernel faults under memory pressure. The fault address was always unmapped, the fault was non-reproducible from userspace, and it appeared deep in `do_page_fault` on a kernel address that was provably mapped.
+r0p2 のシリコンを搭載して出荷された製品デバイスが、メモリ逼迫時に偽のカーネルフォールトに見舞われた。フォールトアドレスは常にマッピングされておらず、ユーザー空間からは再現できず、確実にマッピングされているカーネルアドレスに対して `do_page_fault` の奥深くで発生した。
 
-**The MIDR_EL1 register format:**
+**MIDR_EL1 レジスタの形式:**
 
 ```
-Bits [31:24] — Implementer  (e.g., 0x41 = ARM, the design licensor)
-Bits [23:20] — Variant      (major revision, e.g., 0 = r0)
-Bits [19:16] — Architecture (0xf = ARMv8)
-Bits [15:4]  — Part number  (implementation-defined per core design)
-Bits [3:0]   — Revision     (minor revision, e.g., 2 = p2)
+Bits [31:24] — Implementer  （例: 0x41 = ARM、設計のライセンサー）
+Bits [23:20] — Variant      （メジャーリビジョン、例: 0 = r0）
+Bits [19:16] — Architecture （0xf = ARMv8）
+Bits [15:4]  — Part number  （コア設計ごとに実装定義）
+Bits [3:0]   — Revision     （マイナーリビジョン、例: 2 = p2）
 ```
 
-The `MIDR_CPU_MODEL()` macro matches on implementer and part number. The errata entry in the `arm64_errata[]` table specifies a revision range via the `midr_range` structure (first and last MIDR values, encoding variant and revision). The incorrect backport:
+`MIDR_CPU_MODEL()` マクロは、実装者（implementer）とパーツ番号で照合する。`arm64_errata[]` テーブルのエラッタエントリは、`midr_range` 構造体（バリアントとリビジョンをエンコードした最初と最後の MIDR 値）でリビジョン範囲を指定する。誤ったバックポートは次のとおりである。
 
 ```c
-/* WRONG: range ends at r0p1 (revision = 1), misses r0p2 */
+/* 誤り: 範囲が r0p1（revision = 1）で終わっており、r0p2 が漏れている */
 static const struct midr_range affected_range[] = {
     MIDR_RANGE(MIDR_MYCORE, 0, 0, 0, 1),
     /* variant_min=0, revision_min=0, variant_max=0, revision_max=1 */
 };
 
-/* CORRECT: range must include r0p2 (revision = 2) */
+/* 正しい: 範囲に r0p2（revision = 2）を含めなければならない */
 static const struct midr_range affected_range[] = {
     MIDR_RANGE(MIDR_MYCORE, 0, 0, 0, 2),
     /* variant_min=0, revision_min=0, variant_max=0, revision_max=2 */
 };
 ```
 
-At boot, the kernel iterates `arm64_errata[]` and calls the `matches` function for each entry. If the current CPU's MIDR falls within the declared range, the erratum is applied and a boot message is printed in the form the kernel's `arm64_errata[]` entries actually use — `pr_fmt` for this code is `"CPU features: "`, and each entry's `.desc` string reads just `"ARM erratum NNNNNN"` (see e.g. the real, unrelated entries in `arch/arm64/kernel/cpu_errata.c`, which read `"ARM erratum 832075"`, `"ARM erratum 834220"`, and so on — no core name, no "Workaround for" prefix):
+起動時、カーネルは `arm64_errata[]` を走査し、各エントリの `matches` 関数を呼ぶ。現在の CPU の MIDR が宣言された範囲内にあれば、エラッタが適用され、カーネルの `arm64_errata[]` エントリが実際に使う形式で起動メッセージが出力される — このコードの `pr_fmt` は `"CPU features: "` であり、各エントリの `.desc` 文字列は単に `"ARM erratum NNNNNN"` となっている（たとえば `arch/arm64/kernel/cpu_errata.c` にある、この件とは無関係の実在のエントリは `"ARM erratum 832075"`、`"ARM erratum 834220"` などとなっている — コア名も「Workaround for」という接頭辞もない）。
 
 ```
 CPU features: detected: ARM erratum NNNNNN
 ```
 
-On the affected r0p2 devices, no such message appeared — a clear sign the workaround was not active.
+影響を受けた r0p2 デバイスでは、このようなメッセージは現れなかった — 回避策が有効になっていないことを示す明確な兆候である。
 
-To read the MIDR of a running system:
+稼働中のシステムの MIDR を読むには次のようにする。
 
 ```bash
 cat /sys/devices/system/cpu/cpu0/regs/identification/midr_el1
-# e.g., 0x00000000410FFFF2
+# 例: 0x00000000410FFFF2
 ```
 
-Reading the low 32 bits, `410FFFF2`, against the bit layout above: implementer `0x41` (ARM), variant `0x0` (r0), architecture `0xf` (ARMv8), part number `0xfff` (this core's placeholder part number), revision `0x2` (p2). The revision field (`bits[3:0]`) read as `2` (p2), but the erratum table's range only went to `1` (p1) — a one-off error.
+下位 32 ビット `410FFFF2` を上のビットレイアウトに照らして読むと、実装者 `0x41`（ARM）、バリアント `0x0`（r0）、アーキテクチャ `0xf`（ARMv8）、パーツ番号 `0xfff`（このコアのプレースホルダーのパーツ番号）、リビジョン `0x2`（p2）となる。リビジョンフィールド（`bits[3:0]`）は `2`（p2）と読めたが、エラッタテーブルの範囲は `1`（p1）までしかなかった — 1つずれのエラーである。
 
-### Diagnosis {#diagnosis_4}
+### 診断 {#diagnosis_4}
 
-1. **Spurious kernel faults** on an address that is mapped; fault is non-deterministic and load-dependent.
-2. Check whether the erratum workaround boot message appears: `dmesg | grep -i erratum`. (The kernel's own `.desc` strings for these entries say "ARM erratum ...", not "workaround" — grepping for "workaround" alone won't find it.)
-3. Read `midr_el1` from sysfs: `cat /sys/devices/system/cpu/cpu0/regs/identification/midr_el1`. Decode the revision field as shown above.
-4. Cross-reference the silicon revision against the errata table in the kernel source. Check `arch/arm64/kernel/cpu_errata.c` (or the vendor equivalent) for the MIDR range.
-5. Confirm by patching the range to include r0p2, reboot, and verify the workaround message appears and spurious faults cease.
+1. マッピングされているアドレスでの **偽のカーネルフォールト**。フォールトは非決定的で、負荷に依存する。
+2. エラッタ回避策の起動メッセージが出ているかを確認する: `dmesg | grep -i erratum`。（これらのエントリに対するカーネル自身の `.desc` 文字列は「ARM erratum ...」であり、「workaround」ではない — 「workaround」だけで grep しても見つからない。）
+3. sysfs から `midr_el1` を読む: `cat /sys/devices/system/cpu/cpu0/regs/identification/midr_el1`。上で示したようにリビジョンフィールドをデコードする。
+4. シリコンのリビジョンをカーネルソース内のエラッタテーブルと突き合わせる。MIDR 範囲については `arch/arm64/kernel/cpu_errata.c`（またはベンダーの同等物）を確認する。
+5. 範囲に r0p2 を含めるようパッチを当てて再起動し、回避策のメッセージが現れて偽のフォールトが止まることを確認する。
 
-### Fix {#fix_4}
+### 修正 {#fix_4}
 
-Widen the MIDR revision range to include all affected silicon revisions. After the fix, verify with a production r0p2 device that the boot message appears. Add a comment referencing the errata ID and the affected revision range explicitly so future backports are easier to audit:
+影響を受けるすべてのシリコンリビジョンを含むよう、MIDR のリビジョン範囲を広げる。修正後、製品の r0p2 デバイスで起動メッセージが現れることを確認する。将来のバックポートを監査しやすくするため、エラッタ ID と影響を受けるリビジョン範囲を明示的に参照するコメントを追加する。
 
 ```c
-/* Workaround for MyCore erratum NNNNNN.
- * Affected: r0p0, r0p1, r0p2.
- * See ARM erratum document ID NNNNNN, revision C. */
+/* MyCore erratum NNNNNN の回避策。
+ * 影響を受けるもの: r0p0, r0p1, r0p2。
+ * ARM erratum document ID NNNNNN, revision C を参照。 */
 static const struct midr_range affected_range[] = {
     MIDR_RANGE(MIDR_MYCORE, 0, 0, 0, 2),
 };
 ```
 
-### Lesson {#lesson_4}
+### 教訓 {#lesson_4}
 
-Errata workarounds are safety-critical: an off-by-one in a MIDR revision range silently leaves devices unprotected. Every backport of an erratum fix must be validated against the actual silicon revision deployed in the target hardware. Reading `midr_el1` from sysfs is a one-line check that should be part of any bringup checklist. Boot-time messages confirming erratum activation are a valuable diagnostic signal — their absence is a warning.
+エラッタ回避策は安全上きわめて重要である。MIDR リビジョン範囲の1つずれは、デバイスを黙って無防備のまま放置する。エラッタ修正のバックポートはすべて、対象ハードウェアに実際に搭載されているシリコンリビジョンに照らして検証しなければならない。sysfs から `midr_el1` を読むのは1行で済むチェックであり、あらゆるブリングアップのチェックリストに含めるべきである。エラッタの有効化を確認する起動時メッセージは貴重な診断シグナルであり、それがないことは警告である。
 
 ---
 
-## Summary {#summary}
+## まとめ {#summary}
 
-| # | Bug | Root cause | Detection method | ARM64-specific? |
+| # | バグ | 根本原因 | 検出方法 | ARM64 固有か |
 |---|-----|-----------|-----------------|----------------|
-| 1 | Stack corruption on preemption | Unmatched `kernel_neon_begin/end` leaves a dangling `kernel_fpsimd_state` pointer into a dead stack frame | Corruption in unrelated code after the buggy function returns; ftrace on begin/end call sites | Yes — ARM64's context-switchable kernel-mode NEON state is ARM64-specific |
-| 2 | Stale PTE after TLBI | Missing `dsb(ishst)` before TLB invalidate | Intermittent translation faults on recently remapped VA | Yes — ARM64 weak ordering; x86 TSO hides this |
-| 3 | Device reads stale DMA data | Non-coherent DMA without cache flush | Device transmits zeros; confirmed with `pgprot_noncached` | Partly — non-coherent DMA exists on other arches but common on embedded ARM64 |
-| 4 | BTI enforcement crash | JIT code missing `BTI c` landing pad instruction | SIGILL (ILL_ILLOPC) with ESR EC=0x0D (ESR_ELx_EC_BTI) | Yes — ARMv8.5 BTI is ARM64-specific |
-| 5 | Erratum workaround not applied | MIDR revision range off-by-one in errata table | Spurious faults; no erratum boot message; `midr_el1` sysfs | Yes — ARM64 MIDR-based errata infrastructure |
+| 1 | プリエンプション時のスタック破損 | `kernel_neon_begin/end` の不一致により、無効になったスタックフレームを指すダングリングな `kernel_fpsimd_state` ポインタが残る | バグのある関数がリターンした後の無関係なコードでの破損。begin/end の呼び出し箇所に対する ftrace | はい — ARM64 のコンテキストスイッチ可能なカーネルモード NEON 状態は ARM64 固有 |
+| 2 | TLBI 後の古い PTE | TLB 無効化の前の `dsb(ishst)` の欠落 | 最近リマップされた VA での断続的な変換フォールト | はい — ARM64 の弱い順序付け。x86 の TSO はこれを隠す |
+| 3 | デバイスが古い DMA データを読む | キャッシュフラッシュなしの非コヒーレント DMA | デバイスがゼロを送信する。`pgprot_noncached` で確認 | 部分的に — 非コヒーレント DMA は他のアーキテクチャにも存在するが、組み込み ARM64 でよく見られる |
+| 4 | BTI 強制によるクラッシュ | JIT コードに `BTI c` ランディングパッド命令がない | ESR EC=0x0D（ESR_ELx_EC_BTI）を伴う SIGILL（ILL_ILLOPC） | はい — ARMv8.5 の BTI は ARM64 固有 |
+| 5 | エラッタ回避策が適用されない | エラッタテーブル内の MIDR リビジョン範囲の1つずれ | 偽のフォールト。エラッタの起動メッセージがない。`midr_el1` の sysfs | はい — ARM64 の MIDR ベースのエラッタ基盤 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Exception Model](exception-model.md) — EL0-EL3, ESR_EL1 syndrome decoding, SCTLR_EL1 control bits
-- [Memory Model](memory-model.md) — Weak ordering, DSB/ISB/DMB barriers, load-acquire/store-release
-- [Page Tables](page-tables.md) — PTE format, TLB management, `flush_tlb_range()` internals
-- [CPU Features](cpu-features.md) — Feature detection, MIDR_EL1 format, `arm64_errata[]` infrastructure, SVE/BTI/MTE capability probing
-- [Spectre and Meltdown](spectre-meltdown.md) — Speculative execution, erratum-driven mitigations, SMCCC firmware interfaces
-- [Documentation/arch/arm64/silicon-errata.rst](https://docs.kernel.org/arch/arm64/silicon-errata.html) — the kernel's list of every worked-around erratum (Case 5's world)
-- [arch/arm64/kernel/cpu_errata.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/cpu_errata.c) — MIDR match ranges for erratum workarounds
+- [例外モデル](exception-model.md) — EL0-EL3、ESR_EL1 のシンドロームのデコード、SCTLR_EL1 の制御ビット
+- [メモリモデル](memory-model.md) — 弱い順序付け、DSB/ISB/DMB バリア、load-acquire/store-release
+- [ページテーブル](page-tables.md) — PTE の形式、TLB 管理、`flush_tlb_range()` の内部
+- [CPU 機能](cpu-features.md) — 機能検出、MIDR_EL1 の形式、`arm64_errata[]` 基盤、SVE/BTI/MTE の機能プロービング
+- [Spectre と Meltdown](spectre-meltdown.md) — 投機的実行、エラッタに基づく緩和策、SMCCC ファームウェアインターフェース
+- [Documentation/arch/arm64/silicon-errata.rst](https://docs.kernel.org/arch/arm64/silicon-errata.html) — 回避策が実装されたすべてのエラッタのカーネルによる一覧（事例 5 の世界）
+- [arch/arm64/kernel/cpu_errata.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/cpu_errata.c) — エラッタ回避策のための MIDR 照合範囲

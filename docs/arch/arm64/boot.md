@@ -1,10 +1,10 @@
-# ARM64 Boot Sequence {#arm64-boot-sequence}
+# ARM64のブートシーケンス {#arm64-boot-sequence}
 
-> From reset vector to start_kernel: head.S, page table setup, and MMU enable
+> リセットベクタからstart_kernelまで: head.S、ページテーブルの構築、MMUの有効化
 
-## Overview {#overview}
+## 概要 {#overview}
 
-When power is applied to an ARM64 system, the CPU starts executing at the reset vector with the MMU disabled, in the highest exception level supported by the hardware.
+ARM64システムに電源が投入されると、CPUはMMUが無効の状態で、ハードウェアがサポートする最上位の例外レベルにおいてリセットベクタから実行を開始する。
 
 ```
 Power on / Reset
@@ -34,39 +34,39 @@ EL1 (Kernel) → arch/arm64/kernel/head.S
                └─ b start_kernel  (C code)
 ```
 
-## head.S: the entry point {#heads-the-entry-point}
+## head.S: エントリポイント {#heads-the-entry-point}
 
 ```asm
 /* arch/arm64/kernel/head.S */
 
     /*
-     * Linux/arm64 Image header: first 64 bytes used by bootloader.
-     * Bootloader jumps here with:
-     *   x0 = physical address of device tree blob (DTB)
-     *   x1 = 0 (reserved)
-     *   x2 = 0 (reserved)
-     *   x3 = 0 (reserved)
+     * Linux/arm64 Imageヘッダ: 先頭64バイトはブートローダが使用する。
+     * ブートローダは次の状態でここへジャンプする:
+     *   x0 = デバイスツリーブロブ（DTB）の物理アドレス
+     *   x1 = 0（予約）
+     *   x2 = 0（予約）
+     *   x3 = 0（予約）
      */
     .section ".head.text","ax"
 
 SYM_CODE_START(primary_entry)
-    /* Disable all interrupts */
+    /* すべての割り込みを無効化 */
     msr     daifset, #0xf
 
-    /* Preserve x0 (DTB address) for later */
+    /* x0（DTBアドレス）を後で使うために保存 */
     mov     x21, x0
 
-    /* Are we running in EL2? Set up hypervisor configuration */
+    /* EL2で動作しているか? ハイパーバイザ設定を行う */
     bl      record_mmu_state
     bl      preserve_boot_args
 
     /*
-     * Set up EL1 or EL2 system registers.
-     * CPU starts with MMU off; endianness and cache state set via
-     * __cpu_setup before MMU enable.
+     * EL1またはEL2のシステムレジスタを設定する。
+     * CPUはMMUオフで起動する。エンディアンとキャッシュ状態は
+     * MMU有効化の前に__cpu_setupで設定される。
      */
     bl      __create_page_tables
-    /* x23 = TTBR1 (kernel VA page tables physical address) */
+    /* x23 = TTBR1（カーネルVAページテーブルの物理アドレス） */
     /* x25 = VA_BITS */
 
     bl      __cpu_setup
@@ -75,38 +75,38 @@ SYM_CODE_START(primary_entry)
 SYM_CODE_END(primary_entry)
 ```
 
-## Exception level setup {#exception-level-setup}
+## 例外レベルの設定 {#exception-level-setup}
 
 ```c
 /* arch/arm64/kernel/head.S */
 
 /*
- * Set up EL2 registers if booting at EL2 (common with KVM/Xen):
- * - Configure HCR_EL2: virtualization configuration
- * - Set up EL1 trap configuration
- * - Drop to EL1 via eret
+ * EL2でブートした場合（KVM/Xenでよくある）、EL2レジスタを設定する:
+ * - HCR_EL2を設定: 仮想化の構成
+ * - EL1のトラップ設定を行う
+ * - eretでEL1へ降りる
  */
 SYM_FUNC_START_LOCAL(el2_setup)
-    msr     SPsel, #1           /* use SP_EL1 for EL1 */
+    msr     SPsel, #1           /* EL1ではSP_EL1を使う */
 
-    /* Check current exception level: */
+    /* 現在の例外レベルを確認: */
     mrs     x0, CurrentEL
     cmp     x0, #CurrentEL_EL2
     b.eq    1f
 
-    /* Running at EL1: nothing to do */
+    /* EL1で動作中: 何もしない */
     mov     w0, #BOOT_CPU_MODE_EL1
     ret
 
-1:  /* Running at EL2: configure for kernel at EL1 */
-    mov_q   x0, HCR_HOST_NVHE_FLAGS  /* no-VHE host configuration */
+1:  /* EL2で動作中: EL1で動くカーネル向けに設定 */
+    mov_q   x0, HCR_HOST_NVHE_FLAGS  /* VHEなしのホスト構成 */
     msr     HCR_EL2, x0
 
-    /* Allow kernel to access physical timers and PMU: */
+    /* カーネルが物理タイマーとPMUにアクセスできるようにする: */
     mov     x0, #(CNTHCTL_EL2_EL1PCTEN | CNTHCTL_EL2_EL1PTEN)
     msr     CNTHCTL_EL2, x0
 
-    /* Drop to EL1 via ERET: */
+    /* ERETでEL1へ降りる: */
     mov     x0, #(PSR_F_BIT | PSR_I_BIT | PSR_A_BIT | PSR_D_BIT | \
                   PSR_MODE_EL1h)
     msr     SPSR_EL2, x0
@@ -116,136 +116,136 @@ SYM_FUNC_START_LOCAL(el2_setup)
 SYM_FUNC_END(el2_setup)
 ```
 
-## Early page tables {#early-page-tables}
+## 初期ページテーブル {#early-page-tables}
 
-Before the MMU is enabled, the kernel creates minimal page tables mapping:
-1. The kernel itself (identity map for the boot path)
-2. The kernel virtual address space (high addresses, TTBR1)
+MMUを有効化する前に、カーネルは次をマップする最小限のページテーブルを作成する。
+1. カーネル自身（ブートパス用のアイデンティティマップ）
+2. カーネル仮想アドレス空間（高位アドレス、TTBR1）
 
 ```c
 /* arch/arm64/kernel/head.S */
 SYM_FUNC_START_LOCAL(__create_page_tables)
     /*
-     * ARM64 uses two sets of page tables:
-     *   TTBR0_EL1: user space (VA [0, VA_BITS-1])
-     *   TTBR1_EL1: kernel space (VA [-(1<<VA_BITS), -1])
+     * ARM64は2組のページテーブルを使う:
+     *   TTBR0_EL1: ユーザー空間（VA [0, VA_BITS-1]）
+     *   TTBR1_EL1: カーネル空間（VA [-(1<<VA_BITS), -1]）
      *
-     * On boot: create identity map for [_text, _end) in TTBR0
-     *          and kernel map in TTBR1
+     * ブート時: TTBR0に[_text, _end)のアイデンティティマップを、
+     *          TTBR1にカーネルマップを作成する
      */
 
-    /* Clear init_pg_dir (kernel page tables) */
+    /* init_pg_dir（カーネルページテーブル）をクリア */
     adrp    x0, init_pg_dir
     adrp    x1, init_pg_end
     sub     x1, x1, x0
-    bl      __pi_memset             /* zero init_pg_dir (__memzero is ARM32 only) */
+    bl      __pi_memset             /* init_pg_dirをゼロ化（__memzeroはARM32専用） */
 
-    /* Create the initial kernel page tables: */
-    /* Map kernel text/data at KIMAGE_VADDR */
+    /* 初期カーネルページテーブルを作成: */
+    /* カーネルのtext/dataをKIMAGE_VADDRにマップ */
     adrp    x0, init_pg_dir
     adrp    x6, _text
-    bl      map_kernel_segment      /* maps _text.._end at kernel VA */
+    bl      map_kernel_segment      /* _text.._endをカーネルVAにマップ */
     ret
 SYM_FUNC_END(__create_page_tables)
 ```
 
-## CPU setup: enabling the MMU {#cpu-setup-enabling-the-mmu}
+## CPUの設定: MMUの有効化 {#cpu-setup-enabling-the-mmu}
 
 ```asm
 /* arch/arm64/kernel/head.S */
 SYM_FUNC_START(__primary_switch)
     /*
-     * Set TTBR0 (identity map, used during MMU enable)
-     * and TTBR1 (kernel VA map)
+     * TTBR0（アイデンティティマップ、MMU有効化中に使用）と
+     * TTBR1（カーネルVAマップ）を設定
      */
-    adrp    x1, idmap_pg_dir    /* TTBR0: identity map for boot path */
-    adrp    x2, init_pg_dir     /* TTBR1: kernel VA map */
+    adrp    x1, idmap_pg_dir    /* TTBR0: ブートパス用アイデンティティマップ */
+    adrp    x2, init_pg_dir     /* TTBR1: カーネルVAマップ */
     bl      __enable_mmu
 
-    /* After MMU enable: we're now running at kernel VAs */
+    /* MMU有効化後: ここからはカーネルVAで実行している */
     ldr     x8, =__primary_switched
-    adrp    x0, KERNEL_START        /* physical address of _text */
+    adrp    x0, KERNEL_START        /* _textの物理アドレス */
     br      x8
 SYM_FUNC_END(__primary_switch)
 
 SYM_FUNC_START_LOCAL(__enable_mmu)
     /*
-     * Set up MAIR_EL1: memory attribute indirection register
-     * Defines 8 memory types (Normal WB, Device, etc.)
+     * MAIR_EL1を設定: memory attribute indirection register
+     * 8種類のメモリタイプ（Normal WB、Deviceなど）を定義する
      */
     mov_q   x5, MAIR_EL1_SET
     msr     mair_el1, x5
 
     /*
-     * Set up TCR_EL1: Translation Control Register
-     * - IPS: physical address size
-     * - T0SZ: VA range for TTBR0 (user, 48-bit)
-     * - T1SZ: VA range for TTBR1 (kernel, 48-bit)
-     * - TG0/TG1: 4KB granule
+     * TCR_EL1を設定: Translation Control Register
+     * - IPS: 物理アドレスサイズ
+     * - T0SZ: TTBR0のVA範囲（ユーザー、48ビット）
+     * - T1SZ: TTBR1のVA範囲（カーネル、48ビット）
+     * - TG0/TG1: 4KBグラニュール
      * - SH0/SH1: inner shareable
-     * - ORGN/IRGN: outer/inner write-back cacheable
+     * - ORGN/IRGN: outer/innerライトバックキャッシュ可能
      */
     mrs     x10, ID_AA64MMFR0_EL1
     ...
     msr     tcr_el1, x10
 
-    /* Set TTBR0 and TTBR1: */
+    /* TTBR0とTTBR1を設定: */
     msr     ttbr0_el1, x1
     msr     ttbr1_el1, x2
     isb
 
-    /* Enable MMU: set SCTLR_EL1.M = 1 */
+    /* MMUを有効化: SCTLR_EL1.M = 1を設定 */
     mrs     x0, sctlr_el1
-    orr     x0, x0, #SCTLR_EL1_M     /* MMU enable */
-    orr     x0, x0, #SCTLR_EL1_C     /* cache enable */
-    orr     x0, x0, #SCTLR_EL1_I     /* instruction cache enable */
+    orr     x0, x0, #SCTLR_EL1_M     /* MMU有効化 */
+    orr     x0, x0, #SCTLR_EL1_C     /* キャッシュ有効化 */
+    orr     x0, x0, #SCTLR_EL1_I     /* 命令キャッシュ有効化 */
     msr     sctlr_el1, x0
-    isb     /* ISB required after SCTLR_EL1 write */
+    isb     /* SCTLR_EL1への書き込み後はISBが必要 */
     ret
 SYM_FUNC_END(__enable_mmu)
 ```
 
-## After MMU enable: __primary_switched {#after-mmu-enable-_primaryswitched}
+## MMU有効化の後: __primary_switched {#after-mmu-enable-_primaryswitched}
 
 ```asm
 SYM_FUNC_START_LOCAL(__primary_switched)
-    /* Set up the exception vector table (VBAR_EL1) */
+    /* 例外ベクタテーブル（VBAR_EL1）を設定 */
     adr_l   x4, vectors             /* arch/arm64/kernel/entry.S */
     msr     vbar_el1, x4
     isb
 
-    /* Set up the initial kernel stack */
-    adr_l   x5, init_task           /* struct task_struct for init */
-    msr     sp_el0, x5              /* used for current macro */
+    /* 初期カーネルスタックを設定 */
+    adr_l   x5, init_task           /* init用のstruct task_struct */
+    msr     sp_el0, x5              /* currentマクロで使用 */
     adr_l   x6, init_thread_union
-    add     sp, x6, #THREAD_SIZE    /* kernel stack top (init_thread_union + THREAD_SIZE) */
+    add     sp, x6, #THREAD_SIZE    /* カーネルスタックの先頭（init_thread_union + THREAD_SIZE） */
 
-    /* Record which exception level we booted at */
+    /* どの例外レベルでブートしたかを記録 */
     str_l   x5, __boot_cpu_mode, x6
 
-    /* Zero BSS: */
+    /* BSSをゼロ化: */
     adrp    x0, __bss_start
     adrp    x1, __bss_stop
     sub     x1, x1, x0
     bl      __pi_memset
 
-    /* Preserve DTB address for setup_arch: */
+    /* setup_arch用にDTBアドレスを保存: */
     str_l   x21, __fdt_pointer, x5
 
-    /* Jump to C code! */
+    /* Cコードへジャンプ! */
     b       start_kernel
 SYM_FUNC_END(__primary_switched)
 ```
 
-## SMP secondary CPU boot {#smp-secondary-cpu-boot}
+## SMPセカンダリCPUのブート {#smp-secondary-cpu-boot}
 
-Secondary CPUs start at `secondary_entry` after being released by the primary:
+セカンダリCPUは、プライマリによって解放された後に`secondary_entry`から開始する。
 
 ```c
 /* arch/arm64/kernel/head.S */
 SYM_CODE_START(secondary_entry)
-    /* Same setup as primary: EL2, CPU features, page tables */
-    bl      el2_setup           /* configure EL2 (shared with primary) */
+    /* プライマリと同じ設定: EL2、CPU機能、ページテーブル */
+    bl      el2_setup           /* EL2を設定（プライマリと共通） */
     bl      __cpu_setup
 
     adr_l   x0, KERNEL_START
@@ -262,20 +262,20 @@ void secondary_start_kernel(void)
     mmgrab(mm);
     current->active_mm = mm;
 
-    /* Initialize per-CPU data structures */
+    /* per-CPUデータ構造を初期化 */
     notify_cpu_starting(cpu);
 
-    /* Set up interrupts and timers for this CPU */
+    /* このCPUの割り込みとタイマーを設定 */
     local_irq_enable();
     cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
-    /* → idle loop */
+    /* → アイドルループ */
 }
 ```
 
-## Observing the boot {#observing-the-boot}
+## ブートを観察する {#observing-the-boot}
 
 ```bash
-# See kernel boot messages:
+# カーネルのブートメッセージを見る:
 dmesg | head -50
 # [    0.000000] Booting Linux on physical CPU 0x0000000000 [0x410fd034]
 # [    0.000000] Linux version 6.8.0 (gcc 13.2.0)
@@ -287,26 +287,26 @@ dmesg | head -50
 # [    0.000000]   DMA32    empty
 # [    0.000000]   Normal   [mem 0x0000000040000000-0x000000013fffffff]
 
-# Check exception level we booted at:
+# ブートした例外レベルを確認:
 dmesg | grep "booted at EL"
 # Kernel booted at EL2
 
-# KASLR offset (if enabled):
+# KASLRオフセット（有効な場合）:
 dmesg | grep "kaslr"
 # KASLR enabled: offset 0x5500000
 
-# Check the arm64 CPU features detected:
+# 検出されたarm64のCPU機能を確認:
 dmesg | grep "CPU features"
 cat /sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_cur_freq
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ARM64 Exception Model](exception-model.md) — EL0-EL3, exception entry/exit
-- [ARM64 Memory Model](memory-model.md) — TTBR0/TTBR1, page table format
-- [Page Tables](../../mm/page-tables.md) — host-side page table internals
-- [SMP](../../sched/context-switch.md) — secondary CPU initialization
-- [arch/arm64/kernel/head.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/head.S) — complete boot assembly
-- [arch/arm64/mm/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/mmu.c) — page table creation
-- [Booting AArch64 Linux](https://docs.kernel.org/arch/arm64/booting.html) — the boot contract between firmware/bootloader and kernel
-- ARM Architecture Reference Manual (ARM DDI 0487) — authoritative reference
+- [ARM64の例外モデル](exception-model.md) — EL0-EL3、例外の入口と出口
+- [ARM64のメモリモデル](memory-model.md) — TTBR0/TTBR1、ページテーブル形式
+- [ページテーブル](../../mm/page-tables.md) — ホスト側のページテーブル内部構造
+- [SMP](../../sched/context-switch.md) — セカンダリCPUの初期化
+- [arch/arm64/kernel/head.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/kernel/head.S) — ブート用アセンブリの全体
+- [arch/arm64/mm/mmu.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/mmu.c) — ページテーブルの作成
+- [Booting AArch64 Linux](https://docs.kernel.org/arch/arm64/booting.html) — ファームウェア/ブートローダとカーネルの間のブート規約
+- ARM Architecture Reference Manual（ARM DDI 0487） — 権威ある参照資料

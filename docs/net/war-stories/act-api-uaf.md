@@ -1,66 +1,66 @@
-# The net/sched act_api Filter-Delete Race {#the-netsched-act_api-filter-delete-race}
+# net/sched act_apiのフィルタ削除競合 {#the-netsched-act_api-filter-delete-race}
 
-> CVE-2026-53264 — a 2017 comment's reasoning about RCU safety covered every reader that existed at the time; a 2023 scalability fix quietly added the one it hadn't, and another researcher independently found the resulting bug and built a working exploit for it as a fresh 0-day, with AI speeding up the exploit development
+> CVE-2026-53264 — 2017年のコメントによるRCU安全性の論証は、当時存在していたすべての読み手をカバーしていた。2023年のスケーラビリティ修正が、カバーされていなかった唯一の読み手を静かに追加し、別の研究者がその結果生じたバグを独自に発見して、新規の0-dayとして実際に動作するエクスプロイトを構築した。そのエクスプロイト開発はAIによって加速された
 
-Disclosed
-:   2026-06-25 (Linux kernel CNA record); independent 0-day exploit write-up published July 27, 2026 (STAR Labs)
+公開日
+:   2026-06-25（LinuxカーネルCNAのレコード）。独立した0-dayエクスプロイトの解説記事は2026年7月27日に公開（STAR Labs）
 
-Reported / found by
-:   Kyle Zeng (OpenAI security research) — original kernel bug report, credited in the fix commit's `Reported-by` tag; Lee Jia Jie (STAR Labs, Singapore) — independently found the same bug and built a working exploit for it as a 0-day, learning only afterward, by their own account, that Zeng had already reported it upstream
+報告者／発見者
+:   Kyle Zeng（OpenAIのセキュリティ研究）— カーネルに対する元のバグ報告者で、修正コミットの`Reported-by`タグでクレジットされている。Lee Jia Jie（STAR Labs、シンガポール）— 同じバグを独自に発見し、0-dayとして実際に動作するエクスプロイトを構築した。本人の説明によれば、Zengがすでにアップストリームに報告していたことを知ったのは後になってからである
 
 CVSS
-:   7.8 HIGH (Linux kernel CNA, vector `CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`; mirrored, not independently scored, by NVD) / 7.0 (Red Hat's own scoring, vector `CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`)
+:   7.8 HIGH（LinuxカーネルCNA、ベクタ`CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:H/A:H`。NVDはこれを転載しており、独自には評価していない）/ 7.0（Red Hat独自の評価、ベクタ`CVSS:3.1/AV:L/AC:H/PR:L/UI:N/S:U/C:H/I:H/A:H`）
 
-Fixed in
-:   mainline 7.1-rc7 (commit `5057e1aca011`, authored May 31 2026, committed June 1); backported separately to stable 5.10.259, 5.15.210, 6.1.176, 6.6.143, 6.12.94, 6.18.36, and 7.0.13
+修正バージョン
+:   メインライン7.1-rc7（コミット`5057e1aca011`、2026年5月31日作成、6月1日コミット）。stable 5.10.259、5.15.210、6.1.176、6.6.143、6.12.94、6.18.36、7.0.13にそれぞれ個別にバックポート
 
-Exploit tool
-:   yes — full source published: [star-sg/CVE: CVE-2026-53264](https://github.com/star-sg/CVE/tree/master/CVE-2026-53264), Lee Jia Jie's TyphoonPwn 2026 submission, alongside a detailed STAR Labs write-up
+エクスプロイトツール
+:   あり — 完全なソースが公開されている: [star-sg/CVE: CVE-2026-53264](https://github.com/star-sg/CVE/tree/master/CVE-2026-53264)。Lee Jia JieのTyphoonPwn 2026への提出物であり、STAR Labsの詳細な解説記事が併せて公開されている
 
-Actively exploited
-:   no confirmed cases (local-only; requires an existing unprivileged shell; not on CISA KEV as of this writing)
+実際の悪用
+:   確認された事例なし（ローカル専用。既存の非特権シェルが必要。本稿執筆時点でCISA KEVには未掲載）
 
-*Part of [War Stories: Network Stack Bugs and CVEs](../war-stories.md).*
+*[事件簿: ネットワークスタックのバグとCVE](../war-stories.md)の一部。*
 
-## What happened {#what-happened}
+## 何が起きたか {#what-happened}
 
-Two people found the same bug in Linux's traffic-control code, for completely unrelated reasons, with neither working from the other's find. A security researcher at OpenAI quietly reported a use-after-free upstream through normal channels, shortly before a hacking competition in Seoul. An intern at a Singapore security firm — hunting kernel bugs with AI assistance ahead of that same competition — had independently found the identical bug on their own and built it into a full local-root exploit; by their own account, they only learned about the upstream report after the competition was over.
+2人の人物が、まったく無関係な理由で、互いの発見をもとにすることなく、Linuxのトラフィック制御コードの同じバグを見つけた。OpenAIのセキュリティ研究者が、ソウルで開かれるハッキング競技会の少し前に、通常の経路でuse-after-freeをアップストリームにひっそりと報告した。シンガポールのセキュリティ企業のインターン — 同じ競技会に向けてAIの支援を受けながらカーネルのバグを探していた — は、まったく同じバグを独自に見つけ、完全なローカルroot取得エクスプロイトに仕上げていた。本人の説明によれば、アップストリームへの報告のことを知ったのは競技会が終わった後だったという。
 
-The vulnerability, CVE-2026-53264, is a locking/RCU mismatch, not sloppy code: two separate, individually reasonable kernel changes, made years apart, quietly combined into a bug neither author had reason to anticipate — leaving a window where deleting a network filter could free memory another CPU was still about to use.
+この脆弱性CVE-2026-53264は、ロック／RCUの不整合であって、ずさんなコードではない。何年も離れて行われた、個々には妥当な2つの別々のカーネル変更が静かに組み合わさり、どちらの作者も予期する理由のなかったバグになった — ネットワークフィルタを削除すると、別のCPUがまさに使おうとしているメモリを解放してしまう窓が残ったのである。
 
-## How the code was vulnerable {#how-the-code-was-vulnerable}
+## コードはどのように脆弱だったか {#how-the-code-was-vulnerable}
 
-Linux [traffic control](../tc-qdisc.md) (`tc`) actions — the `gact`, `mirred`, and similar objects a filter runs when it matches a packet — are reference-counted `struct tc_action` objects, indexed per action-type in an IDR (`idr_find(idr, index)`) so that [netlink](../netlink.md) requests can look one up by its numeric index and either attach it to a new filter or delete it. Because the IDR is walked by lookups that only take `rcu_read_lock()`, not the mutex that protects *removing* entries from it, an action's memory has to stay valid for at least one RCU grace period after it's unlinked — otherwise a concurrent reader that found the pointer just before removal can dereference (or refcount) it just after the memory is freed.
+Linuxの[トラフィック制御](../tc-qdisc.md)（`tc`）のアクション — フィルタがパケットにマッチしたときに実行する`gact`、`mirred`などのオブジェクト — は参照カウントされる`struct tc_action`オブジェクトであり、アクション種別ごとにIDR（`idr_find(idr, index)`）でインデックス付けされている。これにより[netlink](../netlink.md)のリクエストが数値インデックスでアクションを検索し、新しいフィルタにアタッチしたり削除したりできる。IDRは`rcu_read_lock()`だけを取り、エントリの*削除*を保護するmutexは取らないルックアップによって走査されるため、アクションのメモリはリンク解除後少なくとも1回のRCUグレースピリオドの間は有効なままでなければならない — さもなければ、削除の直前にポインタを見つけた並行する読み手が、メモリ解放の直後にそれを参照外し（あるいは参照カウント操作）してしまう。
 
-That mechanism — an RCU-deferred free protecting a lookup that only takes the read lock — is what's in place today, but it wasn't always there, and the history is the opposite of what you'd guess. Before 2017, `free_tcf()` *was* the RCU callback itself — `static void free_tcf(struct rcu_head *head)`, recovering the action pointer via `container_of()` — and it was its two callers, `tcf_idr_remove()` and `tcf_idr_cleanup()`, that deferred the free with `call_rcu(&p->tcfa_rcu, free_tcf)` rather than invoking it directly. In September 2017, Cong Wang's commit [`d7fb60b9cafb`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d7fb60b9cafb982cb2e46a267646a8dfd4f2e5da) ("net_sched: get rid of tcfa_rcu") removed that deferral: `free_tcf()` was changed to take the `tc_action *` directly and run immediately, with both callers now just calling `free_tcf(p)`.
+その仕組み — 読み取りロックしか取らないルックアップを保護するための、RCUで遅延された解放 — は現在は存在するが、常にあったわけではなく、その歴史は予想とは逆である。2017年以前は、`free_tcf()`*自体が*RCUコールバックだった — `static void free_tcf(struct rcu_head *head)`であり、`container_of()`でアクションのポインタを復元していた — そして、その2つの呼び出し元`tcf_idr_remove()`と`tcf_idr_cleanup()`が、直接呼び出す代わりに`call_rcu(&p->tcfa_rcu, free_tcf)`で解放を遅延させていた。2017年9月、Cong Wangのコミット[`d7fb60b9cafb`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d7fb60b9cafb982cb2e46a267646a8dfd4f2e5da)（"net_sched: get rid of tcfa_rcu"）がその遅延を取り除いた。`free_tcf()`は`tc_action *`を直接受け取って即座に実行されるよう変更され、両方の呼び出し元は単に`free_tcf(p)`を呼ぶだけになった。
 
-The commit message gives two reasons. The narrow one is that a related rewrite meant one specific caller no longer needed to wait for a grace period on that account — the commit message itself doesn't name which caller. The other is a real constraint on a follow-up patch the commit was clearing the way for — Wang writes that removing the deferral *"also completely closes a race condition between action free path and filter chain add/remove path for the following patch. Because otherwise the nested RCU callback can't be caught by `rcu_barrier()`"* — a `call_rcu()` nested inside another RCU callback can outlive the `rcu_barrier()` a caller uses to wait out all pending callbacks, which the follow-up work needed to not happen.
+コミットメッセージは2つの理由を挙げている。限定的な理由は、関連する書き換えによって、ある特定の呼び出し元がその理由でグレースピリオドを待つ必要がなくなったというものである — コミットメッセージ自体はどの呼び出し元かを名指ししていない。もう1つは、このコミットが道を開こうとしていた後続パッチに対する実際の制約である — Wangは、遅延を取り除くことは*"also completely closes a race condition between action free path and filter chain add/remove path for the following patch. Because otherwise the nested RCU callback can't be caught by `rcu_barrier()`"*（訳: 後続パッチにとって、アクションの解放パスとフィルタチェーンの追加／削除パスとの間の競合状態も完全に閉じる。さもなければ、ネストしたRCUコールバックを`rcu_barrier()`で捕捉できないからだ）と書いている — 別のRCUコールバックの内部でネストした`call_rcu()`は、呼び出し元が保留中のすべてのコールバックを待つために使う`rcu_barrier()`より長く生き残ることがあり、後続の作業ではそれが起きてはならなかった。
 
-Alongside both of those, the rewritten `free_tcf()` carries a comment justifying why dropping the deferral should be safe on its own terms — the load-bearing claim for *this* bug: *"for standalone actions, we don't need a RCU grace period either, because actions are always connected to filters and filters are already destroyed in RCU callbacks, so after a RCU grace period actions are already disconnected from filters. Readers later can not find us."* That argument is about one specific reader path: someone reaching an action *through a filter*. It says nothing about a reader reaching the same action *directly through the IDR* — which is exactly what a concurrent `RTM_NEWTFILTER` lookup does.
+それら2つとは別に、書き換えられた`free_tcf()`には、遅延を取り除くことがそれ自体として安全であるはずの理由を正当化するコメントが付いている — *このバグにとって*決定的に重要な主張である: *"for standalone actions, we don't need a RCU grace period either, because actions are always connected to filters and filters are already destroyed in RCU callbacks, so after a RCU grace period actions are already disconnected from filters. Readers later can not find us."*（訳: スタンドアロンのアクションについても、RCUグレースピリオドは必要ない。アクションは常にフィルタに接続されており、フィルタはすでにRCUコールバックの中で破棄されるので、RCUグレースピリオドの後にはアクションはすでにフィルタから切り離されている。後の読み手は我々を見つけられない。）この論証は1つの特定の読み手パス、すなわち*フィルタを通して*アクションに到達する者についてのものである。*IDRを通して直接*同じアクションに到達する読み手については何も言っていない — それこそが並行する`RTM_NEWTFILTER`のルックアップが行うことである。
 
-That gap didn't turn into a live bug the moment it opened. Direct action-index lookups — what a concurrent `RTM_NEWTFILTER` performs, via `tcf_idr_check_alloc()` — were, through Linux 6.7, entirely mutex-protected: the function took `idrinfo->lock` before calling `idr_find()` and held it through the `refcount_inc()`, so there was no RCU-only reader of the action IDR at all, and the 2017 comment's claim held safely, if incidentally. That changed in December 2023: Pedro Tammela's commit [`4b55e86736d5`](https://git.kernel.org/linus/4b55e86736d5) ("net/sched: act_api: rely on rcu in tcf_idr_check_alloc"), merged for Linux 6.8, rewrote the function to reduce mutex contention when many filters bind to the same action concurrently — replacing the mutex-held lookup with `rcu_read_lock()` around `idr_find()` and `refcount_inc_not_zero()` for the bump, falling back to the mutex only when allocating a brand-new slot.
+その穴は、開いた瞬間に生きたバグになったわけではない。アクションインデックスの直接ルックアップ — 並行する`RTM_NEWTFILTER`が`tcf_idr_check_alloc()`経由で行うもの — は、Linux 6.7までは完全にmutexで保護されていた。この関数は`idr_find()`を呼ぶ前に`idrinfo->lock`を取り、`refcount_inc()`の間もそれを保持していたので、アクションIDRに対するRCUのみの読み手は一切存在せず、2017年のコメントの主張は偶然ながら安全に成り立っていた。それが2023年12月に変わった。Pedro Tammelaのコミット[`4b55e86736d5`](https://git.kernel.org/linus/4b55e86736d5)（"net/sched: act_api: rely on rcu in tcf_idr_check_alloc"）がLinux 6.8向けにマージされ、多数のフィルタが同じアクションに同時にバインドする際のmutex競合を減らすために関数を書き換えた — mutexを保持したルックアップを、`idr_find()`を囲む`rcu_read_lock()`とカウント増加のための`refcount_inc_not_zero()`に置き換え、まったく新しいスロットを割り当てるときにだけmutexにフォールバックするようにしたのである。
 
-That's exactly the reader the 2017 comment never accounted for, introduced not by carelessness but by an unrelated, individually well-reasoned scalability fix six years later. The exploitable window opened there, in late 2023 — not in 2017. (The CVE record itself lists "affected since 4.14" — that's a mechanical consequence of citing the 2017 commit as the `Fixes:` target, not an independent exploitability analysis; the code itself is what actually determines when the window opened.)
+それはまさに2017年のコメントが考慮していなかった読み手であり、不注意によってではなく、6年後の無関係で個々には十分に考え抜かれたスケーラビリティ修正によって導入された。悪用可能な窓が開いたのはそこ、2023年末であって — 2017年ではない。（CVEレコード自体は「4.14以降影響を受ける」としているが、それは2017年のコミットを`Fixes:`の対象として挙げたことの機械的な帰結であって、独立した悪用可能性の分析ではない。いつ窓が開いたかを実際に決めるのはコードそのものである。）
 
-The two versions of the read path, trimmed to the locking difference (the `IS_ERR(p)` retry branch and the allocate-a-new-slot path are both omitted here; checked against `net/sched/act_api.c` at each tag):
+読み取りパスの2つのバージョンを、ロックの違いに絞って示す（`IS_ERR(p)`の再試行分岐と新規スロット割り当てパスはどちらもここでは省略している。各タグにおける`net/sched/act_api.c`と照合済み）:
 
 ```c
-/* v6.7 — idrinfo->lock held for the entire lookup and refcount bump */
+/* v6.7 — ルックアップと参照カウント増加の間ずっとidrinfo->lockを保持 */
 mutex_lock(&idrinfo->lock);
 p = idr_find(&idrinfo->action_idr, *index);
 if (p) {
-    refcount_inc(&p->tcfa_refcnt);   /* safe: mutex still held, p can't vanish */
+    refcount_inc(&p->tcfa_refcnt);   /* 安全: mutexをまだ保持しているので、pは消えない */
     ...
 }
 mutex_unlock(&idrinfo->lock);
 ```
 
 ```c
-/* v6.8, commit 4b55e86736d5 — mutex dropped for the lookup itself */
+/* v6.8、コミット4b55e86736d5 — ルックアップ自体ではmutexを取らなくなった */
 rcu_read_lock();
 p = idr_find(&idrinfo->action_idr, *index);
 if (p) {
-    if (!refcount_inc_not_zero(&p->tcfa_refcnt)) {  /* p could already be mid-free */
+    if (!refcount_inc_not_zero(&p->tcfa_refcnt)) {  /* pはすでに解放途中かもしれない */
         rcu_read_unlock();
         return -EAGAIN;
     }
@@ -69,25 +69,25 @@ if (p) {
 rcu_read_unlock();
 ```
 
-Nothing here is wrong on its own — `refcount_inc_not_zero()` is exactly the right primitive for an RCU-only reader to use. The 2017 comment just predates this reader by six years, and nobody re-checked it against the new code path when this landed.
+ここにはそれ自体として間違っているものは何もない — `refcount_inc_not_zero()`は、RCUのみの読み手が使うのにまさに正しいプリミティブである。2017年のコメントがこの読み手より6年古いというだけであり、これが取り込まれたときに、誰もそのコメントを新しいコードパスに照らして再確認しなかった。
 
-The chronology, visually:
+時系列を図で示す:
 
 ```mermaid
 timeline
-    title Two individually-safe changes, six years apart, became one bug
-    2017 : d7fb60b9cafb removes RCU-deferred freeing
-         : safe at the time — no RCU-only reader of the action IDR exists yet
-    2023 : 4b55e86736d5 adds an RCU-only reader
-         : an unrelated scalability fix, merged for Linux 6.8
-         : the exploitable window opens, unnoticed
-    2026 : two researchers independently find the race
-         : 5057e1aca011 restores RCU-deferred freeing
+    title 6年を隔てた、個々には安全な2つの変更が1つのバグになった
+    2017 : d7fb60b9cafbがRCUで遅延された解放を削除
+         : 当時は安全 — アクションIDRのRCUのみの読み手はまだ存在しない
+    2023 : 4b55e86736d5がRCUのみの読み手を追加
+         : 無関係なスケーラビリティ修正、Linux 6.8向けにマージ
+         : 悪用可能な窓が、気づかれないまま開く
+    2026 : 2人の研究者が独立に競合を発見
+         : 5057e1aca011がRCUで遅延された解放を復活
 ```
 
-## The race {#the-race}
+## 競合 {#the-race}
 
-The fix commit's own description lays out the race with CPU0 running `RTM_NEWTFILTER` and CPU1 running `RTM_DELTFILTER` concurrently against the same action index:
+修正コミット自身の説明は、同じアクションインデックスに対してCPU0が`RTM_NEWTFILTER`を、CPU1が`RTM_DELTFILTER`を並行して実行する場合の競合を次のように示している:
 
 ```
 0: mutex_lock()                              <-- holds the idr lock
@@ -101,11 +101,11 @@ The fix commit's own description lays out the race with CPU0 running `RTM_NEWTFI
 0: refcount_inc_not_zero(&p->tcfa_refcnt)    <-- ouch, UAF p points to freed memory
 ```
 
-That diagram is the fix commit's own schematic, and it's worth being precise about where it simplifies. In the actual `tcf_idr_check_alloc()` code (checked against `net/sched/act_api.c` at the pre-fix v7.0 tag), CPU0's read side never takes a mutex at all: it's `rcu_read_lock()`, `idr_find()`, `refcount_inc_not_zero()`, `rcu_read_unlock()`, with no mutex anywhere in between — the mutex in the diagram belongs to CPU1's delete path, not CPU0's read.
+この図は修正コミット自身の模式図であり、どこを単純化しているかを正確にしておく価値がある。実際の`tcf_idr_check_alloc()`のコード（修正前のv7.0タグにおける`net/sched/act_api.c`と照合済み）では、CPU0の読み取り側はmutexを一切取らない。`rcu_read_lock()`、`idr_find()`、`refcount_inc_not_zero()`、`rcu_read_unlock()`であり、その間のどこにもmutexはない — 図中のmutexはCPU1の削除パスのものであって、CPU0の読み取りのものではない。
 
-The actual gap is simpler than the diagram implies: CPU0 holds only the RCU read lock for the entire lookup-and-refcount sequence, and the RCU read lock guarantees only that memory a reader already holds a pointer to won't be *reclaimed* via an RCU-deferred free while that lock is held — it says nothing about a concurrent, *non*-deferred `kfree()` elsewhere. If CPU1's delete path runs in the gap and frees `p` immediately (as the 2017 change made it do), CPU0's subsequent `refcount_inc_not_zero()` touches memory that's already back in the slab allocator's hands.
+実際の隙間は図が示唆するよりも単純である。CPU0はルックアップと参照カウント操作の一連の流れ全体を通じてRCU読み取りロックしか保持しておらず、RCU読み取りロックが保証するのは、読み手がすでにポインタを持っているメモリが、そのロックを保持している間はRCUで遅延された解放によって*回収*されないということだけである — 他の場所での並行する、遅延*されない*`kfree()`については何も言わない。CPU1の削除パスがその隙間で実行されて`p`を即座に解放すると（2017年の変更によってそうなった）、CPU0の後続の`refcount_inc_not_zero()`は、すでにslabアロケータの手に戻ったメモリに触れることになる。
 
-Visually, the actual (not schematic) interleaving:
+実際の（模式的でない）インターリーブを図で示す:
 
 ```mermaid
 sequenceDiagram
@@ -113,57 +113,57 @@ sequenceDiagram
     participant C1 as CPU1 (RTM_DELTFILTER)
     C0->>C0: rcu_read_lock()
     C0->>C0: p = idr_find(idr, index)
-    Note over C0: no mutex held — RCU read lock only
+    Note over C0: mutexは保持していない — RCU読み取りロックのみ
     C1->>C1: refcount_dec_and_mutex_lock() — refcnt 1→0
     C1->>C1: idr_remove(idr, index)
     C1->>C1: mutex_unlock()
     C1->>C1: tcf_action_cleanup(p)
-    C1->>C1: kfree(p) — immediate, no RCU deferral
-    Note over C1: p is freed while CPU0 still holds a pointer to it
+    C1->>C1: kfree(p) — 即時、RCU遅延なし
+    Note over C1: CPU0がまだポインタを保持している間にpが解放される
     C0->>C0: refcount_inc_not_zero(&p->tcfa_refcnt)
-    Note over C0: use-after-free — p is already back in the slab allocator
+    Note over C0: use-after-free — pはすでにslabアロケータに戻っている
     C0->>C0: rcu_read_unlock()
 ```
 
-The 2017 comment's blind spot wasn't about being wrong — its claim was correct for the one reader path it was written about. It just never occurred to anyone that "the readers I have in mind" is a claim that needs revisiting every time a new reader gets added, which is exactly what happened in 2023.
+2017年のコメントの盲点は、間違っていたことではない — その主張は、それが書かれた対象である1つの読み手パスについては正しかった。ただ、「自分が想定している読み手」という主張が、新しい読み手が追加されるたびに見直す必要のあるものだということに誰も思い至らなかっただけであり、2023年に起きたのはまさにそれである。
 
-## How it was found {#how-it-was-found}
+## どのように発見されたか {#how-it-was-found}
 
-**The original report.** Kyle Zeng, a security researcher at OpenAI, reported the race upstream. That attribution rests on two independent sources: the fix commit's own `Reported-by`/`Tested-by` trailers (`kylebot@openai.com`), and Lee Jia Jie's write-up, which separately names "KyleBot" — Zeng's long-standing handle — as the person who had already reported the bug. Neither the commit trailers nor Lee's write-up says how Zeng found it, and there's no public report thread — consistent with a private report made directly to a maintainer, though nothing confirms that.
+**元の報告。** OpenAIのセキュリティ研究者Kyle Zengがこの競合をアップストリームに報告した。この帰属は2つの独立した情報源に基づいている。修正コミット自身の`Reported-by`/`Tested-by`トレーラー（`kylebot@openai.com`）と、Lee Jia Jieの解説記事である。後者は、すでにバグを報告していた人物として、Zengの長年のハンドル名である"KyleBot"を別途名指ししている。コミットのトレーラーもLeeの記事も、Zengがどうやってそれを見つけたかは述べておらず、公開された報告スレッドもない — メンテナに直接行われた非公開の報告と整合的だが、それを裏付けるものは何もない。
 
-The fix commit also credits syzbot, but only as `Tested-by` — confirming the finished patch works, not crediting it as a discoverer of the original race (it did find real bugs in the first version of the fix, covered below); there's no `Reported-by` tag or linked bug report for syzbot finding the race itself. (Zeng re-tested the finished fix too, appearing a second time as `Tested-by`.) The CVE was published June 25, 2026.
+修正コミットはsyzbotもクレジットしているが、それは`Tested-by`としてのみである — 完成したパッチが動作することを確認したのであって、元の競合の発見者としてクレジットしているのではない（修正の最初のバージョンでは実際のバグを見つけており、それについては後述する）。syzbotが競合そのものを見つけたことを示す`Reported-by`タグやリンクされたバグ報告はない。（Zengも完成した修正を再テストしており、`Tested-by`として二度目の登場をしている。）CVEは2026年6月25日に公開された。
 
-**The independent 0-day.** Lee Jia Jie, an intern at STAR Labs (Singapore), was hunting kernel bugs with AI assistance ahead of **[TyphoonPwn 2026](https://typhooncon.com/typhoonpwn-2026/)** — a multi-category exploit competition held May 28, 2026, per Lee's own account. Linux local-privilege-escalation was the track they were targeting, and they found the same race in `net/sched` on their own, building it into a working local-root exploit before the competition.
+**独立した0-day。** STAR Labs（シンガポール）のインターンLee Jia Jieは、**[TyphoonPwn 2026](https://typhooncon.com/typhoonpwn-2026/)** — Lee自身の説明によれば2026年5月28日に開催された複数カテゴリのエクスプロイト競技会 — に向けて、AIの支援を受けながらカーネルのバグを探していた。狙っていたのはLinuxのローカル権限昇格部門で、`net/sched`の同じ競合を独自に見つけ、競技会の前に実際に動作するローカルroot取得エクスプロイトに仕上げた。
 
-A few days after the competition, someone told Lee that *"KyleBot had already reported the bug 2 days before TyphoonPwn."* On that secondhand account, Zeng's report came two days before the competition — which says nothing about when Lee found the bug, only that it was earlier still.
+競技会の数日後、ある人がLeeに*"KyleBot had already reported the bug 2 days before TyphoonPwn."*（訳: KyleBotはTyphoonPwnの2日前にすでにそのバグを報告していた。）と伝えた。この伝聞によれば、Zengの報告は競技会の2日前だった — これはLeeがいつバグを見つけたかについては何も語らず、それがさらに前だったということを示すだけである。
 
-Lee's write-up, published July 27, 2026 and titled ["When AI Makes 0-Days Feel Like N-Days"](https://starlabs.sg/blog/2026/07-when-ai-makes-0-days-feel-like-n-days/), independently confirms the same root cause: *"The vulnerability is a lock-mismatch: `tcf_idr_check_alloc()` accesses the action idr with only `rcu_read_lock()`, while actions are freed with `idrinfo->lock` and `rtnl_lock()` held, but without waiting for the RCU grace period (i.e. raw kfree)."*
+2026年7月27日に公開されたLeeの解説記事["When AI Makes 0-Days Feel Like N-Days"](https://starlabs.sg/blog/2026/07-when-ai-makes-0-days-feel-like-n-days/)は、同じ根本原因を独自に確認している: *"The vulnerability is a lock-mismatch: `tcf_idr_check_alloc()` accesses the action idr with only `rcu_read_lock()`, while actions are freed with `idrinfo->lock` and `rtnl_lock()` held, but without waiting for the RCU grace period (i.e. raw kfree)."*（訳: この脆弱性はロックの不整合である。`tcf_idr_check_alloc()`は`rcu_read_lock()`だけでアクションのidrにアクセスする一方、アクションは`idrinfo->lock`と`rtnl_lock()`を保持した状態で、しかしRCUグレースピリオドを待たずに（つまり生のkfreeで）解放される。）
 
-Lee describes using AI to speed up three tasks — finding the bug itself, producing a KASAN proof-of-concept, and improving the race condition as a whole — without saying which part of that process AI actually helped most with.
+Leeは、AIを使って3つの作業 — バグそのものの発見、KASANの概念実証の作成、そして競合状態全体の改善 — を加速したと述べているが、その過程のどの部分でAIが最も役立ったかは述べていない。
 
-## The impact {#the-impact}
+## 影響 {#the-impact}
 
-The full chain went well past triggering the UAF: reclaiming the freed `tc_action` memory with an attacker-controlled `user_key_payload` object to hijack a function pointer, a stack pivot from a controlled heap buffer, and a kernel-version-specific ROP chain that overwrites [`core_pattern`](https://docs.kernel.org/admin-guide/sysctl/kernel.html#core-pattern) to gain root execution through the core-dump handler — a working local-root exploit, not just a crash.
+完全なチェーンはUAFを引き起こすだけにとどまらなかった。解放された`tc_action`のメモリを攻撃者が制御する`user_key_payload`オブジェクトで再取得して関数ポインタを乗っ取り、制御下のヒープバッファからスタックピボットを行い、カーネルバージョン固有のROPチェーンで[`core_pattern`](https://docs.kernel.org/admin-guide/sysctl/kernel.html#core-pattern)を上書きして、コアダンプハンドラを通じてroot権限での実行を得る — 単なるクラッシュではなく、実際に動作するローカルroot取得エクスプロイトである。
 
-It requires unprivileged user namespaces to be available, the `CONFIG_NET_ACT_GACT` and `CONFIG_NET_CLS_FLOWER` kernel options, and hardcoded per-kernel-version offsets in the ROP chain, so it's a local privilege-escalation primitive, not something portable or remotely triggerable as published.
+非特権user namespaceが利用可能であること、`CONFIG_NET_ACT_GACT`と`CONFIG_NET_CLS_FLOWER`のカーネルオプション、そしてROPチェーン内のカーネルバージョンごとにハードコードされたオフセットが必要であるため、公開されたものはローカル権限昇格のプリミティブであって、移植性があるものでもリモートから引き起こせるものでもない。
 
-Winning the underlying race got substantially faster over several iterations: naive attempts to win the CPU0/CPU1 race took over 15 minutes. After widening the window with a `timerfd`/`epoll` technique, splitting the attempt across separate chains with separate mutexes, and restructuring it into dedicated "binder" and "deleter" threads, the time needed to actually win the race dropped to around 5 seconds (Lee notes this could likely be reduced further using multiple action indexes).
+根底にある競合に勝つまでの時間は、何度かの改良を経て大幅に短くなった。CPU0/CPU1の競合に勝とうとする素朴な試みでは15分以上かかった。`timerfd`/`epoll`の手法で窓を広げ、試行を別々のmutexを持つ別々のチェーンに分割し、専用の"binder"スレッドと"deleter"スレッドに再構成した後、実際に競合に勝つのに必要な時間は約5秒にまで下がった（Leeは、複数のアクションインデックスを使えばさらに短縮できるだろうと述べている）。
 
-That's a different measurement from how long the finished exploit takes end-to-end: in a separate 10-run benchmark of the complete chain (a CentOS 9 desktop on an Intel i5-1235U laptop), all 10 runs succeeded, taking 10, 10, 9, 11, 11, 111, 64, 69, 47, and 10 seconds; Lee attributes the slower outliers to CPU thermal throttling.
+これは、完成したエクスプロイトが端から端までにかかる時間とは別の測定値である。完全なチェーンの別個の10回のベンチマーク（Intel i5-1235UのノートPC上のCentOS 9デスクトップ）では、10回すべてが成功し、所要時間は10、10、9、11、11、111、64、69、47、10秒だった。Leeは遅い外れ値をCPUの熱によるスロットリングによるものとしている。
 
-## How it was fixed {#how-it-was-fixed}
+## どのように修正されたか {#how-it-was-fixed}
 
-**The first attempt didn't work.** Salim's initial patch ([v1](https://ratatoskr.run/netdev/2026/05/17064743/t), posted May 30, 2026) took the same general shape as the code it was reverting to: defer the free with an explicit `call_rcu()` callback, `tcf_action_rcu_free()`, that ran the full cleanup — including `tcf_action_cleanup()` — after the grace period elapsed.
+**最初の試みはうまくいかなかった。** Salimの最初のパッチ（[v1](https://ratatoskr.run/netdev/2026/05/17064743/t)、2026年5月30日投稿）は、戻そうとしていたコードと同じ大まかな形をとった。明示的な`call_rcu()`コールバック`tcf_action_rcu_free()`で解放を遅延させ、グレースピリオド経過後に`tcf_action_cleanup()`を含む完全なクリーンアップを実行するというものである。
 
-Syzbot's automated testing caught two real problems with that design within hours. `tcf_action_rcu_free()` called `__tcf_chain_put()`, which tries to acquire a mutex — but RCU callbacks run in softirq context, where sleeping isn't allowed, producing a "sleeping function called from invalid context" report whose trace lands on `__tcf_chain_put()`, `net/sched/cls_api.c:694`. A second lockdep warning fired on `mirred_list_lock`, a spinlock that `tcf_mirred_release()` (reached through the same cleanup path) had previously only ever taken from process context, now being taken from inside a softirq — exactly the context an RCU callback runs in.
+syzbotの自動テストは、数時間のうちにその設計の2つの本物の問題を検出した。`tcf_action_rcu_free()`は`__tcf_chain_put()`を呼び、これはmutexを取得しようとする — しかしRCUコールバックはスリープが許されないsoftirqコンテキストで実行されるため、"sleeping function called from invalid context"の報告が出て、そのトレースは`__tcf_chain_put()`、`net/sched/cls_api.c:694`に行き着いた。2つ目のlockdep警告は`mirred_list_lock`で発生した。これは`tcf_mirred_release()`（同じクリーンアップパスから到達する）がそれまでプロセスコンテキストからしか取得していなかったspinlockで、それがsoftirqの内部から — まさにRCUコールバックが実行されるコンテキストから — 取得されるようになっていた。
 
-Salim's reply was short: *"Thanks for finding this. Will send a v2 with a fix."*
+Salimの返信は短かった: *"Thanks for finding this. Will send a v2 with a fix."*（訳: 見つけてくれてありがとう。修正したv2を送る。）
 
-The [v2](https://ratatoskr.run/netdev/2026/05/17069560/t) — the version that merged as commit [`5057e1aca011`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5057e1aca011e51ef51498c940ef96f3d3e8a305) (Jamal Hadi Salim; authored May 31 2026, committed June 1, landed in v7.1-rc7) — fixed this by moving `tcf_action_cleanup()` out of the deferred path entirely, running it synchronously before scheduling the RCU-deferred free, and simplifying the callback itself down to a plain `kfree_rcu(p, tcfa_rcu)` that does nothing but release memory. Nothing that needs a mutex, or a spinlock taken with the wrong IRQ state, runs in RCU-callback context in the version that shipped. The commit restores `struct rcu_head tcfa_rcu` to `struct tc_action` and is explicitly framed as a revert of 2017's `d7fb60b9cafb` combined with a modernization (the original used an explicit `call_rcu()` callback; the fix uses `kfree_rcu()` directly). Suggested-by Jakub Kicinski; reviewed by Pedro Tammela, Eric Dumazet, and Victor Nogueira; tested by Kyle Zeng, syzbot, and Victor Nogueira.
+[v2](https://ratatoskr.run/netdev/2026/05/17069560/t) — コミット[`5057e1aca011`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5057e1aca011e51ef51498c940ef96f3d3e8a305)としてマージされたバージョン（Jamal Hadi Salim。2026年5月31日作成、6月1日コミット、v7.1-rc7に取り込み）— は、`tcf_action_cleanup()`を遅延パスから完全に外し、RCUで遅延された解放をスケジュールする前に同期的に実行するようにし、コールバック自体をメモリを解放する以外に何もしない単純な`kfree_rcu(p, tcfa_rcu)`にまで簡素化することでこれを修正した。出荷されたバージョンでは、mutexを必要とするものや、誤ったIRQ状態で取得されるspinlockは、RCUコールバックのコンテキストで一切実行されない。このコミットは`struct tc_action`に`struct rcu_head tcfa_rcu`を復活させ、2017年の`d7fb60b9cafb`のrevertと近代化（元のコードは明示的な`call_rcu()`コールバックを使っていたが、修正は`kfree_rcu()`を直接使う）を組み合わせたものとして明示的に位置付けられている。Suggested-byはJakub Kicinski、レビューはPedro Tammela、Eric Dumazet、Victor Nogueira、テストはKyle Zeng、syzbot、Victor Nogueiraである。
 
-With the free deferred, timing determines which of three things happens: `idr_find()` finds a still-live object and `refcount_inc_not_zero()` succeeds normally; the object is already unlinked from the IDR and `idr_find()` correctly returns `NULL`; or — the case the diagram above shows — `idr_find()` succeeds just before removal, but by the time `refcount_inc_not_zero()` runs the refcount has already dropped to zero, so it correctly fails and the caller retries with `-EAGAIN`. In every case, the memory itself, even if a stale pointer to it exists somewhere, isn't actually released until the RCU grace period elapses, so there's no window left in which a refcount operation can touch freed memory.
+解放が遅延されると、タイミングによって次の3つのうちどれかが起きる。`idr_find()`がまだ生きているオブジェクトを見つけ、`refcount_inc_not_zero()`が通常どおり成功する。オブジェクトがすでにIDRからリンク解除されていて、`idr_find()`が正しく`NULL`を返す。あるいは — 上の図が示すケース — `idr_find()`は削除の直前に成功するが、`refcount_inc_not_zero()`が実行される時点では参照カウントがすでに0に落ちているため、正しく失敗し、呼び出し元は`-EAGAIN`で再試行する。どの場合でも、メモリ自体は、たとえどこかに古いポインタが存在していても、RCUグレースピリオドが経過するまで実際には解放されないので、参照カウント操作が解放済みメモリに触れうる窓はもう残っていない。
 
-The same interleaving, after the fix:
+修正後の同じインターリーブ:
 
 ```mermaid
 sequenceDiagram
@@ -174,46 +174,46 @@ sequenceDiagram
     C1->>C1: refcount_dec_and_mutex_lock() — refcnt 1→0
     C1->>C1: idr_remove(idr, index)
     C1->>C1: mutex_unlock()
-    C1->>C1: tcf_action_cleanup(p) — now runs synchronously, not deferred
-    C1->>C1: kfree_rcu(p, tcfa_rcu) — only the free itself is deferred
-    Note over C0,C1: p's memory is still valid — CPU0 is inside an RCU read-side section
-    C0->>C0: refcount_inc_not_zero(&p->tcfa_refcnt) — reads live memory, returns false
+    C1->>C1: tcf_action_cleanup(p) — 遅延されず、同期的に実行されるようになった
+    C1->>C1: kfree_rcu(p, tcfa_rcu) — 遅延されるのは解放そのものだけ
+    Note over C0,C1: pのメモリはまだ有効 — CPU0はRCU読み取り側クリティカルセクション内にいる
+    C0->>C0: refcount_inc_not_zero(&p->tcfa_refcnt) — 生きたメモリを読み、falseを返す
     C0->>C0: rcu_read_unlock()
-    Note over C0: caller gets -EAGAIN and retries — no use-after-free
+    Note over C0: 呼び出し元は-EAGAINを受け取り再試行する — use-after-freeは起きない
 ```
 
-`net/sched/act_api.c` at the `v7.0` tag still has the unconditional `kfree(p)`; current mainline has the restored `kfree_rcu(p, tcfa_rcu)` — consistent with public reporting that pins the mainline landing to `7.1-rc7`. The fix was backported separately to each affected stable branch as seven distinct commits — `98b2e40879ab`, `18af5d2ef0c4`, `1f1b98fea6b9`, `8b136f18ac4b`, `5dd51e09020c`, `b60e9391142e`, and `91d105d2cbe0`, covering 5.10.259, 5.15.210, 6.1.176, 6.6.143, 6.12.94, 6.18.36, and 7.0.13 — each one carrying its own `[ Upstream commit 5057e1aca011... ]` tag, and the `98b2e40879ab` backport's sign-off chain ends with Sasha Levin's stable-tree sign-off, as is standard for these backports.
+`v7.0`タグの`net/sched/act_api.c`にはまだ無条件の`kfree(p)`があり、現在のメインラインには復活した`kfree_rcu(p, tcfa_rcu)`がある — メインラインへの取り込みを`7.1-rc7`とする公開報道と整合的である。修正は影響を受ける各stableブランチに7つの別個のコミットとして個別にバックポートされた — `98b2e40879ab`、`18af5d2ef0c4`、`1f1b98fea6b9`、`8b136f18ac4b`、`5dd51e09020c`、`b60e9391142e`、`91d105d2cbe0`で、それぞれ5.10.259、5.15.210、6.1.176、6.6.143、6.12.94、6.18.36、7.0.13に対応する — 各コミットはそれぞれ`[ Upstream commit 5057e1aca011... ]`タグを持ち、`98b2e40879ab`のバックポートのsign-offチェーンは、この種のバックポートでは標準的なとおり、Sasha Levinによるstableツリーのsign-offで終わっている。
 
-## What it taught us {#what-it-taught-us}
+## 得られた教訓 {#what-it-taught-us}
 
-**An RCU-safety argument has to cover every reader path that will ever exist, not just the ones that exist when it's written.** The 2017 reasoning wasn't wrong about filter-chain traversal, and it wasn't wrong about the IDR either — *at the time*, direct IDR lookups were still mutex-protected, so no RCU-only reader existed to violate the assumption. Six years later, an unrelated scalability fix added exactly that reader, and nobody went back to check whether the 2017 comment's guarantee still held.
+**RCU安全性の論証は、それが書かれた時点で存在する読み手パスだけでなく、今後存在しうるすべての読み手パスをカバーしなければならない。** 2017年の推論はフィルタチェーンの走査について間違っていなかったし、IDRについても間違っていなかった — *当時は*、IDRの直接ルックアップはまだmutexで保護されていたので、前提を破るRCUのみの読み手は存在しなかった。6年後、無関係なスケーラビリティ修正がまさにその読み手を追加し、2017年のコメントの保証がまだ成り立つかどうかを誰も確認しに戻らなかった。
 
-**A correctness comment is a claim that ages, silently, along with the code around it — including code changed by someone who never saw the comment.** Nothing about the 2017 change or the 2023 change looked unsafe in isolation; each was a reasonable fix to the problem in front of its author. The bug only exists at their intersection, which is exactly the kind of thing neither author had reason to go looking for.
+**正しさに関するコメントは、周囲のコードとともに静かに古びていく主張である — そのコメントを見たこともない人が変更したコードも含めて。** 2017年の変更も2023年の変更も、単独では危険に見えるところは何もなかった。どちらも作者の目の前の問題に対する妥当な修正だった。バグはそれらの交差点にだけ存在し、それはまさにどちらの作者にも探しに行く理由のなかった種類のものである。
 
-**Two independent efforts surfaced the same bug for unrelated reasons.** Kyle Zeng reported it upstream through normal channels; Lee Jia Jie found it separately while hunting for a competition, using AI to help, and only learned afterward that the same bug had already been reported. That's not evidence this bug was unusually easy to find — but it's a reminder that a race window open for a couple of years, in a widely-used networking subsystem, can attract more than one independent search effort, run without either side coordinating with the other.
+**2つの独立した取り組みが、無関係な理由で同じバグを表面化させた。** Kyle Zengは通常の経路でアップストリームに報告し、Lee Jia Jieは競技会に向けた探索の中でAIの助けを借りて別個にそれを見つけ、同じバグがすでに報告されていたことを後になって知った。これはこのバグが特に見つけやすかったことの証拠ではない — しかし、広く使われているネットワークサブシステムで数年間開いていた競合の窓は、互いに連携することなく行われる複数の独立した探索を引き寄せうるということを思い起こさせる。
 
-**Even a well-reasoned fix can ship with a real bug, and automated testing is what catches it before it merges.** Salim's first attempt at the fix introduced exactly the kind of problem RCU callbacks are notorious for — code that assumes it can sleep or take a lock from a context where it can't. Syzbot found both issues within hours of the v1 posting, before it ever reached a released kernel.
+**十分に考え抜かれた修正でも本物のバグを含んだまま出荷されうるし、マージ前にそれを捉えるのは自動テストである。** Salimの最初の修正の試みは、まさにRCUコールバックで悪名高い種類の問題 — スリープやロック取得ができないコンテキストで、それができると仮定するコード — を持ち込んだ。syzbotはv1の投稿から数時間以内に両方の問題を見つけ、それがリリースされたカーネルに届くことはなかった。
 
-**AI made 0-day hunting feel, procedurally, like n-day analysis — in the researcher's own words.** Lee's account doesn't claim AI found or exploited the bug autonomously: they credit it for iterating quickly on discovery, a proof-of-concept, and improving the race condition, while stressing that their own judgment was still necessary to fine-tune the result. The claim is narrower than "AI raced to exploit an already-patched bug": AI let Lee — on their first real exposure to the Linux kernel — focus on the hunting process itself rather than deep subsystem study, in their own words: *"In a sense, this made it feel more like I was doing n-day analysis even on new bugs."* Their own caveat runs the other way, though: they say deep subsystem knowledge is still what surfaces the ideas AI overlooks.
+**AIは0-dayの探索を、手順の面でn-dayの分析のように感じさせた — 研究者自身の言葉によれば。** Leeの説明は、AIが自律的にバグを見つけたり悪用したりしたとは主張していない。発見、概念実証、競合状態の改善を素早く繰り返せたことをAIの功績としつつも、結果を微調整するには自分自身の判断が依然として必要だったと強調している。主張は「AIがすでにパッチ済みのバグの悪用に向けて競走した」よりも狭い。AIのおかげでLeeは — Linuxカーネルに本格的に触れるのはこれが初めてだったが — サブシステムを深く研究するよりも探索のプロセスそのものに集中できた。本人の言葉では: *"In a sense, this made it feel more like I was doing n-day analysis even on new bugs."*（訳: ある意味で、新しいバグであってもn-dayの分析をしているような感覚になった。）ただし本人の但し書きは逆方向を向いている。AIが見落とすアイデアを浮かび上がらせるのは、依然としてサブシステムの深い知識だというのである。
 
-!!! warning "Pattern to watch for"
-    Any refcounted object reachable through both an RCU-read-locked lookup (an IDR, a hash table, an RCU-protected list) and a mutex-protected removal path needs the *free itself* deferred with `call_rcu()`/`kfree_rcu()` — a lock around removal doesn't help a lookup that only ever took the RCU read lock. If a comment justifies skipping deferred freeing by saying "readers can only reach this through path X, and X is already safe," audit every other path that can reach the same object before trusting it — not just the one the comment's author had in mind. That audit isn't a one-time check, either: if a later, unrelated change adds a *new* reader path to the same object — exactly what happened here, six years on — it needs to be checked against every existing safety comment that assumed a fixed set of readers, not just reviewed for correctness on its own terms.
+!!! warning "注意すべきパターン"
+    RCU読み取りロックを取るルックアップ（IDR、ハッシュテーブル、RCUで保護されたリスト）と、mutexで保護された削除パスの両方から到達可能な参照カウント付きオブジェクトは、*解放そのもの*を`call_rcu()`/`kfree_rcu()`で遅延させる必要がある — 削除を囲むロックは、RCU読み取りロックしか取らないルックアップの助けにはならない。遅延解放を省略することを「読み手はパスXを通してしかここに到達できず、Xはすでに安全だ」と言って正当化しているコメントがあれば、それを信頼する前に、同じオブジェクトに到達しうる他のすべてのパスを監査すること — コメントの作者が想定していたパスだけでなく。その監査は一度きりの確認でもない。後の無関係な変更が同じオブジェクトへの*新しい*読み手パスを追加した場合 — まさにここで6年後に起きたように — それは単体での正しさをレビューするだけでなく、固定された読み手の集合を前提としていた既存のすべての安全性コメントに照らして確認する必要がある。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Traffic Control and Queueing Disciplines](../tc-qdisc.md) — the `tc` filter/action architecture this bug lives in
-- [Netlink Sockets](../netlink.md) — how `RTM_NEWTFILTER`/`RTM_DELTFILTER` requests reach the kernel
-- [Network Namespaces](../net-namespaces.md) — how unprivileged user+network namespaces expose the capabilities this exploit needs
-- [AF_PACKET TPACKET_V3 Privilege Escalation](af-packet.md) — another local UAF-to-root chain in this collection, for comparison
+- [トラフィック制御とキューイング規律](../tc-qdisc.md) — このバグが存在する`tc`のフィルタ／アクションのアーキテクチャ
+- [Netlinkソケット](../netlink.md) — `RTM_NEWTFILTER`/`RTM_DELTFILTER`のリクエストがどのようにカーネルに届くか
+- [ネットワークnamespace](../net-namespaces.md) — 非特権のuser+network namespaceが、このエクスプロイトが必要とするケーパビリティをどのように公開するか
+- [AF_PACKET TPACKET_V3の権限昇格](af-packet.md) — 比較のための、このコレクションにあるもう1つのローカルUAFからrootへのチェーン
 
-## External references {#external-references}
+## 外部参考資料 {#external-references}
 
 - [git.kernel.org: 5057e1aca011](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=5057e1aca011e51ef51498c940ef96f3d3e8a305) — "net/sched: act_api: use RCU with deferred freeing for action lifecycle"
-- [git.kernel.org: d7fb60b9cafb](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d7fb60b9cafb982cb2e46a267646a8dfd4f2e5da) — "net_sched: get rid of tcfa_rcu", the 2017 change this fix reverts
-- [git.kernel.org: 4b55e86736d5](https://git.kernel.org/linus/4b55e86736d5) — "net/sched: act_api: rely on rcu in tcf_idr_check_alloc", the December 2023 scalability fix that introduced the RCU-only reader the 2017 change hadn't accounted for
-- [netdev: \[PATCH net 1/1\] net/sched: act_api: use RCU... (v1)](https://ratatoskr.run/netdev/2026/05/17064743/t) — the first attempt at the fix, before syzbot found its RCU-callback locking bugs
-- [netdev: \[PATCH net v2 1/1\] net/sched: act_api: use RCU... (v2)](https://ratatoskr.run/netdev/2026/05/17069560/t) — the corrected version that merged as `5057e1aca011`
-- [STAR Labs: When AI Makes 0-Days Feel Like N-Days](https://starlabs.sg/blog/2026/07-when-ai-makes-0-days-feel-like-n-days/) — Lee Jia Jie's own account of finding this bug and building a working exploit for it as a 0-day, including the AI-assisted race-window timing data
-- [star-sg/CVE: CVE-2026-53264](https://github.com/star-sg/CVE/tree/master/CVE-2026-53264) — Lee Jia Jie's full published exploit source
-- [The Hacker News: Researcher Says AI Helped Develop Linux Traffic-Control Race Into Root Exploit](https://thehackernews.com/2026/07/researcher-says-ai-helped-develop-linux.html) — secondary coverage of the write-up
-- [Red Hat: CVE-2026-53264](https://access.redhat.com/security/cve/cve-2026-53264) — CVE description and Red Hat's own CVSS scoring
+- [git.kernel.org: d7fb60b9cafb](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d7fb60b9cafb982cb2e46a267646a8dfd4f2e5da) — "net_sched: get rid of tcfa_rcu"。この修正がrevertした2017年の変更
+- [git.kernel.org: 4b55e86736d5](https://git.kernel.org/linus/4b55e86736d5) — "net/sched: act_api: rely on rcu in tcf_idr_check_alloc"。2017年の変更が考慮していなかったRCUのみの読み手を導入した、2023年12月のスケーラビリティ修正
+- [netdev: \[PATCH net 1/1\] net/sched: act_api: use RCU... (v1)](https://ratatoskr.run/netdev/2026/05/17064743/t) — syzbotがRCUコールバックのロックのバグを見つける前の、修正の最初の試み
+- [netdev: \[PATCH net v2 1/1\] net/sched: act_api: use RCU... (v2)](https://ratatoskr.run/netdev/2026/05/17069560/t) — `5057e1aca011`としてマージされた修正版
+- [STAR Labs: When AI Makes 0-Days Feel Like N-Days](https://starlabs.sg/blog/2026/07-when-ai-makes-0-days-feel-like-n-days/) — このバグを発見し、0-dayとして実際に動作するエクスプロイトを構築したLee Jia Jie自身の説明。AI支援による競合の窓のタイミングデータを含む
+- [star-sg/CVE: CVE-2026-53264](https://github.com/star-sg/CVE/tree/master/CVE-2026-53264) — Lee Jia Jieが公開したエクスプロイトの完全なソース
+- [The Hacker News: Researcher Says AI Helped Develop Linux Traffic-Control Race Into Root Exploit](https://thehackernews.com/2026/07/researcher-says-ai-helped-develop-linux.html) — 解説記事についての二次報道
+- [Red Hat: CVE-2026-53264](https://access.redhat.com/security/cve/cve-2026-53264) — CVEの説明とRed Hat独自のCVSS評価

@@ -1,90 +1,90 @@
-# x86 Architecture War Stories {#x86-architecture-war-stories}
+# x86アーキテクチャの事件簿 {#x86-architecture-war-stories}
 
-> Real incidents: KPTI regression, TSC drift, SYSRET bug, and more
+> 実際のインシデント: KPTIのリグレッション、TSCのドリフト、SYSRETのバグなど
 
-The x86 architecture's complexity — decades of backward compatibility, microarchitectural quirks, and hardware-software interface subtleties — produces a steady stream of real-world incidents. These are five such incidents drawn from public kernel commit logs, CVE disclosures, LWN articles, and vendor advisories. Each had measurable impact on production systems.
+x86アーキテクチャの複雑さ（数十年にわたる後方互換性、マイクロアーキテクチャ上の癖、ハードウェアとソフトウェアのインターフェースの微妙な点）は、現実のインシデントを絶え間なく生み出している。ここで取り上げるのは、公開されているカーネルのコミットログ、CVEの開示情報、LWNの記事、ベンダーのアドバイザリから集めた5つのインシデントである。いずれも本番システムに測定可能な影響を与えた。
 
 ---
 
-## Case 1: KPTI performance regression on database workloads {#case-1-kpti-performance-regression-on-database-workloads}
+## 事例1: データベースワークロードにおけるKPTIの性能リグレッション {#case-1-kpti-performance-regression-on-database-workloads}
 
-### Before state {#before-state}
+### 以前の状態 {#before-state}
 
-When KPTI (Kernel Page Table Isolation) shipped in Linux 4.15 in January 2018, it was an urgent Meltdown fix that had to land quickly. The mitigation was correct and effective, but its performance implications were not fully characterized before release.
+2018年1月にKPTI（Kernel Page Table Isolation）がLinux 4.15で出荷されたとき、それは急いで投入しなければならない緊急のMeltdown修正だった。緩和策は正しく効果的だったが、その性能への影響はリリース前に十分に把握されていなかった。
 
-PostgreSQL, MySQL, and other database servers make system calls at very high rates: `read()`, `write()`, `lseek()`, `fsync()`, `futex()` on hot paths. A PostgreSQL instance processing OLTP transactions might execute hundreds of thousands of syscalls per second per core.
+PostgreSQL、MySQLなどのデータベースサーバーは、非常に高い頻度でシステムコールを発行する。ホットパス上では`read()`、`write()`、`lseek()`、`fsync()`、`futex()`が呼ばれる。OLTPトランザクションを処理するPostgreSQLインスタンスは、コアあたり毎秒数十万回のsyscallを実行することもある。
 
-### The regression {#the-regression}
+### リグレッション {#the-regression}
 
-Teams running PostgreSQL 10 on Linux 4.15 immediately after the kernel upgrade reported throughput drops of **15–30%** on TPC-B-like benchmarks. The regression was not in any PostgreSQL code — the workload was identical. The kernel upgrade alone caused it.
+カーネルのアップグレード直後にLinux 4.15上でPostgreSQL 10を動かしていたチームは、TPC-B相当のベンチマークで**15〜30%**のスループット低下を報告した。リグレッションはPostgreSQLのコードにはなく、ワークロードもまったく同じだった。カーネルのアップグレードだけが原因だった。
 
-### Diagnosis {#diagnosis}
+### 診断 {#diagnosis}
 
-`perf stat` told the story:
+`perf stat`が事情を物語っていた。
 
 ```bash
 perf stat -e dTLB-load-misses,iTLB-load-misses,cycles \
           -p $(pgrep postgres | head -1) sleep 10
 
-# Before KPTI: dTLB-load-misses ~0.1% of loads
-# After  KPTI: dTLB-load-misses ~8-15% of loads (TLB is being trashed)
+# KPTI前: dTLB-load-misses はロードの約0.1%
+# KPTI後: dTLB-load-misses はロードの約8-15%（TLBが荒らされている）
 ```
 
-`perf record` with stack traces showed time concentrated in `native_write_cr3()` and the entry/exit trampoline code — the CR3-switching overhead. Each syscall required two CR3 loads (user PGD → kernel PGD on entry, kernel PGD → user PGD on exit), each of which flushed the TLB on CPUs without PCID.
+スタックトレース付きの`perf record`では、時間が`native_write_cr3()`とエントリ/イグジットのトランポリンコード、つまりCR3切り替えのオーバーヘッドに集中していることが示された。各syscallでは2回のCR3ロード（エントリ時にユーザーPGD → カーネルPGD、イグジット時にカーネルPGD → ユーザーPGD）が必要で、PCIDを持たないCPUではそのたびにTLBがフラッシュされていた。
 
-The fundamental issue: without PCID, every CR3 load on entry/exit discards all TLB entries for the current CPU. A PostgreSQL worker doing 200,000 syscalls/second was refilling the TLB 400,000 times/second per core.
+根本的な問題は次のとおりである。PCIDがなければ、エントリ/イグジット時のCR3ロードのたびに、そのCPUのTLBエントリがすべて破棄される。毎秒200,000回のsyscallを行うPostgreSQLワーカーは、コアあたり毎秒400,000回TLBを埋め直していたことになる。
 
-### Root cause {#root-cause}
+### 根本原因 {#root-cause}
 
-KPTI was designed with the PCID optimization in mind but it could only be used on CPUs that also support `INVPCID`. The initial KPTI implementation fell back to the slower (full TLB flush) path on CPUs that have PCID but lack `INVPCID` — which included some production Haswell server CPUs.
+KPTIはPCID最適化を念頭に置いて設計されていたが、その最適化は`INVPCID`もサポートするCPUでしか使えなかった。初期のKPTI実装は、PCIDを持つが`INVPCID`を欠くCPUでは低速な（TLB全体をフラッシュする）パスにフォールバックしていた。そこには本番で使われていた一部のHaswellサーバーCPUも含まれていた。
 
-Even on CPUs with full PCID+INVPCID support, the KPTI PCID optimization (the dual-ASID scheme using kernel PCID = user ASID | 0x80, i.e., bit 7 set) was not enabled by default in the very first KPTI patches and had to be explicitly enabled and then auto-detected.
+PCID+INVPCIDを完全にサポートするCPUであっても、KPTIのPCID最適化（カーネルPCID = ユーザーASID | 0x80、つまりbit 7を立てるデュアルASID方式）は、最初期のKPTIパッチではデフォルトで有効になっておらず、明示的に有効化し、その後自動検出されるようにする必要があった。
 
-### Fix {#fix}
+### 修正 {#fix}
 
-The PCID optimization was refined and verified across CPU generations. For CPUs with PCID+INVPCID support, the kernel:
+PCID最適化は改良され、各世代のCPUで検証された。PCID+INVPCIDをサポートするCPUでは、カーネルは次のように動作する。
 
-1. Assigns each process two PCIDs: one for the user PGD (e.g., PCID 5) and one for the kernel PGD (e.g., PCID 5 | 0x80 = 133)
-2. Loads CR3 with `bit 63 = 1` (no TLB flush) when switching between the two PGDs for the same process — because the TLB entries tagged with the old PCID remain valid
-3. Uses `INVPCID` to selectively invalidate entries when required (e.g., after `munmap`)
+1. 各プロセスに2つのPCIDを割り当てる。1つはユーザーPGD用（例: PCID 5）、もう1つはカーネルPGD用（例: PCID 5 | 0x80 = 133）
+2. 同じプロセスの2つのPGD間で切り替えるときは、`bit 63 = 1`（TLBフラッシュなし）でCR3をロードする。古いPCIDでタグ付けされたTLBエントリは有効なままだからである
+3. 必要なとき（例: `munmap`の後）には`INVPCID`を使ってエントリを選択的に無効化する
 
-With the PCID optimization, the KPTI overhead on syscall-heavy workloads dropped to approximately 5%.
+PCID最適化により、syscallの多いワークロードでのKPTIのオーバーヘッドは約5%まで低下した。
 
-### Checking the current state {#checking-the-current-state}
+### 現在の状態を確認する {#checking-the-current-state}
 
 ```bash
-# Is KPTI active?
+# KPTIは有効か?
 cat /sys/devices/system/cpu/vulnerabilities/meltdown
-# "Mitigation: PTI"  = KPTI on
-# "Not affected"     = CPU immune, no KPTI needed
+# "Mitigation: PTI"  = KPTI有効
+# "Not affected"     = CPUは影響を受けず、KPTI不要
 
-# Is PCID being used? (check for PCID in CPU flags)
+# PCIDは使われているか?（CPUフラグにPCIDがあるか確認）
 grep pcid /proc/cpuinfo
 
-# KPTI + PCID optimization — look in dmesg
+# KPTI + PCID最適化 — dmesgを確認
 dmesg | grep -i "pcid\|pti\|kpti"
 
-# Measure syscall overhead directly
+# syscallのオーバーヘッドを直接測定
 time (for i in $(seq 100000); do true; done)
 ```
 
-### What it taught us {#what-it-taught-us}
+### 教訓 {#what-it-taught-us}
 
-Correctness-first security fixes can have severe performance consequences on specific workloads. The PCID optimization was known in advance but could not be validated across all CPU generations under production load before the January 2018 embargo lifted. Subsequent kernel releases (4.15.x, 4.16) refined the PCID path. This incident led to better benchmarking practices for security mitigations and more focus on CPU-model-specific fallbacks.
+正しさを優先したセキュリティ修正は、特定のワークロードで深刻な性能低下を招くことがある。PCID最適化は事前に知られていたが、2018年1月のエンバーゴ解除までに、本番負荷のもとで全世代のCPUにわたって検証することはできなかった。その後のカーネルリリース（4.15.x、4.16）でPCIDパスが改良された。このインシデントをきっかけに、セキュリティ緩和策のベンチマーク手法が改善され、CPUモデル固有のフォールバックにより注意が払われるようになった。
 
 ---
 
-## Case 2: TSC drift on multi-socket systems {#case-2-tsc-drift-on-multi-socket-systems}
+## 事例2: マルチソケットシステムにおけるTSCのドリフト {#case-2-tsc-drift-on-multi-socket-systems}
 
-### Before state {#before-state_1}
+### 以前の状態 {#before-state_1}
 
-The **TSC** (Time Stamp Counter) is an x86 register that increments at a fixed rate (on modern CPUs, the "invariant TSC" from CPUID leaf 0x80000007). It is the cheapest way to get a timestamp — a single `RDTSC` instruction with no kernel call overhead.
+**TSC**（Time Stamp Counter）は、一定のレートでインクリメントされるx86のレジスタである（最近のCPUでは、CPUID leaf 0x80000007で示される「invariant TSC」）。タイムスタンプを取得する最も安価な方法であり、カーネル呼び出しのオーバーヘッドなしに`RDTSC`命令1つで済む。
 
-The Linux kernel uses the TSC as the primary clocksource (`clocksource=tsc`) on systems where it is deemed reliable. The vDSO's `clock_gettime(CLOCK_REALTIME)` reads from vvar data that is seqlock-protected and TSC-based — all in userspace, no syscall.
+Linuxカーネルは、TSCが信頼できると判断されたシステムでは、TSCを主要なclocksource（`clocksource=tsc`）として使う。vDSOの`clock_gettime(CLOCK_REALTIME)`は、seqlockで保護されたTSCベースのvvarデータを読み取る。すべてユーザー空間で完結し、syscallは発生しない。
 
-### The problem {#the-problem}
+### 問題 {#the-problem}
 
-On dual-socket (and larger) NUMA servers, operators observed that `gettimeofday()` returned **time that went backwards**. Applications logging timestamps in sequence would sometimes record a later event with an earlier timestamp than a prior event. Database replication systems using wall-clock time for ordering would fail their ordering guarantees.
+デュアルソケット（およびそれ以上）のNUMAサーバーで、運用者は`gettimeofday()`が**逆行する時刻**を返すことに気づいた。タイムスタンプを順にログ出力するアプリケーションが、後のイベントを前のイベントより早いタイムスタンプで記録することがあった。順序付けにウォールクロック時刻を使うデータベースのレプリケーションシステムは、順序保証を守れなくなった。
 
 ```
 T1 (thread on socket 0): timestamp = 1234567890.100
@@ -92,46 +92,46 @@ Thread migrates to socket 1
 T2 (thread on socket 1): timestamp = 1234567889.998  ← time went backwards!
 ```
 
-This produced assertion failures in log analyzers, replication ordering bugs, and mysterious "time skew" alerts.
+これにより、ログアナライザでのアサーション失敗、レプリケーションの順序バグ、謎の「time skew」アラートが発生した。
 
-### Diagnosis {#diagnosis_1}
+### 診断 {#diagnosis_1}
 
-The TSC counters on different sockets are not guaranteed to be synchronized at power-on. While BIOS firmware attempts to synchronize them, the synchronization is not perfect, and on some platforms the drift can be hundreds of microseconds or more at boot. Additionally, TSC values can diverge over time on older CPUs due to different clock domains per socket running at slightly different rates (this is mitigated by the "invariant TSC" feature on Nehalem and later, but the boot synchronization problem remains).
+異なるソケット上のTSCカウンタは、電源投入時に同期していることが保証されていない。BIOSファームウェアは同期を試みるが完全ではなく、プラットフォームによっては起動時のずれが数百マイクロ秒以上になることもある。さらに古いCPUでは、ソケットごとに異なるクロックドメインがわずかに異なるレートで動くため、TSCの値が時間とともに乖離していくことがある（これはNehalem以降の「invariant TSC」機能で緩和されているが、起動時の同期の問題は残る）。
 
-The kernel detects TSC reliability via the `tsc_reliable` flag (set based on CPUID and calibration) and the result of `tsc_clocksource_reliable` checks in `arch/x86/kernel/tsc.c`. TSC synchronization across CPUs is tested during boot in `check_tsc_sync_source()` and `check_tsc_sync_target()`.
+カーネルは、`tsc_reliable`フラグ（CPUIDとキャリブレーションに基づいて設定される）と、`arch/x86/kernel/tsc.c`における`tsc_clocksource_reliable`のチェック結果によって、TSCの信頼性を判定する。CPU間のTSC同期は、起動時に`check_tsc_sync_source()`と`check_tsc_sync_target()`でテストされる。
 
 ```c
 /* arch/x86/kernel/tsc_sync.c */
 /*
- * Called by each secondary CPU to compare its TSC against the boot CPU.
- * If the difference exceeds a threshold, the TSC is marked unreliable.
+ * 各セカンダリCPUから呼ばれ、自身のTSCをブートCPUのものと比較する。
+ * 差がしきい値を超えると、TSCは信頼できないとマークされる。
  */
 void check_tsc_sync_target(void)
 {
     struct tsc_adjust *ref, *cur;
     cycles_t cur_max_warp;
 
-    /* Read TSC and compare with boot CPU's TSC */
-    /* If delta > threshold: mark TSC unreliable */
+    /* TSCを読み、ブートCPUのTSCと比較する */
+    /* 差 > しきい値 なら: TSCを信頼できないとマークする */
     if (nr_warps) {
         mark_tsc_unstable("TSC ADJUST differs");
     }
 }
 ```
 
-If the kernel detects TSC drift or skew, it falls back to the HPET (High Precision Event Timer) or ACPI PM timer as the clocksource.
+カーネルはTSCのドリフトやスキューを検出すると、clocksourceとしてHPET（High Precision Event Timer）またはACPI PMタイマーにフォールバックする。
 
-### Root cause {#root-cause_1}
+### 根本原因 {#root-cause_1}
 
-Two separate issues:
+別々の問題が2つあった。
 
-1. **Boot synchronization drift**: TSC counters on each socket start from different values at power-on. Even a 1 microsecond difference means any process migrated from socket 0 to socket 1 (or reading from a CPU on the other socket via a shared `vvar` page) sees apparent time reversal.
+1. **起動時の同期ずれ**: 各ソケットのTSCカウンタは、電源投入時に異なる値から始まる。たとえ1マイクロ秒の差でも、ソケット0からソケット1へマイグレーションしたプロセス（あるいは共有の`vvar`ページを介して他方のソケットのCPUから読み取るプロセス）には、時刻が逆行したように見える。
 
-2. **Task migration without TSC adjustment**: When a task migrates between CPUs on different sockets, the new CPU's TSC may be ahead or behind. If the kernel's timekeeping is not socket-aware, the vDSO reads the wrong TSC base.
+2. **TSC調整なしのタスクマイグレーション**: タスクが異なるソケット上のCPU間でマイグレーションすると、新しいCPUのTSCは進んでいるか遅れている可能性がある。カーネルの時刻管理がソケットを意識していなければ、vDSOは誤ったTSCベースを読んでしまう。
 
-### Fix and mitigations {#fix-and-mitigations}
+### 修正と緩和策 {#fix-and-mitigations}
 
-**Kernel-side detection and fallback**: When `check_tsc_sync_source()` detects significant TSC skew between CPUs, it calls `mark_tsc_unstable()` which switches the clocksource from `tsc` to `hpet` or `acpi_pm`. This is visible in `dmesg`:
+**カーネル側の検出とフォールバック**: `check_tsc_sync_source()`がCPU間で大きなTSCスキューを検出すると、`mark_tsc_unstable()`を呼び出し、clocksourceを`tsc`から`hpet`または`acpi_pm`に切り替える。これは`dmesg`で確認できる。
 
 ```
 Detected 1 TSC warp(s) in TSC synchronization.
@@ -139,213 +139,213 @@ Marking TSC unstable due to: TSC ADJUST differs.
 Switched to clocksource hpet
 ```
 
-**TSC_ADJUST MSR**: Newer Intel CPUs (Skylake+) have the `TSC_ADJUST` MSR (0x3B), which allows firmware and the OS to apply per-CPU offsets to align TSC values. The kernel reads and validates `TSC_ADJUST` values in `tsc_sync.c`.
+**TSC_ADJUST MSR**: 新しいIntel CPU（Skylake以降）には`TSC_ADJUST` MSR（0x3B）があり、ファームウェアとOSがCPUごとのオフセットを適用してTSC値をそろえられる。カーネルは`tsc_sync.c`で`TSC_ADJUST`の値を読み取り、検証する。
 
-**`rdtsc_ordered()`**: The kernel's own RDTSC usage uses `rdtsc_ordered()` which adds a memory fence:
+**`rdtsc_ordered()`**: カーネル自身のRDTSCの使用では、メモリフェンスを追加する`rdtsc_ordered()`を使う。
 
 ```c
 /* arch/x86/include/asm/msr.h */
 static __always_inline u64 rdtsc_ordered(void)
 {
     /*
-     * The RDTSC instruction is not ordered relative to memory access.
-     * Add a serializing instruction (LFENCE) to ensure ordering.
+     * RDTSC命令はメモリアクセスに対して順序付けされない。
+     * 順序を保証するためにシリアライズ命令（LFENCE）を追加する。
      */
     WARN_ON_ONCE(preemptible());
-    return rdtsc();  /* on x86-64 with LFENCE_RDTSC feature */
+    return rdtsc();  /* LFENCE_RDTSC機能を持つx86-64の場合 */
 }
 ```
 
-**Clocksource selection**: operators with multi-socket servers and TSC reliability concerns can force a stable clocksource:
+**clocksourceの選択**: マルチソケットサーバーでTSCの信頼性に懸念がある運用者は、安定したclocksourceを強制できる。
 
 ```bash
-# Check current clocksource
+# 現在のclocksourceを確認
 cat /sys/devices/system/clocksource/clocksource0/current_clocksource
 # tsc
 
-# Check available clocksources
+# 利用可能なclocksourceを確認
 cat /sys/devices/system/clocksource/clocksource0/available_clocksource
 # tsc hpet acpi_pm
 
-# Force HPET (lower overhead than acpi_pm, more reliable than tsc on affected HW)
+# HPETを強制（acpi_pmよりオーバーヘッドが小さく、影響を受けるHWではtscより信頼性が高い）
 echo hpet > /sys/devices/system/clocksource/clocksource0/current_clocksource
 
-# Or set via boot parameter (permanent)
+# あるいはブートパラメータで設定（恒久的）
 # clocksource=hpet
 ```
 
-### What it taught us {#what-it-taught-us_1}
+### 教訓 {#what-it-taught-us_1}
 
-TSC unreliability on multi-socket systems is well-known but the failure mode (time going backwards) surprises developers who assume wall-clock time is monotonic. Linux's TSC synchronization infrastructure (`tsc_sync.c`) and the VDSO's seqlock-protected time data are designed to handle this, but the fallback to HPET has real performance implications: HPET requires a ring transition, so `clock_gettime()` is no longer vDSO-fast. The lesson: never assume the TSC is synchronized across sockets without verifying `dmesg` and the current clocksource.
+マルチソケットシステムでTSCが信頼できないことはよく知られているが、その障害モード（時刻の逆行）は、ウォールクロック時刻が単調増加すると思い込んでいる開発者を驚かせる。LinuxのTSC同期の仕組み（`tsc_sync.c`）とVDSOのseqlockで保護された時刻データはこれに対処するよう設計されているが、HPETへのフォールバックには実際の性能上の影響がある。HPETはリング遷移を必要とするため、`clock_gettime()`はもはやvDSOの速さでは動かない。教訓は、`dmesg`と現在のclocksourceを確認せずに、TSCがソケット間で同期していると決して仮定しないことである。
 
 ---
 
-## Case 3: Intel SYSRET canonical address bug (CVE-2012-0217) {#case-3-intel-sysret-canonical-address-bug-cve-2012-0217}
+## 事例3: IntelのSYSRET正規アドレスバグ（CVE-2012-0217） {#case-3-intel-sysret-canonical-address-bug-cve-2012-0217}
 
-### Before state {#before-state_2}
+### 以前の状態 {#before-state_2}
 
-`SYSRET` (specifically the 64-bit `SYSRETQ`, the fast counterpart to `SYSCALL`) returns to user space by restoring `RIP` from `RCX`, `RFLAGS` from `R11`, and setting the code segment to ring 3. By the time the kernel executes `SYSRET`, it has *already* restored the user's `RSP` and run `swapgs` to restore the user's `GS.base` — so the CPU is one instruction away from user space while still technically at CPL 0.
+`SYSRET`（具体的には64ビットの`SYSRETQ`で、`SYSCALL`に対応する高速な復帰命令）は、`RCX`から`RIP`を、`R11`から`RFLAGS`を復元し、コードセグメントをリング3に設定することでユーザー空間に戻る。カーネルが`SYSRET`を実行する時点では、ユーザーの`RSP`は*すでに*復元され、`swapgs`でユーザーの`GS.base`も復元されている。つまりCPUはユーザー空間まであと命令1つという状態にありながら、形式上はまだCPL 0にいる。
 
-The subtlety that matters: what if `RCX` (the return `RIP`) is a **non-canonical address** — one where bits 63:48 are not a sign extension of bit 47? The processor must raise `#GP`, but *when* and *in what state* it does so differs between vendors, and that difference is the whole bug.
+重要な微妙さはここにある。`RCX`（戻り先の`RIP`）が**非正規アドレス**、つまりビット63:48がビット47の符号拡張になっていないアドレスだったらどうなるか。プロセッサは`#GP`を発生させなければならないが、それを*いつ*、*どの状態で*行うかはベンダーによって異なり、その違いこそがこのバグのすべてである。
 
-### The vulnerability {#the-vulnerability}
+### 脆弱性 {#the-vulnerability}
 
-On **Intel** processors, `SYSRET` checks the new `RIP` for canonicality and, if it fails, raises `#GP` **while still in ring 0 (CPL 0)** — but only *after* `RSP` has been pointed at the user's stack and `GS.base` swapped to the user's. So the `#GP` handler begins executing with **kernel privilege on a user-controlled stack**, and its first `gs:`-relative access faults because `GS.base` is now the user's. An attacker who arranges the non-canonical return and grooms the user stack and GS can steer the fault handler into their own code — a clean unprivileged → ring-0 escalation.
+**Intel**のプロセッサでは、`SYSRET`は新しい`RIP`が正規かどうかをチェックし、不正なら**リング0（CPL 0）のまま**`#GP`を発生させる。しかしそれは、`RSP`がユーザーのスタックを指し、`GS.base`がユーザーのものに入れ替えられた*後*である。そのため`#GP`ハンドラは**ユーザーが制御するスタック上でカーネル権限で**実行を始め、`GS.base`がユーザーのものになっているので、最初の`gs:`相対アクセスでフォルトする。非正規アドレスへの復帰を仕組み、ユーザースタックとGSを整えた攻撃者は、フォルトハンドラを自分のコードへ誘導できる。非特権からリング0への、きれいな権限昇格である。
 
-On **AMD** processors the `#GP` is delivered before the CPU reaches that exploitable state, so AMD hardware is **not affected**. That asymmetry is exactly why the bug hid for years: `SYSRET` originated with AMD (which authored the AMD64 spec), kernels were written against AMD's semantics, and Intel's implementation quietly diverged.
+**AMD**のプロセッサでは、CPUがその悪用可能な状態に達する前に`#GP`が配送されるため、AMDのハードウェアは**影響を受けない**。この非対称性こそが、バグが何年も隠れていた理由である。`SYSRET`はAMD（AMD64仕様の策定者）が生み出したもので、カーネルはAMDのセマンティクスに基づいて書かれており、Intelの実装はひっそりと異なっていた。
 
-### Discovery and impact {#discovery-and-impact}
+### 発見と影響 {#discovery-and-impact}
 
-Here is the twist that makes this a good war story: **Linux had already fixed this exact bug in 2006.** Linux hit the non-canonical-`SYSRET` hole on early Intel EM64T CPUs and closed it in **2.6.16.5** (CVE-2006-0744) — the fault-on-the-user-stack-with-wrong-GS problem, described there in almost the same words. Six years later, Rafal Wojtczuk found that everyone who *hadn't* copied Linux's fix was still exposed, and disclosed it as CVE-2012-0217 (June 2012). Because `SYSRET` is subtle enough that each kernel got it wrong independently, it hit a broad set of systems — all **running on Intel CPUs**:
+これを良い事件簿にしているひねりはここにある。**Linuxはこのまったく同じバグを2006年にすでに修正していた。** Linuxは初期のIntel EM64T CPUで非正規`SYSRET`の穴に遭遇し、**2.6.16.5**（CVE-2006-0744）でそれを塞いでいた。ユーザースタック上で誤ったGSのままフォルトするという問題で、ほぼ同じ言葉で説明されている。6年後、Rafal Wojtczukは、Linuxの修正を取り入れて*いなかった*すべてのOSがまだ脆弱であることを発見し、CVE-2012-0217（2012年6月）として開示した。`SYSRET`は微妙すぎて各カーネルが独立に間違えていたため、幅広いシステムが影響を受けた。いずれも**Intel CPU上で動作する**ものである。
 
-- Xen PV guests on Intel hosts (the Xen `SYSRET` path) — a guest → hypervisor escape
-- FreeBSD, NetBSD, Oracle Solaris / illumos, and Microsoft Windows (7 / Server 2008 R2)
-- **Linux was *not* affected in 2012** — it had been fixed since 2006
-- AMD hardware was unaffected throughout
+- Intelホスト上のXen PVゲスト（Xenの`SYSRET`パス）— ゲストからハイパーバイザへの脱出
+- FreeBSD、NetBSD、Oracle Solaris / illumos、Microsoft Windows（7 / Server 2008 R2）
+- **Linuxは2012年には影響を*受けなかった*** — 2006年から修正済みだった
+- AMDのハードウェアは一貫して影響を受けなかった
 
-An unprivileged user process (or PV guest) on a vulnerable system could gain full kernel (ring 0) execution.
+脆弱なシステム上の非特権ユーザープロセス（またはPVゲスト）は、カーネル（リング0）での完全な実行権を得ることができた。
 
-### Root cause {#root-cause_2}
+### 根本原因 {#root-cause_2}
 
-The naive `SYSRET` return path issues the instruction without first checking that the return address in `RCX` is canonical, trusting the CPU to fault safely if it isn't — which is true on AMD but not on Intel. The fix is to check `RCX` for canonicality *before* `SYSRET` and fall back to `IRET` (which handles the privilege change safely) when it is non-canonical.
+素朴な`SYSRET`の復帰パスは、`RCX`内の戻りアドレスが正規かどうかを先にチェックせずに命令を発行し、正規でなければCPUが安全にフォルトしてくれると信頼している。これはAMDでは正しいがIntelではそうではない。修正は、`SYSRET`の*前に*`RCX`が正規かどうかをチェックし、非正規の場合は（権限の変更を安全に扱う）`IRET`にフォールバックすることである。
 
-### Fix {#fix_1}
+### 修正 {#fix_1}
 
-Linux's fix — the one everyone else eventually copied — checks `RCX` before returning. Here it is in the form it takes in modern `arch/x86/entry/entry_64.S` (the 2006 original was the same idea with different symbol names):
+Linuxの修正（最終的に他の全員が取り入れたもの）は、復帰前に`RCX`をチェックする。現代の`arch/x86/entry/entry_64.S`での形を以下に示す（2006年のオリジナルは、シンボル名が異なるだけで考え方は同じである）。
 
 ```c
-/* arch/x86/entry/entry_64.S (post-fix, simplified) */
+/* arch/x86/entry/entry_64.S（修正後、簡略化） */
 /*
- * If the return address (RCX) is non-canonical, we cannot use SYSRET.
- * SYSRET with a non-canonical RCX would #GP in ring 0 with user RSP.
- * Use IRET instead, which handles the privilege level change safely.
+ * 戻りアドレス（RCX）が非正規なら、SYSRETは使えない。
+ * 非正規なRCXでSYSRETすると、ユーザーRSPのままリング0で#GPになる。
+ * 代わりに、権限レベルの変更を安全に扱うIRETを使う。
  */
 testq   $0xffff000000000000, %rcx
-jnz     swapgs_restore_regs_and_return_to_usermode  /* use IRET path */
+jnz     swapgs_restore_regs_and_return_to_usermode  /* IRETパスを使う */
 
-/* Normal case: canonical address, safe to SYSRET */
+/* 通常のケース: 正規アドレスなので安全にSYSRETできる */
 USERGS_SYSRET64
 ```
 
-The IRET fallback path (`swapgs_restore_regs_and_return_to_usermode`) restores all registers and uses the `IRET` instruction, which handles non-canonical return addresses by raising `#GP` at the correct privilege level (ring 3, with the correct stack).
+IRETのフォールバックパス（`swapgs_restore_regs_and_return_to_usermode`）はすべてのレジスタを復元して`IRET`命令を使う。`IRET`は非正規の戻りアドレスに対し、正しい権限レベル（リング3、正しいスタック）で`#GP`を発生させる。
 
-Xen implemented the same fix in its `SYSRET` emulation path.
+Xenも自身の`SYSRET`エミュレーションパスに同じ修正を実装した。
 
-### Observing the fix {#observing-the-fix}
+### 修正を観察する {#observing-the-fix}
 
 ```bash
-# The fix is in the SYSRET path — visible at:
+# 修正はSYSRETパスにあり、次の場所で確認できる:
 grep -n "SYSRET\|non_canonical\|swapgs_restore" \
     arch/x86/entry/entry_64.S
 
-# On an affected system, an unprivileged user could reproduce the bug by:
-# 1. Calling a syscall with mmap to create a mapping at a non-canonical address
-# 2. Using the non-canonical address as a stack return (via manipulation of the
-#    sigreturn frame or direct thread-local RIP manipulation)
-# Fixed kernels check RCX before SYSRET.
+# 影響を受けるシステムでは、非特権ユーザーは次のようにしてバグを再現できた:
+# 1. mmapでsyscallを呼び、非正規アドレスにマッピングを作成する
+# 2. その非正規アドレスをスタック上の戻り先として使う（sigreturnフレームの
+#    操作、またはスレッドローカルなRIPの直接操作による）
+# 修正済みのカーネルはSYSRETの前にRCXをチェックする。
 ```
 
-### What it taught us {#what-it-taught-us_2}
+### 教訓 {#what-it-taught-us_2}
 
-The `SYSCALL`/`SYSRET` pair has vendor-specific edge cases: `SYSRET`'s response to a non-canonical `RIP` is safe on AMD but exploitable on Intel, because kernels were written against AMD's semantics — AMD defined AMD64 — and Intel's implementation diverged. The striking part is that this was **learned once and forgotten**: Linux closed the hole in 2006 (CVE-2006-0744), yet the same trap caught Xen, the BSDs, Solaris, and Windows six years later as CVE-2012-0217. Privilege-transition instructions have to be validated against *each* vendor's manual, and a fix in one kernel doesn't propagate to the others — everyone re-learns the sharp edge independently. The fix itself is a single canonical-address check before `SYSRET`; the expensive part was noticing it was needed.
+`SYSCALL`/`SYSRET`のペアにはベンダー固有のエッジケースがある。非正規の`RIP`に対する`SYSRET`の挙動は、AMDでは安全だがIntelでは悪用可能である。カーネルはAMDのセマンティクスに基づいて書かれており（AMD64を定義したのはAMDである）、Intelの実装は異なっていたからだ。注目すべきは、これが**一度学ばれ、そして忘れられた**ことである。Linuxは2006年にこの穴を塞いだ（CVE-2006-0744）にもかかわらず、同じ罠が6年後にXen、BSD系、Solaris、WindowsをCVE-2012-0217として捕らえた。権限遷移命令は*各*ベンダーのマニュアルに照らして検証しなければならず、あるカーネルでの修正は他のカーネルには伝播しない。誰もが鋭い角を独立に学び直すことになる。修正そのものは`SYSRET`の前の正規アドレスチェック1つにすぎない。高くついたのは、それが必要だと気づくことだった。
 
 ---
 
-## Case 4: Spectre v2 retpoline breaking BPF JIT indirect calls {#case-4-spectre-v2-retpoline-breaking-bpf-jit-indirect-calls}
+## 事例4: Spectre v2のretpolineがBPF JITの間接呼び出しを破った件 {#case-4-spectre-v2-retpoline-breaking-bpf-jit-indirect-calls}
 
-### Before state {#before-state_3}
+### 以前の状態 {#before-state_3}
 
-The BPF JIT compiler (in `arch/x86/net/bpf_jit_comp.c`) translates BPF bytecode into native x86-64 machine code at runtime. BPF helper function calls are compiled as indirect calls: the JIT emits code that calls through a function pointer.
+BPF JITコンパイラ（`arch/x86/net/bpf_jit_comp.c`）は、BPFバイトコードを実行時にネイティブのx86-64機械語に変換する。BPFヘルパー関数の呼び出しは間接呼び出しとしてコンパイルされる。つまりJITは関数ポインタを介して呼び出すコードを出力する。
 
-Before Spectre v2 mitigations, a BPF helper call compiled to something like:
+Spectre v2の緩和策以前は、BPFヘルパー呼び出しはおおよそ次のようにコンパイルされていた。
 
 ```asm
 mov     rax, [helper_ptr]
-call    *rax              /* direct indirect call */
+call    *rax              /* 直接の間接呼び出し */
 ```
 
-### The problem {#the-problem_1}
+### 問題 {#the-problem_1}
 
-When the kernel is compiled with `-mindirect-branch=thunk-extern` to enable retpoline, the compiler replaces all indirect `call *rax` instructions in C code with retpoline thunk calls. But **the BPF JIT emits machine code directly** — it does not go through the compiler. The JIT was emitting bare `call *rax` instructions even after retpoline was required by the mitigation.
+retpolineを有効にするためにカーネルを`-mindirect-branch=thunk-extern`付きでコンパイルすると、コンパイラはCコード中のすべての間接`call *rax`命令をretpolineサンク呼び出しに置き換える。しかし**BPF JITは機械語を直接出力する**ため、コンパイラを経由しない。JITは、緩和策によってretpolineが必要になった後も、生の`call *rax`命令を出力し続けていた。
 
-This meant that BPF programs, which run in kernel context, were making JIT-compiled indirect calls that were **not retpoline-protected** — leaving them as a potential Spectre v2 gadget.
+これは、カーネルコンテキストで実行されるBPFプログラムが、**retpolineで保護されていない**JITコンパイル済みの間接呼び出しを行っていたことを意味し、潜在的なSpectre v2ガジェットとして残っていた。
 
-Additionally, some BPF programs use tail calls (`BPF_TAIL_CALL`), which are indirect jumps. These also required retpoline treatment.
+さらに、一部のBPFプログラムは間接ジャンプであるテールコール（`BPF_TAIL_CALL`）を使う。これらにもretpolineによる対処が必要だった。
 
-### Diagnosis {#diagnosis_2}
+### 診断 {#diagnosis_2}
 
-The issue was identified during the post-Spectre code audit. Security researchers reviewing the JIT output (obtainable from `/proc/sys/net/core/bpf_jit_dump` or BPF disassemblers) noticed that `call *rax` appeared in JIT output despite the kernel being compiled with retpoline.
+この問題はSpectre後のコード監査の中で発見された。JITの出力（`/proc/sys/net/core/bpf_jit_dump`やBPF逆アセンブラから取得できる）をレビューしていたセキュリティ研究者が、カーネルがretpoline付きでコンパイルされているにもかかわらず、JIT出力に`call *rax`が現れることに気づいた。
 
-### Fix {#fix_2}
+### 修正 {#fix_2}
 
-The BPF JIT was updated to emit retpoline sequences directly for all indirect calls and tail calls. Since the JIT emits raw bytes, it had to manually emit the retpoline byte sequence:
+BPF JITは、すべての間接呼び出しとテールコールに対してretpolineのシーケンスを直接出力するよう更新された。JITは生のバイトを出力するため、retpolineのバイト列を手作業で出力する必要があった。
 
 ```c
-/* arch/x86/net/bpf_jit_comp.c (post-fix) */
+/* arch/x86/net/bpf_jit_comp.c（修正後） */
 
-/* Emit a retpoline-safe indirect call through 'reg' */
+/* 'reg'を介したretpoline安全な間接呼び出しを出力する */
 static void emit_indirect_call(u8 **pprog, int reg)
 {
     u8 *prog = *pprog;
 
     if (cpu_feature_enabled(X86_FEATURE_RETPOLINE_LFENCE)) {
-        /* AMD retpoline variant: LFENCE; JMP *reg */
-        EMIT3(0x0F, 0xAE, 0xE8);   /* LFENCE (3-byte: 0F AE E8) */
-        EMIT2(0xFF, 0xE0 + reg); /* JMP *reg (opcode FF /4, e.g. FF E0 = JMP rax) */
+        /* AMDのretpoline変種: LFENCE; JMP *reg */
+        EMIT3(0x0F, 0xAE, 0xE8);   /* LFENCE（3バイト: 0F AE E8） */
+        EMIT2(0xFF, 0xE0 + reg); /* JMP *reg（オペコード FF /4、例: FF E0 = JMP rax） */
     } else {
-        /* Intel retpoline: call into thunk */
-        /* emit: call __x86_indirect_thunk_rax (or appropriate reg) */
+        /* Intelのretpoline: サンクを呼び出す */
+        /* 出力: call __x86_indirect_thunk_rax（または該当するレジスタ） */
         emit_call(&prog, __x86_indirect_thunk_array[reg], prog);
     }
     *pprog = prog;
 }
 ```
 
-For tail calls (indirect jumps), a similar retpoline jump sequence was emitted.
+テールコール（間接ジャンプ）についても、同様のretpolineジャンプシーケンスが出力された。
 
-The fix also affected the JIT for `BPF_CALL` instructions that call into kernel helper functions, and the tail call mechanism which uses an indirect jump through the BPF program array.
+この修正は、カーネルのヘルパー関数を呼び出す`BPF_CALL`命令に対するJITと、BPFプログラム配列を介した間接ジャンプを使うテールコールの仕組みにも影響した。
 
-### Performance vs security tradeoff {#performance-vs-security-tradeoff}
+### 性能とセキュリティのトレードオフ {#performance-vs-security-tradeoff}
 
-Retpoline adds overhead to every BPF helper call — typically a handful of additional cycles. For BPF programs doing many helper calls (e.g., map lookups in XDP programs), this is measurable. The tradeoff was accepted because BPF programs run in kernel context and a Spectre v2 gadget in JIT output is exactly as dangerous as one in kernel C code.
+retpolineはすべてのBPFヘルパー呼び出しにオーバーヘッドを加える。通常は数サイクル程度の追加である。ヘルパー呼び出しを多数行うBPFプログラム（例: XDPプログラムでのマップ検索）では、これは測定可能な差になる。このトレードオフが受け入れられたのは、BPFプログラムはカーネルコンテキストで実行され、JIT出力中のSpectre v2ガジェットはカーネルのCコード中のものとまったく同じくらい危険だからである。
 
-On CPUs with eIBRS (hardware Spectre v2 mitigation, available on Ice Lake+), the kernel can use a faster calling convention since eIBRS makes the hardware-level protection always-on:
+eIBRS（ハードウェアによるSpectre v2緩和策、Ice Lake以降で利用可能）を持つCPUでは、eIBRSがハードウェアレベルの保護を常時有効にするため、カーネルはより高速な呼び出し規約を使える。
 
 ```bash
-# Check if eIBRS is in use (affects BPF JIT behavior)
+# eIBRSが使われているか確認（BPF JITの挙動に影響する）
 cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
-# "Mitigation: Enhanced / Automatic IBRS" = eIBRS, faster BPF calls
-# "Mitigation: Retpoline" = software retpoline, every indirect call is a thunk
+# "Mitigation: Enhanced / Automatic IBRS" = eIBRS、BPF呼び出しが高速
+# "Mitigation: Retpoline" = ソフトウェアretpoline、すべての間接呼び出しがサンクになる
 ```
 
-### What it taught us {#what-it-taught-us_3}
+### 教訓 {#what-it-taught-us_3}
 
-JIT compilers are a special case in the mitigation story. The compiler-based mitigations (`-mindirect-branch=thunk-extern`) only work for C code compiled by GCC/Clang — they have no effect on machine code emitted at runtime by JIT compilers, interpreters, or hand-written assembly. Every JIT in the kernel (BPF, KVM's instruction emulator, etc.) had to be audited and updated independently. This drove the development of better tooling for auditing JIT output and better abstractions for emitting retpoline sequences from JIT code.
+JITコンパイラは緩和策の話の中で特別なケースである。コンパイラベースの緩和策（`-mindirect-branch=thunk-extern`）はGCC/ClangでコンパイルされたCコードにしか効かず、JITコンパイラやインタプリタが実行時に出力する機械語や、手書きのアセンブリには何の効果もない。カーネル内のすべてのJIT（BPF、KVMの命令エミュレータなど）を個別に監査し、更新しなければならなかった。これが、JIT出力を監査するためのより良いツールや、JITコードからretpolineシーケンスを出力するためのより良い抽象化の開発を促した。
 
 ---
 
-## Case 5: INVPCID not available on early Haswell CPUs {#case-5-invpcid-not-available-on-early-haswell-cpus}
+## 事例5: 初期のHaswell CPUでINVPCIDが使えなかった件 {#case-5-invpcid-not-available-on-early-haswell-cpus}
 
-### Before state {#before-state_4}
+### 以前の状態 {#before-state_4}
 
-PCID (Process-Context Identifiers) was introduced in Intel Sandy Bridge (2011) and allows the TLB to cache entries tagged with a process identifier, avoiding full TLB flushes on context switches. The KPTI PCID optimization (Linux 4.15) uses PCID to reduce the overhead of the dual-PGD CR3 switches required for Meltdown mitigation.
+PCID（Process-Context Identifiers）はIntel Sandy Bridge（2011年）で導入され、TLBがプロセス識別子でタグ付けされたエントリをキャッシュできるようにして、コンテキストスイッチ時のTLB全体のフラッシュを回避する。KPTIのPCID最適化（Linux 4.15）は、Meltdown緩和に必要なデュアルPGDのCR3切り替えのオーバーヘッドを減らすためにPCIDを使う。
 
-The `INVPCID` instruction (Invalidate Process-Context Identifier) allows selective TLB invalidation by PCID. It is required for the full KPTI+PCID optimization because:
+`INVPCID`命令（Invalidate Process-Context Identifier）は、PCID単位での選択的なTLB無効化を可能にする。KPTI+PCID最適化を完全に行うにはこれが必要である。理由は次のとおり。
 
-- Without INVPCID, flushing a specific PCID requires loading CR3 with the no-flush bit cleared, which is a broader operation
-- With INVPCID, you can invalidate exactly the entries you need
+- INVPCIDがなければ、特定のPCIDをフラッシュするにはno-flushビットをクリアしてCR3をロードする必要があり、これはより広範な操作になる
+- INVPCIDがあれば、必要なエントリだけを正確に無効化できる
 
-### The problem {#the-problem_2}
+### 問題 {#the-problem_2}
 
-Early Haswell CPUs (released in 2013) support PCID (the `pcid` bit appears in `/proc/cpuinfo`) but **do not support INVPCID** (`invpcid` is absent). This was a known errata/stepping issue: INVPCID was added to the CPUID feature bits in later Haswell steppings.
+初期のHaswell CPU（2013年リリース）はPCIDをサポートする（`/proc/cpuinfo`に`pcid`ビットが現れる）が、**INVPCIDをサポートしない**（`invpcid`がない）。これは既知のエラッタ/ステッピングの問題で、INVPCIDは後のHaswellステッピングでCPUIDの機能ビットに追加された。
 
-When the KPTI patches shipped in Linux 4.15, the initial PCID optimization path checked only for `X86_FEATURE_PCID` and attempted to use INVPCID. On early Haswell systems, this would cause an **Undefined Instruction (#UD) fault** when the kernel first tried to execute `INVPCID` — crashing on boot.
+KPTIパッチがLinux 4.15で出荷されたとき、初期のPCID最適化パスは`X86_FEATURE_PCID`だけをチェックしてINVPCIDを使おうとした。初期のHaswellシステムでは、カーネルが最初に`INVPCID`を実行しようとした時点で**未定義命令（#UD）フォルト**が発生し、起動時にクラッシュした。
 
-Additionally, some VM hypervisors (particularly older KVM and VMware versions) would expose PCID in CPUID but not properly virtualize INVPCID, causing the same boot crash in VMs.
+さらに、一部のVMハイパーバイザ（特に古いKVMやVMwareのバージョン）はCPUIDでPCIDを公開しながらINVPCIDを正しく仮想化しておらず、VM内でも同じ起動時クラッシュが起きた。
 
-### Diagnosis {#diagnosis_3}
+### 診断 {#diagnosis_3}
 
-The boot crash produced a message like:
+起動時のクラッシュでは次のようなメッセージが出力された。
 
 ```
 kernel BUG at arch/x86/mm/tlb.c:!
@@ -354,24 +354,24 @@ CPU: 0 PID: 0 Comm: swapper/0 Not tainted 4.15.0
 RIP: 0010:invpcid_flush_one
 ```
 
-The instruction that faulted was the `INVPCID` instruction itself (opcode `66 0F 38 82 /r`).
+フォルトした命令は`INVPCID`命令そのもの（オペコード`66 0F 38 82 /r`）だった。
 
-### Root cause {#root-cause_3}
+### 根本原因 {#root-cause_3}
 
-The KPTI PCID code checked `X86_FEATURE_PCID` but not `X86_FEATURE_INVPCID` separately. The fix required checking both features and implementing a fallback path when INVPCID is unavailable.
+KPTIのPCIDコードは`X86_FEATURE_PCID`をチェックしていたが、`X86_FEATURE_INVPCID`は別途チェックしていなかった。修正には、両方の機能をチェックし、INVPCIDが使えない場合のフォールバックパスを実装することが必要だった。
 
-### Fix {#fix_3}
+### 修正 {#fix_3}
 
-The kernel was updated to check both CPUID bits independently:
+カーネルは、両方のCPUIDビットを独立にチェックするよう更新された。
 
 ```c
-/* arch/x86/include/asm/tlbflush.h (post-fix) */
+/* arch/x86/include/asm/tlbflush.h（修正後） */
 
 /*
- * We use PCID only if both PCID and INVPCID are supported.
- * If PCID is available but INVPCID is not, PCID provides no benefit
- * for KPTI (we would need full CR3 reloads for the TLB invalidations
- * that INVPCID would handle selectively).
+ * PCIDとINVPCIDの両方がサポートされている場合にのみPCIDを使う。
+ * PCIDがあってもINVPCIDがなければ、KPTIにとってPCIDは利点をもたらさない
+ * （INVPCIDなら選択的に処理できるTLB無効化のために、CR3の完全な
+ * 再ロードが必要になってしまう）。
  */
 static inline bool cpu_has_pcid(void)
 {
@@ -380,45 +380,45 @@ static inline bool cpu_has_pcid(void)
 }
 ```
 
-For the case where PCID is present but INVPCID is not, the kernel falls back to CR3 reload (clearing PCID and doing a full TLB flush where needed). This is slower than the PCID+INVPCID fast path but correct.
+PCIDはあるがINVPCIDがない場合、カーネルはCR3の再ロード（PCIDをクリアし、必要に応じてTLB全体をフラッシュする）にフォールバックする。これはPCID+INVPCIDの高速パスより遅いが、正しい。
 
-A separate fallback handles early INVPCID emulation in virtualized environments where the hypervisor does not expose the instruction.
+これとは別のフォールバックが、ハイパーバイザがこの命令を公開しない仮想化環境における初期のINVPCIDエミュレーションを扱う。
 
 ```bash
-# Check both PCID and INVPCID separately
+# PCIDとINVPCIDを別々に確認
 grep -E '\bpcid\b|\binvpcid\b' /proc/cpuinfo
 
-# If pcid is present but invpcid is absent: PCID optimization is disabled
-# If both are present: KPTI PCID optimization is active
+# pcidがあってinvpcidがない場合: PCID最適化は無効
+# 両方ある場合: KPTIのPCID最適化が有効
 
-# Verify via dmesg
+# dmesgで確認
 dmesg | grep -i "pcid\|invpcid"
 
-# On affected systems (no invpcid), KPTI overhead is higher:
-# Each syscall does a full TLB flush on CR3 switch
+# 影響を受けるシステム（invpcidなし）では、KPTIのオーバーヘッドが大きい:
+# 各syscallがCR3切り替え時にTLB全体をフラッシュする
 perf stat -e dTLB-load-misses,iTLB-load-misses -p $$ sleep 5
 ```
 
-### What it taught us {#what-it-taught-us_4}
+### 教訓 {#what-it-taught-us_4}
 
-CPUID feature bits cannot be assumed to be complete, consistent, or independent. A CPU can report PCID support while lacking INVPCID — a configuration that is useful in isolation (PCID works for normal context switches) but that the kernel's KPTI path could not use correctly without both. The fix required treating PCID and INVPCID as independent features and implementing the correct fallback for every combination.
+CPUIDの機能ビットが完全で、一貫しており、互いに独立していると仮定することはできない。CPUはINVPCIDを欠いたままPCIDのサポートを報告することがある。この構成は単独では有用だが（PCIDは通常のコンテキストスイッチでは機能する）、カーネルのKPTIパスは両方がそろわなければ正しく使えなかった。修正では、PCIDとINVPCIDを独立した機能として扱い、すべての組み合わせに対して正しいフォールバックを実装する必要があった。
 
-This case is also a good example of why the kernel's feature detection and alternative patching infrastructure exists: `X86_FEATURE_*` flags and the `cpu_has()` family of functions provide a single authoritative source of truth for capability checks, making it possible to audit all the places a feature is required and add missing checks consistently.
+この事例は、カーネルの機能検出とalternativeパッチングの仕組みがなぜ存在するのかを示す好例でもある。`X86_FEATURE_*`フラグと`cpu_has()`系の関数は、機能チェックのための唯一の権威ある情報源を提供する。これにより、ある機能が必要とされるすべての箇所を監査し、欠けているチェックを一貫して追加できるようになる。
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Sources {#sources}
+### 出典 {#sources}
 
-- [CVE-2012-0217 (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2012-0217) — the SYSRET non-canonical-address privilege escalation (the vulnerable behavior is Intel's SYSRET; AMD CPUs are unaffected)
-- [CVE-2006-0744 (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2006-0744) — the same bug in Linux, fixed six years earlier in kernel 2.6.16.5
-- [fail0verflow: Intel's SYSRET kernel privilege escalation](https://fail0verflow.com/blog/2012/cve-2012-0217-intel-sysret-freebsd/) — the canonical technical walkthrough of the ring-0/user-stack fault and the exploit
-- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — TSC calibration and watchdog, scene of Case 2
-- [Spectre Side Channels](https://docs.kernel.org/admin-guide/hw-vuln/spectre.html) — retpoline and its interaction with indirect calls (Case 4)
+- [CVE-2012-0217 (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2012-0217) — SYSRETの非正規アドレスによる権限昇格（脆弱な挙動はIntelのSYSRETのもので、AMD CPUは影響を受けない）
+- [CVE-2006-0744 (NVD)](https://nvd.nist.gov/vuln/detail/CVE-2006-0744) — Linuxにおける同じバグ。6年前にカーネル2.6.16.5で修正された
+- [fail0verflow: Intel's SYSRET kernel privilege escalation](https://fail0verflow.com/blog/2012/cve-2012-0217-intel-sysret-freebsd/) — リング0/ユーザースタックでのフォルトとエクスプロイトについての定番の技術解説
+- [arch/x86/kernel/tsc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/tsc.c) — TSCのキャリブレーションとウォッチドッグ。事例2の舞台
+- [Spectre Side Channels](https://docs.kernel.org/admin-guide/hw-vuln/spectre.html) — retpolineと間接呼び出しとの相互作用（事例4）
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [x86-64 Syscall Entry](syscall-entry.md) — the SYSRET path exploited in Case 3
-- [Spectre and Meltdown](spectre-meltdown.md) — background for the KPTI and retpoline cases
-- [x86 CPU Features](cpu-features.md) — feature detection, INVPCID fallback (Case 5)
+- [x86-64のシステムコールエントリ](syscall-entry.md) — 事例3で悪用されたSYSRETパス
+- [SpectreとMeltdown](spectre-meltdown.md) — KPTIとretpolineの事例の背景
+- [x86のCPU機能](cpu-features.md) — 機能検出、INVPCIDのフォールバック（事例5）

@@ -1,14 +1,14 @@
-# x86-64 Page Tables {#x86-64-page-tables}
+# x86-64のページテーブル {#x86-64-page-tables}
 
-> 4-level and 5-level paging, CR3, PCID, and KPTI
+> 4レベルおよび5レベルのページング、CR3、PCID、そしてKPTI
 
-Virtual memory on x86-64 uses a multi-level radix tree of page tables to translate virtual addresses to physical addresses. Understanding this translation is fundamental to understanding memory allocation, protection, isolation, and the Meltdown mitigations.
+x86-64の仮想メモリは、ページテーブルによる多段の基数木（radix tree）を使って仮想アドレスを物理アドレスに変換する。この変換を理解することは、メモリ割り当て、保護、隔離、そしてMeltdownの緩和策を理解するための基礎である。
 
 ---
 
-## 4-level paging: the standard case {#4-level-paging-the-standard-case}
+## 4レベルページング: 標準的なケース {#4-level-paging-the-standard-case}
 
-On x86-64, the default is **4-level paging** using 48-bit virtual addresses. Each virtual address is decoded as five fields:
+x86-64では、48ビットの仮想アドレスを使う**4レベルページング**がデフォルトである。各仮想アドレスは5つのフィールドとして解釈される。
 
 ```
 48-bit virtual address (canonical form):
@@ -26,9 +26,9 @@ Terminology used in the kernel source:
   PTE = Page Table Entry       (level 1, maps a 4KB page)
 ```
 
-Each level is an array of 512 entries (2^9), each entry 8 bytes wide — exactly one 4KB page per level.
+各レベルは512（2^9）個のエントリからなる配列で、各エントリは8バイト幅である — つまり各レベルがちょうど4KBのページ1つに収まる。
 
-The hardware walks these four levels to translate a virtual address:
+ハードウェアは、仮想アドレスを変換するためにこれら4つのレベルをたどる。
 
 ```
 CR3 (physical addr of PGD)
@@ -40,13 +40,13 @@ CR3 (physical addr of PGD)
           = Physical Address
 ```
 
-The MMU caches recent translations in the **TLB** (Translation Lookaside Buffer) to avoid walking the page table on every memory access.
+MMUは、メモリアクセスのたびにページテーブルをたどらずに済むよう、最近の変換結果を**TLB**（Translation Lookaside Buffer）にキャッシュする。
 
 ---
 
-## Page table entry (PTE) bit layout {#page-table-entry-pte-bit-layout}
+## ページテーブルエントリ（PTE）のビット配置 {#page-table-entry-pte-bit-layout}
 
-Each 8-byte entry in the page table uses a defined set of bits:
+ページテーブルの8バイトの各エントリは、定められたビットの集合を使う。
 
 ```
 PTE (64-bit) format — applies to all levels (PGD, PUD, PMD, PTE):
@@ -73,21 +73,21 @@ PTE (64-bit) format — applies to all levels (PGD, PUD, PMD, PTE):
                 Requires EFER.NXE = 1 (set by kernel during boot)
 ```
 
-### Kernel-side PTE manipulation {#kernel-side-pte-manipulation}
+### カーネル側でのPTE操作 {#kernel-side-pte-manipulation}
 
-The kernel provides a set of functions to read and modify PTEs safely:
+カーネルは、PTEを安全に読み取り・変更するための一連の関数を提供している。
 
 ```c
 /* arch/x86/include/asm/pgtable.h */
 
-/* Check flags */
+/* フラグを確認する */
 static inline int pte_present(pte_t pte)  { return pte_flags(pte) & _PAGE_PRESENT; }
 static inline int pte_write(pte_t pte)    { return pte_flags(pte) & _PAGE_RW; }
 static inline int pte_dirty(pte_t pte)    { return pte_flags(pte) & _PAGE_DIRTY; }
 static inline int pte_young(pte_t pte)    { return pte_flags(pte) & _PAGE_ACCESSED; }
 static inline int pte_exec(pte_t pte)     { return !(pte_flags(pte) & _PAGE_NX); }
 
-/* Modify flags */
+/* フラグを変更する */
 static inline pte_t pte_mkwrite(pte_t pte, struct vm_area_struct *vma)
 {
     return pte_set_flags(pte, _PAGE_RW);
@@ -96,18 +96,18 @@ static inline pte_t pte_mkdirty(pte_t pte)  { return pte_set_flags(pte, _PAGE_DI
 static inline pte_t pte_mkyoung(pte_t pte)  { return pte_set_flags(pte, _PAGE_ACCESSED); }
 static inline pte_t pte_wrprotect(pte_t pte) { return pte_clear_flags(pte, _PAGE_RW); }
 
-/* Address translation helpers */
-#define __pa(x)  ((unsigned long)(x) - PAGE_OFFSET)  /* virtual → physical */
-#define __va(x)  ((void *)((unsigned long)(x) + PAGE_OFFSET))  /* physical → virtual */
+/* アドレス変換のヘルパー */
+#define __pa(x)  ((unsigned long)(x) - PAGE_OFFSET)  /* 仮想 → 物理 */
+#define __va(x)  ((void *)((unsigned long)(x) + PAGE_OFFSET))  /* 物理 → 仮想 */
 ```
 
-`set_pte_at(mm, addr, ptep, pte)` writes a PTE atomically, handling TLB flushes as needed.
+`set_pte_at(mm, addr, ptep, pte)`はPTEを不可分に書き込み、必要に応じてTLBフラッシュを処理する。
 
 ---
 
-## 5-level paging (LA57) {#5-level-paging-la57}
+## 5レベルページング（LA57） {#5-level-paging-la57}
 
-5-level paging adds a fifth level called **P4D** (Page 4 Directory) above the PGD, extending the virtual address space from 48 bits to **57 bits**:
+5レベルページングは、PGDの上に**P4D**（Page 4 Directory）と呼ばれる5番目のレベルを追加し、仮想アドレス空間を48ビットから**57ビット**に拡張する。
 
 ```
 57-bit virtual address (5-level paging):
@@ -118,25 +118,25 @@ static inline pte_t pte_wrprotect(pte_t pte) { return pte_clear_flags(pte, _PAGE
  └───────────┴────────┴────────┴────────┴────────┴────────┴────────┘
 ```
 
-In Linux, `pgd_t` is always the top level (bits 56:48 in 5-level paging) and `p4d_t` is the next level (bits 47:39). The walk order is: PGD (bits 56:48) → P4D (bits 47:39) → PUD → PMD → PTE.
+Linuxでは、`pgd_t`が常に最上位レベル（5レベルページングではビット56:48）であり、`p4d_t`がその次のレベル（ビット47:39）である。たどる順序は、PGD（ビット56:48） → P4D（ビット47:39） → PUD → PMD → PTEとなる。
 
-This provides 128 PB of virtual address space per process (versus 128 TB with 4-level paging).
+これによりプロセスごとに128PBの仮想アドレス空間が得られる（4レベルページングでは128TB）。
 
-5-level paging is enabled by setting `CR4.LA57 = 1` during kernel boot. The kernel detects support via CPUID leaf 7, subleaf 0, ECX bit 16. Linux support was introduced in **Linux 4.14**.
+5レベルページングは、カーネルのブート中に`CR4.LA57 = 1`を設定することで有効になる。カーネルはCPUIDのリーフ7、サブリーフ0、ECXのビット16でサポートを検出する。Linuxでのサポートは**Linux 4.14**で導入された。
 
 ```bash
-# Check if 5-level paging is in use
-grep -i la57 /proc/cpuinfo     # CPU supports it
-dmesg | grep -i "5-level\|la57"  # kernel enabled it
+# 5レベルページングが使われているか確認する
+grep -i la57 /proc/cpuinfo     # CPUがサポートしている
+dmesg | grep -i "5-level\|la57"  # カーネルが有効にした
 ```
 
-In kernel source, `CONFIG_X86_5LEVEL=y` enables compile-time support. At runtime, the kernel detects whether the CPU and BIOS support it and enables it during `startup_64` before the final page tables are set up.
+カーネルソースでは、`CONFIG_X86_5LEVEL=y`でコンパイル時のサポートが有効になる。実行時には、カーネルはCPUとBIOSがそれをサポートしているかを検出し、最終的なページテーブルを用意する前の`startup_64`の中で有効にする。
 
 ---
 
-## CR3: the page table register {#cr3-the-page-table-register}
+## CR3: ページテーブルレジスタ {#cr3-the-page-table-register}
 
-`CR3` is the register that tells the MMU where the current process's top-level page table lives:
+`CR3`は、現在のプロセスの最上位ページテーブルがどこにあるかをMMUに伝えるレジスタである。
 
 ```
 CR3 register (64-bit):
@@ -151,82 +151,82 @@ CR3 register (64-bit):
  bit 63:     (when writing CR3) if set AND PCID is in use, skip TLB flush
 ```
 
-Loading CR3 with a new value switches the current page table. Every process context switch calls `switch_mm_irqs_off()` which writes the new process's PGD physical address into CR3.
+CR3に新しい値をロードすると、現在のページテーブルが切り替わる。プロセスのコンテキストスイッチのたびに`switch_mm_irqs_off()`が呼ばれ、新しいプロセスのPGDの物理アドレスがCR3に書き込まれる。
 
 ```c
 /* arch/x86/mm/tlb.c */
 void switch_mm_irqs_off(struct mm_struct *prev, struct mm_struct *next,
                          struct task_struct *tsk)
 {
-    /* ... select correct CR3 value (accounting for KPTI, PCID) ... */
+    /* ... 正しいCR3の値を選ぶ（KPTI、PCIDを考慮する） ... */
     load_new_mm_cr3(next_pgd, new_asid, new_lam, true);
 }
 ```
 
 ---
 
-## Huge pages: 2MB and 1GB {#huge-pages-2mb-and-1gb}
+## ヒュージページ: 2MBと1GB {#huge-pages-2mb-and-1gb}
 
-The `PS` bit in a non-leaf page table entry causes the hardware to treat that entry as a leaf — directly mapping a large page instead of pointing to the next table level:
+リーフでないページテーブルエントリの`PS`ビットがセットされていると、ハードウェアはそのエントリをリーフとして扱う — 次のテーブルレベルを指す代わりに、大きなページを直接マップする。
 
-| PS bit location | Page size | Alignment required |
+| PSビットの位置 | ページサイズ | 必要なアライメント |
 |----------------|-----------|-------------------|
-| PMD (level 2) | 2MB | 2MB aligned |
-| PUD (level 3) | 1GB | 1GB aligned |
+| PMD（レベル2） | 2MB | 2MBアライン |
+| PUD（レベル3） | 1GB | 1GBアライン |
 
-For a 2MB PMD entry, bits 20:0 of the virtual address are used as the offset within the 2MB page (no PTE level walk). The PMD entry's PFN field points directly to a 2MB-aligned physical frame.
+2MBのPMDエントリでは、仮想アドレスのビット20:0が2MBページ内のオフセットとして使われる（PTEレベルはたどらない）。PMDエントリのPFNフィールドは、2MBにアラインされた物理フレームを直接指す。
 
-Huge pages reduce TLB pressure: a single TLB entry covers 2MB instead of 4KB, so fewer entries are needed for the same working set.
+ヒュージページはTLBへの負荷を減らす: 1つのTLBエントリが4KBではなく2MBをカバーするため、同じワーキングセットに必要なエントリが少なくて済む。
 
-The kernel uses 2MB huge pages for the **direct mapping** of all physical memory (the physmap, aliased by `__va()`/`__pa()`). User-visible huge pages are managed via `hugetlbfs` or Transparent Huge Pages (THP).
+カーネルは、すべての物理メモリの**ダイレクトマッピング**（physmap。`__va()`/`__pa()`で別名として参照される）に2MBのヒュージページを使う。ユーザーから見えるヒュージページは、`hugetlbfs`またはTransparent Huge Pages（THP）によって管理される。
 
 ---
 
-## PCID: Process-Context Identifiers {#pcid-process-context-identifiers}
+## PCID: Process-Context Identifier {#pcid-process-context-identifiers}
 
-Without PCID, every CR3 load (context switch) must flush the entire TLB — because the new process's virtual-to-physical mappings would otherwise collide with the old process's cached translations.
+PCIDがない場合、CR3をロードするたびに（コンテキストスイッチのたびに）TLB全体をフラッシュしなければならない — そうしないと、新しいプロセスの仮想→物理マッピングが、古いプロセスのキャッシュされた変換と衝突してしまうからである。
 
-**PCID** (Process-Context Identifier) is a 12-bit tag stored in bits 11:0 of CR3. The TLB stores the PCID alongside each cached translation. When switching to a new process, if its PCID differs from the current one, the CPU uses the new process's cached translations (tagged with its PCID) without flushing out the old entries.
+**PCID**（Process-Context Identifier）は、CR3のビット11:0に格納される12ビットのタグである。TLBはキャッシュした各変換とともにPCIDを保持する。新しいプロセスに切り替えるとき、そのPCIDが現在のものと異なれば、CPUは古いエントリをフラッシュせずに、新しいプロセスのキャッシュされた変換（そのPCIDでタグ付けされたもの）を使う。
 
 ```
 TLB entry with PCID:
   [ PCID (12 bits) | Virtual Page Number (52 bits) ] → Physical Frame Number
 ```
 
-PCID is enabled by setting `CR4.PCIDE = 1`. The kernel uses PCID to avoid full TLB flushes on context switch:
+PCIDは`CR4.PCIDE = 1`を設定することで有効になる。カーネルは、コンテキストスイッチ時のTLB全体のフラッシュを避けるためにPCIDを使う。
 
-- Each `mm_struct` is assigned an ASID (address space ID) from the `pcid_asid_map[]` array
-- On context switch, if the process has a valid PCID assigned and its translations are cached, CR3 is loaded with `bit 63 = 1` (no-flush) to preserve the TLB entries
+- 各`mm_struct`には、`pcid_asid_map[]`配列からASID（アドレス空間ID）が割り当てられる
+- コンテキストスイッチ時、プロセスに有効なPCIDが割り当てられていて、その変換がキャッシュされていれば、TLBエントリを保持するために`bit 63 = 1`（フラッシュなし）でCR3がロードされる
 
 ```c
 /* arch/x86/mm/tlb.c */
 /*
- * Given an ASID, pick a PCID. The kernel uses a per-CPU
- * array to track which PCIDs are currently in use.
+ * ASIDが与えられたら、PCIDを選ぶ。カーネルはper-CPUの
+ * 配列を使って、現在どのPCIDが使用中かを追跡する。
  */
 static u16 user_pcid(u16 asid)
 {
     u16 ret = asid;
-    /* Kernel PCID is asid + TLB_NR_DYN_ASIDS */
+    /* カーネルのPCIDはasid + TLB_NR_DYN_ASIDS */
     return ret;
 }
 ```
 
-PCID requires the `INVPCID` instruction to invalidate individual PCID-tagged TLB entries. Some early Haswell CPUs support PCID but not INVPCID — the kernel detects this and falls back.
+PCIDで個々のPCIDタグ付きTLBエントリを無効化するには、`INVPCID`命令が必要である。初期のHaswell CPUの一部はPCIDをサポートするがINVPCIDはサポートしない — カーネルはこれを検出してフォールバックする。
 
 ---
 
 ## KPTI: Kernel Page Table Isolation {#kpti-kernel-page-table-isolation}
 
-**KPTI** (Kernel Page Table Isolation) was introduced in **Linux 4.15** (January 2018) to mitigate **Meltdown** (CVE-2017-5754).
+**KPTI**（Kernel Page Table Isolation）は、**Meltdown**（CVE-2017-5754）を緩和するために**Linux 4.15**（2018年1月）で導入された。
 
-### The problem KPTI solves {#the-problem-kpti-solves}
+### KPTIが解決する問題 {#the-problem-kpti-solves}
 
-Before KPTI, the kernel's page tables were always mapped — including when running user code. This meant a user process's page table always included kernel virtual addresses (marked non-accessible via U/S=0). Meltdown exploited speculative execution to read kernel memory through these mappings before the CPU's permission check raised a #PF (Page Fault, vector 14).
+KPTI以前は、カーネルのページテーブルは常にマップされていた — ユーザーコードを実行している間も含めて。つまり、ユーザープロセスのページテーブルには常にカーネルの仮想アドレスが含まれていた（U/S=0によってアクセス不可とマークされている）。Meltdownは投機的実行を悪用し、CPUの権限チェックが#PF（ページフォールト、ベクタ14）を発生させる前に、これらのマッピングを通じてカーネルメモリを読み取った。
 
-### The two-PGD solution {#the-two-pgd-solution}
+### 2つのPGDによる解決策 {#the-two-pgd-solution}
 
-KPTI maintains **two page tables per process**:
+KPTIは**プロセスごとに2つのページテーブル**を保持する。
 
 ```
 User PGD (loaded when running in userspace):
@@ -241,25 +241,25 @@ Kernel PGD (loaded when running in the kernel):
   - Full kernel mappings: all kernel code, data, physmap, modules, vmalloc
 ```
 
-The two PGDs are allocated together as a pair. In `pgd_alloc()`, the kernel allocates two adjacent PGD pages and links them:
+2つのPGDはペアとしてまとめて割り当てられる。`pgd_alloc()`の中で、カーネルは隣接する2つのPGDページを割り当てて、それらを結び付ける。
 
 ```c
 /* arch/x86/mm/pgtable.c */
 pgd_t *pgd_alloc(struct mm_struct *mm)
 {
     pgd_t *pgd;
-    /* Allocate two pages: one for user PGD, one for kernel PGD */
+    /* 2ページを割り当てる: 1つはユーザーPGD用、1つはカーネルPGD用 */
     pgd = _pgd_alloc();
     /* ... */
     pgd_prepopulate_pmd(mm, pgd, pmds);
-    /* The "kernel" PGD is at pgd + PTRS_PER_PGD (one page later) */
+    /* 「カーネル」PGDはpgd + PTRS_PER_PGD（1ページ後ろ）にある */
     return pgd;
 }
 ```
 
-### CR3 switches on every kernel entry/exit {#cr3-switches-on-every-kernel-entryexit}
+### カーネルへの出入りのたびにCR3を切り替える {#cr3-switches-on-every-kernel-entryexit}
 
-On every syscall, interrupt, or exception:
+すべてのシステムコール、割り込み、例外で:
 
 ```
 User → Kernel:
@@ -276,36 +276,36 @@ Kernel → User:
   4. SYSRET or IRET
 ```
 
-The entry trampoline is in `arch/x86/entry/entry_64.S`. The `PAGE_TABLE_ISOLATION` config option controls KPTI.
+エントリトランポリンは`arch/x86/entry/entry_64.S`にある。KPTIは`PAGE_TABLE_ISOLATION`設定オプションで制御される。
 
-### KPTI + PCID: reducing the overhead {#kpti-pcid-reducing-the-overhead}
+### KPTI + PCID: オーバーヘッドの削減 {#kpti-pcid-reducing-the-overhead}
 
-The naive KPTI implementation would flush the entire TLB on every user↔kernel transition (two CR3 loads per syscall). With PCID, the kernel assigns separate PCIDs for the user PGD and kernel PGD of each process:
+素朴なKPTIの実装では、ユーザー↔カーネルの遷移のたびに（システムコールごとに2回のCR3ロードで）TLB全体をフラッシュすることになる。PCIDを使えば、カーネルは各プロセスのユーザーPGDとカーネルPGDに別々のPCIDを割り当てる。
 
 ```
 Process A, user PGD:   PCID = asid (e.g., 5)
 Process A, kernel PGD: PCID = asid | 0x80 (e.g., 5 | 0x80 = 133)
 ```
 
-With PCID, switching between the user and kernel PGDs preserves TLB entries for both. The CR3 is still reloaded, but with `bit 63 = 1` (no flush). This reduces the KPTI overhead from ~30% to roughly 5% on syscall-heavy workloads.
+PCIDを使うと、ユーザーPGDとカーネルPGDの間の切り替えで、両方のTLBエントリが保持される。CR3は依然として再ロードされるが、`bit 63 = 1`（フラッシュなし）で行われる。これにより、システムコールの多いワークロードでのKPTIのオーバーヘッドが約30%からおよそ5%に減少する。
 
 ```bash
-# Check if KPTI is active
+# KPTIが有効か確認する
 cat /sys/devices/system/cpu/vulnerabilities/meltdown
-# "Mitigation: PTI" = KPTI is on
-# "Not affected"   = CPU is not vulnerable (or has hardware fix)
+# "Mitigation: PTI" = KPTIが有効
+# "Not affected"   = CPUが脆弱でない（またはハードウェアで修正されている）
 
-# See the PTI CR3 switch cost in perf
+# perfでPTIのCR3切り替えコストを見る
 perf stat -e tlb:tlb_flush ls
 ```
 
 ---
 
-## Kernel virtual address layout {#kernel-virtual-address-layout}
+## カーネルの仮想アドレスレイアウト {#kernel-virtual-address-layout}
 
-> Deep dive: [The Kernel Address Space](../../mm/kernel-address-space.md) covers each of these regions — the direct map, vmemmap, vmalloc, KASLR — and the rationale behind the layout.
+> 詳細: [カーネルのアドレス空間](../../mm/kernel-address-space.md)では、これらの各領域 — ダイレクトマップ、vmemmap、vmalloc、KASLR — とレイアウトの根拠を扱っている。
 
-The 64-bit kernel virtual address space is divided into regions (values are for a typical 4-level paging, non-5-level system with `CONFIG_X86_64`):
+64ビットカーネルの仮想アドレス空間は、いくつかの領域に分割されている（値は、`CONFIG_X86_64`を使う典型的な4レベルページングの、5レベルでないシステムのもの）。
 
 ```
 Virtual address layout (x86-64, 4-level paging, kernel 6.x):
@@ -326,86 +326,86 @@ ffffffffa0000000 - fffffffffeffffff  Modules
 ffffffffff000000 - ffffffffffffffff  Fixmap
 ```
 
-The physmap (direct mapping) allows the kernel to access any physical page via a simple arithmetic offset: `phys_addr + PAGE_OFFSET = virt_addr`. `PAGE_OFFSET` is `0xffff888000000000` on a standard x86-64 kernel.
+physmap（ダイレクトマッピング）により、カーネルは単純な算術オフセットで任意の物理ページにアクセスできる: `phys_addr + PAGE_OFFSET = virt_addr`。標準的なx86-64カーネルでは、`PAGE_OFFSET`は`0xffff888000000000`である。
 
 ---
 
-## Observing page tables {#observing-page-tables}
+## ページテーブルを観察する {#observing-page-tables}
 
 ```bash
-# Process virtual memory map
+# プロセスの仮想メモリマップ
 cat /proc/$$/maps
-cat /proc/$$/smaps       # includes RSS, anonymous/file-backed breakdown
+cat /proc/$$/smaps       # RSS、匿名/ファイルバックの内訳を含む
 
-# Page table usage statistics
-cat /proc/$$/status | grep VmPTE   # page table memory used
+# ページテーブルの使用統計
+cat /proc/$$/status | grep VmPTE   # ページテーブルが使っているメモリ
 
-# Kernel virtual address layout
+# カーネルの仮想アドレスレイアウト
 dmesg | grep -E "Virtual kernel memory layout" -A 20
 
-# Page table debugging (requires CONFIG_X86_PTDUMP or CONFIG_PTDUMP_DEBUGFS)
+# ページテーブルのデバッグ（CONFIG_X86_PTDUMPまたはCONFIG_PTDUMP_DEBUGFSが必要）
 ls /sys/kernel/debug/page_tables/
 cat /sys/kernel/debug/page_tables/kernel
 
-# PCID / ASID usage — no direct interface, but visible in perf
+# PCID / ASIDの使用状況 — 直接のインターフェースはないが、perfで見える
 perf stat -e dTLB-load-misses,iTLB-load-misses <command>
 
-# With crash(8) on a vmcore, translate a virtual address
+# vmcoreに対してcrash(8)を使い、仮想アドレスを変換する
 # crash> vtop <address>
 # crash> ptov <physical_address>
 
-# Check if huge pages are in use for kernel text
+# カーネルテキストにヒュージページが使われているか確認する
 dmesg | grep -i "huge\|2M\|PMD"
 ```
 
 ---
 
-## Key kernel functions {#key-kernel-functions}
+## 主要なカーネル関数 {#key-kernel-functions}
 
-| Function | File | Purpose |
+| 関数 | ファイル | 用途 |
 |----------|------|---------|
-| `pgd_alloc()` | `arch/x86/mm/pgtable.c` | Allocate PGD (and shadow PGD for KPTI) |
-| `pgd_free()` | `arch/x86/mm/pgtable.c` | Free PGD pair |
-| `__pa()` / `__va()` | `arch/x86/include/asm/page.h` | Physical↔virtual address conversion |
-| `pte_mkwrite()` | `arch/x86/include/asm/pgtable.h` | Set R/W bit in PTE |
-| `set_pte_at()` | `arch/x86/mm/pgtable.c` | Atomically write a PTE |
-| `flush_tlb_mm()` | `arch/x86/mm/tlb.c` | TLB flush for an entire mm |
-| `flush_tlb_page()` | `arch/x86/mm/tlb.c` | TLB flush for a single page |
-| `switch_mm_irqs_off()` | `arch/x86/mm/tlb.c` | Context switch — load new CR3 |
-| `load_new_mm_cr3()` | `arch/x86/mm/tlb.c` | Write CR3, handling PCID and KPTI |
+| `pgd_alloc()` | `arch/x86/mm/pgtable.c` | PGD（およびKPTI用のシャドウPGD）を割り当てる |
+| `pgd_free()` | `arch/x86/mm/pgtable.c` | PGDのペアを解放する |
+| `__pa()` / `__va()` | `arch/x86/include/asm/page.h` | 物理↔仮想アドレスの変換 |
+| `pte_mkwrite()` | `arch/x86/include/asm/pgtable.h` | PTEのR/Wビットをセットする |
+| `set_pte_at()` | `arch/x86/mm/pgtable.c` | PTEを不可分に書き込む |
+| `flush_tlb_mm()` | `arch/x86/mm/tlb.c` | mm全体のTLBフラッシュ |
+| `flush_tlb_page()` | `arch/x86/mm/tlb.c` | 単一ページのTLBフラッシュ |
+| `switch_mm_irqs_off()` | `arch/x86/mm/tlb.c` | コンテキストスイッチ — 新しいCR3をロードする |
+| `load_new_mm_cr3()` | `arch/x86/mm/tlb.c` | PCIDとKPTIを考慮してCR3に書き込む |
 
 ---
 
-## Version notes {#version-notes}
+## バージョンに関する注記 {#version-notes}
 
-| Feature | Linux version | Notes |
+| 機能 | Linuxバージョン | 備考 |
 |---------|--------------|-------|
-| 4-level paging | Always | Default on x86-64 |
-| NX bit (EFER.NXE) | 2.6.8 | No-execute support |
-| PCID support | 3.2 | CR4.PCIDE, avoids full TLB flush |
-| 5-level paging (LA57) | 4.14 | `CONFIG_X86_5LEVEL`, CR4.LA57 |
-| KPTI (Meltdown fix) | 4.15 | Two PGDs, CR3 switch on entry/exit |
-| KPTI + PCID optimization | 4.15 | Dual-ASID scheme, `bit 63` no-flush |
+| 4レベルページング | 当初から | x86-64でのデフォルト |
+| NXビット（EFER.NXE） | 2.6.8 | 実行禁止のサポート |
+| PCIDのサポート | 3.2 | CR4.PCIDE。TLB全体のフラッシュを避ける |
+| 5レベルページング（LA57） | 4.14 | `CONFIG_X86_5LEVEL`、CR4.LA57 |
+| KPTI（Meltdownの修正） | 4.15 | 2つのPGD、エントリ/イグジット時のCR3切り替え |
+| KPTI + PCIDの最適化 | 4.15 | デュアルASID方式、`bit 63`によるフラッシュなし |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source & documentation {#kernel-source-documentation}
+### カーネルソースとドキュメント {#kernel-source-documentation}
 
-- [Documentation/arch/x86/x86_64/mm.rst](https://docs.kernel.org/arch/x86/x86_64/mm.html) — the canonical virtual memory layout tables
-- [arch/x86/include/asm/pgtable_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable_types.h) — every `_PAGE_*` bit defined
-- [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — CR3 switching, PCID/ASID management, KPTI CR3 assembly
+- [Documentation/arch/x86/x86_64/mm.rst](https://docs.kernel.org/arch/x86/x86_64/mm.html) — 正式な仮想メモリレイアウトの表
+- [arch/x86/include/asm/pgtable_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable_types.h) — すべての`_PAGE_*`ビットの定義
+- [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — CR3の切り替え、PCID/ASIDの管理、KPTIのCR3の組み立て
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Page Tables (generic)](../../mm/page-tables.md) — the arch-independent pgd/pud/pmd/pte view
-- [x86_64 Boot Page Table Setup](../../mm/boot-page-tables.md) — how these structures are first built
-- [TLB Optimization](../../mm/tlb-optimization.md) — flush batching above the architecture layer
-- [ARM64 Page Tables](../arm64/page-tables.md) — TTBR0/TTBR1 instead of one CR3
+- [ページテーブル（汎用）](../../mm/page-tables.md) — アーキテクチャ非依存のpgd/pud/pmd/pteの視点
+- [x86_64のブート時ページテーブル設定](../../mm/boot-page-tables.md) — これらの構造が最初にどのように構築されるか
+- [TLBの最適化](../../mm/tlb-optimization.md) — アーキテクチャ層より上でのフラッシュのバッチ処理
+- [ARM64のページテーブル](../arm64/page-tables.md) — 1つのCR3の代わりにTTBR0/TTBR1
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — the design that became KPTI, written pre-Meltdown
-- [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — Meltdown/Spectre and what they meant for the kernel
-- [Kernel address space layout randomization](https://lwn.net/Articles/569635/) — KASLR design and limitations
+- [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — KPTIとなった設計。Meltdown以前に書かれたもの
+- [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — Meltdown/Spectreと、それがカーネルにとって何を意味したか
+- [Kernel address space layout randomization](https://lwn.net/Articles/569635/) — KASLRの設計と限界

@@ -1,53 +1,53 @@
-# Life of a Block I/O {#life-of-a-block-io}
+# ブロックI/Oの一生 {#life-of-a-block-io}
 
-> Tracing a read or write from `submit_bio()` down through the block layer to the device — and back up on completion
+> 読み込みや書き込みを`submit_bio()`からブロック層を通ってデバイスまで追跡し、完了時に再び上へ戻るまでをたどる
 
-Every block I/O has two halves: a **submission path** that carries a request *down* toward the hardware, and a **completion path** that carries the result *back up* to whoever asked. Between them, the block layer does the work that justifies its existence — merging, batching, scheduling, and mapping onto hardware queues. This page follows one I/O through both halves.
+すべてのブロックI/Oには2つの半分がある。リクエストをハードウェアに向かって*下へ*運ぶ**発行パス**と、結果を要求元へ*上へ*運び戻す**完了パス**である。その間で、ブロック層は自らの存在を正当化する仕事を行う — マージ、バッチ化、スケジューリング、そしてハードウェアキューへのマッピングである。このページでは、1つのI/Oが両方の半分を通過する様子を追う。
 
-Function names below refer to [`block/blk-mq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c) and [`block/blk-core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-core.c) unless noted.
+以下の関数名は、特に断りがない限り[`block/blk-mq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c)と[`block/blk-core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-core.c)のものを指す。
 
-## The starting point: a bio {#the-starting-point-a-bio}
+## 出発点: bio {#the-starting-point-a-bio}
 
-A [`bio`](bio-request.md) describes one I/O: a target device, a starting sector, a direction, and a list of memory segments to read into or write from. Whoever wants I/O — a filesystem, the [page-cache writeback](../io/page-cache-writeback.md) path, swap, or an `O_DIRECT` submitter — fills in a `bio` and calls `submit_bio()`.
+[`bio`](bio-request.md)は1つのI/Oを記述する。対象デバイス、開始セクタ、方向、そして読み込み先または書き込み元となるメモリセグメントのリストである。I/Oを必要とする者 — ファイルシステム、[ページキャッシュのライトバック](../io/page-cache-writeback.md)パス、スワップ、あるいは`O_DIRECT`の発行者 — は`bio`を埋めて`submit_bio()`を呼ぶ。
 
-## 1. Submission: `submit_bio()` → `blk_mq_submit_bio()` {#1-submission-submitbio-blkmqsubmitbio}
+## 1. 発行: `submit_bio()` → `blk_mq_submit_bio()` {#1-submission-submitbio-blkmqsubmitbio}
 
-`submit_bio()` funnels into `submit_bio_noacct()`, which does validation and I/O accounting, then hands the `bio` to `blk_mq_submit_bio()` — the entry into the multi-queue machinery. From here the block layer's first instinct is *not* to build a new request, but to avoid one.
+`submit_bio()`は`submit_bio_noacct()`に流れ込み、そこで検証とI/Oの計上を行った後、`bio`を`blk_mq_submit_bio()`に渡す — これがマルチキュー機構への入口である。ここからブロック層が最初にとる本能的な行動は、新しいrequestを作ることでは*なく*、それを避けることである。
 
-## 2. Can we avoid a new request? Merging {#2-can-we-avoid-a-new-request-merging}
+## 2. 新しいrequestを避けられるか？ マージ {#2-can-we-avoid-a-new-request-merging}
 
-Before allocating anything, the block layer tries to fold the `bio` into an existing, not-yet-dispatched request:
+何かを割り当てる前に、ブロック層は`bio`を、まだディスパッチされていない既存のrequestに取り込もうとする。
 
-- **`blk_attempt_plug_merge()`** — the current task holds a short *plug* list of pending requests (see step 4). A `bio` that is contiguous with one of them is merged right there, without taking a queue lock.
-- **`blk_mq_sched_bio_merge()`** — if an I/O scheduler is attached, it gets a chance to merge the `bio` into a request already sitting in its queues.
+- **`blk_attempt_plug_merge()`** — 現在のタスクは、保留中のrequestの短い*plug*リストを保持している（ステップ4を参照）。そのいずれかと連続している`bio`は、キューロックを取ることなく、その場でマージされる。
+- **`blk_mq_sched_bio_merge()`** — I/Oスケジューラが接続されていれば、そのキューにすでに存在するrequestに`bio`をマージする機会が与えられる。
 
-A **back-merge** (the `bio`'s start sector equals a request's end) or **front-merge** simply extends the existing request to cover the new segments. Merging is why a stream of sequential 4 KB writes becomes a handful of large requests instead of thousands of tiny ones — the single biggest efficiency win the block layer provides.
+**バックマージ**（`bio`の開始セクタがrequestの終端と等しい）や**フロントマージ**は、単に既存のrequestを新しいセグメントまで覆うように拡張する。マージがあるからこそ、シーケンシャルな4 KBの書き込みの流れが、何千もの小さなrequestではなく、ひと握りの大きなrequestになる — これはブロック層がもたらす最大の効率化である。
 
-## 3. Allocation: a bio becomes a request {#3-allocation-a-bio-becomes-a-request}
+## 3. 割り当て: bioがrequestになる {#3-allocation-a-bio-becomes-a-request}
 
-If nothing could be merged, `blk_mq_get_new_requests()` allocates a `request` by claiming a free **tag** from the hardware queue's tag set. That tag is the request's identity for the rest of its life — it travels down to the device and comes back on completion to identify which I/O finished.
+何もマージできなかった場合、`blk_mq_get_new_requests()`は、ハードウェアキューのtag setから空き**タグ**を確保することで`request`を割り当てる。そのタグは、以後のライフタイムを通じてrequestの識別子となる — デバイスまで下っていき、完了時に戻ってきて、どのI/Oが終わったかを識別する。
 
-Tags are finite (the queue depth). If none is free, the submitter **blocks** until one is returned. This is the block layer's natural backpressure: a device that can't keep up throttles its submitters automatically, without any explicit rate limiting.
+タグの数は有限である（キュー深さ）。空きがなければ、発行者は返却されるまで**ブロック**する。これがブロック層の自然なバックプレッシャーである。追いつけないデバイスは、明示的なレート制限なしに、自動的に発行者をスロットリングする。
 
-## 4. Plugging: batching for throughput {#4-plugging-batching-for-throughput}
+## 4. plug: スループットのためのバッチ化 {#4-plugging-batching-for-throughput}
 
-Rather than dispatch immediately, the fresh request is usually added to the task's **plug**. Code that is about to submit a burst of I/O brackets it with `blk_start_plug()` / `blk_finish_plug()` — the writeback path does this around a flushing run, for example. While the plug is held, requests accumulate, which gives merging (step 2) more to work with and amortizes the cost of poking the hardware. When the plug is flushed, its requests move toward dispatch.
+即座にディスパッチするのではなく、新しいrequestは通常タスクの**plug**に追加される。I/Oのバーストを発行しようとするコードは、それを`blk_start_plug()` / `blk_finish_plug()`で囲む — 例えばライトバックパスは、フラッシュ処理の実行の周りでこれを行う。plugが保持されている間はrequestが溜まっていくので、マージ（ステップ2）の材料が増え、ハードウェアを叩くコストが償却される。plugがフラッシュされると、そのrequestはディスパッチへと向かう。
 
-## 5. Scheduling: order and fairness {#5-scheduling-order-and-fairness}
+## 5. スケジューリング: 順序と公平性 {#5-scheduling-order-and-fairness}
 
-If an [I/O scheduler](io-schedulers.md) is attached — BFQ, mq-deadline, or Kyber — requests wait in its queues and it decides the **dispatch order**: bounding tail latency, dividing bandwidth fairly between cgroups, or reducing seeks on rotational media. On a fast SSD the scheduler is frequently set to **`none`**, and requests flow straight to the hardware queue, because reordering buys little when the device has no seek penalty and millions of IOPS to spare.
+[I/Oスケジューラ](io-schedulers.md) — BFQ、mq-deadline、Kyber — が接続されていれば、requestはそのキューで待ち、スケジューラが**ディスパッチ順序**を決める。テールレイテンシを抑える、cgroup間で帯域を公平に分配する、回転メディアでシークを減らす、といった目的である。高速なSSDではスケジューラは**`none`**に設定されることが多く、requestはハードウェアキューに直行する。デバイスにシークのペナルティがなく、数百万IOPSの余裕があるときには、並べ替えで得られるものはほとんどないからである。
 
-## 6. Dispatch: into the hardware queue {#6-dispatch-into-the-hardware-queue}
+## 6. ディスパッチ: ハードウェアキューへ {#6-dispatch-into-the-hardware-queue}
 
-`blk_mq_run_hw_queue()` → `blk_mq_dispatch_rq_list()` walks the ready requests and hands each to the driver's `->queue_rq()` callback — `nvme_queue_rq()` for NVMe ([`drivers/nvme/host/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/nvme/host/pci.c)), and equivalents for SCSI or virtio-blk. The driver translates the generic request into a device-specific command, places it on a **hardware submission queue** (identified by the request's tag), and rings the device's doorbell. Control returns to the submitter; the I/O is now in flight.
+`blk_mq_run_hw_queue()` → `blk_mq_dispatch_rq_list()`は準備のできたrequestをたどり、それぞれをドライバの`->queue_rq()`コールバックに渡す — NVMeでは`nvme_queue_rq()`（[`drivers/nvme/host/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/nvme/host/pci.c)）であり、SCSIやvirtio-blkにも相当するものがある。ドライバは汎用的なrequestをデバイス固有のコマンドに変換し、それを**ハードウェアのサブミッションキュー**に置き（requestのタグで識別される）、デバイスのドアベルを鳴らす。制御は発行者に戻り、I/Oはこれで処理中（in flight）となる。
 
-## 7. Completion: back up the stack {#7-completion-back-up-the-stack}
+## 7. 完了: スタックを上へ戻る {#7-completion-back-up-the-stack}
 
-Eventually the device finishes and signals it — usually an **interrupt**, or a **[poll](../io/io-polling.md)** for latency-critical I/O. The driver reads the completion, looks up the request by its tag, and calls `blk_mq_complete_request()`. To keep data cache-warm, completion is often steered back to the CPU that submitted the I/O (via an IPI), where it runs `blk_mq_end_request()` → `bio_endio()`.
+やがてデバイスが処理を終え、それを通知する — 通常は**割り込み**であり、レイテンシが重要なI/Oでは**[ポーリング](../io/io-polling.md)**である。ドライバは完了を読み取り、タグでrequestを探し出し、`blk_mq_complete_request()`を呼ぶ。データのキャッシュを温かく保つため、完了処理はしばしば（IPIを介して）I/Oを発行したCPUに戻され、そこで`blk_mq_end_request()` → `bio_endio()`が実行される。
 
-`bio_endio()` invokes the `bio`'s `->bi_end_io` callback — the hook the *original* submitter installed. That is where the story ends for each caller: a synchronous reader is woken, a page is marked up-to-date and unlocked, or a writeback completion records that the data is now durable. The tag is freed, which may release a submitter that was blocked back in step 3.
+`bio_endio()`は`bio`の`->bi_end_io`コールバックを呼び出す — *元の*発行者が設定したフックである。各呼び出し元にとっての物語はここで終わる。同期的な読み込み側が起こされる、ページが最新（up-to-date）とマークされてアンロックされる、あるいはライトバックの完了処理がデータが永続化されたことを記録する。タグは解放され、それによってステップ3でブロックしていた発行者が解放されることもある。
 
-## The round trip {#the-round-trip}
+## 往復 {#the-round-trip}
 
 ```
  submit_bio()                                     bi_end_io() callback
@@ -62,18 +62,18 @@ Eventually the device finishes and signals it — usually an **interrupt**, or a
  device  ───────────────  in flight  ──────────────────  device
 ```
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-`blktrace` records every stage of this path — `Q` (queued), `M` (merged), `G` (get request), `I` (inserted), `D` (dispatched), `C` (completed) — for a live device:
+`blktrace`は、稼働中のデバイスについて、このパスのすべての段階 — `Q`（キューに入った）、`M`（マージされた）、`G`（リクエストの取得）、`I`（挿入された）、`D`（ディスパッチされた）、`C`（完了した） — を記録する。
 
 ```bash
 blktrace -d /dev/nvme0n1 -o - | blkparse -i -
 ```
 
-`bpftrace` can watch the same transitions by attaching to the block tracepoints (`block:block_bio_queue`, `block:block_rq_issue`, `block:block_rq_complete`).
+`bpftrace`は、ブロックのtracepoint（`block:block_bio_queue`、`block:block_rq_issue`、`block:block_rq_complete`）にアタッチすることで、同じ遷移を観察できる。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
 - [Kernel docs: block layer](https://docs.kernel.org/block/index.html)
-- [`block/blk-mq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c) — the submission and completion machinery
-- [`320ae51feed5`](https://git.kernel.org/linus/320ae51feed5) — the introduction of blk-mq, which established this multi-queue path (Linux 3.13)
+- [`block/blk-mq.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/block/blk-mq.c) — 発行と完了の機構
+- [`320ae51feed5`](https://git.kernel.org/linus/320ae51feed5) — このマルチキューパスを確立したblk-mqの導入（Linux 3.13）

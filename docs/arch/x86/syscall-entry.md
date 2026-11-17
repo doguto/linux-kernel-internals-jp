@@ -1,16 +1,16 @@
-# x86-64 Syscall Entry {#x86-64-syscall-entry}
+# x86-64のシステムコールエントリ {#x86-64-syscall-entry}
 
-> SYSCALL instruction, entry_SYSCALL_64, vDSO, and signal delivery
+> SYSCALL命令、entry_SYSCALL_64、vDSO、そしてシグナル配送
 
-Every time a user process calls `read()`, `write()`, `mmap()`, or any other system call, control transfers from user space to the kernel and back. On x86-64, this transition is handled by the `SYSCALL`/`SYSRET` instruction pair — a fast path that avoids the overhead of the older `int 0x80` interrupt mechanism.
+ユーザープロセスが`read()`、`write()`、`mmap()`、あるいはその他のシステムコールを呼ぶたびに、制御はユーザー空間からカーネルへ移り、また戻ってくる。x86-64では、この遷移は`SYSCALL`/`SYSRET`命令のペアによって処理される — これは古い`int 0x80`割り込み機構のオーバーヘッドを避ける高速パスである。
 
 ---
 
-## The SYSCALL instruction {#the-syscall-instruction}
+## SYSCALL命令 {#the-syscall-instruction}
 
-`SYSCALL` is an x86-64 instruction (available in 64-bit mode) that performs a privilege transition from ring 3 (user) to ring 0 (kernel). Unlike an interrupt-based entry, `SYSCALL` does not consult the IDT and does not push a full exception frame — it is a streamlined mechanism specifically designed for syscall entry.
+`SYSCALL`はx86-64の命令（64ビットモードで利用可能）で、ring 3（ユーザー）からring 0（カーネル）への特権遷移を行う。割り込みベースのエントリとは異なり、`SYSCALL`はIDTを参照せず、完全な例外フレームもプッシュしない — システムコールエントリ専用に設計された、無駄を削ぎ落とした機構である。
 
-### What SYSCALL does (hardware behavior) {#what-syscall-does-hardware-behavior}
+### SYSCALLが行うこと（ハードウェアの動作） {#what-syscall-does-hardware-behavior}
 
 ```
 When the CPU executes SYSCALL:
@@ -31,17 +31,17 @@ Registers at the point entry_SYSCALL_64 begins:
   RSP = still pointing at user stack (not yet switched)
 ```
 
-Note that the SYSCALL ABI differs from the C ABI in one way: the 4th argument comes in `R10` rather than `RCX` (because `RCX` is overwritten by the SYSCALL instruction itself).
+SYSCALLのABIはC ABIと1点だけ異なることに注意してほしい: 第4引数は`RCX`ではなく`R10`で渡される（`RCX`はSYSCALL命令自体によって上書きされるため）。
 
-### MSR setup {#msr-setup}
+### MSRの設定 {#msr-setup}
 
-Three MSRs configure the SYSCALL behavior. The kernel sets them in `arch/x86/kernel/cpu/common.c` during `syscall_init()`:
+3つのMSRがSYSCALLの動作を設定する。カーネルは`arch/x86/kernel/cpu/common.c`の`syscall_init()`の中でこれらを設定する。
 
-| MSR | Address | Content |
+| MSR | アドレス | 内容 |
 |-----|---------|---------|
-| `STAR` | `0xC0000081` | Bits 47:32 = kernel CS selector; bits 63:48 = user CS selector |
-| `LSTAR` | `0xC0000082` | 64-bit SYSCALL target RIP (address of `entry_SYSCALL_64`) |
-| `SFMASK` | `0xC0000084` | RFLAGS bits to clear on SYSCALL (clears `IF`, `TF`, `DF`, `AC`) |
+| `STAR` | `0xC0000081` | ビット47:32 = カーネルのCSセレクタ。ビット63:48 = ユーザーのCSセレクタ |
+| `LSTAR` | `0xC0000082` | 64ビットSYSCALLのジャンプ先RIP（`entry_SYSCALL_64`のアドレス） |
+| `SFMASK` | `0xC0000084` | SYSCALL時にクリアするRFLAGSのビット（`IF`、`TF`、`DF`、`AC`をクリアする） |
 
 ```c
 /* arch/x86/kernel/cpu/common.c */
@@ -51,8 +51,8 @@ void syscall_init(void)
     wrmsrl(MSR_LSTAR, (unsigned long)entry_SYSCALL_64);
 
     /*
-     * Flags to clear on syscall entry: direction flag, interrupt flag,
-     * trap flag, and alignment check flag.
+     * システムコールエントリ時にクリアするフラグ: 方向フラグ、割り込みフラグ、
+     * トラップフラグ、アライメントチェックフラグ。
      */
     wrmsrl(MSR_SYSCALL_MASK,
            X86_EFLAGS_TF|X86_EFLAGS_DF|X86_EFLAGS_IF|
@@ -62,69 +62,69 @@ void syscall_init(void)
 
 ---
 
-## entry_SYSCALL_64 (`arch/x86/entry/entry_64.S`) {#entrysyscall64-archx86entryentry_64s}
+## entry_SYSCALL_64（`arch/x86/entry/entry_64.S`） {#entrysyscall64-archx86entryentry_64s}
 
-`entry_SYSCALL_64` is the assembly entry point for all 64-bit syscalls. It must:
-1. Save user state
-2. Switch to a kernel stack
-3. Enable interrupts (the SFMASK cleared IF; the kernel enables it after saving state)
-4. Call `do_syscall_64()`
-5. Restore user state and return
+`entry_SYSCALL_64`は、すべての64ビットシステムコールのアセンブリによるエントリポイントである。これは次のことを行わなければならない。
+1. ユーザーの状態を保存する
+2. カーネルスタックに切り替える
+3. 割り込みを有効にする（SFMASKがIFをクリアしている。カーネルは状態を保存した後に有効化する）
+4. `do_syscall_64()`を呼ぶ
+5. ユーザーの状態を復元して戻る
 
 ```asm
-/* arch/x86/entry/entry_64.S (simplified, illustrative) */
+/* arch/x86/entry/entry_64.S（簡略化した説明用のもの） */
 
 SYM_CODE_START(entry_SYSCALL_64)
-    /* We arrive here with user RSP; must not touch it until we save it */
+    /* ユーザーのRSPのままここに到着する。保存するまでRSPに触れてはならない */
 
-    /* swapgs: swap GS.base with KernelGSbase MSR.
-     * After this, GS points to the per-CPU data area.
-     * This lets us access per-CPU variables to find the kernel stack. */
+    /* swapgs: GS.baseとKernelGSbase MSRを交換する。
+     * これ以降、GSはper-CPUデータ領域を指す。
+     * これによりper-CPU変数にアクセスしてカーネルスタックを見つけられる。 */
     swapgs
 
-    /* Save user RSP to the per-CPU area; switch to kernel stack.
-     * cpu_current_top_of_stack is a per-CPU variable holding the
-     * top of the kernel stack for this CPU. */
+    /* ユーザーのRSPをper-CPU領域に保存し、カーネルスタックに切り替える。
+     * cpu_current_top_of_stackは、このCPUのカーネルスタックの
+     * トップを保持するper-CPU変数である。 */
     movq    %rsp, PER_CPU_VAR(cpu_tss_rw + TSS_sp2)
-    SWITCH_TO_KERNEL_CR3 scratch_reg=%rsp   /* KPTI: switch to kernel PGD */
+    SWITCH_TO_KERNEL_CR3 scratch_reg=%rsp   /* KPTI: カーネルのPGDに切り替える */
     movq    PER_CPU_VAR(cpu_current_top_of_stack), %rsp
 
-    /* Push a synthetic exception frame (struct pt_regs) on the kernel stack */
+    /* カーネルスタック上に合成した例外フレーム（struct pt_regs）をプッシュする */
     pushq   $__USER_DS                  /* SS */
-    pushq   PER_CPU_VAR(cpu_tss_rw + TSS_sp2)  /* RSP (saved user stack) */
+    pushq   PER_CPU_VAR(cpu_tss_rw + TSS_sp2)  /* RSP（保存したユーザースタック） */
     pushq   %r11                        /* RFLAGS */
     pushq   $__USER_CS                  /* CS */
-    pushq   %rcx                        /* RIP (user return address) */
+    pushq   %rcx                        /* RIP（ユーザーの戻りアドレス） */
 
-    /* Save all other registers (building the rest of struct pt_regs) */
-    pushq   %rax        /* orig_ax = syscall number */
-    PUSH_AND_CLEAR_REGS rax=$-ENOSYS   /* push rdi..r15, clear sensitive regs */
+    /* 残りのレジスタをすべて保存する（struct pt_regsの残りを構築する） */
+    pushq   %rax        /* orig_ax = システムコール番号 */
+    PUSH_AND_CLEAR_REGS rax=$-ENOSYS   /* rdi..r15をプッシュし、機微なレジスタをクリアする */
 
-    /* Now we have a full struct pt_regs on the kernel stack */
-    movq    %rsp, %rdi  /* pt_regs * as first argument */
+    /* これでカーネルスタック上に完全なstruct pt_regsができた */
+    movq    %rsp, %rdi  /* 第1引数としてpt_regs *を渡す */
 
-    /* Enable interrupts — safe now that we are on the kernel stack */
+    /* 割り込みを有効にする — カーネルスタック上にいるので今は安全 */
     TRACE_IRQS_OFF
     call    do_syscall_64
 
-    /* ... return path: restore registers, SWAPGS, SYSRET/IRET ... */
+    /* ... 復帰パス: レジスタを復元、SWAPGS、SYSRET/IRET ... */
 SYM_CODE_END(entry_SYSCALL_64)
 ```
 
-The `SWITCH_TO_KERNEL_CR3` macro is only active when KPTI is compiled in and running. It loads the kernel CR3 before accessing kernel stacks.
+`SWITCH_TO_KERNEL_CR3`マクロは、KPTIが組み込まれていて、かつ動作している場合にのみ有効になる。これはカーネルスタックにアクセスする前にカーネルのCR3をロードする。
 
 ---
 
 ## struct pt_regs {#struct-pt_regs}
 
-The assembly builds a `struct pt_regs` on the kernel stack. This structure captures the complete register state of the user process:
+アセンブリコードはカーネルスタック上に`struct pt_regs`を構築する。この構造体はユーザープロセスのレジスタ状態を完全に記録する。
 
 ```c
 /* arch/x86/include/asm/ptrace.h */
 struct pt_regs {
     /*
-     * C ABI says these regs are callee-preserved. They aren't saved on kernel entry
-     * unless syscall needs a full register dump (e.g., for ptrace).
+     * C ABIでは、これらのレジスタは呼び出し先保存である。システムコールが
+     * レジスタの完全なダンプを必要としない限り（例: ptrace用）、カーネルエントリ時には保存されない。
      */
     unsigned long r15;
     unsigned long r14;
@@ -133,37 +133,37 @@ struct pt_regs {
     unsigned long rbp;
     unsigned long rbx;
 
-    /* These regs are callee-clobbered. Always saved on kernel entry. */
-    unsigned long r11;   /* saved RFLAGS (for SYSCALL path) */
+    /* これらのレジスタは呼び出し先で破壊される。カーネルエントリ時に常に保存される。 */
+    unsigned long r11;   /* 保存されたRFLAGS（SYSCALLパスの場合） */
     unsigned long r10;
     unsigned long r9;
     unsigned long r8;
-    unsigned long rax;   /* syscall return value */
-    unsigned long rcx;   /* saved RIP (for SYSCALL path) */
+    unsigned long rax;   /* システムコールの戻り値 */
+    unsigned long rcx;   /* 保存されたRIP（SYSCALLパスの場合） */
     unsigned long rdx;
     unsigned long rsi;
     unsigned long rdi;
 
-    /* On SYSCALL entry, orig_rax = syscall number.
-     * On exception entry, orig_rax = -1 or the error code. */
+    /* SYSCALLエントリ時は、orig_rax = システムコール番号。
+     * 例外エントリ時は、orig_rax = -1 またはエラーコード。 */
     unsigned long orig_ax;
 
-    /* These are pushed by hardware on exception, or synthesized for SYSCALL */
-    unsigned long ip;    /* user RIP */
-    unsigned long cs;    /* user CS */
-    unsigned long flags; /* user RFLAGS */
-    unsigned long sp;    /* user RSP */
-    unsigned long ss;    /* user SS */
+    /* これらは例外時にハードウェアがプッシュするか、SYSCALL用に合成される */
+    unsigned long ip;    /* ユーザーのRIP */
+    unsigned long cs;    /* ユーザーのCS */
+    unsigned long flags; /* ユーザーのRFLAGS */
+    unsigned long sp;    /* ユーザーのRSP */
+    unsigned long ss;    /* ユーザーのSS */
 };
 ```
 
-The layout matches what the hardware pushes during an interrupt/exception, so the same `pt_regs` structure is used for both paths.
+このレイアウトは割り込み/例外時にハードウェアがプッシュするものと一致しているため、同じ`pt_regs`構造体が両方のパスで使われる。
 
 ---
 
-## do_syscall_64() and the syscall table {#dosyscall64-and-the-syscall-table}
+## do_syscall_64()とシステムコールテーブル {#dosyscall64-and-the-syscall-table}
 
-`do_syscall_64()` dispatches to the actual syscall handler:
+`do_syscall_64()`は実際のシステムコールハンドラへディスパッチする。
 
 ```c
 /* arch/x86/entry/common.c */
@@ -175,7 +175,7 @@ __visible noinstr void do_syscall_64(struct pt_regs *regs, int nr)
     instrumentation_begin();
 
     if (!do_syscall_x64(regs, nr) && !do_syscall_x32(regs, nr) && nr != -1) {
-        /* syscall not found */
+        /* システムコールが見つからない */
         regs->ax = __x64_sys_ni_syscall(regs);
     }
 
@@ -196,21 +196,21 @@ static __always_inline bool do_syscall_x64(struct pt_regs *regs, int nr)
 }
 ```
 
-`array_index_nospec()` is a Spectre v1 mitigation: it masks the index to prevent speculative out-of-bounds access to `sys_call_table`.
+`array_index_nospec()`はSpectre v1の緩和策である: インデックスをマスクして、`sys_call_table`への投機的な範囲外アクセスを防ぐ。
 
-### The syscall table {#the-syscall-table}
+### システムコールテーブル {#the-syscall-table}
 
-`sys_call_table[]` is an array of function pointers, indexed by syscall number:
+`sys_call_table[]`は関数ポインタの配列で、システムコール番号でインデックスされる。
 
 ```c
 /* arch/x86/entry/syscall_64.c */
 asmlinkage const sys_call_ptr_t sys_call_table[] = {
-    [0 ... __NR_syscall_max] = &__x64_sys_ni_syscall, /* default: ENOSYS */
-#include <asm/syscalls_64.h>   /* generated from syscall_64.tbl */
+    [0 ... __NR_syscall_max] = &__x64_sys_ni_syscall, /* デフォルト: ENOSYS */
+#include <asm/syscalls_64.h>   /* syscall_64.tblから生成される */
 };
 ```
 
-The table is generated from `arch/x86/entry/syscalls/syscall_64.tbl`:
+このテーブルは`arch/x86/entry/syscalls/syscall_64.tbl`から生成される。
 
 ```
 # arch/x86/entry/syscalls/syscall_64.tbl (excerpt)
@@ -222,7 +222,7 @@ The table is generated from `arch/x86/entry/syscalls/syscall_64.tbl`:
 ...
 ```
 
-Each syscall handler is defined with the `SYSCALL_DEFINE` macro:
+各システムコールハンドラは`SYSCALL_DEFINE`マクロで定義される。
 
 ```c
 /* fs/read_write.c */
@@ -232,47 +232,47 @@ SYSCALL_DEFINE3(read, unsigned int, fd, char __user *, buf, size_t, count)
 }
 ```
 
-The macro expands to `__x64_sys_read(struct pt_regs *regs)`, which extracts arguments from `regs->di`, `regs->si`, `regs->dx`.
+このマクロは`__x64_sys_read(struct pt_regs *regs)`に展開され、`regs->di`、`regs->si`、`regs->dx`から引数を取り出す。
 
 ---
 
-## The return path: SYSRET and IRET {#the-return-path-sysret-and-iret}
+## 復帰パス: SYSRETとIRET {#the-return-path-sysret-and-iret}
 
-After `do_syscall_64()` returns, the entry code restores registers and returns to userspace.
+`do_syscall_64()`が戻った後、エントリコードはレジスタを復元してユーザー空間に戻る。
 
-**Normal return via SYSRET:**
+**SYSRETによる通常の復帰:**
 
 ```asm
-/* SYSRET restores: */
+/* SYSRETが復元するもの: */
 RIP    ← RCX   (saved user RIP)
 RFLAGS ← R11   (saved user RFLAGS)
 CS     ← from STAR MSR (user CS selector)
 SS     ← from STAR MSR (user SS selector)
-/* RSP is explicitly restored from pt_regs->sp before SYSRET */
+/* RSPはSYSRETの前にpt_regs->spから明示的に復元される */
 ```
 
-**IRET fallback:** SYSRET cannot be used if the return address is non-canonical, if the task was interrupted mid-syscall by a signal, or in various edge cases. In those cases, the kernel uses `IRET` (interrupt return), which pops a full exception frame from the stack. `IRET` is slower but handles all cases correctly.
+**IRETへのフォールバック:** 戻りアドレスが非正規（non-canonical）である場合、タスクがシステムコールの途中でシグナルによって中断された場合、その他さまざまなエッジケースでは、SYSRETは使えない。そうした場合、カーネルは`IRET`（割り込みからの復帰）を使う。これはスタックから完全な例外フレームをポップする。`IRET`は低速だが、すべてのケースを正しく処理する。
 
-The kernel checks which path is safe before deciding:
+カーネルは、どちらのパスが安全かを確認してから決定する。
 
 ```c
 /* arch/x86/entry/entry_64.S */
-/* If pt_regs->cs is not __USER_CS or RIP is non-canonical: use IRET */
-/* Otherwise: use SYSRET */
+/* pt_regs->csが__USER_CSでないか、RIPが非正規なら: IRETを使う */
+/* それ以外: SYSRETを使う */
 ```
 
 ---
 
-## vDSO: fast syscalls without entering the kernel {#vdso-fast-syscalls-without-entering-the-kernel}
+## vDSO: カーネルに入らない高速なシステムコール {#vdso-fast-syscalls-without-entering-the-kernel}
 
-The **vDSO** (virtual Dynamic Shared Object) is a small shared library that the kernel maps into every process's address space. It provides fast implementations of certain syscalls that do not actually require entering the kernel ring 0.
+**vDSO**（virtual Dynamic Shared Object）は、カーネルがすべてのプロセスのアドレス空間にマップする小さな共有ライブラリである。実際にはカーネルのring 0に入る必要のない特定のシステムコールについて、高速な実装を提供する。
 
-### How vDSO works {#how-vdso-works}
+### vDSOの仕組み {#how-vdso-works}
 
-The kernel maps two special pages into the high end of every process's virtual address space:
+カーネルは、すべてのプロセスの仮想アドレス空間の上端に2つの特別なページをマップする。
 
-1. **vDSO page**: executable code implementing fast syscall wrappers (`clock_gettime`, `gettimeofday`, `getcpu`, `clock_getres`)
-2. **vvar page**: a read-only shared memory page containing kernel data that the vDSO code reads (current time, clock resolution, etc.)
+1. **vDSOページ**: 高速なシステムコールラッパー（`clock_gettime`、`gettimeofday`、`getcpu`、`clock_getres`）を実装した実行可能コード
+2. **vvarページ**: vDSOのコードが読み取るカーネルデータ（現在時刻、クロック分解能など）を含む、読み取り専用の共有メモリページ
 
 ```
 Process virtual address space (top):
@@ -280,47 +280,47 @@ Process virtual address space (top):
   vDSO page (r-x): user code calls into this; reads from vvar
 ```
 
-The vvar page is updated by the kernel's timekeeping subsystem. The vDSO code reads from it directly — no syscall, no privilege transition. For `clock_gettime(CLOCK_REALTIME)`, this eliminates the SYSCALL/SYSRET overhead entirely.
+vvarページはカーネルの時刻管理サブシステムによって更新される。vDSOのコードはそこを直接読み取る — システムコールも特権遷移もない。`clock_gettime(CLOCK_REALTIME)`の場合、これによりSYSCALL/SYSRETのオーバーヘッドが完全になくなる。
 
 ```bash
-# See vDSO mapped in a process
+# プロセスにマップされたvDSOを確認する
 cat /proc/$$/maps | grep vdso
 # 7ffd2a3d1000-7ffd2a3d3000 r--p 00000000 00:00 0      [vvar]
 # 7ffd2a3d3000-7ffd2a3d5000 r-xp 00000000 00:00 0      [vdso]
 
-# Extract the vDSO for analysis
+# 解析用にvDSOを取り出す
 cat /proc/self/maps | grep vdso
-# Use vdso_test from tools/testing/selftests/vDSO/ in the kernel tree
+# カーネルツリーのtools/testing/selftests/vDSO/にあるvdso_testを使う
 ```
 
-### vDSO source {#vdso-source}
+### vDSOのソース {#vdso-source}
 
-The vDSO is compiled as a special shared library:
+vDSOは特別な共有ライブラリとしてコンパイルされる。
 
-- `arch/x86/vdso/` — x86-64 vDSO source
-- `arch/x86/vdso/vdso64.lds.S` — linker script
-- `arch/x86/vdso/vclock_gettime.c` — `clock_gettime` implementation
+- `arch/x86/vdso/` — x86-64のvDSOソース
+- `arch/x86/vdso/vdso64.lds.S` — リンカスクリプト
+- `arch/x86/vdso/vclock_gettime.c` — `clock_gettime`の実装
 
-The vvar page is described by `struct vdso_data` (defined in `include/vdso/datapage.h`, the generic architecture-independent header), which contains time fields that the kernel updates using seqlock semantics to ensure the vDSO reader sees a consistent snapshot. `arch/x86/include/asm/vvar.h` defines the `VVAR()` access macro used to reference the vvar page, not the struct itself.
-
----
-
-## int 0x80: the legacy 32-bit interface {#int-0x80-the-legacy-32-bit-interface}
-
-Before `SYSCALL` (and even before `SYSENTER`), system calls on x86 were made via `INT 0x80` — a software interrupt. This mechanism still works in 64-bit kernels for compatibility with 32-bit applications and code.
-
-- `INT 0x80` delivers a software interrupt through IDT vector 0x80
-- The IDT entry for vector 0x80 points to `entry_INT80_compat` (in `arch/x86/entry/entry_64_compat.S`)
-- This handler uses the **32-bit syscall table** (`ia32_sys_call_table[]`)
-- `INT 0x80` in a 64-bit process uses only 32-bit registers (EAX, EBX, etc.) and the 32-bit ABI
-
-`INT 0x80` is significantly slower than `SYSCALL` because it goes through the full IDT exception delivery mechanism (saves more state, checks DPL, etc.).
+vvarページは`struct vdso_data`（汎用のアーキテクチャ非依存ヘッダである`include/vdso/datapage.h`で定義）によって記述される。この構造体は時刻フィールドを含み、カーネルはvDSOの読み手が一貫したスナップショットを見られるよう、seqlockのセマンティクスを用いてそれらを更新する。`arch/x86/include/asm/vvar.h`は、vvarページを参照するために使われる`VVAR()`アクセスマクロを定義しており、構造体そのものを定義しているわけではない。
 
 ---
 
-## Signal delivery before returning to userspace {#signal-delivery-before-returning-to-userspace}
+## int 0x80: レガシーな32ビットインターフェース {#int-0x80-the-legacy-32-bit-interface}
 
-Before `entry_SYSCALL_64` returns to userspace, the return path calls `syscall_exit_to_user_mode()`, which checks for pending signals:
+`SYSCALL`以前（さらには`SYSENTER`以前）は、x86のシステムコールはソフトウェア割り込みである`INT 0x80`を介して行われていた。この機構は、32ビットのアプリケーションやコードとの互換性のために、64ビットカーネルでも今なお動作する。
+
+- `INT 0x80`はIDTベクタ0x80を通じてソフトウェア割り込みを配送する
+- ベクタ0x80のIDTエントリは`entry_INT80_compat`（`arch/x86/entry/entry_64_compat.S`内）を指す
+- このハンドラは**32ビットのシステムコールテーブル**（`ia32_sys_call_table[]`）を使う
+- 64ビットプロセス内の`INT 0x80`は32ビットのレジスタ（EAX、EBXなど）と32ビットのABIのみを使う
+
+`INT 0x80`は、完全なIDT例外配送機構を経由する（より多くの状態を保存する、DPLをチェックするなど）ため、`SYSCALL`よりかなり遅い。
+
+---
+
+## ユーザー空間に戻る前のシグナル配送 {#signal-delivery-before-returning-to-userspace}
+
+`entry_SYSCALL_64`がユーザー空間に戻る前に、復帰パスは`syscall_exit_to_user_mode()`を呼び、保留中のシグナルを確認する。
 
 ```c
 /* kernel/entry/common.c */
@@ -343,9 +343,9 @@ static void exit_to_user_mode_loop(struct pt_regs *regs, u32 cached_flags)
 }
 ```
 
-### Signal frame setup {#signal-frame-setup}
+### シグナルフレームの構築 {#signal-frame-setup}
 
-When `do_signal()` determines a signal must be delivered, it sets up a **signal frame** on the user stack before returning:
+`do_signal()`がシグナルを配送すべきだと判断すると、復帰する前にユーザースタック上に**シグナルフレーム**を構築する。
 
 ```
 User stack after signal frame setup:
@@ -358,101 +358,101 @@ User stack after signal frame setup:
   └─────────────────────────────────┘  ← old rsp (before signal)
 ```
 
-The `struct rt_sigframe` (defined in `arch/x86/include/asm/sigframe.h`) contains a `ucontext_t` with a copy of `pt_regs` — the saved user register state at the point the signal was delivered.
+`struct rt_sigframe`（`arch/x86/include/asm/sigframe.h`で定義）は`ucontext_t`を含み、その中に`pt_regs`のコピー — シグナルが配送された時点で保存されたユーザーのレジスタ状態 — が入っている。
 
-The kernel then sets `regs->ip` to the signal handler address and `regs->sp` to the new stack top. When `entry_SYSCALL_64` completes its return, the CPU jumps to the signal handler instead of the original user code.
+次にカーネルは`regs->ip`をシグナルハンドラのアドレスに、`regs->sp`を新しいスタックトップに設定する。`entry_SYSCALL_64`が復帰処理を終えると、CPUは元のユーザーコードではなくシグナルハンドラへジャンプする。
 
-After the signal handler returns, it executes `sigreturn()` (or calls through the vDSO trampoline to `rt_sigreturn`), which calls the `rt_sigreturn` syscall. The kernel's handler (`sys_rt_sigreturn`) reads the saved `ucontext_t` from the signal frame, restores `pt_regs`, and returns to the original user instruction.
+シグナルハンドラが戻ると、`sigreturn()`を実行する（またはvDSOトランポリンを経由して`rt_sigreturn`を呼ぶ）。これは`rt_sigreturn`システムコールを呼び出す。カーネルのハンドラ（`sys_rt_sigreturn`）はシグナルフレームから保存された`ucontext_t`を読み取り、`pt_regs`を復元して、元のユーザー命令に戻る。
 
 ---
 
-## Tracing and observability {#tracing-and-observability}
+## トレーシングと可観測性 {#tracing-and-observability}
 
-### strace: intercepting every syscall {#strace-intercepting-every-syscall}
+### strace: すべてのシステムコールを横取りする {#strace-intercepting-every-syscall}
 
-`strace` uses `ptrace(PTRACE_SYSCALL)` to pause the tracee at every syscall entry and exit:
+`strace`は`ptrace(PTRACE_SYSCALL)`を使い、トレース対象をすべてのシステムコールの入口と出口で一時停止させる。
 
 ```bash
-# Trace all syscalls of a command
+# コマンドのすべてのシステムコールをトレースする
 strace ls
 
-# Trace specific syscall
+# 特定のシステムコールをトレースする
 strace -e trace=read,write cat /etc/hostname
 
-# Show timing
+# 所要時間を表示する
 strace -T ls
 
-# Attach to running process
+# 実行中のプロセスにアタッチする
 strace -p <pid>
 ```
 
-### perf trace: low-overhead syscall tracing {#perf-trace-low-overhead-syscall-tracing}
+### perf trace: 低オーバーヘッドなシステムコールトレーシング {#perf-trace-low-overhead-syscall-tracing}
 
 ```bash
-# System-wide syscall summary
+# システム全体のシステムコールの要約
 perf trace --summary sleep 5
 
-# Per-process trace
+# プロセス単位のトレース
 perf trace -p <pid>
 
-# Count syscalls by name
+# システムコールを名前ごとに数える
 perf stat -e 'syscalls:sys_enter_*' -p <pid> sleep 5
 ```
 
-### Tracepoints {#tracepoints}
+### tracepoint {#tracepoints}
 
-The kernel provides entry and exit tracepoints for every syscall:
+カーネルはすべてのシステムコールについて、入口と出口のtracepointを提供している。
 
 ```bash
-# List syscall tracepoints
+# システムコールのtracepointを一覧表示する
 ls /sys/kernel/debug/tracing/events/syscalls/ | head -20
 
-# Enable tracing for a specific syscall
+# 特定のシステムコールのトレーシングを有効にする
 echo 1 > /sys/kernel/debug/tracing/events/syscalls/sys_enter_read/enable
 cat /sys/kernel/debug/tracing/trace
 ```
 
 ### Seccomp BPF {#seccomp-bpf}
 
-Seccomp BPF filters are applied during `syscall_enter_from_user_mode()`, before the syscall handler runs. Each filter rule is a BPF program that receives the syscall number and arguments and returns an action (allow, deny, kill, trap, etc.). See `kernel/seccomp.c`.
+Seccomp BPFフィルタは、システムコールハンドラが実行される前の`syscall_enter_from_user_mode()`の中で適用される。各フィルタルールはBPFプログラムで、システムコール番号と引数を受け取り、アクション（許可、拒否、kill、trapなど）を返す。`kernel/seccomp.c`を参照。
 
 ```bash
-# Check if a process has seccomp active
+# プロセスでseccompが有効か確認する
 cat /proc/<pid>/status | grep Seccomp
-# Seccomp: 2  (2 = filter mode)
+# Seccomp: 2  (2 = フィルタモード)
 ```
 
-### Finding entry_SYSCALL_64 in the running kernel {#finding-entrysyscall64-in-the-running-kernel}
+### 実行中のカーネルでentry_SYSCALL_64を見つける {#finding-entrysyscall64-in-the-running-kernel}
 
 ```bash
-# Address of the syscall entry point
+# システムコールのエントリポイントのアドレス
 grep entry_SYSCALL_64 /proc/kallsyms
 
-# Verify it matches LSTAR MSR
+# LSTAR MSRと一致するか確認する
 modprobe msr
-rdmsr 0xC0000082   # LSTAR — should match the above address
+rdmsr 0xC0000082   # LSTAR — 上のアドレスと一致するはず
 ```
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source & documentation {#kernel-source-documentation}
+### カーネルソースとドキュメント {#kernel-source-documentation}
 
-- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64` itself; unusually well commented
-- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — the syscall table and `do_syscall_64()`
+- [arch/x86/entry/entry_64.S](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/entry_64.S) — `entry_SYSCALL_64`そのもの。珍しいほど丁寧にコメントされている
+- [arch/x86/entry/syscall_64.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/entry/syscall_64.c) — システムコールテーブルと`do_syscall_64()`
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — calling conventions for every architecture in one table
-- [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — which syscalls never enter the kernel
+- [`syscall(2)`](https://man7.org/linux/man-pages/man2/syscall.2.html) — 全アーキテクチャの呼び出し規約を1つの表にまとめたもの
+- [`vdso(7)`](https://man7.org/linux/man-pages/man7/vdso.7.html) — どのシステムコールがカーネルに一切入らないか
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Syscall Entry Path](../../syscalls/syscall-entry.md) — the architecture-neutral view
-- [ARM64 Syscall Entry](../arm64/syscall-entry.md) — SVC instead of SYSCALL
-- [vDSO](../../mm/vdso.md) — the fast path in depth
+- [システムコールのエントリパス](../../syscalls/syscall-entry.md) — アーキテクチャ中立の視点
+- [ARM64のシステムコールエントリ](../arm64/syscall-entry.md) — SYSCALLの代わりにSVC
+- [vDSO](../../mm/vdso.md) — 高速パスの詳細
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — the classic walkthrough of this exact path
+- [Anatomy of a system call, part 1](https://lwn.net/Articles/604287/) — まさにこのパスを順にたどる定番の解説

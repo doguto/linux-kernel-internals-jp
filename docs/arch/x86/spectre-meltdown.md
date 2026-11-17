@@ -1,30 +1,30 @@
-# Spectre and Meltdown {#spectre-and-meltdown}
+# SpectreとMeltdown {#spectre-and-meltdown}
 
-> Hardware vulnerabilities, kernel mitigations, and performance impact
+> ハードウェアの脆弱性、カーネルの緩和策、そして性能への影響
 
-In January 2018, the coordinated disclosure of Meltdown and Spectre fundamentally changed the relationship between software and hardware. These vulnerabilities exploit CPU performance features — speculative execution and branch prediction — to leak information across privilege and process boundaries. The Linux kernel's mitigations touch nearly every hot path in the system.
-
----
-
-## Background: speculative execution and cache side channels {#background-speculative-execution-and-cache-side-channels}
-
-Modern CPUs execute instructions speculatively — they predict branches and execute ahead of confirmed program flow. If the prediction is wrong, the speculatively executed results are discarded. The problem: **side effects in the cache are not discarded**.
-
-A cache side channel works by:
-1. Flushing a probe array from the cache (using `CLFLUSH`)
-2. Triggering the victim to speculatively access memory and load data into the cache
-3. Measuring access times to the probe array to determine which cache line was loaded
-4. Inferring the secret byte from the timing difference
-
-This is called a **Flush+Reload** or **Prime+Probe** attack. All major speculative execution vulnerabilities use variants of this technique.
+2018年1月、MeltdownとSpectreの協調開示は、ソフトウェアとハードウェアの関係を根本から変えた。これらの脆弱性は、CPUの性能向上のための機能 — 投機的実行と分岐予測 — を悪用し、特権やプロセスの境界を越えて情報を漏洩させる。Linuxカーネルの緩和策は、システムのほぼすべてのホットパスに手を入れている。
 
 ---
 
-## Meltdown (CVE-2017-5754) {#meltdown-cve-2017-5754}
+## 背景: 投機的実行とキャッシュサイドチャネル {#background-speculative-execution-and-cache-side-channels}
 
-### The vulnerability {#the-vulnerability}
+現代のCPUは命令を投機的に実行する — 分岐を予測し、確定したプログラムの流れより先に実行する。予測が誤っていれば、投機的に実行された結果は破棄される。問題は、**キャッシュへの副作用は破棄されない**ことである。
 
-Meltdown exploits a race between speculative execution and permission checks. On vulnerable Intel CPUs (and some ARM), the CPU speculatively executes memory reads from kernel addresses even in user mode, **before** the permission check that would generate a #PF (Page Fault, vector 14) fault.
+キャッシュサイドチャネルは次のように機能する。
+1. プローブ配列をキャッシュからフラッシュする（`CLFLUSH`を使う）
+2. 被害者にメモリへの投機的アクセスを行わせ、データをキャッシュにロードさせる
+3. プローブ配列へのアクセス時間を測定し、どのキャッシュラインがロードされたかを特定する
+4. タイミングの差から秘密のバイトを推測する
+
+これは**Flush+Reload**攻撃や**Prime+Probe**攻撃と呼ばれる。主要な投機的実行の脆弱性は、いずれもこの手法の変種を使う。
+
+---
+
+## Meltdown（CVE-2017-5754） {#meltdown-cve-2017-5754}
+
+### 脆弱性 {#the-vulnerability}
+
+Meltdownは、投機的実行と権限チェックの間の競合を悪用する。脆弱なIntel CPU（および一部のARM）では、CPUはユーザーモードであってもカーネルアドレスからのメモリ読み取りを投機的に実行する — #PF（ページフォールト、ベクタ14）フォルトを発生させるはずの権限チェックが行われる**前に**。
 
 ```
 Attack sequence:
@@ -38,59 +38,59 @@ Attack sequence:
 7. Secret kernel byte recovered
 ```
 
-**Affected hardware**: Most Intel CPUs from ~2010 to ~2018 (before Coffee Lake Refresh). AMD CPUs are generally not affected. ARM Cortex-A75 is affected.
+**影響を受けるハードウェア**: 2010年頃から2018年頃（Coffee Lake Refresh以前）までのほとんどのIntel CPU。AMDのCPUは一般に影響を受けない。ARM Cortex-A75は影響を受ける。
 
-### Mitigation: KPTI {#mitigation-kpti}
+### 緩和策: KPTI {#mitigation-kpti}
 
-KPTI (Kernel Page Table Isolation) prevents the attack by ensuring that kernel addresses are simply **not mapped** in the page table while the CPU is running user code. If the kernel address is not in the page table, speculative reads produce a TLB miss (not a cached value), defeating the side channel.
+KPTI（Kernel Page Table Isolation）は、CPUがユーザーコードを実行している間、カーネルアドレスがページテーブルにそもそも**マップされていない**ようにすることで攻撃を防ぐ。カーネルアドレスがページテーブルになければ、投機的な読み取りは（キャッシュされた値ではなく）TLBミスを生むだけで、サイドチャネルは成立しない。
 
-See [page-tables.md](page-tables.md) for the full KPTI description.
+KPTIの詳しい説明は[page-tables.md](page-tables.md)を参照。
 
 ```bash
 cat /sys/devices/system/cpu/vulnerabilities/meltdown
-# "Mitigation: PTI"         — KPTI active
-# "Not affected"            — CPU not vulnerable
+# "Mitigation: PTI"         — KPTIが有効
+# "Not affected"            — CPUは脆弱でない
 ```
 
 ---
 
-## Spectre v1 (CVE-2017-5753): bounds check bypass {#spectre-v1-cve-2017-5753-bounds-check-bypass}
+## Spectre v1（CVE-2017-5753）: 境界チェックのバイパス {#spectre-v1-cve-2017-5753-bounds-check-bypass}
 
-### The vulnerability {#the-vulnerability_1}
+### 脆弱性 {#the-vulnerability_1}
 
-Spectre v1 exploits speculative execution past a bounds check. The attacker trains the branch predictor to expect the branch to be taken, then causes a check to fail — but speculative execution has already read out-of-bounds data.
+Spectre v1は、境界チェックを越えて進む投機的実行を悪用する。攻撃者は分岐予測器を訓練して分岐が成立すると予測させ、その後チェックを失敗させる — しかし投機的実行はすでに範囲外のデータを読み出している。
 
 ```c
-/* Vulnerable pattern */
+/* 脆弱なパターン */
 if (index < array_size) {
-    /* CPU speculatively executes this even when index >= array_size */
-    value = array[index];           /* speculative out-of-bounds read */
-    sink  = probe_array[value * 4096]; /* loads secret byte into cache */
+    /* index >= array_sizeであっても、CPUはこれを投機的に実行する */
+    value = array[index];           /* 投機的な範囲外読み取り */
+    sink  = probe_array[value * 4096]; /* 秘密のバイトをキャッシュにロードする */
 }
-/* Branch predictor realizes mistake, rolls back — but cache is warm */
+/* 分岐予測器が誤りに気づいてロールバックする — しかしキャッシュは温まっている */
 ```
 
-The attacker trains the branch predictor by calling the function many times with valid indices, then calls it once with a malicious index. The CPU predicts "branch taken" and speculatively reads the out-of-bounds value.
+攻撃者は、有効なインデックスでその関数を何度も呼び出して分岐予測器を訓練し、その後悪意のあるインデックスで一度だけ呼び出す。CPUは「分岐成立」と予測し、範囲外の値を投機的に読み取る。
 
-**Affected hardware**: All CPUs with branch prediction — essentially every modern CPU.
+**影響を受けるハードウェア**: 分岐予測を持つすべてのCPU — 事実上すべての現代的なCPU。
 
-### Mitigations {#mitigations}
+### 緩和策 {#mitigations}
 
-**array_index_nospec()**: The primary in-kernel mitigation. It masks the index to zero if the bounds check fails, even speculatively:
+**array_index_nospec()**: カーネル内の主要な緩和策である。境界チェックが失敗する場合、投機的実行中であっても、インデックスをゼロにマスクする。
 
 ```c
 /* include/linux/nospec.h */
 /*
- * array_index_nospec() - sanitize an array index after a bounds check.
+ * array_index_nospec() - 境界チェックの後に配列インデックスを無害化する。
  *
- * For a code sequence like:
+ * 次のようなコード列に対して:
  *   if (index < size) {
  *       index = array_index_nospec(index, size);
  *       val = array[index];
  *   }
  *
- * After sanitization, even in a mispredicted speculative execution path,
- * 'index' will be within bounds (or will be zero).
+ * 無害化の後は、予測を誤った投機的実行パスの中であっても、
+ * 'index'は範囲内に収まる（またはゼロになる）。
  */
 #define array_index_nospec(index, size)                          \
 ({                                                               \
@@ -102,15 +102,15 @@ The attacker trains the branch predictor by calling the function many times with
 })
 ```
 
-`array_index_mask_nospec()` computes a mask that is `~0UL` when `index < size` and `0` otherwise, using arithmetic that the CPU cannot speculate around:
+`array_index_mask_nospec()`は、CPUが投機によって回避できない算術演算を使い、`index < size`のときは`~0UL`、それ以外のときは`0`となるマスクを計算する。
 
 ```c
 static inline unsigned long array_index_mask_nospec(unsigned long index,
                                                       unsigned long size)
 {
     /*
-     * Subtract index from size, producing a borrow (bit 63) when size <= index.
-     * The mask is the arithmetic right shift — all ones or all zeros.
+     * sizeからindexを引き、size <= indexのときにボロー（ビット63）を生じさせる。
+     * マスクは算術右シフトの結果 — すべて1かすべて0になる。
      */
     unsigned long mask;
     asm volatile ("cmp %1,%2; sbb %0,%0;"
@@ -119,9 +119,9 @@ static inline unsigned long array_index_mask_nospec(unsigned long index,
 }
 ```
 
-**Compiler mitigations**: The kernel is compiled with `-mindirect-branch=thunk-extern` (GCC) or equivalent, which also helps with Spectre v2 (below). For v1, `LFENCE` serializing fences can be inserted after bounds checks; the kernel uses this selectively in critical paths.
+**コンパイラによる緩和策**: カーネルは`-mindirect-branch=thunk-extern`（GCC）またはそれに相当するオプションでコンパイルされ、これは（後述の）Spectre v2にも役立つ。v1については、境界チェックの後にシリアライズを行う`LFENCE`フェンスを挿入できる。カーネルは重要なパスでこれを選択的に使っている。
 
-The syscall dispatch path uses `array_index_nospec()` to protect `sys_call_table[]` access:
+システムコールのディスパッチパスは、`sys_call_table[]`へのアクセスを保護するために`array_index_nospec()`を使う。
 
 ```c
 /* arch/x86/entry/common.c */
@@ -133,68 +133,68 @@ if (likely(unr < NR_syscalls)) {
 
 ---
 
-## Spectre v2 (CVE-2017-5715): branch target injection {#spectre-v2-cve-2017-5715-branch-target-injection}
+## Spectre v2（CVE-2017-5715）: 分岐ターゲットインジェクション {#spectre-v2-cve-2017-5715-branch-target-injection}
 
-### The vulnerability {#the-vulnerability_2}
+### 脆弱性 {#the-vulnerability_2}
 
-Spectre v2 targets the **indirect branch predictor** (the BTB: Branch Target Buffer). An attacker can poison the BTB so that a victim's indirect call or jump speculatively executes attacker-controlled code.
+Spectre v2は**間接分岐予測器**（BTB: Branch Target Buffer）を標的にする。攻撃者はBTBを汚染して、被害者の間接呼び出しや間接ジャンプが、攻撃者の制御するコードを投機的に実行するよう仕向けられる。
 
-The attack:
-1. Attacker trains the BTB to associate a victim's indirect call address with the attacker's chosen target
-2. When the victim executes the indirect call, the CPU speculatively jumps to the attacker's target
-3. Attacker's target is a gadget that reads a secret and encodes it in the cache
+攻撃の流れ:
+1. 攻撃者はBTBを訓練し、被害者の間接呼び出しのアドレスを攻撃者が選んだターゲットに関連付けさせる
+2. 被害者が間接呼び出しを実行すると、CPUは攻撃者のターゲットへ投機的にジャンプする
+3. 攻撃者のターゲットは、秘密を読み取ってキャッシュにエンコードするガジェットである
 
-This works across processes (same CPU core) and in some configurations across privilege levels (user → kernel).
+これはプロセス間（同じCPUコア上）で機能し、構成によっては特権レベルをまたいで（ユーザー → カーネル）も機能する。
 
-**Affected hardware**: All modern CPUs with indirect branch prediction.
+**影響を受けるハードウェア**: 間接分岐予測を持つすべての現代的なCPU。
 
-### Mitigation 1: Retpoline {#mitigation-1-retpoline}
+### 緩和策1: Retpoline {#mitigation-1-retpoline}
 
-**Retpoline** (return trampoline) is a software technique that replaces indirect calls and jumps with a sequence that defeats branch prediction for the target:
+**Retpoline**（return trampoline）は、間接呼び出しと間接ジャンプを、ターゲットに対する分岐予測を無効化する命令列に置き換えるソフトウェア技法である。
 
 ```asm
-/* Retpoline sequence for an indirect call through *rax */
+/* *raxを介した間接呼び出しのためのRetpoline命令列 */
 
 call    __x86_indirect_thunk_rax
 
 .global __x86_indirect_thunk_rax
 __x86_indirect_thunk_rax:
-    /* Step 1: Push the real target onto the stack */
+    /* ステップ1: 本当のターゲットをスタックにプッシュする */
     call    1f
-    /* Step 2: Speculative execution ends up in a loop here */
+    /* ステップ2: 投機的実行はここでループに陥る */
     .align 16
 2:  pause
     lfence
-    jmp     2b          /* infinite speculative loop */
-    /* Step 3: The real call set RIP to this point */
-1:  mov     %rax, (%rsp) /* replace return address with target */
-    ret                  /* speculative: loop; real: jump to target */
+    jmp     2b          /* 投機的な無限ループ */
+    /* ステップ3: 実際のcallはRIPをこの地点に設定する */
+1:  mov     %rax, (%rsp) /* 戻りアドレスをターゲットで置き換える */
+    ret                  /* 投機的にはループ。実際にはターゲットへジャンプ */
 ```
 
-The CPU's return-address predictor (the RSB: Return Stack Buffer) predicts that `ret` will jump to the instruction after the `call 1f` — which is the `pause; lfence; jmp` loop. Speculative execution spins harmlessly in the loop. The actual (non-speculative) execution of `ret` uses the correct stack value (overwritten to `*rax`) and jumps to the real target.
+CPUの戻りアドレス予測器（RSB: Return Stack Buffer）は、`ret`が`call 1f`の次の命令 — すなわち`pause; lfence; jmp`のループ — へジャンプすると予測する。投機的実行はそのループの中で無害に空回りする。`ret`の実際の（投機的でない）実行は正しいスタックの値（`*rax`に上書きされたもの）を使い、本当のターゲットへジャンプする。
 
-The kernel is compiled with `-mindirect-branch=thunk-extern` (GCC 7.3+) to replace all indirect calls/jumps with retpoline thunks. The thunks are defined in `arch/x86/lib/retpoline.S`.
+カーネルは`-mindirect-branch=thunk-extern`（GCC 7.3以降）でコンパイルされ、すべての間接呼び出し/ジャンプがretpolineのサンクに置き換えられる。サンクは`arch/x86/lib/retpoline.S`で定義されている。
 
-### Mitigation 2: eIBRS (Enhanced IBRS) {#mitigation-2-eibrs-enhanced-ibrs}
+### 緩和策2: eIBRS（Enhanced IBRS） {#mitigation-2-eibrs-enhanced-ibrs}
 
-Newer Intel CPUs (Ice Lake and later) implement **eIBRS** (Enhanced Indirect Branch Restricted Speculation), a hardware mitigation. When `IA32_SPEC_CTRL.IBRS = 1` is set once at boot, the CPU continuously prevents cross-privilege BTB pollution — no retpoline needed.
+新しいIntel CPU（Ice Lake以降）は、ハードウェアによる緩和策である**eIBRS**（Enhanced Indirect Branch Restricted Speculation）を実装している。ブート時に一度`IA32_SPEC_CTRL.IBRS = 1`を設定すれば、CPUは特権をまたぐBTBの汚染を継続的に防ぐ — retpolineは不要になる。
 
-On CPUs with eIBRS, the kernel disables retpoline and uses the hardware mitigation instead:
+eIBRSを持つCPUでは、カーネルはretpolineを無効にし、代わりにハードウェアの緩和策を使う。
 
 ```bash
 dmesg | grep -i "retpoline\|eibrs\|ibrs"
 # "Spectre v2 : Mitigation: Retpoline"
-# or
+# または
 # "Spectre v2 : Mitigation: Enhanced / Automatic IBRS"
 ```
 
-### Mitigation 3: IBRS (plain) {#mitigation-3-ibrs-plain}
+### 緩和策3: IBRS（素の） {#mitigation-3-ibrs-plain}
 
-Plain **IBRS** (Indirect Branch Restricted Speculation) restricts cross-privilege BTB pollution, but must be re-enabled on every kernel entry (cleared on exit to avoid performance impact). It is slower than retpoline on CPUs without eIBRS.
+素の**IBRS**（Indirect Branch Restricted Speculation）は特権をまたぐBTBの汚染を制限するが、カーネルに入るたびに再度有効にしなければならない（性能への影響を避けるため、出るときにクリアされる）。eIBRSを持たないCPUでは、retpolineより遅い。
 
 ```bash
 cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
-# One of:
+# 次のいずれか:
 # "Mitigation: Retpoline"
 # "Mitigation: Enhanced / Automatic IBRS"
 # "Mitigation: IBRS"
@@ -203,22 +203,22 @@ cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 
 ---
 
-## IBRS, IBPB, and STIBP: the three MSR-based controls {#ibrs-ibpb-and-stibp-the-three-msr-based-controls}
+## IBRS、IBPB、STIBP: MSRベースの3つの制御 {#ibrs-ibpb-and-stibp-the-three-msr-based-controls}
 
-These three controls operate via `IA32_SPEC_CTRL` MSR (`0x48`) and `IA32_PRED_CMD` MSR (`0x49`):
+これら3つの制御は、`IA32_SPEC_CTRL` MSR（`0x48`）と`IA32_PRED_CMD` MSR（`0x49`）を介して動作する。
 
-### IBRS (Indirect Branch Restricted Speculation) {#ibrs-indirect-branch-restricted-speculation}
+### IBRS（Indirect Branch Restricted Speculation） {#ibrs-indirect-branch-restricted-speculation}
 
-- Bit 0 of `IA32_SPEC_CTRL`
-- When set: indirect branches in lower privilege levels (user) cannot influence speculative execution targets in higher privilege levels (kernel)
-- Performance cost: measurable on older implementations
-- eIBRS: always-on hardware version, no performance cost on modern Intel
+- `IA32_SPEC_CTRL`のビット0
+- セットされているとき: 低い特権レベル（ユーザー）の間接分岐が、高い特権レベル（カーネル）の投機的実行のターゲットに影響を与えられなくなる
+- 性能コスト: 古い実装では計測可能なほどある
+- eIBRS: 常時有効なハードウェア版。現代のIntelでは性能コストはない
 
-### IBPB (Indirect Branch Predictor Barrier) {#ibpb-indirect-branch-predictor-barrier}
+### IBPB（Indirect Branch Predictor Barrier） {#ibpb-indirect-branch-predictor-barrier}
 
-- Writing 1 to bit 0 of `IA32_PRED_CMD` flushes the indirect branch predictor state
-- Used on context switch between processes: prevents process A's BTB state from influencing process B
-- One-way barrier — issued by the kernel at context switch
+- `IA32_PRED_CMD`のビット0に1を書き込むと、間接分岐予測器の状態がフラッシュされる
+- プロセス間のコンテキストスイッチで使われる: プロセスAのBTBの状態がプロセスBに影響を与えるのを防ぐ
+- 一方向のバリア — コンテキストスイッチ時にカーネルが発行する
 
 ```c
 /* arch/x86/include/asm/nospec-branch.h */
@@ -229,30 +229,30 @@ static inline void indirect_branch_prediction_barrier(void)
 }
 ```
 
-### STIBP (Single Thread Indirect Branch Predictors) {#stibp-single-thread-indirect-branch-predictors}
+### STIBP（Single Thread Indirect Branch Predictors） {#stibp-single-thread-indirect-branch-predictors}
 
-- Bit 1 of `IA32_SPEC_CTRL`
-- Prevents sibling hyperthreads from influencing each other's indirect branch prediction
-- Relevant on SMT (hyper-threaded) CPUs where two hardware threads share a physical core
-- The kernel can enable STIBP always, per-task (if the process requests it), or not at all
+- `IA32_SPEC_CTRL`のビット1
+- 兄弟ハイパースレッドが互いの間接分岐予測に影響を与えるのを防ぐ
+- 2つのハードウェアスレッドが1つの物理コアを共有するSMT（ハイパースレッディング）CPUで意味を持つ
+- カーネルはSTIBPを常に有効にすることも、タスク単位で（プロセスが要求した場合に）有効にすることも、まったく有効にしないこともできる
 
 ```bash
-# STIBP mitigation status
+# STIBPの緩和策の状態
 cat /sys/devices/system/cpu/vulnerabilities/spectre_v2
 # "Mitigation: Retpoline, IBPB: conditional, STIBP: conditional, RSB filling, PBRSB-eIBRS: Not affected"
 ```
 
 ---
 
-## Spectre v4 (CVE-2018-3639): Speculative Store Bypass {#spectre-v4-cve-2018-3639-speculative-store-bypass}
+## Spectre v4（CVE-2018-3639）: Speculative Store Bypass {#spectre-v4-cve-2018-3639-speculative-store-bypass}
 
-### The vulnerability {#the-vulnerability_3}
+### 脆弱性 {#the-vulnerability_3}
 
-The CPU may speculate that a load's address does not conflict with a recent store and bypass the store's value — reading stale data from cache or memory instead of the just-written value. An attacker can exploit this to read values that should have been overwritten.
+CPUは、ロードのアドレスが直前のストアと衝突しないと投機し、ストアの値をバイパスすることがある — つまり、書き込まれたばかりの値ではなく、キャッシュやメモリから古いデータを読み取る。攻撃者はこれを悪用して、上書きされているはずの値を読み取れる。
 
-### Mitigation: SSBD {#mitigation-ssbd}
+### 緩和策: SSBD {#mitigation-ssbd}
 
-**SSBD** (Speculative Store Bypass Disable) sets bit 2 of `IA32_SPEC_CTRL` to disable speculative store bypass globally:
+**SSBD**（Speculative Store Bypass Disable）は、`IA32_SPEC_CTRL`のビット2をセットして、投機的なストアバイパスをグローバルに無効化する。
 
 ```c
 /* arch/x86/kernel/cpu/bugs.c */
@@ -260,59 +260,59 @@ static void ssb_select_mitigation(void)
 {
     switch (ssb_mode) {
     case SPEC_STORE_BYPASS_DISABLE:
-        /* Enable SSBD globally */
+        /* SSBDをグローバルに有効にする */
         x86_spec_ctrl_base |= SPEC_CTRL_SSBD;
         wrmsrl(MSR_IA32_SPEC_CTRL, x86_spec_ctrl_base);
         break;
     case SPEC_STORE_BYPASS_PRCTL:
-        /* Enable per-thread via prctl(PR_SET_SPECULATION_CTRL) */
+        /* prctl(PR_SET_SPECULATION_CTRL)によりスレッド単位で有効にする */
         break;
     /* ... */
     }
 }
 ```
 
-User processes can request SSBD via:
+ユーザープロセスは次のようにしてSSBDを要求できる。
 
 ```c
 prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_STORE_BYPASS, PR_SPEC_DISABLE, 0, 0);
 ```
 
-The kernel sets the SSBD bit when scheduling in such a thread and clears it on context switch out.
+カーネルは、そのようなスレッドをスケジュールインするときにSSBDビットをセットし、コンテキストスイッチでスケジュールアウトするときにクリアする。
 
 ```bash
 cat /sys/devices/system/cpu/vulnerabilities/spec_store_bypass
 # "Mitigation: Speculative Store Bypass disabled via prctl"
-# or "Vulnerable"
+# または "Vulnerable"
 ```
 
 ---
 
-## MDS: Microarchitectural Data Sampling (CVE-2018-12130, etc.) {#mds-microarchitectural-data-sampling-cve-2018-12130-etc}
+## MDS: Microarchitectural Data Sampling（CVE-2018-12130など） {#mds-microarchitectural-data-sampling-cve-2018-12130-etc}
 
-MDS is a family of vulnerabilities that allow leaking data from CPU internal buffers (line fill buffer, store buffer, load ports) to an attacker on the same physical CPU core.
+MDSは、CPU内部のバッファ（ラインフィルバッファ、ストアバッファ、ロードポート）から、同じ物理CPUコア上の攻撃者へデータを漏洩させうる脆弱性のファミリーである。
 
-Variants:
+変種:
 
-- **MFBDS** (CVE-2018-12130): Microarchitectural Fill Buffer Data Sampling (ZombieLoad)
-- **MLPDS** (CVE-2018-12127): Microarchitectural Load Port Data Sampling
-- **MSBDS** (CVE-2018-12126): Microarchitectural Store Buffer Data Sampling (Fallout)
-- **MDSUM** (CVE-2019-11091): Microarchitectural Data Sampling Uncacheable Memory
+- **MFBDS**（CVE-2018-12130）: Microarchitectural Fill Buffer Data Sampling（ZombieLoad）
+- **MLPDS**（CVE-2018-12127）: Microarchitectural Load Port Data Sampling
+- **MSBDS**（CVE-2018-12126）: Microarchitectural Store Buffer Data Sampling（Fallout）
+- **MDSUM**（CVE-2019-11091）: Microarchitectural Data Sampling Uncacheable Memory
 
-### Mitigation: VERW {#mitigation-verw}
+### 緩和策: VERW {#mitigation-verw}
 
-The `VERW` instruction (originally for segment verification) was repurposed on affected Intel CPUs to flush the relevant microarchitectural buffers as a side effect when executed just before transitioning from kernel to user mode or entering a guest VM.
+`VERW`命令（本来はセグメントの検証用）は、影響を受けるIntel CPUにおいて、カーネルからユーザーモードへ遷移する直前やゲストVMに入る直前に実行されたとき、副作用として関連するマイクロアーキテクチャのバッファをフラッシュするよう転用された。
 
 ```asm
-/* arch/x86/entry/entry_64.S — before SYSRET/IRET */
-/* On MDS-affected CPUs: */
+/* arch/x86/entry/entry_64.S — SYSRET/IRETの前 */
+/* MDSの影響を受けるCPUでは: */
 sub     $8, %rsp
 mov     %ds, (%rsp)
-verw    (%rsp)       /* flush CPU buffers */
+verw    (%rsp)       /* CPUバッファをフラッシュする */
 add     $8, %rsp
 ```
 
-This is applied via the alternatives mechanism:
+これはalternative機構を介して適用される。
 
 ```c
 /* arch/x86/include/asm/nospec-branch.h */
@@ -323,7 +323,7 @@ static inline void mds_clear_cpu_buffers(void)
 }
 ```
 
-`VERW` is cheap (a few cycles) but must be executed on every kernel→user transition, adding a small constant overhead.
+`VERW`は安価（数サイクル）だが、カーネル→ユーザーの遷移のたびに実行しなければならないため、小さな一定のオーバーヘッドが加わる。
 
 ```bash
 cat /sys/devices/system/cpu/vulnerabilities/mds
@@ -333,81 +333,81 @@ cat /sys/devices/system/cpu/vulnerabilities/mds
 
 ---
 
-## Performance impact {#performance-impact}
+## 性能への影響 {#performance-impact}
 
-The mitigations impose measurable overhead, concentrated in syscall-heavy and context-switch-heavy workloads:
+緩和策は計測可能なオーバーヘッドを課し、それはシステムコールの多いワークロードやコンテキストスイッチの多いワークロードに集中する。
 
-| Vulnerability | Mitigation | Typical overhead |
+| 脆弱性 | 緩和策 | 典型的なオーバーヘッド |
 |---------------|------------|-----------------|
-| Meltdown | KPTI (PTI) | 5–30% on syscall-heavy workloads; ~5% with PCID |
-| Spectre v2 | Retpoline | 2–15% depending on indirect call frequency |
-| Spectre v2 | eIBRS (hardware) | ~1% (modern Intel Ice Lake+) |
-| Spectre v1 | `array_index_nospec` | Negligible (a few instructions per check) |
-| IBPB | Per context-switch | 1–10% on context-switch-heavy workloads |
-| STIBP | Continuous | 5–15% on SMT systems (when always-on) |
-| MDS | VERW per exit | ~1-2% (a few cycles per kernel exit) |
-| Spectre v4 | SSBD | 2–8% when enabled per-thread; negligible when off |
+| Meltdown | KPTI（PTI） | システムコールの多いワークロードで5–30%。PCIDありで約5% |
+| Spectre v2 | Retpoline | 間接呼び出しの頻度に応じて2–15% |
+| Spectre v2 | eIBRS（ハードウェア） | 約1%（現代のIntel Ice Lake以降） |
+| Spectre v1 | `array_index_nospec` | 無視できる程度（チェックごとに数命令） |
+| IBPB | コンテキストスイッチごと | コンテキストスイッチの多いワークロードで1–10% |
+| STIBP | 継続的 | SMTシステムで5–15%（常時有効の場合） |
+| MDS | 出口ごとのVERW | 約1-2%（カーネルの出口ごとに数サイクル） |
+| Spectre v4 | SSBD | スレッド単位で有効にした場合2–8%。オフなら無視できる程度 |
 
-Workload-specific impact:
+ワークロード別の影響:
 
-- **Database servers (PostgreSQL, MySQL)**: high syscall rate → KPTI and IBPB have the most impact
-- **Web servers (nginx, Apache)**: moderate syscall rate; retpoline overhead visible
-- **HPC / batch compute**: mostly user-space computation; mitigations largely invisible
-- **Container orchestration**: high context-switch rate; IBPB overhead matters
+- **データベースサーバー（PostgreSQL、MySQL）**: システムコールの頻度が高い → KPTIとIBPBの影響が最も大きい
+- **Webサーバー（nginx、Apache）**: システムコールの頻度は中程度。retpolineのオーバーヘッドが見える
+- **HPC / バッチ計算**: ほとんどがユーザー空間での計算。緩和策の影響はほぼ見えない
+- **コンテナオーケストレーション**: コンテキストスイッチの頻度が高い。IBPBのオーバーヘッドが効いてくる
 
 ```bash
-# Measure syscall overhead before/after (compare with mitigations off vs on)
-# Boot with: mitigations=off   (disables all; only for isolated benchmarking!)
-# Normal:    mitigations=auto  (default)
-# Maximum:   mitigations=auto,nosmt
+# システムコールのオーバーヘッドを前後で測定する（緩和策オフとオンを比較する）
+# ブート時に指定: mitigations=off   （すべて無効にする。隔離されたベンチマーク専用！）
+# 通常:           mitigations=auto  （デフォルト）
+# 最大:           mitigations=auto,nosmt
 
-# Quick syscall benchmark
+# 簡易的なシステムコールのベンチマーク
 perf stat -e instructions,cycles,cache-misses -r 5 \
     bash -c 'for i in $(seq 100000); do :; done'
 
-# Measure CR3 switch cost (KPTI)
+# CR3切り替えのコストを測定する（KPTI）
 perf stat -e dTLB-load-misses,iTLB-load-misses ls
 
-# See retpoline stats
+# retpolineの状況を見る
 grep . /sys/devices/system/cpu/vulnerabilities/*
 dmesg | grep -E "Spectre|Meltdown|MDS|retpoline|IBRS|IBPB|STIBP|VERW"
 ```
 
 ---
 
-## Mitigation control {#mitigation-control}
+## 緩和策の制御 {#mitigation-control}
 
-The kernel provides several ways to control mitigations:
+カーネルは緩和策を制御するいくつかの方法を提供している。
 
-### Boot parameters {#boot-parameters}
+### ブートパラメータ {#boot-parameters}
 
 ```bash
-# Disable all mitigations (dangerous! only for benchmarking in isolated environments)
+# すべての緩和策を無効にする（危険！ 隔離された環境でのベンチマーク専用）
 mitigations=off
 
-# Default auto-selection
+# デフォルトの自動選択
 mitigations=auto
 
-# Also disable SMT (hyper-threading) for strongest isolation
+# 最も強い隔離のためにSMT（ハイパースレッディング）も無効にする
 mitigations=auto,nosmt
 
-# Individual controls
-nopti                    # disable KPTI
-nospectre_v1             # disable Spectre v1 mitigations
-nospectre_v2             # disable Spectre v2 mitigations
-spec_store_bypass_disable=off  # disable SSBD
-mds=off                  # disable MDS mitigation
+# 個別の制御
+nopti                    # KPTIを無効にする
+nospectre_v1             # Spectre v1の緩和策を無効にする
+nospectre_v2             # Spectre v2の緩和策を無効にする
+spec_store_bypass_disable=off  # SSBDを無効にする
+mds=off                  # MDSの緩和策を無効にする
 ```
 
-### Runtime control (per-process) {#runtime-control-per-process}
+### 実行時の制御（プロセス単位） {#runtime-control-per-process}
 
 ```c
-/* Spectre v4 / SSBD — user can request mitigation for their process */
+/* Spectre v4 / SSBD — ユーザーは自分のプロセスに対して緩和策を要求できる */
 prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_STORE_BYPASS, PR_SPEC_DISABLE, 0, 0);
 prctl(PR_SET_SPECULATION_CTRL, PR_SPEC_INDIRECT_BRANCH, PR_SPEC_DISABLE, 0, 0);
 ```
 
-### Observing all mitigations at once {#observing-all-mitigations-at-once}
+### すべての緩和策を一度に観察する {#observing-all-mitigations-at-once}
 
 ```bash
 grep . /sys/devices/system/cpu/vulnerabilities/*
@@ -427,36 +427,36 @@ grep . /sys/devices/system/cpu/vulnerabilities/*
 
 ---
 
-## Timeline {#timeline}
+## 年表 {#timeline}
 
-| Date | Event |
+| 日付 | 出来事 |
 |------|-------|
-| Jan 3, 2018 | Coordinated public disclosure of Meltdown and Spectre v1/v2 |
-| Jan 2, 2018 | Linux 4.15 released with KPTI (Meltdown fix) |
-| Jan 2018 | Retpoline technique published by Google; kernel 4.15 gains retpoline |
-| May 2018 | Spectre v4 (SSBD) disclosed; kernel 4.17 adds SSBD prctl |
-| Aug 14, 2018 | L1TF (Foreshadow) disclosed; kernel 4.18 adds mitigations |
-| May 2019 | MDS (Zombieload) disclosed; kernel 5.1 adds VERW flush |
-| Nov 2019 | TAA (TSX Async Abort); kernel 5.4 adds mitigation |
-| 2020+ | Continued stream of microarchitectural vulnerabilities; mitigations added per release |
+| 2018年1月3日 | MeltdownとSpectre v1/v2の協調的な一般公開 |
+| 2018年1月2日 | KPTI（Meltdownの修正）を含むLinux 4.15がリリースされる |
+| 2018年1月 | GoogleがRetpoline技法を公開。カーネル4.15にretpolineが入る |
+| 2018年5月 | Spectre v4（SSBD）が公開される。カーネル4.17がSSBDのprctlを追加 |
+| 2018年8月14日 | L1TF（Foreshadow）が公開される。カーネル4.18が緩和策を追加 |
+| 2019年5月 | MDS（Zombieload）が公開される。カーネル5.1がVERWによるフラッシュを追加 |
+| 2019年11月 | TAA（TSX Async Abort）。カーネル5.4が緩和策を追加 |
+| 2020年以降 | マイクロアーキテクチャの脆弱性が次々と見つかり続け、リリースごとに緩和策が追加されている |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source & documentation {#kernel-source-documentation}
+### カーネルソースとドキュメント {#kernel-source-documentation}
 
-- [Spectre Side Channels](https://docs.kernel.org/admin-guide/hw-vuln/spectre.html) — the kernel's own admin-facing documentation of variants and mitigation controls
-- [arch/x86/kernel/cpu/bugs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/bugs.c) — where every mitigation is selected and reported
-- [meltdownattack.com](https://meltdownattack.com/) — the original Meltdown and Spectre papers
+- [Spectre Side Channels](https://docs.kernel.org/admin-guide/hw-vuln/spectre.html) — 変種と緩和策の制御についての、カーネル自身による管理者向けドキュメント
+- [arch/x86/kernel/cpu/bugs.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/bugs.c) — すべての緩和策が選択・報告される場所
+- [meltdownattack.com](https://meltdownattack.com/) — MeltdownとSpectreの原論文
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Spectre and Meltdown on ARM64](../arm64/spectre-meltdown.md) — the same vulnerabilities through arm64's lens
-- [x86-64 Page Tables](page-tables.md) — KPTI mechanics: dual PGDs, PCID
-- [Kernel Hardening](../../security/kernel-hardening.md) — the broader mitigation landscape
+- [ARM64におけるSpectreとMeltdown](../arm64/spectre-meltdown.md) — 同じ脆弱性をarm64の視点から見る
+- [x86-64のページテーブル](page-tables.md) — KPTIの仕組み: 2つのPGD、PCID
+- [カーネルのハードニング](../../security/kernel-hardening.md) — より広い緩和策の全体像
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — the disclosure week, explained calmly
-- [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — the KASLR defense that turned out to stop Meltdown
+- [Notes from the Intelpocalypse](https://lwn.net/Articles/742702/) — 開示の週を冷静に解説したもの
+- [KAISER: hiding the kernel from user space](https://lwn.net/Articles/738975/) — 結果的にMeltdownを阻止したKASLR防御

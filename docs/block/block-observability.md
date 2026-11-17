@@ -1,69 +1,69 @@
-# Block Layer Observability {#block-layer-observability}
+# ブロック層の可観測性 {#block-layer-observability}
 
-> Seeing what the block layer is doing — from cheap aggregate counters up to per-request tracing
+> ブロック層が何をしているかを見る — 安価な集計カウンタからリクエスト単位のトレーシングまで
 
-Block I/O problems — a slow database, a stalling desktop, a saturated disk — are usually invisible at the application level, which only sees "the write took a long time." The block layer offers three levels of visibility to find out *why*: always-on aggregate counters, on-demand per-request tracing, and programmable tracepoints.
+ブロックI/Oの問題 — 遅いデータベース、固まるデスクトップ、飽和したディスク — は、通常アプリケーションのレベルからは見えない。アプリケーションに見えるのは「書き込みに長い時間がかかった」ということだけである。ブロック層は*なぜ*かを突き止めるために3段階の可視性を提供している。常時有効な集計カウンタ、オンデマンドのリクエスト単位トレーシング、そしてプログラム可能なtracepointである。
 
-## Level 1: aggregate counters {#level-1-aggregate-counters}
+## レベル1: 集計カウンタ {#level-1-aggregate-counters}
 
-Every block device exports cumulative counters through `/proc/diskstats` (and per-device `/sys/block/<dev>/stat`). Each line carries, among other fields: reads completed, reads merged, sectors read, milliseconds spent reading, the same four for writes, I/Os currently in flight, and total milliseconds the device has had I/O in progress.
+すべてのブロックデバイスは、`/proc/diskstats`（およびデバイスごとの`/sys/block/<dev>/stat`）を通じて累積カウンタをエクスポートしている。各行には、他のフィールドとともに次のものが含まれる: 完了した読み込み数、マージされた読み込み数、読み込んだセクタ数、読み込みに費やしたミリ秒数、書き込みについての同じ4項目、現在処理中のI/O数、そしてデバイスがI/Oを処理中だった合計ミリ秒数。
 
-These counters are the raw material for `iostat -x`, which reports *rates* by differencing the counters over an interval:
+これらのカウンタは`iostat -x`の素材であり、`iostat -x`は一定間隔でのカウンタの差分を取って*レート*を報告する。
 
 ```bash
 iostat -x 1 /dev/nvme0n1
 # Device   r/s   w/s   rkB/s   wkB/s  r_await  w_await  aqu-sz  %util
 ```
 
-- **`r_await` / `w_await`** — average time an I/O spent from submission to completion, *including* time queued. Rising await with normal throughput usually means requests are piling up upstream (in the scheduler or plug), not that the device is slow.
-- **`aqu-sz`** — average queue depth (how many I/Os were outstanding). Little's Law ties it to await × throughput.
-- **`%util`** — the fraction of time the device had at least one I/O in flight. On a single spinning disk, near 100% means saturated; on an NVMe device with many independent hardware queues, `%util` can read 100% while the device is far from its limit, so it is *not* a saturation signal for parallel devices. (Older `svctm` was removed for this same reason — it was misleading on modern hardware.)
+- **`r_await` / `w_await`** — I/Oが発行から完了までに費やした平均時間で、キューで待った時間を*含む*。スループットが正常なのにawaitが上昇している場合、通常はデバイスが遅いのではなく、上流（スケジューラやプラグ）でリクエストが溜まっていることを意味する。
+- **`aqu-sz`** — 平均キュー深さ（未完了のI/Oがいくつあったか）。リトルの法則により、await × スループットと結びつく。
+- **`%util`** — デバイスに少なくとも1つのI/Oが処理中だった時間の割合。単一の回転ディスクでは、100%近くは飽和を意味する。しかし多数の独立したハードウェアキューを持つNVMeデバイスでは、デバイスが限界からほど遠い状態でも`%util`が100%を示すことがあり、並列デバイスに対しては飽和のシグナルでは*ない*。（以前の`svctm`も同じ理由で削除された — 現代のハードウェアでは誤解を招くものだった。）
 
-## Level 2: per-request tracing — blktrace {#level-2-per-request-tracing-blktrace}
+## レベル2: リクエスト単位のトレーシング — blktrace {#level-2-per-request-tracing-blktrace}
 
-When the aggregates say "await is high" but not *where* the time went, `blktrace` records an event for **every stage of every request**. `blkparse` renders the trace, and each line is tagged with an action letter — the stages a request passes through on its way down, exactly as traced in [Life of a Block I/O](life-of-block-io.md):
+集計値が「awaitが高い」とは言っても、*どこで*時間がかかったのかを教えてくれない場合、`blktrace`は**すべてのリクエストのすべての段階**についてイベントを記録する。`blkparse`がトレースを整形し、各行にはアクション文字のタグが付く — これはリクエストが下へ向かう途中で通過する段階であり、[ブロックI/Oの一生](life-of-block-io.md)でたどったものとまったく同じである。
 
-| Action | Meaning |
+| アクション | 意味 |
 |---|---|
-| `Q` | bio **queued** — entered the block layer |
-| `G` | **get request** — a request was allocated |
-| `M` / `F` | back-**merge** / **front**-merge into an existing request |
-| `I` | request **inserted** into the scheduler |
-| `D` | request **dispatched** to the driver |
-| `C` | request **completed** |
+| `Q` | bioが**キューに入った** — ブロック層に入った |
+| `G` | **リクエストの取得** — requestが割り当てられた |
+| `M` / `F` | 既存のrequestへのバック**マージ** / **フロント**マージ |
+| `I` | requestがスケジューラに**挿入された** |
+| `D` | requestがドライバに**ディスパッチされた** |
+| `C` | requestが**完了した** |
 
 ```bash
 blktrace -d /dev/nvme0n1 -o - | blkparse -i -
 ```
 
-`btt` (block trace timeline) post-processes a capture into a latency breakdown by stage — most usefully **Q2D** (time from queue to dispatch: how long the block layer/scheduler held the I/O) versus **D2C** (dispatch to completion: time actually at the device). That single split answers the most common question: *is the latency in the kernel or in the hardware?*
+`btt`（block trace timeline）は、キャプチャを後処理して段階ごとのレイテンシの内訳を出す — 最も有用なのは**Q2D**（キューからディスパッチまでの時間: ブロック層/スケジューラがI/Oを保持していた時間）と**D2C**（ディスパッチから完了まで: 実際にデバイスで費やされた時間）の比較である。この1つの分割が、最もよくある疑問に答えてくれる: *レイテンシはカーネルにあるのか、ハードウェアにあるのか？*
 
-## Level 3: programmable tracing — tracepoints and BPF {#level-3-programmable-tracing-tracepoints-and-bpf}
+## レベル3: プログラム可能なトレーシング — tracepointとBPF {#level-3-programmable-tracing-tracepoints-and-bpf}
 
-The same stages are exposed as static tracepoints — `block:block_rq_issue`, `block:block_rq_complete`, `block:block_bio_queue`, `block:block_rq_insert` — which any BPF tool can attach to without a full capture. The BCC / bpftrace suite turns them into focused answers:
+同じ段階は静的tracepoint — `block:block_rq_issue`、`block:block_rq_complete`、`block:block_bio_queue`、`block:block_rq_insert` — としても公開されており、どのBPFツールも完全なキャプチャなしにアタッチできる。BCC / bpftraceのツール群は、これらを的を絞った答えに変える。
 
-- **`biolatency`** — a histogram of I/O completion latency (spot bimodal distributions and tail latency)
-- **`biosnoop`** — one line per I/O with issuing process, sector, size, and latency
-- **`biotop`** — `top`, but for block I/O by process
+- **`biolatency`** — I/O完了レイテンシのヒストグラム（二峰性の分布やテールレイテンシを見つける）
+- **`biosnoop`** — I/Oごとに1行、発行したプロセス、セクタ、サイズ、レイテンシを表示
+- **`biotop`** — ブロックI/O版の`top`で、プロセスごとに表示
 
 ```bash
-# latency histogram, per second, for one device
+# 1つのデバイスについて、1秒ごとのレイテンシヒストグラム
 biolatency -D 1
 
-# a one-liner: average completion latency by device, live
+# ワンライナー: デバイスごとの平均完了レイテンシをライブで
 bpftrace -e 'tracepoint:block:block_rq_complete { @[args->dev] = avg(nsecs); }'
 ```
 
-## Putting it together {#putting-it-together}
+## まとめ {#putting-it-together}
 
-A practical diagnosis flow:
+実践的な診断の流れ:
 
-1. **`iostat -x`** first. High `await` with low throughput and modest `%util` → the time is *upstream* (queuing, throttling, scheduler). High throughput at the device's known limit → simply saturated.
-2. If it looks upstream, **`blktrace | btt`** and compare **Q2D vs D2C**. Large Q2D means the block layer is holding the I/O — check the [I/O scheduler](io-schedulers.md) and any [cgroup I/O throttling](blk-cgroup.md). Large D2C means the device (or its firmware) is the bottleneck.
-3. To attribute latency to *processes*, reach for **`biosnoop`** / **`biotop`**.
+1. まず**`iostat -x`**。スループットが低く`%util`もそこそこなのに`await`が高い → 時間は*上流*（キューイング、スロットリング、スケジューラ）にある。スループットがデバイスの既知の限界に達している → 単純に飽和している。
+2. 上流に見える場合は、**`blktrace | btt`**で**Q2DとD2C**を比較する。Q2Dが大きければブロック層がI/Oを保持している — [I/Oスケジューラ](io-schedulers.md)や[cgroup I/Oスロットリング](blk-cgroup.md)を確認する。D2Cが大きければデバイス（またはそのファームウェア）がボトルネックである。
+3. レイテンシを*プロセス*に帰属させるには、**`biosnoop`** / **`biotop`**を使う。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: procfs `diskstats`](https://docs.kernel.org/admin-guide/iostats.html) — the definitive field-by-field reference
-- [I/O Schedulers](io-schedulers.md) — where Q2D latency comes from
-- [bio and request structures](bio-request.md) — the objects these traces follow
+- [Kernel docs: procfs `diskstats`](https://docs.kernel.org/admin-guide/iostats.html) — フィールドごとの決定版リファレンス
+- [I/Oスケジューラ](io-schedulers.md) — Q2Dレイテンシの発生源
+- [bioとrequestの構造体](bio-request.md) — これらのトレースが追いかけるオブジェクト

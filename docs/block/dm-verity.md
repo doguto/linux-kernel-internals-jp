@@ -1,23 +1,23 @@
-# Device Mapper: dm-verity and Integrity Checking {#device-mapper-dm-verity-and-integrity-checking}
+# Device Mapper: dm-verityと整合性検査 {#device-mapper-dm-verity-and-integrity-checking}
 
-> Merkle tree verification of block device data for Android and ChromeOS
+> AndroidとChromeOSのための、Merkleツリーによるブロックデバイスデータの検証
 
-## What is dm-verity? {#what-is-dm-verity}
+## dm-verityとは？ {#what-is-dm-verity}
 
-dm-verity provides **transparent integrity checking** of a block device using a Merkle (hash) tree. Every read is verified against pre-computed hashes. If data is tampered with, the kernel returns an error or panics.
+dm-verityは、Merkle（ハッシュ）ツリーを使ってブロックデバイスの**透過的な整合性検査**を提供する。すべての読み込みは、事前に計算されたハッシュに対して検証される。データが改ざんされていれば、カーネルはエラーを返すかパニックする。
 
-Used by:
+使用例:
 
-- **Android**: verifying the read-only system partition
-- **ChromeOS**: verified boot for rootfs
-- **Linux distributions**: immutable root filesystem with integrity
+- **Android**: 読み取り専用のシステムパーティションの検証
+- **ChromeOS**: rootfsのverified boot
+- **Linuxディストリビューション**: 整合性を備えたイミュータブルなルートファイルシステム
 
 ```
 Without dm-verity: read block → use data (no check)
 With dm-verity:    read block → hash block → compare with Merkle tree → use data
 ```
 
-## Merkle tree structure {#merkle-tree-structure}
+## Merkleツリーの構造 {#merkle-tree-structure}
 
 ```
 Data blocks:        [B0][B1][B2][B3][B4][B5][B6][B7]
@@ -36,9 +36,9 @@ On read of B3:
   5. Verify ROOT matches the stored root hash (from trusted source)
 ```
 
-The root hash is stored outside the block device (in the kernel command line, TPM, or signed partition table).
+ルートハッシュはブロックデバイスの外部（カーネルコマンドライン、TPM、または署名付きパーティションテーブル）に格納される。
 
-## dm-verity on-disk layout {#dm-verity-on-disk-layout}
+## dm-verityのディスク上のレイアウト {#dm-verity-on-disk-layout}
 
 ```
 dm-verity device:
@@ -54,13 +54,13 @@ dm-verity device:
 └───────────────────────────────────┘
 ```
 
-The hash tree can be on the same device (after the data) or on a separate device.
+ハッシュツリーは同じデバイス上（データの後ろ）に置くことも、別のデバイスに置くこともできる。
 
-## Setting up dm-verity {#setting-up-dm-verity}
+## dm-verityのセットアップ {#setting-up-dm-verity}
 
 ```bash
-# Step 1: Format a block device with dm-verity:
-veritysetup format /dev/sdb1 /dev/sdc1   # data device, hash device
+# ステップ1: ブロックデバイスをdm-verity用にフォーマットする:
+veritysetup format /dev/sdb1 /dev/sdc1   # データデバイス、ハッシュデバイス
 # VERITY header information for /dev/sdb1
 # UUID:                   abc123-...
 # Hash type:              1
@@ -69,66 +69,66 @@ veritysetup format /dev/sdb1 /dev/sdc1   # data device, hash device
 # Hash block size:        4096
 # Hash algorithm:         sha256
 # Salt:                   deadbeef...
-# Root hash:              1234567890abcdef...  ← SAVE THIS!
+# Root hash:              1234567890abcdef...  ← これを保存すること！
 
-# Step 2: Open dm-verity:
+# ステップ2: dm-verityをオープンする:
 veritysetup open /dev/sdb1 verified-root /dev/sdc1 \
-    1234567890abcdef...   # root hash from step 1
+    1234567890abcdef...   # ステップ1のルートハッシュ
 
-# Step 3: Mount the verified device:
+# ステップ3: 検証済みデバイスをマウントする:
 mount -o ro /dev/mapper/verified-root /mnt
 
-# Any tampered block → read returns -EIO (or panic if configured)
+# 改ざんされたブロックがあれば → 読み込みは-EIOを返す（設定によってはパニック）
 
-# Step 4: Verify manually:
+# ステップ4: 手動で検証する:
 veritysetup verify /dev/sdb1 /dev/sdc1 1234567890abcdef...
 # Verification successful.
 ```
 
-## Kernel dm-verity implementation {#kernel-dm-verity-implementation}
+## カーネルのdm-verity実装 {#kernel-dm-verity-implementation}
 
 ```c
 /* drivers/md/dm-verity-target.c */
 
 struct dm_verity {
-    struct dm_dev    *data_dev;     /* data block device */
-    struct dm_dev    *hash_dev;     /* hash tree device */
-    sector_t          data_start;   /* start sector of data */
-    sector_t          hash_start;   /* start sector of hash tree */
-    sector_t          data_blocks;  /* number of data blocks */
+    struct dm_dev    *data_dev;     /* データブロックデバイス */
+    struct dm_dev    *hash_dev;     /* ハッシュツリーデバイス */
+    sector_t          data_start;   /* データの開始セクタ */
+    sector_t          hash_start;   /* ハッシュツリーの開始セクタ */
+    sector_t          data_blocks;  /* データブロック数 */
     unsigned int      data_dev_block_bits;
     unsigned int      hash_dev_block_bits;
-    unsigned int      digest_size;  /* hash output size */
+    unsigned int      digest_size;  /* ハッシュ出力のサイズ */
     const char       *alg_name;    /* "sha256" */
-    u8               *root_digest; /* trusted root hash */
-    u8               *salt;        /* salt to prevent pre-image attacks */
+    u8               *root_digest; /* 信頼されたルートハッシュ */
+    u8               *salt;        /* 原像攻撃を防ぐためのソルト */
     unsigned int      salt_size;
-    struct crypto_ahash *tfm;      /* hash transform */
+    struct crypto_ahash *tfm;      /* ハッシュ変換 */
     /* ... */
 };
 
-/* On every read: */
+/* 読み込みのたびに: */
 static int verity_verify_io(struct dm_verity_io *io)
 {
     struct dm_verity *v = io->v;
     struct bio_vec bv;
 
-    /* For each data block in the bio: */
+    /* bio内の各データブロックについて: */
     while (more_blocks) {
-        /* 1. Hash the data block */
+        /* 1. データブロックをハッシュする */
         verity_hash_init(v, io);
-        /* io->req = crypto_ahash_request for the block */
+        /* io->req = そのブロック用のcrypto_ahash_request */
 
-        /* 2. Walk up the Merkle tree levels */
+        /* 2. Merkleツリーのレベルを上にたどる */
         for (level = v->levels - 1; level >= 0; level--) {
-            /* Read hash block from hash_dev */
-            /* Verify this level's hash against parent */
+            /* hash_devからハッシュブロックを読み込む */
+            /* このレベルのハッシュを親に対して検証する */
         }
 
-        /* 3. Verify root hash */
+        /* 3. ルートハッシュを検証する */
         if (memcmp(root_hash, v->root_digest, v->digest_size)) {
             if (v->mode == DM_VERITY_MODE_EIO)
-                return -EIO;       /* silent failure */
+                return -EIO;       /* サイレントな失敗 */
             else if (v->mode == DM_VERITY_MODE_PANIC)
                 panic("dm-verity: data corrupted!");
         }
@@ -137,20 +137,20 @@ static int verity_verify_io(struct dm_verity_io *io)
 }
 ```
 
-### Error modes {#error-modes}
+### エラーモード {#error-modes}
 
 ```c
 enum verity_mode {
-    DM_VERITY_MODE_EIO,          /* return -EIO on corruption (default) */
-    DM_VERITY_MODE_LOGGING,      /* log but continue */
-    DM_VERITY_MODE_RESTART,      /* reboot */
-    DM_VERITY_MODE_PANIC,        /* kernel panic */
+    DM_VERITY_MODE_EIO,          /* 破損時に-EIOを返す（デフォルト） */
+    DM_VERITY_MODE_LOGGING,      /* ログに記録して続行 */
+    DM_VERITY_MODE_RESTART,      /* 再起動 */
+    DM_VERITY_MODE_PANIC,        /* カーネルパニック */
 };
 ```
 
-## dm-verity in Android {#dm-verity-in-android}
+## Androidにおけるdm-verity {#dm-verity-in-android}
 
-Android uses dm-verity for the `/system` partition since Android 4.4 (KitKat):
+AndroidはAndroid 4.4（KitKat）以降、`/system`パーティションにdm-verityを使っている。
 
 ```
 Android boot process:
@@ -166,72 +166,72 @@ AVB (Android Verified Boot) 2.0:
 ```
 
 ```bash
-# Android: check verity status
+# Android: verityの状態を確認する
 adb shell getprop ro.boot.veritymode
 # enforcing
 
-# Check dm-verity device:
+# dm-verityデバイスを確認する:
 adb shell dmctl table system
 # 0 ...: verity 1 /dev/block/sda1 /dev/block/sda2 4096 4096 ...
 ```
 
-## dm-verity with fec (Forward Error Correction) {#dm-verity-with-fec-forward-error-correction}
+## fec（前方誤り訂正）付きのdm-verity {#dm-verity-with-fec-forward-error-correction}
 
 ```bash
-# Enable FEC: can correct up to N corrupted bytes without failing:
+# FECを有効にする: 失敗せずに最大Nバイトの破損を訂正できる:
 veritysetup format --fec-device=/dev/sdc2 --fec-roots=2 \
     /dev/sdb1 /dev/sdc1
-# FEC roots=2 → can correct 2*255/255 = ~0.8% of data
+# FEC roots=2 → データの2*255/255 = 約0.8%を訂正できる
 
-# Open with FEC:
+# FEC付きでオープンする:
 veritysetup open --fec-device=/dev/sdc2 /dev/sdb1 verified /dev/sdc1 \
     <root_hash>
 ```
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Check dm-verity corruption stats:
+# dm-verityの破損統計を確認する:
 dmsetup status verified
 # 0 524288000 verity V
-# → V = no errors, C = corruption detected
+# → V = エラーなし、C = 破損を検出
 
-# Kernel error log on corruption:
+# 破損時のカーネルエラーログ:
 dmesg | grep -E "dm-verity|verity"
 # dm-verity: device 252:0 is corrupted
 # dm-verity: hashed block 1234 is corrupted
 
-# Check if verity is enforced:
+# verityが強制されているか確認する:
 cat /sys/module/dm_verity/parameters/error_behavior
 # EIO
 ```
 
-## dm-thin: thin provisioning {#dm-thin-thin-provisioning}
+## dm-thin: シンプロビジョニング {#dm-thin-thin-provisioning}
 
-Another important device mapper target — thin provisioning allows creating virtual block devices larger than physical storage:
+もう1つの重要なdevice mapperターゲットである — シンプロビジョニングは、物理ストレージより大きな仮想ブロックデバイスの作成を可能にする。
 
 ```bash
-# Create thin pool (metadata + data devices):
+# シンプールを作成する（メタデータ + データデバイス）:
 dmsetup create pool --table \
     "0 20971520 thin-pool /dev/sdb1 /dev/sdb2 128 0"
-#   sectors   target   metadata     data       chunk-size min-free-space
+#   セクタ数   ターゲット メタデータ   データ     チャンクサイズ 最小空き容量
 
-# Create a thin volume (virtual device, no physical allocation):
-dmsetup message pool 0 "create_thin 0"       # thin ID 0
+# シンボリュームを作成する（仮想デバイス、物理的な割り当てなし）:
+dmsetup message pool 0 "create_thin 0"       # シンID 0
 dmsetup create thin0 --table "0 2097152 thin /dev/mapper/pool 0"
 
-# Actual blocks are allocated on first write (copy-on-write with provisioning)
+# 実際のブロックは最初の書き込み時に割り当てられる（プロビジョニングを伴うcopy-on-write）
 
-# Create snapshot:
-dmsetup message pool 0 "create_snap 1 0"   # snap ID 1, origin ID 0
+# スナップショットを作成する:
+dmsetup message pool 0 "create_snap 1 0"   # スナップショットID 1、元のID 0
 dmsetup create snap0 --table "0 2097152 thin /dev/mapper/pool 1"
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [dm-crypt](../security/dm-crypt.md) — dm-crypt stacks well with dm-verity
-- [NVMe Driver](nvme.md) — block device dm-verity protects
-- [BPF Networking](../bpf/bpf-networking.md) — similar pipeline interception
-- `drivers/md/dm-verity*.c` — dm-verity implementation
+- [dm-crypt](../security/dm-crypt.md) — dm-cryptはdm-verityとうまくスタックできる
+- [NVMeドライバ](nvme.md) — dm-verityが保護するブロックデバイス
+- [BPFネットワーキング](../bpf/bpf-networking.md) — 類似したパイプラインでの介入
+- `drivers/md/dm-verity*.c` — dm-verityの実装
 - `Documentation/admin-guide/device-mapper/verity.rst`
-- Android AVB documentation
+- AndroidのAVBドキュメント

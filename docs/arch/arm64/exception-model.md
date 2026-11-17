@@ -1,10 +1,10 @@
-# ARM64 Exception Model {#arm64-exception-model}
+# ARM64の例外モデル {#arm64-exception-model}
 
-> Exception levels, interrupt handling, and the GIC
+> 例外レベル、割り込み処理、そしてGIC
 
-## Exception Levels {#exception-levels}
+## 例外レベル {#exception-levels}
 
-ARM64 defines four exception levels (EL0-EL3), roughly analogous to x86 protection rings but more hierarchical:
+ARM64は4つの例外レベル（EL0-EL3）を定義している。これはx86の保護リングにおおよそ相当するが、より階層的である。
 
 ```
 EL3: Secure Monitor (TrustZone firmware, e.g., ARM Trusted Firmware)
@@ -16,29 +16,29 @@ EL1: OS Kernel (Linux kernel runs here)
 EL0: User space (applications)
 ```
 
-Key properties:
+主な特性:
 
-- **EL0**: unprivileged, can only access user-accessible system registers
-- **EL1**: kernel mode, full access to kernel address space and EL1 system registers
-- **EL2**: hypervisor mode, can trap and emulate EL1 operations
-- **EL3**: most privileged, manages secure/non-secure world transitions (TrustZone)
+- **EL0**: 非特権。ユーザーがアクセス可能なシステムレジスタにしかアクセスできない
+- **EL1**: カーネルモード。カーネルアドレス空間とEL1システムレジスタに完全にアクセスできる
+- **EL2**: ハイパーバイザモード。EL1の操作をトラップしてエミュレートできる
+- **EL3**: 最も特権が高い。セキュアワールドと非セキュアワールドの間の遷移（TrustZone）を管理する
 
-The Linux kernel runs at EL1 normally, but with VHE (Virtualization Host Extension, ARMv8.1+) KVM runs the host kernel at EL2 directly (EL2 registers are made to look like EL1 registers via VHE). Without VHE, a small EL2 stub handles world-switching while the host kernel stays at EL1. Guests always run at EL1/EL0.
+Linuxカーネルは通常EL1で動作するが、VHE（Virtualization Host Extension、ARMv8.1以降）があるとKVMはホストカーネルを直接EL2で動かす（VHEによってEL2レジスタがEL1レジスタのように見えるようになる）。VHEがない場合は、小さなEL2スタブがワールドの切り替えを処理し、ホストカーネルはEL1にとどまる。ゲストは常にEL1/EL0で動作する。
 
-## Exception types {#exception-types}
+## 例外の種類 {#exception-types}
 
-ARM64 has four categories of exceptions:
+ARM64には4つのカテゴリの例外がある。
 
-| Category | Description | Examples |
+| カテゴリ | 説明 | 例 |
 |----------|-------------|---------|
-| **Synchronous** | Caused by the current instruction | SVC, data abort, instruction abort, undefined |
-| **IRQ** | External interrupt (normal priority) | Device interrupts |
-| **FIQ** | Fast interrupt (high priority, typically routed to EL3) | Secure world interrupts |
-| **SError** | Asynchronous system error | Bus errors, DRAM ECC |
+| **Synchronous** | 現在の命令によって引き起こされる | SVC、データアボート、命令アボート、未定義命令 |
+| **IRQ** | 外部割り込み（通常優先度） | デバイス割り込み |
+| **FIQ** | 高速割り込み（高優先度、通常はEL3へルーティングされる） | セキュアワールドの割り込み |
+| **SError** | 非同期システムエラー | バスエラー、DRAM ECC |
 
-## Exception vectors: VBAR_EL1 {#exception-vectors-vbar_el1}
+## 例外ベクタ: VBAR_EL1 {#exception-vectors-vbar_el1}
 
-When an exception occurs, the CPU jumps to an entry in the **vector table**, pointed to by `VBAR_EL1` (Vector Base Address Register for EL1):
+例外が発生すると、CPUは`VBAR_EL1`（Vector Base Address Register for EL1）が指す**ベクタテーブル**内のエントリへジャンプする。
 
 ```
 VBAR_EL1 base
@@ -58,76 +58,76 @@ VBAR_EL1 base
   ...
 ```
 
-### Linux vector table {#linux-vector-table}
+### Linuxのベクタテーブル {#linux-vector-table}
 
 ```asm
 /* arch/arm64/kernel/entry.S */
     .align  11
 SYM_CODE_START(vectors)
-    kernel_ventry   1, t, 64, sync    /* Synchronous EL1t (SP_EL0) */
+    kernel_ventry   1, t, 64, sync    /* 同期 EL1t（SP_EL0） */
     kernel_ventry   1, t, 64, irq     /* IRQ EL1t */
     kernel_ventry   1, t, 64, fiq     /* FIQ EL1t */
-    kernel_ventry   1, t, 64, error   /* Error EL1t */
+    kernel_ventry   1, t, 64, error   /* エラー EL1t */
 
-    kernel_ventry   1, h, 64, sync    /* Synchronous EL1h (SP_ELx) */
+    kernel_ventry   1, h, 64, sync    /* 同期 EL1h（SP_ELx） */
     kernel_ventry   1, h, 64, irq     /* IRQ EL1h */
     kernel_ventry   1, h, 64, fiq     /* FIQ EL1h */
-    kernel_ventry   1, h, 64, error   /* Error EL1h */
+    kernel_ventry   1, h, 64, error   /* エラー EL1h */
 
-    kernel_ventry   0, t, 64, sync    /* Synchronous EL0 64-bit */
-    kernel_ventry   0, t, 64, irq     /* IRQ EL0 64-bit */
-    kernel_ventry   0, t, 64, fiq     /* FIQ EL0 64-bit */
-    kernel_ventry   0, t, 64, error   /* Error EL0 64-bit */
+    kernel_ventry   0, t, 64, sync    /* 同期 EL0 64ビット */
+    kernel_ventry   0, t, 64, irq     /* IRQ EL0 64ビット */
+    kernel_ventry   0, t, 64, fiq     /* FIQ EL0 64ビット */
+    kernel_ventry   0, t, 64, error   /* エラー EL0 64ビット */
 
-    kernel_ventry   0, t, 32, sync    /* Synchronous EL0 32-bit */
-    kernel_ventry   0, t, 32, irq     /* IRQ EL0 32-bit */
-    kernel_ventry   0, t, 32, fiq     /* FIQ EL0 32-bit */
-    kernel_ventry   0, t, 32, error   /* Error EL0 32-bit */
+    kernel_ventry   0, t, 32, sync    /* 同期 EL0 32ビット */
+    kernel_ventry   0, t, 32, irq     /* IRQ EL0 32ビット */
+    kernel_ventry   0, t, 32, fiq     /* FIQ EL0 32ビット */
+    kernel_ventry   0, t, 32, error   /* エラー EL0 32ビット */
 SYM_CODE_END(vectors)
 ```
 
-## Syndrome registers: ESR_EL1 {#syndrome-registers-esr_el1}
+## シンドロームレジスタ: ESR_EL1 {#syndrome-registers-esr_el1}
 
-When a synchronous exception occurs, `ESR_EL1` (Exception Syndrome Register) identifies the cause:
+同期例外が発生すると、`ESR_EL1`（Exception Syndrome Register）がその原因を示す。
 
 ```c
 /* arch/arm64/include/asm/esr.h */
 
-/* ESR_EL1 bits: */
-/* [31:26] EC: Exception Class */
+/* ESR_EL1のビット: */
+/* [31:26] EC: Exception Class（例外クラス） */
 #define ESR_ELx_EC_SHIFT    26
 #define ESR_ELx_EC_MASK     (0x3FUL << ESR_ELx_EC_SHIFT)
 
-/* Exception classes: */
-#define ESR_ELx_EC_UNKNOWN  0x00  /* Unknown reason */
-#define ESR_ELx_EC_SVC64   0x15  /* SVC instruction (EL0 → EL1, 64-bit) */
-#define ESR_ELx_EC_IABT_LOW 0x20  /* Instruction abort from lower EL */
-#define ESR_ELx_EC_IABT_CUR 0x21  /* Instruction abort from current EL */
-#define ESR_ELx_EC_DABT_LOW 0x24  /* Data abort from lower EL */
-#define ESR_ELx_EC_DABT_CUR 0x25  /* Data abort from current EL */
-#define ESR_ELx_EC_SOFTSTP_LOW 0x32 /* Software step (debug) from lower EL */
+/* 例外クラス: */
+#define ESR_ELx_EC_UNKNOWN  0x00  /* 原因不明 */
+#define ESR_ELx_EC_SVC64   0x15  /* SVC命令（EL0 → EL1、64ビット） */
+#define ESR_ELx_EC_IABT_LOW 0x20  /* 下位ELからの命令アボート */
+#define ESR_ELx_EC_IABT_CUR 0x21  /* 現在のELからの命令アボート */
+#define ESR_ELx_EC_DABT_LOW 0x24  /* 下位ELからのデータアボート */
+#define ESR_ELx_EC_DABT_CUR 0x25  /* 現在のELからのデータアボート */
+#define ESR_ELx_EC_SOFTSTP_LOW 0x32 /* 下位ELからのソフトウェアステップ（デバッグ） */
 
-/* [24] IL: Instruction Length (0=16-bit, 1=32-bit) */
-/* [23:0] ISS: Instruction-Specific Syndrome */
-/* For data aborts, ISS includes: DFSC (fault status code), WnR (write), SRT (register) */
+/* [24] IL: 命令長（0=16ビット、1=32ビット） */
+/* [23:0] ISS: Instruction-Specific Syndrome（命令固有シンドローム） */
+/* データアボートの場合、ISSには次が含まれる: DFSC（フォールトステータスコード）、WnR（書き込み）、SRT（レジスタ） */
 ```
 
-### Fault status codes (DFSC) {#fault-status-codes-dfsc}
+### フォールトステータスコード（DFSC） {#fault-status-codes-dfsc}
 
 ```c
-/* Data fault status codes in ESR_EL1.ISS.DFSC */
+/* ESR_EL1.ISS.DFSC内のデータフォールトステータスコード */
 #define ESR_ELx_FSC_TYPE    0x3C
-#define ESR_ELx_FSC_EXTABT  0x10  /* External abort */
-#define ESR_ELx_FSC_SERROR  0x11  /* Async SError abort */
-#define ESR_ELx_FSC_ACCESS  0x08  /* Access flag fault */
-#define ESR_ELx_FSC_FAULT   0x04  /* Translation fault (page not present) */
-#define ESR_ELx_FSC_PERM    0x0C  /* Permission fault */
+#define ESR_ELx_FSC_EXTABT  0x10  /* 外部アボート */
+#define ESR_ELx_FSC_SERROR  0x11  /* 非同期SErrorアボート */
+#define ESR_ELx_FSC_ACCESS  0x08  /* アクセスフラグフォールト */
+#define ESR_ELx_FSC_FAULT   0x04  /* 変換フォールト（ページが存在しない） */
+#define ESR_ELx_FSC_PERM    0x0C  /* パーミッションフォールト */
 
-/* Level bits [1:0]: */
-/* 0b00 = level 0 (PGD), 0b01 = level 1, 0b10 = level 2, 0b11 = level 3 (PTE) */
+/* レベルビット[1:0]: */
+/* 0b00 = レベル0（PGD）、0b01 = レベル1、0b10 = レベル2、0b11 = レベル3（PTE） */
 ```
 
-### Linux fault handling {#linux-fault-handling}
+### Linuxのフォールト処理 {#linux-fault-handling}
 
 ```c
 /* arch/arm64/mm/fault.c */
@@ -139,12 +139,12 @@ static int __kprobes do_mem_abort(unsigned long far, unsigned long esr,
     if (!inf->fn(far, esr, regs))
         return 0;
 
-    /* Unhandled fault */
+    /* 処理されなかったフォールト */
     arm64_notify_die(inf->name, regs, esr, far);
     return 0;
 }
 
-/* ESR EC → handler dispatch */
+/* ESR EC → ハンドラへのディスパッチ */
 static const struct fault_info fault_info[] = {
     { do_bad,           SIGKILL, 0,                   "ttbr address size fault" },
     /* ... */
@@ -154,36 +154,36 @@ static const struct fault_info fault_info[] = {
 };
 ```
 
-## Syscall entry (SVC) {#syscall-entry-svc}
+## システムコールのエントリ（SVC） {#syscall-entry-svc}
 
-On ARM64, system calls use the `SVC #0` instruction (Supervisor Call):
+ARM64では、システムコールは`SVC #0`命令（Supervisor Call）を使う。
 
 ```asm
-/* Userspace syscall: */
-mov x8, #__NR_write    /* syscall number in x8 */
-mov x0, #1             /* fd = 1 (stdout) */
-mov x1, x_buf          /* buffer address */
-mov x2, x_len          /* length */
-svc #0                 /* trap to EL1 */
-/* returns in x0 */
+/* ユーザー空間のシステムコール: */
+mov x8, #__NR_write    /* x8にシステムコール番号 */
+mov x0, #1             /* fd = 1（stdout） */
+mov x1, x_buf          /* バッファアドレス */
+mov x2, x_len          /* 長さ */
+svc #0                 /* EL1へトラップ */
+/* x0に戻り値が返る */
 ```
 
-The kernel SVC handler:
+カーネルのSVCハンドラ:
 
 ```asm
 /* arch/arm64/kernel/entry.S */
 SYM_CODE_START(el0t_64_sync_handler)
-    /* Save all registers */
+    /* すべてのレジスタを保存 */
     kernel_entry 0, 64
 
-    mrs     x22, esr_el1        /* read exception syndrome */
-    lsr     x24, x22, #ESR_ELx_EC_SHIFT  /* extract EC */
+    mrs     x22, esr_el1        /* 例外シンドロームを読む */
+    lsr     x24, x22, #ESR_ELx_EC_SHIFT  /* ECを取り出す */
 
-    /* EC = 0x15 means SVC from 64-bit EL0 */
+    /* EC = 0x15は64ビットEL0からのSVCを意味する */
     cmp     x24, #ESR_ELx_EC_SVC64
     b.eq    el0_svc
 
-    /* Other exception types */
+    /* その他の例外の種類 */
     b       el0_sync_handler
 SYM_CODE_END(el0t_64_sync_handler)
 ```
@@ -193,16 +193,16 @@ SYM_CODE_END(el0t_64_sync_handler)
 static void el0_svc_common(struct pt_regs *regs, int scno,
                              int sc_nr, const syscall_fn_t syscall_table[])
 {
-    /* Apply syscall tracing (seccomp, ptrace) */
+    /* システムコールのトレーシング（seccomp、ptrace）を適用 */
     invoke_syscall(regs, scno, sc_nr, syscall_table);
 }
 ```
 
-The syscall number is in `x8`, arguments in `x0-x5`, and the return value goes into `x0`.
+システムコール番号は`x8`に、引数は`x0-x5`に入り、戻り値は`x0`に入る。
 
 ## GIC: Generic Interrupt Controller {#gic-generic-interrupt-controller}
 
-ARM systems use the GIC (Generic Interrupt Controller) for interrupt management, not the x86 APIC.
+ARMシステムは割り込み管理にx86のAPICではなくGIC（Generic Interrupt Controller）を使う。
 
 ```
 Peripheral ──► GIC Distributor (shared)
@@ -214,17 +214,17 @@ Peripheral ──► GIC Distributor (shared)
                           IRQ line to CPU core
 ```
 
-### GIC interrupt types {#gic-interrupt-types}
+### GICの割り込みの種類 {#gic-interrupt-types}
 
 ```c
-/* GIC interrupt IDs */
-/* 0-15:   SGI (Software Generated Interrupts) — IPIs */
-/* 16-31:  PPI (Private Peripheral Interrupts) — per-CPU (timers, PMU) */
-/* 32+:    SPI (Shared Peripheral Interrupts) — shared across CPUs */
-/* 8192+:  LPI (Locality-specific Peripheral Interrupts) — MSI for PCIe */
+/* GICの割り込みID */
+/* 0-15:   SGI（Software Generated Interrupts） — IPI */
+/* 16-31:  PPI（Private Peripheral Interrupts） — CPUごと（タイマー、PMU） */
+/* 32+:    SPI（Shared Peripheral Interrupts） — CPU間で共有 */
+/* 8192+:  LPI（Locality-specific Peripheral Interrupts） — PCIe向けMSI */
 ```
 
-### Linux GIC driver {#linux-gic-driver}
+### LinuxのGICドライバ {#linux-gic-driver}
 
 ```c
 /* drivers/irqchip/irq-gic-v3.c */
@@ -234,22 +234,22 @@ static struct irq_chip gic_chip = {
     .irq_unmask             = gic_unmask_irq,
     .irq_eoi                = gic_eoi_irq,
     .irq_set_type           = gic_set_type,
-    .irq_set_affinity       = gic_set_affinity,   /* CPU affinity */
+    .irq_set_affinity       = gic_set_affinity,   /* CPUアフィニティ */
     .irq_retrigger          = gic_retrigger,
     .irq_get_irqchip_state  = gic_irq_get_irqchip_state,
     .irq_set_irqchip_state  = gic_irq_set_irqchip_state,
 };
 
-/* EOI (End of Interrupt): acknowledge to GIC when done */
+/* EOI（End of Interrupt）: 完了時にGICへ通知する */
 static void gic_eoi_irq(struct irq_data *d)
 {
-    gic_write_eoir(gic_irq(d));  /* EOIR1_EL1: write IRQ number to EOI */
+    gic_write_eoir(gic_irq(d));  /* EOIR1_EL1: IRQ番号をEOIに書き込む */
 }
 ```
 
-### IPIs on ARM64 {#ipis-on-arm64}
+### ARM64のIPI {#ipis-on-arm64}
 
-ARM64 IPIs (for TLB shootdown, function calls, rescheduling) use GIC SGIs:
+ARM64のIPI（TLBシュートダウン、関数呼び出し、再スケジューリング用）はGICのSGIを使う。
 
 ```c
 /* arch/arm64/kernel/smp.c */
@@ -263,42 +263,42 @@ void arch_send_call_function_ipi_mask(const struct cpumask *mask)
     smp_cross_call(mask, IPI_CALL_FUNC);
 }
 
-/* smp_cross_call → GIC SGI → IPI_RESCHEDULE/IPI_CALL_FUNC handler */
+/* smp_cross_call → GIC SGI → IPI_RESCHEDULE/IPI_CALL_FUNCハンドラ */
 ```
 
-## System registers {#system-registers}
+## システムレジスタ {#system-registers}
 
-ARM64 system registers are accessed with `MRS`/`MSR` instructions:
+ARM64のシステムレジスタには`MRS`/`MSR`命令でアクセスする。
 
 ```asm
-/* Read current EL */
-mrs x0, CurrentEL          /* bits [3:2] = EL */
-lsr x0, x0, #2             /* shift to get 0/1/2/3 */
+/* 現在のELを読む */
+mrs x0, CurrentEL          /* ビット[3:2] = EL */
+lsr x0, x0, #2             /* シフトして0/1/2/3を得る */
 
-/* Read virtual counter (vDSO uses this instead of syscall) */
+/* 仮想カウンタを読む（vDSOはシステムコールの代わりにこれを使う） */
 mrs x0, CNTVCT_EL0
 
-/* Read Thread ID register (TLS base) */
+/* Thread IDレジスタ（TLSベース）を読む */
 mrs x0, TPIDR_EL0
 
-/* Enable/disable interrupts */
-msr daifclr, #2            /* clear IRQ mask bit = enable IRQs */
-msr daifset, #2            /* set IRQ mask bit = disable IRQs */
+/* 割り込みを有効化/無効化 */
+msr daifclr, #2            /* IRQマスクビットをクリア = IRQを有効化 */
+msr daifset, #2            /* IRQマスクビットをセット = IRQを無効化 */
 ```
 
-In the kernel (using C):
+カーネル内（Cを使う場合）:
 
 ```c
 /* arch/arm64/include/asm/sysreg.h */
-u64 cntvct = read_sysreg(cntvct_el0);   /* virtual counter */
-write_sysreg(ttbr0_val, ttbr0_el1);     /* page table base */
+u64 cntvct = read_sysreg(cntvct_el0);   /* 仮想カウンタ */
+write_sysreg(ttbr0_val, ttbr0_el1);     /* ページテーブルのベース */
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Memory Model](memory-model.md) — ARM64 weak ordering and barriers
-- [Memory Management: page tables](../../mm/page-tables.md) — ARM64 page table format
-- [Interrupts: Interrupt Handling Overview](../../interrupts/interrupts.md) — generic interrupt framework
-- [Virtualization: KVM Architecture](../../virtualization/kvm-arch.md) — KVM on ARM64 (EL2)
-- `arch/arm64/kernel/` in the kernel tree — ARM64 exception handlers
-- ARM Architecture Reference Manual (ARM DDI 0487)
+- [メモリモデル](memory-model.md) — ARM64の弱い順序付けとバリア
+- [メモリ管理: ページテーブル](../../mm/page-tables.md) — ARM64のページテーブル形式
+- [割り込み: 割り込み処理の概要](../../interrupts/interrupts.md) — 汎用割り込みフレームワーク
+- [仮想化: KVMアーキテクチャ](../../virtualization/kvm-arch.md) — ARM64上のKVM（EL2）
+- カーネルツリーの`arch/arm64/kernel/` — ARM64の例外ハンドラ
+- ARM Architecture Reference Manual（ARM DDI 0487）

@@ -1,66 +1,66 @@
-# War Stories: ALSA Bugs and Regressions {#war-stories-alsa-bugs-and-regressions}
+# 事件簿: ALSAのバグとリグレッション {#war-stories-alsa-bugs-and-regressions}
 
-> Six incidents from the ALSA sound subsystem — all six CVEs, spanning USB audio descriptor parsing, PCM buffer locking, rawmidi resize races, and a use-after-free that sat unexercised for nearly 21 years
+> ALSAサウンドサブシステムで起きた6件の事件。6件すべてがCVEであり、USBオーディオのディスクリプタ解析、PCMバッファのロック、rawmidiのリサイズ競合、そして21年近く誰にも踏まれずに眠っていたuse-after-freeにまたがる
 
-[ALSA Overview](README.md), [The PCM Data Path](pcm.md), and [ASoC](asoc.md) document the subsystem as it works today. This page is the incident record behind parts of that architecture: the lifetime and locking bugs that real drivers shipped, and how they were found and fixed.
+[ALSA概要](README.md)、[PCMデータパス](pcm.md)、[ASoC](asoc.md)は、現在動いているサブシステムの姿を説明している。このページは、そのアーキテクチャの一部の背後にある事件の記録である。実際のドライバが出荷してしまったライフタイムとロックのバグ、そしてそれらがどのように発見され修正されたかを扱う。
 
-Unlike [DRM's war stories](../drm/war-stories.md), which are entirely reliability bugs (a hung GPU, not a security boundary) with zero CVEs among them, every incident here is a CVE — all six. That's a structural difference in what the two subsystems expose: `sound/usb/` parses data supplied by whatever USB device is plugged in, and PCM/rawmidi expose ioctls directly to any process that can open `/dev/snd/*` — both are attacker-influenced-input surfaces in a way a GPU scheduler's internal job queue mostly isn't.
+[DRMの事件簿](../drm/war-stories.md)は全件が信頼性のバグ（GPUのハングであって、セキュリティ境界の問題ではない）でCVEは1件もないが、ここに挙げる事件はすべてCVEである。6件すべてだ。これは2つのサブシステムが何を外部に晒しているかという構造的な違いによる。`sound/usb/`は接続されたUSBデバイスが何であれ、そのデバイスが提供するデータを解析する。PCM/rawmidiは`/dev/snd/*`を開ける任意のプロセスにioctlを直接公開している。どちらも、GPUスケジューラの内部ジョブキューにはほぼ当てはまらない意味で、攻撃者の影響を受ける入力面である。
 
-## Deep dives {#deep-dives}
+## 詳細解説 {#deep-dives}
 
-### [The 21-Year-Latent USB Mixer Teardown Use-After-Free](war-stories/mixer-teardown-use-after-free.md) {#the-21-year-latent-usb-mixer-teardown-use-after-free}
-**January 2026 · CVE-2026-23089**
-A 2005 commit gave every registered ALSA control a back-pointer to its USB mixer object. A failed probe could free that entire object while controls created earlier in the same probe still pointed at it — a bug the code path made possible for almost 21 years before a fix landed.
+### [21年間潜伏したUSBミキサー解体時のuse-after-free](war-stories/mixer-teardown-use-after-free.md) {#the-21-year-latent-usb-mixer-teardown-use-after-free}
+**2026年1月 · CVE-2026-23089**
+2005年のコミットにより、登録されたすべてのALSAコントロールがUSBミキサーオブジェクトへの逆ポインタを持つようになった。probeが失敗すると、同じprobe内で先に作成されたコントロールがまだ指している状態のまま、そのオブジェクト全体が解放されうる。このコードパスでは、修正が入るまでほぼ21年間このバグが起こりうる状態だった。
 
-### [The USB Audio Clock Descriptor Out-of-Bounds Reads](war-stories/usb-audio-clock-descriptor-oob.md) {#the-usb-audio-clock-descriptor-out-of-bounds-reads}
-**November 2024 · CVE-2024-53150 · CISA Known Exploited Vulnerabilities catalog**
-Three functions walked a USB audio device's clock-topology descriptors without validating any of them were long enough to hold the fields being read — and the CVE covering all three is listed in CISA's Known Exploited Vulnerabilities catalog.
+### [USBオーディオのクロックディスクリプタにおける境界外読み出し](war-stories/usb-audio-clock-descriptor-oob.md) {#the-usb-audio-clock-descriptor-out-of-bounds-reads}
+**2024年11月 · CVE-2024-53150 · CISA Known Exploited Vulnerabilitiesカタログ掲載**
+3つの関数が、USBオーディオデバイスのクロックトポロジーディスクリプタを辿る際に、どのディスクリプタについても読み出すフィールドを保持できるだけの長さがあるかを検証していなかった。この3つすべてを対象とするCVEは、CISAのKnown Exploited Vulnerabilitiesカタログに掲載されている。
 
-## Quick cases {#quick-cases}
+## 短い事例 {#quick-cases}
 
-### Case 1: The PCM `hw_params`/`hw_free` race — CVE-2022-1048 {#case-1-the-pcm-hwparamshwfree-race-cve-2022-1048}
+### 事例1: PCMの`hw_params`/`hw_free`競合 — CVE-2022-1048 {#case-1-the-pcm-hwparamshwfree-race-cve-2022-1048}
 
-ALSA PCM had no critical section covering a full `hw_params`/`hw_free` ioctl call — the existing `snd_pcm_stream_lock` couldn't span the whole call because both ioctls need to sleep (memory allocation, in particular). Two threads issuing `hw_params` and `hw_free` concurrently on the same substream — or the same ioctl racing itself from two threads — could have one thread's `hw_free` release the buffer's backing memory while another thread's `hw_params` was still using it: a use-after-free through a missing lock, not a missing bounds check.
+ALSA PCMには、`hw_params`/`hw_free`のioctl呼び出し全体を覆うクリティカルセクションがなかった。既存の`snd_pcm_stream_lock`では呼び出し全体をカバーできなかった。両ioctlともスリープする必要があるからである（特にメモリ割り当てのため）。同じsubstreamに対して2つのスレッドが`hw_params`と`hw_free`を並行して発行すると（あるいは同じioctlを2つのスレッドから競合させても）、一方のスレッドの`hw_free`がバッファの裏付けメモリを解放している間に、もう一方のスレッドの`hw_params`がまだそれを使っている、という状況が起こりえた。これは境界チェックの欠落ではなく、ロックの欠落によるuse-after-freeである。
 
-Takashi Iwai's fix ([`92ee3c60ec9f`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=92ee3c60ec9fe64404dc035e7c41277d74aa26cb)) adds a new `runtime->buffer_mutex` in `include/sound/pcm.h`, initialized/destroyed alongside the runtime in `sound/core/pcm.c`, and wraps both `snd_pcm_hw_params()` and `snd_pcm_hw_free()` in it in `sound/core/pcm_native.c` — a mutex specifically because the critical section needs to sleep, where the existing stream lock (a spinlock) couldn't. [NVD: CVE-2022-1048](https://nvd.nist.gov/vuln/detail/CVE-2022-1048), CVSS 3.1 7.0 HIGH.
+Takashi Iwaiによる修正（[`92ee3c60ec9f`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=92ee3c60ec9fe64404dc035e7c41277d74aa26cb)）は、`include/sound/pcm.h`に新しい`runtime->buffer_mutex`を追加し、`sound/core/pcm.c`でruntimeと一緒に初期化・破棄し、`sound/core/pcm_native.c`で`snd_pcm_hw_params()`と`snd_pcm_hw_free()`の両方をそれで囲む。mutexを使うのはクリティカルセクションがスリープする必要があるからであり、既存のストリームロック（spinlock）ではそれができなかった。[NVD: CVE-2022-1048](https://nvd.nist.gov/vuln/detail/CVE-2022-1048)、CVSS 3.1 7.0 HIGH。
 
-### Case 2: The rawmidi buffer resize race — CVE-2020-27786 {#case-2-the-rawmidi-buffer-resize-race-cve-2020-27786}
+### 事例2: rawmidiバッファのリサイズ競合 — CVE-2020-27786 {#case-2-the-rawmidi-buffer-resize-race-cve-2020-27786}
 
-Rawmidi's read/write paths in `sound/core/rawmidi.c` have to unlock the runtime spinlock while copying to/from userspace — you can't hold a spinlock across a user-space copy, since the copy can fault and sleep. That unlock window is exactly when a concurrent `SNDRV_RAWMIDI_IOCTL_PARAMS` call could resize (free and reallocate) the runtime buffer a read or write was still using.
+`sound/core/rawmidi.c`にあるrawmidiの読み出し/書き込みパスは、ユーザー空間との間でコピーする間、runtimeのspinlockをアンロックしなければならない。コピーはフォールトしてスリープしうるので、ユーザー空間とのコピーをまたいでspinlockを保持することはできない。まさにそのアンロックの隙間に、並行する`SNDRV_RAWMIDI_IOCTL_PARAMS`呼び出しが、読み出しや書き込みがまだ使っているruntimeバッファをリサイズ（解放して再割り当て）しえた。
 
-Takashi Iwai's fix ([`c1f6e3c818dd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c1f6e3c818dd734c30f6a7eeebf232ba2cf3181d)) adds a plain, spinlock-protected reference counter (`buffer_ref`) — not `refcount_t`, since every access is already serialized by the lock the counter lives under — and makes a resize return `-EBUSY` while a read or write holds a reference. The receive/transmit interrupt callbacks don't need the same check; they're already fully covered by the lock. [NVD: CVE-2020-27786](https://nvd.nist.gov/vuln/detail/CVE-2020-27786), CVSS 3.1 7.8 HIGH.
+Takashi Iwaiによる修正（[`c1f6e3c818dd`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c1f6e3c818dd734c30f6a7eeebf232ba2cf3181d)）は、spinlockで保護された素朴な参照カウンタ（`buffer_ref`）を追加する。`refcount_t`ではないのは、カウンタが置かれているロックによってすべてのアクセスがすでに直列化されているからである。そして、読み出しや書き込みが参照を保持している間はリサイズが`-EBUSY`を返すようにする。受信/送信の割り込みコールバックには同じチェックは必要ない。それらはすでにロックで完全にカバーされている。[NVD: CVE-2020-27786](https://nvd.nist.gov/vuln/detail/CVE-2020-27786)、CVSS 3.1 7.8 HIGH。
 
-### Case 3: The mixer-unit descriptor OOB, five years before the clock descriptors — CVE-2019-15117 {#case-3-the-mixer-unit-descriptor-oob-five-years-before-the-clock-descriptors-cve-2019-15117}
+### 事例3: クロックディスクリプタの5年前に起きたmixer-unitディスクリプタの境界外アクセス — CVE-2019-15117 {#case-3-the-mixer-unit-descriptor-oob-five-years-before-the-clock-descriptors-cve-2019-15117}
 
-`parse_audio_mixer_unit()` in `sound/usb/mixer.c` reads a `uac_mixer_unit_descriptor` and hands it to `uac_mixer_unit_get_channels()`, which walks its `baSourceID[]` array using the device-supplied `bNrInPins` count — without checking the descriptor was actually long enough to contain that many entries. Reported by USB-fuzzing researchers Hui Peng and Mathias Payer.
+`sound/usb/mixer.c`の`parse_audio_mixer_unit()`は`uac_mixer_unit_descriptor`を読み取り、それを`uac_mixer_unit_get_channels()`に渡す。この関数はデバイスが提供する`bNrInPins`の数を使って`baSourceID[]`配列を辿るが、ディスクリプタがそれだけの数のエントリを実際に含めるだけの長さを持っているかをチェックしていなかった。報告者はUSBファジングの研究者であるHui PengとMathias Payerである。
 
-The fix adds one bounds check inside `uac_mixer_unit_get_channels()`: `if (desc->bLength < sizeof(*desc) + desc->bNrInPins) return -EINVAL;` before the array walk ([`daac07156b33`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=daac07156b330b18eb5071aec4b3ddca1c377f2c)). It's the same missing-length-validation pattern the [clock descriptor deep-dive](war-stories/usb-audio-clock-descriptor-oob.md) hit again, in a different `sound/usb/` parser, five years later. [NVD: CVE-2019-15117](https://nvd.nist.gov/vuln/detail/CVE-2019-15117), CVSS 7.8 HIGH.
+修正は、`uac_mixer_unit_get_channels()`内の配列走査の前に、境界チェックを1つ追加するものである: `if (desc->bLength < sizeof(*desc) + desc->bNrInPins) return -EINVAL;`（[`daac07156b33`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=daac07156b330b18eb5071aec4b3ddca1c377f2c)）。これは、5年後に別の`sound/usb/`パーサで[クロックディスクリプタの詳細解説](war-stories/usb-audio-clock-descriptor-oob.md)が再び踏んだのと同じ、長さ検証欠落のパターンである。[NVD: CVE-2019-15117](https://nvd.nist.gov/vuln/detail/CVE-2019-15117)、CVSS 7.8 HIGH。
 
-### Case 4: The caiaq probe error-handling use-after-free — CVE-2026-46004 {#case-4-the-caiaq-probe-error-handling-use-after-free-cve-2026-46004}
+### 事例4: caiaqのprobeエラー処理におけるuse-after-free — CVE-2026-46004 {#case-4-the-caiaq-probe-error-handling-use-after-free-cve-2026-46004}
 
-The Native Instruments caiaq USB audio driver's `setup_card()` probe routine called `snd_card_free()` to tear down the card when `snd_card_register()` failed — and then kept executing, calling `snd_usb_caiaq_control_init()` against structures that had just been freed. The audio, MIDI, and input init calls happen earlier in `setup_card()`, before `snd_card_register()` is even reached, so they had already completed successfully by the time the failure hit; only the control-setup call that runs *after* `snd_card_register()` touched freed memory. `setup_card()` was `void`; there was no way for it to stop early on error, only to keep going.
+Native Instrumentsのcaiaq USBオーディオドライバのprobeルーチン`setup_card()`は、`snd_card_register()`が失敗するとカードを解体するために`snd_card_free()`を呼び、そのあとも実行を続けて、解放されたばかりの構造体に対して`snd_usb_caiaq_control_init()`を呼び出していた。オーディオ、MIDI、入力の初期化呼び出しは`setup_card()`内でもっと前、`snd_card_register()`に到達する前に行われるため、失敗が起きた時点ではすでに正常に完了していた。解放済みメモリに触れたのは、`snd_card_register()`の*後*に走るコントロール設定の呼び出しだけである。`setup_card()`は`void`だったので、エラー時に早期に止まる手段はなく、続行するしかなかった。
 
-Takashi Iwai's fix ([`28abd224db4a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=28abd224db4a49560b452115bca3672a20e45b2f)) changes `setup_card()` to return `int`, adds an early `return` on every error path, drops the now-redundant `snd_card_free()` call (the caller handles cleanup once the error propagates), and makes `init_card()` check and propagate that return value. [NVD: CVE-2026-46004](https://nvd.nist.gov/vuln/detail/CVE-2026-46004), CVSS 3.1 7.8 HIGH.
+Takashi Iwaiによる修正（[`28abd224db4a`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=28abd224db4a49560b452115bca3672a20e45b2f)）は、`setup_card()`が`int`を返すように変更し、すべてのエラーパスに早期`return`を追加し、不要になった`snd_card_free()`呼び出しを削除し（エラーが伝播すれば呼び出し元が後始末をする）、`init_card()`がその戻り値をチェックして伝播するようにする。[NVD: CVE-2026-46004](https://nvd.nist.gov/vuln/detail/CVE-2026-46004)、CVSS 3.1 7.8 HIGH。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | Mixer UAF | Clock OOB | hw_params race | Rawmidi race | Mixer-unit OOB | caiaq UAF |
+| パターン | Mixer UAF | Clock OOB | hw_params競合 | Rawmidi競合 | Mixer-unit OOB | caiaq UAF |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| USB descriptor parsing (attacker controls the input) | — | Yes | — | — | Yes | — |
-| Missing length/bounds validation | — | Yes | — | — | Yes | — |
-| Lock doesn't cover the full critical section | — | — | Yes | Yes | — | — |
-| Probe/init error path leaves a stale reference | Yes | — | — | — | — | Yes |
-| Fix required for years/decades before landing | Yes (~21y) | — | — | — | — | Yes (~18.5y) |
+| USBディスクリプタの解析（入力を攻撃者が制御する） | — | Yes | — | — | Yes | — |
+| 長さ/境界検証の欠落 | — | Yes | — | — | Yes | — |
+| ロックがクリティカルセクション全体をカバーしていない | — | — | Yes | Yes | — | — |
+| probe/initのエラーパスが古い参照を残す | Yes | — | — | — | — | Yes |
+| 修正が入るまで数年/数十年を要した | Yes (~21年) | — | — | — | — | Yes (~18.5年) |
 
-**Two of six are USB-descriptor parsing bugs, and they're the same missing check, five years apart, in two different parsers.** The mixer-unit OOB (2019) and the clock-descriptor OOB (2024) both come from reading a device-supplied count field and indexing further into a buffer without re-validating the buffer is actually that long — `sound/usb/` has more than one descriptor walker built on that same unchecked pattern, and fixing one instance evidently didn't prompt an audit of the others at the time.
+**6件中2件はUSBディスクリプタ解析のバグであり、5年の隔たりをおいて、2つの異なるパーサで同じチェックが欠けていた。** mixer-unitの境界外アクセス（2019年）とクロックディスクリプタの境界外アクセス（2024年）はどちらも、デバイスが提供するカウントフィールドを読み取り、バッファが実際にその長さを持っているかを再検証せずにバッファのさらに先へインデックスすることから生じている。`sound/usb/`には同じ未チェックのパターンの上に作られたディスクリプタ走査処理が複数あり、当時1つを修正しても、ほかの箇所の監査にはつながらなかったようである。
 
-**Two of six are the same underlying shape: a lock that can't span the full operation because part of the operation has to sleep.** PCM's `hw_params`/`hw_free` and rawmidi's read/write-vs-resize race both needed a mutex or reference count layered *around* a spinlock-protected fast path specifically because a user-space copy or an allocation can't happen while holding a spinlock — the fix in both cases is "add a second, sleep-safe layer of protection," not "make the existing lock work harder."
+**6件中2件は根本的に同じ形をしている。操作の一部がスリープしなければならないために、ロックが操作全体をカバーできないというものだ。** PCMの`hw_params`/`hw_free`と、rawmidiの読み出し/書き込み対リサイズの競合はどちらも、spinlockで保護された高速パスの*周囲に*mutexや参照カウントを重ねる必要があった。spinlockを保持したままではユーザー空間とのコピーやメモリ割り当てができないからである。どちらの場合も修正は「既存のロックをもっと頑張らせる」ことではなく、「スリープ可能な第2の保護層を追加する」ことだった。
 
-**Two bugs on this page sat latent for close to two decades, but for different reasons.** The USB-descriptor and locking bugs above are all reachable on essentially every affected kernel, the moment the right device or the right race window shows up — which is why they were found relatively quickly by fuzzing or CVE-hunting. The mixer teardown bug (~21 years) required a specific, non-trivial sequencing — some controls already registered, then a *later* unit's parsing to fail — that well-formed devices essentially never produce: a design flaw baked into how `id_elems` was shared between the mixer object and ALSA's own control registry, exposed only by an unlikely partial-failure ordering. The caiaq probe bug (~18.5 years, `setup_card()` dating to a 2007 commit) is a plainer error-handling gap: a `void` teardown function with no way to stop early, latent simply because a `snd_card_register()` failure is itself a rare event at probe time, not because the triggering sequence was intricate. Both needed a long run of ordinary, working hardware before the failure path that exposed them ever ran.
+**このページの2つのバグは20年近く潜伏していたが、その理由は異なる。** 上に挙げたUSBディスクリプタとロックのバグは、影響を受けるほぼすべてのカーネルで、適切なデバイスや適切な競合ウィンドウが現れた瞬間に到達可能である。だからこそ、ファジングやCVE探索によって比較的早く見つかった。ミキサー解体のバグ（約21年）は、特定の自明でない順序（いくつかのコントロールがすでに登録され、その*後*のユニットの解析が失敗する）を必要とし、正しく作られたデバイスはそれを実質的に決して生み出さない。これは、ミキサーオブジェクトとALSA自身のコントロールレジストリの間で`id_elems`を共有する方法に組み込まれた設計上の欠陥であり、起こりにくい部分失敗の順序によってのみ露呈した。caiaqのprobeバグ（約18.5年、`setup_card()`は2007年のコミットにさかのぼる）は、より単純なエラー処理の抜けである。早期に止まる手段を持たない`void`の解体関数であり、潜伏していたのは、引き金となる順序が入り組んでいたからではなく、probe時の`snd_card_register()`失敗そのものがまれな出来事だったからにすぎない。どちらも、それを露呈させる失敗パスが一度でも走るまでに、普通に動作するハードウェアでの長い運用期間を要した。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [ALSA Overview](README.md) — `struct snd_card`, control registration, and the USB audio device model these incidents live inside
-- [The PCM Data Path](pcm.md) — the `hw_params`/`hw_free` machinery Case 1's race lives in
-- [DRM War Stories](../drm/war-stories.md) — a subsystem where reliability bugs (hangs, deadlocks) dominate instead of CVEs, for contrast in what "war story" means when the bug class is exploitable rather than reliability-only
-- [Locking](../locking/README.md) — general background on lock-scope and critical-section bugs, the pattern behind Cases 1 and 2
+- [ALSA概要](README.md) — `struct snd_card`、コントロールの登録、そしてこれらの事件が起きたUSBオーディオのデバイスモデル
+- [PCMデータパス](pcm.md) — 事例1の競合が存在する`hw_params`/`hw_free`の仕組み
+- [DRMの事件簿](../drm/war-stories.md) — CVEではなく信頼性のバグ（ハング、デッドロック）が大半を占めるサブシステム。バグの種類が信頼性のみの問題ではなく悪用可能なものである場合に「事件簿」が何を意味するかを対比するために
+- [ロック](../locking/README.md) — ロックの範囲とクリティカルセクションのバグに関する一般的な背景。事例1と2の背後にあるパターン

@@ -1,25 +1,25 @@
-# ARM64 Page Tables {#arm64-page-tables}
+# ARM64のページテーブル {#arm64-page-tables}
 
-> TTBR0/TTBR1, translation granules, PTE format, and ASID
+> TTBR0/TTBR1、変換グラニュール、PTE形式、ASID
 
-ARM64's MMU uses a two-register design to handle user and kernel address spaces independently. This page covers the hardware page table walk, how Linux structures its page table types, the PTE bit layout, ASID-based TLB management, and Stage 2 translation for KVM.
+ARM64のMMUは、ユーザーとカーネルのアドレス空間を独立に扱うために2レジスタ構成を採用している。このページでは、ハードウェアによるページテーブルウォーク、Linuxがページテーブルの型をどう構成しているか、PTEのビット配置、ASIDベースのTLB管理、そしてKVM向けのStage 2変換を扱う。
 
 ---
 
-## Two TTBRs: user and kernel address spaces {#two-ttbrs-user-and-kernel-address-spaces}
+## 2つのTTBR: ユーザーとカーネルのアドレス空間 {#two-ttbrs-user-and-kernel-address-spaces}
 
-ARM64 splits the virtual address space at the midpoint using the **top bit of the virtual address**. Two translation base registers tell the MMU where to start the walk:
+ARM64は**仮想アドレスの最上位ビット**を使って仮想アドレス空間を中央で分割する。2つの変換ベースレジスタが、MMUにウォークの開始位置を伝える。
 
-| Register | Address range | Used for |
+| レジスタ | アドレス範囲 | 用途 |
 |---|---|---|
-| `TTBR0_EL1` | `[0, 2^VA_BITS)` — low addresses | User space (per-process) |
-| `TTBR1_EL1` | `[2^64 - 2^VA_BITS, 2^64)` — high addresses | Kernel (global) |
+| `TTBR0_EL1` | `[0, 2^VA_BITS)` — 低位アドレス | ユーザー空間（プロセスごと） |
+| `TTBR1_EL1` | `[2^64 - 2^VA_BITS, 2^64)` — 高位アドレス | カーネル（グローバル） |
 
-With the default `VA_BITS=48`, user space occupies `[0, 0x0000_FFFF_FFFF_FFFF]` and the kernel occupies `[0xFFFF_0000_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]`. The top bit (bit 63) of a virtual address selects the register: bit 63 = 0 uses TTBR0, bit 63 = 1 uses TTBR1. Any address with bits between VA_BITS-1 and 63 not all matching (i.e., not properly sign-extended) causes a Translation Fault.
+デフォルトの`VA_BITS=48`では、ユーザー空間は`[0, 0x0000_FFFF_FFFF_FFFF]`を、カーネルは`[0xFFFF_0000_0000_0000, 0xFFFF_FFFF_FFFF_FFFF]`を占める。仮想アドレスの最上位ビット（ビット63）がレジスタを選択する。ビット63 = 0ならTTBR0、ビット63 = 1ならTTBR1を使う。VA_BITS-1から63までのビットがすべて一致しない（つまり正しく符号拡張されていない）アドレスは、変換フォールト（Translation Fault）を引き起こす。
 
-**52-bit VA (optional):** ARMv8.7+ supports 52-bit virtual addresses (`VA_BITS=52`) with `CONFIG_ARM64_VA_BITS_52`. This still uses 4 translation levels (not 5); the extra bits come from widening the Level 0 index field. This extends the user and kernel ranges to 4PB each. Most production configs still use 48-bit.
+**52ビットVA（オプション）:** ARMv8.7以降は`CONFIG_ARM64_VA_BITS_52`により52ビットの仮想アドレス（`VA_BITS=52`）をサポートする。この場合も変換レベルは4段（5段ではない）であり、追加のビットはLevel 0のインデックスフィールドを広げることで賄われる。これにより、ユーザーとカーネルの範囲はそれぞれ4PBに拡張される。ほとんどの本番構成はいまだに48ビットを使っている。
 
-On context switch, the kernel writes the new process's PGD physical address into `TTBR0_EL1`. The ASID (see below) is packed into bits `[63:48]` of `TTBR0_EL1` at the same time. `TTBR1_EL1` is set once at boot and never changes.
+コンテキストスイッチ時、カーネルは新しいプロセスのPGDの物理アドレスを`TTBR0_EL1`に書き込む。同時にASID（後述）が`TTBR0_EL1`のビット`[63:48]`に詰め込まれる。`TTBR1_EL1`はブート時に一度設定され、以後変わらない。
 
 ```c
 /* arch/arm64/include/asm/mmu_context.h */
@@ -27,30 +27,30 @@ static inline void cpu_switch_mm(pgd_t *pgd, struct mm_struct *mm)
 {
     BUG_ON(pgd == swapper_pg_dir);
     cpu_set_reserved_ttbr0();
-    /* ASID packed in mm->context.id; cpu_do_switch_mm writes TTBR0_EL1
-     * with the new PGD PA and ASID together — no TLB flush needed when
-     * switching to a different ASID (that is the whole point of ASIDs). */
+    /* ASIDはmm->context.idに詰め込まれている。cpu_do_switch_mmは
+     * 新しいPGDの物理アドレスとASIDを一緒にTTBR0_EL1に書き込む — 異なるASIDへ
+     * 切り替える際にTLBフラッシュは不要である（それこそがASIDの存在意義である）。 */
     cpu_do_switch_mm(virt_to_phys(pgd), mm);
 }
 ```
 
 ---
 
-## Translation granules {#translation-granules}
+## 変換グラニュール {#translation-granules}
 
-The **translation granule** is the base page size. ARM64 supports three granule sizes, each changing the number of levels needed and the size of each level's table:
+**変換グラニュール**とはベースとなるページサイズである。ARM64は3種類のグラニュールサイズをサポートし、それぞれで必要なレベル数と各レベルのテーブルサイズが変わる。
 
-| Granule | Page size | Levels (48-bit VA) | Notes |
+| グラニュール | ページサイズ | レベル数（48ビットVA） | 備考 |
 |---|---|---|---|
-| 4KB | 4KB | 4 (L0→L1→L2→L3) | Most common; default in Linux |
-| 16KB | 16KB | 4 (L0→L1→L2→L3) | Apple Silicon uses this |
-| 64KB | 64KB | 3 (L1→L2→L3) | Fewer levels; large contiguous TLB entries |
+| 4KB | 4KB | 4（L0→L1→L2→L3） | 最も一般的。Linuxのデフォルト |
+| 16KB | 16KB | 4（L0→L1→L2→L3） | Apple Siliconが使用 |
+| 64KB | 64KB | 3（L1→L2→L3） | レベル数が少ない。大きな連続TLBエントリ |
 
-The granule is selected by `TCR_EL1.TG0` (for TTBR0) and `TCR_EL1.TG1` (for TTBR1).
+グラニュールは`TCR_EL1.TG0`（TTBR0用）と`TCR_EL1.TG1`（TTBR1用）で選択される。
 
-### 4KB granule: level coverage (48-bit VA) {#4kb-granule-level-coverage-48-bit-va}
+### 4KBグラニュール: 各レベルのカバー範囲（48ビットVA） {#4kb-granule-level-coverage-48-bit-va}
 
-With a 4KB granule each page table is exactly one 4KB page containing 512 8-byte entries (9 index bits per level):
+4KBグラニュールでは、各ページテーブルはちょうど4KBの1ページであり、8バイトのエントリを512個含む（レベルごとに9ビットのインデックス）。
 
 ```
 Level   Index bits   Entries   Coverage per entry
@@ -65,9 +65,9 @@ Page offset [11:0]     —        4 KB
 
 ---
 
-## The 4-level page table walk (48-bit VA, 4KB granule) {#the-4-level-page-table-walk-48-bit-va-4kb-granule}
+## 4段のページテーブルウォーク（48ビットVA、4KBグラニュール） {#the-4-level-page-table-walk-48-bit-va-4kb-granule}
 
-For a 48-bit virtual address with a 4KB granule, the hardware performs a 4-level walk:
+4KBグラニュールの48ビット仮想アドレスに対して、ハードウェアは4段のウォークを行う。
 
 ```
 48-bit Virtual Address:
@@ -87,13 +87,13 @@ TTBR0_EL1 or TTBR1_EL1 → physical address of L0 table
           + VA[11:0]         = final physical address
 ```
 
-The MMU caches translations in the TLB, keyed on VA + ASID. On a TLB miss, the hardware page table walker performs the walk automatically (hardware-managed TLB on ARM64 — no software TLB fill required in the common case).
+MMUは変換結果をVA + ASIDをキーとしてTLBにキャッシュする。TLBミス時には、ハードウェアのページテーブルウォーカが自動的にウォークを行う（ARM64のTLBはハードウェア管理であり、通常のケースではソフトウェアによるTLBの補充は不要である）。
 
 ---
 
-## PTE format {#pte-format}
+## PTE形式 {#pte-format}
 
-ARM64 descriptors are 64-bit values. The meaning of bits depends on the level and whether the entry is a **table**, **block**, or **page** descriptor.
+ARM64のディスクリプタは64ビットの値である。ビットの意味は、レベルと、エントリが**テーブル**、**ブロック**、**ページ**のどのディスクリプタであるかによって決まる。
 
 ```
 ARM64 Page/Block Descriptor (64-bit):
@@ -103,59 +103,59 @@ ARM64 Page/Block Descriptor (64-bit):
  │ PBHA │ SW   │UXN│PXN│Cont│  OA   │nG│AF│SH│AP│NS│  │AtIdx│type│V│
  └──────┴───────┴──┴──┴──┴──────────┴──┴──┴──┴──┴──┴──┴─────┴──┴──┘
 
- bit 0:     Valid (V)        — 1 = entry is valid
- bit 1:     Type             — at L0-L2: 1 = table descriptor, 0 = block descriptor
-                               at L3: 1 = page descriptor (must be 1 for valid pages)
- bits [4:2]: AttrIndx[2:0]  — index into MAIR_EL1 (memory type selection)
- bit 5:     NS               — Non-Secure (applies in Secure state)
- bits [7:6]: AP[2:1]         — Access Permissions (see table below)
- bits [9:8]: SH[1:0]         — Shareability: 00=non-shareable, 10=outer, 11=inner
- bit 10:    AF               — Access Flag: fault on first access if 0 (SW manages)
- bit 11:    nG               — not-Global: 1 = ASID-tagged (user), 0 = global (kernel)
- bits [47:12]: Output Address (OA) — physical page frame number (bits [47:12] of PA)
- bit 52:    Contiguous hint  — TLB can merge contiguous entries
- bit 53:    PXN              — Privileged Execute Never (EL1 cannot execute)
- bit 54:    UXN              — Unprivileged Execute Never (EL0 cannot execute)
- bits [58:55]: SW            — Software-defined (kernel uses for _PAGE_* flags)
- bits [63:59]: PBHA          — Page-Based Hardware Attributes (ARMv8.2+)
+ bit 0:     Valid (V)        — 1 = エントリは有効
+ bit 1:     Type             — L0-L2では: 1 = テーブルディスクリプタ、0 = ブロックディスクリプタ
+                               L3では: 1 = ページディスクリプタ（有効なページでは1でなければならない）
+ bits [4:2]: AttrIndx[2:0]  — MAIR_EL1へのインデックス（メモリタイプの選択）
+ bit 5:     NS               — Non-Secure（Secure状態で適用）
+ bits [7:6]: AP[2:1]         — アクセス許可（下表参照）
+ bits [9:8]: SH[1:0]         — 共有可能性: 00=non-shareable、10=outer、11=inner
+ bit 10:    AF               — Access Flag: 0なら初回アクセスでフォールト（SWが管理）
+ bit 11:    nG               — not-Global: 1 = ASIDタグ付き（ユーザー）、0 = グローバル（カーネル）
+ bits [47:12]: Output Address (OA) — 物理ページフレーム番号（PAのビット[47:12]）
+ bit 52:    Contiguous hint  — TLBが連続したエントリをまとめられる
+ bit 53:    PXN              — Privileged Execute Never（EL1は実行できない）
+ bit 54:    UXN              — Unprivileged Execute Never（EL0は実行できない）
+ bits [58:55]: SW            — ソフトウェア定義（カーネルが_PAGE_*フラグに使う）
+ bits [63:59]: PBHA          — Page-Based Hardware Attributes（ARMv8.2以降）
 ```
 
-### Access Permission (AP[2:1]) encoding {#access-permission-ap21-encoding}
+### アクセス許可（AP[2:1]）のエンコーディング {#access-permission-ap21-encoding}
 
-| AP[2:1] | EL1 (kernel) | EL0 (user) |
+| AP[2:1] | EL1（カーネル） | EL0（ユーザー） |
 |---|---|---|
-| `00` | Read/Write | No access |
-| `01` | Read/Write | Read/Write |
-| `10` | Read-Only | No access |
-| `11` | Read-Only | Read-Only |
+| `00` | 読み書き | アクセス不可 |
+| `01` | 読み書き | 読み書き |
+| `10` | 読み取り専用 | アクセス不可 |
+| `11` | 読み取り専用 | 読み取り専用 |
 
-Linux sets `UXN` on all kernel mappings and `PXN` on all user mappings (preventing user code from being executed at EL1 and vice versa). The `AF` (Access Flag) bit: on pre-ARMv8.1 hardware it is managed by software — a PTE with AF=0 generates an Access Flag Fault on first access, which the kernel handles by setting AF=1. On ARMv8.1+ hardware with `FEAT_HAFDBS`, Linux enables hardware-managed AF (`TCR_EL1.HA=1`), so the CPU sets AF automatically without faulting. The Access Flag is used by the page reclaim path to distinguish recently-accessed pages.
+Linuxはすべてのカーネルマッピングに`UXN`を、すべてのユーザーマッピングに`PXN`をセットする（ユーザーのコードがEL1で実行されること、およびその逆を防ぐ）。`AF`（Access Flag）ビットについては、ARMv8.1より前のハードウェアではソフトウェアが管理する。AF=0のPTEは初回アクセス時にAccess Flagフォールトを発生させ、カーネルはAF=1をセットしてそれを処理する。`FEAT_HAFDBS`を持つARMv8.1以降のハードウェアでは、Linuxはハードウェア管理のAF（`TCR_EL1.HA=1`）を有効にするので、CPUはフォールトなしに自動的にAFをセットする。Access Flagは、ページ回収のパスで最近アクセスされたページを見分けるために使われる。
 
-### ARM64 vs x86-64 PTE comparison {#arm64-vs-x86-64-pte-comparison}
+### ARM64とx86-64のPTEの比較 {#arm64-vs-x86-64-pte-comparison}
 
-| Concept | ARM64 | x86-64 |
+| 概念 | ARM64 | x86-64 |
 |---|---|---|
-| Valid bit | bit 0 (`V`) | bit 0 (`P` — Present) |
-| Read/Write | `AP[2:1]` field | bit 1 (`R/W`) |
-| User access | `AP[2:1]` field | bit 2 (`U/S`) |
-| Execute disable | `UXN` (bit 54), `PXN` (bit 53) | bit 63 (`NX`) |
-| Cache type | `AttrIndx` → `MAIR_EL1` | `PCD`/`PWT`/`PAT` bits |
-| Huge page marker | bit 1 = 0 at L1/L2 (block) | `PS` bit at PMD/PUD |
-| Global (no ASID flush) | `nG` = 0 | bit 8 (`G`) |
-| Dirty / Accessed | Software-managed via AF fault | Hardware-set bits 5 (`A`) and 6 (`D`) |
+| 有効ビット | ビット0（`V`） | ビット0（`P` — Present） |
+| 読み書き | `AP[2:1]`フィールド | ビット1（`R/W`） |
+| ユーザーアクセス | `AP[2:1]`フィールド | ビット2（`U/S`） |
+| 実行禁止 | `UXN`（ビット54）、`PXN`（ビット53） | ビット63（`NX`） |
+| キャッシュタイプ | `AttrIndx` → `MAIR_EL1` | `PCD`/`PWT`/`PAT`ビット |
+| huge pageの目印 | L1/L2でビット1 = 0（ブロック） | PMD/PUDの`PS`ビット |
+| グローバル（ASIDフラッシュなし） | `nG` = 0 | ビット8（`G`） |
+| Dirty / Accessed | AFフォールトによるソフトウェア管理 | ハードウェアがセットするビット5（`A`）と6（`D`） |
 
 ---
 
-## Huge pages: block descriptors {#huge-pages-block-descriptors}
+## huge page: ブロックディスクリプタ {#huge-pages-block-descriptors}
 
-ARM64 uses **block descriptors** to map large contiguous physical regions without traversing all four levels. A block descriptor at L1 or L2 has bit 1 (`type`) = 0:
+ARM64は、4レベルすべてをたどらずに大きな連続物理領域をマップするために**ブロックディスクリプタ**を使う。L1またはL2のブロックディスクリプタはビット1（`type`）= 0である。
 
-| Level | Block size | Linux term |
+| レベル | ブロックサイズ | Linuxでの用語 |
 |---|---|---|
-| L1 | 1 GB | `pud_huge()` — 1GB huge page |
-| L2 | 2 MB | `pmd_huge()` — 2MB huge page (THP, hugetlbfs) |
+| L1 | 1 GB | `pud_huge()` — 1GBのhuge page |
+| L2 | 2 MB | `pmd_huge()` — 2MBのhuge page（THP、hugetlbfs） |
 
-Linux detects block descriptors with `pmd_huge()` defined in `arch/arm64/include/asm/pgtable.h`:
+Linuxは`arch/arm64/include/asm/pgtable.h`で定義された`pmd_huge()`でブロックディスクリプタを検出する。
 
 ```c
 /* arch/arm64/include/asm/pgtable.h */
@@ -165,50 +165,50 @@ static inline int pmd_huge(pmd_t pmd)
 }
 ```
 
-`PMD_TABLE_BIT` is bit 1. A valid PMD entry with bit 1 clear is a 2MB block descriptor.
+`PMD_TABLE_BIT`はビット1である。ビット1がクリアされた有効なPMDエントリは2MBのブロックディスクリプタである。
 
-Transparent Huge Pages (THP) and `hugetlbfs` both use 2MB block descriptors. The kernel also maps its own text and data sections with 2MB blocks when alignment allows (visible in `arch/arm64/mm/mmu.c` via `create_mapping_noalloc()`).
+Transparent Huge Pages（THP）と`hugetlbfs`はどちらも2MBのブロックディスクリプタを使う。カーネルはまた、アラインメントが許す場合には自身のtextセクションとdataセクションを2MBブロックでマップする（`arch/arm64/mm/mmu.c`の`create_mapping_noalloc()`で確認できる）。
 
 ---
 
-## Linux kernel page table types {#linux-kernel-page-table-types}
+## Linuxカーネルのページテーブルの型 {#linux-kernel-page-table-types}
 
-Linux uses a generic five-level abstraction over the hardware levels. On ARM64 with 48-bit VA and 4KB granule, `p4d_t` is **folded** (a no-op alias for `pgd_t`):
+Linuxはハードウェアのレベルの上に汎用的な5段の抽象化を用いる。48ビットVAで4KBグラニュールのARM64では、`p4d_t`は**折りたたまれる**（`pgd_t`に対する何もしない別名となる）。
 
-| Linux type | Hardware level | Source |
+| Linuxの型 | ハードウェアのレベル | ソース |
 |---|---|---|
-| `pgd_t` | L0 (pointed to by TTBR0/TTBR1) | `arch/arm64/include/asm/pgtable-types.h` |
-| `p4d_t` | Folded into PGD (48-bit VA) | `include/asm-generic/pgtable-nop4d.h` |
+| `pgd_t` | L0（TTBR0/TTBR1が指す） | `arch/arm64/include/asm/pgtable-types.h` |
+| `p4d_t` | PGDに折りたたまれる（48ビットVA） | `include/asm-generic/pgtable-nop4d.h` |
 | `pud_t` | L1 | `arch/arm64/include/asm/pgtable-types.h` |
 | `pmd_t` | L2 | `arch/arm64/include/asm/pgtable-types.h` |
 | `pte_t` | L3 | `arch/arm64/include/asm/pgtable-types.h` |
 
-All types are wrappers around `u64`. The underlying hardware descriptor value is accessed with `pgd_val()`, `pud_val()`, `pmd_val()`, `pte_val()`.
+すべての型は`u64`のラッパーである。基になるハードウェアのディスクリプタ値には、`pgd_val()`、`pud_val()`、`pmd_val()`、`pte_val()`でアクセスする。
 
-Standard page table navigation macros:
+標準的なページテーブルのナビゲーションマクロ:
 
 ```c
-/* Given a mm_struct and virtual address, walk down to the PTE: */
-pgd_t *pgd = pgd_offset(mm, addr);       /* index into mm->pgd */
-p4d_t *p4d = p4d_offset(pgd, addr);      /* folded on 48-bit ARM64 */
+/* mm_structと仮想アドレスが与えられたとき、PTEまでたどる: */
+pgd_t *pgd = pgd_offset(mm, addr);       /* mm->pgdへのインデックス */
+p4d_t *p4d = p4d_offset(pgd, addr);      /* 48ビットARM64では折りたたまれる */
 pud_t *pud = pud_offset(p4d, addr);
 pmd_t *pmd = pmd_offset(pud, addr);
-pte_t *pte = pte_offset_map(pmd, addr);  /* maps the PTE page, returns kernel VA */
+pte_t *pte = pte_offset_map(pmd, addr);  /* PTEページをマップし、カーネルVAを返す */
 ```
 
-`pte_offset_map()` is defined in `arch/arm64/include/asm/pgtable.h` and handles the physical-to-virtual translation for the PTE page pointer.
+`pte_offset_map()`は`arch/arm64/include/asm/pgtable.h`で定義されており、PTEページのポインタについて物理アドレスから仮想アドレスへの変換を処理する。
 
 ---
 
-## ASID: Address Space Identifiers {#asid-address-space-identifiers}
+## ASID: アドレス空間識別子 {#asid-address-space-identifiers}
 
-Every user-space mapping in a PTE has `nG` (not-Global) = 1. This means the TLB tags the entry with the current **ASID** (Address Space Identifier). Different processes with different ASIDs can coexist in the TLB without interference, avoiding a full TLB flush on every context switch.
+PTE中のすべてのユーザー空間マッピングは`nG`（not-Global）= 1である。これは、TLBがそのエントリに現在の**ASID**（Address Space Identifier）をタグ付けすることを意味する。異なるASIDを持つ異なるプロセスは互いに干渉せずにTLB内で共存でき、コンテキストスイッチのたびにTLB全体をフラッシュすることを避けられる。
 
-### ASID storage {#asid-storage}
+### ASIDの格納場所 {#asid-storage}
 
-The ASID is stored in `TTBR0_EL1[63:48]` (16-bit ASID field, when `TCR_EL1.AS=1`). Each time a process is scheduled, the kernel writes both the ASID and the PGD address into `TTBR0_EL1` atomically. Kernel mappings use `nG=0` (global), so they are not tagged with an ASID and are never evicted by ASID-based TLB operations.
+ASIDは`TTBR0_EL1[63:48]`に格納される（`TCR_EL1.AS=1`のとき16ビットのASIDフィールド）。プロセスがスケジュールされるたびに、カーネルはASIDとPGDアドレスの両方を`TTBR0_EL1`にアトミックに書き込む。カーネルマッピングは`nG=0`（グローバル）を使うので、ASIDでタグ付けされず、ASIDベースのTLB操作で追い出されることはない。
 
-The per-process ASID is stored in `mm->context.id` and managed by `check_and_switch_context()` in `arch/arm64/mm/context.c`:
+プロセスごとのASIDは`mm->context.id`に格納され、`arch/arm64/mm/context.c`の`check_and_switch_context()`によって管理される。
 
 ```c
 /* arch/arm64/mm/context.c */
@@ -221,8 +221,8 @@ void check_and_switch_context(struct mm_struct *mm)
     asid = atomic64_read(&mm->context.id);
 
     /*
-     * If the current ASID is still valid for this CPU, use it without
-     * taking the lock.  Otherwise fall through to the slow path.
+     * 現在のASIDがこのCPUでまだ有効なら、ロックを取らずにそれを使う。
+     * そうでなければ低速パスへ進む。
      */
     old_active_asid = atomic64_read(this_cpu_ptr(&active_asids));
     if (asid_gen_match(asid) &&
@@ -231,7 +231,7 @@ void check_and_switch_context(struct mm_struct *mm)
         goto switch_mm_fastpath;
 
     raw_spin_lock_irqsave(&cpu_asid_lock, flags);
-    /* ... slow path: allocate new ASID or flush on generation wrap ... */
+    /* ... 低速パス: 新しいASIDを割り当てる、または世代のラップ時にフラッシュする ... */
     raw_spin_unlock_irqrestore(&cpu_asid_lock, flags);
 
 switch_mm_fastpath:
@@ -239,70 +239,70 @@ switch_mm_fastpath:
 }
 ```
 
-### ASID generation wrap {#asid-generation-wrap}
+### ASID世代のラップ {#asid-generation-wrap}
 
-ARM64 supports 8-bit or 16-bit ASIDs (`TCR_EL1.AS`). Linux detects ASID width at runtime from `ID_AA64MMFR0_EL1.ASIDBits` and uses 16-bit ASIDs where available. With 16-bit ASIDs there are 65536 possible values. When they are exhausted, the kernel bumps an internal **generation counter** and flushes the entire TLB (`TLBI VMALLE1IS`), then reallocates ASIDs from scratch.
+ARM64は8ビットまたは16ビットのASIDをサポートする（`TCR_EL1.AS`）。Linuxは実行時に`ID_AA64MMFR0_EL1.ASIDBits`からASIDの幅を検出し、利用可能なら16ビットASIDを使う。16ビットASIDでは65536個の値が使える。それらを使い果たすと、カーネルは内部の**世代カウンタ**をインクリメントしてTLB全体をフラッシュし（`TLBI VMALLE1IS`）、ASIDを最初から割り当て直す。
 
 ---
 
 ## MAIR_EL1: Memory Attribute Indirection Register {#mair_el1-memory-attribute-indirection-register}
 
-The `AttrIndx[2:0]` field in every PTE is an index into `MAIR_EL1`, which maps 8 attribute slots to actual memory types. This indirection allows PTE format to stay compact while supporting many memory types.
+各PTEの`AttrIndx[2:0]`フィールドは`MAIR_EL1`へのインデックスであり、`MAIR_EL1`は8つの属性スロットを実際のメモリタイプに対応付ける。この間接参照により、PTE形式をコンパクトに保ちつつ多くのメモリタイプをサポートできる。
 
-Linux sets up `MAIR_EL1` once at boot in `arch/arm64/mm/proc.S`:
+Linuxはブート時に一度、`arch/arm64/mm/proc.S`で`MAIR_EL1`を設定する。
 
 ```asm
-/* arch/arm64/mm/proc.S — MAIR_EL1 setup during __cpu_setup */
+/* arch/arm64/mm/proc.S — __cpu_setup中のMAIR_EL1設定 */
 /*
- * MAIR_EL1 attribute encoding (one byte per slot, 8 slots = 64 bits):
+ * MAIR_EL1の属性エンコーディング（スロットごとに1バイト、8スロット = 64ビット）:
  *
  * Slot  AttrIndx  Attr byte  Memory type
  * ────  ────────  ─────────  ───────────────────────────────────────
- *   0     0b000   0x00       Device-nGnRnE  (strongly ordered device)
- *   1     0b001   0x04       Device-nGnRE   (device, gathering+reordering ok)
- *   2     0b010   0x0C       Device-GRE     (device, gathering+reordering+early-write ok)
+ *   0     0b000   0x00       Device-nGnRnE  （強く順序付けられたデバイス）
+ *   1     0b001   0x04       Device-nGnRE   （デバイス、gathering+reorderingは可）
+ *   2     0b010   0x0C       Device-GRE     （デバイス、gathering+reordering+early-writeは可）
  *   3     0b011   0x44       Normal Non-Cacheable (NC)
  *   4     0b100   0xFF       Normal Write-Back, Read-Allocate, Write-Allocate (WB)
  *   5     0b101   0xBB       Normal Write-Through, Read-Allocate (WT)
  *   6     0b110   0x40       Normal Non-Cacheable Outer, NC Inner
- *   7     0b111   0xFF       Normal WB (duplicate; used by Tagged Normal memory)
+ *   7     0b111   0xFF       Normal WB （重複。Tagged Normalメモリで使用）
  *
- * Linux primary slots:
- *   MT_DEVICE_nGnRnE  = 0  (ioremap strongly ordered)
- *   MT_DEVICE_nGnRE   = 1  (ioremap device)
- *   MT_DEVICE_GRE     = 2  (ioremap write-combining)
- *   MT_NORMAL_NC      = 3  (DMA non-cacheable)
- *   MT_NORMAL         = 4  (normal RAM — all kernel/user memory)
- *   MT_NORMAL_WT      = 5  (write-through)
+ * Linuxの主要スロット:
+ *   MT_DEVICE_nGnRnE  = 0  （強く順序付けられたioremap）
+ *   MT_DEVICE_nGnRE   = 1  （デバイスのioremap）
+ *   MT_DEVICE_GRE     = 2  （ライトコンバイニングのioremap）
+ *   MT_NORMAL_NC      = 3  （キャッシュ不可のDMA）
+ *   MT_NORMAL         = 4  （通常のRAM — カーネル/ユーザーのすべてのメモリ）
+ *   MT_NORMAL_WT      = 5  （ライトスルー）
  */
 ldr x5, =MAIR_EL1_SET
 msr mair_el1, x5
 isb
 ```
 
-The constant `MAIR_EL1_SET` is built from individual `MAIR_ATTRIDX()` macros in `arch/arm64/include/asm/pgtable-hwdef.h`. User-space and kernel text/data use slot 4 (`MT_NORMAL`, `AttrIndx=0b100`). Device memory mapped via `ioremap()` uses slot 0 (`MT_DEVICE_nGnRnE`).
+定数`MAIR_EL1_SET`は、`arch/arm64/include/asm/pgtable-hwdef.h`の個々の`MAIR_ATTRIDX()`マクロから組み立てられる。ユーザー空間とカーネルのtext/dataはスロット4（`MT_NORMAL`、`AttrIndx=0b100`）を使う。`ioremap()`でマップされたデバイスメモリはスロット0（`MT_DEVICE_nGnRnE`）を使う。
 
 ---
 
-## TLB operations {#tlb-operations}
+## TLB操作 {#tlb-operations}
 
-ARM64 uses **broadcast TLB invalidation instructions** (`TLBI`) rather than IPIs. These instructions propagate across CPUs within a shareability domain automatically when the `IS` (Inner Shareable) suffix is used.
+ARM64はIPIではなく**ブロードキャスト型のTLB無効化命令**（`TLBI`）を使う。これらの命令は、`IS`（Inner Shareable）サフィックスを使うと、共有可能ドメイン内のCPU間に自動的に伝播する。
 
-### Key TLBI instructions {#key-tlbi-instructions}
+### 主なTLBI命令 {#key-tlbi-instructions}
 
-| Instruction | Invalidates | When to use |
+| 命令 | 無効化する対象 | 使う場面 |
 |---|---|---|
-| `TLBI VAE1IS, Xt` | Entry by VA + current ASID, inner shareable | Single page unmap (user) |
-| `TLBI VALE1IS, Xt` | Entry by VA + ASID, last-level only | More common for leaf pages |
-| `TLBI ASIDE1IS, Xt` | All entries matching ASID, inner shareable | Process exit (mm teardown) |
-| `TLBI VMALLE1IS` | All EL1 entries (all ASIDs), inner shareable | ASID generation wrap |
-| `TLBI VAAE1IS, Xt` | Entry by VA, all ASIDs | Kernel mapping change |
+| `TLBI VAE1IS, Xt` | VA + 現在のASIDによるエントリ、inner shareable | 単一ページのアンマップ（ユーザー） |
+| `TLBI VALE1IS, Xt` | VA + ASIDによるエントリ、最終レベルのみ | リーフページではこちらがより一般的 |
+| `TLBI ASIDE1IS, Xt` | ASIDに一致する全エントリ、inner shareable | プロセス終了（mmの破棄） |
+| `TLBI VMALLE1IS` | EL1の全エントリ（全ASID）、inner shareable | ASID世代のラップ |
+| `TLBI VAAE1IS, Xt` | VAによるエントリ、全ASID | カーネルマッピングの変更 |
 
-The operand `Xt` encodes the VA shifted right by 12 (page-aligned) ORed with the ASID in bits `[63:48]`.
+オペランド`Xt`は、12ビット右シフトした（ページアラインされた）VAと、ビット`[63:48]`のASIDのORをエンコードする。
 
-### Required TLB invalidation sequence {#required-tlb-invalidation-sequence}
+### 必須のTLB無効化シーケンス {#required-tlb-invalidation-sequence}
 
-Writing a new PTE and then invalidating the TLB must follow a strict ordering to prevent the MMU from caching a stale translation:
+新しいPTEを書き込んでからTLBを無効化する際は、MMUが古い変換をキャッシュしないよう、厳密な順序に従わなければならない。
 
 ```
 1. Write new PTE to memory
@@ -312,7 +312,7 @@ Writing a new PTE and then invalidating the TLB must follow a strict ordering to
 5. ISB             — flush instruction pipeline (see new mappings for instruction fetch)
 ```
 
-In Linux C code, `flush_tlb_page()` in `arch/arm64/include/asm/tlbflush.h` implements this:
+LinuxのCコードでは、`arch/arm64/include/asm/tlbflush.h`の`flush_tlb_page()`がこれを実装している。
 
 ```c
 /* arch/arm64/include/asm/tlbflush.h */
@@ -321,95 +321,95 @@ static inline void flush_tlb_page(struct vm_area_struct *vma,
 {
     unsigned long addr = __TLBI_VADDR(uaddr, ASID(vma->vm_mm));
 
-    dsb(ishst);              /* DSB ISH ST: wait for PTE stores to complete */
-    __tlbi(vale1is, addr);   /* TLBI VALE1IS: invalidate last-level TLB entry */
-    dsb(ish);                /* DSB ISH: wait for TLB invalidation to propagate */
+    dsb(ishst);              /* DSB ISH ST: PTEのストアの完了を待つ */
+    __tlbi(vale1is, addr);   /* TLBI VALE1IS: 最終レベルのTLBエントリを無効化 */
+    dsb(ish);                /* DSB ISH: TLB無効化の伝播を待つ */
 }
 ```
 
-Note there is no `ISB` in `flush_tlb_page()` itself because it is only used for data mappings; the ISB is required only when instruction mappings change (e.g., `flush_icache_range()`).
+`flush_tlb_page()`自体には`ISB`がないことに注意してほしい。これはデータマッピングにのみ使われるからであり、ISBは命令マッピングが変わる場合（例: `flush_icache_range()`）にのみ必要である。
 
-`__TLBI_VADDR()` is a macro that encodes the page-aligned address and ASID into the format expected by the `TLBI` operand. `__tlbi()` expands to an inline assembly `TLBI` instruction via the `SYS` instruction encoding.
+`__TLBI_VADDR()`は、ページアラインされたアドレスとASIDを`TLBI`オペランドが期待する形式にエンコードするマクロである。`__tlbi()`は、`SYS`命令エンコーディングを介したインラインアセンブリの`TLBI`命令に展開される。
 
 ---
 
-## Stage 2 translation (KVM) {#stage-2-translation-kvm}
+## Stage 2変換（KVM） {#stage-2-translation-kvm}
 
-When KVM is active, the CPU runs at EL2 and guests run at EL1/EL0. Guest virtual addresses are translated first by the **Stage 1** page tables (guest OS's own `TTBR0_EL1`/`TTBR1_EL1`) to **Intermediate Physical Addresses (IPA)**, then by **Stage 2** page tables to real **Physical Addresses (PA)**.
+KVMが有効なとき、CPUはEL2で動作し、ゲストはEL1/EL0で動作する。ゲストの仮想アドレスはまず**Stage 1**のページテーブル（ゲストOS自身の`TTBR0_EL1`/`TTBR1_EL1`）によって**中間物理アドレス（IPA: Intermediate Physical Address）**に変換され、次に**Stage 2**のページテーブルによって実際の**物理アドレス（PA）**に変換される。
 
-Stage 2 is controlled by `VTTBR_EL2`, which holds the physical address of the Stage 2 PGD (the **IPA→PA** translation table). The Stage 2 tables use a similar descriptor format to Stage 1 but with different attribute fields (`S2AP`, `S2SH`, `MemAttr`).
+Stage 2は`VTTBR_EL2`によって制御される。これはStage 2のPGD（**IPA→PA**の変換テーブル）の物理アドレスを保持する。Stage 2のテーブルはStage 1と似たディスクリプタ形式を使うが、属性フィールドが異なる（`S2AP`、`S2SH`、`MemAttr`）。
 
 ```
 Guest VA ──[Stage 1: TTBR0/TTBR1]──► IPA ──[Stage 2: VTTBR_EL2]──► PA
                  (Guest OS controls)              (KVM controls)
 ```
 
-TLB invalidation for guests requires `TLBI` instructions with the `VMID` suffix (e.g., `TLBI IPAS2E1IS`) to invalidate only entries for the current VM's VMID. The VMID is stored in `VTTBR_EL2[55:48]`.
+ゲストに対するTLB無効化には、現在のVMのVMIDに対応するエントリだけを無効化するために、`VMID`を伴う`TLBI`命令（例: `TLBI IPAS2E1IS`）が必要である。VMIDは`VTTBR_EL2[55:48]`に格納される。
 
-Stage 2 management in Linux lives in `arch/arm64/kvm/mmu.c`. See the [KVM Architecture](../../virtualization/kvm-arch.md) and [Memory Virtualization](../../virtualization/kvm-memory.md) docs for details.
+LinuxにおけるStage 2の管理は`arch/arm64/kvm/mmu.c`にある。詳細は[KVMアーキテクチャ](../../virtualization/kvm-arch.md)と[メモリ仮想化](../../virtualization/kvm-memory.md)のドキュメントを参照のこと。
 
 ---
 
-## Observing ARM64 page tables {#observing-arm64-page-tables}
+## ARM64のページテーブルを観察する {#observing-arm64-page-tables}
 
 ```bash
-# Virtual address layout on ARM64
+# ARM64の仮想アドレスレイアウト
 dmesg | grep -E "Virtual kernel memory layout" -A 20
 
-# Per-process page table memory
+# プロセスごとのページテーブルのメモリ
 cat /proc/$$/status | grep VmPTE
 
-# Memory mapping of current process
+# 現在のプロセスのメモリマッピング
 cat /proc/$$/maps
-cat /proc/$$/smaps   # includes page-level breakdown
+cat /proc/$$/smaps   # ページレベルの内訳を含む
 
-# Check VA_BITS (kernel config)
+# VA_BITSを確認（カーネルconfig）
 zcat /proc/config.gz | grep ARM64_VA_BITS
 
-# Check translation granule
+# 変換グラニュールを確認
 zcat /proc/config.gz | grep ARM64_4K_PAGES
 
-# TLB miss rate (requires PMU access)
+# TLBミス率（PMUへのアクセスが必要）
 perf stat -e dTLB-load-misses,iTLB-load-misses <command>
 
-# ASID allocation (DEBUG_VM builds expose asid info via dmesg)
+# ASIDの割り当て（DEBUG_VMビルドではdmesg経由でASID情報が見える）
 dmesg | grep -i asid
 
-# Page table dump (requires CONFIG_PTDUMP_DEBUGFS)
+# ページテーブルのダンプ（CONFIG_PTDUMP_DEBUGFSが必要）
 ls /sys/kernel/debug/page_tables/
 cat /sys/kernel/debug/page_tables/kernel
 ```
 
 ---
 
-## Key kernel functions and files {#key-kernel-functions-and-files}
+## 主要なカーネル関数とファイル {#key-kernel-functions-and-files}
 
-| Symbol | File | Purpose |
+| シンボル | ファイル | 目的 |
 |---|---|---|
-| `pgd_t`, `pud_t`, `pmd_t`, `pte_t` | `arch/arm64/include/asm/pgtable-types.h` | Page table entry types |
-| `pgd_offset()`, `pud_offset()`, `pmd_offset()` | `arch/arm64/include/asm/pgtable.h` | VA → page table level pointer |
-| `pte_offset_map()` | `arch/arm64/include/asm/pgtable.h` | Map PTE page, return pointer |
-| `pmd_huge()` | `arch/arm64/include/asm/pgtable.h` | Detect 2MB block descriptor |
-| `pud_huge()` | `arch/arm64/include/asm/pgtable.h` | Detect 1GB block descriptor |
-| `set_pte_at()` | `arch/arm64/mm/pgtable.c` | Write PTE (with barrier) |
-| `flush_tlb_page()` | `arch/arm64/include/asm/tlbflush.h` | Single-page TLB invalidation |
-| `flush_tlb_mm()` | `arch/arm64/include/asm/tlbflush.h` | Full mm TLB flush (ASIDE1IS) |
-| `check_and_switch_context()` | `arch/arm64/mm/context.c` | ASID allocation and mm switch |
-| `cpu_do_switch_mm()` | `arch/arm64/mm/proc.S` | Write TTBR0_EL1 with new ASID+PGD |
-| `__cpu_setup()` | `arch/arm64/mm/proc.S` | Configure TCR_EL1, MAIR_EL1, SCTLR_EL1 |
-| `create_mapping_noalloc()` | `arch/arm64/mm/mmu.c` | Build kernel page table entries |
-| `MAIR_EL1_SET` | `arch/arm64/include/asm/pgtable-hwdef.h` | MAIR value built from slot macros |
+| `pgd_t`、`pud_t`、`pmd_t`、`pte_t` | `arch/arm64/include/asm/pgtable-types.h` | ページテーブルエントリの型 |
+| `pgd_offset()`、`pud_offset()`、`pmd_offset()` | `arch/arm64/include/asm/pgtable.h` | VA → ページテーブルの各レベルへのポインタ |
+| `pte_offset_map()` | `arch/arm64/include/asm/pgtable.h` | PTEページをマップしてポインタを返す |
+| `pmd_huge()` | `arch/arm64/include/asm/pgtable.h` | 2MBブロックディスクリプタを検出 |
+| `pud_huge()` | `arch/arm64/include/asm/pgtable.h` | 1GBブロックディスクリプタを検出 |
+| `set_pte_at()` | `arch/arm64/mm/pgtable.c` | PTEを書き込む（バリア付き） |
+| `flush_tlb_page()` | `arch/arm64/include/asm/tlbflush.h` | 単一ページのTLB無効化 |
+| `flush_tlb_mm()` | `arch/arm64/include/asm/tlbflush.h` | mm全体のTLBフラッシュ（ASIDE1IS） |
+| `check_and_switch_context()` | `arch/arm64/mm/context.c` | ASIDの割り当てとmmの切り替え |
+| `cpu_do_switch_mm()` | `arch/arm64/mm/proc.S` | 新しいASID+PGDでTTBR0_EL1を書き込む |
+| `__cpu_setup()` | `arch/arm64/mm/proc.S` | TCR_EL1、MAIR_EL1、SCTLR_EL1を設定 |
+| `create_mapping_noalloc()` | `arch/arm64/mm/mmu.c` | カーネルのページテーブルエントリを構築 |
+| `MAIR_EL1_SET` | `arch/arm64/include/asm/pgtable-hwdef.h` | スロットマクロから組み立てたMAIR値 |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Memory Model](memory-model.md) — ARM64 weak memory ordering, DSB/ISB, page table barriers
-- [Exception Model](exception-model.md) — EL0–EL3, how EL2 relates to Stage 2 translation
-- [Page Tables (generic)](../../mm/page-tables.md) — Linux pgd/pud/pmd/pte abstraction layer
-- [Page Fault Handler](../../mm/page-fault.md) — how the kernel handles Translation Faults and Access Flag Faults
-- [Transparent Huge Pages](../../mm/thp.md) — how Linux promotes 4KB pages to 2MB block descriptors
-- [KVM Memory Virtualization](../../virtualization/kvm-memory.md) — Stage 2 page tables, EPT/NPT analog on ARM64
-- [TLB Optimization](../../mm/tlb-optimization.md) — batched TLB invalidation and mmu_gather
-- ARM Architecture Reference Manual (DDI 0487) — D5: AArch64 Virtual Memory System Architecture
-- [Documentation/arch/arm64/memory.rst](https://docs.kernel.org/arch/arm64/memory.html) — ARM64 virtual address layout
+- [メモリモデル](memory-model.md) — ARM64の弱いメモリ順序付け、DSB/ISB、ページテーブルのバリア
+- [例外モデル](exception-model.md) — EL0–EL3、EL2とStage 2変換の関係
+- [ページテーブル（汎用）](../../mm/page-tables.md) — Linuxのpgd/pud/pmd/pte抽象化層
+- [ページフォールトハンドラ](../../mm/page-fault.md) — カーネルが変換フォールトとAccess Flagフォールトをどう処理するか
+- [Transparent Huge Pages](../../mm/thp.md) — Linuxが4KBページを2MBブロックディスクリプタに昇格させる方法
+- [KVMのメモリ仮想化](../../virtualization/kvm-memory.md) — Stage 2ページテーブル、ARM64におけるEPT/NPT相当
+- [TLB最適化](../../mm/tlb-optimization.md) — バッチ化されたTLB無効化とmmu_gather
+- ARM Architecture Reference Manual（DDI 0487） — D5: AArch64 Virtual Memory System Architecture
+- [Documentation/arch/arm64/memory.rst](https://docs.kernel.org/arch/arm64/memory.html) — ARM64の仮想アドレスレイアウト

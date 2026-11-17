@@ -1,50 +1,50 @@
-# Block Layer War Stories {#block-layer-war-stories}
+# ブロック層の事件簿 {#block-layer-war-stories}
 
-> Real bugs where the block layer met the messy reality of hardware, concurrency, and stacked devices — and what each one taught
+> ブロック層がハードウェア、並行性、スタックされたデバイスという厄介な現実にぶつかった実際のバグと、それぞれが教えてくれたこと
 
-The block layer's job looks simple: carry bytes between memory and a device. In practice it sits between untrusted device firmware below and a tower of stacked virtual devices above, all while I/O flows concurrently and the configuration can change underneath it. Each of these stories is a place where one of those realities bit hard.
+ブロック層の仕事は単純に見える。メモリとデバイスの間でバイトを運ぶだけだ。しかし実際には、下には信頼できないデバイスファームウェア、上にはスタックされた仮想デバイスの塔があり、その間でI/Oは並行して流れ、構成はその足元で変わりうる。ここで紹介する話はどれも、そうした現実のどれかに手痛く噛まれた場所である。
 
-## 1. The SSD that lied about TRIM {#1-the-ssd-that-lied-about-trim}
+## 1. TRIMについて嘘をついたSSD {#1-the-ssd-that-lied-about-trim}
 
-**Symptom.** Filesystems on certain SSDs developed silent data corruption once `discard` (TRIM) was enabled — files reading back as zeros or garbage, with no I/O errors reported.
+**症状。** 特定のSSD上のファイルシステムで、`discard`（TRIM）を有効にするとサイレントなデータ破損が発生した — ファイルを読み返すとゼロやゴミになっており、I/Oエラーは報告されなかった。
 
-**Root cause.** For performance, the kernel had begun issuing **queued** DSM TRIM commands (NCQ TRIM) — letting a TRIM ride alongside normal reads and writes instead of draining the queue first. Some drives' firmware mishandled this: a queued TRIM could return incorrect data or affect the wrong logical blocks. The hardware advertised support for queued TRIM; it just didn't work.
+**根本原因。** 性能のために、カーネルは**キュー付き**DSM TRIMコマンド（NCQ TRIM）を発行し始めていた — TRIMの前にキューを空にするのではなく、TRIMを通常の読み書きと並べて流せるようにするものである。一部のドライブのファームウェアはこれを正しく扱えなかった。キュー付きTRIMが誤ったデータを返したり、間違った論理ブロックに影響したりすることがあった。ハードウェアはキュー付きTRIMのサポートを広告していたが、単に動かなかったのである。
 
-**Fix.** The kernel maintains a per-device quirk list. Affected models were flagged to force **unqueued** TRIM, starting with [`6fc4d97a4987`](https://git.kernel.org/linus/6fc4d97a4987) ("libata: Blacklist queued TRIM on Samsung SSD 850 Pro") and growing into a broader `ATA_HORKAGE_NO_NCQ_TRIM` blacklist.
+**修正。** カーネルはデバイスごとのquirkリストを保持している。影響を受けるモデルには**キューなし**TRIMを強制するフラグが付けられた。最初は[`6fc4d97a4987`](https://git.kernel.org/linus/6fc4d97a4987)（"libata: Blacklist queued TRIM on Samsung SSD 850 Pro"）で、その後より広範な`ATA_HORKAGE_NO_NCQ_TRIM`ブラックリストへと成長した。
 
-**Lesson.** "The device reports that it supports X" is a claim, not a guarantee. A storage stack that trusts firmware blindly will corrupt data; a per-device quirk/blacklist is an unglamorous but essential defense, and it never really shrinks.
+**教訓。** 「デバイスがXをサポートしていると報告している」は主張であって保証ではない。ファームウェアを盲目的に信頼するストレージスタックはデータを破損させる。デバイスごとのquirk/ブラックリストは地味だが不可欠な防御であり、実際に縮小することはまずない。
 
-## 2. The page that changed mid-flight {#2-the-page-that-changed-mid-flight}
+## 2. 転送中に変化したページ {#2-the-page-that-changed-mid-flight}
 
-**Symptom.** Sporadic, maddeningly unreproducible integrity errors on setups using **iSCSI data digests**, **DIF/DIX** protection information, or software RAID — a checksum computed over data that was correct in memory would fail to match downstream.
+**症状。** **iSCSIデータダイジェスト**、**DIF/DIX**保護情報、あるいはソフトウェアRAIDを使う構成で、散発的で腹立たしいほど再現しない整合性エラーが起きた — メモリ上では正しかったデータに対して計算したチェックサムが、下流で一致しなくなるのである。
 
-**Root cause.** During writeback, the CPU can modify a page *while the device is still reading it out via DMA*. If a lower layer computes a checksum over the page and the contents change between checksum and transmission, the check fails — or worse, wrong data is written with a valid-looking checksum. The remedy is **stable pages**: layers that need the page to hold still advertise `BDI_CAP_STABLE_WRITES`, and the writeback path then waits for in-flight writeback before letting the page be dirtied again.
+**根本原因。** ライトバック中、*デバイスがまだDMAでページを読み出している最中に*、CPUがそのページを変更することがある。下位の層がページに対してチェックサムを計算し、チェックサム計算と送信の間に内容が変わると、チェックは失敗する — さらに悪い場合は、もっともらしいチェックサム付きで間違ったデータが書き込まれる。対策は**安定ページ（stable pages）**である。ページが静止している必要がある層は`BDI_CAP_STABLE_WRITES`を広告し、ライトバックパスはページが再びダーティにされるのを許す前に、処理中のライトバックを待つ。
 
-The bug was in propagation. Device-mapper did not carry `BDI_CAP_STABLE_WRITES` up from an underlying device that required it, so a `dm` device stacked on top wouldn't wait — producing the sporadic checksum errors ([`eb40c0acdc34`](https://git.kernel.org/linus/eb40c0acdc34), "dm table: propagate BDI_CAP_STABLE_WRITES to fix sporadic checksum errors"). The iSCSI side had the mirror problem: it only set the flag when a data digest was actually enabled ([`89d0c804392b`](https://git.kernel.org/linus/89d0c804392b)).
+バグは伝播にあった。Device-mapperは、それを必要とする下位デバイスから`BDI_CAP_STABLE_WRITES`を上に引き継いでいなかったため、その上にスタックされた`dm`デバイスは待たず、散発的なチェックサムエラーを生み出していた（[`eb40c0acdc34`](https://git.kernel.org/linus/eb40c0acdc34)、"dm table: propagate BDI_CAP_STABLE_WRITES to fix sporadic checksum errors"）。iSCSI側には鏡像の問題があった。データダイジェストが実際に有効なときにしかフラグを設定していなかったのである（[`89d0c804392b`](https://git.kernel.org/linus/89d0c804392b)）。
 
-**Lesson.** In a stacked block device, a correctness requirement is only as strong as its *weakest* layer. A capability that one layer silently drops on the way up breaks the entire stack — and the resulting bugs are rare and non-deterministic, the hardest kind to chase.
+**教訓。** スタックされたブロックデバイスでは、正しさの要件はその*最も弱い*層と同じ強さしか持たない。ある層が上へ向かう途中で黙って落とした能力は、スタック全体を壊す — そして結果として生じるバグは稀で非決定的であり、追いかけるのが最も難しい種類のものである。
 
-## 3. Swapping the engine while the car is moving {#3-swapping-the-engine-while-the-car-is-moving}
+## 3. 走行中の車のエンジンを交換する {#3-swapping-the-engine-while-the-car-is-moving}
 
-**Symptom.** Crashes and use-after-free reports when changing a device's I/O scheduler at runtime (`echo bfq > /sys/block/sdX/queue/scheduler`) under load.
+**症状。** 負荷がかかった状態で、実行時にデバイスのI/Oスケジューラを変更すると（`echo bfq > /sys/block/sdX/queue/scheduler`）、クラッシュやuse-after-freeの報告が発生した。
 
-**Root cause.** Switching the elevator tears down the old scheduler's per-queue state and builds the new one — all while I/O may still be referencing the old state. Releasing the queue's sysfs lock partway through the switch opened a window for a concurrent path to touch freed scheduler data.
+**根本原因。** エレベータの切り替えでは、古いスケジューラのキューごとの状態を破棄して新しいものを構築する — その間ずっと、I/Oがまだ古い状態を参照している可能性がある。切り替えの途中でキューのsysfsロックを解放していたため、並行するパスが解放済みのスケジューラデータに触れる隙間が開いていた。
 
-**Fix.** Hold the queue's sysfs lock across the *entire* switch, closing the window ([`b89f625e28d4`](https://git.kernel.org/linus/b89f625e28d4), "block: don't release queue's sysfs lock during switching elevator").
+**修正。** 切り替えの*全体*にわたってキューのsysfsロックを保持し、隙間を閉じた（[`b89f625e28d4`](https://git.kernel.org/linus/b89f625e28d4)、"block: don't release queue's sysfs lock during switching elevator"）。
 
-**Lesson.** Runtime-reconfigurable subsystems — swap the scheduler, resize the queue, all while live I/O flows — are a rich seam of lifetime bugs. The fix is almost always the same shape: make the transition atomic with respect to everything that can observe it.
+**教訓。** 実行時に再構成可能なサブシステム — ライブのI/Oが流れている間にスケジューラを交換したり、キューのサイズを変えたりする — は、ライフタイムバグの豊かな鉱脈である。修正はほぼ常に同じ形をとる: それを観測しうるすべてのものに対して、遷移をアトミックにすることである。
 
-## The recurring themes {#the-recurring-themes}
+## 繰り返し現れるテーマ {#the-recurring-themes}
 
-Across these very different failures, the same three pressures show up:
+これらのまったく異なる障害を通して、同じ3つの圧力が現れる。
 
-- **Don't trust the hardware.** Firmware lies; the block layer needs quirk lists and defensive checks (story 1).
-- **Requirements must propagate.** Stacked devices only work if every layer honors the constraints of the layers below (story 2).
-- **Reconfiguration races the datapath.** Anything you can change at runtime can be changed *during* an I/O (story 3).
+- **ハードウェアを信用するな。** ファームウェアは嘘をつく。ブロック層にはquirkリストと防御的なチェックが必要である（話1）。
+- **要件は伝播しなければならない。** スタックされたデバイスは、すべての層が下位の層の制約を尊重して初めて機能する（話2）。
+- **再構成はデータパスと競合する。** 実行時に変更できるものは、すべてI/Oの*最中に*変更されうる（話3）。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
 - [Kernel docs: block layer](https://docs.kernel.org/block/index.html)
-- [`6fc4d97a4987`](https://git.kernel.org/linus/6fc4d97a4987) — the first queued-TRIM blacklist entry
-- [`eb40c0acdc34`](https://git.kernel.org/linus/eb40c0acdc34) — stable-writes propagation through device-mapper
-- [`b89f625e28d4`](https://git.kernel.org/linus/b89f625e28d4) — the elevator-switch locking fix
+- [`6fc4d97a4987`](https://git.kernel.org/linus/6fc4d97a4987) — 最初のキュー付きTRIMブラックリストのエントリ
+- [`eb40c0acdc34`](https://git.kernel.org/linus/eb40c0acdc34) — device-mapperを通じたstable writesの伝播
+- [`b89f625e28d4`](https://git.kernel.org/linus/b89f625e28d4) — エレベータ切り替えのロック修正

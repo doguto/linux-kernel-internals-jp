@@ -1,14 +1,14 @@
-# x86 CPU Features and Alternatives {#x86-cpu-features-and-alternatives}
+# x86のCPU機能とalternative {#x86-cpu-features-and-alternatives}
 
-> CPUID, feature flags, alternative patching, and hardware capabilities
+> CPUID、機能フラグ、alternativeパッチング、そしてハードウェアの能力
 
-The kernel must run on CPUs spanning decades of x86 evolution — from early Pentium 4s to the latest AMD Zen or Intel Core generations. The CPU feature detection and alternative patching infrastructure allows the kernel to be compiled once and then automatically tune itself to the current hardware at boot time.
+カーネルは、数十年にわたるx86の進化にまたがるCPU — 初期のPentium 4から最新のAMD ZenやIntel Coreの世代まで — の上で動作しなければならない。CPU機能の検出とalternativeパッチングの基盤により、カーネルは一度コンパイルするだけで、ブート時に現在のハードウェアに合わせて自動的に自身を調整できる。
 
 ---
 
-## CPUID: querying CPU capabilities {#cpuid-querying-cpu-capabilities}
+## CPUID: CPUの能力を問い合わせる {#cpuid-querying-cpu-capabilities}
 
-`CPUID` is the x86 instruction for enumerating CPU capabilities. The caller loads a **leaf number** into `EAX` (and sometimes a subleaf into `ECX`) before executing `CPUID`. The CPU returns capability bits in `EAX`, `EBX`, `ECX`, and `EDX`.
+`CPUID`は、CPUの能力を列挙するためのx86の命令である。呼び出し側は`CPUID`を実行する前に、**リーフ番号**を`EAX`に（場合によってはサブリーフを`ECX`に）ロードする。CPUは能力ビットを`EAX`、`EBX`、`ECX`、`EDX`に返す。
 
 ```
 CPUID usage:
@@ -45,7 +45,7 @@ Key leaves:
                          TBM, TOPOEXT, PERFCTR_CORE, PERFCTR_NB
 ```
 
-The kernel calls CPUID during early boot in `arch/x86/kernel/cpu/common.c` via `cpuid()` and `cpuid_count()` helpers:
+カーネルはブートの初期段階で、`arch/x86/kernel/cpu/common.c`内から`cpuid()`および`cpuid_count()`ヘルパーを介してCPUIDを呼ぶ。
 
 ```c
 /* arch/x86/include/asm/processor.h */
@@ -70,40 +70,40 @@ static inline void cpuid_count(unsigned int op, int count,
 
 ---
 
-## x86_capability[]: the kernel's feature bitmask {#x86_capability-the-kernels-feature-bitmask}
+## x86_capability[]: カーネルの機能ビットマスク {#x86_capability-the-kernels-feature-bitmask}
 
-After parsing all CPUID leaves, the kernel stores CPU features in the `x86_capability` array inside `struct cpuinfo_x86`:
+すべてのCPUIDリーフを解析した後、カーネルはCPU機能を`struct cpuinfo_x86`内の`x86_capability`配列に格納する。
 
 ```c
 /* arch/x86/include/asm/processor.h */
 struct cpuinfo_x86 {
     /* ... */
     __u32   x86_capability[NCAPINTS + NBUGINTS];
-    /* NCAPINTS words for features, NBUGINTS words for bug flags */
+    /* 機能用にNCAPINTSワード、バグフラグ用にNBUGINTSワード */
     /* ... */
 };
 
-/* The boot CPU's cpuinfo — used for most feature checks */
+/* ブートCPUのcpuinfo — ほとんどの機能チェックで使われる */
 extern struct cpuinfo_x86 boot_cpu_data;
 ```
 
-`NCAPINTS` is the number of 32-bit words in the feature bitmask array. Each bit corresponds to one `X86_FEATURE_*` constant. The words map to CPUID output registers in a defined order:
+`NCAPINTS`は、機能ビットマスク配列内の32ビットワードの数である。各ビットは1つの`X86_FEATURE_*`定数に対応する。各ワードは、定められた順序でCPUIDの出力レジスタに対応付けられる。
 
 ```c
 /* arch/x86/include/asm/cpufeatures.h */
 /*
- * Word  0: EDX from CPUID leaf 1
- * Word  1: ECX from CPUID leaf 1
- * Word  2: EDX from CPUID leaf 0x80000001
- * Word  3: Linux-defined synthetic features (no single CPUID bit)
- * Word  4: ECX from CPUID leaf 0x80000001
- * Word  5: EBX from CPUID leaf 1 (cache info)
- * Word  6: EBX from CPUID leaf 7, subleaf 0
- * Word  7: EDX from CPUID leaf 7, subleaf 0
- * Word  8: EBX from CPUID leaf 0x80000007 (APM)
- * Word  9: EBX from CPUID leaf 0x80000008
- * Word 10: ECX from CPUID leaf 7, subleaf 0
- * Word 11: EDX from CPUID leaf 7, subleaf 1
+ * ワード 0: CPUIDリーフ1のEDX
+ * ワード 1: CPUIDリーフ1のECX
+ * ワード 2: CPUIDリーフ0x80000001のEDX
+ * ワード 3: Linuxが定義する合成的な機能（単一のCPUIDビットを持たない）
+ * ワード 4: CPUIDリーフ0x80000001のECX
+ * ワード 5: CPUIDリーフ1のEBX（キャッシュ情報）
+ * ワード 6: CPUIDリーフ7、サブリーフ0のEBX
+ * ワード 7: CPUIDリーフ7、サブリーフ0のEDX
+ * ワード 8: CPUIDリーフ0x80000007のEBX（APM）
+ * ワード 9: CPUIDリーフ0x80000008のEBX
+ * ワード10: CPUIDリーフ7、サブリーフ0のECX
+ * ワード11: CPUIDリーフ7、サブリーフ1のEDX
  * ...
  */
 
@@ -114,7 +114,7 @@ extern struct cpuinfo_x86 boot_cpu_data;
 #define X86_FEATURE_TSC         ( 0*32+ 4)  /* Time Stamp Counter */
 #define X86_FEATURE_MSR         ( 0*32+ 5)  /* Model-Specific Registers */
 #define X86_FEATURE_PAE         ( 0*32+ 6)  /* Physical Address Extensions */
-/* ... many more ... */
+/* ... ほかにも多数 ... */
 #define X86_FEATURE_FSGSBASE    ( 6*32+ 0)  /* RDFSBASE, WRFSBASE, RDGSBASE, WRGSBASE */
 #define X86_FEATURE_PCID        ( 1*32+17)  /* Process Context IDs */
 #define X86_FEATURE_INVPCID     ( 6*32+10)  /* INVPCID instruction */
@@ -125,73 +125,73 @@ extern struct cpuinfo_x86 boot_cpu_data;
 
 ---
 
-## Three ways to check CPU features {#three-ways-to-check-cpu-features}
+## CPU機能をチェックする3つの方法 {#three-ways-to-check-cpu-features}
 
-The kernel provides three macros for checking features, with different performance characteristics:
+カーネルは機能をチェックするために、性能特性の異なる3つのマクロを提供している。
 
-### 1. cpu_has(): runtime check {#1-cpu_has-runtime-check}
+### 1. cpu_has(): 実行時チェック {#1-cpu_has-runtime-check}
 
 ```c
 /* arch/x86/include/asm/cpufeature.h */
 #define cpu_has(c, bit) test_cpu_cap(c, bit)
 
-/* Example: check if a specific CPU struct has PCID */
+/* 例: 特定のCPU構造体がPCIDを持つかチェックする */
 if (cpu_has(&boot_cpu_data, X86_FEATURE_PCID)) {
     /* ... */
 }
 ```
 
-`cpu_has()` is a runtime check — it reads from the `x86_capability` array. Use this when you need to check a specific CPU (not just the boot CPU), or in early boot before alternatives are patched.
+`cpu_has()`は実行時チェックである — `x86_capability`配列から読み取る。（ブートCPUだけでなく）特定のCPUをチェックする必要がある場合や、alternativeがパッチされる前のブート初期段階では、これを使う。
 
-### 2. boot_cpu_has(): boot-time check {#2-bootcpuhas-boot-time-check}
+### 2. boot_cpu_has(): ブート時チェック {#2-bootcpuhas-boot-time-check}
 
 ```c
 #define boot_cpu_has(bit) cpu_has(&boot_cpu_data, bit)
 
-/* Example: enable PCID if supported */
+/* 例: サポートされていればPCIDを有効にする */
 if (boot_cpu_has(X86_FEATURE_PCID))
     cr4_set_bits(X86_CR4_PCIDE);
 ```
 
-`boot_cpu_has()` checks the boot CPU's feature flags. Used for one-time setup decisions during boot. These calls are not patched by the alternatives mechanism.
+`boot_cpu_has()`はブートCPUの機能フラグをチェックする。ブート中の一度きりのセットアップ判断に使われる。これらの呼び出しはalternative機構によってパッチされない。
 
-### 3. static_cpu_has(): compile-time patched {#3-staticcpuhas-compile-time-patched}
+### 3. static_cpu_has(): コンパイル時に用意されパッチされる {#3-staticcpuhas-compile-time-patched}
 
 ```c
 #define static_cpu_has(bit) __static_cpu_has(bit)
 
-/* Example: fast path for FSGSBASE */
+/* 例: FSGSBASEの高速パス */
 if (static_cpu_has(X86_FEATURE_FSGSBASE)) {
-    /* This branch may be compiled out entirely on CPUs without FSGSBASE,
-     * or turned into an unconditional jump on CPUs that always have it */
+    /* FSGSBASEを持たないCPUではこの分岐は完全に除去されることがあり、
+     * 常に持つCPUでは無条件ジャンプに変わることがある */
     wrfsbase(value);
 } else {
     wrmsrl(MSR_FS_BASE, value);
 }
 ```
 
-`static_cpu_has()` emits a **patchable** instruction sequence. At boot, `apply_alternatives()` patches the code in place:
+`static_cpu_has()`は**パッチ可能な**命令列を出力する。ブート時に`apply_alternatives()`がそのコードをその場でパッチする。
 
-- If the feature is **present**: the test is replaced with `jmp over_else` (always take the if-branch)
-- If the feature is **absent**: the test is replaced with `jmp over_if` (always take the else-branch)
+- 機能が**存在する**場合: テストは`jmp over_else`に置き換えられる（常にif側の分岐を取る）
+- 機能が**存在しない**場合: テストは`jmp over_if`に置き換えられる（常にelse側の分岐を取る）
 
-After patching, the check becomes a single unconditional branch — zero overhead compared to a memory read.
+パッチ後、このチェックは単一の無条件分岐になる — メモリ読み取りと比べてオーバーヘッドはゼロである。
 
 ---
 
-## Alternative patching {#alternative-patching}
+## alternativeパッチング {#alternative-patching}
 
-The **alternative** mechanism allows the kernel to ship with safe, conservative code and then patch in optimized instruction sequences at boot time based on the actual CPU capabilities.
+**alternative**機構により、カーネルは安全で保守的なコードを同梱しておき、実際のCPUの能力に基づいて、ブート時に最適化された命令列をパッチで適用できる。
 
-### The ALTERNATIVE macro {#the-alternative-macro}
+### ALTERNATIVEマクロ {#the-alternative-macro}
 
 ```c
 /* arch/x86/include/asm/alternative.h */
 
 /*
  * ALTERNATIVE(orig_insn, alt_insn, feature):
- *   If 'feature' is present in boot_cpu_data: use alt_insn
- *   Otherwise: use orig_insn
+ *   boot_cpu_dataに'feature'が存在する場合: alt_insnを使う
+ *   それ以外: orig_insnを使う
  */
 #define ALTERNATIVE(oldinstr, newinstr, feature)            \
     OLDINSTR(oldinstr)                                       \
@@ -203,22 +203,22 @@ The **alternative** mechanism allows the kernel to ship with safe, conservative 
     ".popsection\n"
 ```
 
-The default instruction (`orig_insn`) is emitted inline in the `.text` section. The replacement instruction (`alt_insn`) is placed in `.altinstr_replacement`. A descriptor (`struct alt_instr`) is placed in `.altinstructions` to describe the patching.
+デフォルトの命令（`orig_insn`）は`.text`セクションにインラインで出力される。置き換え用の命令（`alt_insn`）は`.altinstr_replacement`に置かれる。パッチ適用を記述するディスクリプタ（`struct alt_instr`）は`.altinstructions`に置かれる。
 
 ### struct alt_instr {#struct-alt_instr}
 
 ```c
 /* arch/x86/include/asm/alternative.h */
 struct alt_instr {
-    s32  instr_offset;    /* offset of original instruction */
-    s32  repl_offset;     /* offset of replacement instruction */
-    u16  cpuid;           /* CPUID feature bit */
-    u8   instrlen;        /* length of original instruction */
-    u8   replacementlen;  /* length of replacement instruction */
+    s32  instr_offset;    /* 元の命令のオフセット */
+    s32  repl_offset;     /* 置き換え命令のオフセット */
+    u16  cpuid;           /* CPUIDの機能ビット */
+    u8   instrlen;        /* 元の命令の長さ */
+    u8   replacementlen;  /* 置き換え命令の長さ */
 };
 ```
 
-### apply_alternatives() at boot {#apply_alternatives-at-boot}
+### ブート時のapply_alternatives() {#apply_alternatives-at-boot}
 
 ```c
 /* arch/x86/kernel/alternative.c */
@@ -232,51 +232,51 @@ void __init_or_module apply_alternatives(struct alt_instr *start,
         u8 *repl   = (u8 *)&a->repl_offset   + a->repl_offset;
 
         if (!boot_cpu_has(a->cpuid))
-            continue;   /* feature not present, keep original */
+            continue;   /* 機能が存在しないので元のままにする */
 
-        /* Patch: copy replacement bytes over original instruction.
-         * NOP-pad if replacement is shorter. */
+        /* パッチ: 置き換え用のバイト列を元の命令の上にコピーする。
+         * 置き換えの方が短ければNOPで埋める。 */
         text_poke_early(instr, repl, a->replacementlen);
         /* ... */
     }
 }
 ```
 
-`apply_alternatives()` is called during `start_kernel()` via `alternative_instructions()`. It iterates the `.altinstructions` section and patches each instruction in place using `text_poke_early()` (which temporarily makes `.text` writable).
+`apply_alternatives()`は`start_kernel()`の中で`alternative_instructions()`を介して呼ばれる。これは`.altinstructions`セクションを走査し、`text_poke_early()`（一時的に`.text`を書き込み可能にする）を使って各命令をその場でパッチする。
 
-### Real examples of alternative use {#real-examples-of-alternative-use}
+### alternativeの実際の使用例 {#real-examples-of-alternative-use}
 
 ```c
-/* LOCK prefix: present on SMP, patched out to NOP on uniprocessor (UP) kernels */
+/* LOCKプレフィックス: SMPでは存在し、ユニプロセッサ（UP）カーネルではNOPにパッチされる */
 ALTERNATIVE("lock; ", "nop", X86_FEATURE_UP)
 
-/* Fast string operations (ERMS: Enhanced REP MOVSB/STOSB) */
+/* 高速な文字列操作（ERMS: Enhanced REP MOVSB/STOSB） */
 ALTERNATIVE("rep movsq", "rep movsb", X86_FEATURE_ERMS)
 
-/* Memory barrier: LFENCE vs MFENCE vs nothing (for Spectre) */
+/* メモリバリア: LFENCEかMFENCEか何もしないか（Spectre対策） */
 ALTERNATIVE("", "lfence", X86_FEATURE_LFENCE_RDTSC)
 ```
 
 ---
 
-## CPU bug flags: x86_bugs[] {#cpu-bug-flags-x86_bugs}
+## CPUのバグフラグ: x86_bugs[] {#cpu-bug-flags-x86_bugs}
 
-In addition to feature flags, the kernel maintains a set of **bug flags** in the upper `NBUGINTS` words of `x86_capability[]`. These are set during early CPU detection to indicate that a CPU requires a mitigation:
+機能フラグに加えて、カーネルは`x86_capability[]`の上位`NBUGINTS`ワードに一連の**バグフラグ**を保持している。これらは、CPUが緩和策を必要とすることを示すために、初期のCPU検出中に設定される。
 
 ```c
 /* arch/x86/include/asm/cpufeatures.h */
 /*
- * Bug flags — stored in the upper NBUGINTS words of x86_capability[].
- * The macro X86_BUG(x) places bug flags above all feature words:
+ * バグフラグ — x86_capability[]の上位NBUGINTSワードに格納される。
+ * マクロX86_BUG(x)は、バグフラグをすべての機能ワードの上に配置する:
  *   #define X86_BUG(x)  (NCAPINTS*32 + (x))
- * So X86_BUG_CPU_MELTDOWN = X86_BUG(14) = NCAPINTS*32 + 14.
+ * したがってX86_BUG_CPU_MELTDOWN = X86_BUG(14) = NCAPINTS*32 + 14。
  */
-#define X86_BUG_F00F            X86_BUG( 0)  /* Intel F0 0F bug */
-#define X86_BUG_FDIV            X86_BUG( 1)  /* FPU FDIV */
-#define X86_BUG_AMD_APM_ERRATUM X86_BUG( 2)  /* AMD APM bug */
-#define X86_BUG_CPU_MELTDOWN    X86_BUG(14)  /* CPU is vulnerable to Meltdown */
-#define X86_BUG_SPECTRE_V1      X86_BUG(15)  /* CPU is vulnerable to Spectre v1 */
-#define X86_BUG_SPECTRE_V2      X86_BUG(16)  /* CPU is vulnerable to Spectre v2 */
+#define X86_BUG_F00F            X86_BUG( 0)  /* IntelのF0 0Fバグ */
+#define X86_BUG_FDIV            X86_BUG( 1)  /* FPUのFDIV */
+#define X86_BUG_AMD_APM_ERRATUM X86_BUG( 2)  /* AMDのAPMバグ */
+#define X86_BUG_CPU_MELTDOWN    X86_BUG(14)  /* CPUがMeltdownに対して脆弱 */
+#define X86_BUG_SPECTRE_V1      X86_BUG(15)  /* CPUがSpectre v1に対して脆弱 */
+#define X86_BUG_SPECTRE_V2      X86_BUG(16)  /* CPUがSpectre v2に対して脆弱 */
 #define X86_BUG_SPEC_STORE_BYPASS X86_BUG(17) /* Speculative store bypass */
 #define X86_BUG_L1TF            X86_BUG(18)  /* L1 Terminal Fault */
 #define X86_BUG_MDS             X86_BUG(19)  /* Microarchitectural Data Sampling */
@@ -286,10 +286,10 @@ In addition to feature flags, the kernel maintains a set of **bug flags** in the
 #define X86_BUG_ITLB_MULTIHIT   X86_BUG(23)
 #define X86_BUG_SRBDS           X86_BUG(24)
 #define X86_BUG_MMIO_STALE_DATA X86_BUG(25)
-/* ... more added with each new hardware vulnerability ... */
+/* ... ハードウェアの脆弱性が新たに見つかるたびに追加される ... */
 ```
 
-Bug flags are set in `arch/x86/kernel/cpu/bugs.c` during `check_bugs()`:
+バグフラグは`arch/x86/kernel/cpu/bugs.c`の`check_bugs()`の中で設定される。
 
 ```c
 /* arch/x86/kernel/cpu/bugs.c */
@@ -298,15 +298,15 @@ void __init check_bugs(void)
     identify_boot_cpu();
 
     /*
-     * identify_boot_cpu() set x86_capability[].
-     * Now set bug flags based on CPU family/model/stepping.
+     * identify_boot_cpu()がx86_capability[]を設定した。
+     * 次に、CPUのfamily/model/steppingに基づいてバグフラグを設定する。
      */
     if (cpu_matches(cpu_vuln_whitelist, NO_MELTDOWN))
-        ; /* not vulnerable */
+        ; /* 脆弱ではない */
     else
         setup_force_cpu_bug(X86_BUG_CPU_MELTDOWN);
 
-    /* ... check for each vulnerability ... */
+    /* ... 各脆弱性についてチェックする ... */
     spectre_v2_select_mitigation();
     spectre_v1_select_mitigation();
     mds_select_mitigation();
@@ -316,101 +316,101 @@ void __init check_bugs(void)
 
 ---
 
-## Key CPU features in the kernel {#key-cpu-features-in-the-kernel}
+## カーネルにおける主要なCPU機能 {#key-cpu-features-in-the-kernel}
 
 ### X86_FEATURE_FSGSBASE {#x86featurefsgsbase}
 
-Adds `RDFSBASE`, `WRFSBASE`, `RDGSBASE`, `WRGSBASE` instructions — fast reads and writes of the FS and GS segment base registers without going through the MSR interface.
+`RDFSBASE`、`WRFSBASE`、`RDGSBASE`、`WRGSBASE`命令を追加する — MSRインターフェースを経由せずに、FSおよびGSセグメントのベースレジスタを高速に読み書きできる。
 
-- Without FSGSBASE: setting FS.base requires `wrmsr(MSR_FS_BASE, value)` — a serializing instruction
-- With FSGSBASE: `wrfsbase(value)` — much faster; used for TLS in userspace and glibc's implementation of thread-local storage
+- FSGSBASEがない場合: FS.baseの設定には`wrmsr(MSR_FS_BASE, value)`が必要 — これはシリアライズ命令である
+- FSGSBASEがある場合: `wrfsbase(value)` — はるかに高速。ユーザー空間のTLSや、glibcのスレッドローカルストレージの実装に使われる
 
-The kernel enables FSGSBASE (sets `CR4.FSGSBASE`) if the CPU supports it. Support was added in **Linux 5.9**.
+カーネルは、CPUがサポートしていればFSGSBASEを有効にする（`CR4.FSGSBASE`をセットする）。このサポートは**Linux 5.9**で追加された。
 
 ### X86_FEATURE_INVPCID {#x86featureinvpcid}
 
-`INVPCID` (Invalidate Process-Context Identifier) instruction: selectively invalidate TLB entries by PCID and virtual address, or flush all non-global entries for a specific PCID.
+`INVPCID`（Invalidate Process-Context Identifier）命令: PCIDと仮想アドレスを指定してTLBエントリを選択的に無効化する、または特定のPCIDのグローバルでないエントリをすべてフラッシュする。
 
-Without INVPCID, PCID flushing requires writing CR3 (which flushes all TLB entries for that PCID). INVPCID is more precise and faster.
+INVPCIDがない場合、PCIDのフラッシュにはCR3への書き込みが必要になる（そのPCIDのTLBエントリがすべてフラッシュされる）。INVPCIDの方が精密で高速である。
 
-Some early Haswell CPUs support PCID but not INVPCID — the kernel detects this and falls back to CR3-based flushing.
+初期のHaswell CPUの一部はPCIDをサポートするがINVPCIDはサポートしない — カーネルはこれを検出し、CR3ベースのフラッシュにフォールバックする。
 
 ### X86_FEATURE_PKU {#x86featurepku}
 
-**Protection Keys for Userspace (PKU)**: allows user-space code to mark memory regions with a 4-bit "protection key." The `PKRU` register controls access rights (read/write disable) for each of the 16 possible keys, without requiring a syscall or page table modification.
+**Protection Keys for Userspace（PKU）**: ユーザー空間のコードがメモリ領域に4ビットの「保護キー」を付けられるようにする。`PKRU`レジスタは、システムコールやページテーブルの変更を必要とせずに、16通りあるキーそれぞれのアクセス権（読み取り/書き込みの禁止）を制御する。
 
-Useful for isolating sensitive data within a process (e.g., OpenSSL's private keys). Kernel support added in **Linux 4.6**.
+プロセス内の機密データ（例: OpenSSLの秘密鍵）を隔離するのに役立つ。カーネルのサポートは**Linux 4.6**で追加された。
 
 ### X86_FEATURE_UMIP {#x86featureumip}
 
-**User-Mode Instruction Prevention**: when `CR4.UMIP = 1`, executing `SGDT`, `SIDT`, `SLDT`, `SMSW`, or `STR` in ring 3 generates a #GP instead of returning hardware descriptor table addresses.
+**User-Mode Instruction Prevention**: `CR4.UMIP = 1`のとき、ring 3で`SGDT`、`SIDT`、`SLDT`、`SMSW`、`STR`を実行すると、ハードウェアのディスクリプタテーブルのアドレスを返す代わりに#GPが発生する。
 
-Prevents user processes from learning the addresses of IDT, GDT, and LDT — useful for defeating ASLR bypasses. Linux enables UMIP automatically when available.
+ユーザープロセスがIDT、GDT、LDTのアドレスを知ることを防ぐ — ASLRの回避を阻止するのに役立つ。Linuxは利用可能であればUMIPを自動的に有効にする。
 
 ### X86_FEATURE_RDRAND {#x86featurerdrand}
 
-`RDRAND` instruction: hardware random number generator that returns cryptographically random values. The kernel uses it as an entropy source for `/dev/random` and friends. Note: `RDRAND` alone is not trusted as the sole entropy source in the kernel (a bug in Intel's implementation of `RDRAND` was discovered on some Ivy Bridge systems returning constant values).
+`RDRAND`命令: 暗号学的に安全な乱数値を返すハードウェア乱数生成器である。カーネルはこれを`/dev/random`などのエントロピー源として使う。注意: カーネルでは`RDRAND`単独では唯一のエントロピー源として信頼されない（一部のIvy Bridgeシステムで、Intelの`RDRAND`実装に定数値を返すバグが見つかった）。
 
 ---
 
-## Observing CPU features {#observing-cpu-features}
+## CPU機能を観察する {#observing-cpu-features}
 
 ```bash
-# Feature flags as detected by the kernel (same as CPUID output, filtered)
+# カーネルが検出した機能フラグ（CPUIDの出力と同じものをフィルタしたもの）
 cat /proc/cpuinfo | grep flags | head -1 | tr ' ' '\n' | sort | grep -E "pcid|invpcid|fsgsbase|pku|umip"
 
-# All vulnerability mitigations
+# すべての脆弱性緩和策
 grep . /sys/devices/system/cpu/vulnerabilities/*
 
-# Raw CPUID output (userspace tool)
-# Install: apt-get install cpuid / dnf install cpuid
-cpuid -1        # all leaves for CPU 0
-cpuid -l 7      # extended features leaf 7
+# CPUIDの生の出力（ユーザー空間のツール）
+# インストール: apt-get install cpuid / dnf install cpuid
+cpuid -1        # CPU 0の全リーフ
+cpuid -l 7      # 拡張機能のリーフ7
 
-# Verify that alternatives were patched
-# (requires CONFIG_X86_PTDUMP or careful use of /proc/kcore)
-# The presence of a feature in /proc/cpuinfo flags confirms the feature flag is set
+# alternativeがパッチされたことを確認する
+# （CONFIG_X86_PTDUMPか、/proc/kcoreの慎重な利用が必要）
+# /proc/cpuinfoのflagsに機能が現れていれば、その機能フラグが設定されていることが確認できる
 
-# Alternative patching size statistics (in dmesg if CONFIG_X86_ALT_PATCHING_STATS)
+# alternativeパッチングのサイズ統計（CONFIG_X86_ALT_PATCHING_STATSならdmesgに出る）
 dmesg | grep -i alternat
 
-# Check a specific MSR
+# 特定のMSRを確認する
 modprobe msr
 rdmsr 0xC0000082    # LSTAR
 rdmsr 0x48b         # IA32_CORE_CAPABILITIES
 
-# See which CPUs have ERMS (Enhanced REP MOVSB/STOSB)
+# どのCPUがERMS（Enhanced REP MOVSB/STOSB）を持つか確認する
 grep erms /proc/cpuinfo
 
-# Check PCID support and use
+# PCIDのサポートと使用状況を確認する
 dmesg | grep -i pcid
 ```
 
 ---
 
-## Version notes {#version-notes}
+## バージョンに関する注記 {#version-notes}
 
-| Feature | Linux version | Notes |
+| 機能 | Linuxバージョン | 備考 |
 |---------|--------------|-------|
-| `static_cpu_has()` | 2.6.39 | Compile-time patchable feature check |
-| `ALTERNATIVE` macro | Early; formalized ~3.x | Assembly-level patching |
-| PKU support | 4.6 | `CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS` |
-| UMIP enforcement | 4.19 | Automatically enabled if supported |
-| FSGSBASE instructions in kernel | 5.9 | `CR4.FSGSBASE` enabled |
-| `X86_BUG_*` flags for speculative execution | 4.15 | Meltdown/Spectre era |
+| `static_cpu_has()` | 2.6.39 | コンパイル時に用意されるパッチ可能な機能チェック |
+| `ALTERNATIVE`マクロ | 初期から。3.x頃に整備 | アセンブリレベルのパッチング |
+| PKUのサポート | 4.6 | `CONFIG_X86_INTEL_MEMORY_PROTECTION_KEYS` |
+| UMIPの強制 | 4.19 | サポートされていれば自動的に有効化 |
+| カーネルでのFSGSBASE命令 | 5.9 | `CR4.FSGSBASE`を有効化 |
+| 投機的実行向けの`X86_BUG_*`フラグ | 4.15 | Meltdown/Spectreの時代 |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source & documentation {#kernel-source-documentation}
+### カーネルソースとドキュメント {#kernel-source-documentation}
 
-- [arch/x86/include/asm/cpufeatures.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/cpufeatures.h) — the full feature-bit vocabulary (`X86_FEATURE_*`)
-- [arch/x86/kernel/cpu/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/common.c) — `get_cpu_cap()` and boot-time detection
-- [arch/x86/kernel/alternative.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/alternative.c) — the runtime patching engine behind `ALTERNATIVE`
-- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) — Vol. 2A documents every CPUID leaf
+- [arch/x86/include/asm/cpufeatures.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/cpufeatures.h) — 機能ビットの全語彙（`X86_FEATURE_*`）
+- [arch/x86/kernel/cpu/common.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/common.c) — `get_cpu_cap()`とブート時の検出
+- [arch/x86/kernel/alternative.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/alternative.c) — `ALTERNATIVE`の背後にある実行時パッチングエンジン
+- [Intel SDM](https://www.intel.com/content/www/us/en/developer/articles/technical/intel-sdm.html) — Vol. 2AにすべてのCPUIDリーフが記載されている
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [ARM64 CPU Features](../arm64/cpu-features.md) — the system-register equivalent of CPUID, and arm64's alternatives engine
-- [Kernel Hardening](../../security/kernel-hardening.md) — mitigations selected via these feature/bug bits
+- [ARM64のCPU機能](../arm64/cpu-features.md) — CPUIDに相当するシステムレジスタと、arm64のalternativeエンジン
+- [カーネルのハードニング](../../security/kernel-hardening.md) — これらの機能/バグビットによって選択される緩和策

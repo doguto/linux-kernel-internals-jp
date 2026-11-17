@@ -1,54 +1,50 @@
-# ARM64 Syscall Entry {#arm64-syscall-entry}
+# ARM64のシステムコールのエントリ {#arm64-syscall-entry}
 
-> From SVC instruction to kernel C handler and back
+> SVC命令からカーネルのCハンドラへ、そして戻るまで
 
-Every system call made by a 64-bit ARM process — `read()`, `write()`, `mmap()`, or any other — follows a
-specific hardware and software path from `SVC #0` in userspace through the kernel's assembly entry point,
-register-save machinery, C dispatch layer, and back to userspace via `ERET`. This page traces that path.
+64ビットARMプロセスが行うすべてのシステムコール（`read()`、`write()`、`mmap()`、その他何であれ）は、ユーザー空間の`SVC #0`から、カーネルのアセンブリのエントリポイント、レジスタ保存の仕組み、Cのディスパッチ層を通り、`ERET`でユーザー空間へ戻るという、ハードウェアとソフトウェアの決まった経路をたどる。このページではその経路を追う。
 
 ---
 
-## The SVC instruction {#the-svc-instruction}
+## SVC命令 {#the-svc-instruction}
 
-On ARM64, system calls are made with `SVC #0` (Supervisor Call). The calling convention is:
+ARM64では、システムコールは`SVC #0`（Supervisor Call）で行う。呼び出し規約は次のとおりである。
 
-| Register | Role |
+| レジスタ | 役割 |
 |----------|------|
-| `x8` | Syscall number |
-| `x0`–`x5` | Arguments (up to 6) |
-| `x0` | Return value (after return) |
+| `x8` | システムコール番号 |
+| `x0`–`x5` | 引数（最大6個） |
+| `x0` | 戻り値（復帰後） |
 
 ```asm
-/* Userspace: calling write(1, buf, len) on ARM64 */
+/* ユーザー空間: ARM64でwrite(1, buf, len)を呼ぶ */
 mov  x8, #64        /* __NR_write = 64 */
-mov  x0, #1         /* fd = 1 (stdout) */
-ldr  x1, =buf       /* buffer address */
-mov  x2, #len       /* length */
-svc  #0             /* trap to EL1; return value in x0 */
+mov  x0, #1         /* fd = 1（stdout） */
+ldr  x1, =buf       /* バッファアドレス */
+mov  x2, #len       /* 長さ */
+svc  #0             /* EL1へトラップ。戻り値はx0 */
 ```
 
-The immediate in `SVC #0` is conventionally zero — Linux ignores it. The syscall number comes from `x8`.
+`SVC #0`の即値は慣例的にゼロであり、Linuxはこれを無視する。システムコール番号は`x8`から取られる。
 
-### Contrast with x86-64 {#contrast-with-x86-64}
+### x86-64との対比 {#contrast-with-x86-64}
 
-| Aspect | ARM64 (`SVC #0`) | x86-64 (`SYSCALL`) |
+| 観点 | ARM64（`SVC #0`） | x86-64（`SYSCALL`） |
 |--------|------------------|-------------------|
-| Syscall number | `x8` | `rax` |
-| Arguments | `x0`–`x5` | `rdi`, `rsi`, `rdx`, `r10`, `r8`, `r9` |
-| Return value | `x0` | `rax` |
-| Saved return address | CPU writes `ELR_EL1` | CPU writes `rcx` |
-| Saved flags | CPU writes `SPSR_EL1` | CPU writes `r11` |
-| Entry mechanism | Exception vector (VBAR_EL1) | Fixed MSR (LSTAR) |
+| システムコール番号 | `x8` | `rax` |
+| 引数 | `x0`–`x5` | `rdi`、`rsi`、`rdx`、`r10`、`r8`、`r9` |
+| 戻り値 | `x0` | `rax` |
+| 保存される戻りアドレス | CPUが`ELR_EL1`に書き込む | CPUが`rcx`に書き込む |
+| 保存されるフラグ | CPUが`SPSR_EL1`に書き込む | CPUが`r11`に書き込む |
+| エントリ機構 | 例外ベクタ（VBAR_EL1） | 固定のMSR（LSTAR） |
 
-On ARM64, `SVC #0` triggers a synchronous exception dispatched through the vector table. On x86-64,
-`SYSCALL` jumps directly to the `LSTAR` MSR address without going through the IDT.
+ARM64では、`SVC #0`はベクタテーブルを通じてディスパッチされる同期例外を引き起こす。x86-64では、`SYSCALL`はIDTを経由せずに`LSTAR` MSRのアドレスへ直接ジャンプする。
 
 ---
 
-## Exception vector dispatch {#exception-vector-dispatch}
+## 例外ベクタによるディスパッチ {#exception-vector-dispatch}
 
-When `SVC #0` executes, the CPU takes a **synchronous exception** and jumps to `VBAR_EL1 + 0x400` —
-the slot for synchronous exceptions from 64-bit EL0:
+`SVC #0`が実行されると、CPUは**同期例外**を受け、`VBAR_EL1 + 0x400`、すなわち64ビットEL0からの同期例外用のスロットへジャンプする。
 
 ```
 VBAR_EL1 + 0x200: Synchronous, EL1 with SP_ELx   (kernel exceptions)
@@ -56,36 +52,35 @@ VBAR_EL1 + 0x400: Synchronous, lower EL (AArch64) ← SVC from 64-bit EL0
 VBAR_EL1 + 0x600: Synchronous, lower EL (AArch32) ← SVC from 32-bit EL0
 ```
 
-The Linux vector table in `arch/arm64/kernel/entry.S`:
+`arch/arm64/kernel/entry.S`にあるLinuxのベクタテーブル:
 
 ```asm
 /* arch/arm64/kernel/entry.S */
     .align  11
 SYM_CODE_START(vectors)
-    kernel_ventry   1, h, 64, sync    /* Synchronous EL1h (kernel exceptions) */
+    kernel_ventry   1, h, 64, sync    /* 同期 EL1h（カーネルの例外） */
     kernel_ventry   1, h, 64, irq     /* IRQ EL1h */
     /* ... */
-    kernel_ventry   0, t, 64, sync    /* Synchronous EL0, 64-bit ← here for SVC */
-    kernel_ventry   0, t, 64, irq     /* IRQ EL0, 64-bit */
+    kernel_ventry   0, t, 64, sync    /* 同期 EL0、64ビット ← SVCはここ */
+    kernel_ventry   0, t, 64, irq     /* IRQ EL0、64ビット */
     /* ... */
-    kernel_ventry   0, t, 32, sync    /* Synchronous EL0, 32-bit (AArch32 compat) */
+    kernel_ventry   0, t, 32, sync    /* 同期 EL0、32ビット（AArch32 compat） */
     /* ... */
 SYM_CODE_END(vectors)
 ```
 
-### ESR_EL1 and EC == 0x15 {#esr_el1-and-ec-0x15}
+### ESR_EL1とEC == 0x15 {#esr_el1-and-ec-0x15}
 
-The CPU populates `ESR_EL1` with the exception cause. Bits 31:26 are the **Exception Class (EC)**; for
-a 64-bit SVC, EC is `0x15`:
+CPUは`ESR_EL1`に例外の原因を格納する。ビット31:26が**Exception Class（EC）**であり、64ビットのSVCではECは`0x15`である。
 
 ```c
 /* arch/arm64/include/asm/esr.h */
 #define ESR_ELx_EC_SHIFT    26
-#define ESR_ELx_EC_SVC64    0x15   /* SVC from 64-bit EL0 */
-#define ESR_ELx_EC_SVC32   0x11   /* SVC from 32-bit EL0 */
+#define ESR_ELx_EC_SVC64    0x15   /* 64ビットEL0からのSVC */
+#define ESR_ELx_EC_SVC32   0x11   /* 32ビットEL0からのSVC */
 ```
 
-The handler reads `ESR_EL1`, extracts EC, and branches to `el0_svc`:
+ハンドラは`ESR_EL1`を読み、ECを取り出して`el0_svc`へ分岐する。
 
 ```c
 /* arch/arm64/kernel/entry-common.c */
@@ -100,20 +95,20 @@ asmlinkage void noinstr el0t_64_sync_handler(struct pt_regs *regs)
     case ESR_ELx_EC_DABT_LOW:
         el0_da(regs, esr);
         break;
-    /* ... other exception classes ... */
+    /* ... その他の例外クラス ... */
     default:
         el0_inv(regs, esr);
     }
 }
 ```
 
-Note: `el0t_64_sync_handler` is a C function in `arch/arm64/kernel/entry-common.c` (not assembly). The low-level vector stub in `entry.S` saves registers with `kernel_entry 0, 64` and then calls this C handler.
+注: `el0t_64_sync_handler`は`arch/arm64/kernel/entry-common.c`にあるC関数である（アセンブリではない）。`entry.S`の低レベルなベクタスタブが`kernel_entry 0, 64`でレジスタを保存し、その後このCハンドラを呼ぶ。
 
 ---
 
-## Register save and restore {#register-save-and-restore}
+## レジスタの保存と復元 {#register-save-and-restore}
 
-`kernel_entry 0, 64` saves all userspace registers onto the kernel stack as a `struct pt_regs`:
+`kernel_entry 0, 64`は、ユーザー空間のすべてのレジスタを`struct pt_regs`としてカーネルスタックに保存する。
 
 ```c
 /* arch/arm64/include/asm/ptrace.h */
@@ -122,28 +117,26 @@ struct pt_regs {
         struct user_pt_regs user_regs;
         struct {
             u64 regs[31];   /* x0–x30 */
-            u64 sp;         /* user stack pointer (SP_EL0) */
-            u64 pc;         /* ELR_EL1: user return address */
-            u64 pstate;     /* SPSR_EL1: saved processor state */
+            u64 sp;         /* ユーザースタックポインタ（SP_EL0） */
+            u64 pc;         /* ELR_EL1: ユーザーへの戻りアドレス */
+            u64 pstate;     /* SPSR_EL1: 保存されたプロセッサ状態 */
         };
     };
-    u64 orig_x0;    /* original x0 (for syscall restart) */
-    s32 syscallno;  /* syscall number */
-    /* ... additional fields for MTE, SVE state ... */
+    u64 orig_x0;    /* 元のx0（システムコール再開用） */
+    s32 syscallno;  /* システムコール番号 */
+    /* ... MTE、SVEの状態用の追加フィールド ... */
 };
 ```
 
-The macro switches to the per-task kernel stack (from `SP_EL1`), saves `x0`–`x30`, `sp`, `ELR_EL1`
-(return PC), and `SPSR_EL1` (saved PSTATE). The resulting `pt_regs *` is passed to all C handlers.
+このマクロはタスクごとのカーネルスタック（`SP_EL1`から）に切り替え、`x0`–`x30`、`sp`、`ELR_EL1`（戻りPC）、`SPSR_EL1`（保存されたPSTATE）を保存する。得られた`pt_regs *`がすべてのCハンドラに渡される。
 
-On the return path, `kernel_exit 0` restores all fields and executes `ERET`, which atomically restores
-the program counter from `ELR_EL1` and processor state from `SPSR_EL1`, returning to EL0.
+復帰パスでは、`kernel_exit 0`がすべてのフィールドを復元して`ERET`を実行する。`ERET`は`ELR_EL1`からプログラムカウンタを、`SPSR_EL1`からプロセッサ状態をアトミックに復元し、EL0へ戻る。
 
 ---
 
-## The C dispatch path {#the-c-dispatch-path}
+## Cのディスパッチパス {#the-c-dispatch-path}
 
-After register save, control flows from assembly into C:
+レジスタ保存の後、制御はアセンブリからCへ移る。
 
 ```
 el0_svc (entry-common.c)
@@ -154,8 +147,7 @@ el0_svc (entry-common.c)
                     └─► sys_call_table[scno](regs)
 ```
 
-`el0_svc_common` in `arch/arm64/kernel/syscall.c` saves `orig_x0` and `syscallno` into `pt_regs`, runs
-any pre-syscall work, then calls `invoke_syscall`:
+`arch/arm64/kernel/syscall.c`の`el0_svc_common`は、`orig_x0`と`syscallno`を`pt_regs`に保存し、システムコール前の処理を実行してから`invoke_syscall`を呼ぶ。
 
 ```c
 /* arch/arm64/kernel/syscall.c */
@@ -177,9 +169,9 @@ static void invoke_syscall(struct pt_regs *regs, unsigned int scno,
 }
 ```
 
-### The syscall table {#the-syscall-table}
+### システムコールテーブル {#the-syscall-table}
 
-The ARM64 native syscall table is built in `arch/arm64/kernel/sys.c` via the `__SYSCALL()` macro:
+ARM64ネイティブのシステムコールテーブルは、`arch/arm64/kernel/sys.c`で`__SYSCALL()`マクロによって構築される。
 
 ```c
 /* arch/arm64/kernel/sys.c */
@@ -191,15 +183,13 @@ const syscall_fn_t sys_call_table[__NR_syscalls] = {
 };
 ```
 
-ARM64 uses the generic syscall numbering from `include/uapi/asm-generic/unistd.h` — the same table
-shared with RISC-V and LoongArch. `__NR_write` is 64, `__NR_read` is 63, `__NR_openat` is 56.
+ARM64は`include/uapi/asm-generic/unistd.h`の汎用システムコール番号体系を使う。これはRISC-VやLoongArchと共有されている同じテーブルである。`__NR_write`は64、`__NR_read`は63、`__NR_openat`は56である。
 
 ---
 
-## Syscall tracing and seccomp {#syscall-tracing-and-seccomp}
+## システムコールのトレーシングとseccomp {#syscall-tracing-and-seccomp}
 
-`syscall_enter_from_user_mode_work()` in `kernel/entry/common.c` handles all pre-syscall hooks. It
-checks the `syscall_work` flags in `thread_info`:
+`kernel/entry/common.c`の`syscall_enter_from_user_mode_work()`が、システムコール前のすべてのフックを処理する。これは`thread_info`の`syscall_work`フラグをチェックする。
 
 ```c
 /* kernel/entry/common.c */
@@ -208,43 +198,37 @@ static long syscall_enter_from_user_mode_work(struct pt_regs *regs, long syscall
     unsigned long work = READ_ONCE(current_thread_info()->syscall_work);
 
     if (work & SYSCALL_WORK_SECCOMP) {
-        int ret = __secure_computing(NULL);   /* run BPF filter */
+        int ret = __secure_computing(NULL);   /* BPFフィルタを実行 */
         if (ret == -1)
-            return ret;  /* process killed by seccomp */
+            return ret;  /* seccompによりプロセスがkillされた */
     }
 
     if (work & SYSCALL_WORK_SYSCALL_TRACEPOINT)
         trace_sys_enter(regs, syscall);       /* sys_enter raw tracepoint */
 
-    syscall = ptrace_report_syscall_entry(regs);  /* ptrace stop if traced */
+    syscall = ptrace_report_syscall_entry(regs);  /* トレース中ならptraceで停止 */
 
     return syscall;
 }
 ```
 
-When a task is traced with `PTRACE_SYSCALL` (as used by `strace`), `SYSCALL_WORK_SYSCALL_TRACE` is set (since Linux 5.12, replacing the old `TIF_SYSCALL_TRACE`) and
-`ptrace_report_syscall_entry()` pauses the task. The tracer reads registers via `PTRACE_GETREGSET` with
-`NT_PRSTATUS`, which exposes `struct user_pt_regs`.
+タスクが`PTRACE_SYSCALL`でトレースされている場合（`strace`が使う方法）、`SYSCALL_WORK_SYSCALL_TRACE`がセットされ（Linux 5.12以降。古い`TIF_SYSCALL_TRACE`を置き換えた）、`ptrace_report_syscall_entry()`がタスクを一時停止する。トレーサは`NT_PRSTATUS`を指定した`PTRACE_GETREGSET`でレジスタを読む。これは`struct user_pt_regs`を公開する。
 
-The return path mirrors entry: `syscall_exit_to_user_mode()` fires `sys_exit` tracepoints, handles
-ptrace exit-stops, and delivers any pending signals before `kernel_exit` restores registers.
+復帰パスはエントリと対称である。`syscall_exit_to_user_mode()`が`sys_exit` tracepointを発火し、ptraceのexit-stopを処理し、`kernel_exit`がレジスタを復元する前に保留中のシグナルを配送する。
 
 ---
 
 ## AArch32 compat {#aarch32-compat}
 
-A 64-bit ARM64 kernel can run 32-bit ARM (AArch32) ELF binaries (`CONFIG_COMPAT`). These processes also
-use `SVC #0`, but with a different register convention:
+64ビットARM64カーネルは、32ビットARM（AArch32）のELFバイナリを実行できる（`CONFIG_COMPAT`）。これらのプロセスも`SVC #0`を使うが、レジスタ規約が異なる。
 
-| Register | Role |
+| レジスタ | 役割 |
 |----------|------|
-| `r7` | Syscall number (EABI) |
-| `r0`–`r5` | Arguments |
-| `r0` | Return value |
+| `r7` | システムコール番号（EABI） |
+| `r0`–`r5` | 引数 |
+| `r0` | 戻り値 |
 
-The hardware routes AArch32 synchronous exceptions to **VBAR_EL1 + 0x600** instead of `+0x400`. The
-entry handler `el0t_32_sync_handler` recognises EC `0x11` (`ESR_ELx_EC_SVC32`) and branches to
-`el0_svc_compat`, which dispatches via a separate table:
+ハードウェアはAArch32の同期例外を`+0x400`ではなく**VBAR_EL1 + 0x600**へルーティングする。エントリハンドラ`el0t_32_sync_handler`はEC `0x11`（`ESR_ELx_EC_SVC32`）を認識して`el0_svc_compat`へ分岐し、これが別のテーブルを介してディスパッチする。
 
 ```c
 /* arch/arm64/kernel/sys_compat.c */
@@ -256,17 +240,13 @@ const syscall_fn_t compat_sys_call_table[__NR_compat_syscalls] = {
 };
 ```
 
-AArch32 syscall numbers match the historical 32-bit ARM ABI and differ from native arm64 numbers.
-Compat handlers use `compat_*` types (`compat_size_t`, `compat_timespec64`, `compat_uptr_t`) to
-translate 32-bit struct layouts. `TIF_32BIT` marks a compat thread; `is_compat_task()` checks it.
+AArch32のシステムコール番号は歴史的な32ビットARM ABIに一致し、ネイティブarm64の番号とは異なる。compatハンドラは32ビットの構造体レイアウトを変換するために`compat_*`型（`compat_size_t`、`compat_timespec64`、`compat_uptr_t`）を使う。`TIF_32BIT`がcompatスレッドを示し、`is_compat_task()`がそれをチェックする。
 
 ---
 
-## vDSO: avoiding SVC for hot paths {#vdso-avoiding-svc-for-hot-paths}
+## vDSO: ホットパスでSVCを避ける {#vdso-avoiding-svc-for-hot-paths}
 
-`clock_gettime`, `gettimeofday`, and `clock_getres` are called millions of times per second in some
-workloads. The **vDSO** (virtual Dynamic Shared Object) implements these without `SVC #0` by reading
-timekeeping data from a kernel-managed shared page:
+`clock_gettime`、`gettimeofday`、`clock_getres`は、ワークロードによっては毎秒数百万回呼ばれる。**vDSO**（virtual Dynamic Shared Object）は、カーネルが管理する共有ページから時刻管理データを読むことで、これらを`SVC #0`なしで実装する。
 
 ```bash
 cat /proc/self/maps | grep -E 'vdso|vvar'
@@ -274,46 +254,41 @@ cat /proc/self/maps | grep -E 'vdso|vvar'
 # ffff800000001000-ffff800000002000 r-xp 00000000 00:00 0  [vdso]
 ```
 
-The ARM64 vDSO lives at `arch/arm64/kernel/vdso/`. Instead of the x86 TSC, it reads `CNTVCT_EL0` — the
-ARM generic virtual timer counter, which the kernel configures as accessible from EL0:
+ARM64のvDSOは`arch/arm64/kernel/vdso/`にある。x86のTSCの代わりに、`CNTVCT_EL0`を読む。これはARMの汎用仮想タイマーのカウンタであり、カーネルがEL0からアクセス可能に設定している。
 
 ```asm
-mrs x0, CNTVCT_EL0   /* read virtual counter — no privilege transition */
+mrs x0, CNTVCT_EL0   /* 仮想カウンタを読む — 特権遷移なし */
 ```
 
-The vDSO reads `struct vdso_data` (from `include/vdso/datapage.h`) in the **vvar page**, using a seqlock
-to detect concurrent kernel updates. The shared implementation in `lib/vdso/gettimeofday.c` is compiled
-for both arm64 and x86; only `__arch_get_hw_counter()` is architecture-specific. If the clock mode is
-`VDSO_CLOCKMODE_NONE` (e.g., after VM migration), the vDSO falls back transparently to `svc #0`.
+vDSOは**vvarページ**内の`struct vdso_data`（`include/vdso/datapage.h`由来）を読み、seqlockを使ってカーネルによる並行更新を検出する。`lib/vdso/gettimeofday.c`にある共通実装はarm64とx86の両方向けにコンパイルされ、アーキテクチャ固有なのは`__arch_get_hw_counter()`だけである。クロックモードが`VDSO_CLOCKMODE_NONE`の場合（例: VMマイグレーション後）、vDSOは透過的に`svc #0`へフォールバックする。
 
-There is no vsyscall fixed-address page on ARM64 — that is an x86-64-only legacy.
+ARM64にはvsyscallの固定アドレスページはない。それはx86-64だけのレガシーである。
 
 ---
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ### strace {#strace}
 
 ```bash
-strace ls                       # trace all syscalls
-strace -e trace=read,write ls   # filter by syscall name
-strace -T ls                    # show per-syscall elapsed time
-strace -p <pid>                 # attach to a running process
+strace ls                       # すべてのシステムコールをトレース
+strace -e trace=read,write ls   # システムコール名でフィルタ
+strace -T ls                    # システムコールごとの経過時間を表示
+strace -p <pid>                 # 実行中のプロセスにアタッチ
 ```
 
-`strace` uses `ptrace(PTRACE_SYSCALL)` and never sees vDSO-accelerated calls — those never issue
-`svc #0`.
+`strace`は`ptrace(PTRACE_SYSCALL)`を使うので、vDSOで高速化された呼び出しは決して見えない。それらは`svc #0`を発行しないからである。
 
-### perf trace and bpftrace {#perf-trace-and-bpftrace}
+### perf traceとbpftrace {#perf-trace-and-bpftrace}
 
 ```bash
-perf trace ls                   # low-overhead syscall trace via tracepoints
-perf trace --summary sleep 5    # per-syscall counts and latency summary
+perf trace ls                   # tracepointによる低オーバーヘッドなシステムコールトレース
+perf trace --summary sleep 5    # システムコールごとの回数とレイテンシの要約
 
-# Count syscalls by name
+# システムコールを名前ごとに数える
 bpftrace -e 'tracepoint:syscalls:sys_enter_* { @[probe] = count(); }'
 
-# Trace specific process
+# 特定のプロセスをトレース
 bpftrace -e 'tracepoint:syscalls:sys_enter_read /pid == 1234/ { printf("fd=%d\n", args->fd); }'
 ```
 
@@ -325,45 +300,45 @@ cat /proc/$(pidof sshd)/syscall
 # ^nr  ^args...                                              ^sp    ^pc
 ```
 
-Shows the syscall number, arguments, user SP, and user PC for a process blocked in a syscall.
+システムコール内でブロックしているプロセスについて、システムコール番号、引数、ユーザーSP、ユーザーPCを表示する。
 
-### Raw tracepoints {#raw-tracepoints}
+### raw tracepoint {#raw-tracepoints}
 
 ```bash
-# Enable sys_enter_read tracing via ftrace
+# ftraceでsys_enter_readのトレーシングを有効化
 echo 1 > /sys/kernel/debug/tracing/events/syscalls/sys_enter_read/enable
 cat /sys/kernel/debug/tracing/trace
 ```
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-**In this site:**
+**このサイト内:**
 
-- [ARM64 Exception Model](exception-model.md) — VBAR_EL1, ESR_EL1, exception levels, and the GIC
-- [ARM64 Memory Model](memory-model.md) — Weak ordering, barriers, and LDAR/STLR
-- [x86-64 Syscall Entry](../x86/syscall-entry.md) — SYSCALL/SYSRET, entry_SYSCALL_64, KPTI
-- [Syscall Entry Path](../../syscalls/syscall-entry.md) — Architecture-neutral overview
-- [vDSO and Virtual System Calls](../../syscalls/vdso.md) — vvar page, seqlock, clock modes
-- [32-bit Compat Syscalls](../../syscalls/compat.md) — compat types, compat_sys_call_table
-- [ptrace and Syscall Interception](../../syscalls/ptrace-interception.md) — How strace works
+- [ARM64の例外モデル](exception-model.md) — VBAR_EL1、ESR_EL1、例外レベル、GIC
+- [ARM64のメモリモデル](memory-model.md) — 弱い順序付け、バリア、LDAR/STLR
+- [x86-64のシステムコールのエントリ](../x86/syscall-entry.md) — SYSCALL/SYSRET、entry_SYSCALL_64、KPTI
+- [システムコールのエントリパス](../../syscalls/syscall-entry.md) — アーキテクチャ中立な概要
+- [vDSOと仮想システムコール](../../syscalls/vdso.md) — vvarページ、seqlock、クロックモード
+- [32ビットcompatシステムコール](../../syscalls/compat.md) — compat型、compat_sys_call_table
+- [ptraceとシステムコールの横取り](../../syscalls/ptrace-interception.md) — straceの仕組み
 
-**Kernel source files:**
+**カーネルのソースファイル:**
 
-- `arch/arm64/kernel/entry.S` — vector table, `kernel_entry`/`kernel_exit` macros, low-level stubs
-- `arch/arm64/kernel/entry-common.c` — C exception handlers including `el0t_64_sync_handler`
-- `arch/arm64/kernel/syscall.c` — `do_el0_svc`, `el0_svc_common`, `invoke_syscall`
-- `arch/arm64/kernel/sys.c` — `sys_call_table` definition
-- `arch/arm64/kernel/sys_compat.c` — `compat_sys_call_table` for AArch32 processes
-- `arch/arm64/kernel/vdso/` — ARM64 vDSO source
-- `arch/arm64/include/asm/ptrace.h` — `struct pt_regs` layout
-- `arch/arm64/include/asm/esr.h` — ESR_EL1 exception class constants
-- `include/vdso/datapage.h` — `struct vdso_data` (shared vvar layout)
-- `lib/vdso/gettimeofday.c` — Shared vDSO clock implementation (arm64 and x86)
-- `kernel/entry/common.c` — `syscall_enter_from_user_mode`, `syscall_exit_to_user_mode`
+- `arch/arm64/kernel/entry.S` — ベクタテーブル、`kernel_entry`/`kernel_exit`マクロ、低レベルスタブ
+- `arch/arm64/kernel/entry-common.c` — `el0t_64_sync_handler`を含むCの例外ハンドラ
+- `arch/arm64/kernel/syscall.c` — `do_el0_svc`、`el0_svc_common`、`invoke_syscall`
+- `arch/arm64/kernel/sys.c` — `sys_call_table`の定義
+- `arch/arm64/kernel/sys_compat.c` — AArch32プロセス用の`compat_sys_call_table`
+- `arch/arm64/kernel/vdso/` — ARM64のvDSOソース
+- `arch/arm64/include/asm/ptrace.h` — `struct pt_regs`のレイアウト
+- `arch/arm64/include/asm/esr.h` — ESR_EL1の例外クラス定数
+- `include/vdso/datapage.h` — `struct vdso_data`（共有vvarのレイアウト）
+- `lib/vdso/gettimeofday.c` — 共通のvDSOクロック実装（arm64とx86）
+- `kernel/entry/common.c` — `syscall_enter_from_user_mode`、`syscall_exit_to_user_mode`
 
-**External:**
+**外部:**
 
-- ARM Architecture Reference Manual (ARM DDI 0487) — definitive AArch64 exception model reference
-- `Documentation/arm64/` in the kernel tree
+- ARM Architecture Reference Manual（ARM DDI 0487） — AArch64例外モデルの決定版リファレンス
+- カーネルツリーの`Documentation/arm64/`

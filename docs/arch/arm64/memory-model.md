@@ -1,195 +1,195 @@
-# ARM64 Memory Model {#arm64-memory-model}
+# ARM64のメモリモデル {#arm64-memory-model}
 
-> Weak ordering, barriers, and atomic operations on ARM64
+> ARM64における弱い順序付け、バリア、アトミック操作
 
-## ARM64 is weakly ordered {#arm64-is-weakly-ordered}
+## ARM64は弱い順序付けである {#arm64-is-weakly-ordered}
 
-Unlike x86 (which has TSO — Total Store Order, nearly sequentially consistent), ARM64 has a **weakly ordered** memory model. The hardware may reorder loads and stores for performance:
+x86（TSO — Total Store Order を持ち、ほぼ逐次一貫）とは異なり、ARM64は**弱い順序付け**のメモリモデルを持つ。ハードウェアは性能のためにロードとストアを並べ替えることがある。
 
 ```
-// ARM64: these operations may be REORDERED by hardware:
-STR x1, [x2]     // store to address x2
-LDR x3, [x4]     // load from address x4
-// CPU may execute the load before the store
+// ARM64: これらの操作はハードウェアによって並べ替えられる可能性がある:
+STR x1, [x2]     // アドレスx2へストア
+LDR x3, [x4]     // アドレスx4からロード
+// CPUはストアより前にロードを実行するかもしれない
 ```
 
-This matters for lock-free algorithms and any code that synchronizes between threads without using explicit atomic operations.
+これは、ロックフリーアルゴリズムや、明示的なアトミック操作を使わずにスレッド間で同期を取るあらゆるコードにとって重要である。
 
-## What ARM64 guarantees {#what-arm64-guarantees}
+## ARM64が保証すること {#what-arm64-guarantees}
 
-1. **Single-copy atomicity**: A naturally-aligned load or store of a single register is atomic (the value is either fully written or not written).
+1. **シングルコピーアトミック性**: 自然にアラインされた単一レジスタのロードまたはストアはアトミックである（値は完全に書き込まれるか、まったく書き込まれないかのどちらかである）。
 
-2. **Program order for dependent accesses**: If load A is used to compute the address of load B, B observes the effects of A (data-dependent ordering).
+2. **依存するアクセスのプログラム順序**: ロードAがロードBのアドレス計算に使われる場合、BはAの効果を観測する（データ依存の順序付け）。
 
-3. **No guarantees for independent accesses**: Stores and loads to unrelated addresses can be observed in any order by other CPUs.
+3. **独立したアクセスには保証がない**: 無関係なアドレスへのストアとロードは、他のCPUから任意の順序で観測されうる。
 
-## Memory barrier instructions {#memory-barrier-instructions}
+## メモリバリア命令 {#memory-barrier-instructions}
 
-ARM64 provides three barrier instructions:
+ARM64は3つのバリア命令を提供する。
 
 ### DMB: Data Memory Barrier {#dmb-data-memory-barrier}
 
-Ensures memory accesses before the barrier are visible before accesses after it:
+バリアより前のメモリアクセスが、バリアより後のアクセスより先に可視になることを保証する。
 
 ```asm
-DMB SY      /* full system, all types: LD after LD, LD after ST, ST after LD, ST after ST */
-DMB ST      /* only STores after STores */
-DMB LD      /* LoaDs and STores after LoaDs */
-DMB ISH     /* inner shareable: affects all CPUs in the same shareability domain */
-DMB ISHST   /* inner shareable, stores only */
-DMB ISHLD   /* inner shareable, loads only */
-DMB NSH     /* non-shareable: only this PE */
+DMB SY      /* システム全体、全種類: LDの後のLD、STの後のLD、LDの後のST、STの後のST */
+DMB ST      /* STの後のSTのみ */
+DMB LD      /* LDの後のLDとST */
+DMB ISH     /* inner shareable: 同じ共有可能ドメイン内の全CPUに影響 */
+DMB ISHST   /* inner shareable、ストアのみ */
+DMB ISHLD   /* inner shareable、ロードのみ */
+DMB NSH     /* non-shareable: このPEのみ */
 DMB OSH     /* outer shareable */
 ```
 
-`SY` (full system) is most conservative. `ISH` is typical for SMP kernels.
+`SY`（システム全体）が最も保守的である。SMPカーネルでは`ISH`が一般的である。
 
 ### DSB: Data Synchronization Barrier {#dsb-data-synchronization-barrier}
 
-Stronger than DMB: not only are memory accesses ordered, but **the barrier stalls the pipeline** until all prior memory accesses are complete:
+DMBより強い。メモリアクセスが順序付けられるだけでなく、先行するすべてのメモリアクセスが完了するまで**バリアがパイプラインをストールさせる**。
 
 ```asm
-DSB SY      /* wait until all memory accesses complete, full system */
-DSB ISH     /* same but inner shareable only */
-DSB ST      /* wait until all stores complete */
+DSB SY      /* すべてのメモリアクセスの完了を待つ、システム全体 */
+DSB ISH     /* 同上だがinner shareableのみ */
+DSB ST      /* すべてのストアの完了を待つ */
 ```
 
-Use DSB when you need to know memory accesses have *completed* (not just ordered) — e.g., before modifying page tables that the MMU might be walking, or before a cache maintenance operation takes effect.
+メモリアクセスが（単に順序付けられたのではなく）*完了した*ことを知る必要があるときにDSBを使う。たとえば、MMUがウォーク中かもしれないページテーブルを変更する前や、キャッシュメンテナンス操作を有効にする前である。
 
 ### ISB: Instruction Synchronization Barrier {#isb-instruction-synchronization-barrier}
 
-Flushes the instruction pipeline:
+命令パイプラインをフラッシュする。
 
 ```asm
 ISB
 ```
 
-Use ISB after:
+ISBは次の後に使う。
 
-- Writing to system registers that affect instruction execution (e.g., SCTLR_EL1)
-- Self-modifying code
-- Changing the instruction cache attributes
+- 命令実行に影響するシステムレジスタ（例: SCTLR_EL1）への書き込み
+- 自己書き換えコード
+- 命令キャッシュ属性の変更
 
-Without ISB, the CPU might have already fetched and decoded instructions past the system register write.
+ISBがないと、CPUはシステムレジスタへの書き込みより後の命令をすでにフェッチ・デコードしているかもしれない。
 
-## Load-acquire and Store-release {#load-acquire-and-store-release}
+## Load-acquireとStore-release {#load-acquire-and-store-release}
 
-ARM64 provides special atomic load/store variants that include ordering semantics:
+ARM64は順序付けのセマンティクスを含む特別なアトミックロード/ストアの変種を提供する。
 
 ```asm
-LDAR x0, [x1]    /* Load-Acquire: no loads or stores after this can be
-                    reordered before it */
+LDAR x0, [x1]    /* Load-Acquire: これより後のロードやストアは
+                    これより前に並べ替えられない */
 
-STLR x0, [x1]    /* Store-Release: no loads or stores before this can be
-                    reordered after it */
+STLR x0, [x1]    /* Store-Release: これより前のロードやストアは
+                    これより後に並べ替えられない */
 
-LDAPR x0, [x1]   /* Load-Acquire RCpc: weaker acquire — allows reordering
-                    with prior STLR to different addresses (unlike LDAR) */
+LDAPR x0, [x1]   /* Load-Acquire RCpc: より弱いacquire — 異なるアドレスへの
+                    先行するSTLRとの並べ替えを許す（LDARとは異なる） */
 ```
 
-These implement the C11/C++11 `memory_order_acquire` and `memory_order_release` semantics efficiently — no explicit DMB needed.
+これらはC11/C++11の`memory_order_acquire`と`memory_order_release`のセマンティクスを効率的に実装する。明示的なDMBは不要である。
 
 ```c
-/* C equivalent of LDAR/STLR */
+/* LDAR/STLRに相当するC */
 /* LDAR x0, [x1] == */  atomic_load_explicit(ptr, memory_order_acquire);
 /* STLR x0, [x1] == */  atomic_store_explicit(ptr, val, memory_order_release);
 ```
 
-## Exclusive load/store (atomics) {#exclusive-loadstore-atomics}
+## 排他的ロード/ストア（アトミック） {#exclusive-loadstore-atomics}
 
-ARM64 atomics use a load-link/store-conditional (LL/SC) mechanism:
+ARM64のアトミック操作はload-link/store-conditional（LL/SC）機構を使う。
 
 ```asm
-/* Compare-and-swap loop: old_val → new_val at [addr] */
+/* compare-and-swapループ: [addr]のold_val → new_val */
 .loop:
-    LDXR  w0, [x1]        /* Load eXclusive: mark addr as exclusive */
-    CMP   w0, w3           /* compare with expected */
+    LDXR  w0, [x1]        /* Load eXclusive: addrを排他としてマーク */
+    CMP   w0, w3           /* 期待値と比較 */
     B.NE  .fail
-    STXR  w4, w2, [x1]    /* Store eXclusive: write new value */
-    CBNZ  w4, .loop        /* if store failed (exclusive lost), retry */
-    /* success */
+    STXR  w4, w2, [x1]    /* Store eXclusive: 新しい値を書き込む */
+    CBNZ  w4, .loop        /* ストアが失敗した（排他を失った）らリトライ */
+    /* 成功 */
 .fail:
-    /* w0 has the actual value */
+    /* w0には実際の値が入っている */
 ```
 
-ARMv8.1 adds **Large System Extensions (LSE)** — single-instruction atomics that avoid the retry loop:
+ARMv8.1では**Large System Extensions（LSE）**が追加された。これはリトライループを避ける単一命令のアトミック操作である。
 
 ```asm
-/* ARMv8.1 LSE: atomic compare-and-swap */
-CAS  w0, w2, [x1]    /* if [x1]==w0, write w2; w0 = old value */
-CASAL w0, w2, [x1]   /* CAS with acquire-release semantics */
+/* ARMv8.1 LSE: アトミックなcompare-and-swap */
+CAS  w0, w2, [x1]    /* [x1]==w0ならw2を書き込む。w0 = 古い値 */
+CASAL w0, w2, [x1]   /* acquire-releaseセマンティクス付きのCAS */
 
-/* Atomic add */
-LDADD x0, x1, [x2]  /* [x2] += x0; x1 = old [x2] */
-STADD x0, [x1]       /* [x1] += x0; no return value */
+/* アトミック加算 */
+LDADD x0, x1, [x2]  /* [x2] += x0; x1 = 古い[x2] */
+STADD x0, [x1]       /* [x1] += x0; 戻り値なし */
 
-/* Atomic swap */
-SWP x0, x1, [x2]    /* [x2] = x0; x1 = old [x2] */
+/* アトミックスワップ */
+SWP x0, x1, [x2]    /* [x2] = x0; x1 = 古い[x2] */
 ```
 
-LSE atomics are preferred on systems with many cores — they generate a single bus transaction rather than potentially many retry loops.
+多数のコアを持つシステムではLSEアトミックが好まれる。潜在的に多くのリトライループを回す代わりに、単一のバストランザクションを生成するからである。
 
-## Linux kernel barrier macros on ARM64 {#linux-kernel-barrier-macros-on-arm64}
+## ARM64におけるLinuxカーネルのバリアマクロ {#linux-kernel-barrier-macros-on-arm64}
 
-The kernel provides architecture-independent macros that map to ARM64 instructions:
+カーネルは、ARM64命令に対応付けられるアーキテクチャ非依存のマクロを提供する。
 
 ```c
-/* include/asm-generic/barrier.h (mapped to arch/arm64 in asm/barrier.h) */
+/* include/asm-generic/barrier.h（asm/barrier.hでarch/arm64に対応付けられる） */
 
-smp_mb()    /* full memory barrier:   DMB ISH  */
-smp_rmb()   /* read memory barrier:   DMB ISHLD */
-smp_wmb()   /* write memory barrier:  DMB ISHST */
+smp_mb()    /* フルメモリバリア:   DMB ISH  */
+smp_rmb()   /* 読み込みメモリバリア:   DMB ISHLD */
+smp_wmb()   /* 書き込みメモリバリア:  DMB ISHST */
 
-smp_store_release(p, v)   /* STLR: store + release */
-smp_load_acquire(p)        /* LDAR: load + acquire */
+smp_store_release(p, v)   /* STLR: ストア + release */
+smp_load_acquire(p)        /* LDAR: ロード + acquire */
 
-/* Data dependency barrier (weaker — relies on data dependency ordering) */
-smp_read_barrier_depends()  /* no-op on ARM64: data dep ordering is guaranteed */
+/* データ依存バリア（より弱い — データ依存の順序付けに依拠） */
+smp_read_barrier_depends()  /* ARM64ではno-op: データ依存の順序付けが保証されている */
 
-/* Compiler barriers (prevent compiler reordering, no CPU barrier) */
+/* コンパイラバリア（コンパイラによる並べ替えを防ぐ、CPUバリアなし） */
 barrier()   /* asm volatile("" ::: "memory") */
-READ_ONCE(x)    /* load, prevent compiler optimizations */
-WRITE_ONCE(x,v) /* store, prevent compiler optimizations */
+READ_ONCE(x)    /* ロード、コンパイラ最適化を防ぐ */
+WRITE_ONCE(x,v) /* ストア、コンパイラ最適化を防ぐ */
 ```
 
-### When to use which {#when-to-use-which}
+### どれをいつ使うか {#when-to-use-which}
 
 ```c
-/* Lock: acquire semantics — nothing after the lock can move before it */
+/* ロック: acquireセマンティクス — ロックより後のものはロックより前に移動できない */
 spin_lock() → smp_load_acquire or DMB ISH + LDAR
 
-/* Unlock: release semantics — nothing before the unlock can move after it */
+/* アンロック: releaseセマンティクス — アンロックより前のものはアンロックより後に移動できない */
 spin_unlock() → STLR or DMB ISH + STR
 
-/* RCU read side: data dependency is sufficient on ARM64 */
-rcu_dereference(p)  /* READ_ONCE + smp_read_barrier_depends (noop on ARM64) */
+/* RCUの読み込み側: ARM64ではデータ依存で十分 */
+rcu_dereference(p)  /* READ_ONCE + smp_read_barrier_depends（ARM64ではnoop） */
 
-/* Producer/consumer lockless queue */
-/* Producer: */
+/* プロデューサ/コンシューマのロックレスキュー */
+/* プロデューサ: */
 WRITE_ONCE(item->data, value);
-smp_wmb();                     /* ensure data visible before index */
+smp_wmb();                     /* インデックスより先にデータを可視にする */
 WRITE_ONCE(queue->tail, new_tail);
 
-/* Consumer: */
-tail = smp_load_acquire(&queue->tail);  /* load tail with acquire */
-data = READ_ONCE(item->data);           /* data visible after acquire load */
+/* コンシューマ: */
+tail = smp_load_acquire(&queue->tail);  /* acquire付きでtailをロード */
+data = READ_ONCE(item->data);           /* acquireロードの後ではデータが可視 */
 ```
 
-## Page table barriers {#page-table-barriers}
+## ページテーブルのバリア {#page-table-barriers}
 
-A common ARM64 specific need: after modifying a page table entry, you must ensure the store is visible to the MMU before the TLB invalidation instruction:
+ARM64固有のよくある要件として、ページテーブルエントリを変更した後は、TLB無効化命令の前にそのストアがMMUから可視であることを保証しなければならない。
 
 ```asm
-/* Write new PTE */
-STR x0, [x1]          /* store new page table entry */
-DSB ISH                /* wait for store to complete */
-/* TLB invalidate */
-TLBI VAE1IS, x2        /* invalidate TLB entry, inner shareable */
-DSB ISH                /* wait for TLB invalidation */
-ISB                    /* ensure subsequent instructions use new mappings */
+/* 新しいPTEを書き込む */
+STR x0, [x1]          /* 新しいページテーブルエントリをストア */
+DSB ISH                /* ストアの完了を待つ */
+/* TLB無効化 */
+TLBI VAE1IS, x2        /* TLBエントリを無効化、inner shareable */
+DSB ISH                /* TLB無効化の完了を待つ */
+ISB                    /* 以降の命令が新しいマッピングを使うことを保証 */
 ```
 
-In the kernel:
+カーネルでは次のようになる。
 
 ```c
 /* arch/arm64/include/asm/tlbflush.h */
@@ -197,99 +197,99 @@ static inline void flush_tlb_page(struct vm_area_struct *vma,
                                     unsigned long uaddr)
 {
     unsigned long addr = __TLBI_VADDR(uaddr, ASID(vma->vm_mm));
-    dsb(ishst);             /* DSB ISH ST — wait for page table stores */
-    __tlbi(vale1is, addr);  /* TLBI by address, inner shareable */
-    dsb(ish);               /* DSB ISH — wait for TLB invalidation */
+    dsb(ishst);             /* DSB ISH ST — ページテーブルへのストアを待つ */
+    __tlbi(vale1is, addr);  /* アドレス指定のTLBI、inner shareable */
+    dsb(ish);               /* DSB ISH — TLB無効化を待つ */
 }
 ```
 
-## Acquire/Release in the kernel: spinlock {#acquirerelease-in-the-kernel-spinlock}
+## カーネルにおけるAcquire/Release: spinlock {#acquirerelease-in-the-kernel-spinlock}
 
 ```asm
 /* arch/arm64/include/asm/spinlock.h */
-/* Ticket spinlock acquire: */
+/* チケットspinlockの獲得: */
 arch_spin_lock:
-    PRFM    PSTL1KEEP, [x0]   /* prefetch for write */
+    PRFM    PSTL1KEEP, [x0]   /* 書き込み用にプリフェッチ */
 .again:
     LDAXR   w2, [x0]          /* load-exclusive + acquire */
-    /* Check if our ticket == serving number */
+    /* 自分のチケット == 処理中番号かを確認 */
     ...
     CBNZ    w3, .wait
     STXR    w3, w1, [x0]      /* store-exclusive */
     CBNZ    w3, .again
     RET
 
-/* Spinlock release: just store, store-release ordering */
+/* spinlockの解放: ストアするだけ、store-releaseの順序付け */
 arch_spin_unlock:
-    STLR    w1, [x0]          /* store-release: all prior accesses visible */
+    STLR    w1, [x0]          /* store-release: 先行するすべてのアクセスが可視 */
     RET
 ```
 
-## Weak memory model bugs {#weak-memory-model-bugs}
+## 弱いメモリモデルのバグ {#weak-memory-model-bugs}
 
-Common patterns that work on x86 (TSO) but **fail on ARM64**:
+x86（TSO）では動くが**ARM64では失敗する**よくあるパターン:
 
-### Missing barrier in producer/consumer {#missing-barrier-in-producerconsumer}
+### プロデューサ/コンシューマでのバリア欠落 {#missing-barrier-in-producerconsumer}
 
 ```c
-/* WRONG on ARM64: */
+/* ARM64では誤り: */
 struct item {
-    int ready;    /* offset 0 */
-    int data;     /* offset 4 */
+    int ready;    /* オフセット0 */
+    int data;     /* オフセット4 */
 };
 
-/* Thread A (producer): */
+/* スレッドA（プロデューサ）: */
 item->data  = 42;
-item->ready = 1;    /* ARM64 may reorder: ready=1 visible before data=42 */
+item->ready = 1;    /* ARM64は並べ替えうる: data=42より先にready=1が可視になる */
 
-/* Thread B (consumer): */
-while (!item->ready);   /* spin */
-use(item->data);        /* may see data=0 because no barrier! */
+/* スレッドB（コンシューマ）: */
+while (!item->ready);   /* スピン */
+use(item->data);        /* バリアがないのでdata=0が見えるかもしれない! */
 
-/* RIGHT: */
+/* 正しい: */
 WRITE_ONCE(item->data, 42);
-smp_wmb();              /* DMB ISHST: ensure data visible before ready */
+smp_wmb();              /* DMB ISHST: readyより先にdataを可視にする */
 WRITE_ONCE(item->ready, 1);
 
-/* Consumer: */
-while (!smp_load_acquire(&item->ready)); /* LDAR: acquire ordering */
+/* コンシューマ: */
+while (!smp_load_acquire(&item->ready)); /* LDAR: acquireの順序付け */
 use(READ_ONCE(item->data));
 ```
 
-### Missing dsb after page table update {#missing-dsb-after-page-table-update}
+### ページテーブル更新後のdsb欠落 {#missing-dsb-after-page-table-update}
 
 ```c
-/* WRONG: CPU may start walking old page tables after set_pte */
+/* 誤り: set_pteの後、CPUが古いページテーブルのウォークを始めるかもしれない */
 set_pte(ptep, new_pte);
-flush_tlb_page(vma, addr);  /* TLB flush without DSB — MMU might not see new PTE */
+flush_tlb_page(vma, addr);  /* DSBなしのTLBフラッシュ — MMUが新しいPTEを見ないかもしれない */
 
-/* RIGHT (done by the kernel automatically): */
+/* 正しい（カーネルが自動的に行う）: */
 set_pte(ptep, new_pte);
-dsb(ishst);                 /* ensure PTE store visible */
+dsb(ishst);                 /* PTEのストアを可視にする */
 flush_tlb_page(vma, addr);
 ```
 
-## Observing memory ordering issues {#observing-memory-ordering-issues}
+## メモリ順序付けの問題を観察する {#observing-memory-ordering-issues}
 
 ```bash
-# Run litmus tests (memory model validation)
-# ARM provides litmus7 tool for testing actual hardware behavior
+# litmusテストを実行する（メモリモデルの検証）
+# ARMは実ハードウェアの挙動をテストするlitmus7ツールを提供している
 
-# LKMM (Linux Kernel Memory Model) verification
+# LKMM（Linux Kernel Memory Model）による検証
 # https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/memory-model
 
-# Enable CONFIG_KCSAN for compile-time race detection
-# KCSAN instruments memory accesses and checks for data races
+# コンパイル時の競合検出のためにCONFIG_KCSANを有効化
+# KCSANはメモリアクセスを計装し、データ競合をチェックする
 
-# Detect issues with lockdep + KCSAN
+# lockdep + KCSANで問題を検出
 dmesg | grep "data-race"
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Exception Model](exception-model.md) — ARM64 exception levels and GIC
-- [Locking: Atomic Operations and Memory Barriers](../../locking/atomics.md) — kernel atomic API
-- [Locking: RCU](../../locking/rcu.md) — how RCU uses barriers
-- [Memory Management: page tables](../../mm/page-tables.md) — page table barrier requirements
+- [例外モデル](exception-model.md) — ARM64の例外レベルとGIC
+- [ロック: アトミック操作とメモリバリア](../../locking/atomics.md) — カーネルのアトミックAPI
+- [ロック: RCU](../../locking/rcu.md) — RCUがバリアをどう使うか
+- [メモリ管理: ページテーブル](../../mm/page-tables.md) — ページテーブルのバリア要件
 - ARM Architecture Reference Manual — B2: The AArch64 Application Level Memory Model
-- [Documentation/memory-barriers.txt](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/memory-barriers.txt) — the kernel's memory-ordering bible
+- [Documentation/memory-barriers.txt](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/memory-barriers.txt) — カーネルのメモリ順序付けのバイブル

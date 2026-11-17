@@ -1,53 +1,53 @@
-# ASoC: Audio for Embedded Systems {#asoc-audio-for-embedded-systems}
+# ASoC: 組み込みシステムのためのオーディオ {#asoc-audio-for-embedded-systems}
 
-> Why a phone's audio path is three drivers wired together instead of one, and how DAPM keeps most of it powered off
+> なぜスマートフォンのオーディオパスは1つではなく3つのドライバをつなぎ合わせたものなのか、そしてDAPMはどのようにしてその大部分の電源を切ったままにしておくのか
 
-## The problem: the "sound card" is actually three chips on a board {#the-problem-the-sound-card-is-actually-three-chips-on-a-board}
+## 問題: 「サウンドカード」は実はボード上の3つのチップである {#the-problem-the-sound-card-is-actually-three-chips-on-a-board}
 
-ALSA's original driver model assumes a sound card is one device. A PCI or USB sound card has a single `snd_pcm` driver that owns the DMA engine, the codec registers, and the mixer controls — because physically it's one chip (or one small board) behind one bus address. `snd_pcm_ops` for `hw_params`/`trigger`/`pointer` and a handful of `snd_kcontrol`s for volume are enough, because there's nothing else to describe: the codec is soldered to the same silicon as the DMA engine and never appears on any other card.
+ALSAの元々のドライバモデルは、サウンドカードが1つのデバイスであることを前提としている。PCIやUSBのサウンドカードには、DMAエンジン、コーデックのレジスタ、ミキサーコントロールを所有する単一の`snd_pcm`ドライバがある。物理的に1つのバスアドレスの背後にある1つのチップ（または1枚の小さなボード）だからである。`hw_params`/`trigger`/`pointer`のための`snd_pcm_ops`と、音量のための少数の`snd_kcontrol`があれば十分である。ほかに記述すべきものがないからだ。コーデックはDMAエンジンと同じシリコンにはんだ付けされており、ほかのカードに現れることは決してない。
 
-Embedded and mobile audio doesn't look like that. A typical phone or single-board computer has:
+組み込みやモバイルのオーディオはそうはなっていない。典型的なスマートフォンやシングルボードコンピュータには次のものがある。
 
-- an **I2S/TDM controller** that's part of the SoC itself, sharing silicon with the CPU, GPU, and everything else on the die;
-- a **codec** — a separate DAC/ADC chip (Wolfson, Cirrus, Maxim, Realtek, TI...) sitting on the board's I2C or SPI bus, wired to the SoC's I2S pins for audio and to a completely different bus for control;
-- sometimes a **separate amplifier** driving the speaker, also a distinct chip with its own enable GPIO and gain registers.
+- SoC自体の一部である**I2S/TDMコントローラ**。CPU、GPU、そのほかダイ上のすべてとシリコンを共有している。
+- **コーデック**。ボードのI2CまたはSPIバス上にある独立したDAC/ADCチップ（Wolfson、Cirrus、Maxim、Realtek、TI...）であり、オーディオ用にはSoCのI2Sピンに、制御用にはまったく別のバスに配線されている。
+- 場合によってはスピーカーを駆動する**独立したアンプ**。これも独自のイネーブルGPIOとゲインレジスタを持つ別個のチップである。
 
-None of these three are the same piece of silicon, and — critically — the *same* codec chip and the *same* SoC I2S block both turn up on dozens of unrelated boards in different combinations. A driver that hard-wired "this I2S controller talks to this codec" the way a PCI sound card driver hard-wires "this DMA engine talks to this codec" would have to be rewritten for every board. `Documentation/sound/soc/overview.rst` names this as the concrete problem ASoC was written to fix, using exactly this codec-reuse example:
+この3つはどれも同じシリコンではない。そして決定的なことに、*同じ*コーデックチップと*同じ*SoCのI2Sブロックが、互いに無関係な何十ものボードで異なる組み合わせで登場する。PCIサウンドカードのドライバが「このDMAエンジンはこのコーデックと通信する」とハードコードするように、「このI2Sコントローラはこのコーデックと通信する」とハードコードしたドライバは、ボードごとに書き直さなければならなくなる。`Documentation/sound/soc/overview.rst`は、ASoCが解決するために書かれた具体的な問題としてこれを挙げており、まさにこのコーデック再利用の例を使っている。
 
-> *"Codec drivers were often tightly coupled to the underlying SoC CPU. This is not ideal and leads to code duplication - for example, Linux had different wm8731 drivers for 4 different SoC platforms."*
+> *"Codec drivers were often tightly coupled to the underlying SoC CPU. This is not ideal and leads to code duplication - for example, Linux had different wm8731 drivers for 4 different SoC platforms."*（訳: 「コーデックドライバは、しばしば下位のSoC CPUと密結合していた。これは理想的ではなく、コードの重複につながる。たとえばLinuxには、4つの異なるSoCプラットフォーム向けに別々のwm8731ドライバがあった。」）
 
-The same document lists two more limitations of pre-ASoC embedded audio: no standard way to signal user-initiated events like a headphone jack insertion, and codec drivers that powered up the *entire* chip for any playback or capture — fine for a PC plugged into the wall, wasteful for a battery.
+同じドキュメントは、ASoC以前の組み込みオーディオの制約をさらに2つ挙げている。ヘッドホンジャックの挿入のようなユーザー起因のイベントを通知する標準的な方法がなかったこと、そしてコーデックドライバが、再生や録音のたびにチップ*全体*の電源を入れていたことである。壁のコンセントにつながったPCなら問題ないが、バッテリーにとっては無駄である。
 
-ASoC's answer is to stop treating "the sound card" as one driver and split it into three reusable pieces along exactly the seams the hardware already has:
+ASoCの答えは、「サウンドカード」を1つのドライバとして扱うのをやめ、ハードウェアにすでにある継ぎ目にちょうど沿って、再利用可能な3つの部品に分割することである。
 
-> *"Codec class drivers: The codec class driver is platform independent... Platform class drivers: The platform class driver includes the audio DMA engine driver, digital audio interface (DAI) drivers... Machine class driver: The machine driver class acts as the glue that describes and binds the other component drivers together to form an ALSA 'sound card device'."*
+> *"Codec class drivers: The codec class driver is platform independent... Platform class drivers: The platform class driver includes the audio DMA engine driver, digital audio interface (DAI) drivers... Machine class driver: The machine driver class acts as the glue that describes and binds the other component drivers together to form an ALSA 'sound card device'."*（訳: 「コーデッククラスドライバ: コーデッククラスドライバはプラットフォームに依存しない……プラットフォームクラスドライバ: プラットフォームクラスドライバには、オーディオDMAエンジンドライバ、デジタルオーディオインターフェース（DAI）ドライバが含まれる……マシンクラスドライバ: マシンドライバクラスは、ほかのコンポーネントドライバを記述し結び付けてALSAの『サウンドカードデバイス』を形成する接着剤として働く。」）
 > — [`Documentation/sound/soc/overview.rst`](https://docs.kernel.org/sound/soc/overview.html)
 
-That's the shape of the rest of this page: what each of those three driver types actually registers with the core, how the machine driver wires two of them together into a working `dai_link`, and why the resulting audio path needs its own fine-grained power model (DAPM) that a PC sound card never had to bother with.
+このページの残りはその形に沿って進む。3種類のドライバがそれぞれ実際にコアに何を登録するのか、マシンドライバがそのうち2つをどのようにつないで動作する`dai_link`にするのか、そしてその結果できるオーディオパスに、なぜPCのサウンドカードでは気にする必要のなかった独自のきめ細かい電源モデル（DAPM）が必要なのかを扱う。
 
-## Three driver components {#three-driver-components}
+## 3つのドライバコンポーネント {#three-driver-components}
 
-### CPU DAI driver: the SoC side of the wire {#cpu-dai-driver-the-soc-side-of-the-wire}
+### CPU DAIドライバ: 配線のSoC側 {#cpu-dai-driver-the-soc-side-of-the-wire}
 
-The CPU DAI driver owns the SoC's digital audio interface hardware — the I2S/TDM/PCM controller that shifts bits onto a bus at a bit clock and frame-sync rate, and the DMA plumbing that feeds it from a ring buffer. It has no idea what's on the other end of the wire; it just needs to be configured with a format and a rate and told to start.
+CPU DAIドライバは、SoCのデジタルオーディオインターフェースのハードウェアを所有する。すなわち、ビットクロックとフレーム同期のレートでビットをバス上に送り出すI2S/TDM/PCMコントローラと、リングバッファからそれにデータを供給するDMAの配管である。CPU DAIドライバは配線の反対側に何があるかを知らない。フォーマットとレートを設定され、開始を指示されればよいだけである。
 
-The interface it exposes to the ASoC core is `struct snd_soc_dai_driver`, defined in [`include/sound/soc-dai.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dai.h):
+CPU DAIドライバがASoCコアに公開するインターフェースは、[`include/sound/soc-dai.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dai.h)で定義されている`struct snd_soc_dai_driver`である。
 
 ```c
 // include/sound/soc-dai.h
 struct snd_soc_dai_driver {
-	/* DAI description */
+	/* DAIの記述 */
 	const char *name;
 	unsigned int id;
 	unsigned int base;
 	struct snd_soc_dobj dobj;
 	const struct of_phandle_args *dai_args;
 
-	/* ops */
+	/* 操作 */
 	const struct snd_soc_dai_ops *ops;
 	const struct snd_soc_cdai_ops *cops;
 
-	/* DAI capabilities */
+	/* DAIの能力 */
 	struct snd_soc_pcm_stream capture;
 	struct snd_soc_pcm_stream playback;
 	unsigned int symmetric_rate:1;
@@ -56,30 +56,30 @@ struct snd_soc_dai_driver {
 };
 ```
 
-`capture` and `playback` are each a `struct snd_soc_pcm_stream` — supported rates and formats as bitmasks (`SNDRV_PCM_RATE_*`, `SNDRV_PCM_FMTBIT_*`) plus plain integer `channels_min`/`channels_max` counts, the same vocabulary a plain ALSA PCM driver uses. The actual operations live in `struct snd_soc_dai_ops`, and the ones a CPU DAI driver cares about are the clocking/format setters plus the standard PCM trigger sequence:
+`capture`と`playback`はそれぞれ`struct snd_soc_pcm_stream`であり、サポートするレートとフォーマットをビットマスク（`SNDRV_PCM_RATE_*`、`SNDRV_PCM_FMTBIT_*`）で、加えて`channels_min`/`channels_max`を素の整数で持つ。普通のALSA PCMドライバが使うのと同じ語彙である。実際の操作は`struct snd_soc_dai_ops`にあり、CPU DAIドライバが気にするのは、クロック/フォーマットの設定関数と標準的なPCMのtriggerシーケンスである。
 
 ```c
-// include/sound/soc-dai.h (selected fields)
+// include/sound/soc-dai.h（抜粋）
 struct snd_soc_dai_ops {
 	int (*probe)(struct snd_soc_dai *dai);
 	int (*remove)(struct snd_soc_dai *dai);
 
-	/* clocking configuration */
+	/* クロック設定 */
 	int (*set_sysclk)(struct snd_soc_dai *dai, int clk_id, unsigned int freq, int dir);
 	int (*set_pll)(struct snd_soc_dai *dai, int pll_id, int source,
 		unsigned int freq_in, unsigned int freq_out);
 	int (*set_clkdiv)(struct snd_soc_dai *dai, int div_id, int div);
 	int (*set_bclk_ratio)(struct snd_soc_dai *dai, unsigned int ratio);
 
-	/* format configuration */
+	/* フォーマット設定 */
 	int (*set_fmt)(struct snd_soc_dai *dai, unsigned int fmt);
 	int (*set_tdm_slot)(struct snd_soc_dai *dai,
 		unsigned int tx_mask, unsigned int rx_mask, int slots, int slot_width);
 
-	/* digital mute */
+	/* デジタルミュート */
 	int (*mute_stream)(struct snd_soc_dai *dai, int mute, int stream);
 
-	/* PCM operations, called by soc-core during audio PCM operations */
+	/* PCM操作。オーディオPCM操作の際にsoc-coreから呼ばれる */
 	int (*startup)(struct snd_pcm_substream *, struct snd_soc_dai *);
 	void (*shutdown)(struct snd_pcm_substream *, struct snd_soc_dai *);
 	int (*hw_params)(struct snd_pcm_substream *, struct snd_pcm_hw_params *, struct snd_soc_dai *);
@@ -88,17 +88,17 @@ struct snd_soc_dai_ops {
 };
 ```
 
-`set_fmt` is the one that carries the I2S protocol details — justification (I2S/left-justified/right-justified/DSP), clock polarity, and, as of the format-bit rework, which side drives the bit clock and frame sync. That last part used to be spelled `_MASTER`/`_SLAVE`; current headers spell it in terms of provider/consumer instead, and the bit patterns are explicit about which signal each side of the link owns:
+I2Sプロトコルの詳細を運ぶのは`set_fmt`である。データの詰め方（I2S/左詰め/右詰め/DSP）、クロックの極性、そしてフォーマットビットの改修以降は、どちら側がビットクロックとフレーム同期を駆動するか、である。この最後の部分は以前は`_MASTER`/`_SLAVE`と表記されていたが、現在のヘッダではprovider/consumerという用語で表記され、ビットパターンはリンクのどちら側がどの信号を所有するかを明示している。
 
 ```c
 // include/sound/soc-dai.h
-#define SND_SOC_DAIFMT_CBP_CFP		(1 << 12) /* codec clk provider & frame provider */
-#define SND_SOC_DAIFMT_CBC_CFP		(2 << 12) /* codec clk consumer & frame provider */
-#define SND_SOC_DAIFMT_CBP_CFC		(3 << 12) /* codec clk provider & frame consumer */
-#define SND_SOC_DAIFMT_CBC_CFC		(4 << 12) /* codec clk consumer & frame consumer */
+#define SND_SOC_DAIFMT_CBP_CFP		(1 << 12) /* コーデックがクロックprovider & フレームprovider */
+#define SND_SOC_DAIFMT_CBC_CFP		(2 << 12) /* コーデックがクロックconsumer & フレームprovider */
+#define SND_SOC_DAIFMT_CBP_CFC		(3 << 12) /* コーデックがクロックprovider & フレームconsumer */
+#define SND_SOC_DAIFMT_CBC_CFC		(4 << 12) /* コーデックがクロックconsumer & フレームconsumer */
 ```
 
-Rockchip's I2S driver is a compact real example of a CPU DAI driver — no codec-specific code anywhere in it, just the I2S controller:
+RockchipのI2Sドライバは、CPU DAIドライバのコンパクトな実例である。コーデック固有のコードはどこにもなく、I2Sコントローラだけを扱っている。
 
 ```c
 // sound/soc/rockchip/rockchip_i2s.c
@@ -117,9 +117,9 @@ static struct snd_soc_dai_driver rockchip_i2s_dai = {
 };
 ```
 
-(The `playback`/`capture` `snd_soc_pcm_stream`s aren't in the static initializer — `rockchip_i2s_init_dai()` fills them in from devicetree at probe time, since the same silicon block is wired for playback-only, capture-only, or both depending on the board.)
+（`playback`/`capture`の`snd_soc_pcm_stream`は静的初期化子には含まれていない。同じシリコンブロックがボードによって再生専用、録音専用、またはその両方として配線されるため、`rockchip_i2s_init_dai()`がprobe時にdevicetreeからそれらを埋める。）
 
-There's a structural detail worth flagging here, because ASoC's own documentation still describes the older three-way split: a "platform class driver" for the DMA engine, separate from the codec class driver. That struct doesn't exist anymore — `grep -rn "struct snd_soc_platform" include/sound/` against current mainline returns nothing. The DMA/platform role was folded into the same component model the codec side uses (below); a CPU DAI driver registers its `snd_soc_dai_driver` and, for the DMA side, typically just calls a helper like `devm_snd_dmaengine_pcm_register()` rather than implementing PCM callbacks itself:
+ここで指摘しておく価値のある構造上の詳細がある。ASoC自身のドキュメントがいまだに古い3分割、つまりコーデッククラスドライバとは別の、DMAエンジン用の「プラットフォームクラスドライバ」を説明しているからである。その構造体はもう存在しない。現在のメインラインに対して`grep -rn "struct snd_soc_platform" include/sound/`を実行しても何も返らない。DMA/プラットフォームの役割は、コーデック側が使うのと同じコンポーネントモデル（後述）に統合された。CPU DAIドライバは自身の`snd_soc_dai_driver`を登録し、DMA側については、PCMコールバックを自分で実装する代わりに、通常は`devm_snd_dmaengine_pcm_register()`のようなヘルパーを呼ぶだけである。
 
 ```c
 // sound/soc/rockchip/rockchip_i2s.c
@@ -130,14 +130,14 @@ ret = devm_snd_soc_register_component(&pdev->dev,
 ret = devm_snd_dmaengine_pcm_register(&pdev->dev, NULL, 0);
 ```
 
-### Codec driver: the DAC/ADC chip itself {#codec-driver-the-dacadc-chip-itself}
+### コーデックドライバ: DAC/ADCチップそのもの {#codec-driver-the-dacadc-chip-itself}
 
-The codec driver is the platform-independent half: it knows how to talk to a specific DAC/ADC chip over I2C or SPI, what its mixer topology looks like, and how to sequence its internal power domains — but nothing about which SoC or which board it's wired to. That's what makes the wm8731-times-four problem `overview.rst` complains about solvable: write the codec driver once, reuse it on every board that happens to use that chip.
+コーデックドライバはプラットフォームに依存しない半分である。特定のDAC/ADCチップとI2CやSPI経由でどう通信するか、そのミキサートポロジーがどうなっているか、内部の電源ドメインをどういう順序で操作するかは知っているが、どのSoCやどのボードに配線されているかについては何も知らない。これこそが、`overview.rst`が嘆くwm8731が4つある問題を解決可能にするものである。コーデックドライバを一度書けば、たまたまそのチップを使っているすべてのボードで再利用できる。
 
-Structurally, a codec driver looks almost identical to a CPU DAI driver — it registers a `snd_soc_dai_driver` too, since the codec side of the I2S link is also a DAI. What differs is the *component* it registers alongside it. Older ASoC code had a distinct `struct snd_soc_codec` for this; current mainline doesn't — the same `grep` for `struct snd_soc_codec` against `include/sound/` turns up nothing but `snd_soc_codec_conf` (a machine-driver-side per-codec configuration knob, not the driver-facing struct). Codec drivers, CPU DAI/platform drivers, and even DSP/compressed-audio drivers all register through the same [`struct snd_soc_component_driver`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-component.h):
+構造的には、コーデックドライバはCPU DAIドライバとほとんど同じに見える。I2Sリンクのコーデック側もDAIなので、コーデックドライバも`snd_soc_dai_driver`を登録する。異なるのは、それと一緒に登録する*コンポーネント*である。古いASoCのコードにはこのための独立した`struct snd_soc_codec`があったが、現在のメインラインにはない。`include/sound/`に対して同じように`struct snd_soc_codec`を`grep`しても、見つかるのは`snd_soc_codec_conf`（マシンドライバ側のコーデックごとの設定項目であり、ドライバ向けの構造体ではない）だけである。コーデックドライバ、CPU DAI/プラットフォームドライバ、さらにはDSP/圧縮オーディオのドライバまで、すべて同じ[`struct snd_soc_component_driver`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-component.h)を通じて登録される。
 
 ```c
-// include/sound/soc-component.h (selected fields)
+// include/sound/soc-component.h（抜粋）
 struct snd_soc_component_driver {
 	const char *name;
 
@@ -161,7 +161,7 @@ struct snd_soc_component_driver {
 	int (*set_bias_level)(struct snd_soc_component *component,
 			      enum snd_soc_bias_level level);
 
-	/* PCM operations — used by DMA/platform-style components */
+	/* PCM操作 — DMA/プラットフォーム型のコンポーネントが使う */
 	int (*hw_params)(struct snd_soc_component *component,
 			 struct snd_pcm_substream *substream, struct snd_pcm_hw_params *params);
 	int (*trigger)(struct snd_soc_component *component,
@@ -174,10 +174,10 @@ struct snd_soc_component_driver {
 };
 ```
 
-and its runtime counterpart:
+そして、その実行時の対応物は次のとおりである。
 
 ```c
-// include/sound/soc-component.h (selected fields)
+// include/sound/soc-component.h（抜粋）
 struct snd_soc_component {
 	const char *name;
 	const char *name_prefix;
@@ -201,9 +201,9 @@ struct snd_soc_component {
 };
 ```
 
-`controls`, `dapm_widgets`, and `dapm_routes` on the *driver* struct are exactly what makes a codec driver self-describing: the driver ships its own DAPM graph (below), and the machine driver only has to describe the parts that are board-specific (an external speaker, a mic jack) rather than re-declaring the codec's internal mixer topology every time.
+*ドライバ*構造体の`controls`、`dapm_widgets`、`dapm_routes`こそが、コーデックドライバを自己記述的にしているものである。ドライバは自身のDAPMグラフ（後述）を同梱しており、マシンドライバは、毎回コーデック内部のミキサートポロジーを宣言し直すのではなく、ボード固有の部分（外部スピーカー、マイクジャック）だけを記述すればよい。
 
-Maxim's max98090 codec driver shows the pattern end to end — its own `snd_soc_dai_driver` for the I2S side, and a `snd_soc_component_driver` for everything else:
+Maximのmax98090コーデックドライバは、このパターンを端から端まで示している。I2S側のための独自の`snd_soc_dai_driver`と、それ以外すべてのための`snd_soc_component_driver`である。
 
 ```c
 // sound/soc/codecs/max98090.c
@@ -238,7 +238,7 @@ static const struct snd_soc_component_driver soc_component_dev_max98090 = {
 };
 ```
 
-registered from the I2C probe function with the same `devm_snd_soc_register_component()` the CPU DAI side used:
+これはI2Cのprobe関数から、CPU DAI側が使ったのと同じ`devm_snd_soc_register_component()`で登録される。
 
 ```c
 // sound/soc/codecs/max98090.c
@@ -247,15 +247,15 @@ ret = devm_snd_soc_register_component(&i2c->dev,
 				      &max98090_dai, 1);
 ```
 
-Nothing in either struct mentions Rockchip, and nothing in the Rockchip I2S driver mentions Maxim — which is exactly the reuse `overview.rst` was written to enable. The board that puts these two together is the machine driver's job.
+どちらの構造体もRockchipに言及しておらず、RockchipのI2SドライバもMaximに言及していない。これこそが、`overview.rst`が可能にしようとして書かれた再利用である。この2つを組み合わせるボードを扱うのは、マシンドライバの仕事である。
 
-### Machine driver: DAI links and board glue {#machine-driver-dai-links-and-board-glue}
+### マシンドライバ: DAIリンクとボードの接着剤 {#machine-driver-dai-links-and-board-glue}
 
-The machine driver is the only one of the three that's genuinely board-specific, and its central job is small: declare which CPU DAI connects to which codec DAI, over what bus format, and hand the pair to the core as a `struct snd_soc_dai_link`. `Documentation/sound/soc/machine.rst` puts the scope plainly:
+マシンドライバは3つのうちで唯一、本当にボード固有のものであり、その中心的な仕事は小さい。どのCPU DAIがどのコーデックDAIに、どのバスフォーマットで接続されるかを宣言し、その組を`struct snd_soc_dai_link`としてコアに渡すことである。`Documentation/sound/soc/machine.rst`はその範囲を率直に述べている。
 
-> *"The ASoC machine (or board) driver is the code that glues together all the component drivers (e.g. codecs, platforms and DAIs). It also describes the relationships between each component which include audio paths, GPIOs, interrupts, clocking, jacks and voltage regulators."*
+> *"The ASoC machine (or board) driver is the code that glues together all the component drivers (e.g. codecs, platforms and DAIs). It also describes the relationships between each component which include audio paths, GPIOs, interrupts, clocking, jacks and voltage regulators."*（訳: 「ASoCのマシン（またはボード）ドライバは、すべてのコンポーネントドライバ（コーデック、プラットフォーム、DAIなど）を接着するコードである。また、オーディオパス、GPIO、割り込み、クロック、ジャック、電圧レギュレータを含む、各コンポーネント間の関係も記述する。」）
 
-A `dai_link` doesn't reference a CPU DAI and a codec DAI by embedding them directly — each side is an array of `struct snd_soc_dai_link_component`, because a link can legitimately have more than one DAI per side (multi-codec boards, TDM-split CPUs feeding several codec channels):
+`dai_link`は、CPU DAIとコーデックDAIを直接埋め込んで参照するわけではない。各側は`struct snd_soc_dai_link_component`の配列である。1つのリンクが片側に複数のDAIを持つことが正当にありうるからである（マルチコーデックのボードや、TDM分割されたCPUが複数のコーデックチャネルに供給する場合）。
 
 ```c
 // include/sound/soc.h
@@ -267,10 +267,10 @@ struct snd_soc_dai_link_component {
 	unsigned int ext_fmt;
 };
 
-// struct snd_soc_dai_link (selected fields)
+// struct snd_soc_dai_link（抜粋）
 struct snd_soc_dai_link {
-	const char *name;			/* Codec name */
-	const char *stream_name;		/* Stream name */
+	const char *name;			/* コーデック名 */
+	const char *stream_name;		/* ストリーム名 */
 
 	struct snd_soc_dai_link_component *cpus;
 	unsigned int num_cpus;
@@ -281,21 +281,21 @@ struct snd_soc_dai_link {
 	struct snd_soc_dai_link_component *platforms;
 	unsigned int num_platforms;
 
-	unsigned int dai_fmt;			/* format to set on init */
+	unsigned int dai_fmt;			/* 初期化時に設定するフォーマット */
 
-	/* codec/machine specific init - e.g. add machine controls */
+	/* コーデック/マシン固有の初期化 — 例: マシンのコントロールを追加する */
 	int (*init)(struct snd_soc_pcm_runtime *rtd);
 
 	const struct snd_soc_ops *ops;
 
 	unsigned int playback_only:1;
 	unsigned int capture_only:1;
-	unsigned int no_pcm:1;			/* backend link, no userspace PCM */
-	unsigned int dynamic:1;		/* frontend, routes to a BE at runtime */
+	unsigned int no_pcm:1;			/* バックエンドリンク、ユーザー空間PCMなし */
+	unsigned int dynamic:1;		/* フロントエンド、実行時にBEへルーティングする */
 };
 ```
 
-There are no `.cpu_dai_name`/`.codec_name`/`.platform_name` string fields on this struct — that flatter, DPCM-era shape is gone from current mainline (a stale example still circulating in `machine.rst` still shows it; don't copy it). Populating the three component arrays by hand for every link is tedious enough that `soc.h` provides a macro pair to build them at compile time:
+この構造体には`.cpu_dai_name`/`.codec_name`/`.platform_name`といった文字列フィールドはない。そのより平坦な、DPCM時代の形は現在のメインラインからは消えている（`machine.rst`でいまだに出回っている古い例はその形を示しているが、コピーしてはいけない）。リンクごとに3つのコンポーネント配列を手で埋めるのは十分に面倒なので、`soc.h`はそれらをコンパイル時に構築するためのマクロの組を用意している。
 
 ```c
 // include/sound/soc.h
@@ -314,7 +314,7 @@ struct snd_soc_dai_link link = {
 };
 ```
 
-Rockchip's machine driver for boards with a max98090 codec is a real, current instance of exactly this pattern — note that both `cpus` and `platforms` use `COMP_EMPTY()`, because on this SoC the I2S controller and the DMA engine are matched to the runtime by devicetree phandle rather than by name:
+max98090コーデックを搭載したボード向けのRockchipのマシンドライバは、まさにこのパターンの、現行の実例である。`cpus`と`platforms`の両方が`COMP_EMPTY()`を使っていることに注目してほしい。このSoCでは、I2SコントローラとDMAエンジンは名前ではなくdevicetreeのphandleによってランタイムに照合されるからである。
 
 ```c
 // sound/soc/rockchip/rockchip_max98090.c
@@ -329,7 +329,7 @@ static struct snd_soc_dai_link rk_max98090_dailinks[] = {
 		.stream_name = "Analog",
 		.init = rk_init,
 		.ops = &rk_aif1_ops,
-		/* set max98090 as slave */
+		/* max98090をスレーブとして設定する */
 		.dai_fmt = SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
 			SND_SOC_DAIFMT_CBC_CFC,
 		SND_SOC_DAILINK_REG(analog),
@@ -352,49 +352,49 @@ static struct snd_soc_card rockchip_max98090_card = {
 };
 ```
 
-`struct snd_soc_card` is the top-level object the machine driver registers with `devm_snd_soc_register_card()`: an array of `dai_link`s plus the board-level DAPM widgets/routes/controls that the codec driver doesn't already know about (the external speaker, the mic jack — see below). `dai_fmt` here spells out the I2S wire format directly on the link: standard I2S justification, normal (non-inverted) bit clock and frame, and the codec as the clock *consumer* on both bit clock and frame sync — meaning the Rockchip I2S controller is the one driving BCLK/LRCK on this board. `aux_dev`/`num_aux_devs` is a separate, smaller mechanism for a component that isn't part of any `dai_link` at all — on this board it points at `rk_98090_headset_dev`, whose init callback populates a `snd_soc_jack` (via `snd_soc_card_jack_new_pins()`, with the button-key masks and DAPM pins the jack reports through) and then calls `ts3a227e_enable_jack_detect()` to register that jack with the ts3a227e headset-detection IC's driver; the IC's own I2C probe is what actually requests its interrupt line, independently of this call. `aux_dev` wires up the jack-reporting path, not an audio data path.
+`struct snd_soc_card`は、マシンドライバが`devm_snd_soc_register_card()`で登録する最上位のオブジェクトである。`dai_link`の配列と、コーデックドライバがまだ知らないボードレベルのDAPMウィジェット/ルート/コントロール（外部スピーカー、マイクジャック。後述）からなる。ここでの`dai_fmt`はI2Sの配線フォーマットをリンク上で直接指定している。標準的なI2Sの詰め方、通常の（反転しない）ビットクロックとフレーム、そしてビットクロックとフレーム同期の両方についてコーデックがクロックの*consumer*であること、つまりこのボードではRockchipのI2SコントローラがBCLK/LRCKを駆動する側であることを意味する。`aux_dev`/`num_aux_devs`は、どの`dai_link`にもまったく属さないコンポーネントのための、別の小さな仕組みである。このボードでは`rk_98090_headset_dev`を指しており、そのinitコールバックは（`snd_soc_card_jack_new_pins()`によって、ジャックが報告に使うボタンキーのマスクとDAPMピンとともに）`snd_soc_jack`を設定し、続いて`ts3a227e_enable_jack_detect()`を呼んで、そのジャックをts3a227eヘッドセット検出ICのドライバに登録する。実際に割り込み線を要求するのはIC自身のI2C probeであり、この呼び出しとは独立している。`aux_dev`が配線するのはジャックの報告経路であって、オーディオのデータパスではない。
 
-## DAPM: power-managing what a PC sound card doesn't have {#dapm-power-managing-what-a-pc-sound-card-doesnt-have}
+## DAPM: PCのサウンドカードにはないものの電源管理 {#dapm-power-managing-what-a-pc-sound-card-doesnt-have}
 
-A PC sound card codec is behind a fixed AC'97 or HD-Audio link, plugged into wall power, and typically has one dominant power state: on, because the machine itself is either awake or suspended. An embedded codec is different in two ways that matter for power: it runs on a battery, and it usually contains several genuinely independent analog blocks — a headphone amp, a speaker amp, a mic bias supply, an ADC, a DAC — any subset of which might be needed at a given moment depending on what's actually connected and what's actually playing. Powering the whole chip for a phone call that only needs the mic-bias-to-ADC path is wasted current draw a laptop sound card never had to think about.
+PCのサウンドカードのコーデックは、固定のAC'97またはHD-Audioリンクの背後にあり、壁のコンセントから給電され、通常は支配的な電源状態が1つしかない。オンである。マシン自体が起きているかサスペンドしているかのどちらかだからだ。組み込みのコーデックは、電源にとって重要な2つの点で異なる。バッテリーで動作すること、そして通常は本当に独立したアナログブロックをいくつも含んでいることである。ヘッドホンアンプ、スピーカーアンプ、マイクバイアス電源、ADC、DACなどであり、実際に何が接続され何が再生されているかによって、その時点で必要なのはそれらの任意の部分集合でありうる。マイクバイアスからADCへのパスしか必要としない通話のためにチップ全体の電源を入れるのは電流の無駄遣いであり、ノートPCのサウンドカードでは考える必要のなかったことである。
 
-Dynamic Audio Power Management (DAPM) is ASoC's answer, and unlike everything else on this page it's *not* something the machine driver has to actively manage — `Documentation/sound/soc/dapm.rst` is explicit that the machine driver just describes the graph and the core does the rest:
+Dynamic Audio Power Management（DAPM）がASoCの答えであり、このページのほかのすべてと違って、マシンドライバが能動的に管理しなければならないもの*ではない*。`Documentation/sound/soc/dapm.rst`は、マシンドライバはグラフを記述するだけで、残りはコアが行うと明言している。
 
-> *"DAPM is also completely transparent to all user space applications as all power switching is done within the ASoC core. No code changes or recompiling are required for user space applications. DAPM makes power switching decisions based upon any audio stream (capture/playback) activity and audio mixer settings within the device."*
+> *"DAPM is also completely transparent to all user space applications as all power switching is done within the ASoC core. No code changes or recompiling are required for user space applications. DAPM makes power switching decisions based upon any audio stream (capture/playback) activity and audio mixer settings within the device."*（訳: 「すべての電源切り替えはASoCコア内で行われるため、DAPMはすべてのユーザー空間アプリケーションに対して完全に透過的でもある。ユーザー空間アプリケーションにはコードの変更も再コンパイルも必要ない。DAPMは、オーディオストリーム（録音/再生）の活動とデバイス内のオーディオミキサー設定に基づいて電源切り替えの判断を行う。」）
 
-The model is a directed graph of two kinds of object:
+モデルは2種類のオブジェクトからなる有向グラフである。
 
-> *"a **widget** is every part of the audio hardware that can be enabled by software when in use and disabled to save power when not in use... a **route** is an interconnection between widgets that exists when sound can flow from one widget to the other."*
+> *"a **widget** is every part of the audio hardware that can be enabled by software when in use and disabled to save power when not in use... a **route** is an interconnection between widgets that exists when sound can flow from one widget to the other."*（訳: 「**ウィジェット**とは、使用中にはソフトウェアで有効化でき、未使用時には省電力のために無効化できる、オーディオハードウェアのあらゆる部分である……**ルート**とは、あるウィジェットから別のウィジェットへ音が流れうるときに存在する、ウィジェット間の相互接続である。」）
 
-A widget is `struct snd_soc_dapm_widget` — a typed node (mixer, mux, PGA, ADC, DAC, mic, speaker, supply, ...) with a register/bit/mask that toggles its power, plus the standard bookkeeping for walking the graph:
+ウィジェットは`struct snd_soc_dapm_widget`である。型付きのノード（ミキサー、マルチプレクサ、PGA、ADC、DAC、マイク、スピーカー、電源、...）であり、その電源を切り替えるレジスタ/ビット/マスクと、グラフを辿るための標準的な管理情報を持つ。
 
 ```c
-// include/sound/soc-dapm.h (selected fields)
+// include/sound/soc-dapm.h（抜粋）
 struct snd_soc_dapm_widget {
 	enum snd_soc_dapm_type id;
 	const char *name;
-	const char *sname;			/* stream name, for AIF/DAC/ADC widgets */
+	const char *sname;			/* ストリーム名。AIF/DAC/ADCウィジェット用 */
 
-	int reg;				/* negative reg = no direct dapm */
+	int reg;				/* 負のreg = 直接のdapmなし */
 	unsigned char shift;
 	unsigned int mask;
 	unsigned int on_val;
 	unsigned int off_val;
-	unsigned char power:1;			/* block power status */
-	unsigned char connected:1;		/* connected codec pin */
+	unsigned char power:1;			/* ブロックの電源状態 */
+	unsigned char connected:1;		/* 接続されたコーデックピン */
 
-	/* external events */
+	/* 外部イベント */
 	unsigned short event_flags;
 	int (*event)(struct snd_soc_dapm_widget*, struct snd_kcontrol *, int);
 
 	int num_kcontrols;
 	const struct snd_kcontrol_new *kcontrol_news;
 
-	struct list_head edges[2];		/* widget input and output edges */
+	struct list_head edges[2];		/* ウィジェットの入力辺と出力辺 */
 };
 ```
 
-and a route is the much simpler `struct snd_soc_dapm_route` — just `sink`, `source`, and an optional `control` name when the connection is gated by a mux or switch:
+ルートははるかに単純な`struct snd_soc_dapm_route`である。`sink`、`source`、そして接続がマルチプレクサやスイッチで制御される場合のオプションの`control`名だけを持つ。
 
 ```c
 // include/sound/soc-dapm.h
@@ -407,7 +407,7 @@ struct snd_soc_dapm_route {
 };
 ```
 
-Widgets are declared with per-type convenience macros — `SND_SOC_DAPM_SPK`, `SND_SOC_DAPM_MIC`, `SND_SOC_DAPM_ADC`, `SND_SOC_DAPM_MIXER`, and so on — most of them expanding to a `struct snd_soc_dapm_widget` literal with the right `id` and register bits filled in. The Rockchip board again gives a real, minimal example of the board-level half of the graph — the external jacks the codec driver doesn't know about, wired to pins the codec driver *does* export:
+ウィジェットは型ごとの便利マクロ（`SND_SOC_DAPM_SPK`、`SND_SOC_DAPM_MIC`、`SND_SOC_DAPM_ADC`、`SND_SOC_DAPM_MIXER`など）で宣言され、その大半は正しい`id`とレジスタビットが埋められた`struct snd_soc_dapm_widget`のリテラルに展開される。ここでもRockchipのボードが、グラフのボードレベル側の半分について、現実の最小限の例を示している。コーデックドライバが知らない外部ジャックを、コーデックドライバが*エクスポートしている*ピンに配線するものである。
 
 ```c
 // sound/soc/rockchip/rockchip_max98090.c
@@ -427,7 +427,7 @@ Widgets are declared with per-type convenience macros — `SND_SOC_DAPM_SPK`, `S
 	{"Speaker", NULL, "SPKR"}
 ```
 
-`IN34`, `HPL`/`HPR`, `SPKL`/`SPKR`, and `MICBIAS` are internal pins the max98090 codec driver already registered — but not through the `snd_soc_component_driver` static initializer shown above. `soc_component_dev_max98090` sets no `.dapm_widgets`/`.dapm_routes` at all; the driver instead registers its widgets imperatively from its `probe()` callback, via a helper that calls `snd_soc_dapm_new_controls()`/`snd_soc_dapm_add_routes()`:
+`IN34`、`HPL`/`HPR`、`SPKL`/`SPKR`、`MICBIAS`は、max98090コーデックドライバがすでに登録した内部ピンである。ただし、上で示した`snd_soc_component_driver`の静的初期化子を通じて登録されたのではない。`soc_component_dev_max98090`は`.dapm_widgets`/`.dapm_routes`をまったく設定していない。代わりにドライバは、`probe()`コールバックから、`snd_soc_dapm_new_controls()`/`snd_soc_dapm_add_routes()`を呼ぶヘルパーを介して、手続き的にウィジェットを登録する。
 
 ```c
 // sound/soc/codecs/max98090.c
@@ -453,18 +453,18 @@ static int max98090_add_widgets(struct snd_soc_component *component)
 }
 ```
 
-Doing it this way rather than through the static `.dapm_widgets` field is what lets the driver pick a different widget set at runtime — the `if (max98090->devtype == MAX98091)` branch above adds a second array of controls for the max98091 variant, something a fixed compile-time array on the driver struct can't express. Either way, the machine driver never needs to know how the codec powers its own headphone amp internally; it only has to say "the board's headphone jack is wired to the codec's HPL/HPR pins," and DAPM's graph walk takes care of the rest: opening a playback stream marks the DAC endpoint active, the core walks backward through the route graph powering every widget on the path to a connected, active endpoint, and idle branches (the mic path, if nothing's recording) stay off.
+静的な`.dapm_widgets`フィールドではなくこの方法で登録することで、ドライバは実行時に異なるウィジェットセットを選べる。上の`if (max98090->devtype == MAX98091)`の分岐はmax98091の派生品向けに2つ目のコントロール配列を追加しているが、これはドライバ構造体上の固定のコンパイル時配列では表現できない。いずれにせよ、マシンドライバはコーデックが内部で自分のヘッドホンアンプにどう電源を入れるかを知る必要はまったくない。「ボードのヘッドホンジャックはコーデックのHPL/HPRピンに配線されている」と言うだけでよく、残りはDAPMのグラフ走査が引き受ける。再生ストリームを開くとDACのエンドポイントがアクティブになり、コアはルートグラフを逆向きに辿って、接続されたアクティブなエンドポイントへのパス上にあるすべてのウィジェットの電源を入れる。アイドルな枝（何も録音していなければマイクのパス）はオフのままである。
 
-`dapm.rst` groups the power decisions into four domains, each triggered by a different kind of event — stream start/stop, a mixer switch, a jack insertion, or codec suspend/resume:
+`dapm.rst`は電源に関する判断を4つのドメインに分類しており、それぞれ異なる種類のイベント（ストリームの開始/停止、ミキサーのスイッチ、ジャックの挿入、コーデックのサスペンド/レジューム）によって引き起こされる。
 
-| Domain | What it covers | Triggered by |
+| ドメイン | 対象 | 契機 |
 |---|---|---|
-| Codec bias | VREF/VMID — core codec/audio power | probe, suspend/resume |
-| Platform/machine | physically connected inputs/outputs | machine driver, async events (jack insert) |
-| Path | mixer/mux signal paths | user changing a control (alsamixer) |
-| Stream | DACs and ADCs | stream start/stop (aplay/arecord) |
+| コーデックバイアス | VREF/VMID — コーデック/オーディオの中核電源 | probe、サスペンド/レジューム |
+| プラットフォーム/マシン | 物理的に接続された入力/出力 | マシンドライバ、非同期イベント（ジャック挿入） |
+| パス | ミキサー/マルチプレクサの信号経路 | ユーザーによるコントロールの変更（alsamixer） |
+| ストリーム | DACとADC | ストリームの開始/停止（aplay/arecord） |
 
-The codec bias domain is itself a small state machine, `enum snd_soc_bias_level`, and its four states are the ones a codec's `set_bias_level` callback is expected to sequence through cleanly to avoid the pops and clicks a fast, uncontrolled power transition causes. The enum body itself is bare; the explanation of each value lives in the kernel-doc block immediately above it:
+コーデックバイアスのドメインはそれ自体が小さな状態機械`enum snd_soc_bias_level`であり、その4つの状態は、速く制御されない電源遷移が引き起こすポップノイズやクリックノイズを避けるために、コーデックの`set_bias_level`コールバックがきれいに順を追って遷移することが期待されているものである。enumの本体自体には何の説明もなく、各値の説明はそのすぐ上のkernel-docブロックにある。
 
 ```c
 // include/sound/soc-dapm.h
@@ -487,9 +487,9 @@ enum snd_soc_bias_level {
 };
 ```
 
-## Devicetree: describing the board topology without writing a driver {#devicetree-describing-the-board-topology-without-writing-a-driver}
+## Devicetree: ドライバを書かずにボードのトポロジーを記述する {#devicetree-describing-the-board-topology-without-writing-a-driver}
 
-Most embedded boards don't need a bespoke C machine driver at all. If the topology is just "one CPU DAI, one codec DAI, a fixed I2S format, and a short list of board widgets/routes" — which covers a large fraction of real hardware — the generic **simple-audio-card** driver (`sound/soc/generic/simple-card.c`) can build the entire `snd_soc_card` from devicetree properties, with no board-specific driver code at all. The DT node names the CPU and codec DAIs by phandle and spells out the same widget/route information a bespoke machine driver would hardcode in C:
+ほとんどの組み込みボードは、専用のCのマシンドライバをまったく必要としない。トポロジーが「CPU DAIが1つ、コーデックDAIが1つ、固定のI2Sフォーマット、そしてボードのウィジェット/ルートの短いリスト」だけなら（これは現実のハードウェアのかなりの割合をカバーする）、汎用の**simple-audio-card**ドライバ（`sound/soc/generic/simple-card.c`）が、ボード固有のドライバコードなしに、devicetreeのプロパティから`snd_soc_card`全体を構築できる。DTノードはCPUとコーデックのDAIをphandleで指定し、専用のマシンドライバならCでハードコードするのと同じウィジェット/ルート情報を記述する。
 
 ```dts
 sound {
@@ -519,7 +519,7 @@ sound {
 ```
 — [`Documentation/devicetree/bindings/sound/simple-card.yaml`](https://www.kernel.org/doc/Documentation/devicetree/bindings/sound/simple-card.yaml)
 
-For topologies simple-card's flat `cpu`/`codec` node pair can't express cleanly — several DAIs feeding a shared codec through TDM splits, or boards with more than two components chained together — there's **audio-graph-card** (`sound/soc/generic/audio-graph-card.c`), which reuses the generic devicetree [OF graph](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/devicetree/bindings/sound/audio-graph.yaml) `port`/`endpoint`/`remote-endpoint` bindings instead of simple-card's flat property list:
+simple-cardの平坦な`cpu`/`codec`ノードの組ではきれいに表現できないトポロジー（TDM分割を通じて複数のDAIが共有コーデックに供給する場合や、3つ以上のコンポーネントが連なるボード）には、**audio-graph-card**（`sound/soc/generic/audio-graph-card.c`）がある。これはsimple-cardの平坦なプロパティリストの代わりに、汎用のdevicetree [OF graph](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/devicetree/bindings/sound/audio-graph.yaml)の`port`/`endpoint`/`remote-endpoint`バインディングを再利用する。
 
 ```dts
 sound {
@@ -546,9 +546,9 @@ codec {
 ```
 — [`Documentation/devicetree/bindings/sound/audio-graph-card.yaml`](https://raw.githubusercontent.com/torvalds/linux/master/Documentation/devicetree/bindings/sound/audio-graph-card.yaml)
 
-Both drivers are, structurally, just machine drivers themselves: they parse devicetree properties and populate the exact same `snd_soc_dai_link`/`snd_soc_card` structures a hand-written board driver like `rockchip_max98090.c` would build in C, then call the same `devm_snd_soc_register_card()`. The choice between writing a real machine driver, using simple-card, or using audio-graph-card is purely about how much board-specific logic (jack detection callbacks, GPIO-controlled amps, non-trivial `.init()` hooks) the board actually needs — anything simple-card and audio-graph-card can't express in properties still falls back to a C machine driver.
+どちらのドライバも、構造的にはそれ自体がただのマシンドライバである。devicetreeのプロパティを解析し、`rockchip_max98090.c`のような手書きのボードドライバがCで構築するのとまったく同じ`snd_soc_dai_link`/`snd_soc_card`構造体を埋め、同じ`devm_snd_soc_register_card()`を呼ぶ。本物のマシンドライバを書くか、simple-cardを使うか、audio-graph-cardを使うかの選択は、ボードが実際にどれだけのボード固有ロジック（ジャック検出のコールバック、GPIOで制御されるアンプ、自明でない`.init()`フック）を必要とするかだけで決まる。simple-cardやaudio-graph-cardがプロパティで表現できないものは、依然としてCのマシンドライバに頼ることになる。
 
-## How it fits together {#how-it-fits-together}
+## 全体の組み合わせ {#how-it-fits-together}
 
 ```
                           snd_soc_card                         machine driver
@@ -583,34 +583,34 @@ Both drivers are, structurally, just machine drivers themselves: they parse devi
                                                 reused across many boards
 ```
 
-The CPU DAI and codec boxes never reference each other by name in source; the machine driver — or the devicetree it was generated from — is the only thing that knows they're wired together on *this particular* board.
+CPU DAIとコーデックの箱は、ソース上で互いを名前で参照することは決してない。それらが*この特定の*ボード上で配線されていることを知っているのは、マシンドライバ（またはそれが生成される元となったdevicetree）だけである。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [`include/sound/soc.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc.h) — `snd_soc_dai_link`, `snd_soc_dai_link_component`, `snd_soc_card`, `SND_SOC_DAILINK_DEFS`/`SND_SOC_DAILINK_REG` macros
-- [`include/sound/soc-dai.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dai.h) — `snd_soc_dai`, `snd_soc_dai_driver`, `snd_soc_dai_ops`, DAI format bit definitions
-- [`include/sound/soc-component.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-component.h) — `snd_soc_component`, `snd_soc_component_driver` (the unified codec/platform registration point)
-- [`include/sound/soc-dapm.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dapm.h) — `snd_soc_dapm_widget`, `snd_soc_dapm_route`, `snd_soc_bias_level`, widget macros
-- [`sound/soc/rockchip/rockchip_i2s.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/rockchip/rockchip_i2s.c) — a real CPU DAI driver
-- [`sound/soc/codecs/max98090.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/codecs/max98090.c) — a real codec driver
-- [`sound/soc/rockchip/rockchip_max98090.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/rockchip/rockchip_max98090.c) — a real machine driver, DAI links, board DAPM graph
-- [`sound/soc/generic/simple-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/simple-card.c), [`sound/soc/generic/audio-graph-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/audio-graph-card.c) — the generic devicetree-driven machine drivers
+- [`include/sound/soc.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc.h) — `snd_soc_dai_link`、`snd_soc_dai_link_component`、`snd_soc_card`、`SND_SOC_DAILINK_DEFS`/`SND_SOC_DAILINK_REG`マクロ
+- [`include/sound/soc-dai.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dai.h) — `snd_soc_dai`、`snd_soc_dai_driver`、`snd_soc_dai_ops`、DAIフォーマットのビット定義
+- [`include/sound/soc-component.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-component.h) — `snd_soc_component`、`snd_soc_component_driver`（コーデック/プラットフォームの統一された登録ポイント）
+- [`include/sound/soc-dapm.h`](https://raw.githubusercontent.com/torvalds/linux/master/include/sound/soc-dapm.h) — `snd_soc_dapm_widget`、`snd_soc_dapm_route`、`snd_soc_bias_level`、ウィジェットマクロ
+- [`sound/soc/rockchip/rockchip_i2s.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/rockchip/rockchip_i2s.c) — 実際のCPU DAIドライバ
+- [`sound/soc/codecs/max98090.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/codecs/max98090.c) — 実際のコーデックドライバ
+- [`sound/soc/rockchip/rockchip_max98090.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/rockchip/rockchip_max98090.c) — 実際のマシンドライバ、DAIリンク、ボードのDAPMグラフ
+- [`sound/soc/generic/simple-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/simple-card.c)、[`sound/soc/generic/audio-graph-card.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/soc/generic/audio-graph-card.c) — devicetree駆動の汎用マシンドライバ
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Device Tree: ARM Hardware Description](../drivers/device-tree.md) — the `of_node`/phandle mechanism `snd_soc_dai_link_component` and simple-card/audio-graph-card build on
-- [I2C and SPI Bus Drivers](../drivers/i2c-spi.md) — the control bus most codec drivers register on
-- [Platform Drivers](../drivers/platform-driver.md) — the `platform_device`/`platform_driver` pattern CPU DAI and machine drivers both use
-- [ALSA War Stories](war-stories.md) — incident record for the PCM/rawmidi/USB-audio layers ASoC's `dai_link`s ultimately sit on top of
+- [Device Tree: ARMのハードウェア記述](../drivers/device-tree.md) — `snd_soc_dai_link_component`とsimple-card/audio-graph-cardが土台とする`of_node`/phandleの仕組み
+- [I2CとSPIのバスドライバ](../drivers/i2c-spi.md) — ほとんどのコーデックドライバが登録される制御バス
+- [プラットフォームドライバ](../drivers/platform-driver.md) — CPU DAIドライバとマシンドライバの両方が使う`platform_device`/`platform_driver`パターン
+- [ALSAの事件簿](war-stories.md) — ASoCの`dai_link`が最終的にその上に乗っているPCM/rawmidi/USBオーディオ層の事件記録
 
-### External {#external}
+### 外部資料 {#external}
 
-- [ALSA SoC Layer Overview](https://docs.kernel.org/sound/soc/overview.html) — the problem statement and the codec/platform/machine split
-- [ASoC Machine Driver](https://docs.kernel.org/sound/soc/machine.html) — the machine driver's role (note: its inline code sample predates the current `cpus[]`/`codecs[]`/`platforms[]` array shape — the `SND_SOC_DAILINK_DEFS` form on this page reflects current mainline)
-- [ASoC Codec Class Driver](https://docs.kernel.org/sound/soc/codec.html) — codec driver responsibilities
-- [ASoC Digital Audio Interface (DAI)](https://docs.kernel.org/sound/soc/dai.html) — AC97/I2S/PCM wire protocols
-- [Dynamic Audio Power Management for Portable Devices](https://docs.kernel.org/sound/soc/dapm.html) — the widget/route model and power domains
+- [ALSA SoC Layer Overview](https://docs.kernel.org/sound/soc/overview.html) — 問題提起と、コーデック/プラットフォーム/マシンの分割
+- [ASoC Machine Driver](https://docs.kernel.org/sound/soc/machine.html) — マシンドライバの役割（注: その中のコード例は現在の`cpus[]`/`codecs[]`/`platforms[]`配列の形より前のものである。このページの`SND_SOC_DAILINK_DEFS`形式が現在のメインラインを反映している）
+- [ASoC Codec Class Driver](https://docs.kernel.org/sound/soc/codec.html) — コーデックドライバの責務
+- [ASoC Digital Audio Interface (DAI)](https://docs.kernel.org/sound/soc/dai.html) — AC97/I2S/PCMの配線プロトコル
+- [Dynamic Audio Power Management for Portable Devices](https://docs.kernel.org/sound/soc/dapm.html) — ウィジェット/ルートモデルと電源ドメイン
 - [Simple Audio Card devicetree binding](https://www.kernel.org/doc/Documentation/devicetree/bindings/sound/simple-card.yaml)
 - [Audio Graph Card devicetree binding](https://www.kernel.org/doc/Documentation/devicetree/bindings/sound/audio-graph-card.yaml)

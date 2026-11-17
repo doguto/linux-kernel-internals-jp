@@ -1,16 +1,16 @@
-# The ALSA PCM Data Path: Ring Buffer, Periods, hw_params, and mmap {#the-alsa-pcm-data-path-ring-buffer-periods-hw_params-and-mmap}
+# ALSA PCMのデータパス: リングバッファ、period、hw_params、mmap {#the-alsa-pcm-data-path-ring-buffer-periods-hw_params-and-mmap}
 
-> One ring buffer shared between a driver's DMA engine and userspace, two pointers that track how full it is, and one interrupt that keeps both sides honest
+> ドライバのDMAエンジンとユーザー空間が共有する1つのリングバッファ、その埋まり具合を追跡する2つのポインタ、そして両者に辻褄を合わせさせる1つの割り込み
 
-## The problem: getting audio samples across a driver boundary, continuously {#the-problem-getting-audio-samples-across-a-driver-boundary-continuously}
+## 問題: ドライバ境界を越えてオーディオサンプルを途切れなく受け渡す {#the-problem-getting-audio-samples-across-a-driver-boundary-continuously}
 
-A sound card doesn't ask for data once — it wants a steady stream of samples arriving (or leaving) at exactly its sample rate, forever, for as long as playback or capture runs. Userspace doesn't work that way: it wakes up, does other things, and comes back later to top up a buffer. Something has to reconcile a hardware DMA engine that consumes or produces samples in fixed lockstep with a scheduler-driven process that fills or drains a buffer in bursts, without either side ever finding the buffer empty (an underrun, an audible glitch) or unread (an overrun, dropped samples).
+サウンドカードはデータを一度だけ要求するわけではない。再生や録音が続く限り、ずっと、まさに自分のサンプルレートでサンプルが到着（または出発）し続けることを求める。ユーザー空間はそのようには動かない。起床し、ほかのことをして、あとで戻ってきてバッファを補充する。固定の歩調でサンプルを消費または生成するハードウェアのDMAエンジンと、スケジューラに駆動されてバーストでバッファを満たしたり排出したりするプロセスとを、どちらの側もバッファが空（アンダーラン、聞こえるグリッチ）や未読（オーバーラン、サンプルの欠落）の状態を見ることがないように調停する何かが必要である。
 
-ALSA's answer is `snd_pcm` — the PCM ("Pulse-Code Modulation") layer that every sound driver, from a USB headset to an HDMI codec to a hardware DSP, implements against. It is one ring buffer per stream direction, a fixed division of that buffer into **periods** that set the interrupt granularity, and two positions — `hw_ptr` and `appl_ptr` — that respectively track how far the hardware has gotten and how far the application has gotten. This page covers the mechanics: the structures a driver and userspace actually touch (`struct snd_pcm_substream`, `struct snd_pcm_runtime`), how a period size and buffer size get negotiated, how userspace gets a zero-copy `mmap()`'d view of the buffer, and how a driver's interrupt handler drives the whole thing forward.
+ALSAの答えは`snd_pcm`である。USBヘッドセットからHDMIコーデック、ハードウェアDSPに至るまで、あらゆるサウンドドライバが実装の対象とするPCM（"Pulse-Code Modulation"）層だ。これはストリームの方向ごとに1つのリングバッファであり、そのバッファを割り込みの粒度を決める**period**に固定的に分割したものと、2つの位置、すなわちハードウェアがどこまで進んだかとアプリケーションがどこまで進んだかをそれぞれ追跡する`hw_ptr`と`appl_ptr`からなる。このページではその仕組みを扱う。ドライバとユーザー空間が実際に触れる構造体（`struct snd_pcm_substream`、`struct snd_pcm_runtime`）、periodサイズとバッファサイズがどのようにネゴシエートされるか、ユーザー空間がどのようにバッファのゼロコピーな`mmap()`ビューを得るか、そしてドライバの割り込みハンドラがどのように全体を前に進めるかである。
 
-## `struct snd_pcm_substream` and `struct snd_pcm_runtime` {#struct-sndpcmsubstream-and-struct-sndpcmruntime}
+## `struct snd_pcm_substream`と`struct snd_pcm_runtime` {#struct-sndpcmsubstream-and-struct-sndpcmruntime}
 
-A `struct snd_pcm` is a sound card's PCM device — "device 0," say, a card's default audio device — and it can expose a playback direction, a capture direction, or both, each as a `struct snd_pcm_str`. Opening a device's playback or capture direction gets a process a `struct snd_pcm_substream` (`include/sound/pcm.h`), one per concurrently-open stream:
+`struct snd_pcm`はサウンドカードのPCMデバイス（たとえばカードのデフォルトのオーディオデバイスである「デバイス0」）であり、再生方向、録音方向、またはその両方を、それぞれ`struct snd_pcm_str`として公開できる。デバイスの再生方向または録音方向を開くと、プロセスは`struct snd_pcm_substream`（`include/sound/pcm.h`）を得る。同時に開かれたストリームごとに1つである。
 
 ```c
 // include/sound/pcm.h
@@ -49,7 +49,7 @@ struct snd_pcm_substream {
 };
 ```
 
-`substream->ops` is the driver's vtable (`struct snd_pcm_ops`, covered below) — the only place driver code plugs into this machinery. `substream->runtime` is where nearly everything else lives: `struct snd_pcm_runtime` is, in the kernel doc's own framing in `Documentation/sound/kernel-api/writing-an-alsa-driver.rst`, "the chest of PCM information" — allocated fresh in `snd_pcm_attach_substream()` (`sound/core/pcm.c`, called from `snd_pcm_open()`'s open path) and freed on close, so it exists only while the stream is open. Its fields split cleanly into the categories the rest of this page walks through:
+`substream->ops`はドライバのvtable（`struct snd_pcm_ops`、後述）であり、ドライバのコードがこの仕組みに差し込まれる唯一の場所である。それ以外のほぼすべては`substream->runtime`にある。`struct snd_pcm_runtime`は、`Documentation/sound/kernel-api/writing-an-alsa-driver.rst`にあるカーネルドキュメント自身の表現によれば「PCM情報の宝箱」である。`snd_pcm_attach_substream()`（`sound/core/pcm.c`、`snd_pcm_open()`のオープンパスから呼ばれる）で新たに割り当てられ、クローズ時に解放されるので、ストリームが開いている間だけ存在する。そのフィールドは、このページの残りで順に見ていくカテゴリにきれいに分かれる。
 
 ```c
 // include/sound/pcm.h
@@ -130,26 +130,26 @@ struct snd_pcm_runtime {
 };
 ```
 
-`runtime->private_data` is a driver-owned pointer — most drivers stash a small per-stream struct there (timer state, DMA channel handle, whatever the hardware backend needs) via `.open`, and free it via `.close`. `runtime->hw` (a `struct snd_pcm_hardware`) is the capability description a driver hands back at open time; `runtime->status`/`runtime->control` are the two mmap'd structs that carry `hw_ptr` and `appl_ptr` to userspace, covered in the mmap section below.
+`runtime->private_data`はドライバが所有するポインタである。ほとんどのドライバは、`.open`でそこにストリームごとの小さな構造体（タイマーの状態、DMAチャネルのハンドル、ハードウェアのバックエンドが必要とするものなら何でも）を置き、`.close`で解放する。`runtime->hw`（`struct snd_pcm_hardware`）は、ドライバがオープン時に返す能力の記述である。`runtime->status`/`runtime->control`は、`hw_ptr`と`appl_ptr`をユーザー空間に運ぶ2つのmmapされた構造体であり、後述のmmapの節で扱う。
 
-## The ring buffer model: periods and frames {#the-ring-buffer-model-periods-and-frames}
+## リングバッファモデル: periodとフレーム {#the-ring-buffer-model-periods-and-frames}
 
-The DMA buffer (`runtime->dma_area`, sized `runtime->dma_bytes`) is a single, contiguous ring. Data is measured in **frames** — one sample per channel, so a frame for 16-bit stereo is 4 bytes; for 24-bit 6-channel it depends on which 24-bit *format* is in use — 18 bytes for the tightly-packed `S24_3LE` (3 bytes/sample), but 24 bytes for the far more common `S24_LE` (which stores the 24-bit value in the low three bytes of a 4-byte container). (`S24_LE`/`S24_3LE` are distinct entries in `SNDRV_PCM_FORMAT_*`, not variants of a single format's `subformat` field — `subformat` is a separate, mostly-unused hw_params dimension of its own, see `SNDRV_PCM_SUBFORMAT_*`.) Frame count itself is independent of format and channel count, which is what lets the rest of the PCM core reason about buffer position without caring what's actually in the bytes.
+DMAバッファ（`runtime->dma_area`、サイズは`runtime->dma_bytes`）は単一の連続したリングである。データは**フレーム**単位で計られる。フレームはチャネルごとに1サンプルなので、16ビットステレオのフレームは4バイトである。24ビット6チャネルの場合は、どの24ビット*フォーマット*を使うかによる。隙間なく詰め込まれた`S24_3LE`（1サンプル3バイト）なら18バイトだが、はるかに一般的な`S24_LE`（24ビット値を4バイトのコンテナの下位3バイトに格納する）なら24バイトである。（`S24_LE`/`S24_3LE`は`SNDRV_PCM_FORMAT_*`の別々のエントリであり、単一フォーマットの`subformat`フィールドの変種ではない。`subformat`はそれ自体が別個の、ほとんど使われないhw_paramsの次元である。`SNDRV_PCM_SUBFORMAT_*`を参照。）フレーム数そのものはフォーマットやチャネル数とは独立しており、だからこそPCMコアの残りの部分は、バイトに実際に何が入っているかを気にせずにバッファ位置を扱える。
 
-The buffer is carved into `runtime->periods` equal-sized chunks of `runtime->period_size` frames each, so `buffer_size == period_size * periods`. A period is the **interrupt granularity**: the driver's hardware is expected to raise one interrupt every time it finishes consuming (playback) or producing (capture) one period's worth of frames, and that interrupt is what tells the PCM core "a period elapsed" — see [`snd_pcm_period_elapsed()`](#the-interrupt-driven-update-snd_pcm_period_elapsed) below. This is the same design OSS called a "fragment."
+バッファは、それぞれ`runtime->period_size`フレームからなる`runtime->periods`個の等しいサイズの塊に分割されるので、`buffer_size == period_size * periods`となる。periodは**割り込みの粒度**である。ドライバのハードウェアは、1 period分のフレームを消費（再生）または生成（録音）し終えるたびに1回割り込みを上げることが期待されており、その割り込みがPCMコアに「periodが経過した」ことを伝える。後述の[`snd_pcm_period_elapsed()`](#the-interrupt-driven-update-snd_pcm_period_elapsed)を参照。これはOSSが「フラグメント」と呼んでいたのと同じ設計である。
 
-The size of a period is a direct latency/overhead tradeoff, and it's the central tuning knob of the whole data path:
+periodのサイズはレイテンシとオーバーヘッドの直接的なトレードオフであり、データパス全体の中心的な調整つまみである。
 
-- **Smaller periods** mean more frequent interrupts, so the kernel notices "you can write more now" (or "more is ready to read") sooner after the hardware consumes data — lower latency, because userspace doesn't have to keep as much data pre-buffered to survive the gap between wakeups. The cost is more interrupts per second: more CPU time in the IRQ handler, more scheduler wakeups, worse power behavior on anything that wants to stay idle.
-- **Larger periods** mean fewer, cheaper interrupts and more slack for a userspace process that gets scheduled late — good for power and for anything sharing the CPU with bursty, less time-critical work — at the cost of needing more data buffered ahead of time to avoid an underrun, which is exactly what higher latency means in practice.
+- **periodを小さくする**と割り込みが頻繁になるので、ハードウェアがデータを消費してから、カーネルが「もっと書き込める」（または「読み出せるデータが増えた」）ことに気づくまでが早くなる。ユーザー空間はウェイクアップの間隔を乗り切るためにそれほど多くのデータを事前にバッファしておく必要がないので、レイテンシが下がる。代償は1秒あたりの割り込みの増加である。IRQハンドラで費やすCPU時間が増え、スケジューラのウェイクアップが増え、アイドルでいたいものすべてにとって電力特性が悪化する。
+- **periodを大きくする**と割り込みは少なく安価になり、スケジュールが遅れたユーザー空間プロセスにとっての余裕も増える。電力にとっても、バースト的で時間的制約の緩い処理とCPUを共有するものにとっても好ましい。代償は、アンダーランを避けるためにより多くのデータを事前にバッファしておく必要があることであり、これはまさに実際にはレイテンシが高いということを意味する。
 
-`buffer_size` itself, independent of how it's divided into periods, sets the outer bound: for playback it's how much audio can be queued before `write()` blocks or an `mmap()`'d ring fills up; for capture it's how long the hardware can keep producing data before an unread buffer overflows. A driver constrains both dimensions via `struct snd_pcm_hardware`, and userspace negotiates a specific point inside those constraints during `hw_params` — the next section.
+`buffer_size`そのものは、それがperiodにどう分割されるかとは独立に、外側の上限を決める。再生では、`write()`がブロックするか`mmap()`されたリングが満杯になるまでにどれだけのオーディオをキューに入れられるかであり、録音では、未読のバッファがあふれるまでにハードウェアがどれだけの時間データを生成し続けられるかである。ドライバは`struct snd_pcm_hardware`を通じて両方の次元を制約し、ユーザー空間は`hw_params`の間にその制約内の特定の点をネゴシエートする。これが次の節である。
 
-## hw_params negotiation {#hw_params-negotiation}
+## hw_paramsのネゴシエーション {#hw_params-negotiation}
 
-### The driver's declared capability: `struct snd_pcm_hardware` {#the-drivers-declared-capability-struct-sndpcmhardware}
+### ドライバが宣言する能力: `struct snd_pcm_hardware` {#the-drivers-declared-capability-struct-sndpcmhardware}
 
-At `.open` time, a driver fills in `runtime->hw` with what its hardware can actually do:
+`.open`の時点で、ドライバは`runtime->hw`に自身のハードウェアが実際にできることを書き込む。
 
 ```c
 // include/sound/pcm.h
@@ -171,11 +171,11 @@ struct snd_pcm_hardware {
 };
 ```
 
-`info` carries capability flags like `SNDRV_PCM_INFO_MMAP` (can this stream be `mmap()`'d at all — see below) and `SNDRV_PCM_INFO_INTERLEAVED`/`NONINTERLEAVED` (channel layout in the buffer). `rates`/`formats` are bitmasks (`SNDRV_PCM_RATE_44100`, `SNDRV_PCM_FMTBIT_S16_LE`, and so on); `rate_min`/`rate_max`/`channels_min`/`channels_max` bound the continuous ranges. Drivers can additionally register `hw_constraints` rules (`snd_pcm_hw_constraint_*()`) for relationships the flat `snd_pcm_hardware` struct can't express — e.g., "this channel count is only valid at these specific rates."
+`info`は、`SNDRV_PCM_INFO_MMAP`（このストリームがそもそも`mmap()`可能か。後述）や`SNDRV_PCM_INFO_INTERLEAVED`/`NONINTERLEAVED`（バッファ内のチャネル配置）といった能力フラグを運ぶ。`rates`/`formats`はビットマスク（`SNDRV_PCM_RATE_44100`、`SNDRV_PCM_FMTBIT_S16_LE`など）であり、`rate_min`/`rate_max`/`channels_min`/`channels_max`は連続範囲の境界を定める。ドライバはさらに、平坦な`snd_pcm_hardware`構造体では表現できない関係（たとえば「このチャネル数はこれらの特定のレートでのみ有効」）のために、`hw_constraints`のルール（`snd_pcm_hw_constraint_*()`）を登録できる。
 
-### The negotiation itself: refine, then commit {#the-negotiation-itself-refine-then-commit}
+### ネゴシエーションそのもの: 絞り込み、そして確定 {#the-negotiation-itself-refine-then-commit}
 
-Userspace's ALSA-lib layer (`snd_pcm_hw_params()` in libasound, not to be confused with the kernel-side function of the same name) works by iteratively narrowing a `struct snd_pcm_hw_params` — a fixed-size array of masks (for enum-like parameters: access mode, format, subformat) and intervals (for ranged parameters: rate, channels, period size, periods, buffer size), indexed by parameter IDs like `SNDRV_PCM_HW_PARAM_ACCESS`, `SNDRV_PCM_HW_PARAM_FORMAT`, `SNDRV_PCM_HW_PARAM_RATE`, `SNDRV_PCM_HW_PARAM_PERIOD_SIZE`, `SNDRV_PCM_HW_PARAM_PERIODS`, `SNDRV_PCM_HW_PARAM_BUFFER_SIZE`, and so on. Each round trip is `SNDRV_PCM_IOCTL_HW_REFINE`, which lands on `snd_pcm_hw_refine()` (`sound/core/pcm_native.c`):
+ユーザー空間のALSA-lib層（libasoundの`snd_pcm_hw_params()`。カーネル側の同名の関数と混同しないこと）は、`struct snd_pcm_hw_params`を繰り返し絞り込むことで動作する。これは、マスク（列挙型のようなパラメータ: アクセスモード、フォーマット、サブフォーマット）と区間（範囲を持つパラメータ: レート、チャネル数、periodサイズ、period数、バッファサイズ）からなる固定サイズの配列であり、`SNDRV_PCM_HW_PARAM_ACCESS`、`SNDRV_PCM_HW_PARAM_FORMAT`、`SNDRV_PCM_HW_PARAM_RATE`、`SNDRV_PCM_HW_PARAM_PERIOD_SIZE`、`SNDRV_PCM_HW_PARAM_PERIODS`、`SNDRV_PCM_HW_PARAM_BUFFER_SIZE`などのパラメータIDでインデックスされる。各往復は`SNDRV_PCM_IOCTL_HW_REFINE`であり、`snd_pcm_hw_refine()`（`sound/core/pcm_native.c`）に到達する。
 
 ```c
 // sound/core/pcm_native.c
@@ -204,9 +204,9 @@ int snd_pcm_hw_refine(struct snd_pcm_substream *substream,
 }
 ```
 
-`constrain_mask_params()` and `constrain_interval_params()` intersect each requested mask/interval against `runtime->hw` and the registered `hw_constraints` rules, shrinking the ranges in place; `constrain_params_by_rules()` applies the cross-parameter rules (e.g., format constraining sample bits constraining frame bits). Userspace calls this repeatedly, narrowing one parameter at a time, until every mask is a single value and every interval is a single point — a fully-specified configuration.
+`constrain_mask_params()`と`constrain_interval_params()`は、要求された各マスク/区間を`runtime->hw`および登録された`hw_constraints`ルールと交差させ、範囲をその場で縮める。`constrain_params_by_rules()`はパラメータ間のルール（たとえば、フォーマットがサンプルビット数を制約し、それがフレームビット数を制約する）を適用する。ユーザー空間は、すべてのマスクが単一の値になり、すべての区間が単一の点になる（完全に指定された構成になる）まで、一度に1つのパラメータを絞り込みながらこれを繰り返し呼ぶ。
 
-The actual commit is `SNDRV_PCM_IOCTL_HW_PARAMS`, `snd_pcm_hw_params()` in `pcm_native.c`. It re-runs `snd_pcm_hw_refine()` on the final params, picks concrete values via `snd_pcm_hw_params_choose()`, allocates the DMA buffer if the driver uses managed allocation, and — only once everything else has succeeded — calls the driver's own `.hw_params` callback so it can program format/rate/channel registers. On success it copies the negotiated values into the runtime fields covered above (`runtime->access`, `format`, `channels`, `rate`, `period_size`, `periods`, `buffer_size`, ...) and also seeds default software parameters:
+実際の確定は`SNDRV_PCM_IOCTL_HW_PARAMS`、すなわち`pcm_native.c`の`snd_pcm_hw_params()`である。これは最終的なパラメータに対して`snd_pcm_hw_refine()`を再実行し、`snd_pcm_hw_params_choose()`で具体的な値を選び、ドライバが管理された割り当てを使う場合はDMAバッファを割り当て、そして、ほかのすべてが成功した後でのみ、ドライバ自身の`.hw_params`コールバックを呼んで、フォーマット/レート/チャネルのレジスタを設定させる。成功すると、ネゴシエートされた値を上で見たruntimeのフィールド（`runtime->access`、`format`、`channels`、`rate`、`period_size`、`periods`、`buffer_size`、...）にコピーし、デフォルトのソフトウェアパラメータも設定する。
 
 ```c
 // sound/core/pcm_native.c — snd_pcm_hw_params(), abridged
@@ -232,15 +232,15 @@ while (runtime->boundary * 2 <= LONG_MAX - runtime->buffer_size)
 	runtime->boundary *= 2;
 ```
 
-The stream moves from `SNDRV_PCM_STATE_OPEN` to `SNDRV_PCM_STATE_SETUP`. `boundary` deserves a note: it's not the buffer size — it's the largest power-of-two multiple of `buffer_size` that still fits comfortably below `LONG_MAX` (the doubling loop above), and it's the modulus `hw_ptr` and `appl_ptr` wrap around at (not `buffer_size` itself), which is what lets the core distinguish "the buffer has wrapped N times" from "the pointers are equal" while still doing simple arithmetic on them.
+ストリームは`SNDRV_PCM_STATE_OPEN`から`SNDRV_PCM_STATE_SETUP`に移行する。`boundary`については一言述べておく価値がある。これはバッファサイズではない。`LONG_MAX`より十分下に収まる、`buffer_size`の2のべき乗倍のうち最大のもの（上の倍々ループ）であり、`hw_ptr`と`appl_ptr`が（`buffer_size`そのものではなく）それで折り返す法である。これによってコアは、ポインタに対して単純な算術を行いながらも、「バッファがN回折り返した」と「ポインタが等しい」とを区別できる。
 
-### sw_params: policy, not capability {#sw_params-policy-not-capability}
+### sw_params: 能力ではなくポリシー {#sw_params-policy-not-capability}
 
-Where `hw_params` describes what the hardware supports, `SNDRV_PCM_IOCTL_SW_PARAMS` (`struct snd_pcm_sw_params`, handled by `snd_pcm_sw_params()`) tunes how the *core* behaves around that hardware — when to auto-start the stream (`start_threshold`, minimum `hw_avail` frames queued before playback starts automatically), when to auto-stop on underrun (`stop_threshold`), and `avail_min`, the minimum available-frame count that triggers a `poll()`/`select()` wakeup — the knob that determines how eagerly a period-driven interrupt actually wakes a blocked userspace process versus letting more accumulate first. `silence_threshold`/`silence_size` are a related but distinct pair: they don't wait for an underrun to fire — `snd_pcm_playback_silence()` (`sound/core/pcm_lib.c`) runs on every hw_ptr update and proactively writes silence into the buffer *ahead* of `hw_ptr`, up to `silence_size` frames, whenever the gap between `hw_ptr` and `appl_ptr` (the "noise distance," i.e. how much real, not-yet-overwritten data is still queued) drops below `silence_threshold`. That keeps the hardware from ever reading stale/garbage samples if userspace falls behind, independent of whether an actual xrun has happened yet.
+`hw_params`がハードウェアのサポートするものを記述するのに対し、`SNDRV_PCM_IOCTL_SW_PARAMS`（`struct snd_pcm_sw_params`、`snd_pcm_sw_params()`が処理する）は、そのハードウェアの周りで*コア*がどう振る舞うかを調整する。いつストリームを自動開始するか（`start_threshold`。再生が自動的に始まる前にキューに入っているべき`hw_avail`フレームの最小数）、アンダーラン時にいつ自動停止するか（`stop_threshold`）、そして`avail_min`である。`avail_min`は`poll()`/`select()`のウェイクアップを引き起こす利用可能フレーム数の最小値であり、periodによる割り込みが、ブロックしているユーザー空間プロセスを実際にどれだけ積極的に起こすか、それとも先にもっと溜まるのを待つかを決めるつまみである。`silence_threshold`/`silence_size`は関連するが別個の組である。これらはアンダーランが起きるのを待たない。`snd_pcm_playback_silence()`（`sound/core/pcm_lib.c`）はhw_ptrが更新されるたびに走り、`hw_ptr`と`appl_ptr`の間隔（「ノイズ距離」、すなわちまだ上書きされていない本物のデータがどれだけキューに残っているか）が`silence_threshold`を下回るたびに、`hw_ptr`より*先*のバッファに最大`silence_size`フレームの無音を先回りして書き込む。これにより、実際のxrunがすでに起きたかどうかとは無関係に、ユーザー空間が遅れてもハードウェアが古い/ゴミのサンプルを読むことは決してなくなる。
 
-## The mmap path: a zero-copy view of the ring buffer {#the-mmap-path-a-zero-copy-view-of-the-ring-buffer}
+## mmapパス: リングバッファのゼロコピーなビュー {#the-mmap-path-a-zero-copy-view-of-the-ring-buffer}
 
-For drivers advertising `SNDRV_PCM_INFO_MMAP`, userspace can skip `read()`/`write()` entirely and `mmap()` the ring buffer directly, writing (or reading) sample frames in place. The kernel side is `snd_pcm_mmap_data()` (`sound/core/pcm_native.c`), reached through the PCM device's `mmap` file operation once it's determined the requested offset isn't the status/control page (see below):
+`SNDRV_PCM_INFO_MMAP`を通知するドライバでは、ユーザー空間は`read()`/`write()`をまったく使わずに、リングバッファを直接`mmap()`し、サンプルフレームをその場で書き込む（または読み出す）ことができる。カーネル側は`snd_pcm_mmap_data()`（`sound/core/pcm_native.c`）であり、要求されたオフセットがstatus/controlページ（後述）でないと判断された後に、PCMデバイスの`mmap`ファイル操作を通じて到達する。
 
 ```c
 // sound/core/pcm_native.c
@@ -288,11 +288,11 @@ int snd_pcm_mmap_data(struct snd_pcm_substream *substream, struct file *file,
 }
 ```
 
-It rejects mixing `mmap()` with the interleaved/noninterleaved `read`/`write` access modes (a stream picks one access model at `hw_params` time and sticks to it), bounds-checks the requested VMA against the actual DMA buffer size, and then either calls the driver's own `.mmap` op or falls back to `snd_pcm_lib_default_mmap()`, which either maps the buffer's pages directly (for a `dma_alloc_coherent()`-backed buffer this is often a straight `remap_pfn_range()`-style mapping via `snd_dma_buffer_mmap()`) or installs a page-fault handler (`snd_pcm_mmap_data_fault()`) that resolves individual pages on demand — the path a driver without a linear kernel-virtual DMA mapping takes, calling `substream->ops->page()` per fault.
+この関数は、`mmap()`をインターリーブ/非インターリーブの`read`/`write`アクセスモードと混在させることを拒否し（ストリームは`hw_params`の時点で1つのアクセスモデルを選び、それを使い続ける）、要求されたVMAを実際のDMAバッファサイズに対して境界チェックし、そのうえでドライバ自身の`.mmap`操作を呼ぶか、`snd_pcm_lib_default_mmap()`にフォールバックする。後者は、バッファのページを直接マップする（`dma_alloc_coherent()`で確保されたバッファでは、これは多くの場合`snd_dma_buffer_mmap()`による素直な`remap_pfn_range()`的なマッピングである）か、個々のページをオンデマンドで解決するページフォールトハンドラ（`snd_pcm_mmap_data_fault()`）をインストールする。後者は、線形なカーネル仮想DMAマッピングを持たないドライバがたどるパスであり、フォールトごとに`substream->ops->page()`を呼ぶ。
 
-### The other two mmap regions: status and control {#the-other-two-mmap-regions-status-and-control}
+### 残り2つのmmap領域: statusとcontrol {#the-other-two-mmap-regions-status-and-control}
 
-The ring buffer itself is one of three things a PCM file descriptor can be `mmap()`'d for. The other two are fixed-offset, fixed-size structures — `SNDRV_PCM_MMAP_OFFSET_STATUS`/`_CONTROL` — that carry the position pointers, so userspace never needs an ioctl round trip just to check "how much room is left." The uapi header's "base" struct tags are actually `struct __snd_pcm_mmap_status`/`__snd_pcm_mmap_control`, a simplified 32-bit-timestamp layout with 6 and 2 fields respectively. But `include/uapi/sound/asound.h` defines `__SND_STRUCT_TIME64` whenever `__KERNEL__` is set, and under that macro it renames the larger `*64` variants — `struct __snd_pcm_mmap_status64`/`__snd_pcm_mmap_control64` — to the plain names `snd_pcm_mmap_status`/`snd_pcm_mmap_control` via `#define`. So in-kernel (and for y2038-safe 64-bit userspace), those plain names actually resolve to the bigger, padded structs, and `runtime->status`/`runtime->control` point at these, not the smaller ones:
+リングバッファ自体は、PCMファイルディスクリプタを`mmap()`できる3つの対象のうちの1つである。残りの2つは固定オフセット・固定サイズの構造体（`SNDRV_PCM_MMAP_OFFSET_STATUS`/`_CONTROL`）であり、位置ポインタを運ぶ。そのため、ユーザー空間は「あとどれだけ空きがあるか」を確認するためだけにioctlの往復をする必要がない。uapiヘッダの「基本」構造体タグは実際には`struct __snd_pcm_mmap_status`/`__snd_pcm_mmap_control`であり、それぞれ6個と2個のフィールドを持つ、32ビットタイムスタンプの簡略化されたレイアウトである。しかし`include/uapi/sound/asound.h`は`__KERNEL__`が設定されていれば常に`__SND_STRUCT_TIME64`を定義し、そのマクロの下で、より大きな`*64`版である`struct __snd_pcm_mmap_status64`/`__snd_pcm_mmap_control64`を、`#define`によって素の名前`snd_pcm_mmap_status`/`snd_pcm_mmap_control`に改名する。したがってカーネル内（およびy2038安全な64ビットユーザー空間）では、それらの素の名前は実際にはより大きなパディング付きの構造体に解決され、`runtime->status`/`runtime->control`が指すのは小さいほうではなくこちらである。
 
 ```c
 // include/uapi/sound/asound.h — the struct kernel builds actually get for
@@ -320,11 +320,11 @@ struct snd_pcm_mmap_control {
 };
 ```
 
-`runtime->status` and `runtime->control` in `struct snd_pcm_runtime` point at these same structures — the kernel and userspace's mmap'd view are the same memory. `hw_ptr` is written only by the kernel (updated from the driver's `.pointer` callback, see the next section); `appl_ptr` is written by userspace (or, for non-mmap `read()`/`write()` streams, by the kernel on the application's behalf) to say how far it has consumed or produced.
+`struct snd_pcm_runtime`の`runtime->status`と`runtime->control`は、これと同じ構造体を指している。カーネルとユーザー空間のmmapされたビューは同じメモリである。`hw_ptr`はカーネルだけが書き込む（ドライバの`.pointer`コールバックから更新される。次の節を参照）。`appl_ptr`はユーザー空間が（mmapでない`read()`/`write()`のストリームでは、アプリケーションに代わってカーネルが）書き込み、どこまで消費または生成したかを示す。
 
-### `appl_ptr` and `hw_ptr`: producer and consumer position {#applptr-and-hwptr-producer-and-consumer-position}
+### `appl_ptr`と`hw_ptr`: 生産者と消費者の位置 {#applptr-and-hwptr-producer-and-consumer-position}
 
-Both are frame offsets that increase monotonically and wrap at `runtime->boundary`, not at `buffer_size` — the actual position within the ring is `pointer % buffer_size`, but keeping the counters unwrapped past the buffer size is what lets the core tell "the hardware is 1.5 buffers ahead of where it started" from "the hardware is exactly one buffer position ahead," which distinguishes a healthy running stream from one that silently wrapped an extra time. For playback: `hw_ptr` is how far the hardware has *consumed* (played) into the buffer; `appl_ptr` is how far userspace has *written*. The gap between them is exactly the queued-but-not-yet-played data, computed in `snd_pcm_playback_avail()` (`include/sound/pcm.h`) as the inverse — free space still available to write:
+どちらも単調増加するフレームオフセットであり、`buffer_size`ではなく`runtime->boundary`で折り返す。リング内の実際の位置は`pointer % buffer_size`だが、カウンタをバッファサイズを超えても折り返さずに保つことで、コアは「ハードウェアが開始位置から1.5バッファ先にいる」と「ハードウェアがちょうど1バッファ位置先にいる」とを区別できる。これにより、健全に動作しているストリームと、気づかないうちに余分に1回折り返したストリームとを見分けられる。再生では、`hw_ptr`はハードウェアがバッファをどこまで*消費*（再生）したかであり、`appl_ptr`はユーザー空間がどこまで*書き込んだ*かである。その間隔はまさにキューに入っているがまだ再生されていないデータであり、`snd_pcm_playback_avail()`（`include/sound/pcm.h`）ではその逆、つまりまだ書き込める空き領域として計算される。
 
 ```c
 // include/sound/pcm.h
@@ -339,9 +339,9 @@ static inline snd_pcm_uframes_t snd_pcm_playback_avail(struct snd_pcm_runtime *r
 }
 ```
 
-For capture the relationship inverts: `hw_ptr` is how far the hardware has *produced* (captured), `appl_ptr` is how far userspace has *read*, and `snd_pcm_capture_avail()` is simply `hw_ptr - appl_ptr` (mod boundary) — the amount of freshly captured, not-yet-read data. In both directions, the two pointers are only ever allowed to differ by at most `buffer_size` frames; hitting that limit without the consumer catching up is exactly an xrun (an underrun for playback, an overrun for capture).
+録音では関係が逆転する。`hw_ptr`はハードウェアがどこまで*生成*（録音）したかであり、`appl_ptr`はユーザー空間がどこまで*読んだ*かであり、`snd_pcm_capture_avail()`は単に`hw_ptr - appl_ptr`（boundaryを法とする）、すなわち新たに録音されてまだ読まれていないデータ量である。どちらの方向でも、2つのポインタの差は最大`buffer_size`フレームまでしか許されない。消費者が追いつかないままその限界に達することが、まさにxrun（再生ではアンダーラン、録音ではオーバーラン）である。
 
-## Ring buffer diagram {#ring-buffer-diagram}
+## リングバッファの図 {#ring-buffer-diagram}
 
 ```
                      buffer_size = period_size * periods  (here: 4 periods)
@@ -370,9 +370,9 @@ For capture the relationship inverts: `hw_ptr` is how far the hardware has *prod
   One IRQ per period boundary crossed -> snd_pcm_period_elapsed()
 ```
 
-## The interrupt-driven update: `snd_pcm_period_elapsed()` {#the-interrupt-driven-update-sndpcmperiod_elapsed}
+## 割り込み駆動の更新: `snd_pcm_period_elapsed()` {#the-interrupt-driven-update-sndpcmperiod_elapsed}
 
-The driver side of the loop is: an IRQ fires when the DMA engine finishes a period, and the driver's handler calls `snd_pcm_period_elapsed()` (`sound/core/pcm_lib.c`):
+ループのドライバ側はこうである。DMAエンジンがperiodを終えるとIRQが発生し、ドライバのハンドラが`snd_pcm_period_elapsed()`（`sound/core/pcm_lib.c`）を呼ぶ。
 
 ```c
 // sound/core/pcm_lib.c
@@ -387,7 +387,7 @@ void snd_pcm_period_elapsed(struct snd_pcm_substream *substream)
 EXPORT_SYMBOL(snd_pcm_period_elapsed);
 ```
 
-which, under the substream lock, calls `snd_pcm_update_hw_ptr0()`. That function is where the driver's `.pointer` callback actually gets invoked:
+これはsubstreamのロックの下で`snd_pcm_update_hw_ptr0()`を呼ぶ。この関数こそが、ドライバの`.pointer`コールバックが実際に呼び出される場所である。
 
 ```c
 // sound/core/pcm_lib.c — snd_pcm_update_hw_ptr0(), abridged
@@ -417,13 +417,13 @@ if (new_hw_ptr < old_hw_ptr) {
 }
 ```
 
-Note the contract this puts on a driver's `.pointer` callback: it returns a raw position *within the buffer* — `0 .. buffer_size - 1` (or `SNDRV_PCM_POS_XRUN` if the hardware has already xrun) — and the core is entirely responsible for turning that wrapped, hardware-relative position into the monotonically increasing, boundary-wrapped `hw_ptr` that `snd_pcm_playback_avail()`/`snd_pcm_capture_avail()` consume, by tracking `hw_ptr_base` and detecting the wraparound itself. A driver normally never writes `runtime->status->hw_ptr` directly — the exceptions are a few drivers with an explicit hardware-position-reset ioctl, like the RME9652 family (`sound/pci/rme9652/{hdsp,rme9652,hdspm}.c`), which assign `runtime->status->hw_ptr` straight from their own position readback inside that reset handler rather than going through `snd_pcm_update_hw_ptr0()`.
+これがドライバの`.pointer`コールバックに課す契約に注意してほしい。コールバックは*バッファ内の*生の位置、つまり`0 .. buffer_size - 1`（ハードウェアがすでにxrunしている場合は`SNDRV_PCM_POS_XRUN`）を返す。そして、その折り返された、ハードウェア相対の位置を、`snd_pcm_playback_avail()`/`snd_pcm_capture_avail()`が使う単調増加でboundaryで折り返す`hw_ptr`に変換する責任は、`hw_ptr_base`を追跡し折り返しを自分で検出することによって、すべてコアが負う。ドライバは通常`runtime->status->hw_ptr`に直接書き込むことはない。例外は、明示的なハードウェア位置リセットのioctlを持つ少数のドライバであり、RME9652ファミリ（`sound/pci/rme9652/{hdsp,rme9652,hdspm}.c`）のように、そのリセットハンドラ内で`snd_pcm_update_hw_ptr0()`を経由せずに、自身の位置読み戻しから`runtime->status->hw_ptr`を直接代入するものである。
 
-Once the position is updated, `snd_pcm_update_hw_ptr0()` itself hands off to `snd_pcm_update_state()`, which is what actually wakes anything sleeping on `runtime->sleep`/`runtime->tsleep` (a blocked `read()`/`write()`, or a `poll()` past `avail_min`) once enough frames are available; back up in `snd_pcm_period_elapsed_under_stream_lock()`, and if `CONFIG_SND_PCM_TIMER` is enabled, it also ticks the PCM's associated ALSA timer for anything subscribed to period-elapsed events that way. This is also the exact point where XRUN and DRAIN handling live: if `.pointer` reports `SNDRV_PCM_POS_XRUN`, `__snd_pcm_xrun()` transitions the stream to `SNDRV_PCM_STATE_XRUN` right here, in interrupt context, and userspace finds out the next time it touches the stream.
+位置が更新されると、`snd_pcm_update_hw_ptr0()`自身が`snd_pcm_update_state()`に処理を渡す。十分なフレームが利用可能になったときに、`runtime->sleep`/`runtime->tsleep`で眠っているもの（ブロックしている`read()`/`write()`や、`avail_min`を超えた`poll()`）を実際に起こすのはこれである。`snd_pcm_period_elapsed_under_stream_lock()`に戻ると、`CONFIG_SND_PCM_TIMER`が有効なら、その方法でperiod経過イベントを購読しているもののために、PCMに関連付けられたALSAタイマーも刻む。XRUNとDRAINの処理があるのもまさにこの地点である。`.pointer`が`SNDRV_PCM_POS_XRUN`を報告すると、`__snd_pcm_xrun()`がまさにここで、割り込みコンテキストのまま、ストリームを`SNDRV_PCM_STATE_XRUN`に遷移させ、ユーザー空間は次にストリームに触れたときにそれを知る。
 
-## Driver-side callback ops: `struct snd_pcm_ops` {#driver-side-callback-ops-struct-sndpcmops}
+## ドライバ側のコールバック操作: `struct snd_pcm_ops` {#driver-side-callback-ops-struct-sndpcmops}
 
-Everything a driver plugs into the PCM core funnels through one vtable, `substream->ops`:
+ドライバがPCMコアに差し込むものはすべて、1つのvtable、`substream->ops`を通る。
 
 ```c
 // include/sound/pcm.h
@@ -454,21 +454,21 @@ struct snd_pcm_ops {
 };
 ```
 
-The core ones for the data path itself:
+データパスそのものの中核となるものは次のとおりである。
 
-- **`.open`/`.close`** — allocate/free any per-stream driver state (commonly stashed in `runtime->private_data`), and set `runtime->hw` to describe what this specific device instance supports.
-- **`.hw_params`/`.hw_free`** — program hardware format/rate/channel registers for the negotiated configuration; tear that back down. Called from `snd_pcm_hw_params()`/`do_hw_free()` after the core has already validated and recorded the parameters.
-- **`.prepare`** — reset the driver's internal position/state to the start of the buffer, ready for the next `.trigger(START)`. Called after `hw_params`, and again after every `SNDRV_PCM_STATE_XRUN` recovery.
-- **`.trigger`** — the real-time-sensitive one: start, stop, pause, resume, or begin draining, selected by `cmd` (`SNDRV_PCM_TRIGGER_START`, `_STOP`, `_PAUSE_PUSH`, `_PAUSE_RELEASE`, `_SUSPEND`, `_RESUME`, `_DRAIN`). Called with the stream lock held and interrupts disabled on at least some call paths, so it needs to be fast — this is where DMA actually gets kicked off or halted.
-- **`.pointer`** — report current hardware position, in frames, within the buffer; this is what `snd_pcm_update_hw_ptr0()` calls, as shown above.
-- **`.copy`/`.fill_silence`/`.page`** — only needed when a driver can't expose a plain linear kernel-mapped DMA buffer (scattered pages, hardware-specific transfer requirements); most drivers leave these unset and let the core's default linear-buffer path (`memcpy`-based `read`/`write`, direct mmap) handle it.
-- **`.mmap`** — override the default buffer mmap logic (`snd_pcm_lib_default_mmap()`) entirely; most drivers with ordinary DMA-coherent memory leave this NULL.
+- **`.open`/`.close`** — ストリームごとのドライバ状態（一般に`runtime->private_data`に置かれる）を割り当て/解放し、この特定のデバイスインスタンスがサポートするものを記述するよう`runtime->hw`を設定する。
+- **`.hw_params`/`.hw_free`** — ネゴシエートされた構成に合わせてハードウェアのフォーマット/レート/チャネルのレジスタを設定し、またそれを元に戻す。コアがすでにパラメータを検証・記録した後に、`snd_pcm_hw_params()`/`do_hw_free()`から呼ばれる。
+- **`.prepare`** — ドライバ内部の位置/状態をバッファの先頭にリセットし、次の`.trigger(START)`に備える。`hw_params`の後と、`SNDRV_PCM_STATE_XRUN`から回復するたびに呼ばれる。
+- **`.trigger`** — リアルタイム性が問われるもの。`cmd`（`SNDRV_PCM_TRIGGER_START`、`_STOP`、`_PAUSE_PUSH`、`_PAUSE_RELEASE`、`_SUSPEND`、`_RESUME`、`_DRAIN`）によって選ばれる、開始、停止、一時停止、再開、またはドレイン開始である。少なくとも一部の呼び出しパスでは、ストリームロックを保持し割り込みを無効にした状態で呼ばれるので、高速でなければならない。DMAが実際に起動または停止されるのはここである。
+- **`.pointer`** — バッファ内の現在のハードウェア位置をフレーム単位で報告する。上で示したとおり、`snd_pcm_update_hw_ptr0()`が呼ぶのはこれである。
+- **`.copy`/`.fill_silence`/`.page`** — ドライバが単純な線形のカーネルマップされたDMAバッファを公開できない場合（散在するページ、ハードウェア固有の転送要件）にのみ必要である。ほとんどのドライバはこれらを未設定のままにし、コアのデフォルトの線形バッファパス（`memcpy`ベースの`read`/`write`、直接のmmap）に任せる。
+- **`.mmap`** — デフォルトのバッファmmapロジック（`snd_pcm_lib_default_mmap()`）を完全に置き換える。普通のDMAコヒーレントなメモリを使うほとんどのドライバはこれをNULLのままにする。
 
-## Worked example: `sound/drivers/dummy.c`'s systimer backend {#worked-example-sounddriversdummycs-systimer-backend}
+## 実例: `sound/drivers/dummy.c`のsystimerバックエンド {#worked-example-sounddriversdummycs-systimer-backend}
 
-`sound/drivers/dummy.c` implements a PCM device with no real hardware at all — it exists to test and demonstrate the ALSA PCM core in isolation, which makes it a clean, real, in-tree example of a minimal `.pointer`/`.trigger` implementation rather than a real DMA-driven one. It has two selectable backends for "hardware progress" — a `jiffies`-driven system timer and (if `CONFIG_HIGH_RES_TIMERS` is enabled) an `hrtimer`; the systimer one is simpler to read as a first example.
+`sound/drivers/dummy.c`は、実ハードウェアをまったく持たないPCMデバイスを実装している。ALSA PCMコアを単独でテスト・デモするために存在しており、そのため、実際のDMA駆動の実装ではなく、最小限の`.pointer`/`.trigger`実装の、すっきりとした、本物の、ツリー内の例になっている。「ハードウェアの進行」のために選択可能なバックエンドが2つある。`jiffies`駆動のシステムタイマーと、（`CONFIG_HIGH_RES_TIMERS`が有効なら）`hrtimer`である。最初の例として読むにはsystimerのほうが単純である。
 
-Per-substream state:
+substreamごとの状態:
 
 ```c
 // sound/drivers/dummy.c
@@ -488,7 +488,7 @@ struct dummy_systimer_pcm {
 };
 ```
 
-`dummy_systimer_update()` advances the fractional position by however many jiffies have elapsed since the last update, converts that into frames via the stream's `rate`, and counts how many period boundaries were crossed:
+`dummy_systimer_update()`は、前回の更新から経過したjiffies分だけ小数部を含む位置を進め、それをストリームの`rate`でフレームに換算し、いくつのperiod境界を越えたかを数える。
 
 ```c
 // sound/drivers/dummy.c
@@ -512,7 +512,7 @@ static void dummy_systimer_update(struct dummy_systimer_pcm *dpcm)
 }
 ```
 
-The `struct timer_list` callback runs that update, rearms the timer for the next expected period boundary, and — only if at least one period actually elapsed — calls `snd_pcm_period_elapsed()`, exactly the mechanism described above, standing in for what a real driver's DMA-complete IRQ handler would do:
+`struct timer_list`のコールバックはその更新を実行し、次に予想されるperiod境界に向けてタイマーを再設定し、少なくとも1つのperiodが実際に経過した場合にのみ`snd_pcm_period_elapsed()`を呼ぶ。これはまさに上で説明した仕組みであり、本物のドライバのDMA完了IRQハンドラが行うことの代役を務めている。
 
 ```c
 // sound/drivers/dummy.c
@@ -532,7 +532,7 @@ static void dummy_systimer_callback(struct timer_list *t)
 }
 ```
 
-`.pointer` just reports the current fractional position converted back to frames:
+`.pointer`は、現在の小数部を含む位置をフレームに戻して報告するだけである。
 
 ```c
 // sound/drivers/dummy.c
@@ -547,7 +547,7 @@ dummy_systimer_pointer(struct snd_pcm_substream *substream)
 }
 ```
 
-And `.trigger`/`.prepare` are thin dispatches to this backend's `start`/`stop`/`prepare` — `dummy_pcm_trigger()` maps `SNDRV_PCM_TRIGGER_START`/`_RESUME` to `start()` (which stamps `base_time` and arms the timer) and `_STOP`/`_SUSPEND` to `stop()` (which disarms it):
+そして`.trigger`/`.prepare`は、このバックエンドの`start`/`stop`/`prepare`への薄いディスパッチである。`dummy_pcm_trigger()`は`SNDRV_PCM_TRIGGER_START`/`_RESUME`を`start()`（`base_time`を記録してタイマーを設定する）に、`_STOP`/`_SUSPEND`を`stop()`（タイマーを解除する）に対応付ける。
 
 ```c
 // sound/drivers/dummy.c
@@ -586,7 +586,7 @@ static const struct snd_pcm_ops dummy_pcm_ops_no_buf = {
 };
 ```
 
-That six-entry `snd_pcm_ops` — `open`/`close`/`hw_params`/`prepare`/`trigger`/`pointer` — is close to the practical minimum for a working PCM device: everything else (`.copy`, `.fill_silence`, `.page`, `.mmap`) is left unset and handled by the core's default linear-DMA-buffer path, which is exactly the "most drivers leave these unset" case described above. But `dummy.c` picks between the two structs above at card-creation time based on its `fake_buffer` module parameter (`static bool fake_buffer = 1;`, i.e. *on* by default):
+この6エントリの`snd_pcm_ops`（`open`/`close`/`hw_params`/`prepare`/`trigger`/`pointer`）は、動作するPCMデバイスの実用上の最小限に近い。それ以外のすべて（`.copy`、`.fill_silence`、`.page`、`.mmap`）は未設定のままにされ、コアのデフォルトの線形DMAバッファパスが処理する。これはまさに上で述べた「ほとんどのドライバはこれらを未設定のままにする」場合である。ただし`dummy.c`は、カード作成時に`fake_buffer`モジュールパラメータ（`static bool fake_buffer = 1;`、つまりデフォルトで*オン*）に基づいて上の2つの構造体のどちらかを選ぶ。
 
 ```c
 // sound/drivers/dummy.c
@@ -596,24 +596,24 @@ else
 	ops = &dummy_pcm_ops;
 ```
 
-So out of the box, with `fake_buffer` at its default of 1, `dummy.c` actually loads the *nine*-entry `dummy_pcm_ops_no_buf` — because with no real DMA-backed buffer to hand out, it has to implement `.copy`/`.fill_silence`/`.page` itself to shuttle sample data. The plain six-entry `dummy_pcm_ops` above is the minimal-vtable illustration and is what a driver with a real linear DMA buffer would use, but it's only what `dummy.c` itself falls back to when loaded with `fake_buffer=0`. A real hardware driver's `.pointer` reads a DMA position register instead of a jiffies-derived fraction, and its `.trigger` toggles an actual DMA-start bit instead of arming a software timer, but the shape — advance a position, notice period boundaries, call `snd_pcm_period_elapsed()` from whatever interrupt source stands in for "hardware made progress" — is identical.
+したがって、そのままの状態で`fake_buffer`がデフォルトの1なら、`dummy.c`が実際に読み込むのは*9*エントリの`dummy_pcm_ops_no_buf`である。渡すべき本物のDMAで裏付けられたバッファがないので、サンプルデータを運ぶために`.copy`/`.fill_silence`/`.page`を自分で実装しなければならないからだ。上の素の6エントリの`dummy_pcm_ops`は最小限のvtableの例示であり、本物の線形DMAバッファを持つドライバが使うものだが、`dummy.c`自身がそれにフォールバックするのは`fake_buffer=0`で読み込まれたときだけである。本物のハードウェアドライバの`.pointer`はjiffiesから導いた小数の代わりにDMA位置レジスタを読み、その`.trigger`はソフトウェアタイマーを設定する代わりに実際のDMA開始ビットを切り替える。しかし形、すなわち位置を進め、period境界に気づき、「ハードウェアが進んだ」ことの代わりとなる何らかの割り込み源から`snd_pcm_period_elapsed()`を呼ぶという形は同一である。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [`include/sound/pcm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/pcm.h) — `struct snd_pcm_substream`, `struct snd_pcm_runtime`, `struct snd_pcm_hardware`, `struct snd_pcm_ops`
-- [`include/uapi/sound/asound.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/sound/asound.h) — the uAPI structs: `snd_pcm_hw_params`, `snd_pcm_sw_params`, `snd_pcm_mmap_status`, `snd_pcm_mmap_control`, ioctl numbers
-- [`sound/core/pcm_native.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/pcm_native.c) — `snd_pcm_hw_refine()`, `snd_pcm_hw_params()`, `snd_pcm_sw_params()`, `snd_pcm_mmap_data()`
-- [`sound/core/pcm_lib.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/pcm_lib.c) — `snd_pcm_period_elapsed()`, `snd_pcm_update_hw_ptr0()`, hw_params constraint machinery
-- [`sound/drivers/dummy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/drivers/dummy.c) — the worked-example driver above: a complete, minimal `snd_pcm_ops` implementation
+- [`include/sound/pcm.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/sound/pcm.h) — `struct snd_pcm_substream`、`struct snd_pcm_runtime`、`struct snd_pcm_hardware`、`struct snd_pcm_ops`
+- [`include/uapi/sound/asound.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/sound/asound.h) — uAPIの構造体: `snd_pcm_hw_params`、`snd_pcm_sw_params`、`snd_pcm_mmap_status`、`snd_pcm_mmap_control`、ioctl番号
+- [`sound/core/pcm_native.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/pcm_native.c) — `snd_pcm_hw_refine()`、`snd_pcm_hw_params()`、`snd_pcm_sw_params()`、`snd_pcm_mmap_data()`
+- [`sound/core/pcm_lib.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/core/pcm_lib.c) — `snd_pcm_period_elapsed()`、`snd_pcm_update_hw_ptr0()`、hw_paramsの制約の仕組み
+- [`sound/drivers/dummy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/sound/drivers/dummy.c) — 上の実例のドライバ: 完全で最小限の`snd_pcm_ops`実装
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [ALSA: the Sound Subsystem](README.md) — where the PCM layer sits in the card/device model
-- [ALSA War Stories](war-stories.md) — Case 1: the `hw_params`/`hw_free` race (CVE-2022-1048) that this page's negotiation and locking machinery shipped without a critical section wide enough to cover
+- [ALSA: サウンドサブシステム](README.md) — カード/デバイスモデルの中でPCM層が占める位置
+- [ALSAの事件簿](war-stories.md) — 事例1: このページのネゴシエーションとロックの仕組みが、それをカバーできるだけの広さのクリティカルセクションを持たずに出荷された`hw_params`/`hw_free`競合（CVE-2022-1048）
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Writing an ALSA Driver: PCM Interface](https://docs.kernel.org/sound/kernel-api/writing-an-alsa-driver.html#pcm-interface) — the canonical driver-author's guide to `snd_pcm_runtime`, periods, and every `snd_pcm_ops` callback
-- [ALSA PCM Timestamping](https://docs.kernel.org/sound/designs/timestamping.html) — how `hw_ptr` updates relate to the timestamps reported alongside `SNDRV_PCM_IOCTL_STATUS`/`SYNC_PTR`
+- [Writing an ALSA Driver: PCM Interface](https://docs.kernel.org/sound/kernel-api/writing-an-alsa-driver.html#pcm-interface) — `snd_pcm_runtime`、period、そしてすべての`snd_pcm_ops`コールバックについての、ドライバ作者向けの標準的なガイド
+- [ALSA PCM Timestamping](https://docs.kernel.org/sound/designs/timestamping.html) — `hw_ptr`の更新が、`SNDRV_PCM_IOCTL_STATUS`/`SYNC_PTR`と一緒に報告されるタイムスタンプとどう関係するか

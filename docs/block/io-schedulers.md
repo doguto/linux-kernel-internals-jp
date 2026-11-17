@@ -1,43 +1,43 @@
-# I/O Schedulers {#io-schedulers}
+# I/Oスケジューラ {#io-schedulers}
 
-> How the block layer reorders requests for efficiency
+> ブロック層が効率のためにリクエストをどのように並べ替えるか
 
-## What I/O schedulers do {#what-io-schedulers-do}
+## I/Oスケジューラが行うこと {#what-io-schedulers-do}
 
-An I/O scheduler (also called an elevator) sits between the block layer submission path and the hardware dispatch. It can:
+I/Oスケジューラ（エレベータとも呼ばれる）は、ブロック層の発行パスとハードウェアへのディスパッチの間に位置する。次のことができる。
 
-1. **Merge** adjacent requests into one (fewer I/O operations)
-2. **Reorder** requests to reduce HDD seek distance or improve fairness
-3. **Prioritize** certain types of requests (metadata, interactive I/O)
-4. **Throttle** requests from processes that are using too much I/O
+1. 隣接するリクエストを1つに**マージ**する（I/O操作が減る）
+2. HDDのシーク距離を減らしたり公平性を改善したりするために、リクエストを**並べ替える**
+3. 特定の種類のリクエスト（メタデータ、対話的なI/O）を**優先する**
+4. I/Oを使いすぎているプロセスからのリクエストを**スロットリングする**
 
-On modern blk-mq hardware (NVMe, virtio-blk), schedulers are optional — for NVMe with many queues, "none" (no scheduler) is often optimal.
+現代的なblk-mqハードウェア（NVMe、virtio-blk）では、スケジューラはオプションである — 多数のキューを持つNVMeでは、"none"（スケジューラなし）が最適であることが多い。
 
-### How a scheduler plugs into blk-mq {#how-a-scheduler-plugs-into-blk-mq}
+### スケジューラがblk-mqにどう組み込まれるか {#how-a-scheduler-plugs-into-blk-mq}
 
-A blk-mq scheduler is an `elevator_type` exposing a small set of hooks — chiefly `bio_merge` (try to merge an incoming bio), `insert_requests` (accept requests into the scheduler's own queues), and `dispatch_request` (hand the next request to the hardware queue when it has room). Requests inserted into the scheduler *wait there* rather than going straight to hardware; the scheduler's `dispatch_request` decides the order they leave. A device has at most one scheduler, and it can be switched at runtime through sysfs — atomically with respect to live I/O, a property that has historically been a source of use-after-free bugs.
+blk-mqのスケジューラは、少数のフックを公開する`elevator_type`である — 主なものは`bio_merge`（到着したbioのマージを試みる）、`insert_requests`（スケジューラ自身のキューにリクエストを受け入れる）、`dispatch_request`（ハードウェアキューに空きがあるときに次のリクエストを渡す）である。スケジューラに挿入されたリクエストは、ハードウェアに直行するのではなく*そこで待つ*。リクエストが出ていく順序はスケジューラの`dispatch_request`が決める。デバイスが持つスケジューラは最大1つであり、sysfsを通じて実行時に切り替えられる — ライブのI/Oに対してアトミックに行われるが、この性質は歴史的にuse-after-freeバグの発生源となってきた。
 
-The key insight is that a scheduler only earns its keep when reordering is worth more than its overhead. On a spinning disk, reordering saves milliseconds of seek time; on an NVMe device with no seek penalty and millions of IOPS, the scheduler's per-request bookkeeping can *cost* more than it saves — which is why `none` exists and is frequently the right answer.
+重要な洞察は、スケジューラが元を取れるのは、並べ替えの価値がそのオーバーヘッドを上回るときだけだということである。回転ディスクでは、並べ替えによってミリ秒単位のシーク時間を節約できる。シークのペナルティがなく数百万IOPSをこなすNVMeデバイスでは、スケジューラのリクエストごとの管理処理が節約分よりも多くの*コストがかかる*ことがある — だからこそ`none`が存在し、それがしばしば正解となるのである。
 
-## Available schedulers {#available-schedulers}
+## 利用可能なスケジューラ {#available-schedulers}
 
 ```bash
-# Check available schedulers for a device
+# デバイスで利用可能なスケジューラを確認する
 cat /sys/block/sda/queue/scheduler
 # [mq-deadline] none bfq kyber
-# Current scheduler in brackets
+# 括弧内が現在のスケジューラ
 
-# Change scheduler
+# スケジューラを変更する
 echo mq-deadline > /sys/block/sda/queue/scheduler
-echo none > /sys/block/nvme0n1/queue/scheduler  # for NVMe
+echo none > /sys/block/nvme0n1/queue/scheduler  # NVMe向け
 ```
 
 ### none {#none}
 
-No scheduling. Requests are dispatched in submission order. Optimal for:
+スケジューリングを行わない。リクエストは発行順にディスパッチされる。最適なのは次の場合である。
 
-- NVMe SSDs with hardware queues (no seek latency, no benefit from reordering)
-- Very low-latency workloads where scheduler overhead matters
+- ハードウェアキューを持つNVMe SSD（シークレイテンシがなく、並べ替えによる利点がない）
+- スケジューラのオーバーヘッドが問題になる、非常に低レイテンシなワークロード
 
 ```bash
 echo none > /sys/block/nvme0n1/queue/scheduler
@@ -45,105 +45,105 @@ echo none > /sys/block/nvme0n1/queue/scheduler
 
 ### mq-deadline {#mq-deadline}
 
-**Default for most block devices.** Prevents request starvation by giving each request a deadline. Uses two separate queues: read and write. Introduced in Linux 4.11 by Jens Axboe — [`945ffb60c11d`](https://git.kernel.org/linus/945ffb60c11dfb228130f3f2bdde961cecb76671).
+**ほとんどのブロックデバイスのデフォルト。** 各リクエストにデッドラインを与えることで、リクエストの飢餓を防ぐ。読み込みと書き込みの2つの別々のキューを使う。Jens AxboeによりLinux 4.11で導入された — [`945ffb60c11d`](https://git.kernel.org/linus/945ffb60c11dfb228130f3f2bdde961cecb76671)。
 
-Algorithm:
-1. Requests are sorted in an elevator (rb-tree sorted by sector)
-2. Each request also gets a **deadline**: reads default 500ms, writes 5000ms
-3. Scheduler normally dispatches in sector order (fewer seeks)
-4. If any request reaches its deadline, it's dispatched immediately
+アルゴリズム:
+1. リクエストはエレベータ（セクタ順にソートされたrb-tree）でソートされる
+2. 各リクエストには**デッドライン**も与えられる: 読み込みはデフォルト500ms、書き込みは5000ms
+3. スケジューラは通常、セクタ順にディスパッチする（シークが減る）
+4. いずれかのリクエストがデッドラインに達すると、即座にディスパッチされる
 
 ```c
 /* block/mq-deadline.c */
 struct deadline_data {
-    struct rb_root sort_list[DD_DIR_COUNT];  /* sorted by sector */
-    struct list_head fifo_list[DD_DIR_COUNT]; /* sorted by deadline */
+    struct rb_root sort_list[DD_DIR_COUNT];  /* セクタ順にソート */
+    struct list_head fifo_list[DD_DIR_COUNT]; /* デッドライン順にソート */
     sector_t last_sector[DD_DIR_COUNT];
-    unsigned int batching;    /* current batch count */
-    unsigned int starved;     /* write starvation count */
+    unsigned int batching;    /* 現在のバッチ数 */
+    unsigned int starved;     /* 書き込み飢餓のカウント */
 };
 ```
 
-**How it decides.** Each direction keeps the same requests in *two* structures: a red-black tree sorted by **sector** and a FIFO list sorted by **deadline**. Normally mq-deadline dispatches from the rb-tree in sector order, sweeping forward like an elevator to minimize seeks. Before each batch it peeks at the FIFO head: if the oldest request has passed its deadline, it switches to deadline order and services that request, guaranteeing no request starves. `fifo_batch` sets how many requests it dispatches in one sweep before re-evaluating direction and deadlines. Reads are favored over writes — reads are usually synchronous (something is waiting on them) while writes are buffered — and `writes_starved` bounds how many read batches may run before a write batch is forced. Later versions added I/O-priority support, giving RT / BE / IDLE classes their own queues so higher-priority I/O is served first within the deadline framework.
+**判断の仕方。** 各方向は同じリクエストを*2つの*構造で保持する。**セクタ**順にソートされた赤黒木と、**デッドライン**順にソートされたFIFOリストである。通常、mq-deadlineはrb-treeからセクタ順にディスパッチし、シークを最小化するためにエレベータのように前方へ掃引する。各バッチの前にFIFOの先頭をのぞき、最も古いリクエストがデッドラインを過ぎていれば、デッドライン順に切り替えてそのリクエストを処理する。これにより、どのリクエストも飢餓状態にならないことが保証される。`fifo_batch`は、方向とデッドラインを再評価するまでに1回の掃引でディスパッチするリクエスト数を設定する。読み込みは書き込みより優先される — 読み込みは通常同期的（何かがそれを待っている）であるのに対し、書き込みはバッファリングされるからである — そして`writes_starved`は、書き込みバッチが強制されるまでに実行できる読み込みバッチの数を制限する。後のバージョンではI/O優先度のサポートが追加され、RT / BE / IDLEの各クラスが独自のキューを持つようになったので、デッドラインの枠組みの中で優先度の高いI/Oが先に処理される。
 
-Tuning:
+チューニング:
 ```bash
-# Deadline for reads (ms, default 500)
+# 読み込みのデッドライン（ms、デフォルト500）
 cat /sys/block/sda/queue/iosched/read_expire
 echo 100 > /sys/block/sda/queue/iosched/read_expire
 
-# Deadline for writes (ms, default 5000)
+# 書き込みのデッドライン（ms、デフォルト5000）
 cat /sys/block/sda/queue/iosched/write_expire
 
-# How many read requests to dispatch before switching to writes
-cat /sys/block/sda/queue/iosched/writes_starved  # default 2
+# 書き込みに切り替える前に、読み込みリクエストをいくつディスパッチするか
+cat /sys/block/sda/queue/iosched/writes_starved  # デフォルト2
 
-# Number of requests to batch before switching direction
-cat /sys/block/sda/queue/iosched/fifo_batch  # default 16
+# 方向を切り替える前にバッチ化するリクエスト数
+cat /sys/block/sda/queue/iosched/fifo_batch  # デフォルト16
 ```
 
-### BFQ (Budget Fair Queueing) {#bfq-budget-fair-queueing}
+### BFQ（Budget Fair Queueing） {#bfq-budget-fair-queueing}
 
-**Best for desktop/interactive workloads.** Introduced in Linux 4.12 by Paolo Valente — [`aee69d78dec0`](https://git.kernel.org/linus/aee69d78dec0ffdf82e35d57c626e80dddc314d5), [LWN](https://lwn.net/Articles/720675/). Provides proportional-share I/O scheduling with a focus on low latency for interactive applications (browser, desktop UI) even under heavy background I/O.
+**デスクトップ/対話的なワークロードに最適。** Paolo ValenteによりLinux 4.12で導入された — [`aee69d78dec0`](https://git.kernel.org/linus/aee69d78dec0ffdf82e35d57c626e80dddc314d5)、[LWN](https://lwn.net/Articles/720675/)。比例配分のI/Oスケジューリングを提供し、重いバックグラウンドI/Oの下でも対話的なアプリケーション（ブラウザ、デスクトップUI）の低レイテンシを重視する。
 
-BFQ assigns each process or group a **budget** of sectors to serve. When the budget is exhausted, the scheduler moves to the next process. Budget is dynamically sized based on workload characteristics.
+BFQは、各プロセスまたはグループに処理すべきセクタの**バジェット**を割り当てる。バジェットを使い切ると、スケジューラは次のプロセスに移る。バジェットはワークロードの特性に基づいて動的にサイズが決まる。
 
-Key properties:
+主な特性:
 
-- Interactive processes get boosted priority (short bursts are rewarded)
-- cgroups integration: `/sys/block/sda/queue/iosched/` exposes per-group weights
-- `CONFIG_BFQ_GROUP_IOSCHED` enables cgroup-based I/O isolation
+- 対話的なプロセスは優先度がブーストされる（短いバーストが報われる）
+- cgroupとの統合: `/sys/block/sda/queue/iosched/`がグループごとのウェイトを公開する
+- `CONFIG_BFQ_GROUP_IOSCHED`がcgroupベースのI/O分離を有効にする
 
-**Under the hood.** BFQ is a proportional-share scheduler built on **WF2Q+**, an accurate fair-queueing algorithm that services queues in *virtual-time* order so that, over any interval, each process or cgroup receives bandwidth proportional to its weight. Each queue is granted a **budget** in sectors; BFQ serves it until the budget is spent or the queue goes idle, then picks the next queue by virtual time. On top of this fairness core, BFQ layers heuristics: it detects **interactive** and **soft-real-time** applications — short I/O bursts separated by think-time — and temporarily multiplies their weight ("weight raising") so a desktop stays responsive even under a heavy background copy. All of this accuracy has a price: the per-request virtual-time and heuristic bookkeeping is expensive, which is exactly why BFQ shines on HDDs and interactive desktops but becomes a throughput bottleneck on high-IOPS NVMe.
+**内部の仕組み。** BFQは**WF2Q+**の上に構築された比例配分スケジューラである。WF2Q+は正確なフェアキューイングアルゴリズムで、キューを*仮想時間*の順に処理し、任意の区間で各プロセスやcgroupがウェイトに比例した帯域を受け取るようにする。各キューにはセクタ単位の**バジェット**が与えられる。BFQはバジェットを使い切るかキューがアイドルになるまでそのキューを処理し、その後仮想時間によって次のキューを選ぶ。この公平性の核の上に、BFQはヒューリスティックを重ねている。**対話的**および**ソフトリアルタイム**なアプリケーション — 思考時間を挟んだ短いI/Oバースト — を検出し、それらのウェイトを一時的に倍増させる（「weight raising」）ことで、重いバックグラウンドコピーの最中でもデスクトップの応答性を保つ。この正確さにはすべて代償がある。リクエストごとの仮想時間とヒューリスティックの管理処理は高価であり、まさにそれゆえにBFQはHDDや対話的なデスクトップでは輝くが、高IOPSのNVMeではスループットのボトルネックになる。
 
 ```bash
 echo bfq > /sys/block/sda/queue/scheduler
 
-# BFQ tunables
-cat /sys/block/sda/queue/iosched/slice_idle    # idle time between requests (µs)
-cat /sys/block/sda/queue/iosched/back_seek_max  # max backward seek allowed
+# BFQのチューニング可能なパラメータ
+cat /sys/block/sda/queue/iosched/slice_idle    # リクエスト間のアイドル時間（µs）
+cat /sys/block/sda/queue/iosched/back_seek_max  # 許容される後方シークの最大値
 
-# Per-process I/O priority (ionice)
-ionice -c 2 -n 4 rsync source/ dest/   # best-effort, priority 4
-ionice -c 3 rsync source/ dest/         # idle class
+# プロセスごとのI/O優先度（ionice）
+ionice -c 2 -n 4 rsync source/ dest/   # best-effort、優先度4
+ionice -c 3 rsync source/ dest/         # idleクラス
 ```
 
 ### kyber {#kyber}
 
-**For multi-queue, low-latency devices (NVMe, SSDs).** Introduced in Linux 4.12 by Omar Sandoval — [`00e043936e9a`](https://git.kernel.org/linus/00e043936e9a1c274c29366c7ecd9e17c79418e6), [LWN](https://lwn.net/Articles/720675/). Uses per-operation-type queues (read, write, discard) with token-based latency targeting.
+**マルチキューの低レイテンシデバイス（NVMe、SSD）向け。** Omar SandovalによりLinux 4.12で導入された — [`00e043936e9a`](https://git.kernel.org/linus/00e043936e9a1c274c29366c7ecd9e17c79418e6)、[LWN](https://lwn.net/Articles/720675/)。操作の種類ごと（読み込み、書き込み、discard）のキューを使い、トークンベースでレイテンシ目標を狙う。
 
-Rather than reordering, kyber:
+並べ替えを行う代わりに、kyberは次のようにする。
 
-- Limits in-flight requests per category to hit target latencies
-- Doesn't do merging (relies on hardware)
-- Very low overhead
+- 目標レイテンシを達成するために、カテゴリごとの処理中リクエスト数を制限する
+- マージを行わない（ハードウェアに任せる）
+- オーバーヘッドが非常に低い
 
-**Under the hood.** Kyber is a feedback controller, not an elevator. It groups requests by type (read, write, discard, other) and caps the number of in-flight requests per type — its "tokens." It continuously *measures* the latency each type is actually achieving and raises or lowers the token counts to keep each near its target (`read_lat_nsec`, `write_lat_nsec`). Fewer tokens means shallower queues and lower latency at some cost to throughput, and vice-versa; Kyber finds the balance automatically. Because it never sorts by sector and does almost no bookkeeping, its overhead is tiny — the point is latency *control* on a device that's already fast, not seek reduction.
+**内部の仕組み。** Kyberはエレベータではなく、フィードバック制御器である。リクエストを種類（読み込み、書き込み、discard、その他）ごとにグループ化し、種類ごとの処理中リクエスト数 — その「トークン」 — に上限を設ける。各種類が実際に達成しているレイテンシを継続的に*計測*し、それぞれを目標（`read_lat_nsec`、`write_lat_nsec`）近くに保つようにトークン数を上げ下げする。トークンが少なければキューは浅くなり、スループットをいくらか犠牲にしてレイテンシが下がる。逆もまた然りであり、Kyberは自動的にバランスを見つける。セクタでソートすることがなく、管理処理もほとんど行わないため、オーバーヘッドはごくわずかである — 目的は、すでに高速なデバイスでのレイテンシの*制御*であって、シークの削減ではない。
 
 ```bash
 echo kyber > /sys/block/nvme0n1/queue/scheduler
 
-# Latency targets (ns)
-cat /sys/block/nvme0n1/queue/iosched/read_lat_nsec    # default 2000000 (2ms)
-cat /sys/block/nvme0n1/queue/iosched/write_lat_nsec   # default 10000000 (10ms)
+# レイテンシ目標（ns）
+cat /sys/block/nvme0n1/queue/iosched/read_lat_nsec    # デフォルト2000000（2ms）
+cat /sys/block/nvme0n1/queue/iosched/write_lat_nsec   # デフォルト10000000（10ms）
 ```
 
-## Choosing a scheduler {#choosing-a-scheduler}
+## スケジューラの選び方 {#choosing-a-scheduler}
 
-| Workload | Recommended scheduler |
+| ワークロード | 推奨スケジューラ |
 |----------|----------------------|
-| NVMe SSD | `none` or `kyber` |
-| SATA SSD | `mq-deadline` or `none` |
-| HDD (spinning) | `mq-deadline` or `bfq` |
-| Desktop/interactive | `bfq` |
-| Database server | `mq-deadline` or `none` |
-| Container I/O isolation | `bfq` (with cgroups) |
+| NVMe SSD | `none`または`kyber` |
+| SATA SSD | `mq-deadline`または`none` |
+| HDD（回転ディスク） | `mq-deadline`または`bfq` |
+| デスクトップ/対話的 | `bfq` |
+| データベースサーバー | `mq-deadline`または`none` |
+| コンテナのI/O分離 | `bfq`（cgroupと併用） |
 
 ```bash
-# Check if rotational (0=SSD, 1=HDD)
+# 回転ディスクかどうかを確認する（0=SSD、1=HDD）
 cat /sys/block/sda/queue/rotational
 
-# Automatic scheduler selection at boot (udev rules)
+# 起動時の自動スケジューラ選択（udevルール）
 # /usr/lib/udev/rules.d/60-io-scheduler.rules
 ACTION=="add|change", KERNEL=="sd[a-z]*", ATTR{queue/rotational}=="0",
   ATTR{queue/scheduler}="mq-deadline"
@@ -151,28 +151,28 @@ ACTION=="add|change", KERNEL=="nvme[0-9]*",
   ATTR{queue/scheduler}="none"
 ```
 
-## Monitoring I/O performance {#monitoring-io-performance}
+## I/O性能の監視 {#monitoring-io-performance}
 
 ```bash
-# iostat: throughput, IOPS, latency
+# iostat: スループット、IOPS、レイテンシ
 iostat -x 1 /dev/sda
 # Device    r/s   w/s  rkB/s  wkB/s  await  svctm  %util
 # sda       0.5  50.2   8.0  801.0    4.5    1.2   6.1
 
-# await: average total latency (queue wait + service time)
-# svctm: average service time at device
-# %util: device utilization
+# await: 平均合計レイテンシ（キュー待ち + サービス時間）
+# svctm: デバイスでの平均サービス時間
+# %util: デバイスの利用率
 
-# blktrace: detailed per-request tracing
+# blktrace: リクエスト単位の詳細なトレーシング
 blktrace -d /dev/sda -o trace
 blkparse -i trace.blktrace.0 | head -50
 
-# biolatency (BCC): histogram of I/O latencies
+# biolatency（BCC）: I/Oレイテンシのヒストグラム
 biolatency -d sda 10 1
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [blk-mq](blk-mq.md) — The dispatch layer below the scheduler
-- [bio and request structures](bio-request.md) — What the scheduler reorders
-- `Documentation/block/` in the kernel tree
+- [blk-mq](blk-mq.md) — スケジューラの下にあるディスパッチ層
+- [bioとrequestの構造体](bio-request.md) — スケジューラが並べ替えるもの
+- カーネルツリー内の`Documentation/block/`
