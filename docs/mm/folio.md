@@ -1,57 +1,57 @@
-# The Folio Abstraction {#the-folio-abstraction}
+# folio抽象化 {#the-folio-abstraction}
 
-> `struct folio` replaces the compound-page patchwork with a first-class kernel object that makes multi-page memory units safe, explicit, and efficient
+> `struct folio`は、継ぎはぎだらけのcompound pageに代わる第一級のカーネルオブジェクトであり、複数ページからなるメモリ単位を安全・明示的・効率的に扱えるようにする
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 役割 |
 |------|---------|
-| `include/linux/mm_types.h` | `struct folio` definition and layout assertions |
-| `include/linux/page-flags.h` | `page_folio()`, `folio_page()`, flag accessors |
-| `include/linux/mm.h` | `folio_order()`, `folio_nr_pages()`, `folio_size()`, `folio_pfn()`, `folio_address()`, `folio_get()`, `folio_put()` |
-| `include/linux/page_ref.h` | `folio_ref_count()`, `folio_try_get()` |
-| `include/linux/pagemap.h` | `filemap_alloc_folio()`, `filemap_grab_folio()`, `readahead_folio()`, `filemap_add_folio()` |
+| `include/linux/mm_types.h` | `struct folio`の定義とレイアウトのアサーション |
+| `include/linux/page-flags.h` | `page_folio()`、`folio_page()`、フラグアクセサ |
+| `include/linux/mm.h` | `folio_order()`、`folio_nr_pages()`、`folio_size()`、`folio_pfn()`、`folio_address()`、`folio_get()`、`folio_put()` |
+| `include/linux/page_ref.h` | `folio_ref_count()`、`folio_try_get()` |
+| `include/linux/pagemap.h` | `filemap_alloc_folio()`、`filemap_grab_folio()`、`readahead_folio()`、`filemap_add_folio()` |
 | `include/linux/swap.h` | `folio_add_lru()` |
-| `mm/folio-compat.c` | Page-API shims that delegate to folio functions |
+| `mm/folio-compat.c` | folio関数に処理を委譲するpage APIのシム |
 
 ---
 
-## Why folios exist {#why-folios-exist}
+## なぜfolioが存在するか {#why-folios-exist}
 
-### The compound page problem {#the-compound-page-problem}
+### compound pageの問題 {#the-compound-page-problem}
 
-`struct page` was designed for order-0 (single, 4KB) pages. Huge pages were bolted on later using the *compound page* mechanism: a contiguous group of pages is allocated where the first page is the *head* and every subsequent page is a *tail*.
+`struct page`はorder-0（単一の4KB）ページ向けに設計された。ヒュージページは後から*compound page*機構を使って追加された。これは連続したページ群を割り当て、最初のページを*head*、それ以降の各ページを*tail*とするものである。
 
-Tails encode a back-pointer to the head in `page->compound_head` with the LSB set as a tag. Code that receives an arbitrary `struct page *` must therefore constantly ask: is this a head or a tail? If it is a tail, dereference the back-pointer first. Get it wrong and you silently corrupt the head's reference count, flags, or mapping pointer.
+tailは`page->compound_head`にheadへの逆ポインタを格納し、タグとしてLSBを立てる。そのため任意の`struct page *`を受け取るコードは、それがheadなのかtailなのかを常に確認しなければならない。tailであれば、まず逆ポインタをたどる必要がある。これを誤ると、headの参照カウント、フラグ、mappingポインタを気付かないうちに破壊してしまう。
 
-The result is a pervasive pattern:
+その結果、次のようなパターンが至るところに現れる:
 
 ```c
-/* Old-style: every caller has to do this dance */
+/* 旧来のスタイル: すべての呼び出し元がこの手順を踏む必要がある */
 page = compound_head(page);
 ```
 
-This is error-prone, invisible to the type system, and scattered across thousands of call sites.
+これは誤りやすく、型システムからは見えず、数千もの呼び出し箇所に散らばっている。
 
-### What a folio is {#what-a-folio-is}
+### folioとは何か {#what-a-folio-is}
 
-A `struct folio` is a first-class kernel object representing a **physically, virtually, and logically contiguous power-of-two-aligned set of bytes**. It is always at least `PAGE_SIZE` in size. The key guarantee is: a pointer to a `struct folio` is always a pointer to the *head*. There are no tail folios.
+`struct folio`は、**物理的・仮想的・論理的に連続し、2のべき乗にアラインされたバイト集合**を表す第一級のカーネルオブジェクトである。サイズは常に`PAGE_SIZE`以上である。重要な保証は、`struct folio`へのポインタは常に*head*へのポインタであるということだ。tail folioというものは存在しない。
 
-- An order-0 folio is a single 4KB page.
-- An order-N folio is 2^N physically contiguous pages (2^N × `PAGE_SIZE` bytes).
-- The size is encoded in the object itself via `folio_order()`, not inferred from context.
+- order-0のfolioは単一の4KBページである。
+- order-Nのfolioは物理的に連続した2^N個のページ（2^N × `PAGE_SIZE`バイト）である。
+- サイズは文脈から推測されるのではなく、`folio_order()`を通じてオブジェクト自体にエンコードされている。
 
-`struct folio` was introduced by Matthew Wilcox starting in Linux 5.16 (2022) and the conversion has been ongoing in every release since.
+`struct folio`はMatthew WilcoxによってLinux 5.16（2022年）から導入され、それ以降のすべてのリリースで変換作業が続いている。
 
 ---
 
 ## struct folio {#struct-folio}
 
-The definition lives in `include/linux/mm_types.h`:
+定義は`include/linux/mm_types.h`にある:
 
 ```c
 struct folio {
-    /* private: don't document the anon union */
+    /* private: 無名unionはドキュメント化しない */
     union {
         struct {
             memdesc_flags_t flags;
@@ -74,18 +74,18 @@ struct folio {
             };
             atomic_t _mapcount;
             atomic_t _refcount;
-            /* ... CONFIG_MEMCG, WANT_PAGE_VIRTUAL, etc. */
+            /* ... CONFIG_MEMCG、WANT_PAGE_VIRTUAL など */
         };
-        struct page page;   /* union at offset 0 */
+        struct page page;   /* オフセット0のunion */
     };
-    /* second and third page slots: large-folio metadata */
+    /* 2番目と3番目のページスロット: large folioのメタデータ */
     union { struct { ... }; struct page __page_1; };
     union { struct { ... }; struct page __page_2; };
     union { struct { ... }; struct page __page_3; };
 };
 ```
 
-The critical design point: `struct page page` is the **first member of the anonymous union**, at offset 0. A `struct folio *` cast to `struct page *` is always the head page. The kernel enforces this with compile-time `static_assert` calls immediately after the struct definition:
+設計上の要点は、`struct page page`が**無名unionの最初のメンバ**であり、オフセット0に位置することである。`struct folio *`を`struct page *`にキャストすると、常にheadページになる。カーネルはこれを、構造体定義の直後に置かれたコンパイル時の`static_assert`呼び出しで強制している:
 
 ```c
 #define FOLIO_MATCH(pg, fl) \
@@ -96,35 +96,35 @@ FOLIO_MATCH(_refcount,  _refcount);
 /* ... */
 ```
 
-If the layout ever drifts, the build breaks.
+レイアウトがずれれば、ビルドが失敗する。
 
-### Size and order accessors {#size-and-order-accessors}
+### サイズとorderのアクセサ {#size-and-order-accessors}
 
-These are all in `include/linux/mm.h`:
+これらはすべて`include/linux/mm.h`にある:
 
 ```c
-/* Allocation order: 0 for a single page, N for 2^N pages */
+/* 割り当てorder: 単一ページなら0、2^Nページなら N */
 static inline unsigned int folio_order(const struct folio *folio);
 
-/* Number of struct pages spanned by this folio: 1 << folio_order() */
+/* このfolioがまたがるstruct pageの数: 1 << folio_order() */
 static inline unsigned long folio_nr_pages(const struct folio *folio);
 
-/* Total byte size: PAGE_SIZE << folio_order() */
+/* 総バイトサイズ: PAGE_SIZE << folio_order() */
 static inline size_t folio_size(const struct folio *folio);
 
-/* Base-2 log of byte size: PAGE_SHIFT + folio_order() */
+/* バイトサイズの2を底とする対数: PAGE_SHIFT + folio_order() */
 static inline unsigned int folio_shift(const struct folio *folio);
 ```
 
-For order-0 (the common case), `folio_order()` returns 0 without dereferencing any extra fields — the `folio_test_large()` check short-circuits immediately.
+order-0（一般的なケース）では、`folio_order()`は余分なフィールドを一切参照せずに0を返す。`folio_test_large()`のチェックで即座に短絡評価されるためである。
 
 ---
 
-## page ↔ folio conversion {#page-folio-conversion}
+## page ↔ folioの変換 {#page-folio-conversion}
 
-### page_folio() — page to its owning folio {#page_folio-page-to-its-owning-folio}
+### page_folio() — pageからそれを所有するfolioへ {#page_folio-page-to-its-owning-folio}
 
-Defined in `include/linux/page-flags.h`:
+`include/linux/page-flags.h`で定義されている:
 
 ```c
 #define page_folio(p)   (_Generic((p),                          \
@@ -132,39 +132,39 @@ Defined in `include/linux/page-flags.h`:
     struct page *:       (struct folio *)_compound_head(p)))
 ```
 
-This is a `_Generic` macro so it preserves const-correctness. `_compound_head()` follows the `compound_head` pointer if the LSB is set (tail page) or returns the page itself if it is already a head. The result is always a head page cast to `struct folio *`.
+これは`_Generic`マクロなので、const正当性が保たれる。`_compound_head()`は、LSBが立っていれば（tailページ）`compound_head`ポインタをたどり、すでにheadであればページ自体を返す。結果は常に`struct folio *`にキャストされたheadページである。
 
-!!! note "No-reference race"
-    The kernel documentation notes: if the caller does not already hold a reference, `page_folio()` can race with a folio split. Always verify that the folio still contains the page after acquiring a reference.
+!!! note "参照なしでの競合"
+    カーネルのドキュメントには次の注意がある: 呼び出し元がまだ参照を保持していない場合、`page_folio()`はfolioの分割と競合しうる。参照を取得した後で、そのfolioがまだ当該ページを含んでいることを必ず確認すること。
 
-### folio_page() — nth page within a folio {#folio_page-nth-page-within-a-folio}
+### folio_page() — folio内のn番目のページ {#folio_page-nth-page-within-a-folio}
 
 ```c
 #define folio_page(folio, n)    (&(folio)->page + (n))
 ```
 
-Simple pointer arithmetic. `folio_page(folio, 0)` is the head page; `folio_page(folio, folio_nr_pages(folio) - 1)` is the last page. No bounds checking is performed — the caller is assumed to hold a reference.
+単純なポインタ演算である。`folio_page(folio, 0)`はheadページ、`folio_page(folio, folio_nr_pages(folio) - 1)`は最後のページである。境界チェックは行われない。呼び出し元が参照を保持していることが前提である。
 
-### folio_file_page() — page for a given file index {#foliofilepage-page-for-a-given-file-index}
+### folio_file_page() — 指定したファイルインデックスに対応するページ {#foliofilepage-page-for-a-given-file-index}
 
-When a large folio spans multiple page-cache indices, `folio_file_page()` maps a file offset to the correct sub-page:
+large folioが複数のページキャッシュインデックスにまたがる場合、`folio_file_page()`はファイルオフセットを正しいサブページに対応付ける:
 
 ```c
 /* include/linux/pagemap.h */
 static inline struct page *folio_file_page(struct folio *folio, pgoff_t index);
 ```
 
-### folio_pfn() and folio_address() {#foliopfn-and-folioaddress}
+### folio_pfn()とfolio_address() {#foliopfn-and-folioaddress}
 
 ```c
-/* Page Frame Number of the first page in the folio */
+/* folio内の最初のページのページフレーム番号 */
 static inline unsigned long folio_pfn(const struct folio *folio);
 
-/* Kernel virtual address (direct map) of the folio */
+/* folioのカーネル仮想アドレス（ダイレクトマップ） */
 static inline void *folio_address(const struct folio *folio);
 ```
 
-The symmetric `pfn_folio(pfn)` converts a PFN back to a folio:
+対称的な`pfn_folio(pfn)`はPFNをfolioに変換する:
 
 ```c
 static inline struct folio *pfn_folio(unsigned long pfn)
@@ -175,25 +175,25 @@ static inline struct folio *pfn_folio(unsigned long pfn)
 
 ---
 
-## Reference counting {#reference-counting}
+## 参照カウント {#reference-counting}
 
-### The model {#the-model}
+### モデル {#the-model}
 
-The reference count lives in the folio (head page) in `_refcount`. Tail pages have no independent refcount. All reference operations go through the folio.
+参照カウントはfolio（headページ）の`_refcount`にある。tailページは独立した参照カウントを持たない。すべての参照操作はfolioを通じて行われる。
 
-### folio_get() and folio_put() {#folioget-and-folioput}
+### folio_get()とfolio_put() {#folioget-and-folioput}
 
 ```c
 /* include/linux/mm.h */
 
-/* Increment refcount — requires a reference already held */
+/* 参照カウントを増やす — すでに参照を保持していることが必要 */
 static inline void folio_get(struct folio *folio);
 
-/* Decrement refcount — frees the folio when it reaches zero */
+/* 参照カウントを減らす — 0になるとfolioを解放する */
 static inline void folio_put(struct folio *folio);
 ```
 
-`get_page()` and `put_page()` still exist but are wrappers:
+`get_page()`と`put_page()`は今も存在するが、ラッパーである:
 
 ```c
 static inline void get_page(struct page *page)
@@ -217,95 +217,95 @@ static inline void put_page(struct page *page)
 static inline int folio_ref_count(const struct folio *folio);
 ```
 
-Returns the raw reference count. The kernel documentation warns not to access `_refcount` directly; always use this accessor.
+生の参照カウントを返す。カーネルのドキュメントは`_refcount`に直接アクセスしないよう警告しており、常にこのアクセサを使うべきである。
 
 ### folio_try_get() {#foliotryget}
 
-Use this when you do not already hold a reference and need to speculatively acquire one:
+まだ参照を保持しておらず、投機的に参照を取得する必要がある場合にこれを使う:
 
 ```c
 /* include/linux/page_ref.h */
 static inline bool folio_try_get(struct folio *folio);
 ```
 
-Returns `true` if the reference was acquired, `false` if the folio was already at zero (freed or frozen for splitting/migration). This is the folio equivalent of the old `get_page_unless_zero()`.
+参照を取得できた場合は`true`、folioがすでに0（解放済み、または分割/マイグレーションのために凍結済み）だった場合は`false`を返す。これは旧来の`get_page_unless_zero()`に相当するfolio版である。
 
-!!! warning "folio_get() vs folio_try_get()"
-    Use `folio_get()` only when you already hold a reference (e.g., you received the folio from the page cache with a lock held). Use `folio_try_get()` when you found the folio pointer through a data structure and need to pin it before the lock is acquired.
+!!! warning "folio_get()とfolio_try_get()の違い"
+    `folio_get()`は、すでに参照を保持している場合（例: ロックを保持した状態でページキャッシュからfolioを受け取った場合）にのみ使う。データ構造を通じてfolioポインタを見つけ、ロックを取得する前にそれをピン留めする必要がある場合は`folio_try_get()`を使う。
 
 ---
 
-## Where folios are used today {#where-folios-are-used-today}
+## 現在folioが使われている場所 {#where-folios-are-used-today}
 
-### Page cache {#page-cache}
+### ページキャッシュ {#page-cache}
 
-`struct address_space` stores its cached pages in an XArray (`i_pages`). The XArray entries are `struct folio *` pointers. All modern page-cache lookup paths return folios:
+`struct address_space`はキャッシュしたページをXArray（`i_pages`）に格納する。XArrayのエントリは`struct folio *`ポインタである。現代のページキャッシュ検索パスはすべてfolioを返す:
 
 ```c
-/* Look up — returns a locked folio, creates one if absent */
+/* 検索 — ロックされたfolioを返す。存在しなければ作成する */
 static inline struct folio *filemap_grab_folio(
     struct address_space *mapping, pgoff_t index);
 
-/* Low-level lookup/creation with flags */
+/* フラグ付きの低レベルな検索/作成 */
 struct folio *__filemap_get_folio(struct address_space *mapping,
     pgoff_t index, fgf_t fgf_flags, gfp_t gfp);
 
-/* Insert a folio into the page cache and the LRU */
+/* folioをページキャッシュとLRUに挿入する */
 int filemap_add_folio(struct address_space *mapping,
     struct folio *folio, pgoff_t index, gfp_t gfp);
 ```
 
-### Readahead {#readahead}
+### 先読み {#readahead}
 
-The `->readahead` address space operation receives a `struct readahead_control *`. Drivers and filesystems that have been converted call `readahead_folio()` in a loop:
+`->readahead`アドレス空間操作は`struct readahead_control *`を受け取る。変換済みのドライバやファイルシステムは、ループ内で`readahead_folio()`を呼び出す:
 
 ```c
 /* include/linux/pagemap.h */
 static inline struct folio *readahead_folio(struct readahead_control *ractl);
 ```
 
-Each call returns the next folio to fill and advances the control structure by `folio_nr_pages()` pages.
+各呼び出しは次に埋めるべきfolioを返し、制御構造体を`folio_nr_pages()`ページ分進める。
 
-### Writeback {#writeback}
+### ライトバック {#writeback}
 
-The writeback path uses folio-native operations. `mm/folio-compat.c` contains the shims that map old page-based APIs onto their folio equivalents:
+ライトバックパスはfolioネイティブな操作を使う。`mm/folio-compat.c`には、旧来のページベースAPIをfolio版の対応関数に対応付けるシムが含まれている:
 
 ```c
-/* These page-API functions are compatibility shims (folio-compat.c) */
+/* これらのpage API関数は互換性シムである（folio-compat.c） */
 void end_page_writeback(struct page *page)  /* → folio_end_writeback() */
 bool set_page_dirty(struct page *page)      /* → folio_mark_dirty() */
 void mark_page_accessed(struct page *page)  /* → folio_mark_accessed() */
 ```
 
-The comment at the top of `folio-compat.c` is explicit: *"All of the callers of these functions should be converted to use folios eventually."*
+`folio-compat.c`の先頭のコメントは明確である: *"All of the callers of these functions should be converted to use folios eventually."*（これらの関数の呼び出し元はすべて、最終的にfolioを使うように変換されるべきである。）
 
-### LRU lists {#lru-lists}
+### LRUリスト {#lru-lists}
 
 ```c
 /* include/linux/swap.h */
 void folio_add_lru(struct folio *folio);
 ```
 
-LRU accounting is per-folio. A large folio counts as `folio_nr_pages()` pages on the LRU, but it is a single eviction unit — the kernel cannot partially evict a folio.
+LRUの集計はfolio単位である。large folioはLRU上では`folio_nr_pages()`ページとして数えられるが、単一の追い出し単位である。カーネルはfolioを部分的に追い出すことはできない。
 
-### Filesystem adoption {#filesystem-adoption}
+### ファイルシステムでの採用状況 {#filesystem-adoption}
 
-Most in-tree filesystems have converted their `->readahead`, `->read_folio`, and `->writepages` methods. The address space operations struct (`struct address_space_operations`) now carries folio-native slots: `dirty_folio`, `migrate_folio`, `error_remove_folio`. Filesystems that have not yet converted fall back to compatibility wrappers; the conversion effort is ongoing.
+ツリー内のほとんどのファイルシステムは、`->readahead`、`->read_folio`、`->writepages`メソッドを変換済みである。アドレス空間操作の構造体（`struct address_space_operations`）は現在、folioネイティブなスロット`dirty_folio`、`migrate_folio`、`error_remove_folio`を持つ。まだ変換されていないファイルシステムは互換性ラッパーにフォールバックする。変換作業は継続中である。
 
 ---
 
-## Large folios {#large-folios}
+## large folio {#large-folios}
 
-An order-N folio with N ≥ 1 is a *large folio*. `folio_test_large()` returns true for these:
+N ≥ 1であるorder-Nのfolioは*large folio*である。`folio_test_large()`はこれらに対してtrueを返す:
 
 ```c
 /* include/linux/page-flags.h */
 static inline bool folio_test_large(const struct folio *folio);
 ```
 
-### Allocation {#allocation}
+### 割り当て {#allocation}
 
-For page-cache use, allocate via `filemap_alloc_folio()`:
+ページキャッシュ用には`filemap_alloc_folio()`で割り当てる:
 
 ```c
 /* include/linux/pagemap.h */
@@ -313,24 +313,24 @@ For page-cache use, allocate via `filemap_alloc_folio()`:
     alloc_hooks(filemap_alloc_folio_noprof(gfp, order))
 ```
 
-For generic kernel use, `folio_alloc()` (in `include/linux/gfp.h`) wraps the buddy allocator:
+汎用のカーネル用途では、`folio_alloc()`（`include/linux/gfp.h`内）がバディアロケータをラップしている:
 
 ```c
 #define folio_alloc(gfp, order) \
     alloc_hooks(folio_alloc_noprof(gfp, order))
 ```
 
-### File-backed large folios and TLB {#file-backed-large-folios-and-tlb}
+### ファイルバックのlarge folioとTLB {#file-backed-large-folios-and-tlb}
 
-When a page-cache folio spans multiple PMD-size-aligned pages, fewer page-table entries are needed to map it. For workloads that read or mmap large files sequentially, large folios reduce:
+ページキャッシュのfolioがPMDサイズにアラインされた複数のページにまたがる場合、それをマップするのに必要なページテーブルエントリは少なくなる。大きなファイルを順次readしたりmmapしたりするワークロードでは、large folioによって次のものが削減される:
 
-- **Page fault count**: one fault populates the whole folio.
-- **TLB pressure**: contiguous physical pages can be covered by a single PMD entry if alignment permits.
-- **Writeback overhead**: one `writepages` call can submit the whole folio as a single I/O.
+- **ページフォールト回数**: 1回のフォールトでfolio全体が埋まる。
+- **TLB圧迫**: アラインメントが許せば、連続した物理ページを単一のPMDエントリでカバーできる。
+- **ライトバックのオーバーヘッド**: 1回の`writepages`呼び出しでfolio全体を単一のI/Oとして発行できる。
 
-The maximum order for page-cache folios is governed by `MAX_PAGECACHE_ORDER`, which is `min(MAX_XAS_ORDER, PREFERRED_MAX_PAGECACHE_ORDER)`. On most 64-bit configs `PREFERRED_MAX_PAGECACHE_ORDER` is `HPAGE_PMD_ORDER` (order 9, 2MB), matching the PMD size.
+ページキャッシュのfolioの最大orderは`MAX_PAGECACHE_ORDER`によって決まり、これは`min(MAX_XAS_ORDER, PREFERRED_MAX_PAGECACHE_ORDER)`である。ほとんどの64ビット構成では、`PREFERRED_MAX_PAGECACHE_ORDER`は`HPAGE_PMD_ORDER`（order 9、2MB）であり、PMDサイズと一致する。
 
-Filesystems advertise their supported folio order range through:
+ファイルシステムは、サポートするfolioのorder範囲を次の関数で通知する:
 
 ```c
 /* include/linux/pagemap.h */
@@ -339,20 +339,20 @@ static inline void mapping_set_folio_order_range(
     unsigned int min, unsigned int max);
 ```
 
-### Relation to mTHP {#relation-to-mthp}
+### mTHPとの関係 {#relation-to-mthp}
 
-Large folios in the page cache are the file-backed counterpart to multi-size THP (mTHP) for anonymous memory. See [mTHP](mthp.md) for the anonymous side. The key distinction: file-backed large folios are managed by the page cache and `struct address_space`; anonymous large folios are managed by the THP machinery and `struct vm_area_struct`.
+ページキャッシュのlarge folioは、匿名メモリ向けのmulti-size THP（mTHP）に対応するファイルバック版である。匿名側については[mTHP](mthp.md)を参照。重要な違いは、ファイルバックのlarge folioはページキャッシュと`struct address_space`によって管理され、匿名のlarge folioはTHPの仕組みと`struct vm_area_struct`によって管理されるという点である。
 
 ---
 
-## The conversion in progress {#the-conversion-in-progress}
+## 進行中の変換 {#the-conversion-in-progress}
 
-### The pattern: folio-compat.c {#the-pattern-folio-compatc}
+### パターン: folio-compat.c {#the-pattern-folio-compatc}
 
-`mm/folio-compat.c` is the canonical example of how the conversion proceeds. Each function in that file has the same structure:
+`mm/folio-compat.c`は、変換がどのように進むかを示す典型例である。このファイル内の各関数は同じ構造を持つ:
 
 ```c
-/* Old page-based API — still exported for unconverted callers */
+/* 旧来のページベースAPI — 未変換の呼び出し元のためにまだエクスポートされている */
 void unlock_page(struct page *page)
 {
     return folio_unlock(page_folio(page));
@@ -360,121 +360,121 @@ void unlock_page(struct page *page)
 EXPORT_SYMBOL(unlock_page);
 ```
 
-The page function converts to a folio and delegates. As callers are converted to call `folio_unlock()` directly, the page shim eventually has no callers and can be removed.
+page関数はfolioに変換して処理を委譲する。呼び出し元が`folio_unlock()`を直接呼ぶように変換されていくにつれ、pageのシムは最終的に呼び出し元がなくなり、削除できるようになる。
 
-### Naming convention {#naming-convention}
+### 命名規則 {#naming-convention}
 
-The kernel has adopted a consistent naming convention:
+カーネルは一貫した命名規則を採用している:
 
-| API style | Naming pattern | Example |
+| APIスタイル | 命名パターン | 例 |
 |-----------|---------------|---------|
-| Folio-native (new) | `folio_*` | `folio_lock()`, `folio_mark_dirty()` |
-| Page-based (legacy) | original names | `lock_page()`, `set_page_dirty()` |
-| Conversion helper | `page_folio()` | `page_folio(page)` |
+| folioネイティブ（新） | `folio_*` | `folio_lock()`、`folio_mark_dirty()` |
+| ページベース（レガシー） | 元の名前 | `lock_page()`、`set_page_dirty()` |
+| 変換ヘルパー | `page_folio()` | `page_folio(page)` |
 
-If a function name starts with `folio_`, it takes a `struct folio *` and operates on the whole folio. If it takes a `struct page *`, check `mm/folio-compat.c` — it is probably a shim.
+関数名が`folio_`で始まる場合、それは`struct folio *`を受け取り、folio全体に対して操作する。`struct page *`を受け取る場合は`mm/folio-compat.c`を確認すること。おそらくシムである。
 
-### How to tell if a function has been converted {#how-to-tell-if-a-function-has-been-converted}
+### 関数が変換済みかどうかを見分ける方法 {#how-to-tell-if-a-function-has-been-converted}
 
-1. Check the parameter type: `struct folio *` means converted.
-2. Look in `mm/folio-compat.c`: if the old name appears there, the implementation has moved to a `folio_*` counterpart.
-3. Search the address space operations struct (`struct address_space_operations` in `include/linux/fs.h`): slots named `*_folio` have been converted; slots still named `*_page` have not.
+1. 引数の型を確認する: `struct folio *`なら変換済みである。
+2. `mm/folio-compat.c`を見る: 旧名がそこにあれば、実装は`folio_*`の対応関数に移っている。
+3. アドレス空間操作の構造体（`include/linux/fs.h`の`struct address_space_operations`）を調べる: `*_folio`という名前のスロットは変換済みで、まだ`*_page`という名前のスロットは未変換である。
 
 ---
 
-## Writing folio-aware code {#writing-folio-aware-code}
+## folioを意識したコードの書き方 {#writing-folio-aware-code}
 
-### The decision rule {#the-decision-rule}
+### 判断ルール {#the-decision-rule}
 
-| You are working with… | Use |
+| 扱っている対象… | 使うもの |
 |----------------------|-----|
-| Page cache (file data) | Folio APIs throughout |
-| LRU tracking | `folio_add_lru()` |
-| Writeback state | `folio_mark_dirty()`, `folio_start_writeback()`, `folio_end_writeback()` |
-| Raw page allocation (`alloc_pages`) | Returns `struct page *`; call `page_folio()` immediately |
-| Existing code that passes `struct page *` | Convert at the boundary; hold a folio reference before touching flags |
+| ページキャッシュ（ファイルデータ） | 全面的にfolio API |
+| LRUの追跡 | `folio_add_lru()` |
+| ライトバック状態 | `folio_mark_dirty()`、`folio_start_writeback()`、`folio_end_writeback()` |
+| 生のページ割り当て（`alloc_pages`） | `struct page *`を返すので、直ちに`page_folio()`を呼ぶ |
+| `struct page *`を渡す既存コード | 境界で変換する。フラグに触れる前にfolioの参照を保持する |
 
-### Typical folio-aware read path (sketch) {#typical-folio-aware-read-path-sketch}
+### folioを意識した典型的な読み込みパス（概略） {#typical-folio-aware-read-path-sketch}
 
 ```c
 struct folio *folio;
 
-/* 1. Look up or create a folio in the page cache */
+/* 1. ページキャッシュ内でfolioを検索するか作成する */
 folio = filemap_grab_folio(mapping, index);
 if (IS_ERR(folio))
     return PTR_ERR(folio);
 
-/* folio is now locked and referenced */
+/* folioはこの時点でロックされ、参照されている */
 
-/* 2. Check if it's already up to date */
+/* 2. すでに最新かどうかを確認する */
 if (folio_test_uptodate(folio)) {
     folio_unlock(folio);
     return 0;
 }
 
-/* 3. Submit I/O for the whole folio */
-/* ... filesystem-specific read ... */
+/* 3. folio全体に対してI/Oを発行する */
+/* ... ファイルシステム固有の読み込み ... */
 
-/* 4. Mark it up to date and release */
+/* 4. 最新としてマークし、解放する */
 folio_mark_uptodate(folio);
 folio_unlock(folio);
 folio_put(folio);
 ```
 
-### Allocating a folio directly {#allocating-a-folio-directly}
+### folioを直接割り当てる {#allocating-a-folio-directly}
 
-When you need a folio outside the page cache (e.g., a private kernel buffer):
+ページキャッシュ外でfolioが必要な場合（例: カーネル内のプライベートなバッファ）:
 
 ```c
-/* Allocate a single-page (order-0) folio */
+/* 単一ページ（order-0）のfolioを割り当てる */
 struct folio *folio = folio_alloc(GFP_KERNEL, 0);
 if (!folio)
     return -ENOMEM;
 
-/* Use it ... */
+/* 使用する ... */
 
-folio_put(folio);   /* drops the allocator's reference; frees if zero */
+folio_put(folio);   /* アロケータの参照を落とす。0になれば解放する */
 ```
 
-### Do not call folio_get() without a prior reference {#do-not-call-folio_get-without-a-prior-reference}
+### 事前の参照なしにfolio_get()を呼ばない {#do-not-call-folio_get-without-a-prior-reference}
 
 ```c
-/* WRONG: folio pointer from a data structure with no lock held */
-folio_get(folio);   /* may race with free */
+/* 誤り: ロックを保持せずにデータ構造から得たfolioポインタ */
+folio_get(folio);   /* 解放と競合する可能性がある */
 
-/* RIGHT: speculatively acquire a reference */
+/* 正しい: 投機的に参照を取得する */
 if (!folio_try_get(folio))
-    return -ENOENT;  /* folio was freed before we got it */
+    return -ENOENT;  /* 取得する前にfolioが解放された */
 ```
 
 ---
 
-## Reference summary {#reference-summary}
+## リファレンスまとめ {#reference-summary}
 
-| Function | Header | Description |
+| 関数 | ヘッダ | 説明 |
 |----------|--------|-------------|
-| `page_folio(page)` | `page-flags.h` | Convert any page to its owning folio |
-| `folio_page(folio, n)` | `page-flags.h` | Get the nth page within a folio |
-| `folio_order(folio)` | `mm.h` | Allocation order (0 for single page) |
-| `folio_nr_pages(folio)` | `mm.h` | Number of pages: `1 << folio_order()` |
-| `folio_size(folio)` | `mm.h` | Byte size: `PAGE_SIZE << folio_order()` |
-| `folio_pfn(folio)` | `mm.h` | PFN of the first page |
-| `folio_address(folio)` | `mm.h` | Kernel virtual address |
-| `folio_get(folio)` | `mm.h` | Increment refcount (requires prior ref) |
-| `folio_put(folio)` | `mm.h` | Decrement refcount; frees at zero |
-| `folio_try_get(folio)` | `page_ref.h` | Speculatively acquire a reference |
-| `folio_ref_count(folio)` | `page_ref.h` | Raw reference count |
-| `folio_test_large(folio)` | `page-flags.h` | True for order ≥ 1 folios |
-| `folio_add_lru(folio)` | `swap.h` | Add folio to the LRU list |
-| `filemap_grab_folio(mapping, index)` | `pagemap.h` | Look up or create a page-cache folio |
-| `filemap_alloc_folio(gfp, order)` | `pagemap.h` | Allocate a page-cache folio |
-| `readahead_folio(ractl)` | `pagemap.h` | Get next folio from a readahead batch |
+| `page_folio(page)` | `page-flags.h` | 任意のpageをそれを所有するfolioに変換する |
+| `folio_page(folio, n)` | `page-flags.h` | folio内のn番目のページを取得する |
+| `folio_order(folio)` | `mm.h` | 割り当てorder（単一ページなら0） |
+| `folio_nr_pages(folio)` | `mm.h` | ページ数: `1 << folio_order()` |
+| `folio_size(folio)` | `mm.h` | バイトサイズ: `PAGE_SIZE << folio_order()` |
+| `folio_pfn(folio)` | `mm.h` | 最初のページのPFN |
+| `folio_address(folio)` | `mm.h` | カーネル仮想アドレス |
+| `folio_get(folio)` | `mm.h` | 参照カウントを増やす（事前の参照が必要） |
+| `folio_put(folio)` | `mm.h` | 参照カウントを減らす。0で解放する |
+| `folio_try_get(folio)` | `page_ref.h` | 投機的に参照を取得する |
+| `folio_ref_count(folio)` | `page_ref.h` | 生の参照カウント |
+| `folio_test_large(folio)` | `page-flags.h` | order ≥ 1のfolioならtrue |
+| `folio_add_lru(folio)` | `swap.h` | folioをLRUリストに追加する |
+| `filemap_grab_folio(mapping, index)` | `pagemap.h` | ページキャッシュのfolioを検索または作成する |
+| `filemap_alloc_folio(gfp, order)` | `pagemap.h` | ページキャッシュのfolioを割り当てる |
+| `readahead_folio(ractl)` | `pagemap.h` | 先読みバッチから次のfolioを取得する |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LWN: Folios](https://lwn.net/Articles/849538/) — Matthew Wilcox's 2021 article introducing the folio concept and explaining why `struct page` needed replacing
-- [LWN: Large folios for the page cache](https://lwn.net/Articles/893512/) — follow-up coverage on large folio support for file-backed memory and the page cache
-- [mm/folio-compat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/folio-compat.c) — the compatibility shim layer; every function here is a page-API call that delegates to its `folio_*` counterpart and is awaiting conversion
-- [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) — page cache core; `__filemap_get_folio()` and `filemap_add_folio()` are the primary folio-native entry points
-- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — canonical `struct folio` definition with the `FOLIO_MATCH` layout assertions
-- [mthp.md](mthp.md) — multi-size THP: the anonymous-memory counterpart to large file-backed folios; both share the same order-N folio representation
+- [LWN: Folios](https://lwn.net/Articles/849538/) — folioの概念を紹介し、なぜ`struct page`を置き換える必要があったかを説明したMatthew Wilcoxの2021年の記事
+- [LWN: Large folios for the page cache](https://lwn.net/Articles/893512/) — ファイルバックメモリとページキャッシュに対するlarge folioサポートについての続報
+- [mm/folio-compat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/folio-compat.c) — 互換性シム層。ここにある関数はすべて、`folio_*`の対応関数に処理を委譲するpage API呼び出しであり、変換を待っている
+- [mm/filemap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) — ページキャッシュの中核。`__filemap_get_folio()`と`filemap_add_folio()`が主要なfolioネイティブのエントリポイントである
+- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `FOLIO_MATCH`によるレイアウトのアサーションを含む、`struct folio`の正規の定義
+- [mthp.md](mthp.md) — multi-size THP: ファイルバックのlarge folioに対応する匿名メモリ版。どちらも同じorder-Nのfolio表現を共有している

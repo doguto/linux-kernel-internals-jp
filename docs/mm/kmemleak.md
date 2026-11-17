@@ -1,32 +1,32 @@
-# Kmemleak (Kernel Memory Leak Detector) {#kmemleak-kernel-memory-leak-detector}
+# Kmemleak（カーネルメモリリーク検出器） {#kmemleak-kernel-memory-leak-detector}
 
-> Finding unreferenced kernel allocations with a garbage-collection style scan
+> ガベージコレクション風のスキャンで、参照されなくなったカーネルの割り当てを見つける
 
-## What Is Kmemleak? {#what-is-kmemleak}
+## Kmemleakとは何か {#what-is-kmemleak}
 
-Kmemleak is a kernel subsystem that detects **memory leaks** in the kernel — allocations that are no longer referenced by any pointer but have never been freed. These are sometimes called *orphaned* allocations. They do not cause immediate crashes, but they silently consume memory that can never be reclaimed, eventually leading to exhaustion.
+Kmemleakは、カーネル内の**メモリリーク**、すなわちどのポインタからももはや参照されていないのに一度も解放されていない割り当てを検出するカーネルサブシステムである。これらは*孤立した*（orphaned）割り当てと呼ばれることもある。即座にクラッシュを引き起こすことはないが、決して回収できないメモリを気付かれないうちに消費し、最終的にはメモリの枯渇につながる。
 
-Kmemleak is documented at [`Documentation/dev-tools/kmemleak.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst) and implemented in [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c).
+Kmemleakは[`Documentation/dev-tools/kmemleak.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst)に文書化されており、[`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c)に実装されている。
 
-## How Kmemleak Differs from KASAN and KFENCE {#how-kmemleak-differs-from-kasan-and-kfence}
+## KmemleakとKASAN・KFENCEの違い {#how-kmemleak-differs-from-kasan-and-kfence}
 
-Kmemleak, [KASAN](kasan.md), and [KFENCE](kfence.md) all guard kernel memory, but they target fundamentally different failure modes:
+Kmemleak、[KASAN](kasan.md)、[KFENCE](kfence.md)はいずれもカーネルメモリを守るが、対象とする障害の種類は根本的に異なる:
 
-| Tool | What it catches | How it works | Deployment |
+| ツール | 検出するもの | 仕組み | 用途 |
 |------|----------------|--------------|------------|
-| Kmemleak | Memory **leaks** (never freed) | Garbage-collection scan, gray-coloring | Testing, debug builds |
-| [KASAN](kasan.md) | **Use-after-free**, out-of-bounds, double-free | Shadow memory + compiler instrumentation | Testing, CI |
-| [KFENCE](kfence.md) | Use-after-free, out-of-bounds (sampled) | Guard pages, hardware page faults | Production, always-on |
+| Kmemleak | メモリ**リーク**（一度も解放されない） | ガベージコレクション風のスキャン、灰色塗り | テスト、デバッグビルド |
+| [KASAN](kasan.md) | **use-after-free**、範囲外アクセス、二重解放 | シャドウメモリ + コンパイラによる計装 | テスト、CI |
+| [KFENCE](kfence.md) | use-after-free、範囲外アクセス（サンプリング） | ガードページ、ハードウェアのページフォールト | 本番環境、常時有効 |
 
-A buffer that is allocated, its only pointer is overwritten without freeing it, and then the allocation is forgotten: KASAN and KFENCE are silent (no bad access happened). Only kmemleak reports it.
+バッファが割り当てられ、その唯一のポインタが解放されないまま上書きされ、その割り当てが忘れ去られた場合を考える。KASANとKFENCEは何も報告しない（不正なアクセスは起きていない）。これを報告するのはkmemleakだけである。
 
-Conversely, kmemleak cannot tell you that a freed pointer was accessed again. That is KASAN's domain.
+逆に、kmemleakは解放済みのポインタに再びアクセスされたことを教えてはくれない。それはKASANの領分である。
 
-## How Kmemleak Works {#how-kmemleak-works}
+## Kmemleakの仕組み {#how-kmemleak-works}
 
-### The Gray-Coloring Algorithm {#the-gray-coloring-algorithm}
+### 灰色塗りアルゴリズム {#the-gray-coloring-algorithm}
 
-Kmemleak uses an algorithm inspired by **garbage collector tri-color marking**. Every tracked allocation is assigned one of three states:
+Kmemleakは、**ガベージコレクタの三色マーキング**に着想を得たアルゴリズムを使う。追跡されている各割り当てには、3つの状態のいずれかが割り当てられる:
 
 ```
 White  ── not yet reachable from any root; candidate for reporting
@@ -34,65 +34,65 @@ Gray   ── reachable (a pointer to it was found during scanning)
 Black  ── explicitly told to ignore (kmemleak_ignore only)
 ```
 
-At the end of a scan:
+スキャンの終わりに:
 
-- **Gray objects** are considered live. They will not be reported.
-- **White objects** (those never colored gray) are *potentially leaked* — no pointer to them was found anywhere in the scanned memory.
+- **灰色のオブジェクト**は生存しているとみなされ、報告されない。
+- **白のオブジェクト**（一度も灰色に塗られなかったもの）は*リークしている可能性がある*。スキャンしたメモリのどこにも、それらを指すポインタが見つからなかったということである。
 
-The algorithm is described in the source at the top of [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c).
+このアルゴリズムは、[`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c)のソースの先頭に記述されている。
 
-### What Gets Scanned {#what-gets-scanned}
+### 何がスキャンされるか {#what-gets-scanned}
 
-To find pointers, kmemleak scans:
+ポインタを見つけるため、kmemleakは次のものをスキャンする:
 
-1. **Data and BSS segments** of the kernel image — global/static variables that might hold pointers to allocations
-2. **The init section** (`.init.data`) before it is freed
-3. **Per-CPU data areas** — per-CPU variables that could hold allocation pointers
-4. **Stack of every thread** — each task's kernel stack is scanned for pointer-like values
-5. **Extra scan areas** explicitly registered via `kmemleak_scan_area()` — used by subsystems that store pointers in memory regions not covered by the above
+1. カーネルイメージの**データセグメントとBSSセグメント** — 割り当てへのポインタを保持している可能性のあるグローバル/静的変数
+2. 解放される前の**initセクション**（`.init.data`）
+3. **CPUごとのデータ領域** — 割り当てのポインタを保持しうるCPUごとの変数
+4. **すべてのスレッドのスタック** — 各タスクのカーネルスタックが、ポインタらしき値を求めてスキャンされる
+5. `kmemleak_scan_area()`で明示的に登録された**追加のスキャン領域** — 上記でカバーされないメモリ領域にポインタを格納するサブシステムが使う
 
-Any value in any of these regions that **looks like** a pointer into a tracked allocation marks that allocation gray (reachable).
+これらのいずれかの領域にある値のうち、追跡中の割り当てを指すポインタの**ように見える**ものがあれば、その割り当ては灰色（到達可能）とマークされる。
 
-### What "Looks Like a Pointer" Means {#what-looks-like-a-pointer-means}
+### 「ポインタのように見える」とはどういう意味か {#what-looks-like-a-pointer-means}
 
-Kmemleak uses a conservative approach: **any word-sized value that falls within the address range of a tracked allocation is treated as a valid pointer**. This is intentionally liberal to avoid false positives.
+Kmemleakは保守的な手法を使う。**追跡中の割り当てのアドレス範囲内に収まるワードサイズの値はすべて、有効なポインタとして扱われる**。これは誤検出を避けるため、意図的に緩くしてある。
 
-The consequence is false negatives: if the pointer is stored in a form kmemleak cannot read (e.g., XOR-obfuscated linked list pointers, packed bitfields, or offsets rather than direct pointers), kmemleak will miss it and falsely report the allocation as leaked. This is a known limitation — see [Limitations](#limitations) below.
+その代償として見逃しが生じる。ポインタがkmemleakの読めない形式（例: XORで難読化された連結リストのポインタ、詰め込まれたビットフィールド、直接のポインタではなくオフセット）で格納されていると、kmemleakはそれを見落とし、その割り当てを誤ってリークとして報告する。これは既知の制限である。後述の[制限事項](#limitations)を参照。
 
-### Tracking Allocations {#tracking-allocations}
+### 割り当ての追跡 {#tracking-allocations}
 
-Kmemleak hooks into the kernel allocator by way of callbacks declared in [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h):
+Kmemleakは、[`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h)で宣言されたコールバックを通じて、カーネルのアロケータにフックする:
 
-| Allocator event | Kmemleak callback |
+| アロケータのイベント | Kmemleakのコールバック |
 |----------------|-------------------|
-| `kmalloc()` / `kmem_cache_alloc()` | `kmemleak_alloc()` — register new object |
-| `kfree()` / `kmem_cache_free()` | `kmemleak_free()` — unregister object |
+| `kmalloc()` / `kmem_cache_alloc()` | `kmemleak_alloc()` — 新しいオブジェクトを登録する |
+| `kfree()` / `kmem_cache_free()` | `kmemleak_free()` — オブジェクトの登録を解除する |
 | `vmalloc()` | `kmemleak_vmalloc()` |
 | `vfree()` | `kmemleak_free()` |
 
-These hooks are called from deep inside the slab allocator ([`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c), [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c)) and are compiled out entirely when `CONFIG_DEBUG_KMEMLEAK` is not set.
+これらのフックはslabアロケータの奥深く（[`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c)、[`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c)）から呼び出され、`CONFIG_DEBUG_KMEMLEAK`が設定されていない場合はコンパイル時に完全に取り除かれる。
 
-Each tracked object is represented by a `struct kmemleak_object` (defined in `mm/kmemleak.c`) that stores:
+追跡される各オブジェクトは`struct kmemleak_object`（`mm/kmemleak.c`で定義）で表され、これは次のものを保持する:
 
-- The allocation pointer and size
-- The allocation stack trace (captured at `kmemleak_alloc()` time)
-- Reference count and state flags
-- Minimum number of pointer references required before declaring a leak (default 1; set via the `min_count` parameter to `kmemleak_alloc()`)
+- 割り当てのポインタとサイズ
+- 割り当て時のスタックトレース（`kmemleak_alloc()`の時点で取得）
+- 参照カウントと状態フラグ
+- リークと判定する前に必要なポインタ参照の最小数（デフォルトは1。`kmemleak_alloc()`の`min_count`パラメータで設定）
 
-### The Scan Thread {#the-scan-thread}
+### スキャンスレッド {#the-scan-thread}
 
-A kernel thread (`kmemleak` kthread) periodically executes `kmemleak_scan()`. The scan:
+カーネルスレッド（`kmemleak` kthread）が定期的に`kmemleak_scan()`を実行する。スキャンは次のように行われる:
 
-1. **Marks all objects white** (candidate state)
-2. **Walks all scan areas** (data, BSS, per-CPU, stacks) looking for pointer values
-3. **Colors reachable objects gray** — objects pointed to by a scanned root are marked reachable via `make_gray_object()`
-4. **Reports survivors** — any object still white after the full walk is reported as a potential leak
+1. **すべてのオブジェクトを白にマークする**（候補の状態）
+2. **すべてのスキャン領域をたどり**（データ、BSS、CPUごとの領域、スタック）、ポインタ値を探す
+3. **到達可能なオブジェクトを灰色に塗る** — スキャンしたルートから指されているオブジェクトは、`make_gray_object()`によって到達可能とマークされる
+4. **生き残ったものを報告する** — 走査全体を終えてもまだ白のオブジェクトは、リークの可能性があるものとして報告される
 
-The scan is also triggered on demand via the debugfs interface (see [Using Kmemleak](#using-kmemleak)).
+スキャンはdebugfsインターフェースを介してオンデマンドでも起動できる（[Kmemleakの使い方](#using-kmemleak)を参照）。
 
-## Enabling Kmemleak {#enabling-kmemleak}
+## Kmemleakを有効にする {#enabling-kmemleak}
 
-### Kernel Configuration {#kernel-configuration}
+### カーネルの設定 {#kernel-configuration}
 
 ```
 CONFIG_DEBUG_KMEMLEAK=y
@@ -106,49 +106,49 @@ CONFIG_DEBUG_KMEMLEAK_DEFAULT_OFF=y   # Boot disabled; enable via boot param
 CONFIG_DEBUG_KMEMLEAK_AUTO_SCAN=y
 ```
 
-Enabling kmemleak requires `CONFIG_DEBUG_KMEMLEAK=y`. The related options are defined in [`lib/Kconfig.debug`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.debug).
+kmemleakを有効にするには`CONFIG_DEBUG_KMEMLEAK=y`が必要である。関連するオプションは[`lib/Kconfig.debug`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.debug)で定義されている。
 
-!!! warning "Not for production"
-    Kmemleak adds measurable memory and CPU overhead (see [Performance Overhead](#performance-overhead)). It is intended for development and debugging builds, not production deployment.
+!!! warning "本番環境向けではない"
+    Kmemleakは測定可能なメモリとCPUのオーバーヘッドを追加する（[性能上のオーバーヘッド](#performance-overhead)を参照）。開発用やデバッグ用のビルドを想定したものであり、本番環境での運用向けではない。
 
-### Boot Parameters {#boot-parameters}
+### ブートパラメータ {#boot-parameters}
 
 ```bash
-# Disable kmemleak entirely (even if compiled in)
+# kmemleakを完全に無効にする（組み込まれていても）
 kmemleak=off
 
-# Enable even if CONFIG_DEBUG_KMEMLEAK_DEFAULT_OFF=y
+# CONFIG_DEBUG_KMEMLEAK_DEFAULT_OFF=yであっても有効にする
 kmemleak=on
 ```
 
-### Verifying Kmemleak Is Active {#verifying-kmemleak-is-active}
+### Kmemleakが有効であることを確認する {#verifying-kmemleak-is-active}
 
 ```bash
-# Check configuration
+# 設定を確認する
 zcat /proc/config.gz | grep KMEMLEAK
 
-# Check boot messages
+# ブートメッセージを確認する
 dmesg | grep kmemleak
 
-# Check that debugfs interface exists
+# debugfsインターフェースが存在することを確認する
 ls /sys/kernel/debug/kmemleak
 ```
 
-## Using Kmemleak {#using-kmemleak}
+## Kmemleakの使い方 {#using-kmemleak}
 
-### The debugfs Interface {#the-debugfs-interface}
+### debugfsインターフェース {#the-debugfs-interface}
 
-Kmemleak exposes a single file at `/sys/kernel/debug/kmemleak` that serves as both a control channel (writes) and a report interface (reads).
+Kmemleakは`/sys/kernel/debug/kmemleak`に単一のファイルを公開しており、これは制御チャネル（書き込み）とレポートインターフェース（読み込み）の両方の役割を果たす。
 
-#### Reading Reports {#reading-reports}
+#### レポートを読む {#reading-reports}
 
 ```bash
-# Trigger a scan and then read results
+# スキャンを起動してから結果を読む
 echo scan > /sys/kernel/debug/kmemleak
 cat /sys/kernel/debug/kmemleak
 ```
 
-A typical leak report looks like:
+典型的なリークレポートは次のようになる:
 
 ```
 unreferenced object 0xffff88801a2b4c00 (size 128):
@@ -163,74 +163,74 @@ unreferenced object 0xffff88801a2b4c00 (size 128):
     [<00000000abcd1234>] do_init_module+0x5e/0x220
 ```
 
-**Reading the report**:
+**レポートの読み方**:
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `unreferenced object 0xffff...` | Allocation address found with no pointer to it |
-| `size 128` | Allocation size in bytes |
-| `comm / pid / jiffies` | Task name, PID, and kernel timestamp at allocation time |
-| `age` | Seconds since the allocation was made |
-| `hex dump` | First bytes of the allocation (helps identify the object type) |
-| `backtrace` | Call stack at allocation time — this shows **where the leak was created** |
+| `unreferenced object 0xffff...` | それを指すポインタが見つからなかった割り当てのアドレス |
+| `size 128` | 割り当てのバイト単位のサイズ |
+| `comm / pid / jiffies` | 割り当て時のタスク名、PID、カーネルのタイムスタンプ |
+| `age` | 割り当てからの経過秒数 |
+| `hex dump` | 割り当ての先頭バイト（オブジェクトの種類の特定に役立つ） |
+| `backtrace` | 割り当て時のコールスタック — **リークがどこで作られたか**を示す |
 
-The backtrace points to where the memory was allocated, which is typically where you begin the investigation. The leak itself (where the pointer was dropped) is the bug to find.
+バックトレースはメモリが割り当てられた場所を指しており、通常はそこから調査を始める。見つけるべきバグは、リークそのもの（ポインタが失われた場所）である。
 
-#### Control Commands {#control-commands}
+#### 制御コマンド {#control-commands}
 
 ```bash
-# Trigger an immediate scan
+# 即座にスキャンを起動する
 echo scan > /sys/kernel/debug/kmemleak
 
-# Clear all current reports (useful to get a clean baseline)
+# 現在のレポートをすべてクリアする（きれいな基準状態を得るのに便利）
 echo clear > /sys/kernel/debug/kmemleak
 
-# Disable kmemleak at runtime (stops tracking new allocations)
+# 実行時にkmemleakを無効にする（新しい割り当ての追跡を止める）
 echo off > /sys/kernel/debug/kmemleak
 
-# Dump information about the tracked object at a specific address
+# 特定のアドレスにある追跡中のオブジェクトの情報をダンプする
 echo dump=0xffff88801a2b4c00 > /sys/kernel/debug/kmemleak
 ```
 
-### Workflow: Finding a Leak in a Kernel Module {#workflow-finding-a-leak-in-a-kernel-module}
+### ワークフロー: カーネルモジュールのリークを見つける {#workflow-finding-a-leak-in-a-kernel-module}
 
 ```bash
-# 1. Get a clean baseline before loading the module
+# 1. モジュールをロードする前に、きれいな基準状態を得る
 echo clear > /sys/kernel/debug/kmemleak
 echo scan  > /sys/kernel/debug/kmemleak
-cat /sys/kernel/debug/kmemleak    # Should be empty or show pre-existing leaks
+cat /sys/kernel/debug/kmemleak    # 空であるか、既存のリークが表示されるはず
 
-# 2. Load and exercise the module
+# 2. モジュールをロードして動作させる
 modprobe my_module
-# ... run the workload that exercises my_module ...
+# ... my_moduleを動作させるワークロードを実行する ...
 
-# 3. Unload the module (leaks should now be orphaned)
+# 3. モジュールをアンロードする（リークはこの時点で孤立しているはず）
 rmmod my_module
 
-# 4. Trigger a fresh scan
+# 4. 新たにスキャンを起動する
 echo scan > /sys/kernel/debug/kmemleak
 
-# 5. Read results
+# 5. 結果を読む
 cat /sys/kernel/debug/kmemleak
 ```
 
-!!! tip "Multiple scan passes"
-    The first read after loading may include transient allocations. Run `echo scan > /sys/kernel/debug/kmemleak` a second or third time, waiting a few seconds between passes. Objects that persist across multiple scans are more likely to be true leaks.
+!!! tip "複数回のスキャン"
+    ロード後の最初の読み込みには、一時的な割り当てが含まれていることがある。各回の間に数秒待ちながら、`echo scan > /sys/kernel/debug/kmemleak`を2回目、3回目と実行すること。複数回のスキャンにわたって残り続けるオブジェクトほど、本当のリークである可能性が高い。
 
-### Automatic Scanning {#automatic-scanning}
+### 自動スキャン {#automatic-scanning}
 
-By default, kmemleak schedules automatic scans every 600 seconds (10 minutes) using a kernel thread. You can see this thread:
+デフォルトでは、kmemleakはカーネルスレッドを使って600秒（10分）ごとに自動スキャンをスケジュールする。このスレッドは次のように確認できる:
 
 ```bash
 ps aux | grep kmemleak
 # root         23  0.0  0.0      0     0 ?  S    boot  0:00 [kmemleak]
 ```
 
-Automatic scans produce the same output as manual scans. Check `/sys/kernel/debug/kmemleak` at any time to see the accumulated results.
+自動スキャンは手動スキャンと同じ出力を生成する。いつでも`/sys/kernel/debug/kmemleak`を確認すれば、蓄積された結果を見ることができる。
 
-## Annotating Allocations {#annotating-allocations}
+## 割り当てへのアノテーション {#annotating-allocations}
 
-Kmemleak can report false positives for allocations where the pointer is stored in a way it cannot scan — XOR-linked lists, encoded pointers, hardware descriptor rings, or deliberately long-lived allocations that the programmer knows are intentional. The API in [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h) provides annotations to suppress these reports.
+Kmemleakは、スキャンできない方法でポインタが格納されている割り当て、たとえばXOR連結リスト、エンコードされたポインタ、ハードウェアのディスクリプタリング、あるいはプログラマが意図的なものとわかっている長寿命の割り当てに対して、誤検出を報告することがある。[`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h)のAPIは、こうした報告を抑制するためのアノテーションを提供している。
 
 ### kmemleak_not_leak {#kmemleaknotleak}
 
@@ -238,12 +238,12 @@ Kmemleak can report false positives for allocations where the pointer is stored 
 #include <linux/kmemleak.h>
 
 void *buf = kmalloc(size, GFP_KERNEL);
-/* buf is stored in hardware registers — kmemleak can't scan those */
+/* bufはハードウェアレジスタに格納される — kmemleakはそれらをスキャンできない */
 writel(virt_to_phys(buf), hw_reg);
 kmemleak_not_leak(buf);
 ```
 
-`kmemleak_not_leak(ptr)` tells kmemleak that this allocation is **intentionally not tracked** — it will not be reported even if no pointer to it is found during scanning. Use this when you know the allocation is reachable through a path kmemleak cannot see.
+`kmemleak_not_leak(ptr)`は、この割り当てが**意図的に追跡対象外である**ことをkmemleakに伝える。スキャン中にそれを指すポインタが見つからなくても報告されない。kmemleakからは見えない経路で割り当てに到達可能だとわかっている場合に使う。
 
 ### kmemleak_ignore {#kmemleak_ignore}
 
@@ -252,7 +252,7 @@ void *scratch = kmalloc(size, GFP_KERNEL);
 kmemleak_ignore(scratch);
 ```
 
-`kmemleak_ignore(ptr)` suppresses reporting for this specific allocation and also suppresses scanning its contents. Use this for allocations that are truly intentional one-time allocations that are never freed (e.g., early-boot data structures that live for the kernel lifetime).
+`kmemleak_ignore(ptr)`は、この特定の割り当てについての報告を抑制し、その内容のスキャンも抑制する。決して解放されない、本当に意図的な一度きりの割り当て（例: カーネルの生存期間中ずっと存在するブート初期のデータ構造）に使う。
 
 ### kmemleak_no_scan {#kmemleaknoscan}
 
@@ -260,7 +260,7 @@ kmemleak_ignore(scratch);
 kmemleak_no_scan(ptr);
 ```
 
-`kmemleak_no_scan(ptr)` prevents kmemleak from scanning the contents of this allocation for pointers to other objects. It does not suppress leak reporting for `ptr` itself; it just stops kmemleak from using `ptr`'s contents as roots. Use this when the object contains values that look like pointers but are not (e.g., hash values, checksums, raw data buffers).
+`kmemleak_no_scan(ptr)`は、kmemleakがこの割り当ての内容を、他のオブジェクトへのポインタを求めてスキャンするのを防ぐ。`ptr`自体のリーク報告は抑制しない。kmemleakが`ptr`の内容をルートとして使うのを止めるだけである。オブジェクトがポインタのように見えるがポインタではない値（例: ハッシュ値、チェックサム、生のデータバッファ）を含んでいる場合に使う。
 
 ### kmemleak_erase {#kmemleak_erase}
 
@@ -268,122 +268,122 @@ kmemleak_no_scan(ptr);
 kmemleak_erase(&global_ptr);
 ```
 
-`kmemleak_erase(ptr)` explicitly removes a pointer from consideration during scanning. Use this when a pointer to an allocation has been cleared but the allocation will be freed later through a different mechanism. This prevents kmemleak from following the now-null pointer during the scan.
+`kmemleak_erase(ptr)`は、スキャン時の検討対象からポインタを明示的に取り除く。割り当てへのポインタはクリアされたが、その割り当ては後で別の仕組みによって解放される場合に使う。これにより、kmemleakがスキャン中に今やnullとなったポインタをたどるのを防ぐ。
 
-### kmemleak_alloc / kmemleak_free (Manual Registration) {#kmemleakalloc-kmemleakfree-manual-registration}
+### kmemleak_alloc / kmemleak_free（手動登録） {#kmemleakalloc-kmemleakfree-manual-registration}
 
-For memory that is tracked by a custom allocator rather than `kmalloc`/`vmalloc`, you can register and unregister objects manually:
+`kmalloc`/`vmalloc`ではなく独自のアロケータで管理されるメモリについては、オブジェクトを手動で登録・登録解除できる:
 
 ```c
-/* Register an externally-managed allocation */
+/* 外部で管理される割り当てを登録する */
 kmemleak_alloc(ptr, size, min_count, gfp);
 
-/* Unregister when freed */
+/* 解放時に登録を解除する */
 kmemleak_free(ptr);
 ```
 
-The `min_count` parameter controls how many pointer references are required before kmemleak considers the object reachable. Setting `min_count=0` means kmemleak will never report this object regardless of references (equivalent to `kmemleak_ignore`). Setting `min_count=2` requires at least two pointer references.
+`min_count`パラメータは、kmemleakがオブジェクトを到達可能とみなすまでに必要なポインタ参照の数を制御する。`min_count=0`を設定すると、参照の有無にかかわらずkmemleakはこのオブジェクトを決して報告しない（`kmemleak_ignore`と同等）。`min_count=2`を設定すると、少なくとも2つのポインタ参照が必要になる。
 
-### Summary of Annotation Functions {#summary-of-annotation-functions}
+### アノテーション関数のまとめ {#summary-of-annotation-functions}
 
-| Function | Effect |
+| 関数 | 効果 |
 |----------|--------|
-| `kmemleak_not_leak(ptr)` | Do not report this object as leaked |
-| `kmemleak_ignore(ptr)` | Do not report; do not scan contents |
-| `kmemleak_no_scan(ptr)` | Do not scan contents (still track for leaks) |
-| `kmemleak_erase(addrp)` | Remove a pointer from scan consideration |
-| `kmemleak_alloc(ptr, size, min_count, gfp)` | Manually register an object |
-| `kmemleak_free(ptr)` | Manually unregister an object |
+| `kmemleak_not_leak(ptr)` | このオブジェクトをリークとして報告しない |
+| `kmemleak_ignore(ptr)` | 報告しない。内容もスキャンしない |
+| `kmemleak_no_scan(ptr)` | 内容をスキャンしない（リークの追跡は続ける） |
+| `kmemleak_erase(addrp)` | ポインタをスキャンの検討対象から取り除く |
+| `kmemleak_alloc(ptr, size, min_count, gfp)` | オブジェクトを手動で登録する |
+| `kmemleak_free(ptr)` | オブジェクトの登録を手動で解除する |
 
-## Limitations {#limitations}
+## 制限事項 {#limitations}
 
-### False Positives (Incorrectly Reported Leaks) {#false-positives-incorrectly-reported-leaks}
+### 誤検出（誤って報告されるリーク） {#false-positives-incorrectly-reported-leaks}
 
-Kmemleak reports an allocation as leaked whenever its scan finds no pointer to it. This produces false positives when the pointer exists but is hidden:
+Kmemleakは、スキャンで割り当てを指すポインタが見つからなければ、その割り当てをリークとして報告する。そのため、ポインタが存在していても隠れている場合に誤検出が生じる:
 
-- **Encoded pointers**: XOR-linked lists (`list_add_rcu` variants), offset-based references, or deliberately obfuscated pointers are not recognized as valid references.
-- **Pointer stored in hardware**: Physical addresses written to MMIO registers, DMA descriptor rings, or IOMMU tables are not part of the scanned memory.
-- **Pointer stored in userspace memory**: If a kernel pointer is copied to a userspace buffer (unusual, and typically a bug itself), kmemleak does not scan userspace.
-- **Pointer split across two words**: On architectures where unaligned access is legal, a pointer split across a word boundary may not be recognized.
+- **エンコードされたポインタ**: XOR連結リスト（`list_add_rcu`の変種）、オフセットベースの参照、意図的に難読化されたポインタは、有効な参照として認識されない。
+- **ハードウェアに格納されたポインタ**: MMIOレジスタ、DMAディスクリプタリング、IOMMUテーブルに書き込まれた物理アドレスは、スキャン対象のメモリには含まれない。
+- **ユーザー空間のメモリに格納されたポインタ**: カーネルのポインタがユーザー空間のバッファにコピーされた場合（珍しく、通常はそれ自体がバグである）、kmemleakはユーザー空間をスキャンしない。
+- **2ワードにまたがって分割されたポインタ**: 非アラインアクセスが許されるアーキテクチャでは、ワード境界をまたいで分割されたポインタは認識されないことがある。
 
-The `kmemleak_not_leak()` and `kmemleak_no_scan()` annotations exist specifically to silence these false positives in known-good code.
+`kmemleak_not_leak()`と`kmemleak_no_scan()`のアノテーションは、まさに問題のないことがわかっているコードでこうした誤検出を黙らせるために存在する。
 
-### False Negatives (Missed Leaks) {#false-negatives-missed-leaks}
+### 見逃し（検出されないリーク） {#false-negatives-missed-leaks}
 
-Kmemleak can fail to detect a real leak if:
+Kmemleakは次の場合に本物のリークを検出できないことがある:
 
-- The pointer happens to be present somewhere in scanned memory (a stale value from a previous allocation that was never cleared), making the object appear reachable.
-- The allocation is freed before the scan runs (kmemleak correctly removes freed objects from tracking).
-- The allocation is below the minimum size tracked by kmemleak.
+- ポインタがたまたまスキャン対象のメモリのどこかに存在し（以前の割り当てから残った、クリアされていない古い値）、オブジェクトが到達可能に見えてしまう場合。
+- スキャンが実行される前に割り当てが解放された場合（kmemleakは解放されたオブジェクトを正しく追跡対象から外す）。
+- 割り当てがkmemleakの追跡する最小サイズを下回っている場合。
 
-### Performance Overhead {#performance-overhead}
+### 性能上のオーバーヘッド {#performance-overhead}
 
-Kmemleak has three main sources of overhead:
+Kmemleakのオーバーヘッドには主に3つの発生源がある:
 
-1. **Per-allocation cost**: Every `kmalloc()` and `kfree()` invokes a kmemleak callback that updates the internal object tree (a red-black tree keyed on allocation address). This adds latency to every allocation.
-2. **Memory for metadata**: Each tracked `struct kmemleak_object` consumes memory proportional to the number of live allocations.
-3. **Scan cost**: The periodic scan traverses the data segment, per-CPU areas, and every thread's kernel stack. On systems with many threads or large data segments, a single scan can take hundreds of milliseconds.
+1. **割り当てごとのコスト**: すべての`kmalloc()`と`kfree()`がkmemleakのコールバックを呼び出し、内部のオブジェクトツリー（割り当てアドレスをキーとする赤黒木）を更新する。これはすべての割り当てにレイテンシを追加する。
+2. **メタデータのためのメモリ**: 追跡される各`struct kmemleak_object`が、生存している割り当ての数に比例したメモリを消費する。
+3. **スキャンのコスト**: 定期的なスキャンは、データセグメント、CPUごとの領域、すべてのスレッドのカーネルスタックを走査する。スレッドの多いシステムや大きなデータセグメントを持つシステムでは、1回のスキャンに数百ミリ秒かかることがある。
 
-The scan temporarily disables migration and reads every thread's stack, which can cause scheduling jitter. This makes kmemleak unsuitable for latency-sensitive workloads.
+スキャンは一時的にマイグレーションを無効にし、すべてのスレッドのスタックを読むため、スケジューリングのジッタを引き起こすことがある。このため、kmemleakはレイテンシに敏感なワークロードには適さない。
 
-### What Kmemleak Cannot Detect {#what-kmemleak-cannot-detect}
+### Kmemleakが検出できないもの {#what-kmemleak-cannot-detect}
 
-- Leaks in userspace processes (use Valgrind or AddressSanitizer for that)
-- Leaks in memory-mapped I/O regions
-- Memory that is technically reachable but functionally never used (logical leaks)
-- Reference counting bugs (where a reference count never reaches zero, keeping an object alive indefinitely) — these are reachable and will not be reported
+- ユーザー空間プロセスのリーク（それにはValgrindやAddressSanitizerを使う）
+- メモリマップドI/O領域のリーク
+- 技術的には到達可能だが、機能的には決して使われないメモリ（論理的なリーク）
+- 参照カウントのバグ（参照カウントが決して0にならず、オブジェクトを無期限に生かし続けるもの） — これらは到達可能なので報告されない
 
-For OOM conditions caused by accumulation of unfreed objects, see [OOM Debugging](oom-debugging.md).
+解放されないオブジェクトの蓄積によって引き起こされるOOM状態については、[OOMのデバッグ](oom-debugging.md)を参照。
 
-## History {#history}
+## 歴史 {#history}
 
-### v2.6.28: Introduction (2008) {#v2628-introduction-2008}
+### v2.6.28: 導入（2008年） {#v2628-introduction-2008}
 
-Kmemleak was introduced by Catalin Marinas (Arm Ltd) in kernel 2.6.28. The initial submission is described in the commit that added the infrastructure and the debugfs interface. The design drew on ideas from the Boehm-Demers-Weiser conservative garbage collector applied to the kernel's flat virtual address space.
+KmemleakはCatalin Marinas（Arm Ltd）によってカーネル2.6.28で導入された。最初の投稿は、基盤とdebugfsインターフェースを追加したコミットに記述されている。その設計は、Boehm-Demers-Weiserの保守的ガベージコレクタのアイデアを、カーネルの平坦な仮想アドレス空間に適用したものである。
 
-**LWN coverage**: [Finding kernel memory leaks](https://lwn.net/Articles/187979/) (2006) describes the early design proposals that preceded the upstream submission.
+**LWNの記事**: [Finding kernel memory leaks](https://lwn.net/Articles/187979/)（2006年）は、アップストリームへの投稿に先立つ初期の設計提案について述べている。
 
-### v2.6.30–v2.6.32: Stabilization {#v2630v2632-stabilization}
+### v2.6.30〜v2.6.32: 安定化 {#v2630v2632-stabilization}
 
-Early after introduction, Catalin Marinas and other contributors addressed false-positive rates and scanning coverage, adding support for per-CPU variables and refining the gray-coloring pass.
+導入後間もなく、Catalin Marinasや他の貢献者が誤検出率とスキャンの対象範囲に取り組み、CPUごとの変数のサポートを追加し、灰色塗りのパスを改良した。
 
-### v3.2: Early-Log Buffer {#v32-early-log-buffer}
+### v3.2: 初期ログバッファ {#v32-early-log-buffer}
 
-The early-log buffer was added to capture allocations that happen before the kmemleak data structures are fully initialized (very early boot), allowing boot-time leaks to be reported once kmemleak is ready.
+初期ログバッファは、kmemleakのデータ構造が完全に初期化される前（ブートのごく初期）に発生する割り当てを捕捉するために追加された。これにより、kmemleakの準備が整った時点でブート時のリークを報告できるようになった。
 
-### v4.x: Stability and Integration Improvements {#v4x-stability-and-integration-improvements}
+### v4.x: 安定性と統合の改善 {#v4x-stability-and-integration-improvements}
 
-Incremental improvements over the v4.x series addressed interactions with other debug infrastructure (fault injection, KASAN), reduced false-positive rates, and improved default scan interval behavior.
+v4.xシリーズを通じた段階的な改善により、他のデバッグ基盤（フォールトインジェクション、KASAN）との相互作用への対処、誤検出率の低減、デフォルトのスキャン間隔の挙動の改善が行われた。
 
-### v5.x: SLUB Integration Improvements {#v5x-slub-integration-improvements}
+### v5.x: SLUBとの統合の改善 {#v5x-slub-integration-improvements}
 
-As SLUB became the dominant slab allocator (see [Slab Allocator](slab.md)), kmemleak's hooks in [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) were refined to correctly track SLUB's internal object lifecycle, reducing false positives from SLUB's own internal allocations.
+SLUBが主流のslabアロケータになるにつれて（[slabアロケータ](slab.md)を参照）、[`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c)内のkmemleakのフックは、SLUBの内部的なオブジェクトのライフサイクルを正しく追跡するよう改良され、SLUB自身の内部割り当てによる誤検出が減った。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c) | Full kmemleak implementation: object tracking, scan logic, debugfs interface |
-| [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h) | Public API: `kmemleak_alloc`, `kmemleak_free`, annotation functions |
-| [`Documentation/dev-tools/kmemleak.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst) | Official kernel documentation |
-| [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | Calls `kmemleak_alloc` and `kmemleak_free` from common slab paths |
-| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB allocator; calls kmemleak hooks on alloc/free |
-| [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | Calls `kmemleak_vmalloc` / `kmemleak_vfree` |
-| [`lib/Kconfig.debug`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.debug) | `CONFIG_DEBUG_KMEMLEAK` and related Kconfig options |
+| [`mm/kmemleak.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kmemleak.c) | kmemleakの実装全体: オブジェクトの追跡、スキャンロジック、debugfsインターフェース |
+| [`include/linux/kmemleak.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kmemleak.h) | 公開API: `kmemleak_alloc`、`kmemleak_free`、アノテーション関数 |
+| [`Documentation/dev-tools/kmemleak.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/dev-tools/kmemleak.rst) | カーネルの公式ドキュメント |
+| [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | slabの共通パスから`kmemleak_alloc`と`kmemleak_free`を呼び出す |
+| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUBアロケータ。割り当て/解放時にkmemleakのフックを呼び出す |
+| [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | `kmemleak_vmalloc` / `kmemleak_vfree`を呼び出す |
+| [`lib/Kconfig.debug`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.debug) | `CONFIG_DEBUG_KMEMLEAK`と関連するKconfigオプション |
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [Kmemleak official documentation](https://docs.kernel.org/dev-tools/kmemleak.html) — configuration, usage, and the scanning algorithm
+- [Kmemleak official documentation](https://docs.kernel.org/dev-tools/kmemleak.html) — 設定、使い方、スキャンアルゴリズム
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Finding kernel memory leaks](https://lwn.net/Articles/187979/) — early design proposal describing the motivation and algorithm
+- [Finding kernel memory leaks](https://lwn.net/Articles/187979/) — 動機とアルゴリズムを説明した初期の設計提案
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [KASAN](kasan.md) — catches use-after-free and out-of-bounds; complementary to kmemleak
-- [KFENCE](kfence.md) — production-safe sampling detector; catches access bugs, not leaks
-- [OOM Debugging](oom-debugging.md) — when accumulated leaks lead to exhaustion
-- [Slab Allocator](slab.md) — kmemleak hooks into slab allocation paths
+- [KASAN](kasan.md) — use-after-freeと範囲外アクセスを検出する。kmemleakと相補的
+- [KFENCE](kfence.md) — 本番環境でも安全なサンプリング型の検出器。リークではなくアクセスのバグを検出する
+- [OOMのデバッグ](oom-debugging.md) — 蓄積したリークが枯渇につながる場合
+- [slabアロケータ](slab.md) — kmemleakはslabの割り当てパスにフックする

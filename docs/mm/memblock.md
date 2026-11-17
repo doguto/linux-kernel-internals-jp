@@ -1,34 +1,34 @@
-# memblock: The Boot-Time Memory Allocator {#memblock-the-boot-time-memory-allocator}
+# memblock: ブート時のメモリアロケータ {#memblock-the-boot-time-memory-allocator}
 
-> Before the buddy system can manage memory, something has to manage memory first
+> バディシステムがメモリを管理できるようになる前に、まず何かがメモリを管理しなければならない
 
-## What is memblock? {#what-is-memblock}
+## memblockとは何か {#what-is-memblock}
 
-memblock is the kernel's early boot-time memory allocator. It tracks which physical memory regions exist and which are already reserved, allowing the kernel to allocate memory during the earliest stages of boot -- long before the buddy allocator (page allocator) is initialized.
+memblockは、カーネルのブート初期のメモリアロケータである。どの物理メモリ領域が存在し、どれがすでに予約されているかを追跡し、バディアロケータ（ページアロケータ）が初期化されるよりずっと前の、ブートの最初期段階でカーネルがメモリを割り当てられるようにする。
 
 ```c
-/* Add a region of physical memory */
+/* 物理メモリの領域を追加する */
 int memblock_add(phys_addr_t base, phys_addr_t size);
 
-/* Mark a region as reserved (in use) */
+/* 領域を予約済み（使用中）としてマークする */
 int memblock_reserve(phys_addr_t base, phys_addr_t size);
 
-/* Allocate memory during early boot */
+/* ブート初期にメモリを割り当てる */
 void *memblock_alloc(phys_addr_t size, phys_addr_t align);
 ```
 
-## The Chicken-and-Egg Problem {#the-chicken-and-egg-problem}
+## 鶏が先か卵が先かの問題 {#the-chicken-and-egg-problem}
 
-The buddy allocator is the kernel's primary physical memory manager at runtime. But setting it up requires memory:
+バディアロケータは、実行時におけるカーネルの主要な物理メモリ管理機構である。しかし、それをセットアップするにはメモリが必要になる:
 
-- **Zone structures** (`struct zone`) need to be allocated for each memory zone
-- **Page frame metadata** (`struct page`) needs one entry per physical page -- on a 16GB system that's millions of entries
-- **Per-CPU data structures** for allocation caches
-- **Free lists** for the buddy system itself
+- **ゾーン構造体**（`struct zone`）を、各メモリゾーンについて割り当てる必要がある
+- **ページフレームのメタデータ**（`struct page`）は物理ページごとに1エントリ必要であり、16GBのシステムでは数百万エントリになる
+- 割り当てキャッシュのための**CPUごとのデータ構造**
+- バディシステム自体の**フリーリスト**
 
-But you cannot allocate memory without a memory allocator. Something simpler must come first.
+しかし、メモリアロケータなしにメモリを割り当てることはできない。もっと単純な何かが先に来なければならない。
 
-memblock solves this bootstrap problem with a deliberately minimal design: two flat arrays that track memory regions. No page tables, no locking, no per-CPU caches -- just "here's what exists" and "here's what's taken."
+memblockは、意図的に最小限にとどめた設計でこのブートストラップ問題を解決する。メモリ領域を追跡する2つの平坦な配列である。ページテーブルも、ロックも、CPUごとのキャッシュもない。あるのは「何が存在するか」と「何が使われているか」だけである。
 
 ```
 Boot sequence:
@@ -55,45 +55,45 @@ Boot sequence:
   7. memblock is done (memory can be freed if not needed)
 ```
 
-## How memblock Works {#how-memblock-works}
+## memblockの仕組み {#how-memblock-works}
 
-### Two Arrays: memory and reserved {#two-arrays-memory-and-reserved}
+### 2つの配列: memoryとreserved {#two-arrays-memory-and-reserved}
 
-The core data structure is simple. memblock maintains two collections of regions:
+中核となるデータ構造は単純である。memblockは2つの領域の集合を保持する:
 
 ```c
 struct memblock {
-    bool bottom_up;                          /* allocation direction */
-    phys_addr_t current_limit;               /* allocation limit */
-    struct memblock_type memory;             /* physical memory regions */
-    struct memblock_type reserved;           /* reserved (in-use) regions */
+    bool bottom_up;                          /* 割り当ての方向 */
+    phys_addr_t current_limit;               /* 割り当ての上限 */
+    struct memblock_type memory;             /* 物理メモリ領域 */
+    struct memblock_type reserved;           /* 予約済み（使用中）の領域 */
 };
 ```
 
-Each `memblock_type` holds a dynamically-growing array of regions:
+各`memblock_type`は、動的に拡張される領域の配列を保持する:
 
 ```c
 struct memblock_type {
-    unsigned long cnt;                       /* number of regions */
-    unsigned long max;                       /* max regions (grows if needed) */
-    phys_addr_t total_size;                  /* total size of all regions */
-    struct memblock_region *regions;         /* array of regions */
-    char *name;                              /* "memory" or "reserved" */
+    unsigned long cnt;                       /* 領域の数 */
+    unsigned long max;                       /* 最大領域数（必要に応じて拡張） */
+    phys_addr_t total_size;                  /* 全領域の合計サイズ */
+    struct memblock_region *regions;         /* 領域の配列 */
+    char *name;                              /* "memory"または"reserved" */
 };
 
 struct memblock_region {
-    phys_addr_t base;                        /* start address */
-    phys_addr_t size;                        /* region size */
-    enum memblock_flags flags;               /* HOTPLUG, MIRROR, NOMAP */
+    phys_addr_t base;                        /* 開始アドレス */
+    phys_addr_t size;                        /* 領域のサイズ */
+    enum memblock_flags flags;               /* HOTPLUG、MIRROR、NOMAP */
 #ifdef CONFIG_NUMA
-    int nid;                                 /* NUMA node id */
+    int nid;                                 /* NUMAノードID */
 #endif
 };
 ```
 
-The `memory` array describes what physical memory exists (as reported by firmware). The `reserved` array describes what's already been claimed -- the kernel image itself, device tree blob, initrd, early allocations, etc.
+`memory`配列は、（ファームウェアが報告する）どの物理メモリが存在するかを記述する。`reserved`配列は、すでに確保されているもの、すなわちカーネルイメージ自体、device tree blob、initrd、初期の割り当てなどを記述する。
 
-**Free memory** is implicitly defined as: regions in `memory` that are not covered by `reserved`.
+**空きメモリ**は暗黙的に、`memory`内の領域のうち`reserved`に覆われていない部分として定義される。
 
 ```
 Physical address space:
@@ -111,9 +111,9 @@ kernel  DTB                  initrd
 Free = memory minus reserved
 ```
 
-### Region Merging {#region-merging}
+### 領域の結合 {#region-merging}
 
-When adjacent or overlapping regions are added, memblock automatically merges them. This keeps the arrays compact:
+隣接する領域や重なり合う領域が追加されると、memblockはそれらを自動的に結合する。これによって配列がコンパクトに保たれる:
 
 ```
 memblock_add(0, 1GB)    -> memory: [0, 1GB]
@@ -121,100 +121,100 @@ memblock_add(1GB, 1GB)  -> memory: [0, 2GB]     (merged)
 memblock_add(3GB, 1GB)  -> memory: [0, 2GB], [3GB, 4GB]  (gap, no merge)
 ```
 
-### Static Bootstrap {#static-bootstrap}
+### 静的なブートストラップ {#static-bootstrap}
 
-The initial region arrays are statically allocated:
+最初の領域配列は静的に割り当てられている:
 
 ```c
 static struct memblock_region memblock_memory_init_regions[INIT_MEMBLOCK_REGIONS];
 static struct memblock_region memblock_reserved_init_regions[INIT_MEMBLOCK_RESERVED_REGIONS];
 ```
 
-`INIT_MEMBLOCK_REGIONS` defaults to 128. If more regions are needed, memblock doubles the array using `memblock_double_array()`, which allocates new space from memblock itself -- a neat self-referential trick that works because the old array remains valid until the copy is complete.
+`INIT_MEMBLOCK_REGIONS`のデフォルトは128である。より多くの領域が必要になると、memblockは`memblock_double_array()`を使って配列を2倍にする。これはmemblock自身から新しい領域を割り当てるもので、古い配列はコピーが完了するまで有効なままなので成り立つ、うまい自己参照的なトリックである。
 
-## Key APIs {#key-apis}
+## 主要なAPI {#key-apis}
 
-### Adding and Removing Memory {#adding-and-removing-memory}
+### メモリの追加と削除 {#adding-and-removing-memory}
 
 ```c
-/* Tell memblock about physical memory regions (called by arch code) */
+/* memblockに物理メモリ領域を伝える（アーキテクチャのコードから呼ばれる） */
 int memblock_add(phys_addr_t base, phys_addr_t size);
 
-/* Remove a region (e.g., firmware reserved areas) */
+/* 領域を削除する（例: ファームウェアが予約した領域） */
 int memblock_remove(phys_addr_t base, phys_addr_t size);
 
-/* Mark a region as reserved */
+/* 領域を予約済みとしてマークする */
 int memblock_reserve(phys_addr_t base, phys_addr_t size);
 
-/* Free a previously reserved region */
+/* 以前に予約した領域を解放する */
 int memblock_phys_free(phys_addr_t base, phys_addr_t size);
 
-/* Mark memory as not directly usable (won't be mapped) */
+/* メモリを直接使用不可としてマークする（マップされない） */
 int memblock_mark_nomap(phys_addr_t base, phys_addr_t size);
 ```
 
-### Allocating Memory {#allocating-memory}
+### メモリの割り当て {#allocating-memory}
 
 ```c
-/* Allocate aligned memory (most common) */
+/* アラインされたメモリを割り当てる（最も一般的） */
 void *memblock_alloc(phys_addr_t size, phys_addr_t align);
 
-/* Allocate from a specific address range */
+/* 特定のアドレス範囲から割り当てる */
 void *memblock_alloc_range_nid(phys_addr_t size, phys_addr_t align,
                                phys_addr_t start, phys_addr_t end,
                                int nid, bool exact_nid);
 
-/* Allocate raw physical address (no virtual mapping) */
+/* 生の物理アドレスを割り当てる（仮想マッピングなし） */
 phys_addr_t memblock_phys_alloc(phys_addr_t size, phys_addr_t align);
 ```
 
-`memblock_alloc()` does two things: finds a free physical region and maps it into the kernel's virtual address space (via `memblock_alloc_internal()` which calls `memblock_alloc_range_nid()` then `memblock_reserve()` on the result). The returned pointer is a kernel virtual address ready to use.
+`memblock_alloc()`は2つのことを行う。空いている物理領域を見つけ、それをカーネルの仮想アドレス空間にマップする（`memblock_alloc_internal()`を介して行われ、これは`memblock_alloc_range_nid()`を呼んだ後、その結果に対して`memblock_reserve()`を呼ぶ）。返されるポインタは、すぐに使えるカーネル仮想アドレスである。
 
-### Querying Memory {#querying-memory}
+### メモリの照会 {#querying-memory}
 
 ```c
-/* Is this address in a reserved region? */
+/* このアドレスは予約済み領域内にあるか? */
 bool memblock_is_reserved(phys_addr_t addr);
 
-/* Is this address in a memory region? */
+/* このアドレスはメモリ領域内にあるか? */
 bool memblock_is_memory(phys_addr_t addr);
 
-/* Total amount of usable RAM */
+/* 使用可能なRAMの総量 */
 phys_addr_t memblock_phys_mem_size(void);
 
-/* Iterate over free (unreserved) memory regions */
+/* 空いている（予約されていない）メモリ領域を走査する */
 for_each_free_mem_range(i, nid, flags, &start, &end, NULL)
 ```
 
-## Memory Discovery: Device Tree and ACPI {#memory-discovery-device-tree-and-acpi}
+## メモリの検出: Device TreeとACPI {#memory-discovery-device-tree-and-acpi}
 
-memblock does not discover memory on its own. Architecture-specific code populates it using firmware information.
+memblockは自分でメモリを検出するわけではない。アーキテクチャ固有のコードが、ファームウェアの情報を使ってmemblockにデータを投入する。
 
-### Device Tree (ARM, RISC-V, PowerPC, etc.) {#device-tree-arm-risc-v-powerpc-etc}
+### Device Tree（ARM、RISC-V、PowerPCなど） {#device-tree-arm-risc-v-powerpc-etc}
 
-On device-tree platforms, the `/memory` nodes describe physical RAM:
+device treeを使うプラットフォームでは、`/memory`ノードが物理RAMを記述する:
 
 ```dts
 / {
     memory@80000000 {
         device_type = "memory";
-        reg = <0x00 0x80000000 0x00 0x80000000>;  /* 2GB at 0x80000000 */
+        reg = <0x00 0x80000000 0x00 0x80000000>;  /* 0x80000000から2GB */
     };
 };
 ```
 
-The kernel's early DT scanning code (`early_init_dt_scan_memory()` in [`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c)) parses these nodes and calls `memblock_add()` for each region. Reserved memory nodes (`/reserved-memory`) result in `memblock_reserve()` calls.
+カーネルの初期のDTスキャンコード（[`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c)の`early_init_dt_scan_memory()`）がこれらのノードをパースし、各領域について`memblock_add()`を呼び出す。予約メモリのノード（`/reserved-memory`）は`memblock_reserve()`呼び出しになる。
 
-### ACPI (x86, ARM servers) {#acpi-x86-arm-servers}
+### ACPI（x86、ARMサーバー） {#acpi-x86-arm-servers}
 
-On ACPI systems, the firmware provides memory maps through different mechanisms:
+ACPIシステムでは、ファームウェアはさまざまな仕組みを通じてメモリマップを提供する:
 
-- **x86**: The BIOS/UEFI provides an **e820 memory map** -- a table of address ranges with types (usable, reserved, ACPI reclaimable, etc.). The function `e820__memblock_setup()` in [`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) translates e820 entries into `memblock_add()` and `memblock_reserve()` calls.
-- **ARM64 with ACPI**: Uses EFI memory map entries, processed by `efi_init()`.
+- **x86**: BIOS/UEFIが**e820メモリマップ**を提供する。これは種別（usable、reserved、ACPI reclaimableなど）付きのアドレス範囲の表である。[`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c)の関数`e820__memblock_setup()`が、e820のエントリを`memblock_add()`と`memblock_reserve()`の呼び出しに変換する。
+- **ACPIを使うARM64**: EFIメモリマップのエントリを使い、`efi_init()`で処理される。
 
-### The Pattern {#the-pattern}
+### パターン {#the-pattern}
 
-Regardless of platform, the flow is the same:
+プラットフォームにかかわらず、流れは同じである:
 
 ```
 Firmware provides memory layout
@@ -230,23 +230,23 @@ memblock_reserve() for reserved regions
 memblock has complete picture of physical memory
 ```
 
-## The Handoff to the Buddy Allocator {#the-handoff-to-the-buddy-allocator}
+## バディアロケータへの引き渡し {#the-handoff-to-the-buddy-allocator}
 
-Once the kernel has used memblock to set up all the data structures the buddy allocator needs, memblock's job is nearly done. The handoff happens through `memblock_free_all()`:
+カーネルがmemblockを使って、バディアロケータが必要とするすべてのデータ構造をセットアップし終えると、memblockの仕事はほぼ終わりである。引き渡しは`memblock_free_all()`を通じて行われる:
 
 ```c
 void __init memblock_free_all(void)
 {
     unsigned long pages;
 
-    pages = free_low_memory_core_early();  /* release memblock pages to buddy */
+    pages = free_low_memory_core_early();  /* memblockのページをバディに解放する */
     totalram_pages_add(pages);
 }
 ```
 
-This function walks all memblock memory regions, and for each page that is **not** reserved, calls `__free_pages_core()` to hand it to the buddy allocator. After this point, the buddy system owns all free physical memory and memblock is no longer needed for allocation.
+この関数はmemblockのすべてのメモリ領域をたどり、予約されて**いない**各ページについて`__free_pages_core()`を呼び出してバディアロケータに引き渡す。この時点以降、バディシステムがすべての空き物理メモリを所有し、割り当てにmemblockはもはや必要ない。
 
-The memblock data structures themselves are marked `__initdata`, meaning they live in the kernel's init section. After boot completes (`free_initmem()`), this memory is reclaimed -- unless `CONFIG_ARCH_KEEP_MEMBLOCK` is enabled (which preserves memblock data for later queries, useful for kexec and memory hotplug).
+memblockのデータ構造自体には`__initdata`が付けられている。つまりカーネルのinitセクションに置かれる。ブートが完了すると（`free_initmem()`）、このメモリは回収される。ただし`CONFIG_ARCH_KEEP_MEMBLOCK`が有効な場合は別で、その場合はmemblockのデータが後の照会のために保持される（kexecやメモリホットプラグに有用）。
 
 ```
 memblock_free_all() walkthrough:
@@ -259,169 +259,169 @@ memblock_free_all() walkthrough:
   Result: buddy free lists populated, system ready for normal allocation
 ```
 
-## History and Evolution {#history-and-evolution}
+## 歴史と進化 {#history-and-evolution}
 
-### bootmem: The Original Approach (Linux 2.4 through early 3.x) {#bootmem-the-original-approach-linux-24-through-early-3x}
+### bootmem: 元々の手法（Linux 2.4から初期の3.xまで） {#bootmem-the-original-approach-linux-24-through-early-3x}
 
-Before memblock, the kernel used a **bitmap-based** boot allocator called `bootmem`. Each bit represented one physical page: 1 = allocated, 0 = free.
+memblock以前、カーネルは`bootmem`と呼ばれる**ビットマップベース**のブートアロケータを使っていた。各ビットが1つの物理ページを表し、1 = 割り当て済み、0 = 空きである。
 
-The problems with bootmem:
+bootmemの問題点:
 
-- **Bitmap overhead**: A 64GB system needs a 2MB bitmap just for accounting
-- **Linear search**: Finding free memory required scanning the bitmap -- O(n) in the number of pages
-- **No NUMA awareness**: The original bootmem had no concept of memory nodes
-- **Fragile**: The bitmap itself needed to live somewhere in memory, creating another bootstrap problem
+- **ビットマップのオーバーヘッド**: 64GBのシステムでは、集計のためだけに2MBのビットマップが必要になる
+- **線形探索**: 空きメモリを見つけるにはビットマップを走査する必要があり、ページ数に対してO(n)である
+- **NUMAを意識しない**: 元々のbootmemにはメモリノードという概念がなかった
+- **脆弱**: ビットマップ自体もメモリのどこかに置く必要があり、別のブートストラップ問題を生んでいた
 
-### The Rise of memblock (Logical Memory Blocks) {#the-rise-of-memblock-logical-memory-blocks}
+### memblock（Logical Memory Blocks）の台頭 {#the-rise-of-memblock-logical-memory-blocks}
 
-memblock's predecessor was called **lmb** (Logical Memory Blocks), used on PowerPC. It tracked memory as a list of regions rather than a per-page bitmap -- far more efficient when memory is mostly contiguous.
+memblockの前身は**lmb**（Logical Memory Blocks）と呼ばれ、PowerPCで使われていた。これはメモリをページごとのビットマップではなく領域のリストとして追跡するもので、メモリがほぼ連続している場合にははるかに効率的である。
 
-**Commit**: [95f72d1ed41a](https://git.kernel.org/linus/95f72d1ed41a) ("lmb: rename to memblock") | [LWN coverage](https://lwn.net/Articles/382559/)
-**Kernel**: v2.6.35 (2010)
-**Author**: Yinghai Lu
+**コミット**: [95f72d1ed41a](https://git.kernel.org/linus/95f72d1ed41a) ("lmb: rename to memblock") | [LWNの記事](https://lwn.net/Articles/382559/)
+**カーネル**: v2.6.35（2010年）
+**作者**: Yinghai Lu
 
-Yinghai Lu renamed lmb to memblock and began extending it for use on x86. The rename was the first step in making it architecture-independent.
+Yinghai Luはlmbをmemblockに改名し、x86で使えるよう拡張し始めた。この改名は、それをアーキテクチャ非依存にするための第一歩であった。
 
-### memblock Replaces bootmem {#memblock-replaces-bootmem}
+### memblockがbootmemを置き換える {#memblock-replaces-bootmem}
 
-Over several kernel releases, architectures migrated from bootmem to memblock:
+いくつものカーネルリリースにわたって、各アーキテクチャはbootmemからmemblockへ移行した:
 
-- **ARM**: One of the early adopters alongside PowerPC
-- **x86**: Migrated in the v2.6.35 -- v3.x timeframe
+- **ARM**: PowerPCと並ぶ初期の採用者の1つ
+- **x86**: v2.6.35からv3.xの時期に移行した
 
-**Commit**: [9a8dd708d547](https://git.kernel.org/linus/9a8dd708d547) ("memblock: remove bootmem dependency on memblock")
-**Kernel**: v3.12 (2013)
+**コミット**: [9a8dd708d547](https://git.kernel.org/linus/9a8dd708d547) ("memblock: remove bootmem dependency on memblock")
+**カーネル**: v3.12（2013年）
 
-The final removal of bootmem happened when all architectures had been converted:
+すべてのアーキテクチャの変換が終わったとき、bootmemは最終的に削除された:
 
-**Commit**: [355c45affca7](https://git.kernel.org/linus/355c45affca7114ab510e296a5b7012943aeea17) ("mm: remove bootmem allocator implementation")
-**Kernel**: v4.20 (2018)
-**Author**: Mike Rapoport (IBM)
+**コミット**: [355c45affca7](https://git.kernel.org/linus/355c45affca7114ab510e296a5b7012943aeea17) ("mm: remove bootmem allocator implementation")
+**カーネル**: v4.20（2018年）
+**作者**: Mike Rapoport（IBM）
 
-This was a significant cleanup -- the bootmem code had accumulated decades of workarounds and special cases.
+これは大きな整理であった。bootmemのコードには、数十年にわたって回避策や特殊ケースが積み重なっていた。
 
-### Recent Improvements {#recent-improvements}
+### 最近の改良 {#recent-improvements}
 
-**Commit**: [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) ("memblock: introduce memblock_phys_free()")
-**Kernel**: v6.1 (2022)
-**Author**: Mike Rapoport
+**コミット**: [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) ("memblock: introduce memblock_phys_free()")
+**カーネル**: v6.1（2022年）
+**作者**: Mike Rapoport
 
-Part of a broader effort to clean up early memory management and reduce the use of `memblock_free()` which had confusing semantics (it freed from the reserved list, not the memory list).
+初期のメモリ管理を整理し、紛らわしいセマンティクスを持っていた（memoryリストではなくreservedリストから解放する）`memblock_free()`の使用を減らすという、より広範な取り組みの一環である。
 
-## Observing memblock {#observing-memblock}
+## memblockを観測する {#observing-memblock}
 
-### debugfs Interface {#debugfs-interface}
+### debugfsインターフェース {#debugfs-interface}
 
-If `CONFIG_ARCH_KEEP_MEMBLOCK` is enabled, you can inspect the memblock state after boot:
+`CONFIG_ARCH_KEEP_MEMBLOCK`が有効であれば、ブート後にmemblockの状態を調べられる:
 
 ```bash
-# View memory regions
+# メモリ領域を表示する
 cat /sys/kernel/debug/memblock/memory
 
-# View reserved regions
+# 予約済み領域を表示する
 cat /sys/kernel/debug/memblock/reserved
 
-# Example output (memory):
+# 出力例（memory）:
 #    0: 0x0000000000000000..0x000000009fffffff (2560 MB)
 #    1: 0x0000000100000000..0x00000004ffffffff (16384 MB)
 ```
 
-### Early Boot Messages {#early-boot-messages}
+### ブート初期のメッセージ {#early-boot-messages}
 
-memblock logs its activity to dmesg during early boot. Look for lines with the `memblock` prefix:
+memblockはブート初期に自身の動作をdmesgに記録する。`memblock`という接頭辞の付いた行を探すとよい:
 
 ```bash
 dmesg | grep -i memblock
 
-# Example output:
+# 出力例:
 # [    0.000000] memblock_add: [mem 0x00000000-0x9fffffff]
 # [    0.000000] memblock_reserve: [mem 0x01000000-0x01ffffff]
 # [    0.000000] memblock: memory size = 16384 MB
 ```
 
-For more verbose output, pass `memblock=debug` on the kernel command line. This enables detailed logging of every memblock operation:
+より詳細な出力を得るには、カーネルコマンドラインに`memblock=debug`を渡す。これにより、すべてのmemblock操作の詳細なログ出力が有効になる:
 
 ```bash
-# In bootloader config (e.g., GRUB):
+# ブートローダーの設定内（例: GRUB）:
 linux /vmlinuz memblock=debug ...
 ```
 
-### e820 Table (x86) {#e820-table-x86}
+### e820テーブル（x86） {#e820-table-x86}
 
-On x86 systems, you can see the firmware memory map that feeds into memblock:
+x86システムでは、memblockに供給されるファームウェアのメモリマップを見ることができる:
 
 ```bash
 dmesg | grep e820
 
-# Example output:
+# 出力例:
 # BIOS-e820: [mem 0x0000000000000000-0x000000000009fbff] usable
 # BIOS-e820: [mem 0x000000000009fc00-0x000000000009ffff] reserved
 # BIOS-e820: [mem 0x00000000000f0000-0x00000000000fffff] reserved
 # BIOS-e820: [mem 0x0000000000100000-0x000000003fffffff] usable
 ```
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Inspect memblock Regions {#inspect-memblock-regions}
+### memblockの領域を調べる {#inspect-memblock-regions}
 
 ```bash
-# Check if your kernel preserves memblock data
+# カーネルがmemblockのデータを保持しているか確認する
 ls /sys/kernel/debug/memblock/ 2>/dev/null && echo "memblock debugfs available"
 
-# If available, examine the memory layout
+# 利用可能なら、メモリレイアウトを調べる
 cat /sys/kernel/debug/memblock/memory
 cat /sys/kernel/debug/memblock/reserved
 
-# Count the number of memory regions
+# メモリ領域の数を数える
 wc -l < /sys/kernel/debug/memblock/memory
 ```
 
-### Trace the Boot Memory Setup {#trace-the-boot-memory-setup}
+### ブート時のメモリセットアップを追跡する {#trace-the-boot-memory-setup}
 
 ```bash
-# See how firmware reported memory to the kernel
+# ファームウェアがカーネルにメモリをどう報告したかを見る
 dmesg | grep -E "(e820|memblock|Memory:)"
 
-# The "Memory:" line shows the final accounting
+# "Memory:"の行が最終的な集計を示す
 # Memory: 16123456K/16777216K available
 #          (X kernel code, Y rwdata, Z rodata, W init, V bss, ...)
 ```
 
-### Enable Verbose memblock Logging {#enable-verbose-memblock-logging}
+### memblockの詳細なログ出力を有効にする {#enable-verbose-memblock-logging}
 
 ```bash
-# Add to kernel command line (requires reboot)
-# For GRUB: edit /etc/default/grub, add memblock=debug to GRUB_CMDLINE_LINUX
+# カーネルコマンドラインに追加する（再起動が必要）
+# GRUBの場合: /etc/default/grubを編集し、GRUB_CMDLINE_LINUXにmemblock=debugを追加する
 sudo sed -i 's/GRUB_CMDLINE_LINUX="\(.*\)"/GRUB_CMDLINE_LINUX="\1 memblock=debug"/' /etc/default/grub
 sudo update-grub
 
-# After reboot, check the detailed log
+# 再起動後、詳細なログを確認する
 dmesg | grep memblock | head -50
 ```
 
-### Compare memblock with Runtime View {#compare-memblock-with-runtime-view}
+### memblockと実行時のビューを比較する {#compare-memblock-with-runtime-view}
 
 ```bash
-# memblock's view (boot time, if preserved)
+# memblockのビュー（ブート時、保持されていれば）
 cat /sys/kernel/debug/memblock/memory 2>/dev/null
 
-# Buddy allocator's view (runtime)
+# バディアロケータのビュー（実行時）
 cat /proc/buddyinfo
 
-# Total managed memory
+# 管理されているメモリの総量
 grep MemTotal /proc/meminfo
 ```
 
-## Key Data Structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
-### struct memblock (Global State) {#struct-memblock-global-state}
+### struct memblock（グローバルな状態） {#struct-memblock-global-state}
 
-The entire memblock state lives in a single global variable:
+memblockの状態全体は、単一のグローバル変数にある:
 
 ```c
 struct memblock memblock __initdata_memblock = {
     .memory.regions     = memblock_memory_init_regions,
-    .memory.cnt         = 1,    /* empty dummy region */
+    .memory.cnt         = 1,    /* 空のダミー領域 */
     .memory.max         = INIT_MEMBLOCK_REGIONS,
     .memory.name        = "memory",
 
@@ -435,61 +435,61 @@ struct memblock memblock __initdata_memblock = {
 };
 ```
 
-The `__initdata_memblock` annotation means this data is either `__initdata` (freed after boot) or `__meminitdata` (kept for memory hotplug), depending on `CONFIG_ARCH_KEEP_MEMBLOCK`.
+`__initdata_memblock`アノテーションは、`CONFIG_ARCH_KEEP_MEMBLOCK`に応じて、このデータが`__initdata`（ブート後に解放される）か`__meminitdata`（メモリホットプラグのために保持される）のいずれかになることを意味する。
 
 ### memblock_flags {#memblock_flags}
 
 ```c
 enum memblock_flags {
-    MEMBLOCK_NONE       = 0x0,   /* No special flags */
-    MEMBLOCK_HOTPLUG    = 0x1,   /* Hotpluggable memory */
-    MEMBLOCK_MIRROR     = 0x2,   /* Mirrored (EFI) memory */
-    MEMBLOCK_NOMAP      = 0x4,   /* Don't add to direct mapping */
-    MEMBLOCK_DRIVER_MANAGED = 0x8, /* Managed by a driver */
+    MEMBLOCK_NONE       = 0x0,   /* 特別なフラグなし */
+    MEMBLOCK_HOTPLUG    = 0x1,   /* ホットプラグ可能なメモリ */
+    MEMBLOCK_MIRROR     = 0x2,   /* ミラーされた（EFI）メモリ */
+    MEMBLOCK_NOMAP      = 0x4,   /* ダイレクトマッピングに追加しない */
+    MEMBLOCK_DRIVER_MANAGED = 0x8, /* ドライバが管理する */
 };
 ```
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memblock.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) | Core memblock implementation |
-| [`include/linux/memblock.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memblock.h) | Public API and data structures |
-| [`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c) | Device tree memory scanning |
-| [`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) | x86 e820 to memblock translation |
+| [`mm/memblock.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) | memblockの中核実装 |
+| [`include/linux/memblock.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memblock.h) | 公開APIとデータ構造 |
+| [`drivers/of/fdt.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c) | device treeのメモリスキャン |
+| [`arch/x86/kernel/e820.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) | x86のe820からmemblockへの変換 |
 
-### Key Commits {#key-commits}
+### 主要なコミット {#key-commits}
 
-| Commit | Kernel | Description |
+| コミット | カーネル | 説明 |
 |--------|--------|-------------|
-| [95f72d1ed41a](https://git.kernel.org/linus/95f72d1ed41a) | v2.6.35 | Rename lmb to memblock |
-| [9a8dd708d547](https://git.kernel.org/linus/9a8dd708d547) | v3.12 | Remove bootmem dependency on memblock |
-| [355c45affca7](https://git.kernel.org/linus/355c45affca7114ab510e296a5b7012943aeea17) | v4.20 | Remove bootmem allocator implementation |
-| [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) | v6.1 | Introduce memblock_phys_free() |
+| [95f72d1ed41a](https://git.kernel.org/linus/95f72d1ed41a) | v2.6.35 | lmbをmemblockに改名 |
+| [9a8dd708d547](https://git.kernel.org/linus/9a8dd708d547) | v3.12 | memblockに対するbootmemの依存を削除 |
+| [355c45affca7](https://git.kernel.org/linus/355c45affca7114ab510e296a5b7012943aeea17) | v4.20 | bootmemアロケータの実装を削除 |
+| [35fd0808de0e](https://git.kernel.org/linus/35fd0808de0e) | v6.1 | memblock_phys_free()を導入 |
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [A quick history of early-boot memory allocators](https://lwn.net/Articles/382559/) -- Coverage of the lmb-to-memblock rename and rationale
-- [Improvements to memblock](https://lwn.net/Articles/761215/) -- Mike Rapoport's work cleaning up the early memory allocator
+- [A quick history of early-boot memory allocators](https://lwn.net/Articles/382559/) -- lmbからmemblockへの改名とその理由についての記事
+- [Improvements to memblock](https://lwn.net/Articles/761215/) -- 初期メモリアロケータを整理したMike Rapoportの取り組み
 
-### Related {#related}
+### 関連 {#related}
 
-- [page-allocator](page-allocator.md) - The buddy allocator that memblock hands off to
-- [overview](overview.md) - How memblock fits in the allocator hierarchy
-- [numa](numa.md) - NUMA-aware memblock allocation
+- [page-allocator](page-allocator.md) - memblockが引き渡す先のバディアロケータ
+- [overview](overview.md) - アロケータの階層におけるmemblockの位置付け
+- [numa](numa.md) - NUMAを意識したmemblockの割り当て
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [page-allocator.md](page-allocator.md) — The buddy allocator that takes over from memblock after `memblock_free_all()`
-- [boot-page-tables.md](boot-page-tables.md) — Early page table setup that relies on memblock for its memory allocations
-- [numa.md](numa.md) — NUMA node assignments tracked via `memblock_region.nid` during early boot
-- [memory-hotplug.md](memory-hotplug.md) — `CONFIG_ARCH_KEEP_MEMBLOCK` preserves memblock data for hotplug operations after boot
-- [mm/memblock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) — Core memblock implementation; `memblock_alloc_range_nid()` is the central allocator
-- [include/linux/memblock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memblock.h) — Public API, data structures, and iteration macros like `for_each_free_mem_range()`
-- [arch/x86/kernel/e820.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) — x86 firmware memory map translation into memblock regions
-- [drivers/of/fdt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c) — Device tree memory scanning that feeds `memblock_add()` on ARM and RISC-V
-- [LWN: A quick history of early-boot memory allocators](https://lwn.net/Articles/382559/) — Context on the transition from bootmem bitmaps to the region-list approach
-- [LWN: Improvements to memblock](https://lwn.net/Articles/761215/) — Mike Rapoport's cleanup work and the final removal of bootmem
-- `Documentation/core-api/boot-time-mm.rst` — Kernel documentation on boot-time memory management APIs
+- [page-allocator.md](page-allocator.md) — `memblock_free_all()`の後にmemblockから処理を引き継ぐバディアロケータ
+- [boot-page-tables.md](boot-page-tables.md) — メモリ割り当てをmemblockに依存する、初期のページテーブルのセットアップ
+- [numa.md](numa.md) — ブート初期に`memblock_region.nid`を通じて追跡されるNUMAノードの割り当て
+- [memory-hotplug.md](memory-hotplug.md) — `CONFIG_ARCH_KEEP_MEMBLOCK`は、ブート後のホットプラグ操作のためにmemblockのデータを保持する
+- [mm/memblock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memblock.c) — memblockの中核実装。`memblock_alloc_range_nid()`が中心となるアロケータである
+- [include/linux/memblock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memblock.h) — 公開API、データ構造、`for_each_free_mem_range()`のような走査マクロ
+- [arch/x86/kernel/e820.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/e820.c) — x86のファームウェアメモリマップをmemblockの領域に変換する
+- [drivers/of/fdt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/of/fdt.c) — ARMとRISC-Vで`memblock_add()`にデータを供給するdevice treeのメモリスキャン
+- [LWN: A quick history of early-boot memory allocators](https://lwn.net/Articles/382559/) — bootmemのビットマップから領域リスト方式への移行の背景
+- [LWN: Improvements to memblock](https://lwn.net/Articles/761215/) — Mike Rapoportによる整理作業と、bootmemの最終的な削除
+- `Documentation/core-api/boot-time-mm.rst` — ブート時のメモリ管理APIに関するカーネルドキュメント

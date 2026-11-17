@@ -1,28 +1,28 @@
-# NUMA Topology Discovery: ACPI SRAT and SLIT {#numa-topology-discovery-acpi-srat-and-slit}
+# NUMAトポロジの検出: ACPI SRATとSLIT {#numa-topology-discovery-acpi-srat-and-slit}
 
-> How the kernel reads firmware tables to learn which memory belongs to which node — and how far apart those nodes are
+> カーネルがファームウェアのテーブルを読んで、どのメモリがどのノードに属するか、そしてそれらのノードがどれだけ離れているかを知る仕組み
 
-On NUMA systems, the kernel cannot detect the physical memory topology on its own. It relies on firmware to describe which CPUs and memory ranges share a proximity domain and how far apart those domains are from each other. On x86 and ARM64 platforms this information lives in two ACPI tables: the **SRAT** (System Resource Affinity Table) and the **SLIT** (System Locality Information Table).
+NUMAシステムでは、カーネルは物理メモリのトポロジを自力で検出できない。どのCPUとメモリ範囲が近接ドメインを共有しているか、そしてそれらのドメインが互いにどれだけ離れているかを記述するのはファームウェアの役割であり、カーネルはそれに頼っている。x86とARM64プラットフォームでは、この情報は2つのACPIテーブル、すなわち**SRAT**（System Resource Affinity Table）と**SLIT**（System Locality Information Table）にある。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`drivers/acpi/numa/srat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/numa/srat.c) | Core SRAT/SLIT parsing: `acpi_numa_init()`, `acpi_parse_slit()` |
-| [`arch/x86/mm/srat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/srat.c) | x86 entry point (`x86_acpi_numa_init()`) and CPU affinity callbacks |
-| [`arch/x86/mm/numa.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) | x86 NUMA initialization orchestration, `dummy_numa_init()` |
-| [`mm/numa_memblks.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) | `numa_add_memblk()`, `numa_set_distance()`, NUMA distance table |
-| [`include/acpi/actbl3.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) | SRAT and SLIT C struct definitions |
+| [`drivers/acpi/numa/srat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/numa/srat.c) | SRAT/SLITパースの中核: `acpi_numa_init()`、`acpi_parse_slit()` |
+| [`arch/x86/mm/srat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/srat.c) | x86のエントリポイント（`x86_acpi_numa_init()`）とCPUアフィニティのコールバック |
+| [`arch/x86/mm/numa.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) | x86のNUMA初期化の統括、`dummy_numa_init()` |
+| [`mm/numa_memblks.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) | `numa_add_memblk()`、`numa_set_distance()`、NUMA距離テーブル |
+| [`include/acpi/actbl3.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) | SRATとSLITのC構造体定義 |
 
-## What Are SRAT and SLIT? {#what-are-srat-and-slit}
+## SRATとSLITとは何か {#what-are-srat-and-slit}
 
-SRAT and SLIT are ACPI firmware tables that together describe the physical memory topology of a NUMA system.
+SRATとSLITはACPIのファームウェアテーブルであり、両者を合わせてNUMAシステムの物理メモリトポロジを記述する。
 
-**SRAT** answers: *which CPUs and which memory ranges belong to which proximity domain?*
+**SRAT**が答えるのは: *どのCPUとどのメモリ範囲がどの近接ドメインに属するか?*
 
-**SLIT** answers: *how far apart are the proximity domains from each other?*
+**SLIT**が答えるのは: *近接ドメイン同士はどれだけ離れているか?*
 
-A **proximity domain** (PXM) is firmware's opaque identifier for a NUMA locality group. The kernel maps each PXM to a Linux node number during boot; after that, PXM values are only used internally by the ACPI parsing code.
+**近接ドメイン**（proximity domain、PXM）は、NUMAの局所性グループに対するファームウェアの不透明な識別子である。カーネルはブート時に各PXMをLinuxのノード番号に対応付ける。それ以降、PXMの値はACPIパースコードの内部でのみ使われる。
 
 ```
 Firmware view (SRAT/SLIT)           Linux kernel view
@@ -37,115 +37,115 @@ SLIT distances:
   PXM 1 → PXM 1: 10 (local)          node_distance(1,1) = 10
 ```
 
-## SRAT Table Format {#srat-table-format}
+## SRATテーブルの形式 {#srat-table-format}
 
-The SRAT is a variable-length ACPI table. It starts with a standard header followed by a sequence of subtable entries, each describing one CPU or one memory range.
+SRATは可変長のACPIテーブルである。標準ヘッダで始まり、その後にサブテーブルエントリの列が続く。各エントリは1つのCPUまたは1つのメモリ範囲を記述する。
 
-### Table Header {#table-header}
+### テーブルヘッダ {#table-header}
 
 ```c
 /* include/acpi/actbl3.h */
 struct acpi_table_srat {
-    struct acpi_table_header header;  /* "SRAT" signature, length, revision */
-    u32 table_revision;               /* Must be 1 */
-    u64 reserved;                     /* Reserved, must be zero */
+    struct acpi_table_header header;  /* "SRAT"シグネチャ、長さ、リビジョン */
+    u32 table_revision;               /* 1でなければならない */
+    u64 reserved;                     /* 予約済み、0でなければならない */
 };
 ```
 
-The `header.revision` field is significant: SRAT revision 1 uses only the low 8 bits of `proximity_domain` in CPU affinity entries. Revision 2 and later use the full 32-bit value.
+`header.revision`フィールドは重要である。SRATリビジョン1では、CPUアフィニティエントリの`proximity_domain`の下位8ビットしか使わない。リビジョン2以降は32ビット値全体を使う。
 
-### Memory Affinity Subtable {#memory-affinity-subtable}
+### メモリアフィニティサブテーブル {#memory-affinity-subtable}
 
-Each memory range gets one `acpi_srat_mem_affinity` entry:
+各メモリ範囲には`acpi_srat_mem_affinity`エントリが1つずつ割り当てられる:
 
 ```c
 /* include/acpi/actbl3.h */
 struct acpi_srat_mem_affinity {
-    struct acpi_subtable_header header;  /* type=1 (ACPI_SRAT_TYPE_MEMORY_AFFINITY), length */
-    u32 proximity_domain;                /* Which PXM this memory belongs to */
+    struct acpi_subtable_header header;  /* type=1（ACPI_SRAT_TYPE_MEMORY_AFFINITY）、長さ */
+    u32 proximity_domain;                /* このメモリが属するPXM */
     u16 reserved;
-    u64 base_address;                    /* Physical start address */
-    u64 length;                          /* Size in bytes */
+    u64 base_address;                    /* 物理開始アドレス */
+    u64 length;                          /* バイト単位のサイズ */
     u32 reserved1;
     u32 flags;
     u64 reserved2;
 };
 
-/* Relevant flags */
-#define ACPI_SRAT_MEM_ENABLED       (1)      /* Entry is valid and should be used */
-#define ACPI_SRAT_MEM_HOT_PLUGGABLE (1 << 1) /* Range is hot-pluggable */
-#define ACPI_SRAT_MEM_NON_VOLATILE  (1 << 2) /* Range is non-volatile (NVDIMM) */
-#define ACPI_SRAT_MEM_SPEC_PURPOSE  (1 << 3) /* Reserved for specific purpose */
+/* 関連するフラグ */
+#define ACPI_SRAT_MEM_ENABLED       (1)      /* エントリは有効であり、使用すべき */
+#define ACPI_SRAT_MEM_HOT_PLUGGABLE (1 << 1) /* 範囲はホットプラグ可能 */
+#define ACPI_SRAT_MEM_NON_VOLATILE  (1 << 2) /* 範囲は不揮発性（NVDIMM） */
+#define ACPI_SRAT_MEM_SPEC_PURPOSE  (1 << 3) /* 特定用途向けに予約 */
 ```
 
-The kernel skips any entry where `ACPI_SRAT_MEM_ENABLED` is not set. Hot-pluggable ranges are registered with memblock as hotplug regions so the memory hotplug subsystem can manage them correctly.
+カーネルは、`ACPI_SRAT_MEM_ENABLED`が設定されていないエントリをすべてスキップする。ホットプラグ可能な範囲は、メモリホットプラグサブシステムが正しく管理できるよう、memblockにホットプラグ領域として登録される。
 
-### CPU Affinity Subtables {#cpu-affinity-subtables}
+### CPUアフィニティサブテーブル {#cpu-affinity-subtables}
 
-Two subtable types handle CPUs depending on whether the system uses the legacy local APIC or x2APIC:
+システムがレガシーなローカルAPICとx2APICのどちらを使うかに応じて、2種類のサブテーブルがCPUを扱う:
 
 ```c
-/* Legacy APIC CPUs (SRAT type 0) */
+/* レガシーAPICのCPU（SRATタイプ0） */
 struct acpi_srat_cpu_affinity {
     struct acpi_subtable_header header;
-    u8  proximity_domain_lo;    /* Low 8 bits of PXM (SRAT rev 1 only uses this) */
-    u8  apic_id;                /* Local APIC ID */
+    u8  proximity_domain_lo;    /* PXMの下位8ビット（SRATリビジョン1はこれだけを使う） */
+    u8  apic_id;                /* ローカルAPIC ID */
     u32 flags;                  /* ACPI_SRAT_CPU_ENABLED = 1 */
-    u8  local_sapic_eid;        /* SAPIC extended ID (for Itanium, rarely used) */
-    u8  proximity_domain_hi[3]; /* High 24 bits of PXM (SRAT rev >= 2) */
+    u8  local_sapic_eid;        /* SAPIC拡張ID（Itanium用、ほとんど使われない） */
+    u8  proximity_domain_hi[3]; /* PXMの上位24ビット（SRATリビジョン >= 2） */
     u32 clock_domain;
 };
 
-/* x2APIC CPUs (SRAT type 2, ACPI 4.0+) */
+/* x2APICのCPU（SRATタイプ2、ACPI 4.0+） */
 struct acpi_srat_x2apic_cpu_affinity {
     struct acpi_subtable_header header;
     u16 reserved;
-    u32 proximity_domain;       /* Full 32-bit PXM */
+    u32 proximity_domain;       /* 32ビット全体のPXM */
     u32 apic_id;                /* x2APIC ID */
     u32 flags;                  /* ACPI_SRAT_CPU_ENABLED = 1 */
     u32 clock_domain;
     u32 reserved2;
 };
 
-#define ACPI_SRAT_CPU_ENABLED  (1)  /* Entry is valid */
+#define ACPI_SRAT_CPU_ENABLED  (1)  /* エントリは有効 */
 ```
 
-ARM64 systems use `acpi_srat_gicc_affinity` (SRAT type 3) instead of the APIC-based structures.
+ARM64システムでは、APICベースの構造体の代わりに`acpi_srat_gicc_affinity`（SRATタイプ3）を使う。
 
-## SLIT Table Format {#slit-table-format}
+## SLITテーブルの形式 {#slit-table-format}
 
-The SLIT encodes the relative memory access latency between every pair of proximity domains as a flat byte matrix:
+SLITは、すべての近接ドメインの組の間の相対的なメモリアクセスレイテンシを、平坦なバイト行列としてエンコードする:
 
 ```c
 /* include/acpi/actbl3.h */
 struct acpi_table_slit {
-    struct acpi_table_header header;  /* "SLIT" signature */
-    u64 locality_count;               /* Number of proximity domains (N) */
-    u8  entry[];                      /* N*N byte matrix, row-major */
+    struct acpi_table_header header;  /* "SLIT"シグネチャ */
+    u64 locality_count;               /* 近接ドメインの数（N） */
+    u8  entry[];                      /* N*Nのバイト行列、行優先 */
 };
 ```
 
-The distance from PXM `i` to PXM `j` is:
+PXM `i`からPXM `j`への距離は次のとおりである:
 
 ```
 distance = slit->entry[i * locality_count + j]
 ```
 
-Defined reference values (from `include/linux/topology.h`):
+定義済みの基準値（`include/linux/topology.h`より）:
 
-| Value | Meaning |
+| 値 | 意味 |
 |-------|---------|
-| `10` (`LOCAL_DISTANCE`) | Local node access |
-| `20` (`REMOTE_DISTANCE`) | Default remote distance when no SLIT |
-| > 10 | Higher = further away |
+| `10`（`LOCAL_DISTANCE`） | ローカルノードへのアクセス |
+| `20`（`REMOTE_DISTANCE`） | SLITがない場合のデフォルトのリモート距離 |
+| > 10 | 大きいほど遠い |
 
-The diagonal (`i == j`) must always be `LOCAL_DISTANCE` (10). Off-diagonal values must be strictly greater than 10. The kernel validates this in `slit_valid()` before using the table — if the SLIT fails validation it is silently discarded and default distances are used.
+対角成分（`i == j`）は常に`LOCAL_DISTANCE`（10）でなければならない。非対角成分は10より真に大きくなければならない。カーネルはテーブルを使う前に`slit_valid()`でこれを検証する。SLITが検証に失敗すると、何も言わずに破棄され、デフォルトの距離が使われる。
 
-## Kernel Parsing Path {#kernel-parsing-path}
+## カーネルのパース経路 {#kernel-parsing-path}
 
-### Entry Points {#entry-points}
+### エントリポイント {#entry-points}
 
-On x86, NUMA initialization is orchestrated from `x86_numa_init()` in `arch/x86/mm/numa.c`. It tries each initialization method in order until one succeeds:
+x86では、NUMAの初期化は`arch/x86/mm/numa.c`の`x86_numa_init()`から統括される。これは各初期化方法を、いずれかが成功するまで順に試す:
 
 ```
 x86_numa_init()
@@ -159,18 +159,18 @@ x86_numa_init()
   └─ numa_init(dummy_numa_init)           [last resort: single node 0]
 ```
 
-### SRAT Parsing in acpi_numa_init() {#srat-parsing-in-acpinumainit}
+### acpi_numa_init()でのSRATのパース {#srat-parsing-in-acpinumainit}
 
-`acpi_numa_init()` in `drivers/acpi/numa/srat.c` drives the full SRAT/SLIT parsing sequence:
+`drivers/acpi/numa/srat.c`の`acpi_numa_init()`が、SRAT/SLITのパース処理全体を駆動する:
 
 ```c
 int __init acpi_numa_init(void)
 {
-    /* Parse SRAT table header, then iterate all subtable types */
+    /* SRATテーブルのヘッダをパースし、すべてのサブテーブル種別を走査する */
     if (!acpi_table_parse(ACPI_SIG_SRAT, acpi_parse_srat)) {
         struct acpi_subtable_proc srat_proc[5];
 
-        /* CPU affinity subtables are processed first */
+        /* CPUアフィニティサブテーブルが最初に処理される */
         srat_proc[0].id = ACPI_SRAT_TYPE_CPU_AFFINITY;
         srat_proc[0].handler = acpi_parse_processor_affinity;
         srat_proc[1].id = ACPI_SRAT_TYPE_X2APIC_CPU_AFFINITY;
@@ -180,63 +180,63 @@ int __init acpi_numa_init(void)
         /* ... */
         acpi_table_parse_entries_array(ACPI_SIG_SRAT, ...);
 
-        /* Then memory affinity subtables */
+        /* 次にメモリアフィニティサブテーブル */
         cnt = acpi_table_parse_srat(ACPI_SRAT_TYPE_MEMORY_AFFINITY,
                                     acpi_parse_memory_affinity, 0);
     }
 
-    /* Parse SLIT */
+    /* SLITをパースする */
     acpi_table_parse(ACPI_SIG_SLIT, acpi_parse_slit);
     /* ... */
 }
 ```
 
-### CPU Entry Processing {#cpu-entry-processing}
+### CPUエントリの処理 {#cpu-entry-processing}
 
-For each CPU affinity subtable, `acpi_numa_processor_affinity_init()` (in `arch/x86/mm/srat.c`) is called:
+各CPUアフィニティサブテーブルについて、`acpi_numa_processor_affinity_init()`（`arch/x86/mm/srat.c`内）が呼び出される:
 
-1. Check `ACPI_SRAT_CPU_ENABLED` flag — skip disabled entries.
-2. Extract the proximity domain, accounting for SRAT revision (rev 1 uses only `proximity_domain_lo`).
-3. Call `acpi_map_pxm_to_node(pxm)` to get or allocate a Linux node number for this PXM.
-4. Record the APIC ID → node mapping in `__apicid_to_node[]`.
+1. `ACPI_SRAT_CPU_ENABLED`フラグを確認する。無効なエントリはスキップする。
+2. SRATリビジョンを考慮して近接ドメインを取り出す（リビジョン1は`proximity_domain_lo`のみを使う）。
+3. `acpi_map_pxm_to_node(pxm)`を呼び出し、このPXMに対応するLinuxのノード番号を取得または割り当てる。
+4. APIC ID → ノードの対応を`__apicid_to_node[]`に記録する。
 
-### Memory Entry Processing {#memory-entry-processing}
+### メモリエントリの処理 {#memory-entry-processing}
 
-For each memory affinity subtable, `acpi_parse_memory_affinity()` is called:
+各メモリアフィニティサブテーブルについて、`acpi_parse_memory_affinity()`が呼び出される:
 
-1. Check `ACPI_SRAT_MEM_ENABLED` — skip disabled entries.
-2. Extract `base_address` and `length` to form the physical range `[start, end)`.
-3. Extract `proximity_domain` (masked to 8 bits for SRAT rev ≤ 1).
-4. Call `acpi_map_pxm_to_node(pxm)` to get the Linux node number.
-5. Call `numa_add_memblk(node, start, end)` to register the range.
+1. `ACPI_SRAT_MEM_ENABLED`を確認する。無効なエントリはスキップする。
+2. `base_address`と`length`を取り出し、物理範囲`[start, end)`を形成する。
+3. `proximity_domain`を取り出す（SRATリビジョン ≤ 1では8ビットにマスクされる）。
+4. `acpi_map_pxm_to_node(pxm)`を呼び出してLinuxのノード番号を得る。
+5. `numa_add_memblk(node, start, end)`を呼び出して範囲を登録する。
 
-### PXM to Node Mapping {#pxm-to-node-mapping}
+### PXMからノードへの対応付け {#pxm-to-node-mapping}
 
-The mapping between firmware PXM values and Linux node numbers is maintained by two arrays in `drivers/acpi/numa/srat.c`:
-
-```c
-static int pxm_to_node_map[MAX_PXM_DOMAINS];  /* PXM → node */
-static int node_to_pxm_map[MAX_NUMNODES];      /* node → PXM */
-```
-
-Two public functions expose this mapping:
+ファームウェアのPXM値とLinuxのノード番号との対応は、`drivers/acpi/numa/srat.c`内の2つの配列で保持される:
 
 ```c
-int pxm_to_node(int pxm);   /* Returns NUMA_NO_NODE if PXM unknown */
-int node_to_pxm(int node);  /* Returns PXM_INVAL if no mapping */
+static int pxm_to_node_map[MAX_PXM_DOMAINS];  /* PXM → ノード */
+static int node_to_pxm_map[MAX_NUMNODES];      /* ノード → PXM */
 ```
 
-`acpi_map_pxm_to_node(pxm)` is the internal function that allocates a new node number the first time a PXM is encountered. It uses `first_unset_node(nodes_found_map)` to find the next available slot. This is how sparse PXM values (e.g., PXMs 0, 5, 100) get compacted into consecutive Linux node numbers (0, 1, 2).
+この対応は2つの公開関数で提供される:
 
-### SLIT Parsing {#slit-parsing}
+```c
+int pxm_to_node(int pxm);   /* PXMが不明ならNUMA_NO_NODEを返す */
+int node_to_pxm(int node);  /* 対応がなければPXM_INVALを返す */
+```
 
-`acpi_parse_slit()` iterates over the SLIT matrix after SRAT parsing is complete, so that all PXM→node mappings are already established:
+`acpi_map_pxm_to_node(pxm)`は、あるPXMに初めて遭遇したときに新しいノード番号を割り当てる内部関数である。次に利用可能なスロットを見つけるのに`first_unset_node(nodes_found_map)`を使う。これにより、まばらなPXM値（例: PXM 0、5、100）が、連続したLinuxのノード番号（0、1、2）に詰められる。
+
+### SLITのパース {#slit-parsing}
+
+`acpi_parse_slit()`は、SRATのパースが完了した後、つまりすべてのPXM→ノードの対応がすでに確立された後にSLIT行列を走査する:
 
 ```c
 for (i = 0; i < slit->locality_count; i++) {
     int from_node = pxm_to_node(i);
     if (from_node == NUMA_NO_NODE)
-        continue;  /* PXM with no memory or CPU in SRAT */
+        continue;  /* SRATにメモリもCPUもないPXM */
 
     for (j = 0; j < slit->locality_count; j++) {
         int to_node = pxm_to_node(j);
@@ -249,28 +249,28 @@ for (i = 0; i < slit->locality_count; i++) {
 }
 ```
 
-PXMs that appear in the SLIT but have no corresponding SRAT entry (no CPUs or memory) are silently skipped.
+SLITには現れるが、対応するSRATエントリ（CPUもメモリもない）を持たないPXMは、何も言わずにスキップされる。
 
-## From Proximity Domains to the Memory Subsystem {#from-proximity-domains-to-the-memory-subsystem}
+## 近接ドメインからメモリサブシステムへ {#from-proximity-domains-to-the-memory-subsystem}
 
-After SRAT parsing, the topology information is held in two structures that feed into the rest of the kernel.
+SRATのパース後、トポロジ情報は2つの構造体に保持され、それらがカーネルの他の部分に供給される。
 
-### numa_memblks and memblock {#numa_memblks-and-memblock}
+### numa_memblksとmemblock {#numa_memblks-and-memblock}
 
-`numa_add_memblk()` records `[start, end)` → `node` mappings in an internal `numa_meminfo` structure (in `mm/numa_memblks.c`). Later, `numa_memblks_init()` calls `memblock_set_node()` to tag every `memblock.memory` region with its NUMA node number. This is how the buddy allocator's per-node free lists are populated correctly at boot.
+`numa_add_memblk()`は、`[start, end)` → `node`の対応を内部の`numa_meminfo`構造体（`mm/numa_memblks.c`内）に記録する。後に`numa_memblks_init()`が`memblock_set_node()`を呼び出し、すべての`memblock.memory`領域にNUMAノード番号のタグを付ける。これによって、バディアロケータのノードごとのフリーリストがブート時に正しく構築される。
 
-See [memblock: The Boot-Time Memory Allocator](memblock.md) for how `memblock` tracks these regions and hands them to the buddy allocator.
+`memblock`がこれらの領域をどのように追跡し、バディアロケータに引き渡すかについては、[memblock: ブート時のメモリアロケータ](memblock.md)を参照。
 
-### NUMA Distance Matrix {#numa-distance-matrix}
+### NUMA距離行列 {#numa-distance-matrix}
 
-`numa_set_distance(from, to, distance)` writes into a flat `u8` array allocated from memblock:
+`numa_set_distance(from, to, distance)`は、memblockから割り当てられた平坦な`u8`配列に書き込む:
 
 ```c
 /* mm/numa_memblks.c */
 numa_distance[from * numa_distance_cnt + to] = distance;
 ```
 
-At runtime, `node_distance(from, to)` (and its underlying `__node_distance()`) reads from this array to answer scheduler and page-allocator queries about topology proximity. The scheduler uses distance to prefer local memory allocation; the page allocator uses it to choose fallback nodes when the local node is exhausted.
+実行時には、`node_distance(from, to)`（およびその下にある`__node_distance()`）がこの配列を読み、トポロジ上の近さに関するスケジューラやページアロケータからの問い合わせに答える。スケジューラは距離を使ってローカルなメモリ割り当てを優先し、ページアロケータはローカルノードが枯渇したときのフォールバックノードを選ぶのに使う。
 
 ```
 SRAT parsing          SLIT parsing
@@ -289,41 +289,41 @@ buddy allocator      scheduler / page alloc
 per-node free lists  fallback node selection
 ```
 
-## Common Firmware Bugs {#common-firmware-bugs}
+## よくあるファームウェアのバグ {#common-firmware-bugs}
 
-!!! warning "Broken SRAT: memory silently assigned to node 0"
-    If the SRAT is missing memory entries, the kernel falls through to `numa_fill_memblks()`, which assigns unclaimed physical ranges to node 0. On a 4-socket system this means all 3 remote nodes' memory appears as node 0. The system boots but NUMA is completely broken: no remote memory is accessible from the correct node, and `numactl -H` will show a single huge node.
+!!! warning "壊れたSRAT: メモリが何も言わずにノード0に割り当てられる"
+    SRATにメモリエントリが欠けていると、カーネルは`numa_fill_memblks()`にフォールスルーし、これが帰属先のない物理範囲をノード0に割り当てる。4ソケットのシステムでは、3つのリモートノードのメモリがすべてノード0として現れることになる。システムは起動するがNUMAは完全に壊れている。どのリモートメモリも正しいノードからアクセスされず、`numactl -H`は単一の巨大なノードを表示する。
 
-    Detection: `numactl -H` reports one enormous node instead of several balanced ones. Boot log will show `SRAT: Node 0 PXM 0 [mem ...]` for all memory.
+    検出方法: `numactl -H`が、バランスの取れた複数のノードではなく、1つの巨大なノードを報告する。ブートログには、すべてのメモリについて`SRAT: Node 0 PXM 0 [mem ...]`と表示される。
 
-!!! warning "Broken SLIT: all distances reported as 10"
-    Some firmware incorrectly fills the entire SLIT matrix — including off-diagonal entries — with the value 10 (`LOCAL_DISTANCE`). This means the firmware claims all nodes are equidistant from each other, which is false.
+!!! warning "壊れたSLIT: すべての距離が10と報告される"
+    一部のファームウェアは、非対角成分を含むSLIT行列全体を誤って値10（`LOCAL_DISTANCE`）で埋めてしまう。これは、すべてのノードが互いに等距離であるとファームウェアが主張していることを意味し、事実に反する。
 
-    The kernel catches this in `slit_valid()`, which checks that diagonal entries equal `LOCAL_DISTANCE` and off-diagonal entries are strictly greater. A SLIT that fails this check is rejected with the message:
+    カーネルはこれを`slit_valid()`で検出する。これは対角成分が`LOCAL_DISTANCE`に等しく、非対角成分がそれより真に大きいことを確認する。このチェックに失敗したSLITは、次のメッセージとともに拒否される:
 
     ```
     SLIT table looks invalid. Not used.
     ```
 
-    When the SLIT is rejected, the kernel falls back to default distances: `LOCAL_DISTANCE` (10) for same-node and `REMOTE_DISTANCE` (20) for all cross-node pairs. The scheduler and page allocator still function but cannot make topology-aware decisions beyond the two-level local/remote distinction.
+    SLITが拒否されると、カーネルはデフォルトの距離、すなわち同一ノードには`LOCAL_DISTANCE`（10）、ノードをまたぐすべての組には`REMOTE_DISTANCE`（20）にフォールバックする。スケジューラとページアロケータは引き続き機能するが、ローカル/リモートという2段階の区別を超えたトポロジを意識した判断はできない。
 
-!!! warning "Sparse or non-contiguous PXM values"
-    The ACPI specification allows PXM values to be sparse — a system might have PXMs 0, 5, and 100 with no PXMs in between. The kernel handles this via `acpi_map_pxm_to_node()`, which allocates consecutive Linux node numbers regardless of PXM gaps. However, a SLIT for such a system must be sized `101 × 101` (for PXMs 0 through 100), and entries for non-existent PXMs must still be present.
+!!! warning "まばらな、または連続していないPXM値"
+    ACPI仕様では、PXM値がまばらであることが許されている。あるシステムがPXM 0、5、100を持ち、その間のPXMを持たないこともありうる。カーネルはこれを`acpi_map_pxm_to_node()`で扱い、PXMの隙間にかかわらず連続したLinuxのノード番号を割り当てる。ただし、そのようなシステムのSLITは`101 × 101`（PXM 0から100まで）のサイズでなければならず、存在しないPXMのエントリも含まれていなければならない。
 
-    Firmware that sizes the SLIT matrix incorrectly — for example, using `3 × 3` instead of `101 × 101` — will cause the kernel to read past the end of the table when translating distances. The kernel will either silently use garbage distance values or reject the SLIT as invalid.
+    SLIT行列のサイズを誤るファームウェア、たとえば`101 × 101`ではなく`3 × 3`を使うファームウェアでは、カーネルが距離を変換する際にテーブルの末尾を越えて読み込んでしまう。カーネルは何も言わずにゴミの距離値を使うか、SLITを無効として拒否するかのいずれかになる。
 
-!!! warning "SRAT revision mismatch"
-    SRAT revision 1 packs the proximity domain into only the low 8 bits of the `proximity_domain_lo` field of CPU affinity entries. Starting with revision 2, the full 32-bit `proximity_domain` is used. Firmware that sets `header.revision = 1` but writes 32-bit PXMs will have its high bits silently masked off (`pxm &= 0xff`). CPUs and memory that share a PXM > 255 will appear to belong to PXM `pxm & 0xff`, breaking node assignments.
+!!! warning "SRATリビジョンの不一致"
+    SRATリビジョン1では、近接ドメインをCPUアフィニティエントリの`proximity_domain_lo`フィールドの下位8ビットだけに詰め込む。リビジョン2からは、32ビット全体の`proximity_domain`が使われる。`header.revision = 1`を設定しているのに32ビットのPXMを書き込むファームウェアでは、上位ビットが何も言わずにマスクされる（`pxm &= 0xff`）。255を超えるPXMを共有するCPUとメモリは、PXM `pxm & 0xff`に属しているように見え、ノードの割り当てが壊れる。
 
-## Validating NUMA Topology {#validating-numa-topology}
+## NUMAトポロジの検証 {#validating-numa-topology}
 
-### Runtime Tools {#runtime-tools}
+### 実行時のツール {#runtime-tools}
 
 ```bash
-# Show node sizes, CPUs per node, and the distance matrix
+# ノードのサイズ、ノードごとのCPU、距離行列を表示する
 numactl --hardware
 
-# Example output on a 2-node system:
+# 2ノードシステムでの出力例:
 # available: 2 nodes (0-1)
 # node 0 cpus: 0 1 2 3 4 5 6 7
 # node 0 size: 65536 MB
@@ -336,14 +336,14 @@ numactl --hardware
 #   0:  10  21
 #   1:  21  10
 
-# Read distance for a specific pair
+# 特定の組の距離を読む
 cat /sys/devices/system/node/node0/distance
-# 10 21   (distance from node 0 to node 0, then node 0 to node 1)
+# 10 21   （ノード0からノード0、次にノード0からノード1への距離）
 ```
 
-### Boot Log {#boot-log}
+### ブートログ {#boot-log}
 
-During early boot, the ACPI NUMA code logs each SRAT entry it accepts:
+ブートの初期段階で、ACPI NUMAのコードは受け入れた各SRATエントリをログに出力する:
 
 ```bash
 dmesg | grep -i "SRAT"
@@ -352,35 +352,35 @@ dmesg | grep -i "SRAT"
 # ACPI: SRAT: Node 0 PXM 0 [mem 0x100000000-0x3fffffffff] hotplug
 ```
 
-Missing expected nodes here is a clear sign of a broken SRAT.
+ここに期待されるノードが欠けていれば、SRATが壊れている明確な兆候である。
 
-### Decoding the Raw Tables {#decoding-the-raw-tables}
+### 生のテーブルのデコード {#decoding-the-raw-tables}
 
-For deep inspection, decode the raw ACPI tables with the standard toolchain:
+詳しく調べるには、標準のツールチェーンで生のACPIテーブルをデコードする:
 
 ```bash
-# Dump all ACPI tables to binary files
+# すべてのACPIテーブルをバイナリファイルにダンプする
 acpidump -o acpi.dat
 acpixtract acpi.dat
 
-# Disassemble SRAT and SLIT
+# SRATとSLITを逆アセンブルする
 iasl -d SRAT.dat
 iasl -d SLIT.dat
-# Produces SRAT.dsl and SLIT.dsl — human-readable text
+# SRAT.dslとSLIT.dslが生成される — 人間が読めるテキスト
 
-# Check for hotplug memory regions
+# ホットプラグのメモリ領域を確認する
 grep -i "hot" SRAT.dsl
 ```
 
-## Non-ACPI Systems {#non-acpi-systems}
+## ACPI以外のシステム {#non-acpi-systems}
 
-ACPI-based SRAT/SLIT parsing is used on x86 and ARM64. Other platforms discover NUMA topology differently:
+ACPIベースのSRAT/SLITのパースは、x86とARM64で使われる。他のプラットフォームは別の方法でNUMAトポロジを検出する:
 
-**Device Tree (ARM, RISC-V)**: Topology is described by the `numa-node-id` property in DT nodes. `of_numa_init()` reads these and calls `numa_add_memblk()` with the same interface that the SRAT parser uses. See [memblock: The Boot-Time Memory Allocator](memblock.md) for context on how Device Tree memory regions flow into memblock.
+**Device Tree（ARM、RISC-V）**: トポロジはDTノードの`numa-node-id`プロパティで記述される。`of_numa_init()`がこれらを読み、SRATパーサと同じインターフェースで`numa_add_memblk()`を呼び出す。Device Treeのメモリ領域がどのようにmemblockに流れ込むかについては、[memblock: ブート時のメモリアロケータ](memblock.md)を参照。
 
-**AMD without ACPI (`amd_numa_init()`)**: On older AMD systems where ACPI NUMA support is broken or absent, the kernel probes the AMD northbridge directly for memory topology. This is a fallback that runs only when `x86_acpi_numa_init()` fails.
+**ACPIのないAMD（`amd_numa_init()`）**: ACPIのNUMAサポートが壊れているか存在しない古いAMDシステムでは、カーネルはメモリトポロジを得るためにAMDのノースブリッジを直接調べる。これは`x86_acpi_numa_init()`が失敗した場合にのみ実行されるフォールバックである。
 
-**No NUMA firmware (`dummy_numa_init()`)**: When all other methods fail (or when `numa=off` is passed on the kernel command line), `dummy_numa_init()` creates a single fake node 0 that covers the entire physical address space. The system runs as if it were a UMA machine regardless of the actual hardware topology.
+**NUMAファームウェアなし（`dummy_numa_init()`）**: 他のすべての方法が失敗した場合（またはカーネルコマンドラインで`numa=off`が渡された場合）、`dummy_numa_init()`は物理アドレス空間全体をカバーする単一の偽のノード0を作成する。実際のハードウェアトポロジにかかわらず、システムはUMAマシンであるかのように動作する。
 
 ```c
 /* arch/x86/mm/numa.c */
@@ -392,27 +392,27 @@ static int __init dummy_numa_init(void)
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/acpi/numa/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/numa/srat.c) — `acpi_numa_init()`, `acpi_parse_slit()`, PXM-to-node mapping tables
-- [arch/x86/mm/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/srat.c) — x86 entry point `x86_acpi_numa_init()` and APIC-affinity callbacks
-- [arch/x86/mm/numa.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) — `x86_numa_init()` orchestration, `dummy_numa_init()`, NUMA init fallback chain
-- [mm/numa_memblks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) — `numa_add_memblk()`, `numa_set_distance()`, and the runtime `numa_distance[]` matrix
-- [include/acpi/actbl3.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) — C struct definitions for `acpi_table_srat`, `acpi_srat_mem_affinity`, `acpi_table_slit`
+- [drivers/acpi/numa/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/acpi/numa/srat.c) — `acpi_numa_init()`、`acpi_parse_slit()`、PXMからノードへの対応テーブル
+- [arch/x86/mm/srat.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/srat.c) — x86のエントリポイント`x86_acpi_numa_init()`とAPICアフィニティのコールバック
+- [arch/x86/mm/numa.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/numa.c) — `x86_numa_init()`による統括、`dummy_numa_init()`、NUMA初期化のフォールバックチェーン
+- [mm/numa_memblks.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/numa_memblks.c) — `numa_add_memblk()`、`numa_set_distance()`、実行時の`numa_distance[]`行列
+- [include/acpi/actbl3.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/acpi/actbl3.h) — `acpi_table_srat`、`acpi_srat_mem_affinity`、`acpi_table_slit`のC構造体定義
 
-### ACPI specification {#acpi-specification}
+### ACPI仕様 {#acpi-specification}
 
-- [ACPI Specification (latest)](https://uefi.org/specifications) — Chapter 5 (ACPI Software Programming Model) covers the SRAT (section 5.2.16) and SLIT (section 5.2.17) table formats in authoritative detail
+- [ACPI Specification (latest)](https://uefi.org/specifications) — 第5章（ACPI Software Programming Model）で、SRAT（5.2.16節）とSLIT（5.2.17節）のテーブル形式が正式かつ詳細に記述されている
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [NUMA topology initialization](https://lwn.net/Articles/568950/) — how ACPI tables feed into the kernel's NUMA node model at boot
-- [Memory hotplug and NUMA](https://lwn.net/Articles/523874/) — how hotplug memory regions from SRAT interact with the memory hotplug subsystem
+- [NUMA topology initialization](https://lwn.net/Articles/568950/) — ブート時にACPIテーブルがカーネルのNUMAノードモデルにどのように供給されるか
+- [Memory hotplug and NUMA](https://lwn.net/Articles/523874/) — SRATからのホットプラグメモリ領域がメモリホットプラグサブシステムとどのように相互作用するか
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [NUMA Memory Management](numa.md) — overview of NUMA policies, automatic balancing, and memory tiering
-- [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how the `numa_distance[]` matrix built from SLIT is used at runtime by the scheduler and allocator
-- [memblock: The Boot-Time Memory Allocator](memblock.md) — how `memblock_set_node()` consumes the node ranges registered by SRAT parsing
+- [NUMAメモリ管理](numa.md) — NUMAポリシー、自動バランシング、メモリティアリングの概要
+- [NUMA距離とソケット間レイテンシ](numa-distance.md) — SLITから構築された`numa_distance[]`行列が、実行時にスケジューラとアロケータでどのように使われるか
+- [memblock: ブート時のメモリアロケータ](memblock.md) — `memblock_set_node()`が、SRATのパースで登録されたノード範囲をどのように使うか

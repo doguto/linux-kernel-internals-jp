@@ -1,10 +1,10 @@
-# 1GB Huge Pages {#1gb-huge-pages}
+# 1GBヒュージページ {#1gb-huge-pages}
 
-> PUD-level huge pages for workloads where even 2MB pages leave TLB pressure on the table
+> 2MBページでさえTLB圧迫が残るワークロード向けの、PUDレベルのヒュージページ
 
-## What are 1GB pages? {#what-are-1gb-pages}
+## 1GBページとは何か {#what-are-1gb-pages}
 
-On x86-64, the CPU's page table walker can terminate a translation at three levels:
+x86-64では、CPUのページテーブルウォーカーは3つのレベルでアドレス変換を終端できる:
 
 ```
 PGD → PUD → PMD → PTE → 4KB page
@@ -12,19 +12,19 @@ PGD → PUD → PMD →        2MB huge page  (PMD-level)
 PGD → PUD →               1GB huge page  (PUD-level)
 ```
 
-A **1GB huge page** maps the entire gigabyte with a single PUD entry. One TLB entry covers 1GB of virtual address space — 512 times the coverage of a 2MB page and 262,144 times the coverage of a 4KB page.
+**1GBヒュージページ**は、1ギガバイト全体を単一のPUDエントリでマップする。1つのTLBエントリで1GBの仮想アドレス空間をカバーでき、これは2MBページの512倍、4KBページの262,144倍のカバー範囲である。
 
-This is the largest page size supported on x86-64. It requires explicit CPU support and explicit reservation. Nothing happens automatically.
+これはx86-64でサポートされる最大のページサイズである。明示的なCPUサポートと明示的な予約が必要であり、何も自動的には行われない。
 
-### CPU requirement {#cpu-requirement}
+### CPU要件 {#cpu-requirement}
 
-1GB pages require the `pdpe1gb` CPUID flag (kernel feature `X86_FEATURE_GBPAGES`). Check your system:
+1GBページには`pdpe1gb` CPUIDフラグ（カーネルの機能名は`X86_FEATURE_GBPAGES`）が必要である。システムを確認するには:
 
 ```bash
 grep pdpe1gb /proc/cpuinfo
 ```
 
-Any x86-64 CPU manufactured after roughly 2010 (Intel Westmere, AMD Barcelona and later) supports it. The kernel gates 1GB page support on this flag in `arch/x86/mm/hugetlbpage.c`:
+おおよそ2010年以降に製造されたx86-64 CPU（Intel Westmere、AMD Barcelona以降）であればサポートしている。カーネルは`arch/x86/mm/hugetlbpage.c`で、このフラグに基づいて1GBページのサポートを制御している:
 
 ```c
 bool __init arch_hugetlb_valid_size(unsigned long size)
@@ -38,43 +38,43 @@ bool __init arch_hugetlb_valid_size(unsigned long size)
 }
 ```
 
-## TLB coverage: the core motivation {#tlb-coverage-the-core-motivation}
+## TLBカバー範囲: 中心的な動機 {#tlb-coverage-the-core-motivation}
 
-The TLB holds a finite number of virtual-to-physical address translations. When it fills, the CPU must walk the page table in memory — a multi-step operation that can cost 50–200 cycles per miss on modern hardware.
+TLBが保持できる仮想アドレスから物理アドレスへの変換の数には限りがある。TLBが一杯になると、CPUはメモリ上のページテーブルをウォークしなければならない。これは複数ステップの操作であり、最新のハードウェアではミス1回あたり50〜200サイクルかかることがある。
 
-TLB entry counts for a 1GB working set:
+1GBのワーキングセットに必要なTLBエントリ数:
 
-| Page Size | TLB Entries for 1GB |
+| ページサイズ | 1GBに必要なTLBエントリ数 |
 |-----------|---------------------|
 | 4KB       | 262,144             |
 | 2MB       | 512                 |
 | 1GB       | 1                   |
 
-For a 100GB database buffer pool (a realistic figure for Oracle, SAP HANA, or Redis with a large dataset):
+100GBのデータベースバッファプール（大規模なデータセットを持つOracle、SAP HANA、Redisでは現実的な数字）の場合:
 
-| Page Size | TLB Entries for 100GB |
+| ページサイズ | 100GBに必要なTLBエントリ数 |
 |-----------|-----------------------|
 | 4KB       | ~26,200,000           |
 | 2MB       | 51,200                |
 | 1GB       | 100                   |
 
-A typical L2 TLB (STLB) on a Skylake CPU holds 1,536 entries for 4KB pages and 32 entries for large pages (sources: [WikiChip Skylake server](https://en.wikichip.org/wiki/intel/microarchitectures/skylake_(server)#Memory_Hierarchy), [7-cpu.com](https://www.7-cpu.com/cpu/Skylake.html)). With a 100GB working set and 2MB pages, you need 51,200 TLB entries to cover it all — but the hardware only has 32 dedicated large-page TLB entries. With 1GB pages, 100 entries covers the entire pool.
+Skylake CPUの典型的なL2 TLB（STLB）は、4KBページ用に1,536エントリ、ラージページ用に32エントリを保持する（出典: [WikiChip Skylake server](https://en.wikichip.org/wiki/intel/microarchitectures/skylake_(server)#Memory_Hierarchy)、[7-cpu.com](https://www.7-cpu.com/cpu/Skylake.html)）。100GBのワーキングセットを2MBページでカバーするには51,200のTLBエントリが必要だが、ハードウェアにはラージページ専用のTLBエントリが32しかない。1GBページなら、100エントリでプール全体をカバーできる。
 
-For more on TLB mechanics and 2MB page TLB math, see [Transparent Huge Pages](thp.md) and [hugetlbfs vs THP](hugetlbfs-vs-thp.md).
+TLBの仕組みと2MBページでのTLBの計算について詳しくは、[Transparent Huge Pages](thp.md)と[hugetlbfs vs THP](hugetlbfs-vs-thp.md)を参照。
 
-## Allocation: boot time only (practically speaking) {#allocation-boot-time-only-practically-speaking}
+## 割り当て: （実用上は）ブート時のみ {#allocation-boot-time-only-practically-speaking}
 
-### Why 1GB pages cannot be allocated at runtime {#why-1gb-pages-cannot-be-allocated-at-runtime}
+### なぜ1GBページは実行時に割り当てられないか {#why-1gb-pages-cannot-be-allocated-at-runtime}
 
-A 1GB page requires 1GB of **physically contiguous** memory, aligned to a 1GB physical boundary. On a freshly booted system with no memory fragmentation, this is feasible. On a system that has been running — with the kernel, drivers, file caches, and applications already fragmented across physical memory — finding a free, contiguous, aligned 1GB region is nearly impossible.
+1GBページには、1GBの物理境界にアラインされた1GBの**物理的に連続した**メモリが必要である。メモリの断片化がない起動直後のシステムであれば、これは実現可能である。しかし稼働を続けているシステム、つまりカーネル、ドライバ、ファイルキャッシュ、アプリケーションがすでに物理メモリ全体に断片化して配置されているシステムでは、空いていて連続し、かつアラインされた1GBの領域を見つけることはほぼ不可能である。
 
-The kernel calls pages of this size "gigantic" because their allocation order (`PUD_SHIFT - PAGE_SHIFT` = 30 - 12 = order-18) exceeds `MAX_PAGE_ORDER` (typically 10 or 11). The buddy allocator does not manage blocks this large at all.
+カーネルはこのサイズのページを「gigantic」と呼ぶ。その割り当てorder（`PUD_SHIFT - PAGE_SHIFT` = 30 - 12 = order-18）が`MAX_PAGE_ORDER`（通常10または11）を超えるためである。バディアロケータはこれほど大きなブロックをまったく管理しない。
 
-Runtime allocation is technically possible when `CONFIG_CONTIG_ALLOC` is enabled — the kernel can use `alloc_contig_pages()` or CMA (Contiguous Memory Allocator) to assemble a contiguous region by migrating existing pages out of the way. In practice this succeeds only immediately after boot, before memory becomes fragmented. On a loaded production system, it almost always fails silently: you write a count to `nr_hugepages` and `free_hugepages` stays at 0.
+`CONFIG_CONTIG_ALLOC`が有効であれば、実行時の割り当ても技術的には可能である。カーネルは`alloc_contig_pages()`またはCMA（Contiguous Memory Allocator）を使い、既存のページをマイグレーションして退かすことで連続した領域を作り出せる。実際には、これはメモリが断片化する前の起動直後にしか成功しない。負荷のかかった本番システムでは、ほぼ常に何も言わずに失敗する。`nr_hugepages`に数を書き込んでも、`free_hugepages`は0のままである。
 
-### Boot-time reservation {#boot-time-reservation}
+### ブート時の予約 {#boot-time-reservation}
 
-Reserve 1GB pages on the kernel command line, before the memory allocator has touched anything:
+メモリアロケータが何も触れる前に、カーネルコマンドラインで1GBページを予約する:
 
 ```
 # Method 1: explicit size
@@ -84,171 +84,171 @@ hugepagesz=1G hugepages=N
 default_hugepagesz=1G hugepages=N
 ```
 
-Both `hugepagesz` and `default_hugepagesz` are parsed as `early_param` in `mm/hugetlb.c` (functions `hugepagesz_setup` and `default_hugepagesz_setup`). They run before the page allocator is fully initialized, which is why boot-time reservation succeeds where runtime reservation fails.
+`hugepagesz`と`default_hugepagesz`はどちらも`mm/hugetlb.c`で`early_param`としてパースされる（関数`hugepagesz_setup`と`default_hugepagesz_setup`）。これらはページアロケータが完全に初期化される前に実行されるため、実行時の予約が失敗する状況でもブート時の予約は成功する。
 
-You can combine sizes on the command line to reserve both 2MB and 1GB pools:
+コマンドラインでサイズを組み合わせれば、2MBと1GBの両方のプールを予約できる:
 
 ```
 hugepagesz=1G hugepages=16 hugepagesz=2M hugepages=1024
 ```
 
-!!! warning "Order matters"
-    `hugepages=N` applies to the most recently specified `hugepagesz`. A stray `hugepages=` before any `hugepagesz=` applies to the default page size (usually 2MB). Always pair them explicitly.
+!!! warning "順序が重要"
+    `hugepages=N`は、直前に指定された`hugepagesz`に適用される。どの`hugepagesz=`よりも前に置かれた`hugepages=`は、デフォルトのページサイズ（通常は2MB）に適用される。常に明示的にペアで指定すること。
 
-## Runtime failure: what it looks like {#runtime-failure-what-it-looks-like}
+## 実行時の失敗: どのように見えるか {#runtime-failure-what-it-looks-like}
 
-After boot, the 1GB pool lives at:
+起動後、1GBのプールは次の場所にある:
 
 ```
 /sys/kernel/mm/hugepages/hugepages-1048576kB/
 ```
 
-(1048576 kB = 1GB)
+（1048576 kB = 1GB）
 
-On a booted system without boot-time reservation, attempting runtime allocation:
+ブート時の予約をしていない起動済みシステムで、実行時の割り当てを試みた場合:
 
 ```bash
-# Attempt to allocate 4 x 1GB pages at runtime
+# 実行時に1GBページを4つ割り当てようとする
 echo 4 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages
 
-# Check what actually happened
-cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages   # shows actual pool size (may be 0-4)
-cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages # shows unused pages in pool
+# 実際に何が起きたかを確認する
+cat /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages   # 実際のプールサイズを表示（0〜4の可能性あり）
+cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages # プール内の未使用ページを表示
 ```
 
-`nr_hugepages` shows the actual number of huge pages in the pool — not the requested target. If you request 4 but the kernel can only allocate 2 (due to fragmentation), `nr_hugepages` shows 2. `free_hugepages` shows how many pool pages are not currently mapped by any process. On a loaded system, runtime allocation of 1GB pages almost always fails entirely.
+`nr_hugepages`は、要求した目標値ではなく、プール内の実際のヒュージページ数を示す。4つを要求しても（断片化のために）カーネルが2つしか割り当てられなければ、`nr_hugepages`は2を示す。`free_hugepages`は、プールのページのうち現在どのプロセスにもマップされていないものの数を示す。負荷のかかったシステムでは、1GBページの実行時割り当てはほぼ常に完全に失敗する。
 
 !!! note "CONFIG_CONTIG_ALLOC"
-    Some distributions enable `CONFIG_CONTIG_ALLOC`, which allows runtime gigantic page allocation via `alloc_contig_pages()`. This may succeed immediately after boot when memory is still unfragmented, but should not be relied upon for production deployments. Boot-time reservation is the only reliable method.
+    一部のディストリビューションは`CONFIG_CONTIG_ALLOC`を有効にしており、これにより`alloc_contig_pages()`を介した実行時のgiganticページ割り当てが可能になる。メモリがまだ断片化していない起動直後であれば成功することもあるが、本番環境での運用で頼りにすべきではない。ブート時の予約が唯一の信頼できる方法である。
 
-## NUMA implications {#numa-implications}
+## NUMAへの影響 {#numa-implications}
 
-Each 1GB page is allocated on a specific NUMA node. A process running on node 0 that accesses a 1GB page residing on node 1 pays the NUMA remote memory penalty on **every single access** — there is no migration granularity below the 1GB page boundary.
+各1GBページは特定のNUMAノード上に割り当てられる。ノード0で動作するプロセスがノード1上の1GBページにアクセスすると、**すべてのアクセス**でNUMAのリモートメモリペナルティを支払うことになる。1GBのページ境界より細かい粒度でのマイグレーションはない。
 
-With 4KB or 2MB pages, the kernel's NUMA balancing can migrate individual pages or 2MB chunks closer to the accessing CPU. With 1GB pages, NUMA balancing does not apply — the pages are pinned in the hugetlb pool and are never migrated.
+4KBや2MBのページであれば、カーネルのNUMAバランシングが個々のページや2MBのチャンクを、アクセスするCPUの近くにマイグレーションできる。1GBページにはNUMAバランシングは適用されない。ページはhugetlbプール内に固定されており、マイグレーションされることはない。
 
-### Per-node reservation {#per-node-reservation}
+### ノードごとの予約 {#per-node-reservation}
 
-Always reserve 1GB pages on the specific NUMA nodes where your workload runs:
+1GBページは必ず、ワークロードが動作する特定のNUMAノード上に予約すること:
 
 ```bash
-# Reserve 8 x 1GB pages on node 0
+# ノード0に1GBページを8つ予約する
 echo 8 > /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/nr_hugepages
 
-# Reserve 8 x 1GB pages on node 1
+# ノード1に1GBページを8つ予約する
 echo 8 > /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/nr_hugepages
 ```
 
-Or equivalently with `numactl` at application launch time:
+あるいは同等のことを、アプリケーション起動時に`numactl`で行う:
 
 ```bash
 numactl --membind=0 --cpunodebind=0 ./myapp
 ```
 
-Check per-node 1GB page usage:
+ノードごとの1GBページの使用状況を確認する:
 
 ```bash
-# Pages allocated per node
+# ノードごとに割り当てられたページ
 cat /sys/devices/system/node/node0/hugepages/hugepages-1048576kB/free_hugepages
 cat /sys/devices/system/node/node1/hugepages/hugepages-1048576kB/free_hugepages
 
-# Summary across all nodes
+# 全ノードの集計
 numastat -m | grep -i huge
 ```
 
-## When 1GB pages outperform 2MB pages {#when-1gb-pages-outperform-2mb-pages}
+## 1GBページが2MBページより性能で勝るとき {#when-1gb-pages-outperform-2mb-pages}
 
-2MB pages already reduce TLB pressure by 512x over 4KB pages. Switching to 1GB pages provides another 512x reduction — but this only matters if TLB misses are still the bottleneck after switching to 2MB.
+2MBページはすでに、4KBページに比べてTLB圧迫を512分の1に減らしている。1GBページに切り替えると、さらに512分の1に減る。ただしこれが意味を持つのは、2MBに切り替えた後もTLBミスがボトルネックであり続ける場合だけである。
 
-**Workloads that benefit:**
+**恩恵を受けるワークロード:**
 
-- **In-memory databases** — Oracle Database, SAP HANA, and similar systems with buffer pools larger than ~100GB. The buffer pool is accessed randomly; every cache hit becomes a TLB miss at 2MB granularity when the working set exceeds TLB capacity.
-- **ML training with large model weights** — Large language model training loads multi-gigabyte weight tensors that are repeatedly accessed. With 1GB pages, the entire weight tensor for a transformer layer can fit in a handful of TLB entries.
-- **HPC with dense matrices** — Scientific codes doing dense linear algebra (DGEMM, FFTs) on large matrices see measurable speedups from 1GB pages when matrix dimensions push working sets into the hundreds of gigabytes.
-- **DPDK and high-speed packet processing** — DPDK has long recommended 1GB pages for its memory pools. A single TLB entry covers the entire packet buffer pool, and the zero TLB miss rate on packet descriptor lookups is measurable in throughput.
+- **インメモリデータベース** — Oracle Database、SAP HANA、および約100GBを超えるバッファプールを持つ同様のシステム。バッファプールはランダムにアクセスされるため、ワーキングセットがTLB容量を超えると、2MB粒度ではキャッシュヒットのたびにTLBミスが発生する。
+- **大規模なモデル重みを扱うML学習** — 大規模言語モデルの学習では、繰り返しアクセスされる数ギガバイトの重みテンソルをロードする。1GBページなら、transformer層の重みテンソル全体がほんの数個のTLBエントリに収まる。
+- **密行列を扱うHPC** — 大きな行列に対して密な線形代数演算（DGEMM、FFT）を行う科学技術計算コードでは、行列の次元によってワーキングセットが数百ギガバイトに達する場合、1GBページによって測定可能な高速化が得られる。
+- **DPDKと高速パケット処理** — DPDKは長年、メモリプールに1GBページを推奨してきた。単一のTLBエントリでパケットバッファプール全体をカバーでき、パケットディスクリプタの参照でTLBミスがゼロになることはスループットとして測定できる。
 
-**Rule of thumb:** consider 1GB pages when:
-1. Your working set is larger than ~100GB, **and**
-2. You can measure TLB miss rate via `perf stat -e dTLB-load-misses` and it is a non-trivial fraction of runtime, **and**
-3. 2MB pages (THP or hugetlbfs) are already in use but TLB misses persist
+**経験則:** 次の場合に1GBページを検討する:
+1. ワーキングセットが約100GBより大きい、**かつ**
+2. `perf stat -e dTLB-load-misses`でTLBミス率を測定でき、それが実行時間の無視できない割合を占めている、**かつ**
+3. 2MBページ（THPまたはhugetlbfs）をすでに使っているのに、TLBミスが解消しない
 
 ```bash
-# Measure TLB miss rate before and after switching to 1GB pages
+# 1GBページへの切り替え前後でTLBミス率を測定する
 perf stat -e cycles,dTLB-load-misses,dTLB-load-misses:u ./workload
 ```
 
-## When NOT to use 1GB pages {#when-not-to-use-1gb-pages}
+## 1GBページを使うべきでないとき {#when-not-to-use-1gb-pages}
 
-1GB pages are a commitment. They have significant downsides that rule them out for many workloads.
+1GBページは確約である。多くのワークロードでは使えない大きな欠点がある。
 
-**Memory waste.** A 1GB page allocated for a 100MB dataset wastes 900MB of physical RAM — permanently, until the application exits and the page returns to the pool. With 2MB pages the waste is at most 2MB per allocation.
+**メモリの無駄。** 100MBのデータセットのために割り当てた1GBページは、900MBの物理RAMを無駄にする。それはアプリケーションが終了してページがプールに戻るまで、恒久的に続く。2MBページであれば、無駄は割り当てごとに最大2MBである。
 
-**No swapping.** hugetlb pages (both 2MB and 1GB) are never swapped. A 1GB page that your application maps but rarely accesses sits in physical RAM indefinitely. On a machine with memory pressure, this can push other workloads into swap or OOM.
+**スワップされない。** hugetlbページ（2MB・1GBとも）は決してスワップされない。アプリケーションがマップしているもののほとんどアクセスしない1GBページは、物理RAMに無期限に居座る。メモリ圧迫のあるマシンでは、これが他のワークロードをスワップやOOMに追いやることがある。
 
-**Fragmentation of the pool itself.** Each 1GB page is committed to the pool even when not mapped by any application. Ten reserved but unmapped 1GB pages means 10GB of RAM sitting idle.
+**プール自体の断片化。** 各1GBページは、どのアプリケーションにもマップされていないときでもプールに確保されたままである。予約済みだがマップされていない1GBページが10個あれば、10GBのRAMが遊んでいることになる。
 
-**Containers and overcommit.** Container environments typically rely on memory overcommit — the ability to promise more memory than exists and rely on typical usage being less than total reservation. hugetlb pages cannot be overcommitted: the pool is a hard limit. 1GB granularity also makes it impossible to size the pool precisely for containers with varying memory requirements.
+**コンテナとオーバーコミット。** コンテナ環境は通常、メモリのオーバーコミット、すなわち実在する以上のメモリを約束し、典型的な使用量が予約総量より少ないことを当てにする仕組みに依存している。hugetlbページはオーバーコミットできず、プールは厳格な上限となる。また1GBという粒度では、メモリ要件がまちまちなコンテナに合わせてプールを正確にサイジングすることも不可能である。
 
-**Small or medium workloads.** A process with a 4GB working set uses 4 TLB entries with 1GB pages. The same process with 2MB pages uses 2,048 TLB entries — well within the capacity of a modern STLB. There is no TLB benefit that justifies 1GB page overhead for small working sets.
+**小規模または中規模のワークロード。** 4GBのワーキングセットを持つプロセスは、1GBページなら4つのTLBエントリを使う。同じプロセスが2MBページなら2,048のTLBエントリを使うが、これは最新のSTLBの容量内に十分収まる。小さなワーキングセットでは、1GBページのオーバーヘッドに見合うTLB上の利点はない。
 
-!!! tip "For most workloads: start with 2MB"
-    If you haven't already deployed 2MB hugetlbfs pages, do that first. The operational overhead is far lower (runtime allocation is possible), and you can measure how much TLB benefit you get before committing to the more complex 1GB setup. See [hugetlbfs vs THP](hugetlbfs-vs-thp.md) for 2MB page setup and comparison.
+!!! tip "ほとんどのワークロードでは: まず2MBから始める"
+    まだ2MBのhugetlbfsページを導入していないなら、まずそれを行うこと。運用上のオーバーヘッドがはるかに低く（実行時の割り当てが可能）、より複雑な1GBのセットアップに踏み切る前に、TLB上の利点がどれだけ得られるかを測定できる。2MBページのセットアップと比較については[hugetlbfs vs THP](hugetlbfs-vs-thp.md)を参照。
 
-## Using 1GB pages from applications {#using-1gb-pages-from-applications}
+## アプリケーションから1GBページを使う {#using-1gb-pages-from-applications}
 
-### hugetlbfs mount {#hugetlbfs-mount}
+### hugetlbfsのマウント {#hugetlbfs-mount}
 
 ```bash
-# Create a mount point for 1GB pages
+# 1GBページ用のマウントポイントを作成する
 mkdir -p /dev/hugepages-1G
 
-# Mount with explicit page size
+# ページサイズを明示してマウントする
 mount -t hugetlbfs -o pagesize=1G nodev /dev/hugepages-1G
 ```
 
-### mmap() with MAP_HUGE_1GB {#mmap-with-maphuge1gb}
+### MAP_HUGE_1GBを指定したmmap() {#mmap-with-maphuge1gb}
 
 ```c
 #include <sys/mman.h>
 
-/* Map 2GB using 1GB huge pages (MAP_HUGE_1GB = 30U << 26 = 0x78000000) */
+/* 1GBヒュージページを使って2GBをマップする（MAP_HUGE_1GB = 30U << 26 = 0x78000000） */
 void *ptr = mmap(NULL, 2UL * 1024 * 1024 * 1024,
                  PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS | MAP_HUGETLB | MAP_HUGE_1GB,
                  -1, 0);
 if (ptr == MAP_FAILED) {
-    perror("mmap");  /* pool exhausted or not reserved */
+    perror("mmap");  /* プールが枯渇しているか、予約されていない */
     exit(1);
 }
 ```
 
-`MAP_HUGE_1GB` is defined in `include/uapi/linux/mman.h` as `HUGETLB_FLAG_ENCODE_1GB`, which is `(30U << HUGETLB_FLAG_ENCODE_SHIFT)` = `(30U << 26)` = `0x78000000`. The value 30 encodes log2(1GB) = 30.
+`MAP_HUGE_1GB`は`include/uapi/linux/mman.h`で`HUGETLB_FLAG_ENCODE_1GB`として定義されており、これは`(30U << HUGETLB_FLAG_ENCODE_SHIFT)` = `(30U << 26)` = `0x78000000`である。値30はlog2(1GB) = 30をエンコードしている。
 
-### File on hugetlbfs (shared memory between processes) {#file-on-hugetlbfs-shared-memory-between-processes}
+### hugetlbfs上のファイル（プロセス間の共有メモリ） {#file-on-hugetlbfs-shared-memory-between-processes}
 
 ```c
-/* Process 1: create the backing file */
+/* プロセス1: 裏付けとなるファイルを作成する */
 int fd = open("/dev/hugepages-1G/shm-buffer", O_CREAT | O_RDWR, 0600);
-ftruncate(fd, 4UL * 1024 * 1024 * 1024);  /* 4GB = 4 x 1GB pages */
+ftruncate(fd, 4UL * 1024 * 1024 * 1024);  /* 4GB = 1GBページ × 4 */
 
 void *ptr = mmap(NULL, 4UL * 1024 * 1024 * 1024,
                  PROT_READ | PROT_WRITE,
                  MAP_SHARED, fd, 0);
 
-/* Process 2: attach to the same file */
+/* プロセス2: 同じファイルにアタッチする */
 int fd2 = open("/dev/hugepages-1G/shm-buffer", O_RDWR);
 void *ptr2 = mmap(NULL, 4UL * 1024 * 1024 * 1024,
                   PROT_READ | PROT_WRITE,
                   MAP_SHARED, fd2, 0);
 ```
 
-The hugetlbfs file approach is used by Oracle's SGA and by DPDK for shared packet memory.
+hugetlbfsファイルを使う手法は、OracleのSGAや、DPDKの共有パケットメモリで使われている。
 
-## Observing 1GB page usage {#observing-1gb-page-usage}
+## 1GBページの使用状況を観測する {#observing-1gb-page-usage}
 
 ### /proc/meminfo {#procmeminfo}
 
-`/proc/meminfo` only shows the **default** huge page size pool. On a system where the default is 2MB (the common case), `HugePages_Total` reflects the 2MB pool, not the 1GB pool:
+`/proc/meminfo`は**デフォルト**のヒュージページサイズのプールしか表示しない。デフォルトが2MBのシステム（一般的なケース）では、`HugePages_Total`は1GBプールではなく2MBプールを反映する:
 
 ```bash
 $ grep -i huge /proc/meminfo
@@ -260,7 +260,7 @@ HugePages_Surp:        0
 Hugepagesize:       2048 kB    # confirms default is 2MB
 ```
 
-To see the 1GB pool regardless of the default setting, use the size-specific sysfs directory:
+デフォルト設定にかかわらず1GBプールを見るには、サイズ別のsysfsディレクトリを使う:
 
 ```bash
 $ ls /sys/kernel/mm/hugepages/hugepages-1048576kB/
@@ -273,19 +273,19 @@ $ cat /sys/kernel/mm/hugepages/hugepages-1048576kB/free_hugepages
 4
 ```
 
-### Per-node via numastat {#per-node-via-numastat}
+### numastatによるノードごとの確認 {#per-node-via-numastat}
 
 ```bash
-# Per-node breakdown of all huge page sizes
+# 全ヒュージページサイズのノードごとの内訳
 numastat -m
 
-# Example output (excerpt):
+# 出力例（抜粋）:
 # Node 0  Node 1   Total
 # HugePages_Total   8.00    8.00   16.00
 # HugePages_Free    2.00    2.00    4.00
 ```
 
-### Per-node via sysfs {#per-node-via-sysfs}
+### sysfsによるノードごとの確認 {#per-node-via-sysfs}
 
 ```bash
 for node in /sys/devices/system/node/node*/hugepages/hugepages-1048576kB; do
@@ -295,65 +295,65 @@ for node in /sys/devices/system/node/node*/hugepages/hugepages-1048576kB; do
 done
 ```
 
-### Per-process {#per-process}
+### プロセスごと {#per-process}
 
 ```bash
-# Maps using 1GB huge pages show up in smaps with KernelPageSize: 1048576 kB
+# 1GBヒュージページを使うマッピングは、smapsでKernelPageSize: 1048576 kBとして表示される
 grep -A5 "KernelPageSize" /proc/<pid>/smaps | grep -B1 "1048576"
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/hugetlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) | hugetlb pool management: `hugepagesz_setup`, `default_hugepagesz_setup`, `alloc_gigantic_frozen_folio`, `hugetlb_gigantic_pages_alloc_boot` |
-| [`include/linux/hugetlb.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hugetlb.h) | `hstate_is_gigantic()`, `hugepage_migration_supported()` |
-| [`arch/x86/mm/hugetlbpage.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/hugetlbpage.c) | `arch_hugetlb_valid_size()` — gates 1GB support on `X86_FEATURE_GBPAGES`; `gigantic_pages_init()` — registers the PUD-level hstate when `CONFIG_CONTIG_ALLOC` is set |
-| [`arch/x86/include/asm/cpufeatures.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/cpufeatures.h) | `X86_FEATURE_GBPAGES` (`"pdpe1gb"`) — CPU capability flag |
-| [`include/uapi/linux/mman.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mman.h) | `MAP_HUGE_1GB` — mmap flag for 1GB pages |
+| [`mm/hugetlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) | hugetlbプールの管理: `hugepagesz_setup`、`default_hugepagesz_setup`、`alloc_gigantic_frozen_folio`、`hugetlb_gigantic_pages_alloc_boot` |
+| [`include/linux/hugetlb.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/hugetlb.h) | `hstate_is_gigantic()`、`hugepage_migration_supported()` |
+| [`arch/x86/mm/hugetlbpage.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/hugetlbpage.c) | `arch_hugetlb_valid_size()` — `X86_FEATURE_GBPAGES`に基づいて1GBサポートを制御する。`gigantic_pages_init()` — `CONFIG_CONTIG_ALLOC`が設定されているときにPUDレベルのhstateを登録する |
+| [`arch/x86/include/asm/cpufeatures.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/cpufeatures.h) | `X86_FEATURE_GBPAGES`（`"pdpe1gb"`） — CPUの機能フラグ |
+| [`include/uapi/linux/mman.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/mman.h) | `MAP_HUGE_1GB` — 1GBページ用のmmapフラグ |
 | [`include/uapi/asm-generic/hugetlb_encode.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/hugetlb_encode.h) | `HUGETLB_FLAG_ENCODE_1GB` = `(30U << 26)` |
 
-## History {#history}
+## 歴史 {#history}
 
-### 1GB page support (v2.6.26, 2008) {#1gb-page-support-v2626-2008}
+### 1GBページのサポート（v2.6.26、2008年） {#1gb-page-support-v2626-2008}
 
-1GB page support on x86-64 was introduced in Linux 2.6.26. AMD Barcelona (Family 10h) was the first x86 CPU to implement the `PDPE1GB` CPUID bit, which is exposed in Linux as `X86_FEATURE_GBPAGES` (cpufeature string `"pdpe1gb"`).
+x86-64での1GBページのサポートはLinux 2.6.26で導入された。AMD Barcelona（Family 10h）は`PDPE1GB` CPUIDビットを実装した最初のx86 CPUであり、このビットはLinuxでは`X86_FEATURE_GBPAGES`（cpufeature文字列`"pdpe1gb"`）として公開されている。
 
-**LWN coverage**: [Huge pages part 3: Administration](https://lwn.net/Articles/376606/) covers the NUMA pool management that accompanied 1GB page support.
+**LWNの記事**: [Huge pages part 3: Administration](https://lwn.net/Articles/376606/)は、1GBページのサポートに伴うNUMAプールの管理を扱っている。
 
-### MAP_HUGE_1GB flag (v3.8, 2013) {#maphuge1gb-flag-v38-2013}
+### MAP_HUGE_1GBフラグ（v3.8、2013年） {#maphuge1gb-flag-v38-2013}
 
-**Commit**: [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) ("mm: support more pagesizes for MAP_HUGETLB/SHM_HUGETLB")
+**コミット**: [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) ("mm: support more pagesizes for MAP_HUGETLB/SHM_HUGETLB")
 
-Before this commit, applications had to open a file on a `pagesize=1G` hugetlbfs mount to get 1GB pages. This commit added the page-size encoding in mmap flags, enabling `MAP_HUGETLB | MAP_HUGE_1GB` without a mount point.
+このコミット以前は、1GBページを得るにはアプリケーションが`pagesize=1G`のhugetlbfsマウント上のファイルを開く必要があった。このコミットはmmapフラグにページサイズのエンコーディングを追加し、マウントポイントなしで`MAP_HUGETLB | MAP_HUGE_1GB`を使えるようにした。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/mm/hugetlbpage.rst`](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) — hugetlbfs admin guide including boot parameters and sysfs interface
+- [`Documentation/admin-guide/mm/hugetlbpage.rst`](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html) — ブートパラメータとsysfsインターフェースを含むhugetlbfsの管理者ガイド
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Huge pages part 1: Introduction](https://lwn.net/Articles/374424/) (2010)
-- [Huge pages part 2: Interfaces](https://lwn.net/Articles/375096/) (2010) — mmap flags and libhugetlbfs
-- [Huge pages part 3: Administration](https://lwn.net/Articles/376606/) (2010) — pool management and NUMA
+- [Huge pages part 1: Introduction](https://lwn.net/Articles/374424/)（2010年）
+- [Huge pages part 2: Interfaces](https://lwn.net/Articles/375096/)（2010年） — mmapフラグとlibhugetlbfs
+- [Huge pages part 3: Administration](https://lwn.net/Articles/376606/)（2010年） — プール管理とNUMA
 
-### Related Pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [hugetlbfs vs THP](hugetlbfs-vs-thp.md) — 2MB page comparison, pool management, and when to use hugetlbfs vs THP
-- [Transparent Huge Pages](thp.md) — 2MB PMD-level THP internals and tuning
-- [Page Tables](page-tables.md) — PUD-level page table entry structure
-- [NUMA](numa.md) — per-node memory allocation and NUMA topology
-- [Page Allocator](page-allocator.md) — why the buddy allocator cannot satisfy 1GB allocations at runtime
+- [hugetlbfs vs THP](hugetlbfs-vs-thp.md) — 2MBページの比較、プール管理、hugetlbfsとTHPの使い分け
+- [Transparent Huge Pages](thp.md) — 2MBのPMDレベルTHPの内部とチューニング
+- [ページテーブル](page-tables.md) — PUDレベルのページテーブルエントリの構造
+- [NUMA](numa.md) — ノードごとのメモリ割り当てとNUMAトポロジ
+- [ページアロケータ](page-allocator.md) — なぜバディアロケータは実行時に1GBの割り当てを満たせないか
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- `Documentation/admin-guide/mm/hugetlbpage.rst` — the canonical kernel admin guide for hugetlbfs: boot parameters (`hugepagesz=`, `default_hugepagesz=`), sysfs interface, per-node reservation, and `MAP_HUGETLB` / `MAP_HUGE_1GB` flags; rendered at [docs.kernel.org](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html)
-- [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) — hugetlb pool management: `hugepagesz_setup()`, `default_hugepagesz_setup()`, `alloc_gigantic_frozen_folio()`, and `hugetlb_gigantic_pages_alloc_boot()` for the early-param reservation path
-- [arch/x86/mm/hugetlbpage.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/hugetlbpage.c) — `arch_hugetlb_valid_size()` gating 1GB support on `X86_FEATURE_GBPAGES`, and `gigantic_pages_init()` registering the PUD-level hstate
-- [LWN: Huge pages part 1: Introduction](https://lwn.net/Articles/374424/) — background on why huge pages were added to Linux and the original database-vendor motivation
-- [LWN: Huge pages part 3: Administration](https://lwn.net/Articles/376606/) — NUMA pool management and per-node reservation, written at the time 1GB page support was maturing
-- Commit [42d7395feb56](https://git.kernel.org/linus/42d7395feb56) — v3.8 addition of `MAP_HUGE_1GB` and the page-size encoding in mmap flags, removing the requirement for a `pagesize=1G` hugetlbfs mount
-- [hugetlbfs-vs-thp.md](hugetlbfs-vs-thp.md) — when to choose 1GB hugetlbfs over 2MB THP or mTHP, including the operational trade-offs of pre-reserved pools
-- [thp.md](thp.md) — 2MB PMD-level THP: the lower-overhead starting point before committing to 1GB pages
+- `Documentation/admin-guide/mm/hugetlbpage.rst` — hugetlbfsに関するカーネルの正式な管理者ガイド。ブートパラメータ（`hugepagesz=`、`default_hugepagesz=`）、sysfsインターフェース、ノードごとの予約、`MAP_HUGETLB` / `MAP_HUGE_1GB`フラグを扱う。[docs.kernel.org](https://docs.kernel.org/admin-guide/mm/hugetlbpage.html)で閲覧できる
+- [mm/hugetlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/hugetlb.c) — hugetlbプールの管理。`hugepagesz_setup()`、`default_hugepagesz_setup()`、`alloc_gigantic_frozen_folio()`、およびearly_paramによる予約パスのための`hugetlb_gigantic_pages_alloc_boot()`
+- [arch/x86/mm/hugetlbpage.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/hugetlbpage.c) — `X86_FEATURE_GBPAGES`に基づいて1GBサポートを制御する`arch_hugetlb_valid_size()`と、PUDレベルのhstateを登録する`gigantic_pages_init()`
+- [LWN: Huge pages part 1: Introduction](https://lwn.net/Articles/374424/) — なぜヒュージページがLinuxに追加されたか、そして当初のデータベースベンダーの動機についての背景
+- [LWN: Huge pages part 3: Administration](https://lwn.net/Articles/376606/) — NUMAプールの管理とノードごとの予約。1GBページのサポートが成熟しつつあった時期に書かれた
+- コミット[42d7395feb56](https://git.kernel.org/linus/42d7395feb56) — v3.8での`MAP_HUGE_1GB`とmmapフラグへのページサイズエンコーディングの追加。`pagesize=1G`のhugetlbfsマウントの必要性をなくした
+- [hugetlbfs-vs-thp.md](hugetlbfs-vs-thp.md) — 2MBのTHPやmTHPではなく1GBのhugetlbfsを選ぶべきとき。事前予約プールの運用上のトレードオフを含む
+- [thp.md](thp.md) — 2MBのPMDレベルTHP: 1GBページに踏み切る前の、オーバーヘッドの低い出発点
