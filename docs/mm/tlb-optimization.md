@@ -1,23 +1,23 @@
-# TLB Optimization Techniques {#tlb-optimization-techniques}
+# TLB最適化の技法 {#tlb-optimization-techniques}
 
-> How the Linux kernel minimizes the cost of keeping Translation Lookaside Buffers coherent across CPUs
+> Linuxカーネルが、CPU間でTranslation Lookaside Bufferの一貫性を保つコストをどのように最小化しているか
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 役割 |
 |------|---------|
-| `arch/x86/include/asm/tlbflush.h` | `flush_tlb_mm()`, `flush_tlb_range()`, `flush_tlb_page()`, `struct tlb_state`, `struct flush_tlb_info` |
-| `arch/x86/mm/tlb.c` | TLB flush batching, lazy TLB mode, PCID/ASID management, `flush_tlb_mm_range()`, `enter_lazy_tlb()`, `switch_mm_irqs_off()` |
-| `include/asm-generic/tlb.h` | `struct mmu_gather`, `tlb_gather_mmu()`, `tlb_finish_mmu()`, `tlb_flush_mmu()` |
-| `mm/mmu_gather.c` | mmu_gather implementation: `tlb_gather_mmu()`, `tlb_gather_mmu_fullmm()`, `tlb_finish_mmu()`, `tlb_flush_mmu()` |
+| `arch/x86/include/asm/tlbflush.h` | `flush_tlb_mm()`、`flush_tlb_range()`、`flush_tlb_page()`、`struct tlb_state`、`struct flush_tlb_info` |
+| `arch/x86/mm/tlb.c` | TLBフラッシュのバッチ化、lazy TLBモード、PCID/ASID管理、`flush_tlb_mm_range()`、`enter_lazy_tlb()`、`switch_mm_irqs_off()` |
+| `include/asm-generic/tlb.h` | `struct mmu_gather`、`tlb_gather_mmu()`、`tlb_finish_mmu()`、`tlb_flush_mmu()` |
+| `mm/mmu_gather.c` | mmu_gatherの実装: `tlb_gather_mmu()`、`tlb_gather_mmu_fullmm()`、`tlb_finish_mmu()`、`tlb_flush_mmu()` |
 
 ---
 
-## Why the TLB Matters for Performance {#why-the-tlb-matters-for-performance}
+## なぜTLBが性能にとって重要か {#why-the-tlb-matters-for-performance}
 
-The Translation Lookaside Buffer (TLB) is a small hardware cache that stores recent virtual-to-physical address translations. Without it, every memory access would require a full page-table walk — typically three to five additional memory reads depending on the paging depth.
+Translation Lookaside Buffer（TLB）は、最近の仮想アドレスから物理アドレスへの変換結果を保持する小さなハードウェアキャッシュである。TLBがなければ、すべてのメモリアクセスで完全なページテーブルウォークが必要になる。これはページングの段数に応じて、通常3〜5回の追加メモリ読み出しを伴う。
 
-### The Cost Difference {#the-cost-difference}
+### コストの差 {#the-cost-difference}
 
 ```
 TLB hit:   ~1  cycle    (~0.3 ns)
@@ -25,45 +25,45 @@ TLB miss:  ~50 cycles   (~17 ns) + page table walk
 Page walk: up to 4 serialized cache misses on a cold hierarchy
 ```
 
-On modern x86, the L1 dTLB holds 64–96 entries for 4KB pages and 32 entries for 2MB pages. A second-level TLB (STLB) provides 1024–3072 additional entries. These numbers are dwarfed by realistic working sets.
+最近のx86では、L1 dTLBは4KBページ用に64〜96エントリ、2MBページ用に32エントリを持つ。第2レベルTLB（STLB）がさらに1024〜3072エントリを提供する。これらの数は、現実的なワーキングセットと比べるとはるかに小さい。
 
-| Working Set | 4KB Pages Needed | TLB Entries Required | Fits in TLB? |
+| ワーキングセット | 必要な4KBページ数 | 必要なTLBエントリ数 | TLBに収まるか |
 |-------------|-----------------|---------------------|--------------|
-| 4MB | 1,024 | 1,024 | No (4x STLB) |
-| 1GB | 262,144 | 262,144 | No (256x STLB) |
-| 100GB | 26,214,400 | 26,214,400 | No |
+| 4MB | 1,024 | 1,024 | いいえ（STLBの4倍） |
+| 1GB | 262,144 | 262,144 | いいえ（STLBの256倍） |
+| 100GB | 26,214,400 | 26,214,400 | いいえ |
 
-Processes with large virtual address spaces, many VMAs, or frequent `mmap()`/`munmap()` activity generate significant TLB pressure. Every stale entry that must be invalidated and every subsequent miss is paid in cycles — and on multi-CPU systems, in IPI latency.
+大きな仮想アドレス空間、多数のVMA、あるいは頻繁な`mmap()`/`munmap()`を行うプロセスは、大きなTLB圧迫を生む。無効化しなければならない古いエントリと、その後に生じるミスの1つ1つがサイクル数として支払われ、マルチCPUシステムではさらにIPIレイテンシとしても支払われる。
 
 ---
 
-## TLB Flush Basics {#tlb-flush-basics}
+## TLBフラッシュの基本 {#tlb-flush-basics}
 
-The kernel must flush TLB entries whenever the underlying mapping changes in a way that could allow a CPU to observe incorrect data:
+カーネルは、CPUが誤ったデータを観測しうるような形で下位のマッピングが変更されたときには、必ずTLBエントリをフラッシュしなければならない。
 
-- **Page unmapped**: a live translation must not be used after the physical page is freed.
-- **Permission downgraded**: e.g., write-protecting a page; the old cached read-write entry must be evicted.
-- **PTE changed**: any modification to a present PTE that narrows access rights or changes the physical address.
+- **ページのアンマップ**: 物理ページが解放された後に、有効な変換が使われてはならない。
+- **権限の格下げ**: 例えばページを書き込み保護する場合、キャッシュされた古い読み書き可能エントリを追い出さなければならない。
+- **PTEの変更**: present状態のPTEに対する、アクセス権を狭める、または物理アドレスを変えるあらゆる変更。
 
-The rule is: *flush before freeing the page, never after*.
+規則は *ページを解放する前にフラッシュし、決して後にはしない* である。
 
-### The Three Core Flush Functions (x86) {#the-three-core-flush-functions-x86}
+### 3つの中核フラッシュ関数（x86） {#the-three-core-flush-functions-x86}
 
-These are defined in `arch/x86/include/asm/tlbflush.h`. On x86 they are all implemented as thin wrappers around the underlying `flush_tlb_mm_range()`:
+これらは`arch/x86/include/asm/tlbflush.h`で定義されている。x86ではいずれも、下位の`flush_tlb_mm_range()`を包む薄いラッパーとして実装されている。
 
 ```c
-/* Flush the entire address space of mm on all CPUs */
+/* 全CPU上でmmのアドレス空間全体をフラッシュする */
 #define flush_tlb_mm(mm) \
     flush_tlb_mm_range(mm, 0UL, TLB_FLUSH_ALL, 0UL, true)
 
-/* Flush a range of pages in vma->vm_mm, respecting huge page stride */
+/* vma->vm_mm内のページ範囲をフラッシュする（huge pageのストライドを考慮） */
 #define flush_tlb_range(vma, start, end) \
     flush_tlb_mm_range((vma)->vm_mm, start, end, \
                        ((vma)->vm_flags & VM_HUGETLB) \
                            ? huge_page_shift(hstate_vma(vma)) \
                            : PAGE_SHIFT, true)
 
-/* Flush a single page */
+/* 単一ページをフラッシュする */
 static inline void flush_tlb_page(struct vm_area_struct *vma,
                                    unsigned long a)
 {
@@ -71,58 +71,58 @@ static inline void flush_tlb_page(struct vm_area_struct *vma,
 }
 ```
 
-For kernel mappings, `flush_tlb_kernel_range(start, end)` sends a flush to every CPU — there is no per-process scoping for kernel space.
+カーネルマッピングについては、`flush_tlb_kernel_range(start, end)`がすべてのCPUにフラッシュを送る。カーネル空間にはプロセス単位のスコープが存在しない。
 
-### IPIs to Remote CPUs {#ipis-to-remote-cpus}
+### リモートCPUへのIPI {#ipis-to-remote-cpus}
 
-When a mapping changes, every CPU that might have a cached translation must be notified. The kernel uses inter-processor interrupts (IPIs) for this: `flush_tlb_multi()` sends a `flush_tlb_func()` handler to all CPUs in the target `mm_cpumask(mm)`. Each remote CPU then executes an `INVLPG` (single page) or CR3 reload (full flush) to evict the stale entries.
+マッピングが変わると、変換をキャッシュしている可能性のあるすべてのCPUに通知しなければならない。カーネルはこのためにプロセッサ間割り込み（IPI）を使う。`flush_tlb_multi()`は、対象の`mm_cpumask(mm)`に含まれる全CPUへ`flush_tlb_func()`ハンドラを送る。各リモートCPUは`INVLPG`（単一ページ）またはCR3の再ロード（完全フラッシュ）を実行して古いエントリを追い出す。
 
-IPI delivery has non-trivial cost: on a loaded system, round-trip latency can be several microseconds. On NUMA systems with many sockets, this cost multiplies.
+IPIの配送には無視できないコストがある。負荷のかかったシステムでは、往復レイテンシが数マイクロ秒に達することがある。多数のソケットを持つNUMAシステムでは、このコストが倍増する。
 
 ---
 
-## mmu_gather — Batched TLB Flushing {#mmu_gather-batched-tlb-flushing}
+## mmu_gather — バッチ化されたTLBフラッシュ {#mmu_gather-batched-tlb-flushing}
 
-Naively, unmapping N pages would require N separate TLB flushes. The kernel avoids this with `mmu_gather`, a per-operation accumulator that collects all address ranges to be flushed and delivers a single batched flush at the end.
+素朴に実装すると、N個のページをアンマップするにはN回の個別のTLBフラッシュが必要になる。カーネルは`mmu_gather`によってこれを回避する。これは操作ごとのアキュムレータであり、フラッシュすべきアドレス範囲をすべて集め、最後に1回のバッチ化されたフラッシュを発行する。
 
-### The struct {#the-struct}
+### 構造体 {#the-struct}
 
-Defined in `include/asm-generic/tlb.h`:
+`include/asm-generic/tlb.h`で定義されている。
 
 ```c
 struct mmu_gather {
     struct mm_struct    *mm;
 
-    unsigned long        start;   /* lowest address unmapped */
-    unsigned long        end;     /* highest address unmapped */
+    unsigned long        start;   /* アンマップされた最小アドレス */
+    unsigned long        end;     /* アンマップされた最大アドレス */
 
-    unsigned int         fullmm        : 1; /* tearing down entire mm? */
-    unsigned int         need_flush_all: 1; /* arch needs full flush */
-    unsigned int         freed_tables  : 1; /* freed page table pages */
-    unsigned int         delayed_rmap  : 1; /* pending rmap removals */
+    unsigned int         fullmm        : 1; /* mm全体を破棄中か */
+    unsigned int         need_flush_all: 1; /* アーキテクチャが完全フラッシュを要求 */
+    unsigned int         freed_tables  : 1; /* ページテーブルのページを解放した */
+    unsigned int         delayed_rmap  : 1; /* 保留中のrmap削除 */
 
-    /* which page-table levels were cleared */
+    /* どのページテーブル階層がクリアされたか */
     unsigned int         cleared_ptes : 1;
     unsigned int         cleared_pmds : 1;
     unsigned int         cleared_puds : 1;
     unsigned int         cleared_p4ds : 1;
 
-    /* VMA flags captured at tlb_start_vma() */
+    /* tlb_start_vma()時に取得したVMAフラグ */
     unsigned int         vma_exec : 1;
     unsigned int         vma_huge : 1;
     unsigned int         vma_pfn  : 1;
 
     unsigned int         batch_count;
 
-    struct mmu_gather_batch *active;  /* current page-free batch */
-    struct mmu_gather_batch  local;   /* on-stack initial batch */
-    struct page         *__pages[MMU_GATHER_BUNDLE]; /* small initial array */
+    struct mmu_gather_batch *active;  /* 現在のページ解放バッチ */
+    struct mmu_gather_batch  local;   /* スタック上の初期バッチ */
+    struct page         *__pages[MMU_GATHER_BUNDLE]; /* 小さな初期配列 */
 };
 ```
 
-### Lifecycle {#lifecycle}
+### ライフサイクル {#lifecycle}
 
-The gather lifecycle is three steps, implemented in `mm/mmu_gather.c`:
+gatherのライフサイクルは3つのステップからなり、`mm/mmu_gather.c`で実装されている。
 
 ```
 tlb_gather_mmu(tlb, mm)          ← begin gathering; resets range and page list
@@ -133,35 +133,35 @@ tlb_gather_mmu(tlb, mm)          ← begin gathering; resets range and page list
 tlb_finish_mmu(tlb)              ← issue TLB flush, free queued pages
 ```
 
-`tlb_gather_mmu()` initialises the structure (range reset to `[TASK_SIZE, 0]`, page batch empty) and increments `mm->tlb_flush_pending` to signal that a nested TLB flush may be needed.
+`tlb_gather_mmu()`は構造体を初期化し（範囲を`[TASK_SIZE, 0]`にリセットし、ページバッチを空にする）、ネストしたTLBフラッシュが必要になりうることを示すために`mm->tlb_flush_pending`をインクリメントする。
 
-`tlb_finish_mmu()` calls `tlb_flush_mmu()`, which in turn:
-1. Calls `tlb_flush_mmu_tlbonly()` — issues `flush_tlb_range()` or `flush_tlb_mm()` covering the full accumulated range.
-2. Frees all batched pages (`tlb_batch_pages_flush()`).
+`tlb_finish_mmu()`は`tlb_flush_mmu()`を呼び出し、これが次の処理を行う。
+1. `tlb_flush_mmu_tlbonly()`を呼ぶ — 累積した範囲全体をカバーする`flush_tlb_range()`または`flush_tlb_mm()`を発行する。
+2. バッチ化されたすべてのページを解放する（`tlb_batch_pages_flush()`）。
 
-Finally, `dec_tlb_flush_pending()` balances the counter.
+最後に`dec_tlb_flush_pending()`がカウンタを元に戻す。
 
-For the full-mm case (`exec`, `exit`), `tlb_gather_mmu_fullmm()` sets `fullmm = 1`. This skips per-VMA range tracking — there is no point narrowing a flush that will cover the entire address space anyway. On architectures with ASIDs, `fullmm` also enables cycling to a new ASID rather than sending IPIs.
+mm全体を対象とする場合（`exec`、`exit`）、`tlb_gather_mmu_fullmm()`は`fullmm = 1`を設定する。これによりVMAごとの範囲追跡が省略される。どうせアドレス空間全体をカバーするフラッシュを狭めても意味がないからである。ASIDを持つアーキテクチャでは、`fullmm`によってIPIを送る代わりに新しいASIDへ切り替えることも可能になる。
 
-### Why Batching Matters {#why-batching-matters}
+### なぜバッチ化が重要か {#why-batching-matters}
 
-Consider `munmap()` of a 1GB anonymous mapping (262,144 pages). Without batching:
+1GBの匿名マッピング（262,144ページ）を`munmap()`する場合を考える。バッチ化がなければ次のようになる。
 
-- 262,144 × `flush_tlb_page()` = 262,144 IPI round-trips on an SMP system.
-- Each IPI costs ~1–5 µs; total: potentially over a second of IPI overhead.
+- 262,144回の`flush_tlb_page()` = SMPシステムで262,144回のIPI往復。
+- IPI 1回あたり約1〜5 µs。合計で、IPIオーバーヘッドだけで1秒を超える可能性がある。
 
-With `mmu_gather`, the kernel walks all PTEs, accumulates the range `[start, start+1GB)`, then issues **one** `flush_tlb_range()` call. The single IPI flushes the entire range on each remote CPU at once.
+`mmu_gather`を使えば、カーネルはすべてのPTEをたどって範囲`[start, start+1GB)`を累積し、その後`flush_tlb_range()`を **1回** だけ発行する。この1回のIPIで、各リモートCPU上の範囲全体が一度にフラッシュされる。
 
-!!!tip "Performance tip"
-    If your workload performs many small `munmap()` calls in a tight loop, consider batching them into a single larger unmap or replacing them with `madvise(MADV_FREE)`, which defers the actual page release and avoids immediate TLB shootdowns.
+!!!tip "性能に関するヒント"
+    ワークロードが小さな`munmap()`呼び出しをタイトなループで多数行っている場合は、それらを1回の大きなアンマップにまとめるか、`madvise(MADV_FREE)`で置き換えることを検討するとよい。後者は実際のページ解放を遅延させ、即時のTLBシュートダウンを回避する。
 
 ---
 
-## Lazy TLB Mode {#lazy-tlb-mode}
+## lazy TLBモード {#lazy-tlb-mode}
 
-When a CPU switches from a user-space process to a kernel thread (or another process whose mm differs), it does not immediately need to flush the TLB for the previous mm — there are no user mappings to protect from a kernel thread. Flushing early wastes CPU cycles.
+CPUがユーザー空間プロセスからカーネルスレッド（あるいはmmが異なる別のプロセス）へ切り替わるとき、直前のmmのためにすぐTLBをフラッシュする必要はない。カーネルスレッドから保護すべきユーザーマッピングは存在しないからである。早期にフラッシュするのはCPUサイクルの無駄である。
 
-The kernel exploits this with **lazy TLB mode**, tracked via the `is_lazy` flag in `struct tlb_state_shared` (per-CPU, `cpu_tlbstate_shared`):
+カーネルはこれを **lazy TLBモード** として活用している。これは`struct tlb_state_shared`（per-CPU、`cpu_tlbstate_shared`）の`is_lazy`フラグで追跡される。
 
 ```c
 struct tlb_state_shared {
@@ -170,9 +170,9 @@ struct tlb_state_shared {
 DECLARE_PER_CPU_SHARED_ALIGNED(struct tlb_state_shared, cpu_tlbstate_shared);
 ```
 
-### Entering Lazy Mode {#entering-lazy-mode}
+### lazyモードへの移行 {#entering-lazy-mode}
 
-`enter_lazy_tlb()` is called by the scheduler when switching to a kernel thread. On x86:
+`enter_lazy_tlb()`は、カーネルスレッドへ切り替える際にスケジューラから呼ばれる。x86では次のとおり。
 
 ```c
 void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
@@ -184,11 +184,11 @@ void enter_lazy_tlb(struct mm_struct *mm, struct task_struct *tsk)
 }
 ```
 
-The CPU's bit in `mm_cpumask(mm)` **remains set** — the CPU is still in the cpumask so it will eventually receive flush IPIs — but the `is_lazy` flag tells the IPI sender it can skip sending unless page tables are being freed.
+`mm_cpumask(mm)`内のそのCPUのビットは **セットされたまま** である。CPUはcpumaskに残っているため、いずれフラッシュIPIを受け取ることになる。しかし`is_lazy`フラグは、ページテーブルが解放される場合を除いてIPIの送信を省略してよいことを送信側に伝える。
 
-### Skipping IPIs to Lazy CPUs {#skipping-ipis-to-lazy-cpus}
+### lazyなCPUへのIPIの省略 {#skipping-ipis-to-lazy-cpus}
 
-In `native_flush_tlb_multi()` (`arch/x86/mm/tlb.c`), the IPI is sent only to CPUs that are actively running the mm:
+`native_flush_tlb_multi()`（`arch/x86/mm/tlb.c`）では、IPIはそのmmを実際に実行しているCPUにだけ送られる。
 
 ```c
 if (info->freed_tables || mm_in_asid_transition(info->mm))
@@ -198,69 +198,69 @@ else
                           (void *)info, 1, cpumask);
 ```
 
-`should_flush_tlb()` returns `false` for CPUs with `is_lazy == true` (unless page tables are being freed, in which case all CPUs must be flushed to prevent speculative walks of freed memory).
+`should_flush_tlb()`は`is_lazy == true`のCPUに対して`false`を返す（ただしページテーブルが解放される場合は除く。その場合は、解放済みメモリの投機的なウォークを防ぐため、すべてのCPUをフラッシュしなければならない）。
 
-When the lazy CPU next runs user code, `switch_mm_irqs_off()` resets `is_lazy` to `false` and checks `tlb_gen` — if the generation counter has advanced while the CPU was lazy, a full flush is issued at that point.
+lazyなCPUが次にユーザーコードを実行するとき、`switch_mm_irqs_off()`が`is_lazy`を`false`に戻し、`tlb_gen`を確認する。CPUがlazyであった間に世代カウンタが進んでいれば、その時点で完全フラッシュが発行される。
 
-!!!tip "What this means in practice"
-    Idle CPUs and kernel threads on a large machine contribute zero IPI cost for typical page-table changes. The savings scale linearly with the number of CPUs that are in kernel threads or idle at the time of the flush.
+!!!tip "実際の意味"
+    大規模マシン上のアイドルCPUやカーネルスレッドは、通常のページテーブル変更においてIPIコストをまったく生じない。この節約は、フラッシュ時点でカーネルスレッドを実行中またはアイドル状態のCPU数に比例して線形に増える。
 
 ---
 
-## Huge Pages and TLB Coverage {#huge-pages-and-tlb-coverage}
+## huge pageとTLBカバレッジ {#huge-pages-and-tlb-coverage}
 
-A 2MB huge page is mapped by a single PMD-level TLB entry rather than 512 individual 4KB PTE entries. The TLB coverage per entry is 512× larger.
+2MBのhuge pageは、512個の個別の4KB PTEエントリではなく、PMDレベルの単一のTLBエントリでマップされる。エントリあたりのTLBカバレッジは512倍になる。
 
-| Working Set | 4KB Page TLB Entries | 2MB Page TLB Entries | Reduction |
+| ワーキングセット | 4KBページのTLBエントリ数 | 2MBページのTLBエントリ数 | 削減率 |
 |-------------|---------------------|---------------------|-----------|
 | 1GB | 262,144 | 512 | 512× |
 | 4GB | 1,048,576 | 2,048 | 512× |
 
-This is the primary performance benefit of Transparent Huge Pages (THP): reducing TLB pressure rather than reducing memory usage.
+これがTransparent Huge Pages（THP）の主要な性能上の利点である。つまり、メモリ使用量の削減ではなく、TLB圧迫の軽減である。
 
-### How the Kernel Tracks Huge-Page Entries {#how-the-kernel-tracks-huge-page-entries}
+### カーネルはhuge pageエントリをどう追跡するか {#how-the-kernel-tracks-huge-page-entries}
 
-`struct mmu_gather` tracks which page-table levels were cleared during an unmap operation:
+`struct mmu_gather`は、アンマップ操作中にどのページテーブル階層がクリアされたかを追跡する。
 
 ```c
-unsigned int  cleared_ptes : 1;  /* 4KB pages */
-unsigned int  cleared_pmds : 1;  /* 2MB pages */
-unsigned int  cleared_puds : 1;  /* 1GB pages */
+unsigned int  cleared_ptes : 1;  /* 4KBページ */
+unsigned int  cleared_pmds : 1;  /* 2MBページ */
+unsigned int  cleared_puds : 1;  /* 1GBページ */
 unsigned int  cleared_p4ds : 1;
 ```
 
-`tlb_get_unmap_shift()` uses these bits to return the smallest TLB entry size that was unmapped, so `tlb_flush()` can pass the correct `stride_shift` to `flush_tlb_range()`. For huge-page VMAs, `flush_tlb_range()` receives `PMD_SHIFT` (21) as the stride, telling the hardware to flush at 2MB granularity rather than 4KB.
+`tlb_get_unmap_shift()`はこれらのビットを使って、アンマップされた最小のTLBエントリサイズを返す。これにより`tlb_flush()`は正しい`stride_shift`を`flush_tlb_range()`へ渡せる。huge pageのVMAでは、`flush_tlb_range()`はストライドとして`PMD_SHIFT`（21）を受け取り、4KBではなく2MB単位でフラッシュするようハードウェアに指示する。
 
-The `vma_huge` bit in `struct mmu_gather` is set by `tlb_update_vma_flags()` when processing a `VM_HUGETLB` VMA, allowing the flush to pass the correct stride even when an intermediate `tlb_flush_mmu()` fires before `tlb_finish_mmu()`.
+`struct mmu_gather`の`vma_huge`ビットは、`VM_HUGETLB`のVMAを処理するときに`tlb_update_vma_flags()`によってセットされる。これにより、`tlb_finish_mmu()`の前に途中で`tlb_flush_mmu()`が発動した場合でも、フラッシュに正しいストライドを渡せる。
 
-!!!tip "TLB-aware allocation"
-    For workloads with multi-gigabyte working sets, enabling THP (`/sys/kernel/mm/transparent_hugepage/enabled = always`) or using `madvise(MADV_HUGEPAGE)` on hot regions dramatically reduces TLB miss rates. The reduction in TLB pressure typically outweighs any memory fragmentation cost for large, long-lived allocations.
+!!!tip "TLBを意識した割り当て"
+    数ギガバイトのワーキングセットを持つワークロードでは、THPを有効にする（`/sys/kernel/mm/transparent_hugepage/enabled = always`）か、ホットな領域に`madvise(MADV_HUGEPAGE)`を使うことで、TLBミス率が劇的に下がる。大きく長寿命な割り当てでは、TLB圧迫の軽減が、メモリ断片化のコストを通常は上回る。
 
 ---
 
-## PCID — Process Context Identifiers {#pcid-process-context-identifiers}
+## PCID — Process Context Identifier {#pcid-process-context-identifiers}
 
-Without PCID, every context switch flushes the entire TLB (by reloading CR3 with the new page-table root). With PCID, the TLB is tagged: each entry carries the PCID of the process that created it, and the CPU can keep entries for multiple processes simultaneously. Context switches no longer require a flush — the incoming process simply starts using its own tagged entries.
+PCIDがなければ、コンテキストスイッチのたびに（CR3に新しいページテーブルのルートを再ロードすることで）TLB全体がフラッシュされる。PCIDがあると、TLBにタグが付く。各エントリはそれを作ったプロセスのPCIDを持ち、CPUは複数のプロセスのエントリを同時に保持できる。コンテキストスイッチでフラッシュはもはや不要になり、切り替わってきたプロセスは単に自分のタグ付きエントリを使い始める。
 
-### PCID in the Hardware {#pcid-in-the-hardware}
+### ハードウェアにおけるPCID {#pcid-in-the-hardware}
 
-x86 supports up to 4096 PCIDs (12-bit field in CR3). To switch to a process *without* flushing its existing TLB entries, the kernel sets the `CR3_NOFLUSH` bit (bit 63) when writing CR3.
+x86は最大4096個のPCID（CR3内の12ビットフィールド）をサポートする。既存のTLBエントリをフラッシュ *せずに* プロセスへ切り替えるため、カーネルはCR3への書き込み時に`CR3_NOFLUSH`ビット（ビット63）をセットする。
 
-### Linux's ASID Model {#linuxs-asid-model}
+### LinuxのASIDモデル {#linuxs-asid-model}
 
-Linux does not give each process a globally unique PCID. Instead it maintains a small per-CPU array of **dynamic ASIDs** (`TLB_NR_DYN_ASIDS = 6`), caching the last few processes that ran on each CPU:
+Linuxは各プロセスにグローバルに一意なPCIDを与えるわけではない。代わりに、**動的ASID**（`TLB_NR_DYN_ASIDS = 6`）の小さなper-CPU配列を保持し、各CPU上で直近に実行されたいくつかのプロセスをキャッシュする。
 
 ```c
 struct tlb_context {
-    u64 ctx_id;   /* which mm owns this slot */
-    u64 tlb_gen;  /* generation when last flushed */
+    u64 ctx_id;   /* このスロットを所有するmm */
+    u64 tlb_gen;  /* 最後にフラッシュしたときの世代 */
 };
 
 struct tlb_state {
     struct mm_struct *loaded_mm;
     u16               loaded_mm_asid;
     u16               next_asid;
-    bool              invalidate_other;  /* flush non-loaded ctxs next switch */
+    bool              invalidate_other;  /* 次のスイッチでロードされていないctxをフラッシュ */
     unsigned short    user_pcid_flush_mask;
     struct tlb_context ctxs[TLB_NR_DYN_ASIDS];
     /* ... */
@@ -268,7 +268,7 @@ struct tlb_state {
 DECLARE_PER_CPU_ALIGNED(struct tlb_state, cpu_tlbstate);
 ```
 
-`choose_new_asid()` scans `ctxs[]` looking for an existing slot whose `ctx_id` matches `next->context.ctx_id`. If found, it checks whether `tlb_gen` is current; if so, `need_flush = false` and the CR3 load uses `CR3_NOFLUSH`:
+`choose_new_asid()`は`ctxs[]`を走査し、`ctx_id`が`next->context.ctx_id`と一致する既存スロットを探す。見つかれば`tlb_gen`が最新かどうかを確認し、最新であれば`need_flush = false`となり、CR3のロードには`CR3_NOFLUSH`が使われる。
 
 ```c
 static inline unsigned long build_cr3_noflush(pgd_t *pgd, u16 asid,
@@ -279,34 +279,34 @@ static inline unsigned long build_cr3_noflush(pgd_t *pgd, u16 asid,
 }
 ```
 
-If the generation has advanced (a TLB flush happened while this CPU was running another process), `need_flush = true` and a full CR3 reload (without `CR3_NOFLUSH`) evicts stale entries for that ASID.
+世代が進んでいる場合（このCPUが別のプロセスを実行している間にTLBフラッシュが起きた場合）は`need_flush = true`となり、（`CR3_NOFLUSH`なしの）完全なCR3再ロードによって、そのASIDの古いエントリが追い出される。
 
-### KPTI and Doubled PCIDs {#kpti-and-doubled-pcids}
+### KPTIと2倍のPCID {#kpti-and-doubled-pcids}
 
-#### Why KPTI exists {#why-kpti-exists}
+#### なぜKPTIが存在するか {#why-kpti-exists}
 
-On January 3, 2018, the Meltdown vulnerability (CVE-2017-5754) was disclosed. The root cause: for performance, Linux had always mapped the kernel's virtual address space into every process's page table. Switching from user to kernel mode (syscall, interrupt) required no CR3 reload — the kernel's virtual addresses were already reachable. This saved a TLB flush on every kernel entry and exit.
+2018年1月3日、Meltdown脆弱性（CVE-2017-5754）が公開された。根本原因はこうである。Linuxは性能のため、カーネルの仮想アドレス空間を常にすべてのプロセスのページテーブルにマップしていた。ユーザーモードからカーネルモードへの切り替え（システムコール、割り込み）ではCR3の再ロードが不要で、カーネルの仮想アドレスにはすでに到達可能だった。これにより、カーネルへの出入りのたびにTLBフラッシュを節約していた。
 
-Meltdown showed that a user process could speculatively read kernel memory through this shared mapping using a side channel (cache timing), bypassing the hardware permission bits. The fix — **Kernel Page Table Isolation (KPTI)** — was conceptually simple: give each process two separate sets of page tables. The "user" page table has almost no kernel mappings (just a tiny trampoline needed to handle the mode switch). The "kernel" page table is only active while in kernel mode.
+Meltdownは、ユーザープロセスがサイドチャネル（キャッシュタイミング）を用い、この共有マッピングを通じてハードウェアの権限ビットを迂回し、カーネルメモリを投機的に読み出せることを示した。修正策である **Kernel Page Table Isolation（KPTI）** は、概念的には単純だった。各プロセスに2組の別々のページテーブルを与えるのである。「ユーザー」ページテーブルにはカーネルマッピングがほとんどない（モード切り替えを処理するのに必要な小さなトランポリンだけ）。「カーネル」ページテーブルはカーネルモードにいる間だけ有効になる。
 
-The cost was severe: every syscall and interrupt required two CR3 writes (one to switch to kernel page tables on entry, one to switch back on return). On a pre-PCID processor, each CR3 write flushes the entire TLB. Benchmarks showed 5–30% performance regression on syscall-heavy workloads.
+コストは深刻だった。すべてのシステムコールと割り込みで、CR3への書き込みが2回必要になった（入口でカーネルページテーブルへ切り替えるのに1回、戻るときに切り替え直すのに1回）。PCID以前のプロセッサでは、CR3への書き込みのたびにTLB全体がフラッシュされる。ベンチマークでは、システムコールの多いワークロードで5〜30%の性能リグレッションが示された。
 
-#### PCID made KPTI bearable {#pcid-made-kpti-bearable}
+#### PCIDがKPTIを許容可能にした {#pcid-made-kpti-bearable}
 
-PCID (Process Context Identifiers) had been introduced in Linux 4.7 but barely used — there was little reason to avoid TLB flushes on context switches when all process page tables were already in memory. Meltdown changed that calculation completely.
+PCID（Process Context Identifiers）はLinux 4.7で導入されていたが、ほとんど使われていなかった。すべてのプロセスのページテーブルがすでにメモリ上にある状況では、コンテキストスイッチでのTLBフラッシュを避ける理由がほとんどなかったからである。Meltdownはこの計算を完全に変えた。
 
-With PCID active, the two CR3 writes per syscall no longer flush the TLB: the kernel and user page tables each get a distinct PCID tag, and the CPU keeps both in the TLB simultaneously. An entry to the kernel switches to the kernel PCID; a return to userspace switches back to the user PCID. Warm TLB entries survive the transition.
+PCIDが有効だと、システムコールごとの2回のCR3書き込みはもはやTLBをフラッシュしない。カーネルとユーザーのページテーブルはそれぞれ異なるPCIDタグを持ち、CPUは両方を同時にTLBに保持する。カーネルへの入口ではカーネルのPCIDに切り替わり、ユーザー空間への復帰ではユーザーのPCIDに戻る。温まったTLBエントリはこの遷移を越えて生き残る。
 
-Linux 4.14 enabled both KPTI and PCID together. On PCID-capable hardware (Westmere and newer), the KPTI overhead dropped from ~30% to ~5–10% for syscall-heavy workloads. On older hardware without PCID (which still needed to flush on every CR3 write), KPTI remained expensive and was sometimes disabled by administrators on trusted workloads.
+Linux 4.14でKPTIとPCIDの両方が一緒に有効化された。PCID対応ハードウェア（Westmere以降）では、システムコールの多いワークロードでKPTIのオーバーヘッドが約30%から約5〜10%に下がった。PCIDを持たない古いハードウェア（依然としてCR3書き込みのたびにフラッシュが必要）ではKPTIは高コストのままであり、信頼できるワークロードでは管理者が無効化することもあった。
 
-When Kernel Page Table Isolation (KPTI) is active, each mm needs two PCIDs: one for user-space page tables and one for kernel-space. This halves the available PCID space to 2048 effective ASIDs (`PTI_CONSUMED_PCID_BITS = 1`).
+Kernel Page Table Isolation（KPTI）が有効な場合、各mmには2つのPCIDが必要になる。1つはユーザー空間のページテーブル用、もう1つはカーネル空間用である。これにより、利用可能なPCID空間は実質2048個のASIDに半減する（`PTI_CONSUMED_PCID_BITS = 1`）。
 
-### Global ASIDs (INVLPGB) {#global-asids-invlpgb}
+### グローバルASID（INVLPGB） {#global-asids-invlpgb}
 
-On AMD processors supporting `INVLPGB` (broadcast TLB invalidation), the kernel can assign a **global ASID** to processes that are simultaneously active on four or more CPUs. A global ASID is identical on every CPU, enabling hardware-assisted remote TLB invalidation without IPIs:
+`INVLPGB`（ブロードキャストTLB無効化）をサポートするAMDプロセッサでは、カーネルは4つ以上のCPU上で同時にアクティブなプロセスに **グローバルASID** を割り当てられる。グローバルASIDはすべてのCPUで同一であり、IPIなしでハードウェア支援によるリモートTLB無効化を可能にする。
 
 ```c
-/* From arch/x86/mm/tlb.c */
+/* arch/x86/mm/tlb.cより */
 static void consider_global_asid(struct mm_struct *mm)
 {
     if (!cpu_feature_enabled(X86_FEATURE_INVLPGB))
@@ -317,51 +317,51 @@ static void consider_global_asid(struct mm_struct *mm)
 }
 ```
 
-`broadcast_tlb_flush()` then uses `invlpgb_flush_user_nr_nosync()` followed by `__tlbsync()` to flush the TLB across all CPUs in hardware, completely eliminating IPI overhead for heavily multi-threaded processes.
+その後`broadcast_tlb_flush()`は、`invlpgb_flush_user_nr_nosync()`に続けて`__tlbsync()`を使い、ハードウェアで全CPUにわたってTLBをフラッシュする。これにより、高度にマルチスレッド化されたプロセスでIPIオーバーヘッドが完全に排除される。
 
-!!!tip "PCID benefit at a glance"
-    On a workload with frequent context switches between the same small set of processes (e.g., a web server with a fixed worker pool), PCID avoids all TLB flushes on CPUs where the process's ASID slot is still valid and up to date. The savings are proportional to TLB warm-up time per context switch.
+!!!tip "PCIDの利点の概要"
+    同じ少数のプロセス間で頻繁にコンテキストスイッチが起きるワークロード（例えば、固定のワーカープールを持つWebサーバー）では、PCIDは、プロセスのASIDスロットがまだ有効かつ最新であるCPU上で、すべてのTLBフラッシュを回避する。節約量は、コンテキストスイッチごとのTLBウォームアップ時間に比例する。
 
 ---
 
-## TLB Shootdown Cost on NUMA Systems {#tlb-shootdown-cost-on-numa-systems}
+## NUMAシステムにおけるTLBシュートダウンのコスト {#tlb-shootdown-cost-on-numa-systems}
 
-On multi-socket NUMA machines, a TLB shootdown IPI must cross inter-socket interconnects to reach remote CPUs. These cross-socket IPIs are substantially more expensive than intra-socket ones.
+マルチソケットのNUMAマシンでは、TLBシュートダウンのIPIはリモートCPUに届くためにソケット間インターコネクトを越えなければならない。こうしたソケット間IPIは、ソケット内のものよりかなり高コストである。
 
-### Cost Anatomy {#cost-anatomy}
+### コストの内訳 {#cost-anatomy}
 
-A TLB shootdown for a single `munmap()` on a 64-CPU, 4-socket machine:
+64 CPU・4ソケットのマシンで、1回の`munmap()`に対するTLBシュートダウンは次のようになる。
 
-1. **IPI send**: broadcast to up to 63 CPUs, crossing NUMA interconnects.
-2. **IPI receive overhead**: each CPU must enter the IPI handler, execute INVLPG or CR3 reload, and return.
-3. **Synchronization**: the initiating CPU waits for all acknowledgements before returning from `flush_tlb_multi()`.
+1. **IPI送信**: 最大63個のCPUへ、NUMAインターコネクトを越えてブロードキャストする。
+2. **IPI受信のオーバーヘッド**: 各CPUはIPIハンドラに入り、INVLPGまたはCR3再ロードを実行し、戻らなければならない。
+3. **同期**: 開始側のCPUは、`flush_tlb_multi()`から戻る前に全員の応答を待つ。
 
-The `mmu_gather` batching directly amortises this cost: the number of IPIs is bounded by the number of distinct flush events, not the number of pages unmapped. Regardless of whether 1 or 1,000,000 pages are unmapped in a single `munmap()`, at most one flush IPI round-trip is needed.
+`mmu_gather`のバッチ化はこのコストを直接償却する。IPIの数はアンマップされたページ数ではなく、異なるフラッシュイベントの数で上限が決まる。1回の`munmap()`でアンマップされるのが1ページでも1,000,000ページでも、必要なフラッシュIPIの往復は高々1回である。
 
 ### `tlb_single_page_flush_ceiling` {#tlbsinglepageflushceiling}
 
-For small ranges, individual `INVLPG` instructions (one per page) are cheaper than a full flush. For larger ranges, a full flush wins. The kernel switches strategies at `tlb_single_page_flush_ceiling` pages (default: 33):
+小さな範囲では、個別の`INVLPG`命令（1ページに1つ）のほうが完全フラッシュより安い。大きな範囲では完全フラッシュが有利になる。カーネルは`tlb_single_page_flush_ceiling`ページ（デフォルト: 33）を境に戦略を切り替える。
 
 ```c
 /* arch/x86/mm/tlb.c */
 unsigned long tlb_single_page_flush_ceiling __read_mostly = 33;
 ```
 
-Inside `get_flush_tlb_info()`, if `(end - start) >> stride_shift > tlb_single_page_flush_ceiling`, the range is promoted to `TLB_FLUSH_ALL`.
+`get_flush_tlb_info()`の内部で、`(end - start) >> stride_shift > tlb_single_page_flush_ceiling`であれば、その範囲は`TLB_FLUSH_ALL`に格上げされる。
 
-This threshold is tunable via `/sys/kernel/debug/x86/tlb_single_page_flush_ceiling`.
+この閾値は`/sys/kernel/debug/x86/tlb_single_page_flush_ceiling`で調整できる。
 
-!!!tip "Reducing shootdown cost"
-    - **Avoid frequent small unmaps** in hot paths; coalesce `munmap()` calls over larger ranges.
-    - **Use `madvise(MADV_FREE)`** instead of `munmap()` where possible: the kernel defers actual unmapping until memory pressure occurs, avoiding immediate TLB invalidation.
-    - **Use `madvise(MADV_DONTNEED)`** to drop page contents without unmapping the VMA, which also defers TLB shootdown work.
-    - On workloads with many threads, consider evaluating whether the kernel can use global ASIDs (AMD INVLPGB) to replace IPIs with hardware broadcast flushing.
+!!!tip "シュートダウンコストの削減"
+    - ホットパスでは **頻繁な小さいアンマップを避ける**。`munmap()`呼び出しをより大きな範囲にまとめる。
+    - 可能な場合は`munmap()`の代わりに **`madvise(MADV_FREE)`を使う**。カーネルはメモリ圧迫が起きるまで実際のアンマップを遅延させ、即時のTLB無効化を回避する。
+    - **`madvise(MADV_DONTNEED)`を使う** と、VMAをアンマップせずにページの内容を捨てられ、これもTLBシュートダウンの作業を遅延させる。
+    - スレッド数の多いワークロードでは、カーネルがグローバルASID（AMD INVLPGB）を使ってIPIをハードウェアのブロードキャストフラッシュに置き換えられるかどうかの評価を検討するとよい。
 
 ---
 
-## Kernel TLB Pressure: vmalloc and Global Entries {#kernel-tlb-pressure-vmalloc-and-global-entries}
+## カーネルのTLB圧迫: vmallocとグローバルエントリ {#kernel-tlb-pressure-vmalloc-and-global-entries}
 
-Kernel virtual memory allocated via `vmalloc()` uses the global page-table region. Kernel mappings are not tagged per-process — they appear in every address space via the shared kernel PGD entries. Flushing a kernel TLB entry requires invalidating it on **every CPU**, regardless of which process is running.
+`vmalloc()`で割り当てられたカーネル仮想メモリは、グローバルなページテーブル領域を使う。カーネルマッピングはプロセスごとにタグ付けされず、共有されたカーネルPGDエントリを通じてすべてのアドレス空間に現れる。カーネルのTLBエントリをフラッシュするには、どのプロセスが実行中かにかかわらず **すべてのCPU** で無効化する必要がある。
 
 ### `flush_tlb_kernel_range()` {#flushtlbkernel_range}
 
@@ -369,11 +369,11 @@ Kernel virtual memory allocated via `vmalloc()` uses the global page-table regio
 void flush_tlb_kernel_range(unsigned long start, unsigned long end)
 ```
 
-This function sends a flush to every CPU on the system. On a 64-CPU machine, every `vfree()` that triggers a kernel TLB flush costs 63 IPIs. The `_PAGE_GLOBAL` flag on kernel PTEs means these entries are not evicted by normal user-space CR3 reloads, so there is no opportunity to avoid the IPIs.
+この関数はシステム上のすべてのCPUにフラッシュを送る。64 CPUのマシンでは、カーネルTLBフラッシュを引き起こす`vfree()`のたびに63回のIPIがかかる。カーネルPTEの`_PAGE_GLOBAL`フラグは、これらのエントリが通常のユーザー空間のCR3再ロードでは追い出されないことを意味するため、IPIを回避する機会はない。
 
-On processors with `INVLPGB`, `flush_tlb_kernel_range()` uses `invlpgb_flush_addr_nosync()` + `__tlbsync()` instead of IPIs, eliminating the per-CPU interrupt overhead.
+`INVLPGB`を持つプロセッサでは、`flush_tlb_kernel_range()`はIPIの代わりに`invlpgb_flush_addr_nosync()` + `__tlbsync()`を使い、CPUごとの割り込みオーバーヘッドを排除する。
 
-### Why vmalloc Is Expensive {#why-vmalloc-is-expensive}
+### なぜvmallocは高コストか {#why-vmalloc-is-expensive}
 
 ```
 vmalloc() call path:
@@ -388,48 +388,48 @@ vfree() call path:
   3. Free physical pages
 ```
 
-The global flush on every `vmalloc()`/`vfree()` pair makes vmalloc unsuitable for high-frequency allocation in hot paths.
+`vmalloc()`/`vfree()`の組のたびに発生するグローバルフラッシュのため、vmallocはホットパスでの高頻度な割り当てには向かない。
 
-!!!tip "vmalloc guidelines"
-    - **Avoid vmalloc in hot paths.** Use `kmalloc()` (slab) for objects under ~128KB; it operates within the direct-mapped region and requires no global TLB invalidation.
-    - **For large kernel buffers that are allocated once and reused**, vmalloc is acceptable; the TLB cost is paid once at allocation and deallocation.
-    - **`vmalloc_huge()`** uses 2MB huge pages for vmalloc mappings, which reduces the number of kernel TLB entries required and can improve performance for large, persistent vmalloc areas.
+!!!tip "vmallocのガイドライン"
+    - **ホットパスではvmallocを避ける**。 約128KB未満のオブジェクトには`kmalloc()`（slab）を使う。これはダイレクトマップ領域内で動作し、グローバルなTLB無効化を必要としない。
+    - **一度割り当てて再利用する大きなカーネルバッファ** であれば、vmallocでも許容できる。TLBコストは割り当て時と解放時に一度ずつ支払うだけである。
+    - **`vmalloc_huge()`** はvmallocマッピングに2MBのhuge pageを使う。これにより必要なカーネルTLBエントリ数が減り、大きく永続的なvmalloc領域の性能が向上しうる。
 
 ---
 
-## Summary: TLB Optimization Strategies {#summary-tlb-optimization-strategies}
+## まとめ: TLB最適化戦略 {#summary-tlb-optimization-strategies}
 
-| Technique | Mechanism | Kernel Implementation |
+| 技法 | 仕組み | カーネルでの実装 |
 |-----------|-----------|----------------------|
-| Flush batching | Accumulate ranges; one flush per unmap operation | `struct mmu_gather`, `tlb_gather_mmu()` / `tlb_finish_mmu()` |
-| Lazy TLB mode | Skip IPIs to CPUs running kernel threads | `enter_lazy_tlb()`, `cpu_tlbstate_shared.is_lazy`, `should_flush_tlb()` |
-| PCID / ASID caching | Survive context switches without flushing | `choose_new_asid()`, `build_cr3_noflush()`, `cpu_tlbstate.ctxs[]` |
-| Huge pages | 512× TLB coverage per entry | `tlb_update_vma_flags()`, `vma_huge`, PMD-level flush stride |
-| Global ASIDs (INVLPGB) | Hardware broadcast; no IPIs | `use_global_asid()`, `broadcast_tlb_flush()` |
-| Range-vs-full heuristic | Switch to full flush beyond 33 pages | `tlb_single_page_flush_ceiling`, `get_flush_tlb_info()` |
-| Avoid kernel vmalloc | No global TLB flush for slab allocs | Use `kmalloc()` instead of `vmalloc()` in hot paths |
+| フラッシュのバッチ化 | 範囲を累積し、アンマップ操作1回につきフラッシュ1回 | `struct mmu_gather`、`tlb_gather_mmu()` / `tlb_finish_mmu()` |
+| lazy TLBモード | カーネルスレッドを実行中のCPUへのIPIを省略 | `enter_lazy_tlb()`、`cpu_tlbstate_shared.is_lazy`、`should_flush_tlb()` |
+| PCID / ASIDキャッシュ | フラッシュせずにコンテキストスイッチを越えて生き残る | `choose_new_asid()`、`build_cr3_noflush()`、`cpu_tlbstate.ctxs[]` |
+| huge page | エントリあたり512倍のTLBカバレッジ | `tlb_update_vma_flags()`、`vma_huge`、PMDレベルのフラッシュストライド |
+| グローバルASID（INVLPGB） | ハードウェアブロードキャスト。IPIなし | `use_global_asid()`、`broadcast_tlb_flush()` |
+| 範囲か完全かのヒューリスティック | 33ページを超えたら完全フラッシュに切り替え | `tlb_single_page_flush_ceiling`、`get_flush_tlb_info()` |
+| カーネルでのvmallocの回避 | slab割り当てではグローバルTLBフラッシュなし | ホットパスでは`vmalloc()`の代わりに`kmalloc()`を使う |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — `flush_tlb_mm_range()`, `native_flush_tlb_multi()`, `enter_lazy_tlb()`, `switch_mm_irqs_off()`, PCID/ASID management
-- [arch/x86/include/asm/tlbflush.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/tlbflush.h) — `flush_tlb_mm()`, `flush_tlb_range()`, `flush_tlb_page()`, `struct tlb_state`
-- [include/asm-generic/tlb.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/tlb.h) — `struct mmu_gather`, `tlb_gather_mmu()`, `tlb_finish_mmu()`
-- [mm/mmu_gather.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmu_gather.c) — mmu_gather implementation: batching, range accumulation, and page freeing
+- [arch/x86/mm/tlb.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/tlb.c) — `flush_tlb_mm_range()`、`native_flush_tlb_multi()`、`enter_lazy_tlb()`、`switch_mm_irqs_off()`、PCID/ASID管理
+- [arch/x86/include/asm/tlbflush.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/tlbflush.h) — `flush_tlb_mm()`、`flush_tlb_range()`、`flush_tlb_page()`、`struct tlb_state`
+- [include/asm-generic/tlb.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/tlb.h) — `struct mmu_gather`、`tlb_gather_mmu()`、`tlb_finish_mmu()`
+- [mm/mmu_gather.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmu_gather.c) — mmu_gatherの実装: バッチ化、範囲の累積、ページの解放
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/arch/x86/tlb.rst`](https://docs.kernel.org/arch/x86/tlb.html) — x86 TLB flushing design notes: why certain shootdown paths are taken
+- [`Documentation/arch/x86/tlb.rst`](https://docs.kernel.org/arch/x86/tlb.html) — x86のTLBフラッシュの設計ノート: 特定のシュートダウン経路が選ばれる理由
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [page-tables.md](page-tables.md) — the page table hierarchy that TLB entries cache
-- [thp.md](thp.md) — how huge pages reduce TLB pressure by providing 512× larger entries
-- [boot-page-tables.md](boot-page-tables.md) — PCID activation and the early CR3 setup that initializes ASID support
+- [page-tables.md](page-tables.md) — TLBエントリがキャッシュするページテーブル階層
+- [thp.md](thp.md) — huge pageが512倍大きなエントリを提供することでTLB圧迫をどう軽減するか
+- [boot-page-tables.md](boot-page-tables.md) — PCIDの有効化と、ASIDサポートを初期化する初期のCR3設定
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [LWN: Improving page-fault scalability](https://lwn.net/Articles/741937/) — covers PCID benefits and context-switch TLB cost reduction
-- [LWN: Meltdown and Spectre, part 2](https://lwn.net/Articles/743287/) — KPTI's impact on TLB performance and the doubled-PCID workaround
-- [LWN: INVLPGB and broadcast TLB flushing](https://lwn.net/Articles/951489/) — AMD INVLPGB support: eliminating cross-CPU IPIs for TLB invalidation
+- [LWN: Improving page-fault scalability](https://lwn.net/Articles/741937/) — PCIDの利点とコンテキストスイッチ時のTLBコスト削減を扱う
+- [LWN: Meltdown and Spectre, part 2](https://lwn.net/Articles/743287/) — KPTIがTLB性能に与える影響と、PCIDを2倍使う回避策
+- [LWN: INVLPGB and broadcast TLB flushing](https://lwn.net/Articles/951489/) — AMD INVLPGBのサポート: TLB無効化のためのCPU間IPIの排除

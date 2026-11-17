@@ -1,17 +1,17 @@
-# CXL Memory and Kernel Memory Tiering {#cxl-memory-and-kernel-memory-tiering}
+# CXLメモリとカーネルのメモリ階層化 {#cxl-memory-and-kernel-memory-tiering}
 
-> Expanding past DRAM limits with CXL and the kernel's memory tier framework
+> CXLとカーネルのメモリティアフレームワークでDRAMの限界を超えて拡張する
 
-## CXL memory as a NUMA node {#cxl-memory-as-a-numa-node}
+## NUMAノードとしてのCXLメモリ {#cxl-memory-as-a-numa-node}
 
-Compute Express Link (CXL) is a high-speed cache-coherent interconnect built on PCIe that allows memory expansion cards to be attached to a CPU. From the operating system's perspective, CXL memory appears as a **NUMA node with no CPUs** — a memory-only node with higher access latency than local DRAM.
+Compute Express Link（CXL）はPCIeの上に構築された高速なキャッシュコヒーレント相互接続であり、メモリ拡張カードをCPUに接続できるようにする。オペレーティングシステムの視点からは、CXLメモリは**CPUを持たないNUMAノード**、すなわちローカルDRAMよりアクセスレイテンシの高いメモリ専用ノードとして見える。
 
-CXL 1.1 and 2.0 devices connect over a single PCIe link. Latency to CXL memory is higher than DDR because the request must traverse the PCIe fabric, though the gap varies with hardware and link generation. CXL 3.0 adds fabric-level switching that enables multi-host sharing and additional topologies.
+CXL 1.1と2.0のデバイスは単一のPCIeリンクで接続される。要求がPCIeファブリックを通過しなければならないため、CXLメモリへのレイテンシはDDRより高いが、その差はハードウェアやリンクの世代によって異なる。CXL 3.0はファブリックレベルのスイッチングを追加し、複数ホストでの共有や追加のトポロジーを可能にする。
 
-!!! note "Actual latency and bandwidth are hardware-specific"
-    Do not treat any specific latency or bandwidth figure as a guarantee. Real-world numbers depend on the CXL device, host memory controller, and platform. The kernel uses performance measurements from HMAT (Heterogeneous Memory Attribute Table) or CXL CDAT tables to place devices into the correct tier — not hardcoded values.
+!!! note "実際のレイテンシと帯域幅はハードウェア依存である"
+    特定のレイテンシや帯域幅の数値を保証として扱ってはならない。実際の数値はCXLデバイス、ホストのメモリコントローラ、プラットフォームに依存する。カーネルは、ハードコードされた値ではなく、HMAT（Heterogeneous Memory Attribute Table）やCXLのCDATテーブルから得た性能測定値を使って、デバイスを正しいティアに配置する。
 
-The Linux CXL driver registers each CXL memory region as a NUMA node during region activation. The region's performance characteristics are read from the `access_coordinate` data (populated from CDAT) and passed to the memory tier framework through a notifier. The relevant call chain in `drivers/cxl/core/region.c` is:
+LinuxのCXLドライバは、リージョンの有効化時に各CXLメモリリージョンをNUMAノードとして登録する。リージョンの性能特性は（CDATから設定される）`access_coordinate`データから読み取られ、notifierを通じてメモリティアフレームワークに渡される。`drivers/cxl/core/region.c`内の関連する呼び出しチェーンは次のとおりである。
 
 ```c
 /* drivers/cxl/core/region.c */
@@ -30,66 +30,66 @@ static int cxl_region_calculate_adistance(struct notifier_block *nb,
 }
 ```
 
-`mt_perf_to_adistance()` converts the hardware performance coordinates into an abstract distance value that the memory tier framework uses to assign the node to a tier.
+`mt_perf_to_adistance()`は、ハードウェアの性能座標を、メモリティアフレームワークがノードをティアに割り当てるために使う抽象距離の値に変換する。
 
-## The memory tier framework {#the-memory-tier-framework}
+## メモリティアフレームワーク {#the-memory-tier-framework}
 
-### Abstract distance {#abstract-distance}
+### 抽象距離 {#abstract-distance}
 
-The kernel represents memory speed as an **abstract distance** — a dimensionless integer where smaller means faster. Regular DRAM has a reference abstract distance defined by `MEMTIER_ADISTANCE_DRAM`:
+カーネルはメモリの速度を**抽象距離**（abstract distance）として表す。これは無次元の整数で、小さいほど速い。通常のDRAMは`MEMTIER_ADISTANCE_DRAM`で定義される基準の抽象距離を持つ。
 
 ```c
 /* include/linux/memory-tiers.h */
 #define MEMTIER_CHUNK_BITS   7
 #define MEMTIER_CHUNK_SIZE   (1 << MEMTIER_CHUNK_BITS)   /* 128 */
 
-/* Offset slightly so devices marginally faster than DRAM share the tier */
+/* DRAMよりわずかに速いデバイスが同じティアを共有するよう少しずらす */
 #define MEMTIER_ADISTANCE_DRAM  ((4L * MEMTIER_CHUNK_SIZE) + (MEMTIER_CHUNK_SIZE >> 1))
 ```
 
-Each `memory_tier` covers a range of abstract distance values of width `MEMTIER_CHUNK_SIZE` (128). Devices whose abstract distance falls in the same 128-unit window are grouped into the same tier. A smaller `adistance_start` means a higher (faster) tier.
+各`memory_tier`は幅`MEMTIER_CHUNK_SIZE`（128）の抽象距離の範囲をカバーする。抽象距離が同じ128単位の窓に入るデバイスは同じティアにまとめられる。`adistance_start`が小さいほど上位の（速い）ティアである。
 
-### Tier assignment {#tier-assignment}
+### ティアの割り当て {#tier-assignment}
 
-A NUMA node is assigned to a tier through `struct memory_dev_type`:
+NUMAノードは`struct memory_dev_type`を通じてティアに割り当てられる。
 
 ```c
 /* include/linux/memory-tiers.h */
 struct memory_dev_type {
-    struct list_head tier_sibling;  /* other types in same tier */
-    struct list_head list;          /* types managed by one driver */
-    int adistance;                  /* this type's abstract distance */
-    nodemask_t nodes;               /* nodes of this abstract distance */
+    struct list_head tier_sibling;  /* 同じティア内の他のタイプ */
+    struct list_head list;          /* 1つのドライバが管理するタイプ */
+    int adistance;                  /* このタイプの抽象距離 */
+    nodemask_t nodes;               /* この抽象距離を持つノード */
     struct kref kref;
 };
 ```
 
-At boot, `memory_tier_init()` places all online nodes into a default tier using `default_dram_type`. When a CXL region activates, its driver registers an adistance notifier (`register_mt_adistance_algorithm()`). The framework then calls the notifier chain, the CXL driver reports the CXL region's adistance, and `find_create_memory_tier()` either places the node in an existing tier or creates a new one.
+ブート時、`memory_tier_init()`は`default_dram_type`を使って、オンラインのすべてのノードをデフォルトのティアに配置する。CXLリージョンが有効化されると、そのドライバはadistanceのnotifierを登録する（`register_mt_adistance_algorithm()`）。するとフレームワークがnotifierチェーンを呼び出し、CXLドライバがCXLリージョンのadistanceを報告し、`find_create_memory_tier()`がノードを既存のティアに配置するか、新しいティアを作成する。
 
-### Sysfs representation {#sysfs-representation}
+### sysfsでの表現 {#sysfs-representation}
 
-Memory tiers are visible under:
+メモリティアは次の場所で見ることができる。
 
 ```
 /sys/devices/virtual/memory_tiering/memory_tierN/
-    nodelist   # NUMA nodes in this tier
+    nodelist   # このティア内のNUMAノード
 ```
 
-The `N` in `memory_tierN` is derived from the tier's `adistance_start` shifted right by `MEMTIER_CHUNK_BITS`. A lower `N` means a higher (faster) tier.
+`memory_tierN`の`N`は、ティアの`adistance_start`を`MEMTIER_CHUNK_BITS`だけ右シフトしたものから導かれる。`N`が小さいほど上位の（速い）ティアである。
 
-On a system with local DRAM (node 0) and a CXL expansion node (node 1), you might see:
+ローカルDRAM（ノード0）とCXL拡張ノード（ノード1）を持つシステムでは、次のように見えるかもしれない。
 
 ```
 /sys/devices/virtual/memory_tiering/memory_tier4/nodelist  → 0
 /sys/devices/virtual/memory_tiering/memory_tier8/nodelist  → 1
 ```
 
-!!! note "The tier numbering is derived from abstract distance, not from insertion order"
-    Two systems with the same hardware topology will have the same tier numbers because they are computed from the performance coordinates, not assigned sequentially.
+!!! note "ティアの番号は挿入順ではなく抽象距離から導かれる"
+    同じハードウェアトポロジーを持つ2つのシステムは同じティア番号を持つ。番号は順番に割り振られるのではなく、性能座標から計算されるからである。
 
-### Demotion target topology {#demotion-target-topology}
+### 降格先のトポロジー {#demotion-target-topology}
 
-The framework builds a `node_demotion[]` array that maps each NUMA node to its preferred demotion target. Given three nodes:
+フレームワークは、各NUMAノードをその優先降格先に対応付ける`node_demotion[]`配列を構築する。3つのノードがあるとする。
 
 ```
 memory_tier0 (fastest) → node 1  (HBM)
@@ -97,29 +97,29 @@ memory_tier1           → node 0  (DRAM)
 memory_tier2 (slowest) → node 2  (CXL/PMEM)
 ```
 
-The demotion paths would be:
+降格パスは次のようになる。
 
-- node 1 (HBM) → node 0 (DRAM)
-- node 0 (DRAM) → node 2 (CXL)
-- node 2 (CXL) → nowhere (terminal)
+- ノード1（HBM）→ ノード0（DRAM）
+- ノード0（DRAM）→ ノード2（CXL）
+- ノード2（CXL）→ どこへもなし（終端）
 
-`next_demotion_node()` in `mm/memory-tiers.c` returns the preferred demotion target, choosing randomly among nodes in the preferred mask if multiple targets exist.
+`mm/memory-tiers.c`の`next_demotion_node()`は優先降格先を返し、複数の候補がある場合は優先マスク内のノードからランダムに選ぶ。
 
-`node_is_toptier()` returns true for nodes in tiers at or above `top_tier_adistance`. Top-tier nodes are never demoted to.
+`node_is_toptier()`は、`top_tier_adistance`以上のティアにあるノードに対してtrueを返す。最上位ティアのノードが降格先になることはない。
 
-## Page demotion: kswapd driving the slow path {#page-demotion-kswapd-driving-the-slow-path}
+## pageの降格: 低速パスを駆動するkswapd {#page-demotion-kswapd-driving-the-slow-path}
 
-When the kernel reclaims memory under memory pressure, it prefers to **demote** cold pages from fast to slow memory rather than swap them to disk. This is implemented in `mm/vmscan.c`.
+メモリ逼迫下でカーネルがメモリを回収するとき、カーネルはコールドなpageをディスクへスワップするより、高速メモリから低速メモリへ**降格**（demote）することを好む。これは`mm/vmscan.c`で実装されている。
 
-### When demotion fires {#when-demotion-fires}
+### 降格が発動するとき {#when-demotion-fires}
 
-The key predicate is `can_demote()` in `mm/vmscan.c`:
+鍵となる述語は`mm/vmscan.c`の`can_demote()`である。
 
 ```c
 static bool can_demote(int nid, struct scan_control *sc, struct mem_cgroup *memcg)
 ```
 
-It returns true if the node has a valid demotion target (a lower tier with free capacity) and `numa_demotion_enabled` is set. When demotion is available, the reclaim path builds a `demote_folios` list alongside the normal `folio_list`:
+これは、ノードが有効な降格先（空き容量のある下位ティア）を持ち、かつ`numa_demotion_enabled`が設定されていればtrueを返す。降格が利用可能な場合、回収パスは通常の`folio_list`と並んで`demote_folios`リストを構築する。
 
 ```c
 /* mm/vmscan.c — shrink_folio_list() */
@@ -128,35 +128,35 @@ if (do_demote_pass &&
     list_add(&folio->lru, &demote_folios);
 ```
 
-`demote_folio_list()` then calls `migrate_pages()` to move those folios to the demotion target node. Folios that cannot be demoted (no space on the target, migration failure) are returned to the reclaim list and may be swapped.
+続いて`demote_folio_list()`が`migrate_pages()`を呼び出し、それらのfolioを降格先ノードへ移動する。降格できなかったfolio（降格先に空きがない、マイグレーションの失敗）は回収リストに戻され、スワップされることがある。
 
-The kernel prefers demotion to swapping because accessing demoted memory is typically much faster than a swap I/O, and because it keeps data in memory rather than discarding it.
+カーネルがスワップより降格を好むのは、降格されたメモリへのアクセスが通常スワップI/Oよりはるかに速く、またデータを破棄せずにメモリ上に保てるからである。
 
-!!! tip "Enable demotion with numa_demotion_enabled"
-    Demotion is controlled by the `numa_demotion_enabled` variable, exposed as:
+!!! tip "numa_demotion_enabledで降格を有効にする"
+    降格は`numa_demotion_enabled`変数で制御され、次の場所で公開されている。
     ```
     /proc/sys/kernel/numa/demotion_enabled
     ```
-    It defaults to disabled. Write `1` to enable. Without this, kswapd will swap to disk (or zswap) rather than demote to CXL.
+    デフォルトでは無効である。有効にするには`1`を書き込む。これがないと、kswapdはCXLへ降格するのではなく、ディスク（またはzswap）へスワップする。
 
-### vmstat counters for demotion {#vmstat-counters-for-demotion}
+### 降格のvmstatカウンタ {#vmstat-counters-for-demotion}
 
-`/proc/vmstat` tracks demotion events by initiator:
+`/proc/vmstat`は降格イベントを起点別に追跡する。
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `pgdemote_kswapd` | Pages demoted by kswapd background reclaim |
-| `pgdemote_direct` | Pages demoted by direct reclaim (allocating process) |
-| `pgdemote_khugepaged` | Pages demoted during khugepaged split |
-| `pgdemote_proactive` | Pages demoted by proactive reclaim |
+| `pgdemote_kswapd` | kswapdのバックグラウンド回収によって降格されたpage |
+| `pgdemote_direct` | 直接回収（割り当てを行うプロセス）によって降格されたpage |
+| `pgdemote_khugepaged` | khugepagedの分割中に降格されたpage |
+| `pgdemote_proactive` | プロアクティブ回収によって降格されたpage |
 
-## Page promotion: NUMA balancing driving the fast path {#page-promotion-numa-balancing-driving-the-fast-path}
+## pageの昇格: 高速パスを駆動するNUMAバランシング {#page-promotion-numa-balancing-driving-the-fast-path}
 
-**Promotion** is the reverse: moving a hot page from slow memory (CXL) to fast memory (DRAM). The mechanism is NUMA balancing.
+**昇格**（promotion）はその逆で、ホットなpageを低速メモリ（CXL）から高速メモリ（DRAM）へ移動することである。その仕組みはNUMAバランシングである。
 
-NUMA balancing works by periodically unmapping pages from their page tables (NUMA hinting faults). When the page is accessed, a minor fault fires and the kernel observes which CPU accessed the page. If a page in CXL memory is being accessed frequently by a CPU whose local DRAM is on a higher tier, the kernel migrates the page to that faster tier.
+NUMAバランシングは、pageを定期的にページテーブルからアンマップすることで機能する（NUMAヒンティングフォールト）。pageがアクセスされるとマイナーフォールトが発生し、カーネルはどのCPUがそのpageにアクセスしたかを観測する。CXLメモリ内のpageが、ローカルDRAMがより上位のティアにあるCPUから頻繁にアクセスされていれば、カーネルはそのpageをより速いティアへマイグレーションする。
 
-The memory tiering mode of NUMA balancing is activated by setting bit 1 of `numa_balancing_mode`:
+NUMAバランシングのメモリ階層化モードは、`numa_balancing_mode`のビット1を設定することで有効になる。
 
 ```c
 /* include/linux/sched/sysctl.h */
@@ -164,126 +164,126 @@ The memory tiering mode of NUMA balancing is activated by setting bit 1 of `numa
 extern int sysctl_numa_balancing_mode;
 ```
 
-When `NUMA_BALANCING_MEMORY_TIERING` is active, the `folio_use_access_time()` function repurposes the folio's `_last_cpupid` field to record page access time instead of the last CPU/PID. This lets the balancer identify hot pages in slow memory based on access recency rather than CPU affinity alone.
+`NUMA_BALANCING_MEMORY_TIERING`が有効なとき、`folio_use_access_time()`関数はfolioの`_last_cpupid`フィールドを転用し、最後のCPU/PIDの代わりにpageのアクセス時刻を記録する。これにより、バランサはCPUアフィニティだけでなくアクセスの新しさに基づいて、低速メモリ内のホットなpageを特定できる。
 
-### vmstat counters for promotion {#vmstat-counters-for-promotion}
+### 昇格のvmstatカウンタ {#vmstat-counters-for-promotion}
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `pgpromote_success` | Pages successfully promoted to a faster tier |
-| `pgpromote_candidate` | Pages identified as candidates for promotion |
-| `pgpromote_candidate_nrl` | Candidates skipped (not recently local) |
+| `pgpromote_success` | より速いティアへの昇格に成功したpage |
+| `pgpromote_candidate` | 昇格の候補として特定されたpage |
+| `pgpromote_candidate_nrl` | スキップされた候補（最近ローカルでなかったもの） |
 
-## DAMON integration for cold-page demotion {#damon-integration-for-cold-page-demotion}
+## コールドpageの降格のためのDAMON連携 {#damon-integration-for-cold-page-demotion}
 
-DAMON (Data Access MONitor) can be used to identify cold pages in fast memory and demote them proactively, before memory pressure forces kswapd to act.
+DAMON（Data Access MONitor）を使うと、高速メモリ内のコールドなpageを特定し、メモリ逼迫によってkswapdが動かざるを得なくなる前に、それらをプロアクティブに降格できる。
 
-The relevant DAMOS (DAMON-based Operation Scheme) action is `DAMOS_MIGRATE_COLD`:
+関連するDAMOS（DAMON-based Operation Scheme）のアクションは`DAMOS_MIGRATE_COLD`である。
 
 ```c
 /* include/linux/damon.h */
 enum damos_action {
     DAMOS_WILLNEED,
     DAMOS_COLD,
-    DAMOS_PAGEOUT,       /* reclaim to swap — does NOT demote */
+    DAMOS_PAGEOUT,       /* スワップへ回収する — 降格はしない */
     DAMOS_HUGEPAGE,
     DAMOS_NOHUGEPAGE,
     DAMOS_MIGRATE_HOT,
-    DAMOS_MIGRATE_COLD,  /* migrate cold regions to a slower node */
+    DAMOS_MIGRATE_COLD,  /* コールドな領域をより遅いノードへマイグレーションする */
     ...
 };
 ```
 
-!!! warning "DAMOS_PAGEOUT does not demote"
-    `DAMOS_PAGEOUT` reclaims pages to swap or zswap. It does **not** migrate pages to a CXL node. Use `DAMOS_MIGRATE_COLD` when the goal is tiered memory demotion.
+!!! warning "DAMOS_PAGEOUTは降格しない"
+    `DAMOS_PAGEOUT`はpageをスワップまたはzswapへ回収する。pageをCXLノードへマイグレーション**しない**。階層化メモリの降格が目的なら`DAMOS_MIGRATE_COLD`を使うこと。
 
-A DAMON scheme configured with `DAMOS_MIGRATE_COLD` and a target that includes CXL nodes will proactively move cold pages from DRAM to CXL, keeping warm pages in fast memory without waiting for memory pressure.
+`DAMOS_MIGRATE_COLD`と、CXLノードを含むターゲットで構成されたDAMONスキームは、コールドなpageをDRAMからCXLへプロアクティブに移動し、メモリ逼迫を待たずにウォームなpageを高速メモリに保つ。
 
-See the [DAMON documentation](damon.md) for details on configuring DAMON schemes via `/sys/kernel/mm/damon/`.
+`/sys/kernel/mm/damon/`経由でDAMONスキームを構成する方法の詳細は、[DAMONのドキュメント](damon.md)を参照してほしい。
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
-### Automatic with CXL hardware {#automatic-with-cxl-hardware}
+### CXLハードウェアでは自動 {#automatic-with-cxl-hardware}
 
-On a system where the BIOS provides valid HMAT or CDAT tables and the CXL driver is loaded, the memory tier framework configures itself automatically at boot:
+BIOSが有効なHMATまたはCDATテーブルを提供し、CXLドライバがロードされているシステムでは、メモリティアフレームワークはブート時に自動的に自身を構成する。
 
-1. `memory_tier_init()` places existing NUMA nodes in the default DRAM tier.
-2. CXL region activation registers an adistance notifier.
-3. The framework assigns the CXL node to a tier based on its measured abstract distance.
-4. `establish_demotion_targets()` builds the `node_demotion[]` table.
+1. `memory_tier_init()`が既存のNUMAノードをデフォルトのDRAMティアに配置する。
+2. CXLリージョンの有効化がadistanceのnotifierを登録する。
+3. フレームワークが、測定された抽象距離に基づいてCXLノードをティアに割り当てる。
+4. `establish_demotion_targets()`が`node_demotion[]`テーブルを構築する。
 
-No manual configuration is needed beyond enabling demotion and the desired NUMA balancing mode.
+降格と、望むNUMAバランシングモードを有効にする以外に、手動での設定は必要ない。
 
-### Sysctl knobs {#sysctl-knobs}
+### sysctlのつまみ {#sysctl-knobs}
 
 ```
 /proc/sys/kernel/numa/demotion_enabled
 ```
-Enable or disable demotion (0/1). Defaults to 0 (disabled).
+降格を有効または無効にする（0/1）。デフォルトは0（無効）である。
 
 ```
 /proc/sys/kernel/numa_balancing
 ```
-Bitmap controlling NUMA balancing behavior. Set bit 1 (`value |= 2`) to enable memory tiering mode alongside normal NUMA balancing.
+NUMAバランシングの挙動を制御するビットマップ。通常のNUMAバランシングと併せてメモリ階層化モードを有効にするには、ビット1を設定する（`value |= 2`）。
 
-### numactl for manual placement {#numactl-for-manual-placement}
+### 手動配置のためのnumactl {#numactl-for-manual-placement}
 
-On systems without automatic CXL tier setup, or for testing, `numactl` can bind allocations to specific nodes:
+CXLのティアが自動設定されないシステムやテスト用には、`numactl`で割り当てを特定のノードに束縛できる。
 
 ```bash
-# Allocate from node 1 (CXL) preferring node 0 (DRAM) on overflow
+# ノード1（CXL）から割り当て、あふれたときはノード0（DRAM）を優先する
 numactl --preferred=0 --membind=0,1 ./my_process
 
-# Force allocation from CXL node only
+# CXLノードのみからの割り当てを強制する
 numactl --membind=1 ./my_process
 ```
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
 ### /proc/vmstat {#procvmstat}
 
-The demotion and promotion counters described above are available in `/proc/vmstat` and via `sar`, `vmstat`, or `perf stat`:
+上で述べた降格と昇格のカウンタは、`/proc/vmstat`で、また`sar`、`vmstat`、`perf stat`経由で利用できる。
 
 ```bash
 watch -n 1 'grep -E "pgdemote|pgpromote" /proc/vmstat'
 ```
 
-A healthy tiered-memory system under light pressure shows steady `pgdemote_kswapd` activity moving cold pages to CXL, and occasional `pgpromote_success` events when NUMA balancing moves hot pages back to DRAM.
+軽い逼迫下にある健全な階層化メモリシステムでは、コールドなpageをCXLへ移す`pgdemote_kswapd`の活動が安定して見られ、NUMAバランシングがホットなpageをDRAMへ戻すときに`pgpromote_success`のイベントが時折見られる。
 
-### Tier membership {#tier-membership}
+### ティアへの所属 {#tier-membership}
 
 ```bash
 cat /sys/devices/virtual/memory_tiering/memory_tier*/nodelist
 ```
 
-Shows which NUMA nodes belong to which tier.
+どのNUMAノードがどのティアに属しているかを示す。
 
-### Tracepoints {#tracepoints}
+### tracepoint {#tracepoints}
 
-`mm/vmscan.c` does not currently have dedicated tiering tracepoints, but the standard `mm_migrate_pages` tracepoint (`include/trace/events/migrate.h`) fires for every demotion migration and reports the migration mode and reason.
+`mm/vmscan.c`には現在、階層化専用のtracepointはないが、標準の`mm_migrate_pages` tracepoint（`include/trace/events/migrate.h`）が降格のマイグレーションごとに発火し、マイグレーションのモードと理由を報告する。
 
-## Current limitations {#current-limitations}
+## 現在の制約 {#current-limitations}
 
-**Automatic CXL node detection requires firmware cooperation.** If HMAT or CDAT data is absent or incorrect, the CXL node may land in the same tier as DRAM and demotion will not occur. Check `dmesg` for messages from the CXL driver and memory tier framework at boot.
+**CXLノードの自動検出にはファームウェアの協力が必要である。** HMATやCDATのデータが欠けているか誤っていると、CXLノードがDRAMと同じティアに入ってしまい、降格が起こらない。ブート時のCXLドライバとメモリティアフレームワークのメッセージを`dmesg`で確認すること。
 
-**Demotion does not respect `cpusets.mems_allowed` in kernels before the fix landed in v6.15 and later patches.** Pages belonging to a cgroup may be demoted to nodes outside its `mems_allowed` set. This is a known limitation documented in `Documentation/driver-api/cxl/allocation/reclaim.rst`.
+**v6.15およびそれ以降のパッチで修正が入る前のカーネルでは、降格は`cpusets.mems_allowed`を尊重しない。** cgroupに属するpageが、その`mems_allowed`集合の外にあるノードへ降格されることがある。これは`Documentation/driver-api/cxl/allocation/reclaim.rst`に記載された既知の制約である。
 
-**khugepaged may conflict with tiering.** When khugepaged splits a THP on a CXL node, the `pgdemote_khugepaged` counter increments. In some configurations, khugepaged activity can re-promote pages that demotion just moved.
+**khugepagedが階層化と衝突することがある。** khugepagedがCXLノード上のTHPを分割すると、`pgdemote_khugepaged`カウンタが増加する。構成によっては、khugepagedの活動が、降格で移動したばかりのpageを再び昇格させてしまうことがある。
 
-**NUMA balancing promotion adds overhead.** The balancer works by unmapping pages (causing faults on next access) to observe access patterns. On CXL nodes with cold pages this is usually fine, but misconfigured schemes that promote too aggressively can increase fault rates.
+**NUMAバランシングによる昇格はオーバーヘッドを増やす。** バランサはアクセスパターンを観測するためにpageをアンマップする（次のアクセス時にフォールトを起こす）ことで機能する。コールドなpageを持つCXLノードでは通常問題ないが、昇格が積極的すぎる誤った構成のスキームはフォールト率を上げうる。
 
-!!! note "This area is actively developed"
-    Memory tiering, CXL support, and the interaction between DAMON, kswapd, and NUMA balancing are actively changing across kernel versions. Always check the kernel version's changelog when relying on specific behaviors described here.
+!!! note "この分野は活発に開発されている"
+    メモリ階層化、CXLのサポート、そしてDAMON、kswapd、NUMAバランシングの間の相互作用は、カーネルのバージョンごとに活発に変化している。ここで説明した特定の挙動に依存する場合は、必ずそのカーネルバージョンの変更履歴を確認すること。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: CXL](https://docs.kernel.org/driver-api/cxl/index.html) — official kernel documentation for the CXL subsystem including memory region activation and CDAT parsing
-- [`Documentation/driver-api/cxl/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/driver-api/cxl) — kernel source documentation for CXL memory regions, allocation, and reclaim behavior
-- [`drivers/cxl/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cxl) — CXL driver source: region activation, CDAT parsing, and the adistance notifier
-- [`mm/memory-tiers.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory-tiers.c) — memory tier framework: `find_create_memory_tier()`, `establish_demotion_targets()`, abstract distance logic
-- [LWN: Memory tiering in the kernel](https://lwn.net/Articles/858215/) — the original memory tiering framework design and demotion infrastructure (2021)
-- [LWN: CXL memory management](https://lwn.net/Articles/894816/) — how CXL nodes integrate with the Linux NUMA and tiering subsystems (2022)
-- [LWN: DAMOS_MIGRATE_COLD and proactive reclaim](https://lwn.net/Articles/905967/) — using DAMON schemes to demote cold pages to slower tiers before memory pressure builds (2022)
-- [numa.md](numa.md) — NUMA node topology, HMAT distance tables, and the automatic balancing infrastructure that drives promotion
-- [memory-bandwidth.md](memory-bandwidth.md) — why CXL nodes are unsuitable targets for `MPOL_INTERLEAVE` and how bandwidth tiers affect policy decisions
-- [damon.md](damon.md) — configuring `DAMOS_MIGRATE_COLD` schemes for proactive demotion to CXL
+- [Kernel docs: CXL](https://docs.kernel.org/driver-api/cxl/index.html): メモリリージョンの有効化やCDATの解析を含む、CXLサブシステムの公式カーネルドキュメント
+- [`Documentation/driver-api/cxl/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/driver-api/cxl): CXLメモリリージョン、割り当て、回収の挙動に関するカーネルソース内のドキュメント
+- [`drivers/cxl/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/cxl): CXLドライバのソース。リージョンの有効化、CDATの解析、adistanceのnotifier
+- [`mm/memory-tiers.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory-tiers.c): メモリティアフレームワーク。`find_create_memory_tier()`、`establish_demotion_targets()`、抽象距離のロジック
+- [LWN: Memory tiering in the kernel](https://lwn.net/Articles/858215/): 元々のメモリ階層化フレームワークの設計と降格の基盤（2021年）
+- [LWN: CXL memory management](https://lwn.net/Articles/894816/): CXLノードがLinuxのNUMAおよび階層化サブシステムとどう統合されるか（2022年）
+- [LWN: DAMOS_MIGRATE_COLD and proactive reclaim](https://lwn.net/Articles/905967/): DAMONスキームを使い、メモリ逼迫が高まる前にコールドなpageをより遅いティアへ降格する（2022年）
+- [numa.md](numa.md): NUMAノードのトポロジー、HMATの距離テーブル、昇格を駆動する自動バランシングの基盤
+- [memory-bandwidth.md](memory-bandwidth.md): なぜCXLノードが`MPOL_INTERLEAVE`の対象に適さないのか、そして帯域幅のティアがポリシー判断にどう影響するか
+- [damon.md](damon.md): CXLへのプロアクティブな降格のための`DAMOS_MIGRATE_COLD`スキームの構成

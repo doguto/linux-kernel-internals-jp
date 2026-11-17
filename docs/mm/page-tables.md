@@ -1,10 +1,10 @@
-# Page Tables {#page-tables}
+# ページテーブル {#page-tables}
 
-> Mapping virtual addresses to physical memory
+> 仮想アドレスを物理メモリに対応付ける
 
-## What Are Page Tables? {#what-are-page-tables}
+## ページテーブルとは何か? {#what-are-page-tables}
 
-Page tables are hierarchical data structures that map virtual addresses (what programs see) to physical addresses (actual RAM locations). The MMU (Memory Management Unit) hardware uses them to translate every memory access.
+ページテーブルは、仮想アドレス（プログラムから見えるもの）を物理アドレス（実際のRAM上の位置）に対応付ける階層的なデータ構造である。MMU（Memory Management Unit）ハードウェアは、これを使ってすべてのメモリアクセスを変換する。
 
 ```
 Virtual Address                Physical Address
@@ -14,9 +14,9 @@ Virtual Address                Physical Address
        └──────────────────────────────┘
 ```
 
-## The Five-Level Hierarchy {#the-five-level-hierarchy}
+## 5段階の階層 {#the-five-level-hierarchy}
 
-Linux uses a five-level page table hierarchy (since [v4.14](https://git.kernel.org/linus/77ef56e4f0fb) for x86-64, see [x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html)):
+Linuxは5段階のページテーブル階層を使う（x86-64では[v4.14](https://git.kernel.org/linus/77ef56e4f0fb)以降。[x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html)を参照）。
 
 ```
 +-----+
@@ -47,19 +47,19 @@ Linux uses a five-level page table hierarchy (since [v4.14](https://git.kernel.o
  PAGE    Physical memory page
 ```
 
-### Level Details {#level-details}
+### 各レベルの詳細 {#level-details}
 
-| Level | Type | Bits (x86-64) | Entries | Maps |
+| レベル | 型 | ビット（x86-64） | エントリ数 | マップする範囲 |
 |-------|------|---------------|---------|------|
-| PGD | `pgd_t` | 47-39 (4-level) or 56-48 (5-level) | 512 | 512GB or 128PB |
-| P4D | `p4d_t` | 47-39 | 512 | 512GB (folded if 4-level) |
+| PGD | `pgd_t` | 47-39（4段階）または56-48（5段階） | 512 | 512GBまたは128PB |
+| P4D | `p4d_t` | 47-39 | 512 | 512GB（4段階では畳み込まれる） |
 | PUD | `pud_t` | 38-30 | 512 | 1GB |
 | PMD | `pmd_t` | 29-21 | 512 | 2MB |
 | PTE | `pte_t` | 20-12 | 512 | 4KB |
 
-### Address Translation (x86-64, 4-level) {#address-translation-x86-64-4-level}
+### アドレス変換（x86-64、4段階） {#address-translation-x86-64-4-level}
 
-A 48-bit virtual address breaks down as:
+48ビットの仮想アドレスは次のように分解される。
 
 ```
  47      39 38      30 29      21 20      12 11       0
@@ -69,38 +69,38 @@ A 48-bit virtual address breaks down as:
    9 bits     9 bits     9 bits     9 bits    12 bits
 ```
 
-## Page Table Folding {#page-table-folding}
+## ページテーブルの畳み込み {#page-table-folding}
 
-Not all architectures need all five levels. Linux handles this through **folding** - unused levels are compile-time optimized away.
+すべてのアーキテクチャが5段階すべてを必要とするわけではない。Linuxはこれを**畳み込み**（folding）で扱う。使われないレベルはコンパイル時に最適化で取り除かれる。
 
-| Architecture | Levels | Notes |
+| アーキテクチャ | レベル数 | 備考 |
 |--------------|--------|-------|
-| x86-64 (LA57) | 5 | 57-bit virtual addresses |
-| x86-64 (standard) | 4 | 48-bit virtual addresses |
-| x86-32 (PAE) | 3 | 36-bit physical addresses |
-| x86-32 | 2 | Original 32-bit |
-| ARM64 | 3-4 | Configurable |
+| x86-64（LA57） | 5 | 57ビットの仮想アドレス |
+| x86-64（標準） | 4 | 48ビットの仮想アドレス |
+| x86-32（PAE） | 3 | 36ビットの物理アドレス |
+| x86-32 | 2 | 元々の32ビット |
+| ARM64 | 3-4 | 設定可能 |
 
-When a level is folded, functions like `p4d_offset()` become no-ops that return the input unchanged.
+あるレベルが畳み込まれると、`p4d_offset()`のような関数は入力をそのまま返す何もしない処理になる。
 
-## Key Data Structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
-### Per-Process Page Tables {#per-process-page-tables}
+### プロセスごとのページテーブル {#per-process-page-tables}
 
-Each process has its own page tables via `mm_struct`:
+各プロセスは`mm_struct`を介して自身のページテーブルを持つ。
 
 ```c
 struct mm_struct {
-    pgd_t *pgd;              /* Top-level page table */
-    atomic_t mm_users;       /* Users of this mm */
-    atomic_t mm_count;       /* References to struct */
+    pgd_t *pgd;              /* 最上位のページテーブル */
+    atomic_t mm_users;       /* このmmの利用者 */
+    atomic_t mm_count;       /* 構造体への参照 */
     /* ... */
 };
 ```
 
-The kernel has a single `swapper_pg_dir` for kernel mappings, shared across all processes.
+カーネルはカーネルのマッピング用に単一の`swapper_pg_dir`を持ち、それはすべてのプロセスで共有される。
 
-### Page Table Entry Format (x86-64 specific) {#page-table-entry-format-x86-64-specific}
+### ページテーブルエントリの形式（x86-64固有） {#page-table-entry-format-x86-64-specific}
 
 ```
  63    62    52 51                           12 11  9 8 7 6 5 4 3 2 1 0
@@ -121,9 +121,9 @@ The kernel has a single `swapper_pg_dir` for kernel mappings, shared across all 
   └───────────────────────────────────────────────────────────────────── Execute disable
 ```
 
-## Page Faults {#page-faults}
+## ページフォールト {#page-faults}
 
-When the MMU can't translate an address, it triggers a **page fault**. The kernel handles this in `handle_mm_fault()`:
+MMUがアドレスを変換できないと、**ページフォールト**が発生する。カーネルはこれを`handle_mm_fault()`で処理する。
 
 ```
 Page Fault
@@ -147,279 +147,279 @@ handle_pte_fault()
     └── do_shared_fault()  (shared mapping)
 ```
 
-### Fault Types {#fault-types}
+### フォールトの種類 {#fault-types}
 
-| Type | Cause | Resolution |
+| 種類 | 原因 | 解決方法 |
 |------|-------|------------|
-| Minor | Page in memory, PTE not set | Update PTE |
-| Major | Page not in memory | Read from disk/swap |
-| Invalid | Bad address or permissions | SIGSEGV |
+| マイナー | pageはメモリ上にあるが、PTEが設定されていない | PTEを更新する |
+| メジャー | pageがメモリ上にない | ディスク/スワップから読み込む |
+| 不正 | 不正なアドレスまたは権限 | SIGSEGV |
 
-## TLB (Translation Lookaside Buffer) {#tlb-translation-lookaside-buffer}
+## TLB（Translation Lookaside Buffer） {#tlb-translation-lookaside-buffer}
 
-The TLB caches recent translations. Without it, every memory access would require multiple page table lookups.
+TLBは最近の変換結果をキャッシュする。これがなければ、すべてのメモリアクセスで複数回のページテーブル参照が必要になる。
 
-### TLB Flush Operations {#tlb-flush-operations}
+### TLBフラッシュ操作 {#tlb-flush-operations}
 
 ```c
-/* Flush single page */
+/* 単一のpageをフラッシュする */
 flush_tlb_page(vma, addr);
 
-/* Flush range */
+/* 範囲をフラッシュする */
 flush_tlb_range(vma, start, end);
 
-/* Flush entire mm */
+/* mm全体をフラッシュする */
 flush_tlb_mm(mm);
 ```
 
-TLB flushes are expensive on SMP - they require IPIs (Inter-Processor Interrupts) to all CPUs running the affected process.
+SMPではTLBフラッシュは高くつく。影響を受けるプロセスを実行しているすべてのCPUへのIPI（Inter-Processor Interrupt、プロセッサ間割り込み）が必要になるからである。
 
-## Huge Pages {#huge-pages}
+## ヒュージページ {#huge-pages}
 
-Higher-level entries can map large pages directly, skipping lower levels:
+上位レベルのエントリは、下位レベルを飛ばして大きなpageを直接マップできる。
 
-| Level | Page Size | Use Case |
+| レベル | pageサイズ | 用途 |
 |-------|-----------|----------|
-| PUD | 1GB | Large databases, VMs |
-| PMD | 2MB | General large allocations |
-| PTE | 4KB | Default |
+| PUD | 1GB | 大規模データベース、VM |
+| PMD | 2MB | 一般的な大きな割り当て |
+| PTE | 4KB | デフォルト |
 
 ```c
-/* Check if PMD maps a huge page */
+/* PMDがヒュージページをマップしているか確認する */
 if (pmd_large(*pmd)) {
-    /* 2MB page, no PTE walk needed */
+    /* 2MBのpage。PTEのウォークは不要 */
 }
 ```
 
-Benefits:
+利点:
 
-- Fewer TLB entries needed
-- Reduced page table memory
-- Fewer page faults
+- 必要なTLBエントリが少ない
+- ページテーブルのメモリが減る
+- ページフォールトが少ない
 
-Trade-offs:
+トレードオフ:
 
-- Internal fragmentation
-- Allocation challenges
+- 内部断片化
+- 割り当ての難しさ
 
-## History {#history}
+## 歴史 {#history}
 
-### Origins (1991-1994) {#origins-1991-1994}
+### 起源（1991〜1994年） {#origins-1991-1994}
 
-Early Linux on i386 used two-level page tables (PGD + PTE). The `swapper_pg_dir` was the top-level Page Global Directory, not a single flat table. The i386 hardware dictated this structure.
+i386上の初期のLinuxは2段階のページテーブル（PGD + PTE）を使っていた。`swapper_pg_dir`は最上位のPage Global Directoryであり、単一のフラットなテーブルではなかった。この構造はi386のハードウェアによって決められていた。
 
-### Three-Level (v2.3.23, 1999) {#three-level-v2323-1999}
+### 3段階（v2.3.23、1999年） {#three-level-v2323-1999}
 
-Added PMD for PAE (Physical Address Extension) on x86, enabling >4GB physical memory on 32-bit.
+x86のPAE（Physical Address Extension）のためにPMDが追加され、32ビットで4GBを超える物理メモリが使えるようになった。
 
-### Four-Level (v2.6.11, 2005) {#four-level-v2611-2005}
+### 4段階（v2.6.11、2005年） {#four-level-v2611-2005}
 
-Added PUD for x86-64's 48-bit virtual address space. This predates git history (kernel moved to git at v2.6.12).
+x86-64の48ビット仮想アドレス空間のためにPUDが追加された。これはgitの履歴より前のことである（カーネルはv2.6.12でgitに移行した）。
 
-### Five-Level (v4.14, 2017) {#five-level-v414-2017}
+### 5段階（v4.14、2017年） {#five-level-v414-2017}
 
-**Commit**: [77ef56e4f0fb](https://git.kernel.org/linus/77ef56e4f0fb) ("x86: Enable 5-level paging support via CONFIG_X86_5LEVEL=y") | [LKML](https://lore.kernel.org/all/20170313055020.69655-1-kirill.shutemov@linux.intel.com/)
+**コミット**: [77ef56e4f0fb](https://git.kernel.org/linus/77ef56e4f0fb)（"x86: Enable 5-level paging support via CONFIG_X86_5LEVEL=y"） | [LKML](https://lore.kernel.org/all/20170313055020.69655-1-kirill.shutemov@linux.intel.com/)
 
-Added P4D for 57-bit virtual addresses (128PB), needed for machines with >64TB physical memory.
+57ビットの仮想アドレス（128PB）のためにP4Dが追加された。これは64TBを超える物理メモリを持つマシンに必要である。
 
-## Try It Yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### View Process Page Tables {#view-process-page-tables}
+### プロセスのページテーブルを見る {#view-process-page-tables}
 
 ```bash
-# Page table stats for a process
+# プロセスのページテーブル統計
 cat /proc/<pid>/smaps | grep -E "Size|Rss|Pss"
 
-# Detailed page mapping
-cat /proc/<pid>/pagemap  # Binary format
+# 詳細なpageマッピング
+cat /proc/<pid>/pagemap  # バイナリ形式
 
-# Parse with tools
+# ツールで解析する
 pagemap <pid> <address>
 ```
 
-### Check TLB Flushes {#check-tlb-flushes}
+### TLBフラッシュを確認する {#check-tlb-flushes}
 
 ```bash
-# TLB flush statistics
+# TLBフラッシュの統計
 cat /proc/vmstat | grep tlb
 
-# Trace TLB flushes
+# TLBフラッシュをトレースする
 echo 1 > /sys/kernel/debug/tracing/events/tlb/tlb_flush/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-### Check Huge Page Usage {#check-huge-page-usage}
+### ヒュージページの使用状況を確認する {#check-huge-page-usage}
 
 ```bash
-# System huge page stats
+# システム全体のヒュージページ統計
 cat /proc/meminfo | grep -i huge
 
-# Per-process huge pages
+# プロセスごとのヒュージページ
 cat /proc/<pid>/smaps | grep -i huge
 ```
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### TLB Shootdown Storms {#tlb-shootdown-storms}
+### TLBシュートダウンの嵐 {#tlb-shootdown-storms}
 
-Heavy `mprotect()` or `munmap()` causes excessive IPIs.
+`mprotect()`や`munmap()`を多用すると、過剰なIPIが発生する。
 
-**Debug**: Check `/proc/interrupts` for TLB IPI counts.
+**デバッグ**: `/proc/interrupts`でTLBのIPI数を確認する。
 
-### Page Table Memory Overhead {#page-table-memory-overhead}
+### ページテーブルのメモリオーバーヘッド {#page-table-memory-overhead}
 
-Sparse address spaces waste page table memory.
+疎なアドレス空間はページテーブルのメモリを浪費する。
 
-**Debug**: Check `PageTables` in `/proc/meminfo`.
+**デバッグ**: `/proc/meminfo`の`PageTables`を確認する。
 
-### Huge Page Allocation Failures {#huge-page-allocation-failures}
+### ヒュージページの割り当て失敗 {#huge-page-allocation-failures}
 
-Can't allocate huge pages due to fragmentation.
+断片化のためにヒュージページを割り当てられない。
 
-**Solutions**:
+**解決策**:
 
-- Reserve at boot: `hugepages=N`
-- Enable THP: `/sys/kernel/mm/transparent_hugepage/enabled`
-- Compact memory: `echo 1 > /proc/sys/vm/compact_memory`
+- ブート時に予約する: `hugepages=N`
+- THPを有効にする: `/sys/kernel/mm/transparent_hugepage/enabled`
+- メモリをコンパクションする: `echo 1 > /proc/sys/vm/compact_memory`
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-Page tables mediate all memory access. Bugs here range from privilege escalation to information disclosure to complete CPU security model breakdown.
+ページテーブルはすべてのメモリアクセスを仲介する。ここでのバグは、権限昇格から情報漏洩、さらにはCPUのセキュリティモデルの完全な崩壊にまで及ぶ。
 
-### Case 1: Meltdown (CVE-2017-5754) {#case-1-meltdown-cve-2017-5754}
+### ケース1: Meltdown（CVE-2017-5754） {#case-1-meltdown-cve-2017-5754}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-In January 2018, researchers disclosed [Meltdown](https://meltdownattack.com/), a hardware vulnerability affecting Intel CPUs that allowed unprivileged processes to read kernel memory.
+2018年1月、研究者らが[Meltdown](https://meltdownattack.com/)を公表した。これはIntel CPUに影響するハードウェアの脆弱性で、特権のないプロセスがカーネルメモリを読むことを可能にした。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-Meltdown exploits **speculative execution** combined with **cache timing**. The CPU speculatively executes an illegal kernel read, and even though it raises a fault, the cache side effects remain, leaking the data.
+Meltdownは**投機的実行**と**キャッシュタイミング**を組み合わせて悪用する。CPUは不正なカーネルの読み取りを投機的に実行し、フォールトが発生してもキャッシュへの副作用は残るため、データが漏洩する。
 
-#### The fix: KPTI {#the-fix-kpti}
+#### 修正: KPTI {#the-fix-kpti}
 
-**Commit**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7) ("x86/mm/pti: Add infrastructure for page table isolation")
+**コミット**: [aa8c6248f8c7](https://git.kernel.org/linus/aa8c6248f8c7)（"x86/mm/pti: Add infrastructure for page table isolation"）
 
-**Author**: Thomas Gleixner
+**作者**: Thomas Gleixner
 
-KPTI creates separate page tables for kernel and user mode. When entering the kernel, page tables are switched to include kernel mappings.
+KPTIはカーネルモードとユーザーモードで別々のページテーブルを作成する。カーネルに入るとき、ページテーブルはカーネルのマッピングを含むものに切り替えられる。
 
 ```bash
-# Check KPTI status
+# KPTIの状態を確認する
 cat /sys/devices/system/cpu/vulnerabilities/meltdown
 ```
 
 ---
 
-### Case 2: Spectre (CVE-2017-5753, CVE-2017-5715) {#case-2-spectre-cve-2017-5753-cve-2017-5715}
+### ケース2: Spectre（CVE-2017-5753、CVE-2017-5715） {#case-2-spectre-cve-2017-5753-cve-2017-5715}
 
-#### What happened {#what-happened_1}
+#### 何が起きたか {#what-happened_1}
 
-Disclosed alongside Meltdown, [Spectre](https://spectreattack.com/) exploits speculative execution to leak data from other processes or the kernel.
+Meltdownと同時に公表された[Spectre](https://spectreattack.com/)は、投機的実行を悪用して他のプロセスやカーネルのデータを漏洩させる。
 
-#### Variant 1 (Bounds Check Bypass) {#variant-1-bounds-check-bypass}
+#### バリアント1（Bounds Check Bypass） {#variant-1-bounds-check-bypass}
 
-The CPU speculatively executes past bounds checks, allowing out-of-bounds reads via cache timing.
+CPUは境界チェックを越えて投機的に実行し、キャッシュタイミングを通じて範囲外の読み取りを可能にしてしまう。
 
-**Fix**: Array index masking with `array_index_nospec()`.
+**修正**: `array_index_nospec()`による配列インデックスのマスキング。
 
-#### Variant 2 (Branch Target Injection) {#variant-2-branch-target-injection}
+#### バリアント2（Branch Target Injection） {#variant-2-branch-target-injection}
 
-Attackers poison the branch predictor to redirect speculative execution to chosen gadgets.
+攻撃者は分岐予測器を汚染し、投機的実行を選んだガジェットへ誘導する。
 
-**Fix**: Retpoline - replaces indirect calls with a sequence that traps speculative execution.
+**修正**: Retpoline。間接呼び出しを、投機的実行を閉じ込めるシーケンスに置き換える。
 
-**Commit**: [76b043848fd2](https://git.kernel.org/linus/76b043848fd2) ("x86/retpoline: Add initial retpoline support")
-
----
-
-### Case 3: TLB flush races {#case-3-tlb-flush-races}
-
-#### What happened {#what-happened_2}
-
-The TLB caches page table entries. When page tables change, the TLB must be flushed. Races between changes and flushes cause security vulnerabilities.
-
-#### The bug pattern {#the-bug-pattern}
-
-A CPU can use stale TLB entries to access pages that should be unmapped:
-1. Page table entry cleared
-2. TLB flush pending (not yet complete)
-3. Another CPU accesses via stale TLB entry
-4. Access succeeds to freed/reallocated page
-
-#### Example: CVE-2018-18281 {#example-cve-2018-18281}
-
-The `mremap()` syscall moved page table entries but flushed TLBs too late.
-
-**Commit**: [eb66ae030829](https://git.kernel.org/linus/eb66ae030829) ("mremap: properly flush TLB before releasing the page")
+**コミット**: [76b043848fd2](https://git.kernel.org/linus/76b043848fd2)（"x86/retpoline: Add initial retpoline support"）
 
 ---
 
-### Case 4: KASLR bypasses {#case-4-kaslr-bypasses}
+### ケース3: TLBフラッシュの競合 {#case-3-tlb-flush-races}
 
-#### What is KASLR? {#what-is-kaslr}
+#### 何が起きたか {#what-happened_2}
 
-Kernel Address Space Layout Randomization randomizes where the kernel is loaded, making exploits harder.
+TLBはページテーブルエントリをキャッシュする。ページテーブルが変わると、TLBをフラッシュしなければならない。変更とフラッシュの間の競合がセキュリティ脆弱性を引き起こす。
 
-#### Bypass techniques {#bypass-techniques}
+#### バグのパターン {#the-bug-pattern}
 
-| Technique | Method |
+CPUは古いTLBエントリを使って、アンマップされているはずのpageにアクセスできてしまう。
+1. ページテーブルエントリがクリアされる
+2. TLBフラッシュが保留中（まだ完了していない）
+3. 別のCPUが古いTLBエントリ経由でアクセスする
+4. 解放済み/再割り当て済みのpageへのアクセスが成功してしまう
+
+#### 例: CVE-2018-18281 {#example-cve-2018-18281}
+
+`mremap()`システムコールはページテーブルエントリを移動したが、TLBのフラッシュが遅すぎた。
+
+**コミット**: [eb66ae030829](https://git.kernel.org/linus/eb66ae030829)（"mremap: properly flush TLB before releasing the page"）
+
+---
+
+### ケース4: KASLRの回避 {#case-4-kaslr-bypasses}
+
+#### KASLRとは何か? {#what-is-kaslr}
+
+Kernel Address Space Layout Randomization（カーネルアドレス空間配置のランダム化）は、カーネルがロードされる場所をランダム化し、エクスプロイトを難しくする。
+
+#### 回避手法 {#bypass-techniques}
+
+| 手法 | 方法 |
 |-----------|--------|
-| Info leak | Kernel pointer exposed to userspace |
-| Timing side channel | Measure access times |
-| dmesg leak | Kernel addresses in logs |
+| 情報漏洩 | カーネルのポインタがユーザー空間に露出する |
+| タイミングのサイドチャネル | アクセス時間を測定する |
+| dmesgからの漏洩 | ログ内のカーネルアドレス |
 
-#### Hardening {#hardening}
+#### ハードニング {#hardening}
 
 ```bash
-# Restrict kernel pointers
+# カーネルポインタを制限する
 echo 2 > /proc/sys/kernel/kptr_restrict
 
-# Restrict dmesg
+# dmesgを制限する
 echo 1 > /proc/sys/kernel/dmesg_restrict
 ```
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Year | Type | Mitigation |
+| バグ | 年 | 種類 | 緩和策 |
 |-----|------|------|------------|
-| Meltdown | 2017 | Hardware | KPTI |
-| Spectre v1 | 2017 | Hardware | nospec barriers |
-| Spectre v2 | 2017 | Hardware | Retpoline |
-| TLB races | Ongoing | Software | Proper flush ordering |
-| KASLR bypass | Ongoing | Info leak | Pointer restrictions |
+| Meltdown | 2017 | ハードウェア | KPTI |
+| Spectre v1 | 2017 | ハードウェア | nospecバリア |
+| Spectre v2 | 2017 | ハードウェア | Retpoline |
+| TLBの競合 | 継続中 | ソフトウェア | 適切なフラッシュの順序 |
+| KASLRの回避 | 継続中 | 情報漏洩 | ポインタの制限 |
 
-**The pattern**: Page table bugs often involve timing (TLB races, speculation) or assumptions about hardware behavior that turn out to be wrong.
+**パターン**: ページテーブルのバグには、タイミング（TLBの競合、投機）や、誤りだと判明するハードウェアの挙動についての前提が絡むことが多い。
 
-## References {#references}
+## 参照 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`include/linux/pgtable.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pgtable.h) | Generic page table API |
-| [`arch/x86/include/asm/pgtable.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable.h) | x86 page table definitions |
-| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | Page fault handling |
+| [`include/linux/pgtable.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pgtable.h) | 汎用のページテーブルAPI |
+| [`arch/x86/include/asm/pgtable.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/pgtable.h) | x86のページテーブル定義 |
+| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | ページフォールト処理 |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
 - [`Documentation/mm/page_tables.rst`](https://docs.kernel.org/mm/page_tables.html)
 
-### Related {#related}
+### 関連 {#related}
 
-- [overview](overview.md) - Memory management overview
-- [glossary](glossary.md) - PFN, TLB, MMU definitions
-- [Bug Index](bugs/README.md) - Index of all mm kernel bugs
+- [overview](overview.md): メモリ管理の概要
+- [glossary](glossary.md): PFN、TLB、MMUの定義
+- [バグ索引](bugs/README.md): mmのカーネルバグすべての索引
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [arch/x86/mm/pgtable.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pgtable.c) — x86-specific page table allocation, PTE manipulation helpers, and KPTI page table switching
-- [include/linux/pgtable.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pgtable.h) — architecture-independent page table API: `pgd_offset()`, `pte_present()`, `pte_mkwrite()`, and the full set of PTE flag accessors
-- [mm/memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) — page fault entry point `handle_mm_fault()`, COW handling, and page table teardown on `munmap()`
-- `Documentation/admin-guide/mm/concepts.rst` — kernel documentation overview of virtual memory, page tables, and the TLB
-- [Five-level page tables](https://lwn.net/Articles/717293/) (LWN, 2017) — design and rationale for adding the P4D level to support 57-bit virtual address spaces
-- [KPTI: kernel page-table isolation](https://lwn.net/Articles/741878/) (LWN, 2017) — how the Meltdown mitigation works by maintaining separate page tables for kernel and user mode
-- [page-fault](page-fault.md) — the complete page fault handling path from hardware trap through `handle_pte_fault()` to memory resolution
-- [tlb-optimization](tlb-optimization.md) — TLB batching, lazy flushing, and how the kernel minimises IPI-heavy TLB shootdowns
+- [arch/x86/mm/pgtable.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pgtable.c): x86固有のページテーブル割り当て、PTE操作のヘルパー、KPTIのページテーブル切り替え
+- [include/linux/pgtable.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pgtable.h): アーキテクチャ非依存のページテーブルAPI。`pgd_offset()`、`pte_present()`、`pte_mkwrite()`、およびPTEフラグのアクセサ一式
+- [mm/memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c): ページフォールトのエントリポイント`handle_mm_fault()`、COWの処理、`munmap()`時のページテーブルの解体
+- `Documentation/admin-guide/mm/concepts.rst`: 仮想メモリ、ページテーブル、TLBについてのカーネルドキュメントの概説
+- [Five-level page tables](https://lwn.net/Articles/717293/)（LWN、2017年）: 57ビットの仮想アドレス空間をサポートするためにP4Dレベルを追加した設計と根拠
+- [KPTI: kernel page-table isolation](https://lwn.net/Articles/741878/)（LWN、2017年）: カーネルモードとユーザーモードで別々のページテーブルを維持することでMeltdownの緩和策がどう機能するか
+- [page-fault](page-fault.md): ハードウェアのトラップから`handle_pte_fault()`を経てメモリの解決に至る、ページフォールト処理の完全なパス
+- [tlb-optimization](tlb-optimization.md): TLBのバッチ処理、遅延フラッシュ、そしてカーネルがIPIの多いTLBシュートダウンをどう最小化するか

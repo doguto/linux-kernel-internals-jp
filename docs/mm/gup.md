@@ -1,187 +1,187 @@
-# Getting User Pages (GUP) {#getting-user-pages-gup}
+# ユーザーページの取得（GUP） {#getting-user-pages-gup}
 
-> `get_user_pages()` vs `pin_user_pages()`, FOLL_LONGTERM, fast GUP, and why pinning fights copy-on-write and page migration
+> `get_user_pages()`対`pin_user_pages()`、FOLL_LONGTERM、fast GUP、そしてなぜピン留めがコピーオンライトやページマイグレーションと衝突するのか
 
-When the kernel — or a device behind it — needs to touch a page of *user* memory by its physical identity rather than through the process's page tables, it calls into the **get_user_pages** family (universally "GUP"). This is one of the most consequential and most bug-prone interfaces in the memory-management subsystem: it sits exactly where the stable world of physical pages meets the shifting world of user virtual memory, and getting the contract wrong has produced some of Linux's most famous vulnerabilities.
+カーネル（あるいはその背後にあるデバイス）が、プロセスのページテーブルを経由するのではなく物理的な実体として*ユーザー*メモリのpageに触れる必要があるとき、カーネルは**get_user_pages**ファミリー（一般に「GUP」と呼ばれる）を呼び出す。これはメモリ管理サブシステムで最も影響が大きく、かつ最もバグを生みやすいインターフェースの1つである。物理pageという安定した世界と、ユーザー仮想メモリという移ろう世界がちょうど出会う場所に位置しており、その契約を誤ったことがLinuxの最も有名な脆弱性のいくつかを生んできた。
 
-This page is about the *why*: why GUP has to exist, why it was split into two APIs that look almost identical, and why "just pin the page" turns out to be one of the hardest promises the kernel makes. For the copy-on-write fallout specifically, read [Copy-on-Write](cow.md) and the [CVE case studies](war-stories-cves.md); for the fast-path performance angle, [io_uring fixed buffers](../io-uring/fixed-buffers.md).
+このページは*なぜ*を扱う。なぜGUPが存在しなければならないのか、なぜほとんど同じに見える2つのAPIに分割されたのか、そしてなぜ「pageをピン留めするだけ」がカーネルの交わす約束の中で最も難しいものの1つになるのか。コピーオンライトへの影響については特に[コピーオンライト](cow.md)と[CVE事例研究](war-stories-cves.md)を、高速パスの性能面については[io_uringの固定バッファ](../io-uring/fixed-buffers.md)を読んでほしい。
 
 ---
 
-## The problem GUP solves {#the-problem-gup-solves}
+## GUPが解決する問題 {#the-problem-gup-solves}
 
-A user virtual address is a *lease*, not a deed. The page it names can be, at almost any moment:
+ユーザー仮想アドレスは*借地権*であって、*権利証*ではない。それが指すpageは、ほとんどいつでも次のような状態になりうる。
 
-- **not present yet** — never faulted in, or reclaimed to swap ([Page Fault Handler](page-fault.md));
-- **relocated** — moved by compaction, NUMA balancing, or CMA to a different physical frame ([Compaction](compaction.md));
-- **shared and read-only** — a copy-on-write page that will be duplicated on the next write ([Copy-on-Write](cow.md)).
+- **まだ存在しない**: 一度もフォールトインされていないか、スワップへ回収された（[ページフォールトハンドラ](page-fault.md)）。
+- **再配置される**: コンパクション、NUMAバランシング、CMAによって別の物理フレームへ移動される（[コンパクション](compaction.md)）。
+- **共有かつ読み取り専用**: 次の書き込みで複製されるコピーオンライトのpage（[コピーオンライト](cow.md)）。
 
-That instability is fine for a CPU touching its own memory through its own page tables — the MMU and fault handler paper over it transparently. It is *not* fine for three important users who need to reach a page **by physical address, outside the owning process's page-table walk**:
+この不安定さは、CPUが自分のページテーブルを通して自分のメモリに触れる分には問題ない。MMUとフォールトハンドラが透過的に取り繕ってくれるからだ。しかし、**物理アドレスによって、所有プロセスのページテーブルウォークの外側から**pageに到達する必要がある3つの重要な利用者にとっては問題になる。
 
-1. **Hardware DMA** — a NIC, GPU, or NVMe controller programmed with a physical (or IOMMU) address will read/write that frame directly. If the kernel migrates or frees it mid-transfer, the device corrupts whatever now lives there.
-2. **The kernel accessing another address space** — `process_vm_readv()`, ptrace, futexes on shared mappings, `vmsplice()`.
-3. **Direct I/O** — the block layer DMAs straight into user buffers, bypassing the page cache.
+1. **ハードウェアDMA**: 物理（またはIOMMU）アドレスをプログラムされたNIC、GPU、NVMeコントローラは、そのフレームを直接読み書きする。転送の途中でカーネルがそれをマイグレーションしたり解放したりすると、デバイスはその時点でそこにあるものを何であれ破壊してしまう。
+2. **カーネルが別のアドレス空間にアクセスする場合**: `process_vm_readv()`、ptrace、共有マッピング上のfutex、`vmsplice()`。
+3. **ダイレクトI/O**: ブロック層がページキャッシュを迂回してユーザーバッファへ直接DMAする。
 
-GUP is the bridge: hand it an `mm_struct` and a user virtual address range, and it walks that process's page tables (**faulting pages in if necessary**), resolves each address to a `struct page`, takes a reference that holds the page in place, and returns the array of `struct page *`. The caller now has a physically-stable handle it can DMA to or `kmap()` — until it releases the reference.
+GUPはその橋渡しである。`mm_struct`とユーザー仮想アドレスの範囲を渡すと、そのプロセスのページテーブルをウォークし（**必要ならpageをフォールトインし**）、各アドレスを`struct page`に解決し、pageをその場に留めておく参照を取得して、`struct page *`の配列を返す。呼び出し元は、参照を解放するまで、DMAしたり`kmap()`したりできる物理的に安定したハンドルを手にする。
 
 ```c
-/* the shape of it — mm/gup.c */
+/* 概形 — mm/gup.c */
 long pin_user_pages(unsigned long start, unsigned long nr_pages,
                     unsigned int gup_flags, struct page **pages);
-/* ... walk page tables, fault in what's missing, grab a ref per page ... */
-/* later: */
+/* ... ページテーブルをウォークし、欠けているものをフォールトインし、pageごとに参照を取る ... */
+/* 後で: */
 unpin_user_pages(pages, nr_pages);
 ```
 
-The caller-supplied `gup_flags` (`FOLL_WRITE`, `FOLL_LONGTERM`, …) encode intent, and — as the history below shows — the entire safety of the interface turns on stating that intent correctly. (`FOLL_PIN` itself is set internally by the `pin_user_pages*()` wrappers, not passed by callers.)
+呼び出し元が指定する`gup_flags`（`FOLL_WRITE`、`FOLL_LONGTERM`、…）は意図を表し、後述の歴史が示すように、このインターフェースの安全性はすべて、その意図を正しく表明できるかどうかにかかっている。（`FOLL_PIN`自体は`pin_user_pages*()`ラッパーが内部で設定するもので、呼び出し元が渡すものではない。）
 
 ---
 
-## get vs pin: two APIs that look identical and mean opposite things {#get-vs-pin-two-apis-that-look-identical-and-mean-opposite-things}
+## getとpin: 同じに見えて正反対の意味を持つ2つのAPI {#get-vs-pin-two-apis-that-look-identical-and-mean-opposite-things}
 
-Since Linux 5.6 there are two families that appear interchangeable:
+Linux 5.6以降、互換性があるように見える2つのファミリーが存在する。
 
-| | `get_user_pages()` (FOLL_GET) | `pin_user_pages()` (FOLL_PIN) |
+| | `get_user_pages()`（FOLL_GET） | `pin_user_pages()`（FOLL_PIN） |
 |---|---|---|
-| **The distinction — will the caller access the page's *data*?** | **No** — only manipulates `struct page` metadata, not the memory it tracks | **Yes** — reads/writes the actual page contents (e.g. DMA) |
-| Reference taken | ordinary page refcount +1 | base page: refcount += `GUP_PIN_COUNTING_BIAS` (1024); large folios use a separate `_pincount` |
-| Detectable as a DMA pin? | no — indistinguishable from any other ref | yes — `folio_maybe_dma_pinned()` |
-| Release with | `put_page()` | `unpin_user_pages()` |
+| **区別の要点: 呼び出し元はpageの*データ*にアクセスするか?** | **しない**: `struct page`のメタデータを操作するだけで、それが管理するメモリには触れない | **する**: pageの実際の内容を読み書きする（例: DMA） |
+| 取得される参照 | 通常のpage参照カウント+1 | ベースpage: 参照カウント += `GUP_PIN_COUNTING_BIAS`（1024）。大きなfolioは別個の`_pincount`を使う |
+| DMAピンとして検出可能か? | 不可: 他の参照と区別できない | 可能: `folio_maybe_dma_pinned()` |
+| 解放方法 | `put_page()` | `unpin_user_pages()` |
 
-The primary axis is **data access, not duration** — the kernel documentation is explicit that "FOLL_GET is for `struct page` manipulation, without affecting the data," while FOLL_PIN is for when "the caller will access the page data." (*How long* the pin is held is a separate axis, owned by `FOLL_LONGTERM` below.) The split exists because of a subtle, expensive lesson: **an ordinary reference count cannot tell the memory-management core that a page is being used for DMA.** A refcount of, say, 3 could mean three fleeting references or one live DMA transfer that must not be disturbed. Code that needs to make a decision — "is it safe to migrate this page, or write back this dirty folio while a device might still be writing to it?" — had no way to ask.
+主軸は**期間ではなくデータアクセス**である。カーネルのドキュメントは、「FOLL_GET is for `struct page` manipulation, without affecting the data」（FOLL_GETはデータに影響を与えない`struct page`の操作用）である一方、FOLL_PINは「the caller will access the page data」（呼び出し元がpageのデータにアクセスする）場合のためのものだと明言している。（ピンを*どれだけ長く*保持するかは別の軸であり、後述の`FOLL_LONGTERM`が担う。）この分割は、微妙で高くついた教訓から生まれた。すなわち、**通常の参照カウントでは、pageがDMAに使われていることをメモリ管理のコアに伝えられない**。参照カウントが例えば3であっても、それは3つの一時的な参照なのか、乱してはならない進行中のDMA転送1つなのか区別がつかない。「このpageをマイグレーションしても安全か、デバイスがまだ書き込んでいるかもしれない間にこのダーティなfolioをライトバックしてよいか」という判断を下す必要のあるコードには、それを問う手段がなかった。
 
-John Hubbard's `FOLL_PIN` redesign ([LWN: Explicit pinning of user-space pages](https://lwn.net/Articles/807108/)) makes the DMA intent *visible in the page itself*. The trick, per the [kernel documentation](https://docs.kernel.org/core-api/pin_user_pages.html), is to bias the count: a pin adds `GUP_PIN_COUNTING_BIAS` (1024) to the refcount rather than 1, so:
+John Hubbardによる`FOLL_PIN`の再設計（[LWN: Explicit pinning of user-space pages](https://lwn.net/Articles/807108/)）は、DMAの意図を*page自体の中に見える*ようにする。[カーネルのドキュメント](https://docs.kernel.org/core-api/pin_user_pages.html)によれば、その仕掛けはカウントにバイアスをかけることである。ピンは参照カウントに1ではなく`GUP_PIN_COUNTING_BIAS`（1024）を加えるので、次のようになる。
 
 ```c
-/* "is this page pinned for DMA?" becomes answerable */
+/* 「このpageはDMAのためにピン留めされているか?」に答えられるようになる */
 if (folio_maybe_dma_pinned(folio))
-        /* do NOT migrate; do NOT assume writeback ends the writer */
+        /* マイグレーションしてはならない。ライトバックで書き込み手が終わると仮定してはならない */
 ```
 
-The bias scheme is a pragmatic hack — on a huge compound page the count was shared, so a 1 GB page could only be pinned a handful of times before overflow, which is why large folios grew a *separate* `_pincount` field. But the important part is conceptual: **the API now carries the contract that context used to only imply.** The guidance is blunt — new code that touches page data should use `pin_user_pages()`; `get_user_pages()` is legacy for the cases that only manipulate `struct page` metadata.
+このバイアス方式は実用本位のハックである。巨大な複合pageではカウントが共有されていたため、1 GBのpageは数回ピン留めしただけでオーバーフローしかねず、それが大きなfolioに*別個の*`_pincount`フィールドが追加された理由である。しかし重要なのは概念的な部分だ。**以前は文脈が暗に示すだけだった契約を、今やAPIが担うようになった。** 指針は率直である。pageのデータに触れる新しいコードは`pin_user_pages()`を使うべきであり、`get_user_pages()`は`struct page`のメタデータを操作するだけの場合のためのレガシーである。
 
 ---
 
-## FOLL_LONGTERM: the pin that fights the whole memory manager {#foll_longterm-the-pin-that-fights-the-whole-memory-manager}
+## FOLL_LONGTERM: メモリ管理全体と衝突するピン {#foll_longterm-the-pin-that-fights-the-whole-memory-manager}
 
-A short pin is a nuisance; a *long* pin is a structural problem. `FOLL_LONGTERM` marks a pin that may last seconds, minutes, or the lifetime of an RDMA registration — and an indefinitely unmovable page is at war with two subsystems designed around the assumption that any page can be relocated:
+短いピンは厄介ごとにすぎないが、*長い*ピンは構造的な問題である。`FOLL_LONGTERM`は、数秒、数分、あるいはRDMA登録の存続期間中ずっと続く可能性のあるピンを示す。そして、いつまでも移動できないpageは、どのpageも再配置できるという前提で設計された2つのサブシステムと対立する。
 
-- **Compaction / anti-fragmentation** — the kernel earns physically-contiguous free space by migrating movable pages together. A long-term pin nails a page in place, permanently fragmenting the region around it ([Compaction](compaction.md)).
-- **CMA and `ZONE_MOVABLE`** — these regions exist *specifically* so their pages can always be migrated away when someone needs contiguous memory. A page pinned there defeats the region's entire reason for existing ([CMA](cma.md)).
+- **コンパクション / 断片化防止**: カーネルは移動可能なpageをマイグレーションして寄せ集めることで、物理的に連続した空き領域を確保する。長期ピンはpageをその場に釘付けにし、その周囲の領域を恒久的に断片化させる（[コンパクション](compaction.md)）。
+- **CMAと`ZONE_MOVABLE`**: これらの領域は、誰かが連続メモリを必要としたときにそのpageをいつでもマイグレーションで退避できるようにすることを*特に目的として*存在する。そこでピン留めされたpageは、その領域が存在する理由そのものを無にしてしまう（[CMA](cma.md)）。
 
-The kernel's answer is **migrate-before-pin**: a `FOLL_LONGTERM` request first tries to move the target page *out* of any movable zone or CMA area into ordinary memory, and only then pins it. If the migration fails, so does the pin ([LWN: Preserving the mobility of ZONE_MOVABLE](https://lwn.net/Articles/843326/), [prohibit pinning pages in ZONE_MOVABLE](https://lwn.net/Articles/843143/)). This is why a classic CMA allocation failure is "a page here is pinned by `get_user_pages()`" — a device driver's DMA buffer holding a CMA page hostage. The tension is fundamental: **movability and long-term pinning are mutually exclusive by construction**, and the kernel can only choose which one wins per-page.
-
----
-
-## Fast GUP: walking page tables without the locks {#fast-gup-walking-page-tables-without-the-locks}
-
-The straightforward GUP path takes `mmap_lock` and walks the page tables under it. For a high-IOPS direct-I/O or io_uring workload doing millions of pins per second, that lock and the full walk are pure overhead ([io_uring fixed buffers](../io-uring/fixed-buffers.md) exists precisely to amortize it away). So there is a **lockless fast path**, `get_user_pages_fast()` / `pin_user_pages_fast()` — Nick Piggin's original x86 work in 2.6.27 ([LWN: Toward better direct I/O scalability](https://lwn.net/Articles/275808/)):
-
-- It walks the page tables **without taking `mmap_lock`**, relying instead on the fact that a fast-GUP walker runs with **interrupts disabled**. On x86 that blocks the TLB-shootdown IPI that page-table freeing broadcasts, so the tables can't vanish underneath the walk; architectures with hardware TLB broadcast instead **RCU-free** the page tables and the interrupts-off window acts as the RCU read-side critical section ([LWN: a general RCU get_user_pages_fast](https://lwn.net/Articles/616211/); see [RCU in memory management](rcu-mm.md), `follow_page_mask()` and the `gup_fast` machinery in `mm/gup.c`).
-- It speculatively bumps the refcount and then **re-validates** the PTE; if anything changed, it backs out and falls back to the slow, locked path.
-
-This is a textbook lockless-read pattern: optimistic, verify-after, fall back on conflict. It is also the reason GUP interacts so delicately with copy-on-write — a fast walker and a faulting writer can race on the very same PTE.
+カーネルの答えは**ピン留め前のマイグレーション**である。`FOLL_LONGTERM`の要求は、まず対象pageを移動可能なゾーンやCMA領域から通常のメモリへ*移し出そう*とし、その後でピン留めする。マイグレーションに失敗すれば、ピン留めも失敗する（[LWN: Preserving the mobility of ZONE_MOVABLE](https://lwn.net/Articles/843326/)、[prohibit pinning pages in ZONE_MOVABLE](https://lwn.net/Articles/843143/)）。典型的なCMA割り当て失敗が「ここにあるpageが`get_user_pages()`によってピン留めされている」となるのはこのためである。デバイスドライバのDMAバッファがCMAのpageを人質に取っているのだ。この緊張関係は根本的なものである。**移動可能性と長期ピン留めは構造上両立しない**のであり、カーネルはpageごとにどちらを優先するかを選ぶことしかできない。
 
 ---
 
-## Why GUP is a bug magnet: the copy-on-write collision {#why-gup-is-a-bug-magnet-the-copy-on-write-collision}
+## Fast GUP: ロックなしでページテーブルをウォークする {#fast-gup-walking-page-tables-without-the-locks}
 
-Almost every notorious GUP bug is the same shape: **a page was pinned for one purpose while copy-on-write changed what that page *means*.** Two canonical examples (told in full in [Copy-on-Write](cow.md) and the [CVE case studies](war-stories-cves.md)):
+素直なGUPパスは`mmap_lock`を取得し、その下でページテーブルをウォークする。毎秒数百万回のピン留めを行う高IOPSのダイレクトI/Oやio_uringのワークロードにとって、そのロックと完全なウォークは純粋なオーバーヘッドである（[io_uringの固定バッファ](../io-uring/fixed-buffers.md)はまさにそれを償却して消すために存在する）。そこで**ロックレスの高速パス**、`get_user_pages_fast()` / `pin_user_pages_fast()`が存在する。これは2.6.27でのNick Pigginによる元々のx86向けの作業である（[LWN: Toward better direct I/O scalability](https://lwn.net/Articles/275808/)）。
 
-- **Dirty COW (CVE-2016-5195)** — an 11-year-old race where `__get_user_pages()` retried a failed write fault *without* re-asserting `FOLL_WRITE`, so it handed back the original read-only page instead of a COW copy — letting an unprivileged process write read-only files. Fixed by [19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a), which keeps write intent set across all retries.
-- **The vmsplice/COW leak** — a child that pins a shared COW page via GUP, then lets the parent write to it, can observe the parent's later data through the stale pin even after unmapping its own PTE ([LWN: Patching until the COWs come home](https://lwn.net/Articles/849638/)).
+- **`mmap_lock`を取得せずに**ページテーブルをウォークし、代わりにfast GUPのウォーカーが**割り込み禁止**で動作するという事実に依拠する。x86では、これによりページテーブルの解放時にブロードキャストされるTLBシュートダウンのIPIがブロックされるため、ウォークの最中にテーブルが消えることはない。ハードウェアによるTLBブロードキャストを持つアーキテクチャでは、代わりにページテーブルを**RCUで解放**し、割り込み禁止の区間がRCUの読み取り側クリティカルセクションとして機能する（[LWN: a general RCU get_user_pages_fast](https://lwn.net/Articles/616211/)。[メモリ管理におけるRCU](rcu-mm.md)、`follow_page_mask()`、`mm/gup.c`の`gup_fast`の仕組みを参照）。
+- 参照カウントを投機的に増やしてからPTEを**再検証**する。何かが変わっていれば撤退し、ロックを取る低速パスにフォールバックする。
 
-The deep fix was architectural, not a patch: the `FOLL_PIN` split and `PG_anon_exclusive` exist so the COW machinery can *see* long-term pins and refuse to share a pinned page in the first place. GUP earned its reputation as a trap for exactly this class of bug, and the redesign's whole thesis is **make the contract explicit in the API rather than inferred from context** — because inference is what kept failing.
+これはロックレス読み取りの教科書的なパターンである。楽観的に進め、後で検証し、衝突時にはフォールバックする。そしてこれが、GUPがコピーオンライトと非常に微妙な相互作用をする理由でもある。高速パスのウォーカーとフォールト中の書き込み手が、まさに同じPTEをめぐって競合しうるのだ。
 
 ---
 
-## The caller taxonomy {#the-caller-taxonomy}
+## なぜGUPはバグを呼び寄せるのか: コピーオンライトとの衝突 {#why-gup-is-a-bug-magnet-the-copy-on-write-collision}
 
-The [kernel documentation](https://docs.kernel.org/core-api/pin_user_pages.html) classifies GUP callers into cases, which is the fastest way to choose the right call:
+悪名高いGUPのバグのほとんどすべては同じ形をしている。**あるpageがある目的のためにピン留めされている間に、コピーオンライトがそのpageの*意味*を変えてしまった**のだ。代表的な例を2つ挙げる（詳細は[コピーオンライト](cow.md)と[CVE事例研究](war-stories-cves.md)で述べている）。
 
-| Case | Caller | Correct call |
+- **Dirty COW（CVE-2016-5195）**: 11年間潜んでいた競合で、`__get_user_pages()`が失敗した書き込みフォールトを`FOLL_WRITE`を再度表明*せずに*リトライしたため、COWのコピーではなく元の読み取り専用pageを返してしまい、特権のないプロセスが読み取り専用ファイルに書き込めた。[19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a)で修正され、すべてのリトライにわたって書き込みの意図が保持されるようになった。
+- **vmsplice/COWのリーク**: GUPで共有COWのpageをピン留めした子プロセスが、その後親プロセスにそこへ書き込ませると、自身のPTEをアンマップした後でも、古いピンを通じて親の後のデータを観測できてしまう（[LWN: Patching until the COWs come home](https://lwn.net/Articles/849638/)）。
+
+根本的な修正はパッチではなくアーキテクチャによるものだった。`FOLL_PIN`の分割と`PG_anon_exclusive`は、COWの仕組みが長期ピンを*認識*し、そもそもピン留めされたpageを共有しないようにするために存在する。GUPはまさにこの種のバグの罠として評判を得たのであり、再設計の主題全体は**契約を文脈から推論させるのではなくAPIで明示する**ことにある。失敗し続けたのは推論だったからだ。
+
+---
+
+## 呼び出し元の分類 {#the-caller-taxonomy}
+
+[カーネルのドキュメント](https://docs.kernel.org/core-api/pin_user_pages.html)はGUPの呼び出し元をいくつかのケースに分類しており、これが正しい呼び出しを選ぶ最も手早い方法である。
+
+| ケース | 呼び出し元 | 正しい呼び出し |
 |------|--------|--------------|
-| 1 | **Direct I/O** — short-lived buffer, DMA completes soon | `pin_user_pages_fast()` |
-| 2 | **RDMA / long-lived DMA** — buffer registered indefinitely | `pin_user_pages(..., FOLL_LONGTERM)` |
-| 3 | **MMU-notifier users** — track the mapping, re-fetch on invalidation | often no pin needed |
-| 4 | **`struct page` manipulation only** — never touches page *data* | `get_user_pages()` |
-| 5 | **Writing to page data** | `pin_user_pages()` |
+| 1 | **ダイレクトI/O**: 短命なバッファ、DMAはすぐに完了する | `pin_user_pages_fast()` |
+| 2 | **RDMA / 長命なDMA**: バッファが無期限に登録される | `pin_user_pages(..., FOLL_LONGTERM)` |
+| 3 | **MMU notifierの利用者**: マッピングを追跡し、無効化時に再取得する | ピン留めは不要なことが多い |
+| 4 | **`struct page`の操作のみ**: pageの*データ*には一切触れない | `get_user_pages()` |
+| 5 | **pageのデータへの書き込み** | `pin_user_pages()` |
 
-You never pass `FOLL_PIN` yourself — it is internal to GUP and "should not appear at the gup call sites"; you pick the `pin_user_pages*()` wrapper and it sets `FOLL_PIN` for you. The rule of thumb the documentation pushes: if you will access the *data*, use a pin; if the access outlives the syscall, add `FOLL_LONGTERM` and accept the migrate-first cost.
+`FOLL_PIN`を自分で渡すことは決してない。これはGUPの内部のものであり、「should not appear at the gup call sites」（GUPの呼び出し箇所に現れるべきではない）。`pin_user_pages*()`ラッパーを選べば、それが`FOLL_PIN`を設定してくれる。ドキュメントが推す経験則は次のとおりだ。*データ*にアクセスするならピンを使い、アクセスがシステムコールより長く続くなら`FOLL_LONGTERM`を追加して、先にマイグレーションするコストを受け入れる。
 
 ---
 
-## Observing pins {#observing-pins}
+## ピンの観測 {#observing-pins}
 
 ```bash
-# VmPin = pages pinned unmovable; drivers that account long-term pins
-# (RDMA, VFIO, io_uring registered buffers) charge them to pinned_vm here.
-# Note: an ad-hoc get_user_pages() pin is NOT systematically exposed —
-# only callers that explicitly account show up.
+# VmPin = 移動不可としてピン留めされたpage。長期ピンを計上するドライバ
+# （RDMA、VFIO、io_uringの登録バッファ）はここでpinned_vmに課金する。
+# 注意: その場限りのget_user_pages()によるピンは体系的には公開されない —
+# 明示的に計上する呼び出し元だけが現れる。
 grep -i "VmLck\|VmPin" /proc/$$/status
 
-# Watch a device driver's DMA pinning live (VFIO, RDMA, io_uring):
+# デバイスドライバのDMAピン留めをライブで観察する（VFIO、RDMA、io_uring）:
 sudo bpftrace -e 'kprobe:pin_user_pages_remote,
                   kprobe:pin_user_pages_fast { @[probe, comm] = count(); }'
 
-# See GUP in kernel CPU profiles of a direct-I/O / io_uring workload —
-# get_user_pages_fast / unpin_user_pages appear prominently unless the
-# app uses registered/fixed buffers:
+# ダイレクトI/O / io_uringワークロードのカーネルCPUプロファイルでGUPを見る —
+# アプリが登録/固定バッファを使っていなければ、get_user_pages_fast / unpin_user_pages
+# が目立って現れる:
 sudo perf top -e cycles --sort comm,symbol | grep -iE "user_pages"
 
-# CMA allocation failing because a page in the region is pinned?
+# 領域内のpageがピン留めされているためにCMA割り当てが失敗している?
 dmesg | grep -iE "alloc_contig|cma:.*fail|migrat"
 ```
 
 ---
 
-## Common issues {#common-issues}
+## よくある問題 {#common-issues}
 
-**"CMA allocation failed" under memory pressure.** Almost always a page in the CMA region is pinned by an in-flight `get_user_pages()`/DMA and cannot be migrated out. The fix is upstream in the driver (use bounce buffers, or don't long-term-pin CMA pages), not in tuning.
+**メモリ逼迫時に「CMA allocation failed」が出る。** ほぼ常に、CMA領域内のpageが処理中の`get_user_pages()`/DMAによってピン留めされており、移し出せないことが原因である。修正はチューニングではなく、ドライバ側の根本的な対処（バウンスバッファを使う、あるいはCMAのpageを長期ピン留めしない）である。
 
-**RDMA/VFIO registration fails with `-ENOMEM` despite free memory.** `FOLL_LONGTERM` migrate-before-pin couldn't relocate the page out of `ZONE_MOVABLE`, or you've hit `RLIMIT_MEMLOCK`. Long-term pins count against locked-memory limits precisely because they are unreclaimable.
+**空きメモリがあるのにRDMA/VFIOの登録が`-ENOMEM`で失敗する。** `FOLL_LONGTERM`のピン留め前マイグレーションがpageを`ZONE_MOVABLE`の外へ再配置できなかったか、`RLIMIT_MEMLOCK`に達している。長期ピンは回収不能であるからこそ、ロック済みメモリの上限に計上される。
 
-**A device reads stale/garbage data after fork.** A classic pin-vs-COW interaction: pages pinned before a `fork()` can diverge from what the child sees once COW kicks in. Modern kernels mitigate this — pinned anonymous pages are copied *eagerly* at fork rather than shared COW (Peter Xu's early-COW-for-pinned-pages, 5.9), and 5.19's `PG_anon_exclusive` made GUP-vs-COW reliable in general — but the underlying hazard is why long-term DMA buffers should be set up with this in mind.
+**fork後にデバイスが古い/ゴミのデータを読む。** ピンとCOWの古典的な相互作用である。`fork()`の前にピン留めされたpageは、COWが働き始めると子プロセスから見えるものと食い違いうる。現代のカーネルはこれを緩和している。ピン留めされた無名pageはfork時にCOWで共有されるのではなく*即座に*コピーされ（Peter Xuによるピン留めpageの早期COW、5.9）、5.19の`PG_anon_exclusive`がGUPとCOWの関係を全般的に信頼できるものにした。しかし根底にある危険性があるため、長期のDMAバッファはこの点を念頭に置いて設定すべきである。
 
 ---
 
-## Version notes {#version-notes}
+## バージョンに関する注記 {#version-notes}
 
-| Change | Linux version | Why it matters here |
+| 変更 | Linuxバージョン | ここで重要な理由 |
 |--------|--------------|---------------------|
-| `get_user_pages_fast()` lockless path | 2.6.27 ([8174c430e445](https://git.kernel.org/linus/8174c430e445)) | The high-throughput DMA/direct-I/O fast path |
-| Dirty COW fix (write intent kept across retries) | 4.8.3 / 4.9 ([19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a)) | Closed CVE-2016-5195 (merged Oct 2016) |
-| `pin_user_pages()` + `FOLL_PIN` | 5.6 ([eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79)) | DMA intent made visible via the pin bias |
-| `pin_user_pages_remote()` replaces `get_user_pages_remote()` for DMA | 5.6 | VFIO/RDMA switch to the pin API |
-| Prohibit long-term pins in `ZONE_MOVABLE`; migrate-first | 5.11–5.12 | Preserves movability of CMA/movable zones |
-| Early-COW for pinned pages at fork | 5.9 | Pinned anon pages copied eagerly instead of shared |
-| `PG_anon_exclusive` — reliable COW vs pin | 5.19 ([LWN](https://lwn.net/Articles/887178/)) | The architectural end of the GUP/COW war |
+| `get_user_pages_fast()`のロックレスパス | 2.6.27（[8174c430e445](https://git.kernel.org/linus/8174c430e445)） | 高スループットのDMA/ダイレクトI/O向け高速パス |
+| Dirty COWの修正（書き込みの意図をリトライ間で保持） | 4.8.3 / 4.9（[19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a)） | CVE-2016-5195を塞いだ（2016年10月マージ） |
+| `pin_user_pages()` + `FOLL_PIN` | 5.6（[eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79)） | ピンのバイアスによりDMAの意図が見えるようになった |
+| DMA用に`pin_user_pages_remote()`が`get_user_pages_remote()`を置き換え | 5.6 | VFIO/RDMAがピンAPIへ移行 |
+| `ZONE_MOVABLE`での長期ピンを禁止、先にマイグレーション | 5.11–5.12 | CMA/移動可能ゾーンの移動可能性を保つ |
+| fork時のピン留めpageの早期COW | 5.9 | ピン留めされた無名pageを共有せず即座にコピー |
+| `PG_anon_exclusive`: COWとピンの信頼できる関係 | 5.19（[LWN](https://lwn.net/Articles/887178/)） | GUP/COW戦争のアーキテクチャ上の決着 |
 
 ---
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source & documentation {#kernel-source-documentation}
+### カーネルソースとドキュメント {#kernel-source-documentation}
 
-- [Documentation/core-api/pin_user_pages.rst](https://docs.kernel.org/core-api/pin_user_pages.html) — the authoritative contract: FOLL_GET vs FOLL_PIN, the caller cases, the counting bias
-- [mm/gup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c) — `get_user_pages*`, `pin_user_pages*`, `follow_page_mask()`, and the `gup_fast` lockless walk
-- [include/linux/mm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h) — the `FOLL_*` flag definitions
+- [Documentation/core-api/pin_user_pages.rst](https://docs.kernel.org/core-api/pin_user_pages.html): 権威ある契約。FOLL_GET対FOLL_PIN、呼び出し元のケース、カウントのバイアス
+- [mm/gup.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c): `get_user_pages*`、`pin_user_pages*`、`follow_page_mask()`、そして`gup_fast`のロックレスウォーク
+- [include/linux/mm.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm.h): `FOLL_*`フラグの定義
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Copy-on-Write](cow.md) — the GUP/COW interaction in full, and `PG_anon_exclusive`
-- [CVE Case Studies](war-stories-cves.md) — Dirty COW and the FOLL_PIN redesign as incident history
-- [io_uring Fixed Buffers](../io-uring/fixed-buffers.md) — pinning once to erase per-I/O GUP cost
-- [VFIO Internals](../iommu/vfio-internals.md) — `pin_user_pages_remote()` for device DMA
-- [CMA](cma.md) — why pinned pages are the top cause of CMA allocation failure
-- [RCU in Memory Management](rcu-mm.md) — the lockless page-table walk fast GUP relies on
-- [The Kernel Address Space](kernel-address-space.md) — where the pages GUP returns actually live (the direct map)
+- [コピーオンライト](cow.md): GUP/COWの相互作用の全体像と`PG_anon_exclusive`
+- [CVE事例研究](war-stories-cves.md): インシデントの歴史としてのDirty COWとFOLL_PINの再設計
+- [io_uringの固定バッファ](../io-uring/fixed-buffers.md): 一度ピン留めしてI/OごとのGUPコストを消す
+- [VFIOの内部構造](../iommu/vfio-internals.md): デバイスDMAのための`pin_user_pages_remote()`
+- [CMA](cma.md): なぜピン留めされたpageがCMA割り当て失敗の最大の原因なのか
+- [メモリ管理におけるRCU](rcu-mm.md): fast GUPが依拠するロックレスなページテーブルウォーク
+- [カーネルアドレス空間](kernel-address-space.md): GUPが返すpageが実際にどこにあるか（ダイレクトマップ）
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Explicit pinning of user-space pages](https://lwn.net/Articles/807108/) — John Hubbard introduces `pin_user_pages()` and the counting bias
-- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) — Vlastimil Babka on the pin-vs-COW data-leak class
-- [Preserving the mobility of ZONE_MOVABLE](https://lwn.net/Articles/843326/) — migrate-before-pin and why long-term pins threaten movable zones
-- [Reliable GUP pins of anonymous pages](https://lwn.net/Articles/887178/) — David Hildenbrand on `PG_anon_exclusive` and ending the GUP/COW war
-- [Toward better direct I/O scalability](https://lwn.net/Articles/275808/) — the 2008 origin of lockless `get_user_pages_fast()`
-- [A general RCU get_user_pages_fast](https://lwn.net/Articles/616211/) — RCU-freed page tables for architectures without IPI TLB shootdown
+- [Explicit pinning of user-space pages](https://lwn.net/Articles/807108/): John Hubbardが`pin_user_pages()`とカウントのバイアスを紹介
+- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/): Vlastimil Babkaによるピン対COWのデータリーク類
+- [Preserving the mobility of ZONE_MOVABLE](https://lwn.net/Articles/843326/): ピン留め前のマイグレーションと、なぜ長期ピンが移動可能ゾーンを脅かすのか
+- [Reliable GUP pins of anonymous pages](https://lwn.net/Articles/887178/): David Hildenbrandによる`PG_anon_exclusive`とGUP/COW戦争の終結
+- [Toward better direct I/O scalability](https://lwn.net/Articles/275808/): ロックレスな`get_user_pages_fast()`の2008年の起源
+- [A general RCU get_user_pages_fast](https://lwn.net/Articles/616211/): IPIによるTLBシュートダウンを持たないアーキテクチャのためのRCU解放されたページテーブル

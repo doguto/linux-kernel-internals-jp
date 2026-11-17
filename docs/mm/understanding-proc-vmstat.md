@@ -1,12 +1,12 @@
-# Understanding /proc/vmstat {#understanding-procvmstat}
+# /proc/vmstatを理解する {#understanding-procvmstat}
 
-> Practical guide to using kernel memory management counters
+> カーネルのメモリ管理カウンタを使うための実践ガイド
 
-*This is a scenario-based diagnostic guide. For a field-by-field reference, see [/proc/vmstat reference](proc-vmstat.md).*
+*これはシナリオに基づく診断ガイドである。フィールドごとのリファレンスについては[/proc/vmstatリファレンス](proc-vmstat.md)を参照してほしい。*
 
-## What Is /proc/vmstat? {#what-is-procvmstat}
+## /proc/vmstatとは何か? {#what-is-procvmstat}
 
-`/proc/vmstat` is a pseudo-file that exposes the kernel's internal memory management counters. Every time the kernel allocates a page, reclaims memory, swaps, compacts, or handles a fault, it increments a counter. `/proc/vmstat` lets you read all of them.
+`/proc/vmstat`は、カーネル内部のメモリ管理カウンタを公開する疑似ファイルである。カーネルはpageを割り当てる、メモリを回収する、スワップする、コンパクションする、フォールトを処理するたびに、カウンタを1つ増やす。`/proc/vmstat`を使えば、それらすべてを読むことができる。
 
 ```
 $ cat /proc/vmstat | head -20
@@ -31,35 +31,35 @@ pgsteal_kswapd 33456780
 pgsteal_direct 1134567
 ```
 
-The file lives in [`mm/vmstat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmstat.c) and aggregates per-CPU counters across all nodes and zones.
+このファイルの実装は[`mm/vmstat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmstat.c)にあり、すべてのノードとゾーンにわたってCPUごとのカウンタを集計する。
 
-## The Critical Distinction: Gauges vs Counters {#the-critical-distinction-gauges-vs-counters}
+## 決定的な区別: ゲージとカウンタ {#the-critical-distinction-gauges-vs-counters}
 
-This is the single most important thing to understand about `/proc/vmstat`. There are two fundamentally different types of values:
+これは`/proc/vmstat`について理解すべき最も重要な点である。根本的に異なる2種類の値が存在する。
 
-### Gauges (`nr_*`) — Current State {#gauges-nr_-current-state}
+### ゲージ（`nr_*`）: 現在の状態 {#gauges-nr_-current-state}
 
-Gauges report the **current** value. They go up and down. Reading them once gives you useful information.
-
-```
-nr_free_pages 234567       ← Right now, 234567 pages are free
-nr_active_anon 123456      ← Right now, 123456 anonymous pages are active
-nr_slab_reclaimable 56789  ← Right now, 56789 slab pages can be reclaimed
-```
-
-Think of a gauge like a thermometer: you read it and you know the temperature *right now*.
-
-### Counters (`pg*`, `pswp*`, `thp_*`, etc.) — Monotonic Since Boot {#counters-pg-pswp-thp_-etc-monotonic-since-boot}
-
-Counters report the **cumulative total** since the system booted. They only go up. A single reading tells you almost nothing — you need **two readings and a time delta** to compute a rate.
+ゲージは**現在の**値を報告する。値は増えたり減ったりする。1回読むだけで有用な情報が得られる。
 
 ```
-pgfault 987654321          ← 987 million page faults since boot
-pgmajfault 12345           ← 12,345 major faults since boot
-pswpout 567890             ← 567,890 pages swapped out since boot
+nr_free_pages 234567       ← 今この瞬間、234567 pageが空いている
+nr_active_anon 123456      ← 今この瞬間、123456の無名pageがアクティブである
+nr_slab_reclaimable 56789  ← 今この瞬間、56789のslab pageが回収可能である
 ```
 
-Think of a counter like an odometer: knowing you've driven 50,000 miles total is less useful than knowing you drove 100 miles in the last hour.
+ゲージは温度計のようなものだと考えればよい。読めば*今の*温度がわかる。
+
+### カウンタ（`pg*`、`pswp*`、`thp_*`など）: ブート以降単調増加 {#counters-pg-pswp-thp_-etc-monotonic-since-boot}
+
+カウンタはシステムのブート以降の**累積合計**を報告する。値は増える一方である。1回読んだだけではほとんど何もわからない。レートを計算するには**2回の読み取りと時間差**が必要である。
+
+```
+pgfault 987654321          ← ブート以降9億8700万回のページフォールト
+pgmajfault 12345           ← ブート以降12,345回のメジャーフォールト
+pswpout 567890             ← ブート以降567,890 pageがスワップアウトされた
+```
+
+カウンタは走行距離計のようなものだと考えればよい。合計で5万マイル走ったと知るより、直近1時間で100マイル走ったと知るほうが役に立つ。
 
 ```
 Gauges (nr_*)              Counters (pg*, pswp*, thp_*, etc.)
@@ -75,57 +75,57 @@ Gauges (nr_*)              Counters (pg*, pswp*, thp_*, etc.)
 └──────────────┘           └──────────────┘
 ```
 
-!!! warning "The most common mistake"
-    Seeing `pgmajfault 50000` and panicking. That is 50,000 major faults **since boot** — possibly weeks ago. What matters is the *rate*: how many per second right now?
+!!! warning "最もよくある間違い"
+    `pgmajfault 50000`を見てパニックになること。これは**ブート以降**（おそらく何週間も前から）の50,000回のメジャーフォールトである。重要なのは*レート*、つまり今この瞬間に毎秒何回起きているかである。
 
-## Key Counters by Scenario {#key-counters-by-scenario}
+## シナリオ別の主要カウンタ {#key-counters-by-scenario}
 
-### Memory Pressure {#memory-pressure}
+### メモリ逼迫 {#memory-pressure}
 
-When you suspect the system is under memory pressure, these are the counters to watch:
+システムがメモリ逼迫下にあると疑われるときに注目すべきカウンタは次のとおりである。
 
-| Counter | Type | What It Means |
+| カウンタ | 種類 | 意味 |
 |---------|------|---------------|
-| `allocstall_normal` | counter | A process blocked in direct reclaim for Normal zone |
-| `allocstall_movable` | counter | A process blocked in direct reclaim for Movable zone |
-| `allocstall_dma32` | counter | A process blocked in direct reclaim for DMA32 zone |
-| `pgscan_direct` | counter | Pages scanned by direct reclaim (process is stalled) |
-| `pgscan_kswapd` | counter | Pages scanned by kswapd (background, healthy) |
-| `pgmajfault` | counter | Major page faults (required disk I/O) |
-| `nr_free_pages` | gauge | Current free pages |
+| `allocstall_normal` | カウンタ | プロセスがNormalゾーンのために直接回収でブロックした |
+| `allocstall_movable` | カウンタ | プロセスがMovableゾーンのために直接回収でブロックした |
+| `allocstall_dma32` | カウンタ | プロセスがDMA32ゾーンのために直接回収でブロックした |
+| `pgscan_direct` | カウンタ | 直接回収でスキャンされたpage（プロセスは停止している） |
+| `pgscan_kswapd` | カウンタ | kswapdでスキャンされたpage（バックグラウンド、健全） |
+| `pgmajfault` | カウンタ | メジャーページフォールト（ディスクI/Oが必要だった） |
+| `nr_free_pages` | ゲージ | 現在の空きpage |
 
-**What to look for**:
+**注目すべき点**:
 
-- `allocstall_*` increasing means processes are **blocking** on memory allocation. This is the clearest signal of memory pressure.
-- A rising `pgscan_direct` rate means [direct reclaim](reclaim.md) is active — kswapd can't keep up.
-- Compare `pgscan_kswapd` vs `pgscan_direct`. In a healthy system, almost all scanning is done by kswapd. If direct reclaim dominates, you have a problem.
+- `allocstall_*`の増加は、プロセスがメモリ割り当てで**ブロックしている**ことを意味する。これはメモリ逼迫の最も明確なシグナルである。
+- `pgscan_direct`のレートの上昇は、[直接回収](reclaim.md)が動いていること、つまりkswapdが追いつけていないことを意味する。
+- `pgscan_kswapd`と`pgscan_direct`を比較する。健全なシステムでは、スキャンのほとんどすべてはkswapdが行う。直接回収が支配的なら問題がある。
 
-### Swap Activity {#swap-activity}
+### スワップの活動 {#swap-activity}
 
-| Counter | Type | What It Means |
+| カウンタ | 種類 | 意味 |
 |---------|------|---------------|
-| `pswpin` | counter | Pages swapped in from disk |
-| `pswpout` | counter | Pages swapped out to disk |
-| `nr_zone_inactive_anon` | gauge | Anonymous pages on inactive LRU (swap candidates) |
+| `pswpin` | カウンタ | ディスクからスワップインされたpage |
+| `pswpout` | カウンタ | ディスクへスワップアウトされたpage |
+| `nr_zone_inactive_anon` | ゲージ | 非アクティブLRU上の無名page（スワップの候補） |
 
-**What to look for**:
+**注目すべき点**:
 
-- A sustained `pswpout` rate means the system is actively [swapping out](swapping.md) pages. Some swap-out is normal under pressure.
-- A sustained `pswpin` rate means the system is swapping pages **back in** — the pages it evicted are being used again. This is the painful case: it means the working set doesn't fit in RAM.
-- High `pswpin` + high `pswpout` simultaneously = **swap thrashing**. The system is moving the same pages back and forth.
+- `pswpout`のレートが持続しているのは、システムがpageを活発に[スワップアウト](swapping.md)していることを意味する。逼迫下ではある程度のスワップアウトは正常である。
+- `pswpin`のレートが持続しているのは、システムがpageを**スワップインして戻している**こと、つまり追い出したpageが再び使われていることを意味する。これは痛いケースである。ワーキングセットがRAMに収まっていないことを意味するからだ。
+- 高い`pswpin`と高い`pswpout`が同時に起きている = **スワップスラッシング**。システムは同じpageを行ったり来たりさせている。
 
-### Reclaim Efficiency {#reclaim-efficiency}
+### 回収の効率 {#reclaim-efficiency}
 
-| Counter | Type | What It Means |
+| カウンタ | 種類 | 意味 |
 |---------|------|---------------|
-| `pgsteal_kswapd` | counter | Pages successfully reclaimed by kswapd |
-| `pgsteal_direct` | counter | Pages successfully reclaimed by direct reclaim |
-| `pgscan_kswapd` | counter | Pages scanned by kswapd |
-| `pgscan_direct` | counter | Pages scanned by direct reclaim |
+| `pgsteal_kswapd` | カウンタ | kswapdが回収に成功したpage |
+| `pgsteal_direct` | カウンタ | 直接回収が回収に成功したpage |
+| `pgscan_kswapd` | カウンタ | kswapdがスキャンしたpage |
+| `pgscan_direct` | カウンタ | 直接回収がスキャンしたpage |
 
-**Reclaim efficiency** = `pgsteal / pgscan`
+**回収効率** = `pgsteal / pgscan`
 
-This ratio tells you how productive reclaim is. If the kernel scans 1000 pages to reclaim 100, the efficiency is 10% — most pages are in use and can't be freed. That's bad.
+この比率は回収がどれだけ生産的かを示す。カーネルが100 pageを回収するために1000 pageをスキャンしているなら、効率は10%である。ほとんどのpageは使用中で解放できない。これは悪い状態である。
 
 ```
 Efficiency = pgsteal_kswapd / pgscan_kswapd
@@ -135,72 +135,72 @@ Efficiency = pgsteal_kswapd / pgscan_kswapd
   < 10%   Bad — the system is desperately scanning
 ```
 
-These thresholds are operational heuristics, not kernel-defined values. Treat them as rough guidelines — what matters most is the *trend* (efficiency dropping over time) rather than any single value.
+これらのしきい値は運用上の経験則であり、カーネルが定めた値ではない。大まかな目安として扱うこと。最も重要なのは個々の値ではなく、*傾向*（時間とともに効率が下がっているか）である。
 
-!!! note "Why low efficiency matters"
-    Low reclaim efficiency means the kernel is doing a lot of work (scanning LRU lists, checking page flags, taking locks) for little gain. This wastes CPU and increases allocation latency.
+!!! note "なぜ低い効率が問題なのか"
+    回収効率が低いということは、カーネルがわずかな成果のために多くの作業（LRUリストのスキャン、pageフラグの確認、ロックの取得）をしていることを意味する。これはCPUを浪費し、割り当てのレイテンシを増やす。
 
-### THP (Transparent Huge Pages) Health {#thp-transparent-huge-pages-health}
+### THP（Transparent Huge Pages）の健全性 {#thp-transparent-huge-pages-health}
 
-| Counter | Type | What It Means |
+| カウンタ | 種類 | 意味 |
 |---------|------|---------------|
-| `thp_fault_alloc` | counter | Successful THP allocations on page fault |
-| `thp_fault_fallback` | counter | THP allocation failed, fell back to 4KB pages |
-| `thp_collapse_alloc` | counter | Successful THP collapses (khugepaged) |
-| `thp_collapse_alloc_failed` | counter | Failed THP collapses |
-| `thp_split_page` | counter | THPs that had to be split back to 4KB |
+| `thp_fault_alloc` | カウンタ | ページフォールト時のTHP割り当ての成功 |
+| `thp_fault_fallback` | カウンタ | THP割り当てが失敗し、4KBのpageにフォールバックした |
+| `thp_collapse_alloc` | カウンタ | THPへの集約（collapse）の成功（khugepaged） |
+| `thp_collapse_alloc_failed` | カウンタ | THPへの集約の失敗 |
+| `thp_split_page` | カウンタ | 4KBに分割し直さなければならなかったTHP |
 
-**What to look for**:
+**注目すべき点**:
 
-- The ratio `thp_fault_fallback / (thp_fault_alloc + thp_fault_fallback)` is the [THP](thp.md) failure rate. High failure rate means the system can't find contiguous 2MB chunks.
-- Rising `thp_split_page` means THPs are being broken up — possibly due to partial munmap or memory pressure.
-- If `thp_collapse_alloc_failed` is rising, khugepaged is trying to promote 4KB pages to THPs but failing.
+- 比率`thp_fault_fallback / (thp_fault_alloc + thp_fault_fallback)`が[THP](thp.md)の失敗率である。失敗率が高いということは、システムが連続した2MBの塊を見つけられないことを意味する。
+- `thp_split_page`の上昇は、THPが分割されていることを意味する。部分的なmunmapやメモリ逼迫が原因の可能性がある。
+- `thp_collapse_alloc_failed`が上昇しているなら、khugepagedが4KBのpageをTHPに昇格させようとして失敗している。
 
-### Compaction Health {#compaction-health}
+### コンパクションの健全性 {#compaction-health}
 
-| Counter | Type | What It Means |
+| カウンタ | 種類 | 意味 |
 |---------|------|---------------|
-| `compact_stall` | counter | A process blocked waiting for compaction |
-| `compact_fail` | counter | Compaction was attempted but failed |
-| `compact_success` | counter | Compaction succeeded |
-| `compact_migrate_scanned` | counter | Pages scanned for migration during compaction |
-| `compact_free_scanned` | counter | Free pages scanned during compaction |
+| `compact_stall` | カウンタ | プロセスがコンパクションを待ってブロックした |
+| `compact_fail` | カウンタ | コンパクションを試みたが失敗した |
+| `compact_success` | カウンタ | コンパクションが成功した |
+| `compact_migrate_scanned` | カウンタ | コンパクション中にマイグレーションのためにスキャンされたpage |
+| `compact_free_scanned` | カウンタ | コンパクション中にスキャンされた空きpage |
 
-**What to look for**:
+**注目すべき点**:
 
-- `compact_stall` increasing means processes are **blocking** on [compaction](compaction.md). This adds latency to allocations.
-- The failure rate `compact_fail / (compact_fail + compact_success)` tells you how often compaction works. High failure rate means memory is too fragmented.
-- A high `compact_migrate_scanned` rate with high `compact_fail` means the kernel is doing expensive work (scanning, migrating pages) without producing contiguous blocks.
+- `compact_stall`の増加は、プロセスが[コンパクション](compaction.md)で**ブロックしている**ことを意味する。これは割り当てにレイテンシを加える。
+- 失敗率`compact_fail / (compact_fail + compact_success)`は、コンパクションがどれくらいの頻度でうまくいくかを示す。失敗率が高いということは、メモリの断片化がひどすぎることを意味する。
+- `compact_migrate_scanned`のレートが高く、かつ`compact_fail`も高い場合、カーネルは連続ブロックを生み出せないまま高くつく作業（スキャン、pageのマイグレーション）をしている。
 
-## Computing Rates from Counter Deltas {#computing-rates-from-counter-deltas}
+## カウンタの差分からレートを計算する {#computing-rates-from-counter-deltas}
 
-Since counters are monotonic, you need two samples and a time interval to compute a rate:
+カウンタは単調増加なので、レートを計算するには2つのサンプルと時間間隔が必要である。
 
 ```
 rate = (value_t2 - value_t1) / (t2 - t1)
 ```
 
-### Manual two-sample method {#manual-two-sample-method}
+### 手動で2回サンプリングする方法 {#manual-two-sample-method}
 
 ```bash
-# Sample 1
+# サンプル1
 T1=$(date +%s)
 V1=$(awk '/^pgmajfault / {print $2}' /proc/vmstat)
 
 sleep 10
 
-# Sample 2
+# サンプル2
 T2=$(date +%s)
 V2=$(awk '/^pgmajfault / {print $2}' /proc/vmstat)
 
-# Rate
+# レート
 echo "Major faults/sec: $(( (V2 - V1) / (T2 - T1) ))"
 ```
 
-### Watch multiple counters over time {#watch-multiple-counters-over-time}
+### 複数のカウンタを経時的に監視する {#watch-multiple-counters-over-time}
 
 ```bash
-# Print key counters every 5 seconds with deltas
+# 主要カウンタを5秒ごとに差分付きで表示する
 while true; do
     awk '
     /^(pgscan_direct|pgsteal_direct|allocstall|pgmajfault|pswpin|pswpout) / {
@@ -211,11 +211,11 @@ while true; do
 done
 ```
 
-A cleaner approach that computes actual deltas:
+実際の差分を計算する、よりきれいな方法は次のとおりである。
 
 ```bash
 #!/bin/bash
-# vmstat-delta.sh — show per-second rates for key counters
+# vmstat-delta.sh — 主要カウンタの毎秒レートを表示する
 INTERVAL=${1:-5}
 COUNTERS="pgscan_direct pgsteal_direct pgscan_kswapd pgsteal_kswapd allocstall_normal pgmajfault pswpin pswpout"
 
@@ -242,11 +242,11 @@ while true; do
 done
 ```
 
-## Integration with Common Tools {#integration-with-common-tools}
+## 一般的なツールとの連携 {#integration-with-common-tools}
 
-### vmstat command {#vmstat-command}
+### vmstatコマンド {#vmstat-command}
 
-The `vmstat` command (from procps-ng) already reads `/proc/vmstat` internally, but it shows a simplified, aggregated view:
+（procps-ngの）`vmstat`コマンドは内部ですでに`/proc/vmstat`を読んでいるが、簡略化・集約されたビューを表示する。
 
 ```bash
 $ vmstat 1
@@ -255,43 +255,43 @@ procs -----------memory---------- ---swap-- -----io---- -system-- ------cpu-----
  1  0  12340 234567  89012 456789    0    0    12    34  567  890  5  2 92  1  0
 ```
 
-| vmstat column | /proc/vmstat source |
+| vmstatの列 | /proc/vmstatのソース |
 |---------------|---------------------|
-| `si` (swap in) | `pswpin` delta |
-| `so` (swap out) | `pswpout` delta |
-| `free` | `nr_free_pages` * page size |
+| `si`（スワップイン） | `pswpin`の差分 |
+| `so`（スワップアウト） | `pswpout`の差分 |
+| `free` | `nr_free_pages` * pageサイズ |
 
-`vmstat` is good for a quick overview. `/proc/vmstat` gives you the full picture — including counters like `allocstall_*`, `pgscan_direct`, and THP stats that `vmstat` doesn't expose.
+`vmstat`は手早く概要をつかむのに適している。`/proc/vmstat`は、`allocstall_*`、`pgscan_direct`、THPの統計など`vmstat`が公開しないカウンタも含めた全体像を与えてくれる。
 
-### sar (sysstat) {#sar-sysstat}
+### sar（sysstat） {#sar-sysstat}
 
-`sar` collects and reports `/proc/vmstat` data over time:
+`sar`は`/proc/vmstat`のデータを経時的に収集して報告する。
 
 ```bash
-# Page faults and major faults per second
+# 毎秒のページフォールトとメジャーフォールト
 sar -B 1
 
-# Swap activity per second
+# 毎秒のスワップ活動
 sar -W 1
 
-# Historical data (from collected logs)
+# 過去のデータ（収集されたログから）
 sar -B -f /var/log/sa/sa28
 ```
 
-| sar -B field | /proc/vmstat source |
+| sar -Bのフィールド | /proc/vmstatのソース |
 |--------------|---------------------|
-| `pgscank/s` | `pgscan_kswapd` delta |
-| `pgscand/s` | `pgscan_direct` delta |
-| `pgsteal/s` | `pgsteal_kswapd` + `pgsteal_direct` delta |
-| `fault/s` | `pgfault` delta |
-| `majflt/s` | `pgmajfault` delta |
+| `pgscank/s` | `pgscan_kswapd`の差分 |
+| `pgscand/s` | `pgscan_direct`の差分 |
+| `pgsteal/s` | `pgsteal_kswapd` + `pgsteal_direct`の差分 |
+| `fault/s` | `pgfault`の差分 |
+| `majflt/s` | `pgmajfault`の差分 |
 
-!!! tip "sar for historical analysis"
-    If you have `sysstat` installed and the `sa1`/`sa2` collectors running, `sar` lets you look back at past memory pressure events. This is invaluable for post-incident analysis.
+!!! tip "過去の分析にはsar"
+    `sysstat`がインストールされ、`sa1`/`sa2`のコレクタが動いていれば、`sar`を使って過去のメモリ逼迫イベントを振り返ることができる。これはインシデント後の分析で非常に役立つ。
 
-### Monitoring systems (Prometheus, Grafana, etc.) {#monitoring-systems-prometheus-grafana-etc}
+### 監視システム（Prometheus、Grafanaなど） {#monitoring-systems-prometheus-grafana-etc}
 
-Node Exporter (Prometheus) exposes `/proc/vmstat` counters directly under the `node_vmstat_*` metric family:
+Node Exporter（Prometheus）は、`/proc/vmstat`のカウンタを`node_vmstat_*`というメトリクスファミリーの下で直接公開する。
 
 ```
 node_vmstat_pgscan_direct
@@ -304,48 +304,48 @@ node_vmstat_thp_fault_alloc
 node_vmstat_thp_fault_fallback
 ```
 
-Since these are exposed as Prometheus counters, you use `rate()` or `irate()` to compute per-second rates:
+これらはPrometheusのカウンタとして公開されるので、毎秒のレートを計算するには`rate()`や`irate()`を使う。
 
 ```promql
-# Direct reclaim scan rate (pages/sec)
+# 直接回収のスキャンレート（page/秒）
 rate(node_vmstat_pgscan_direct[5m])
 
-# Reclaim efficiency
+# 回収効率
 rate(node_vmstat_pgsteal_kswapd[5m]) / rate(node_vmstat_pgscan_kswapd[5m])
 
-# THP failure rate
+# THPの失敗率
 rate(node_vmstat_thp_fault_fallback[5m])
 / (rate(node_vmstat_thp_fault_alloc[5m]) + rate(node_vmstat_thp_fault_fallback[5m]))
 
-# Alert: sustained direct reclaim
+# アラート: 持続的な直接回収
 rate(node_vmstat_pgscan_direct[5m]) > 1000
 ```
 
-## Practical One-Liners {#practical-one-liners}
+## 実用的なワンライナー {#practical-one-liners}
 
-### Is the system under memory pressure right now? {#is-the-system-under-memory-pressure-right-now}
+### システムは今メモリ逼迫下にあるか? {#is-the-system-under-memory-pressure-right-now}
 
 ```bash
-# Check if direct reclaim or allocation stalls are happening
-# Run twice with a gap, look for increasing values
+# 直接回収や割り当てのストールが起きているか確認する
+# 間隔を空けて2回実行し、値が増えているかを見る
 grep -E '^(allocstall|pgscan_direct)' /proc/vmstat
 ```
 
-If `allocstall_*` values are increasing between reads, processes are stalling on memory.
+読み取りの間で`allocstall_*`の値が増えていれば、プロセスはメモリでストールしている。
 
-### Is the system swap-thrashing? {#is-the-system-swap-thrashing}
+### システムはスワップスラッシングしているか? {#is-the-system-swap-thrashing}
 
 ```bash
-# Watch swap in/out rates (pages/sec)
+# スワップイン/アウトのレートを監視する（page/秒）
 watch -n1 "grep -E '^(pswpin|pswpout)' /proc/vmstat"
 ```
 
-Both increasing together means pages are being evicted and faulted back repeatedly.
+両方がそろって増えていれば、pageが追い出されてはフォールトで戻されることを繰り返している。
 
-### How efficient is page reclaim? {#how-efficient-is-page-reclaim}
+### pageの回収はどれくらい効率的か? {#how-efficient-is-page-reclaim}
 
 ```bash
-# Reclaim efficiency snapshot
+# 回収効率のスナップショット
 awk '
 /^pgsteal_kswapd/  { steal += $2 }
 /^pgsteal_direct/  { steal += $2 }
@@ -358,7 +358,7 @@ END {
 }' /proc/vmstat
 ```
 
-### Are THPs working or falling back? {#are-thps-working-or-falling-back}
+### THPは機能しているか、それともフォールバックしているか? {#are-thps-working-or-falling-back}
 
 ```bash
 awk '
@@ -372,10 +372,10 @@ END {
 }' /proc/vmstat
 ```
 
-### Quick memory pressure dashboard {#quick-memory-pressure-dashboard}
+### 簡易メモリ逼迫ダッシュボード {#quick-memory-pressure-dashboard}
 
 ```bash
-# One-shot summary of key indicators
+# 主要指標の1回限りの要約
 awk '
 /^nr_free_pages /          { printf "Free pages:          %d (%.0f MB)\n", $2, $2*4/1024 }
 /^nr_zone_inactive_anon /  { printf "Inactive anon:       %d (%.0f MB)\n", $2, $2*4/1024 }
@@ -389,11 +389,11 @@ awk '
 ' /proc/vmstat
 ```
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Page Reclaim](reclaim.md) — how the kernel decides which pages to free
-- [What happens during swapping](swapping.md) — the swap-out and swap-in paths
-- [Transparent Huge Pages](thp.md) — 2MB page allocation and management
-- [Compaction](compaction.md) — how the kernel defragments memory
-- [Running out of memory](oom.md) — what happens when reclaim fails
-- [`mm/vmstat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmstat.c) — kernel source for /proc/vmstat
+- [pageの回収](reclaim.md): カーネルがどのpageを解放するかをどう決めるか
+- [スワッピング中に何が起きるか](swapping.md): スワップアウトとスワップインのパス
+- [Transparent Huge Pages](thp.md): 2MBのpageの割り当てと管理
+- [コンパクション](compaction.md): カーネルがメモリの断片化をどう解消するか
+- [メモリ不足](oom.md): 回収が失敗したときに何が起きるか
+- [`mm/vmstat.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmstat.c): /proc/vmstatのカーネルソース

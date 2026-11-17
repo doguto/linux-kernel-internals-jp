@@ -1,10 +1,10 @@
-# When does copy-on-write break? {#when-does-copy-on-write-break}
+# コピーオンライトはいつ破れるのか? {#when-does-copy-on-write-break}
 
-> COW is elegant in theory, but the edge cases will surprise you
+> COWは理論上はエレガントだが、エッジケースには驚かされる
 
-## The COW promise {#the-cow-promise}
+## COWの約束 {#the-cow-promise}
 
-Copy-on-write (COW) is one of the kernel's most important optimizations. When you `fork()`, the child doesn't get a physical copy of the parent's memory - both processes share the same pages, marked read-only in the [page tables](page-tables.md). Only when either process writes does the kernel copy the page.
+コピーオンライト（COW）はカーネルの最も重要な最適化の1つである。`fork()`したとき、子プロセスは親のメモリの物理的なコピーを受け取らない。両プロセスは同じpageを共有し、それらは[ページテーブル](page-tables.md)上で読み取り専用とマークされる。どちらかのプロセスが書き込んだときにだけ、カーネルはそのpageをコピーする。
 
 ```
 After fork():
@@ -23,41 +23,41 @@ After fork():
          └─────────────┘
 ```
 
-This is why `fork()` is fast - no copying, just page table manipulation. But when does this sharing actually break?
+これが`fork()`が速い理由である。コピーは一切なく、ページテーブルを操作するだけだ。では、この共有は実際にはいつ破れるのだろうか?
 
-## When COW triggers a copy {#when-cow-triggers-a-copy}
+## COWがコピーを引き起こすとき {#when-cow-triggers-a-copy}
 
-### 1. Any write to a shared page {#1-any-write-to-a-shared-page}
+### 1. 共有pageへのあらゆる書き込み {#1-any-write-to-a-shared-page}
 
-The obvious case. When either process writes:
+明白なケースである。どちらかのプロセスが書き込むと次のようになる。
 
 ```c
 pid_t pid = fork();
 if (pid == 0) {
-    // Child writes to a shared page
-    buffer[0] = 'x';  // Page fault → COW copy
+    // 子プロセスが共有pageに書き込む
+    buffer[0] = 'x';  // ページフォールト → COWコピー
 }
 ```
 
-The write triggers a page fault, the kernel sees the page is shared, allocates a new page from the [page allocator](page-allocator.md), copies the content, and updates the faulting process's [page table](page-tables.md).
+書き込みはページフォールトを引き起こし、カーネルはそのpageが共有されていることを確認すると、[ページアロケータ](page-allocator.md)から新しいpageを割り当て、内容をコピーし、フォールトしたプロセスの[ページテーブル](page-tables.md)を更新する。
 
-### 2. Writing to a private file mapping {#2-writing-to-a-private-file-mapping}
+### 2. プライベートなファイルマッピングへの書き込み {#2-writing-to-a-private-file-mapping}
 
-`MAP_PRIVATE` file mappings use COW too:
+`MAP_PRIVATE`のファイルマッピングもCOWを使う。
 
 ```c
 void *p = mmap(NULL, size, PROT_READ | PROT_WRITE,
-               MAP_PRIVATE, fd, 0);  // Private mapping
+               MAP_PRIVATE, fd, 0);  // プライベートマッピング
 
-// Initially shares pages with page cache
-p[0] = 'x';  // COW: gets private copy
+// 最初はページキャッシュとpageを共有する
+p[0] = 'x';  // COW: プライベートなコピーを得る
 ```
 
-The initial mapping shares pages with the [page cache](page-cache.md). Writing triggers COW, giving you a private copy that diverges from the file.
+最初のマッピングは[ページキャッシュ](page-cache.md)とpageを共有する。書き込みがCOWを引き起こし、ファイルとは別の道を歩むプライベートなコピーが得られる。
 
-### 3. KSM de-duplication (and then writing) {#3-ksm-de-duplication-and-then-writing}
+### 3. KSMによる重複排除（とその後の書き込み） {#3-ksm-de-duplication-and-then-writing}
 
-[KSM](ksm.md) (Kernel Same-page Merging) scans for identical pages and merges them with COW:
+[KSM](ksm.md)（Kernel Same-page Merging）は同一のpageを探してCOWでマージする。
 
 ```
 Before KSM:
@@ -74,63 +74,63 @@ Process A: [Private copy: "hello!"]  ← COW triggered
 Process B: [Still sharing original]
 ```
 
-This is why VMs with identical guest OS pages can share memory - until the guest writes.
+同一のゲストOSのpageを持つVMがメモリを共有できるのはこのためである。ただしゲストが書き込むまでは。
 
-### 4. `MADV_WIPEONFORK` regions after fork {#4-madv_wipeonfork-regions-after-fork}
+### 4. fork後の`MADV_WIPEONFORK`領域 {#4-madv_wipeonfork-regions-after-fork}
 
-Memory marked with `MADV_WIPEONFORK` ([added in kernel 4.14](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)) appears zeroed in the child:
+`MADV_WIPEONFORK`（[カーネル4.14で追加](https://git.kernel.org/linus/d2cd9ede6e19) | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)）でマークされたメモリは、子プロセスではゼロ埋めされて見える。
 
 ```c
 madvise(addr, len, MADV_WIPEONFORK);
 fork();
-// Child: sees zero-filled memory (on access)
-// Parent: pages unchanged
+// 子: ゼロ埋めされたメモリが見える（アクセス時）
+// 親: pageは変化しない
 ```
 
-The child doesn't inherit the parent's page mappings for this region. When the child accesses the memory, it faults in fresh zero pages on demand - not immediate allocation at fork time, but the content is effectively wiped.
+子プロセスはこの領域について親のページマッピングを継承しない。子がそのメモリにアクセスすると、新しいゼロpageがオンデマンドでフォールトインされる。fork時に即座に割り当てられるわけではないが、内容は実質的に消去される。
 
-## When COW doesn't work as expected {#when-cow-doesnt-work-as-expected}
+## COWが期待どおりに動かないとき {#when-cow-doesnt-work-as-expected}
 
-### Problem 1: fork() + immediate write pattern {#problem-1-fork-immediate-write-pattern}
+### 問題1: fork()直後に書き込むパターン {#problem-1-fork-immediate-write-pattern}
 
-The classic anti-pattern:
+古典的なアンチパターンである。
 
 ```c
 char *big_buffer = malloc(1GB);
-memset(big_buffer, 0, 1GB);  // Pages now allocated
+memset(big_buffer, 0, 1GB);  // これでpageが割り当てられた
 
 pid_t pid = fork();
 if (pid == 0) {
-    // Child immediately writes to everything
-    memset(big_buffer, 1, 1GB);  // COW copies ALL 1GB
+    // 子プロセスがただちに全体に書き込む
+    memset(big_buffer, 1, 1GB);  // COWが1GB全体をコピーする
     exit(0);
 }
 ```
 
-After the child's `memset`, you have 2GB of physical memory in use, not 1GB. The fork was "free," but the writes weren't. This is why [memory overcommit](overcommit.md) works - the kernel assumes most COW pages won't actually be copied.
+子プロセスの`memset`の後、使用中の物理メモリは1GBではなく2GBになる。forkは「タダ」だったが、書き込みはそうではなかった。[メモリのオーバーコミット](overcommit.md)が機能するのはこのためである。カーネルは、ほとんどのCOW pageが実際にはコピーされないと想定している。
 
-**Solution**: If the child will `exec()` immediately, don't worry - `exec()` discards the address space before COW happens. If the child needs to process data, consider sharing memory explicitly with [`mmap(MAP_SHARED)`](mmap.md), or use `posix_spawn()` for the fork+exec pattern.
+**解決策**: 子プロセスがすぐに`exec()`するなら心配は要らない。`exec()`はCOWが起きる前にアドレス空間を破棄する。子プロセスがデータを処理する必要があるなら、[`mmap(MAP_SHARED)`](mmap.md)でメモリを明示的に共有することを検討するか、fork+execのパターンには`posix_spawn()`を使う。
 
-*Note: `vfork()` avoids page table copying but is dangerous - the child shares the parent's stack and address space entirely. Any writes in the child corrupt the parent. Only use it if you `exec()` or `_exit()` immediately.*
+*注: `vfork()`はページテーブルのコピーを回避するが危険である。子プロセスは親のスタックとアドレス空間を丸ごと共有する。子での書き込みはすべて親を破壊する。ただちに`exec()`または`_exit()`する場合にだけ使うこと。*
 
-### Problem 2: Reading doesn't mean safe {#problem-2-reading-doesnt-mean-safe}
+### 問題2: 読むだけなら安全とは限らない {#problem-2-reading-doesnt-mean-safe}
 
-Reading shared pages is safe... usually. But some "reads" are actually writes:
+共有pageの読み取りは安全である……通常は。しかし、「読み取り」の中には実は書き込みであるものがある。
 
 ```c
-// Looks like a read, but...
-if (buffer[i] != 0) { ... }  // Safe read
+// 読み取りに見えるが……
+if (buffer[i] != 0) { ... }  // 安全な読み取り
 
-// This is NOT just a read:
-buffer[i]++;  // Read-modify-write = write = COW
+// これは単なる読み取りではない:
+buffer[i]++;  // 読み取り-変更-書き込み = 書き込み = COW
 
-// Neither is this (atomic read-modify-write):
-__sync_fetch_and_add(&buffer[i], 1);  // Still triggers COW
+// これも同様（アトミックな読み取り-変更-書き込み）:
+__sync_fetch_and_add(&buffer[i], 1);  // やはりCOWを引き起こす
 ```
 
-### Problem 3: Page table overhead {#problem-3-page-table-overhead}
+### 問題3: ページテーブルのオーバーヘッド {#problem-3-page-table-overhead}
 
-COW doesn't copy pages, but it does copy **[page tables](page-tables.md)** at fork time:
+COWはpageをコピーしないが、fork時に**[ページテーブル](page-tables.md)**はコピーする。
 
 ```
 Parent with large virtual address space:
@@ -142,11 +142,11 @@ After fork():
 └── Physical pages: Still shared (COW)
 ```
 
-For processes with large sparse address spaces, page table copying during fork can be significant. This is why `vfork()` exists - it doesn't copy page tables at all.
+大きく疎なアドレス空間を持つプロセスでは、fork中のページテーブルのコピーが無視できない量になりうる。`vfork()`が存在するのはこのためである。`vfork()`はページテーブルを一切コピーしない。
 
-### Problem 4: COW and huge pages {#problem-4-cow-and-huge-pages}
+### 問題4: COWとヒュージページ {#problem-4-cow-and-huge-pages}
 
-[Huge pages](thp.md) (2MB or 1GB) interact with COW in interesting ways. For anonymous THP, the kernel splits the huge page into 4KB pages before COW to avoid copying 2MB for a single-byte write:
+[ヒュージページ](thp.md)（2MBまたは1GB）は興味深い形でCOWと相互作用する。無名THPの場合、1バイトの書き込みのために2MBをコピーするのを避けるため、カーネルはCOWの前にヒュージページを4KBのpageに分割する。
 
 ```
 Original 2MB THP (after fork, shared):
@@ -162,19 +162,19 @@ Original 2MB THP (after fork, shared):
                         ▼ Then COW only the written 4K page
 ```
 
-This splitting behavior is the default for anonymous THP since kernel ~4.5. However, **hugetlbfs** pages (explicit huge pages via `mmap(..., MAP_HUGETLB)`) are *not* split - writing one byte to a shared 2MB hugetlbfs page does copy all 2MB.
+この分割の挙動は、カーネル4.5頃から無名THPのデフォルトである。しかし**hugetlbfs**のpage（`mmap(..., MAP_HUGETLB)`による明示的なヒュージページ）は分割*されない*。共有された2MBのhugetlbfs pageに1バイト書き込むと、2MB全体がコピーされる。
 
-### Problem 5: GUP (get_user_pages) and COW {#problem-5-gup-getuserpages-and-cow}
+### 問題5: GUP（get_user_pages）とCOW {#problem-5-gup-getuserpages-and-cow}
 
-When the kernel pins user pages for DMA (via `get_user_pages()`), COW gets complicated. The [Dirty COW vulnerability](https://dirtycow.ninja/) (CVE-2016-5195) exploited a race condition in this area.
+カーネルが（`get_user_pages()`を通じて）DMAのためにユーザーpageをピン留めすると、COWは複雑になる。[Dirty COW脆弱性](https://dirtycow.ninja/)（CVE-2016-5195）はこの領域の競合状態を突いたものだった。
 
-The kernel now handles this with more care, but the interaction between pinned pages and COW remains complex. See [Getting User Pages (GUP)](gup.md) for the full mechanism — get vs pin, FOLL_LONGTERM, and why pinning collides with COW — and [`mm/gup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c) for the gory details.
+カーネルは現在これをより慎重に扱っているが、ピン留めされたpageとCOWの相互作用は依然として複雑である。仕組みの全体像（getとpin、FOLL_LONGTERM、なぜピン留めがCOWと衝突するのか）については[ユーザーページの取得（GUP）](gup.md)を、生々しい詳細については[`mm/gup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/gup.c)を参照してほしい。
 
-## Performance implications {#performance-implications}
+## 性能への影響 {#performance-implications}
 
-### Memory bandwidth {#memory-bandwidth}
+### メモリ帯域幅 {#memory-bandwidth}
 
-COW copies consume memory bandwidth. If many processes fork and write:
+COWのコピーはメモリ帯域幅を消費する。多数のプロセスがforkして書き込むと次のようになる。
 
 ```
 Time:     t0          t1          t2          t3
@@ -191,134 +191,138 @@ Child3                      [====]──write──[copy]
                           Memory bandwidth spike
 ```
 
-### CPU overhead {#cpu-overhead}
+### CPUオーバーヘッド {#cpu-overhead}
 
-The COW page fault path ([`mm/memory.c:do_wp_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c)) is well-optimized but not free:
+COWのページフォールトパス（[`mm/memory.c:do_wp_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c)）はよく最適化されているが、タダではない。
 
-1. Allocate new folio (without holding locks)
-2. Copy page content via `__wp_page_copy_user()`
-3. Take page table lock
-4. Re-check PTE hasn't changed (another thread might have handled it)
-5. Flush cache and TLB (`ptep_clear_flush()`)
-6. Update rmap (`folio_add_new_anon_rmap()`)
-7. Set new PTE (`set_pte_at()`)
-8. Release locks
+1. 新しいfolioを割り当てる（ロックを保持せずに）
+2. `__wp_page_copy_user()`でpageの内容をコピーする
+3. ページテーブルロックを取得する
+4. PTEが変化していないか再確認する（別のスレッドが処理したかもしれない）
+5. キャッシュとTLBをフラッシュする（`ptep_clear_flush()`）
+6. rmapを更新する（`folio_add_new_anon_rmap()`）
+7. 新しいPTEを設定する（`set_pte_at()`）
+8. ロックを解放する
 
-The copy happens *before* taking the lock - this allows concurrent faults on different pages. On a hot path with many COW faults, the overhead still adds up.
+コピーはロックを取得する*前に*行われる。これにより、異なるpageに対するフォールトを並行して処理できる。それでも、COWフォールトの多いホットパスでは、オーバーヘッドが積み重なる。
 
-### TLB shootdowns {#tlb-shootdowns}
+### TLBシュートダウン {#tlb-shootdowns}
 
-When a COW copy happens, the old read-only PTE must be replaced with a writable one pointing to the new page. This requires invalidating the stale TLB entry on the faulting CPU.
+COWのコピーが起きると、古い読み取り専用のPTEを、新しいpageを指す書き込み可能なPTEに置き換えなければならない。そのためには、フォールトしたCPU上の古くなったTLBエントリを無効化する必要がある。
 
-Note that after `fork()`, parent and child have *separate* address spaces (`mm_struct`). When the child COWs a page, only the child's page table changes - the parent's mapping to the original page remains valid. Cross-process TLB shootdowns don't apply here.
+`fork()`の後、親と子は*別々の*アドレス空間（`mm_struct`）を持つことに注意してほしい。子がpageをCOWしても、変わるのは子のページテーブルだけで、元のpageへの親のマッピングは有効なままである。ここではプロセスをまたぐTLBシュートダウンは関係しない。
 
-TLB shootdowns become expensive in *multithreaded* processes where multiple CPUs share the same `mm`. If one thread COWs a page that other CPUs have cached in their TLBs, those entries must be invalidated via inter-processor interrupts (IPIs).
+TLBシュートダウンが高くつくのは、複数のCPUが同じ`mm`を共有する*マルチスレッド*プロセスである。あるスレッドが、他のCPUがTLBにキャッシュしているpageをCOWすると、それらのエントリはプロセッサ間割り込み（IPI）によって無効化しなければならない。
 
-## Monitoring COW {#monitoring-cow}
+## COWの監視 {#monitoring-cow}
 
 ```bash
-# Watch for COW faults
+# COWフォールトを監視する
 perf stat -e page-faults,minor-faults,major-faults ./program
 
-# Trace COW events specifically
+# COWイベントに絞ってトレースする
 perf trace -e 'exceptions:page_fault_*' ./program
 
-# Check a process's COW-related memory (see virtual-physical-resident.md for details)
+# プロセスのCOW関連メモリを確認する（詳細はvirtual-physical-resident.mdを参照）
 grep -E "Private|Shared" /proc/<pid>/smaps | head -20
 
-# Private_Clean:  Pages private to this process, not written since mapped
-# Private_Dirty:  Pages private to this process, written (possibly COW'd)
-# Shared_Clean:   Pages shared with others, not written
-# Shared_Dirty:   Pages shared with others, written
-# See [Virtual vs Physical vs Resident](virtual-physical-resident.md) for full smaps explanation
+# Private_Clean:  このプロセス専有のpageで、マップ以降書き込まれていない
+# Private_Dirty:  このプロセス専有のpageで、書き込まれた（COWされた可能性あり）
+# Shared_Clean:   他と共有されたpageで、書き込まれていない
+# Shared_Dirty:   他と共有されたpageで、書き込まれた
+# smapsの詳しい説明は[Virtual vs Physical vs Resident](virtual-physical-resident.md)を参照
 ```
 
-## Evolution {#evolution}
+## 進化 {#evolution}
 
-### Origins (pre-Linux) {#origins-pre-linux}
+### 起源（Linux以前） {#origins-pre-linux}
 
-The TENEX papers ([Bobrow et al., CACM 1972](https://dl.acm.org/doi/10.1145/361268.361271)) describe COW on the PDP-10, crediting its first development to the BBN-LISP system for the SDS 940 (late 1960s). The technique became widespread in Unix systems in the 1980s. Linux inherited COW from the Unix tradition when Linus Torvalds wrote the first version in 1991.
+TENEXの論文（[Bobrow et al., CACM 1972](https://dl.acm.org/doi/10.1145/361268.361271)）はPDP-10上のCOWを説明しており、その最初の開発をSDS 940向けのBBN-LISPシステム（1960年代後半）に帰している。この手法は1980年代にUnixシステムで広く普及した。Linuxは、Linus Torvaldsが1991年に最初のバージョンを書いたときに、Unixの伝統からCOWを受け継いだ。
 
-*Note: The original Linux COW implementation predates git. The core logic in `mm/memory.c` has been substantially rewritten multiple times.*
+*注: 元々のLinuxのCOW実装はgitより前のものである。`mm/memory.c`の中核ロジックはこれまで何度も大幅に書き直されてきた。*
 
-### The Dirty COW vulnerability (2016) {#the-dirty-cow-vulnerability-2016}
+### Dirty COW脆弱性（2016年） {#the-dirty-cow-vulnerability-2016}
 
-**CVE-2016-5195** - Fixed by [commit 19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a) ("mm: remove gup_flags FOLL_WRITE games from __get_user_pages()") | [LKML (stable backport)](https://lore.kernel.org/lkml/20161019182853.224077572@linuxfoundation.org/)
+**CVE-2016-5195**: [commit 19be0eaffa3a](https://git.kernel.org/linus/19be0eaffa3a)（"mm: remove gup_flags FOLL_WRITE games from __get_user_pages()"）で修正 | [LKML（stableへのバックポート）](https://lore.kernel.org/lkml/20161019182853.224077572@linuxfoundation.org/)
 
-A race condition between COW and `get_user_pages()` allowed unprivileged users to write to read-only files, enabling privilege escalation. The bug was 11 years old - Linus Torvalds had attempted to fix it in 2005 ([commit 4ceb5db9757a](https://git.kernel.org/linus/4ceb5db9757a)) but that fix was reverted due to s390 issues.
+COWと`get_user_pages()`の間の競合状態により、特権のないユーザーが読み取り専用ファイルに書き込むことができ、権限昇格が可能になった。このバグは11年前からのものだった。Linus Torvaldsは2005年に修正を試みていた（[commit 4ceb5db9757a](https://git.kernel.org/linus/4ceb5db9757a)）が、その修正はs390での問題のために取り消された。
 
-*Note: The 2005 fix predates modern LKML archiving on lore.kernel.org.*
+*注: 2005年の修正は、lore.kernel.orgでの現代的なLKMLアーカイブより前のものである。*
 
-From the fix commit message:
+修正コミットのメッセージより:
 > *"This is an ancient bug that was actually attempted to be fixed once (badly) by me eleven years ago... In the meantime, the VM has become more scalable, and what used to be a purely theoretical race back then has become easier to trigger."*
 
-### FOLL_PIN and pin_user_pages() (v5.6, 2020) {#follpin-and-pinuser_pages-v56-2020}
+（訳: これは古くからあるバグで、実は11年前に私が一度（まずいやり方で）修正しようとしたものだ……その間にVMはよりスケーラブルになり、当時は純粋に理論上の競合だったものが、より簡単に引き起こせるようになった。）
 
-**Commit**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79) ("mm/gup: introduce pin_user_pages*() and FOLL_PIN") | [LKML](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/)
+### FOLL_PINとpin_user_pages()（v5.6、2020年） {#follpin-and-pinuser_pages-v56-2020}
 
-**Author**: John Hubbard (NVIDIA)
+**コミット**: [eddb1c228f79](https://git.kernel.org/linus/eddb1c228f79)（"mm/gup: introduce pin_user_pages*() and FOLL_PIN"） | [LKML](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/)
 
-Post-Dirty COW, the kernel needed a clean distinction between:
+**作者**: John Hubbard（NVIDIA）
 
-- **get_user_pages()**: Short-term references (will be released quickly)
-- **pin_user_pages()**: Long-term pins for DMA (new FOLL_PIN flag)
+Dirty COWの後、カーネルには次の2つを明確に区別する必要があった。
 
-This allowed the COW machinery to know when pages are pinned for DMA and handle them more carefully.
+- **get_user_pages()**: 短期の参照（すぐに解放される）
+- **pin_user_pages()**: DMAのための長期のピン（新しいFOLL_PINフラグ）
 
-### PG_anon_exclusive (v5.19, 2022) {#pganonexclusive-v519-2022}
+これにより、COWの仕組みは、pageがDMAのためにピン留めされているときにそれを知り、より慎重に扱えるようになった。
 
-**Commit**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56) ("mm: remember exclusively mapped anonymous pages with PG_anon_exclusive") | [LKML](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/)
+### PG_anon_exclusive（v5.19、2022年） {#pganonexclusive-v519-2022}
 
-**Author**: David Hildenbrand (Red Hat)
+**コミット**: [6c287605fd56](https://git.kernel.org/linus/6c287605fd56)（"mm: remember exclusively mapped anonymous pages with PG_anon_exclusive"） | [LKML](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/)
 
-The definitive fix for GUP/COW races. Added a page flag to track whether an anonymous page is exclusively owned. Key insight from the commit:
+**作者**: David Hildenbrand（Red Hat）
+
+GUP/COWの競合に対する決定的な修正である。無名pageが排他的に所有されているかどうかを追跡するpageフラグを追加した。コミットからの重要な洞察は次のとおり。
 
 > *"Let's mark exclusively mapped anonymous pages with PG_anon_exclusive as exclusive, and use that information to make GUP pins reliable and stay consistent with the page mapped into the page table even if the page table entry gets write-protected."*
 
-This replaced the "refcount > 1" heuristic with explicit exclusivity tracking, making COW behavior predictable even with pinned pages.
+（訳: 排他的にマップされた無名pageをPG_anon_exclusiveで排他的とマークし、その情報を使ってGUPのピンを信頼できるものにし、ページテーブルエントリが書き込み保護されても、ページテーブルにマップされたpageとの一貫性を保てるようにしよう。）
 
-### COW under VMA lock (v6.4+, 2023) {#cow-under-vma-lock-v64-2023}
+これにより「refcount > 1」というヒューリスティックが明示的な排他性の追跡に置き換えられ、ピン留めされたpageがあってもCOWの挙動が予測可能になった。
 
-**Commit**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9) ("mm: call wp_page_copy() under the VMA lock") | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
+### VMAロック下でのCOW（v6.4以降、2023年） {#cow-under-vma-lock-v64-2023}
 
-Part of the ongoing per-VMA lock work to improve page fault scalability. COW faults can now be handled without taking `mmap_lock` in many cases.
+**コミット**: [164b06f238b9](https://git.kernel.org/linus/164b06f238b9)（"mm: call wp_page_copy() under the VMA lock"） | [LKML](https://lkml.kernel.org/r/20231006195318.4087158-3-willy@infradead.org)
 
-### THP COW improvements (v6.15, 2025) {#thp-cow-improvements-v615-2025}
+ページフォールトのスケーラビリティを改善するための、進行中のVMA単位ロックの作業の一部である。多くの場合、COWフォールトを`mmap_lock`を取得せずに処理できるようになった。
 
-**Commit**: [1da190f4d0a6](https://git.kernel.org/linus/1da190f4d0a6) ("mm: Copy-on-Write (COW) reuse support for PTE-mapped THP") | [LKML](https://lkml.kernel.org/r/20250303163014.1128035-14-david@redhat.com)
+### THPのCOW改善（v6.15、2025年） {#thp-cow-improvements-v615-2025}
 
-When a THP is PTE-mapped and a COW fault occurs, the kernel can now reuse subpages that are exclusively owned rather than always copying. This reduces COW overhead for THP significantly.
+**コミット**: [1da190f4d0a6](https://git.kernel.org/linus/1da190f4d0a6)（"mm: Copy-on-Write (COW) reuse support for PTE-mapped THP"） | [LKML](https://lkml.kernel.org/r/20250303163014.1128035-14-david@redhat.com)
 
-## Related history {#related-history}
+THPがPTEでマップされている状態でCOWフォールトが起きた場合、カーネルは常にコピーするのではなく、排他的に所有されているサブページを再利用できるようになった。これによりTHPのCOWオーバーヘッドが大幅に減る。
 
-### MADV_WIPEONFORK (v4.14, 2017) {#madv_wipeonfork-v414-2017}
+## 関連する歴史 {#related-history}
 
-**Commit**: [d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19) ("mm,fork: introduce MADV_WIPEONFORK") | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)
+### MADV_WIPEONFORK（v4.14、2017年） {#madv_wipeonfork-v414-2017}
 
-**Author**: Rik van Riel (Red Hat)
+**コミット**: [d2cd9ede6e19](https://git.kernel.org/linus/d2cd9ede6e19)（"mm,fork: introduce MADV_WIPEONFORK"） | [LKML](https://lore.kernel.org/lkml/20170811212829.29186-3-riel@redhat.com/)
 
-Added for security-sensitive applications that need to regenerate secrets after fork (PRNG state, PKCS#11 sessions, etc.). Alternative to `MADV_DONTFORK` that preserves address space layout.
+**作者**: Rik van Riel（Red Hat）
 
-## Best practices {#best-practices}
+fork後に秘密情報（PRNGの状態、PKCS#11のセッションなど）を再生成する必要がある、セキュリティ上重要なアプリケーションのために追加された。アドレス空間のレイアウトを保つ、`MADV_DONTFORK`の代替である。
 
-### For application developers {#for-application-developers}
+## ベストプラクティス {#best-practices}
 
-1. **After fork, exec quickly** - If you're just spawning a subprocess, `exec()` before touching memory
-2. **Use `posix_spawn()` for subprocess creation** - It's safer than `fork()+exec()` and often faster
-3. **Use MAP_SHARED for truly shared data** - Don't rely on COW for data you want to share; see [mmap](mmap.md)
-4. **Avoid `vfork()` unless you know exactly what you're doing** - It's fast but dangerous (child shares parent's stack)
+### アプリケーション開発者向け {#for-application-developers}
 
-### For kernel/driver developers {#for-kerneldriver-developers}
+1. **fork後はすぐにexecする**: サブプロセスを起動するだけなら、メモリに触れる前に`exec()`する
+2. **サブプロセスの作成には`posix_spawn()`を使う**: `fork()+exec()`より安全で、多くの場合高速である
+3. **本当に共有するデータにはMAP_SHAREDを使う**: 共有したいデータをCOWに頼らないこと。[mmap](mmap.md)を参照
+4. **自分が何をしているか正確にわかっているのでなければ`vfork()`は避ける**: 速いが危険である（子が親のスタックを共有する）
 
-1. **Minimize GUP usage** - Pinning pages complicates COW
-2. **Use FOLL_PIN for long-term pins** - Proper accounting helps the COW machinery
-3. **Test fork() paths** - COW bugs often manifest only after fork
+### カーネル/ドライバ開発者向け {#for-kerneldriver-developers}
 
-## Try it yourself {#try-it-yourself}
+1. **GUPの使用を最小限にする**: pageのピン留めはCOWを複雑にする
+2. **長期のピンにはFOLL_PINを使う**: 適切な計上がCOWの仕組みを助ける
+3. **fork()のパスをテストする**: COWのバグはfork後にしか現れないことが多い
+
+## 自分で試す {#try-it-yourself}
 
 ```bash
-# Watch COW in action
-# Terminal 1: Create a process with large memory
+# COWの動作を観察する
+# ターミナル1: 大きなメモリを持つプロセスを作成する
 python3 -c "
 import os
 data = bytearray(100 * 1024 * 1024)  # 100MB
@@ -327,37 +331,37 @@ pid = os.fork()
 if pid == 0:
     print(f'Child PID: {os.getpid()}')
     input('Press Enter to write (trigger COW)...')
-    data[0] = 1  # Trigger COW
+    data[0] = 1  # COWを引き起こす
     input('COW done. Press Enter to exit...')
 else:
     os.wait()
 "
 
-# Terminal 2: Watch memory usage
+# ターミナル2: メモリ使用量を監視する
 watch -n 1 'ps -o pid,rss,vsz,comm -p <parent_pid>,<child_pid>'
-# RSS increases after child writes (COW copy)
+# 子が書き込んだ後にRSSが増える（COWコピー）
 
-# Trace page faults during fork+exec
+# fork+exec中のページフォールトをトレースする
 strace -f -e trace=clone,execve -o /tmp/trace.log /bin/ls
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Memory overcommit](overcommit.md) - COW enables overcommit
-- [KSM](ksm.md) - COW-based page deduplication
-- [THP](thp.md) - COW behavior with huge pages
-- [Process address space](mmap.md) - VMAs and page fault handling
+- [メモリのオーバーコミット](overcommit.md): COWがオーバーコミットを可能にする
+- [KSM](ksm.md): COWに基づくpageの重複排除
+- [THP](thp.md): ヒュージページでのCOWの挙動
+- [プロセスのアドレス空間](mmap.md): VMAとページフォールト処理
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/) (2016) - Jonathan Corbet on the Dirty COW race and its fix
-- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/) (2021) - Vlastimil Babka on the GUP-pin vs. COW data-leak problem
-- [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/) (2022) - David Hildenbrand's PG_anon_exclusive solution
+- [Dirty COW and clean commit messages](https://lwn.net/Articles/704231/)（2016年）: Jonathan CorbetによるDirty COWの競合とその修正の解説
+- [Patching until the COWs come home (part 1)](https://lwn.net/Articles/849638/)（2021年）: Vlastimil BabkaによるGUPのピン対COWのデータリーク問題の解説
+- [get_user_pages() and COW, 2022 edition](https://lwn.net/Articles/895439/)（2022年）: David HildenbrandのPG_anon_exclusiveによる解決策
 
-### Key LKML threads {#key-lkml-threads}
+### 主要なLKMLスレッド {#key-lkml-threads}
 
-- [FOLL_PIN patch series](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/) - John Hubbard's v5.6 series
-- [PG_anon_exclusive series](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/) - David Hildenbrand's v5.19 series
-- [COW under VMA lock](https://lore.kernel.org/linux-mm/20230109205336.3665937-1-surenb@google.com/) - Suren Baghdasaryan's per-VMA lock work
+- [FOLL_PIN patch series](https://lore.kernel.org/lkml/20200107224558.2362728-12-jhubbard@nvidia.com/): John Hubbardのv5.6向けシリーズ
+- [PG_anon_exclusive series](https://lore.kernel.org/lkml/20220428083441.37290-13-david@redhat.com/): David Hildenbrandのv5.19向けシリーズ
+- [COW under VMA lock](https://lore.kernel.org/linux-mm/20230109205336.3665937-1-surenb@google.com/): Suren BaghdasaryanのVMA単位ロックの作業

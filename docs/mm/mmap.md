@@ -1,10 +1,10 @@
-# Process Address Space {#process-address-space}
+# プロセスのアドレス空間 {#process-address-space}
 
-> How Linux manages virtual memory for processes
+> Linuxがプロセスの仮想メモリをどう管理するか
 
-## What Is the Process Address Space? {#what-is-the-process-address-space}
+## プロセスのアドレス空間とは何か? {#what-is-the-process-address-space}
 
-Each process has its own virtual address space - a private view of memory that the kernel maps to physical memory. This isolation means processes can't access each other's memory (without explicit sharing).
+各プロセスは自身の仮想アドレス空間を持つ。これはメモリのプライベートな見え方であり、カーネルがそれを物理メモリに対応付ける。この分離により、プロセスは（明示的に共有しない限り）互いのメモリにアクセスできない。
 
 ```
 Process A's View              Process B's View
@@ -28,40 +28,40 @@ Process A's View              Process B's View
 Same virtual addresses, different physical memory
 ```
 
-## Virtual Memory Areas (VMAs) {#virtual-memory-areas-vmas}
+## 仮想メモリ領域（VMA） {#virtual-memory-areas-vmas}
 
-The address space is divided into regions called VMAs. Each VMA describes a contiguous range with consistent properties.
+アドレス空間はVMAと呼ばれる領域に分割される。各VMAは、一貫した属性を持つ連続した範囲を記述する。
 
-### VMA Structure {#vma-structure}
+### VMAの構造 {#vma-structure}
 
 ```c
 struct vm_area_struct {
-    unsigned long vm_start;      /* Start address */
-    unsigned long vm_end;        /* End address (exclusive) */
-    pgprot_t vm_page_prot;       /* Access permissions */
-    unsigned long vm_flags;      /* Flags (VM_READ, VM_WRITE, etc.) */
-    struct file *vm_file;        /* Backing file (or NULL) */
-    unsigned long vm_pgoff;      /* Offset in file */
-    struct mm_struct *vm_mm;     /* Owning mm_struct */
+    unsigned long vm_start;      /* 開始アドレス */
+    unsigned long vm_end;        /* 終了アドレス（この値は含まない） */
+    pgprot_t vm_page_prot;       /* アクセス権限 */
+    unsigned long vm_flags;      /* フラグ（VM_READ、VM_WRITEなど） */
+    struct file *vm_file;        /* 裏付けとなるファイル（またはNULL） */
+    unsigned long vm_pgoff;      /* ファイル内のオフセット */
+    struct mm_struct *vm_mm;     /* 所有するmm_struct */
     /* ... */
 };
 ```
 
-### VMA Types {#vma-types}
+### VMAの種類 {#vma-types}
 
-| Type | vm_file | Description |
+| 種類 | vm_file | 説明 |
 |------|---------|-------------|
-| Anonymous | NULL | Heap, stack, mmap(MAP_ANONYMOUS) |
-| File-backed | Set | mmap'd files, executables, libraries |
-| Shared | Set + VM_SHARED | Shared memory regions |
+| 無名 | NULL | ヒープ、スタック、mmap(MAP_ANONYMOUS) |
+| ファイルバック | 設定あり | mmapされたファイル、実行ファイル、ライブラリ |
+| 共有 | 設定あり + VM_SHARED | 共有メモリ領域 |
 
-### Viewing VMAs {#viewing-vmas}
+### VMAを見る {#viewing-vmas}
 
 ```bash
-# View process memory map
+# プロセスのメモリマップを見る
 cat /proc/<pid>/maps
 
-# Example output:
+# 出力例:
 # address          perms offset   dev   inode   pathname
 # 00400000-00452000 r-xp 00000000 08:01 1234    /bin/bash
 # 00651000-00652000 r--p 00051000 08:01 1234    /bin/bash
@@ -70,56 +70,56 @@ cat /proc/<pid>/maps
 # 7f8a0000-7f8a2000 rw-p 00000000 00:00 0
 # 7ffff000-80000000 rw-p 00000000 00:00 0       [stack]
 
-# Detailed view with sizes
+# サイズ付きの詳細表示
 cat /proc/<pid>/smaps
 ```
 
-## The mmap() System Call {#the-mmap-system-call}
+## mmap()システムコール {#the-mmap-system-call}
 
-`mmap()` creates new VMAs - it's how processes request virtual memory.
+`mmap()`は新しいVMAを作成する。これはプロセスが仮想メモリを要求する手段である。
 
-### Basic Usage {#basic-usage}
+### 基本的な使い方 {#basic-usage}
 
 ```c
 #include <sys/mman.h>
 
-/* Anonymous mapping (like malloc for large allocations) */
+/* 無名マッピング（大きな割り当てに対するmallocのようなもの） */
 void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-/* File mapping */
+/* ファイルマッピング */
 int fd = open("file.dat", O_RDONLY);
 void *ptr = mmap(NULL, size, PROT_READ,
                  MAP_PRIVATE, fd, 0);
 
-/* Unmap when done */
+/* 終わったらアンマップする */
 munmap(ptr, size);
 ```
 
-### mmap Flags {#mmap-flags}
+### mmapのフラグ {#mmap-flags}
 
-| Flag | Description |
+| フラグ | 説明 |
 |------|-------------|
-| `MAP_PRIVATE` | Copy-on-write, changes not written to file |
-| `MAP_SHARED` | Changes visible to other processes and written to file |
-| `MAP_ANONYMOUS` | Not backed by file, zero-initialized |
-| `MAP_FIXED` | Use exact address (dangerous) |
-| `MAP_POPULATE` | Pre-fault pages (avoid later faults) |
-| `MAP_HUGETLB` | Use huge pages |
-| `MAP_LOCKED` | Lock in RAM (like mlock) |
+| `MAP_PRIVATE` | コピーオンライト。変更はファイルに書き込まれない |
+| `MAP_SHARED` | 変更は他のプロセスから見え、ファイルに書き込まれる |
+| `MAP_ANONYMOUS` | ファイルに裏付けられず、ゼロで初期化される |
+| `MAP_FIXED` | 正確なアドレスを使う（危険） |
+| `MAP_POPULATE` | pageを事前にフォールトインする（後のフォールトを避ける） |
+| `MAP_HUGETLB` | ヒュージページを使う |
+| `MAP_LOCKED` | RAMにロックする（mlockと同様） |
 
-### Protection Flags {#protection-flags}
+### 保護フラグ {#protection-flags}
 
-| Flag | Description |
+| フラグ | 説明 |
 |------|-------------|
-| `PROT_READ` | Pages can be read |
-| `PROT_WRITE` | Pages can be written |
-| `PROT_EXEC` | Pages can be executed |
-| `PROT_NONE` | Pages cannot be accessed |
+| `PROT_READ` | pageを読み取れる |
+| `PROT_WRITE` | pageに書き込める |
+| `PROT_EXEC` | pageを実行できる |
+| `PROT_NONE` | pageにアクセスできない |
 
-## Address Space Layout {#address-space-layout}
+## アドレス空間のレイアウト {#address-space-layout}
 
-### Traditional Layout (32-bit) {#traditional-layout-32-bit}
+### 従来のレイアウト（32ビット） {#traditional-layout-32-bit}
 
 ```
 ┌──────────────────┐ 0xFFFFFFFF (4GB)
@@ -141,7 +141,7 @@ munmap(ptr, size);
 └──────────────────┘ 0x08048000
 ```
 
-### Modern Layout (64-bit with ASLR) {#modern-layout-64-bit-with-aslr}
+### 現代のレイアウト（64ビット、ASLRあり） {#modern-layout-64-bit-with-aslr}
 
 ```
 ┌──────────────────┐ 0xFFFFFFFFFFFFFFFF
@@ -162,45 +162,45 @@ munmap(ptr, size);
 └──────────────────┘ 0x0
 ```
 
-### ASLR (Address Space Layout Randomization) {#aslr-address-space-layout-randomization}
+### ASLR（Address Space Layout Randomization） {#aslr-address-space-layout-randomization}
 
-ASLR randomizes memory layout to make exploits harder:
+ASLRはメモリレイアウトをランダム化してエクスプロイトを難しくする。
 
 ```bash
-# Check ASLR setting
+# ASLRの設定を確認する
 cat /proc/sys/kernel/randomize_va_space
-# 0 = disabled
-# 1 = stack/mmap randomized
-# 2 = + heap randomized (full ASLR)
+# 0 = 無効
+# 1 = スタック/mmapをランダム化
+# 2 = + ヒープもランダム化（完全なASLR）
 ```
 
-See [kernel sysctl docs](https://docs.kernel.org/admin-guide/sysctl/kernel.html) and [x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html) for details.
+詳細は[kernel sysctl docs](https://docs.kernel.org/admin-guide/sysctl/kernel.html)と[x86_64 memory map](https://docs.kernel.org/arch/x86/x86_64/mm.html)を参照してほしい。
 
-## Memory Management Structures {#memory-management-structures}
+## メモリ管理の構造体 {#memory-management-structures}
 
 ### mm_struct {#mm_struct}
 
-Each address space is described by one `mm_struct` (threads within a process share the same mm_struct via `CLONE_VM`):
+各アドレス空間は1つの`mm_struct`で記述される（プロセス内のスレッドは`CLONE_VM`によって同じmm_structを共有する）。
 
 ```c
 struct mm_struct {
-    struct maple_tree mm_mt;     /* VMA tree (replaced rb_root in v6.1) */
-    unsigned long task_size;     /* Size of user address space */
+    struct maple_tree mm_mt;     /* VMAツリー（v6.1でrb_rootを置き換えた） */
+    unsigned long task_size;     /* ユーザーアドレス空間のサイズ */
     pgd_t *pgd;                  /* Page Global Directory */
-    atomic_t mm_users;           /* Processes sharing this mm */
-    atomic_t mm_count;           /* References to struct */
-    unsigned long start_code, end_code;   /* Text segment */
-    unsigned long start_data, end_data;   /* Data segment */
-    unsigned long start_brk, brk;         /* Heap */
-    unsigned long start_stack;            /* Stack start */
-    unsigned long mmap_base;              /* mmap region base */
+    atomic_t mm_users;           /* このmmを共有するプロセス */
+    atomic_t mm_count;           /* 構造体への参照 */
+    unsigned long start_code, end_code;   /* テキストセグメント */
+    unsigned long start_data, end_data;   /* データセグメント */
+    unsigned long start_brk, brk;         /* ヒープ */
+    unsigned long start_stack;            /* スタックの開始位置 */
+    unsigned long mmap_base;              /* mmap領域のベース */
     /* ... */
 };
 ```
 
-### VMA Organization {#vma-organization}
+### VMAの編成 {#vma-organization}
 
-VMAs were stored in a red-black tree until v6.1, then switched to a maple tree for better performance:
+VMAはv6.1まで赤黒木に格納されていたが、性能向上のためにmaple treeに切り替えられた。
 
 ```
 Pre-v6.1: Red-Black Tree     v6.1+: Maple Tree
@@ -211,11 +211,11 @@ Pre-v6.1: Red-Black Tree     v6.1+: Maple Tree
 [VMA] [VMA]
 ```
 
-**Commit**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) ("mm: start tracking VMAs with maple tree") | [LKML](https://lore.kernel.org/linux-mm/20220822150128.1562046-1-Liam.Howlett@oracle.com/)
+**コミット**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6)（"mm: start tracking VMAs with maple tree"） | [LKML](https://lore.kernel.org/linux-mm/20220822150128.1562046-1-Liam.Howlett@oracle.com/)
 
-## Demand Paging {#demand-paging}
+## デマンドページング {#demand-paging}
 
-Pages aren't allocated until accessed. This is called demand paging or lazy allocation.
+pageはアクセスされるまで割り当てられない。これはデマンドページングまたは遅延割り当てと呼ばれる。
 
 ```
 mmap() called:
@@ -236,17 +236,17 @@ First access:
 └───────────────────────┘
 ```
 
-### Fault Types {#fault-types}
+### フォールトの種類 {#fault-types}
 
-| Fault | Cause | Resolution |
+| フォールト | 原因 | 解決方法 |
 |-------|-------|------------|
-| Minor | Page in memory but PTE needs update | Update PTE (includes COW breaks, access/dirty bit updates) |
-| Major | Page not in memory | Read from file/swap |
-| Invalid | Bad access (SIGSEGV) | Kill process |
+| マイナー | pageはメモリ上にあるが、PTEの更新が必要 | PTEを更新する（COWの破れ、アクセス/ダーティビットの更新を含む） |
+| メジャー | pageがメモリ上にない | ファイル/スワップから読み込む |
+| 不正 | 不正なアクセス（SIGSEGV） | プロセスをkillする |
 
-## Copy-on-Write (COW) {#copy-on-write-cow}
+## コピーオンライト（COW） {#copy-on-write-cow}
 
-When `fork()` creates a child, pages are shared until written:
+`fork()`が子プロセスを作成すると、pageは書き込まれるまで共有される。
 
 ```
 After fork():
@@ -264,175 +264,175 @@ Parent          Child
 [Original]    [Copy]
 ```
 
-This makes `fork()` fast - page tables are duplicated (pointing to the same physical pages, now marked read-only), but the actual data pages are not copied. Only when either process writes does a copy occur.
+これにより`fork()`は高速になる。ページテーブルは複製される（同じ物理pageを指し、それらは読み取り専用とマークされる）が、実際のデータpageはコピーされない。どちらかのプロセスが書き込んだときにだけコピーが起こる。
 
-See [Copy-on-Write explainer](cow.md) for edge cases, performance implications, and when COW breaks.
+エッジケース、性能への影響、COWがいつ破れるかについては[コピーオンライトの解説](cow.md)を参照してほしい。
 
-## Common Operations {#common-operations}
+## よく使う操作 {#common-operations}
 
-### brk/sbrk (Heap) {#brksbrk-heap}
+### brk/sbrk（ヒープ） {#brksbrk-heap}
 
 ```c
-/* Expand heap */
+/* ヒープを拡張する */
 void *old_brk = sbrk(0);
-brk(old_brk + 4096);  /* Add 4KB to heap */
+brk(old_brk + 4096);  /* ヒープに4KB追加する */
 
-/* malloc typically uses mmap for large allocations */
+/* mallocは通常、大きな割り当てにはmmapを使う */
 ```
 
-### mprotect (Change Permissions) {#mprotect-change-permissions}
+### mprotect（権限の変更） {#mprotect-change-permissions}
 
 ```c
-/* Make region read-only */
+/* 領域を読み取り専用にする */
 mprotect(ptr, size, PROT_READ);
 
-/* Make region executable (JIT) */
+/* 領域を実行可能にする（JIT） */
 mprotect(ptr, size, PROT_READ | PROT_EXEC);
 ```
 
-### mlock (Pin in RAM) {#mlock-pin-in-ram}
+### mlock（RAMに固定する） {#mlock-pin-in-ram}
 
 ```c
-/* Prevent page from being swapped */
+/* pageがスワップされないようにする */
 mlock(ptr, size);
 
-/* Unlock */
+/* ロックを解除する */
 munlock(ptr, size);
 
-/* Lock all current and future pages */
+/* 現在および将来のすべてのpageをロックする */
 mlockall(MCL_CURRENT | MCL_FUTURE);
 ```
 
-### mremap (Resize Mapping) {#mremap-resize-mapping}
+### mremap（マッピングのサイズ変更） {#mremap-resize-mapping}
 
 ```c
-/* Grow or shrink a mapping */
+/* マッピングを拡大または縮小する */
 void *new_ptr = mremap(ptr, old_size, new_size, MREMAP_MAYMOVE);
 ```
 
-## Evolution {#evolution}
+## 進化 {#evolution}
 
-### Original Design (1991) {#original-design-1991}
+### 当初の設計（1991年） {#original-design-1991}
 
-Simple linear list of VMAs. Worked for small address spaces.
+VMAの単純な線形リスト。小さなアドレス空間ではこれで機能した。
 
-### Red-Black Tree (v2.4.10, 2001) {#red-black-tree-v2410-2001}
+### 赤黒木（v2.4.10、2001年） {#red-black-tree-v2410-2001}
 
-VMA lookup changed from O(n) to O(log n) using [rb-tree](https://docs.kernel.org/core-api/rbtree.html) (implemented by Andrea Arcangeli, predates git history).
+[rb-tree](https://docs.kernel.org/core-api/rbtree.html)を使うことで、VMAの検索がO(n)からO(log n)に変わった（Andrea Arcangeliによる実装で、gitの履歴より前のもの）。
 
-### Maple Tree (v6.1, 2022) {#maple-tree-v61-2022}
+### Maple Tree（v6.1、2022年） {#maple-tree-v61-2022}
 
-**Commit**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) ("mm: start tracking VMAs with maple tree") | [LKML](https://lore.kernel.org/linux-mm/20220906194824.2110408-9-Liam.Howlett@oracle.com/)
+**コミット**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6)（"mm: start tracking VMAs with maple tree"） | [LKML](https://lore.kernel.org/linux-mm/20220906194824.2110408-9-Liam.Howlett@oracle.com/)
 
-**Author**: Liam R. Howlett
+**作者**: Liam R. Howlett
 
-Replaced rb-tree with maple tree for better cache behavior and RCU-safe lookups.
+キャッシュの挙動を改善し、RCUで安全な検索を可能にするため、rb-treeをmaple treeに置き換えた。
 
-### Per-VMA Locks (v6.4, 2023) {#per-vma-locks-v64-2023}
+### VMA単位ロック（v6.4、2023年） {#per-vma-locks-v64-2023}
 
-**Commit**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) ("mm: add per-VMA lock and helper functions to control it") | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
+**コミット**: [5e31275cc997](https://git.kernel.org/linus/5e31275cc997)（"mm: add per-VMA lock and helper functions to control it"） | [LKML](https://lore.kernel.org/all/20230109205336.3665937-1-surenb@google.com/)
 
-**Author**: Suren Baghdasaryan
+**作者**: Suren Baghdasaryan
 
-Fine-grained locking per VMA instead of mmap_lock for entire mm, improving scalability for page fault handling.
+mm全体に対するmmap_lockの代わりにVMAごとの細粒度ロックを導入し、ページフォールト処理のスケーラビリティを改善した。
 
-## Debugging {#debugging}
+## デバッグ {#debugging}
 
-### /proc Interface {#proc-interface}
+### /procインターフェース {#proc-interface}
 
 ```bash
-# Memory map
+# メモリマップ
 cat /proc/<pid>/maps
 
-# Detailed with RSS, PSS, etc.
+# RSS、PSSなどを含む詳細
 cat /proc/<pid>/smaps
 
-# Summary
+# 要約
 cat /proc/<pid>/smaps_rollup
 
-# Memory stats
+# メモリ統計
 cat /proc/<pid>/status | grep -i vm
-# VmPeak: Peak virtual memory
-# VmSize: Current virtual memory
-# VmRSS:  Resident set size
-# VmData: Data segment
-# VmStk:  Stack
+# VmPeak: 仮想メモリのピーク値
+# VmSize: 現在の仮想メモリ
+# VmRSS:  常駐セットサイズ
+# VmData: データセグメント
+# VmStk:  スタック
 ```
 
-### Tracing {#tracing}
+### トレーシング {#tracing}
 
 ```bash
-# Trace mmap calls
+# mmap呼び出しをトレースする
 strace -e mmap,munmap,mprotect ./program
 
-# Trace page faults
+# ページフォールトをトレースする
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 ```
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Virtual Memory Exhaustion {#virtual-memory-exhaustion}
+### 仮想メモリの枯渇 {#virtual-memory-exhaustion}
 
-Process hits `TASK_SIZE` limit or [`vm.max_map_count`](https://docs.kernel.org/admin-guide/sysctl/vm.html).
+プロセスが`TASK_SIZE`の上限、または[`vm.max_map_count`](https://docs.kernel.org/admin-guide/sysctl/vm.html)に達する。
 
 ```bash
-# View/set max VMAs per process
+# プロセスあたりのVMA数の上限を表示/設定する
 cat /proc/sys/vm/max_map_count
 echo 65530 > /proc/sys/vm/max_map_count
 ```
 
-### Memory Fragmentation {#memory-fragmentation}
+### メモリの断片化 {#memory-fragmentation}
 
-Many small mappings prevent large allocations.
+多数の小さなマッピングが大きな割り当てを妨げる。
 
-**Solution**: Use larger mappings, reduce mmap/munmap churn.
+**解決策**: より大きなマッピングを使い、mmap/munmapの頻繁な繰り返しを減らす。
 
-### mmap_lock Contention {#mmap_lock-contention}
+### mmap_lockの競合 {#mmap_lock-contention}
 
-Multiple threads fighting for mm->mmap_lock.
+複数のスレッドがmm->mmap_lockを奪い合う。
 
-**Solution**: Upgrade to v6.4+ for per-VMA locks, or reduce mmap operations.
+**解決策**: VMA単位ロックのためにv6.4以降にアップグレードするか、mmap操作を減らす。
 
-## References {#references}
+## 参照 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | mmap implementation |
-| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | Page fault handling |
-| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct, vm_area_struct |
+| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | mmapの実装 |
+| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | ページフォールト処理 |
+| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | mm_struct、vm_area_struct |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
 - [`Documentation/mm/process_addrs.rst`](https://docs.kernel.org/mm/process_addrs.html)
 
-### Related {#related}
+### 関連 {#related}
 
-- [page-tables](page-tables.md) - How VMAs are backed by page tables
-- [reclaim](reclaim.md) - Anonymous vs file-backed page handling
-- [thp](thp.md) - Huge pages in VMAs
+- [page-tables](page-tables.md): VMAがページテーブルによってどう裏付けられるか
+- [reclaim](reclaim.md): 無名pageとファイルバックのpageの扱い
+- [thp](thp.md): VMA内のヒュージページ
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) — `do_mmap()`, `mmap_region()`, VMA merging and splitting
-- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c) — VMA lifecycle helpers: `do_brk_flags()`, `vma_merge()`, `vma_expand()`
-- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `struct mm_struct` and `struct vm_area_struct` definitions
+- [mm/mmap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c): `do_mmap()`、`mmap_region()`、VMAの結合と分割
+- [mm/vma.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vma.c): VMAのライフサイクルのヘルパー。`do_brk_flags()`、`vma_merge()`、`vma_expand()`
+- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h): `struct mm_struct`と`struct vm_area_struct`の定義
 
-### Kernel documentation {#kernel-documentation_1}
+### カーネルドキュメント {#kernel-documentation_1}
 
-- [`Documentation/admin-guide/mm/concepts.rst`](https://docs.kernel.org/admin-guide/mm/concepts.html) — official overview of VMAs, demand paging, and the process address space
-- [`Documentation/arch/x86/x86_64/mm.rst`](https://docs.kernel.org/arch/x86/x86_64/mm.html) — authoritative x86_64 virtual memory map
+- [`Documentation/admin-guide/mm/concepts.rst`](https://docs.kernel.org/admin-guide/mm/concepts.html): VMA、デマンドページング、プロセスのアドレス空間についての公式の概説
+- [`Documentation/arch/x86/x86_64/mm.rst`](https://docs.kernel.org/arch/x86/x86_64/mm.html): x86_64の仮想メモリマップの権威ある資料
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [page-fault.md](page-fault.md) — what happens after a VMA is found: page fault handling and PTE installation
-- [per-vma-locks.md](per-vma-locks.md) — how Linux 6.4 reduced mmap_lock contention with per-VMA locking
-- [brk-vs-mmap.md](brk-vs-mmap.md) — when allocators choose `brk()` vs `mmap()` and why
+- [page-fault.md](page-fault.md): VMAが見つかった後に何が起こるか。ページフォールト処理とPTEの設定
+- [per-vma-locks.md](per-vma-locks.md): Linux 6.4がVMA単位ロックでmmap_lockの競合をどう減らしたか
+- [brk-vs-mmap.md](brk-vs-mmap.md): アロケータが`brk()`と`mmap()`のどちらをいつ、なぜ選ぶのか
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Virtual Memory I — address spaces](https://lwn.net/Articles/829812/) — introductory series on Linux virtual memory
-- [LWN: The maple tree](https://lwn.net/Articles/894061/) — the RCU-safe B-tree that replaced the VMA red-black tree in v6.1
+- [LWN: Virtual Memory I — address spaces](https://lwn.net/Articles/829812/): Linuxの仮想メモリについての入門シリーズ
+- [LWN: The maple tree](https://lwn.net/Articles/894061/): v6.1でVMAの赤黒木を置き換えた、RCUで安全なBツリー

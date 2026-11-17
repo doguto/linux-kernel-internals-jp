@@ -1,16 +1,16 @@
-# Tuning Memory for Containers {#tuning-memory-for-containers}
+# コンテナのためのメモリチューニング {#tuning-memory-for-containers}
 
-> Getting container memory limits right -- and debugging when they're wrong
+> コンテナのメモリ制限を正しく設定する -- そして誤っていたときにデバッグする
 
-## Why Container Memory Is Different {#why-container-memory-is-different}
+## なぜコンテナのメモリは異なるのか {#why-container-memory-is-different}
 
-On a bare-metal server, all processes share a single pool of memory managed by the kernel. Containers change this model fundamentally: each container gets its own memory boundary enforced by the kernel's **cgroup memory controller**. Understanding how that controller works is the difference between a stable production deployment and mysterious OOM kills at 3 AM.
+ベアメタルサーバーでは、すべてのプロセスがカーネルの管理する単一のメモリプールを共有する。コンテナはこのモデルを根本的に変える。各コンテナは、カーネルの **cgroupメモリコントローラ** によって強制される独自のメモリ境界を持つ。このコントローラの仕組みを理解しているかどうかが、安定した本番デプロイと、午前3時の謎のOOM killの違いになる。
 
-This page focuses on **cgroup v2**, which is the [recommended cgroup version](https://lwn.net/Articles/679786/) for all new deployments (declared production-ready in kernel v4.5). If you're still on cgroup v1, the concepts are similar but the interface files differ. See [Memory Cgroups](memcg.md) for v1 vs v2 differences.
+このページは **cgroup v2** に焦点を当てる。cgroup v2は、すべての新規デプロイに対する[推奨されるcgroupバージョン](https://lwn.net/Articles/679786/)である（カーネルv4.5で本番利用可能と宣言された）。まだcgroup v1を使っている場合、概念は似ているがインターフェースファイルが異なる。v1とv2の違いについては[メモリcgroup](memcg.md)を参照。
 
-## The Four Memory Knobs {#the-four-memory-knobs}
+## 4つのメモリノブ {#the-four-memory-knobs}
 
-The cgroup v2 memory controller exposes four files that control how much memory a group of processes can use. They form a hierarchy from hard enforcement to soft protection:
+cgroup v2のメモリコントローラは、プロセスのグループが使えるメモリ量を制御する4つのファイルを公開している。これらは、強制力のある上限から緩い保護までの階層を構成する。
 
 ```
                     memory.max      <- Hard ceiling. Exceed this and die.
@@ -24,55 +24,55 @@ The cgroup v2 memory controller exposes four files that control how much memory 
                     memory.min      <- Hard floor. Absolutely protected from reclaim.
 ```
 
-| File | Type | What Happens | Default |
+| ファイル | 種類 | 何が起きるか | デフォルト |
 |------|------|-------------|---------|
-| [`memory.max`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Hard limit | OOM killer invoked when exceeded | `max` (no limit) |
-| [`memory.high`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Soft limit | Processes throttled, aggressive reclaim | `max` (no limit) |
-| [`memory.low`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Soft protection | Memory below this is protected from reclaim (best-effort) | `0` |
-| [`memory.min`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | Hard protection | Memory below this is never reclaimed | `0` |
+| [`memory.max`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | ハード制限 | 超えるとOOM killerが起動される | `max`（制限なし） |
+| [`memory.high`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | ソフト制限 | プロセスがスロットリングされ、積極的に回収される | `max`（制限なし） |
+| [`memory.low`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | ソフト保護 | これ未満のメモリは回収から保護される（ベストエフォート） | `0` |
+| [`memory.min`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) | ハード保護 | これ未満のメモリは決して回収されない | `0` |
 
-### memory.max: The Hard Limit {#memorymax-the-hard-limit}
+### memory.max: ハード制限 {#memorymax-the-hard-limit}
 
-When a cgroup's memory usage reaches `memory.max`, the kernel tries reclaim within that cgroup. If reclaim fails to free enough memory, the cgroup OOM killer is invoked and a process within the cgroup is killed. The host system is unaffected -- this is a cgroup-scoped OOM, not a global one.
+cgroupのメモリ使用量が`memory.max`に達すると、カーネルはそのcgroup内で回収を試みる。回収で十分なメモリを解放できなければ、cgroupのOOM killerが起動され、cgroup内のプロセスが1つkillされる。ホストシステムには影響しない -- これはグローバルなOOMではなく、cgroupスコープのOOMである。
 
 ```bash
-# Set a 1GB hard limit
+# 1GBのハード制限を設定する
 echo 1G > /sys/fs/cgroup/mycontainer/memory.max
 ```
 
-This is the wall your container cannot climb over. It exists to prevent a single container from starving the rest of the system.
+これはコンテナが乗り越えられない壁である。単一のコンテナがシステムの残りを飢えさせることを防ぐために存在する。
 
-### memory.high: The Soft Limit {#memoryhigh-the-soft-limit}
+### memory.high: ソフト制限 {#memoryhigh-the-soft-limit}
 
-`memory.high` is more nuanced. When usage exceeds this threshold, the kernel does not kill anything. Instead, it aggressively reclaims memory from the cgroup and **throttles** allocating processes -- they're put to sleep until the reclaim frees enough pages.
+`memory.high`はもっと繊細である。使用量がこの閾値を超えても、カーネルは何もkillしない。その代わりにcgroupから積極的にメモリを回収し、割り当てを行うプロセスを **スロットリングする**。それらのプロセスは、回収によって十分なページが解放されるまでスリープさせられる。
 
 ```bash
-# Throttle at 800MB, kill at 1GB
+# 800MBでスロットリングし、1GBでkillする
 echo 800M > /sys/fs/cgroup/mycontainer/memory.high
 echo 1G > /sys/fs/cgroup/mycontainer/memory.max
 ```
 
-Why have both? Because `memory.high` creates back-pressure. Instead of running at full speed until you hit a wall and die, your application slows down gradually. This gives monitoring time to detect the problem and is far gentler than an OOM kill.
+なぜ両方が必要なのか。`memory.high`はバックプレッシャーを生むからである。壁にぶつかって死ぬまで全速力で走る代わりに、アプリケーションは徐々に減速する。これにより監視が問題を検出する時間が生まれ、OOM killよりはるかに穏やかである。
 
-!!! tip "Think of it like a speed limit vs a cliff"
-    `memory.high` is a speed limit sign -- you slow down when you hit it. `memory.max` is the edge of a cliff -- you go over it and you're dead.
+!!! tip "制限速度と崖のようなものと考える"
+    `memory.high`は制限速度の標識である -- そこに達したら減速する。`memory.max`は崖の縁である -- 越えたら終わりである。
 
-### memory.low and memory.min: Protection Guarantees {#memorylow-and-memorymin-protection-guarantees}
+### memory.lowとmemory.min: 保護の保証 {#memorylow-and-memorymin-protection-guarantees}
 
-These knobs work in the opposite direction. Instead of limiting how much memory a cgroup can use, they guarantee how much it gets to keep during system-wide memory pressure.
+これらのノブは逆方向に働く。cgroupが使えるメモリ量を制限する代わりに、システム全体のメモリ圧迫の際に保持できる量を保証する。
 
-- **`memory.low`**: Best-effort protection. Memory below this threshold won't be reclaimed unless there is no other reclaimable memory anywhere in the system. Think of it as "please don't take this memory unless you absolutely have to."
-- **`memory.min`**: Hard protection. Memory below this threshold is never reclaimed, period. Even under extreme pressure, the kernel will OOM-kill other things rather than reclaim this cgroup's protected memory.
+- **`memory.low`**: ベストエフォートの保護。この閾値未満のメモリは、システム内のどこにもほかに回収可能なメモリがない場合を除いて回収されない。「どうしても必要でない限り、このメモリは取らないでほしい」と考えるとよい。
+- **`memory.min`**: ハードな保護。この閾値未満のメモリは、何があっても回収されない。極度の圧迫下でも、カーネルはこのcgroupの保護されたメモリを回収するよりも、ほかのものをOOM killする。
 
 ```bash
-# Guarantee the database container keeps at least 2GB
+# データベースコンテナが少なくとも2GBを保持することを保証する
 echo 2G > /sys/fs/cgroup/database/memory.min
 
-# Prefer to keep 4GB if possible
+# 可能なら4GBを保持することを優先する
 echo 4G > /sys/fs/cgroup/database/memory.low
 ```
 
-**Protection is hierarchical**: the effective protection for a child cgroup is limited by its parent's protection. If a parent has `memory.min` of 4GB, the sum of children's `memory.min` values can exceed 4GB, but the effective protection is distributed proportionally up to the parent's 4GB. This is documented in the [cgroup v2 distribution model](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files).
+**保護は階層的である**: 子cgroupの実効的な保護は、親の保護によって制限される。親の`memory.min`が4GBの場合、子の`memory.min`の合計は4GBを超えてもよいが、実効的な保護は親の4GBまでの範囲で比例配分される。これは[cgroup v2の配分モデル](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)に記載されている。
 
 ```
 parent (memory.min: 4GB)
@@ -80,74 +80,74 @@ parent (memory.min: 4GB)
 ├── child-b (memory.min: 2GB)  <- effective: ~1.6GB (2/5 of 4GB)
 ```
 
-## Why Containers See Wrong Memory Numbers {#why-containers-see-wrong-memory-numbers}
+## なぜコンテナは誤ったメモリ量を見るのか {#why-containers-see-wrong-memory-numbers}
 
-Run `free` inside a typical container and you'll see the **host's** total memory, not the container's limit:
+典型的なコンテナの中で`free`を実行すると、コンテナの制限ではなく **ホストの** 総メモリが表示される。
 
 ```bash
-# Inside a container with 1GB limit
+# 1GB制限のコンテナ内で
 $ free -h
               total        used        free
-Mem:           62Gi        45Gi        17Gi    # <- This is the HOST's memory!
+Mem:           62Gi        45Gi        17Gi    # <- これはホストのメモリ!
 ```
 
-This happens because `/proc/meminfo` is a global file that reports system-wide memory. The container's cgroup limit exists only in the cgroup filesystem, not in `/proc`. Many applications (especially JVMs, databases, and language runtimes) read `/proc/meminfo` to auto-tune themselves. When they see 62GB of total memory instead of 1GB, they allocate far too much and get OOM-killed.
+これは、`/proc/meminfo`がシステム全体のメモリを報告するグローバルなファイルだからである。コンテナのcgroup制限はcgroupファイルシステムにのみ存在し、`/proc`には存在しない。多くのアプリケーション（特にJVM、データベース、言語ランタイム）は`/proc/meminfo`を読んで自身を自動チューニングする。1GBではなく62GBの総メモリを見ると、それらはあまりにも多くを割り当て、OOM killされる。
 
-### The Solutions {#the-solutions}
+### 解決策 {#the-solutions}
 
-**LXCFS**: A FUSE filesystem that intercepts reads to `/proc/meminfo`, `/proc/cpuinfo`, and other files, returning cgroup-aware values instead. [LXCFS](https://linuxcontainers.org/lxcfs/) mounts over `/proc` inside the container so existing tools work without modification.
+**LXCFS**: `/proc/meminfo`、`/proc/cpuinfo`などのファイルの読み出しを横取りし、代わりにcgroupを考慮した値を返すFUSEファイルシステム。[LXCFS](https://linuxcontainers.org/lxcfs/)はコンテナ内の`/proc`の上にマウントされるため、既存のツールが修正なしで動作する。
 
-**Runtime-specific flags**: Many runtimes now detect cgroup limits natively:
+**ランタイム固有のフラグ**: 現在では多くのランタイムがcgroup制限をネイティブに検出する。
 
 ```bash
-# Java 10+ automatically detects cgroup limits
+# Java 10以降はcgroup制限を自動的に検出する
 java -XX:+UseContainerSupport -jar app.jar
 
-# Java 8u191+ also supports it
+# Java 8u191以降もサポートしている
 java -XX:+UnlockExperimentalVMOptions -XX:+UseCGroupMemoryLimitForHeap -jar app.jar
 ```
 
-**cgroup-aware tools**: Modern versions of `systemd-cgtop`, `cadvisor`, and `kubectl top` read from the cgroup filesystem directly rather than `/proc/meminfo`.
+**cgroupを考慮したツール**: 最近のバージョンの`systemd-cgtop`、`cadvisor`、`kubectl top`は、`/proc/meminfo`ではなくcgroupファイルシステムから直接読む。
 
-## Common Problems {#common-problems}
+## よくある問題 {#common-problems}
 
-### Container OOM When Host Has Free Memory {#container-oom-when-host-has-free-memory}
+### ホストに空きメモリがあるのにコンテナがOOMになる {#container-oom-when-host-has-free-memory}
 
-This is the most frequently misdiagnosed container problem. The host shows 17GB free, but your container just got killed.
+これは最も頻繁に誤診されるコンテナの問題である。ホストは17GBの空きを示しているのに、コンテナがkillされた。
 
-The cause is simple: the container hit its **cgroup memory limit** (`memory.max`), which triggered a cgroup-scoped OOM kill. Global free memory is irrelevant -- the cgroup has its own accounting.
+原因は単純である。コンテナが **cgroupのメモリ制限**（`memory.max`）に達し、cgroupスコープのOOM killが発動したのである。グローバルな空きメモリは関係ない -- cgroupは独自の計上を持つ。
 
 ```bash
-# Confirm the cgroup limit was hit
+# cgroupの制限に達したことを確認する
 cat /sys/fs/cgroup/mycontainer/memory.events
-# oom 3          <- OOM was triggered 3 times
-# oom_kill 3     <- 3 processes were killed
-# max 47         <- memory.max was hit 47 times
+# oom 3          <- OOMが3回発動した
+# oom_kill 3     <- 3つのプロセスがkillされた
+# max 47         <- memory.maxに47回達した
 ```
 
-**Fixes**:
+**対処法**:
 
-- Increase `memory.max` if the limit is too low
-- Add `memory.high` below `memory.max` to create back-pressure before the OOM
-- Optimize the application's memory usage
-- Allow swap with `memory.swap.max` to give a buffer
+- 制限が低すぎるなら`memory.max`を引き上げる
+- OOMの前にバックプレッシャーを生むよう、`memory.max`より下に`memory.high`を追加する
+- アプリケーションのメモリ使用量を最適化する
+- `memory.swap.max`でスワップを許可し、バッファを設ける
 
-### Page Cache Counting Against the Limit {#page-cache-counting-against-the-limit}
+### ページキャッシュが制限に計上される {#page-cache-counting-against-the-limit}
 
-In cgroup v2, **page cache is charged to the cgroup that read the file**. This catches many people off guard. A container that reads large files will have its page cache counted against its memory limit, even though the kernel can reclaim that cache at any time.
+cgroup v2では、**ページキャッシュはファイルを読んだcgroupに課金される**。これは多くの人の不意を突く。大きなファイルを読むコンテナは、カーネルがそのキャッシュをいつでも回収できるにもかかわらず、ページキャッシュがメモリ制限に計上される。
 
 ```bash
-# Check how much is cache vs anonymous memory
+# キャッシュと匿名メモリがそれぞれどれだけか確認する
 cat /sys/fs/cgroup/mycontainer/memory.stat | grep -E '^(anon|file) '
-# anon 524288000     <- actual working memory
-# file 209715200     <- page cache (reclaimable)
+# anon 524288000     <- 実際の作業用メモリ
+# file 209715200     <- ページキャッシュ（回収可能）
 ```
 
-The cache is reclaimable, so it won't cause OOM by itself. But it does cause `memory.high` throttling if the combined usage exceeds the soft limit. If this is a problem, size `memory.high` with page cache headroom in mind.
+キャッシュは回収可能なので、それ自体がOOMを引き起こすことはない。しかし合計の使用量がソフト制限を超えれば、`memory.high`のスロットリングは引き起こす。これが問題になる場合は、ページキャッシュの余裕を考慮して`memory.high`のサイズを決めること。
 
-### Slow Container Start Under Memory Pressure {#slow-container-start-under-memory-pressure}
+### メモリ圧迫下でのコンテナの起動の遅さ {#slow-container-start-under-memory-pressure}
 
-If a container starts slowly, it might be because `memory.high` is set too close to actual usage. Every allocation triggers reclaim and throttling. Check `memory.pressure` to confirm:
+コンテナの起動が遅い場合、`memory.high`が実際の使用量に近すぎる値に設定されているのかもしれない。すべての割り当てが回収とスロットリングを引き起こす。確認するには`memory.pressure`を見る。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.pressure
@@ -155,36 +155,36 @@ cat /sys/fs/cgroup/mycontainer/memory.pressure
 # full avg10=20.00 avg60=10.00 avg300=5.00 total=234567
 ```
 
-If these numbers are high, your container is spending significant time waiting for memory.
+これらの数値が高ければ、コンテナはメモリ待ちにかなりの時間を費やしている。
 
-## Kubernetes: Requests vs Limits {#kubernetes-requests-vs-limits}
+## Kubernetes: requestsとlimits {#kubernetes-requests-vs-limits}
 
-Kubernetes exposes two memory settings per container, and they map directly to cgroup knobs:
+Kubernetesはコンテナごとに2つのメモリ設定を公開しており、それらはcgroupのノブに直接対応する。
 
-| Kubernetes | cgroup v2 | Behavior |
+| Kubernetes | cgroup v2 | 挙動 |
 |-----------|-----------|----------|
-| `resources.limits.memory` | `memory.max` | Hard limit. Container is OOM-killed if exceeded. |
-| `resources.requests.memory` | `memory.min` (requires MemoryQoS feature gate) | Scheduling guarantee. Used for QoS classification; `memory.min` mapping requires the alpha [MemoryQoS feature gate](https://kubernetes.io/docs/tasks/configure-pod-container/quality-service-pod/) (k/enhancements#2570). |
+| `resources.limits.memory` | `memory.max` | ハード制限。超えるとコンテナはOOM killされる。 |
+| `resources.requests.memory` | `memory.min`（MemoryQoSフィーチャーゲートが必要） | スケジューリングの保証。QoS分類に使われる。`memory.min`への対応付けには、アルファ版の[MemoryQoSフィーチャーゲート](https://kubernetes.io/docs/tasks/configure-pod-container/quality-service-pod/)（k/enhancements#2570）が必要。 |
 
 ```yaml
-# Pod spec
+# Podのspec
 resources:
   requests:
-    memory: "512Mi"   # Schedule on a node with 512Mi available; protect this amount
+    memory: "512Mi"   # 512Miが利用可能なノードにスケジュールし、この量を保護する
   limits:
-    memory: "1Gi"     # Hard ceiling; OOM kill above this
+    memory: "1Gi"     # ハードな上限。これを超えるとOOM kill
 ```
 
-### How QoS Classes Affect Memory {#how-qos-classes-affect-memory}
+### QoSクラスがメモリに与える影響 {#how-qos-classes-affect-memory}
 
-Kubernetes assigns Quality of Service classes based on requests and limits:
+Kubernetesは、requestsとlimitsに基づいてQuality of Serviceクラスを割り当てる。
 
-- **Guaranteed** (requests == limits): Container gets exactly what it asks for. With MemoryQoS enabled, the kubelet sets `memory.min` equal to the limit, providing hard protection.
-- **Burstable** (requests < limits): Container can use more than requested, up to its limit. With MemoryQoS enabled, gets `memory.min` set to the request value.
-- **BestEffort** (no requests or limits): No cgroup memory limit is set. First to be killed under node pressure.
+- **Guaranteed**（requests == limits）: コンテナは要求したとおりの量を得る。MemoryQoSが有効な場合、kubeletは`memory.min`をlimitと等しく設定し、ハードな保護を提供する。
+- **Burstable**（requests < limits）: コンテナはlimitまで、要求を超えて使える。MemoryQoSが有効な場合、`memory.min`がrequestの値に設定される。
+- **BestEffort**（requestsもlimitsもない）: cgroupのメモリ制限は設定されない。ノードの圧迫下で最初にkillされる。
 
-!!! note "MemoryQoS feature gate"
-    The `memory.min` mapping described above requires the `MemoryQoS` feature gate, which was alpha in Kubernetes 1.22+ and is not enabled by default. In standard Kubernetes deployments, `resources.requests.memory` influences scheduling and QoS class only — it does not set `memory.min` in the cgroup.
+!!! note "MemoryQoSフィーチャーゲート"
+    上で述べた`memory.min`への対応付けには`MemoryQoS`フィーチャーゲートが必要である。これはKubernetes 1.22以降でアルファ版であり、デフォルトでは有効になっていない。標準的なKubernetesのデプロイでは、`resources.requests.memory`はスケジューリングとQoSクラスにのみ影響し、cgroupの`memory.min`は設定しない。
 
 ```
 Node (16GB)
@@ -193,73 +193,73 @@ Node (16GB)
 └── BestEffort pod (no limits)                       <- first to die
 ```
 
-!!! warning "Set requests even if you don't set limits"
-    Without a `requests.memory`, your pod is BestEffort class and will be the first to be evicted when the node runs low on memory. Always set at least requests.
+!!! warning "limitsを設定しない場合でもrequestsは設定すること"
+    `requests.memory`がないと、PodはBestEffortクラスになり、ノードのメモリが不足したときに最初に退避させられる。少なくともrequestsは常に設定すること。
 
-## Docker: --memory and --memory-reservation {#docker-memory-and-memory-reservation}
+## Docker: --memoryと--memory-reservation {#docker-memory-and-memory-reservation}
 
-Docker exposes container memory settings through command-line flags:
+Dockerはコマンドラインフラグを通じてコンテナのメモリ設定を公開している。
 
-| Docker Flag | cgroup v2 | Behavior |
+| Dockerフラグ | cgroup v2 | 挙動 |
 |------------|-----------|----------|
-| `--memory` (or `-m`) | `memory.max` | Hard limit. OOM kill if exceeded. |
-| `--memory-reservation` | `memory.low` | Soft protection under system pressure. |
-| `--memory-swap` | `memory.swap.max` + `memory.max` | Total memory + swap limit. |
-| `--oom-kill-disable` | Disables OOM killer | **Dangerous**: can hang the container and host. |
+| `--memory`（または`-m`） | `memory.max` | ハード制限。超えるとOOM kill。 |
+| `--memory-reservation` | `memory.low` | システムの圧迫下でのソフトな保護。 |
+| `--memory-swap` | `memory.swap.max` + `memory.max` | メモリ＋スワップの合計制限。 |
+| `--oom-kill-disable` | OOM killerを無効化 | **危険**: コンテナとホストがハングしうる。 |
 
 ```bash
-# Run a container with 1GB limit and 750MB reservation
+# 1GBの制限と750MBの予約でコンテナを実行する
 docker run -d \
   --memory=1g \
   --memory-reservation=750m \
   --name myapp myimage
 
-# Equivalent cgroup settings:
+# 等価なcgroup設定:
 # memory.max = 1073741824
 # memory.low = 786432000
 ```
 
-!!! warning "Docker --memory-swap semantics"
-    `--memory-swap` sets the **combined** memory + swap limit, not just swap. So `--memory=1g --memory-swap=2g` means 1GB RAM + 1GB swap. Set `--memory-swap=-1` for unlimited swap.
+!!! warning "Dockerの--memory-swapのセマンティクス"
+    `--memory-swap`は、スワップだけでなくメモリ＋スワップの **合計** の制限を設定する。したがって`--memory=1g --memory-swap=2g`は、1GBのRAM＋1GBのスワップを意味する。スワップを無制限にするには`--memory-swap=-1`を設定する。
 
-## Monitoring Container Memory {#monitoring-container-memory}
+## コンテナのメモリの監視 {#monitoring-container-memory}
 
-### Key Files {#key-files}
+### 主要なファイル {#key-files}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
 
-# Current usage (bytes)
+# 現在の使用量（バイト）
 cat $CGROUP/memory.current
 # 734003200
 
-# Peak usage (useful for sizing)
-cat $CGROUP/memory.peak       # v5.19+
+# ピーク使用量（サイズ決めに有用）
+cat $CGROUP/memory.peak       # v5.19以降
 # 891289600
 
-# Detailed breakdown
+# 詳細な内訳
 cat $CGROUP/memory.stat
-# anon 524288000              # heap, stack, anonymous mmap
-# file 209715200              # page cache
-# slab 12582912               # kernel slab objects
-# sock 4194304                # socket buffers
-# shmem 0                     # shared memory (tmpfs)
-# pgfault 1234567             # page faults
-# pgmajfault 42               # major faults (disk I/O)
+# anon 524288000              # ヒープ、スタック、匿名mmap
+# file 209715200              # ページキャッシュ
+# slab 12582912               # カーネルのslabオブジェクト
+# sock 4194304                # ソケットバッファ
+# shmem 0                     # 共有メモリ（tmpfs）
+# pgfault 1234567             # ページフォールト
+# pgmajfault 42               # メジャーフォールト（ディスクI/O）
 
-# Events (problems that happened)
+# イベント（発生した問題）
 cat $CGROUP/memory.events
-# low 0                       # times memory.low was breached
-# high 152                    # times memory.high was exceeded
-# max 3                       # times memory.max was hit
-# oom 1                       # OOM events
-# oom_kill 1                  # processes OOM-killed
-# oom_group_kill 0            # group OOM kills
+# low 0                       # memory.lowを下回った回数
+# high 152                    # memory.highを超えた回数
+# max 3                       # memory.maxに達した回数
+# oom 1                       # OOMイベント
+# oom_kill 1                  # OOM killされたプロセス
+# oom_group_kill 0            # グループOOM kill
 ```
 
-### Pressure Stall Information (PSI) {#pressure-stall-information-psi}
+### Pressure Stall Information（PSI） {#pressure-stall-information-psi}
 
-PSI gives you the most actionable signal about whether a container is memory-constrained:
+PSIは、コンテナがメモリに制約されているかどうかについて、最も行動に結びつけやすいシグナルを与えてくれる。
 
 ```bash
 cat $CGROUP/memory.pressure
@@ -267,124 +267,124 @@ cat $CGROUP/memory.pressure
 # full avg10=0.00 avg60=0.00 avg300=0.00 total=1234
 ```
 
-- **some**: Percentage of time that at least one task in the cgroup was stalled waiting for memory. If this is consistently above zero, the container is under pressure.
-- **full**: Percentage of time that all tasks were stalled. If this is above zero, the container is completely blocked on memory.
+- **some**: cgroup内の少なくとも1つのタスクがメモリ待ちでストールしていた時間の割合。これが常にゼロより大きければ、コンテナは圧迫下にある。
+- **full**: すべてのタスクがストールしていた時間の割合。これがゼロより大きければ、コンテナはメモリで完全にブロックされている。
 
-PSI was introduced as a cgroup-level feature in [v4.20](https://lwn.net/Articles/759658/) and is the foundation of Meta's [oomd](https://facebookincubator.github.io/oomd/) userspace OOM daemon, which uses PSI to proactively kill workloads before the kernel OOM killer fires.
+PSIは[v4.20](https://lwn.net/Articles/759658/)でcgroupレベルの機能として導入され、Metaのユーザー空間OOMデーモン[oomd](https://facebookincubator.github.io/oomd/)の基盤となっている。oomdはPSIを使い、カーネルのOOM killerが発動する前に先回りしてワークロードをkillする。
 
 ```bash
-# Set up a PSI trigger to get notified when pressure exceeds a threshold
-# (useful for building auto-scaling)
+# 圧迫が閾値を超えたときに通知を受けるPSIトリガーを設定する
+# （オートスケーリングの構築に有用）
 echo "some 50000 1000000" > $CGROUP/memory.pressure
-# Trigger when "some" exceeds 50ms per 1s window
+# 1秒のウィンドウあたり"some"が50msを超えたら発火する
 ```
 
-## Swap in Containers {#swap-in-containers}
+## コンテナにおけるスワップ {#swap-in-containers}
 
-By default in cgroup v2, swap is allowed up to whatever the system provides. You can control this per-cgroup:
+cgroup v2のデフォルトでは、スワップはシステムが提供する分まで許可される。これはcgroupごとに制御できる。
 
 ```bash
-# Disable swap entirely for this container
+# このコンテナのスワップを完全に無効にする
 echo 0 > /sys/fs/cgroup/mycontainer/memory.swap.max
 
-# Allow up to 500MB of swap
+# 最大500MBのスワップを許可する
 echo 500M > /sys/fs/cgroup/mycontainer/memory.swap.max
 
-# Check current swap usage
+# 現在のスワップ使用量を確認する
 cat /sys/fs/cgroup/mycontainer/memory.swap.current
 ```
 
-### Why Allow Swap in Containers? {#why-allow-swap-in-containers}
+### なぜコンテナでスワップを許可するのか {#why-allow-swap-in-containers}
 
-The conventional wisdom of "disable swap for containers" comes from cgroup v1 where swap accounting was expensive and unreliable. In cgroup v2, swap accounting is efficient and well-integrated.
+「コンテナではスワップを無効にせよ」という通説は、スワップの計上が高コストで信頼性に欠けていたcgroup v1に由来する。cgroup v2では、スワップの計上は効率的で、よく統合されている。
 
-Swap provides a buffer between "memory.high throttling" and "memory.max OOM kill". Without swap, a sudden spike in memory usage goes directly to OOM. With swap, the spike gets absorbed into swap, giving you time to detect and react.
+スワップは「memory.highのスロットリング」と「memory.maxのOOM kill」の間のバッファとなる。スワップがなければ、メモリ使用量の急増はそのままOOMにつながる。スワップがあれば急増はスワップに吸収され、検出して対応する時間が生まれる。
 
-### memory.zswap.max (v5.19+) {#memoryzswapmax-v519}
+### memory.zswap.max（v5.19以降） {#memoryzswapmax-v519}
 
-[zswap](https://docs.kernel.org/admin-guide/mm/zswap.html) compresses pages in memory before writing them to swap. The `memory.zswap.max` file limits how much compressed data a cgroup can store in the zswap pool:
+[zswap](https://docs.kernel.org/admin-guide/mm/zswap.html)は、ページをスワップに書き出す前にメモリ内で圧縮する。`memory.zswap.max`ファイルは、cgroupがzswapプールに格納できる圧縮データの量を制限する。
 
 ```bash
-# Limit zswap usage to 200MB for this cgroup
+# このcgroupのzswap使用量を200MBに制限する
 echo 200M > /sys/fs/cgroup/mycontainer/memory.zswap.max
 
-# Check zswap usage
+# zswapの使用量を確認する
 cat /sys/fs/cgroup/mycontainer/memory.zswap.current
 ```
 
-This prevents a single container from filling the entire zswap pool and forcing other containers' pages to be written to slow disk swap. The per-cgroup zswap limit was introduced in [commit f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25) ("zswap: memcg accounting").
+これにより、単一のコンテナがzswapプール全体を埋め尽くし、ほかのコンテナのページを低速なディスクスワップへ書き出させることを防げる。cgroupごとのzswap制限は[commit f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25)（"zswap: memcg accounting"）で導入された。
 
-## Best Practices {#best-practices}
+## ベストプラクティス {#best-practices}
 
-### Sizing Limits {#sizing-limits}
+### 制限のサイズ決め {#sizing-limits}
 
-1. **Profile first**: Run your application under realistic load and observe `memory.peak` (or `memory.max_usage_in_bytes` on v1). Set `memory.max` to 1.25-1.5x the observed peak.
+1. **まずプロファイルする**: 現実的な負荷でアプリケーションを実行し、`memory.peak`（v1では`memory.max_usage_in_bytes`）を観察する。`memory.max`を観測したピークの1.25〜1.5倍に設定する。
 
-2. **Set memory.high below memory.max**: A gap of 10-20% between `memory.high` and `memory.max` gives the kernel room to throttle and reclaim before killing.
+2. **memory.highをmemory.maxより下に設定する**: `memory.high`と`memory.max`の間に10〜20%の差を設けると、カーネルはkillする前にスロットリングと回収を行う余地を得る。
 
     ```bash
-    # If your app peaks at 800MB:
-    echo 1200M > /sys/fs/cgroup/mycontainer/memory.max   # 1.5x peak
-    echo 1000M > /sys/fs/cgroup/mycontainer/memory.high  # throttle zone
+    # アプリのピークが800MBの場合:
+    echo 1200M > /sys/fs/cgroup/mycontainer/memory.max   # ピークの1.5倍
+    echo 1000M > /sys/fs/cgroup/mycontainer/memory.high  # スロットリング領域
     ```
 
-3. **Account for page cache**: If your workload is I/O-heavy, add headroom for page cache. Check `memory.stat`'s `file` field under load.
+3. **ページキャッシュを考慮する**: ワークロードがI/O中心なら、ページキャッシュのための余裕を加える。負荷をかけた状態で`memory.stat`の`file`フィールドを確認する。
 
-4. **Use memory.low for critical services**: If a container must not be reclaimed (e.g., database buffer pool), set `memory.low` or `memory.min`.
+4. **重要なサービスにはmemory.lowを使う**: コンテナを回収させてはならない場合（例えばデータベースのバッファプール）は、`memory.low`または`memory.min`を設定する。
 
-### Handling OOM Gracefully {#handling-oom-gracefully}
+### OOMを穏やかに処理する {#handling-oom-gracefully}
 
-**Use `memory.oom.group`** ([commit 3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca), "mm, oom: introduce memory.oom.group"): When a container OOM occurs, the default behavior kills a single process. For multi-process containers (e.g., a web server with workers), killing one process often leaves the container in a broken state. `memory.oom.group` kills all processes in the cgroup together, ensuring a clean restart.
+**`memory.oom.group`を使う**（[commit 3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca)、"mm, oom: introduce memory.oom.group"）: コンテナのOOMが起きたとき、デフォルトの挙動では単一のプロセスがkillされる。マルチプロセスのコンテナ（例えばワーカーを持つWebサーバー）では、1つのプロセスをkillするとコンテナが壊れた状態で残ることが多い。`memory.oom.group`はcgroup内のすべてのプロセスをまとめてkillし、クリーンな再起動を保証する。
 
 ```bash
-# Kill all processes in the cgroup on OOM (v4.19+)
+# OOM時にcgroup内のすべてのプロセスをkillする（v4.19以降）
 echo 1 > /sys/fs/cgroup/mycontainer/memory.oom.group
 ```
 
-**Use systemd or container runtime restart policies**: Since OOM is not always preventable, make sure your container can restart cleanly.
+**systemdやコンテナランタイムの再起動ポリシーを使う**: OOMは常に防げるわけではないので、コンテナがクリーンに再起動できるようにしておくこと。
 
 ```bash
-# Docker: always restart on OOM
+# Docker: OOM時に常に再起動する
 docker run --restart=always --memory=1g myimage
 
-# Kubernetes: the default restartPolicy is Always
+# Kubernetes: デフォルトのrestartPolicyはAlways
 ```
 
-**Monitor `memory.events`**: Set up alerts on the `oom` and `oom_kill` counters. An increasing count means the limit is too low or the application has a leak.
+**`memory.events`を監視する**: `oom`と`oom_kill`カウンタにアラートを設定する。カウントが増えていれば、制限が低すぎるか、アプリケーションにリークがある。
 
-### A Complete Production Setup {#a-complete-production-setup}
+### 本番環境の完全な設定例 {#a-complete-production-setup}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
 
-# Hard limit: 1.5x observed peak
+# ハード制限: 観測したピークの1.5倍
 echo 1500M > $CGROUP/memory.max
 
-# Throttle before OOM
+# OOMの前にスロットリングする
 echo 1200M > $CGROUP/memory.high
 
-# Protect critical working set
+# 重要なワーキングセットを保護する
 echo 500M > $CGROUP/memory.min
 
-# Allow some swap as buffer
+# バッファとしていくらかのスワップを許可する
 echo 512M > $CGROUP/memory.swap.max
 
-# Kill all processes together on OOM
+# OOM時にすべてのプロセスをまとめてkillする
 echo 1 > $CGROUP/memory.oom.group
 ```
 
-## Try It Yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### Observe memory.high Throttling {#observe-memoryhigh-throttling}
+### memory.highのスロットリングを観察する {#observe-memoryhigh-throttling}
 
 ```bash
-# Create a cgroup with a low soft limit
+# 低いソフト制限を持つcgroupを作成する
 sudo mkdir -p /sys/fs/cgroup/throttle-test
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo 50M | sudo tee /sys/fs/cgroup/throttle-test/memory.high
 echo 100M | sudo tee /sys/fs/cgroup/throttle-test/memory.max
 
-# Run a process that slowly allocates memory
+# ゆっくりメモリを割り当てるプロセスを実行する
 echo $$ | sudo tee /sys/fs/cgroup/throttle-test/cgroup.procs
 python3 -c "
 import time
@@ -394,14 +394,14 @@ for i in range(80):
     print(f'Allocated {i+1}MB')
     time.sleep(0.1)
 "
-# Notice it slows down dramatically around 50MB (memory.high)
-# and gets killed around 100MB (memory.max)
+# 50MB（memory.high）付近で劇的に遅くなり、
+# 100MB（memory.max）付近でkillされることに注目
 ```
 
-### Compare memory.low Protection {#compare-memorylow-protection}
+### memory.lowによる保護を比較する {#compare-memorylow-protection}
 
 ```bash
-# Create parent and two children
+# 親と2つの子を作成する
 sudo mkdir -p /sys/fs/cgroup/parent
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo 200M | sudo tee /sys/fs/cgroup/parent/memory.max
@@ -410,26 +410,26 @@ echo "+memory" | sudo tee /sys/fs/cgroup/parent/cgroup.subtree_control
 sudo mkdir /sys/fs/cgroup/parent/protected
 sudo mkdir /sys/fs/cgroup/parent/unprotected
 
-# Protect one child
+# 一方の子を保護する
 echo 100M | sudo tee /sys/fs/cgroup/parent/protected/memory.low
 
-# Allocate memory in both, then observe which one gets reclaimed
-# when the parent approaches its 200M limit
+# 両方でメモリを割り当て、親が200Mの制限に近づいたときに
+# どちらが回収されるかを観察する
 ```
 
-### Monitor a Docker Container's Memory {#monitor-a-docker-containers-memory}
+### Dockerコンテナのメモリを監視する {#monitor-a-docker-containers-memory}
 
 ```bash
-# Start a container
+# コンテナを起動する
 docker run -d --name memtest --memory=256m nginx
 
-# Find its cgroup path
+# cgroupのパスを見つける
 CGPATH=$(docker inspect memtest --format '{{.HostConfig.CgroupParent}}')
-# Or on systemd-based systems:
+# またはsystemdベースのシステムでは:
 PID=$(docker inspect memtest --format '{{.State.Pid}}')
 CGROUP=$(cat /proc/$PID/cgroup | grep -o '/.*')
 
-# Watch memory in real-time
+# メモリをリアルタイムで監視する
 watch -n 1 "echo '--- usage ---' && \
   cat /sys/fs/cgroup${CGROUP}/memory.current && \
   echo '--- pressure ---' && \
@@ -437,80 +437,80 @@ watch -n 1 "echo '--- usage ---' && \
   echo '--- events ---' && \
   cat /sys/fs/cgroup${CGROUP}/memory.events"
 
-# Cleanup
+# 後片付け
 docker rm -f memtest
 ```
 
-## History {#history}
+## 歴史 {#history}
 
-### memory.high Throttling (v4.0+, stable in v4.5) {#memoryhigh-throttling-v40-stable-in-v45}
+### memory.highのスロットリング（v4.0以降、v4.5で安定） {#memoryhigh-throttling-v40-stable-in-v45}
 
-**Author**: Johannes Weiner
+**作者**: Johannes Weiner
 
-The `memory.high` knob was added as part of the cgroup v2 memory controller in v4.0 ([commit 241994ed8649](https://git.kernel.org/linus/241994ed8649)), but cgroup v2 was experimental until v4.5 when it was [declared production-ready](https://lwn.net/Articles/679786/). The soft-limit throttling model — where processes are slowed down instead of killed — made container memory management much more predictable.
+`memory.high`ノブはv4.0でcgroup v2メモリコントローラの一部として追加された（[commit 241994ed8649](https://git.kernel.org/linus/241994ed8649)）が、cgroup v2はv4.5で[本番利用可能と宣言される](https://lwn.net/Articles/679786/)までは実験的な扱いだった。プロセスをkillする代わりに減速させるソフト制限のスロットリングモデルによって、コンテナのメモリ管理ははるかに予測しやすくなった。
 
-### memory.oom.group (v4.19, 2018) {#memoryoomgroup-v419-2018}
+### memory.oom.group（v4.19、2018年） {#memoryoomgroup-v419-2018}
 
-**Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group")
+**コミット**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca)（"mm, oom: introduce memory.oom.group"）
 
-**Author**: Roman Gushchin
+**作者**: Roman Gushchin
 
-Allowed killing all processes in a cgroup together on OOM, which is essential for container-based deployments where partial kills leave broken state.
+OOM時にcgroup内のすべてのプロセスをまとめてkillできるようにした。部分的なkillが壊れた状態を残すコンテナベースのデプロイにとって不可欠である。
 
-### Per-cgroup PSI (v4.20, 2018) {#per-cgroup-psi-v420-2018}
+### cgroupごとのPSI（v4.20、2018年） {#per-cgroup-psi-v420-2018}
 
-**Commit**: [eb414681d5a0](https://git.kernel.org/linus/eb414681d5a0) ("psi: pressure stall information for CPU, memory, and IO") | [LWN](https://lwn.net/Articles/759658/)
+**コミット**: [eb414681d5a0](https://git.kernel.org/linus/eb414681d5a0)（"psi: pressure stall information for CPU, memory, and IO"） | [LWN](https://lwn.net/Articles/759658/)
 
-**Author**: Johannes Weiner
+**作者**: Johannes Weiner
 
-Enabled fine-grained pressure monitoring per cgroup, replacing the crude `memory.failcnt` counter from v1.
+cgroupごとのきめ細かな圧迫監視を可能にし、v1の大雑把な`memory.failcnt`カウンタに取って代わった。
 
-### memory.reclaim (v5.19, 2022) {#memoryreclaim-v519-2022}
+### memory.reclaim（v5.19、2022年） {#memoryreclaim-v519-2022}
 
-**Commit**: [94968384dde1](https://git.kernel.org/linus/94968384dde1) ("memcg: introduce per-memcg reclaim interface") | [LWN](https://lwn.net/Articles/894849/)
+**コミット**: [94968384dde1](https://git.kernel.org/linus/94968384dde1)（"memcg: introduce per-memcg reclaim interface"） | [LWN](https://lwn.net/Articles/894849/)
 
-**Authors**: Shakeel Butt (original author, Google) and Yosry Ahmed (Google, drove subsequent revisions)
+**作者**: Shakeel Butt（最初の作者、Google）とYosry Ahmed（Google、その後の改訂を推進）
 
-Proactive reclaim: allows userspace to trigger reclaim within a cgroup without waiting for memory pressure. Used by Meta and Google for pre-emptive memory management.
+プロアクティブな回収: メモリ圧迫を待たずに、ユーザー空間がcgroup内で回収を起動できるようにする。MetaとGoogleが先回りのメモリ管理に使っている。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory controller implementation |
-| [`mm/vmpressure.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmpressure.c) | Memory pressure notifications |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | メモリコントローラの実装 |
+| [`mm/vmpressure.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmpressure.c) | メモリ圧迫の通知 |
 | [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | Pressure Stall Information |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - Authoritative cgroup v2 reference
-- [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) - zswap documentation
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) - cgroup v2の正式なリファレンス
+- [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) - zswapのドキュメント
 
-### LWN Articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Controlling memory with cgroup v2](https://lwn.net/Articles/662925/) - memory.high design and motivation
-- [PSI - Pressure Stall Information](https://lwn.net/Articles/759658/) - per-cgroup pressure tracking
-- [User-space OOM handling](https://lwn.net/Articles/894849/) - memory.reclaim and proactive management
-- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) - cgroup v2 reaching production readiness
+- [Controlling memory with cgroup v2](https://lwn.net/Articles/662925/) - memory.highの設計と動機
+- [PSI - Pressure Stall Information](https://lwn.net/Articles/759658/) - cgroupごとの圧迫の追跡
+- [User-space OOM handling](https://lwn.net/Articles/894849/) - memory.reclaimとプロアクティブな管理
+- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) - cgroup v2が本番利用可能になるまで
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Memory Cgroups](memcg.md) - Detailed memcg internals and v1 vs v2
-- [Running out of memory](oom.md) - The global OOM kill path
-- [Page Reclaim](reclaim.md) - How the kernel reclaims memory
-- [Swap](swap.md) - Swap subsystem internals
-- [Glossary](glossary.md) - cgroup, OOM, PSI definitions
+- [メモリcgroup](memcg.md) - memcgの内部の詳細とv1とv2の違い
+- [メモリ不足](oom.md) - グローバルなOOM killの経路
+- [ページ回収](reclaim.md) - カーネルがメモリをどのように回収するか
+- [スワップ](swap.md) - スワップサブシステムの内部
+- [用語集](glossary.md) - cgroup、OOM、PSIの定義
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Container Memory Limits](container-memory-limits.md) — the full sequence from `memory.high` throttling through cgroup OOM kill and recovery
-- [memory.stat Field Reference](memory-stat.md) — every field in `/sys/fs/cgroup/*/memory.stat` explained, with diagnostic recipes
-- [Memory Cgroups](memcg.md) — how the memcg charge model works and v1 vs v2 differences
-- [Reading an OOM log](reading-oom-log.md) — how to parse the dmesg output when a container is OOM-killed
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — authoritative kernel reference for all cgroup v2 interface files including `memory.high`, `memory.max`, `memory.min`, and `memory.events`
-- [LWN: Controlling memory with cgroup v2](https://lwn.net/Articles/662925/) — design rationale for `memory.high` and the soft-limit throttling model
-- [LWN: PSI — Pressure Stall Information](https://lwn.net/Articles/759658/) — how per-cgroup `memory.pressure` is computed and how to act on it
-- [LWN: User-space OOM handling](https://lwn.net/Articles/894849/) — `memory.reclaim` and proactive memory management from orchestrators
-- [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — memory controller implementation: charge, throttle, and OOM paths
+- [コンテナのメモリ制限](container-memory-limits.md) — `memory.high`のスロットリングからcgroupのOOM kill、そして回復までの一連の流れ
+- [memory.statフィールドリファレンス](memory-stat.md) — `/sys/fs/cgroup/*/memory.stat`のすべてのフィールドの説明と診断のレシピ
+- [メモリcgroup](memcg.md) — memcgの課金モデルの仕組みとv1とv2の違い
+- [OOMログの読み方](reading-oom-log.md) — コンテナがOOM killされたときのdmesg出力の解析方法
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — `memory.high`、`memory.max`、`memory.min`、`memory.events`を含む、cgroup v2のすべてのインターフェースファイルに関するカーネルの正式なリファレンス
+- [LWN: Controlling memory with cgroup v2](https://lwn.net/Articles/662925/) — `memory.high`とソフト制限のスロットリングモデルの設計根拠
+- [LWN: PSI — Pressure Stall Information](https://lwn.net/Articles/759658/) — cgroupごとの`memory.pressure`がどのように計算され、どう対応すべきか
+- [LWN: User-space OOM handling](https://lwn.net/Articles/894849/) — `memory.reclaim`と、オーケストレータからのプロアクティブなメモリ管理
+- [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — メモリコントローラの実装: 課金、スロットリング、OOMの経路

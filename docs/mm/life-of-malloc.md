@@ -1,373 +1,373 @@
-# Life of a malloc {#life-of-a-malloc}
+# mallocの一生 {#life-of-a-malloc}
 
-> Tracing a userspace memory allocation from `malloc()` to physical pages
+> ユーザー空間のメモリ割り当てを`malloc()`から物理ページまで追跡する
 
-## What happens when you call malloc? {#what-happens-when-you-call-malloc}
+## mallocを呼ぶと何が起きるか {#what-happens-when-you-call-malloc}
 
-When a program calls `malloc(1024)`, what actually happens? The answer involves multiple layers of software, each optimizing for different goals:
+プログラムが`malloc(1024)`を呼んだとき、実際には何が起きているのか。答えには複数のソフトウェア層が関わっており、それぞれが異なる目標に向けて最適化されている。
 
 ```mermaid
 flowchart TD
     A["malloc(1024)"] --> B
 
     subgraph B["glibc (ptmalloc2)"]
-        B1["Check thread-local free lists"]
-        B2["Try arena allocation"]
-        B3["Maybe call brk() or mmap()"]
+        B1["スレッドローカルのフリーリストを確認"]
+        B2["アリーナからの割り当てを試行"]
+        B3["必要ならbrk()またはmmap()を呼ぶ"]
     end
 
-    B -->|"only if needed"| C
+    B -->|"必要な場合のみ"| C
 
-    subgraph C["Kernel: System Call"]
-        C1["brk(): extend heap"]
-        C2["mmap(): create new mapping"]
+    subgraph C["カーネル: システムコール"]
+        C1["brk(): ヒープを拡張"]
+        C2["mmap(): 新しいマッピングを作成"]
     end
 
     C --> D
 
-    subgraph D["Kernel: VMA Creation"]
-        D1["Create/extend vm_area_struct"]
-        D2["No physical memory yet!"]
+    subgraph D["カーネル: VMAの作成"]
+        D1["vm_area_structを作成/拡張"]
+        D2["まだ物理メモリはない!"]
     end
 
-    D -->|"later, on first access"| E
+    D -->|"後で、最初のアクセス時に"| E
 
-    subgraph E["Kernel: Page Fault"]
-        E1["Process touches the memory"]
-        E2["Trap into kernel"]
-        E3["Allocate physical page"]
-        E4["Update page tables"]
+    subgraph E["カーネル: ページフォールト"]
+        E1["プロセスがメモリに触れる"]
+        E2["カーネルへトラップ"]
+        E3["物理ページを割り当てる"]
+        E4["ページテーブルを更新"]
     end
 
     E --> F
 
-    subgraph F["Physical Memory"]
-        F1["Page from buddy allocator"]
-        F2["Mapped into process address space"]
+    subgraph F["物理メモリ"]
+        F1["バディアロケータからのページ"]
+        F2["プロセスのアドレス空間にマップされる"]
     end
 ```
 
-The key insight: **malloc doesn't allocate physical memory**. It reserves virtual address space. Physical pages are allocated later, on first access, through demand paging.
+重要な洞察は、**mallocは物理メモリを割り当てない** ということである。mallocが確保するのは仮想アドレス空間である。物理ページは後で、最初のアクセス時に、デマンドページングによって割り当てられる。
 
-## Stage 1: Userspace (glibc) {#stage-1-userspace-glibc}
+## ステージ1: ユーザー空間（glibc） {#stage-1-userspace-glibc}
 
-### The allocator's job {#the-allocators-job}
+### アロケータの仕事 {#the-allocators-job}
 
-`malloc()` is a library function, not a system call. glibc implements it using [ptmalloc (derived from dlmalloc)](https://sourceware.org/glibc/manual/latest/html_node/The-GNU-Allocator.html). The allocator has one goal: satisfy memory requests without calling into the kernel more than necessary.
+`malloc()`はライブラリ関数であり、システムコールではない。glibcはこれを[ptmalloc（dlmallocから派生）](https://sourceware.org/glibc/manual/latest/html_node/The-GNU-Allocator.html)で実装している。アロケータの目標はただ1つ、必要以上にカーネルを呼び出すことなくメモリ要求を満たすことである。
 
 ```c
 void *malloc(size_t size);
 ```
 
-For each allocation, ptmalloc2 checks:
+割り当てのたびに、ptmalloc2は次を確認する。
 
-1. **Thread-local cache**: Each thread has a tcache with small, recently-freed chunks. Fastest path - no locking.
+1. **スレッドローカルキャッシュ**: 各スレッドは、最近解放された小さなチャンクを保持するtcacheを持つ。最速の経路であり、ロックは不要。
 
-2. **Fastbins**: Per-arena lists of small freed chunks (up to ~160 bytes default). Quick LIFO access.
+2. **fastbin**: アリーナごとの、解放済みの小さなチャンクのリスト（デフォルトで約160バイトまで）。高速なLIFOアクセス。
 
-3. **Small/large bins**: Sorted lists of freed chunks. Searched for best fit.
+3. **small/large bin**: 解放済みチャンクのソート済みリスト。最適なものが探索される。
 
-4. **Top chunk**: The "wilderness" - unused space at the end of the heap. Can be carved up.
+4. **トップチャンク**: 「wilderness」とも呼ばれる、ヒープ末尾の未使用領域。切り出して使える。
 
-5. **System call**: Only when all else fails does glibc ask the kernel for more memory.
+5. **システムコール**: ほかのすべてが失敗したときにだけ、glibcはカーネルに追加のメモリを要求する。
 
-### When glibc calls the kernel {#when-glibc-calls-the-kernel}
+### glibcがカーネルを呼ぶとき {#when-glibc-calls-the-kernel}
 
-glibc uses two system calls to get memory from the kernel:
+glibcはカーネルからメモリを得るために2つのシステムコールを使う。
 
-| Method | When Used | Typical Threshold |
+| 方法 | 使われる場面 | 典型的な閾値 |
 |--------|-----------|-------------------|
-| `brk()` | Small allocations, heap growth | < [128KB](https://man7.org/linux/man-pages/man3/mallopt.3.html) (tunable via `M_MMAP_THRESHOLD`) |
-| `mmap()` | Large allocations | >= 128KB |
+| `brk()` | 小さな割り当て、ヒープの拡張 | < [128KB](https://man7.org/linux/man-pages/man3/mallopt.3.html)（`M_MMAP_THRESHOLD`で調整可能） |
+| `mmap()` | 大きな割り当て | >= 128KB |
 
-The threshold is [adaptive](https://man7.org/linux/man-pages/man3/mallopt.3.html) - glibc adjusts it upward when large blocks are freed. You can override with `mallopt(M_MMAP_THRESHOLD, bytes)`.
+この閾値は[適応的](https://man7.org/linux/man-pages/man3/mallopt.3.html)であり、大きなブロックが解放されるとglibcはそれを引き上げる。`mallopt(M_MMAP_THRESHOLD, bytes)`で上書きできる。
 
-**Why two methods?**
+**なぜ2つの方法があるのか**
 
-- `brk()` extends the heap contiguously. Simple, but freed memory can't return to the kernel until everything above it is also freed.
-- `mmap()` creates independent mappings. Can be returned to the kernel immediately with `munmap()`, but has more overhead.
+- `brk()`はヒープを連続的に拡張する。単純だが、解放されたメモリは、それより上にあるものがすべて解放されるまでカーネルに返せない。
+- `mmap()`は独立したマッピングを作る。`munmap()`ですぐにカーネルへ返せるが、オーバーヘッドが大きい。
 
-See [brk vs mmap](brk-vs-mmap.md) for the full trade-off analysis.
+トレードオフの完全な分析は[brkとmmap](brk-vs-mmap.md)を参照。
 
-## Stage 2: Kernel entry {#stage-2-kernel-entry}
+## ステージ2: カーネルへの進入 {#stage-2-kernel-entry}
 
-### The brk() path {#the-brk-path}
+### brk()の経路 {#the-brk-path}
 
-When glibc calls `brk()`, it's asking the kernel to move the program break - the end of the heap:
+glibcが`brk()`を呼ぶとき、それはカーネルにプログラムブレーク（ヒープの終端）を移動するよう求めている。
 
 ```c
-// Userspace (glibc)
-void *new_mem = sbrk(4096);  // Wrapper around brk()
+// ユーザー空間（glibc）
+void *new_mem = sbrk(4096);  // brk()のラッパー
 ```
 
-The kernel handles this in [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c):
+カーネルはこれを[`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c)で処理する。
 
 ```c
-// Pseudocode - actual implementation has more validation
+// 疑似コード - 実際の実装にはより多くの検証がある
 SYSCALL_DEFINE1(brk, unsigned long, brk)
 {
     struct mm_struct *mm = current->mm;
 
-    // Validate: not decreasing into existing mappings,
-    // not exceeding RLIMIT_DATA, etc.
+    // 検証: 既存のマッピングに食い込むような縮小でないこと、
+    // RLIMIT_DATAを超えないこと、など
 
-    // Extend or shrink the heap VMA
+    // ヒープのVMAを拡張または縮小する
     if (brk > mm->brk)
-        do_brk_flags(...);  // Creates/extends VMA
+        do_brk_flags(...);  // VMAを作成/拡張する
 
     mm->brk = brk;
     return brk;
 }
 ```
 
-The kernel updates the process's `mm_struct` to extend the heap VMA. No physical memory is allocated yet - just the virtual address range is reserved.
+カーネルはプロセスの`mm_struct`を更新してヒープのVMAを拡張する。まだ物理メモリは割り当てられておらず、仮想アドレス範囲が確保されるだけである。
 
-### The mmap() path {#the-mmap-path}
+### mmap()の経路 {#the-mmap-path}
 
-For larger allocations, glibc uses `mmap()` with `MAP_ANONYMOUS`:
+より大きな割り当てには、glibcは`MAP_ANONYMOUS`付きの`mmap()`を使う。
 
 ```c
-// Userspace (glibc simplified)
+// ユーザー空間（glibcを簡略化）
 void *ptr = mmap(NULL, size, PROT_READ | PROT_WRITE,
                  MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
 
-// Kernel: mm/mmap.c
+// カーネル: mm/mmap.c
 SYSCALL_DEFINE6(mmap, ...)
 {
-    // Find free virtual address range
-    // Create new VMA
-    // Return address to userspace
+    // 空いている仮想アドレス範囲を探す
+    // 新しいVMAを作成する
+    // アドレスをユーザー空間に返す
 }
 ```
 
-Again, no physical memory yet. The kernel creates a VMA describing the mapping and returns. No page table entries exist yet - they'll be created lazily on first access.
+ここでもまだ物理メモリはない。カーネルはマッピングを記述するVMAを作成して戻る。ページテーブルエントリもまだ存在せず、それらは最初のアクセス時に遅延して作成される。
 
-## Stage 3: VMA creation {#stage-3-vma-creation}
+## ステージ3: VMAの作成 {#stage-3-vma-creation}
 
-Both `brk()` and `mmap()` result in VMA (Virtual Memory Area) creation or modification.
+`brk()`と`mmap()`のどちらも、VMA（Virtual Memory Area）の作成または変更をもたらす。
 
 ```c
-// From include/linux/mm_types.h
+// include/linux/mm_types.hより
 struct vm_area_struct {
-    unsigned long vm_start;     // Start address
-    unsigned long vm_end;       // End address (exclusive)
-    struct mm_struct *vm_mm;    // Owning address space
-    pgprot_t vm_page_prot;      // Access permissions
-    unsigned long vm_flags;     // VM_READ, VM_WRITE, etc.
-    struct file *vm_file;       // NULL for anonymous memory
+    unsigned long vm_start;     // 開始アドレス
+    unsigned long vm_end;       // 終了アドレス（この値は含まない）
+    struct mm_struct *vm_mm;    // 所有するアドレス空間
+    pgprot_t vm_page_prot;      // アクセス権
+    unsigned long vm_flags;     // VM_READ、VM_WRITEなど
+    struct file *vm_file;       // 匿名メモリではNULL
     // ...
 };
 ```
 
-For a `malloc()` that triggers `mmap()`:
+`mmap()`を引き起こす`malloc()`の場合は次のようになる。
 
 ```mermaid
 flowchart LR
-    subgraph before["Before mmap()"]
+    subgraph before["mmap()の前"]
         direction LR
         A1[stack] --- A2[libs] --- A3[heap] --- A4[text]
     end
 
     before -->|"mmap()"| after
 
-    subgraph after["After mmap()"]
+    subgraph after["mmap()の後"]
         direction LR
         B1[stack] --- B2["<b>NEW VMA</b><br/>vm_file = NULL<br/>vm_flags = VM_READ|WRITE"] --- B3[libs] --- B4[heap]
     end
 ```
 
-The new VMA is added to the process's maple tree (or red-black tree in kernels before v6.1). See [process address space](mmap.md) for details on VMA organization.
+新しいVMAはプロセスのmaple tree（v6.1より前のカーネルでは赤黒木）に追加される。VMAの構成の詳細は[プロセスのアドレス空間](mmap.md)を参照。
 
-**Key point**: When `malloc()` returns, you have a valid pointer, but no physical memory backs it. The page table entries for this region don't exist yet - they're created on first access when the CPU faults.
+**要点**: `malloc()`が戻ったとき、有効なポインタは手に入るが、それを裏付ける物理メモリは存在しない。この領域のページテーブルエントリもまだ存在せず、CPUがフォールトする最初のアクセス時に作成される。
 
-## Stage 4: Page fault {#stage-4-page-fault}
+## ステージ4: ページフォールト {#stage-4-page-fault}
 
-Physical memory is allocated on first access. When the program reads or writes the malloc'd memory:
+物理メモリは最初のアクセス時に割り当てられる。プログラムがmallocしたメモリを読み書きすると、次のようになる。
 
 ```c
 char *ptr = malloc(4096);
-ptr[0] = 'x';  // First access - triggers page fault
+ptr[0] = 'x';  // 最初のアクセス - ページフォールトを引き起こす
 ```
 
-The CPU finds no valid page table entry and triggers a page fault exception. The kernel handles it:
+CPUは有効なページテーブルエントリを見つけられず、ページフォールト例外を発生させる。カーネルがそれを処理する。
 
 ```c
-// Simplified from mm/memory.c
+// mm/memory.cを簡略化
 static vm_fault_t handle_pte_fault(struct vm_fault *vmf)
 {
-    // PTE is empty - this is a new page
+    // PTEが空 - これは新しいページ
     if (pte_none(vmf->orig_pte)) {
         if (vma_is_anonymous(vmf->vma))
-            return do_anonymous_page(vmf);  // Our path
+            return do_anonymous_page(vmf);  // 今回の経路
         else
-            return do_fault(vmf);  // File-backed
+            return do_fault(vmf);  // ファイルベース
     }
-    // ... other cases (COW, swap, etc.)
+    // ... その他のケース（COW、スワップなど）
 }
 ```
 
-### Anonymous page allocation {#anonymous-page-allocation}
+### 匿名ページの割り当て {#anonymous-page-allocation}
 
-For anonymous memory (heap, stack), [`do_anonymous_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) runs:
+匿名メモリ（ヒープ、スタック）では、[`do_anonymous_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c)が実行される。
 
 ```c
-// Simplified from mm/memory.c
+// mm/memory.cを簡略化
 static vm_fault_t do_anonymous_page(struct vm_fault *vmf)
 {
     struct folio *folio;
 
-    // 1. Allocate a physical page (folio)
-    //    A folio is the modern replacement for struct page - it represents
-    //    one or more contiguous pages as a single unit. For most anonymous
-    //    allocations, this is a single 4KB page.
+    // 1. 物理ページ（folio）を割り当てる
+    //    folioはstruct pageに代わる現代的な抽象であり、1つ以上の
+    //    連続したページを1つの単位として表す。ほとんどの匿名
+    //    割り当てでは、これは単一の4KBページである。
     folio = vma_alloc_zeroed_movable_folio(vmf->vma, vmf->address);
 
-    // 2. Prepare page table entry
+    // 2. ページテーブルエントリを準備する
     entry = mk_pte(&folio->page, vma->vm_page_prot);
     if (vma->vm_flags & VM_WRITE)
         entry = pte_mkwrite(pte_mkdirty(entry), vma);
 
-    // 3. Install in page table
+    // 3. ページテーブルに設定する
     set_pte_at(vma->vm_mm, vmf->address, vmf->pte, entry);
 
-    // 4. Add to reverse mapping (for reclaim)
+    // 4. 逆マッピングに追加する（回収のため）
     folio_add_new_anon_rmap(folio, vma, vmf->address);
 
     return 0;
 }
 ```
 
-This is where physical memory finally gets allocated.
+ここでようやく物理メモリが割り当てられる。
 
-## Stage 5: Page allocator {#stage-5-page-allocator}
+## ステージ5: ページアロケータ {#stage-5-page-allocator}
 
-The `vma_alloc_zeroed_movable_folio()` call ultimately reaches the buddy allocator:
+`vma_alloc_zeroed_movable_folio()`の呼び出しは、最終的にバディアロケータに到達する。
 
 ```c
-// The chain of calls (simplified):
+// 呼び出しの連鎖（簡略化）:
 vma_alloc_zeroed_movable_folio()
   → folio_alloc()
     → __folio_alloc()
-      → __alloc_pages()  // The core buddy allocator entry point
+      → __alloc_pages()  // バディアロケータの中核の入口
 ```
 
-[`__alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) is the heart of Linux memory allocation:
+[`__alloc_pages()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)は、Linuxのメモリ割り当ての心臓部である。
 
 ```c
-// mm/page_alloc.c (heavily simplified)
+// mm/page_alloc.c（大幅に簡略化）
 struct page *__alloc_pages(gfp_t gfp, unsigned int order, int nid, nodemask_t *nodemask)
 {
-    // 1. Fast path: try per-CPU lists
+    // 1. 高速パス: per-CPUリストを試す
     page = get_page_from_freelist(gfp, order, ...);
     if (page)
         return page;
 
-    // 2. Slow path: wake kswapd, try harder
+    // 2. 低速パス: kswapdを起こし、より強く試みる
     page = __alloc_pages_slowpath(gfp, order, ...);
     return page;
 }
 ```
 
-### Fast path {#fast-path}
+### 高速パス {#fast-path}
 
-Most allocations succeed immediately from per-CPU page lists or zone free lists:
+ほとんどの割り当ては、per-CPUのページリストかゾーンのフリーリストから即座に成功する。
 
 ```mermaid
 flowchart TD
-    subgraph pcplists["Per-CPU lists (pcplists) - No locking needed"]
+    subgraph pcplists["per-CPUリスト（pcplists） - ロック不要"]
         CPU0["CPU 0: [page][page][page]..."]
         CPU1["CPU 1: [page][page]..."]
         CPU2["CPU 2: [page][page][page][page]..."]
     end
 
-    pcplists -->|"refill when empty"| buddy
+    pcplists -->|"空になったら補充"| buddy
 
-    subgraph buddy["Zone free lists (buddy allocator)"]
+    subgraph buddy["ゾーンのフリーリスト（バディアロケータ）"]
         O0["Order 0: [4KB][4KB][4KB]..."]
         O1["Order 1: [8KB][8KB]..."]
         O2["..."]
     end
 ```
 
-For a single-page allocation (typical for page faults), the kernel checks the per-CPU list first. This requires no locking and is very fast.
+単一ページの割り当て（ページフォールトでは典型的）では、カーネルはまずper-CPUリストを確認する。これはロックを必要とせず、非常に高速である。
 
-### Slow path {#slow-path}
+### 低速パス {#slow-path}
 
-If free pages are low:
+空きページが少ない場合は次のようになる。
 
-1. **Wake kswapd**: Background reclaim daemon
-2. **Direct reclaim**: The allocating process frees some pages itself
-3. **Compaction**: Defragment memory for high-order allocations
-4. **OOM killer**: Last resort - kill a process to free memory
+1. **kswapdを起こす**: バックグラウンドの回収デーモン
+2. **直接回収**: 割り当てを行っているプロセス自身がいくつかのページを解放する
+3. **コンパクション**: 高オーダーの割り当てのためにメモリをデフラグする
+4. **OOM killer**: 最後の手段 - プロセスを殺してメモリを解放する
 
-See [page reclaim](reclaim.md) for details on memory pressure handling.
+メモリ圧迫の処理の詳細は[ページ回収](reclaim.md)を参照。
 
-## Stage 6: Return to userspace {#stage-6-return-to-userspace}
+## ステージ6: ユーザー空間への復帰 {#stage-6-return-to-userspace}
 
-After the page fault handler succeeds:
+ページフォールトハンドラが成功した後は次のようになる。
 
-1. **Page table updated**: The PTE now points to the physical page
-2. **TLB entry created**: CPU caches the virtual→physical mapping
-3. **Execution resumes**: The faulting instruction is retried
+1. **ページテーブルの更新**: PTEが物理ページを指すようになる
+2. **TLBエントリの作成**: CPUが仮想→物理のマッピングをキャッシュする
+3. **実行の再開**: フォールトした命令が再試行される
 
 ```mermaid
 flowchart LR
-    subgraph before["Before page fault"]
-        VA1["Virtual Address<br/>0x7f1234"] -.-x|"✗"| NP["No physical<br/>page"]
+    subgraph before["ページフォールトの前"]
+        VA1["仮想アドレス<br/>0x7f1234"] -.-x|"✗"| NP["物理ページ<br/>なし"]
     end
 
-    subgraph after["After page fault"]
-        VA2["Virtual Address<br/>0x7f1234"] --> PP["Physical Page<br/>0x3a5000"]
-        PP --> ZM["Zeroed memory<br/>(4096 bytes)"]
+    subgraph after["ページフォールトの後"]
+        VA2["仮想アドレス<br/>0x7f1234"] --> PP["物理ページ<br/>0x3a5000"]
+        PP --> ZM["ゼロ埋めされたメモリ<br/>(4096バイト)"]
     end
 ```
 
-The program continues, unaware that a complex dance just occurred. From its perspective, `ptr[0] = 'x'` just worked.
+プログラムは、複雑な舞踏が行われたばかりであることを知らずに処理を続ける。プログラムから見れば、`ptr[0] = 'x'`は単にうまく動いただけである。
 
-## Why demand paging? {#why-demand-paging}
+## なぜデマンドページングか {#why-demand-paging}
 
-This lazy allocation strategy has major benefits:
+この遅延割り当て戦略には大きな利点がある。
 
-### 1. Fast malloc {#1-fast-malloc}
+### 1. mallocが高速 {#1-fast-malloc}
 
-`malloc()` returns immediately. The kernel work is deferred until actually needed.
+`malloc()`は即座に戻る。カーネルの作業は、実際に必要になるまで遅延される。
 
-### 2. Sparse allocations are cheap {#2-sparse-allocations-are-cheap}
+### 2. 疎な割り当てが安価 {#2-sparse-allocations-are-cheap}
 
-A program can allocate 1GB but only use 4KB. It pays only for what it touches:
+プログラムは1GBを割り当てて4KBしか使わないこともできる。支払うのは触れた分だけである。
 
 ```c
-// "Allocate" 1GB
+// 1GBを「割り当てる」
 char *huge = malloc(1024 * 1024 * 1024);
 
-// Only use 4KB - only one physical page allocated
+// 4KBだけ使う - 割り当てられる物理ページは1つだけ
 huge[0] = 'a';
 ```
 
-### 3. Overcommit works {#3-overcommit-works}
+### 3. オーバーコミットが機能する {#3-overcommit-works}
 
-The kernel can promise more memory than physically exists. Most programs don't use all they request. See [memory overcommit](overcommit.md).
+カーネルは物理的に存在する以上のメモリを約束できる。ほとんどのプログラムは要求した分をすべて使うわけではない。[メモリのオーバーコミット](overcommit.md)を参照。
 
-### 4. fork() is fast {#4-fork-is-fast}
+### 4. fork()が高速 {#4-fork-is-fast}
 
-Child processes share pages with parents via [copy-on-write](cow.md). Physical copies only happen when either process writes.
+子プロセスは[コピーオンライト](cow.md)によって親とページを共有する。物理的なコピーは、どちらかのプロセスが書き込んだときにだけ発生する。
 
-## Try it yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### Watch malloc in action {#watch-malloc-in-action}
+### mallocの動作を観察する {#watch-malloc-in-action}
 
 ```bash
-# Trace system calls from a simple allocation
+# 簡単な割り当てのシステムコールをトレースする
 strace -e brk,mmap,munmap -f sh -c 'head -c 1M /dev/zero > /dev/null'
 
-# See page faults
+# ページフォールトを確認する
 perf stat -e page-faults,minor-faults,major-faults ./your_program
 ```
 
-### Observe demand paging {#observe-demand-paging}
+### デマンドページングを観察する {#observe-demand-paging}
 
 ```bash
-# Create a program that allocates but doesn't touch memory
+# 割り当てるがメモリに触れないプログラムを作る
 cat > /tmp/lazy.c << 'EOF'
 #include <stdio.h>
 #include <stdlib.h>
@@ -393,15 +393,15 @@ EOF
 gcc -o /tmp/lazy /tmp/lazy.c
 /tmp/lazy
 
-# In another terminal, watch RSS grow:
+# 別のターミナルで、RSSが増えるのを観察する:
 watch -n 1 'ps -o pid,vsz,rss,comm -p $(pgrep lazy)'
-# VSZ jumps after malloc, RSS jumps only after touching
+# VSZはmalloc後に跳ね上がり、RSSは触れた後にだけ跳ね上がる
 ```
 
-### Examine the malloc threshold {#examine-the-malloc-threshold}
+### mallocの閾値を調べる {#examine-the-malloc-threshold}
 
 ```bash
-# See glibc's mmap threshold behavior
+# glibcのmmap閾値の挙動を確認する
 cat > /tmp/mmap_test.c << 'EOF'
 #include <stdio.h>
 #include <stdlib.h>
@@ -423,281 +423,283 @@ gcc -o /tmp/mmap_test /tmp/mmap_test.c
 strace -e brk,mmap /tmp/mmap_test
 ```
 
-### Trace page faults in the kernel {#trace-page-faults-in-the-kernel}
+### カーネル内のページフォールトをトレースする {#trace-page-faults-in-the-kernel}
 
 ```bash
-# Enable page fault tracing (requires root, debugfs mounted)
+# ページフォールトのトレーシングを有効にする（root権限とdebugfsのマウントが必要）
 echo 1 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 cat /sys/kernel/debug/tracing/trace_pipe &
 
-# Run a program - see faults in real time
+# プログラムを実行する - フォールトをリアルタイムで確認できる
 ./your_program
 
-# Disable when done
+# 終わったら無効にする
 echo 0 > /sys/kernel/debug/tracing/events/exceptions/page_fault_user/enable
 ```
 
-## Common misconceptions {#common-misconceptions}
+## よくある誤解 {#common-misconceptions}
 
-### "malloc allocates memory" {#malloc-allocates-memory}
+### 「mallocはメモリを割り当てる」 {#malloc-allocates-memory}
 
-Not really. It reserves address space. Physical pages come later via page faults.
+厳密にはそうではない。mallocはアドレス空間を確保する。物理ページは後でページフォールトを通じてやってくる。
 
-### "My program uses 1GB because malloc(1GB) succeeded" {#my-program-uses-1gb-because-malloc1gb-succeeded}
+### 「malloc(1GB)が成功したので、プログラムは1GBを使っている」 {#my-program-uses-1gb-because-malloc1gb-succeeded}
 
-Check RSS (Resident Set Size), not VSZ (Virtual Size). VSZ includes all reserved address space; RSS is physical memory actually used.
+VSZ（Virtual Size）ではなくRSS（Resident Set Size）を確認すること。VSZは確保されたすべてのアドレス空間を含み、RSSは実際に使われている物理メモリである。
 
 ```bash
 ps -o pid,vsz,rss,comm -p <pid>
 ```
 
-### "Page faults are bad" {#page-faults-are-bad}
+### 「ページフォールトは悪いものだ」 {#page-faults-are-bad}
 
-Minor faults (demand paging) are normal and expected. Major faults (reading from disk) are expensive. The kernel optimizes for minor faults to be fast.
+マイナーフォールト（デマンドページング）は正常であり、想定されたものである。メジャーフォールト（ディスクからの読み込み）は高コストである。カーネルはマイナーフォールトが高速になるよう最適化している。
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | brk(), mmap() implementation |
-| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | Page fault handling, do_anonymous_page() |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Buddy allocator, __alloc_pages() |
-| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | vm_area_struct, mm_struct definitions |
+| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | brk()、mmap()の実装 |
+| [`mm/memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memory.c) | ページフォールト処理、do_anonymous_page() |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | バディアロケータ、__alloc_pages() |
+| [`include/linux/mm_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) | vm_area_struct、mm_structの定義 |
 
-## History {#history}
+## 歴史 {#history}
 
-### Demand paging origins {#demand-paging-origins}
+### デマンドページングの起源 {#demand-paging-origins}
 
-Demand paging has been part of Linux since the beginning. The basic mechanism - mapping virtual addresses without backing physical memory until access - is fundamental to Unix-like systems.
+デマンドページングはLinuxの当初から存在する。仮想アドレスを、アクセスされるまで物理メモリの裏付けなしにマップするという基本的な仕組みは、Unix系システムの根幹である。
 
-### VMA management evolution {#vma-management-evolution}
+### VMA管理の進化 {#vma-management-evolution}
 
-In **Stage 3** above, when `mmap()` creates a new VMA, it must be inserted into the process's VMA collection for later lookup (e.g., during page faults). The data structure for this has evolved:
+上の **ステージ3** で`mmap()`が新しいVMAを作成すると、後で（例えばページフォールト時に）検索できるよう、それをプロセスのVMAコレクションに挿入しなければならない。このためのデータ構造は進化してきた。
 
-**Red-black tree (early Linux)**: VMAs were organized in an rb-tree for `O(log n)` lookup. Simple but required careful locking.
+**赤黒木（初期のLinux）**: VMAは`O(log n)`で検索できるようrb-treeで構成されていた。単純だが、慎重なロックが必要だった。
 
-**Maple tree (v6.1, 2022)**: VMAs moved to a maple tree - a B-tree variant optimized for cache locality and RCU-safe operations. This allows concurrent VMA lookups without holding `mmap_lock`, improving page fault scalability.
+**maple tree（v6.1、2022年）**: VMAはmaple treeに移行した。これはキャッシュ局所性とRCU安全な操作のために最適化されたBツリーの変種である。これにより`mmap_lock`を保持せずに並行してVMAを検索できるようになり、ページフォールトのスケーラビリティが向上した。
 
-**Commit**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) ("mm: start tracking VMAs with maple tree") | [LKML](https://lore.kernel.org/linux-mm/20220906194824.2110408-9-Liam.Howlett@oracle.com/)
+**コミット**: [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6)（"mm: start tracking VMAs with maple tree"） | [LKML](https://lore.kernel.org/linux-mm/20220906194824.2110408-9-Liam.Howlett@oracle.com/)
 
-**Author**: Liam Howlett (Oracle)
+**作者**: Liam Howlett（Oracle）
 
-### Folio conversion (v5.16+) {#folio-conversion-v516}
+### folioへの変換（v5.16以降） {#folio-conversion-v516}
 
-In **Stage 4** above, `do_anonymous_page()` allocates a `struct folio` rather than a raw `struct page`. A folio is the modern abstraction for memory:
+上の **ステージ4** で、`do_anonymous_page()`は生の`struct page`ではなく`struct folio`を割り当てる。folioはメモリのための現代的な抽象である。
 
-- **What it is**: A folio represents one or more physically contiguous pages managed as a unit
-- **Why it exists**: The old `struct page` API was ambiguous - functions didn't know if they received a head page, tail page, or single page. Folios make the semantics explicit.
-- **In our flow**: `vma_alloc_zeroed_movable_folio()` allocates a folio, which for anonymous faults is typically a single 4KB page (or a 2MB transparent huge page if enabled)
+- **それは何か**: folioは、1つの単位として管理される、1つ以上の物理的に連続したページを表す
+- **なぜ存在するか**: 古い`struct page`のAPIは曖昧だった。関数は、受け取ったのがヘッドページなのか、テイルページなのか、単一ページなのかを知らなかった。folioはこのセマンティクスを明示的にする。
+- **今回の流れでは**: `vma_alloc_zeroed_movable_folio()`はfolioを割り当てる。匿名フォールトでは、これは通常単一の4KBページである（有効であれば2MBのtransparent huge page）
 
-**Commit**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3) ("mm: Introduce struct folio") | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
+**コミット**: [7b230db3b8d3](https://git.kernel.org/linus/7b230db3b8d3)（"mm: Introduce struct folio"） | [LKML](https://lore.kernel.org/linux-mm/20210622121551.3398730-3-willy@infradead.org/)
 
-**Author**: Matthew Wilcox (Oracle)
+**作者**: Matthew Wilcox（Oracle）
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-The malloc path spans userspace (glibc) and kernel (brk/mmap, page fault). Bugs at either level can lead to memory corruption or privilege escalation.
-
----
-
-### Case 1: glibc heap overflow (CVE-2023-6246) {#case-1-glibc-heap-overflow-cve-2023-6246}
-
-#### What happened {#what-happened}
-
-In January 2024, Qualys discovered a heap buffer overflow in glibc's `__vsyslog_internal()` function that could be exploited for local privilege escalation.
-
-#### The bug {#the-bug}
-
-From the [Qualys disclosure](https://medium.com/@elpepinillo/heap-heap-hooray-unveiling-glibc-heap-overflow-vulnerability-cve-2023-6246-0c6412423069):
-
-The `__vsyslog_internal()` function in glibc could overflow a heap buffer when processing specially crafted input. The heap (managed by ptmalloc2 in glibc) stores the buffer, and overflowing it corrupts adjacent heap metadata.
-
-#### Real-world implications {#real-world-implications}
-
-An attacker with local access could escalate to root by exploiting programs that use `syslog()`.
-
-#### Why this matters for malloc {#why-this-matters-for-malloc}
-
-When you call `malloc()`, glibc's ptmalloc2 manages the heap internally. Heap corruption vulnerabilities like this one abuse:
-
-1. **Chunk metadata**: ptmalloc stores size/flags adjacent to user data
-2. **Free list pointers**: Corrupting these leads to arbitrary write primitives
-3. **Tcache/fastbin**: Modern glibc mitigations complicate exploitation but don't eliminate it
-
-#### The fix {#the-fix}
-
-**Commit**: [6bd0e4efcc78](https://sourceware.org/git/?p=glibc.git;a=commit;h=6bd0e4efcc78f3c0115e5ea9739a1642807450da) (glibc)
-
-Fixed in glibc 2.39. The vulnerability was introduced in glibc 2.37 by commit `52a5be0df411`.
-
-#### Mitigations {#mitigations}
-
-Modern glibc includes:
-
-- **Safe-linking**: Pointer mangling in fastbins/tcache
-- **Chunk size validation**: Detect corrupted size fields
-- **Top chunk integrity checks**: Prevent wilderness corruption
+mallocの経路はユーザー空間（glibc）とカーネル（brk/mmap、ページフォールト）にまたがる。どちらのレベルのバグも、メモリ破壊や権限昇格につながりうる。
 
 ---
 
-### Case 2: The Stack Clash (2017) {#case-2-the-stack-clash-2017}
+### ケース1: glibcのヒープオーバーフロー（CVE-2023-6246） {#case-1-glibc-heap-overflow-cve-2023-6246}
 
-#### What happened {#what-happened_1}
+#### 何が起きたか {#what-happened}
 
-Qualys discovered that the gap between stack and heap could be jumped, allowing stack-to-heap or heap-to-stack corruption.
+2024年1月、Qualysは、ローカルでの権限昇格に悪用可能な、glibcの`__vsyslog_internal()`関数におけるヒープバッファオーバーフローを発見した。
 
-#### The bug {#the-bug_1}
+#### バグ {#the-bug}
 
-The kernel maintains a "stack guard page" - an unmapped page between the stack and other mappings. The assumption: any access to this page triggers a segfault.
+[Qualysの公開情報](https://medium.com/@elpepinillo/heap-heap-hooray-unveiling-glibc-heap-overflow-vulnerability-cve-2023-6246-0c6412423069)より:
 
-But large allocations (via `alloca()` or VLAs) can jump over the guard page:
+glibcの`__vsyslog_internal()`関数は、特別に細工された入力を処理する際にヒープバッファをオーバーフローさせることがあった。そのバッファは（glibcのptmalloc2が管理する）ヒープに格納されており、オーバーフローすると隣接するヒープのメタデータが破壊される。
+
+#### 現実世界への影響 {#real-world-implications}
+
+ローカルアクセス権を持つ攻撃者は、`syslog()`を使うプログラムを悪用してrootへ昇格できた。
+
+#### なぜmallocにとって重要か {#why-this-matters-for-malloc}
+
+`malloc()`を呼ぶと、glibcのptmalloc2が内部でヒープを管理する。今回のようなヒープ破壊の脆弱性は次のものを悪用する。
+
+1. **チャンクのメタデータ**: ptmallocはサイズやフラグをユーザーデータに隣接して格納する
+2. **フリーリストのポインタ**: これを破壊すると任意書き込みのプリミティブにつながる
+3. **tcache/fastbin**: 現代のglibcの緩和策は悪用を難しくするが、排除はしない
+
+#### 修正 {#the-fix}
+
+**コミット**: [6bd0e4efcc78](https://sourceware.org/git/?p=glibc.git;a=commit;h=6bd0e4efcc78f3c0115e5ea9739a1642807450da)（glibc）
+
+glibc 2.39で修正された。この脆弱性は、glibc 2.37でコミット`52a5be0df411`によって混入した。
+
+#### 緩和策 {#mitigations}
+
+現代のglibcには次のものが含まれる。
+
+- **Safe-linking**: fastbin/tcacheでのポインタの難読化
+- **チャンクサイズの検証**: 破壊されたサイズフィールドを検出する
+- **トップチャンクの整合性チェック**: wildernessの破壊を防ぐ
+
+---
+
+### ケース2: Stack Clash（2017年） {#case-2-the-stack-clash-2017}
+
+#### 何が起きたか {#what-happened_1}
+
+Qualysは、スタックとヒープの間の隙間を飛び越えられることを発見した。これにより、スタックからヒープ、あるいはヒープからスタックへの破壊が可能になった。
+
+#### バグ {#the-bug_1}
+
+カーネルは「スタックガードページ」、すなわちスタックとほかのマッピングの間にあるマップされていないページを維持している。前提は、このページへのアクセスは必ずセグメンテーションフォールトを引き起こすというものだった。
+
+しかし、（`alloca()`やVLAによる）大きな割り当ては、ガードページを飛び越えられる。
 
 ```c
 void vulnerable() {
-    char buf[HUGE_SIZE];  // If HUGE_SIZE > guard gap...
-    buf[0] = 'A';         // ...we land in heap/mmap region
+    char buf[HUGE_SIZE];  // HUGE_SIZEがガードギャップより大きければ...
+    buf[0] = 'A';         // ...ヒープ/mmap領域に着地する
 }
 ```
 
-#### Real-world implications {#real-world-implications_1}
+#### 現実世界への影響 {#real-world-implications_1}
 
-Local privilege escalation on many Linux distributions. The vulnerability affected:
+多くのLinuxディストリビューションでローカルの権限昇格が可能だった。この脆弱性は次のものに影響した。
 
-- Linux (CVE-2017-1000364)
-- FreeBSD, OpenBSD, NetBSD, Solaris
-- Programs using large stack allocations
+- Linux（CVE-2017-1000364）
+- FreeBSD、OpenBSD、NetBSD、Solaris
+- 大きなスタック割り当てを使うプログラム
 
-#### The fix {#the-fix_1}
+#### 修正 {#the-fix_1}
 
-**Commit**: [1be7107fbe18](https://git.kernel.org/linus/1be7107fbe18) ("mm: larger stack guard gap, between vmas")
+**コミット**: [1be7107fbe18](https://git.kernel.org/linus/1be7107fbe18)（"mm: larger stack guard gap, between vmas"）
 
-The kernel increased the stack guard gap from 1 page (4KB) to 1MB by default:
+カーネルはスタックガードギャップを、デフォルトで1ページ（4KB）から1MBに拡大した。
 
-The guard gap defaults to 256 pages (1MB on 4KB page systems) and is configurable via the `stack_guard_gap=` kernel boot parameter (see `Documentation/admin-guide/kernel-parameters.txt`).
+ガードギャップのデフォルトは256ページ（4KBページのシステムで1MB）であり、カーネルブートパラメータ`stack_guard_gap=`で設定できる（`Documentation/admin-guide/kernel-parameters.txt`を参照）。
 
-#### Why this matters for malloc {#why-this-matters-for-malloc_1}
+#### なぜmallocにとって重要か {#why-this-matters-for-malloc_1}
 
-The heap (via `brk()`) and stack grow toward each other. This bug showed that the boundary between them must be carefully protected.
+（`brk()`による）ヒープとスタックは互いに向かって伸びる。このバグは、両者の境界を慎重に保護しなければならないことを示した。
 
 ---
 
-### Case 3: mmap_min_addr bypass (CVE-2009-2695) {#case-3-mmapminaddr-bypass-cve-2009-2695}
+### ケース3: mmap_min_addrの迂回（CVE-2009-2695） {#case-3-mmapminaddr-bypass-cve-2009-2695}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_2}
 
-NULL pointer dereference bugs in the kernel could be exploited by mapping memory at address 0.
+カーネル内のNULLポインタ参照のバグが、アドレス0にメモリをマップすることで悪用可能だった。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_2}
 
-Many kernel bugs involve dereferencing a NULL pointer. Normally this would crash. But if an attacker can map memory at address 0 and control its contents, they can turn a NULL dereference into code execution.
+多くのカーネルバグはNULLポインタの参照を伴う。通常これはクラッシュするだけである。しかし攻撃者がアドレス0にメモリをマップしてその内容を制御できれば、NULL参照をコード実行に変えられる。
 
-The kernel added `mmap_min_addr` to prevent low-address mappings. But SELinux's `unconfined_t` domain bypassed this restriction.
+カーネルは低アドレスへのマッピングを防ぐために`mmap_min_addr`を追加した。しかしSELinuxの`unconfined_t`ドメインはこの制限を迂回していた。
 
-From [Red Hat's advisory](https://access.redhat.com/articles/17995):
+[Red Hatのアドバイザリ](https://access.redhat.com/articles/17995)より:
 
 > *"A system with SELinux enforced was found to be more permissive in allowing local users in the unconfined_t domain to map low memory areas even if the mmap_min_addr restriction is enabled."*
 
-#### The fix {#the-fix_2}
+（訳: SELinuxを強制モードにしたシステムが、mmap_min_addrの制限が有効であっても、unconfined_tドメインのローカルユーザーに低位メモリ領域のマップを許すという、より緩い挙動を示すことが判明した。）
 
-Multiple commits fixed the SELinux policy and strengthened `mmap_min_addr` enforcement:
+#### 修正 {#the-fix_2}
+
+複数のコミットがSELinuxポリシーを修正し、`mmap_min_addr`の強制を強化した。
 
 - [9c0d9010](https://git.kernel.org/linus/9c0d9010)
 - [8cf948e7](https://git.kernel.org/linus/8cf948e7)
 
 ```bash
-# Check current minimum mmap address
+# 現在のmmapの最小アドレスを確認する
 cat /proc/sys/vm/mmap_min_addr
-# Default: 65536 (64KB) - set by LSM_MMAP_MIN_ADDR in security/Kconfig
+# デフォルト: 65536（64KB） - security/KconfigのLSM_MMAP_MIN_ADDRで設定される
 ```
 
-#### Why this matters for malloc {#why-this-matters-for-malloc_2}
+#### なぜmallocにとって重要か {#why-this-matters-for-malloc_2}
 
-When `malloc()` uses `mmap()` for large allocations, the kernel chooses the address. `mmap_min_addr` ensures the kernel never maps at dangerously low addresses.
+`malloc()`が大きな割り当てに`mmap()`を使うとき、アドレスを選ぶのはカーネルである。`mmap_min_addr`は、カーネルが危険なほど低いアドレスに決してマップしないことを保証する。
 
 ---
 
-### Case 4: ptmalloc thread arena exhaustion {#case-4-ptmalloc-thread-arena-exhaustion}
+### ケース4: ptmallocのスレッドアリーナの枯渇 {#case-4-ptmalloc-thread-arena-exhaustion}
 
-#### What happened {#what-happened_3}
+#### 何が起きたか {#what-happened_3}
 
-Under heavy concurrent allocation, glibc's ptmalloc could create excessive arenas, wasting memory.
+並行する大量の割り当ての下で、glibcのptmallocが過剰なアリーナを作成し、メモリを浪費することがあった。
 
-#### The bug {#the-bug_3}
+#### バグ {#the-bug_3}
 
-ptmalloc creates per-thread arenas to reduce lock contention. But the default limit (`8 * num_cpus`) can lead to:
+ptmallocはロック競合を減らすためにスレッドごとのアリーナを作る。しかしデフォルトの上限（`8 * num_cpus`）は次の事態を招きうる。
 
-1. Many threads each get their own arena
-2. Each arena has its own heap segment
-3. Fragmentation and memory waste explode
+1. 多数のスレッドがそれぞれ自分のアリーナを得る
+2. 各アリーナが自分のヒープセグメントを持つ
+3. 断片化とメモリの浪費が爆発的に増える
 
-#### Real-world implications {#real-world-implications_2}
+#### 現実世界への影響 {#real-world-implications_2}
 
-Applications with many threads (e.g., Java apps, web servers) could use 2-3x more memory than expected due to arena overhead.
+多数のスレッドを持つアプリケーション（例えばJavaアプリケーションやWebサーバー）は、アリーナのオーバーヘッドにより、想定の2〜3倍のメモリを使うことがあった。
 
-#### Mitigation {#mitigation}
+#### 緩和策 {#mitigation}
 
 ```bash
-# Limit arenas (set before running program)
+# アリーナ数を制限する（プログラムの実行前に設定する）
 export MALLOC_ARENA_MAX=2
 
-# Or use alternative allocators
-# jemalloc, tcmalloc have better multi-threaded behavior
+# あるいは別のアロケータを使う
+# jemalloc、tcmallocはマルチスレッドでの挙動がより良い
 ```
 
 ---
 
-### Case 5: brk randomization weaknesses {#case-5-brk-randomization-weaknesses}
+### ケース5: brkのランダム化の弱さ {#case-5-brk-randomization-weaknesses}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_4}
 
-ASLR (Address Space Layout Randomization) randomizes mmap but historically left brk predictable.
+ASLR（Address Space Layout Randomization）はmmapをランダム化するが、歴史的にbrkは予測可能なまま残されていた。
 
-#### The bug {#the-bug_4}
+#### バグ {#the-bug_4}
 
-If `brk()` always returns the same address, heap exploitation becomes easier - attackers know where heap data lives.
+`brk()`が常に同じアドレスを返すなら、ヒープの悪用は容易になる。攻撃者はヒープのデータがどこにあるかを知っているからである。
 
-Early ASLR implementations randomized:
+初期のASLR実装がランダム化していたのは次のものである。
 
-- Stack location ✓
-- mmap base ✓
-- brk/heap location - **partially or not at all**
+- スタックの位置 ✓
+- mmapのベース ✓
+- brk/ヒープの位置 - **部分的に、あるいはまったく行われない**
 
-#### Modern status {#modern-status}
+#### 現在の状況 {#modern-status}
 
-Modern kernels randomize brk with `CONFIG_COMPAT_BRK=n`:
+現代のカーネルは`CONFIG_COMPAT_BRK=n`でbrkをランダム化する。
 
 ```bash
-# Check if brk randomization is enabled
+# brkのランダム化が有効か確認する
 cat /proc/sys/kernel/randomize_va_space
-# 2 = full ASLR including brk
+# 2 = brkを含む完全なASLR
 ```
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Year | Layer | Impact | Prevention |
+| バグ | 年 | 層 | 影響 | 予防策 |
 |-----|------|-------|--------|------------|
-| **glibc heap overflow** | 2024 | Userspace | Root access | Update glibc |
-| **Stack Clash** | 2017 | Kernel | Root access | Larger guard gap |
-| **mmap_min_addr bypass** | 2009 | Kernel/SELinux | Root access | Fixed in kernel |
-| **Arena exhaustion** | Ongoing | Userspace | Memory waste | `MALLOC_ARENA_MAX` |
-| **brk predictability** | Historical | Kernel | Easier exploitation | Full ASLR |
+| **glibcのヒープオーバーフロー** | 2024 | ユーザー空間 | root権限の取得 | glibcを更新する |
+| **Stack Clash** | 2017 | カーネル | root権限の取得 | より大きなガードギャップ |
+| **mmap_min_addrの迂回** | 2009 | カーネル/SELinux | root権限の取得 | カーネルで修正済み |
+| **アリーナの枯渇** | 継続中 | ユーザー空間 | メモリの浪費 | `MALLOC_ARENA_MAX` |
+| **brkの予測可能性** | 過去の問題 | カーネル | 悪用が容易になる | 完全なASLR |
 
-The common thread: **malloc is the foundation of memory safety**. Bugs in heap management (glibc) or virtual memory setup (kernel) have severe security implications.
+共通するのは、**mallocはメモリ安全性の基盤である** ということである。ヒープ管理（glibc）や仮想メモリの設定（カーネル）のバグは、深刻なセキュリティ上の影響を持つ。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Process address space](mmap.md) - VMAs, mmap details
-- [Page allocator](page-allocator.md) - Buddy system internals
-- [Memory overcommit](overcommit.md) - Why demand paging enables overcommit
-- [brk vs mmap](brk-vs-mmap.md) - When glibc uses each method
-- [Page reclaim](reclaim.md) - What happens when memory runs low
+- [プロセスのアドレス空間](mmap.md) - VMA、mmapの詳細
+- [ページアロケータ](page-allocator.md) - バディシステムの内部
+- [メモリのオーバーコミット](overcommit.md) - なぜデマンドページングがオーバーコミットを可能にするか
+- [brkとmmap](brk-vs-mmap.md) - glibcがそれぞれの方法を使う場面
+- [ページ回収](reclaim.md) - メモリが不足したときに何が起きるか
 
-### External resources {#external-resources}
+### 外部リソース {#external-resources}
 
-- [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) - Official glibc documentation
-- [The Stack Clash](https://blog.qualys.com/vulnerabilities-threat-research/2017/06/19/the-stack-clash) - Qualys research paper
-- [Heap exploitation techniques](https://github.com/shellphish/how2heap) - Educational heap exploitation examples
+- [glibc malloc internals](https://sourceware.org/glibc/wiki/MallocInternals) - glibcの公式ドキュメント
+- [The Stack Clash](https://blog.qualys.com/vulnerabilities-threat-research/2017/06/19/the-stack-clash) - Qualysの研究論文
+- [Heap exploitation techniques](https://github.com/shellphish/how2heap) - 教育用のヒープ悪用の例

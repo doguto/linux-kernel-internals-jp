@@ -1,14 +1,14 @@
-# Device Memory Coherency and Cache Management {#device-memory-coherency-and-cache-management}
+# デバイスメモリのコヒーレンシとキャッシュ管理 {#device-memory-coherency-and-cache-management}
 
-> CPUs cache aggressively; DMA devices do not. Bridging that gap correctly is the difference between a working driver and one that corrupts data silently.
+> CPUは積極的にキャッシュするが、DMAデバイスはしない。この溝を正しく埋められるかどうかが、正しく動くドライバと、黙ってデータを破壊するドライバの違いである。
 
-## The Cache Coherency Problem {#the-cache-coherency-problem}
+## キャッシュコヒーレンシの問題 {#the-cache-coherency-problem}
 
-Modern CPUs do not access RAM on every load and store. Instead, they fill cache lines from RAM and operate on those cached copies. Writes may sit in L1 or L2 cache for microseconds before being flushed to RAM. This is invisible to software running purely on the CPU — two cores share the same physical memory and their caches snoop each other.
+最近のCPUは、ロードやストアのたびにRAMへアクセスするわけではない。RAMからキャッシュラインを埋め、そのキャッシュされたコピーに対して操作する。書き込みはRAMへフラッシュされるまで、L1やL2キャッシュに数マイクロ秒とどまることがある。これはCPU上だけで動くソフトウェアからは見えない。2つのコアは同じ物理メモリを共有し、それぞれのキャッシュは互いをスヌープするからである。
 
-DMA-capable devices break this assumption. A device performing DMA reads and writes RAM directly, bypassing the CPU caches entirely. Two failure modes result:
+DMA対応デバイスはこの前提を崩す。DMAを行うデバイスはRAMを直接読み書きし、CPUキャッシュを完全に迂回する。その結果、2つの障害モードが生じる。
 
-**CPU writes, device reads stale data (DMA transmit bug)**
+**CPUが書き込み、デバイスが古いデータを読む（DMA送信のバグ）**
 
 ```
 1. CPU writes packet data to buffer[0..N]      → data in CPU cache, NOT yet in RAM
@@ -17,7 +17,7 @@ DMA-capable devices break this assumption. A device performing DMA reads and wri
 4. Packet sent with wrong content
 ```
 
-**Device writes, CPU reads stale data (DMA receive bug)**
+**デバイスが書き込み、CPUが古いデータを読む（DMA受信のバグ）**
 
 ```
 1. Driver programs NIC: "DMA receive to buffer at phys X"
@@ -26,26 +26,26 @@ DMA-capable devices break this assumption. A device performing DMA reads and wri
 4. Driver processes garbage data
 ```
 
-These bugs are intermittent, load-dependent, and architecture-specific. On x86 they are invisible. On non-coherent ARM they cause real corruption.
+これらのバグは間欠的で、負荷に依存し、アーキテクチャ固有である。x86では表面化しない。非コヒーレントなARMでは実際にデータ破壊を引き起こす。
 
-## Coherent vs Non-Coherent Systems {#coherent-vs-non-coherent-systems}
+## コヒーレントなシステムと非コヒーレントなシステム {#coherent-vs-non-coherent-systems}
 
-Whether hardware enforces coherency between CPU caches and DMA devices depends on the platform's memory interconnect.
+ハードウェアがCPUキャッシュとDMAデバイスの間でコヒーレンシを保証するかどうかは、プラットフォームのメモリインターコネクトによって決まる。
 
-### x86: Hardware-Enforced Coherency {#x86-hardware-enforced-coherency}
+### x86: ハードウェアによるコヒーレンシ {#x86-hardware-enforced-coherency}
 
-On x86, PCIe DMA transactions snoop the CPU caches. When a device reads from a physical address, the CPU cache controller intercepts the transaction and supplies the most recent data — even if it has not yet been written back to RAM. When a device writes, the corresponding CPU cache lines are invalidated automatically.
+x86では、PCIeのDMAトランザクションがCPUキャッシュをスヌープする。デバイスが物理アドレスから読むと、CPUのキャッシュコントローラがトランザクションを横取りし、まだRAMへライトバックされていなくても最新のデータを供給する。デバイスが書き込むと、対応するCPUキャッシュラインは自動的に無効化される。
 
-The result: on x86, software never needs to flush or invalidate CPU caches for DMA correctness. `dma_map_single()` and `dma_sync_*` functions are no-ops at the cache level on x86.
+その結果、x86ではDMAの正しさのためにソフトウェアがCPUキャッシュをフラッシュしたり無効化したりする必要は一切ない。x86では、`dma_map_single()`や`dma_sync_*`関数はキャッシュレベルでは何もしない。
 
-### ARM64: Optional Coherency {#arm64-optional-coherency}
+### ARM64: オプションのコヒーレンシ {#arm64-optional-coherency}
 
-ARM64 coherency depends on the System-on-Chip design:
+ARM64のコヒーレンシはSystem-on-Chipの設計に依存する。
 
-- **Coherent interconnect (CCI, CMN)**: devices attached via a coherent interconnect participate in cache snooping. Most server-class ARM64 platforms (Ampere, Neoverse, ThunderX) and recent mobile SoCs fall here. DMA operations are coherent.
-- **Non-coherent devices**: devices attached to a non-coherent interconnect or behind a simple bus bridge. The software must explicitly clean and invalidate CPU caches to match device ownership.
+- **コヒーレントインターコネクト（CCI、CMN）**: コヒーレントインターコネクト経由で接続されたデバイスはキャッシュスヌーピングに参加する。サーバー級のARM64プラットフォーム（Ampere、Neoverse、ThunderX）の多くと、最近のモバイルSoCはここに分類される。DMA操作はコヒーレントである。
+- **非コヒーレントなデバイス**: 非コヒーレントなインターコネクトや単純なバスブリッジの背後に接続されたデバイス。ソフトウェアは、デバイスの所有権に合わせてCPUキャッシュを明示的にクリーンおよび無効化しなければならない。
 
-Whether a device is coherent is recorded in the device tree or ACPI tables and surfaced through `dev->dma_coherent`. The kernel checks this flag — set by `arch_setup_dma_ops()` in [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c) — to decide whether to perform cache maintenance.
+デバイスがコヒーレントかどうかはデバイスツリーまたはACPIテーブルに記録され、`dev->dma_coherent`として公開される。カーネルは、[`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c)の`arch_setup_dma_ops()`によって設定されるこのフラグを確認して、キャッシュメンテナンスを行うかどうかを決める。
 
 ```
 Coherent platform (x86, coherent ARM64):
@@ -60,21 +60,21 @@ Non-coherent platform (some ARM64 SoCs):
   CPU core         DMA device
 ```
 
-### Key Source Files {#key-source-files}
+### 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 役割 |
 |------|---------|
-| [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) | Public DMA API: `dma_alloc_coherent()`, `dma_map_single()`, `dma_sync_*()` |
-| [`include/linux/dma-direction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-direction.h) | `enum dma_data_direction` values |
-| [`kernel/dma/direct.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.h) | Non-IOMMU DMA path: calls `arch_sync_dma_for_device()` / `arch_sync_dma_for_cpu()` |
-| [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c) | ARM64 `arch_sync_dma_for_device()` → `dcache_clean_poc()` |
-| [`arch/arm64/include/asm/cacheflush.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/include/asm/cacheflush.h) | ARM64 cache ops: `dcache_clean_poc()`, `dcache_inval_poc()`, `dcache_clean_inval_poc()` |
-| [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c) | `ioremap()`, `ioremap_wc()`, `ioremap_uc()` implementations |
-| [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) | PAT memory type management: WB, WC, UC-, WT |
+| [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) | 公開DMA API: `dma_alloc_coherent()`、`dma_map_single()`、`dma_sync_*()` |
+| [`include/linux/dma-direction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-direction.h) | `enum dma_data_direction`の値 |
+| [`kernel/dma/direct.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.h) | IOMMUを使わないDMA経路: `arch_sync_dma_for_device()` / `arch_sync_dma_for_cpu()`を呼ぶ |
+| [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c) | ARM64の`arch_sync_dma_for_device()` → `dcache_clean_poc()` |
+| [`arch/arm64/include/asm/cacheflush.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/include/asm/cacheflush.h) | ARM64のキャッシュ操作: `dcache_clean_poc()`、`dcache_inval_poc()`、`dcache_clean_inval_poc()` |
+| [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c) | `ioremap()`、`ioremap_wc()`、`ioremap_uc()`の実装 |
+| [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) | PATメモリタイプの管理: WB、WC、UC-、WT |
 
-## DMA Coherent Allocation {#dma-coherent-allocation}
+## DMAコヒーレント割り当て {#dma-coherent-allocation}
 
-`dma_alloc_coherent()` allocates a buffer that is guaranteed coherent between the CPU and the device for its entire lifetime. No cache flushes are ever needed when accessing it.
+`dma_alloc_coherent()`は、その存続期間全体を通じてCPUとデバイスの間でコヒーレントであることが保証されたバッファを割り当てる。アクセスする際にキャッシュフラッシュが必要になることは一切ない。
 
 ```c
 void *dma_alloc_coherent(struct device *dev, size_t size,
@@ -84,9 +84,9 @@ void dma_free_coherent(struct device *dev, size_t size,
                        void *cpu_addr, dma_addr_t dma_handle);
 ```
 
-`dma_alloc_coherent()` returns two values: a CPU virtual address (the return value) and a device DMA address written into `*dma_handle`. The CPU address is used for normal memory accesses; the DMA address is programmed into the device's descriptor ring or DMA register.
+`dma_alloc_coherent()`は2つの値を返す。CPUの仮想アドレス（戻り値）と、`*dma_handle`に書き込まれるデバイスのDMAアドレスである。CPUアドレスは通常のメモリアクセスに使い、DMAアドレスはデバイスのディスクリプタリングやDMAレジスタに設定する。
 
-From [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h):
+[`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h)より:
 
 ```c
 static inline void *dma_alloc_coherent(struct device *dev, size_t size,
@@ -97,28 +97,28 @@ static inline void *dma_alloc_coherent(struct device *dev, size_t size,
 }
 ```
 
-**How coherency is achieved per architecture:**
+**アーキテクチャごとのコヒーレンシの実現方法:**
 
-- **x86**: allocates normal cacheable memory. Hardware coherency makes CPU cache flushes unnecessary.
-- **Non-coherent ARM64**: allocates uncached memory (mapped with `pgprot_dmacoherent`). CPU accesses bypass the cache entirely, so there is never stale data — at the cost of slower CPU reads and writes.
+- **x86**: 通常のキャッシュ可能なメモリを割り当てる。ハードウェアのコヒーレンシにより、CPUキャッシュのフラッシュは不要である。
+- **非コヒーレントなARM64**: キャッシュされないメモリ（`pgprot_dmacoherent`でマップ）を割り当てる。CPUのアクセスはキャッシュを完全に迂回するため、古いデータは決して生じない。その代償として、CPUの読み書きは遅くなる。
 
-**When to use coherent allocation:**
+**コヒーレント割り当てを使うべき場合:**
 
-- Descriptor rings (NVMe submission/completion queues, network TX/RX rings)
-- Command and status regions shared with firmware
-- Small, long-lived control structures accessed frequently by both CPU and device
+- ディスクリプタリング（NVMeのサブミッション/コンプリーションキュー、ネットワークのTX/RXリング）
+- ファームウェアと共有されるコマンド領域やステータス領域
+- CPUとデバイスの両方から頻繁にアクセスされる、小さく長寿命な制御構造
 
-**When not to use it:**
+**使うべきでない場合:**
 
-Avoid `dma_alloc_coherent()` for large data buffers (packet payloads, disk read buffers) that the CPU will access heavily. On non-coherent systems, uncached memory access for large transfers is significantly slower than cached memory with explicit sync operations.
+CPUが頻繁にアクセスする大きなデータバッファ（パケットペイロード、ディスク読み出しバッファ）には`dma_alloc_coherent()`を避ける。非コヒーレントなシステムでは、大きな転送をキャッシュされないメモリでアクセスするのは、明示的なsync操作を伴うキャッシュ付きメモリよりかなり遅い。
 
-## DMA Streaming Mappings {#dma-streaming-mappings}
+## DMAストリーミングマッピング {#dma-streaming-mappings}
 
-Streaming mappings are used for buffers allocated by normal kernel means (`kmalloc`, `__get_free_pages`, `vmalloc` is **not** supported) that need to be temporarily handed to a device. Unlike coherent allocations, these buffers are normally cacheable; the DMA API performs cache maintenance only when needed.
+ストリーミングマッピングは、通常のカーネルの手段（`kmalloc`、`__get_free_pages`。`vmalloc`はサポート **されない**）で割り当てられ、一時的にデバイスへ渡す必要があるバッファに使う。コヒーレント割り当てと異なり、これらのバッファは通常キャッシュ可能であり、DMA APIは必要なときだけキャッシュメンテナンスを行う。
 
-### Ownership Model {#ownership-model}
+### 所有権モデル {#ownership-model}
 
-Streaming mappings enforce a strict ownership model: **a buffer belongs either to the CPU or to the device — never both at the same time.**
+ストリーミングマッピングは厳格な所有権モデルを課す。**バッファはCPUかデバイスのどちらか一方に属し、同時に両方に属することはない**。
 
 ```
 CPU owns buffer → dma_map_single() → Device owns buffer
@@ -128,12 +128,12 @@ CPU owns buffer → dma_map_single() → Device owns buffer
 Device owns buffer → dma_unmap_single() → CPU owns buffer
 ```
 
-While the device owns the buffer (between map and unmap), the CPU must not read or write it. Violating this rule causes corruption on non-coherent platforms.
+デバイスがバッファを所有している間（マップからアンマップまで）、CPUはそれを読み書きしてはならない。この規則に違反すると、非コヒーレントなプラットフォームでデータ破壊が起きる。
 
 ### dma_map_single() / dma_unmap_single() {#dmamapsingle-dmaunmapsingle}
 
 ```c
-/* Map a virtually contiguous buffer */
+/* 仮想的に連続したバッファをマップする */
 dma_addr_t dma_map_single(struct device *dev, void *ptr,
                           size_t size, enum dma_data_direction dir);
 
@@ -141,30 +141,30 @@ void dma_unmap_single(struct device *dev, dma_addr_t addr,
                       size_t size, enum dma_data_direction dir);
 ```
 
-These are macros expanding to `dma_map_single_attrs()` / `dma_unmap_single_attrs()` with zero attributes. The `dir` argument controls which direction cache maintenance is applied:
+これらは属性ゼロの`dma_map_single_attrs()` / `dma_unmap_single_attrs()`に展開されるマクロである。引数`dir`は、どの方向にキャッシュメンテナンスを適用するかを制御する。
 
-- `DMA_TO_DEVICE` — CPU writes data, device reads it (transmit). On map: flush CPU cache to RAM so device sees the data. On unmap: no-op (device only read).
-- `DMA_FROM_DEVICE` — device writes data, CPU reads it (receive). On map: invalidate CPU cache so the CPU cannot read stale data. On unmap: invalidate CPU cache again to expose what the device wrote.
-- `DMA_BIDIRECTIONAL` — both directions; conservative. Performs both clean and invalidate.
+- `DMA_TO_DEVICE` — CPUがデータを書き、デバイスが読む（送信）。マップ時: デバイスがデータを見られるようにCPUキャッシュをRAMへフラッシュする。アンマップ時: 何もしない（デバイスは読んだだけ）。
+- `DMA_FROM_DEVICE` — デバイスがデータを書き、CPUが読む（受信）。マップ時: CPUが古いデータを読めないようにCPUキャッシュを無効化する。アンマップ時: デバイスが書いた内容を見えるようにするため、再度CPUキャッシュを無効化する。
+- `DMA_BIDIRECTIONAL` — 両方向。保守的であり、クリーンと無効化の両方を行う。
 
 ```c
-/* TX path: CPU filled the buffer, hand it to the device */
+/* TX経路: CPUがバッファを埋めたので、デバイスに渡す */
 dma_addr_t dma_addr = dma_map_single(dev, skb->data, skb->len,
                                      DMA_TO_DEVICE);
 if (dma_mapping_error(dev, dma_addr))
     goto drop;
-/* Program device descriptor with dma_addr */
+/* デバイスのディスクリプタにdma_addrを設定する */
 desc->addr = dma_addr;
 desc->len  = skb->len;
 kick_tx_queue(dev);
 
-/* After device completes (TX completion interrupt): */
+/* デバイスが完了した後（TX完了割り込み）: */
 dma_unmap_single(dev, dma_addr, skb->len, DMA_TO_DEVICE);
 dev_kfree_skb(skb);
 ```
 
-!!! warning "Always check `dma_mapping_error()`"
-    `dma_map_single()` can fail (IOMMU exhaustion, device address range overflow). Always check the return value with `dma_mapping_error(dev, addr)`. Using `DMA_MAPPING_ERROR` as a device address causes a hardware fault or silent corruption.
+!!! warning "常に`dma_mapping_error()`を確認すること"
+    `dma_map_single()`は失敗しうる（IOMMUの枯渇、デバイスのアドレス範囲のオーバーフロー）。戻り値は必ず`dma_mapping_error(dev, addr)`で確認すること。`DMA_MAPPING_ERROR`をデバイスアドレスとして使うと、ハードウェアフォルトや気付かれないデータ破壊が起きる。
 
 ### dma_map_page() {#dmamappage}
 
@@ -177,7 +177,7 @@ void dma_unmap_page(struct device *dev, dma_addr_t addr,
                     size_t size, enum dma_data_direction dir);
 ```
 
-Used when the buffer is described by a `struct page` rather than a virtual address. Common in network drivers receiving into page-based skb fragments.
+バッファが仮想アドレスではなく`struct page`で表される場合に使う。ページベースのskbフラグメントに受信するネットワークドライバでよく使われる。
 
 ### dma_map_sg() / dma_unmap_sg() {#dmamapsg-dmaunmapsg}
 
@@ -189,16 +189,16 @@ void dma_unmap_sg(struct device *dev, struct scatterlist *sg,
                   int nents, enum dma_data_direction dir);
 ```
 
-Maps a scatter-gather list of physically discontiguous pages as a single DMA operation. The IOMMU maps them into a contiguous range of I/O virtual addresses. Without an IOMMU, the device must support scatter-gather natively.
+物理的に不連続なページのスキャッタギャザーリストを、1つのDMA操作としてマップする。IOMMUはそれらをI/O仮想アドレスの連続した範囲にマップする。IOMMUがない場合、デバイス自身がスキャッタギャザーをネイティブにサポートしていなければならない。
 
-`dma_map_sg()` returns the number of DMA segments — which may be fewer than `nents` if the IOMMU merged adjacent entries.
+`dma_map_sg()`はDMAセグメントの数を返す。IOMMUが隣接するエントリを結合した場合、これは`nents`より少なくなることがある。
 
-## dma_sync_*: Partial Ownership Transfers {#dmasync-partial-ownership-transfers}
+## dma_sync_*: 部分的な所有権の移譲 {#dmasync-partial-ownership-transfers}
 
-Full unmap and remap on every access is expensive. `dma_sync_*` functions allow the CPU to temporarily reclaim ownership of a mapped buffer without unmapping it. This is the right pattern for high-performance descriptor rings.
+アクセスのたびに完全にアンマップして再マップするのは高コストである。`dma_sync_*`関数を使うと、CPUはマップされたバッファをアンマップせずに一時的に所有権を取り戻せる。これは高性能なディスクリプタリングにとって正しいパターンである。
 
 ```c
-/* Defined in include/linux/dma-mapping.h */
+/* include/linux/dma-mapping.hで定義 */
 void dma_sync_single_for_cpu(struct device *dev, dma_addr_t addr,
                              size_t size, enum dma_data_direction dir);
 
@@ -212,7 +212,7 @@ void dma_sync_sg_for_device(struct device *dev, struct scatterlist *sg,
                              int nelems, enum dma_data_direction dir);
 ```
 
-### Ownership Protocol with sync {#ownership-protocol-with-sync}
+### syncを用いた所有権プロトコル {#ownership-protocol-with-sync}
 
 ```
 Initial state: CPU owns buffer
@@ -227,103 +227,103 @@ dma_sync_single_for_device(...)   → Device owns buffer again
 dma_unmap_single(...)             → CPU owns buffer, mapping torn down
 ```
 
-### RX Ring Pattern {#rx-ring-pattern}
+### RXリングのパターン {#rx-ring-pattern}
 
-A receive ring holds N pre-mapped buffers. The device writes into the current head; the driver reads completed entries from the tail.
+受信リングはN個の事前マップ済みバッファを保持する。デバイスは現在のヘッドに書き込み、ドライバはテールから完了したエントリを読む。
 
 ```c
-/* Setup: pre-map all RX buffers */
+/* セットアップ: すべてのRXバッファを事前にマップする */
 for (int i = 0; i < RING_SIZE; i++) {
     rx_ring[i].buf = kmalloc(BUF_SIZE, GFP_KERNEL);
     rx_ring[i].dma = dma_map_single(dev, rx_ring[i].buf,
                                     BUF_SIZE, DMA_FROM_DEVICE);
-    /* Program buffer address into hardware descriptor */
+    /* バッファアドレスをハードウェアのディスクリプタに設定する */
     hw_ring[i].addr = rx_ring[i].dma;
 }
 
-/* Interrupt handler: device has written received data */
+/* 割り込みハンドラ: デバイスが受信データを書き込んだ */
 void rx_interrupt(struct device *dev)
 {
     int idx = rx_tail;
 
-    /* Transfer ownership back to CPU */
+    /* 所有権をCPUに戻す */
     dma_sync_single_for_cpu(dev, rx_ring[idx].dma,
                             BUF_SIZE, DMA_FROM_DEVICE);
 
-    /* Safe to read the received data now */
+    /* これで受信データを安全に読める */
     process_packet(rx_ring[idx].buf, hw_ring[idx].len);
 
-    /* Replenish: give the buffer back to the device */
+    /* 補充: バッファをデバイスに返す */
     dma_sync_single_for_device(dev, rx_ring[idx].dma,
                                BUF_SIZE, DMA_FROM_DEVICE);
-    hw_ring[idx].addr = rx_ring[idx].dma;  /* re-arm descriptor */
+    hw_ring[idx].addr = rx_ring[idx].dma;  /* ディスクリプタを再設定 */
 
     rx_tail = (rx_tail + 1) % RING_SIZE;
 }
 ```
 
-### Direction Values {#direction-values}
+### 方向の値 {#direction-values}
 
-From [`include/linux/dma-direction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-direction.h):
+[`include/linux/dma-direction.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-direction.h)より:
 
 ```c
 enum dma_data_direction {
     DMA_BIDIRECTIONAL = 0,
-    DMA_TO_DEVICE     = 1,  /* CPU → device: flush cache before DMA */
-    DMA_FROM_DEVICE   = 2,  /* device → CPU: invalidate cache after DMA */
-    DMA_NONE          = 3,  /* error sentinel, not a real direction */
+    DMA_TO_DEVICE     = 1,  /* CPU → デバイス: DMA前にキャッシュをフラッシュ */
+    DMA_FROM_DEVICE   = 2,  /* デバイス → CPU: DMA後にキャッシュを無効化 */
+    DMA_NONE          = 3,  /* エラー用の番兵。実際の方向ではない */
 };
 ```
 
-## Cache Attributes and ioremap for MMIO {#cache-attributes-and-ioremap-for-mmio}
+## キャッシュ属性とMMIO用のioremap {#cache-attributes-and-ioremap-for-mmio}
 
-Device registers (MMIO) must never be accessed through a cached mapping. A CPU that caches a write to a control register may delay it indefinitely; a cached read may return a stale value rather than querying the device.
+デバイスレジスタ（MMIO）には、決してキャッシュされるマッピング経由でアクセスしてはならない。制御レジスタへの書き込みをキャッシュしたCPUは、それを無期限に遅延させるかもしれない。キャッシュされた読み出しは、デバイスに問い合わせる代わりに古い値を返すかもしれない。
 
-The `ioremap` family maps physical MMIO regions into the kernel's virtual address space with appropriate cache attributes. On x86, these mappings use the **PAT (Page Attribute Table)** to encode the memory type directly in the page table entry.
+`ioremap`ファミリは、物理MMIO領域を適切なキャッシュ属性でカーネルの仮想アドレス空間にマップする。x86では、これらのマッピングは **PAT（Page Attribute Table）** を使い、メモリタイプをページテーブルエントリに直接エンコードする。
 
-### ioremap Variants (x86) {#ioremap-variants-x86}
+### ioremapの種類（x86） {#ioremap-variants-x86}
 
-From [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c):
+[`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c)より:
 
 ```c
-/* Standard uncached mapping (UC-minus: honors existing MTRRs) */
+/* 標準のキャッシュなしマッピング（UC-minus: 既存のMTRRを尊重） */
 void __iomem *ioremap(resource_size_t phys_addr, unsigned long size);
 
-/* Strongly uncached (UC: ignores MTRRs, truly uncached) */
+/* 強いキャッシュなし（UC: MTRRを無視し、真にキャッシュなし） */
 void __iomem *ioremap_uc(resource_size_t phys_addr, unsigned long size);
 
-/* Write-combining (WC: writes coalesced in write buffer before flush) */
+/* ライトコンバイン（WC: 書き込みはフラッシュ前にライトバッファで結合される） */
 void __iomem *ioremap_wc(resource_size_t phys_addr, unsigned long size);
 
-/* Write-through (WT: writes go to both cache and memory) */
+/* ライトスルー（WT: 書き込みはキャッシュとメモリの両方に行く） */
 void __iomem *ioremap_wt(resource_size_t phys_addr, unsigned long size);
 
 void iounmap(volatile void __iomem *addr);
 ```
 
-**Which variant to use:**
+**どれを使うべきか:**
 
-| Variant | PAT Mode | Use Case |
+| 種類 | PATモード | 用途 |
 |---------|----------|----------|
-| `ioremap()` | UC-minus | Default for device registers; honors MTRR ranges |
-| `ioremap_uc()` | UC | When you need strictly uncached access regardless of MTRR |
-| `ioremap_wc()` | WC | Framebuffers, PCIe BAR for bulk data (GPU VRAM, NVMe doorbells) |
-| `ioremap_wt()` | WT | Rare; use when reads must be cached but writes must be visible immediately |
+| `ioremap()` | UC-minus | デバイスレジスタのデフォルト。MTRRの範囲を尊重する |
+| `ioremap_uc()` | UC | MTRRにかかわらず厳密にキャッシュなしのアクセスが必要な場合 |
+| `ioremap_wc()` | WC | フレームバッファ、バルクデータ用のPCIe BAR（GPU VRAM、NVMeドアベル） |
+| `ioremap_wt()` | WT | まれ。読み出しはキャッシュしたいが、書き込みは即座に見える必要がある場合 |
 
-Write-combining (`ioremap_wc`) is particularly important for framebuffers and other bulk write destinations. The CPU batches writes into a write-combining buffer and flushes them as a burst, dramatically reducing PCIe transactions compared to individual uncached writes.
+ライトコンバイン（`ioremap_wc`）は、フレームバッファなどのバルク書き込み先で特に重要である。CPUは書き込みをライトコンバインバッファにまとめてバーストとしてフラッシュするため、個別のキャッシュなし書き込みに比べてPCIeトランザクションが劇的に減る。
 
-### ioremap_np: Non-Posted Writes {#ioremap_np-non-posted-writes}
+### ioremap_np: ノンポステッド書き込み {#ioremap_np-non-posted-writes}
 
 ```c
-/* Non-posted writes: CPU waits for write completion acknowledgment */
+/* ノンポステッド書き込み: CPUは書き込み完了の応答を待つ */
 void __iomem *ioremap_np(phys_addr_t offset, size_t size);
 ```
 
-From [`include/asm-generic/io.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/io.h): `ioremap_np()` requests stricter non-posted write semantics — the CPU stalls until the device acknowledges the write. This guarantees ordering between a register write and subsequent reads. Not all architectures implement it; portable drivers should fall back to `ioremap()` if `ioremap_np()` returns `NULL`.
+[`include/asm-generic/io.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/asm-generic/io.h)より: `ioremap_np()`は、より厳格なノンポステッド書き込みのセマンティクスを要求する。デバイスが書き込みを応答するまでCPUはストールする。これにより、レジスタ書き込みとその後の読み出しの間の順序が保証される。すべてのアーキテクチャが実装しているわけではない。移植性のあるドライバは、`ioremap_np()`が`NULL`を返した場合に`ioremap()`へフォールバックすべきである。
 
-### PAT Memory Types on x86 {#pat-memory-types-on-x86}
+### x86のPATメモリタイプ {#pat-memory-types-on-x86}
 
-x86 PAT supports four memory types relevant to MMIO (from [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c)):
+x86のPATは、MMIOに関係する4つのメモリタイプをサポートする（[`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c)より）。
 
 ```
 _PAGE_CACHE_MODE_WB       Write-back (normal RAM, cached)
@@ -332,11 +332,11 @@ _PAGE_CACHE_MODE_UC_MINUS UC-minus (device registers, honors MTRRs)
 _PAGE_CACHE_MODE_WT       Write-through
 ```
 
-PAT encodes the memory type in bits of the page table entry (PWT, PCD, PAT bit). The kernel manages this through `ioremap_change_attr()`, which calls `_set_memory_uc()`, `_set_memory_wc()`, etc., to update the PTE and flush the TLB.
+PATはメモリタイプをページテーブルエントリのビット（PWT、PCD、PATビット）にエンコードする。カーネルはこれを`ioremap_change_attr()`で管理する。これは`_set_memory_uc()`、`_set_memory_wc()`などを呼び出してPTEを更新し、TLBをフラッシュする。
 
-## ARM64 Cache Operations for DMA {#arm64-cache-operations-for-dma}
+## DMAのためのARM64キャッシュ操作 {#arm64-cache-operations-for-dma}
 
-On non-coherent ARM64 platforms, the DMA mapping layer performs explicit cache maintenance. The call chain for `dma_map_single()` on a non-coherent device, from [`kernel/dma/direct.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.h) and [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c):
+非コヒーレントなARM64プラットフォームでは、DMAマッピング層が明示的なキャッシュメンテナンスを行う。非コヒーレントなデバイスに対する`dma_map_single()`の呼び出しチェーンは、[`kernel/dma/direct.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.h)と[`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c)より次のとおりである。
 
 ```
 dma_map_single()
@@ -348,7 +348,7 @@ dma_map_single()
                         └─ dcache_clean_poc(start, start + size)
 ```
 
-For the CPU-side sync on receive:
+受信時のCPU側のsyncは次のとおり。
 
 ```
 dma_sync_single_for_cpu()
@@ -360,92 +360,92 @@ dma_sync_single_for_cpu()
                         dcache_inval_poc(start, start + size)
 ```
 
-The ARM64 cache functions operate on ranges `[start, end)` to the **Point of Coherency (PoC)** — the level of the cache hierarchy shared by all observers, including DMA-capable devices:
+ARM64のキャッシュ関数は、範囲`[start, end)`に対して **Point of Coherency（PoC）** まで操作する。PoCとは、DMA対応デバイスを含むすべての観測者が共有するキャッシュ階層のレベルである。
 
-From [`arch/arm64/include/asm/cacheflush.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/include/asm/cacheflush.h):
+[`arch/arm64/include/asm/cacheflush.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/include/asm/cacheflush.h)より:
 
 ```c
-/* Clean (write back dirty lines, keep valid) */
+/* クリーン（ダーティなラインをライトバックし、有効なまま保持） */
 extern void dcache_clean_poc(unsigned long start, unsigned long end);
 
-/* Invalidate (discard cache lines, force re-fetch from RAM) */
+/* 無効化（キャッシュラインを破棄し、RAMからの再取得を強制） */
 extern void dcache_inval_poc(unsigned long start, unsigned long end);
 
-/* Clean + Invalidate (write back then discard) */
+/* クリーン＋無効化（ライトバックしてから破棄） */
 extern void dcache_clean_inval_poc(unsigned long start, unsigned long end);
 ```
 
-**What each operation does in the DMA context:**
+**DMAの文脈で各操作が行うこと:**
 
-- `dcache_clean_poc`: used on `DMA_TO_DEVICE` — flushes CPU cache to RAM so the device reads the latest data.
-- `dcache_inval_poc`: used on `DMA_FROM_DEVICE` — discards CPU cache lines so the CPU will re-fetch from RAM after the device has written.
-- `dcache_clean_inval_poc`: used on `DMA_BIDIRECTIONAL` — combines both, used when the direction of data flow is unknown.
+- `dcache_clean_poc`: `DMA_TO_DEVICE`で使われる。デバイスが最新のデータを読めるように、CPUキャッシュをRAMへフラッシュする。
+- `dcache_inval_poc`: `DMA_FROM_DEVICE`で使われる。デバイスが書き込んだ後にCPUがRAMから再取得するように、CPUのキャッシュラインを破棄する。
+- `dcache_clean_inval_poc`: `DMA_BIDIRECTIONAL`で使われる。両方を組み合わせたもので、データの流れの方向がわからない場合に使う。
 
-On coherent ARM64 platforms (where `dev->dma_coherent` is true), `arch_sync_dma_for_device()` and `arch_sync_dma_for_cpu()` are not called — the hardware handles it transparently, matching x86 behavior.
+コヒーレントなARM64プラットフォーム（`dev->dma_coherent`がtrue）では、`arch_sync_dma_for_device()`や`arch_sync_dma_for_cpu()`は呼ばれない。ハードウェアが透過的に処理し、x86の挙動と一致する。
 
-## The IOMMU and Coherency {#the-iommu-and-coherency}
+## IOMMUとコヒーレンシ {#the-iommu-and-coherency}
 
-The IOMMU translates device DMA addresses (I/O virtual addresses) into physical addresses. It enables address space isolation — a device can only access memory the kernel has explicitly mapped into its I/O page tables.
+IOMMUは、デバイスのDMAアドレス（I/O仮想アドレス）を物理アドレスへ変換する。これによりアドレス空間の隔離が可能になる。デバイスは、カーネルがそのI/Oページテーブルに明示的にマップしたメモリにしかアクセスできない。
 
-The IOMMU does **not** solve CPU cache coherency. It operates on the memory bus between the device and RAM, not between the CPU and RAM. On a non-coherent system, even with an IOMMU, the software must still perform cache maintenance through `dma_sync_*` or `dma_map_*` / `dma_unmap_*`.
+IOMMUはCPUキャッシュのコヒーレンシを解決 **しない**。IOMMUはデバイスとRAMの間のメモリバス上で動作するのであって、CPUとRAMの間ではない。非コヒーレントなシステムでは、IOMMUがあっても、ソフトウェアは依然として`dma_sync_*`や`dma_map_*` / `dma_unmap_*`を通じてキャッシュメンテナンスを行わなければならない。
 
-The one exception: some IOMMUs on ARM SoCs are placed on the coherent interconnect side and can participate in snooping. In those cases, the device's coherency is determined by where in the interconnect hierarchy the device is placed, which is reflected in `dev->dma_coherent`.
+唯一の例外として、ARM SoC上の一部のIOMMUはコヒーレントインターコネクト側に配置されており、スヌーピングに参加できる。その場合、デバイスのコヒーレンシは、インターコネクト階層のどこにデバイスが配置されているかで決まり、それは`dev->dma_coherent`に反映される。
 
-For IOMMU address translation and memory protection, see [DMA Memory Allocation](dma.md).
+IOMMUのアドレス変換とメモリ保護については、[DMAメモリ割り当て](dma.md)を参照。
 
-## Common Bugs {#common-bugs}
+## よくあるバグ {#common-bugs}
 
-!!! warning "Accessing a mapped buffer from the CPU"
-    Calling `dma_map_single()` transfers ownership to the device. Any CPU read or write to that buffer before `dma_unmap_single()` (or `dma_sync_single_for_cpu()`) is undefined behavior. On coherent x86 the bug is invisible; on non-coherent ARM64 the CPU reads stale cache or the device reads stale RAM.
+!!! warning "マップ済みバッファへのCPUからのアクセス"
+    `dma_map_single()`を呼ぶと所有権がデバイスに移る。`dma_unmap_single()`（または`dma_sync_single_for_cpu()`）の前にCPUがそのバッファを読み書きするのは未定義動作である。コヒーレントなx86ではこのバグは表面化しない。非コヒーレントなARM64では、CPUが古いキャッシュを読むか、デバイスが古いRAMを読む。
 
     ```c
-    /* WRONG: CPU accesses buffer after mapping */
+    /* 誤り: マップ後にCPUがバッファにアクセスしている */
     dma_addr_t dma = dma_map_single(dev, buf, len, DMA_FROM_DEVICE);
-    buf[0] = 0;                    /* undefined: device owns buf */
+    buf[0] = 0;                    /* 未定義: bufはデバイスが所有 */
     submit_to_device(dev, dma);
 
-    /* CORRECT: map after CPU is done writing */
+    /* 正しい: CPUの書き込みが終わってからマップする */
     buf[0] = 0;
     dma_addr_t dma = dma_map_single(dev, buf, len, DMA_TO_DEVICE);
     submit_to_device(dev, dma);
     ```
 
-!!! warning "Forgetting DMA_FROM_DEVICE sync before reading RX buffer"
-    After a device fills an RX buffer, calling `dma_sync_single_for_cpu()` with `DMA_FROM_DEVICE` is required before reading it. Without this, on a non-coherent platform the CPU reads its own stale cache rather than what the device wrote.
+!!! warning "RXバッファを読む前のDMA_FROM_DEVICEのsync忘れ"
+    デバイスがRXバッファを埋めた後、それを読む前に`DMA_FROM_DEVICE`で`dma_sync_single_for_cpu()`を呼ぶ必要がある。これがないと、非コヒーレントなプラットフォームでは、CPUはデバイスが書いた内容ではなく自分の古いキャッシュを読む。
 
     ```c
-    /* WRONG on non-coherent ARM64: */
-    /* Device has written packet data to rx_buf */
-    process_packet(rx_buf, len);   /* reads stale cache */
+    /* 非コヒーレントなARM64では誤り: */
+    /* デバイスがrx_bufにパケットデータを書き込んだ */
+    process_packet(rx_buf, len);   /* 古いキャッシュを読む */
 
-    /* CORRECT: */
+    /* 正しい: */
     dma_sync_single_for_cpu(dev, rx_dma, len, DMA_FROM_DEVICE);
-    process_packet(rx_buf, len);   /* reads fresh data from RAM */
+    process_packet(rx_buf, len);   /* RAMから新しいデータを読む */
     ```
 
-!!! warning "Using dma_alloc_coherent() for large streaming buffers"
-    Coherent allocations on non-coherent ARM64 are backed by uncached memory. Reading or writing large amounts of data through an uncached mapping is slow — the CPU cannot use its write buffer or load multiple cache lines at once. For bulk data (packet payloads, DMA scatter lists), use `dma_map_single()` / `dma_map_sg()` with explicit sync instead.
+!!! warning "大きなストリーミングバッファへのdma_alloc_coherent()の使用"
+    非コヒーレントなARM64でのコヒーレント割り当ては、キャッシュされないメモリに裏付けられている。キャッシュなしのマッピングを通じて大量のデータを読み書きするのは遅い。CPUはライトバッファを使ったり、複数のキャッシュラインを一度にロードしたりできないからである。バルクデータ（パケットペイロード、DMAスキャッタリスト）には、代わりに明示的なsyncを伴う`dma_map_single()` / `dma_map_sg()`を使うこと。
 
-!!! warning "Accessing MMIO through a cached mapping"
-    Mapping device registers with `ioremap_cache()` (write-back) instead of `ioremap()` causes reads to return cached values and may delay writes indefinitely. Always use `ioremap()` or `ioremap_wc()` for MMIO regions. Never access a device register through a pointer obtained from `phys_to_virt()` — that mapping is write-back cached.
+!!! warning "キャッシュされるマッピング経由でのMMIOアクセス"
+    デバイスレジスタを`ioremap()`ではなく`ioremap_cache()`（ライトバック）でマップすると、読み出しがキャッシュされた値を返し、書き込みが無期限に遅延しうる。MMIO領域には常に`ioremap()`または`ioremap_wc()`を使うこと。`phys_to_virt()`で得たポインタ経由でデバイスレジスタにアクセスしてはならない。そのマッピングはライトバックでキャッシュされる。
 
-!!! warning "Ignoring dma_mapping_error()"
-    `dma_map_single()` and `dma_map_sg()` can fail. The failure return is `DMA_MAPPING_ERROR` (~0ULL on 64-bit). Programming this value into a device DMA register will cause a device fault or access physical memory at the wrong address.
+!!! warning "dma_mapping_error()の無視"
+    `dma_map_single()`と`dma_map_sg()`は失敗しうる。失敗時の戻り値は`DMA_MAPPING_ERROR`（64ビットでは~0ULL）である。この値をデバイスのDMAレジスタに設定すると、デバイスフォルトが起きるか、誤ったアドレスの物理メモリにアクセスすることになる。
 
     ```c
     dma_addr_t addr = dma_map_single(dev, buf, len, DMA_TO_DEVICE);
     if (dma_mapping_error(dev, addr)) {
-        /* handle error: drop packet, return error, etc. */
+        /* エラー処理: パケットを破棄する、エラーを返す、など */
         return -ENOMEM;
     }
     ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — the canonical reference for `dma_alloc_coherent()`, `dma_map_*()`, and `dma_sync_*()` semantics
-- [`Documentation/core-api/dma-api.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api.rst) — kernel source for the DMA API documentation including ownership rules and direction values
-- [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c) — ARM64 `arch_sync_dma_for_device()` and `arch_sync_dma_for_cpu()` implementations
-- [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) — x86 PAT memory type management for `ioremap_wc()` and `ioremap_uc()` mappings
-- [LWN: DMA and cache coherency](https://lwn.net/Articles/501591/) — deep dive into why non-coherent platforms require explicit cache management (2012)
-- [DMA Memory Allocation](dma.md) — IOMMU integration, SWIOTLB bounce buffering, and DMA zone layout
-- [PCI BAR Mapping](pci-bar-mapping.md) — MMIO cache attributes (`ioremap`, `ioremap_wc`) for device register access
+- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — `dma_alloc_coherent()`、`dma_map_*()`、`dma_sync_*()`のセマンティクスに関する標準的なリファレンス
+- [`Documentation/core-api/dma-api.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api.rst) — 所有権の規則や方向の値を含む、DMA APIドキュメントのカーネルソース
+- [`arch/arm64/mm/dma-mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/mm/dma-mapping.c) — ARM64の`arch_sync_dma_for_device()`と`arch_sync_dma_for_cpu()`の実装
+- [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) — `ioremap_wc()`および`ioremap_uc()`マッピングのためのx86 PATメモリタイプ管理
+- [LWN: DMA and cache coherency](https://lwn.net/Articles/501591/) — 非コヒーレントなプラットフォームでなぜ明示的なキャッシュ管理が必要かの詳解（2012年）
+- [DMAメモリ割り当て](dma.md) — IOMMUとの統合、SWIOTLBのバウンスバッファ、DMAゾーンのレイアウト
+- [PCI BARマッピング](pci-bar-mapping.md) — デバイスレジスタアクセスのためのMMIOキャッシュ属性（`ioremap`、`ioremap_wc`）

@@ -1,21 +1,21 @@
-# Memory Management: The Story {#memory-management-the-story}
+# メモリ管理: その物語 {#memory-management-the-story}
 
-## The Problem (1991) {#the-problem-1991}
+## 問題（1991年） {#the-problem-1991}
 
-When Linus Torvalds started Linux, he faced a fundamental question: **how do you let multiple programs share limited RAM?**
+Linus TorvaldsがLinuxを始めたとき、彼は根本的な問いに直面した。**限られたRAMを複数のプログラムでどう共有させるか?**
 
-Every program thinks it has the entire computer's memory to itself. But there's only so much physical RAM. The memory management (mm) subsystem solves this with two key tricks:
+どのプログラムも、コンピュータのメモリ全体を自分だけのものだと思っている。しかし物理RAMには限りがある。メモリ管理（mm）サブシステムは、2つの重要な仕掛けでこれを解決する。
 
-1. **Virtual memory**: Each program gets its own "fake" address space
-2. **Paging**: Only keep in RAM what's actually being used
+1. **仮想メモリ**: 各プログラムに自分専用の「偽の」アドレス空間を与える
+2. **ページング**: 実際に使われているものだけをRAMに置いておく
 
-This document tells the story of how Linux's memory allocators evolved over 30+ years.
+このドキュメントは、Linuxのメモリアロケータが30年以上にわたってどう進化してきたかの物語を語る。
 
 ---
 
-## The Big Picture {#the-big-picture}
+## 全体像 {#the-big-picture}
 
-How Linux memory allocators relate to each other:
+Linuxのメモリアロケータが互いにどう関係しているか:
 
 ```
                            +---------------------------------------------+
@@ -58,36 +58,36 @@ How Linux memory allocators relate to each other:
               +------------------------------------------------------------+
 ```
 
-**Key insight**: All allocators ultimately get pages from the buddy allocator. The difference is how they present memory to callers:
+**重要な洞察**: すべてのアロケータは最終的にバディアロケータからpageを得る。違いは、呼び出し元にメモリをどう見せるかにある。
 
-- **kmalloc/SLUB**: Physically contiguous, fast, small allocations
-- **vmalloc**: Virtually contiguous, can satisfy large requests from fragmented memory
+- **kmalloc/SLUB**: 物理的に連続、高速、小さな割り当て
+- **vmalloc**: 仮想的に連続、断片化したメモリからでも大きな要求を満たせる
 
 ---
 
-## Chapter 1: The Page Allocator (The Foundation) {#chapter-1-the-page-allocator-the-foundation}
+## 第1章: ページアロケータ（土台） {#chapter-1-the-page-allocator-the-foundation}
 
-### The Original Problem {#the-original-problem}
+### 元々の問題 {#the-original-problem}
 
-Physical memory is finite. You need a way to hand out chunks of it and get them back.
+物理メモリは有限である。その塊を配り、そして回収する方法が必要になる。
 
-*Note: The buddy allocator dates to Linux 0.01 (1991). This predates LKML - early Linux development happened on comp.os.minix and early mailing lists without good archives. Detailed mm discussions from this era are largely lost to history.*
+*注: バディアロケータはLinux 0.01（1991年）にまでさかのぼる。これはLKMLより前のことであり、初期のLinux開発はcomp.os.minixや、よいアーカイブを持たない初期のメーリングリストで行われていた。この時代のmmに関する詳細な議論は、ほとんどが歴史の中に失われている。*
 
-> **Historical Context: How Linux Started**
+> **歴史的背景: Linuxはどう始まったか**
 >
-> On August 25, 1991, Linus Torvalds [posted to comp.os.minix](https://www.cs.cmu.edu/~awb/linux.history.html): *"I'm doing a (free) operating system (just a hobby, won't be big and professional like gnu) for 386(486) AT clones."* He was a 21-year-old student in Helsinki, frustrated that MINIX (a teaching OS) couldn't be freely modified. Linux 0.01 had basic memory management - a simple buddy allocator for physical pages. Within months, others were contributing.
+> 1991年8月25日、Linus Torvaldsは[comp.os.minixに投稿した](https://www.cs.cmu.edu/~awb/linux.history.html)。*"I'm doing a (free) operating system (just a hobby, won't be big and professional like gnu) for 386(486) AT clones."*（訳: 386(486) ATクローン向けの（フリーの）オペレーティングシステムを作っている（ただの趣味で、gnuのように大きくてプロフェッショナルなものにはならない）。）彼はヘルシンキの21歳の学生で、MINIX（教育用OS）を自由に改変できないことに不満を抱いていた。Linux 0.01には基本的なメモリ管理、すなわち物理page用の単純なバディアロケータがあった。数か月のうちに、他の人々が貢献し始めた。
 >
-> **The Monolithic vs Microkernel Debate (1992)**
+> **モノリシック対マイクロカーネル論争（1992年）**
 >
-> In January 1992, Andrew Tanenbaum (MINIX creator, OS professor) [declared "Linux is obsolete"](https://www.oreilly.com/openbook/opensources/book/appa.html) on comp.os.minix. His argument: Linux's monolithic kernel (where mm/, filesystems, drivers all run in kernel space) was a "giant step back into the 1970s." Microkernels (like MINIX) were the future - minimal kernel, everything else in userspace.
+> 1992年1月、Andrew Tanenbaum（MINIXの作者、OSの教授）はcomp.os.minixで[「Linux is obsolete」（Linuxは時代遅れだ）と宣言した](https://www.oreilly.com/openbook/opensources/book/appa.html)。彼の主張は、Linuxのモノリシックカーネル（mm/、ファイルシステム、ドライバがすべてカーネル空間で動く）は「1970年代への大きな後退」だというものだった。（MINIXのような）マイクロカーネル、つまり最小限のカーネルで、それ以外はすべてユーザー空間に置く方式こそが未来だというのである。
 >
-> Torvalds responded the next day: monolithic was a pragmatic choice. Microkernels had theoretical elegance but real-world performance overhead from context switches and message passing. He prioritized getting things working on real hardware (the 386) over architectural purity. History proved him right - Linux runs everywhere from phones to supercomputers, while pure microkernels remain niche.
+> Torvaldsは翌日反論した。モノリシックは実用的な選択だった。マイクロカーネルには理論上の美しさがあるが、コンテキストスイッチとメッセージパッシングによる現実の性能オーバーヘッドがあった。彼はアーキテクチャの純粋さより、実際のハードウェア（386）で物事を動かすことを優先した。歴史は彼が正しかったことを証明した。Linuxは電話からスーパーコンピュータまであらゆる場所で動いている一方、純粋なマイクロカーネルはニッチなままである。
 >
-> **Why this matters for mm/**: Linux's monolithic design means memory management runs in kernel space with direct hardware access. No message-passing overhead. `kmalloc()` is a function call, not an IPC. This shaped every allocator discussed below - they optimize for this tight integration.
+> **これがmm/にとってなぜ重要か**: Linuxのモノリシックな設計により、メモリ管理はハードウェアに直接アクセスできるカーネル空間で動作する。メッセージパッシングのオーバーヘッドはない。`kmalloc()`は関数呼び出しであってIPCではない。これが以下で論じるすべてのアロケータを形作った。どれもこの緊密な統合に向けて最適化されている。
 
-### The Solution: Buddy System {#the-solution-buddy-system}
+### 解決策: バディシステム {#the-solution-buddy-system}
 
-Linux uses a "buddy allocator" (borrowed from older systems). Here's the clever idea:
+Linuxは（より古いシステムから借用した）「バディアロケータ」を使う。その巧妙なアイデアは次のとおりである。
 
 ```
 Imagine you have 16 pages of RAM:
@@ -106,27 +106,27 @@ When they free those 2 pages, you merge them back with their "buddy":
 [__][_][_] -> [____][_] -> [________] -> etc.
 ```
 
-**Why it works**: Fast allocation (`O(1)` from a given order's free list), automatic merging reduces fragmentation.
+**なぜうまくいくのか**: 割り当てが高速（特定のorderのフリーリストから`O(1)`）で、自動的な結合によって断片化が減る。
 
-**What it can't do**: Give you, say, 3 pages. You'll get 4 (next power of 2).
+**できないこと**: 例えば3 pageを渡すこと。4 page（次の2のべき乗）が渡される。
 
 ---
 
-## Chapter 2: The Slab Allocator (v2.0, ~1996) {#chapter-2-the-slab-allocator-v20-1996}
+## 第2章: slabアロケータ（v2.0、1996年頃） {#chapter-2-the-slab-allocator-v20-1996}
 
-### The Problem {#the-problem}
+### 問題 {#the-problem}
 
-The page allocator works in page-sized chunks (`4KB`). But kernel objects are often tiny:
+ページアロケータはpageサイズ（`4KB`）の塊で動作する。しかしカーネルのオブジェクトは小さいことが多い。
 
-- An inode? ~600 bytes
-- A dentry? ~200 bytes
-- A socket buffer? ~200 bytes
+- inodeは? 約600バイト
+- dentryは? 約200バイト
+- ソケットバッファは? 約200バイト
 
-Giving someone a whole `4KB` page for a 200-byte object wastes memory.
+200バイトのオブジェクトのために`4KB`のpageを丸ごと渡すのはメモリの無駄である。
 
-### The Solution: Slab {#the-solution-slab}
+### 解決策: slab {#the-solution-slab}
 
-The "slab allocator" (borrowed from SunOS) carves pages into fixed-size object caches:
+（SunOSから借用した）「slabアロケータ」は、pageを固定サイズのオブジェクトキャッシュに切り分ける。
 
 ```
 Page for 200-byte objects:
@@ -136,45 +136,45 @@ Page for 600-byte objects:
 [object][object][object][object]...     <- ~6 objects fit
 ```
 
-Each object type gets its own cache. Allocating is fast (grab from cache), freeing is fast (return to cache).
+オブジェクトの種類ごとに専用のキャッシュを持つ。割り当ては高速で（キャッシュから取ってくる）、解放も高速である（キャッシュに返す）。
 
-### The Evolution {#the-evolution}
+### 進化 {#the-evolution}
 
-**SLAB (Original, ~1996)**: Ported from SunOS, based on [Bonwick's 1994 USENIX paper](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf). Complex. Multiple levels of caches. Good debugging. But hard to maintain.
+**SLAB（元祖、1996年頃）**: SunOSから移植され、[Bonwickの1994年のUSENIX論文](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf)に基づく。複雑である。何段階ものキャッシュを持つ。デバッグ機能は優れている。しかし保守が難しい。
 
-*Note: SLAB predates good LKML archives. The Bonwick paper is the canonical design reference.*
+*注: SLABはよいLKMLアーカイブより前のものである。Bonwickの論文が標準的な設計の参考文献である。*
 
-**SLUB (v2.6.22, 2007)**: Simpler redesign by Christoph Lameter.
+**SLUB（v2.6.22、2007年）**: Christoph Lameterによる、より単純な再設計。
 
-- **Commit**: [81819f0fc828](https://git.kernel.org/linus/81819f0fc828)
-- Removed complex queuing
-- Lower memory overhead
-- Better NUMA support
-- Same API, simpler internals
+- **コミット**: [81819f0fc828](https://git.kernel.org/linus/81819f0fc828)
+- 複雑なキューイングを削除
+- メモリオーバーヘッドが小さい
+- NUMAのサポートが優れている
+- 同じAPIで、内部はより単純
 
-*Note: The commit message contains the design rationale. Pre-2008 LKML archives are sparse.*
+*注: コミットメッセージに設計の根拠が記されている。2008年以前のLKMLアーカイブはまばらである。*
 
-**Why SLUB won**: Kernel developers learned that simpler code is easier to maintain and debug. SLAB's complexity wasn't worth the marginal performance gains.
+**なぜSLUBが勝ったのか**: カーネル開発者は、単純なコードのほうが保守もデバッグも容易だと学んだ。SLABの複雑さは、わずかな性能向上に見合うものではなかった。
 
-**SLOB (embedded, removed v6.4)**: Minimal allocator for tiny systems. Removed because SLUB became efficient enough for embedded too.
+**SLOB（組み込み向け、v6.4で削除）**: 小さなシステム向けの最小限のアロケータ。SLUBが組み込みでも十分に効率的になったため削除された。
 
-**The API** (`kmalloc`/`kfree`):
+**API**（`kmalloc`/`kfree`）:
 ```c
-ptr = kmalloc(size, GFP_KERNEL);  // Get memory
-kfree(ptr);                        // Give it back
+ptr = kmalloc(size, GFP_KERNEL);  // メモリを得る
+kfree(ptr);                        // 返す
 ```
 
 ---
 
-## Chapter 3: vmalloc (1993 → Present) {#chapter-3-vmalloc-1993-present}
+## 第3章: vmalloc（1993年 → 現在） {#chapter-3-vmalloc-1993-present}
 
-### The Problem {#the-problem_1}
+### 問題 {#the-problem_1}
 
-`kmalloc` gives you *physically contiguous* memory. As the system runs, physical memory becomes fragmented. Eventually, you can't find a contiguous `1MB` chunk even if total free memory is `100MB`.
+`kmalloc`は*物理的に連続した*メモリを与える。システムが動き続けると、物理メモリは断片化していく。やがて、空きメモリの合計が`100MB`あっても、連続した`1MB`の塊を見つけられなくなる。
 
-### The Solution: Virtual Contiguity {#the-solution-virtual-contiguity}
+### 解決策: 仮想的な連続性 {#the-solution-virtual-contiguity}
 
-What if the memory only needs to *look* contiguous to the user?
+メモリが利用者から見て連続しているように*見え*さえすればよいとしたら?
 
 ```
 Virtual addresses:     Physical pages:
@@ -183,206 +183,206 @@ Virtual addresses:     Physical pages:
 0xFFFF2000 ──────────→ Page at 0x2222000
 ```
 
-The program sees contiguous 0xFFFF0000-0xFFFF3000, but the physical pages are scattered. This is `vmalloc()`.
+プログラムからは0xFFFF0000〜0xFFFF3000が連続して見えるが、物理pageは散らばっている。これが`vmalloc()`である。
 
-### The Cost {#the-cost}
+### コスト {#the-cost}
 
-Page tables must be set up. TLB (translation cache) entries are consumed. It's slower than kmalloc. But it can satisfy large allocations when kmalloc can't.
+ページテーブルを設定しなければならない。TLB（変換キャッシュ）のエントリが消費される。kmallocより遅い。しかし、kmallocでは満たせない大きな割り当てを満たすことができる。
 
-### Major Evolution {#major-evolution}
+### 主要な進化 {#major-evolution}
 
-**v2.6.28 (2008): The Scalability Crisis**
+**v2.6.28（2008年）: スケーラビリティの危機**
 
-**The problem**: vunmap needed to flush TLB entries. On multi-core systems, this meant an IPI (interrupt) to *every* CPU. Under a global lock. As core counts grew from 4 to 64+, this became quadratic slowdown.
+**問題**: vunmapはTLBエントリをフラッシュする必要があった。マルチコアシステムでは、これは*すべての*CPUへのIPI（割り込み）を意味した。しかもグローバルロックの下で。コア数が4から64以上に増えるにつれ、これは二次関数的な速度低下になった。
 
-**The fix**: Nick Piggin rewrote vmalloc from scratch:
+**修正**: Nick Pigginがvmallocをゼロから書き直した。
 
-- **Commit**: [db64fe02258f](https://git.kernel.org/linus/db64fe02258f)
-- Lazy TLB flushing: Don't flush immediately, batch multiple unmaps
-- RBTree for address lookup: `O(log n)` instead of `O(n)` list scan
-- Per-CPU frontend: Reduce lock contention
+- **コミット**: [db64fe02258f](https://git.kernel.org/linus/db64fe02258f)
+- 遅延TLBフラッシュ: すぐにはフラッシュせず、複数のアンマップをまとめて処理する
+- アドレス検索にRBTree: `O(n)`のリスト走査の代わりに`O(log n)`
+- CPUごとのフロントエンド: ロック競合を減らす
 
-*Note: The commit message documents the detailed design rationale for lazy TLB flushing and RCU.*
+*注: 遅延TLBフラッシュとRCUについての詳細な設計の根拠は、コミットメッセージに記されている。*
 
-**v5.13 (2021): Huge Pages**
+**v5.13（2021年）: ヒュージページ**
 
-**The problem**: With huge vmalloc buffers (BPF programs, modules), each `4KB` page needed a TLB entry. TLB is limited. Lots of TLB misses.
+**問題**: 巨大なvmallocバッファ（BPFプログラム、モジュール）では、`4KB`のpageごとにTLBエントリが必要だった。TLBには限りがある。TLBミスが多発した。
 
-**The fix**: Use huge pages (`2MB`) when possible:
+**修正**: 可能な場合はヒュージページ（`2MB`）を使う。
 
-- **Commit**: [121e6f3258fe](https://git.kernel.org/linus/121e6f3258fe) | [LKML](https://lore.kernel.org/linux-mm/1616036421.amjz2efujj.astroid@bobo.none/)
-- Fewer TLB entries needed
-- Trade-off: More internal fragmentation
+- **コミット**: [121e6f3258fe](https://git.kernel.org/linus/121e6f3258fe) | [LKML](https://lore.kernel.org/linux-mm/1616036421.amjz2efujj.astroid@bobo.none/)
+- 必要なTLBエントリが少なくなる
+- トレードオフ: 内部断片化が増える
 
-**v6.12 (2024): vrealloc**
+**v6.12（2024年）: vrealloc**
 
-**The problem**: You have a vmalloc buffer and want to resize it. Previously, you'd have to allocate new, copy, free old.
+**問題**: vmallocバッファがあり、それをリサイズしたい。以前は、新しく割り当て、コピーし、古いものを解放しなければならなかった。
 
-**The fix**: `vrealloc()` - resize in place when possible:
+**修正**: `vrealloc()`。可能な場合はその場でリサイズする。
 
-- **Commit**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3)
-- Motivated by Rust's allocator needs (`Vec` resizing)
-- See [vrealloc](vrealloc.md) for the full story and bugs found
+- **コミット**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3)
+- Rustのアロケータの必要性（`Vec`のリサイズ）が動機
+- 物語の全体と見つかったバグについては[vrealloc](vrealloc.md)を参照
 
-*See [LKML patch series](https://lore.kernel.org/all/20240722163111.4766-1-dakr@kernel.org/) by Danilo Krummrich.*
-
----
-
-## Chapter 4: When Things Broke {#chapter-4-when-things-broke}
-
-Real bugs teach more than perfect code. Here are instructive failures:
-
-### KASAN vs vrealloc (v6.12) {#kasan-vs-vrealloc-v612}
-
-**What broke**: vrealloc reused existing memory but didn't update KASAN (memory sanitizer) annotations. Result: false-positive "use-after-free" reports.
-
-**The lesson**: When you have memory safety tooling, you must keep it in sync with actual memory state. Annotations are code, not comments.
-
-**Fix**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce)
-
-### The Return Value Bug (v6.13) {#the-return-value-bug-v613}
-
-**What broke**: vrealloc was refactored to support in-place growing. The code did all the work correctly... then returned the wrong variable. Growing allocations silently fell back to the slow path.
-
-**The lesson**: After complex refactoring, double-check your return statements. The happy path isn't always the executed path.
-
-**Impact**: BPF verifier performance regression - it uses vrealloc heavily.
-
-**Fix**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) - one line change.
-
-### Redundant Zeroing (v6.13) {#redundant-zeroing-v613}
-
-**What broke**: With `init_on_alloc` enabled, vrealloc was zeroing memory on both grow and shrink. But on grow, the new memory was already zeroed by the allocator.
-
-**The lesson**: Understand what upstream code already did. Don't assume you need to do everything yourself.
-
-**Fix**: [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68)
+*Danilo Krummrichによる[LKMLのパッチシリーズ](https://lore.kernel.org/all/20240722163111.4766-1-dakr@kernel.org/)を参照。*
 
 ---
 
-## Chapter 5: Choosing the Right Allocator {#chapter-5-choosing-the-right-allocator}
+## 第4章: 物事が壊れたとき {#chapter-4-when-things-broke}
 
-After all this history, here's the practical guidance:
+現実のバグは完璧なコードより多くを教えてくれる。教訓的な失敗を紹介する。
 
-| Situation | Use | Why |
+### KASAN対vrealloc（v6.12） {#kasan-vs-vrealloc-v612}
+
+**何が壊れたか**: vreallocは既存のメモリを再利用したが、KASAN（メモリサニタイザ）の注釈を更新しなかった。その結果、偽陽性の「use-after-free」報告が出た。
+
+**教訓**: メモリ安全性のツールを使っているなら、それを実際のメモリの状態と同期させ続けなければならない。注釈はコメントではなくコードである。
+
+**修正**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce)
+
+### 戻り値のバグ（v6.13） {#the-return-value-bug-v613}
+
+**何が壊れたか**: vreallocは、その場での拡大をサポートするようにリファクタリングされた。コードはすべての処理を正しく行った……そして間違った変数を返した。拡大する割り当ては、黙って低速パスにフォールバックしていた。
+
+**教訓**: 複雑なリファクタリングの後は、return文を再確認すること。想定した正常系が、実際に実行されるパスとは限らない。
+
+**影響**: BPF検証器の性能のリグレッション。検証器はvreallocを多用している。
+
+**修正**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1)。1行の変更。
+
+### 冗長なゼロ埋め（v6.13） {#redundant-zeroing-v613}
+
+**何が壊れたか**: `init_on_alloc`が有効なとき、vreallocは拡大時と縮小時の両方でメモリをゼロ埋めしていた。しかし拡大時には、新しいメモリはすでにアロケータによってゼロ埋めされていた。
+
+**教訓**: 上流のコードがすでに何をしたかを理解すること。すべてを自分でやる必要があると思い込まないこと。
+
+**修正**: [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68)
+
+---
+
+## 第5章: 正しいアロケータを選ぶ {#chapter-5-choosing-the-right-allocator}
+
+これまでの歴史を踏まえた、実践的な指針は次のとおりである。
+
+| 状況 | 使うもの | 理由 |
 |-----------|-----|-----|
-| Small object (<page) | `kmalloc()` | Fast, low overhead |
-| Large buffer (pages+) | `vmalloc()` | Doesn't need physical contiguity |
-| Don't know size ahead | `kvmalloc()` | Tries kmalloc, falls back to vmalloc |
-| DMA buffer | `dma_alloc_coherent()` | Need physical address for hardware |
-| Resizable buffer | `krealloc()`/`vrealloc()` | Efficient resize |
+| 小さなオブジェクト（< page） | `kmalloc()` | 高速、オーバーヘッドが小さい |
+| 大きなバッファ（page以上） | `vmalloc()` | 物理的な連続性を必要としない |
+| サイズが事前にわからない | `kvmalloc()` | kmallocを試し、vmallocにフォールバックする |
+| DMAバッファ | `dma_alloc_coherent()` | ハードウェアのために物理アドレスが必要 |
+| リサイズ可能なバッファ | `krealloc()`/`vrealloc()` | 効率的なリサイズ |
 
 ---
 
-## Try It Yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### Explore the Buddy Allocator {#explore-the-buddy-allocator}
+### バディアロケータを探る {#explore-the-buddy-allocator}
 
 ```bash
-# View buddy allocator state per zone
+# ゾーンごとのバディアロケータの状態を見る
 cat /proc/buddyinfo
 
-# Example output:
+# 出力例:
 # Node 0, zone   Normal  1024  512  256  128   64   32   16    8    4    2    1
 #                        ^     ^    ^    ^     ^    ^    ^     ^    ^    ^    ^
 #                        |     |    |    |     |    |    |     |    |    |    order 10 (4MB blocks)
 #                        order 0 (4KB pages)
 
-# Each number = count of free blocks at that order
+# 各数値 = そのorderの空きブロック数
 # Order 0 = 4KB, Order 1 = 8KB, ... Order 10 = 4MB
 ```
 
-### Explore the Slab Allocator {#explore-the-slab-allocator}
+### slabアロケータを探る {#explore-the-slab-allocator}
 
 ```bash
-# View all slab caches
+# すべてのslabキャッシュを見る
 cat /proc/slabinfo
 
-# Better: use slabtop for live monitoring
+# より良い方法: slabtopでライブ監視する
 slabtop
 
-# Key columns:
-# OBJS     - Total objects (active + inactive)
-# ACTIVE   - Objects currently in use
-# USE      - Percentage utilization
-# OBJ SIZE - Size of each object
-# SLABS    - Number of slabs
+# 主要な列:
+# OBJS     - オブジェクトの総数（アクティブ + 非アクティブ）
+# ACTIVE   - 現在使用中のオブジェクト
+# USE      - 使用率（パーセント）
+# OBJ SIZE - 各オブジェクトのサイズ
+# SLABS    - slabの数
 
-# Find biggest memory consumers
-slabtop -s c  # Sort by cache size
+# 最大のメモリ消費者を見つける
+slabtop -s c  # キャッシュサイズでソート
 ```
 
-### Check Overall Memory {#check-overall-memory}
+### メモリ全体を確認する {#check-overall-memory}
 
 ```bash
-# High-level memory overview
+# 高レベルのメモリ概要
 cat /proc/meminfo
 
-# Key fields for mm/:
-# MemTotal      - Total usable RAM
-# MemFree       - Completely unused pages
-# Buffers       - Block device cache
-# Cached        - Page cache (file data)
-# Slab          - Kernel slab allocator total
-# SReclaimable  - Slab memory that can be reclaimed
-# VmallocUsed   - vmalloc usage
+# mm/にとって重要なフィールド:
+# MemTotal      - 使用可能なRAMの合計
+# MemFree       - まったく使われていないpage
+# Buffers       - ブロックデバイスのキャッシュ
+# Cached        - ページキャッシュ（ファイルデータ）
+# Slab          - カーネルのslabアロケータの合計
+# SReclaimable  - 回収可能なslabメモリ
+# VmallocUsed   - vmallocの使用量
 ```
 
-### Run Kernel Memory Tests {#run-kernel-memory-tests}
+### カーネルのメモリテストを実行する {#run-kernel-memory-tests}
 
 ```bash
-# Build test modules (in kernel tree with CONFIG_TEST_* enabled)
+# テストモジュールをビルドする（CONFIG_TEST_*を有効にしたカーネルツリーで）
 make M=lib/ lib/test_vmalloc.ko
 make M=mm/ mm/test_hmm.ko
 
-# Run vmalloc tests
+# vmallocのテストを実行する
 modprobe test_vmalloc run_test_mask=0xFFFF
 dmesg | grep test_vmalloc
 
-# Run via virtme-ng (recommended for testing)
+# virtme-ng経由で実行する（テストに推奨）
 virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 ```
 
-### Key Code Locations {#key-code-locations}
+### 主要なコードの場所 {#key-code-locations}
 
-| Subsystem | File | What to Look For |
+| サブシステム | ファイル | 見るべきもの |
 |-----------|------|------------------|
-| Buddy allocator | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `__alloc_pages()`, `free_pages()` |
-| SLUB allocator | [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | `kmem_cache_alloc()`, `kmalloc()` |
-| vmalloc | [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | `vmalloc()`, `vfree()` |
-| Memory reclaim | [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `shrink_node()`, `kswapd()` |
-| OOM killer | [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | `out_of_memory()`, `oom_badness()` - see [overcommit](overcommit.md) |
+| バディアロケータ | [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | `__alloc_pages()`、`free_pages()` |
+| SLUBアロケータ | [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | `kmem_cache_alloc()`、`kmalloc()` |
+| vmalloc | [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | `vmalloc()`、`vfree()` |
+| メモリ回収 | [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `shrink_node()`、`kswapd()` |
+| OOM killer | [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | `out_of_memory()`、`oom_badness()`。[overcommit](overcommit.md)を参照 |
 
 ---
 
-## Timeline Summary {#timeline-summary}
+## 年表のまとめ {#timeline-summary}
 
-| Year | Kernel | What Happened |
+| 年 | カーネル | 出来事 |
 |------|--------|---------------|
-| 1991 | 0.01 | Buddy allocator for pages |
-| ~1996 | 2.0 | SLAB allocator for small objects |
-| 1993-2002 | 2.x | vmalloc evolution (Linus, then Christoph Hellwig) |
-| 2007 | [v2.6.22](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v2.6.22) | SLUB replaces SLAB as default |
-| 2008 | [v2.6.28](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v2.6.28) | vmalloc rewrite (RBTree, lazy TLB) |
-| 2021 | [v5.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v5.13) | vmalloc huge page support |
-| 2023 | [v6.4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.4) | SLOB removed |
-| 2024 | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | vrealloc introduced |
-| 2025 | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13)+ | vrealloc bugs fixed, shrink optimization |
+| 1991 | 0.01 | page用のバディアロケータ |
+| 1996年頃 | 2.0 | 小さなオブジェクト用のSLABアロケータ |
+| 1993-2002 | 2.x | vmallocの進化（Linus、その後Christoph Hellwig） |
+| 2007 | [v2.6.22](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v2.6.22) | SLUBがSLABに代わってデフォルトに |
+| 2008 | [v2.6.28](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v2.6.28) | vmallocの書き直し（RBTree、遅延TLB） |
+| 2021 | [v5.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v5.13) | vmallocのヒュージページサポート |
+| 2023 | [v6.4](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.4) | SLOBの削除 |
+| 2024 | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | vreallocの導入 |
+| 2025 | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13)以降 | vreallocのバグ修正、縮小の最適化 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [vmalloc](vmalloc.md) - Deep dive into virtual memory allocation
-- [vrealloc](vrealloc.md) - The full story of vmalloc resizing
-- [page-allocator](page-allocator.md) - Buddy system details
-- [slab](slab.md) - SLUB internals
-- [glossary](glossary.md) - Terminology reference
+- [vmalloc](vmalloc.md): 仮想メモリ割り当ての詳細
+- [vrealloc](vrealloc.md): vmallocのリサイズの物語の全体
+- [page-allocator](page-allocator.md): バディシステムの詳細
+- [slab](slab.md): SLUBの内部構造
+- [glossary](glossary.md): 用語のリファレンス
 
-### Explainers {#explainers}
+### 解説記事 {#explainers}
 
-- [virtual-physical-resident](virtual-physical-resident.md) - VSZ vs RSS vs PSS explained
-- [overcommit](overcommit.md) - Why overcommit is the only sane default
-- [brk-vs-mmap](brk-vs-mmap.md) - Two ways to get memory from the kernel
-- [contiguous-memory](contiguous-memory.md) - Why large allocations fail despite free memory
-- [cow](cow.md) - Copy-on-write edge cases and when it breaks
+- [virtual-physical-resident](virtual-physical-resident.md): VSZ対RSS対PSSの解説
+- [overcommit](overcommit.md): なぜオーバーコミットが唯一の正気なデフォルトなのか
+- [brk-vs-mmap](brk-vs-mmap.md): カーネルからメモリを得る2つの方法
+- [contiguous-memory](contiguous-memory.md): なぜ空きメモリがあるのに大きな割り当てが失敗するのか
+- [cow](cow.md): コピーオンライトのエッジケースと、それがいつ破れるか

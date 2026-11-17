@@ -1,89 +1,89 @@
-# Maple Tree: VMA Management Data Structure {#maple-tree-vma-management-data-structure}
+# maple tree: VMA管理のためのデータ構造 {#maple-tree-vma-management-data-structure}
 
-> The B-tree variant that replaced the rbtree + linked list for virtual memory area management in Linux 6.1
+> Linux 6.1で、仮想メモリ領域の管理に使われていたrbtree＋連結リストを置き換えたBツリーの変種
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 役割 |
 |------|---------|
-| `include/linux/maple_tree.h` | Public API: `struct maple_tree`, `struct ma_state`, all macros and inline functions |
-| `lib/maple_tree.c` | Full implementation, `maple_tree_init()`, `mas_walk()`, `mas_find()`, `mas_store()`, `mas_erase()` |
-| `include/linux/mm_types.h` | `struct mm_struct` embedding (`mm_mt`), `struct vma_iterator`, `MM_MT_FLAGS` |
-| `mm/mmap.c` | `find_vma()`, `find_vma_intersection()`, process teardown with `__mt_destroy()` |
-| `mm/vma.c` | VMA insertion via `vma_iter_store_gfp()`, removal via `vma_iter_clear()` |
-| `kernel/fork.c` | `mm_init()`: maple tree initialization with `mt_init_flags()` |
+| `include/linux/maple_tree.h` | 公開API: `struct maple_tree`、`struct ma_state`、すべてのマクロとインライン関数 |
+| `lib/maple_tree.c` | 完全な実装、`maple_tree_init()`、`mas_walk()`、`mas_find()`、`mas_store()`、`mas_erase()` |
+| `include/linux/mm_types.h` | `struct mm_struct`への埋め込み（`mm_mt`）、`struct vma_iterator`、`MM_MT_FLAGS` |
+| `mm/mmap.c` | `find_vma()`、`find_vma_intersection()`、`__mt_destroy()`によるプロセスの破棄 |
+| `mm/vma.c` | `vma_iter_store_gfp()`によるVMAの挿入、`vma_iter_clear()`による削除 |
+| `kernel/fork.c` | `mm_init()`: `mt_init_flags()`によるmaple treeの初期化 |
 
 ---
 
-## Why the Maple Tree Replaced rbtree + Linked List {#why-the-maple-tree-replaced-rbtree-linked-list}
+## なぜmaple treeがrbtree＋連結リストを置き換えたか {#why-the-maple-tree-replaced-rbtree-linked-list}
 
-Before Linux 6.1, every `mm_struct` maintained two redundant data structures for VMAs:
+Linux 6.1より前は、すべての`mm_struct`がVMAのために2つの冗長なデータ構造を保持していた。
 
-- An **red-black tree** (`mm->mm_rb`) keyed on `vm_start`, providing O(log n) lookup by address.
-- A **doubly-linked list** (`vma->vm_next` / `vma->vm_prev`) threading all VMAs in address order, used for sequential iteration.
+- `vm_start`をキーとする **赤黒木**（`mm->mm_rb`）。アドレスによるO(log n)の検索を提供する。
+- すべてのVMAをアドレス順につなぐ **双方向連結リスト**（`vma->vm_next` / `vma->vm_prev`）。順次走査に使われる。
 
-Every VMA insertion, deletion, or modification had to update both structures atomically under `mmap_lock`. Beyond the extra code complexity, there were two concrete performance costs:
+VMAの挿入、削除、変更のたびに、`mmap_lock`の下で両方の構造をアトミックに更新しなければならなかった。コードの複雑さが増すだけでなく、具体的な性能コストが2つあった。
 
-1. **Cache misses during sequential scans.** Walking the linked list requires following `vm_next` pointers, one per VMA, with each pointer potentially pointing to a different cache line in a different slab object. On a process with thousands of mappings this becomes a long chain of pointer-chasing loads.
+1. **順次走査時のキャッシュミス**。 連結リストをたどるには、VMAごとに1つずつ`vm_next`ポインタを追う必要があり、各ポインタは別のslabオブジェクト内の別のキャッシュラインを指している可能性がある。数千のマッピングを持つプロセスでは、これはポインタを追うロードの長い連鎖になる。
 
-2. **Memory overhead.** Each `vm_area_struct` carried three rbtree node fields (`rb_node`, plus parent and colour embedded in the pointer) and two list pointers, costing ~40 bytes per VMA solely for indexing.
+2. **メモリのオーバーヘッド**。 各`vm_area_struct`は3つのrbtreeノードフィールド（`rb_node`。ポインタに埋め込まれた親と色を含む）と2つのリストポインタを持っており、インデックス付けのためだけにVMAあたり約40バイトを費やしていた。
 
-The maple tree (merged in v6.1, authored at Oracle by Liam Howlett and Matthew Wilcox) unifies both structures into a single B-tree variant that natively supports range-keyed lookup *and* efficient sequential iteration. Because B-tree nodes pack multiple pivots and slots into one 256-byte cache line, a single node access provides several pivot comparisons, dramatically reducing cache misses compared to an rbtree where each comparison requires loading a different node.
+maple tree（v6.1でマージ。OracleのLiam HowlettとMatthew Wilcoxによる）は、両方の構造を単一のBツリーの変種に統合した。これは範囲をキーとする検索 *と* 効率的な順次走査の両方をネイティブにサポートする。Bツリーのノードは複数のピボットとスロットを256バイトのキャッシュラインに詰め込むため、1回のノードアクセスで複数のピボット比較ができる。比較のたびに別のノードをロードする必要があるrbtreeに比べて、キャッシュミスが劇的に減る。
 
 ---
 
-## What the Maple Tree Is {#what-the-maple-tree-is}
+## maple treeとは何か {#what-the-maple-tree-is}
 
-The maple tree is an RCU-safe, range-keyed B-tree. It stores non-overlapping ranges of unsigned long keys, mapping each range to an opaque pointer value. For VMA management the key is the address range `[vm_start, vm_end - 1]` and the value is `struct vm_area_struct *`.
+maple treeは、RCU安全で範囲をキーとするBツリーである。unsigned longのキーの重ならない範囲を格納し、各範囲を不透明なポインタ値に対応付ける。VMA管理では、キーはアドレス範囲`[vm_start, vm_end - 1]`であり、値は`struct vm_area_struct *`である。
 
-### Node types and sizes {#node-types-and-sizes}
+### ノードの種類とサイズ {#node-types-and-sizes}
 
-Three node types are defined (from `include/linux/maple_tree.h`):
+3種類のノードが定義されている（`include/linux/maple_tree.h`より）。
 
 ```c
-/* On 64-bit: 256 bytes per node, aligned to 256 bytes */
-#define MAPLE_NODE_SLOTS     31   /* slots in a generic node */
-#define MAPLE_RANGE64_SLOTS  16   /* range node: 15 pivots + 16 slots */
-#define MAPLE_ARANGE64_SLOTS 10   /* alloc-range node: 9 pivots + 10 slots + gaps */
+/* 64ビットでは: ノードあたり256バイト、256バイト境界にアライン */
+#define MAPLE_NODE_SLOTS     31   /* 汎用ノードのスロット数 */
+#define MAPLE_RANGE64_SLOTS  16   /* rangeノード: 15ピボット + 16スロット */
+#define MAPLE_ARANGE64_SLOTS 10   /* alloc-rangeノード: 9ピボット + 10スロット + gap */
 ```
 
-The two node variants in use:
+使われている2種類のノードは次のとおり。
 
-**`maple_range_64` — the standard internal/leaf node**
+**`maple_range_64` — 標準の内部/リーフノード**
 
 ```c
 struct maple_range_64 {
     struct maple_pnode *parent;
-    unsigned long pivot[MAPLE_RANGE64_SLOTS - 1]; /* 15 range boundaries */
+    unsigned long pivot[MAPLE_RANGE64_SLOTS - 1]; /* 15個の範囲境界 */
     union {
-        void __rcu *slot[MAPLE_RANGE64_SLOTS];    /* 16 child or value pointers */
+        void __rcu *slot[MAPLE_RANGE64_SLOTS];    /* 16個の子または値のポインタ */
         struct {
             void __rcu *pad[MAPLE_RANGE64_SLOTS - 1];
-            struct maple_metadata meta;            /* end offset + largest gap */
+            struct maple_metadata meta;            /* 終端オフセット + 最大のgap */
         };
     };
 };
 ```
 
-A `maple_range_64` node stores up to 15 pivots and 16 slots in 256 bytes. In B-tree terms, pivots are the inclusive upper bounds of the ranges stored in each slot. Slot *i* covers the range `(pivot[i-1], pivot[i]]`, with slot 0 covering from the node's implied minimum.
+`maple_range_64`ノードは、256バイトに最大15個のピボットと16個のスロットを格納する。Bツリーの用語では、ピボットは各スロットに格納された範囲の上限（その値を含む）である。スロット *i* は範囲`(pivot[i-1], pivot[i]]`をカバーし、スロット0はノードの暗黙の最小値からカバーする。
 
-**`maple_arange_64` — the allocation-range node**
+**`maple_arange_64` — 割り当て範囲ノード**
 
 ```c
 struct maple_arange_64 {
     struct maple_pnode *parent;
-    unsigned long pivot[MAPLE_ARANGE64_SLOTS - 1]; /* 9 range boundaries */
-    void __rcu *slot[MAPLE_ARANGE64_SLOTS];         /* 10 pointers */
-    unsigned long gap[MAPLE_ARANGE64_SLOTS];        /* largest NULL gap per slot */
+    unsigned long pivot[MAPLE_ARANGE64_SLOTS - 1]; /* 9個の範囲境界 */
+    void __rcu *slot[MAPLE_ARANGE64_SLOTS];         /* 10個のポインタ */
+    unsigned long gap[MAPLE_ARANGE64_SLOTS];        /* スロットごとのNULLの最大gap */
     struct maple_metadata meta;
 };
 ```
 
-Allocation-range nodes additionally track the largest contiguous gap of NULL entries within each subtree. This supports `mas_empty_area()` / `mas_empty_area_rev()`, which find a free address range of a given size without scanning the entire tree — critical for `mmap()` address selection.
+割り当て範囲ノードは、さらに各サブツリー内のNULLエントリの最大の連続ギャップを追跡する。これにより`mas_empty_area()` / `mas_empty_area_rev()`がサポートされる。これらはツリー全体を走査することなく、指定サイズの空きアドレス範囲を見つける。`mmap()`のアドレス選択にとって極めて重要である。
 
-### Node allocation {#node-allocation}
+### ノードの割り当て {#node-allocation}
 
-All nodes are allocated from a dedicated `kmem_cache` named `maple_node`, created at boot by `maple_tree_init()`:
+すべてのノードは、起動時に`maple_tree_init()`によって作成される`maple_node`という名前の専用`kmem_cache`から割り当てられる。
 
 ```c
 void __init maple_tree_init(void)
@@ -97,15 +97,15 @@ void __init maple_tree_init(void)
 }
 ```
 
-The 256-byte alignment ensures that the bottom 8 bits of a node pointer are always zero. The maple tree uses these bits to encode the node type and tree metadata directly in the pointer, avoiding extra memory accesses.
+256バイトのアラインメントにより、ノードポインタの下位8ビットは常にゼロになる。maple treeはこれらのビットを使ってノードの種類とツリーのメタデータをポインタに直接エンコードし、余分なメモリアクセスを避けている。
 
-### Maximum tree height {#maximum-tree-height}
+### ツリーの最大の高さ {#maximum-tree-height}
 
 ```c
 #define MAPLE_HEIGHT_MAX  31
 ```
 
-With 16 slots per `maple_range_64` node, a tree of height 31 can represent 16^31 distinct ranges — far beyond any realistic address space.
+`maple_range_64`ノードあたり16スロットであれば、高さ31のツリーは16^31個の異なる範囲を表現できる。これは現実的などのアドレス空間をもはるかに超える。
 
 ---
 
@@ -125,21 +125,21 @@ struct maple_tree {
 };
 ```
 
-- **`ma_lock`** — internal spinlock, used when no external lock is supplied. For `mm->mm_mt` this is unused: the tree is configured with `MT_FLAGS_LOCK_EXTERN` so that `mmap_lock` acts as the serialising lock.
-- **`ma_flags`** — bitmask of tree-wide properties (see below).
-- **`ma_root`** — RCU-protected pointer to the root node (or a single stored value if the tree has exactly one entry at index 0).
+- **`ma_lock`** — 内部のspinlock。外部ロックが与えられない場合に使われる。`mm->mm_mt`ではこれは使われない。ツリーは`MT_FLAGS_LOCK_EXTERN`で構成され、`mmap_lock`が直列化のためのロックとして機能する。
+- **`ma_flags`** — ツリー全体の性質を表すビットマスク（後述）。
+- **`ma_root`** — ルートノードへのRCU保護されたポインタ（ツリーがインデックス0にちょうど1つのエントリしか持たない場合は、格納された単一の値）。
 
-### Flags {#flags}
+### フラグ {#flags}
 
 ```c
-#define MT_FLAGS_ALLOC_RANGE   0x01  /* track largest free gap per node */
-#define MT_FLAGS_USE_RCU       0x02  /* nodes are freed via RCU */
-#define MT_FLAGS_LOCK_IRQ      0x100 /* ma_lock acquired IRQ-safe */
-#define MT_FLAGS_LOCK_BH       0x200 /* ma_lock acquired BH-safe */
-#define MT_FLAGS_LOCK_EXTERN   0x300 /* external lock; ma_lock unused */
+#define MT_FLAGS_ALLOC_RANGE   0x01  /* ノードごとに最大の空きgapを追跡 */
+#define MT_FLAGS_USE_RCU       0x02  /* ノードはRCU経由で解放される */
+#define MT_FLAGS_LOCK_IRQ      0x100 /* ma_lockをIRQセーフに取得 */
+#define MT_FLAGS_LOCK_BH       0x200 /* ma_lockをBHセーフに取得 */
+#define MT_FLAGS_LOCK_EXTERN   0x300 /* 外部ロック。ma_lockは未使用 */
 ```
 
-### How mm_struct embeds the maple tree {#how-mm_struct-embeds-the-maple-tree}
+### mm_structはmaple treeをどう埋め込んでいるか {#how-mm_struct-embeds-the-maple-tree}
 
 ```c
 /* include/linux/mm_types.h */
@@ -151,18 +151,18 @@ struct mm_struct {
     ...
 };
 
-/* The flags used when initialising mm->mm_mt */
+/* mm->mm_mtの初期化時に使われるフラグ */
 #define MM_MT_FLAGS  (MT_FLAGS_ALLOC_RANGE | MT_FLAGS_LOCK_EXTERN | \
                       MT_FLAGS_USE_RCU)
 ```
 
-All three flags are active for `mm->mm_mt`:
+`mm->mm_mt`では3つのフラグすべてが有効である。
 
-- `MT_FLAGS_ALLOC_RANGE` — enables gap tracking so that `mmap()` can find a free region efficiently.
-- `MT_FLAGS_LOCK_EXTERN` — the tree's internal `ma_lock` spinlock is bypassed; callers must hold `mmap_lock` for write before any mutation.
-- `MT_FLAGS_USE_RCU` — removed nodes are freed via `call_rcu()` rather than immediately, enabling lockless RCU readers (see [RCU safety](#rcu-safety) below).
+- `MT_FLAGS_ALLOC_RANGE` — ギャップの追跡を有効にし、`mmap()`が空き領域を効率的に見つけられるようにする。
+- `MT_FLAGS_LOCK_EXTERN` — ツリー内部の`ma_lock` spinlockは迂回される。呼び出し側は、変更を行う前に`mmap_lock`を書き込み用に保持していなければならない。
+- `MT_FLAGS_USE_RCU` — 削除されたノードは即座にではなく`call_rcu()`経由で解放され、ロックなしのRCUリーダーが可能になる（後述の[RCU安全性](#rcu-safety)を参照）。
 
-The tree is initialised and bound to `mmap_lock` in `mm_init()` (`kernel/fork.c`):
+ツリーは`mm_init()`（`kernel/fork.c`）で初期化され、`mmap_lock`に結び付けられる。
 
 ```c
 static struct mm_struct *mm_init(struct mm_struct *mm, ...)
@@ -175,98 +175,98 @@ static struct mm_struct *mm_init(struct mm_struct *mm, ...)
 
 ---
 
-## RCU Safety {#rcu-safety}
+## RCU安全性 {#rcu-safety}
 
-The maple tree achieves lockless reads by ensuring that nodes removed from the tree are not freed until all currently executing RCU read-side critical sections have completed. When `MT_FLAGS_USE_RCU` is set, the removal path calls `call_rcu()` instead of freeing immediately:
+maple treeは、ツリーから削除されたノードを、現在実行中のすべてのRCU読み出し側クリティカルセクションが完了するまで解放しないことで、ロックなしの読み出しを実現している。`MT_FLAGS_USE_RCU`がセットされていると、削除経路は即座に解放する代わりに`call_rcu()`を呼ぶ。
 
 ```c
-/* lib/maple_tree.c — node removal path */
+/* lib/maple_tree.c — ノード削除の経路 */
 if (mt_in_rcu(mt)) {
     mt_destroy_walk(enode, mt, false);
-    call_rcu(&node->rcu, mt_free_walk);   /* deferred free */
+    call_rcu(&node->rcu, mt_free_walk);   /* 遅延解放 */
 } else {
-    mt_destroy_walk(enode, mt, true);     /* immediate free */
+    mt_destroy_walk(enode, mt, true);     /* 即時解放 */
 }
 ```
 
-The `struct maple_node` reuses its `slot[]` array as an `rcu_head` after the node is removed from the tree (both are stored in a union). A reader that loaded a pointer from `slots[]` before the node was unlinked can safely continue dereferencing it; the memory will not be returned to the allocator until after its RCU grace period.
+`struct maple_node`は、ノードがツリーから削除された後、その`slot[]`配列を`rcu_head`として再利用する（両者はunionに格納されている）。ノードがリンクから外される前に`slots[]`からポインタを読み込んだリーダーは、それを安全に参照し続けられる。そのメモリはRCUグレースピリオドが経過するまでアロケータに返されない。
 
-### RCU mode lifecycle in the mm {#rcu-mode-lifecycle-in-the-mm}
+### mmにおけるRCUモードのライフサイクル {#rcu-mode-lifecycle-in-the-mm}
 
-The `mm->mm_mt` operates with RCU enabled most of the time. During process teardown and the `dup_mmap()` path, the kernel temporarily disables RCU mode to avoid the overhead of deferred freeing when nodes are being discarded en masse:
+`mm->mm_mt`はほとんどの時間、RCUを有効にして動作する。プロセスの破棄時と`dup_mmap()`の経路では、ノードが大量に破棄される際の遅延解放のオーバーヘッドを避けるため、カーネルは一時的にRCUモードを無効にする。
 
 ```c
 /* mm/mmap.c — exit_mmap() */
-mt_clear_in_rcu(&mm->mm_mt);   /* switch to immediate free for teardown */
+mt_clear_in_rcu(&mm->mm_mt);   /* 破棄のため即時解放に切り替える */
 ...
-__mt_destroy(&mm->mm_mt);      /* free all remaining nodes */
+__mt_destroy(&mm->mm_mt);      /* 残りのノードをすべて解放する */
 
-/* mm/mmap.c — dup_mmap() — after bulk duplication is complete */
-mt_set_in_rcu(vmi.mas.tree);   /* re-enable RCU on the new mm */
+/* mm/mmap.c — dup_mmap() — 一括複製の完了後 */
+mt_set_in_rcu(vmi.mas.tree);   /* 新しいmmでRCUを再び有効にする */
 ```
 
-`mt_set_in_rcu()` and `mt_clear_in_rcu()` toggle `MT_FLAGS_USE_RCU` under the tree's lock.
+`mt_set_in_rcu()`と`mt_clear_in_rcu()`は、ツリーのロックの下で`MT_FLAGS_USE_RCU`を切り替える。
 
-### Lockless VMA lookup (per-VMA lock fast path) {#lockless-vma-lookup-per-vma-lock-fast-path}
+### ロックなしのVMA検索（per-VMAロックの高速パス） {#lockless-vma-lookup-per-vma-lock-fast-path}
 
-A reader holding only `rcu_read_lock()` — with no `mmap_lock` — can safely walk `mm->mm_mt` to find a VMA. This is the foundation of the per-VMA lock fast path (see [per-vma-locks.md](per-vma-locks.md)):
+`rcu_read_lock()`だけを保持し、`mmap_lock`を保持していないリーダーでも、`mm->mm_mt`を安全にたどってVMAを見つけられる。これがper-VMAロックの高速パスの基盤である（[per-vma-locks.md](per-vma-locks.md)を参照）。
 
 ```c
 /* mm/mmap_lock.c — lock_vma_under_rcu() */
 MA_STATE(mas, &mm->mm_mt, address, address);
 
 rcu_read_lock();
-vma = mas_walk(&mas);          /* lockless maple tree walk under RCU */
+vma = mas_walk(&mas);          /* RCU下でのロックなしmaple treeウォーク */
 if (!vma)
     goto inval;
-vma = vma_start_read(mm, vma); /* attempt per-VMA read lock */
+vma = vma_start_read(mm, vma); /* per-VMA読み出しロックを試みる */
 ...
 rcu_read_unlock();
 ```
 
-`mas_walk()` traverses from root to leaf purely by reading `__rcu`-annotated pointers and pivots. No lock is required because removed nodes remain valid for at least one RCU grace period.
+`mas_walk()`は、`__rcu`アノテーション付きのポインタとピボットを読むだけで、ルートからリーフまでたどる。削除されたノードは少なくとも1回のRCUグレースピリオドの間は有効なままなので、ロックは不要である。
 
 ---
 
-## MA_STATE and the Maple State Cursor {#ma_state-and-the-maple-state-cursor}
+## MA_STATEとmaple stateカーソル {#ma_state-and-the-maple-state-cursor}
 
-The `struct ma_state` is the operation cursor for all advanced maple tree APIs. It tracks the current position in the tree so that sequential operations (e.g. iterating over all VMAs) do not need to restart from the root on each call.
+`struct ma_state`は、すべての高度なmaple tree APIのための操作カーソルである。ツリー内の現在位置を追跡するため、順次的な操作（例えば全VMAの走査）で呼び出しのたびにルートからやり直す必要がない。
 
 ```c
 /* include/linux/maple_tree.h */
 struct ma_state {
-    struct maple_tree      *tree;         /* the tree being operated on */
-    unsigned long           index;        /* range start of current operation */
-    unsigned long           last;         /* range end of current operation */
-    struct maple_enode     *node;         /* current node */
-    unsigned long           min;          /* implied minimum of current node */
-    unsigned long           max;          /* implied maximum of current node */
-    struct slab_sheaf      *sheaf;        /* pre-allocated node pool */
-    struct maple_node      *alloc;        /* single pre-allocated node (fast path) */
-    unsigned long           node_request; /* number of nodes to pre-allocate */
+    struct maple_tree      *tree;         /* 操作対象のツリー */
+    unsigned long           index;        /* 現在の操作の範囲の開始 */
+    unsigned long           last;         /* 現在の操作の範囲の終了 */
+    struct maple_enode     *node;         /* 現在のノード */
+    unsigned long           min;          /* 現在のノードの暗黙の最小値 */
+    unsigned long           max;          /* 現在のノードの暗黙の最大値 */
+    struct slab_sheaf      *sheaf;        /* 事前割り当てされたノードプール */
+    struct maple_node      *alloc;        /* 事前割り当てされた単一ノード（高速パス） */
+    unsigned long           node_request; /* 事前割り当てするノード数 */
     enum maple_status       status;       /* ma_start / ma_active / ma_none / ma_error / ... */
-    unsigned char           depth;        /* depth during write descent */
-    unsigned char           offset;       /* slot/pivot index within current node */
+    unsigned char           depth;        /* 書き込み時の降下中の深さ */
+    unsigned char           offset;       /* 現在のノード内のスロット/ピボットのインデックス */
     unsigned char           mas_flags;
-    unsigned char           end;          /* last used slot in current node */
-    enum store_type         store_type;   /* type of write needed */
+    unsigned char           end;          /* 現在のノードで最後に使われているスロット */
+    enum store_type         store_type;   /* 必要な書き込みの種類 */
 };
 ```
 
-The `status` field determines how the next operation treats the cursor:
+`status`フィールドは、次の操作がカーソルをどう扱うかを決める。
 
-| Status | Meaning |
+| ステータス | 意味 |
 |--------|---------|
-| `ma_start` | Not yet positioned; next operation walks from root |
-| `ma_active` | Cursor is valid at `node`/`offset`; in-place continuation is safe |
-| `ma_none` | Search complete; no entry found at `index` |
-| `ma_root` | Entry found in the root pointer (tree has only one entry) |
-| `ma_pause` | Node data may be stale; restart required (e.g. lock dropped) |
-| `ma_overflow` | Reached the upper search limit |
-| `ma_underflow` | Reached the lower search limit |
-| `ma_error` | Error occurred; `node` encodes the negative errno |
+| `ma_start` | まだ位置が決まっていない。次の操作はルートからたどる |
+| `ma_active` | カーソルは`node`/`offset`で有効。その場からの継続が安全 |
+| `ma_none` | 検索完了。`index`にエントリは見つからなかった |
+| `ma_root` | エントリはルートポインタ内で見つかった（ツリーのエントリが1つだけ） |
+| `ma_pause` | ノードのデータが古い可能性がある。再開が必要（例: ロックを手放した） |
+| `ma_overflow` | 検索の上限に達した |
+| `ma_underflow` | 検索の下限に達した |
+| `ma_error` | エラーが発生した。`node`に負のerrnoがエンコードされている |
 
-The `MA_STATE` macro initialises a cursor on the stack:
+`MA_STATE`マクロはスタック上にカーソルを初期化する。
 
 ```c
 #define MA_STATE(name, mt, first, end)      \
@@ -282,9 +282,9 @@ The `MA_STATE` macro initialises a cursor on the stack:
     }
 ```
 
-After an operation completes, `mas->index` and `mas->last` hold the full range of the entry that was found or stored.
+操作が完了すると、`mas->index`と`mas->last`は、見つかったか格納されたエントリの範囲全体を保持する。
 
-The `struct vma_iterator` used throughout `mm/mmap.c` and `mm/vma.c` is a thin wrapper:
+`mm/mmap.c`と`mm/vma.c`の全体で使われる`struct vma_iterator`は、薄いラッパーである。
 
 ```c
 /* include/linux/mm_types.h */
@@ -304,40 +304,40 @@ struct vma_iterator {
 
 ---
 
-## Key Operations {#key-operations}
+## 主要な操作 {#key-operations}
 
-### Tree lifecycle: `mt_init()` and `mtree_destroy()` {#tree-lifecycle-mtinit-and-mtreedestroy}
+### ツリーのライフサイクル: `mt_init()`と`mtree_destroy()` {#tree-lifecycle-mtinit-and-mtreedestroy}
 
 ```c
-/* Initialise an empty tree with default flags (no external lock, no RCU) */
+/* デフォルトのフラグ（外部ロックなし、RCUなし）で空のツリーを初期化する */
 static inline void mt_init(struct maple_tree *mt)
 {
     mt_init_flags(mt, 0);
 }
 
-/* Initialise with specific flags (used for mm->mm_mt) */
+/* 特定のフラグで初期化する（mm->mm_mtで使用） */
 static inline void mt_init_flags(struct maple_tree *mt, unsigned int flags);
 
-/* Destroy a tree, freeing all nodes (acquires ma_lock internally) */
+/* ツリーを破棄し、すべてのノードを解放する（内部でma_lockを取得） */
 void mtree_destroy(struct maple_tree *mt);
 
-/* Destroy without locking — caller must hold the external lock */
+/* ロックなしで破棄する — 呼び出し側が外部ロックを保持していること */
 void __mt_destroy(struct maple_tree *mt);
 ```
 
-For `mm->mm_mt`, `mm_init()` uses `mt_init_flags()` with `MM_MT_FLAGS`. Teardown in `exit_mmap()` and `dup_mmap()` error paths uses `__mt_destroy(&mm->mm_mt)` after the caller already holds `mmap_lock` for write.
+`mm->mm_mt`については、`mm_init()`が`MM_MT_FLAGS`を指定して`mt_init_flags()`を使う。`exit_mmap()`と`dup_mmap()`のエラー経路での破棄では、呼び出し側がすでに`mmap_lock`を書き込み用に保持した後で`__mt_destroy(&mm->mm_mt)`を使う。
 
 ---
 
-### `mas_walk()` — position cursor at index {#mas_walk-position-cursor-at-index}
+### `mas_walk()` — カーソルをindexに位置付ける {#mas_walk-position-cursor-at-index}
 
 ```c
 void *mas_walk(struct ma_state *mas);
 ```
 
-Searches for `mas->index` in the tree. On return, `mas->index` and `mas->last` are set to the range of the found entry (or to `0` and `ULONG_MAX` if nothing was found). Does not advance the cursor; calling `mas_walk()` twice on the same index returns the same entry.
+ツリー内で`mas->index`を検索する。戻ったとき、`mas->index`と`mas->last`は見つかったエントリの範囲に設定される（何も見つからなければ`0`と`ULONG_MAX`）。カーソルは進めない。同じindexに対して`mas_walk()`を2回呼ぶと、同じエントリが返る。
 
-Safe to call under `rcu_read_lock()` alone (no write lock needed). The per-VMA lock fast path uses this directly:
+`rcu_read_lock()`だけで安全に呼べる（書き込みロックは不要）。per-VMAロックの高速パスはこれを直接使う。
 
 ```c
 MA_STATE(mas, &mm->mm_mt, address, address);
@@ -347,19 +347,19 @@ vma = mas_walk(&mas);
 
 ---
 
-### `mas_find()` — forward iteration from index {#mas_find-forward-iteration-from-index}
+### `mas_find()` — indexからの前方走査 {#mas_find-forward-iteration-from-index}
 
 ```c
 void *mas_find(struct ma_state *mas, unsigned long max);
 ```
 
-Returns the next entry whose range overlaps `[mas->index, max]`. After a successful return, `mas->index` and `mas->last` describe the range of the returned entry and the cursor is positioned there; the next call starts scanning forward from `mas->last + 1`.
+範囲が`[mas->index, max]`と重なる次のエントリを返す。正常に戻った後、`mas->index`と`mas->last`は返されたエントリの範囲を表し、カーソルはそこに位置付けられる。次の呼び出しは`mas->last + 1`から前方に走査を始める。
 
-Returns `NULL` when no entry exists in the remaining range (sets status to `ma_overflow`).
+残りの範囲にエントリが存在しない場合は`NULL`を返す（ステータスを`ma_overflow`に設定する）。
 
-Must be called with `rcu_read_lock()` or the write lock held.
+`rcu_read_lock()`または書き込みロックを保持した状態で呼ばなければならない。
 
-The `mas_for_each()` macro uses this:
+`mas_for_each()`マクロはこれを使っている。
 
 ```c
 #define mas_for_each(__mas, __entry, __max) \
@@ -368,21 +368,21 @@ The `mas_for_each()` macro uses this:
 
 ---
 
-### `mas_store()` / `mas_store_gfp()` — insert or update a range mapping {#masstore-masstore_gfp-insert-or-update-a-range-mapping}
+### `mas_store()` / `mas_store_gfp()` — 範囲マッピングの挿入または更新 {#masstore-masstore_gfp-insert-or-update-a-range-mapping}
 
 ```c
-/* Store entry at [mas->index, mas->last]. Requires pre-allocated nodes. */
+/* [mas->index, mas->last]にentryを格納する。事前割り当てされたノードが必要。 */
 void *mas_store(struct ma_state *mas, void *entry);
 
-/* Store with on-demand allocation (returns -ENOMEM on failure). */
+/* オンデマンドの割り当てを伴って格納する（失敗時は-ENOMEMを返す）。 */
 int mas_store_gfp(struct ma_state *mas, void *entry, gfp_t gfp);
 ```
 
-Both functions write `entry` into the tree for the range `[mas->index, mas->last]`, which must be set before calling. If an existing entry overlaps the range, it is displaced (split, shrunk, or replaced as needed). Returns the first displaced entry (if any) for `mas_store()`; returns 0 or `-ENOMEM` for `mas_store_gfp()`.
+どちらの関数も、範囲`[mas->index, mas->last]`に対して`entry`をツリーに書き込む。この範囲は呼び出し前に設定しておかなければならない。既存のエントリが範囲と重なる場合、それは押しのけられる（必要に応じて分割、縮小、または置換される）。`mas_store()`は押しのけられた最初のエントリ（あれば）を返し、`mas_store_gfp()`は0または`-ENOMEM`を返す。
 
-Requires the write lock.
+書き込みロックが必要である。
 
-In VMA code, `vma_iter_store_gfp()` wraps `mas_store_gfp()`:
+VMAのコードでは、`vma_iter_store_gfp()`が`mas_store_gfp()`をラップしている。
 
 ```c
 /* mm/vma.h */
@@ -400,17 +400,17 @@ static inline int vma_iter_store_gfp(struct vma_iterator *vmi,
 
 ---
 
-### `mas_erase()` — remove the entry at the current index {#mas_erase-remove-the-entry-at-the-current-index}
+### `mas_erase()` — 現在のindexのエントリを削除する {#mas_erase-remove-the-entry-at-the-current-index}
 
 ```c
 void *mas_erase(struct ma_state *mas);
 ```
 
-Finds the range containing `mas->index`, erases the entire range (stores NULL), and returns the previous entry. On return, `mas->index` and `mas->last` are set to the erased range.
+`mas->index`を含む範囲を見つけ、その範囲全体を消去し（NULLを格納し）、以前のエントリを返す。戻ったとき、`mas->index`と`mas->last`は消去された範囲に設定される。
 
-Requires the write lock.
+書き込みロックが必要である。
 
-In VMA code the removal path uses `vma_iter_clear()`, which calls `mas_store_prealloc()` with NULL:
+VMAのコードでは、削除経路は`vma_iter_clear()`を使う。これはNULLを指定して`mas_store_prealloc()`を呼ぶ。
 
 ```c
 /* mm/vma.h */
@@ -422,7 +422,7 @@ static inline void vma_iter_clear(struct vma_iterator *vmi)
 
 ---
 
-### `mt_for_each()` — simple full-tree iteration {#mtforeach-simple-full-tree-iteration}
+### `mt_for_each()` — 単純なツリー全体の走査 {#mtforeach-simple-full-tree-iteration}
 
 ```c
 /* include/linux/maple_tree.h */
@@ -432,13 +432,13 @@ static inline void vma_iter_clear(struct vma_iterator *vmi)
          __entry = mt_find_after(__tree, &(__index), __max))
 ```
 
-`mt_for_each` uses the simpler `mt_find()` / `mt_find_after()` interface (which acquires and releases `rcu_read_lock()` internally on each call), rather than an explicit `ma_state`. It is convenient for read-only traversals that do not need to maintain cursor state between iterations.
+`mt_for_each`は、明示的な`ma_state`ではなく、より単純な`mt_find()` / `mt_find_after()`インターフェース（呼び出しのたびに内部で`rcu_read_lock()`を取得・解放する）を使う。反復の間でカーソルの状態を保持する必要がない、読み出し専用の走査に便利である。
 
 ---
 
-## Code Examples {#code-examples}
+## コード例 {#code-examples}
 
-### VMA lookup by address {#vma-lookup-by-address}
+### アドレスによるVMAの検索 {#vma-lookup-by-address}
 
 ```c
 /* find_vma() — mm/mmap.c */
@@ -451,16 +451,16 @@ struct vm_area_struct *find_vma(struct mm_struct *mm, unsigned long addr)
 }
 ```
 
-`mt_find()` starts at `index` and returns the first entry whose range covers or follows `addr`. For address lookup this is equivalent to asking "which VMA covers addr, or if none, which is the next one".
+`mt_find()`は`index`から開始し、範囲が`addr`をカバーするか、`addr`の後に続く最初のエントリを返す。アドレス検索においては、これは「どのVMAがaddrをカバーしているか、なければ次のVMAはどれか」を問うことと等価である。
 
-### VMA insertion during mmap {#vma-insertion-during-mmap}
+### mmap時のVMAの挿入 {#vma-insertion-during-mmap}
 
 ```c
-/* mm/vma.c — anonymous mapping creation (simplified) */
+/* mm/vma.c — 匿名マッピングの作成（簡略化） */
 vma = vm_area_alloc(mm);
 vma_set_range(vma, addr, addr + len, pgoff);
 vm_flags_init(vma, vm_flags);
-vma_start_write(vma);                    /* mark VMA write-locked */
+vma_start_write(vma);                    /* VMAを書き込みロック状態にする */
 
 if (vma_iter_store_gfp(vmi, vma, GFP_KERNEL))
     goto mas_store_fail;
@@ -468,75 +468,75 @@ if (vma_iter_store_gfp(vmi, vma, GFP_KERNEL))
 mm->map_count++;
 ```
 
-### Iterating all VMAs (e.g. for /proc/PID/maps) {#iterating-all-vmas-eg-for-procpidmaps}
+### 全VMAの走査（例: /proc/PID/mapsのため） {#iterating-all-vmas-eg-for-procpidmaps}
 
 ```c
 VMA_ITERATOR(vmi, mm, 0);
 struct vm_area_struct *vma;
 
 for_each_vma(vmi, vma) {
-    /* vma->vm_start, vma->vm_end, vma->vm_flags ... */
+    /* vma->vm_start、vma->vm_end、vma->vm_flags ... */
 }
 ```
 
-`for_each_vma` is built on `vma_next()` which advances the `vma_iterator` forward through the maple tree without restarting from the root.
+`for_each_vma`は`vma_next()`の上に構築されている。これはルートからやり直すことなく、`vma_iterator`をmaple tree内で前方に進める。
 
-### Finding a free address range (mmap hint search) {#finding-a-free-address-range-mmap-hint-search}
+### 空きアドレス範囲の探索（mmapのヒント探索） {#finding-a-free-address-range-mmap-hint-search}
 
 ```c
-/* mas_empty_area() — finds a gap of at least `size` bytes in [min, max] */
+/* mas_empty_area() — [min, max]内で少なくとも`size`バイトのgapを見つける */
 MA_STATE(mas, &mm->mm_mt, 0, 0);
 mas_empty_area(&mas, mmap_min_addr, mmap_end - len, len);
 addr = mas.index;
 ```
 
-This leverages the `gap[]` array in `maple_arange_64` nodes to skip subtrees that cannot contain a gap large enough, making free-range search O(log n) rather than O(n).
+これは`maple_arange_64`ノードの`gap[]`配列を活用し、十分な大きさのギャップを含みえないサブツリーを飛ばす。これにより空き範囲の探索はO(n)ではなくO(log n)になる。
 
 ---
 
-## Performance Compared to rbtree {#performance-compared-to-rbtree}
+## rbtreeとの性能比較 {#performance-compared-to-rbtree}
 
-| Property | rbtree + linked list | Maple tree |
+| 性質 | rbtree＋連結リスト | maple tree |
 |----------|---------------------|------------|
-| Point lookup | O(log n) | O(log n) |
-| Sequential scan | O(n) pointer chasing | O(n) sequential node reads |
-| Free-gap search | O(n) full scan | O(log n) via gap metadata |
-| Cache lines per node | 1 (one VMA pointer per node) | Up to 16 entries per 256-byte node |
-| Memory per VMA (index overhead) | ~40 bytes (rb_node + list pointers) | Amortised ~16 bytes (shared node) |
-| Lock on reads | mmap_lock required | RCU read lock sufficient |
-| Update complexity | Two structure updates | One tree update |
+| 点検索 | O(log n) | O(log n) |
+| 順次走査 | O(n)のポインタ追跡 | O(n)の順次的なノード読み出し |
+| 空きギャップの探索 | O(n)の全走査 | ギャップのメタデータによるO(log n) |
+| ノードあたりのキャッシュライン | 1（ノードあたりVMAポインタ1つ） | 256バイトのノードあたり最大16エントリ |
+| VMAあたりのメモリ（インデックスのオーバーヘッド） | 約40バイト（rb_node＋リストポインタ） | 償却で約16バイト（共有ノード） |
+| 読み出し時のロック | mmap_lockが必要 | RCU読み出しロックで十分 |
+| 更新の複雑さ | 2つの構造の更新 | 1つのツリーの更新 |
 
-The key advantage for sequential scans (e.g. reading `/proc/PID/maps` or `mprotect()` over a large range) is that a `maple_range_64` node holds 16 VMA pointers in one 256-byte allocation. A full-node traversal costs one cache miss to load the node, then up to 16 useful entries, compared to one cache miss *per entry* when following a linked list.
+順次走査（例えば`/proc/PID/maps`の読み出しや、大きな範囲にわたる`mprotect()`）における主な利点は、`maple_range_64`ノードが1つの256バイトの割り当てに16個のVMAポインタを保持することである。ノード全体の走査は、ノードをロードするための1回のキャッシュミスで最大16個の有用なエントリを得られる。連結リストをたどる場合は *エントリごとに* 1回のキャッシュミスが生じる。
 
-For address spaces with thousands of mappings (JVM, large applications, container runtimes), this reduction in cache pressure is measurable.
+数千のマッピングを持つアドレス空間（JVM、大規模アプリケーション、コンテナランタイム）では、このキャッシュ圧迫の減少は測定可能な差になる。
 
 ---
 
-## Debugging {#debugging}
+## デバッグ {#debugging}
 
-### `/proc/PID/maps` and `/proc/PID/smaps` {#procpidmaps-and-procpidsmaps}
+### `/proc/PID/maps`と`/proc/PID/smaps` {#procpidmaps-and-procpidsmaps}
 
-These files are generated by iterating `mm->mm_mt` directly. No change is required to read them; the maple tree is the authoritative source.
+これらのファイルは`mm->mm_mt`を直接走査して生成される。読むために必要な変更はない。maple treeが正式な情報源である。
 
 ### `CONFIG_DEBUG_MAPLE_TREE` {#configdebugmaple_tree}
 
-Enable via `lib/Kconfig.debug`:
+`lib/Kconfig.debug`で有効にする。
 
 ```
 CONFIG_DEBUG_MAPLE_TREE=y   # requires CONFIG_DEBUG_KERNEL=y
 ```
 
-With this option:
+このオプションを有効にすると次のようになる。
 
-- `MT_BUG_ON()`, `MAS_BUG_ON()`, and `MT_WARN_ON()` perform additional consistency checks at each tree operation and dump the full tree on failure.
-- Extra range validation is performed inside `mas_store()` before each write.
-- `mt_validate()` can be called explicitly to check the structural integrity of any tree:
+- `MT_BUG_ON()`、`MAS_BUG_ON()`、`MT_WARN_ON()`が各ツリー操作で追加の整合性チェックを行い、失敗時にツリー全体をダンプする。
+- 各書き込みの前に、`mas_store()`内で追加の範囲検証が行われる。
+- `mt_validate()`を明示的に呼び出して、任意のツリーの構造的な整合性を確認できる。
 
 ```c
 void mt_validate(struct maple_tree *mt);
 ```
 
-`mt_validate()` checks that all pivot arrays are sorted, that no ranges overlap, that gap metadata is consistent, and that the height stored in `ma_flags` matches the actual tree depth.
+`mt_validate()`は、すべてのピボット配列がソートされていること、範囲が重なっていないこと、ギャップのメタデータが一貫していること、`ma_flags`に格納された高さが実際のツリーの深さと一致することを確認する。
 
 ### `mt_dump()` {#mt_dump}
 
@@ -544,7 +544,7 @@ void mt_validate(struct maple_tree *mt);
 void mt_dump(const struct maple_tree *mt, enum mt_dump_format format);
 ```
 
-Prints the full tree to the kernel log in decimal (`mt_dump_dec`) or hexadecimal (`mt_dump_hex`) format. Available only when `CONFIG_DEBUG_MAPLE_TREE=y`. Called automatically by `MT_BUG_ON()` and `MAS_BUG_ON()` on failure.
+ツリー全体を、10進数（`mt_dump_dec`）または16進数（`mt_dump_hex`）の形式でカーネルログに出力する。`CONFIG_DEBUG_MAPLE_TREE=y`のときにのみ利用できる。失敗時には`MT_BUG_ON()`と`MAS_BUG_ON()`から自動的に呼ばれる。
 
 ### `mas_dump()` {#mas_dump}
 
@@ -552,29 +552,29 @@ Prints the full tree to the kernel log in decimal (`mt_dump_dec`) or hexadecimal
 void mas_dump(const struct ma_state *mas);
 ```
 
-Prints the current state of an `ma_state` cursor (index, last, node pointer, status, min/max, depth, offset). Useful when debugging an incorrect cursor state.
+`ma_state`カーソルの現在の状態（index、last、ノードポインタ、status、min/max、depth、offset）を出力する。カーソルの状態がおかしいときのデバッグに有用である。
 
-!!! tip "Tracing maple tree operations"
-    The maple tree has built-in tracepoints (`trace_ma_read`, `trace_ma_write`, `trace_ma_op`) instrumented throughout `lib/maple_tree.c`. These are visible via `ftrace` when the corresponding `maple_tree` event group is enabled and provide per-operation visibility into the tree without requiring `CONFIG_DEBUG_MAPLE_TREE`.
+!!! tip "maple tree操作のトレーシング"
+    maple treeには、`lib/maple_tree.c`の随所に組み込まれたtracepoint（`trace_ma_read`、`trace_ma_write`、`trace_ma_op`）がある。対応する`maple_tree`イベントグループを有効にすると`ftrace`で確認でき、`CONFIG_DEBUG_MAPLE_TREE`を必要とせずに、操作ごとにツリーの様子を可視化できる。
 
-!!! note "RCU mode and debugging"
-    When `CONFIG_DEBUG_MAPLE_TREE` is combined with `CONFIG_MAPLE_RCU_DISABLED` (a compile-time option at the top of `lib/maple_tree.c`), RCU freeing is suppressed entirely and nodes are freed immediately. This can help expose use-after-free bugs in tree consumers but is not safe for production.
+!!! note "RCUモードとデバッグ"
+    `CONFIG_DEBUG_MAPLE_TREE`を`CONFIG_MAPLE_RCU_DISABLED`（`lib/maple_tree.c`の先頭にあるコンパイル時オプション）と組み合わせると、RCUによる解放が完全に抑止され、ノードは即座に解放される。これはツリーの利用者に潜むuse-after-freeのバグを表面化させるのに役立つが、本番環境では安全ではない。
 
 ---
 
-## Relationship to Other Subsystems {#relationship-to-other-subsystems}
+## ほかのサブシステムとの関係 {#relationship-to-other-subsystems}
 
-- **Per-VMA locks** (`mm/mmap_lock.c`) depend on `MT_FLAGS_USE_RCU` to perform lockless VMA lookups under `rcu_read_lock()`. See [per-vma-locks.md](per-vma-locks.md).
-- **`/proc/PID/maps`** iterates `mm->mm_mt` via `for_each_vma()` under `mmap_lock` for read.
-- **`dup_mmap()`** uses `__mt_dup()` to bulk-copy the parent maple tree into the child `mm`, then replaces any `VM_DONTCOPY` entries with `vma_iter_clear_gfp()`.
-- **`execve()`** tears down the address space by calling `exit_mmap()`, which calls `__mt_destroy(&mm->mm_mt)` after clearing all page table entries.
-- **vmalloc** uses a red-black tree (`free_vmap_area_root`, a `struct rb_root`) for tracking kernel virtual address space — not a maple tree.
+- **per-VMAロック**（`mm/mmap_lock.c`）は、`rcu_read_lock()`の下でロックなしのVMA検索を行うために`MT_FLAGS_USE_RCU`に依存している。[per-vma-locks.md](per-vma-locks.md)を参照。
+- **`/proc/PID/maps`** は、`mmap_lock`を読み出し用に保持した状態で、`for_each_vma()`によって`mm->mm_mt`を走査する。
+- **`dup_mmap()`** は`__mt_dup()`を使って親のmaple treeを子の`mm`へ一括コピーし、その後`VM_DONTCOPY`のエントリを`vma_iter_clear_gfp()`で置き換える。
+- **`execve()`** は`exit_mmap()`を呼んでアドレス空間を破棄する。`exit_mmap()`は、すべてのページテーブルエントリをクリアした後で`__mt_destroy(&mm->mm_mt)`を呼ぶ。
+- **vmalloc** は、カーネルの仮想アドレス空間の追跡に、maple treeではなく赤黒木（`struct rb_root`である`free_vmap_area_root`）を使う。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LWN: The maple tree, a modern data structure for a complex problem](https://lwn.net/Articles/845507/) — 2022 article by Liam Howlett and Matthew Wilcox explaining the design rationale, node layout, and benchmarks against the rbtree + linked list combination
-- [lib/maple_tree.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/maple_tree.c) — the full implementation: `maple_tree_init()`, `mas_walk()`, `mas_find()`, `mas_store()`, `mas_erase()`, RCU node freeing via `mt_free_walk()`, and the `CONFIG_MAPLE_RCU_DISABLED` debug mode
-- [include/linux/maple_tree.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/maple_tree.h) — public API: `struct maple_tree`, `struct ma_state`, `MA_STATE()`, `mt_for_each()`, node-type constants, and all flag definitions
-- Commit [54a611b60590](https://git.kernel.org/linus/54a611b60590) — the Linux 6.1 merge of the maple tree replacing `mm->mm_rb` and the VMA linked list; the merge message links to the full patch series and benchmark results
-- [per-vma-locks.md](per-vma-locks.md) — the per-VMA lock fast path that depends on `MT_FLAGS_USE_RCU` to perform lockless maple tree walks under `rcu_read_lock()` without holding `mmap_lock`
-- [LWN: Splitting VMAs](https://lwn.net/Articles/937943/) — covers the VMA tree reorganisation work in Linux 6.7 that moved VMA manipulation helpers into `mm/vma.c`, enabled by the cleaner maple tree API
+- [LWN: The maple tree, a modern data structure for a complex problem](https://lwn.net/Articles/845507/) — Liam HowlettとMatthew Wilcoxによる2022年の記事。設計根拠、ノードのレイアウト、rbtree＋連結リストの組み合わせとのベンチマークを解説している
+- [lib/maple_tree.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/maple_tree.c) — 完全な実装: `maple_tree_init()`、`mas_walk()`、`mas_find()`、`mas_store()`、`mas_erase()`、`mt_free_walk()`によるRCUでのノード解放、`CONFIG_MAPLE_RCU_DISABLED`デバッグモード
+- [include/linux/maple_tree.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/maple_tree.h) — 公開API: `struct maple_tree`、`struct ma_state`、`MA_STATE()`、`mt_for_each()`、ノード種別の定数、すべてのフラグ定義
+- コミット[54a611b60590](https://git.kernel.org/linus/54a611b60590) — `mm->mm_rb`とVMA連結リストを置き換えた、Linux 6.1でのmaple treeのマージ。マージメッセージには、パッチシリーズ全体とベンチマーク結果へのリンクがある
+- [per-vma-locks.md](per-vma-locks.md) — `mmap_lock`を保持せずに`rcu_read_lock()`の下でロックなしのmaple treeウォークを行うために`MT_FLAGS_USE_RCU`に依存する、per-VMAロックの高速パス
+- [LWN: Splitting VMAs](https://lwn.net/Articles/937943/) — Linux 6.7でのVMAツリーの再編作業を扱う。よりすっきりしたmaple tree APIによって可能になった、VMA操作ヘルパーの`mm/vma.c`への移動について
