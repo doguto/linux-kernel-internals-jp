@@ -1,194 +1,194 @@
-# Memory Management Bugs (Kernel) {#memory-management-bugs-kernel}
+# メモリ管理のバグ（カーネル） {#memory-management-bugs-kernel}
 
-> A catalog of notable Linux kernel memory management bugs, vulnerabilities, and edge cases
+> Linuxカーネルのメモリ管理における注目すべきバグ、脆弱性、エッジケースのカタログ
 
-This index covers bugs in the Linux kernel's mm/ subsystem - security vulnerabilities, data corruption, performance regressions, and stability issues. These are real kernel bugs we analyze for educational purposes.
+この索引は、Linuxカーネルの mm/ サブシステムにおけるバグ（セキュリティ脆弱性、データ破損、性能リグレッション、安定性の問題）を扱う。いずれも、教育目的で分析する実際のカーネルバグである。
 
-## Quick Reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
-### By Severity {#by-severity}
+### 深刻度別 {#by-severity}
 
-| Severity | Count | Examples |
+| 深刻度 | 件数 | 例 |
 |----------|-------|----------|
-| **Critical (CVE, exploit)** | 15+ | Dirty COW, Meltdown, SLUB exploits |
-| **Data corruption** | 5+ | Large folio data loss, swap ABA |
-| **Deadlock/hang** | 5+ | mmap_sem deadlock, OOM livelock |
-| **Performance** | 5+ | Thrashing, readahead traps |
+| **致命的（CVE、エクスプロイト）** | 15+ | Dirty COW、Meltdown、SLUBのエクスプロイト |
+| **データ破損** | 5+ | large folioのデータ消失、スワップのABA |
+| **デッドロック/ハング** | 5+ | mmap_semのデッドロック、OOMのライブロック |
+| **性能** | 5+ | スラッシング、readaheadの罠 |
 
-### By Year {#by-year}
+### 年別 {#by-year}
 
-| Year | Notable Bugs |
+| 年 | 注目すべきバグ |
 |------|--------------|
-| 2024 | Swap slot ABA (CVE-2024-26759) |
-| 2023 | StackRot (CVE-2023-3269), Large folio data loss, glibc heap overflow (CVE-2023-6246) |
-| 2022 | io_uring UAF (CVE-2022-29582), systemd cgroup massacre |
-| 2021 | Netfilter heap OOB (CVE-2021-22555) |
-| 2020 | THP COW race (CVE-2020-29368) |
-| 2018 | mremap TLB race (CVE-2018-18281), Spectre variants |
-| 2017 | Meltdown (CVE-2017-5754), Spectre (CVE-2017-5753/5715), Stack Clash |
-| 2016 | Dirty COW (CVE-2016-5195) |
+| 2024 | スワップスロットのABA（CVE-2024-26759） |
+| 2023 | StackRot（CVE-2023-3269）、large folioのデータ消失、glibcのヒープオーバーフロー（CVE-2023-6246） |
+| 2022 | io_uringのUAF（CVE-2022-29582）、systemdによるcgroup大量殺戮 |
+| 2021 | Netfilterのヒープ境界外アクセス（CVE-2021-22555） |
+| 2020 | THPのCOW競合（CVE-2020-29368） |
+| 2018 | mremapのTLB競合（CVE-2018-18281）、Spectreの亜種 |
+| 2017 | Meltdown（CVE-2017-5754）、Spectre（CVE-2017-5753/5715）、Stack Clash |
+| 2016 | Dirty COW（CVE-2016-5195） |
 
 ---
 
-## Detailed Bug Documentation {#detailed-bug-documentation}
+## バグの詳細ドキュメント {#detailed-bug-documentation}
 
-### Subsystem Bug Sections {#subsystem-bug-sections}
+### サブシステムごとのバグのセクション {#subsystem-bug-sections}
 
-Detailed analysis of bugs in specific subsystems (located within each topic's documentation):
+特定のサブシステムにおけるバグの詳細な分析（各トピックのドキュメント内にある）:
 
-| Document | Subsystem | Key Bugs |
+| ドキュメント | サブシステム | 主なバグ |
 |----------|-----------|----------|
-| [SLUB Allocator Bugs](../slab.md#notorious-bugs-and-edge-cases) | mm/slub.c | CVE-2021-22555, CVE-2022-29582, heap exploitation |
-| [THP Bugs](../thp.md#notorious-bugs-and-edge-cases) | mm/huge_memory.c | CVE-2020-29368, khugepaged races, collapse bugs |
-| [Page Table Bugs](../page-tables.md#notorious-bugs-and-edge-cases) | arch/*/mm/ | Meltdown, Spectre, TLB flush races |
+| [SLUBアロケータのバグ](../slab.md#notorious-bugs-and-edge-cases) | mm/slub.c | CVE-2021-22555、CVE-2022-29582、ヒープのエクスプロイト |
+| [THPのバグ](../thp.md#notorious-bugs-and-edge-cases) | mm/huge_memory.c | CVE-2020-29368、khugepagedの競合、collapseのバグ |
+| [ページテーブルのバグ](../page-tables.md#notorious-bugs-and-edge-cases) | arch/*/mm/ | Meltdown、Spectre、TLBフラッシュの競合 |
 
-### Lifecycle Document Bug Sections {#lifecycle-document-bug-sections}
+### ライフサイクル系ドキュメントのバグのセクション {#lifecycle-document-bug-sections}
 
-The lifecycle docs contain narrative bug coverage as part of their end-to-end walkthroughs:
+ライフサイクル系ドキュメントには、端から端までのウォークスルーの一部として、物語形式でのバグの解説が含まれている。
 
-| Document | Section | Key Bugs |
+| ドキュメント | セクション | 主なバグ |
 |----------|---------|----------|
-| [fork.md](../fork.md#notorious-bugs-and-edge-cases) | COW & fork bugs | Dirty COW (CVE-2016-5195), StackRot (CVE-2023-3269), mremap (CVE-2004-0077) |
-| [oom.md](../oom.md#notorious-bugs-and-edge-cases) | OOM killer bugs | mmap_sem deadlock, thrashing livelock, CVE-2012-4398 |
-| [life-of-malloc.md](../life-of-malloc.md#notorious-bugs-and-edge-cases) | Heap & allocation bugs | glibc CVE-2023-6246, Stack Clash, mmap_min_addr bypass |
-| [life-of-page.md](../life-of-page.md#notorious-bugs-and-edge-cases) | Page lifecycle bugs | Refcount overflow, large folio data loss, LRU corruption |
-| [life-of-read.md](../life-of-read.md#notorious-bugs-and-edge-cases) | Page cache bugs | filemap_fault races, 9p corruption, readahead issues |
-| [swapping.md](../swapping.md#notorious-bugs-and-edge-cases) | Swap bugs | Swap slot ABA (CVE-2024-26759), zswap races |
+| [fork.md](../fork.md#notorious-bugs-and-edge-cases) | COWとforkのバグ | Dirty COW（CVE-2016-5195）、StackRot（CVE-2023-3269）、mremap（CVE-2004-0077） |
+| [oom.md](../oom.md#notorious-bugs-and-edge-cases) | OOM killerのバグ | mmap_semのデッドロック、スラッシングによるライブロック、CVE-2012-4398 |
+| [life-of-malloc.md](../life-of-malloc.md#notorious-bugs-and-edge-cases) | ヒープと割り当てのバグ | glibc CVE-2023-6246、Stack Clash、mmap_min_addrのバイパス |
+| [life-of-page.md](../life-of-page.md#notorious-bugs-and-edge-cases) | ページのライフサイクルのバグ | 参照カウントのオーバーフロー、large folioのデータ消失、LRUの破損 |
+| [life-of-read.md](../life-of-read.md#notorious-bugs-and-edge-cases) | ページキャッシュのバグ | filemap_faultの競合、9pの破損、readaheadの問題 |
+| [swapping.md](../swapping.md#notorious-bugs-and-edge-cases) | スワップのバグ | スワップスロットのABA（CVE-2024-26759）、zswapの競合 |
 
 ---
 
-## Bug Categories {#bug-categories}
+## バグの分類 {#bug-categories}
 
-### Security Vulnerabilities (CVEs) {#security-vulnerabilities-cves}
+### セキュリティ脆弱性（CVE） {#security-vulnerabilities-cves}
 
-Bugs with assigned CVEs, typically exploitable for privilege escalation or information disclosure.
+CVEが割り当てられたバグ。典型的には権限昇格や情報漏洩に悪用可能なもの。
 
-| CVE | Name | Subsystem | Type | Details |
+| CVE | 名称 | サブシステム | 種類 | 詳細 |
 |-----|------|-----------|------|---------|
-| CVE-2024-26759 | Swap slot ABA | swap | Race/corruption | [swapping.md](../swapping.md#case-1-the-swap-slot-aba-problem-cve-2024-26759) |
+| CVE-2024-26759 | スワップスロットのABA | swap | 競合/破損 | [swapping.md](../swapping.md#case-1-the-swap-slot-aba-problem-cve-2024-26759) |
 | CVE-2023-3269 | StackRot | maple tree | UAF | [fork.md](../fork.md#case-2-stackrot-cve-2023-3269) |
-| CVE-2023-6246 | glibc syslog | glibc heap | Overflow | [life-of-malloc.md](../life-of-malloc.md#case-1-glibc-heap-overflow-cve-2023-6246) |
-| CVE-2022-29582 | io_uring UAF | io_uring/slub | UAF | [slab.md](../slab.md#case-2-io_uring-use-after-free-cve-2022-29582) |
-| CVE-2021-22555 | Netfilter heap OOB | netfilter/slub | Heap OOB | [slab.md](../slab.md#case-1-netfilter-heap-out-of-bounds-cve-2021-22555) |
-| CVE-2020-29368 | THP COW race | thp | Race | [thp.md](../thp.md#case-1-thp-cow-race-cve-2020-29368) |
-| CVE-2018-18281 | mremap TLB race | mremap | TLB race | [fork.md](../fork.md#case-4-tlb-flush-races-in-mremap-cve-2018-18281) |
-| CVE-2017-5754 | Meltdown | CPU/page tables | Side channel | [page-tables.md](../page-tables.md#case-1-meltdown-cve-2017-5754) |
-| CVE-2017-5753 | Spectre v1 | CPU | Side channel | [page-tables.md](../page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715) |
-| CVE-2017-5715 | Spectre v2 | CPU | Side channel | [page-tables.md](../page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715) |
-| CVE-2016-5195 | Dirty COW | COW | Race | [fork.md](../fork.md#case-1-dirty-cow-cve-2016-5195) |
-| CVE-2012-4398 | OOM deadlock | OOM | Deadlock | [oom.md](../oom.md#case-5-cve-2012-4398-oom-deadlock-denial-of-service) |
-| CVE-2009-2695 | mmap_min_addr bypass | mmap | Logic | [life-of-malloc.md](../life-of-malloc.md#case-3-mmap_min_addr-bypass-cve-2009-2695) |
-| CVE-2004-0077 | mremap disaster | mremap | Logic | [fork.md](../fork.md#case-3-the-mremap-disaster-cve-2004-0077) |
+| CVE-2023-6246 | glibc syslog | glibcのヒープ | オーバーフロー | [life-of-malloc.md](../life-of-malloc.md#case-1-glibc-heap-overflow-cve-2023-6246) |
+| CVE-2022-29582 | io_uringのUAF | io_uring/slub | UAF | [slab.md](../slab.md#case-2-io_uring-use-after-free-cve-2022-29582) |
+| CVE-2021-22555 | Netfilterのヒープ境界外アクセス | netfilter/slub | ヒープ境界外アクセス | [slab.md](../slab.md#case-1-netfilter-heap-out-of-bounds-cve-2021-22555) |
+| CVE-2020-29368 | THPのCOW競合 | thp | 競合 | [thp.md](../thp.md#case-1-thp-cow-race-cve-2020-29368) |
+| CVE-2018-18281 | mremapのTLB競合 | mremap | TLB競合 | [fork.md](../fork.md#case-4-tlb-flush-races-in-mremap-cve-2018-18281) |
+| CVE-2017-5754 | Meltdown | CPU/ページテーブル | サイドチャネル | [page-tables.md](../page-tables.md#case-1-meltdown-cve-2017-5754) |
+| CVE-2017-5753 | Spectre v1 | CPU | サイドチャネル | [page-tables.md](../page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715) |
+| CVE-2017-5715 | Spectre v2 | CPU | サイドチャネル | [page-tables.md](../page-tables.md#case-2-spectre-cve-2017-5753-cve-2017-5715) |
+| CVE-2016-5195 | Dirty COW | COW | 競合 | [fork.md](../fork.md#case-1-dirty-cow-cve-2016-5195) |
+| CVE-2012-4398 | OOMのデッドロック | OOM | デッドロック | [oom.md](../oom.md#case-5-cve-2012-4398-oom-deadlock-denial-of-service) |
+| CVE-2009-2695 | mmap_min_addrのバイパス | mmap | ロジック | [life-of-malloc.md](../life-of-malloc.md#case-3-mmap_min_addr-bypass-cve-2009-2695) |
+| CVE-2004-0077 | mremapの大惨事 | mremap | ロジック | [fork.md](../fork.md#case-3-the-mremap-disaster-cve-2004-0077) |
 
-### Data Corruption Bugs {#data-corruption-bugs}
+### データ破損バグ {#data-corruption-bugs}
 
-Bugs causing silent data loss or corruption without security implications.
+セキュリティ上の影響はないが、気づかれないままデータの消失や破損を引き起こすバグ。
 
-| Bug | Year | Subsystem | Details |
+| バグ | 年 | サブシステム | 詳細 |
 |-----|------|-----------|---------|
-| Large folio data loss | 2023 | writeback/folio | [life-of-page.md](../life-of-page.md#case-2-large-folio-data-loss-2023) |
-| Swap slot ABA | 2024 | swap | [swapping.md](../swapping.md#case-1-the-swap-slot-aba-problem-cve-2024-26759) |
-| 9p read corruption | 2025 | 9p/netfs | [life-of-read.md](../life-of-read.md#case-2-9p-read-corruption-2025) |
-| zswap races | Ongoing | zswap | [swapping.md](../swapping.md#case-2-zswap-race-conditions) |
+| large folioのデータ消失 | 2023 | writeback/folio | [life-of-page.md](../life-of-page.md#case-2-large-folio-data-loss-2023) |
+| スワップスロットのABA | 2024 | swap | [swapping.md](../swapping.md#case-1-the-swap-slot-aba-problem-cve-2024-26759) |
+| 9pの読み込み破損 | 2025 | 9p/netfs | [life-of-read.md](../life-of-read.md#case-2-9p-read-corruption-2025) |
+| zswapの競合 | 継続中 | zswap | [swapping.md](../swapping.md#case-2-zswap-race-conditions) |
 
-### Deadlock & Hang Bugs {#deadlock-hang-bugs}
+### デッドロックとハングのバグ {#deadlock-hang-bugs}
 
-Bugs causing system hangs or unrecoverable states.
+システムのハングや回復不能な状態を引き起こすバグ。
 
-| Bug | Year | Subsystem | Details |
+| バグ | 年 | サブシステム | 詳細 |
 |-----|------|-----------|---------|
-| mmap_sem deadlock | 2010-2016 | OOM | [oom.md](../oom.md#case-2-the-mmap_sem-deadlock-2010-2016) |
-| Swap-over-NFS deadlock | Historical | swap/NFS | [swapping.md](../swapping.md#case-3-swap-over-nfs-instability) |
+| mmap_semのデッドロック | 2010-2016 | OOM | [oom.md](../oom.md#case-2-the-mmap_sem-deadlock-2010-2016) |
+| NFS上のスワップのデッドロック | 過去 | swap/NFS | [swapping.md](../swapping.md#case-3-swap-over-nfs-instability) |
 
-### Performance Bugs {#performance-bugs}
+### 性能バグ {#performance-bugs}
 
-Bugs causing severe performance degradation.
+深刻な性能低下を引き起こすバグ。
 
-| Bug | Year | Subsystem | Details |
+| バグ | 年 | サブシステム | 詳細 |
 |-----|------|-----------|---------|
-| Thrashing livelock | 2010+ | reclaim | [oom.md](../oom.md#case-3-the-thrashing-livelock-2010-mitigated-2018) |
-| Readahead trap | Ongoing | readahead | [swapping.md](../swapping.md#case-5-the-swap-readahead-trap) |
-| khugepaged CPU | Ongoing | thp | [thp.md](../thp.md#case-3-khugepaged-cpu-storms) |
+| スラッシングによるライブロック | 2010+ | reclaim | [oom.md](../oom.md#case-3-the-thrashing-livelock-2010-mitigated-2018) |
+| readaheadの罠 | 継続中 | readahead | [swapping.md](../swapping.md#case-5-the-swap-readahead-trap) |
+| khugepagedのCPU消費 | 継続中 | thp | [thp.md](../thp.md#case-3-khugepaged-cpu-storms) |
 
 ---
 
-## Exploitation Techniques {#exploitation-techniques}
+## エクスプロイト手法 {#exploitation-techniques}
 
-Common techniques used to exploit mm bugs:
+mmのバグを悪用する際によく使われる手法:
 
-### Heap Exploitation (SLUB) {#heap-exploitation-slub}
+### ヒープのエクスプロイト（SLUB） {#heap-exploitation-slub}
 
-| Technique | Description | Used In |
+| 手法 | 説明 | 使用例 |
 |-----------|-------------|---------|
-| **Heap spray** | Fill heap with controlled objects | CVE-2021-22555 |
-| **Cross-cache attack** | Exploit objects across different caches | CVE-2022-29582 |
-| **Freelist corruption** | Overwrite SLUB freelist pointers | Many heap overflows |
-| **msg_msg abuse** | Use msgsnd() for heap layout control | CVE-2021-22555 |
+| **ヒープスプレー** | 制御下のオブジェクトでヒープを埋め尽くす | CVE-2021-22555 |
+| **クロスキャッシュ攻撃** | 異なるキャッシュをまたいでオブジェクトを悪用する | CVE-2022-29582 |
+| **フリーリストの破壊** | SLUBのフリーリストのポインタを上書きする | 多数のヒープオーバーフロー |
+| **msg_msgの悪用** | msgsnd() を使ってヒープのレイアウトを制御する | CVE-2021-22555 |
 
-### Race Conditions {#race-conditions}
+### 競合状態 {#race-conditions}
 
-| Technique | Description | Used In |
+| 手法 | 説明 | 使用例 |
 |-----------|-------------|---------|
-| **userfaultfd** | Pause kernel at precise moments | Dirty COW variants |
-| **FUSE** | Control page fault timing via filesystem | Various exploits |
-| **CPU pinning** | Control which CPU runs exploit code | Race window expansion |
+| **userfaultfd** | カーネルを狙ったタイミングで一時停止させる | Dirty COWの亜種 |
+| **FUSE** | ファイルシステム経由でページフォールトのタイミングを制御する | さまざまなエクスプロイト |
+| **CPUピン留め** | エクスプロイトのコードを実行するCPUを制御する | 競合の窓の拡大 |
 
-### Side Channels {#side-channels}
+### サイドチャネル {#side-channels}
 
-| Technique | Description | Used In |
+| 手法 | 説明 | 使用例 |
 |-----------|-------------|---------|
-| **Flush+Reload** | Measure cache timing | Meltdown, Spectre |
-| **Prime+Probe** | Fill cache, measure evictions | Spectre variants |
+| **Flush+Reload** | キャッシュのタイミングを計測する | Meltdown、Spectre |
+| **Prime+Probe** | キャッシュを埋め、追い出しを計測する | Spectreの亜種 |
 
 ---
 
-## Hardening & Mitigations {#hardening-mitigations}
+## 堅牢化と緩和策 {#hardening-mitigations}
 
-### Kernel Config Options {#kernel-config-options}
+### カーネルのコンフィグオプション {#kernel-config-options}
 
-| Option | Protects Against | Performance Impact |
+| オプション | 防御対象 | 性能への影響 |
 |--------|------------------|-------------------|
-| `CONFIG_SLAB_FREELIST_RANDOM` | Heap layout prediction | Minimal |
-| `CONFIG_SLAB_FREELIST_HARDENED` | Freelist pointer corruption | Minimal |
-| `CONFIG_INIT_ON_ALLOC_DEFAULT_ON` | Info leaks via uninitialized memory | Low |
-| `CONFIG_INIT_ON_FREE_DEFAULT_ON` | UAF info leaks | Low |
+| `CONFIG_SLAB_FREELIST_RANDOM` | ヒープレイアウトの予測 | 最小限 |
+| `CONFIG_SLAB_FREELIST_HARDENED` | フリーリストのポインタの破壊 | 最小限 |
+| `CONFIG_INIT_ON_ALLOC_DEFAULT_ON` | 未初期化メモリ経由の情報漏洩 | 低 |
+| `CONFIG_INIT_ON_FREE_DEFAULT_ON` | UAFによる情報漏洩 | 低 |
 | `CONFIG_PAGE_TABLE_ISOLATION` | Meltdown | 1-5% |
-| `CONFIG_RETPOLINE` | Spectre v2 | Variable |
+| `CONFIG_RETPOLINE` | Spectre v2 | 状況による |
 
-### Runtime Tunables {#runtime-tunables}
+### 実行時のチューニング可能なパラメータ {#runtime-tunables}
 
 ```bash
-# Restrict userfaultfd (reduces race exploit surface)
+# userfaultfd を制限する（競合を突くエクスプロイトの攻撃対象を減らす）
 echo 0 > /proc/sys/vm/unprivileged_userfaultfd
 
-# Restrict kernel pointer exposure
+# カーネルポインタの露出を制限する
 echo 2 > /proc/sys/kernel/kptr_restrict
 
-# Enable KFENCE sampling
+# KFENCE のサンプリングを有効にする
 echo 100 > /sys/module/kfence/parameters/sample_interval
 ```
 
 ---
 
-## External Resources {#external-resources}
+## 外部リソース {#external-resources}
 
-### Research & Write-ups {#research-write-ups}
+### 研究と解説記事 {#research-write-ups}
 
-- [Google Project Zero](https://googleprojectzero.blogspot.com/) - Kernel vulnerability research
-- [xairy/linux-kernel-exploitation](https://github.com/xairy/linux-kernel-exploitation) - Comprehensive link collection
-- [how2heap](https://github.com/shellphish/how2heap) - Heap exploitation techniques
+- [Google Project Zero](https://googleprojectzero.blogspot.com/) - カーネル脆弱性の研究
+- [xairy/linux-kernel-exploitation](https://github.com/xairy/linux-kernel-exploitation) - 網羅的なリンク集
+- [how2heap](https://github.com/shellphish/how2heap) - ヒープのエクスプロイト手法
 
-### Disclosure Lists {#disclosure-lists}
+### 公開リスト {#disclosure-lists}
 
-- [oss-security](https://www.openwall.com/lists/oss-security/) - Public vulnerability disclosures
-- [LKML security](https://lore.kernel.org/linux-security-module/) - Kernel security discussions
+- [oss-security](https://www.openwall.com/lists/oss-security/) - 脆弱性の公開情報
+- [LKML security](https://lore.kernel.org/linux-security-module/) - カーネルのセキュリティに関する議論
 
 ---
 
-## Contributing {#contributing}
+## 貢献 {#contributing}
 
-Found a bug not listed here? Contributions welcome:
+ここに載っていないバグを見つけたら、ぜひ貢献してほしい。
 
-1. Add to the appropriate subsystem file in `bugs/`
-2. Include: CVE (if assigned), fix commit, root cause analysis
-3. Link from this index
+1. `bugs/` 内の適切なサブシステムのファイルに追加する
+2. CVE（割り当てられていれば）、修正コミット、根本原因の分析を含める
+3. この索引からリンクする
