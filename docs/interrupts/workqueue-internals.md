@@ -1,10 +1,10 @@
-# Workqueue Internals {#workqueue-internals}
+# Workqueueの内部 {#workqueue-internals}
 
-> cmwq architecture, worker pools, work item lifecycle, and NUMA affinity
+> cmwqのアーキテクチャ、ワーカープール、ワークアイテムのライフサイクル、NUMAアフィニティ
 
-## Why workqueues exist {#why-workqueues-exist}
+## なぜworkqueueが存在するのか {#why-workqueues-exist}
 
-Interrupt handlers (hardirq and softirq) run atomically — they cannot sleep or block. Work that needs to sleep, acquire mutexes, or do I/O must be deferred. Workqueues provide a kernel thread pool that can run this deferred work in process context.
+割り込みハンドラ（hardirqとsoftirq）はアトミックに動作し、スリープもブロックもできない。スリープしたり、mutexを取得したり、I/Oを行ったりする必要がある処理は遅延させなければならない。workqueueは、こうした遅延処理をプロセスコンテキストで実行できるカーネルスレッドのプールを提供する。
 
 ```
 Interrupt fires:
@@ -16,9 +16,9 @@ Interrupt fires:
                     → can mutex_lock(), kmalloc(GFP_KERNEL), etc.
 ```
 
-## Concurrency-Managed Workqueues (cmwq) {#concurrency-managed-workqueues-cmwq}
+## 並行性管理workqueue（cmwq） {#concurrency-managed-workqueues-cmwq}
 
-Since Linux 2.6.36, workqueues use **cmwq** — introduced by Tejun Heo [(LWN)](https://lwn.net/Articles/394084/) — a unified worker pool that automatically manages concurrency:
+Linux 2.6.36以降、workqueueは**cmwq**を使っている。これはTejun Heoが導入したもので[(LWN)](https://lwn.net/Articles/394084/)、並行性を自動的に管理する統一されたワーカープールである。
 
 ```
 Before cmwq (per-CPU dedicated threads):
@@ -32,154 +32,154 @@ After cmwq (shared worker pool):
   All workqueues share the pool → far fewer threads
 ```
 
-### Worker pool types {#worker-pool-types}
+### ワーカープールの種類 {#worker-pool-types}
 
 ```c
 /* kernel/workqueue.c */
 
-/* Per-CPU worker pools (2 per CPU: normal and highpri): */
+/* per-CPUのワーカープール（CPUごとに2つ: 通常と高優先度）: */
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct worker_pool [NR_STD_WORKER_POOLS],
                                      cpu_worker_pools);
 /*
- * cpu_worker_pools[0]: normal priority (SCHED_NORMAL, nice=0)
- * cpu_worker_pools[1]: high priority  (SCHED_NORMAL, nice=-20)
+ * cpu_worker_pools[0]: 通常優先度（SCHED_NORMAL, nice=0）
+ * cpu_worker_pools[1]: 高優先度  （SCHED_NORMAL, nice=-20）
  */
 
-/* Unbound worker pools: not tied to any CPU, for WQ_UNBOUND workqueues */
+/* アンバウンドなワーカープール: どのCPUにも縛られず、WQ_UNBOUNDのworkqueue用 */
 static DEFINE_HASHTABLE(unbound_pool_hash, UNBOUND_POOL_HASH_ORDER);
 ```
 
-## Creating workqueues {#creating-workqueues}
+## workqueueの作成 {#creating-workqueues}
 
 ```c
 #include <linux/workqueue.h>
 
-/* System workqueues (prefer these): */
-system_wq             /* general-purpose, can sleep */
-system_highpri_wq     /* high-priority, time-critical work */
-system_long_wq        /* for work that may run for a long time */
-system_unbound_wq     /* not bound to a specific CPU */
-system_freezable_wq   /* suspended during system freeze */
-system_power_efficient_wq  /* prefers low-power CPUs */
+/* システムworkqueue（こちらを優先する）: */
+system_wq             /* 汎用、スリープ可能 */
+system_highpri_wq     /* 高優先度、時間的にクリティカルなワーク */
+system_long_wq        /* 長時間実行されうるワーク用 */
+system_unbound_wq     /* 特定のCPUに束縛されない */
+system_freezable_wq   /* システムのフリーズ中は停止する */
+system_power_efficient_wq  /* 低電力のCPUを好む */
 
-/* Use system_wq for most cases: */
-schedule_work(&my_work);  /* submits to system_wq */
+/* ほとんどの場合はsystem_wqを使う: */
+schedule_work(&my_work);  /* system_wqに投入する */
 
-/* Custom workqueue: */
+/* 独自のworkqueue: */
 struct workqueue_struct *wq;
 
-/* Bound to a CPU (work runs on the CPU it was submitted from): */
+/* CPUにバウンド（ワークは投入元のCPUで実行される）: */
 wq = alloc_workqueue("my-wq", WQ_MEM_RECLAIM, 1);
 
-/* Unbound (can run on any CPU, better for NUMA): */
+/* アンバウンド（任意のCPUで実行でき、NUMAに適する）: */
 wq = alloc_workqueue("my-unbound-wq", WQ_UNBOUND, 0);
 
-/* High priority + unbound: */
+/* 高優先度 + アンバウンド: */
 wq = alloc_workqueue("my-hipri-wq", WQ_UNBOUND | WQ_HIGHPRI, 0);
 
-/* Flags: */
-WQ_UNBOUND          /* not bound to a specific CPU */
-WQ_FREEZABLE        /* freeze during system suspend */
-WQ_MEM_RECLAIM      /* may be needed during memory reclaim (reserves a rescue thread) */
-WQ_HIGHPRI          /* high-priority worker pool */
-WQ_CPU_INTENSIVE    /* CPU-intensive work: excluded from pool concurrency count,
-                       allowing other pending work to start alongside it */
-WQ_SYSFS            /* expose workqueue attributes in /sys/bus/workqueue */
+/* フラグ: */
+WQ_UNBOUND          /* 特定のCPUに束縛されない */
+WQ_FREEZABLE        /* システムのサスペンド中にフリーズする */
+WQ_MEM_RECLAIM      /* メモリ回収中に必要になりうる（レスキュースレッドを予約する） */
+WQ_HIGHPRI          /* 高優先度のワーカープール */
+WQ_CPU_INTENSIVE    /* CPU負荷の高いワーク: プールの並行数カウントから除外され、
+                       他の保留中のワークがそれと並んで開始できる */
+WQ_SYSFS            /* workqueueの属性を/sys/bus/workqueueに公開する */
 
-/* Last arg: max_active = max concurrent work items per CPU (0 = default=256) */
+/* 最後の引数: max_active = CPUごとの最大同時実行ワークアイテム数（0 = デフォルト=256） */
 ```
 
-## Work items {#work-items}
+## ワークアイテム {#work-items}
 
 ```c
-/* Declare and initialize work: */
+/* ワークを宣言して初期化する: */
 DECLARE_WORK(my_work, my_work_func);
-/* or: */
+/* または: */
 struct work_struct my_work;
 INIT_WORK(&my_work, my_work_func);
 
-/* Work function: */
+/* ワーク関数: */
 static void my_work_func(struct work_struct *work)
 {
     struct my_device *dev = container_of(work, struct my_device, work);
-    /* Process dev->data — can sleep here */
+    /* dev->dataを処理する。ここではスリープできる */
     mutex_lock(&dev->lock);
     process_data(dev);
     mutex_unlock(&dev->lock);
 }
 
-/* Submit work: */
-schedule_work(&my_work);          /* to system_wq, current CPU */
-queue_work(wq, &my_work);         /* to custom wq */
-queue_work_on(cpu, wq, &my_work); /* to specific CPU's pool */
+/* ワークを投入する: */
+schedule_work(&my_work);          /* system_wqの現在のCPUへ */
+queue_work(wq, &my_work);         /* 独自のwqへ */
+queue_work_on(cpu, wq, &my_work); /* 特定のCPUのプールへ */
 
-/* Wait for work to complete: */
-flush_work(&my_work);             /* blocks until this work item finishes */
-flush_workqueue(wq);              /* blocks until all items in wq finish */
+/* ワークの完了を待つ: */
+flush_work(&my_work);             /* このワークアイテムが終わるまでブロックする */
+flush_workqueue(wq);              /* wq内のすべてのアイテムが終わるまでブロックする */
 ```
 
-## Delayed work {#delayed-work}
+## 遅延ワーク {#delayed-work}
 
 ```c
 struct delayed_work my_dwork;
 INIT_DELAYED_WORK(&my_dwork, my_dwork_func);
 
-/* Schedule to run after 100ms: */
+/* 100ms後に実行するようスケジュールする: */
 schedule_delayed_work(&my_dwork, msecs_to_jiffies(100));
 queue_delayed_work(wq, &my_dwork, msecs_to_jiffies(100));
 
-/* Cancel (may or may not cancel if already running): */
+/* キャンセルする（すでに実行中ならキャンセルできるとは限らない）: */
 cancel_delayed_work(&my_dwork);
 
-/* Cancel and wait for completion: */
+/* キャンセルして完了を待つ: */
 cancel_delayed_work_sync(&my_dwork);
 ```
 
-## struct work_struct internals {#struct-work_struct-internals}
+## struct work_structの内部 {#struct-work_struct-internals}
 
 ```c
 struct work_struct {
-    atomic_long_t   data;       /* encodes: pool pointer + flags */
-    struct list_head entry;     /* in pool->worklist */
+    atomic_long_t   data;       /* プールへのポインタ + フラグをエンコードする */
+    struct list_head entry;     /* pool->worklist内 */
     work_func_t     func;
 #ifdef CONFIG_LOCKDEP
     struct lockdep_map lockdep_map;
 #endif
 };
 
-/* data field encodes: */
-/* bits [0]: WORK_STRUCT_PENDING — work is queued */
-/* bits [1]: WORK_STRUCT_INACTIVE — work is in an inactive list */
-/* bits [2]: WORK_STRUCT_PWQ — lower bits point to pool_workqueue */
-/* bits [WORK_STRUCT_FLAG_BITS..]: pointer to pool_workqueue or last pool */
+/* dataフィールドのエンコード: */
+/* ビット[0]: WORK_STRUCT_PENDING — ワークがキューに積まれている */
+/* ビット[1]: WORK_STRUCT_INACTIVE — ワークが非アクティブリストにある */
+/* ビット[2]: WORK_STRUCT_PWQ — 下位ビットがpool_workqueueを指す */
+/* ビット[WORK_STRUCT_FLAG_BITS..]: pool_workqueueまたは最後のプールへのポインタ */
 ```
 
-## Worker pool and concurrency management {#worker-pool-and-concurrency-management}
+## ワーカープールと並行性管理 {#worker-pool-and-concurrency-management}
 
 ```c
 struct worker_pool {
     spinlock_t          lock;
-    int                 cpu;        /* CPU or -1 for unbound */
-    int                 node;       /* NUMA node */
+    int                 cpu;        /* CPU、アンバウンドなら-1 */
+    int                 node;       /* NUMAノード */
     int                 id;
     unsigned int        flags;
 
     unsigned long       watchdog_ts;
     bool                cpu_stall;
 
-    struct list_head    worklist;   /* pending work items */
+    struct list_head    worklist;   /* 保留中のワークアイテム */
     int                 nr_workers;
     int                 nr_idle;
 
-    struct list_head    idle_list;  /* idle workers */
+    struct list_head    idle_list;  /* アイドルなワーカー */
     struct timer_list   idle_timer;
     struct work_struct  idle_cull_work;
 
-    struct timer_list   mayday_timer; /* safety valve */
+    struct timer_list   mayday_timer; /* 安全弁 */
     DECLARE_HASHTABLE(busy_hash, BUSY_WORKER_HASH_ORDER);
 
-    struct worker       *manager;   /* thread managing the pool */
-    struct list_head    workers;    /* all workers in pool */
+    struct worker       *manager;   /* プールを管理するスレッド */
+    struct list_head    workers;    /* プール内のすべてのワーカー */
     struct completion   *detach_completion;
 
     struct ida          worker_ida;
@@ -190,9 +190,9 @@ struct worker_pool {
 };
 ```
 
-### Concurrency management algorithm {#concurrency-management-algorithm}
+### 並行性管理のアルゴリズム {#concurrency-management-algorithm}
 
-cmwq maintains exactly enough workers to keep the CPU busy:
+cmwqは、CPUを忙しく保つのにちょうど足りるだけのワーカーを維持する。
 
 ```
 Rule: pool tries to keep at least one runnable worker
@@ -222,7 +222,7 @@ static void worker_enter_idle(struct worker *worker)
     worker->flags |= WORKER_IDLE;
     list_add(&worker->entry, &pool->idle_list);
 
-    /* Destroy idle workers after 5 minutes of idleness */
+    /* 5分間アイドルが続いたワーカーを破棄する */
     if (too_many_workers(pool))
         mod_timer(&pool->idle_timer, jiffies + IDLE_WORKER_TIMEOUT);
 }
@@ -234,46 +234,46 @@ static bool keep_working(struct worker_pool *pool)
 }
 ```
 
-## Workqueue attributes and NUMA affinity {#workqueue-attributes-and-numa-affinity}
+## workqueueの属性とNUMAアフィニティ {#workqueue-attributes-and-numa-affinity}
 
 ```c
-/* Get/set workqueue attributes (WQ_UNBOUND only): */
+/* workqueueの属性を取得/設定する（WQ_UNBOUNDのみ）: */
 struct workqueue_attrs *attrs = alloc_workqueue_attrs();
-attrs->nice = -5;           /* worker thread niceness */
-attrs->cpumask = cpu_mask;  /* which CPUs workers can run on */
-attrs->no_numa = false;     /* respect NUMA locality */
+attrs->nice = -5;           /* ワーカースレッドのnice値 */
+attrs->cpumask = cpu_mask;  /* ワーカーが動作できるCPU */
+attrs->no_numa = false;     /* NUMAの局所性を尊重する */
 
 apply_workqueue_attrs(wq, attrs);
 free_workqueue_attrs(attrs);
 
-/* NUMA-aware unbound pools:
-   By default, unbound workqueues have per-NUMA-node pools.
-   Work submitted from node 0 runs on node 0 workers.
-   This ensures cache-hot data stays on the same node. */
+/* NUMAを考慮したアンバウンドプール:
+   デフォルトでは、アンバウンドなworkqueueはNUMAノードごとのプールを持つ。
+   ノード0から投入されたワークはノード0のワーカーで実行される。
+   これによりキャッシュがホットなデータが同じノードに留まる。 */
 ```
 
-## Workqueue debugging {#workqueue-debugging}
+## workqueueのデバッグ {#workqueue-debugging}
 
 ```bash
-# Show all workqueues and their stats:
+# すべてのworkqueueとその統計を表示する:
 cat /sys/kernel/debug/workqueue/stats
 
-# Show worker threads:
+# ワーカースレッドを表示する:
 ps aux | grep kworker
-# kworker/0:1   — bound to CPU 0, pool 1 (normal)
-# kworker/0:1H  — bound to CPU 0, pool H (high priority)
-# kworker/u8:2  — unbound pool, pool ID=8, worker ID=2
+# kworker/0:1   — CPU 0にバウンド、プール1（通常）
+# kworker/0:1H  — CPU 0にバウンド、プールH（高優先度）
+# kworker/u8:2  — アンバウンドプール、プールID=8、ワーカーID=2
 
-# Show per-workqueue stats (if WQ_SYSFS):
+# workqueueごとの統計を表示する（WQ_SYSFSの場合）:
 ls /sys/bus/workqueue/devices/
 cat /sys/bus/workqueue/devices/system_wq/per_cpu
 
-# Dump all task stacks (including kworker threads) via SysRq:
+# SysRqですべてのタスクのスタック（kworkerスレッドを含む）をダンプする:
 echo t > /proc/sysrq-trigger
-# Shows all threads in dmesg; use /sys/kernel/debug/workqueue for
-# workqueue-specific state (pending counts, queue depths)
+# dmesgにすべてのスレッドが表示される。workqueue固有の状態（保留数、キューの深さ）には
+# /sys/kernel/debug/workqueueを使う
 
-# Trace work submission and execution:
+# ワークの投入と実行をトレースする:
 bpftrace -e '
 kprobe:queue_work_on {
     /* queue_work_on(int cpu, struct workqueue_struct *wq, struct work_struct *work) */
@@ -285,34 +285,34 @@ kprobe:process_one_work {
            cpu, pid, ksym(((struct work_struct *)arg1)->func));
 }'
 
-# Watchdog: detect hung workers (CONFIG_WQ_WATCHDOG=y)
-# Kernel will warn if a worker pool stalls for > 30 seconds:
+# ウォッチドッグ: ハングしたワーカーを検出する（CONFIG_WQ_WATCHDOG=y）
+# ワーカープールが30秒を超えてストールすると、カーネルが警告を出す:
 # "BUG: workqueue lockup"
-# Tune:
+# 調整:
 echo 60 > /sys/module/workqueue/parameters/watchdog_thresh
 ```
 
-## WQ_MEM_RECLAIM and rescue workers {#wqmemreclaim-and-rescue-workers}
+## WQ_MEM_RECLAIMとレスキューワーカー {#wqmemreclaim-and-rescue-workers}
 
 ```c
 /*
- * Work used during memory reclaim (e.g., writeback) MUST use WQ_MEM_RECLAIM.
- * This ensures a dedicated rescue worker exists that won't be blocked
- * waiting for memory (avoiding deadlock):
+ * メモリ回収中に使われるワーク（例: ライトバック）は必ずWQ_MEM_RECLAIMを使わなければならない。
+ * これにより、メモリを待ってブロックされることのない専用のレスキューワーカーが
+ * 存在することが保証される（デッドロックを回避する）:
  *
- * Memory reclaim path:
- *   1. kswapd needs to write dirty pages → queues work
- *   2. Normal workers might be sleeping waiting for memory
- *   3. Rescue worker picks up the work — always has one thread reserved
+ * メモリ回収のパス:
+ *   1. kswapdがダーティページを書き出す必要がある → ワークをキューに積む
+ *   2. 通常のワーカーはメモリを待ってスリープしているかもしれない
+ *   3. レスキューワーカーがそのワークを拾う — 常に1スレッドが予約されている
  */
 wq = alloc_workqueue("writeback", WQ_MEM_RECLAIM | WQ_UNBOUND, 1);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Workqueues](workqueues.md) — API reference and basic usage
-- [Softirq and Tasklets](softirq.md) — lighter-weight deferral (no sleep)
-- [Threaded IRQs](threaded-irq.md) — IRQ handlers in thread context
-- [RCU](../locking/rcu.md) — lock-free deferred work
-- `kernel/workqueue.c` — complete implementation (~6000 lines)
-- `Documentation/core-api/workqueue.rst` — kernel documentation
+- [Workqueue](workqueues.md) — APIリファレンスと基本的な使い方
+- [Softirqとtasklet](softirq.md) — より軽量な遅延（スリープなし）
+- [スレッド化IRQ](threaded-irq.md) — スレッドコンテキストのIRQハンドラ
+- [RCU](../locking/rcu.md) — ロックフリーな遅延処理
+- `kernel/workqueue.c` — 完全な実装（約6000行）
+- `Documentation/core-api/workqueue.rst` — カーネルのドキュメント

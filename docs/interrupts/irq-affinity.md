@@ -1,19 +1,19 @@
-# IRQ Affinity and CPU Isolation {#irq-affinity-and-cpu-isolation}
+# IRQアフィニティとCPU分離 {#irq-affinity-and-cpu-isolation}
 
-> Controlling which CPUs handle interrupts for performance and latency
+> 性能とレイテンシのために、どのCPUが割り込みを処理するかを制御する
 
-## Why IRQ affinity matters {#why-irq-affinity-matters}
+## なぜIRQアフィニティが重要か {#why-irq-affinity-matters}
 
-By default, the kernel distributes interrupts across CPUs automatically (`irqbalance` daemon). For latency-sensitive or high-throughput workloads, manual affinity control lets you:
+デフォルトでは、カーネル（`irqbalance`デーモン）が割り込みを自動的にCPU間に分散する。レイテンシに敏感なワークロードや高スループットのワークロードでは、アフィニティを手動で制御することで次のことが可能になる。
 
-- Dedicate CPUs to specific network queues (one queue per CPU)
-- Isolate real-time tasks from interrupt storms
-- Colocate IRQ handling with the NUMA node that owns the memory
+- 特定のネットワークキューにCPUを専有させる（CPUごとに1キュー）
+- リアルタイムタスクを割り込みストームから隔離する
+- IRQ処理を、メモリを所有するNUMAノードと同じ場所に配置する
 
-## Viewing IRQ assignments {#viewing-irq-assignments}
+## IRQの割り当ての確認 {#viewing-irq-assignments}
 
 ```bash
-# List all IRQs with CPU affinity and counts
+# すべてのIRQをCPUアフィニティと回数付きで一覧表示する
 cat /proc/interrupts
 # CPU0     CPU1     CPU2     CPU3
 #   0:   ...   IO-APIC   2-edge      timer
@@ -21,100 +21,100 @@ cat /proc/interrupts
 # eth0-q0: (MSI-X queue 0)
 # eth0-q1: (MSI-X queue 1)
 
-# Show affinity for a specific IRQ
-cat /proc/irq/42/smp_affinity      # bitmask (hex)
-cat /proc/irq/42/smp_affinity_list # human-readable (CPU list)
+# 特定のIRQのアフィニティを表示する
+cat /proc/irq/42/smp_affinity      # ビットマスク（16進）
+cat /proc/irq/42/smp_affinity_list # 人間が読める形式（CPUリスト）
 
-# Example: IRQ 42 runs on CPU 0 and CPU 1
+# 例: IRQ 42がCPU 0とCPU 1で動作する
 # /proc/irq/42/smp_affinity:      00000003  (CPUs 0,1)
 # /proc/irq/42/smp_affinity_list: 0-1
 ```
 
-## Setting IRQ affinity {#setting-irq-affinity}
+## IRQアフィニティの設定 {#setting-irq-affinity}
 
 ```bash
-# Pin IRQ 42 to CPU 3 only
-echo 8 > /proc/irq/42/smp_affinity       # 0x8 = bit 3 = CPU 3
-# or:
+# IRQ 42をCPU 3のみに固定する
+echo 8 > /proc/irq/42/smp_affinity       # 0x8 = ビット3 = CPU 3
+# または:
 echo 3 > /proc/irq/42/smp_affinity_list  # CPU 3
 
-# Pin to multiple CPUs (0 and 3):
-echo 9 > /proc/irq/42/smp_affinity       # 0x9 = bits 0,3
+# 複数のCPU（0と3）に固定する:
+echo 9 > /proc/irq/42/smp_affinity       # 0x9 = ビット0,3
 echo 0,3 > /proc/irq/42/smp_affinity_list
 
-# All CPUs:
-echo ff > /proc/irq/42/smp_affinity      # 0xff = CPUs 0-7
+# すべてのCPU:
+echo ff > /proc/irq/42/smp_affinity      # 0xff = CPU 0-7
 ```
 
-### High-throughput NIC: one queue per CPU {#high-throughput-nic-one-queue-per-cpu}
+### 高スループットNIC: CPUごとに1キュー {#high-throughput-nic-one-queue-per-cpu}
 
 ```bash
-# Find IRQ numbers for each NIC queue
+# NICの各キューのIRQ番号を調べる
 grep 'eth0' /proc/interrupts
 # 100:  0  0  0  0  PCI-MSI  eth0-q0
 # 101:  0  0  0  0  PCI-MSI  eth0-q1
 # 102:  0  0  0  0  PCI-MSI  eth0-q2
 # 103:  0  0  0  0  PCI-MSI  eth0-q3
 
-# Bind each queue to one CPU
+# 各キューを1つのCPUに結びつける
 echo 1  > /proc/irq/100/smp_affinity  # q0 → CPU 0
 echo 2  > /proc/irq/101/smp_affinity  # q1 → CPU 1
 echo 4  > /proc/irq/102/smp_affinity  # q2 → CPU 2
 echo 8  > /proc/irq/103/smp_affinity  # q3 → CPU 3
 
-# Also set XPS (Transmit Packet Steering) for TX:
+# TX用にXPS（Transmit Packet Steering）も設定する:
 echo 1 > /sys/class/net/eth0/queues/tx-0/xps_cpus  # tx-0 → CPU 0
 echo 2 > /sys/class/net/eth0/queues/tx-1/xps_cpus  # tx-1 → CPU 1
 ```
 
-## irqbalance: automatic balancing {#irqbalance-automatic-balancing}
+## irqbalance: 自動バランシング {#irqbalance-automatic-balancing}
 
-`irqbalance` is a daemon that periodically rebalances IRQs across CPUs:
+`irqbalance`は、IRQをCPU間で定期的に再配分するデーモンである。
 
 ```bash
-# Start/stop irqbalance
+# irqbalanceの開始/停止
 systemctl start irqbalance
-systemctl stop irqbalance  # stop for manual control
+systemctl stop irqbalance  # 手動で制御するために停止する
 
-# irqbalance policy hints
-# Mark an IRQ as "performance" (don't move it):
-IRQBALANCE_BANNED_IRQS="42 43"  # in /etc/sysconfig/irqbalance
+# irqbalanceのポリシーヒント
+# IRQを「performance」としてマークする（移動させない）:
+IRQBALANCE_BANNED_IRQS="42 43"  # /etc/sysconfig/irqbalance内で
 
-# One-shot: balance and exit
+# 1回だけ: バランシングして終了する
 irqbalance --oneshot
 
-# Watch irqbalance decisions
+# irqbalanceの判断を観察する
 irqbalance --debug --foreground 2>&1 | head -50
 ```
 
-For latency-sensitive workloads, stop irqbalance and set affinity manually.
+レイテンシに敏感なワークロードでは、irqbalanceを停止してアフィニティを手動で設定する。
 
-## Kernel API: irq_set_affinity_hint {#kernel-api-irqsetaffinity_hint}
+## カーネルAPI: irq_set_affinity_hint {#kernel-api-irqsetaffinity_hint}
 
-Drivers can suggest preferred CPUs for their IRQs:
+ドライバは、自分のIRQに対して望ましいCPUを提案できる。
 
 ```c
 #include <linux/interrupt.h>
 #include <linux/cpumask.h>
 
-/* Suggest CPU 3 for this IRQ (irqbalance will respect this hint) */
+/* このIRQにCPU 3を提案する（irqbalanceはこのヒントを尊重する） */
 irq_set_affinity_hint(irq, cpumask_of(3));
 
-/* Suggest a range of CPUs */
+/* CPUの範囲を提案する */
 cpumask_t mask;
 cpumask_clear(&mask);
 cpumask_set_cpu(0, &mask);
 cpumask_set_cpu(1, &mask);
 irq_set_affinity_hint(irq, &mask);
 
-/* Clear the hint */
+/* ヒントをクリアする */
 irq_set_affinity_hint(irq, NULL);
 
-/* Force affinity (bypasses irqbalance) */
+/* アフィニティを強制する（irqbalanceを迂回する） */
 irq_set_affinity(irq, &mask);
 ```
 
-NIC drivers like mlx5 use `irq_set_affinity_hint` in their queue setup to suggest NUMA-local CPUs:
+mlx5のようなNICドライバは、キューのセットアップ時に`irq_set_affinity_hint`を使ってNUMAローカルなCPUを提案する。
 
 ```c
 /* net/ethernet/mellanox/mlx5/core/eq.c */
@@ -125,94 +125,94 @@ static int mlx5_irq_set_affinity_hint(struct mlx5_irq *irq, int i)
 }
 ```
 
-## CPU isolation for real-time workloads {#cpu-isolation-for-real-time-workloads}
+## リアルタイムワークロードのためのCPU分離 {#cpu-isolation-for-real-time-workloads}
 
-For real-time tasks that must not be interrupted, isolate CPUs from the kernel's scheduler and interrupt balancer:
+割り込まれてはならないリアルタイムタスクのために、CPUをカーネルのスケジューラと割り込みバランサから分離する。
 
-### isolcpus: remove CPUs from the scheduler {#isolcpus-remove-cpus-from-the-scheduler}
+### isolcpus: CPUをスケジューラから外す {#isolcpus-remove-cpus-from-the-scheduler}
 
 ```bash
-# Boot parameter: remove CPUs 2,3 from scheduler load balancing
+# ブートパラメータ: CPU 2,3をスケジューラの負荷分散から外す
 GRUB_CMDLINE_LINUX="isolcpus=2,3"
 
-# After boot: CPUs 2,3 won't run kernel threads or normal processes
-# Only explicitly placed tasks run there (taskset/cgroup cpuset)
+# ブート後: CPU 2,3ではカーネルスレッドや通常のプロセスが動作しない
+# 明示的に配置されたタスクだけがそこで動作する（taskset/cgroup cpuset）
 
-# Place a task on an isolated CPU:
+# 分離されたCPUにタスクを配置する:
 taskset -c 2 ./realtime_task
 
-# Or via cgroup cpuset:
+# あるいはcgroup cpuset経由で:
 echo 2 > /sys/fs/cgroup/realtime/cpuset.cpus
 echo 0 > /sys/fs/cgroup/realtime/cpuset.mems
 ```
 
-### nohz_full: tickless operation {#nohz_full-tickless-operation}
+### nohz_full: tickレス動作 {#nohz_full-tickless-operation}
 
-The NO_HZ (tickless idle) feature was introduced in Linux 2.6.21 by Ingo Molnár and Thomas Gleixner [(LWN)](https://lwn.net/Articles/223185/); `nohz_full` for full dynticks came later in Linux 3.10.
+NO_HZ（tickレスアイドル）機能はIngo MolnárとThomas GleixnerによってLinux 2.6.21で導入された[(LWN)](https://lwn.net/Articles/223185/)。完全なdynticksのための`nohz_full`は後のLinux 3.10で登場した。
 
 ```bash
-# Remove CPUs from the scheduling tick (reduces timer interrupts to ~0)
+# CPUをスケジューリングtickから外す（タイマー割り込みをほぼ0に減らす）
 GRUB_CMDLINE_LINUX="isolcpus=2,3 nohz_full=2,3 rcu_nocbs=2,3"
 
-# nohz_full: disable the periodic scheduling tick when only 1 task runs
-# rcu_nocbs: offload RCU callbacks from these CPUs to "RCU kthreads"
+# nohz_full: タスクが1つだけ動作しているときに周期的なスケジューリングtickを無効にする
+# rcu_nocbs: これらのCPUのRCUコールバックを「RCU kthread」にオフロードする
 
-# Verify: after boot, isolated CPUs should have near-zero interrupts
+# 確認: ブート後、分離されたCPUの割り込みはほぼゼロになっているはず
 watch -n1 'cat /proc/interrupts | head -5'
 ```
 
-### irq_default_affinity: exclude isolated CPUs {#irqdefaultaffinity-exclude-isolated-cpus}
+### irq_default_affinity: 分離されたCPUを除外する {#irqdefaultaffinity-exclude-isolated-cpus}
 
 ```bash
-# Set system-wide default affinity to exclude CPUs 2,3
-echo 3 > /proc/irq/default_smp_affinity  # 0x3 = CPUs 0,1 only
-# New IRQs will be placed on CPUs 0,1 by default
+# システム全体のデフォルトアフィニティをCPU 2,3を除外するように設定する
+echo 3 > /proc/irq/default_smp_affinity  # 0x3 = CPU 0,1のみ
+# 新しいIRQはデフォルトでCPU 0,1に配置される
 ```
 
-### Full isolation example (latency-critical CPU) {#full-isolation-example-latency-critical-cpu}
+### 完全な分離の例（レイテンシが重要なCPU） {#full-isolation-example-latency-critical-cpu}
 
 ```bash
 #!/bin/bash
-# Isolate CPU 3 for a real-time task
+# リアルタイムタスクのためにCPU 3を分離する
 
 CPU=3
 MASK=$((1 << CPU))
-HEX_MASK=$(printf '%x' $MASK)  # = "8" for CPU 3
+HEX_MASK=$(printf '%x' $MASK)  # CPU 3の場合は"8"
 
-# 1. Move all movable IRQs off CPU 3
+# 1. 移動可能なすべてのIRQをCPU 3から移す
 for irq in /proc/irq/*/; do
     irq_num=$(basename $irq)
-    [ "$irq_num" = "0" ] && continue  # skip timer
+    [ "$irq_num" = "0" ] && continue  # タイマーはスキップ
     current=$(cat /proc/irq/$irq_num/smp_affinity 2>/dev/null)
-    # If current mask includes CPU 3, remove it
+    # 現在のマスクがCPU 3を含んでいれば取り除く
     new_mask=$(( 0x$current & ~MASK ))
-    [ $new_mask -eq 0 ] && new_mask=1  # can't have empty mask
+    [ $new_mask -eq 0 ] && new_mask=1  # 空のマスクにはできない
     echo $new_mask > /proc/irq/$irq_num/smp_affinity 2>/dev/null
 done
 
-# 2. Stop irqbalance from moving IRQs back
+# 2. irqbalanceがIRQを戻さないように停止する
 systemctl stop irqbalance
 
-# 3. Move kernel threads off CPU 3 (optional, requires tuna)
+# 3. カーネルスレッドをCPU 3から移す（任意、tunaが必要）
 tuna --cpus=3 --isolate
 
-# 4. Pin the real-time task
+# 4. リアルタイムタスクを固定する
 taskset -c $CPU ./realtime_task &
 ```
 
-## Monitoring interrupt distribution {#monitoring-interrupt-distribution}
+## 割り込み分散の監視 {#monitoring-interrupt-distribution}
 
 ```bash
-# Live interrupt counts per CPU
+# CPUごとの割り込み回数をリアルタイムで表示する
 watch -n0.5 'cat /proc/interrupts'
 
-# Show interrupt rate per IRQ (sar)
+# IRQごとの割り込みレートを表示する（sar）
 sar -I ALL 1 5
 
-# Total interrupts per CPU:
+# CPUごとの割り込み総数:
 cat /proc/stat | grep intr
 
-# IRQ affinity summary script:
+# IRQアフィニティの要約スクリプト:
 for irq in /proc/irq/*/; do
     name=$(cat $irq/irq_name 2>/dev/null || basename $irq)
     aff=$(cat $irq/smp_affinity_list 2>/dev/null)
@@ -220,27 +220,27 @@ for irq in /proc/irq/*/; do
 done
 ```
 
-## Receive Packet Steering (RPS/RFS) {#receive-packet-steering-rpsrfs}
+## Receive Packet Steering（RPS/RFS） {#receive-packet-steering-rpsrfs}
 
-For NICs with fewer hardware queues than CPUs, RPS steers packets to specific CPUs in software:
+ハードウェアキューの数がCPU数より少ないNICでは、RPSがソフトウェアでパケットを特定のCPUに振り分ける。
 
 ```bash
-# Enable RPS: steer received packets across all CPUs
-echo ff > /sys/class/net/eth0/queues/rx-0/rps_cpus  # all 8 CPUs
+# RPSを有効にする: 受信パケットをすべてのCPUに振り分ける
+echo ff > /sys/class/net/eth0/queues/rx-0/rps_cpus  # 8つのCPUすべて
 
-# RFS: steer to the CPU that last ran the application (cache-hot)
+# RFS: アプリケーションを最後に実行したCPU（キャッシュがホット）に振り分ける
 echo 4096 > /sys/class/net/eth0/queues/rx-0/rps_flow_cnt
 echo 4096 > /proc/sys/net/core/rps_sock_flow_entries
 ```
 
-RPS is implemented as a softirq that moves packet processing to the target CPU via IPI (inter-processor interrupt).
+RPSはsoftirqとして実装されており、IPI（プロセッサ間割り込み）を介してパケット処理を対象のCPUに移す。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [IRQ Descriptor and irq_chip](irq-desc.md) — struct irq_desc internals
-- [request_irq and free_irq](request-irq.md) — IRQ handler registration
-- [Threaded IRQs](threaded-irq.md) — threaded IRQ handlers for latency
-- [PCI Drivers](../drivers/pci-driver.md) — MSI-X affinity in NIC drivers
-- [CPU Affinity](../sched/cpu-affinity.md) — process CPU pinning
-- [Scheduling Domains](../sched/sched-domains.md) — scheduler topology
-- `kernel/irq/manage.c` — irq_set_affinity implementation
+- [IRQディスクリプタとirq_chip](irq-desc.md) — struct irq_descの内部
+- [request_irqとfree_irq](request-irq.md) — IRQハンドラの登録
+- [スレッド化IRQ](threaded-irq.md) — レイテンシのためのスレッド化IRQハンドラ
+- [PCIドライバ](../drivers/pci-driver.md) — NICドライバにおけるMSI-Xのアフィニティ
+- [CPUアフィニティ](../sched/cpu-affinity.md) — プロセスのCPU固定
+- [スケジューリングドメイン](../sched/sched-domains.md) — スケジューラのトポロジ
+- `kernel/irq/manage.c` — irq_set_affinityの実装

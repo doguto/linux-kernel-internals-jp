@@ -1,10 +1,10 @@
-# IRQ Descriptor and irq_chip {#irq-descriptor-and-irq_chip}
+# IRQディスクリプタとirq_chip {#irq-descriptor-and-irq_chip}
 
-> The kernel's abstraction over interrupt hardware
+> 割り込みハードウェアに対するカーネルの抽象化
 
-## The three-layer interrupt abstraction {#the-three-layer-interrupt-abstraction}
+## 3層の割り込み抽象化 {#the-three-layer-interrupt-abstraction}
 
-The Linux interrupt subsystem — the genirq framework introduced in Linux 2.6.16 by Thomas Gleixner and Ingo Molnár [(LWN)](https://lwn.net/Articles/184750/) — uses three structures to abstract over wildly different interrupt controllers (APIC, GIC, IOAPIC, MSI, GPIO controllers...):
+Linuxの割り込みサブシステム、すなわちThomas GleixnerとIngo MolnárがLinux 2.6.16で導入したgenirqフレームワーク[(LWN)](https://lwn.net/Articles/184750/)は、大きく異なる割り込みコントローラ（APIC、GIC、IOAPIC、MSI、GPIOコントローラなど）を抽象化するために3つの構造体を使う。
 
 ```
 Linux IRQ number
@@ -20,85 +20,85 @@ struct irq_desc        ← per-IRQ kernel state (handlers, counters, flags)
 
 ## struct irq_desc {#struct-irq_desc}
 
-One `irq_desc` exists for each Linux IRQ number. It's the central object that ties together the hardware abstraction and the software handlers:
+`irq_desc`はLinuxのIRQ番号ごとに1つ存在する。これはハードウェア抽象化とソフトウェアのハンドラを結びつける中心的なオブジェクトである。
 
 ```c
 /* include/linux/irqdesc.h */
 struct irq_desc {
-    struct irq_common_data irq_common_data;  /* shared irq/chip data */
-    struct irq_data        irq_data;         /* chip-level data */
-    struct irqstat __percpu *kstat_irqs;     /* per-CPU interrupt count */
-    irq_flow_handler_t     handle_irq;       /* high-level handler */
-    struct irqaction       *action;          /* handler chain */
-    unsigned int           depth;            /* nested disable count */
-    unsigned int           irq_count;        /* for stall detection */
-    unsigned int           irqs_unhandled;   /* spurious count */
-    raw_spinlock_t         lock;             /* protects this struct */
-    struct cpumask         *percpu_enabled;  /* per-CPU enable state */
+    struct irq_common_data irq_common_data;  /* irq/chip間で共有するデータ */
+    struct irq_data        irq_data;         /* チップレベルのデータ */
+    struct irqstat __percpu *kstat_irqs;     /* CPUごとの割り込み回数 */
+    irq_flow_handler_t     handle_irq;       /* 高レベルハンドラ */
+    struct irqaction       *action;          /* ハンドラチェーン */
+    unsigned int           depth;            /* ネストした無効化の回数 */
+    unsigned int           irq_count;        /* ストール検出用 */
+    unsigned int           irqs_unhandled;   /* スプリアス割り込みの回数 */
+    raw_spinlock_t         lock;             /* この構造体を保護する */
+    struct cpumask         *percpu_enabled;  /* CPUごとの有効状態 */
     const char             *name;
 };
 ```
 
-Key fields:
+主なフィールド:
 
-- `handle_irq`: the **flow handler** — decides how to run the action chain (edge-triggered, level-triggered, per-CPU, etc.)
-- `action`: linked list of `irqaction` structs, one per registered handler
-- `depth`: incremented by `disable_irq()`, decremented by `enable_irq()` — only 0 means actually enabled
+- `handle_irq`: **フローハンドラ**。アクションチェーンをどのように実行するか（エッジトリガ、レベルトリガ、per-CPUなど）を決める
+- `action`: `irqaction`構造体の連結リストで、登録されたハンドラごとに1つ
+- `depth`: `disable_irq()`でインクリメントされ、`enable_irq()`でデクリメントされる。0のときだけ実際に有効である
 
 ## struct irqaction {#struct-irqaction}
 
-One `irqaction` per `request_irq()` call. Multiple drivers can share an IRQ line, each with its own `irqaction`:
+`irqaction`は`request_irq()`の呼び出しごとに1つ作られる。複数のドライバが1本のIRQラインを共有でき、それぞれが自分の`irqaction`を持つ。
 
 ```c
 /* include/linux/interrupt.h */
 struct irqaction {
-    irq_handler_t    handler;     /* the interrupt handler function */
-    void             *dev_id;     /* passed to handler, identifies the device */
-    struct irqaction *next;       /* next handler sharing this IRQ */
-    irq_handler_t    thread_fn;   /* threaded handler (if IRQF_ONESHOT) */
-    struct task_struct *thread;   /* kernel thread for threaded handler */
-    unsigned int     irq;         /* IRQ number */
-    unsigned int     flags;       /* IRQF_* flags */
-    const char       *name;       /* appears in /proc/interrupts */
+    irq_handler_t    handler;     /* 割り込みハンドラ関数 */
+    void             *dev_id;     /* ハンドラに渡され、デバイスを識別する */
+    struct irqaction *next;       /* このIRQを共有する次のハンドラ */
+    irq_handler_t    thread_fn;   /* スレッド化ハンドラ（IRQF_ONESHOTの場合） */
+    struct task_struct *thread;   /* スレッド化ハンドラ用のカーネルスレッド */
+    unsigned int     irq;         /* IRQ番号 */
+    unsigned int     flags;       /* IRQF_*フラグ */
+    const char       *name;       /* /proc/interruptsに表示される */
 };
 ```
 
-When a shared IRQ fires, the kernel walks the `irqaction` chain calling each handler in turn. Each handler returns `IRQ_HANDLED` if it handled the interrupt, or `IRQ_NONE` if it wasn't its device.
+共有IRQが発火すると、カーネルは`irqaction`チェーンをたどって各ハンドラを順に呼び出す。各ハンドラは、割り込みを処理した場合は`IRQ_HANDLED`を、自分のデバイスからの割り込みでなかった場合は`IRQ_NONE`を返す。
 
 ## struct irq_chip {#struct-irq_chip}
 
-The `irq_chip` provides operations for controlling the interrupt controller hardware. Each controller (APIC, ARM GIC, etc.) implements this interface:
+`irq_chip`は、割り込みコントローラのハードウェアを制御するための操作を提供する。各コントローラ（APIC、ARM GICなど）がこのインターフェースを実装する。
 
 ```c
 /* include/linux/irq.h */
 struct irq_chip {
-    const char *name;           /* appears in /proc/interrupts */
+    const char *name;           /* /proc/interruptsに表示される */
 
-    /* Basic control */
-    void (*irq_mask)(struct irq_data *data);    /* disable at controller */
-    void (*irq_unmask)(struct irq_data *data);  /* enable at controller */
-    void (*irq_enable)(struct irq_data *data);  /* enable (may = unmask) */
-    void (*irq_disable)(struct irq_data *data); /* disable */
-    void (*irq_ack)(struct irq_data *data);     /* acknowledge (edge) */
-    void (*irq_eoi)(struct irq_data *data);     /* end-of-interrupt (level) */
+    /* 基本的な制御 */
+    void (*irq_mask)(struct irq_data *data);    /* コントローラで無効化 */
+    void (*irq_unmask)(struct irq_data *data);  /* コントローラで有効化 */
+    void (*irq_enable)(struct irq_data *data);  /* 有効化（unmaskと同じ場合もある） */
+    void (*irq_disable)(struct irq_data *data); /* 無効化 */
+    void (*irq_ack)(struct irq_data *data);     /* 受領通知（エッジ） */
+    void (*irq_eoi)(struct irq_data *data);     /* 割り込み終了（レベル） */
 
-    /* Affinity */
+    /* アフィニティ */
     int  (*irq_set_affinity)(struct irq_data *data,
                               const struct cpumask *dest, bool force);
 
-    /* Trigger type */
+    /* トリガ種別 */
     int  (*irq_set_type)(struct irq_data *data, unsigned int flow_type);
 
-    /* Wakeup */
+    /* ウェイクアップ */
     int  (*irq_set_wake)(struct irq_data *data, unsigned int on);
 };
 ```
 
-Drivers typically don't call `irq_chip` operations directly — the generic IRQ layer calls them at the right time.
+ドライバは通常`irq_chip`の操作を直接呼ばない。汎用IRQレイヤーが適切なタイミングでそれらを呼び出す。
 
-## IRQ domains {#irq-domains}
+## IRQドメイン {#irq-domains}
 
-Modern systems have hierarchical interrupt controllers (e.g., GPIO expander → GIC → CPU). **IRQ domains** map hardware interrupt numbers to Linux IRQ numbers:
+現代のシステムは階層的な割り込みコントローラ（例: GPIOエクスパンダ → GIC → CPU）を持つ。**IRQドメイン**は、ハードウェアの割り込み番号をLinuxのIRQ番号に対応付ける。
 
 ```
 Hardware interrupt 47 (on GPIO expander)
@@ -111,15 +111,15 @@ CPU interrupt vector
 ```
 
 ```c
-/* Creating an IRQ domain (driver code) */
+/* IRQドメインの作成（ドライバのコード） */
 struct irq_domain *domain = irq_domain_add_linear(
-    node,           /* device tree node */
-    num_irqs,       /* number of hardware IRQs */
-    &my_domain_ops, /* translate hw → linux IRQ */
-    host_data       /* driver private data */
+    node,           /* デバイスツリーのノード */
+    num_irqs,       /* ハードウェアIRQの数 */
+    &my_domain_ops, /* hw → linux IRQの変換 */
+    host_data       /* ドライバのプライベートデータ */
 );
 
-/* In the domain ops: map HW IRQ to Linux IRQ */
+/* ドメインの操作内: HW IRQをLinux IRQに対応付ける */
 static int my_irq_domain_map(struct irq_domain *d,
                               unsigned int virq, irq_hw_number_t hwirq)
 {
@@ -129,42 +129,42 @@ static int my_irq_domain_map(struct irq_domain *d,
 }
 ```
 
-## Flow handlers {#flow-handlers}
+## フローハンドラ {#flow-handlers}
 
-The flow handler (`handle_irq` in `irq_desc`) determines how interrupt delivery works:
+フローハンドラ（`irq_desc`内の`handle_irq`）は、割り込みの配送がどのように行われるかを決める。
 
-| Handler | Usage |
+| ハンドラ | 用途 |
 |---------|-------|
-| `handle_edge_irq` | Edge-triggered: ack before calling action chain |
-| `handle_level_irq` | Level-triggered: mask, run actions, unmask |
-| `handle_fasteoi_irq` | Modern level (with EOI): most ARM/x86 MSI |
-| `handle_percpu_irq` | Per-CPU interrupts (local timer, IPI) |
-| `handle_simple_irq` | No mask/ack, just run actions |
+| `handle_edge_irq` | エッジトリガ: アクションチェーンを呼ぶ前にackする |
+| `handle_level_irq` | レベルトリガ: マスクし、アクションを実行し、アンマスクする |
+| `handle_fasteoi_irq` | 現代的なレベル（EOI付き）: ARM/x86 MSIの大半 |
+| `handle_percpu_irq` | per-CPU割り込み（ローカルタイマー、IPI） |
+| `handle_simple_irq` | mask/ackなしで、アクションを実行するだけ |
 
-The difference between edge and level matters:
+エッジとレベルの違いは重要である。
 
-- **Edge**: interrupt fires once when signal transitions. If missed, it won't fire again.
-- **Level**: interrupt fires as long as signal is asserted. Must be masked during handling.
+- **エッジ**: 信号が遷移したときに割り込みが1回発火する。取りこぼすと再び発火することはない。
+- **レベル**: 信号がアサートされている間、割り込みが発火し続ける。処理中はマスクしなければならない。
 
-## Observing IRQ state {#observing-irq-state}
+## IRQ状態の観察 {#observing-irq-state}
 
 ```bash
-# Full IRQ table with controller info
+# コントローラ情報付きの完全なIRQテーブル
 cat /proc/interrupts
 
-# Per-IRQ information
+# IRQごとの情報
 ls /proc/irq/24/
 # affinity_hint  node  smp_affinity  smp_affinity_list  spread_affinity
 
-# Current affinity
-cat /proc/irq/24/smp_affinity_list  # e.g., "0-3"
+# 現在のアフィニティ
+cat /proc/irq/24/smp_affinity_list  # 例: "0-3"
 
-# IRQ chip name and handler
-cat /sys/kernel/debug/irq/irqs/24  # (requires debugfs)
+# IRQチップ名とハンドラ
+cat /sys/kernel/debug/irq/irqs/24  # （debugfsが必要）
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Interrupt Handling Overview](interrupts.md) — The hardware interrupt flow
-- [request_irq and free_irq](request-irq.md) — Registering irqactions
-- `Documentation/core-api/genericirq.rst` — Generic IRQ subsystem design
+- [割り込み処理の概要](interrupts.md) — ハードウェア割り込みの流れ
+- [request_irqとfree_irq](request-irq.md) — irqactionの登録
+- `Documentation/core-api/genericirq.rst` — 汎用IRQサブシステムの設計

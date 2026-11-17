@@ -1,76 +1,76 @@
-# request_irq and free_irq {#requestirq-and-freeirq}
+# request_irqとfree_irq {#requestirq-and-freeirq}
 
-> Registering interrupt handlers with the kernel
+> 割り込みハンドラをカーネルに登録する
 
-## The basic API {#the-basic-api}
+## 基本的なAPI {#the-basic-api}
 
 ```c
 #include <linux/interrupt.h>
 
-/* Register an interrupt handler */
+/* 割り込みハンドラを登録する */
 int request_irq(unsigned int irq,
                 irq_handler_t handler,
                 unsigned long flags,
                 const char *name,
                 void *dev_id);
 
-/* Returns 0 on success, negative errno on failure */
+/* 成功時は0、失敗時は負のerrnoを返す */
 
-/* Unregister: dev_id must match what was passed to request_irq */
+/* 登録解除: dev_idはrequest_irqに渡したものと一致しなければならない */
 void free_irq(unsigned int irq, void *dev_id);
 
-/* Managed version: automatically freed when device is removed */
+/* 管理版: デバイスが取り外されると自動的に解放される */
 int devm_request_irq(struct device *dev, unsigned int irq,
                      irq_handler_t handler, unsigned long flags,
                      const char *name, void *dev_id);
 ```
 
-## Why this API has barely changed while everything under it has {#why-this-api-has-barely-changed-while-everything-under-it-has}
+## なぜその下のすべてが変わったのに、このAPIはほとんど変わっていないのか {#why-this-api-has-barely-changed-while-everything-under-it-has}
 
-`request_irq()`'s shape has been almost untouched since the early 2.6 series, even as the hardware it sits on top of went through IOAPIC, MSI, MSI-X, per-CPU vectors, and (on other architectures) entirely different controller families like ARM's GIC. That stability isn't an accident or a case of the API being frozen in amber — it's the direct payoff of the `irq_desc`/flow-handler/`irq_chip` separation covered on the [Interrupt Handling Overview](interrupts.md#the-irq_desc-lookup) page: because a driver's handler only ever talks to a Linux IRQ number, and everything controller-specific lives behind `irq_chip` ops the driver never touches, an entirely new interrupt controller can be plugged into the kernel without any existing driver's `request_irq()` call needing to change.
+`request_irq()`の形は、2.6系列の初期からほとんど手付かずのままである。その下にあるハードウェアは、IOAPIC、MSI、MSI-X、per-CPUベクタ、そして（他のアーキテクチャでは）ARMのGICのようなまったく異なるコントローラファミリーへと変遷してきたにもかかわらず、である。この安定性は偶然でも、APIが琥珀に閉じ込められたように凍結された結果でもない。これは[割り込み処理の概要](interrupts.md#the-irq_desc-lookup)のページで扱った`irq_desc`/フローハンドラ/`irq_chip`の分離が直接もたらした見返りである。ドライバのハンドラはLinuxのIRQ番号とだけやりとりし、コントローラ固有のものはすべてドライバが決して触れない`irq_chip`の操作の背後にあるため、既存のどのドライバの`request_irq()`呼び出しも変更することなく、まったく新しい割り込みコントローラをカーネルに組み込めるのである。
 
-The one real change to the handler signature itself is its third argument. Through Linux 2.6.18, a handler was `irqreturn_t (*)(int, void *, struct pt_regs *)` — the raw register state at the moment of interrupt was passed to every handler, "just in case." (The `irq_handler_t` typedef itself arrived just before this: a separate, immediately-preceding commit in the same October 2006 series, "IRQ: Typedef the IRQ handler function type", introduced the name for whatever the handler signature happened to be at that point.) David Howells's [*"IRQ: Maintain regs pointer globally rather than passing to IRQ handlers"*](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7d12e780e003f93433d49ce78cfedf4b4c52adc5) (October 2006) then dropped the `pt_regs` argument for 2.6.19 (confirmed via tag-diff: present at v2.6.18, gone at v2.6.19), leaving today's `irqreturn_t (*)(int, void *)`. Almost nothing actually used `regs` (the commit's own message names the real consumers: `profile_tick()` for profiling and `update_process_times()` for user-vs-kernel CPU time accounting — the kind of thing that surfaces in `/proc/stat` and per-process `/proc/<pid>/stat`, not `/proc/interrupts` — and both could get at the current register state through `get_irq_regs()` instead), and passing a live pointer into every handler was a standing invitation to misuse it for something other than its original diagnostic purpose. Removing an argument nobody needed, once there was an equally capable alternative for the handful of callers who did, is the kind of API cleanup that's much easier to justify than to reverse — which is presumably why, two decades on, it's still the only breaking change this signature has ever had.
+ハンドラのシグネチャそのものに対する唯一の本当の変更は、その第3引数である。Linux 2.6.18までは、ハンドラは`irqreturn_t (*)(int, void *, struct pt_regs *)`であり、割り込み発生時点の生のレジスタ状態が「念のため」すべてのハンドラに渡されていた。（`irq_handler_t`というtypedef自体はこの直前に登場した。同じ2006年10月のシリーズの、すぐ前にある別のコミット"IRQ: Typedef the IRQ handler function type"が、その時点でのハンドラのシグネチャが何であれ、それに名前を付けたのである。）その後、David Howellsの[*"IRQ: Maintain regs pointer globally rather than passing to IRQ handlers"*](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=7d12e780e003f93433d49ce78cfedf4b4c52adc5)（2006年10月）が2.6.19で`pt_regs`引数を削除し（タグ間の差分で確認済み: v2.6.18には存在し、v2.6.19ではなくなっている）、今日の`irqreturn_t (*)(int, void *)`が残った。実際に`regs`を使っているものはほとんどなかった（コミットメッセージ自身が本当の利用者を挙げている。プロファイリングのための`profile_tick()`と、ユーザー対カーネルのCPU時間計上のための`update_process_times()`である。これは`/proc/interrupts`ではなく`/proc/stat`やプロセスごとの`/proc/<pid>/stat`に現れる種類のものであり、どちらも代わりに`get_irq_regs()`を通じて現在のレジスタ状態を得ることができた）。そして生きたポインタをすべてのハンドラに渡すことは、本来の診断目的以外のことに悪用することを常に誘っているようなものだった。必要としていた少数の呼び出し元に同等に有能な代替手段が用意された時点で、誰も必要としない引数を削除するというのは、正当化するのは容易だが元に戻すのは難しい種類のAPI整理である。おそらくそれが、20年経った今でも、これがこのシグネチャにとって唯一の互換性を壊す変更である理由だろう。
 
-## Handler return values {#handler-return-values}
+## ハンドラの戻り値 {#handler-return-values}
 
 ```c
 typedef irqreturn_t (*irq_handler_t)(int irq, void *dev_id);
 
-#define IRQ_NONE      (0)            /* not my interrupt */
-#define IRQ_HANDLED   (1)            /* handled the interrupt */
-#define IRQ_WAKE_THREAD (2)          /* wake the threaded handler */
+#define IRQ_NONE      (0)            /* 自分の割り込みではない */
+#define IRQ_HANDLED   (1)            /* 割り込みを処理した */
+#define IRQ_WAKE_THREAD (2)          /* スレッド化ハンドラを起床させる */
 ```
 
-- Return `IRQ_NONE` if the interrupt wasn't from your device (important for shared IRQs)
-- Return `IRQ_HANDLED` when you've handled it
-- Return `IRQ_WAKE_THREAD` to wake the threaded handler (see [Threaded IRQs](threaded-irq.md))
+- 割り込みが自分のデバイスからでなければ`IRQ_NONE`を返す（共有IRQでは重要）
+- 処理したら`IRQ_HANDLED`を返す
+- スレッド化ハンドラを起床させるには`IRQ_WAKE_THREAD`を返す（[スレッド化IRQ](threaded-irq.md)を参照）
 
-## IRQF flags {#irqf-flags}
+## IRQFフラグ {#irqf-flags}
 
 ```c
-/* Trigger type (usually already configured by firmware/devicetree) */
-IRQF_TRIGGER_RISING   /* edge: low → high */
-IRQF_TRIGGER_FALLING  /* edge: high → low */
-IRQF_TRIGGER_HIGH     /* level: active high */
-IRQF_TRIGGER_LOW      /* level: active low */
+/* トリガ種別（通常はファームウェア/デバイスツリーで設定済み） */
+IRQF_TRIGGER_RISING   /* エッジ: low → high */
+IRQF_TRIGGER_FALLING  /* エッジ: high → low */
+IRQF_TRIGGER_HIGH     /* レベル: アクティブhigh */
+IRQF_TRIGGER_LOW      /* レベル: アクティブlow */
 
-/* Sharing */
-IRQF_SHARED           /* interrupt line shared with other devices */
+/* 共有 */
+IRQF_SHARED           /* 割り込みラインを他のデバイスと共有する */
 
-/* Threading */
-IRQF_ONESHOT          /* disable IRQ line until thread handler completes */
-IRQF_NO_THREAD        /* force non-threaded even if requested */
+/* スレッド化 */
+IRQF_ONESHOT          /* スレッドハンドラが完了するまでIRQラインを無効にする */
+IRQF_NO_THREAD        /* 要求されてもスレッド化しないよう強制する */
 
-/* Power management */
-IRQF_NO_SUSPEND       /* don't disable during suspend */
-IRQF_FORCE_RESUME     /* force-enable on resume even if disabled */
+/* 電源管理 */
+IRQF_NO_SUSPEND       /* サスペンド中も無効にしない */
+IRQF_FORCE_RESUME     /* 無効化されていてもレジューム時に強制的に有効にする */
 
-/* Misc */
-IRQF_NOBALANCING      /* exclude from IRQ balancing */
-IRQF_PERCPU           /* per-CPU interrupt */
+/* その他 */
+IRQF_NOBALANCING      /* IRQバランシングの対象から外す */
+IRQF_PERCPU           /* per-CPU割り込み */
 ```
 
-## A minimal driver example {#a-minimal-driver-example}
+## 最小限のドライバの例 {#a-minimal-driver-example}
 
 ```c
 #include <linux/interrupt.h>
@@ -87,17 +87,17 @@ static irqreturn_t my_irq_handler(int irq, void *dev_id)
     struct my_device *dev = dev_id;
     u32 status;
 
-    /* Read interrupt status register */
+    /* 割り込みステータスレジスタを読む */
     status = readl(dev->regs + STATUS_REG);
 
-    /* Check if this is our interrupt */
+    /* 自分の割り込みかどうかを確認する */
     if (!(status & MY_IRQ_BIT))
         return IRQ_NONE;
 
-    /* Acknowledge (clear) the interrupt */
+    /* 割り込みを受領通知（クリア）する */
     writel(MY_IRQ_BIT, dev->regs + STATUS_CLEAR_REG);
 
-    /* Do minimal work here — queue deferred processing */
+    /* ここでは最小限の処理だけを行い、遅延処理をキューに積む */
     schedule_work(&dev->work);
 
     return IRQ_HANDLED;
@@ -115,7 +115,7 @@ static int my_driver_probe(struct platform_device *pdev)
 
     INIT_WORK(&dev->work, my_work_handler);
 
-    /* devm_request_irq: automatically freed when device is removed */
+    /* devm_request_irq: デバイスが取り外されると自動的に解放される */
     ret = devm_request_irq(&pdev->dev, dev->irq, my_irq_handler,
                            0, dev_name(&pdev->dev), dev);
     if (ret) {
@@ -127,74 +127,74 @@ static int my_driver_probe(struct platform_device *pdev)
 }
 ```
 
-## Shared IRQs {#shared-irqs}
+## 共有IRQ {#shared-irqs}
 
-On legacy systems (e.g., PCI INTx), multiple devices share a single IRQ line. Each registers with `IRQF_SHARED`:
+レガシーなシステム（例: PCI INTx）では、複数のデバイスが1本のIRQラインを共有する。それぞれが`IRQF_SHARED`付きで登録する。
 
 ```c
-/* Both devices register on the same IRQ */
+/* 両方のデバイスが同じIRQに登録する */
 request_irq(irq, handler_a, IRQF_SHARED, "device-a", dev_a);
 request_irq(irq, handler_b, IRQF_SHARED, "device-b", dev_b);
 
-/* When the IRQ fires, both handlers are called in sequence:
-   kernel calls handler_a(irq, dev_a), then handler_b(irq, dev_b)
-   Each must check its own hardware status register and return IRQ_NONE
-   if not its interrupt */
+/* IRQが発火すると、両方のハンドラが順に呼ばれる:
+   カーネルはhandler_a(irq, dev_a)を呼び、次にhandler_b(irq, dev_b)を呼ぶ
+   各ハンドラは自分のハードウェアのステータスレジスタを確認し、
+   自分の割り込みでなければIRQ_NONEを返さなければならない */
 ```
 
-Requirements for shared IRQs:
-1. `IRQF_SHARED` must be set by all sharing drivers
-2. `dev_id` must be unique (typically the device struct pointer)
-3. Each handler must be able to determine if it was its device
+共有IRQの要件:
+1. 共有するすべてのドライバが`IRQF_SHARED`を設定しなければならない
+2. `dev_id`は一意でなければならない（通常はデバイス構造体へのポインタ）
+3. 各ハンドラは、それが自分のデバイスからのものかを判定できなければならない
 
 ## disable_irq / enable_irq {#disableirq-enableirq}
 
 ```c
-/* Disable an IRQ and wait for any running handler to complete */
-disable_irq(irq);          /* sleeps until handler done */
-disable_irq_nosync(irq);   /* returns immediately */
+/* IRQを無効にし、実行中のハンドラの完了を待つ */
+disable_irq(irq);          /* ハンドラが終わるまでスリープする */
+disable_irq_nosync(irq);   /* すぐに戻る */
 
-/* Re-enable */
+/* 再度有効にする */
 enable_irq(irq);
 
-/* Balanced: nested calls (depth counter) */
+/* 対になる: ネストした呼び出し（depthカウンタ） */
 disable_irq(irq);  /* depth=1 */
 disable_irq(irq);  /* depth=2 */
-enable_irq(irq);   /* depth=1, still disabled */
-enable_irq(irq);   /* depth=0, now enabled */
+enable_irq(irq);   /* depth=1、まだ無効 */
+enable_irq(irq);   /* depth=0、ここで有効になる */
 ```
 
-`disable_irq()` increments `irq_desc->depth`. The IRQ is physically disabled when `depth` goes from 0 to 1 (first disable call) and re-enabled when it returns to 0 (last enable call).
+`disable_irq()`は`irq_desc->depth`をインクリメントする。IRQが物理的に無効化されるのは`depth`が0から1になったとき（最初のdisable呼び出し）であり、0に戻ったとき（最後のenable呼び出し）に再度有効化される。
 
 ## synchronize_irq {#synchronize_irq}
 
-`free_irq()` already calls `synchronize_irq()` internally before returning, so any in-flight handlers are guaranteed complete when `free_irq()` returns:
+`free_irq()`は戻る前に内部で`synchronize_irq()`をすでに呼んでいるため、`free_irq()`が戻った時点で、実行中だったハンドラはすべて完了していることが保証される。
 
 ```c
 free_irq(dev->irq, dev);
-/* safe to free dev — free_irq() waited for in-flight handlers */
+/* devを解放しても安全。free_irq()が実行中のハンドラを待った */
 ```
 
-`devm_request_irq()` handles this automatically at device removal, so prefer it over manual `request_irq()` + `free_irq()`.
+`devm_request_irq()`はデバイスの取り外し時にこれを自動的に処理するため、手動の`request_irq()` + `free_irq()`よりもこちらを優先すべきである。
 
-## Getting the IRQ number {#getting-the-irq-number}
+## IRQ番号の取得 {#getting-the-irq-number}
 
 ```c
-/* From platform resources */
+/* プラットフォームリソースから */
 irq = platform_get_irq(pdev, 0);
 
-/* From device tree */
+/* デバイスツリーから */
 irq = of_irq_get(np, 0);
 
-/* From PCI */
-irq = pci_irq_vector(pdev, 0);  /* MSI or legacy */
+/* PCIから */
+irq = pci_irq_vector(pdev, 0);  /* MSIまたはレガシー */
 
-/* From GPIO */
+/* GPIOから */
 irq = gpiod_to_irq(gpio);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [IRQ Descriptor and irq_chip](irq-desc.md) — What's registered under the hood
-- [Threaded IRQs](threaded-irq.md) — Moving work out of hardirq context
-- [Workqueues](workqueues.md) — For deferred work from interrupt handlers
+- [IRQディスクリプタとirq_chip](irq-desc.md) — 内部で何が登録されているか
+- [スレッド化IRQ](threaded-irq.md) — 処理をhardirqコンテキストの外へ移す
+- [Workqueue](workqueues.md) — 割り込みハンドラからの遅延処理向け

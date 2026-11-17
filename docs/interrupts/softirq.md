@@ -1,135 +1,135 @@
-# Softirqs {#softirqs}
+# Softirq {#softirqs}
 
-> The kernel's high-priority deferred work mechanism
+> カーネルの高優先度な遅延処理機構
 
-## From bottom halves to softirqs to threaded IRQs {#from-bottom-halves-to-softirqs-to-threaded-irqs}
+## ボトムハーフからsoftirq、そしてスレッド化IRQへ {#from-bottom-halves-to-softirqs-to-threaded-irqs}
 
-Interrupt deferral in Linux has gone through three generations, each addressing the limitations of the previous.
+Linuxにおける割り込み処理の遅延は3つの世代を経てきており、それぞれが前の世代の制約に対処してきた。
 
-### Bottom halves (Linux 2.0–2.3) {#bottom-halves-linux-2023}
+### ボトムハーフ（Linux 2.0〜2.3） {#bottom-halves-linux-2023}
 
-The original deferred-work mechanism was called "bottom halves" (BH). The model: an interrupt handler (the "top half") does minimal work and marks a BH for later execution. At the next safe moment, the kernel runs the marked BHs.
+最初の遅延処理機構は「ボトムハーフ」（BH）と呼ばれていた。そのモデルは次のとおりである。割り込みハンドラ（「トップハーフ」）は最小限の処理だけを行い、後で実行するBHに印を付ける。次に安全なタイミングで、カーネルが印の付いたBHを実行する。
 
-The fatal flaw: **only one BH could run anywhere in the system at a time**, protected by a global spinlock. On an SMP machine, this meant all CPUs serialized through one lock to run BH handlers. Network receive on CPU 0 blocked timer processing on CPU 1. As SMP systems became common in the late 1990s, the BH model became a scalability bottleneck.
+致命的な欠陥は、**システム全体で同時に実行できるBHは1つだけ**であり、それがグローバルなspinlockで保護されていたことである。SMPマシンでは、BHハンドラを実行するためにすべてのCPUが1つのロックを通じて直列化されることを意味した。CPU 0でのネットワーク受信が、CPU 1でのタイマー処理をブロックした。1990年代後半にSMPシステムが一般的になるにつれ、BHモデルはスケーラビリティのボトルネックになった。
 
-There were also only 32 BH slots, statically defined — no driver could add its own.
+また、BHのスロットは静的に定義された32個しかなく、ドライバが独自のものを追加することはできなかった。
 
-### Softirqs (Linux 2.3, SMP rewrite) {#softirqs-linux-23-smp-rewrite}
+### Softirq（Linux 2.3、SMP向けの書き直し） {#softirqs-linux-23-smp-rewrite}
 
-Softirqs replaced BHs in Linux 2.3 during the SMP scalability push. The key change: **multiple softirqs can run in parallel on different CPUs**. `NET_RX_SOFTIRQ` on CPU 0 no longer blocks `TIMER_SOFTIRQ` on CPU 1.
+softirqは、SMPスケーラビリティ向上の取り組みの中でLinux 2.3においてBHを置き換えた。重要な変更点は、**複数のsoftirqが異なるCPU上で並列に実行できる**ことである。CPU 0の`NET_RX_SOFTIRQ`が、CPU 1の`TIMER_SOFTIRQ`をブロックすることはもはやない。
 
-The trade-off: because softirqs can run in parallel, softirq handlers themselves must be reentrant and use per-CPU data or spinlocks for any shared state. This was too difficult to ask of every driver author, so softirqs remained limited to statically-defined, heavily-audited subsystem code.
+そのトレードオフとして、softirqは並列に実行されうるため、softirqハンドラ自身はリエントラントでなければならず、共有状態にはper-CPUデータかspinlockを使わなければならない。これはすべてのドライバ作者に求めるには難しすぎたため、softirqは静的に定義され、厳しく監査されたサブシステムのコードに限定されたままとなった。
 
-Tasklets (built on `TASKLET_SOFTIRQ`) were added to give drivers a way to defer work into softirq context without needing to be reentrant — a tasklet is guaranteed to run on only one CPU at a time, but different tasklets can run in parallel.
+tasklet（`TASKLET_SOFTIRQ`の上に構築されている）は、リエントラントである必要なしに処理をsoftirqコンテキストへ遅延させる手段をドライバに与えるために追加された。taskletは同時に1つのCPU上でしか実行されないことが保証されるが、異なるtaskletどうしは並列に実行されうる。
 
-### Threaded IRQs (Linux 2.6.30, 2009) {#threaded-irqs-linux-2630-2009}
+### スレッド化IRQ（Linux 2.6.30、2009年） {#threaded-irqs-linux-2630-2009}
 
-Tasklets solved the reentrance problem but created new ones: tasklets run in softirq context, which means they cannot sleep, must complete quickly, and run with `bh_disable()` semantics that cause scheduling latency for high-priority processes.
+taskletはリエントランシーの問題を解決したが、新たな問題を生んだ。taskletはsoftirqコンテキストで動作するため、スリープできず、素早く完了しなければならず、さらに`bh_disable()`のセマンティクスで動作するため高優先度プロセスのスケジューリングレイテンシを引き起こす。
 
-Thomas Gleixner introduced threaded IRQ handlers as a better model for most drivers [(commit)](https://git.kernel.org/linus/3aa551c9b4c40018f0e261a178e3d25478dc04a9) [(LWN)](https://lwn.net/Articles/302043/). With `IRQF_THREAD`, the interrupt handler runs as a kernel thread rather than in hardirq/softirq context:
+Thomas Gleixnerは、ほとんどのドライバにとってより良いモデルとしてスレッド化IRQハンドラを導入した[(commit)](https://git.kernel.org/linus/3aa551c9b4c40018f0e261a178e3d25478dc04a9) [(LWN)](https://lwn.net/Articles/302043/)。`IRQF_THREAD`を使うと、割り込みハンドラはhardirq/softirqコンテキストではなくカーネルスレッドとして動作する。
 
-- The handler **can sleep** (mutex, allocate with GFP_KERNEL, etc.)
-- It has a **schedulable priority** — RT systems can give it the right priority
-- On `CONFIG_PREEMPT_RT`, all softirq processing (including timers) runs in threads, making the system fully preemptible
+- ハンドラは**スリープできる**（mutex、GFP_KERNELでの割り当てなど）
+- **スケジュール可能な優先度**を持つ。RTシステムでは適切な優先度を与えられる
+- `CONFIG_PREEMPT_RT`では、すべてのsoftirq処理（タイマーを含む）がスレッドで動作し、システムが完全にプリエンプト可能になる
 
-Tasklets were explicitly deprecated for new use in Linux 5.9 (2020) [(LWN)](https://lwn.net/Articles/830964/) — see [Tasklets](tasklets.md#the-deprecation-nobody-planned-to-start-then-couldnt-finish) for the deprecation debate itself. The recommendation for new driver code is: use threaded IRQs or regular workqueues if the handler can sleep and needs process context, or a `WQ_BH` workqueue if it must stay in atomic (softirq-like) context the way a tasklet did — `WQ_BH` is the more direct mechanical replacement for that fast-path case, not a process-context alternative. Tasklets remain for existing drivers but should not appear in new code.
+taskletは、Linux 5.9（2020年）で新規の使用について明示的に非推奨とされた[(LWN)](https://lwn.net/Articles/830964/)。非推奨化をめぐる議論そのものについては[Tasklet](tasklets.md#the-deprecation-nobody-planned-to-start-then-couldnt-finish)を参照。新しいドライバコードに対する推奨は次のとおりである。ハンドラがスリープでき、プロセスコンテキストを必要とするならスレッド化IRQか通常のworkqueueを使い、taskletと同じようにアトミックな（softirqに似た）コンテキストに留まらなければならないなら`WQ_BH` workqueueを使う。`WQ_BH`は、その高速パスのケースに対するより直接的で機械的な置き換えであり、プロセスコンテキストの代替手段ではない。taskletは既存のドライバには残っているが、新しいコードに現れるべきではない。
 
-## What are softirqs? {#what-are-softirqs}
+## softirqとは何か {#what-are-softirqs}
 
-Softirqs (software interrupts) are the lowest-level deferred execution mechanism in the kernel. Unlike hardirq handlers that run with interrupts disabled, softirqs run with interrupts **enabled** — they're preemptible by hardirqs but not by other softirqs on the same CPU.
+softirq（ソフトウェア割り込み）は、カーネルで最も低レベルな遅延実行機構である。割り込みを無効にして動作するhardirqハンドラと異なり、softirqは割り込みが**有効**な状態で動作する。hardirqによってプリエンプトされうるが、同じCPU上の他のsoftirqによってプリエンプトされることはない。
 
-Softirqs are statically defined: there are exactly 10 softirq types, registered at boot. New types cannot be added dynamically. Drivers don't use softirqs directly — they use [tasklets](tasklets.md) or [workqueues](workqueues.md) instead.
+softirqは静的に定義されている。softirqの種類はちょうど10個で、ブート時に登録される。新しい種類を動的に追加することはできない。ドライバはsoftirqを直接使わず、代わりに[tasklet](tasklets.md)や[workqueue](workqueues.md)を使う。
 
-## The 10 softirq types {#the-10-softirq-types}
+## 10種類のsoftirq {#the-10-softirq-types}
 
 ```c
 /* include/linux/interrupt.h */
 enum {
-    HI_SOFTIRQ      = 0,  /* high-priority tasklets */
-    TIMER_SOFTIRQ   = 1,  /* timer wheel expiry */
-    NET_TX_SOFTIRQ  = 2,  /* network transmit */
-    NET_RX_SOFTIRQ  = 3,  /* network receive (NAPI) */
-    BLOCK_SOFTIRQ   = 4,  /* block layer completions */
-    IRQ_POLL_SOFTIRQ= 5,  /* IRQ poll (blk-mq) */
-    TASKLET_SOFTIRQ = 6,  /* normal-priority tasklets */
-    SCHED_SOFTIRQ   = 7,  /* scheduler (load balancing) */
-    HRTIMER_SOFTIRQ = 8,  /* high-resolution timer */
-    RCU_SOFTIRQ     = 9,  /* RCU callbacks */
+    HI_SOFTIRQ      = 0,  /* 高優先度のtasklet */
+    TIMER_SOFTIRQ   = 1,  /* タイマーホイールの満了 */
+    NET_TX_SOFTIRQ  = 2,  /* ネットワーク送信 */
+    NET_RX_SOFTIRQ  = 3,  /* ネットワーク受信（NAPI） */
+    BLOCK_SOFTIRQ   = 4,  /* ブロック層の完了処理 */
+    IRQ_POLL_SOFTIRQ= 5,  /* IRQポーリング（blk-mq） */
+    TASKLET_SOFTIRQ = 6,  /* 通常優先度のtasklet */
+    SCHED_SOFTIRQ   = 7,  /* スケジューラ（負荷分散） */
+    HRTIMER_SOFTIRQ = 8,  /* 高分解能タイマー */
+    RCU_SOFTIRQ     = 9,  /* RCUコールバック */
     NR_SOFTIRQS
 };
 ```
 
-The number is the **priority** — lower number runs first. `HI_SOFTIRQ` (priority 0) for high-priority tasklets always preempts `TASKLET_SOFTIRQ` (priority 6) for normal tasklets.
+番号は**優先度**であり、番号が小さいほど先に実行される。高優先度tasklet用の`HI_SOFTIRQ`（優先度0）は、通常のtasklet用の`TASKLET_SOFTIRQ`（優先度6）より常に先に実行される。
 
-## How softirqs are triggered {#how-softirqs-are-triggered}
+## softirqはどのように起動されるか {#how-softirqs-are-triggered}
 
-A softirq is raised by calling `raise_softirq()`, which sets a bit in the per-CPU `__softirq_pending` bitmask:
+softirqは`raise_softirq()`を呼ぶことで発生させる。これはper-CPUの`__softirq_pending`ビットマスクのビットを立てる。
 
 ```c
-/* Raise a softirq (can call from hardirq context) */
+/* softirqを発生させる（hardirqコンテキストから呼べる） */
 raise_softirq(NET_RX_SOFTIRQ);
 
-/* Variant for use when IRQs are already disabled */
+/* IRQがすでに無効化されているときに使う版 */
 raise_softirq_irqoff(NET_TX_SOFTIRQ);
 ```
 
-## When softirqs run {#when-softirqs-run}
+## softirqはいつ実行されるか {#when-softirqs-run}
 
-Softirqs are processed at three points:
+softirqは3つの時点で処理される。
 
-1. **After a hardirq handler returns** (`irq_exit_rcu()`)
-2. **In ksoftirqd threads** when softirqs are too frequent
-3. **Explicitly** in `local_bh_enable()` when bottom halves are re-enabled
+1. **hardirqハンドラが戻った後**（`irq_exit_rcu()`）
+2. softirqの頻度が高すぎる場合は**ksoftirqdスレッド内**で
+3. ボトムハーフが再度有効化されたときに`local_bh_enable()`内で**明示的に**
 
-The `__do_softirq()` → `handle_softirqs()` loop:
+`__do_softirq()` → `handle_softirqs()`のループ:
 
 ```c
-/* kernel/softirq.c (simplified) */
+/* kernel/softirq.c（簡略化） */
 static void handle_softirqs(bool ksirqd)
 {
     __u32 pending = local_softirq_pending();
 
-    /* Enable IRQs (softirqs run with interrupts enabled) */
+    /* IRQを有効にする（softirqは割り込みが有効な状態で動作する） */
     local_irq_enable();
 
-    /* Process each pending softirq in priority order */
+    /* 保留中の各softirqを優先度順に処理する */
     while ((softirq_bit = ffs(pending))) {
         h = &softirq_vec[softirq_bit - 1];
-        h->action();    /* call the registered handler */
+        h->action();    /* 登録されたハンドラを呼ぶ */
         pending >>= softirq_bit;
     }
 
     local_irq_disable();
 
-    /* If more softirqs pending and time allows, restart */
+    /* さらにsoftirqが保留中で時間に余裕があれば、やり直す */
     if (pending) {
         if (time_before(jiffies, end) && !need_resched() && --max_restart)
             goto restart;
-        /* Otherwise, wake ksoftirqd */
+        /* そうでなければksoftirqdを起床させる */
         wakeup_softirqd();
     }
 }
 ```
 
-The loop limits to `MAX_SOFTIRQ_RESTART` (10) iterations before waking `ksoftirqd`, preventing softirqs from starving processes indefinitely.
+このループは`ksoftirqd`を起床させる前に`MAX_SOFTIRQ_RESTART`（10）回の反復に制限されており、softirqがプロセスを無期限に飢餓状態にすることを防いでいる。
 
 ## ksoftirqd {#ksoftirqd}
 
-When softirqs are too frequent (high network load, many timers), the loop would run too long. Instead, the kernel wakes `ksoftirqd/N` — one per CPU — which is a kernel thread at `SCHED_NORMAL` priority that drains pending softirqs:
+softirqの頻度が高すぎる場合（高いネットワーク負荷、多数のタイマー）、ループの実行時間が長くなりすぎる。代わりにカーネルは`ksoftirqd/N`（CPUごとに1つ）を起床させる。これは`SCHED_NORMAL`優先度のカーネルスレッドで、保留中のsoftirqを処理しきる。
 
 ```bash
-# ksoftirqd threads: one per CPU
+# ksoftirqdスレッド: CPUごとに1つ
 ps aux | grep ksoftirqd
 # root         9  0.0  0.0      0     0 ?   S    10:00   0:01 [ksoftirqd/0]
 # root        18  0.0  0.0      0     0 ?   S    10:00   0:00 [ksoftirqd/1]
 ```
 
-Since `ksoftirqd` is a normal process, it can be preempted by user tasks, preventing livelock. High CPU usage by `ksoftirqd` indicates the system is processing many interrupts.
+`ksoftirqd`は通常のプロセスなので、ユーザータスクによってプリエンプトされうる。これによりライブロックが防がれる。`ksoftirqd`のCPU使用率が高いことは、システムが多くの割り込みを処理していることを示す。
 
-## Checking softirq activity {#checking-softirq-activity}
+## softirqの動作の確認 {#checking-softirq-activity}
 
 ```bash
-# Per-CPU softirq counts
+# CPUごとのsoftirq回数
 cat /proc/softirqs
 #                     CPU0       CPU1       CPU2       CPU3
 #           HI:          1          1          1          1
@@ -143,46 +143,46 @@ cat /proc/softirqs
 #      HRTIMER:      12345      12234      12123      12234
 #          RCU:    4567890    4567234    4567123    4567456
 
-# NET_RX high = heavy network receive
-# TASKLET high = many driver tasklets
-# RCU high = many RCU callbacks being processed
+# NET_RXが高い = ネットワーク受信が多い
+# TASKLETが高い = ドライバのtaskletが多い
+# RCUが高い = 多数のRCUコールバックが処理されている
 ```
 
-## Registering a softirq handler (kernel subsystems only) {#registering-a-softirq-handler-kernel-subsystems-only}
+## softirqハンドラの登録（カーネルサブシステムのみ） {#registering-a-softirq-handler-kernel-subsystems-only}
 
 ```c
-/* At boot time only (not from drivers) */
+/* ブート時のみ（ドライバからではない） */
 open_softirq(MY_SOFTIRQ_NR, my_softirq_action);
 
-/* The handler signature */
+/* ハンドラのシグネチャ */
 static void my_softirq_action(void)
 {
-    /* Process work for this CPU */
-    /* Runs with IRQs enabled, preemptible by hardirqs */
-    /* Cannot sleep */
+    /* このCPUの処理を行う */
+    /* IRQが有効な状態で動作し、hardirqによってプリエンプトされうる */
+    /* スリープできない */
 }
 ```
 
-Drivers should use tasklets or workqueues instead — never add a new softirq type.
+ドライバは代わりにtaskletかworkqueueを使うべきであり、新しいsoftirqの種類を追加してはならない。
 
 ## local_bh_disable / local_bh_enable {#localbhdisable-localbhenable}
 
-Code that shares data with softirq handlers must disable softirqs on the local CPU while accessing the data:
+softirqハンドラとデータを共有するコードは、そのデータにアクセスする間、ローカルCPUでsoftirqを無効にしなければならない。
 
 ```c
-/* Disable softirqs (and tasklets) on this CPU */
+/* このCPUでsoftirq（とtasklet）を無効にする */
 local_bh_disable();
-/* Access data shared with softirq handler */
-local_bh_enable();  /* re-enables, runs pending softirqs */
+/* softirqハンドラと共有するデータにアクセスする */
+local_bh_enable();  /* 再度有効にし、保留中のsoftirqを実行する */
 
-/* spin_lock_bh: spinlock + local_bh_disable in one call */
+/* spin_lock_bh: spinlock + local_bh_disableを1回の呼び出しで */
 spin_lock_bh(&my_lock);
-/* safe to access data that softirq also touches */
+/* softirqも触るデータに安全にアクセスできる */
 spin_unlock_bh(&my_lock);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Tasklets](tasklets.md) — The driver-accessible wrapper around softirqs
-- [Workqueues](workqueues.md) — When you need to sleep in deferred work
-- [Network Device and NAPI](../net/napi.md) — NET_RX_SOFTIRQ in practice
+- [Tasklet](tasklets.md) — ドライバから利用できるsoftirqのラッパー
+- [Workqueue](workqueues.md) — 遅延処理の中でスリープする必要がある場合
+- [ネットワークデバイスとNAPI](../net/napi.md) — 実際のNET_RX_SOFTIRQ

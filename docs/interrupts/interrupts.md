@@ -1,10 +1,10 @@
-# Interrupt Handling Overview {#interrupt-handling-overview}
+# 割り込み処理の概要 {#interrupt-handling-overview}
 
-> From hardware signal to kernel handler: the complete path
+> ハードウェアの信号からカーネルのハンドラまで: その全経路
 
-## What happens when hardware sends an interrupt {#what-happens-when-hardware-sends-an-interrupt}
+## ハードウェアが割り込みを送ると何が起きるか {#what-happens-when-hardware-sends-an-interrupt}
 
-On x86, the interrupt flow:
+x86での割り込みの流れは次のとおりである。
 
 ```
 Hardware device asserts IRQ line
@@ -26,9 +26,9 @@ irq_exit_rcu() checks if softirqs are pending
   If yes: invoke_softirq() → __do_softirq()
 ```
 
-## The IDT and interrupt vectors {#the-idt-and-interrupt-vectors}
+## IDTと割り込みベクタ {#the-idt-and-interrupt-vectors}
 
-The x86 Interrupt Descriptor Table (IDT) has 256 entries, each pointing to a handler:
+x86の割り込み記述子テーブル（IDT）は256エントリを持ち、それぞれがハンドラを指している。
 
 ```
 Vectors 0-31:   CPU exceptions (divide by zero, page fault, etc.)
@@ -37,61 +37,61 @@ Vector 128:     System call (int 0x80, legacy)
 Vectors 129-255: Other IPIs, local APIC, MSI
 ```
 
-Each IDT entry specifies privilege level, segment, and handler address. When an interrupt fires, the CPU indexes into the IDT to find the handler.
+各IDTエントリは、特権レベル、セグメント、ハンドラのアドレスを指定する。割り込みが発火すると、CPUはIDTを索引してハンドラを見つける。
 
-## Interrupt entry: irq_enter and irq_exit {#interrupt-entry-irqenter-and-irqexit}
+## 割り込みの入口: irq_enterとirq_exit {#interrupt-entry-irqenter-and-irqexit}
 
-The kernel tracks whether it's in interrupt context with per-CPU counters in `preempt_count`:
+カーネルは、自分が割り込みコンテキストにいるかどうかを`preempt_count`内のper-CPUカウンタで追跡する。
 
 ```c
 /* include/linux/preempt.h */
 #define SOFTIRQ_SHIFT   (PREEMPT_SHIFT + PREEMPT_BITS)
 #define HARDIRQ_SHIFT   (SOFTIRQ_SHIFT + SOFTIRQ_BITS)
 
-/* preempt_count layout:
-   bits 0-7:  preempt count
-   bits 8-15: softirq count
-   bits 16-19: hardirq count
-   bit 20+: NMI count
+/* preempt_countのレイアウト:
+   ビット0-7:  プリエンプションカウント
+   ビット8-15: softirqカウント
+   ビット16-19: hardirqカウント
+   ビット20以降: NMIカウント
 */
 
-#define in_hardirq()  (hardirq_count())  /* in hardirq handler */
-#define in_softirq()  (softirq_count())  /* in softirq handler */
-#define in_interrupt() (irq_count())     /* in any interrupt context */
+#define in_hardirq()  (hardirq_count())  /* hardirqハンドラ内 */
+#define in_softirq()  (softirq_count())  /* softirqハンドラ内 */
+#define in_interrupt() (irq_count())     /* いずれかの割り込みコンテキスト内 */
 ```
 
-`irq_enter()` increments the hardirq count; `irq_exit()` decrements it and runs pending softirqs if we're returning to process context:
+`irq_enter()`はhardirqカウントをインクリメントする。`irq_exit()`はそれをデクリメントし、プロセスコンテキストに戻る場合には保留中のsoftirqを実行する。
 
 ```c
-/* kernel/softirq.c (simplified) */
+/* kernel/softirq.c（簡略化） */
 void irq_exit_rcu(void)
 {
-    /* Decrement hardirq nesting count */
+    /* hardirqのネストカウントをデクリメントする */
     preempt_count_sub(HARDIRQ_OFFSET);
 
-    /* Run softirqs if we're back in process context */
+    /* プロセスコンテキストに戻っていればsoftirqを実行する */
     if (!in_interrupt() && local_softirq_pending())
         invoke_softirq();
 
     tick_irq_exit();
-    /* Note: rcu_irq_exit() and trace_hardirq_exit() are NOT called here —
-     * the _rcu suffix means the caller manages RCU idle-state transitions */
+    /* 注意: rcu_irq_exit()とtrace_hardirq_exit()はここでは呼ばれない。
+     * _rcu接尾辞は、呼び出し元がRCUのアイドル状態遷移を管理することを意味する */
 }
 ```
 
-## The irq_desc lookup {#the-irq_desc-lookup}
+## irq_descの検索 {#the-irq_desc-lookup}
 
-From the interrupt vector, the kernel finds the `irq_desc` (interrupt descriptor):
+カーネルは割り込みベクタから`irq_desc`（割り込みディスクリプタ）を見つける。
 
 ```c
-/* arch/x86/kernel/irq.c (simplified) */
+/* arch/x86/kernel/irq.c（簡略化） */
 __visible void __irq_entry common_interrupt(struct pt_regs *regs, u64 vector)
 {
     struct irq_desc *desc;
 
     irq_enter_rcu();
 
-    /* Convert CPU vector → Linux IRQ number → irq_desc */
+    /* CPUベクタ → Linux IRQ番号 → irq_descに変換する */
     desc = __this_cpu_read(vector_irq[vector]);
     if (likely(!IS_ERR_OR_NULL(desc)))
         handle_irq(desc, regs);
@@ -100,36 +100,36 @@ __visible void __irq_entry common_interrupt(struct pt_regs *regs, u64 vector)
 }
 ```
 
-`handle_irq(desc, regs)` doesn't run one universal handler — it calls whichever *flow handler* is stored in `desc->handle_irq` for this specific interrupt (`handle_level_irq`, `handle_edge_irq`, `handle_fasteoi_irq`, and a handful of others). That indirection exists because of a design that didn't scale: the original Linux interrupt core used a single `__do_IRQ()` "super-handler" that tried to cope with every controller's quirks — level-triggered, edge-triggered, per-CPU, fast-EOI — inside one function, dispatching internally via `hw_interrupt_type` callback structs. As more interrupt controller types accumulated across architectures, that produced real duplication: x86 alone needed both an `ioapic_level_irq` and an `ioapic_edge_irq` variant that shared most of their low-level detail but differed in flow control. Analysis across architectures found the same handful of flow categories — level, edge, simple, fast-EOI — recurring everywhere, which is what made a single shared set of flow handlers usable by every architecture instead of each reinventing its own ([Documentation/core-api/genericirq.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/genericirq.rst)).
+`handle_irq(desc, regs)`は1つの汎用ハンドラを実行するのではない。この特定の割り込みについて`desc->handle_irq`に格納されている*フローハンドラ*（`handle_level_irq`、`handle_edge_irq`、`handle_fasteoi_irq`、その他いくつか）を呼び出す。この間接化が存在するのは、スケールしなかった設計があったからである。元のLinuxの割り込みコアは、単一の`__do_IRQ()`という「スーパーハンドラ」を使い、レベルトリガ、エッジトリガ、per-CPU、fast-EOIといったあらゆるコントローラの癖を1つの関数の中で処理しようとし、内部では`hw_interrupt_type`のコールバック構造体を介してディスパッチしていた。アーキテクチャをまたいで割り込みコントローラの種類が増えるにつれ、これは実際の重複を生んだ。x86だけでも、低レベルの詳細のほとんどを共有しながらフロー制御だけが異なる`ioapic_level_irq`と`ioapic_edge_irq`の2つの変種が必要だった。アーキテクチャ横断で分析すると、レベル、エッジ、シンプル、fast-EOIという同じ少数のフローの分類がどこにでも繰り返し現れることがわかった。これこそが、各アーキテクチャが独自のものを再発明する代わりに、共有された1組のフローハンドラをすべてのアーキテクチャで使えるようにしたものである（[Documentation/core-api/genericirq.rst](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/genericirq.rst)）。
 
-Russell King had already identified the real categories — level, edge, simple, and (later) fast-EOI — while building ARM's interrupt handling for the 2.5/2.6 development series. Thomas Gleixner generalized that split into the current `irq_desc`/flow-handler/`irq_chip` architecture across all architectures in 2005–2006 (`kernel/irq/handle.c`'s own header credits "Copyright (C) 2005-2006, Thomas Gleixner, Russell King" for that generalization, alongside the older "Copyright (C) 1992, 1998-2006 Linus Torvalds, Ingo Molnar" line for the file's original pre-genirq history — see [IRQ Descriptor and irq_chip](irq-desc.md) for the resulting structures in depth). The payoff of separating "how does this interrupt's lifecycle flow" (the flow handler) from "how do I talk to this specific piece of hardware" (the `irq_chip` ops) is exactly what makes `common_interrupt()` above so short: it doesn't need to know anything about IOAPIC, GIC, or MSI at all. That knowledge lives entirely behind `desc->handle_irq` and `desc->irq_data.chip`, which is also what makes it possible for one `common_interrupt()` to serve every interrupt-controller type a given architecture supports.
+Russell Kingは、2.5/2.6開発系列向けにARMの割り込み処理を構築する中で、実際の分類（レベル、エッジ、シンプル、そして（後に）fast-EOI）をすでに特定していた。Thomas Gleixnerは2005〜2006年に、その分割を全アーキテクチャにまたがる現在の`irq_desc`/フローハンドラ/`irq_chip`のアーキテクチャへと一般化した（`kernel/irq/handle.c`自身のヘッダは、この一般化について"Copyright (C) 2005-2006, Thomas Gleixner, Russell King"とクレジットしており、ファイルのgenirq以前の元の歴史については古い"Copyright (C) 1992, 1998-2006 Linus Torvalds, Ingo Molnar"の行が並んでいる。結果として生まれた構造体の詳細は[IRQディスクリプタとirq_chip](irq-desc.md)を参照）。「この割り込みのライフサイクルがどう流れるか」（フローハンドラ）と「この特定のハードウェアとどう通信するか」（`irq_chip`の操作）を分離したことの見返りこそが、上の`common_interrupt()`をこれほど短くしている。この関数はIOAPICやGIC、MSIについて何も知る必要がない。その知識はすべて`desc->handle_irq`と`desc->irq_data.chip`の背後にあり、これによって1つの`common_interrupt()`が、そのアーキテクチャがサポートするあらゆる種類の割り込みコントローラに対応できるのである。
 
-## Interrupt context restrictions {#interrupt-context-restrictions}
+## 割り込みコンテキストの制約 {#interrupt-context-restrictions}
 
-Code running in hardirq context must follow strict rules:
+hardirqコンテキストで動作するコードは、厳格なルールに従わなければならない。
 
 ```c
-/* DON'T: sleep in interrupt context */
+/* してはいけない: 割り込みコンテキストでスリープする */
 irqreturn_t my_handler(int irq, void *dev)
 {
-    msleep(1);           /* BUG: may sleep */
-    kmalloc(sz, GFP_KERNEL);  /* BUG: may sleep */
-    mutex_lock(&m);      /* BUG: may sleep */
+    msleep(1);           /* バグ: スリープしうる */
+    kmalloc(sz, GFP_KERNEL);  /* バグ: スリープしうる */
+    mutex_lock(&m);      /* バグ: スリープしうる */
     return IRQ_HANDLED;
 }
 
-/* DO: use non-sleeping alternatives */
+/* すべきこと: スリープしない代替手段を使う */
 irqreturn_t my_handler(int irq, void *dev)
 {
-    kmalloc(sz, GFP_ATOMIC);  /* never sleeps */
-    spin_lock(&s);             /* doesn't sleep */
+    kmalloc(sz, GFP_ATOMIC);  /* 決してスリープしない */
+    spin_lock(&s);             /* スリープしない */
     /* ... */
     spin_unlock(&s);
     return IRQ_HANDLED;
 }
 ```
 
-Hardware interrupts are disabled on the current CPU for the duration of the hardirq handler (the CPU cleared `IF` on entry). Interrupts on other CPUs are not affected.
+hardirqハンドラの実行中は、現在のCPUでハードウェア割り込みが無効化されている（CPUが入口で`IF`をクリアしている）。他のCPU上の割り込みは影響を受けない。
 
 ## /proc/interrupts {#procinterrupts}
 
@@ -147,39 +147,39 @@ cat /proc/interrupts
 # CAL:        234        234        234        234   Function call interrupts
 ```
 
-- First column: IRQ number (or name for special interrupts)
-- CPU columns: per-CPU interrupt count since boot
-- Controller: interrupt controller and routing
-- Name: driver name from `request_irq()`
+- 1列目: IRQ番号（特殊な割り込みの場合は名前）
+- CPU列: ブート以降のCPUごとの割り込み回数
+- コントローラ: 割り込みコントローラとルーティング
+- 名前: `request_irq()`で指定されたドライバ名
 
 ```bash
-# Watch interrupt rates
+# 割り込みレートを観察する
 watch -d -n 1 'cat /proc/interrupts'
 
-# IRQs per second
+# 1秒あたりのIRQ
 awk 'NR>1 {for(i=2;i<=NF-2;i++) if($i+0>0) {print $0; next}}' /proc/interrupts
 ```
 
-## IRQ affinity {#irq-affinity}
+## IRQアフィニティ {#irq-affinity}
 
-Each IRQ can be steered to specific CPUs:
+各IRQは特定のCPUに振り向けることができる。
 
 ```bash
-# Show IRQ affinity (bitmask)
-cat /proc/irq/24/smp_affinity      # hex bitmask
-cat /proc/irq/24/smp_affinity_list # human-readable CPU list
+# IRQアフィニティを表示する（ビットマスク）
+cat /proc/irq/24/smp_affinity      # 16進ビットマスク
+cat /proc/irq/24/smp_affinity_list # 人間が読める形式のCPUリスト
 
-# Pin IRQ 24 to CPUs 0-3
-echo "f" > /proc/irq/24/smp_affinity   # hex f = CPUs 0-3
+# IRQ 24をCPU 0-3に固定する
+echo "f" > /proc/irq/24/smp_affinity   # 16進のf = CPU 0-3
 echo "0-3" > /proc/irq/24/smp_affinity_list
 
-# irqbalance daemon automatically balances IRQ affinity
+# irqbalanceデーモンはIRQアフィニティを自動的にバランスさせる
 systemctl status irqbalance
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [IRQ Descriptor and irq_chip](irq-desc.md) — The irq_desc data structures
-- [request_irq and free_irq](request-irq.md) — Registering handlers
-- [Softirqs](softirq.md) — What irq_exit runs when pending
-- `Documentation/core-api/genericirq.rst` — Generic IRQ subsystem docs
+- [IRQディスクリプタとirq_chip](irq-desc.md) — irq_descのデータ構造
+- [request_irqとfree_irq](request-irq.md) — ハンドラの登録
+- [Softirq](softirq.md) — 保留中のときにirq_exitが実行するもの
+- `Documentation/core-api/genericirq.rst` — 汎用IRQサブシステムのドキュメント

@@ -1,49 +1,49 @@
-# War Stories: Interrupt and IRQ-Affinity Bugs {#war-stories-interrupt-and-irq-affinity-bugs}
+# 事件簿: 割り込みとIRQアフィニティのバグ {#war-stories-interrupt-and-irq-affinity-bugs}
 
-> Four incidents in the machinery that decides which CPU handles an interrupt and cleans up after it moves — two CVEs, one two-year silent-failure gap, and one use-after-free in a rarely-exercised notifier path that took two separate fixes to fully close
+> 割り込みをどのCPUが処理するかを決め、それが移動した後の後始末をする仕組みで起きた4つの事件。2件のCVE、2年間気づかれなかった失敗の空白、そしてめったに通らない通知パスで起き、完全に塞ぐのに2回の別々の修正を要したuse-after-free
 
-Interrupt affinity is deceptively simple from the outside — "run this interrupt's handler on that CPU" — and genuinely intricate underneath, because changing it safely means coordinating in-flight interrupt delivery, per-CPU vector allocation, CPU hotplug, and (for drivers that want to know) an asynchronous notification callback, all without ever leaving a window where the same interrupt could be handled twice or a resource freed while something still points at it. Every incident below lives in that coordination layer, not in interrupt handling itself.
+割り込みアフィニティは外から見ると「この割り込みのハンドラをあのCPUで実行する」という一見単純なものだが、その内側は本当に入り組んでいる。これを安全に変更するには、処理中の割り込み配送、per-CPUのベクタ割り当て、CPUホットプラグ、そして（知りたいドライバのための）非同期の通知コールバックを協調させる必要があり、しかも同じ割り込みが二重に処理されたり、まだ何かが指しているリソースが解放されたりする隙間を決して残してはならないからである。以下の事件はすべて、割り込み処理そのものではなく、この協調レイヤーで起きている。
 
-## Incidents {#incidents}
+## 事件一覧 {#incidents}
 
-Ordered reverse chronologically by when the fix landed in mainline — newest first.
+修正がメインラインに入った時期の新しい順に並べている。
 
-### [The Vector Leak That Needed Two CPUs to Go Offline in the Wrong Order](war-stories/vector-leak-cpu-offline.md) {#the-vector-leak-that-needed-two-cpus-to-go-offline-in-the-wrong-order}
-**Linux 6.10 (July 2024) · CVE-2024-31076**
-A deferred interrupt-affinity change and a CPU hot-unplug, interleaved in one specific rare order, meant one x86 interrupt vector was never returned to `vector_matrix` — a slow leak, one vector at a time, on systems that offline and re-online CPUs routinely.
+### [2つのCPUが誤った順序でオフラインになる必要があったベクタリーク](war-stories/vector-leak-cpu-offline.md) {#the-vector-leak-that-needed-two-cpus-to-go-offline-in-the-wrong-order}
+**Linux 6.10（2024年7月） · CVE-2024-31076**
+遅延された割り込みアフィニティの変更とCPUのホットアンプラグが、ある特定のまれな順序で交錯すると、x86の割り込みベクタが1つ`vector_matrix`に返却されなくなった。CPUを日常的にオフライン・再オンラインするシステムで、1つずつゆっくり進むリークである。
 
-### [The IPI Verifier That Trusted Its Own Caller](war-stories/ipi-send-verify-null-deref.md) {#the-ipi-verifier-that-trusted-its-own-caller}
-**Linux 6.3 (April 2023) · CVE-2023-53332**
-`ipi_send_verify()` dereferenced its `irq_data` parameter before checking whether that parameter was `NULL` — an invalid IPI interrupt number turned a clean error return into a kernel oops.
+### [自分の呼び出し元を信用したIPI検証関数](war-stories/ipi-send-verify-null-deref.md) {#the-ipi-verifier-that-trusted-its-own-caller}
+**Linux 6.3（2023年4月） · CVE-2023-53332**
+`ipi_send_verify()`は、引数`irq_data`が`NULL`かどうかを確認する前にそれを参照外ししていた。無効なIPI割り込み番号によって、本来ならきれいなエラー返却になるはずのものがカーネルoopsに変わった。
 
-### [The Warning That Vector Space Was Silently Breaking Affinity](war-stories/vector-exhaustion-silent-affinity-break.md) {#the-warning-that-vector-space-was-silently-breaking-affinity}
-**Linux 5.4 (November 2019) · not a CVE**
-When every CPU in a reserved affinity mask had exhausted its 202 assignable interrupt vectors, activating the interrupt silently widened the mask with no log message — for about two years, an administrator had no way to learn their affinity request had been quietly overruled.
+### [ベクタ空間がアフィニティを黙って壊していることを知らせる警告](war-stories/vector-exhaustion-silent-affinity-break.md) {#the-warning-that-vector-space-was-silently-breaking-affinity}
+**Linux 5.4（2019年11月） · CVEではない**
+予約済みアフィニティマスク内のすべてのCPUが、割り当て可能な202個の割り込みベクタを使い果たしていると、割り込みの有効化時にログメッセージなしでマスクが黙って広げられていた。約2年間、管理者は自分のアフィニティ指定が密かに覆されたことを知る手段がなかった。
 
-### [The Affinity Notifier That Outlived Its Own Reference Count](war-stories/affinity-notifier-uaf.md) {#the-affinity-notifier-that-outlived-its-own-reference-count}
-**Linux 5.2 (July 2019) · not a CVE**
-Replacing an affinity-change notifier dropped the old one's reference count without checking whether its callback was still sitting in a workqueue — a use-after-free waiting for a very specific timing window to be hit.
+### [自分の参照カウントより長生きしたアフィニティ通知](war-stories/affinity-notifier-uaf.md) {#the-affinity-notifier-that-outlived-its-own-reference-count}
+**Linux 5.2（2019年7月） · CVEではない**
+アフィニティ変更通知を置き換える際、古い通知のコールバックがまだworkqueueに積まれているかどうかを確認せずに、その参照カウントを減らしていた。非常に特定のタイミングの窓に当たるのを待っているuse-after-freeである。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | Vector leak (CPU offline) | IPI verifier NULL deref | Vector exhaustion warning | Affinity-notifier UAF |
+| パターン | ベクタリーク（CPUオフライン） | IPI検証関数のNULL参照外し | ベクタ枯渇の警告 | アフィニティ通知のUAF |
 |---------|:---:|:---:|:---:|:---:|
-| Involves interrupt CPU-affinity machinery specifically | Yes | Yes (IPI targeting) | Yes | Yes |
-| Root cause: two independently-correct code paths racing against each other | Yes | No | — | No |
-| Root cause: validation ordered after the operation it should have gated | No | Yes | — | No |
-| Root cause: a release not synchronized against a still-outstanding deferred use | No | No | — | Yes |
-| Is a security vulnerability (has a CVE) | Yes | Yes | No | No |
-| Fix changed behavior, not just added a diagnostic | Yes | Yes | No (diagnostic only) | Yes |
-| Years between introduction and fix | 7 (2017 → 2024) | ~7 (2015 → 2023) | ~2 (2017 → 2019) | ~8 (2011 → 2019) |
+| 特に割り込みのCPUアフィニティの仕組みに関わる | はい | はい（IPIの宛先指定） | はい | はい |
+| 根本原因: それぞれ単独では正しい2つのコードパスが互いに競合する | はい | いいえ | — | いいえ |
+| 根本原因: 検証が、それが制御すべき操作の後に置かれていた | いいえ | はい | — | いいえ |
+| 根本原因: 解放が、まだ残っている遅延された使用と同期していなかった | いいえ | いいえ | — | はい |
+| セキュリティ脆弱性である（CVEがある） | はい | はい | いいえ | いいえ |
+| 修正が診断の追加だけでなく挙動を変えた | はい | はい | いいえ（診断のみ） | はい |
+| 混入から修正までの年数 | 7（2017 → 2024） | 約7（2015 → 2023） | 約2（2017 → 2019） | 約8（2011 → 2019） |
 
-**Two of these four are architecturally related.** The vector leak and the vector-exhaustion warning both live in the same x86 per-CPU vector allocator, separated by five years — one is about a resource silently *falling back* to a different CPU when space runs out, the other is about a resource silently *not being reclaimed* after a CPU goes away. Neither is a mistake in the other's fix; they're two different failure modes in the same limited-resource-management problem, discovered independently.
+**4件のうち2件はアーキテクチャ的に関連している。** ベクタリークとベクタ枯渇の警告は、どちらも同じx86のper-CPUベクタアロケータの中にあり、5年の隔たりがある。一方は空きがなくなったときにリソースが黙って別のCPUに*フォールバック*する話であり、もう一方はCPUがいなくなった後にリソースが黙って*回収されない*話である。どちらも他方の修正の誤りではない。同じ限られたリソースの管理問題における2つの異なる失敗モードであり、それぞれ独立に発見された。
 
-**The IPI verifier bug and the affinity-notifier bug are both, in different ways, stories about validation and cleanup happening in the wrong order relative to the operation they were meant to guard.** The IPI verifier read a value from an unchecked pointer before checking the pointer — fixed by reordering a small number of lines. The affinity-notifier bug released a reference before confirming a deferred user of that reference had actually finished — fixed by adding a synchronous cancellation, not by reordering existing code, and it took a second fix a year later to also account for the reference that cancellation itself was holding. In both cases, the hard part was recognizing that an ordering assumption, not a missing check, was the actual bug.
+**IPI検証関数のバグとアフィニティ通知のバグは、どちらも形は違えど、検証や後始末が、それらが守るはずの操作に対して誤った順序で行われていたという話である。** IPI検証関数は、ポインタを確認する前に未確認のポインタから値を読んでいた。これは数行の並べ替えで修正された。アフィニティ通知のバグは、その参照の遅延された利用者が実際に終了したことを確認する前に参照を解放していた。これは既存コードの並べ替えではなく同期的なキャンセルを追加することで修正され、さらにそのキャンセル自体が保持している参照も考慮するために、1年後に2つ目の修正が必要になった。どちらの場合も、難しかったのは、本当のバグがチェックの欠如ではなく順序に関する思い込みだと見抜くことだった。
 
-**Only one of the four incidents here — the vector-exhaustion warning — isn't a "wrong behavior" bug at all.** The silent CPU-set fallback it made visible was arguably correct behavior; the gap was purely that nothing told an administrator it had happened. It's the only incident on this page whose fix is a single diagnostic line rather than a change to what the kernel actually does.
+**ここにある4件のうち1件、つまりベクタ枯渇の警告だけは、そもそも「誤った挙動」のバグではない。** それが可視化した、CPU集合への黙ったフォールバックは、おそらく正しい挙動だった。欠けていたのは、それが起きたことを管理者に何も伝えなかったという点だけである。このページで、カーネルが実際に行うことを変えるのではなく、診断用の1行だけが修正となっている事件はこれだけである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Interrupt Handling Overview](interrupts.md) — the top/bottom-half split and execution contexts these bugs assume
-- [IRQ Affinity and CPU Isolation](irq-affinity.md) — the affinity-configuration interface three of the four incidents involve directly
-- [Locking War Stories](../locking/war-stories.md) — a comparable set of kernel-internal bugs from priority-inheritance and rt_mutex bookkeeping, a different kind of cross-subsystem coordination problem
+- [割り込み処理の概要](interrupts.md) — これらのバグが前提とするトップハーフ/ボトムハーフの分割と実行コンテキスト
+- [IRQアフィニティとCPU分離](irq-affinity.md) — 4件のうち3件が直接関わるアフィニティ設定インターフェース
+- [ロックの事件簿](../locking/war-stories.md) — 優先度継承とrt_mutexの管理処理に関する、比較対象となるカーネル内部のバグ群。種類の異なるサブシステム横断の協調問題
