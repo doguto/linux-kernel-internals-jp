@@ -1,39 +1,39 @@
-# Life of a write {#life-of-a-write}
+# writeの一生 {#life-of-a-write}
 
-> Tracing a write() syscall from userspace through the page cache, dirty throttling, writeback, and down to storage
+> write()システムコールを、ユーザー空間からページキャッシュ、ダーティスロットリング、ライトバックを経てストレージに至るまで追跡する
 
-## What happens when you write to a file? {#what-happens-when-you-write-to-a-file}
+## ファイルに書き込むと何が起きるのか？ {#what-happens-when-you-write-to-a-file}
 
-When a program writes to a file, the data almost never goes directly to disk. Instead, the kernel copies it into a **page cache** page, marks that page **dirty**, and returns immediately. The data reaches storage later — either when the OS flushes it in the background, when memory pressure forces eviction, or when the application explicitly calls `fsync()`.
+プログラムがファイルに書き込むとき、データがディスクへ直接書かれることはほとんどない。カーネルはデータを**ページキャッシュ**のページにコピーし、そのページを**ダーティ**とマークして、すぐに戻る。データがストレージに到達するのは後になってからである。それはOSがバックグラウンドでフラッシュするとき、メモリ逼迫によって追い出しが強制されるとき、あるいはアプリケーションが明示的に`fsync()`を呼んだときのいずれかである。
 
 ```mermaid
 flowchart TD
     A["write(fd, buf, 4096)"] --> B
 
-    B["<b>VFS Layer</b><br/>- Resolve fd → struct file<br/>- Permission checks<br/>- Call file system's write_iter method"]
+    B["<b>VFS層</b><br/>- fd → struct file を解決<br/>- パーミッションチェック<br/>- ファイルシステムの write_iter メソッドを呼ぶ"]
     B --> C
 
-    C["<b>Page Cache Write</b><br/>- generic_perform_write()<br/>- write_begin: prepare/lock target page<br/>- copy_from_user: data into page<br/>- write_end: mark page dirty"]
+    C["<b>ページキャッシュへの書き込み</b><br/>- generic_perform_write()<br/>- write_begin: 対象ページを準備・ロック<br/>- copy_from_user: データをページへ<br/>- write_end: ページをダーティにする"]
     C --> D
 
-    D["<b>Dirty Throttle Check</b><br/>balance_dirty_pages_ratelimited()<br/>- If dirty pages below threshold: continue<br/>- If above threshold: sleep to let writeback catch up"]
-    D --> E["write() returns to userspace<br/>(data NOT yet on storage)"]
+    D["<b>ダーティスロットリングのチェック</b><br/>balance_dirty_pages_ratelimited()<br/>- ダーティページがしきい値未満: 続行<br/>- しきい値超過: ライトバックが追いつくまでスリープ"]
+    D --> E["write() がユーザー空間に戻る<br/>（データはまだストレージ上にない）"]
 
-    C -.->|"background,<br/>periodic, or<br/>fsync()"| F
+    C -.->|"バックグラウンド、<br/>定期実行、または<br/>fsync()"| F
 
-    F["<b>Writeback</b><br/>wb_workfn() → writeback_sb_inodes()<br/>→ do_writepages() → a_ops->writepages()"]
-    F --> G["<b>Block Layer</b><br/>submit_bio() → blk_mq_submit_bio()<br/>→ driver dispatch"]
-    G --> H["<b>Storage</b><br/>NVMe / SATA / HDD"]
+    F["<b>ライトバック</b><br/>wb_workfn() → writeback_sb_inodes()<br/>→ do_writepages() → a_ops->writepages()"]
+    F --> G["<b>ブロック層</b><br/>submit_bio() → blk_mq_submit_bio()<br/>→ ドライバへのディスパッチ"]
+    G --> H["<b>ストレージ</b><br/>NVMe / SATA / HDD"]
 ```
 
-The critical insight: **write() returns before your data is durable**. This is a deliberate design choice — buffering writes in DRAM and flushing them asynchronously in large batches is orders of magnitude faster than writing every byte synchronously. But it means applications that need durability must explicitly ask for it with `fsync()` or `O_SYNC`.
+決定的に重要な点は、**write()はデータが永続化される前に戻る**ということである。これは意図的な設計判断である。書き込みをDRAMにバッファリングし、大きなバッチで非同期にフラッシュするほうが、1バイトずつ同期的に書き込むより桁違いに速い。しかしそれは、永続性を必要とするアプリケーションは`fsync()`や`O_SYNC`で明示的にそれを要求しなければならないことを意味する。
 
-## Stage 1: The write() syscall entry {#stage-1-the-write-syscall-entry}
+## ステージ1: write()システムコールへの入口 {#stage-1-the-write-syscall-entry}
 
-A user program calls `write()`:
+ユーザープログラムが`write()`を呼ぶ:
 
 ```c
-// User space
+// ユーザー空間
 ssize_t n = write(fd, buffer, 4096);
 
 /* fs/read_write.c */
@@ -55,9 +55,9 @@ ssize_t ksys_write(unsigned int fd, const char __user *buf, size_t count)
 }
 ```
 
-### From syscall to VFS: ksys_write and vfs_write {#from-syscall-to-vfs-ksyswrite-and-vfswrite}
+### システムコールからVFSへ: ksys_writeとvfs_write {#from-syscall-to-vfs-ksyswrite-and-vfswrite}
 
-The syscall stub simply calls `ksys_write()`. `ksys_write()` wraps the fd resolution so the same logic can be called from kernel code without going through `SYSCALL_DEFINE`. `vfs_write()` does the permission checks and dispatches to the filesystem:
+システムコールのスタブは単に`ksys_write()`を呼ぶだけである。`ksys_write()`はfdの解決をラップしており、同じロジックを`SYSCALL_DEFINE`を経由せずにカーネルコードから呼べるようにしている。`vfs_write()`はパーミッションチェックを行い、ファイルシステムへディスパッチする:
 
 ```c
 // fs/read_write.c
@@ -93,7 +93,7 @@ ssize_t vfs_write(struct file *file, const char __user *buf,
 }
 ```
 
-Nearly every modern filesystem uses the `write_iter` path. `new_sync_write()` wraps the synchronous interface into the iterator-based one:
+現代のファイルシステムのほぼすべてが`write_iter`パスを使う。`new_sync_write()`は同期インターフェースをイテレータベースのインターフェースにラップする:
 
 ```c
 // fs/read_write.c
@@ -115,46 +115,46 @@ static ssize_t new_sync_write(struct file *filp, const char __user *buf,
 }
 ```
 
-### The kiocb and iov_iter {#the-kiocb-and-iov_iter}
+### kiocbとiov_iter {#the-kiocb-and-iov_iter}
 
-Two structs carry per-operation state through the entire write path:
+2つの構造体が、操作ごとの状態を書き込みパス全体にわたって運ぶ:
 
 ```c
 // include/linux/fs.h
 struct kiocb {
-    struct file       *ki_filp;    // file being written
-    loff_t             ki_pos;     // current file offset (updated after write)
-    void (*ki_complete)(struct kiocb *, long); // async completion callback (NULL = sync)
+    struct file       *ki_filp;    // 書き込み対象のファイル
+    loff_t             ki_pos;     // 現在のファイルオフセット（書き込み後に更新）
+    void (*ki_complete)(struct kiocb *, long); // 非同期完了コールバック（NULL = 同期）
     void              *private;
     int                ki_flags;   // IOCB_DIRECT, IOCB_SYNC, IOCB_DSYNC, ...
-    u16                ki_ioprio;  // I/O priority
-    struct wait_page_queue *ki_waitq; // for async page waits
+    u16                ki_ioprio;  // I/O優先度
+    struct wait_page_queue *ki_waitq; // 非同期のページ待ち用
 };
 ```
 
-`iov_iter` abstracts the source of data — a user buffer, a kernel buffer, a pipe, or a scatter-gather list:
+`iov_iter`はデータの供給元を抽象化する。ユーザーバッファ、カーネルバッファ、パイプ、あるいはスキャッタギャザーリストのいずれでもよい:
 
 ```c
-// include/linux/uio.h (simplified)
+// include/linux/uio.h（簡略化）
 struct iov_iter {
     u8              iter_type;   // ITER_UBUF, ITER_IOVEC, ITER_BVEC, ITER_KVEC
     bool            nofault;
-    bool            data_source; // ITER_SOURCE (write) or ITER_DEST (read)
-    size_t          count;       // bytes remaining in the iterator
+    bool            data_source; // ITER_SOURCE（書き込み）または ITER_DEST（読み込み）
+    size_t          count;       // イテレータ内の残りバイト数
     union {
         const struct iovec *iov;
         const struct kvec  *kvec;
         const struct bio_vec *bvec;
         struct xarray      *xarray;
-        void __user        *ubuf;  // for ITER_UBUF (single-buffer common case)
+        void __user        *ubuf;  // ITER_UBUF 用（単一バッファの一般的なケース）
     };
     // ...
 };
 ```
 
-Using `iov_iter` means that `generic_perform_write()` does not need to know whether the data is coming from a userspace buffer, a kernel buffer, or an `iovec` array — it calls `copy_page_from_iter_atomic()` uniformly.
+`iov_iter`を使うことで、`generic_perform_write()`はデータがユーザー空間のバッファから来るのか、カーネルバッファから来るのか、`iovec`配列から来るのかを知る必要がない。一律に`copy_page_from_iter_atomic()`を呼ぶだけである。
 
-Most filesystems wire `f_op->write_iter` to `generic_file_write_iter()`:
+ほとんどのファイルシステムは`f_op->write_iter`を`generic_file_write_iter()`に結び付けている:
 
 ```c
 // mm/filemap.c
@@ -173,21 +173,21 @@ ssize_t generic_file_write_iter(struct kiocb *iocb, struct iov_iter *from)
     inode_unlock(inode);
 
     if (ret > 0) {
-        // If O_SYNC or O_DSYNC, flush to storage before returning
+        // O_SYNC または O_DSYNC なら、戻る前にストレージへフラッシュする
         ret = generic_write_sync(iocb, ret);
     }
     return ret;
 }
 ```
 
-The `inode_lock()` / `inode_unlock()` wrapping `generic_perform_write` is the inode's `i_rwsem`. This serialises concurrent writers on the same file — only one write is in `generic_perform_write` at a time for buffered I/O.
+`generic_perform_write`を囲む`inode_lock()` / `inode_unlock()`は、inodeの`i_rwsem`である。これは同じファイルへの並行する書き込み側を直列化する。バッファードI/Oでは、`generic_perform_write`の中にいる書き込みは一度に1つだけである。
 
-## Stage 2: The page cache write path {#stage-2-the-page-cache-write-path}
+## ステージ2: ページキャッシュの書き込みパス {#stage-2-the-page-cache-write-path}
 
-`generic_perform_write()` is the engine of the buffered write path. It loops over the write range one page at a time, calling into the filesystem for each page via the `address_space_operations` (`a_ops`) dispatch table:
+`generic_perform_write()`はバッファード書き込みパスのエンジンである。書き込み範囲を1ページずつループし、ページごとに`address_space_operations`（`a_ops`）ディスパッチテーブルを介してファイルシステムを呼び出す:
 
 ```c
-// mm/filemap.c (simplified)
+// mm/filemap.c（簡略化）
 ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 {
     struct file          *file    = iocb->ki_filp;
@@ -200,24 +200,24 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
     do {
         struct page *page;
         void        *fsdata = NULL;
-        unsigned long offset = pos & (PAGE_SIZE - 1);  // offset within page
+        unsigned long offset = pos & (PAGE_SIZE - 1);  // ページ内オフセット
         unsigned long bytes  = min_t(unsigned long,
                                      PAGE_SIZE - offset,
                                      iov_iter_count(i));
 
-        // Step 1: Prepare the target page
+        // ステップ1: 対象ページを準備する
         status = a_ops->write_begin(file, mapping, pos, bytes,
                                      &page, &fsdata);
         if (unlikely(status < 0))
             break;
 
-        // Step 2: Copy from user into the page
+        // ステップ2: ユーザーからページへコピーする
         if (mapping_writably_mapped(mapping))
             flush_dcache_page(page);
         copied = copy_page_from_iter_atomic(page, offset, bytes, i);
         flush_dcache_page(page);
 
-        // Step 3: Mark dirty and unlock
+        // ステップ3: ダーティにしてアンロックする
         status = a_ops->write_end(file, mapping, pos, bytes, copied,
                                    page, fsdata);
         if (unlikely(status != copied)) {
@@ -229,7 +229,7 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
         pos     += copied;
         written += copied;
 
-        // Step 4: Throttle if too many dirty pages
+        // ステップ4: ダーティページが多すぎればスロットリングする
         balance_dirty_pages_ratelimited(mapping);
 
     } while (iov_iter_count(i));
@@ -239,29 +239,29 @@ ssize_t generic_perform_write(struct kiocb *iocb, struct iov_iter *i)
 }
 ```
 
-### write_begin: preparing the page {#write_begin-preparing-the-page}
+### write_begin: ページの準備 {#write_begin-preparing-the-page}
 
-`a_ops->write_begin` is the filesystem's hook to prepare the target folio before the copy. For iomap-based filesystems, the `a_ops->write_begin` dispatch goes through the filesystem's own write_begin implementation (e.g., `ext4_write_begin`), which then calls into the iomap machinery — `iomap_write_begin()` is an internal iomap helper, not the `a_ops` callback itself. It must:
+`a_ops->write_begin`は、コピーの前に対象folioを準備するためのファイルシステムのフックである。iomapベースのファイルシステムでは、`a_ops->write_begin`のディスパッチはファイルシステム自身のwrite_begin実装（例: `ext4_write_begin`）を経由し、そこからiomapの機構が呼ばれる。`iomap_write_begin()`はiomap内部のヘルパーであり、`a_ops`コールバックそのものではない。write_beginは次のことを行わなければならない:
 
-1. Find or allocate the page in the page cache at the target offset.
-2. For a **partial page write** — a write that does not cover the entire 4 KB page — read the existing page content from disk first, so the unwritten bytes retain their on-disk values. This read-modify-write pattern avoids exposing uninitialised data.
-3. Allocate any filesystem metadata needed (e.g., journal credits in ext4).
-4. Return the locked page to the caller.
+1. 対象オフセットのページをページキャッシュ内で見つけるか、割り当てる。
+2. **部分ページ書き込み**（4 KBのページ全体をカバーしない書き込み）の場合は、まずディスクから既存のページ内容を読み込み、書き込まれないバイトがディスク上の値を保持するようにする。このリードモディファイライトのパターンにより、未初期化データの露出を防ぐ。
+3. 必要なファイルシステムメタデータ（例: ext4のジャーナルクレジット）を割り当てる。
+4. ロックされたページを呼び出し元に返す。
 
 ```c
-// fs/iomap/buffered-io.c (conceptual flow)
+// fs/iomap/buffered-io.c（概念的な流れ）
 static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
                               unsigned len, struct folio **foliop)
 {
     struct address_space *mapping = iter->inode->i_mapping;
     struct folio *folio;
 
-    // Grab or allocate the folio at this file offset
+    // このファイルオフセットの folio を取得または割り当てる
     folio = iomap_get_folio(iter, pos, len);
 
-    // Partial page write?  Read existing content first.
+    // 部分ページ書き込みか？ まず既存の内容を読み込む。
     if (!folio_test_uptodate(folio)) {
-        // Only read the blocks that are NOT being fully overwritten
+        // 完全には上書きされないブロックだけを読み込む
         status = iomap_read_folio_sync(iter, folio, pos, len);
     }
 
@@ -270,20 +270,20 @@ static int iomap_write_begin(struct iomap_iter *iter, loff_t pos,
 }
 ```
 
-The read-on-partial-write is an important performance concern. If your application always writes 4 KB-aligned, full-page chunks, the kernel skips this extra read. Databases and write-optimised applications often align writes for exactly this reason.
+部分書き込み時の読み込みは、性能上の重要な懸念事項である。アプリケーションが常に4 KB境界に揃ったページ全体単位で書き込むなら、カーネルはこの余分な読み込みを省略する。データベースや書き込みに最適化されたアプリケーションが書き込みをアラインするのは、まさにこの理由による場合が多い。
 
-### copy_page_from_iter_atomic: the actual copy {#copypagefromiteratomic-the-actual-copy}
+### copy_page_from_iter_atomic: 実際のコピー {#copypagefromiteratomic-the-actual-copy}
 
-With the page locked and uptodate, the kernel copies from the user iterator into the page:
+ページがロックされ、uptodateになった状態で、カーネルはユーザーのイテレータからページへコピーする:
 
 ```c
 // lib/iov_iter.c
 size_t copy_page_from_iter_atomic(struct page *page, unsigned offset,
                                    size_t bytes, struct iov_iter *i)
 {
-    // kmap_local_page: temporarily map the page into kernel address space
-    // (kmap_atomic() is deprecated since ~5.19; kmap_local_page() is the modern replacement)
-    // copy_from_user_inatomic: copy without sleeping (we hold the page lock)
+    // kmap_local_page: ページを一時的にカーネルアドレス空間へマップする
+    // （kmap_atomic() は ~5.19 以降非推奨。kmap_local_page() が現代の代替）
+    // copy_from_user_inatomic: スリープせずにコピーする（ページロックを保持しているため）
     char *kaddr = kmap_local_page(page);
     size_t copied = copyout(kaddr + offset, i, bytes);
     kunmap_local(kaddr);
@@ -291,26 +291,26 @@ size_t copy_page_from_iter_atomic(struct page *page, unsigned offset,
 }
 ```
 
-### write_end: marking the page dirty {#write_end-marking-the-page-dirty}
+### write_end: ページをダーティにする {#write_end-marking-the-page-dirty}
 
-`a_ops->write_end` is called after the copy. It does three things:
+`a_ops->write_end`はコピーの後に呼ばれる。これは3つのことを行う:
 
-1. Updates the inode size (`i_size`) if the write extended the file.
-2. Calls `folio_mark_dirty()` to mark the folio dirty. For file-backed pages, only `folio_mark_dirty()` (or its wrappers) should be used — raw flag setters like `SetPageDirty` bypass the `a_ops->dirty_folio` dispatch and inode accounting.
-3. Unlocks the page so other waiters can proceed.
+1. 書き込みによってファイルが伸びた場合、inodeのサイズ（`i_size`）を更新する。
+2. `folio_mark_dirty()`を呼んでfolioをダーティにする。ファイルバックのページでは、`folio_mark_dirty()`（またはそのラッパー）だけを使うべきである。`SetPageDirty`のような生のフラグ設定関数は、`a_ops->dirty_folio`のディスパッチとinodeのアカウンティングを迂回してしまう。
+3. ページをアンロックし、他の待機者が先に進めるようにする。
 
 ```c
-// fs/iomap/buffered-io.c (simplified)
+// fs/iomap/buffered-io.c（簡略化）
 static int iomap_write_end(struct iomap_iter *iter, loff_t pos, unsigned len,
                             unsigned copied, struct folio *folio)
 {
     struct inode *inode = iter->inode;
 
-    // Update file size if write extended the file
+    // 書き込みでファイルが伸びたらファイルサイズを更新する
     if (pos + copied > i_size_read(inode))
         i_size_write(inode, pos + copied);
 
-    // Mark the folio dirty — this is what puts it on writeback's radar
+    // folio をダーティにする — これでライトバックの対象として認識される
     folio_mark_dirty(folio);
 
     folio_unlock(folio);
@@ -320,11 +320,11 @@ static int iomap_write_end(struct iomap_iter *iter, loff_t pos, unsigned len,
 }
 ```
 
-## Stage 3: What "dirty" means {#stage-3-what-dirty-means}
+## ステージ3: 「ダーティ」の意味 {#stage-3-what-dirty-means}
 
-Marking a page dirty is the key event that separates "data written to memory" from "data written to disk". The kernel tracks dirty pages globally, per-node, and per-cgroup.
+ページをダーティにすることは、「メモリに書かれたデータ」と「ディスクに書かれたデータ」を分ける重要な出来事である。カーネルはダーティページを、グローバル、ノード単位、cgroup単位で追跡する。
 
-### folio_mark_dirty and SetPageDirty {#foliomarkdirty-and-setpagedirty}
+### folio_mark_dirtyとSetPageDirty {#foliomarkdirty-and-setpagedirty}
 
 ```c
 // include/linux/pagemap.h / mm/page-writeback.c
@@ -338,28 +338,28 @@ bool folio_mark_dirty(struct folio *folio)
 }
 ```
 
-The `dirty_folio` a_ops hook dispatches to one of two implementations depending on whether the filesystem uses buffer heads:
+`dirty_folio` a_opsフックは、ファイルシステムがバッファヘッドを使うかどうかに応じて、2つの実装のいずれかにディスパッチする:
 
-**`filemap_dirty_folio`** (used by iomap-based filesystems — ext4 with iomap, xfs, btrfs, f2fs; replaces the legacy page-based `__set_page_dirty_nobuffers`):
+**`filemap_dirty_folio`**（iomapベースのファイルシステムで使われる。iomapを使うext4、xfs、btrfs、f2fs。旧来のページベースの`__set_page_dirty_nobuffers`を置き換えるもの）:
 
 ```c
 // mm/page-writeback.c
 bool filemap_dirty_folio(struct address_space *mapping, struct folio *folio)
 {
-    // Atomically test-and-set PG_dirty
+    // PG_dirty をアトミックにテスト・アンド・セットする
     if (folio_test_set_dirty(folio))
-        return false;   // already dirty, nothing to do
+        return false;   // すでにダーティ。何もしない
 
-    // Account this folio as dirty in per-node stats
+    // この folio をノード単位の統計でダーティとして計上する
     folio_account_dirtied(folio, mapping);
 
-    // Put the inode on the BDI's dirty list (b_dirty)
+    // inode を BDI のダーティリスト（b_dirty）に載せる
     __mark_inode_dirty(mapping->host, I_DIRTY_PAGES);
     return true;
 }
 ```
 
-**`__set_page_dirty_buffers`** (used by filesystems that still track per-block state with `struct buffer_head`, e.g., some ext2/ext3 codepaths):
+**`__set_page_dirty_buffers`**（`struct buffer_head`でブロック単位の状態をいまだに追跡するファイルシステムで使われる。例: 一部のext2/ext3のコードパス）:
 
 ```c
 // fs/buffer.c
@@ -372,7 +372,7 @@ bool block_dirty_folio(struct address_space *mapping, struct folio *folio)
     head = folio_buffers(folio);
     bh = head;
     do {
-        // Mark each buffer_head dirty too
+        // 各 buffer_head もダーティにする
         if (!buffer_dirty(bh))
             mark_buffer_dirty(bh);
         bh = bh->b_this_page;
@@ -388,9 +388,9 @@ bool block_dirty_folio(struct address_space *mapping, struct folio *folio)
 }
 ```
 
-### Dirty page accounting {#dirty-page-accounting}
+### ダーティページのアカウンティング {#dirty-page-accounting}
 
-`folio_account_dirtied()` increments the global and per-node dirty page counters:
+`folio_account_dirtied()`は、グローバルおよびノード単位のダーティページカウンタをインクリメントする:
 
 ```c
 // mm/page-writeback.c
@@ -400,29 +400,29 @@ void folio_account_dirtied(struct folio *folio,
     struct inode *inode = mapping->host;
     int nr = folio_nr_pages(folio);
 
-    // Global counter: NR_FILE_DIRTY (all dirty file pages)
+    // グローバルカウンタ: NR_FILE_DIRTY（すべてのダーティなファイルページ）
     node_stat_mod_folio(folio, NR_FILE_DIRTY, nr);
 
-    // Per-BDI (per device) bandwidth accounting
+    // BDI 単位（デバイス単位）の帯域アカウンティング
     wb_stat_mod(inode_to_wb(inode), WB_RECLAIMABLE, nr);
 }
 ```
 
-You can observe these counters directly:
+これらのカウンタは直接観察できる:
 
 ```bash
-# NR_FILE_DIRTY and NR_WRITEBACK from /proc/meminfo:
+# /proc/meminfo の NR_FILE_DIRTY と NR_WRITEBACK:
 grep -E "^Dirty:|^Writeback:" /proc/meminfo
-# Dirty:           131072 kB   ← pages modified, not yet on disk
-# Writeback:         4096 kB   ← pages currently being written to disk
+# Dirty:           131072 kB   ← 変更済みでまだディスク上にないページ
+# Writeback:         4096 kB   ← 現在ディスクへ書き込み中のページ
 
-# More detail from /proc/vmstat:
+# /proc/vmstat からさらに詳細を見る:
 grep -E "nr_dirty|nr_writeback" /proc/vmstat
 ```
 
-### __mark_inode_dirty: the inode dirty list {#_markinode_dirty-the-inode-dirty-list}
+### __mark_inode_dirty: inodeのダーティリスト {#_markinode_dirty-the-inode-dirty-list}
 
-Dirtying a page also marks the owning inode dirty. This is how the writeback worker knows which inodes have pages to flush:
+ページをダーティにすると、それを所有するinodeもダーティになる。ライトバックワーカーは、これによってどのinodeにフラッシュすべきページがあるかを知る:
 
 ```c
 // fs/fs-writeback.c
@@ -431,40 +431,40 @@ void __mark_inode_dirty(struct inode *inode, int flags)
     struct super_block *sb = inode->i_sb;
     struct bdi_writeback *wb;
 
-    // If already dirty with these flags, nothing to do
+    // すでにこれらのフラグでダーティなら何もしない
     if ((inode->i_state & flags) == flags)
         return;
 
     inode->i_state |= flags;
 
-    // Move inode to the BDI's b_dirty list if not already there
+    // まだ載っていなければ inode を BDI の b_dirty リストへ移す
     wb = inode_to_wb(inode);
     if (list_empty(&inode->i_io_list))
         inode->dirtied_when = jiffies;
 
     if (!(inode->i_state & I_DIRTY))
-        wb_wakeup_delayed(wb);  // wake the per-BDI writeback worker only if newly dirty
+        wb_wakeup_delayed(wb);  // 新たにダーティになった場合のみ BDI 単位のライトバックワーカーを起こす
 
     list_move(&inode->i_io_list, &wb->b_dirty);
 }
 ```
 
-## Stage 4: Dirty throttling {#stage-4-dirty-throttling}
+## ステージ4: ダーティスロットリング {#stage-4-dirty-throttling}
 
-Buffering writes is fast, but if writers produce dirty pages faster than writeback can flush them, memory fills up. To prevent this, every loop iteration of `generic_perform_write()` calls `balance_dirty_pages_ratelimited()`.
+書き込みのバッファリングは高速だが、書き込み側がライトバックのフラッシュよりも速くダーティページを生み出すと、メモリが埋まってしまう。これを防ぐため、`generic_perform_write()`はループの各反復で`balance_dirty_pages_ratelimited()`を呼ぶ。
 
-### The two thresholds {#the-two-thresholds}
+### 2つのしきい値 {#the-two-thresholds}
 
-The kernel enforces two dirty-memory thresholds, both expressed as percentages of available memory:
+カーネルは2つのダーティメモリしきい値を強制する。どちらも利用可能メモリに対する割合で表される:
 
-| sysctl | Default | Meaning |
+| sysctl | デフォルト | 意味 |
 |--------|---------|---------|
-| `vm.dirty_background_ratio` | 10% | Soft limit — wake background flusher, don't block writers |
-| `vm.dirty_ratio` | 20% | Hard limit — block writers until dirty pages drain |
-| `vm.dirty_background_bytes` | 0 | Absolute soft limit in bytes (overrides ratio when non-zero) |
-| `vm.dirty_bytes` | 0 | Absolute hard limit in bytes (overrides ratio when non-zero) |
-| `vm.dirty_writeback_centisecs` | 500 | Flusher wakeup interval (centiseconds; 500 = 5 s) |
-| `vm.dirty_expire_centisecs` | 3000 | Pages dirty longer than this are eligible for writeback (30 s) |
+| `vm.dirty_background_ratio` | 10% | ソフトリミット — バックグラウンドのフラッシャを起こすが、書き込み側はブロックしない |
+| `vm.dirty_ratio` | 20% | ハードリミット — ダーティページが掃けるまで書き込み側をブロックする |
+| `vm.dirty_background_bytes` | 0 | バイト単位の絶対的なソフトリミット（0でなければratioより優先される） |
+| `vm.dirty_bytes` | 0 | バイト単位の絶対的なハードリミット（0でなければratioより優先される） |
+| `vm.dirty_writeback_centisecs` | 500 | フラッシャの起床間隔（センチ秒。500 = 5秒） |
+| `vm.dirty_expire_centisecs` | 3000 | これより長くダーティなページはライトバックの対象となる（30秒） |
 
 ```mermaid
 stateDiagram-v2
@@ -472,20 +472,20 @@ stateDiagram-v2
     [*] --> Clean
     Clean --> Dirty : write() + folio_mark_dirty()
 
-    Dirty --> BackgroundFlush : dirty pages > dirty_background_ratio\nwb_workfn wakes up (writer not blocked)
-    Dirty --> HardThrottle : dirty pages > dirty_ratio\nbalance_dirty_pages() sleeps writer
+    Dirty --> BackgroundFlush : ダーティページ > dirty_background_ratio\nwb_workfn が起床（書き込み側はブロックされない）
+    Dirty --> HardThrottle : ダーティページ > dirty_ratio\nbalance_dirty_pages() が書き込み側をスリープさせる
 
-    BackgroundFlush --> Writeback : wb_workfn runs
-    HardThrottle --> Writeback : forced writeback + writer unblocked
+    BackgroundFlush --> Writeback : wb_workfn が実行される
+    HardThrottle --> Writeback : 強制ライトバック + 書き込み側のブロック解除
 
-    Writeback --> Clean : bio completes, folio_end_writeback()
+    Writeback --> Clean : bio 完了、folio_end_writeback()
 ```
 
-> **Note:** The `HardThrottle` state is not a single transition. `balance_dirty_pages()` loops internally — it sleeps the writer, wakes up, rechecks the dirty count, and sleeps again if the count is still above the threshold. The writer is unblocked only once dirty pages drain below the limit.
+> **注:** `HardThrottle`状態は単一の遷移ではない。`balance_dirty_pages()`は内部でループする。書き込み側をスリープさせ、起床し、ダーティ数を再チェックし、まだしきい値を超えていれば再びスリープする。書き込み側のブロックが解除されるのは、ダーティページがリミットを下回るまで掃けたときだけである。
 
 ### balance_dirty_pages_ratelimited {#balancedirtypages_ratelimited}
 
-The rate-limited wrapper avoids calling `balance_dirty_pages()` on every single write — that would be too expensive. Instead it amortizes the check:
+レート制限付きのラッパーは、書き込みのたびに`balance_dirty_pages()`を呼ぶことを避ける。それではコストが高すぎるからである。代わりにチェックのコストを償却する:
 
 ```c
 // mm/page-writeback.c
@@ -495,19 +495,19 @@ void balance_dirty_pages_ratelimited(struct address_space *mapping)
     struct bdi_writeback *wb = inode_to_wb(inode);
     int ratelimit;
 
-    // Cheap check: has this task dirtied enough pages to warrant a full check?
+    // 安価なチェック: このタスクは完全なチェックが必要なほどページをダーティにしたか？
     ratelimit = current->nr_dirtied_pause;
     if (current->nr_dirtied >= ratelimit)
         balance_dirty_pages(wb, current->nr_dirtied);
 }
 ```
 
-### balance_dirty_pages: the throttling loop {#balancedirtypages-the-throttling-loop}
+### balance_dirty_pages: スロットリングのループ {#balancedirtypages-the-throttling-loop}
 
-When dirty pages exceed the hard limit, `balance_dirty_pages()` calculates a sleep duration proportional to how far over the limit we are, and pauses the writer:
+ダーティページがハードリミットを超えると、`balance_dirty_pages()`はリミットをどれだけ超えているかに比例したスリープ時間を計算し、書き込み側を一時停止させる:
 
 ```c
-// mm/page-writeback.c (simplified)
+// mm/page-writeback.c（簡略化）
 static void balance_dirty_pages(struct bdi_writeback *wb,
                                  unsigned long pages_dirtied)
 {
@@ -515,90 +515,90 @@ static void balance_dirty_pages(struct bdi_writeback *wb,
         unsigned long nr_dirty = global_node_page_state(NR_FILE_DIRTY);
         unsigned long dirty_thresh, bg_thresh;
 
-        // Calculate thresholds from ratios × available memory
+        // ratio × 利用可能メモリからしきい値を計算する
         global_dirty_limits(&bg_thresh, &dirty_thresh);
 
         if (nr_dirty <= dirty_thresh)
-            break;   // under the hard limit, writer can continue
+            break;   // ハードリミット未満。書き込み側は続行できる
 
-        // Wake the background flusher (always, even when throttling)
+        // バックグラウンドのフラッシャを起こす（スロットリング中でも常に）
         if (nr_dirty > bg_thresh)
             wb_start_background_writeback(wb);
 
-        // Calculate sleep duration — longer sleep the further over the limit
+        // スリープ時間を計算する — リミットを超えているほど長くスリープする
         nr_reclaimable = nr_dirty - dirty_thresh;
         pause = dirty_poll_interval(nr_dirty, dirty_thresh);
         usleep_range(pause, pause + pause / 8);
 
-        // After waking, loop back and recheck
+        // 起床後、ループの先頭に戻って再チェックする
     }
     current->nr_dirtied = 0;
 }
 ```
 
-### What this looks like in production {#what-this-looks-like-in-production}
+### 本番環境でどう見えるか {#what-this-looks-like-in-production}
 
-When writes overwhelm writeback capacity, `balance_dirty_pages()` starts sleeping writers. The effects are visible:
+書き込みがライトバックの処理能力を圧倒すると、`balance_dirty_pages()`が書き込み側をスリープさせ始める。その影響は目に見える:
 
 ```bash
-# See write throttling in action — look for processes in D state:
+# 書き込みスロットリングの様子を見る — D 状態のプロセスを探す:
 ps aux | grep " D "
 
-# Observe the dirty page watermarks and current dirty count:
+# ダーティページのウォーターマークと現在のダーティ数を観察する:
 watch -n1 'grep -E "^Dirty:|^Writeback:|^NFS_Unstable:" /proc/meminfo'
 
-# Check if dirty throttling is happening (requires perf or ftrace):
+# ダーティスロットリングが起きているか確認する（perf または ftrace が必要）:
 perf trace -e 'balance_dirty_pages' -p <pid>
 
-# Count throttle events via vmstat:
+# vmstat でスロットリング関連の値を数える:
 grep -E "nr_dirty_threshold|nr_dirty_background_threshold" /proc/vmstat
 ```
 
-The practical production impact: a single large writer can "fill the pipe" and cause all other processes that happen to write files to stall in `balance_dirty_pages()`. This is a common source of application latency spikes on write-heavy machines. Tuning `dirty_ratio` and `dirty_background_ratio` or switching to `dirty_bytes` / `dirty_background_bytes` (which do not scale with memory size) can help.
+本番環境での実際の影響として、1つの大きな書き込み側が「パイプを埋め」てしまい、たまたまファイルに書き込む他のすべてのプロセスを`balance_dirty_pages()`で停止させることがある。これは書き込みの多いマシンにおけるアプリケーションのレイテンシスパイクのよくある原因である。`dirty_ratio`と`dirty_background_ratio`をチューニングするか、`dirty_bytes` / `dirty_background_bytes`（メモリサイズに応じてスケールしない）に切り替えると改善できる。
 
-## Stage 5: When does the write actually hit storage? {#stage-5-when-does-the-write-actually-hit-storage}
+## ステージ5: 書き込みは実際にいつストレージに届くのか？ {#stage-5-when-does-the-write-actually-hit-storage}
 
-After `write()` returns, the data is in the page cache but not on disk. There are four ways it eventually gets there.
+`write()`が戻った後、データはページキャッシュにあるがディスク上にはない。最終的にそこへ到達する経路は4つある。
 
-### Path 1: Periodic writeback (every 5 seconds by default) {#path-1-periodic-writeback-every-5-seconds-by-default}
+### 経路1: 定期ライトバック（デフォルトで5秒ごと） {#path-1-periodic-writeback-every-5-seconds-by-default}
 
-The per-BDI writeback worker `wb_workfn` runs every `dirty_writeback_centisecs` centiseconds (default 500 = 5 s). Each run flushes dirty pages that have been dirty longer than `dirty_expire_centisecs` (default 3000 = 30 s). This is the normal path for most workloads.
+BDI単位のライトバックワーカー`wb_workfn`は、`dirty_writeback_centisecs`センチ秒ごと（デフォルト500 = 5秒）に実行される。各実行で、`dirty_expire_centisecs`（デフォルト3000 = 30秒）より長くダーティであったページをフラッシュする。これがほとんどのワークロードにおける通常の経路である。
 
-### Path 2: Background ratio crossed {#path-2-background-ratio-crossed}
+### 経路2: バックグラウンド比率の超過 {#path-2-background-ratio-crossed}
 
-When dirty pages exceed `dirty_background_ratio`, `wb_start_background_writeback()` wakes the flusher immediately — without stalling the writer. The flusher runs concurrently with writes.
+ダーティページが`dirty_background_ratio`を超えると、`wb_start_background_writeback()`が書き込み側を停止させることなく、ただちにフラッシャを起こす。フラッシャは書き込みと並行して実行される。
 
-### Path 3: Memory pressure {#path-3-memory-pressure}
+### 経路3: メモリ逼迫 {#path-3-memory-pressure}
 
-When `kswapd` is trying to reclaim pages for new allocations, it cannot reclaim dirty pages until they have been written back. It calls `wakeup_flusher_threads()` to accelerate writeback. If writeback is too slow, `kswapd` itself may write pages directly — this is called **direct writeback** and is a sign of memory pressure.
+`kswapd`が新たな割り当てのためにページを回収しようとしているとき、ダーティページはライトバックされるまで回収できない。`kswapd`はライトバックを加速するために`wakeup_flusher_threads()`を呼ぶ。ライトバックが遅すぎる場合は、`kswapd`自身がページを直接書き込むこともある。これは**ダイレクトライトバック**と呼ばれ、メモリ逼迫の兆候である。
 
-### Path 4: Explicit sync (fsync, fdatasync, sync) {#path-4-explicit-sync-fsync-fdatasync-sync}
+### 経路4: 明示的な同期（fsync、fdatasync、sync） {#path-4-explicit-sync-fsync-fdatasync-sync}
 
-Applications that need durability guarantees call one of the sync syscalls:
+永続性の保証を必要とするアプリケーションは、同期系のシステムコールのいずれかを呼ぶ:
 
 ```c
-// Ensure file data AND metadata (size, mtime) are durable:
+// ファイルのデータとメタデータ（サイズ、mtime）の両方を永続化する:
 fsync(fd);
 
-// Ensure file data is durable; skip metadata if unchanged:
+// ファイルのデータを永続化する。メタデータは変更がなければスキップ:
 fdatasync(fd);
 
-// Flush all dirty pages across all filesystems (system-wide):
+// すべてのファイルシステムのダーティページをフラッシュする（システム全体）:
 sync();
 ```
 
-The kernel path for `fsync`:
+`fsync`のカーネルパス:
 
 ```c
 // fs/sync.c
 SYSCALL_DEFINE1(fsync, unsigned int, fd)
 {
-    return do_fsync(fd, 0);   // 0 = sync data + metadata
+    return do_fsync(fd, 0);   // 0 = データ + メタデータを同期
 }
 
 SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
 {
-    return do_fsync(fd, 1);   // 1 = data only (skip metadata if possible)
+    return do_fsync(fd, 1);   // 1 = データのみ（可能ならメタデータはスキップ）
 }
 
 static int do_fsync(unsigned int fd, int datasync)
@@ -619,24 +619,24 @@ int vfs_fsync(struct file *file, int datasync)
 
 int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 {
-    // Call the filesystem's fsync implementation
-    // (e.g., ext4_sync_file, xfs_file_fsync)
+    // ファイルシステムの fsync 実装を呼ぶ
+    // （例: ext4_sync_file, xfs_file_fsync）
     return file->f_op->fsync(file, start, end, datasync);
 }
 ```
 
-The filesystem fsync implementation must:
-1. Writeback all dirty pages in the range (calling `filemap_write_and_wait_range`).
-2. Write the inode's metadata to the journal (if using a journalling filesystem).
-3. Issue a flush/FUA command to the storage device.
+ファイルシステムのfsync実装は次のことを行わなければならない:
+1. 範囲内のすべてのダーティページをライトバックする（`filemap_write_and_wait_range`を呼ぶ）。
+2. inodeのメタデータをジャーナルに書き込む（ジャーナリングファイルシステムの場合）。
+3. ストレージデバイスにflush/FUAコマンドを発行する。
 
-After `fsync()` returns, the write is durable — even if power is lost immediately afterward.
+`fsync()`が戻った後は、書き込みは永続化されている。直後に電源が失われたとしてもである。
 
-## Stage 6: The writeback path {#stage-6-the-writeback-path}
+## ステージ6: ライトバックのパス {#stage-6-the-writeback-path}
 
-Writeback is the process by which the kernel actually writes dirty pages to storage. It runs in the context of per-BDI worker threads, driven by `wb_workfn`.
+ライトバックとは、カーネルがダーティページを実際にストレージへ書き込む処理である。これは`wb_workfn`によって駆動されるBDI単位のワーカースレッドのコンテキストで実行される。
 
-### The writeback call chain {#the-writeback-call-chain}
+### ライトバックのコールチェーン {#the-writeback-call-chain}
 
 ```
 wb_workfn()                               fs/fs-writeback.c
@@ -652,7 +652,7 @@ wb_workfn()                               fs/fs-writeback.c
                                                   └── block layer → driver → disk
 ```
 
-### The wb_workfn worker {#the-wb_workfn-worker}
+### wb_workfnワーカー {#the-wb_workfn-worker}
 
 ```c
 // fs/fs-writeback.c
@@ -661,25 +661,25 @@ void wb_workfn(struct work_struct *work)
     struct bdi_writeback *wb =
         container_of(to_delayed_work(work), struct bdi_writeback, dwork);
 
-    // Process any queued explicit work (fsync, sync) first
+    // キューに積まれた明示的な作業（fsync、sync）を先に処理する
     while ((work_item = get_next_work_item(wb)) != NULL) {
         wb_do_writeback(wb, work_item);
         finish_writeback_work(wb, work_item);
     }
 
-    // Then handle periodic/background writeback
+    // 次に定期/バックグラウンドのライトバックを処理する
     wb_do_writeback(wb, NULL);
 
-    // Reschedule if there is still dirty data
+    // まだダーティなデータがあれば再スケジュールする
     if (wb_has_dirty_io(wb))
         wb_wakeup_delayed(wb);
 }
 ```
 
-### writeback_sb_inodes: the per-inode loop {#writebacksbinodes-the-per-inode-loop}
+### writeback_sb_inodes: inodeごとのループ {#writebacksbinodes-the-per-inode-loop}
 
 ```c
-// fs/fs-writeback.c (simplified)
+// fs/fs-writeback.c（簡略化）
 static long writeback_sb_inodes(struct super_block *sb,
                                  struct bdi_writeback *wb,
                                  struct wb_writeback_work *work)
@@ -703,52 +703,52 @@ static long writeback_sb_inodes(struct super_block *sb,
 }
 ```
 
-### The writeback_control struct {#the-writeback_control-struct}
+### writeback_control構造体 {#the-writeback_control-struct}
 
-`writeback_control` is the instruction packet passed down through the call chain. It tells each layer how much to write, in what mode, and for what reason:
+`writeback_control`は、コールチェーンを下って渡される指示パケットである。各層に対して、どれだけ、どのモードで、どんな理由で書き込むかを伝える:
 
 ```c
 // include/linux/writeback.h
 struct writeback_control {
-    long nr_to_write;               // pages to write; decremented as pages are submitted
-    long pages_skipped;             // pages that could not be written (locked, etc.)
-    loff_t range_start;             // start of file byte range to write
-    loff_t range_end;               // end of file byte range
+    long nr_to_write;               // 書き込むページ数。ページが投入されるたびに減る
+    long pages_skipped;             // 書き込めなかったページ数（ロック中など）
+    loff_t range_start;             // 書き込むファイルのバイト範囲の開始
+    loff_t range_end;               // ファイルのバイト範囲の終端
 
-    enum writeback_sync_modes sync_mode;  // WB_SYNC_NONE or WB_SYNC_ALL
-    // WB_SYNC_NONE: don't wait for I/O completion (background writeback)
-    // WB_SYNC_ALL:  wait for I/O completion (fsync path)
+    enum writeback_sync_modes sync_mode;  // WB_SYNC_NONE または WB_SYNC_ALL
+    // WB_SYNC_NONE: I/O の完了を待たない（バックグラウンドライトバック）
+    // WB_SYNC_ALL:  I/O の完了を待つ（fsync パス）
 
-    unsigned for_kupdate:1;         // this is the periodic flusher run
-    unsigned for_background:1;      // triggered by dirty_background_ratio
-    unsigned tagged_writepages:1;   // use tag-based page selection
-    unsigned no_cgroup_owner:1;     // don't charge cgroup writeback
-    unsigned range_cyclic:1;        // cycle through file, starting from writeback_index
+    unsigned for_kupdate:1;         // 定期フラッシャによる実行
+    unsigned for_background:1;      // dirty_background_ratio によって起動された
+    unsigned tagged_writepages:1;   // タグベースのページ選択を使う
+    unsigned no_cgroup_owner:1;     // cgroup ライトバックに課金しない
+    unsigned range_cyclic:1;        // writeback_index から始めてファイルを巡回する
 };
 ```
 
-### WB_REASON: why writeback was triggered {#wb_reason-why-writeback-was-triggered}
+### WB_REASON: ライトバックが起動された理由 {#wb_reason-why-writeback-was-triggered}
 
-The `wb_writeback_work` struct carries a `reason` field that records what triggered this writeback pass:
+`wb_writeback_work`構造体は、このライトバックのパスを起動したものを記録する`reason`フィールドを持つ:
 
 ```c
 // fs/fs-writeback.c
 enum wb_reason {
-    WB_REASON_BACKGROUND,       // dirty_background_ratio exceeded
-    WB_REASON_VMSCAN,           // kswapd / memory pressure
-    WB_REASON_SYNC,             // explicit sync() syscall
-    WB_REASON_PERIODIC,         // dirty_writeback_centisecs timer
-    WB_REASON_LAPTOP_TIMER,     // laptop mode: delayed writeback
-    WB_REASON_FS_FREE_SPACE,    // filesystem running low on space
-    WB_REASON_FORKER_THREAD,    // forker thread (internal)
+    WB_REASON_BACKGROUND,       // dirty_background_ratio を超過
+    WB_REASON_VMSCAN,           // kswapd / メモリ逼迫
+    WB_REASON_SYNC,             // 明示的な sync() システムコール
+    WB_REASON_PERIODIC,         // dirty_writeback_centisecs タイマー
+    WB_REASON_LAPTOP_TIMER,     // ラップトップモード: 遅延ライトバック
+    WB_REASON_FS_FREE_SPACE,    // ファイルシステムの空き容量不足
+    WB_REASON_FORKER_THREAD,    // forker スレッド（内部用）
 };
 ```
 
-This is visible in writeback tracepoints — useful for diagnosing unexpected write storms.
+これはライトバックのtracepointで確認でき、予期しない書き込みの嵐を診断するのに役立つ。
 
-### do_writepages and a_ops->writepages {#dowritepages-and-aops-writepages}
+### do_writepagesとa_ops->writepages {#dowritepages-and-aops-writepages}
 
-At the bottom of the writeback call chain, `do_writepages()` calls into the filesystem:
+ライトバックのコールチェーンの最下部で、`do_writepages()`がファイルシステムを呼び出す:
 
 ```c
 // mm/page-writeback.c
@@ -757,7 +757,7 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
     const struct address_space_operations *a_ops = mapping->a_ops;
     int ret;
 
-    // Prefer filesystem-specific implementation
+    // ファイルシステム固有の実装を優先する
     if (a_ops->writepages)
         ret = a_ops->writepages(mapping, wbc);
     else
@@ -767,46 +767,46 @@ int do_writepages(struct address_space *mapping, struct writeback_control *wbc)
 }
 ```
 
-For ext4 and xfs using iomap, `a_ops->writepages` is `iomap_writepages`. It walks the dirty folios in the address space, calls `iomap_begin` to get block mappings, builds `struct bio` objects, and calls `submit_bio()`.
+iomapを使うext4とxfsでは、`a_ops->writepages`は`iomap_writepages`である。これはアドレス空間内のダーティなfolioをたどり、`iomap_begin`を呼んでブロックマッピングを取得し、`struct bio`オブジェクトを組み立てて`submit_bio()`を呼ぶ。
 
-The folio state transitions during this process:
+この処理の間のfolioの状態遷移:
 
 ```c
-// Before writeback: folio is PG_dirty
-// PG_dirty is cleared before writeback starts, separately from PG_writeback:
-folio_clear_dirty_for_io(folio);  // clears PG_dirty (done before writeback begins)
-folio_start_writeback(folio);     // sets PG_writeback only — does NOT clear PG_dirty
+// ライトバック前: folio は PG_dirty
+// PG_dirty はライトバック開始前に、PG_writeback とは別にクリアされる:
+folio_clear_dirty_for_io(folio);  // PG_dirty をクリアする（ライトバック開始前に行われる）
+folio_start_writeback(folio);     // PG_writeback をセットするだけ — PG_dirty はクリアしない
 
-// After bio completion (bio end_io handler):
-folio_end_writeback(folio);    // clears PG_writeback, wakes waiters
+// bio 完了後（bio の end_io ハンドラ）:
+folio_end_writeback(folio);    // PG_writeback をクリアし、待機者を起こす
 ```
 
-## Stage 7: Block layer handoff {#stage-7-block-layer-handoff}
+## ステージ7: ブロック層への引き渡し {#stage-7-block-layer-handoff}
 
-When `submit_bio()` is called, control passes from the filesystem to the block layer. The write is now a `struct bio` — a description of the I/O operation:
+`submit_bio()`が呼ばれると、制御はファイルシステムからブロック層へ移る。書き込みはこの時点で`struct bio`、すなわちI/O操作の記述になっている:
 
 ```c
-// include/linux/bio.h (key fields)
+// include/linux/bio.h（主要フィールド）
 struct bio {
-    struct block_device *bi_bdev;   // target block device
+    struct block_device *bi_bdev;   // 対象のブロックデバイス
     blk_opf_t            bi_opf;   // REQ_OP_WRITE, REQ_FUA, REQ_PREFLUSH, ...
     unsigned short       bi_flags;
     unsigned short       bi_ioprio;
-    struct bvec_iter     bi_iter;   // current position in bi_io_vec
-    bio_end_io_t        *bi_end_io; // called when I/O completes
+    struct bvec_iter     bi_iter;   // bi_io_vec 内の現在位置
+    bio_end_io_t        *bi_end_io; // I/O 完了時に呼ばれる
     void                *bi_private;
-    struct bio_vec       bi_inline_vecs[]; // scatter-gather list of pages
+    struct bio_vec       bi_inline_vecs[]; // ページのスキャッタギャザーリスト
 };
 ```
 
-### submit_bio to blk_mq_submit_bio {#submitbio-to-blkmqsubmitbio}
+### submit_bioからblk_mq_submit_bioへ {#submitbio-to-blkmqsubmitbio}
 
 ```c
 // block/blk-core.c
 void submit_bio(struct bio *bio)
 {
     if (blkcg_punt_bio_submit(bio))
-        return;   // cgroup IO scheduling — bio handed off to a workqueue
+        return;   // cgroup の I/O スケジューリング — bio は workqueue に引き渡される
 
     __submit_bio(bio);
 }
@@ -815,282 +815,282 @@ static void __submit_bio(struct bio *bio)
 {
     struct gendisk *disk = bio->bi_bdev->bd_disk;
 
-    // Integrity checks (DIF/DIX)
+    // 整合性チェック（DIF/DIX）
     if (!blk_crypto_bio_prep(&bio))
         return;
 
-    disk->fops->submit_bio(bio);    // dispatch to driver, or:
-    blk_mq_submit_bio(bio);         // multiqueue path (most modern drivers)
+    disk->fops->submit_bio(bio);    // ドライバへディスパッチ、または:
+    blk_mq_submit_bio(bio);         // マルチキューのパス（ほとんどの現代的なドライバ）
 }
 ```
 
-`blk_mq_submit_bio` places the bio into the appropriate hardware dispatch queue, handles I/O scheduling (BFQ, mq-deadline, none), merges adjacent bios where possible, and ultimately calls the device driver's queue command function.
+`blk_mq_submit_bio`は、bioを適切なハードウェアディスパッチキューに配置し、I/Oスケジューリング（BFQ、mq-deadline、none）を扱い、可能であれば隣接するbioをマージし、最終的にデバイスドライバのキューコマンド関数を呼ぶ。
 
-For a deeper look at request queues, I/O schedulers, and driver dispatch, see the [block layer docs](../block/README.md).
+リクエストキュー、I/Oスケジューラ、ドライバのディスパッチについて詳しくは、[ブロック層のドキュメント](../block/README.md)を参照。
 
-## Stage 8: Barriers and persistence guarantees {#stage-8-barriers-and-persistence-guarantees}
+## ステージ8: バリアと永続性の保証 {#stage-8-barriers-and-persistence-guarantees}
 
-### O_SYNC and O_DSYNC {#osync-and-odsync}
+### O_SYNCとO_DSYNC {#osync-and-odsync}
 
-Opening a file with `O_SYNC` makes every `write()` call synchronous — it does not return until data and metadata have been confirmed durable by the storage device. `O_DSYNC` is the data-only equivalent (like `fdatasync()` on every write):
+ファイルを`O_SYNC`で開くと、すべての`write()`呼び出しが同期的になる。データとメタデータが永続化されたことをストレージデバイスが確認するまで戻らない。`O_DSYNC`はデータのみの同等版である（書き込みのたびに`fdatasync()`を行うようなもの）:
 
 ```c
-// Every write is fully durable (data + metadata):
+// すべての書き込みが完全に永続化される（データ + メタデータ）:
 int fd = open("journal.log", O_WRONLY | O_CREAT | O_SYNC, 0644);
-write(fd, record, len);   // blocks until on-disk
+write(fd, record, len);   // ディスクに載るまでブロック
 
-// Data durable; inode mtime may lag:
+// データは永続化される。inode の mtime は遅れることがある:
 int fd = open("data.bin", O_WRONLY | O_CREAT | O_DSYNC, 0644);
-write(fd, buf, len);      // blocks until data on-disk
+write(fd, buf, len);      // データがディスクに載るまでブロック
 ```
 
-These flags set `IOCB_SYNC` / `IOCB_DSYNC` on the `kiocb`. After `generic_perform_write()` returns, `generic_file_write_iter()` checks:
+これらのフラグは`kiocb`に`IOCB_SYNC` / `IOCB_DSYNC`をセットする。`generic_perform_write()`が戻った後、`generic_file_write_iter()`は次のようにチェックする:
 
 ```c
 // mm/filemap.c
 if (ret > 0) {
     ret = generic_write_sync(iocb, ret);
-    // generic_write_sync → vfs_fsync_range → filesystem fsync
+    // generic_write_sync → vfs_fsync_range → ファイルシステムの fsync
 }
 ```
 
-### FUA vs FLUSH {#fua-vs-flush}
+### FUA対FLUSH {#fua-vs-flush}
 
-The block layer communicates ordering requirements to the storage device via two mechanisms:
+ブロック層は、2つの仕組みを通じてストレージデバイスに順序付けの要件を伝える:
 
-| Mechanism | How it works | Cost |
+| 仕組み | 動作 | コスト |
 |-----------|-------------|------|
-| `REQ_PREFLUSH` | Flush the device's write cache before the write | Extra round-trip |
-| `REQ_FUA` (Force Unit Access) | Bypass the write cache for this specific write | ~same as write |
-| `REQ_SYNC` | Hint: this is a synchronous write (priority) | None |
+| `REQ_PREFLUSH` | 書き込みの前にデバイスのライトキャッシュをフラッシュする | 余分な往復 |
+| `REQ_FUA`（Force Unit Access） | この特定の書き込みについてライトキャッシュを迂回する | 書き込みとほぼ同じ |
+| `REQ_SYNC` | ヒント: これは同期書き込みである（優先度） | なし |
 
-For `O_DSYNC` writes, the block layer uses FUA if the device supports it (`/sys/block/sda/queue/fua` == 1), avoiding the cost of a separate flush command. For `fsync()`, the filesystem issues a `REQ_PREFLUSH` after flushing dirty pages to ensure ordering.
+`O_DSYNC`の書き込みでは、デバイスがFUAをサポートしていれば（`/sys/block/sda/queue/fua` == 1）、ブロック層はFUAを使い、別個のフラッシュコマンドのコストを避ける。`fsync()`では、ファイルシステムはダーティページをフラッシュした後に`REQ_PREFLUSH`を発行して順序を保証する。
 
 ```bash
-# Check FUA support:
-cat /sys/block/nvme0n1/queue/fua    # 1 = FUA supported
-cat /sys/block/sda/queue/fua        # 0 = no FUA (older SATA drives)
+# FUA のサポートを確認する:
+cat /sys/block/nvme0n1/queue/fua    # 1 = FUA サポートあり
+cat /sys/block/sda/queue/fua        # 0 = FUA なし（古い SATA ドライブ）
 
-# Check write cache status on a spinning disk:
-hdparm -W /dev/sda                  # 1 = write cache enabled (volatile)
+# 回転ディスクのライトキャッシュの状態を確認する:
+hdparm -W /dev/sda                  # 1 = ライトキャッシュ有効（揮発性）
 ```
 
-### NVMe ordering {#nvme-ordering}
+### NVMeの順序付け {#nvme-ordering}
 
-NVMe has native support for FUA and the `Flush` command. On NVMe, `fsync()` typically maps to:
+NVMeはFUAと`Flush`コマンドをネイティブにサポートしている。NVMeでは、`fsync()`は通常次のように対応付けられる:
 
-1. Write all dirty data pages (normal write commands).
-2. Write the inode/journal.
-3. Issue one `Flush` command to the NVMe controller.
+1. すべてのダーティなデータページを書き込む（通常の書き込みコマンド）。
+2. inode/ジャーナルを書き込む。
+3. NVMeコントローラに`Flush`コマンドを1つ発行する。
 
-NVMe controllers are required to honour the Flush command — all preceding writes must be committed to non-volatile storage before the Flush command completes. This is the hardware guarantee that makes `fsync()` meaningful.
+NVMeコントローラはFlushコマンドに従うことが要求されている。Flushコマンドが完了する前に、それ以前のすべての書き込みが不揮発性ストレージにコミットされなければならない。これが`fsync()`を意味あるものにしているハードウェアの保証である。
 
-## Stage 9: What can go wrong {#stage-9-what-can-go-wrong}
+## ステージ9: 何がうまくいかなくなりうるか {#stage-9-what-can-go-wrong}
 
-### The volatile write cache problem {#the-volatile-write-cache-problem}
+### 揮発性ライトキャッシュの問題 {#the-volatile-write-cache-problem}
 
-Most HDDs and many SSDs have a DRAM write cache. When the kernel issues a write, the device acknowledges it as soon as the data lands in this cache — before writing it to the platters or NAND. If power fails between the acknowledgement and the actual physical write, data is lost.
+ほとんどのHDDと多くのSSDはDRAMのライトキャッシュを持つ。カーネルが書き込みを発行すると、デバイスはデータがこのキャッシュに届いた時点で、プラッタやNANDに書き込む前に完了を応答する。応答と実際の物理的な書き込みの間に電源が落ちると、データは失われる。
 
-This means that even after `fsync()` returns successfully, data can be lost on drives with volatile write caches unless:
+つまり、`fsync()`が成功して戻った後でさえ、揮発性ライトキャッシュを持つドライブでは、次のいずれかが満たされない限りデータが失われうる:
 
-- The drive's write cache is disabled (`hdparm -W 0 /dev/sda`), or
-- The drive supports and honours FUA / Flush commands.
+- ドライブのライトキャッシュが無効化されている（`hdparm -W 0 /dev/sda`）、または
+- ドライブがFUA / Flushコマンドをサポートし、それに従う。
 
-Enterprise HDDs and SSDs typically have battery-backed or capacitor-backed write caches, which mitigate this — the cache survives brief power loss long enough to flush to persistent storage.
+エンタープライズ向けのHDDやSSDは通常、バッテリーやキャパシタでバックアップされたライトキャッシュを持ち、これがこの問題を緩和する。キャッシュは短時間の電源喪失を、永続ストレージへフラッシュできるだけの時間持ちこたえる。
 
-### Kernel buffering fooling applications {#kernel-buffering-fooling-applications}
+### アプリケーションを欺くカーネルのバッファリング {#kernel-buffering-fooling-applications}
 
-A common mistake: an application writes data and calls `close()` without `fsync()`, and assumes the data is safe because `close()` succeeded. In fact, `close()` does not flush dirty pages — it merely decrements the file descriptor reference count. Dirty pages may remain in the page cache for up to 30 seconds (the `dirty_expire_centisecs` default) after `close()` returns.
+よくある間違いとして、アプリケーションがデータを書き込み、`fsync()`なしで`close()`を呼び、`close()`が成功したからデータは安全だと思い込むことがある。実際には、`close()`はダーティページをフラッシュしない。ファイルディスクリプタの参照カウントを減らすだけである。ダーティページは`close()`が戻った後も最大30秒（`dirty_expire_centisecs`のデフォルト）ページキャッシュに残りうる。
 
 ```c
-// WRONG: does not guarantee durability
+// 誤り: 永続性を保証しない
 int fd = open("data", O_WRONLY | O_CREAT, 0644);
 write(fd, buf, len);
-close(fd);    // <-- does NOT flush to disk
+close(fd);    // <-- ディスクへフラッシュしない
 
-// CORRECT:
+// 正しい:
 int fd = open("data", O_WRONLY | O_CREAT, 0644);
 write(fd, buf, len);
-fsync(fd);    // <-- flush data and metadata to storage
+fsync(fd);    // <-- データとメタデータをストレージへフラッシュする
 close(fd);
 ```
 
-### fsync on a directory for rename safety {#fsync-on-a-directory-for-rename-safety}
+### rename安全性のためのディレクトリへのfsync {#fsync-on-a-directory-for-rename-safety}
 
-Renaming a file (which is how most applications do "atomic write": write to a temp file, then rename into place) requires `fsync()` on the directory, not just the file:
+ファイルのrename（ほとんどのアプリケーションが「アトミックな書き込み」を行う方法。一時ファイルに書き込み、それをrenameで所定の位置に置く）には、ファイルだけでなくディレクトリに対する`fsync()`も必要である:
 
 ```c
-// Atomic write pattern used by databases, editors, etc.
+// データベースやエディタなどが使うアトミック書き込みパターン
 
-// Step 1: write to a temporary file
+// ステップ1: 一時ファイルに書き込む
 int fd = open("data.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 write(fd, new_content, len);
-fsync(fd);            // flush data and inode to disk
+fsync(fd);            // データと inode をディスクへフラッシュする
 close(fd);
 
-// Step 2: rename into place (atomic on the filesystem)
+// ステップ2: 所定の位置へ rename する（ファイルシステム上でアトミック）
 rename("data.tmp", "data");
 
-// Step 3: fsync the directory so the rename's directory entry is durable
+// ステップ3: rename によるディレクトリエントリが永続化されるようディレクトリを fsync する
 int dir_fd = open(".", O_RDONLY);
-fsync(dir_fd);        // <-- without this, after a crash, "data" might not exist
+fsync(dir_fd);        // <-- これがないと、クラッシュ後に "data" が存在しないかもしれない
 close(dir_fd);
 ```
 
-Without the directory `fsync`, the rename's directory entry update may still be in the page cache after a crash. On reboot, neither the old nor the new name might exist, leaving the file orphaned or missing.
+ディレクトリの`fsync`がないと、クラッシュ時にrenameによるディレクトリエントリの更新がまだページキャッシュにある可能性がある。再起動後、古い名前も新しい名前も存在せず、ファイルが孤立するか失われることがある。
 
-### Page cache and direct I/O coherency {#page-cache-and-direct-io-coherency}
+### ページキャッシュとダイレクトI/Oの一貫性 {#page-cache-and-direct-io-coherency}
 
-Mixing buffered writes (which go through the page cache) with direct reads (`O_DIRECT`, which bypass the cache) can produce stale reads:
+バッファード書き込み（ページキャッシュを経由する）とダイレクト読み込み（`O_DIRECT`。キャッシュを迂回する）を混在させると、古いデータを読むことがある:
 
 ```c
-// Thread A: buffered write
-write(fd, "new_value", 9);   // lands in page cache (dirty)
+// スレッドA: バッファード書き込み
+write(fd, "new_value", 9);   // ページキャッシュに入る（ダーティ）
 
-// Thread B: direct read bypasses page cache, sees old on-disk data
+// スレッドB: ダイレクト読み込みはページキャッシュを迂回し、ディスク上の古いデータを見る
 int fd_direct = open("file", O_RDONLY | O_DIRECT);
-pread(fd_direct, buf, 9, 0); // reads from disk: old data!
+pread(fd_direct, buf, 9, 0); // ディスクから読む: 古いデータ！
 ```
 
-The kernel does not automatically flush the page cache when a direct read is issued. Applications that mix buffered and direct I/O must call `fsync()` before switching from buffered writes to direct reads.
+カーネルは、ダイレクト読み込みが発行されたときにページキャッシュを自動的にフラッシュしない。バッファードI/OとダイレクトI/Oを混在させるアプリケーションは、バッファード書き込みからダイレクト読み込みに切り替える前に`fsync()`を呼ばなければならない。
 
-### NFS and distributed write safety {#nfs-and-distributed-write-safety}
+### NFSと分散環境での書き込みの安全性 {#nfs-and-distributed-write-safety}
 
-On NFS, `write()` calls may be buffered by the NFS client. The server does not see the writes until the client flushes them. `fsync()` on an NFS client sends a `COMMIT` RPC to the server, requesting that the server flush its own buffers to stable storage. If the server crashes between the client's write and the `COMMIT`, data can be lost even if the client's `write()` returned success — this is NFS's "unstable write" behaviour.
+NFSでは、`write()`呼び出しはNFSクライアントでバッファリングされることがある。サーバーは、クライアントがフラッシュするまでその書き込みを見ない。NFSクライアントでの`fsync()`は、サーバーに`COMMIT` RPCを送り、サーバー自身のバッファを安定ストレージへフラッシュするよう要求する。クライアントの書き込みと`COMMIT`の間にサーバーがクラッシュすると、クライアントの`write()`が成功を返していてもデータは失われうる。これがNFSの「unstable write（不安定な書き込み）」の挙動である。
 
-## Try it yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### Trace a write with strace {#trace-a-write-with-strace}
+### straceで書き込みをトレースする {#trace-a-write-with-strace}
 
 ```bash
-# Trace write syscalls for a command:
+# コマンドの write 系システムコールをトレースする:
 strace -e trace=write,fsync,fdatasync dd if=/dev/zero of=/tmp/test bs=4096 count=256
 
-# Trace with timing to see where time is spent:
+# 時間を計測しながらトレースし、どこで時間を使っているか見る:
 strace -T -e trace=write,fsync dd if=/dev/zero of=/tmp/test bs=4096 count=256 oflag=sync
 ```
 
-### Watch dirty pages accumulate and flush {#watch-dirty-pages-accumulate-and-flush}
+### ダーティページが溜まりフラッシュされる様子を見る {#watch-dirty-pages-accumulate-and-flush}
 
 ```bash
-# Continuous monitoring of dirty/writeback pages:
+# dirty/writeback ページを継続的に監視する:
 watch -n1 'grep -E "^Dirty:|^Writeback:|^NFS_Unstable:" /proc/meminfo'
 
-# In another terminal, write a large file:
+# 別のターミナルで大きなファイルを書き込む:
 dd if=/dev/zero of=/tmp/bigfile bs=1M count=512
 
-# Observe: Dirty: rises as writes buffer, then drops as writeback runs
+# 観察: 書き込みがバッファされると Dirty: が上がり、ライトバックが走ると下がる
 ```
 
-### Measure the cost of fsync {#measure-the-cost-of-fsync}
+### fsyncのコストを測る {#measure-the-cost-of-fsync}
 
 ```bash
-# Buffered writes only (no fsync) — fast:
+# バッファード書き込みのみ（fsync なし）— 速い:
 time dd if=/dev/zero of=/tmp/test bs=4096 count=4096
 
-# Buffered writes with fsync at the end — slightly slower:
+# バッファード書き込みと最後に fsync — 少し遅い:
 time dd if=/dev/zero of=/tmp/test bs=4096 count=4096 conv=fsync
 
-# Sync every write (O_SYNC equivalent) — much slower:
+# 書き込みごとに同期（O_SYNC 相当）— かなり遅い:
 time dd if=/dev/zero of=/tmp/test bs=4096 count=4096 oflag=sync
 ```
 
-### Watch writeback with iostat {#watch-writeback-with-iostat}
+### iostatでライトバックを観察する {#watch-writeback-with-iostat}
 
 ```bash
-# Real-time I/O statistics per device (1-second intervals):
+# デバイスごとのリアルタイム I/O 統計（1秒間隔）:
 iostat -x 1
 
-# Look for:
-#   wMB/s   — write throughput (rising during writeback)
-#   w_await — write latency (rising when drive is saturated)
-#   %util   — device utilisation
+# 注目する項目:
+#   wMB/s   — 書き込みスループット（ライトバック中に上昇）
+#   w_await — 書き込みレイテンシ（ドライブが飽和すると上昇）
+#   %util   — デバイス使用率
 
-# When a writeback storm hits, you will see wMB/s spike followed by
-# application latency spikes as balance_dirty_pages() throttles writers.
+# ライトバックの嵐が起きると、wMB/s のスパイクに続いて、
+# balance_dirty_pages() が書き込み側をスロットリングすることによるアプリケーションのレイテンシスパイクが見える。
 ```
 
-### Observe the writeback worker with ftrace {#observe-the-writeback-worker-with-ftrace}
+### ftraceでライトバックワーカーを観察する {#observe-the-writeback-worker-with-ftrace}
 
 ```bash
-# Enable writeback tracepoints:
+# ライトバックの tracepoint を有効にする:
 echo 1 > /sys/kernel/debug/tracing/events/writeback/enable
 cat /sys/kernel/debug/tracing/trace_pipe &
 
-# Trigger some writes in another terminal:
+# 別のターミナルで書き込みを発生させる:
 dd if=/dev/zero of=/tmp/trace_test bs=4096 count=1024
 
-# Disable tracing:
+# トレーシングを無効にする:
 echo 0 > /sys/kernel/debug/tracing/events/writeback/enable
 
-# You should see events like:
+# 次のようなイベントが見えるはずである:
 # wb_writeback_start: bdi=8:0 nr_pages=... reason=periodic
 # writeback_dirty_inode: dev=8:0 ino=... state=I_DIRTY_PAGES
 # writeback_single_inode: dev=8:0 ino=... wrote=...
 ```
 
-### Check dirty throttling thresholds {#check-dirty-throttling-thresholds}
+### ダーティスロットリングのしきい値を確認する {#check-dirty-throttling-thresholds}
 
 ```bash
-# Current sysctl values:
+# 現在の sysctl 値:
 sysctl vm.dirty_ratio vm.dirty_background_ratio \
        vm.dirty_writeback_centisecs vm.dirty_expire_centisecs
 
-# Actual threshold in pages (computed from ratio × available memory):
+# ページ単位の実際のしきい値（ratio × 利用可能メモリから計算）:
 grep -E "nr_dirty_threshold|nr_dirty_background_threshold" /proc/vmstat
 
-# Tune for a write-heavy workload (more buffering, less stalling):
+# 書き込みの多いワークロード向けにチューニング（バッファリングを増やし、停止を減らす）:
 sudo sysctl -w vm.dirty_ratio=40
 sudo sysctl -w vm.dirty_background_ratio=20
 
-# Tune for better durability (flush more frequently):
-sudo sysctl -w vm.dirty_writeback_centisecs=100   # wake up every 1 s
-sudo sysctl -w vm.dirty_expire_centisecs=500      # flush pages older than 5 s
+# 永続性を高めるためのチューニング（より頻繁にフラッシュ）:
+sudo sysctl -w vm.dirty_writeback_centisecs=100   # 1秒ごとに起床
+sudo sysctl -w vm.dirty_expire_centisecs=500      # 5秒より古いページをフラッシュ
 ```
 
-### Monitor per-BDI writeback state {#monitor-per-bdi-writeback-state}
+### BDI単位のライトバック状態を監視する {#monitor-per-bdi-writeback-state}
 
 ```bash
-# List all backing devices:
+# すべてのバッキングデバイスを一覧する:
 ls /sys/class/bdi/
 
-# Per-BDI writeback stats:
+# BDI 単位のライトバック統計:
 cat /sys/class/bdi/*/stats
 
-# Example output fields:
-# BdiDirtyThresh: dirty threshold for this device (KB)
-# BdiDirty:       current dirty pages on this device (KB)
-# BdiWriteback:   pages currently in writeback (KB)
-# BdiWritten:     total bytes written since boot
+# 出力フィールドの例:
+# BdiDirtyThresh: このデバイスのダーティしきい値（KB）
+# BdiDirty:       このデバイス上の現在のダーティページ（KB）
+# BdiWriteback:   現在ライトバック中のページ（KB）
+# BdiWritten:     起動以降に書き込まれた総バイト数
 ```
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What It Does |
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | `generic_file_write_iter`, `generic_perform_write`, `filemap_dirty_folio` |
-| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | `balance_dirty_pages`, dirty accounting, `do_writepages`, `folio_mark_dirty` |
-| [`fs/fs-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fs-writeback.c) | `wb_workfn`, `writeback_sb_inodes`, `__writeback_single_inode`, `__mark_inode_dirty` |
-| [`fs/sync.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/sync.c) | `fsync`, `fdatasync`, `sync` syscall implementations |
-| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | `vfs_write`, `ksys_write`, `new_sync_write` |
-| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | `struct address_space`, `struct kiocb`, `address_space_operations` |
-| [`include/linux/writeback.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/writeback.h) | `struct writeback_control`, `wb_reason` enum |
-| [`fs/iomap/buffered-io.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/iomap/buffered-io.c) | `iomap_write_begin`, `iomap_write_end`, `iomap_writepages` |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | `generic_file_write_iter`、`generic_perform_write`、`filemap_dirty_folio` |
+| [`mm/page-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) | `balance_dirty_pages`、ダーティのアカウンティング、`do_writepages`、`folio_mark_dirty` |
+| [`fs/fs-writeback.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/fs-writeback.c) | `wb_workfn`、`writeback_sb_inodes`、`__writeback_single_inode`、`__mark_inode_dirty` |
+| [`fs/sync.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/sync.c) | `fsync`、`fdatasync`、`sync`システムコールの実装 |
+| [`fs/read_write.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/read_write.c) | `vfs_write`、`ksys_write`、`new_sync_write` |
+| [`include/linux/fs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fs.h) | `struct address_space`、`struct kiocb`、`address_space_operations` |
+| [`include/linux/writeback.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/writeback.h) | `struct writeback_control`、`wb_reason` enum |
+| [`fs/iomap/buffered-io.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/iomap/buffered-io.c) | `iomap_write_begin`、`iomap_write_end`、`iomap_writepages` |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [Page cache writeback](page-cache-writeback.md) — writeback mechanics in depth
-- [Buffered I/O](buffered-io.md) — the full read and write path through the page cache
-- [Direct I/O](direct-io.md) — bypassing the page cache entirely with `O_DIRECT`
-- [Async I/O](async-io.md) — io_uring for non-blocking write submission
-- [Life of a read](../mm/life-of-read.md) — the read-side counterpart to this page
+- [ページキャッシュのライトバック](page-cache-writeback.md) — ライトバックの仕組みの詳細
+- [バッファードI/O](buffered-io.md) — ページキャッシュを通る読み書きパスの全体
+- [ダイレクトI/O](direct-io.md) — `O_DIRECT`でページキャッシュを完全に迂回する
+- [非同期I/O](async-io.md) — ノンブロッキングな書き込み投入のためのio_uring
+- [readの一生](../mm/life-of-read.md) — このページの読み込み側の対になるページ
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Writeback and control groups](https://lwn.net/Articles/648292/) (2015) — per-cgroup writeback accounting
-- [Dynamic writeback throttling](https://lwn.net/Articles/405076/) (2010) — dirty throttling history
-- [Flushing out pdflush](https://lwn.net/Articles/326552/) — replacing the single pdflush thread with per-BDI flusher threads
-- [The end of block barriers](https://lwn.net/Articles/400541/) — the move from I/O barriers to the FLUSH/FUA model
-- [The rapid growth of io_uring](https://lwn.net/Articles/810414/) (2020) — the first year of io_uring's feature growth
+- [Writeback and control groups](https://lwn.net/Articles/648292/)（2015） — cgroup単位のライトバックのアカウンティング
+- [Dynamic writeback throttling](https://lwn.net/Articles/405076/)（2010） — ダーティスロットリングの歴史
+- [Flushing out pdflush](https://lwn.net/Articles/326552/) — 単一のpdflushスレッドをBDI単位のフラッシャスレッドで置き換える
+- [The end of block barriers](https://lwn.net/Articles/400541/) — I/OバリアからFLUSH/FUAモデルへの移行
+- [The rapid growth of io_uring](https://lwn.net/Articles/810414/)（2020） — io_uringの機能拡張の最初の1年

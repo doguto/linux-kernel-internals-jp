@@ -1,151 +1,153 @@
-# War Stories: I/O Bugs, Regressions, and Data Loss Incidents {#war-stories-io-bugs-regressions-and-data-loss-incidents}
+# 事件簿: I/Oのバグ、リグレッション、データ損失インシデント {#war-stories-io-bugs-regressions-and-data-loss-incidents}
 
-> Real incidents from Linux I/O subsystem history — what broke, why, and what the kernel learned
+> LinuxのI/Oサブシステムの歴史から実際のインシデントを取り上げる — 何が壊れ、なぜ壊れ、カーネルは何を学んだか
 
-The Linux I/O stack is one of the most complex paths in the kernel, spanning VFS, the page cache, filesystem journaling, block layer, and device drivers. Changes at any layer can produce subtle interactions that only manifest under specific workloads, crash scenarios, or combinations of flags that seemed safe in isolation.
+LinuxのI/Oスタックは、VFS、ページキャッシュ、ファイルシステムのジャーナリング、ブロック層、デバイスドライバにまたがる、カーネルで最も複雑な経路の1つである。どの層での変更も微妙な相互作用を生み出すことがあり、それは特定のワークロード、クラッシュのシナリオ、あるいは単独では安全に見えたフラグの組み合わせの下でしか表に出ない。
 
-This page documents five well-known I/O incidents drawn from public kernel commit logs, LWN articles, LKML discussions, and documented reports from database and application teams. These are not hypothetical risks. Each caused real data loss, silent corruption, or production outages before the root cause was understood.
+このページでは、公開されたカーネルのコミットログ、LWNの記事、LKMLでの議論、データベースやアプリケーションのチームによる文書化された報告から集めた、よく知られた5つのI/Oインシデントを記録する。これらは仮定上のリスクではない。いずれも、根本原因が理解されるまでに、実際のデータ損失、静かなデータ破損、あるいは本番環境の障害を引き起こした。
 
 ---
 
-## Case 1: ext4 `data=writeback` and stale data exposure after a crash {#case-1-ext4-datawriteback-and-stale-data-exposure-after-a-crash}
+## 事例1: ext4の`data=writeback`とクラッシュ後の古いデータの露出 {#case-1-ext4-datawriteback-and-stale-data-exposure-after-a-crash}
 
-### Before state {#before-state}
+### 事前の状態 {#before-state}
 
-ext4 inherited from ext3 three journaling modes that trade durability for performance:
+ext4はext3から、永続性と性能をトレードオフする3つのジャーナリングモードを引き継いだ:
 
-- `data=journal`: all data and metadata are written to the journal before the commit. Slowest, but strongest crash guarantees.
-- `data=ordered` (the default): metadata is journaled, but data blocks are written to their final location *before* the metadata commit. This ensures that after a crash, any metadata pointing to a newly allocated block also points to data that has been written.
-- `data=writeback`: metadata is journaled, but data writes are completely decoupled from the journal commit. Data may be written before or after the associated metadata journal commit — or not at all before a crash.
+- `data=journal`: すべてのデータとメタデータが、コミットの前にジャーナルへ書き込まれる。最も遅いが、クラッシュに対する保証は最も強い。
+- `data=ordered`（デフォルト）: メタデータはジャーナルされるが、データブロックはメタデータのコミットの*前に*最終的な位置へ書き込まれる。これにより、クラッシュ後に、新たに割り当てられたブロックを指すメタデータは、すでに書き込まれたデータを指していることが保証される。
+- `data=writeback`: メタデータはジャーナルされるが、データの書き込みはジャーナルコミットから完全に切り離されている。データは関連するメタデータのジャーナルコミットの前に書かれるかもしれないし、後かもしれないし、クラッシュ前にはまったく書かれないかもしれない。
 
-In `data=ordered` mode, the kernel enforces an ordering: data blocks go to disk, *then* the journal transaction containing the inode update commits. This is why the default mode is safe: if the system crashes after the journal commit but before the data write, ext4's recovery will replay the journal and end up with an inode that points to unwritten data — but this case cannot occur because the data write happens first.
+`data=ordered`モードでは、カーネルは順序を強制する。データブロックがディスクに書かれ、*その後で*inodeの更新を含むジャーナルトランザクションがコミットされる。これがデフォルトモードが安全である理由である。もしジャーナルコミットの後、データ書き込みの前にシステムがクラッシュしたなら、ext4の回復処理はジャーナルをリプレイし、書き込まれていないデータを指すinodeが残ることになる。しかし、データの書き込みが先に起きるため、このケースは起こりえない。
 
-`data=writeback` was offered as a performance option. For workloads that did their own internal durability management (databases, certain log-structured applications), the overhead of the ordered flush was unnecessary. The assumption was that callers using `data=writeback` understood the trade-off.
+`data=writeback`は性能オプションとして提供されていた。独自に内部で永続性を管理するワークロード（データベースや、ある種のログ構造化アプリケーション）では、ordered方式のフラッシュのオーバーヘッドは不要だった。`data=writeback`を使う側はそのトレードオフを理解しているという前提があった。
 
-### The change {#the-change}
+### 変更 {#the-change}
 
-The trigger was not a single kernel change but a configuration choice made by system administrators and distributions seeking better write throughput. The mount option `data=writeback` was sometimes recommended in performance guides, particularly for ext4 on servers with battery-backed write caches, where the assumption was that the hardware ensured ordering.
+きっかけは単一のカーネル変更ではなく、より良い書き込みスループットを求めるシステム管理者やディストリビューションによる設定上の選択だった。マウントオプション`data=writeback`は性能ガイドで推奨されることがあり、特にバッテリーバックアップ付きライトキャッシュを持つサーバー上のext4でそうだった。そこではハードウェアが順序を保証するという前提があった。
 
-The combination that caused data exposure: truncating a file (or overwriting it by truncating and rewriting) followed by a crash before the new data was flushed, but after the journal metadata commit.
+データの露出を引き起こした組み合わせは、ファイルのtruncate（あるいはtruncateして書き直すことによる上書き）の後、新しいデータがフラッシュされる前、しかしジャーナルのメタデータコミットの後にクラッシュすることだった。
 
-### Observed regression {#observed-regression}
+### 観測されたリグレッション {#observed-regression}
 
-After a crash and journal recovery, users found that files contained **stale data** — data that had previously belonged to a different file, or to an earlier version of the same file, rather than the newly written data or zeros.
+クラッシュとジャーナル回復の後、ユーザーはファイルに**古いデータ**が含まれていることに気づいた。新たに書き込まれたデータやゼロではなく、以前は別のファイルに属していたデータや、同じファイルの以前のバージョンのデータである。
 
-The scenario:
+シナリオ:
 
-1. Application truncates a file to zero length and begins writing new content.
-2. ext4 allocates new data blocks. These blocks may be reused from a recently freed file and still contain that file's old data on disk.
-3. In `data=ordered` mode, the new data would be written to disk before the inode's metadata (with the new block pointers) is committed to the journal. A crash before the data write means the journal never commits the new block pointers — the file is safely empty or contains partial data, never stale foreign data.
-4. In `data=writeback` mode, the journal can commit the metadata (the inode update with the new block pointers) without waiting for the data write. If the system crashes after the journal commit but before the data blocks are written, recovery replays the journal and produces an inode pointing to the newly allocated (but unwritten) blocks — which still contain whatever was on disk before.
+1. アプリケーションがファイルを長さ0にtruncateし、新しい内容の書き込みを始める。
+2. ext4が新しいデータブロックを割り当てる。これらのブロックは最近解放されたファイルから再利用されたものかもしれず、ディスク上にはまだそのファイルの古いデータが残っている。
+3. `data=ordered`モードでは、新しいデータは、inodeのメタデータ（新しいブロックポインタを含む）がジャーナルにコミットされる前にディスクへ書き込まれる。データ書き込みの前にクラッシュすれば、ジャーナルは新しいブロックポインタをコミットしない。ファイルは安全に空のままか部分的なデータを含むだけであり、他のファイルの古いデータを含むことは決してない。
+4. `data=writeback`モードでは、ジャーナルはデータ書き込みを待たずにメタデータ（新しいブロックポインタを含むinodeの更新）をコミットできる。ジャーナルコミットの後、データブロックが書き込まれる前にシステムがクラッシュすると、回復処理はジャーナルをリプレイし、新たに割り当てられた（しかし書き込まれていない）ブロックを指すinodeを生成する。そのブロックには、以前ディスク上にあったものがそのまま入っている。
 
-The result was that opening a recovered file could expose data from a previously deleted file — a security and data integrity problem. This behavior was documented in the ext4 documentation and in LWN's coverage of ext4 journaling modes.
+その結果、回復されたファイルを開くと、以前に削除されたファイルのデータが露出しうるという、セキュリティとデータ整合性の問題が生じた。この挙動はext4のドキュメントや、ext4のジャーナリングモードに関するLWNの記事で文書化されている。
 
-### Why it happened {#why-it-happened}
+### なぜ起きたか {#why-it-happened}
 
-The root cause is the decoupling of metadata journaling from data writeback in `data=writeback` mode. ext4's journal guarantees metadata consistency: after recovery, the filesystem structure is coherent. But metadata consistency does not imply data integrity — it only means the pointers are valid, not that the pointed-to data is what the application wrote.
+根本原因は、`data=writeback`モードにおいてメタデータのジャーナリングがデータのライトバックから切り離されていることである。ext4のジャーナルはメタデータの一貫性を保証する。回復後、ファイルシステムの構造は整合している。しかしメタデータの一貫性はデータの整合性を意味しない。それはポインタが有効であることを意味するだけで、指されているデータがアプリケーションの書き込んだものであることを意味しない。
 
-The relevant code path in `fs/ext4/`:
+`fs/ext4/`内の関連するコードパス:
 
-- `ext4_writepage()` and `ext4_write_end()` handle data writeback.
-- In `data=ordered` mode, `ext4_jbd2_inode_add_write()` registers the inode's data pages with the current journal transaction. JBD2 flushes these data pages before allowing the transaction to commit.
-- In `data=writeback` mode, this registration does not happen. The journal transaction commits independently of data writeback.
+- `ext4_writepage()`と`ext4_write_end()`がデータのライトバックを扱う。
+- `data=ordered`モードでは、`ext4_jbd2_inode_add_write()`がinodeのデータページを現在のジャーナルトランザクションに登録する。JBD2は、トランザクションのコミットを許す前にこれらのデータページをフラッシュする。
+- `data=writeback`モードでは、この登録が行われない。ジャーナルトランザクションはデータのライトバックとは独立にコミットされる。
 
-The unwritten data issue is specific to block reuse: a newly allocated block inherits whatever content the previous occupant left on disk. In `data=ordered` mode this is harmless because the new data is written before the block pointer is committed. In `data=writeback` mode the block pointer can be committed while the block still holds stale content.
+未書き込みデータの問題はブロックの再利用に特有のものである。新たに割り当てられたブロックは、以前の持ち主がディスク上に残した内容をそのまま引き継ぐ。`data=ordered`モードでは、ブロックポインタがコミットされる前に新しいデータが書き込まれるため、これは無害である。`data=writeback`モードでは、ブロックがまだ古い内容を保持している間にブロックポインタがコミットされうる。
 
-The ext4 documentation is explicit about this: "`data=writeback` mode does not maintain data ordering and is known to lead to stale data exposure after a crash." But this warning was not always read before enabling the option.
+ext4のドキュメントはこの点を明記している: 「`data=writeback` mode does not maintain data ordering and is known to lead to stale data exposure after a crash.」（訳: `data=writeback`モードはデータの順序を維持せず、クラッシュ後に古いデータを露出させることが知られている。）しかしこの警告は、オプションを有効にする前に必ずしも読まれていたわけではなかった。
 
-### Resolution {#resolution}
+### 解決 {#resolution}
 
-The resolution for users was to not use `data=writeback` unless the workload was specifically designed for it (i.e., the application maintained its own write ordering and durability, as a database does with `fsync`). The default `data=ordered` mode does not have this vulnerability.
+ユーザーにとっての解決策は、ワークロードがそのために特別に設計されている場合（つまり、データベースが`fsync`で行うように、アプリケーションが独自に書き込み順序と永続性を管理している場合）を除き、`data=writeback`を使わないことだった。デフォルトの`data=ordered`モードにはこの脆弱性はない。
 
-For workloads that needed the performance of `data=writeback` without the stale data risk, the correct approach was to use `O_DIRECT` for the writes that needed to bypass the page cache entirely, or to call `fsync()` before the metadata update could be committed without the corresponding data.
+`data=writeback`の性能を必要としつつ古いデータのリスクを避けたいワークロードにとって、正しいアプローチは、ページキャッシュを完全に迂回する必要がある書き込みに`O_DIRECT`を使うか、対応するデータなしにメタデータの更新がコミットされうる前に`fsync()`を呼ぶことだった。
 
-Modern kernels and filesystem documentation make the warning prominent:
+現代のカーネルやファイルシステムのドキュメントでは、この警告が目立つように記載されている:
 
 ```bash
-# Check current journaling mode
+# 現在のジャーナリングモードを確認する
 tune2fs -l /dev/sdX | grep "Default mount options"
 
-# Mount with explicit ordered mode (same as default)
+# 明示的に ordered モードでマウントする（デフォルトと同じ）
 mount -o data=ordered /dev/sdX /mnt
 
-# data=writeback requires that the application handles its own durability
+# data=writeback では、アプリケーションが自身で永続性を扱う必要がある
 mount -o data=writeback /dev/sdX /mnt
-# WARNING: stale data exposure after crash without application-level fsync
+# 警告: アプリケーションレベルの fsync がなければ、クラッシュ後に古いデータが露出する
 ```
 
-Some distributions removed `data=writeback` from their tuning guides after the exposure pattern became widely understood. The ext4 development team also documented the interaction clearly in `Documentation/filesystems/ext4/` in the kernel source tree.
+この露出パターンが広く理解されるようになると、一部のディストリビューションはチューニングガイドから`data=writeback`を削除した。ext4の開発チームも、カーネルソースツリー内の`Documentation/filesystems/ext4/`でこの相互作用を明確に文書化した。
 
-### What it taught us {#what-it-taught-us}
+### 教訓 {#what-it-taught-us}
 
-**"Metadata consistency" is not "data integrity."** A journaled filesystem can guarantee that the filesystem structure is coherent after recovery without guaranteeing that the data in files is what the application wrote. These are different properties, and conflating them leads to dangerous configurations.
+**「メタデータの一貫性」は「データの整合性」ではない。** ジャーナリングファイルシステムは、ファイル内のデータがアプリケーションの書き込んだものであることを保証しなくても、回復後にファイルシステムの構造が整合していることを保証できる。これらは異なる性質であり、混同すると危険な設定につながる。
 
-**Performance options that change crash semantics need clear warnings.** `data=writeback` was presented as a performance knob. Its crash behavior was an afterthought. The real lesson is that any option that changes what "crash safe" means deserves prominent documentation, not a footnote.
+**クラッシュ時のセマンティクスを変える性能オプションには、明確な警告が必要である。** `data=writeback`は性能のつまみとして提示された。そのクラッシュ時の挙動は後回しにされていた。本当の教訓は、「クラッシュに対して安全」の意味を変えるオプションには、脚注ではなく目立つドキュメントがふさわしいということである。
 
-**Block reuse amplifies journaling mode differences.** The stale data exposure only occurs because newly allocated blocks may contain old data. On freshly provisioned storage this is less likely; on a long-running filesystem with many files created and deleted, it is common. This made the bug intermittent and hard to reproduce in short tests.
+**ブロックの再利用はジャーナリングモードの違いを増幅する。** 古いデータの露出は、新たに割り当てられたブロックが古いデータを含みうるからこそ起きる。新しくプロビジョニングされたストレージではその可能性は低いが、多くのファイルが作成・削除されてきた長期稼働のファイルシステムではよくあることである。このためバグは断続的にしか現れず、短時間のテストでは再現が難しかった。
 
-!!! warning "Pattern to watch for"
-    Filesystems mounted with `data=writeback` that do not use `O_DIRECT` or per-write `fsync()` are vulnerable to stale data exposure after a crash. Check mount options on all filesystem mounts:
+!!! warning "注意すべきパターン"
+    `data=writeback`でマウントされ、`O_DIRECT`も書き込みごとの`fsync()`も使っていないファイルシステムは、クラッシュ後の古いデータの露出に対して脆弱である。すべてのファイルシステムのマウントオプションを確認すること:
 
     ```bash
-    # Check mount options for all ext4 mounts
+    # すべての ext4 マウントのマウントオプションを確認する
     grep ext4 /proc/mounts | awk '{print $1, $2, $4}'
 
-    # Check filesystem default mount options (baked in at mkfs time)
+    # ファイルシステムのデフォルトマウントオプションを確認する（mkfs 時に焼き込まれたもの）
     tune2fs -l /dev/sdX | grep "Default mount options"
 
-    # If data=writeback appears and the filesystem holds application data:
-    # ensure the application calls fsync() before considering a write durable,
-    # or remount with data=ordered.
+    # data=writeback が現れ、そのファイルシステムがアプリケーションデータを保持している場合:
+    # アプリケーションが書き込みを永続とみなす前に fsync() を呼ぶことを確認するか、
+    # data=ordered で再マウントする。
     ```
 
 ---
 
-## Case 2: `O_DIRECT` and buffered I/O coherency — mixing modes corrupts reads {#case-2-o_direct-and-buffered-io-coherency-mixing-modes-corrupts-reads}
+## 事例2: `O_DIRECT`とバッファードI/Oの一貫性 — モードの混在が読み込みを破損させる {#case-2-o_direct-and-buffered-io-coherency-mixing-modes-corrupts-reads}
 
-### Before state {#before-state_1}
+### 事前の状態 {#before-state_1}
 
-Linux provides two I/O paths to the same file:
+Linuxは、同じファイルに対して2つのI/O経路を提供している:
 
-- **Buffered I/O** (default): reads and writes go through the page cache. Multiple processes reading the same file share cached pages.
-- **O_DIRECT**: reads and writes bypass the page cache entirely, going directly between the userspace buffer and the storage device.
+- **バッファードI/O**（デフォルト）: 読み書きはページキャッシュを経由する。同じファイルを読む複数のプロセスは、キャッシュされたページを共有する。
+- **O_DIRECT**: 読み書きはページキャッシュを完全に迂回し、ユーザー空間のバッファとストレージデバイスの間で直接行われる。
 
-The correct mental model for the page cache is that it is a coherent cache: any read should see the most recently written data, regardless of how that data was written. Under the buffered I/O path alone this is guaranteed — everyone shares the same in-memory pages.
+ページキャッシュについての正しいメンタルモデルは、それが一貫性のあるキャッシュだということである。どの読み込みも、データがどのように書き込まれたかにかかわらず、最も新しく書き込まれたデータを見るべきである。バッファードI/Oの経路だけなら、これは保証される。誰もが同じメモリ内のページを共有しているからである。
 
-### The change {#the-change_1}
+### 変更 {#the-change_1}
 
-The problem arises when *both* paths are active simultaneously on the same file. This happens in practice: a database uses `O_DIRECT` for its own I/O, but a backup tool, monitoring agent, or `rsync` opens the same file without `O_DIRECT`, reading through the page cache.
+問題は、同じファイルに対して*両方の*経路が同時に使われるときに生じる。これは実際に起きる。データベースが自身のI/Oに`O_DIRECT`を使い、バックアップツール、監視エージェント、あるいは`rsync`が`O_DIRECT`なしで同じファイルを開き、ページキャッシュ経由で読む場合である。
 
-The expectation of users encountering this situation was reasonable: surely the kernel would ensure that a buffered read of a file returns the data that was most recently written, regardless of which path wrote it?
+この状況に遭遇したユーザーの期待は妥当なものだった。どの経路で書かれたかにかかわらず、ファイルのバッファード読み込みは最も新しく書き込まれたデータを返すことを、カーネルは当然保証するだろう、というものである。
 
-### Observed regression {#observed-regression_1}
+### 観測されたリグレッション {#observed-regression_1}
 
-When an `O_DIRECT` write was followed by a buffered read of the same file region, the buffered read could return **stale data** — the content of the page cache from before the `O_DIRECT` write, not the freshly written data.
+`O_DIRECT`の書き込みの後に、同じファイル領域のバッファード読み込みが続くと、バッファード読み込みは**古いデータ**を返すことがあった。新しく書き込まれたデータではなく、`O_DIRECT`書き込みの前のページキャッシュの内容である。
 
-The sequence:
+順序:
 
-1. Process A opens a file with `O_DIRECT` and writes 4 KB to offset 0.
-2. The write goes directly to disk; the page cache is not updated.
-3. Process B (or even Process A without `O_DIRECT`) reads offset 0 via `read()`.
-4. The page cache contains the old version of the data (from before step 1, if the page was previously cached). The kernel serves the stale cached page.
-5. Process B sees data that does not reflect the `O_DIRECT` write.
+1. プロセスAがファイルを`O_DIRECT`で開き、オフセット0に4 KBを書き込む。
+2. 書き込みはディスクへ直接行われ、ページキャッシュは更新されない。
+3. プロセスB（あるいは`O_DIRECT`なしのプロセスA自身）が`read()`でオフセット0を読む。
+4. ページキャッシュには古いバージョンのデータ（そのページが以前にキャッシュされていれば、ステップ1より前のもの）が入っている。カーネルは古いキャッシュページを返す。
+5. プロセスBは、`O_DIRECT`の書き込みを反映していないデータを見る。
 
-The reverse direction also causes problems: a buffered write followed by an `O_DIRECT` read may read from disk rather than from the in-memory dirty page, again returning stale data.
+逆方向でも問題が起きる。バッファード書き込みの後に`O_DIRECT`の読み込みを行うと、メモリ内のダーティページではなくディスクから読むことがあり、やはり古いデータが返される。
 
-The `open(2)` man page documents this explicitly:
+`open(2)`のmanページはこれを明記している:
 
 > "If a file is opened in `O_DIRECT` mode while the same file has been opened with buffered I/O, the results are undefined."
 
-But "undefined" was often interpreted as a theoretical concern rather than a routine production hazard, especially when tools like backup agents and database engines operated on the same files.
+（訳: 同じファイルがバッファードI/Oで開かれている間にそのファイルが`O_DIRECT`モードで開かれると、結果は未定義である。）
 
-### Why it happened {#why-it-happened_1}
+しかし「未定義」は、特にバックアップエージェントとデータベースエンジンが同じファイルを操作する場合でさえ、日常的な本番環境の危険ではなく理論上の懸念と解釈されることが多かった。
 
-The fundamental issue is that `O_DIRECT` writes are invisible to the page cache. From the page cache's perspective, the data at a given offset is what it last cached — it has no knowledge of an `O_DIRECT` write that went around it.
+### なぜ起きたか {#why-it-happened_1}
 
-The kernel does include a cache invalidation step in the `O_DIRECT` write path, but the window between the invalidation and the completion of the DMA transfer creates a race:
+根本的な問題は、`O_DIRECT`の書き込みがページキャッシュから見えないことである。ページキャッシュの視点では、あるオフセットのデータは最後にキャッシュしたものであり、それを迂回して行われた`O_DIRECT`の書き込みについては何も知らない。
 
-In `fs/direct-io.c` (and later in the iomap direct I/O path), the `O_DIRECT` write sequence is roughly:
+カーネルは`O_DIRECT`の書き込みパスにキャッシュ無効化のステップを含めているが、無効化とDMA転送の完了の間の窓が競合状態を生む:
+
+`fs/direct-io.c`（および後のiomapのダイレクトI/Oパス）では、`O_DIRECT`の書き込み順序はおおよそ次のとおりである:
 
 ```
 1. Invalidate (truncate) page cache pages covering the write range
@@ -153,210 +155,210 @@ In `fs/direct-io.c` (and later in the iomap direct I/O path), the `O_DIRECT` wri
 3. Wait for DMA completion
 ```
 
-Between steps 1 and 3, a concurrent buffered read will fault in the page from disk — but the DMA write may not have completed yet, so the page that gets faulted in may be the *old* data from disk, not the new data being written. After the DMA completes (step 3), the disk has the new data, but the page cache now has a stale copy that was read in during the window.
+ステップ1と3の間に、並行するバッファード読み込みがディスクからページをフォールトインする。しかしDMA書き込みはまだ完了していないかもしれないため、フォールトインされるページは書き込み中の新しいデータではなく、ディスク上の*古い*データかもしれない。DMAが完了した後（ステップ3）、ディスクには新しいデータがあるが、ページキャッシュには窓の間に読み込まれた古いコピーが入っている。
 
-This is a classic TOCTOU (time-of-check-to-time-of-use) race: the invalidation and the I/O completion are not atomic, and a concurrent reader can slip in between them.
+これは典型的なTOCTOU（time-of-check-to-time-of-use）競合である。無効化とI/Oの完了はアトミックではなく、並行する読み込み側がその間に滑り込める。
 
-The problem was acknowledged in the kernel, in glibc documentation, and in database documentation. PostgreSQL's documentation explicitly warned users not to mix buffered and direct I/O on database files. The `open(2)` man page on Linux carried the "undefined behavior" note precisely because the kernel developers recognized the race was not fully closed.
+この問題は、カーネル、glibcのドキュメント、データベースのドキュメントで認識されていた。PostgreSQLのドキュメントは、データベースファイルに対してバッファードI/OとダイレクトI/Oを混在させないよう明示的にユーザーに警告していた。Linuxの`open(2)` manページに「未定義の挙動」という注記があったのは、まさにカーネル開発者がこの競合が完全には塞がれていないことを認識していたからである。
 
-### Resolution {#resolution_1}
+### 解決 {#resolution_1}
 
-The correct resolution for applications is to avoid mixing `O_DIRECT` and buffered I/O on the same file. In practice this means:
+アプリケーションにとっての正しい解決策は、同じファイルに対して`O_DIRECT`とバッファードI/Oを混在させないことである。実際には次のことを意味する:
 
-- Tools that read database files (backups, monitoring) should also use `O_DIRECT`, or else the database should ensure the page cache is up to date before such reads (by calling `sync_file_range` or ensuring no concurrent `O_DIRECT` writes are in flight).
-- Applications that use `O_DIRECT` for performance-critical writes should open all file descriptors to that file with `O_DIRECT`, not a mix.
+- データベースファイルを読むツール（バックアップ、監視）も`O_DIRECT`を使うべきである。そうでなければ、データベースはそのような読み込みの前にページキャッシュが最新であることを保証すべきである（`sync_file_range`を呼ぶか、並行する`O_DIRECT`書き込みが実行中でないことを保証する）。
+- 性能が重要な書き込みに`O_DIRECT`を使うアプリケーションは、そのファイルへのすべてのファイルディスクリプタを、混在させずに`O_DIRECT`で開くべきである。
 
-From the kernel side, the `O_DIRECT` write path was made more careful about page cache invalidation over time. The `__blockdev_direct_IO()` path and the newer `iomap_dio_rw()` path both perform invalidation before and after the I/O to reduce the window, but the race cannot be fully eliminated without serializing all buffered reads against concurrent `O_DIRECT` writes — which would defeat the purpose of `O_DIRECT`.
+カーネル側では、`O_DIRECT`の書き込みパスは時間とともにページキャッシュの無効化についてより慎重になった。`__blockdev_direct_IO()`パスと新しい`iomap_dio_rw()`パスはどちらも、窓を小さくするためにI/Oの前後で無効化を行う。しかし、すべてのバッファード読み込みを並行する`O_DIRECT`書き込みに対して直列化しない限り、競合を完全に排除することはできない。そうすれば`O_DIRECT`の目的が台無しになる。
 
 ```c
 /*
- * Diagnostic: detect mixed-mode I/O on the same file.
- * Both fds refer to the same file; this is the problematic pattern.
+ * 診断: 同じファイルに対する混在モードの I/O を検出する。
+ * 両方の fd が同じファイルを参照している。これが問題のあるパターンである。
  */
 int fd_direct  = open("dbfile", O_RDWR | O_DIRECT);
-int fd_buffered = open("dbfile", O_RDONLY);  /* page cache path */
+int fd_buffered = open("dbfile", O_RDONLY);  /* ページキャッシュ経由 */
 
-/* A write through fd_direct followed by a read through fd_buffered
- * may return stale data. Do not do this. */
+/* fd_direct 経由の書き込みの後に fd_buffered 経由の読み込みを行うと、
+ * 古いデータが返されることがある。これをしてはならない。 */
 ```
 
-Modern Linux (v5.x and later) made further improvements to the `O_DIRECT` invalidation path to shrink the race window, but the fundamental advice remains: do not mix modes on the same file.
+現代のLinux（v5.x以降）は、競合の窓を縮めるために`O_DIRECT`の無効化パスにさらなる改善を加えたが、基本的な助言は変わらない。同じファイルでモードを混在させてはならない。
 
-### What it taught us {#what-it-taught-us_1}
+### 教訓 {#what-it-taught-us_1}
 
-**"Undefined behavior" in system call documentation is a real warning, not a theoretical footnote.** When the `open(2)` man page says mixing `O_DIRECT` and buffered I/O produces undefined results, it means there is a real race that the kernel cannot fully close without sacrificing the performance properties that make `O_DIRECT` valuable.
+**システムコールのドキュメントにある「未定義の挙動」は、理論上の脚注ではなく本物の警告である。** `open(2)` manページが`O_DIRECT`とバッファードI/Oの混在は未定義の結果を生むと述べているとき、それは、`O_DIRECT`を価値あるものにしている性能特性を犠牲にしない限りカーネルが完全には塞げない、本物の競合が存在することを意味する。
 
-**Cache coherency is only guaranteed within a single I/O path.** The page cache is coherent for buffered I/O. `O_DIRECT` is coherent with disk. They are not coherent with each other.
+**キャッシュの一貫性は単一のI/O経路の中でのみ保証される。** ページキャッシュはバッファードI/Oについて一貫している。`O_DIRECT`はディスクと一貫している。両者は互いに一貫していない。
 
-**Operational tools that touch database files need to understand I/O modes.** Backup agents, `rsync`-based replication, and monitoring tools that read files without `O_DIRECT` while a database writes those same files with `O_DIRECT` are silently operating on potentially stale data.
+**データベースファイルに触れる運用ツールは、I/Oモードを理解する必要がある。** データベースが`O_DIRECT`で書き込んでいるファイルを、`O_DIRECT`なしで読むバックアップエージェント、`rsync`ベースのレプリケーション、監視ツールは、古い可能性のあるデータを黙って扱っている。
 
-!!! warning "Pattern to watch for"
-    Mixed-mode I/O is particularly common in environments where databases are copied or backed up using standard filesystem tools (`cp`, `rsync`, `tar`) while the database continues running with `O_DIRECT`. The backup may be internally consistent but contain stale reads from the page cache.
+!!! warning "注意すべきパターン"
+    混在モードのI/Oは、データベースが`O_DIRECT`で稼働し続けている間に、標準的なファイルシステムツール（`cp`、`rsync`、`tar`）でデータベースをコピーやバックアップする環境で特によく見られる。バックアップは内部的には一貫していても、ページキャッシュからの古い読み込みを含んでいることがある。
 
     ```bash
-    # Check if a process is using O_DIRECT on a file
-    # (look for the 0x4000 flag in /proc/<pid>/fdinfo)
+    # プロセスがファイルに O_DIRECT を使っているか確認する
+    # （/proc/<pid>/fdinfo で 0x4000 フラグを探す）
     grep flags /proc/<pid>/fdinfo/<fd>
-    # flags: 0100002 → O_RDWR only (buffered)
-    # flags: 0140002 → O_RDWR | O_DIRECT (0x4000 = 040000 octal = 16384 decimal)
+    # flags: 0100002 → O_RDWR のみ（バッファード）
+    # flags: 0140002 → O_RDWR | O_DIRECT（0x4000 = 8進数 040000 = 10進数 16384）
 
-    # Or use lsof:
+    # あるいは lsof を使う:
     lsof -p <pid> | grep REG
-    # Look for the "DIR" column; O_DIRECT files show specific access patterns
+    # "DIR" 列を見る。O_DIRECT のファイルは特有のアクセスパターンを示す
     ```
 
 ---
 
-## Case 3: `fsync()` after `rename()` is not enough — losing files after a crash {#case-3-fsync-after-rename-is-not-enough-losing-files-after-a-crash}
+## 事例3: `rename()`の後の`fsync()`だけでは不十分 — クラッシュ後にファイルを失う {#case-3-fsync-after-rename-is-not-enough-losing-files-after-a-crash}
 
-### Before state {#before-state_2}
+### 事前の状態 {#before-state_2}
 
-The canonical pattern for safely overwriting a file in a crash-safe manner is the "write to temp, then rename" idiom:
+クラッシュに対して安全な方法でファイルを上書きするための定番パターンは、「一時ファイルに書いてからrenameする」というイディオムである:
 
 ```c
-/* Safe file update pattern */
+/* 安全なファイル更新パターン */
 fd = open("file.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 write(fd, data, len);
-fsync(fd);   /* flush data and metadata of the new file */
+fsync(fd);   /* 新しいファイルのデータとメタデータをフラッシュする */
 close(fd);
-rename("file.tmp", "file");  /* atomic replacement */
+rename("file.tmp", "file");  /* アトミックな置き換え */
 ```
 
-The intent is to ensure that either the old `file` or the new `file` is visible after a crash — never a partially-written version. The `fsync()` call before `rename()` ensures the new content is on disk. The `rename()` syscall is atomic at the VFS level.
+意図は、クラッシュ後に古い`file`か新しい`file`のどちらかが見え、部分的に書き込まれたバージョンが見えることは決してないようにすることである。`rename()`の前の`fsync()`呼び出しは、新しい内容がディスク上にあることを保証する。`rename()`システムコールはVFSレベルでアトミックである。
 
-This pattern was used by SQLite (in its journal mode), PostgreSQL (for WAL segment renaming and configuration file updates), many text editors, and countless other applications that needed to update files safely.
+このパターンは、SQLite（そのジャーナルモードで）、PostgreSQL（WALセグメントのrenameや設定ファイルの更新で）、多くのテキストエディタ、そしてファイルを安全に更新する必要がある無数のアプリケーションで使われていた。
 
-### The change {#the-change_2}
+### 変更 {#the-change_2}
 
-The problem was not a kernel regression. It was a gap between what programmers believed `fsync()` + `rename()` guaranteed and what it actually guaranteed on Linux.
+問題はカーネルのリグレッションではなかった。それは、プログラマが`fsync()` + `rename()`で保証されると信じていたことと、Linuxで実際に保証されることとの間のギャップだった。
 
-The missing step: after `rename()`, the **parent directory** must also be `fsync()`'d.
+欠けていたステップは、`rename()`の後に**親ディレクトリ**も`fsync()`しなければならないということだった。
 
-### Observed regression {#observed-regression_2}
+### 観測されたリグレッション {#observed-regression_2}
 
-After a crash, the file `file.tmp` had been durably written (because `fsync(fd)` was called), and the `rename()` had completed in-memory — but after journal recovery, the directory entry pointing to `file` had vanished. The directory still showed the old state, as if the rename had never happened.
+クラッシュの後、ファイル`file.tmp`は（`fsync(fd)`が呼ばれたので）永続的に書き込まれており、`rename()`もメモリ内では完了していた。しかしジャーナル回復の後、`file`を指すディレクトリエントリが消えていた。ディレクトリは、まるでrenameが起きなかったかのように古い状態を示していた。
 
-Applications that used this pattern for configuration updates could find their configuration file missing after a crash — reverting to an old version or losing the file entirely. SQLite users reported that databases could appear to lose committed transactions after a power failure. PostgreSQL reported similar issues in early versions with WAL segment management.
+このパターンを設定の更新に使っていたアプリケーションは、クラッシュ後に設定ファイルが失われ、古いバージョンに戻るかファイルを完全に失うことがあった。SQLiteのユーザーは、電源障害の後にデータベースがコミット済みのトランザクションを失ったように見えることがあると報告した。PostgreSQLも、初期のバージョンでWALセグメントの管理について同様の問題を報告した。
 
-The problem was extensively documented by the database community and became one of the most well-known POSIX `fsync` subtleties. Ted Ts'o (an ext4 maintainer) and the PostgreSQL and SQLite developers wrote about it publicly. It also appears in Dan Luu's survey of file system correctness and in the Russ Cox analysis of file system behavior.
+この問題はデータベースコミュニティによって広く文書化され、POSIXの`fsync`の微妙な点の中でも最もよく知られたものの1つになった。Ted Ts'o（ext4のメンテナ）や、PostgreSQLとSQLiteの開発者がこれについて公に書いている。Dan Luuによるファイルシステムの正しさに関する調査や、Russ Coxによるファイルシステムの挙動の分析にも登場する。
 
-### Why it happened {#why-it-happened_2}
+### なぜ起きたか {#why-it-happened_2}
 
-On Linux, `fsync(fd)` flushes the file's data and inode to disk. It does **not** flush the parent directory.
+Linuxでは、`fsync(fd)`はファイルのデータとinodeをディスクへフラッシュする。親ディレクトリはフラッシュ**しない**。
 
-A `rename()` modifies the parent directory: it removes the old directory entry (`file.tmp`) and adds a new one (`file`). This directory modification is an in-memory change (to the directory's data pages and to the inode's metadata). Without an `fsync()` on the directory, this change may not reach disk before a crash.
+`rename()`は親ディレクトリを変更する。古いディレクトリエントリ（`file.tmp`）を削除し、新しいエントリ（`file`）を追加する。このディレクトリの変更はメモリ内での変更である（ディレクトリのデータページとinodeのメタデータに対するもの）。ディレクトリに対する`fsync()`がなければ、この変更はクラッシュ前にディスクに届かないことがある。
 
-The sequence that causes the loss:
+損失を引き起こす順序:
 
-1. `write()` + `fsync(fd)` on `file.tmp` → data on disk, inode on disk.
-2. `rename("file.tmp", "file")` → directory pages modified in page cache (dirty), but not yet on disk.
-3. System crashes before the dirty directory pages are written.
-4. After recovery: `file.tmp`'s data is on disk, the inode is on disk, but the directory does not contain an entry for `file`. The new file is an orphan. The old directory entry for `file` (pointing to the old content) may or may not be present depending on the filesystem's crash recovery semantics.
+1. `file.tmp`に対する`write()` + `fsync(fd)` → データはディスク上、inodeもディスク上。
+2. `rename("file.tmp", "file")` → ディレクトリのページがページキャッシュ内で変更される（ダーティ）が、まだディスク上にはない。
+3. ダーティなディレクトリページが書き込まれる前にシステムがクラッシュする。
+4. 回復後: `file.tmp`のデータはディスク上にあり、inodeもディスク上にあるが、ディレクトリには`file`のエントリがない。新しいファイルは孤児になる。（古い内容を指す）`file`の古いディレクトリエントリが存在するかどうかは、ファイルシステムのクラッシュ回復のセマンティクスによる。
 
-On ext4 with `data=ordered` journaling, the directory update is journaled but the journal transaction may not have been committed. Recovery replays committed transactions only — uncommitted transactions are discarded. The result is a directory in its pre-rename state.
+`data=ordered`ジャーナリングのext4では、ディレクトリの更新はジャーナルされるが、そのジャーナルトランザクションがコミットされていない可能性がある。回復処理はコミット済みのトランザクションだけをリプレイし、未コミットのトランザクションは破棄される。結果として、ディレクトリはrename前の状態になる。
 
-The fix requires fsyncing the directory:
+修正にはディレクトリのfsyncが必要である:
 
 ```c
-/* Correct crash-safe file replacement */
+/* クラッシュに対して安全な正しいファイル置き換え */
 int fd = open("file.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 write(fd, data, len);
-fsync(fd);            /* flush data and inode of the new file */
+fsync(fd);            /* 新しいファイルのデータと inode をフラッシュする */
 close(fd);
 rename("file.tmp", "file");
 
-/* This step is the one that was missing: */
+/* 欠けていたのはこのステップである: */
 int dir_fd = open(".", O_RDONLY);
-fsync(dir_fd);        /* flush the directory entry update */
+fsync(dir_fd);        /* ディレクトリエントリの更新をフラッシュする */
 close(dir_fd);
 ```
 
-The directory `fsync()` ensures that the rename's modification to the directory pages is on disk before the application considers the operation complete.
+ディレクトリの`fsync()`は、アプリケーションが操作の完了とみなす前に、renameによるディレクトリページの変更がディスク上にあることを保証する。
 
-### Resolution {#resolution_2}
+### 解決 {#resolution_2}
 
-**SQLite** (versions 3.7.x and later) added directory `fsync()` to its unix VFS layer after this issue was reported and analyzed. The `PRAGMA fullfsync` and the default unix sync behavior were updated to fsync the directory after rename operations involving WAL files and rollback journals.
+**SQLite**（バージョン3.7.x以降）は、この問題が報告・分析された後、unix VFS層にディレクトリの`fsync()`を追加した。`PRAGMA fullfsync`とデフォルトのunixのsync挙動は、WALファイルやロールバックジャーナルに関わるrename操作の後にディレクトリをfsyncするよう更新された。
 
-**PostgreSQL** added `fsync_fname()` and explicit directory syncing in its WAL and checkpoint code. The `fsync_fname` function in `src/backend/storage/file/fd.c` opens the path and calls `fsync()`, and PostgreSQL calls this for parent directories after file renames.
+**PostgreSQL**は、WALとチェックポイントのコードに`fsync_fname()`と明示的なディレクトリのsyncを追加した。`src/backend/storage/file/fd.c`の`fsync_fname`関数はパスを開いて`fsync()`を呼び、PostgreSQLはファイルのrename後に親ディレクトリに対してこれを呼ぶ。
 
-**The kernel** added `sync_file_range(2)` and `fdatasync(2)` as supplementary tools, but neither addresses the directory sync requirement — those are still userspace responsibilities. The kernel cannot automatically fsync directories on rename because that would make `rename()` synchronous and break the performance properties that make it useful.
+**カーネル**は補助的なツールとして`sync_file_range(2)`と`fdatasync(2)`を追加したが、どちらもディレクトリのsyncの要件には対処しない。それは依然としてユーザー空間の責任である。カーネルはrename時にディレクトリを自動的にfsyncすることはできない。そうすれば`rename()`が同期的になり、それを有用にしている性能特性が損なわれるからである。
 
-On ext4, the `dirsync` mount option makes all directory operations synchronous:
+ext4では、`dirsync`マウントオプションがすべてのディレクトリ操作を同期的にする:
 
 ```bash
-# Mount with dirsync: all directory updates are synchronous
+# dirsync でマウントする: すべてのディレクトリ更新が同期的になる
 mount -o dirsync /dev/sdX /mnt
-# This is slow but ensures directory entries are always durable.
-# Most applications should handle this themselves rather than using dirsync.
+# 遅いが、ディレクトリエントリが常に永続化されることを保証する。
+# ほとんどのアプリケーションは dirsync を使うよりも自身でこれを扱うべきである。
 ```
 
-The `sync_file_range()` syscall can be used to flush specific byte ranges of a file, but does not help with directory durability:
+`sync_file_range()`システムコールはファイルの特定のバイト範囲をフラッシュするのに使えるが、ディレクトリの永続性には役立たない:
 
 ```c
-/* sync_file_range: flush specific ranges of a file's data */
-/* Does NOT fsync inode or parent directory */
+/* sync_file_range: ファイルデータの特定の範囲をフラッシュする */
+/* inode や親ディレクトリは fsync しない */
 sync_file_range(fd, 0, 0, SYNC_FILE_RANGE_WRITE | SYNC_FILE_RANGE_WAIT_AFTER);
-/* Still need: fsync(fd) for inode, fsync(dir_fd) for directory entry */
+/* 依然として必要: inode のための fsync(fd)、ディレクトリエントリのための fsync(dir_fd) */
 ```
 
-### What it taught us {#what-it-taught-us_2}
+### 教訓 {#what-it-taught-us_2}
 
-**`rename()` atomicity is in-memory atomicity, not durability.** The rename syscall is atomic in the sense that no other process will see a partially-renamed state — but it is not durable until the directory's pages are flushed to disk.
+**`rename()`のアトミック性はメモリ内でのアトミック性であり、永続性ではない。** renameシステムコールは、他のプロセスが部分的にrenameされた状態を見ることがないという意味ではアトミックである。しかし、ディレクトリのページがディスクへフラッシュされるまでは永続的ではない。
 
-**POSIX does not require `rename()` to be durable.** POSIX guarantees that `rename()` is atomic with respect to concurrent observers, but says nothing about crash recovery. Linux implements the POSIX guarantee without the additional durability guarantee. Applications that need both must explicitly fsync the directory.
+**POSIXは`rename()`が永続的であることを要求していない。** POSIXは、`rename()`が並行する観測者に対してアトミックであることは保証するが、クラッシュ回復については何も述べていない。LinuxはPOSIXの保証を、追加の永続性保証なしに実装している。両方を必要とするアプリケーションは、明示的にディレクトリをfsyncしなければならない。
 
-**High-profile software shipped with this bug.** SQLite and PostgreSQL, two of the most carefully written database systems in open source, both had this issue in some of their releases. If they missed it, the implication is that most applications missed it too. The correct pattern is not obvious from reading the man pages.
+**著名なソフトウェアがこのバグを抱えたまま出荷されていた。** オープンソースで最も慎重に書かれたデータベースシステムであるSQLiteとPostgreSQLの両方が、一部のリリースでこの問題を抱えていた。それらが見落としたのなら、ほとんどのアプリケーションも見落としていたことになる。正しいパターンは、manページを読んでも明らかではない。
 
-!!! warning "Pattern to watch for"
-    Any application that uses write-to-temp-then-rename for crash safety must fsync the parent directory after the rename. This includes text editors (saving files), databases (log segment management), and any system that atomically replaces configuration or data files.
+!!! warning "注意すべきパターン"
+    クラッシュ安全性のために「一時ファイルに書いてからrename」を使うアプリケーションは、rename後に親ディレクトリをfsyncしなければならない。これには、テキストエディタ（ファイルの保存）、データベース（ログセグメントの管理）、そして設定ファイルやデータファイルをアトミックに置き換えるあらゆるシステムが含まれる。
 
     ```bash
-    # Check if a process is fsyncing after rename using strace
+    # strace を使って、プロセスが rename 後に fsync しているか確認する
     strace -e trace=fsync,fdatasync,rename,renameat -p <pid>
 
-    # Correct output for a crash-safe rename should show:
-    # fsync(fd_for_tempfile)     ← flush new file content
-    # rename("file.tmp", "file") ← atomic replacement
-    # fsync(fd_for_directory)    ← flush directory entry update
+    # クラッシュに対して安全な rename の正しい出力は次のようになるはずである:
+    # fsync(fd_for_tempfile)     ← 新しいファイルの内容をフラッシュ
+    # rename("file.tmp", "file") ← アトミックな置き換え
+    # fsync(fd_for_directory)    ← ディレクトリエントリの更新をフラッシュ
 
-    # Missing the last fsync means the rename may be lost after a crash.
+    # 最後の fsync が欠けていると、クラッシュ後に rename が失われることがある。
     ```
 
 ---
 
-## Case 4: Dirty throttling writeback stalls — write latency spikes from balance_dirty_pages {#case-4-dirty-throttling-writeback-stalls-write-latency-spikes-from-balancedirtypages}
+## 事例4: ダーティスロットリングによるライトバックの停止 — balance_dirty_pagesによる書き込みレイテンシのスパイク {#case-4-dirty-throttling-writeback-stalls-write-latency-spikes-from-balancedirtypages}
 
-### Before state {#before-state_3}
+### 事前の状態 {#before-state_3}
 
-The Linux dirty page throttling mechanism exists to prevent applications from writing data to the page cache faster than the kernel can flush it to storage. Without throttling, an application could dirty all available memory in seconds, leaving the kernel with no clean pages to allocate and causing sudden, catastrophic I/O bursts.
+Linuxのダーティページスロットリングの仕組みは、カーネルがストレージへフラッシュできるより速くアプリケーションがページキャッシュへデータを書き込むことを防ぐために存在する。スロットリングがなければ、アプリケーションは数秒で利用可能なメモリをすべてダーティにでき、カーネルには割り当てられるクリーンなページがなくなり、突然の壊滅的なI/Oバーストが起きる。
 
-The mechanism works by tracking the total amount of dirty data system-wide and per backing device, comparing it against configurable thresholds, and slowing down ("throttling") processes that are writing too fast when those thresholds are exceeded. The key function is `balance_dirty_pages()`, called from `generic_perform_write()` after each write that dirtied pages.
+この仕組みは、システム全体およびバッキングデバイスごとのダーティデータの総量を追跡し、それを設定可能なしきい値と比較し、しきい値を超えたときに書き込みが速すぎるプロセスを遅くする（「スロットリングする」）ことで機能する。鍵となる関数は`balance_dirty_pages()`であり、ページをダーティにした書き込みのたびに`generic_perform_write()`から呼ばれる。
 
-Before v3.1, the throttling logic applied a per-process pause when the dirty ratio exceeded a threshold. The pause was relatively crude: processes were either running or sleeping, with limited gradation between the two.
+v3.1より前、スロットリングのロジックは、ダーティ比率がしきい値を超えたときにプロセスごとの一時停止を適用していた。その一時停止は比較的粗く、プロセスは実行中かスリープ中かのどちらかで、その中間の段階はほとんどなかった。
 
-### The change {#the-change_3}
+### 変更 {#the-change_3}
 
-In Linux v3.1, Fengguang Wu introduced a substantially reworked dirty throttling algorithm (sometimes called "smoothed dirty throttling" or "bdi-based throttling"). The goal was to make throttling more proportional and fair: instead of a binary sleep/run decision, processes should be slowed to match the throughput of the underlying storage device, with pauses scaled to the degree of exceedance.
+Linux v3.1で、Fengguang Wuは大幅に作り直されたダーティスロットリングアルゴリズム（「smoothed dirty throttling」や「bdi-based throttling」と呼ばれることもある）を導入した。目標は、スロットリングをより比例的で公平なものにすることだった。スリープか実行かの二値的な判断の代わりに、プロセスは下位のストレージデバイスのスループットに合わせて減速されるべきであり、一時停止は超過の度合いに応じてスケールされるべきだというものである。
 
-The new algorithm tracked per-BDI (backing device info) write bandwidth, estimated how long a dirty page would take to be written back, and used that estimate to compute a sleep time for throttled writers. The intent was to produce smooth, predictable write behavior across diverse storage speeds.
+新しいアルゴリズムは、BDI（backing device info）ごとの書き込み帯域を追跡し、ダーティページのライトバックにかかる時間を推定し、その推定値を使ってスロットリングされた書き込み側のスリープ時間を計算した。意図は、多様なストレージ速度にわたって滑らかで予測可能な書き込み挙動を実現することだった。
 
-This change was covered in detail in LWN articles on the dirty throttling rework (see [LWN: Flushing out pdflush](https://lwn.net/Articles/326552/) for background, and the v3.1 changelog).
+この変更は、ダーティスロットリングの作り直しに関するLWNの記事で詳しく取り上げられた（背景については[LWN: Flushing out pdflush](https://lwn.net/Articles/326552/)とv3.1の変更履歴を参照）。
 
-### Observed regression {#observed-regression_3}
+### 観測されたリグレッション {#observed-regression_3}
 
-After v3.1, several production workloads reported **write latency spikes** — individual `write()` calls that normally completed in microseconds now took tens or hundreds of milliseconds. The spikes were intermittent and correlated with periods of high write activity.
+v3.1以降、いくつかの本番ワークロードで**書き込みレイテンシのスパイク**が報告された。通常はマイクロ秒で完了していた個々の`write()`呼び出しが、数十〜数百ミリ秒かかるようになった。スパイクは断続的で、書き込みが活発な期間と相関していた。
 
-The pattern had two distinct manifestations:
+このパターンには2つの異なる現れ方があった:
 
-**The bandwidth estimation problem**: The new algorithm estimated storage bandwidth by measuring how fast dirty pages were being written back. If the writeback thread was briefly idle (because there was nothing to flush), the bandwidth estimate could fall to a low value. The next burst of writes would then be throttled heavily based on the stale low-bandwidth estimate, causing the first writes in a burst to stall even though the device was fully available.
+**帯域推定の問題**: 新しいアルゴリズムは、ダーティページがどれだけ速くライトバックされているかを測ってストレージの帯域を推定していた。ライトバックスレッドが（フラッシュするものがないために）一時的にアイドルだと、帯域の推定値が低い値に落ちることがあった。次の書き込みバーストは、この古い低帯域の推定値に基づいて強くスロットリングされ、デバイスが完全に利用可能であるにもかかわらず、バーストの最初の書き込みが停止した。
 
-**The sync-heavy workload problem**: Workloads that called `fsync()` frequently (databases, journaling applications) created a sawtooth pattern: write a burst of data, call `fsync()` which drains the dirty pages, repeat. The dirty throttle saw the post-fsync state as "no dirty pages" and reset its bandwidth estimate. The next write burst was then throttled as if the device were slow, even though it had just demonstrated high throughput.
+**syncの多いワークロードの問題**: `fsync()`を頻繁に呼ぶワークロード（データベース、ジャーナリングを行うアプリケーション）は、のこぎり歯状のパターンを生み出した。データのバーストを書き込み、ダーティページを掃き出す`fsync()`を呼び、それを繰り返す。ダーティスロットリングはfsync直後の状態を「ダーティページなし」とみなし、帯域推定値をリセットした。次の書き込みバーストは、デバイスが直前に高いスループットを示したばかりなのに、デバイスが遅いかのようにスロットリングされた。
 
-These regressions were reported on LKML by database operators and application developers, and Fengguang Wu and other mm developers issued a series of fixes in v3.2 through v3.10 to address the stall cases.
+これらのリグレッションはデータベースの運用者やアプリケーション開発者によってLKMLで報告され、Fengguang Wuや他のmm開発者は、停止のケースに対処するためにv3.2からv3.10にかけて一連の修正を出した。
 
-### Why it happened {#why-it-happened_3}
+### なぜ起きたか {#why-it-happened_3}
 
-The bandwidth estimation in `bdi_dirty_limit()` and the throttle computation in `balance_dirty_pages()` relied on an exponentially weighted moving average of observed writeback throughput. The averaging window and the reaction to sudden changes in write rate created instability:
+`bdi_dirty_limit()`での帯域推定と`balance_dirty_pages()`でのスロットリング計算は、観測されたライトバックのスループットの指数加重移動平均に依存していた。平均化の窓と、書き込み速度の急な変化への反応が不安定性を生んだ:
 
 ```
 Estimated bandwidth:
@@ -376,85 +378,85 @@ Next write burst:
   But the sleeping process doesn't wake up quickly enough
 ```
 
-The issue was that the throttling algorithm was reactive: it measured what the device had done recently and assumed that was representative of what it could do now. A device that had been idle for 500 ms appeared to have zero bandwidth, even if it was capable of 500 MB/s.
+問題は、スロットリングアルゴリズムが反応的だったことである。デバイスが最近何をしたかを測り、それが今何をできるかを代表していると仮定していた。500 msアイドルだったデバイスは、500 MB/sを出せるとしても、帯域がゼロであるように見えた。
 
-The per-process sleep in `balance_dirty_pages()` is in `mm/page-writeback.c`. The sleep is implemented via `io_schedule_timeout()`, which puts the process into the `TASK_KILLABLE` sleep state and does not return until the timeout expires or the process is killed — there is no early wakeup based on the device becoming available.
+`balance_dirty_pages()`でのプロセスごとのスリープは`mm/page-writeback.c`にある。スリープは`io_schedule_timeout()`で実装されており、これはプロセスを`TASK_KILLABLE`のスリープ状態にし、タイムアウトが切れるかプロセスがkillされるまで戻らない。デバイスが利用可能になったことに基づく早期の起床はない。
 
-### Resolution {#resolution_3}
+### 解決 {#resolution_3}
 
-Fengguang Wu and the mm team issued multiple patches across v3.2–v3.10 to address the stall cases:
+Fengguang Wuとmmチームは、停止のケースに対処するためにv3.2〜v3.10にわたって複数のパッチを出した:
 
-- **Minimum bandwidth floor**: A minimum estimated bandwidth was established to prevent the estimate from decaying to zero. This prevented the catastrophic first-write stall after an idle period.
-- **Wakeup improvements**: Logic was added to wake throttled processes earlier when writeback caught up faster than expected.
-- **Global vs. per-BDI accounting fixes**: Interaction bugs between global dirty limits and per-BDI limits were fixed to prevent double-throttling.
+- **最小帯域の下限**: 推定値がゼロまで減衰することを防ぐため、推定帯域の最小値が設けられた。これにより、アイドル期間後の最初の書き込みでの壊滅的な停止が防がれた。
+- **起床の改善**: ライトバックが予想より速く追いついたときに、スロットリングされたプロセスをより早く起こすロジックが追加された。
+- **グローバルとBDI単位のアカウンティングの修正**: グローバルなダーティリミットとBDI単位のリミットの間の相互作用のバグが修正され、二重のスロットリングが防がれた。
 
-Operator-visible tunables for the dirty throttling behavior:
+ダーティスロットリングの挙動について運用者が触れるチューニング可能なパラメータ:
 
 ```bash
-# Global dirty thresholds
-cat /proc/sys/vm/dirty_ratio          # % of RAM at which throttling starts
-cat /proc/sys/vm/dirty_background_ratio  # % at which background writeback starts
+# グローバルなダーティしきい値
+cat /proc/sys/vm/dirty_ratio          # スロットリングが始まる RAM の %
+cat /proc/sys/vm/dirty_background_ratio  # バックグラウンドライトバックが始まる %
 
-# Or absolute byte values (override ratio settings if nonzero)
+# あるいはバイト単位の絶対値（0 でなければ ratio の設定より優先される）
 cat /proc/sys/vm/dirty_bytes
 cat /proc/sys/vm/dirty_background_bytes
 
-# Writeback timeout: how old a dirty page can be before forced writeback
-cat /proc/sys/vm/dirty_expire_centisecs    # default: 3000 (30 seconds)
-cat /proc/sys/vm/dirty_writeback_centisecs # how often writeback runs
+# ライトバックのタイムアウト: 強制ライトバックの前にダーティページがどれだけ古くなれるか
+cat /proc/sys/vm/dirty_expire_centisecs    # デフォルト: 3000（30秒）
+cat /proc/sys/vm/dirty_writeback_centisecs # ライトバックの実行頻度
 
-# For workloads with frequent fsync and write bursts:
-# Reduce dirty_ratio to keep less dirty data in flight at any time.
-# This reduces the throttle headroom needed.
+# fsync と書き込みバーストが頻繁なワークロードの場合:
+# dirty_ratio を下げ、常に処理中のダーティデータを少なく保つ。
+# これにより必要なスロットリングの余裕が小さくなる。
 sysctl vm.dirty_ratio=5
 sysctl vm.dirty_background_ratio=3
 ```
 
-For database workloads that use `fsync()` heavily and are sensitive to write latency, a common production workaround was to use `O_DIRECT` (bypassing dirty throttling entirely) or to reduce `dirty_ratio` to reduce the amount of data the throttler had to manage.
+`fsync()`を多用し書き込みレイテンシに敏感なデータベースのワークロードでは、本番環境でのよくある回避策は、`O_DIRECT`を使う（ダーティスロットリングを完全に迂回する）か、`dirty_ratio`を下げてスロットリング機構が管理しなければならないデータ量を減らすことだった。
 
-The `tracing/events/writeback/` tracepoints can expose throttling events:
+`tracing/events/writeback/`のtracepointでスロットリングのイベントを観察できる:
 
 ```bash
-# Enable writeback throttle tracing
+# ライトバックのスロットリングのトレーシングを有効にする
 echo 1 > /sys/kernel/debug/tracing/events/writeback/balance_dirty_pages/enable
 cat /sys/kernel/debug/tracing/trace_pipe
-# Look for: balance_dirty_pages: ... paused=<N>ms ...
+# 探すもの: balance_dirty_pages: ... paused=<N>ms ...
 ```
 
-### What it taught us {#what-it-taught-us_3}
+### 教訓 {#what-it-taught-us_3}
 
-**Feedback-control algorithms are sensitive to idle periods.** An estimator that measures throughput during active periods and extrapolates to predict future capacity will fail when the system transitions from idle to active. The measurement during idle (zero throughput) is not representative of capacity.
+**フィードバック制御アルゴリズムはアイドル期間に敏感である。** 活動期間中のスループットを測定し、それを外挿して将来の容量を予測する推定器は、システムがアイドルから活動状態へ遷移するときに失敗する。アイドル中の測定値（スループットゼロ）は容量を代表しない。
 
-**Throttling that sleeps unconditionally cannot react to changing conditions.** When `balance_dirty_pages()` puts a process to sleep for a computed duration, that duration was correct at the moment of calculation — but it may be wrong seconds later when the storage device has demonstrated higher throughput. The throttler should be able to wake early.
+**無条件にスリープするスロットリングは、変化する状況に反応できない。** `balance_dirty_pages()`が計算された時間だけプロセスをスリープさせるとき、その時間は計算の瞬間には正しかったが、ストレージデバイスがより高いスループットを示した数秒後には誤っているかもしれない。スロットリング機構は早期に起床できるべきである。
 
-**Write throughput ≠ write latency.** The throttling mechanism was designed to protect aggregate throughput and memory usage. It was not designed to bound per-write latency. A process writing 4 KB could sleep for 100 ms if the estimator was wrong about bandwidth — a 25,000x latency amplification. This is unacceptable for latency-sensitive workloads.
+**書き込みスループット ≠ 書き込みレイテンシ。** スロットリングの仕組みは、総スループットとメモリ使用量を守るために設計されていた。書き込みごとのレイテンシを抑えるようには設計されていなかった。推定器が帯域を誤れば、4 KBを書き込むプロセスが100 msスリープすることがありえた。これは25,000倍のレイテンシ増幅である。レイテンシに敏感なワークロードにとって、これは受け入れられない。
 
-!!! warning "Pattern to watch for"
-    Intermittent write latency spikes on kernels v3.1–v3.10 (or on later kernels with high dirty ratios) should be investigated with writeback tracing before attributing the latency to storage hardware.
+!!! warning "注意すべきパターン"
+    カーネルv3.1〜v3.10（あるいはダーティ比率を高くした後のカーネル）での断続的な書き込みレイテンシのスパイクは、レイテンシの原因をストレージハードウェアに帰する前に、ライトバックのトレーシングで調査すべきである。
 
     ```bash
-    # Check for throttling events
+    # スロットリングのイベントを確認する
     grep -i 'balance_dirty\|writeback_wait' /sys/kernel/debug/tracing/available_events
 
-    # Quick check: are writers being throttled?
+    # 簡易チェック: 書き込み側はスロットリングされているか？
     cat /proc/vmstat | grep -E 'writeback|dirty'
-    # Key counters:
-    # nr_dirty         - current dirty pages
-    # nr_writeback     - pages currently under writeback
-    # nr_dirty_threshold - current dirty throttle threshold
+    # 主要なカウンタ:
+    # nr_dirty         - 現在のダーティページ
+    # nr_writeback     - 現在ライトバック中のページ
+    # nr_dirty_threshold - 現在のダーティスロットリングのしきい値
 
-    # If nr_dirty is consistently near nr_dirty_threshold, throttling is active.
-    # If write latency spikes correlate with nr_dirty crossing the threshold,
-    # dirty throttling is the cause.
+    # nr_dirty が常に nr_dirty_threshold 付近にあるなら、スロットリングが働いている。
+    # 書き込みレイテンシのスパイクが nr_dirty のしきい値超えと相関しているなら、
+    # 原因はダーティスロットリングである。
     ```
 
 ---
 
-## Case 5: The `sendfile()` and `splice()` stall — zero-copy I/O and pipe buffer deadlocks {#case-5-the-sendfile-and-splice-stall-zero-copy-io-and-pipe-buffer-deadlocks}
+## 事例5: `sendfile()`と`splice()`の停止 — ゼロコピーI/Oとパイプバッファのデッドロック {#case-5-the-sendfile-and-splice-stall-zero-copy-io-and-pipe-buffer-deadlocks}
 
-### Before state {#before-state_4}
+### 事前の状態 {#before-state_4}
 
-`sendfile(2)` and `splice(2)` are zero-copy I/O system calls that allow data to be transferred between file descriptors without copying it through userspace. Their primary use case is efficient file serving (HTTP servers like nginx and Apache) and data pipelines.
+`sendfile(2)`と`splice(2)`は、データをユーザー空間経由でコピーせずにファイルディスクリプタ間で転送できるゼロコピーI/Oのシステムコールである。主な用途は、効率的なファイル配信（nginxやApacheのようなHTTPサーバー）とデータパイプラインである。
 
 ```
 Traditional read() + write():
@@ -469,37 +471,37 @@ sendfile() / splice():
   socket buffer → NIC (DMA)
 ```
 
-`splice()` is more general: it can splice between any two file descriptors where at least one is a pipe. It was introduced in v2.6.17 (2006) by Jens Axboe and Linus Torvalds as a generalization of `sendfile()`.
+`splice()`はより汎用的で、少なくとも一方がパイプである任意の2つのファイルディスクリプタ間でspliceできる。`sendfile()`の一般化として、v2.6.17（2006年）でJens AxboeとLinus Torvaldsによって導入された。
 
-Both calls were heavily used in high-throughput file serving and are critical to the performance of nginx, Apache, and various proxy servers.
+どちらの呼び出しも高スループットのファイル配信で多用されており、nginx、Apache、さまざまなプロキシサーバーの性能にとって決定的に重要である。
 
-### The change {#the-change_4}
+### 変更 {#the-change_4}
 
-The pipe buffer implementation that backs `splice()` uses a fixed-size ring of buffer entries (`PIPE_DEF_BUFFERS = 16` entries by default). Each entry can reference a page from the page cache. When the ring is full and the reader has not consumed any entries, the writer blocks.
+`splice()`を支えるパイプバッファの実装は、固定サイズのバッファエントリのリング（デフォルトで`PIPE_DEF_BUFFERS = 16`エントリ）を使う。各エントリはページキャッシュのページを参照できる。リングが満杯で読み込み側がどのエントリも消費していないと、書き込み側はブロックする。
 
-The interaction that caused production incidents was not a single kernel change but the combined effect of:
+本番環境のインシデントを引き起こした相互作用は、単一のカーネル変更ではなく、次の要因の組み合わせだった:
 
-1. Large file transfers using `splice()` that fed data faster than the consumer (socket, pipe reader) could drain it.
-2. The file being read was also being written by another process (a log file, a growing file, or a file being updated).
-3. The `sendfile()` caller holding `mmap_lock` (formerly `mmap_sem`) on the source file's mappings while blocked on the pipe buffer being full.
+1. 消費側（ソケット、パイプの読み込み側）が掃き出せるより速くデータを供給する、`splice()`を使った大きなファイル転送。
+2. 読まれているファイルが、別のプロセスによって書き込まれてもいること（ログファイル、伸び続けるファイル、更新中のファイル）。
+3. `sendfile()`の呼び出し側が、パイプバッファが満杯でブロックしている間、転送元ファイルのマッピングに対する`mmap_lock`（以前の`mmap_sem`）を保持していること。
 
-In certain kernel versions (particularly in the v2.6.x series through early v3.x), the interaction between `splice()`'s pipe buffer blocking and locks held on the source file could produce deadlocks or very long stalls.
+特定のカーネルバージョン（特にv2.6.x系列から初期のv3.x）では、`splice()`のパイプバッファでのブロックと、転送元ファイルに対して保持されたロックとの相互作用が、デッドロックや非常に長い停止を引き起こすことがあった。
 
-### Observed regression {#observed-regression_4}
+### 観測されたリグレッション {#observed-regression_4}
 
-Production reports from file servers and content delivery systems described two failure patterns:
+ファイルサーバーやコンテンツ配信システムからの本番環境の報告は、2つの障害パターンを記述していた:
 
-**Throughput collapse under load**: nginx or Apache processes using `sendfile()` would see throughput drop to near zero when serving many concurrent large file transfers. The system had CPU and network capacity available, but the file serving processes were blocked.
+**負荷下でのスループットの崩壊**: `sendfile()`を使うnginxやApacheのプロセスは、多数の大きなファイル転送を並行して配信するとき、スループットがほぼゼロまで落ちることがあった。システムにはCPUとネットワークの余力があったが、ファイル配信プロセスはブロックされていた。
 
-**Deadlocks with writable files**: In scenarios where a log file was being both written (by an application) and served via `splice()` or `sendfile()` (by a proxy or log shipping agent), a deadlock could occur. The `splice()` reader held the pipe write end blocked waiting for the pipe buffer to drain; the pipe buffer drain was waiting for the socket to drain; and the socket was waiting for the application to read — creating a cycle.
+**書き込み可能なファイルでのデッドロック**: ログファイルが（アプリケーションによって）書き込まれると同時に、（プロキシやログ転送エージェントによって）`splice()`や`sendfile()`で配信されているシナリオでは、デッドロックが起きることがあった。`splice()`の読み込み側は、パイプバッファが掃けるのを待ってパイプの書き込み端でブロックしていた。パイプバッファの掃き出しはソケットが掃けるのを待っていた。そしてソケットはアプリケーションが読むのを待っていた。これが循環を生んだ。
 
-These were reported in nginx bug trackers, Apache mailing lists, and LKML discussions about `splice()` and `sendfile()` behavior under load.
+これらは、nginxのバグトラッカー、Apacheのメーリングリスト、負荷下での`splice()`と`sendfile()`の挙動に関するLKMLの議論で報告された。
 
-A related and well-documented issue was the interaction between `splice()` and files that had pages under writeback. In some kernel versions, splicing a page that was currently being written back (dirty → writeback state transition) could cause `splice()` to block on the page lock in `wait_on_page_writeback()`, producing unexpected latency for operations that were supposed to be zero-copy reads.
+関連する、よく文書化された問題として、`splice()`とライトバック中のページを持つファイルとの相互作用があった。一部のカーネルバージョンでは、現在ライトバック中（dirty → writeback状態の遷移）のページをspliceすると、`splice()`が`wait_on_page_writeback()`でページロックを待ってブロックすることがあり、ゼロコピーの読み込みであるはずの操作に予期しないレイテンシを生んだ。
 
-### Why it happened {#why-it-happened_4}
+### なぜ起きたか {#why-it-happened_4}
 
-The `splice()` implementation in `fs/splice.c` involves several distinct lock acquisitions and blocking points:
+`fs/splice.c`の`splice()`実装には、いくつかの異なるロック取得とブロッキングポイントが含まれる:
 
 ```
 splice_file_to_pipe():
@@ -513,136 +515,136 @@ splice_file_to_pipe():
      (holds pipe->mutex while blocked)
 ```
 
-The blocking in step 3 (pipe buffer full) while holding state from steps 1–2 created the opportunity for priority inversions and deadlocks when the pipe reader was another kernel path that needed the same resources.
+ステップ1〜2の状態を保持したままステップ3（パイプバッファが満杯）でブロックすることで、パイプの読み込み側が同じリソースを必要とする別のカーネルパスである場合に、優先度逆転やデッドロックの機会が生まれた。
 
-Additionally, the `sendfile()` implementation on older kernels used a temporary mapping of the source pages that, in some configurations, required acquiring the file's `mmap_lock` for reading. If the file was simultaneously being truncated or remapped by another process, `mmap_lock` contention caused `sendfile()` to block — sometimes for the duration of a competing `mmap()` or `munmap()` operation on a large mapping.
+さらに、古いカーネルの`sendfile()`実装は転送元ページの一時的なマッピングを使っており、一部の構成ではファイルの`mmap_lock`を読み取りで取得する必要があった。ファイルが同時に別のプロセスによってtruncateや再マップされていると、`mmap_lock`の競合によって`sendfile()`がブロックした。ときには、大きなマッピングに対する競合する`mmap()`や`munmap()`操作が続く間ずっとブロックした。
 
-The zero-copy page reference mechanism in `splice()` meant that spliced pages were "pinned" in the page cache until the pipe buffer entry was consumed. Under high load, this could exhaust the pipe buffer (PIPE_BUF_FLAG_* limits) and cause all further splice operations on those files to block until the consumer drained its end.
+`splice()`のゼロコピーのページ参照の仕組みは、spliceされたページがパイプバッファのエントリが消費されるまでページキャッシュに「ピン留め」されることを意味した。高負荷下では、これがパイプバッファ（PIPE_BUF_FLAG_*の制限）を使い果たし、消費側が自分の端を掃き出すまで、それらのファイルに対する以降のすべてのsplice操作をブロックさせることがあった。
 
-### Resolution {#resolution_4}
+### 解決 {#resolution_4}
 
-Several improvements addressed these issues across kernel versions:
+カーネルバージョンをまたいだいくつかの改善がこれらの問題に対処した:
 
-**Pipe buffer size tuning** (v2.6.35+): The `F_SETPIPE_SZ` fcntl was added to allow setting the pipe buffer size per pipe. High-throughput applications could increase the pipe buffer to reduce the frequency of blocking:
+**パイプバッファサイズのチューニング**（v2.6.35以降）: パイプごとにパイプバッファサイズを設定できるように、`F_SETPIPE_SZ` fcntlが追加された。高スループットのアプリケーションは、パイプバッファを大きくしてブロックの頻度を減らせるようになった:
 
 ```c
-/* Increase pipe buffer to 1 MB to reduce blocking frequency */
+/* ブロックの頻度を減らすためにパイプバッファを 1 MB に増やす */
 int fds[2];
 pipe(fds);
-fcntl(fds[1], F_SETPIPE_SZ, 1024 * 1024);  /* 1 MB pipe buffer */
+fcntl(fds[1], F_SETPIPE_SZ, 1024 * 1024);  /* 1 MB のパイプバッファ */
 
-/* Check current and maximum sizes */
+/* 現在のサイズと最大サイズを確認する */
 int current_size = fcntl(fds[0], F_GETPIPE_SZ);
 
-/* System maximum (default 1 MB, configurable) */
+/* システムの最大値（デフォルト 1 MB、設定可能） */
 /* cat /proc/sys/fs/pipe-max-size */
 ```
 
-**Writeback wait removal from splice path**: Later kernel versions made the splice read path skip pages under active writeback rather than blocking on them, accepting that the spliced data might be slightly behind the current write state. This avoided the `wait_on_page_writeback()` blocking in the hot path.
+**spliceパスからのライトバック待ちの除去**: 後のカーネルバージョンでは、spliceの読み込みパスはアクティブなライトバック中のページでブロックせずにそれをスキップするようになり、spliceされるデータが現在の書き込み状態よりわずかに遅れることを許容した。これにより、ホットパスでの`wait_on_page_writeback()`によるブロックが避けられた。
 
-**`sendfile()` implementation refinements**: The interaction between `sendfile()` and `mmap_lock` was addressed by limiting the scope of the lock during the page reference phase, reducing contention with concurrent mmap/munmap operations.
+**`sendfile()`実装の改良**: `sendfile()`と`mmap_lock`の相互作用は、ページ参照フェーズ中のロックの範囲を限定することで対処され、並行するmmap/munmap操作との競合が減った。
 
-For applications:
+アプリケーション向け:
 
 ```bash
-# Increase system-wide maximum pipe size (affects F_SETPIPE_SZ ceiling)
+# システム全体のパイプ最大サイズを増やす（F_SETPIPE_SZ の上限に影響する）
 sysctl fs.pipe-max-size=4194304  # 4 MB
 
-# Check current pipe-max-size
+# 現在の pipe-max-size を確認する
 cat /proc/sys/fs/pipe-max-size
 
-# For nginx: use sendfile = on with sendfile_max_chunk to limit
-# the amount of data sent in one sendfile() call, preventing
-# the kernel from holding page references for too long.
+# nginx の場合: sendfile = on と sendfile_max_chunk を使い、
+# 1 回の sendfile() 呼び出しで送るデータ量を制限して、
+# カーネルがページ参照を長く保持しすぎるのを防ぐ。
 # nginx.conf:
 #   sendfile on;
 #   sendfile_max_chunk 512k;
 ```
 
-The `sendfile_max_chunk` configuration (nginx-specific) limits how much data is transferred per `sendfile()` syscall, allowing the event loop to regain control and drain pipe buffers between chunks.
+`sendfile_max_chunk`設定（nginx固有）は、`sendfile()`システムコール1回あたりに転送するデータ量を制限し、イベントループがチャンクの合間に制御を取り戻してパイプバッファを掃き出せるようにする。
 
-### What it taught us {#what-it-taught-us_4}
+### 教訓 {#what-it-taught-us_4}
 
-**Zero-copy is not zero-blocking.** `sendfile()` and `splice()` eliminate memory copies, but they do not eliminate the need to acquire locks and wait for page states. A path that blocks on `wait_on_page_writeback()` in the middle of a "zero-copy" operation is still a blocking operation from the caller's perspective.
+**ゼロコピーはゼロブロッキングではない。** `sendfile()`と`splice()`はメモリのコピーをなくすが、ロックの取得やページ状態の待機の必要をなくすわけではない。「ゼロコピー」操作の途中で`wait_on_page_writeback()`でブロックするパスは、呼び出し側から見ればやはりブロッキング操作である。
 
-**Pipe buffers are a hidden resource that can be exhausted.** The default 16-entry, 64 KB pipe buffer is fine for most uses but becomes a bottleneck for high-throughput file serving. The inability to resize pipe buffers at all (before v2.6.35) was a design limitation that created a fixed ceiling on `splice()` throughput per file descriptor pair.
+**パイプバッファは使い果たされうる隠れたリソースである。** デフォルトの16エントリ、64 KBのパイプバッファは、ほとんどの用途では問題ないが、高スループットのファイル配信ではボトルネックになる。（v2.6.35より前は）パイプバッファのサイズをまったく変更できなかったことは設計上の制限であり、ファイルディスクリプタのペアあたりの`splice()`スループットに固定の上限を課していた。
 
-**Deadlock analysis must include kernel blocking points.** The `splice()` deadlock scenarios were difficult to diagnose because the blocking was invisible from userspace: processes appeared to be doing I/O but were actually blocked on pipe buffer drains, page writeback waits, or mmap_lock contention deep in the kernel. Standard tools like `strace` did not clearly expose which kernel lock was causing the block.
+**デッドロックの分析には、カーネル内のブロッキングポイントを含めなければならない。** `splice()`のデッドロックのシナリオは、ブロッキングがユーザー空間から見えないため診断が難しかった。プロセスはI/Oを行っているように見えたが、実際にはカーネルの奥深くで、パイプバッファの掃き出し、ページのライトバック待ち、あるいはmmap_lockの競合でブロックしていた。`strace`のような標準的なツールは、どのカーネルのロックがブロックの原因なのかを明確には示さなかった。
 
-!!! warning "Pattern to watch for"
-    If nginx, Apache, or another file server using `sendfile()` shows high CPU idle but low throughput under load, check whether splice/sendfile is blocking on pipe buffer exhaustion or page locks:
+!!! warning "注意すべきパターン"
+    `sendfile()`を使うnginx、Apache、その他のファイルサーバーが、負荷下でCPUのアイドルが高いのにスループットが低い場合は、splice/sendfileがパイプバッファの枯渇やページロックでブロックしていないか確認すること:
 
     ```bash
-    # Check for processes blocked in sendfile/splice
-    # D state means blocked in kernel (uninterruptible sleep)
+    # sendfile/splice でブロックされているプロセスを確認する
+    # D 状態はカーネル内でブロックされている（割り込み不可能なスリープ）ことを意味する
     ps aux | grep " D "
 
-    # Get kernel stack of a stuck process
-    cat /proc/<pid>/wchan          # shows which kernel function it's sleeping in
-    cat /proc/<pid>/stack          # full kernel stack (requires root)
+    # 停止しているプロセスのカーネルスタックを取得する
+    cat /proc/<pid>/wchan          # どのカーネル関数でスリープしているかを示す
+    cat /proc/<pid>/stack          # 完全なカーネルスタック（root が必要）
 
-    # Look for:
-    # pipe_write         → pipe buffer full
-    # wait_on_page_bit   → waiting for a page lock
-    # inode_lock         → inode lock contention
+    # 探すもの:
+    # pipe_write         → パイプバッファが満杯
+    # wait_on_page_bit   → ページロック待ち
+    # inode_lock         → inode ロックの競合
 
-    # Check pipe buffer size for the relevant file descriptors
-    ls -la /proc/<pid>/fd/         # identify pipe fds
-    cat /proc/<pid>/fdinfo/<fd>    # pipe_size shows current buffer
+    # 該当するファイルディスクリプタのパイプバッファサイズを確認する
+    ls -la /proc/<pid>/fd/         # パイプの fd を特定する
+    cat /proc/<pid>/fdinfo/<fd>    # pipe_size が現在のバッファを示す
     ```
 
 ---
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-These five incidents share structural patterns that recur across the I/O stack:
+これら5つのインシデントは、I/Oスタック全体で繰り返し現れる構造的なパターンを共有している:
 
-| Pattern | ext4 writeback stale data | O_DIRECT coherency | fsync + rename | Dirty throttle stalls | splice deadlocks |
+| パターン | ext4 writebackの古いデータ | O_DIRECTの一貫性 | fsync + rename | ダーティスロットリングの停止 | spliceのデッドロック |
 |---------|--------------------------|-------------------|----------------|----------------------|-----------------|
-| Correct in isolation, wrong in combination | Yes | Yes | Yes | Partial | Yes |
-| Documented but widely misunderstood | Yes | Yes | Yes | No | Partial |
-| Required userspace behavior change | Yes | Yes | Yes | No | Partial |
-| Fixed by kernel improvement alone | No | No | No | Yes (partial) | Yes (partial) |
-| Root cause: ordering or timing assumption | Yes | Yes | Yes | Yes | Yes |
+| 単独では正しく、組み合わせると誤る | はい | はい | はい | 部分的 | はい |
+| 文書化されているが広く誤解されていた | はい | はい | はい | いいえ | 部分的 |
+| ユーザー空間の挙動変更が必要だった | はい | はい | はい | いいえ | 部分的 |
+| カーネルの改善だけで修正された | いいえ | いいえ | いいえ | はい（部分的） | はい（部分的） |
+| 根本原因: 順序やタイミングの前提 | はい | はい | はい | はい | はい |
 
-The I/O stack is particularly prone to **ordering assumption bugs**: code that is correct when operations happen in a given sequence but silently fails when that sequence is not enforced by explicit synchronization. The three fsync-related cases (Cases 1, 3, and implicitly Case 2) all fit this pattern.
+I/Oスタックは特に**順序の前提に関するバグ**を生みやすい。操作が特定の順序で起きれば正しいが、その順序が明示的な同期によって強制されていないと黙って失敗するコードである。fsyncに関連する3つの事例（事例1、事例3、そして暗黙的に事例2）はすべてこのパターンに当てはまる。
 
-A second theme is **coherency across abstraction boundaries**: the page cache is coherent within itself, the journal is coherent within itself, and the block device is coherent within itself — but interactions between these layers, or between different I/O paths to the same file, are where the bugs live.
-
----
-
-## See also {#see-also}
-
-- [Page Cache Writeback](page-cache-writeback.md) — How dirty pages are flushed, throttling thresholds, and BDI bandwidth estimation
-- [Direct I/O](direct-io.md) — O_DIRECT alignment requirements, DIO path, and mmap comparison
-- [Async I/O evolution](async-io.md) — POSIX AIO, Linux AIO limitations, and io_uring
-- [splice and sendfile](splice-sendfile.md) — Zero-copy I/O internals and pipe buffer mechanics
-- [mmap I/O](mmap-io.md) — Memory-mapped I/O, page faults, and mmap/O_DIRECT interaction
-- [Filesystem observability](observability.md) — Tracepoints, /proc/vmstat counters, and iostat for diagnosing I/O issues
-- [Life of a write](life-of-a-write.md) — End-to-end write path from syscall to disk
+2つ目のテーマは**抽象化の境界をまたぐ一貫性**である。ページキャッシュはそれ自体の中では一貫しており、ジャーナルもそれ自体の中では一貫しており、ブロックデバイスもそれ自体の中では一貫している。しかし、これらの層の間の相互作用や、同じファイルへの異なるI/O経路の間の相互作用こそが、バグの棲む場所である。
 
 ---
 
-## External references {#external-references}
+## 関連項目 {#see-also}
 
-- [LWN: Flushing out pdflush](https://lwn.net/Articles/326552/) — Background on writeback thread design leading to the dirty throttling rework
-- [LWN: When writeback goes wrong](https://lwn.net/Articles/384093/) — Direct reclaim recursing into filesystem writeback and overflowing the kernel stack
-- [LWN: No-I/O dirty throttling](https://lwn.net/Articles/456904/) — Fengguang Wu's dirty throttling improvements in v3.1
-- [ext4 and data loss](https://lwn.net/Articles/322823/) — ext4 journaling modes and their crash semantics
-- [Kernel docs: ext4](https://docs.kernel.org/filesystems/ext4/index.html) — Official ext4 documentation including journaling mode descriptions
-- [open(2) man page](https://man7.org/linux/man-pages/man2/open.2.html) — O_DIRECT documentation including the mixed-mode coherency warning
-- [fsync(2) man page](https://man7.org/linux/man-pages/man2/fsync.2.html) — fsync semantics and the note on directory syncing
-- [SQLite atomic commit documentation](https://www.sqlite.org/atomiccommit.html) — SQLite's analysis of fsync semantics and the directory sync requirement
-- [PostgreSQL WAL reliability documentation](https://www.postgresql.org/docs/current/wal-reliability.html) — PostgreSQL's requirements for fsync and directory sync
-- [Russ Cox: Fsync after rename](https://research.swtch.com/gofsck) — Analysis of fsync + rename semantics on Linux and other systems
-- [splice(2) man page](https://man7.org/linux/man-pages/man2/splice.2.html) — splice system call documentation
-- [fs/splice.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/splice.c) — splice implementation
-- [fs/ext4/inode.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ext4/inode.c) — ext4 writepage and ordered/writeback mode handling
-- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) — balance_dirty_pages() and dirty throttling implementation
+- [ページキャッシュのライトバック](page-cache-writeback.md) — ダーティページのフラッシュ方法、スロットリングのしきい値、BDIの帯域推定
+- [ダイレクトI/O](direct-io.md) — O_DIRECTのアラインメント要件、DIOパス、mmapとの比較
+- [非同期I/Oの進化](async-io.md) — POSIX AIO、Linux AIOの制限、io_uring
+- [spliceとsendfile](splice-sendfile.md) — ゼロコピーI/Oの内部とパイプバッファの仕組み
+- [mmap I/O](mmap-io.md) — メモリマップドI/O、ページフォールト、mmapとO_DIRECTの相互作用
+- [ファイルシステムの可観測性](observability.md) — I/Oの問題を診断するためのtracepoint、/proc/vmstatのカウンタ、iostat
+- [writeの一生](life-of-a-write.md) — システムコールからディスクまでのエンドツーエンドの書き込みパス
 
-## Further reading {#further-reading}
+---
 
-- [war-stories-regressions.md](../mm/war-stories-regressions.md) — Memory management regressions: THP compaction stalls, NUMA balancing overhead, khugepaged CPU storms, and swap readahead mismatch; the same "optimization correct in theory, wrong for this workload" pattern applies to I/O
-- [Tuning storage I/O](tuning-storage.md) — Practical guidance for dirty ratio tuning, O_DIRECT configuration, and sendfile/splice tuning for production workloads
-- [Filesystem observability](observability.md) — The `/proc/vmstat` counters (`nr_dirty`, `nr_writeback`, `pgpgout`) and tracepoints for diagnosing all five cases documented here
-- [Ensuring data reaches disk](https://lwn.net/Articles/457667/) — Jeff Moyer on the directory fsync requirement and filesystem behavior differences across Linux filesystem implementations
+## 外部参考資料 {#external-references}
+
+- [LWN: Flushing out pdflush](https://lwn.net/Articles/326552/) — ダーティスロットリングの作り直しにつながったライトバックスレッドの設計の背景
+- [LWN: When writeback goes wrong](https://lwn.net/Articles/384093/) — ダイレクト回収がファイルシステムのライトバックへ再帰し、カーネルスタックをオーバーフローさせる問題
+- [LWN: No-I/O dirty throttling](https://lwn.net/Articles/456904/) — v3.1でのFengguang Wuによるダーティスロットリングの改善
+- [ext4 and data loss](https://lwn.net/Articles/322823/) — ext4のジャーナリングモードとそのクラッシュ時のセマンティクス
+- [Kernel docs: ext4](https://docs.kernel.org/filesystems/ext4/index.html) — ジャーナリングモードの説明を含むext4の公式ドキュメント
+- [open(2) man page](https://man7.org/linux/man-pages/man2/open.2.html) — 混在モードの一貫性に関する警告を含むO_DIRECTのドキュメント
+- [fsync(2) man page](https://man7.org/linux/man-pages/man2/fsync.2.html) — fsyncのセマンティクスとディレクトリのsyncに関する注記
+- [SQLite atomic commit documentation](https://www.sqlite.org/atomiccommit.html) — fsyncのセマンティクスとディレクトリのsync要件に関するSQLiteの分析
+- [PostgreSQL WAL reliability documentation](https://www.postgresql.org/docs/current/wal-reliability.html) — fsyncとディレクトリのsyncに関するPostgreSQLの要件
+- [Russ Cox: Fsync after rename](https://research.swtch.com/gofsck) — Linuxや他のシステムにおけるfsync + renameのセマンティクスの分析
+- [splice(2) man page](https://man7.org/linux/man-pages/man2/splice.2.html) — spliceシステムコールのドキュメント
+- [fs/splice.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/splice.c) — spliceの実装
+- [fs/ext4/inode.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/ext4/inode.c) — ext4のwritepageとordered/writebackモードの処理
+- [mm/page-writeback.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page-writeback.c) — balance_dirty_pages()とダーティスロットリングの実装
+
+## 参考文献 {#further-reading}
+
+- [war-stories-regressions.md](../mm/war-stories-regressions.md) — メモリ管理のリグレッション: THPのコンパクションによる停止、NUMAバランシングのオーバーヘッド、khugepagedのCPU嵐、スワップのリードアヘッドの不一致。「理論上は正しい最適化が、このワークロードには誤り」という同じパターンがI/Oにも当てはまる
+- [ストレージI/Oのチューニング](tuning-storage.md) — 本番ワークロード向けの、ダーティ比率のチューニング、O_DIRECTの設定、sendfile/spliceのチューニングに関する実践的なガイダンス
+- [ファイルシステムの可観測性](observability.md) — ここに記録した5つの事例すべての診断に使える`/proc/vmstat`のカウンタ（`nr_dirty`、`nr_writeback`、`pgpgout`）とtracepoint
+- [Ensuring data reaches disk](https://lwn.net/Articles/457667/) — ディレクトリのfsync要件と、Linuxのファイルシステム実装間での挙動の違いについてのJeff Moyerの記事

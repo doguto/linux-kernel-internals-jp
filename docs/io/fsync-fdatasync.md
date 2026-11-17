@@ -1,10 +1,10 @@
-# Durability Semantics: fsync, fdatasync, O_SYNC, and Write Barriers {#durability-semantics-fsync-fdatasync-o_sync-and-write-barriers}
+# 永続性のセマンティクス: fsync、fdatasync、O_SYNC、ライトバリア {#durability-semantics-fsync-fdatasync-o_sync-and-write-barriers}
 
-> What each durability syscall actually promises, where the guarantees break down, and how databases use them correctly
+> 永続性に関わる各システムコールが実際に何を約束するのか、その保証がどこで崩れるのか、そしてデータベースがそれらをどう正しく使っているのか
 
-## The durability gap {#the-durability-gap}
+## 永続性のギャップ {#the-durability-gap}
 
-`write()` returns when data is in DRAM — specifically in the kernel's **page cache**. The call does not touch persistent storage. Between the moment `write()` returns and the moment data survives a power cut, three independent layers can each lose data:
+`write()`は、データがDRAM、具体的にはカーネルの**ページキャッシュ**にある時点で戻る。この呼び出しは永続ストレージには触れない。`write()`が戻った瞬間から、データが電源断を生き延びる瞬間までの間に、3つの独立した層のそれぞれがデータを失いうる:
 
 ```
 User process
@@ -30,40 +30,40 @@ User process
 └─────────────────────────────────────────────────────┘
 ```
 
-**Layer 1 — page cache**: A `write()` makes the page dirty and returns. The kernel's writeback threads flush dirty pages to the drive at their own pace (controlled by `dirty_expire_centisecs`, `dirty_writeback_centisecs`, and memory pressure). A kernel panic before writeback loses the data completely.
+**層1 — ページキャッシュ**: `write()`はページをダーティにして戻る。カーネルのライトバックスレッドは、自分のペース（`dirty_expire_centisecs`、`dirty_writeback_centisecs`、およびメモリ逼迫によって制御される）でダーティページをドライブへフラッシュする。ライトバック前にカーネルパニックが起きると、データは完全に失われる。
 
-**Layer 2 — drive write buffer**: Modern drives have DRAM write caches. The kernel can deliver a block write to the drive and receive an ACK before the drive has committed to flash cells or platters. A power cut at this stage loses data unless the drive has a battery-backed write cache (BBWC) or the kernel issued a FLUSH command (or FUA — Force Unit Access — on the write itself).
+**層2 — ドライブの書き込みバッファ**: 現代のドライブはDRAMのライトキャッシュを持つ。カーネルはブロック書き込みをドライブに渡し、ドライブがフラッシュセルやプラッタにコミットする前にACKを受け取ることがある。この段階で電源断が起きると、ドライブがバッテリーバックアップ付きライトキャッシュ（BBWC）を持っているか、カーネルがFLUSHコマンド（あるいは書き込み自体にFUA — Force Unit Access）を発行していない限り、データは失われる。
 
-**Layer 3 — storage medium**: Once data is on the medium, only physical destruction can lose it. Flash cells and platters are persistent.
+**層3 — 記憶媒体**: データが媒体上に載れば、物理的な破壊以外でそれが失われることはない。フラッシュセルやプラッタは永続的である。
 
-The contract of each durability mechanism specifies which layers it closes:
+各永続化メカニズムの契約は、どの層を閉じるかを規定している:
 
-| Mechanism | Flushes page cache | Flushes drive buffer | Notes |
+| メカニズム | ページキャッシュをフラッシュ | ドライブのバッファをフラッシュ | 備考 |
 |---|---|---|---|
-| `write()` | No | No | Data in DRAM only |
-| background writeback | Yes | No | Timing non-deterministic |
-| `fsync(fd)` | Yes | Yes | Full durability for the file |
-| `fdatasync(fd)` | Yes | Yes | Durability without non-essential metadata |
-| `sync()` | Yes | No* | System-wide; see caveats below |
-| `syncfs(fd)` | Yes | No* | Per-filesystem; see caveats below |
-| `O_SYNC` write | Yes | Yes | Per-write, after each `write_iter` |
-| `O_DSYNC` write | Yes | Yes (data+size) | Per-write, data-only variant |
+| `write()` | しない | しない | データはDRAMにのみある |
+| バックグラウンドライトバック | する | しない | タイミングは非決定的 |
+| `fsync(fd)` | する | する | ファイルの完全な永続性 |
+| `fdatasync(fd)` | する | する | 必須でないメタデータを除いた永続性 |
+| `sync()` | する | しない* | システム全体。後述の注意点を参照 |
+| `syncfs(fd)` | する | しない* | ファイルシステム単位。後述の注意点を参照 |
+| `O_SYNC`書き込み | する | する | 書き込みごと。各`write_iter`の後 |
+| `O_DSYNC`書き込み | する | する（データ+サイズ） | 書き込みごと。データのみの変種 |
 
-*`sync()` and `syncfs()` do not unconditionally issue a FLUSH to each device; they rely on the filesystem's journal commit (which does issue a FLUSH) having run, or on the caller also calling `fsync()` on representative files.
+*`sync()`と`syncfs()`は、各デバイスに無条件でFLUSHを発行するわけではない。ファイルシステムのジャーナルコミット（これはFLUSHを発行する）が実行されていることか、呼び出し側が代表的なファイルに対して`fsync()`も呼ぶことに依存している。
 
 ---
 
 ## fsync() {#fsync}
 
-### POSIX definition {#posix-definition}
+### POSIXの定義 {#posix-definition}
 
-POSIX requires that `fsync()` cause all modified data **and metadata** of the file to be transferred to the underlying hardware. "Transferred" means the hardware has acknowledged persistence — the application can assume the data will survive a power failure.
+POSIXは、`fsync()`がファイルの変更されたすべてのデータ**およびメタデータ**を下位のハードウェアへ転送することを要求している。「転送」とは、ハードウェアが永続化を確認応答したことを意味し、アプリケーションはデータが電源障害を生き延びると想定してよい。
 
-The key phrase is *all metadata*: `fsync()` must persist not only file data blocks but also the inode (size, block pointers, modification time, change time) and any filesystem-level journal records needed to make that inode state recoverable.
+鍵となるのは*すべてのメタデータ*という語句である。`fsync()`はファイルのデータブロックだけでなく、inode（サイズ、ブロックポインタ、更新時刻、変更時刻）と、そのinodeの状態を回復可能にするために必要なファイルシステムレベルのジャーナルレコードも永続化しなければならない。
 
-### Kernel implementation {#kernel-implementation}
+### カーネルの実装 {#kernel-implementation}
 
-The entry point is `SYSCALL_DEFINE1(fsync)` in `fs/sync.c`, which calls `do_fsync(fd, 0)`. The `0` is the `datasync` flag — for `fsync()` it is always 0. The path from syscall to filesystem is:
+エントリポイントは`fs/sync.c`の`SYSCALL_DEFINE1(fsync)`で、これは`do_fsync(fd, 0)`を呼ぶ。`0`は`datasync`フラグであり、`fsync()`では常に0である。システムコールからファイルシステムまでのパスは次のとおり:
 
 ```
 fsync(fd)
@@ -73,7 +73,7 @@ fsync(fd)
   → file->f_op->fsync(file, 0, LLONG_MAX, datasync=0)
 ```
 
-`vfs_fsync_range()` is the canonical VFS entry point:
+`vfs_fsync_range()`が正規のVFSエントリポイントである:
 
 ```c
 /* fs/sync.c */
@@ -88,27 +88,27 @@ int vfs_fsync_range(struct file *file, loff_t start, loff_t end, int datasync)
 }
 ```
 
-The range `[start, end]` is used by `msync()` for partial flushes; for a plain `fsync()` call the entire file range is passed. The `datasync` argument is forwarded unchanged to the filesystem, which uses it to decide whether to flush non-essential metadata.
+範囲`[start, end]`は`msync()`が部分的なフラッシュに使う。単純な`fsync()`呼び出しではファイル全体の範囲が渡される。`datasync`引数はそのままファイルシステムに転送され、ファイルシステムはそれを使って必須でないメタデータをフラッシュするかどうかを決める。
 
-### What "stable storage" means for different hardware {#what-stable-storage-means-for-different-hardware}
+### ハードウェアごとの「安定ストレージ」の意味 {#what-stable-storage-means-for-different-hardware}
 
-On rotating disk, stable storage is the platter. The drive must drain its volatile write cache — the kernel does this by issuing a `REQ_OP_FLUSH` block request, which translates to the ATA `FLUSH CACHE EXT` command or SCSI `SYNCHRONIZE CACHE`.
+回転ディスクでは、安定ストレージとはプラッタである。ドライブは揮発性のライトキャッシュを吐き出さなければならない。カーネルは`REQ_OP_FLUSH`ブロックリクエストを発行してこれを行い、それはATAの`FLUSH CACHE EXT`コマンドやSCSIの`SYNCHRONIZE CACHE`に変換される。
 
-On SATA SSD and NVMe, stable storage is flash cells that have been programmed (not just sitting in the write buffer). NVMe exposes two mechanisms: the `FLUSH` command (drain the write cache) and FUA (Force Unit Access) on a specific write — a flag on the NVMe write command that bypasses the write buffer for that operation only.
+SATA SSDやNVMeでは、安定ストレージとは（書き込みバッファに置かれているだけでなく）プログラム済みのフラッシュセルである。NVMeは2つの仕組みを公開している。`FLUSH`コマンド（ライトキャッシュを吐き出す）と、特定の書き込みに対するFUA（Force Unit Access）である。後者はNVMe書き込みコマンドのフラグで、その操作に限って書き込みバッファを迂回する。
 
-On enterprise flash with battery-backed write cache (BBWC) or capacitor-backed persistent memory (PMem/Optane), writes to the device's RAM are already considered durable, so FLUSH can be made a no-op. The kernel respects a `BLK_FEAT_FUA` flag indicating the device honors FUA, and a `BLK_FEAT_WRITE_CACHE` flag indicating a volatile write cache is present.
+バッテリーバックアップ付きライトキャッシュ（BBWC）やキャパシタでバックアップされた永続メモリ（PMem/Optane）を持つエンタープライズ向けフラッシュでは、デバイスのRAMへの書き込みはすでに永続とみなされるため、FLUSHをno-opにできる。カーネルは、デバイスがFUAに従うことを示す`BLK_FEAT_FUA`フラグと、揮発性ライトキャッシュが存在することを示す`BLK_FEAT_WRITE_CACHE`フラグを尊重する。
 
-### Ext4 journal modes and fsync cost {#ext4-journal-modes-and-fsync-cost}
+### ext4のジャーナルモードとfsyncのコスト {#ext4-journal-modes-and-fsync-cost}
 
-Ext4 has three journal modes that dramatically affect what `fsync()` must do:
+ext4には3つのジャーナルモードがあり、`fsync()`が行うべきことを大きく左右する:
 
-**`data=ordered` (default)**: Data blocks are written to disk *before* the journal commit that records metadata changes. On `fsync()`:
-1. Dirty data pages are written back via `filemap_write_and_wait_range()`.
-2. `ext4_sync_file()` calls `jbd2_complete_transaction()` to commit the current journal transaction.
-3. The journal commit block is written with a FLUSH or FUA to the journal device.
-4. If the file's data is on a separate device, a second FLUSH may be needed.
+**`data=ordered`（デフォルト）**: データブロックは、メタデータの変更を記録するジャーナルコミットの*前に*ディスクへ書き込まれる。`fsync()`では:
+1. ダーティなデータページが`filemap_write_and_wait_range()`でライトバックされる。
+2. `ext4_sync_file()`が`jbd2_complete_transaction()`を呼び、現在のジャーナルトランザクションをコミットする。
+3. ジャーナルのコミットブロックがFLUSHまたはFUA付きでジャーナルデバイスに書き込まれる。
+4. ファイルのデータが別のデバイス上にある場合は、2回目のFLUSHが必要になることがある。
 
-This means `fsync()` typically causes one journal commit plus one storage barrier, even if no data has changed since the last commit (because the metadata journal entry referencing the data must be committed).
+つまり`fsync()`は通常、1回のジャーナルコミットと1回のストレージバリアを引き起こす。最後のコミット以降データが変わっていなくても同様である（データを参照するメタデータのジャーナルエントリがコミットされなければならないため）。
 
 ```c
 /* fs/ext4/fsync.c */
@@ -129,7 +129,7 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
     trace_ext4_sync_file_enter(file, datasync);
 
     if (inode->i_sb->s_flags & SB_RDONLY) {
-        /* Make sure that we read updated s_mount_flags value */
+        /* 更新された s_mount_flags の値を確実に読む */
         smp_rmb();
         if (EXT4_SB(inode->i_sb)->s_mount_flags & EXT4_MF_FS_ABORTED)
             ret = -EROFS;
@@ -150,8 +150,8 @@ int ext4_sync_file(struct file *file, loff_t start, loff_t end, int datasync)
         goto out;
 
     /*
-     * data=writeback,ordered: if the inode is in the journal's
-     * checkpoint list, we need to commit the journal.
+     * data=writeback,ordered: inode がジャーナルの
+     * チェックポイントリストにあれば、ジャーナルをコミットする必要がある。
      */
     if (datasync)
         commit_tid = atomic_read(&ei->i_datasync_tid);
@@ -175,13 +175,13 @@ out:
 }
 ```
 
-**`data=writeback`**: Metadata is journaled but data block writes are not ordered with respect to journal commits. On `fsync()`, ext4 still calls `filemap_write_and_wait_range()` and commits the journal, but there is no ordering guarantee between data and metadata — a crash-and-recover can expose stale data in blocks that have valid metadata pointing to them. This mode is faster but requires the application to tolerate the risk.
+**`data=writeback`**: メタデータはジャーナルされるが、データブロックの書き込みはジャーナルコミットに対して順序付けられない。`fsync()`では、ext4はやはり`filemap_write_and_wait_range()`を呼んでジャーナルをコミットするが、データとメタデータの間に順序保証はない。クラッシュからの回復時に、有効なメタデータが指しているブロックに古いデータが露出することがある。このモードは高速だが、アプリケーションがそのリスクを許容する必要がある。
 
-**`data=journal`**: All data is written to the journal before being written to its final location. `fsync()` is expensive because it must commit the journal transaction that contains the data itself, not just metadata. Rarely used; reserved for applications that need strict ordering and can tolerate the write amplification.
+**`data=journal`**: すべてのデータは、最終的な位置に書き込まれる前にジャーナルへ書き込まれる。`fsync()`は、メタデータだけでなくデータそのものを含むジャーナルトランザクションをコミットしなければならないため高価である。めったに使われず、厳密な順序付けを必要とし、書き込み増幅を許容できるアプリケーション向けである。
 
-### XFS: log force vs data write ordering {#xfs-log-force-vs-data-write-ordering}
+### XFS: ログフォースとデータ書き込みの順序付け {#xfs-log-force-vs-data-write-ordering}
 
-XFS does not use a block-level journal in the ext4 sense; it uses a log structured for transactions. `xfs_file_fsync()` issues a log force (`xfs_log_force_seq()`) to flush the in-memory log to disk, then optionally issues a storage barrier.
+XFSはext4の意味でのブロックレベルのジャーナルは使わず、トランザクション向けに構造化されたログを使う。`xfs_file_fsync()`はログフォース（`xfs_log_force_seq()`）を発行してメモリ内のログをディスクへフラッシュし、必要に応じてストレージバリアを発行する。
 
 ```c
 /* fs/xfs/xfs_file.c */
@@ -202,10 +202,10 @@ int xfs_file_fsync(struct file *file, loff_t start, loff_t end, int datasync)
     xfs_iflags_clear(ip, XFS_ITRUNCATED);
 
     /*
-     * If we have an RT and/or log subvolume we need to make sure
-     * to flush the write cache the device used for file data
-     * first. This is to ensure all pending I/O is flushed prior
-     * to issuing the log force.
+     * RT サブボリュームやログサブボリュームがある場合は、まず
+     * ファイルデータに使われるデバイスのライトキャッシュを
+     * フラッシュする必要がある。ログフォースを発行する前に
+     * 保留中のすべての I/O がフラッシュされるようにするためである。
      */
     if (mp->m_rtdev_targp != mp->m_ddev_targp)
         blkdev_issue_flush(mp->m_rtdev_targp->bt_bdev);
@@ -232,46 +232,46 @@ out_flush:
 }
 ```
 
-### Typical fsync latency {#typical-fsync-latency}
+### 典型的なfsyncのレイテンシ {#typical-fsync-latency}
 
-These are representative numbers for a single `fsync()` call with a small write workload:
+小さな書き込みワークロードにおける1回の`fsync()`呼び出しの代表的な数値は次のとおり:
 
-| Storage type | Typical fsync latency |
+| ストレージの種類 | 典型的なfsyncレイテンシ |
 |---|---|
-| NVMe SSD (PCIe 4.0) | 50–500 µs |
-| NVMe SSD (PCIe 3.0) | 100–1000 µs |
+| NVMe SSD（PCIe 4.0） | 50–500 µs |
+| NVMe SSD（PCIe 3.0） | 100–1000 µs |
 | SATA SSD | 1–5 ms |
-| SATA HDD (7200 RPM) | 5–15 ms |
-| HDD (5400 RPM) | 10–30 ms |
-| Network block device (iSCSI/FC) | 1–10 ms (depends on storage array) |
+| SATA HDD（7200 RPM） | 5–15 ms |
+| HDD（5400 RPM） | 10–30 ms |
+| ネットワークブロックデバイス（iSCSI/FC） | 1–10 ms（ストレージアレイに依存） |
 
-The latency is dominated by the time to drain the write cache and for the journal commit block to land on stable media. On NVMe, a FUA write to the journal removes the need for a separate FLUSH command, cutting latency roughly in half.
+レイテンシの大部分は、ライトキャッシュを吐き出し、ジャーナルのコミットブロックが安定媒体に載るまでの時間である。NVMeでは、ジャーナルへのFUA書き込みによって別個のFLUSHコマンドが不要になり、レイテンシがおよそ半分になる。
 
 ---
 
 ## fdatasync() {#fdatasync}
 
-### POSIX definition {#posix-definition_1}
+### POSIXの定義 {#posix-definition_1}
 
-`fdatasync()` transfers file data and **enough metadata to retrieve the data** to stable storage. It explicitly does not need to flush metadata that does not affect the ability to read back data. From POSIX:
+`fdatasync()`は、ファイルのデータと**データを取り出すのに十分なメタデータ**を安定ストレージへ転送する。データを読み戻す能力に影響しないメタデータは、明示的にフラッシュする必要がない。POSIXより:
 
 > *If the file is not in a special file, it is not required to update metadata such as st_atime or st_mtime.*
 
-The metadata `fdatasync()` can skip:
+`fdatasync()`がスキップできるメタデータ:
 
-- `atime` (last access time) — never affects data retrieval
-- `mtime` (last modification time) — does not affect data location
-- `ctime` (last status change time) — inode change timestamp
+- `atime`（最終アクセス時刻） — データの取り出しに影響することはない
+- `mtime`（最終更新時刻） — データの位置に影響しない
+- `ctime`（最終状態変更時刻） — inodeの変更タイムスタンプ
 
-The metadata `fdatasync()` **must** flush:
+`fdatasync()`がフラッシュ**しなければならない**メタデータ:
 
-- File size (`i_size`) — if the file grew, the new size is needed to locate the new data
-- Block pointers — any newly allocated data blocks must be findable
-- Indirect/extent tree changes — required to locate data
+- ファイルサイズ（`i_size`） — ファイルが伸びた場合、新しいデータの位置を特定するには新しいサイズが必要
+- ブロックポインタ — 新たに割り当てられたデータブロックは見つけられる状態でなければならない
+- 間接ブロック/エクステントツリーの変更 — データの位置を特定するのに必要
 
-### The datasync flag path {#the-datasync-flag-path}
+### datasyncフラグのパス {#the-datasync-flag-path}
 
-`SYSCALL_DEFINE1(fdatasync)` calls `do_fsync(fd, 1)`. The `1` travels through `vfs_fsync_range()` and into the filesystem's `fsync` method as the `datasync` argument.
+`SYSCALL_DEFINE1(fdatasync)`は`do_fsync(fd, 1)`を呼ぶ。`1`は`vfs_fsync_range()`を通り、`datasync`引数としてファイルシステムの`fsync`メソッドに渡る。
 
 ```c
 /* fs/sync.c */
@@ -281,10 +281,10 @@ SYSCALL_DEFINE1(fdatasync, unsigned int, fd)
 }
 ```
 
-In ext4, `datasync=1` selects `ei->i_datasync_tid` instead of `ei->i_sync_tid`:
+ext4では、`datasync=1`は`ei->i_sync_tid`の代わりに`ei->i_datasync_tid`を選択する:
 
 ```c
-/* fs/ext4/fsync.c — simplified */
+/* fs/ext4/fsync.c — 簡略化 */
 if (datasync)
     commit_tid = atomic_read(&ei->i_datasync_tid);
 else
@@ -293,34 +293,34 @@ else
 ret = jbd2_complete_transaction(journal, commit_tid);
 ```
 
-`i_datasync_tid` is the transaction ID of the last transaction that affected data-accessible metadata. For a file that has not changed size since the last journal commit, `i_datasync_tid` may already be committed, making the `jbd2_complete_transaction()` call return immediately. This is the common case for databases writing to pre-allocated files — there is no size change, so there is no metadata journal commit to wait for.
+`i_datasync_tid`は、データのアクセスに関わるメタデータに影響した最後のトランザクションのIDである。最後のジャーナルコミット以降サイズが変わっていないファイルでは、`i_datasync_tid`はすでにコミット済みである可能性があり、その場合`jbd2_complete_transaction()`の呼び出しはすぐに戻る。これは事前割り当てされたファイルに書き込むデータベースでよくあるケースである。サイズの変更がないため、待つべきメタデータのジャーナルコミットがない。
 
-### When fdatasync is equivalent to fsync {#when-fdatasync-is-equivalent-to-fsync}
+### fdatasyncがfsyncと同等になるとき {#when-fdatasync-is-equivalent-to-fsync}
 
-`fdatasync()` must perform a full metadata flush (equivalent to `fsync()`) when:
+`fdatasync()`は、次の場合に完全なメタデータのフラッシュ（`fsync()`と同等）を行わなければならない:
 
-- **File size changed**: a `write()` past end-of-file, or `truncate()`. The new `i_size` must be on disk before the data it describes can be retrieved safely.
-- **New blocks allocated**: on block-based filesystems, if a write caused new extent or indirect-block entries to be created.
-- **New file**: a newly created file has never had its inode committed. Both data and all inode metadata must be flushed.
-- **File renamed or linked**: the directory entry is part of the metadata that describes the file's location.
+- **ファイルサイズが変わった**: ファイル末尾を超える`write()`、または`truncate()`。新しい`i_size`は、それが記述するデータを安全に取り出せるようになる前にディスク上になければならない。
+- **新しいブロックが割り当てられた**: ブロックベースのファイルシステムで、書き込みによって新しいエクステントや間接ブロックのエントリが作られた場合。
+- **新しいファイル**: 新規作成されたファイルは、そのinodeが一度もコミットされていない。データとすべてのinodeメタデータの両方をフラッシュしなければならない。
+- **ファイルのrenameやlink**: ディレクトリエントリは、ファイルの位置を記述するメタデータの一部である。
 
-For a database WAL file that is pre-allocated and written sequentially without size changes, `fdatasync()` skips the metadata journal commit entirely on every write after the first. This is why PostgreSQL uses `fdatasync()` for WAL writes — the WAL file is pre-allocated and its size rarely changes during normal operation.
+事前割り当てされ、サイズを変えずに順次書き込まれるデータベースのWALファイルでは、`fdatasync()`は最初の書き込み以降のすべての書き込みでメタデータのジャーナルコミットを完全にスキップする。PostgreSQLがWALの書き込みに`fdatasync()`を使うのはこのためである。WALファイルは事前割り当てされており、通常運用中にそのサイズが変わることはまれである。
 
-### Why fdatasync is faster {#why-fdatasync-is-faster}
+### なぜfdatasyncのほうが速いか {#why-fdatasync-is-faster}
 
-The performance advantage is not about writing less data — both `fsync()` and `fdatasync()` must flush dirty data pages. The advantage is in journal commits: a metadata journal commit requires writing a commit block to the journal device and waiting for the FLUSH or FUA acknowledgment. On a heavily written filesystem, this commit may include unrelated metadata from other files, serializing all fsync() callers. `fdatasync()` avoids this serialization point when no metadata change is needed.
+性能上の利点は、書き込むデータが少ないことではない。`fsync()`も`fdatasync()`もダーティなデータページをフラッシュしなければならない。利点はジャーナルコミットにある。メタデータのジャーナルコミットには、ジャーナルデバイスへコミットブロックを書き込み、FLUSHまたはFUAの確認応答を待つ必要がある。書き込みの多いファイルシステムでは、このコミットに他のファイルの無関係なメタデータが含まれることがあり、すべてのfsync()呼び出し側を直列化してしまう。`fdatasync()`は、メタデータの変更が不要なときにこの直列化ポイントを回避する。
 
-Benchmarks on a SATA SSD with ext4 `data=ordered` typically show `fdatasync()` at 2–3× the throughput of `fsync()` for small random writes to pre-allocated files, primarily because `fdatasync()` avoids the journal commit serialization.
+ext4 `data=ordered`のSATA SSDでのベンチマークでは、事前割り当てされたファイルへの小さなランダム書き込みにおいて、`fdatasync()`は通常`fsync()`の2〜3倍のスループットを示す。主な理由は、`fdatasync()`がジャーナルコミットによる直列化を回避することである。
 
 ---
 
-## sync() and syncfs() {#sync-and-syncfs}
+## sync()とsyncfs() {#sync-and-syncfs}
 
-### sync() — system-wide flush {#sync-system-wide-flush}
+### sync() — システム全体のフラッシュ {#sync-system-wide-flush}
 
-`sync()` instructs the kernel to flush all dirty pages and all journal transactions across all mounted filesystems. Historically `sync()` initiated writeback and returned immediately — this was intentional; the Unix documentation simply said it "schedules" writes, not that it waits for them.
+`sync()`は、マウントされたすべてのファイルシステムにわたって、すべてのダーティページとすべてのジャーナルトランザクションをフラッシュするようカーネルに指示する。歴史的に`sync()`はライトバックを開始してすぐに戻っていた。これは意図的なもので、Unixのドキュメントは単に書き込みを「スケジュールする」と述べており、それを待つとは述べていなかった。
 
-**Linux behavior**: unlike the bare POSIX requirement, Linux `sync()` has waited for writeback and journal commits to complete for a very long time (the behaviour predates the 2.6 series — see the NOTES in `sync(2)`). The current kernel implementation delegates to `ksys_sync()`:
+**Linuxの挙動**: 素のPOSIXの要件とは異なり、Linuxの`sync()`は非常に長い間、ライトバックとジャーナルコミットの完了を待ってきた（この挙動は2.6系列より前からある。`sync(2)`のNOTESを参照）。現在のカーネル実装は`ksys_sync()`に委譲している:
 
 ```c
 /* fs/sync.c */
@@ -329,11 +329,11 @@ void ksys_sync(void)
     int nowait = 0, wait = 1;
 
     wakeup_flusher_threads(WB_REASON_SYNC);
-    iterate_supers(sync_inodes_one_sb, NULL);  /* write back + wait on inodes */
-    iterate_supers(sync_fs_one_sb, &nowait);   /* ->sync_fs, no wait */
-    iterate_supers(sync_fs_one_sb, &wait);     /* ->sync_fs, wait */
-    sync_bdevs(false);                         /* flush block-device caches */
-    sync_bdevs(true);                          /* ... and wait */
+    iterate_supers(sync_inodes_one_sb, NULL);  /* inode をライトバックして待つ */
+    iterate_supers(sync_fs_one_sb, &nowait);   /* ->sync_fs、待たない */
+    iterate_supers(sync_fs_one_sb, &wait);     /* ->sync_fs、待つ */
+    sync_bdevs(false);                         /* ブロックデバイスのキャッシュをフラッシュ */
+    sync_bdevs(true);                          /* ... そして待つ */
 }
 
 SYSCALL_DEFINE0(sync)
@@ -343,19 +343,19 @@ SYSCALL_DEFINE0(sync)
 }
 ```
 
-Despite waiting, `sync()` does **not** issue a FLUSH command to every storage device. It relies on the filesystem's journal commits (which do use barriers) to ensure ordering. If a filesystem has dirty data but no pending journal commit (e.g., `nobarrier` mount option), `sync()` may not fully flush the drive write cache.
+待つにもかかわらず、`sync()`はすべてのストレージデバイスにFLUSHコマンドを発行するわけでは**ない**。順序付けの保証は、ファイルシステムのジャーナルコミット（これはバリアを使う）に依存している。ファイルシステムにダーティなデータがあっても保留中のジャーナルコミットがない場合（例: `nobarrier`マウントオプション）、`sync()`はドライブのライトキャッシュを完全にはフラッシュしないことがある。
 
-**When to use `sync()`**: system shutdown, testing, and scripting scenarios where you need everything on disk. Not appropriate for application-level durability — the scope is too broad and the cost too high.
+**`sync()`を使うべきとき**: システムのシャットダウン、テスト、すべてをディスクに載せる必要があるスクリプトのシナリオ。アプリケーションレベルの永続性には適さない。範囲が広すぎ、コストが高すぎる。
 
-### syncfs() — per-filesystem flush {#syncfs-per-filesystem-flush}
+### syncfs() — ファイルシステム単位のフラッシュ {#syncfs-per-filesystem-flush}
 
-`syncfs()` was added in Linux 2.6.39 to give per-filesystem semantics without the system-wide cost of `sync()`. It takes a file descriptor and flushes the filesystem that contains it:
+`syncfs()`は、`sync()`のシステム全体にわたるコストなしにファイルシステム単位のセマンティクスを提供するため、Linux 2.6.39で追加された。ファイルディスクリプタを受け取り、それを含むファイルシステムをフラッシュする:
 
 ```c
 /* fs/sync.c */
 SYSCALL_DEFINE1(syncfs, int, fd)
 {
-    CLASS(fd, f)(fd);              /* scope-guarded fd, released on return */
+    CLASS(fd, f)(fd);              /* スコープガード付きの fd。return 時に解放される */
     struct super_block *sb;
     int ret, ret2;
 
@@ -367,50 +367,50 @@ SYSCALL_DEFINE1(syncfs, int, fd)
     ret = sync_filesystem(sb);
     up_read(&sb->s_umount);
 
-    /* report any writeback error seen since this fd last checked */
+    /* この fd が最後に確認して以降に見られたライトバックエラーを報告する */
     ret2 = errseq_check_and_advance(&sb->s_wb_err, &fd_file(f)->f_sb_err);
     return ret ? ret : ret2;
 }
 ```
 
-`sync_filesystem()` calls `sb->s_op->sync_fs()` (if defined) and then `sync_blockdev()` on the superblock's block device. It waits for writeback and journal commits. Like `sync()`, it does not explicitly send a FLUSH to the storage device unless the filesystem's journal commit does so.
+`sync_filesystem()`は`sb->s_op->sync_fs()`（定義されていれば）を呼び、次にスーパーブロックのブロックデバイスに対して`sync_blockdev()`を呼ぶ。ライトバックとジャーナルコミットを待つ。`sync()`と同様に、ファイルシステムのジャーナルコミットが行わない限り、ストレージデバイスへ明示的にFLUSHを送ることはない。
 
-**`syncfs()` vs multiple `fsync()` calls**: `syncfs()` is useful when you need to flush everything on a filesystem — for example before a snapshot — without calling `fsync()` on every file. It is cheaper than `sync()` and scoped to one filesystem. For per-file durability guarantees, `fsync()` or `fdatasync()` is still required.
+**`syncfs()`と複数の`fsync()`呼び出しの比較**: `syncfs()`は、例えばスナップショットの前など、すべてのファイルに`fsync()`を呼ばずにファイルシステム上のすべてをフラッシュする必要があるときに便利である。`sync()`より安価で、1つのファイルシステムに範囲が限定される。ファイル単位の永続性保証には、依然として`fsync()`か`fdatasync()`が必要である。
 
 ---
 
-## O_SYNC and O_DSYNC {#osync-and-odsync}
+## O_SYNCとO_DSYNC {#osync-and-odsync}
 
-### Per-fd synchronous I/O {#per-fd-synchronous-io}
+### fd単位の同期I/O {#per-fd-synchronous-io}
 
-`O_SYNC` and `O_DSYNC` are flags passed to `open()` that make every subsequent `write()` on the file descriptor synchronous — the write call blocks until data is on stable storage. They avoid the need for a separate `fsync()` call after each write.
+`O_SYNC`と`O_DSYNC`は`open()`に渡すフラグで、そのファイルディスクリプタに対する以降のすべての`write()`を同期的にする。書き込み呼び出しは、データが安定ストレージに載るまでブロックする。これにより、書き込みのたびに別途`fsync()`を呼ぶ必要がなくなる。
 
 ```c
 int fd = open("wal.log", O_WRONLY | O_CREAT | O_DSYNC, 0644);
-write(fd, record, len);  /* blocks until data is on stable storage */
+write(fd, record, len);  /* データが安定ストレージに載るまでブロックする */
 ```
 
-### IOCB flags and generic_write_sync {#iocb-flags-and-genericwritesync}
+### IOCBフラグとgeneric_write_sync {#iocb-flags-and-genericwritesync}
 
-When `O_SYNC` or `O_DSYNC` is set on the file, the VFS sets corresponding flags in the `kiocb` struct before calling `write_iter`:
+ファイルに`O_SYNC`または`O_DSYNC`が設定されていると、VFSは`write_iter`を呼ぶ前に、`kiocb`構造体に対応するフラグを設定する:
 
 ```c
-/* include/linux/fs.h — open flags become kiocb flags */
+/* include/linux/fs.h — open フラグが kiocb フラグになる */
 static inline int iocb_flags(struct file *file)
 {
     int res = 0;
     /* ... O_APPEND -> IOCB_APPEND, O_DIRECT -> IOCB_DIRECT ... */
     if (file->f_flags & O_DSYNC)
-        res |= IOCB_DSYNC;   /* both O_DSYNC and O_SYNC set the O_DSYNC bit */
+        res |= IOCB_DSYNC;   /* O_DSYNC と O_SYNC の両方が O_DSYNC ビットを立てる */
     if (file->f_flags & __O_SYNC)
-        res |= IOCB_SYNC;    /* only full O_SYNC sets the __O_SYNC bit */
+        res |= IOCB_SYNC;    /* 完全な O_SYNC だけが __O_SYNC ビットを立てる */
     return res;
 }
 ```
 
-(`O_SYNC` is defined as `__O_SYNC | O_DSYNC`, so a full `O_SYNC` file gets *both* `IOCB_DSYNC` and `IOCB_SYNC`, while `O_DSYNC` gets only `IOCB_DSYNC` — which is why the sync check must test `__O_SYNC`, not `O_SYNC`.)
+（`O_SYNC`は`__O_SYNC | O_DSYNC`と定義されているため、完全な`O_SYNC`のファイルは`IOCB_DSYNC`と`IOCB_SYNC`の*両方*を得るが、`O_DSYNC`は`IOCB_DSYNC`だけを得る。sync判定が`O_SYNC`ではなく`__O_SYNC`をテストしなければならないのはこのためである。）
 
-After `write_iter` completes, `generic_file_write_iter()` checks these flags and calls `generic_write_sync()`:
+`write_iter`が完了した後、`generic_file_write_iter()`はこれらのフラグを確認して`generic_write_sync()`を呼ぶ:
 
 ```c
 /* mm/filemap.c */
@@ -445,48 +445,48 @@ static inline ssize_t generic_write_sync(struct kiocb *iocb, ssize_t count)
 }
 ```
 
-The `vfs_fsync_range()` call passes `datasync=1` for `O_DSYNC` (only `IOCB_DSYNC` set) and `datasync=0` for `O_SYNC` (both `IOCB_SYNC` and `IOCB_DSYNC` set). This is the precise semantic difference:
+`vfs_fsync_range()`の呼び出しは、`O_DSYNC`（`IOCB_DSYNC`のみ設定）では`datasync=1`を、`O_SYNC`（`IOCB_SYNC`と`IOCB_DSYNC`の両方が設定）では`datasync=0`を渡す。これが正確なセマンティクスの違いである:
 
-- **`O_DSYNC`** (`IOCB_DSYNC` only): calls `vfs_fsync_range(..., datasync=1)` — data and size-related metadata, no timestamp flush.
-- **`O_SYNC`** (`IOCB_SYNC | IOCB_DSYNC`): calls `vfs_fsync_range(..., datasync=0)` — full metadata including timestamps.
+- **`O_DSYNC`**（`IOCB_DSYNC`のみ）: `vfs_fsync_range(..., datasync=1)`を呼ぶ — データとサイズ関連のメタデータ。タイムスタンプはフラッシュしない。
+- **`O_SYNC`**（`IOCB_SYNC | IOCB_DSYNC`）: `vfs_fsync_range(..., datasync=0)`を呼ぶ — タイムスタンプを含む完全なメタデータ。
 
-In practice, for most write workloads on pre-allocated files, `O_DSYNC` and `O_SYNC` have identical performance because `fdatasync` and `fsync` behave identically when no pure-metadata change is pending.
+実際には、事前割り当てされたファイルへのほとんどの書き込みワークロードで、`O_DSYNC`と`O_SYNC`の性能は同一である。純粋なメタデータの変更が保留されていなければ、`fdatasync`と`fsync`は同じように振る舞うからである。
 
-### Performance cost {#performance-cost}
+### 性能コスト {#performance-cost}
 
-`O_SYNC` and `O_DSYNC` serialize each write with a storage flush. On random small writes, this eliminates all write coalescing:
+`O_SYNC`と`O_DSYNC`は、各書き込みをストレージのフラッシュと直列化する。小さなランダム書き込みでは、書き込みの合体（coalescing）がすべて失われる:
 
-| Write pattern | Buffered throughput | O_DSYNC throughput | Ratio |
+| 書き込みパターン | バッファードのスループット | O_DSYNCのスループット | 比率 |
 |---|---|---|---|
-| 4KB sequential, NVMe | ~3 GB/s | ~400 MB/s | 7× slower |
-| 4KB random, NVMe | ~2 GB/s | ~30 MB/s | 60× slower |
-| 64KB sequential, NVMe | ~3 GB/s | ~1 GB/s | 3× slower |
-| 4KB sequential, SATA SSD | ~500 MB/s | ~50 MB/s | 10× slower |
+| 4KBシーケンシャル、NVMe | ~3 GB/s | ~400 MB/s | 7倍遅い |
+| 4KBランダム、NVMe | ~2 GB/s | ~30 MB/s | 60倍遅い |
+| 64KBシーケンシャル、NVMe | ~3 GB/s | ~1 GB/s | 3倍遅い |
+| 4KBシーケンシャル、SATA SSD | ~500 MB/s | ~50 MB/s | 10倍遅い |
 
-The large ratio for random 4KB writes is because each write round-trips to the drive (commit latency ~100 µs on NVMe) and there is no pipelining.
+ランダム4KB書き込みの比率が大きいのは、各書き込みがドライブとの往復を伴い（NVMeでのコミットレイテンシは~100 µs）、パイプライン化が行われないためである。
 
-### When to use O_SYNC / O_DSYNC {#when-to-use-osync-odsync}
+### O_SYNC / O_DSYNCを使うべきとき {#when-to-use-osync-odsync}
 
-- **WAL files and redo logs**: databases that need every log record durable before acknowledging a commit. Using `O_DSYNC` on the WAL file avoids a separate `fdatasync()` call and reduces syscall count.
-- **Audit logs**: security-critical logs where every event must survive a crash.
-- **Transaction log files in message queues** (e.g., Kafka segment files): `O_DSYNC` on the segment file ensures each message is durable before acknowledging the producer.
+- **WALファイルとredoログ**: コミットを確認応答する前にすべてのログレコードを永続化する必要があるデータベース。WALファイルに`O_DSYNC`を使えば、別途`fdatasync()`を呼ぶ必要がなくなり、システムコールの回数が減る。
+- **監査ログ**: すべてのイベントがクラッシュを生き延びなければならない、セキュリティ上重要なログ。
+- **メッセージキューのトランザクションログファイル**（例: Kafkaのセグメントファイル）: セグメントファイルに`O_DSYNC`を使えば、プロデューサーに確認応答する前に各メッセージが永続化されることが保証される。
 
-**Do not use** `O_SYNC`/`O_DSYNC` for general application data files — the performance cost is too high and most applications are better served by occasional `fsync()` checkpoints.
+一般的なアプリケーションのデータファイルには`O_SYNC`/`O_DSYNC`を**使ってはならない**。性能コストが高すぎ、ほとんどのアプリケーションにとっては時折の`fsync()`によるチェックポイントのほうが適している。
 
 ---
 
-## Write barriers in filesystems {#write-barriers-in-filesystems}
+## ファイルシステムにおけるライトバリア {#write-barriers-in-filesystems}
 
-### The ordering problem {#the-ordering-problem}
+### 順序付けの問題 {#the-ordering-problem}
 
-Consider a database writing a data page and then a journal record describing that write. If the storage device reorders these two writes — journal record lands first, crash occurs, data page never arrives — recovery replays a journal entry that points to stale data. The file is now corrupt.
+データベースがデータページを書き込み、次にその書き込みを記述するジャーナルレコードを書き込む場合を考える。ストレージデバイスがこの2つの書き込みを並べ替えると（ジャーナルレコードが先に届き、クラッシュが起き、データページは届かない）、回復処理は古いデータを指すジャーナルエントリをリプレイしてしまう。ファイルは破損する。
 
-Write barriers solve this: a barrier ensures all writes issued before it are persistent before any write issued after it begins. On NVMe:
+ライトバリアはこれを解決する。バリアは、それより前に発行されたすべての書き込みが、それより後に発行された書き込みが始まる前に永続化されることを保証する。NVMeでは:
 
-- **FUA (Force Unit Access)**: a flag on a specific write command that bypasses the volatile write cache for that command only.
-- **FLUSH command** (`REQ_OP_FLUSH`): drains the entire volatile write cache; all previous writes are persistent before this command returns.
+- **FUA（Force Unit Access）**: 特定の書き込みコマンドのフラグで、そのコマンドに限って揮発性ライトキャッシュを迂回する。
+- **FLUSHコマンド**（`REQ_OP_FLUSH`）: 揮発性ライトキャッシュ全体を吐き出す。このコマンドが戻る前に、それ以前のすべての書き込みが永続化される。
 
-The kernel bio flags:
+カーネルのbioフラグ:
 
 ```c
 /* include/linux/blk_types.h */
@@ -494,84 +494,84 @@ The kernel bio flags:
 #define REQ_PREFLUSH    ((__force blk_opf_t)(1 << __REQ_PREFLUSH))
 ```
 
-`REQ_FUA` sets the FUA bit on the NVMe write command. `REQ_PREFLUSH` causes a FLUSH command to be issued before the write. The block layer in `blk-flush.c` sequences these correctly for drives that require FLUSH+WRITE instead of FUA.
+`REQ_FUA`はNVMe書き込みコマンドのFUAビットを立てる。`REQ_PREFLUSH`は、書き込みの前にFLUSHコマンドを発行させる。`blk-flush.c`のブロック層は、FUAの代わりにFLUSH+WRITEを必要とするドライブに対してこれらを正しく順序付ける。
 
-### How journaling filesystems use barriers {#how-journaling-filesystems-use-barriers}
+### ジャーナリングファイルシステムはバリアをどう使うか {#how-journaling-filesystems-use-barriers}
 
 ```mermaid
 sequenceDiagram
-    participant FS as Filesystem
-    participant BLK as Block Layer
-    participant DEV as NVMe Device
+    participant FS as ファイルシステム
+    participant BLK as ブロック層
+    participant DEV as NVMeデバイス
 
-    FS->>BLK: write data blocks (REQ_OP_WRITE)
-    BLK->>DEV: Write data (no FUA)
-    DEV-->>BLK: ACK (data in write buffer)
+    FS->>BLK: データブロックを書き込む (REQ_OP_WRITE)
+    BLK->>DEV: データを書き込む (FUAなし)
+    DEV-->>BLK: ACK (データは書き込みバッファ内)
 
-    FS->>BLK: write journal commit block (REQ_OP_WRITE | REQ_FUA)
-    Note over BLK,DEV: FUA forces drain of write buffer
-    BLK->>DEV: Write commit block (FUA=1)
-    DEV-->>BLK: ACK (commit block AND all prior data are persistent)
+    FS->>BLK: ジャーナルのコミットブロックを書き込む (REQ_OP_WRITE | REQ_FUA)
+    Note over BLK,DEV: FUAが書き込みバッファの吐き出しを強制する
+    BLK->>DEV: コミットブロックを書き込む (FUA=1)
+    DEV-->>BLK: ACK (コミットブロックとそれ以前の全データが永続化済み)
 
-    BLK-->>FS: commit write complete
-    FS-->>FS: fsync() can return — all data + commit are durable
+    BLK-->>FS: コミットの書き込み完了
+    FS-->>FS: fsync() は戻ってよい — 全データとコミットが永続化済み
 ```
 
-**ext4**: The journal commit block (`jbd2_commit_block`) is written with `REQ_FUA` (if the device supports FUA) or with a preceding `REQ_PREFLUSH` (if the device requires FLUSH before the commit). The `JBD2_BARRIER` journal flag controls whether barriers are used; it is enabled by default and can be disabled with the `nobarrier` mount option (dangerous — only for testing or battery-backed storage).
+**ext4**: ジャーナルのコミットブロック（`jbd2_commit_block`）は、`REQ_FUA`付き（デバイスがFUAをサポートする場合）か、先行する`REQ_PREFLUSH`付き（デバイスがコミット前にFLUSHを必要とする場合）で書き込まれる。`JBD2_BARRIER`ジャーナルフラグがバリアを使うかどうかを制御する。これはデフォルトで有効であり、`nobarrier`マウントオプションで無効にできる（危険であり、テストかバッテリーバックアップ付きストレージ専用）。
 
-**XFS**: XFS uses `xlog_write()` to write log records, and the log record at the tail of a log flush is written with `REQ_FUA`. The log head is protected by `xfs_log_force()`, which issues the FUA write and waits for completion. Like ext4, XFS respects a `nobarrier` mount option.
+**XFS**: XFSは`xlog_write()`でログレコードを書き込み、ログフラッシュの末尾のログレコードは`REQ_FUA`付きで書き込まれる。ログヘッドは`xfs_log_force()`によって保護され、これはFUA書き込みを発行して完了を待つ。ext4と同様に、XFSも`nobarrier`マウントオプションを尊重する。
 
-**btrfs**: btrfs uses ordered writes for data (data is on disk before the tree root that references it) and writes the superblock with `REQ_FUA | REQ_PREFLUSH` to ensure the new tree root is persistent before the superblock is updated.
+**btrfs**: btrfsはデータに順序付き書き込みを使い（データは、それを参照するツリールートより前にディスク上にある）、新しいツリールートがスーパーブロックの更新前に永続化されるよう、スーパーブロックを`REQ_FUA | REQ_PREFLUSH`で書き込む。
 
-### Barrier detection and the nobarrier risk {#barrier-detection-and-the-nobarrier-risk}
+### バリアの検出とnobarrierのリスク {#barrier-detection-and-the-nobarrier-risk}
 
-The `nobarrier` mount option disables write barriers. On a storage device with a volatile write cache, this creates a window where journal commits are acknowledged before the data they describe is persistent. On crash-and-recover, the journal replays the commit but the referenced data blocks contain stale or zeroed content.
+`nobarrier`マウントオプションはライトバリアを無効にする。揮発性ライトキャッシュを持つストレージデバイスでは、これにより、ジャーナルコミットが、それが記述するデータの永続化より前に確認応答されてしまう窓が生じる。クラッシュからの回復時に、ジャーナルはコミットをリプレイするが、参照されるデータブロックには古い内容やゼロ埋めされた内容が入っている。
 
-`nobarrier` is safe only when:
-1. The block device is known to have no volatile write cache (e.g., a RAMDISK, certain PMem configurations, or a storage array with battery-backed NVRAM that is automatically flushed to persistent media).
-2. The application explicitly handles durability at a higher level and does not rely on filesystem crash consistency.
+`nobarrier`が安全なのは次の場合だけである:
+1. ブロックデバイスに揮発性ライトキャッシュがないことがわかっている（例: RAMDISK、特定のPMem構成、あるいは永続媒体へ自動的にフラッシュされるバッテリーバックアップ付きNVRAMを持つストレージアレイ）。
+2. アプリケーションがより上位のレベルで明示的に永続性を扱い、ファイルシステムのクラッシュ一貫性に依存しない。
 
-To test whether a device honors FLUSH commands, see the [Benchmarking fsync](#benchmarking-fsync) section.
+デバイスがFLUSHコマンドに従うかどうかをテストするには、[fsyncのベンチマーク](#benchmarking-fsync)の節を参照。
 
 ---
 
-## The new-file durability trap {#the-new-file-durability-trap}
+## 新規ファイルの永続性の罠 {#the-new-file-durability-trap}
 
-A common application mistake is to create a new file, write data, `fsync()` the file, and assume the file is durable. This is insufficient.
+よくあるアプリケーションの間違いは、新しいファイルを作成し、データを書き込み、ファイルを`fsync()`して、そのファイルが永続化されたと思い込むことである。これでは不十分である。
 
-When a file is created, two things happen:
-1. The file's inode is allocated and its data is written.
-2. A directory entry (dentry) is added to the parent directory, linking the filename to the inode.
+ファイルが作成されるとき、2つのことが起きる:
+1. ファイルのinodeが割り当てられ、そのデータが書き込まれる。
+2. ディレクトリエントリ（dentry）が親ディレクトリに追加され、ファイル名とinodeを結び付ける。
 
-`fsync(fd)` flushes the inode and its data — but the directory entry is in the *parent directory's* inode, which has its own dirty state. A crash after `fsync(fd)` but before the directory entry is flushed can leave the data blocks on disk with no directory entry pointing to them. The file data is irrecoverable.
+`fsync(fd)`はinodeとそのデータをフラッシュするが、ディレクトリエントリは*親ディレクトリの*inodeにあり、それは独自のダーティ状態を持つ。`fsync(fd)`の後、ディレクトリエントリがフラッシュされる前にクラッシュすると、データブロックはディスク上にあるのに、それを指すディレクトリエントリがない状態になりうる。そのファイルのデータは回復不能である。
 
-**Correct pattern for durable file creation:**
+**永続的なファイル作成の正しいパターン:**
 
 ```c
-/* Create a new file durably */
+/* 新しいファイルを永続的に作成する */
 int fd = open("/data/new_file", O_WRONLY | O_CREAT | O_TRUNC, 0644);
 write(fd, data, len);
-fsync(fd);   /* flush file data and inode */
+fsync(fd);   /* ファイルのデータと inode をフラッシュする */
 close(fd);
 
-/* Also flush the directory containing the new file */
+/* 新しいファイルを含むディレクトリもフラッシュする */
 int dirfd = open("/data", O_RDONLY);
-fsync(dirfd);   /* flush directory entry to disk */
+fsync(dirfd);   /* ディレクトリエントリをディスクへフラッシュする */
 close(dirfd);
 ```
 
-The two `fsync()` calls ensure:
-1. The file's data and inode are on disk.
-2. The directory entry linking the filename to the inode is on disk.
+2つの`fsync()`呼び出しは次のことを保証する:
+1. ファイルのデータとinodeがディスク上にある。
+2. ファイル名とinodeを結び付けるディレクトリエントリがディスク上にある。
 
-On ext4 `data=ordered`, the two `fsync()` calls may collapse into a single journal commit if both happen within the same transaction window — but the application cannot assume this and must issue both calls.
+ext4 `data=ordered`では、両方が同じトランザクションの窓の中で起きれば、2つの`fsync()`呼び出しが1回のジャーナルコミットにまとめられることがある。しかしアプリケーションはそれを前提にできず、両方の呼び出しを発行しなければならない。
 
-### Who does this correctly {#who-does-this-correctly}
+### これを正しく行っているもの {#who-does-this-correctly}
 
-**SQLite**: in WAL mode, SQLite calls `fsync()` on the WAL file and on the directory after creating the WAL file. See `unixSync()` in `os_unix.c`:
+**SQLite**: WALモードでは、SQLiteはWALファイルを作成した後、WALファイルとディレクトリに対して`fsync()`を呼ぶ。`os_unix.c`の`unixSync()`を参照:
 
 ```c
-/* SQLite os_unix.c — simplified */
+/* SQLite os_unix.c — 簡略化 */
 static int unixSync(sqlite3_file *id, int flags)
 {
     unixFile *pFile = (unixFile*)id;
@@ -583,7 +583,7 @@ static int unixSync(sqlite3_file *id, int flags)
         return SQLITE_IOERR_FSYNC;
     }
     if( pFile->dirfd>=0 ){
-        /* Also sync the directory that contains the WAL file */
+        /* WAL ファイルを含むディレクトリも sync する */
         full_fsync(pFile->dirfd, 0, 0);
         robust_close(pFile, pFile->dirfd, __LINE__);
         pFile->dirfd = -1;
@@ -592,62 +592,62 @@ static int unixSync(sqlite3_file *id, int flags)
 }
 ```
 
-**PostgreSQL**: `pg_fsync()` in `fd.c` calls `fsync()` on data files. After creating a new file in `PathNameOpenFile()`, PostgreSQL also opens and fsyncs the parent directory via `fsync_fname()`. See `storage/file/fd.c` and `storage/smgr/md.c`.
+**PostgreSQL**: `fd.c`の`pg_fsync()`はデータファイルに対して`fsync()`を呼ぶ。`PathNameOpenFile()`で新しいファイルを作成した後、PostgreSQLは`fsync_fname()`を介して親ディレクトリも開いてfsyncする。`storage/file/fd.c`と`storage/smgr/md.c`を参照。
 
-**LevelDB / RocksDB**: both call `SyncDir()` after creating new SST files, which opens the directory with `O_RDONLY` and calls `fsync()` on it. In RocksDB, `env/io_posix.cc` contains `PosixDirectory::FsyncWithDirOptions()`.
+**LevelDB / RocksDB**: どちらも新しいSSTファイルを作成した後に`SyncDir()`を呼び、ディレクトリを`O_RDONLY`で開いてそれに`fsync()`を呼ぶ。RocksDBでは、`env/io_posix.cc`に`PosixDirectory::FsyncWithDirOptions()`がある。
 
 ---
 
-## Durability matrix {#durability-matrix}
+## 永続性マトリクス {#durability-matrix}
 
-The following table summarizes what each write mechanism guarantees across the three durability layers:
+次の表は、各書き込みメカニズムが3つの永続性の層にわたって何を保証するかをまとめたものである:
 
-| Mechanism | Page cache flushed | Drive write cache flushed | Survives power loss | Notes |
+| メカニズム | ページキャッシュのフラッシュ | ドライブのライトキャッシュのフラッシュ | 電源断を生き延びる | 備考 |
 |---|---|---|---|---|
-| `write()` | No | No | No | Data in DRAM only |
-| `write()` + background writeback | Yes (eventually) | No | No | Timing non-deterministic |
-| `write()` + `fsync()` | Yes | Yes | Yes | Full durability for the file |
-| `write()` + `fdatasync()` | Yes | Yes | Yes | No non-essential metadata flush |
-| `write()` + `sync()` | Yes | Partially* | Partially* | System-wide; barriers via journal |
-| `O_SYNC` write | Yes | Yes | Yes | Per-write; full metadata |
-| `O_DSYNC` write | Yes | Yes | Yes | Per-write; data + size metadata |
-| `O_DIRECT` write | Yes (bypass) | No | No | Bypasses page cache; drive buffer still volatile |
-| `O_DIRECT` + `O_DSYNC` | Yes (bypass) | Yes | Yes | Bypasses page cache AND flushes drive cache |
-| `O_DIRECT` + `fsync()` | Yes (bypass) | Yes | Yes | Most common DB pattern |
+| `write()` | しない | しない | いいえ | データはDRAMにのみある |
+| `write()` + バックグラウンドライトバック | する（いずれ） | しない | いいえ | タイミングは非決定的 |
+| `write()` + `fsync()` | する | する | はい | ファイルの完全な永続性 |
+| `write()` + `fdatasync()` | する | する | はい | 必須でないメタデータはフラッシュしない |
+| `write()` + `sync()` | する | 部分的* | 部分的* | システム全体。バリアはジャーナル経由 |
+| `O_SYNC`書き込み | する | する | はい | 書き込みごと。完全なメタデータ |
+| `O_DSYNC`書き込み | する | する | はい | 書き込みごと。データ + サイズのメタデータ |
+| `O_DIRECT`書き込み | する（迂回） | しない | いいえ | ページキャッシュを迂回する。ドライブのバッファは依然として揮発性 |
+| `O_DIRECT` + `O_DSYNC` | する（迂回） | する | はい | ページキャッシュを迂回し、かつドライブのキャッシュをフラッシュする |
+| `O_DIRECT` + `fsync()` | する（迂回） | する | はい | 最も一般的なDBのパターン |
 
-*`sync()` flushing the drive write cache depends on whether a journal commit with barriers runs during the sync.
+*`sync()`がドライブのライトキャッシュをフラッシュするかどうかは、sync中にバリア付きのジャーナルコミットが実行されるかどうかに依存する。
 
 ---
 
-## Atomic write guarantees {#atomic-write-guarantees}
+## アトミック書き込みの保証 {#atomic-write-guarantees}
 
-### POSIX atomicity and its limits {#posix-atomicity-and-its-limits}
+### POSIXのアトミック性とその限界 {#posix-atomicity-and-its-limits}
 
-POSIX does **not** guarantee that `write()` is atomic with respect to concurrent readers. A reader calling `read()` on the same file concurrently with a `write()` may see a partial write — some bytes old, some bytes new, depending on page cache state and filesystem implementation.
+POSIXは、`write()`が並行する読み込み側に対してアトミックであることを**保証しない**。`write()`と並行して同じファイルに`read()`を呼ぶ読み込み側は、ページキャッシュの状態やファイルシステムの実装によっては、部分的な書き込み（一部のバイトは古く、一部は新しい）を見ることがある。
 
-POSIX does guarantee:
+POSIXが保証するのは次のことである:
 
-- `O_APPEND` writes are atomic **for the offset assignment only** — the file offset is assigned atomically so that two concurrent `write()` calls with `O_APPEND` do not assign the same offset. The data of each write is serialized.
-- `pwrite()` updates are visible atomically at the sector level on most Linux filesystems (ext4, xfs, btrfs) for writes within a single filesystem block, but this is an implementation detail, not a POSIX guarantee.
+- `O_APPEND`の書き込みは**オフセットの割り当てに限って**アトミックである。ファイルオフセットはアトミックに割り当てられるため、`O_APPEND`を使った2つの並行する`write()`呼び出しが同じオフセットを割り当てることはない。各書き込みのデータは直列化される。
+- `pwrite()`による更新は、ほとんどのLinuxファイルシステム（ext4、xfs、btrfs）で、単一のファイルシステムブロック内の書き込みであればセクタレベルでアトミックに見えるが、これは実装の詳細であってPOSIXの保証ではない。
 
-### O_APPEND atomicity {#o_append-atomicity}
+### O_APPENDのアトミック性 {#o_append-atomicity}
 
-When a file is opened with `O_APPEND`, the kernel holds `inode_lock` across the seek-to-end and write, making the offset assignment and the write itself atomic with respect to other `O_APPEND` writers on the same inode. This is why write(2) says:
+ファイルが`O_APPEND`で開かれていると、カーネルは末尾へのシークと書き込みにわたって`inode_lock`を保持し、オフセットの割り当てと書き込み自体を、同じinodeに対する他の`O_APPEND`の書き込み側に対してアトミックにする。write(2)が次のように述べているのはこのためである:
 
 > *If the O_APPEND file status flag is set on the open file description, then a write() shall atomically seek the file offset to the end of the file before each write.*
 
-This atomicity holds for writes that complete in a single `write()` call. If the write spans multiple pages and requires partial writes (e.g., due to signal interruption or `PIPE_BUF` limits), the kernel may release and reacquire the inode lock between page writes, breaking atomicity.
+このアトミック性は、1回の`write()`呼び出しで完了する書き込みについて成り立つ。書き込みが複数ページにまたがり、部分書き込み（例: シグナルによる中断や`PIPE_BUF`の制限による）を必要とする場合、カーネルはページの書き込みの合間にinodeロックを解放して再取得することがあり、アトミック性が崩れる。
 
-### io_uring RWF_ATOMIC (Linux 6.11+) {#iouring-rwfatomic-linux-611}
+### io_uring RWF_ATOMIC（Linux 6.11以降） {#iouring-rwfatomic-linux-611}
 
-Linux 6.11 introduced `RWF_ATOMIC` via io_uring, providing true atomic writes up to `stx_atomic_write_unit_max` bytes (reported via `statx(2)`):
+Linux 6.11はio_uring経由で`RWF_ATOMIC`を導入し、`stx_atomic_write_unit_max`バイト（`statx(2)`で報告される）までの真のアトミック書き込みを提供した:
 
 ```c
 /* include/uapi/linux/fs.h */
 #define RWF_ATOMIC  ((__kernel_rwf_t)0x00000040)
 ```
 
-With `RWF_ATOMIC`, the kernel guarantees that a concurrent reader sees either all of the write or none of it — no torn writes within the specified size boundary. NVMe devices expose atomic write unit size via `IDENTIFY` controller data. The filesystem communicates this to userspace via `stx_atomic_write_unit_min` and `stx_atomic_write_unit_max` in `struct statx`.
+`RWF_ATOMIC`を使うと、カーネルは並行する読み込み側が書き込みの全部か何も見ないかのどちらかであることを保証する。指定されたサイズ境界内でのtorn write（書き込みの裂け）は起きない。NVMeデバイスは、アトミック書き込みの単位サイズを`IDENTIFY`コントローラデータで公開する。ファイルシステムはこれを`struct statx`の`stx_atomic_write_unit_min`と`stx_atomic_write_unit_max`でユーザー空間に伝える。
 
 ```c
 struct statx sbuf;
@@ -656,31 +656,31 @@ statx(fd, "", AT_EMPTY_PATH, STATX_WRITE_FLAGS, &sbuf);
 printf("atomic_write_unit_min = %u\n", sbuf.stx_atomic_write_unit_min);
 printf("atomic_write_unit_max = %u\n", sbuf.stx_atomic_write_unit_max);
 
-/* Issue an atomic write via io_uring */
+/* io_uring 経由でアトミック書き込みを発行する */
 struct io_uring_sqe *sqe = io_uring_get_sqe(&ring);
 io_uring_prep_write(sqe, fd, buf, len, offset);
 sqe->rw_flags = RWF_ATOMIC;
 ```
 
-`RWF_ATOMIC` is separate from durability — an atomic write does not imply `fsync()` semantics. It guarantees torn-write protection, not persistence through a power loss.
+`RWF_ATOMIC`は永続性とは別物である。アトミック書き込みは`fsync()`のセマンティクスを意味しない。保証するのはtorn writeからの保護であり、電源断を越えた永続化ではない。
 
 ---
 
-## Common database patterns {#common-database-patterns}
+## データベースによくあるパターン {#common-database-patterns}
 
-### PostgreSQL WAL {#postgresql-wal}
+### PostgreSQLのWAL {#postgresql-wal}
 
-PostgreSQL writes its Write-Ahead Log to files in `pg_wal/`. Each transaction's WAL records are written with `write()`, and `fdatasync()` is called before the transaction is acknowledged to the client. The WAL files are pre-allocated (via `posix_fallocate()`), so file size rarely changes — this means `fdatasync()` avoids the metadata journal commit on every flush.
+PostgreSQLはWrite-Ahead Logを`pg_wal/`内のファイルに書き込む。各トランザクションのWALレコードは`write()`で書き込まれ、トランザクションをクライアントに確認応答する前に`fdatasync()`が呼ばれる。WALファイルは（`posix_fallocate()`で）事前割り当てされているため、ファイルサイズが変わることはまれである。これは、`fdatasync()`がフラッシュのたびにメタデータのジャーナルコミットを回避できることを意味する。
 
-The WAL flush path in `src/backend/access/transam/xlog.c`:
+`src/backend/access/transam/xlog.c`のWALフラッシュパス:
 
 ```c
 /*
- * XLogFlush -- make sure xlog through given position is flushed to disk.
+ * XLogFlush -- 指定位置までの xlog がディスクへフラッシュされていることを保証する。
  */
 void XLogFlush(XLogRecPtr record)
 {
-    /* ... write WAL pages to WAL file ... */
+    /* ... WAL ページを WAL ファイルに書き込む ... */
 
     issue_xlog_fsync(openLogFile, openLogSegNo, tli);
 }
@@ -697,50 +697,50 @@ static void issue_xlog_fsync(int fd, XLogSegNo segno, TimeLineID tli)
             ereport(PANIC, ...);
         break;
     case SYNC_METHOD_OPEN_DSYNC:
-        /* fd was opened with O_DSYNC; no explicit sync needed */
+        /* fd は O_DSYNC で開かれている。明示的な sync は不要 */
         break;
     /* ... */
     }
 }
 ```
 
-`wal_sync_method` defaults to `fdatasync` on Linux, `fsync` on macOS (where `fdatasync` behavior differs).
+`wal_sync_method`のデフォルトは、Linuxでは`fdatasync`、macOS（`fdatasync`の挙動が異なる）では`fsync`である。
 
-### SQLite WAL mode {#sqlite-wal-mode}
+### SQLiteのWALモード {#sqlite-wal-mode}
 
-In WAL mode, SQLite writes transactions to a WAL file and periodically checkpoints (copies WAL records back to the main database file). The checkpoint requires a specific fsync sequence:
+WALモードでは、SQLiteはトランザクションをWALファイルに書き込み、定期的にチェックポイント（WALレコードをメインのデータベースファイルにコピーし戻す）を行う。チェックポイントには特定のfsyncの順序が必要である:
 
-1. `fdatasync(wal_fd)` — ensure WAL records are durable before the checkpoint starts.
-2. Copy WAL records to database file.
-3. `fdatasync(db_fd)` — ensure the database file has the checkpointed data.
-4. Update the WAL header to mark the checkpoint complete.
-5. `fdatasync(wal_fd)` again — ensure the checkpoint completion marker is durable.
+1. `fdatasync(wal_fd)` — チェックポイント開始前にWALレコードが永続化されていることを保証する。
+2. WALレコードをデータベースファイルにコピーする。
+3. `fdatasync(db_fd)` — データベースファイルがチェックポイントされたデータを持つことを保証する。
+4. WALヘッダを更新してチェックポイントの完了を記録する。
+5. 再度`fdatasync(wal_fd)` — チェックポイント完了のマーカーが永続化されていることを保証する。
 
-This two-phase barrier pattern ensures that a crash at any point leaves either the WAL or the database file in a consistent state.
+この2段階のバリアパターンにより、どの時点でクラッシュしても、WALかデータベースファイルのどちらかが一貫した状態に保たれる。
 
 ### MySQL InnoDB: innodb_flush_method {#mysql-innodb-innodbflushmethod}
 
-InnoDB exposes `innodb_flush_method` to control how it flushes data and log files:
+InnoDBは、データファイルとログファイルをどのようにフラッシュするかを制御する`innodb_flush_method`を公開している:
 
-| Method | Data files | Log files | Notes |
+| 方式 | データファイル | ログファイル | 備考 |
 |---|---|---|---|
-| `fsync` (default) | `fsync()` | `fsync()` | Portable; double-buffers via OS page cache |
-| `O_DIRECT` | `O_DIRECT` | `fsync()` | Bypasses page cache for data; log still buffered |
-| `O_DIRECT_NO_FSYNC` | `O_DIRECT` | `O_DIRECT` (no fsync) | Requires hardware BBWC; dangerous without it |
-| `O_DSYNC` | buffered | `O_DSYNC` | Each log write synchronous; data file buffered |
-| `littlesync` | buffered | `O_DSYNC` | Reduced sync for replicas |
+| `fsync`（デフォルト） | `fsync()` | `fsync()` | 移植性が高い。OSのページキャッシュで二重バッファリングになる |
+| `O_DIRECT` | `O_DIRECT` | `fsync()` | データはページキャッシュを迂回。ログは依然としてバッファード |
+| `O_DIRECT_NO_FSYNC` | `O_DIRECT` | `O_DIRECT`（fsyncなし） | ハードウェアのBBWCが必要。それがなければ危険 |
+| `O_DSYNC` | バッファード | `O_DSYNC` | ログの各書き込みが同期的。データファイルはバッファード |
+| `littlesync` | バッファード | `O_DSYNC` | レプリカ向けにsyncを減らしたもの |
 
-`O_DIRECT_NO_FSYNC` skips `fsync()` on data files entirely, relying on `O_DIRECT` bypassing the page cache (so there is nothing to flush in the OS). It still requires the drive write cache to be drained — this is only safe with BBWC or an NVMe device that is configured to disable the volatile write cache.
+`O_DIRECT_NO_FSYNC`はデータファイルに対する`fsync()`を完全にスキップし、`O_DIRECT`がページキャッシュを迂回すること（つまりOS側にはフラッシュするものがないこと）に依存する。それでもドライブのライトキャッシュは吐き出される必要があり、これが安全なのはBBWCがあるか、揮発性ライトキャッシュを無効にするよう設定されたNVMeデバイスの場合だけである。
 
 ### RocksDB: use_fsync {#rocksdb-use_fsync}
 
-RocksDB defaults to `fdatasync()` (`use_fsync = false`) for SST file flushes and compaction output files. The `use_fsync` option switches to `fsync()`:
+RocksDBは、SSTファイルのフラッシュとコンパクションの出力ファイルに対して、デフォルトで`fdatasync()`（`use_fsync = false`）を使う。`use_fsync`オプションで`fsync()`に切り替わる:
 
 ```cpp
 /* RocksDB env/io_posix.cc */
 IOStatus PosixWritableFile::Sync(const IOOptions& opts, IODebugContext* dbg) {
   if (use_direct_io()) {
-    /* O_DIRECT: no page cache to flush */
+    /* O_DIRECT: フラッシュすべきページキャッシュはない */
     if (IsPageCacheFlushRequired()) {
       IOStatus s = Flush(opts, dbg);
       if (!s.ok()) return s;
@@ -763,53 +763,53 @@ IOStatus PosixWritableFile::Sync(const IOOptions& opts, IODebugContext* dbg) {
 }
 ```
 
-`fdatasync()` is preferred because SST files are written once and never appended to after creation — they are immutable. The file size is set during the write and does not change, so `fdatasync()` skips the metadata journal commit with no durability impact.
+`fdatasync()`が好まれるのは、SSTファイルは一度書き込まれると作成後に追記されることがない、つまりイミュータブルだからである。ファイルサイズは書き込み中に決まり変化しないため、`fdatasync()`は永続性に影響を与えずにメタデータのジャーナルコミットをスキップする。
 
-macOS requires `F_FULLFSYNC` (an `fcntl` call) instead of `fsync()` because macOS `fsync()` only flushes to the kernel's write buffer, not to the drive's write cache. RocksDB handles this via `#ifdef HAVE_FULLFSYNC`.
+macOSでは`fsync()`の代わりに`F_FULLFSYNC`（`fcntl`呼び出し）が必要である。macOSの`fsync()`はカーネルの書き込みバッファまでしかフラッシュせず、ドライブのライトキャッシュまではフラッシュしないからである。RocksDBはこれを`#ifdef HAVE_FULLFSYNC`で扱っている。
 
 ---
 
-## Benchmarking fsync {#benchmarking-fsync}
+## fsyncのベンチマーク {#benchmarking-fsync}
 
-### fio: measuring throughput and latency {#fio-measuring-throughput-and-latency}
+### fio: スループットとレイテンシの測定 {#fio-measuring-throughput-and-latency}
 
-fio provides `--fsync=N` and `--fdatasync=N` options to issue a sync every N writes:
+fioは、N回の書き込みごとにsyncを発行する`--fsync=N`と`--fdatasync=N`オプションを提供している:
 
 ```bash
-# Baseline: buffered writes, no fsync
+# ベースライン: バッファード書き込み、fsync なし
 fio --name=buffered --rw=randwrite --bs=4k --size=1G \
     --filename=/mnt/test/bench --ioengine=libaio --iodepth=32 \
     --numjobs=1 --runtime=30 --time_based
 
-# fdatasync after every write
+# 書き込みごとに fdatasync
 fio --name=fdatasync --rw=randwrite --bs=4k --size=1G \
     --filename=/mnt/test/bench --ioengine=sync --fsync=0 \
     --fdatasync=1 --numjobs=1 --runtime=30 --time_based
 
-# fsync after every write
+# 書き込みごとに fsync
 fio --name=fsync --rw=randwrite --bs=4k --size=1G \
     --filename=/mnt/test/bench --ioengine=sync --fsync=1 \
     --numjobs=1 --runtime=30 --time_based
 
-# O_DSYNC writes
+# O_DSYNC 書き込み
 fio --name=odsync --rw=randwrite --bs=4k --size=1G \
     --filename=/mnt/test/bench --ioengine=sync \
     --sync_file_range=write:4k --sync=1 \
     --open_flags=O_DSYNC --numjobs=1 --runtime=30 --time_based
 ```
 
-Key fio output fields for fsync benchmarking:
+fsyncのベンチマークで重要なfioの出力フィールド:
 
-- `lat (usec)`: per-operation latency including the fsync
-- `iops`: operations per second
-- `clat percentiles`: 99th/99.9th percentile latency reveals outliers
+- `lat (usec)`: fsyncを含む操作ごとのレイテンシ
+- `iops`: 1秒あたりの操作数
+- `clat percentiles`: 99/99.9パーセンタイルのレイテンシから外れ値がわかる
 
-### bpftrace: per-fsync latency {#bpftrace-per-fsync-latency}
+### bpftrace: fsyncごとのレイテンシ {#bpftrace-per-fsync-latency}
 
-Measure actual fsync latency distribution from userspace to kernel return:
+ユーザー空間からカーネルが戻るまでの実際のfsyncレイテンシの分布を測定する:
 
 ```bash
-# Histogram of fsync() latency in microseconds
+# fsync() のレイテンシのヒストグラム（マイクロ秒）
 bpftrace -e '
 tracepoint:syscalls:sys_enter_fsync { @start[tid] = nsecs; }
 tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
@@ -819,7 +819,7 @@ tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
 }
 '
 
-# Track fsync latency per process
+# プロセスごとに fsync のレイテンシを追跡する
 bpftrace -e '
 tracepoint:syscalls:sys_enter_fsync { @start[tid] = nsecs; }
 tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
@@ -829,7 +829,7 @@ tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
 }
 '
 
-# Alert on any fsync over 10ms
+# 10ms を超える fsync があれば警告する
 bpftrace -e '
 tracepoint:syscalls:sys_enter_fsync { @start[tid] = nsecs; }
 tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
@@ -844,67 +844,67 @@ tracepoint:syscalls:sys_exit_fsync  /@start[tid]/
 '
 ```
 
-### Detecting whether a drive honors FLUSH {#detecting-whether-a-drive-honors-flush}
+### ドライブがFLUSHに従うかどうかの検出 {#detecting-whether-a-drive-honors-flush}
 
-A drive that ignores FLUSH commands will report very low fsync latency — too low. On NVMe with no write cache, fsync on a 4KB write should take ~50–200 µs. If you see consistent 10–20 µs, the drive may be ignoring FLUSH.
+FLUSHコマンドを無視するドライブは、非常に低い（低すぎる）fsyncレイテンシを報告する。ライトキャッシュのないNVMeでは、4KB書き込みのfsyncは~50–200 µsかかるはずである。一貫して10–20 µsが見えるなら、ドライブはFLUSHを無視しているかもしれない。
 
-The definitive test is the write-cache discard test:
+決定的なテストは、ライトキャッシュ破棄テストである:
 
 ```bash
-# 1. Write a large amount of data (fills write cache)
+# 1. 大量のデータを書き込む（ライトキャッシュを埋める）
 fio --name=fill --rw=write --bs=1M --size=4G \
     --filename=/dev/nvme0n1 --ioengine=libaio --iodepth=32 \
     --direct=1
 
-# 2. Immediately cut power (or use a VM snapshot rollback)
-# 3. On next boot, check if the last writes are present
+# 2. ただちに電源を切る（または VM スナップショットのロールバックを使う）
+# 3. 次回起動時に、最後の書き込みが残っているか確認する
 
-# For testing without cutting power: use hdparm/nvme-cli to
-# check if volatile write cache is enabled
+# 電源を切らずにテストする場合: hdparm/nvme-cli を使って
+# 揮発性ライトキャッシュが有効かどうかを確認する
 hdparm -I /dev/sda | grep -i cache
-nvme id-ctrl /dev/nvme0 | grep vwc   # vwc=1 means volatile write cache present
+nvme id-ctrl /dev/nvme0 | grep vwc   # vwc=1 は揮発性ライトキャッシュがあることを意味する
 nvme id-ctrl /dev/nvme0 | grep awun  # atomic write unit normal
 ```
 
-Check drive write cache status with `nvme-cli`:
+`nvme-cli`でドライブのライトキャッシュの状態を確認する:
 
 ```bash
-# Check if volatile write cache is enabled on NVMe
+# NVMe で揮発性ライトキャッシュが有効か確認する
 nvme get-feature /dev/nvme0 -f 6    # Feature ID 6 = Volatile Write Cache
 
-# For SATA drives
-hdparm -W /dev/sda    # 1 = write caching enabled, 0 = disabled
+# SATA ドライブの場合
+hdparm -W /dev/sda    # 1 = ライトキャッシュ有効、0 = 無効
 
-# Check if drive supports and uses FUA
-cat /sys/block/nvme0n1/queue/write_cache   # "write back" or "write through"
+# ドライブが FUA をサポートし使っているか確認する
+cat /sys/block/nvme0n1/queue/write_cache   # "write back" または "write through"
 ```
 
-A device reporting `write through` does not buffer writes and does not require FLUSH commands — `fsync()` on such a device is a no-op at the barrier level (data still needs to be written, but no FLUSH is needed).
+`write through`を報告するデバイスは書き込みをバッファせず、FLUSHコマンドを必要としない。そのようなデバイスでの`fsync()`は、バリアのレベルではno-opである（データの書き込み自体は必要だが、FLUSHは不要）。
 
 ---
 
-## Key source files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Purpose |
+| ファイル | 目的 |
 |---|---|
-| `fs/sync.c` | `fsync()`, `fdatasync()`, `sync()`, `syncfs()` syscall implementations; `vfs_fsync_range()` |
-| `mm/filemap.c` | `filemap_write_and_wait_range()`, `generic_file_write_iter()`, `generic_write_sync()` |
-| `fs/ext4/fsync.c` | `ext4_sync_file()` — ext4's fsync implementation |
-| `fs/xfs/xfs_file.c` | `xfs_file_fsync()` — XFS's fsync implementation |
-| `fs/btrfs/file.c` | `btrfs_sync_file()` — btrfs's fsync implementation |
-| `fs/jbd2/commit.c` | `jbd2_journal_commit_transaction()` — ext4 journal commit with barriers |
-| `block/blk-flush.c` | `blkdev_issue_flush()`, flush sequencing for PREFLUSH and FUA |
-| `include/linux/fs.h` | `kiocb`, `file_operations`, `address_space` struct definitions; `IOCB_SYNC`, `IOCB_DSYNC` flags |
-| `include/linux/blk_types.h` | `REQ_FUA`, `REQ_PREFLUSH` bio flags |
-| `include/uapi/linux/fs.h` | `RWF_ATOMIC`, `RWF_SYNC`, `RWF_DSYNC` userspace flags |
+| `fs/sync.c` | `fsync()`、`fdatasync()`、`sync()`、`syncfs()`システムコールの実装。`vfs_fsync_range()` |
+| `mm/filemap.c` | `filemap_write_and_wait_range()`、`generic_file_write_iter()`、`generic_write_sync()` |
+| `fs/ext4/fsync.c` | `ext4_sync_file()` — ext4のfsync実装 |
+| `fs/xfs/xfs_file.c` | `xfs_file_fsync()` — XFSのfsync実装 |
+| `fs/btrfs/file.c` | `btrfs_sync_file()` — btrfsのfsync実装 |
+| `fs/jbd2/commit.c` | `jbd2_journal_commit_transaction()` — バリア付きのext4ジャーナルコミット |
+| `block/blk-flush.c` | `blkdev_issue_flush()`、PREFLUSHとFUAのフラッシュ順序制御 |
+| `include/linux/fs.h` | `kiocb`、`file_operations`、`address_space`構造体の定義。`IOCB_SYNC`、`IOCB_DSYNC`フラグ |
+| `include/linux/blk_types.h` | `REQ_FUA`、`REQ_PREFLUSH` bioフラグ |
+| `include/uapi/linux/fs.h` | `RWF_ATOMIC`、`RWF_SYNC`、`RWF_DSYNC`ユーザー空間フラグ |
 
-### Further reading {#further-reading}
+### 参考文献 {#further-reading}
 
-- POSIX `fsync` specification: The Open Group Base Specifications Issue 8, `<unistd.h>`
+- POSIX `fsync`仕様: The Open Group Base Specifications Issue 8, `<unistd.h>`
 - [Filesystem Robustness - The Linux Documentation Project](https://www.kernel.org/doc/html/latest/filesystems/ext4/journal.html)
-- Pillai et al., *All File Systems Are Not Created Equal* (OSDI 2014) — systematic study of application-level crash consistency bugs, including the new-file trap
-- Zheng et al., *Fast Crash Recovery in RAMCloud* (SOSP 2013) — discussion of write barrier semantics at scale
+- Pillai et al., *All File Systems Are Not Created Equal*（OSDI 2014） — 新規ファイルの罠を含む、アプリケーションレベルのクラッシュ一貫性バグの体系的研究
+- Zheng et al., *Fast Crash Recovery in RAMCloud*（SOSP 2013） — 大規模環境におけるライトバリアのセマンティクスの議論
 - [PostgreSQL WAL Internals](https://www.postgresql.org/docs/current/wal-internals.html)
-- [SQLite WAL mode documentation](https://www.sqlite.org/wal.html) — explains the checkpoint fsync sequence
-- `Documentation/block/writeback_cache_control.rst` in the kernel tree — covers FUA and FLUSH from the block layer perspective
-- `Documentation/filesystems/journalling.rst` in the kernel tree — covers ext4/jbd2 journal modes
+- [SQLite WAL modeのドキュメント](https://www.sqlite.org/wal.html) — チェックポイントのfsync順序を解説
+- カーネルツリー内の`Documentation/block/writeback_cache_control.rst` — ブロック層の観点からFUAとFLUSHを扱う
+- カーネルツリー内の`Documentation/filesystems/journalling.rst` — ext4/jbd2のジャーナルモードを扱う
