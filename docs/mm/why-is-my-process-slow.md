@@ -1,45 +1,45 @@
-# Why is my process slow? (memory diagnosis) {#why-is-my-process-slow-memory-diagnosis}
+# なぜプロセスが遅いのか（メモリ診断） {#why-is-my-process-slow-memory-diagnosis}
 
-> A systematic troubleshooting guide for memory-related performance problems
+> メモリ関連の性能問題を体系的にトラブルシューティングするためのガイド
 
-## The problem {#the-problem}
+## 問題 {#the-problem}
 
-Your process is slow, and you suspect memory. But "memory problem" is vague -- it could be swapping, reclaim pressure, NUMA effects, THP compaction stalls, or kernel slab growth eating your available memory. This guide gives you a systematic flowchart so you stop guessing and start measuring.
+プロセスが遅く、メモリを疑っている。だが「メモリの問題」というのは曖昧だ -- スワップかもしれないし、回収の逼迫、NUMAの影響、THPのコンパクションによるストール、あるいはカーネルslabの増大が利用可能なメモリを食いつぶしているのかもしれない。このガイドは体系的なフローチャートを示し、推測をやめて計測を始められるようにする。
 
-## Decision flowchart {#decision-flowchart}
+## 判断フローチャート {#decision-flowchart}
 
-Start here and follow the arrows. Each step either identifies the problem or sends you deeper.
+ここから始めて矢印をたどる。各ステップは問題を特定するか、さらに深く調べるよう誘導する。
 
 ```mermaid
 flowchart TD
-    START["Process is slow"] --> PSI{"Step 1: Check PSI<br/>/proc/pressure/memory<br/>Is there memory pressure?"}
-    PSI -->|"some avg10 > 5"| MEMINFO{"Step 2: Check /proc/meminfo<br/>MemAvailable low?<br/>SwapUsed high?"}
-    PSI -->|"avg10 ~ 0"| NOTMEM["Not a memory problem.<br/>Check CPU, I/O, locks."]
+    START["プロセスが遅い"] --> PSI{"ステップ1: PSIを確認<br/>/proc/pressure/memory<br/>メモリ逼迫はあるか?"}
+    PSI -->|"some avg10 > 5"| MEMINFO{"ステップ2: /proc/meminfoを確認<br/>MemAvailableが低い?<br/>SwapUsedが高い?"}
+    PSI -->|"avg10 ~ 0"| NOTMEM["メモリの問題ではない。<br/>CPU、I/O、ロックを確認。"]
 
-    MEMINFO -->|"MemAvailable < 10%"| PERPROC{"Step 3: Which process?<br/>Check /proc/pid/status<br/>VmRSS, VmSwap"}
-    MEMINFO -->|"SwapUsed growing"| SWAP{"Step 5: Swapping<br/>pswpin/pswpout rates"}
-    MEMINFO -->|"MemAvailable OK"| VMSTAT{"Step 4: Check /proc/vmstat<br/>pgscan_direct? pgmajfault?"}
+    MEMINFO -->|"MemAvailable < 10%"| PERPROC{"ステップ3: どのプロセスか?<br/>/proc/pid/statusを確認<br/>VmRSS, VmSwap"}
+    MEMINFO -->|"SwapUsedが増加中"| SWAP{"ステップ5: スワップ<br/>pswpin/pswpoutのレート"}
+    MEMINFO -->|"MemAvailableは正常"| VMSTAT{"ステップ4: /proc/vmstatを確認<br/>pgscan_direct? pgmajfault?"}
 
     PERPROC --> VMSTAT
 
-    VMSTAT -->|"pgscan_direct high"| RECLAIM["Direct reclaim stalls.<br/>See: Page Reclaim"]
-    VMSTAT -->|"pgmajfault high"| SWAP
-    VMSTAT -->|"thp_fault_fallback"| THP{"Step 6: THP compaction<br/>compact_stall?"}
-    VMSTAT -->|"numa_miss high"| NUMA{"Step 7: NUMA effects<br/>numastat"}
+    VMSTAT -->|"pgscan_directが高い"| RECLAIM["直接回収のストール。<br/>参照: ページ回収"]
+    VMSTAT -->|"pgmajfaultが高い"| SWAP
+    VMSTAT -->|"thp_fault_fallback"| THP{"ステップ6: THPコンパクション<br/>compact_stall?"}
+    VMSTAT -->|"numa_missが高い"| NUMA{"ステップ7: NUMAの影響<br/>numastat"}
 
-    SWAP --> SWAPFIX["Swapping bottleneck.<br/>See: Swapping"]
+    SWAP --> SWAPFIX["スワップがボトルネック。<br/>参照: スワップ"]
 
-    THP --> THPFIX["Compaction stalls.<br/>See: THP"]
+    THP --> THPFIX["コンパクションのストール。<br/>参照: THP"]
 
-    NUMA --> NUMAFIX["NUMA misplacement.<br/>See: NUMA"]
+    NUMA --> NUMAFIX["NUMA配置の誤り。<br/>参照: NUMA"]
 
-    MEMINFO -->|"SUnreclaim growing"| SLAB{"Step 8: Kernel slab<br/>slabtop"}
-    SLAB --> SLABFIX["Kernel memory leak.<br/>See: SLUB"]
+    MEMINFO -->|"SUnreclaimが増加中"| SLAB{"ステップ8: カーネルslab<br/>slabtop"}
+    SLAB --> SLABFIX["カーネルのメモリリーク。<br/>参照: SLUB"]
 ```
 
-## Step 1: Is it memory at all? {#step-1-is-it-memory-at-all}
+## ステップ1: そもそもメモリの問題か? {#step-1-is-it-memory-at-all}
 
-Before digging into memory internals, confirm that memory pressure actually exists. Since Linux 4.20 ([commit 0e94682b73bf](https://git.kernel.org/linus/0e94682b73bf)), PSI (Pressure Stall Information) tells you directly whether tasks are stalling on memory.
+メモリの内部に踏み込む前に、メモリ逼迫が実際に存在するかを確認する。Linux 4.20（[commit 0e94682b73bf](https://git.kernel.org/linus/0e94682b73bf)）以降、PSI（Pressure Stall Information）は、タスクがメモリ待ちでストールしているかを直接教えてくれる。
 
 ```bash
 cat /proc/pressure/memory
@@ -47,149 +47,149 @@ cat /proc/pressure/memory
 # full avg10=0.12 avg60=0.04 avg300=0.01 total=12345678
 ```
 
-**What the numbers mean:**
+**数値の意味:**
 
-| Metric | Meaning |
+| 指標 | 意味 |
 |--------|---------|
-| `some` | Percentage of time *at least one* task is stalled on memory |
-| `full` | Percentage of time *all* tasks are stalled (nothing productive happening) |
-| `avg10` | 10-second moving average |
-| `avg60` / `avg300` | 60-second and 5-minute averages |
+| `some` | *少なくとも1つの*タスクがメモリ待ちでストールしている時間の割合 |
+| `full` | *すべての*タスクがストールしている時間の割合（生産的な処理が何も行われていない） |
+| `avg10` | 10秒間の移動平均 |
+| `avg60` / `avg300` | 60秒間および5分間の平均 |
 
-**How to interpret:**
+**解釈の仕方:**
 
-- `some avg10 = 0`: No memory pressure. Your slowness is elsewhere -- check CPU (`/proc/pressure/cpu`), I/O (`/proc/pressure/io`), or application-level contention.
-- `some avg10 > 5`: Meaningful memory pressure. Continue to Step 2.
-- `full avg10 > 1`: Severe. The entire system is stalling on memory.
+- `some avg10 = 0`: メモリ逼迫はない。遅さの原因は別のところにある -- CPU（`/proc/pressure/cpu`）、I/O（`/proc/pressure/io`）、あるいはアプリケーションレベルの競合を確認する。
+- `some avg10 > 5`: 意味のあるメモリ逼迫がある。ステップ2へ進む。
+- `full avg10 > 1`: 深刻。システム全体がメモリ待ちでストールしている。
 
-PSI is implemented in [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c). It tracks stall states per task and aggregates them into time-weighted averages. Facebook developed PSI because load average and `MemAvailable` alone were not sufficient -- they needed to know *if anyone was actually waiting* for memory. See the LWN coverage: [Tracking pressure-stall information](https://lwn.net/Articles/759658/).
+PSIは[`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c)に実装されている。タスクごとのストール状態を追跡し、時間加重平均に集約する。Facebookがロードアベレージや`MemAvailable`だけでは不十分だったためにPSIを開発した -- *実際に誰かがメモリを待っているか*を知る必要があったのである。LWNの記事を参照: [Tracking pressure-stall information](https://lwn.net/Articles/759658/)。
 
-!!! tip "Why PSI first?"
-    Traditional metrics like `MemAvailable` tell you about *supply*. PSI tells you about *impact*. A system can have low available memory and still perform fine if the working set fits in the remaining pages. Conversely, a system with "enough" free memory can still stall if reclaim is thrashing.
+!!! tip "なぜPSIが最初か"
+    `MemAvailable`のような従来の指標は*供給*について教えてくれる。PSIは*影響*について教えてくれる。利用可能なメモリが少なくても、ワーキングセットが残りのpageに収まっていれば問題なく動作しうる。逆に、「十分な」空きメモリがあるシステムでも、回収がスラッシングしていればストールしうる。
 
-## Step 2: Check /proc/meminfo {#step-2-check-procmeminfo}
+## ステップ2: /proc/meminfoを確認する {#step-2-check-procmeminfo}
 
-Once PSI confirms memory pressure, understand where the memory is going.
+PSIでメモリ逼迫を確認したら、メモリがどこに使われているかを把握する。
 
 ```bash
 grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SwapTotal|SwapFree|SReclaimable|SUnreclaim|Active|Inactive)' /proc/meminfo
 ```
 
-**Key fields:**
+**主要なフィールド:**
 
-| Field | What it tells you |
+| フィールド | わかること |
 |-------|-------------------|
-| `MemAvailable` | How much memory is available for new allocations without swapping. This is *not* `MemFree` -- it includes reclaimable page cache and slab. Added in kernel 3.14 ([commit 34e431b0ae39](https://git.kernel.org/linus/34e431b0ae39)). |
-| `SwapTotal - SwapFree` | How much swap is in use. If this is large and growing, you are actively swapping. |
-| `Cached` | Page cache size. Large `Cached` is normal and healthy -- it means the kernel is caching file data. |
-| `SReclaimable` | Slab memory the kernel can free under pressure (dentry cache, inode cache). |
-| `SUnreclaim` | Slab memory the kernel *cannot* free. If this is large and growing, suspect a kernel memory leak. |
+| `MemAvailable` | スワップせずに新たな割り当てに使えるメモリ量。これは`MemFree`*ではない* -- 回収可能なページキャッシュとslabを含む。カーネル3.14で追加された（[commit 34e431b0ae39](https://git.kernel.org/linus/34e431b0ae39)）。 |
+| `SwapTotal - SwapFree` | 使用中のスワップ量。これが大きく増え続けているなら、活発にスワップしている。 |
+| `Cached` | ページキャッシュのサイズ。大きな`Cached`は正常で健全である -- カーネルがファイルデータをキャッシュしていることを意味する。 |
+| `SReclaimable` | 逼迫時にカーネルが解放できるslabメモリ（dentryキャッシュ、inodeキャッシュ）。 |
+| `SUnreclaim` | カーネルが解放*できない*slabメモリ。これが大きく増え続けているなら、カーネルのメモリリークを疑う。 |
 
-**How to interpret:**
+**解釈の仕方:**
 
 ```bash
-# Quick health check: what percentage of memory is available?
+# 簡易ヘルスチェック: メモリの何パーセントが利用可能か?
 awk '/MemTotal/{t=$2} /MemAvailable/{a=$2} END{printf "Available: %.1f%%\n", a/t*100}' /proc/meminfo
 ```
 
-- **MemAvailable < 10% of MemTotal**: System is under pressure. The kernel is likely reclaiming or swapping.
-- **Large Cached but low MemAvailable**: The page cache is being used and is reclaimable, but even after reclaiming it there would not be enough. Processes are using too much anonymous memory.
-- **SwapTotal - SwapFree > 0 and growing**: Active swapping. Jump to Step 5.
-- **SUnreclaim growing over time**: Kernel slab leak. Jump to Step 8.
+- **MemAvailableがMemTotalの10%未満**: システムは逼迫している。カーネルは回収またはスワップを行っている可能性が高い。
+- **Cachedは大きいがMemAvailableが低い**: ページキャッシュは使われていて回収可能だが、それを回収しても足りない。プロセスが匿名メモリを使いすぎている。
+- **SwapTotal - SwapFree > 0かつ増加中**: 活発なスワップ。ステップ5へ飛ぶ。
+- **SUnreclaimが時間とともに増加**: カーネルslabのリーク。ステップ8へ飛ぶ。
 
-The `MemAvailable` estimate is calculated in [`mm/show_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/show_mem.c) (via `si_mem_available()`). It accounts for the zone watermarks, reclaimable page cache, and reclaimable slab.
+`MemAvailable`の推定値は[`mm/show_mem.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/show_mem.c)で（`si_mem_available()`を通じて）計算される。ゾーンのウォーターマーク、回収可能なページキャッシュ、回収可能なslabを考慮に入れている。
 
-## Step 3: Check per-process memory {#step-3-check-per-process-memory}
+## ステップ3: プロセスごとのメモリを確認する {#step-3-check-per-process-memory}
 
-Now find which process is the culprit.
+次に、どのプロセスが犯人かを突き止める。
 
 ```bash
-# Top memory consumers by RSS
+# RSS によるメモリ消費上位
 ps aux --sort=-%mem | head -20
 
-# For a specific process, get detailed breakdown
+# 特定のプロセスについて詳細な内訳を得る
 grep -E '^(VmSize|VmRSS|VmSwap|RssAnon|RssFile|RssShmem)' /proc/<pid>/status
 ```
 
-**Key fields in `/proc/<pid>/status`:**
+**`/proc/<pid>/status`の主要なフィールド:**
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `VmRSS` | Resident Set Size -- physical memory currently used by this process |
-| `VmSwap` | How much of this process has been swapped out |
-| `RssAnon` | Anonymous pages (heap, stack) -- these can only go to swap |
-| `RssFile` | File-backed pages -- can be dropped and re-read |
-| `RssShmem` | Shared memory and tmpfs pages |
+| `VmRSS` | Resident Set Size -- このプロセスが現在使用している物理メモリ |
+| `VmSwap` | このプロセスのうちスワップアウトされた量 |
+| `RssAnon` | 匿名page（ヒープ、スタック） -- スワップにしか行けない |
+| `RssFile` | ファイルバックのpage -- 破棄して再読み込みできる |
+| `RssShmem` | 共有メモリとtmpfsのpage |
 
-For a more detailed per-mapping breakdown:
+マッピングごとのより詳細な内訳には次を使う。
 
 ```bash
-# Aggregated summary (fast, available since kernel 4.14)
+# 集約された要約（高速、カーネル 4.14 以降で利用可能）
 cat /proc/<pid>/smaps_rollup
 ```
 
-The `smaps_rollup` file ([commit 493b0e9d945f](https://git.kernel.org/linus/493b0e9d945f)) gives you totals across all VMAs without the overhead of reading the full `smaps` file. Key fields to watch:
+`smaps_rollup`ファイル（[commit 493b0e9d945f](https://git.kernel.org/linus/493b0e9d945f)）は、完全な`smaps`ファイルを読むオーバーヘッドなしに、全VMAにわたる合計を提供する。注目すべき主要なフィールドは次のとおり。
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `Pss` | Proportional Set Size -- accounts for shared pages by dividing by number of sharers |
-| `Swap` | Total swapped pages across all VMAs |
-| `Referenced` | Pages accessed since last clear -- indicates working set size |
+| `Pss` | Proportional Set Size -- 共有pageを共有者数で割って計上する |
+| `Swap` | 全VMAにわたるスワップ済みpageの合計 |
+| `Referenced` | 最後のクリア以降にアクセスされたpage -- ワーキングセットのサイズを示す |
 
-!!! note "PSS vs RSS"
-    `RSS` double-counts shared pages. If two processes share a 100MB library, both show 100MB in RSS. `PSS` divides shared pages proportionally, so each shows ~50MB. For capacity planning, `PSS` is more accurate. For "is this process the problem?", `RSS` is usually enough.
+!!! note "PSSとRSS"
+    `RSS`は共有pageを二重に数える。2つのプロセスが100MBのライブラリを共有していれば、どちらもRSSに100MBと表示される。`PSS`は共有pageを按分するので、それぞれ約50MBと表示される。キャパシティプランニングには`PSS`の方が正確である。「このプロセスが問題か?」を判断するには、通常`RSS`で十分である。
 
-## Step 4: Check /proc/vmstat for reclaim activity {#step-4-check-procvmstat-for-reclaim-activity}
+## ステップ4: /proc/vmstatで回収活動を確認する {#step-4-check-procvmstat-for-reclaim-activity}
 
-This is where you identify *what the kernel is doing* about memory pressure.
+ここで、メモリ逼迫に対して*カーネルが何をしているか*を特定する。
 
 ```bash
-# Snapshot key counters
+# 主要なカウンタのスナップショットを取る
 grep -E '^(pgscan_direct|pgscan_kswapd|pgsteal_direct|pgsteal_kswapd|allocstall|pgmajfault|pgfault)' /proc/vmstat
 ```
 
-These are cumulative counters. Take two snapshots and compare:
+これらは累積カウンタである。2回スナップショットを取って比較する。
 
 ```bash
-# Watch the rate of change
+# 変化率を観察する
 watch -d -n1 'grep -E "pgscan_direct|allocstall|pgmajfault" /proc/vmstat'
 ```
 
-**Key counters:**
+**主要なカウンタ:**
 
-| Counter | What it means | Why it matters |
+| カウンタ | 意味 | なぜ重要か |
 |---------|---------------|----------------|
-| `pgscan_direct` | Pages scanned by direct reclaim | Process is blocking to free memory. This is the latency killer. |
-| `pgscan_kswapd` | Pages scanned by kswapd | Background reclaim -- less harmful but indicates pressure. |
-| `pgsteal_direct` / `pgsteal_kswapd` | Pages actually freed | Compare with `pgscan` to get reclaim efficiency. Low steal/scan ratio means the kernel is scanning many pages but few are reclaimable. |
-| `allocstall` | Number of direct reclaim events | Each one means a process blocked waiting for memory. |
-| `pgmajfault` | Major page faults (required disk I/O) | If high, pages are being faulted in from swap or disk. |
-| `pgfault` | All page faults (minor + major) | Minor faults are normal. Focus on major faults. |
+| `pgscan_direct` | 直接回収でスキャンされたpage | プロセスがメモリを解放するためにブロックしている。これがレイテンシの元凶である。 |
+| `pgscan_kswapd` | kswapdがスキャンしたpage | バックグラウンド回収 -- 害は少ないが逼迫を示す。 |
+| `pgsteal_direct` / `pgsteal_kswapd` | 実際に解放されたpage | `pgscan`と比較して回収効率を得る。steal/scan比が低いと、カーネルは多くのpageをスキャンしているが回収可能なものは少ないことを意味する。 |
+| `allocstall` | 直接回収イベントの回数 | 1回ごとに、あるプロセスがメモリを待ってブロックしたことを意味する。 |
+| `pgmajfault` | メジャーページフォールト（ディスクI/Oが必要） | 高ければ、pageがスワップやディスクからフォールトインされている。 |
+| `pgfault` | すべてのページフォールト（マイナー + メジャー） | マイナーフォールトは正常。メジャーフォールトに注目する。 |
 
-**How to interpret:**
+**解釈の仕方:**
 
-- **`pgscan_direct` growing**: Direct reclaim is happening. Processes are stalling. See [Page Reclaim](reclaim.md) for the full reclaim path.
-- **`allocstall` increasing**: Each increment means at least one allocation had to wait for reclaim. High rates (>10/sec) will cause visible latency.
-- **`pgmajfault` high**: Pages are being read from swap or disk. If the process is faulting on anonymous pages, it is thrashing swap.
-- **High `pgscan_direct` but low `pgsteal_direct`**: Reclaim is inefficient. The kernel is scanning pages but cannot free them -- they are all in active use. This is the worst case: high CPU overhead with no benefit.
+- **`pgscan_direct`が増加**: 直接回収が起きている。プロセスがストールしている。回収経路の全体は[ページ回収](reclaim.md)を参照。
+- **`allocstall`が増加**: 1増えるごとに、少なくとも1つの割り当てが回収を待たなければならなかったことを意味する。高いレート（>10/秒）は目に見えるレイテンシを引き起こす。
+- **`pgmajfault`が高い**: pageがスワップやディスクから読まれている。プロセスが匿名pageでフォールトしているなら、スワップをスラッシングしている。
+- **`pgscan_direct`が高いのに`pgsteal_direct`が低い**: 回収が非効率である。カーネルはpageをスキャンしているが解放できない -- すべて活発に使われている。これは最悪のケースで、CPUオーバーヘッドが高いのに何の効果もない。
 
-These counters are maintained in [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c). Direct reclaim happens in `__alloc_pages_direct_reclaim()` within [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c).
+これらのカウンタは[`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c)で管理されている。直接回収は[`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)内の`__alloc_pages_direct_reclaim()`で行われる。
 
-## Step 5: Is it swapping? {#step-5-is-it-swapping}
+## ステップ5: スワップしているか? {#step-5-is-it-swapping}
 
-Swapping is often the first suspect when a process is slow, and it is usually correct -- swap I/O is orders of magnitude slower than memory access.
+プロセスが遅いとき、スワップは最初に疑われることが多く、たいていそれは正しい -- スワップI/Oはメモリアクセスより桁違いに遅い。
 
 ```bash
-# Current swap activity rates
+# 現在のスワップ活動のレート
 vmstat 1 5
-# Look at 'si' (swap in) and 'so' (swap out) columns
+# 'si'（スワップイン）と 'so'（スワップアウト）の列を見る
 
-# Or from /proc/vmstat (cumulative pages)
+# あるいは /proc/vmstat から（累積 page 数）
 grep -E '^(pswpin|pswpout)' /proc/vmstat
 ```
 
 ```bash
-# Which processes are swapped?
+# どのプロセスがスワップされているか?
 for pid in /proc/[0-9]*; do
     swap=$(grep VmSwap "$pid/status" 2>/dev/null | awk '{print $2}')
     name=$(cat "$pid/comm" 2>/dev/null)
@@ -199,151 +199,151 @@ for pid in /proc/[0-9]*; do
 done | sort -rn | head -20
 ```
 
-**How to interpret:**
+**解釈の仕方:**
 
-- **`pswpout` growing, `pswpin` stable**: The kernel is evicting pages to swap. Processes are losing resident pages.
-- **`pswpin` growing**: Processes are faulting pages back from swap -- this means swapped-out pages are still being accessed. Each swap-in is a disk I/O that blocks the faulting process.
-- **Both high**: Active thrashing. The working set does not fit in memory and the kernel is churning pages between RAM and swap.
-- **Per-process `VmSwap` large**: That specific process has been victimized by reclaim.
+- **`pswpout`が増加し、`pswpin`は安定**: カーネルがpageをスワップへ追い出している。プロセスは常駐pageを失っている。
+- **`pswpin`が増加**: プロセスがpageをスワップからフォールトで戻している -- スワップアウトされたpageがまだアクセスされていることを意味する。スワップインのたびに、フォールトしたプロセスをブロックするディスクI/Oが発生する。
+- **両方が高い**: 活発なスラッシング。ワーキングセットがメモリに収まらず、カーネルがRAMとスワップの間でpageを入れ替え続けている。
+- **プロセスごとの`VmSwap`が大きい**: その特定のプロセスが回収の犠牲になっている。
 
-**Common causes and fixes:**
+**よくある原因と対処:**
 
-| Cause | Evidence | Fix |
+| 原因 | 証拠 | 対処 |
 |-------|----------|-----|
-| Working set exceeds RAM | All processes have VmSwap > 0 | Add RAM or reduce workload |
-| One process leaked memory | One process has huge VmRSS + VmSwap | Fix the application |
-| Swappiness too high | `pswpout` high even with MemAvailable | Tune `vm.swappiness` (see [Swap](swap.md)) |
+| ワーキングセットがRAMを超えている | すべてのプロセスでVmSwap > 0 | RAMを増やすかワークロードを減らす |
+| 1つのプロセスがメモリリークしている | 1つのプロセスのVmRSS + VmSwapが巨大 | アプリケーションを修正する |
+| swappinessが高すぎる | MemAvailableがあるのに`pswpout`が高い | `vm.swappiness`を調整する（[スワップ](swap.md)を参照） |
 
-For the full lifecycle of a swapped page, see [What happens during swapping](swapping.md).
+スワップされたpageのライフサイクル全体については、[スワップ中に何が起きるか](swapping.md)を参照。
 
-## Step 6: Is it THP compaction? {#step-6-is-it-thp-compaction}
+## ステップ6: THPのコンパクションか? {#step-6-is-it-thp-compaction}
 
-Transparent Huge Pages can cause surprise latency spikes. When a process faults on memory and the kernel tries to allocate a 2MB huge page, it may stall to compact memory.
+Transparent Huge Pageは予期しないレイテンシスパイクを引き起こすことがある。プロセスがメモリでフォールトし、カーネルが2MBのhuge pageを割り当てようとすると、メモリをコンパクションするためにストールすることがある。
 
 ```bash
 grep -E '^(thp_fault_alloc|thp_fault_fallback|thp_collapse_alloc|thp_collapse_alloc_failed|compact_stall|compact_success|compact_fail)' /proc/vmstat
 ```
 
-**Key counters:**
+**主要なカウンタ:**
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `thp_fault_alloc` | Successful THP allocations on page fault |
-| `thp_fault_fallback` | THP allocation failed, fell back to 4KB pages |
-| `compact_stall` | Number of times a process stalled waiting for compaction |
-| `compact_fail` | Compaction attempted but failed to create a huge page |
+| `thp_fault_alloc` | ページフォールト時のTHP割り当て成功 |
+| `thp_fault_fallback` | THP割り当てに失敗し、4KBのpageにフォールバックした |
+| `compact_stall` | プロセスがコンパクションを待ってストールした回数 |
+| `compact_fail` | コンパクションを試みたがhuge pageを作れなかった |
 
-**How to interpret:**
+**解釈の仕方:**
 
-- **`compact_stall` growing rapidly**: Processes are blocking while the kernel rearranges pages. Each stall can be milliseconds to tens of milliseconds.
-- **`thp_fault_fallback` >> `thp_fault_alloc`**: Memory is too fragmented for huge pages. The kernel keeps trying and failing.
-- **`compact_fail` high**: Compaction is running but not helping. The kernel is doing expensive page migration for nothing.
+- **`compact_stall`が急増**: カーネルがpageを並べ替える間、プロセスがブロックしている。1回のストールは数ミリ秒から数十ミリ秒に及ぶ。
+- **`thp_fault_fallback` >> `thp_fault_alloc`**: メモリがhuge pageには断片化しすぎている。カーネルは試行しては失敗し続けている。
+- **`compact_fail`が高い**: コンパクションは動いているが効果がない。カーネルは無駄に高コストなページマイグレーションを行っている。
 
-**Mitigations:**
+**緩和策:**
 
 ```bash
-# Option 1: Switch THP to madvise-only (no automatic THP on faults)
+# 方法1: THP を madvise のみに切り替える（フォールト時の自動 THP なし）
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 
-# Option 2: Disable THP compaction on fault (still allow khugepaged)
+# 方法2: フォールト時の THP コンパクションを無効化する（khugepaged は許可したまま）
 echo never > /sys/kernel/mm/transparent_hugepage/defrag
 ```
 
-The compaction code lives in [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c). The `defrag` knob controls whether the kernel stalls on allocation to attempt compaction, defers it to `khugepaged`, or skips it entirely. See the LWN article [Proactive compaction](https://lwn.net/Articles/817905/) for background on how compaction has evolved.
+コンパクションのコードは[`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c)にある。`defrag`ノブは、カーネルが割り当て時にストールしてコンパクションを試みるか、`khugepaged`に先送りするか、完全にスキップするかを制御する。コンパクションがどのように進化してきたかの背景は、LWNの記事[Proactive compaction](https://lwn.net/Articles/817905/)を参照。
 
-For the full THP picture, see [Transparent Huge Pages](thp.md).
+THPの全体像については[Transparent Huge Pages](thp.md)を参照。
 
-## Step 7: Is it NUMA effects? {#step-7-is-it-numa-effects}
+## ステップ7: NUMAの影響か? {#step-7-is-it-numa-effects}
 
-On multi-socket systems, memory access latency depends on which node the memory lives on. A process running on node 0 accessing memory on node 1 pays a 30-50% latency penalty on each access.
+マルチソケットシステムでは、メモリアクセスのレイテンシはメモリがどのノードにあるかに依存する。ノード0で動いているプロセスがノード1のメモリにアクセスすると、アクセスごとに30〜50%のレイテンシペナルティを払う。
 
 ```bash
-# System-wide NUMA statistics
+# システム全体の NUMA 統計
 numastat
 
-# Per-process NUMA allocation
+# プロセスごとの NUMA 割り当て
 numastat -p <pid>
 
-# From /proc/vmstat
+# /proc/vmstat から
 grep -E '^numa_' /proc/vmstat
 ```
 
-**Key counters:**
+**主要なカウンタ:**
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `numa_hit` | Allocation satisfied from the preferred/local node |
-| `numa_miss` | Allocation went to a non-preferred node |
-| `numa_foreign` | This node was preferred but allocation went elsewhere |
-| `numa_interleave` | Allocation via interleave policy (intentional) |
+| `numa_hit` | 優先／ローカルノードから満たされた割り当て |
+| `numa_miss` | 優先ノード以外に行った割り当て |
+| `numa_foreign` | このノードが優先されていたが、割り当ては他所に行った |
+| `numa_interleave` | インターリーブポリシーによる割り当て（意図的） |
 
-**How to interpret:**
+**解釈の仕方:**
 
-- **`numa_miss / (numa_hit + numa_miss)` > 10%**: Significant remote memory access. The process's memory is spread across nodes.
-- **`numastat -p <pid>` shows memory on non-local nodes**: The process's working set is not on the node where it is running.
+- **`numa_miss / (numa_hit + numa_miss)`が10%超**: リモートメモリアクセスが顕著である。プロセスのメモリが複数ノードに分散している。
+- **`numastat -p <pid>`が非ローカルノード上のメモリを示す**: プロセスのワーキングセットが、それが動いているノードにない。
 
-**Common causes:**
+**よくある原因:**
 
-| Cause | Evidence | Fix |
+| 原因 | 証拠 | 対処 |
 |-------|----------|-----|
-| Process migrated between nodes | Memory on old node, CPU on new | Pin with `numactl --cpunodebind=N --membind=N` |
-| Memory interleaved by default | Even spread across nodes | Use `numactl --localalloc` or `--membind` |
-| Allocation overflow | Local node was full | Add memory or balance workload across nodes |
+| プロセスがノード間で移動した | メモリは旧ノード、CPUは新ノード | `numactl --cpunodebind=N --membind=N`で固定する |
+| デフォルトでメモリがインターリーブされている | ノード間に均等に分散 | `numactl --localalloc`または`--membind`を使う |
+| 割り当てのあふれ | ローカルノードが満杯だった | メモリを増やすか、ワークロードをノード間で分散する |
 
-The kernel's NUMA allocation policy is implemented in [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c). AutoNUMA (automatic NUMA balancing) was added in kernel 3.8 ([commit 217db1ef6c47](https://git.kernel.org/linus/217db1ef6c47)) and periodically scans pages to migrate them closer to the accessing CPU. See LWN: [AutoNUMA: the other approach to NUMA scheduling](https://lwn.net/Articles/488709/).
+カーネルのNUMA割り当てポリシーは[`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c)に実装されている。AutoNUMA（自動NUMAバランシング）はカーネル3.8で追加され（[commit 217db1ef6c47](https://git.kernel.org/linus/217db1ef6c47)）、定期的にpageをスキャンして、アクセスするCPUの近くへマイグレーションする。LWNを参照: [AutoNUMA: the other approach to NUMA scheduling](https://lwn.net/Articles/488709/)。
 
-For the full NUMA story, see [NUMA Memory Management](numa.md).
+NUMAの全体像については[NUMAメモリ管理](numa.md)を参照。
 
-## Step 8: Is it a kernel memory issue? {#step-8-is-it-a-kernel-memory-issue}
+## ステップ8: カーネルメモリの問題か? {#step-8-is-it-a-kernel-memory-issue}
 
-Sometimes the problem is not user-space memory at all -- the kernel itself is consuming memory through slab caches.
+問題がユーザー空間のメモリでは全くないこともある -- カーネル自身がslabキャッシュを通じてメモリを消費しているのだ。
 
 ```bash
-# Watch SUnreclaim over time
+# SUnreclaim を時系列で観察する
 watch -n5 'grep SUnreclaim /proc/meminfo'
 
-# See which slab caches are largest
+# どの slab キャッシュが最大かを確認する
 sudo slabtop -o -s c | head -20
 
-# Detailed per-cache stats
+# キャッシュごとの詳細な統計
 cat /proc/slabinfo | head -5
 ```
 
-**Key indicators:**
+**主要な指標:**
 
-- **`SUnreclaim` in `/proc/meminfo` growing over time**: Kernel objects are accumulating and cannot be freed.
-- **`SReclaimable` is large but not being reclaimed**: The kernel has not been under enough pressure to shrink dentry/inode caches. This is usually benign.
+- **`/proc/meminfo`の`SUnreclaim`が時間とともに増加**: カーネルオブジェクトが蓄積し、解放できない。
+- **`SReclaimable`が大きいが回収されていない**: カーネルがdentry/inodeキャッシュを縮小するほどの逼迫を受けていない。通常は無害である。
 
-**Common offenders:**
+**よくある犯人:**
 
-| Cache | What it is | Why it grows |
+| キャッシュ | 何か | なぜ増えるか |
 |-------|-----------|--------------|
-| `dentry` | Directory entry cache | Many files accessed, deep directory trees |
-| `inode_cache` | Inode metadata cache | Same as dentry |
-| `kmalloc-*` | General-purpose allocations | Possible kernel memory leak |
-| `sock_inode_cache` | Socket structures | Many network connections |
+| `dentry` | ディレクトリエントリキャッシュ | 多数のファイルへのアクセス、深いディレクトリツリー |
+| `inode_cache` | inodeメタデータキャッシュ | dentryと同じ |
+| `kmalloc-*` | 汎用の割り当て | カーネルのメモリリークの可能性 |
+| `sock_inode_cache` | ソケット構造体 | 多数のネットワーク接続 |
 
 ```bash
-# Force the kernel to reclaim slab caches (drops page cache + slab)
+# カーネルに slab キャッシュを回収させる（ページキャッシュ + slab を破棄）
 echo 3 > /proc/sys/vm/drop_caches
-# WARNING: This drops page cache too, which can cause a temporary I/O spike.
-# Use echo 2 to drop slab only (dentries + inodes).
+# 警告: これはページキャッシュも破棄するため、一時的な I/O スパイクを引き起こしうる。
+# slab のみ（dentry + inode）を破棄するには echo 2 を使う。
 ```
 
-!!! warning "drop_caches is for diagnosis, not production"
-    If you need to regularly drop caches to keep a system healthy, you have a leak or a sizing problem. Fix the root cause.
+!!! warning "drop_cachesは診断用であり、本番用ではない"
+    システムを健全に保つために定期的にキャッシュを破棄する必要があるなら、リークかサイジングの問題を抱えている。根本原因を修正すること。
 
-The slab allocator is implemented in [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c). Slab shrinking during reclaim is handled by shrinker callbacks registered via [`register_shrinker()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c). See the LWN article [The slab and protected memory allocations](https://lwn.net/Articles/753154/) for background.
+slabアロケータは[`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c)に実装されている。回収時のslabの縮小は、[`register_shrinker()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c)で登録されたshrinkerコールバックによって処理される。背景については、LWNの記事[The slab and protected memory allocations](https://lwn.net/Articles/753154/)を参照。
 
-For the full slab story, see [Slab Allocator (SLUB)](slab.md).
+slabの全体像については[slabアロケータ（SLUB）](slab.md)を参照。
 
-## Try It Yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-Run this all-in-one diagnostic script to get a snapshot of your system's memory health:
+このオールインワンの診断スクリプトを実行すると、システムのメモリの健全性のスナップショットが得られる。
 
 ```bash
 #!/bin/bash
-# memory-diag.sh -- Quick memory health snapshot
+# memory-diag.sh -- メモリの健全性の簡易スナップショット
 
 echo "=== PSI (Pressure Stall Information) ==="
 if [ -f /proc/pressure/memory ]; then
@@ -383,50 +383,50 @@ for pid in /proc/[0-9]*; do
 done | sort -rn | head -10
 ```
 
-For continuous monitoring, combine PSI with `vmstat`:
+継続的な監視には、PSIと`vmstat`を組み合わせる。
 
 ```bash
-# Terminal 1: Watch PSI
+# 端末1: PSI を観察する
 watch -n1 cat /proc/pressure/memory
 
-# Terminal 2: Watch vmstat (si/so = swap in/out, free = free pages)
+# 端末2: vmstat を観察する（si/so = スワップイン/アウト、free = 空き page）
 vmstat 1
 
-# Terminal 3: Watch reclaim counters
+# 端末3: 回収カウンタを観察する
 watch -d -n1 'grep -E "pgscan_direct|allocstall|compact_stall" /proc/vmstat'
 ```
 
-## Quick reference: which metric points where {#quick-reference-which-metric-points-where}
+## クイックリファレンス: どの指標が何を示すか {#quick-reference-which-metric-points-where}
 
-| Symptom | Key metric | Likely cause | Deep-dive doc |
+| 症状 | 主要指標 | 考えられる原因 | 詳細ドキュメント |
 |---------|-----------|--------------|---------------|
-| PSI `some` > 0, MemAvailable low | `/proc/meminfo` | System-wide memory shortage | [Page Reclaim](reclaim.md) |
-| `allocstall` increasing | `/proc/vmstat` | Direct reclaim stalls | [Page Reclaim](reclaim.md) |
-| `pswpin` / `pswpout` high | `/proc/vmstat`, `vmstat` | Active swapping | [Swapping](swapping.md) |
-| `pgmajfault` high | `/proc/vmstat` | Pages faulted from disk/swap | [Swapping](swapping.md) |
-| `compact_stall` high | `/proc/vmstat` | THP compaction latency | [THP](thp.md), [Compaction](compaction.md) |
-| `numa_miss` high | `/proc/vmstat` | Remote NUMA access | [NUMA](numa.md) |
-| `SUnreclaim` growing | `/proc/meminfo` | Kernel slab leak | [SLUB](slab.md) |
-| Large `VmSwap` on one process | `/proc/<pid>/status` | Process swapped out | [Swapping](swapping.md) |
+| PSIの`some` > 0、MemAvailableが低い | `/proc/meminfo` | システム全体のメモリ不足 | [ページ回収](reclaim.md) |
+| `allocstall`が増加 | `/proc/vmstat` | 直接回収のストール | [ページ回収](reclaim.md) |
+| `pswpin` / `pswpout`が高い | `/proc/vmstat`、`vmstat` | 活発なスワップ | [スワップ](swapping.md) |
+| `pgmajfault`が高い | `/proc/vmstat` | ディスク／スワップからのページフォールト | [スワップ](swapping.md) |
+| `compact_stall`が高い | `/proc/vmstat` | THPコンパクションのレイテンシ | [THP](thp.md)、[コンパクション](compaction.md) |
+| `numa_miss`が高い | `/proc/vmstat` | リモートNUMAアクセス | [NUMA](numa.md) |
+| `SUnreclaim`が増加 | `/proc/meminfo` | カーネルslabのリーク | [SLUB](slab.md) |
+| 1つのプロセスで`VmSwap`が大きい | `/proc/<pid>/status` | プロセスがスワップアウトされた | [スワップ](swapping.md) |
 
-## Kernel source reference {#kernel-source-reference}
+## カーネルソースリファレンス {#kernel-source-reference}
 
-| File | What it contains |
+| ファイル | 内容 |
 |------|-----------------|
-| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | PSI tracking and averaging |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Page reclaim, direct reclaim, kswapd |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Page allocator, watermarks, alloc stalls |
-| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Memory compaction for huge pages |
-| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | NUMA memory policy |
-| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB slab allocator |
-| [`fs/proc/meminfo.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/meminfo.c) | /proc/meminfo implementation |
-| [`fs/proc/array.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/array.c) | /proc/pid/status implementation |
+| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | PSIの追跡と平均化 |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | ページ回収、直接回収、kswapd |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | ページアロケータ、ウォーターマーク、割り当てストール |
+| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | huge pageのためのメモリコンパクション |
+| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | NUMAメモリポリシー |
+| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB slabアロケータ |
+| [`fs/proc/meminfo.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/meminfo.c) | /proc/meminfoの実装 |
+| [`fs/proc/array.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/proc/array.c) | /proc/pid/statusの実装 |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [LWN: Tracking pressure-stall information](https://lwn.net/Articles/759658/) -- The original PSI proposal from Facebook
-- [LWN: The state of the page in 2023](https://lwn.net/Articles/943128/) -- Modern page reclaim overview
-- [LWN: AutoNUMA: the other approach to NUMA scheduling](https://lwn.net/Articles/488709/) -- NUMA balancing design
-- [LWN: Proactive compaction](https://lwn.net/Articles/817905/) -- THP compaction improvements
-- [Kernel docs: PSI](https://docs.kernel.org/accounting/psi.html) -- Official PSI documentation
-- [Brendan Gregg: Linux Performance](https://www.brendangregg.com/linuxperf.html) -- Broader performance methodology
+- [LWN: Tracking pressure-stall information](https://lwn.net/Articles/759658/) -- FacebookによるPSIの最初の提案
+- [LWN: The state of the page in 2023](https://lwn.net/Articles/943128/) -- 現代のページ回収の概観
+- [LWN: AutoNUMA: the other approach to NUMA scheduling](https://lwn.net/Articles/488709/) -- NUMAバランシングの設計
+- [LWN: Proactive compaction](https://lwn.net/Articles/817905/) -- THPコンパクションの改善
+- [Kernel docs: PSI](https://docs.kernel.org/accounting/psi.html) -- PSIの公式ドキュメント
+- [Brendan Gregg: Linux Performance](https://www.brendangregg.com/linuxperf.html) -- より広範な性能分析の方法論

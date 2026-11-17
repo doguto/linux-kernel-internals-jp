@@ -1,12 +1,12 @@
-# PCI BAR Memory Mapping {#pci-bar-memory-mapping}
+# PCI BARのメモリマッピング {#pci-bar-memory-mapping}
 
-> How the kernel discovers, claims, and maps PCI device memory regions into kernel virtual address space
+> カーネルがPCIデバイスのメモリ領域をどのように発見・確保し、カーネル仮想アドレス空間へマップするか
 
-## What Are PCI BARs? {#what-are-pci-bars}
+## PCI BARとは何か {#what-are-pci-bars}
 
-Every PCI and PCIe device exposes up to six **Base Address Registers** (BARs), numbered BAR0 through BAR5, in its configuration space. These registers tell the operating system where the device's memory-mapped I/O (MMIO) regions live in the physical address space.
+すべてのPCIおよびPCIeデバイスは、そのコンフィギュレーション空間に最大6つの**ベースアドレスレジスタ**（Base Address Register、BAR）を公開しており、BAR0からBAR5まで番号が振られている。これらのレジスタは、デバイスのメモリマップドI/O（MMIO）領域が物理アドレス空間のどこにあるかをオペレーティングシステムに伝える。
 
-BARs live at offsets `0x10` through `0x24` in the standard PCI configuration header, defined in [`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h):
+BARは標準PCIコンフィギュレーションヘッダのオフセット`0x10`から`0x24`にあり、[`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h)で定義されている。
 
 ```c
 #define PCI_BASE_ADDRESS_0  0x10  /* 32 bits */
@@ -17,11 +17,11 @@ BARs live at offsets `0x10` through `0x24` in the standard PCI configuration hea
 #define PCI_BASE_ADDRESS_5  0x24  /* 32 bits */
 ```
 
-The maximum number of standard BARs is defined as `PCI_STD_NUM_BARS = 6` in [`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h).
+標準BARの最大数は、[`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h)で`PCI_STD_NUM_BARS = 6`として定義されている。
 
-### How BAR Size Is Determined {#how-bar-size-is-determined}
+### BARのサイズはどのように決まるか {#how-bar-size-is-determined}
 
-The firmware or OS discovers the size of a BAR region using a hardware protocol: write all-1s (`0xFFFFFFFF`) to the BAR register, read the value back, mask off the type bits, and invert. The result is the size minus one. This is called **BAR sizing** and is performed by `pci_read_bases()` in [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c), called from `pci_setup_device()` during bus enumeration.
+ファームウェアやOSは、ハードウェアのプロトコルを使ってBAR領域のサイズを発見する。BARレジスタにすべて1（`0xFFFFFFFF`）を書き込み、値を読み戻し、タイプビットをマスクして反転する。結果はサイズから1を引いたものになる。これは**BARサイジング**と呼ばれ、[`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c)の`pci_read_bases()`によって実行される。この関数はバス列挙の際に`pci_setup_device()`から呼ばれる。
 
 ```
 Write: 0xFFFFFFFF → BAR register
@@ -29,38 +29,38 @@ Read back: 0xFFFFF000  (device decodes 12 address bits → 4 KB region)
 Mask type bits, invert: size = 4096 bytes
 ```
 
-The device decodes only the bits it responds to; the rest read back as zero. The lower bits hold type information and are masked before the inversion.
+デバイスは自分が応答するビットだけをデコードし、残りはゼロとして読み戻される。下位ビットはタイプ情報を保持しており、反転の前にマスクされる。
 
-## BAR Types {#bar-types}
+## BARの種類 {#bar-types}
 
-The lower bits of each BAR register encode the region's type:
+各BARレジスタの下位ビットは、その領域の種類をエンコードしている。
 
 ```c
-#define PCI_BASE_ADDRESS_SPACE         0x01  /* 0 = memory, 1 = I/O */
+#define PCI_BASE_ADDRESS_SPACE         0x01  /* 0 = メモリ, 1 = I/O */
 #define PCI_BASE_ADDRESS_SPACE_IO      0x01
 #define PCI_BASE_ADDRESS_SPACE_MEMORY  0x00
 #define PCI_BASE_ADDRESS_MEM_TYPE_MASK 0x06
-#define PCI_BASE_ADDRESS_MEM_TYPE_32   0x00  /* 32-bit address */
-#define PCI_BASE_ADDRESS_MEM_TYPE_1M   0x02  /* Below 1M (obsolete) */
-#define PCI_BASE_ADDRESS_MEM_TYPE_64   0x04  /* 64-bit address */
-#define PCI_BASE_ADDRESS_MEM_PREFETCH  0x08  /* prefetchable? */
+#define PCI_BASE_ADDRESS_MEM_TYPE_32   0x00  /* 32ビットアドレス */
+#define PCI_BASE_ADDRESS_MEM_TYPE_1M   0x02  /* 1M未満（廃止） */
+#define PCI_BASE_ADDRESS_MEM_TYPE_64   0x04  /* 64ビットアドレス */
+#define PCI_BASE_ADDRESS_MEM_PREFETCH  0x08  /* プリフェッチ可能か */
 ```
 
-### Memory BARs (`PCI_BASE_ADDRESS_SPACE_MEMORY`) {#memory-bars-pcibaseaddressspacememory}
+### メモリBAR（`PCI_BASE_ADDRESS_SPACE_MEMORY`） {#memory-bars-pcibaseaddressspacememory}
 
-The common case. The BAR describes a window of physical address space that maps directly to device registers or device-local memory. CPU accesses to this window go out on the PCIe bus and reach the device. The kernel maps these regions using `ioremap()` or one of its variants.
+一般的なケースである。BARは、デバイスのレジスタやデバイスローカルメモリに直接対応する物理アドレス空間のウィンドウを記述する。このウィンドウへのCPUアクセスはPCIeバスに出て、デバイスに届く。カーネルはこれらの領域を`ioremap()`またはその変種の1つを使ってマップする。
 
-### I/O BARs (`PCI_BASE_ADDRESS_SPACE_IO`) {#io-bars-pcibaseaddressspaceio}
+### I/O BAR（`PCI_BASE_ADDRESS_SPACE_IO`） {#io-bars-pcibaseaddressspaceio}
 
-A legacy type specific to x86. The device occupies a range in the x86 I/O port address space, accessed via `inb()`/`outb()` instructions rather than normal memory loads and stores. Modern devices rarely use I/O BARs; PCIe firmware often assigns them but devices may not actually need them. `pci_iomap()` handles both types transparently.
+x86固有のレガシーな種類である。デバイスはx86のI/Oポートアドレス空間の範囲を占有し、通常のメモリのロード／ストアではなく`inb()`/`outb()`命令でアクセスされる。現代のデバイスがI/O BARを使うことはまれである。PCIeのファームウェアはしばしばI/O BARを割り当てるが、デバイスは実際には必要としていないことがある。`pci_iomap()`は両方の種類を透過的に扱う。
 
-### Prefetchable BARs (`PCI_BASE_ADDRESS_MEM_PREFETCH`) {#prefetchable-bars-pcibaseaddressmemprefetch}
+### プリフェッチ可能なBAR（`PCI_BASE_ADDRESS_MEM_PREFETCH`） {#prefetchable-bars-pcibaseaddressmemprefetch}
 
-A memory BAR with a guarantee that reads have no side effects and the CPU or PCIe fabric can safely prefetch data and combine writes. This is set only for regions like GPU framebuffers where sequential writes benefit from write-combining. Non-prefetchable BARs must not be speculatively read -- side effects (like clearing a status register on read) would be triggered incorrectly.
+読み出しに副作用がなく、CPUやPCIeファブリックが安全にデータをプリフェッチし、書き込みを結合できることが保証されたメモリBARである。これは、シーケンシャルな書き込みがライトコンバイニングの恩恵を受けるGPUのフレームバッファのような領域にのみ設定される。プリフェッチ不可のBARを投機的に読み出してはならない -- 副作用（読み出し時にステータスレジスタがクリアされるなど）が誤って引き起こされてしまう。
 
-### 64-bit BARs (`PCI_BASE_ADDRESS_MEM_TYPE_64`) {#64-bit-bars-pcibaseaddressmemtype_64}
+### 64ビットBAR（`PCI_BASE_ADDRESS_MEM_TYPE_64`） {#64-bit-bars-pcibaseaddressmemtype_64}
 
-A 64-bit memory BAR uses **two consecutive BAR slots** to store the full 64-bit base address: the lower 32 bits in BAR `n` and the upper 32 bits in BAR `n+1`. This means a device can have at most three 64-bit BARs (using all six slots in pairs), and accessing the resource via `pci_resource_start(dev, n)` gives the full 64-bit physical address correctly -- the kernel handles the two-register assembly transparently during `pci_read_bases()`.
+64ビットのメモリBARは、64ビットのベースアドレス全体を格納するために**連続する2つのBARスロット**を使う。下位32ビットはBAR `n`に、上位32ビットはBAR `n+1`に格納される。つまり、デバイスは最大3つの64ビットBARを持てる（6つのスロットすべてをペアで使う）。また`pci_resource_start(dev, n)`でリソースにアクセスすると、完全な64ビットの物理アドレスが正しく得られる -- カーネルは`pci_read_bases()`の中で2つのレジスタの組み立てを透過的に処理する。
 
 ```
 BAR Layout for a device with one 64-bit BAR at BAR0:
@@ -70,32 +70,32 @@ BAR Layout for a device with one 64-bit BAR at BAR0:
   BAR2  [0x18]: next independent BAR (e.g., another memory region)
 ```
 
-## Linux BAR Enumeration {#linux-bar-enumeration}
+## LinuxにおけるBARの列挙 {#linux-bar-enumeration}
 
-During PCI bus enumeration, the kernel calls `pci_setup_device()` → `pci_read_bases()` for every device found. This function reads and sizes all BARs, then stores the results in `dev->resource[]` -- an array of `struct resource` indexed 0 through 5 (for the standard BARs), with entry 6 reserved for the expansion ROM.
+PCIバスの列挙の間、カーネルは見つかったすべてのデバイスについて`pci_setup_device()` → `pci_read_bases()`を呼ぶ。この関数はすべてのBARを読み取ってサイジングし、結果を`dev->resource[]`に格納する。これは`struct resource`の配列で、（標準BAR用に）0から5までのインデックスを持ち、エントリ6は拡張ROM用に予約されている。
 
-After enumeration, three macros in [`include/linux/pci.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pci.h) give drivers everything they need:
+列挙の後は、[`include/linux/pci.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pci.h)の3つのマクロが、ドライバに必要なものをすべて提供する。
 
 ```c
-pci_resource_start(dev, bar)  /* physical base address of the BAR */
-pci_resource_len(dev, bar)    /* size of the BAR region in bytes  */
-pci_resource_flags(dev, bar)  /* type and attribute flags          */
+pci_resource_start(dev, bar)  /* BAR の物理ベースアドレス */
+pci_resource_len(dev, bar)    /* BAR 領域のバイト単位のサイズ */
+pci_resource_flags(dev, bar)  /* 種類と属性のフラグ */
 ```
 
-The flags use the `IORESOURCE_*` constants from [`include/linux/ioport.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ioport.h):
+フラグは[`include/linux/ioport.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ioport.h)の`IORESOURCE_*`定数を使う。
 
-| Flag | Value | Meaning |
+| フラグ | 値 | 意味 |
 |------|-------|---------|
-| `IORESOURCE_IO` | `0x00000100` | I/O port BAR |
-| `IORESOURCE_MEM` | `0x00000200` | Memory BAR |
-| `IORESOURCE_PREFETCH` | `0x00002000` | Prefetchable memory |
-| `IORESOURCE_MEM_64` | `0x00100000` | 64-bit address BAR |
+| `IORESOURCE_IO` | `0x00000100` | I/OポートBAR |
+| `IORESOURCE_MEM` | `0x00000200` | メモリBAR |
+| `IORESOURCE_PREFETCH` | `0x00002000` | プリフェッチ可能なメモリ |
+| `IORESOURCE_MEM_64` | `0x00100000` | 64ビットアドレスのBAR |
 
-## Requesting and Mapping a BAR {#requesting-and-mapping-a-bar}
+## BARの要求とマッピング {#requesting-and-mapping-a-bar}
 
-A driver must follow three steps in order: enable the device, claim the BAR region from the kernel resource tree, and map the BAR into kernel virtual address space. All three functions live in [`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c) and [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c).
+ドライバは3つのステップを順に踏まなければならない。デバイスを有効化し、カーネルのリソースツリーからBAR領域を確保し、BARをカーネル仮想アドレス空間へマップする。3つの関数はすべて[`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c)と[`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c)にある。
 
-### The Standard Driver Pattern {#the-standard-driver-pattern}
+### 標準的なドライバのパターン {#the-standard-driver-pattern}
 
 ```c
 static int my_driver_probe(struct pci_dev *pdev,
@@ -104,27 +104,27 @@ static int my_driver_probe(struct pci_dev *pdev,
     void __iomem *base;
     int err;
 
-    /* 1. Enable the device (powers on, enables bus mastering) */
+    /* 1. デバイスを有効化する（電源投入、バスマスタリングの有効化） */
     err = pci_enable_device(pdev);
     if (err)
         return err;
 
-    /* 2. Claim BAR 0 — prevents other drivers from touching it.
-     *    pci_request_regions() claims all BARs at once. */
+    /* 2. BAR 0 を確保する — 他のドライバが触れないようにする。
+     *    pci_request_regions() はすべての BAR を一度に確保する。 */
     err = pci_request_region(pdev, 0, "my_driver");
     if (err)
         goto err_disable;
 
-    /* 3. Map BAR 0 into kernel virtual address space.
-     *    Pass 0 as maxlen to map the full BAR. */
+    /* 3. BAR 0 をカーネル仮想アドレス空間へマップする。
+     *    BAR 全体をマップするには maxlen に 0 を渡す。 */
     base = pci_iomap(pdev, 0, 0);
     if (!base) {
         err = -ENOMEM;
         goto err_release;
     }
 
-    /* 4. Access the device using ioread*/iowrite* — never
-     *    dereference the pointer directly. */
+    /* 4. ioread*／iowrite* を使ってデバイスにアクセスする — ポインタを
+     *    決して直接デリファレンスしないこと。 */
     u32 version = ioread32(base + REG_VERSION);
     iowrite32(CTRL_ENABLE, base + REG_CONTROL);
 
@@ -148,27 +148,27 @@ static void my_driver_remove(struct pci_dev *pdev)
 }
 ```
 
-### Function Reference {#function-reference}
+### 関数リファレンス {#function-reference}
 
 **`pci_request_region(pdev, bar, name)`** / **`pci_request_regions(pdev, name)`**
 
-Claims one BAR (or all BARs) by inserting entries into the kernel's `iomem` or `ioport` resource tree. Returns `-EBUSY` if another driver already owns the region. This is the software lock that prevents two drivers from simultaneously mapping the same hardware registers. Defined in [`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c).
+カーネルの`iomem`または`ioport`リソースツリーにエントリを挿入することで、1つのBAR（またはすべてのBAR）を確保する。別のドライバがすでにその領域を所有していれば`-EBUSY`を返す。これは、2つのドライバが同じハードウェアレジスタを同時にマップするのを防ぐソフトウェア上のロックである。[`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c)で定義されている。
 
 **`pci_iomap(pdev, bar, maxlen)`**
 
-Maps the BAR into kernel virtual address space and returns a `void __iomem *` cookie. Internally calls `ioremap()` for memory BARs or `__pci_ioport_map()` for I/O BARs. If `maxlen` is 0, the entire BAR is mapped. Defined in [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c).
+BARをカーネル仮想アドレス空間にマップし、`void __iomem *`のクッキーを返す。内部では、メモリBARには`ioremap()`を、I/O BARには`__pci_ioport_map()`を呼ぶ。`maxlen`が0なら、BAR全体がマップされる。[`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c)で定義されている。
 
 **`ioread32(addr)` / `iowrite32(val, addr)`**
 
-The correct way to access MMIO. These functions handle any required memory barriers and work correctly regardless of whether the underlying mapping is true MMIO or an I/O port range. Do **not** dereference the `__iomem` pointer directly -- the compiler will allow it but it bypasses the barriers and will break on some architectures.
+MMIOにアクセスする正しい方法である。これらの関数は必要なメモリバリアを処理し、下位のマッピングが本物のMMIOかI/Oポート範囲かにかかわらず正しく動作する。`__iomem`ポインタを直接デリファレンス**しない**こと -- コンパイラは許してしまうが、バリアを迂回するため、一部のアーキテクチャでは壊れる。
 
 **`pci_iounmap(pdev, addr)` / `pci_release_regions(pdev)`**
 
-Teardown pair for the mapping and claim. Always call them in driver `remove()`.
+マッピングと確保の後始末を行うペアである。ドライバの`remove()`で必ず呼ぶこと。
 
-### Managed Variant: `pcim_iomap()` {#managed-variant-pcim_iomap}
+### マネージド版: `pcim_iomap()` {#managed-variant-pcim_iomap}
 
-For drivers that want automatic cleanup on driver detach, the devres-managed variant `pcim_iomap()` is available. It requires `pcim_enable_device()` instead of `pci_enable_device()`. The mapping is automatically released when the driver unbinds. Defined in [`drivers/pci/devres.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/devres.c).
+ドライバのデタッチ時に自動的な後始末を望むドライバ向けに、devresで管理される変種`pcim_iomap()`が用意されている。これには`pci_enable_device()`の代わりに`pcim_enable_device()`が必要である。マッピングはドライバがアンバインドされると自動的に解放される。[`drivers/pci/devres.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/devres.c)で定義されている。
 
 ```c
 err = pcim_enable_device(pdev);
@@ -178,61 +178,61 @@ if (err)
 base = pcim_iomap(pdev, 0, 0);
 if (!base)
     return -ENOMEM;
-/* No explicit cleanup needed in remove() */
+/* remove() での明示的な後始末は不要 */
 ```
 
-## Memory Types for BAR Mappings {#memory-types-for-bar-mappings}
+## BARマッピングのメモリタイプ {#memory-types-for-bar-mappings}
 
-How the CPU accesses MMIO depends on the **page attribute** applied when the virtual mapping is created. The choice has large performance implications. On x86, this is controlled by the **Page Attribute Table (PAT)**, implemented in [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c).
+CPUがMMIOにどうアクセスするかは、仮想マッピングの作成時に適用される**ページ属性**に依存する。この選択は性能に大きく影響する。x86では、これは**Page Attribute Table（PAT）**によって制御され、[`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c)に実装されている。
 
-### Uncached (UC) — Non-Prefetchable BARs {#uncached-uc-non-prefetchable-bars}
+### キャッシュなし（UC） — プリフェッチ不可のBAR {#uncached-uc-non-prefetchable-bars}
 
-`ioremap()` (called internally by `pci_iomap()`) maps the region as **UC-minus** (uncacheable, write-posted). Every read and write goes directly to the device; no data is held in any CPU cache. This is mandatory for control registers where each read may have side effects and writes must be visible to the device immediately.
+`ioremap()`（`pci_iomap()`から内部的に呼ばれる）は、領域を**UC-minus**（キャッシュ不可、ライトポステッド）としてマップする。すべての読み書きはデバイスに直接行き、どのCPUキャッシュにもデータは保持されない。これは、各読み出しが副作用を持ちうるうえ、書き込みが即座にデバイスから見える必要がある制御レジスタには必須である。
 
 ```c
-/* ioremap() is the default -- UC-minus caching */
+/* ioremap() がデフォルト -- UC-minus キャッシング */
 void __iomem *ioremap(resource_size_t phys_addr, unsigned long size);
 ```
 
-### Write-Combining (WC) — Prefetchable BARs {#write-combining-wc-prefetchable-bars}
+### ライトコンバイニング（WC） — プリフェッチ可能なBAR {#write-combining-wc-prefetchable-bars}
 
-`ioremap_wc()` maps the region with **write-combining** enabled. The CPU may buffer multiple writes and send them to the device in a single burst, dramatically improving throughput for sequential writes. Reads still go to the device but there is no read prefetching. This is the correct choice for framebuffers, PCIe peer-to-peer memory, and any large, streaming-write workload.
+`ioremap_wc()`は、**ライトコンバイニング**を有効にして領域をマップする。CPUは複数の書き込みをバッファし、1回のバーストでデバイスに送ることができるため、シーケンシャルな書き込みのスループットが劇的に向上する。読み出しは依然としてデバイスに行くが、読み出しのプリフェッチはない。これはフレームバッファ、PCIeのピアツーピアメモリ、そしてあらゆる大規模なストリーミング書き込みのワークロードにとって正しい選択である。
 
 ```c
-/* ioremap_wc() -- write-combining for prefetchable BARs */
+/* ioremap_wc() -- プリフェッチ可能な BAR 向けのライトコンバイニング */
 void __iomem *ioremap_wc(resource_size_t phys_addr, unsigned long size);
 ```
 
-The PCI subsystem provides a wrapper for the write-combining case, defined in [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c):
+PCIサブシステムは、ライトコンバイニングの場合のためのラッパーを提供しており、[`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c)で定義されている。
 
 ```c
-/* Maps a BAR with write-combining (prefetchable BARs only) */
+/* BAR をライトコンバイニングでマップする（プリフェッチ可能な BAR のみ） */
 void __iomem *pci_iomap_wc(struct pci_dev *dev, int bar,
                             unsigned long maxlen);
 ```
 
-`pci_iomap_wc()` returns `NULL` for I/O BARs (write-combining makes no sense for port I/O) and calls `ioremap_wc()` for memory BARs.
+`pci_iomap_wc()`は、I/O BARに対しては`NULL`を返し（ポートI/Oにライトコンバイニングは意味をなさない）、メモリBARに対しては`ioremap_wc()`を呼ぶ。
 
-### Choosing the Right Mapping {#choosing-the-right-mapping}
+### 適切なマッピングの選択 {#choosing-the-right-mapping}
 
 ```c
 unsigned long flags = pci_resource_flags(pdev, bar);
 
 if (flags & IORESOURCE_PREFETCH) {
-    /* Safe to use write-combining */
+    /* ライトコンバイニングを安全に使える */
     base = pci_iomap_wc(pdev, bar, 0);
 } else {
-    /* Non-prefetchable: use uncached */
+    /* プリフェッチ不可: キャッシュなしを使う */
     base = pci_iomap(pdev, bar, 0);
 }
 ```
 
-!!! warning "Performance impact"
-    Mapping a 256 MB framebuffer as UC instead of WC can reduce sequential write throughput by an order of magnitude. GPU drivers are careful to use `pci_iomap_wc()` for VRAM BARs and `pci_iomap()` for register BARs even on the same device.
+!!! warning "性能への影響"
+    256 MBのフレームバッファをWCではなくUCとしてマップすると、シーケンシャルな書き込みのスループットが1桁低下しうる。GPUドライバは、同じデバイス上であっても、VRAMのBARには`pci_iomap_wc()`を、レジスタのBARには`pci_iomap()`を慎重に使い分けている。
 
-## IOMMU and BAR Access {#iommu-and-bar-access}
+## IOMMUとBARアクセス {#iommu-and-bar-access}
 
-The IOMMU translates device-issued DMA addresses (device → RAM direction). BAR accesses travel in the **opposite direction** (CPU → device) and bypass the IOMMU entirely. The CPU issues a physical memory transaction on the PCIe bus; the device responds directly.
+IOMMUは、デバイスが発行するDMAアドレス（デバイス → RAMの方向）を変換する。BARアクセスは**逆方向**（CPU → デバイス）に進み、IOMMUを完全に迂回する。CPUはPCIeバス上で物理メモリトランザクションを発行し、デバイスが直接応答する。
 
 ```
 DMA (device → RAM):
@@ -242,33 +242,33 @@ MMIO (CPU → device):
   CPU --[phys addr]--> PCIe --[reaches device, not RAM]
 ```
 
-The IOMMU is not involved in MMIO reads or writes. However, during BAR assignment the firmware (and optionally the kernel) must ensure BAR physical addresses do not overlap with installed RAM. On x86 this is enforced by the memory map in `E820`, and the PCI subsystem checks `iomem_resource` before accepting BAR assignments.
+IOMMUはMMIOの読み書きには関与しない。ただし、BARの割り当て時に、ファームウェア（および任意でカーネル）は、BARの物理アドレスが搭載RAMと重ならないことを保証しなければならない。x86では、これは`E820`のメモリマップによって強制され、PCIサブシステムはBARの割り当てを受け入れる前に`iomem_resource`を確認する。
 
-## 64-Bit BARs and Address Space Conflicts {#64-bit-bars-and-address-space-conflicts}
+## 64ビットBARとアドレス空間の衝突 {#64-bit-bars-and-address-space-conflicts}
 
-On systems with more than 4 GB of RAM, 32-bit BARs (which can only describe addresses below 4 GB) can conflict with installed memory. On most modern x86 systems, firmware handles this by reserving a region below 4 GB (sometimes called the **PCI hole** or **TOLUD** -- Top Of Low Usable DRAM) where BARs are placed without conflict. However, this shrinks the effective addressable low memory.
+4 GBを超えるRAMを持つシステムでは、32ビットBAR（4 GB未満のアドレスしか記述できない）が搭載メモリと衝突しうる。現代のほとんどのx86システムでは、ファームウェアが4 GB未満の領域（**PCIホール**や**TOLUD** -- Top Of Low Usable DRAM -- と呼ばれることがある）を予約し、そこにBARを衝突なく配置することでこれに対処する。しかし、これは実質的にアドレス可能な低位メモリを縮小させる。
 
-To check whether a BAR uses 64-bit addressing from driver code:
+ドライバのコードからBARが64ビットアドレッシングを使っているかを確認するには、次のようにする。
 
 ```c
 if (pci_resource_flags(pdev, bar) & IORESOURCE_MEM_64) {
-    /* BAR uses a 64-bit address; bar+1 is consumed for the high bits */
+    /* BAR は64ビットアドレスを使う。bar+1 は上位ビットに消費される */
     pr_info("64-bit BAR at %pa, size %pa\n",
             &pci_resource_start(pdev, bar),
             &pci_resource_len(pdev, bar));
 }
 ```
 
-Modern NVMe drives, CXL memory devices, and high-end GPUs routinely use 64-bit BARs larger than 4 GB (e.g., a 16 GB VRAM BAR) placed above the 4 GB boundary. The kernel places these via `pci_reassign_resource()` in [`drivers/pci/setup-res.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/setup-res.c) when firmware leaves BARs unassigned or assigns them suboptimally.
+現代のNVMeドライブ、CXLメモリデバイス、ハイエンドGPUは、4 GBを超える64ビットBAR（例: 16 GBのVRAM BAR）を4 GB境界より上に配置して日常的に使っている。ファームウェアがBARを未割り当てのまま残したり、最適でない形で割り当てたりした場合、カーネルは[`drivers/pci/setup-res.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/setup-res.c)の`pci_reassign_resource()`を使ってこれらを配置する。
 
-!!! note "Firmware vs. kernel BAR assignment"
-    Most x86 systems have firmware assign all BARs before the kernel boots. The kernel then reads and trusts those assignments. On embedded systems or when `pci=realloc` is passed on the kernel command line, the kernel may reassign BARs itself.
+!!! note "ファームウェアとカーネルによるBARの割り当て"
+    ほとんどのx86システムでは、カーネルが起動する前にファームウェアがすべてのBARを割り当てる。カーネルはその割り当てを読み取り、信頼する。組み込みシステムや、カーネルコマンドラインに`pci=realloc`が渡された場合には、カーネル自身がBARを再割り当てすることがある。
 
-## Debugging BAR Mappings {#debugging-bar-mappings}
+## BARマッピングのデバッグ {#debugging-bar-mappings}
 
 ### `lspci -v` {#lspci-v}
 
-Shows all BARs assigned to a device, including their physical addresses, sizes, and types:
+デバイスに割り当てられたすべてのBARを、物理アドレス、サイズ、種類を含めて表示する。
 
 ```
 $ lspci -v -s 03:00.0
@@ -279,11 +279,11 @@ $ lspci -v -s 03:00.0
         I/O ports at e000 [size=128]
 ```
 
-The lines after the device description are the BARs. `prefetchable` indicates `IORESOURCE_PREFETCH` is set.
+デバイスの説明の後の行がBARである。`prefetchable`は`IORESOURCE_PREFETCH`が設定されていることを示す。
 
 ### `/proc/iomem` {#prociomem}
 
-Shows how BARs occupy the physical address space alongside RAM and other resources:
+BARが、RAMや他のリソースと並んで物理アドレス空間をどのように占有しているかを示す。
 
 ```
 $ cat /proc/iomem
@@ -296,11 +296,11 @@ f6000000-f6ffffff : 0000:03:00.0
   f6000000-f6ffffff : nvidia
 ```
 
-Entries are indented to show the resource hierarchy: bus window → device BAR → driver claim.
+エントリはリソースの階層を示すためにインデントされている。バスウィンドウ → デバイスのBAR → ドライバによる確保、である。
 
 ### `/sys/bus/pci/devices/BBDF/resource` {#sysbuspcidevicesbbdfresource}
 
-Each PCI device has a `resource` file showing all six BARs plus the expansion ROM, one per line, as three hex fields: start, end, flags.
+各PCIデバイスには`resource`ファイルがあり、6つのBARすべてと拡張ROMを、1行に1つずつ、開始・終了・フラグの3つの16進フィールドとして示す。
 
 ```
 $ cat /sys/bus/pci/devices/0000:03:00.0/resource
@@ -312,76 +312,76 @@ $ cat /sys/bus/pci/devices/0000:03:00.0/resource
 0x0000000000000000 0x0000000000000000 0x0000000000000000
 ```
 
-The third column is the `IORESOURCE_*` flags. `0x200` is `IORESOURCE_MEM`; `0x2000` is `IORESOURCE_PREFETCH`; `0x100000` is `IORESOURCE_MEM_64`.
+3列目は`IORESOURCE_*`フラグである。`0x200`は`IORESOURCE_MEM`、`0x2000`は`IORESOURCE_PREFETCH`、`0x100000`は`IORESOURCE_MEM_64`である。
 
-### `/sys/bus/pci/devices/BBDF/resource0` through `resource5` {#sysbuspcidevicesbbdfresource0-through-resource5}
+### `/sys/bus/pci/devices/BBDF/resource0`から`resource5` {#sysbuspcidevicesbbdfresource0-through-resource5}
 
-These files are `mmap()`-able from userspace (when the BAR is not marked exclusive). A userspace tool can map a BAR directly without a kernel driver:
+これらのファイルは（BARが排他としてマークされていなければ）ユーザー空間から`mmap()`できる。ユーザー空間のツールは、カーネルドライバなしにBARを直接マップできる。
 
 ```c
 int fd = open("/sys/bus/pci/devices/0000:03:00.0/resource0", O_RDWR);
-size_t len = /* from resource file or lspci */ 16 * 1024 * 1024;
+size_t len = /* resource ファイルまたは lspci から */ 16 * 1024 * 1024;
 void *mmio = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-uint32_t val = *(volatile uint32_t *)mmio;  /* direct access from userspace */
+uint32_t val = *(volatile uint32_t *)mmio;  /* ユーザー空間からの直接アクセス */
 ```
 
-This is how tools like `nvtop` and GPU compute debuggers access device memory without a kernel driver. Note that `pci_request_regions_exclusive()` prevents this by setting `IORESOURCE_EXCLUSIVE`, blocking the sysfs mmap path.
+これは、`nvtop`やGPU計算用デバッガのようなツールが、カーネルドライバなしにデバイスメモリにアクセスする方法である。なお、`pci_request_regions_exclusive()`は`IORESOURCE_EXCLUSIVE`を設定してsysfsのmmap経路をブロックすることで、これを防ぐ。
 
-### Checking BAR assignments at boot {#checking-bar-assignments-at-boot}
+### 起動時のBAR割り当ての確認 {#checking-bar-assignments-at-boot}
 
 ```bash
-# All PCI-related messages during bus enumeration
+# バス列挙中の PCI 関連のすべてのメッセージ
 dmesg | grep -i pci | grep -i BAR
 
-# Check a specific device's resources from sysfs
+# sysfs から特定のデバイスのリソースを確認する
 cat /sys/bus/pci/devices/0000:03:00.0/resource
 
-# Show the full iomem map
+# iomem マップ全体を表示する
 cat /proc/iomem | grep -A2 "PCI Bus"
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c) | `pci_iomap()`, `pci_iomap_wc()`, `pci_iomap_range()`, `pci_iounmap()` |
-| [`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c) | `pci_request_region()`, `pci_request_regions()`, `pci_release_regions()` |
-| [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c) | `pci_setup_device()`, `pci_read_bases()` — BAR sizing and enumeration |
-| [`drivers/pci/devres.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/devres.c) | `pcim_iomap()`, `pcim_enable_device()` — managed (devres) variants |
-| [`drivers/pci/setup-res.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/setup-res.c) | `pci_reassign_resource()` — BAR relocation |
-| [`include/linux/pci.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pci.h) | `pci_resource_start()`, `pci_resource_len()`, `pci_resource_flags()` |
-| [`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h) | `PCI_BASE_ADDRESS_*` constants, `PCI_STD_NUM_BARS` |
-| [`include/linux/ioport.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ioport.h) | `IORESOURCE_MEM`, `IORESOURCE_PREFETCH`, `IORESOURCE_MEM_64` |
-| [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c) | `ioremap()`, `ioremap_wc()`, `ioremap_uc()` on x86 |
-| [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) | PAT — page attribute table controlling cache modes |
+| [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c) | `pci_iomap()`、`pci_iomap_wc()`、`pci_iomap_range()`、`pci_iounmap()` |
+| [`drivers/pci/pci.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/pci.c) | `pci_request_region()`、`pci_request_regions()`、`pci_release_regions()` |
+| [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c) | `pci_setup_device()`、`pci_read_bases()` — BARのサイジングと列挙 |
+| [`drivers/pci/devres.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/devres.c) | `pcim_iomap()`、`pcim_enable_device()` — マネージド（devres）版 |
+| [`drivers/pci/setup-res.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/setup-res.c) | `pci_reassign_resource()` — BARの再配置 |
+| [`include/linux/pci.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/pci.h) | `pci_resource_start()`、`pci_resource_len()`、`pci_resource_flags()` |
+| [`include/uapi/linux/pci_regs.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pci_regs.h) | `PCI_BASE_ADDRESS_*`定数、`PCI_STD_NUM_BARS` |
+| [`include/linux/ioport.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/ioport.h) | `IORESOURCE_MEM`、`IORESOURCE_PREFETCH`、`IORESOURCE_MEM_64` |
+| [`arch/x86/mm/ioremap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/ioremap.c) | x86での`ioremap()`、`ioremap_wc()`、`ioremap_uc()` |
+| [`arch/x86/mm/pat/memtype.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/mm/pat/memtype.c) | PAT — キャッシュモードを制御するページ属性テーブル |
 
 ---
 
-## References {#references}
+## 参考資料 {#references}
 
-### Further Reading {#further-reading}
+### 参考文献 {#further-reading}
 
-- [Kernel documentation: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — authoritative guide to MMIO access functions
-- [PCI Local Bus Specification, rev 3.0](https://pcisig.com/) — defines BAR layout, sizing protocol, and type bits
-- [LWN: PCI resource management](https://lwn.net/Articles/51834/) — early overview of how Linux manages PCI resources
-- [LWN: Write-combining mappings](https://lwn.net/Articles/252029/) — PAT and write-combining performance on x86
+- [Kernel documentation: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — MMIOアクセス関数に関する信頼できるガイド
+- [PCI Local Bus Specification, rev 3.0](https://pcisig.com/) — BARのレイアウト、サイジングのプロトコル、タイプビットを定義している
+- [LWN: PCI resource management](https://lwn.net/Articles/51834/) — LinuxがPCIリソースをどのように管理するかの初期の概観
+- [LWN: Write-combining mappings](https://lwn.net/Articles/252029/) — x86でのPATとライトコンバイニングの性能
 
-### Related Pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [DMA Memory Allocation](dma.md) — how devices transfer data to/from RAM (distinct from MMIO)
-- [vmalloc](vmalloc.md) — kernel virtual address space that `ioremap()` carves from
-- [Page Tables](page-tables.md) — how `ioremap()` mappings appear in the kernel page table
-- [CXL Memory Tiering](cxl-memory-tiering.md) — CXL devices expose large 64-bit BARs for memory expansion
+- [DMAメモリ割り当て](dma.md) — デバイスがRAMとの間でどのようにデータを転送するか（MMIOとは別物）
+- [vmalloc](vmalloc.md) — `ioremap()`が切り出すカーネル仮想アドレス空間
+- [ページテーブル](page-tables.md) — `ioremap()`のマッピングがカーネルのページテーブルにどう現れるか
+- [CXLメモリ階層化](cxl-memory-tiering.md) — CXLデバイスはメモリ拡張のために大きな64ビットBARを公開する
 
-## Further reading {#further-reading_1}
+## 参考文献 {#further-reading_1}
 
-- [Kernel docs: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — authoritative guide to `ioread*`/`iowrite*`, `ioremap` variants, and MMIO access rules
-- [`Documentation/PCI/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/PCI) — kernel PCI documentation directory covering BAR assignment, error handling, and host bridge enumeration
-- [`Documentation/PCI/pci.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/PCI/pci.rst) — step-by-step guide to writing PCI drivers including the enable/request/map lifecycle
-- [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c) — `pci_iomap()` and `pci_iomap_wc()` source
-- [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c) — `pci_read_bases()` BAR sizing protocol implementation
-- [LWN: PCI resource management](https://lwn.net/Articles/51834/) — early overview of how Linux claims and tracks PCI resources (2003)
-- [LWN: Write-combining and the PAT](https://lwn.net/Articles/252029/) — PAT memory types and write-combining performance on x86 (2008)
-- [../drivers/pci-driver.md](../drivers/pci-driver.md) — PCI driver model: probe/remove lifecycle, device IDs, and power management
-- [Device Memory Coherency](device-coherency.md) — cache attribute selection (`ioremap` vs `ioremap_wc`) for MMIO regions
-- [DMA Memory Allocation](dma.md) — device-to-RAM data paths that complement BAR-based MMIO access
+- [Kernel docs: Device I/O](https://docs.kernel.org/driver-api/device-io.html) — `ioread*`/`iowrite*`、`ioremap`の変種、MMIOアクセスの規則に関する信頼できるガイド
+- [`Documentation/PCI/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/PCI) — BARの割り当て、エラー処理、ホストブリッジの列挙を扱うカーネルのPCIドキュメントのディレクトリ
+- [`Documentation/PCI/pci.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/PCI/pci.rst) — 有効化／要求／マップのライフサイクルを含む、PCIドライバの書き方のステップバイステップガイド
+- [`drivers/pci/iomap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/iomap.c) — `pci_iomap()`と`pci_iomap_wc()`のソース
+- [`drivers/pci/probe.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/pci/probe.c) — `pci_read_bases()`によるBARサイジングのプロトコルの実装
+- [LWN: PCI resource management](https://lwn.net/Articles/51834/) — LinuxがPCIリソースをどのように確保・追跡するかの初期の概観（2003年）
+- [LWN: Write-combining and the PAT](https://lwn.net/Articles/252029/) — x86でのPATメモリタイプとライトコンバイニングの性能（2008年）
+- [../drivers/pci-driver.md](../drivers/pci-driver.md) — PCIドライバモデル: probe/removeのライフサイクル、デバイスID、電源管理
+- [デバイスメモリのコヒーレンシ](device-coherency.md) — MMIO領域に対するキャッシュ属性の選択（`ioremap`か`ioremap_wc`か）
+- [DMAメモリ割り当て](dma.md) — BARベースのMMIOアクセスを補完する、デバイスからRAMへのデータ経路

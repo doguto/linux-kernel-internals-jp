@@ -1,25 +1,25 @@
-# Swap Accounting in Cgroups {#swap-accounting-in-cgroups}
+# cgroupにおけるスワップの計上 {#swap-accounting-in-cgroups}
 
-> How swap usage is tracked, limited, and monitored per cgroup
+> スワップ使用量がcgroupごとにどのように追跡・制限・監視されるか
 
-## Why Per-Cgroup Swap Accounting Matters {#why-per-cgroup-swap-accounting-matters}
+## なぜcgroupごとのスワップ計上が重要か {#why-per-cgroup-swap-accounting-matters}
 
-Without swap accounting, a container with a `memory.max` of 1G can page out 2G of anonymous memory to swap and effectively use 3G of memory — 1G in RAM plus 2G on disk. The cgroup limit is bypassed. Per-cgroup swap accounting closes this gap by counting swap usage separately and enforcing an independent limit.
+スワップの計上がなければ、`memory.max`が1Gのコンテナは2Gの匿名メモリをスワップへページアウトでき、実質的に3Gのメモリ — RAMに1G、ディスクに2G — を使えてしまう。cgroupの制限が迂回されるのである。cgroupごとのスワップ計上は、スワップ使用量を別個に数え、独立した制限を課すことでこの穴を塞ぐ。
 
-cgroup v2 tracks RAM and swap with two separate counters and two separate limits. This separation is intentional: it gives operators independent control over how much RAM a cgroup uses and how much swap it can consume.
+cgroup v2は、RAMとスワップを2つの別々のカウンタと2つの別々の制限で追跡する。この分離は意図的なものであり、cgroupが使うRAMの量と消費できるスワップの量を、運用者が独立に制御できるようにしている。
 
-## The cgroup v2 Swap Interface {#the-cgroup-v2-swap-interface}
+## cgroup v2のスワップインターフェース {#the-cgroup-v2-swap-interface}
 
 ### memory.swap.current {#memoryswapcurrent}
 
-`memory.swap.current` reports the number of bytes a cgroup's anonymous pages currently occupy in swap. **This is swap-only** — pages that have been swapped out and are not currently in RAM.
+`memory.swap.current`は、cgroupの匿名pageが現在スワップ上で占めているバイト数を報告する。**これはスワップのみである** — スワップアウトされ、現在RAMにないpageである。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.swap.current
-# 209715200   (200MB currently in swap)
+# 209715200   （現在 200MB がスワップ上にある）
 ```
 
-A page that has been swapped out and then swapped back in is no longer counted here (it is now in RAM and counted in `memory.current`). A page that has been copied to swap but is still resident in RAM (swap cache) counts in `memory.current`, not `memory.swap.current`. The two counters are disjoint: `memory.current + memory.swap.current` gives the total memory footprint of the cgroup across both RAM and swap.
+スワップアウトされた後にスワップインされたpageは、ここではもう数えられない（今はRAMにあり、`memory.current`に数えられる）。スワップにコピーされたがまだRAMに常駐しているpage（スワップキャッシュ）は、`memory.swap.current`ではなく`memory.current`に数えられる。2つのカウンタは互いに重複しない。`memory.current + memory.swap.current`は、RAMとスワップの両方にわたるcgroupの総メモリフットプリントを与える。
 
 ```
 memory.current        = pages in RAM charged to this cgroup
@@ -30,182 +30,182 @@ total footprint       = memory.current + memory.swap.current
 
 ### memory.swap.max {#memoryswapmax}
 
-`memory.swap.max` is the hard limit on swap usage. When a cgroup's `memory.swap.current` reaches this value, further swapping for that cgroup is blocked. Anonymous pages that would have been swapped out are instead reclaimed directly (if possible) or trigger OOM.
+`memory.swap.max`はスワップ使用量のハードリミットである。cgroupの`memory.swap.current`がこの値に達すると、そのcgroupのそれ以上のスワップはブロックされる。スワップアウトされるはずだった匿名pageは、代わりに（可能なら）直接回収されるか、OOMを引き起こす。
 
 ```bash
-# Disable swap entirely for this cgroup
+# この cgroup のスワップを完全に無効化する
 echo 0 > /sys/fs/cgroup/mycontainer/memory.swap.max
 
-# Allow up to 512MB of swap
+# 最大 512MB のスワップを許可する
 echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max
 
-# Unlimited swap (default if not set)
+# スワップ無制限（未設定時のデフォルト）
 echo max > /sys/fs/cgroup/mycontainer/memory.swap.max
 ```
 
-When `memory.swap.max = 0`, the cgroup behaves as if swap does not exist: anonymous pages cannot be paged out, so memory pressure leads directly to OOM rather than swapping. This is the behavior most container orchestrators rely on when `--memory-swap` is set equal to `--memory`.
+`memory.swap.max = 0`のとき、cgroupはスワップが存在しないかのように振る舞う。匿名pageはページアウトできないため、メモリ逼迫はスワップではなく直接OOMにつながる。これは、`--memory-swap`を`--memory`と等しく設定したときに、ほとんどのコンテナオーケストレータが頼りにしている挙動である。
 
-!!! note "memory.swap.max only limits swap pages, not memsw"
-    Setting `memory.swap.max = 512M` means the cgroup can use up to 512MB of swap in addition to its `memory.max`. It does not mean the total (RAM + swap) is capped at 512MB. For a combined limit, set both `memory.max` and `memory.swap.max`.
+!!! note "memory.swap.maxはスワップpageのみを制限し、memswではない"
+    `memory.swap.max = 512M`と設定すると、cgroupは`memory.max`に加えて最大512MBのスワップを使えるという意味になる。合計（RAM + スワップ）が512MBに制限されるという意味ではない。合算の制限が欲しければ、`memory.max`と`memory.swap.max`の両方を設定する。
 
-### memory.swap.high (v5.8+) {#memoryswaphigh-v58}
+### memory.swap.high（v5.8+） {#memoryswaphigh-v58}
 
-`memory.swap.high` is a soft limit on swap usage, analogous to `memory.high` for RAM. When `memory.swap.current` exceeds `memory.swap.high`, the kernel throttles processes in the cgroup and tries to reclaim swap (by swapping pages back in and then freeing them, or by reclaiming the freed anonymous pages).
+`memory.swap.high`はスワップ使用量のソフトリミットであり、RAMに対する`memory.high`に相当する。`memory.swap.current`が`memory.swap.high`を超えると、カーネルはcgroup内のプロセスをスロットリングし、スワップの回収を試みる（pageをスワップインしてから解放するか、解放された匿名pageを回収することによって）。
 
-No processes are killed at `memory.swap.high`. It exists to create back-pressure before `memory.swap.max` is reached.
+`memory.swap.high`ではプロセスはkillされない。これは`memory.swap.max`に達する前に背圧（バックプレッシャー）を生み出すために存在する。
 
-**Introduced**: This interface was added in kernel v5.8. See [LWN: Cgroup swap high limit](https://lwn.net/Articles/912708/) for the motivation and design discussion.
+**導入**: このインターフェースはカーネルv5.8で追加された。動機と設計の議論については[LWN: Cgroup swap high limit](https://lwn.net/Articles/912708/)を参照。
 
 ```bash
-# Throttle when swap exceeds 256MB, hard stop at 512MB
+# スワップが 256MB を超えたらスロットリングし、512MB でハードストップする
 echo 256M > /sys/fs/cgroup/mycontainer/memory.swap.high
 echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max
 ```
 
-If your kernel is older than v6.2, `memory.swap.high` will not exist. Check with:
+カーネルがv6.2より古い場合、`memory.swap.high`は存在しない。次で確認する。
 
 ```bash
 ls /sys/fs/cgroup/mycontainer/memory.swap.high 2>/dev/null || echo "not available (kernel < 5.8)"
 ```
 
-### memory.swap.events (v4.18+) {#memoryswapevents-v418}
+### memory.swap.events（v4.18+） {#memoryswapevents-v418}
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.swap.events
-# high 12    <- times swap exceeded memory.swap.high
-# max 2      <- times swap hit memory.swap.max
-# fail 0     <- swap allocation failures
+# high 12    <- スワップが memory.swap.high を超えた回数
+# max 2      <- スワップが memory.swap.max に達した回数
+# fail 0     <- スワップ割り当ての失敗回数
 ```
 
-This file was introduced in kernel v6.5 alongside other swap accounting improvements. On older kernels, swap events are not reported separately — swap-related OOM events appear in `memory.events`.
+このファイルは、他のスワップ計上の改善とともにカーネルv6.5で導入された。古いカーネルではスワップイベントは別個に報告されず、スワップ関連のOOMイベントは`memory.events`に現れる。
 
-## zswap: Compressed Swap per Cgroup {#zswap-compressed-swap-per-cgroup}
+## zswap: cgroupごとの圧縮スワップ {#zswap-compressed-swap-per-cgroup}
 
-[zswap](https://docs.kernel.org/admin-guide/mm/zswap.html) is an in-kernel compressed cache for swap pages. Instead of writing anonymous pages directly to disk, zswap compresses them and stores them in a pool of RAM. Pages that cannot fit in zswap are written to disk as usual. This trades CPU for reduced swap I/O.
+[zswap](https://docs.kernel.org/admin-guide/mm/zswap.html)は、スワップpageのためのカーネル内圧縮キャッシュである。匿名pageを直接ディスクに書き込む代わりに、zswapはそれらを圧縮してRAMのプールに格納する。zswapに収まらないpageは通常どおりディスクに書き込まれる。これはCPUと引き換えにスワップI/Oを減らすものである。
 
 ### memory.zswap.current {#memoryzswapcurrent}
 
-`memory.zswap.current` reports the **compressed** bytes this cgroup is using in the zswap pool — the actual RAM consumed by the compressed data. The uncompressed logical size of the swap data is larger; `memory.zswap.current` reflects the physical RAM footprint of the compressed pages in the pool.
+`memory.zswap.current`は、このcgroupがzswapプールで使用している**圧縮後の**バイト数 — 圧縮データが実際に消費しているRAM — を報告する。スワップデータの非圧縮の論理サイズはこれより大きい。`memory.zswap.current`は、プール内の圧縮pageの物理RAMフットプリントを反映する。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.zswap.current
-# 41943040   (40MB of RAM holding compressed swap pages; uncompressed equivalent may be 100MB+)
+# 41943040   （圧縮スワップ page を保持する RAM が 40MB。非圧縮換算では 100MB 以上の可能性）
 ```
 
 ### memory.zswap.max {#memoryzswapmax}
 
-`memory.zswap.max` limits how much of the zswap pool this cgroup can use. Without a per-cgroup zswap limit, a single cgroup could fill the entire zswap pool and force other cgroups' pages to disk.
+`memory.zswap.max`は、このcgroupがzswapプールをどれだけ使えるかを制限する。cgroupごとのzswap制限がないと、1つのcgroupがzswapプール全体を埋め尽くし、他のcgroupのpageをディスクへ追いやってしまう可能性がある。
 
-**Commit**: [f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25) ("zswap: memcg accounting")
+**コミット**: [f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25)（"zswap: memcg accounting"）
 
-**Author**: Johannes Weiner (kernel v6.5)
+**作者**: Johannes Weiner（カーネルv6.5）
 
 ```bash
-# Limit this cgroup to 200MB of zswap
+# この cgroup の zswap を 200MB に制限する
 echo 200M > /sys/fs/cgroup/mycontainer/memory.zswap.max
 
-# Disable zswap for this cgroup (use disk swap directly)
+# この cgroup の zswap を無効化する（ディスクスワップを直接使う）
 echo 0 > /sys/fs/cgroup/mycontainer/memory.zswap.max
 
-# Unlimited zswap (default)
+# zswap 無制限（デフォルト）
 echo max > /sys/fs/cgroup/mycontainer/memory.zswap.max
 ```
 
-!!! note "memory.zswap.max requires zswap to be enabled system-wide"
-    If zswap is not enabled (check `cat /sys/module/zswap/parameters/enabled`), `memory.zswap.current` will always be 0 and `memory.zswap.max` has no effect. See the [zswap documentation](https://docs.kernel.org/admin-guide/mm/zswap.html) for enabling zswap.
+!!! note "memory.zswap.maxにはシステム全体でzswapが有効である必要がある"
+    zswapが有効でない場合（`cat /sys/module/zswap/parameters/enabled`で確認）、`memory.zswap.current`は常に0であり、`memory.zswap.max`は効果がない。zswapの有効化については[zswapのドキュメント](https://docs.kernel.org/admin-guide/mm/zswap.html)を参照。
 
-## The cgroup v1 memsw Interface (Legacy) {#the-cgroup-v1-memsw-interface-legacy}
+## cgroup v1のmemswインターフェース（レガシー） {#the-cgroup-v1-memsw-interface-legacy}
 
-cgroup v1 used a different model: a combined **memory + swap** limit called `memsw`. The relevant files were:
+cgroup v1は異なるモデルを使っていた。`memsw`と呼ばれる、**メモリ + スワップ**の合算制限である。関連するファイルは次のとおり。
 
-| File | Meaning |
+| ファイル | 意味 |
 |------|---------|
-| `memory.limit_in_bytes` | RAM-only limit |
-| `memory.memsw.limit_in_bytes` | Combined RAM + swap limit |
-| `memory.memsw.usage_in_bytes` | Current combined RAM + swap usage |
-| `memory.memsw.max_usage_in_bytes` | Peak combined usage |
+| `memory.limit_in_bytes` | RAMのみの制限 |
+| `memory.memsw.limit_in_bytes` | RAM + スワップの合算制限 |
+| `memory.memsw.usage_in_bytes` | 現在のRAM + スワップの合算使用量 |
+| `memory.memsw.max_usage_in_bytes` | 合算使用量のピーク |
 
-### Why memsw was problematic {#why-memsw-was-problematic}
+### なぜmemswは問題だったか {#why-memsw-was-problematic}
 
-The `memsw` model had a fundamental design issue: you could not limit swap independently of RAM. If you set `memory.limit_in_bytes = 1G` and `memory.memsw.limit_in_bytes = 2G`, the cgroup could use up to 1G of RAM and 1G of swap. But you could not say "use up to 1G of RAM and up to 512MB of swap" — the two limits were coupled by the combined counter.
+`memsw`モデルには根本的な設計上の問題があった。RAMとは独立にスワップを制限できなかったのである。`memory.limit_in_bytes = 1G`、`memory.memsw.limit_in_bytes = 2G`と設定すると、cgroupは最大1GのRAMと1Gのスワップを使えた。しかし「RAMは最大1G、スワップは最大512MB」と指定することはできなかった — 2つの制限は合算カウンタによって結合されていた。
 
-Additionally, the combined counter had performance issues. Every swap-in required updating both `memory.usage_in_bytes` and `memory.memsw.usage_in_bytes`, and the interaction between the two limits created subtle races.
+さらに、合算カウンタには性能上の問題があった。スワップインのたびに`memory.usage_in_bytes`と`memory.memsw.usage_in_bytes`の両方を更新する必要があり、2つの制限の相互作用が微妙な競合を生んでいた。
 
-### Why cgroup v2 separates them {#why-cgroup-v2-separates-them}
+### なぜcgroup v2はそれらを分離するのか {#why-cgroup-v2-separates-them}
 
-cgroup v2 replaced `memsw` with separate `memory.max` and `memory.swap.max`. This allows independent control:
+cgroup v2は`memsw`を、別々の`memory.max`と`memory.swap.max`に置き換えた。これにより独立した制御が可能になる。
 
 ```bash
-# v2: 1GB RAM, 512MB swap — independent limits
+# v2: RAM 1GB、スワップ 512MB — 独立した制限
 echo 1G   > /sys/fs/cgroup/mycontainer/memory.max
 echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max
 ```
 
-The separation also makes the semantics clearer: `memory.current` always means RAM, `memory.swap.current` always means disk swap. There is no combined counter to misinterpret.
+この分離はセマンティクスもより明確にする。`memory.current`は常にRAMを意味し、`memory.swap.current`は常にディスクスワップを意味する。誤解の元となる合算カウンタはない。
 
-## What Happens When the Swap Limit Is Hit {#what-happens-when-the-swap-limit-is-hit}
+## スワップ制限に達すると何が起きるか {#what-happens-when-the-swap-limit-is-hit}
 
-When `memory.swap.current` reaches `memory.swap.max`:
+`memory.swap.current`が`memory.swap.max`に達すると、次のようになる。
 
-1. The kernel cannot swap out any more anonymous pages from this cgroup.
-2. The kernel tries direct reclaim of file-backed pages (page cache) within the cgroup — these do not require swap.
-3. If reclaim cannot free enough memory to satisfy the allocation, the cgroup OOM killer is invoked.
+1. カーネルはこのcgroupからそれ以上匿名pageをスワップアウトできない。
+2. カーネルはcgroup内のファイルバックのpage（ページキャッシュ）の直接回収を試みる — これらはスワップを必要としない。
+3. 回収で割り当てを満たすのに十分なメモリを解放できなければ、cgroupのOOM killerが呼び出される。
 
-The OOM kill log will show a normal cgroup OOM (prefix: `Memory cgroup out of memory:`). There is no separate "swap limit exceeded" kill message — from the kernel's perspective, the cgroup ran out of memory because swapping was unavailable.
+OOM killのログには通常のcgroup OOM（接頭辞: `Memory cgroup out of memory:`）が表示される。「スワップ制限超過」専用のkillメッセージはない — カーネルから見れば、スワップが使えなかったためにcgroupがメモリ不足になったのである。
 
 ```bash
-# Observe swap limit being hit
+# スワップ制限に達したことを観察する
 cat /sys/fs/cgroup/mycontainer/memory.events
-# oom 1           <- OOM was triggered (may be due to swap limit)
+# oom 1           <- OOM が発生した（スワップ制限が原因の可能性あり）
 # oom_kill 1
 
-# If kernel >= 6.5, check swap events directly
+# カーネル >= 6.5 なら、スワップイベントを直接確認する
 cat /sys/fs/cgroup/mycontainer/memory.swap.events
-# max 1           <- swap.max was hit
+# max 1           <- swap.max に達した
 # fail 0
 ```
 
-## Monitoring Swap Pressure per Cgroup {#monitoring-swap-pressure-per-cgroup}
+## cgroupごとのスワップ逼迫の監視 {#monitoring-swap-pressure-per-cgroup}
 
-### Basic monitoring {#basic-monitoring}
+### 基本的な監視 {#basic-monitoring}
 
 ```bash
 CGROUP=/sys/fs/cgroup/mycontainer
 
-# Current RAM and swap usage
+# 現在の RAM とスワップの使用量
 echo "RAM:  $(cat $CGROUP/memory.current) bytes"
 echo "Swap: $(cat $CGROUP/memory.swap.current) bytes"
 
-# Limits
+# 制限
 echo "RAM limit:  $(cat $CGROUP/memory.max)"
 echo "Swap limit: $(cat $CGROUP/memory.swap.max)"
 
-# Usage as a percentage of limit (requires arithmetic)
+# 制限に対する使用率（算術演算が必要）
 swap_current=$(cat $CGROUP/memory.swap.current)
 swap_max=$(cat $CGROUP/memory.swap.max)
 [ "$swap_max" != "max" ] && echo "Swap usage: $((swap_current * 100 / swap_max))%"
 ```
 
-### Swap activity in memory.stat {#swap-activity-in-memorystat}
+### memory.statにおけるスワップ活動 {#swap-activity-in-memorystat}
 
-`memory.stat` includes swap-related counters:
+`memory.stat`にはスワップ関連のカウンタが含まれる。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.stat | grep -E "^(pswp|workingset)"
 
-# pswpin         <- pages swapped in
-# pswpout        <- pages swapped out
-# workingset_refault_anon  <- anonymous pages re-faulted after being reclaimed
+# pswpin         <- スワップインされた page
+# pswpout        <- スワップアウトされた page
+# workingset_refault_anon  <- 回収された後に再びフォールトした匿名 page
 ```
 
-!!! note "pgpgin/pgpgout not available in cgroup v2"
-    `pgpgin` and `pgpgout` are cgroup v1 fields. In cgroup v2 they are explicitly skipped by `mm/memcontrol.c`. Use `pswpin`/`pswpout` for swap activity and `iostat` for broader I/O accounting.
+!!! note "cgroup v2ではpgpgin/pgpgoutは利用できない"
+    `pgpgin`と`pgpgout`はcgroup v1のフィールドである。cgroup v2では`mm/memcontrol.c`によって明示的にスキップされる。スワップ活動には`pswpin`/`pswpout`を、より広いI/Oの計上には`iostat`を使う。
 
-`pswpout` increasing means the cgroup is actively swapping out. `workingset_refault_anon` increasing means pages that were swapped out are being faulted back in — a sign of swap thrashing, where the working set does not fit in the RAM allocation.
+`pswpout`が増加しているなら、cgroupは活発にスワップアウトしている。`workingset_refault_anon`が増加しているなら、スワップアウトされたpageがフォールトで戻されている — ワーキングセットがRAMの割り当てに収まっていない、スワップスラッシングの兆候である。
 
-### PSI as a swap pressure signal {#psi-as-a-swap-pressure-signal}
+### スワップ逼迫のシグナルとしてのPSI {#psi-as-a-swap-pressure-signal}
 
-Memory PSI (`memory.pressure`) captures stall time due to both RAM and swap pressure. A cgroup that is heavily swapping will show elevated PSI `some` values because processes stall waiting for swap I/O.
+メモリPSI（`memory.pressure`）は、RAMとスワップの両方の逼迫によるストール時間を捕捉する。激しくスワップしているcgroupは、プロセスがスワップI/Oを待ってストールするため、PSIの`some`の値が上昇する。
 
 ```bash
 cat /sys/fs/cgroup/mycontainer/memory.pressure
@@ -213,121 +213,121 @@ cat /sys/fs/cgroup/mycontainer/memory.pressure
 # full avg10=5.00  avg60=2.00 avg300=0.80 total=56789
 ```
 
-If `pswpin` + `pswpout` are high and PSI `some` is elevated, the cgroup is spending significant time on swap I/O. This typically means the working set is too large for the `memory.max` allocation.
+`pswpin` + `pswpout`が高く、PSIの`some`が上昇しているなら、cgroupはスワップI/Oにかなりの時間を費やしている。これは通常、ワーキングセットが`memory.max`の割り当てに対して大きすぎることを意味する。
 
-### Watch for swap in real time {#watch-for-swap-in-real-time}
+### スワップをリアルタイムで観察する {#watch-for-swap-in-real-time}
 
 ```bash
-# Poll swap usage every second
+# 1秒ごとにスワップ使用量をポーリングする
 while true; do
     swap=$(cat /sys/fs/cgroup/mycontainer/memory.swap.current)
     echo "$(date +%H:%M:%S) swap: $((swap / 1024 / 1024))MB"
     sleep 1
 done
 
-# Or use watch
+# あるいは watch を使う
 watch -n 1 "cat /sys/fs/cgroup/mycontainer/memory.swap.current | \
     awk '{printf \"%.1f MB\n\", \$1/1024/1024}'"
 ```
 
-## Swap in Docker and Kubernetes {#swap-in-docker-and-kubernetes}
+## DockerとKubernetesにおけるスワップ {#swap-in-docker-and-kubernetes}
 
 ### Docker {#docker}
 
-Docker exposes swap control through two flags:
+Dockerは2つのフラグでスワップの制御を公開している。
 
-| Flag | Effect |
+| フラグ | 効果 |
 |------|--------|
-| `--memory=1g` | Sets `memory.max = 1G` |
-| `--memory-swap=2g` | Sets the **combined** RAM+swap limit to 2G (so 1G RAM + 1G swap) |
-| `--memory-swap=-1` | Unlimited swap |
-| `--memory-swap=<value equal to --memory>` | No swap (memsw limit = RAM limit) |
+| `--memory=1g` | `memory.max = 1G`を設定する |
+| `--memory-swap=2g` | RAM+スワップの**合算**制限を2Gに設定する（つまりRAM 1G + スワップ 1G） |
+| `--memory-swap=-1` | スワップ無制限 |
+| `--memory-swap=<value equal to --memory>` | スワップなし（memsw制限 = RAM制限） |
 
-!!! warning "Docker --memory-swap semantics are confusing"
-    `--memory-swap` is a **combined** limit (RAM + swap), not a swap-only limit. `--memory=1g --memory-swap=1g` means no swap. `--memory=1g --memory-swap=2g` means 1GB swap. On cgroup v2 hosts (Docker 20.10+), Docker translates this into `memory.swap.max` (swap-only limit), automatically computing the difference. The combined semantics of the flag are preserved, but the kernel interface used is the native cgroup v2 one.
+!!! warning "Dockerの--memory-swapのセマンティクスは紛らわしい"
+    `--memory-swap`は**合算**制限（RAM + スワップ）であり、スワップのみの制限ではない。`--memory=1g --memory-swap=1g`はスワップなしを意味する。`--memory=1g --memory-swap=2g`は1GBのスワップを意味する。cgroup v2のホスト（Docker 20.10+）では、Dockerはこれを差分を自動計算して`memory.swap.max`（スワップのみの制限）に変換する。フラグの合算セマンティクスは維持されるが、使われるカーネルインターフェースはcgroup v2ネイティブのものである。
 
 ```bash
-# Allow 512MB of swap for a 1GB container
+# 1GB のコンテナに 512MB のスワップを許可する
 docker run -d --memory=1g --memory-swap=1536m nginx
-# 1536MB memsw limit - 1024MB memory limit = 512MB swap
+# memsw 制限 1536MB - メモリ制限 1024MB = スワップ 512MB
 
-# Disable swap
+# スワップを無効化する
 docker run -d --memory=1g --memory-swap=1g nginx
 ```
 
 ### Kubernetes {#kubernetes}
 
-Kubernetes memory limits map only to `memory.max` (RAM). Swap is disabled by default on Kubernetes nodes because the scheduler assumes memory requests and limits reflect only RAM.
+Kubernetesのメモリ制限は`memory.max`（RAM）にのみ対応する。スケジューラはメモリのrequestとlimitがRAMのみを反映すると想定しているため、Kubernetesノードではスワップはデフォルトで無効になっている。
 
-The `NodeSwap` feature gate (alpha in v1.22, beta in v1.28) enables swap on Kubernetes nodes, with per-pod swap control via `swapBehavior` in the node configuration. See the [Kubernetes swap documentation](https://kubernetes.io/docs/concepts/architecture/nodes/#swap-memory) for current status.
+`NodeSwap`フィーチャーゲート（v1.22でアルファ、v1.28でベータ）はKubernetesノードでスワップを有効にし、ノード設定の`swapBehavior`を通じてpodごとのスワップ制御を可能にする。現在の状況については[Kubernetesのスワップに関するドキュメント](https://kubernetes.io/docs/concepts/architecture/nodes/#swap-memory)を参照。
 
 ```yaml
-# Kubernetes swap is opt-in and controlled at the node level, not per-pod
-# Pod-level swap settings are not yet available in stable Kubernetes
+# Kubernetes のスワップはオプトインであり、pod 単位ではなくノードレベルで制御される
+# pod レベルのスワップ設定は、安定版 Kubernetes ではまだ利用できない
 ```
 
-## Best Practices {#best-practices}
+## ベストプラクティス {#best-practices}
 
-### Deciding whether to allow swap {#deciding-whether-to-allow-swap}
+### スワップを許可するかどうかの判断 {#deciding-whether-to-allow-swap}
 
-| Workload type | Swap recommendation |
+| ワークロードの種類 | スワップに関する推奨 |
 |---------------|---------------------|
-| Latency-sensitive (databases, caches) | Disable (`memory.swap.max = 0`). Swap causes unpredictable latency spikes. |
-| Batch jobs, data pipelines | Allow swap. Temporary spikes absorbed into swap rather than causing OOM. |
-| Web servers, application servers | Allow limited swap (`memory.swap.max` = 25-50% of `memory.max`). Provides a buffer without allowing unbounded paging. |
-| Containers with memory leaks | Disable swap. Swap masks the leak — the container uses swap instead of being killed, making the problem harder to detect. |
+| レイテンシに敏感なもの（データベース、キャッシュ） | 無効化する（`memory.swap.max = 0`）。スワップは予測不能なレイテンシスパイクを引き起こす。 |
+| バッチジョブ、データパイプライン | スワップを許可する。一時的なスパイクはOOMを起こす代わりにスワップに吸収される。 |
+| Webサーバー、アプリケーションサーバー | 限定的なスワップを許可する（`memory.swap.max` = `memory.max`の25〜50%）。無制限のページングを許さずにバッファを提供する。 |
+| メモリリークのあるコンテナ | スワップを無効化する。スワップはリークを覆い隠す — コンテナはkillされる代わりにスワップを使い、問題の検出を難しくする。 |
 
-### Set memory.high to avoid reaching the swap limit {#set-memoryhigh-to-avoid-reaching-the-swap-limit}
+### スワップ制限に達するのを避けるためにmemory.highを設定する {#set-memoryhigh-to-avoid-reaching-the-swap-limit}
 
-If a cgroup has swap enabled, set `memory.high` to trigger throttling before the cgroup has consumed all its RAM. This gives the kernel a chance to reclaim page cache before resorting to swapping anonymous pages.
+cgroupでスワップが有効なら、cgroupがRAMをすべて消費する前にスロットリングが始まるよう`memory.high`を設定する。これにより、カーネルは匿名pageのスワップに頼る前にページキャッシュを回収する機会を得る。
 
 ```bash
-echo 800M > /sys/fs/cgroup/mycontainer/memory.high   # Throttle here
-echo 1G   > /sys/fs/cgroup/mycontainer/memory.max    # OOM here
-echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max  # Swap budget
+echo 800M > /sys/fs/cgroup/mycontainer/memory.high   # ここでスロットリング
+echo 1G   > /sys/fs/cgroup/mycontainer/memory.max    # ここで OOM
+echo 512M > /sys/fs/cgroup/mycontainer/memory.swap.max  # スワップの予算
 ```
 
-### Use zswap to reduce disk I/O {#use-zswap-to-reduce-disk-io}
+### zswapを使ってディスクI/Oを減らす {#use-zswap-to-reduce-disk-io}
 
-If your system has spare CPU capacity and swap I/O is a bottleneck, enabling zswap reduces the amount of data written to disk:
+システムにCPUの余力があり、スワップI/Oがボトルネックになっているなら、zswapを有効にするとディスクに書き込まれるデータ量が減る。
 
 ```bash
-# Enable zswap globally
+# zswap をグローバルに有効化する
 echo 1 > /sys/module/zswap/parameters/enabled
 
-# Limit per-cgroup zswap usage (kernel >= 6.5)
+# cgroup ごとの zswap 使用量を制限する（カーネル >= 6.5）
 echo 200M > /sys/fs/cgroup/mycontainer/memory.zswap.max
 ```
 
-The default zswap pool size is a heuristic (typically 20% of total RAM — check `/sys/module/zswap/parameters/max_pool_percent`). Without per-cgroup limits, a single container can saturate the zswap pool.
+zswapプールのデフォルトサイズはヒューリスティックである（通常は総RAMの20% — `/sys/module/zswap/parameters/max_pool_percent`を確認）。cgroupごとの制限がないと、1つのコンテナがzswapプールを飽和させうる。
 
-## Try It Yourself {#try-it-yourself}
+## 自分で試す {#try-it-yourself}
 
-### Observe swap usage in a cgroup {#observe-swap-usage-in-a-cgroup}
+### cgroupでのスワップ使用量を観察する {#observe-swap-usage-in-a-cgroup}
 
 ```bash
-# Create a cgroup with limited RAM but some swap
+# RAM を制限し、ある程度のスワップを持つ cgroup を作る
 sudo mkdir -p /sys/fs/cgroup/swap-test
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo 128M | sudo tee /sys/fs/cgroup/swap-test/memory.max
 echo 256M | sudo tee /sys/fs/cgroup/swap-test/memory.swap.max
 
-# Move the current shell into the cgroup
+# 現在のシェルを cgroup に移す
 echo $$ | sudo tee /sys/fs/cgroup/swap-test/cgroup.procs
 
-# Allocate more than the RAM limit — should use swap instead of OOM
+# RAM 制限を超えて割り当てる — OOM ではなくスワップが使われるはず
 python3 -c "
 import time
-x = bytearray(200 * 1024 * 1024)  # 200MB: 128MB fits in RAM, rest goes to swap
+x = bytearray(200 * 1024 * 1024)  # 200MB: 128MB は RAM に収まり、残りはスワップへ
 print('allocated 200MB')
 time.sleep(10)
 "
 
-# In another terminal, watch swap usage
+# 別の端末でスワップ使用量を観察する
 watch -n 1 cat /sys/fs/cgroup/swap-test/memory.swap.current
 ```
 
-### Observe OOM when swap limit is also hit {#observe-oom-when-swap-limit-is-also-hit}
+### スワップ制限にも達したときのOOMを観察する {#observe-oom-when-swap-limit-is-also-hit}
 
 ```bash
 sudo mkdir -p /sys/fs/cgroup/swap-oom-test
@@ -335,78 +335,78 @@ echo 64M  | sudo tee /sys/fs/cgroup/swap-oom-test/memory.max
 echo 64M  | sudo tee /sys/fs/cgroup/swap-oom-test/memory.swap.max  # no swap
 echo $$ | sudo tee /sys/fs/cgroup/swap-oom-test/cgroup.procs
 
-# This will OOM because swap is disabled
+# スワップが無効なので、これは OOM になる
 python3 -c "x = bytearray(100 * 1024 * 1024)"
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Relevant code |
+| ファイル | 関連するコード |
 |------|---------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Swap charge/uncharge: `__mem_cgroup_try_charge_swap()`, `__mem_cgroup_uncharge_swap()`, `mem_cgroup_swapin_charge_folio()`; swap limit enforcement; `memory.swap.current` and `memory.swap.max` reads/writes |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`: `swap`, `memsw`, swap counter fields |
-| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | Swap cache management, interacts with memcg charges |
-| [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | zswap implementation including per-memcg accounting |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | スワップのチャージ／アンチャージ: `__mem_cgroup_try_charge_swap()`、`__mem_cgroup_uncharge_swap()`、`mem_cgroup_swapin_charge_folio()`。スワップ制限の強制。`memory.swap.current`と`memory.swap.max`の読み書き |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`: `swap`、`memsw`、スワップカウンタのフィールド |
+| [`mm/swap_state.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swap_state.c) | スワップキャッシュの管理。memcgのチャージと相互作用する |
+| [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | memcgごとの計上を含むzswapの実装 |
 
-## History {#history}
+## 歴史 {#history}
 
-### cgroup v1 memsw (v2.6.34, 2010) {#cgroup-v1-memsw-v2634-2010}
+### cgroup v1 memsw（v2.6.34、2010年） {#cgroup-v1-memsw-v2634-2010}
 
-The combined memory+swap (`memsw`) interface was introduced in cgroup v1. It provided the only mechanism to limit swap per cgroup, but the combined-limit model caused confusion and the implementation had performance overhead from maintaining two coupled counters.
+メモリ+スワップの合算（`memsw`）インターフェースはcgroup v1で導入された。cgroupごとにスワップを制限する唯一の仕組みを提供したが、合算制限モデルは混乱を招き、実装には結合した2つのカウンタを維持することによる性能オーバーヘッドがあった。
 
-### cgroup v2 separate swap accounting {#cgroup-v2-separate-swap-accounting}
+### cgroup v2の分離されたスワップ計上 {#cgroup-v2-separate-swap-accounting}
 
-cgroup v2 separated `memory.max` (RAM) from `memory.swap.max` (swap-only), fixing the semantic confusion of `memsw`. The separation was part of the broader cgroup v2 memory controller redesign that reached production readiness in v4.5. See [LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/).
+cgroup v2は`memory.max`（RAM）を`memory.swap.max`（スワップのみ）から分離し、`memsw`のセマンティクス上の混乱を解消した。この分離は、v4.5で本番利用可能な水準に達したcgroup v2メモリコントローラの、より広範な再設計の一部であった。[LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/)を参照。
 
-### memory.swap.high (v5.8, 2020) {#memoryswaphigh-v58-2020}
+### memory.swap.high（v5.8、2020年） {#memoryswaphigh-v58-2020}
 
 **LWN**: [Cgroup swap high limit](https://lwn.net/Articles/912708/)
 
-Added a soft swap limit analogous to `memory.high` for RAM, enabling throttle-before-OOM behavior for swap as well as for RAM.
+RAMに対する`memory.high`に相当するソフトなスワップ制限を追加し、RAMと同様にスワップについてもOOM前にスロットリングする挙動を可能にした。
 
-### Per-cgroup zswap accounting (v5.19, 2022) {#per-cgroup-zswap-accounting-v519-2022}
+### cgroupごとのzswap計上（v5.19、2022年） {#per-cgroup-zswap-accounting-v519-2022}
 
-**Commit**: [f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25) ("zswap: memcg accounting")
+**コミット**: [f4840ccfca25](https://git.kernel.org/linus/f4840ccfca25)（"zswap: memcg accounting"）
 
-**Author**: Johannes Weiner
+**作者**: Johannes Weiner
 
-Enabled `memory.zswap.current` and `memory.zswap.max`, preventing any single cgroup from monopolizing the zswap pool and causing other cgroups' pages to be written to disk.
+`memory.zswap.current`と`memory.zswap.max`を有効にし、単一のcgroupがzswapプールを独占して他のcgroupのpageをディスクに書き出させることを防いだ。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Swap charge/uncharge, swap limit enforcement |
-| [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | zswap implementation and memcg accounting |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg struct and swap counter fields |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | スワップのチャージ／アンチャージ、スワップ制限の強制 |
+| [`mm/zswap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) | zswapの実装とmemcgの計上 |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg構造体とスワップカウンタのフィールド |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — memory interface files, swap accounting
-- [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) — zswap documentation
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — メモリインターフェースファイル、スワップの計上
+- [`Documentation/admin-guide/mm/zswap.rst`](https://docs.kernel.org/admin-guide/mm/zswap.html) — zswapのドキュメント
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — cgroup v2 design including swap separation
-- [Cgroup swap high limit](https://lwn.net/Articles/912708/) — memory.swap.high motivation and design
+- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — スワップの分離を含むcgroup v2の設計
+- [Cgroup swap high limit](https://lwn.net/Articles/912708/) — memory.swap.highの動機と設計
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Memory Cgroups](memcg.md) — memcg fundamentals
-- [Tuning memory for containers](tuning-containers.md) — practical container memory tuning
-- [Cgroup OOM controller](memcg-oom.md) — what happens when the swap limit contributes to OOM
-- [Hierarchical memory limits](memcg-hierarchy.md) — how limits propagate through the cgroup tree
+- [メモリcgroup](memcg.md) — memcgの基礎
+- [コンテナ向けのメモリチューニング](tuning-containers.md) — 実践的なコンテナのメモリチューニング
+- [cgroup OOMコントローラ](memcg-oom.md) — スワップ制限がOOMの一因となったときに何が起きるか
+- [階層的なメモリ制限](memcg-hierarchy.md) — 制限がcgroupツリーをどのように伝播するか
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `__mem_cgroup_try_charge_swap()` and `__mem_cgroup_uncharge_swap()` for the swap charge/uncharge paths; `memory.swap.current` and `memory.swap.max` read/write handlers
-- [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — zswap implementation including per-memcg pool accounting introduced by commit `f4840ccfca25`
-- `Documentation/admin-guide/cgroup-v2.rst` — `memory.swap.*` and `memory.zswap.*` interface file semantics, including the disjoint-counter model (`memory.current + memory.swap.current = total footprint`)
-- `Documentation/admin-guide/mm/zswap.rst` — zswap architecture, enabling instructions, and pool configuration
-- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — cgroup v2 design context, including why `memory.max` and `memory.swap.max` were separated from the v1 combined `memsw` model
-- [LWN: Cgroup swap high limit](https://lwn.net/Articles/912708/) — motivation and design for `memory.swap.high`, the soft swap limit that throttles before `memory.swap.max` triggers OOM
-- [memcg](memcg.md) — memcg fundamentals: `memory.max`, `memory.high`, and basic cgroup operations
-- [memcg-oom](memcg-oom.md) — what the OOM kill log looks like when the swap limit is the proximate cause of the kill
-- [reclaim](reclaim.md) — how the kernel reclaims anonymous pages via swap and file pages via writeback during memory pressure
+- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — スワップのチャージ／アンチャージ経路である`__mem_cgroup_try_charge_swap()`と`__mem_cgroup_uncharge_swap()`。`memory.swap.current`と`memory.swap.max`の読み書きハンドラ
+- [mm/zswap.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/zswap.c) — コミット`f4840ccfca25`で導入されたmemcgごとのプール計上を含むzswapの実装
+- `Documentation/admin-guide/cgroup-v2.rst` — `memory.swap.*`と`memory.zswap.*`のインターフェースファイルのセマンティクス。重複しないカウンタのモデル（`memory.current + memory.swap.current = total footprint`）を含む
+- `Documentation/admin-guide/mm/zswap.rst` — zswapのアーキテクチャ、有効化の手順、プールの設定
+- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — cgroup v2の設計の背景。`memory.max`と`memory.swap.max`がv1の合算`memsw`モデルから分離された理由を含む
+- [LWN: Cgroup swap high limit](https://lwn.net/Articles/912708/) — `memory.swap.max`がOOMを引き起こす前にスロットリングするソフトなスワップ制限、`memory.swap.high`の動機と設計
+- [memcg](memcg.md) — memcgの基礎: `memory.max`、`memory.high`、基本的なcgroup操作
+- [memcg-oom](memcg-oom.md) — スワップ制限がkillの直接の原因であるときのOOM killログの見え方
+- [reclaim](reclaim.md) — メモリ逼迫時に、カーネルが匿名pageをスワップ経由で、ファイルpageをライトバック経由でどのように回収するか

@@ -1,25 +1,25 @@
 # Shrinker API {#shrinker-api}
 
-> A callback mechanism that lets subsystems participate in memory reclaim — when the kernel needs memory, it asks registered shrinkers to free their caches.
+> サブシステムがメモリ回収に参加するためのコールバック機構 — カーネルがメモリを必要とするとき、登録されたshrinkerにキャッシュの解放を求める。
 
-## What Are Shrinkers? {#what-are-shrinkers}
+## shrinkerとは何か {#what-are-shrinkers}
 
-The kernel maintains many in-memory caches: directory entry (dentry) caches, inode caches, DMA-buf heaps, driver-private object pools, zswap pools, and more. These caches are valuable — they avoid expensive recomputation or I/O — but they must yield memory when the system is under pressure.
+カーネルは多くのインメモリキャッシュを保持している。ディレクトリエントリ（dentry）キャッシュ、inodeキャッシュ、DMA-bufヒープ、ドライバ固有のオブジェクトプール、zswapプールなどである。これらのキャッシュは価値がある — 高コストな再計算やI/Oを回避してくれる — が、システムが逼迫しているときにはメモリを明け渡さなければならない。
 
-The shrinker API is how subsystems register with the memory management core to say: "I have objects you can ask me to free." When reclaim runs, it calls every registered shrinker twice per sweep: first to ask how much could be freed (counting pass), then to actually free some of it (scanning pass).
+shrinker APIは、サブシステムがメモリ管理のコアに登録して「解放を頼んでもらえるオブジェクトがある」と伝えるための手段である。回収が走ると、1回のスイープにつき登録済みのすべてのshrinkerを2回呼ぶ。まずどれだけ解放できるかを尋ね（カウントパス）、次に実際にその一部を解放させる（スキャンパス）。
 
-Examples of shrinkers in the tree:
+ツリー内のshrinkerの例は次のとおり。
 
-- `fs/super.c` — per-superblock shrinker covering dentry LRU and inode LRU (`super_cache_scan` / `super_cache_count`)
-- `mm/huge_memory.c` — deferred split THP shrinker
-- `mm/zswap.c` — zswap pool shrinker
-- `mm/workingset.c` — workingset shadow entry shrinker
-- `fs/xfs/xfs_icache.c` — XFS inode GC shrinker
-- `mm/vmalloc.c` — vmap node shrinker
+- `fs/super.c` — dentry LRUとinode LRUをカバーするsuperblockごとのshrinker（`super_cache_scan` / `super_cache_count`）
+- `mm/huge_memory.c` — 遅延分割THPのshrinker
+- `mm/zswap.c` — zswapプールのshrinker
+- `mm/workingset.c` — ワーキングセットのシャドウエントリのshrinker
+- `fs/xfs/xfs_icache.c` — XFSのinode GCのshrinker
+- `mm/vmalloc.c` — vmapノードのshrinker
 
 ## `struct shrinker` {#struct-shrinker}
 
-From `include/linux/shrinker.h`:
+`include/linux/shrinker.h`より:
 
 ```c
 struct shrinker {
@@ -28,133 +28,132 @@ struct shrinker {
     unsigned long (*scan_objects)(struct shrinker *,
                                   struct shrink_control *sc);
 
-    long batch;     /* reclaim batch size, 0 = default */
-    int seeks;      /* seeks to recreate an obj */
+    long batch;     /* 回収のバッチサイズ、0 = デフォルト */
+    int seeks;      /* オブジェクトの再作成に要するシーク数 */
     unsigned flags;
 
     /*
-     * The reference count of this shrinker. Registered shrinkers have an
-     * initial refcount of 1, then lookup operations are allowed to use it
-     * via shrinker_try_get(). On unregistration the initial refcount is
-     * discarded, and the shrinker is freed asynchronously via RCU after
-     * its refcount reaches 0.
+     * この shrinker の参照カウント。登録済みの shrinker は初期参照カウント 1
+     * を持ち、その後ルックアップ操作は shrinker_try_get() を通じてそれを使う
+     * ことができる。登録解除時に初期参照カウントが破棄され、参照カウントが 0
+     * に達した後、shrinker は RCU を介して非同期に解放される。
      */
     refcount_t refcount;
-    struct completion done;  /* used to wait for refcount to reach 0 */
+    struct completion done;  /* 参照カウントが 0 になるのを待つために使う */
     struct rcu_head rcu;
 
     void *private_data;
 
-    /* Internal use */
+    /* 内部用 */
     struct list_head list;
 #ifdef CONFIG_MEMCG
-    int id;          /* ID in shrinker_idr */
+    int id;          /* shrinker_idr 内の ID */
 #endif
 #ifdef CONFIG_SHRINKER_DEBUG
     int debugfs_id;
     const char *name;
     struct dentry *debugfs_entry;
 #endif
-    /* objs pending delete, per node */
+    /* 削除保留中のオブジェクト、ノードごと */
     atomic_long_t *nr_deferred;
 };
 
 #define DEFAULT_SEEKS 2
 ```
 
-### Field guide {#field-guide}
+### フィールドガイド {#field-guide}
 
-| Field | Description |
+| フィールド | 説明 |
 |-------|-------------|
-| `count_objects` | Return the number of objects that *could* be freed. Called without actually freeing anything. |
-| `scan_objects` | Free up to `sc->nr_to_scan` objects. Return number freed, `SHRINK_STOP`, or `SHRINK_EMPTY`. |
-| `batch` | How many objects to scan per `scan_objects` call. `0` uses the internal default of 128. Larger batches reduce call overhead; smaller batches improve latency. |
-| `seeks` | Relative cost to recreate one object (disk seeks as a unit). Used by the priority scaling formula. Use `DEFAULT_SEEKS` (2) if unsure. Set to 0 for objects that require no I/O to recreate — this causes them to be trimmed more aggressively. |
-| `flags` | `SHRINKER_NUMA_AWARE`, `SHRINKER_MEMCG_AWARE`, `SHRINKER_NONSLAB` — described below. |
-| `private_data` | Opaque pointer for the shrinker implementation, e.g. the `super_block *` in `fs/super.c`. |
-| `nr_deferred` | Per-node count of scan work that was calculated but not yet completed (due to `batch` rounding or contention). Carried forward to the next invocation. Managed by the core. |
+| `count_objects` | 解放*できる*オブジェクトの数を返す。実際には何も解放せずに呼ばれる。 |
+| `scan_objects` | 最大`sc->nr_to_scan`個のオブジェクトを解放する。解放した数、`SHRINK_STOP`、または`SHRINK_EMPTY`を返す。 |
+| `batch` | `scan_objects`の1回の呼び出しでスキャンするオブジェクト数。`0`なら内部のデフォルト値128を使う。大きなバッチは呼び出しのオーバーヘッドを減らし、小さなバッチはレイテンシを改善する。 |
+| `seeks` | オブジェクト1つを再作成する相対コスト（ディスクシークを単位とする）。優先度スケーリングの式で使われる。迷ったら`DEFAULT_SEEKS`（2）を使う。再作成にI/Oを必要としないオブジェクトには0を設定する — これにより、より積極的に削減されるようになる。 |
+| `flags` | `SHRINKER_NUMA_AWARE`、`SHRINKER_MEMCG_AWARE`、`SHRINKER_NONSLAB` — 後述する。 |
+| `private_data` | shrinkerの実装のための不透明なポインタ。例えば`fs/super.c`では`super_block *`。 |
+| `nr_deferred` | 計算されたがまだ完了していないスキャン作業（`batch`の丸めや競合による）のノードごとの数。次回の呼び出しに持ち越される。コアによって管理される。 |
 
 ## `struct shrink_control` {#struct-shrink_control}
 
-The kernel passes a `struct shrink_control` to both callbacks on every invocation.
+カーネルは呼び出しのたびに、両方のコールバックに`struct shrink_control`を渡す。
 
 ```c
 struct shrink_control {
     gfp_t gfp_mask;
 
-    /* current node being shrunk (for NUMA aware shrinkers) */
+    /* 現在縮小中のノード（NUMA 対応 shrinker 用） */
     int nid;
 
     /*
-     * How many objects scan_objects should scan and try to reclaim.
-     * Reset before every call.
+     * scan_objects がスキャンして回収を試みるべきオブジェクト数。
+     * 毎回の呼び出しの前にリセットされる。
      */
     unsigned long nr_to_scan;
 
     /*
-     * How many objects did scan_objects process?
-     * Defaults to nr_to_scan; callee should update to reflect actual progress.
+     * scan_objects はいくつのオブジェクトを処理したか?
+     * デフォルトは nr_to_scan。呼び出された側が実際の進捗を反映するよう更新すべき。
      */
     unsigned long nr_scanned;
 
-    /* current memcg being shrunk (for memcg aware shrinkers) */
+    /* 現在縮小中の memcg（memcg 対応 shrinker 用） */
     struct mem_cgroup *memcg;
 };
 ```
 
-### Field semantics {#field-semantics}
+### フィールドのセマンティクス {#field-semantics}
 
-**`gfp_mask`** — the allocation context that triggered reclaim. Shrinkers must respect this. If `__GFP_FS` is clear, the shrinker must not enter the filesystem (e.g., `super_cache_scan` returns `SHRINK_STOP` immediately in that case). If `__GFP_IO` is clear, avoid starting I/O.
+**`gfp_mask`** — 回収を引き起こした割り当てのコンテキスト。shrinkerはこれを尊重しなければならない。`__GFP_FS`がクリアされているなら、shrinkerはファイルシステムに入ってはならない（例えば、その場合`super_cache_scan`は即座に`SHRINK_STOP`を返す）。`__GFP_IO`がクリアされているなら、I/Oの開始を避ける。
 
-**`nid`** — the NUMA node being shrunk. Only meaningful when `SHRINKER_NUMA_AWARE` is set; other shrinkers always see node 0.
+**`nid`** — 縮小対象のNUMAノード。`SHRINKER_NUMA_AWARE`が設定されているときにのみ意味を持つ。それ以外のshrinkerは常にノード0を見る。
 
-**`nr_to_scan`** — set by the core before calling `scan_objects`. The shrinker should attempt to free this many objects. It is safe to modify (the core resets it before each call).
+**`nr_to_scan`** — `scan_objects`を呼ぶ前にコアが設定する。shrinkerはこの数のオブジェクトの解放を試みるべきである。変更しても安全である（コアは毎回の呼び出しの前にリセットする）。
 
-**`nr_scanned`** — pre-filled to `nr_to_scan` by the core. The shrinker should update this to reflect how many objects were actually examined (not just freed). The core uses it to account for work done when updating `nr_deferred`.
+**`nr_scanned`** — コアによって`nr_to_scan`があらかじめ設定される。shrinkerは、（解放した数だけでなく）実際に調べたオブジェクト数を反映するようこれを更新すべきである。コアは`nr_deferred`を更新する際に、実施された作業の計上にこれを使う。
 
-**`memcg`** — the memory cgroup being targeted. Set by the core when walking per-memcg shrinkers; `NULL` for the global (root memcg) path. Only meaningful when `SHRINKER_MEMCG_AWARE` is set.
+**`memcg`** — 対象となるメモリcgroup。memcgごとのshrinkerを走査する際にコアが設定する。グローバル（ルートmemcg）経路では`NULL`である。`SHRINKER_MEMCG_AWARE`が設定されているときにのみ意味を持つ。
 
-## `count_objects` vs `scan_objects` {#countobjects-vs-scanobjects}
+## `count_objects`と`scan_objects` {#countobjects-vs-scanobjects}
 
-These two callbacks implement a two-phase contract:
+この2つのコールバックは、2段階の契約を実装している。
 
-### `count_objects` — estimate freeable capacity {#count_objects-estimate-freeable-capacity}
+### `count_objects` — 解放可能な量を見積もる {#count_objects-estimate-freeable-capacity}
 
 ```c
 unsigned long (*count_objects)(struct shrinker *, struct shrink_control *sc);
 ```
 
-Return the number of objects that *could* be freed from the cache. The return value controls whether `scan_objects` is called at all:
+キャッシュから解放*できる*オブジェクトの数を返す。戻り値は、そもそも`scan_objects`が呼ばれるかどうかを制御する。
 
-| Return value | Meaning |
+| 戻り値 | 意味 |
 |---|---|
-| `SHRINK_EMPTY` (`~0UL - 1`) | The cache is completely empty. The core clears the per-memcg shrinker bit for this shrinker, skipping it in future passes until new objects are added. |
-| `0` | Nothing freeable right now (e.g., all objects are pinned, or count is below a threshold). `scan_objects` will not be called for this sweep. |
-| `N > 0` | There are approximately N freeable objects. The core uses this to calculate how many objects to request via `nr_to_scan`. |
+| `SHRINK_EMPTY`（`~0UL - 1`） | キャッシュは完全に空である。コアはこのshrinkerのmemcgごとのshrinkerビットをクリアし、新しいオブジェクトが追加されるまで以降のパスでスキップする。 |
+| `0` | 現時点では解放可能なものがない（例: すべてのオブジェクトがピン留めされている、あるいは数がしきい値を下回っている）。このスイープでは`scan_objects`は呼ばれない。 |
+| `N > 0` | およそN個の解放可能なオブジェクトがある。コアはこれを使って、`nr_to_scan`で要求するオブジェクト数を計算する。 |
 
-**No lock requirements.** `count_objects` must not take locks that could deadlock with reclaim. The count can be stale — the core tolerates a mismatch between `count_objects` and what `scan_objects` actually frees. This is by design: counts are used for proportional scaling, not as hard limits.
+**ロックの要件はない。** `count_objects`は、回収とデッドロックしうるロックを取ってはならない。カウントは古くてもよい — コアは、`count_objects`と`scan_objects`が実際に解放する数の食い違いを許容する。これは設計上のものであり、カウントは比例スケーリングに使われるのであって、ハードな制限としてではない。
 
-### `scan_objects` — actually free objects {#scan_objects-actually-free-objects}
+### `scan_objects` — 実際にオブジェクトを解放する {#scan_objects-actually-free-objects}
 
 ```c
 unsigned long (*scan_objects)(struct shrinker *, struct shrink_control *sc);
 ```
 
-Walk your cache, free up to `sc->nr_to_scan` objects, update `sc->nr_scanned`, and return the number of objects freed.
+キャッシュを走査し、最大`sc->nr_to_scan`個のオブジェクトを解放し、`sc->nr_scanned`を更新して、解放したオブジェクト数を返す。
 
-| Return value | Meaning |
+| 戻り値 | 意味 |
 |---|---|
-| `N >= 0` | Number of objects freed during this call. |
-| `SHRINK_STOP` (`~0UL`) | Cannot make progress right now — a lock that would be needed could cause a deadlock in the current reclaim context. The core will not call `scan_objects` again for this shrinker during the current reclaim invocation. |
-| `SHRINK_EMPTY` (`~0UL - 1`) | No objects remain in the cache. |
+| `N >= 0` | この呼び出しの間に解放されたオブジェクト数。 |
+| `SHRINK_STOP`（`~0UL`） | 現時点では進捗できない — 必要となるロックが、現在の回収コンテキストでデッドロックを引き起こしうる。コアは、現在の回収の呼び出しの間、このshrinkerの`scan_objects`を再び呼ぶことはない。 |
+| `SHRINK_EMPTY`（`~0UL - 1`） | キャッシュにオブジェクトが残っていない。 |
 
 ```c
-/* Defined in include/linux/shrinker.h */
+/* include/linux/shrinker.h で定義されている */
 #define SHRINK_STOP  (~0UL)
 #define SHRINK_EMPTY (~0UL - 1)
 ```
 
-## Shrinker Flags {#shrinker-flags}
+## shrinkerのフラグ {#shrinker-flags}
 
 ```c
 #define SHRINKER_NUMA_AWARE   BIT(2)
@@ -162,15 +161,15 @@ Walk your cache, free up to `sc->nr_to_scan` objects, update `sc->nr_scanned`, a
 #define SHRINKER_NONSLAB      BIT(4)
 ```
 
-**`SHRINKER_NUMA_AWARE`** — the shrinker is called once per NUMA node. `sc->nid` is set to the node being reclaimed. Use this when your cache is partitioned by node (e.g., per-node LRUs). Without this flag, the shrinker is called once with `nid = 0` regardless of which node is under pressure.
+**`SHRINKER_NUMA_AWARE`** — shrinkerはNUMAノードごとに1回呼ばれる。`sc->nid`には回収対象のノードが設定される。キャッシュがノードごとに分割されている場合（例: ノードごとのLRU）に使う。このフラグがなければ、どのノードが逼迫しているかにかかわらず、shrinkerは`nid = 0`で1回だけ呼ばれる。
 
-**`SHRINKER_MEMCG_AWARE`** — the shrinker participates in per-memcg reclaim. When a memcg is over its limit, the core calls shrinkers that are `MEMCG_AWARE` with `sc->memcg` set to the target cgroup. The shrinker must then only free objects charged to that memcg. This requires your LRU to be initialized with `list_lru_init_memcg()`. Without this flag, the shrinker is only called during global (root-cgroup) reclaim.
+**`SHRINKER_MEMCG_AWARE`** — shrinkerはmemcgごとの回収に参加する。memcgが制限を超えると、コアは`MEMCG_AWARE`なshrinkerを、`sc->memcg`に対象cgroupを設定して呼ぶ。shrinkerは、そのmemcgにチャージされたオブジェクトだけを解放しなければならない。これには、LRUが`list_lru_init_memcg()`で初期化されている必要がある。このフラグがなければ、shrinkerはグローバル（ルートcgroup）回収の間にのみ呼ばれる。
 
-**`SHRINKER_NONSLAB`** — only meaningful in combination with `SHRINKER_MEMCG_AWARE`. Marks a shrinker as managing non-slab memory. When memcg kmem accounting is disabled, non-`NONSLAB` shrinkers are skipped during per-memcg reclaim; `NONSLAB` shrinkers are always called. Used for objects like DMA-buf attachments that are not slab allocations but should still be reclaimed per-memcg.
+**`SHRINKER_NONSLAB`** — `SHRINKER_MEMCG_AWARE`と組み合わせたときにのみ意味を持つ。shrinkerがslab以外のメモリを管理していることを示す。memcgのkmem計上が無効な場合、`NONSLAB`でないshrinkerはmemcgごとの回収の間スキップされるが、`NONSLAB`のshrinkerは常に呼ばれる。slab割り当てではないがmemcgごとに回収されるべきDMA-bufのアタッチメントのようなオブジェクトに使われる。
 
-## How the Kernel Invokes Shrinkers {#how-the-kernel-invokes-shrinkers}
+## カーネルはshrinkerをどのように呼び出すか {#how-the-kernel-invokes-shrinkers}
 
-### Call path {#call-path}
+### 呼び出し経路 {#call-path}
 
 ```
 Memory pressure (allocation fails or watermark crossed)
@@ -204,41 +203,41 @@ Memory pressure (allocation fails or watermark crossed)
                                              or SHRINK_STOP returned
 ```
 
-### Priority scaling in `do_shrink_slab` {#priority-scaling-in-doshrinkslab}
+### `do_shrink_slab`における優先度スケーリング {#priority-scaling-in-doshrinkslab}
 
-The `priority` parameter (from `sc->priority` in `mm/vmscan.c`) controls how aggressively the shrinker is invoked. Higher priority means more memory pressure.
+`priority`パラメータ（`mm/vmscan.c`の`sc->priority`由来）は、shrinkerをどれだけ積極的に呼び出すかを制御する。優先度が高いほど、メモリ逼迫が大きいことを意味する。
 
 ```c
-/* From mm/shrinker.c: do_shrink_slab() */
+/* mm/shrinker.c の do_shrink_slab() より */
 if (shrinker->seeks) {
-    delta = freeable >> priority;  /* at priority 12: very small delta */
+    delta = freeable >> priority;  /* priority 12 では delta は非常に小さい */
     delta *= 4;
     do_div(delta, shrinker->seeks);
 } else {
-    delta = freeable / 2;          /* seeks=0: trim half regardless */
+    delta = freeable / 2;          /* seeks=0: 無条件に半分を削減する */
 }
 
-total_scan = nr >> priority;   /* deferred work, scaled down at low priority */
+total_scan = nr >> priority;   /* 遅延された作業。低優先度では縮小される */
 total_scan += delta;
 total_scan = min(total_scan, (2 * freeable));
 ```
 
-At `priority = DEF_PRIORITY` (12, low pressure): `freeable >> 12` is tiny — the shrinker is barely touched. As priority approaches 0 (extreme pressure): the full deferred count and a larger `delta` are applied, scanning more objects per call. `total_scan` is capped at `2 * freeable` to prevent over-scanning.
+`priority = DEF_PRIORITY`（12、低い逼迫）では、`freeable >> 12`はごくわずかであり、shrinkerはほとんど触られない。priorityが0に近づくにつれ（極度の逼迫）、遅延カウント全体とより大きな`delta`が適用され、1回の呼び出しでより多くのオブジェクトがスキャンされる。`total_scan`は過剰なスキャンを防ぐため`2 * freeable`で上限が設けられる。
 
-`do_shrink_slab` then calls `scan_objects` in a loop, `batch_size` objects at a time, until `total_scan` is exhausted or `SHRINK_STOP` is returned. Any work calculated but not done (due to batch rounding) is saved in `nr_deferred` and added to the next invocation.
+`do_shrink_slab`はその後、`total_scan`を使い切るか`SHRINK_STOP`が返されるまで、`batch_size`個ずつループで`scan_objects`を呼ぶ。計算されたが（バッチの丸めのために）行われなかった作業は`nr_deferred`に保存され、次の呼び出しに加算される。
 
-### Concurrency and locking {#concurrency-and-locking}
+### 並行性とロック {#concurrency-and-locking}
 
-The shrinker list is protected by `shrinker_mutex` for mutation (registration/unregistration) and by RCU for iteration. Individual shrinker lookup uses `shrinker_try_get()` (a `refcount_inc_not_zero`) to hold a reference while `do_shrink_slab` runs. `shrinker_free()` calls `wait_for_completion(&shrinker->done)` to drain all in-flight references before freeing memory.
+shrinkerのリストは、変更（登録／登録解除）については`shrinker_mutex`で、走査についてはRCUで保護される。個々のshrinkerのルックアップは`shrinker_try_get()`（`refcount_inc_not_zero`）を使い、`do_shrink_slab`の実行中は参照を保持する。`shrinker_free()`は、メモリを解放する前に`wait_for_completion(&shrinker->done)`を呼んで、処理中のすべての参照を排出する。
 
-This means `scan_objects` can run concurrently on different CPUs (for different nodes or memcgs). Shrinker implementations must be safe under concurrent calls.
+これは、`scan_objects`が（異なるノードやmemcgに対して）異なるCPU上で並行に実行されうることを意味する。shrinkerの実装は並行呼び出しに対して安全でなければならない。
 
-## Registration and Lifecycle {#registration-and-lifecycle}
+## 登録とライフサイクル {#registration-and-lifecycle}
 
-### The three-step lifecycle {#the-three-step-lifecycle}
+### 3段階のライフサイクル {#the-three-step-lifecycle}
 
 ```c
-/* 1. Allocate and configure */
+/* 1. 割り当てて設定する */
 struct shrinker *shrinker;
 
 shrinker = shrinker_alloc(SHRINKER_NUMA_AWARE | SHRINKER_MEMCG_AWARE,
@@ -251,47 +250,47 @@ shrinker->scan_objects  = mydriver_scan_objects;
 shrinker->seeks         = DEFAULT_SEEKS;
 shrinker->private_data  = my_private_ctx;
 
-/* 2. Register (shrinker becomes visible to reclaim) */
+/* 2. 登録する（shrinker が回収から見えるようになる） */
 shrinker_register(shrinker);
 
-/* ... device/module in use ... */
+/* ... デバイス／モジュールの使用中 ... */
 
-/* 3. Free (unregisters, drains references, then frees asynchronously via RCU) */
+/* 3. 解放する（登録解除し、参照を排出してから、RCU を介して非同期に解放する） */
 shrinker_free(shrinker);
 ```
 
 ### `shrinker_alloc(flags, fmt, ...)` {#shrinker_allocflags-fmt}
 
-Allocates and initializes a `struct shrinker`. The `fmt` argument is a `printf`-style name used in `/sys/kernel/debug/shrinker/` (when `CONFIG_SHRINKER_DEBUG` is set). If `SHRINKER_MEMCG_AWARE` is requested but memcg is disabled at runtime, the flag is silently cleared and the shrinker falls back to non-memcg mode.
+`struct shrinker`を割り当てて初期化する。`fmt`引数は`printf`形式の名前で、（`CONFIG_SHRINKER_DEBUG`が設定されている場合に）`/sys/kernel/debug/shrinker/`で使われる。`SHRINKER_MEMCG_AWARE`が要求されたが実行時にmemcgが無効な場合、このフラグは黙ってクリアされ、shrinkerは非memcgモードにフォールバックする。
 
-Returns `NULL` on allocation failure.
+割り当てに失敗すると`NULL`を返す。
 
 ### `shrinker_register(shrinker)` {#shrinker_registershrinker}
 
-Adds the shrinker to `shrinker_list`, sets `SHRINKER_REGISTERED`, and initializes `refcount` to 1 (making it visible to reclaim). Must only be called on a shrinker returned by `shrinker_alloc()`.
+shrinkerを`shrinker_list`に追加し、`SHRINKER_REGISTERED`を設定し、`refcount`を1に初期化する（これにより回収から見えるようになる）。`shrinker_alloc()`が返したshrinkerに対してのみ呼ばなければならない。
 
 ### `shrinker_free(shrinker)` {#shrinker_freeshrinker}
 
-Handles both unregistration and freeing in one call:
+登録解除と解放の両方を1回の呼び出しで処理する。
 
-1. If registered: drops the initial refcount and waits (`wait_for_completion`) for all in-flight `do_shrink_slab` calls to finish.
-2. Removes from `shrinker_list` under `shrinker_mutex`.
-3. Removes from the memcg IDR if `SHRINKER_MEMCG_AWARE`.
-4. Schedules the struct itself for `kfree` via `call_rcu`.
+1. 登録済みであれば、初期参照カウントを落とし、処理中のすべての`do_shrink_slab`呼び出しが終わるのを待つ（`wait_for_completion`）。
+2. `shrinker_mutex`の下で`shrinker_list`から削除する。
+3. `SHRINKER_MEMCG_AWARE`であれば、memcgのIDRから削除する。
+4. 構造体自体を`call_rcu`経由で`kfree`するようスケジュールする。
 
-After `shrinker_free()` returns, it is safe to free whatever structure holds the shrinker (e.g., the `super_block`, the driver's device structure).
+`shrinker_free()`が戻った後は、shrinkerを保持している構造体（例: `super_block`やドライバのデバイス構造体）を解放しても安全である。
 
-### When to call each {#when-to-call-each}
+### それぞれをいつ呼ぶか {#when-to-call-each}
 
-| Situation | When to register | When to free |
+| 状況 | 登録のタイミング | 解放のタイミング |
 |-----------|-----------------|--------------|
-| Module-global cache | `module_init` / `subsys_initcall` | `module_exit` |
-| Per-device cache | `probe()`, after cache is initialized | `remove()` / error path in `probe()` |
-| Per-superblock cache | `sget()` / `alloc_super()`, before mount completes | `kill_sb()` / `deactivate_super()` |
+| モジュール全体のキャッシュ | `module_init` / `subsys_initcall` | `module_exit` |
+| デバイスごとのキャッシュ | キャッシュの初期化後の`probe()` | `remove()` / `probe()`のエラー経路 |
+| superblockごとのキャッシュ | マウント完了前の`sget()` / `alloc_super()` | `kill_sb()` / `deactivate_super()` |
 
-## Real Example: The Superblock Shrinker {#real-example-the-superblock-shrinker}
+## 実例: superblockのshrinker {#real-example-the-superblock-shrinker}
 
-Every mounted filesystem gets a per-superblock shrinker covering both the dentry LRU and the inode LRU. It is set up in `alloc_super()` (`fs/super.c`):
+マウントされたすべてのファイルシステムは、dentry LRUとinode LRUの両方をカバーするsuperblockごとのshrinkerを持つ。これは`alloc_super()`（`fs/super.c`）で設定される。
 
 ```c
 /* fs/super.c: alloc_super() */
@@ -304,54 +303,54 @@ s->s_shrink->batch         = 1024;
 s->s_shrink->private_data  = s;
 ```
 
-The shrinker is registered later, after the superblock is fully set up and marked `SB_BORN`:
+shrinkerは後で、superblockが完全に設定されて`SB_BORN`とマークされた後に登録される。
 
 ```c
-/* fs/super.c: vfs_get_tree() / mount_fs() path */
+/* fs/super.c: vfs_get_tree() / mount_fs() の経路 */
 shrinker_register(s->s_shrink);
 ```
 
-**`super_cache_count`** queries `list_lru_shrink_count()` on the dentry and inode LRUs, adds any filesystem-private object count from `s_op->nr_cached_objects()`, and returns `SHRINK_EMPTY` if the total is zero.
+**`super_cache_count`**は、dentryとinodeのLRUに対して`list_lru_shrink_count()`を問い合わせ、`s_op->nr_cached_objects()`によるファイルシステム固有のオブジェクト数を加え、合計がゼロなら`SHRINK_EMPTY`を返す。
 
-**`super_cache_scan`** proportionally distributes `sc->nr_to_scan` across dentries, inodes, and FS-private objects. It calls `prune_dcache_sb()` first (dentries pin inodes), then `prune_icache_sb()`, then `s_op->free_cached_objects()`. If `__GFP_FS` is not set in `sc->gfp_mask`, it returns `SHRINK_STOP` immediately to avoid re-entering a filesystem that may be holding locks.
+**`super_cache_scan`**は、`sc->nr_to_scan`をdentry、inode、FS固有のオブジェクトに比例配分する。まず`prune_dcache_sb()`を呼び（dentryはinodeをピン留めしているため）、次に`prune_icache_sb()`、次に`s_op->free_cached_objects()`を呼ぶ。`sc->gfp_mask`に`__GFP_FS`が設定されていなければ、ロックを保持している可能性のあるファイルシステムへの再入を避けるため、即座に`SHRINK_STOP`を返す。
 
-## Common Mistakes {#common-mistakes}
+## よくある間違い {#common-mistakes}
 
-!!! warning "Blocking or sleeping in `scan_objects` without checking `gfp_mask`"
-    `scan_objects` can be called from direct reclaim in any context. If the caller holds a lock that your shrinker also needs, or if reclaim is happening under a filesystem lock, taking that lock again will deadlock. Always check `sc->gfp_mask` for `__GFP_FS` and `__GFP_IO` before entering the filesystem or starting I/O. Return `SHRINK_STOP` if you cannot safely proceed.
+!!! warning "`gfp_mask`を確認せずに`scan_objects`内でブロックやスリープをする"
+    `scan_objects`は、任意のコンテキストで直接回収から呼ばれうる。呼び出し元がshrinkerも必要とするロックを保持している場合や、回収がファイルシステムのロックの下で行われている場合、そのロックを再び取るとデッドロックする。ファイルシステムに入ったりI/Oを開始したりする前に、必ず`sc->gfp_mask`の`__GFP_FS`と`__GFP_IO`を確認すること。安全に進められない場合は`SHRINK_STOP`を返す。
 
-!!! warning "Returning 0 from `count_objects` when the cache is actually empty"
-    `0` means "nothing freeable right now" (e.g., objects are pinned). `SHRINK_EMPTY` means "the cache is completely empty." These are not interchangeable. Returning `0` when the cache is empty costs nothing in the global reclaim path, but in the per-memcg path it prevents the kernel from clearing the shrinker's bit in the memcg bitmap, causing unnecessary future wakeups.
+!!! warning "キャッシュが実際には空なのに`count_objects`から0を返す"
+    `0`は「現時点では解放可能なものがない」（例: オブジェクトがピン留めされている）を意味する。`SHRINK_EMPTY`は「キャッシュが完全に空である」を意味する。この2つは置き換え可能ではない。キャッシュが空のときに`0`を返しても、グローバル回収の経路ではコストはかからないが、memcgごとの経路では、カーネルがmemcgビットマップのshrinkerのビットをクリアできなくなり、将来の不要な起動を引き起こす。
 
-!!! warning "Mishandling `nr_scanned`"
-    `sc->nr_scanned` is pre-filled to `sc->nr_to_scan`. If your `scan_objects` examines fewer objects than requested (e.g., because it hit a trylock and skipped some), update `sc->nr_scanned` to reflect the actual number examined. The core uses it to compute `next_deferred`. Leaving it at `nr_to_scan` when you scanned fewer will incorrectly mark that work as done and under-report deferred work.
+!!! warning "`nr_scanned`の誤った扱い"
+    `sc->nr_scanned`は`sc->nr_to_scan`にあらかじめ設定されている。`scan_objects`が要求より少ないオブジェクトしか調べなかった場合（例: trylockに失敗して一部をスキップした）、実際に調べた数を反映するよう`sc->nr_scanned`を更新すること。コアはこれを使って`next_deferred`を計算する。実際のスキャン数が少ないのに`nr_to_scan`のままにしておくと、その作業が完了したと誤ってマークされ、遅延作業が過少に報告される。
 
-!!! warning "Forgetting to call `shrinker_free` on error paths"
-    If `shrinker_register` has been called and your device or module initialization later fails, `shrinker_free` must be called before returning the error. A registered shrinker pointing to freed or partially-initialized data will be called during the next reclaim cycle, causing a use-after-free or a NULL dereference. `shrinker_free` handles both the unregistered case (no-op if not yet registered) and the registered case, so it is safe to call unconditionally on any cleanup path after `shrinker_alloc` has succeeded.
+!!! warning "エラー経路で`shrinker_free`の呼び出しを忘れる"
+    `shrinker_register`を呼んだ後にデバイスやモジュールの初期化が失敗した場合、エラーを返す前に`shrinker_free`を呼ばなければならない。解放済みまたは初期化途中のデータを指す登録済みshrinkerは、次の回収サイクルで呼ばれ、use-after-freeやNULLデリファレンスを引き起こす。`shrinker_free`は未登録の場合（まだ登録されていなければ何もしない）と登録済みの場合の両方を処理するので、`shrinker_alloc`が成功した後のどの後始末経路でも無条件に呼んで安全である。
 
-!!! warning "Concurrent calls to `scan_objects`"
-    The kernel may call `scan_objects` concurrently for different nodes (if `SHRINKER_NUMA_AWARE`) or different memcgs (if `SHRINKER_MEMCG_AWARE`). Your LRU walks and counters must be safe under concurrent access. Use `list_lru` (which has per-node, per-memcg locking built in) rather than rolling your own list.
+!!! warning "`scan_objects`の並行呼び出し"
+    カーネルは、（`SHRINKER_NUMA_AWARE`なら）異なるノード、または（`SHRINKER_MEMCG_AWARE`なら）異なるmemcgに対して、`scan_objects`を並行に呼ぶことがある。LRUの走査やカウンタは並行アクセスに対して安全でなければならない。独自のリストを作るのではなく、`list_lru`（ノードごと・memcgごとのロックが組み込まれている）を使うこと。
 
-!!! warning "Using `seeks = 0` unintentionally"
-    Setting `seeks` to 0 triggers the aggressive branch in `do_shrink_slab`: `delta = freeable / 2`. This means at any priority, the shrinker requests to scan half its freeable objects in one pass. This is intentional for caches that are cheap to repopulate (no I/O), but using it by accident for an expensive cache will cause excessive eviction under pressure.
+!!! warning "意図せず`seeks = 0`を使う"
+    `seeks`を0に設定すると、`do_shrink_slab`の積極的な分岐`delta = freeable / 2`が発動する。これは、どの優先度でも、shrinkerが1回のパスで解放可能なオブジェクトの半分のスキャンを要求することを意味する。これは再投入が安価な（I/Oを伴わない）キャッシュには意図されたものだが、高コストなキャッシュに誤って使うと、逼迫時に過剰な追い出しを引き起こす。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`include/linux/shrinker.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/shrinker.h) | `struct shrinker`, `struct shrink_control`, `SHRINK_STOP`, `SHRINK_EMPTY`, flags, `shrinker_alloc`/`shrinker_register`/`shrinker_free` declarations |
-| [`mm/shrinker.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c) | `shrinker_alloc`, `shrinker_register`, `shrinker_free`, `do_shrink_slab`, `shrink_slab`, `shrink_slab_memcg`, memcg bitmap management |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `shrink_node`, `shrink_lruvec` — where `shrink_slab()` is called from during reclaim |
-| [`fs/super.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/super.c) | `super_cache_scan`, `super_cache_count`, per-superblock shrinker setup in `alloc_super` |
-| [`fs/dcache.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/dcache.c) | `prune_dcache_sb` — called by `super_cache_scan` to shrink the dentry LRU |
-| [`fs/inode.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/inode.c) | `prune_icache_sb` — called by `super_cache_scan` to shrink the inode LRU |
-| [`include/linux/list_lru.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/list_lru.h) | `list_lru_init_memcg`, `list_lru_shrink_count`, `list_lru_shrink_walk` — NUMA/memcg-aware LRU used with shrinkers |
+| [`include/linux/shrinker.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/shrinker.h) | `struct shrinker`、`struct shrink_control`、`SHRINK_STOP`、`SHRINK_EMPTY`、フラグ、`shrinker_alloc`/`shrinker_register`/`shrinker_free`の宣言 |
+| [`mm/shrinker.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c) | `shrinker_alloc`、`shrinker_register`、`shrinker_free`、`do_shrink_slab`、`shrink_slab`、`shrink_slab_memcg`、memcgビットマップの管理 |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | `shrink_node`、`shrink_lruvec` — 回収中に`shrink_slab()`が呼ばれる場所 |
+| [`fs/super.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/super.c) | `super_cache_scan`、`super_cache_count`、`alloc_super`でのsuperblockごとのshrinkerの設定 |
+| [`fs/dcache.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/dcache.c) | `prune_dcache_sb` — dentry LRUを縮小するために`super_cache_scan`から呼ばれる |
+| [`fs/inode.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/inode.c) | `prune_icache_sb` — inode LRUを縮小するために`super_cache_scan`から呼ばれる |
+| [`include/linux/list_lru.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/list_lru.h) | `list_lru_init_memcg`、`list_lru_shrink_count`、`list_lru_shrink_walk` — shrinkerとともに使われるNUMA/memcg対応のLRU |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/shrinker.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c) — `shrinker_alloc()`, `shrinker_register()`, `shrinker_free()`, `do_shrink_slab()` (priority scaling and batch loop), `shrink_slab()`, and `shrink_slab_memcg()` with the per-memcg bitmap
-- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — `shrink_node()` and `shrink_lruvec()`, the reclaim entry points that call `shrink_slab()` after scanning LRU lists
-- [LWN: Smarter shrinkers](https://lwn.net/Articles/550463/) — motivation and design for the two-phase `count_objects`/`scan_objects` split, replacing the older single-callback model
-- [LWN: Shrinker reorganization](https://lwn.net/Articles/966451/) — the extraction of shrinker code from `mm/vmscan.c` into the dedicated `mm/shrinker.c` file and the RCU-based refcount lifecycle introduced alongside it
-- [reclaim](reclaim.md) — the broader reclaim picture showing where `shrink_slab()` fits alongside LRU scanning, kswapd, and direct reclaim
-- [memcg](memcg.md) — per-cgroup reclaim context: when `sc->memcg` is set and how `SHRINKER_MEMCG_AWARE` shrinkers interact with cgroup memory limits
+- [mm/shrinker.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/shrinker.c) — `shrinker_alloc()`、`shrinker_register()`、`shrinker_free()`、`do_shrink_slab()`（優先度スケーリングとバッチループ）、`shrink_slab()`、およびmemcgごとのビットマップを使う`shrink_slab_memcg()`
+- [mm/vmscan.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) — LRUリストのスキャン後に`shrink_slab()`を呼ぶ回収のエントリポイント、`shrink_node()`と`shrink_lruvec()`
+- [LWN: Smarter shrinkers](https://lwn.net/Articles/550463/) — 古い単一コールバックのモデルを置き換えた、`count_objects`/`scan_objects`の2段階分割の動機と設計
+- [LWN: Shrinker reorganization](https://lwn.net/Articles/966451/) — shrinkerのコードを`mm/vmscan.c`から専用の`mm/shrinker.c`ファイルへ切り出したことと、それに伴って導入されたRCUベースの参照カウントのライフサイクル
+- [reclaim](reclaim.md) — `shrink_slab()`がLRUスキャン、kswapd、直接回収とともにどこに位置づけられるかを示す、回収の全体像
+- [memcg](memcg.md) — cgroupごとの回収コンテキスト: `sc->memcg`がいつ設定されるか、`SHRINKER_MEMCG_AWARE`なshrinkerがcgroupのメモリ制限とどう相互作用するか

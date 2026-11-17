@@ -1,88 +1,88 @@
-# Page Poisoning and Memory Zeroing {#page-poisoning-and-memory-zeroing}
+# ページポイズニングとメモリのゼロ化 {#page-poisoning-and-memory-zeroing}
 
-> Catching use-after-free bugs and enforcing memory hygiene with kernel poisoning mechanisms
+> カーネルのポイズニング機構で use-after-free バグを捕捉し、メモリの衛生を保つ
 
-The Linux kernel provides several overlapping mechanisms for filling memory with known patterns before or after use. Some are purely for debugging (catching bugs), others are for security (preventing data leakage). Understanding which tool to reach for requires knowing how they differ.
+Linux カーネルは、使用前または使用後にメモリを既知のパターンで埋めるための、互いに重複する複数の機構を提供している。純粋にデバッグ用（バグの捕捉）のものもあれば、セキュリティ用（データ漏洩の防止）のものもある。どのツールを使うべきかを判断するには、それらの違いを理解する必要がある。
 
-## Overview {#overview}
+## 概要 {#overview}
 
-| Mechanism | Layer | Pattern | Goal | Config |
+| 機構 | レイヤ | パターン | 目的 | 設定 |
 |-----------|-------|---------|------|--------|
-| `CONFIG_PAGE_POISONING` | Page allocator | `0xAA` (free), `0x00` (alloc) | Debug: catch UAF and use-before-init | `CONFIG_PAGE_POISONING` |
-| `init_on_alloc` / `init_on_free` | Page + slab | `0x00` (zero) | Security: prevent data leakage | Boot parameter (v5.3+) |
-| `slub_debug=P` | SLUB slab cache | `0x6b` (free), `0xa5` (redzone) | Debug: catch slab UAF and overflows | `CONFIG_SLUB_DEBUG` + boot param |
+| `CONFIG_PAGE_POISONING` | ページアロケータ | `0xAA`（解放時）、`0x00`（割り当て時） | デバッグ: UAF と初期化前使用の捕捉 | `CONFIG_PAGE_POISONING` |
+| `init_on_alloc` / `init_on_free` | ページ + slab | `0x00`（ゼロ） | セキュリティ: データ漏洩の防止 | ブートパラメータ（v5.3+） |
+| `slub_debug=P` | SLUB の slab キャッシュ | `0x6b`（解放時）、`0xa5`（レッドゾーン） | デバッグ: slab の UAF とオーバーフローの捕捉 | `CONFIG_SLUB_DEBUG` + ブートパラメータ |
 
-These are independent mechanisms. They can be combined, though some combinations are redundant (e.g., enabling both `CONFIG_PAGE_POISONING` and `init_on_free=1` zeros the same pages twice).
+これらは独立した機構である。組み合わせることもできるが、一部の組み合わせは冗長になる（例: `CONFIG_PAGE_POISONING` と `init_on_free=1` を両方有効にすると、同じページを2回ゼロ化する）。
 
-## CONFIG_PAGE_POISONING: Debug Poisoning {#configpagepoisoning-debug-poisoning}
+## CONFIG_PAGE_POISONING: デバッグ用ポイズニング {#configpagepoisoning-debug-poisoning}
 
-### What It Does {#what-it-does}
+### 何をするのか {#what-it-does}
 
-`CONFIG_PAGE_POISONING` causes the page allocator to fill pages with a known byte pattern when they are freed, then verify that pattern has not been disturbed when the page is next allocated.
+`CONFIG_PAGE_POISONING` は、ページアロケータに、ページの解放時にそのページを既知のバイトパターンで埋めさせ、次にそのページが割り当てられるときにパターンが乱されていないことを検証させる。
 
-The implementation lives in [`mm/page_poison.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c).
+実装は [`mm/page_poison.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) にある。
 
-The pattern used:
+使われるパターン:
 
-- **On free**: pages are filled with `0xAA` (by `kernel_poison_pages()` called from `__free_pages_prepare()` in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c))
-- **On alloc**: the kernel verifies every byte is still `0xAA` before handing the page to the requester, then fills with `0x00`
+- **解放時**: ページは `0xAA` で埋められる（[`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) の `__free_pages_prepare()` から呼ばれる `kernel_poison_pages()` による）
+- **割り当て時**: カーネルはページを要求元に渡す前に、すべてのバイトがまだ `0xAA` であることを検証し、その後 `0x00` で埋める
 
 ```
-Page lifecycle with CONFIG_PAGE_POISONING:
+CONFIG_PAGE_POISONING でのページのライフサイクル:
 
-  Allocate page
+  ページを割り当てる
   ┌────────────────────────────┐
-  │  verify all bytes == 0xAA  │  ← if not: BUG (someone wrote after free)
-  │  fill with 0x00            │  ← caller gets zeroed page
+  │  verify all bytes == 0xAA  │  ← 一致しなければ: BUG（解放後に誰かが書き込んだ）
+  │  fill with 0x00            │  ← 呼び出し元はゼロ化されたページを得る
   └────────────────────────────┘
           │
-          │  (caller uses page)
+          │  （呼び出し元がページを使う）
           ▼
-  Free page
+  ページを解放する
   ┌────────────────────────────┐
-  │  fill with 0xAA            │  ← poison marker
+  │  fill with 0xAA            │  ← ポイズンマーカー
   └────────────────────────────┘
           │
-          │  (page sits on free list)
+          │  （ページはフリーリスト上にとどまる）
           ▼
-  Next allocation from this page:
+  このページからの次の割り当て:
   ┌────────────────────────────┐
-  │  verify all bytes == 0xAA  │  ← catches writes that happened while freed
+  │  verify all bytes == 0xAA  │  ← 解放中に起きた書き込みを捕捉する
   └────────────────────────────┘
 ```
 
-### How It Catches Use-After-Free {#how-it-catches-use-after-free}
+### use-after-free をどう捕捉するか {#how-it-catches-use-after-free}
 
-When code writes to a freed page, it overwrites some `0xAA` bytes. The next time that page is allocated, the verification scan finds bytes that do not match `0xAA` and reports the corruption.
+コードが解放済みのページに書き込むと、いくつかの `0xAA` バイトが上書きされる。次にそのページが割り当てられるとき、検証スキャンが `0xAA` と一致しないバイトを見つけ、破損を報告する。
 
-The catch is timing: the write can happen anytime between the free and the next allocation. If the page is quickly recycled, the window is small. If the page sits on the free list for a while (e.g., under low allocation pressure), longer-lived writes are also detected.
+問題はタイミングである。書き込みは解放から次の割り当てまでの間のいつでも起こりうる。ページがすぐに再利用されれば、その窓は小さい。ページがしばらくフリーリスト上にとどまっていれば（例: 割り当て圧力が低い場合）、より後に行われた書き込みも検出される。
 
-### Enabling It {#enabling-it}
+### 有効化する {#enabling-it}
 
 ```
-# Kernel config
+# カーネルの設定
 CONFIG_PAGE_POISONING=y
 ```
 
-You can also toggle poisoning at boot time (it is **off** by default even when compiled in):
+ポイズニングはブート時に切り替えることもできる（コンパイル時に組み込まれていても、デフォルトでは **オフ** である）:
 
 ```bash
-# Enable at boot (required — CONFIG_PAGE_POISONING=y alone does not enable it)
+# ブート時に有効化（必須 — CONFIG_PAGE_POISONING=y だけでは有効にならない）
 page_poison=on
 
-# Explicitly disable (the default)
+# 明示的に無効化（デフォルト）
 page_poison=off
 ```
 
-### Performance Cost {#performance-cost}
+### 性能コスト {#performance-cost}
 
-Page poisoning adds a full page write on every free and a full page read (verify) plus write (zero) on every allocation. For order-0 pages (4KB on x86), this is two extra memory operations per allocation cycle. For high-order pages (e.g., 2MB huge pages), the cost scales linearly with page size.
+ページポイズニングは、解放のたびにページ全体の書き込みを、割り当てのたびにページ全体の読み出し（検証）と書き込み（ゼロ化）を追加する。order-0 ページ（x86 では4KB）の場合、割り当てサイクルごとに2回の余分なメモリ操作となる。高次ページ（例: 2MB の huge page）では、コストはページサイズに比例して増える。
 
-In practice, the overhead is measurable but workload-dependent. Allocation-heavy workloads (e.g., network-intensive, frequent small allocations) see higher overhead than workloads that allocate once at startup. This tool is suitable for development kernels and CI, not production.
+実際には、オーバーヘッドは測定可能だがワークロードに依存する。割り当ての多いワークロード（例: ネットワーク集約型、小さな割り当てが頻繁なもの）は、起動時に一度だけ割り当てるワークロードよりも大きなオーバーヘッドを受ける。このツールは開発用カーネルや CI に適しており、本番環境向けではない。
 
-### Reading a Page Poisoning Report {#reading-a-page-poisoning-report}
+### ページポイズニングのレポートの読み方 {#reading-a-page-poisoning-report}
 
-When the verification detects a corrupted byte, the kernel emits a message like:
+検証で破損したバイトが検出されると、カーネルは次のようなメッセージを出力する:
 
 ```
 BUG: Bad page state in process kworker/0:1  pfn:0x12ab3
@@ -102,126 +102,126 @@ Call Trace:
  ...
 ```
 
-**Reading the report**:
+**レポートの読み方**:
 
-1. `Poison overwritten` — the poisoning check failed; some code wrote to this page while it was on the free list
-2. `First byte 0x0 instead of 0xaa` — the specific byte value found (here: zero, meaning the write was a zeroing operation or bzero-style memset)
-3. The call trace shows **who allocated the page** and triggered the check — not who wrote to it (that would require KASAN or a watchpoint)
-4. To find the writer, cross-reference with KASAN or add a hardware watchpoint (`perf mem`) on the poisoned address
+1. `Poison overwritten` — ポイズニングのチェックが失敗した。このページがフリーリスト上にある間に、何らかのコードが書き込んだ
+2. `First byte 0x0 instead of 0xaa` — 見つかった具体的なバイト値（ここではゼロで、書き込みがゼロ化操作か bzero 風の memset だったことを意味する）
+3. コールトレースは、チェックを引き起こした **ページを割り当てた側** を示す — 書き込んだ側ではない（それには KASAN かウォッチポイントが必要）
+4. 書き込んだ側を見つけるには、KASAN と突き合わせるか、ポイズンされたアドレスにハードウェアウォッチポイント（`perf mem`）を設定する
 
-!!! tip "Combining with KASAN"
-    `CONFIG_PAGE_POISONING` and KASAN serve complementary roles. KASAN (see [KASAN](kasan.md)) catches the write at the moment it happens (with a precise stack trace). Page poisoning catches it at the next allocation, which is simpler to enable but gives you less information about the culprit. Run both together in a debug build for maximum coverage.
+!!! tip "KASAN との併用"
+    `CONFIG_PAGE_POISONING` と KASAN は相補的な役割を果たす。KASAN（[KASAN](kasan.md) を参照）は書き込みが起きたその瞬間に（正確なスタックトレース付きで）捕捉する。ページポイズニングは次の割り当て時に捕捉するので、有効化は簡単だが、犯人についての情報は少ない。最大のカバレッジを得るには、デバッグビルドで両方を一緒に実行するとよい。
 
-### When to Use It {#when-to-use-it}
+### いつ使うか {#when-to-use-it}
 
-Use `CONFIG_PAGE_POISONING` when:
+`CONFIG_PAGE_POISONING` を使うのは次のような場合である:
 
-- You suspect a use-after-free involving page-level allocations (not slab objects — for slab, use `slub_debug=P`)
-- You want a simple, compiler-independent check (unlike KASAN, no special compiler flags needed)
-- You are running a VM or low-performance system where KASAN's overhead is too high
+- ページ単位の割り当てが関わる use-after-free が疑われる（slab オブジェクトではない — slab には `slub_debug=P` を使う）
+- 単純でコンパイラに依存しないチェックが欲しい（KASAN と違い、特別なコンパイラフラグは不要）
+- KASAN のオーバーヘッドが大きすぎる VM や低性能なシステムで実行している
 
-## init_on_alloc and init_on_free: Security Zeroing {#initonalloc-and-initonfree-security-zeroing}
+## init_on_alloc と init_on_free: セキュリティのためのゼロ化 {#initonalloc-and-initonfree-security-zeroing}
 
-### What They Do {#what-they-do}
+### 何をするのか {#what-they-do}
 
-Introduced in Linux v5.3, `init_on_alloc` and `init_on_free` are **security features**, not debugging tools. Their purpose is to prevent sensitive kernel data from leaking into new allocations.
+Linux v5.3 で導入された `init_on_alloc` と `init_on_free` は、デバッグツールではなく **セキュリティ機能** である。その目的は、機密性のあるカーネルデータが新しい割り当てに漏洩するのを防ぐことである。
 
-**Commit**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6) ("mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options")
-**Author**: Alexander Potapenko
+**コミット**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6)（"mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options"）
+**作者**: Alexander Potapenko
 
-The implementation hooks are in [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) (for pages) and [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) (for slab).
+実装のフックは [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c)（ページ用）と [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c)（slab 用）にある。
 
-- **`init_on_alloc=1`**: Every page and slab allocation is zeroed before being handed to the caller. The caller sees `0x00` for every byte.
-- **`init_on_free=1`**: Every page and slab object is zeroed when freed. The freed memory is cleared before it goes back to the allocator.
+- **`init_on_alloc=1`**: すべてのページと slab の割り当ては、呼び出し元に渡される前にゼロ化される。呼び出し元にはすべてのバイトが `0x00` に見える。
+- **`init_on_free=1`**: すべてのページと slab オブジェクトは、解放時にゼロ化される。解放されたメモリは、アロケータに戻る前にクリアされる。
 
 ```
-init_on_free=1 (security focus):
-  Caller frees memory
-  └─→ kernel zeros it immediately           ← sensitive data erased now
-      └─→ memory sits on free list (zeroed)
-          └─→ next caller gets zeroed memory (bonus)
+init_on_free=1（セキュリティ重視）:
+  呼び出し元がメモリを解放する
+  └─→ カーネルが即座にゼロ化する             ← 機密データはこの時点で消去される
+      └─→ メモリは（ゼロ化された状態で）フリーリスト上にとどまる
+          └─→ 次の呼び出し元はゼロ化されたメモリを得る（おまけ）
 
-init_on_alloc=1 (simpler, slightly different guarantee):
-  Caller requests memory
-  └─→ kernel zeros it right before returning ← sensitive data from previous
-      └─→ caller gets zeroed memory             owner is cleared
+init_on_alloc=1（より単純で、保証がやや異なる）:
+  呼び出し元がメモリを要求する
+  └─→ カーネルが返す直前にゼロ化する         ← 前の所有者の機密データが
+      └─→ 呼び出し元はゼロ化されたメモリを得る     クリアされる
 ```
 
-`init_on_free` gives the stronger security guarantee: it ensures data is erased at the moment of release, even if the memory is never reallocated (e.g., freed kernel buffers that sit idle).
+`init_on_free` のほうが強いセキュリティ保証を与える。メモリが再割り当てされない場合でも（例: 解放されたまま放置されるカーネルバッファ）、解放した瞬間にデータが消去されることを保証するからである。
 
-### How It Differs from Debug Poisoning {#how-it-differs-from-debug-poisoning}
+### デバッグ用ポイズニングとの違い {#how-it-differs-from-debug-poisoning}
 
-| Aspect | `CONFIG_PAGE_POISONING` | `init_on_alloc/free` |
+| 観点 | `CONFIG_PAGE_POISONING` | `init_on_alloc/free` |
 |--------|------------------------|---------------------|
-| Pattern | `0xAA` on free, verify on alloc | `0x00` (zero) always |
-| Goal | Debug: detect writes to freed memory | Security: erase sensitive data |
-| Detects UAF | Yes (nonzero pattern) | No (zeros are not verified on alloc) |
-| Overhead | 2× read+write per page cycle | 1× write per alloc or free |
-| Compiler needed | No | No |
-| Scope | Pages only | Pages and slab objects |
+| パターン | 解放時に `0xAA`、割り当て時に検証 | 常に `0x00`（ゼロ） |
+| 目的 | デバッグ: 解放済みメモリへの書き込みを検出 | セキュリティ: 機密データを消去 |
+| UAF の検出 | する（非ゼロのパターン） | しない（割り当て時にゼロは検証されない） |
+| オーバーヘッド | ページサイクルあたり読み出し+書き込みが2倍 | 割り当てまたは解放ごとに書き込み1回 |
+| コンパイラ対応の要否 | 不要 | 不要 |
+| 対象範囲 | ページのみ | ページと slab オブジェクト |
 
-The key distinction: `0xAA` patterns are useless for security (an attacker can simply look for `0xAA` bytes and know the memory is not sensitive) but useful for debugging (a write of any other value is detectable). Zeroing is useful for security but invisible to debugging (a zero write to a freed page looks the same as the expected zero pattern).
+重要な違いは次のとおりである。`0xAA` パターンはセキュリティには役立たない（攻撃者は `0xAA` バイトを探すだけで、そのメモリが機密でないとわかる）が、デバッグには役立つ（それ以外の値の書き込みは検出できる）。ゼロ化はセキュリティには役立つが、デバッグからは見えない（解放済みページへのゼロの書き込みは、期待されるゼロパターンと同じに見える）。
 
-### Enabling It {#enabling-it_1}
+### 有効化する {#enabling-it_1}
 
 ```bash
-# Boot parameters (no recompilation needed)
+# ブートパラメータ（再コンパイル不要）
 init_on_alloc=1
 init_on_free=1
 
-# Or set both
+# あるいは両方を設定
 init_on_alloc=1 init_on_free=1
 ```
 
-These can also be set as compile-time defaults:
+これらはコンパイル時のデフォルトとして設定することもできる:
 
 ```
 CONFIG_INIT_ON_ALLOC_DEFAULT_ON=y
 CONFIG_INIT_ON_FREE_DEFAULT_ON=y
 ```
 
-### Performance Cost {#performance-cost_1}
+### 性能コスト {#performance-cost_1}
 
-The v5.3 commit message measured the overhead on kernel compilation (a CPU-and-allocation-intensive workload):
+v5.3 のコミットメッセージでは、カーネルのコンパイル（CPU と割り当てを多用するワークロード）でオーバーヘッドが測定されている:
 
-- `init_on_alloc=1`: under 1% overhead (zeroing at alloc is largely overlapped with cache warming)
-- `init_on_free=1`: ~8% wall time overhead on kernel build; `security/Kconfig.hardening` documents this as "3–5% in most cases"
+- `init_on_alloc=1`: オーバーヘッド1%未満（割り当て時のゼロ化はキャッシュのウォーミングと大部分が重なる）
+- `init_on_free=1`: カーネルビルドでウォールタイムのオーバーヘッドが約8%。`security/Kconfig.hardening` ではこれを「ほとんどの場合3–5%」と記載している
 
-`init_on_free` is significantly more expensive than `init_on_alloc` because freed memory is cold cache — zeroing it forces cache misses. Memory-allocation-heavy workloads will see higher relative overhead. Workloads that allocate large contiguous buffers once and reuse them see near-zero overhead.
+`init_on_free` は `init_on_alloc` よりかなり高コストである。解放されたメモリはキャッシュ上でコールドであり、それをゼロ化するとキャッシュミスが強制されるからである。メモリ割り当ての多いワークロードでは相対的なオーバーヘッドが大きくなる。大きな連続バッファを一度だけ割り当てて再利用するワークロードでは、オーバーヘッドはほぼゼロである。
 
 !!! note
-    If `CONFIG_PAGE_POISONING` is also enabled, `init_on_free` and page poisoning both run on free. The kernel does not deduplicate them automatically; you may zero pages twice. Disable one if you enable the other for production-like performance testing.
+    `CONFIG_PAGE_POISONING` も有効になっている場合、解放時に `init_on_free` とページポイズニングの両方が実行される。カーネルはこれらを自動的に重複排除しないため、ページを2回ゼロ化する可能性がある。本番に近い性能テストを行う場合は、一方を有効にするなら他方を無効にすること。
 
-### When to Use It {#when-to-use-it_1}
+### いつ使うか {#when-to-use-it_1}
 
-- **Security-sensitive kernels**: Enable `init_on_free=1` to comply with security hardening guides (e.g., KSPP recommendations)
-- **Containers and multi-tenant workloads**: Prevent tenant A's freed memory from being readable by tenant B after reallocation
-- **Not a debugging tool**: If you are trying to catch a use-after-free, use KASAN or `CONFIG_PAGE_POISONING` instead
+- **セキュリティが重要なカーネル**: セキュリティ強化ガイド（例: KSPP の推奨事項）に準拠するために `init_on_free=1` を有効にする
+- **コンテナやマルチテナントのワークロード**: テナント A が解放したメモリが、再割り当て後にテナント B から読めてしまうのを防ぐ
+- **デバッグツールではない**: use-after-free を捕捉しようとしているなら、代わりに KASAN か `CONFIG_PAGE_POISONING` を使う
 
-## slub_debug Poisoning: Slab-Level Debugging {#slub_debug-poisoning-slab-level-debugging}
+## slub_debug ポイズニング: slab レベルのデバッグ {#slub_debug-poisoning-slab-level-debugging}
 
-### What It Does {#what-it-does_1}
+### 何をするのか {#what-it-does_1}
 
-`CONFIG_PAGE_POISONING` operates at the page allocator level and catches bugs involving raw page allocations. Most kernel allocations go through the slab allocator (`kmalloc`, `kmem_cache_alloc`), which carves pages into smaller objects. For those, you need slab-level poisoning.
+`CONFIG_PAGE_POISONING` はページアロケータのレベルで動作し、生のページ割り当てが関わるバグを捕捉する。しかしカーネルのほとんどの割り当ては slab アロケータ（`kmalloc`、`kmem_cache_alloc`）を経由し、slab アロケータはページをより小さなオブジェクトに切り分ける。それらには slab レベルのポイズニングが必要である。
 
-SLUB (the default slab allocator since v2.6.23) has built-in debug support controlled by the `slub_debug` boot parameter. The `P` flag enables poisoning.
+SLUB（v2.6.23 以降のデフォルトの slab アロケータ）には、`slub_debug` ブートパラメータで制御される組み込みのデバッグ機能がある。`P` フラグでポイズニングが有効になる。
 
-The implementation is in [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c).
+実装は [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) にある。
 
-### The Poison Patterns {#the-poison-patterns}
+### ポイズンパターン {#the-poison-patterns}
 
-SLUB poisoning uses two distinct byte values (defined in [`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h)):
+SLUB のポイズニングは、2つの異なるバイト値を使う（[`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) で定義）:
 
-| Pattern | Value | Meaning |
+| パターン | 値 | 意味 |
 |---------|-------|---------|
-| `POISON_FREE` | `0x6b` (`k` in ASCII) | Object has been freed |
-| `POISON_END` | `0xa5` | End-of-object marker (redzone boundary) |
-| `POISON_INUSE` | `0x5a` | Object is in use (some allocators) |
+| `POISON_FREE` | `0x6b`（ASCII の `k`） | オブジェクトは解放済み |
+| `POISON_END` | `0xa5` | オブジェクト終端のマーカー（レッドゾーン境界） |
+| `POISON_INUSE` | `0x5a` | オブジェクトは使用中（一部のアロケータ） |
 
-On free, the object body is filled with `0x6b` and the redzone bytes are set to `0xa5`. On the next allocation, SLUB verifies these patterns before returning the object.
+解放時には、オブジェクト本体が `0x6b` で埋められ、レッドゾーンのバイトが `0xa5` に設定される。次の割り当て時に、SLUB はオブジェクトを返す前にこれらのパターンを検証する。
 
 ```
-SLUB object layout with poisoning (P flag) and redzones (Z flag):
+ポイズニング（P フラグ）とレッドゾーン（Z フラグ）ありの SLUB オブジェクトレイアウト:
 
   ┌──────────┬─────────────────────────────┬──────────┐
   │ redzone  │    object body (0x6b when   │ redzone  │
@@ -229,43 +229,43 @@ SLUB object layout with poisoning (P flag) and redzones (Z flag):
   └──────────┴─────────────────────────────┴──────────┘
 ```
 
-The `0x6b` value (`k` in ASCII) is a recognizable signature in memory dumps, making it easy to spot freed slab memory in crash analysis tools like `crash(8)`.
+`0x6b` という値（ASCII の `k`）はメモリダンプ中で見分けやすい目印であり、`crash(8)` のようなクラッシュ解析ツールで解放済みの slab メモリを見つけやすくしている。
 
-### Enabling SLUB Poisoning {#enabling-slub-poisoning}
+### SLUB ポイズニングの有効化 {#enabling-slub-poisoning}
 
 ```bash
-# Enable for all slab caches
+# すべての slab キャッシュで有効化
 slub_debug=P
 
-# Combine with other flags (recommended for thorough debugging)
+# 他のフラグと組み合わせる（徹底的なデバッグに推奨）
 slub_debug=FZPU
-# F = sanity checks
-# Z = redzones (catch overflows into adjacent objects)
-# P = poisoning (catch use-after-free)
-# U = track allocation/free stacks
+# F = 整合性チェック
+# Z = レッドゾーン（隣接オブジェクトへのオーバーフローを捕捉）
+# P = ポイズニング（use-after-free を捕捉）
+# U = 割り当て/解放のスタックを追跡
 
-# Enable only for a specific cache (e.g., the ext4_inode_cache)
+# 特定のキャッシュ（例: ext4_inode_cache）だけで有効化
 slub_debug=P,ext4_inode_cache
 
-# Enable only for kmalloc-64
+# kmalloc-64 だけで有効化
 slub_debug=P,kmalloc-64
 ```
 
-Alternatively, target a specific cache at runtime via sysfs:
+あるいは、実行時に sysfs 経由で特定のキャッシュを対象にする:
 
 ```bash
-# Check which caches exist
+# どのキャッシュが存在するか確認
 ls /sys/kernel/slab/
 
-# Check poison status of a specific cache (read-only — reflects compile-time SLAB_POISON flag)
+# 特定キャッシュのポイズン状態を確認（読み取り専用 — コンパイル時の SLAB_POISON フラグを反映）
 cat /sys/kernel/slab/kmalloc-64/poison
 ```
 
-Require `CONFIG_SLUB_DEBUG=y` in the kernel config (typically enabled in debug kernels automatically).
+カーネル設定で `CONFIG_SLUB_DEBUG=y` が必要である（デバッグカーネルでは通常自動的に有効になっている）。
 
-### How It Catches Slab Use-After-Free {#how-it-catches-slab-use-after-free}
+### slab の use-after-free をどう捕捉するか {#how-it-catches-slab-use-after-free}
 
-When code writes to a freed slab object, it overwrites some `0x6b` bytes. The next time an object is taken from that slab, SLUB's `check_object()` function scans the body for bytes that are not `0x6b`. If found, it reports a poison corruption:
+コードが解放済みの slab オブジェクトに書き込むと、いくつかの `0x6b` バイトが上書きされる。次にその slab からオブジェクトが取り出されるとき、SLUB の `check_object()` 関数が本体をスキャンして `0x6b` でないバイトを探す。見つかった場合、ポイズン破損を報告する:
 
 ```
 =============================================================================
@@ -282,81 +282,81 @@ Call Trace:
  dump_stack+0x48/0x5e
  print_trailer+0xf0/0x150
  object_err+0x2e/0x40
- check_object+0x218/0x270          ← SLUB poison verification
+ check_object+0x218/0x270          ← SLUB のポイズン検証
  alloc_debug_processing+0x6e/0x170
  ___slab_alloc+0x42e/0x560
  kmalloc_trace+0x26/0x50
  ...
 ```
 
-**Reading the report**:
+**レポートの読み方**:
 
-1. `BUG kmalloc-64: Poison overwritten` — a freed object in the `kmalloc-64` cache was written to while free
-2. `First byte 0x0 instead of 0x6b` — byte at offset 0 of the object is `0x0`, not the expected `0x6b` poison
-3. `Allocated in` / `Freed in` — SLUB tracks the last allocation and free site (requires the `U` flag in `slub_debug`)
-4. The call trace shows who triggered the check (the next allocator), not who did the write
+1. `BUG kmalloc-64: Poison overwritten` — `kmalloc-64` キャッシュ内の解放済みオブジェクトに、解放中に書き込みがあった
+2. `First byte 0x0 instead of 0x6b` — オブジェクトのオフセット0のバイトが、期待される `0x6b` ポイズンではなく `0x0` だった
+3. `Allocated in` / `Freed in` — SLUB は最後の割り当て箇所と解放箇所を追跡している（`slub_debug` の `U` フラグが必要）
+4. コールトレースはチェックを引き起こした側（次の割り当て元）を示し、書き込んだ側は示さない
 
-### When to Use It {#when-to-use-it_2}
+### いつ使うか {#when-to-use-it_2}
 
-Use `slub_debug=P` when:
+`slub_debug=P` を使うのは次のような場合である:
 
-- You suspect a use-after-free in a slab-allocated object (most `kmalloc` and `kmem_cache_alloc` objects fall here)
-- You want to identify which specific slab cache is involved (use the cache-specific form: `slub_debug=P,mycache`)
-- You want lower overhead than full KASAN but still need poison-level coverage
+- slab で割り当てられたオブジェクトでの use-after-free が疑われる（`kmalloc` と `kmem_cache_alloc` のオブジェクトのほとんどがこれに該当する）
+- どの slab キャッシュが関わっているかを特定したい（キャッシュ指定の形式 `slub_debug=P,mycache` を使う）
+- 完全な KASAN よりオーバーヘッドを抑えつつ、ポイズンレベルのカバレッジは必要
 
-!!! warning "Performance impact"
-    `slub_debug=FZPU` applied to all caches can slow down a system by 5–10x on allocation-heavy workloads. If performance matters, target only the suspect cache with `slub_debug=P,cache_name`.
+!!! warning "性能への影響"
+    `slub_debug=FZPU` をすべてのキャッシュに適用すると、割り当ての多いワークロードではシステムが5–10倍遅くなることがある。性能が重要な場合は、`slub_debug=P,cache_name` で疑わしいキャッシュだけを対象にすること。
 
-## Choosing the Right Tool {#choosing-the-right-tool}
+## 適切なツールの選び方 {#choosing-the-right-tool}
 
 ```
-Use-after-free suspicion
-├── Involves a page-level allocation (vmalloc, alloc_pages)?
+use-after-free の疑い
+├── ページ単位の割り当て（vmalloc、alloc_pages）が関わる?
 │   └── CONFIG_PAGE_POISONING
-├── Involves a slab object (kmalloc, kmem_cache_alloc)?
-│   ├── Want precise "who did it" with stack trace → KASAN (see kasan.md)
-│   ├── Want pattern-based detection with lower overhead → slub_debug=P
-│   └── Running in production → KFENCE (see kfence.md)
-└── Security concern (prevent data leakage between tenants)?
+├── slab オブジェクト（kmalloc、kmem_cache_alloc）が関わる?
+│   ├── スタックトレース付きで正確に「誰がやったか」を知りたい → KASAN（kasan.md を参照）
+│   ├── より低いオーバーヘッドでパターンベースの検出をしたい → slub_debug=P
+│   └── 本番環境で実行している → KFENCE（kfence.md を参照）
+└── セキュリティ上の懸念（テナント間のデータ漏洩を防ぎたい）?
     └── init_on_free=1
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/page_poison.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) | `CONFIG_PAGE_POISONING` implementation: `kernel_poison_pages()`, `kernel_unpoison_pages()` |
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Page allocator hooks that call poisoning and `init_on_alloc/free` |
-| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB allocator: `set_freepointer()`, `check_object()`, poison fill and verify |
-| [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | `init_on_alloc` / `init_on_free` hooks for the slab layer |
-| [`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) | Poison byte constants: `POISON_FREE` (`0x6b`), `POISON_END` (`0xa5`) |
+| [`mm/page_poison.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) | `CONFIG_PAGE_POISONING` の実装: `kernel_poison_pages()`、`kernel_unpoison_pages()` |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | ポイズニングと `init_on_alloc/free` を呼び出すページアロケータのフック |
+| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB アロケータ: `set_freepointer()`、`check_object()`、ポイズンの書き込みと検証 |
+| [`mm/slab_common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slab_common.c) | slab レイヤ向けの `init_on_alloc` / `init_on_free` フック |
+| [`include/linux/poison.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) | ポイズンバイトの定数: `POISON_FREE`（`0x6b`）、`POISON_END`（`0xa5`） |
 
-## History {#history}
+## 歴史 {#history}
 
 ### CONFIG_PAGE_POISONING {#configpagepoisoning}
 
-Page poisoning predates systematic git history tracking. The `PAGE_POISONING` config option and `0xAA` pattern have been present in the kernel for many years as a debugging aid; the current `mm/page_poison.c` file consolidates the logic that was previously scattered across `mm/page_alloc.c`.
+ページポイズニングは、git による体系的な履歴管理よりも前から存在する。`PAGE_POISONING` 設定オプションと `0xAA` パターンは、デバッグ支援として長年カーネルに存在してきた。現在の `mm/page_poison.c` ファイルは、以前は `mm/page_alloc.c` に散らばっていたロジックをまとめたものである。
 
-### init_on_alloc / init_on_free (v5.3, 2019) {#initonalloc-initonfree-v53-2019}
+### init_on_alloc / init_on_free（v5.3、2019年） {#initonalloc-initonfree-v53-2019}
 
-**Commit**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6) ("mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options")
-**Author**: Alexander Potapenko
-**LWN coverage**: [Initializing memory on allocation and release](https://lwn.net/Articles/791380/) (2019)
+**コミット**: [6471384af2a6](https://git.kernel.org/linus/6471384af2a6)（"mm: security: introduce init_on_alloc=1 and init_on_free=1 boot options"）
+**作者**: Alexander Potapenko
+**LWN の記事**: [Initializing memory on allocation and release](https://lwn.net/Articles/791380/)（2019年）
 
-Motivated by a class of information disclosure vulnerabilities where kernel memory from one context was reused in another without being cleared. The patch was part of a broader push to make the kernel's memory lifecycle safer by default, aligned with the Kernel Self Protection Project (KSPP).
+ある文脈のカーネルメモリが、クリアされないまま別の文脈で再利用されるという、情報漏洩の脆弱性のクラスが動機となった。このパッチは、カーネルのメモリのライフサイクルをデフォルトでより安全にしようという、Kernel Self Protection Project（KSPP）に沿ったより広範な取り組みの一部であった。
 
-### slub_debug Poisoning {#slub_debug-poisoning}
+### slub_debug ポイズニング {#slub_debug-poisoning}
 
-SLUB was introduced in v2.6.23 (2007) as a replacement for SLAB. The `P` (poisoning) flag and `0x6b`/`0xa5` patterns were part of SLUB's debug infrastructure from the beginning, carrying forward conventions from the older SLAB allocator. The sysfs interface at `/sys/kernel/slab/<cache>/poison` enables per-cache control without rebooting.
+SLUB は SLAB の置き換えとして v2.6.23（2007年）で導入された。`P`（ポイズニング）フラグと `0x6b`/`0xa5` パターンは、当初から SLUB のデバッグ基盤の一部であり、旧来の SLAB アロケータの慣例を引き継いだものである。`/sys/kernel/slab/<cache>/poison` の sysfs インターフェースにより、再起動せずにキャッシュごとの制御が可能になっている。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/page_poison.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) — `CONFIG_PAGE_POISONING` implementation: `kernel_poison_pages()` fills freed pages with `0xAA` and `kernel_unpoison_pages()` verifies the pattern on allocation
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — page allocator hooks that invoke both page poisoning and the `init_on_alloc`/`init_on_free` security zeroing paths
-- [mm/slub.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) — SLUB allocator: `set_freepointer()` and `check_object()` implement the `0x6b`/`0xa5` slab poison patterns
-- [include/linux/poison.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) — canonical definitions for `POISON_FREE` (`0x6b`) and `POISON_END` (`0xa5`)
-- `Documentation/admin-guide/kernel-parameters.txt` — reference entries for the `page_poison`, `init_on_alloc`, `init_on_free`, and `slub_debug` boot parameters
-- [Initializing memory on allocation and release](https://lwn.net/Articles/791380/) (LWN, 2019) — design rationale for `init_on_alloc=1` and `init_on_free=1` and their security versus debug tradeoffs
-- [kasan](kasan.md) — compiler-instrumented memory error detection; catches use-after-free at the moment of the write with a precise stack trace, complementing the deferred detection of page poisoning
-- [kfence](kfence.md) — sampling-based memory error detection that is safe to enable in production, unlike the heavier page poisoning or KASAN approaches
-- [slab](slab.md) — SLUB allocator internals: slab cache layout, object lifecycle, and the debug flag infrastructure that `slub_debug=P` builds on
+- [mm/page_poison.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_poison.c) — `CONFIG_PAGE_POISONING` の実装: `kernel_poison_pages()` が解放されたページを `0xAA` で埋め、`kernel_unpoison_pages()` が割り当て時にパターンを検証する
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — ページポイズニングと、`init_on_alloc`/`init_on_free` によるセキュリティ用ゼロ化パスの両方を呼び出すページアロケータのフック
+- [mm/slub.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) — SLUB アロケータ: `set_freepointer()` と `check_object()` が `0x6b`/`0xa5` の slab ポイズンパターンを実装している
+- [include/linux/poison.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/poison.h) — `POISON_FREE`（`0x6b`）と `POISON_END`（`0xa5`）の正式な定義
+- `Documentation/admin-guide/kernel-parameters.txt` — ブートパラメータ `page_poison`、`init_on_alloc`、`init_on_free`、`slub_debug` のリファレンス項目
+- [Initializing memory on allocation and release](https://lwn.net/Articles/791380/)（LWN、2019年） — `init_on_alloc=1` と `init_on_free=1` の設計根拠と、セキュリティ対デバッグのトレードオフ
+- [kasan](kasan.md) — コンパイラによる計装を用いたメモリエラー検出。書き込みの瞬間に正確なスタックトレース付きで use-after-free を捕捉し、ページポイズニングによる遅延検出を補完する
+- [kfence](kfence.md) — サンプリングベースのメモリエラー検出。より重いページポイズニングや KASAN と異なり、本番環境で有効にしても安全である
+- [slab](slab.md) — SLUB アロケータの内部: slab キャッシュのレイアウト、オブジェクトのライフサイクル、そして `slub_debug=P` の土台となるデバッグフラグの基盤

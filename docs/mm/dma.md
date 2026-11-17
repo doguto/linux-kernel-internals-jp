@@ -1,54 +1,54 @@
-# DMA Memory Allocation {#dma-memory-allocation}
+# DMA メモリの割り当て {#dma-memory-allocation}
 
-> How the kernel allocates and manages memory for devices that access RAM directly
+> RAM に直接アクセスするデバイスのために、カーネルはどのようにメモリを割り当て、管理するのか
 
-## What is DMA? {#what-is-dma}
+## DMA とは何か {#what-is-dma}
 
-Direct Memory Access (DMA) lets hardware devices read and write system memory without involving the CPU for every byte transferred. A network card receiving packets, a disk controller fetching blocks, or a GPU reading textures -- all bypass the CPU and talk to RAM directly.
+ダイレクトメモリアクセス（DMA）は、転送するバイトごとに CPU を介さずに、ハードウェアデバイスがシステムメモリを読み書きできるようにする仕組みである。パケットを受信するネットワークカード、ブロックを取得するディスクコントローラ、テクスチャを読み込む GPU — いずれも CPU を迂回して RAM と直接やり取りする。
 
-This is essential for performance. Without DMA, the CPU would spend its time copying bytes between device registers and memory instead of doing useful work. But DMA introduces a fundamental problem: **devices operate on physical addresses, not virtual ones**, and they may not be able to reach all of physical memory.
+これは性能にとって不可欠である。DMA がなければ、CPU は有用な仕事をする代わりに、デバイスのレジスタとメモリの間でバイトをコピーすることに時間を費やすことになる。しかし DMA は根本的な問題をもたらす。**デバイスは仮想アドレスではなく物理アドレスで動作し**、しかも物理メモリのすべてに到達できるとは限らないのである。
 
-## Why DMA Needs Special Memory {#why-dma-needs-special-memory}
+## なぜ DMA には特別なメモリが必要なのか {#why-dma-needs-special-memory}
 
-Three constraints make DMA memory allocation different from normal `kmalloc()`:
+3つの制約により、DMA 用のメモリ割り当ては通常の `kmalloc()` とは異なるものになる:
 
-1. **Physical address limitations**: Many devices can only address a subset of physical memory. An old ISA sound card can only reach the first 16MB. A 32-bit PCI card can only reach the first 4GB. If the kernel hands a device a buffer at physical address 8GB, the device simply cannot access it.
+1. **物理アドレスの制限**: 多くのデバイスは物理メモリの一部しかアドレス指定できない。古い ISA サウンドカードは最初の16MB にしか到達できない。32ビットの PCI カードは最初の4GB にしか到達できない。カーネルがデバイスに物理アドレス8GB のバッファを渡しても、デバイスは単純にそれにアクセスできない。
 
-2. **Cache coherency**: The CPU uses caches (L1, L2, L3) between itself and RAM. When a device writes to RAM via DMA, the CPU cache may still hold stale data for that address. Conversely, if the CPU writes to cache but the data has not reached RAM yet, the device reads stale memory. The kernel must manage this explicitly.
+2. **キャッシュコヒーレンシ**: CPU は自身と RAM の間にキャッシュ（L1、L2、L3）を使う。デバイスが DMA で RAM に書き込んだとき、CPU キャッシュにはそのアドレスの古いデータがまだ残っている可能性がある。逆に、CPU がキャッシュに書き込んだデータがまだ RAM に到達していなければ、デバイスは古いメモリを読むことになる。カーネルはこれを明示的に管理しなければならない。
 
-3. **Contiguity requirements**: Devices see physical memory, not virtual. A buffer that looks contiguous in the kernel's virtual address space may be scattered across physical pages. Without hardware support (IOMMU), the device needs physically contiguous memory.
+3. **連続性の要件**: デバイスが見るのは仮想メモリではなく物理メモリである。カーネルの仮想アドレス空間で連続して見えるバッファも、物理ページ上では散らばっていることがある。ハードウェアの支援（IOMMU）がなければ、デバイスは物理的に連続したメモリを必要とする。
 
-## DMA Zones {#dma-zones}
+## DMA ゾーン {#dma-zones}
 
-The kernel partitions physical memory into zones to handle device addressing limitations. From [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h):
+カーネルは、デバイスのアドレス指定の制限に対処するために、物理メモリをゾーンに分割している。[`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) より:
 
 ```c
 enum zone_type {
-    ZONE_DMA,       /* First 16MB - ISA devices */
-    ZONE_DMA32,     /* First 4GB - 32-bit PCI devices */
-    ZONE_NORMAL,    /* All addressable memory */
+    ZONE_DMA,       /* 最初の16MB - ISA デバイス */
+    ZONE_DMA32,     /* 最初の4GB - 32ビット PCI デバイス */
+    ZONE_NORMAL,    /* アドレス指定可能なすべてのメモリ */
     /* ... */
 };
 ```
 
-### ZONE_DMA (first 16MB) {#zone_dma-first-16mb}
+### ZONE_DMA（最初の16MB） {#zone_dma-first-16mb}
 
-A legacy zone for ISA bus devices. The ISA bus uses 24-bit addresses, limiting DMA to the first 2^24 = 16MB of RAM. Modern systems rarely need this, but the zone persists because some architectures still define it.
+ISA バスのデバイス向けのレガシーなゾーンである。ISA バスは24ビットのアドレスを使うため、DMA は RAM の最初の 2^24 = 16MB に制限される。最近のシステムでこれが必要になることはまれだが、一部のアーキテクチャがまだ定義しているため、このゾーンは残っている。
 
-Allocated with `GFP_DMA`.
+`GFP_DMA` で割り当てる。
 
-### ZONE_DMA32 (first 4GB) {#zone_dma32-first-4gb}
+### ZONE_DMA32（最初の4GB） {#zone_dma32-first-4gb}
 
-For 32-bit PCI devices that use 32-bit DMA addresses. On a system with 64GB of RAM, these devices can only access the bottom 4GB. This is still relevant -- many embedded devices and older PCIe cards have 32-bit DMA masks.
+32ビットの DMA アドレスを使う32ビット PCI デバイス向けである。64GB の RAM を持つシステムでも、これらのデバイスは下位4GB にしかアクセスできない。これは今でも重要である — 多くの組み込みデバイスや古い PCIe カードは32ビットの DMA マスクを持っている。
 
-Allocated with `GFP_DMA32`.
+`GFP_DMA32` で割り当てる。
 
 ### ZONE_NORMAL {#zone_normal}
 
-Memory accessible by the kernel and by devices with full addressing capability (64-bit DMA). No special constraints.
+カーネルと、完全なアドレス指定能力（64ビット DMA）を持つデバイスがアクセスできるメモリである。特別な制約はない。
 
 ```
-Physical Memory Layout (64-bit system with 64GB RAM):
+物理メモリのレイアウト（64GB の RAM を持つ64ビットシステム）:
 
 0                16MB              4GB                              64GB
 |--- ZONE_DMA ---|--- ZONE_DMA32 ---|------------ ZONE_NORMAL -----------|
@@ -56,15 +56,15 @@ Physical Memory Layout (64-bit system with 64GB RAM):
     (GFP_DMA)       (GFP_DMA32)             (GFP_KERNEL)
 ```
 
-The zone boundaries are architecture-specific. ARM64 initially had no `ZONE_DMA` at all, but commit [1a8e1cef7603](https://git.kernel.org/linus/1a8e1cef7603) ("arm64: use both ZONE_DMA and ZONE_DMA32") added it to handle devices that can only address the lowest 1GB of physical memory — a constraint that exists on some ARM SoCs and PCIe devices regardless of what the architecture spec allows.
+ゾーンの境界はアーキテクチャ固有である。ARM64 には当初 `ZONE_DMA` がまったくなかったが、コミット [1a8e1cef7603](https://git.kernel.org/linus/1a8e1cef7603)（"arm64: use both ZONE_DMA and ZONE_DMA32"）が、物理メモリの最下位1GB しかアドレス指定できないデバイスに対処するためにこれを追加した。これは、アーキテクチャ仕様が何を許すかにかかわらず、一部の ARM SoC や PCIe デバイスに存在する制約である。
 
-## The DMA API {#the-dma-api}
+## DMA API {#the-dma-api}
 
-The kernel provides a unified DMA API that abstracts away the differences between architectures and IOMMUs. The API lives in [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) with the core implementation in [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma).
+カーネルは、アーキテクチャや IOMMU の違いを抽象化する統一的な DMA API を提供している。API は [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) にあり、中核の実装は [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma) にある。
 
 ### dma_alloc_coherent() {#dmaalloccoherent}
 
-Allocates a buffer that is simultaneously accessible by the CPU and the device, with hardware-enforced coherency (no manual cache management needed).
+CPU とデバイスの両方から同時にアクセスでき、ハードウェアによってコヒーレンシが保証される（手動でのキャッシュ管理が不要な）バッファを割り当てる。
 
 ```c
 void *dma_alloc_coherent(struct device *dev, size_t size,
@@ -73,15 +73,15 @@ void dma_free_coherent(struct device *dev, size_t size,
                        void *cpu_addr, dma_addr_t dma_handle);
 ```
 
-Returns two things: a CPU virtual address (the return value) and a device-visible DMA address (via `dma_handle`). The driver uses the CPU address; it programs the device with the DMA address.
+2つのものを返す。CPU の仮想アドレス（戻り値）と、デバイスから見える DMA アドレス（`dma_handle` 経由）である。ドライバは CPU アドレスを使い、デバイスには DMA アドレスを設定する。
 
-**When to use**: Long-lived buffers shared between CPU and device -- descriptor rings, command queues, firmware communication areas. The coherency guarantee means neither side needs to flush or invalidate caches.
+**使うべきとき**: CPU とデバイスの間で共有される長寿命のバッファ — ディスクリプタリング、コマンドキュー、ファームウェアとの通信領域。コヒーレンシが保証されるため、どちらの側もキャッシュのフラッシュや無効化を行う必要がない。
 
-**Trade-off**: Coherent memory is often uncacheable on architectures without hardware cache coherency (e.g., some ARM SoCs). This makes CPU access slower. Do not use for large data buffers that the CPU will read/write intensively.
+**トレードオフ**: ハードウェアによるキャッシュコヒーレンシを持たないアーキテクチャ（例: 一部の ARM SoC）では、コヒーレントメモリはキャッシュ不可であることが多い。このため CPU からのアクセスが遅くなる。CPU が集中的に読み書きする大きなデータバッファには使わないこと。
 
 ### dma_map_single() {#dmamapsingle}
 
-Maps an existing kernel buffer for DMA access by a device. This is a "streaming" mapping -- it has a direction and a lifecycle.
+既存のカーネルバッファを、デバイスが DMA でアクセスできるようにマップする。これは「ストリーミング」マッピングであり、方向とライフサイクルを持つ。
 
 ```c
 dma_addr_t dma_map_single(struct device *dev, void *cpu_addr,
@@ -90,19 +90,19 @@ void dma_unmap_single(struct device *dev, dma_addr_t dma_addr,
                       size_t size, enum dma_data_direction dir);
 ```
 
-The direction tells the kernel which cache operations are needed:
+方向は、どのキャッシュ操作が必要かをカーネルに伝える:
 
-| Direction | Meaning | Cache Operation |
+| 方向 | 意味 | キャッシュ操作 |
 |-----------|---------|-----------------|
-| `DMA_TO_DEVICE` | CPU writes, device reads | Flush CPU caches before DMA |
-| `DMA_FROM_DEVICE` | Device writes, CPU reads | Invalidate CPU caches after DMA |
-| `DMA_BIDIRECTIONAL` | Both directions | Flush before, invalidate after |
+| `DMA_TO_DEVICE` | CPU が書き、デバイスが読む | DMA の前に CPU キャッシュをフラッシュする |
+| `DMA_FROM_DEVICE` | デバイスが書き、CPU が読む | DMA の後に CPU キャッシュを無効化する |
+| `DMA_BIDIRECTIONAL` | 双方向 | 前にフラッシュし、後に無効化する |
 
-**When to use**: Temporary transfers -- sending a network packet, submitting a disk I/O request. Map before the transfer, unmap when it completes.
+**使うべきとき**: 一時的な転送 — ネットワークパケットの送信、ディスク I/O 要求の発行。転送の前にマップし、完了したらアンマップする。
 
 ### dma_map_sg() {#dmamapsg}
 
-Maps a scatter-gather list -- multiple non-contiguous memory regions -- for a single DMA operation. This is how the kernel handles I/O that spans multiple pages.
+スキャッタギャザーリスト — 連続していない複数のメモリ領域 — を、単一の DMA 操作のためにマップする。カーネルは、複数のページにまたがる I/O をこの方法で処理する。
 
 ```c
 int dma_map_sg(struct device *dev, struct scatterlist *sg,
@@ -111,117 +111,117 @@ void dma_unmap_sg(struct device *dev, struct scatterlist *sg,
                   int nents, enum dma_data_direction dir);
 ```
 
-`dma_map_sg()` returns the number of DMA-mapped entries, which may be *fewer* than the input entries. With an IOMMU, the kernel can merge physically discontiguous pages into a single contiguous DMA region as seen by the device.
+`dma_map_sg()` は DMA マップされたエントリの数を返すが、これは入力のエントリ数より *少ない* ことがある。IOMMU があれば、カーネルは物理的に不連続なページを、デバイスから見て単一の連続した DMA 領域にまとめることができる。
 
-**When to use**: Block I/O, large network transfers, any case where data spans multiple pages. Most real device drivers use scatter-gather extensively.
+**使うべきとき**: ブロック I/O、大きなネットワーク転送など、データが複数のページにまたがるあらゆる場合。実際のデバイスドライバのほとんどは、スキャッタギャザーを多用している。
 
-## Coherent vs Streaming DMA Mappings {#coherent-vs-streaming-dma-mappings}
+## コヒーレントマッピングとストリーミングマッピング {#coherent-vs-streaming-dma-mappings}
 
-This is the central design decision in the DMA API:
+これは DMA API における中心的な設計判断である:
 
-| Property | Coherent | Streaming |
+| 特性 | コヒーレント | ストリーミング |
 |----------|----------|-----------|
-| **API** | `dma_alloc_coherent()` | `dma_map_single()`, `dma_map_sg()` |
-| **Lifetime** | Long-lived (driver load to unload) | Per-transfer (map, DMA, unmap) |
-| **Cache handling** | Automatic (hardware or uncached) | Manual (flush/invalidate at map/unmap) |
-| **CPU access speed** | Potentially slow (uncached on some archs) | Normal (cached) |
-| **Use case** | Descriptor rings, command queues | Data buffers, packets, disk blocks |
+| **API** | `dma_alloc_coherent()` | `dma_map_single()`、`dma_map_sg()` |
+| **寿命** | 長寿命（ドライバのロードからアンロードまで） | 転送ごと（マップ、DMA、アンマップ） |
+| **キャッシュの扱い** | 自動（ハードウェアまたはキャッシュ不可） | 手動（マップ/アンマップ時にフラッシュ/無効化） |
+| **CPU アクセスの速度** | 遅い可能性がある（一部のアーキテクチャではキャッシュ不可） | 通常（キャッシュ可能） |
+| **ユースケース** | ディスクリプタリング、コマンドキュー | データバッファ、パケット、ディスクブロック |
 
-The key insight: **coherent mappings trade CPU performance for convenience, while streaming mappings trade convenience for CPU performance.** Most drivers use coherent mappings for small control structures and streaming mappings for data.
+重要な点は次のとおりである: **コヒーレントマッピングは CPU 性能と引き換えに利便性を得ており、ストリーミングマッピングは利便性と引き換えに CPU 性能を得ている。** ほとんどのドライバは、小さな制御構造にはコヒーレントマッピングを、データにはストリーミングマッピングを使う。
 
-### Sync Operations {#sync-operations}
+### sync 操作 {#sync-operations}
 
-Between map and unmap, if the CPU needs to touch a streaming buffer, it must use sync operations:
+マップとアンマップの間に CPU がストリーミングバッファに触れる必要がある場合は、sync 操作を使わなければならない:
 
 ```c
-/* CPU wants to read a buffer the device has written */
+/* デバイスが書き込んだバッファを CPU が読みたい */
 dma_sync_single_for_cpu(dev, dma_handle, size, DMA_FROM_DEVICE);
-/* ... CPU reads data ... */
+/* ... CPU がデータを読む ... */
 
-/* Hand buffer back to device */
+/* バッファをデバイスに返す */
 dma_sync_single_for_device(dev, dma_handle, size, DMA_FROM_DEVICE);
 ```
 
-These ensure cache coherency at the point of the sync call. Without them, the CPU may read stale cached data.
+これらは sync を呼び出した時点でのキャッシュコヒーレンシを保証する。これらがなければ、CPU はキャッシュされた古いデータを読む可能性がある。
 
 ## IOMMU {#iommu}
 
-An Input/Output Memory Management Unit (IOMMU) sits between devices and physical memory, translating device-visible "I/O virtual addresses" (IOVAs) to physical addresses. It is essentially a page table for devices.
+入出力メモリ管理ユニット（IOMMU）はデバイスと物理メモリの間に位置し、デバイスから見える「I/O 仮想アドレス」（IOVA）を物理アドレスに変換する。本質的には、デバイスのためのページテーブルである。
 
 ```
-Without IOMMU:
+IOMMU なし:
   Device --[physical addr]--> RAM
-  (device must use real physical addresses)
+  （デバイスは実際の物理アドレスを使わなければならない）
 
-With IOMMU:
+IOMMU あり:
   Device --[IOVA]--> IOMMU --[physical addr]--> RAM
-  (device uses virtual addresses, translated by hardware)
+  （デバイスは仮想アドレスを使い、ハードウェアが変換する）
 ```
 
-### What IOMMU enables {#what-iommu-enables}
+### IOMMU が可能にすること {#what-iommu-enables}
 
-1. **Scatter-gather coalescing**: Map physically scattered pages as contiguous to the device. A 64KB buffer spanning 16 scattered pages appears as one contiguous 64KB region to the device.
+1. **スキャッタギャザーの結合**: 物理的に散らばったページを、デバイスから見て連続しているようにマップする。散らばった16ページにまたがる64KB のバッファが、デバイスには1つの連続した64KB の領域に見える。
 
-2. **Device isolation**: A buggy or malicious device can only access memory regions explicitly mapped in its IOMMU page table. This is essential for secure device passthrough to virtual machines (VFIO).
+2. **デバイスの隔離**: バグのある、あるいは悪意のあるデバイスは、その IOMMU ページテーブルに明示的にマップされたメモリ領域にしかアクセスできない。これは、仮想マシンへの安全なデバイスパススルー（VFIO）に不可欠である。
 
-3. **Addressing limitations solved**: A 32-bit device can access memory above 4GB because the IOMMU maps high physical pages into the device's 32-bit address window.
+3. **アドレス指定の制限の解消**: IOMMU が高位の物理ページをデバイスの32ビットのアドレスウィンドウにマップするため、32ビットのデバイスでも4GB を超えるメモリにアクセスできる。
 
-4. **DMA remapping**: Intel calls it VT-d, AMD calls it AMD-Vi. Both provide hardware IOMMU for PCIe devices.
+4. **DMA リマッピング**: Intel は VT-d、AMD は AMD-Vi と呼んでいる。どちらも PCIe デバイス向けのハードウェア IOMMU を提供する。
 
-The IOMMU driver in Linux lives under [`drivers/iommu/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu). The DMA API automatically uses the IOMMU when one is present -- drivers do not need to know or care.
+Linux の IOMMU ドライバは [`drivers/iommu/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu) 以下にある。DMA API は IOMMU が存在すれば自動的にそれを使うため、ドライバがそれを知ったり気にしたりする必要はない。
 
-### LWN coverage {#lwn-coverage}
+### LWN の記事 {#lwn-coverage}
 
-LWN's coverage of DMA addressing, cache coherency, and device isolation:
+DMA のアドレス指定、キャッシュコヒーレンシ、デバイスの隔離に関する LWN の記事:
 
-- [The trouble with 64-bit DMA](https://lwn.net/Articles/904210/) (2022) -- DMA addressing masks, IOVAs, and how the IOMMU maps device addresses
-- [Noncoherent DMA mappings](https://lwn.net/Articles/855328/) (2021) -- coherent vs. streaming mappings and cache-coherency management
-- [Restricted DMA](https://lwn.net/Articles/841916/) (2021) -- using SWIOTLB bounce buffering to isolate untrusted devices on systems without an IOMMU
+- [The trouble with 64-bit DMA](https://lwn.net/Articles/904210/)（2022年） -- DMA アドレスマスク、IOVA、IOMMU がデバイスアドレスをどうマップするか
+- [Noncoherent DMA mappings](https://lwn.net/Articles/855328/)（2021年） -- コヒーレントマッピングとストリーミングマッピング、キャッシュコヒーレンシの管理
+- [Restricted DMA](https://lwn.net/Articles/841916/)（2021年） -- IOMMU のないシステムで、SWIOTLB のバウンスバッファを使って信頼できないデバイスを隔離する
 
-## SWIOTLB Bounce Buffers {#swiotlb-bounce-buffers}
+## SWIOTLB バウンスバッファ {#swiotlb-bounce-buffers}
 
-When there is no IOMMU and a device cannot address all of physical memory, the kernel falls back to SWIOTLB (Software I/O Translation Lookaside Buffer) -- a bounce buffer mechanism.
+IOMMU がなく、デバイスが物理メモリのすべてをアドレス指定できない場合、カーネルは SWIOTLB（Software I/O Translation Lookaside Buffer）— バウンスバッファの仕組み — にフォールバックする。
 
-### How it works {#how-it-works}
+### 仕組み {#how-it-works}
 
-1. Kernel allocates a pool of low-memory bounce buffers at boot (typically 64MB from memory below 4GB)
-2. When `dma_map_single()` is called for a buffer the device cannot reach, the kernel:
-   - Allocates a bounce buffer from the SWIOTLB pool
-   - For `DMA_TO_DEVICE`: copies data from the original buffer to the bounce buffer
-   - Gives the device the bounce buffer's physical address
-3. When `dma_unmap_single()` is called:
-   - For `DMA_FROM_DEVICE`: copies data from bounce buffer back to the original buffer
-   - Frees the bounce buffer
+1. カーネルはブート時に、低位メモリのバウンスバッファのプールを割り当てる（通常は4GB 未満のメモリから64MB）
+2. デバイスが到達できないバッファに対して `dma_map_single()` が呼ばれると、カーネルは次のことを行う:
+   - SWIOTLB プールからバウンスバッファを割り当てる
+   - `DMA_TO_DEVICE` の場合: 元のバッファからバウンスバッファにデータをコピーする
+   - デバイスにバウンスバッファの物理アドレスを渡す
+3. `dma_unmap_single()` が呼ばれると:
+   - `DMA_FROM_DEVICE` の場合: バウンスバッファから元のバッファにデータをコピーして戻す
+   - バウンスバッファを解放する
 
 ```
-High Memory (>4GB):
+高位メモリ（>4GB）:
 +------------------+
-| Original Buffer  |  <-- CPU uses this
+| Original Buffer  |  <-- CPU はこれを使う
 +------------------+
         |  copy
         v
-Low Memory (<4GB):
+低位メモリ（<4GB）:
 +------------------+
-| Bounce Buffer    |  <-- Device DMAs here
+| Bounce Buffer    |  <-- デバイスはここに DMA する
 | (SWIOTLB pool)  |
 +------------------+
 ```
 
-### The cost {#the-cost}
+### コスト {#the-cost}
 
-Bounce buffering means **double the memory copies** -- a significant performance penalty. This is why IOMMUs are strongly preferred on modern systems.
+バウンスバッファリングは **メモリコピーが2倍になる** ことを意味し、性能上の大きなペナルティとなる。これが、最近のシステムで IOMMU が強く好まれる理由である。
 
-The SWIOTLB pool size can be configured at boot with `swiotlb=N` (number of 2KB slots). The implementation lives in [`kernel/dma/swiotlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c).
+SWIOTLB プールのサイズは、ブート時に `swiotlb=N`（2KB スロットの数）で設定できる。実装は [`kernel/dma/swiotlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c) にある。
 
-### Confidential computing and SWIOTLB {#confidential-computing-and-swiotlb}
+### コンフィデンシャルコンピューティングと SWIOTLB {#confidential-computing-and-swiotlb}
 
-SWIOTLB gained renewed importance with confidential computing (AMD SEV, Intel TDX). In these environments, device DMA cannot access encrypted guest memory directly. The guest must use decrypted bounce buffers for all DMA operations. Commit [0b84e4f8b793](https://git.kernel.org/linus/0b84e4f8b793) ("swiotlb: Add restricted DMA pool initialization") added support for restricted DMA pools to handle these scenarios.
+SWIOTLB は、コンフィデンシャルコンピューティング（AMD SEV、Intel TDX）によって再び重要性を増した。これらの環境では、デバイスの DMA は暗号化されたゲストメモリに直接アクセスできない。ゲストは、すべての DMA 操作に復号されたバウンスバッファを使わなければならない。コミット [0b84e4f8b793](https://git.kernel.org/linus/0b84e4f8b793)（"swiotlb: Add restricted DMA pool initialization"）は、こうしたシナリオに対処するために、制限付き DMA プールのサポートを追加した。
 
-## DMA Memory Pools {#dma-memory-pools}
+## DMA メモリプール {#dma-memory-pools}
 
-For drivers that frequently allocate and free small, fixed-size DMA-coherent buffers (like USB transfer descriptors or hardware command entries), the overhead of calling `dma_alloc_coherent()` each time is excessive. The DMA pool API solves this.
+小さな固定サイズの DMA コヒーレントバッファ（USB の転送ディスクリプタやハードウェアのコマンドエントリなど）を頻繁に割り当て・解放するドライバにとって、毎回 `dma_alloc_coherent()` を呼ぶオーバーヘッドは過大である。DMA プール API がこれを解決する。
 
-From [`include/linux/dmapool.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dmapool.h):
+[`include/linux/dmapool.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dmapool.h) より:
 
 ```c
 struct dma_pool *dma_pool_create(const char *name, struct device *dev,
@@ -234,173 +234,173 @@ void dma_pool_free(struct dma_pool *pool, void *vaddr,
                    dma_addr_t dma_handle);
 ```
 
-The pool pre-allocates large coherent regions and carves them into fixed-size chunks -- the same idea as the slab allocator, but for DMA-coherent memory. The `boundary` parameter prevents allocations from crossing a specified power-of-two boundary, which some hardware requires.
+プールは大きなコヒーレント領域を事前に割り当て、それを固定サイズのチャンクに切り分ける — slab アロケータと同じ考え方だが、DMA コヒーレントメモリ向けである。`boundary` パラメータは、割り当てが指定された2のべき乗の境界をまたがないようにする。これを必要とするハードウェアもある。
 
-The implementation lives in [`mm/dmapool.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c).
+実装は [`mm/dmapool.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c) にある。
 
-## Common Mistakes {#common-mistakes}
+## よくある間違い {#common-mistakes}
 
-### Forgetting to unmap {#forgetting-to-unmap}
+### アンマップし忘れる {#forgetting-to-unmap}
 
-Every `dma_map_single()` must have a matching `dma_unmap_single()`. Every `dma_map_sg()` must have a matching `dma_unmap_sg()`. Leaked mappings exhaust IOMMU address space or SWIOTLB pool, eventually causing allocation failures.
+すべての `dma_map_single()` には対応する `dma_unmap_single()` が必要である。すべての `dma_map_sg()` には対応する `dma_unmap_sg()` が必要である。リークしたマッピングは IOMMU のアドレス空間や SWIOTLB プールを枯渇させ、最終的に割り当ての失敗を引き起こす。
 
-Enable `CONFIG_DMA_API_DEBUG` to catch this. It tracks all mappings and warns on driver unload if any remain:
+これを捕捉するには `CONFIG_DMA_API_DEBUG` を有効にする。これはすべてのマッピングを追跡し、ドライバのアンロード時に残っているものがあれば警告する:
 
 ```bash
-# Boot with DMA API debugging
+# DMA API のデバッグ付きでブート
 echo 1 > /sys/kernel/debug/dma-api/enable
 ```
 
-### Using wrong GFP flags {#using-wrong-gfp-flags}
+### 誤った GFP フラグを使う {#using-wrong-gfp-flags}
 
-Do not use `GFP_DMA` unless you actually need memory in ZONE_DMA (first 16MB). Most modern devices with 32-bit DMA limitations need `GFP_DMA32` instead. But ideally, use the DMA API and let it handle zone selection:
+ZONE_DMA（最初の16MB）のメモリが本当に必要でない限り、`GFP_DMA` を使ってはならない。32ビットの DMA 制限を持つ最近のデバイスのほとんどは、代わりに `GFP_DMA32` を必要とする。しかし理想的には、DMA API を使ってゾーンの選択を任せるべきである:
 
 ```c
-/* Wrong: manually allocating from DMA zone */
+/* 誤り: DMA ゾーンから手動で割り当てている */
 buf = kmalloc(4096, GFP_KERNEL | GFP_DMA);
-dma_handle = virt_to_phys(buf); /* BROKEN: skips IOMMU! */
+dma_handle = virt_to_phys(buf); /* 壊れている: IOMMU を迂回する! */
 
-/* Right: let the DMA API handle it */
+/* 正しい: DMA API に任せる */
 buf = dma_alloc_coherent(dev, 4096, &dma_handle, GFP_KERNEL);
 ```
 
-The DMA API consults the device's DMA mask to determine the correct zone automatically.
+DMA API は、デバイスの DMA マスクを参照して正しいゾーンを自動的に決定する。
 
-### Cache coherency bugs {#cache-coherency-bugs}
+### キャッシュコヒーレンシのバグ {#cache-coherency-bugs}
 
-On architectures without hardware-managed coherency, accessing a streaming DMA buffer without proper sync operations causes data corruption. This often manifests as intermittent failures that are extremely difficult to reproduce:
+ハードウェアがコヒーレンシを管理しないアーキテクチャでは、適切な sync 操作なしにストリーミング DMA バッファにアクセスすると、データ破損が起きる。これは多くの場合、再現が極めて難しい断続的な障害として現れる:
 
 ```c
-/* BUG: reading device data without sync */
+/* バグ: sync せずにデバイスのデータを読んでいる */
 dma_handle = dma_map_single(dev, buf, len, DMA_FROM_DEVICE);
 start_device_dma(dev, dma_handle, len);
 wait_for_dma_complete(dev);
-memcpy(dest, buf, len);  /* May read stale cached data! */
+memcpy(dest, buf, len);  /* キャッシュされた古いデータを読むかもしれない! */
 dma_unmap_single(dev, dma_handle, len, DMA_FROM_DEVICE);
 
-/* CORRECT: unmap (which syncs) before reading */
+/* 正しい: 読む前にアンマップする（アンマップが sync を行う） */
 dma_handle = dma_map_single(dev, buf, len, DMA_FROM_DEVICE);
 start_device_dma(dev, dma_handle, len);
 wait_for_dma_complete(dev);
 dma_unmap_single(dev, dma_handle, len, DMA_FROM_DEVICE);
-memcpy(dest, buf, len);  /* Safe: unmap invalidated cache */
+memcpy(dest, buf, len);  /* 安全: アンマップがキャッシュを無効化した */
 ```
 
-### Using virt_to_phys() for DMA {#using-virttophys-for-dma}
+### DMA に virt_to_phys() を使う {#using-virttophys-for-dma}
 
-Never convert a virtual address to physical and hand it to a device. This bypasses the IOMMU, skips bounce buffering, and ignores the device's DMA mask. Always use the DMA API.
+仮想アドレスを物理アドレスに変換してデバイスに渡してはならない。これは IOMMU を迂回し、バウンスバッファリングをスキップし、デバイスの DMA マスクを無視する。常に DMA API を使うこと。
 
-### DMA to stack or module memory {#dma-to-stack-or-module-memory}
+### スタックやモジュールのメモリへの DMA {#dma-to-stack-or-module-memory}
 
-Stack memory and module text may reside in vmalloc space, which is not guaranteed to be physically contiguous or DMA-addressable. Always use `kmalloc()` or `dma_alloc_coherent()` for DMA buffers.
+スタックのメモリやモジュールのテキストは vmalloc 空間に存在することがあり、物理的に連続していることも DMA でアドレス指定可能であることも保証されない。DMA バッファには常に `kmalloc()` か `dma_alloc_coherent()` を使うこと。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Check DMA zone sizes {#check-dma-zone-sizes}
+### DMA ゾーンのサイズを確認する {#check-dma-zone-sizes}
 
 ```bash
-# View zone information
+# ゾーン情報を表示
 cat /proc/zoneinfo | grep -E "^Node|pages free|managed|zone"
 
-# Compact view of zones
+# ゾーンの簡潔な表示
 cat /proc/buddyinfo
-# Example output:
+# 出力例:
 # Node 0, zone      DMA      1    1    0    0    2    1    1    0    1    1    3
 # Node 0, zone    DMA32   2907 2312  975  574  256   94   40   16    6    5  252
 # Node 0, zone   Normal  19374 7834 5327 2581  784  168   30    5    0    0    0
 ```
 
-### Inspect IOMMU state {#inspect-iommu-state}
+### IOMMU の状態を調べる {#inspect-iommu-state}
 
 ```bash
-# Check if IOMMU is active
+# IOMMU が有効かどうかを確認
 dmesg | grep -i iommu
 
-# View IOMMU groups (each group shares address space isolation)
+# IOMMU グループを表示（各グループがアドレス空間の隔離を共有する）
 ls /sys/kernel/iommu_groups/
-# Each group directory contains a devices/ subdirectory listing PCI devices
+# 各グループのディレクトリには、PCI デバイスを列挙する devices/ サブディレクトリがある
 
-# Check a specific device's DMA mask
-# (from within a kernel module or via debugfs)
+# 特定のデバイスの DMA マスクを確認
+# （カーネルモジュール内から、または debugfs 経由で）
 cat /sys/bus/pci/devices/0000:03:00.0/dma_mask_bits
 ```
 
-### Monitor SWIOTLB usage {#monitor-swiotlb-usage}
+### SWIOTLB の使用状況を監視する {#monitor-swiotlb-usage}
 
 ```bash
-# Check SWIOTLB pool size and usage
+# SWIOTLB プールのサイズと使用量を確認
 cat /sys/kernel/debug/swiotlb/io_tlb_nslabs  2>/dev/null
 cat /sys/kernel/debug/swiotlb/io_tlb_used    2>/dev/null
 
-# Or from dmesg at boot
+# あるいはブート時の dmesg から
 dmesg | grep -i swiotlb
-# Example: "software IO TLB: mapped [mem 0x00000000b3c00000-0x00000000b7c00000] (64MB)"
+# 例: "software IO TLB: mapped [mem 0x00000000b3c00000-0x00000000b7c00000] (64MB)"
 ```
 
-### Enable DMA API debug checking {#enable-dma-api-debug-checking}
+### DMA API のデバッグチェックを有効にする {#enable-dma-api-debug-checking}
 
 ```bash
-# Build kernel with CONFIG_DMA_API_DEBUG=y
-# Then at boot or runtime:
+# CONFIG_DMA_API_DEBUG=y でカーネルをビルド
+# その後、ブート時または実行時に:
 echo 1 > /sys/kernel/debug/dma-api/enable
 
-# View DMA API debug statistics
+# DMA API のデバッグ統計を表示
 cat /sys/kernel/debug/dma-api/num_errors
 cat /sys/kernel/debug/dma-api/num_free_entries
 cat /sys/kernel/debug/dma-api/min_free_entries
 ```
 
-### View DMA pool statistics {#view-dma-pool-statistics}
+### DMA プールの統計を表示する {#view-dma-pool-statistics}
 
 ```bash
-# DMA pool info per device
+# デバイスごとの DMA プール情報
 cat /sys/kernel/debug/dma_pools 2>/dev/null
 
-# Or from sysfs (depends on kernel config)
+# あるいは sysfs から（カーネル設定による）
 find /sys/kernel/debug/ -name "*dma*" 2>/dev/null
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`kernel/dma/mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/mapping.c) | Core DMA mapping implementation |
-| [`kernel/dma/direct.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.c) | Direct DMA (no IOMMU) implementation |
-| [`kernel/dma/swiotlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c) | SWIOTLB bounce buffer implementation |
-| [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) | DMA API header |
-| [`include/linux/dmapool.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dmapool.h) | DMA pool API header |
-| [`mm/dmapool.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c) | DMA pool implementation |
-| [`drivers/iommu/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu) | IOMMU driver implementations |
-| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | Zone type definitions |
+| [`kernel/dma/mapping.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/mapping.c) | DMA マッピングの中核実装 |
+| [`kernel/dma/direct.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/direct.c) | ダイレクト DMA（IOMMU なし）の実装 |
+| [`kernel/dma/swiotlb.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma/swiotlb.c) | SWIOTLB バウンスバッファの実装 |
+| [`include/linux/dma-mapping.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dma-mapping.h) | DMA API のヘッダ |
+| [`include/linux/dmapool.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/dmapool.h) | DMA プール API のヘッダ |
+| [`mm/dmapool.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/dmapool.c) | DMA プールの実装 |
+| [`drivers/iommu/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/iommu) | IOMMU ドライバの実装 |
+| [`include/linux/mmzone.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) | ゾーン種別の定義 |
 
 ---
 
-## References {#references}
+## 参考資料 {#references}
 
-### Further Reading {#further-reading}
+### 参考文献 {#further-reading}
 
-- [DMA API Guide](https://docs.kernel.org/core-api/dma-api.html) -- the authoritative kernel documentation on the DMA API
-- [DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) -- practical guide for driver developers
-- [Dynamic DMA mapping Guide](https://docs.kernel.org/core-api/dma-api-howto.html) -- when and how to use each mapping type
-- [LWN: The trouble with 64-bit DMA](https://lwn.net/Articles/904210/) (2022) -- DMA addressing masks, IOVAs, and the IOMMU
-- [LWN: Noncoherent DMA mappings](https://lwn.net/Articles/855328/) (2021) -- coherent vs. streaming mappings and cache coherency
-- [LWN: Restricted DMA](https://lwn.net/Articles/841916/) (2021) -- SWIOTLB bounce buffering to isolate untrusted devices
+- [DMA API Guide](https://docs.kernel.org/core-api/dma-api.html) -- DMA API に関する正式なカーネルドキュメント
+- [DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) -- ドライバ開発者向けの実践的なガイド
+- [Dynamic DMA mapping Guide](https://docs.kernel.org/core-api/dma-api-howto.html) -- 各マッピング種別をいつ、どう使うか
+- [LWN: The trouble with 64-bit DMA](https://lwn.net/Articles/904210/)（2022年） -- DMA アドレスマスク、IOVA、IOMMU
+- [LWN: Noncoherent DMA mappings](https://lwn.net/Articles/855328/)（2021年） -- コヒーレントマッピングとストリーミングマッピング、キャッシュコヒーレンシ
+- [LWN: Restricted DMA](https://lwn.net/Articles/841916/)（2021年） -- SWIOTLB のバウンスバッファで信頼できないデバイスを隔離する
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Page Allocator](page-allocator.md) -- where DMA memory ultimately comes from
-- [vmalloc](vmalloc.md) -- virtual memory allocation (not suitable for DMA)
-- [NUMA](numa.md) -- NUMA-aware allocation and its interaction with DMA zones
-- [Overview](overview.md) -- how DMA allocation fits in the memory management hierarchy
+- [Page Allocator](page-allocator.md) -- DMA メモリの最終的な供給元
+- [vmalloc](vmalloc.md) -- 仮想メモリの割り当て（DMA には適さない）
+- [NUMA](numa.md) -- NUMA を考慮した割り当てと、DMA ゾーンとの相互作用
+- [Overview](overview.md) -- メモリ管理の階層の中で DMA の割り当てがどこに位置するか
 
-## Further reading {#further-reading_1}
+## 参考文献 {#further-reading_1}
 
-- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — the authoritative reference for every function in the DMA API
-- [Kernel docs: DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) — practical guide covering when and how to use each mapping type
-- [`Documentation/core-api/dma-api.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api.rst) — kernel source for the DMA API documentation
-- [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma) — the full DMA subsystem source directory: mapping, direct, swiotlb, pool
-- [LWN: The trouble with 64-bit DMA](https://lwn.net/Articles/904210/) — DMA addressing masks, IOVAs, and how the IOMMU maps device addresses (2022)
-- [LWN: Noncoherent DMA mappings](https://lwn.net/Articles/855328/) — coherent vs. streaming DMA mappings and cache-coherency management (2021)
-- [LWN: Restricted DMA](https://lwn.net/Articles/841916/) — SWIOTLB bounce buffering to isolate untrusted devices without an IOMMU (2021)
-- [Device Memory Coherency](device-coherency.md) — cache maintenance rules that govern every DMA mapping
-- [CMA](cma.md) — how `dma_alloc_coherent()` sources physically contiguous memory via the Contiguous Memory Allocator
+- [Kernel docs: DMA API](https://docs.kernel.org/core-api/dma-api.html) — DMA API のすべての関数に関する正式なリファレンス
+- [Kernel docs: DMA API HOWTO](https://docs.kernel.org/core-api/dma-api-howto.html) — 各マッピング種別をいつ、どう使うかを扱う実践的なガイド
+- [`Documentation/core-api/dma-api.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/core-api/dma-api.rst) — DMA API ドキュメントのカーネルソース
+- [`kernel/dma/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/dma) — DMA サブシステム全体のソースディレクトリ: mapping、direct、swiotlb、pool
+- [LWN: The trouble with 64-bit DMA](https://lwn.net/Articles/904210/) — DMA アドレスマスク、IOVA、IOMMU がデバイスアドレスをどうマップするか（2022年）
+- [LWN: Noncoherent DMA mappings](https://lwn.net/Articles/855328/) — コヒーレント DMA マッピングとストリーミング DMA マッピング、キャッシュコヒーレンシの管理（2021年）
+- [LWN: Restricted DMA](https://lwn.net/Articles/841916/) — IOMMU なしで、SWIOTLB のバウンスバッファを使って信頼できないデバイスを隔離する（2021年）
+- [Device Memory Coherency](device-coherency.md) — すべての DMA マッピングを支配するキャッシュ保守のルール
+- [CMA](cma.md) — `dma_alloc_coherent()` が Contiguous Memory Allocator を介して物理的に連続したメモリをどう確保するか

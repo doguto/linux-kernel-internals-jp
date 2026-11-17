@@ -1,97 +1,97 @@
-# Cgroup OOM Controller {#cgroup-oom-controller}
+# cgroup の OOM コントローラ {#cgroup-oom-controller}
 
-> How the kernel kills processes when a cgroup runs out of memory
+> cgroup がメモリを使い果たしたとき、カーネルはどのようにプロセスを kill するのか
 
-## Cgroup OOM vs Global OOM {#cgroup-oom-vs-global-oom}
+## cgroup OOM とグローバル OOM {#cgroup-oom-vs-global-oom}
 
-The kernel has two OOM paths. The global OOM killer fires when the entire system cannot satisfy an allocation after exhausting reclaim. The cgroup OOM controller fires when a single cgroup exceeds its `memory.max` after exhausting reclaim within that cgroup. The host system can have gigabytes free — the cgroup OOM does not care.
+カーネルには2つの OOM パスがある。グローバル OOM killer は、回収を尽くしたあともシステム全体として割り当てを満たせないときに発動する。cgroup の OOM コントローラは、単一の cgroup が、その cgroup 内での回収を尽くしたあとも `memory.max` を超えるときに発動する。ホストシステムに何ギガバイトも空きがあっても、cgroup OOM は意に介さない。
 
-| | Global OOM | Cgroup OOM |
+| | グローバル OOM | cgroup OOM |
 |---|---|---|
-| Trigger | System-wide allocation failure | cgroup `memory.max` exceeded after reclaim |
-| Candidate pool | All processes on the system | Processes in the cgroup (and descendants) |
-| `totalpages` for scoring | System RAM + swap | cgroup's `memory.max` |
-| Log prefix | `Out of memory:` | `Memory cgroup out of memory:` |
-| `constraint` field | `CONSTRAINT_NONE` | `CONSTRAINT_MEMCG` |
-| Host impact | Potentially severe | Isolated to the cgroup |
+| きっかけ | システム全体での割り当て失敗 | 回収後も cgroup の `memory.max` を超過 |
+| 候補の母集団 | システム上のすべてのプロセス | cgroup（とその子孫）内のプロセス |
+| スコア計算の `totalpages` | システムの RAM + スワップ | cgroup の `memory.max` |
+| ログの接頭辞 | `Out of memory:` | `Memory cgroup out of memory:` |
+| `constraint` フィールド | `CONSTRAINT_NONE` | `CONSTRAINT_MEMCG` |
+| ホストへの影響 | 深刻になりうる | cgroup 内に隔離される |
 
-Both paths converge on the same victim selection function, `oom_badness()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c). The difference is which `totalpages` value is passed in — and `totalpages` is the denominator in the `oom_score_adj` calculation, so cgroup size matters.
+どちらのパスも、同じ犠牲者選択関数である [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) の `oom_badness()` に合流する。違いは渡される `totalpages` の値である。そして `totalpages` は `oom_score_adj` の計算の分母なので、cgroup のサイズが重要になる。
 
-## What Triggers a Cgroup OOM {#what-triggers-a-cgroup-oom}
+## 何が cgroup OOM を引き起こすのか {#what-triggers-a-cgroup-oom}
 
-The sequence from normal operation to OOM kill has four steps:
+通常の動作から OOM kill に至るまでの流れは4つのステップからなる:
 
 ```mermaid
 flowchart TB
-    A["Process in cgroup allocates memory"]
-    B["try_charge() walks up cgroup tree"]
-    C["Ancestor at memory.max"]
-    D["mem_cgroup_handle_over_high(): throttle + reclaim"]
-    E["Reclaim insufficient"]
-    F["mem_cgroup_out_of_memory(): select and kill victim"]
-    G["Victim killed, memory freed, charge succeeds"]
+    A["cgroup 内のプロセスがメモリを割り当てる"]
+    B["try_charge() が cgroup ツリーを上へたどる"]
+    C["祖先が memory.max に到達"]
+    D["mem_cgroup_handle_over_high(): スロットリング + 回収"]
+    E["回収が不十分"]
+    F["mem_cgroup_out_of_memory(): 犠牲者を選んで kill"]
+    G["犠牲者が kill され、メモリが解放され、チャージが成功"]
 
     A --> B --> C --> D --> E --> F --> G
 ```
 
-1. **Charge**: Every page allocation is charged to the cgroup via `try_charge()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c). This walks up the cgroup tree checking each ancestor's limit.
+1. **チャージ**: すべてのページ割り当ては、[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) の `try_charge()` を通じて cgroup にチャージされる。これは cgroup ツリーを上へたどり、各祖先の制限をチェックする。
 
-2. **Reclaim**: If a limit is reached, the kernel attempts reclaim within the cgroup. It tries to free reclaimable pages (page cache, reclaimable slab, anonymous pages with swap) belonging to processes in the cgroup.
+2. **回収**: 制限に達すると、カーネルは cgroup 内での回収を試みる。cgroup 内のプロセスに属する回収可能なページ（ページキャッシュ、回収可能な slab、スワップがある場合の匿名ページ）を解放しようとする。
 
-3. **OOM decision**: If reclaim cannot free enough memory after repeated attempts, `mem_cgroup_out_of_memory()` is called. It calls the same `out_of_memory()` function used by the global path, but with a memcg constraint.
+3. **OOM の判断**: 繰り返し試みても回収で十分なメモリを解放できない場合、`mem_cgroup_out_of_memory()` が呼ばれる。これはグローバルパスで使われるのと同じ `out_of_memory()` 関数を、memcg の制約付きで呼び出す。
 
-4. **Kill**: A victim is selected and sent `SIGKILL`. Memory is freed, and the original allocation retries.
+4. **kill**: 犠牲者が選ばれ、`SIGKILL` が送られる。メモリが解放され、元の割り当てが再試行される。
 
-### The `memory.high` path is separate {#the-memoryhigh-path-is-separate}
+### `memory.high` のパスは別物 {#the-memoryhigh-path-is-separate}
 
-`memory.high` does not trigger OOM. When a cgroup exceeds `memory.high`, the kernel throttles allocating processes and reclaims aggressively, but no process is killed. OOM is only triggered when `memory.max` is reached and reclaim fails. See [Tuning memory for containers](tuning-containers.md) for the distinction.
+`memory.high` は OOM を引き起こさない。cgroup が `memory.high` を超えると、カーネルは割り当て中のプロセスをスロットリングし、積極的に回収するが、プロセスが kill されることはない。OOM が引き起こされるのは、`memory.max` に達して回収が失敗したときだけである。違いについては [Tuning memory for containers](tuning-containers.md) を参照。
 
-## Victim Selection in a Cgroup Context {#victim-selection-in-a-cgroup-context}
+## cgroup の文脈での犠牲者選択 {#victim-selection-in-a-cgroup-context}
 
-The function `oom_badness()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) computes a score for each process:
+[`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) の関数 `oom_badness()` は、各プロセスのスコアを計算する:
 
 ```
 score = (rss_anon + rss_file + rss_shmem + swapents + pgtables_pages)
       + (oom_score_adj × totalpages / 1000)
 ```
 
-For cgroup OOM, `totalpages` is the cgroup's `memory.max` (or the current usage, whichever is appropriate to compute the score), not the total system RAM. This changes the impact of `oom_score_adj`:
+cgroup OOM では、`totalpages` はシステムの総 RAM ではなく、cgroup の `memory.max`（またはスコア計算に適切なほうとして現在の使用量）である。これにより `oom_score_adj` の影響が変わる:
 
-**Example**: A cgroup with `memory.max = 512M` and a process with `oom_score_adj = 500`.
+**例**: `memory.max = 512M` の cgroup と、`oom_score_adj = 500` のプロセス。
 
-- System RAM = 16G → `totalpages` ≈ 4M pages → adjustment = 4M × 500/1000 = 2M pages (~8G penalty)
-- cgroup `memory.max` = 512M → `totalpages` ≈ 128K pages → adjustment = 128K × 500/1000 = 64K pages (~256M penalty)
+- システムの RAM = 16G → `totalpages` ≈ 4M ページ → 調整値 = 4M × 500/1000 = 2M ページ（約8G のペナルティ）
+- cgroup の `memory.max` = 512M → `totalpages` ≈ 128K ページ → 調整値 = 128K × 500/1000 = 64K ページ（約256M のペナルティ）
 
-In the cgroup case, `oom_score_adj` has much less absolute impact because `totalpages` is small. Processes that look highly penalized at the system level may be only moderately penalized within a small cgroup. The relative ordering can change.
+cgroup の場合、`totalpages` が小さいため、`oom_score_adj` の絶対的な影響はずっと小さくなる。システムレベルでは大きくペナルティを受けているように見えるプロセスも、小さな cgroup 内では中程度のペナルティしか受けないことがある。相対的な順序が変わることもある。
 
-### Candidate enumeration {#candidate-enumeration}
+### 候補の列挙 {#candidate-enumeration}
 
-For a cgroup OOM, only processes within the affected cgroup (and its descendants) are candidates. `select_bad_process()` uses `mem_cgroup_scan_tasks()` to iterate only tasks within the target memcg hierarchy, calling `oom_evaluate_task()` for each candidate.
+cgroup OOM では、影響を受けた cgroup（とその子孫）内のプロセスだけが候補になる。`select_bad_process()` は `mem_cgroup_scan_tasks()` を使って対象の memcg 階層内のタスクだけを走査し、各候補について `oom_evaluate_task()` を呼ぶ。
 
-Processes with `oom_score_adj = -1000` are always skipped (immune). Kernel threads are always skipped. The process that triggered the OOM is not automatically the victim — it competes on score like any other process.
+`oom_score_adj = -1000` のプロセスは常にスキップされる（免除）。カーネルスレッドも常にスキップされる。OOM を引き起こしたプロセスが自動的に犠牲者になるわけではなく、他のプロセスと同様にスコアで競う。
 
-## memory.oom.group: Killing the Whole Cgroup {#memoryoomgroup-killing-the-whole-cgroup}
+## memory.oom.group: cgroup 全体を kill する {#memoryoomgroup-killing-the-whole-cgroup}
 
-By default, the OOM killer selects and kills one process. For containerized applications, killing one worker process often leaves the container in a broken state: the orchestrator sees the container still running, but a critical subprocess is dead.
+デフォルトでは、OOM killer は1つのプロセスを選んで kill する。コンテナ化されたアプリケーションでは、ワーカープロセスを1つ kill するとコンテナが壊れた状態で残ることが多い。オーケストレータからはコンテナがまだ動作しているように見えるが、重要なサブプロセスは死んでいる。
 
-`memory.oom.group` solves this by killing all processes in the cgroup together when an OOM occurs.
+`memory.oom.group` は、OOM が起きたときに cgroup 内のすべてのプロセスをまとめて kill することでこれを解決する。
 
-**Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
+**コミット**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca)（"mm, oom: introduce memory.oom.group"） | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
 
-**Author**: Roman Gushchin (kernel v4.19, 2018)
+**作者**: Roman Gushchin（カーネル v4.19、2018年）
 
 ```bash
-# Enable group kill for a cgroup
+# cgroup のグループ kill を有効化
 echo 1 > /sys/fs/cgroup/mycontainer/memory.oom.group
 ```
 
-### How group kill works {#how-group-kill-works}
+### グループ kill の仕組み {#how-group-kill-works}
 
-When the OOM killer selects a victim and `memory.oom.group = 1` is set on that victim's cgroup (or any ancestor with `oom_group` set), `mem_cgroup_get_oom_group()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) returns the highest ancestor cgroup with `oom_group = 1`. Then `oom_kill_memcg_member()` is called for every process in that cgroup's subtree.
+OOM killer が犠牲者を選び、その犠牲者の cgroup（または `oom_group` が設定された任意の祖先）に `memory.oom.group = 1` が設定されている場合、[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) の `mem_cgroup_get_oom_group()` が `oom_group = 1` を持つ最上位の祖先 cgroup を返す。次に、その cgroup のサブツリー内のすべてのプロセスについて `oom_kill_memcg_member()` が呼ばれる。
 
-Processes with `oom_score_adj = -1000` are still skipped even during group kill.
+`oom_score_adj = -1000` のプロセスは、グループ kill の際でもスキップされる。
 
-The kill log includes an extra line:
+kill のログには追加の行が含まれる:
 
 ```
 [  891.112295] Tasks in /myapp.slice/myapp.service are going to be killed due to memory.oom.group set
@@ -100,49 +100,49 @@ The kill log includes an extra line:
 [  891.112298] Memory cgroup out of memory: Killed process 12003 (worker-3) ...
 ```
 
-### When to use memory.oom.group {#when-to-use-memoryoomgroup}
+### memory.oom.group を使うべきとき {#when-to-use-memoryoomgroup}
 
-| Use case | Recommendation |
+| ユースケース | 推奨 |
 |----------|----------------|
-| Single-process container | Default (off) is fine |
-| Multi-process container (web server + workers) | Enable — partial kill leaves broken state |
-| Microservice with sidecar | Enable — killing the app but not the proxy leaves a zombie |
-| Interactive shell session | Do not enable — kills the whole session for one bad command |
+| 単一プロセスのコンテナ | デフォルト（オフ）で問題ない |
+| 複数プロセスのコンテナ（Web サーバー + ワーカー） | 有効にする — 部分的な kill は壊れた状態を残す |
+| サイドカー付きのマイクロサービス | 有効にする — アプリを kill してプロキシを残すとゾンビ状態になる |
+| 対話的なシェルセッション | 有効にしない — 1つの悪いコマンドのためにセッション全体が kill される |
 
-## oom_score_adj Interaction with Cgroup OOM {#oomscoreadj-interaction-with-cgroup-oom}
+## oom_score_adj と cgroup OOM の相互作用 {#oomscoreadj-interaction-with-cgroup-oom}
 
-`oom_score_adj` is set per-process (via `/proc/<pid>/oom_score_adj`) and ranges from -1000 to +1000. It modifies the computed OOM score:
+`oom_score_adj` はプロセスごとに（`/proc/<pid>/oom_score_adj` を介して）設定され、範囲は -1000 から +1000 である。これは計算された OOM スコアを修正する:
 
 ```bash
-# Make this process less likely to be killed
+# このプロセスを kill されにくくする
 echo -200 > /proc/$(pgrep myapp)/oom_score_adj
 
-# Make this process immune (never killed by OOM)
+# このプロセスを免除する（OOM で決して kill されない）
 echo -1000 > /proc/$(pgrep critical-daemon)/oom_score_adj
 
-# Make this process the preferred victim
+# このプロセスを優先的な犠牲者にする
 echo 1000 > /proc/$(pgrep disposable-worker)/oom_score_adj
 ```
 
-!!! warning "Immune processes can cause OOM loops"
-    If all processes in a cgroup have `oom_score_adj = -1000`, the OOM killer cannot select a victim. The allocation will fail with `-ENOMEM` rather than killing anything. This can cause `ENOMEM` errors or allocation hangs in the triggering process.
+!!! warning "免除されたプロセスは OOM ループを引き起こしうる"
+    cgroup 内のすべてのプロセスが `oom_score_adj = -1000` の場合、OOM killer は犠牲者を選べない。何かを kill する代わりに、割り当てが `-ENOMEM` で失敗する。これにより、OOM を引き起こしたプロセスで `ENOMEM` エラーや割り当てのハングが起こりうる。
 
-### Systemd and oom_score_adj {#systemd-and-oomscoreadj}
+### systemd と oom_score_adj {#systemd-and-oomscoreadj}
 
-systemd sets `OOMScoreAdjust` in unit files, which maps directly to `/proc/<pid>/oom_score_adj`. System-critical services (journald, udevd) are set to -1000 by default. For container workloads, set `OOMScoreAdjust` per service to control victim preference within a cgroup.
+systemd はユニットファイルで `OOMScoreAdjust` を設定し、これは `/proc/<pid>/oom_score_adj` に直接対応する。システムにとって重要なサービス（journald、udevd）はデフォルトで -1000 に設定されている。コンテナのワークロードでは、サービスごとに `OOMScoreAdjust` を設定して、cgroup 内での犠牲者の優先度を制御する。
 
 ```ini
 # /etc/systemd/system/myapp.service
 [Service]
 MemoryMax=1G
 MemoryHigh=800M
-OOMScoreAdjust=200      # Prefer this service as a victim over others
-MemoryOOMPolicy=kill    # Default: kill the process (v253+)
+OOMScoreAdjust=200      # 他よりもこのサービスを犠牲者として優先する
+MemoryOOMPolicy=kill    # デフォルト: プロセスを kill する（v253+）
 ```
 
-## The Kill Sequence: Functions and Log Output {#the-kill-sequence-functions-and-log-output}
+## kill のシーケンス: 関数とログ出力 {#the-kill-sequence-functions-and-log-output}
 
-The complete call path from charge failure to process kill:
+チャージの失敗からプロセスの kill までの完全な呼び出しパス:
 
 ```
 try_charge()                         [mm/memcontrol.c]
@@ -158,17 +158,17 @@ try_charge()                         [mm/memcontrol.c]
             → do_send_sig_info()     [SIGKILL]
 ```
 
-### What gets logged {#what-gets-logged}
+### 何がログに記録されるか {#what-gets-logged}
 
-The log output is generated by `dump_header()` and `oom_kill_process()` in [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c), with cgroup-specific memory stats from `mem_cgroup_print_oom_meminfo()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c).
+ログ出力は [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) の `dump_header()` と `oom_kill_process()` によって生成され、cgroup 固有のメモリ統計は [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) の `mem_cgroup_print_oom_meminfo()` から出力される。
 
-A complete cgroup OOM log has these sections:
+完全な cgroup OOM のログは次のセクションからなる:
 
 ```
-# 1. Trigger line
+# 1. きっかけの行
 [  891.112200] worker-1 invoked oom-killer: gfp_mask=0x140cca(...), order=0, oom_score_adj=0
 
-# 2. Stack trace (who called the allocator)
+# 2. スタックトレース（誰がアロケータを呼んだか）
 [  891.112210]  <TASK>
 [  891.112215]  oom_kill_process+0x101/0x170
 [  891.112220]  out_of_memory+0x116/0x570
@@ -176,222 +176,222 @@ A complete cgroup OOM log has these sections:
 [  891.112230]  try_charge_memcg+0x5c4/0x6b0
 [  891.112235]  mem_cgroup_charge+0x92/0x1e0
 
-# 3. Cgroup memory stats (not system-wide stats)
+# 3. cgroup のメモリ統計（システム全体の統計ではない）
 [  891.112245] Memory cgroup stats for /myapp.slice/myapp.service:
 [  891.112248] anon 536346624
 [  891.112248] file 262144
 [  891.112248] kernel 2158592
 [  891.112248] ...
 
-# 4. Task table (only processes in the cgroup)
+# 4. タスク表（cgroup 内のプロセスのみ）
 [  891.112260] Tasks state (memory values in pages):
 [  891.112262] [  pid  ]   uid  tgid total_vm  rss  ...  oom_score_adj name
 [  891.112268] [  12001]  1000 12001   524288  130048 ...           0  worker-1
 [  891.112275] [  12002]  1000 12002   524288  131072 ...           0  worker-2
 
-# 5. Kill line
+# 5. kill の行
 [  891.112285] oom-kill:constraint=CONSTRAINT_MEMCG,nodemask=(null),memcg=/myapp.slice/myapp.service,task_memcg=/myapp.slice/myapp.service,task=worker-2,pid=12002,uid=1000
 [  891.112290] Memory cgroup out of memory: Killed process 12002 (worker-2) total-vm:2097152kB, anon-rss:524288kB, file-rss:0kB, shmem-rss:0kB, UID:1000 pgtables:1024kB oom_score_adj:0
 ```
 
-Key differences from a global OOM log:
+グローバル OOM のログとの主な違い:
 
-- Section 3 shows `Memory cgroup stats for <path>:` with named byte counters, not the zone-based `Mem-Info:` dump
-- Section 4 lists only processes in the cgroup
-- Section 5 shows `constraint=CONSTRAINT_MEMCG` and `Memory cgroup out of memory:`
+- セクション3には、ゾーンベースの `Mem-Info:` ダンプではなく、名前付きのバイトカウンタを伴う `Memory cgroup stats for <path>:` が表示される
+- セクション4には cgroup 内のプロセスだけが列挙される
+- セクション5には `constraint=CONSTRAINT_MEMCG` と `Memory cgroup out of memory:` が表示される
 
-See [Reading an OOM log](reading-oom-log.md) for a full annotated walkthrough of each field.
+各フィールドの注釈付きの詳しい解説は [Reading an OOM log](reading-oom-log.md) を参照。
 
-## Configuring Cgroup OOM Behavior {#configuring-cgroup-oom-behavior}
+## cgroup OOM の挙動の設定 {#configuring-cgroup-oom-behavior}
 
-### Prevent OOM by setting memory.high {#prevent-oom-by-setting-memoryhigh}
+### memory.high を設定して OOM を防ぐ {#prevent-oom-by-setting-memoryhigh}
 
-The most effective way to avoid cgroup OOM is to ensure the application encounters throttling (`memory.high`) before hitting the hard limit (`memory.max`). The gap between them gives the kernel room to reclaim and gives monitoring systems time to respond.
+cgroup OOM を避ける最も効果的な方法は、アプリケーションがハードリミット（`memory.max`）に達する前にスロットリング（`memory.high`）に遭遇するようにすることである。両者の間の差が、カーネルに回収する余地を与え、監視システムに対応する時間を与える。
 
 ```bash
-# 200MB gap between high and max
+# high と max の間に200MB の差を設ける
 echo 800M > /sys/fs/cgroup/myapp/memory.high
 echo 1G   > /sys/fs/cgroup/myapp/memory.max
 ```
 
-### Allow swap as a buffer {#allow-swap-as-a-buffer}
+### スワップをバッファとして許可する {#allow-swap-as-a-buffer}
 
-If swap is available, allowing the cgroup to use it gives a buffer between the `memory.high` throttle zone and the `memory.max` OOM zone. See [Swap accounting in cgroups](memcg-swap.md) for details.
+スワップが利用可能なら、cgroup にスワップの使用を許可することで、`memory.high` のスロットリングゾーンと `memory.max` の OOM ゾーンの間にバッファができる。詳細は [Swap accounting in cgroups](memcg-swap.md) を参照。
 
 ```bash
 echo 512M > /sys/fs/cgroup/myapp/memory.swap.max
 ```
 
-### Monitor OOM events proactively {#monitor-oom-events-proactively}
+### OOM イベントを事前に監視する {#monitor-oom-events-proactively}
 
 ```bash
-# Watch for OOM events
+# OOM イベントを監視
 watch -n 5 cat /sys/fs/cgroup/myapp/memory.events
 
-# Set up inotify on memory.events for event-driven monitoring
-# (systemd-oomd uses inotify on memory.pressure instead)
+# イベント駆動の監視には memory.events に inotify を設定する
+# （systemd-oomd は代わりに memory.pressure に inotify を使う）
 ```
 
-### memory.events fields {#memoryevents-fields}
+### memory.events のフィールド {#memoryevents-fields}
 
 ```bash
 cat /sys/fs/cgroup/myapp/memory.events
-# low 0          # times usage dropped below memory.low (reclaim pressure)
-# high 152       # times memory.high was exceeded
-# max 3          # times memory.max was reached
-# oom 1          # OOM events triggered
-# oom_kill 1     # processes killed by cgroup OOM
-# oom_group_kill 0  # group kill events (memory.oom.group)
+# low 0          # 使用量が memory.low を下回った回数（回収圧力）
+# high 152       # memory.high を超えた回数
+# max 3          # memory.max に達した回数
+# oom 1          # 引き起こされた OOM イベント
+# oom_kill 1     # cgroup OOM で kill されたプロセス
+# oom_group_kill 0  # グループ kill のイベント（memory.oom.group）
 ```
 
-`oom` counts OOM events. `oom_kill` counts processes killed. If `memory.oom.group = 1`, one OOM event can produce multiple `oom_kill` increments.
+`oom` は OOM イベントの数を数える。`oom_kill` は kill されたプロセスの数を数える。`memory.oom.group = 1` の場合、1回の OOM イベントで `oom_kill` が複数回増えることがある。
 
-## cgroup v1 vs v2 OOM Behavior {#cgroup-v1-vs-v2-oom-behavior}
+## cgroup v1 と v2 の OOM の挙動 {#cgroup-v1-vs-v2-oom-behavior}
 
-| Behavior | cgroup v1 | cgroup v2 |
+| 挙動 | cgroup v1 | cgroup v2 |
 |----------|-----------|-----------|
-| OOM trigger file | `memory.limit_in_bytes` | `memory.max` |
-| memsw (memory+swap) limit | `memory.memsw.limit_in_bytes` | Separate `memory.swap.max` |
-| Group kill | `memory.oom_control` (OOM disabling only) | `memory.oom.group` |
-| OOM disable | `echo 1 > memory.oom_control` | No equivalent — discouraged |
-| OOM notification | eventfd on `memory.oom_control` | `memory.events` (poll/inotify) |
-| OOM log prefix | `Memory cgroup out of memory:` | Same |
-| Kernel memory | Separate `memory.kmem.limit_in_bytes` | Unified under `memory.max` |
+| OOM を引き起こすファイル | `memory.limit_in_bytes` | `memory.max` |
+| memsw（メモリ+スワップ）の制限 | `memory.memsw.limit_in_bytes` | 別個の `memory.swap.max` |
+| グループ kill | `memory.oom_control`（OOM の無効化のみ） | `memory.oom.group` |
+| OOM の無効化 | `echo 1 > memory.oom_control` | 相当するものはない — 推奨されない |
+| OOM の通知 | `memory.oom_control` 上の eventfd | `memory.events`（poll/inotify） |
+| OOM ログの接頭辞 | `Memory cgroup out of memory:` | 同じ |
+| カーネルメモリ | 別個の `memory.kmem.limit_in_bytes` | `memory.max` に統合 |
 
-!!! warning "memory.oom_control disable in v1 is dangerous"
-    Setting `memory.oom_control = 1` in cgroup v1 disables the OOM killer for that cgroup. When the cgroup exceeds its limit, allocations block indefinitely instead of triggering OOM. Processes hang rather than die. This was removed from cgroup v2 by design. If you need allocation failure without killing, use `memory.oom.group` plus a userspace OOM daemon like [systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) or [Meta's oomd](https://facebookincubator.github.io/oomd/).
+!!! warning "v1 での memory.oom_control による無効化は危険"
+    cgroup v1 で `memory.oom_control = 1` を設定すると、その cgroup の OOM killer が無効になる。cgroup が制限を超えると、OOM を引き起こす代わりに割り当てが無期限にブロックする。プロセスは死ぬのではなくハングする。これは設計上の判断として cgroup v2 から削除された。kill せずに割り当てを失敗させたい場合は、`memory.oom.group` と、[systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) や [Meta's oomd](https://facebookincubator.github.io/oomd/) のようなユーザー空間の OOM デーモンを併用する。
 
-## systemd-oomd: Userspace OOM Before the Kernel Fires {#systemd-oomd-userspace-oom-before-the-kernel-fires}
+## systemd-oomd: カーネルが発動する前のユーザー空間 OOM {#systemd-oomd-userspace-oom-before-the-kernel-fires}
 
-[systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) monitors PSI (Pressure Stall Information) per cgroup and kills cgroups that are under sustained memory pressure, before the kernel OOM killer fires. It acts at the cgroup level (killing the whole cgroup), not the process level.
+[systemd-oomd](https://www.freedesktop.org/software/systemd/man/systemd-oomd.service.html) は cgroup ごとの PSI（Pressure Stall Information）を監視し、カーネルの OOM killer が発動する前に、持続的なメモリ圧力下にある cgroup を kill する。プロセスレベルではなく cgroup レベルで動作する（cgroup 全体を kill する）。
 
 ```bash
-# Check systemd-oomd status
+# systemd-oomd の状態を確認
 systemctl status systemd-oomd
 
-# View oomd's kill history
+# oomd の kill 履歴を表示
 journalctl -u systemd-oomd
 
-# Configure thresholds in /etc/systemd/oomd.conf
+# /etc/systemd/oomd.conf でしきい値を設定
 [OOM]
-SwapUsedLimit=90%           # Kill if swap > 90% full
-DefaultMemoryPressureLimit=60%  # Kill if PSI > 60% for DefaultMemoryPressureDurationSec
+SwapUsedLimit=90%           # スワップが90%を超えたら kill
+DefaultMemoryPressureLimit=60%  # DefaultMemoryPressureDurationSec の間 PSI が60%を超えたら kill
 DefaultMemoryPressureDurationSec=30
 ```
 
-PSI-based killing is generally preferable to kernel OOM killing because it acts earlier (during high pressure, not after allocation failure) and kills at the cgroup boundary.
+PSI に基づく kill は、一般にカーネルの OOM kill より望ましい。より早い段階で（割り当て失敗の後ではなく、高い圧力がかかっている間に）動作し、cgroup の境界で kill するからである。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Trigger a cgroup OOM and observe the log {#trigger-a-cgroup-oom-and-observe-the-log}
+### cgroup OOM を引き起こしてログを観察する {#trigger-a-cgroup-oom-and-observe-the-log}
 
 ```bash
-# Create a cgroup with a small limit
+# 小さな制限を持つ cgroup を作成
 sudo mkdir -p /sys/fs/cgroup/oom-test
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo 64M | sudo tee /sys/fs/cgroup/oom-test/memory.max
 echo 1   | sudo tee /sys/fs/cgroup/oom-test/memory.oom.group
 
-# Move current shell into it
+# 現在のシェルをその中に移動
 echo $$ | sudo tee /sys/fs/cgroup/oom-test/cgroup.procs
 
-# Allocate more than the limit
+# 制限を超える量を割り当てる
 python3 -c "x = bytearray(100 * 1024 * 1024)"
-# This process will be OOM-killed
+# このプロセスは OOM kill される
 
-# Check the log
+# ログを確認
 dmesg | grep -A 30 "Memory cgroup out of memory"
 ```
 
-### Compare oom_score_adj impact {#compare-oomscoreadj-impact}
+### oom_score_adj の影響を比較する {#compare-oomscoreadj-impact}
 
 ```bash
-# With two processes in a cgroup, observe which one is selected
+# cgroup 内に2つのプロセスを置き、どちらが選ばれるかを観察
 sudo mkdir -p /sys/fs/cgroup/score-test
 echo 128M | sudo tee /sys/fs/cgroup/score-test/memory.max
 
-# Start two background processes
+# 2つのバックグラウンドプロセスを起動
 python3 -c "import time; x = bytearray(30 * 1024 * 1024); time.sleep(300)" &
 PID_A=$!
 python3 -c "import time; x = bytearray(30 * 1024 * 1024); time.sleep(300)" &
 PID_B=$!
 
-# Move both into the cgroup
+# 両方を cgroup に移動
 echo $PID_A | sudo tee /sys/fs/cgroup/score-test/cgroup.procs
 echo $PID_B | sudo tee /sys/fs/cgroup/score-test/cgroup.procs
 
-# Penalize one process
+# 一方のプロセスにペナルティを与える
 echo 500 > /proc/$PID_B/oom_score_adj
 
-# Now trigger OOM — PID_B should be killed first
+# ここで OOM を引き起こす — PID_B が先に kill されるはず
 python3 -c "x = bytearray(80 * 1024 * 1024)" &
 echo $! | sudo tee /sys/fs/cgroup/score-test/cgroup.procs
 
-# Check which PID was killed
+# どの PID が kill されたかを確認
 dmesg | tail -5
 ```
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Relevant functions |
+| ファイル | 関連する関数 |
 |------|--------------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `mem_cgroup_out_of_memory()` — cgroup OOM entry point; `mem_cgroup_get_oom_group()` — find group to kill; `mem_cgroup_print_oom_meminfo()` — log output; `try_charge()` — charge + limit enforcement |
-| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | `out_of_memory()` — shared OOM logic; `oom_badness()` — scoring; `select_bad_process()` — candidate enumeration; `oom_kill_process()` — kill + log; `__oom_kill_process()` — actual SIGKILL |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`, oom_group field |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `mem_cgroup_out_of_memory()` — cgroup OOM のエントリポイント、`mem_cgroup_get_oom_group()` — kill するグループを探す、`mem_cgroup_print_oom_meminfo()` — ログ出力、`try_charge()` — チャージと制限の強制 |
+| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | `out_of_memory()` — 共通の OOM ロジック、`oom_badness()` — スコア計算、`select_bad_process()` — 候補の列挙、`oom_kill_process()` — kill とログ、`__oom_kill_process()` — 実際の SIGKILL |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`、oom_group フィールド |
 
-## History {#history}
+## 歴史 {#history}
 
-### Cgroup OOM Notification (cgroup v1, v3.8, 2013) {#cgroup-oom-notification-cgroup-v1-v38-2013}
+### cgroup の OOM 通知（cgroup v1、v3.8、2013年） {#cgroup-oom-notification-cgroup-v1-v38-2013}
 
-cgroup v1 introduced `memory.oom_control` with eventfd-based OOM notifications. The interface allowed userspace to be notified when OOM occurred, and optionally to disable the OOM killer entirely (blocking allocations instead). This was useful but fragile — disabled OOM kills led to hung processes.
+cgroup v1 は、eventfd ベースの OOM 通知を伴う `memory.oom_control` を導入した。このインターフェースにより、OOM が起きたときにユーザー空間へ通知することができ、オプションで OOM killer を完全に無効化する（代わりに割り当てをブロックする）こともできた。これは有用だったが脆弱で、OOM kill を無効にするとプロセスがハングした。
 
-### memory.oom.group (v4.19, 2018) {#memoryoomgroup-v419-2018}
+### memory.oom.group（v4.19、2018年） {#memoryoomgroup-v419-2018}
 
-**Commit**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca) ("mm, oom: introduce memory.oom.group") | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
+**コミット**: [3d8b38eb81ca](https://git.kernel.org/linus/3d8b38eb81ca)（"mm, oom: introduce memory.oom.group"） | [LKML](https://lore.kernel.org/all/20180730180100.25079-4-guro@fb.com/)
 
-**Author**: Roman Gushchin
+**作者**: Roman Gushchin
 
-Enabled killing all processes in a cgroup together on OOM, replacing the need for external watchdogs to restart partially-killed containers.
+OOM 時に cgroup 内のすべてのプロセスをまとめて kill できるようにし、部分的に kill されたコンテナを再起動するための外部のウォッチドッグを不要にした。
 
-### cgroup v2 OOM (v4.5+) {#cgroup-v2-oom-v45}
+### cgroup v2 の OOM（v4.5+） {#cgroup-v2-oom-v45}
 
-cgroup v2 removed `memory.oom_control` disable functionality by design. The v2 philosophy is that processes should be killed rather than hung. The `memory.events` file replaced eventfd notifications with a simple counter file suitable for polling.
+cgroup v2 は、設計上の判断として `memory.oom_control` の無効化機能を削除した。v2 の考え方は、プロセスはハングさせるよりも kill すべきだというものである。`memory.events` ファイルが、eventfd による通知を、ポーリングに適した単純なカウンタファイルで置き換えた。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Cgroup memory controller |
-| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer: scoring, selection, killing |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | cgroup のメモリコントローラ |
+| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer: スコア計算、選択、kill |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — memory interface files, oom.group
-- [`Documentation/filesystems/proc.rst`](https://docs.kernel.org/filesystems/proc.html) — `/proc/<pid>/oom_score_adj` and `oom_score` semantics
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — メモリのインターフェースファイル、oom.group
+- [`Documentation/filesystems/proc.rst`](https://docs.kernel.org/filesystems/proc.html) — `/proc/<pid>/oom_score_adj` と `oom_score` のセマンティクス
 
-### LWN Articles {#lwn-articles}
+### LWN の記事 {#lwn-articles}
 
-- [Toward better OOM killing](https://lwn.net/Articles/391222/) — background on the OOM scoring model
-- [Group-kill for memory-cgroup OOM](https://lwn.net/Articles/761118/) — memory.oom.group design
+- [Toward better OOM killing](https://lwn.net/Articles/391222/) — OOM スコアリングモデルの背景
+- [Group-kill for memory-cgroup OOM](https://lwn.net/Articles/761118/) — memory.oom.group の設計
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Memory Cgroups](memcg.md) — memcg fundamentals
-- [Reading an OOM log](reading-oom-log.md) — annotated OOM log walkthrough
-- [Running out of memory](oom.md) — the global OOM path
-- [Hierarchical memory limits](memcg-hierarchy.md) — how limits propagate in the cgroup tree
-- [Swap accounting in cgroups](memcg-swap.md) — using swap to avoid OOM
+- [Memory Cgroups](memcg.md) — memcg の基礎
+- [Reading an OOM log](reading-oom-log.md) — 注釈付きの OOM ログ解説
+- [Running out of memory](oom.md) — グローバル OOM のパス
+- [Hierarchical memory limits](memcg-hierarchy.md) — cgroup ツリー内で制限がどう伝播するか
+- [Swap accounting in cgroups](memcg-swap.md) — スワップを使って OOM を避ける
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `mem_cgroup_out_of_memory()` (cgroup OOM entry point), `mem_cgroup_get_oom_group()` (group-kill ancestor walk), `mem_cgroup_print_oom_meminfo()` (per-cgroup log output)
-- [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()` scoring, `select_bad_process()` with `mem_cgroup_scan_tasks()`, `oom_kill_process()` log generation — shared between global and cgroup OOM paths
-- `Documentation/admin-guide/cgroup-v2.rst` — `memory.oom.group` and `memory.events` semantics, including field definitions for `oom`, `oom_kill`, and `oom_group_kill`
-- `Documentation/admin-guide/oom-kill.rst` — `oom_score_adj` range, semantics, and interaction with process scoring
-- [LWN: Group-kill for memory-cgroup OOM](https://lwn.net/Articles/761118/) — design discussion and motivation for `memory.oom.group`, including the container-restart problem it solves
-- [LWN: Toward better OOM killing](https://lwn.net/Articles/391222/) — background on the OOM scoring model and why `oom_score_adj` was introduced
-- [memcg](memcg.md) — memcg fundamentals, including `memory.max` vs `memory.high` and the OOM group kill flag
-- [memcg-hierarchy](memcg-hierarchy.md) — how ancestor limits can trigger cgroup OOM even when a child's own `memory.max` has not been reached
-- [memcg-swap](memcg-swap.md) — how allowing swap creates a buffer between the `memory.high` throttle zone and `memory.max` OOM
+- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `mem_cgroup_out_of_memory()`（cgroup OOM のエントリポイント）、`mem_cgroup_get_oom_group()`（グループ kill のための祖先の走査）、`mem_cgroup_print_oom_meminfo()`（cgroup ごとのログ出力）
+- [mm/oom_kill.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) — `oom_badness()` によるスコア計算、`mem_cgroup_scan_tasks()` を使う `select_bad_process()`、`oom_kill_process()` によるログ生成 — グローバルと cgroup の OOM パスで共有される
+- `Documentation/admin-guide/cgroup-v2.rst` — `memory.oom.group` と `memory.events` のセマンティクス。`oom`、`oom_kill`、`oom_group_kill` のフィールド定義を含む
+- `Documentation/admin-guide/oom-kill.rst` — `oom_score_adj` の範囲、セマンティクス、プロセスのスコア計算との相互作用
+- [LWN: Group-kill for memory-cgroup OOM](https://lwn.net/Articles/761118/) — `memory.oom.group` の設計に関する議論と動機。これが解決するコンテナ再起動の問題を含む
+- [LWN: Toward better OOM killing](https://lwn.net/Articles/391222/) — OOM スコアリングモデルの背景と、`oom_score_adj` が導入された理由
+- [memcg](memcg.md) — memcg の基礎。`memory.max` と `memory.high` の違いや、OOM のグループ kill フラグを含む
+- [memcg-hierarchy](memcg-hierarchy.md) — 子の `memory.max` に達していなくても、祖先の制限によって cgroup OOM が引き起こされうる仕組み
+- [memcg-swap](memcg-swap.md) — スワップを許可することで、`memory.high` のスロットリングゾーンと `memory.max` の OOM の間にバッファができる仕組み
