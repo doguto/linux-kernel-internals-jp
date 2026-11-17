@@ -1,10 +1,10 @@
-# What Happens During exec() {#what-happens-during-exec}
+# exec()の間に何が起きるか {#what-happens-during-exec}
 
-> From execve() syscall to a running new process
+> execve()システムコールから、新しいプロセスが実行されるまで
 
-## Overview {#overview}
+## 概要 {#overview}
 
-`execve()` replaces the current process image with a new one. The PID stays the same, but the address space, file descriptors (non-`O_CLOEXEC`), and registers are replaced:
+`execve()` は現在のプロセスイメージを新しいものに置き換える。PIDは変わらないが、アドレス空間、ファイルディスクリプタ（`O_CLOEXEC` でないもの）、レジスタは置き換えられる。
 
 ```
 execve("./myprogram", argv, envp)
@@ -23,7 +23,7 @@ execve("./myprogram", argv, envp)
    └─ start_thread: set IP = entry, SP = stack top
 ```
 
-## The linux_binprm structure {#the-linux_binprm-structure}
+## linux_binprm構造体 {#the-linux_binprm-structure}
 
 ```c
 /* include/linux/binfmts.h */
@@ -32,31 +32,31 @@ struct linux_binprm {
     unsigned long         vma_pages;
     struct mm_struct *mm;
 
-    /* argv[0] path, used for /proc/PID/exe */
+    /* argv[0]のパス。/proc/PID/exeに使われる */
     const char *filename;
     const char *interp;
 
-    /* The first BINPRM_BUF_SIZE bytes of the file */
-    char buf[BINPRM_BUF_SIZE];  /* 256 bytes */
+    /* ファイルの先頭BINPRM_BUF_SIZEバイト */
+    char buf[BINPRM_BUF_SIZE];  /* 256バイト */
 
     struct file *file;
-    struct cred *cred;          /* proposed new credentials */
+    struct cred *cred;          /* 提案された新しいクレデンシャル */
 
     int argc, envc;
 
-    /* Address of the top of the stack in the new mm */
+    /* 新しいmmにおけるスタックの先頭アドレス */
     unsigned long p;
 
-    /* argv[] and envp[] are stored on the stack above p */
+    /* argv[]とenvp[]はpより上のスタックに格納される */
     unsigned long argmin;
 
-    /* ELF-specific: executable type flags */
+    /* ELF固有: 実行形式の種別フラグ */
     unsigned int per_flags;
     unsigned int unsafe;
 };
 ```
 
-## Step 1: syscall entry {#step-1-syscall-entry}
+## ステップ1: システムコールのエントリ {#step-1-syscall-entry}
 
 ```c
 /* fs/exec.c */
@@ -77,23 +77,23 @@ static int do_execveat_common(int fd, struct filename *filename,
 
     bprm = alloc_bprm(fd, filename, flags);
 
-    /* Copy argv/envp strings to bprm (checked for length limits) */
+    /* argv/envpの文字列をbprmにコピーする（長さの上限をチェック） */
     retval = copy_strings_kernel(1, &bprm->filename, bprm);
     retval = copy_strings(bprm->envc, envp, bprm);
     retval = copy_strings(bprm->argc, argv, bprm);
 
-    /* Read the first 256 bytes of the file (magic number check) */
+    /* ファイルの先頭256バイトを読む（マジックナンバーのチェック） */
     retval = bprm_execve(bprm, fd, filename, flags);
 }
 ```
 
-## Step 2: binary format detection {#step-2-binary-format-detection}
+## ステップ2: バイナリ形式の検出 {#step-2-binary-format-detection}
 
 ```c
 /* fs/exec.c */
 static int search_binary_handler(struct linux_binprm *bprm)
 {
-    /* Walk list of registered binary handlers */
+    /* 登録済みバイナリハンドラのリストを走査する */
     list_for_each_entry(fmt, &formats, lh) {
         retval = fmt->load_binary(bprm);
         if (retval != -ENOEXEC)
@@ -101,16 +101,16 @@ static int search_binary_handler(struct linux_binprm *bprm)
     }
 }
 
-/* Registered handlers (in order): */
-/* 1. ELF:     fs/binfmt_elf.c    — matches "\x7fELF" */
-/* 2. Scripts: fs/binfmt_script.c — matches "#!"       */
-/* 3. Misc:    fs/binfmt_misc.c   — user-defined rules */
-/* 4. Flat:    fs/binfmt_flat.c   — uClinux flat binaries */
+/* 登録済みハンドラ（順番どおり）: */
+/* 1. ELF:       fs/binfmt_elf.c    — "\x7fELF" にマッチ */
+/* 2. スクリプト: fs/binfmt_script.c — "#!" にマッチ       */
+/* 3. Misc:      fs/binfmt_misc.c   — ユーザー定義のルール */
+/* 4. Flat:      fs/binfmt_flat.c   — uClinuxのflatバイナリ */
 ```
 
-For `#!/bin/sh` scripts, `binfmt_script` re-invokes `search_binary_handler` with `/bin/sh` as the new executable.
+`#!/bin/sh` スクリプトの場合、`binfmt_script` は `/bin/sh` を新しい実行ファイルとして `search_binary_handler` を再度呼び出す。
 
-## Step 3: ELF loading {#step-3-elf-loading}
+## ステップ3: ELFのロード {#step-3-elf-loading}
 
 ```c
 /* fs/binfmt_elf.c */
@@ -119,67 +119,67 @@ static int load_elf_binary(struct linux_binprm *bprm)
     struct elf_phdr *elf_phdata;
     struct elf_ehdr *elf_ex = (struct elf_ehdr *)bprm->buf;
 
-    /* 1. Validate ELF magic and architecture */
+    /* 1. ELFマジックとアーキテクチャを検証する */
     if (memcmp(elf_ex->e_ident, ELFMAG, SELFMAG) != 0)
         return -ENOEXEC;
 
-    /* 2. Read all program headers */
+    /* 2. すべてのプログラムヘッダを読む */
     elf_phdata = load_elf_phdrs(elf_ex, bprm->file);
 
-    /* 3. Find the interpreter (PT_INTERP = dynamic linker path) */
+    /* 3. インタプリタを探す（PT_INTERP = 動的リンカのパス） */
     for (i = 0; i < elf_ex->e_phnum; i++) {
         if (elf_phdata[i].p_type == PT_INTERP) {
-            /* Read "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" */
+            /* "/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" を読む */
             elf_interpreter = kmalloc(elf_phdata[i].p_filesz, GFP_KERNEL);
             kernel_read(bprm->file, elf_interpreter, ...);
         }
     }
 
-    /* 4. Flush old address space, create new mm */
+    /* 4. 古いアドレス空間を破棄し、新しいmmを作る */
     retval = begin_new_exec(bprm);
-    /* → exec_mmap: replace current mm with fresh mm_struct */
-    /* → close O_CLOEXEC fds */
-    /* → reset signal handlers */
+    /* → exec_mmap: 現在のmmを新しいmm_structに置き換える */
+    /* → O_CLOEXECのfdを閉じる */
+    /* → シグナルハンドラをリセットする */
 
-    /* 5. Map PT_LOAD segments */
+    /* 5. PT_LOADセグメントをマップする */
     for each PT_LOAD segment {
         elf_map(bprm->file, load_addr + vaddr,
                 eppnt, elf_prot, elf_flags, total_size);
-        /* Creates a VMA for each segment:
+        /* セグメントごとにVMAを作る:
              .text: PROT_READ|EXEC, MAP_PRIVATE|FIXED
              .data: PROT_READ|WRITE, MAP_PRIVATE|FIXED  */
     }
 
-    /* 6. Load the interpreter (ld.so) at a random address */
+    /* 6. インタプリタ（ld.so）をランダムなアドレスにロードする */
     if (elf_interpreter) {
         interp_load_addr = load_elf_interp(&interp_elf_ex, interpreter);
         elf_entry = interp_load_addr + interp_elf_ex.e_entry;
-        /* Process starts at ld.so, not at e_entry of the binary */
+        /* プロセスはバイナリのe_entryではなくld.soから開始する */
     } else {
-        elf_entry = elf_ex->e_entry;  /* statically linked */
+        elf_entry = elf_ex->e_entry;  /* 静的リンクの場合 */
     }
 
-    /* 7. Set up the stack */
+    /* 7. スタックをセットアップする */
     retval = setup_arg_pages(bprm, randomize_stack_top(STACK_TOP),
                               executable_stack);
-    /* Creates the stack VMA: PROT_READ|WRITE, grows down */
+    /* スタックのVMAを作る: PROT_READ|WRITE、下方向に伸びる */
 
-    /* 8. Create [vvar] and [vdso] mappings */
+    /* 8. [vvar]と[vdso]のマッピングを作る */
     arch_setup_additional_pages(bprm, !!elf_interpreter);
 
-    /* 9. Push auxiliary vector onto stack */
-    /* auxv entries: AT_PHDR, AT_PHNUM, AT_ENTRY, AT_BASE,
+    /* 9. 補助ベクタをスタックに積む */
+    /* auxvのエントリ: AT_PHDR, AT_PHNUM, AT_ENTRY, AT_BASE,
                      AT_PAGESZ, AT_RANDOM, AT_PLATFORM, ... */
 
-    /* 10. Start the new binary */
+    /* 10. 新しいバイナリを開始する */
     start_thread(regs, elf_entry, bprm->p);
-    /* Sets IP=elf_entry, SP=bprm->p (stack top with argv/envp/auxv) */
+    /* IP=elf_entry、SP=bprm->p（argv/envp/auxvを含むスタックの先頭）に設定する */
 }
 ```
 
-## The resulting address space {#the-resulting-address-space}
+## 結果として得られるアドレス空間 {#the-resulting-address-space}
 
-After exec completes, `/proc/<pid>/maps` shows:
+execが完了した後、`/proc/<pid>/maps` は次のようになる。
 
 ```
 Address           Perms  Name
@@ -195,26 +195,26 @@ Address           Perms  Name
 7ffcc1401000-...  r-xp   [vdso]
 ```
 
-## Dynamic linker startup {#dynamic-linker-startup}
+## 動的リンカの起動 {#dynamic-linker-startup}
 
-The kernel jumps to `ld.so`'s entry point, not the main binary's. `ld.so`:
-1. Maps itself (it's position-independent)
-2. Reads the binary's `PT_DYNAMIC` segment to find shared library dependencies
-3. Loads each `.so` via `mmap()` (creating new VMAs)
-4. Resolves PLT/GOT relocations (symbol addresses)
-5. Calls `DT_INIT` constructors (e.g., `__attribute__((constructor))` functions)
-6. Jumps to the main binary's `e_entry` (the `_start` symbol)
+カーネルはメインバイナリではなく `ld.so` のエントリポイントにジャンプする。`ld.so` は次のことを行う。
+1. 自分自身をマップする（位置独立である）
+2. バイナリの `PT_DYNAMIC` セグメントを読み、共有ライブラリの依存関係を見つける
+3. 各 `.so` を `mmap()` でロードする（新しいVMAを作る）
+4. PLT/GOTの再配置（シンボルアドレス）を解決する
+5. `DT_INIT` のコンストラクタ（例: `__attribute__((constructor))` 関数）を呼び出す
+6. メインバイナリの `e_entry`（`_start` シンボル）にジャンプする
 
 ```c
-/* ld.so loads libraries into the process address space */
-/* After ld.so finishes: */
+/* ld.soはライブラリをプロセスのアドレス空間にロードする */
+/* ld.soの処理が終わった後: */
 00400000-...  r-xp   /usr/bin/myprogram
 7f0000000000-...  r-xp   /lib/x86_64-linux-gnu/libc.so.6
 7f0001000000-...  r-xp   /lib/x86_64-linux-gnu/libm.so.6
-/* Each shared library gets its own set of VMAs */
+/* 各共有ライブラリはそれぞれ独自のVMA群を持つ */
 ```
 
-## begin_new_exec: the point of no return {#beginnewexec-the-point-of-no-return}
+## begin_new_exec: 引き返せない地点 {#beginnewexec-the-point-of-no-return}
 
 ```c
 /* fs/exec.c */
@@ -222,30 +222,30 @@ int begin_new_exec(struct linux_binprm *bprm)
 {
     struct task_struct *me = current;
 
-    /* Create a new mm_struct (blank address space) */
+    /* 新しいmm_structを作る（空のアドレス空間） */
     retval = exec_mmap(bprm->mm);
-    /* This replaces current->mm — old mappings gone! */
+    /* これはcurrent->mmを置き換える — 古いマッピングは消える！ */
 
-    /* Close O_CLOEXEC file descriptors */
+    /* O_CLOEXECのファイルディスクリプタを閉じる */
     do_close_on_exec(current->files);
 
-    /* Reset signal handlers to SIG_DFL */
+    /* シグナルハンドラをSIG_DFLにリセットする */
     flush_signal_handlers(me, 0);
 
-    /* Drop capabilities acquired via set-uid */
-    /* Update credentials if set-uid/set-gid binary */
+    /* set-uidによって獲得したケーパビリティを落とす */
+    /* set-uid/set-gidバイナリならクレデンシャルを更新する */
     retval = install_exec_creds(bprm);
 
-    /* Change process name (/proc/PID/comm) */
+    /* プロセス名を変更する（/proc/PID/comm） */
     __set_task_comm(me, kbasename(bprm->filename), true);
 
     return 0;
 }
 ```
 
-## exec and threads {#exec-and-threads}
+## execとスレッド {#exec-and-threads}
 
-If the calling process has multiple threads, `execve` kills all other threads before replacing the address space:
+呼び出したプロセスに複数のスレッドがある場合、`execve` はアドレス空間を置き換える前に他のすべてのスレッドを終了させる。
 
 ```c
 /* fs/exec.c */
@@ -254,40 +254,40 @@ static int de_thread(struct task_struct *tsk)
     struct signal_struct *sig = tsk->signal;
     struct sighand_struct *oldsighand = tsk->sighand;
 
-    /* Unshare the thread group */
-    /* Signal all other threads to exit */
+    /* スレッドグループの共有を解除する */
+    /* 他のすべてのスレッドに終了をシグナルで通知する */
     zap_other_threads(tsk);
 
-    /* Wait for all other threads to die */
+    /* 他のすべてのスレッドが終了するのを待つ */
     while (atomic_read(&sig->count) > 1)
         schedule_timeout(1);
 }
 ```
 
-## Observing exec {#observing-exec}
+## execの観測 {#observing-exec}
 
 ```bash
-# Trace exec syscalls
+# exec システムコールをトレースする
 strace -e execve /bin/ls
 
-# Trace all execs system-wide
+# システム全体のすべての exec をトレースする
 bpftrace -e 'tracepoint:syscalls:sys_enter_execve { printf("%s exec %s\n", comm, str(args->filename)); }'
 
-# See ELF segments
+# ELF セグメントを表示する
 readelf -l /usr/bin/ls | grep -A1 LOAD
 
-# See dynamic linker loading
+# 動的リンカのロード処理を表示する
 LD_DEBUG=all /usr/bin/ls 2>&1 | head -50
 
-# See full address space after exec
+# exec 後のアドレス空間全体を表示する
 cat /proc/$(pgrep myprogram)/maps
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [What Happens When You fork()](fork.md) — fork creates the starting mm
-- [Process Address Space](mmap.md) — VMA layout
-- [Life of a malloc](life-of-malloc.md) — heap after exec
-- [Copy-on-Write](cow.md) — ELF data segments use COW
-- `fs/exec.c` — execve implementation
-- `fs/binfmt_elf.c` — ELF loader
+- [fork()したときに何が起きるか](fork.md) — forkが出発点となるmmを作る
+- [プロセスのアドレス空間](mmap.md) — VMAのレイアウト
+- [mallocの一生](life-of-malloc.md) — exec後のヒープ
+- [Copy-on-Write](cow.md) — ELFのデータセグメントはCOWを使う
+- `fs/exec.c` — execveの実装
+- `fs/binfmt_elf.c` — ELFローダ

@@ -1,110 +1,110 @@
 # vDSO: Virtual Dynamic Shared Object {#vdso-virtual-dynamic-shared-object}
 
-> Syscalls without entering the kernel: gettimeofday at userspace speed
+> カーネルに入らないシステムコール: ユーザー空間の速度で動くgettimeofday
 
-## The problem {#the-problem}
+## 問題 {#the-problem}
 
-Every system call requires a mode switch: user → kernel → user. For `gettimeofday()`, this means:
+システムコールは毎回モード切り替え（ユーザー → カーネル → ユーザー）を必要とする。`gettimeofday()` の場合、これは次を意味する。
 
-- Save registers, change privilege level (CPL 0)
-- Look up time in the kernel
-- Restore registers, return to userspace
+- レジスタを退避し、特権レベルを変更する（CPL 0）
+- カーネル内で時刻を参照する
+- レジスタを復元し、ユーザー空間へ戻る
 
-For high-frequency time queries (trading systems, profilers, game loops), this round-trip costs ~100-300ns. The vDSO eliminates it.
+高頻度で時刻を問い合わせる用途（トレーディングシステム、プロファイラ、ゲームループ）では、この往復に約100〜300nsかかる。vDSOはこれをなくす。
 
-## What is the vDSO? {#what-is-the-vdso}
+## vDSOとは何か {#what-is-the-vdso}
 
-The vDSO (virtual dynamic shared object) is a small shared library that the kernel **maps into every process address space** automatically. It contains a few time-related functions implemented as pure userspace code that read from a kernel-maintained shared memory region — no syscall needed.
+vDSO（virtual dynamic shared object）は、カーネルが **すべてのプロセスのアドレス空間に** 自動的にマップする小さな共有ライブラリである。いくつかの時刻関連関数を含んでおり、これらは純粋なユーザー空間コードとして実装され、カーネルが管理する共有メモリ領域から値を読む。システムコールは不要である。
 
 ```bash
-# See vDSO mapping in every process
+# すべてのプロセスで vDSO のマッピングを確認する
 cat /proc/self/maps | grep vdso
 # 7fff12345000-7fff12346000 r-xp  [vdso]
 
-# Extract and disassemble the vDSO
+# vDSO を取り出して逆アセンブルする
 objcopy --dump-section .text=/tmp/vdso.so [vdso] /dev/null 2>/dev/null
-# Or:
+# または:
 dd if=/proc/self/mem bs=4096 count=1 skip=$((0x7fff12345000/4096)) > /tmp/vdso.so
 ```
 
-## Functions in the vDSO {#functions-in-the-vdso}
+## vDSOに含まれる関数 {#functions-in-the-vdso}
 
 ```c
-/* The vDSO exports these symbols (x86-64): */
-__vdso_clock_gettime()    /* clock_gettime(CLOCK_REALTIME, ...)  — fast */
-__vdso_clock_getres()     /* clock_getres()                      — fast */
-__vdso_gettimeofday()     /* gettimeofday()                      — fast */
-__vdso_time()             /* time()                              — fast */
-__vdso_getcpu()           /* getcpu() — current CPU/NUMA node   — fast */
+/* vDSOは次のシンボルをエクスポートする（x86-64）: */
+__vdso_clock_gettime()    /* clock_gettime(CLOCK_REALTIME, ...)  — 高速 */
+__vdso_clock_getres()     /* clock_getres()                      — 高速 */
+__vdso_gettimeofday()     /* gettimeofday()                      — 高速 */
+__vdso_time()             /* time()                              — 高速 */
+__vdso_getcpu()           /* getcpu() — 現在のCPU/NUMAノード      — 高速 */
 
-/* These call the vDSO instead of the kernel: */
-/* glibc wraps all of these to use vDSO automatically */
+/* これらはカーネルの代わりにvDSOを呼び出す: */
+/* glibcはこれらすべてをラップし、自動的にvDSOを使う */
 ```
 
-## The vdso_data shared page {#the-vdso_data-shared-page}
+## vdso_data共有ページ {#the-vdso_data-shared-page}
 
-The kernel maintains a **vvar** (vDSO variable) page that is:
+カーネルは **vvar**（vDSO variable）ページを管理している。このページは次の性質を持つ。
 
-- Mapped read-only into every process
-- Written by the kernel (holding current time)
-- Read by the vDSO functions (no syscall)
+- すべてのプロセスに読み取り専用でマップされる
+- カーネルによって書き込まれる（現在時刻を保持する）
+- vDSOの関数によって読まれる（システムコールなし）
 
 ```c
 /* arch/x86/include/asm/vvar.h */
 /* arch/x86/entry/vdso/vma.c */
 struct vdso_data {
-    u32 seq;              /* seqlock sequence counter */
+    u32 seq;              /* seqlockのシーケンスカウンタ */
 
     s32 clock_mode;       /* VDSO_CLOCKMODE_* */
-    u64 cycle_last;       /* TSC value at last update */
-    u64 mask;             /* TSC bitmask */
-    u32 mult;             /* TSC → ns multiplier */
-    u32 shift;            /* TSC → ns shift */
+    u64 cycle_last;       /* 最終更新時のTSC値 */
+    u64 mask;             /* TSCのビットマスク */
+    u32 mult;             /* TSC → ns の乗数 */
+    u32 shift;            /* TSC → ns のシフト量 */
 
-    /* Per-clockid data: */
+    /* clockidごとのデータ: */
     struct {
-        u64 nsec;         /* sub-second nanoseconds */
-        u64 sec;          /* seconds since epoch */
-        u64 snsec;        /* CLOCK_MONOTONIC offsets */
+        u64 nsec;         /* 1秒未満のナノ秒 */
+        u64 sec;          /* エポックからの秒数 */
+        u64 snsec;        /* CLOCK_MONOTONICのオフセット */
     } basetime[VDSO_BASES];
 
-    s32 tz_minuteswest;   /* timezone */
+    s32 tz_minuteswest;   /* タイムゾーン */
     s32 tz_dsttime;
     u32 hrtimer_res;
     u32 __unused;
 };
 
-/* Two copies for NMI safety: */
-extern struct vdso_data _vdso_data[CS_BASES];  /* in vmlinux */
-/* Mapped to [vvar] page in each process */
+/* NMI安全性のための2つのコピー: */
+extern struct vdso_data _vdso_data[CS_BASES];  /* vmlinux内 */
+/* 各プロセスの[vvar]ページにマップされる */
 ```
 
-## The seqlock pattern {#the-seqlock-pattern}
+## seqlockパターン {#the-seqlock-pattern}
 
-The kernel updates `vdso_data` while user code reads it concurrently. A **seqlock** ensures consistent reads:
+カーネルが `vdso_data` を更新する一方で、ユーザーコードはそれを並行して読む。**seqlock** が一貫した読み取りを保証する。
 
 ```c
-/* Kernel (timekeeping.c): write side */
+/* カーネル（timekeeping.c）: 書き込み側 */
 void update_vsyscall(struct timekeeper *tk)
 {
     struct vdso_data *vdata = __arch_get_k_vdso_data();
 
-    /* Increment seq to odd: mark as "being updated" */
+    /* seqを奇数にインクリメント: 「更新中」とマークする */
     vdso_write_begin(vdata);
 
-    /* Update all fields */
+    /* すべてのフィールドを更新する */
     vdata->cycle_last = tk->tkr_mono.cycle_last;
     vdata->mult       = tk->tkr_mono.mult;
     vdata->shift      = tk->tkr_mono.shift;
     /* ... */
 
-    /* Increment seq to even: "update complete" */
+    /* seqを偶数にインクリメント: 「更新完了」 */
     vdso_write_end(vdata);
 }
 ```
 
 ```c
-/* vDSO userspace: read side (in [vdso] mapping) */
+/* vDSOのユーザー空間側: 読み取り側（[vdso]マッピング内） */
 notrace static __always_inline int
 do_hres(const struct vdso_data *vd, clockid_t clk, struct __kernel_timespec *ts)
 {
@@ -113,15 +113,15 @@ do_hres(const struct vdso_data *vd, clockid_t clk, struct __kernel_timespec *ts)
     u32 seq;
 
     do {
-        /* Read seq: must be even (not being updated) */
+        /* seqを読む: 偶数（更新中でない）でなければならない */
         seq = vdso_read_begin(vd);
         if (unlikely(vd->clock_mode == VDSO_CLOCKMODE_NONE))
-            return -1;  /* fallback to syscall */
+            return -1;  /* システムコールへフォールバック */
 
-        /* Read TSC */
+        /* TSCを読む */
         cycles = __arch_get_hw_counter(vd->clock_mode, vd);
 
-        /* Compute nanoseconds: (cycles - cycle_last) * mult >> shift */
+        /* ナノ秒を計算: (cycles - cycle_last) * mult >> shift */
         ns = vdso_ts->nsec;
         ns += (cycles - vd->cycle_last) * vd->mult;
         ns >>= vd->shift;
@@ -130,37 +130,37 @@ do_hres(const struct vdso_data *vd, clockid_t clk, struct __kernel_timespec *ts)
         ts->tv_nsec = ns;
 
     } while (unlikely(vdso_read_retry(vd, seq)));
-    /* Retry if seq changed mid-read (kernel was updating) */
+    /* 読み取り途中でseqが変わったら（カーネルが更新中だった）リトライする */
 
     return 0;
 }
 ```
 
-The retry loop is the key: if the kernel updated `vdso_data` during our read (seq changed), we retry. Typically 0 retries.
+鍵となるのはリトライループである。読み取り中にカーネルが `vdso_data` を更新した（seqが変わった）場合はリトライする。通常リトライは0回である。
 
-## AT_SYSINFO_EHDR: finding the vDSO {#atsysinfoehdr-finding-the-vdso}
+## AT_SYSINFO_EHDR: vDSOの位置を知る {#atsysinfoehdr-finding-the-vdso}
 
-The kernel passes the vDSO address via the ELF auxiliary vector:
+カーネルはvDSOのアドレスをELFの補助ベクタ（auxiliary vector）経由で渡す。
 
 ```c
-/* Auxiliary vector entry at program startup */
-AT_SYSINFO_EHDR = 33   /* address of the vDSO ELF header */
+/* プログラム起動時の補助ベクタのエントリ */
+AT_SYSINFO_EHDR = 33   /* vDSOのELFヘッダのアドレス */
 
-/* glibc reads this during startup: */
+/* glibcは起動時にこれを読む: */
 void __dl_discover_osversion(void)
 {
     ElfW(Phdr) *phdr = (void *)getauxval(AT_SYSINFO_EHDR);
-    /* dlopen-like loading of the vDSO */
+    /* dlopenに似た方法でvDSOをロードする */
 }
 ```
 
 ```c
-/* Read auxiliary vector from /proc/self/auxv: */
+/* /proc/self/auxv から補助ベクタを読む: */
 #include <sys/auxv.h>
 unsigned long vdso_addr = getauxval(AT_SYSINFO_EHDR);
 printf("vDSO at %#lx\n", vdso_addr);
 
-/* Or parse /proc/self/auxv manually: */
+/* または /proc/self/auxv を手動で解析する: */
 #include <elf.h>
 Elf64_auxv_t auxv;
 int fd = open("/proc/self/auxv", O_RDONLY);
@@ -172,9 +172,9 @@ while (read(fd, &auxv, sizeof(auxv)) == sizeof(auxv)) {
 }
 ```
 
-## vDSO fallback to syscall {#vdso-fallback-to-syscall}
+## vDSOからシステムコールへのフォールバック {#vdso-fallback-to-syscall}
 
-If the vDSO can't provide the answer (e.g., clock is not TSC-based, or it's a non-monotonic clock), it falls back to a real syscall:
+vDSOが答えを出せない場合（たとえばクロックがTSCベースでない、あるいは非単調クロックである場合）、本物のシステムコールにフォールバックする。
 
 ```c
 /* arch/x86/entry/vdso/vclock_gettime.c */
@@ -187,14 +187,14 @@ notrace int __vdso_clock_gettime(clockid_t clock, struct __kernel_timespec *ts)
     case CLOCK_MONOTONIC:
     case CLOCK_BOOTTIME:
     case CLOCK_TAI:
-        /* Fast path via TSC */
+        /* TSCによる高速パス */
         if (likely(do_hres(vd + clock, clock, ts) == 0))
             return 0;
         break;
 
     case CLOCK_REALTIME_COARSE:
     case CLOCK_MONOTONIC_COARSE:
-        /* Coarse: just read from vdso_data without TSC */
+        /* 粗い精度: TSCを使わずvdso_dataから読むだけ */
         do_coarse(vd + clock, clock, ts);
         return 0;
 
@@ -202,43 +202,43 @@ notrace int __vdso_clock_gettime(clockid_t clock, struct __kernel_timespec *ts)
         break;
     }
 
-    /* Fallback: real syscall */
+    /* フォールバック: 本物のシステムコール */
     return clock_gettime_fallback(clock, ts);
 }
 ```
 
-## Performance comparison {#performance-comparison}
+## 性能比較 {#performance-comparison}
 
 ```c
-/* Benchmark: syscall vs vDSO vs rdtsc */
+/* ベンチマーク: システムコール vs vDSO vs rdtsc */
 
-/* syscall gettimeofday: ~150-300ns */
+/* システムコールのgettimeofday: 約150〜300ns */
 struct timeval tv;
-gettimeofday(&tv, NULL);  /* uses vDSO automatically with glibc */
+gettimeofday(&tv, NULL);  /* glibcでは自動的にvDSOを使う */
 
-/* Direct vDSO call (same as gettimeofday with glibc): ~5-15ns */
+/* vDSOの直接呼び出し（glibcのgettimeofdayと同じ）: 約5〜15ns */
 
-/* Raw RDTSC (fastest, but no unit): ~2-5ns */
+/* 生のRDTSC（最速だが単位がない）: 約2〜5ns */
 uint64_t t = __rdtsc();
 ```
 
 ```bash
-# Measure gettimeofday latency
+# gettimeofday のレイテンシを測定する
 perf stat -e syscalls:sys_enter_gettimeofday -- \
     python3 -c "import time; [time.time() for _ in range(1000000)]"
-# syscalls:sys_enter_gettimeofday: 0  (zero syscalls — all vDSO!)
+# syscalls:sys_enter_gettimeofday: 0  (システムコールはゼロ — すべて vDSO!)
 
-# Force syscall path (bypass vDSO):
-LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0  # doesn't work anymore
-# Use seccomp to intercept, or strace:
-strace -c -e gettimeofday myprogram  # will show 0 if vDSO is working
+# システムコール経路を強制する（vDSO を迂回する）:
+LD_PRELOAD=/lib/x86_64-linux-gnu/libpthread.so.0  # もう機能しない
+# seccomp で横取りするか、strace を使う:
+strace -c -e gettimeofday myprogram  # vDSO が機能していれば 0 と表示される
 ```
 
-## vDSO on other architectures {#vdso-on-other-architectures}
+## 他のアーキテクチャにおけるvDSO {#vdso-on-other-architectures}
 
-The vDSO is architecture-specific:
+vDSOはアーキテクチャ固有である。
 
-| Architecture | vDSO functions |
+| アーキテクチャ | vDSOの関数 |
 |-------------|---------------|
 | x86-64 | clock_gettime, gettimeofday, time, getcpu |
 | ARM64 | clock_gettime, gettimeofday, clock_getres |
@@ -247,22 +247,22 @@ The vDSO is architecture-specific:
 | s390 | clock_gettime, gettimeofday |
 
 ```bash
-# ARM64 vDSO functions
+# ARM64 の vDSO 関数
 nm /proc/self/mem 2>/dev/null | grep vdso || \
     objdump -d /proc/self/mem 2>/dev/null | head
-# Or:
+# または:
 cat /proc/self/maps | grep vdso
-# Extract and inspect:
+# 取り出して調べる:
 dd if=/proc/self/mem of=/tmp/vdso.so bs=4096 count=1 \
    skip=$(($(cat /proc/self/maps | grep vdso | cut -d- -f1 | head -1 | xargs printf '%d')/4096)) 2>/dev/null
 nm /tmp/vdso.so
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Timekeeping and Clocksources](../time/timekeeping.md) — how the kernel maintains time
-- [Process Address Space](mmap.md) — vDSO VMA in process maps
-- [What happens during exec()](exec.md) — AT_SYSINFO_EHDR in the auxiliary vector
-- [Syscall Entry Path](../syscalls/syscall-entry.md) — when vDSO falls back to syscall
-- `arch/x86/entry/vdso/` — x86-64 vDSO implementation
+- [時刻管理とクロックソース](../time/timekeeping.md) — カーネルが時刻をどう管理するか
+- [プロセスのアドレス空間](mmap.md) — プロセスのマップにおけるvDSOのVMA
+- [exec()の間に何が起きるか](exec.md) — 補助ベクタ中のAT_SYSINFO_EHDR
+- [システムコールのエントリパス](../syscalls/syscall-entry.md) — vDSOがシステムコールにフォールバックするとき
+- `arch/x86/entry/vdso/` — x86-64のvDSO実装
 - `include/vdso/datapage.h` — struct vdso_data

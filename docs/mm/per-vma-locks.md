@@ -1,54 +1,54 @@
-# Per-VMA Locks {#per-vma-locks}
+# VMA単位のロック {#per-vma-locks}
 
-> Eliminating the mmap_lock bottleneck in page fault handling
+> ページフォールト処理におけるmmap_lockのボトルネックを解消する
 
-## The mmap_lock bottleneck {#the-mmap_lock-bottleneck}
+## mmap_lockのボトルネック {#the-mmap_lock-bottleneck}
 
-Every process has a single per-`mm_struct` read-write semaphore called `mmap_lock`. Historically it was the gate for nearly every operation that touches the process's virtual memory layout:
+すべてのプロセスは、`mm_struct` ごとに1つの読み書きセマフォ `mmap_lock` を持つ。歴史的に、これはプロセスの仮想メモリレイアウトに触れるほぼすべての操作の関門だった。
 
-- Page faults acquire it **for read** (shared access with other faults)
-- `mmap()`, `munmap()`, `mprotect()`, `mremap()`, `brk()` acquire it **for write** (exclusive)
+- ページフォールトはこれを **読み込み用** に獲得する（他のフォールトと共有アクセス）
+- `mmap()`、`munmap()`、`mprotect()`、`mremap()`、`brk()` はこれを **書き込み用** に獲得する（排他）
 
-The read-side contention problem is subtle. Read locks in a rwsem are shared, so multiple threads faulting simultaneously should be able to proceed in parallel — and they do, until a writer shows up. A single `mmap()` or `munmap()` call in any thread takes the write lock and **blocks every concurrent page fault** in the process until the writer finishes.
+読み込み側の競合の問題は微妙である。rwsemの読み込みロックは共有されるため、同時にフォールトする複数のスレッドは並列に進めるはずであり、実際に進める。ただしそれはライターが現れるまでの話である。どのスレッドであれ、1回の `mmap()` や `munmap()` の呼び出しが書き込みロックを獲得すると、ライターが終わるまでプロセス内の **並行するすべてのページフォールトがブロックされる**。
 
-For multi-threaded workloads that mix frequent faults with occasional VMA modifications (think: many worker threads faulting in new heap pages while the allocator occasionally calls `mmap()`), `mmap_lock` becomes a serialization point that caps fault throughput.
+頻繁なフォールトとたまのVMA変更が混在するマルチスレッドのワークロード（例: 多数のワーカースレッドが新しいヒープのpageをフォールトで読み込む一方、アロケータが時折 `mmap()` を呼ぶ）では、`mmap_lock` が直列化ポイントとなり、フォールトのスループットを頭打ちにする。
 
-The `mmap_lock` is also coarse: it protects the entire VMA tree. If thread A is faulting in region X and thread B is faulting in region Y, they still contend on the same lock even though they are touching completely different VMAs.
+`mmap_lock` は粒度も粗い。VMAツリー全体を保護している。スレッドAが領域Xでフォールトし、スレッドBが領域Yでフォールトしている場合、両者はまったく異なるVMAに触れているにもかかわらず、同じロックで競合する。
 
-## Per-VMA lock design {#per-vma-lock-design}
+## VMA単位のロックの設計 {#per-vma-lock-design}
 
-Per-VMA locks (merged in Linux 6.4) give each `vm_area_struct` its own lightweight lock. The page fault path tries this VMA-scoped lock first, only falling back to `mmap_lock` if the VMA is being modified concurrently.
+VMA単位のロック（Linux 6.4でマージ）は、各 `vm_area_struct` に独自の軽量なロックを持たせる。ページフォールトの経路はまずこのVMA単位のロックを試み、VMAが並行して変更されている場合にのみ `mmap_lock` にフォールバックする。
 
-### Lock state in the VMA {#lock-state-in-the-vma}
+### VMA内のロック状態 {#lock-state-in-the-vma}
 
-Two fields in `vm_area_struct` implement the per-VMA lock (guarded by `CONFIG_PER_VMA_LOCK`):
-
-```c
-/* In vm_area_struct (include/linux/mm_types.h) */
-
-unsigned int vm_lock_seq;      /* sequence number, updated on each write-lock */
-refcount_t vm_refcnt;          /* reference count + reader/writer state */
-```
-
-The per-`mm_struct` counterpart is:
+`vm_area_struct` の2つのフィールドがVMA単位のロックを実装している（`CONFIG_PER_VMA_LOCK` で有効化される）。
 
 ```c
-/* In mm_struct */
-int mm_lock_seq;               /* bumped every time mmap_lock is write-locked */
+/* vm_area_struct内（include/linux/mm_types.h） */
+
+unsigned int vm_lock_seq;      /* シーケンス番号。書き込みロックのたびに更新される */
+refcount_t vm_refcnt;          /* 参照カウント + リーダー/ライターの状態 */
 ```
 
-A VMA is considered **unlocked** when `vma->vm_lock_seq != mm->mm_lock_seq`. Whenever the mm is write-locked (e.g. for `mmap()`), `mm_lock_seq` is incremented, which invalidates all existing per-VMA read locks simultaneously — without touching each VMA.
+`mm_struct` 側の対応するフィールドは次のとおりである。
 
-The `vm_refcnt` field encodes the reader count plus a special `VM_REFCNT_EXCLUDE_READERS_FLAG` bit used during write-locking and VMA detach. The detailed state machine is documented in the `vm_area_struct` definition in `include/linux/mm_types.h`.
+```c
+/* mm_struct内 */
+int mm_lock_seq;               /* mmap_lockが書き込みロックされるたびにインクリメントされる */
+```
 
-!!! note "The sequence counter is allowed to overflow"
-    The kernel comment on `vm_lock_seq` explicitly notes that overflow is acceptable. Overflow can only cause an occasional unnecessary fallback to `mmap_lock`, not a correctness failure.
+VMAは `vma->vm_lock_seq != mm->mm_lock_seq` のとき **ロックされていない** とみなされる。mmが（たとえば `mmap()` のために）書き込みロックされるたびに `mm_lock_seq` がインクリメントされ、これにより既存のVMA単位の読み込みロックがすべて一斉に無効化される。個々のVMAに触れる必要はない。
 
-### The VMA lookup: maple tree + RCU {#the-vma-lookup-maple-tree-rcu}
+`vm_refcnt` フィールドは、リーダー数に加えて、書き込みロック時とVMAのデタッチ時に使われる特別な `VM_REFCNT_EXCLUDE_READERS_FLAG` ビットをエンコードしている。詳細な状態遷移は `include/linux/mm_types.h` の `vm_area_struct` の定義に記述されている。
 
-VMA lookups during the fast fault path use the maple tree (`mm->mm_mt`, type `struct maple_tree`) under RCU protection. The maple tree is an RCU-safe B-tree that stores VMAs keyed by address range.
+!!! note "シーケンスカウンタはオーバーフローしてもよい"
+    `vm_lock_seq` に付けられたカーネルのコメントは、オーバーフローが許容されることを明記している。オーバーフローが引き起こしうるのは、時折の不要な `mmap_lock` へのフォールバックだけであり、正しさが損なわれることはない。
 
-`lock_vma_under_rcu()` in `mm/memory.c` is the entry point:
+### VMAの探索: maple tree + RCU {#the-vma-lookup-maple-tree-rcu}
+
+高速なフォールト経路でのVMA探索は、RCUの保護下でmaple tree（`mm->mm_mt`、型は `struct maple_tree`）を使う。maple treeはRCUセーフなB木であり、アドレス範囲をキーとしてVMAを格納する。
+
+`mm/memory.c` の `lock_vma_under_rcu()` がエントリポイントである。
 
 ```c
 struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
@@ -59,29 +59,29 @@ struct vm_area_struct *lock_vma_under_rcu(struct mm_struct *mm,
 
 retry:
     rcu_read_lock();
-    vma = mas_walk(&mas);           /* RCU-protected maple tree walk */
+    vma = mas_walk(&mas);           /* RCUで保護されたmaple treeの走査 */
     if (!vma) { ... goto inval; }
 
-    if (!vma_start_read(vma))       /* attempt per-VMA read lock */
-        goto inval;                 /* lock failed (VMA changed), fall back */
+    if (!vma_start_read(vma))       /* VMA単位の読み込みロックを試みる */
+        goto inval;                 /* ロック失敗（VMAが変化した）、フォールバック */
 
     rcu_read_unlock();
 
-    /* validate address range */
+    /* アドレス範囲を検証する */
     if (address < vma->vm_start || address >= vma->vm_end) {
         vma_end_read(vma);
         goto inval;
     }
-    return vma;  /* stable locked VMA, no mmap_lock held */
+    return vma;  /* 安定したロック済みVMA。mmap_lockは保持していない */
     ...
 }
 ```
 
-`vma_start_read()` checks `vma->vm_lock_seq == mm->mm_lock_seq`. If they match the VMA is currently write-locked and the function returns NULL (falls back to mmap_lock). If they don't match it increments `vm_refcnt` using an acquire fence and re-checks, establishing the read lock.
+`vma_start_read()` は `vma->vm_lock_seq == mm->mm_lock_seq` かどうかを確認する。一致すればVMAは現在書き込みロックされているので、関数はNULLを返す（mmap_lockにフォールバックする）。一致しなければ、acquireフェンスを使って `vm_refcnt` をインクリメントし、再確認したうえで読み込みロックを確立する。
 
-## The fault path {#the-fault-path}
+## フォールトの経路 {#the-fault-path}
 
-`handle_mm_fault()` in `mm/memory.c` is called by architecture fault handlers with either the VMA lock or `mmap_lock` held, indicated by the `FAULT_FLAG_VMA_LOCK` flag:
+`mm/memory.c` の `handle_mm_fault()` は、アーキテクチャのフォールトハンドラから、VMAロックか `mmap_lock` のどちらかを保持した状態で呼ばれる。どちらであるかは `FAULT_FLAG_VMA_LOCK` フラグで示される。
 
 ```c
 /* mm/memory.c */
@@ -89,8 +89,8 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
                             unsigned int flags, struct pt_regs *regs)
 {
     /*
-     * By the time we get here, we already hold either the VMA lock
-     * or the mmap_lock (FAULT_FLAG_VMA_LOCK tells you which).
+     * ここに来た時点で、VMAロックかmmap_lockのどちらかをすでに保持している
+     * （どちらであるかはFAULT_FLAG_VMA_LOCKでわかる）。
      */
     if (unlikely(is_vm_hugetlb_page(vma)))
         ret = hugetlb_fault(vma->vm_mm, vma, address, flags);
@@ -100,61 +100,61 @@ vm_fault_t handle_mm_fault(struct vm_area_struct *vma, unsigned long address,
 }
 ```
 
-The architecture-specific fault handler (e.g. `do_user_addr_fault()` on x86) first tries `lock_vma_under_rcu()`. On success it sets `FAULT_FLAG_VMA_LOCK` and calls `handle_mm_fault()`. If the RCU fast path fails (VMA modification in progress, VMA not found, or address range mismatch), it falls back to acquiring `mmap_lock` for read in the normal way.
+アーキテクチャ固有のフォールトハンドラ（例: x86の `do_user_addr_fault()`）は、まず `lock_vma_under_rcu()` を試みる。成功すれば `FAULT_FLAG_VMA_LOCK` を設定して `handle_mm_fault()` を呼ぶ。RCUの高速パスが失敗した場合（VMAの変更が進行中、VMAが見つからない、あるいはアドレス範囲の不一致）は、通常の方法で `mmap_lock` を読み込み用に獲得する方式にフォールバックする。
 
-If a fault handler inside `__handle_mm_fault()` determines it cannot proceed without `mmap_lock` — for example when it needs to retry after blocking I/O — it releases the VMA lock with `vma_end_read()` and returns `VM_FAULT_RETRY`. The caller then retakes `mmap_lock`.
+`__handle_mm_fault()` 内のフォールトハンドラが、`mmap_lock` なしでは先に進めないと判断した場合（たとえばブロッキングI/Oの後にリトライする必要があるとき）は、`vma_end_read()` でVMAロックを解放し、`VM_FAULT_RETRY` を返す。呼び出し側はその後 `mmap_lock` を獲得し直す。
 
-## Write-locking a VMA {#write-locking-a-vma}
+## VMAの書き込みロック {#write-locking-a-vma}
 
-When a VMA must be modified (e.g. during `mprotect()`, split/merge during `mmap()`, or unmap during `munmap()`), the kernel calls `vma_start_write()`:
+VMAを変更しなければならないとき（例: `mprotect()` の間、`mmap()` 中の分割/結合、`munmap()` 中のマップ解除）、カーネルは `vma_start_write()` を呼ぶ。
 
 ```c
-/* mm/mmap.c and mm/memory.c — callers */
+/* mm/mmap.c と mm/memory.c — 呼び出し側 */
 vma_start_write(vma);
 ```
 
-`vma_start_write()` (in `mm/mmap_lock.c`) requires that `mmap_lock` is already held for write. It sets `vma->vm_lock_seq = mm->mm_lock_seq`, which makes `vma_start_read()` fail for this VMA until the write-lock is released and `mm_lock_seq` is bumped again.
+`vma_start_write()`（`mm/mmap_lock.c` 内）は、`mmap_lock` がすでに書き込み用に保持されていることを要求する。これは `vma->vm_lock_seq = mm->mm_lock_seq` を設定し、書き込みロックが解放されて `mm_lock_seq` が再びインクリメントされるまで、このVMAに対する `vma_start_read()` を失敗させる。
 
-The protocol ensures correctness: any operation that modifies a VMA must first hold `mmap_lock` write, then call `vma_start_write()`. Fault handlers that hold a per-VMA read lock are thereby excluded from seeing partial modifications.
+このプロトコルが正しさを保証する。VMAを変更するあらゆる操作は、まず `mmap_lock` を書き込み用に保持し、それから `vma_start_write()` を呼ばなければならない。これにより、VMA単位の読み込みロックを保持しているフォールトハンドラが、途中までの変更を目にすることはなくなる。
 
-## Operations that still require mmap_lock {#operations-that-still-require-mmap_lock}
+## 依然としてmmap_lockを必要とする操作 {#operations-that-still-require-mmap_lock}
 
-Per-VMA locks only accelerate the **read** side of faults. The following operations still require `mmap_lock` for write:
+VMA単位のロックが高速化するのは、フォールトの **読み込み** 側だけである。次の操作は依然として書き込み用の `mmap_lock` を必要とする。
 
-| Operation | Reason |
+| 操作 | 理由 |
 |-----------|--------|
-| `mmap()` / `munmap()` | VMA tree insertion/removal |
-| `mprotect()` | VMA flags modification |
-| `mremap()` | VMA address range change |
-| `brk()` | Heap boundary change |
-| VMA split/merge during fault | Modifies adjacent VMAs |
-| `execve()` | Tears down entire address space |
+| `mmap()` / `munmap()` | VMAツリーへの挿入/削除 |
+| `mprotect()` | VMAフラグの変更 |
+| `mremap()` | VMAのアドレス範囲の変更 |
+| `brk()` | ヒープ境界の変更 |
+| フォールト中のVMAの分割/結合 | 隣接するVMAを変更する |
+| `execve()` | アドレス空間全体を破棄する |
 
-`mmap_lock` for read is still used as the fallback for any fault where the per-VMA lock path fails.
+読み込み用の `mmap_lock` は、VMA単位のロックの経路が失敗したあらゆるフォールトのフォールバックとして、依然として使われている。
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
-There are no sysfs knobs for per-VMA locks — the feature is always enabled when `CONFIG_PER_VMA_LOCK=y` (which is the default in kernels >= 6.4 on supported architectures).
+VMA単位のロックにsysfsのノブはない。`CONFIG_PER_VMA_LOCK=y`（サポートされているアーキテクチャでは、カーネル6.4以降のデフォルト）であれば、この機能は常に有効である。
 
-Four vmstat-style counters track per-VMA lock activity (defined in `include/linux/vm_event_item.h`):
+4つのvmstat形式のカウンタがVMA単位のロックの活動を追跡する（`include/linux/vm_event_item.h` で定義されている）。
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---------|---------|
-| `VMA_LOCK_SUCCESS` | Fast path succeeded; fault handled under per-VMA lock |
-| `VMA_LOCK_ABORT` | Fast path failed; fell back to `mmap_lock` |
-| `VMA_LOCK_RETRY` | Fast path was retried (e.g. after a transient failure) |
-| `VMA_LOCK_MISS` | VMA was detached between lookup and lock; retried |
+| `VMA_LOCK_SUCCESS` | 高速パスが成功し、フォールトがVMA単位のロックの下で処理された |
+| `VMA_LOCK_ABORT` | 高速パスが失敗し、`mmap_lock` にフォールバックした |
+| `VMA_LOCK_RETRY` | 高速パスがリトライされた（例: 一時的な失敗の後） |
+| `VMA_LOCK_MISS` | 探索とロックの間にVMAがデタッチされたため、リトライした |
 
-These are readable via the standard `count_vm_vma_lock_event()` infrastructure. They appear in `/proc/vmstat` on kernels where `CONFIG_PER_VMA_LOCK` is enabled.
+これらは標準の `count_vm_vma_lock_event()` 基盤を通じて読める。`CONFIG_PER_VMA_LOCK` が有効なカーネルでは `/proc/vmstat` に現れる。
 
-!!! tip "Diagnosing contention"
-    If `VMA_LOCK_ABORT` is high relative to `VMA_LOCK_SUCCESS`, the workload is frequently faulting during VMA modifications. This is expected if the application calls `mmap()`/`munmap()` at high frequency from a thread that also takes heavy faults.
+!!! tip "競合の診断"
+    `VMA_LOCK_SUCCESS` に比べて `VMA_LOCK_ABORT` が多い場合、そのワークロードはVMAの変更中に頻繁にフォールトしている。アプリケーションが、重いフォールトを起こすスレッドから高頻度で `mmap()`/`munmap()` を呼んでいるなら、これは想定どおりである。
 
-## Limitations and special cases {#limitations-and-special-cases}
+## 制限と特殊なケース {#limitations-and-special-cases}
 
-**Hugetlb faults** do not use per-VMA locks. `handle_mm_fault()` routes `VM_HUGETLB` pages through `hugetlb_fault()`, which uses its own `hugetlb_vma_lock_read()` / `hugetlb_vma_lock_write()` infrastructure — a separate locking scheme for hugetlb VMAs.
+**hugetlbのフォールト** はVMA単位のロックを使わない。`handle_mm_fault()` は `VM_HUGETLB` のpageを `hugetlb_fault()` に回し、これは独自の `hugetlb_vma_lock_read()` / `hugetlb_vma_lock_write()` 基盤を使う。hugetlbのVMAのための別個のロック方式である。
 
-**FAULT_FLAG_RETRY_NOWAIT** cannot be combined with `FAULT_FLAG_VMA_LOCK`. The kernel asserts this in `sanitize_fault_flags()`:
+**FAULT_FLAG_RETRY_NOWAIT** は `FAULT_FLAG_VMA_LOCK` と組み合わせられない。カーネルは `sanitize_fault_flags()` でこれをアサートしている。
 
 ```c
 /* mm/memory.c */
@@ -164,34 +164,34 @@ if (WARN_ON_ONCE((*flags &
     return VM_FAULT_SIGSEGV;
 ```
 
-The reason: `FAULT_FLAG_RETRY_NOWAIT` assumes the lock is not dropped on `VM_FAULT_RETRY`, but per-VMA lock protocol requires dropping it.
+理由: `FAULT_FLAG_RETRY_NOWAIT` は `VM_FAULT_RETRY` の際にロックが手放されないことを前提としているが、VMA単位のロックのプロトコルではロックを手放す必要がある。
 
-**userfaultfd** has its own interaction. The userfaultfd code (`mm/userfaultfd.c`) uses `lock_vma_under_rcu()` directly in some paths, calling `vma_start_read_locked()` and `vma_end_read()` explicitly.
+**userfaultfd** には独自の相互作用がある。userfaultfdのコード（`mm/userfaultfd.c`）は一部の経路で `lock_vma_under_rcu()` を直接使い、`vma_start_read_locked()` と `vma_end_read()` を明示的に呼ぶ。
 
-**madvise** for some behaviors (e.g. `MADV_DONTNEED` ranges) uses `lock_vma_under_rcu()` in the per-range path added in recent kernels.
+**madvise** は一部の挙動（例: `MADV_DONTNEED` の範囲）について、最近のカーネルで追加された範囲単位の経路で `lock_vma_under_rcu()` を使う。
 
-!!! warning "Per-VMA locks require CONFIG_PER_VMA_LOCK"
-    The entire feature is compiled out if `CONFIG_PER_VMA_LOCK` is not set. On such kernels all faults go through `mmap_lock`. Most production distro kernels enable it from 6.4 onward.
+!!! warning "VMA単位のロックにはCONFIG_PER_VMA_LOCKが必要"
+    `CONFIG_PER_VMA_LOCK` が設定されていない場合、この機能全体がコンパイルから除外される。そのようなカーネルでは、すべてのフォールトが `mmap_lock` を経由する。ほとんどの本番向けディストリビューションのカーネルは6.4以降でこれを有効にしている。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/mmap_lock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmap_lock.h) — `vma_start_read()`, `vma_end_read()`, `vma_start_write()`, and the sequence-counter helpers
-- [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()`: the fast-path VMA lookup combining RCU and per-VMA locking
-- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `vm_lock_seq`, `vm_refcnt`, and `mm_lock_seq` field definitions with their locking contracts
+- [include/linux/mmap_lock.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmap_lock.h) — `vma_start_read()`、`vma_end_read()`、`vma_start_write()`、およびシーケンスカウンタのヘルパー
+- [mm/mmap_lock.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap_lock.c) — `lock_vma_under_rcu()`: RCUとVMA単位のロックを組み合わせた高速パスのVMA探索
+- [include/linux/mm_types.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mm_types.h) — `vm_lock_seq`、`vm_refcnt`、`mm_lock_seq` のフィールド定義と、それぞれのロックの規約
 
-### Kernel commits {#kernel-commits}
+### カーネルコミット {#kernel-commits}
 
-- [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) — Linux 6.4: "mm: add per-VMA lock and helper functions to control it" (Suren Baghdasaryan, Google)
-- [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) — Linux 6.1: maple tree VMA storage, prerequisite for scalable per-VMA locking
+- [5e31275cc997](https://git.kernel.org/linus/5e31275cc997) — Linux 6.4: "mm: add per-VMA lock and helper functions to control it"（Suren Baghdasaryan、Google）
+- [d4af56c5c7c6](https://git.kernel.org/linus/d4af56c5c7c6) — Linux 6.1: maple treeによるVMAの格納。スケーラブルなVMA単位のロックの前提条件
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [rcu-mm.md](rcu-mm.md) — how `SLAB_TYPESAFE_BY_RCU` and the maple tree enable the lock-free VMA lookup that per-VMA locks build on
-- [mmap.md](mmap.md) — operations that still require the coarse `mmap_lock` write side
+- [rcu-mm.md](rcu-mm.md) — `SLAB_TYPESAFE_BY_RCU` とmaple treeが、VMA単位のロックの土台となるロックフリーなVMA探索をどう実現しているか
+- [mmap.md](mmap.md) — 依然として粗い粒度の `mmap_lock` の書き込み側を必要とする操作
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [LWN: Per-VMA locks](https://lwn.net/Articles/906852/) — 2022 article covering the design and motivation for per-VMA locking
-- [LWN: Scalable page-fault handling](https://lwn.net/Articles/932298/) — follow-up covering the Linux 6.4 merge and benchmarks
+- [LWN: Per-VMA locks](https://lwn.net/Articles/906852/) — VMA単位のロックの設計と動機を扱った2022年の記事
+- [LWN: Scalable page-fault handling](https://lwn.net/Articles/932298/) — Linux 6.4でのマージとベンチマークを扱った続報

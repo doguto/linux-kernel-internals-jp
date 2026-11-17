@@ -1,18 +1,18 @@
 # MGLRU: Multi-Generation LRU {#mglru-multi-generation-lru}
 
-> A generational page reclaim algorithm for better working set detection
+> ワーキングセットをより正確に検出するための、世代別ページ回収アルゴリズム
 
-## The problem with classic LRU {#the-problem-with-classic-lru}
+## 従来のLRUの問題点 {#the-problem-with-classic-lru}
 
-The classic LRU (Least Recently Used) page reclaim uses two lists per memory zone: **active** and **inactive**. Pages migrate between them based on access. The fundamental problems:
+従来のLRU（Least Recently Used）によるページ回収は、メモリゾーンごとに **active** と **inactive** の2つのリストを使う。pageはアクセス状況に応じて両リスト間を移動する。根本的な問題は次のとおりである。
 
-1. **The scan cost**: To find reclaimable pages, the reclaimer walks the inactive list. If the inactive list is full of hot pages (false negatives), it wastes CPU time.
-2. **One-time access pollution**: A large `dd` or `tar` operation reads every file once, thrashing the active list with cold pages.
-3. **No temporal locality**: Classic LRU treats a page accessed 1 second ago the same as one accessed 1 year ago.
+1. **スキャンコスト**: 回収可能なpageを見つけるため、回収処理はinactiveリストを走査する。inactiveリストがホットなpage（偽陰性）で埋まっていると、CPU時間を浪費する。
+2. **一度きりのアクセスによる汚染**: 大きな `dd` や `tar` の処理はすべてのファイルを一度だけ読むため、activeリストがコールドなpageでかき回される。
+3. **時間的局所性がない**: 従来のLRUは、1秒前にアクセスされたpageと1年前にアクセスされたpageを同じように扱う。
 
-## MGLRU's generational model {#mglrus-generational-model}
+## MGLRUの世代モデル {#mglrus-generational-model}
 
-MGLRU (Multi-Generation LRU, merged in 6.1) divides pages into **generations**. Each generation represents pages that became hot at roughly the same time. The oldest generation is evicted first:
+MGLRU（Multi-Generation LRU、6.1でマージ）はpageを **世代** に分割する。各世代は、ほぼ同じ時期にホットになったpageを表す。最も古い世代から先に追い出される。
 
 ```
 Generation 0 (oldest): pages not accessed since earliest timestamp
@@ -24,36 +24,36 @@ Reclaim: evict from generation 0 first → if empty, evict generation 1 → ...
 Age: promote pages to the newest generation when accessed
 ```
 
-Typical number of generations: 4. Each generation is ~seconds to minutes of activity.
+典型的な世代数は4である。各世代はおよそ数秒から数分のアクティビティに相当する。
 
-## Key data structures {#key-data-structures}
+## 主要なデータ構造 {#key-data-structures}
 
 ```c
 /* mm/vmscan.c (6.1+) */
 
-/* Per-node, per-type (anon/file) LRU state */
+/* ノードごと・種別（anon/file）ごとのLRU状態 */
 struct lru_gen_folio {
-    /* Min/max generation counters */
-    unsigned long max_seq;          /* newest generation */
-    unsigned long min_seq[ANON_AND_FILE]; /* oldest non-empty generation */
+    /* 最小/最大の世代カウンタ */
+    unsigned long max_seq;          /* 最新の世代 */
+    unsigned long min_seq[ANON_AND_FILE]; /* 空でない最古の世代 */
 
-    /* Per-generation page counts */
+    /* 世代ごとのページ数 */
     long          nr_pages[MAX_NR_GENS][ANON_AND_FILE][MAX_NR_ZONES];
 
-    /* Bloom filter for faster refault detection */
+    /* refault検出を高速化するためのBloomフィルタ */
     unsigned long *filters[NR_BLOOM_FILTERS];
     atomic_long_t  nr_evicted[ANON_AND_FILE];
     atomic_long_t  nr_refaulted[ANON_AND_FILE];
     atomic_long_t  protected[NR_HIST_GENS][ANON_AND_FILE][NR_BIRTH_MARKS];
 };
 
-/* Per-folio generation tracking embedded in folio flags */
-/* gen = folio_lru_gen(folio): which generation this folio is in */
+/* folioごとの世代情報はfolioフラグに埋め込まれている */
+/* gen = folio_lru_gen(folio): このfolioがどの世代に属するか */
 ```
 
-## Aging: scanning for hot pages {#aging-scanning-for-hot-pages}
+## エージング: ホットなpageの走査 {#aging-scanning-for-hot-pages}
 
-**Aging** walks page tables to find recently accessed pages and promote them to the newest generation:
+**エージング**はページテーブルを走査して最近アクセスされたpageを見つけ、それらを最新の世代に昇格させる。
 
 ```c
 /* mm/vmscan.c */
@@ -66,17 +66,17 @@ static bool walk_mm(struct lruvec *lruvec, struct mm_struct *mm,
         /* ... */
     };
 
-    /* Walk all VMAs, checking PTE accessed bits */
+    /* すべてのVMAを走査し、PTEのaccessedビットを確認する */
     walk_page_range(mm, 0, ULONG_MAX, &lru_gen_mm_walk_ops, &walk);
     return walk.force_scan;
 }
 ```
 
-The accessed bit in PTEs tells the kernel which pages have been touched since the last aging pass. Pages with the accessed bit set are promoted to the newest generation; those without are left in their old generation (and will be evicted sooner).
+PTEのaccessedビットは、前回のエージングパス以降にどのpageが触られたかをカーネルに伝える。accessedビットが立っているpageは最新の世代に昇格し、立っていないpageは古い世代に残される（そして、より早く追い出される）。
 
-## Eviction: reclaiming old generations {#eviction-reclaiming-old-generations}
+## 追い出し: 古い世代の回収 {#eviction-reclaiming-old-generations}
 
-**Eviction** reclaims pages from the oldest generation:
+**追い出し（eviction）**は最も古い世代からpageを回収する。
 
 ```c
 /* mm/vmscan.c */
@@ -87,16 +87,16 @@ static long evict_folios(struct lruvec *lruvec, struct scan_control *sc,
     long nr_to_scan = get_nr_to_scan(lruvec, sc, can_age, type);
     long nr_reclaimed = 0;
 
-    /* Get the oldest generation */
+    /* 最古の世代を取得する */
     unsigned long min_seq = READ_ONCE(lrugen->min_seq[type]);
 
-    /* Collect folios from the oldest generation */
+    /* 最古の世代からfolioを集める */
     isolate_folios(lruvec, sc, type, min_seq, &list);
 
-    /* Try to reclaim them (writeback, swap, or just free) */
+    /* それらの回収を試みる（ライトバック、スワップ、または単に解放） */
     nr_reclaimed = shrink_folio_list(&list, pgdat, sc, &stat, false);
 
-    /* If min generation is now empty, advance min_seq */
+    /* 最小の世代が空になったら min_seq を進める */
     if (!nr_pages_in_gen(lruvec, type, min_seq))
         WRITE_ONCE(lrugen->min_seq[type], min_seq + 1);
 
@@ -104,87 +104,87 @@ static long evict_folios(struct lruvec *lruvec, struct scan_control *sc,
 }
 ```
 
-## Working set protection: refault detection {#working-set-protection-refault-detection}
+## ワーキングセットの保護: refault検出 {#working-set-protection-refault-detection}
 
-MGLRU detects when evicted pages are immediately faulted back in (**refaults**), indicating the working set was violated. It uses a Bloom filter:
+MGLRUは、追い出したpageがすぐにフォールトで再び読み込まれる状況（**refault**）を検出する。これはワーキングセットが侵されたことを示す。検出にはBloomフィルタを使う。
 
-1. When a page is evicted, its fingerprint is added to the Bloom filter
-2. When a page is faulted in, MGLRU checks if it was recently evicted
-3. If yes: the page is placed in a **protected generation** — older than the newest but protected from immediate eviction
+1. pageが追い出されると、そのフィンガープリントがBloomフィルタに追加される
+2. pageがフォールトで読み込まれると、MGLRUはそれが最近追い出されたものかを確認する
+3. そうであれば、そのpageは **保護された世代** に置かれる。これは最新の世代より古いが、即座の追い出しからは保護される
 
 ```c
-/* Refault detection */
+/* refault検出 */
 static bool lru_gen_test_recent(struct lruvec *lruvec, bool file,
                                  struct folio *folio, ...)
 {
     struct lru_gen_folio *lrugen = &lruvec->lrugen;
-    /* Check Bloom filter: was this folio recently evicted? */
+    /* Bloomフィルタを確認: このfolioは最近追い出されたか？ */
     return test_bloom_filter(lrugen, lrugen->min_seq[file], folio);
 }
 ```
 
-## Comparison: classic LRU vs MGLRU {#comparison-classic-lru-vs-mglru}
+## 比較: 従来のLRUとMGLRU {#comparison-classic-lru-vs-mglru}
 
-| Aspect | Classic LRU | MGLRU |
+| 観点 | 従来のLRU | MGLRU |
 |--------|-------------|-------|
-| Data structure | active + inactive lists | 4 generation lists |
-| Reclaim target | scan inactive list | evict oldest generation |
-| Access tracking | active/inactive promotion | PTE accessed bit scan |
-| Working set detection | refault distance approximation | Bloom filter per generation |
-| Streaming reads | pollutes active list | one-time accesses stay in old gen |
-| Memory overhead | 2 list_head per folio | generation counters + Bloom filter |
+| データ構造 | active + inactiveリスト | 4つの世代リスト |
+| 回収の対象 | inactiveリストを走査 | 最古の世代を追い出す |
+| アクセスの追跡 | active/inactive間の昇格 | PTEのaccessedビットの走査 |
+| ワーキングセットの検出 | refault距離による近似 | 世代ごとのBloomフィルタ |
+| ストリーミング読み込み | activeリストを汚染する | 一度きりのアクセスは古い世代に留まる |
+| メモリオーバーヘッド | folioごとに2つの list_head | 世代カウンタ + Bloomフィルタ |
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
 ```bash
-# MGLRU is enabled by default in 6.1+
+# MGLRU は 6.1 以降ではデフォルトで有効
 cat /sys/kernel/mm/lru_gen/enabled
-# 0x0007  ← bitmask: 1=enabled, 2=mglru, 4=aging
+# 0x0007  ← ビットマスク: 1=有効, 2=mglru, 4=エージング
 
-# Enable/disable components
-echo 0 > /sys/kernel/mm/lru_gen/enabled    # disable MGLRU (use classic LRU)
-echo 0x0007 > /sys/kernel/mm/lru_gen/enabled  # enable all
+# 各コンポーネントの有効化/無効化
+echo 0 > /sys/kernel/mm/lru_gen/enabled    # MGLRU を無効化（従来の LRU を使う）
+echo 0x0007 > /sys/kernel/mm/lru_gen/enabled  # すべて有効化
 
-# Min LRU generations (default 2)
+# LRU の最小世代数（デフォルト 2）
 cat /sys/kernel/mm/lru_gen/min_ttl_ms
-# 0  ← no minimum lifetime
+# 0  ← 最小生存期間なし
 
-# Set minimum time a generation stays before eviction
-echo 1000 > /sys/kernel/mm/lru_gen/min_ttl_ms  # protect pages for 1s
+# 世代が追い出されるまでに留まる最小時間を設定する
+echo 1000 > /sys/kernel/mm/lru_gen/min_ttl_ms  # page を 1 秒間保護する
 
-# Number of generations: controlled by MAX_NR_GENS (compile-time, usually 4)
+# 世代数: MAX_NR_GENS で制御される（コンパイル時、通常 4）
 ```
 
-## Observing MGLRU {#observing-mglru}
+## MGLRUの観測 {#observing-mglru}
 
 ```bash
-# Generation distribution per node/memcg/zone
+# ノード/memcg/ゾーンごとの世代分布
 cat /sys/kernel/debug/lru_gen
 
-# Output format:
+# 出力形式:
 # memcg    N    lruvec    aged anon  0  1  2  3
 #                         evicted anon 0 1 2 3
 #                         aged file  0  1  2  3
 #                         evicted file 0 1 2 3
 
-# Memory pressure stats
+# メモリプレッシャーの統計
 cat /proc/vmstat | grep -E "pgpromote|pgdemote|lru_gen"
-# pgpromote_success 12345    ← pages promoted to newer generation
-# pgdemote_kswapd 67890      ← pages demoted (aged into older generation)
+# pgpromote_success 12345    ← より新しい世代に昇格した page
+# pgdemote_kswapd 67890      ← 降格した page（エージングで古い世代へ）
 
-# Refault rate (working set violations)
+# refault 率（ワーキングセットの侵害）
 cat /proc/vmstat | grep pgrefault
 # pgrefault 1234
 
-# perf: track LRU events
+# perf: LRU イベントを追跡する
 perf stat -e vmscan:mm_vmscan_lru_isolate -a sleep 5
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Page Reclaim](reclaim.md) — overall reclaim framework
-- [Reclaim Throttling](reclaim-throttling.md) — memory pressure signaling
-- [Swap](swap.md) — where anon pages go when evicted
-- [Page Cache](page-cache.md) — file-backed page lifecycle
-- `mm/vmscan.c` in the kernel tree — MGLRU implementation
-- `Documentation/admin-guide/mm/multigen_lru.rst` in the kernel tree
+- [ページ回収](reclaim.md) — 回収フレームワーク全体
+- [回収のスロットリング](reclaim-throttling.md) — メモリプレッシャーの通知
+- [スワップ](swap.md) — 追い出されたanonymous pageの行き先
+- [ページキャッシュ](page-cache.md) — ファイルバックドpageのライフサイクル
+- カーネルツリーの `mm/vmscan.c` — MGLRUの実装
+- カーネルツリーの `Documentation/admin-guide/mm/multigen_lru.rst`

@@ -1,23 +1,23 @@
-# SLUB Allocator Internals {#slub-allocator-internals}
+# SLUBアロケータの内部 {#slub-allocator-internals}
 
-> struct kmem_cache, freelist mechanics, per-CPU caches, and slab debugging
+> struct kmem_cache、freelistの仕組み、CPUごとのキャッシュ、slabのデバッグ
 
-## Why a slab allocator? {#why-a-slab-allocator}
+## なぜslabアロケータか {#why-a-slab-allocator}
 
-`kmalloc` could just call the page allocator for every allocation, but that's wasteful:
+`kmalloc` は割り当てのたびにページアロケータを呼び出すこともできるが、それは無駄が多い。
 
-- Page allocator minimum granularity: 4096 bytes
-- Typical kernel allocation: 32–512 bytes
-- Objects of the same type are created and freed repeatedly
+- ページアロケータの最小粒度: 4096バイト
+- 典型的なカーネルの割り当て: 32〜512バイト
+- 同じ型のオブジェクトが繰り返し作られ、解放される
 
-The slab allocator solves this by:
-1. Allocating objects from pre-divided pages ("slabs")
-2. Caching freed objects for immediate reuse (no page allocator round-trip)
-3. Exploiting constructor patterns: objects are often the same type
+slabアロケータはこれを次のように解決する。
+1. あらかじめ分割されたpage（「slab」）からオブジェクトを割り当てる
+2. 解放されたオブジェクトをキャッシュして即座に再利用する（ページアロケータとの往復なし）
+3. コンストラクタのパターンを活用する: オブジェクトは同じ型であることが多い
 
-Linux uses **SLUB** (the "unqueued" slab allocator) since 2.6.23.
+Linuxは2.6.23以降 **SLUB**（「unqueued」slabアロケータ）を使っている。
 
-## Architecture overview {#architecture-overview}
+## アーキテクチャの概要 {#architecture-overview}
 
 ```
 kmalloc(128, GFP_KERNEL)
@@ -44,44 +44,44 @@ kmalloc-128 cache (struct kmem_cache)
 ```c
 /* include/linux/slub_def.h */
 struct kmem_cache {
-    struct kmem_cache_cpu __percpu *cpu_slab; /* per-CPU fast path */
+    struct kmem_cache_cpu __percpu *cpu_slab; /* CPUごとの高速パス */
 
-    /* Allocation flags and configuration: */
+    /* 割り当てフラグと設定: */
     slab_flags_t    flags;
-    unsigned long   min_partial;  /* min partial slabs in node */
-    unsigned int    size;         /* object size (with metadata) */
-    unsigned int    object_size;  /* real object size */
+    unsigned long   min_partial;  /* ノード内の部分slabの最小数 */
+    unsigned int    size;         /* オブジェクトサイズ（メタデータ込み） */
+    unsigned int    object_size;  /* 実際のオブジェクトサイズ */
     struct reciprocal_value reciprocal_size;
-    unsigned int    offset;       /* offset to freelist pointer */
-    struct kmem_cache_order_objects oo; /* order and objects per slab */
+    unsigned int    offset;       /* freelistポインタへのオフセット */
+    struct kmem_cache_order_objects oo; /* オーダーとslabあたりのオブジェクト数 */
     struct kmem_cache_order_objects max;
     struct kmem_cache_order_objects min;
-    gfp_t           allocflags;   /* gfp flags for slab allocation */
+    gfp_t           allocflags;   /* slab割り当て用のgfpフラグ */
     int             refcount;
-    void            (*ctor)(void *);  /* constructor */
+    void            (*ctor)(void *);  /* コンストラクタ */
 
-    unsigned int    inuse;        /* offset to metadata */
+    unsigned int    inuse;        /* メタデータへのオフセット */
     unsigned int    align;
-    unsigned int    red_left_pad; /* for redzone debugging */
+    unsigned int    red_left_pad; /* レッドゾーンによるデバッグ用 */
     const char      *name;
-    struct list_head list;        /* in slab_caches list */
+    struct list_head list;        /* slab_cachesリスト内 */
 
     struct kmem_cache_node *node[MAX_NUMNODES];
 };
 ```
 
-## struct kmem_cache_cpu (per-CPU fast path) {#struct-kmemcachecpu-per-cpu-fast-path}
+## struct kmem_cache_cpu（CPUごとの高速パス） {#struct-kmemcachecpu-per-cpu-fast-path}
 
 ```c
 struct kmem_cache_cpu {
-    void        **freelist;     /* pointer to first free object */
-    unsigned long tid;          /* transaction ID (ABA prevention) */
-    struct slab *slab;          /* current slab being used */
+    void        **freelist;     /* 最初の空きオブジェクトへのポインタ */
+    unsigned long tid;          /* トランザクションID（ABA防止） */
+    struct slab *slab;          /* 現在使用中のslab */
     /* ... */
 };
 ```
 
-The freelist is an **embedded linked list**: each free object's first bytes contain a pointer to the next free object (or NULL at the end of the list).
+freelistは **埋め込み連結リスト** である。各空きオブジェクトの先頭バイトには、次の空きオブジェクトへのポインタ（リストの末尾ではNULL）が入っている。
 
 ```
 Slab page layout (objects = 128 bytes, SLUB):
@@ -94,15 +94,15 @@ Slab page layout (objects = 128 bytes, SLUB):
 cpu_slab->freelist = &obj[0] → obj[2] → obj[3] → NULL
 ```
 
-## kmalloc path (alloc_cache_obj) {#kmalloc-path-alloccacheobj}
+## kmallocの経路（alloc_cache_obj） {#kmalloc-path-alloccacheobj}
 
 ```c
-/* mm/slub.c (simplified) */
+/* mm/slub.c（簡略化） */
 static __always_inline void *__kmalloc(size_t size, gfp_t flags)
 {
     struct kmem_cache *s;
 
-    /* Round up to the next kmalloc-N size: */
+    /* 次のkmalloc-Nサイズに切り上げる: */
     s = kmalloc_caches[kmalloc_type(flags, _RET_IP_)][kmalloc_index(size)];
 
     return slab_alloc(s, size, flags, _RET_IP_);
@@ -116,20 +116,20 @@ static __always_inline void *slab_alloc(struct kmem_cache *s,
     struct kmem_cache_cpu *c;
     unsigned long tid;
 
-    /* Fast path: per-CPU freelist */
+    /* 高速パス: CPUごとのfreelist */
     c = this_cpu_ptr(s->cpu_slab);
     tid = c->tid;
     barrier();
 
     object = c->freelist;
     if (unlikely(!object || !c->slab)) {
-        /* Per-CPU slab exhausted → slow path */
+        /* CPUごとのslabを使い切った → 低速パス */
         object = __slab_alloc(s, gfpflags, NUMA_NO_NODE, addr, c, orig_size);
     } else {
-        /* Advance the freelist pointer (the embedded next ptr): */
+        /* freelistポインタを進める（埋め込まれたnextポインタ）: */
         void *next = get_freepointer_safe(s, object);
 
-        /* CAS to prevent races with IRQs stealing from same freelist: */
+        /* 同じfreelistからIRQが横取りする競合を防ぐためのCAS: */
         if (unlikely(!__update_cpu_freelist_fast(s, object, next, tid))) {
             object = __slab_alloc(s, gfpflags, NUMA_NO_NODE, addr, c, orig_size);
         }
@@ -138,7 +138,7 @@ static __always_inline void *slab_alloc(struct kmem_cache *s,
 }
 ```
 
-## kfree path {#kfree-path}
+## kfreeの経路 {#kfree-path}
 
 ```c
 void kfree(const void *object)
@@ -146,10 +146,10 @@ void kfree(const void *object)
     struct slab *slab;
     struct kmem_cache *s;
 
-    /* Get the slab (and thus the cache) from the page: */
+    /* pageからslab（ひいてはキャッシュ）を得る: */
     slab = virt_to_slab(object);
     if (unlikely(!slab)) {
-        /* Might be a large allocation (compound page) */
+        /* 大きな割り当て（複合ページ）かもしれない */
         free_large_kmalloc(page, object);
         return;
     }
@@ -164,83 +164,83 @@ static void slab_free(struct kmem_cache *s, struct slab *slab,
 {
     struct kmem_cache_cpu *c = this_cpu_ptr(s->cpu_slab);
 
-    /* If freeing to the current slab, just prepend to freelist: */
+    /* 現在のslabへの解放なら、freelistの先頭に追加するだけ: */
     if (slab == c->slab) {
-        /* Fast path: set object's next ptr to current freelist head */
+        /* 高速パス: オブジェクトのnextポインタを現在のfreelistの先頭に設定する */
         set_freepointer(s, head, c->freelist);
         c->freelist = head;
         c->tid = next_tid(c->tid);
         return;
     }
 
-    /* Slow path: different slab → lock and handle */
+    /* 低速パス: 別のslab → ロックして処理する */
     __slab_free(s, slab, head, tail, cnt, addr);
 }
 ```
 
-## kmem_cache_create (named caches) {#kmemcachecreate-named-caches}
+## kmem_cache_create（名前付きキャッシュ） {#kmemcachecreate-named-caches}
 
 ```c
-/* For frequently allocated objects with a specific type: */
+/* 特定の型を持ち、頻繁に割り当てられるオブジェクト向け: */
 struct kmem_cache *my_cache;
 
-/* At module init: */
+/* モジュール初期化時: */
 my_cache = kmem_cache_create(
-    "my_struct",               /* name (shown in /proc/slabinfo) */
-    sizeof(struct my_struct),  /* object size */
-    __alignof__(struct my_struct), /* alignment */
-    SLAB_HWCACHE_ALIGN |       /* align to cache lines */
-    SLAB_PANIC,                /* BUG() if creation fails */
-    my_struct_ctor             /* optional constructor */
+    "my_struct",               /* 名前（/proc/slabinfoに表示される） */
+    sizeof(struct my_struct),  /* オブジェクトサイズ */
+    __alignof__(struct my_struct), /* アラインメント */
+    SLAB_HWCACHE_ALIGN |       /* キャッシュラインにアラインする */
+    SLAB_PANIC,                /* 作成に失敗したらBUG() */
+    my_struct_ctor             /* 任意のコンストラクタ */
 );
 
-/* Allocate and free: */
+/* 割り当てと解放: */
 struct my_struct *obj = kmem_cache_alloc(my_cache, GFP_KERNEL);
 kmem_cache_free(my_cache, obj);
 
-/* At module exit: */
+/* モジュール終了時: */
 kmem_cache_destroy(my_cache);
 ```
 
-## SLUB debugging {#slub-debugging}
+## SLUBのデバッグ {#slub-debugging}
 
 ```bash
-# Enable SLUB debugging at boot (heavy overhead!):
-# SLUB_DEBUG in config, then:
+# ブート時に SLUB デバッグを有効にする（オーバーヘッドが大きい！）:
+# config で SLUB_DEBUG を有効にしたうえで:
 # slub_debug=FZP (FreeZone, Poison, track Padding)
-# or per-cache: slub_debug=FZP,my_struct
+# またはキャッシュ単位で: slub_debug=FZP,my_struct
 
-# /proc/slabinfo: cache statistics
+# /proc/slabinfo: キャッシュの統計
 cat /proc/slabinfo
 # name            <active_objs> <num_objs> <objsize> <objperslab> ...
 # kmalloc-128        12453       13000       128         32        ...
 # my_struct             123         256       256         16        ...
 
-# More detailed: slabtop (like top for slab)
+# より詳しく: slabtop（slab 版の top）
 slabtop
 # Active / Total Objects (% used)    : 1234567 / 1500000 (82.3%)
 # Active / Total Slabs (% used)      : 12345 / 15000 (82.3%)
 # ...
 
-# Find which cache holds a pointer:
-# (in crash or gdb with vmlinux):
+# あるポインタがどのキャッシュに属するかを調べる:
+# （crash または vmlinux を読み込んだ gdb で）:
 # crash> kmem -s <pointer>
 
-# SLUB debug info for a cache:
+# キャッシュの SLUB デバッグ情報:
 ls /sys/kernel/slab/
-cat /sys/kernel/slab/kmalloc-128/alloc_fastpath   # per-CPU alloc count
+cat /sys/kernel/slab/kmalloc-128/alloc_fastpath   # CPU ごとの割り当て回数
 cat /sys/kernel/slab/kmalloc-128/free_fastpath
-cat /sys/kernel/slab/kmalloc-128/slabs            # total slab pages
-cat /sys/kernel/slab/kmalloc-128/objects          # total objects
+cat /sys/kernel/slab/kmalloc-128/slabs            # slab ページの総数
+cat /sys/kernel/slab/kmalloc-128/objects          # オブジェクトの総数
 cat /sys/kernel/slab/kmalloc-128/object_size      # 128
 
-# KASAN: detects use-after-free and out-of-bounds in slab:
-# CONFIG_KASAN=y causes SLUB to insert red zones and poison memory
+# KASAN: slab における use-after-free と範囲外アクセスを検出する:
+# CONFIG_KASAN=y にすると SLUB はレッドゾーンを挿入し、メモリをポイズニングする
 ```
 
-## Memory poisoning {#memory-poisoning}
+## メモリのポイズニング {#memory-poisoning}
 
-When `CONFIG_SLUB_DEBUG` is enabled, freed objects are poisoned:
+`CONFIG_SLUB_DEBUG` が有効な場合、解放されたオブジェクトはポイズニングされる。
 
 ```
 Poison values:
@@ -252,11 +252,11 @@ On the next allocation, SLUB checks that POISON_FREE pattern is intact.
 If not: use-after-free detected, kernel dumps the offending allocation.
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [kmalloc and slab](slab.md) — user-facing API
-- [Page Allocator](page-allocator.md) — SLUB gets pages from here
-- [KASAN](kasan.md) — slab memory error detection
-- [KFENCE](kfence.md) — lightweight slab sampling-based detection
-- `mm/slub.c` — SLUB implementation (~10,000 lines)
-- `Documentation/mm/slub.rst` — SLUB documentation
+- [kmallocとslab](slab.md) — 利用者向けのAPI
+- [ページアロケータ](page-allocator.md) — SLUBはここからpageを得る
+- [KASAN](kasan.md) — slabメモリのエラー検出
+- [KFENCE](kfence.md) — サンプリングに基づく軽量なslabのエラー検出
+- `mm/slub.c` — SLUBの実装（約10,000行）
+- `Documentation/mm/slub.rst` — SLUBのドキュメント

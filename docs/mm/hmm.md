@@ -1,10 +1,10 @@
 # HMM: Heterogeneous Memory Management {#hmm-heterogeneous-memory-management}
 
-> Sharing virtual address spaces between CPU and GPU — struct page for device memory
+> CPUとGPUの間で仮想アドレス空間を共有する — デバイスメモリのためのstruct page
 
-## The problem {#the-problem}
+## 問題 {#the-problem}
 
-Modern systems have GPUs and other accelerators with their own memory (VRAM). Applications want to use a single virtual address space across CPU and GPU:
+現代のシステムには、独自のメモリ（VRAM）を持つGPUやその他のアクセラレータがある。アプリケーションは、CPUとGPUにまたがって単一の仮想アドレス空間を使いたい。
 
 ```
 Traditional (two address spaces):
@@ -19,7 +19,7 @@ With HMM (unified virtual address space):
   Kernel: tracks ownership and handles faults on both sides
 ```
 
-## HMM components {#hmm-components}
+## HMMの構成要素 {#hmm-components}
 
 ```
 Application virtual address space
@@ -43,22 +43,22 @@ Application virtual address space
     └─────────────────────────────────────────────────┘
 ```
 
-## struct page for device memory {#struct-page-for-device-memory}
+## デバイスメモリのためのstruct page {#struct-page-for-device-memory}
 
-HMM extends `struct page` to represent GPU/device memory through `ZONE_DEVICE`:
+HMMは `ZONE_DEVICE` を通じて `struct page` を拡張し、GPU/デバイスのメモリを表現できるようにする。
 
 ```c
 /* mm/memremap.c */
 
-/* Device memory types: */
+/* デバイスメモリの種類: */
 enum memory_type {
-    MEMORY_DEVICE_PRIVATE,     /* GPU private memory, not CPU-accessible */
-    MEMORY_DEVICE_COHERENT,    /* CPU-accessible device memory (CXL, etc., 5.19+) */
-    MEMORY_DEVICE_FS_DAX,      /* DAX filesystems */
-    MEMORY_DEVICE_PCI_P2PDMA,  /* P2P DMA between PCIe devices */
+    MEMORY_DEVICE_PRIVATE,     /* GPUのプライベートメモリ。CPUからアクセスできない */
+    MEMORY_DEVICE_COHERENT,    /* CPUからアクセス可能なデバイスメモリ（CXLなど、5.19+） */
+    MEMORY_DEVICE_FS_DAX,      /* DAXファイルシステム */
+    MEMORY_DEVICE_PCI_P2PDMA,  /* PCIeデバイス間のP2P DMA */
 };
 
-/* Register device memory as ZONE_DEVICE pages: */
+/* デバイスメモリをZONE_DEVICEのページとして登録する: */
 struct dev_pagemap pgmap = {
     .type  = MEMORY_DEVICE_PRIVATE,
     .range = {
@@ -68,43 +68,43 @@ struct dev_pagemap pgmap = {
     .ops = &my_device_pagemap_ops,
 };
 devm_memremap_pages(dev, &pgmap);
-/* Now: pfn_to_page(pfn) works for device memory pages */
+/* これで: デバイスメモリのページに対してpfn_to_page(pfn)が機能する */
 ```
 
-## mmu_interval_notifier: CPU→GPU page table synchronization {#mmuintervalnotifier-cpugpu-page-table-synchronization}
+## mmu_interval_notifier: CPU→GPUのページテーブル同期 {#mmuintervalnotifier-cpugpu-page-table-synchronization}
 
-Drivers use `mmu_interval_notifier` (introduced Linux 5.5, became the sole API when the earlier `hmm_mirror` was removed in 5.10) to receive callbacks when a virtual address range's CPU page table changes:
+ドライバは `mmu_interval_notifier`（Linux 5.5で導入され、以前の `hmm_mirror` が5.10で削除されて唯一のAPIとなった）を使い、仮想アドレス範囲のCPUページテーブルが変化したときにコールバックを受け取る。
 
-### mmu_interval_notifier (Linux 5.5+) {#mmuintervalnotifier-linux-55}
+### mmu_interval_notifier（Linux 5.5+） {#mmuintervalnotifier-linux-55}
 
 ```c
-/* Preferred modern API: no full mirror, just range notifications */
+/* 推奨される新しいAPI: 完全なミラーではなく、範囲の通知だけ */
 struct mmu_interval_notifier notifier;
 
 static const struct mmu_interval_notifier_ops gpu_mni_ops = {
     .invalidate = gpu_invalidate_range,
 };
 
-/* Register: notified when [start, end) VA range changes */
+/* 登録: [start, end) のVA範囲が変化したときに通知される */
 mmu_interval_notifier_insert(&notifier, mm, start, length, &gpu_mni_ops);
 
 static bool gpu_invalidate_range(struct mmu_interval_notifier *mni,
                                   const struct mmu_notifier_range *range,
                                   unsigned long cur_seq)
 {
-    /* GPU must stop accessing this range */
+    /* GPUはこの範囲へのアクセスを止めなければならない */
     gpu_unmap_range(mni->start, mni->length);
     mmu_interval_set_seq(mni, cur_seq);
     return true;
 }
 ```
 
-## HMM range snapshot {#hmm-range-snapshot}
+## HMMの範囲スナップショット {#hmm-range-snapshot}
 
-A driver uses `hmm_range_fault()` to snapshot the current CPU page table state for a range, getting the physical addresses (PFNs) the GPU should map:
+ドライバは `hmm_range_fault()` を使って、ある範囲の現在のCPUページテーブルの状態のスナップショットを取り、GPUがマップすべき物理アドレス（PFN）を得る。
 
 ```c
-/* drivers/gpu/my_driver.c (simplified) */
+/* drivers/gpu/my_driver.c（簡略化） */
 
 static int gpu_fault_and_map(struct mm_struct *mm, unsigned long addr,
                               unsigned long len)
@@ -116,10 +116,10 @@ static int gpu_fault_and_map(struct mm_struct *mm, unsigned long addr,
         .notifier_seq = mmu_interval_read_begin(&notifier),
         .start        = addr,
         .end          = addr + len,
-        .hmm_pfns     = hmm_pfns,   /* field name is hmm_pfns, not pfns */
+        .hmm_pfns     = hmm_pfns,   /* フィールド名はpfnsではなくhmm_pfns */
         .pfn_flags_mask = HMM_PFN_REQ_FAULT | HMM_PFN_REQ_WRITE,
     };
-    /* Set request flags: ask for all pages to be faulted in and writable */
+    /* 要求フラグを設定: すべてのページをフォールトで読み込み、書き込み可能にするよう求める */
     for (int i = 0; i < npages; i++)
         hmm_pfns[i] = HMM_PFN_REQ_FAULT | HMM_PFN_REQ_WRITE;
 
@@ -127,20 +127,20 @@ static int gpu_fault_and_map(struct mm_struct *mm, unsigned long addr,
 retry:
     ret = hmm_range_fault(&range);
     if (ret == -EBUSY) {
-        /* Page table changed while snapshotting — retry */
+        /* スナップショット中にページテーブルが変化した — リトライする */
         range.notifier_seq = mmu_interval_read_begin(&notifier);
         goto retry;
     }
     if (ret)
         return ret;
 
-    /* hmm_pfns[i] now contains PFN + flags for each page */
-    /* HMM_PFN_VALID set if page is present */
-    /* HMM_PFN_WRITE set if writable */
+    /* hmm_pfns[i]には各ページのPFNとフラグが入っている */
+    /* ページが存在すればHMM_PFN_VALIDが立つ */
+    /* 書き込み可能ならHMM_PFN_WRITEが立つ */
     for (int i = 0; i < npages; i++) {
         if (!(hmm_pfns[i] & HMM_PFN_VALID))
             continue;
-        /* Extract PFN: shift out the flag bits */
+        /* PFNを取り出す: フラグビットをシフトして取り除く */
         unsigned long pfn = hmm_pfns[i] >> HMM_PFN_SHIFT;
         phys_addr_t phys = PFN_PHYS(pfn);
         gpu_map_page(addr + i * PAGE_SIZE, phys,
@@ -150,9 +150,9 @@ retry:
 }
 ```
 
-## Device-private memory migration {#device-private-memory-migration}
+## デバイスプライベートメモリのマイグレーション {#device-private-memory-migration}
 
-For GPUs with private VRAM (not CPU-addressable), pages are migrated between system RAM and VRAM on demand:
+（CPUからアドレス指定できない）プライベートなVRAMを持つGPUでは、pageは必要に応じてシステムRAMとVRAMの間でマイグレーションされる。
 
 ```
 GPU accesses CPU page:
@@ -169,18 +169,18 @@ CPU accesses GPU page:
 ```
 
 ```c
-/* Driver implements: */
+/* ドライバが実装するもの: */
 static const struct dev_pagemap_ops my_pgmap_ops = {
-    /* Called when CPU tries to access device-private page */
+    /* CPUがデバイスプライベートなページにアクセスしようとしたときに呼ばれる */
     .migrate_to_ram = my_gpu_migrate_to_ram,
 
-    /* Called when device-private page reference count drops to 0 */
+    /* デバイスプライベートなページの参照カウントが0になったときに呼ばれる */
     .page_free = my_gpu_page_free,
 };
 
 static vm_fault_t my_gpu_migrate_to_ram(struct vm_fault *vmf)
 {
-    /* Migrate the GPU page back to system RAM */
+    /* GPUのページをシステムRAMへマイグレーションして戻す */
     struct migrate_vma args = {
         .vma        = vmf->vma,
         .start      = vmf->address & PAGE_MASK,
@@ -192,9 +192,9 @@ static vm_fault_t my_gpu_migrate_to_ram(struct vm_fault *vmf)
     };
 
     migrate_vma_setup(&args);
-    /* args.src now has PFNs of GPU pages to migrate */
+    /* args.srcにはマイグレーションするGPUページのPFNが入っている */
 
-    /* Allocate system RAM pages, copy GPU memory to them */
+    /* システムRAMのページを割り当て、GPUメモリの内容をそこへコピーする */
     for (int i = 0; i < npages; i++) {
         if (!(args.src[i] & MIGRATE_PFN_MIGRATE))
             continue;
@@ -203,61 +203,61 @@ static vm_fault_t my_gpu_migrate_to_ram(struct vm_fault *vmf)
         args.dst[i] = migrate_pfn(page_to_pfn(dpage));
     }
 
-    migrate_vma_pages(&args);    /* install RAM pages in CPU PTE */
-    migrate_vma_finalize(&args); /* release GPU pages */
+    migrate_vma_pages(&args);    /* RAMのページをCPUのPTEに設定する */
+    migrate_vma_finalize(&args); /* GPUのページを解放する */
     return 0;
 }
 ```
 
-## SVM (Shared Virtual Memory) in practice {#svm-shared-virtual-memory-in-practice}
+## 実際のSVM（Shared Virtual Memory） {#svm-shared-virtual-memory-in-practice}
 
-CUDA and ROCm implement SVM using HMM:
+CUDAとROCmはHMMを使ってSVMを実装している。
 
 ```c
-/* CUDA managed memory: */
+/* CUDAのマネージドメモリ: */
 cudaMallocManaged(&ptr, size, cudaMemAttachGlobal);
-/* ptr is a CPU VA backed by HMM */
-/* Access from CPU → normal page fault, kernel allocates DRAM */
-/* Access from GPU → GPU fault, driver calls hmm_range_fault() */
-/*                   or migrates to VRAM */
+/* ptrはHMMに裏付けられたCPUのVA */
+/* CPUからのアクセス → 通常のページフォールト。カーネルがDRAMを割り当てる */
+/* GPUからのアクセス → GPUフォールト。ドライバがhmm_range_fault()を呼ぶ */
+/*                   か、VRAMへマイグレーションする */
 
-/* cudaMemPrefetchAsync: hint to migrate pages before needed */
-cudaMemPrefetchAsync(ptr, size, cudaCpuDeviceId);  /* prefetch to CPU */
-cudaMemPrefetchAsync(ptr, size, 0);                /* prefetch to GPU 0 */
+/* cudaMemPrefetchAsync: 必要になる前にページを移動するためのヒント */
+cudaMemPrefetchAsync(ptr, size, cudaCpuDeviceId);  /* CPUへプリフェッチ */
+cudaMemPrefetchAsync(ptr, size, 0);                /* GPU 0へプリフェッチ */
 ```
 
-## Observing HMM {#observing-hmm}
+## HMMの観測 {#observing-hmm}
 
 ```bash
-# Check if kernel has HMM support:
+# カーネルが HMM をサポートしているか確認する:
 zcat /proc/config.gz | grep -E "ZONE_DEVICE|DEVICE_PRIVATE"
 # CONFIG_ZONE_DEVICE=y
 # CONFIG_DEVICE_PRIVATE=y
-# (CONFIG_HMM_MIRROR was removed in 5.10; HMM support is implicit via DEVICE_PRIVATE)
+# （CONFIG_HMM_MIRROR は 5.10 で削除された。HMM のサポートは DEVICE_PRIVATE によって暗黙的に有効になる）
 
-# ZONE_DEVICE memory stats:
+# ZONE_DEVICE メモリの統計:
 cat /proc/zoneinfo | grep -A20 "Device"
 
-# nvidia-smi shows unified memory stats:
+# nvidia-smi はユニファイドメモリの統計を表示する:
 nvidia-smi --query-gpu=memory.used,memory.free --format=csv
 
-# Trace HMM range faults:
+# HMM の範囲フォールトをトレースする:
 bpftrace -e '
 kprobe:hmm_range_fault {
     printf("hmm_range_fault: pid=%d addr=%lx\n", pid, ((struct hmm_range *)arg0)->start);
 }'
 
-# NUMA-aware: HMM migrates pages to GPU memory (different NUMA node)
+# NUMA を考慮: HMM は page を GPU メモリ（別の NUMA ノード）へマイグレーションする
 numastat -p <cuda_process>
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Memory Tiering](memory-tiering.md) — CXL and NUMA memory tiers
-- [IOMMU](../iommu/iommu-arch.md) — IOMMU for GPU DMA
-- [VFIO](../virtualization/vfio.md) — device passthrough using IOMMU
-- [DMA API](../iommu/dma-api.md) — DMA mapping fundamentals
-- [Page Allocator](page-allocator.md) — ZONE_DEVICE integration
-- `mm/hmm.c` — HMM core implementation
-- `mm/migrate_device.c` — device memory migration
-- `Documentation/mm/hmm.rst` — kernel HMM documentation
+- [メモリ階層化](memory-tiering.md) — CXLとNUMAのメモリ階層
+- [IOMMU](../iommu/iommu-arch.md) — GPUのDMAのためのIOMMU
+- [VFIO](../virtualization/vfio.md) — IOMMUを使ったデバイスパススルー
+- [DMA API](../iommu/dma-api.md) — DMAマッピングの基礎
+- [ページアロケータ](page-allocator.md) — ZONE_DEVICEの統合
+- `mm/hmm.c` — HMMのコア実装
+- `mm/migrate_device.c` — デバイスメモリのマイグレーション
+- `Documentation/mm/hmm.rst` — カーネルのHMMドキュメント

@@ -1,112 +1,112 @@
-# Memory Sysctl Tuning Reference {#memory-sysctl-tuning-reference}
+# メモリ関連sysctlチューニングリファレンス {#memory-sysctl-tuning-reference}
 
-Compact reference for all memory-related sysctls under `/proc/sys/vm/`. Each entry links to the [kernel sysctl documentation](https://docs.kernel.org/admin-guide/sysctl/vm.html).
+`/proc/sys/vm/` 以下にあるメモリ関連のすべてのsysctlの簡潔なリファレンス。各エントリは[カーネルのsysctlドキュメント](https://docs.kernel.org/admin-guide/sysctl/vm.html)にリンクしている。
 
-Read or write any value at runtime:
+どの値も実行時に読み書きできる。
 
 ```bash
-# Read
+# 読む
 sysctl vm.swappiness
-# Write (non-persistent)
+# 書く（永続化されない）
 sysctl -w vm.swappiness=10
-# Persistent (survives reboot)
+# 永続化（再起動後も残る）
 echo "vm.swappiness = 10" >> /etc/sysctl.d/99-tuning.conf
 sysctl --system
 ```
 
 ---
 
-## Reclaim {#reclaim}
+## 回収 {#reclaim}
 
-Controls how aggressively the kernel reclaims memory and manages free-page watermarks.
+カーネルがどれだけ積極的にメモリを回収するか、また空きページのウォーターマークをどう管理するかを制御する。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.swappiness`](https://docs.kernel.org/admin-guide/sysctl/vm.html#swappiness) | 60 | Weight for reclaiming anonymous pages vs page cache (0-200) | Lower for latency-sensitive workloads that prefer dropping cache over swapping; raise for memory-overcommitted hosts |
-| [`vm.min_free_kbytes`](https://docs.kernel.org/admin-guide/sysctl/vm.html#min-free-kbytes) | Varies (scales with RAM) | Minimum KB of free memory the kernel keeps reserved | Raise on systems that hit direct reclaim stalls or need burst allocations (e.g., high-speed networking) |
-| [`vm.watermark_scale_factor`](https://docs.kernel.org/admin-guide/sysctl/vm.html#watermark-scale-factor) | 10 | Gap between min/low/high watermarks as fraction of zone size (units of 0.01%) | Raise to trigger kswapd earlier, reducing direct reclaim; useful for bursty allocation patterns |
-| [`vm.watermark_boost_factor`](https://docs.kernel.org/admin-guide/sysctl/vm.html#watermark-boost-factor) | 15000 | Temporary watermark boost after memory fragmentation events (units of 0.01%) | Lower or set to 0 on systems where boosted reclaim causes unnecessary swapping |
-| [`vm.vfs_cache_pressure`](https://docs.kernel.org/admin-guide/sysctl/vm.html#vfs-cache-pressure) | 100 | Tendency to reclaim dentry/inode caches vs page cache (0 = never, 100 = fair, >100 = aggressive) | Lower for file-server workloads with many small files; raise when dentry/inode caches consume too much memory |
+| [`vm.swappiness`](https://docs.kernel.org/admin-guide/sysctl/vm.html#swappiness) | 60 | anonymous pageの回収とページキャッシュの回収の重み付け（0-200） | スワップよりキャッシュの破棄を好むレイテンシ重視のワークロードでは下げる。メモリをオーバーコミットしているホストでは上げる |
+| [`vm.min_free_kbytes`](https://docs.kernel.org/admin-guide/sysctl/vm.html#min-free-kbytes) | 環境による（RAMに応じて変わる） | カーネルが予約しておく空きメモリの最小KB数 | 直接回収によるストールが発生するシステムや、バースト的な割り当てを必要とするシステム（例: 高速ネットワーク）では上げる |
+| [`vm.watermark_scale_factor`](https://docs.kernel.org/admin-guide/sysctl/vm.html#watermark-scale-factor) | 10 | min/low/highウォーターマーク間の間隔。ゾーンサイズに対する割合（単位は0.01%） | 上げるとkswapdが早く起動し、直接回収が減る。バースト的な割り当てパターンに有用 |
+| [`vm.watermark_boost_factor`](https://docs.kernel.org/admin-guide/sysctl/vm.html#watermark-boost-factor) | 15000 | メモリ断片化イベント後の一時的なウォーターマーク引き上げ（単位は0.01%） | 引き上げられた回収が不要なスワップを引き起こすシステムでは、下げるか0にする |
+| [`vm.vfs_cache_pressure`](https://docs.kernel.org/admin-guide/sysctl/vm.html#vfs-cache-pressure) | 100 | ページキャッシュに対してdentry/inodeキャッシュを回収する傾向（0 = 回収しない、100 = 公平、>100 = 積極的） | 小さなファイルが多いファイルサーバーのワークロードでは下げる。dentry/inodeキャッシュがメモリを消費しすぎる場合は上げる |
 
 ---
 
-## Dirty Pages {#dirty-pages}
+## dirtyページ {#dirty-pages}
 
-Controls when and how often dirty (modified) page cache is written back to disk.
+dirty（変更済み）なページキャッシュを、いつ、どのくらいの頻度でディスクにライトバックするかを制御する。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.dirty_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-ratio) | 20 | Percentage of total memory at which a writing process is forced to start writeback | Lower for latency-sensitive I/O; raise for throughput on fast storage |
-| [`vm.dirty_background_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-background-ratio) | 10 | Percentage of total memory at which background writeback (per-device writeback threads) kicks in | Lower to keep less dirty data in memory (safer on power loss); raise on fast storage to batch more writes |
-| [`vm.dirty_expire_centisecs`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-expire-centisecs) | 3000 | Age (in centiseconds) at which dirty data becomes eligible for writeback | Lower for data safety; raise to allow more write coalescing |
-| [`vm.dirty_writeback_centisecs`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-writeback-centisecs) | 500 | Interval (in centiseconds) between writeback thread wake-ups | Lower for more frequent flushes; raise (or set to 0 to disable) on battery-powered devices to reduce disk wake-ups |
+| [`vm.dirty_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-ratio) | 20 | 書き込み中のプロセスが強制的にライトバックを開始させられる、総メモリに対する割合 | レイテンシ重視のI/Oでは下げる。高速ストレージでスループットを得たい場合は上げる |
+| [`vm.dirty_background_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-background-ratio) | 10 | バックグラウンドのライトバック（デバイスごとのライトバックスレッド）が始まる、総メモリに対する割合 | 下げるとメモリ上のdirtyデータが減る（電源喪失時により安全）。高速ストレージでは上げて書き込みをより多くバッチ化する |
+| [`vm.dirty_expire_centisecs`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-expire-centisecs) | 3000 | dirtyデータがライトバックの対象になる経過時間（1/100秒単位） | データの安全性を高めるには下げる。書き込みの結合を増やすには上げる |
+| [`vm.dirty_writeback_centisecs`](https://docs.kernel.org/admin-guide/sysctl/vm.html#dirty-writeback-centisecs) | 500 | ライトバックスレッドが起床する間隔（1/100秒単位） | より頻繁にフラッシュするには下げる。バッテリー駆動のデバイスでは上げる（または0にして無効化する）ことでディスクの起動を減らす |
 
 !!! tip
-    Use `dirty_bytes` / `dirty_background_bytes` instead of the ratio variants when you need an absolute cap that does not scale with RAM.
+    RAMに応じて変化しない絶対的な上限が必要な場合は、ratio系の代わりに `dirty_bytes` / `dirty_background_bytes` を使う。
 
 ---
 
-## Overcommit {#overcommit}
+## オーバーコミット {#overcommit}
 
-Controls the kernel's memory overcommit policy. See also [Memory Overcommit](overcommit.md).
+カーネルのメモリオーバーコミットのポリシーを制御する。[メモリのオーバーコミット](overcommit.md)も参照。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.overcommit_memory`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) | 0 | Policy: 0 = heuristic, 1 = always allow, 2 = strict limit | Set to 2 on systems where OOM kills are unacceptable (databases, embedded); set to 1 for certain HPC or container setups |
-| [`vm.overcommit_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-ratio) | 50 | When `overcommit_memory=2`: commit limit = swap + RAM * ratio / 100 | Raise when applications legitimately need more virtual memory; only effective with mode 2 |
-| [`vm.overcommit_kbytes`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-kbytes) | 0 | When `overcommit_memory=2`: absolute overcommit limit in KB (overrides ratio if nonzero) | Use instead of ratio when you need a precise byte-level commit limit |
+| [`vm.overcommit_memory`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-memory) | 0 | ポリシー: 0 = ヒューリスティック、1 = 常に許可、2 = 厳格な制限 | OOM killが許容できないシステム（データベース、組み込み）では2にする。特定のHPCやコンテナ構成では1にする |
+| [`vm.overcommit_ratio`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-ratio) | 50 | `overcommit_memory=2` の場合: コミット上限 = swap + RAM * ratio / 100 | アプリケーションが正当により多くの仮想メモリを必要とする場合に上げる。モード2でのみ有効 |
+| [`vm.overcommit_kbytes`](https://docs.kernel.org/admin-guide/sysctl/vm.html#overcommit-kbytes) | 0 | `overcommit_memory=2` の場合: KB単位の絶対的なオーバーコミット上限（非ゼロならratioより優先される） | バイト単位で正確なコミット上限が必要な場合にratioの代わりに使う |
 
 ---
 
-## Huge Pages {#huge-pages}
+## ヒュージページ {#huge-pages}
 
-Controls static (hugetlbfs) huge page allocation. For transparent huge pages, see [THP](thp.md).
+静的な（hugetlbfsの）ヒュージページの割り当てを制御する。Transparent Huge Pageについては[THP](thp.md)を参照。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.nr_hugepages`](https://docs.kernel.org/admin-guide/sysctl/vm.html#nr-hugepages) | 0 | Number of persistent huge pages to pre-allocate | Set to the number of huge pages your application requires (e.g., DPDK, large databases) |
-| [`vm.nr_overcommit_hugepages`](https://docs.kernel.org/admin-guide/sysctl/vm.html#nr-overcommit-hugepages) | 0 | Additional huge pages that can be allocated on demand beyond `nr_hugepages` | Set when applications may need burst huge-page capacity but you do not want to pin all memory upfront |
-| [`vm.hugetlb_shm_group`](https://docs.kernel.org/admin-guide/sysctl/vm.html#hugetlb-shm-group) | 0 | GID allowed to create SysV shared memory segments backed by huge pages | Set to the group ID of unprivileged users that need huge-page shared memory (e.g., database service accounts) |
+| [`vm.nr_hugepages`](https://docs.kernel.org/admin-guide/sysctl/vm.html#nr-hugepages) | 0 | 事前に割り当てる永続的なヒュージページの数 | アプリケーション（例: DPDK、大規模データベース）が必要とするヒュージページの数に設定する |
+| [`vm.nr_overcommit_hugepages`](https://docs.kernel.org/admin-guide/sysctl/vm.html#nr-overcommit-hugepages) | 0 | `nr_hugepages` を超えてオンデマンドで割り当てられる追加のヒュージページ | アプリケーションがバースト的にヒュージページを必要とする可能性があるが、すべてのメモリを最初から固定したくない場合に設定する |
+| [`vm.hugetlb_shm_group`](https://docs.kernel.org/admin-guide/sysctl/vm.html#hugetlb-shm-group) | 0 | ヒュージページを裏付けとするSysV共有メモリセグメントの作成を許可されるGID | ヒュージページの共有メモリを必要とする非特権ユーザー（例: データベースのサービスアカウント）のグループIDに設定する |
 
 ---
 
 ## NUMA {#numa}
 
-Tuning knobs for Non-Uniform Memory Access systems. See also [NUMA](numa.md).
+Non-Uniform Memory Accessシステム向けのチューニングノブ。[NUMA](numa.md)も参照。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.zone_reclaim_mode`](https://docs.kernel.org/admin-guide/sysctl/vm.html#zone-reclaim-mode) | 0 | Bitmask controlling whether the kernel reclaims local-node memory before allocating remotely (1 = enable zone reclaim, 2 = writeback, 4 = swap) | Enable on large NUMA systems where local-memory latency matters more than cache retention; leave at 0 for most workloads |
-| [`vm.numa_stat`](https://docs.kernel.org/admin-guide/sysctl/vm.html#numa-stat) | 1 | Enable per-node NUMA hit/miss/foreign statistics in `/proc/vmstat` | Disable (set to 0) on large NUMA machines where the per-update overhead of these counters is measurable |
+| [`vm.zone_reclaim_mode`](https://docs.kernel.org/admin-guide/sysctl/vm.html#zone-reclaim-mode) | 0 | リモートから割り当てる前にカーネルがローカルノードのメモリを回収するかどうかを制御するビットマスク（1 = ゾーン回収を有効化、2 = ライトバック、4 = スワップ） | キャッシュの保持よりローカルメモリのレイテンシが重要な大規模NUMAシステムで有効にする。ほとんどのワークロードでは0のままにする |
+| [`vm.numa_stat`](https://docs.kernel.org/admin-guide/sysctl/vm.html#numa-stat) | 1 | `/proc/vmstat` におけるノードごとのNUMA hit/miss/foreign統計を有効にする | これらのカウンタの更新ごとのオーバーヘッドが無視できない大規模NUMAマシンでは無効にする（0にする） |
 
 ---
 
 ## OOM {#oom}
 
-Controls Out-Of-Memory killer behavior. See also [Running out of memory](oom.md).
+Out-Of-Memory killerの振る舞いを制御する。[メモリ不足](oom.md)も参照。
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.oom_kill_allocating_task`](https://docs.kernel.org/admin-guide/sysctl/vm.html#oom-kill-allocating-task) | 0 | When set to 1, kill the task that triggered OOM instead of scanning for the worst offender | Enable on systems where scanning is too slow or you want deterministic OOM behavior |
-| [`vm.oom_dump_tasks`](https://docs.kernel.org/admin-guide/sysctl/vm.html#oom-dump-tasks) | 1 | Dump per-task memory info to the kernel log on OOM | Disable on systems with thousands of tasks where the dump itself causes problems |
-| [`vm.panic_on_oom`](https://docs.kernel.org/admin-guide/sysctl/vm.html#panic-on-oom) | 0 | Trigger a kernel panic instead of invoking the OOM killer (0 = off, 1 = panic, 2 = panic even for cgroup OOM) | Enable in clusters where a dead node is preferable to a degraded one (lets a watchdog or cluster manager restart the machine) |
+| [`vm.oom_kill_allocating_task`](https://docs.kernel.org/admin-guide/sysctl/vm.html#oom-kill-allocating-task) | 0 | 1にすると、最悪の原因プロセスを探す代わりに、OOMを引き起こしたタスクをkillする | 走査が遅すぎるシステムや、決定的なOOMの振る舞いが欲しい場合に有効にする |
+| [`vm.oom_dump_tasks`](https://docs.kernel.org/admin-guide/sysctl/vm.html#oom-dump-tasks) | 1 | OOM時にタスクごとのメモリ情報をカーネルログにダンプする | タスクが数千あり、ダンプ自体が問題を引き起こすシステムでは無効にする |
+| [`vm.panic_on_oom`](https://docs.kernel.org/admin-guide/sysctl/vm.html#panic-on-oom) | 0 | OOM killerを起動する代わりにカーネルパニックを起こす（0 = オフ、1 = パニック、2 = cgroupのOOMでもパニック） | 性能が劣化したノードより停止したノードのほうが望ましいクラスタで有効にする（ウォッチドッグやクラスタマネージャがマシンを再起動できる） |
 
 ---
 
-## Miscellaneous {#miscellaneous}
+## その他 {#miscellaneous}
 
-| Sysctl | Default | Description | When to change |
+| sysctl | デフォルト | 説明 | 変更すべきとき |
 |--------|---------|-------------|----------------|
-| [`vm.max_map_count`](https://docs.kernel.org/admin-guide/sysctl/vm.html#max-map-count) | 65530 | Maximum number of VMAs a process may have | Raise for applications with many mappings (e.g., JVMs, Elasticsearch, mmap-heavy databases) |
-| [`vm.mmap_min_addr`](https://docs.kernel.org/admin-guide/sysctl/vm.html#mmap-min-addr) | 0 (kernel default; most distros set 65536) | Lowest virtual address a user-space process is allowed to mmap | Lower only if legacy software requires mapping at address zero; keep high for NULL-pointer dereference protection |
-| [`vm.compact_memory`](https://docs.kernel.org/admin-guide/sysctl/vm.html#compact-memory) | Write-only | Writing 1 triggers synchronous memory compaction across all zones | Use before allocating huge pages on a fragmented system; avoid in production hot paths |
-| [`vm.drop_caches`](https://docs.kernel.org/admin-guide/sysctl/vm.html#drop-caches) | Write-only | Writing 1 = free page cache, 2 = free dentries/inodes, 3 = both | Use only for benchmarking or debugging; not recommended in production as the kernel manages caches effectively on its own |
+| [`vm.max_map_count`](https://docs.kernel.org/admin-guide/sysctl/vm.html#max-map-count) | 65530 | プロセスが持てるVMAの最大数 | 多数のマッピングを持つアプリケーション（例: JVM、Elasticsearch、mmapを多用するデータベース）では上げる |
+| [`vm.mmap_min_addr`](https://docs.kernel.org/admin-guide/sysctl/vm.html#mmap-min-addr) | 0（カーネルのデフォルト。ほとんどのディストリビューションは65536に設定） | ユーザー空間プロセスがmmapできる最小の仮想アドレス | レガシーなソフトウェアがアドレス0へのマップを必要とする場合にのみ下げる。NULLポインタ参照に対する保護のため高く保つ |
+| [`vm.compact_memory`](https://docs.kernel.org/admin-guide/sysctl/vm.html#compact-memory) | 書き込み専用 | 1を書き込むと、すべてのゾーンで同期的なメモリコンパクションが起動される | 断片化したシステムでヒュージページを割り当てる前に使う。本番環境のホットパスでは避ける |
+| [`vm.drop_caches`](https://docs.kernel.org/admin-guide/sysctl/vm.html#drop-caches) | 書き込み専用 | 1を書き込む = ページキャッシュを解放、2 = dentry/inodeを解放、3 = 両方 | ベンチマークやデバッグでのみ使う。カーネルは自力でキャッシュを効果的に管理するため、本番環境では推奨されない |
 
 ---
 
-## Quick Tips {#quick-tips}
+## ちょっとしたヒント {#quick-tips}
 
-- **Check current values**: `sysctl -a | grep vm.` lists every `vm.*` parameter and its value.
-- **Monitor effects**: watch `/proc/vmstat`, `/proc/meminfo`, and per-zone stats in `/proc/zoneinfo` after changing a sysctl.
-- **Persist changes**: place tuning in `/etc/sysctl.d/*.conf` files rather than editing `/etc/sysctl.conf` directly.
-- **Container awareness**: inside a container, many `vm.*` sysctls are host-global and require privileged access. Memory cgroup knobs (see [memcg](memcg.md)) are the per-container equivalent.
+- **現在の値を確認する**: `sysctl -a | grep vm.` で、すべての `vm.*` パラメータとその値が一覧できる。
+- **効果を監視する**: sysctlを変更した後は、`/proc/vmstat`、`/proc/meminfo`、`/proc/zoneinfo` のゾーンごとの統計を観察する。
+- **変更を永続化する**: `/etc/sysctl.conf` を直接編集するのではなく、`/etc/sysctl.d/*.conf` ファイルにチューニングを置く。
+- **コンテナを意識する**: コンテナ内では、多くの `vm.*` sysctlはホスト全体に効くものであり、特権アクセスを必要とする。メモリcgroupのノブ（[memcg](memcg.md)を参照）がコンテナごとの同等物である。

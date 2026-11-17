@@ -1,212 +1,212 @@
-# Memory Management (mm/) {#memory-management-mm}
+# メモリ管理（mm/） {#memory-management-mm}
 
-> How Linux manages the most fundamental resource: memory
+> Linuxは最も基本的なリソースであるメモリをどう管理しているか
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-This documentation explains how Linux manages memory - not just the theory, but the actual implementation decisions, trade-offs, and lessons learned over 30+ years of development.
+このドキュメントは、Linuxがメモリをどう管理しているかを説明する。理論だけでなく、30年以上の開発を通じて積み重ねられた実際の実装上の判断、トレードオフ、そして得られた教訓を扱う。
 
-### Prerequisites {#prerequisites}
+### 前提知識 {#prerequisites}
 
-This documentation assumes familiarity with:
+このドキュメントは次の事項に通じていることを前提とする。
 
-- **C programming** - The kernel is written in C
-- **Pointers and memory addresses** - Virtual vs physical addressing
-- **Basic OS concepts** - Processes, kernel vs userspace
+- **Cプログラミング** - カーネルはCで書かれている
+- **ポインタとメモリアドレス** - 仮想アドレスと物理アドレス
+- **OSの基本概念** - プロセス、カーネルとユーザー空間
 
-If you've covered virtual memory and paging, that's a good foundation. See [Further Reading](#further-reading) for recommended textbooks.
+仮想メモリとページングを学んだことがあれば、それが良い基礎になる。推奨する教科書は[参考文献](#further-reading)を参照。
 
-### Getting the Kernel Source {#getting-the-kernel-source}
+### カーネルソースの入手 {#getting-the-kernel-source}
 
 ```bash
 git clone https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git
 cd linux
 ```
 
-For building and configuration, see [Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html).
+ビルドと設定については[Documentation/admin-guide/README.rst](https://docs.kernel.org/admin-guide/README.html)を参照。
 
-### Running Tests {#running-tests}
+### テストの実行 {#running-tests}
 
-The fastest way to test kernel changes without rebooting your machine:
+マシンを再起動せずにカーネルの変更をテストする最速の方法:
 
 ```bash
-# Install virtme-ng (runs kernel in QEMU with your filesystem)
+# virtme-ng をインストールする（手元のファイルシステムで QEMU 上のカーネルを実行する）
 pip install virtme-ng
 
-# Build and boot with a test module
+# テストモジュール付きでビルドして起動する
 virtme-ng --kdir . --append 'test_vmalloc.run_test_mask=0xFFFF'
 
-# Check results
-# (dmesg output appears in the virtual console)
+# 結果を確認する
+# （dmesg の出力は仮想コンソールに表示される）
 ```
 
-For comprehensive testing documentation, see [Documentation/dev-tools/testing-overview.rst](https://docs.kernel.org/dev-tools/testing-overview.html).
+テストに関する包括的なドキュメントは[Documentation/dev-tools/testing-overview.rst](https://docs.kernel.org/dev-tools/testing-overview.html)を参照。
 
-### Suggested Reading Order {#suggested-reading-order}
+### 推奨する読む順番 {#suggested-reading-order}
 
-**Fundamentals:**
+**基礎:**
 
-1. **[Overview](overview.md)** - The narrative of how mm/ evolved
-2. **[Page Allocator](page-allocator.md)** - Buddy system fundamentals
-3. **[Slab](slab.md)** - SLUB allocator for small objects
-4. **[vmalloc](vmalloc.md)** - Virtual memory allocation
+1. **[概要](overview.md)** - mm/がどう進化してきたかの物語
+2. **[ページアロケータ](page-allocator.md)** - バディシステムの基礎
+3. **[slab](slab.md)** - 小さなオブジェクトのためのSLUBアロケータ
+4. **[vmalloc](vmalloc.md)** - 仮想メモリの割り当て
 
-**Address Translation & Process Memory:**
+**アドレス変換とプロセスのメモリ:**
 
-5. **[Page Tables](page-tables.md)** - Virtual address translation
-6. **[The Kernel Address Space](kernel-address-space.md)** - Direct map, vmemmap, vmalloc space, KASLR
-7. **[Process Address Space](mmap.md)** - VMAs, mmap, demand paging
+5. **[ページテーブル](page-tables.md)** - 仮想アドレスの変換
+6. **[カーネルのアドレス空間](kernel-address-space.md)** - ダイレクトマップ、vmemmap、vmalloc空間、KASLR
+7. **[プロセスのアドレス空間](mmap.md)** - VMA、mmap、デマンドページング
 
-**Memory Pressure & Reclaim:**
+**メモリプレッシャーと回収:**
 
-8. **[Page Reclaim](reclaim.md)** - LRU, kswapd, MGLRU
-9. **[Swap](swap.md)** - Extending memory to disk
-10. **[Page Cache](page-cache.md)** - File data caching
+8. **[ページ回収](reclaim.md)** - LRU、kswapd、MGLRU
+9. **[スワップ](swap.md)** - メモリをディスクに拡張する
+10. **[ページキャッシュ](page-cache.md)** - ファイルデータのキャッシュ
 
-**Advanced Topics:**
+**発展的なトピック:**
 
-11. **[Memory Cgroups](memcg.md)** - Container memory limits
-12. **[NUMA](numa.md)** - Multi-node memory management
-13. **[Transparent Huge Pages](thp.md)** - Automatic huge pages
-14. **[Compaction](compaction.md)** - Memory defragmentation
-15. **[KSM](ksm.md)** - Page deduplication for VMs
+11. **[メモリcgroup](memcg.md)** - コンテナのメモリ制限
+12. **[NUMA](numa.md)** - 複数ノードのメモリ管理
+13. **[Transparent Huge Pages](thp.md)** - 自動的なヒュージページ
+14. **[コンパクション](compaction.md)** - メモリのデフラグ
+15. **[KSM](ksm.md)** - VMのためのページ重複排除
 
-**End-to-End Walkthroughs:**
+**エンドツーエンドのウォークスルー:**
 
-After the fundamentals, these trace operations through the entire stack:
+基礎を学んだ後は、これらで操作をスタック全体にわたって追跡する。
 
-16. **[Life of a malloc](life-of-malloc.md)** - From userspace to physical page
-17. **[Life of a page](life-of-page.md)** - Allocation through reclaim
-18. **[What happens when you fork](fork.md)** - COW mechanics
-19. **[Running out of memory](oom.md)** - The path to OOM kill
-20. **[Life of a file read](life-of-read.md)** - Page cache in action
-21. **[What happens during swapping](swapping.md)** - Swap-out and swap-in
+16. **[mallocの一生](life-of-malloc.md)** - ユーザー空間から物理pageまで
+17. **[pageの一生](life-of-page.md)** - 割り当てから回収まで
+18. **[fork()したときに何が起きるか](fork.md)** - COWの仕組み
+19. **[メモリ不足](oom.md)** - OOM killに至る経路
+20. **[ファイル読み込みの一生](life-of-read.md)** - ページキャッシュの実際の動作
+21. **[スワップ処理の間に何が起きるか](swapping.md)** - スワップアウトとスワップイン
 
-### What You'll Learn {#what-youll-learn}
+### 学べること {#what-youll-learn}
 
-| Textbook Concept | Linux Reality |
+| 教科書の概念 | Linuxの実際 |
 |------------------|---------------|
-| "malloc allocates memory" | [No - it reserves address space](life-of-malloc.md). Physical pages come later via demand paging |
-| "fork copies process memory" | [Copy-on-write](fork.md) means pages are shared until written |
-| "Page tables map virtual to physical" | Multi-level page tables, TLB flushing costs, [lazy creation](life-of-malloc.md) |
-| "Memory allocator" | Multiple allocators for different use cases (slab, vmalloc, buddy) |
-| "Fragmentation" | Why physically contiguous memory is hard, vmalloc as a solution |
-| "Memory is finite" | [Watermarks, kswapd, direct reclaim, OOM killer](oom.md) - a progression, not a cliff |
-| "Reading files hits disk" | [Page cache](life-of-read.md) means most reads are from memory |
-| "Swap is slow" | [Swap mechanics](swapping.md) - understand when and why it hurts |
+| 「mallocはメモリを割り当てる」 | [違う。アドレス空間を予約するだけである](life-of-malloc.md)。物理pageは後からデマンドページングによって与えられる |
+| 「forkはプロセスのメモリをコピーする」 | [Copy-on-write](fork.md)により、pageは書き込まれるまで共有される |
+| 「ページテーブルは仮想アドレスを物理アドレスにマップする」 | 多段のページテーブル、TLBフラッシュのコスト、[遅延作成](life-of-malloc.md) |
+| 「メモリアロケータ」 | 用途ごとに複数のアロケータがある（slab、vmalloc、buddy） |
+| 「断片化」 | なぜ物理的に連続したメモリの確保は難しいのか、その解決策としてのvmalloc |
+| 「メモリは有限である」 | [ウォーターマーク、kswapd、直接回収、OOM killer](oom.md) - 崖ではなく段階的な進行 |
+| 「ファイルの読み込みはディスクにアクセスする」 | [ページキャッシュ](life-of-read.md)により、ほとんどの読み込みはメモリから行われる |
+| 「スワップは遅い」 | [スワップの仕組み](swapping.md) - いつ、なぜ性能を損なうのかを理解する |
 
-### What Makes This Different {#what-makes-this-different}
+### このドキュメントの特徴 {#what-makes-this-different}
 
-- **Real commits**: Every claim links to actual kernel commits
-- **Real bugs**: Learn from what broke and why
-- **Real discussions**: Links to LKML where decisions were debated
-- **Real trade-offs**: Not just "what" but "why this and not that"
-- **Hands-on**: "Try It Yourself" sections with commands to run and code to read
-
----
-
-## Documentation {#documentation}
-
-### Core Reading {#core-reading}
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [overview](overview.md) | The 30-year story of Linux memory management |
-| [page-allocator](page-allocator.md) | Buddy system - physical page management |
-| [slab](slab.md) | SLUB - small object allocation |
-| [vmalloc](vmalloc.md) | Virtually contiguous allocation |
-| [vrealloc](vrealloc.md) | Resizing allocations |
-| [page-tables](page-tables.md) | Virtual address translation |
-| [kernel-address-space](kernel-address-space.md) | The kernel half: direct map, vmemmap, KASLR |
-| [reclaim](reclaim.md) | What happens under memory pressure |
-| [memcg](memcg.md) | Container memory limits |
-| [thp](thp.md) | Transparent Huge Pages - automatic 2MB pages |
-| [numa](numa.md) | NUMA memory policies and balancing |
-| [compaction](compaction.md) | Memory defragmentation for large allocations |
-| [ksm](ksm.md) | Kernel Same-page Merging - memory deduplication |
-| [mmap](mmap.md) | Process address space and VMAs |
-| [page-cache](page-cache.md) | File data caching in memory |
-| [swap](swap.md) | Extending memory to disk |
-
-### Lifecycle {#lifecycle}
-
-Narrative walkthroughs following memory operations end-to-end:
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [life-of-malloc](life-of-malloc.md) | Tracing malloc() from userspace to physical pages |
-| [life-of-page](life-of-page.md) | A physical page's journey through allocation, use, and reclaim |
-| [fork](fork.md) | COW setup, page table copying, and COW fault handling |
-| [oom](oom.md) | Watermarks, kswapd, direct reclaim, and OOM killer |
-| [life-of-read](life-of-read.md) | How read() flows through the page cache |
-| [swapping](swapping.md) | Swap-out and swap-in mechanics in detail |
-
-### Explainers {#explainers}
-
-Conceptual guides for common memory management questions:
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [virtual-physical-resident](virtual-physical-resident.md) | VSZ vs RSS vs PSS vs USS - why memory numbers don't add up |
-| [overcommit](overcommit.md) | Why overcommit is the only sane default |
-| [brk-vs-mmap](brk-vs-mmap.md) | Two ways to get memory from the kernel |
-| [contiguous-memory](contiguous-memory.md) | Why large allocations fail despite free memory |
-| [cow](cow.md) | Copy-on-write edge cases and when it breaks |
-
-### Kernel Bugs & CVEs {#kernel-bugs-cves}
-
-Analysis of notable Linux kernel vulnerabilities, data corruption bugs, and edge cases:
-
-| Document | What You'll Learn |
-|----------|-------------------|
-| [Bug Index](bugs/README.md) | Catalog of all mm bugs by severity, year, and subsystem |
-| [SLUB Bugs](slab.md#notorious-bugs-and-edge-cases) | Heap exploitation (CVE-2021-22555, CVE-2022-29582) |
-| [THP Bugs](thp.md#notorious-bugs-and-edge-cases) | khugepaged races, COW issues (CVE-2020-29368) |
-| [Page Table Bugs](page-tables.md#notorious-bugs-and-edge-cases) | Meltdown, Spectre, TLB flush races |
+- **実際のコミット**: すべての主張は実際のカーネルコミットにリンクしている
+- **実際のバグ**: 何が壊れたか、なぜ壊れたかから学ぶ
+- **実際の議論**: 判断が議論されたLKMLへのリンク
+- **実際のトレードオフ**: 「何を」だけでなく「なぜこれであれではないのか」
+- **ハンズオン**: 実行するコマンドや読むべきコードを含む「Try It Yourself」セクション
 
 ---
 
-## Key Source Files {#key-source-files}
+## ドキュメント {#documentation}
 
-If you want to read the actual code:
+### 中核となる読み物 {#core-reading}
 
-| File | What It Does |
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [overview](overview.md) | Linuxのメモリ管理の30年の物語 |
+| [page-allocator](page-allocator.md) | バディシステム - 物理pageの管理 |
+| [slab](slab.md) | SLUB - 小さなオブジェクトの割り当て |
+| [vmalloc](vmalloc.md) | 仮想的に連続した割り当て |
+| [vrealloc](vrealloc.md) | 割り当てのサイズ変更 |
+| [page-tables](page-tables.md) | 仮想アドレスの変換 |
+| [kernel-address-space](kernel-address-space.md) | カーネル側の半分: ダイレクトマップ、vmemmap、KASLR |
+| [reclaim](reclaim.md) | メモリプレッシャー下で何が起きるか |
+| [memcg](memcg.md) | コンテナのメモリ制限 |
+| [thp](thp.md) | Transparent Huge Pages - 自動的な2MBのpage |
+| [numa](numa.md) | NUMAのメモリポリシーとバランシング |
+| [compaction](compaction.md) | 大きな割り当てのためのメモリのデフラグ |
+| [ksm](ksm.md) | Kernel Same-page Merging - メモリの重複排除 |
+| [mmap](mmap.md) | プロセスのアドレス空間とVMA |
+| [page-cache](page-cache.md) | メモリ上でのファイルデータのキャッシュ |
+| [swap](swap.md) | メモリをディスクに拡張する |
+
+### ライフサイクル {#lifecycle}
+
+メモリ操作をエンドツーエンドで追う物語形式のウォークスルー:
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [life-of-malloc](life-of-malloc.md) | ユーザー空間から物理pageまでmalloc()を追跡する |
+| [life-of-page](life-of-page.md) | 物理pageが割り当て、使用、回収を経る旅 |
+| [fork](fork.md) | COWの設定、ページテーブルのコピー、COWフォールトの処理 |
+| [oom](oom.md) | ウォーターマーク、kswapd、直接回収、OOM killer |
+| [life-of-read](life-of-read.md) | read()がページキャッシュをどう流れるか |
+| [swapping](swapping.md) | スワップアウトとスワップインの仕組みの詳細 |
+
+### 解説 {#explainers}
+
+メモリ管理に関するよくある疑問に答える概念的なガイド:
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [virtual-physical-resident](virtual-physical-resident.md) | VSZ、RSS、PSS、USSの違い - なぜメモリの数値は合計が合わないのか |
+| [overcommit](overcommit.md) | なぜオーバーコミットが唯一の妥当なデフォルトなのか |
+| [brk-vs-mmap](brk-vs-mmap.md) | カーネルからメモリを得る2つの方法 |
+| [contiguous-memory](contiguous-memory.md) | 空きメモリがあるのに大きな割り当てが失敗する理由 |
+| [cow](cow.md) | Copy-on-writeのエッジケースと、それが破綻するとき |
+
+### カーネルのバグとCVE {#kernel-bugs-cves}
+
+Linuxカーネルの注目すべき脆弱性、データ破損バグ、エッジケースの分析:
+
+| ドキュメント | 学べること |
+|----------|-------------------|
+| [バグ索引](bugs/README.md) | 深刻度・年・サブシステム別のmmバグ一覧 |
+| [SLUBのバグ](slab.md#notorious-bugs-and-edge-cases) | ヒープの悪用（CVE-2021-22555、CVE-2022-29582） |
+| [THPのバグ](thp.md#notorious-bugs-and-edge-cases) | khugepagedの競合、COWの問題（CVE-2020-29368） |
+| [ページテーブルのバグ](page-tables.md#notorious-bugs-and-edge-cases) | Meltdown、Spectre、TLBフラッシュの競合 |
+
+---
+
+## 主要なソースファイル {#key-source-files}
+
+実際のコードを読みたい場合:
+
+| ファイル | 役割 |
 |------|--------------|
-| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | Buddy allocator - physical page management |
-| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUB allocator - small object caches |
-| [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | vmalloc - virtually contiguous allocation |
-| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | Memory reclaim under pressure |
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory cgroups |
+| [`mm/page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) | バディアロケータ - 物理pageの管理 |
+| [`mm/slub.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/slub.c) | SLUBアロケータ - 小さなオブジェクトのキャッシュ |
+| [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) | vmalloc - 仮想的に連続した割り当て |
+| [`mm/vmscan.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmscan.c) | プレッシャー下でのメモリ回収 |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | メモリcgroup |
 | [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) | Transparent Huge Pages |
-| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | NUMA memory policies |
-| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | Memory compaction |
+| [`mm/mempolicy.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) | NUMAのメモリポリシー |
+| [`mm/compaction.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/compaction.c) | メモリコンパクション |
 | [`mm/ksm.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/ksm.c) | Kernel Same-page Merging |
-| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | Process address space, VMAs |
-| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | Page cache |
-| [`mm/swapfile.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swapfile.c) | Swap area management |
-| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer, victim selection |
-| [`kernel/fork.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) | Process creation, dup_mm() |
-| [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) | GFP flags definitions |
+| [`mm/mmap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mmap.c) | プロセスのアドレス空間、VMA |
+| [`mm/filemap.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/filemap.c) | ページキャッシュ |
+| [`mm/swapfile.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/swapfile.c) | スワップ領域の管理 |
+| [`mm/oom_kill.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/oom_kill.c) | OOM killer、犠牲プロセスの選択 |
+| [`kernel/fork.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/fork.c) | プロセスの生成、dup_mm() |
+| [`include/linux/gfp.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/gfp.h) | GFPフラグの定義 |
 
 ---
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Free Resources {#free-resources}
-- Bonwick, [*The Slab Allocator*](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf) (1994) - Original slab paper from USENIX
-- Gorman, [*Understanding the Linux Virtual Memory Manager*](https://www.kernel.org/doc/gorman/) - Free online book
+### 無料のリソース {#free-resources}
+- Bonwick, [*The Slab Allocator*](https://people.eecs.berkeley.edu/~kubitron/courses/cs194-24-S14/hand-outs/bonwick_slab.pdf) (1994) - USENIXで発表されたslabの原論文
+- Gorman, [*Understanding the Linux Virtual Memory Manager*](https://www.kernel.org/doc/gorman/) - 無料のオンライン書籍
 
-### Kernel Documentation {#kernel-documentation}
-- [Documentation/mm/](https://docs.kernel.org/mm/) in the kernel tree
-- [Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/) for sysadmin perspective
+### カーネルのドキュメント {#kernel-documentation}
+- カーネルツリーの[Documentation/mm/](https://docs.kernel.org/mm/)
+- システム管理者向けの観点からは[Documentation/admin-guide/mm/](https://docs.kernel.org/admin-guide/mm/)
 
-### Textbooks {#textbooks}
-- Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) - Ch. 9-10 (Memory)
-- Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) - Ch. 3 (Memory Management)
-- Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) - Ch. 12 (Memory Management)
+### 教科書 {#textbooks}
+- Silberschatz et al., [*Operating System Concepts*](https://www.os-book.com/) - 第9〜10章（メモリ）
+- Tanenbaum & Bos, [*Modern Operating Systems*](https://www.pearson.com/en-us/subject-catalog/p/modern-operating-systems/P200000003295) - 第3章（メモリ管理）
+- Love, [*Linux Kernel Development*](https://www.oreilly.com/library/view/linux-kernel-development/9780768696974/) - 第12章（メモリ管理）
 
 ---
 
-## Appendix {#appendix}
+## 付録 {#appendix}
 
-- **[Glossary](glossary.md)** - Terminology reference
+- **[用語集](glossary.md)** - 用語のリファレンス

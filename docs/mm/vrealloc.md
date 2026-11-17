@@ -1,180 +1,180 @@
 # vrealloc {#vrealloc}
 
-> Resize vmalloc allocations
+> vmallocによる割り当てのサイズを変更する
 
-## What is vrealloc? {#what-is-vrealloc}
+## vreallocとは何か {#what-is-vrealloc}
 
-`vrealloc()` resizes an existing vmalloc allocation, similar to userspace `realloc()`.
+`vrealloc()` は既存のvmallocによる割り当てのサイズを変更する。ユーザー空間の `realloc()` に似ている。
 
 ```c
 void *vrealloc(const void *p, size_t size, gfp_t flags);
 ```
 
-## History & Evolution {#history-evolution}
+## 歴史と変遷 {#history-evolution}
 
-### v6.12: Initial Implementation {#v612-initial-implementation}
+### v6.12: 最初の実装 {#v612-initial-implementation}
 
-**Commit**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) ("mm: vmalloc: implement vrealloc()")
-**Kernel**: v6.12
-**Author**: Danilo Krummrich
+**コミット**: [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) ("mm: vmalloc: implement vrealloc()")
+**カーネル**: v6.12
+**作者**: Danilo Krummrich
 
-**Why it was needed**:
+**なぜ必要だったか**:
 
-The existing `kvrealloc()` had inconsistent behavior compared to `krealloc()`:
+既存の `kvrealloc()` は、`krealloc()` と比べて振る舞いに一貫性がなかった。
 
-| Behavior | krealloc() | kvrealloc() (old) |
+| 振る舞い | krealloc() | kvrealloc()（旧） |
 |----------|------------|-------------------|
-| size = 0 | Frees memory | Returns existing pointer |
-| NULL pointer | Acts like kmalloc | Faults |
-| Track old size | Self-contained | Caller must track |
+| size = 0 | メモリを解放する | 既存のポインタを返す |
+| NULLポインタ | kmallocのように振る舞う | フォールトする |
+| 旧サイズの追跡 | 自己完結している | 呼び出し側が追跡しなければならない |
 
-**LKML Discussion**: [Align kvrealloc() with krealloc()](https://lore.kernel.org/lkml/20240704170738.3621-1-dakr@redhat.com/)
+**LKMLでの議論**: [Align kvrealloc() with krealloc()](https://lore.kernel.org/lkml/20240704170738.3621-1-dakr@redhat.com/)
 
-**Rust motivation**: The patch mentions Rust's allocator abstractions. `Vec` and `KVec` need efficient realloc for growing/shrinking - a common pattern that was inefficient without proper vrealloc.
+**Rustからの動機**: このパッチはRustのアロケータ抽象化に言及している。`Vec` や `KVec` は拡大・縮小のために効率的なreallocを必要とする。これはよくあるパターンだが、適切なvreallocなしでは非効率だった。
 
-### Bug: KASAN Poisoning (v6.12) {#bug-kasan-poisoning-v612}
+### バグ: KASANのポイズニング（v6.12） {#bug-kasan-poisoning-v612}
 
-**Commit**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) ("mm: fix vrealloc()'s KASAN poisoning logic")
-**Reporter**: Andrii Nakryiko (via BPF testing)
-**Bug Report**: [lore.kernel.org](https://lore.kernel.org/bpf/67450f9b.050a0220.21d33d.0004.GAE@google.com/)
+**コミット**: [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) ("mm: fix vrealloc()'s KASAN poisoning logic")
+**報告者**: Andrii Nakryiko（BPFのテスト経由）
+**バグ報告**: [lore.kernel.org](https://lore.kernel.org/bpf/67450f9b.050a0220.21d33d.0004.GAE@google.com/)
 
-**What happened**: When vrealloc() reused existing vmap_area, KASAN annotations weren't updated correctly for the new size, causing false-positive KASAN splats.
+**何が起きたか**: vrealloc()が既存のvmap_areaを再利用するとき、KASANのアノテーションが新しいサイズに合わせて正しく更新されず、偽陽性のKASANレポートが発生した。
 
-**Learning**: Memory sanitizers (KASAN) add complexity to allocation code paths. When reusing memory regions, all annotations must be updated to match new valid/invalid byte ranges.
+**教訓**: メモリサニタイザ（KASAN）は割り当てのコードパスを複雑にする。メモリ領域を再利用するときは、すべてのアノテーションを新しい有効/無効バイト範囲に合わせて更新しなければならない。
 
-### v6.13: requested_size Tracking {#v613-requested_size-tracking}
+### v6.13: requested_sizeの追跡 {#v613-requested_size-tracking}
 
-**Commit**: [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) ("mm: vmalloc: support more granular vrealloc() sizing")
-**Author**: Kees Cook
+**コミット**: [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) ("mm: vmalloc: support more granular vrealloc() sizing")
+**作者**: Kees Cook
 
-Introduced `vm_struct::requested_size` to track actual requested size separately from allocated area. This enabled:
+`vm_struct::requested_size` を導入し、実際に要求されたサイズを割り当て領域とは別に追跡するようにした。これにより次が可能になった。
 
-- Correct KASAN poisoning boundaries
-- Growing within existing allocation
-- Foundation for shrink optimization
+- 正しいKASANポイズニング境界
+- 既存の割り当て内での拡大
+- 縮小最適化の基盤
 
-**Bug Report that triggered this**: [lore.kernel.org](https://lore.kernel.org/all/20250408192503.6149a816@outsider.home/)
+**これを引き起こしたバグ報告**: [lore.kernel.org](https://lore.kernel.org/all/20250408192503.6149a816@outsider.home/)
 
-### Bug: In-place Region Not Returned (v6.13) {#bug-in-place-region-not-returned-v613}
+### バグ: インプレース領域が返されない（v6.13） {#bug-in-place-region-not-returned-v613}
 
-**Commit**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) ("mm: vmalloc: actually use the in-place vrealloc region")
-**Reporter**: Shung-Hsi Yu (SUSE)
-**Bug Report**: [lore.kernel.org](https://lore.kernel.org/all/20250515-bpf-verifier-slowdown-vwo2meju4cgp2su5ckj@6gi6ssxbnfqg)
+**コミット**: [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) ("mm: vmalloc: actually use the in-place vrealloc region")
+**報告者**: Shung-Hsi Yu（SUSE）
+**バグ報告**: [lore.kernel.org](https://lore.kernel.org/all/20250515-bpf-verifier-slowdown-vwo2meju4cgp2su5ckj@6gi6ssxbnfqg)
 
-**What happened**: The refactoring to support in-place growing only worked for shrinking. Growing allocations would do the work but then allocate a completely new region anyway.
+**何が起きたか**: インプレースでの拡大をサポートするためのリファクタリングは、縮小の場合にしか機能していなかった。拡大する割り当てでは、処理は行うものの、結局まったく新しい領域を割り当てていた。
 
-**Impact**: Performance regression in BPF verifier (heavy vrealloc user).
+**影響**: BPF検証器（verifier）（vreallocのヘビーユーザー）における性能リグレッション。
 
-**Learning**: Off-by-one-style bugs in control flow. The function did all the right work, but the return statement used the wrong variable. One-line fix, big impact.
+**教訓**: 制御フローにおけるoff-by-one的なバグ。関数は正しい処理をすべて行っていたが、return文が誤った変数を使っていた。1行の修正で大きな影響があった。
 
-### Bug: Unnecessary Zero-init on Grow (v6.13) {#bug-unnecessary-zero-init-on-grow-v613}
+### バグ: 拡大時の不要なゼロ初期化（v6.13） {#bug-unnecessary-zero-init-on-grow-v613}
 
-**Commit**: [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) ("mm: vmalloc: only zero-init on vrealloc shrink")
+**コミット**: [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) ("mm: vmalloc: only zero-init on vrealloc shrink")
 
-**What happened**: With `init_on_alloc`, the code was zeroing memory on both grow and shrink. But on grow, the new memory was already zeroed by the allocator.
+**何が起きたか**: `init_on_alloc` が有効な場合、コードは拡大時と縮小時の両方でメモリをゼロクリアしていた。しかし拡大時には、新しいメモリはアロケータによってすでにゼロクリアされていた。
 
-**Learning**: Understand when initialization has already happened upstream. Redundant zeroing is expensive at scale.
+**教訓**: 初期化が上流ですでに行われているのはいつかを理解すること。冗長なゼロクリアは大規模では高コストである。
 
-### v6.14+: Shrink Optimization {#v614-shrink-optimization}
+### v6.14+: 縮小の最適化 {#v614-shrink-optimization}
 
-**Commit**: [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) ("mm/vmalloc: free pages when vrealloc() shrinks allocation")
+**コミット**: [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) ("mm/vmalloc: free pages when vrealloc() shrinks allocation")
 
-**Problem identified**: `vrealloc()` shrinking only updated metadata but kept all pages mapped. Shrinking `256KB` to `16KB` still consumed `256KB` of physical memory.
+**特定された問題**: `vrealloc()` による縮小はメタデータを更新するだけで、すべてのpageをマップしたままにしていた。`256KB` を `16KB` に縮小しても、依然として `256KB` の物理メモリを消費していた。
 
-**The fix**:
+**修正内容**:
 
-- Unmap pages beyond new size via `vunmap_range()`
-- Free pages via `__free_page()`
-- Update memcg accounting
-- Update `nr_vmalloc_pages` counter
+- `vunmap_range()` で新しいサイズを超えるpageのマップを解除する
+- `__free_page()` でpageを解放する
+- memcgのアカウンティングを更新する
+- `nr_vmalloc_pages` カウンタを更新する
 
-**Result**: 93% memory reduction when shrinking `256KB` -> `16KB`.
+**結果**: `256KB` -> `16KB` に縮小したとき、メモリが93%削減された。
 
-## Behavior {#behavior}
+## 振る舞い {#behavior}
 
-### Shrinking {#shrinking}
+### 縮小 {#shrinking}
 
-When shrinking (size < current):
+縮小時（size < 現在のサイズ）:
 
-- Preserves data up to new size
-- Frees unused pages (since e64f42036ef4)
-- Returns same pointer (no copy)
+- 新しいサイズまでのデータを保持する
+- 使われなくなったpageを解放する（e64f42036ef4以降）
+- 同じポインタを返す（コピーなし）
 
-### Growing {#growing}
+### 拡大 {#growing}
 
-When growing (size > current):
+拡大時（size > 現在のサイズ）:
 
-- May reuse existing allocation if space allows (since a0309faf1cb0)
-- Otherwise: allocate new, copy, free old
-- Returns potentially new pointer
+- 余裕があれば既存の割り当てを再利用することがある（a0309faf1cb0以降）
+- そうでなければ: 新たに割り当て、コピーし、古いものを解放する
+- 新しいポインタを返すことがある
 
-## Design Decisions {#design-decisions}
+## 設計判断 {#design-decisions}
 
-### Why huge pages are skipped for shrink {#why-huge-pages-are-skipped-for-shrink}
+### なぜ縮小時にヒュージページはスキップされるのか {#why-huge-pages-are-skipped-for-shrink}
 
-Huge pages (order > 0) use single TLB entries covering multiple pages. Partial unmapping would require splitting the huge page, which is complex and defeats the purpose. Shrinking huge page allocations only updates metadata.
+ヒュージページ（order > 0）は、複数のpageを覆う単一のTLBエントリを使う。部分的なマップ解除にはヒュージページの分割が必要になり、これは複雑なうえ、ヒュージページを使う意味を失わせる。ヒュージページの割り当てを縮小する場合は、メタデータだけを更新する。
 
-### Why at least one page must remain {#why-at-least-one-page-must-remain}
+### なぜ少なくとも1ページは残さなければならないのか {#why-at-least-one-page-must-remain}
 
-The first page is used for memcg accounting via `mod_memcg_page_state()`. The memcg charge is associated with the first page. Freeing all pages would lose this accounting reference.
+先頭のpageは `mod_memcg_page_state()` を介したmemcgのアカウンティングに使われる。memcgのチャージは先頭のpageに関連付けられている。すべてのpageを解放すると、このアカウンティングの参照が失われる。
 
-### Why no minimum threshold for shrink {#why-no-minimum-threshold-for-shrink}
+### なぜ縮小に最小しきい値がないのか {#why-no-minimum-threshold-for-shrink}
 
-Early iterations considered requiring >= 4 pages to free before actually freeing. This was removed:
+初期の版では、実際に解放する前に、解放対象が4ページ以上あることを要件とすることが検討された。これは削除された。
 
-- Callers should control behavior, not arbitrary kernel policy
-- Any freed memory has value
-- Magic thresholds are hard to justify in review
+- 振る舞いは、恣意的なカーネルのポリシーではなく呼び出し側が制御すべきである
+- 解放されたメモリはどんな量でも価値がある
+- マジックナンバー的なしきい値はレビューで正当化しにくい
 
-## Common Pitfalls {#common-pitfalls}
+## よくある落とし穴 {#common-pitfalls}
 
-Based on bugs found in vrealloc development:
+vreallocの開発で見つかったバグに基づく:
 
-1. **KASAN annotations**: When reusing memory, update sanitizer state
-2. **Return value bugs**: After complex operations, ensure you return the right thing
-3. **Redundant initialization**: Know what upstream code already initialized
-4. **Partial operations on huge pages**: Usually not possible without splitting
+1. **KASANのアノテーション**: メモリを再利用するときは、サニタイザの状態を更新する
+2. **戻り値のバグ**: 複雑な操作の後、正しいものを返しているか確認する
+3. **冗長な初期化**: 上流のコードがすでに何を初期化したかを把握する
+4. **ヒュージページに対する部分的な操作**: 通常、分割しなければ不可能である
 
-## Testing {#testing}
+## テスト {#testing}
 
-The `test_vmalloc` module includes `vrealloc_shrink_test` (id: 4096):
+`test_vmalloc` モジュールには `vrealloc_shrink_test`（id: 4096）が含まれている。
 
 ```bash
-# Run in QEMU with virtme-ng
+# virtme-ng を使って QEMU で実行する
 virtme-ng --append 'test_vmalloc.run_test_mask=4096'
 ```
 
-## References {#references}
+## 参照 {#references}
 
-### Commits (chronological) {#commits-chronological}
-| Commit | Kernel | Description |
+### コミット（時系列順） {#commits-chronological}
+| コミット | カーネル | 説明 |
 |--------|--------|-------------|
-| [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | Initial implementation |
-| [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | Fix KASAN poisoning |
-| [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | requested_size tracking |
-| [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | Fix in-place region return |
-| [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | Fix redundant zero-init |
-| [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) | v6.14+ | Shrink optimization |
+| [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | 最初の実装 |
+| [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) | [v6.12](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.12) | KASANポイズニングの修正 |
+| [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | requested_sizeの追跡 |
+| [f7a35a3c36d1](https://git.kernel.org/linus/f7a35a3c36d1) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | インプレース領域を返す修正 |
+| [70d1eb031a68](https://git.kernel.org/linus/70d1eb031a68) | [v6.13](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tag/?h=v6.13) | 冗長なゼロ初期化の修正 |
+| [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) | v6.14+ | 縮小の最適化 |
 
-### LKML Discussions {#lkml-discussions}
-- [Original vrealloc proposal](https://lore.kernel.org/lkml/20240704170738.3621-1-dakr@redhat.com/)
-- [KASAN bug report](https://lore.kernel.org/bpf/67450f9b.050a0220.21d33d.0004.GAE@google.com/)
-- [BPF verifier slowdown](https://lore.kernel.org/all/20250515-bpf-verifier-slowdown-vwo2meju4cgp2su5ckj@6gi6ssxbnfqg)
+### LKMLでの議論 {#lkml-discussions}
+- [最初のvrealloc提案](https://lore.kernel.org/lkml/20240704170738.3621-1-dakr@redhat.com/)
+- [KASANのバグ報告](https://lore.kernel.org/bpf/67450f9b.050a0220.21d33d.0004.GAE@google.com/)
+- [BPF検証器の速度低下](https://lore.kernel.org/all/20250515-bpf-verifier-slowdown-vwo2meju4cgp2su5ckj@6gi6ssxbnfqg)
 
-### Code {#code}
-- [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) - Implementation
-- [`lib/test_vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/test_vmalloc.c) - Test module
+### コード {#code}
+- [`mm/vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) - 実装
+- [`lib/test_vmalloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/test_vmalloc.c) - テストモジュール
 
-### Related {#related}
-- [vmalloc](vmalloc.md) - Parent allocator
+### 関連 {#related}
+- [vmalloc](vmalloc.md) - 親となるアロケータ
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [vmalloc.md](vmalloc.md) — The parent allocator; covers vmap_area RBTree, lazy TLB flushing, and huge-page backing
-- [slab.md](slab.md) — `krealloc()` is the analogous resize primitive for slab/kmalloc allocations
-- [kasan.md](kasan.md) — KASAN poisoning interactions that caused the v6.12 bug fixed by [d699440f58ce](https://git.kernel.org/linus/d699440f58ce)
-- [mm/vmalloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) — `vrealloc()` implementation; search for `vrealloc` and `vm_struct::requested_size`
-- [lib/test_vmalloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/test_vmalloc.c) — `vrealloc_shrink_test` (test mask id 4096) exercises grow, shrink, and in-place reuse paths
-- [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) — Initial `vrealloc()` implementation by Danilo Krummrich in v6.12
-- [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) — Kees Cook's v6.13 addition of `vm_struct::requested_size` enabling in-place growing
-- [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) — Shrink optimization that actually frees physical pages on size reduction
+- [vmalloc.md](vmalloc.md) — 親となるアロケータ。vmap_areaのRBTree、lazy TLBフラッシュ、ヒュージページによる裏付けを扱う
+- [slab.md](slab.md) — `krealloc()` はslab/kmallocによる割り当てに対する同様のサイズ変更プリミティブである
+- [kasan.md](kasan.md) — [d699440f58ce](https://git.kernel.org/linus/d699440f58ce) で修正されたv6.12のバグの原因となった、KASANポイズニングとの相互作用
+- [mm/vmalloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/vmalloc.c) — `vrealloc()` の実装。`vrealloc` と `vm_struct::requested_size` を検索するとよい
+- [lib/test_vmalloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/test_vmalloc.c) — `vrealloc_shrink_test`（テストマスクid 4096）が拡大・縮小・インプレース再利用の各パスを検証する
+- [3ddc2fefe6f3](https://git.kernel.org/linus/3ddc2fefe6f3) — v6.12でのDanilo Krummrichによる最初の `vrealloc()` 実装
+- [a0309faf1cb0](https://git.kernel.org/linus/a0309faf1cb0) — Kees Cookによるv6.13での `vm_struct::requested_size` の追加。インプレースでの拡大を可能にした
+- [e64f42036ef4](https://git.kernel.org/linus/e64f42036ef4) — サイズ縮小時に実際に物理pageを解放する縮小最適化
