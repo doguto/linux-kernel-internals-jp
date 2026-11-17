@@ -1,14 +1,14 @@
-# RCU (Read-Copy-Update) {#rcu-read-copy-update}
+# RCU（Read-Copy-Update） {#rcu-read-copy-update}
 
-> Lock-free reads through grace periods — the highest-performance synchronization in the kernel
+> グレースピリオドによるロックフリーな読み込み。カーネルで最も高性能な同期
 
-## The core idea {#the-core-idea}
+## 基本的な考え方 {#the-core-idea}
 
-RCU was added to Linux in kernel 2.5.43 (October 2002) by Dipankar Sarma (IBM) and Paul E. McKenney — confirmed in ["What is RCU, Fundamentally?"](https://lwn.net/Articles/262464/) (McKenney & Walpole, LWN 2007): *"RCU added to the Linux kernel in October 2002."*
+RCUは、Dipankar Sarma（IBM）とPaul E. McKenneyによってカーネル2.5.43（2002年10月）でLinuxに追加された。これは["What is RCU, Fundamentally?"](https://lwn.net/Articles/262464/)（McKenney & Walpole、LWN 2007）で確認できる。*"RCU added to the Linux kernel in October 2002."*（訳: RCUは2002年10月にLinuxカーネルに追加された。）
 
-RCU solves a specific problem: how do you allow many readers to access a data structure with zero synchronization overhead, while still allowing writers to modify it safely?
+RCUは特定の問題を解決する。書き手が安全に変更できるようにしつつ、多数の読み手が同期のオーバーヘッドゼロでデータ構造にアクセスできるようにするにはどうすればよいか、という問題である。
 
-The insight: **readers never modify the data**, so they can run truly concurrently as long as the writer doesn't free the old data until all readers that could see it have finished.
+洞察は次のとおりである。**読み手はデータを決して変更しない**。したがって、古いデータを見た可能性のあるすべての読み手が終了するまで書き手が古いデータを解放しない限り、読み手は真に並行して実行できる。
 
 ```
 Writer algorithm:
@@ -26,17 +26,17 @@ Reader algorithm:
   4. Exit RCU read-side critical section
 ```
 
-The critical property: **readers pay almost nothing**. On non-preemptible kernels, `rcu_read_lock()` is literally a compiler barrier with preemption disabled — no atomic operations, no cache line bouncing.
+決定的な性質は、**読み手がほとんど何も支払わない**ことである。プリエンプト不可のカーネルでは、`rcu_read_lock()`は文字どおり、プリエンプションを無効化した状態でのコンパイラバリアにすぎない。アトミック操作もキャッシュラインのバウンスもない。
 
-## The grace period {#the-grace-period}
+## グレースピリオド {#the-grace-period}
 
-A **grace period** is the time the writer waits after publishing the new pointer before freeing the old one. A grace period ends when every CPU has passed through a **quiescent state** — a point where no RCU read-side critical section can be in progress.
+**グレースピリオド**とは、書き手が新しいポインタを公開した後、古いものを解放するまでに待つ時間である。グレースピリオドは、すべてのCPUが**静止状態**（RCU読み側クリティカルセクションが進行中ではありえない地点）を通過したときに終わる。
 
-Quiescent states include:
+静止状態には次のものがある。
 
-- Context switch (the CPU was preempted)
-- Idle (the CPU has no work)
-- User mode execution
+- コンテキストスイッチ（CPUがプリエンプトされた）
+- アイドル（CPUに仕事がない）
+- ユーザーモードでの実行
 
 ```
 CPU 0: [reader using old data]──────────────────[end read]
@@ -47,32 +47,32 @@ CPU 2:                                    [context switch]
                                                 (old data safe to free)
 ```
 
-On a non-preemptible kernel, a grace period completes when every CPU has scheduled at least once. This is why context switches are RCU quiescent states.
+プリエンプト不可のカーネルでは、すべてのCPUが少なくとも1回スケジュールを行った時点でグレースピリオドが完了する。これが、コンテキストスイッチがRCUの静止状態である理由である。
 
 ## API {#api}
 
 ```c
 #include <linux/rcupdate.h>
 
-/* Read side: enter/exit critical section */
+/* 読み側: クリティカルセクションに入る/出る */
 rcu_read_lock();
-/* Access RCU-protected data. May NOT sleep (on !PREEMPT_RCU). */
+/* RCUで保護されたデータにアクセスする。スリープしてはならない（!PREEMPT_RCUの場合）。 */
 rcu_read_unlock();
 
-/* Read a pointer protected by RCU */
+/* RCUで保護されたポインタを読む */
 struct my_data *p = rcu_dereference(rcu_ptr);
-/* rcu_dereference adds a data-dependency barrier — required! */
+/* rcu_dereferenceはデータ依存バリアを追加する — 必須！ */
 
-/* Publish a new pointer (issues memory barrier before assignment) */
+/* 新しいポインタを公開する（代入の前にメモリバリアを発行する） */
 rcu_assign_pointer(rcu_ptr, new_data);
 
-/* Wait for grace period to complete (blocking) */
+/* グレースピリオドの完了を待つ（ブロックする） */
 synchronize_rcu();
 
-/* Schedule callback for after grace period (non-blocking) */
+/* グレースピリオド後に実行するコールバックを登録する（ブロックしない） */
 call_rcu(&old_data->rcu_head, my_free_callback);
 
-/* In the callback: */
+/* コールバック内で: */
 static void my_free_callback(struct rcu_head *head)
 {
     struct my_data *data = container_of(head, struct my_data, rcu_head);
@@ -80,53 +80,53 @@ static void my_free_callback(struct rcu_head *head)
 }
 ```
 
-### Embedding rcu_head {#embedding-rcu_head}
+### rcu_headの埋め込み {#embedding-rcu_head}
 
-Any object freed via RCU must embed `struct rcu_head`:
+RCU経由で解放されるオブジェクトは、すべて`struct rcu_head`を埋め込まなければならない。
 
 ```c
 struct my_data {
     int value;
     char name[32];
-    struct rcu_head rcu;  /* for call_rcu / kfree_rcu */
+    struct rcu_head rcu;  /* call_rcu / kfree_rcu用 */
 };
 
-/* Allocate and publish */
+/* 割り当てて公開する */
 struct my_data *new_data = kmalloc(sizeof(*new_data), GFP_KERNEL);
 new_data->value = 42;
 rcu_assign_pointer(global_ptr, new_data);
 
-/* Remove and free (writer side) */
+/* 取り除いて解放する（書き手側） */
 struct my_data *old = rcu_dereference_protected(global_ptr,
                                                  lockdep_is_held(&my_lock));
 rcu_assign_pointer(global_ptr, NULL);
 synchronize_rcu();
 kfree(old);
 
-/* Or with call_rcu (async) */
+/* あるいはcall_rcuで（非同期） */
 call_rcu(&old->rcu, my_free_callback);
 ```
 
-### kfree_rcu shorthand {#kfree_rcu-shorthand}
+### kfree_rcuによる省略形 {#kfree_rcu-shorthand}
 
-For objects that just need `kfree()` after a grace period, `kfree_rcu()` is a shorthand that avoids writing a callback:
+グレースピリオド後に`kfree()`するだけでよいオブジェクトには、`kfree_rcu()`という省略形があり、コールバックを書かずに済む。
 
 ```c
-/* Instead of call_rcu + callback that calls kfree: */
-kfree_rcu(old_data, rcu);  /* 'rcu' is the rcu_head field name */
+/* call_rcu + kfreeを呼ぶコールバックの代わりに: */
+kfree_rcu(old_data, rcu);  /* 'rcu'はrcu_headフィールドの名前 */
 
-/* Zero-argument form (Linux 5.9+): no rcu_head needed */
+/* 引数なしの形式（Linux 5.9以降）: rcu_headが不要 */
 kfree_rcu(old_data);
 ```
 
-## A complete example: RCU-protected lookup table {#a-complete-example-rcu-protected-lookup-table}
+## 完全な例: RCUで保護されたルックアップテーブル {#a-complete-example-rcu-protected-lookup-table}
 
 ```c
-/* Global pointer, updated rarely */
+/* グローバルなポインタ。更新はまれ */
 static struct config __rcu *global_config;
-static DEFINE_SPINLOCK(config_lock);  /* protects writers */
+static DEFINE_SPINLOCK(config_lock);  /* 書き手を保護する */
 
-/* Reader: called frequently, must be fast */
+/* 読み手: 頻繁に呼ばれ、高速でなければならない */
 int get_timeout(void)
 {
     int timeout;
@@ -136,7 +136,7 @@ int get_timeout(void)
     return timeout;
 }
 
-/* Writer: called rarely */
+/* 書き手: まれに呼ばれる */
 int update_config(int new_timeout)
 {
     struct config *new_cfg, *old_cfg;
@@ -152,90 +152,90 @@ int update_config(int new_timeout)
     rcu_assign_pointer(global_config, new_cfg);
     spin_unlock(&config_lock);
 
-    /* Wait until no reader can see old_cfg, then free it */
+    /* どの読み手もold_cfgを見られなくなるまで待ってから解放する */
     synchronize_rcu();
     kfree(old_cfg);
     return 0;
 }
 ```
 
-## RCU-protected lists {#rcu-protected-lists}
+## RCUで保護されたリスト {#rcu-protected-lists}
 
-The kernel provides `rculist.h` for linked lists:
+カーネルは、リンクリスト用に`rculist.h`を提供している。
 
 ```c
 #include <linux/rculist.h>
 
-/* Writer: add to list (must hold list lock) */
+/* 書き手: リストに追加する（リストのロックを保持していなければならない） */
 spin_lock(&list_lock);
 list_add_rcu(&new->list, &my_list);
 spin_unlock(&list_lock);
 
-/* Writer: remove from list */
+/* 書き手: リストから削除する */
 spin_lock(&list_lock);
 list_del_rcu(&entry->list);
 spin_unlock(&list_lock);
-synchronize_rcu();  /* wait before freeing */
+synchronize_rcu();  /* 解放する前に待つ */
 kfree(entry);
 
-/* Reader: traverse list */
+/* 読み手: リストを走査する */
 rcu_read_lock();
 list_for_each_entry_rcu(entry, &my_list, list) {
-    /* use entry */
+    /* entryを使う */
 }
 rcu_read_unlock();
 ```
 
-## RCU flavors {#rcu-flavors}
+## RCUのフレーバー {#rcu-flavors}
 
-There are three main RCU flavors for different contexts:
+コンテキストに応じて、主に3つのRCUフレーバーがある。
 
-| Flavor | Read-side lock | Quiescent state | Use when |
+| フレーバー | 読み側のロック | 静止状態 | 使う場面 |
 |--------|---------------|-----------------|----------|
-| `rcu` | `rcu_read_lock()` | context switch, idle, user mode | Most kernel code |
-| `rcu_bh` | `rcu_read_lock_bh()` | any BH-disabled region | Legacy, BH context |
-| `rcu_sched` | `rcu_read_lock_sched()` | preemption-disabled region | Scheduler internals |
+| `rcu` | `rcu_read_lock()` | コンテキストスイッチ、アイドル、ユーザーモード | ほとんどのカーネルコード |
+| `rcu_bh` | `rcu_read_lock_bh()` | BHが無効な任意の領域 | レガシー、BHコンテキスト |
+| `rcu_sched` | `rcu_read_lock_sched()` | プリエンプション無効の領域 | スケジューラの内部 |
 
-Since Linux 5.0, all three are unified — `synchronize_rcu()` waits for all three simultaneously.
+Linux 5.0以降、3つはすべて統合されている。`synchronize_rcu()`は3つすべてを同時に待つ。
 
-## SRCU: sleepable RCU {#srcu-sleepable-rcu}
+## SRCU: スリープ可能なRCU {#srcu-sleepable-rcu}
 
-Standard RCU read-side critical sections cannot sleep. SRCU (Sleepable RCU) lifts this restriction at the cost of higher read-side overhead:
+標準のRCUの読み側クリティカルセクションはスリープできない。SRCU（Sleepable RCU）は、読み側のオーバーヘッドが高くなる代わりにこの制限を取り払う。
 
 ```c
 #include <linux/srcu.h>
 
-DEFINE_SRCU(my_srcu);  /* or DEFINE_STATIC_SRCU */
+DEFINE_SRCU(my_srcu);  /* またはDEFINE_STATIC_SRCU */
 
-/* Reader (may sleep) */
+/* 読み手（スリープしうる） */
 int idx = srcu_read_lock(&my_srcu);
-/* ... may call schedule() here ... */
+/* ... ここでschedule()を呼んでもよい ... */
 srcu_read_unlock(&my_srcu, idx);
 
-/* Writer */
+/* 書き手 */
 synchronize_srcu(&my_srcu);
 ```
 
-SRCU is used where readers need to sleep, such as notifier chains, filesystem operations, and BPF program invocation.
+SRCUは、notifierチェーン、ファイルシステムの操作、BPFプログラムの呼び出しなど、読み手がスリープする必要がある場面で使われる。
 
-## When to use RCU {#when-to-use-rcu}
+## RCUを使うべき場面 {#when-to-use-rcu}
 
 ```
-RCU is ideal when:
-  ✓ Reads are much more frequent than writes
-  ✓ Read-side performance is critical (no atomic ops in read path)
-  ✓ The data is accessed via pointers
-  ✓ Writers can tolerate the cost of synchronize_rcu() or call_rcu()
+RCUが理想的な場合:
+  ✓ 読み込みが書き込みよりはるかに頻繁である
+  ✓ 読み側の性能が重要である（読み込みパスにアトミック操作がない）
+  ✓ データがポインタ経由でアクセスされる
+  ✓ 書き手がsynchronize_rcu()やcall_rcu()のコストを許容できる
 
-RCU is not suited for:
-  ✗ Write-heavy workloads (synchronize_rcu is expensive)
-  ✗ Data updated in-place (not pointer-based)
-  ✗ Small per-CPU data (use per-CPU variables instead)
+RCUが向かない場合:
+  ✗ 書き込み中心のワークロード（synchronize_rcuは高コスト）
+  ✗ その場で更新されるデータ（ポインタベースでない）
+  ✗ 小さなCPUごとのデータ（代わりにper-CPU変数を使う）
 ```
 
-## Tree RCU: grace period detection mechanism {#tree-rcu-grace-period-detection-mechanism}
+## Tree RCU: グレースピリオド検出の仕組み {#tree-rcu-grace-period-detection-mechanism}
 
-`synchronize_rcu()` on a real system can't simply "wait for every CPU to context switch" — it would block the caller indefinitely on a loaded system. Tree RCU solves this with an efficient hierarchical algorithm:
+実際のシステムでは、`synchronize_rcu()`が単純に「すべてのCPUがコンテキストスイッチするのを待つ」わけにはいかない。負荷のかかったシステムでは呼び出し側を無期限にブロックしてしまうからである。Tree RCUは、効率的な階層型アルゴリズムでこれを解決する。
 
 ```
 Tree RCU node hierarchy (for 16 CPUs, FANOUT=8):
@@ -250,90 +250,90 @@ Each node tracks:
   qsmaskinit: initial value at grace period start
 ```
 
-### Grace period phases {#grace-period-phases}
+### グレースピリオドの段階 {#grace-period-phases}
 
 ```c
 /* kernel/rcu/tree.c */
 
-/* Phase 1: RCU GP kthread starts a new grace period */
+/* 段階1: RCU GP kthreadが新しいグレースピリオドを開始する */
 static void rcu_gp_init(void)
 {
-    /* Set qsmaskinit for all nodes based on online CPUs */
-    /* Bump GP sequence number, wake CPUs to report quiescent state */
+    /* オンラインのCPUに基づいて全ノードのqsmaskinitを設定する */
+    /* GPシーケンス番号を進め、静止状態を報告させるためにCPUを起こす */
 }
 
-/* Phase 2: Each CPU reports its quiescent state */
-/* On context switch: */
+/* 段階2: 各CPUが自身の静止状態を報告する */
+/* コンテキストスイッチ時: */
 void rcu_note_context_switch(bool preempt)
 {
-    /* Report quiescent state to parent node */
+    /* 親ノードに静止状態を報告する */
     rcu_qs();
 }
 
-/* Phase 3: When all bits in root qsmask are clear, GP ends */
+/* 段階3: ルートのqsmaskの全ビットがクリアされたら、GPが終わる */
 static void rcu_gp_cleanup(void)
 {
-    /* Invoke all callbacks registered via call_rcu() */
-    /* Advance the grace period sequence counter */
+    /* call_rcu()で登録されたすべてのコールバックを呼び出す */
+    /* グレースピリオドのシーケンスカウンタを進める */
     rcu_advance_cbs(rdp);
 }
 ```
 
-### Expedited grace periods {#expedited-grace-periods}
+### 緊急グレースピリオド（expedited grace period） {#expedited-grace-periods}
 
-`synchronize_rcu_expedited()` forces a fast grace period by sending IPIs to all CPUs to make them immediately report a quiescent state:
+`synchronize_rcu_expedited()`は、すべてのCPUにIPIを送って即座に静止状態を報告させることで、高速なグレースピリオドを強制する。
 
 ```c
-/* Completes in ~100µs vs ~10ms for normal GP */
+/* 通常のGPの約10msに対し、約100µsで完了する */
 synchronize_rcu_expedited();
-/* Use sparingly: IPI storm overhead, hurts real-time latency */
+/* 控えめに使うこと: IPIの嵐によるオーバーヘッドがあり、リアルタイムのレイテンシを損なう */
 
-/* The kernel automatically switches between:
-   - Normal GP: low overhead, used when no one is waiting urgently
-   - Expedited GP: after a threshold of synchronize_rcu() callers queue up */
+/* カーネルは自動的に次を切り替える:
+   - 通常のGP: 低オーバーヘッド。急いで待っている者がいないときに使われる
+   - 緊急GP: synchronize_rcu()の呼び出し側がしきい値を超えて溜まった後 */
 ```
 
-### TASKS RCU {#tasks-rcu}
+### Tasks RCU {#tasks-rcu}
 
-For "tasks" (non-atomic, can-sleep contexts), Tasks RCU tracks quiescent states differently:
+「タスク」（非アトミックでスリープ可能なコンテキスト）に対して、Tasks RCUは静止状態を別の方法で追跡する。
 
 ```c
-/* Tasks RCU: used for BPF program updates, trampoline code patching */
-synchronize_rcu_tasks();   /* wait until no task is in old trampolines */
+/* Tasks RCU: BPFプログラムの更新、トランポリンのコードパッチに使われる */
+synchronize_rcu_tasks();   /* 古いトランポリン内にいるタスクがなくなるまで待つ */
 call_rcu_tasks(&rcu_head, callback);
 
-/* Quiescent state for tasks RCU: voluntary scheduling (cond_resched) */
-/* Used by: BPF, ftrace, live patching */
+/* Tasks RCUの静止状態: 自発的なスケジューリング（cond_resched） */
+/* 使用者: BPF、ftrace、ライブパッチ */
 ```
 
-## RCU torture testing {#rcu-torture-testing}
+## RCUの拷問テスト {#rcu-torture-testing}
 
-The kernel includes an extensive RCU stress test:
+カーネルには、大規模なRCUのストレステストが含まれている。
 
 ```bash
-# Load rcutorture module to stress-test RCU:
+# RCUのストレステストのためにrcutortureモジュールをロードする:
 modprobe rcutorture
 
-# Watch results:
+# 結果を見る:
 dmesg | grep -E "rcu_torture|Readers Stall"
 # rcu_torture: Readers stall PASSED: n=0
 # rcu_torture: 0 expedited-grace-period failures
 
-# rcuscale: performance measurement (renamed from rcuperf in Linux 5.10 — 4e88ec4a9eb1)
+# rcuscale: 性能測定（Linux 5.10でrcuperfから改名 — 4e88ec4a9eb1）
 modprobe rcuscale perf_type="rcu"
 dmesg | grep "rcuscale"
 ```
 
-## RCU in the kernel: key usage sites {#rcu-in-the-kernel-key-usage-sites}
+## カーネル内のRCU: 主要な使用箇所 {#rcu-in-the-kernel-key-usage-sites}
 
 ```c
-/* Routing table lookup (hot path): */
+/* ルーティングテーブルの検索（ホットパス）: */
 rcu_read_lock();
-rt = rcu_dereference(dev->ip_ptr->rt_cache);  /* no lock needed */
-/* ... use rt ... */
+rt = rcu_dereference(dev->ip_ptr->rt_cache);  /* ロック不要 */
+/* ... rtを使う ... */
 rcu_read_unlock();
 
-/* Network interface list: */
+/* ネットワークインターフェースのリスト: */
 rcu_read_lock();
 list_for_each_entry_rcu(dev, &net->dev_base_head, dev_list) {
     if (dev->flags & IFF_UP)
@@ -341,39 +341,39 @@ list_for_each_entry_rcu(dev, &net->dev_base_head, dev_list) {
 }
 rcu_read_unlock();
 
-/* Process credentials (very hot path): */
+/* プロセスのクレデンシャル（非常にホットなパス）: */
 rcu_read_lock();
 uid = rcu_dereference(current->cred)->uid;
 rcu_read_unlock();
-/* Or the optimized helper: */
-uid = current_uid();  /* uses rcu_read_lock internally */
+/* または最適化されたヘルパ: */
+uid = current_uid();  /* 内部でrcu_read_lockを使う */
 ```
 
-## Debugging RCU {#debugging-rcu}
+## RCUのデバッグ {#debugging-rcu}
 
 ```bash
-# Check for RCU stalls (CPUs stuck in read-side critical section):
-# Kernel detects and prints: "INFO: rcu_sched detected stalls on CPUs/tasks"
+# RCUストール（読み側クリティカルセクションで止まったCPU）をチェックする:
+# カーネルは検出して次を出力する: "INFO: rcu_sched detected stalls on CPUs/tasks"
 dmesg | grep "rcu.*stall"
 
-# Lockdep checks for misuse:
-# rcu_read_lock() annotates the task; lockdep warns if you sleep
+# lockdepが誤用をチェックする:
+# rcu_read_lock()はタスクに注釈を付け、スリープするとlockdepが警告する
 
-# CONFIG_PROVE_RCU=y: enables lockdep-style RCU correctness checking
-# Warns about: rcu_dereference() outside rcu_read_lock, sleeping in read-side
+# CONFIG_PROVE_RCU=y: lockdep方式のRCU正当性チェックを有効にする
+# 警告対象: rcu_read_lockの外でのrcu_dereference()、読み側でのスリープ
 
-# rcustat BPF tool:
+# rcustat BPFツール:
 bpftrace -e '
 kprobe:synchronize_rcu { @[kstack] = count(); }' &
-# Shows who is calling synchronize_rcu (the expensive operation)
+# 誰がsynchronize_rcu（高コストな操作）を呼んでいるかを示す
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [RCU in Memory Management](../mm/rcu-mm.md) — How RCU is used in the mm subsystem
-- [Spinlock](spinlock.md) — For write-heavy short critical sections
-- [rwsem](rwlock-rwsem.md) — For sleeping reader-writer locking
-- [SRCU](srcu.md) — Sleepable RCU for contexts that need to sleep
-- `Documentation/RCU/` in the kernel tree — Paul McKenney's extensive RCU docs
-- `kernel/rcu/tree.c` — Tree RCU implementation
+- [メモリ管理におけるRCU](../mm/rcu-mm.md) — mmサブシステムでRCUがどう使われているか
+- [spinlock](spinlock.md) — 書き込み中心の短いクリティカルセクション向け
+- [rwsem](rwlock-rwsem.md) — スリープするreader-writerロック向け
+- [SRCU](srcu.md) — スリープが必要なコンテキストのためのスリープ可能なRCU
+- カーネルツリー内の`Documentation/RCU/` — Paul McKenneyによる充実したRCUのドキュメント
+- `kernel/rcu/tree.c` — Tree RCUの実装
 - `kernel/rcu/tasks.h` — Tasks RCU

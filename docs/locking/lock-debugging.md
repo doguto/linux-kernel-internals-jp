@@ -1,90 +1,90 @@
-# Lock Contention Debugging {#lock-contention-debugging}
+# ロック競合のデバッグ {#lock-contention-debugging}
 
-> Finding and fixing lock hotspots in the kernel
+> カーネル内のロックのホットスポットを見つけて修正する
 
-## Identifying the problem {#identifying-the-problem}
+## 問題の特定 {#identifying-the-problem}
 
-Lock contention manifests as CPUs burning time waiting rather than doing useful work. Symptoms:
+ロック競合は、CPUが有用な仕事をする代わりに待機に時間を費やすという形で現れる。症状:
 
-- High CPU utilization but low throughput
-- `perf top` shows `_raw_spin_lock` or `mutex_lock` near the top
-- `sar -u` shows high `%sys` with low actual work rate
-- `perf stat` shows many `lock:contention_begin` events
+- CPU使用率が高いのにスループットが低い
+- `perf top`で`_raw_spin_lock`や`mutex_lock`が上位に表示される
+- `sar -u`で`%sys`が高いのに、実際の作業量が少ない
+- `perf stat`で`lock:contention_begin`イベントが多数観測される
 
 ## /proc/lock_stat {#proclock_stat}
 
-Requires `CONFIG_LOCK_STAT=y`. Provides per-lock-class contention statistics:
+`CONFIG_LOCK_STAT=y`が必要である。ロッククラスごとの競合統計を提供する。
 
 ```bash
-# Enable lock stats collection
+# ロック統計の収集を有効化する
 echo 1 > /proc/sys/kernel/lock_stat
 
-# View stats (reset on read if you use >)
+# 統計を表示する（> を使うと読み込み時にリセットされる）
 cat /proc/lock_stat
 
-# Reset counters
+# カウンタをリセットする
 echo 0 > /proc/lock_stat
 ```
 
-Output format:
+出力形式:
 ```
 class name    con-bounces  contentions  waittime-min  waittime-max  waittime-total  acq-bounces  acquisitions  holdtime-min  holdtime-max  holdtime-total
 &rq->lock:
                    234567       234567          0.20       4567.89    12345678.90       345678      23456789          0.10        234.56    23456789.12
 ```
 
-Key columns:
+主要な列:
 
-- **contentions**: number of times a caller had to wait (lock was already held)
-- **waittime-max**: worst-case wait time (µs) — your tail latency
-- **holdtime-total**: total time the lock was held — high means long critical sections
-- **con-bounces**: contentions where the previous holder was on a different CPU (cross-CPU bouncing)
+- **contentions**: 呼び出し側が待たなければならなかった回数（ロックがすでに保持されていた）
+- **waittime-max**: 最悪ケースの待ち時間（µs）。これがテールレイテンシである
+- **holdtime-total**: ロックが保持されていた合計時間。高い場合はクリティカルセクションが長いことを意味する
+- **con-bounces**: 直前の保持者が別のCPU上にいた競合（CPU間のバウンス）
 
 ```bash
-# Find the most contended locks
+# 最も競合の激しいロックを見つける
 cat /proc/lock_stat | sort -k2 -rn | head -20
 
-# Focus on high wait times
+# 待ち時間の長いものに絞る
 awk '$5 > 1000' /proc/lock_stat  # waittime-max > 1ms
 ```
 
 ## perf lock {#perf-lock}
 
-`perf lock` traces lock events with timestamps:
+`perf lock`はロックイベントをタイムスタンプ付きでトレースする。
 
 ```bash
-# Record lock events (requires perf with lock support)
+# ロックイベントを記録する（ロックサポート付きのperfが必要）
 perf lock record -a sleep 10
 
-# Analyze: show most contended locks
+# 解析: 最も競合の激しいロックを表示する
 perf lock report
 
-# Summary view
+# 要約ビュー
 perf lock report --key acquired
 ```
 
-Output:
+出力:
 ```
                 Name   acquired  contended  avg wait (ns)  total wait (ns)
         &rq->__lock:    1234567      45678          12345      12345678901
   &mm->mmap_lock(W):      23456       1234         234567       1234567890
 ```
 
-## perf top for lock hotspots {#perf-top-for-lock-hotspots}
+## ロックのホットスポットを探すperf top {#perf-top-for-lock-hotspots}
 
 ```bash
-# Find which functions spend most time waiting on locks
+# どの関数がロック待ちに最も時間を費やしているかを見つける
 perf top -e lock:contention_begin,lock:contention_end
 
-# Profile lock acquisition overhead
+# ロック取得のオーバーヘッドをプロファイルする
 perf record -e lock:contention_begin -ag sleep 10
 perf report --stdio
 ```
 
-## bpftrace for lock analysis {#bpftrace-for-lock-analysis}
+## bpftraceによるロック解析 {#bpftrace-for-lock-analysis}
 
 ```bash
-# Track lock wait time per lock and call site
+# ロックと呼び出し箇所ごとのロック待ち時間を追跡する
 bpftrace -e '
 kprobe:mutex_lock {
     @ts[tid] = nsecs;
@@ -100,7 +100,7 @@ kretprobe:mutex_lock /@ts[tid]/ {
     delete(@caller[tid]);
 }'
 
-# Histogram of spinlock hold times
+# spinlockの保持時間のヒストグラム
 bpftrace -e '
 kprobe:_raw_spin_lock {
     @start[tid] = nsecs;
@@ -110,7 +110,7 @@ kprobe:_raw_spin_unlock /@start[tid]/ {
     delete(@start[tid]);
 }'
 
-# Find which locks have the most contention (spin loops)
+# どのロックで最も競合が多いか（スピンループ）を見つける
 bpftrace -e '
 kprobe:__pv_queued_spin_lock_slowpath {
     @[kstack] = count();
@@ -120,10 +120,10 @@ interval:s:5 {
 }'
 ```
 
-## Lockdep contention tracking {#lockdep-contention-tracking}
+## lockdepによる競合の追跡 {#lockdep-contention-tracking}
 
 ```bash
-# With CONFIG_LOCK_STAT and CONFIG_LOCKDEP, check /proc/lockdep_stats
+# CONFIG_LOCK_STATとCONFIG_LOCKDEPがあれば、/proc/lockdep_statsを確認する
 cat /proc/lockdep_stats
 # lock-classes: 2341
 # direct dependencies: 8234
@@ -132,30 +132,30 @@ cat /proc/lockdep_stats
 # softirq-safe locks:  789
 ```
 
-## ftrace: tracing specific lock points {#ftrace-tracing-specific-lock-points}
+## ftrace: 特定のロック箇所をトレースする {#ftrace-tracing-specific-lock-points}
 
 ```bash
-# Trace all mutex_lock calls with stack
+# すべてのmutex_lock呼び出しをスタック付きでトレースする
 echo mutex_lock > /sys/kernel/debug/tracing/set_ftrace_filter
 echo function_graph > /sys/kernel/debug/tracing/current_tracer
 echo 1 > /sys/kernel/debug/tracing/tracing_on
-# ... reproduce the issue ...
+# ... 問題を再現する ...
 echo 0 > /sys/kernel/debug/tracing/tracing_on
 cat /sys/kernel/debug/tracing/trace | head -100
 ```
 
-## Common lock contention patterns and fixes {#common-lock-contention-patterns-and-fixes}
+## よくあるロック競合のパターンと修正 {#common-lock-contention-patterns-and-fixes}
 
-### 1. Fine-grained locking {#1-fine-grained-locking}
+### 1. 細粒度ロック {#1-fine-grained-locking}
 
-Replace one coarse lock with many per-bucket or per-object locks:
+1つの粗いロックを、多数のバケット単位またはオブジェクト単位のロックに置き換える。
 
 ```c
-/* Before: one global lock */
+/* 変更前: グローバルなロック1つ */
 static DEFINE_SPINLOCK(hash_lock);
 static struct hlist_head hash_table[HASH_SIZE];
 
-/* After: per-bucket locks */
+/* 変更後: バケット単位のロック */
 struct hash_bucket {
     spinlock_t lock;
     struct hlist_head head;
@@ -163,73 +163,73 @@ struct hash_bucket {
 static struct hash_bucket hash_table[HASH_SIZE];
 ```
 
-The `____cacheline_aligned` attribute prevents false sharing between adjacent buckets.
+`____cacheline_aligned`属性は、隣接するバケット間のfalse sharingを防ぐ。
 
-### 2. Read-write splitting {#2-read-write-splitting}
+### 2. 読み書きの分離 {#2-read-write-splitting}
 
-If most access is read-only, use rwsem or RCU:
+アクセスの大半が読み込み専用なら、rwsemかRCUを使う。
 
 ```c
-/* Before: spinlock serializes readers and writers */
+/* 変更前: spinlockが読み手と書き手を直列化する */
 spin_lock(&config_lock);
 val = config->value;
 spin_unlock(&config_lock);
 
-/* After: RCU allows concurrent reads */
+/* 変更後: RCUにより並行読み込みが可能になる */
 rcu_read_lock();
 cfg = rcu_dereference(config);
 val = cfg->value;
 rcu_read_unlock();
 ```
 
-### 3. Per-CPU sharding {#3-per-cpu-sharding}
+### 3. per-CPUシャーディング {#3-per-cpu-sharding}
 
-For counters and stats, use per-CPU variables:
+カウンタや統計には、per-CPU変数を使う。
 
 ```c
-/* Before: atomic increment on shared counter */
+/* 変更前: 共有カウンタへのアトミックなインクリメント */
 atomic_inc(&event_count);
 
-/* After: per-CPU counter, no synchronization needed */
+/* 変更後: per-CPUカウンタ。同期は不要 */
 this_cpu_inc(event_count);
 ```
 
-### 4. Lock elision / trylock patterns {#4-lock-elision-trylock-patterns}
+### 4. ロック省略 / trylockパターン {#4-lock-elision-trylock-patterns}
 
-In some cases, falling back to a slower path avoids contention:
+場合によっては、低速パスにフォールバックすることで競合を回避できる。
 
 ```c
-/* Try to acquire, fall back to queuing work if busy */
+/* 取得を試み、ビジーなら作業をキューに入れる方式にフォールバックする */
 if (!spin_trylock(&cache_lock)) {
-    schedule_work(&cache_work);  /* retry later */
+    schedule_work(&cache_work);  /* 後でリトライする */
     return;
 }
-/* fast path */
+/* 高速パス */
 spin_unlock(&cache_lock);
 ```
 
-### 5. Batching {#5-batching}
+### 5. バッチ化 {#5-batching}
 
-Reduce lock granularity by batching multiple updates into one critical section:
+複数の更新を1つのクリティカルセクションにまとめることで、ロックの粒度を下げる。
 
 ```c
-/* Before: one lock per item */
+/* 変更前: 項目ごとに1回ロック */
 for (item in items) {
     spin_lock(&list_lock);
     list_add(&item->node, &list);
     spin_unlock(&list_lock);
 }
 
-/* After: batch */
+/* 変更後: バッチ */
 spin_lock(&list_lock);
 for (item in items)
     list_add(&item->node, &list);
 spin_unlock(&list_lock);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Lockdep](lockdep.md) — Detecting circular dependencies
-- [Spinlock](spinlock.md) — When spinlocks make sense
-- [RCU](rcu.md) — For read-heavy workloads
-- [Per-CPU variables](percpu.md) — Eliminating shared counters
+- [lockdep](lockdep.md) — 循環依存の検出
+- [spinlock](spinlock.md) — spinlockが意味を持つ場面
+- [RCU](rcu.md) — 読み込み中心のワークロード向け
+- [per-CPU変数](percpu.md) — 共有カウンタの排除

@@ -1,52 +1,52 @@
-# SRCU: Sleepable RCU {#srcu-sleepable-rcu}
+# SRCU: スリープ可能なRCU {#srcu-sleepable-rcu}
 
-> RCU for read-side critical sections that may block or sleep
+> ブロックやスリープをしうる読み側クリティカルセクションのためのRCU
 
-## The problem with classic RCU {#the-problem-with-classic-rcu}
+## 従来のRCUの問題 {#the-problem-with-classic-rcu}
 
-Classic RCU (`rcu_read_lock`) has one key constraint: **no sleeping**. The reader must stay in its critical section without blocking:
+従来のRCU（`rcu_read_lock`）には1つの重要な制約がある。**スリープしてはならない**ことである。読み手はブロックせずにクリティカルセクション内にとどまらなければならない。
 
 ```c
 rcu_read_lock();
 p = rcu_dereference(global_ptr);
-/* Must not sleep here! No mutex, no blocking I/O */
+/* ここでスリープしてはならない！ mutexもブロッキングI/Oも不可 */
 do_something(p);
 rcu_read_unlock();
 ```
 
-This rules out many use cases: VFS operations (may take a lock), I/O, memory allocation with GFP_KERNEL, or any operation that might schedule.
+これにより多くのユースケースが除外される。VFS操作（ロックを取ることがある）、I/O、GFP_KERNELでのメモリ割り当て、あるいはスケジュールしうるあらゆる操作である。
 
-**SRCU** (Sleepable RCU) allows sleeping inside the read-side critical section. The trade-off: SRCU is more expensive than classic RCU (per-CPU counters instead of quiescent state detection).
+**SRCU**（Sleepable RCU）は、読み側クリティカルセクション内でのスリープを許す。トレードオフとして、SRCUは従来のRCUより高コストである（静止状態の検出ではなくper-CPUカウンタを使う）。
 
-## SRCU usage {#srcu-usage}
+## SRCUの使い方 {#srcu-usage}
 
 ```c
 #include <linux/srcu.h>
 
-/* Declare a per-module SRCU domain */
+/* モジュールごとのSRCUドメインを宣言する */
 DEFINE_SRCU(my_srcu);
-/* Or: */
+/* または: */
 struct srcu_struct my_srcu;
-init_srcu_struct(&my_srcu);  /* dynamic initialization */
+init_srcu_struct(&my_srcu);  /* 動的初期化 */
 
-/* ---- Read side ---- */
+/* ---- 読み側 ---- */
 int idx = srcu_read_lock(&my_srcu);
-/* CAN sleep here (mutex, wait_event, etc.) */
+/* ここでスリープしてよい（mutex、wait_eventなど） */
 p = srcu_dereference(global_ptr, &my_srcu);
-mutex_lock(&p->lock);     /* ← this is fine in SRCU */
+mutex_lock(&p->lock);     /* ← SRCUではこれは問題ない */
 do_work(p);
 mutex_unlock(&p->lock);
 srcu_read_unlock(&my_srcu, idx);
 
-/* ---- Update side ---- */
+/* ---- 更新側 ---- */
 old = rcu_replace_pointer(global_ptr, new_ptr, 1);
 
-/* Wait for all current readers to complete */
-synchronize_srcu(&my_srcu);  /* may sleep (blocks) */
-/* Safe to free old */
+/* 現在のすべての読み手の完了を待つ */
+synchronize_srcu(&my_srcu);  /* スリープしうる（ブロックする） */
+/* oldを解放しても安全 */
 kfree(old);
 
-/* Asynchronous: */
+/* 非同期: */
 call_srcu(&my_srcu, &old->rcu, my_free_callback);
 ```
 
@@ -55,28 +55,28 @@ call_srcu(&my_srcu, &old->rcu, my_free_callback);
 ```c
 /* include/linux/srcu.h */
 struct srcu_struct {
-    struct srcu_node    node[NUM_RCU_NODES];  /* expedited nodes */
-    struct srcu_node   *level[RCU_NUM_LVLS + 1]; /* node levels */
-    int                 srcu_size_state;       /* size of below */
-    struct mutex        srcu_cb_mutex;         /* callback serialization */
+    struct srcu_node    node[NUM_RCU_NODES];  /* 緊急処理用ノード */
+    struct srcu_node   *level[RCU_NUM_LVLS + 1]; /* ノードの階層 */
+    int                 srcu_size_state;       /* 下記のサイズ */
+    struct mutex        srcu_cb_mutex;         /* コールバックの直列化 */
     spinlock_t          lock;
     struct mutex        srcu_gp_mutex;
-    unsigned int        srcu_idx;             /* current grace period idx */
+    unsigned int        srcu_idx;             /* 現在のグレースピリオドのidx */
     bool                srcu_gp_running;
     bool                srcu_gp_waiting;
-    struct srcu_data __percpu *sda;           /* per-CPU counters */
+    struct srcu_data __percpu *sda;           /* per-CPUカウンタ */
     struct list_head    srcu_work_list;
-    struct delayed_work work;                 /* periodic grace period check */
+    struct delayed_work work;                 /* 定期的なグレースピリオドのチェック */
     struct lockdep_map  dep_map;
-    unsigned long       srcu_gp_seq;          /* grace period sequence */
+    unsigned long       srcu_gp_seq;          /* グレースピリオドのシーケンス */
     unsigned long       srcu_gp_seq_needed;
     unsigned long       srcu_gp_seq_needed_exp;
 };
 ```
 
-### Per-CPU counters: the key difference {#per-cpu-counters-the-key-difference}
+### per-CPUカウンタ: 決定的な違い {#per-cpu-counters-the-key-difference}
 
-Classic RCU tracks quiescent states globally. SRCU uses per-CPU counters that readers increment/decrement:
+従来のRCUは静止状態をグローバルに追跡する。SRCUは、読み手がインクリメント/デクリメントするper-CPUカウンタを使う。
 
 ```c
 /* srcu_read_lock: */
@@ -89,37 +89,37 @@ srcu_read_unlock(sp, idx)
     → this_cpu_inc(sp->sda->srcu_unlock_count[idx & 1])
 ```
 
-A grace period completes when `srcu_lock_count[old_idx] == srcu_unlock_count[old_idx]` across all CPUs — meaning all readers that started before the grace period have finished.
+グレースピリオドは、全CPUにわたって`srcu_lock_count[old_idx] == srcu_unlock_count[old_idx]`となったときに完了する。これは、グレースピリオドの開始前に始まったすべての読み手が終了したことを意味する。
 
-## Expedited SRCU {#expedited-srcu}
+## 緊急SRCU（expedited SRCU） {#expedited-srcu}
 
-`synchronize_srcu_expedited()` shortens the grace period by actively polling CPUs:
+`synchronize_srcu_expedited()`は、CPUを能動的にポーリングすることでグレースピリオドを短縮する。
 
 ```c
-/* Faster than synchronize_srcu but more CPU intensive */
+/* synchronize_srcuより速いが、CPU負荷が高い */
 synchronize_srcu_expedited(&my_srcu);
 ```
 
-Use for infrequent, latency-critical updates where waiting is unacceptable.
+待つことが許容できない、まれでレイテンシが重要な更新に使う。
 
-## SRCU vs classic RCU {#srcu-vs-classic-rcu}
+## SRCUと従来のRCUの比較 {#srcu-vs-classic-rcu}
 
-| Feature | RCU | SRCU |
+| 機能 | RCU | SRCU |
 |---------|-----|------|
-| Read-side overhead | barrier (near zero) | per-CPU counter increment |
-| Sleep in read-side | No | Yes |
-| Grace period | Async, natural quiescent states | Active polling of per-CPU counters |
-| Multiple domains | One global | One per-domain (struct srcu_struct) |
-| Typical use | Lock-free data structures | VFS, notifiers, module unload |
-| `call_rcu` equivalent | Yes | `call_srcu` |
+| 読み側のオーバーヘッド | バリア（ほぼゼロ） | per-CPUカウンタのインクリメント |
+| 読み側でのスリープ | 不可 | 可 |
+| グレースピリオド | 非同期、自然な静止状態 | per-CPUカウンタの能動的なポーリング |
+| 複数ドメイン | グローバルに1つ | ドメインごとに1つ（struct srcu_struct） |
+| 典型的な用途 | ロックフリーなデータ構造 | VFS、notifier、モジュールのアンロード |
+| `call_rcu`相当 | あり | `call_srcu` |
 
-## Real-world uses of SRCU {#real-world-uses-of-srcu}
+## SRCUの実際の使用例 {#real-world-uses-of-srcu}
 
-**VFS path lookup**: The kernel uses SRCU for namespaces where locks might be needed during the read-side:
+**VFSのパス探索**: カーネルは、読み側でロックが必要になりうるnamespaceにSRCUを使っている。
 
 ```c
 /* fs/namespace.c */
-/* SRCU for mount namespace protection */
+/* マウントnamespace保護のためのSRCU */
 DEFINE_STATIC_SRCU(mount_lock);
 
 int path_mount(const char *dev_name, struct path *path, ...)
@@ -133,29 +133,29 @@ int path_mount(const char *dev_name, struct path *path, ...)
 }
 ```
 
-**Notifier chains**: Many kernel notifier chains use SRCU to allow sleeping callbacks.
+**notifierチェーン**: 多くのカーネルのnotifierチェーンは、スリープするコールバックを許すためにSRCUを使っている。
 
-**Module unload**: SRCU allows holding a reference to a module while sleeping, preventing the module from being unloaded mid-operation.
+**モジュールのアンロード**: SRCUを使うと、スリープ中もモジュールへの参照を保持でき、操作の途中でモジュールがアンロードされるのを防げる。
 
-## Observing SRCU {#observing-srcu}
+## SRCUの観測 {#observing-srcu}
 
 ```bash
-# SRCU grace period statistics
+# SRCUのグレースピリオド統計
 cat /sys/kernel/debug/rcu/rcudata
 
-# Lockdep: SRCU annotations appear in lockdep output
-# If a read-side critical section is too long:
+# lockdep: SRCUのアノテーションはlockdepの出力に現れる
+# 読み側クリティカルセクションが長すぎる場合:
 dmesg | grep "SRCU stall"
 # rcu: INFO: SRCU stall warning (5999ms)
 
-# Force an SRCU stall (for testing, requires CONFIG_RCU_STALL_COMMON)
+# SRCUストールを強制する（テスト用、CONFIG_RCU_STALL_COMMONが必要）
 # echo 1 > /sys/kernel/debug/rcu/rcu_urgent_qs
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [RCU](rcu.md) — classic RCU for non-sleeping read-side
-- [Mutex](mutex.md) — blocking mutual exclusion
-- [Completions and Wait Queues](completions.md) — blocking synchronization primitives
-- `kernel/rcu/srcutree.c` — SRCU implementation
-- `Documentation/RCU/Design/` in the kernel tree
+- [RCU](rcu.md) — スリープしない読み側のための従来のRCU
+- [mutex](mutex.md) — ブロックする相互排他
+- [completionと待ちキュー](completions.md) — ブロックする同期プリミティブ
+- `kernel/rcu/srcutree.c` — SRCUの実装
+- カーネルツリー内の`Documentation/RCU/Design/`

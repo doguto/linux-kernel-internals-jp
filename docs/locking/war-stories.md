@@ -1,49 +1,49 @@
-# War Stories: Locking and Synchronization Bugs {#war-stories-locking-and-synchronization-bugs}
+# 事件簿: ロックと同期のバグ {#war-stories-locking-and-synchronization-bugs}
 
-> Three CVEs and one origin story, all from the same corner of the kernel — rt_mutex and PI-futexes, the priority-inheritance machinery that keeps a high-priority task from starving behind a low-priority lock holder, and the three separate ways getting that machinery's bookkeeping wrong has gone badly
+> 3つのCVEと1つの起源の物語。すべてカーネルの同じ一角、つまりrt_mutexとPI-futexから来ている。これは低優先度のロック保持者の背後で高優先度タスクが飢餓状態に陥るのを防ぐ優先度継承の仕組みであり、その仕組みの帳簿管理を誤ったことで、3つの別々の形でひどい結果を招いてきた
 
-All three CVEs here live in the same subsystem — priority-inheritance futexes and the rt_mutex they're built on. Two of the three are the mirror image of each other: rt_mutex has to keep several pieces of state (a userspace futex word, `pi_state`, the mutex's own owner field) consistent across code paths that don't all touch every piece at once, and one bug left that state inconsistent after an unhandled fault while the other missed a precondition check its sibling function already had. The third CVE is a different kind of mistake entirely — a lock-discipline violation, not a state-consistency one. The fourth page isn't a bug at all: it's why any of this machinery exists.
+ここに挙げる3つのCVEはすべて同じサブシステム、すなわち優先度継承futexと、その土台となるrt_mutexに属する。3つのうち2つは互いに鏡像の関係にある。rt_mutexは複数の状態（ユーザー空間のfutexワード、`pi_state`、mutex自身のownerフィールド）を、すべてが一度にすべての状態に触れるわけではないコードパス群にまたがって一貫させておかなければならない。一方のバグは処理されないフォールトの後でその状態を不整合なまま残し、もう一方は、兄弟関数がすでに持っていた前提条件チェックを欠いていた。3つ目のCVEはまったく種類の異なる誤りで、状態の一貫性ではなくロック規律の違反である。4つ目のページはそもそもバグではなく、この仕組み全体がなぜ存在するのかを語るものである。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by when the fix (or, for the origin story, the original merge) landed in mainline — newest first.
+修正（起源の物語については元のマージ）がメインラインに入った時期の新しい順に並べている。
 
-### [The Deadlock Detector That Scheduled While Atomic](war-stories/rtmutex-deadlock-detector-atomic-sleep.md) {#the-deadlock-detector-that-scheduled-while-atomic}
-**Linux 6.11 (September 2024) · CVE-2024-46829**
-rt_mutex's own cycle detector confirmed a genuine deadlock and responded by warning and then looping forever calling `schedule()` — while still holding the raw spinlock every other waiter on the same lock needed to make progress.
+### [アトミック中にスケジュールしたデッドロック検出器](war-stories/rtmutex-deadlock-detector-atomic-sleep.md) {#the-deadlock-detector-that-scheduled-while-atomic}
+**Linux 6.11（2024年9月）· CVE-2024-46829**
+rt_mutex自身の循環検出器が本物のデッドロックを確認し、それに対して警告を出した後、`schedule()`を呼び続ける無限ループに入った。しかも、同じロックを待つ他のすべての待機者が先に進むために必要なraw spinlockを保持したままであった。
 
-### [The PI-Futex Fixup That Had No Answer for a Permanent Fault](war-stories/pi-futex-fixup-owner-uaf.md) {#the-pi-futex-fixup-that-had-no-answer-for-a-permanent-fault}
-**Linux 5.11 (February 2021) · CVE-2021-3347**
-When the kernel couldn't write a new owner's TID back into a PI futex word, it gave up without reconciling its own rt_mutex and pi_state — and a subsequent unlock on that mismatch corrupted a waiter structure still resident on another task's kernel stack.
+### [恒久的なフォールトへの答えを持たなかったPI-futexの修正処理](war-stories/pi-futex-fixup-owner-uaf.md) {#the-pi-futex-fixup-that-had-no-answer-for-a-permanent-fault}
+**Linux 5.11（2021年2月）· CVE-2021-3347**
+カーネルが新しいオーナーのTIDをPI futexワードに書き戻せなかったとき、自身のrt_mutexとpi_stateを整合させないまま諦めていた。その不整合に対する後続のアンロックが、別タスクのカーネルスタック上にまだ残っていた待機者構造体を破壊した。
 
-### [Towelroot: The Missing Check on the Requeuer's Half of the Pair](war-stories/towelroot-futex-requeue.md) {#towelroot-the-missing-check-on-the-requeuers-half-of-the-pair}
-**Linux 3.15 (June 2014) · CVE-2014-3153**
-`futex_requeue()` never checked that a PI-requeue's source and destination were different futexes — the identical check on the sibling function, added two years earlier for an unrelated crash, hadn't been enough to catch it.
+### [Towelroot: ペアの片割れ、requeue側に欠けていたチェック](war-stories/towelroot-futex-requeue.md) {#towelroot-the-missing-check-on-the-requeuers-half-of-the-pair}
+**Linux 3.15（2014年6月）· CVE-2014-3153**
+`futex_requeue()`は、PI-requeueの移動元と移動先が別々のfutexであることを一度もチェックしていなかった。兄弟関数には、2年前に無関係なクラッシュのために同一のチェックが追加されていたが、それではこれを捕まえられなかった。
 
-### [The PI-Mutex Origin Story](war-stories/pi-mutex-origin.md) {#the-pi-mutex-origin-story}
-**Linux 2.6.18 (September 2006) · not a CVE**
-A low-priority lock holder can be starved by a medium-priority task that has nothing to do with the lock at all — priority-inheritance mutexes exist because a plain mutex has no way to stop this, and it took a blunt public objection from Linus Torvalds before the kernel carried a mainline implementation anyway.
+### [PI-mutexの起源の物語](war-stories/pi-mutex-origin.md) {#the-pi-mutex-origin-story}
+**Linux 2.6.18（2006年9月）· CVEではない**
+低優先度のロック保持者は、そのロックとはまったく無関係な中優先度タスクによって飢餓状態に陥りうる。優先度継承mutexが存在するのは、普通のmutexにはこれを止める手段がないからである。そしてLinus Torvaldsによる率直な公開の異議があったにもかかわらず、カーネルは最終的にメインラインで実装を持つことになった。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | Deadlock detector | PI-futex fixup | Towelroot | PI-mutex origin |
+| パターン | デッドロック検出器 | PI-futex修正処理 | Towelroot | PI-mutexの起源 |
 |---------|:---:|:---:|:---:|:---:|
-| Involves rt_mutex/PI-futex bookkeeping specifically | Yes | Yes | Yes | Yes (defines it) |
-| Root cause: a lock held across a call that shouldn't happen while holding it | Yes | No | No | — |
-| Root cause: state left inconsistent after an unhandled failure path | No | Yes | No | — |
-| Root cause: a fix applied to one function, needed on its untouched sibling | No | No | Yes | — |
-| Years between the bug's introduction and its fix | 10 (2014→2024) | 13 (2008→2021) | ~5 (2009→2014) | — |
-| CISA KEV-listed | No | No | Yes (May 2022) | — |
-| Public exploit tool published | No | No | Yes (Towelroot) | — |
+| rt_mutex/PI-futexの帳簿管理に特有のものか | はい | はい | はい | はい（それを定義した） |
+| 根本原因: 保持中に呼ぶべきでない呼び出しをまたいでロックを保持 | はい | いいえ | いいえ | — |
+| 根本原因: 処理されない失敗パスの後で状態が不整合なまま残る | いいえ | はい | いいえ | — |
+| 根本原因: ある関数に適用された修正が、手つかずの兄弟関数にも必要だった | いいえ | いいえ | はい | — |
+| バグ混入から修正までの年数 | 10（2014→2024） | 13（2008→2021） | 約5（2009→2014） | — |
+| CISA KEVに掲載 | いいえ | いいえ | はい（2022年5月） | — |
+| 公開されたエクスプロイトツール | なし | なし | あり（Towelroot） | — |
 
-**Two of the three CVEs are the same shape of mistake, from opposite directions.** The PI-futex fixup bug is a fault-handling path that left cross-referencing state inconsistent because the "permanent failure" branch was never written. Towelroot is a missing precondition check that *had* been written — just on the wrong half of a two-function pair. Both are failures to fully generalize a fix: the 2008 retry logic generalized "the fault will eventually resolve" without a fallback; the 2012 `trinity`-driven fix generalized "check `uaddr != uaddr2`" to exactly one function instead of the pair that shared the invariant.
+**3つのCVEのうち2つは、逆方向から来た同じ形の誤りである。** PI-futex修正処理のバグは、「恒久的な失敗」の分岐が書かれなかったために、相互参照する状態を不整合なまま残したフォールト処理パスである。Towelrootは、*書かれてはいた*前提条件チェックの欠落であり、ただ2関数ペアの間違ったほうに書かれていた。どちらも修正を完全に一般化できなかった失敗である。2008年のリトライロジックは「フォールトはいずれ解消する」という前提を代替策なしに一般化し、2012年の`trinity`起因の修正は「`uaddr != uaddr2`をチェックする」ことを、不変条件を共有するペアではなく、ちょうど1つの関数にだけ一般化した。
 
-**The deadlock-detector bug is the odd one out: a lock-discipline violation in error-handling code, not a state-consistency bug.** Unlike the other two, nothing about *what* the code was tracking was wrong — the mistake was scheduling with a spinlock held, in a branch whose entire job was to report that no further progress was possible. It's also the only one of the three not tied to PI-futexes at all: `CONFIG_DEBUG_RT_MUTEXES=y` kernels can hit it through any rt_mutex, not just the futex path.
+**デッドロック検出器のバグは異質で、状態の一貫性のバグではなく、エラー処理コードにおけるロック規律の違反である。** 他の2つと異なり、コードが*何を*追跡していたかについては何も間違っていなかった。誤りはspinlockを保持したままスケジュールしたことであり、それもこれ以上先に進めないことを報告するのが唯一の役目である分岐の中でのことだった。また、3つの中でPI-futexにまったく結びついていない唯一のものでもある。`CONFIG_DEBUG_RT_MUTEXES=y`のカーネルでは、futexパスに限らず、任意のrt_mutexを通じてこれに当たりうる。
 
-**None of the three CVEs here have a public exploit tool except Towelroot — and Towelroot's is one of the most consequential local root exploits the kernel has ever shipped.** Read alongside [the origin story](war-stories/pi-mutex-origin.md), there's a certain irony: the mechanism Torvalds worried was "your system is broken anyway" territory became, about eight years later, the exact subsystem whose bookkeeping mistakes produced the highest-impact bug on this page.
+**ここにある3つのCVEのうち、公開されたエクスプロイトツールがあるのはTowelrootだけである。そしてTowelrootのそれは、カーネル史上最も影響の大きいローカルroot取得エクスプロイトの1つである。** [起源の物語](war-stories/pi-mutex-origin.md)と並べて読むと、ある種の皮肉がある。Torvaldsが「どのみちシステムは壊れている」領域だと懸念した仕組みが、約8年後には、まさにその帳簿管理の誤りによってこのページで最も影響の大きいバグを生んだサブシステムとなったのである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Locking Overview](README.md) — spinlocks, mutexes, rt_mutex, and RCU
-- [VFS War Stories](../vfs/war-stories.md) — a comparable set of local-privilege CVEs from a different subsystem, useful for contrasting root-cause shapes
-- [GPU/DRM War Stories](../drm/war-stories.md) — reliability-only incidents (no CVEs) from a different kind of shared kernel-internal scheduling problem
+- [ロックの概要](README.md) — spinlock、mutex、rt_mutex、RCU
+- [VFSの事件簿](../vfs/war-stories.md) — 別のサブシステムにおける、ローカル権限昇格CVEの同等の集まり。根本原因の形を対比するのに役立つ
+- [GPU/DRMの事件簿](../drm/war-stories.md) — 別種のカーネル内部の共有スケジューリング問題から来た、信頼性のみのインシデント（CVEなし）

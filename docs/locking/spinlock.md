@@ -1,103 +1,103 @@
-# Spinlock and raw_spinlock {#spinlock-and-raw_spinlock}
+# spinlockとraw_spinlock {#spinlock-and-raw_spinlock}
 
-> Busy-wait locks that don't sleep — the foundation of kernel synchronization
+> スリープしないビジーウェイト型のロック。カーネルの同期の土台
 
-## What is a spinlock? {#what-is-a-spinlock}
+## spinlockとは何か {#what-is-a-spinlock}
 
-A spinlock is a lock that a thread holds by spinning in a tight loop until the lock becomes available. Unlike a mutex, it never puts the thread to sleep. This makes spinlocks usable in contexts where sleeping is forbidden — interrupt handlers, NMI handlers, and anywhere `in_interrupt()` is true.
+spinlockは、ロックが利用可能になるまでスレッドがタイトなループでスピンすることで保持するロックである。mutexと異なり、スレッドをスリープさせることは決してない。そのため、スリープが禁止されているコンテキスト、つまり割り込みハンドラ、NMIハンドラ、および`in_interrupt()`が真となるあらゆる場所でspinlockを使える。
 
-The cost: spinning wastes CPU cycles. Spinlocks should only protect very short critical sections (typically microseconds, not milliseconds).
+代償として、スピンはCPUサイクルを浪費する。spinlockは非常に短いクリティカルセクション（通常はミリ秒ではなくマイクロ秒単位）だけを保護すべきである。
 
-## Two spinlock types {#two-spinlock-types}
+## 2種類のspinlock {#two-spinlock-types}
 
-The kernel has two types that look similar but behave differently on PREEMPT_RT kernels:
+カーネルには、見た目は似ているがPREEMPT_RTカーネルでは異なる振る舞いをする2つの型がある。
 
 ```c
 /* include/linux/spinlock_types.h */
 
-/* Non-RT kernels: spinlock_t wraps raw_spinlock_t */
+/* 非RTカーネル: spinlock_tはraw_spinlock_tをラップする */
 typedef struct spinlock {
     union {
         struct raw_spinlock rlock;
     };
 } spinlock_t;
 
-/* raw_spinlock_t: always a real spinlock, never converted */
+/* raw_spinlock_t: 常に本物のspinlockで、変換されることはない */
 typedef struct raw_spinlock {
-    arch_spinlock_t raw_lock;   /* arch-specific, e.g. queued spinlock */
+    arch_spinlock_t raw_lock;   /* アーキテクチャ固有。例: queued spinlock */
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
     struct lockdep_map dep_map;
 #endif
 } raw_spinlock_t;
 ```
 
-On a standard kernel (non-RT), `spinlock_t` and `raw_spinlock_t` behave identically.
+標準のカーネル（非RT）では、`spinlock_t`と`raw_spinlock_t`は同一の振る舞いをする。
 
-On a PREEMPT_RT kernel, `spinlock_t` becomes a sleeping lock (backed by `rt_mutex`) so that RT tasks can preempt the lock holder. `raw_spinlock_t` remains a true spinlock even on RT.
+PREEMPT_RTカーネルでは、RTタスクがロック保持者をプリエンプトできるように、`spinlock_t`はスリープするロック（`rt_mutex`が裏付け）になる。`raw_spinlock_t`はRTでも本物のspinlockのままである。
 
-**Rule**: use `spinlock_t` for most code. Use `raw_spinlock_t` only when you need a true spinlock even on RT kernels (e.g., the scheduler's runqueue lock, which cannot sleep because the scheduler itself is how sleeping works).
+**ルール**: ほとんどのコードでは`spinlock_t`を使う。RTカーネルでも本物のspinlockが必要な場合に限り`raw_spinlock_t`を使う（例: スケジューラのランキューロック。スリープの仕組みそのものがスケジューラなので、これはスリープできない）。
 
-## Basic API {#basic-api}
+## 基本API {#basic-api}
 
 ```c
 #include <linux/spinlock.h>
 
-/* Static initialization */
+/* 静的初期化 */
 DEFINE_SPINLOCK(my_lock);
 
-/* Dynamic initialization */
+/* 動的初期化 */
 spinlock_t my_lock;
 spin_lock_init(&my_lock);
 
-/* Lock / unlock (process context, preemption disabled) */
+/* ロック / アンロック（プロセスコンテキスト、プリエンプション無効） */
 spin_lock(&my_lock);
-/* critical section */
+/* クリティカルセクション */
 spin_unlock(&my_lock);
 
-/* Lock/unlock + disable local interrupts */
+/* ロック/アンロック + ローカル割り込みの無効化 */
 unsigned long flags;
 spin_lock_irqsave(&my_lock, flags);
-/* critical section — safe even if called from process context
-   where IRQ handler might also take this lock */
+/* クリティカルセクション — IRQハンドラもこのロックを取りうる
+   プロセスコンテキストから呼ばれても安全 */
 spin_unlock_irqrestore(&my_lock, flags);
 
-/* Lock/unlock + disable only softirqs (bottom halves) */
+/* ロック/アンロック + softirq（ボトムハーフ）のみ無効化 */
 spin_lock_bh(&my_lock);
 spin_unlock_bh(&my_lock);
 
-/* Non-blocking trylock (returns 1 on success, 0 on failure) */
+/* ブロックしないtrylock（成功で1、失敗で0を返す） */
 if (spin_trylock(&my_lock)) {
-    /* got the lock */
+    /* ロックを取得できた */
     spin_unlock(&my_lock);
 }
 ```
 
-## When to use irqsave vs plain spin_lock {#when-to-use-irqsave-vs-plain-spin_lock}
+## irqsaveと素のspin_lockの使い分け {#when-to-use-irqsave-vs-plain-spin_lock}
 
-The rule: you need `spin_lock_irqsave()` if the same lock is acquired from both process context and an interrupt handler.
+ルール: 同じロックがプロセスコンテキストと割り込みハンドラの両方から取得されるなら、`spin_lock_irqsave()`が必要である。
 
 ```c
-/* WRONG: process context takes lock, then IRQ fires and also
-   tries to take the same lock → deadlock */
+/* 誤り: プロセスコンテキストがロックを取った後、IRQが発生して
+   同じロックを取ろうとする → デッドロック */
 static spinlock_t counter_lock;
 static int counter;
 
-void update_counter(void)       /* process context */
+void update_counter(void)       /* プロセスコンテキスト */
 {
-    spin_lock(&counter_lock);   /* takes lock */
+    spin_lock(&counter_lock);   /* ロックを取る */
     counter++;
-    spin_unlock(&counter_lock); /* releases lock */
+    spin_unlock(&counter_lock); /* ロックを解放する */
 }
 
 irqreturn_t my_irq_handler(int irq, void *data)
 {
-    spin_lock(&counter_lock);   /* DEADLOCK: IRQ fires while process holds lock */
+    spin_lock(&counter_lock);   /* デッドロック: プロセスがロックを保持中にIRQが発生 */
     counter++;
     spin_unlock(&counter_lock);
     return IRQ_HANDLED;
 }
 
-/* CORRECT: disable IRQs while holding the lock */
+/* 正しい: ロック保持中はIRQを無効化する */
 void update_counter(void)
 {
     unsigned long flags;
@@ -107,11 +107,11 @@ void update_counter(void)
 }
 ```
 
-If the lock is only used within a single IRQ handler (or only in process context where IRQs are already off), plain `spin_lock()` is sufficient.
+ロックが単一のIRQハンドラ内でのみ使われる場合（あるいは、すでにIRQがオフになっているプロセスコンテキストでのみ使われる場合）は、素の`spin_lock()`で十分である。
 
-## How it works: queued spinlocks {#how-it-works-queued-spinlocks}
+## 仕組み: queued spinlock {#how-it-works-queued-spinlocks}
 
-Modern x86 uses **queued spinlocks** (MCS-based, introduced in Linux 4.2 by Waiman Long — [`a33fda35e3a7`](https://git.kernel.org/linus/a33fda35e3a7655fb7df756ed67822afb5ed5e8d), [LWN](https://lwn.net/Articles/590243/)). Instead of all waiters spinning on the same variable (causing cache line bouncing), each CPU spins on its own per-CPU node:
+現代のx86は**queued spinlock**を使う（MCSベースで、Waiman LongによってLinux 4.2で導入された。[`a33fda35e3a7`](https://git.kernel.org/linus/a33fda35e3a7655fb7df756ed67822afb5ed5e8d)、[LWN](https://lwn.net/Articles/590243/)）。すべての待機者が同じ変数上でスピンする（キャッシュラインのバウンスを引き起こす）代わりに、各CPUは自分専用のper-CPUノード上でスピンする。
 
 ```
 Lock structure:
@@ -131,11 +131,11 @@ MCS queue node (per-CPU):
          No cache line bouncing.
 ```
 
-When a CPU acquires the lock it clears `locked` in the next CPU's node, causing only that waiter to stop spinning. This scales to hundreds of CPUs.
+CPUがロックを取得すると、次のCPUのノードの`locked`をクリアし、その待機者だけがスピンをやめる。これは数百個のCPUまでスケールする。
 
-## raw_spinlock API {#raw_spinlock-api}
+## raw_spinlockのAPI {#raw_spinlock-api}
 
-`raw_spinlock_t` uses the same naming convention but with `raw_` prefix:
+`raw_spinlock_t`は同じ命名規則に`raw_`接頭辞を付けたものを使う。
 
 ```c
 raw_spinlock_t raw_lock = __RAW_SPIN_LOCK_UNLOCKED(raw_lock);
@@ -146,17 +146,17 @@ raw_spin_unlock(&raw_lock);
 raw_spin_lock_irqsave(&raw_lock, flags);
 raw_spin_unlock_irqrestore(&raw_lock, flags);
 
-raw_spin_trylock(&raw_lock);       /* returns 1 on success */
+raw_spin_trylock(&raw_lock);       /* 成功で1を返す */
 ```
 
-## Debugging: lockdep catches misuse {#debugging-lockdep-catches-misuse}
+## デバッグ: lockdepが誤用を捕まえる {#debugging-lockdep-catches-misuse}
 
-With `CONFIG_DEBUG_SPINLOCK` and `CONFIG_LOCKDEP`, the kernel detects:
+`CONFIG_DEBUG_SPINLOCK`と`CONFIG_LOCKDEP`があれば、カーネルは次を検出する。
 
-- Double-locking (taking a lock you already hold)
-- Lock ordering violations (potential deadlocks between lock classes)
-- Sleeping while holding a spinlock
-- Taking a lock in hardirq context that is also taken in process context without irq-disable
+- 二重ロック（すでに保持しているロックを取る）
+- ロック順序の違反（ロッククラス間の潜在的なデッドロック）
+- spinlockを保持したままのスリープ
+- プロセスコンテキストでIRQを無効化せずに取られているロックを、hardirqコンテキストでも取る
 
 ```
 BUG: spinlock already locked on CPU#1
@@ -164,35 +164,35 @@ spin_lock() at include/linux/spinlock.h:186
 ...
 ```
 
-See [Lockdep](lockdep.md) for full details.
+詳細は[lockdep](lockdep.md)を参照のこと。
 
-## Common mistakes {#common-mistakes}
+## よくある誤り {#common-mistakes}
 
 ```c
-/* DON'T: hold a spinlock across sleeping calls */
+/* してはならない: スリープする呼び出しをまたいでspinlockを保持する */
 spin_lock(&lock);
-kmalloc(size, GFP_KERNEL);  /* may sleep — BUG */
+kmalloc(size, GFP_KERNEL);  /* スリープしうる — バグ */
 spin_unlock(&lock);
 
-/* DO: use GFP_ATOMIC when holding a spinlock */
+/* するべき: spinlock保持中はGFP_ATOMICを使う */
 spin_lock(&lock);
-kmalloc(size, GFP_ATOMIC);  /* never sleeps */
+kmalloc(size, GFP_ATOMIC);  /* 決してスリープしない */
 spin_unlock(&lock);
 
-/* DON'T: call spin_lock twice on the same lock (no recursion) */
+/* してはならない: 同じロックに対してspin_lockを2回呼ぶ（再帰不可） */
 spin_lock(&lock);
-spin_lock(&lock);  /* DEADLOCK */
+spin_lock(&lock);  /* デッドロック */
 
-/* DON'T: exit function without unlocking */
+/* してはならない: アンロックせずに関数を抜ける */
 spin_lock(&lock);
 if (error)
-    return -EINVAL;  /* leaked lock! */
+    return -EINVAL;  /* ロックがリークする！ */
 spin_unlock(&lock);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Mutex and rt_mutex](mutex.md) — When you can afford to sleep
-- [Lockdep](lockdep.md) — How the kernel validates lock usage
-- [Atomic operations and memory barriers](atomics.md) — What spinlocks are built on
-- `Documentation/locking/spinlocks.rst` in the kernel tree
+- [mutexとrt_mutex](mutex.md) — スリープしても構わない場合
+- [lockdep](lockdep.md) — カーネルがロックの使い方をどう検証するか
+- [アトミック操作とメモリバリア](atomics.md) — spinlockの土台
+- カーネルツリー内の`Documentation/locking/spinlocks.rst`

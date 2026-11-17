@@ -1,43 +1,43 @@
-# Locking and Synchronization {#locking-and-synchronization}
+# ロックと同期 {#locking-and-synchronization}
 
-> How the Linux kernel serializes concurrent access to shared data
+> Linuxカーネルが共有データへの並行アクセスをどのように直列化するか
 
-## Why locking matters {#why-locking-matters}
+## なぜロックが重要か {#why-locking-matters}
 
-Linux runs on systems with hundreds of CPUs, all sharing kernel data structures. Without synchronization, two CPUs could simultaneously modify a linked list — corrupting its pointers, losing entries, or looping forever. Locking prevents this.
+Linuxは数百個のCPUを持つシステム上で動作し、それらのCPUはすべてカーネルのデータ構造を共有している。同期がなければ、2つのCPUが同時にリンクリストを変更し、ポインタを破壊したり、エントリを失ったり、無限ループに陥ったりしうる。ロックはこれを防ぐ。
 
-The kernel provides a rich set of primitives, each with different performance characteristics and usage contexts:
+カーネルは豊富なプリミティブを提供しており、それぞれ性能特性と使用コンテキストが異なる。
 
-| Primitive | Sleeps? | IRQ-safe? | Use when |
+| プリミティブ | スリープするか | IRQセーフか | 使う場面 |
 |-----------|---------|-----------|----------|
-| `raw_spinlock_t` | No | Yes | Must not sleep, IRQ context |
-| `spinlock_t` | No (RT: yes) | No | Process context, short critical sections |
-| `mutex_t` | Yes | No | Process context, longer critical sections |
-| `rw_semaphore` | Yes | No | Many readers, few writers |
-| `rwlock_t` | No | Yes | Many readers, IRQ context |
-| RCU | No (readers) | Yes (readers) | Read-heavy, pointer-based data |
-| `seqlock_t` | No | Yes | Small data, writers must not starve |
+| `raw_spinlock_t` | しない | はい | スリープしてはならない、IRQコンテキスト |
+| `spinlock_t` | しない（RTではする） | いいえ | プロセスコンテキスト、短いクリティカルセクション |
+| `mutex_t` | する | いいえ | プロセスコンテキスト、長めのクリティカルセクション |
+| `rw_semaphore` | する | いいえ | 読み手が多く書き手が少ない |
+| `rwlock_t` | しない | はい | 読み手が多い、IRQコンテキスト |
+| RCU | しない（読み手） | はい（読み手） | 読み込み中心、ポインタベースのデータ |
+| `seqlock_t` | しない | はい | 小さなデータ、書き手を飢餓状態にしてはならない |
 
-## Contents {#contents}
+## 目次 {#contents}
 
-### Fundamentals {#fundamentals}
-- [Spinlock and raw_spinlock](spinlock.md) — The atomic building block
-- [Mutex and rt_mutex](mutex.md) — Sleeping locks for process context
-- [rwlock and rwsem](rwlock-rwsem.md) — Reader-writer locking
-- [RCU (Read-Copy-Update)](rcu.md) — Lock-free reads via grace periods
-- [Seqlock](seqlock.md) — Sequence counters for small frequently-read data
+### 基礎 {#fundamentals}
+- [spinlockとraw_spinlock](spinlock.md) — アトミックな基本構成要素
+- [mutexとrt_mutex](mutex.md) — プロセスコンテキスト用のスリープするロック
+- [rwlockとrwsem](rwlock-rwsem.md) — reader-writerロック
+- [RCU（Read-Copy-Update）](rcu.md) — グレースピリオドによるロックフリーな読み込み
+- [seqlock](seqlock.md) — 頻繁に読まれる小さなデータのためのシーケンスカウンタ
 
-### Advanced {#advanced}
-- [Atomic operations and memory barriers](atomics.md) — The primitives beneath the primitives
-- [Per-CPU variables](percpu.md) — Eliminating shared state entirely
-- [Lockdep](lockdep.md) — The kernel's lock validator
-- [Lock contention debugging](lock-debugging.md) — Diagnosing lock hotspots
-- [Futex internals](futex.md) — How userspace locking works
+### 応用 {#advanced}
+- [アトミック操作とメモリバリア](atomics.md) — プリミティブの下にあるプリミティブ
+- [per-CPU変数](percpu.md) — 共有状態そのものを排除する
+- [lockdep](lockdep.md) — カーネルのロック検証器
+- [ロック競合のデバッグ](lock-debugging.md) — ロックのホットスポットを診断する
+- [futexの内部](futex.md) — ユーザー空間のロックがどう動くか
 
-### War stories {#war-stories}
-- [War Stories](war-stories.md) — three CVEs and one origin story from rt_mutex and PI-futexes
+### 事件簿 {#war-stories}
+- [事件簿](war-stories.md) — rt_mutexとPI-futexにまつわる3つのCVEと1つの起源の物語
 
-## The hierarchy: what can nest inside what {#the-hierarchy-what-can-nest-inside-what}
+## 階層: 何の内側に何をネストできるか {#the-hierarchy-what-can-nest-inside-what}
 
 ```
 Hardware interrupts (NMI)
@@ -50,4 +50,4 @@ Process context (preemptible)
     └── can use: everything, including mutex, semaphore, RCU
 ```
 
-Never call a sleeping lock from interrupt context — the kernel will warn or deadlock.
+割り込みコンテキストからスリープするロックを呼んではならない。カーネルは警告を出すか、デッドロックする。

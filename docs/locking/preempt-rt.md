@@ -1,63 +1,63 @@
-# PREEMPT_RT: Twenty Years to Mainline {#preempt_rt-twenty-years-to-mainline}
+# PREEMPT_RT: メインラインまでの20年 {#preempt_rt-twenty-years-to-mainline}
 
-> A patch set that started in 2004, took two decades, and finally became a fully mainline kernel option in Linux 6.12 — because of one specific, long-identified blocker finally being resolved
+> 2004年に始まり、20年を要して、ついにLinux 6.12で完全なメインラインのカーネルオプションとなったパッチセット。その理由は、長らく特定されていたある1つの障害がついに解消されたことにある
 
-## The short version {#the-short-version}
+## 概要 {#the-short-version}
 
-`CONFIG_PREEMPT_RT` turns Linux into a kernel that aims for a bounded **worst-case response time**, not just good average-case performance — see the [Real-Time Linux Tuning Guide](../sched/rt-tuning.md#what-real-time-means-on-linux) for what that bound actually looks like in measured latency numbers. It does this by replacing spinlocks with preemptible, priority-inheriting `rt_mutex`es (see [Mutex and rt_mutex](mutex.md#rt_mutex-priority-inheritance-mutex)), forcing interrupt handlers to run as preemptible threads, and breaking up the few remaining long non-preemptible sections in the kernel. The mechanism itself has been mature and in-tree, in pieces, for years. What changed in kernel **6.12** (released November 2024) is narrower and more interesting than "PREEMPT_RT finally works": it's the story of one specific, long-identified blocker — `printk()` — finally being resolved, which is what let the option actually be turned on for the first time on real architectures.
+`CONFIG_PREEMPT_RT`は、Linuxを、平均的なケースで良好な性能を出すだけでなく、上限のある**最悪ケースの応答時間**を目指すカーネルに変える。その上限が実測レイテンシの数値でどのようなものかは、[リアルタイムLinuxチューニングガイド](../sched/rt-tuning.md#what-real-time-means-on-linux)を参照のこと。これは、spinlockをプリエンプト可能で優先度継承を行う`rt_mutex`に置き換え（[mutexとrt_mutex](mutex.md#rt_mutex-priority-inheritance-mutex)を参照）、割り込みハンドラをプリエンプト可能なスレッドとして実行させ、カーネルに残るわずかな長いプリエンプト不可区間を分割することで実現される。この仕組み自体は何年も前から成熟しており、部分的にはツリー内に存在していた。カーネル**6.12**（2024年11月リリース）で変わったのは、「PREEMPT_RTがついに動くようになった」よりも範囲が狭く、そしてより興味深いことである。それは、長らく特定されていたある1つの障害、`printk()`がついに解消された話であり、これによって初めて実際のアーキテクチャでこのオプションを有効にできるようになった。
 
-## The twenty-year timeline {#the-twenty-year-timeline}
+## 20年の年表 {#the-twenty-year-timeline}
 
-The project's age is not a rhetorical exaggeration. Kernel developer Sebastian Andrzej Siewior posted the patch series that finally enabled `PREEMPT_RT` in mainline on 6 September 2024, and LWN's coverage of that posting opens with the line: ["Work on realtime preemption for the Linux kernel got its start almost exactly 20 years ago (though it had its roots in earlier work, of course)"](https://lwn.net/Articles/989212/) — dating the project to roughly 2004.
+プロジェクトの年齢は誇張ではない。カーネル開発者のSebastian Andrzej Siewiorは、メインラインで`PREEMPT_RT`をついに有効にするパッチシリーズを2024年9月6日に投稿した。その投稿に関するLWNの記事は、次の一文で始まる。["Work on realtime preemption for the Linux kernel got its start almost exactly 20 years ago (though it had its roots in earlier work, of course)"](https://lwn.net/Articles/989212/)（訳: Linuxカーネルのリアルタイムプリエンプションの作業は、ほぼちょうど20年前に始まった（もちろん、その根はさらに以前の作業にあるが））。これにより、プロジェクトの始まりはおよそ2004年となる。
 
-The intervening years are documented in real time on LWN. A [2009 interview with Thomas Gleixner and Ingo Molnar](https://lwn.net/Articles/319544/) — by then already years into the effort — opens by noting that progress on mainlining the realtime work "has slowed" for "the last year or so" before the pair resurfaced with "a new realtime preemption tree and a newly reinvigorated development effort," with Gleixner explaining the delay as time spent getting the unified x86 architecture into shape first. Both Gleixner and Siewior are, and were, engineers at **Linutronix**, the real-time Linux consultancy that has employed much of the PREEMPT_RT core team for most of the project's life — the `linutronix.de` addresses are visible directly on the 2024 patch postings.
+その間の年月は、LWNによってリアルタイムに記録されている。[2009年のThomas GleixnerとIngo Molnarへのインタビュー](https://lwn.net/Articles/319544/)は、その時点ですでに取り組み開始から何年も経っていたが、リアルタイム作業のメインライン化の進捗が「ここ1年ほど」「鈍化していた」ことに触れるところから始まる。その後2人は「新しいリアルタイムプリエンプションツリーと、新たに活性化した開発の取り組み」を携えて再び姿を現し、Gleixnerは遅れの理由を、先にx86アーキテクチャの統合を整えることに時間を費やしていたためだと説明している。GleixnerとSiewiorはいずれも、当時も今も**Linutronix**のエンジニアである。LinutronixはリアルタイムLinuxのコンサルティング企業で、プロジェクトの歴史の大部分を通じてPREEMPT_RTのコアチームの多くを雇用してきた。2024年のパッチ投稿には`linutronix.de`のアドレスがそのまま見える。
 
-Much of the RT patch set didn't wait for a single "merge PREEMPT_RT" event to reach mainline. Pieces of it landed piecemeal over the two decades: threaded interrupt handlers, generic `rt_mutex` infrastructure (see the [PI-Mutex Origin Story](war-stories/pi-mutex-origin.md) for a specific historical incident from that work), and priority inheritance for futexes among them. By the time of the 2024 merge, the RT patch set as a *downstream tree* had been usable enough that vendors were already shipping products and distributions on top of it — the LWN comment thread on the 2024 announcement includes a user reporting about six years of using PREEMPT_RT at work on ARM boards. What remained out-of-tree was a shrinking, but stubborn, set of blockers that prevented the full configuration from being *enabled in mainline itself*.
+RTパッチセットの多くは、「PREEMPT_RTをマージする」という単一のイベントを待たずにメインラインに到達した。その一部は20年の間に少しずつ入っていった。スレッド化された割り込みハンドラ、汎用の`rt_mutex`基盤（その作業から生まれた具体的な歴史上のインシデントについては[PI-mutexの起源の物語](war-stories/pi-mutex-origin.md)を参照）、futexの優先度継承などがそれにあたる。2024年のマージの時点では、*ダウンストリームのツリー*としてのRTパッチセットは十分に実用的になっており、ベンダーはすでにその上で製品やディストリビューションを出荷していた。2024年の発表に対するLWNのコメントスレッドには、職場のARMボードでPREEMPT_RTを約6年使ってきたと報告するユーザーもいる。ツリー外に残っていたのは、縮小しつつも頑固な障害の集まりであり、それが*メインライン自体で*完全な構成を有効にすることを妨げていた。
 
-## The last blocker: printk {#the-last-blocker-printk}
+## 最後の障害: printk {#the-last-blocker-printk}
 
-Siewior's own words, from the patch cover letter posted to the kernel mailing list, are direct about what had been holding things up: ["The printk bits required for PREEMPT_RT are sitting in linux-next. This was the last known roadblock for PREEMPT_RT"](https://lwn.net/Articles/989211/).
+カーネルメーリングリストに投稿されたパッチのカバーレターにあるSiewior自身の言葉は、何が足止めしていたかについて率直である。["The printk bits required for PREEMPT_RT are sitting in linux-next. This was the last known roadblock for PREEMPT_RT"](https://lwn.net/Articles/989211/)（訳: PREEMPT_RTに必要なprintkの部分はlinux-nextに入っている。これがPREEMPT_RTにとって既知の最後の障害だった）。
 
-The problem printk posed was structural, not incidental, and it had been identified as the blocker for a long time before it was fixed: LWN's report on a printk discussion at the 2022 Linux Plumbers Conference states plainly that "printk() represents the last piece needing changes before the RT_PREEMPT patches can be fully merged" — two years before that actually happened ([LWN](https://lwn.net/Articles/909980/)). Realtime preemption's whole premise is that no code path — including one triggered by an emergency, like a kernel panic trying to print a backtrace — should be able to block a high-priority task indefinitely. But `printk()` had historically done exactly that: any CPU could take a single global console lock and spend unbounded time emitting output, including from contexts where RT's rules say nothing should be allowed to run long or sleep.
+printkが引き起こした問題は偶発的なものではなく構造的なものであり、修正されるずっと前から障害として特定されていた。2022年のLinux Plumbers Conferenceでのprintkの議論に関するLWNの記事は、「printk()は、RT_PREEMPTパッチが完全にマージされる前に変更が必要な最後のピースである」とはっきり述べている。それは実際にそうなる2年前のことである（[LWN](https://lwn.net/Articles/909980/)）。リアルタイムプリエンプションの前提そのものは、どのコードパスも、カーネルパニックがバックトレースを出力しようとする場合のような緊急時に起動されるパスでさえも、高優先度タスクを無期限にブロックできてはならないということである。しかし`printk()`は歴史的にまさにそれを行っていた。任意のCPUが単一のグローバルなコンソールロックを取り、上限のない時間をかけて出力を行うことができた。その中には、RTのルールでは何も長時間実行したりスリープしたりしてはならないとされるコンテキストからのものも含まれていた。
 
-The design John Ogness presented at that 2022 discussion, developed with Thomas Gleixner, didn't touch the existing global console lock at all — it added a new, separate per-console lock alongside it, used only by consoles opted into the new ("nbcon") model. Each CPU wanting to print through an nbcon console declares a priority (`NBCON_PRIO_NORMAL`, `NBCON_PRIO_EMERGENCY`, or `NBCON_PRIO_PANIC`, defined in `include/linux/console.h`), and a takeover check — `nbcon_can_proceed()` as shipped, called `console_can_proceed()` in the original 2022 proposal — lets a higher-priority message preempt a lower-priority one mid-output rather than waiting for it to finish, while an actively-printing kernel thread, not just-in-time inline emission, does the unbounded I/O work itself ([LWN](https://lwn.net/Articles/909980/)). Legacy consoles that never adopt nbcon keep using the original global lock (`console_sem` in `kernel/printk/printk.c`, still present in 6.12) — 6.12 also added a `printk_legacy_kthread` to get that lock off the most RT-hostile paths without requiring every driver to migrate at once.
+John Ognessがその2022年の議論で提示し、Thomas Gleixnerとともに開発した設計は、既存のグローバルなコンソールロックにはまったく手を付けなかった。代わりに、新しい（「nbcon」）モデルに参加したコンソールだけが使う、新しい別個のコンソールごとのロックをその横に追加した。nbconコンソールを通じて出力したい各CPUは優先度（`include/linux/console.h`で定義された`NBCON_PRIO_NORMAL`、`NBCON_PRIO_EMERGENCY`、`NBCON_PRIO_PANIC`）を宣言する。そして引き継ぎチェック（出荷版では`nbcon_can_proceed()`、2022年の元の提案では`console_can_proceed()`と呼ばれていた）により、高優先度のメッセージは低優先度のメッセージの終了を待たず、出力の途中でそれを横取りできる。一方、上限のないI/O作業そのものは、その場でのインライン出力ではなく、能動的に出力を行うカーネルスレッドが担う（[LWN](https://lwn.net/Articles/909980/)）。nbconを採用しないレガシーなコンソールは、元のグローバルロック（`kernel/printk/printk.c`の`console_sem`で、6.12でもまだ存在する）を使い続ける。6.12では`printk_legacy_kthread`も追加され、すべてのドライバを一斉に移行させることなく、そのロックを最もRTと相性の悪いパスから外せるようになった。
 
-With that piece finally ready, Siewior's message spelled out the immediate, concrete effect precisely: ["With the printk bits merged, PREEMPT_RT could be enabled on X86, ARM64 and Risc-V"](https://lwn.net/Articles/989211/). That's the actual event: not new functionality being written, but the Kconfig gate coming down on the last three architectures that had already done everything else required.
+そのピースがついに揃ったことで、Siewiorのメッセージは直接的で具体的な効果を正確に述べた。["With the printk bits merged, PREEMPT_RT could be enabled on X86, ARM64 and Risc-V"](https://lwn.net/Articles/989211/)（訳: printkの部分がマージされたことで、PREEMPT_RTはX86、ARM64、Risc-Vで有効にできるようになった）。これが実際の出来事である。新しい機能が書かれたのではなく、必要な他のすべてをすでに済ませていた最後の3つのアーキテクチャに対して、Kconfigのゲートが外れたのである。
 
-## What actually flipped in the kernel tree {#what-actually-flipped-in-the-kernel-tree}
+## カーネルツリーで実際に切り替わったもの {#what-actually-flipped-in-the-kernel-tree}
 
-The `PREEMPT_RT` Kconfig option itself isn't new in 6.12 — it's been present for years, gated behind `depends on EXPERT && ARCH_SUPPORTS_RT` in `kernel/Kconfig.preempt` (confirmed unchanged as far back as kernel 5.10). What changed is which architectures declare `ARCH_SUPPORTS_RT`. Diffing `arch/x86/Kconfig`, `arch/arm64/Kconfig`, and `arch/riscv/Kconfig` between the 6.11 and 6.12 tags shows all three architectures adding a `select ARCH_SUPPORTS_RT` line for the first time at 6.12 — before that release, the option existed in the source tree but could not actually be turned on for any architecture in mainline. This matches Siewior's own framing exactly: the printk work removed the one remaining reason those three architectures couldn't declare support.
+`PREEMPT_RT`のKconfigオプション自体は6.12で新しく入ったものではない。何年も前から存在しており、`kernel/Kconfig.preempt`の中で`depends on EXPERT && ARCH_SUPPORTS_RT`によってゲートされていた（カーネル5.10まで遡って変化がないことを確認済み）。変わったのは、どのアーキテクチャが`ARCH_SUPPORTS_RT`を宣言するかである。6.11と6.12のタグの間で`arch/x86/Kconfig`、`arch/arm64/Kconfig`、`arch/riscv/Kconfig`の差分を取ると、3つのアーキテクチャすべてが6.12で初めて`select ARCH_SUPPORTS_RT`の行を追加していることがわかる。そのリリース以前は、このオプションはソースツリーに存在してはいたが、メインラインではどのアーキテクチャでも実際には有効にできなかった。これはSiewior自身の説明と完全に一致する。printkの作業が、これら3つのアーキテクチャがサポートを宣言できなかった残り1つの理由を取り除いたのである。
 
-Not every architecture got there at once. The same patch cover letter notes that "ARM and POWERPC have a few essential patches left" and that Siewior had "lost track of MIPS" — a reminder that "PREEMPT_RT merged" in 6.12 specifically means x86, arm64, and RISC-V, not universal availability. That list has grown since: LoongArch added `select ARCH_SUPPORTS_RT` in 6.13; 32-bit ARM has it queued in the development tree but not yet in a tagged release as of this writing. powerpc and MIPS still don't have it.
+すべてのアーキテクチャが一度にそこへ到達したわけではない。同じパッチのカバーレターには、「ARM and POWERPC have a few essential patches left」（ARMとPOWERPCには不可欠なパッチがいくつか残っている）こと、そしてSiewiorが「lost track of MIPS」（MIPSの状況を把握できなくなっていた）ことが記されている。これは、6.12における「PREEMPT_RTのマージ」が特にx86、arm64、RISC-Vを意味し、全アーキテクチャで利用可能になったわけではないことを思い出させる。その一覧はその後増えている。LoongArchは6.13で`select ARCH_SUPPORTS_RT`を追加した。32ビットARMは開発ツリーにキューされているが、本稿執筆時点ではタグ付きリリースにはまだ入っていない。powerpcとMIPSはまだ持っていない。
 
-## What this doesn't mean {#what-this-doesnt-mean}
+## これが意味しないこと {#what-this-doesnt-mean}
 
-Being mainline doesn't mean `PREEMPT_RT` becomes the kernel's default preemption model, or that most users will ever set `CONFIG_PREEMPT_RT=y`. It's still an explicit, `EXPERT`-gated build-time choice, because it trades throughput for worst-case latency — a tradeoff most general-purpose systems don't want. See the [Real-Time Linux Tuning Guide](../sched/rt-tuning.md) for what actually configuring and running an RT kernel involves once you've built one, and [RT Scheduler: SCHED_FIFO and SCHED_RR](../sched/rt-scheduler.md) for the scheduling side that RT workloads typically pair with `PREEMPT_RT`.
+メインラインに入ったからといって、`PREEMPT_RT`がカーネルのデフォルトのプリエンプションモデルになるわけでも、ほとんどのユーザーが`CONFIG_PREEMPT_RT=y`を設定するようになるわけでもない。これは依然として`EXPERT`でゲートされた明示的なビルド時の選択である。最悪ケースのレイテンシと引き換えにスループットを差し出すものであり、ほとんどの汎用システムが望まないトレードオフだからである。RTカーネルをビルドした後、実際に設定して運用することが何を伴うかについては[リアルタイムLinuxチューニングガイド](../sched/rt-tuning.md)を、RTワークロードが通常`PREEMPT_RT`と組み合わせるスケジューリング側については[RTスケジューラ: SCHED_FIFOとSCHED_RR](../sched/rt-scheduler.md)を参照のこと。
 
-The 6.12 merge wasn't the end of the story, either: `PREEMPT_LAZY` landed in 6.13 as a separate preemption model choice (`kernel/Kconfig.preempt`) — "fundamentally similar to full preemption, but less eager to preempt `SCHED_NORMAL` tasks," aimed at recovering some of the throughput lost to full preemption rather than replacing `PREEMPT_RT` itself.
+6.12のマージで話が終わったわけでもない。`PREEMPT_LAZY`が6.13で別のプリエンプションモデルの選択肢（`kernel/Kconfig.preempt`）として入った。これは「基本的には完全プリエンプションと同様だが、`SCHED_NORMAL`タスクのプリエンプトにはそれほど積極的でない」もので、`PREEMPT_RT`そのものを置き換えるのではなく、完全プリエンプションで失われたスループットの一部を取り戻すことを狙っている。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The realtime preemption end game — for real this time](https://lwn.net/Articles/989212/) — Jonathan Corbet's coverage of the September 2024 patch series, including the "almost exactly 20 years" framing
-- [Allow to enable PREEMPT_RT.](https://lwn.net/Articles/989211/) — Sebastian Andrzej Siewior's original patch cover letter to the kernel mailing list, 6 September 2024
-- [Interview: the return of the realtime preemption tree](https://lwn.net/Articles/319544/) — a 2009 interview with Thomas Gleixner and Ingo Molnar on the project's history and pace
-- [A discussion on printk()](https://lwn.net/Articles/909980/) — Jake Edge's report on the 2022 Linux Plumbers Conference discussion that produced the per-console-lock, priority-takeover redesign that unblocked PREEMPT_RT
+- [The realtime preemption end game — for real this time](https://lwn.net/Articles/989212/) — 2024年9月のパッチシリーズに関するJonathan Corbetの記事。「almost exactly 20 years」という表現を含む
+- [Allow to enable PREEMPT_RT.](https://lwn.net/Articles/989211/) — Sebastian Andrzej Siewiorがカーネルメーリングリストに投稿した元のパッチのカバーレター（2024年9月6日）
+- [Interview: the return of the realtime preemption tree](https://lwn.net/Articles/319544/) — プロジェクトの歴史とペースに関する、Thomas GleixnerとIngo Molnarへの2009年のインタビュー
+- [A discussion on printk()](https://lwn.net/Articles/909980/) — 2022年のLinux Plumbers Conferenceでの議論に関するJake Edgeの記事。この議論から、PREEMPT_RTの障害を取り除いたコンソールごとのロックと優先度による引き継ぎの再設計が生まれた
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/Kconfig.preempt](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/Kconfig.preempt) — the `PREEMPT_RT` symbol and its `depends on EXPERT && ARCH_SUPPORTS_RT` gate
-- [arch/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/Kconfig) — where the generic `ARCH_SUPPORTS_RT` symbol itself is defined
-- [arch/x86/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/Kconfig), [arch/arm64/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/Kconfig), [arch/riscv/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/riscv/Kconfig) — each `select ARCH_SUPPORTS_RT` as of kernel 6.12
-- [kernel/printk/nbcon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/nbcon.c) — `nbcon_can_proceed()`, the takeover check behind the printk fix
-- [include/linux/console.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/console.h) — `enum nbcon_prio` (`NBCON_PRIO_NORMAL`/`EMERGENCY`/`PANIC`)
-- [kernel/printk/printk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk.c) — `console_sem`, the original global console lock still used by non-nbcon consoles, and `printk_legacy_kthread`
+- [kernel/Kconfig.preempt](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/Kconfig.preempt) — `PREEMPT_RT`シンボルと、その`depends on EXPERT && ARCH_SUPPORTS_RT`ゲート
+- [arch/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/Kconfig) — 汎用の`ARCH_SUPPORTS_RT`シンボル自体が定義されている場所
+- [arch/x86/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/Kconfig)、[arch/arm64/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/arm64/Kconfig)、[arch/riscv/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/riscv/Kconfig) — カーネル6.12時点でいずれも`select ARCH_SUPPORTS_RT`を持つ
+- [kernel/printk/nbcon.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/nbcon.c) — printk修正の背後にある引き継ぎチェック、`nbcon_can_proceed()`
+- [include/linux/console.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/console.h) — `enum nbcon_prio`（`NBCON_PRIO_NORMAL`/`EMERGENCY`/`PANIC`）
+- [kernel/printk/printk.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/printk/printk.c) — nbcon以外のコンソールが今も使う元のグローバルなコンソールロックである`console_sem`と、`printk_legacy_kthread`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Mutex and rt_mutex](mutex.md) — the priority-inheritance mutex mechanism RT relies on for spinlock replacement
-- [Priority Inversion & PI Mutexes](../sched/pi-mutexes.md) — the full mechanism behind priority inheritance
-- [Real-Time Linux Tuning Guide](../sched/rt-tuning.md) — running and tuning a `PREEMPT_RT` kernel in practice
-- [RT Scheduler: SCHED_FIFO and SCHED_RR](../sched/rt-scheduler.md) — the scheduling classes RT workloads use
-- [The PI-Mutex Origin Story](war-stories/pi-mutex-origin.md) — a historical incident from the priority-inheritance work this project produced
+- [mutexとrt_mutex](mutex.md) — RTがspinlockの置き換えに頼る優先度継承mutexの仕組み
+- [優先度逆転とPI mutex](../sched/pi-mutexes.md) — 優先度継承の背後にある仕組みの全体
+- [リアルタイムLinuxチューニングガイド](../sched/rt-tuning.md) — `PREEMPT_RT`カーネルを実際に運用・チューニングする
+- [RTスケジューラ: SCHED_FIFOとSCHED_RR](../sched/rt-scheduler.md) — RTワークロードが使うスケジューリングクラス
+- [PI-mutexの起源の物語](war-stories/pi-mutex-origin.md) — このプロジェクトが生んだ優先度継承の作業にまつわる歴史上のインシデント

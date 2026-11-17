@@ -1,10 +1,10 @@
-# rwlock and rwsem {#rwlock-and-rwsem}
+# rwlockとrwsem {#rwlock-and-rwsem}
 
-> Reader-writer locking — concurrent reads, exclusive writes
+> reader-writerロック: 読み込みは並行、書き込みは排他
 
-## The reader-writer pattern {#the-reader-writer-pattern}
+## reader-writerパターン {#the-reader-writer-pattern}
 
-Many kernel data structures are read far more often than they are written. A plain spinlock or mutex serializes all access, even concurrent reads that don't conflict. Reader-writer locks allow multiple simultaneous readers while ensuring writers have exclusive access:
+多くのカーネルのデータ構造は、書き込まれるよりはるかに頻繁に読まれる。普通のspinlockやmutexは、衝突しない並行読み込みも含めて、すべてのアクセスを直列化してしまう。reader-writerロックは、書き手には排他アクセスを保証しつつ、複数の読み手が同時にアクセスすることを許す。
 
 ```
 Multiple readers: OK
@@ -12,36 +12,36 @@ Reader + writer:  BLOCKED (writer waits)
 Two writers:      BLOCKED (second waits)
 ```
 
-The kernel provides two reader-writer primitives:
+カーネルは2つのreader-writerプリミティブを提供している。
 
-| Primitive | Sleeps? | IRQ-safe? | Use when |
+| プリミティブ | スリープするか | IRQセーフか | 使う場面 |
 |-----------|---------|-----------|----------|
-| `rwlock_t` | No (spinlock) | Yes | Interrupt context, short critical sections |
-| `rw_semaphore` | Yes (sleeping) | No | Process context, longer critical sections |
+| `rwlock_t` | しない（spinlock） | はい | 割り込みコンテキスト、短いクリティカルセクション |
+| `rw_semaphore` | する（スリープ） | いいえ | プロセスコンテキスト、長めのクリティカルセクション |
 
-## rwlock_t: the spinning variant {#rwlock_t-the-spinning-variant}
+## rwlock_t: スピンする版 {#rwlock_t-the-spinning-variant}
 
-`rwlock_t` is a reader-writer spinlock. Readers and writers both spin rather than sleep.
+`rwlock_t`はreader-writer spinlockである。読み手も書き手も、スリープせずにスピンする。
 
 ```c
 #include <linux/rwlock.h>
 
-/* Initialization */
-DEFINE_RWLOCK(my_rwlock);  /* static */
+/* 初期化 */
+DEFINE_RWLOCK(my_rwlock);  /* 静的 */
 rwlock_t my_rwlock;
-rwlock_init(&my_rwlock);   /* dynamic */
+rwlock_init(&my_rwlock);   /* 動的 */
 
-/* Read side */
+/* 読み側 */
 read_lock(&my_rwlock);
-/* read critical section — concurrent with other readers */
+/* 読み込みクリティカルセクション — 他の読み手と並行 */
 read_unlock(&my_rwlock);
 
-/* Write side */
+/* 書き側 */
 write_lock(&my_rwlock);
-/* write critical section — exclusive */
+/* 書き込みクリティカルセクション — 排他 */
 write_unlock(&my_rwlock);
 
-/* IRQ-safe variants (if lock is also taken in IRQ handler) */
+/* IRQセーフ版（ロックがIRQハンドラでも取られる場合） */
 unsigned long flags;
 read_lock_irqsave(&my_rwlock, flags);
 read_unlock_irqrestore(&my_rwlock, flags);
@@ -49,29 +49,29 @@ read_unlock_irqrestore(&my_rwlock, flags);
 write_lock_irqsave(&my_rwlock, flags);
 write_unlock_irqrestore(&my_rwlock, flags);
 
-/* BH variants */
+/* BH版 */
 read_lock_bh(&my_rwlock);
 read_unlock_bh(&my_rwlock);
 ```
 
-On PREEMPT_RT kernels, `rwlock_t` is implemented with `rwbase_rt` (sleeping), just like `spinlock_t` maps to `rt_mutex`.
+PREEMPT_RTカーネルでは、`spinlock_t`が`rt_mutex`に対応付けられるのと同様に、`rwlock_t`は`rwbase_rt`（スリープする）で実装される。
 
-## rw_semaphore: the sleeping variant {#rw_semaphore-the-sleeping-variant}
+## rw_semaphore: スリープする版 {#rw_semaphore-the-sleeping-variant}
 
-`rw_semaphore` is the sleeping counterpart to `rwlock_t`. Contended waiters go to sleep rather than spinning (after a brief optimistic spin phase, like mutex).
+`rw_semaphore`は`rwlock_t`のスリープする対応物である。競合した待機者は、（mutexと同様に短い楽観的スピンの段階を経た後）スピンせずにスリープする。
 
 ```c
 /* include/linux/rwsem.h */
 struct rw_semaphore {
-    atomic_long_t count;   /* reader count + RWSEM_WRITER_LOCKED bit */
-    atomic_long_t owner;   /* writer task_struct* */
-    struct osq_lock osq;   /* optimistic spinners */
+    atomic_long_t count;   /* 読み手の数 + RWSEM_WRITER_LOCKEDビット */
+    atomic_long_t owner;   /* 書き手のtask_struct* */
+    struct osq_lock osq;   /* 楽観的スピンを行う者 */
     raw_spinlock_t wait_lock;
     struct list_head wait_list;
 };
 ```
 
-The `count` field encodes both the lock state and the reader count. The lower bits are flags; the reader count is stored in the upper bits, shifted by `RWSEM_READER_SHIFT` (8):
+`count`フィールドは、ロック状態と読み手の数の両方をエンコードする。下位ビットはフラグであり、読み手の数は`RWSEM_READER_SHIFT`（8）だけシフトされて上位ビットに格納される。
 
 ```
 count = 0                       → unlocked
@@ -84,53 +84,53 @@ count >> RWSEM_READER_SHIFT     → number of active readers
 ```c
 #include <linux/rwsem.h>
 
-/* Initialization */
-DECLARE_RWSEM(my_rwsem);       /* static */
+/* 初期化 */
+DECLARE_RWSEM(my_rwsem);       /* 静的 */
 struct rw_semaphore my_rwsem;
-init_rwsem(&my_rwsem);         /* dynamic */
+init_rwsem(&my_rwsem);         /* 動的 */
 
-/* Read side */
-down_read(&my_rwsem);          /* may sleep */
-/* read critical section */
+/* 読み側 */
+down_read(&my_rwsem);          /* スリープしうる */
+/* 読み込みクリティカルセクション */
 up_read(&my_rwsem);
 
-/* Interruptible read lock */
+/* 割り込み可能な読み込みロック */
 if (down_read_interruptible(&my_rwsem))
     return -ERESTARTSYS;
 up_read(&my_rwsem);
 
-/* Trylock (non-blocking) */
+/* trylock（ブロックしない） */
 if (down_read_trylock(&my_rwsem)) {
-    /* got it */
+    /* 取得できた */
     up_read(&my_rwsem);
 }
 
-/* Write side */
-down_write(&my_rwsem);         /* may sleep, exclusive */
-/* write critical section */
+/* 書き側 */
+down_write(&my_rwsem);         /* スリープしうる、排他 */
+/* 書き込みクリティカルセクション */
 up_write(&my_rwsem);
 
-/* Downgrade from write to read (without releasing) */
-downgrade_write(&my_rwsem);    /* demote exclusive → shared */
-/* now in read-side critical section */
+/* 書き込みから読み込みへの格下げ（解放せずに） */
+downgrade_write(&my_rwsem);    /* 排他 → 共有に降格 */
+/* ここからは読み側クリティカルセクション */
 up_read(&my_rwsem);
 ```
 
 ### downgrade_write {#downgrade_write}
 
-`downgrade_write()` atomically converts a write lock to a read lock. It's used when a writer has finished the write phase and wants to continue reading, while allowing other readers in:
+`downgrade_write()`は、書き込みロックをアトミックに読み込みロックへ変換する。書き手が書き込みの段階を終え、他の読み手を受け入れながら読み込みを続けたい場合に使われる。
 
 ```c
 down_write(&mm->mmap_lock);
-/* modify vma list */
+/* vmaリストを変更する */
 downgrade_write(&mm->mmap_lock);
-/* now read-only, other readers can join */
+/* ここからは読み込み専用。他の読み手も参加できる */
 up_read(&mm->mmap_lock);
 ```
 
-## Writer starvation {#writer-starvation}
+## 書き手の飢餓 {#writer-starvation}
 
-A critical problem with naïve reader-writer locks: if readers arrive continuously, a writer may never get the lock. Linux's rwsem prevents this by queuing writers — once a writer is waiting, new readers are also queued (they don't jump ahead of the waiting writer).
+素朴なreader-writerロックの重大な問題として、読み手が絶え間なく到着すると、書き手がいつまでもロックを取れない可能性がある。Linuxのrwsemは書き手をキューに入れることでこれを防ぐ。書き手が待機し始めると、新しい読み手もキューに入れられる（待機中の書き手を追い越さない）。
 
 ```
 Timeline:
@@ -141,46 +141,46 @@ Timeline:
   W1 releases → R2 gets lock
 ```
 
-## When to use rwlock vs rwsem vs plain mutex/spinlock {#when-to-use-rwlock-vs-rwsem-vs-plain-mutexspinlock}
+## rwlock、rwsem、普通のmutex/spinlockの使い分け {#when-to-use-rwlock-vs-rwsem-vs-plain-mutexspinlock}
 
 ```
 rwlock_t:
-  ✓ IRQ context readers or writers
-  ✓ Very short read/write critical sections
-  ✗ Don't use if write side is rare — consider just spinlock
+  ✓ IRQコンテキストの読み手または書き手
+  ✓ 非常に短い読み込み/書き込みクリティカルセクション
+  ✗ 書き側がまれなら使わない — 単なるspinlockを検討する
 
 rw_semaphore:
-  ✓ Process context, long critical sections
-  ✓ Read-heavy workloads (many concurrent readers give real benefit)
-  ✗ Not worth it for very short critical sections (mutex overhead similar)
+  ✓ プロセスコンテキスト、長いクリティカルセクション
+  ✓ 読み込み中心のワークロード（多数の並行する読み手が実際の利点を生む）
+  ✗ 非常に短いクリティカルセクションには割に合わない（mutexのオーバーヘッドと同程度）
 
-Rule of thumb: if your reads are > 5x more frequent than writes,
-and reads are long enough to matter, rwsem is a win.
-The mm subsystem uses it heavily (mm->mmap_lock).
+経験則: 読み込みが書き込みの5倍以上頻繁で、
+読み込みが問題になるほど長いなら、rwsemが有利である。
+mmサブシステムはこれを多用している（mm->mmap_lock）。
 ```
 
-## Real-world usage: mmap_lock {#real-world-usage-mmap_lock}
+## 実際の使用例: mmap_lock {#real-world-usage-mmap_lock}
 
-The VMA list in each process is protected by `mm->mmap_lock` (an `rw_semaphore`):
+各プロセスのVMAリストは、`mm->mmap_lock`（`rw_semaphore`）で保護されている。
 
 ```c
-/* Reading VMAs (e.g., during page fault) */
+/* VMAの読み込み（例: ページフォールト中） */
 mmap_read_lock(mm);      /* = down_read(&mm->mmap_lock) */
 vma = find_vma(mm, addr);
-/* use vma */
+/* vmaを使う */
 mmap_read_unlock(mm);    /* = up_read(&mm->mmap_lock) */
 
-/* Modifying VMAs (e.g., mmap/munmap syscall) */
+/* VMAの変更（例: mmap/munmapシステムコール） */
 mmap_write_lock(mm);     /* = down_write(&mm->mmap_lock) */
-/* add/remove/modify VMAs */
+/* VMAの追加/削除/変更 */
 mmap_write_unlock(mm);   /* = up_write(&mm->mmap_lock) */
 ```
 
-This allows multiple threads in the same process to take page faults concurrently, while mmap/munmap operations are serialized.
+これにより、同じプロセス内の複数のスレッドが並行してページフォールトを処理でき、一方でmmap/munmap操作は直列化される。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Spinlock and raw_spinlock](spinlock.md) — The plain spinlock
-- [RCU](rcu.md) — Even more concurrent reads (no reader-side locking at all)
-- [Per-VMA Locks](../mm/per-vma-locks.md) — Fine-grained alternative to mmap_lock
-- `Documentation/locking/` in the kernel tree
+- [spinlockとraw_spinlock](spinlock.md) — 普通のspinlock
+- [RCU](rcu.md) — さらに並行性の高い読み込み（読み手側のロックがまったくない）
+- [VMA単位のロック](../mm/per-vma-locks.md) — mmap_lockに代わる細粒度の選択肢
+- カーネルツリー内の`Documentation/locking/`

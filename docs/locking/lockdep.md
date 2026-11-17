@@ -1,45 +1,45 @@
-# Lockdep: Lock Dependency Validator {#lockdep-lock-dependency-validator}
+# lockdep: ロック依存関係検証器 {#lockdep-lock-dependency-validator}
 
-> The kernel's runtime lock correctness checker
+> カーネルの実行時ロック正当性チェッカ
 
-## What lockdep does {#what-lockdep-does}
+## lockdepが行うこと {#what-lockdep-does}
 
-Lockdep is a kernel subsystem (enabled by `CONFIG_PROVE_LOCKING`) that tracks lock acquisition order at runtime and detects potential deadlocks before they actually happen. It catches:
+lockdepは、実行時にロックの取得順序を追跡し、実際に起きる前に潜在的なデッドロックを検出するカーネルサブシステム（`CONFIG_PROVE_LOCKING`で有効化される）である。次のものを捕まえる。
 
-- **Circular lock dependencies**: A → B → A (classic deadlock)
-- **Lock inversion**: taking A then B in some code paths, B then A in others
-- **Bad IRQ context**: sleeping lock taken in interrupt context
-- **Recursive locking**: taking the same lock twice without releasing
-- **Missing annotations**: lock ordering that depends on subclasses
+- **循環したロック依存**: A → B → A（古典的なデッドロック）
+- **ロックの逆転**: あるコードパスではAの次にBを取り、別のコードパスではBの次にAを取る
+- **不正なIRQコンテキスト**: 割り込みコンテキストでスリープするロックを取る
+- **再帰的なロック**: 解放せずに同じロックを2回取る
+- **アノテーションの欠落**: サブクラスに依存するロック順序
 
-Lockdep reports a "possible deadlock" the first time it sees a new lock ordering that could lead to deadlock — even if no actual deadlock has occurred yet. This is much better than waiting for a real deadlock to happen in production.
+lockdepは、デッドロックにつながりうる新しいロック順序を初めて見た時点で「possible deadlock」を報告する。実際のデッドロックがまだ一度も起きていなくてもである。本番環境で本物のデッドロックが起きるのを待つより、はるかに良い。
 
-## Lock classes {#lock-classes}
+## ロッククラス {#lock-classes}
 
-Lockdep tracks **lock classes**, not individual lock instances. A class represents "all locks initialized with this key". For example, all `mutex` instances of type `struct inode->i_mutex` belong to the same class, even though there are millions of inodes.
+lockdepは個々のロックインスタンスではなく、**ロッククラス**を追跡する。クラスは「このキーで初期化されたすべてのロック」を表す。たとえば、`struct inode->i_mutex`型のすべての`mutex`インスタンスは、inodeが何百万個あっても同じクラスに属する。
 
 ```c
-/* Each statically initialized lock gets its own class automatically */
-DEFINE_MUTEX(my_mutex);  /* class key = address of my_mutex */
+/* 静的に初期化されたロックは、それぞれ自動的に独自のクラスを得る */
+DEFINE_MUTEX(my_mutex);  /* クラスキー = my_mutexのアドレス */
 
-/* Dynamic locks: a static key must be provided */
+/* 動的なロック: 静的なキーを与えなければならない */
 struct my_struct {
     struct mutex lock;
 };
 
 void init_my_struct(struct my_struct *s)
 {
-    /* All my_struct::lock instances share one class key */
+    /* すべてのmy_struct::lockインスタンスが1つのクラスキーを共有する */
     static struct lock_class_key my_lock_key;
     mutex_init(&s->lock);
-    /* Or with explicit class annotation: */
+    /* または明示的なクラスアノテーションで: */
     lockdep_set_class(&s->lock, &my_lock_key);
 }
 ```
 
-## Dependency graph {#dependency-graph}
+## 依存グラフ {#dependency-graph}
 
-Every time a lock is acquired while another lock is already held, lockdep adds an edge A → B to its directed graph. A circular dependency (A → B → A) means a potential deadlock.
+別のロックを保持したままロックが取得されるたびに、lockdepは自身の有向グラフに辺A → Bを追加する。循環依存（A → B → A）は潜在的なデッドロックを意味する。
 
 ```
 Scenario:
@@ -48,9 +48,9 @@ Scenario:
                                  → CIRCULAR! lockdep reports a warning
 ```
 
-The warning appears the moment Thread 2's pattern is first observed, even if Threads 1 and 2 never actually run concurrently.
+警告は、スレッド2のパターンが初めて観測された瞬間に出る。スレッド1と2が実際には一度も並行して実行されなくてもである。
 
-## Reading a lockdep warning {#reading-a-lockdep-warning}
+## lockdepの警告の読み方 {#reading-a-lockdep-warning}
 
 ```
 ======================================================
@@ -76,43 +76,43 @@ the existing dependency chain (in reverse order) is:
        func_a+0x12/0x34
 ```
 
-Key fields:
+主要なフィールド:
 
-- The lock type annotation `{+.+.}` shows where it's used: `+` = used with IRQs enabled, `-` = used with IRQs disabled, `.` = not used in that context
-- The dependency chain shows the exact call path that created the dependency
+- ロック種別のアノテーション`{+.+.}`は、どこで使われているかを示す。`+` = IRQ有効状態で使用、`-` = IRQ無効状態で使用、`.` = そのコンテキストでは未使用
+- 依存チェーンは、その依存関係を作った正確な呼び出しパスを示す
 
-## Lock annotations {#lock-annotations}
+## ロックのアノテーション {#lock-annotations}
 
-Lockdep provides annotations to use in your code:
+lockdepは、コード内で使うアノテーションを提供している。
 
 ```c
-/* Assert that a lock is held (WARN if not) */
+/* ロックが保持されていることを表明する（保持されていなければWARN） */
 lockdep_assert_held(&my_mutex);
 
-/* Assert held for read */
+/* 読み込み用に保持されていることを表明する */
 lockdep_assert_held_read(&my_rwsem);
 
-/* Assert held for write */
+/* 書き込み用に保持されていることを表明する */
 lockdep_assert_held_write(&my_rwsem);
 
-/* Assert that NO lock is held (for sleeping functions) */
-might_sleep();    /* warns if in atomic context */
+/* ロックが1つも保持されていないことを表明する（スリープする関数向け） */
+might_sleep();    /* アトミックコンテキストなら警告する */
 
-/* Mark code that must not sleep */
+/* スリープしてはならないコードを示す */
 cant_sleep();
 
-/* Mark that we're in RCU read-side critical section */
+/* RCU読み側クリティカルセクション内にいることを示す */
 lockdep_assert_in_rcu_read_lock();
 ```
 
-These are no-ops when lockdep is disabled (`CONFIG_PROVE_LOCKING=n`), so they're safe to leave in production code.
+これらはlockdepが無効（`CONFIG_PROVE_LOCKING=n`）のときは何もしないので、本番のコードに残しておいても安全である。
 
-## Subclasses for nested locks {#subclasses-for-nested-locks}
+## ネストしたロックのためのサブクラス {#subclasses-for-nested-locks}
 
-When you legitimately take two locks of the same class in order (e.g., locking a parent then a child in a tree traversal), lockdep needs a subclass annotation to understand this is intentional and not a deadlock:
+同じクラスの2つのロックを正当な理由で順に取る場合（例: ツリー走査で親をロックしてから子をロックする）、これが意図的でありデッドロックではないことをlockdepが理解するには、サブクラスのアノテーションが必要である。
 
 ```c
-/* A tree where each node has its own lock of the same class */
+/* 各ノードが同じクラスの独自のロックを持つツリー */
 struct tree_node {
     struct mutex lock;
     struct tree_node *child;
@@ -121,29 +121,29 @@ struct tree_node {
 void lock_parent_then_child(struct tree_node *parent,
                              struct tree_node *child)
 {
-    /* Without subclass: lockdep would flag this as circular */
+    /* サブクラスがないと、lockdepはこれを循環として報告する */
     mutex_lock(&parent->lock);
-    mutex_lock_nested(&child->lock, 1);  /* subclass=1 = child level */
+    mutex_lock_nested(&child->lock, 1);  /* subclass=1 = 子の階層 */
     /* ... */
     mutex_unlock(&child->lock);
     mutex_unlock(&parent->lock);
 }
 ```
 
-The `_nested` variants (`mutex_lock_nested`, `spin_lock_nested`, `down_read_nested`, etc.) take a subclass argument that lockdep uses to distinguish lock orderings at different tree depths.
+`_nested`版（`mutex_lock_nested`、`spin_lock_nested`、`down_read_nested`など）はサブクラス引数を取り、lockdepはそれを使ってツリーの異なる深さでのロック順序を区別する。
 
 ## /proc/lockdep {#proclockdep}
 
-When lockdep is active, it exposes its data:
+lockdepが有効なとき、そのデータが公開される。
 
 ```bash
-# All known lock classes
+# 既知のすべてのロッククラス
 cat /proc/lockdep
 
-# Dependency graph
+# 依存グラフ
 cat /proc/lockdep_chains
 
-# Statistics (lock classes used, dependency chains, etc.)
+# 統計（使用中のロッククラス、依存チェーンなど）
 cat /proc/lockdep_stats
 # lock-classes: 2341
 # direct dependencies: 8234
@@ -151,9 +151,9 @@ cat /proc/lockdep_stats
 # all direct dependencies: 23456
 ```
 
-## Lock stats (/proc/lock_stat) {#lock-stats-proclock_stat}
+## ロック統計（/proc/lock_stat） {#lock-stats-proclock_stat}
 
-With `CONFIG_LOCK_STAT`, the kernel tracks contention per lock class:
+`CONFIG_LOCK_STAT`があれば、カーネルはロッククラスごとの競合を追跡する。
 
 ```bash
 cat /proc/lock_stat
@@ -162,26 +162,26 @@ cat /proc/lock_stat
 #                      5623        5623              0.26        1234.56       123456.78      234567         2345678          0.12         456.78       23456789.12
 ```
 
-Columns:
+列:
 
-- `contentions`: times the lock was already held when taken
-- `waittime-*`: how long callers waited (microseconds)
-- `acquisitions`: total lock acquisitions
-- `holdtime-*`: how long the lock was held
+- `contentions`: 取得時にロックがすでに保持されていた回数
+- `waittime-*`: 呼び出し側が待った時間（マイクロ秒）
+- `acquisitions`: ロック取得の合計回数
+- `holdtime-*`: ロックが保持されていた時間
 
-High `contentions` and `waittime-max` indicate a lock hotspot.
+`contentions`と`waittime-max`が高い場合は、ロックのホットスポットを示している。
 
-## Performance impact {#performance-impact}
+## 性能への影響 {#performance-impact}
 
-Lockdep is expensive — it keeps a complete dependency graph in memory and validates every lock acquisition. It's intended for development/testing kernels, not production:
+lockdepは高コストである。完全な依存グラフをメモリ上に保持し、すべてのロック取得を検証する。本番用ではなく、開発・テスト用のカーネルを意図したものである。
 
-- Memory: ~60MB for the lock class data structures
-- CPU: each lock acquire/release goes through lockdep validation
+- メモリ: ロッククラスのデータ構造に約60MB
+- CPU: ロックの取得/解放のたびにlockdepの検証を通る
 
-For production, compile with `CONFIG_PROVE_LOCKING=n`. The `lockdep_assert_held()` annotations remain as no-ops.
+本番用には`CONFIG_PROVE_LOCKING=n`でコンパイルする。`lockdep_assert_held()`アノテーションは何もしないものとして残る。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Lock contention debugging](lock-debugging.md) — Using lock_stat and perf to find hotspots
-- [Spinlock](spinlock.md) — What lockdep validates
-- `Documentation/locking/lockdep-design.rst` — Lockdep internals
+- [ロック競合のデバッグ](lock-debugging.md) — lock_statとperfを使ってホットスポットを見つける
+- [spinlock](spinlock.md) — lockdepが検証する対象
+- `Documentation/locking/lockdep-design.rst` — lockdepの内部

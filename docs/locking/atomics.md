@@ -1,10 +1,10 @@
-# Atomic Operations and Memory Barriers {#atomic-operations-and-memory-barriers}
+# アトミック操作とメモリバリア {#atomic-operations-and-memory-barriers}
 
-> The primitives that all higher-level synchronization is built on
+> より高レベルのあらゆる同期の土台となるプリミティブ
 
-## What problem do atomics solve? {#what-problem-do-atomics-solve}
+## アトミック操作はどんな問題を解決するか {#what-problem-do-atomics-solve}
 
-On modern CPUs, a simple `x++` compiles to three operations: load `x`, add 1, store `x`. If two CPUs run this simultaneously, both might load the same value and one increment is lost:
+現代のCPUでは、単純な`x++`は3つの操作にコンパイルされる。`x`のロード、1の加算、`x`へのストアである。2つのCPUがこれを同時に実行すると、両方が同じ値をロードし、一方のインクリメントが失われることがある。
 
 ```
 CPU 0:  load x (gets 5)                store x = 6
@@ -12,67 +12,67 @@ CPU 1:              load x (gets 5)              store x = 6
 Result: x = 6 (should be 7)
 ```
 
-Atomic operations are hardware instructions that perform a read-modify-write as a single indivisible unit. No other CPU can see an intermediate state.
+アトミック操作は、読み込み・変更・書き込みを単一の不可分な単位として実行するハードウェア命令である。他のCPUが中間状態を見ることはできない。
 
-## atomic_t and atomic64_t {#atomict-and-atomic64t}
+## atomic_tとatomic64_t {#atomict-and-atomic64t}
 
 ```c
 /* include/linux/atomic.h */
 typedef struct { int counter; } atomic_t;
 typedef struct { s64 counter; } atomic64_t;
 
-/* Basic operations */
+/* 基本操作 */
 atomic_t a = ATOMIC_INIT(0);
 
-atomic_read(&a);              /* read value */
-atomic_set(&a, 5);            /* set value */
+atomic_read(&a);              /* 値を読む */
+atomic_set(&a, 5);            /* 値を設定する */
 
 atomic_inc(&a);               /* a++ */
 atomic_dec(&a);               /* a-- */
 atomic_add(n, &a);            /* a += n */
 atomic_sub(n, &a);            /* a -= n */
 
-/* Return the new value */
+/* 新しい値を返す */
 int v = atomic_inc_return(&a);   /* ++a */
 int v = atomic_dec_return(&a);   /* --a */
 int v = atomic_add_return(n, &a);
 int v = atomic_sub_return(n, &a);
 
-/* Return the old value */
+/* 古い値を返す */
 int old = atomic_fetch_add(n, &a);
 int old = atomic_fetch_sub(n, &a);
 
-/* Test and return */
-bool zero = atomic_dec_and_test(&a);  /* returns true if result == 0 */
-bool neg  = atomic_add_negative(n, &a); /* returns true if result < 0 */
+/* テストして返す */
+bool zero = atomic_dec_and_test(&a);  /* 結果 == 0 なら真を返す */
+bool neg  = atomic_add_negative(n, &a); /* 結果 < 0 なら真を返す */
 
-/* Bitwise */
+/* ビット演算 */
 atomic_or(mask, &a);
 atomic_and(mask, &a);
 atomic_xor(mask, &a);
 int old = atomic_fetch_or(mask, &a);
 ```
 
-## Compare-and-swap (cmpxchg) {#compare-and-swap-cmpxchg}
+## compare-and-swap（cmpxchg） {#compare-and-swap-cmpxchg}
 
-The most powerful atomic: atomically compare a value with expected, and swap if equal:
+最も強力なアトミック操作である。値を期待値とアトミックに比較し、等しければ入れ替える。
 
 ```c
-/* Succeeds (returns old == expected) if *ptr == expected, sets *ptr = new */
+/* *ptr == expected なら成功し（old == expected を返す）、*ptr = new に設定する */
 old = atomic_cmpxchg(&a, expected, new);
 
-/* Returns true if the swap happened */
+/* 入れ替えが起きたら真を返す */
 bool success = atomic_try_cmpxchg(&a, &expected, new);
 ```
 
-This is the building block for lock-free data structures. For example, a non-blocking push:
+これはロックフリーなデータ構造の基本構成要素である。たとえば、ブロックしないpushは次のようになる。
 
 ```c
 struct node {
     struct node *next;
     int value;
 };
-static atomic_long_t head;  /* really: struct node __rcu *head */
+static atomic_long_t head;  /* 実際には: struct node __rcu *head */
 
 void push(struct node *node)
 {
@@ -88,7 +88,7 @@ void push(struct node *node)
 
 ## atomic_long_t {#atomiclongt}
 
-`atomic_long_t` is a pointer-sized atomic, useful for 64-bit values that need to fit in a pointer on all architectures:
+`atomic_long_t`はポインタサイズのアトミック型であり、すべてのアーキテクチャでポインタに収まる必要がある64ビット値に便利である。
 
 ```c
 atomic_long_t v = ATOMIC_LONG_INIT(0);
@@ -98,32 +98,32 @@ atomic_long_add(n, &v);
 atomic_long_cmpxchg(&v, old, new);
 ```
 
-## READ_ONCE and WRITE_ONCE {#readonce-and-writeonce}
+## READ_ONCEとWRITE_ONCE {#readonce-and-writeonce}
 
-Two CPUs accessing a variable simultaneously is undefined behavior in C. `READ_ONCE` and `WRITE_ONCE` prevent the compiler from:
+2つのCPUが同時に1つの変数にアクセスすることは、Cでは未定義動作である。`READ_ONCE`と`WRITE_ONCE`は、コンパイラが次のことをするのを防ぐ。
 
-- Tearing the access (splitting a word-sized read/write into multiple)
-- Merging or reordering accesses
-- Caching the value in a register across function calls
+- アクセスのテアリング（ワードサイズの読み書きを複数に分割すること）
+- アクセスの統合や並べ替え
+- 関数呼び出しをまたいで値をレジスタにキャッシュすること
 
 ```c
-/* Without READ_ONCE/WRITE_ONCE: compiler may cache, reorder, or tear */
-while (flag) { ... }  /* compiler might load flag once and loop forever */
+/* READ_ONCE/WRITE_ONCEなし: コンパイラがキャッシュ、並べ替え、テアリングをしうる */
+while (flag) { ... }  /* コンパイラはflagを一度だけロードして永久にループするかもしれない */
 
-/* With READ_ONCE: fresh load every iteration */
+/* READ_ONCEあり: 毎回の反復で新たにロードする */
 while (READ_ONCE(flag)) { ... }
 
-/* WRITE_ONCE: ensure the write is visible as a single operation */
+/* WRITE_ONCE: 書き込みが単一の操作として見えることを保証する */
 WRITE_ONCE(flag, 0);
 ```
 
-These are the minimum necessary for any shared variable access. They don't provide ordering guarantees between CPUs — that's what memory barriers are for.
+これらは、共有変数へのあらゆるアクセスに必要な最低限のものである。CPU間の順序保証は提供しない。それはメモリバリアの役目である。
 
-## Memory barriers {#memory-barriers}
+## メモリバリア {#memory-barriers}
 
-Modern CPUs and compilers reorder memory accesses for performance. On a single CPU this is invisible, but between CPUs it can break synchronization.
+現代のCPUとコンパイラは、性能のためにメモリアクセスを並べ替える。単一のCPU上ではこれは見えないが、CPU間では同期を壊しうる。
 
-There are three types of reordering to prevent:
+防ぐべき並べ替えには3種類ある。
 
 ```
 Store-store: CPU may reorder two stores
@@ -131,77 +131,77 @@ Load-load:   CPU may reorder two loads
 Store-load:  CPU may reorder a store followed by a load (most common)
 ```
 
-### Barrier types {#barrier-types}
+### バリアの種類 {#barrier-types}
 
 ```c
-/* Full barrier: no reordering across this point */
+/* フルバリア: この地点をまたぐ並べ替えをしない */
 smp_mb();
 
-/* Read barrier: no load reordering across this point */
+/* 読み込みバリア: この地点をまたぐロードの並べ替えをしない */
 smp_rmb();
 
-/* Write barrier: no store reordering across this point */
+/* 書き込みバリア: この地点をまたぐストアの並べ替えをしない */
 smp_wmb();
 
-/* Acquire: no loads/stores after this are moved before it */
-smp_load_acquire(ptr);   /* load + acquire barrier */
+/* acquire: これより後のロード/ストアはこれより前に移動されない */
+smp_load_acquire(ptr);   /* ロード + acquireバリア */
 
-/* Release: no loads/stores before this are moved after it */
-smp_store_release(ptr, val);  /* release barrier + store */
+/* release: これより前のロード/ストアはこれより後に移動されない */
+smp_store_release(ptr, val);  /* releaseバリア + ストア */
 ```
 
-### Acquire-Release pattern {#acquire-release-pattern}
+### acquire-releaseパターン {#acquire-release-pattern}
 
-The most common barrier pattern is acquire/release, used for passing data from producer to consumer:
+最も一般的なバリアのパターンはacquire/releaseであり、生産者から消費者へデータを渡すのに使われる。
 
 ```c
-/* Producer */
-data = compute_result();        /* (1) prepare data */
-smp_store_release(&ready, 1);  /* (2) publish: data visible before ready=1 */
+/* 生産者 */
+data = compute_result();        /* (1) データを準備する */
+smp_store_release(&ready, 1);  /* (2) 公開: ready=1 より前にdataが見える */
 
-/* Consumer */
-if (smp_load_acquire(&ready)) { /* (3) check: ready=1 before reading data */
-    use(data);                   /* (4) data is guaranteed visible here */
+/* 消費者 */
+if (smp_load_acquire(&ready)) { /* (3) チェック: dataを読む前に ready=1 */
+    use(data);                   /* (4) ここではdataが見えることが保証される */
 }
 ```
 
-The release barrier in (2) ensures (1) is ordered before (2). The acquire barrier in (3) ensures (3) is ordered before (4). Together they form a happens-before relationship.
+(2)のreleaseバリアは、(1)が(2)より前に順序付けられることを保証する。(3)のacquireバリアは、(3)が(4)より前に順序付けられることを保証する。これらが合わさってhappens-before関係を形成する。
 
-### Atomic ordering variants {#atomic-ordering-variants}
+### アトミック操作の順序付けの種類 {#atomic-ordering-variants}
 
-Atomic operations come in four ordering flavors:
+アトミック操作には4種類の順序付けがある。
 
 ```c
-/* Relaxed: no ordering, just atomicity */
+/* relaxed: 順序付けなし、アトミック性のみ */
 atomic_add_relaxed(1, &counter);
 
-/* Acquire: loads after this see stores before the pairing release */
+/* acquire: これより後のロードは、対となるreleaseより前のストアを見る */
 atomic_add_acquire(1, &counter);
 
-/* Release: stores before this are visible before any pairing acquire */
+/* release: これより前のストアは、対となるacquireより前に見える */
 atomic_add_release(1, &counter);
 
-/* Full (default): both acquire and release semantics */
+/* full（デフォルト）: acquireとreleaseの両方のセマンティクス */
 atomic_add(1, &counter);
 ```
 
-Use relaxed for counters where you don't need ordering. Use acquire/release for producer-consumer synchronization. The defaults (`atomic_add`, etc.) are full barriers, which is safe but potentially slower than needed.
+順序付けが不要なカウンタにはrelaxedを使う。生産者・消費者の同期にはacquire/releaseを使う。デフォルト（`atomic_add`など）はフルバリアであり、安全だが必要以上に遅い可能性がある。
 
 ```c
-/* Around non-atomic operations: ensure ordering with respect to atomics */
+/* 非アトミック操作の前後: アトミック操作に対する順序付けを保証する */
 smp_mb__before_atomic();
-/* non-atomic operations */
+/* 非アトミック操作 */
 atomic_op();
-/* non-atomic operations */
+/* 非アトミック操作 */
 smp_mb__after_atomic();
 ```
 
-## Common patterns {#common-patterns}
+## よくあるパターン {#common-patterns}
 
-### Reference counting (atomic_t) {#reference-counting-atomic_t}
+### 参照カウント（atomic_t） {#reference-counting-atomic_t}
 
 ```c
-/* Simpler than kref for simple cases */
+/* 単純なケースではkrefより簡単 */
 static atomic_t refcount = ATOMIC_INIT(1);
 
 void get(void) { atomic_inc(&refcount); }
@@ -211,9 +211,9 @@ void put(void) {
 }
 ```
 
-The kernel provides `kref` (kernel reference counting) that wraps atomic operations with cleaner semantics.
+カーネルは、アトミック操作をよりわかりやすいセマンティクスでラップした`kref`（カーネルの参照カウント）を提供している。
 
-### Flags (atomic_t as bitfield) {#flags-atomic_t-as-bitfield}
+### フラグ（ビットフィールドとしてのatomic_t） {#flags-atomic_t-as-bitfield}
 
 ```c
 #define FLAG_BUSY    0
@@ -221,20 +221,20 @@ The kernel provides `kref` (kernel reference counting) that wraps atomic operati
 
 atomic_t flags = ATOMIC_INIT(0);
 
-/* Set a flag */
+/* フラグを立てる */
 atomic_or(BIT(FLAG_READY), &flags);
 
-/* Test and clear atomically */
+/* アトミックにテストしてクリアする */
 if (atomic_fetch_andnot(BIT(FLAG_BUSY), &flags) & BIT(FLAG_BUSY)) {
-    /* was busy, now cleared */
+    /* ビジーだったが、クリアされた */
 }
 ```
 
-For per-bit atomics, the kernel also provides `set_bit()`, `clear_bit()`, `test_and_set_bit()`, etc. on `unsigned long`.
+ビット単位のアトミック操作として、カーネルは`unsigned long`に対する`set_bit()`、`clear_bit()`、`test_and_set_bit()`なども提供している。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Spinlock](spinlock.md) — Built on atomics and memory barriers
-- [Per-CPU variables](percpu.md) — Avoiding atomics entirely for per-CPU data
-- `Documentation/memory-barriers.txt` in the kernel tree — The definitive reference
-- `Documentation/atomic_t.txt` — atomic_t semantics
+- [spinlock](spinlock.md) — アトミック操作とメモリバリアの上に構築されている
+- [per-CPU変数](percpu.md) — CPUごとのデータについてアトミック操作を完全に避ける
+- カーネルツリー内の`Documentation/memory-barriers.txt` — 決定版のリファレンス
+- `Documentation/atomic_t.txt` — atomic_tのセマンティクス

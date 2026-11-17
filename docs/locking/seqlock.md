@@ -1,12 +1,12 @@
-# Seqlock {#seqlock}
+# seqlock {#seqlock}
 
-> Sequence counters for lockless reads of small, frequently-updated data
+> 頻繁に更新される小さなデータをロックなしで読むためのシーケンスカウンタ
 
-## The seqlock pattern {#the-seqlock-pattern}
+## seqlockのパターン {#the-seqlock-pattern}
 
-A seqlock (sequence lock) solves a specific problem: how do you let readers access small data (like a timestamp or a counter) without taking any lock, while still detecting if a concurrent write happened?
+seqlock（シーケンスロック）は特定の問題を解決する。読み手が、ロックを一切取らずに小さなデータ（タイムスタンプやカウンタなど）にアクセスしつつ、並行する書き込みが起きたかどうかを検出できるようにするにはどうすればよいか、という問題である。
 
-The writer increments a sequence counter before and after writing. A reader reads the counter before and after reading the data. If the counter changed (or is odd, meaning a write is in progress), the reader retries:
+書き手は、書き込みの前後でシーケンスカウンタをインクリメントする。読み手は、データを読む前後でカウンタを読む。カウンタが変化していた（または奇数で、書き込み中であることを意味する）場合、読み手はリトライする。
 
 ```
 Writer:
@@ -23,25 +23,25 @@ Reader:
   data is valid
 ```
 
-This gives **zero-cost reads when there are no concurrent writes**, and cheap retries otherwise.
+これにより、**並行する書き込みがない場合の読み込みはコストゼロ**になり、そうでない場合も安価なリトライで済む。
 
-## Two types: seqcount_t and seqlock_t {#two-types-seqcountt-and-seqlockt}
+## 2つの型: seqcount_tとseqlock_t {#two-types-seqcountt-and-seqlockt}
 
 ```c
-/* seqcount_t: raw counter, no writer serialization built in.
-   You provide your own writer lock. */
+/* seqcount_t: 生のカウンタ。書き手の直列化は組み込まれていない。
+   書き手用のロックは自分で用意する。 */
 typedef struct seqcount {
     unsigned sequence;
 } seqcount_t;
 
-/* seqlock_t: seqcount + embedded spinlock for writer serialization */
+/* seqlock_t: seqcount + 書き手直列化用の組み込みspinlock */
 typedef struct {
     struct seqcount_spinlock seqcount;
     spinlock_t lock;
 } seqlock_t;
 ```
 
-`seqlock_t` is the complete package for most users. `seqcount_t` is used when the writer serialization is handled by some other mechanism (e.g., a mutex).
+ほとんどのユーザーにとっては`seqlock_t`が完全なパッケージである。`seqcount_t`は、書き手の直列化が何か別の仕組み（例: mutex）で扱われる場合に使われる。
 
 ## API {#api}
 
@@ -50,28 +50,28 @@ typedef struct {
 ```c
 #include <linux/seqlock.h>
 
-/* Initialization */
-DEFINE_SEQLOCK(my_seqlock);    /* static */
+/* 初期化 */
+DEFINE_SEQLOCK(my_seqlock);    /* 静的 */
 seqlock_t my_seqlock;
-seqlock_init(&my_seqlock);     /* dynamic */
+seqlock_init(&my_seqlock);     /* 動的 */
 
-/* Writer side */
+/* 書き手側 */
 write_seqlock(&my_seqlock);
-/* modify data */
+/* データを変更する */
 write_sequnlock(&my_seqlock);
 
-/* Writer + IRQ disable */
+/* 書き手 + IRQ無効化 */
 write_seqlock_irqsave(&my_seqlock, flags);
 write_sequnlock_irqrestore(&my_seqlock, flags);
 
-/* Reader side: retry loop */
+/* 読み手側: リトライループ */
 unsigned seq;
 int value;
 do {
     seq = read_seqbegin(&my_seqlock);
     value = protected_value;
 } while (read_seqretry(&my_seqlock, seq));
-/* value is now consistent */
+/* これでvalueは一貫している */
 ```
 
 ### seqcount_t {#seqcount_t}
@@ -80,30 +80,30 @@ do {
 #include <linux/seqlock.h>
 
 seqcount_t my_seqcount = SEQCNT_ZERO(my_seqcount);
-/* or dynamically: seqcount_init(&my_seqcount); */
+/* または動的に: seqcount_init(&my_seqcount); */
 
-/* Writer: you serialize separately */
+/* 書き手: 直列化は別途行う */
 spin_lock(&my_lock);
 write_seqcount_begin(&my_seqcount);
-/* modify data */
+/* データを変更する */
 write_seqcount_end(&my_seqcount);
 spin_unlock(&my_lock);
 
-/* Reader */
+/* 読み手 */
 unsigned seq;
 do {
     seq = read_seqcount_begin(&my_seqcount);
-    /* read data */
+    /* データを読む */
 } while (read_seqcount_retry(&my_seqcount, seq));
 ```
 
-## Real-world example: jiffies and time {#real-world-example-jiffies-and-time}
+## 実際の例: jiffiesと時間 {#real-world-example-jiffies-and-time}
 
-The kernel uses seqlocks extensively for time-related data that is updated on every timer tick but read from many places:
+カーネルは、タイマーティックごとに更新されるが多くの場所から読まれる時間関連のデータに、seqlockを広く使っている。
 
 ```c
 /* kernel/time/timekeeping.c */
-/* Reading the current time */
+/* 現在時刻を読む */
 static inline u64 __ktime_get_fast_ns(void)
 {
     struct tk_read_base *tkr;
@@ -120,7 +120,7 @@ static inline u64 __ktime_get_fast_ns(void)
 }
 ```
 
-The `jiffies_64` counter is also protected by a seqlock on 32-bit systems (where a 64-bit read is non-atomic):
+`jiffies_64`カウンタも、32ビットシステム（64ビットの読み込みがアトミックでない）ではseqlockで保護されている。
 
 ```c
 /* include/linux/jiffies.h */
@@ -139,46 +139,46 @@ static inline u64 get_jiffies_64(void)
 }
 ```
 
-## Constraints {#constraints}
+## 制約 {#constraints}
 
-Seqlocks have important limitations:
+seqlockには重要な制限がある。
 
-1. **No pointers**: readers cannot follow pointers during the critical section. If the writer frees the old object between the reader's pointer dereference and its use, the reader has a dangling pointer. Use RCU instead for pointer-based data.
+1. **ポインタは不可**: 読み手はクリティカルセクションの間にポインタをたどってはならない。読み手がポインタを参照外ししてから使うまでの間に書き手が古いオブジェクトを解放すると、読み手はダングリングポインタを持つことになる。ポインタベースのデータには代わりにRCUを使う。
 
-2. **Small, bounded data**: the retry loop must be cheap and terminating. Don't protect megabytes of data or data with variable-length reads.
+2. **小さく、上限のあるデータ**: リトライループは安価で、必ず終了しなければならない。メガバイト単位のデータや、可変長の読み込みを伴うデータを保護してはならない。
 
-3. **Writer progress**: writes complete quickly. If writes are frequent or long, readers will spin in the retry loop.
+3. **書き手の進行**: 書き込みは素早く完了する。書き込みが頻繁または長いと、読み手はリトライループでスピンし続けることになる。
 
-4. **No blocking in reader**: the reader critical section must not sleep (the data could change while asleep).
+4. **読み手でのブロック不可**: 読み手のクリティカルセクションはスリープしてはならない（スリープ中にデータが変わりうる）。
 
 ```
-Use seqlock when:
-  ✓ Data is small and fixed-size (integers, timestamps)
-  ✓ Reads are much more frequent than writes
-  ✓ Writers are quick and infrequent
-  ✓ No pointers in the protected data
+seqlockを使うべき場合:
+  ✓ データが小さく固定サイズである（整数、タイムスタンプ）
+  ✓ 読み込みが書き込みよりはるかに頻繁である
+  ✓ 書き手が素早く、まれである
+  ✓ 保護対象のデータにポインタがない
 
-Use RCU when:
-  ✓ Data is pointer-based
-  ✓ Reads must see consistent snapshots of complex structures
+RCUを使うべき場合:
+  ✓ データがポインタベースである
+  ✓ 読み込みが複雑な構造の一貫したスナップショットを見なければならない
 ```
 
-## Seqlock vs rwlock {#seqlock-vs-rwlock}
+## seqlockとrwlockの比較 {#seqlock-vs-rwlock}
 
-Both allow concurrent readers, but:
+どちらも読み手の並行実行を許すが、次の違いがある。
 
 | | rwlock | seqlock |
 |---|--------|---------|
-| Reader overhead | atomic op (acquire) | non-atomic read + barrier |
-| Writer blocks readers? | Yes | No (readers retry) |
-| Reader starvation | No | Possible (busy writers force retries) |
-| Pointer data | Yes | No |
-| IRQ safe | Yes | Yes |
+| 読み手のオーバーヘッド | アトミック操作（取得） | 非アトミックな読み込み + バリア |
+| 書き手が読み手をブロックするか | する | しない（読み手がリトライ） |
+| 読み手の飢餓 | なし | ありうる（忙しい書き手がリトライを強いる） |
+| ポインタデータ | 可 | 不可 |
+| IRQセーフ | はい | はい |
 
-Seqlock wins on read-heavy, write-rare workloads with non-pointer data.
+読み込み中心で書き込みがまれな、ポインタを含まないデータのワークロードではseqlockが勝る。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [rwlock and rwsem](rwlock-rwsem.md) — For pointer-based data or complex structures
-- [RCU](rcu.md) — Lock-free reads for pointer-based data
-- `Documentation/locking/seqlock.rst` in the kernel tree
+- [rwlockとrwsem](rwlock-rwsem.md) — ポインタベースのデータや複雑な構造向け
+- [RCU](rcu.md) — ポインタベースのデータのロックフリーな読み込み
+- カーネルツリー内の`Documentation/locking/seqlock.rst`

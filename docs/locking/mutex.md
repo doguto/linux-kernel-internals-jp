@@ -1,77 +1,77 @@
-# Mutex and rt_mutex {#mutex-and-rt_mutex}
+# mutexとrt_mutex {#mutex-and-rt_mutex}
 
-> Sleeping locks for process context — the right tool when your critical section can block
+> プロセスコンテキスト用のスリープするロック。クリティカルセクションがブロックしうる場合に適した道具
 
-## What is a mutex? {#what-is-a-mutex}
+## mutexとは何か {#what-is-a-mutex}
 
-A mutex (mutual exclusion lock) is a sleeping lock. When a thread can't acquire a mutex, it goes to sleep and is woken up when the lock becomes available. This is unlike a spinlock, which busy-waits.
+mutex（相互排他ロック）はスリープするロックである。スレッドがmutexを取得できないとき、そのスレッドはスリープし、ロックが利用可能になると起床させられる。これはビジーウェイトするspinlockとは異なる。
 
-Because acquiring a mutex may sleep, mutexes can only be used in **process context** — never in interrupt handlers, softirqs, or tasklets.
+mutexの取得はスリープしうるため、mutexは**プロセスコンテキスト**でしか使えない。割り込みハンドラ、softirq、taskletでは決して使えない。
 
-## The mutex structure {#the-mutex-structure}
+## mutexの構造体 {#the-mutex-structure}
 
 ```c
 /* include/linux/mutex_types.h */
 struct mutex {
-    atomic_long_t   owner;      /* task_struct* of owner + flags in low bits */
-    raw_spinlock_t  wait_lock;  /* protects wait_list */
-    struct osq_lock osq;        /* optimistic spinning queue (MCS) */
-    struct list_head wait_list; /* list of waiting tasks */
+    atomic_long_t   owner;      /* オーナーのtask_struct* + 下位ビットのフラグ */
+    raw_spinlock_t  wait_lock;  /* wait_listを保護する */
+    struct osq_lock osq;        /* 楽観的スピンのキュー（MCS） */
+    struct list_head wait_list; /* 待機中タスクのリスト */
 };
 ```
 
-The `owner` field packs the owner pointer and status flags into a single atomic:
+`owner`フィールドは、オーナーへのポインタと状態フラグを1つのアトミック変数に詰め込んでいる。
 
 ```c
 /* kernel/locking/mutex.h */
-#define MUTEX_FLAG_WAITERS  0x01  /* there are waiters on wait_list */
-#define MUTEX_FLAG_HANDOFF  0x02  /* lock being handed off to first waiter */
-#define MUTEX_FLAG_PICKUP   0x04  /* lock being picked up by first waiter */
+#define MUTEX_FLAG_WAITERS  0x01  /* wait_listに待機者がいる */
+#define MUTEX_FLAG_HANDOFF  0x02  /* ロックを先頭の待機者に引き渡し中 */
+#define MUTEX_FLAG_PICKUP   0x04  /* 先頭の待機者がロックを受け取り中 */
 #define MUTEX_FLAGS         0x07
 ```
 
-The task pointer is stored in `owner & ~MUTEX_FLAGS` (safe because `task_struct` is aligned to at least 8 bytes, so the low 3 bits are always zero).
+タスクへのポインタは`owner & ~MUTEX_FLAGS`に格納される（`task_struct`は少なくとも8バイトにアラインされているので、下位3ビットは常にゼロであり、安全である）。
 
-## Basic API {#basic-api}
+## 基本API {#basic-api}
 
 ```c
 #include <linux/mutex.h>
 
-/* Static initialization */
+/* 静的初期化 */
 DEFINE_MUTEX(my_mutex);
 
-/* Dynamic initialization */
+/* 動的初期化 */
 struct mutex my_mutex;
 mutex_init(&my_mutex);
 
-/* Lock (may sleep) */
+/* ロック（スリープしうる） */
 mutex_lock(&my_mutex);
-/* critical section */
+/* クリティカルセクション */
 mutex_unlock(&my_mutex);
 
-/* Interruptible lock (returns -EINTR if signal arrives) */
+/* 割り込み可能なロック（シグナルが届くと-EINTRを返す） */
 if (mutex_lock_interruptible(&my_mutex))
     return -ERESTARTSYS;
-/* critical section */
+/* クリティカルセクション */
 mutex_unlock(&my_mutex);
 
-/* Killable lock (only interrupted by fatal signals) */
+/* killableなロック（致命的なシグナルでのみ中断される） */
 if (mutex_lock_killable(&my_mutex))
     return -EINTR;
 
-/* Non-blocking trylock (returns 1 on success, 0 if locked) */
+/* ブロックしないtrylock（成功で1、ロック済みなら0を返す） */
 if (mutex_trylock(&my_mutex)) {
-    /* got it */
+    /* 取得できた */
     mutex_unlock(&my_mutex);
 }
 
-/* Check if locked (advisory, not synchronization) */
+/* ロックされているかを確認する（参考情報であり、同期には使えない） */
 mutex_is_locked(&my_mutex);
 ```
 
-## Three acquisition strategies {#three-acquisition-strategies}
+## 3つの取得戦略 {#three-acquisition-strategies}
 
-When `mutex_lock()` is called and the lock is held, the kernel tries three strategies in order:
+`mutex_lock()`が呼ばれ、ロックが保持されている場合、カーネルは3つの戦略を順に試す。
 
 ```
 1. Fastpath (no contention)
@@ -92,41 +92,41 @@ When `mutex_lock()` is called and the lock is held, the kernel tries three strat
    → woken by mutex_unlock() when lock is released
 ```
 
-This three-phase approach avoids sleeping when the lock will be released quickly (the common case on loaded multiprocessor systems).
+この3段階のアプローチにより、ロックがすぐに解放される場合（負荷のかかったマルチプロセッサシステムでよくあるケース）にスリープを避けられる。
 
-## Strict semantics {#strict-semantics}
+## 厳格なセマンティクス {#strict-semantics}
 
-Mutexes enforce strict ownership rules that spinlocks do not:
+mutexは、spinlockにはない厳格な所有権のルールを強制する。
 
-- **Only the owner can unlock**: calling `mutex_unlock()` from a different task is a bug
-- **No recursive locking**: a task that holds a mutex must not call `mutex_lock()` again on the same mutex — it will deadlock
-- **No exit with lock held**: if a task exits while holding a mutex, the system detects this (with `CONFIG_DEBUG_MUTEXES`)
-- **No use in interrupt context**: the kernel will warn if you try
+- **オーナーだけがアンロックできる**: 別のタスクから`mutex_unlock()`を呼ぶのはバグである
+- **再帰的なロックは不可**: mutexを保持しているタスクが同じmutexに対して再び`mutex_lock()`を呼んではならない。デッドロックする
+- **ロックを保持したままの終了は不可**: タスクがmutexを保持したまま終了すると、システムはそれを検出する（`CONFIG_DEBUG_MUTEXES`使用時）
+- **割り込みコンテキストでの使用は不可**: 使おうとするとカーネルが警告する
 
 ```c
-/* DON'T: unlock from a different task */
-void thread_a(void) { mutex_lock(&m); /* hands off to thread_b */ }
-void thread_b(void) { mutex_unlock(&m); /* BUG: not the owner */ }
+/* してはならない: 別のタスクからアンロックする */
+void thread_a(void) { mutex_lock(&m); /* thread_bに引き渡す */ }
+void thread_b(void) { mutex_unlock(&m); /* バグ: オーナーではない */ }
 
-/* DON'T: recursive locking */
+/* してはならない: 再帰的なロック */
 mutex_lock(&m);
-mutex_lock(&m);  /* DEADLOCK */
+mutex_lock(&m);  /* デッドロック */
 ```
 
-## rt_mutex: priority-inheritance mutex {#rt_mutex-priority-inheritance-mutex}
+## rt_mutex: 優先度継承mutex {#rt_mutex-priority-inheritance-mutex}
 
-On PREEMPT_RT kernels, `spinlock_t` is implemented via `struct rt_mutex` so that high-priority RT tasks can preempt the lock holder. `struct rt_mutex` is also available directly for cases where priority inheritance is explicitly needed.
+PREEMPT_RTカーネルでは、高優先度のRTタスクがロック保持者をプリエンプトできるように、`spinlock_t`は`struct rt_mutex`を使って実装される。優先度継承が明示的に必要な場合には、`struct rt_mutex`を直接使うこともできる。
 
 ```c
 /* include/linux/rtmutex.h */
 struct rt_mutex_base {
     raw_spinlock_t  wait_lock;
-    struct rb_root_cached waiters;  /* waiters sorted by priority */
+    struct rb_root_cached waiters;  /* 優先度順に並べた待機者 */
     struct task_struct *owner;
 };
 ```
 
-The key difference: with an rt_mutex, if a high-priority task is waiting on the lock, the lock holder **inherits** that high priority until it releases the lock. This prevents **priority inversion** (a low-priority task blocking a high-priority one indefinitely).
+決定的な違いは次の点である。rt_mutexでは、高優先度のタスクがロックを待っている場合、ロック保持者はロックを解放するまでその高い優先度を**継承**する。これにより**優先度逆転**（低優先度のタスクが高優先度のタスクを無期限にブロックすること）が防がれる。
 
 ```
 Without PI:
@@ -140,60 +140,60 @@ With rt_mutex:
   → RT task gets the lock quickly
 ```
 
-See [Priority Inversion & PI Mutexes](../sched/pi-mutexes.md) for the full story.
+詳しくは[優先度逆転とPI mutex](../sched/pi-mutexes.md)を参照のこと。
 
-## Choosing between mutex and spinlock {#choosing-between-mutex-and-spinlock}
+## mutexとspinlockの選択 {#choosing-between-mutex-and-spinlock}
 
 ```
-Use mutex when:
-  ✓ Critical section may block (e.g., kmalloc(GFP_KERNEL), copy_from_user)
-  ✓ Critical section is long (milliseconds)
-  ✓ You're in process context
+mutexを使うべき場合:
+  ✓ クリティカルセクションがブロックしうる（例: kmalloc(GFP_KERNEL)、copy_from_user）
+  ✓ クリティカルセクションが長い（ミリ秒単位）
+  ✓ プロセスコンテキストにいる
 
-Use spinlock when:
-  ✓ Critical section never blocks
-  ✓ Critical section is very short (microseconds)
-  ✓ You're in interrupt context
-  ✓ You need IRQ protection (spin_lock_irqsave)
+spinlockを使うべき場合:
+  ✓ クリティカルセクションが決してブロックしない
+  ✓ クリティカルセクションが非常に短い（マイクロ秒単位）
+  ✓ 割り込みコンテキストにいる
+  ✓ IRQからの保護が必要（spin_lock_irqsave）
 ```
 
-## Design history {#design-history}
+## 設計の歴史 {#design-history}
 
-### Semaphores (pre-2.6.16) {#semaphores-pre-2616}
+### セマフォ（2.6.16以前） {#semaphores-pre-2616}
 
-Before `struct mutex` existed, the standard sleeping lock in the kernel was `struct semaphore`. A semaphore has a count — `down()` decrements it and sleeps if the count reaches zero; `up()` increments it and wakes a waiter.
+`struct mutex`が存在する前、カーネルの標準的なスリープするロックは`struct semaphore`であった。セマフォはカウントを持つ。`down()`はそれをデクリメントし、カウントがゼロに達するとスリープする。`up()`はそれをインクリメントし、待機者を起床させる。
 
-The problem with using a counting semaphore as a mutex: because `up()` can be called by *any* task (not just the one that called `down()`), the kernel couldn't enforce ownership. This ruled out:
+カウンティングセマフォをmutexとして使うことの問題は、`up()`が（`down()`を呼んだタスクに限らず）*任意の*タスクから呼べるため、カーネルが所有権を強制できないことであった。これにより次のことができなかった。
 
-- Detecting recursive locking (which could deadlock)
-- Priority inheritance (who holds the lock? unknown)
-- Debugging tools that check "is the lock held when the task exits?"
-- Static analysis of lock ordering
+- 再帰的なロック（デッドロックしうる）の検出
+- 優先度継承（誰がロックを保持しているのか？ 不明）
+- 「タスク終了時にロックが保持されていないか」をチェックするデバッグツール
+- ロック順序の静的解析
 
-Ingo Molnár introduced `struct mutex` in Linux 2.6.16 (2006) with explicit single-owner semantics — [`6053ee3b32e3`](https://git.kernel.org/linus/6053ee3b32e3437e8c1e72687850f436e779bd49), announced at [LWN](https://lwn.net/Articles/164802/). Mutexes are semantically stricter than semaphores, which enables all the above. Kernel code was gradually migrated from `struct semaphore` to `struct mutex` over the following years. New code should always use `struct mutex` unless a counting semaphore is genuinely needed.
+Ingo Molnárは、明示的な単一オーナーのセマンティクスを持つ`struct mutex`をLinux 2.6.16（2006年）で導入した。[`6053ee3b32e3`](https://git.kernel.org/linus/6053ee3b32e3437e8c1e72687850f436e779bd49)であり、[LWN](https://lwn.net/Articles/164802/)で発表された。mutexはセマフォよりもセマンティクスが厳格であり、それが上記のすべてを可能にする。カーネルのコードはその後数年かけて`struct semaphore`から`struct mutex`へと徐々に移行された。新しいコードは、カウンティングセマフォが本当に必要でない限り、常に`struct mutex`を使うべきである。
 
-### The Big Kernel Lock (BKL) {#the-big-kernel-lock-bkl}
+### Big Kernel Lock（BKL） {#the-big-kernel-lock-bkl}
 
-The BKL (`lock_kernel()` / `unlock_kernel()`) was a single global recursive spinlock introduced in Linux 2.0 to make the kernel SMP-safe quickly. The approach: wrap large subsystems in one coarse lock rather than converting every data structure to fine-grained locking.
+BKL（`lock_kernel()` / `unlock_kernel()`）は、カーネルを素早くSMPセーフにするためにLinux 2.0で導入された、単一のグローバルな再帰的spinlockであった。そのアプローチは、すべてのデータ構造を細粒度のロックに変換する代わりに、大きなサブシステムを1つの粗いロックで包むというものだった。
 
-The BKL had unusual properties: it was released automatically on `schedule()` (so the holder could sleep without deadlocking other holders) and it was recursive. These properties made it easy to adopt but hard to remove, because removing it required proving that the protected code was safe without it.
+BKLには変わった性質があった。`schedule()`で自動的に解放され（そのため保持者は他の保持者をデッドロックさせずにスリープできた）、かつ再帰的であった。これらの性質のおかげで導入は簡単だったが、取り除くのは難しかった。取り除くには、保護されていたコードがBKLなしでも安全であることを証明する必要があったからである。
 
-Subsystem by subsystem, developers replaced BKL sections with proper per-subsystem mutexes and spinlocks. The process took over a decade:
+開発者たちはサブシステムごとに、BKLの区間を適切なサブシステム単位のmutexやspinlockに置き換えていった。この過程には10年以上かかった。
 
-- VFS: converted ~2004–2007 (big_kernel_lock → i_mutex, etc.)
-- TTY layer: converted ~2009
-- Remaining network drivers, sound: converted ~2011–2013
-- BKL removed entirely in Linux 2.6.39 (May 2011) — [`4ba8216cd905`](https://git.kernel.org/linus/4ba8216cd90560bc402f52076f64d8546e8aefcb) by Arnd Bergmann ("BKL: That's all, folks") — [LWN background](https://lwn.net/Articles/384855/)
+- VFS: 2004〜2007年頃に変換（big_kernel_lock → i_mutexなど）
+- TTY層: 2009年頃に変換
+- 残りのネットワークドライバ、サウンド: 2011〜2013年頃に変換
+- BKLはLinux 2.6.39（2011年5月）で完全に削除された。Arnd Bergmannによる[`4ba8216cd905`](https://git.kernel.org/linus/4ba8216cd90560bc402f52076f64d8546e8aefcb)（"BKL: That's all, folks"）— [LWNの背景記事](https://lwn.net/Articles/384855/)
 
-### PREEMPT_RT and rt_mutex {#preemptrt-and-rtmutex}
+### PREEMPT_RTとrt_mutex {#preemptrt-and-rtmutex}
 
-On `CONFIG_PREEMPT_RT` kernels (used in real-time Linux deployments), `spinlock_t` itself is implemented on top of `rt_mutex`. Spinlocks become sleeping locks that can be preempted by higher-priority RT tasks, with full priority inheritance. The priority ceiling is correct even in nested lock scenarios through PI chain walking.
+`CONFIG_PREEMPT_RT`カーネル（リアルタイムLinuxの導入環境で使われる）では、`spinlock_t`自体が`rt_mutex`の上に実装される。spinlockは、完全な優先度継承を伴い、より高優先度のRTタスクにプリエンプトされうるスリープするロックになる。ネストしたロックのシナリオでも、PIチェーンをたどることで優先度の上限は正しく保たれる。
 
-This means: on a PREEMPT_RT system, nearly all kernel locking uses the same priority-inheritance machinery, making priority inversion virtually impossible — at the cost of some throughput compared to the bare-spinlock model.
+つまり、PREEMPT_RTシステムでは、ほぼすべてのカーネルのロックが同じ優先度継承の仕組みを使うため、優先度逆転は事実上起こりえなくなる。その代償として、素のspinlockのモデルに比べてスループットがいくらか低下する。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Spinlock and raw_spinlock](spinlock.md) — The busy-wait alternative
-- [Lockdep](lockdep.md) — Detecting deadlocks and lock ordering violations
-- [Priority Inversion & PI Mutexes](../sched/pi-mutexes.md) — When rt_mutex matters
-- `Documentation/locking/mutex-design.rst` in the kernel tree
+- [spinlockとraw_spinlock](spinlock.md) — ビジーウェイトする代替手段
+- [lockdep](lockdep.md) — デッドロックとロック順序違反の検出
+- [優先度逆転とPI mutex](../sched/pi-mutexes.md) — rt_mutexが重要になる場面
+- カーネルツリー内の`Documentation/locking/mutex-design.rst`

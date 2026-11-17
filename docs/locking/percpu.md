@@ -1,22 +1,22 @@
-# Per-CPU Variables {#per-cpu-variables}
+# per-CPU変数 {#per-cpu-variables}
 
-> Eliminating shared state by giving each CPU its own copy
+> 各CPUに専用のコピーを与えることで共有状態を排除する
 
-## The core idea {#the-core-idea}
+## 基本的な考え方 {#the-core-idea}
 
-Many kernel subsystems maintain per-CPU counters or state — a count of context switches, cache statistics, a runqueue pointer. The obvious approach is a global variable with a lock. But the per-CPU approach is better: give each CPU its own copy.
+多くのカーネルサブシステムは、CPUごとのカウンタや状態を保持している。コンテキストスイッチの回数、キャッシュの統計、ランキューへのポインタなどである。素直な方法はロック付きのグローバル変数だが、per-CPUのアプローチのほうが優れている。各CPUに専用のコピーを与えるのである。
 
-Benefits:
+利点:
 
-- **No synchronization needed for CPU-local access**: reading/writing your own CPU's copy requires no locks
-- **No cache line bouncing**: each CPU touches only its own data, no false sharing
-- **Naturally scalable**: performance doesn't degrade as CPU count increases
+- **CPUローカルなアクセスに同期が不要**: 自分のCPUのコピーの読み書きにはロックが要らない
+- **キャッシュラインのバウンスがない**: 各CPUは自分のデータにしか触れないので、false sharingが起きない
+- **自然にスケールする**: CPU数が増えても性能が劣化しない
 
-The tradeoff: reading the system-wide total requires summing all CPUs' copies.
+トレードオフ: システム全体の合計を読むには、全CPUのコピーを合計する必要がある。
 
-## How it works {#how-it-works}
+## 仕組み {#how-it-works}
 
-The kernel allocates a contiguous per-CPU area for each CPU at boot. A per-CPU variable is an offset into this area. To access CPU N's copy, you compute `base[N] + offset`:
+カーネルは起動時に、CPUごとに連続したper-CPU領域を割り当てる。per-CPU変数はこの領域内のオフセットである。CPU Nのコピーにアクセスするには、`base[N] + offset`を計算する。
 
 ```
 Per-CPU memory layout:
@@ -28,65 +28,65 @@ CPU 2 area:  [var_a] [var_b] [counter] [...]
                       same offset, different base address per CPU
 ```
 
-## Declaring and using per-CPU variables {#declaring-and-using-per-cpu-variables}
+## per-CPU変数の宣言と使用 {#declaring-and-using-per-cpu-variables}
 
 ```c
 #include <linux/percpu.h>
 #include <linux/percpu-defs.h>
 
-/* Declare a per-CPU variable (one copy per CPU) */
+/* per-CPU変数を宣言する（CPUごとに1つのコピー） */
 DEFINE_PER_CPU(int, my_counter);
 DEFINE_PER_CPU(struct my_stats, cpu_stats);
 
-/* Declare in header: */
+/* ヘッダでの宣言: */
 DECLARE_PER_CPU(int, my_counter);
 
-/* Access your own CPU's copy */
-/* get_cpu_var: disables preemption, returns reference */
+/* 自分のCPUのコピーにアクセスする */
+/* get_cpu_var: プリエンプションを無効化し、参照を返す */
 int val = get_cpu_var(my_counter);
 get_cpu_var(my_counter)++;
-put_cpu_var(my_counter);  /* re-enables preemption */
+put_cpu_var(my_counter);  /* プリエンプションを再有効化する */
 
-/* this_cpu_*: low-overhead variant, you must ensure no migration */
+/* this_cpu_*: 低オーバーヘッド版。マイグレーションしないことを呼び出し側が保証する必要がある */
 this_cpu_inc(my_counter);
 this_cpu_add(my_counter, 5);
 int v = this_cpu_read(my_counter);
 this_cpu_write(my_counter, 0);
 ```
 
-The difference between `get_cpu_var` and `this_cpu_*`:
+`get_cpu_var`と`this_cpu_*`の違い:
 
-- `get_cpu_var` disables preemption — safe even if code can be preempted
-- `this_cpu_*` does NOT disable preemption — caller must guarantee they won't migrate (e.g., already in a preemption-disabled section, or in a per-CPU context)
+- `get_cpu_var`はプリエンプションを無効化する。コードがプリエンプトされうる場合でも安全である
+- `this_cpu_*`はプリエンプションを無効化*しない*。呼び出し側がマイグレーションしないことを保証しなければならない（例: すでにプリエンプション無効区間にいる、またはper-CPUコンテキストにいる）
 
-## Accessing another CPU's data {#accessing-another-cpus-data}
+## 他のCPUのデータへのアクセス {#accessing-another-cpus-data}
 
 ```c
-/* Read CPU N's copy (observer only, no lock needed for reading) */
+/* CPU Nのコピーを読む（観測のみ。読み込みにロックは不要） */
 int val = per_cpu(my_counter, cpu_id);
 
-/* Get a pointer to CPU N's copy */
+/* CPU Nのコピーへのポインタを得る */
 int *ptr = per_cpu_ptr(&my_counter, cpu_id);
 ```
 
-For writes to another CPU's variable, you typically need either a lock or to use an IPI (inter-processor interrupt) to run code on that CPU.
+他のCPUの変数に書き込むには、通常、ロックを使うか、IPI（プロセッサ間割り込み）を使ってそのCPU上でコードを実行する必要がある。
 
-## Summing all CPUs {#summing-all-cpus}
+## 全CPUの合計 {#summing-all-cpus}
 
 ```c
-/* Sum a per-CPU integer across all CPUs */
+/* per-CPUの整数を全CPUにわたって合計する */
 long total = 0;
 int cpu;
 for_each_possible_cpu(cpu)
     total += per_cpu(my_counter, cpu);
 
-/* Or using the convenience helper for percpu_counter: */
+/* あるいはpercpu_counter用の便利なヘルパを使う: */
 s64 sum = percpu_counter_sum(&my_percpu_counter);
 ```
 
-## percpu_counter: the ready-made solution {#percpu_counter-the-ready-made-solution}
+## percpu_counter: 既製の解決策 {#percpu_counter-the-ready-made-solution}
 
-For simple counters, `percpu_counter` provides a complete implementation that batches updates to a central counter:
+単純なカウンタには、`percpu_counter`が、更新をまとめて中央のカウンタに反映する完全な実装を提供している。
 
 ```c
 #include <linux/percpu_counter.h>
@@ -94,53 +94,53 @@ For simple counters, `percpu_counter` provides a complete implementation that ba
 struct percpu_counter my_counter;
 percpu_counter_init(&my_counter, 0, GFP_KERNEL);
 
-/* Fast: update this CPU's local count */
+/* 高速: このCPUのローカルカウントを更新する */
 percpu_counter_add(&my_counter, 1);
 percpu_counter_inc(&my_counter);
 percpu_counter_dec(&my_counter);
 
-/* Approximate: fast sum (may be slightly off) */
+/* 近似: 高速な合計（多少ずれることがある） */
 s64 approx = percpu_counter_read(&my_counter);
 
-/* Exact: sums all CPUs (slower) */
+/* 正確: 全CPUを合計する（遅い） */
 s64 exact = percpu_counter_sum(&my_counter);
 
 percpu_counter_destroy(&my_counter);
 ```
 
-`percpu_counter` batches updates: each CPU accumulates up to `batch` (default 32) local changes before flushing to the global counter. This makes increments O(1) with no atomic operations in the fast path.
+`percpu_counter`は更新をバッチ化する。各CPUは最大`batch`（デフォルト32）個のローカルな変更を蓄積してから、グローバルカウンタにフラッシュする。これにより、インクリメントは高速パスでアトミック操作なしのO(1)になる。
 
-## When NOT to use per-CPU variables {#when-not-to-use-per-cpu-variables}
+## per-CPU変数を使うべきでない場合 {#when-not-to-use-per-cpu-variables}
 
-Per-CPU is not always the answer:
+per-CPUが常に答えになるわけではない。
 
 ```
-Use per-CPU when:
-  ✓ Data is primarily updated by the owning CPU
-  ✓ Global aggregates can be approximate (stats, counters)
-  ✓ Per-CPU state makes semantic sense (runqueues, CPU-local caches)
+per-CPUを使うべき場合:
+  ✓ データが主に所有CPUによって更新される
+  ✓ グローバルな集計値が近似でよい（統計、カウンタ）
+  ✓ CPUごとの状態が意味的に妥当である（ランキュー、CPUローカルなキャッシュ）
 
-Don't use per-CPU when:
-  ✗ Any CPU can update the data equally often
-  ✗ The global total must always be exact and consistent
-  ✗ The data is inherently global (a single flag, a single pointer)
+per-CPUを使うべきでない場合:
+  ✗ どのCPUも同じ頻度でデータを更新しうる
+  ✗ グローバルな合計が常に正確で一貫していなければならない
+  ✗ データが本質的にグローバルである（単一のフラグ、単一のポインタ）
 ```
 
-## Real-world usage: VM stats {#real-world-usage-vm-stats}
+## 実際の使用例: VM統計 {#real-world-usage-vm-stats}
 
-The mm subsystem uses per-CPU variables for page counters:
+mmサブシステムは、ページカウンタにper-CPU変数を使っている。
 
 ```c
 /* mm/vmstat.c */
 DEFINE_PER_CPU(struct vm_event_state, vm_event_states);
 
-/* Increment a VM event counter (e.g., number of page faults) */
+/* VMイベントカウンタ（例: ページフォールトの回数）をインクリメントする */
 static inline void count_vm_event(enum vm_event_item item)
 {
     this_cpu_inc(vm_event_states.event[item]);
 }
 
-/* Read the global total */
+/* グローバルな合計を読む */
 unsigned long global_node_page_state(enum node_stat_item item)
 {
     long x = atomic_long_read(&vm_node_stat[item]);
@@ -148,7 +148,7 @@ unsigned long global_node_page_state(enum node_stat_item item)
 }
 ```
 
-And the scheduler uses per-CPU runqueues:
+そしてスケジューラはper-CPUのランキューを使っている。
 
 ```c
 /* kernel/sched/core.c */
@@ -158,8 +158,8 @@ DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 #define this_rq()   this_cpu_ptr(&runqueues)
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Atomic operations](atomics.md) — When you do need synchronization
-- [Spinlock](spinlock.md) — Protecting truly shared data
-- `Documentation/core-api/per-cpu.rst` in the kernel tree
+- [アトミック操作](atomics.md) — 同期が本当に必要なとき
+- [spinlock](spinlock.md) — 真に共有されたデータを保護する
+- カーネルツリー内の`Documentation/core-api/per-cpu.rst`

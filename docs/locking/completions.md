@@ -1,140 +1,140 @@
-# Completions and Wait Queues {#completions-and-wait-queues}
+# completionと待ちキュー {#completions-and-wait-queues}
 
-> Blocking synchronization: sleeping until an event occurs
+> ブロックする同期: イベントが起きるまでスリープする
 
 ## struct completion {#struct-completion}
 
-`completion` is a simple one-shot synchronization primitive: one thread waits, another signals when done. It's simpler and safer than using `wait_queue_head_t` directly for this common pattern.
+`completion`は単純な一回限りの同期プリミティブである。一方のスレッドが待ち、もう一方が完了時に通知する。このよくあるパターンについては、`wait_queue_head_t`を直接使うよりも単純で安全である。
 
 ```c
 #include <linux/completion.h>
 
-/* Declare and initialize */
+/* 宣言と初期化 */
 DECLARE_COMPLETION(my_completion);
-/* Or dynamically: */
+/* または動的に: */
 struct completion c;
 init_completion(&c);
 
-/* Waiter thread: block until signaled */
+/* 待機側スレッド: 通知されるまでブロックする */
 wait_for_completion(&c);
-/* Execution continues here after signal */
+/* 通知後、実行はここから続く */
 
-/* Signaler thread: wake up the waiter */
+/* 通知側スレッド: 待機者を起床させる */
 complete(&c);
-/* After complete(), one waiter is woken */
+/* complete()の後、待機者が1つ起床する */
 ```
 
-### Completion variants {#completion-variants}
+### completionのバリエーション {#completion-variants}
 
 ```c
-/* Timed wait: return 0 on timeout, 1 on completion */
+/* 時間制限付きの待機: タイムアウトで0、完了で1を返す */
 unsigned long remaining = wait_for_completion_timeout(&c, HZ);
 if (!remaining)
     pr_err("Timed out waiting!\n");
 
-/* Interruptible wait: return -ERESTARTSYS if signal arrives */
+/* 割り込み可能な待機: シグナルが届くと-ERESTARTSYSを返す */
 int ret = wait_for_completion_interruptible(&c);
 if (ret)
-    return ret;  /* interrupted */
+    return ret;  /* 割り込まれた */
 
-/* Interruptible with timeout */
+/* 割り込み可能かつタイムアウト付き */
 long ret = wait_for_completion_interruptible_timeout(&c, timeout);
-/* ret > 0: completed */
-/* ret == 0: timed out */
-/* ret < 0: interrupted */
+/* ret > 0: 完了した */
+/* ret == 0: タイムアウトした */
+/* ret < 0: 割り込まれた */
 
-/* Wake all waiters (not just one) */
+/* （1つだけでなく）すべての待機者を起床させる */
 complete_all(&c);
 
-/* Reinitialize after all waiters have woken */
+/* すべての待機者が起床した後に再初期化する */
 reinit_completion(&c);
 
-/* Check without blocking */
+/* ブロックせずにチェックする */
 if (completion_done(&c)) {
-    /* already signaled */
+    /* すでに通知済み */
 }
 ```
 
-### Completion with try_wait {#completion-with-try_wait}
+### try_waitを使うcompletion {#completion-with-try_wait}
 
 ```c
-/* Non-blocking check: acquire if already signaled */
+/* ブロックしないチェック: すでに通知済みなら取得する */
 if (try_wait_for_completion(&c)) {
-    /* Was already complete — no blocking */
+    /* すでに完了していた — ブロックなし */
 } else {
-    /* Not yet complete — would have blocked */
+    /* まだ完了していない — 本来ならブロックしていた */
 }
 ```
 
 ## struct wait_queue_head_t {#struct-waitqueuehead_t}
 
-`wait_queue_head_t` is the lower-level primitive that `completion` builds on. It supports:
+`wait_queue_head_t`は、`completion`の土台となる低レベルのプリミティブである。次をサポートする。
 
-- Multiple waiters on the same event
-- Custom wake conditions
-- Exclusive vs non-exclusive wakeup
-- `poll()/select()/epoll` integration
+- 同じイベントに対する複数の待機者
+- 独自の起床条件
+- 排他的な起床と非排他的な起床
+- `poll()/select()/epoll`との統合
 
 ```c
 #include <linux/wait.h>
 
-/* Declare */
+/* 宣言 */
 DECLARE_WAIT_QUEUE_HEAD(my_wq);
-/* Or: */
+/* または: */
 wait_queue_head_t wq;
 init_waitqueue_head(&wq);
 ```
 
-## wait_event: the standard pattern {#wait_event-the-standard-pattern}
+## wait_event: 標準的なパターン {#wait_event-the-standard-pattern}
 
-`wait_event` combines the wait with a condition check:
+`wait_event`は、待機と条件チェックを組み合わせる。
 
 ```c
-/* Waiter: sleep until condition is true */
+/* 待機者: 条件が真になるまでスリープする */
 wait_event(wq, condition);
-/* condition is re-evaluated after every wakeup */
+/* 条件は起床のたびに再評価される */
 
-/* Interruptible version */
+/* 割り込み可能版 */
 int ret = wait_event_interruptible(wq, condition);
 if (ret)
-    return ret;  /* -ERESTARTSYS: signal received */
+    return ret;  /* -ERESTARTSYS: シグナルを受信した */
 
-/* With timeout */
+/* タイムアウト付き */
 long ret = wait_event_timeout(wq, condition, timeout_jiffies);
-/* ret > 0: condition met */
-/* ret == 0: timed out */
+/* ret > 0: 条件が満たされた */
+/* ret == 0: タイムアウトした */
 
-/* With interruptible + timeout */
+/* 割り込み可能 + タイムアウト付き */
 long ret = wait_event_interruptible_timeout(wq, condition, timeout);
 ```
 
-**The wake_up / wait_event contract**:
+**wake_up / wait_eventの約束事**:
 
 ```c
-/* Signaler: modify the condition variable, then wake */
+/* 通知側: 条件変数を変更してから起床させる */
 WRITE_ONCE(data_ready, true);
-wake_up(&wq);          /* wake one non-exclusive waiter */
-wake_up_all(&wq);      /* wake all waiters */
-wake_up_interruptible(&wq);  /* wake only interruptible waiters */
+wake_up(&wq);          /* 非排他的な待機者を1つ起床させる */
+wake_up_all(&wq);      /* すべての待機者を起床させる */
+wake_up_interruptible(&wq);  /* 割り込み可能な待機者のみ起床させる */
 ```
 
-`wait_event` uses a loop:
+`wait_event`はループを使う。
 ```c
-/* wait_event expansion (simplified): */
+/* wait_eventの展開形（簡略化）: */
 for (;;) {
     prepare_to_wait(&wq, &__wait, TASK_UNINTERRUPTIBLE);
     if (condition)
         break;
-    schedule();   /* sleep */
+    schedule();   /* スリープする */
 }
 finish_wait(&wq, &__wait);
 ```
 
-This correctly handles races: if the condition becomes true between the check and `schedule()`, the wake_up will have set the task state back to TASK_RUNNING.
+これは競合を正しく扱う。チェックと`schedule()`の間に条件が真になった場合、wake_upがタスクの状態をTASK_RUNNINGに戻しているはずである。
 
-## Custom wait: prepare_to_wait / finish_wait {#custom-wait-preparetowait-finish_wait}
+## 独自の待機: prepare_to_wait / finish_wait {#custom-wait-preparetowait-finish_wait}
 
-For more complex patterns:
+より複雑なパターンの場合:
 
 ```c
 DEFINE_WAIT(wait);
@@ -142,57 +142,57 @@ DEFINE_WAIT(wait);
 prepare_to_wait(&wq, &wait, TASK_INTERRUPTIBLE);
 while (!condition) {
     if (signal_pending(current)) {
-        /* Signal received */
+        /* シグナルを受信した */
         break;
     }
-    /* Drop any locks here before sleeping */
+    /* スリープする前に、ここで保持しているロックを解放する */
     spin_unlock_irq(&lock);
     schedule();
     spin_lock_irq(&lock);
-    /* Recheck condition here */
+    /* ここで条件を再チェックする */
 }
 finish_wait(&wq, &wait);
 ```
 
-## Exclusive waiters {#exclusive-waiters}
+## 排他的な待機者 {#exclusive-waiters}
 
-Exclusive waiters are woken one at a time (thundering herd prevention):
+排他的な待機者は、1つずつ起床させられる（thundering herdの防止）。
 
 ```c
-/* Add as exclusive waiter (only woken by wake_up, not wake_up_all) */
+/* 排他的な待機者として追加する（wake_upでのみ起床し、wake_up_allでは起床しない） */
 prepare_to_wait_exclusive(&wq, &wait, TASK_INTERRUPTIBLE);
 
-/* wake_up: wakes exactly one exclusive waiter + all non-exclusive */
+/* wake_up: 排他的な待機者をちょうど1つ + 非排他的な待機者をすべて起床させる */
 wake_up(&wq);
 ```
 
-Used for accept() on TCP listen sockets: only one of many waiting accept() calls needs to be woken when a connection arrives.
+TCPのlistenソケットに対するaccept()で使われている。接続が到着したとき、待機している多数のaccept()呼び出しのうち1つだけを起床させればよい。
 
-## poll/select/epoll integration {#pollselectepoll-integration}
+## poll/select/epollとの統合 {#pollselectepoll-integration}
 
-Drivers implement `poll` (or `->poll` in file_operations) using wait queues:
+ドライバは、待ちキューを使って`poll`（file_operationsの`->poll`）を実装する。
 
 ```c
-/* In file_operations.poll or .f_poll: */
+/* file_operations.pollまたは.f_poll内: */
 static __poll_t mydev_poll(struct file *file, poll_table *wait)
 {
     struct mydev *dev = file->private_data;
     __poll_t mask = 0;
 
-    /* Register this file's wait queue with the poll table */
+    /* このファイルの待ちキューをpollテーブルに登録する */
     poll_wait(file, &dev->read_wq, wait);
     poll_wait(file, &dev->write_wq, wait);
 
-    /* Check current state */
+    /* 現在の状態をチェックする */
     if (!kfifo_is_empty(&dev->recv_fifo))
-        mask |= EPOLLIN | EPOLLRDNORM;   /* data available to read */
+        mask |= EPOLLIN | EPOLLRDNORM;   /* 読めるデータがある */
     if (!kfifo_is_full(&dev->send_fifo))
-        mask |= EPOLLOUT | EPOLLWRNORM;  /* space available to write */
+        mask |= EPOLLOUT | EPOLLWRNORM;  /* 書き込む空きがある */
 
     return mask;
 }
 
-/* When data arrives: wake the wait queue */
+/* データが到着したとき: 待ちキューを起床させる */
 void mydev_data_arrived(struct mydev *dev)
 {
     kfifo_put(&dev->recv_fifo, data);
@@ -200,31 +200,31 @@ void mydev_data_arrived(struct mydev *dev)
 }
 ```
 
-`poll_wait` adds the wait queue to the poll table so that epoll monitors it. When `wake_up` fires, epoll wakes the calling process.
+`poll_wait`は待ちキューをpollテーブルに追加し、epollがそれを監視できるようにする。`wake_up`が発火すると、epollは呼び出し元のプロセスを起床させる。
 
-## wait_queue_entry: custom callbacks {#waitqueueentry-custom-callbacks}
+## wait_queue_entry: 独自のコールバック {#waitqueueentry-custom-callbacks}
 
-Advanced use: add a custom function to call on wakeup:
+高度な使い方として、起床時に呼ぶ独自の関数を追加できる。
 
 ```c
-/* Custom wait entry with callback */
+/* コールバック付きの独自の待ちエントリ */
 static int my_wakeup_func(struct wait_queue_entry *curr,
                            unsigned mode, int wake_flags, void *key)
 {
     struct mydata *data = container_of(curr, struct mydata, wait_entry);
 
-    /* Called in the waker's context (IRQ or process) */
-    /* Return 0 to continue waking other waiters, 1 to stop */
+    /* 起床させる側のコンテキスト（IRQまたはプロセス）で呼ばれる */
+    /* 0を返すと他の待機者の起床を続け、1を返すと止める */
 
-    /* Schedule a task for later processing */
+    /* 後で処理するためにタスクをスケジュールする */
     schedule_work(&data->work);
-    return 1;  /* don't wake the task directly */
+    return 1;  /* タスクを直接は起床させない */
 }
 
 struct wait_queue_entry wqe = {
     .private = &mydata,
     .func    = my_wakeup_func,
-    .flags   = 0,  /* or WQ_FLAG_EXCLUSIVE for exclusive */
+    .flags   = 0,  /* 排他的にするならWQ_FLAG_EXCLUSIVE */
 };
 
 add_wait_queue(&wq, &wqe);
@@ -232,20 +232,20 @@ add_wait_queue(&wq, &wqe);
 remove_wait_queue(&wq, &wqe);
 ```
 
-## Common patterns {#common-patterns}
+## よくあるパターン {#common-patterns}
 
-### Producer/consumer with wait queue {#producerconsumer-with-wait-queue}
+### 待ちキューを使った生産者/消費者 {#producerconsumer-with-wait-queue}
 
 ```c
 struct ring_buffer {
     u8               data[1024];
     unsigned int     head, tail;
-    wait_queue_head_t not_empty;   /* consumers wait here */
-    wait_queue_head_t not_full;    /* producers wait here */
+    wait_queue_head_t not_empty;   /* 消費者はここで待つ */
+    wait_queue_head_t not_full;    /* 生産者はここで待つ */
     spinlock_t        lock;
 };
 
-/* Consumer */
+/* 消費者 */
 int rb_read(struct ring_buffer *rb, u8 *buf, size_t len)
 {
     int ret;
@@ -256,7 +256,7 @@ int rb_read(struct ring_buffer *rb, u8 *buf, size_t len)
                                              rb->lock);
     if (ret) {
         spin_unlock(&rb->lock);
-        return ret;  /* interrupted */
+        return ret;  /* 割り込まれた */
     }
 
     memcpy(buf, &rb->data[rb->tail], len);
@@ -267,7 +267,7 @@ int rb_read(struct ring_buffer *rb, u8 *buf, size_t len)
     return len;
 }
 
-/* Producer */
+/* 生産者 */
 int rb_write(struct ring_buffer *rb, const u8 *buf, size_t len)
 {
     spin_lock(&rb->lock);
@@ -281,10 +281,10 @@ int rb_write(struct ring_buffer *rb, const u8 *buf, size_t len)
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [SRCU](srcu.md) — sleepable RCU with read-side blocking
-- [Mutex](mutex.md) — sleeping mutual exclusion
-- [IPC: Signals](../ipc/signals.md) — signal delivery to waiting tasks
-- [io_uring](../io-uring/io-uring-arch.md) — io_uring avoids wait queues entirely
-- `include/linux/wait.h` — full wait queue API
+- [SRCU](srcu.md) — 読み側でブロックできるスリープ可能なRCU
+- [mutex](mutex.md) — スリープする相互排他
+- [IPC: シグナル](../ipc/signals.md) — 待機中のタスクへのシグナル配送
+- [io_uring](../io-uring/io-uring-arch.md) — io_uringは待ちキューを完全に回避する
+- `include/linux/wait.h` — 待ちキューAPIの全体
