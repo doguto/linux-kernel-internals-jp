@@ -1,28 +1,28 @@
-# Cgroup BPF Programs {#cgroup-bpf-programs}
+# cgroup BPF プログラム {#cgroup-bpf-programs}
 
-> Attaching eBPF programs to cgroups for network policy, device control, and resource accounting
+> ネットワークポリシー、デバイス制御、リソースアカウンティングのために eBPF プログラムを cgroup にアタッチする
 
-## Overview {#overview}
+## 概要 {#overview}
 
-BPF programs can be attached to cgroup directories and run for every process in that cgroup and its descendants. This gives you programmable, per-cgroup policy without patching the kernel or writing kernel modules. A cgroup BPF program executes in the kernel at a well-defined hook point — a socket being created, a packet arriving, a device node being opened — and decides what to do.
+BPF プログラムは cgroup ディレクトリにアタッチでき、その cgroup とその子孫に属するすべてのプロセスに対して実行される。これにより、カーネルにパッチを当てたりカーネルモジュールを書いたりせずに、プログラム可能な cgroup 単位のポリシーを実現できる。cgroup BPF プログラムは、明確に定義されたフックポイント（ソケットの作成、パケットの到着、デバイスノードのオープンなど）でカーネル内で実行され、何をすべきかを決定する。
 
-Unlike traditional cgroup controllers (which expose a fixed set of interface files), cgroup BPF lets you express arbitrary policy in a verified, sandboxed program. The same mechanism powers Kubernetes NetworkPolicy enforcement, container device whitelists, and per-service TCP tuning.
+従来の cgroup コントローラ（固定されたインターフェースファイルの集合を公開する）とは異なり、cgroup BPF では、検証済みでサンドボックス化されたプログラムで任意のポリシーを表現できる。同じ仕組みが、Kubernetes の NetworkPolicy の強制、コンテナのデバイスのホワイトリスト、サービスごとの TCP チューニングを支えている。
 
-## Attach types {#attach-types}
+## アタッチタイプ {#attach-types}
 
-Attach types are defined in `include/uapi/linux/bpf.h` as `enum bpf_attach_type`. The cgroup-related ones:
+アタッチタイプは `include/uapi/linux/bpf.h` で `enum bpf_attach_type` として定義されている。cgroup に関連するものは次のとおりである:
 
-### Network packet filtering {#network-packet-filtering}
+### ネットワークパケットのフィルタリング {#network-packet-filtering}
 
 `BPF_CGROUP_INET_INGRESS` / `BPF_CGROUP_INET_EGRESS`
 
-Called for every IPv4/IPv6 packet sent or received by a socket owned by a process in the cgroup. The program receives an `__sk_buff` context and returns:
+cgroup 内のプロセスが所有するソケットが送受信するすべての IPv4/IPv6 パケットに対して呼ばれる。プログラムは `__sk_buff` コンテキストを受け取り、次を返す:
 
-- `1` — pass the packet
-- `0` — drop the packet
+- `1` — パケットを通す
+- `0` — パケットを破棄する
 
 ```c
-/* Egress: drop all packets to 10.0.0.0/8 from this cgroup */
+/* egress: この cgroup から 10.0.0.0/8 宛てのパケットをすべて破棄する */
 SEC("cgroup_skb/egress")
 int block_internal(struct __sk_buff *skb)
 {
@@ -33,37 +33,37 @@ int block_internal(struct __sk_buff *skb)
     if (ip + 1 > data_end)
         return 1;
 
-    /* Drop packets destined for 10.0.0.0/8 */
+    /* 10.0.0.0/8 宛てのパケットを破棄する */
     if ((bpf_ntohl(ip->daddr) & 0xff000000) == 0x0a000000)
         return 0;
     return 1;
 }
 ```
 
-### Socket creation control {#socket-creation-control}
+### ソケット作成の制御 {#socket-creation-control}
 
 `BPF_CGROUP_INET_SOCK_CREATE`
 
-Called when `socket()` is invoked by a process in the cgroup. The program receives a `struct bpf_sock` and can deny socket creation by returning `0`:
+cgroup 内のプロセスが `socket()` を呼び出したときに呼ばれる。プログラムは `struct bpf_sock` を受け取り、`0` を返すことでソケットの作成を拒否できる:
 
 ```c
 SEC("cgroup/sock_create")
 int restrict_raw_sockets(struct bpf_sock *sk)
 {
-    /* Deny raw socket creation (SOCK_RAW) — only allow STREAM and DGRAM */
+    /* raw ソケット（SOCK_RAW）の作成を拒否する — STREAM と DGRAM のみ許可 */
     if (sk->type == SOCK_RAW)
         return 0;
     return 1;
 }
 ```
 
-This is lighter-weight than seccomp filtering on `socket()` because the BPF program has access to socket metadata without needing to decode syscall arguments.
+これは `socket()` に対する seccomp のフィルタリングよりも軽量である。BPF プログラムは、システムコールの引数をデコードしなくてもソケットのメタデータにアクセスできるからである。
 
-### TCP lifecycle hooks {#tcp-lifecycle-hooks}
+### TCP のライフサイクルフック {#tcp-lifecycle-hooks}
 
 `BPF_CGROUP_SOCK_OPS`
 
-Called at multiple TCP lifecycle events — connection established, timeout, retransmit, RTO change — and can query or set socket options per-cgroup. The program receives a `struct bpf_sock_ops`:
+TCP のライフサイクルにおける複数のイベント（コネクション確立、タイムアウト、再送、RTO の変化）で呼ばれ、cgroup ごとにソケットオプションを照会・設定できる。プログラムは `struct bpf_sock_ops` を受け取る:
 
 ```c
 SEC("sockops")
@@ -71,12 +71,12 @@ int set_buffer_sizes(struct bpf_sock_ops *skops)
 {
     switch (skops->op) {
     case BPF_SOCK_OPS_ACTIVE_ESTABLISHED_CB:
-        /* Connection established (client side): increase TCP send buffer */
+        /* コネクション確立（クライアント側）: TCP の送信バッファを増やす */
         bpf_setsockopt(skops, SOL_SOCKET, SO_SNDBUF, &(int){4 * 1024 * 1024},
                        sizeof(int));
         break;
     case BPF_SOCK_OPS_PASSIVE_ESTABLISHED_CB:
-        /* Connection established (server side) */
+        /* コネクション確立（サーバー側） */
         bpf_setsockopt(skops, SOL_SOCKET, SO_RCVBUF, &(int){4 * 1024 * 1024},
                        sizeof(int));
         break;
@@ -85,41 +85,41 @@ int set_buffer_sizes(struct bpf_sock_ops *skops)
 }
 ```
 
-Attaching this to a service's cgroup applies the TCP tuning to all sockets opened by that service — without touching the global `sysctl` values that affect all processes on the host.
+これをサービスの cgroup にアタッチすると、ホスト上の全プロセスに影響するグローバルな `sysctl` の値に触れることなく、そのサービスが開くすべてのソケットに TCP チューニングを適用できる。
 
-### Device access control {#device-access-control}
+### デバイスアクセス制御 {#device-access-control}
 
 `BPF_CGROUP_DEVICE`
 
-Called when a process in the cgroup attempts to `open()`, `mknod()`, or `access()` a device node. The program receives a `struct bpf_cgroup_dev_ctx` describing the device major/minor and the requested access type (`BPF_DEVCG_ACC_READ`, `BPF_DEVCG_ACC_WRITE`, `BPF_DEVCG_ACC_MKNOD`), and returns `1` to allow or `0` to deny:
+cgroup 内のプロセスがデバイスノードを `open()`、`mknod()`、`access()` しようとしたときに呼ばれる。プログラムは、デバイスの major/minor と要求されたアクセス種別（`BPF_DEVCG_ACC_READ`、`BPF_DEVCG_ACC_WRITE`、`BPF_DEVCG_ACC_MKNOD`）を記述した `struct bpf_cgroup_dev_ctx` を受け取り、許可なら `1`、拒否なら `0` を返す:
 
 ```c
 SEC("cgroup/dev")
 int device_policy(struct bpf_cgroup_dev_ctx *ctx)
 {
-    /* Allow access only to /dev/null (1:3) and /dev/zero (1:5) */
+    /* /dev/null (1:3) と /dev/zero (1:5) へのアクセスのみ許可する */
     if (ctx->major == 1 && (ctx->minor == 3 || ctx->minor == 5))
         return 1;
-    /* Allow /dev/pts/* (136:*) for terminal emulators */
+    /* 端末エミュレータ用に /dev/pts/* (136:*) を許可する */
     if (ctx->major == 136)
         return 1;
     return 0;
 }
 ```
 
-`BPF_CGROUP_DEVICE` is the cgroup v2 replacement for the legacy `devices` cgroup v1 controller. The v1 controller exposed `devices.allow` / `devices.deny` files; cgroup v2 dropped the `devices` controller entirely and relies on `BPF_CGROUP_DEVICE` instead. Container runtimes like runc generate and load a `BPF_CGROUP_DEVICE` program from the OCI spec's `linux.resources.devices` list.
+`BPF_CGROUP_DEVICE` は、レガシーな cgroup v1 の `devices` コントローラを cgroup v2 で置き換えるものである。v1 のコントローラは `devices.allow` / `devices.deny` ファイルを公開していたが、cgroup v2 では `devices` コントローラが完全に廃止され、代わりに `BPF_CGROUP_DEVICE` に依存している。runc のようなコンテナランタイムは、OCI 仕様の `linux.resources.devices` リストから `BPF_CGROUP_DEVICE` プログラムを生成してロードする。
 
-### Sysctl interception {#sysctl-interception}
+### sysctl の傍受 {#sysctl-interception}
 
 `BPF_CGROUP_SYSCTL`
 
-Called when a process reads or writes a sysctl under `/proc/sys`. The program receives a `struct bpf_sysctl` and can inspect or modify the value, or deny the operation:
+プロセスが `/proc/sys` 配下の sysctl を読み書きしたときに呼ばれる。プログラムは `struct bpf_sysctl` を受け取り、値を検査・変更したり、操作を拒否したりできる:
 
 ```c
 SEC("cgroup/sysctl")
 int sysctl_filter(struct bpf_sysctl *ctx)
 {
-    /* Deny writes to net.core.somaxconn from within the cgroup */
+    /* cgroup 内からの net.core.somaxconn への書き込みを拒否する */
     char name[64] = {};
     bpf_sysctl_get_name(ctx, name, sizeof(name), 0);
     if (ctx->write && __builtin_memcmp(name, "net/core/somaxconn", 18) == 0)
@@ -128,94 +128,94 @@ int sysctl_filter(struct bpf_sysctl *ctx)
 }
 ```
 
-### Socket option interception {#socket-option-interception}
+### ソケットオプションの傍受 {#socket-option-interception}
 
 `BPF_CGROUP_GETSOCKOPT` / `BPF_CGROUP_SETSOCKOPT`
 
-Called when `getsockopt(2)` or `setsockopt(2)` is issued. The program can override the option value seen by the application (useful for returning per-cgroup defaults) or block certain socket options entirely.
+`getsockopt(2)` や `setsockopt(2)` が発行されたときに呼ばれる。プログラムは、アプリケーションから見えるオプション値を上書きしたり（cgroup ごとのデフォルト値を返すのに便利）、特定のソケットオプションを完全にブロックしたりできる。
 
-## Attach flags {#attach-flags}
+## アタッチフラグ {#attach-flags}
 
-When attaching a program with `bpf(BPF_PROG_ATTACH, ...)`, the `flags` field controls the hierarchy behavior:
+`bpf(BPF_PROG_ATTACH, ...)` でプログラムをアタッチする際、`flags` フィールドが階層での振る舞いを制御する:
 
-| Flag | Meaning |
+| フラグ | 意味 |
 |------|---------|
-| (none / `0`) | Exclusive: only one program per cgroup per attach type; child cgroups inherit but cannot override |
-| `BPF_F_ALLOW_OVERRIDE` | Child cgroups can replace this program with their own |
-| `BPF_F_ALLOW_MULTI` | Multiple programs can be attached; both parent and child programs run (in order, parent first) |
+| （なし / `0`） | 排他: アタッチタイプごとに cgroup あたり1つのプログラムのみ。子の cgroup は継承するが上書きできない |
+| `BPF_F_ALLOW_OVERRIDE` | 子の cgroup がこのプログラムを自身のプログラムで置き換えられる |
+| `BPF_F_ALLOW_MULTI` | 複数のプログラムをアタッチできる。親と子の両方のプログラムが実行される（親が先） |
 
-`BPF_F_ALLOW_MULTI` is the most common in practice — it allows a platform-level policy at the root cgroup and per-container refinements in child cgroups, with both executing.
+実際に最もよく使われるのは `BPF_F_ALLOW_MULTI` である。ルート cgroup にプラットフォームレベルのポリシーを置き、子の cgroup にコンテナごとの細かな調整を置いて、両方を実行させることができる。
 
-## The syscall interface {#the-syscall-interface}
+## システムコールのインターフェース {#the-syscall-interface}
 
 ```c
-/* Attach a program to a cgroup */
+/* プログラムを cgroup にアタッチする */
 union bpf_attr attr = {
     .target_fd   = cgroup_fd,           /* open("/sys/fs/cgroup/c1", O_RDONLY) */
-    .attach_bpf_fd = prog_fd,           /* loaded BPF program fd */
+    .attach_bpf_fd = prog_fd,           /* ロード済みの BPF プログラムの fd */
     .attach_type = BPF_CGROUP_INET_EGRESS,
     .attach_flags = BPF_F_ALLOW_MULTI,
 };
 bpf(BPF_PROG_ATTACH, &attr, sizeof(attr));
 
-/* Detach */
+/* デタッチ */
 attr.attach_bpf_fd = prog_fd;
 bpf(BPF_PROG_DETACH, &attr, sizeof(attr));
 
-/* Query programs attached to a cgroup */
+/* cgroup にアタッチされたプログラムを照会する */
 attr.query.target_fd  = cgroup_fd;
 attr.query.attach_type = BPF_CGROUP_INET_EGRESS;
 bpf(BPF_PROG_QUERY, &attr, sizeof(attr));
 ```
 
-With `libbpf`, the higher-level API is `bpf_prog_attach()` / `bpf_prog_detach()`.
+`libbpf` を使う場合、より高レベルの API は `bpf_prog_attach()` / `bpf_prog_detach()` である。
 
-## Practical example: per-container egress rate limiting {#practical-example-per-container-egress-rate-limiting}
+## 実践例: コンテナごとの egress レート制限 {#practical-example-per-container-egress-rate-limiting}
 
-Cgroup BPF does not provide a built-in rate-limiter (that is the job of the `io` controller for block I/O, or TC for network). The pattern is to combine a `BPF_CGROUP_INET_EGRESS` program with a TC `qdisc` (e.g., `tbf` or `fq`) on the container's `veth` interface:
+cgroup BPF は組み込みのレートリミッタを提供しない（それはブロックI/Oなら `io` コントローラ、ネットワークなら TC の役目である）。定石は、`BPF_CGROUP_INET_EGRESS` プログラムと、コンテナの `veth` インターフェース上の TC `qdisc`（例: `tbf` や `fq`）を組み合わせることである:
 
 ```bash
-# 1. Create a veth pair for the container
+# 1. コンテナ用の veth ペアを作成する
 ip link add veth0 type veth peer name eth0
 
-# 2. Attach a TBF qdisc to veth0 (host side) — 10Mbit/s
+# 2. veth0（ホスト側）に TBF qdisc をアタッチする — 10Mbit/s
 tc qdisc add dev veth0 root tbf rate 10mbit burst 32kbit latency 400ms
 
-# 3. Attach a BPF program to the container's cgroup that marks packets
-#    (sets skb->mark) so the TC classifier can identify per-cgroup flows
+# 3. コンテナの cgroup に、パケットにマークを付ける BPF プログラムをアタッチする
+#    （skb->mark を設定し、TC の分類器が cgroup ごとのフローを識別できるようにする）
 bpftool prog load mark_egress.bpf.o /sys/fs/bpf/mark_egress
 bpftool cgroup attach /sys/fs/cgroup/containers/c1/ egress \
     pinned /sys/fs/bpf/mark_egress allow_multi
 ```
 
-The BPF program itself uses `bpf_skb_store_bytes()` or sets `skb->mark` to a container ID, and TC flower/u32 classifiers match on the mark to apply per-container `tbf` qdiscs.
+BPF プログラム自体は `bpf_skb_store_bytes()` を使うか、`skb->mark` にコンテナIDを設定する。そして TC の flower/u32 分類器がそのマークにマッチして、コンテナごとの `tbf` qdisc を適用する。
 
-For a purely BPF approach, a custom token-bucket implemented in a `BPF_MAP_TYPE_ARRAY` (with atomic operations) can rate-limit packets directly from the `BPF_CGROUP_INET_EGRESS` hook by dropping packets when the bucket is empty.
+純粋に BPF だけで実現する方法としては、`BPF_MAP_TYPE_ARRAY` で（アトミック操作を使って）独自のトークンバケットを実装し、バケットが空のときにパケットを破棄することで、`BPF_CGROUP_INET_EGRESS` フックから直接パケットのレートを制限できる。
 
-## Inspecting attached programs {#inspecting-attached-programs}
+## アタッチされたプログラムの調査 {#inspecting-attached-programs}
 
 ```bash
-# Show all BPF programs attached to a cgroup subtree:
+# cgroup のサブツリーにアタッチされたすべての BPF プログラムを表示する:
 bpftool cgroup tree /sys/fs/cgroup/containers/c1/
 
-# Show programs attached to a single cgroup directory:
+# 単一の cgroup ディレクトリにアタッチされたプログラムを表示する:
 bpftool cgroup show /sys/fs/cgroup/
 
-# Example output:
+# 出力例:
 # /sys/fs/cgroup/containers/c1
 # ID       AttachType      AttachFlags     Name
 # 42       egress          multi           block_internal
 # 43       device          multi           device_policy
 ```
 
-`bpftool cgroup tree` recurses through the hierarchy and lists every attached program with its ID, name, and flags. Use `bpftool prog show id 42` to inspect a specific program's bytecode, maps, and BTF information.
+`bpftool cgroup tree` は階層を再帰的にたどり、アタッチされたすべてのプログラムをID、名前、フラグとともに一覧表示する。特定のプログラムのバイトコード、マップ、BTF 情報を調べるには `bpftool prog show id 42` を使う。
 
-## Kernel implementation {#kernel-implementation}
+## カーネルでの実装 {#kernel-implementation}
 
-The kernel runs cgroup BPF programs from the hot paths of network, socket, and device subsystems. The internal entry points use the `__cgroup_bpf_run_filter_*()` family (double-underscore prefix), defined in `include/linux/bpf-cgroup.h` and invoked via `BPF_CGROUP_RUN_PROG_*` wrapper macros:
+カーネルは、ネットワーク、ソケット、デバイスの各サブシステムのホットパスから cgroup BPF プログラムを実行する。内部のエントリポイントには `__cgroup_bpf_run_filter_*()` 系の関数（ダブルアンダースコアのプレフィックス）が使われ、これらは `include/linux/bpf-cgroup.h` で定義され、`BPF_CGROUP_RUN_PROG_*` ラッパーマクロを介して呼び出される:
 
 ```c
-/* include/linux/bpf-cgroup.h (simplified signatures) */
+/* include/linux/bpf-cgroup.h（シグネチャは簡略化） */
 int __cgroup_bpf_run_filter_skb(struct sock *sk, struct sk_buff *skb,
                                  enum cgroup_bpf_attach_type atype);
 int __cgroup_bpf_run_filter_sk(struct sock *sk,
@@ -228,42 +228,42 @@ int __cgroup_bpf_check_dev_permission(short dev_type, u32 major, u32 minor,
                                        enum cgroup_bpf_attach_type atype);
 ```
 
-These are invoked via macros from:
+これらは次の場所からマクロ経由で呼び出される:
 
-- `net/ipv4/ip_output.c`, `net/ipv6/ip6_output.c` → `BPF_CGROUP_RUN_PROG_INET_EGRESS`
-- `net/ipv4/ip_input.c` (`ip_rcv`) → `BPF_CGROUP_RUN_PROG_INET_INGRESS`
-- `net/socket.c` (`__sock_create`) → `BPF_CGROUP_RUN_PROG_INET_SOCK`
-- `security/device_cgroup.c` (`devcgroup_check_permission`) → `BPF_CGROUP_RUN_PROG_DEVICE_CGROUP`
+- `net/ipv4/ip_output.c`、`net/ipv6/ip6_output.c` → `BPF_CGROUP_RUN_PROG_INET_EGRESS`
+- `net/ipv4/ip_input.c`（`ip_rcv`） → `BPF_CGROUP_RUN_PROG_INET_INGRESS`
+- `net/socket.c`（`__sock_create`） → `BPF_CGROUP_RUN_PROG_INET_SOCK`
+- `security/device_cgroup.c`（`devcgroup_check_permission`） → `BPF_CGROUP_RUN_PROG_DEVICE_CGROUP`
 
-The `struct cgroup_bpf` embedded in `struct cgroup` holds the attached programs:
+`struct cgroup` に埋め込まれた `struct cgroup_bpf` が、アタッチされたプログラムを保持する:
 
 ```c
 /* include/linux/bpf-cgroup-defs.h */
 struct cgroup_bpf {
     /*
-     * effective[] holds the effective set of programs for this cgroup —
-     * programs attached here plus inherited from ancestors (flattened).
+     * effective[] はこの cgroup に対して有効なプログラムの集合を保持する —
+     * ここにアタッチされたプログラムと、祖先から継承したプログラム（平坦化済み）。
      */
     struct bpf_prog_array __rcu *effective[MAX_CGROUP_BPF_ATTACH_TYPE];
 
-    /* programs attached directly to this cgroup */
+    /* この cgroup に直接アタッチされたプログラム */
     struct hlist_head     progs[MAX_CGROUP_BPF_ATTACH_TYPE];
     u8                    flags[MAX_CGROUP_BPF_ATTACH_TYPE];
 
     struct list_head      storages;
-    struct bpf_prog_array *inactive; /* for RCU update */
+    struct bpf_prog_array *inactive; /* RCU による更新用 */
 };
 ```
 
-When a program is attached, `update_effective_progs()` (called from `__cgroup_bpf_attach()`) walks from root to the target cgroup and rebuilds the `effective[]` prog arrays for the cgroup and all its descendants. `cgroup_bpf_inherit()` is a separate function called only at cgroup creation time to copy inherited programs from the parent. The hot path only dereferences `effective[]` via `BPF_PROG_RUN_ARRAY()` — there is no hierarchy walk at runtime.
+プログラムがアタッチされると、（`__cgroup_bpf_attach()` から呼ばれる）`update_effective_progs()` がルートから対象の cgroup までをたどり、その cgroup とすべての子孫の `effective[]` プログラム配列を再構築する。`cgroup_bpf_inherit()` は別の関数で、cgroup の作成時にのみ呼ばれ、親から継承したプログラムをコピーする。ホットパスでは `BPF_PROG_RUN_ARRAY()` を介して `effective[]` を参照するだけであり、実行時に階層をたどることはない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Cgroup v2 Architecture](cgroup-v2.md) — `struct cgroup` and the unified hierarchy
-- [Container Isolation](container-isolation.md) — how BPF device policy fits with seccomp and capabilities
-- [BPF Networking (TC, cgroup, sockmap)](../bpf/bpf-networking.md) — TC-based rate limiting alongside cgroup BPF
-- [BPF Verifier](../bpf/bpf-verifier.md) — how BPF programs are safety-checked before attachment
-- `kernel/bpf/cgroup.c` — attach/detach/run implementation
-- `include/uapi/linux/bpf.h` — `enum bpf_attach_type` and all `BPF_CGROUP_*` constants
-- `tools/bpf/bpftool/cgroup.c` — bpftool cgroup subcommand implementation
-- `Documentation/bpf/prog_cgroup_skb.rst` — upstream documentation
+- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — `struct cgroup` と統一階層
+- [コンテナの隔離](container-isolation.md) — BPF のデバイスポリシーが seccomp やケーパビリティとどう組み合わさるか
+- [BPF ネットワーキング（TC、cgroup、sockmap）](../bpf/bpf-networking.md) — cgroup BPF と併用する TC ベースのレート制限
+- [BPF ベリファイア](../bpf/bpf-verifier.md) — BPF プログラムがアタッチ前にどのように安全性検査を受けるか
+- `kernel/bpf/cgroup.c` — アタッチ/デタッチ/実行の実装
+- `include/uapi/linux/bpf.h` — `enum bpf_attach_type` とすべての `BPF_CGROUP_*` 定数
+- `tools/bpf/bpftool/cgroup.c` — bpftool の cgroup サブコマンドの実装
+- `Documentation/bpf/prog_cgroup_skb.rst` — アップストリームのドキュメント

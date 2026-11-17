@@ -1,15 +1,15 @@
 # BPF Maps {#bpf-maps}
 
-> The data structures that connect BPF programs to each other and to userspace
+> BPFプログラム同士、そしてBPFプログラムとユーザー空間をつなぐデータ構造
 
-## What BPF maps are {#what-bpf-maps-are}
+## BPF mapとは何か {#what-bpf-maps-are}
 
-BPF maps are key-value stores accessible from both BPF programs (via helpers) and userspace (via the bpf() syscall). They are the primary mechanism for:
+BPF mapは、BPFプログラム（ヘルパー経由）とユーザー空間（bpf()システムコール経由）の両方からアクセスできるキーバリューストアである。次の用途のための主要な仕組みである。
 
-- Passing data from BPF programs to userspace (stats, events)
-- Passing configuration from userspace to BPF programs
-- Sharing state between multiple BPF programs
-- Maintaining state across invocations of the same BPF program
+- BPFプログラムからユーザー空間へのデータ受け渡し（統計、イベント）
+- ユーザー空間からBPFプログラムへの設定の受け渡し
+- 複数のBPFプログラム間での状態の共有
+- 同じBPFプログラムの複数回の呼び出しにまたがる状態の保持
 
 ```
 BPF program                       Userspace
@@ -19,18 +19,18 @@ bpf_map_update_elem(&map, &key, &val, BPF_ANY)
 bpf_map_delete_elem(&map, &key)  bpf(BPF_MAP_DELETE_ELEM, ...)
 ```
 
-## Creating a map {#creating-a-map}
+## mapの作成 {#creating-a-map}
 
 ```c
-/* From BPF program (using libbpf macros) */
+/* BPFプログラムから（libbpfのマクロを使用） */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 10000);
-    __type(key, u32);         /* key type (for BTF-aware tools) */
-    __type(value, u64);       /* value type */
+    __type(key, u32);         /* キーの型（BTF対応ツール向け） */
+    __type(value, u64);       /* 値の型 */
 } counts SEC(".maps");
 
-/* From userspace directly */
+/* ユーザー空間から直接 */
 union bpf_attr attr = {
     .map_type    = BPF_MAP_TYPE_HASH,
     .key_size    = sizeof(u32),
@@ -40,14 +40,14 @@ union bpf_attr attr = {
 int map_fd = bpf(BPF_MAP_CREATE, &attr, sizeof(attr));
 ```
 
-## Map types {#map-types}
+## mapタイプ {#map-types}
 
 ### BPF_MAP_TYPE_HASH {#bpfmaptype_hash}
 
-Generic hash map with arbitrary key/value sizes.
+任意のキー/値サイズを持つ汎用ハッシュmap。
 
 ```c
-/* BPF side */
+/* BPF側 */
 u32 pid = bpf_get_current_pid_tgid() >> 32;
 u64 *count = bpf_map_lookup_elem(&counts, &pid);
 if (count) {
@@ -58,36 +58,36 @@ if (count) {
 }
 ```
 
-Update flags:
+更新フラグ:
 
-- `BPF_ANY` — create or update
-- `BPF_NOEXIST` — create only (fail if key exists)
-- `BPF_EXIST` — update only (fail if key doesn't exist)
+- `BPF_ANY` — 作成または更新
+- `BPF_NOEXIST` — 作成のみ（キーが存在すれば失敗）
+- `BPF_EXIST` — 更新のみ（キーが存在しなければ失敗）
 
-Internals: uses a lock-based hash table, `htab_elem` per entry. Supports concurrent access from multiple CPUs.
+内部構造: ロックベースのハッシュテーブルを使い、エントリごとに`htab_elem`を持つ。複数CPUからの並行アクセスをサポートする。
 
 ### BPF_MAP_TYPE_ARRAY {#bpfmaptype_array}
 
-Fixed-size array indexed by u32. Pre-allocated, no dynamic memory during runtime. Value must be zeroed (no deletion).
+u32でインデックス付けされる固定サイズの配列。事前に割り当てられ、実行時に動的メモリを使わない。値はゼロクリアする必要がある（削除はできない）。
 
 ```c
-/* Good for per-event counters indexed by small integers */
+/* 小さな整数でインデックス付けされるイベントごとのカウンタに向く */
 struct {
     __uint(type, BPF_MAP_TYPE_ARRAY);
-    __uint(max_entries, 256);    /* index 0..255 */
+    __uint(max_entries, 256);    /* インデックス0..255 */
     __type(key, u32);
     __type(value, u64);
 } hist SEC(".maps");
 
-u32 slot = /* compute histogram bucket */;
+u32 slot = /* ヒストグラムのバケットを計算する */;
 u64 *val = bpf_map_lookup_elem(&hist, &slot);
 if (val)
-    __sync_fetch_and_add(val, 1);  /* atomic increment */
+    __sync_fetch_and_add(val, 1);  /* アトミックなインクリメント */
 ```
 
 ### BPF_MAP_TYPE_PERCPU_HASH / BPF_MAP_TYPE_PERCPU_ARRAY {#bpfmaptypepercpuhash-bpfmaptypepercpuarray}
 
-One value per CPU — eliminates atomic operations for per-CPU counters:
+CPUごとに1つの値を持つ — CPUごとのカウンタでアトミック操作が不要になる。
 
 ```c
 struct {
@@ -100,12 +100,12 @@ struct {
 u32 key = 0;
 u64 *val = bpf_map_lookup_elem(&bytes_total, &key);
 if (val)
-    *val += skb->len;  /* no atomic needed — this CPU only */
+    *val += skb->len;  /* アトミック不要 — このCPUだけが触る */
 ```
 
-Userspace reads all CPU values and sums them:
+ユーザー空間は全CPUの値を読んで合計する。
 ```c
-/* Userspace: reads nr_cpus values */
+/* ユーザー空間: nr_cpus個の値を読む */
 u64 values[nr_cpus];
 bpf_map_lookup_elem(map_fd, &key, values);
 u64 total = 0;
@@ -115,7 +115,7 @@ for (int i = 0; i < nr_cpus; i++)
 
 ### BPF_MAP_TYPE_RINGBUF {#bpfmaptype_ringbuf}
 
-The preferred mechanism for sending variable-length events from BPF to userspace (replaces perf_event_output for most use cases).
+BPFからユーザー空間へ可変長イベントを送るための推奨される仕組み（ほとんどのユースケースでperf_event_outputを置き換える）。
 
 ```c
 struct event {
@@ -127,33 +127,33 @@ struct event {
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 1 << 24);  /* 16 MB ring buffer */
+    __uint(max_entries, 1 << 24);  /* 16MBのリングバッファ */
 } events SEC(".maps");
 
-/* BPF side: reserve → fill → submit */
+/* BPF側: 予約 → 書き込み → submit */
 SEC("tracepoint/syscalls/sys_enter_execve")
 int trace_execve(struct trace_event_raw_sys_enter *ctx)
 {
     struct event *e = bpf_ringbuf_reserve(&events, sizeof(*e), 0);
     if (!e)
-        return 0;  /* ring full, drop */
+        return 0;  /* リングが満杯、破棄 */
 
     e->pid = bpf_get_current_pid_tgid() >> 32;
     e->uid = bpf_get_current_uid_gid();
     bpf_get_current_comm(e->comm, sizeof(e->comm));
     e->syscall_nr = ctx->id;
 
-    bpf_ringbuf_submit(e, 0);  /* 0 = no BPF_RB_* flags */
+    bpf_ringbuf_submit(e, 0);  /* 0 = BPF_RB_*フラグなし */
     return 0;
 }
 ```
 
 ```c
-/* Userspace: poll with epoll */
+/* ユーザー空間: epollでポーリングする */
 struct ring_buffer *rb = ring_buffer__new(map_fd, handle_event, NULL, NULL);
 
 while (true) {
-    ring_buffer__poll(rb, 100 /* timeout ms */);
+    ring_buffer__poll(rb, 100 /* タイムアウト(ms) */);
 }
 
 static int handle_event(void *ctx, void *data, size_t size)
@@ -164,16 +164,16 @@ static int handle_event(void *ctx, void *data, size_t size)
 }
 ```
 
-Why ringbuf over perf_event output:
+perf_event出力よりringbufを選ぶ理由:
 
-- Single shared ring across all CPUs (no per-CPU waste)
-- Events are ordered within the ring
-- No copy — userspace reads directly from the ring memory
-- Variable-size entries
+- 全CPUで共有される単一のリング（CPUごとの無駄がない）
+- リング内でイベントが順序付けられる
+- コピーなし — ユーザー空間はリングのメモリから直接読む
+- 可変長エントリ
 
 ### BPF_MAP_TYPE_LRU_HASH {#bpfmaptypelruhash}
 
-Hash map with LRU eviction when full. Useful for tracking connections without explicit cleanup:
+満杯になるとLRUで追い出しを行うハッシュmap。明示的なクリーンアップなしでコネクションを追跡するのに便利である。
 
 ```c
 struct {
@@ -182,128 +182,128 @@ struct {
     __type(key, struct flow_key);
     __type(value, struct flow_stats);
 } flows SEC(".maps");
-/* Automatically evicts least recently used entries */
+/* 最も長く使われていないエントリを自動的に追い出す */
 ```
 
 ### BPF_MAP_TYPE_PROG_ARRAY {#bpfmaptypeprogarray}
 
-Array of BPF program file descriptors for tail calls. Enables program chaining without growing the stack:
+テールコール用のBPFプログラムのファイルディスクリプタの配列。スタックを伸ばさずにプログラムを連鎖させられる。
 
 ```c
 struct {
     __uint(type, BPF_MAP_TYPE_PROG_ARRAY);
     __uint(max_entries, 10);
     __uint(key_size, sizeof(u32));
-    __uint(value_size, sizeof(u32));  /* prog fds */
+    __uint(value_size, sizeof(u32));  /* プログラムのfd */
 } jump_table SEC(".maps");
 
-/* Tail call: jumps to prog[index], never returns */
+/* テールコール: prog[index]へジャンプし、決して戻らない */
 u32 index = 3;
 bpf_tail_call(ctx, &jump_table, index);
-/* If tail call succeeds, code below never runs */
-/* If prog[3] is empty, execution continues here */
+/* テールコールが成功すれば、以下のコードは決して実行されない */
+/* prog[3]が空なら、実行はここから続く */
 ```
 
-Tail calls don't increase the call stack depth. They replace the current program. Max chain length: 33.
+テールコールはコールスタックの深さを増やさない。現在のプログラムを置き換えるのである。連鎖の最大長は33である。
 
 ### BPF_MAP_TYPE_HASH_OF_MAPS / BPF_MAP_TYPE_ARRAY_OF_MAPS {#bpfmaptypehashofmaps-bpfmaptypearrayofmaps}
 
-Map-in-map: values are other map file descriptors. Useful for per-CPU or per-namespace map isolation:
+map-in-map: 値が別のmapのファイルディスクリプタである。CPUごと、あるいはnamespaceごとのmap分離に便利である。
 
 ```c
-/* Outer map: key=netns inode, value=inner map fd */
+/* 外側のmap: key=netnsのinode、value=内側のmapのfd */
 struct {
     __uint(type, BPF_MAP_TYPE_HASH_OF_MAPS);
     __uint(max_entries, 1000);
     __type(key, u32);
-    __uint(value_size, sizeof(u32));  /* inner map fd */
+    __uint(value_size, sizeof(u32));  /* 内側のmapのfd */
     __array(values, struct inner_map_type);
 } per_netns_stats SEC(".maps");
 ```
 
 ### BPF_MAP_TYPE_SOCKMAP / BPF_MAP_TYPE_SOCKHASH {#bpfmaptypesockmap-bpfmaptypesockhash}
 
-Stores references to sockets. Used for socket redirection in the sk_msg and sk_skb program types:
+ソケットへの参照を格納する。sk_msgおよびsk_skbプログラムタイプでのソケットリダイレクトに使われる。
 
 ```c
-/* Redirect between sockets without kernel copies */
+/* カーネル内コピーなしでソケット間をリダイレクトする */
 bpf_msg_redirect_map(msg, &sock_map, key, 0);
 ```
 
-## Map operations summary {#map-operations-summary}
+## map操作のまとめ {#map-operations-summary}
 
-| Operation | BPF helper | Userspace syscall |
+| 操作 | BPFヘルパー | ユーザー空間のシステムコール |
 |-----------|-----------|-------------------|
-| Lookup | `bpf_map_lookup_elem` | `BPF_MAP_LOOKUP_ELEM` |
-| Update | `bpf_map_update_elem` | `BPF_MAP_UPDATE_ELEM` |
-| Delete | `bpf_map_delete_elem` | `BPF_MAP_DELETE_ELEM` |
-| Iterate | — (not from BPF) | `BPF_MAP_GET_NEXT_KEY` |
-| Batch ops | — | `BPF_MAP_LOOKUP_BATCH` |
+| 検索 | `bpf_map_lookup_elem` | `BPF_MAP_LOOKUP_ELEM` |
+| 更新 | `bpf_map_update_elem` | `BPF_MAP_UPDATE_ELEM` |
+| 削除 | `bpf_map_delete_elem` | `BPF_MAP_DELETE_ELEM` |
+| 反復 | —（BPFからは不可） | `BPF_MAP_GET_NEXT_KEY` |
+| バッチ操作 | — | `BPF_MAP_LOOKUP_BATCH` |
 
-## Map pinning (persistence) {#map-pinning-persistence}
+## mapのピン留め（永続化） {#map-pinning-persistence}
 
-By default, a map lives as long as its file descriptor is open. Pin it to `/sys/fs/bpf/` to make it survive process exit:
+デフォルトでは、mapはそのファイルディスクリプタが開いている間だけ存在する。プロセス終了後も残すには、`/sys/fs/bpf/`にピン留めする。
 
 ```bash
-# Pin via bpftool
+# bpftoolでピン留めする
 bpftool map pin id 42 /sys/fs/bpf/my_map
 
-# Access from another process
+# 別のプロセスからアクセスする
 bpftool map dump pinned /sys/fs/bpf/my_map
 ```
 
 ```c
-/* Pin from userspace code */
+/* ユーザー空間のコードからピン留めする */
 bpf(BPF_OBJ_PIN, &(union bpf_attr){
     .pathname = (uint64_t)"/sys/fs/bpf/my_map",
     .bpf_fd   = map_fd,
 }, sizeof(union bpf_attr));
 
-/* Retrieve later */
+/* 後で取り出す */
 int map_fd = bpf(BPF_OBJ_GET, &(union bpf_attr){
     .pathname = (uint64_t)"/sys/fs/bpf/my_map",
 }, sizeof(union bpf_attr));
 ```
 
-## Map limits and memory {#map-limits-and-memory}
+## mapの制限とメモリ {#map-limits-and-memory}
 
 ```bash
-# Check map memory usage
+# mapのメモリ使用量を確認する
 bpftool map list
 # 3: hash  name counts  flags 0x0
 #    key 4B  value 8B  max_entries 10000  memlock 819200B
 
-# Total BPF memory
+# BPFのメモリ合計
 cat /proc/meminfo | grep Bpf
 
-# Per-process BPF memory limit (ulimit)
+# プロセスごとのBPFメモリ制限（ulimit）
 ulimit -l  # RLIMIT_MEMLOCK
-# Root is unlimited; unprivileged users limited
+# rootは無制限、非特権ユーザーは制限される
 ```
 
-Memory accounting: maps are charged to `memlock` rlimit of the creating process (unless `BPF_F_MMAPABLE` or newer accounting).
+メモリアカウンティング: mapは作成したプロセスの`memlock` rlimitに課金される（`BPF_F_MMAPABLE`や新しいアカウンティング方式の場合を除く）。
 
-## Atomic operations in maps {#atomic-operations-in-maps}
+## map内でのアトミック操作 {#atomic-operations-in-maps}
 
-For per-CPU-free atomic updates in hash/array maps:
+hash/array mapでper-CPUを使わずにアトミックに更新するには:
 
 ```c
-/* Atomic add (BPF built-in) */
+/* アトミック加算（BPF組み込み） */
 u64 *count = bpf_map_lookup_elem(&map, &key);
 if (count)
     __sync_fetch_and_add(count, 1);
 
-/* BPF atomic instructions (since kernel 5.12) */
+/* BPFのアトミック命令（カーネル5.12以降） */
 u64 *val = bpf_map_lookup_elem(&map, &key);
 if (val)
     __atomic_add_fetch(val, 1, __ATOMIC_RELAXED);
 ```
 
-For high-frequency counters, prefer `BPF_MAP_TYPE_PERCPU_ARRAY` to avoid atomics entirely.
+高頻度のカウンタには、アトミック操作を完全に避けられる`BPF_MAP_TYPE_PERCPU_ARRAY`を優先すること。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [BPF Verifier](bpf-verifier.md) — How map access is safety-checked
-- [libbpf and Skeletons](libbpf.md) — Convenient map access from userspace
-- `kernel/bpf/hashtab.c` — hash map implementation
-- `kernel/bpf/ringbuf.c` — ring buffer implementation
+- [BPF Verifier](bpf-verifier.md) — mapアクセスの安全性がどのようにチェックされるか
+- [libbpfとスケルトン](libbpf.md) — ユーザー空間からの便利なmapアクセス
+- `kernel/bpf/hashtab.c` — ハッシュmapの実装
+- `kernel/bpf/ringbuf.c` — リングバッファの実装

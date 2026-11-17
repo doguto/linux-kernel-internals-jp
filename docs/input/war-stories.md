@@ -1,68 +1,68 @@
-# War Stories: Input/HID Bugs and Regressions {#war-stories-inputhid-bugs-and-regressions}
+# 事件簿: 入力/HIDのバグとリグレッション {#war-stories-inputhid-bugs-and-regressions}
 
-> Six incidents from the input core and HID subsystem — all six are CVEs, and two of the four quick cases below are themselves pairs: the same missing check, or the same bug shape, recurring years apart in a different part of the tree
+> 入力コアとHIDサブシステムで起きた6件の事件。6件すべてがCVEであり、以下の4つのクイックケースのうち2つはそれ自体がペアになっている。同じチェックの欠落、あるいは同じ形のバグが、何年も隔ててツリーの別の場所で再発したものである
 
-[The Input Subsystem](README.md) and [The HID Subsystem](hid.md) document input core, evdev, and HID report parsing as they work today. This page is the incident record behind that architecture — mostly parser bugs (a device-supplied report descriptor, or an empty device-supplied list, read without validating it first) and timer-teardown races (a periodic timer not stopped synchronously before the memory it touches is freed).
+[入力サブシステム](README.md)と[HIDサブシステム](hid.md)では、入力コア、evdev、HIDレポートのパースが現在どのように動作するかを説明している。このページは、そのアーキテクチャの背後にある事件の記録である。大半はパーサのバグ（デバイスが提供するレポートディスクリプタ、あるいはデバイスが提供する空のリストを、先に検証せずに読んでしまうもの）と、タイマー破棄時の競合（周期タイマーが、それが触るメモリが解放される前に同期的に停止されないもの）である。
 
-## Deep dives {#deep-dives}
+## 詳細解説 {#deep-dives}
 
-### [The Uninitialized HID Report Buffer Kernel Memory Leak](war-stories/uninitialized-report-buffer-leak.md) {#the-uninitialized-hid-report-buffer-kernel-memory-leak}
-**October 2024 (CVE published November 2024) · CVE-2024-50302 · CISA Known Exploited Vulnerabilities catalog**
-A one-word fix — `kmalloc` should have been `kzalloc` — closed a heap leak that Google assessed was likely one of several zero-days a forensic device maker's hardware used in a phone-unlock chain, documented by Amnesty International's Security Lab.
+### [初期化されないHIDレポートバッファによるカーネルメモリリーク](war-stories/uninitialized-report-buffer-leak.md) {#the-uninitialized-hid-report-buffer-kernel-memory-leak}
+**2024年10月（CVE公開は2024年11月）· CVE-2024-50302 · CISA Known Exploited Vulnerabilities カタログ**
+1語の修正（`kmalloc` は `kzalloc` であるべきだった）で、ヒープのリークが塞がれた。Googleは、このリークがフォレンジック機器メーカーのハードウェアが携帯電話のロック解除チェーンで使った複数のゼロデイの1つであった可能性が高いと評価しており、その経緯はAmnesty InternationalのSecurity Labが文書化している。
 
-### [The `hid_validate_values()` Type Confusion That a 2014 Bug Fix Introduced](war-stories/hid-validate-values-type-confusion.md) {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
-**January 2023 (CVE published March 2023) · CVE-2023-1073**
-A 2014 fix for a broken report-ID-0 lookup replaced a safe hash-table read with an unchecked list walk — introducing, as a side effect, a type confusion that sat unexploited for almost nine years purely by luck of memory layout.
+### [2014年のバグ修正が持ち込んだ `hid_validate_values()` の型混同](war-stories/hid-validate-values-type-confusion.md) {#the-hidvalidatevalues-type-confusion-that-a-2014-bug-fix-introduced}
+**2023年1月（CVE公開は2023年3月）· CVE-2023-1073**
+壊れていたレポートID 0の検索を直す2014年の修正が、安全なハッシュテーブルの読み出しを、チェックのないリスト走査に置き換えた。その副作用として型混同が持ち込まれ、それはメモリレイアウトの運だけで、ほぼ9年間悪用されずに残っていた。
 
-## Quick cases {#quick-cases}
+## クイックケース {#quick-cases}
 
-### Case 1: The Bluetooth HIDP idle-timer race — CVE-2023-54120 {#case-1-the-bluetooth-hidp-idle-timer-race-cve-2023-54120}
+### ケース1: Bluetooth HIDPのアイドルタイマーの競合 — CVE-2023-54120 {#case-1-the-bluetooth-hidp-idle-timer-race-cve-2023-54120}
 
-`net/bluetooth/hidp/core.c`'s session teardown stopped the connection's idle-timeout timer with `del_timer()` — asynchronous; it removes the timer from the pending-timer list but doesn't wait for a callback already running on another CPU to finish. The window: `hidp_del_timer()` runs while `hidp_idle_timeout()` is already executing elsewhere; teardown proceeds straight to `hidp_session_put()`, freeing the session; the still-running timer callback then touches freed memory. NVD's kernel.org-sourced score rates it CVSS 3.1 8.8 (HIGH).
+`net/bluetooth/hidp/core.c` のセッション破棄処理は、接続のアイドルタイムアウト用タイマーを `del_timer()` で停止していた。これは非同期であり、タイマーを保留中タイマーのリストから外すが、別のCPUですでに実行中のコールバックの完了は待たない。問題のウィンドウはこうである。`hidp_idle_timeout()` が別の場所ですでに実行中の間に `hidp_del_timer()` が走り、破棄処理はそのまま `hidp_session_put()` に進んでセッションを解放する。するとまだ実行中のタイマーコールバックが、解放済みメモリに触れる。NVDのkernel.org由来のスコアでは CVSS 3.1 8.8（HIGH）と評価されている。
 
-The fix ([`c95930abd687`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c95930abd687fcd1aa040dc4fe90dff947916460), Min Li, March 2023) is a one-line change: `del_timer(&session->timer)` → `del_timer_sync(&session->timer)`, which blocks until any in-flight callback has actually finished before returning. [NVD: CVE-2023-54120](https://nvd.nist.gov/vuln/detail/CVE-2023-54120).
+修正（[`c95930abd687`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c95930abd687fcd1aa040dc4fe90dff947916460)、Min Li、2023年3月）は1行の変更である。`del_timer(&session->timer)` → `del_timer_sync(&session->timer)` とし、実行中のコールバックが実際に完了するまでブロックしてから戻るようにした。[NVD: CVE-2023-54120](https://nvd.nist.gov/vuln/detail/CVE-2023-54120)。
 
-### Case 2: The force-feedback timer use-after-free — CVE-2019-19524 {#case-2-the-force-feedback-timer-use-after-free-cve-2019-19524}
+### ケース2: フォースフィードバックのタイマーのuse-after-free — CVE-2019-19524 {#case-2-the-force-feedback-timer-use-after-free-cve-2019-19524}
 
-`drivers/input/ff-memless.c`'s device-teardown path stopped all *playing* force-feedback effects — via `input_device_flush()` calling into `input_ff_flush()`, upstream of `ml_ff_destroy()` — but `ml_ff_destroy()` itself never stopped the underlying periodic `ml->timer`, which could still be pending or running when it freed the driver's private data a few lines later. A malicious or malfunctioning USB force-feedback device could trigger the teardown path while the timer was live.
+`drivers/input/ff-memless.c` のデバイス破棄パスは、*再生中の*フォースフィードバックエフェクトをすべて停止していた（`ml_ff_destroy()` より上流で、`input_device_flush()` が `input_ff_flush()` を呼ぶことによる）。しかし `ml_ff_destroy()` 自体は、その下にある周期タイマー `ml->timer` を一度も停止しておらず、数行後にドライバのプライベートデータを解放する時点で、このタイマーがまだ保留中または実行中である可能性があった。悪意のある、あるいは誤動作するUSBフォースフィードバックデバイスは、タイマーが生きている間に破棄パスを起こすことができた。
 
-The fix ([`fa3a5a1880c9`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fa3a5a1880c91bb92594ad42dfe9eedad7996b86), Oliver Neukum, November 2019) adds `del_timer_sync(&ml->timer)` to `ml_ff_destroy()` before the `kfree()`, with a comment noting explicitly that flushing effects elsewhere doesn't stop the timer — the same class of gap as Case 1, in a different subsystem. [NVD: CVE-2019-19524](https://nvd.nist.gov/vuln/detail/CVE-2019-19524).
+修正（[`fa3a5a1880c9`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=fa3a5a1880c91bb92594ad42dfe9eedad7996b86)、Oliver Neukum、2019年11月）は、`ml_ff_destroy()` の `kfree()` の前に `del_timer_sync(&ml->timer)` を追加し、別の場所でエフェクトをフラッシュしてもタイマーは止まらないことを明記したコメントを添えている。ケース1と同じ種類の穴が、別のサブシステムにあったわけである。[NVD: CVE-2019-19524](https://nvd.nist.gov/vuln/detail/CVE-2019-19524)。
 
-### Case 3: 14 force-feedback drivers, missing a list-emptiness check — CVE-2019-19532 {#case-3-14-force-feedback-drivers-missing-a-list-emptiness-check-cve-2019-19532}
+### ケース3: リストが空かのチェックを欠いた14個のフォースフィードバックドライバ — CVE-2019-19532 {#case-3-14-force-feedback-drivers-missing-a-list-emptiness-check-cve-2019-19532}
 
-A batch bug found by syzbot: 14 separate HID force-feedback quirk drivers (`hid-axff.c`, `hid-dr.c`, `hid-emsff.c`, `hid-gaff.c`, `hid-holtekff.c`, `hid-lg2ff.c`, `hid-lg3ff.c`, `hid-lg4ff.c`, `hid-lgff.c`, `hid-logitech-hidpp.c`, `hid-microsoft.c`, `hid-sony.c`, `hid-tmff.c`, `hid-zpff.c`) each called `list_first_entry()` or the equivalent `list_entry(hid->inputs.next, ...)` at probe time without first checking `&hid->inputs` was non-empty — three drivers used the former, the other eleven the latter. A malicious device presenting no input reports at all produces the same kind of bogus, type-confused pointer as [the `hid_validate_values()` bug](war-stories/hid-validate-values-type-confusion.md) — the same `list_entry`-family-on-a-possibly-empty-list mistake, at the per-driver probe layer instead of HID core, about three years earlier.
+syzbotが見つけた一括のバグである。14個の独立したHIDフォースフィードバック用quirkドライバ（`hid-axff.c`、`hid-dr.c`、`hid-emsff.c`、`hid-gaff.c`、`hid-holtekff.c`、`hid-lg2ff.c`、`hid-lg3ff.c`、`hid-lg4ff.c`、`hid-lgff.c`、`hid-logitech-hidpp.c`、`hid-microsoft.c`、`hid-sony.c`、`hid-tmff.c`、`hid-zpff.c`）がそれぞれ、probe時に `&hid->inputs` が空でないことを先に確認せずに `list_first_entry()` または等価な `list_entry(hid->inputs.next, ...)` を呼んでいた。前者を使っていたのが3つのドライバ、残りの11が後者である。入力レポートを1つも提示しない悪意のあるデバイスは、[`hid_validate_values()` のバグ](war-stories/hid-validate-values-type-confusion.md)と同じ種類の、型が混同された不正なポインタを生み出す。空かもしれないリストに `list_entry` 系を使うという同じ誤りが、HIDコアではなくドライバごとのprobe層で、約3年早く起きていたのである。
 
-The fix ([`d9d4b1e46d95`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d9d4b1e46d9543a82c23f6df03f4ad697dab361b), Alan Stern, October 2019) adds an explicit `if (list_empty(&hid->inputs)) { hid_err(...); return -ENODEV; }` guard to all 14 drivers before the `list_first_entry()` call. [NVD: CVE-2019-19532](https://nvd.nist.gov/vuln/detail/CVE-2019-19532).
+修正（[`d9d4b1e46d95`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=d9d4b1e46d9543a82c23f6df03f4ad697dab361b)、Alan Stern、2019年10月）は、14個のドライバすべてで `list_first_entry()` 呼び出しの前に明示的な `if (list_empty(&hid->inputs)) { hid_err(...); return -ENODEV; }` ガードを追加した。[NVD: CVE-2019-19532](https://nvd.nist.gov/vuln/detail/CVE-2019-19532)。
 
-### Case 4: The GTCO tablet driver, the same function, two bugs under two years apart — CVE-2017-16643 and CVE-2019-13631 {#case-4-the-gtco-tablet-driver-the-same-function-two-bugs-under-two-years-apart-cve-2017-16643-and-cve-2019-13631}
+### ケース4: GTCOタブレットドライバ、同じ関数、2年足らずを隔てた2つのバグ — CVE-2017-16643 と CVE-2019-13631 {#case-4-the-gtco-tablet-driver-the-same-function-two-bugs-under-two-years-apart-cve-2017-16643-and-cve-2019-13631}
 
-`parse_hid_report_descriptor()` in the GTCO digitizer/tablet driver (`drivers/input/tablet/gtco.c`) walks a device-supplied HID report descriptor byte by byte, and had two separate, unrelated-in-mechanism bugs in the same function:
+GTCOデジタイザ/タブレットドライバ（`drivers/input/tablet/gtco.c`）の `parse_hid_report_descriptor()` は、デバイスが提供するHIDレポートディスクリプタを1バイトずつ走査する。この同じ関数に、メカニズムの上では無関係な2つの別々のバグがあった。
 
-- **2017**: the loop checked that at least one byte remained before each iteration, but each HID descriptor item can consume 1, 2, or 4 bytes depending on its prefix byte — so a one-byte-remaining check didn't guarantee a multi-byte read was safe, producing an out-of-bounds read past the descriptor buffer. Fixed by [`a50829479f58`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a50829479f58416a013a4ccca791336af3c584c7) (Dmitry Torokhov, October 2017), adding a single `if (i + size > length)` check, hoisted above the switch statement, that covers all three read widths (1, 2, and 4 bytes) at once. [NVD: CVE-2017-16643](https://nvd.nist.gov/vuln/detail/CVE-2017-16643).
-- **2019**: a completely different bug in the same function — a debug-message indentation counter tracking HID Collection/End Collection nesting depth had no bound, so a descriptor with deeply nested or unbalanced collections could write past the end of a fixed 10-byte indent-string array. Found via code review after a prior syzkaller report against the same driver. Fixed by [`2a017fd82c54`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2a017fd82c5402b3c8df5e3d6e5165d9e6147dc1) (Grant Hernandez, July 2019), which adds two different checks: a `MAX_COLLECTION_LEVELS` upper-bound check before incrementing the indent counter (rejecting collections nested too deep), and a separate zero-floor check (`indent == 0`) before decrementing it (rejecting an unbalanced End-Collection that would underflow the counter). [NVD: CVE-2019-13631](https://nvd.nist.gov/vuln/detail/CVE-2019-13631).
+- **2017年**: ループは各反復の前に少なくとも1バイトが残っていることを確認していたが、HIDディスクリプタの各アイテムはプレフィックスバイトに応じて1、2、4バイトを消費しうる。そのため残り1バイトのチェックではマルチバイトの読み出しの安全性が保証されず、ディスクリプタバッファを越える範囲外読み出しが起きた。[`a50829479f58`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=a50829479f58416a013a4ccca791336af3c584c7)（Dmitry Torokhov、2017年10月）で修正された。switch文の上に引き上げた `if (i + size > length)` チェックを1つ追加し、3つの読み出し幅（1、2、4バイト）すべてを一度にカバーしている。[NVD: CVE-2017-16643](https://nvd.nist.gov/vuln/detail/CVE-2017-16643)。
+- **2019年**: 同じ関数のまったく別のバグである。HIDのCollection/End Collectionのネストの深さを追跡するデバッグメッセージ用のインデントカウンタに上限がなく、深くネストした、あるいは対応の取れていないコレクションを持つディスクリプタによって、固定長10バイトのインデント文字列配列の末尾を越えて書き込むことができた。同じドライバに対する以前のsyzkallerの報告を受けたコードレビューで発見された。[`2a017fd82c54`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2a017fd82c5402b3c8df5e3d6e5165d9e6147dc1)（Grant Hernandez、2019年7月）で修正された。この修正は2種類のチェックを追加している。インデントカウンタをインクリメントする前の `MAX_COLLECTION_LEVELS` による上限チェック（深すぎるネストのコレクションを拒否する）と、デクリメントする前の別個のゼロ下限チェック（`indent == 0`）（カウンタをアンダーフローさせる対応の取れないEnd Collectionを拒否する）である。[NVD: CVE-2019-13631](https://nvd.nist.gov/vuln/detail/CVE-2019-13631)。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | Report buffer leak | `hid_validate` confusion | BT HIDP timer | ff-memless timer | 14-driver list check | GTCO (both) |
+| パターン | レポートバッファのリーク | `hid_validate` の型混同 | BT HIDPタイマー | ff-memlessタイマー | 14ドライバのリストチェック | GTCO（両方） |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Report-descriptor parsing (attacker controls the input) | — | Yes | — | — | Yes | Yes |
-| `list_entry()`/`container_of()` on a possibly-empty list | — | Yes | — | — | Yes | — |
-| Timer stopped asynchronously (or not at all) before teardown | — | — | Yes | Yes | — | — |
-| Same bug shape recurs elsewhere, years apart | — | Yes (→ Case 3) | Yes (↔ Case 2) | Yes (↔ Case 1) | Yes (← type confusion) | Yes (within itself) |
-| Real-world exploitation documented | Yes | — | — | — | — | — |
+| レポートディスクリプタのパース（攻撃者が入力を制御する） | — | あり | — | — | あり | あり |
+| 空かもしれないリストへの `list_entry()`/`container_of()` | — | あり | — | — | あり | — |
+| 破棄前にタイマーを非同期に停止（または停止しない） | — | — | あり | あり | — | — |
+| 同じ形のバグが別の場所で何年も隔てて再発 | — | あり（→ ケース3） | あり（↔ ケース2） | あり（↔ ケース1） | あり（← 型混同） | あり（それ自体の中で） |
+| 実環境での悪用が文書化されている | あり | — | — | — | — | — |
 
-**Two of six are the same "list walked as if it can't be empty" mistake, about three years apart, at two different layers.** [`hid_validate_values()`'s type confusion](war-stories/hid-validate-values-type-confusion.md) (2023) is HID core calling `list_entry()` on a report list without checking it's non-empty; Case 3's 14 force-feedback drivers (2019) do the identical thing to `hid->inputs` at probe time, about three years *earlier*. Different call sites, same underlying gap in the same subsystem's use of the kernel's list primitives — closing the 2019 instances evidently didn't prompt an audit that would have caught the 2023 one in HID core itself.
+**6件のうち2件は「空になりえないかのようにリストを走査する」という同じ誤りで、約3年を隔てて2つの異なる層で起きている。** [`hid_validate_values()` の型混同](war-stories/hid-validate-values-type-confusion.md)（2023年）は、HIDコアがレポートリストに対して、空でないことを確認せずに `list_entry()` を呼ぶものである。ケース3の14個のフォースフィードバックドライバ（2019年）は、probe時に `hid->inputs` に対して同一のことを、約3年*早く*行っていた。呼び出し箇所は異なるが、同じサブシステムにおけるカーネルのリストプリミティブの使い方に、同じ根本的な穴があった。2019年の事例を塞いだことは、HIDコア自身にある2023年の事例を見つけられたはずの監査にはつながらなかったようである。
 
-**Two of six are a timer stopped the wrong way on teardown, in two unrelated subsystems — the same bug shape recurring, not just a shared category.** The BT HIDP session teardown (Case 1) and `ff-memless`'s device teardown (Case 2) both called an asynchronous or missing timer-stop before freeing the memory the timer's callback would touch — `del_timer()` instead of `del_timer_sync()`, or no stop call at all. Both fixes are one line: swap in the synchronous variant, or add the missing call.
+**6件のうち2件は、無関係な2つのサブシステムで破棄時のタイマー停止を誤ったもので、単に同じカテゴリに属するのではなく、同じ形のバグの再発である。** BT HIDPのセッション破棄（ケース1）と `ff-memless` のデバイス破棄（ケース2）はどちらも、タイマーのコールバックが触るメモリを解放する前に、非同期のタイマー停止を呼ぶか、停止そのものを欠いていた。つまり `del_timer_sync()` ではなく `del_timer()` を使うか、停止呼び出しがまったくなかった。どちらの修正も1行である。同期版に差し替えるか、欠けていた呼び出しを追加するかである。
 
-**The GTCO driver is the one incident that's internally a pair, not a pairing with another case.** Two structurally unrelated bugs — a missing multi-byte-read bound check, and an unbounded indentation counter — both lived in the same function, surfaced under two years apart. Fixing the first didn't prompt a close-enough read of the rest of the function to catch the second.
+**GTCOドライバは、他のケースとの対ではなく、内部でペアになっている唯一の事件である。** 構造的に無関係な2つのバグ（マルチバイト読み出しの境界チェックの欠落と、上限のないインデントカウンタ）が同じ関数の中にあり、2年足らずを隔てて表面化した。1つ目を修正しても、2つ目を見つけられるほど関数の残りを丁寧に読むことにはつながらなかった。
 
-**Only the report-buffer leak has documented real-world exploitation, and that's not because it's the most severe bug on this page in isolation** — CVE-2023-54120 (CVSS 8.8) and CVE-2023-1073 (type confusion) are both plausibly more dangerous as standalone primitives. What made the leak notable is that Google's Threat Analysis Group assessed it as likely one of at least three zero-days used by a commercial forensic-device maker's hardware in a working phone-unlock exploit before the fix shipped — documented by Amnesty International's Security Lab, whose report itself notes it's unclear which specific devices were part of the successful chain — a reminder that "most severe in isolation" and "most likely to actually get used" are different rankings.
+**実環境での悪用が文書化されているのはレポートバッファのリークだけであり、それはこのページで単体として最も深刻なバグだからではない。** CVE-2023-54120（CVSS 8.8）とCVE-2023-1073（型混同）は、どちらも単体のプリミティブとしてはおそらくより危険である。このリークが注目されたのは、GoogleのThreat Analysis Groupが、修正が出荷される前に商用フォレンジック機器メーカーのハードウェアが実際に動作する携帯電話ロック解除エクスプロイトで使った、少なくとも3つのゼロデイの1つである可能性が高いと評価したためである。これはAmnesty InternationalのSecurity Labが文書化しており、その報告自体も、成功したチェーンにどの具体的なデバイスが含まれていたかは不明だと記している。「単体で最も深刻」と「実際に使われる可能性が最も高い」は別の順位付けだということを思い出させる事例である。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [The Input Subsystem](README.md) — `struct input_dev`, the event model, and evdev
-- [The HID Subsystem](hid.md) — report descriptors, parsing, and the driver model every incident above lives inside
-- [ALSA War Stories](../alsa/war-stories.md) — a sibling device-subsystem incident page with a similar shape: mostly CVEs, mostly descriptor-parsing and teardown-locking bugs
-- [Timers and Timer Wheels](../interrupts/timers.md) — `del_timer()` vs `del_timer_sync()` and the async-vs-synchronous teardown distinction behind Cases 1 and 2
-- [Locking](../locking/README.md) — general background on lock-scope and critical-section bugs
+- [入力サブシステム](README.md) — `struct input_dev`、イベントモデル、evdev
+- [HIDサブシステム](hid.md) — レポートディスクリプタ、パース、そして上記のすべての事件が存在するドライバモデル
+- [ALSAの事件簿](../alsa/war-stories.md) — 似た形をした兄弟分のデバイスサブシステムの事件ページ。大半がCVEで、大半がディスクリプタのパースと破棄時のロックのバグである
+- [タイマーとタイマーホイール](../interrupts/timers.md) — `del_timer()` と `del_timer_sync()` の違い、およびケース1と2の背後にある非同期と同期の破棄の区別
+- [ロック](../locking/README.md) — ロックの範囲とクリティカルセクションのバグに関する一般的な背景

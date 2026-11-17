@@ -1,87 +1,87 @@
-# BTF and CO-RE {#btf-and-co-re}
+# BTFとCO-RE {#btf-and-co-re}
 
-> Writing BPF programs that run across different kernel versions
+> 異なるカーネルバージョンをまたいで動くBPFプログラムを書く
 
-## The problem BTF solves {#the-problem-btf-solves}
+## BTFが解決する問題 {#the-problem-btf-solves}
 
-Kernel data structures change between versions. A BPF program compiled against kernel 5.15 might access `struct task_struct` at the wrong offsets on kernel 6.1 if the struct was reorganized.
+カーネルのデータ構造はバージョン間で変化する。カーネル5.15向けにコンパイルされたBPFプログラムは、構造体が再編成されていた場合、カーネル6.1上では`struct task_struct`に誤ったオフセットでアクセスしてしまうかもしれない。
 
-Before BTF/CO-RE, BPF programs were compiled with kernel headers from a specific version and only ran on that version (or required recompilation per kernel).
+BTF/CO-RE以前は、BPFプログラムは特定バージョンのカーネルヘッダを使ってコンパイルされ、そのバージョン上でしか動かなかった（あるいはカーネルごとに再コンパイルが必要だった）。
 
-**CO-RE** (Compile Once, Run Everywhere), developed by Andrii Nakryiko, lets you compile a BPF program once and have it work on any kernel version ≥ 5.8 that has BTF.
+Andrii Nakryikoが開発した**CO-RE**（Compile Once, Run Everywhere）を使うと、BPFプログラムを一度コンパイルするだけで、BTFを持つ5.8以上の任意のカーネルバージョンで動作させられる。
 
 ## BTF: BPF Type Format {#btf-bpf-type-format}
 
-BTF is a compact type information format stored in a special ELF section (`.BTF`) and loaded into the kernel alongside BPF programs. It was introduced in Linux 4.18 by Martin KaFai Lau. [(commit)](https://git.kernel.org/linus/69b693f0aefa0ed521e8bd02260523b5ae446ad7)
+BTFはコンパクトな型情報フォーマットであり、特別なELFセクション（`.BTF`）に格納され、BPFプログラムとともにカーネルにロードされる。Martin KaFai LauによってLinux 4.18で導入された。[(commit)](https://git.kernel.org/linus/69b693f0aefa0ed521e8bd02260523b5ae446ad7)
 
 ```bash
-# Check if kernel has BTF
+# カーネルがBTFを持っているか確認する
 ls /sys/kernel/btf/vmlinux
-# If present, the kernel exposes its full type information
+# 存在すれば、カーネルは自身の完全な型情報を公開している
 
-# Generate vmlinux.h (all kernel types as C headers)
+# vmlinux.hを生成する（全カーネル型をCヘッダとして出力）
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 ```
 
-### BTF type encoding {#btf-type-encoding}
+### BTFの型エンコーディング {#btf-type-encoding}
 
 ```c
-/* BTF represents types as a sequence of type descriptors */
+/* BTFは型を型記述子の並びとして表現する */
 struct btf_type {
-    __u32 name_off;    /* offset in string table */
-    /* info encoding:
-     * bits 0-15:  vlen (number of struct members, etc.)
-     * bits 16-23: unused
-     * bits 24-28: kind (BTF_KIND_INT, STRUCT, ARRAY, FUNC, ...)
+    __u32 name_off;    /* 文字列テーブル内のオフセット */
+    /* infoのエンコーディング:
+     * bits 0-15:  vlen（構造体メンバ数など）
+     * bits 16-23: 未使用
+     * bits 24-28: kind（BTF_KIND_INT, STRUCT, ARRAY, FUNC, ...）
      * bit 31:     kind_flag
      */
     __u32 info;
     union {
-        __u32 size;   /* for INT, STRUCT, UNION: size in bytes */
-        __u32 type;   /* for PTR, TYPEDEF, VOLATILE: referred type id */
+        __u32 size;   /* INT, STRUCT, UNIONの場合: バイト単位のサイズ */
+        __u32 type;   /* PTR, TYPEDEF, VOLATILEの場合: 参照先の型ID */
     };
 };
 
-/* struct member follows btf_type for STRUCT/UNION */
+/* STRUCT/UNIONではbtf_typeの後に構造体メンバが続く */
 struct btf_member {
-    __u32 name_off;  /* offset in string table */
-    __u32 type;      /* type id of this member */
-    __u32 offset;    /* bit offset (or bit field spec) */
+    __u32 name_off;  /* 文字列テーブル内のオフセット */
+    __u32 type;      /* このメンバの型ID */
+    __u32 offset;    /* ビットオフセット（またはビットフィールド指定） */
 };
 ```
 
-The kernel loads BTF via `BTF_LOAD` bpf() command and uses it:
+カーネルは`BTF_LOAD` bpf()コマンドでBTFをロードし、次の用途に使う。
 
-- For the verifier: to understand pointed-to struct layouts
-- For CO-RE relocation: to patch field offsets at program load time
-- For bpftool/libbpf: to pretty-print map values and program contexts
-- For BPF iterators and kfuncs: function signatures
+- Verifier向け: ポインタが指す構造体のレイアウトを理解するため
+- CO-REリロケーション向け: プログラムのロード時にフィールドオフセットをパッチするため
+- bpftool/libbpf向け: mapの値やプログラムのコンテキストを整形表示するため
+- BPFイテレータとkfunc向け: 関数シグネチャ
 
-## vmlinux.h: all kernel types in one header {#vmlinuxh-all-kernel-types-in-one-header}
+## vmlinux.h: 全カーネル型を1つのヘッダに {#vmlinuxh-all-kernel-types-in-one-header}
 
-Instead of including individual kernel headers, CO-RE programs typically use a generated `vmlinux.h`:
+個々のカーネルヘッダをインクルードする代わりに、CO-REプログラムでは通常、生成された`vmlinux.h`を使う。
 
 ```bash
 bpftool btf dump file /sys/kernel/btf/vmlinux format c > vmlinux.h
 ```
 
-This single header contains every struct, union, enum, and typedef in the running kernel — extracted from BTF.
+この単一のヘッダには、実行中のカーネルのすべての構造体、共用体、列挙型、typedefが含まれる — BTFから抽出されたものである。
 
 ```c
-/* In your BPF program, instead of: */
+/* BPFプログラムでは、次のように書く代わりに: */
 #include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/mm_types.h>
 
-/* You write: */
-#include "vmlinux.h"         /* all kernel types, from BTF */
-#include <bpf/bpf_helpers.h> /* BPF helper declarations */
-#include <bpf/bpf_core_read.h> /* CO-RE macros */
+/* こう書く: */
+#include "vmlinux.h"         /* BTF由来の全カーネル型 */
+#include <bpf/bpf_helpers.h> /* BPFヘルパーの宣言 */
+#include <bpf/bpf_core_read.h> /* CO-REマクロ */
 ```
 
-## CO-RE field access {#co-re-field-access}
+## CO-REによるフィールドアクセス {#co-re-field-access}
 
-The key CO-RE mechanism is `BPF_CORE_READ`, which records relocations that libbpf patches at load time:
+CO-REの中核となる仕組みは`BPF_CORE_READ`であり、libbpfがロード時にパッチするリロケーションを記録する。
 
 ```c
 #include "vmlinux.h"
@@ -92,13 +92,13 @@ int trace_open(struct pt_regs *ctx)
 {
     struct task_struct *task = (struct task_struct *)bpf_get_current_task();
 
-    /* WITHOUT CO-RE: fixed offset, breaks across kernel versions */
+    /* CO-REなし: 固定オフセット。カーネルバージョンが変わると壊れる */
     pid_t pid = *(pid_t *)((char *)task + offsetof(struct task_struct, pid));
 
-    /* WITH CO-RE: offset resolved at load time from BTF */
+    /* CO-REあり: オフセットはロード時にBTFから解決される */
     pid_t pid = BPF_CORE_READ(task, pid);
 
-    /* Nested field access */
+    /* ネストしたフィールドへのアクセス */
     u32 ns_inum = BPF_CORE_READ(task, nsproxy, pid_ns_for_children, ns.inum);
 
     bpf_printk("open by pid=%d ns=%u\n", pid, ns_inum);
@@ -106,81 +106,81 @@ int trace_open(struct pt_regs *ctx)
 }
 ```
 
-`BPF_CORE_READ(ptr, field)` expands to a safe read with relocation metadata embedded in the BPF bytecode as special instructions. When libbpf loads the program, it:
-1. Reads the target kernel's BTF from `/sys/kernel/btf/vmlinux`
-2. Looks up the actual offset of `task_struct.pid` in that kernel
-3. Patches the instruction with the correct offset
+`BPF_CORE_READ(ptr, field)`は、リロケーションのメタデータを特別な命令としてBPFバイトコードに埋め込んだ安全な読み出しに展開される。libbpfはプログラムをロードする際に次を行う。
+1. `/sys/kernel/btf/vmlinux`からターゲットカーネルのBTFを読む
+2. そのカーネルにおける`task_struct.pid`の実際のオフセットを調べる
+3. 命令を正しいオフセットでパッチする
 
-### CO-RE read variants {#co-re-read-variants}
+### CO-RE読み出しのバリエーション {#co-re-read-variants}
 
 ```c
-/* Basic read */
+/* 基本的な読み出し */
 BPF_CORE_READ(ptr, field)
 
-/* Read into a variable */
+/* 変数に読み込む */
 BPF_CORE_READ_INTO(&dest, ptr, field)
 
-/* Bitfield read (handles bitfield packing differences) */
+/* ビットフィールドの読み出し（ビットフィールドのパッキングの違いを吸収する） */
 BPF_CORE_READ_BITFIELD(ptr, field)
 BPF_CORE_READ_BITFIELD_PROBED(ptr, field)
 
-/* String read */
+/* 文字列の読み出し */
 BPF_CORE_READ_STR_INTO(dest, ptr, field)
 
-/* Check if a field exists in the target kernel */
-bpf_core_field_exists(ptr->field)   /* returns 0 or 1 */
+/* ターゲットカーネルにフィールドが存在するか確認する */
+bpf_core_field_exists(ptr->field)   /* 0または1を返す */
 bpf_core_type_exists(struct foo)
 
-/* Check field size (handles changed types) */
+/* フィールドのサイズを確認する（型の変更に対応する） */
 bpf_core_field_size(ptr->field)
 ```
 
-### CO-RE for enum values {#co-re-for-enum-values}
+### 列挙値に対するCO-RE {#co-re-for-enum-values}
 
-Enum values can also change between kernels. CO-RE handles this:
+列挙値もカーネル間で変わりうる。CO-REはこれにも対応する。
 
 ```c
-/* Check if kernel uses a renamed enum value */
+/* カーネルが名前の変わった列挙値を使っているか確認する */
 u32 state;
 if (bpf_core_enum_value_exists(enum task_state, TASK_DEAD))
     state = BPF_CORE_READ(task, state);
 else
-    state = BPF_CORE_READ(task, __state);  /* renamed in 5.14 */
+    state = BPF_CORE_READ(task, __state);  /* 5.14で名前が変わった */
 ```
 
-## Kernel version checks at load time {#kernel-version-checks-at-load-time}
+## ロード時のカーネルバージョンチェック {#kernel-version-checks-at-load-time}
 
-For features that were added or removed:
+追加または削除された機能の場合:
 
 ```c
-/* Conditional compilation based on kernel version */
+/* カーネルバージョンに基づく条件付きコンパイル */
 extern int LINUX_KERNEL_VERSION __kconfig;
 
 SEC("kprobe/...")
 int my_prog(struct pt_regs *ctx)
 {
     if (LINUX_KERNEL_VERSION >= KERNEL_VERSION(5, 16, 0)) {
-        /* Use newer field or API */
+        /* 新しいフィールドやAPIを使う */
     } else {
-        /* Fallback for older kernels */
+        /* 古いカーネル向けのフォールバック */
     }
 }
 ```
 
-The `extern ... __kconfig` syntax reads values from `/proc/config.gz` or `Kconfig` symbols, also resolved by libbpf at load time.
+`extern ... __kconfig`構文は`/proc/config.gz`や`Kconfig`シンボルから値を読み出すものであり、これもlibbpfがロード時に解決する。
 
-## BTF-based tracing: fentry/fexit {#btf-based-tracing-fentryfexit}
+## BTFベースのトレーシング: fentry/fexit {#btf-based-tracing-fentryfexit}
 
-BTF enables a more efficient alternative to kprobes — `fentry` and `fexit` programs:
+BTFは、kprobeよりも効率的な代替手段である`fentry`および`fexit`プログラムを可能にする。
 
 ```c
-/* fentry: no function arguments rewriting needed,
-   BTF provides the type info directly */
+/* fentry: 関数引数の書き換えは不要。
+   BTFが型情報を直接提供する */
 SEC("fentry/tcp_sendmsg")
 int BPF_PROG(trace_tcp_sendmsg,
-             struct sock *sk,      /* BTF tells us: arg 1 is sock* */
-             struct msghdr *msg,   /* arg 2 is msghdr* */
-             size_t size)          /* arg 3 is size_t */
+             struct sock *sk,      /* BTFによれば: 第1引数はsock* */
+             struct msghdr *msg,   /* 第2引数はmsghdr* */
+             size_t size)          /* 第3引数はsize_t */
 {
     u32 pid = bpf_get_current_pid_tgid() >> 32;
     u64 bytes = BPF_CORE_READ(sk, sk_sndbuf);
@@ -189,11 +189,11 @@ int BPF_PROG(trace_tcp_sendmsg,
     return 0;
 }
 
-/* fexit: also gets return value */
+/* fexit: 戻り値も受け取れる */
 SEC("fexit/tcp_sendmsg")
 int BPF_PROG(trace_tcp_sendmsg_ret,
              struct sock *sk, struct msghdr *msg, size_t size,
-             int ret)   /* return value appended as last arg */
+             int ret)   /* 戻り値は最後の引数として追加される */
 {
     if (ret < 0)
         bpf_printk("tcp_sendmsg failed: %d\n", ret);
@@ -201,18 +201,18 @@ int BPF_PROG(trace_tcp_sendmsg_ret,
 }
 ```
 
-`fentry`/`fexit` use trampolines — direct calls into the BPF JIT code — and are 10–100x lower overhead than kprobes.
+`fentry`/`fexit`はトランポリン — BPF JITコードへの直接呼び出し — を使い、オーバーヘッドはkprobeの10〜100分の1である。
 
-## BTF in maps: typed map values {#btf-in-maps-typed-map-values}
+## mapにおけるBTF: 型付きのmap値 {#btf-in-maps-typed-map-values}
 
-With BTF, map values can be self-describing:
+BTFを使うと、mapの値を自己記述的にできる。
 
 ```c
 struct event {
     u32 pid;
     u32 uid;
     char comm[16];
-} __attribute__((preserve_access_index));  /* enable CO-RE for this struct */
+} __attribute__((preserve_access_index));  /* この構造体でCO-REを有効にする */
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -220,9 +220,9 @@ struct {
 } events SEC(".maps");
 ```
 
-With BTF attached to the map:
+mapにBTFがアタッチされている場合:
 ```bash
-# bpftool can pretty-print map values using BTF
+# bpftoolはBTFを使ってmapの値を整形表示できる
 bpftool map dump id 42
 # [{
 #     "pid": 1234,
@@ -231,50 +231,50 @@ bpftool map dump id 42
 # }]
 ```
 
-## Observing BTF {#observing-btf}
+## BTFを観察する {#observing-btf}
 
 ```bash
-# List all BTF objects loaded in the kernel
+# カーネルにロードされているすべてのBTFオブジェクトを一覧表示する
 bpftool btf list
 # 1: name [vmlinux]  size 5.5MB
 # 42: name [bpf_prog] size 1.2KB
 
-# Dump type information
+# 型情報をダンプする
 bpftool btf dump id 1 format raw | grep -A5 "task_struct"
 
-# Show struct layout from BTF
+# BTFから構造体のレイアウトを表示する
 bpftool btf dump file /sys/kernel/btf/vmlinux format c | \
     grep -A 30 "^struct task_struct {"
 
-# Verify a BPF object's BTF
+# BPFオブジェクトのBTFを検証する
 bpftool prog list
 bpftool btf dump id <btf_id>
 ```
 
-## Writing portable BPF programs: checklist {#writing-portable-bpf-programs-checklist}
+## 移植性のあるBPFプログラムを書くためのチェックリスト {#writing-portable-bpf-programs-checklist}
 
-1. Use `vmlinux.h` instead of kernel headers
-2. Use `BPF_CORE_READ()` for all kernel struct field accesses
-3. Use `bpf_core_field_exists()` for fields added after 5.2
-4. Use `LINUX_KERNEL_VERSION` guards for behavioral differences
-5. Compile with `clang -target bpf -g` (`-g` embeds BTF in the .o)
-6. Use libbpf to load (it handles CO-RE relocation)
+1. カーネルヘッダの代わりに`vmlinux.h`を使う
+2. カーネル構造体のフィールドへのアクセスにはすべて`BPF_CORE_READ()`を使う
+3. 5.2以降に追加されたフィールドには`bpf_core_field_exists()`を使う
+4. 振る舞いの違いには`LINUX_KERNEL_VERSION`によるガードを使う
+5. `clang -target bpf -g`でコンパイルする（`-g`は.oにBTFを埋め込む）
+6. ロードにはlibbpfを使う（CO-REリロケーションを処理してくれる）
 
 ```bash
-# Compile with BTF embedded
+# BTFを埋め込んでコンパイルする
 clang -target bpf -O2 -g \
     -I/usr/include/bpf \
     -c my_prog.bpf.c -o my_prog.bpf.o
 
-# Verify BTF is present in the object
+# オブジェクトにBTFが存在することを確認する
 llvm-readelf --sections my_prog.bpf.o | grep BTF
 # .BTF         PROGBITS  ...
 # .BTF.ext     PROGBITS  ...  (line number info for verifier)
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [libbpf and Skeletons](libbpf.md) — Using CO-RE with libbpf's load workflow
-- [BPF Verifier](bpf-verifier.md) — How BTF improves verifier type checking
-- `tools/lib/bpf/` in the kernel tree — libbpf source
-- `Documentation/bpf/btf.rst` — BTF format specification
+- [libbpfとスケルトン](libbpf.md) — libbpfのロードワークフローでCO-REを使う
+- [BPF Verifier](bpf-verifier.md) — BTFがVerifierの型チェックをどう改善するか
+- カーネルツリーの`tools/lib/bpf/` — libbpfのソース
+- `Documentation/bpf/btf.rst` — BTFフォーマットの仕様

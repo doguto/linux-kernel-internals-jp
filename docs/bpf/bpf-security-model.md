@@ -1,14 +1,14 @@
-# BPF Security Model {#bpf-security-model}
+# BPFセキュリティモデル {#bpf-security-model}
 
-> Capabilities, the unprivileged-BPF knob, and BPF as a security module
+> ケーパビリティ、非特権BPFのノブ、そしてセキュリティモジュールとしてのBPF
 
-## Two different security questions {#two-different-security-questions}
+## 2つの異なるセキュリティ上の問い {#two-different-security-questions}
 
-[The verifier](bpf-verifier.md) answers one question: *given that a program is allowed to load, will it behave safely?* This page answers a different one: *who is allowed to load a program in the first place, and what can a BPF program itself be trusted to enforce?* The two are related — the whole point of a sound verifier is that the answer to the second question can be "more people than just root" — but they're separate mechanisms, and the [BPF war stories](war-stories.md) page documents the kernel gradually losing confidence that the verifier alone was strong enough, which is why the capability and sysctl layer below exists at all.
+[Verifier](bpf-verifier.md)が答えるのは1つの問い、すなわち*あるプログラムのロードが許可されたとして、それは安全に振る舞うか?* である。このページが答えるのは別の問い、すなわち*そもそも誰がプログラムをロードしてよいのか、そしてBPFプログラム自身に何を強制させることを信頼できるのか?* である。両者は関連している — 健全なVerifierを持つことの要点はまさに、2つ目の問いへの答えを「root以外の人も」にできることにある — が、別々の仕組みである。そして[BPFの事件簿](war-stories.md)のページは、Verifierだけで十分に強固だという確信をカーネルが徐々に失っていった経緯を記録している。以下で述べるケーパビリティとsysctlの層がそもそも存在するのは、そのためである。
 
-## The capability model {#the-capability-model}
+## ケーパビリティモデル {#the-capability-model}
 
-Loading a BPF program or creating a BPF map goes through the same central check, `bpf_token_capable()`, defined in `kernel/bpf/token.c` (only declared in `include/linux/bpf.h`):
+BPFプログラムのロードもBPF mapの作成も、同じ中心的なチェックである`bpf_token_capable()`を通る。これは`kernel/bpf/token.c`で定義されている（`include/linux/bpf.h`では宣言のみ）。
 
 ```c
 static bool bpf_ns_capable(struct user_namespace *ns, int cap)
@@ -20,7 +20,7 @@ bool bpf_token_capable(const struct bpf_token *token, int cap)
 {
 	struct user_namespace *userns;
 
-	/* BPF token allows ns_capable() level of capabilities */
+	/* BPFトークンはns_capable()レベルのケーパビリティを許可する */
 	userns = token ? token->userns : &init_user_ns;
 	if (!bpf_ns_capable(userns, cap))
 		return false;
@@ -30,15 +30,15 @@ bool bpf_token_capable(const struct bpf_token *token, int cap)
 }
 ```
 
-`CAP_SYS_ADMIN` is always an accepted fallback for any specific BPF capability check — a process with `CAP_SYS_ADMIN` doesn't additionally need `CAP_BPF`. `CAP_BPF` itself is the specific, narrower capability, added in Linux 5.8 (confirmed absent from `include/uapi/linux/capability.h` at the v5.7 tag, present at v5.8) specifically so BPF program loading and map creation no longer required the much broader `CAP_SYS_ADMIN`. `CAP_PERFMON` is checked separately for the riskier verifier relaxations — `bpf_allow_ptr_leaks()`, `bpf_allow_uninit_stack()`, and bypassing the Spectre v1/v4 mitigations (`bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`), all declared right next to `bpf_token_capable()` in `include/linux/bpf.h`. Without a token, the check falls back to `init_user_ns` and behaves like a plain `capable()` check; with one, it's evaluated against the token's own user namespace, plus an additional LSM veto via `security_bpf_token_capable()`.
+`CAP_SYS_ADMIN`は、BPFに固有のどのケーパビリティチェックに対しても常にフォールバックとして受け入れられる — `CAP_SYS_ADMIN`を持つプロセスは、さらに`CAP_BPF`を必要とはしない。`CAP_BPF`自体はより限定的な専用のケーパビリティであり、Linux 5.8で追加された（v5.7タグの`include/uapi/linux/capability.h`には存在せず、v5.8には存在することを確認済み）。BPFプログラムのロードとmapの作成に、はるかに広範な`CAP_SYS_ADMIN`を要求しないようにするためである。`CAP_PERFMON`は、よりリスクの高いVerifierの緩和 — `bpf_allow_ptr_leaks()`、`bpf_allow_uninit_stack()`、そしてSpectre v1/v4緩和策の回避（`bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`）— について別途チェックされる。これらはすべて`include/linux/bpf.h`で`bpf_token_capable()`のすぐ隣に宣言されている。トークンがない場合、チェックは`init_user_ns`にフォールバックし、通常の`capable()`チェックと同じように振る舞う。トークンがある場合は、トークン自身のuser namespaceに対して評価され、さらに`security_bpf_token_capable()`によるLSMの拒否権が加わる。
 
-### BPF tokens: delegating capabilities into a namespace {#bpf-tokens-delegating-capabilities-into-a-namespace}
+### BPFトークン: ケーパビリティをnamespaceに委譲する {#bpf-tokens-delegating-capabilities-into-a-namespace}
 
-The `token` argument above isn't decorative. `kernel/bpf/token.c` (confirmed absent at v6.8, present at v6.9) lets a process holding real capabilities on the host mount a `bpffs` instance with `delegate_cmds=`, `delegate_maps=`, `delegate_progs=`, and `delegate_attachs=` options (`kernel/bpf/inode.c`), then hand a file descriptor for that mount to an unprivileged process in a different user namespace — a container, for instance. That process calls `bpf()` with `BPF_TOKEN_CREATE` to mint a token from the fd, and passes the token on subsequent `BPF_MAP_CREATE`/`BPF_PROG_LOAD` calls. Before the ordinary capability check runs, `bpf_token_get_from_fd()`, `bpf_token_allow_cmd()`, `bpf_token_allow_prog_type()`, and `bpf_token_allow_map_type()` (all `kernel/bpf/token.c`) gate whether the token covers the specific command, program type, or map type being requested. It's the mechanism that makes "a container can load *this specific* XDP program without being root" possible without loosening the mounter's own trust boundary.
+上の`token`引数は飾りではない。`kernel/bpf/token.c`（v6.8には存在せず、v6.9には存在することを確認済み）を使うと、ホスト上で本物のケーパビリティを持つプロセスが、`delegate_cmds=`、`delegate_maps=`、`delegate_progs=`、`delegate_attachs=`オプション（`kernel/bpf/inode.c`）付きで`bpffs`インスタンスをマウントし、そのマウントのファイルディスクリプタを、別のuser namespaceにいる非特権プロセス — たとえばコンテナ — に渡すことができる。そのプロセスは`BPF_TOKEN_CREATE`を指定して`bpf()`を呼び、そのfdからトークンを発行し、以降の`BPF_MAP_CREATE`/`BPF_PROG_LOAD`呼び出しでそのトークンを渡す。通常のケーパビリティチェックが走る前に、`bpf_token_get_from_fd()`、`bpf_token_allow_cmd()`、`bpf_token_allow_prog_type()`、`bpf_token_allow_map_type()`（いずれも`kernel/bpf/token.c`）が、要求された特定のコマンド、プログラムタイプ、mapタイプをそのトークンがカバーしているかどうかを判定する。これは、マウントした側自身の信頼境界を緩めることなく、「コンテナがrootでなくても*この特定の*XDPプログラムをロードできる」ことを可能にする仕組みである。
 
-## `unprivileged_bpf_disabled`: three states, not two {#unprivilegedbpfdisabled-three-states-not-two}
+## `unprivileged_bpf_disabled`: 2状態ではなく3状態 {#unprivilegedbpfdisabled-three-states-not-two}
 
-The `kernel.unprivileged_bpf_disabled` sysctl (`kernel/bpf/syscall.c`) gates whether a process without `CAP_BPF` can create BPF maps or load BPF programs at all — both `map_create_alloc()` (called from `map_create()`, the `BPF_MAP_CREATE` handler, checking `sysctl_unprivileged_bpf_disabled && !bpf_token_capable(token, CAP_BPF)`) and `bpf_prog_load()` (checking `sysctl_unprivileged_bpf_disabled && !bpf_cap`) refuse outright if it's true. `map_create_alloc()` is a recent split of the map-creation path — on older kernels the equivalent check sits directly in `map_create()`. But the value isn't a boolean; there are three states, and the difference between two of them matters:
+`kernel.unprivileged_bpf_disabled` sysctl（`kernel/bpf/syscall.c`）は、`CAP_BPF`を持たないプロセスがそもそもBPF mapを作成したりBPFプログラムをロードしたりできるかどうかを制御する — `map_create_alloc()`（`BPF_MAP_CREATE`のハンドラである`map_create()`から呼ばれ、`sysctl_unprivileged_bpf_disabled && !bpf_token_capable(token, CAP_BPF)`をチェックする）と`bpf_prog_load()`（`sysctl_unprivileged_bpf_disabled && !bpf_cap`をチェックする）は、これが真であれば即座に拒否する。`map_create_alloc()`はmap作成パスを最近分割してできたものであり、古いカーネルでは同等のチェックが`map_create()`内に直接置かれている。ただし、この値はブール値ではない。3つの状態があり、そのうち2つの違いが重要である。
 
 ```c
 /* kernel/bpf/syscall.c */
@@ -46,30 +46,30 @@ int sysctl_unprivileged_bpf_disabled __read_mostly =
 	IS_BUILTIN(CONFIG_BPF_UNPRIV_DEFAULT_OFF) ? 2 : 0;
 ```
 
-- **0** — unprivileged BPF is allowed.
-- **1** — disabled, and *locked*: once set to 1, the kernel's own write handler refuses to change it back (`bpf_unpriv_handler()` treats `unpriv_enable == 1` as a one-way latch — any further write that isn't itself `1` returns `-EPERM`). There's no way to re-enable unprivileged BPF on a running kernel after this, short of a reboot.
-- **2** — disabled by default (via `CONFIG_BPF_UNPRIV_DEFAULT_OFF`), but *recoverable*: an administrator can still write `0` back to re-enable it.
+- **0** — 非特権BPFが許可される。
+- **1** — 無効化され、かつ*ロックされる*。一度1に設定されると、カーネル自身の書き込みハンドラはそれを元に戻すことを拒否する（`bpf_unpriv_handler()`は`unpriv_enable == 1`を一方向のラッチとして扱い、以降の`1`以外の書き込みはすべて`-EPERM`を返す）。こうなると、稼働中のカーネルで非特権BPFを再び有効にする方法は再起動以外にない。
+- **2** — デフォルトで無効（`CONFIG_BPF_UNPRIV_DEFAULT_OFF`による）だが、*元に戻せる*。管理者は`0`を書き戻して再び有効にできる。
 
-This isn't a hypothetical distinction. Two separate commits are involved: `08389d888287` (May 2021, landed in Linux 5.13) added the `CONFIG_BPF_UNPRIV_DEFAULT_OFF` Kconfig option and the three-valued sysctl itself, but didn't turn the knob on — that Kconfig symbol had no `default` at 5.13, 5.14, or 5.15, so upstream kernels still shipped with unprivileged BPF allowed. `8a03e56b253e` (October 2021, landed in Linux 5.16) is the commit that actually added `default y`, making disabled-by-default (value 2, specifically because it's reversible) the shipped upstream behavior — see the [unprivileged-BPF-off-by-default](war-stories/unprivileged-bpf-off.md) change for that story. Value 1 exists for administrators who've decided to close the door permanently on a given machine.
+これは仮定上の区別ではない。2つの別々のコミットが関わっている。`08389d888287`（2021年5月、Linux 5.13に取り込まれた）は`CONFIG_BPF_UNPRIV_DEFAULT_OFF` Kconfigオプションと3値のsysctl自体を追加したが、ノブをオンにはしなかった — このKconfigシンボルは5.13、5.14、5.15では`default`を持たなかったため、アップストリームのカーネルは依然として非特権BPFを許可した状態で出荷されていた。`8a03e56b253e`（2021年10月、Linux 5.16に取り込まれた）が実際に`default y`を追加したコミットであり、これによってデフォルトで無効（値2。元に戻せることが特に理由である）がアップストリームで出荷される振る舞いになった — その経緯については[非特権BPFのデフォルト無効化](war-stories/unprivileged-bpf-off.md)の変更を参照のこと。値1は、特定のマシンで扉を永久に閉ざすと決めた管理者のために存在する。
 
-Writing to the sysctl at all requires `CAP_SYS_ADMIN`, regardless of the current or target value.
+このsysctlへの書き込み自体には、現在の値や目標の値にかかわらず`CAP_SYS_ADMIN`が必要である。
 
-## What unprivileged BPF can still do {#what-unprivileged-bpf-can-still-do}
+## 非特権BPFがまだできること {#what-unprivileged-bpf-can-still-do}
 
-On a kernel that still allows unprivileged BPF (`unprivileged_bpf_disabled` at 0 — not the shipped-upstream default since 5.16, but still common on kernels built without `CONFIG_BPF_UNPRIV_DEFAULT_OFF`, or with the sysctl explicitly re-enabled), a process without `CAP_BPF` is restricted well beyond what the verifier alone would allow:
+非特権BPFをまだ許可しているカーネル（`unprivileged_bpf_disabled`が0 — 5.16以降のアップストリームの出荷時デフォルトではないが、`CONFIG_BPF_UNPRIV_DEFAULT_OFF`なしでビルドされたカーネルや、sysctlで明示的に再有効化されたカーネルでは今でも一般的である）では、`CAP_BPF`を持たないプロセスは、Verifierだけが課す制限をはるかに超えて制限される。
 
-- **Program type**: only `BPF_PROG_TYPE_SOCKET_FILTER` and `BPF_PROG_TYPE_CGROUP_SKB` may be loaded without `CAP_BPF` (`kernel/bpf/syscall.c`, checked immediately after the `unprivileged_bpf_disabled` gate).
-- **Program size**: an unprivileged program is capped at `BPF_MAXINSNS` — 4096 instructions (`include/uapi/linux/bpf_common.h`) — versus `BPF_COMPLEXITY_LIMIT_INSNS`, 1,000,000, defined in `include/linux/bpf.h` and used as the verifier's own path-exploration budget in `kernel/bpf/verifier.c`, for a `CAP_BPF`-holding one.
-- **Pointer and speculation leaks**: `bpf_allow_ptr_leaks()` and the Spectre-bypass checks above all accept `CAP_PERFMON` as one way to relax them — but each also has its own, capability-independent escape hatch (`bpf_jit_bypass_spec_v1()`/`bpf_jit_bypass_spec_v4()` for architectures whose JIT is structurally immune, or booting with `mitigations=off`), so an unprivileged program on an affected, default-mitigated machine gets the verifier's strictest, most defensive rules with no way to relax them through capabilities alone.
-- **Unaligned access**: on architectures without efficient unaligned access, `BPF_F_ANY_ALIGNMENT` also requires `CAP_BPF`.
+- **プログラムタイプ**: `CAP_BPF`なしでロードできるのは`BPF_PROG_TYPE_SOCKET_FILTER`と`BPF_PROG_TYPE_CGROUP_SKB`だけである（`kernel/bpf/syscall.c`。`unprivileged_bpf_disabled`のゲートの直後でチェックされる）。
+- **プログラムサイズ**: 非特権プログラムは`BPF_MAXINSNS` — 4096命令（`include/uapi/linux/bpf_common.h`）— に制限される。これに対し、`CAP_BPF`を持つプログラムの上限は`BPF_COMPLEXITY_LIMIT_INSNS`、すなわち1,000,000である。これは`include/linux/bpf.h`で定義され、`kernel/bpf/verifier.c`でVerifier自身のパス探索の予算として使われる。
+- **ポインタと投機実行による漏洩**: `bpf_allow_ptr_leaks()`と上述のSpectre回避チェックは、いずれも`CAP_PERFMON`をそれらを緩める1つの手段として受け入れる — だが、それぞれがケーパビリティとは無関係の独自の抜け道（JITが構造的に影響を受けないアーキテクチャ向けの`bpf_jit_bypass_spec_v1()`/`bpf_jit_bypass_spec_v4()`、あるいは`mitigations=off`での起動）も持つ。そのため、影響を受けるアーキテクチャでデフォルトの緩和策が有効なマシンでは、非特権プログラムにはVerifierの最も厳格で防御的なルールが適用され、ケーパビリティだけでそれを緩める方法はない。
+- **アラインされていないアクセス**: アラインされていないアクセスを効率的に行えないアーキテクチャでは、`BPF_F_ANY_ALIGNMENT`にも`CAP_BPF`が必要である。
 
-None of this is enforced by the verifier's safety proof — it's a separate, capability-gated policy layered on top of it, and it's the layer that actually changed in response to the verifier CVEs on the [war stories page](war-stories.md).
+これらはいずれもVerifierの安全性証明によって強制されるものではない — それはVerifierの上に重ねられた、ケーパビリティによって制御される別のポリシー層であり、[事件簿のページ](war-stories.md)にあるVerifierのCVEを受けて実際に変化したのはこの層である。
 
-## BPF as a security module: BPF LSM {#bpf-as-a-security-module-bpf-lsm}
+## セキュリティモジュールとしてのBPF: BPF LSM {#bpf-as-a-security-module-bpf-lsm}
 
-Everything above is about controlling who can load BPF. BPF LSM inverts the relationship: it lets a BPF program *become* part of the kernel's own access-control decision, attached directly to [LSM](../security/lsm.md) hooks.
+ここまでの内容はすべて、誰がBPFをロードできるかを制御する話であった。BPF LSMはこの関係を逆転させる。BPFプログラムが[LSM](../security/lsm.md)フックに直接アタッチされ、カーネル自身のアクセス制御判断の一部*となる*ことを可能にするのである。
 
-`kernel/bpf/bpf_lsm.c` (Google, added in Linux 5.7 — confirmed absent at v5.6, present at v5.7) works by declaring a weak, no-op function for every LSM hook that can take a BPF attachment:
+`kernel/bpf/bpf_lsm.c`（Googleによる。Linux 5.7で追加 — v5.6には存在せず、v5.7には存在することを確認済み）は、BPFをアタッチできるすべてのLSMフックについて、弱シンボルの何もしない関数を宣言することで機能する。
 
 ```c
 /* kernel/bpf/bpf_lsm.c */
@@ -82,27 +82,27 @@ __weak noinline RET bpf_lsm_##NAME(__VA_ARGS__)	\
 #undef LSM_HOOK
 ```
 
-Each `bpf_lsm_<hookname>()` stub is registered as an attachable BTF function (`BTF_SET_START(bpf_lsm_hooks)` / `BTF_ID(func, bpf_lsm_##NAME)`, same file), and a BPF program of type `BPF_PROG_TYPE_LSM` (`include/uapi/linux/bpf.h`) attaches to one of them — `BPF_LSM_MAC` for the ordinary access-control hooks, `BPF_LSM_CGROUP` for a cgroup-scoped variant. Because the attach point is a real LSM hook, the program's return value can actually deny an operation, the same as SELinux or AppArmor would — the difference is the policy is a BPF program instead of a compiled-in or loaded security module, so it can be short-lived, generated at runtime, or scoped to exactly one workload. The verifier enforces one extra rule specific to this program type: `bpf_lsm_verify_prog()` (`kernel/bpf/bpf_lsm.c`) rejects any LSM program that isn't GPL-compatible, refusing to let a proprietary policy attach to a security decision point.
+各`bpf_lsm_<hookname>()`スタブはアタッチ可能なBTF関数として登録され（同じファイル内の`BTF_SET_START(bpf_lsm_hooks)` / `BTF_ID(func, bpf_lsm_##NAME)`）、`BPF_PROG_TYPE_LSM`（`include/uapi/linux/bpf.h`）タイプのBPFプログラムがそのいずれかにアタッチする — 通常のアクセス制御フックには`BPF_LSM_MAC`、cgroupスコープの変種には`BPF_LSM_CGROUP`を使う。アタッチ先が本物のLSMフックなので、プログラムの戻り値は、SELinuxやAppArmorと同じように実際に操作を拒否できる — 違いは、ポリシーが組み込みまたはロードされたセキュリティモジュールではなくBPFプログラムである点であり、そのため短命にしたり、実行時に生成したり、ちょうど1つのワークロードにスコープを限定したりできる。Verifierは、このプログラムタイプに固有の追加ルールを1つ課す。`bpf_lsm_verify_prog()`（`kernel/bpf/bpf_lsm.c`）はGPL互換でないLSMプログラムをすべて拒否し、プロプライエタリなポリシーがセキュリティ判断の地点にアタッチすることを許さない。
 
-`CONFIG_BPF_LSM` (`kernel/bpf/Kconfig`) is the build-time switch, and its own help text is direct about the intended use: "Enables instrumentation of the security hooks with BPF programs for implementing dynamic MAC and Audit Policies." It depends on `BPF_EVENTS`, `BPF_SYSCALL`, `SECURITY`, and `BPF_JIT` all being enabled — this is not something a minimal kernel build gets by accident. Building it in isn't the whole story, though: LSMs are only active if they're in the ordered list the `LSM` Kconfig string enables (`bpf` is included in every distribution's default list in `security/Kconfig`), and that list "can be controlled at boot with the `lsm=` parameter" — a custom `lsm=` boot argument that drops `bpf` silently disables BPF LSM even on a kernel built with `CONFIG_BPF_LSM=y`.
+`CONFIG_BPF_LSM`（`kernel/bpf/Kconfig`）がビルド時のスイッチであり、そのヘルプテキストは意図された用途について率直である。"Enables instrumentation of the security hooks with BPF programs for implementing dynamic MAC and Audit Policies."（訳: 動的なMACおよび監査ポリシーを実装するために、BPFプログラムによるセキュリティフックの計装を有効にする。）これは`BPF_EVENTS`、`BPF_SYSCALL`、`SECURITY`、`BPF_JIT`がすべて有効であることに依存している — 最小構成のカーネルビルドで偶然手に入るものではない。ただし、組み込んでビルドすればそれで終わりではない。LSMは、`LSM` Kconfig文字列が有効にする順序付きリストに含まれている場合にのみ有効になる（`security/Kconfig`では、どのディストリビューション向けのデフォルトリストにも`bpf`が含まれている）。そしてそのリストは「ブート時に`lsm=`パラメータで制御できる」— `bpf`を含まないカスタムの`lsm=`ブート引数を指定すると、`CONFIG_BPF_LSM=y`でビルドされたカーネルであっても、BPF LSMは黙って無効になる。
 
-Loading an LSM-attached BPF program is still gated by the ordinary capability rules above, not a separate, more permissive path: `BPF_PROG_TYPE_LSM` isn't one of the two program types unprivileged loading allows, so it requires `CAP_BPF`, on top of `CONFIG_BPF_LSM` being built in at all — and because `BPF_PROG_TYPE_LSM` is also one of the program types `is_perfmon_prog_type()` (`kernel/bpf/syscall.c`) covers, loading one requires `CAP_PERFMON` as well. BPF LSM changes what a *sufficiently privileged* BPF program is allowed to influence, not who's allowed to load one.
+LSMにアタッチされるBPFプログラムのロードも、別個のより寛容なパスではなく、上述の通常のケーパビリティルールによって制御される。`BPF_PROG_TYPE_LSM`は非特権ロードが許可される2つのプログラムタイプに含まれないので、そもそも`CONFIG_BPF_LSM`が組み込まれていることに加えて`CAP_BPF`が必要である — さらに、`BPF_PROG_TYPE_LSM`は`is_perfmon_prog_type()`（`kernel/bpf/syscall.c`）がカバーするプログラムタイプの1つでもあるため、ロードには`CAP_PERFMON`も必要になる。BPF LSMが変えるのは、*十分な特権を持つ*BPFプログラムが何に影響を与えてよいかであって、誰がそれをロードできるかではない。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [kernel/bpf/syscall.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/syscall.c) — `bpf_unpriv_handler()`, the `unprivileged_bpf_disabled` sysctl table entry, and the capability checks in program/map creation
-- [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — the `bpf_token_capable()` declaration, `bpf_allow_ptr_leaks()`, `bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`
-- [kernel/bpf/token.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/token.c) — `bpf_token_capable()`'s actual definition, and the token-delegation checks (`bpf_token_get_from_fd()`, `bpf_token_allow_cmd()`, `bpf_token_allow_prog_type()`, `bpf_token_allow_map_type()`)
+- [kernel/bpf/syscall.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/syscall.c) — `bpf_unpriv_handler()`、`unprivileged_bpf_disabled` sysctlのテーブルエントリ、プログラム/map作成時のケーパビリティチェック
+- [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — `bpf_token_capable()`の宣言、`bpf_allow_ptr_leaks()`、`bpf_bypass_spec_v1()`/`bpf_bypass_spec_v4()`
+- [kernel/bpf/token.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/token.c) — `bpf_token_capable()`の実際の定義と、トークン委譲のチェック（`bpf_token_get_from_fd()`、`bpf_token_allow_cmd()`、`bpf_token_allow_prog_type()`、`bpf_token_allow_map_type()`）
 - [include/uapi/linux/bpf_common.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf_common.h) — `BPF_MAXINSNS`
-- [kernel/bpf/bpf_lsm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/bpf_lsm.c) — the `bpf_lsm_<hook>()` weak-symbol mechanism and BTF registration
-- [kernel/bpf/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/Kconfig) — `CONFIG_BPF_LSM` and its dependencies
-- [include/uapi/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf.h) — `BPF_PROG_TYPE_LSM`, `BPF_LSM_MAC`, `BPF_LSM_CGROUP`
+- [kernel/bpf/bpf_lsm.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/bpf_lsm.c) — `bpf_lsm_<hook>()`の弱シンボルの仕組みとBTFへの登録
+- [kernel/bpf/Kconfig](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/Kconfig) — `CONFIG_BPF_LSM`とその依存関係
+- [include/uapi/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf.h) — `BPF_PROG_TYPE_LSM`、`BPF_LSM_MAC`、`BPF_LSM_CGROUP`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [BPF Verifier](bpf-verifier.md) — the safety proof this page's capability layer sits on top of
-- [War Stories](war-stories.md) — why the capability model exists: verifier CVEs and the 2021 unprivileged-BPF-off-by-default change
-- [LSM Framework](../security/lsm.md) — the hook framework BPF LSM attaches into
-- [Linux Capabilities](../security/capabilities.md) — `CAP_BPF`, `CAP_PERFMON`, and the wider capability split
+- [BPF Verifier](bpf-verifier.md) — このページのケーパビリティ層がその上に載っている安全性証明
+- [事件簿](war-stories.md) — ケーパビリティモデルが存在する理由: VerifierのCVEと、2021年の非特権BPFデフォルト無効化の変更
+- [LSMフレームワーク](../security/lsm.md) — BPF LSMがアタッチするフックのフレームワーク
+- [Linuxケーパビリティ](../security/capabilities.md) — `CAP_BPF`、`CAP_PERFMON`、そしてより広範なケーパビリティの分割

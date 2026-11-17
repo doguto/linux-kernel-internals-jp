@@ -1,36 +1,36 @@
-# I2C and SPI Bus Drivers {#i2c-and-spi-bus-drivers}
+# I2CとSPIのバスドライバ {#i2c-and-spi-bus-drivers}
 
-> Writing drivers for I2C and SPI peripheral devices in the Linux kernel
+> LinuxカーネルでI2CとSPIの周辺デバイス向けドライバを書く
 
-## I2C overview {#i2c-overview}
+## I2Cの概要 {#i2c-overview}
 
-I2C (Inter-Integrated Circuit) is a two-wire serial protocol for connecting low-speed peripherals (sensors, EEPROMs, touch controllers) to a microprocessor. The Linux I2C subsystem was carried into the mainline kernel through Greg Kroah-Hartman's driver-model work and later co-maintained by Jean Delvare (formerly of the lm-sensors project), who took sole maintainership in September 2005 [(LWN: I2C patches for 2.6.12-rc1)](https://lwn.net/Articles/130158/).
+I2C（Inter-Integrated Circuit）は、低速の周辺機器（センサー、EEPROM、タッチコントローラ）をマイクロプロセッサに接続するための2線式シリアルプロトコルである。LinuxのI2Cサブシステムは、Greg Kroah-Hartmanのドライバモデルの作業を通じてメインラインカーネルに取り込まれ、その後Jean Delvare（元lm-sensorsプロジェクト）が共同でメンテナンスし、2005年9月に彼が単独のメンテナとなった[（LWN: I2C patches for 2.6.12-rc1）](https://lwn.net/Articles/130158/)。
 
 ```
-Physical wires:
+物理的な配線:
   SDA (data)  ────────────────────────
   SCL (clock) ────────────────────────
               │       │       │
            Master    Dev1    Dev2
         (host CPU) (0x48) (0x50)
                      ↑       ↑
-                  7-bit addresses
+                  7ビットアドレス
 ```
 
-### I2C transaction format {#i2c-transaction-format}
+### I2Cトランザクションの形式 {#i2c-transaction-format}
 
 ```
-Start: SDA falls while SCL is high
+Start: SCLがHighの間にSDAが立ち下がる
   │
   └─ [7-bit address] [R/W bit] [ACK]
      │
      └─ [data byte 0] [ACK]
         [data byte 1] [ACK]
         ...
-Stop: SDA rises while SCL is high
+Stop: SCLがHighの間にSDAが立ち上がる
 ```
 
-## I2C client driver {#i2c-client-driver}
+## I2Cクライアントドライバ {#i2c-client-driver}
 
 ### struct i2c_driver {#struct-i2c_driver}
 
@@ -38,33 +38,33 @@ Stop: SDA rises while SCL is high
 #include <linux/i2c.h>
 #include <linux/module.h>
 
-/* Device-specific private data */
+/* デバイス固有のプライベートデータ */
 struct my_sensor {
     struct i2c_client *client;
     struct mutex       lock;
     int                irq;
 };
 
-/* Match table for device tree / ACPI */
+/* Device Tree / ACPI用のマッチテーブル */
 static const struct of_device_id my_sensor_of_match[] = {
     { .compatible = "vendor,my-sensor" },
-    { /* sentinel */ }
+    { /* 番兵 */ }
 };
 MODULE_DEVICE_TABLE(of, my_sensor_of_match);
 
 static const struct i2c_device_id my_sensor_id[] = {
     { "my-sensor", 0 },
-    { /* sentinel */ }
+    { /* 番兵 */ }
 };
 MODULE_DEVICE_TABLE(i2c, my_sensor_id);
 
-/* Called when device is found */
+/* デバイスが見つかったときに呼ばれる */
 static int my_sensor_probe(struct i2c_client *client)
 {
     struct my_sensor *sensor;
     int ret;
 
-    /* Verify the device supports the operations we need */
+    /* 必要な操作をデバイスがサポートしているか確認する */
     if (!i2c_check_functionality(client->adapter,
                                   I2C_FUNC_SMBUS_BYTE_DATA)) {
         dev_err(&client->dev, "SMBus byte operations required\n");
@@ -79,7 +79,7 @@ static int my_sensor_probe(struct i2c_client *client)
     mutex_init(&sensor->lock);
     i2c_set_clientdata(client, sensor);
 
-    /* Read and verify device ID register */
+    /* デバイスIDレジスタを読んで検証する */
     ret = i2c_smbus_read_byte_data(client, REG_DEVICE_ID);
     if (ret < 0) {
         dev_err(&client->dev, "failed to read device ID: %d\n", ret);
@@ -90,7 +90,7 @@ static int my_sensor_probe(struct i2c_client *client)
         return -ENODEV;
     }
 
-    /* Register with IIO or hwmon subsystem */
+    /* IIOまたはhwmonサブシステムに登録する */
     return my_sensor_register_iio(sensor);
 }
 
@@ -110,55 +110,55 @@ static struct i2c_driver my_sensor_driver = {
     .id_table = my_sensor_id,
 };
 module_i2c_driver(my_sensor_driver);
-/* Expands to: module_init + module_exit with i2c_add/del_driver */
+/* 展開結果: i2c_add/del_driverを使うmodule_init + module_exit */
 ```
 
-## I2C transfer functions {#i2c-transfer-functions}
+## I2Cの転送関数 {#i2c-transfer-functions}
 
-### SMBus (common for simple devices) {#smbus-common-for-simple-devices}
+### SMBus（単純なデバイスで一般的） {#smbus-common-for-simple-devices}
 
 ```c
-/* Read/write a single byte at a register address: */
+/* レジスタアドレスの1バイトを読み書きする: */
 s32 i2c_smbus_read_byte_data(struct i2c_client *client, u8 reg);
 s32 i2c_smbus_write_byte_data(struct i2c_client *client, u8 reg, u8 value);
 
-/* Read/write a 16-bit word: */
+/* 16ビットのワードを読み書きする: */
 s32 i2c_smbus_read_word_data(struct i2c_client *client, u8 reg);
 s32 i2c_smbus_write_word_data(struct i2c_client *client, u8 reg, u16 value);
 
-/* Read a block of data: */
+/* データのブロックを読む: */
 s32 i2c_smbus_read_i2c_block_data(struct i2c_client *client, u8 reg,
                                    u8 length, u8 *values);
-/* values receives `length` bytes starting from register `reg` */
+/* valuesには、レジスタ`reg`から始まる`length`バイトが格納される */
 
-/* Example: read 6 bytes of accelerometer data from reg 0x28: */
+/* 例: レジスタ0x28から加速度センサーのデータを6バイト読む: */
 u8 data[6];
 ret = i2c_smbus_read_i2c_block_data(client, 0x28, 6, data);
 ```
 
-### Raw I2C messages (for complex protocols) {#raw-i2c-messages-for-complex-protocols}
+### 生のI2Cメッセージ（複雑なプロトコル向け） {#raw-i2c-messages-for-complex-protocols}
 
 ```c
-/* For devices that don't follow SMBus convention: */
+/* SMBusの慣習に従わないデバイス向け: */
 int i2c_transfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num);
 
-/* Example: write register address, then read multiple bytes
-   (common register access pattern): */
+/* 例: レジスタアドレスを書き込んでから複数バイトを読む
+   （一般的なレジスタアクセスのパターン）: */
 static int my_read_regs(struct i2c_client *client, u8 reg,
                          u8 *buf, size_t len)
 {
     struct i2c_msg msgs[2] = {
         {
-            /* Write phase: send register address */
+            /* 書き込みフェーズ: レジスタアドレスを送る */
             .addr  = client->addr,
-            .flags = 0,              /* write */
+            .flags = 0,              /* 書き込み */
             .len   = 1,
             .buf   = &reg,
         },
         {
-            /* Read phase: read `len` bytes */
+            /* 読み出しフェーズ: `len`バイトを読む */
             .addr  = client->addr,
-            .flags = I2C_M_RD,      /* read */
+            .flags = I2C_M_RD,      /* 読み出し */
             .len   = len,
             .buf   = buf,
         },
@@ -167,26 +167,26 @@ static int my_read_regs(struct i2c_client *client, u8 reg,
 }
 ```
 
-## regmap: register access abstraction {#regmap-register-access-abstraction}
+## regmap: レジスタアクセスの抽象化 {#regmap-register-access-abstraction}
 
-`regmap` provides a unified API for register access across I2C, SPI, MMIO, and other buses:
+`regmap`は、I2C、SPI、MMIOなどのバスをまたいで、レジスタアクセスのための統一されたAPIを提供する。
 
 ```c
 #include <linux/regmap.h>
 
-/* Define the register map configuration: */
+/* レジスタマップの設定を定義する: */
 static const struct regmap_config my_regmap_config = {
-    .reg_bits   = 8,    /* register address width */
-    .val_bits   = 8,    /* register value width */
+    .reg_bits   = 8,    /* レジスタアドレスの幅 */
+    .val_bits   = 8,    /* レジスタ値の幅 */
     .max_register = 0xFF,
 
-    /* Optional: caching for read-only or slow registers */
+    /* 任意: 読み出し専用または低速なレジスタのキャッシュ */
     .cache_type = REGCACHE_RBTREE,
 
-    /* Readable/writeable register masks: */
+    /* 読み出し可能/書き込み可能なレジスタのマスク: */
     .readable_reg = my_readable_reg,
     .writeable_reg = my_writeable_reg,
-    .volatile_reg  = my_volatile_reg,  /* not cached */
+    .volatile_reg  = my_volatile_reg,  /* キャッシュされない */
 };
 
 static int my_sensor_probe(struct i2c_client *client)
@@ -194,7 +194,7 @@ static int my_sensor_probe(struct i2c_client *client)
     struct my_sensor *sensor;
     struct regmap *regmap;
 
-    /* Create regmap backed by I2C: */
+    /* I2Cを裏付けとするregmapを作成する: */
     regmap = devm_regmap_init_i2c(client, &my_regmap_config);
     if (IS_ERR(regmap))
         return PTR_ERR(regmap);
@@ -203,39 +203,39 @@ static int my_sensor_probe(struct i2c_client *client)
     /* ... */
 }
 
-/* Use regmap for register access: */
+/* レジスタアクセスにregmapを使う: */
 unsigned int val;
 regmap_read(sensor->regmap, REG_STATUS, &val);
 regmap_write(sensor->regmap, REG_CONFIG, 0x01);
 
-/* Read-modify-write (atomic): */
+/* 読み出し-変更-書き込み（アトミック）: */
 regmap_update_bits(sensor->regmap, REG_CONFIG,
-                   BIT(3) | BIT(2),   /* mask */
-                   BIT(3));           /* value: set bit 3, clear bit 2 */
+                   BIT(3) | BIT(2),   /* マスク */
+                   BIT(3));           /* 値: ビット3をセット、ビット2をクリア */
 
-/* Bulk read multiple consecutive registers: */
+/* 連続する複数のレジスタを一括で読む: */
 u8 buf[6];
 regmap_bulk_read(sensor->regmap, REG_DATA_START, buf, 6);
 ```
 
-## SPI overview {#spi-overview}
+## SPIの概要 {#spi-overview}
 
-SPI (Serial Peripheral Interface) is a synchronous 4-wire protocol. The Linux SPI subsystem was written by David Brownell and merged in Linux 2.6.16 [(commit 8ae12a0d)](https://git.kernel.org/linus/8ae12a0d85987dc138f8c944cb78a92bf466cea0):
+SPI（Serial Peripheral Interface）は同期式の4線プロトコルである。LinuxのSPIサブシステムはDavid Brownellによって書かれ、Linux 2.6.16でマージされた[（commit 8ae12a0d）](https://git.kernel.org/linus/8ae12a0d85987dc138f8c944cb78a92bf466cea0)。
 
 ```
-SCLK  ──────────────────── clock (master-driven)
+SCLK  ──────────────────── クロック（マスターが駆動）
 MOSI  ──────────────────── master-out slave-in
 MISO  ──────────────────── master-in slave-out
-CS/SS ──────────────────── chip select (one per device, active-low)
+CS/SS ──────────────────── チップセレクト（デバイスごとに1本、アクティブLow）
 
-Unlike I2C:
-  - Full-duplex (simultaneous TX and RX)
-  - No addressing: CS line selects device
-  - No ACK: master never knows if slave received
-  - Higher speeds (up to 100+ MHz vs I2C's 3.4 MHz)
+I2Cとの違い:
+  - 全二重（TXとRXを同時に行う）
+  - アドレッシングなし: CS線でデバイスを選択する
+  - ACKなし: スレーブが受信したかどうかをマスターは知ることがない
+  - より高速（I2Cの3.4 MHzに対して100 MHz以上まで）
 ```
 
-## SPI device driver {#spi-device-driver}
+## SPIデバイスドライバ {#spi-device-driver}
 
 ```c
 #include <linux/spi/spi.h>
@@ -254,11 +254,11 @@ static int my_spi_probe(struct spi_device *spi)
 {
     struct my_spi_dev *dev;
 
-    /* Configure SPI parameters: */
+    /* SPIのパラメータを設定する: */
     spi->bits_per_word = 8;
     spi->mode          = SPI_MODE_0;    /* CPOL=0, CPHA=0 */
     spi->max_speed_hz  = 10000000;      /* 10 MHz */
-    spi_setup(spi);                      /* apply configuration */
+    spi_setup(spi);                      /* 設定を適用する */
 
     dev = devm_kzalloc(&spi->dev, sizeof(*dev), GFP_KERNEL);
     dev->spi = spi;
@@ -277,46 +277,46 @@ static struct spi_driver my_spi_driver = {
 module_spi_driver(my_spi_driver);
 ```
 
-## SPI transfer functions {#spi-transfer-functions}
+## SPIの転送関数 {#spi-transfer-functions}
 
 ```c
-/* Simple synchronous read/write: */
+/* 単純な同期読み書き: */
 u8 tx_buf[4], rx_buf[4];
 
-/* Full-duplex transfer (TX and RX simultaneously): */
+/* 全二重転送（TXとRXを同時に）: */
 struct spi_transfer t = {
     .tx_buf = tx_buf,
     .rx_buf = rx_buf,
     .len    = 4,
-    .speed_hz = 5000000,  /* override default speed */
+    .speed_hz = 5000000,  /* デフォルトの速度を上書きする */
 };
 struct spi_message m;
 spi_message_init(&m);
 spi_message_add_tail(&t, &m);
 ret = spi_sync(spi, &m);
 
-/* Convenience wrappers: */
-spi_write(spi, tx_buf, 4);           /* TX only */
-spi_read(spi, rx_buf, 4);            /* RX only (sends 0x00) */
-spi_write_then_read(spi, tx_buf, 2, rx_buf, 4);  /* CS held low between */
+/* 便利なラッパー: */
+spi_write(spi, tx_buf, 4);           /* TXのみ */
+spi_read(spi, rx_buf, 4);            /* RXのみ（0x00を送信する） */
+spi_write_then_read(spi, tx_buf, 2, rx_buf, 4);  /* 間はCSをLowに保持する */
 
-/* regmap for SPI (same API as I2C!): */
+/* SPI用のregmap（I2Cと同じAPI!）: */
 regmap = devm_regmap_init_spi(spi, &my_regmap_config);
 regmap_read(regmap, REG_ID, &val);
 ```
 
-## Device Tree instantiation {#device-tree-instantiation}
+## Device Treeによるインスタンス化 {#device-tree-instantiation}
 
 ```dts
-/* Board DTS: */
+/* ボードのDTS: */
 &i2c1 {
     status = "okay";
-    clock-frequency = <400000>;  /* 400 kHz fast mode */
+    clock-frequency = <400000>;  /* 400 kHzのファストモード */
 
     my_sensor: sensor@48 {
         compatible = "vendor,my-sensor";
-        reg = <0x48>;            /* I2C address */
-        vdd-supply = <&ldo3>;    /* power supply */
+        reg = <0x48>;            /* I2Cアドレス */
+        vdd-supply = <&ldo3>;    /* 電源 */
         interrupt-parent = <&gpio0>;
         interrupts = <15 IRQ_TYPE_EDGE_FALLING>;
     };
@@ -328,50 +328,50 @@ regmap_read(regmap, REG_ID, &val);
 
     my_spi_sensor: sensor@0 {
         compatible = "vendor,my-spi-sensor";
-        reg = <0>;              /* chip select 0 */
+        reg = <0>;              /* チップセレクト0 */
         spi-max-frequency = <10000000>;
         spi-cpol;               /* CPOL=1 */
-        spi-cpha;               /* CPHA=1 → together: SPI_MODE_3 */
+        spi-cpha;               /* CPHA=1 → 合わせてSPI_MODE_3 */
     };
 };
 ```
 
-## Debugging I2C/SPI {#debugging-i2cspi}
+## I2C/SPIのデバッグ {#debugging-i2cspi}
 
 ```bash
-# List I2C buses:
+# I2Cバスを一覧表示:
 ls /dev/i2c-*
 i2cdetect -l
 
-# Scan I2C bus 1 for devices:
+# I2Cバス1をスキャンしてデバイスを探す:
 i2cdetect -y 1
 #      0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f
 # 40: -- -- -- -- -- -- -- -- 48 -- -- -- -- -- -- --
-# (device found at address 0x48)
+# （アドレス0x48でデバイスが見つかった）
 
-# Read register 0x00 from device at address 0x48:
+# アドレス0x48のデバイスからレジスタ0x00を読む:
 i2cget -y 1 0x48 0x00
 
-# Write 0x01 to register 0x10:
+# レジスタ0x10に0x01を書き込む:
 i2cset -y 1 0x48 0x10 0x01
 
-# Decode I2C traffic (if hardware supports):
-# Use /sys/kernel/debug/i2c-0/
+# I2Cのトラフィックをデコードする（ハードウェアが対応していれば）:
+# /sys/kernel/debug/i2c-0/を使う
 cat /sys/kernel/debug/i2c-0/timing
 
-# SPI trace:
+# SPIのトレース:
 echo 1 > /sys/kernel/debug/dynamic_debug/control
-# or use spidev_test:
+# またはspidev_testを使う:
 spidev_test -D /dev/spidev0.0 -s 1000000 -p '\x01\x02\x03'
 
-# regmap debugfs:
+# regmapのdebugfs:
 ls /sys/kernel/debug/regmap/
 cat /sys/kernel/debug/regmap/my-sensor-0-0048/registers
 # 00: 01
 # 01: 0f
 # ...
 
-# Trace I2C transactions:
+# I2Cトランザクションをトレースする:
 bpftrace -e '
 kprobe:i2c_transfer {
     printf("i2c_transfer: adapter=%s num_msgs=%d\n",
@@ -379,13 +379,13 @@ kprobe:i2c_transfer {
 }'
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Platform Drivers](platform-driver.md) — MMIO register-mapped devices
-- [Device Tree](device-tree.md) — DTS binding for I2C/SPI devices
-- [Device Model](device-model.md) — bus/device/driver framework
-- [DMA API](../iommu/dma-api.md) — DMA for SPI controllers
-- `drivers/i2c/` — I2C subsystem
-- `drivers/spi/` — SPI subsystem
+- [プラットフォームドライバ](platform-driver.md) — MMIOでレジスタがマップされたデバイス
+- [Device Tree](device-tree.md) — I2C/SPIデバイスのDTSバインディング
+- [デバイスモデル](device-model.md) — バス/デバイス/ドライバの枠組み
+- [DMA API](../iommu/dma-api.md) — SPIコントローラのためのDMA
+- `drivers/i2c/` — I2Cサブシステム
+- `drivers/spi/` — SPIサブシステム
 - `include/linux/regmap.h` — regmap API
-- `Documentation/driver-api/i2c.rst` — I2C driver guide
+- `Documentation/driver-api/i2c.rst` — I2Cドライバのガイド

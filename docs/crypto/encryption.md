@@ -1,21 +1,21 @@
-# dm-crypt and fscrypt {#dm-crypt-and-fscrypt}
+# dm-cryptとfscrypt {#dm-crypt-and-fscrypt}
 
-> Block-level and file-level encryption in Linux
+> Linuxにおけるブロックレベル暗号化とファイルレベル暗号化
 
-## Two encryption layers {#two-encryption-layers}
+## 2つの暗号化レイヤー {#two-encryption-layers}
 
-Linux provides encryption at two levels:
+Linuxは2つのレベルで暗号化を提供する:
 
-| Layer | Subsystem | What's encrypted | Key granularity |
+| レイヤー | サブシステム | 暗号化される対象 | 鍵の粒度 |
 |-------|-----------|-----------------|-----------------|
-| Block device | dm-crypt | Entire partition/disk | One key per volume |
-| Filesystem | fscrypt | Individual files/dirs | Per-file or per-directory keys |
+| ブロックデバイス | dm-crypt | パーティション/ディスク全体 | ボリュームごとに1つの鍵 |
+| ファイルシステム | fscrypt | 個々のファイル/ディレクトリ | ファイルごとまたはディレクトリごとの鍵 |
 
-dm-crypt is transparent to the filesystem; fscrypt is transparent to applications but per-file.
+dm-cryptはファイルシステムから透過的である。fscryptはアプリケーションから透過的だが、ファイル単位で動作する。
 
-## dm-crypt: block-level encryption {#dm-crypt-block-level-encryption}
+## dm-crypt: ブロックレベル暗号化 {#dm-crypt-block-level-encryption}
 
-dm-crypt is a device mapper target that transparently encrypts reads and writes using the kernel crypto API.
+dm-cryptはdevice mapperのターゲットであり、カーネル暗号APIを使って読み書きを透過的に暗号化する。
 
 ```
 Application → read/write /dev/mapper/myvolume
@@ -28,80 +28,80 @@ Application → read/write /dev/mapper/myvolume
 
 ### LUKS: Linux Unified Key Setup {#luks-linux-unified-key-setup}
 
-LUKS is the standard format for dm-crypt volumes. It stores encrypted key material in a header, allowing multiple passphrases to unlock the same volume:
+LUKSはdm-cryptボリュームの標準フォーマットである。暗号化された鍵素材をヘッダーに格納し、複数のパスフレーズで同じボリュームをアンロックできるようにする:
 
 ```bash
-# Create a LUKS volume
+# LUKSボリュームを作成
 cryptsetup luksFormat /dev/sda2
-# Enter passphrase
+# パスフレーズを入力
 
-# Open (decrypt) the volume
+# ボリュームを開く（復号する）
 cryptsetup luksOpen /dev/sda2 myvolume
-# /dev/mapper/myvolume now exists
+# これで /dev/mapper/myvolume が存在する
 
-# Use it like any block device
+# 通常のブロックデバイスと同様に使う
 mkfs.ext4 /dev/mapper/myvolume
 mount /dev/mapper/myvolume /mnt/secure
 
-# Close (re-encrypt the volume key, remove device)
+# 閉じる（ボリューム鍵を再暗号化し、デバイスを削除）
 umount /mnt/secure
 cryptsetup luksClose myvolume
 ```
 
-### dm-crypt internals {#dm-crypt-internals}
+### dm-cryptの内部 {#dm-crypt-internals}
 
 ```c
 /* drivers/md/dm-crypt.c */
 struct crypt_config {
-    struct dm_dev       *dev;           /* backing block device */
+    struct dm_dev       *dev;           /* 下位のブロックデバイス */
     sector_t             start;
 
-    /* Per-CPU I/O work queues */
+    /* CPUごとのI/Oワークキュー */
     struct workqueue_struct *io_queue;
     struct workqueue_struct *crypt_queue;
 
-    /* Crypto transform */
+    /* 暗号変換 */
     union {
-        struct crypto_skcipher **tfms;  /* one per CPU for parallelism */
+        struct crypto_skcipher **tfms;  /* 並列化のためCPUごとに1つ */
         struct crypto_aead    **tfms_aead;
     } cipher_tfm;
     unsigned int          tfms_count;
 
-    /* IV generator */
+    /* IVジェネレータ */
     const struct crypt_iv_operations *iv_gen_ops;  /* ESSIV, plain64, benbi, ... */
     union {
         struct iv_benbi_private    benbi;
         struct iv_lmk_private      lmk;
         struct iv_tcw_private      tcw;
         struct iv_elephant_private elephant;
-    } iv_gen_private;                   /* per-IV-mode private state */
+    } iv_gen_private;                   /* IVモードごとのプライベート状態 */
 
-    u64                    iv_offset;   /* sector number offset for IV */
+    u64                    iv_offset;   /* IV用のセクタ番号オフセット */
     unsigned int           iv_size;
 
-    char                  *cipher_string;  /* allocated, not embedded */
+    char                  *cipher_string;  /* 埋め込みではなく割り当てられる */
 };
 
-/* Each I/O is processed in a crypt_io */
+/* 各I/Oはcrypt_ioの中で処理される */
 struct dm_crypt_io {
     struct crypt_config    *cc;
     struct bio             *base_bio;
     u8                     *integrity_metadata;
 
-    struct work_struct      work;   /* submitted to crypt_queue */
+    struct work_struct      work;   /* crypt_queueに投入される */
 
-    struct convert_context  ctx;    /* current conversion state */
+    struct convert_context  ctx;    /* 現在の変換状態 */
     atomic_t                io_pending;
     blk_status_t            error;
     sector_t                sector;
 };
 ```
 
-### AES-XTS: why not CBC? {#aes-xts-why-not-cbc}
+### AES-XTS: なぜCBCではないのか {#aes-xts-why-not-cbc}
 
-dm-crypt uses AES-XTS (XEX-based tweaked-codebook mode with ciphertext stealing) rather than AES-CBC for disk encryption:
+dm-cryptはディスク暗号化にAES-CBCではなくAES-XTS（XEX-based tweaked-codebook mode with ciphertext stealing）を使う:
 
-**CBC weakness for disk encryption**: In CBC, sector 1 always encrypts to the same ciphertext for a given key (the IV is derived from the sector number). An attacker can detect which sectors have identical plaintext. AES-XTS uses a tweak derived from the physical sector number, making each sector's encryption unique.
+**ディスク暗号化におけるCBCの弱点**: CBCでは、ある鍵に対してセクタ1は常に同じ暗号文に暗号化される（IVがセクタ番号から導出されるため）。攻撃者はどのセクタが同一の平文を持つかを検出できる。AES-XTSは物理セクタ番号から導出したtweakを使い、各セクタの暗号化を一意にする。
 
 ```
 AES-XTS(key, sector_num, plaintext) → ciphertext
@@ -112,38 +112,38 @@ For each 16-byte block i in the sector:
   tweak_{i+1}   = GF(2^128) multiplication of tweak_i
 ```
 
-### IV generation {#iv-generation}
+### IVの生成 {#iv-generation}
 
-dm-crypt supports several IV modes:
+dm-cryptはいくつかのIVモードをサポートする:
 
 ```c
-/* IV modes (selected by the cipher string): */
+/* IVモード（暗号文字列で選択する）: */
 
-/* plain/plain64: IV = sector number */
+/* plain/plain64: IV = セクタ番号 */
 /* "aes-cbc-plain64" */
 
-/* essiv: IV = encrypt(sector_num) with SHA256 of volume key */
-/* Prevents watermarking attacks against CBC */
+/* essiv: IV = ボリューム鍵のSHA256でencrypt(sector_num) */
+/* CBCに対するウォーターマーキング攻撃を防ぐ */
 /* "aes-cbc-essiv:sha256" */
 
-/* Standard for new volumes: */
-/* "aes-xts-plain64" — sector number as 64-bit LE integer */
+/* 新規ボリュームの標準: */
+/* "aes-xts-plain64" — セクタ番号を64ビットLE整数として使う */
 ```
 
-## dm-integrity: authenticated block storage {#dm-integrity-authenticated-block-storage}
+## dm-integrity: 認証付きブロックストレージ {#dm-integrity-authenticated-block-storage}
 
-dm-integrity adds a per-sector checksum to detect data corruption:
+dm-integrityはデータ破損を検出するためにセクタごとのチェックサムを追加する:
 
 ```bash
-# Create an integrity device (adds 4-byte CRC per 512-byte sector)
+# integrityデバイスを作成（512バイトセクタごとに4バイトのCRCを追加）
 cryptsetup open --type integrity /dev/sda2 myintegrity
-# Or combine with dm-crypt for authenticated encryption:
+# あるいはdm-cryptと組み合わせて認証付き暗号化にする:
 cryptsetup luksFormat --integrity hmac-sha256 /dev/sda2
 ```
 
-## fscrypt: filesystem-level encryption {#fscrypt-filesystem-level-encryption}
+## fscrypt: ファイルシステムレベル暗号化 {#fscrypt-filesystem-level-encryption}
 
-fscrypt is built into ext4, f2fs, and ubifs. It encrypts file contents and filenames, with keys stored in the kernel keyring.
+fscryptはext4、f2fs、ubifsに組み込まれている。ファイルの内容とファイル名を暗号化し、鍵はカーネルkeyringに格納される。
 
 ```
 Directory with encryption policy:
@@ -159,30 +159,30 @@ Reading a file:
   → return plaintext
 ```
 
-### Setting up fscrypt {#setting-up-fscrypt}
+### fscryptのセットアップ {#setting-up-fscrypt}
 
 ```bash
-# Requires CONFIG_FS_ENCRYPTION=y and an fscrypt-capable filesystem
+# CONFIG_FS_ENCRYPTION=y とfscrypt対応ファイルシステムが必要
 
-# Generate a master key (256 bits)
+# マスター鍵を生成（256ビット）
 keyctl new_session
 fscryptctl generate-key > master.key
 
-# Add master key to filesystem
+# マスター鍵をファイルシステムに追加
 fscryptctl add-key /mnt/myfs < master.key
 # Key identifier: 0123456789abcdef0123456789abcdef
 
-# Set encryption policy on a directory
+# ディレクトリに暗号化ポリシーを設定
 fscryptctl set-policy 0123456789abcdef0123456789abcdef /mnt/myfs/private/
-# Now all files created under /mnt/myfs/private/ are encrypted
+# これで /mnt/myfs/private/ 以下に作られるファイルはすべて暗号化される
 
-# After unmounting and remounting without the key:
-# filenames appear as ciphertext, content unreadable
+# 鍵なしでアンマウントして再マウントした後:
+# ファイル名は暗号文として表示され、内容は読めない
 ```
 
-### Key hierarchy {#key-hierarchy}
+### 鍵の階層 {#key-hierarchy}
 
-fscrypt derives per-file keys from the master key using HKDF-SHA512:
+fscryptはHKDF-SHA512を使ってマスター鍵からファイルごとの鍵を導出する:
 
 ```
 Master key (256 bit)
@@ -196,9 +196,9 @@ Per-file key (256 bit, unique per inode)
 Encrypted content
 ```
 
-The nonce stored in the inode is unique per file, ensuring different keys for files with identical content.
+inodeに格納されるnonceはファイルごとに一意であり、内容が同一のファイルでも異なる鍵になることを保証する。
 
-### fscrypt policies {#fscrypt-policies}
+### fscryptポリシー {#fscrypt-policies}
 
 ```c
 /* include/uapi/linux/fscrypt.h */
@@ -207,19 +207,19 @@ struct fscrypt_policy_v2 {
     __u8 contents_encryption_mode;      /* FSCRYPT_MODE_AES_256_XTS */
     __u8 filenames_encryption_mode;     /* FSCRYPT_MODE_AES_256_CTS */
     __u8 flags;                         /* FSCRYPT_POLICY_FLAGS_PAD_* */
-    __u8 log2_data_unit_size;           /* 0 = filesystem block size */
+    __u8 log2_data_unit_size;           /* 0 = ファイルシステムのブロックサイズ */
     __u8 __reserved[3];
-    __u8 master_key_identifier[FSCRYPT_KEY_IDENTIFIER_SIZE]; /* 16 bytes */
+    __u8 master_key_identifier[FSCRYPT_KEY_IDENTIFIER_SIZE]; /* 16バイト */
 };
 
-/* Encryption modes: */
-FSCRYPT_MODE_AES_256_XTS   /* for file contents (recommended) */
-FSCRYPT_MODE_AES_256_CTS   /* for filenames */
-FSCRYPT_MODE_AES_128_CBC   /* legacy */
-FSCRYPT_MODE_ADIANTUM      /* for low-power devices (no AES-NI) */
+/* 暗号化モード: */
+FSCRYPT_MODE_AES_256_XTS   /* ファイル内容用（推奨） */
+FSCRYPT_MODE_AES_256_CTS   /* ファイル名用 */
+FSCRYPT_MODE_AES_128_CBC   /* レガシー */
+FSCRYPT_MODE_ADIANTUM      /* 低消費電力デバイス用（AES-NIなし） */
 ```
 
-### fscrypt in the kernel {#fscrypt-in-the-kernel}
+### カーネル内のfscrypt {#fscrypt-in-the-kernel}
 
 ```c
 /* fs/crypto/crypto.c */
@@ -237,8 +237,8 @@ int fscrypt_decrypt_pagecache_blocks(struct folio *folio, size_t len,
     for (i = offs; i < offs + len; i += du_size, index++) {
         struct page *page = folio_page(folio, i >> PAGE_SHIFT);
 
-        /* Decrypt one data unit using the per-file key; index doubles
-         * as the IV input (logical data-unit number) */
+        /* ファイルごとの鍵で1データユニットを復号する。indexは
+         * IVの入力（論理データユニット番号）も兼ねる */
         err = fscrypt_crypt_data_unit(ci, FS_DECRYPT, index, page,
                                       page, du_size, i & ~PAGE_MASK);
         if (err)
@@ -248,41 +248,41 @@ int fscrypt_decrypt_pagecache_blocks(struct folio *folio, size_t len,
 }
 ```
 
-## Kernel keyring integration {#kernel-keyring-integration}
+## カーネルkeyringとの統合 {#kernel-keyring-integration}
 
-Both dm-crypt (via cryptsetup) and fscrypt store key material in the kernel keyring:
+dm-crypt（cryptsetup経由）とfscryptはどちらも鍵素材をカーネルkeyringに格納する:
 
 ```bash
-# View current keyring
-keyctl show @s         # session keyring
-keyctl show @u         # user keyring
-keyctl show @us        # user-session keyring
+# 現在のkeyringを表示
+keyctl show @s         # セッションkeyring
+keyctl show @u         # ユーザーkeyring
+keyctl show @us        # ユーザーセッションkeyring
 
-# Add a dm-crypt volume key to the keyring
+# dm-cryptのボリューム鍵をkeyringに追加
 keyctl add logon cryptsetup:0123456789abcdef <key_data> @s
 
-# Add an fscrypt master key
+# fscryptのマスター鍵を追加
 keyctl add logon fscrypt:0123456789abcdef <key_data> @s
 
-# Key types used:
-# "user": arbitrary user data
-# "logon": kernel-only (cannot be read back by userspace)
-# "keyring": a keyring itself (can hold other keys)
-# "encrypted": encrypted with a master key
+# 使われる鍵タイプ:
+# "user": 任意のユーザーデータ
+# "logon": カーネル専用（ユーザー空間から読み戻せない）
+# "keyring": keyringそのもの（他の鍵を保持できる）
+# "encrypted": マスター鍵で暗号化される
 ```
 
 ```c
-/* Kernel: look up a key */
+/* カーネル: 鍵を検索する */
 struct key *key = request_key(&key_type_logon, "fscrypt:...", NULL);
 const struct user_key_payload *ukp = user_key_payload_locked(key);
 memcpy(master_key, ukp->data, ukp->datalen);
 key_put(key);
 ```
 
-## Observing encryption {#observing-encryption}
+## 暗号化の観測 {#observing-encryption}
 
 ```bash
-# dm-crypt status
+# dm-cryptの状態
 cryptsetup status myvolume
 # /dev/mapper/myvolume is active and is in use.
 #   type:    LUKS2
@@ -291,10 +291,10 @@ cryptsetup status myvolume
 #   key location: dm-crypt
 #   device:  /dev/sda2
 
-# LUKS header info
+# LUKSヘッダー情報
 cryptsetup luksDump /dev/sda2
 
-# fscrypt status
+# fscryptの状態
 fscryptctl get-policy /mnt/myfs/private/
 # Encryption policy for /mnt/myfs/private/:
 #   Policy version: 2
@@ -302,43 +302,43 @@ fscryptctl get-policy /mnt/myfs/private/
 #   Contents encryption mode: AES-256-XTS
 #   Filenames encryption mode: AES-256-CTS
 
-# Performance
+# 性能
 cryptsetup benchmark
-# Tests common cipher/mode combinations
+# 一般的な暗号/モードの組み合わせをテストする
 
-# Block layer stats (I/O through dm-crypt)
+# ブロック層の統計（dm-cryptを通るI/O）
 cat /sys/block/dm-0/stat
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/md/dm-crypt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/md/dm-crypt.c) — `struct crypt_config`, `crypt_map()`, and the per-CPU cipher/IV setup
+- [drivers/md/dm-crypt.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/md/dm-crypt.c) — `struct crypt_config`、`crypt_map()`、CPUごとの暗号/IVのセットアップ
 - [fs/crypto/crypto.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/fs/crypto/crypto.c) — `fscrypt_decrypt_pagecache_blocks()`
-- [include/uapi/linux/fscrypt.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/fscrypt.h) — `struct fscrypt_policy_v2` and the `FSCRYPT_MODE_*` constants
+- [include/uapi/linux/fscrypt.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/fscrypt.h) — `struct fscrypt_policy_v2` と `FSCRYPT_MODE_*` 定数
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`cryptsetup(8)`](https://man.archlinux.org/man/cryptsetup.8.en) — LUKS/dm-crypt volume management
-- [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — keyring command-line tool (`add`, `show`, `new_session`, ...)
-- [`keyrings(7)`](https://man7.org/linux/man-pages/man7/keyrings.7.html) — the in-kernel key management facility
+- [`cryptsetup(8)`](https://man.archlinux.org/man/cryptsetup.8.en) — LUKS/dm-cryptのボリューム管理
+- [`keyctl(1)`](https://man7.org/linux/man-pages/man1/keyctl.1.html) — keyringのコマンドラインツール（`add`、`show`、`new_session`、...）
+- [`keyrings(7)`](https://man7.org/linux/man-pages/man7/keyrings.7.html) — カーネル内の鍵管理機構
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [dm-crypt: Block-Level Encryption](../security/dm-crypt.md) — deeper dive into LUKS2's on-disk format, key derivation, and the kernel-side `crypt_map()` I/O path
-- [fscrypt: Per-File Encryption](../security/fscrypt.md) — deeper dive into the key hierarchy, the `FS_IOC_*` ioctl API, and inline encryption hardware
-- [Kernel Keyring](keyring.md) — the `logon` key type both dm-crypt and fscrypt use to store key material
-- [Kernel Crypto API](crypto-api.md) — the `skcipher` and AEAD transforms (`xts(aes)`, `gcm(aes)`) that dm-crypt and fscrypt call into
-- [crypto_engine: Hardware Offload Framework](crypto-engine.md) — how hardware crypto accelerators plug in beneath callers like dm-crypt
-- [Random Number Generation](rng.md) — where key material (`/dev/urandom`, `get_random_bytes()`) comes from
+- [dm-crypt: ブロックレベル暗号化](../security/dm-crypt.md) — LUKS2のオンディスクフォーマット、鍵導出、カーネル側の `crypt_map()` I/Oパスをさらに掘り下げる
+- [fscrypt: ファイルごとの暗号化](../security/fscrypt.md) — 鍵の階層、`FS_IOC_*` ioctl API、インライン暗号化ハードウェアをさらに掘り下げる
+- [カーネルkeyring](keyring.md) — dm-cryptとfscryptの両方が鍵素材の格納に使う `logon` 鍵タイプ
+- [カーネル暗号API](crypto-api.md) — dm-cryptとfscryptが呼び出す `skcipher` およびAEAD変換（`xts(aes)`、`gcm(aes)`）
+- [crypto_engine: ハードウェアオフロードフレームワーク](crypto-engine.md) — dm-cryptのような呼び出し元の下にハードウェア暗号アクセラレータがどう組み込まれるか
+- [乱数生成](rng.md) — 鍵素材（`/dev/urandom`、`get_random_bytes()`）がどこから来るか
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Ext4 encryption](https://lwn.net/Articles/639427/) — Jonathan Corbet, April 8, 2015 — the original per-file encryption design that became fscrypt
-- [Adiantum: encryption for the low end](https://lwn.net/Articles/776721/) — Jake Edge, January 16, 2019 — the `FSCRYPT_MODE_ADIANTUM` cipher for devices without AES-NI
+- [Ext4 encryption](https://lwn.net/Articles/639427/) — Jonathan Corbet、2015年4月8日 — 後にfscryptとなった、ファイルごとの暗号化の当初の設計
+- [Adiantum: encryption for the low end](https://lwn.net/Articles/776721/) — Jake Edge、2019年1月16日 — AES-NIを持たないデバイス向けの `FSCRYPT_MODE_ADIANTUM` 暗号
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Documentation/filesystems/fscrypt.rst](https://docs.kernel.org/filesystems/fscrypt.html) — the kernel's own fscrypt design and threat-model documentation
-- [Documentation/admin-guide/device-mapper/dm-crypt.rst](https://docs.kernel.org/admin-guide/device-mapper/dm-crypt.html) — the kernel's own dm-crypt target documentation
+- [Documentation/filesystems/fscrypt.rst](https://docs.kernel.org/filesystems/fscrypt.html) — カーネル自身によるfscryptの設計と脅威モデルのドキュメント
+- [Documentation/admin-guide/device-mapper/dm-crypt.rst](https://docs.kernel.org/admin-guide/device-mapper/dm-crypt.html) — カーネル自身によるdm-cryptターゲットのドキュメント

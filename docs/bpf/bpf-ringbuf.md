@@ -1,13 +1,13 @@
-# BPF Ring Buffer {#bpf-ring-buffer}
+# BPFリングバッファ {#bpf-ring-buffer}
 
-> Lock-free, memory-efficient event streaming from BPF programs
+> BPFプログラムからの、ロックフリーでメモリ効率の良いイベントストリーミング
 
-## Why not perf event output? {#why-not-perf-event-output}
+## なぜperfイベント出力ではないのか {#why-not-perf-event-output}
 
-Before `BPF_MAP_TYPE_RINGBUF` (5.8), BPF programs streamed events to userspace via `bpf_perf_event_output`:
+`BPF_MAP_TYPE_RINGBUF`（5.8）以前は、BPFプログラムは`bpf_perf_event_output`を介してユーザー空間にイベントをストリーミングしていた。
 
 ```c
-/* Old approach: per-CPU perf ring buffers */
+/* 旧来の方式: CPUごとのperfリングバッファ */
 struct bpf_map_def SEC("maps") events = {
     .type        = BPF_MAP_TYPE_PERF_EVENT_ARRAY,
     .key_size    = sizeof(int),
@@ -23,16 +23,16 @@ int trace_write(struct trace_event_raw_sys_enter *ctx) {
 }
 ```
 
-Problems with `PERF_EVENT_ARRAY`:
+`PERF_EVENT_ARRAY`の問題点:
 
-- **Per-CPU**: separate buffer per CPU, requires per-CPU polling in userspace
-- **Memory waste**: each CPU gets a full buffer even if mostly idle
-- **No variable-size records**: must pre-declare event size
-- **Wakeup overhead**: `epoll_wait` requires a fd per CPU
+- **CPUごと**: CPUごとに別々のバッファがあり、ユーザー空間ではCPUごとのポーリングが必要になる
+- **メモリの無駄**: ほとんどアイドル状態であっても、各CPUがバッファを丸ごと1つ持つ
+- **可変長レコード不可**: イベントのサイズを事前に宣言しなければならない
+- **ウェイクアップのオーバーヘッド**: `epoll_wait`にはCPUごとのfdが必要になる
 
-## BPF ring buffer design {#bpf-ring-buffer-design}
+## BPFリングバッファの設計 {#bpf-ring-buffer-design}
 
-`BPF_MAP_TYPE_RINGBUF` uses a **single shared ring buffer** across all CPUs with a lock-free design:
+`BPF_MAP_TYPE_RINGBUF`は、全CPUで共有される**単一のリングバッファ**を、ロックフリーな設計で使う。
 
 ```
 Ring buffer memory layout:
@@ -55,14 +55,14 @@ Ring buffer memory layout:
          BPF_RINGBUF_DISCARD_BIT = 0x2 (record discarded)
 ```
 
-Key properties:
+主な性質:
 
-- **Single buffer**: no per-CPU waste; all CPUs share one ring
-- **Spinlock-free**: compare-and-swap for producer position reservation
-- **Two-phase commit**: reserve space, fill it, then submit or discard
-- **Memory-mapped**: userspace reads directly without syscall
+- **単一バッファ**: CPUごとの無駄がない。全CPUが1つのリングを共有する
+- **spinlock不要**: producer位置の予約にcompare-and-swapを使う
+- **2フェーズコミット**: 領域を予約し、そこを埋め、それからsubmitまたはdiscardする
+- **メモリマップ**: ユーザー空間はシステムコールなしで直接読み出す
 
-## BPF program side {#bpf-program-side}
+## BPFプログラム側 {#bpf-program-side}
 
 ```c
 #include <vmlinux.h>
@@ -70,7 +70,7 @@ Key properties:
 
 struct {
     __uint(type, BPF_MAP_TYPE_RINGBUF);
-    __uint(max_entries, 256 * 1024);  /* 256KB ring */
+    __uint(max_entries, 256 * 1024);  /* 256KBのリング */
 } rb SEC(".maps");
 
 struct event {
@@ -87,12 +87,12 @@ int trace_write_exit(struct trace_event_raw_sys_exit *ctx)
 {
     struct event *e;
 
-    /* Reserve space in the ring buffer */
+    /* リングバッファ内の領域を予約する */
     e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
     if (!e)
-        return 0;  /* ring full: drop event */
+        return 0;  /* リングが満杯: イベントを破棄 */
 
-    /* Fill the record (safe: we own it until submit) */
+    /* レコードを埋める（安全: submitまではこちらが所有している） */
     e->pid = bpf_get_current_pid_tgid() >> 32;
     e->tid = (u32)bpf_get_current_pid_tgid();
     e->ts  = bpf_ktime_get_ns();
@@ -100,41 +100,41 @@ int trace_write_exit(struct trace_event_raw_sys_exit *ctx)
     e->fd  = (int)ctx->args[0];
     e->ret = (ssize_t)ctx->ret;
 
-    /* Commit: make visible to userspace */
+    /* コミット: ユーザー空間から見えるようにする */
     bpf_ringbuf_submit(e, 0);
     return 0;
 }
 ```
 
-### bpf_ringbuf_output: one-shot alternative {#bpfringbufoutput-one-shot-alternative}
+### bpf_ringbuf_output: 1回で済ませる代替手段 {#bpfringbufoutput-one-shot-alternative}
 
-For small, fixed-size events where reserve+submit is overkill:
+reserve+submitが大げさな、小さな固定長イベントの場合:
 
 ```c
-/* Single call: reserve, copy, submit atomically */
+/* 1回の呼び出し: 予約、コピー、submitをアトミックに行う */
 bpf_ringbuf_output(&rb, &event, sizeof(event), 0);
-/* Less efficient than reserve+submit for large events */
-/* (copies from stack, can't fill in-place) */
+/* 大きなイベントではreserve+submitより効率が悪い */
+/* （スタックからコピーするため、その場で埋められない） */
 ```
 
-### Discard on error {#discard-on-error}
+### エラー時のdiscard {#discard-on-error}
 
 ```c
 e = bpf_ringbuf_reserve(&rb, sizeof(*e), 0);
 if (!e)
     return 0;
 
-/* ... fill e ... */
+/* ... eを埋める ... */
 
 if (should_drop) {
-    bpf_ringbuf_discard(e, 0);  /* release reserved space, no event */
+    bpf_ringbuf_discard(e, 0);  /* 予約した領域を解放する。イベントは出ない */
     return 0;
 }
 
 bpf_ringbuf_submit(e, 0);
 ```
 
-## Userspace consumption with libbpf {#userspace-consumption-with-libbpf}
+## libbpfによるユーザー空間での消費 {#userspace-consumption-with-libbpf}
 
 ```c
 #include <bpf/libbpf.h>
@@ -154,13 +154,13 @@ int main(void)
     struct my_bpf *skel = my_bpf__open_and_load();
     my_bpf__attach(skel);
 
-    /* Create ring buffer consumer */
+    /* リングバッファのコンシューマを作成する */
     rb = ring_buffer__new(bpf_map__fd(skel->maps.rb),
                            handle_event, NULL, NULL);
 
-    /* Poll: calls handle_event for each available record */
+    /* ポーリング: 利用可能な各レコードに対してhandle_eventを呼ぶ */
     while (1) {
-        ring_buffer__poll(rb, 100 /* ms timeout */);
+        ring_buffer__poll(rb, 100 /* ミリ秒のタイムアウト */);
     }
 
     ring_buffer__free(rb);
@@ -168,16 +168,16 @@ int main(void)
 }
 ```
 
-### Manual mmap polling {#manual-mmap-polling}
+### 手動のmmapポーリング {#manual-mmap-polling}
 
-Without libbpf, the ring buffer is accessed via `mmap`:
+libbpfを使わない場合、リングバッファには`mmap`経由でアクセスする。
 
 ```c
 int map_fd = bpf_map__fd(skel->maps.rb);
 int page_size = getpagesize();
 int map_size = 256 * 1024;
 
-/* Map: consumer + producer pages + data area */
+/* マップ: consumerページ + producerページ + データ領域 */
 void *mmap_base = mmap(NULL, page_size + page_size + map_size,
                         PROT_READ | PROT_WRITE, MAP_SHARED,
                         map_fd, 0);
@@ -186,7 +186,7 @@ unsigned long *consumer_pos = mmap_base;
 unsigned long *producer_pos = mmap_base + page_size;
 void *data = mmap_base + 2 * page_size;
 
-/* Poll loop: */
+/* ポーリングループ: */
 while (1) {
     unsigned long prod = __atomic_load_n(producer_pos, __ATOMIC_ACQUIRE);
     unsigned long cons = *consumer_pos;
@@ -194,69 +194,69 @@ while (1) {
     while (cons < prod) {
         unsigned long offset = cons % map_size;
         u32 *hdr = data + offset;
-        u32  len = *hdr & ~0xf;  /* mask off flag bits */
+        u32  len = *hdr & ~0xf;  /* フラグビットをマスクする */
         u32  flags = *hdr & 0xf;
 
         if (flags & BPF_RINGBUF_BUSY_BIT)
-            break;  /* producer hasn't committed yet */
+            break;  /* producerがまだコミットしていない */
 
         if (!(flags & BPF_RINGBUF_DISCARD_BIT)) {
-            /* Valid record: data starts after header */
+            /* 有効なレコード: データはヘッダの後から始まる */
             process_event(data + offset + sizeof(u32), len);
         }
 
         cons += sizeof(u32) + ALIGN(len, 8);
-        *consumer_pos = cons;  /* advance consumer */
+        *consumer_pos = cons;  /* consumerを進める */
     }
 
-    /* Sleep or use epoll on ring buffer fd */
+    /* スリープするか、リングバッファのfdでepollを使う */
     usleep(1000);
 }
 ```
 
-## BPF_MAP_TYPE_RINGBUF vs PERF_EVENT_ARRAY {#bpfmaptyperingbuf-vs-perfevent_array}
+## BPF_MAP_TYPE_RINGBUFとPERF_EVENT_ARRAYの比較 {#bpfmaptyperingbuf-vs-perfevent_array}
 
-| Feature | PERF_EVENT_ARRAY | RINGBUF |
+| 機能 | PERF_EVENT_ARRAY | RINGBUF |
 |---------|-----------------|---------|
-| Memory | Per-CPU buffers | Single shared buffer |
-| Variable-size records | No | Yes |
-| Userspace polling | Per-CPU epoll fds | Single fd |
-| In-place filling | No (stack copy) | Yes (reserve+submit) |
-| Discard support | No | Yes |
-| mmap access | Yes | Yes |
-| Kernel version | 4.4 | 5.8 |
-| Overhead | Higher | Lower |
+| メモリ | CPUごとのバッファ | 単一の共有バッファ |
+| 可変長レコード | 不可 | 可 |
+| ユーザー空間でのポーリング | CPUごとのepoll fd | 単一のfd |
+| その場での書き込み | 不可（スタックからコピー） | 可（reserve+submit） |
+| discardのサポート | なし | あり |
+| mmapアクセス | 可 | 可 |
+| カーネルバージョン | 4.4 | 5.8 |
+| オーバーヘッド | 高い | 低い |
 
-## Wakeup control {#wakeup-control}
+## ウェイクアップの制御 {#wakeup-control}
 
 ```c
-/* Submit without waking userspace (batch multiple events) */
+/* ユーザー空間を起こさずにsubmitする（複数イベントをバッチ化） */
 bpf_ringbuf_submit(e, BPF_RB_NO_WAKEUP);
 
-/* Force immediate wakeup (for latency-sensitive events) */
+/* 即座にウェイクアップを強制する（レイテンシが重要なイベント向け） */
 bpf_ringbuf_submit(e, BPF_RB_FORCE_WAKEUP);
 
-/* Default: wake if userspace is waiting, don't otherwise */
+/* デフォルト: ユーザー空間が待っていれば起こし、そうでなければ起こさない */
 bpf_ringbuf_submit(e, 0);
 ```
 
-With `ring_buffer__poll` in libbpf, `BPF_RB_NO_WAKEUP` + a final `BPF_RB_FORCE_WAKEUP` can batch many events into a single wakeup, reducing overhead significantly.
+libbpfの`ring_buffer__poll`と組み合わせると、`BPF_RB_NO_WAKEUP`と最後の`BPF_RB_FORCE_WAKEUP`によって多数のイベントを1回のウェイクアップにまとめることができ、オーバーヘッドを大幅に減らせる。
 
-## Query available space {#query-available-space}
+## 空き容量の問い合わせ {#query-available-space}
 
 ```c
-/* Check if ring has space before allocating */
+/* 割り当てる前にリングに空きがあるか確認する */
 u64 avail = bpf_ringbuf_query(&rb, BPF_RB_AVAIL_DATA);
 u64 ring_size = bpf_ringbuf_query(&rb, BPF_RB_RING_SIZE);
 u64 cons_pos  = bpf_ringbuf_query(&rb, BPF_RB_CONS_POS);
 u64 prod_pos  = bpf_ringbuf_query(&rb, BPF_RB_PROD_POS);
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [BPF Maps](bpf-maps.md) — other BPF map types
-- [BPF Architecture](bpf-overview.md) — program types overview
-- [libbpf and Skeletons](libbpf.md) — `ring_buffer__new` / `ring_buffer__poll`
-- [Kprobes and Tracepoints](../tracing/kprobes-tracepoints.md) — attaching to tracepoints
-- `kernel/bpf/ringbuf.c` — ring buffer implementation
-- `tools/lib/bpf/ringbuf.c` — libbpf consumer
+- [BPF Maps](bpf-maps.md) — その他のBPF mapタイプ
+- [BPFアーキテクチャ](bpf-overview.md) — プログラムタイプの概要
+- [libbpfとスケルトン](libbpf.md) — `ring_buffer__new` / `ring_buffer__poll`
+- [kprobeとtracepoint](../tracing/kprobes-tracepoints.md) — tracepointへのアタッチ
+- `kernel/bpf/ringbuf.c` — リングバッファの実装
+- `tools/lib/bpf/ringbuf.c` — libbpfのコンシューマ

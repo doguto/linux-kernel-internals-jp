@@ -1,50 +1,50 @@
-# BPF Architecture and Program Types {#bpf-architecture-and-program-types}
+# BPFのアーキテクチャとプログラムタイプ {#bpf-architecture-and-program-types}
 
-> How eBPF programs are loaded, verified, and attached to kernel hooks
+> eBPFプログラムはどのようにロードされ、検証され、カーネルフックにアタッチされるのか
 
-## From cBPF to eBPF {#from-cbpf-to-ebpf}
+## cBPFからeBPFへ {#from-cbpf-to-ebpf}
 
-### Classic BPF (1993–2014) {#classic-bpf-19932014}
+### Classic BPF（1993〜2014） {#classic-bpf-19932014}
 
-BPF was not originally a Linux invention. It came from a paper by Steven McCanne and Van Jacobson at Lawrence Berkeley Laboratory presented at USENIX Winter 1993: *"The BSD Packet Filter: A New Architecture for User-level Packet Capture."* [(paper)](https://www.tcpdump.org/papers/bpf-usenix93.pdf)
+BPFはもともとLinuxの発明ではない。Lawrence Berkeley LaboratoryのSteven McCanneとVan JacobsonがUSENIX Winter 1993で発表した論文 *"The BSD Packet Filter: A New Architecture for User-level Packet Capture."* に由来する。[(paper)](https://www.tcpdump.org/papers/bpf-usenix93.pdf)
 
-The original BPF was a small virtual machine with two 32-bit registers (`A` and `X`), a small scratch memory array, and a simple instruction set designed for one purpose: filtering network packets in the kernel before copying them to userspace. Linux adopted it as `SO_ATTACH_FILTER` — attach a filter to a socket to drop packets you don't care about before they reach `recvmsg()`.
+元のBPFは、2つの32ビットレジスタ（`A`と`X`）、小さなスクラッチメモリ配列、そして単純な命令セットを持つ小さな仮想マシンであった。その命令セットはただ1つの目的、すなわちネットワークパケットをユーザー空間にコピーする前にカーネル内でフィルタリングするために設計されていた。Linuxはこれを`SO_ATTACH_FILTER`として採用した — ソケットにフィルタをアタッチし、関心のないパケットを`recvmsg()`に届く前にドロップするのである。
 
-That was its entire purpose. The implementation lived almost entirely in `net/core/filter.c`.
+それが目的のすべてであった。実装はほぼ完全に`net/core/filter.c`の中にあった。
 
-### The problem with cBPF {#the-problem-with-cbpf}
+### cBPFの問題点 {#the-problem-with-cbpf}
 
-As Linux kernel development accelerated in the 2000s and 2010s, multiple subsystems needed a way to let userspace express policies in the kernel without giving userspace arbitrary kernel code execution:
+2000年代から2010年代にかけてLinuxカーネルの開発が加速するにつれ、複数のサブシステムが、ユーザー空間に任意のカーネルコード実行を許すことなく、ユーザー空間がカーネル内でポリシーを表現できる手段を必要とするようになった。
 
-- **seccomp** (2005): wanted to filter system calls. Used cBPF as-is, but the 2-register model was awkward for real policies.
-- **tc** (traffic control): needed programmable packet classification and mangling, not just filtering.
-- **perf/tracing**: wanted to attach custom aggregation logic to probe points to avoid copying raw events to userspace.
+- **seccomp**（2005年）: システムコールをフィルタリングしたかった。cBPFをそのまま使ったが、2レジスタのモデルは現実のポリシーには扱いにくかった。
+- **tc**（トラフィック制御）: 単なるフィルタリングではなく、プログラム可能なパケット分類と改変が必要だった。
+- **perf/トレーシング**: 生のイベントをユーザー空間にコピーするのを避けるため、プローブポイントに独自の集計ロジックをアタッチしたかった。
 
-Kernel modules could do all this, but they're dangerous: a buggy module panics the kernel, they require CAP_SYS_MODULE, and they're tied to a specific kernel version. There was no way to safely run "untrusted" kernel code.
+カーネルモジュールならこれらすべてが可能だが、危険である。バグのあるモジュールはカーネルをパニックさせるし、CAP_SYS_MODULEが必要であり、特定のカーネルバージョンに縛られる。「信頼できない」カーネルコードを安全に実行する方法は存在しなかった。
 
-### eBPF (Linux 3.18, 2014) {#ebpf-linux-318-2014}
+### eBPF（Linux 3.18、2014年） {#ebpf-linux-318-2014}
 
-Alexei Starovoitov and Daniel Borkmann rewrote the BPF virtual machine from scratch. The new design — retroactively called eBPF (extended BPF) [(commit)](https://git.kernel.org/linus/99c55f7d47c0dc6fc64729f37bf435abf43f4c60) [(LWN)](https://lwn.net/Articles/603983/) — kept backward compatibility with cBPF socket filters (they are auto-translated) but was otherwise a new architecture:
+Alexei StarovoitovとDaniel BorkmannはBPF仮想マシンをゼロから書き直した。新しい設計 — 後からeBPF（extended BPF）と呼ばれるようになった [(commit)](https://git.kernel.org/linus/99c55f7d47c0dc6fc64729f37bf435abf43f4c60) [(LWN)](https://lwn.net/Articles/603983/) — は、cBPFのソケットフィルタとの後方互換性を保ちつつ（それらは自動的に変換される）、それ以外の点では新しいアーキテクチャであった。
 
 | | cBPF | eBPF |
 |--|------|------|
-| Registers | 2 (32-bit A, X) | 11 (64-bit r0–r10) |
-| Instruction width | Variable | Fixed 64-bit |
-| Shared state | None | Maps (hash, array, ring buffer…) |
-| Attachment points | Socket filter only | 30+ program types |
-| Verifier | None (simple validator) | Full safety proof |
-| JIT | Partial | All major architectures |
-| Userspace/kernel sharing | No | Yes (maps, BTF) |
+| レジスタ | 2個（32ビットのA、X） | 11個（64ビットのr0〜r10） |
+| 命令長 | 可変 | 64ビット固定 |
+| 共有状態 | なし | map（ハッシュ、配列、リングバッファ…） |
+| アタッチ箇所 | ソケットフィルタのみ | 30以上のプログラムタイプ |
+| Verifier | なし（単純なバリデータ） | 完全な安全性証明 |
+| JIT | 一部 | 主要アーキテクチャすべて |
+| ユーザー空間とカーネルの共有 | 不可 | 可（map、BTF） |
 
-The **verifier** is what makes eBPF safe: it walks every possible execution path in the BPF program and proves that it terminates, does not dereference invalid pointers, and does not access memory outside the permitted regions. A program the verifier rejects never runs.
+eBPFを安全にしているのは**Verifier**である。Verifierは、BPFプログラム内のあらゆる実行パスをたどり、プログラムが停止すること、不正なポインタを参照外ししないこと、許可された領域の外のメモリにアクセスしないことを証明する。Verifierが拒否したプログラムは決して実行されない。
 
-The **map** abstraction solved the shared-state problem: BPF programs could accumulate statistics (per-IP counters, latency histograms) in a kernel-side data structure, and userspace could read that structure via the `bpf()` syscall — no raw kernel memory access needed.
+**map**という抽象化が共有状態の問題を解決した。BPFプログラムはカーネル側のデータ構造に統計情報（IPごとのカウンタ、レイテンシのヒストグラム）を蓄積でき、ユーザー空間は`bpf()`システムコールを介してその構造を読み出せる — カーネルメモリへの生のアクセスは不要である。
 
-The answer to "why not a kernel module?" is now concrete: a BPF program that passes the verifier cannot crash the kernel, can be loaded without `CAP_SYS_MODULE`, and is JIT-compiled to near-native speed.
+「なぜカーネルモジュールではないのか?」への答えは、今や具体的である。Verifierを通過したBPFプログラムはカーネルをクラッシュさせられず、`CAP_SYS_MODULE`なしでロードでき、ネイティブに近い速度にJITコンパイルされる。
 
-## The bpf() syscall {#the-bpf-syscall}
+## bpf()システムコール {#the-bpf-syscall}
 
-Everything in eBPF flows through a single syscall:
+eBPFのすべては単一のシステムコールを通る。
 
 ```c
 #include <linux/bpf.h>
@@ -52,24 +52,24 @@ Everything in eBPF flows through a single syscall:
 int bpf(int cmd, union bpf_attr *attr, unsigned int size);
 ```
 
-Key commands:
+主要なコマンド:
 
 ```c
-BPF_PROG_LOAD      /* load and verify a BPF program */
-BPF_MAP_CREATE     /* create a BPF map */
+BPF_PROG_LOAD      /* BPFプログラムをロードして検証する */
+BPF_MAP_CREATE     /* BPF mapを作成する */
 BPF_MAP_LOOKUP_ELEM
 BPF_MAP_UPDATE_ELEM
 BPF_MAP_DELETE_ELEM
-BPF_OBJ_PIN        /* pin map/program to /sys/fs/bpf/ */
-BPF_OBJ_GET        /* retrieve pinned object */
-BPF_PROG_ATTACH    /* attach program to cgroup/hook */
+BPF_OBJ_PIN        /* map/プログラムを/sys/fs/bpf/にピン留めする */
+BPF_OBJ_GET        /* ピン留めされたオブジェクトを取り出す */
+BPF_PROG_ATTACH    /* プログラムをcgroup/フックにアタッチする */
 BPF_PROG_DETACH
-BPF_LINK_CREATE    /* create a BPF link (managed attachment) */
+BPF_LINK_CREATE    /* BPFリンク（管理されたアタッチ）を作成する */
 BPF_LINK_UPDATE
-BTF_LOAD           /* load BTF type information */
+BTF_LOAD           /* BTF型情報をロードする */
 ```
 
-## Loading a program {#loading-a-program}
+## プログラムのロード {#loading-a-program}
 
 ```c
 /* kernel/bpf/syscall.c: bpf_prog_load() */
@@ -78,46 +78,46 @@ union bpf_attr attr = {
     .insn_cnt     = prog_len / sizeof(struct bpf_insn),
     .insns        = (uint64_t)prog_insns,
     .license      = (uint64_t)"GPL",
-    .log_level    = 1,          /* request verifier log */
+    .log_level    = 1,          /* Verifierログを要求する */
     .log_buf      = (uint64_t)log_buf,
     .log_size     = LOG_BUF_SIZE,
-    .kern_version = 0,          /* for kprobes, must match kernel */
+    .kern_version = 0,          /* kprobeの場合、カーネルと一致しなければならない */
 };
 
 int prog_fd = bpf(BPF_PROG_LOAD, &attr, sizeof(attr));
-/* Returns file descriptor or -1 with errno */
+/* ファイルディスクリプタを返す。失敗時は-1を返しerrnoを設定する */
 ```
 
-The kernel flow after BPF_PROG_LOAD:
+BPF_PROG_LOAD後のカーネル内の流れ:
 
 ```
 bpf_prog_load()
-  → bpf_check_uarg_tail_zero()    /* validate attr padding */
-  → find_prog_type()              /* look up type ops */
-  → bpf_prog_alloc()              /* allocate struct bpf_prog */
-  → copy_from_bpfptr(insns)       /* copy bytecode from userspace */
-  → bpf_check()                   /* VERIFIER — safety proof */
-  → bpf_prog_select_runtime()     /* JIT or interpreter selection */
-  → bpf_prog_kallsyms_add()       /* expose in /proc/kallsyms */
-  → anon_inode_getfd("bpf-prog")  /* return file descriptor */
+  → bpf_check_uarg_tail_zero()    /* attrのパディングを検証する */
+  → find_prog_type()              /* タイプのopsを検索する */
+  → bpf_prog_alloc()              /* struct bpf_progを割り当てる */
+  → copy_from_bpfptr(insns)       /* ユーザー空間からバイトコードをコピーする */
+  → bpf_check()                   /* VERIFIER — 安全性の証明 */
+  → bpf_prog_select_runtime()     /* JITかインタプリタかを選択する */
+  → bpf_prog_kallsyms_add()       /* /proc/kallsymsに公開する */
+  → anon_inode_getfd("bpf-prog")  /* ファイルディスクリプタを返す */
 ```
 
 ## struct bpf_prog {#struct-bpf_prog}
 
-The central kernel object for a loaded BPF program:
+ロードされたBPFプログラムを表す中心的なカーネルオブジェクト:
 
 ```c
 /* include/linux/filter.h */
 struct bpf_prog {
-    u16             pages;          /* number of pages */
-    u16             jited:1,        /* true if JIT-compiled */
+    u16             pages;          /* ページ数 */
+    u16             jited:1,        /* JITコンパイル済みなら真 */
                     jit_requested:1,
                     gpl_compatible:1,
-                    cb_access:1,    /* accesses skb->cb area */
+                    cb_access:1,    /* skb->cb領域にアクセスする */
                     dst_needed:1,
                     blinding_requested:1,
                     blinded:1,
-                    is_func:1,      /* function in a program array */
+                    is_func:1,      /* プログラム配列内の関数 */
                     kprobe_override:1,
                     has_callchain_buf:1,
                     enforce_expected_attach_type:1,
@@ -126,88 +126,88 @@ struct bpf_prog {
                     tstamp_type_access:1;
     enum bpf_prog_type      type;   /* BPF_PROG_TYPE_* */
     enum bpf_attach_type    expected_attach_type;
-    u32             len;            /* number of filter blocks */
-    u32             jited_len;      /* size of JIT code */
-    u8              tag[BPF_TAG_SIZE]; /* SHA1-based identifier */
+    u32             len;            /* フィルタブロックの数 */
+    u32             jited_len;      /* JITコードのサイズ */
+    u8              tag[BPF_TAG_SIZE]; /* SHA1ベースの識別子 */
     struct bpf_prog_stats __percpu *stats;
-    struct bpf_prog_aux    *aux;    /* verifier state, maps, BTF */
-    struct sock_fprog_kern *orig_prog; /* original Classic BPF */
+    struct bpf_prog_aux    *aux;    /* Verifierの状態、map、BTF */
+    struct sock_fprog_kern *orig_prog; /* 元のClassic BPF */
     unsigned int    (*bpf_func)(const void *ctx,
                                 const struct bpf_insn *insn);
-    /* JIT/interpreter code follows */
+    /* この後にJIT/インタプリタのコードが続く */
     union {
-        struct sock_filter  insns[0]; /* Classic BPF instructions */
-        struct bpf_insn     insnsi[]; /* eBPF instructions */
+        struct sock_filter  insns[0]; /* Classic BPFの命令 */
+        struct bpf_insn     insnsi[]; /* eBPFの命令 */
     };
 };
 ```
 
-## BPF instruction set {#bpf-instruction-set}
+## BPF命令セット {#bpf-instruction-set}
 
-eBPF has 11 64-bit registers (r0–r10) and a fixed-size instruction format:
+eBPFは11個の64ビットレジスタ（r0〜r10）と固定サイズの命令フォーマットを持つ。
 
 ```c
 /* include/linux/filter.h */
 struct bpf_insn {
-    __u8    code;       /* opcode */
-    __u8    dst_reg:4;  /* destination register */
-    __u8    src_reg:4;  /* source register */
-    __s16   off;        /* signed offset */
-    __s32   imm;        /* signed immediate */
+    __u8    code;       /* オペコード */
+    __u8    dst_reg:4;  /* デスティネーションレジスタ */
+    __u8    src_reg:4;  /* ソースレジスタ */
+    __s16   off;        /* 符号付きオフセット */
+    __s32   imm;        /* 符号付き即値 */
 };
 ```
 
-Register conventions:
+レジスタの規約:
 
-- `r0` — return value from helper calls and program exit
-- `r1`–`r5` — function arguments (r1 = context pointer on entry)
-- `r6`–`r9` — callee-saved registers
-- `r10` — frame pointer (read-only)
+- `r0` — ヘルパー呼び出しの戻り値とプログラム終了時の戻り値
+- `r1`〜`r5` — 関数の引数（エントリ時はr1 = コンテキストポインタ）
+- `r6`〜`r9` — callee-savedレジスタ
+- `r10` — フレームポインタ（読み取り専用）
 
-## Program types {#program-types}
+## プログラムタイプ {#program-types}
 
-Each program type has a specific context struct and allowed helpers:
+各プログラムタイプは、固有のコンテキスト構造体と使用を許可されたヘルパーを持つ。
 
 ```c
 /* include/uapi/linux/bpf.h */
 enum bpf_prog_type {
-    BPF_PROG_TYPE_SOCKET_FILTER,    /* socket filter, ctx=sk_buff */
-    BPF_PROG_TYPE_KPROBE,           /* kprobe/uprobe, ctx=pt_regs */
-    BPF_PROG_TYPE_SCHED_CLS,        /* TC classifier, ctx=sk_buff */
-    BPF_PROG_TYPE_SCHED_ACT,        /* TC action */
-    BPF_PROG_TYPE_TRACEPOINT,       /* static tracepoints */
-    BPF_PROG_TYPE_XDP,              /* XDP, ctx=xdp_md */
-    BPF_PROG_TYPE_PERF_EVENT,       /* PMU/perf events */
-    BPF_PROG_TYPE_CGROUP_SKB,       /* cgroup socket buffer */
-    BPF_PROG_TYPE_CGROUP_SOCK,      /* cgroup socket creation */
-    BPF_PROG_TYPE_LWT_IN,           /* lightweight tunnels */
-    BPF_PROG_TYPE_SOCK_OPS,         /* socket event callbacks */
-    BPF_PROG_TYPE_SK_SKB,           /* socket map steering */
-    BPF_PROG_TYPE_CGROUP_DEVICE,    /* device access control */
-    BPF_PROG_TYPE_SK_MSG,           /* sockmap message redirect */
-    BPF_PROG_TYPE_RAW_TRACEPOINT,   /* raw tracepoints (no arg rewrite) */
-    BPF_PROG_TYPE_CGROUP_SOCK_ADDR, /* cgroup bind/connect/sendmsg */
+    BPF_PROG_TYPE_SOCKET_FILTER,    /* ソケットフィルタ、ctx=sk_buff */
+    BPF_PROG_TYPE_KPROBE,           /* kprobe/uprobe、ctx=pt_regs */
+    BPF_PROG_TYPE_SCHED_CLS,        /* TC分類器、ctx=sk_buff */
+    BPF_PROG_TYPE_SCHED_ACT,        /* TCアクション */
+    BPF_PROG_TYPE_TRACEPOINT,       /* 静的tracepoint */
+    BPF_PROG_TYPE_XDP,              /* XDP、ctx=xdp_md */
+    BPF_PROG_TYPE_PERF_EVENT,       /* PMU/perfイベント */
+    BPF_PROG_TYPE_CGROUP_SKB,       /* cgroupのソケットバッファ */
+    BPF_PROG_TYPE_CGROUP_SOCK,      /* cgroupのソケット作成 */
+    BPF_PROG_TYPE_LWT_IN,           /* 軽量トンネル */
+    BPF_PROG_TYPE_SOCK_OPS,         /* ソケットイベントのコールバック */
+    BPF_PROG_TYPE_SK_SKB,           /* ソケットmapによる振り分け */
+    BPF_PROG_TYPE_CGROUP_DEVICE,    /* デバイスアクセス制御 */
+    BPF_PROG_TYPE_SK_MSG,           /* sockmapのメッセージリダイレクト */
+    BPF_PROG_TYPE_RAW_TRACEPOINT,   /* raw tracepoint（引数の書き換えなし） */
+    BPF_PROG_TYPE_CGROUP_SOCK_ADDR, /* cgroupのbind/connect/sendmsg */
     BPF_PROG_TYPE_LWT_SEG6LOCAL,
-    BPF_PROG_TYPE_LIRC_MODE2,       /* IR decoding */
-    BPF_PROG_TYPE_SK_REUSEPORT,     /* SO_REUSEPORT steering */
-    BPF_PROG_TYPE_FLOW_DISSECTOR,   /* custom flow dissection */
-    BPF_PROG_TYPE_CGROUP_SYSCTL,    /* sysctl access control */
+    BPF_PROG_TYPE_LIRC_MODE2,       /* 赤外線デコード */
+    BPF_PROG_TYPE_SK_REUSEPORT,     /* SO_REUSEPORTの振り分け */
+    BPF_PROG_TYPE_FLOW_DISSECTOR,   /* 独自のフロー解析 */
+    BPF_PROG_TYPE_CGROUP_SYSCTL,    /* sysctlのアクセス制御 */
     BPF_PROG_TYPE_RAW_TRACEPOINT_WRITABLE,
     BPF_PROG_TYPE_CGROUP_SOCKOPT,
     BPF_PROG_TYPE_TRACING,          /* fentry/fexit/fmod_ret */
-    BPF_PROG_TYPE_STRUCT_OPS,       /* implement kernel struct ops */
-    BPF_PROG_TYPE_EXT,              /* function replacement */
-    BPF_PROG_TYPE_LSM,              /* Linux Security Module hooks */
-    BPF_PROG_TYPE_SK_LOOKUP,        /* socket lookup */
-    BPF_PROG_TYPE_SYSCALL,          /* privileged syscall programs */
-    BPF_PROG_TYPE_NETFILTER,        /* netfilter hook */
+    BPF_PROG_TYPE_STRUCT_OPS,       /* カーネルのstruct opsを実装する */
+    BPF_PROG_TYPE_EXT,              /* 関数の置き換え */
+    BPF_PROG_TYPE_LSM,              /* Linux Security Moduleのフック */
+    BPF_PROG_TYPE_SK_LOOKUP,        /* ソケット検索 */
+    BPF_PROG_TYPE_SYSCALL,          /* 特権システムコールプログラム */
+    BPF_PROG_TYPE_NETFILTER,        /* netfilterフック */
 };
 ```
 
-### Tracing programs in detail {#tracing-programs-in-detail}
+### トレーシングプログラムの詳細 {#tracing-programs-in-detail}
 
 ```c
-/* fentry: attaches to function entry, no overhead of kprobes */
+/* fentry: 関数の入口にアタッチする。kprobeのオーバーヘッドがない */
 SEC("fentry/tcp_sendmsg")
 int BPF_PROG(trace_tcp_sendmsg, struct sock *sk,
              struct msghdr *msg, size_t size)
@@ -216,7 +216,7 @@ int BPF_PROG(trace_tcp_sendmsg, struct sock *sk,
     return 0;
 }
 
-/* fexit: attaches to function return, can see return value */
+/* fexit: 関数のリターンにアタッチする。戻り値を見られる */
 SEC("fexit/tcp_sendmsg")
 int BPF_PROG(trace_tcp_sendmsg_exit, struct sock *sk,
              struct msghdr *msg, size_t size, int ret)
@@ -225,20 +225,20 @@ int BPF_PROG(trace_tcp_sendmsg_exit, struct sock *sk,
     return 0;
 }
 
-/* kprobe: can attach to any non-inlined function */
+/* kprobe: インライン化されていない任意の関数にアタッチできる */
 SEC("kprobe/tcp_sendmsg")
 int kprobe_tcp_sendmsg(struct pt_regs *ctx)
 {
     struct sock *sk = (struct sock *)PT_REGS_PARM1(ctx);
-    /* access arguments through PT_REGS_PARM1..5 */
+    /* 引数にはPT_REGS_PARM1..5でアクセスする */
     return 0;
 }
 ```
 
-### XDP program {#xdp-program}
+### XDPプログラム {#xdp-program}
 
 ```c
-/* Minimal XDP program */
+/* 最小のXDPプログラム */
 SEC("xdp")
 int xdp_drop_icmp(struct xdp_md *ctx)
 {
@@ -257,21 +257,21 @@ int xdp_drop_icmp(struct xdp_md *ctx)
         return XDP_PASS;
 
     if (ip->protocol == IPPROTO_ICMP)
-        return XDP_DROP;  /* drop ICMP */
+        return XDP_DROP;  /* ICMPをドロップする */
 
     return XDP_PASS;
 }
 ```
 
-XDP return codes:
+XDPの戻り値コード:
 
-- `XDP_ABORTED` — bug/error, drops packet + fires tracepoint
-- `XDP_DROP` — drop immediately (before skb allocation)
-- `XDP_PASS` — pass to normal networking stack
-- `XDP_TX` — send back out the same interface
-- `XDP_REDIRECT` — redirect to another interface or AF_XDP socket
+- `XDP_ABORTED` — バグ/エラー。パケットをドロップし、tracepointを発火させる
+- `XDP_DROP` — 即座にドロップする（skb割り当て前）
+- `XDP_PASS` — 通常のネットワークスタックに渡す
+- `XDP_TX` — 同じインターフェースから送り返す
+- `XDP_REDIRECT` — 別のインターフェースまたはAF_XDPソケットへリダイレクトする
 
-## BPF program lifecycle {#bpf-program-lifecycle}
+## BPFプログラムのライフサイクル {#bpf-program-lifecycle}
 
 ```
 Load: bpf(BPF_PROG_LOAD)  → prog_fd (refcount=1)
@@ -289,18 +289,18 @@ refcount==0:               → bpf_prog_free()
                               JIT memory freed
 ```
 
-BPF links (`BPF_LINK_CREATE`) are preferred over legacy attach methods because:
+BPFリンク（`BPF_LINK_CREATE`）は、次の理由から従来のアタッチ方法よりも推奨される。
 
-- Closing the link_fd automatically detaches (no dangling programs)
-- Links survive the original loader process exiting (if pinned)
-- Atomic program replacement via `BPF_LINK_UPDATE`
+- link_fdを閉じると自動的にデタッチされる（宙に浮いたプログラムが残らない）
+- リンクは、元のローダープロセスが終了しても存続する（ピン留めされている場合）
+- `BPF_LINK_UPDATE`によるアトミックなプログラムの置き換え
 
-## Helper functions {#helper-functions}
+## ヘルパー関数 {#helper-functions}
 
-BPF programs can't call arbitrary kernel functions — they use a whitelisted set of helpers:
+BPFプログラムは任意のカーネル関数を呼べない — ホワイトリスト化されたヘルパーの集合を使う。
 
 ```c
-/* Common helpers */
+/* 一般的なヘルパー */
 bpf_map_lookup_elem(map, key)       → value pointer or NULL
 bpf_map_update_elem(map, key, val, flags)
 bpf_map_delete_elem(map, key)
@@ -316,47 +316,47 @@ bpf_probe_read_kernel_str(dst, sz, src)
 
 bpf_printk(fmt, ...)               → /sys/kernel/debug/tracing/trace_pipe
 
-/* Networking */
+/* ネットワーキング */
 bpf_skb_load_bytes(skb, off, to, len)
 bpf_skb_store_bytes(skb, off, from, len, flags)
 bpf_redirect(ifindex, flags)
 bpf_fib_lookup(ctx, params, plen, flags)
 
-/* Ringbuf */
+/* リングバッファ */
 bpf_ringbuf_reserve(map, size, flags)
 bpf_ringbuf_submit(data, flags)
 bpf_ringbuf_output(map, data, size, flags)
 ```
 
-Each helper is assigned a stable number; new helpers get new numbers and never change existing ones for ABI stability.
+各ヘルパーには安定した番号が割り当てられる。新しいヘルパーには新しい番号が与えられ、ABIの安定性のために既存の番号が変更されることは決してない。
 
-## Observing BPF programs {#observing-bpf-programs}
+## BPFプログラムの観察 {#observing-bpf-programs}
 
 ```bash
-# List all loaded BPF programs
+# ロードされているすべてのBPFプログラムを一覧表示する
 bpftool prog list
 # 42: xdp  name xdp_drop_icmp  tag a04f5eef06a7f555  gpl
 #         loaded_at 2024-01-15T10:00:00+0000  uid 0
 #         xlated 112B  jited 88B  memlock 4096B  map_ids 3
 
-# Show disassembly (eBPF or JIT)
+# 逆アセンブルを表示する（eBPFまたはJIT）
 bpftool prog dump xlated id 42
 bpftool prog dump jited id 42
 
-# Show a program's maps
+# プログラムのmapを表示する
 bpftool prog show id 42 --pretty
 
-# BPF stats
+# BPFの統計
 bpftool prog profile id 42 duration 5 cycles instructions
 
-# Trace output
+# トレース出力
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [BPF Maps](bpf-maps.md) — Sharing data between BPF and userspace
-- [BPF Verifier](bpf-verifier.md) — How safety is enforced
-- [BTF and CO-RE](btf-core.md) — Writing portable BPF programs
-- `kernel/bpf/syscall.c` — bpf() syscall implementation
-- `samples/bpf/` in the kernel tree — in-tree examples
+- [BPF Maps](bpf-maps.md) — BPFとユーザー空間の間でのデータ共有
+- [BPF Verifier](bpf-verifier.md) — 安全性がどのように強制されるか
+- [BTFとCO-RE](btf-core.md) — 移植性のあるBPFプログラムを書く
+- `kernel/bpf/syscall.c` — bpf()システムコールの実装
+- カーネルツリーの`samples/bpf/` — ツリー内のサンプル

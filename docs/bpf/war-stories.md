@@ -1,72 +1,72 @@
-# War Stories: BPF Verifier Bugs and CVEs {#war-stories-bpf-verifier-bugs-and-cves}
+# 事件簿: BPF VerifierのバグとCVE {#war-stories-bpf-verifier-bugs-and-cves}
 
-> Real vulnerabilities from the eBPF verifier — what broke, why, and what the kernel eventually concluded about the whole idea
+> eBPF Verifierに実在した脆弱性 — 何が壊れ、なぜ壊れ、そしてカーネルが最終的にこの構想全体についてどんな結論を下したか
 
-Almost every other war story on this site is about code that was *supposed* to be safe and turned out not to be. The BPF verifier is different: it is a program whose entire job is to be a proof. Before the kernel will run a BPF program, the verifier walks every path the program could take, tracks what every register could hold, and refuses anything it cannot prove safe. When it works, an unprivileged user can load code into ring 0 and nothing bad happens.
+このサイトにある他の事件簿のほとんどは、安全である*はず*だったのにそうではなかったコードについての話である。BPF Verifierは違う。Verifierは、その仕事のすべてが証明であるようなプログラムなのだ。カーネルはBPFプログラムを実行する前に、Verifierによって、そのプログラムが取りうるすべてのパスをたどり、各レジスタが保持しうる値を追跡し、安全だと証明できないものはすべて拒否する。これがうまく機能していれば、非特権ユーザーがring 0にコードをロードしても何も悪いことは起こらない。
 
-That makes the bug class here unusually pure. There is no buffer to overflow and no lock to drop. Every incident below is the same failure in a different costume: **the verifier's model of what a register holds diverged from what the register will actually hold at run time.** One instruction where the model says "sign-extended" and the machine says "zero-padded." One masking operation that is valid for a value and invalid for a range. One early return that skips an update because a sibling function "will handle it." Each of those is a few lines, each of them passed review, and each of them hands an unprivileged process the ability to construct a pointer the verifier thinks is in bounds.
+そのため、ここでのバグの類型は異様なほど純粋である。オーバーフローさせるバッファもなければ、取り落とすロックもない。以下のインシデントはどれも、同じ失敗が衣装を替えて現れたものにすぎない。すなわち、**レジスタが何を保持しているかについてのVerifierのモデルが、実行時にレジスタが実際に保持する値と食い違ったのである**。モデルは「符号拡張される」と言い、マシンは「ゼロ埋めされる」と言う、そんな1命令。値に対しては正しく、範囲に対しては正しくないマスク操作が1つ。兄弟関数が「処理してくれる」からといって更新をスキップする早期リターンが1つ。いずれも数行のコードであり、いずれもレビューを通過し、そしていずれも非特権プロセスに、Verifierが範囲内だと思い込むポインタを作り出す能力を与えてしまう。
 
-The other thing this page documents is a conclusion. After years of holding the line that the verifier could be a security boundary against a hostile program author, the BPF maintainers stopped believing it — publicly, on LWN, in 2019 — and the subsystem eventually shipped a knob to turn unprivileged BPF off by default. That is not a CVE, but it is the most consequential entry here, so it gets a page.
+このページが記録するもう1つのことは、ある結論である。Verifierは悪意あるプログラム作者に対するセキュリティ境界になりうるという立場を何年も守り続けた後、BPFメンテナたちはそれを信じるのをやめた — 2019年にLWN上で公に — そしてサブシステムは最終的に、非特権BPFをデフォルトで無効にするノブを出荷した。これはCVEではないが、ここで最も大きな影響を持つ項目なので、1ページを割いている。
 
-Each incident below has its own page: root-cause analysis grounded in the actual patches and the actual verifier traces the maintainers pasted into their commit messages, plus whatever public mailing-list record exists. For one of them — the 2020 jmp32 revert — that record is a full public thread with a replacement implementation from Jann Horn in the same series. For most of the rest, the fixes were handled privately and announced on oss-security once they shipped; CVE-2021-31440 has no oss-security announcement at all, only a ZDI advisory, and the unprivileged-BPF default change was an ordinary public patch posting. The pages say that rather than manufacturing a debate.
+以下の各インシデントにはそれぞれ専用のページがある。実際のパッチと、メンテナがコミットメッセージに貼り付けた実際のVerifierトレースに基づく根本原因の分析に加え、存在する公開メーリングリストの記録も載せている。そのうちの1つ — 2020年のjmp32のrevert — については、その記録は、同じシリーズの中にJann Hornによる代替実装を含む完全な公開スレッドである。残りのほとんどについては、修正は非公開で扱われ、出荷された時点でoss-securityで告知された。CVE-2021-31440にはoss-securityでの告知すらなくZDIのアドバイザリしかない。また、非特権BPFのデフォルト変更は通常の公開パッチ投稿であった。各ページは議論をでっち上げるのではなく、そうした事実をそのまま述べている。
 
-## Incidents {#incidents}
+## インシデント {#incidents}
 
-Ordered reverse chronologically by earliest public disclosure — oss-security post, ZDI advisory, or NVD publication, whichever came first — newest first.
+最初の公開開示 — oss-securityへの投稿、ZDIのアドバイザリ、NVDでの公開のうち最も早いもの — の日付で、新しいものから逆時系列に並べている。
 
-### [Spectre in the BPF Verifier](war-stories/spectre-verifier.md) {#spectre-in-the-bpf-verifier}
-**June 2021 · CVE-2021-33624 · CVSS 4.7**
-The verifier only walks paths that can actually execute. A CPU that mispredicts two mutually exclusive branches will execute a path the verifier proved impossible, dereferencing an attacker-controlled pointer under speculation. The fix stopped pruning unreachable branches and started simulating them.
+### [BPF VerifierにおけるSpectre](war-stories/spectre-verifier.md) {#spectre-in-the-bpf-verifier}
+**2021年6月 · CVE-2021-33624 · CVSS 4.7**
+Verifierは実際に実行されうるパスしかたどらない。互いに排他的な2つの分岐を誤予測したCPUは、Verifierが不可能だと証明したパスを実行し、投機実行のもとで攻撃者が制御するポインタを参照外ししてしまう。修正では、到達不能な分岐の枝刈りをやめ、それらをシミュレートするようにした。
 
-### [Unprivileged BPF Off by Default](war-stories/unprivileged-bpf-off.md) {#unprivileged-bpf-off-by-default}
-**May 2021 · not a CVE**
-Posted the same day CVE-2021-3490 was announced: a kconfig knob defaulting `kernel.unprivileged_bpf_disabled` to a new value 2 — off, but recoverable by an administrator. The end of a two-year argument about whether unprivileged BPF was ever achievable, which LWN had documented in 2019.
+### [非特権BPFのデフォルト無効化](war-stories/unprivileged-bpf-off.md) {#unprivileged-bpf-off-by-default}
+**2021年5月 · CVEではない**
+CVE-2021-3490が告知されたのと同じ日に投稿された。`kernel.unprivileged_bpf_disabled`のデフォルトを新しい値2 — 無効だが管理者が元に戻せる — にするkconfigノブである。非特権BPFがそもそも実現可能なのかをめぐる2年越しの議論の終わりであり、その議論はLWNが2019年に記録していた。
 
-### [ALU32 Bitwise Bounds Tracking](war-stories/alu32-bitwise-bounds.md) {#alu32-bitwise-bounds-tracking}
-**May 2021 · CVE-2021-3490 · CVSS 7.8**
-Three functions skipped updating a register's 32-bit bounds on the grounds that a 64-bit sibling would handle it. The sibling only handled it under a stricter precondition, leaving registers in a state where the minimum exceeded the maximum. A public local-root exploit followed.
+### [ALU32のビット演算における範囲追跡](war-stories/alu32-bitwise-bounds.md) {#alu32-bitwise-bounds-tracking}
+**2021年5月 · CVE-2021-3490 · CVSS 7.8**
+3つの関数が、64ビット版の兄弟関数が処理してくれるという理由で、レジスタの32ビット範囲の更新をスキップしていた。兄弟関数がそれを処理するのはより厳しい前提条件のもとだけであり、レジスタは最小値が最大値を上回る状態のまま残された。公開されたローカルroot奪取エクスプロイトが後に続いた。
 
-### [The 32-Bit Unsigned Bounds Propagation Bug](war-stories/alu32-unsigned-bounds.md) {#the-32-bit-unsigned-bounds-propagation-bug}
-**May 2021 · CVE-2021-31440 · CVSS 7.0 (NVD) / 8.8 (ZDI)**
-Four and a half months earlier, someone had fixed exactly this bug in the signed half of a two-block pattern. The unsigned half sat unchanged in the trailing context of the fix's own diff.
+### [32ビット符号なし範囲伝播のバグ](war-stories/alu32-unsigned-bounds.md) {#the-32-bit-unsigned-bounds-propagation-bug}
+**2021年5月 · CVE-2021-31440 · CVSS 7.0 (NVD) / 8.8 (ZDI)**
+その4か月半前、ある人物が、2ブロックからなるパターンの符号付きの側でまさにこのバグを修正していた。符号なしの側は、その修正自身のdiffの後続コンテキストに、手つかずのまま残っていた。
 
-### [The jmp32 Bounds Regression](war-stories/jmp32-bounds.md) {#the-jmp32-bounds-regression}
-**March 2020 · CVE-2020-8835 · CVSS 7.8**
-A precision improvement, never intended for stable, was auto-selected into the 5.4 long-term series by a machine-learning classifier that mistook it for a fix. Manfred Paul turned it into a Pwn2Own entry. The fix was a pure 19-line deletion, chosen over a working repair.
+### [jmp32の範囲リグレッション](war-stories/jmp32-bounds.md) {#the-jmp32-bounds-regression}
+**2020年3月 · CVE-2020-8835 · CVSS 7.8**
+stableに入れることを意図していなかった精度改善が、それを修正と取り違えた機械学習の分類器によって、5.4長期サポート系列に自動的に選ばれた。Manfred Paulはそれを使ってPwn2Ownにエントリした。修正は19行の純粋な削除であり、動作する修復案よりもそちらが選ばれた。
 
-### [Sign Extension in `check_alu_op()`](war-stories/sign-extension.md) {#sign-extension-in-checkaluop}
-**December 2017 · CVE-2017-16995 · CVSS 7.8**
-The verifier sign-extended a 32-bit immediate that the machine zero-pads, so its model of the register was wrong from the first instruction. One of eight verifier bugs Jann Horn reported in a single message — the pass that established the verifier's arithmetic as a security-reviewed surface. Three public exploits, including a Metasploit module.
+### [`check_alu_op()`における符号拡張](war-stories/sign-extension.md) {#sign-extension-in-checkaluop}
+**2017年12月 · CVE-2017-16995 · CVSS 7.8**
+Verifierは、マシンがゼロ埋めする32ビット即値を符号拡張していたため、レジスタに関するモデルが最初の命令から誤っていた。Jann Hornが1通のメッセージで報告した8つのVerifierバグの1つ — Verifierの算術処理を、セキュリティレビューの対象となる攻撃面として確立した一連の監査である。Metasploitモジュールを含む3つの公開エクスプロイトがある。
 
-## Common threads {#common-threads}
+## 共通する傾向 {#common-threads}
 
-| Pattern | Spectre | Unpriv off | ALU32 bitwise | 32-bit unsigned | jmp32 | Sign extension |
+| パターン | Spectre | 非特権無効化 | ALU32ビット演算 | 32ビット符号なし | jmp32 | 符号拡張 |
 |---------|:-------:|:----------:|:-------------:|:----------------:|:-----:|:--------------:|
-| Root cause is 32-bit vs. 64-bit value tracking | No | — | Yes | Yes | Yes | Yes |
-| Reachable by an unprivileged local process on a default-configured kernel | Yes | — | Yes | Yes | Yes | Yes (from 4.14) |
-| Descends from `3f50f132d840` (explicit ALU32 bounds tracking) | No | — | Yes | Yes | No | No |
-| Surfaced first by fuzzing | No | — | No | No | Yes | No |
-| Found through a paid vulnerability program (ZDI / Pwn2Own) | No | — | Yes | Yes | Yes | No |
-| Packaged public exploit tool (Exploit-DB / Metasploit / Packet Storm) | No | — | Yes | No | No | Yes |
-| Confirmed active exploitation (CISA KEV) | No | — | No | No | No | No |
-| Fix deleted code rather than adding it | No | — | No | No | Yes | No |
+| 根本原因が32ビットと64ビットの値追跡の食い違い | いいえ | — | はい | はい | はい | はい |
+| デフォルト設定のカーネルで非特権ローカルプロセスから到達可能 | はい | — | はい | はい | はい | はい（4.14以降） |
+| `3f50f132d840`（明示的なALU32範囲追跡）に由来する | いいえ | — | はい | はい | いいえ | いいえ |
+| 最初にファジングで発見された | いいえ | — | いいえ | いいえ | はい | いいえ |
+| 有償の脆弱性プログラム（ZDI / Pwn2Own）を通じて発見された | いいえ | — | はい | はい | はい | いいえ |
+| パッケージ化された公開エクスプロイトツール（Exploit-DB / Metasploit / Packet Storm） | いいえ | — | はい | いいえ | いいえ | はい |
+| 実際の悪用が確認されている（CISA KEV） | いいえ | — | いいえ | いいえ | いいえ | いいえ |
+| 修正がコードを追加するのではなく削除した | いいえ | — | いいえ | いいえ | はい | いいえ |
 
-The first row is the page's spine. Four of the five bugs are the same disagreement at different points in the pipeline: a 64-bit value, a 32-bit view of it, and a rule for keeping the two consistent that was correct for the case its author had in mind. BPF programs are written in C and compiled by LLVM, which emits 32-bit arithmetic constantly, so the verifier cannot simply refuse to reason about subregisters — the alternative to this machinery is rejecting correct programs.
+最初の行がこのページの背骨である。5つのバグのうち4つは、パイプラインの異なる地点で起きた同じ食い違いである。64ビットの値と、その32ビットのビュー、そして両者の一貫性を保つためのルールがあり、そのルールは作者が想定していたケースについては正しかった。BPFプログラムはCで書かれLLVMでコンパイルされるが、LLVMは32ビット算術を頻繁に出力するので、Verifierはサブレジスタについての推論を単純に拒否するわけにはいかない — この仕組みを持たない代わりの選択肢は、正しいプログラムを拒否することなのである。
 
-**The lineage is the most instructive thing here, and it is fully traceable in the commits.** A precision patch ([`581738a681b6`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=581738a681b6faae5725c2555439189ca81c0f1f)) encoded 32-bit knowledge by abusing the tnum representation. That became [CVE-2020-8835](war-stories/jmp32-bounds.md). The response was a revert plus a correct reimplementation by Jann Horn — which was itself superseded, in the same release, by John Fastabend's [`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244), giving registers a genuine second set of 32-bit bounds instead of overloading the tnum. That is the better design, and it is the `Fixes:` target of both [CVE-2021-3490](war-stories/alu32-bitwise-bounds.md) and [CVE-2021-31440](war-stories/alu32-unsigned-bounds.md). Every step of that chain was an improvement. Every step also created new invariants that nothing but review enforced, and review missed them.
+**系譜こそがここで最も教訓的な点であり、それはコミットで完全に追跡できる**。ある精度改善パッチ（[`581738a681b6`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=581738a681b6faae5725c2555439189ca81c0f1f)）は、tnum表現を濫用して32ビットの知識を符号化した。これが[CVE-2020-8835](war-stories/jmp32-bounds.md)になった。その対応は、revertとJann Hornによる正しい再実装であったが — その再実装自体も同じリリースの中で、John Fastabendの[`3f50f132d840`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=3f50f132d8400e129fc9eb68b5020167ef80a244)に置き換えられた。こちらはtnumに意味を詰め込むのではなく、レジスタに本物の第2の32ビット範囲セットを持たせるものである。これはより良い設計であり、そして[CVE-2021-3490](war-stories/alu32-bitwise-bounds.md)と[CVE-2021-31440](war-stories/alu32-unsigned-bounds.md)の両方の`Fixes:`の対象でもある。この連鎖のどの段階も改善であった。そしてどの段階も、レビュー以外には何も強制しない新たな不変条件を生み出し、レビューはそれを見落とした。
 
-**Detection here looks nothing like the [networking page](../net/war-stories.md).** There, fuzzing found a real share of them — syzkaller flagged the AF_PACKET and UDP UFO defects, and a syzbot report on the Netfilter x_tables gap sat unanswered for eight months — because those bugs corrupt memory in ways a sanitizer notices. A verifier bug corrupts nothing at verification time — it produces a *proof that is wrong*, and no sanitizer has an opinion about that. So the finders are different: Jann Horn's systematic 2017 audit, and then Manfred Paul, who is behind three of the five CVEs on this page, working through Pwn2Own and ZDI. Fuzzing appears exactly once, and even then obliquely: Anatoly Trosinenko's kBdysch harness reported CVE-2020-8835 as a *hang*, because the verifier's wrong proof caused it to rewrite live instructions as an infinite loop. The security impact was found separately, by someone looking for it.
+**ここでの発見のされ方は、[ネットワーキングのページ](../net/war-stories.md)とはまったく異なる**。あちらでは、ファジングが実際にかなりの割合を見つけていた — syzkallerがAF_PACKETやUDP UFOの欠陥を検出し、Netfilterのx_tablesの穴についてのsyzbotレポートは8か月間放置された — それらのバグは、サニタイザが気づく形でメモリを破壊するからである。Verifierのバグは検証時に何も破壊しない — それが生み出すのは*誤った証明*であり、それについて意見を持つサニタイザは存在しない。そのため発見者も異なる。2017年のJann Hornによる体系的な監査、そしてPwn2OwnとZDIを通じて活動し、このページの5つのCVEのうち3つの発見者であるManfred Paulである。ファジングが登場するのはちょうど1回だけで、それも間接的である。Anatoly TrosinenkoのkBdyschハーネスはCVE-2020-8835を*ハング*として報告した。Verifierの誤った証明によって、実行される命令が無限ループに書き換えられたためである。セキュリティ上の影響は、それを探していた別の人物によって独立に発見された。
 
-**None of these has ever been confirmed exploited in the wild.** Not one appears in CISA's KEV catalog, despite two of them having packaged public working exploits — one catalogued on Packet Storm, the other shipped as a Metasploit module in 2018. That is a lower rate than the [security subsystem's war stories](../security/war-stories.md), where three of four are KEV-listed — and the likely reason is the same reason this page ends the way it does. A local privilege escalation is only useful if the primitive is available on the target, and over this exact period the primitive was being fenced off: `CAP_BPF` in 2020, then a build-time off-by-default option in 2021. That is a plausible explanation rather than a demonstrated one — absence from KEV is absence of *confirmed* exploitation, not evidence that nobody tried.
+**これらのうち、実環境での悪用が確認されたものは1つもない**。2つには動作するエクスプロイトがパッケージ化されて公開されている — 1つはPacket Stormに収録され、もう1つは2018年にMetasploitモジュールとして出荷された — にもかかわらず、CISAのKEVカタログに載っているものは1つもない。これは、4つのうち3つがKEVに載っている[セキュリティサブシステムの事件簿](../security/war-stories.md)よりも低い割合であり、その理由はおそらく、このページがこのような締めくくり方をする理由と同じである。ローカル権限昇格が役に立つのは、そのプリミティブが標的上で利用可能な場合だけであり、まさにこの期間に、そのプリミティブは囲い込まれつつあった。2020年の`CAP_BPF`、そして2021年のビルド時にデフォルトで無効にするオプションである。これはもっともらしい説明ではあるが、実証されたものではない — KEVに載っていないことは*確認された*悪用がないことを意味するだけで、誰も試みなかった証拠ではない。
 
-**Which is the actual conclusion of this page.** The [unprivileged-BPF-off](war-stories/unprivileged-bpf-off.md) entry is not a CVE and not a mistake — it is the subsystem's own answer to everything above it. Alexei Starovoitov's position, quoted on LWN in 2019, is that the verifier hardening built to make unprivileged BPF safe is "a lot of complex kernel code without users." Andy Lutomirski's counter, that the use cases don't exist *because* the support doesn't, was never refuted; it was settled by shipping a default. Read the five bug pages first, then that one, and the argument reads very differently than it does in isolation.
+**そしてこれこそが、このページの本当の結論である**。[非特権BPFの無効化](war-stories/unprivileged-bpf-off.md)の項目はCVEでも誤りでもない — それは、ここまでに挙げたすべてに対するサブシステム自身の回答である。2019年にLWNで引用されたAlexei Starovoitovの立場は、非特権BPFを安全にするために構築されたVerifierのハードニングは「ユーザーのいない大量の複雑なカーネルコード」（"a lot of complex kernel code without users."）だというものである。ユースケースが存在しないのはサポートが存在しない*から*だというAndy Lutomirskiの反論は、一度も論駁されなかった。それはデフォルトを出荷することで決着したのである。先に5つのバグのページを読み、それからそのページを読めば、単独で読んだときとはまったく違ったふうに議論が読めるはずである。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [BPF Verifier](bpf-verifier.md) — register state tracking, bounds, path exploration, and dead-code elimination: the machinery every bug on this page lives inside
-- [Architecture & Program Types](bpf-overview.md) — the eBPF instruction format, registers, and program types: the vocabulary the 2017 bug is written in
-- [BPF Maps](bpf-maps.md) — array maps and the other map types the pointers these bugs forge are aimed at
-- [Linux Capabilities](../security/capabilities.md) — `CAP_BPF` and the privilege split that gave administrators an option between "root" and "anyone"
-- [Kernel Hardening](../security/kernel-hardening.md) — where speculation mitigations and hardening config knobs sit in the wider picture
-- [Security War Stories](../security/war-stories.md) — local privilege escalations in the capabilities/namespaces/credentials layer, with a very different KEV profile
-- [Network War Stories](../net/war-stories.md) — the same site's networking incidents, where syzkaller found bugs of a kind no sanitizer can find here
+- [BPF Verifier](bpf-verifier.md) — レジスタ状態の追跡、範囲、パス探索、デッドコードの除去: このページのすべてのバグが棲みついている仕組み
+- [アーキテクチャとプログラムタイプ](bpf-overview.md) — eBPFの命令フォーマット、レジスタ、プログラムタイプ: 2017年のバグを記述するための語彙
+- [BPF Maps](bpf-maps.md) — 配列mapをはじめとする各種mapタイプ。これらのバグで偽造されたポインタが狙う対象
+- [Linuxケーパビリティ](../security/capabilities.md) — `CAP_BPF`と、管理者に「root」と「誰でも」の間の選択肢を与えた権限分割
+- [カーネルハードニング](../security/kernel-hardening.md) — 投機実行の緩和策やハードニングの設定ノブが、より大きな全体像のどこに位置するか
+- [セキュリティの事件簿](../security/war-stories.md) — capabilities/namespaces/credentials層におけるローカル権限昇格。KEVの傾向はまったく異なる
+- [ネットワークの事件簿](../net/war-stories.md) — 同サイトのネットワーキングのインシデント。ここではどのサニタイザにも見つけられない種類のバグをsyzkallerが発見していた

@@ -95,6 +95,10 @@
 | time / timekeeping | 時間 / 時刻管理 |
 | timer | タイマー |
 | Observability | 可観測性 |
+| verifier (BPF) | 検証器（初出は「検証器（verifier）」） |
+| capability | ケーパビリティ |
+| skeleton / trampoline / tail call | スケルトン / トランポリン / テールコール |
+| wait queue / waitqueue | 待ちキュー |
 | Further reading | 参考文献 |
 | See also | 関連項目 |
 | Key takeaways | 要点 |

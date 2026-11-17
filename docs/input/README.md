@@ -1,27 +1,27 @@
-# The Input Subsystem: One Model for Every Keyboard, Mouse, and Touchscreen {#the-input-subsystem-one-model-for-every-keyboard-mouse-and-touchscreen}
+# 入力サブシステム: あらゆるキーボード、マウス、タッチスクリーンのための1つのモデル {#the-input-subsystem-one-model-for-every-keyboard-mouse-and-touchscreen}
 
-> How Linux turns a PS/2 keyboard, a USB mouse, and an I2C touchscreen into the same `struct input_event` stream — one kernel-level object model shared by every HID-class device, with `/dev/input/eventN` as the uniform handoff point to userspace
+> LinuxがPS/2キーボード、USBマウス、I2Cタッチスクリーンをどのように同じ `struct input_event` ストリームに変えるか。HIDクラスのすべてのデバイスが共有するカーネルレベルの1つのオブジェクトモデルがあり、`/dev/input/eventN` がユーザー空間への統一された受け渡し点となる
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-Every input device is, at bottom, a stream of discrete state changes: a key went down, a wheel turned two clicks, a finger touched down at (412, 900). But the hardware producing those changes is wildly heterogeneous — PS/2 controllers, USB HID devices, I2C/SPI touch controllers, Bluetooth peripherals, GPIO-wired buttons — and if every driver invented its own ioctl set and its own device-node convention, every window system and every application would need a driver-specific backend for each one. The **input subsystem**, living under `drivers/input/`, exists to prevent that: it gives every driver one shared object (`struct input_dev`), one event structure (`struct input_event`), and one small vocabulary of event types, so that from userspace's point of view a keyboard, a mouse, a joystick, and a touchscreen all look like the same kind of thing — a character device that emits a stream of typed, coded, timestamped events.
+あらゆる入力デバイスは、突き詰めれば離散的な状態変化のストリームである。キーが押された、ホイールが2クリック回った、指が (412, 900) に触れた、といったものだ。しかし、それらの変化を生み出すハードウェアは極めて多様である。PS/2コントローラ、USB HIDデバイス、I2C/SPIタッチコントローラ、Bluetooth周辺機器、GPIOに配線されたボタンなどがある。もしドライバごとに独自のioctlセットと独自のデバイスノードの規約を発明していたら、あらゆるウィンドウシステムとあらゆるアプリケーションが、それぞれに対してドライバ固有のバックエンドを必要とすることになる。`drivers/input/` 以下にある**入力サブシステム**は、それを防ぐために存在する。すべてのドライバに1つの共有オブジェクト（`struct input_dev`）、1つのイベント構造体（`struct input_event`）、そしてイベント型の小さな語彙を1つ与える。これにより、ユーザー空間から見ると、キーボード、マウス、ジョイスティック、タッチスクリーンはすべて同じ種類のもの、つまり型とコードとタイムスタンプを持つイベントのストリームを発するキャラクタデバイスに見える。
 
-### The problem the input subsystem solves {#the-problem-the-input-subsystem-solves}
+### 入力サブシステムが解決する問題 {#the-problem-the-input-subsystem-solves}
 
-Before this model existed, individual driver subsystems (the console keyboard driver, the PS/2 mouse driver, joystick drivers) each exposed their own bespoke interface, and every application that wanted keyboard or pointer input had to know which one it was talking to. The input subsystem, whose core lives in `drivers/input/input.c` and whose data structures are declared in [`include/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) and [`include/uapi/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h), splits the problem into three layers:
+このモデルが存在する前は、個々のドライバサブシステム（コンソールキーボードドライバ、PS/2マウスドライバ、ジョイスティックドライバ）がそれぞれ独自のインターフェースを公開しており、キーボードやポインタの入力を欲しいアプリケーションは、どれと話しているのかを知っている必要があった。入力サブシステムのコアは `drivers/input/input.c` にあり、データ構造は [`include/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) と [`include/uapi/linux/input.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h) で宣言されている。入力サブシステムは問題を3つの層に分割する。
 
-- **Device drivers** (`drivers/input/keyboard/`, `drivers/input/mouse/`, `drivers/input/touchscreen/`, `drivers/hid/`, and many more) know how to talk to specific hardware and turn raw interrupts/reports into typed events. This is the layer a device-specific driver author writes.
-- **The input core** owns `struct input_dev` and `struct input_handler`, and is the switchboard between them: every event a driver reports gets dispatched to every handler currently attached to that device.
-- **Input handlers** consume the event stream. The one nearly everything cares about is **evdev**, which exposes the raw event stream to userspace as a character device. Two older, narrower handlers — **mousedev** (`/dev/input/mice`, a synthesized PS/2-mouse-protocol stream) and **joydev** (`/dev/input/jsN`, the legacy joystick API) — still exist for compatibility, but evdev is the general-purpose interface everything modern is built on.
+- **デバイスドライバ**（`drivers/input/keyboard/`、`drivers/input/mouse/`、`drivers/input/touchscreen/`、`drivers/hid/` ほか多数）は特定のハードウェアとのやりとりの仕方を知っており、生の割り込みやレポートを型付きのイベントに変換する。デバイス固有のドライバの作者が書くのはこの層である。
+- **入力コア**は `struct input_dev` と `struct input_handler` を所有し、両者の間の交換台となる。ドライバが報告するすべてのイベントは、そのデバイスに現在アタッチされているすべてのハンドラにディスパッチされる。
+- **入力ハンドラ**はイベントストリームを消費する。ほぼすべてのものが関心を持つのは **evdev** で、生のイベントストリームをキャラクタデバイスとしてユーザー空間に公開する。より古く用途の狭い2つのハンドラ、**mousedev**（`/dev/input/mice`、合成されたPS/2マウスプロトコルのストリーム）と **joydev**（`/dev/input/jsN`、レガシーなジョイスティックAPI）も互換性のために今も存在するが、現代的なものはすべて汎用インターフェースであるevdevの上に構築されている。
 
-The result is that a driver author only has to learn one API to make a new device usable by every input-aware program on the system, and a userspace program only has to learn one event format to read from any input device, regardless of the bus or protocol underneath.
+その結果、ドライバの作者は1つのAPIを学ぶだけで、新しいデバイスをシステム上のあらゆる入力対応プログラムから使えるようにでき、ユーザー空間のプログラムは1つのイベント形式を学ぶだけで、下にあるバスやプロトコルに関係なく、あらゆる入力デバイスから読み取れる。
 
-### The core object model: `struct input_dev` {#the-core-object-model-struct-input_dev}
+### コアのオブジェクトモデル: `struct input_dev` {#the-core-object-model-struct-input_dev}
 
-A driver's job is to build one `struct input_dev`, describe what kinds of events it can produce, and register it. Three calls carry almost the whole life cycle:
+ドライバの仕事は、`struct input_dev` を1つ作り、それが生成できるイベントの種類を記述して、登録することである。3つの呼び出しでライフサイクルのほぼ全体がまかなわれる。
 
-1. **`input_allocate_device()`** (or the devres-managed **`devm_input_allocate_device(dev)`**, which ties the input device's lifetime to the owning `struct device` and needs no explicit unregister) allocates and zeroes a `struct input_dev`, initializes its mutex and `event_lock` spinlock, and calls `dev_set_name(&dev->dev, "input%lu", ...)` once to give it its permanent sysfs identity — this `inputN` number is never changed by `input_register_device()` and stays fixed for the device's whole life. A driver's human-readable label lives in a separate field, `dev->name` (the `N: Name=` line in `/proc/bus/input/devices`); registration does not use it to rename anything. Where that `inputN` entry shows up in sysfs also depends on whether the device has a parent: `devm_input_allocate_device(dev)` sets `input->dev.parent = dev`, so a hardware-backed device registered this way appears under its physical parent's sysfs path (with a symlink from `/sys/class/input/`); only parentless devices land directly under `/sys/devices/virtual/input/`.
-2. The driver declares **capabilities** — which event types and which codes within each type the device can produce — by setting bits in the device's capability bitmaps. This can be done directly:
+1. **`input_allocate_device()`**（またはdevresで管理される **`devm_input_allocate_device(dev)`**。こちらは入力デバイスの寿命を所有者の `struct device` に結び付け、明示的な登録解除を必要としない）は、`struct input_dev` を割り当ててゼロ初期化し、そのmutexと `event_lock` spinlockを初期化し、`dev_set_name(&dev->dev, "input%lu", ...)` を一度呼んで恒久的なsysfs上の識別名を与える。この `inputN` の番号は `input_register_device()` によって変更されることはなく、デバイスの生涯を通じて固定される。ドライバの人間が読めるラベルは別のフィールド `dev->name`（`/proc/bus/input/devices` の `N: Name=` 行）にあり、登録処理がこれを使って何かをリネームすることはない。その `inputN` エントリがsysfsのどこに現れるかは、デバイスに親があるかどうかにも依存する。`devm_input_allocate_device(dev)` は `input->dev.parent = dev` を設定するので、この方法で登録されたハードウェアに裏付けられたデバイスは、物理的な親のsysfsパスの下に現れる（`/sys/class/input/` からのシンボリックリンクが付く）。`/sys/devices/virtual/input/` の直下に置かれるのは、親を持たないデバイスだけである。
+2. ドライバは**ケーパビリティ**、つまりデバイスが生成できるイベント型と、各型の中のコードを、デバイスのケーパビリティビットマップにビットを立てることで宣言する。これは直接行うこともできる。
 
    ```c
    __set_bit(EV_KEY, input_dev->evbit);
@@ -30,14 +30,14 @@ A driver's job is to build one `struct input_dev`, describe what kinds of events
    __set_bit(REL_X, input_dev->relbit);
    ```
 
-   or through the helper `input_set_capability(dev, type, code)`, which sets the per-type bit (`keybit`, `relbit`, `absbit`, `mscbit`, `swbit`, `ledbit`, `sndbit`, `ffbit`) *and* the corresponding bit in `dev->evbit` in one call. For absolute axes, `input_set_abs_params(dev, axis, min, max, fuzz, flat)` additionally allocates the axis's `struct input_absinfo` and fills in `minimum`, `maximum`, `fuzz`, and `flat` — `value` is left at zero (the driver reports it later via ordinary `input_report_abs()` calls) and `resolution` needs a separate `input_abs_set_res(dev, axis, res)` call if the device provides one. Every `EV_ABS` axis needs an `absinfo` entry, and `input_register_device()` refuses to register a device that declares `EV_ABS` capability without any `absinfo` array.
-3. **`input_register_device()`** finalizes the device: it unconditionally sets the `EV_SYN` bit (every input device is required to emit synchronization events, whether or not the driver remembered to declare it), clamps out the reserved `KEY_RESERVED` keycode, calls `device_add()` to make the device visible in sysfs, and walks the list of registered input handlers, attaching any whose `match()`/`id_table` accepts this device — which is what causes an evdev node to appear.
+   あるいはヘルパー `input_set_capability(dev, type, code)` を通じて行うこともでき、こちらは型ごとのビット（`keybit`、`relbit`、`absbit`、`mscbit`、`swbit`、`ledbit`、`sndbit`、`ffbit`）*と* `dev->evbit` の対応するビットを1回の呼び出しで立てる。絶対軸については、`input_set_abs_params(dev, axis, min, max, fuzz, flat)` がさらにその軸の `struct input_absinfo` を割り当て、`minimum`、`maximum`、`fuzz`、`flat` を埋める。`value` はゼロのままにされ（ドライバが後で通常の `input_report_abs()` 呼び出しで報告する）、`resolution` はデバイスが提供する場合、別途 `input_abs_set_res(dev, axis, res)` 呼び出しが必要である。すべての `EV_ABS` 軸は `absinfo` エントリを必要とし、`input_register_device()` は、`EV_ABS` ケーパビリティを宣言しているのに `absinfo` 配列を持たないデバイスの登録を拒否する。
+3. **`input_register_device()`** はデバイスを確定させる。`EV_SYN` ビットを無条件に立て（ドライバが宣言を覚えていたかどうかにかかわらず、すべての入力デバイスは同期イベントを発することが求められる）、予約済みの `KEY_RESERVED` キーコードを除外し、`device_add()` を呼んでデバイスをsysfsで見えるようにし、登録済みの入力ハンドラのリストを走査して、`match()`/`id_table` がこのデバイスを受け入れるものをすべてアタッチする。evdevのノードが現れるのはこのためである。
 
-`struct input_dev` itself (defined in `include/linux/input.h`) is built almost entirely out of capability bitmaps sized by the corresponding `*_CNT` constant from `input-event-codes.h` — `evbit[BITS_TO_LONGS(EV_CNT)]`, `keybit[BITS_TO_LONGS(KEY_CNT)]`, `relbit`, `absbit`, `mscbit`, `ledbit`, `sndbit`, `ffbit`, `swbit` — plus identity fields (`name`, `phys`, `uniq`, `id`), the live-state mirrors (`key`, `led`, `snd`, `sw` — bitmaps of current pressed/lit/active state), an `open()`/`close()` pair the core calls when the first/last handler opens or closes the device (so a driver can defer starting a polling thread or requesting an IRQ until something actually wants events), and the embedded `struct device dev` that makes it a first-class citizen of the driver model.
+`struct input_dev` 自体（`include/linux/input.h` で定義）は、ほぼ全体が `input-event-codes.h` の対応する `*_CNT` 定数でサイズが決まるケーパビリティビットマップでできている。`evbit[BITS_TO_LONGS(EV_CNT)]`、`keybit[BITS_TO_LONGS(KEY_CNT)]`、`relbit`、`absbit`、`mscbit`、`ledbit`、`sndbit`、`ffbit`、`swbit` である。これに加えて、識別用フィールド（`name`、`phys`、`uniq`、`id`）、現在の状態のミラー（`key`、`led`、`snd`、`sw`。押されている/点灯している/アクティブな現在の状態のビットマップ）、最初/最後のハンドラがデバイスをオープン/クローズしたときにコアが呼ぶ `open()`/`close()` のペア（これによりドライバは、ポーリングスレッドの開始やIRQの要求を、実際に何かがイベントを欲しがるまで遅らせることができる）、そしてドライバモデルの一級市民にするための埋め込みの `struct device dev` がある。
 
-### The event model {#the-event-model}
+### イベントモデル {#the-event-model}
 
-Every event, in-kernel or over the wire to userspace, is one `struct input_event` (`include/uapi/linux/input.h`):
+カーネル内でもユーザー空間へ渡す際でも、すべてのイベントは1つの `struct input_event`（`include/uapi/linux/input.h`）である。
 
 ```c
 struct input_event {
@@ -48,28 +48,28 @@ struct input_event {
 };
 ```
 
-The `time` field above is the userspace-facing shape, and it's what almost every userspace program actually sees: any 64-bit build gets it unconditionally, and so does an ordinary 32-bit build. Only in-kernel code, or a 32-bit userspace build that has specifically opted into the Y2038-safe 64-bit `time_t` ABI (`__USE_TIME_BITS64`, a macro libc defines on the application's behalf), instead sees two plain `__kernel_ulong_t` fields, `__sec` and `__usec` — accessed as `ev.input_event_sec`/`ev.input_event_usec` (object-like macros aliasing those fields, not function calls) rather than `time.tv_sec`/`time.tv_usec`. The field layout is picked by preprocessor conditionals in `include/uapi/linux/input.h` so the struct's on-the-wire size matches what the reading process expects.
+上の `time` フィールドはユーザー空間向けの形であり、ほぼすべてのユーザー空間プログラムが実際に目にするのはこれである。64ビットビルドはどれも無条件にこの形になり、通常の32ビットビルドも同様である。カーネル内のコード、あるいはY2038対策の64ビット `time_t` ABI（`__USE_TIME_BITS64`。libcがアプリケーションに代わって定義するマクロ）を明示的に選択した32ビットのユーザー空間ビルドだけが、代わりに2つの単純な `__kernel_ulong_t` フィールド `__sec` と `__usec` を見る。これらには `time.tv_sec`/`time.tv_usec` ではなく `ev.input_event_sec`/`ev.input_event_usec`（関数呼び出しではなく、これらのフィールドの別名となるオブジェクト形式マクロ）としてアクセスする。フィールドのレイアウトは `include/uapi/linux/input.h` のプリプロセッサ条件分岐で選ばれ、構造体の受け渡し上のサイズが読み取り側プロセスの期待と一致するようになっている。
 
-`type` is one of a fixed, small-ish set of event classes (`include/uapi/linux/input-event-codes.h`):
+`type` は固定された、比較的小さなイベントクラスの集合のいずれかである（`include/uapi/linux/input-event-codes.h`）。
 
-| Type | Meaning | Example codes |
+| 型 | 意味 | コードの例 |
 |---|---|---|
-| `EV_SYN` | Synchronization marker — separates one packet of simultaneous changes from the next | `SYN_REPORT`, `SYN_MT_REPORT`, `SYN_DROPPED` |
-| `EV_KEY` | Keys and buttons: value `0` = release, `1` = press, `2` = autorepeat. A driver reporting through `input_report_key()` can only ever send `0`/`1` — the `!!value` normalization in that wrapper makes `2` unreachable from driver code; autorepeat events are synthesized by the input core's own repeat timer instead | `KEY_A`, `BTN_LEFT`, `BTN_TOUCH` |
-| `EV_REL` | Relative axis motion — a *delta*, like a mouse moving | `REL_X`, `REL_Y`, `REL_WHEEL` |
-| `EV_ABS` | Absolute axis position — a new value within `[minimum, maximum]` | `ABS_X`, `ABS_Y`, the `ABS_MT_*` multitouch codes |
-| `EV_MSC` | Miscellaneous events that don't fit elsewhere, e.g. raw scancodes | `MSC_SCAN` |
-| `EV_SW` | Stateful binary switches (not momentary like keys) | `SW_LID`, `SW_TABLET_MODE` |
-| `EV_LED` | Set/query LED state — flows *into* the device | `LED_NUML`, `LED_CAPSL` |
-| `EV_SND` | Simple sound events — also flow into the device | `SND_CLICK`, `SND_BELL` |
-| `EV_REP` | Autorepeat settings (delay/period) — flows *into* the device via `EVIOCSREP` | `REP_DELAY`, `REP_PERIOD` |
-| `EV_FF` | Force-feedback effect control | upload/play/erase force-feedback effects |
-| `EV_PWR` | Power-management events, used by a handful of drivers | driver-specific |
-| `EV_FF_STATUS` | Force-feedback effect status reports, flowing *from* the device | effect playback state |
+| `EV_SYN` | 同期マーカー。同時に起きた変化の1つのパケットを次のパケットから区切る | `SYN_REPORT`、`SYN_MT_REPORT`、`SYN_DROPPED` |
+| `EV_KEY` | キーとボタン。値 `0` = 離す、`1` = 押す、`2` = オートリピート。`input_report_key()` を通じて報告するドライバは `0`/`1` しか送れない。このラッパー内の `!!value` 正規化により、ドライバのコードから `2` には到達できない。オートリピートのイベントは、代わりに入力コア自身のリピートタイマーが合成する | `KEY_A`、`BTN_LEFT`、`BTN_TOUCH` |
+| `EV_REL` | 相対軸の動き。マウスの移動のような*差分* | `REL_X`、`REL_Y`、`REL_WHEEL` |
+| `EV_ABS` | 絶対軸の位置。`[minimum, maximum]` の範囲内の新しい値 | `ABS_X`、`ABS_Y`、`ABS_MT_*` マルチタッチコード |
+| `EV_MSC` | 他に当てはまらない雑多なイベント。例えば生のスキャンコード | `MSC_SCAN` |
+| `EV_SW` | 状態を持つ2値のスイッチ（キーのような瞬間的なものではない） | `SW_LID`、`SW_TABLET_MODE` |
+| `EV_LED` | LEDの状態の設定/問い合わせ。デバイス*へ*流れる | `LED_NUML`、`LED_CAPSL` |
+| `EV_SND` | 単純なサウンドイベント。これもデバイスへ流れる | `SND_CLICK`、`SND_BELL` |
+| `EV_REP` | オートリピートの設定（遅延/周期）。`EVIOCSREP` によってデバイス*へ*流れる | `REP_DELAY`、`REP_PERIOD` |
+| `EV_FF` | フォースフィードバックのエフェクト制御 | フォースフィードバックエフェクトのアップロード/再生/消去 |
+| `EV_PWR` | 電源管理イベント。一握りのドライバが使う | ドライバ固有 |
+| `EV_FF_STATUS` | フォースフィードバックのエフェクト状態の報告。デバイス*から*流れる | エフェクトの再生状態 |
 
-`code` picks a specific member of that type (which key, which axis), and `value` is the payload — its meaning depends on `type`, as the table above shows.
+`code` はその型の特定のメンバー（どのキーか、どの軸か）を選び、`value` はペイロードである。その意味は上の表が示すとおり `type` に依存する。
 
-A driver reports events with a family of small inline wrappers around the core dispatcher `input_event()`, defined in `include/linux/input.h`:
+ドライバは、`include/linux/input.h` で定義された、コアのディスパッチャ `input_event()` を包む小さなインラインラッパー群でイベントを報告する。
 
 ```c
 input_report_key(input_dev, BTN_LEFT, 1);   /* -> input_event(dev, EV_KEY, BTN_LEFT, !!1) */
@@ -78,33 +78,33 @@ input_report_abs(input_dev, ABS_X, 512);    /* -> input_event(dev, EV_ABS, ABS_X
 input_sync(input_dev);                      /* -> input_event(dev, EV_SYN, SYN_REPORT, 0) */
 ```
 
-`input_event()` checks that the device actually declared the given type in `evbit` (an undeclared event is silently dropped — a driver that forgets to `set_bit` the capability will find its events go nowhere), then takes `dev->event_lock` and hands off to the internal dispatch path. For most types the dispatch path also deduplicates against the device's live-state bitmap: an `EV_KEY`, `EV_SW`, `EV_LED`, or `EV_SND` report whose value matches the state already recorded (`key`/`sw`/`led`/`snd`) is dropped rather than forwarded, so calling `input_report_key()` twice in a row with the same value only produces one event at the handler side (autorepeat, `value == 2`, is the deliberate exception — it always passes through). Events that do pass the check update the live-state bitmap (or the current `absinfo[axis].value` for `EV_ABS`) and are queued for every attached handler.
+`input_event()` は、デバイスが与えられた型を実際に `evbit` で宣言しているかを確認し（宣言されていないイベントは黙って捨てられる。ケーパビリティの `set_bit` を忘れたドライバは、自分のイベントがどこにも届かないことに気づくことになる）、それから `dev->event_lock` を取って内部のディスパッチパスに引き渡す。ほとんどの型について、ディスパッチパスはデバイスの現在の状態のビットマップとの重複除去も行う。`EV_KEY`、`EV_SW`、`EV_LED`、`EV_SND` の報告で、値がすでに記録された状態（`key`/`sw`/`led`/`snd`）と一致するものは転送されずに捨てられる。そのため、同じ値で `input_report_key()` を2回続けて呼んでも、ハンドラ側では1つのイベントにしかならない（オートリピート、`value == 2` は意図的な例外で、常に通過する）。チェックを通過したイベントは、現在の状態のビットマップ（`EV_ABS` の場合は現在の `absinfo[axis].value`）を更新し、アタッチされているすべてのハンドラのためにキューに入れられる。
 
-**`input_sync()`** matters more than it looks: individual `input_report_*()` calls describe *changes*, and several changes can belong to the same physical instant — moving a mouse diagonally is a `REL_X` and a `REL_Y` event that happened together. `EV_SYN`/`SYN_REPORT` is the marker that tells a reader "everything since the last `SYN_REPORT` happened as one atomic update"; a driver is expected to call `input_sync()` once after each batch of related reports, not after every single one.
+**`input_sync()`** は見た目以上に重要である。個々の `input_report_*()` 呼び出しは*変化*を記述するもので、複数の変化が同じ物理的な瞬間に属することがある。マウスを斜めに動かすのは、同時に起きた `REL_X` と `REL_Y` のイベントである。`EV_SYN`/`SYN_REPORT` は、「直前の `SYN_REPORT` 以降のすべてが1つのアトミックな更新として起きた」ことを読み手に伝えるマーカーである。ドライバは、関連する報告のバッチごとに一度 `input_sync()` を呼ぶことが期待されており、報告1つごとに呼ぶのではない。
 
-### The evdev userspace interface {#the-evdev-userspace-interface}
+### evdevのユーザー空間インターフェース {#the-evdev-userspace-interface}
 
-**evdev** (`drivers/input/evdev.c`) is the input handler that hands the raw event stream to userspace essentially unfiltered. Each input device that evdev attaches to gets a character device node, `/dev/input/eventN`, allocated from minor numbers starting at `EVDEV_MINOR_BASE` (64) — the docs.kernel.org input overview documents this as the 64–95 legacy evdev minor range, with additional dynamic minors available beyond it for systems with more than 32 input devices.
+**evdev**（`drivers/input/evdev.c`）は、生のイベントストリームを実質的にフィルタリングせずにユーザー空間へ渡す入力ハンドラである。evdevがアタッチする各入力デバイスには、キャラクタデバイスノード `/dev/input/eventN` が与えられ、マイナー番号は `EVDEV_MINOR_BASE`（64）から割り当てられる。docs.kernel.orgの入力の概要は、これを64〜95のレガシーなevdevマイナー番号範囲として説明しており、32個を超える入力デバイスを持つシステム向けに、それを超える動的マイナー番号も利用できる。
 
-A userspace program opens the node and calls `read()`; each `read()` returns one or more whole `struct input_event` records (never a partial one — `evdev_read()` rejects a buffer smaller than one event's size with `-EINVAL`, except that a `count == 0` call is let through as a no-op probe rather than rejected) pulled from a per-open-file-descriptor ring buffer that the kernel fills as the underlying device generates events. The size checked against isn't a flat `sizeof(struct input_event)`: it's `input_event_size()`, which returns the size of the compat 32-bit-time `struct input_event_compat` instead when the caller is a compat-mode (e.g. 32-bit) process on a 64-bit kernel, so the bound matches whichever event layout that process actually reads. Reads block by default and return `-EAGAIN` under `O_NONBLOCK` if the buffer is empty. Beyond `read()`, evdev supports a family of `ioctl()`s — `EVIOCGBIT` to query a device's capability bitmaps, `EVIOCGABS`/`EVIOCSABS` to read or set an absolute axis's `input_absinfo`, `EVIOCGRAB` to take exclusive ownership of the device's event stream (what a compositor uses so its own keypresses don't leak to whatever else might be listening), and more, all declared in `include/uapi/linux/input.h`.
+ユーザー空間のプログラムはノードをオープンして `read()` を呼ぶ。各 `read()` は、1つ以上の完全な `struct input_event` レコードを返す（部分的なレコードは決して返さない。`evdev_read()` は1イベントのサイズより小さいバッファを `-EINVAL` で拒否する。ただし `count == 0` の呼び出しは拒否されず、何もしないプローブとして通される）。これらは、下にあるデバイスがイベントを生成するたびにカーネルが埋める、オープンしたファイルディスクリプタごとのリングバッファから取り出される。比較されるサイズは単純な `sizeof(struct input_event)` ではなく `input_event_size()` であり、呼び出し元が64ビットカーネル上のcompatモード（例えば32ビット）のプロセスである場合には、代わりに32ビット時刻のcompat用 `struct input_event_compat` のサイズを返す。これにより、境界がそのプロセスが実際に読むイベントレイアウトと一致する。読み出しはデフォルトでブロックし、`O_NONBLOCK` の下ではバッファが空なら `-EAGAIN` を返す。`read()` 以外に、evdevは一連の `ioctl()` をサポートする。デバイスのケーパビリティビットマップを問い合わせる `EVIOCGBIT`、絶対軸の `input_absinfo` を読み書きする `EVIOCGABS`/`EVIOCSABS`、デバイスのイベントストリームの排他的な所有権を取る `EVIOCGRAB`（コンポジタが自身のキー入力を、聞いているかもしれない他の何かに漏らさないために使う）などがあり、すべて `include/uapi/linux/input.h` で宣言されている。
 
-Almost nothing talks to `/dev/input/eventN` directly except two userspace layers built for exactly that purpose: **libevdev**, a thin C wrapper that handles the `ioctl()` boilerplate and keeps a local mirror of device state, and **libinput**, built on top of libevdev, which turns raw events into higher-level semantics — pointer acceleration, tap-to-click, gesture recognition, device-quirk workarounds — for consumption by a Wayland compositor or X server. This page stops at evdev: libevdev/libinput internals are userspace, not kernel, and out of scope here.
+`/dev/input/eventN` と直接やりとりするものは、まさにその目的のために作られた2つのユーザー空間の層を除いてほとんどない。**libevdev** は、`ioctl()` の定型処理を引き受けてデバイス状態のローカルなミラーを保持する薄いCラッパーである。**libinput** はlibevdevの上に構築されており、生のイベントを、Waylandコンポジタや Xサーバーが消費するための、より高レベルなセマンティクス（ポインタの加速、タップでのクリック、ジェスチャー認識、デバイスのquirkの回避策）に変換する。このページはevdevまでで止める。libevdev/libinputの内部はカーネルではなくユーザー空間のものであり、ここでの対象外である。
 
-### Device enumeration {#device-enumeration}
+### デバイスの列挙 {#device-enumeration}
 
-Three places let you inspect what input devices exist without reading any event data:
+イベントデータを読まずに、どんな入力デバイスが存在するかを調べられる場所が3つある。
 
-- **`/proc/bus/input/devices`** — a plain-text dump, one stanza per registered `struct input_dev`, generated by `input_devices_seq_show()` in `drivers/input/input.c`. Each stanza has fixed prefix letters: `I:` bus/vendor/product/version, `N:` the device's `name`, `P:` its `phys` path, `S:` its sysfs path, `U:` its `uniq` string, `H:` the list of handlers attached to it (e.g. `sysrq kbd event3`), then a series of `B:` bitmap lines, each a hex bitmap of the codes it names. `B: PROP=...` (input properties, e.g. `INPUT_PROP_POINTER`) and `B: EV=...` (the `evbit` mask itself) are always printed; a further `B: KEY=...`/`REL=...`/`ABS=...`/`MSC=...`/`LED=...`/`SND=...`/`FF=...`/`SW=...` line is printed only for each event type the device actually declared in `evbit`.
-- **`/sys/class/input/`** — every registered input device and every handler-created node (`inputN`, `eventN`, `mouseN`, `jsN`) appears here as a symlink into the driver-model device tree, registered under the kernel's `input` device class (`const struct class input_class`, `.name = "input"`, in `drivers/input/input.c`). This is the same information `/proc/bus/input/devices` shows, but navigable as ordinary sysfs attribute files rather than a flat-text dump.
-- **udev naming** — udev consumes the sysfs tree above and creates the stable, human-readable symlinks under `/dev/input/by-id/` and `/dev/input/by-path/` that userspace tools actually use, since a bare `/dev/input/eventN` number is not guaranteed to stay attached to the same physical device across reboots or hot-plug events.
+- **`/proc/bus/input/devices`** — プレーンテキストのダンプで、登録された `struct input_dev` ごとに1つのスタンザがあり、`drivers/input/input.c` の `input_devices_seq_show()` が生成する。各スタンザには固定のプレフィックス文字がある。`I:` はバス/ベンダー/製品/バージョン、`N:` はデバイスの `name`、`P:` はその `phys` パス、`S:` はsysfsパス、`U:` は `uniq` 文字列、`H:` はアタッチされているハンドラのリスト（例: `sysrq kbd event3`）で、その後に一連の `B:` ビットマップ行が続き、それぞれが示すコードの16進ビットマップである。`B: PROP=...`（入力プロパティ、例: `INPUT_PROP_POINTER`）と `B: EV=...`（`evbit` マスクそのもの）は常に出力される。さらに `B: KEY=...`/`REL=...`/`ABS=...`/`MSC=...`/`LED=...`/`SND=...`/`FF=...`/`SW=...` の行は、デバイスが `evbit` で実際に宣言したイベント型についてのみ出力される。
+- **`/sys/class/input/`** — 登録されたすべての入力デバイスと、ハンドラが作成したすべてのノード（`inputN`、`eventN`、`mouseN`、`jsN`）が、ドライバモデルのデバイスツリーへのシンボリックリンクとしてここに現れ、カーネルの `input` デバイスクラス（`drivers/input/input.c` の `const struct class input_class`、`.name = "input"`）の下に登録される。これは `/proc/bus/input/devices` が示すのと同じ情報だが、平坦なテキストダンプではなく、通常のsysfs属性ファイルとしてたどれる。
+- **udevによる命名** — udevは上記のsysfsツリーを消費し、ユーザー空間のツールが実際に使う、安定した人間が読めるシンボリックリンクを `/dev/input/by-id/` と `/dev/input/by-path/` の下に作成する。素の `/dev/input/eventN` の番号は、再起動やホットプラグのイベントをまたいで同じ物理デバイスに結び付いたままである保証がないためである。
 
-### Absolute vs. relative devices, and multitouch {#absolute-vs-relative-devices-and-multitouch}
+### 絶対デバイスと相対デバイス、そしてマルチタッチ {#absolute-vs-relative-devices-and-multitouch}
 
-The `EV_REL`/`EV_ABS` split exists because "where is the pointer" genuinely means different things for different hardware. A mouse reports **relative** motion (`REL_X`, `REL_Y`): it has no idea where the cursor is on screen, only how far it moved since the last report, and the receiving side (input core, then a compositor) accumulates those deltas into a position. A touchscreen or graphics tablet reports **absolute** position (`ABS_X`, `ABS_Y`): the hardware knows exactly where the contact is within its own coordinate space, and every report is a new authoritative value, not a delta.
+`EV_REL`/`EV_ABS` の区別が存在するのは、「ポインタはどこにあるか」がハードウェアによって本当に異なる意味を持つからである。マウスは**相対**的な動き（`REL_X`、`REL_Y`）を報告する。マウスはカーソルが画面のどこにあるかを知らず、前回の報告からどれだけ動いたかだけを知っており、受け取る側（入力コア、次いでコンポジタ）がそれらの差分を位置へと積算する。タッチスクリーンやペンタブレットは**絶対**位置（`ABS_X`、`ABS_Y`）を報告する。ハードウェアは自身の座標空間内のどこに接触があるかを正確に知っており、各報告は差分ではなく新たな正式な値である。
 
-A single touch point fits neatly into `ABS_X`/`ABS_Y`, but a touchscreen or trackpad that can sense several simultaneous fingers cannot: one pair of absolute axes can't represent more than one position at a time. The kernel's **multitouch (MT) protocol** solves this with a set of `ABS_MT_*` codes (`ABS_MT_POSITION_X`, `ABS_MT_POSITION_Y`, `ABS_MT_TOUCH_MAJOR`, `ABS_MT_PRESSURE`, `ABS_MT_TRACKING_ID`, and others, starting at `ABS_MT_SLOT`) and a **slot** model: `ABS_MT_SLOT` selects which contact (slot) the following `ABS_MT_*` events describe, and `ABS_MT_TRACKING_ID` gives that contact a persistent ID for as long as it stays down — a non-negative value means an active contact, `-1` means the slot is now empty. A driver walks its slots, calls `input_mt_slot(dev, slot)` to select one and then reports that contact's `ABS_MT_*` axes, exactly the way it would report any other absolute axis. This slot-based scheme is officially called **type B**; an older **type A** scheme that sent anonymous per-contact data separated by `SYN_MT_REPORT` markers still exists in the protocol's history and is considered obsolete — the kernel's own documentation claims all in-tree drivers have been converted to type B, but that's not quite accurate: a handful of drivers, including `drivers/input/touchscreen/auo-pixcir-ts.c`, `drivers/input/touchscreen/usbtouchscreen.c`, and `drivers/hid/hid-ntrig.c`, still call `input_mt_sync()` and emit type-A reports. The large majority of drivers do use type B, and it's the scheme any new driver should target. See [Kernel docs: Multi-touch (MT) protocol](https://docs.kernel.org/input/multi-touch-protocol.html) for the full slot/tracking-ID mechanics; [HID: the Human Interface Device layer](hid.md) covers how a HID report descriptor is parsed and mapped onto `input_dev` capabilities in the first place, for devices — including multitouch touchscreens — that arrive over USB, Bluetooth, or I2C HID.
+1点のタッチなら `ABS_X`/`ABS_Y` にきれいに収まるが、複数の指を同時に感知できるタッチスクリーンやトラックパッドはそうはいかない。1組の絶対軸では一度に複数の位置を表せないからである。カーネルの**マルチタッチ（MT）プロトコル**は、一連の `ABS_MT_*` コード（`ABS_MT_POSITION_X`、`ABS_MT_POSITION_Y`、`ABS_MT_TOUCH_MAJOR`、`ABS_MT_PRESSURE`、`ABS_MT_TRACKING_ID` など、`ABS_MT_SLOT` から始まるもの）と**スロット**モデルでこれを解決する。`ABS_MT_SLOT` は、続く `ABS_MT_*` イベントがどの接触（スロット）を記述するかを選び、`ABS_MT_TRACKING_ID` はその接触に、触れている間ずっと続く永続的なIDを与える。非負の値はアクティブな接触を意味し、`-1` はそのスロットが空になったことを意味する。ドライバはスロットを順にたどり、`input_mt_slot(dev, slot)` を呼んで1つを選び、その接触の `ABS_MT_*` 軸を、他の絶対軸を報告するのとまったく同じように報告する。このスロットベースの方式は公式に**タイプB**と呼ばれる。匿名の接触ごとのデータを `SYN_MT_REPORT` マーカーで区切って送る、より古い**タイプA**の方式もプロトコルの歴史にはまだ存在し、廃止扱いとされている。カーネル自身のドキュメントは、ツリー内のすべてのドライバがタイプBに変換済みだと主張しているが、これは正確ではない。`drivers/input/touchscreen/auo-pixcir-ts.c`、`drivers/input/touchscreen/usbtouchscreen.c`、`drivers/hid/hid-ntrig.c` を含む一握りのドライバは、今も `input_mt_sync()` を呼んでタイプAの報告を発している。大多数のドライバはタイプBを使っており、新しいドライバが目指すべきなのはこの方式である。スロットとトラッキングIDの仕組みの詳細は [Kernel docs: Multi-touch (MT) protocol](https://docs.kernel.org/input/multi-touch-protocol.html) を参照。[HID: Human Interface Deviceレイヤー](hid.md)では、USB、Bluetooth、I2C HID経由で届くデバイス（マルチタッチのタッチスクリーンを含む）について、そもそもHIDレポートディスクリプタがどのようにパースされ、`input_dev` のケーパビリティに対応付けられるかを扱う。
 
-### Architecture: from hardware to userspace {#architecture-from-hardware-to-userspace}
+### アーキテクチャ: ハードウェアからユーザー空間まで {#architecture-from-hardware-to-userspace}
 
 ```
   Hardware (PS/2 controller, USB HID device, I2C/SPI touch controller, ...)
@@ -140,41 +140,41 @@ A single touch point fits neatly into `ABS_X`/`ABS_Y`, but a touchscreen or trac
   Wayland compositor / X server / plain read() by a console tool
 ```
 
-### The rest of this section {#the-rest-of-this-section}
+### このセクションの残り {#the-rest-of-this-section}
 
-- **[HID: the Human Interface Device layer](hid.md)** — how USB/Bluetooth/I2C HID report descriptors get parsed and mapped onto `input_dev` capabilities, the HID driver model, and transport layering.
-- **[War Stories](war-stories.md)** — real incidents from the input/HID subsystems.
+- **[HID: Human Interface Deviceレイヤー](hid.md)** — USB/Bluetooth/I2C HIDのレポートディスクリプタがどのようにパースされ、`input_dev` のケーパビリティに対応付けられるか、HIDドライバモデル、そしてトランスポートの階層化。
+- **[事件簿](war-stories.md)** — 入力/HIDサブシステムで実際に起きた事件。
 
-### Prerequisites and neighbors {#prerequisites-and-neighbors}
+### 前提知識と関連分野 {#prerequisites-and-neighbors}
 
-Input drivers are ordinary [Linux device-model](../drivers/device-model.md) citizens — most are [USB devices](../usb/README.md) (via the HID layer), I2C/SPI [platform devices](../drivers/platform-driver.md), or, on older hardware, ISA/PS2 devices with no bus abstraction at all. The `/dev/input/*` nodes are plain [character devices](../drivers/chardev.md) registered through the same `cdev`/`file_operations` machinery as any other driver. Reading order: this page, then [HID](hid.md) if you're working with USB/Bluetooth input hardware.
+入力ドライバは通常の[Linuxデバイスモデル](../drivers/device-model.md)の市民である。大半は（HIDレイヤー経由の）[USBデバイス](../usb/README.md)、I2C/SPIの[プラットフォームデバイス](../drivers/platform-driver.md)、あるいは古いハードウェアでは、バスの抽象化をまったく持たないISA/PS2デバイスである。`/dev/input/*` ノードは、他のドライバと同じ `cdev`/`file_operations` の仕組みで登録される、普通の[キャラクタデバイス](../drivers/chardev.md)である。読む順番: このページ、次にUSB/Bluetoothの入力ハードウェアを扱うなら[HID](hid.md)。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) — `struct input_dev`, `struct input_handler`, `struct input_handle`, and the driver-facing registration/reporting API
-- [include/uapi/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h) — `struct input_event`, `struct input_absinfo`, the `EVIOC*` ioctls
-- [include/uapi/linux/input-event-codes.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input-event-codes.h) — every `EV_*`, `KEY_*`, `REL_*`, `ABS_*`, `SYN_*` constant
-- [include/linux/input/mt.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input/mt.h) — `struct input_mt`, `input_mt_slot()`, `input_mt_report_slot_state()`
-- [drivers/input/input.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/input.c) — the input core: `input_register_device()`, `input_event()`/dispatch, `/proc/bus/input/devices`, the `input` device class
-- [drivers/input/evdev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/evdev.c) — the evdev handler: `/dev/input/eventN`, `evdev_read()`, the per-client event ring buffer
-- [drivers/input/mousedev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/mousedev.c) · [drivers/input/joydev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/joydev.c) — the legacy `/dev/input/mice` and `/dev/input/jsN` handlers
+- [include/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input.h) — `struct input_dev`、`struct input_handler`、`struct input_handle`、およびドライバ向けの登録/報告API
+- [include/uapi/linux/input.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input.h) — `struct input_event`、`struct input_absinfo`、`EVIOC*` ioctl
+- [include/uapi/linux/input-event-codes.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/input-event-codes.h) — すべての `EV_*`、`KEY_*`、`REL_*`、`ABS_*`、`SYN_*` 定数
+- [include/linux/input/mt.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/input/mt.h) — `struct input_mt`、`input_mt_slot()`、`input_mt_report_slot_state()`
+- [drivers/input/input.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/input.c) — 入力コア: `input_register_device()`、`input_event()`/ディスパッチ、`/proc/bus/input/devices`、`input` デバイスクラス
+- [drivers/input/evdev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/evdev.c) — evdevハンドラ: `/dev/input/eventN`、`evdev_read()`、クライアントごとのイベントリングバッファ
+- [drivers/input/mousedev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/mousedev.c) · [drivers/input/joydev.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/input/joydev.c) — レガシーな `/dev/input/mice` と `/dev/input/jsN` のハンドラ
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [HID: the Human Interface Device layer](hid.md) — report descriptors, parsing, the HID driver model, and USB/Bluetooth/I2C transport layering
-- [War Stories](war-stories.md) — real incidents in the subsystems above
-- [Linux Device Model](../drivers/device-model.md) · [Character and Misc Devices](../drivers/chardev.md) · [Platform Drivers](../drivers/platform-driver.md) — the driver-core layers the input subsystem sits on
-- [USB](../usb/README.md) — the bus most HID input devices attach through
+- [HID: Human Interface Deviceレイヤー](hid.md) — レポートディスクリプタ、パース、HIDドライバモデル、USB/Bluetooth/I2Cのトランスポートの階層化
+- [事件簿](war-stories.md) — 上記のサブシステムで実際に起きた事件
+- [Linuxデバイスモデル](../drivers/device-model.md) · [キャラクタデバイスとmiscデバイス](../drivers/chardev.md) · [プラットフォームドライバ](../drivers/platform-driver.md) — 入力サブシステムが載っているドライバコアの層
+- [USB](../usb/README.md) — ほとんどのHID入力デバイスが接続されるバス
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [An update on the input stack](https://lwn.net/Articles/801767/) — libinput's evolution, high-resolution scroll events, and the userspace layer built on top of evdev
+- [An update on the input stack](https://lwn.net/Articles/801767/) — libinputの進化、高解像度スクロールイベント、そしてevdevの上に構築されたユーザー空間の層
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Kernel docs: Input subsystem introduction](https://docs.kernel.org/input/input.html) — the `input_event` structure, evdev, and the driver/core/handler architecture
-- [Kernel docs: Event codes](https://docs.kernel.org/input/event-codes.html) — the full semantics of every `EV_*` type
-- [Kernel docs: Multi-touch (MT) protocol](https://docs.kernel.org/input/multi-touch-protocol.html) — type A vs. type B, slots, and `ABS_MT_TRACKING_ID`
-- [Kernel docs: Input subsystem driver API](https://docs.kernel.org/driver-api/input.html) — the full driver-facing function reference
+- [Kernel docs: Input subsystem introduction](https://docs.kernel.org/input/input.html) — `input_event` 構造体、evdev、そしてドライバ/コア/ハンドラのアーキテクチャ
+- [Kernel docs: Event codes](https://docs.kernel.org/input/event-codes.html) — すべての `EV_*` 型の完全なセマンティクス
+- [Kernel docs: Multi-touch (MT) protocol](https://docs.kernel.org/input/multi-touch-protocol.html) — タイプAとタイプBの違い、スロット、`ABS_MT_TRACKING_ID`
+- [Kernel docs: Input subsystem driver API](https://docs.kernel.org/driver-api/input.html) — ドライバ向け関数の完全なリファレンス

@@ -1,20 +1,20 @@
-# systemd and Cgroup Integration {#systemd-and-cgroup-integration}
+# systemd と cgroup の統合 {#systemd-and-cgroup-integration}
 
-> How systemd manages the cgroup hierarchy: slices, scopes, services, and delegation
+> systemd が cgroup 階層をどう管理するか: slice、scope、service、委譲
 
-## Overview {#overview}
+## 概要 {#overview}
 
-systemd is the cgroup manager on nearly every modern Linux distribution. Since systemd 232 (2016), systemd assumes exclusive ownership of the cgroup v2 hierarchy: it creates sub-trees for every unit, writes resource limits to the appropriate interface files, and enforces the rule that only one userspace agent manages a given subtree. No other tool should write to `/sys/fs/cgroup` directly unless systemd has explicitly delegated that subtree.
+systemd は、ほぼすべての現代的な Linux ディストリビューションで cgroup マネージャを務めている。systemd 232（2016年）以降、systemd は cgroup v2 階層の排他的な所有権を前提としている。すべてのユニットに対してサブツリーを作成し、適切なインターフェースファイルにリソース制限を書き込み、あるサブツリーを管理するユーザー空間のエージェントは1つだけというルールを強制する。systemd が明示的にそのサブツリーを委譲していない限り、他のツールは `/sys/fs/cgroup` に直接書き込むべきではない。
 
-This arrangement solves a problem that plagued cgroup v1: multiple managers (Docker, LXC, Kubernetes, systemd itself) competing to write the same cgroup files, often overwriting each other's settings.
+この取り決めは、cgroup v1 を悩ませていた問題を解決する。すなわち、複数のマネージャ（Docker、LXC、Kubernetes、systemd 自身）が同じ cgroup ファイルへの書き込みを競い合い、しばしば互いの設定を上書きしていたという問題である。
 
-## Unit types and their cgroup mapping {#unit-types-and-their-cgroup-mapping}
+## ユニットの種類と cgroup への対応 {#unit-types-and-their-cgroup-mapping}
 
-systemd exposes three unit types that map to cgroups:
+systemd は、cgroup に対応する3種類のユニットを提供する:
 
-### Service units (`.service`) {#service-units-service}
+### service ユニット（`.service`） {#service-units-service}
 
-A long-running daemon. systemd creates a cgroup at `system.slice/<name>.service/` and moves the daemon's processes into it at start time.
+長時間動作するデーモンである。systemd は `system.slice/<name>.service/` に cgroup を作成し、起動時にデーモンのプロセスをそこへ移す。
 
 ```
 /sys/fs/cgroup/system.slice/nginx.service/
@@ -25,25 +25,25 @@ A long-running daemon. systemd creates a cgroup at `system.slice/<name>.service/
 └── pids.max            ← set from TasksMax=
 ```
 
-The cgroup is created when the service starts and removed (after a drain) when it stops. If the service crashes and restarts, the same cgroup path is reused.
+cgroup はサービスの起動時に作成され、停止時に（プロセスが空になった後で）削除される。サービスがクラッシュして再起動した場合は、同じ cgroup パスが再利用される。
 
-### Scope units (`.scope`) {#scope-units-scope}
+### scope ユニット（`.scope`） {#scope-units-scope}
 
-A group of externally-started processes registered with systemd via D-Bus (`org.freedesktop.systemd1.Manager.StartTransientUnit`). Container runtimes use scopes to register containers they start themselves. The cgroup path is `user.slice/user-<uid>.slice/<name>.scope/` for user scopes.
+外部で起動されたプロセスのグループを、D-Bus（`org.freedesktop.systemd1.Manager.StartTransientUnit`）経由で systemd に登録したものである。コンテナランタイムは、自分で起動したコンテナを登録するために scope を使う。ユーザーの scope の cgroup パスは `user.slice/user-<uid>.slice/<name>.scope/` である。
 
-Unlike services, systemd does not start or stop processes in a scope — it only creates the cgroup and tracks it. The runtime that registered the scope is responsible for the processes.
+service と異なり、systemd は scope 内のプロセスを起動も停止もしない。cgroup を作成して追跡するだけである。プロセスについては、scope を登録したランタイムが責任を持つ。
 
-### Slice units (`.slice`) {#slice-units-slice}
+### slice ユニット（`.slice`） {#slice-units-slice}
 
-Hierarchical grouping containers for services and scopes. A slice does not hold processes directly; it holds child slices, services, and scopes. Its cgroup provides a resource envelope shared by all children.
+service と scope をまとめる階層的なグループ化の入れ物である。slice はプロセスを直接保持せず、子の slice、service、scope を保持する。その cgroup は、すべての子が共有するリソースの外枠を提供する。
 
-The default slices are:
+デフォルトの slice は次のとおりである:
 
-- `system.slice` — all system services
-- `user.slice` — all user sessions
-- `machine.slice` — VMs and containers managed by `systemd-machined`
+- `system.slice` — すべてのシステムサービス
+- `user.slice` — すべてのユーザーセッション
+- `machine.slice` — `systemd-machined` が管理する VM とコンテナ
 
-## The default cgroup layout {#the-default-cgroup-layout}
+## デフォルトの cgroup レイアウト {#the-default-cgroup-layout}
 
 ```
 /sys/fs/cgroup/
@@ -70,138 +70,138 @@ The default slices are:
 └── machine.slice/         ← VMs / containers via machined
 ```
 
-systemd ensures the `system.slice` and `user.slice` always exist and that `cgroup.subtree_control` is populated with the controllers listed in `DefaultCPUAccounting=`, `DefaultMemoryAccounting=`, etc. in `/etc/systemd/system.conf`.
+systemd は、`system.slice` と `user.slice` が常に存在すること、そして `cgroup.subtree_control` に `/etc/systemd/system.conf` の `DefaultCPUAccounting=`、`DefaultMemoryAccounting=` などに列挙されたコントローラが設定されていることを保証する。
 
-## Resource limits in unit files {#resource-limits-in-unit-files}
+## ユニットファイルでのリソース制限 {#resource-limits-in-unit-files}
 
-Unit file properties map directly to cgroup v2 interface files:
+ユニットファイルのプロパティは、cgroup v2 のインターフェースファイルに直接対応する:
 
 ```ini
 [Service]
-# cpu.max = quota period (microseconds)
+# cpu.max = クォータ 周期（マイクロ秒）
 CPUQuota=50%          # cpu.max = "500000 1000000"  (50% of one CPU)
 
-# memory.max (hard limit; triggers OOM kill when exceeded)
+# memory.max（ハードな制限。超過すると OOM kill が発生する）
 MemoryMax=512M        # memory.max = 536870912
 
-# memory.high (soft limit; triggers reclaim before OOM)
+# memory.high（ソフトな制限。OOM の前に回収を引き起こす）
 MemoryHigh=400M       # memory.high = 419430400
 
-# memory.swap.max (limit swap usage)
+# memory.swap.max（スワップ使用量を制限する）
 MemorySwapMax=0       # memory.swap.max = 0  (no swap)
 
-# io.weight (proportional IO scheduling weight, range 1-10000)
+# io.weight（比例配分の I/O スケジューリングの重み、範囲 1-10000）
 IOWeight=100          # io.weight = 100
 
-# io.max (per-device hard bandwidth limit)
+# io.max（デバイスごとのハードな帯域制限）
 IOReadBandwidthMax=/dev/sda 50M   # io.max = "8:0 rbps=52428800"
 IOWriteBandwidthMax=/dev/sda 25M  # io.max = "8:0 wbps=26214400"
 
 # pids.max
 TasksMax=100          # pids.max = 100
 
-# cpuset.cpus (pin to specific CPUs)
+# cpuset.cpus（特定の CPU に固定する）
 AllowedCPUs=0-3       # cpuset.cpus = "0-3"
 
-# cpuset.mems (pin to specific NUMA nodes)
+# cpuset.mems（特定の NUMA ノードに固定する）
 AllowedMemoryNodes=0  # cpuset.mems = "0"
 ```
 
-When systemd writes these, it uses `sd_bus_call_method()` over D-Bus for live changes, and then writes directly to the cgroup interface files during unit startup via the internal `cg_set_attribute()` helper (in `src/basic/cgroup-util.c` of the systemd source).
+systemd がこれらを書き込む際、実行中の変更には D-Bus 経由で `sd_bus_call_method()` を使い、ユニットの起動時には内部ヘルパー `cg_set_attribute()`（systemd ソースの `src/basic/cgroup-util.c`）を介して cgroup のインターフェースファイルに直接書き込む。
 
-## Live property changes {#live-property-changes}
+## 実行中のプロパティ変更 {#live-property-changes}
 
-`systemctl set-property` applies a resource change to a running unit without restarting it:
+`systemctl set-property` は、実行中のユニットを再起動せずにリソースの変更を適用する:
 
 ```bash
-# Reduce nginx to 25% CPU quota
+# nginx の CPU クォータを 25% に下げる
 systemctl set-property nginx.service CPUQuota=25%
 
-# Limit memory
+# メモリを制限する
 systemctl set-property nginx.service MemoryMax=256M
 
-# The change is:
-# 1. Sent via D-Bus to PID 1 (systemd)
-# 2. systemd writes the value to /sys/fs/cgroup/system.slice/nginx.service/cpu.max
-# 3. Optionally persisted to /etc/systemd/system/nginx.service.d/50-CPUQuota.conf
+# 変更は次のように行われる:
+# 1. D-Bus 経由で PID 1（systemd）に送られる
+# 2. systemd が値を /sys/fs/cgroup/system.slice/nginx.service/cpu.max に書き込む
+# 3. 必要に応じて /etc/systemd/system/nginx.service.d/50-CPUQuota.conf に永続化される
 
-# Verify the change took effect:
+# 変更が反映されたことを確認する:
 cat /sys/fs/cgroup/system.slice/nginx.service/cpu.max
 # 250000 1000000
 ```
 
-The `--runtime` flag applies the change only until next reboot (no `.conf` file created):
+`--runtime` フラグを付けると、変更は次の再起動までだけ適用される（`.conf` ファイルは作成されない）:
 
 ```bash
 systemctl set-property --runtime nginx.service MemoryMax=256M
 ```
 
-## Delegation {#delegation}
+## 委譲 {#delegation}
 
-When `Delegate=yes` is set in a unit file, systemd marks the service's cgroup as delegated. systemd will still create the cgroup and set top-level limits, but it will not recurse into the subtree — it will not touch `cgroup.subtree_control` or any files below the delegation point. The service itself is responsible for managing its own sub-hierarchy.
+ユニットファイルで `Delegate=yes` を設定すると、systemd はそのサービスの cgroup を委譲済みとしてマークする。systemd は引き続き cgroup を作成し、最上位の制限を設定するが、サブツリーの中には立ち入らない。つまり、`cgroup.subtree_control` や委譲ポイントより下のファイルには一切触れない。サービス自身が、自分のサブ階層を管理する責任を負う。
 
 ```ini
 [Service]
 Delegate=yes
-# Or delegate specific controllers only:
+# あるいは特定のコントローラだけを委譲する:
 Delegate=cpu memory pids
 ```
 
-This is used by:
+これは次のものが使っている:
 
-- **containerd** / **Docker** — create per-container sub-cgroups under `containerd.service/`
-- **Kubernetes kubelet** — creates per-pod cgroups under `kubelet.service/` or a dedicated slice
-- **User systemd instances** — `user@1000.service` is delegated so the per-user systemd can manage `user.slice/user-1000.slice/`
+- **containerd** / **Docker** — `containerd.service/` の下にコンテナごとのサブ cgroup を作成する
+- **Kubernetes kubelet** — `kubelet.service/` または専用の slice の下に Pod ごとの cgroup を作成する
+- **ユーザーの systemd インスタンス** — `user@1000.service` は委譲されており、ユーザーごとの systemd が `user.slice/user-1000.slice/` を管理できる
 
-When `Delegate=yes`, systemd uses `chown(2)` on the cgroup directory to the service's `User=` UID, which allows the unprivileged process to write `cgroup.subtree_control` and create child cgroup subdirectories without root. There is no `cgroup.delegate` kernel interface file; delegation is purely a matter of filesystem ownership on the cgroup directory.
+`Delegate=yes` の場合、systemd は `chown(2)` で cgroup ディレクトリの所有者をサービスの `User=` の UID に変更する。これにより、非特権プロセスが root なしで `cgroup.subtree_control` に書き込み、子の cgroup サブディレクトリを作成できるようになる。`cgroup.delegate` というカーネルのインターフェースファイルは存在しない。委譲は純粋に cgroup ディレクトリのファイルシステム上の所有権の問題である。
 
-The correct pattern for a container runtime using delegation:
+委譲を使うコンテナランタイムの正しいパターンは次のとおりである:
 
 ```bash
-# systemd has created: /sys/fs/cgroup/system.slice/containerd.service/
-# Delegate=yes means containerd owns this subtree.
+# systemd が作成済み: /sys/fs/cgroup/system.slice/containerd.service/
+# Delegate=yes は containerd がこのサブツリーを所有することを意味する。
 
-# containerd creates a cgroup for container abc123:
+# containerd がコンテナ abc123 用の cgroup を作成する:
 mkdir /sys/fs/cgroup/system.slice/containerd.service/abc123/
 
-# Write limits BEFORE moving any process into the cgroup:
+# プロセスを cgroup に移す「前に」制限を書き込む:
 echo "512M" > /sys/fs/cgroup/system.slice/containerd.service/abc123/memory.max
 echo "100"  > /sys/fs/cgroup/system.slice/containerd.service/abc123/pids.max
 
-# Then move the container init process:
+# その後でコンテナの init プロセスを移す:
 echo $CONTAINER_PID > /sys/fs/cgroup/system.slice/containerd.service/abc123/cgroup.procs
 ```
 
-## Transient units {#transient-units}
+## 一時ユニット {#transient-units}
 
-`systemd-run` creates a transient scope or service cgroup on the fly without writing a unit file:
+`systemd-run` は、ユニットファイルを書かずに、その場で一時的な scope や service の cgroup を作成する:
 
 ```bash
-# Run a command in a transient scope under myslice.slice with resource limits
+# myslice.slice の下の一時 scope で、リソース制限付きでコマンドを実行する
 systemd-run --scope \
     --slice=myslice.slice \
     --property=MemoryMax=256M \
     --property=CPUQuota=50% \
     -- stress --vm 2 --vm-bytes 200M
 
-# Run a one-shot service (waits for completion)
+# oneshot のサービスを実行する（完了を待つ）
 systemd-run --service-type=oneshot \
     --property=TasksMax=20 \
     -- /usr/local/bin/batch-job.sh
 
-# Check the generated cgroup:
+# 生成された cgroup を確認する:
 systemd-cgls /sys/fs/cgroup/myslice.slice/
 ```
 
-Transient units are registered via `org.freedesktop.systemd1.Manager.StartTransientUnit` over D-Bus. The unit and its cgroup are removed automatically when the process exits.
+一時ユニットは、D-Bus 経由の `org.freedesktop.systemd1.Manager.StartTransientUnit` で登録される。ユニットとその cgroup は、プロセスが終了すると自動的に削除される。
 
-## Observability {#observability}
+## 可観測性 {#observability}
 
 ```bash
-# Show the full cgroup tree annotated with systemd unit names:
+# systemd のユニット名を注記した cgroup ツリー全体を表示する:
 systemd-cgls
 
-# Example output:
+# 出力例:
 # Control group /:
 # -.slice
 # ├─system.slice
@@ -216,43 +216,43 @@ systemd-cgls
 #       ├─9012 -bash
 #       └─9013 systemd-cgls
 
-# Live per-cgroup resource usage (like top for cgroups):
+# cgroup ごとのリソース使用量をリアルタイム表示する（cgroup 版の top）:
 systemd-cgtop
 
-# Show resource settings for a unit:
+# ユニットのリソース設定を表示する:
 systemctl show nginx.service | grep -E 'CPU|Memory|IO|Tasks'
 # CPUQuota=50%
 # MemoryMax=536870912
 # TasksMax=100
 
-# Check raw cgroup interface files:
+# cgroup の生のインターフェースファイルを確認する:
 cat /sys/fs/cgroup/system.slice/nginx.service/cpu.stat
 cat /sys/fs/cgroup/system.slice/nginx.service/memory.current
 cat /sys/fs/cgroup/system.slice/nginx.service/io.stat
 ```
 
-## How systemd enables controllers {#how-systemd-enables-controllers}
+## systemd がコントローラを有効にする方法 {#how-systemd-enables-controllers}
 
-systemd reads `/proc/cgroups` to discover available controllers and uses `cgroup.subtree_control` to propagate them down the hierarchy. The `DefaultCPUAccounting=yes` / `DefaultMemoryAccounting=yes` / `DefaultIOAccounting=yes` knobs in `/etc/systemd/system.conf` control which controllers systemd enables globally.
+systemd は `/proc/cgroups` を読んで利用可能なコントローラを調べ、`cgroup.subtree_control` を使ってそれらを階層の下へ伝播させる。`/etc/systemd/system.conf` の `DefaultCPUAccounting=yes` / `DefaultMemoryAccounting=yes` / `DefaultIOAccounting=yes` の設定項目が、systemd がグローバルに有効にするコントローラを制御する。
 
 ```bash
-# See which controllers systemd has enabled:
+# systemd が有効にしたコントローラを確認する:
 cat /sys/fs/cgroup/cgroup.subtree_control
 # cpuset cpu io memory hugetlb pids
 
-# See controllers available to a service's cgroup:
+# サービスの cgroup で利用可能なコントローラを確認する:
 cat /sys/fs/cgroup/system.slice/cgroup.subtree_control
 ```
 
-If a controller is not listed in `cgroup.subtree_control` at the relevant level, interface files like `memory.max` won't exist in the child cgroup — a common source of confusion when controllers are disabled by default.
+該当する階層の `cgroup.subtree_control` にコントローラが列挙されていない場合、`memory.max` のようなインターフェースファイルは子の cgroup に存在しない。これは、コントローラがデフォルトで無効になっている場合によくある混乱の原因である。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Cgroup v2 Architecture](cgroup-v2.md) — unified hierarchy, struct cgroup, subtree_control
-- [Resource Controllers](cgroup-controllers.md) — cpu, memory, io, pids interface files in detail
-- [Container Isolation](container-isolation.md) — how Docker/containerd use delegation
-- [Cgroup War Stories](war-stories.md) — delegation race conditions and v1→v2 migration surprises
-- `man systemd.resource-control(5)` — complete list of resource control properties
-- `man systemd-run(1)` — transient unit creation
-- `src/core/cgroup.c` in the systemd source — cgroup management implementation
-- `Documentation/admin-guide/cgroup-v2.rst` — kernel cgroup v2 documentation
+- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — 統一階層、struct cgroup、subtree_control
+- [リソースコントローラ](cgroup-controllers.md) — cpu、memory、io、pids のインターフェースファイルの詳細
+- [コンテナの隔離](container-isolation.md) — Docker/containerd が委譲をどう使うか
+- [cgroup 事件簿](war-stories.md) — 委譲における競合状態と v1→v2 移行の思わぬ落とし穴
+- `man systemd.resource-control(5)` — リソース制御プロパティの完全な一覧
+- `man systemd-run(1)` — 一時ユニットの作成
+- systemd ソースの `src/core/cgroup.c` — cgroup 管理の実装
+- `Documentation/admin-guide/cgroup-v2.rst` — カーネルの cgroup v2 ドキュメント

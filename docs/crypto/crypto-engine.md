@@ -1,25 +1,19 @@
-# crypto_engine: Hardware Offload Framework {#crypto_engine-hardware-offload-framework}
+# crypto_engine: ハードウェアオフロードフレームワーク {#crypto_engine-hardware-offload-framework}
 
-> How hardware crypto accelerators plug into the kernel
+> ハードウェア暗号アクセラレータがカーネルにどう組み込まれるか
 
-## The problem crypto_engine solves {#the-problem-crypto_engine-solves}
+## crypto_engineが解決する問題 {#the-problem-crypto_engine-solves}
 
-Hardware crypto accelerators — STM32 CRYP, Allwinner CE, Marvell CESA, Intel QAT — all share
-the same fundamental I/O model: you program a DMA descriptor, the hardware processes it
-asynchronously, and you get an interrupt when it's done. Writing a driver that satisfies the
-kernel crypto API's `do_one_request()` contract correctly while managing hardware queuing,
-fallbacks, and error recovery requires a lot of boilerplate.
+ハードウェア暗号アクセラレータ — STM32 CRYP、Allwinner CE、Marvell CESA、Intel QAT — はいずれも同じ基本的なI/Oモデルを共有している: DMAディスクリプタをプログラムし、ハードウェアがそれを非同期に処理し、終わると割り込みを受け取る。ハードウェアのキューイング、フォールバック、エラー回復を管理しながら、カーネル暗号APIの `do_one_request()` の契約を正しく満たすドライバを書くには、大量の定型コードが必要になる。
 
-`crypto_engine` (introduced in kernel 3.19) provides a generic work-queue layer that sits between
-the crypto API and a hardware driver. It:
+`crypto_engine`（カーネル3.19で導入）は、暗号APIとハードウェアドライバの間に位置する汎用のワークキュー層を提供する。これは次のことを行う:
 
-- Serializes requests to hardware that can only process one at a time
-- Handles retry when hardware is busy (enabled via `engine->retry_support = true`)
-- Calls driver callbacks at the right points (prepare → do → finalize)
-- Integrates with the async request completion path
+- 一度に1つしか処理できないハードウェアへのリクエストを直列化する
+- ハードウェアがビジーのときのリトライを扱う（`engine->retry_support = true` で有効化）
+- 適切なタイミングでドライバのコールバックを呼ぶ（prepare → do → finalize）
+- 非同期リクエストの完了パスと統合する
 
-Without crypto_engine, each driver implements its own queue, its own retry logic, and its own
-locking — duplicating hundreds of lines of error-prone code.
+crypto_engineがなければ、各ドライバが独自のキュー、独自のリトライロジック、独自のロックを実装することになり、間違えやすいコードが何百行も重複する。
 
 ```
 Caller (IPsec, dm-crypt, TLS)
@@ -46,40 +40,36 @@ Caller (IPsec, dm-crypt, TLS)
 
 ## struct crypto_engine {#struct-crypto_engine}
 
-Defined in the driver-internal header `include/crypto/internal/engine.h` (not the public
-`include/crypto/engine.h`):
+ドライバ内部向けヘッダー `include/crypto/internal/engine.h`（公開ヘッダーの `include/crypto/engine.h` ではない）で定義されている:
 
 ```c
 /* include/crypto/internal/engine.h */
 struct crypto_engine {
     char                    name[ENGINE_NAME_LEN];
-    bool                    busy;         /* request pump is busy */
+    bool                    busy;         /* リクエストポンプがビジー */
     bool                    running;
 
     bool                    retry_support;
-    bool                    rt;           /* run the pump as a realtime task */
+    bool                    rt;           /* ポンプをリアルタイムタスクとして実行する */
 
     struct list_head        list;
     spinlock_t              queue_lock;
-    struct crypto_queue     queue;              /* pending requests */
+    struct crypto_queue     queue;              /* 保留中のリクエスト */
     struct device           *dev;
 
     struct kthread_worker   *kworker;
-    struct kthread_work     pump_requests;      /* work item pumping the queue */
+    struct kthread_work     pump_requests;      /* キューをポンプするワークアイテム */
 
     void                    *priv_data;
     struct crypto_async_request *cur_req;
 };
 ```
 
-A dedicated kthread worker (`kworker`) runs `pump_requests` to dequeue and dispatch requests
-to hardware — not a generic workqueue. Most drivers allocate one engine per hardware channel,
-or one per device if the hardware is single-channel. There is no batching callback on this
-struct; see "Batching" below.
+専用のkthreadワーカー（`kworker`）が `pump_requests` を実行し、リクエストをデキューしてハードウェアにディスパッチする — 汎用のworkqueueではない。ほとんどのドライバはハードウェアチャネルごとに1つのエンジンを割り当てるか、ハードウェアがシングルチャネルならデバイスごとに1つ割り当てる。この構造体にはバッチ処理用のコールバックはない。後述の「バッチ処理」を参照。
 
-## Driver callbacks: crypto_engine_op {#driver-callbacks-cryptoengineop}
+## ドライバのコールバック: crypto_engine_op {#driver-callbacks-cryptoengineop}
 
-Each algorithm registered with crypto_engine provides a `struct crypto_engine_op`:
+crypto_engineに登録される各アルゴリズムは `struct crypto_engine_op` を提供する:
 
 ```c
 /* include/crypto/engine.h (kernel 5.13+) */
@@ -89,22 +79,17 @@ struct crypto_engine_op {
 };
 ```
 
-| Callback | Called when | Typical work |
+| コールバック | 呼ばれるタイミング | 典型的な処理 |
 |---|---|---|
-| `do_one_request` | Hardware is idle, request at head of queue | Start DMA, return `-EINPROGRESS` |
+| `do_one_request` | ハードウェアがアイドルで、リクエストがキューの先頭にあるとき | DMAを開始し、`-EINPROGRESS` を返す |
 
-`do_one_request` is required and is the only callback in current kernels.
+`do_one_request` は必須であり、現在のカーネルでは唯一のコールバックである。
 
-> **Note**: Through kernel 6.5, `struct crypto_engine_op` was a single generic struct (not
-> split by request type) with three callbacks: `prepare_request`, `unprepare_request`, and
-> `do_one_request`. The refactor to today's model — `do_one_request` only, wrapped in
-> per-type structs like `skcipher_engine_alg` — landed between 6.5 and 6.6.
+> **注**: カーネル6.5までは、`struct crypto_engine_op` は（リクエストタイプ別に分かれていない）単一の汎用構造体で、`prepare_request`、`unprepare_request`、`do_one_request` の3つのコールバックを持っていた。現在のモデル — `do_one_request` のみで、`skcipher_engine_alg` のようなタイプ別の構造体にラップされる — へのリファクタリングは6.5と6.6の間に入った。
 
-## Algorithm registration: skcipher_engine_alg {#algorithm-registration-skcipherenginealg}
+## アルゴリズムの登録: skcipher_engine_alg {#algorithm-registration-skcipherenginealg}
 
-The engine op is embedded in the algorithm descriptor struct, not in a per-transform context
-struct. For example, `struct skcipher_engine_alg` wraps `struct skcipher_alg` with an
-appended `struct crypto_engine_op op`:
+エンジンのopは、変換ごとのコンテキスト構造体ではなく、アルゴリズム記述子の構造体に埋め込まれる。たとえば `struct skcipher_engine_alg` は、`struct skcipher_alg` に `struct crypto_engine_op op` を付け加えてラップしたものである:
 
 ```c
 /* include/crypto/engine.h */
@@ -114,14 +99,11 @@ struct skcipher_engine_alg {
 };
 ```
 
-The same pattern applies for AEAD (`struct aead_engine_alg`), ahash
-(`struct ahash_engine_alg`), and akcipher (`struct akcipher_engine_alg`). Drivers embed the
-engine op inside the algorithm descriptor and register with the engine-aware helpers (e.g.,
-`crypto_engine_register_skcipher()`) rather than the plain crypto API helpers.
+同じパターンがAEAD（`struct aead_engine_alg`）、ahash（`struct ahash_engine_alg`）、akcipher（`struct akcipher_engine_alg`）にも当てはまる。ドライバはエンジンのopをアルゴリズム記述子の中に埋め込み、通常の暗号APIのヘルパーではなく、エンジン対応のヘルパー（例: `crypto_engine_register_skcipher()`）で登録する。
 
-## How a driver uses crypto_engine {#how-a-driver-uses-crypto_engine}
+## ドライバがcrypto_engineを使う方法 {#how-a-driver-uses-crypto_engine}
 
-### Step 1: allocate and start the engine in probe {#step-1-allocate-and-start-the-engine-in-probe}
+### ステップ1: probeでエンジンを割り当てて開始する {#step-1-allocate-and-start-the-engine-in-probe}
 
 ```c
 /* drivers/crypto/mydrv.c */
@@ -140,20 +122,20 @@ static int mydrv_probe(struct platform_device *pdev)
     dd = devm_kzalloc(&pdev->dev, sizeof(*dd), GFP_KERNEL);
     dd->dev = &pdev->dev;
 
-    /* Allocate and initialize the engine */
+    /* エンジンを割り当てて初期化する */
     dd->engine = crypto_engine_alloc_init(&pdev->dev, true);
     if (!dd->engine)
         return -ENOMEM;
 
-    /* Optional: enable retry support (engine will re-queue if hardware busy) */
+    /* 任意: リトライサポートを有効化（ハードウェアがビジーならエンジンが再キューイングする） */
     dd->engine->retry_support = true;
 
-    /* Start the engine's work queue */
+    /* エンジンのワークキューを開始する */
     ret = crypto_engine_start(dd->engine);
     if (ret)
         goto err_engine;
 
-    /* Register algorithms ... */
+    /* アルゴリズムを登録 ... */
     return 0;
 
 err_engine:
@@ -170,9 +152,9 @@ static int mydrv_remove(struct platform_device *pdev)
 }
 ```
 
-### Step 2: register algorithms via crypto_engine helpers {#step-2-register-algorithms-via-crypto_engine-helpers}
+### ステップ2: crypto_engineのヘルパーでアルゴリズムを登録する {#step-2-register-algorithms-via-crypto_engine-helpers}
 
-Instead of `crypto_register_skcipher()`, use the engine-aware wrapper:
+`crypto_register_skcipher()` の代わりに、エンジン対応のラッパーを使う:
 
 ```c
 static struct skcipher_engine_alg mydrv_aes_algs[] = {
@@ -191,7 +173,7 @@ static struct skcipher_engine_alg mydrv_aes_algs[] = {
             .max_keysize = AES_MAX_KEY_SIZE,
             .ivsize      = AES_BLOCK_SIZE,
             .setkey      = mydrv_aes_setkey,
-            .encrypt     = mydrv_aes_encrypt,   /* enqueues via crypto_transfer_skcipher_request_to_engine() */
+            .encrypt     = mydrv_aes_encrypt,   /* crypto_transfer_skcipher_request_to_engine()でエンキューする */
             .decrypt     = mydrv_aes_decrypt,
             .init        = mydrv_aes_init,
             .exit        = mydrv_aes_exit,
@@ -202,22 +184,22 @@ static struct skcipher_engine_alg mydrv_aes_algs[] = {
     },
 };
 
-/* In probe, after engine is started (register each algorithm individually): */
+/* probe内で、エンジン開始後に（各アルゴリズムを個別に登録する）: */
 ret = crypto_engine_register_skcipher(&mydrv_aes_algs[0]);
 ```
 
-### Step 3: the encrypt/decrypt entry points enqueue the request {#step-3-the-encryptdecrypt-entry-points-enqueue-the-request}
+### ステップ3: encrypt/decryptのエントリポイントがリクエストをエンキューする {#step-3-the-encryptdecrypt-entry-points-enqueue-the-request}
 
 ```c
-/* Called by the crypto API when a caller does crypto_skcipher_encrypt() */
+/* 呼び出し元がcrypto_skcipher_encrypt()を行うと暗号APIから呼ばれる */
 static int mydrv_aes_encrypt(struct skcipher_request *req)
 {
     struct mydrv_ctx *ctx = crypto_skcipher_ctx(
                                 crypto_skcipher_reqtfm(req));
     /*
-     * Hand the request off to the engine queue.
-     * Returns -EINPROGRESS immediately if queued.
-     * Returns 0 if completed synchronously (unusual for hardware).
+     * リクエストをエンジンのキューに引き渡す。
+     * キューに入れられた場合は直ちに-EINPROGRESSを返す。
+     * 同期的に完了した場合は0を返す（ハードウェアでは珍しい）。
      */
     return crypto_transfer_skcipher_request_to_engine(ctx->dd->engine, req);
 }
@@ -230,7 +212,7 @@ static int mydrv_aes_decrypt(struct skcipher_request *req)
 }
 ```
 
-### Step 4: do_one_request programs the hardware {#step-4-doonerequest-programs-the-hardware}
+### ステップ4: do_one_requestがハードウェアをプログラムする {#step-4-doonerequest-programs-the-hardware}
 
 ```c
 static int mydrv_do_one_request(struct crypto_engine *engine, void *areq)
@@ -240,29 +222,29 @@ static int mydrv_do_one_request(struct crypto_engine *engine, void *areq)
                                 crypto_skcipher_reqtfm(req));
     struct mydrv_dev *dd = ctx->dd;
 
-    /* Set up DMA: scatter-gather to/from hardware FIFO */
+    /* DMAを設定: ハードウェアFIFOとの間のscatter-gather */
     ret = dma_map_sg(dd->dev, req->src, sg_nents(req->src), DMA_TO_DEVICE);
     ret = dma_map_sg(dd->dev, req->dst, sg_nents(req->dst), DMA_FROM_DEVICE);
 
-    /* Program hardware registers */
-    /* Note: req->iv is a virtual pointer; obtain a DMA address via dma_map_single() */
+    /* ハードウェアレジスタをプログラムする */
+    /* 注: req->ivは仮想ポインタなので、dma_map_single()でDMAアドレスを得る */
     dma_addr_t iv_dma = dma_map_single(dd->dev, req->iv, crypto_skcipher_ivsize(...),
                                         DMA_TO_DEVICE);
     writel(MYDRV_CTRL_START | MYDRV_CTRL_CBC, dd->base + MYDRV_CTRL);
     writel(ctx->key_phys, dd->base + MYDRV_KEY_ADDR);
     writel(iv_dma,        dd->base + MYDRV_IV_ADDR);
 
-    /* Start DMA */
+    /* DMAを開始 */
     mydrv_start_dma(dd, req->src, req->dst, req->cryptlen);
 
-    /* Hardware is now running asynchronously.
-     * Return -EINPROGRESS to indicate that the caller's completion
-     * callback will be called from interrupt context later. */
+    /* これでハードウェアは非同期に動作している。
+     * -EINPROGRESSを返し、呼び出し元の完了コールバックが
+     * 後で割り込みコンテキストから呼ばれることを示す。 */
     return -EINPROGRESS;
 }
 ```
 
-### Step 5: complete from the interrupt handler {#step-5-complete-from-the-interrupt-handler}
+### ステップ5: 割り込みハンドラから完了させる {#step-5-complete-from-the-interrupt-handler}
 
 ```c
 static irqreturn_t mydrv_irq(int irq, void *dev_id)
@@ -273,17 +255,17 @@ static irqreturn_t mydrv_irq(int irq, void *dev_id)
     if (!(status & MYDRV_STATUS_DONE))
         return IRQ_NONE;
 
-    /* Acknowledge interrupt */
+    /* 割り込みを確認応答する */
     writel(MYDRV_STATUS_DONE, dd->base + MYDRV_STATUS);
 
-    /* Unmap DMA */
+    /* DMAのマッピングを解除 */
     dma_unmap_sg(dd->dev, dd->cur_req->src, ...);
     dma_unmap_sg(dd->dev, dd->cur_req->dst, ...);
 
-    /* Tell the engine this request is done.
-     * err = 0 on success, negative errno on hardware error.
-     * This will call the original requester's completion callback
-     * and then pump the next request from the queue. */
+    /* このリクエストが完了したことをエンジンに伝える。
+     * 成功ならerr = 0、ハードウェアエラーなら負のerrno。
+     * これにより元の要求者の完了コールバックが呼ばれ、
+     * 続いてキューから次のリクエストがポンプされる。 */
     crypto_finalize_skcipher_request(dd->engine, dd->cur_req,
                                       (status & MYDRV_STATUS_ERR) ? -EIO : 0);
 
@@ -291,19 +273,16 @@ static irqreturn_t mydrv_irq(int irq, void *dev_id)
 }
 ```
 
-`crypto_finalize_skcipher_request()` (and equivalents for AEAD, ahash, akcipher) invokes
-the request's completion callback, then kicks the engine to pump the next queued request.
+`crypto_finalize_skcipher_request()`（およびAEAD、ahash、akcipher用の同等の関数）は、リクエストの完了コールバックを呼び出し、その後エンジンを起動してキュー内の次のリクエストをポンプさせる。
 
-## The fallback pattern {#the-fallback-pattern}
+## フォールバックパターン {#the-fallback-pattern}
 
-Hardware accelerators often have limitations: they may not support all key sizes, all modes,
-or may be unavailable (e.g., during suspend). The standard pattern is to keep a software
-`fallback` transform and use it when the hardware can't handle a request.
+ハードウェアアクセラレータには制約があることが多い: すべての鍵サイズやすべてのモードをサポートしていないことがあり、利用できないこともある（例: サスペンド中）。標準的なパターンは、ソフトウェアの `fallback` 変換を保持しておき、ハードウェアがリクエストを処理できないときにそれを使うことである。
 
 ```c
 struct mydrv_ctx {
     struct mydrv_dev        *dd;
-    struct crypto_skcipher  *fallback;  /* software AES-CBC */
+    struct crypto_skcipher  *fallback;  /* ソフトウェアのAES-CBC */
     u8                       key[AES_MAX_KEY_SIZE];
     unsigned int             keylen;
 };
@@ -312,13 +291,13 @@ static int mydrv_aes_init(struct crypto_skcipher *tfm)
 {
     struct mydrv_ctx *ctx = crypto_skcipher_ctx(tfm);
 
-    /* Allocate a software fallback for unsupported requests */
+    /* サポートされないリクエスト用にソフトウェアのフォールバックを割り当てる */
     ctx->fallback = crypto_alloc_skcipher("cbc(aes)", 0,
                                            CRYPTO_ALG_NEED_FALLBACK);
     if (IS_ERR(ctx->fallback))
         return PTR_ERR(ctx->fallback);
 
-    /* Ensure the request size accounts for the fallback's request size */
+    /* リクエストサイズにフォールバックのリクエストサイズが含まれるようにする */
     crypto_skcipher_set_reqsize(tfm, sizeof(struct mydrv_req) +
                                  crypto_skcipher_reqsize(ctx->fallback));
     return 0;
@@ -336,7 +315,7 @@ static int mydrv_aes_setkey(struct crypto_skcipher *tfm,
     struct mydrv_ctx *ctx = crypto_skcipher_ctx(tfm);
     int ret;
 
-    /* Some hardware only supports 128-bit keys */
+    /* 128ビット鍵しかサポートしないハードウェアもある */
     if (keylen != AES_KEYSIZE_128)
         ctx->use_fallback = true;
     else
@@ -345,7 +324,7 @@ static int mydrv_aes_setkey(struct crypto_skcipher *tfm,
     memcpy(ctx->key, key, keylen);
     ctx->keylen = keylen;
 
-    /* Always set the key on the fallback too */
+    /* フォールバックにも常に鍵を設定する */
     crypto_skcipher_clear_flags(ctx->fallback, CRYPTO_TFM_REQ_MASK);
     crypto_skcipher_set_flags(ctx->fallback,
         crypto_skcipher_get_flags(tfm) & CRYPTO_TFM_REQ_MASK);
@@ -358,7 +337,7 @@ static int mydrv_aes_encrypt(struct skcipher_request *req)
                                 crypto_skcipher_reqtfm(req));
 
     if (ctx->use_fallback) {
-        /* Use the fallback's subrequest, stored after our own req data */
+        /* 自分のreqデータの後ろに格納されたフォールバックのサブリクエストを使う */
         struct skcipher_request *subreq = skcipher_request_ctx(req);
         skcipher_request_set_tfm(subreq, ctx->fallback);
         skcipher_request_set_callback(subreq, req->base.flags,
@@ -372,90 +351,77 @@ static int mydrv_aes_encrypt(struct skcipher_request *req)
 }
 ```
 
-The same pattern applies to AEAD (`struct aead_engine_alg`, `crypto_finalize_aead_request()`),
-ahash, and akcipher.
+同じパターンがAEAD（`struct aead_engine_alg`、`crypto_finalize_aead_request()`）、ahash、akcipherにも当てはまる。
 
-## Retry support {#retry-support}
+## リトライサポート {#retry-support}
 
-When `engine->retry_support = true`, `crypto_pump_requests()` in `crypto/crypto_engine.c`
-handles a `do_one_request()` failure differently depending on the error:
+`engine->retry_support = true` のとき、`crypto/crypto_engine.c` の `crypto_pump_requests()` は、`do_one_request()` の失敗をエラーに応じて異なる方法で扱う:
 
-- **`-ENOSPC`**: only the single request that just failed is re-queued, at the *head* of the
-  engine queue (`crypto_enqueue_request_head()`) to preserve ordering, and the pump is
-  rescheduled to retry it on the next cycle. This handles drivers whose hardware command
-  FIFOs can fill up under sustained load (e.g., Marvell CESA, Allwinner CE).
-- **Any other error**: the request fails immediately (`crypto_request_complete()`) regardless
-  of retry support. The `CRYPTO_TFM_REQ_MAY_BACKLOG` flag is unrelated to this retry path —
-  it governs backlog behavior when a request is first submitted to an already-full queue, not
-  what happens after `do_one_request()` fails.
+- **`-ENOSPC`**: 失敗した直後のその1つのリクエストだけが、順序を保つためにエンジンキューの *先頭* に再キューイングされ（`crypto_enqueue_request_head()`）、次のサイクルでリトライするようにポンプが再スケジュールされる。これは、持続的な負荷のもとでハードウェアのコマンドFIFOが満杯になりうるドライバ（例: Marvell CESA、Allwinner CE）に対応するためのものである。
+- **その他のエラー**: リトライサポートの有無にかかわらず、リクエストは直ちに失敗する（`crypto_request_complete()`）。`CRYPTO_TFM_REQ_MAY_BACKLOG` フラグはこのリトライパスとは無関係である — このフラグが制御するのは、すでに満杯のキューにリクエストが最初に投入されたときのバックログ動作であり、`do_one_request()` が失敗した後に何が起こるかではない。
 
-Without retry support (or on any non-`-ENOSPC` error), a hardware failure causes the request
-to fail immediately with an error back to the caller.
+リトライサポートがない場合（あるいは `-ENOSPC` 以外のエラーの場合）、ハードウェアの失敗によってリクエストは直ちに失敗し、呼び出し元にエラーが返る。
 
-## Batching {#batching}
+## バッチ処理 {#batching}
 
-There is no batching callback in `crypto_engine` — `struct crypto_engine` has no
-`do_batch_requests`-style hook, and `crypto_pump_requests()` always dispatches exactly one
-request per `do_one_request()` call. Hardware capable of submitting several requests in a
-single DMA pass (e.g., QAT) implements its own batching outside of `crypto_engine`, or
-processes requests one at a time through it regardless.
+`crypto_engine` にはバッチ処理用のコールバックはない — `struct crypto_engine` には `do_batch_requests` のようなフックはなく、`crypto_pump_requests()` は常に `do_one_request()` 1回の呼び出しにつき厳密に1つのリクエストをディスパッチする。1回のDMAパスで複数のリクエストを投入できるハードウェア（例: QAT）は、`crypto_engine` の外で独自のバッチ処理を実装するか、そうでなければそれを通して1つずつリクエストを処理する。
 
-## crypto_engine vs. writing directly to the crypto API {#crypto_engine-vs-writing-directly-to-the-crypto-api}
+## crypto_engineと暗号APIへの直接実装の比較 {#crypto_engine-vs-writing-directly-to-the-crypto-api}
 
-| Scenario | Use crypto_engine | Write directly |
+| シナリオ | crypto_engineを使う | 直接書く |
 |---|---|---|
-| Hardware is DMA-based, async completion via IRQ | Yes | — |
-| Hardware can only do one operation at a time | Yes | — |
-| Hardware has a deep command queue (e.g., 64 slots) | Optional | Driver can manage its own queue instead |
-| Pure software algorithm (no DMA) | No | Yes (`crypto_register_skcipher`) |
-| SIMD-accelerated (AES-NI, ARM CE) | No | Yes (use kernel_fpu_begin) |
-| PCIe offload card with its own scheduler | Optional | Sometimes better |
+| ハードウェアがDMAベースで、IRQ経由で非同期に完了する | はい | — |
+| ハードウェアが一度に1つの操作しかできない | はい | — |
+| ハードウェアが深いコマンドキュー（例: 64スロット）を持つ | 任意 | 代わりにドライバが独自のキューを管理できる |
+| 純粋なソフトウェアアルゴリズム（DMAなし） | いいえ | はい（`crypto_register_skcipher`） |
+| SIMDで高速化（AES-NI、ARM CE） | いいえ | はい（kernel_fpu_beginを使う） |
+| 独自のスケジューラを持つPCIeオフロードカード | 任意 | そのほうが良い場合もある |
 
-## Real driver examples {#real-driver-examples}
+## 実際のドライバの例 {#real-driver-examples}
 
-| Driver | Source | Notable pattern |
+| ドライバ | ソース | 注目すべきパターン |
 |---|---|---|
-| stm32-cryp | `drivers/crypto/stm32/stm32-cryp.c` | Single-channel, full fallback, rotate IV in CBC |
-| sun8i-ce | `drivers/crypto/allwinner/sun8i-ce/` | Multi-algorithm crypto_engine user, scatter-gather |
-| marvell/cesa | `drivers/crypto/marvell/cesa/` | Does *not* use `crypto_engine` — its own TDMA-chain-based queueing |
-| bcm2835 | `drivers/crypto/bcm/cipher.c` | Does *not* use `crypto_engine` — submits via the mailbox (mbox) framework to the SPU coprocessor |
+| stm32-cryp | `drivers/crypto/stm32/stm32-cryp.c` | シングルチャネル、完全なフォールバック、CBCでのIVのローテーション |
+| sun8i-ce | `drivers/crypto/allwinner/sun8i-ce/` | 複数アルゴリズムでcrypto_engineを使う、scatter-gather |
+| marvell/cesa | `drivers/crypto/marvell/cesa/` | `crypto_engine` を *使わない* — TDMAチェーンに基づく独自のキューイング |
+| bcm2835 | `drivers/crypto/bcm/cipher.c` | `crypto_engine` を *使わない* — mailbox（mbox）フレームワーク経由でSPUコプロセッサに投入する |
 
-## Observing crypto_engine {#observing-crypto_engine}
+## crypto_engineの観測 {#observing-crypto_engine}
 
 ```bash
-# See which algorithms are ASYNC (hardware-backed)
+# どのアルゴリズムがASYNC（ハードウェア支援）かを確認
 cat /proc/crypto | grep -E "^(name|type|async)"
-# async        : yes   ← hardware-accelerated
+# async        : yes   ← ハードウェアで高速化されている
 
-# Kernel tracepoints for crypto operations
+# 暗号操作のカーネルtracepoint
 perf trace -e crypto:*
 
-# For specific drivers, check debugfs
+# 特定のドライバについてはdebugfsを確認
 ls /sys/kernel/debug/
-# Some drivers export counters here (e.g., number of requests, fallback count)
+# ここにカウンタ（例: リクエスト数、フォールバック回数）をエクスポートするドライバもある
 
-# Run the crypto test suite against hardware algorithms
-# Note: mode=1 tests MD5 only. To run all algorithm tests, use mode=0.
+# ハードウェアアルゴリズムに対して暗号テストスイートを実行
+# 注: mode=1はMD5のみをテストする。全アルゴリズムのテストを実行するにはmode=0を使う。
 modprobe tcrypt mode=0
-# This exercises all registered algorithms including hardware ones
+# これはハードウェアのものも含め、登録済みの全アルゴリズムを実行する
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [crypto/crypto_engine.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/crypto_engine.c) — the engine implementation: `crypto_pump_requests()`, the retry/backlog logic, and the `crypto_engine_register_*()` helpers
-- [include/crypto/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/engine.h) — the public API: `struct crypto_engine_op`, the `*_engine_alg` wrapper structs, `crypto_transfer_*_request_to_engine()`, `crypto_finalize_*_request()`
-- [include/crypto/internal/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/internal/engine.h) — the actual `struct crypto_engine` definition (driver-internal header)
-- [Documentation/crypto/crypto_engine.rst](https://docs.kernel.org/crypto/crypto_engine.html) — kernel documentation; note it still describes the older `enginectx`/`prepare_cipher_request` design and has not been updated for the `crypto_engine_op`/`do_one_request` model in current code
+- [crypto/crypto_engine.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/crypto_engine.c) — エンジンの実装: `crypto_pump_requests()`、リトライ/バックログのロジック、`crypto_engine_register_*()` ヘルパー
+- [include/crypto/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/engine.h) — 公開API: `struct crypto_engine_op`、`*_engine_alg` ラッパー構造体、`crypto_transfer_*_request_to_engine()`、`crypto_finalize_*_request()`
+- [include/crypto/internal/engine.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/crypto/internal/engine.h) — 実際の `struct crypto_engine` の定義（ドライバ内部向けヘッダー）
+- [Documentation/crypto/crypto_engine.rst](https://docs.kernel.org/crypto/crypto_engine.html) — カーネルのドキュメント。依然として古い `enginectx`/`prepare_cipher_request` の設計を記述しており、現在のコードの `crypto_engine_op`/`do_one_request` モデルに合わせて更新されていない点に注意
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Crypto API](crypto-api.md) — SKCIPHER, AEAD, ahash interfaces that `crypto_engine` sits underneath
-- [dm-crypt and fscrypt](encryption.md) — consumers of hardware crypto
-- [Crypto War Stories](war-stories.md) — incident 5 covers a hardware accelerator silently corrupting ciphertext and the fallback pattern used to work around it
-- [Memory Management: DMA](../mm/dma.md) — scatter-gather and DMA mapping used by `do_one_request()` implementations
+- [カーネル暗号API](crypto-api.md) — `crypto_engine` がその下に位置するSKCIPHER、AEAD、ahashのインターフェース
+- [dm-cryptとfscrypt](encryption.md) — ハードウェア暗号の利用者
+- [暗号の事件簿](war-stories.md) — 事件5では、暗号文を黙って破損させたハードウェアアクセラレータと、それを回避するために使われたフォールバックパターンを扱う
+- [メモリ管理: DMA](../mm/dma.md) — `do_one_request()` の実装が使うscatter-gatherとDMAマッピング
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [LWN: Asynchronous crypto](https://lwn.net/Articles/109475/) (November 3, 2004) — the original design discussion for queueing crypto requests to hardware accelerators with async completion callbacks; the conceptual ancestor of the `-EINPROGRESS` / completion-callback model `crypto_engine` implements
+- [LWN: Asynchronous crypto](https://lwn.net/Articles/109475/)（2004年11月3日） — 非同期の完了コールバックを用いて暗号リクエストをハードウェアアクセラレータにキューイングすることについての当初の設計議論。`crypto_engine` が実装する `-EINPROGRESS`/完了コールバックモデルの概念上の祖先である

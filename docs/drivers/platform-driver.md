@@ -1,46 +1,46 @@
-# Platform Drivers {#platform-drivers}
+# プラットフォームドライバ {#platform-drivers}
 
-> The most common driver pattern for embedded and SoC devices
+> 組み込みデバイスやSoCデバイスで最も一般的なドライバのパターン
 
-## What platform devices are {#what-platform-devices-are}
+## プラットフォームデバイスとは {#what-platform-devices-are}
 
-Platform devices are devices that are not discoverable by hardware (unlike PCI or USB). The `platform_device` / `platform_driver` abstraction is part of the Linux driver model that shipped with Linux 2.6.0; a good overview is Jonathan Corbet's 2011 LWN article [(LWN)](https://lwn.net/Articles/448499/). Devices are instantiated via:
+プラットフォームデバイスとは、（PCIやUSBとは異なり）ハードウェアによって検出できないデバイスである。`platform_device` / `platform_driver`という抽象化は、Linux 2.6.0とともに出荷されたLinuxドライバモデルの一部である。よい概説として、Jonathan Corbetによる2011年のLWN記事がある[（LWN）](https://lwn.net/Articles/448499/)。デバイスは次のいずれかによってインスタンス化される。
 
-- **Device tree** (ARM, RISC-V, embedded)
-- **ACPI** (x86, modern ARM servers)
-- **Board files** (old ARM, legacy)
+- **Device Tree**（ARM、RISC-V、組み込み）
+- **ACPI**（x86、最近のARMサーバー）
+- **ボードファイル**（古いARM、レガシー）
 
-Examples: UARTs, I2C controllers, GPIO controllers, clocks — hardware that's wired onto the SoC and can't be dynamically probed.
+例: UART、I2Cコントローラ、GPIOコントローラ、クロック — SoC上に配線されていて、動的にprobeできないハードウェアである。
 
 ## struct platform_driver {#struct-platform_driver}
 
 ```c
 /* include/linux/platform_device.h */
 struct platform_driver {
-    int (*probe)(struct platform_device *);   /* device found, bind driver */
-    void (*remove)(struct platform_device *);  /* device removed, unbind */
+    int (*probe)(struct platform_device *);   /* デバイスを検出、ドライバをbind */
+    void (*remove)(struct platform_device *);  /* デバイスを削除、unbind */
     void (*shutdown)(struct platform_device *);
     int (*suspend)(struct platform_device *, pm_message_t state);
     int (*resume)(struct platform_device *);
-    struct device_driver driver;              /* embedded generic driver */
-    const struct platform_device_id *id_table; /* legacy ID matching */
+    struct device_driver driver;              /* 埋め込まれた汎用ドライバ */
+    const struct platform_device_id *id_table; /* レガシーなIDマッチング */
     bool driver_managed_dma;
 };
 
 struct platform_device {
-    const char      *name;           /* for legacy matching */
-    int              id;             /* appended to name: "serial.0" */
-    struct device    dev;            /* embedded generic device */
+    const char      *name;           /* レガシーなマッチング用 */
+    int              id;             /* 名前の後ろに付加される: "serial.0" */
+    struct device    dev;            /* 埋め込まれた汎用デバイス */
     u32              num_resources;
-    struct resource *resource;       /* I/O memory, IRQ, etc. */
+    struct resource *resource;       /* I/Oメモリ、IRQなど */
     const struct platform_device_id *id_entry;
-    const char      *driver_override; /* force specific driver */
+    const char      *driver_override; /* 特定のドライバを強制する */
     struct mfd_cell *mfd_cell;
     struct pdev_archdata archdata;
 };
 ```
 
-## A minimal platform driver {#a-minimal-platform-driver}
+## 最小限のプラットフォームドライバ {#a-minimal-platform-driver}
 
 ```c
 /* drivers/mydriver/mydriver.c */
@@ -52,12 +52,12 @@ struct platform_device {
 #include <linux/clk.h>
 
 struct mydev {
-    void __iomem    *base;    /* mapped register base */
+    void __iomem    *base;    /* マップされたレジスタのベース */
     struct clk      *clk;
     int              irq;
 };
 
-/* IRQ handler */
+/* IRQハンドラ */
 static irqreturn_t mydev_irq(int irq, void *data)
 {
     struct mydev *dev = data;
@@ -66,7 +66,7 @@ static irqreturn_t mydev_irq(int irq, void *data)
     if (!(status & MY_IRQ_BIT))
         return IRQ_NONE;
 
-    /* handle interrupt */
+    /* 割り込みを処理する */
     writel(MY_IRQ_BIT, dev->base + STATUS_CLR_REG);
     return IRQ_HANDLED;
 }
@@ -77,17 +77,17 @@ static int mydev_probe(struct platform_device *pdev)
     struct resource *res;
     int ret;
 
-    /* Allocate driver private data (devm: freed automatically on remove) */
+    /* ドライバのプライベートデータを割り当てる（devm: remove時に自動的に解放される） */
     dev = devm_kzalloc(&pdev->dev, sizeof(*dev), GFP_KERNEL);
     if (!dev)
         return -ENOMEM;
 
-    /* Map I/O memory from resource #0 */
+    /* リソース#0のI/Oメモリをマップする */
     dev->base = devm_platform_ioremap_resource(pdev, 0);
     if (IS_ERR(dev->base))
         return PTR_ERR(dev->base);
 
-    /* Get and enable clock */
+    /* クロックを取得して有効化する */
     dev->clk = devm_clk_get(&pdev->dev, "mydev_clk");
     if (IS_ERR(dev->clk))
         return PTR_ERR(dev->clk);
@@ -96,7 +96,7 @@ static int mydev_probe(struct platform_device *pdev)
     if (ret)
         return ret;
 
-    /* Request IRQ */
+    /* IRQを要求する */
     dev->irq = platform_get_irq(pdev, 0);
     if (dev->irq < 0)
         return dev->irq;
@@ -106,7 +106,7 @@ static int mydev_probe(struct platform_device *pdev)
     if (ret)
         return ret;
 
-    /* Store driver data */
+    /* ドライバデータを保存する */
     platform_set_drvdata(pdev, dev);
 
     dev_info(&pdev->dev, "mydev initialized at %p, irq %d\n",
@@ -118,19 +118,19 @@ static void mydev_remove(struct platform_device *pdev)
 {
     struct mydev *dev = platform_get_drvdata(pdev);
 
-    /* devm resources freed automatically; only need to disable clock */
+    /* devmリソースは自動的に解放される。クロックの無効化だけが必要 */
     clk_disable_unprepare(dev->clk);
 }
 
-/* Device tree match table */
+/* Device Treeのマッチテーブル */
 static const struct of_device_id mydev_of_match[] = {
     { .compatible = "vendor,mydev-v1" },
     { .compatible = "vendor,mydev-v2", .data = &mydev_v2_config },
-    { }  /* sentinel */
+    { }  /* 番兵 */
 };
 MODULE_DEVICE_TABLE(of, mydev_of_match);
 
-/* Legacy platform ID match (non-DT) */
+/* レガシーなplatform IDマッチ（DT以外） */
 static const struct platform_device_id mydev_id_table[] = {
     { "mydev", 0 },
     { }
@@ -144,59 +144,59 @@ static struct platform_driver mydev_driver = {
     .driver = {
         .name           = "mydev",
         .of_match_table = mydev_of_match,
-        .pm             = &mydev_pm_ops,  /* optional */
+        .pm             = &mydev_pm_ops,  /* 任意 */
     },
 };
 
 module_platform_driver(mydev_driver);
-/* Expands to module_init/module_exit that call
-   platform_driver_register/unregister */
+/* platform_driver_register/unregisterを呼ぶ
+   module_init/module_exitに展開される */
 
 MODULE_DESCRIPTION("Example platform driver");
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Example Author <author@example.com>");
 ```
 
-## devm_: automatic resource management {#devm_-automatic-resource-management}
+## devm_: 自動リソース管理 {#devm_-automatic-resource-management}
 
-`devm_` (device-managed) functions bind resource lifetime to a `struct device`. When the device is unbound (removed), all `devm_` resources are freed in reverse registration order.
+`devm_`（device-managed）関数は、リソースの寿命を`struct device`に結びつける。デバイスがunbind（削除）されると、すべての`devm_`リソースが登録と逆の順序で解放される。
 
 ```c
-/* Memory */
-devm_kzalloc(&dev, size, GFP_KERNEL)    /* freed on device removal */
+/* メモリ */
+devm_kzalloc(&dev, size, GFP_KERNEL)    /* デバイス削除時に解放される */
 devm_kmalloc(&dev, size, GFP_KERNEL)
 
-/* I/O memory */
+/* I/Oメモリ */
 devm_ioremap(&dev, phys_addr, size)
 devm_ioremap_resource(&dev, resource)
-devm_platform_ioremap_resource(pdev, index)  /* map resource by index */
+devm_platform_ioremap_resource(pdev, index)  /* インデックスでリソースをマップ */
 
 /* IRQ */
 devm_request_irq(&dev, irq, handler, flags, name, data)
 devm_request_threaded_irq(...)
 
-/* Clock */
+/* クロック */
 devm_clk_get(&dev, "clock-name")
-devm_clk_get_enabled(&dev, "clock-name")  /* get + enable in one call */
+devm_clk_get_enabled(&dev, "clock-name")  /* 取得と有効化を1回の呼び出しで */
 
 /* GPIO */
 devm_gpiod_get(&dev, "reset", GPIOD_OUT_LOW)
 
-/* Regulator */
+/* レギュレータ */
 devm_regulator_get(&dev, "vdd")
 
 /* DMA */
 devm_dma_request_chan(&dev, "tx")
 
-/* Register your own cleanup */
+/* 独自のクリーンアップを登録する */
 devm_add_action(&dev, my_cleanup_fn, my_data);
 devm_add_action_or_reset(&dev, my_cleanup_fn, my_data);
 ```
 
-### Why devm_ matters {#why-devm_-matters}
+### なぜdevm_が重要か {#why-devm_-matters}
 
 ```c
-/* Without devm: error paths are a nightmare */
+/* devmなし: エラーパスは悪夢である */
 static int probe(struct platform_device *pdev)
 {
     dev->base = ioremap(res->start, resource_size(res));
@@ -204,20 +204,20 @@ static int probe(struct platform_device *pdev)
 
     ret = request_irq(irq, handler, 0, "dev", dev);
     if (ret) {
-        iounmap(dev->base);  /* must undo ioremap */
+        iounmap(dev->base);  /* ioremapを取り消さなければならない */
         return ret;
     }
 
     dev->clk = clk_get(&pdev->dev, "myclk");
     if (IS_ERR(dev->clk)) {
-        free_irq(irq, dev);   /* must undo request_irq */
-        iounmap(dev->base);   /* must undo ioremap */
+        free_irq(irq, dev);   /* request_irqを取り消さなければならない */
+        iounmap(dev->base);   /* ioremapを取り消さなければならない */
         return PTR_ERR(dev->clk);
     }
     /* ... */
 }
 
-/* With devm: errors just return, devm handles cleanup */
+/* devmあり: エラー時は単にreturnし、devmがクリーンアップを行う */
 static int probe(struct platform_device *pdev)
 {
     dev->base = devm_platform_ioremap_resource(pdev, 0);
@@ -232,17 +232,17 @@ static int probe(struct platform_device *pdev)
 }
 ```
 
-## Device tree binding {#device-tree-binding}
+## Device Treeのバインディング {#device-tree-binding}
 
-The device tree describes hardware topology. Each node with a `compatible` property can be matched by a driver:
+Device Treeはハードウェアのトポロジーを記述する。`compatible`プロパティを持つ各ノードは、ドライバとマッチさせることができる。
 
 ```dts
-/* Example device tree node */
+/* Device Treeノードの例 */
 / {
     soc {
         mydev: mydev@10000000 {
             compatible = "vendor,mydev-v1";
-            reg = <0x10000000 0x1000>;  /* I/O memory: base, size */
+            reg = <0x10000000 0x1000>;  /* I/Oメモリ: ベース、サイズ */
             interrupts = <GIC_SPI 42 IRQ_TYPE_LEVEL_HIGH>;
             clocks = <&ccu CLK_MYDEV>;
             clock-names = "mydev_clk";
@@ -253,9 +253,9 @@ The device tree describes hardware topology. Each node with a `compatible` prope
 };
 ```
 
-The platform bus automatically creates a `platform_device` from this node when the kernel boots. The driver's `of_match_table` is compared against `compatible`.
+platformバスは、カーネルのブート時にこのノードから自動的に`platform_device`を作成する。ドライバの`of_match_table`が`compatible`と比較される。
 
-### Reading device tree properties {#reading-device-tree-properties}
+### Device Treeのプロパティを読む {#reading-device-tree-properties}
 
 ```c
 static int mydev_probe(struct platform_device *pdev)
@@ -264,26 +264,26 @@ static int mydev_probe(struct platform_device *pdev)
     u32 frequency;
     bool active_high;
 
-    /* Read simple integer properties */
+    /* 単純な整数プロパティを読む */
     if (of_property_read_u32(np, "clock-frequency", &frequency))
-        frequency = 100000;  /* default */
+        frequency = 100000;  /* デフォルト */
 
-    /* Read boolean property */
+    /* 真偽値プロパティを読む */
     active_high = of_property_read_bool(np, "active-high");
 
-    /* Get a named GPIO */
+    /* 名前付きのGPIOを取得する */
     struct gpio_desc *reset_gpio = devm_gpiod_get(&pdev->dev, "reset",
                                                    GPIOD_OUT_LOW);
 
-    /* Get compatible string data */
+    /* compatible文字列に対応するデータを取得する */
     const struct mydev_config *cfg =
         of_device_get_match_data(&pdev->dev);
 }
 ```
 
-## Deferring probe {#deferring-probe}
+## probeの延期 {#deferring-probe}
 
-If a resource isn't ready yet (e.g., a clock driver hasn't probed yet):
+リソースの準備がまだ整っていない場合（例: クロックドライバがまだprobeしていない）:
 
 ```c
 static int mydev_probe(struct platform_device *pdev)
@@ -291,38 +291,38 @@ static int mydev_probe(struct platform_device *pdev)
     dev->clk = devm_clk_get(&pdev->dev, "myclk");
     if (IS_ERR(dev->clk)) {
         if (PTR_ERR(dev->clk) == -EPROBE_DEFER)
-            return -EPROBE_DEFER;  /* retry later when clk is available */
+            return -EPROBE_DEFER;  /* clkが利用可能になったら後でリトライする */
         return PTR_ERR(dev->clk);
     }
 }
 ```
 
-`-EPROBE_DEFER` tells the probe infrastructure to retry this driver once any other driver finishes probing.
+`-EPROBE_DEFER`は、他のいずれかのドライバがprobeを完了したときにこのドライバをリトライするよう、probeの基盤に伝える。
 
-## Observing platform devices {#observing-platform-devices}
+## プラットフォームデバイスの観察 {#observing-platform-devices}
 
 ```bash
-# List platform devices
+# プラットフォームデバイスを一覧表示
 ls /sys/bus/platform/devices/
 
-# See driver bound to a platform device
+# プラットフォームデバイスにbindされたドライバを確認
 cat /sys/bus/platform/devices/mydev.0/driver/module/name
 
-# See resources (I/O memory, IRQ)
+# リソース（I/Oメモリ、IRQ）を確認
 cat /sys/bus/platform/devices/mydev.0/resource
-# 0x10000000 0x10000fff 0x200  ← start end flags
+# 0x10000000 0x10000fff 0x200  ← 開始 終了 フラグ
 
-# Force rebind
+# 強制的に再bind
 echo mydev.0 > /sys/bus/platform/drivers/mydev/unbind
 echo mydev.0 > /sys/bus/platform/drivers/mydev/bind
 
-# Check kernel log for probe messages
+# probeのメッセージをカーネルログで確認
 dmesg | grep mydev
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Linux Device Model](device-model.md) — struct device, bus, driver internals
-- [Character and Misc Devices](chardev.md) — Exposing devices via /dev
+- [Linuxデバイスモデル](device-model.md) — struct device、バス、ドライバの内部
+- [キャラクタデバイスとmiscデバイス](chardev.md) — /dev経由でデバイスを公開する
 - `Documentation/driver-api/driver-model/platform.rst`
-- `Documentation/devicetree/bindings/` — DT binding documentation
+- `Documentation/devicetree/bindings/` — DTバインディングのドキュメント

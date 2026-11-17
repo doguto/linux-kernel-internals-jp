@@ -1,49 +1,49 @@
-# War Stories: Device Drivers {#war-stories-device-drivers}
+# 事件簿: デバイスドライバ {#war-stories-device-drivers}
 
-> Two CVEs, one multi-year default-rollout saga, and the origin story behind it all — every page here lives in the driver core and its supporting kobject/sysfs infrastructure (`drivers/base/`, `lib/kobject.c`), the code that decides when a device is ready to be probed and how its identity is exposed to userspace, rather than in any individual hardware driver
+> 2件のCVE、数年がかりのデフォルト化の顛末、そしてそのすべての背後にある起源の物語。ここに挙げるページはすべて、個々のハードウェアドライバではなく、ドライバコアとそれを支えるkobject/sysfs基盤（`drivers/base/`、`lib/kobject.c`）、つまりデバイスがいつprobeされる準備ができたかを決め、デバイスの識別情報をどのようにユーザー空間に公開するかを決めるコードの中で起きている
 
-The driver core sits underneath every bus-specific and hardware-specific driver in the kernel, and these four incidents show two different ways it can go wrong. Two pages — the uevent deadlock and the kobject path race — are about the same narrow problem: safely reading and rendering a device's identity (`dev->driver`, a kobject's name) while that identity can change out from under the reader. The other two are about a completely different axis: *when* a device is allowed to probe at all, relative to whatever it depends on. The deferred-probe origin story explains why that axis exists in the first place; the fw_devlink saga is what happened when the kernel tried to make dependency-aware probing the default behavior for everyone, automatically, without every driver having to ask for it.
+ドライバコアは、カーネル内のあらゆるバス固有・ハードウェア固有のドライバの下に位置しており、これら4つの事件はそれがうまくいかなくなる2つの異なる形を示している。2つのページ — ueventのデッドロックとkobjectパスの競合 — は同じ狭い問題を扱っている。デバイスの識別情報（`dev->driver`、kobjectの名前）を、読み手の足元でそれが変わりうる状況で、安全に読み出して文字列化することである。残りの2つはまったく別の軸の話である。デバイスがそもそも*いつ*probeしてよいか、それが依存するものとの相対関係においてである。deferred probeの起源の物語は、なぜその軸がそもそも存在するのかを説明する。fw_devlinkの顛末は、依存関係を意識したprobeを、各ドライバが要求しなくても、全員に対して自動的にデフォルトの振る舞いにしようとしたときに何が起きたかである。
 
-## Incidents {#incidents}
+## 事件 {#incidents}
 
-Ordered reverse chronologically by when the fix (or, for the origin story, the original merge) landed in mainline — newest first.
+修正（起源の物語については元のマージ）がメインラインに入った時期の新しい順に並べている。
 
-### [The uevent_show() Fix That Deadlocked Driver Detach](war-stories/uevent-show-deadlock.md) {#the-uevent_show-fix-that-deadlocked-driver-detach}
-**Linux 6.11 (September 2024) · CVE-2024-44952 (rejected)**
-A 2024 fix for a real `dev->driver` NULL-pointer race added `device_lock()` to a sysfs read path, recreating a deadlock against driver detach that lockdep couldn't see — `device_lock()` is deliberately exempted from lockdep's cycle detector, and only CXL's own local lockdep key ever caught it.
+### [ドライバのデタッチとデッドロックしたuevent_show()の修正](war-stories/uevent-show-deadlock.md) {#the-uevent_show-fix-that-deadlocked-driver-detach}
+**Linux 6.11（2024年9月）· CVE-2024-44952（取り下げ）**
+`dev->driver`の実在するNULLポインタ競合に対する2024年の修正は、sysfsの読み出しパスに`device_lock()`を追加し、lockdepでは検出できないドライバのデタッチとのデッドロックを再び生み出した。`device_lock()`は意図的にlockdepの循環検出から除外されており、これを捕捉したのはCXL独自のローカルなlockdepキーだけだった。
 
-### [The kobject Path Race That Needed a Retry, Not a Lock](war-stories/kobject-path-race.md) {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
-**Linux 6.3 (April 2023) · CVE-2023-45863**
-`kobject_get_path()` measured a sysfs path's length in one unsynchronized pass and filled the buffer in a second — a concurrent network-interface rename between the two passes could grow a name enough to overflow the undersized buffer, a bug that sat in the kernel's git history since its very first tag in 2005.
+### [ロックではなくリトライが必要だったkobjectパスの競合](war-stories/kobject-path-race.md) {#the-kobject-path-race-that-needed-a-retry-not-a-lock}
+**Linux 6.3（2023年4月）· CVE-2023-45863**
+`kobject_get_path()`は、sysfsパスの長さを同期なしの1回目のパスで測り、2回目のパスでバッファを埋めていた。その2回のパスの間にネットワークインターフェースの名前変更が並行して起きると、名前が長くなって小さすぎるバッファをオーバーフローさせうる。このバグは、2005年のカーネルのgit履歴の最初のタグから存在していた。
 
-### [fw_devlink=on: The Default That Broke Boot Twice Before It Stuck](war-stories/fw-devlink-boot-breaking.md) {#fw_devlinkon-the-default-that-broke-boot-twice-before-it-stuck}
-**Linux 5.13 (June 2021) · not a CVE**
-Enabling automatic probe-order enforcement from firmware-described device graphs by default broke boot on multiple platforms twice in three months — and the revert commit's own "for 5.12" framing turned out to be moot, since Linux 5.12 shipped with the old default the entire time.
+### [fw_devlink=on: 定着するまでに2度ブートを壊したデフォルト](war-stories/fw-devlink-boot-breaking.md) {#fw_devlinkon-the-default-that-broke-boot-twice-before-it-stuck}
+**Linux 5.13（2021年6月）· CVEではない**
+ファームウェアが記述したデバイスグラフからprobe順序を自動的に強制する機能をデフォルトで有効にしたところ、3か月のうちに2度、複数のプラットフォームでブートが壊れた。そしてrevertコミット自身の「5.12向け」という位置づけは結局意味をなさなかった。Linux 5.12は最初から最後まで古いデフォルトのまま出荷されたからである。
 
-### [The Deferred-Probe Origin Story](war-stories/deferred-probe-origin.md) {#the-deferred-probe-origin-story}
-**Linux 3.4 (May 2012) · not a CVE**
-An OLPC laptop's camera driver — really three separate devices — failed to initialize built-in but worked fine as a module, because the kernel's static built-in link order had no way to express that one device depended on another being ready first.
+### [deferred probeの起源の物語](war-stories/deferred-probe-origin.md) {#the-deferred-probe-origin-story}
+**Linux 3.4（2012年5月）· CVEではない**
+OLPCラップトップのカメラドライバ — 実際には3つの別々のデバイス — は、組み込み（built-in）では初期化に失敗したが、モジュールとしては問題なく動作した。カーネルの静的な組み込みのリンク順序には、あるデバイスが別のデバイスの準備が先に整っていることに依存している、ということを表現する手段がなかったからである。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | uevent deadlock | kobject path race | fw_devlink saga | deferred-probe origin |
+| パターン | ueventのデッドロック | kobjectパスの競合 | fw_devlinkの顛末 | deferred probeの起源 |
 |---------|:---:|:---:|:---:|:---:|
-| Lives in the driver core or its kobject/sysfs plumbing (`drivers/base/`, `lib/kobject.c`) | Yes | Yes | Yes | Yes |
-| About safely exposing a device/driver's identity (sysfs, uevent) | Yes | Yes | No | No |
-| About probe-order / dependency timing | No | No | Yes | Yes (defines it) |
-| Introduced by a fix for a different, real bug | Yes | No | No | — |
-| CVE assigned | Yes (rejected) | Yes | No | No |
-| Root cause ultimately outside kernel code (firmware/DT description) | No | No | Yes, in one episode | No |
-| Time from introduction to fix | ~2 months (2024) | ~18 years (2005→2023) | ~6 months of instability (2020→2021) | — |
+| ドライバコアまたはそのkobject/sysfsの配管（`drivers/base/`、`lib/kobject.c`）にある | はい | はい | はい | はい |
+| デバイス/ドライバの識別情報の安全な公開（sysfs、uevent）に関するもの | はい | はい | いいえ | いいえ |
+| probe順序・依存関係のタイミングに関するもの | いいえ | いいえ | はい | はい（それを定義した） |
+| 別の実在するバグの修正によって持ち込まれた | はい | いいえ | いいえ | — |
+| CVEが割り当てられた | はい（取り下げ） | はい | いいえ | いいえ |
+| 根本原因が最終的にカーネルコードの外（ファームウェア/DTの記述）にある | いいえ | いいえ | はい、1つのエピソードで | いいえ |
+| 混入から修正までの期間 | 約2か月（2024年） | 約18年（2005→2023） | 約6か月の不安定期（2020→2021） | — |
 
-**The two identity-exposure bugs are mirror images of each other in how they got fixed.** The uevent deadlock was fixed by *removing* a lock and replacing it with RCU; the kobject path race was fixed by *adding* a bounds check and a retry, deliberately without introducing any new lock at all. Both landed on the same conclusion from opposite starting points: a lock taken casually to fix one problem in this exact code area is more likely to create a new one than a synchronization-free, self-checking design.
+**識別情報の公開に関する2つのバグは、修正のされ方が互いに鏡像になっている。** ueventのデッドロックは、ロックを*取り除き*、RCUで置き換えることで修正された。kobjectパスの競合は、境界チェックとリトライを*追加*することで修正され、意図的に新しいロックは一切導入しなかった。どちらも正反対の出発点から同じ結論にたどり着いている。まさにこのコード領域で、ある問題を直すために安易に取ったロックは、同期を必要としない自己検査型の設計よりも、新しい問題を生む可能性が高い。
 
-**The probe-order pages are separated by almost a decade, and the second is the first one's mechanism turned into a systemwide default.** `-EPROBE_DEFER` started in 2012 as something an individual driver had to explicitly request. fw_devlink's `on` mode, landing for real in 2021, is the driver core issuing that same request automatically, on a driver's behalf, from a firmware-described dependency graph — and most of its verified boot regressions trace to exactly the gap that original mechanism was built to paper over. R-Car, i.MX AVIC, and Broadcom's stale mailbox phandle are three instances of the same specific shape: a device the graph says should exist as a probe target, but that never registers a `struct device` the way the graph assumed — a disabled Device Tree node, in Broadcom's case, is exactly as invisible to the driver core as R-Car's never-registered power controller. Only the Exynos fix doesn't fit that shape: it corrected a parsing bug in how fw_devlink itself read Device Tree's `interrupt-map` property, a different kind of gap in the same rollout.
+**probe順序に関する2つのページはほぼ10年離れており、後者は前者の仕組みをシステム全体のデフォルトにしたものである。** `-EPROBE_DEFER`は2012年に、個々のドライバが明示的に要求しなければならないものとして始まった。2021年に本当にマージされたfw_devlinkの`on`モードは、ドライバコアがドライバに代わって、ファームウェアが記述した依存グラフから、同じ要求を自動的に発行するものである。そして検証されたブートリグレッションの大半は、元の仕組みが取り繕うために作られたまさにそのギャップに行き着く。R-Car、i.MX AVIC、そしてBroadcomの古いmailboxのphandleは、同じ具体的な形の3つの事例である。グラフ上はprobe対象として存在するはずのデバイスが、グラフが想定したとおりには`struct device`を一度も登録しない。Broadcomの場合の無効化されたDevice Treeノードは、R-Carの一度も登録されなかった電源コントローラとまったく同じように、ドライバコアからは見えない。Exynosの修正だけがこの形に当てはまらない。それはfw_devlink自身がDevice Treeの`interrupt-map`プロパティを読む際のパースのバグを修正したもので、同じデフォルト化の中の別種のギャップだった。
 
-**Only one of these four is a rejected CVE, and it's rejected for administrative reasons, not because the underlying deadlock wasn't real.** The lockdep splat behind CVE-2024-44952 is a genuine, reproducible AB-BA deadlock on real CXL hardware; the CVE record itself gives no bug-specific rationale for withdrawal, consistent with the kernel CVE team's general practice of assigning CVE numbers to nearly any bugfix and occasionally un-assigning them administratively afterward.
+**4つのうち取り下げられたCVEは1つだけで、それが取り下げられたのは事務的な理由であり、背後のデッドロックが実在しなかったからではない。** CVE-2024-44952の背後にあるlockdepの警告は、実際のCXLハードウェア上で再現可能な、本物のAB-BAデッドロックである。CVEレコード自体は取り下げのバグ固有の理由を何も示しておらず、これはほぼすべてのバグ修正にCVE番号を割り当て、時折あとから事務的に割り当てを解除するというカーネルCVEチームの一般的な慣行と整合している。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [Linux Device Model](device-model.md) — `struct device`, buses, drivers, and classes, the framework every page here operates inside
-- [Device Tree](device-tree.md) — the firmware description format fw_devlink parses to build its dependency graph, and that decades later gave deferred-probe's `-EPROBE_DEFER` an automatic trigger it didn't originally have
-- [Locking War Stories](../locking/war-stories.md) — a comparable set of incidents where a lock's own discipline, rather than a device's identity, is the thing that goes wrong
+- [Linuxデバイスモデル](device-model.md) — `struct device`、バス、ドライバ、クラス。ここに挙げるすべてのページが動作する枠組み
+- [Device Tree](device-tree.md) — fw_devlinkが依存グラフを構築するためにパースするファームウェア記述形式であり、数十年後にdeferred probeの`-EPROBE_DEFER`に、元々は持っていなかった自動的なトリガーを与えたもの
+- [ロックの事件簿](../locking/war-stories.md) — デバイスの識別情報ではなく、ロック自身の規律がうまくいかなくなる、類似した事件の集まり

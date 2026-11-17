@@ -1,8 +1,8 @@
-# Crypto Subsystem {#crypto-subsystem}
+# 暗号サブシステム {#crypto-subsystem}
 
-> Cryptographic algorithms, kernel key management, and storage encryption
+> 暗号アルゴリズム、カーネルの鍵管理、ストレージ暗号化
 
-## The crypto stack {#the-crypto-stack}
+## 暗号スタック {#the-crypto-stack}
 
 ```
 User space:    openssl / libgcrypt / kernel keyctl
@@ -28,44 +28,44 @@ User space:    openssl / libgcrypt / kernel keyctl
          Intel AES-NI / QAT / ARM CE
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Kernel Crypto API](crypto-api.md) | struct crypto_alg, SKCIPHER, AEAD, hash, hardware offload |
-| [dm-crypt and fscrypt](encryption.md) | Block-level and file-level encryption, keyring integration |
-| [crypto_engine: Hardware Offload Framework](crypto-engine.md) | DMA-based hardware accelerators, driver callbacks, fallback pattern |
-| [Kernel Keyring](keyring.md) | Key types (user, logon, trusted, encrypted), TPM-backed keys, keyctl |
-| [Random Number Generation](rng.md) | /dev/random, getrandom(), DRBG, hardware entropy, VM entropy |
-| [Crypto War Stories](war-stories.md) | IV reuse, timing attacks, boot entropy, keyring leaks, hardware bugs |
+| [カーネル暗号API](crypto-api.md) | struct crypto_alg、SKCIPHER、AEAD、ハッシュ、ハードウェアオフロード |
+| [dm-cryptとfscrypt](encryption.md) | ブロックレベル暗号化とファイルレベル暗号化、keyringとの統合 |
+| [crypto_engine: ハードウェアオフロードフレームワーク](crypto-engine.md) | DMAベースのハードウェアアクセラレータ、ドライバコールバック、フォールバックパターン |
+| [カーネルkeyring](keyring.md) | 鍵タイプ（user、logon、trusted、encrypted）、TPMで保護された鍵、keyctl |
+| [乱数生成](rng.md) | /dev/random、getrandom()、DRBG、ハードウェアエントロピー、VMのエントロピー |
+| [暗号の事件簿](war-stories.md) | IVの再利用、タイミング攻撃、ブート時のエントロピー、keyringのリーク、ハードウェアのバグ |
 
-## Reading order {#reading-order}
+## 読む順序 {#reading-order}
 
-| Step | Page | Why |
+| ステップ | ページ | 理由 |
 |------|------|-----|
-| 1 | [Getting Started](README.md) | Stack diagram and quick reference |
-| 2 | [Kernel Crypto API](crypto-api.md) | Core abstractions: SKCIPHER, AEAD, hash, AF_ALG |
-| 3 | [dm-crypt and fscrypt](encryption.md) | How the crypto API is used for storage encryption |
-| 4 | [crypto_engine](crypto-engine.md) | How hardware accelerators plug in; the async driver model |
-| 5 | [Kernel Keyring](keyring.md) | Where keys live; key types, permissions, TPM integration |
-| 6 | [Random Number Generation](rng.md) | Where cryptographic randomness comes from |
-| 7 | [Crypto War Stories](war-stories.md) | Real bugs and how the internals from above led to (or prevented) them |
+| 1 | [はじめに](README.md) | スタック図とクイックリファレンス |
+| 2 | [カーネル暗号API](crypto-api.md) | 中核となる抽象化: SKCIPHER、AEAD、ハッシュ、AF_ALG |
+| 3 | [dm-cryptとfscrypt](encryption.md) | ストレージ暗号化で暗号APIがどう使われるか |
+| 4 | [crypto_engine](crypto-engine.md) | ハードウェアアクセラレータの組み込み方と非同期ドライバモデル |
+| 5 | [カーネルkeyring](keyring.md) | 鍵の置き場所、鍵タイプ、パーミッション、TPMとの統合 |
+| 6 | [乱数生成](rng.md) | 暗号用の乱数がどこから来るか |
+| 7 | [暗号の事件簿](war-stories.md) | 実際のバグと、上記の内部構造がそれをどう招いたか（あるいは防いだか） |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# List available crypto algorithms
+# 利用可能な暗号アルゴリズムを一覧表示
 cat /proc/crypto
 
-# Check if AES-NI is available
+# AES-NIが利用可能か確認
 grep aes /proc/cpuinfo
 
-# Test crypto performance
+# 暗号の性能をテスト
 cryptsetup benchmark
 # Testing 128 bit cipher AES-XTS... 1234.5 MiB/s
 
-# Key management
-keyctl show           # show process keyrings
+# 鍵管理
+keyctl show           # プロセスのkeyringを表示
 keyctl add user mykey "mysecret" @u
 keyctl search @u user mykey
 ```

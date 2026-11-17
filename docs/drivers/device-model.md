@@ -1,30 +1,30 @@
-# Linux Device Model {#linux-device-model}
+# Linuxデバイスモデル {#linux-device-model}
 
-> The object-oriented framework that organizes all kernel devices
+> カーネルのすべてのデバイスを組織するオブジェクト指向の枠組み
 
-## Why the device model exists {#why-the-device-model-exists}
+## なぜデバイスモデルが存在するか {#why-the-device-model-exists}
 
-Before 2.6, each bus subsystem (PCI, USB, SCSI) independently managed power, hotplug, and sysfs. The device model (introduced in 2.5 by Patrick Mochel [(LWN)](https://lwn.net/Articles/31185/)) unified this into a single framework:
+2.6より前は、各バスサブシステム（PCI、USB、SCSI）が、電源管理、ホットプラグ、sysfsをそれぞれ独立に管理していた。デバイスモデル（2.5でPatrick Mochelが導入[（LWN）](https://lwn.net/Articles/31185/)）は、これを単一の枠組みに統一した。
 
-- **Power management**: suspend/resume traverse the device tree in order
-- **Hotplug**: consistent uevent notifications for adding/removing devices
-- **sysfs**: every device and driver automatically appears in `/sys/` (sysfs was written by Patrick Mochel during the 2.5 cycle and shipped with Linux 2.6.0 [(kernel docs)](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html))
-- **Reference counting**: devices live exactly as long as they're needed
+- **電源管理**: suspend/resumeがデバイスツリーを順序どおりに辿る
+- **ホットプラグ**: デバイスの追加/削除について一貫したuevent通知
+- **sysfs**: すべてのデバイスとドライバが自動的に`/sys/`に現れる（sysfsは2.5サイクルの間にPatrick Mochelが書き、Linux 2.6.0とともに出荷された[（kernel docs）](https://www.kernel.org/doc/html/latest/filesystems/sysfs.html)）
+- **参照カウント**: デバイスは必要とされる間だけちょうど存在する
 
-## kobject: the base object {#kobject-the-base-object}
+## kobject: 基底オブジェクト {#kobject-the-base-object}
 
-Every kernel object that appears in sysfs has a `kobject`:
+sysfsに現れるすべてのカーネルオブジェクトは`kobject`を持つ。
 
 ```c
 /* include/linux/kobject.h */
 struct kobject {
-    const char          *name;        /* directory name in sysfs */
-    struct list_head     entry;       /* list of siblings */
-    struct kobject      *parent;      /* parent in sysfs hierarchy */
-    struct kset         *kset;        /* containing set */
-    const struct kobj_type *ktype;    /* type with sysfs ops */
-    struct kernfs_node  *sd;          /* sysfs directory node */
-    struct kref          kref;        /* reference count */
+    const char          *name;        /* sysfs内のディレクトリ名 */
+    struct list_head     entry;       /* 兄弟のリスト */
+    struct kobject      *parent;      /* sysfs階層内の親 */
+    struct kset         *kset;        /* 所属するセット */
+    const struct kobj_type *ktype;    /* sysfs操作を持つ型 */
+    struct kernfs_node  *sd;          /* sysfsのディレクトリノード */
+    struct kref          kref;        /* 参照カウント */
     unsigned int state_initialized:1;
     unsigned int state_in_sysfs:1;
     unsigned int state_add_uevent_sent:1;
@@ -33,79 +33,79 @@ struct kobject {
 };
 ```
 
-Reference counting:
+参照カウント:
 ```c
-kobject_get(kobj);    /* increment refcount */
-kobject_put(kobj);    /* decrement; calls ktype->release() when zero */
+kobject_get(kobj);    /* 参照カウントを増やす */
+kobject_put(kobj);    /* 減らす。ゼロになるとktype->release()を呼ぶ */
 ```
 
-## struct device: the universal device {#struct-device-the-universal-device}
+## struct device: 汎用的なデバイス {#struct-device-the-universal-device}
 
 ```c
 /* include/linux/device.h */
 struct device {
-    struct kobject          kobj;          /* base kobject — first field */
-    struct device           *parent;       /* parent device */
-    struct device_private   *p;            /* private driver core data */
+    struct kobject          kobj;          /* 基底のkobject — 最初のフィールド */
+    struct device           *parent;       /* 親デバイス */
+    struct device_private   *p;            /* ドライバコアのプライベートデータ */
 
-    const char              *init_name;    /* initial device name */
-    const struct device_type *type;        /* device type */
+    const char              *init_name;    /* 初期のデバイス名 */
+    const struct device_type *type;        /* デバイスの型 */
 
-    struct bus_type         *bus;          /* bus this device is on */
-    struct device_driver    *driver;       /* driver assigned to device */
-    void                    *driver_data;  /* driver-private data */
+    struct bus_type         *bus;          /* このデバイスが載っているバス */
+    struct device_driver    *driver;       /* デバイスに割り当てられたドライバ */
+    void                    *driver_data;  /* ドライバのプライベートデータ */
 
-    struct dev_links_info   links;         /* supplier/consumer links */
-    struct dev_pm_info      power;         /* power management state */
+    struct dev_links_info   links;         /* supplier/consumerのリンク */
+    struct dev_pm_info      power;         /* 電源管理の状態 */
     struct dev_pm_domain    *pm_domain;
 
-    struct device_node      *of_node;      /* device tree node */
-    struct fwnode_handle    *fwnode;       /* firmware node (DT or ACPI) */
+    struct device_node      *of_node;      /* Device Treeのノード */
+    struct fwnode_handle    *fwnode;       /* ファームウェアノード（DTまたはACPI） */
 
-    dev_t                   devt;          /* major:minor (if applicable) */
-    struct class            *class;        /* class (input, block, net...) */
+    dev_t                   devt;          /* major:minor（該当する場合） */
+    struct class            *class;        /* クラス（input、block、net...） */
 
-    const struct attribute_group **groups; /* sysfs attribute groups */
-    void (*release)(struct device *dev);   /* called when refcount hits 0 */
+    const struct attribute_group **groups; /* sysfsの属性グループ */
+    void (*release)(struct device *dev);   /* 参照カウントが0になると呼ばれる */
 
     struct iommu_group      *iommu_group;
     /* ... */
 };
 ```
 
-Key operations:
+主な操作:
 ```c
-device_initialize(dev);          /* initialize kobject */
-device_add(dev);                 /* register in sysfs, send uevent */
+device_initialize(dev);          /* kobjectを初期化する */
+device_add(dev);                 /* sysfsに登録し、ueventを送る */
 device_register(dev);            /* = initialize + add */
-device_unregister(dev);          /* remove from sysfs */
+device_unregister(dev);          /* sysfsから削除する */
 
-get_device(dev);                 /* get reference */
-put_device(dev);                 /* release reference */
+get_device(dev);                 /* 参照を取得する */
+put_device(dev);                 /* 参照を解放する */
 
-dev_set_drvdata(dev, data);      /* store driver-private pointer */
-dev_get_drvdata(dev);            /* retrieve it */
+dev_set_drvdata(dev, data);      /* ドライバのプライベートポインタを保存する */
+dev_get_drvdata(dev);            /* それを取り出す */
 ```
 
-## struct bus_type: the bus abstraction {#struct-bus_type-the-bus-abstraction}
+## struct bus_type: バスの抽象化 {#struct-bus_type-the-bus-abstraction}
 
 ```c
 struct bus_type {
     const char          *name;          /* "pci", "usb", "platform", "i2c" */
-    const char          *dev_name;      /* format for auto-named devices */
-    struct device       *dev_root;      /* bus root device */
+    const char          *dev_name;      /* 自動命名されるデバイスの書式 */
+    struct device       *dev_root;      /* バスのルートデバイス */
 
     const struct attribute_group **bus_groups;
     const struct attribute_group **dev_groups;
     const struct attribute_group **drv_groups;
 
-    /* Called to see if a driver handles this device */
+    /* ドライバがこのデバイスを扱うかどうかを確認するために呼ばれる */
     int (*match)(struct device *dev, struct device_driver *drv);
-    /* Called by userspace write to /sys/.../uevent */
+    /* ユーザー空間から/sys/.../ueventへの書き込みによって呼ばれる */
     int (*uevent)(struct device *dev, struct kobj_uevent_env *env);
-    /* Called when a device is about to be bound to a driver */
+    /* デバイスがドライバにbindされる直前に呼ばれる */
     int (*probe)(struct device *dev);
-    /* Ordered device listing for PM */
+    /* PM用の順序付けられたデバイス一覧 */
     int (*remove)(struct device *dev);
     void (*shutdown)(struct device *dev);
 
@@ -121,18 +121,18 @@ struct bus_type {
 
     const struct dev_pm_ops *pm;
     const struct iommu_ops  *iommu_ops;
-    struct subsys_private   *p;         /* private bus core data */
+    struct subsys_private   *p;         /* バスコアのプライベートデータ */
     struct lock_class_key   lock_key;
     bool need_parent_lock;
 };
 ```
 
 ```c
-/* Register a bus type */
+/* バスの型を登録する */
 int bus_register(struct bus_type *bus);
 void bus_unregister(struct bus_type *bus);
 
-/* Iterate over devices on a bus */
+/* バス上のデバイスを走査する */
 bus_for_each_dev(bus, start, data, fn);
 bus_for_each_drv(bus, start, data, fn);
 ```
@@ -141,18 +141,18 @@ bus_for_each_drv(bus, start, data, fn);
 
 ```c
 struct device_driver {
-    const char              *name;         /* driver name */
+    const char              *name;         /* ドライバ名 */
     struct bus_type         *bus;
     struct module           *owner;        /* THIS_MODULE */
     const char              *mod_name;
 
     bool                     suppress_bind_attrs;
-    enum probe_type          probe_type;   /* synchronous, async, force_sync */
+    enum probe_type          probe_type;   /* 同期、非同期、force_sync */
 
-    const struct of_device_id   *of_match_table; /* device tree matches */
+    const struct of_device_id   *of_match_table; /* Device Treeのマッチ */
     const struct acpi_device_id *acpi_match_table;
 
-    int (*probe)(struct device *dev);      /* bind driver to device */
+    int (*probe)(struct device *dev);      /* ドライバをデバイスにbindする */
     void (*sync_state)(struct device *dev);
     int (*remove)(struct device *dev);     /* unbind */
     void (*shutdown)(struct device *dev);
@@ -168,28 +168,28 @@ struct device_driver {
 };
 ```
 
-## The match and probe flow {#the-match-and-probe-flow}
+## matchとprobeの流れ {#the-match-and-probe-flow}
 
-When a device is registered (or a driver is registered), the bus iterates all drivers (or devices) calling `bus->match()`. On a match, `driver_probe_device()` is called:
+デバイスが登録される（あるいはドライバが登録される）と、バスはすべてのドライバ（あるいはデバイス）を走査して`bus->match()`を呼ぶ。マッチすると`driver_probe_device()`が呼ばれる。
 
 ```c
-/* drivers/base/dd.c: simplified */
+/* drivers/base/dd.c: 簡略化 */
 static int driver_probe_device(struct device_driver *drv, struct device *dev)
 {
     int ret;
 
-    /* Check if already bound */
+    /* すでにbindされているか確認する */
     if (dev->driver)
         return 0;
 
-    /* bus-level permission check */
+    /* バスレベルの許可チェック */
     if (drv->bus->match && !drv->bus->match(dev, drv))
         return 0;
 
-    /* pin device and driver */
+    /* デバイスとドライバを結びつける */
     dev->driver = drv;
 
-    /* call bus probe (which usually calls driver->probe) */
+    /* バスのprobeを呼ぶ（通常はそれがdriver->probeを呼ぶ） */
     if (dev->bus->probe)
         ret = dev->bus->probe(dev);
     else if (drv->probe)
@@ -200,18 +200,18 @@ static int driver_probe_device(struct device_driver *drv, struct device *dev)
         return ret;
     }
 
-    /* success: device is now bound */
+    /* 成功: デバイスはbindされた */
     driver_bound(dev);
     return 0;
 }
 ```
 
-## sysfs attributes {#sysfs-attributes}
+## sysfs属性 {#sysfs-attributes}
 
-Drivers and devices expose attributes (files) in sysfs:
+ドライバとデバイスは、sysfsに属性（ファイル）を公開する。
 
 ```c
-/* Simple device attribute */
+/* 単純なデバイス属性 */
 static ssize_t temperature_show(struct device *dev,
                                  struct device_attribute *attr,
                                  char *buf)
@@ -233,38 +233,38 @@ static ssize_t setpoint_store(struct device *dev,
     return count;
 }
 
-/* DEVICE_ATTR_RO: read-only, name = "temperature" */
+/* DEVICE_ATTR_RO: 読み出し専用、名前 = "temperature" */
 static DEVICE_ATTR_RO(temperature);
 
-/* DEVICE_ATTR_WO: write-only */
-/* DEVICE_ATTR_RW: read-write */
+/* DEVICE_ATTR_WO: 書き込み専用 */
+/* DEVICE_ATTR_RW: 読み書き可能 */
 static DEVICE_ATTR_RW(setpoint);
 
-/* Group them */
+/* それらをグループにまとめる */
 static struct attribute *mydev_attrs[] = {
     &dev_attr_temperature.attr,
     &dev_attr_setpoint.attr,
     NULL,
 };
-ATTRIBUTE_GROUPS(mydev);  /* creates mydev_groups[] */
+ATTRIBUTE_GROUPS(mydev);  /* mydev_groups[]を作成する */
 
-/* In driver probe: */
+/* ドライバのprobe内で: */
 device_add_groups(dev, mydev_groups);
 ```
 
 ```bash
-# Result in sysfs
+# sysfsでの結果
 cat /sys/bus/platform/devices/mydev.0/temperature
 # 45
 echo 50 > /sys/bus/platform/devices/mydev.0/setpoint
 ```
 
-## uevent: hotplug notification {#uevent-hotplug-notification}
+## uevent: ホットプラグ通知 {#uevent-hotplug-notification}
 
-When devices are added/removed, the kernel sends uevents to userspace (received by `udevd`/`systemd-udevd`):
+デバイスが追加/削除されると、カーネルはユーザー空間にueventを送る（`udevd`/`systemd-udevd`が受け取る）。
 
 ```bash
-# Watch uevents live
+# ueventをリアルタイムで監視する
 udevadm monitor --kernel --udev
 
 # KERNEL: add@/devices/pci0000:00/0000:00:14.0/usb1/1-1
@@ -273,52 +273,52 @@ udevadm monitor --kernel --udev
 # SUBSYSTEM=usb
 # ...
 
-# Rule to rename a network interface
+# ネットワークインターフェースの名前を変更するルール
 # /etc/udev/rules.d/70-persistent-net.rules:
 # SUBSYSTEM=="net", ACTION=="add", ATTR{address}=="aa:bb:cc:dd:ee:ff", NAME="eth0"
 ```
 
-The kernel's `kobject_uevent()` sends netlink messages; udevd receives them and runs rules.
+カーネルの`kobject_uevent()`はnetlinkメッセージを送る。udevdはそれを受け取ってルールを実行する。
 
-## Power management: dev_pm_ops {#power-management-devpmops}
+## 電源管理: dev_pm_ops {#power-management-devpmops}
 
 ```c
 static const struct dev_pm_ops my_pm_ops = {
-    .suspend  = my_suspend,   /* save state, reduce power */
-    .resume   = my_resume,    /* restore state */
-    .freeze   = my_freeze,    /* for hibernation snapshot */
+    .suspend  = my_suspend,   /* 状態を保存し、電力を下げる */
+    .resume   = my_resume,    /* 状態を復元する */
+    .freeze   = my_freeze,    /* ハイバネーションのスナップショット用 */
     .thaw     = my_thaw,
     .restore  = my_restore,
-    /* Runtime PM: */
-    .runtime_suspend = my_runtime_suspend,  /* auto-suspend when idle */
+    /* ランタイムPM: */
+    .runtime_suspend = my_runtime_suspend,  /* アイドル時に自動サスペンド */
     .runtime_resume  = my_runtime_resume,
 };
 
-/* In driver: */
+/* ドライバ内で: */
 static int my_suspend(struct device *dev)
 {
     struct my_device *mydev = dev_get_drvdata(dev);
-    /* save registers, turn off clocks, etc. */
+    /* レジスタを保存し、クロックを止めるなど */
     return 0;
 }
 ```
 
 ```c
-/* Enable runtime PM for a device */
+/* デバイスのランタイムPMを有効化する */
 pm_runtime_enable(dev);
 pm_runtime_set_active(dev);
 pm_runtime_use_autosuspend(dev);
-pm_runtime_set_autosuspend_delay(dev, 1000);  /* 1 second idle → suspend */
+pm_runtime_set_autosuspend_delay(dev, 1000);  /* 1秒アイドル → サスペンド */
 
-/* In device operations: */
-pm_runtime_get_sync(dev);   /* increment usage count, resume if suspended */
-/* ... use device ... */
-pm_runtime_put_autosuspend(dev);  /* decrement, autosuspend timer starts */
+/* デバイス操作の中で: */
+pm_runtime_get_sync(dev);   /* 使用カウントを増やし、サスペンド中ならresumeする */
+/* ... デバイスを使う ... */
+pm_runtime_put_autosuspend(dev);  /* 減らし、自動サスペンドのタイマーが始まる */
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Platform Drivers](platform-driver.md) — The most common embedded driver pattern
-- [Character and Misc Devices](chardev.md) — Exposing devices to userspace via /dev
-- `Documentation/driver-api/driver-model/` — kernel driver model documentation
-- `drivers/base/` — core device model implementation
+- [プラットフォームドライバ](platform-driver.md) — 最も一般的な組み込みドライバのパターン
+- [キャラクタデバイスとmiscデバイス](chardev.md) — /dev経由でデバイスをユーザー空間に公開する
+- `Documentation/driver-api/driver-model/` — カーネルのドライバモデルのドキュメント
+- `drivers/base/` — デバイスモデルのコア実装

@@ -1,15 +1,15 @@
-# Device Drivers {#device-drivers}
+# デバイスドライバ {#device-drivers}
 
-> How hardware becomes accessible to userspace
+> ハードウェアがどのようにしてユーザー空間から使えるようになるか
 
-## Overview {#overview}
+## 概要 {#overview}
 
-Device drivers bridge hardware and the rest of the kernel. The Linux driver model organizes this with:
+デバイスドライバは、ハードウェアとカーネルの他の部分とを橋渡しする。Linuxのドライバモデルは、これを次の要素で構成する。
 
-- **Devices** (`struct device`) — represent hardware or logical devices
-- **Buses** (`struct bus_type`) — communication channel (PCI, USB, I2C, platform)
-- **Drivers** (`struct device_driver`) — code that handles a specific device
-- **Classes** (`struct class`) — groups of devices with similar behavior (e.g., "input", "net")
+- **デバイス**（`struct device`）— ハードウェアまたは論理デバイスを表す
+- **バス**（`struct bus_type`）— 通信チャネル（PCI、USB、I2C、platform）
+- **ドライバ**（`struct device_driver`）— 特定のデバイスを扱うコード
+- **クラス**（`struct class`）— 似た振る舞いをするデバイスのグループ（例: "input"、"net"）
 
 ```
 sysfs (/sys/bus/pci/devices/0000:00:1f.2)
@@ -28,37 +28,37 @@ struct device_driver ←── struct pci_driver (driver-specific extension)
     Hardware
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Linux Device Model](device-model.md) | struct device, bus, driver, kobject, sysfs |
-| [Platform Drivers](platform-driver.md) | Platform bus, probe/remove, devm_, device tree |
-| [Character and Misc Devices](chardev.md) | cdev, file_operations, ioctl, mmap from driver side |
-| [PCI Drivers](pci-driver.md) | Enumeration, config space, BARs, MSI setup |
-| [I2C and SPI](i2c-spi.md) | Slow-bus drivers, regmap, device addressing |
-| [War Stories](war-stories.md) | Real driver-core bugs and regressions: probe-order races, sysfs deadlocks, the fw_devlink default rollout |
-| [Device Tree](device-tree.md) | Hardware description for non-discoverable buses |
+| [Linuxデバイスモデル](device-model.md) | struct device、バス、ドライバ、kobject、sysfs |
+| [プラットフォームドライバ](platform-driver.md) | platformバス、probe/remove、devm_、Device Tree |
+| [キャラクタデバイスとmiscデバイス](chardev.md) | cdev、file_operations、ioctl、ドライバ側から見たmmap |
+| [PCIドライバ](pci-driver.md) | 列挙、コンフィギュレーション空間、BAR、MSIの設定 |
+| [I2CとSPI](i2c-spi.md) | 低速バスのドライバ、regmap、デバイスのアドレッシング |
+| [事件簿](war-stories.md) | ドライバコアで実際に起きたバグとリグレッション: probe順序の競合、sysfsのデッドロック、fw_devlinkのデフォルト化 |
+| [Device Tree](device-tree.md) | 自動検出できないバスのためのハードウェア記述 |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# List all devices and their drivers
+# すべてのデバイスとそのドライバを一覧表示
 ls /sys/bus/pci/devices/
 ls /sys/bus/platform/devices/
 
-# See driver for a device
+# デバイスのドライバを確認
 cat /sys/bus/pci/devices/0000:00:1f.2/driver/module/name
 
-# Load a kernel module
+# カーネルモジュールをロード
 modprobe e1000e
 lsmod | grep e1000
 
-# Bind/unbind a driver manually
+# ドライバを手動でbind/unbind
 echo "0000:00:1f.2" > /sys/bus/pci/drivers/ahci/unbind
 echo "0000:00:1f.2" > /sys/bus/pci/drivers/ahci/bind
 
-# Character device major/minor
+# キャラクタデバイスのmajor/minor
 ls -la /dev/null /dev/random
 # crw-rw-rw- 1 root root 1, 3 ... /dev/null  ← major=1, minor=3
 ```

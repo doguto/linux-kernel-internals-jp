@@ -1,10 +1,10 @@
-# Character and Misc Devices {#character-and-misc-devices}
+# キャラクタデバイスとmiscデバイス {#character-and-misc-devices}
 
-> Exposing driver functionality to userspace via /dev
+> /dev経由でドライバの機能をユーザー空間に公開する
 
-## Character devices {#character-devices}
+## キャラクタデバイス {#character-devices}
 
-A character device (cdev) is a special file in `/dev` that provides a byte-stream interface to a driver. Unlike block devices, character devices do not buffer data in the page cache — I/O goes directly to the driver. The two-step `alloc_chrdev_region` / `cdev_add` interface was introduced by Al Viro just before Linux 2.6.0 to support an expanded `dev_t` type; the old `register_chrdev()` remains as a compatibility shim [(LWN)](https://lwn.net/Articles/195805/).
+キャラクタデバイス（cdev）は、ドライバへのバイトストリームのインターフェースを提供する`/dev`内の特殊ファイルである。ブロックデバイスとは異なり、キャラクタデバイスはデータをページキャッシュにバッファリングしない。I/Oは直接ドライバに届く。2段階の`alloc_chrdev_region` / `cdev_add`インターフェースは、拡張された`dev_t`型をサポートするために、Linux 2.6.0の直前にAl Viroによって導入された。古い`register_chrdev()`は互換性のための薄いラッパーとして残っている[（LWN）](https://lwn.net/Articles/195805/)。
 
 ```
 /dev/mydevice (major=240, minor=0)
@@ -21,21 +21,21 @@ A character device (cdev) is a special file in `/dev` that provides a byte-strea
    driver code
 ```
 
-## Allocating major/minor numbers {#allocating-majorminor-numbers}
+## major/minor番号の割り当て {#allocating-majorminor-numbers}
 
 ```c
-/* Static allocation (reserved in Documentation/admin-guide/devices.txt) */
+/* 静的な割り当て（Documentation/admin-guide/devices.txtで予約） */
 int ret = register_chrdev_region(MKDEV(240, 0), 1, "mydev");
 
-/* Dynamic allocation (preferred): kernel assigns major */
+/* 動的な割り当て（推奨）: カーネルがmajorを割り当てる */
 dev_t devt;
-int ret = alloc_chrdev_region(&devt, 0, /* first minor */
-                               1,        /* count */
+int ret = alloc_chrdev_region(&devt, 0, /* 最初のminor */
+                               1,        /* 個数 */
                                "mydev");
 int major = MAJOR(devt);
 int minor = MINOR(devt);
 
-/* Release on exit */
+/* 終了時に解放する */
 unregister_chrdev_region(devt, 1);
 ```
 
@@ -50,7 +50,7 @@ struct cdev {
     const struct file_operations *ops;
     struct list_head        list;
     dev_t                   dev;         /* major:minor */
-    unsigned int            count;       /* number of minors */
+    unsigned int            count;       /* minorの個数 */
 };
 ```
 
@@ -63,7 +63,7 @@ struct file_operations {
     loff_t (*llseek)(struct file *, loff_t, int);
     ssize_t (*read)(struct file *, char __user *, size_t, loff_t *);
     ssize_t (*write)(struct file *, const char __user *, size_t, loff_t *);
-    ssize_t (*read_iter)(struct kiocb *, struct iov_iter *);  /* preferred */
+    ssize_t (*read_iter)(struct kiocb *, struct iov_iter *);  /* 推奨 */
     ssize_t (*write_iter)(struct kiocb *, struct iov_iter *);
     int (*iopoll)(struct kiocb *, struct io_comp_batch *, unsigned int flags);
     int (*iterate_shared)(struct file *, struct dir_context *);
@@ -80,7 +80,7 @@ struct file_operations {
 };
 ```
 
-## A complete minimal character driver {#a-complete-minimal-character-driver}
+## 完全な最小限のキャラクタドライバ {#a-complete-minimal-character-driver}
 
 ```c
 /* drivers/mychardev/mychardev.c */
@@ -105,7 +105,7 @@ static dev_t devt;
 
 static int mydev_open(struct inode *inode, struct file *filp)
 {
-    /* Store per-file state in filp->private_data if needed */
+    /* 必要ならファイルごとの状態をfilp->private_dataに保存する */
     struct mychardev *dev = container_of(inode->i_cdev,
                                           struct mychardev, cdev);
     filp->private_data = dev;
@@ -175,23 +175,23 @@ static const struct file_operations mydev_fops = {
     .read    = mydev_read,
     .write   = mydev_write,
     .release = mydev_release,
-    .llseek  = default_llseek,  /* uses f_pos */
+    .llseek  = default_llseek,  /* f_posを使う */
 };
 
 static int __init mydev_init(void)
 {
     int ret;
 
-    /* Allocate device number */
+    /* デバイス番号を割り当てる */
     ret = alloc_chrdev_region(&devt, 0, 1, DEVICE_NAME);
     if (ret)
         return ret;
 
-    /* Allocate and initialize cdev */
+    /* cdevを割り当てて初期化する */
     cdev_init(&mydev.cdev, &mydev_fops);
     mydev.cdev.owner = THIS_MODULE;
 
-    /* Allocate buffer */
+    /* バッファを割り当てる */
     mydev.buf = kzalloc(BUF_SIZE, GFP_KERNEL);
     if (!mydev.buf) {
         unregister_chrdev_region(devt, 1);
@@ -200,7 +200,7 @@ static int __init mydev_init(void)
 
     mutex_init(&mydev.lock);
 
-    /* Register cdev — after this, open() can be called */
+    /* cdevを登録する — これ以降open()が呼ばれうる */
     ret = cdev_add(&mydev.cdev, devt, 1);
     if (ret) {
         kfree(mydev.buf);
@@ -225,23 +225,23 @@ MODULE_LICENSE("GPL");
 ```
 
 ```bash
-# After loading the module, read the major number from /proc/devices:
-grep mychardev /proc/devices   # → "240 mychardev" (dynamic major)
+# モジュールをロードした後、/proc/devicesからmajor番号を読む:
+grep mychardev /proc/devices   # → "240 mychardev"（動的なmajor）
 mknod /dev/mychardev c 240 0
-# Or use class_create/device_create in the driver for udev auto-creation
+# あるいはドライバ内でclass_create/device_createを使い、udevに自動作成させる
 echo "hello" > /dev/mychardev
 cat /dev/mychardev  # → hello
 ```
 
-## misc_register: the easy path {#misc_register-the-easy-path}
+## misc_register: 簡単な方法 {#misc_register-the-easy-path}
 
-For simple devices that don't need multiple minors, `misc_register` handles major/minor allocation and class creation automatically:
+複数のminorを必要としない単純なデバイスでは、`misc_register`がmajor/minorの割り当てとクラスの作成を自動的に行う。
 
 ```c
 #include <linux/miscdevice.h>
 
 static struct miscdevice mymisc = {
-    .minor = MISC_DYNAMIC_MINOR,   /* kernel assigns minor */
+    .minor = MISC_DYNAMIC_MINOR,   /* カーネルがminorを割り当てる */
     .name  = "mymisc",             /* /dev/mymisc */
     .fops  = &mydev_fops,
 };
@@ -249,7 +249,7 @@ static struct miscdevice mymisc = {
 static int __init mymisc_init(void)
 {
     return misc_register(&mymisc);
-    /* /dev/mymisc created automatically via udev */
+    /* /dev/mymiscはudev経由で自動的に作成される */
 }
 
 static void __exit mymisc_exit(void)
@@ -258,14 +258,14 @@ static void __exit mymisc_exit(void)
 }
 ```
 
-All misc devices share major number 10 — a value reserved in the kernel's official device list since at least Linux 1.3. They appear under `/sys/class/misc/`.
+すべてのmiscデバイスはmajor番号10を共有する。これは少なくともLinux 1.3以降、カーネルの公式デバイスリストで予約されている値である。miscデバイスは`/sys/class/misc/`の下に現れる。
 
-## ioctl: control operations {#ioctl-control-operations}
+## ioctl: 制御操作 {#ioctl-control-operations}
 
-ioctl lets userspace send control commands to the driver:
+ioctlを使うと、ユーザー空間からドライバに制御コマンドを送ることができる。
 
 ```c
-/* In driver: */
+/* ドライバ内: */
 static long mydev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
     struct mydev_query query;
@@ -276,7 +276,7 @@ static long mydev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return 0;
 
     case MYDEV_IOCTL_QUERY:
-        /* Copy struct to/from userspace */
+        /* ユーザー空間との間で構造体をコピーする */
         if (copy_from_user(&query, (void __user *)arg, sizeof(query)))
             return -EFAULT;
         query.result = do_query(query.param);
@@ -285,21 +285,21 @@ static long mydev_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
         return 0;
 
     default:
-        return -ENOTTY;  /* unknown ioctl */
+        return -ENOTTY;  /* 未知のioctl */
     }
 }
 ```
 
-ioctl numbers use a structured format to avoid conflicts:
+ioctl番号は、衝突を避けるために構造化された形式を使う。
 
 ```c
 /* include/uapi/linux/mydev.h */
 #include <linux/ioctl.h>
 
-/* _IO(type, nr)          — no argument */
-/* _IOR(type, nr, dtype)  — read from kernel */
-/* _IOW(type, nr, dtype)  — write to kernel */
-/* _IOWR(type, nr, dtype) — read+write */
+/* _IO(type, nr)          — 引数なし */
+/* _IOR(type, nr, dtype)  — カーネルから読み出す */
+/* _IOW(type, nr, dtype)  — カーネルへ書き込む */
+/* _IOWR(type, nr, dtype) — 読み出し+書き込み */
 
 #define MYDEV_MAGIC 'M'
 #define MYDEV_IOCTL_RESET  _IO(MYDEV_MAGIC, 0)
@@ -307,15 +307,15 @@ ioctl numbers use a structured format to avoid conflicts:
 ```
 
 ```c
-/* Userspace: */
+/* ユーザー空間: */
 int fd = open("/dev/mydev", O_RDWR);
 ioctl(fd, MYDEV_IOCTL_RESET);
 ioctl(fd, MYDEV_IOCTL_QUERY, &query);
 ```
 
-## mmap: mapping device memory to userspace {#mmap-mapping-device-memory-to-userspace}
+## mmap: デバイスメモリをユーザー空間にマップする {#mmap-mapping-device-memory-to-userspace}
 
-Drivers can let userspace map device memory or kernel buffers directly:
+ドライバは、デバイスメモリやカーネルバッファをユーザー空間から直接マップできるようにすることができる。
 
 ```c
 static int mydev_mmap(struct file *filp, struct vm_area_struct *vma)
@@ -326,7 +326,7 @@ static int mydev_mmap(struct file *filp, struct vm_area_struct *vma)
     if (size > BUF_SIZE)
         return -EINVAL;
 
-    /* Map kernel buffer to userspace */
+    /* カーネルバッファをユーザー空間にマップする */
     return remap_pfn_range(vma,
         vma->vm_start,
         virt_to_phys(dev->buf) >> PAGE_SHIFT,
@@ -334,13 +334,13 @@ static int mydev_mmap(struct file *filp, struct vm_area_struct *vma)
         vma->vm_page_prot);
 }
 
-/* For device I/O memory (e.g., PCI BAR): */
+/* デバイスのI/Oメモリ（例: PCI BAR）の場合: */
 static int mydev_mmap_io(struct file *filp, struct vm_area_struct *vma)
 {
     unsigned long phys = dev->bar_phys + (vma->vm_pgoff << PAGE_SHIFT);
     unsigned long size = vma->vm_end - vma->vm_start;
 
-    /* Mark as non-cacheable for device registers */
+    /* デバイスレジスタ用にキャッシュ不可としてマークする */
     vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
 
     return remap_pfn_range(vma, vma->vm_start, phys >> PAGE_SHIFT,
@@ -349,14 +349,14 @@ static int mydev_mmap_io(struct file *filp, struct vm_area_struct *vma)
 ```
 
 ```c
-/* Userspace: */
+/* ユーザー空間: */
 void *mapped = mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
-/* Access device memory directly: */
+/* デバイスメモリに直接アクセスする: */
 volatile uint32_t *reg = (volatile uint32_t *)mapped;
 uint32_t val = *reg;
 ```
 
-## poll/select support {#pollselect-support}
+## poll/selectのサポート {#pollselect-support}
 
 ```c
 static __poll_t mydev_poll(struct file *filp, poll_table *wait)
@@ -375,9 +375,9 @@ static __poll_t mydev_poll(struct file *filp, poll_table *wait)
 }
 ```
 
-## struct device integration {#struct-device-integration}
+## struct deviceとの統合 {#struct-device-integration}
 
-To get a proper `/sys/class/` entry and auto-create `/dev/`:
+適切な`/sys/class/`エントリを得て、`/dev/`を自動作成するには:
 
 ```c
 static struct class *mydev_class;
@@ -386,24 +386,24 @@ static int __init mydev_init(void)
 {
     /* ... alloc_chrdev_region, cdev_init, cdev_add ... */
 
-    /* Create /sys/class/mydev/ */
+    /* /sys/class/mydev/を作成する */
     mydev_class = class_create(THIS_MODULE, "mydev");
     if (IS_ERR(mydev_class))
         goto err_class;
 
-    /* Create /sys/class/mydev/mydev0/ and trigger udev → /dev/mydev0 */
+    /* /sys/class/mydev/mydev0/を作成し、udevをトリガーする → /dev/mydev0 */
     device_create(mydev_class, NULL, devt, NULL, "mydev%d", 0);
 
     return 0;
 
 err_class:
-    /* cleanup */
+    /* クリーンアップ */
 }
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Linux Device Model](device-model.md) — struct device, class, kobject
-- [Platform Drivers](platform-driver.md) — devm_ resource management
-- [VFS: File Operations](../vfs/file-ops.md) — How open/read/write reach the driver
+- [Linuxデバイスモデル](device-model.md) — struct device、class、kobject
+- [プラットフォームドライバ](platform-driver.md) — devm_によるリソース管理
+- [VFS: ファイル操作](../vfs/file-ops.md) — open/read/writeがどのようにドライバに届くか
 - `Documentation/driver-api/miscellaneous_devices.rst`

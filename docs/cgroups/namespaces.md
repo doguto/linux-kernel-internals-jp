@@ -1,36 +1,36 @@
-# Linux Namespaces {#linux-namespaces}
+# Linux の namespace {#linux-namespaces}
 
-> Isolating what processes can see
+> プロセスから見えるものを隔離する
 
-## The eight namespace types {#the-eight-namespace-types}
+## 8種類の namespace {#the-eight-namespace-types}
 
-| Namespace | Flag | Isolates | Kernel |
+| namespace | フラグ | 隔離するもの | カーネル |
 |-----------|------|----------|--------|
-| Mount | `CLONE_NEWNS` | Mount points, filesystem view | 2.4.19 (2002) |
-| UTS | `CLONE_NEWUTS` | Hostname, NIS domain name | 2.6.19 |
-| IPC | `CLONE_NEWIPC` | SysV IPC, POSIX message queues | 2.6.19 |
-| PID | `CLONE_NEWPID` | Process IDs | 2.6.24 [(LWN)](https://lwn.net/Articles/259217/) |
-| Network | `CLONE_NEWNET` | Network interfaces, routing, sockets | 2.6.24 |
-| User | `CLONE_NEWUSER` | User/group IDs | 3.9 (complete) [(LWN)](https://lwn.net/Articles/532593/) |
-| Cgroup | `CLONE_NEWCGROUP` | Cgroup root view | 4.6 |
-| Time | `CLONE_NEWTIME` | CLOCK_MONOTONIC, CLOCK_BOOTTIME offsets | 5.6 |
+| Mount | `CLONE_NEWNS` | マウントポイント、ファイルシステムのビュー | 2.4.19（2002年） |
+| UTS | `CLONE_NEWUTS` | ホスト名、NISドメイン名 | 2.6.19 |
+| IPC | `CLONE_NEWIPC` | SysV IPC、POSIXメッセージキュー | 2.6.19 |
+| PID | `CLONE_NEWPID` | プロセスID | 2.6.24 [(LWN)](https://lwn.net/Articles/259217/) |
+| Network | `CLONE_NEWNET` | ネットワークインターフェース、ルーティング、ソケット | 2.6.24 |
+| User | `CLONE_NEWUSER` | ユーザー/グループID | 3.9（完成） [(LWN)](https://lwn.net/Articles/532593/) |
+| Cgroup | `CLONE_NEWCGROUP` | cgroup ルートのビュー | 4.6 |
+| Time | `CLONE_NEWTIME` | CLOCK_MONOTONIC、CLOCK_BOOTTIME のオフセット | 5.6 |
 
-## Creating namespaces {#creating-namespaces}
+## namespace の作成 {#creating-namespaces}
 
-### clone() — create child in new namespace {#clone-create-child-in-new-namespace}
+### clone() — 新しい namespace の中に子を作成する {#clone-create-child-in-new-namespace}
 
 ```c
 #define _GNU_SOURCE
 #include <sched.h>
 #include <unistd.h>
 
-/* Stack for child */
+/* 子のためのスタック */
 static char child_stack[65536];
 
 static int child_fn(void *arg)
 {
-    /* Running in new namespace(s) */
-    printf("child PID: %d\n", getpid());  /* prints 1 in new PID ns */
+    /* 新しい namespace の中で実行中 */
+    printf("child PID: %d\n", getpid());  /* 新しい PID ns では 1 と表示される */
     return 0;
 }
 
@@ -45,48 +45,48 @@ int main(void)
 }
 ```
 
-### unshare() — current process enters new namespace {#unshare-current-process-enters-new-namespace}
+### unshare() — 現在のプロセスが新しい namespace に入る {#unshare-current-process-enters-new-namespace}
 
 ```c
-/* Detach from shared namespaces */
+/* 共有している namespace から切り離す */
 unshare(CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC);
 
-/* Equivalent shell command */
+/* 同等のシェルコマンド */
 /* unshare --mount --uts --ipc bash */
 ```
 
 ```bash
-# Shell: run bash in new namespaces
+# シェル: 新しい namespace の中で bash を実行する
 unshare --pid --mount --fork --mount-proc bash
-# Now in isolated PID+mount namespace, ps shows only this bash subtree
+# これで隔離された PID+mount namespace に入り、ps にはこの bash のサブツリーだけが表示される
 ```
 
-### setns() — join an existing namespace {#setns-join-an-existing-namespace}
+### setns() — 既存の namespace に参加する {#setns-join-an-existing-namespace}
 
 ```c
 #include <fcntl.h>
 #include <sched.h>
 
-/* Enter another process's network namespace */
+/* 別のプロセスの network namespace に入る */
 int nsfd = open("/proc/1234/ns/net", O_RDONLY);
 setns(nsfd, CLONE_NEWNET);
 close(nsfd);
-/* Now in pid 1234's network namespace */
+/* これで pid 1234 の network namespace の中にいる */
 ```
 
 ```bash
-# nsenter: enter namespaces of a running container
+# nsenter: 実行中のコンテナの namespace に入る
 nsenter --target <pid> --mount --pid --net -- bash
 ```
 
-## struct nsproxy: the task's namespace set {#struct-nsproxy-the-tasks-namespace-set}
+## struct nsproxy: タスクの namespace の集合 {#struct-nsproxy-the-tasks-namespace-set}
 
-Each task holds a reference to its namespace set:
+各タスクは、自身の namespace の集合への参照を保持する:
 
 ```c
 /* include/linux/nsproxy.h */
 struct nsproxy {
-    atomic_t          count;          /* reference count */
+    atomic_t          count;          /* 参照カウント */
     struct uts_namespace   *uts_ns;
     struct ipc_namespace   *ipc_ns;
     struct mnt_namespace   *mnt_ns;
@@ -97,15 +97,15 @@ struct nsproxy {
     struct cgroup_namespace *cgroup_ns;
 };
 
-/* In struct task_struct: */
+/* struct task_struct の中: */
 struct nsproxy *nsproxy;
 ```
 
-Processes that share all namespaces point to the same `nsproxy` (refcount). When any namespace diverges, a new nsproxy is allocated.
+すべての namespace を共有するプロセスは、同じ `nsproxy` を指す（参照カウント）。いずれかの namespace が分岐すると、新しい nsproxy が割り当てられる。
 
 ## PID namespace {#pid-namespace}
 
-PID namespaces were introduced in Linux 2.6.24 [(LWN)](https://lwn.net/Articles/259217/). Each PID namespace has its own numbering starting from 1. A process has different PIDs in different namespaces:
+PID namespace は Linux 2.6.24 で導入された [(LWN)](https://lwn.net/Articles/259217/)。各 PID namespace は1から始まる独自の番号付けを持つ。1つのプロセスは、namespace ごとに異なる PID を持つ:
 
 ```
 Host PID namespace:        pid=1234 (systemd), pid=5678 (container init)
@@ -115,105 +115,105 @@ Container PID namespace:   pid=1 (container init), pid=100 (nginx)
 ```c
 /* include/linux/pid_namespace.h */
 struct pid_namespace {
-    struct idr      idr;            /* pid → task mapping */
+    struct idr      idr;            /* pid → タスクの対応付け */
     struct rcu_head rcu;
-    unsigned int    level;          /* nesting depth (0=init_pid_ns) */
+    unsigned int    level;          /* ネストの深さ（0=init_pid_ns） */
     struct pid_namespace *parent;
     struct user_namespace *user_ns;
     struct ucounts *ucounts;
     struct ns_common ns;
 
-    struct task_struct *child_reaper; /* PID 1 in this namespace */
+    struct task_struct *child_reaper; /* この namespace の PID 1 */
     struct kmem_cache *pid_cachep;
     unsigned int    nr_hashed;
 };
 ```
 
-PID 1 in a PID namespace is the init — if it exits, all processes in the namespace are killed.
+PID namespace における PID 1 は init である。これが終了すると、その namespace 内のすべてのプロセスが kill される。
 
 ```bash
-# See PID translations
+# PID の対応を確認する
 cat /proc/1234/status | grep NSpid
-# NSpid:  5678   1    ← host PID 5678 = PID 1 in container's namespace
+# NSpid:  5678   1    ← ホストの PID 5678 = コンテナの namespace における PID 1
 ```
 
-## Mount namespace {#mount-namespace}
+## mount namespace {#mount-namespace}
 
-Mount namespaces (Linux 2.4.19, 2002) were the first namespace type added to the kernel — which is why the flag is the generic `CLONE_NEWNS` rather than something like `CLONE_NEWMNT`. Each mount namespace has its own copy of the mount tree. Changes in one don't affect others.
+mount namespace（Linux 2.4.19、2002年）は、カーネルに最初に追加された namespace の種類である。そのため、フラグは `CLONE_NEWMNT` のような名前ではなく、汎用的な `CLONE_NEWNS` になっている。各 mount namespace はマウントツリーの独自のコピーを持つ。ある namespace での変更は他に影響しない。
 
 ```c
 /* fs/namespace.c */
 struct mnt_namespace {
     struct ns_common    ns;
-    struct mount       *root;           /* root mount */
-    struct list_head    list;           /* all mounts */
+    struct mount       *root;           /* ルートマウント */
+    struct list_head    list;           /* すべてのマウント */
     struct user_namespace *user_ns;
-    u64                 seq;            /* event sequence number */
+    u64                 seq;            /* イベントのシーケンス番号 */
     wait_queue_head_t   poll;
     u64                 event;
 };
 ```
 
 ```bash
-# Create isolated mount namespace and mount procfs for new PID ns
+# 隔離された mount namespace を作成し、新しい PID ns 用に procfs をマウントする
 unshare --mount --pid --fork --mount-proc bash
 
-# The bind mount makes the new /proc show PID namespace contents
-# Host sees the old /proc
+# このバインドマウントにより、新しい /proc は PID namespace の内容を表示する
+# ホストからは古い /proc が見える
 ```
 
-### Mount propagation types {#mount-propagation-types}
+### マウント伝播の種類 {#mount-propagation-types}
 
 ```bash
-# Shared: mounts propagate to peers
+# shared: マウントがピアに伝播する
 mount --make-shared /mnt
 
-# Private: no propagation
+# private: 伝播しない
 mount --make-private /mnt
 
-# Slave: receive propagation from master, don't send back
+# slave: マスターからの伝播を受け取るが、送り返さない
 mount --make-slave /mnt
 
-# Unbindable: cannot be bind-mounted
+# unbindable: バインドマウントできない
 mount --make-unbindable /mnt
 ```
 
-## Network namespace {#network-namespace}
+## network namespace {#network-namespace}
 
-Each network namespace has its own:
+各 network namespace は、次のものを独自に持つ:
 
-- Network interfaces (except loopback is separate per-ns)
-- IP routing table
-- Netfilter rules (iptables)
-- Socket table
-- `/proc/net/` view
+- ネットワークインターフェース（ただしループバックは namespace ごとに別々）
+- IPルーティングテーブル
+- Netfilter のルール（iptables）
+- ソケットテーブル
+- `/proc/net/` のビュー
 
 ```c
 /* include/net/net_namespace.h */
 struct net {
-    /* First cache line: frequently accessed fields */
-    refcount_t          passive;      /* passive reference count */
+    /* 最初のキャッシュライン: 頻繁にアクセスされるフィールド */
+    refcount_t          passive;      /* パッシブ参照カウント */
     spinlock_t          rules_mod_lock;
 
     unsigned int        dev_unreg_count;
     unsigned int        dev_base_seq;
 
-    struct list_head    list;         /* list of all net namespaces */
+    struct list_head    list;         /* すべての net namespace のリスト */
     struct list_head    exit_list;
     struct llist_node   cleanup_list;
 
-    struct user_namespace *user_ns;   /* owning user namespace */
+    struct user_namespace *user_ns;   /* 所有者の user namespace */
     struct ucounts      *ucounts;
     struct idr          netns_ids;
 
     struct ns_common    ns;
     struct ref_tracker_dir  refcnt_tracker;
 
-    struct list_head    dev_base_head; /* list of net devices */
+    struct list_head    dev_base_head; /* ネットワークデバイスのリスト */
     struct proc_dir_entry *proc_net;
     struct proc_dir_entry *proc_net_stat;
 
-    /* Protocol-specific namespaced state: */
+    /* プロトコル固有の namespace 化された状態: */
     struct netns_ipv4   ipv4;
     struct netns_ipv6   ipv6;
     struct netns_unix   unx;
@@ -224,13 +224,13 @@ struct net {
 ```
 
 ```bash
-# Create a network namespace
+# network namespace を作成する
 ip netns add myns
 
-# Run a command in the namespace
+# namespace の中でコマンドを実行する
 ip netns exec myns ip link show
 
-# Move a veth pair into a namespace (typical container networking)
+# veth ペアを namespace に移す（典型的なコンテナのネットワーク構成）
 ip link add veth0 type veth peer name veth1
 ip link set veth1 netns myns
 ip addr add 10.0.0.1/24 dev veth0
@@ -238,19 +238,19 @@ ip netns exec myns ip addr add 10.0.0.2/24 dev veth1
 ip link set veth0 up
 ip netns exec myns ip link set veth1 up
 
-# List network namespaces
+# network namespace を一覧表示する
 ip netns list
 ls /var/run/netns/
 ```
 
-## User namespace {#user-namespace}
+## user namespace {#user-namespace}
 
-User namespaces were made functionally complete and usable by unprivileged users in Linux 3.9 by Eric W. Biederman [(commit)](https://git.kernel.org/linus/94f2f14234178f118545a0be60a6371ddeb229b7) [(LWN)](https://lwn.net/Articles/532593/). User namespaces map UIDs/GIDs between inside and outside:
+user namespace は、Linux 3.9 で Eric W. Biederman によって機能的に完成し、非特権ユーザーから使えるようになった [(commit)](https://git.kernel.org/linus/94f2f14234178f118545a0be60a6371ddeb229b7) [(LWN)](https://lwn.net/Articles/532593/)。user namespace は内側と外側の間で UID/GID をマップする:
 
 ```c
 /* kernel/user_namespace.c */
 struct user_namespace {
-    struct uid_gid_map  uid_map;        /* uid mapping rules */
+    struct uid_gid_map  uid_map;        /* uid のマッピング規則 */
     struct uid_gid_map  gid_map;
     struct uid_gid_map  projid_map;
     struct ucounts     *ucounts;
@@ -266,7 +266,7 @@ struct user_namespace {
 };
 
 struct uid_gid_map {
-    u32                 nr_extents;     /* number of mapping ranges */
+    u32                 nr_extents;     /* マッピング範囲の数 */
     union {
         struct uid_gid_extent extent[UID_GID_MAP_MAX_BASE_EXTENTS];
         struct {
@@ -278,66 +278,66 @@ struct uid_gid_map {
 ```
 
 ```bash
-# Create user namespace as unprivileged user
+# 非特権ユーザーとして user namespace を作成する
 unshare --user --map-root-user bash
-# Now: "root" inside = uid 1000 outside
+# これで: 内側の "root" = 外側の uid 1000
 
-# Inspect the UID mapping
+# UID マッピングを確認する
 cat /proc/self/uid_map
-# 0       1000          1   ← inside_start outside_start count
-# UID 0 inside = UID 1000 outside, 1 entry
+# 0       1000          1   ← 内側の開始 外側の開始 個数
+# 内側の UID 0 = 外側の UID 1000、1 エントリ
 
-# Multi-range mapping (requires privilege)
+# 複数範囲のマッピング（特権が必要）
 echo "0 1000 10" > /proc/<pid>/uid_map
-# UIDs 0-9 inside map to UIDs 1000-1009 outside
+# 内側の UID 0-9 が外側の UID 1000-1009 にマップされる
 ```
 
-The key property: a process can be UID 0 (root) inside a user namespace but have no privilege outside it. This enables rootless containers.
+重要な性質は、プロセスが user namespace の中では UID 0（root）でありながら、その外側では何の特権も持たない、という点である。これにより rootless コンテナが可能になる。
 
-### Capability scope {#capability-scope}
+### ケーパビリティの範囲 {#capability-scope}
 
-Capabilities in a user namespace only grant privilege over resources owned by that namespace and its descendants. Root in a user namespace cannot:
+user namespace 内のケーパビリティは、その namespace とその子孫が所有するリソースに対してのみ特権を与える。user namespace 内の root は次のことができない:
 
-- Load kernel modules
-- Modify kernel parameters outside the namespace
-- Read files owned by other users on the host
+- カーネルモジュールのロード
+- namespace 外のカーネルパラメータの変更
+- ホスト上の他のユーザーが所有するファイルの読み取り
 
 ## UTS namespace {#uts-namespace}
 
 ```bash
-# Isolate hostname
+# ホスト名を隔離する
 unshare --uts bash
 hostname container1
-# Host's hostname is unchanged
+# ホストのホスト名は変わらない
 ```
 
 ```c
 struct uts_namespace {
-    struct new_utsname name;    /* contains nodename (hostname) */
+    struct new_utsname name;    /* nodename（ホスト名）を含む */
     struct user_namespace *user_ns;
     struct ucounts *ucounts;
     struct ns_common ns;
 };
 ```
 
-## Namespace file descriptors {#namespace-file-descriptors}
+## namespace のファイルディスクリプタ {#namespace-file-descriptors}
 
-Namespaces are persistent as long as:
-1. A process is in them, OR
-2. They have a file descriptor open, OR
-3. They have a bind mount at `/proc/<pid>/ns/<type>` or `/var/run/netns/`
+namespace は、次のいずれかが成り立つ限り存続する:
+1. プロセスがその中にいる、または
+2. ファイルディスクリプタが開かれている、または
+3. `/proc/<pid>/ns/<type>` や `/var/run/netns/` へのバインドマウントがある
 
 ```bash
-# Persist a network namespace across process death
+# プロセスが終了しても network namespace を存続させる
 touch /var/run/netns/myns
 mount --bind /proc/<pid>/ns/net /var/run/netns/myns
-# Now myns persists even after the creating process exits
+# これで、作成したプロセスが終了した後も myns は存続する
 ```
 
-## Observing namespaces {#observing-namespaces}
+## namespace の観察 {#observing-namespaces}
 
 ```bash
-# See namespace IDs for all processes (matching = shared)
+# 全プロセスの namespace ID を確認する（一致 = 共有）
 lsns
 # NS TYPE   NPROCS   PID USER       COMMAND
 # 4026531835 cgroup    102     1 root       /sbin/init
@@ -345,19 +345,19 @@ lsns
 # 4026531992 net        98     1 root       /sbin/init
 # 4026532156 mnt         1  1234 user       bash
 
-# See which namespaces a container uses
+# コンテナが使っている namespace を確認する
 lsns --task <container_pid>
 
-# Inspect /proc/self/ns/ symlinks
+# /proc/self/ns/ のシンボリックリンクを調べる
 ls -la /proc/self/ns/
 
-# Find all processes in the same network namespace
+# 同じ network namespace にいるすべてのプロセスを見つける
 lsns -t net
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Container Isolation](container-isolation.md) — How namespaces and cgroups combine
-- [Cgroup v2 Architecture](cgroup-v2.md) — Resource control complement to isolation
-- `man 7 namespaces` — kernel documentation for all namespace types
-- `man 2 clone`, `man 2 unshare`, `man 2 setns`
+- [コンテナの隔離](container-isolation.md) — namespace と cgroup の組み合わせ方
+- [cgroup v2 のアーキテクチャ](cgroup-v2.md) — 隔離を補完するリソース制御
+- `man 7 namespaces` — 全種類の namespace についてのカーネルドキュメント
+- `man 2 clone`、`man 2 unshare`、`man 2 setns`

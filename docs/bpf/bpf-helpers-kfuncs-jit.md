@@ -1,27 +1,27 @@
-# Helpers, kfuncs, and the JIT {#helpers-kfuncs-and-the-jit}
+# ヘルパー、kfunc、JIT {#helpers-kfuncs-and-the-jit}
 
-> How a BPF program calls into the kernel, and how it actually runs once loaded
+> BPFプログラムはどのようにカーネルを呼び出し、ロードされた後に実際にどう実行されるのか
 
-[Architecture and Program Types](bpf-overview.md) covers helpers as a flat list of callable functions. This page goes one level deeper: the actual calling-convention mechanics behind that list, the newer kfunc mechanism that grew up alongside it, and how a verified program turns into the code the CPU actually executes.
+[アーキテクチャとプログラムタイプ](bpf-overview.md)では、ヘルパーを呼び出し可能な関数の平坦なリストとして扱った。このページではもう一段深く掘り下げる。そのリストの背後にある実際の呼び出し規約の仕組み、それと並行して成長してきたより新しいkfuncの仕組み、そして検証済みのプログラムがどのようにしてCPUが実際に実行するコードになるのかを扱う。
 
-## Helpers: a fixed, numbered ABI {#helpers-a-fixed-numbered-abi}
+## ヘルパー: 固定された、番号付きのABI {#helpers-a-fixed-numbered-abi}
 
-A BPF program can't call an arbitrary kernel symbol — the compiler has no way to link against kernel code, and the verifier has no way to reason about arbitrary function bodies. Instead, the kernel exposes a fixed set of helper functions, each identified by a stable number baked into the instruction stream at compile time:
+BPFプログラムは任意のカーネルシンボルを呼び出せない — コンパイラにはカーネルコードに対してリンクする手段がなく、Verifierには任意の関数本体について推論する手段がない。その代わりに、カーネルは固定されたヘルパー関数の集合を公開しており、各ヘルパーはコンパイル時に命令ストリームに埋め込まれる安定した番号で識別される。
 
 ```c
-/* include/uapi/linux/bpf.h — the helper ID list is built from a single
- * macro invoked once per helper, e.g.: */
+/* include/uapi/linux/bpf.h — ヘルパーIDのリストは、ヘルパーごとに
+ * 1回ずつ呼び出される単一のマクロから組み立てられる。例: */
 FN(map_lookup_elem, 1, ##ctx)
 FN(map_update_elem, 2, ##ctx)
 FN(map_delete_elem, 3, ##ctx)
 /* ... */
 ```
 
-`bpf_map_lookup_elem()` is helper 1 — the oldest, most-used helper, from before the numbered-list convention even needed a name. A `BPF_CALL` instruction in the compiled program doesn't reference a symbol; it carries this number as an immediate operand.
+`bpf_map_lookup_elem()`はヘルパー1である — 最も古く、最もよく使われるヘルパーであり、番号付きリストという慣習に名前が必要になる以前から存在する。コンパイルされたプログラム内の`BPF_CALL`命令はシンボルを参照しない。この番号を即値オペランドとして持つのである。
 
-### The five-register calling convention {#the-five-register-calling-convention}
+### 5レジスタの呼び出し規約 {#the-five-register-calling-convention}
 
-Every helper — regardless of its real signature — is called through exactly five 64-bit registers (`r1`–`r5`), because that's what a `BPF_CALL` instruction can pass. A helper implementation looks like an ordinary typed C function, but it's wrapped by a macro that generates the real, register-typed entry point:
+すべてのヘルパーは — 実際のシグネチャにかかわらず — ちょうど5つの64ビットレジスタ（`r1`〜`r5`）を通して呼び出される。`BPF_CALL`命令が渡せるのがそれだけだからである。ヘルパーの実装は通常の型付きC関数のように見えるが、本当のレジスタ型のエントリポイントを生成するマクロでラップされている。
 
 ```c
 /* include/linux/filter.h */
@@ -40,11 +40,11 @@ Every helper — regardless of its real signature — is called through exactly 
 #define BPF_CALL_2(name, ...)	BPF_CALL_x(2, __NOATTR, name, __VA_ARGS__)
 ```
 
-`BPF_CALL_2(bpf_map_lookup_elem, struct bpf_map *, map, void *, key)` expands to a real function taking two typed arguments (`____bpf_map_lookup_elem`), plus a second, register-typed wrapper (`bpf_map_lookup_elem`) that takes five `u64`s, casts the first two down to `struct bpf_map *`/`void *`, and calls through. The verifier and the JIT only ever see the register-typed wrapper; the typed inner function is what you actually write the helper's logic in.
+`BPF_CALL_2(bpf_map_lookup_elem, struct bpf_map *, map, void *, key)`は、2つの型付き引数を取る本物の関数（`____bpf_map_lookup_elem`）と、5つの`u64`を受け取り、最初の2つを`struct bpf_map *`/`void *`にキャストして呼び出す、レジスタ型の2つ目のラッパー（`bpf_map_lookup_elem`）に展開される。VerifierとJITが目にするのはレジスタ型のラッパーだけであり、ヘルパーのロジックを実際に書くのは型付きの内側の関数である。
 
-### Type-checking a helper call {#type-checking-a-helper-call}
+### ヘルパー呼び出しの型チェック {#type-checking-a-helper-call}
 
-The verifier has to know what each helper's arguments and return value actually mean — a `u64` register might hold a map pointer, a raw integer, or a pointer the program isn't allowed to touch. That metadata lives in a separate struct, one per helper:
+Verifierは、各ヘルパーの引数と戻り値が実際に何を意味するのかを知る必要がある — `u64`のレジスタは、mapへのポインタかもしれないし、生の整数かもしれないし、プログラムが触れることを許されないポインタかもしれない。そのメタデータは、ヘルパーごとに1つある別の構造体に格納されている。
 
 ```c
 /* include/linux/bpf.h */
@@ -53,7 +53,7 @@ struct bpf_func_proto {
 	bool gpl_only;
 	bool pkt_access;
 	bool might_sleep;
-	/* ... allow_fastcall omitted here ... */
+	/* ... allow_fastcallはここでは省略 ... */
 	enum bpf_return_type ret_type;
 	union {
 		struct {
@@ -65,13 +65,13 @@ struct bpf_func_proto {
 		};
 		enum bpf_arg_type arg_type[MAX_BPF_FUNC_ARGS];
 	};
-	/* ... BTF-id and size metadata for pointer/size argument pairs ... */
+	/* ... ポインタ/サイズ引数ペアのためのBTF IDとサイズのメタデータ ... */
 };
 ```
 
-Each program type has a `get_func_proto()` callback that maps a helper's numeric ID to its `bpf_func_proto` — which is also how the verifier enforces that, say, an XDP program can't call a helper that's only valid for tracing. Because the numbering is permanent — a helper's ID is part of the userspace-facing BPF ABI — a program compiled against one kernel keeps working on any newer kernel that still recognizes the ID.
+各プログラムタイプは、ヘルパーの数値IDをその`bpf_func_proto`に対応付ける`get_func_proto()`コールバックを持つ — これは、たとえばXDPプログラムがトレーシングでのみ有効なヘルパーを呼べないことをVerifierが強制する方法でもある。番号付けは恒久的である — ヘルパーのIDはユーザー空間に面したBPF ABIの一部である — ため、あるカーネル向けにコンパイルされたプログラムは、そのIDを認識し続けるどの新しいカーネルでも動き続ける。
 
-New helpers essentially don't get added anymore, though. `include/uapi/linux/bpf.h` itself says so, right after the last entry in the helper list (a comment added in Linux **6.15**; confirmed by tag-diff — absent at v6.14, present at v6.15):
+とはいえ、新しいヘルパーはもう実質的に追加されない。`include/uapi/linux/bpf.h`自身が、ヘルパーリストの最後のエントリの直後でそう述べている（Linux **6.15**で追加されたコメント。タグ間のdiffで確認済み — v6.14には存在せず、v6.15には存在する）。
 
 ```c
 /* This helper list is effectively frozen. If you are trying to
@@ -80,15 +80,17 @@ New helpers essentially don't get added anymore, though. `include/uapi/linux/bpf
  */
 ```
 
-That's not a recent policy shift so much as the comment catching up to years of practice: helper 211 (`cgrp_storage_delete`) is still the last one in the list as of Linux 7.2 — the same as it was at 6.19, 6.12, and 6.6. Every new BPF-callable kernel function added in that window went in as a kfunc instead.
+（訳: このヘルパーリストは事実上凍結されている。新しいヘルパーを追加しようとしているなら、代わりに、安定性の保証がより弱いkfuncを追加すべきである。Documentation/bpf/kfuncs.rstを参照のこと。）
 
-## kfuncs: how new BPF functionality actually gets added now {#kfuncs-how-new-bpf-functionality-actually-gets-added-now}
+これは最近の方針転換というより、何年にもわたる慣行にコメントが追いついたものである。Linux 7.2の時点でもヘルパー211（`cgrp_storage_delete`）がリストの最後であり、これは6.19、6.12、6.6のときと同じである。その期間に追加された、BPFから呼び出し可能な新しいカーネル関数はすべて、代わりにkfuncとして入った。
 
-The helper list is a single, kernel-wide enum: every helper, from every subsystem, is added to the same list, gets the same permanent ABI guarantee, and needs review from BPF maintainers even if it's only useful to one subsystem. That doesn't scale to letting individual subsystems (or even individual kernel modules) expose their own narrow, possibly-unstable functions to BPF — and, per the freeze comment above, it isn't how new functionality is added at all anymore. Kfuncs aren't a side door next to the helper ABI; they're the only supported path for extending what BPF programs can call.
+## kfunc: 現在、新しいBPF機能が実際に追加される方法 {#kfuncs-how-new-bpf-functionality-actually-gets-added-now}
 
-The mechanism itself predates the freeze by years. Calling a kernel function from BPF at all — the `BPF_PSEUDO_KFUNC_CALL` instruction-encoding bit — was introduced in Linux **5.13** (confirmed by tag-diff of `include/uapi/linux/bpf.h`: absent at v5.12, present at v5.13). The registration API shown below — `register_btf_kfunc_id_set()`, `struct btf_kfunc_id_set` — came later, in Linux **5.18** (confirmed by tag-diff of `include/linux/btf.h`: absent at v5.17, present at v5.18); it replaced an earlier, more cumbersome per-list API, `struct kfunc_btf_id_set` / `register_kfunc_btf_id_set()`, that existed in `include/linux/btf.h` at v5.16 and v5.17.
+ヘルパーリストはカーネル全体で単一のenumである。あらゆるサブシステムのあらゆるヘルパーが同じリストに追加され、同じ恒久的なABI保証を受け、たとえ1つのサブシステムにしか役立たないものであってもBPFメンテナのレビューを必要とする。これでは、個々のサブシステム（あるいは個々のカーネルモジュール）が、自分たち専用の狭い、場合によっては不安定な関数をBPFに公開できるようにするところまでスケールしない — そして、上の凍結コメントにある通り、新しい機能はもはやこの方法ではまったく追加されない。kfuncはヘルパーABIの脇にある裏口ではない。BPFプログラムが呼び出せるものを拡張するための、唯一サポートされた経路なのである。
 
-A real kfunc set, from `kernel/bpf/helpers.c` as of Linux 7.2 (the bare `bpf_obj_new`/`bpf_obj_drop` entries and the `KF_IMPLICIT_ARGS` flag are recent additions — confirmed absent at v7.0, present at v7.1; before that, only the `_impl` entries existed and callers went through them directly):
+この仕組み自体は凍結より何年も前から存在する。そもそもBPFからカーネル関数を呼ぶこと — `BPF_PSEUDO_KFUNC_CALL`という命令エンコーディングのビット — はLinux **5.13**で導入された（`include/uapi/linux/bpf.h`のタグ間diffで確認済み: v5.12には存在せず、v5.13には存在する）。以下に示す登録API — `register_btf_kfunc_id_set()`、`struct btf_kfunc_id_set` — はそれより後のLinux **5.18**で登場した（`include/linux/btf.h`のタグ間diffで確認済み: v5.17には存在せず、v5.18には存在する）。これは、v5.16とv5.17の`include/linux/btf.h`に存在した、以前のより扱いにくいリスト単位のAPIである`struct kfunc_btf_id_set` / `register_kfunc_btf_id_set()`を置き換えたものである。
+
+Linux 7.2時点の`kernel/bpf/helpers.c`にある実際のkfuncセットを示す（`_impl`の付かない`bpf_obj_new`/`bpf_obj_drop`のエントリと`KF_IMPLICIT_ARGS`フラグは最近の追加である — v7.0には存在せず、v7.1には存在することを確認済み。それ以前は`_impl`のエントリしかなく、呼び出し側はそれらを直接使っていた）。
 
 ```c
 /* kernel/bpf/helpers.c */
@@ -106,7 +108,7 @@ static const struct btf_kfunc_id_set generic_kfunc_set = {
 };
 ```
 
-That set is then registered per program type it should be visible to:
+このセットは、それを見せるべきプログラムタイプごとに登録される。
 
 ```c
 /* kernel/bpf/helpers.c */
@@ -115,19 +117,19 @@ ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_SCHED_CLS, &generic_kfunc_s
 ret = ret ?: register_btf_kfunc_id_set(BPF_PROG_TYPE_XDP, &generic_kfunc_set);
 ```
 
-The `KF_*` flags (`include/linux/btf.h`) are the verifier's substitute for `bpf_func_proto`'s argument-type checking, expressed in terms kfuncs actually need: `KF_ACQUIRE` marks a function that hands back a reference the program must eventually release; `KF_RELEASE` marks the function that releases it; `KF_RET_NULL` tells the verifier the return value must be null-checked before use. Unlike a helper's permanent numeric ID, a kfunc is resolved by name through BTF at load time — and `Documentation/bpf/kfuncs.rst` is explicit that this comes with no hard stability promise at all: "A kfunc will never have any hard stability guarantees. BPF APIs cannot and will not ever hard-block a change in the kernel purely for stability reasons." Whether a given kfunc actually changes out from under callers is a case-by-case maintainer judgment call, not something a subsystem can commit to in advance — that lack of a permanent contract is the tradeoff for not needing central review to add one.
+`KF_*`フラグ（`include/linux/btf.h`）は、`bpf_func_proto`による引数型チェックに代わるVerifierの手段であり、kfuncが実際に必要とする言葉で表現されている。`KF_ACQUIRE`は、プログラムが最終的に解放しなければならない参照を返す関数を示す。`KF_RELEASE`はそれを解放する関数を示す。`KF_RET_NULL`は、戻り値を使用前にNULLチェックしなければならないことをVerifierに伝える。ヘルパーの恒久的な数値IDとは異なり、kfuncはロード時にBTFを通じて名前で解決される — そして`Documentation/bpf/kfuncs.rst`は、これには確固たる安定性の約束がまったく伴わないと明言している。"A kfunc will never have any hard stability guarantees. BPF APIs cannot and will not ever hard-block a change in the kernel purely for stability reasons."（訳: kfuncには確固たる安定性の保証が与えられることは決してない。BPF APIが、純粋に安定性の理由だけでカーネルの変更を厳格に阻むことはできないし、今後もそうすることはない。）ある特定のkfuncが呼び出し側の知らないうちに実際に変わるかどうかは、メンテナがケースごとに下す判断であり、サブシステムが前もって約束できるものではない — この恒久的な契約がないことが、追加に中央のレビューを必要としないことの代償なのである。
 
-## The JIT: from bytecode to native code {#the-jit-from-bytecode-to-native-code}
+## JIT: バイトコードからネイティブコードへ {#the-jit-from-bytecode-to-native-code}
 
-A verified BPF program is a sequence of fixed-width instructions — safe to run, but still bytecode that needs to be dispatched one instruction at a time by an interpreter unless it's compiled to real machine code first. Linux has had a JIT for BPF since before eBPF existed: Eric Dumazet's x86-64 JIT for classic (socket-filter) BPF, covered by Jonathan Corbet on LWN in April 2011 ([LWN](https://lwn.net/Articles/437981/)) and confirmed landing in Linux **3.0** (July 2011) via tag-diff of `arch/x86/net/bpf_jit_comp.c` (absent at v2.6.39, present at v3.0). The eBPF rewrite in 2014 replaced that JIT along with everything else, but the same file and the same idea — translate the whole program to native instructions once, instead of re-interpreting it on every run — carried forward.
+検証済みのBPFプログラムは固定長命令の列である — 実行しても安全だが、先に実際のマシンコードにコンパイルしない限り、インタプリタが1命令ずつディスパッチしなければならないバイトコードのままである。LinuxはeBPFが存在する以前からBPF用のJITを持っていた。Eric Dumazetによる、classic（ソケットフィルタ）BPF向けのx86-64 JITである。これは2011年4月にLWNでJonathan Corbetが取り上げており（[LWN](https://lwn.net/Articles/437981/)）、`arch/x86/net/bpf_jit_comp.c`のタグ間diffによってLinux **3.0**（2011年7月）で取り込まれたことが確認されている（v2.6.39には存在せず、v3.0には存在する）。2014年のeBPFへの書き直しでは他のすべてとともにこのJITも置き換えられたが、同じファイルと同じ考え方 — 実行のたびにプログラムを解釈し直すのではなく、プログラム全体を一度ネイティブ命令に変換する — は引き継がれた。
 
-As of Linux 7.2, each architecture provides its own JIT behind one function, but that function isn't called directly — it's wrapped by a step that can rewrite the program first. This wrapper is recent: it and the two-argument `bpf_int_jit_compile(env, prog)` signature it calls were both introduced in Linux **7.1** (confirmed by tag-diff of `kernel/bpf/core.c` — at v7.0 and every earlier release, including every current LTS, the caller is a bare, single-argument `bpf_int_jit_compile(fp)`, and constant blinding is handled separately, inside each architecture's own `bpf_int_jit_compile()`, via `bpf_jit_blind_constants()`).
+Linux 7.2の時点では、各アーキテクチャが1つの関数の背後に独自のJITを提供しているが、その関数は直接呼ばれるわけではない — 先にプログラムを書き換えうるステップでラップされている。このラッパーは最近のものである。ラッパーと、それが呼び出す2引数の`bpf_int_jit_compile(env, prog)`シグネチャはどちらもLinux **7.1**で導入された（`kernel/bpf/core.c`のタグ間diffで確認済み — v7.0およびそれ以前のすべてのリリース、現行のすべてのLTSを含め、呼び出し側は1引数の素の`bpf_int_jit_compile(fp)`であり、定数ブラインディングは各アーキテクチャ自身の`bpf_int_jit_compile()`の中で、`bpf_jit_blind_constants()`を介して別途処理されている）。
 
 ```c
-/* kernel/bpf/core.c — the real wrapper, handling constant blinding.
- * Controlled by the bpf_jit_harden sysctl: rewrites immediate values
- * before JITing, to mitigate JIT spraying (Documentation/admin-guide/
- * sysctl/net.rst) rather than being on unconditionally. */
+/* kernel/bpf/core.c — 定数ブラインディングを扱う実際のラッパー。
+ * bpf_jit_harden sysctlで制御される: 無条件に有効なのではなく、JITスプレーを
+ * 緩和するためにJIT前に即値を書き換える（Documentation/admin-guide/
+ * sysctl/net.rst）。 */
 static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)
 {
 #ifdef CONFIG_BPF_JIT
@@ -152,14 +154,14 @@ static struct bpf_prog *bpf_prog_jit_compile(struct bpf_verifier_env *env, struc
 }
 ```
 
-`bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)` (declared in `include/linux/filter.h`, defined per-architecture) is the real compiler. Every supported architecture defines its own version of this same function; `arch/x86/net/bpf_jit_comp.c` alone is over 4,000 lines, translating each fixed-width BPF opcode into the corresponding x86-64 instruction sequence, including the register-allocation and calling-convention work needed to make a JITed BPF function callable like any other. An architecture that doesn't implement it at all falls back to a `__weak` stub in `kernel/bpf/core.c` that just returns the program unmodified — the interpreter path is what actually runs there. Whether the JIT is even attempted is itself gated by a sysctl, `net.core.bpf_jit_enable` (`fp->jit_requested = ebpf_jit_enabled()`), separate from the always-on-or-off decision covered next.
+`bpf_int_jit_compile(struct bpf_verifier_env *env, struct bpf_prog *prog)`（`include/linux/filter.h`で宣言され、アーキテクチャごとに定義される）が本当のコンパイラである。サポートされているすべてのアーキテクチャが、この同じ関数の独自版を定義している。`arch/x86/net/bpf_jit_comp.c`だけでも4,000行を超え、固定長のBPFオペコードそれぞれを対応するx86-64命令列に変換している。これには、JITされたBPF関数を他の関数と同じように呼び出せるようにするためのレジスタ割り当てと呼び出し規約の処理も含まれる。これをまったく実装していないアーキテクチャは、`kernel/bpf/core.c`にある`__weak`スタブにフォールバックする。このスタブはプログラムを変更せずに返すだけであり、そこで実際に動くのはインタプリタのパスである。JITを試みるかどうか自体も、次に述べる常時オン/オフの判断とは別に、`net.core.bpf_jit_enable` sysctl（`fp->jit_requested = ebpf_jit_enabled()`）によって制御される。
 
-### Choosing JIT or interpreter {#choosing-jit-or-interpreter}
+### JITかインタプリタかの選択 {#choosing-jit-or-interpreter}
 
-Compilation isn't unconditional — it happens as part of finalizing a verified program, with a documented fallback if it fails:
+コンパイルは無条件に行われるわけではない — 検証済みプログラムの最終処理の一部として行われ、失敗した場合のフォールバックが文書化されている。
 
 ```c
-/* kernel/bpf/core.c (simplified) */
+/* kernel/bpf/core.c（簡略化） */
 struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env,
 					    struct bpf_prog *fp, int *err)
 {
@@ -185,27 +187,27 @@ struct bpf_prog *__bpf_prog_select_runtime(struct bpf_verifier_env *env,
 }
 ```
 
-The comment names a real safety property: if the architecture can't (or, with constant blinding, chooses not to) produce JITed code, the interpreter is still a fully valid fallback — normally. `jit_required` starts out set from `IS_ENABLED(CONFIG_BPF_JIT_ALWAYS_ON)`, but the verifier (`kernel/bpf/verifier.c`) also forces it on for specific program shapes the interpreter simply cannot execute at all: any program that makes a kfunc call — the kfunc mechanism above has no interpreter-side implementation — plus programs that use BPF arena maps or the `BPF_MAP_TYPE_INSN_ARRAY` map type. `CONFIG_BPF_JIT_ALWAYS_ON` is the broadest of these, removing the interpreter from the kernel outright, specifically "to avoid speculative execution of BPF instructions by the interpreter" — a Spectre-class mitigation, since an unJITed BPF program is still walked instruction-by-instruction by real (speculatable) kernel code. The kfunc/arena/insn-array cases are narrower: only programs using those specific features lose the fallback.
+このコメントは実在する安全性の性質を述べている。アーキテクチャがJITコードを生成できない（あるいは定数ブラインディングによって生成しないことを選ぶ）場合でも、インタプリタは依然として完全に有効なフォールバックである — 通常は。`jit_required`は最初`IS_ENABLED(CONFIG_BPF_JIT_ALWAYS_ON)`から設定されるが、Verifier（`kernel/bpf/verifier.c`）も、インタプリタではそもそも実行できない特定の形のプログラムについてはこれを強制的にオンにする。kfunc呼び出しを行うすべてのプログラム — 上述のkfuncの仕組みにはインタプリタ側の実装がない — に加え、BPF arena mapや`BPF_MAP_TYPE_INSN_ARRAY` mapタイプを使うプログラムである。`CONFIG_BPF_JIT_ALWAYS_ON`はこれらの中で最も広範なものであり、カーネルからインタプリタを完全に取り除く。その目的は特に「インタプリタによるBPF命令の投機実行を避けるため」("to avoid speculative execution of BPF instructions by the interpreter")であり、Spectre系の緩和策である。JITされていないBPFプログラムは、実際の（投機実行されうる）カーネルコードによって1命令ずつたどられるからである。kfunc/arena/insn-arrayの場合はより限定的で、それらの特定の機能を使うプログラムだけがフォールバックを失う。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/filter.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/filter.h) — the `BPF_CALL_x` macro family and `bpf_int_jit_compile()`'s declaration
-- [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — `struct bpf_func_proto`, the verifier's per-helper type-checking metadata
-- [include/uapi/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf.h) — `enum bpf_func_id`, generated from the `___BPF_FUNC_MAPPER` helper-name-to-number list
-- [include/linux/btf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/btf.h) — `register_btf_kfunc_id_set()`, `struct btf_kfunc_id_set`, and the `KF_ACQUIRE`/`KF_RELEASE`/`KF_RET_NULL` flags
+- [include/linux/filter.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/filter.h) — `BPF_CALL_x`マクロ群と`bpf_int_jit_compile()`の宣言
+- [include/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/bpf.h) — `struct bpf_func_proto`、Verifierのヘルパーごとの型チェック用メタデータ
+- [include/uapi/linux/bpf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/bpf.h) — `___BPF_FUNC_MAPPER`のヘルパー名と番号の対応リストから生成される`enum bpf_func_id`
+- [include/linux/btf.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/btf.h) — `register_btf_kfunc_id_set()`、`struct btf_kfunc_id_set`、および`KF_ACQUIRE`/`KF_RELEASE`/`KF_RET_NULL`フラグ
 - [include/linux/btf_ids.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/btf_ids.h) — `BTF_KFUNCS_START`/`BTF_ID_FLAGS`/`BTF_KFUNCS_END`
-- [kernel/bpf/helpers.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/helpers.c) — `generic_btf_ids`, a real kfunc set covering `bpf_obj_new`/`bpf_obj_drop` and friends
-- [kernel/bpf/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/core.c) — `__bpf_prog_select_runtime()`, the JIT-or-interpreter decision and constant-blinding fallback
-- [arch/x86/net/bpf_jit_comp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/net/bpf_jit_comp.c) — the x86-64 JIT
+- [kernel/bpf/helpers.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/helpers.c) — `generic_btf_ids`、`bpf_obj_new`/`bpf_obj_drop`などを含む実際のkfuncセット
+- [kernel/bpf/core.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/bpf/core.c) — `__bpf_prog_select_runtime()`、JITかインタプリタかの判断と定数ブラインディングのフォールバック
+- [arch/x86/net/bpf_jit_comp.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/net/bpf_jit_comp.c) — x86-64 JIT
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [A JIT for packet filters](https://lwn.net/Articles/437981/) — Jonathan Corbet, April 2011, covering Eric Dumazet's x86-64 classic-BPF JIT ahead of its Linux 3.0 merge
+- [A JIT for packet filters](https://lwn.net/Articles/437981/) — Jonathan Corbet、2011年4月。Linux 3.0へのマージに先立ち、Eric Dumazetによるx86-64向けclassic BPF JITを取り上げた記事
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [BPF Architecture and Program Types](bpf-overview.md) — the helper list as used from a program, and the `bpf()` syscall's load path
-- [BPF Verifier](bpf-verifier.md) — how `bpf_func_proto` and BTF type information feed the safety proof
-- [BTF and CO-RE](btf-core.md) — the BTF type-encoding machinery kfunc registration builds on
+- [BPFのアーキテクチャとプログラムタイプ](bpf-overview.md) — プログラムから使うヘルパーのリストと、`bpf()`システムコールのロードパス
+- [BPF Verifier](bpf-verifier.md) — `bpf_func_proto`とBTF型情報がどのように安全性証明に使われるか
+- [BTFとCO-RE](btf-core.md) — kfuncの登録が土台とするBTF型エンコーディングの仕組み

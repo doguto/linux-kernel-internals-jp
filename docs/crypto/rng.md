@@ -1,104 +1,84 @@
-# Random Number Generation {#random-number-generation}
+# 乱数生成 {#random-number-generation}
 
-> /dev/random, getrandom(), DRBG, and hardware entropy
+> /dev/random、getrandom()、DRBG、ハードウェアエントロピー
 
-## Overview {#overview}
+## 概要 {#overview}
 
-The Linux kernel random number generator serves two distinct audiences:
+Linuxカーネルの乱数生成器は、2つの異なる利用者に対応している:
 
-- **Userspace**: `/dev/random`, `/dev/urandom`, and the `getrandom(2)` syscall
-- **Kernel internals**: `get_random_bytes()`, `get_random_u32()`, and the DRBG crypto API
+- **ユーザー空間**: `/dev/random`、`/dev/urandom`、`getrandom(2)` システムコール
+- **カーネル内部**: `get_random_bytes()`、`get_random_u32()`、DRBG暗号API
 
-Both ultimately source from the same entropy pool, which is seeded from hardware events and
-(on capable hardware) a hardware RNG instruction.
+どちらも最終的には同じエントロピープールを源としており、そのプールはハードウェアイベントと（対応ハードウェアでは）ハードウェアRNG命令からシードされる。
 
-## The entropy pool {#the-entropy-pool}
+## エントロピープール {#the-entropy-pool}
 
-### Pre-5.6: multiple pools {#pre-56-multiple-pools}
+### 5.6以前: 複数のプール {#pre-56-multiple-pools}
 
-In early kernel versions, the kernel maintained three pools:
+初期のカーネルバージョンでは、カーネルは3つのプールを保持していた:
 
-- `input_pool`: the primary entropy accumulator (4096 bits, hash-based mixing)
-- `blocking_pool`: fed `/dev/random`; blocked when estimated entropy was low
-- `nonblocking_pool`: fed `/dev/urandom`; never blocked
+- `input_pool`: 主となるエントロピー蓄積器（4096ビット、ハッシュベースの混合）
+- `blocking_pool`: `/dev/random` に供給していた。推定エントロピーが低いとブロックした
+- `nonblocking_pool`: `/dev/urandom` に供給していた。ブロックすることはなかった
 
-The `nonblocking_pool` was merged into the CRNG output stage earlier, and the
-`blocking_pool` was removed in **Linux 5.6**. By 5.6 only the `input_pool` remained,
-with a ChaCha20-based CRNG output stage. This is also when `/dev/random` became
-non-blocking. The entropy _estimator_ was controversial: it claimed to track "bits of
-entropy" but was largely a heuristic. In practice it often over-estimated or
-under-estimated, causing spurious blocking or false confidence.
+`nonblocking_pool` はそれ以前にCRNG出力段に統合され、`blocking_pool` は **Linux 5.6** で削除された。5.6の時点では `input_pool` だけが残り、ChaCha20ベースのCRNG出力段を持つようになった。`/dev/random` がノンブロッキングになったのもこのときである。エントロピーの _推定器_ には異論が多かった。「エントロピーのビット数」を追跡すると称していたが、その実態はほぼヒューリスティックだった。実際には過大推定や過小推定がしばしば起こり、不必要なブロックや誤った安心感を生んでいた。
 
-### 5.17+: a single BLAKE2s pool {#517-a-single-blake2s-pool}
+### 5.17以降: 単一のBLAKE2sプール {#517-a-single-blake2s-pool}
 
-Linux 5.17 (2022) — primarily Jason Donenfeld's rework — replaced the multi-pool design
-with a single 256-bit BLAKE2s-based pool. The key insight: once you have 256 bits of
-real entropy, further accumulation doesn't increase security. You have a secret that cannot
-be brute-forced.
+Linux 5.17（2022年） — 主にJason Donenfeldによる改修 — は、複数プール設計を256ビットの単一のBLAKE2sベースのプールに置き換えた。鍵となる洞察は、本物のエントロピーが256ビットあれば、それ以上蓄積しても安全性は上がらないということである。総当たりできない秘密がすでに手元にあるからだ。
 
-The new pool:
+新しいプール:
 
 ```c
 /* drivers/char/random.c (5.17+) */
 
-/* The primary pool is 256 bits mixed through BLAKE2s (input pool, not CRNG output) */
+/* 主プールはBLAKE2sで混合される256ビット（入力プールであり、CRNGの出力ではない） */
 static struct {
     struct blake2s_ctx      hash;
     spinlock_t              lock;
-    unsigned int            init_bits;  /* accumulated so far */
+    unsigned int            init_bits;  /* これまでに蓄積された量 */
 } input_pool = {
-    .hash.h = { /* BLAKE2s IV, pre-mixed with the output length */ ... },
+    .hash.h = { /* BLAKE2sのIV、出力長で事前に混合済み */ ... },
     .hash.outlen = BLAKE2S_HASH_SIZE,
     .lock = __SPIN_LOCK_UNLOCKED(input_pool.lock),
 };
 ```
 
-The `crng_init` counter has three states: 0 (unseeded), 1 (early seeded, ~128 bits of
-entropy, usable but not fully initialized), and 2 (fully seeded, 256 bits). The transition
-is 0 → 1 → 2. After `crng_init` reaches 2, the pool is periodically reseeded from new
-entropy, but the CRNG output is already cryptographically indistinguishable from random.
+`crng_init` カウンタは3つの状態を持つ: 0（未シード）、1（早期シード済み、約128ビットのエントロピー、使用可能だが完全には初期化されていない）、2（完全にシード済み、256ビット）。遷移は0 → 1 → 2である。`crng_init` が2に達した後も、プールは新しいエントロピーから定期的に再シードされるが、CRNGの出力はすでに暗号学的に乱数と区別できない。
 
-The CRNG (Cryptographically Secure Random Number Generator) uses ChaCha20 as its stream
-cipher. Per-CPU CRNGs (added in 5.18, replacing an earlier per-NUMA-node design) allow fast,
-lock-free generation:
+CRNG（Cryptographically Secure Random Number Generator）はストリーム暗号としてChaCha20を使う。CPUごとのCRNG（5.18で追加され、それ以前のNUMAノードごとの設計を置き換えた）により、高速かつロックフリーな生成が可能になる:
 
 ```c
-/* struct crng — internal type, wraps ChaCha20 state; not a public kernel API */
-/* Each CPU has its own CRNG instance for lock-free generation */
+/* struct crng — 内部型で、ChaCha20の状態をラップする。公開カーネルAPIではない */
+/* 各CPUはロックフリーな生成のために独自のCRNGインスタンスを持つ */
 ```
 
-## Entropy sources {#entropy-sources}
+## エントロピー源 {#entropy-sources}
 
-The kernel feeds entropy into the pool from multiple sources:
+カーネルは複数の源からプールにエントロピーを供給する:
 
-| Source | How | Notes |
+| 源 | 方法 | 備考 |
 |---|---|---|
-| Interrupt timing | `add_interrupt_randomness()` — called from interrupt handlers | Jitter between interrupts carries entropy |
-| Hardware RNG | `add_hwgenerator_randomness()` — from `/dev/hwrng` | RDRAND, TPM, virtio-rng |
-| Disk I/O | Block layer timing via `add_disk_randomness()` | Still present and exported (`EXPORT_SYMBOL_GPL`) |
-| Boot-time | Seed file from previous boot via rng-tools/systemd-random-seed | Critical for VMs |
-| CPU RDRAND | `arch_get_random_long()` — used during CRNG initialization | See note on RDRAND below |
+| 割り込みのタイミング | `add_interrupt_randomness()` — 割り込みハンドラから呼ばれる | 割り込み間のジッタがエントロピーを持つ |
+| ハードウェアRNG | `add_hwgenerator_randomness()` — `/dev/hwrng` から | RDRAND、TPM、virtio-rng |
+| ディスクI/O | `add_disk_randomness()` によるブロック層のタイミング | 現在も存在し、エクスポートされている（`EXPORT_SYMBOL_GPL`） |
+| ブート時 | rng-tools/systemd-random-seedによる前回ブートのシードファイル | VMでは極めて重要 |
+| CPUのRDRAND | `arch_get_random_long()` — CRNGの初期化中に使われる | 下記のRDRANDに関する注を参照 |
 
 ### RDRAND {#rdrand}
 
-Intel's RDRAND instruction (Sandy Bridge, 2012+) generates random numbers from an on-chip
-hardware entropy source. The kernel _does_ use RDRAND, but only as one input among many —
-not as the sole source:
+IntelのRDRAND命令（Sandy Bridge、2012年以降）は、チップ上のハードウェアエントロピー源から乱数を生成する。カーネルはRDRANDを _実際に_ 使うが、唯一の源としてではなく、多数の入力のうちの1つとしてのみ使う:
 
 ```c
 /* arch/x86/kernel/cpu/rdrand.c */
 void x86_init_rdrand(struct cpuinfo_x86 *c)
 {
-    /* Test: generate 8 values; if any fail or don't change enough, disable RDRAND usage */
+    /* テスト: 8個の値を生成し、いずれかが失敗するか十分に変化しなければRDRANDの使用を無効にする */
     ...
 }
 ```
 
-The rationale for not trusting RDRAND alone: if Intel (or another party) had backdoored the
-RDRAND implementation, relying solely on it would compromise all cryptographic operations.
-By mixing RDRAND with interrupt jitter and other sources, a compromised RDRAND cannot bias
-the output. This is an explicit design decision discussed in the kernel changelog for
-commits by Theodore Ts'o.
+RDRANDだけを信頼しない理由は次のとおりである: Intel（あるいは別の誰か）がRDRANDの実装にバックドアを仕込んでいた場合、それだけに頼るとすべての暗号操作が危殆化する。RDRANDを割り込みジッタや他の源と混合することで、危殆化したRDRANDでも出力を偏らせることはできない。これはTheodore Ts'oによるコミットのカーネル変更履歴で議論された、明示的な設計判断である。
 
 ## getrandom(2) {#getrandom2}
 
@@ -108,37 +88,29 @@ commits by Theodore Ts'o.
 ssize_t getrandom(void *buf, size_t buflen, unsigned int flags);
 ```
 
-`getrandom(2)` was added in Linux 3.17. It is the preferred interface over `/dev/random` and
-`/dev/urandom`.
+`getrandom(2)` はLinux 3.17で追加された。`/dev/random` や `/dev/urandom` よりも推奨されるインターフェースである。
 
-Behavior:
+動作:
 
-- **No flags (0)**: blocks until the CRNG is fully initialized (256 bits of entropy), then
-  returns cryptographically strong random bytes. Non-blocking after initialization.
-- **`GRND_NONBLOCK`**: like the default, but returns `-EAGAIN` instead of blocking if the
-  CRNG is not yet initialized.
-- **`GRND_RANDOM`**: historically selected the "blocking pool" (reading from the entropy
-  estimator). Since 5.6, this flag has **no effect** — it is treated identically to the
-  default. Do not use `GRND_RANDOM` in new code; it does not provide more security than
-  the default.
-- **`GRND_INSECURE`** (added 5.6): returns random bytes even if the CRNG is not initialized.
-  Only for non-cryptographic uses (e.g., kernel ASLR before full initialization).
+- **フラグなし（0）**: CRNGが完全に初期化される（256ビットのエントロピー）までブロックし、その後、暗号学的に強い乱数バイトを返す。初期化後はブロックしない。
+- **`GRND_NONBLOCK`**: デフォルトと同様だが、CRNGがまだ初期化されていない場合はブロックせずに `-EAGAIN` を返す。
+- **`GRND_RANDOM`**: かつては「ブロッキングプール」（エントロピー推定器から読む）を選択していた。5.6以降、このフラグは **効果がない** — デフォルトとまったく同じに扱われる。新しいコードでは `GRND_RANDOM` を使わないこと。デフォルトより高い安全性を提供するわけではない。
+- **`GRND_INSECURE`**（5.6で追加）: CRNGが初期化されていなくても乱数バイトを返す。暗号以外の用途（例: 完全な初期化前のカーネルASLR）専用である。
 
 ```c
-/* Correct usage in userspace */
+/* ユーザー空間での正しい使い方 */
 uint8_t key[32];
 ssize_t n = getrandom(key, sizeof(key), 0);
 if (n < 0) {
     perror("getrandom");
     exit(1);
 }
-/* key now contains 32 cryptographically strong random bytes */
+/* これでkeyには暗号学的に強い32バイトの乱数が入っている */
 ```
 
-`getrandom()` is not interrupted by signals (unlike reads from `/dev/random`). For requests
-of 256 bytes or less, it is guaranteed to return the full buffer or fail — no short reads.
+`getrandom()` はシグナルによって中断されない（`/dev/random` からの読み出しとは異なる）。256バイト以下の要求では、バッファ全体を返すか失敗するかのどちらかであることが保証される — 短い読み出し（short read）は起こらない。
 
-## /dev/random and /dev/urandom {#devrandom-and-devurandom}
+## /dev/randomと/dev/urandom {#devrandom-and-devurandom}
 
 ```
                       ┌───────────────────────────────┐
@@ -151,83 +123,64 @@ Entropy sources ────► │  Input pool (BLAKE2s, 256 bits│
                     /dev/random   /dev/urandom  getrandom()
 ```
 
-**`/dev/random`**: Since Linux 5.6, `/dev/random` is **non-blocking**. It no longer blocks
-waiting for "sufficient entropy" after the CRNG is initialized. It outputs CRNG bytes, same
-as `/dev/urandom`. Before 5.6 it blocked whenever the entropy estimate fell below a
-threshold, causing frustrating freezes in scripts. The blocking behavior was widely
-acknowledged as providing false security guarantees.
+**`/dev/random`**: Linux 5.6以降、`/dev/random` は **ノンブロッキング** である。CRNGが初期化された後に「十分なエントロピー」を待ってブロックすることはもうない。`/dev/urandom` と同じく、CRNGのバイトを出力する。5.6より前は、エントロピーの推定値がしきい値を下回るたびにブロックし、スクリプトが苛立たしく固まる原因となっていた。このブロッキング動作は、誤った安全性の保証を与えるものだと広く認められていた。
 
-**`/dev/urandom`**: Always non-blocking. Safe for all cryptographic uses after boot
-initialization. Before the CRNG is initialized (very early boot), reading `/dev/urandom` is
-_technically_ unsafe (output could be predictable), but in practice the kernel initializes
-early. The kernel logs a warning if urandom is read before initialization.
+**`/dev/urandom`**: 常にノンブロッキングである。ブート時の初期化後は、すべての暗号用途に安全である。CRNGが初期化される前（ブートのごく初期）に `/dev/urandom` を読むのは _技術的には_ 安全ではない（出力が予測可能かもしれない）が、実際にはカーネルは早期に初期化される。初期化前にurandomが読まれると、カーネルは警告をログに出す。
 
-**Which to use?** Use `getrandom(2)` for new code. If you must use a file descriptor,
-`/dev/urandom` is fine. `/dev/random` provides no additional security over `/dev/urandom`
-since 5.6, and the blocking behavior before 5.6 was harmful.
+**どれを使うべきか?** 新しいコードでは `getrandom(2)` を使う。ファイルディスクリプタを使わなければならないなら、`/dev/urandom` で問題ない。5.6以降、`/dev/random` は `/dev/urandom` に比べて追加の安全性を何も提供しないし、5.6より前のブロッキング動作は有害だった。
 
-## DRBG: Deterministic Random Bit Generator {#drbg-deterministic-random-bit-generator}
+## DRBG: 決定論的乱数ビット生成器 {#drbg-deterministic-random-bit-generator}
 
-The kernel implements NIST SP 800-90A Deterministic Random Bit Generators via the crypto API
-(`crypto/drbg.c`). These are used by kernel subsystems that need NIST-compliant RNG behavior
-(IPsec, certain FIPS-mode operations):
+カーネルは、NIST SP 800-90Aの決定論的乱数ビット生成器（Deterministic Random Bit Generator）を暗号API経由で実装している（`crypto/drbg.c`）。これらは、NIST準拠のRNG動作を必要とするカーネルサブシステム（IPsec、特定のFIPSモード操作）が使う:
 
 ```c
 #include <crypto/rng.h>
 
-/* Allocate the kernel's registered DRBG (exposed under the generic "stdrng" name) */
+/* カーネルに登録されたDRBGを割り当てる（汎用名"stdrng"で公開されている） */
 struct crypto_rng *rng = crypto_alloc_rng("stdrng", 0, 0);
 if (IS_ERR(rng))
     return PTR_ERR(rng);
 
-/* Seed from the kernel entropy pool */
+/* カーネルのエントロピープールからシードする */
 u8 seed[32];
 get_random_bytes(seed, sizeof(seed));
 ret = crypto_rng_reset(rng, seed, sizeof(seed));
 
-/* Generate bytes */
+/* バイトを生成 */
 u8 output[16];
 ret = crypto_rng_get_bytes(rng, output, sizeof(output));
 
 crypto_free_rng(rng);
 ```
 
-As of this kernel, `crypto/drbg.c` registers a single algorithm: `cra_name = "stdrng"`,
-`cra_driver_name = "drbg_nopr_hmac_sha512"` — an HMAC-DRBG built on SHA-512, without
-prediction resistance. The older design registered a family of names following the pattern
-`drbg_{pr,nopr}_{hmac,hash,ctr}_{hash_alg}` (letting callers pick a specific mode/hash and
-choose prediction resistance); that family, and support for prediction resistance itself,
-were removed in a later simplification, leaving `crypto_alloc_rng("stdrng", 0, 0)` as the way
-to reach it.
+このカーネル時点では、`crypto/drbg.c` は単一のアルゴリズムを登録する: `cra_name = "stdrng"`、`cra_driver_name = "drbg_nopr_hmac_sha512"` — SHA-512上に構築された、予測耐性（prediction resistance）なしのHMAC-DRBGである。以前の設計では `drbg_{pr,nopr}_{hmac,hash,ctr}_{hash_alg}` というパターンに従う名前のファミリーを登録しており（呼び出し元が特定のモード/ハッシュを選び、予測耐性の有無を選択できた）、そのファミリーと予測耐性のサポート自体は後の簡素化で削除され、`crypto_alloc_rng("stdrng", 0, 0)` がこれに到達する手段として残った。
 
-## Kernel internal interfaces {#kernel-internal-interfaces}
+## カーネル内部インターフェース {#kernel-internal-interfaces}
 
-For kernel code that needs random data:
+乱数データを必要とするカーネルコード向け:
 
 ```c
-/* General: block until CRNG is initialized, then return bytes */
+/* 汎用: CRNGが初期化されるまでブロックし、その後バイトを返す */
 void get_random_bytes(void *buf, size_t len);
 
-/* Fast per-CPU versions (lock-free, 5.18+) */
+/* 高速なCPUごとの版（ロックフリー、5.18以降） */
 u32 get_random_u32(void);
 u64 get_random_u64(void);
-u32 get_random_u32_below(u32 ceil);  /* uniform in [0, ceil) — added 6.2 */
+u32 get_random_u32_below(u32 ceil);  /* [0, ceil)の一様分布 — 6.2で追加 */
 ```
 
-`get_random_bytes_arch()` and the zero-argument `prandom_u32()` — both older APIs sometimes
-referenced in outdated documentation — no longer exist in the current tree; `get_random_u32()`
-is the current replacement for both use cases.
+`get_random_bytes_arch()` と引数なしの `prandom_u32()` — どちらも古いドキュメントで時折参照される古いAPI — は現在のツリーにはもう存在しない。どちらの用途でも `get_random_u32()` が現在の置き換えである。
 
 ```c
-/* Example: generate a random nonce for a network protocol */
+/* 例: ネットワークプロトコル用のランダムなnonceを生成する */
 u8 nonce[16];
 get_random_bytes(nonce, sizeof(nonce));
 
-/* Example: random jitter in a retry loop */
+/* 例: リトライループでのランダムなジッタ */
 usleep_range(1000 + get_random_u32_below(1000), 3000);
 ```
 
-## Initialization timeline {#initialization-timeline}
+## 初期化のタイムライン {#initialization-timeline}
 
 ```
 Power on
@@ -249,64 +202,56 @@ Power on
     └─ Periodic reseed               ← every CRNG_RESEED_INTERVAL (60 seconds) from fresh entropy
 ```
 
-In a typical boot on bare metal, `crng_init_done` happens within the first few seconds.
-On VMs with no virtio-rng and no saved seed, it can take tens of seconds or longer.
+ベアメタルでの典型的なブートでは、`crng_init_done` は最初の数秒以内に起こる。virtio-rngも保存済みシードもないVMでは、数十秒以上かかることがある。
 
-You can check initialization status:
+初期化状態は次のように確認できる:
 
 ```bash
-# Kernel log shows when CRNG initializes
+# CRNGが初期化された時刻はカーネルログでわかる
 dmesg | grep "crng init done"
 # [    2.341801] random: crng init done
 
-# Current entropy estimate (informational only post-5.17)
+# 現在のエントロピー推定値（5.17以降は参考情報にすぎない）
 cat /proc/sys/kernel/random/entropy_avail
 
-# Pool size in bits
+# プールサイズ（ビット）
 cat /proc/sys/kernel/random/poolsize
-# 256   (always 256 since 5.17)
+# 256   （5.17以降は常に256）
 ```
 
-## VM entropy problem {#vm-entropy-problem}
+## VMのエントロピー問題 {#vm-entropy-problem}
 
-Virtual machines share a hypervisor that controls timing. Interrupt jitter — the primary
-entropy source on bare metal — is much less random in a VM:
+仮想マシンは、タイミングを制御するハイパーバイザを共有している。割り込みジッタ — ベアメタルでの主要なエントロピー源 — は、VMでははるかにランダム性が低い:
 
-1. The hypervisor may deliver interrupts at fixed intervals
-2. Two VMs started from the same snapshot (or snapshotted and cloned) share identical
-   RNG state at the snapshot point
+1. ハイパーバイザは固定間隔で割り込みを配送することがある
+2. 同じスナップショットから起動された（あるいはスナップショットを取ってクローンされた）2つのVMは、スナップショット時点で同一のRNG状態を共有する
 
-**Fork problem**: if a VM is snapshotted and two instances resume from the same state,
-both will produce identical random numbers until their RNG states diverge. This is a
-real cryptographic hazard (identical TLS session keys, duplicate nonces).
+**フォーク問題**: VMのスナップショットが取られ、2つのインスタンスが同じ状態から再開すると、RNG状態が分岐するまで両者は同一の乱数を生成する。これは現実の暗号上の危険である（同一のTLSセッション鍵、重複したnonce）。
 
-### Solutions {#solutions}
+### 解決策 {#solutions}
 
-**virtio-rng**: a paravirtual device that requests random bytes from the host:
+**virtio-rng**: ホストに乱数バイトを要求する準仮想化デバイス:
 
 ```bash
-# In the VM, check for virtio-rng
+# VM内でvirtio-rngを確認
 lsmod | grep virtio_rng
-# or
+# または
 ls /sys/bus/virtio/drivers/virtio_rng/
 
-# The host (e.g., QEMU) feeds entropy from its own /dev/random
-# The guest's kernel mixes this into its entropy pool via add_hwgenerator_randomness()
+# ホスト（例: QEMU）は自身の /dev/random からエントロピーを供給する
+# ゲストのカーネルはadd_hwgenerator_randomness()でこれを自身のエントロピープールに混合する
 ```
 
-**RDRAND / RDSEED in the guest**: if the hypervisor passes through CPU RNG instructions,
-the VM uses real hardware entropy.
+**ゲスト内のRDRAND / RDSEED**: ハイパーバイザがCPUのRNG命令をパススルーしていれば、VMは本物のハードウェアエントロピーを使う。
 
-**VM fork detection**: Linux 5.17+ includes support for detecting VM forks via a virtual
-machine generation ID (VMGENID) ACPI device. When the hypervisor changes the generation ID
-(on snapshot resume), the kernel calls `add_vmfork_randomness()` to reseed the CRNG:
+**VMフォークの検出**: Linux 5.17以降には、仮想マシン世代ID（VMGENID）ACPIデバイスを介してVMのフォークを検出する仕組みが含まれている。ハイパーバイザが（スナップショットからの再開時に）世代IDを変更すると、カーネルは `add_vmfork_randomness()` を呼んでCRNGを再シードする:
 
 ```c
 /* drivers/virt/vmgenid.c */
-/* ACPI/DT device publishes a 128-bit generation counter */
+/* ACPI/DTデバイスが128ビットの世代カウンタを公開する */
 struct vmgenid_state {
-    u8 *next_id;              /* pointer to the live counter in device memory */
-    u8 this_id[VMGENID_SIZE]; /* last-seen copy */
+    u8 *next_id;              /* デバイスメモリ内の現在のカウンタへのポインタ */
+    u8 this_id[VMGENID_SIZE]; /* 最後に見た値のコピー */
 };
 
 static void vmgenid_notify(struct device *device)
@@ -317,104 +262,99 @@ static void vmgenid_notify(struct device *device)
     memcpy(old_id, state->this_id, sizeof(old_id));
     memcpy(state->this_id, state->next_id, sizeof(state->this_id));
     if (!memcmp(old_id, state->this_id, sizeof(old_id)))
-        return;  /* unchanged: not a fork/resume event */
+        return;  /* 変化なし: フォーク/再開イベントではない */
 
     add_vmfork_randomness(state->this_id, sizeof(state->this_id));
 }
 ```
 
-The ACPI notify handler is a thin wrapper that just calls `vmgenid_notify(dev)` when the
-platform signals a generation-ID change; the diff-and-reseed logic above is what actually
-detects the change and reseeds.
+ACPI通知ハンドラは、プラットフォームが世代IDの変更を通知したときに `vmgenid_notify(dev)` を呼ぶだけの薄いラッパーである。実際に変更を検出して再シードするのは、上記の比較と再シードのロジックである。
 
-## getrandom() in containers {#getrandom-in-containers}
+## コンテナ内のgetrandom() {#getrandom-in-containers}
 
-`getrandom()` is **not namespaced** — it uses the host kernel's entropy pool regardless of
-container namespace. A process inside a container calling `getrandom()` gets random bytes
-from the same pool as the host. This is correct: the entropy pool is a global resource
-and sharing it does not weaken it; more consumers mean more entropy mixing, not less.
+`getrandom()` は **namespace化されていない** — コンテナのnamespaceにかかわらず、ホストカーネルのエントロピープールを使う。コンテナ内のプロセスが `getrandom()` を呼ぶと、ホストと同じプールから乱数バイトを得る。これは正しい: エントロピープールはグローバルな資源であり、共有しても弱まることはない。利用者が増えればエントロピーの混合は増えこそすれ、減ることはない。
 
-Container runtimes do not (and should not) intercept `getrandom()`.
+コンテナランタイムは `getrandom()` を横取りしない（し、すべきでもない）。
 
-## Observing the RNG subsystem {#observing-the-rng-subsystem}
+## RNGサブシステムの観測 {#observing-the-rng-subsystem}
 
 ```bash
-# Current entropy estimate
+# 現在のエントロピー推定値
 cat /proc/sys/kernel/random/entropy_avail
-# 256   (capped at pool size since 5.17)
+# 256   （5.17以降はプールサイズが上限）
 
-# Pool parameters
+# プールのパラメータ
 cat /proc/sys/kernel/random/poolsize      # 256
-# Note: read_wakeup_threshold was removed in Linux 5.17. write_wakeup_threshold is
-# still a live sysctl node but is now vestigial (reads return a value; writes are
-# silently ignored). Use entropy_avail, poolsize, and urandom_min_reseed_secs instead.
+# 注: read_wakeup_thresholdはLinux 5.17で削除された。write_wakeup_thresholdは
+# 現在もsysctlノードとして存在するが、今では名残にすぎない（読み出すと値が返り、書き込みは
+# 黙って無視される）。代わりにentropy_avail、poolsize、urandom_min_reseed_secsを使うこと。
 
-# UUID generated from /dev/urandom (convenient test)
+# /dev/urandomから生成されたUUID（手軽なテスト）
 cat /proc/sys/kernel/random/uuid
 
-# FIPS 140-2 statistical test on the output (requires rng-tools)
+# 出力に対するFIPS 140-2統計テスト（rng-toolsが必要）
 rngtest -c 1000 < /dev/urandom
 # rngtest: bits tested:                 20000
 # rngtest: FIPS 140-2 successes:        1000
 # rngtest: FIPS 140-2 failures:         0
 
-# Performance test
+# 性能テスト
 dd if=/dev/urandom of=/dev/null bs=1M count=100 2>&1
-# 100 MB/s+ on modern hardware (ChaCha20 CRNG is fast)
+# 最新のハードウェアでは100 MB/s以上（ChaCha20 CRNGは高速）
 
-# Watch entropy events via tracepoints (kernel 5.x+)
+# tracepointでエントロピーイベントを監視（カーネル5.x以降）
 perf trace -e random:*
-# or (for kernels with these tracepoints enabled):
+# または（これらのtracepointが有効なカーネルでは）:
 trace-cmd record -e random:* sleep 10
 trace-cmd report
 
-# Check if hardware RNG is present and used
+# ハードウェアRNGが存在し使われているか確認
 cat /sys/class/misc/hw_random/rng_current
-# virtio_rng.0   (in a VM with virtio-rng)
-# tpm-rng-0      (TPM as RNG source)
-# intel_rng      (Intel hardware)
+# virtio_rng.0   （virtio-rngのあるVM内）
+# tpm-rng-0      （RNG源としてのTPM）
+# intel_rng      （Intelのハードウェア）
 
-# Force rngd to add entropy from hardware RNG
+# rngdにハードウェアRNGからエントロピーを追加させる
 rngd -f -r /dev/hwrng
 ```
 
-## Relevant source {#relevant-source}
+## 関連ソース {#relevant-source}
 
-- `drivers/char/random.c` — the entire entropy pool, CRNG, getrandom() implementation
-- `crypto/drbg.c` — NIST SP 800-90A DRBG implementation
-- `drivers/char/hw_random/` — hardware RNG drivers (virtio-rng, intel-rng, tpm-rng, etc.)
-- `drivers/virt/vmgenid.c` — VM fork detection via VMGENID
-- `arch/x86/kernel/cpu/rdrand.c` — RDRAND support
-- `include/linux/random.h` — kernel-internal RNG API
+- `drivers/char/random.c` — エントロピープール、CRNG、getrandom()の実装のすべて
+- `crypto/drbg.c` — NIST SP 800-90A DRBGの実装
+- `drivers/char/hw_random/` — ハードウェアRNGドライバ（virtio-rng、intel-rng、tpm-rngなど）
+- `drivers/virt/vmgenid.c` — VMGENIDによるVMフォークの検出
+- `arch/x86/kernel/cpu/rdrand.c` — RDRANDのサポート
+- `include/linux/random.h` — カーネル内部のRNG API
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [drivers/char/random.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/char/random.c) — the BLAKE2s input pool, ChaCha20 CRNG, and the `getrandom()`/`/dev/random`/`/dev/urandom` implementation
-- [crypto/drbg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/drbg.c) — the NIST SP 800-90A DRBG exposed through `crypto_alloc_rng()`
-- [include/linux/random.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/random.h) — `get_random_bytes()`, `get_random_u32()`/`get_random_u64()`, `get_random_u32_below()`, and the `add_*_randomness()` entropy-feeding API
-- [drivers/virt/vmgenid.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virt/vmgenid.c) — VM fork detection via the VMGENID ACPI/DT device
-- [arch/x86/kernel/cpu/rdrand.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/rdrand.c) — `x86_init_rdrand()`, the boot-time RDRAND self-test
+- [drivers/char/random.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/char/random.c) — BLAKE2s入力プール、ChaCha20 CRNG、`getrandom()`/`/dev/random`/`/dev/urandom` の実装
+- [crypto/drbg.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/crypto/drbg.c) — `crypto_alloc_rng()` を通じて公開されるNIST SP 800-90A DRBG
+- [include/linux/random.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/random.h) — `get_random_bytes()`、`get_random_u32()`/`get_random_u64()`、`get_random_u32_below()`、およびエントロピーを供給する `add_*_randomness()` API
+- [drivers/virt/vmgenid.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/virt/vmgenid.c) — VMGENID ACPI/DTデバイスによるVMフォークの検出
+- [arch/x86/kernel/cpu/rdrand.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/kernel/cpu/rdrand.c) — `x86_init_rdrand()`、ブート時のRDRANDセルフテスト
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`getrandom(2)`](https://man7.org/linux/man-pages/man2/getrandom.2.html) — syscall flags (`GRND_NONBLOCK`, `GRND_RANDOM`), signal behavior, and the 256-byte no-short-read guarantee
-- [`random(4)`](https://man7.org/linux/man-pages/man4/random.4.html) — `/dev/random` and `/dev/urandom` device semantics, including the Linux 5.6 non-blocking change
+- [`getrandom(2)`](https://man7.org/linux/man-pages/man2/getrandom.2.html) — システムコールのフラグ（`GRND_NONBLOCK`、`GRND_RANDOM`）、シグナル時の動作、256バイトでの短い読み出しなしの保証
+- [`random(4)`](https://man7.org/linux/man-pages/man4/random.4.html) — `/dev/random` と `/dev/urandom` デバイスのセマンティクス（Linux 5.6でのノンブロッキング化を含む）
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Kernel Crypto API](crypto-api.md) — `crypto_alloc_rng()` and the DRBG interface built on top of this page's entropy pool
-- [dm-crypt and fscrypt](encryption.md) — where `get_random_bytes()`/`/dev/urandom` output is consumed for volume keys and IVs
-- [Kernel Keyring](keyring.md) — where generated key material is stored once created
-- [Crypto War Stories](war-stories.md) — incident 3, "`getrandom()` blocking at boot," a real entropy-starvation case built on the material in this page
+- [カーネル暗号API](crypto-api.md) — `crypto_alloc_rng()` と、このページのエントロピープールの上に構築されたDRBGインターフェース
+- [dm-cryptとfscrypt](encryption.md) — `get_random_bytes()`/`/dev/urandom` の出力がボリューム鍵やIVのために消費される場所
+- [カーネルkeyring](keyring.md) — 生成された鍵素材が作成後に格納される場所
+- [暗号の事件簿](war-stories.md) — 事件3「ブート時の `getrandom()` のブロック」。このページの内容に基づく、実際のエントロピー枯渇の事例
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [The search for truly random numbers in the kernel](https://lwn.net/Articles/567055/) — Jonathan Corbet, September 18, 2013 — why the kernel mixes RDRAND into the pool instead of trusting it alone
-- [A system call for random numbers: getrandom()](https://lwn.net/Articles/606141/) — Jake Edge, July 23, 2014 — the original design discussion for the syscall this page documents
-- [Uniting the Linux random-number devices](https://lwn.net/Articles/884875/) — Jake Edge, February 16, 2022 — Jason Donenfeld's push, from the era of the pool rewrite, to make `/dev/random` and `/dev/urandom` behave identically
+- [The search for truly random numbers in the kernel](https://lwn.net/Articles/567055/) — Jonathan Corbet、2013年9月18日 — カーネルがRDRANDだけを信頼せずにプールへ混合する理由
+- [A system call for random numbers: getrandom()](https://lwn.net/Articles/606141/) — Jake Edge、2014年7月23日 — このページで扱ったシステムコールの当初の設計議論
+- [Uniting the Linux random-number devices](https://lwn.net/Articles/884875/) — Jake Edge、2022年2月16日 — プール書き換えの時期に、`/dev/random` と `/dev/urandom` を同一の動作にしようとしたJason Donenfeldの取り組み
 
-### External {#external}
+### 外部資料 {#external}
 
-- [NIST SP 800-90A Rev. 1](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final) — "Recommendation for Random Number Generation Using Deterministic Random Bit Generators," the standard implemented by `crypto/drbg.c`
+- [NIST SP 800-90A Rev. 1](https://csrc.nist.gov/pubs/sp/800/90/a/r1/final) — "Recommendation for Random Number Generation Using Deterministic Random Bit Generators"、`crypto/drbg.c` が実装する標準

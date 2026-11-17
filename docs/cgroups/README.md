@@ -1,25 +1,25 @@
-# Cgroups & Namespaces {#cgroups-namespaces}
+# cgroup と namespace {#cgroups-namespaces}
 
-> Resource control and isolation primitives that underpin containers
+> コンテナを支えるリソース制御と隔離のプリミティブ
 
-## What cgroups and namespaces do {#what-cgroups-and-namespaces-do}
+## cgroup と namespace が行うこと {#what-cgroups-and-namespaces-do}
 
-**Cgroups (control groups)** limit *how much* resource a group of processes can use:
+**cgroup（control group）** は、プロセスのグループが *どれだけ* リソースを使えるかを制限する:
 
-- CPU time (cpu.weight, cpu.max)
-- Memory (memory.max, memory.swap.max)
-- I/O bandwidth (io.weight, io.max)
-- Process count (pids.max)
+- CPU時間（cpu.weight, cpu.max）
+- メモリ（memory.max, memory.swap.max）
+- I/O帯域（io.weight, io.max）
+- プロセス数（pids.max）
 
-**Namespaces** control *what* processes can see:
+**namespace** は、プロセスから *何が* 見えるかを制御する:
 
-- Which processes are visible (PID namespace)
-- Which filesystem view they have (mount namespace)
-- Which network interfaces and addresses they have (network namespace)
-- Their hostname and domain (UTS namespace)
-- Their user/group IDs (user namespace)
+- どのプロセスが見えるか（PID namespace）
+- どのようなファイルシステムのビューを持つか（mount namespace）
+- どのネットワークインターフェースとアドレスを持つか（network namespace）
+- ホスト名とドメイン名（UTS namespace）
+- ユーザー/グループID（user namespace）
 
-Together they implement container isolation: Docker, Kubernetes pods, and systemd services are built on these primitives.
+この2つを組み合わせてコンテナの隔離が実現される。Docker、Kubernetes の Pod、systemd のサービスはこれらのプリミティブの上に構築されている。
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
@@ -34,35 +34,35 @@ Together they implement container isolation: Docker, Kubernetes pods, and system
 └──────────────────────────────────────────────────────────────┘
 ```
 
-## Pages in this section {#pages-in-this-section}
+## このセクションのページ {#pages-in-this-section}
 
-| Page | What it covers |
+| ページ | 扱う内容 |
 |------|----------------|
-| [Cgroup v2 Architecture](cgroup-v2.md) | Hierarchy, controllers, struct cgroup |
-| [Resource Controllers](cgroup-controllers.md) | cpu, memory, io, pids controllers in detail |
-| [Namespaces](namespaces.md) | All 8 namespace types, clone/unshare/setns |
-| [Container Isolation](container-isolation.md) | How namespaces + cgroups combine for containers |
-| [io Controller](io-cgroup.md) | blkio, io.weight, io.max, io.latency, BFQ |
-| [Cgroup BPF Programs](cgroup-bpf.md) | eBPF attach types, device policy, network filtering |
-| [systemd and Cgroup Integration](systemd-cgroups.md) | Slices, scopes, services, delegation |
-| [War Stories](war-stories.md) | OOM loops, CFS throttling, v1→v2 migration pain |
+| [cgroup v2 のアーキテクチャ](cgroup-v2.md) | 階層、コントローラ、struct cgroup |
+| [リソースコントローラ](cgroup-controllers.md) | cpu、memory、io、pids の各コントローラの詳細 |
+| [namespace](namespaces.md) | 全8種類の namespace、clone/unshare/setns |
+| [コンテナの隔離](container-isolation.md) | namespace と cgroup を組み合わせてコンテナを実現する方法 |
+| [io コントローラ](io-cgroup.md) | blkio、io.weight、io.max、io.latency、BFQ |
+| [cgroup BPF プログラム](cgroup-bpf.md) | eBPF のアタッチタイプ、デバイスポリシー、ネットワークフィルタリング |
+| [systemd と cgroup の統合](systemd-cgroups.md) | slice、scope、service、委譲 |
+| [事件簿](war-stories.md) | OOM ループ、CFS スロットリング、v1→v2 移行の苦労 |
 
-## Quick reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Cgroup v2 filesystem
+# cgroup v2 ファイルシステム
 mount | grep cgroup2
 # cgroup2 on /sys/fs/cgroup type cgroup2 (rw,nosuid,nodev,noexec,relatime)
 
-# Current process's cgroup
+# 現在のプロセスの cgroup
 cat /proc/self/cgroup
 # 0::/user.slice/user-1000.slice/session-1.scope
 
-# Systemd creates cgroups automatically
+# systemd は cgroup を自動的に作成する
 systemctl status nginx
 # CGroup: /system.slice/nginx.service
 
-# Namespaces of current process
+# 現在のプロセスの namespace
 ls -la /proc/self/ns/
 # lrwxrwxrwx ... cgroup -> 'cgroup:[4026531835]'
 # lrwxrwxrwx ... mnt -> 'mnt:[4026531840]'
