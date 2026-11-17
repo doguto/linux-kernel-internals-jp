@@ -1,37 +1,37 @@
-# KASAN (Kernel Address Sanitizer) {#kasan-kernel-address-sanitizer}
+# KASAN（Kernel Address Sanitizer） {#kasan-kernel-address-sanitizer}
 
-> Detecting memory bugs in the kernel at runtime
+> 実行時にカーネル内のメモリバグを検出する
 
-## What Is KASAN? {#what-is-kasan}
+## KASANとは何か {#what-is-kasan}
 
-KASAN is a dynamic memory error detector for the Linux kernel ([docs.kernel.org](https://docs.kernel.org/dev-tools/kasan.html)). It detects:
+KASANはLinuxカーネル向けの動的メモリエラー検出器である（[docs.kernel.org](https://docs.kernel.org/dev-tools/kasan.html)）。次のものを検出する。
 
-- **Out-of-bounds access**: Reading or writing past the end of an allocated object
-- **Use-after-free**: Accessing memory after it has been freed
-- **Double-free**: Freeing the same object twice
-- **Invalid-free**: Freeing a pointer that was never allocated
+- **範囲外アクセス**: 割り当てられたオブジェクトの末尾を越えて読み書きする
+- **use-after-free**: 解放済みのメモリにアクセスする
+- **二重解放**: 同じオブジェクトを2回解放する
+- **不正な解放**: 一度も割り当てられていないポインタを解放する
 
-These bugs can cause data corruption, crashes, and security vulnerabilities. Dirty COW ([CVE-2016-5195](https://git.kernel.org/linus/19be0eaffa3a)) is one example of a memory bug that persisted for 9 years before discovery.
+これらのバグはデータ破壊、クラッシュ、セキュリティ脆弱性の原因になり得る。Dirty COW（[CVE-2016-5195](https://git.kernel.org/linus/19be0eaffa3a)）は、発見されるまで9年間残り続けたメモリバグの一例である。
 
-In Generic and SW_TAGS modes, the compiler inserts checks on every memory access to verify the accessed memory is valid. In HW_TAGS mode, the hardware performs these checks. When a violation is detected, the kernel prints a detailed report identifying the bug type, the offending access, and the allocation/deallocation history of the involved object.
+GenericモードとSW_TAGSモードでは、コンパイラがすべてのメモリアクセスにチェックを挿入し、アクセス先のメモリが有効であることを検証する。HW_TAGSモードではハードウェアがこのチェックを行う。違反が検出されると、カーネルはバグの種類、問題のアクセス、関係するオブジェクトの割り当て／解放履歴を示す詳細なレポートを出力する。
 
-## How KASAN Works {#how-kasan-works}
+## KASANの仕組み {#how-kasan-works}
 
-### The Three Modes {#the-three-modes}
+### 3つのモード {#the-three-modes}
 
-KASAN has three modes, each with different trade-offs between coverage, performance, and hardware requirements:
+KASANには3つのモードがあり、それぞれ検出範囲、性能、ハードウェア要件の間で異なるトレードオフを持つ。
 
-| Mode | Config Option | Mechanism | Overhead | Use Case |
+| モード | 設定オプション | 仕組み | オーバーヘッド | 用途 |
 |------|--------------|-----------|----------|----------|
-| Generic KASAN | `CONFIG_KASAN_GENERIC` | Shadow memory | High (see [docs](https://docs.kernel.org/dev-tools/kasan.html)) | Development and CI testing |
-| SW_TAGS KASAN | `CONFIG_KASAN_SW_TAGS` | Software memory tagging | Moderate | Broader testing (arm64 only) |
-| HW_TAGS KASAN | `CONFIG_KASAN_HW_TAGS` | ARM MTE hardware tagging | Low | Production-capable testing |
+| Generic KASAN | `CONFIG_KASAN_GENERIC` | シャドウメモリ | 高（[ドキュメント](https://docs.kernel.org/dev-tools/kasan.html)参照） | 開発およびCIテスト |
+| SW_TAGS KASAN | `CONFIG_KASAN_SW_TAGS` | ソフトウェアによるメモリタグ付け | 中 | より広範なテスト（arm64のみ） |
+| HW_TAGS KASAN | `CONFIG_KASAN_HW_TAGS` | ARM MTEのハードウェアタグ付け | 低 | 本番環境でも使えるテスト |
 
-### Generic KASAN: Shadow Memory {#generic-kasan-shadow-memory}
+### Generic KASAN: シャドウメモリ {#generic-kasan-shadow-memory}
 
-Generic KASAN is the most widely used mode. It works by maintaining a **shadow memory** region that tracks the validity of every byte of kernel memory.
+Generic KASANは最も広く使われているモードである。カーネルメモリのすべてのバイトの有効性を追跡する**シャドウメモリ**領域を維持することで動作する。
 
-The key insight: one shadow byte can encode the state of eight real bytes.
+鍵となる着想は、1バイトのシャドウで実メモリ8バイトの状態を表現できることである。
 
 ```
 Real memory (8-byte granule):
@@ -46,26 +46,26 @@ Real memory (8-byte granule):
          └───────────┘
 ```
 
-**Shadow byte encoding**:
+**シャドウバイトのエンコーディング**:
 
-Shadow byte values (defined in [`mm/kasan/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h)):
+シャドウバイトの値（[`mm/kasan/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h)で定義）:
 
-| Shadow Value | Kernel Define | Meaning |
+| シャドウ値 | カーネルの定義名 | 意味 |
 |-------------|--------------|---------|
-| `0x00` | — | All 8 bytes are valid (accessible) |
-| `0x01`-`0x07` | — | Only the first N bytes are valid (partial granule) |
-| `0xFF` | `KASAN_SHADOW_INIT` | Inaccessible / uninitialized shadow |
-| `0xFE` | `KASAN_PAGE_REDZONE` | Redzone for kmalloc_large allocation |
-| `0xFC` | `KASAN_SLAB_REDZONE` | Redzone for slab object |
-| `0xFB` | `KASAN_SLAB_FREE` | Freed slab object |
-| `0xFA` | `KASAN_KMALLOC_FREETRACK` | Freed kmalloc object with free-track metadata |
-| `0xF9` | `KASAN_GLOBAL_REDZONE` | Redzone for global variable |
-| `0xF8` | `KASAN_VMALLOC_INVALID` | Inaccessible space in vmap area |
-| `0xF1` | `KASAN_STACK_LEFT` | Stack left redzone |
-| `0xF2` | `KASAN_STACK_MID` | Stack mid redzone |
-| `0xF3` | `KASAN_STACK_RIGHT` | Stack right redzone |
+| `0x00` | — | 8バイトすべてが有効（アクセス可能） |
+| `0x01`-`0x07` | — | 先頭Nバイトのみ有効（部分グラニュール） |
+| `0xFF` | `KASAN_SHADOW_INIT` | アクセス不可／未初期化のシャドウ |
+| `0xFE` | `KASAN_PAGE_REDZONE` | kmalloc_large割り当てのレッドゾーン |
+| `0xFC` | `KASAN_SLAB_REDZONE` | slabオブジェクトのレッドゾーン |
+| `0xFB` | `KASAN_SLAB_FREE` | 解放済みslabオブジェクト |
+| `0xFA` | `KASAN_KMALLOC_FREETRACK` | 解放追跡メタデータ付きの解放済みkmallocオブジェクト |
+| `0xF9` | `KASAN_GLOBAL_REDZONE` | グローバル変数のレッドゾーン |
+| `0xF8` | `KASAN_VMALLOC_INVALID` | vmap領域内のアクセス不可領域 |
+| `0xF1` | `KASAN_STACK_LEFT` | スタックの左レッドゾーン |
+| `0xF2` | `KASAN_STACK_MID` | スタックの中間レッドゾーン |
+| `0xF3` | `KASAN_STACK_RIGHT` | スタックの右レッドゾーン |
 
-For every memory access, the compiler inserts a check:
+すべてのメモリアクセスに対して、コンパイラは次のチェックを挿入する。
 
 ```
 1. Compute shadow address:  shadow_addr = (addr >> 3) + KASAN_SHADOW_OFFSET
@@ -76,7 +76,7 @@ For every memory access, the compiler inserts a check:
 4. Otherwise: access is valid, proceed
 ```
 
-Each memory access incurs additional instructions for the shadow check. The shadow memory itself consumes 1/8 of the total kernel address space.
+各メモリアクセスには、シャドウチェックのための追加命令が発生する。シャドウメモリ自体はカーネルアドレス空間全体の1/8を消費する。
 
 ```
 Kernel address space layout with KASAN:
@@ -92,9 +92,9 @@ Kernel address space layout with KASAN:
 └──────────────────────────┘  Low addresses
 ```
 
-### SW_TAGS KASAN: Software Memory Tagging {#sw_tags-kasan-software-memory-tagging}
+### SW_TAGS KASAN: ソフトウェアによるメモリタグ付け {#sw_tags-kasan-software-memory-tagging}
 
-Generic KASAN's overhead made it impractical for broad testing beyond dedicated CI systems. SW_TAGS KASAN trades deterministic detection for lower overhead by assigning random **tags** to memory allocations and pointers. On each access, it checks that the pointer tag matches the memory tag.
+Generic KASANのオーバーヘッドのため、専用のCIシステム以外で広くテストに使うのは現実的ではなかった。SW_TAGS KASANは、メモリ割り当てとポインタにランダムな**タグ**を付与することで、決定的な検出と引き換えにオーバーヘッドを下げる。アクセスのたびに、ポインタのタグがメモリのタグと一致するかをチェックする。
 
 ```
 Tagged pointer (arm64 Top Byte Ignore):
@@ -110,17 +110,17 @@ Access check:
   if pointer_tag != memory_tag → BUG
 ```
 
-This relies on arm64's Top Byte Ignore (TBI) feature, which ignores the top byte of pointers during address translation. The kernel stores a random tag in that top byte.
+これはarm64のTop Byte Ignore（TBI）機能に依存している。TBIはアドレス変換時にポインタの最上位バイトを無視する機能であり、カーネルはその最上位バイトにランダムなタグを格納する。
 
-When memory is freed, a new random tag is assigned to the shadow. The old pointer still carries the old tag, so any use-after-free will likely be caught (with probability 1 - 1/256 per access, since tags are 8 bits).
+メモリが解放されると、シャドウには新しいランダムなタグが割り当てられる。古いポインタは古いタグを持ったままなので、use-after-freeはおそらく検出される（タグは8ビットなので、1回のアクセスあたりの検出確率は1 - 1/256）。
 
-### HW_TAGS KASAN: Hardware Memory Tagging (ARM MTE) {#hw_tags-kasan-hardware-memory-tagging-arm-mte}
+### HW_TAGS KASAN: ハードウェアによるメモリタグ付け（ARM MTE） {#hw_tags-kasan-hardware-memory-tagging-arm-mte}
 
-HW_TAGS KASAN uses ARM Memory Tagging Extension (MTE), available on ARMv8.5+ processors. MTE implements the same tag-checking concept entirely in hardware:
+HW_TAGS KASANは、ARMv8.5以降のプロセッサで利用できるARM Memory Tagging Extension（MTE）を使う。MTEは同じタグチェックの概念を完全にハードウェアで実装している。
 
-- The CPU stores a 4-bit tag in every 16-byte memory granule (using dedicated tag storage in the memory controller)
-- Pointers carry a 4-bit tag in bits [59:56]
-- The CPU checks tags on every memory access with **zero additional instructions**
+- CPUは16バイトのメモリグラニュールごとに4ビットのタグを格納する（メモリコントローラ内の専用タグ記憶領域を使う）
+- ポインタはビット[59:56]に4ビットのタグを持つ
+- CPUは**追加命令ゼロ**ですべてのメモリアクセスのタグをチェックする
 
 ```
 ARM MTE (tag in bits [59:56], defined in arch/arm64/include/asm/mte-def.h):
@@ -136,11 +136,11 @@ ARM MTE (tag in bits [59:56], defined in arch/arm64/include/asm/mte-def.h):
         └── mismatch → hardware exception
 ```
 
-Because the CPU performs the tag check, there are no additional instructions in the memory access path. The trade-off is a coarser tag space (4 bits = 16 possible tags, so 1/16 chance of missing a bug per access) and the requirement for MTE-capable hardware (ARMv8.5+).
+タグチェックはCPUが行うため、メモリアクセスのパスに追加命令は入らない。トレードオフとして、タグ空間がより粗く（4ビット = 16通りのタグなので、1回のアクセスあたり1/16の確率でバグを見逃す）、MTE対応ハードウェア（ARMv8.5以降）が必要になる。
 
-## What a KASAN Report Looks Like {#what-a-kasan-report-looks-like}
+## KASANレポートの例 {#what-a-kasan-report-looks-like}
 
-When KASAN detects a bug, it prints a report to the kernel log. Here is a realistic example of a slab-out-of-bounds access:
+KASANがバグを検出すると、カーネルログにレポートを出力する。以下はslab-out-of-boundsアクセスの現実的な例である。
 
 ```
 ==================================================================
@@ -180,185 +180,185 @@ Memory state around the buggy address:
 ==================================================================
 ```
 
-**Reading the report**:
+**レポートの読み方**:
 
-1. **Bug type**: `slab-out-of-bounds` -- the access went past the end of a slab object
-2. **Access details**: A 4-byte write at address `ffff888012345678`
-3. **Call trace**: Shows exactly where the bad access happened (`example_function+0x58`)
-4. **Allocation trace**: Shows where the object was originally allocated
-5. **Object details**: The object is in `kmalloc-32` (a 32-byte slab cache), and the access was 24 bytes past the end of the 32-byte allocation
-6. **Shadow memory dump**: The `^` marker points to the shadow byte corresponding to the buggy address. `fc` means KASAN redzone -- the code wrote into the padding between slab objects
+1. **バグの種類**: `slab-out-of-bounds` -- アクセスがslabオブジェクトの末尾を越えた
+2. **アクセスの詳細**: アドレス`ffff888012345678`への4バイトの書き込み
+3. **コールトレース**: 不正アクセスが起きた正確な場所（`example_function+0x58`）を示す
+4. **割り当てトレース**: オブジェクトが最初に割り当てられた場所を示す
+5. **オブジェクトの詳細**: オブジェクトは`kmalloc-32`（32バイトのslabキャッシュ）にあり、アクセスは32バイトの割り当ての末尾から24バイト先だった
+6. **シャドウメモリのダンプ**: `^`マーカーはバグのあるアドレスに対応するシャドウバイトを指す。`fc`はKASANのレッドゾーンを意味し、コードがslabオブジェクト間のパディングに書き込んだことを示す
 
-## Enabling KASAN {#enabling-kasan}
+## KASANの有効化 {#enabling-kasan}
 
-### Kernel Configuration {#kernel-configuration}
+### カーネル設定 {#kernel-configuration}
 
 ```
-# Enable KASAN (pick one mode)
+# KASANを有効化する（モードを1つ選ぶ）
 CONFIG_KASAN=y
 
-# Generic mode (works on all architectures with compiler support)
+# Genericモード（コンパイラが対応していれば全アーキテクチャで動作）
 CONFIG_KASAN_GENERIC=y
 
-# OR: Software tag-based mode (arm64 only)
+# または: ソフトウェアタグベースモード（arm64のみ）
 CONFIG_KASAN_SW_TAGS=y
 
-# OR: Hardware tag-based mode (arm64 with MTE only)
+# または: ハードウェアタグベースモード（MTE対応のarm64のみ）
 CONFIG_KASAN_HW_TAGS=y
 
-# Recommended companion options
-CONFIG_KASAN_INLINE=y        # Inline checks (faster than outline)
-CONFIG_STACKTRACE=y          # Better stack traces in reports
-CONFIG_SLUB_DEBUG=y          # Enhanced slab debugging info
+# 併用推奨のオプション
+CONFIG_KASAN_INLINE=y        # インラインチェック（outlineより高速）
+CONFIG_STACKTRACE=y          # レポート中のスタックトレースを改善
+CONFIG_SLUB_DEBUG=y          # slabデバッグ情報を強化
 ```
 
-### Build Requirements {#build-requirements}
+### ビルド要件 {#build-requirements}
 
-Compiler requirements (from [`lib/Kconfig.kasan`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kasan)):
+コンパイラの要件（[`lib/Kconfig.kasan`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/Kconfig.kasan)より）:
 
-| Mode | GCC | Clang |
+| モード | GCC | Clang |
 |------|-----|-------|
-| Generic | 8.3.0+ | Any version supported by kernel |
-| SW_TAGS | 11+ | Any version supported by kernel |
-| HW_TAGS | 10+ | 12+ |
+| Generic | 8.3.0以降 | カーネルがサポートする任意のバージョン |
+| SW_TAGS | 11以降 | カーネルがサポートする任意のバージョン |
+| HW_TAGS | 10以降 | 12以降 |
 
-The compiler must support `-fsanitize=kernel-address` (Generic) or `-fsanitize=kernel-hwaddress` (SW_TAGS/HW_TAGS).
+コンパイラは`-fsanitize=kernel-address`（Generic）または`-fsanitize=kernel-hwaddress`（SW_TAGS/HW_TAGS）をサポートしている必要がある。
 
 ```bash
-# Building a KASAN-enabled kernel
+# KASANを有効にしたカーネルのビルド
 make defconfig
 ./scripts/config -e KASAN -e KASAN_GENERIC -e KASAN_INLINE
 make -j$(nproc)
 ```
 
-### Boot-Time Options {#boot-time-options}
+### ブート時オプション {#boot-time-options}
 
 ```bash
-# For HW_TAGS mode: enable/disable at boot
-kasan.mode=on          # Enable (default)
-kasan.mode=off         # Disable
-kasan.stacktrace=on    # Collect alloc/free stack traces
-kasan.fault=report     # Report but don't panic (default)
-kasan.fault=panic      # Panic on first KASAN error
+# HW_TAGSモード用: ブート時に有効化／無効化する
+kasan.mode=on          # 有効化（デフォルト）
+kasan.mode=off         # 無効化
+kasan.stacktrace=on    # 割り当て／解放のスタックトレースを収集
+kasan.fault=report     # レポートするがpanicしない（デフォルト）
+kasan.fault=panic      # 最初のKASANエラーでpanicする
 ```
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Trigger a KASAN Report in QEMU {#trigger-a-kasan-report-in-qemu}
+### QEMUでKASANレポートを発生させる {#trigger-a-kasan-report-in-qemu}
 
-The kernel includes a built-in test module for KASAN:
+カーネルにはKASAN用の組み込みテストモジュールが含まれている。
 
 ```bash
-# Boot a KASAN-enabled kernel in QEMU, then:
+# KASANを有効にしたカーネルをQEMUで起動してから:
 
-# Load the KASAN test module
+# KASANテストモジュールをロードする
 modprobe kasan_test
 
-# Or run the KASAN KUnit test suite
-# (requires CONFIG_KUNIT=y and CONFIG_KASAN_KUNIT_TEST=y)
+# またはKASANのKUnitテストスイートを実行する
+# （CONFIG_KUNIT=y と CONFIG_KASAN_KUNIT_TEST=y が必要）
 ./tools/testing/kunit/kunit.py run kasan
 ```
 
-### Check If KASAN Is Active {#check-if-kasan-is-active}
+### KASANが有効か確認する {#check-if-kasan-is-active}
 
 ```bash
-# Check kernel config
+# カーネル設定を確認する
 zcat /proc/config.gz | grep KASAN
 
-# Check boot messages
+# ブートメッセージを確認する
 dmesg | grep -i kasan
 ```
 
-### Read KASAN Reports {#read-kasan-reports}
+### KASANレポートを読む {#read-kasan-reports}
 
 ```bash
-# Watch for KASAN reports in real time
+# KASANレポートをリアルタイムで監視する
 dmesg -w | grep -A 30 "BUG: KASAN"
 ```
 
-## Performance Overhead {#performance-overhead}
+## 性能オーバーヘッド {#performance-overhead}
 
-| Mode | CPU Overhead | Memory Overhead | Detection Probability |
+| モード | CPUオーバーヘッド | メモリオーバーヘッド | 検出確率 |
 |------|-------------|-----------------|----------------------|
-| Generic | High | 1/8 of kernel memory for shadow | 100% — deterministic |
-| SW_TAGS | Moderate | 1/16 of kernel memory for shadow | 1 - 1/256 per access (~99.6%) |
-| HW_TAGS | Low | Hardware tag storage (implementation-defined) | 1 - 1/16 per access (~93.75%) |
+| Generic | 高 | カーネルメモリの1/8をシャドウに使用 | 100% — 決定的 |
+| SW_TAGS | 中 | カーネルメモリの1/16をシャドウに使用 | アクセスあたり1 - 1/256（約99.6%） |
+| HW_TAGS | 低 | ハードウェアのタグ記憶領域（実装依存） | アクセスあたり1 - 1/16（約93.75%） |
 
-(Overhead varies by workload. See [KASAN documentation](https://docs.kernel.org/dev-tools/kasan.html) for details.)
+（オーバーヘッドはワークロードによって異なる。詳細は[KASANのドキュメント](https://docs.kernel.org/dev-tools/kasan.html)を参照。）
 
-Generic mode has the highest overhead but catches everything. It is the standard choice for kernel CI systems and development builds. HW_TAGS mode has low enough overhead for deployment on production hardware.
+Genericモードはオーバーヘッドが最も大きいが、すべてを検出する。カーネルのCIシステムや開発用ビルドでは標準的な選択肢である。HW_TAGSモードは本番ハードウェアに展開できるほどオーバーヘッドが小さい。
 
-## History {#history}
+## 歴史 {#history}
 
-### v4.0: Introduction (2015) {#v40-introduction-2015}
+### v4.0: 導入（2015年） {#v40-introduction-2015}
 
-**Commit**: [0b24becc8105](https://git.kernel.org/linus/0b24becc8105) ("kasan: add kernel address sanitizer infrastructure")
+**コミット**: [0b24becc8105](https://git.kernel.org/linus/0b24becc8105)（"kasan: add kernel address sanitizer infrastructure"）
 
-**Author**: Andrey Ryabinin (Samsung/Google)
+**作者**: Andrey Ryabinin（Samsung/Google）
 
-KASAN was inspired by AddressSanitizer (ASan) for userspace, created by Konstantin Serebryany at Google. Andrey Ryabinin adapted the concept for the Linux kernel, using compiler instrumentation and shadow memory. The initial implementation supported x86_64 only.
+KASANは、GoogleのKonstantin Serebryanyが作ったユーザー空間向けのAddressSanitizer（ASan）に着想を得たものである。Andrey Ryabininは、コンパイラによる計装とシャドウメモリを用いて、この概念をLinuxカーネルに適用した。初期実装はx86_64のみをサポートしていた。
 
-**LWN coverage**: [The kernel address sanitizer](https://lwn.net/Articles/612153/) (2014)
+**LWNの記事**: [The kernel address sanitizer](https://lwn.net/Articles/612153/)（2014年）
 
-### v5.0: Software Tag-Based Mode (2019) {#v50-software-tag-based-mode-2019}
+### v5.0: ソフトウェアタグベースモード（2019年） {#v50-software-tag-based-mode-2019}
 
-**Commit**: [2bd926b439b4](https://git.kernel.org/linus/2bd926b439b4) ("kasan: add CONFIG_KASAN_GENERIC and CONFIG_KASAN_SW_TAGS")
+**コミット**: [2bd926b439b4](https://git.kernel.org/linus/2bd926b439b4)（"kasan: add CONFIG_KASAN_GENERIC and CONFIG_KASAN_SW_TAGS"）
 
-**Author**: Andrey Konovalov (Google)
+**作者**: Andrey Konovalov（Google）
 
-Generic KASAN's overhead made it impractical beyond dedicated CI environments. SW_TAGS KASAN introduced memory tagging in software, leveraging arm64's Top Byte Ignore (TBI) feature. This mode trades deterministic detection for lower overhead, targeting broader testing scenarios.
+Generic KASANのオーバーヘッドのため、専用のCI環境以外での利用は現実的ではなかった。SW_TAGS KASANは、arm64のTop Byte Ignore（TBI）機能を活用して、ソフトウェアによるメモリタグ付けを導入した。このモードは決定的な検出と引き換えにオーバーヘッドを下げ、より広範なテストシナリオを対象とする。
 
-**LWN coverage**: [Tag-based KASAN](https://lwn.net/Articles/766768/) (2018)
+**LWNの記事**: [Tag-based KASAN](https://lwn.net/Articles/766768/)（2018年）
 
-### v5.11: Hardware Tag-Based Mode (2021) {#v511-hardware-tag-based-mode-2021}
+### v5.11: ハードウェアタグベースモード（2021年） {#v511-hardware-tag-based-mode-2021}
 
-**Commit**: [2e903b914797](https://git.kernel.org/linus/2e903b914797) ("kasan, arm64: implement HW_TAGS runtime")
+**コミット**: [2e903b914797](https://git.kernel.org/linus/2e903b914797)（"kasan, arm64: implement HW_TAGS runtime"）
 
-**Author**: Andrey Konovalov (Google)
+**作者**: Andrey Konovalov（Google）
 
-HW_TAGS mode leverages ARM Memory Tagging Extension (MTE) to perform tag checks in hardware, further reducing overhead. This made KASAN deployable on production hardware.
+HW_TAGSモードはARM Memory Tagging Extension（MTE）を活用してタグチェックをハードウェアで行い、オーバーヘッドをさらに削減する。これによりKASANを本番ハードウェアに展開できるようになった。
 
-**LWN coverage**: [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/) (2020)
+**LWNの記事**: [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/)（2020年）
 
-### v5.12: KASAN Boot Parameters {#v512-kasan-boot-parameters}
+### v5.12: KASANのブートパラメータ {#v512-kasan-boot-parameters}
 
-**Commit**: [3c8bc5e09bb2](https://git.kernel.org/linus/3c8bc5e09bb2) ("kasan: add boot parameters for hw tags mode")
+**コミット**: [3c8bc5e09bb2](https://git.kernel.org/linus/3c8bc5e09bb2)（"kasan: add boot parameters for hw tags mode"）
 
-HW_TAGS mode introduced boot-time parameters (`kasan.mode`, `kasan.stacktrace`, `kasan.fault`) to allow enabling/disabling KASAN without recompilation, which is essential for production use.
+HW_TAGSモードにブート時パラメータ（`kasan.mode`、`kasan.stacktrace`、`kasan.fault`）が導入され、再コンパイルなしにKASANを有効化／無効化できるようになった。これは本番での利用に不可欠である。
 
-### Expanding Coverage {#expanding-coverage}
+### 対象範囲の拡大 {#expanding-coverage}
 
-KASAN has been progressively extended to cover more kernel memory types. Stack and global variables are instrumented via the compiler in Generic mode (part of the original v4.0 implementation). vmalloc allocations were added in v5.4 ([commit 3c5c3cfb9ef4](https://git.kernel.org/linus/3c5c3cfb9ef4), Daniel Axtens).
+KASANは段階的に拡張され、より多くの種類のカーネルメモリをカバーするようになった。スタック変数とグローバル変数は、Genericモードではコンパイラによって計装される（v4.0の最初の実装に含まれていた）。vmalloc割り当てはv5.4で追加された（[commit 3c5c3cfb9ef4](https://git.kernel.org/linus/3c5c3cfb9ef4)、Daniel Axtens）。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/kasan/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan) | KASAN implementation directory |
-| [`mm/kasan/common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/common.c) | Code shared across all modes (hooks into slab allocator, poisoning) |
-| [`mm/kasan/generic.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/generic.c) | Generic (shadow memory) mode implementation |
-| [`mm/kasan/sw_tags.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/sw_tags.c) | Software tag-based mode |
-| [`mm/kasan/hw_tags.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/hw_tags.c) | Hardware tag-based mode (ARM MTE) |
-| [`mm/kasan/report.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/report.c) | Bug report formatting and printing |
-| [`mm/kasan/quarantine.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/quarantine.c) | Quarantine for freed objects (delays reuse to catch use-after-free) |
-| [`mm/kasan/shadow.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/shadow.c) | Shadow memory management |
-| [`include/linux/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kasan.h) | KASAN public API and inline hooks |
-| [`mm/kasan/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h) | Internal KASAN definitions and shadow value constants |
+| [`mm/kasan/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan) | KASAN実装のディレクトリ |
+| [`mm/kasan/common.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/common.c) | 全モード共通のコード（slabアロケータへのフック、ポイズニング） |
+| [`mm/kasan/generic.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/generic.c) | Generic（シャドウメモリ）モードの実装 |
+| [`mm/kasan/sw_tags.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/sw_tags.c) | ソフトウェアタグベースモード |
+| [`mm/kasan/hw_tags.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/hw_tags.c) | ハードウェアタグベースモード（ARM MTE） |
+| [`mm/kasan/report.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/report.c) | バグレポートの整形と出力 |
+| [`mm/kasan/quarantine.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/quarantine.c) | 解放済みオブジェクトの隔離（再利用を遅らせてuse-after-freeを検出する） |
+| [`mm/kasan/shadow.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/shadow.c) | シャドウメモリの管理 |
+| [`include/linux/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kasan.h) | KASANの公開APIとインラインフック |
+| [`mm/kasan/kasan.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kasan/kasan.h) | KASAN内部の定義とシャドウ値の定数 |
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [KASAN official documentation](https://docs.kernel.org/dev-tools/kasan.html) -- comprehensive guide covering all three modes, configuration, and interpretation of reports
+- [KASAN公式ドキュメント](https://docs.kernel.org/dev-tools/kasan.html) -- 3つのモードすべて、設定、レポートの解釈を網羅した包括的なガイド
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The kernel address sanitizer](https://lwn.net/Articles/612153/) -- original coverage (2014)
-- [Tag-based KASAN](https://lwn.net/Articles/766768/) -- SW_TAGS mode design (2018)
-- [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/) -- HW_TAGS mode (2020)
+- [The kernel address sanitizer](https://lwn.net/Articles/612153/) -- 最初の紹介記事（2014年）
+- [Tag-based KASAN](https://lwn.net/Articles/766768/) -- SW_TAGSモードの設計（2018年）
+- [Arm Memory Tagging Extension and KASAN](https://lwn.net/Articles/834289/) -- HW_TAGSモード（2020年）
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [slab](slab.md) -- KASAN instruments slab allocator hooks to track allocations and frees
-- [vmalloc](vmalloc.md) -- KASAN also covers vmalloc memory regions
-- [vrealloc](vrealloc.md) -- KASAN poisoning bugs found during vrealloc development
+- [slab](slab.md) -- KASANはslabアロケータのフックを計装して割り当てと解放を追跡する
+- [vmalloc](vmalloc.md) -- KASANはvmallocのメモリ領域もカバーする
+- [vrealloc](vrealloc.md) -- vreallocの開発中に見つかったKASANのポイズニングのバグ

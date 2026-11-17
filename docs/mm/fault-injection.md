@@ -1,43 +1,43 @@
-# Fault Injection for Memory Testing {#fault-injection-for-memory-testing}
+# メモリテストのためのフォールトインジェクション {#fault-injection-for-memory-testing}
 
-> Deliberately failing kernel allocations to exercise error-handling paths
+> カーネルの割り当てを意図的に失敗させてエラー処理パスを動かす
 
-## What Is Fault Injection? {#what-is-fault-injection}
+## フォールトインジェクションとは何か {#what-is-fault-injection}
 
-Fault injection is the practice of deliberately causing kernel operations to fail in order to test whether the error-handling paths in drivers and subsystems work correctly. The Linux kernel has a built-in fault injection framework that makes this systematic: you configure failure probability, scope, and targeting, and the kernel starts randomly failing specific operations.
+フォールトインジェクションとは、ドライバやサブシステムのエラー処理パスが正しく動作するかをテストするために、カーネルの操作を意図的に失敗させる手法である。Linuxカーネルにはこれを体系的に行うための組み込みのフォールトインジェクションフレームワークがある。失敗の確率、範囲、対象を設定すると、カーネルは特定の操作をランダムに失敗させ始める。
 
-The most common use is injection of memory allocation failures — making `kmalloc()`, `alloc_pages()`, and related calls return `NULL` or `-ENOMEM`. A well-written driver must handle these failures gracefully (free any partial allocations, return an error, not panic). A poorly written driver will oops, leak memory, or silently corrupt state. Fault injection reveals which category your code falls into.
+最も一般的な用途は、メモリ割り当ての失敗の注入である。つまり`kmalloc()`、`alloc_pages()`および関連する呼び出しが`NULL`や`-ENOMEM`を返すようにする。よく書かれたドライバは、こうした失敗を穏便に処理しなければならない（部分的な割り当てをすべて解放し、エラーを返し、panicしない）。出来の悪いドライバはoopsを起こしたり、メモリをリークさせたり、黙って状態を破壊したりする。フォールトインジェクションは、自分のコードがどちらに当てはまるかを明らかにする。
 
-!!! tip "Why this matters"
-    Error paths are notoriously undertested. A driver may have a `goto err_free` path that has never executed in practice. Fault injection exercises those paths under controlled conditions, ideally in a VM, before a real allocation failure exposes them in production.
+!!! tip "なぜこれが重要か"
+    エラーパスは十分にテストされていないことで悪名高い。ドライバには、実際には一度も実行されたことのない`goto err_free`のパスがあるかもしれない。フォールトインジェクションは、本番環境で本物の割り当て失敗がそれを露呈させる前に、管理された条件下で（理想的にはVM内で）それらのパスを動かす。
 
-## The Fault Injection Framework {#the-fault-injection-framework}
+## フォールトインジェクションフレームワーク {#the-fault-injection-framework}
 
-### Kernel Configuration {#kernel-configuration}
+### カーネル設定 {#kernel-configuration}
 
 ```
-# Core fault injection infrastructure
+# フォールトインジェクションの中核インフラ
 CONFIG_FAULT_INJECTION=y
-CONFIG_FAULT_INJECTION_DEBUG_FS=y     # debugfs interface (required for runtime control)
-CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y  # filter by call site (requires CONFIG_STACKTRACE=y)
+CONFIG_FAULT_INJECTION_DEBUG_FS=y     # debugfsインターフェース（実行時の制御に必要）
+CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y  # 呼び出し元でフィルタする（CONFIG_STACKTRACE=yが必要）
 
-# Specific fault types
-CONFIG_FAILSLAB=y          # Fail kmalloc / kmem_cache_alloc (slab allocations)
-CONFIG_FAIL_PAGE_ALLOC=y   # Fail alloc_pages / get_free_pages (page allocator)
-CONFIG_FAIL_FUTEX=y        # Fail futex operations (for futex error path testing)
-CONFIG_FAIL_MAKE_REQUEST=y # Fail block I/O requests (bio layer)
-CONFIG_FAIL_IO_TIMEOUT=y   # Inject I/O timeouts
-CONFIG_FAIL_SUNRPC=y       # Fail SunRPC calls (NFS testing)
+# 個別のフォールト種別
+CONFIG_FAILSLAB=y          # kmalloc / kmem_cache_alloc（slab割り当て）を失敗させる
+CONFIG_FAIL_PAGE_ALLOC=y   # alloc_pages / get_free_pages（ページアロケータ）を失敗させる
+CONFIG_FAIL_FUTEX=y        # futex操作を失敗させる（futexのエラーパスのテスト用）
+CONFIG_FAIL_MAKE_REQUEST=y # ブロックI/O要求を失敗させる（bio層）
+CONFIG_FAIL_IO_TIMEOUT=y   # I/Oタイムアウトを注入する
+CONFIG_FAIL_SUNRPC=y       # SunRPC呼び出しを失敗させる（NFSのテスト用）
 ```
 
-The framework's core lives in [`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c). Individual subsystem hooks are in:
+フレームワークの中核は[`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c)にある。個々のサブシステムのフックは次の場所にある。
 
-- [`mm/failslab.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/failslab.c) — slab allocation failures
-- [`mm/fail_page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/fail_page_alloc.c) — page allocator failures
+- [`mm/failslab.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/failslab.c) — slab割り当ての失敗
+- [`mm/fail_page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/fail_page_alloc.c) — ページアロケータの失敗
 
-### How the Framework Decides Whether to Fail {#how-the-framework-decides-whether-to-fail}
+### フレームワークが失敗させるかどうかを決める方法 {#how-the-framework-decides-whether-to-fail}
 
-The framework evaluates a set of configurable attributes on each call to `should_fail()`:
+フレームワークは、`should_fail()`が呼ばれるたびに一連の設定可能な属性を評価する。
 
 ```
 should_fail() decision logic (lib/fault-inject.c):
@@ -50,11 +50,11 @@ should_fail() decision logic (lib/fault-inject.c):
   6. → YES to all: return true (fail this call)
 ```
 
-Each of these is tunable via debugfs or per-task files.
+これらはそれぞれ、debugfsまたはタスクごとのファイルで調整できる。
 
-## The debugfs Interface {#the-debugfs-interface}
+## debugfsインターフェース {#the-debugfs-interface}
 
-When `CONFIG_FAULT_INJECTION_DEBUG_FS=y` is enabled, each fault type exposes a directory under `/sys/kernel/debug/`:
+`CONFIG_FAULT_INJECTION_DEBUG_FS=y`が有効な場合、各フォールト種別は`/sys/kernel/debug/`の下にディレクトリを公開する。
 
 ```
 /sys/kernel/debug/
@@ -81,279 +81,279 @@ When `CONFIG_FAULT_INJECTION_DEBUG_FS=y` is enabled, each fault type exposes a d
     └── verbose
 ```
 
-### Attribute Reference {#attribute-reference}
+### 属性リファレンス {#attribute-reference}
 
-| Attribute | Type | Meaning |
+| 属性 | 型 | 意味 |
 |-----------|------|---------|
-| `probability` | 0–100 | Percentage chance each eligible call fails |
-| `interval` | integer ≥ 1 | Minimum period between injections: fail at most once every N eligible calls; `1` = fail every eligible call |
-| `times` | integer | Number of times to inject failures; `-1` = unlimited |
-| `space` | integer | Call-budget counter: decremented by the allocation `size` on each call to `should_fail()`; injection is suppressed until `space` reaches zero |
-| `verbose` | 0, 1, 2 | `0` = no output; `1` = log each failure; `2` = log + dump stack trace |
-| `task-filter` | 0 or 1 | If `1`, only fail allocations made by tasks that have set `/proc/<pid>/make-it-fail` |
+| `probability` | 0–100 | 対象となる各呼び出しが失敗する確率（パーセント） |
+| `interval` | 1以上の整数 | 注入の最小間隔: 対象となる呼び出しN回につき最大1回失敗させる。`1` = 対象となる呼び出しを毎回失敗させる |
+| `times` | 整数 | 失敗を注入する回数。`-1` = 無制限 |
+| `space` | 整数 | 呼び出し予算のカウンタ: `should_fail()`が呼ばれるたびに割り当ての`size`だけ減算される。`space`がゼロに達するまで注入は抑制される |
+| `verbose` | 0、1、2 | `0` = 出力なし、`1` = 失敗ごとにログ出力、`2` = ログ出力に加えてスタックトレースをダンプ |
+| `task-filter` | 0または1 | `1`の場合、`/proc/<pid>/make-it-fail`を設定したタスクによる割り当てのみを失敗させる |
 
-### Quick-Start: Fail All Page Allocations at 10% {#quick-start-fail-all-page-allocations-at-10}
+### クイックスタート: すべてのページ割り当てを10%で失敗させる {#quick-start-fail-all-page-allocations-at-10}
 
 ```bash
-# Mount debugfs if not already mounted
+# まだマウントされていなければdebugfsをマウントする
 mount -t debugfs none /sys/kernel/debug
 
-# Enable fail_page_alloc: 10% probability, unlimited times
+# fail_page_allocを有効化: 確率10%、回数無制限
 echo 10  > /sys/kernel/debug/fail_page_alloc/probability
 echo -1  > /sys/kernel/debug/fail_page_alloc/times
 echo  0  > /sys/kernel/debug/fail_page_alloc/interval
 echo  1  > /sys/kernel/debug/fail_page_alloc/verbose
 
-# Confirm settings
+# 設定を確認する
 cat /sys/kernel/debug/fail_page_alloc/probability
 ```
 
 !!! warning
-    Setting a high probability (>20%) system-wide without `task-filter` will cause rapid system instability. Use `task-filter=1` and `/proc/self/make-it-fail` for safe, targeted injection. Reserve global injection for dedicated test VMs.
+    `task-filter`なしでシステム全体に高い確率（20%超）を設定すると、急速にシステムが不安定になる。安全に対象を絞って注入するには`task-filter=1`と`/proc/self/make-it-fail`を使うこと。グローバルな注入は専用のテストVMにとどめること。
 
-## Targeting Specific Processes {#targeting-specific-processes}
+## 特定のプロセスを対象にする {#targeting-specific-processes}
 
-The coarsest injection mode (no task filter) randomly fails allocations from any kernel context, which quickly destabilizes the system. For driver testing, you almost always want to restrict injection to a specific process.
+最も粗い注入モード（タスクフィルタなし）は、あらゆるカーネルコンテキストからの割り当てをランダムに失敗させるため、すぐにシステムが不安定になる。ドライバのテストでは、ほぼ常に注入を特定のプロセスに限定したいはずである。
 
 ### /proc/self/make-it-fail {#procselfmake-it-fail}
 
-Every task has a `make-it-fail` file in `/proc`:
+すべてのタスクは`/proc`に`make-it-fail`ファイルを持つ。
 
 ```bash
-# Enable injection for this shell and all processes it spawns
+# このシェルと、そこから起動されるすべてのプロセスで注入を有効化する
 echo 1 > /proc/self/make-it-fail
 
-# Run the driver load (only this process and its children are affected)
+# ドライバをロードする（このプロセスとその子だけが影響を受ける）
 insmod my_driver.ko
 
-# Disable injection for this shell
+# このシェルで注入を無効化する
 echo 0 > /proc/self/make-it-fail
 ```
 
-For this to work, `task-filter` must also be set in the fault injector:
+これを機能させるには、フォールトインジェクタ側でも`task-filter`を設定しておく必要がある。
 
 ```bash
 echo 1 > /sys/kernel/debug/failslab/task-filter
 echo 1 > /proc/self/make-it-fail
 ```
 
-The `make-it-fail` flag is inherited by child processes (fork/exec), so a test script that sets it before launching a target binary will inject failures into the entire subprocess tree.
+`make-it-fail`フラグは子プロセスに継承される（fork/exec）ので、対象のバイナリを起動する前にこれを設定するテストスクリプトは、サブプロセスのツリー全体に失敗を注入することになる。
 
-### Targeting a Specific PID {#targeting-a-specific-pid}
+### 特定のPIDを対象にする {#targeting-a-specific-pid}
 
 ```bash
-# Target an already-running process
+# すでに実行中のプロセスを対象にする
 echo 1 > /proc/<pid>/make-it-fail
 ```
 
-## Filtering by Call Site {#filtering-by-call-site}
+## 呼び出し元によるフィルタリング {#filtering-by-call-site}
 
-With `CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y`, you can restrict injection to allocations that pass through a specific function in the call stack. This is powerful for testing one driver without destabilizing others.
+`CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y`を使うと、コールスタック上で特定の関数を通過する割り当てだけに注入を限定できる。これは他のドライバを不安定にせずに1つのドライバをテストするのに強力である。
 
-The filter is configured via debugfs files under the fault injector directory:
+フィルタは、フォールトインジェクタのディレクトリ下にあるdebugfsファイルで設定する。
 
 ```bash
-# Enable stack trace filtering for failslab
-# Inject only when 'my_driver_probe' appears in the call stack
+# failslabのスタックトレースフィルタリングを有効化する
+# コールスタックに'my_driver_probe'が現れる場合のみ注入する
 echo 1 > /sys/kernel/debug/failslab/stacktrace-depth
-# (stacktrace-depth controls how many frames to inspect)
+# （stacktrace-depthは調べるフレーム数を制御する）
 ```
 
-The stack trace filter works by reading the call stack at the point `should_fail()` is called and checking whether any frame falls within a configured **address range** (`require-start`/`require-end` to require a frame, `reject-start`/`reject-end` to exclude one). Addresses are written as hex values to the corresponding debugfs files. See [`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c) — specifically `fail_stacktrace()` — for the implementation.
+スタックトレースフィルタは、`should_fail()`が呼ばれた時点のコールスタックを読み取り、いずれかのフレームが設定された**アドレス範囲**内にあるかどうかをチェックすることで動作する（フレームを必須とするには`require-start`/`require-end`、除外するには`reject-start`/`reject-end`を使う）。アドレスは対応するdebugfsファイルに16進数で書き込む。実装については[`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c)、特に`fail_stacktrace()`を参照。
 
-In practice, the stack filter is most often used via the helper script provided in the kernel tree.
+実際には、スタックフィルタはカーネルツリーで提供されるヘルパースクリプト経由で使われることが最も多い。
 
-## Practical Example: Testing kmalloc Failures in a Driver {#practical-example-testing-kmalloc-failures-in-a-driver}
+## 実践例: ドライバでのkmalloc失敗をテストする {#practical-example-testing-kmalloc-failures-in-a-driver}
 
-The following walkthrough tests how a hypothetical driver handles `kmalloc` returning `NULL` during probe.
+以下の手順では、仮想的なドライバがprobe中に`kmalloc`が`NULL`を返した場合をどう処理するかをテストする。
 
-### Setup {#setup}
+### セットアップ {#setup}
 
 ```bash
-# Boot a test VM with:
+# 次の設定でテスト用VMを起動する:
 # CONFIG_FAILSLAB=y
 # CONFIG_FAULT_INJECTION_DEBUG_FS=y
 # CONFIG_FAULT_INJECTION_STACKTRACE_FILTER=y
 
-# Step 1: Enable failslab with task-filter (safe — only affects marked tasks)
+# ステップ1: task-filter付きでfailslabを有効化する（安全 — マークされたタスクにのみ影響）
 echo  1 > /sys/kernel/debug/failslab/task-filter
 echo 10 > /sys/kernel/debug/failslab/probability
 echo -1 > /sys/kernel/debug/failslab/times
-echo  2 > /sys/kernel/debug/failslab/verbose   # print stack on each failure
+echo  2 > /sys/kernel/debug/failslab/verbose   # 失敗のたびにスタックを出力
 
-# Step 2: Mark this shell as a fault injection target
+# ステップ2: このシェルをフォールトインジェクションの対象としてマークする
 echo 1 > /proc/self/make-it-fail
 
-# Step 3: Load the driver (kmalloc calls from this process will fail ~10% of the time)
+# ステップ3: ドライバをロードする（このプロセスからのkmalloc呼び出しは約10%の確率で失敗する）
 insmod my_driver.ko
 
-# Step 4: Watch the kernel log for failures and errors
+# ステップ4: カーネルログで失敗とエラーを監視する
 dmesg -w
 ```
 
-### What to Look For in dmesg {#what-to-look-for-in-dmesg}
+### dmesgで何を見るべきか {#what-to-look-for-in-dmesg}
 
-A correctly written driver will log an error and return `-ENOMEM`:
+正しく書かれたドライバは、エラーをログに出して`-ENOMEM`を返す。
 
 ```
 my_driver: probe of 0000:01:00.0 failed with error -12
 ```
 
-A buggy driver may:
+バグのあるドライバは次のような挙動を示し得る。
 
-- Oops (NULL pointer dereference from using the returned pointer without checking)
-- Hang (waiting for a resource that was never acquired)
-- Succeed silently but leak memory (if the error path skips a `kfree`)
+- oopsする（返されたポインタをチェックせずに使ったことによるNULLポインタ参照）
+- ハングする（獲得されなかったリソースを待ち続ける）
+- 黙って成功するがメモリをリークする（エラーパスが`kfree`を飛ばしている場合）
 
-### Iterating {#iterating}
+### 反復 {#iterating}
 
-Increase probability gradually to exercise more paths:
+より多くのパスを動かすために、確率を徐々に上げていく。
 
 ```bash
-# Start conservative
+# 控えめに始める
 echo 5 > /sys/kernel/debug/failslab/probability
 
-# After verifying no oopses, increase
+# oopsがないことを確認したら上げる
 echo 20 > /sys/kernel/debug/failslab/probability
 echo 50 > /sys/kernel/debug/failslab/probability
 ```
 
-Use `times` to limit total failures during a single test run:
+1回のテスト実行中の失敗の総数を制限するには`times`を使う。
 
 ```bash
-# Fail exactly once, then stop
+# ちょうど1回だけ失敗させて止める
 echo 1 > /sys/kernel/debug/failslab/times
 ```
 
-This is useful for bisecting: find the exact allocation failure that causes a regression.
+これは原因の絞り込みに役立つ。つまり、リグレッションを引き起こす割り当て失敗を正確に特定できる。
 
-## Using the Kernel's Helper Script {#using-the-kernels-helper-script}
+## カーネルのヘルパースクリプトを使う {#using-the-kernels-helper-script}
 
-The kernel ships a helper script that sets up fault injection for a specific command using the `FAIL_POINT` mechanism with stack trace filtering:
+カーネルには、スタックトレースフィルタリング付きの`FAIL_POINT`機構を使って、特定のコマンドに対するフォールトインジェクションをセットアップするヘルパースクリプトが同梱されている。
 
 ```bash
-# From the kernel tree:
+# カーネルツリーから:
 tools/testing/fault-injection/failcmd.sh
 
-# Example: run modprobe with slab fault injection at 20% probability
+# 例: 確率20%のslabフォールトインジェクション付きでmodprobeを実行する
 tools/testing/fault-injection/failcmd.sh --probability=20 -- modprobe my_driver
 ```
 
-This script sets up the debugfs parameters, marks the process with `make-it-fail`, runs the command, and cleans up. It is the recommended way to do targeted injection without manually managing the debugfs files. See [`tools/testing/fault-injection/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection) in the kernel source.
+このスクリプトはdebugfsのパラメータをセットアップし、プロセスに`make-it-fail`をマークし、コマンドを実行して、後片付けを行う。debugfsファイルを手作業で管理せずに対象を絞った注入を行うための推奨手段である。カーネルソースの[`tools/testing/fault-injection/`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection)を参照。
 
-## fail_make_request: Block I/O Failure Injection {#failmakerequest-block-io-failure-injection}
+## fail_make_request: ブロックI/Oの失敗注入 {#failmakerequest-block-io-failure-injection}
 
-`CONFIG_FAIL_MAKE_REQUEST` injects failures at the block I/O layer (the `submit_bio()` path). This tests how filesystems and block drivers handle I/O errors, which is distinct from memory allocation failures.
+`CONFIG_FAIL_MAKE_REQUEST`は、ブロックI/O層（`submit_bio()`のパス）で失敗を注入する。これはファイルシステムやブロックドライバがI/Oエラーをどう処理するかをテストするもので、メモリ割り当ての失敗とは別物である。
 
 ```bash
-# Enable block I/O failure injection
+# ブロックI/Oの失敗注入を有効化する
 echo 10 > /sys/kernel/debug/fail_make_request/probability
 echo -1 > /sys/kernel/debug/fail_make_request/times
 echo  1 > /sys/kernel/debug/fail_make_request/verbose
 
-# Restrict to a specific device (by major:minor)
+# 特定のデバイスに限定する（major:minorで指定）
 echo <major>:<minor> > /sys/block/<device>/make-it-fail
-# Example:
+# 例:
 echo 1 > /sys/block/sdb/make-it-fail
 ```
 
-The per-device `make-it-fail` file (in `/sys/block/<device>/`) restricts injection to a specific block device, which is much safer than injecting system-wide. This is the recommended approach for filesystem error path testing.
+デバイスごとの`make-it-fail`ファイル（`/sys/block/<device>/`内）は注入を特定のブロックデバイスに限定するもので、システム全体に注入するよりもはるかに安全である。ファイルシステムのエラーパスのテストにはこの方法が推奨される。
 
-Typical use cases:
+典型的な用途:
 
-- Testing filesystem journal recovery when writes fail
-- Verifying RAID rebuild logic when a device reports errors
-- Testing that database write-ahead logs handle I/O failures without corruption
+- 書き込みが失敗したときのファイルシステムのジャーナル回復のテスト
+- デバイスがエラーを報告したときのRAID再構築ロジックの検証
+- データベースのwrite-aheadログがI/O失敗を破損なく処理できることのテスト
 
-## Fault Injection with Syzkaller {#fault-injection-with-syzkaller}
+## Syzkallerによるフォールトインジェクション {#fault-injection-with-syzkaller}
 
-[Syzkaller](https://github.com/google/syzkaller) is the kernel's primary coverage-guided fuzzer. It integrates with the fault injection framework to automatically exercise error paths that its syscall sequences trigger.
+[Syzkaller](https://github.com/google/syzkaller)は、カーネルの主要なカバレッジ誘導型ファジングツールである。フォールトインジェクションフレームワークと統合されており、自身のシステムコール列が引き起こすエラーパスを自動的に動かす。
 
-Syzkaller uses fault injection through two mechanisms:
+Syzkallerは2つの仕組みでフォールトインジェクションを使う。
 
-**1. Automatic injection via procfs**
+**1. procfs経由の自動注入**
 
-Syzkaller can set `/proc/<pid>/make-it-fail` on the processes it spawns, combined with `failslab` and `fail_page_alloc` configured globally. This causes the syscall sequences to encounter allocation failures at random points, exposing unhandled error paths.
+Syzkallerは、`failslab`と`fail_page_alloc`をグローバルに設定したうえで、自身が起動するプロセスに`/proc/<pid>/make-it-fail`を設定できる。これにより、システムコール列がランダムな箇所で割り当て失敗に遭遇し、処理されていないエラーパスが露呈する。
 
-**2. Targeted injection via `KCOV` + fault point tracing**
+**2. `KCOV` + フォールトポイントのトレーシングによる対象を絞った注入**
 
-When syzkaller identifies a code path of interest via coverage (`CONFIG_KCOV=y`), it can target fault injection to specific call sites that appear in the coverage data, methodically failing each allocation in a code path to check every error branch.
+Syzkallerがカバレッジ（`CONFIG_KCOV=y`）によって注目すべきコードパスを特定すると、カバレッジデータに現れる特定の呼び出し元にフォールトインジェクションを向けることができ、コードパス内の各割り当てを順に失敗させてすべてのエラー分岐をチェックする。
 
-To configure a syzkaller VM for fault injection:
+syzkallerのVMをフォールトインジェクション用に設定するには次のようにする。
 
 ```
-# In syzkaller config (syzkaller.cfg):
+# syzkallerの設定（syzkaller.cfg）内:
 {
   "enable_syscalls": ["..."],
   "fault_injection": true
 }
 ```
 
-This sets `failslab/task-filter=1` and enables the framework automatically.
+これにより`failslab/task-filter=1`が設定され、フレームワークが自動的に有効化される。
 
-For fuzzing memory management specifically, the combination of `CONFIG_KASAN=y` + `CONFIG_FAILSLAB=y` + `CONFIG_FAIL_PAGE_ALLOC=y` catches both bugs triggered by normal allocation patterns (KASAN) and bugs only reachable through error paths (fault injection).
+特にメモリ管理をファジングする場合、`CONFIG_KASAN=y` + `CONFIG_FAILSLAB=y` + `CONFIG_FAIL_PAGE_ALLOC=y`の組み合わせにより、通常の割り当てパターンで引き起こされるバグ（KASAN）と、エラーパスを通じてのみ到達可能なバグ（フォールトインジェクション）の両方を捕捉できる。
 
-See [KASAN](kasan.md) and [KFENCE](kfence.md) for the sanitizers that syzkaller typically pairs with fault injection.
+syzkallerが通常フォールトインジェクションと組み合わせるサニタイザについては[KASAN](kasan.md)と[KFENCE](kfence.md)を参照。
 
-## Stress Testing with Fault Injection {#stress-testing-with-fault-injection}
+## フォールトインジェクションを使ったストレステスト {#stress-testing-with-fault-injection}
 
-For regression testing and robustness validation (as opposed to one-off debugging), running fault injection alongside a stress workload is more effective than injecting in idle conditions.
+（一度きりのデバッグではなく）リグレッションテストや堅牢性の検証では、アイドル状態で注入するよりも、ストレスワークロードと並行してフォールトインジェクションを実行するほうが効果的である。
 
-### Combined Stress + Injection {#combined-stress-injection}
+### ストレスと注入の組み合わせ {#combined-stress-injection}
 
 ```bash
-# Terminal 1: Enable slab fault injection (task-filter off — affects all)
+# ターミナル1: slabのフォールトインジェクションを有効化する（task-filterはオフ — すべてに影響）
 echo 5  > /sys/kernel/debug/failslab/probability
 echo -1 > /sys/kernel/debug/failslab/times
 echo  0 > /sys/kernel/debug/failslab/task-filter
 echo  1 > /sys/kernel/debug/failslab/verbose
 
-# Terminal 2: Concurrent memory stress
+# ターミナル2: 並行してメモリにストレスをかける
 stress-ng --vm 4 --vm-bytes 75% --vm-keep --timeout 60s &
 
-# Terminal 3: Driver load/unload cycle
+# ターミナル3: ドライバのロード／アンロードを繰り返す
 for i in $(seq 1 50); do
   insmod my_driver.ko 2>/dev/null
   rmmod my_driver 2>/dev/null
 done
 
-# Terminal 4: Watch for oopses
+# ターミナル4: oopsを監視する
 dmesg -w | grep -E "BUG|Oops|WARN|NULL pointer|general protection"
 ```
 
-### Targeted Slab Cache Injection {#targeted-slab-cache-injection}
+### slabキャッシュを対象にした注入 {#targeted-slab-cache-injection}
 
-If a driver allocates from a specific named cache, restrict injection to avoid collateral damage:
+ドライバが特定の名前付きキャッシュから割り当てる場合は、巻き添えの被害を避けるために注入を限定する。
 
 ```bash
-# Enable cache-filter mode
+# cache-filterモードを有効化する
 echo 1 > /sys/kernel/debug/failslab/cache-filter
 
-# Enable injection only for the target cache
-# (requires the sysfs entry to exist, i.e., the cache is already active)
+# 対象のキャッシュに対してのみ注入を有効化する
+# （sysfsエントリが存在する、つまりキャッシュがすでに有効である必要がある）
 echo 1 > /sys/kernel/slab/my_driver_cache/failslab
 ```
 
-## Kernel Documentation {#kernel-documentation}
+## カーネルドキュメント {#kernel-documentation}
 
-The authoritative reference for the fault injection framework is:
+フォールトインジェクションフレームワークの権威あるリファレンスは次のとおりである。
 
-- [`Documentation/fault-injection/fault-injection.rst`](https://docs.kernel.org/fault-injection/fault-injection.html) — covers all debugfs parameters, the `make-it-fail` interface, stack trace filtering, and the `failcmd.sh` helper
+- [`Documentation/fault-injection/fault-injection.rst`](https://docs.kernel.org/fault-injection/fault-injection.html) — すべてのdebugfsパラメータ、`make-it-fail`インターフェース、スタックトレースフィルタリング、`failcmd.sh`ヘルパーを網羅している
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c) | Core framework: `should_fail()`, probability/interval/times logic, debugfs setup |
-| [`mm/failslab.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/failslab.c) | `CONFIG_FAILSLAB`: hook into slab allocator |
-| [`mm/fail_page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/fail_page_alloc.c) | `CONFIG_FAIL_PAGE_ALLOC`: hook into page allocator |
-| [`include/linux/fault-inject.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fault-inject.h) | `fault_attr` struct and `should_fail()` declaration |
-| [`tools/testing/fault-injection/failcmd.sh`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection/failcmd.sh) | Helper script for per-command injection |
+| [`lib/fault-inject.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/lib/fault-inject.c) | 中核のフレームワーク: `should_fail()`、probability/interval/timesのロジック、debugfsのセットアップ |
+| [`mm/failslab.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/failslab.c) | `CONFIG_FAILSLAB`: slabアロケータへのフック |
+| [`mm/fail_page_alloc.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/fail_page_alloc.c) | `CONFIG_FAIL_PAGE_ALLOC`: ページアロケータへのフック |
+| [`include/linux/fault-inject.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/fault-inject.h) | `fault_attr`構造体と`should_fail()`の宣言 |
+| [`tools/testing/fault-injection/failcmd.sh`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/tools/testing/fault-injection/failcmd.sh) | コマンド単位の注入のためのヘルパースクリプト |
 
-## Quick Reference {#quick-reference}
+## クイックリファレンス {#quick-reference}
 
 ```bash
-# Slab injection, task-filtered (safe)
+# slabへの注入、タスクフィルタ付き（安全）
 echo 1  > /sys/kernel/debug/failslab/task-filter
 echo 20 > /sys/kernel/debug/failslab/probability
 echo -1 > /sys/kernel/debug/failslab/times
@@ -361,7 +361,7 @@ echo 1  > /proc/self/make-it-fail
 <run test>
 echo 0  > /proc/self/make-it-fail
 
-# Page allocator injection, task-filtered
+# ページアロケータへの注入、タスクフィルタ付き
 echo 1  > /sys/kernel/debug/fail_page_alloc/task-filter
 echo 10 > /sys/kernel/debug/fail_page_alloc/probability
 echo -1 > /sys/kernel/debug/fail_page_alloc/times
@@ -369,28 +369,28 @@ echo 1  > /proc/self/make-it-fail
 <run test>
 echo 0  > /proc/self/make-it-fail
 
-# Block device I/O injection (specific device)
+# ブロックデバイスI/Oへの注入（特定のデバイス）
 echo 1  > /sys/block/sdb/make-it-fail
 echo 5  > /sys/kernel/debug/fail_make_request/probability
 echo -1 > /sys/kernel/debug/fail_make_request/times
 <run filesystem test on sdb>
 echo 0  > /sys/block/sdb/make-it-fail
 
-# Disable all injection
+# すべての注入を無効化する
 echo 0 > /sys/kernel/debug/failslab/probability
 echo 0 > /sys/kernel/debug/fail_page_alloc/probability
 echo 0 > /sys/kernel/debug/fail_make_request/probability
 ```
 
-## Further Reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel Documentation {#kernel-documentation_1}
+### カーネルドキュメント {#kernel-documentation_1}
 
-- [Fault injection capabilities infrastructure](https://docs.kernel.org/fault-injection/fault-injection.html) — complete reference for all parameters and interfaces
+- [Fault injection capabilities infrastructure](https://docs.kernel.org/fault-injection/fault-injection.html) — すべてのパラメータとインターフェースの完全なリファレンス
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [KASAN](kasan.md) — memory error detection; pair with fault injection to catch both normal bugs and error-path bugs in one test run
-- [KFENCE](kfence.md) — low-overhead production memory safety; can run alongside fault injection in long-running stress tests
-- [OOM debugging](oom-debugging.md) — diagnosing and preventing out-of-memory kills; fault injection can trigger OOM-adjacent conditions intentionally
-- [page-poisoning](page-poisoning.md) — use-after-free detection; complements fault injection by verifying that freed memory is not reused incorrectly
+- [KASAN](kasan.md) — メモリエラーの検出。フォールトインジェクションと組み合わせることで、通常のバグとエラーパスのバグの両方を1回のテスト実行で捕捉できる
+- [KFENCE](kfence.md) — 低オーバーヘッドで本番環境向けのメモリ安全性検査。長時間のストレステストでフォールトインジェクションと並行して実行できる
+- [OOMのデバッグ](oom-debugging.md) — out-of-memoryによるkillの診断と防止。フォールトインジェクションでOOMに近い状況を意図的に引き起こせる
+- [page-poisoning](page-poisoning.md) — use-after-freeの検出。解放済みメモリが不正に再利用されていないことを検証することで、フォールトインジェクションを補完する

@@ -1,31 +1,31 @@
-# Hierarchical Memory Limits {#hierarchical-memory-limits}
+# 階層的なメモリ制限 {#hierarchical-memory-limits}
 
-> How memory limits and protections propagate through the cgroup v2 tree
+> メモリの制限と保護がcgroup v2のツリーをどのように伝播するか
 
-## The Problem with Flat Limits {#the-problem-with-flat-limits}
+## フラットな制限の問題 {#the-problem-with-flat-limits}
 
-A single cgroup limit is easy to reason about: set `memory.max`, and the kernel enforces it. But real deployments are not flat. A Kubernetes node has system services, kubelet, and hundreds of pods. A container runtime has a parent cgroup for the entire runtime, child cgroups per container, and grandchild cgroups per process group. When limits are set at every level, the rules for how they interact matter enormously.
+単一のcgroupの制限は理解しやすい。`memory.max`を設定すれば、カーネルがそれを強制する。しかし実際のデプロイはフラットではない。Kubernetesのノードには、システムサービス、kubelet、そして何百ものpodがある。コンテナランタイムには、ランタイム全体のための親cgroup、コンテナごとの子cgroup、プロセスグループごとの孫cgroupがある。すべての階層で制限が設定されている場合、それらがどう相互作用するかのルールが極めて重要になる。
 
-cgroup v2 defines a clear model: limits cascade downward and protections are distributed proportionally. This page explains exactly how that works.
+cgroup v2は明確なモデルを定義している。制限は下方向へ連鎖し、保護は比例配分される。このページでは、それが正確にどう機能するかを説明する。
 
-## The Four Knobs, Revisited {#the-four-knobs-revisited}
+## 4つのつまみ、再訪 {#the-four-knobs-revisited}
 
-cgroup v2 exposes four memory control files. Two are **limits** (caps on consumption), and two are **protections** (guarantees against reclaim):
+cgroup v2は4つのメモリ制御ファイルを公開している。2つは**制限**（消費量の上限）で、2つは**保護**（回収に対する保証）である。
 
-| File | Direction | Type | Enforcement |
+| ファイル | 方向 | 種類 | 強制方法 |
 |------|-----------|------|-------------|
-| `memory.max` | Downward cap | Hard limit | OOM kill if exceeded |
-| `memory.high` | Downward cap | Soft limit | Throttle + aggressive reclaim |
-| `memory.low` | Upward guarantee | Soft protection | Best-effort; kernel avoids reclaiming below this |
-| `memory.min` | Upward guarantee | Hard protection | Never reclaimed, even under extreme pressure |
+| `memory.max` | 下方向の上限 | ハードリミット | 超過するとOOM kill |
+| `memory.high` | 下方向の上限 | ソフトリミット | スロットリング + 積極的な回収 |
+| `memory.low` | 上方向の保証 | ソフトな保護 | ベストエフォート。カーネルはこの値を下回る回収を避ける |
+| `memory.min` | 上方向の保証 | ハードな保護 | 極度の圧迫下でも決して回収されない |
 
-The hierarchy rules for limits and protections are different, and understanding that difference is the key to this page.
+制限と保護では階層のルールが異なり、その違いを理解することがこのページの鍵である。
 
-## How Limits Cascade: The Effective Limit {#how-limits-cascade-the-effective-limit}
+## 制限の連鎖: 実効制限 {#how-limits-cascade-the-effective-limit}
 
-For `memory.max` and `memory.high`, a child cgroup's **effective limit** is the minimum of its own setting and its parent's remaining headroom. The kernel does not silently override a child's setting; instead, enforcement happens at every level independently.
+`memory.max`と`memory.high`について、子cgroupの**実効制限**は、自身の設定値と親の残りの余裕のうち小さいほうである。カーネルは子の設定を黙って上書きするわけではない。代わりに、各階層で独立して強制が行われる。
 
-Consider this hierarchy:
+次の階層を考える。
 
 ```
 root
@@ -34,12 +34,12 @@ root
     └── container-b (memory.max = 3G)
 ```
 
-Both `container-a` and `container-b` have `memory.max = 3G`, but the parent `service` has only 4G. This is allowed — cgroup v2 does not prevent you from writing a child limit larger than the parent. What happens in practice:
+`container-a`と`container-b`はどちらも`memory.max = 3G`だが、親の`service`には4Gしかない。これは許可されている。cgroup v2は、親より大きな子の制限を書き込むことを妨げない。実際には次のようになる。
 
-- If `container-a` uses 3G and `container-b` tries to use 2G, the parent's 4G limit will throttle or OOM `container-b` even though `container-b`'s own `memory.max` of 3G has not been reached.
-- The effective limit for any cgroup is the minimum of its own limit and what the parent tree can accommodate.
+- `container-a`が3Gを使っていて`container-b`が2Gを使おうとすると、`container-b`自身の`memory.max`である3Gには達していなくても、親の4Gの制限によって`container-b`はスロットリングされるかOOMになる。
+- どのcgroupの実効制限も、自身の制限と親ツリーが収容できる量のうち小さいほうになる。
 
-The kernel enforces limits at each level independently in `try_charge()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c). Each charge operation walks up the cgroup tree via the parent pointer chain, testing `memory.max` and `memory.high` at every ancestor.
+カーネルは[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c)の`try_charge()`で、各階層で独立して制限を強制する。各チャージ操作は親ポインタの連鎖をたどってcgroupツリーを上に歩き、すべての祖先で`memory.max`と`memory.high`をテストする。
 
 ```
 Charge path for a page allocation (simplified):
@@ -49,15 +49,15 @@ Charge path for a page allocation (simplified):
     → if any ancestor is at limit: enter reclaim / OOM
 ```
 
-## How Protections Are Distributed {#how-protections-are-distributed}
+## 保護の配分方法 {#how-protections-are-distributed}
 
-Protection (`memory.min` and `memory.low`) works differently from limits. When a child's protection is considered during global reclaim, the kernel must compute the **effective protection** — the amount the child can actually keep, given what the parent can guarantee.
+保護（`memory.min`と`memory.low`）は制限とは異なる動作をする。グローバルな回収中に子の保護が考慮されるとき、カーネルは**実効保護**、つまり親が保証できる量を踏まえて子が実際に保持できる量を計算しなければならない。
 
-The calculation is defined in `mem_cgroup_calculate_protection()` in [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c). The kernel documentation at [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) describes the model as follows: a child's effective protection is the minimum of its own configured protection and the parent's protection, distributed proportionally when the sum of children's protections exceeds the parent's.
+この計算は[`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c)の`mem_cgroup_calculate_protection()`で定義されている。[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)のカーネルドキュメントは、このモデルを次のように説明している。子の実効保護は、自身に設定された保護と親の保護のうち小さいほうであり、子の保護の合計が親の保護を超える場合は比例配分される。
 
-### The Proportional Distribution Formula {#the-proportional-distribution-formula}
+### 比例配分の式 {#the-proportional-distribution-formula}
 
-When the sum of sibling protections exceeds the parent's protection, each child receives a proportional share:
+兄弟の保護の合計が親の保護を超える場合、各子は比例した取り分を受け取る。
 
 ```
 effective_protection(child) =
@@ -65,9 +65,9 @@ effective_protection(child) =
         parent_protection × (child.memory.min / sum_of_sibling_memory_mins))
 ```
 
-This is a heuristic for fair distribution, not a hard mathematical guarantee — the kernel uses this formula as a reclaim weight, not as a strict reservation enforced at charge time.
+これは公平な配分のためのヒューリスティックであり、厳密な数学的保証ではない。カーネルはこの式を回収の重みとして使うのであって、チャージ時に強制される厳格な予約として使うわけではない。
 
-**Example:**
+**例:**
 
 ```
 parent (memory.min = 4G)
@@ -75,16 +75,16 @@ parent (memory.min = 4G)
 └── child-b (memory.min = 2G)
 ```
 
-Sum of children = 5G, parent protection = 4G. Since 5G > 4G, each child gets a proportional share:
+子の合計 = 5G、親の保護 = 4G。5G > 4Gなので、各子は比例した取り分を受け取る。
 
-- `child-a` effective protection = 4G × (3G / 5G) = **2.4G**
-- `child-b` effective protection = 4G × (2G / 5G) = **1.6G**
+- `child-a`の実効保護 = 4G × (3G / 5G) = **2.4G**
+- `child-b`の実効保護 = 4G × (2G / 5G) = **1.6G**
 
-If the sum of children's protections is ≤ the parent's protection, each child gets its full configured value.
+子の保護の合計が親の保護以下であれば、各子は設定値をそのまま受け取る。
 
-## A Three-Level Hierarchy: System → Service → Container {#a-three-level-hierarchy-system-service-container}
+## 3階層の例: システム → サービス → コンテナ {#a-three-level-hierarchy-system-service-container}
 
-Here is a concrete example with three levels. The system has 16G of RAM, a `system.slice` cgroup for all services, a `myapp.service` cgroup for a single application, and `worker` and `sidecar` containers inside it.
+3階層の具体例を示す。システムには16GのRAMがあり、すべてのサービスのための`system.slice` cgroup、単一アプリケーションのための`myapp.service` cgroup、その中に`worker`と`sidecar`のコンテナがある。
 
 ```
 system.slice   (memory.max = 12G, memory.min = 2G)
@@ -93,7 +93,7 @@ system.slice   (memory.max = 12G, memory.min = 2G)
     └── sidecar    (memory.max = 2G,  memory.min = 1G)
 ```
 
-### Enforcing limits from this hierarchy {#enforcing-limits-from-this-hierarchy}
+### この階層での制限の強制 {#enforcing-limits-from-this-hierarchy}
 
 ```
 system.slice:   effective max = 12G
@@ -102,9 +102,9 @@ worker:         effective max = min(6G, 8G)   = 6G
 sidecar:        effective max = min(2G, 8G)   = 2G
 ```
 
-If `worker` uses 6G and `sidecar` tries to allocate 3G, `sidecar` will be throttled at its own 2G `memory.max`, not at the parent level. But if `worker` uses 6G and `sidecar` uses 2G (8G total), `myapp.service` has no more headroom — any further allocation from either child triggers reclaim at the `myapp.service` level.
+`worker`が6Gを使い、`sidecar`が3Gを割り当てようとすると、`sidecar`は親の階層ではなく自身の`memory.max`である2Gでスロットリングされる。しかし`worker`が6G、`sidecar`が2G（合計8G）を使っている場合、`myapp.service`には余裕がもうない。どちらの子からのさらなる割り当ても、`myapp.service`の階層で回収を引き起こす。
 
-### Protection distribution from this hierarchy {#protection-distribution-from-this-hierarchy}
+### この階層での保護の配分 {#protection-distribution-from-this-hierarchy}
 
 ```
 myapp.service:  memory.min = 3G
@@ -113,7 +113,7 @@ myapp.service:  memory.min = 3G
   sum = 3G = parent protection, so each child gets its full value
 ```
 
-If the sum equaled the parent exactly, no proportional scaling is needed. Now suppose sidecar is given `memory.min = 2G`:
+合計が親とちょうど等しければ、比例によるスケーリングは不要である。次に、sidecarに`memory.min = 2G`を与えたとする。
 
 ```
   worker:  memory.min = 2G
@@ -123,9 +123,9 @@ If the sum equaled the parent exactly, no proportional scaling is needed. Now su
   sidecar effective protection = 3G × (2G/4G) = 1.5G
 ```
 
-### What happens when a child exceeds its limit but the parent has headroom {#what-happens-when-a-child-exceeds-its-limit-but-the-parent-has-headroom}
+### 親に余裕があるのに子が制限を超えた場合 {#what-happens-when-a-child-exceeds-its-limit-but-the-parent-has-headroom}
 
-The parent having headroom does not prevent a child's `memory.max` from triggering. A child at its own limit is throttled or OOM-killed even if the parent still has free capacity. The cgroup hierarchy enforces limits at every level independently — a child cannot "borrow" from the parent's unused headroom.
+親に余裕があっても、子の`memory.max`の発動は妨げられない。自身の制限に達した子は、親にまだ空き容量があってもスロットリングされるかOOM killされる。cgroupの階層は各階層で独立して制限を強制するため、子が親の未使用の余裕を「借りる」ことはできない。
 
 ```
 myapp.service: usage = 3G, max = 8G    ← still 5G available
@@ -135,100 +135,100 @@ A worker allocation that pushes usage to 6.1G will trigger
 worker's OOM killer, even though myapp.service has 5G free.
 ```
 
-To allow a child to use the parent's headroom, either raise the child's limit or remove it entirely (set `memory.max = max`).
+子が親の余裕を使えるようにするには、子の制限を引き上げるか、制限を完全に取り除く（`memory.max = max`を設定する）。
 
-## Hierarchical Counters in memory.stat {#hierarchical-counters-in-memorystat}
+## memory.statの階層的カウンタ {#hierarchical-counters-in-memorystat}
 
-In cgroup v2, **all** `memory.stat` fields are hierarchical — they include the full subtree (the cgroup itself plus all descendants). This is unlike cgroup v1 where some fields were per-cgroup only.
+cgroup v2では、`memory.stat`の**すべて**のフィールドが階層的であり、サブツリー全体（そのcgroup自身とすべての子孫）を含む。一部のフィールドがcgroup単位のみだったcgroup v1とは異なる。
 
 ```bash
 cat /sys/fs/cgroup/myapp.service/memory.stat
 ```
 
-`memory.current` always reflects the hierarchical total — it is the sum of memory charged to the cgroup and all children. The same applies to all `memory.stat` fields.
+`memory.current`は常に階層的な合計を反映する。つまり、そのcgroupとすべての子にチャージされたメモリの合計である。`memory.stat`のすべてのフィールドについても同じことが言える。
 
-To see only a cgroup's own memory (excluding children), subtract each child's `memory.current` from the parent's:
+あるcgroup自身のメモリだけ（子を除く）を見るには、親の`memory.current`から各子の`memory.current`を差し引く。
 
 ```bash
-# Hierarchical total
+# 階層的な合計
 cat /sys/fs/cgroup/myapp.service/memory.current
 # 3145728000
 
-# Subtract children to get myapp.service's own usage
+# 子を差し引いてmyapp.service自身の使用量を求める
 parent=$(cat /sys/fs/cgroup/myapp.service/memory.current)
 worker=$(cat /sys/fs/cgroup/myapp.service/worker/memory.current)
 sidecar=$(cat /sys/fs/cgroup/myapp.service/sidecar/memory.current)
-echo $((parent - worker - sidecar))  # local usage only
+echo $((parent - worker - sidecar))  # ローカルの使用量のみ
 ```
 
-The `memory.stat` file itself contains key fields whose scope is always the hierarchical subtree in cgroup v2. The documentation in [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) notes that `memory.stat` values "account for the entire subtree."
+`memory.stat`ファイル自体に含まれる主要なフィールドの範囲は、cgroup v2では常に階層的なサブツリーである。[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)のドキュメントは、`memory.stat`の値が"account for the entire subtree"（サブツリー全体を計上する）と記している。
 
-### Key memory.stat fields and their meaning {#key-memorystat-fields-and-their-meaning}
+### memory.statの主要なフィールドとその意味 {#key-memorystat-fields-and-their-meaning}
 
 ```bash
 cat /sys/fs/cgroup/myapp.service/worker/memory.stat
 
-anon 1073741824          # anonymous pages: heap, stack, mmap(MAP_ANONYMOUS)
-file 209715200           # file-backed pages: page cache
-kernel 12582912          # kernel memory: slab, stacks, pagetables
-kernel_stack 2097152     #   process kernel stacks
-pagetables 1048576       #   page table pages
-slab_reclaimable 6291456 #   reclaimable slab (dentry/inode caches)
-slab_unreclaimable 2097152 # unreclaimable slab (task_struct, etc.)
-slab 8388608             #   total slab (reclaimable + unreclaimable)
-sock 4194304             # socket receive/send buffers
-shmem 0                  # shared memory (tmpfs, IPC shm)
-file_mapped 104857600    # file pages that are mapped (subset of file)
-file_dirty 0             # file pages with pending writes
-file_writeback 0         # file pages currently being written
-inactive_anon 0          # anonymous pages on the inactive LRU
-active_anon 1073741824   # anonymous pages on the active LRU
-inactive_file 104857600  # file pages on the inactive LRU (reclaim candidates)
-active_file 104857600    # file pages on the active LRU
-unevictable 0            # pages that cannot be reclaimed (mlock'd, etc.)
-pgfault 458923           # total page faults
-pgmajfault 12            # major faults (required disk I/O)
-pgrefill 1024            # pages scanned during active→inactive aging
-pgscan 2048              # pages scanned during reclaim
-pgsteal 1536             # pages actually reclaimed
-pgactivate 512           # pages moved from inactive to active
-workingset_refault_anon 0    # anonymous pages re-faulted after reclaim
-workingset_refault_file 64   # file pages re-faulted after reclaim
+anon 1073741824          # 匿名ページ: ヒープ、スタック、mmap(MAP_ANONYMOUS)
+file 209715200           # ファイルを裏付けとするページ: ページキャッシュ
+kernel 12582912          # カーネルメモリ: slab、スタック、ページテーブル
+kernel_stack 2097152     #   プロセスのカーネルスタック
+pagetables 1048576       #   ページテーブルのページ
+slab_reclaimable 6291456 #   回収可能なslab（dentry/inodeキャッシュ）
+slab_unreclaimable 2097152 # 回収不能なslab（task_structなど）
+slab 8388608             #   slabの合計（回収可能 + 回収不能）
+sock 4194304             # ソケットの受信／送信バッファ
+shmem 0                  # 共有メモリ（tmpfs、IPC shm）
+file_mapped 104857600    # マップされているファイルページ（fileの部分集合）
+file_dirty 0             # 書き込み待ちのファイルページ
+file_writeback 0         # 現在書き込み中のファイルページ
+inactive_anon 0          # inactive LRU上の匿名ページ
+active_anon 1073741824   # active LRU上の匿名ページ
+inactive_file 104857600  # inactive LRU上のファイルページ（回収候補）
+active_file 104857600    # active LRU上のファイルページ
+unevictable 0            # 回収できないページ（mlockされたものなど）
+pgfault 458923           # ページフォールトの総数
+pgmajfault 12            # メジャーフォールト（ディスクI/Oを要したもの）
+pgrefill 1024            # active→inactiveのエージング中にスキャンされたページ
+pgscan 2048              # 回収中にスキャンされたページ
+pgsteal 1536             # 実際に回収されたページ
+pgactivate 512           # inactiveからactiveへ移動したページ
+workingset_refault_anon 0    # 回収後に再フォールトした匿名ページ
+workingset_refault_file 64   # 回収後に再フォールトしたファイルページ
 ```
 
-## Watching Hierarchical Limits with memory.events {#watching-hierarchical-limits-with-memoryevents}
+## memory.eventsで階層的な制限を監視する {#watching-hierarchical-limits-with-memoryevents}
 
-Each cgroup has a `memory.events` file. In cgroup v2, there is also `memory.events.local` for events attributed only to that cgroup (not its children).
+各cgroupには`memory.events`ファイルがある。cgroup v2には、そのcgroupのみ（子を含まない）に帰属するイベントのための`memory.events.local`もある。
 
 ```bash
-# Events attributed to myapp.service and all its children
+# myapp.serviceとそのすべての子に帰属するイベント
 cat /sys/fs/cgroup/myapp.service/memory.events
-# low 0        <- times a child's memory dropped below memory.low
-# high 45      <- times memory.high was exceeded (this cgroup or any child)
-# max 3        <- times memory.max was hit
-# oom 1        <- OOM events
-# oom_kill 1   <- processes killed by OOM
+# low 0        <- 子のメモリがmemory.lowを下回った回数
+# high 45      <- memory.highを超過した回数（このcgroupまたはいずれかの子）
+# max 3        <- memory.maxに達した回数
+# oom 1        <- OOMイベント
+# oom_kill 1   <- OOMによってkillされたプロセス
 # oom_group_kill 0
 
-# Events attributed only to myapp.service's own processes
+# myapp.service自身のプロセスのみに帰属するイベント
 cat /sys/fs/cgroup/myapp.service/memory.events.local
-# (same format, but only counts events in this cgroup's own page charges)
+# （同じ形式だが、このcgroup自身のページチャージで起きたイベントのみを数える）
 ```
 
-`memory.events.local` was introduced alongside the hierarchical event propagation model. See [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) for the full field list.
+`memory.events.local`は、階層的なイベント伝播モデルとともに導入された。フィールドの全一覧については[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)を参照。
 
-## Setting Up a Three-Level Hierarchy {#setting-up-a-three-level-hierarchy}
+## 3階層の階層構造をセットアップする {#setting-up-a-three-level-hierarchy}
 
 ```bash
-# Create the hierarchy
+# 階層を作成する
 sudo mkdir -p /sys/fs/cgroup/myapp.service/worker
 sudo mkdir -p /sys/fs/cgroup/myapp.service/sidecar
 
-# Enable memory controller at each level
+# 各階層でメモリコントローラを有効化する
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo "+memory" | sudo tee /sys/fs/cgroup/myapp.service/cgroup.subtree_control
 
-# Set limits and protections
+# 制限と保護を設定する
 echo 8G  | sudo tee /sys/fs/cgroup/myapp.service/memory.max
 echo 7G  | sudo tee /sys/fs/cgroup/myapp.service/memory.high
 echo 3G  | sudo tee /sys/fs/cgroup/myapp.service/memory.min
@@ -240,7 +240,7 @@ echo 2G  | sudo tee /sys/fs/cgroup/myapp.service/worker/memory.min
 echo 2G  | sudo tee /sys/fs/cgroup/myapp.service/sidecar/memory.max
 echo 1G  | sudo tee /sys/fs/cgroup/myapp.service/sidecar/memory.min
 
-# Verify effective limits by reading back settings
+# 設定を読み戻して実効制限を確認する
 for cg in myapp.service myapp.service/worker myapp.service/sidecar; do
     echo "=== $cg ==="
     echo "max:  $(cat /sys/fs/cgroup/$cg/memory.max)"
@@ -250,9 +250,9 @@ for cg in myapp.service myapp.service/worker myapp.service/sidecar; do
 done
 ```
 
-## Common Mistakes {#common-mistakes}
+## よくある間違い {#common-mistakes}
 
-### Setting child protections larger than the parent {#setting-child-protections-larger-than-the-parent}
+### 子の保護を親より大きく設定する {#setting-child-protections-larger-than-the-parent}
 
 ```
 parent: memory.min = 1G
@@ -261,68 +261,68 @@ parent: memory.min = 1G
 sum = 1.2G > 1G
 ```
 
-This is allowed, but each child's effective protection is scaled down to 500M. The kernel will not warn you. Audit child protections relative to parent protections to ensure your guarantees are real.
+これは許可されるが、各子の実効保護は500Mに縮小される。カーネルは警告を出さない。保証が本物であることを確かめるために、子の保護を親の保護と照らし合わせて監査すること。
 
-### Assuming parent headroom is available to children {#assuming-parent-headroom-is-available-to-children}
+### 親の余裕を子が使えると思い込む {#assuming-parent-headroom-is-available-to-children}
 
-A child cgroup that has been given `memory.max = 1G` will be OOM-killed at 1G even if its parent cgroup has 10G of free capacity. The limit is per-cgroup, not "available within parent."
+`memory.max = 1G`を与えられた子cgroupは、親cgroupに10Gの空き容量があっても1GでOOM killされる。制限はcgroupごとのものであり、「親の中で利用可能な量」ではない。
 
-### Forgetting that memory.current is hierarchical {#forgetting-that-memorycurrent-is-hierarchical}
+### memory.currentが階層的であることを忘れる {#forgetting-that-memorycurrent-is-hierarchical}
 
-If a parent cgroup's `memory.current` equals its `memory.max`, the parent is at its limit even if no individual child is at its limit. The combined usage of all children has reached the parent's cap.
+親cgroupの`memory.current`がその`memory.max`に等しければ、個々の子がどれも制限に達していなくても、親は制限に達している。すべての子の合計使用量が親の上限に達したのである。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Relevant functions |
+| ファイル | 関連する関数 |
 |------|--------------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `mem_cgroup_calculate_protection()` — computes effective protection; `mem_cgroup_margin()` — headroom to limit; `try_charge()` — charge + limit enforcement path |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`, `mem_cgroup_protection()` inline |
-| [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) | Authoritative description of the distribution model |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | `mem_cgroup_calculate_protection()` — 実効保護を計算する。`mem_cgroup_margin()` — 制限までの余裕。`try_charge()` — チャージと制限強制のパス |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | `struct mem_cgroup`、インラインの`mem_cgroup_protection()` |
+| [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) | 配分モデルの権威ある説明 |
 
-## History {#history}
+## 歴史 {#history}
 
-### cgroup v2 Memory Controller (v4.5, 2016) {#cgroup-v2-memory-controller-v45-2016}
+### cgroup v2メモリコントローラ（v4.5、2016年） {#cgroup-v2-memory-controller-v45-2016}
 
-The cgroup v2 memory controller, including the hierarchical protection model, was declared production-ready in v4.5 ([commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)). The proportional protection model replaced the simpler v1 approach and was specifically designed for multi-tenant workloads. See [LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/).
+階層的な保護モデルを含むcgroup v2メモリコントローラは、v4.5で本番利用可能と宣言された（[commit 67e9c74b8a87](https://git.kernel.org/linus/67e9c74b8a87)）。比例的な保護モデルはv1のより単純なアプローチを置き換えたもので、マルチテナントのワークロード向けに特に設計された。[LWN: The unified cgroup hierarchy](https://lwn.net/Articles/679786/)を参照。
 
-### memory.low and memory.min (v4.18, 2018) {#memorylow-and-memorymin-v418-2018}
+### memory.lowとmemory.min（v4.18、2018年） {#memorylow-and-memorymin-v418-2018}
 
-`memory.low` (best-effort protection) and `memory.min` (hard protection) were introduced as part of the memory protection model described in [LWN: Putting cgroup memory protection back together](https://lwn.net/Articles/762472/). The `mem_cgroup_calculate_protection()` function implementing the proportional distribution calculation was developed by Tejun Heo and Roman Gushchin.
+`memory.low`（ベストエフォートの保護）と`memory.min`（ハードな保護）は、[LWN: Putting cgroup memory protection back together](https://lwn.net/Articles/762472/)で説明されているメモリ保護モデルの一部として導入された。比例配分の計算を実装する`mem_cgroup_calculate_protection()`関数は、Tejun HeoとRoman Gushchinによって開発された。
 
 ### memory.events.local {#memoryeventslocal}
 
-`memory.events.local` was added to distinguish per-cgroup events from hierarchical events, allowing operators to determine whether a parent cgroup's OOM event was caused by a child or its own processes. See [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files) for the version it was introduced.
+`memory.events.local`は、cgroupごとのイベントと階層的なイベントを区別するために追加された。これにより運用者は、親cgroupのOOMイベントが子によって引き起こされたのか、親自身のプロセスによるものなのかを判断できる。導入されたバージョンについては[`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files)を参照。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | Memory controller: limit enforcement, protection calculation |
-| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcg struct and API |
+| [`mm/memcontrol.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) | メモリコントローラ: 制限の強制、保護の計算 |
+| [`include/linux/memcontrol.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/memcontrol.h) | memcgの構造体とAPI |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — authoritative cgroup v2 reference, including the protection distribution model
+- [`Documentation/admin-guide/cgroup-v2.rst`](https://docs.kernel.org/admin-guide/cgroup-v2.html) — 保護の配分モデルを含む、権威あるcgroup v2のリファレンス
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — cgroup v2 reaching production readiness
-- [Putting cgroup memory protection back together](https://lwn.net/Articles/762472/) — memory.low and memory.min design
+- [The unified cgroup hierarchy](https://lwn.net/Articles/679786/) — cgroup v2が本番利用可能になったこと
+- [Putting cgroup memory protection back together](https://lwn.net/Articles/762472/) — memory.lowとmemory.minの設計
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Memory Cgroups](memcg.md) — memcg fundamentals and v1 vs v2
-- [Tuning memory for containers](tuning-containers.md) — practical limit-setting guide
-- [memory.stat reference](memory-stat.md) — all memory.stat fields explained
+- [メモリcgroup](memcg.md) — memcgの基礎とv1とv2の比較
+- [コンテナ向けのメモリチューニング](tuning-containers.md) — 実践的な制限設定ガイド
+- [memory.statリファレンス](memory-stat.md) — memory.statの全フィールドの解説
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — `mem_cgroup_calculate_protection()` for the proportional protection formula; `try_charge()` for the limit-enforcement walk up the cgroup tree; `mem_cgroup_margin()` for headroom calculation
-- `Documentation/admin-guide/cgroup-v2.rst` — the canonical description of how effective limits and protections are computed when child and parent settings interact, including the proportional distribution model
-- [LWN: Putting cgroup memory protection back together](https://lwn.net/Articles/762472/) — design rationale and discussion behind `memory.low` (best-effort) and `memory.min` (hard) protection, and why proportional scaling was chosen over strict reservation
-- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — background on why cgroup v2 moved to a single unified hierarchy and what that means for multi-level limit enforcement
-- [memcg](memcg.md) — memcg fundamentals: the four limit/protection knobs, basic operations, and cgroup v1 vs v2 differences
-- [memcg-oom](memcg-oom.md) — what happens when a cgroup reaches `memory.max` after the hierarchy's headroom is exhausted
-- [reclaim](reclaim.md) — how the kernel reclaims pages once a cgroup's limits are approached
+- [mm/memcontrol.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/memcontrol.c) — 比例的な保護の式については`mem_cgroup_calculate_protection()`、cgroupツリーを上にたどる制限強制については`try_charge()`、余裕の計算については`mem_cgroup_margin()`
+- `Documentation/admin-guide/cgroup-v2.rst` — 子と親の設定が相互作用するときに実効制限と実効保護がどう計算されるかについての正式な説明。比例配分モデルも含む
+- [LWN: Putting cgroup memory protection back together](https://lwn.net/Articles/762472/) — `memory.low`（ベストエフォート）と`memory.min`（ハード）の保護の背後にある設計の根拠と議論、そして厳格な予約ではなく比例スケーリングが選ばれた理由
+- [LWN: The unified cgroup hierarchy in 4.5](https://lwn.net/Articles/679786/) — cgroup v2が単一の統合階層に移行した理由と、それが多段の制限強制にとって何を意味するかの背景
+- [memcg](memcg.md) — memcgの基礎: 4つの制限／保護のつまみ、基本操作、cgroup v1とv2の違い
+- [memcg-oom](memcg-oom.md) — 階層の余裕が尽きた後にcgroupが`memory.max`に達したときに何が起きるか
+- [reclaim](reclaim.md) — cgroupの制限に近づいたときにカーネルがどのようにページを回収するか

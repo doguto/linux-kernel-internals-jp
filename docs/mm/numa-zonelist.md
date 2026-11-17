@@ -1,53 +1,52 @@
-# NUMA Zonelist Construction and Fallback Ordering {#numa-zonelist-construction-and-fallback-ordering}
+# NUMAのzonelistの構築とフォールバック順序 {#numa-zonelist-construction-and-fallback-ordering}
 
-> When a NUMA node runs out of memory, the kernel's pre-built fallback list determines where the next allocation lands — and memory policies can override that list entirely.
+> NUMAノードのメモリが尽きたとき、次の割り当てがどこに行くかはカーネルが事前に構築したフォールバックリストによって決まる。そしてメモリポリシーはそのリストを完全に上書きできる。
 
-## What Is a Zonelist? {#what-is-a-zonelist}
+## zonelistとは何か {#what-is-a-zonelist}
 
-Every NUMA node (`pg_data_t`, also called `pgdat`) carries an array of zonelists. A zonelist is an ordered sequence of `zoneref` entries — one entry per (zone, node) pair — that the allocator walks in priority order when fulfilling a request.
+すべてのNUMAノード（`pg_data_t`、`pgdat`とも呼ばれる）は、zonelistの配列を持っている。zonelistは`zoneref`エントリの順序付きの列であり（(ゾーン, ノード)の組ごとに1エントリ）、アロケータは要求を満たす際にこれを優先順位の順にたどる。
 
 ```c
 /* include/linux/mmzone.h */
 
-/* Maximum number of zones on a zonelist */
+/* zonelist上のゾーンの最大数 */
 #define MAX_ZONES_PER_ZONELIST (MAX_NUMNODES * MAX_NR_ZONES)
 
 enum {
-    ZONELIST_FALLBACK,      /* zonelist with fallback */
+    ZONELIST_FALLBACK,      /* フォールバックありのzonelist */
 #ifdef CONFIG_NUMA
-    ZONELIST_NOFALLBACK,    /* zonelist without fallback (__GFP_THISNODE) */
+    ZONELIST_NOFALLBACK,    /* フォールバックなしのzonelist（__GFP_THISNODE） */
 #endif
     MAX_ZONELISTS
 };
 
 /*
- * This struct contains information about a zone in a zonelist. It is stored
- * here to avoid dereferences into large structures and lookups of tables
+ * この構造体はzonelist内のゾーンに関する情報を保持する。大きな構造体への
+ * 参照外しやテーブルの検索を避けるためにここに格納される
  */
 struct zoneref {
-    struct zone *zone;   /* Pointer to actual zone */
+    struct zone *zone;   /* 実際のゾーンへのポインタ */
     int zone_idx;        /* zone_idx(zoneref->zone) */
 };
 
 /*
- * One allocation request operates on a zonelist. A zonelist
- * is a list of zones, the first one is the 'goal' of the
- * allocation, the other zones are fallback zones, in decreasing
- * priority.
+ * 1つの割り当て要求は1つのzonelistに対して動作する。zonelistは
+ * ゾーンのリストであり、先頭が割り当ての「目標」で、それ以外の
+ * ゾーンは優先度の降順に並んだフォールバックゾーンである。
  */
 struct zonelist {
     struct zoneref _zonerefs[MAX_ZONES_PER_ZONELIST + 1];
 };
 ```
 
-Each `pgdat` holds two zonelists (`node_zonelists[MAX_ZONELISTS]`):
+各`pgdat`は2つのzonelist（`node_zonelists[MAX_ZONELISTS]`）を持つ。
 
-| Index | Name | Purpose |
+| インデックス | 名前 | 目的 |
 |---|---|---|
-| `ZONELIST_FALLBACK` | Fallback list | Normal allocations; preferred node first, then sorted by NUMA distance |
-| `ZONELIST_NOFALLBACK` | No-fallback list | Used when `__GFP_THISNODE` is set; local node only, never crosses to another node |
+| `ZONELIST_FALLBACK` | フォールバックリスト | 通常の割り当て。優先ノードが先頭で、その後NUMA距離の順に並ぶ |
+| `ZONELIST_NOFALLBACK` | フォールバックなしリスト | `__GFP_THISNODE`が設定されている場合に使われる。ローカルノードのみで、他のノードには決して越境しない |
 
-The helper `node_zonelist(nid, gfp_flags)` selects the right list based on whether `__GFP_THISNODE` is present in the GFP flags:
+ヘルパー`node_zonelist(nid, gfp_flags)`は、GFPフラグに`__GFP_THISNODE`が含まれているかどうかに基づいて適切なリストを選択する。
 
 ```c
 /* include/linux/gfp.h */
@@ -57,18 +56,18 @@ static inline struct zonelist *node_zonelist(int nid, gfp_t flags)
 }
 ```
 
-where `gfp_zonelist()` returns `ZONELIST_NOFALLBACK` if `__GFP_THISNODE` is set, and `ZONELIST_FALLBACK` otherwise.
+ここで`gfp_zonelist()`は、`__GFP_THISNODE`が設定されていれば`ZONELIST_NOFALLBACK`を、そうでなければ`ZONELIST_FALLBACK`を返す。
 
 ---
 
-## How Zonelists Are Built {#how-zonelists-are-built}
+## zonelistの構築方法 {#how-zonelists-are-built}
 
-### Entry Point: `build_all_zonelists()` {#entry-point-buildallzonelists}
+### エントリポイント: `build_all_zonelists()` {#entry-point-buildallzonelists}
 
-Zonelists are constructed at two points in the kernel's lifetime:
+zonelistはカーネルの生存期間中の2つの時点で構築される。
 
-1. **Boot** — `build_all_zonelists()` is called during memory initialization. Because the system is still in `SYSTEM_BOOTING`, it delegates to `build_all_zonelists_init()`, which calls `__build_all_zonelists(NULL)` to rebuild all nodes.
-2. **Memory hotplug** — When a node comes online, `build_all_zonelists(pgdat)` is called again with the new node's `pgdat`. If that node is not yet online, only its own zonelist is rebuilt; otherwise all nodes are rebuilt so their fallback lists reflect the new topology.
+1. **ブート時** — メモリの初期化中に`build_all_zonelists()`が呼ばれる。システムはまだ`SYSTEM_BOOTING`の状態にあるので、`build_all_zonelists_init()`に処理を委ね、それが`__build_all_zonelists(NULL)`を呼んで全ノードを再構築する。
+2. **メモリホットプラグ時** — ノードがオンラインになると、新しいノードの`pgdat`を引数にして`build_all_zonelists(pgdat)`が再び呼ばれる。そのノードがまだオンラインでなければ、そのノード自身のzonelistだけが再構築される。そうでなければ、フォールバックリストが新しいトポロジを反映するよう全ノードが再構築される。
 
 ```c
 /* mm/page_alloc.c */
@@ -83,11 +82,11 @@ void __ref build_all_zonelists(pg_data_t *pgdat)
 }
 ```
 
-The rebuild holds a write-side seqlock (`zonelist_update_seq`) so that concurrent allocators — which may run at IRQ level with `GFP_ATOMIC` — can detect a rebuild in progress and re-read the zonelist.
+再構築中は書き込み側のseqlock（`zonelist_update_seq`）が保持される。これにより、並行して動作するアロケータ（`GFP_ATOMIC`でIRQレベルで動くこともある）は、再構築が進行中であることを検出してzonelistを読み直せる。
 
-### Node Ordering: `build_zonelists()` {#node-ordering-build_zonelists}
+### ノードの順序付け: `build_zonelists()` {#node-ordering-build_zonelists}
 
-For each `pgdat`, `build_zonelists()` constructs the `ZONELIST_FALLBACK` list by calling `find_next_best_node()` repeatedly until all nodes with memory have been visited:
+各`pgdat`について、`build_zonelists()`は、メモリを持つすべてのノードを訪れるまで`find_next_best_node()`を繰り返し呼び出すことで`ZONELIST_FALLBACK`リストを構築する。
 
 ```c
 /* mm/page_alloc.c */
@@ -116,21 +115,21 @@ static void build_zonelists(pg_data_t *pgdat)
 }
 ```
 
-The kernel prints the resulting order at boot: `Fallback order for Node N: 0 1 2 ...`
+カーネルはブート時に、結果の順序を`Fallback order for Node N: 0 1 2 ...`のように出力する。
 
-### Choosing the Next Best Node: `find_next_best_node()` {#choosing-the-next-best-node-findnextbest_node}
+### 次に最適なノードの選択: `find_next_best_node()` {#choosing-the-next-best-node-findnextbest_node}
 
-`find_next_best_node()` scores every unvisited node using a composite metric:
+`find_next_best_node()`は、未訪問のすべてのノードを複合的な指標でスコア付けする。
 
-1. **NUMA distance** — the primary signal, read from the ACPI SLIT table via `node_distance()`. Closer nodes score lower.
-2. **CPU presence penalty** — nodes that have CPUs (`PENALTY_FOR_NODE_WITH_CPUS`) score slightly higher than headless memory-only nodes. Memory-only nodes see less allocation pressure from the kernel itself, making them better overflow targets.
-3. **Load balancing** — a small `node_load` increment is applied to the first node in each new distance group, spreading allocations round-robin among equidistant peers.
+1. **NUMA距離** — 主要な指標で、`node_distance()`を通じてACPIのSLITテーブルから読み取られる。近いノードほどスコアが低い。
+2. **CPUの存在によるペナルティ** — CPUを持つノード（`PENALTY_FOR_NODE_WITH_CPUS`）は、CPUを持たないメモリのみのノードよりもわずかにスコアが高くなる。メモリのみのノードはカーネル自身からの割り当て圧力が少ないので、溢れた分の受け皿として適している。
+3. **負荷分散** — 新しい距離グループの最初のノードに小さな`node_load`の加算が適用され、等距離のノード間で割り当てがラウンドロビンで分散される。
 
-The preferred (local) node is always placed first.
+優先（ローカル）ノードは常に先頭に置かれる。
 
-### The `numa_zonelist_order` Sysctl {#the-numazonelistorder-sysctl}
+### `numa_zonelist_order` sysctl {#the-numazonelistorder-sysctl}
 
-The kernel exposes `/proc/sys/vm/numa_zonelist_order`. In current kernels, only `"Node"` order is implemented. An older zone-based ordering mode was removed because it was not useful in practice. The sysctl is retained for compatibility but ignores any value that does not begin with `'d'`, `'D'`, `'n'`, or `'N'` (matching `"Default"` and `"Node"`), emitting a warning otherwise.
+カーネルは`/proc/sys/vm/numa_zonelist_order`を公開している。現在のカーネルでは`"Node"`順のみが実装されている。以前のゾーンベースの順序付けモードは、実際には役に立たなかったため削除された。このsysctlは互換性のために残されているが、`'d'`、`'D'`、`'n'`、`'N'`のいずれかで始まらない値（`"Default"`と`"Node"`に一致するもの以外）は無視し、その場合は警告を出す。
 
 ```bash
 $ cat /proc/sys/vm/numa_zonelist_order
@@ -139,9 +138,9 @@ Node
 
 ---
 
-## Zone Ordering Within a Node {#zone-ordering-within-a-node}
+## ノード内のゾーンの順序 {#zone-ordering-within-a-node}
 
-Within a single node, `build_zonerefs_node()` iterates zones from the highest zone index down to zero and appends each populated zone to the list:
+単一のノード内では、`build_zonerefs_node()`が最も高いゾーンインデックスから0までゾーンを走査し、実体のある各ゾーンをリストに追加する。
 
 ```c
 /* mm/page_alloc.c */
@@ -164,43 +163,43 @@ static int build_zonerefs_node(pg_data_t *pgdat, struct zoneref *zonerefs)
 }
 ```
 
-The zone type enum in ascending order is:
+ゾーン種別のenumを昇順に並べると次のとおりである。
 
 ```c
 /* include/linux/mmzone.h */
 enum zone_type {
-    ZONE_DMA,       /* CONFIG_ZONE_DMA    — small DMA-capable window */
-    ZONE_DMA32,     /* CONFIG_ZONE_DMA32  — 32-bit DMA window         */
-    ZONE_NORMAL,    /* main addressable memory                         */
-    ZONE_MOVABLE,   /* pages that can be migrated or offlined          */
+    ZONE_DMA,       /* CONFIG_ZONE_DMA    — DMA可能な小さな範囲 */
+    ZONE_DMA32,     /* CONFIG_ZONE_DMA32  — 32ビットDMAの範囲 */
+    ZONE_NORMAL,    /* 主要なアドレス指定可能メモリ */
+    ZONE_MOVABLE,   /* マイグレーションまたはオフライン化できるページ */
     __MAX_NR_ZONES
 };
 ```
 
-Because the loop counts *down* from `MAX_NR_ZONES - 1`, a typical x86-64 node's zones appear in the zonelist as:
+ループは`MAX_NR_ZONES - 1`から*下に向かって*数えるので、典型的なx86-64のノードのゾーンはzonelistに次の順で現れる。
 
 ```
 ZONE_MOVABLE → ZONE_NORMAL → ZONE_DMA32 → ZONE_DMA
 ```
 
-**Why this order?** The allocator tries the largest-capacity zones first (`ZONE_NORMAL` and `ZONE_MOVABLE` together hold the vast majority of RAM). `ZONE_DMA32` and `ZONE_DMA` are preserved for hardware devices that have strict addressing constraints. Using normal memory for ordinary allocations protects these limited DMA-capable regions.
+**なぜこの順序なのか？** アロケータは容量の最も大きいゾーンを先に試す（`ZONE_NORMAL`と`ZONE_MOVABLE`を合わせるとRAMの大部分を占める）。`ZONE_DMA32`と`ZONE_DMA`は、アドレス指定に厳しい制約を持つハードウェアデバイスのために温存される。通常の割り当てに通常のメモリを使うことで、こうした限られたDMA可能な領域が守られる。
 
 ---
 
-## Fallback Algorithm: Iterating the Zonelist {#fallback-algorithm-iterating-the-zonelist}
+## フォールバックのアルゴリズム: zonelistの走査 {#fallback-algorithm-iterating-the-zonelist}
 
-### The `for_each_zone_zonelist` Family {#the-foreachzone_zonelist-family}
+### `for_each_zone_zonelist`ファミリ {#the-foreachzone_zonelist-family}
 
-The allocator's fast path (`get_page_from_freelist()`) iterates the zonelist using:
+アロケータの高速パス（`get_page_from_freelist()`）は、次のものを使ってzonelistを走査する。
 
 ```c
 /* include/linux/mmzone.h */
 
-/* Iterate all zones at or below highest_zoneidx */
+/* highest_zoneidx以下のすべてのゾーンを走査する */
 #define for_each_zone_zonelist(zone, z, zlist, highidx) \
     for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, NULL)
 
-/* Same, but filtered to zones whose node is in nodemask */
+/* 同じだが、ノードがnodemaskに含まれるゾーンに絞り込む */
 #define for_each_zone_zonelist_nodemask(zone, z, zlist, highidx, nodemask) \
     for (z = first_zones_zonelist(zlist, highidx, nodemask), zone = zonelist_zone(z); \
          zone; \
@@ -208,35 +207,35 @@ The allocator's fast path (`get_page_from_freelist()`) iterates the zonelist usi
              zone = zonelist_zone(z))
 ```
 
-`z` is a cursor (`struct zoneref *`) into the zonelist's `_zonerefs` array. Advancing `++z` moves to the next entry without re-scanning from the beginning — this is O(1) per step.
+`z`はzonelistの`_zonerefs`配列を指すカーソル（`struct zoneref *`）である。`++z`で進めると、先頭から再スキャンすることなく次のエントリに移る。これは1ステップあたりO(1)である。
 
-### Watermark Gating {#watermark-gating}
+### ウォーターマークによる判定 {#watermark-gating}
 
-At each zone the allocator checks the watermark before attempting an allocation:
+各ゾーンで、アロケータは割り当てを試みる前にウォーターマークをチェックする。
 
 ```c
-/* mm/page_alloc.c — inside get_page_from_freelist() */
+/* mm/page_alloc.c — get_page_from_freelist()の内部 */
 mark = wmark_pages(zone, alloc_flags & ALLOC_WMARK_MASK);
 if (!zone_watermark_fast(zone, order, mark,
                          ac->highest_zoneidx, alloc_flags,
                          gfp_mask)) {
-    /* watermark failed — skip this zone, continue the loop */
+    /* ウォーターマークの判定に失敗 — このゾーンを飛ばしてループを続ける */
     ...
     continue;
 }
-/* watermark passed — allocate from this zone */
+/* ウォーターマークの判定に合格 — このゾーンから割り当てる */
 ```
 
-`zone_watermark_ok()` checks that `free_pages - requested > watermark + lowmem_reserve[highest_zoneidx]`. The `lowmem_reserve` array provides a per-zone buffer that prevents higher-zone allocations from completely exhausting DMA-capable zones.
+`zone_watermark_ok()`は、`free_pages - requested > watermark + lowmem_reserve[highest_zoneidx]`であることをチェックする。`lowmem_reserve`配列はゾーンごとのバッファを提供し、上位ゾーン向けの割り当てがDMA可能なゾーンを完全に使い果たすのを防ぐ。
 
-!!! note "The allocator does not retry the full list"
-    Once the watermark check fails for a zone, that zone is skipped — the loop simply moves to the next entry. There is no re-scan from the beginning. If all zones in the fallback list fail the watermark check, the allocation falls into `__alloc_pages_slowpath()`, which triggers reclaim, compaction, and ultimately OOM if memory cannot be freed.
+!!! note "アロケータはリスト全体を再試行しない"
+    あるゾーンでウォーターマークのチェックに失敗すると、そのゾーンは飛ばされ、ループは単に次のエントリに進む。先頭からの再スキャンはない。フォールバックリスト内のすべてのゾーンがウォーターマークのチェックに失敗すると、割り当ては`__alloc_pages_slowpath()`に落ち、回収、コンパクションを引き起こし、メモリを解放できなければ最終的にOOMになる。
 
 ---
 
-## How Memory Policies Modify Zonelist Traversal {#how-memory-policies-modify-zonelist-traversal}
+## メモリポリシーがzonelistの走査をどう変えるか {#how-memory-policies-modify-zonelist-traversal}
 
-Memory policies (`struct mempolicy`) intercept the allocation path in `mempolicy.c` and can change either the preferred node or the nodemask that filters the zonelist iterator.
+メモリポリシー（`struct mempolicy`）は`mempolicy.c`で割り当てパスに介入し、優先ノードか、zonelistのイテレータを絞り込むnodemaskのいずれかを変更できる。
 
 ```c
 /* include/linux/mempolicy.h */
@@ -244,8 +243,8 @@ struct mempolicy {
     atomic_t refcnt;
     unsigned short mode;   /* MPOL_DEFAULT, MPOL_BIND, MPOL_PREFERRED, ... */
     unsigned short flags;  /* MPOL_F_STATIC_NODES, MPOL_F_RELATIVE_NODES, ... */
-    nodemask_t nodes;      /* interleave/bind/preferred/etc. */
-    int home_node;         /* home node for MPOL_BIND and MPOL_PREFERRED_MANY */
+    nodemask_t nodes;      /* interleave/bind/preferredなど */
+    int home_node;         /* MPOL_BINDとMPOL_PREFERRED_MANYのホームノード */
     union {
         nodemask_t cpuset_mems_allowed;
         nodemask_t user_nodemask;
@@ -254,7 +253,7 @@ struct mempolicy {
 };
 ```
 
-The `policy_nodemask()` function in `mempolicy.c` translates the policy mode into a `(preferred_nid, nodemask)` pair that the core allocator uses:
+`mempolicy.c`の`policy_nodemask()`関数は、ポリシーのモードを、コアのアロケータが使う`(preferred_nid, nodemask)`の組に変換する。
 
 ```c
 /* mm/mempolicy.c */
@@ -286,59 +285,59 @@ static nodemask_t *policy_nodemask(gfp_t gfp, struct mempolicy *pol,
 
 ### `MPOL_DEFAULT` {#mpol_default}
 
-No policy object is set (`current->mempolicy == NULL`). The allocator uses the current CPU's node as the preferred node and no nodemask filter. The full fallback list is available.
+ポリシーオブジェクトは設定されていない（`current->mempolicy == NULL`）。アロケータは現在のCPUのノードを優先ノードとして使い、nodemaskによる絞り込みは行わない。フォールバックリスト全体が利用可能である。
 
 ### `MPOL_PREFERRED` {#mpol_preferred}
 
-The `nodes` field holds exactly one node. `policy_nodemask()` sets `*nid` to that node, making it the preferred starting point. The nodemask filter remains `NULL`, so if the preferred node is exhausted, the allocator falls back through the full `ZONELIST_FALLBACK` list.
+`nodes`フィールドはちょうど1つのノードを保持する。`policy_nodemask()`は`*nid`をそのノードに設定し、そこを優先的な開始点にする。nodemaskによる絞り込みは`NULL`のままなので、優先ノードが使い果たされると、アロケータは`ZONELIST_FALLBACK`リスト全体を通じてフォールバックする。
 
 ### `MPOL_BIND` {#mpol_bind}
 
-`policy_nodemask()` returns `&pol->nodes` as the nodemask filter. `for_each_zone_zonelist_nodemask` skips any zone whose node is not in that mask. The allocator therefore only considers the bound nodes. **If all bound nodes are exhausted, no fallback to other nodes occurs** — the allocation fails and triggers OOM rather than spilling onto an unbound node.
+`policy_nodemask()`はnodemaskの絞り込みとして`&pol->nodes`を返す。`for_each_zone_zonelist_nodemask`は、ノードがそのマスクに含まれないゾーンをすべて飛ばす。したがってアロケータはバインドされたノードだけを考慮する。**バインドされたノードがすべて使い果たされても、他のノードへのフォールバックは起こらない**。割り当ては失敗し、バインドされていないノードに溢れ出す代わりにOOMを引き起こす。
 
-!!! warning "MPOL_BIND and OOM"
-    A process bound with `MPOL_BIND` to a node that is full will be killed by the OOM killer rather than falling back to remote memory. This is intentional: the application has explicitly declared that it requires local memory.
+!!! warning "MPOL_BINDとOOM"
+    `MPOL_BIND`で満杯のノードにバインドされたプロセスは、リモートメモリにフォールバックする代わりにOOM killerによってkillされる。これは意図的なものである。アプリケーションは、ローカルメモリを必要とすることを明示的に宣言しているからである。
 
 ### `MPOL_INTERLEAVE` {#mpol_interleave}
 
-`interleave_nodes()` advances `current->il_prev` to the next node in `pol->nodes` and returns it as the preferred node for this allocation. No nodemask filter is applied to the zonelist — normal fallback is still available if the interleaved node is temporarily exhausted. Over many allocations, pages are spread round-robin across the allowed nodes.
+`interleave_nodes()`は`current->il_prev`を`pol->nodes`内の次のノードに進め、それをこの割り当ての優先ノードとして返す。zonelistにnodemaskの絞り込みは適用されないので、インターリーブ先のノードが一時的に使い果たされていても通常のフォールバックは利用可能である。多数の割り当てを通じて、ページは許可されたノード間にラウンドロビンで分散される。
 
 ### `MPOL_LOCAL` {#mpol_local}
 
-Allocate from the current CPU's NUMA node. `policy_nodemask()` does not modify `*nid` for `MPOL_LOCAL` (it falls through to the default case), so `numa_node_id()` is used. Normal fallback applies.
+現在のCPUのNUMAノードから割り当てる。`policy_nodemask()`は`MPOL_LOCAL`の場合に`*nid`を変更しない（defaultケースに落ちる）ので、`numa_node_id()`が使われる。通常のフォールバックが適用される。
 
-### Summary Table {#summary-table}
+### まとめの表 {#summary-table}
 
-| Policy | Preferred Node | Nodemask Filter | On Exhaustion |
+| ポリシー | 優先ノード | nodemaskによる絞り込み | 使い果たしたとき |
 |---|---|---|---|
-| `MPOL_DEFAULT` | Current CPU's node | None | Falls back normally |
-| `MPOL_PREFERRED` | Specified node | None | Falls back normally |
-| `MPOL_BIND` | First node in mask (or `home_node`) | `pol->nodes` | OOM — no fallback |
-| `MPOL_INTERLEAVE` | Round-robin across `pol->nodes` | None | Falls back normally |
-| `MPOL_LOCAL` | Current CPU's node | None | Falls back normally |
+| `MPOL_DEFAULT` | 現在のCPUのノード | なし | 通常どおりフォールバック |
+| `MPOL_PREFERRED` | 指定したノード | なし | 通常どおりフォールバック |
+| `MPOL_BIND` | マスク内の最初のノード（または`home_node`） | `pol->nodes` | OOM — フォールバックなし |
+| `MPOL_INTERLEAVE` | `pol->nodes`間でラウンドロビン | なし | 通常どおりフォールバック |
+| `MPOL_LOCAL` | 現在のCPUのノード | なし | 通常どおりフォールバック |
 
 ---
 
-## Practical Effect: Two-Node Example {#practical-effect-two-node-example}
+## 実際の効果: 2ノードの例 {#practical-effect-two-node-example}
 
-Consider a system with node 0 (32 GB) and node 1 (32 GB). NUMA distance: local = 10, remote = 20. Node 0's `ZONELIST_FALLBACK` list is:
+ノード0（32GB）とノード1（32GB）を持つシステムを考える。NUMA距離はローカル = 10、リモート = 20である。ノード0の`ZONELIST_FALLBACK`リストは次のとおりである。
 
 ```
 [ZONE_NORMAL/node0] → [ZONE_DMA32/node0] → [ZONE_NORMAL/node1] → [ZONE_DMA32/node1]
 ```
 
-**Scenario 1 — Default policy, node 0 is full:**
-A task running on node 0 with no explicit policy fills node 0's `ZONE_NORMAL`. `get_page_from_freelist()` fails the watermark check on `ZONE_NORMAL/node0`, skips `ZONE_DMA32/node0` (watermark check also fails or `lowmem_reserve` denies it), and succeeds on `ZONE_NORMAL/node1`. The allocation is served from node 1 at remote latency. `numastat` records a `numa_miss` on node 0 and a `numa_foreign` on node 1.
+**シナリオ1 — デフォルトポリシー、ノード0が満杯:**
+明示的なポリシーなしでノード0上で動くタスクが、ノード0の`ZONE_NORMAL`を使い切る。`get_page_from_freelist()`は`ZONE_NORMAL/node0`でウォーターマークのチェックに失敗し、`ZONE_DMA32/node0`を飛ばし（ウォーターマークのチェックにやはり失敗するか、`lowmem_reserve`が拒否する）、`ZONE_NORMAL/node1`で成功する。割り当てはリモートのレイテンシでノード1から提供される。`numastat`はノード0に`numa_miss`を、ノード1に`numa_foreign`を記録する。
 
-**Scenario 2 — `MPOL_BIND` to node 0, node 0 is full:**
-The nodemask filter restricts the iterator to node 0 entries only. Both `ZONE_NORMAL/node0` and `ZONE_DMA32/node0` fail the watermark check. No other zones pass the nodemask filter. The slow path fails to reclaim enough memory and the OOM killer is invoked. The task does **not** fall back to node 1.
+**シナリオ2 — ノード0への`MPOL_BIND`、ノード0が満杯:**
+nodemaskの絞り込みにより、イテレータはノード0のエントリのみに制限される。`ZONE_NORMAL/node0`と`ZONE_DMA32/node0`はどちらもウォーターマークのチェックに失敗する。他のゾーンはnodemaskの絞り込みを通過しない。低速パスは十分なメモリを回収できず、OOM killerが呼び出される。タスクはノード1にフォールバック**しない**。
 
-**Scenario 3 — `MPOL_PREFERRED` for node 0, node 0 is full:**
-The preferred nid is overridden to node 0, but no nodemask filter is applied. When node 0's zones fail the watermark check, the iterator continues to `ZONE_NORMAL/node1` and the allocation succeeds. Behaviour is identical to the default policy except that node 0 is tried first even if the task happens to be scheduled on node 1.
+**シナリオ3 — ノード0への`MPOL_PREFERRED`、ノード0が満杯:**
+優先nidはノード0に上書きされるが、nodemaskの絞り込みは適用されない。ノード0のゾーンがウォーターマークのチェックに失敗すると、イテレータは`ZONE_NORMAL/node1`へと進み、割り当ては成功する。タスクがたまたまノード1にスケジュールされていてもノード0が最初に試される点を除けば、挙動はデフォルトポリシーと同じである。
 
 ---
 
-## Observing Fallback in Practice {#observing-fallback-in-practice}
+## 実際にフォールバックを観察する {#observing-fallback-in-practice}
 
 ### `numastat` {#numastat}
 
@@ -346,18 +345,18 @@ The preferred nid is overridden to node 0, but no nodemask filter is applied. Wh
 numastat
 ```
 
-| Counter | Meaning |
+| カウンタ | 意味 |
 |---|---|
-| sysfs name | `/proc/vmstat` name | Meaning |
+| sysfsでの名前 | `/proc/vmstat`での名前 | 意味 |
 |---|---|---|
-| `numa_hit` | `numa_hit` | Allocated on the intended (preferred) node |
-| `numa_miss` | `numa_miss` | Allocated on a different node because the preferred node was full |
-| `numa_foreign` | `numa_foreign` | A remote task allocated from this node |
-| `interleave_hit` | `numa_interleave` | Interleave policy landed on the intended node |
-| `local_node` | `numa_local` | Allocated on the local node (CPU and memory are co-located) |
-| `other_node` | `numa_other` | Allocated on a non-local node |
+| `numa_hit` | `numa_hit` | 意図した（優先）ノードで割り当てられた |
+| `numa_miss` | `numa_miss` | 優先ノードが満杯だったため別のノードで割り当てられた |
+| `numa_foreign` | `numa_foreign` | リモートのタスクがこのノードから割り当てた |
+| `interleave_hit` | `numa_interleave` | インターリーブポリシーが意図したノードに当たった |
+| `local_node` | `numa_local` | ローカルノードで割り当てられた（CPUとメモリが同じ場所にある） |
+| `other_node` | `numa_other` | ローカルでないノードで割り当てられた |
 
-High `numa_miss` counts indicate memory pressure on the preferred node and frequent fallback to remote memory.
+`numa_miss`のカウントが高い場合、優先ノードでメモリが圧迫されており、リモートメモリへのフォールバックが頻繁に起きていることを示す。
 
 ### `/proc/zoneinfo` {#proczoneinfo}
 
@@ -365,18 +364,18 @@ High `numa_miss` counts indicate memory pressure on the preferred node and frequ
 grep -A 20 "Node 0, zone" /proc/zoneinfo
 ```
 
-Per-zone free page counts and the three watermarks (`min`, `low`, `high`) are visible here. When `free` approaches `min`, the zone will fail `zone_watermark_ok()` for most allocations and the allocator will skip to the next zonelist entry.
+ゾーンごとの空きページ数と3つのウォーターマーク（`min`、`low`、`high`）をここで確認できる。`free`が`min`に近づくと、そのゾーンはほとんどの割り当てで`zone_watermark_ok()`に失敗し、アロケータはzonelistの次のエントリへ飛ぶ。
 
-### Kernel Boot Log {#kernel-boot-log}
+### カーネルのブートログ {#kernel-boot-log}
 
-At boot, the kernel prints each node's fallback order:
+ブート時に、カーネルは各ノードのフォールバック順序を出力する。
 
 ```
 Fallback order for Node 0: 0 1
 Fallback order for Node 1: 1 0
 ```
 
-This comes directly from `build_zonelists()`:
+これは`build_zonelists()`から直接出力されている。
 
 ```c
 pr_info("Fallback order for Node %d: ", local_node);
@@ -386,36 +385,36 @@ for (node = 0; node < nr_nodes; node++)
 
 ---
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | What to Look For |
+| ファイル | 注目すべき箇所 |
 |---|---|
-| `include/linux/mmzone.h` | `struct zoneref`, `struct zonelist`, `enum zone_type`, `ZONELIST_FALLBACK`, `ZONELIST_NOFALLBACK`, `MAX_ZONES_PER_ZONELIST`, `for_each_zone_zonelist`, `for_each_zone_zonelist_nodemask`, `enum numa_stat_item` |
-| `include/linux/mempolicy.h` | `struct mempolicy` — `mode`, `flags`, `nodes`, `home_node` |
-| `include/uapi/linux/mempolicy.h` | `MPOL_DEFAULT`, `MPOL_PREFERRED`, `MPOL_BIND`, `MPOL_INTERLEAVE`, `MPOL_LOCAL`, `MPOL_PREFERRED_MANY` |
-| `include/linux/gfp.h` | `node_zonelist()`, `gfp_zonelist()` |
-| `mm/page_alloc.c` | `build_all_zonelists()`, `__build_all_zonelists()`, `build_zonelists()`, `build_zonelists_in_node_order()`, `build_thisnode_zonelists()`, `build_zonerefs_node()`, `find_next_best_node()`, `get_page_from_freelist()`, `zone_watermark_ok()`, `__zone_watermark_ok()` |
-| `mm/mempolicy.c` | `policy_nodemask()`, `alloc_pages_mpol()`, `interleave_nodes()`, `mempolicy_slab_node()` |
+| `include/linux/mmzone.h` | `struct zoneref`、`struct zonelist`、`enum zone_type`、`ZONELIST_FALLBACK`、`ZONELIST_NOFALLBACK`、`MAX_ZONES_PER_ZONELIST`、`for_each_zone_zonelist`、`for_each_zone_zonelist_nodemask`、`enum numa_stat_item` |
+| `include/linux/mempolicy.h` | `struct mempolicy` — `mode`、`flags`、`nodes`、`home_node` |
+| `include/uapi/linux/mempolicy.h` | `MPOL_DEFAULT`、`MPOL_PREFERRED`、`MPOL_BIND`、`MPOL_INTERLEAVE`、`MPOL_LOCAL`、`MPOL_PREFERRED_MANY` |
+| `include/linux/gfp.h` | `node_zonelist()`、`gfp_zonelist()` |
+| `mm/page_alloc.c` | `build_all_zonelists()`、`__build_all_zonelists()`、`build_zonelists()`、`build_zonelists_in_node_order()`、`build_thisnode_zonelists()`、`build_zonerefs_node()`、`find_next_best_node()`、`get_page_from_freelist()`、`zone_watermark_ok()`、`__zone_watermark_ok()` |
+| `mm/mempolicy.c` | `policy_nodemask()`、`alloc_pages_mpol()`、`interleave_nodes()`、`mempolicy_slab_node()` |
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `build_all_zonelists()`, `build_zonelists()`, `find_next_best_node()`, `get_page_from_freelist()`, `zone_watermark_ok()`
-- [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `policy_nodemask()`, `alloc_pages_mpol()`, and all memory policy mode implementations
-- [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zonelist`, `struct zoneref`, `for_each_zone_zonelist_nodemask`, `ZONELIST_FALLBACK`, `ZONELIST_NOFALLBACK`
+- [mm/page_alloc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/page_alloc.c) — `build_all_zonelists()`、`build_zonelists()`、`find_next_best_node()`、`get_page_from_freelist()`、`zone_watermark_ok()`
+- [mm/mempolicy.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/mempolicy.c) — `policy_nodemask()`、`alloc_pages_mpol()`、およびすべてのメモリポリシーモードの実装
+- [include/linux/mmzone.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/mmzone.h) — `struct zonelist`、`struct zoneref`、`for_each_zone_zonelist_nodemask`、`ZONELIST_FALLBACK`、`ZONELIST_NOFALLBACK`
 
-### Kernel documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- `Documentation/admin-guide/mm/numa_memory_policy.rst` — reference for all `MPOL_*` policy modes and how they interact with the zonelist ([rendered](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html))
+- `Documentation/admin-guide/mm/numa_memory_policy.rst` — すべての`MPOL_*`ポリシーモードと、それらがzonelistとどう相互作用するかのリファレンス（[HTML版](https://docs.kernel.org/admin-guide/mm/numa_memory_policy.html)）
 
-### LWN articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [GFP flags and memory zones](https://lwn.net/Articles/629925/) — how GFP flags select zones and interact with the fallback list
+- [GFP flags and memory zones](https://lwn.net/Articles/629925/) — GFPフラグがどのようにゾーンを選択し、フォールバックリストと相互作用するか
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [NUMA Memory Management](numa.md) — memory policy overview: `set_mempolicy()`, `mbind()`, `numactl`, and automatic NUMA balancing
-- [NUMA Distance and Inter-Socket Latency](numa-distance.md) — how `node_distance()` values drive `find_next_best_node()` scoring
-- [NUMA Effects on Memory Reclaim](numa-reclaim.md) — per-node kswapd, watermarks, and how `MPOL_BIND` interacts with OOM
-- [Page Allocator](page-allocator.md) — the full allocation path from `__alloc_pages()` through the zonelist to the buddy allocator
+- [NUMAのメモリ管理](numa.md) — メモリポリシーの概要: `set_mempolicy()`、`mbind()`、`numactl`、自動NUMAバランシング
+- [NUMA距離とソケット間レイテンシ](numa-distance.md) — `node_distance()`の値が`find_next_best_node()`のスコア付けをどう左右するか
+- [NUMAがメモリ回収に及ぼす影響](numa-reclaim.md) — ノードごとのkswapd、ウォーターマーク、そして`MPOL_BIND`がOOMとどう相互作用するか
+- [ページアロケータ](page-allocator.md) — `__alloc_pages()`からzonelistを経てバディアロケータに至る割り当てパス全体

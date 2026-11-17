@@ -1,10 +1,10 @@
-# Transparent Huge Pages (THP) {#transparent-huge-pages-thp}
+# Transparent Huge Pages（THP） {#transparent-huge-pages-thp}
 
-> Automatic huge page allocation without application changes
+> アプリケーションを変更せずにhuge pageを自動的に割り当てる
 
-## What Is THP? {#what-is-thp}
+## THPとは何か {#what-is-thp}
 
-Transparent Huge Pages automatically promotes regular 4KB pages to 2MB huge pages when possible. Unlike hugetlbfs, THP requires no application modifications - the kernel handles everything transparently.
+Transparent Huge Pagesは、可能な場合に通常の4KBページを2MBのhuge pageへ自動的に昇格させる。hugetlbfsと異なり、THPはアプリケーションの変更を必要としない。カーネルがすべてを透過的に処理する。
 
 ```
 Without THP:                    With THP:
@@ -15,59 +15,59 @@ Without THP:                    With THP:
    512 TLB entries needed         1 TLB entry needed
 ```
 
-## From hugetlbfs to THP {#from-hugetlbfs-to-thp}
+## hugetlbfsからTHPへ {#from-hugetlbfs-to-thp}
 
-### The original huge page interface (hugetlbfs, Linux 2.6) {#the-original-huge-page-interface-hugetlbfs-linux-26}
+### 最初のhuge pageインターフェース（hugetlbfs、Linux 2.6） {#the-original-huge-page-interface-hugetlbfs-linux-26}
 
-Hardware huge pages (2MB on x86-64) have been available since the Pentium Pro. Linux exposed them through `hugetlbfs`: a special filesystem where files backed by huge pages could be `mmap()`'d with `MAP_HUGETLB`.
+ハードウェアのhuge page（x86-64では2MB）はPentium Proの時代から利用可能だった。Linuxはこれを`hugetlbfs`を通じて公開していた。これは特殊なファイルシステムで、huge pageを裏付けとするファイルを`MAP_HUGETLB`で`mmap()`できる。
 
-The problem was operational: huge pages had to be reserved at boot time (or via `sysctl vm.nr_hugepages`) from a dedicated pre-allocated pool. Applications needed to use a different `mmap()` flag (`MAP_HUGETLB`) or open a file on `hugetlbfs`. Databases like Oracle and PostgreSQL supported this, but it required administrator intervention to size the pool and developer effort to use the API.
+問題は運用面にあった。huge pageは、専用の事前割り当てプールからブート時に（または`sysctl vm.nr_hugepages`で）予約しておく必要があった。アプリケーションは別の`mmap()`フラグ（`MAP_HUGETLB`）を使うか、`hugetlbfs`上のファイルを開く必要があった。OracleやPostgreSQLのようなデータベースはこれに対応していたが、プールのサイズを決めるための管理者の介入と、APIを使うための開発者の労力が必要だった。
 
-If the pool was too small, applications fell back to 4KB pages. If it was too large, the pre-reserved memory sat idle. And it was entirely opt-in — the thousands of applications that didn't explicitly request huge pages got no benefit, even if their working sets were large enough to benefit dramatically.
+プールが小さすぎると、アプリケーションは4KBページにフォールバックした。大きすぎると、事前予約したメモリが遊んだままになった。しかも完全にオプトイン方式だったため、明示的にhuge pageを要求しない何千ものアプリケーションは、ワーキングセットが大きく劇的な恩恵を受けられる場合でも、何の恩恵も受けられなかった。
 
-### Transparent Huge Pages (Linux 2.6.38, 2011) {#transparent-huge-pages-linux-2638-2011}
+### Transparent Huge Pages（Linux 2.6.38、2011年） {#transparent-huge-pages-linux-2638-2011}
 
-Andrea Arcangeli designed THP to deliver huge page performance to applications without any changes. The kernel itself decides when to allocate a 2MB huge page in place of 512 4KB pages, based on alignment, availability, and the `transparent_hugepage` policy.
+Andrea Arcangeliは、アプリケーションに一切の変更を加えずにhuge pageの性能を届けるためにTHPを設計した。アラインメント、空き状況、`transparent_hugepage`ポリシーに基づき、512個の4KBページの代わりに2MBのhuge pageをいつ割り当てるかをカーネル自身が決める。
 
-The key insight: for anonymous memory (heap, stack), the kernel can allocate a 2MB-aligned huge page at fault time if a 2MB-aligned, physically contiguous range is available. The application sees normal virtual memory; the hardware walks the page table one level fewer.
+鍵となる着想は次のとおりである。匿名メモリ（ヒープ、スタック）については、2MBにアラインされた物理的に連続な範囲が利用可能であれば、カーネルはフォールト時に2MBアラインのhuge pageを割り当てられる。アプリケーションからは通常の仮想メモリに見え、ハードウェアはページテーブルを1段少なくたどるだけで済む。
 
-The compaction challenge made THP complex to tune. Physical memory fragments over time — 2MB contiguous ranges become scarce as pages are allocated and freed. The kernel's `khugepaged` daemon scans for small-page regions that could be collapsed into huge pages, and the memory compaction machinery (`MADV_HUGEPAGE`, background compaction, defrag modes) exists to create contiguous ranges. Getting this right without causing latency spikes from compaction stalls took years of refinement.
+コンパクションの課題により、THPのチューニングは複雑になった。物理メモリは時間とともに断片化し、ページの割り当てと解放が繰り返されるにつれて2MBの連続範囲は希少になる。カーネルの`khugepaged`デーモンは、huge pageにまとめ上げ（collapse）られる小さなページの領域を探してスキャンし、メモリコンパクションの仕組み（`MADV_HUGEPAGE`、バックグラウンドコンパクション、デフラグモード）は連続範囲を作り出すために存在する。コンパクションのストールによるレイテンシスパイクを起こさずにこれを正しく機能させるには、何年もの改良が必要だった。
 
-The `transparent_hugepage=defer` mode (Linux 4.14+) tries to allocate huge pages at fault time but defers compaction to `khugepaged`, avoiding synchronous compaction latency in the application's hot path. Per-process control via `MADV_HUGEPAGE` / `MADV_NOHUGEPAGE` lets performance-sensitive applications opt in while others use 4KB pages.
+`transparent_hugepage=defer`モード（Linux 4.14以降）は、フォールト時にhuge pageの割り当てを試みるが、コンパクションは`khugepaged`に先送りし、アプリケーションのホットパスで同期的なコンパクションのレイテンシが発生するのを避ける。`MADV_HUGEPAGE` / `MADV_NOHUGEPAGE`によるプロセスごとの制御により、性能が重要なアプリケーションはオプトインし、それ以外は4KBページを使うといった使い分けができる。
 
-## Why THP? {#why-thp}
+## なぜTHPか {#why-thp}
 
-### The TLB Problem {#the-tlb-problem}
+### TLBの問題 {#the-tlb-problem}
 
-The TLB (Translation Lookaside Buffer) caches virtual-to-physical address translations in a [multi-level hierarchy](https://lwn.net/Articles/379748/).
+TLB（Translation Lookaside Buffer）は、仮想アドレスから物理アドレスへの変換を[多段の階層](https://lwn.net/Articles/379748/)でキャッシュする。
 
-On modern x86-64, the L1 dTLB holds 64-96 entries and the L2 (STLB) holds 1024-3072 entries depending on microarchitecture (sources: [7-cpu.com](https://www.7-cpu.com/cpu/Skylake.html), [WikiChip](https://en.wikichip.org/wiki/intel/microarchitectures/skylake_(server)#Memory_Hierarchy)). With 4KB pages, even a few gigabytes of working set exhausts the TLB:
+現代のx86-64では、マイクロアーキテクチャによってL1 dTLBは64〜96エントリ、L2（STLB）は1024〜3072エントリを保持する（出典: [7-cpu.com](https://www.7-cpu.com/cpu/Skylake.html)、[WikiChip](https://en.wikichip.org/wiki/intel/microarchitectures/skylake_(server)#Memory_Hierarchy)）。4KBページでは、数GB程度のワーキングセットでもTLBを使い果たしてしまう。
 
-| Workload Size | Pages Needed | TLB Pressure |
+| ワークロードのサイズ | 必要なページ数 | TLBへの圧力 |
 |---------------|--------------|--------------|
-| 1MB | 256 | Low |
-| 1GB | 262,144 | High |
-| 100GB | 26,214,400 | Severe |
+| 1MB | 256 | 低 |
+| 1GB | 262,144 | 高 |
+| 100GB | 26,214,400 | 深刻 |
 
-Large workloads constantly evict TLB entries, causing expensive page table walks.
+大きなワークロードは絶えずTLBエントリを追い出し、高コストなページテーブルウォークを引き起こす。
 
-### Huge Pages as Solution {#huge-pages-as-solution}
+### 解決策としてのhuge page {#huge-pages-as-solution}
 
-2MB pages reduce TLB pressure by 512x:
+2MBページはTLBへの圧力を512分の1に減らす。
 
-| Page Size | Pages for 1GB | TLB Entries |
+| ページサイズ | 1GBに必要なページ数 | TLBエントリ数 |
 |-----------|---------------|-------------|
 | 4KB | 262,144 | 262,144 |
 | 2MB | 512 | 512 |
 | 1GB | 1 | 1 |
 
-## How THP Works {#how-thp-works}
+## THPの仕組み {#how-thp-works}
 
-### Two Allocation Paths {#two-allocation-paths}
+### 2つの割り当てパス {#two-allocation-paths}
 
-**1. Fault-based (synchronous)**
+**1. フォールト時（同期）**
 
-When a process faults on memory, the kernel tries to allocate a huge page:
+プロセスがメモリでフォールトすると、カーネルはhuge pageの割り当てを試みる。
 
 ```
 Page fault
@@ -80,9 +80,9 @@ Can we allocate 2MB?
     └── No: Fall back to 4KB pages
 ```
 
-**2. khugepaged (asynchronous)**
+**2. khugepaged（非同期）**
 
-A kernel thread scans for regions that can be collapsed into huge pages:
+カーネルスレッドが、huge pageにまとめ上げられる領域を探してスキャンする。
 
 ```
 khugepaged thread
@@ -98,37 +98,37 @@ Find 512 contiguous 4KB pages?
     └── No: Skip, try again later
 ```
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
-### Global Settings {#global-settings}
+### グローバル設定 {#global-settings}
 
 ```bash
-# View current mode
+# 現在のモードを表示する
 cat /sys/kernel/mm/transparent_hugepage/enabled
 # [always] madvise never
 
-# Options:
-# always  - THP for all anonymous memory
-# madvise - THP only for MADV_HUGEPAGE regions
-# never   - THP disabled
+# 選択肢:
+# always  - すべての匿名メモリでTHPを使う
+# madvise - MADV_HUGEPAGE領域でのみTHPを使う
+# never   - THPを無効化する
 echo madvise > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-### Defrag Settings {#defrag-settings}
+### デフラグ設定 {#defrag-settings}
 
 ```bash
-# When to defragment memory for huge pages
+# huge pageのためにいつメモリをデフラグするか
 cat /sys/kernel/mm/transparent_hugepage/defrag
 # [always] defer defer+madvise madvise never
 
-# always        - Sync defrag on fault (can stall)
-# defer         - Async defrag via khugepaged
-# defer+madvise - Defer for most, sync for MADV_HUGEPAGE
-# madvise       - Only defrag for MADV_HUGEPAGE
-# never         - Never defrag for THP
+# always        - フォールト時に同期デフラグ（ストールし得る）
+# defer         - khugepagedによる非同期デフラグ
+# defer+madvise - 大半はdefer、MADV_HUGEPAGEでは同期
+# madvise       - MADV_HUGEPAGEの場合のみデフラグ
+# never         - THPのためにデフラグしない
 ```
 
-### Per-Process Control {#per-process-control}
+### プロセスごとの制御 {#per-process-control}
 
 ```c
 #include <sys/mman.h>
@@ -136,325 +136,327 @@ cat /sys/kernel/mm/transparent_hugepage/defrag
 void *ptr = mmap(NULL, size, PROT_READ|PROT_WRITE,
                  MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
 
-/* Enable THP for this region */
+/* この領域でTHPを有効化する */
 madvise(ptr, size, MADV_HUGEPAGE);
 
-/* Disable THP for this region */
+/* この領域でTHPを無効化する */
 madvise(ptr, size, MADV_NOHUGEPAGE);
 ```
 
-### khugepaged Tuning {#khugepaged-tuning}
+### khugepagedのチューニング {#khugepaged-tuning}
 
 ```bash
-# Scan interval (milliseconds)
+# スキャン間隔（ミリ秒）
 cat /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs
-# 10000 (default)
+# 10000（デフォルト）
 
-# Pages to scan per interval
+# 1回の間隔でスキャンするページ数
 cat /sys/kernel/mm/transparent_hugepage/khugepaged/pages_to_scan
-# 4096 (default)
+# 4096（デフォルト）
 
-# Max unmapped PTEs allowed when collapsing
+# まとめ上げ時に許容するマップされていないPTEの最大数
 cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none
-# 511 (default - collapse even if 511 of 512 PTEs are none/zero)
+# 511（デフォルト - 512個中511個のPTEがnone/ゼロでもまとめ上げる）
 ```
 
-(See [THP kernel docs](https://docs.kernel.org/admin-guide/mm/transhuge.html) for all tunables.)
+（すべてのチューニング可能なパラメータについては[THPのカーネルドキュメント](https://docs.kernel.org/admin-guide/mm/transhuge.html)を参照。）
 
-## THP and Specific Workloads {#thp-and-specific-workloads}
+## THPと特定のワークロード {#thp-and-specific-workloads}
 
-### Databases {#databases}
+### データベース {#databases}
 
-Databases often benefit from THP but can suffer from:
+データベースはTHPの恩恵を受けることが多いが、次の問題に悩まされることもある。
 
-- Latency spikes during compaction
-- Memory bloat (2MB granularity)
+- コンパクション中のレイテンシスパイク
+- メモリの肥大化（2MB単位）
 
-Many databases recommend `madvise` mode with explicit huge page requests.
+多くのデータベースは、明示的にhuge pageを要求する`madvise`モードを推奨している。
 
-### Virtual Machines (KVM) {#virtual-machines-kvm}
+### 仮想マシン（KVM） {#virtual-machines-kvm}
 
-THP was originally designed for KVM:
+THPは元々KVMのために設計された。
 
-From commit [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f):
+コミット[71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f)より:
 > "Lately I've been working to make KVM use hugepages transparently without the usual restrictions of hugetlbfs."
 
-VMs benefit significantly from reduced TLB pressure on nested page tables.
+（訳: 最近、hugetlbfsの通常の制約なしにKVMがhuge pageを透過的に使えるようにする作業をしている。）
+
+VMは、ネストされたページテーブルにおけるTLBへの圧力が減ることで大きな恩恵を受ける。
 
 ### Redis/Memcached {#redismemcached}
 
-In-memory stores can see latency spikes from THP defragmentation. Many recommend:
+インメモリストアでは、THPのデフラグによるレイテンシスパイクが見られることがある。多くの場合、次の設定が推奨される。
 ```bash
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
-Or use `madvise` mode with application-level control.
+あるいは、`madvise`モードを使ってアプリケーションレベルで制御する。
 
-## THP vs hugetlbfs {#thp-vs-hugetlbfs}
+## THPとhugetlbfsの比較 {#thp-vs-hugetlbfs}
 
-| Feature | THP | hugetlbfs |
+| 特徴 | THP | hugetlbfs |
 |---------|-----|-----------|
-| Application changes | None (or MADV_HUGEPAGE for hints) | Required |
-| Page sizes | 2MB (PMD), 16KB-1MB with mTHP (v6.10+) | 2MB, 1GB |
-| Swappable | Yes (since v4.13) | No |
-| Reservation | On-demand | Pre-allocated |
-| Fragmentation risk | Higher | Lower |
-| Overcommit | Yes | No |
+| アプリケーションの変更 | 不要（ヒントとしてMADV_HUGEPAGEを使う場合あり） | 必要 |
+| ページサイズ | 2MB（PMD）、mTHPでは16KB〜1MB（v6.10以降） | 2MB、1GB |
+| スワップ可能 | 可（v4.13以降） | 不可 |
+| 予約 | オンデマンド | 事前割り当て |
+| 断片化のリスク | 高い | 低い |
+| オーバーコミット | 可 | 不可 |
 
-## Monitoring {#monitoring}
+## 監視 {#monitoring}
 
-### System-Wide Statistics {#system-wide-statistics}
+### システム全体の統計 {#system-wide-statistics}
 
 ```bash
-# THP statistics
+# THPの統計
 cat /proc/meminfo | grep -i huge
-# AnonHugePages:    2097152 kB  <- THP usage
+# AnonHugePages:    2097152 kB  <- THPの使用量
 # HugePages_Total:       0     <- hugetlbfs
 # HugePages_Free:        0
 
-# Detailed THP stats
+# THPの詳細な統計
 cat /proc/vmstat | grep thp
-# thp_fault_alloc        - Huge pages allocated on fault
-# thp_fault_fallback     - Fell back to 4KB
-# thp_collapse_alloc     - khugepaged collapses
-# thp_split_page         - Huge pages split back to 4KB
+# thp_fault_alloc        - フォールト時に割り当てられたhuge page
+# thp_fault_fallback     - 4KBにフォールバックした
+# thp_collapse_alloc     - khugepagedによるまとめ上げ
+# thp_split_page         - 4KBに分割し直されたhuge page
 ```
 
-### Per-Process {#per-process}
+### プロセスごと {#per-process}
 
 ```bash
-# Huge page usage for a process
+# プロセスのhuge page使用量
 cat /proc/<pid>/smaps | grep -i huge
 # AnonHugePages:     2048 kB
 
-# Or summarized
+# または集計値
 cat /proc/<pid>/smaps_rollup | grep AnonHugePages
 ```
 
-### Tracing {#tracing}
+### トレーシング {#tracing}
 
 ```bash
-# Trace THP events
+# THPイベントをトレースする
 echo 1 > /sys/kernel/debug/tracing/events/huge_memory/mm_khugepaged_scan_pmd/enable
 echo 1 > /sys/kernel/debug/tracing/events/huge_memory/mm_collapse_huge_page/enable
 cat /sys/kernel/debug/tracing/trace_pipe
 ```
 
-## History {#history}
+## 歴史 {#history}
 
-### THP Introduction (v2.6.38, 2011) {#thp-introduction-v2638-2011}
+### THPの導入（v2.6.38、2011年） {#thp-introduction-v2638-2011}
 
-**Commit**: [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f) ("thp: transparent hugepage core")
+**コミット**: [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f)（"thp: transparent hugepage core"）
 
-**Author**: Andrea Arcangeli (Red Hat)
+**作者**: Andrea Arcangeli（Red Hat）
 
-*Note: Pre-2012 LKML archives on lore.kernel.org are sparse. The commit message documents the design rationale.*
+*注: lore.kernel.org上の2012年以前のLKMLアーカイブは不完全である。設計の根拠はコミットメッセージに記されている。*
 
-Initial THP implementation for anonymous memory.
+匿名メモリ向けのTHPの初期実装。
 
-### THP Swap Support (v4.13, 2017) {#thp-swap-support-v413-2017}
+### THPのスワップ対応（v4.13、2017年） {#thp-swap-support-v413-2017}
 
-**Commit**: [38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8) ("mm, THP, swap: delay splitting THP during swap out") | [LKML](https://lore.kernel.org/lkml/20170724051840.2309-1-ying.huang@intel.com/)
+**コミット**: [38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8)（"mm, THP, swap: delay splitting THP during swap out"） | [LKML](https://lore.kernel.org/lkml/20170724051840.2309-1-ying.huang@intel.com/)
 
-**Author**: Huang Ying
+**作者**: Huang Ying
 
-THP pages can now be swapped as a unit without splitting first, improving swap performance.
+THPのページを、先に分割することなく1つの単位としてスワップできるようになり、スワップ性能が向上した。
 
-### Multi-Size THP (v6.10, 2024) {#multi-size-thp-v610-2024}
+### Multi-Size THP（v6.10、2024年） {#multi-size-thp-v610-2024}
 
-**Commit**: [19eaf44954df](https://git.kernel.org/linus/19eaf44954df) ("mm: thp: support allocation of anonymous multi-size THP") | [LKML](https://lore.kernel.org/linux-mm/20231204102027.57185-1-ryan.roberts@arm.com/)
+**コミット**: [19eaf44954df](https://git.kernel.org/linus/19eaf44954df)（"mm: thp: support allocation of anonymous multi-size THP"） | [LKML](https://lore.kernel.org/linux-mm/20231204102027.57185-1-ryan.roberts@arm.com/)
 
-**Author**: Ryan Roberts
+**作者**: Ryan Roberts
 
-Enables THP at sizes between 4KB and 2MB (e.g., 16KB, 64KB), providing more flexibility for workloads where 2MB is too large.
+4KBと2MBの間のサイズ（例: 16KB、64KB）でTHPを使えるようにし、2MBでは大きすぎるワークロードに対してより柔軟性を提供する。
 
-## Common Issues {#common-issues}
+## よくある問題 {#common-issues}
 
-### Latency Spikes {#latency-spikes}
+### レイテンシスパイク {#latency-spikes}
 
-THP defragmentation can cause allocation stalls.
+THPのデフラグは割り当てのストールを引き起こし得る。
 
-**Symptoms**: Random latency spikes in latency-sensitive applications
+**症状**: レイテンシに敏感なアプリケーションで不定期にレイテンシスパイクが起きる
 
-**Solutions**:
+**解決策**:
 
-- Use `defrag=defer` or `defrag=madvise`
-- Set `enabled=madvise` and control per-region
-- Disable THP for latency-critical apps
+- `defrag=defer`または`defrag=madvise`を使う
+- `enabled=madvise`に設定し、領域ごとに制御する
+- レイテンシが重要なアプリではTHPを無効化する
 
-### Memory Bloat {#memory-bloat}
+### メモリの肥大化 {#memory-bloat}
 
-Small allocations rounded up to 2MB.
+小さな割り当てが2MBに切り上げられる。
 
-**Symptoms**: Higher than expected memory usage
+**症状**: 予想よりもメモリ使用量が多い
 
-**Debug**: Compare `AnonHugePages` vs `Anonymous` in `/proc/meminfo`
+**デバッグ**: `/proc/meminfo`の`AnonHugePages`と`Anonymous`を比較する
 
-**Solutions**:
+**解決策**:
 
-- Use `madvise` mode
-- Tune application allocation patterns
+- `madvise`モードを使う
+- アプリケーションの割り当てパターンを調整する
 
-### khugepaged CPU Usage {#khugepaged-cpu-usage}
+### khugepagedのCPU使用率 {#khugepaged-cpu-usage}
 
-khugepaged consuming too much CPU.
+khugepagedがCPUを過剰に消費する。
 
-**Debug**: `top` or `perf top`
+**デバッグ**: `top`または`perf top`
 
-**Solutions**:
+**解決策**:
 
-- Increase `scan_sleep_millisecs`
-- Reduce `pages_to_scan`
+- `scan_sleep_millisecs`を増やす
+- `pages_to_scan`を減らす
 
-## Notorious bugs and edge cases {#notorious-bugs-and-edge-cases}
+## 悪名高いバグとエッジケース {#notorious-bugs-and-edge-cases}
 
-THP involves complex operations - collapsing pages, splitting huge pages, handling faults - all while processes continue running. The complexity has led to numerous race conditions and data corruption bugs.
+THPは、ページのまとめ上げ、huge pageの分割、フォールトの処理といった複雑な操作を、プロセスが実行を続けている間に行う。この複雑さにより、数多くの競合状態やデータ破壊のバグが生じてきた。
 
-### Case 1: THP COW race (CVE-2020-29368) {#case-1-thp-cow-race-cve-2020-29368}
+### 事例1: THPのCOWの競合（CVE-2020-29368） {#case-1-thp-cow-race-cve-2020-29368}
 
-#### What happened {#what-happened}
+#### 何が起きたか {#what-happened}
 
-Jann Horn (Google Project Zero) discovered that the copy-on-write implementation for THP could grant unintended write access due to a race condition in mapcount checking.
+Jann Horn（Google Project Zero）は、THPのcopy-on-write実装が、mapcountのチェックにおける競合状態のために、意図しない書き込みアクセスを許してしまう可能性があることを発見した。
 
-#### The bug {#the-bug}
+#### バグ {#the-bug}
 
-When splitting a huge PMD during a COW fault, the kernel checks if the page is shared by examining `mapcount`. But this check races with other operations - another thread can map the same page between the check and the page table modification.
+COWフォールト中にhuge PMDを分割する際、カーネルは`mapcount`を調べてページが共有されているかをチェックする。しかしこのチェックは他の操作と競合する。チェックからページテーブルの変更までの間に、別のスレッドが同じページをマップできてしまう。
 
-#### The fix {#the-fix}
+#### 修正 {#the-fix}
 
-**Commit**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1) ("mm: thp: make the THP mapcount atomic against __split_huge_pmd_locked()")
+**コミット**: [c444eb564fb1](https://git.kernel.org/linus/c444eb564fb1)（"mm: thp: make the THP mapcount atomic against __split_huge_pmd_locked()"）
 
-**Author**: Andrea Arcangeli
-
----
-
-### Case 2: khugepaged collapse races {#case-2-khugepaged-collapse-races}
-
-#### What happened {#what-happened_1}
-
-The khugepaged daemon scans memory looking for 512 contiguous 4KB pages to collapse into a 2MB huge page. This background operation races with application activity.
-
-#### The bug class {#the-bug-class}
-
-Multiple bugs have been found in khugepaged collapse:
-
-- Race with concurrent page faults
-- Race with munmap
-- Race with madvise(MADV_DONTNEED)
-
-#### Mitigations in modern kernels {#mitigations-in-modern-kernels}
-
-- Better locking protocols between khugepaged and fault paths
-- Page lock held during critical sections
-- Validation after acquiring locks
+**作者**: Andrea Arcangeli
 
 ---
 
-### Case 3: khugepaged CPU storms {#case-3-khugepaged-cpu-storms}
+### 事例2: khugepagedのまとめ上げにおける競合 {#case-2-khugepaged-collapse-races}
 
-#### What happened {#what-happened_2}
+#### 何が起きたか {#what-happened_1}
 
-Under certain conditions, khugepaged can consume excessive CPU time, impacting application performance.
+khugepagedデーモンは、2MBのhuge pageにまとめ上げられる512個の連続した4KBページを探してメモリをスキャンする。このバックグラウンド操作はアプリケーションの動作と競合する。
 
-#### The bug {#the-bug_1}
+#### バグの類型 {#the-bug-class}
 
-khugepaged continuously scans for collapsible pages. When conditions prevent collapse but appear promising (e.g., 500 of 512 pages present), it keeps retrying wastefully.
+khugepagedのまとめ上げでは複数のバグが見つかっている。
 
-#### Tuning {#tuning}
+- 並行するページフォールトとの競合
+- munmapとの競合
+- madvise(MADV_DONTNEED)との競合
+
+#### 現代のカーネルにおける緩和策 {#mitigations-in-modern-kernels}
+
+- khugepagedとフォールトパスの間のより良いロックプロトコル
+- クリティカルセクション中にページロックを保持する
+- ロック取得後の検証
+
+---
+
+### 事例3: khugepagedのCPUストーム {#case-3-khugepaged-cpu-storms}
+
+#### 何が起きたか {#what-happened_2}
+
+特定の条件下では、khugepagedが過剰なCPU時間を消費し、アプリケーションの性能に影響を与えることがある。
+
+#### バグ {#the-bug_1}
+
+khugepagedはまとめ上げ可能なページを継続的にスキャンする。まとめ上げを妨げる条件がありながら見込みがありそうに見える場合（例: 512ページ中500ページが存在する）、無駄に再試行を続けてしまう。
+
+#### チューニング {#tuning}
 
 ```bash
-# Reduce scan frequency
+# スキャン頻度を下げる
 echo 60000 > /sys/kernel/mm/transparent_hugepage/khugepaged/scan_sleep_millisecs
 
-# Or disable
+# または無効化する
 echo 0 > /sys/kernel/mm/transparent_hugepage/khugepaged/defrag
 ```
 
 ---
 
-### Case 4: THP split failures {#case-4-thp-split-failures}
+### 事例4: THPの分割失敗 {#case-4-thp-split-failures}
 
-#### What happened {#what-happened_3}
+#### 何が起きたか {#what-happened_3}
 
-When a huge page needs to be split (e.g., for partial munmap), the split can fail, leaving the system in an unexpected state.
+huge pageを分割する必要がある場合（例: 部分的なmunmap）、分割が失敗してシステムが予期しない状態に置かれることがある。
 
-#### The bug class {#the-bug-class_1}
+#### バグの類型 {#the-bug-class_1}
 
-Splitting requires allocating 511 additional page descriptors and updating all PTEs. Failure scenarios include memory exhaustion and inability to freeze the page.
+分割には、511個の追加のページディスクリプタを割り当て、すべてのPTEを更新する必要がある。失敗のシナリオには、メモリの枯渇やページをフリーズできないことが含まれる。
 
-#### Mitigations {#mitigations}
+#### 緩和策 {#mitigations}
 
-Modern kernels handle split failures more gracefully with retry logic and fallback paths.
+現代のカーネルは、再試行ロジックとフォールバックパスによって分割失敗をより穏便に処理する。
 
 ---
 
-### Case 5: THP and NUMA balancing conflicts {#case-5-thp-and-numa-balancing-conflicts}
+### 事例5: THPとNUMAバランシングの衝突 {#case-5-thp-and-numa-balancing-conflicts}
 
-#### What happened {#what-happened_4}
+#### 何が起きたか {#what-happened_4}
 
-THP interacts poorly with NUMA balancing, which tries to move pages closer to the CPUs accessing them.
+THPは、アクセスしているCPUの近くへページを移動させようとするNUMAバランシングとの相性が悪い。
 
-#### The bug {#the-bug_2}
+#### バグ {#the-bug_2}
 
-NUMA balancing marks pages inaccessible to catch faults and migrate. With 2MB THP, any access to any 4KB within triggers migration of the entire 2MB, causing thrashing between nodes.
+NUMAバランシングは、フォールトを捕捉してマイグレーションするためにページをアクセス不可にマークする。2MBのTHPでは、内部のどの4KBへのアクセスでも2MB全体のマイグレーションが引き起こされ、ノード間でスラッシングが起きる。
 
-#### Tuning {#tuning_1}
+#### チューニング {#tuning_1}
 
 ```bash
-# Disable NUMA balancing (if THP is more valuable)
+# NUMAバランシングを無効化する（THPのほうが価値が高い場合）
 echo 0 > /proc/sys/kernel/numa_balancing
 
-# Or disable THP
+# またはTHPを無効化する
 echo never > /sys/kernel/mm/transparent_hugepage/enabled
 ```
 
 ---
 
-### Summary: Lessons learned {#summary-lessons-learned}
+### まとめ: 得られた教訓 {#summary-lessons-learned}
 
-| Bug | Year | Root Cause | Impact |
+| バグ | 年 | 根本原因 | 影響 |
 |-----|------|------------|--------|
-| CVE-2020-29368 | 2020 | Mapcount race | COW bypass |
-| khugepaged races | Ongoing | Lock ordering | Corruption |
-| CPU storms | Ongoing | Aggressive scanning | Performance |
-| Split failures | Ongoing | Resource exhaustion | ENOMEM |
-| NUMA thrashing | Ongoing | Design conflict | Performance |
+| CVE-2020-29368 | 2020 | mapcountの競合 | COWの回避 |
+| khugepagedの競合 | 継続中 | ロック順序 | データ破壊 |
+| CPUストーム | 継続中 | 積極的すぎるスキャン | 性能 |
+| 分割失敗 | 継続中 | リソース枯渇 | ENOMEM |
+| NUMAスラッシング | 継続中 | 設計上の衝突 | 性能 |
 
-**The pattern**: THP bugs stem from concurrent operations on the same memory. The optimization requires complex coordination that is difficult to get right.
+**パターン**: THPのバグは、同じメモリに対する並行操作に起因する。この最適化には、正しく実装するのが難しい複雑な協調が必要になる。
 
-## References {#references}
+## 参考資料 {#references}
 
-### Key Code {#key-code}
+### 主要なコード {#key-code}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) | THP core implementation |
-| [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | Collapse daemon |
+| [`mm/huge_memory.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) | THPのコア実装 |
+| [`mm/khugepaged.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) | まとめ上げデーモン |
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
 - [`Documentation/admin-guide/mm/transhuge.rst`](https://docs.kernel.org/admin-guide/mm/transhuge.html)
 
-### Mailing List Discussions {#mailing-list-discussions}
+### メーリングリストでの議論 {#mailing-list-discussions}
 
-- [THP defrag behavior](https://lore.kernel.org/patchwork/patch/745411/) - Discussion on MADV_HUGEPAGE stalling semantics and Mel Gorman's intent for "defer" mode
-- [Node-local hugepage allocations](https://lore.kernel.org/lkml/20181206045917.GG23332@shao2-debian/) - 2018 discussion on THP gfp handling and remote allocations
+- [THP defrag behavior](https://lore.kernel.org/patchwork/patch/745411/) - MADV_HUGEPAGEのストールのセマンティクスと、"defer"モードに関するMel Gormanの意図についての議論
+- [Node-local hugepage allocations](https://lore.kernel.org/lkml/20181206045917.GG23332@shao2-debian/) - THPのgfp処理とリモート割り当てに関する2018年の議論
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [page-tables](page-tables.md) - PMD-level huge page mapping
-- [compaction](compaction.md) - Memory defragmentation for THP
-- [reclaim](reclaim.md) - THP and memory pressure
-- [Bug Index](bugs/README.md) - Index of all mm kernel bugs
+- [page-tables](page-tables.md) - PMDレベルのhuge pageマッピング
+- [compaction](compaction.md) - THPのためのメモリデフラグ
+- [reclaim](reclaim.md) - THPとメモリ圧迫
+- [バグ索引](bugs/README.md) - mmのカーネルバグすべての索引
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- `Documentation/admin-guide/mm/transhuge.rst` — the authoritative kernel admin guide covering all sysfs tunables, defrag modes, and monitoring counters; rendered at [docs.kernel.org](https://docs.kernel.org/admin-guide/mm/transhuge.html)
-- [mm/huge_memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) — THP core: fault-time allocation, PMD-level mapping, COW splitting, and `MADV_HUGEPAGE` / `MADV_COLLAPSE` handling
-- [mm/khugepaged.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) — the `khugepaged` daemon: scan logic, collapse paths, and the locking protocol that has been the source of several race-condition bugs
-- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) — 2011 coverage of the original THP design by Andrea Arcangeli and the motivation for removing hugetlbfs restrictions
-- [LWN: Improving huge page handling](https://lwn.net/Articles/619738/) — analysis of the deferred compaction (`defer` defrag mode) work and how it addressed the latency-spike problem
-- Commit [71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f) — the initial THP merge in v2.6.38; the commit message documents the original KVM motivation in detail
-- Commit [38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8) — v4.13 THP swap support; huge pages can now be swapped out as a unit without splitting first
-- [mthp.md](mthp.md) — multi-size THP: sub-PMD huge pages (16KB–512KB) introduced in Linux 6.10 for workloads where 2MB is too coarse
-- [hugetlbfs-vs-thp.md](hugetlbfs-vs-thp.md) — side-by-side comparison of THP and explicit hugetlbfs, including when to prefer each
+- `Documentation/admin-guide/mm/transhuge.rst` — すべてのsysfsのチューニング可能なパラメータ、デフラグモード、監視カウンタを網羅した、権威あるカーネル管理ガイド。[docs.kernel.org](https://docs.kernel.org/admin-guide/mm/transhuge.html)で閲覧できる
+- [mm/huge_memory.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/huge_memory.c) — THPのコア: フォールト時の割り当て、PMDレベルのマッピング、COWでの分割、`MADV_HUGEPAGE` / `MADV_COLLAPSE`の処理
+- [mm/khugepaged.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/khugepaged.c) — `khugepaged`デーモン: スキャンロジック、まとめ上げのパス、そしていくつもの競合状態バグの原因となってきたロックプロトコル
+- [LWN: Transparent huge pages](https://lwn.net/Articles/423584/) — Andrea Arcangeliによる最初のTHP設計と、hugetlbfsの制約を取り除く動機についての2011年の記事
+- [LWN: Improving huge page handling](https://lwn.net/Articles/619738/) — 遅延コンパクション（`defer`デフラグモード）の作業と、それがレイテンシスパイクの問題にどう対処したかの分析
+- コミット[71e3aac0724f](https://git.kernel.org/linus/71e3aac0724f) — v2.6.38でのTHPの最初のマージ。コミットメッセージには元々のKVMの動機が詳しく記されている
+- コミット[38d8b4e6bdc8](https://git.kernel.org/linus/38d8b4e6bdc8) — v4.13のTHPスワップ対応。huge pageを分割せずに1つの単位としてスワップアウトできるようになった
+- [mthp.md](mthp.md) — multi-size THP: 2MBでは粗すぎるワークロード向けにLinux 6.10で導入された、PMD未満のhuge page（16KB〜512KB）
+- [hugetlbfs-vs-thp.md](hugetlbfs-vs-thp.md) — THPと明示的なhugetlbfsの並列比較。それぞれをどのような場合に選ぶべきかも含む

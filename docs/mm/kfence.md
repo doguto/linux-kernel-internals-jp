@@ -1,36 +1,36 @@
-# KFENCE (Kernel Electric Fence) {#kfence-kernel-electric-fence}
+# KFENCE（Kernel Electric Fence） {#kfence-kernel-electric-fence}
 
-> Low-overhead sampling-based heap bug detection for production kernels
+> 本番カーネル向けの、低オーバーヘッドなサンプリングベースのヒープバグ検出
 
-## What Is KFENCE? {#what-is-kfence}
+## KFENCEとは何か {#what-is-kfence}
 
-KFENCE is a lightweight memory error detector that catches heap out-of-bounds accesses, use-after-free bugs, and invalid-free errors in the kernel. Unlike full-blown sanitizers that instrument every memory access, KFENCE uses a **sampling-based** approach: it only protects a small fraction of allocations at any time, relying on statistical probability to catch bugs over hours or days of uptime.
+KFENCEは、カーネル内のヒープの範囲外アクセス、use-after-freeバグ、不正な解放のエラーを捕捉する軽量なメモリエラー検出器である。すべてのメモリアクセスを計装する本格的なサニタイザとは異なり、KFENCEは**サンプリングベース**のアプローチを使う。どの時点でも割り当てのごく一部しか保護せず、数時間から数日の稼働時間をかけてバグを捕捉することを統計的な確率に頼っている。
 
-The key insight is that bugs occurring frequently in production will eventually hit a KFENCE-protected allocation, given enough time. The fraction of protected allocations depends on the system's allocation rate relative to the sampling interval. This makes KFENCE practical for always-on deployment where KASAN would be prohibitively expensive.
+鍵となる着想は、本番環境で頻繁に起きるバグは、十分な時間があればいずれKFENCEで保護された割り当てに当たるということである。保護される割り当ての割合は、サンプリング間隔に対するシステムの割り当て頻度に依存する。これにより、KASANではコストが高すぎて使えないような常時稼働の展開でも、KFENCEは実用的になる。
 
-## Why KFENCE Exists {#why-kfence-exists}
+## なぜKFENCEが存在するのか {#why-kfence-exists}
 
-### The Gap Between Testing and Production {#the-gap-between-testing-and-production}
+### テストと本番の隔たり {#the-gap-between-testing-and-production}
 
-Before KFENCE, kernel developers faced a dilemma:
+KFENCE以前、カーネル開発者はジレンマに直面していた。
 
-| Tool | Overhead | Where It Runs | Bug Coverage |
+| ツール | オーバーヘッド | 実行される場所 | バグの検出範囲 |
 |------|----------|---------------|--------------|
-| KASAN (generic) | High (see [KASAN docs](https://docs.kernel.org/dev-tools/kasan.html)) | CI, testing | Every allocation |
-| KASAN (SW/HW tag) | Moderate to low | Testing, some hardware | Every allocation |
-| Nothing | 0% | Production | None |
+| KASAN（generic） | 高（[KASANのドキュメント](https://docs.kernel.org/dev-tools/kasan.html)参照） | CI、テスト | すべての割り当て |
+| KASAN（SW/HWタグ） | 中〜低 | テスト、一部のハードウェア | すべての割り当て |
+| なし | 0% | 本番 | なし |
 
-Many heap bugs only manifest under real production workloads -- specific timing, memory pressure, or access patterns that are hard to reproduce in test environments. KFENCE fills this gap: it runs in production with near-zero overhead, catching bugs that would otherwise go undetected until they cause data corruption or crashes.
+多くのヒープバグは、実際の本番ワークロードの下でしか表面化しない。特定のタイミング、メモリ圧迫、アクセスパターンなど、テスト環境では再現が難しいものである。KFENCEはこの隔たりを埋める。ほぼゼロのオーバーヘッドで本番環境で動作し、そうでなければデータ破壊やクラッシュを起こすまで検出されないままだったはずのバグを捕捉する。
 
-### Real-World Motivation {#real-world-motivation}
+### 現実の動機 {#real-world-motivation}
 
-As described in the [KFENCE design document](https://docs.kernel.org/dev-tools/kfence.html), the motivation was:
+[KFENCEの設計ドキュメント](https://docs.kernel.org/dev-tools/kfence.html)に記されているとおり、動機は次のとおりだった。
 
-1. Many bugs only appeared on production machines under real traffic
-2. Full sanitizer overhead was unacceptable for production fleets
-3. Even a low sampling rate catches high-frequency bugs quickly
+1. 多くのバグは、実際のトラフィックの下にある本番マシンでしか現れなかった
+2. 完全なサニタイザのオーバーヘッドは、本番のフリートでは受け入れられなかった
+3. 低いサンプリング率でも、高頻度のバグはすぐに捕捉できる
 
-## How It Differs from KASAN {#how-it-differs-from-kasan}
+## KASANとの違い {#how-it-differs-from-kasan}
 
 ```
 KASAN (always-on):
@@ -48,20 +48,20 @@ KFENCE (sampling):
                      └──────┘
 ```
 
-| Aspect | KASAN | KFENCE |
+| 観点 | KASAN | KFENCE |
 |--------|-------|--------|
-| Detection | Deterministic (every access) | Probabilistic (sampled) |
-| Overhead | 2-3x CPU, 1.5-3x memory | < 1% CPU, fixed ~2MB memory |
-| Deployment | Testing, CI | Production, always-on |
-| Mechanism | Shadow memory + compiler instrumentation | Guard pages + hardware page faults |
-| Coverage | All allocations | Small rotating subset |
-| Configuration | Compile-time only | Runtime tunable via sysfs |
+| 検出 | 決定的（すべてのアクセス） | 確率的（サンプリング） |
+| オーバーヘッド | CPU 2〜3倍、メモリ1.5〜3倍 | CPU 1%未満、メモリは固定で約2MB |
+| 展開先 | テスト、CI | 本番、常時稼働 |
+| 仕組み | シャドウメモリ + コンパイラによる計装 | ガードページ + ハードウェアのページフォールト |
+| 検出範囲 | すべての割り当て | 入れ替わる小さな部分集合 |
+| 設定 | コンパイル時のみ | sysfs経由で実行時に調整可能 |
 
-## How It Works {#how-it-works}
+## 仕組み {#how-it-works}
 
-### The Object Pool {#the-object-pool}
+### オブジェクトプール {#the-object-pool}
 
-KFENCE pre-allocates a fixed pool of memory at boot time. By default, this pool holds space for 255 objects. The pool is laid out with **guard pages** between every object slot:
+KFENCEはブート時に固定サイズのメモリプールを事前に割り当てる。デフォルトでは、このプールは255個のオブジェクト分の領域を持つ。プールは、すべてのオブジェクトスロットの間に**ガードページ**を挟んで配置される。
 
 ```
 KFENCE pool layout:
@@ -75,21 +75,21 @@ KFENCE pool layout:
   no-access   mapped     no-access   mapped     no-access   mapped     no-access
 ```
 
-Each object slot is a full page (4KB on x86), but the actual object is placed at either the **left edge** or **right edge** of the page:
+各オブジェクトスロットは1ページ丸ごと（x86では4KB）だが、実際のオブジェクトはページの**左端**か**右端**のどちらかに配置される。
 
-- **Right-aligned**: object placed at end of page, so out-of-bounds access to the right hits the guard page immediately
-- **Left-aligned**: object placed at start of page, so out-of-bounds access to the left hits the guard page
+- **右寄せ**: オブジェクトをページの末尾に配置するので、右側への範囲外アクセスはすぐにガードページに当たる
+- **左寄せ**: オブジェクトをページの先頭に配置するので、左側への範囲外アクセスはガードページに当たる
 
-KFENCE alternates alignment to catch both left and right overflows.
+KFENCEは配置を交互に切り替えて、左右両方のオーバーフローを捕捉する。
 
-### The Sampling Mechanism {#the-sampling-mechanism}
+### サンプリングの仕組み {#the-sampling-mechanism}
 
-KFENCE does not intercept every `kmalloc()` or `kmem_cache_alloc()` call. Instead, it uses a **timer-based sampling interval**:
+KFENCEは、すべての`kmalloc()`や`kmem_cache_alloc()`の呼び出しに介入するわけではない。代わりに、**タイマーベースのサンプリング間隔**を使う。
 
-1. A static branch (normally not taken) is toggled on a timer
-2. When toggled on, the **next** allocation is redirected to the KFENCE pool
-3. After one allocation is captured, the static branch is toggled off
-4. The timer fires again after the configured interval (default: 100ms)
+1. 静的分岐（通常は分岐しない）がタイマーで切り替えられる
+2. 有効に切り替えられると、**次の**割り当てがKFENCEプールにリダイレクトされる
+3. 割り当てを1つ捕捉すると、静的分岐は無効に戻される
+4. 設定された間隔（デフォルト: 100ms）の後にタイマーが再び発火する
 
 ```
 Time →
@@ -102,21 +102,21 @@ Time →
             timer    captured   timer    captured
 ```
 
-This approach ensures near-zero overhead during normal operation. The static branch (`static_branch_unlikely`) compiles to a NOP in the fast path, meaning zero cost for the 99.99%+ of allocations that are not sampled.
+この方式により、通常の動作中のオーバーヘッドはほぼゼロに抑えられる。静的分岐（`static_branch_unlikely`）は高速パスではNOPにコンパイルされるので、サンプリングされない99.99%超の割り当てにとってコストはゼロである。
 
-### Detecting Bugs {#detecting-bugs}
+### バグの検出 {#detecting-bugs}
 
-When a KFENCE-protected allocation is misused, the hardware MMU does the detection:
+KFENCEで保護された割り当てが誤用されると、ハードウェアのMMUが検出を行う。
 
-**Out-of-bounds access**: The access hits a no-access guard page (page present bit cleared via [`kfence_protect_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/kfence.h)), triggering a page fault. The KFENCE fault handler identifies the faulting address, finds the nearest KFENCE object, and reports the overflow or underflow.
+**範囲外アクセス**: アクセスがアクセス不可のガードページ（[`kfence_protect_page()`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/arch/x86/include/asm/kfence.h)によってpresentビットがクリアされたページ）に当たり、ページフォールトが発生する。KFENCEのフォールトハンドラはフォールトしたアドレスを特定し、最も近いKFENCEオブジェクトを見つけて、オーバーフローまたはアンダーフローを報告する。
 
-**Use-after-free**: When an object is freed, its page is no-access (protection set to `PROT_NONE`). Any subsequent access triggers a page fault. KFENCE keeps metadata about the freed object (including the free stack trace) so it can report what was freed and when.
+**use-after-free**: オブジェクトが解放されると、そのページはアクセス不可になる（保護が`PROT_NONE`に設定される）。その後のアクセスはすべてページフォールトを引き起こす。KFENCEは解放されたオブジェクトについてのメタデータ（解放時のスタックトレースを含む）を保持しているので、何がいつ解放されたかを報告できる。
 
-**Invalid free**: When `kfree()` is called on a KFENCE address, KFENCE validates the pointer. Double-frees and invalid pointers are caught and reported.
+**不正な解放**: KFENCEのアドレスに対して`kfree()`が呼ばれると、KFENCEはポインタを検証する。二重解放や不正なポインタは捕捉されて報告される。
 
-## What a KFENCE Report Looks Like {#what-a-kfence-report-looks-like}
+## KFENCEレポートの例 {#what-a-kfence-report-looks-like}
 
-When KFENCE detects a bug, it prints a detailed report to the kernel log. Here is an annotated example of an out-of-bounds write:
+KFENCEがバグを検出すると、カーネルログに詳細なレポートを出力する。以下は範囲外書き込みの注釈付きの例である。
 
 ```
 ==================================================================
@@ -144,7 +144,7 @@ allocated by task 1234 on cpu 3 at 42.010s:                       ← Allocation
 ==================================================================
 ```
 
-For use-after-free bugs, the report also includes the **free stack trace**, showing where the object was freed:
+use-after-freeバグの場合、レポートにはオブジェクトがどこで解放されたかを示す**解放時のスタックトレース**も含まれる。
 
 ```
 ==================================================================
@@ -168,99 +168,99 @@ freed by task 789 on cpu 1 at 19.200s:                            ← Free stack
 ==================================================================
 ```
 
-These reports provide enough information to diagnose the root cause: you can see exactly what object was involved, how big it was, which slab cache it came from, and the full call stacks for allocation, free, and the offending access.
+これらのレポートは根本原因を診断するのに十分な情報を提供する。どのオブジェクトが関係していたか、その大きさ、どのslabキャッシュから来たか、そして割り当て、解放、問題のアクセスそれぞれの完全なコールスタックを正確に確認できる。
 
-## Configuration {#configuration}
+## 設定 {#configuration}
 
-### Build-Time Options {#build-time-options}
+### ビルド時オプション {#build-time-options}
 
-Enable KFENCE in your kernel config:
+カーネル設定でKFENCEを有効化する。
 
 ```
 CONFIG_KFENCE=y
 ```
 
-This is the only required option. KFENCE's low overhead makes it suitable for distribution kernels (see [KFENCE documentation](https://docs.kernel.org/dev-tools/kfence.html)).
+必須のオプションはこれだけである。KFENCEはオーバーヘッドが低いので、ディストリビューションのカーネルにも適している（[KFENCEのドキュメント](https://docs.kernel.org/dev-tools/kfence.html)を参照）。
 
-Optional build-time settings:
+任意のビルド時設定:
 
-| Config Option | Default | Description |
+| 設定オプション | デフォルト | 説明 |
 |---------------|---------|-------------|
-| `CONFIG_KFENCE` | n | Enable KFENCE |
-| `CONFIG_KFENCE_SAMPLE_INTERVAL` | 100 | Default sampling interval in milliseconds |
-| `CONFIG_KFENCE_NUM_OBJECTS` | 255 | Number of objects in the KFENCE pool |
-| `CONFIG_KFENCE_STRESS_TEST_FAULTS` | 0 | Inject faults for testing KFENCE itself |
+| `CONFIG_KFENCE` | n | KFENCEを有効化する |
+| `CONFIG_KFENCE_SAMPLE_INTERVAL` | 100 | デフォルトのサンプリング間隔（ミリ秒） |
+| `CONFIG_KFENCE_NUM_OBJECTS` | 255 | KFENCEプール内のオブジェクト数 |
+| `CONFIG_KFENCE_STRESS_TEST_FAULTS` | 0 | KFENCE自体をテストするためにフォールトを注入する |
 
-### Runtime Tuning {#runtime-tuning}
+### 実行時のチューニング {#runtime-tuning}
 
-The sampling interval can be adjusted at runtime without rebooting:
+サンプリング間隔は、再起動せずに実行時に調整できる。
 
 ```bash
-# Check current sampling interval (milliseconds)
+# 現在のサンプリング間隔（ミリ秒）を確認する
 cat /sys/module/kfence/parameters/sample_interval
 
-# Increase interval (less overhead, fewer catches)
+# 間隔を長くする（オーバーヘッドは減り、捕捉も減る）
 echo 500 > /sys/module/kfence/parameters/sample_interval
 
-# Decrease interval (more overhead, more catches)
+# 間隔を短くする（オーバーヘッドは増え、捕捉も増える）
 echo 50 > /sys/module/kfence/parameters/sample_interval
 
-# Disable KFENCE at runtime
+# 実行時にKFENCEを無効化する
 echo 0 > /sys/module/kfence/parameters/sample_interval
 ```
 
-### Boot Parameters {#boot-parameters}
+### ブートパラメータ {#boot-parameters}
 
-You can also set the interval at boot:
+間隔はブート時にも設定できる。
 
 ```
 kfence.sample_interval=200
 ```
 
-## Performance Characteristics {#performance-characteristics}
+## 性能特性 {#performance-characteristics}
 
-### Why It Is Safe for Production {#why-it-is-safe-for-production}
+### なぜ本番環境で安全なのか {#why-it-is-safe-for-production}
 
-KFENCE was designed from the ground up for production use:
+KFENCEは、最初から本番での利用を前提に設計された。
 
-**Near-zero fast-path overhead**: The sampling check uses a static branch that compiles to a NOP instruction. On x86, this means zero additional instructions in the allocation fast path when KFENCE is not sampling (which is >99.99% of the time).
+**高速パスのオーバーヘッドがほぼゼロ**: サンプリングのチェックは、NOP命令にコンパイルされる静的分岐を使う。x86では、KFENCEがサンプリングしていないとき（時間の99.99%超）、割り当ての高速パスに追加される命令はゼロである。
 
-**Fixed memory cost**: The KFENCE pool is allocated at boot and has a fixed size. With the default 255 objects, the pool is `(255 + 1) * 2 = 512` pages (~2MB), interleaving object slots with guard pages. This does not grow.
+**固定のメモリコスト**: KFENCEプールはブート時に割り当てられ、サイズは固定である。デフォルトの255オブジェクトでは、オブジェクトスロットとガードページを交互に並べて、プールは`(255 + 1) * 2 = 512`ページ（約2MB）になる。これは増えない。
 
-**No compiler instrumentation**: Unlike KASAN, KFENCE does not require compiler support or code changes. It works with any compiler and does not increase code size.
+**コンパイラによる計装が不要**: KASANとは異なり、KFENCEはコンパイラのサポートもコードの変更も必要としない。どのコンパイラでも動作し、コードサイズも増やさない。
 
-**No shadow memory**: KASAN requires shadow memory proportional to total system memory (typically 1/8th of RAM). KFENCE uses only its fixed pool regardless of system memory size.
+**シャドウメモリが不要**: KASANはシステムの総メモリに比例したシャドウメモリ（典型的にはRAMの1/8）を必要とする。KFENCEはシステムのメモリサイズに関係なく、固定のプールだけを使う。
 
-| Metric | KASAN (generic) | KFENCE |
+| 指標 | KASAN（generic） | KFENCE |
 |--------|-----------------|--------|
-| CPU overhead | High (see [KASAN docs](https://docs.kernel.org/dev-tools/kasan.html)) | Near-zero (see [KFENCE docs](https://docs.kernel.org/dev-tools/kfence.html)) |
-| Memory overhead | ~12.5% of RAM | ~2MB fixed |
-| Code size increase | Significant | None |
-| Production safe | No | Yes |
+| CPUオーバーヘッド | 高（[KASANのドキュメント](https://docs.kernel.org/dev-tools/kasan.html)参照） | ほぼゼロ（[KFENCEのドキュメント](https://docs.kernel.org/dev-tools/kfence.html)参照） |
+| メモリオーバーヘッド | RAMの約12.5% | 固定で約2MB |
+| コードサイズの増加 | 大きい | なし |
+| 本番環境での安全性 | 安全でない | 安全 |
 
-### The Trade-off {#the-trade-off}
+### トレードオフ {#the-trade-off}
 
-The cost of low overhead is **probabilistic detection**. KFENCE will not catch every bug immediately. A bug must hit a KFENCE-protected allocation to be detected. Detection time depends on the bug's frequency and the sampling interval — high-frequency bugs are caught faster, while rare bugs require more time.
+低オーバーヘッドの代償は**確率的な検出**である。KFENCEはすべてのバグをすぐに捕捉するわけではない。バグが検出されるには、KFENCEで保護された割り当てに当たる必要がある。検出までの時間はバグの頻度とサンプリング間隔に依存する。高頻度のバグはより早く捕捉され、まれなバグはより長い時間を要する。
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### Check if KFENCE Is Enabled {#check-if-kfence-is-enabled}
+### KFENCEが有効か確認する {#check-if-kfence-is-enabled}
 
 ```bash
-# Check kernel config
+# カーネル設定を確認する
 zcat /proc/config.gz 2>/dev/null | grep KFENCE || grep KFENCE /boot/config-$(uname -r)
 
-# Check if KFENCE is active (non-zero interval means active)
+# KFENCEが動作しているか確認する（間隔が非ゼロなら動作中）
 cat /sys/module/kfence/parameters/sample_interval
 ```
 
-### Monitor KFENCE Activity {#monitor-kfence-activity}
+### KFENCEの動作を監視する {#monitor-kfence-activity}
 
 ```bash
-# KFENCE statistics are available via debugfs
+# KFENCEの統計はdebugfsで参照できる
 cat /sys/kernel/debug/kfence/stats
 
-# Example output:
+# 出力例:
 #   enabled: 1
 #   objects allocated: 189
 #   objects freed: 42
@@ -269,111 +269,111 @@ cat /sys/kernel/debug/kfence/stats
 #   bugs found: 0
 ```
 
-### Trigger a Test Bug (in a VM) {#trigger-a-test-bug-in-a-vm}
+### テスト用のバグを発生させる（VM内で） {#trigger-a-test-bug-in-a-vm}
 
 !!! warning
-    Only do this in a test VM or QEMU instance, never on a production system.
+    これはテスト用のVMまたはQEMUインスタンスでのみ行い、本番システムでは決して行わないこと。
 
-The kernel includes a KFENCE test module:
+カーネルにはKFENCEのテストモジュールが含まれている。
 
 ```bash
-# Build with CONFIG_KFENCE_KUNIT_TEST=y
-# Run the KFENCE KUnit tests
+# CONFIG_KFENCE_KUNIT_TEST=y でビルドする
+# KFENCEのKUnitテストを実行する
 modprobe kfence_test
 
-# Or run via KUnit framework
+# またはKUnitフレームワーク経由で実行する
 ./tools/testing/kunit/kunit.py run kfence
 ```
 
-### Tuning for Your Workload {#tuning-for-your-workload}
+### ワークロードに合わせたチューニング {#tuning-for-your-workload}
 
 ```bash
-# Start conservative (default 100ms)
+# 控えめに始める（デフォルトは100ms）
 cat /sys/module/kfence/parameters/sample_interval
 
-# If you want faster detection and can tolerate minimal overhead:
+# より早く検出したく、最小限のオーバーヘッドを許容できる場合:
 echo 20 > /sys/module/kfence/parameters/sample_interval
 
-# Monitor for any detected bugs
+# 検出されたバグがないか監視する
 dmesg | grep -i kfence
 ```
 
-## History {#history}
+## 歴史 {#history}
 
-### v5.12: Introduction (2021) {#v512-introduction-2021}
+### v5.12: 導入（2021年） {#v512-introduction-2021}
 
-**Commits**:
+**コミット**:
 
-- [0ce20dd84089](https://git.kernel.org/linus/0ce20dd84089) ("mm: add Kernel Electric Fence infrastructure")
-- [bc8fbc5f305a](https://git.kernel.org/linus/bc8fbc5f305a) ("mm, kfence: insert KFENCE hooks for SLAB")
-- [d3fb45f370d9](https://git.kernel.org/linus/d3fb45f370d9) ("mm, kfence: insert KFENCE hooks for SLUB")
+- [0ce20dd84089](https://git.kernel.org/linus/0ce20dd84089)（"mm: add Kernel Electric Fence infrastructure"）
+- [bc8fbc5f305a](https://git.kernel.org/linus/bc8fbc5f305a)（"mm, kfence: insert KFENCE hooks for SLAB"）
+- [d3fb45f370d9](https://git.kernel.org/linus/d3fb45f370d9)（"mm, kfence: insert KFENCE hooks for SLUB"）
 
-**Authors**: Marco Elver and Alexander Potapenko (Google)
+**作者**: Marco ElverとAlexander Potapenko（Google）
 
-**Kernel**: v5.12
+**カーネル**: v5.12
 
-KFENCE was developed at Google. The [v1 RFC](https://lore.kernel.org/lkml/20200907134055.2878499-1-elver@google.com/) (September 2020) describes the original design rationale and motivation for upstreaming a production-grade sampling-based detector.
+KFENCEはGoogleで開発された。[v1 RFC](https://lore.kernel.org/lkml/20200907134055.2878499-1-elver@google.com/)（2020年9月）には、本番品質のサンプリングベース検出器をアップストリームに取り込むための、元々の設計の根拠と動機が記されている。
 
-The patch series went through extensive review on LKML: [KFENCE v7 patch series](https://lore.kernel.org/lkml/20201103175841.3495947-1-elver@google.com/) (November 2020, merged for v5.12 in early 2021).
+パッチシリーズはLKMLで広範なレビューを経た: [KFENCE v7 patch series](https://lore.kernel.org/lkml/20201103175841.3495947-1-elver@google.com/)（2020年11月、2021年初頭にv5.12向けにマージ）。
 
-**LWN coverage**: [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) provides an accessible overview of the design rationale.
+**LWNの記事**: [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/)は、設計の根拠をわかりやすく概説している。
 
-### v5.17: Improved Reporting and Coverage {#v517-improved-reporting-and-coverage}
+### v5.17: レポートと検出範囲の改善 {#v517-improved-reporting-and-coverage}
 
-**Commit**: [58f116052668](https://git.kernel.org/linus/58f116052668) ("kfence: track memcache for allocations not covered by a slab cache")
+**コミット**: [58f116052668](https://git.kernel.org/linus/58f116052668)（"kfence: track memcache for allocations not covered by a slab cache"）
 
-### v5.18: Deferrable Timer Support {#v518-deferrable-timer-support}
+### v5.18: 遅延可能タイマーのサポート {#v518-deferrable-timer-support}
 
-**Commit**: [737b6a10ac19](https://git.kernel.org/linus/737b6a10ac19) ("kfence: allow use of a deferrable timer")
+**コミット**: [737b6a10ac19](https://git.kernel.org/linus/737b6a10ac19)（"kfence: allow use of a deferrable timer"）
 
-**Author**: Marco Elver (Google)
+**作者**: Marco Elver（Google）
 
-Added a deferrable timer option to reduce overhead on systems where power consumption matters. The deferrable timer does not wake idle CPUs, making KFENCE friendlier to mobile and embedded systems.
+消費電力が重要なシステムでのオーバーヘッドを減らすため、遅延可能（deferrable）タイマーのオプションが追加された。遅延可能タイマーはアイドル状態のCPUを起こさないので、KFENCEはモバイルや組み込みシステムにとってより扱いやすくなった。
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`mm/kfence/core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/core.c) | Main KFENCE implementation: pool init, allocation, sampling |
-| [`mm/kfence/report.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/report.c) | Bug report generation and formatting |
-| [`mm/kfence/kfence_test.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/kfence_test.c) | KUnit test suite |
-| [`include/linux/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kfence.h) | Public API and inline hooks |
-| [`mm/kfence/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/kfence.h) | Internal header with pool metadata structures |
+| [`mm/kfence/core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/core.c) | KFENCEの主要な実装: プールの初期化、割り当て、サンプリング |
+| [`mm/kfence/report.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/report.c) | バグレポートの生成と整形 |
+| [`mm/kfence/kfence_test.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/kfence_test.c) | KUnitテストスイート |
+| [`include/linux/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/kfence.h) | 公開APIとインラインフック |
+| [`mm/kfence/kfence.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence/kfence.h) | プールのメタデータ構造体を含む内部ヘッダ |
 
-## References {#references}
+## 参考資料 {#references}
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [KFENCE official documentation](https://docs.kernel.org/dev-tools/kfence.html) -- comprehensive reference for configuration and design
+- [KFENCE公式ドキュメント](https://docs.kernel.org/dev-tools/kfence.html) -- 設定と設計に関する包括的なリファレンス
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) -- overview article from the initial submission
+- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) -- 最初の投稿時の概説記事
 
-### LKML Discussions {#lkml-discussions}
+### LKMLでの議論 {#lkml-discussions}
 
-- [KFENCE v7 patch series](https://lore.kernel.org/lkml/20201103175841.3495947-1-elver@google.com/) -- the final review series before merge
-- [KFENCE v1 RFC](https://lore.kernel.org/lkml/20200907134055.2878499-1-elver@google.com/) -- the original RFC with design discussion
+- [KFENCE v7 patch series](https://lore.kernel.org/lkml/20201103175841.3495947-1-elver@google.com/) -- マージ前の最終レビューのシリーズ
+- [KFENCE v1 RFC](https://lore.kernel.org/lkml/20200907134055.2878499-1-elver@google.com/) -- 設計についての議論を含む最初のRFC
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [slab](slab.md) -- KFENCE hooks into the slab allocator (SLUB/SLAB) to intercept allocations
-- [vmalloc](vmalloc.md) -- KFENCE pool uses page-level protection similar to vmalloc guard pages
-- [oom](oom.md) -- KFENCE's fixed pool size means it does not contribute to OOM pressure
+- [slab](slab.md) -- KFENCEはslabアロケータ（SLUB/SLAB）にフックして割り当てに介入する
+- [vmalloc](vmalloc.md) -- KFENCEプールは、vmallocのガードページと同様のページ単位の保護を使う
+- [oom](oom.md) -- KFENCEのプールはサイズが固定なので、OOMの圧迫には寄与しない
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel documentation {#kernel-documentation_1}
+### カーネルドキュメント {#kernel-documentation_1}
 
-- `Documentation/dev-tools/kfence.rst` — design rationale, configuration options, and tuning guidance for the sampling interval and pool size
-- [mm/kfence/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence) — full KFENCE implementation: pool allocation, guard page management, sampling timer, and report generation
+- `Documentation/dev-tools/kfence.rst` — 設計の根拠、設定オプション、サンプリング間隔とプールサイズのチューニング指針
+- [mm/kfence/](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/mm/kfence) — KFENCEの完全な実装: プールの割り当て、ガードページの管理、サンプリングタイマー、レポートの生成
 
-### LWN articles {#lwn-articles_1}
+### LWNの記事 {#lwn-articles_1}
 
-- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — Marco Elver's overview of the design rationale and production deployment model (2021)
+- [KFENCE: A low-overhead sampling-based memory safety error detector](https://lwn.net/Articles/830877/) — 設計の根拠と本番環境への展開モデルについてのMarco Elverによる概説（2021年）
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [kasan.md](kasan.md) — KASAN instruments every allocation; KFENCE complements it by covering production workloads KASAN cannot run on
-- [kmemleak.md](kmemleak.md) — detects memory leaks; combine with KFENCE to cover both access bugs and leaked allocations
-- [fault-injection.md](fault-injection.md) — deliberately failing allocations to test error paths; pairs well with KFENCE in long-running stress tests
+- [kasan.md](kasan.md) — KASANはすべての割り当てを計装する。KFENCEは、KASANを実行できない本番ワークロードをカバーすることでKASANを補完する
+- [kmemleak.md](kmemleak.md) — メモリリークを検出する。KFENCEと組み合わせることで、アクセスのバグとリークした割り当ての両方をカバーできる
+- [fault-injection.md](fault-injection.md) — エラーパスをテストするために意図的に割り当てを失敗させる。長時間のストレステストでKFENCEとよく組み合わせられる

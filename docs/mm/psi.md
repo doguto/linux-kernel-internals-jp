@@ -1,12 +1,12 @@
-# Pressure Stall Information (PSI) {#pressure-stall-information-psi}
+# Pressure Stall Information（PSI） {#pressure-stall-information-psi}
 
-> Quantifying resource pressure, not just utilization
+> 使用率だけでなく、リソースの圧迫を定量化する
 
-## What Is PSI? {#what-is-psi}
+## PSIとは何か {#what-is-psi}
 
-Traditional system metrics like CPU utilization, free memory, and I/O throughput tell you how busy resources are, but they don't tell you whether workloads are actually *suffering*. A system can show 90% CPU utilization and be perfectly healthy if all tasks are making progress. Conversely, a system at 30% CPU can be in trouble if tasks are stuck waiting for memory to be reclaimed.
+CPU使用率、空きメモリ、I/Oスループットといった従来のシステム指標は、リソースがどれだけ忙しいかは教えてくれるが、ワークロードが実際に*苦しんでいる*かどうかは教えてくれない。CPU使用率が90%でも、すべてのタスクが進捗していれば、システムはまったく健全であり得る。逆に、CPUが30%のシステムでも、タスクがメモリの回収を待って止まっていれば問題を抱えていることがある。
 
-PSI (Pressure Stall Information) measures the amount of time tasks spend *stalled* — waiting for resources instead of doing useful work. This is the difference between utilization (how much of a resource is in use) and pressure (how much work is delayed because of insufficient resources).
+PSI（Pressure Stall Information）は、タスクが*ストール*している時間、つまり有用な仕事をする代わりにリソースを待っている時間を測定する。これが使用率（リソースのどれだけが使われているか）と圧迫（リソースの不足によってどれだけの仕事が遅れているか）の違いである。
 
 ```
 Traditional metrics:          PSI:
@@ -19,26 +19,26 @@ Traditional metrics:          PSI:
 "Disk is 60% busy"           "No tasks were stalled on I/O"
 ```
 
-## Three Resources Tracked {#three-resources-tracked}
+## 追跡される3つのリソース {#three-resources-tracked}
 
-PSI tracks pressure across the three fundamental resources that tasks compete for:
+PSIは、タスクが奪い合う3つの基本的なリソースについて圧迫を追跡する。
 
-| Resource | Pressure File | What Causes Stalls |
+| リソース | 圧迫ファイル | ストールの原因 |
 |----------|--------------|-------------------|
-| CPU | `/proc/pressure/cpu` | Runnable tasks waiting for a CPU core |
-| Memory | `/proc/pressure/memory` | Tasks waiting for page reclaim, swap I/O, refaults |
-| I/O | `/proc/pressure/io` | Tasks waiting for block device I/O |
+| CPU | `/proc/pressure/cpu` | 実行可能なタスクがCPUコアを待っている |
+| メモリ | `/proc/pressure/memory` | タスクがページ回収、スワップI/O、リフォールトを待っている |
+| I/O | `/proc/pressure/io` | タスクがブロックデバイスのI/Oを待っている |
 
 ```bash
-# View all pressure metrics
+# すべての圧迫指標を表示する
 cat /proc/pressure/cpu
 cat /proc/pressure/memory
 cat /proc/pressure/io
 ```
 
-## "some" vs "full" Pressure {#some-vs-full-pressure}
+## "some"と"full"の圧迫 {#some-vs-full-pressure}
 
-Each pressure file reports two levels of stalling:
+各圧迫ファイルは2つのレベルのストールを報告する。
 
 ```
 $ cat /proc/pressure/memory
@@ -46,9 +46,9 @@ some avg10=0.00 avg60=0.00 avg300=0.00 total=456789
 full avg10=0.00 avg60=0.00 avg300=0.00 total=123456
 ```
 
-**some**: At least one task is stalled on this resource. Other tasks may still be running productively. This indicates contention — the workload is partially degraded.
+**some**: 少なくとも1つのタスクがこのリソースでストールしている。他のタスクはまだ生産的に動いているかもしれない。これは競合を示しており、ワークロードは部分的に劣化している。
 
-**full**: *All* non-idle tasks are stalled simultaneously. No productive work is happening. This is a much more severe condition — the system (or cgroup) is completely bogged down.
+**full**: アイドルでない*すべて*のタスクが同時にストールしている。生産的な仕事はまったく行われていない。これははるかに深刻な状態であり、システム（またはcgroup）は完全に行き詰まっている。
 
 ```
                 Time ──────────────────────>
@@ -61,27 +61,27 @@ Task B:    [running][running ][stalled ][stalled ]
 ```
 
 !!! note
-    `/proc/pressure/cpu` only reports `some`, not `full`. The reasoning: if all tasks are waiting for CPU, then no task is running, which means the CPU is idle — a contradictory state. CPU pressure means runnable tasks are competing for time, so at least one is always making progress.
+    `/proc/pressure/cpu`は`some`のみを報告し、`full`は報告しない。理由は次のとおりである。すべてのタスクがCPUを待っているなら、どのタスクも実行されていないことになり、それはCPUがアイドルであることを意味する。これは矛盾した状態である。CPUの圧迫とは、実行可能なタスクが時間を奪い合っていることを意味するので、少なくとも1つは常に進捗している。
 
-## Reading the Pressure Files {#reading-the-pressure-files}
+## 圧迫ファイルの読み方 {#reading-the-pressure-files}
 
-Each line contains three moving averages and a cumulative total:
+各行には3つの移動平均と累積合計が含まれる。
 
 ```
 some avg10=4.67 avg60=2.13 avg300=0.85 total=2345678
 ```
 
-| Field | Meaning |
+| フィールド | 意味 |
 |-------|---------|
-| `avg10` | Percentage of time tasks were stalled over the last 10 seconds |
-| `avg60` | Percentage of time stalled over the last 60 seconds |
-| `avg300` | Percentage of time stalled over the last 5 minutes |
-| `total` | Cumulative stall time in microseconds since boot |
+| `avg10` | 直近10秒間でタスクがストールしていた時間の割合 |
+| `avg60` | 直近60秒間でストールしていた時間の割合 |
+| `avg300` | 直近5分間でストールしていた時間の割合 |
+| `total` | ブート以降の累積ストール時間（マイクロ秒） |
 
-The averages are exponentially weighted moving averages (similar to load average), expressed as percentages (0.00 to 100.00). The `total` counter is monotonically increasing and useful for computing exact stall rates over custom intervals.
+平均値は指数加重移動平均（ロードアベレージと同様）で、パーセント（0.00〜100.00）で表される。`total`カウンタは単調増加し、任意の間隔での正確なストール率を計算するのに役立つ。
 
 ```bash
-# Compute exact stall rate over a 5-second window
+# 5秒間のウィンドウでの正確なストール率を計算する
 T1=$(awk '/some/ {print $NF}' /proc/pressure/memory | cut -d= -f2)
 sleep 5
 T2=$(awk '/some/ {print $NF}' /proc/pressure/memory | cut -d= -f2)
@@ -89,13 +89,13 @@ STALL_US=$((T2 - T1))
 echo "Memory stall: ${STALL_US}us over 5 seconds"
 ```
 
-## PSI Triggers: Userspace Monitoring {#psi-triggers-userspace-monitoring}
+## PSIトリガ: ユーザー空間からの監視 {#psi-triggers-userspace-monitoring}
 
-Reading pressure files by polling is fine for dashboards, but for real-time resource management you need event-driven notification. PSI supports poll/epoll on pressure files, allowing userspace to set thresholds and be woken only when pressure exceeds them.
+ポーリングで圧迫ファイルを読むのはダッシュボードには十分だが、リアルタイムのリソース管理にはイベント駆動の通知が必要である。PSIは圧迫ファイルに対するpoll/epollをサポートしており、ユーザー空間は閾値を設定して、圧迫がそれを超えたときにだけ起こされるようにできる。
 
-### Setting Up a Trigger {#setting-up-a-trigger}
+### トリガの設定 {#setting-up-a-trigger}
 
-Write a trigger specification to a pressure file, then use `poll()` or `epoll()` to wait for events:
+圧迫ファイルにトリガの指定を書き込み、`poll()`または`epoll()`でイベントを待つ。
 
 ```c
 #include <fcntl.h>
@@ -107,41 +107,41 @@ Write a trigger specification to a pressure file, then use `poll()` or `epoll()`
 int main(void) {
     int fd = open("/proc/pressure/memory", O_RDWR | O_NONBLOCK);
 
-    /* Trigger when "some" stall time exceeds 100ms
-       within any 1-second window (values in microseconds) */
+    /* 任意の1秒間のウィンドウ内で"some"のストール時間が
+       100msを超えたら発火する（値はマイクロ秒） */
     const char *trigger = "some 100000 1000000";
     write(fd, trigger, strlen(trigger) + 1);
 
     struct pollfd fds = { .fd = fd, .events = POLLPRI };
 
     for (;;) {
-        int ret = poll(&fds, 1, -1);  /* Block until threshold hit */
+        int ret = poll(&fds, 1, -1);  /* 閾値に達するまでブロックする */
         if (ret > 0) {
             printf("Memory pressure threshold exceeded!\n");
-            /* Take action: drop caches, kill low-priority work, etc. */
+            /* 対処する: キャッシュを破棄する、低優先度の仕事をkillする、など */
         }
     }
 }
 ```
 
-The trigger format is:
+トリガの形式は次のとおりである。
 
 ```
 <some|full> <stall_us> <window_us>
 ```
 
-- `some 100000 1000000` means: trigger when at least 100ms of stall time (stall_us) occurs within any 1-second window (window_us).
-- The window must be between 500ms and 10 seconds. Unprivileged users are additionally restricted to windows that are multiples of 2 seconds. See [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) for the full specification.
+- `some 100000 1000000`は、任意の1秒間のウィンドウ（window_us）内で少なくとも100msのストール時間（stall_us）が発生したら発火する、という意味である。
+- ウィンドウは500msから10秒の間でなければならない。非特権ユーザーはさらに、2秒の倍数のウィンドウに制限される。完全な仕様については[`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst)を参照。
 
-PSI trigger support was added in v5.2 by Suren Baghdasaryan ([commit 0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf)).
+PSIトリガのサポートは、v5.2でSuren Baghdasaryanによって追加された（[commit 0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf)）。
 
-## PSI in Practice {#psi-in-practice}
+## 実践でのPSI {#psi-in-practice}
 
-PSI is not just a monitoring curiosity — it is the foundation for modern out-of-memory management in production systems.
+PSIは単なる監視上の珍しい機能ではない。本番システムにおける現代的なout-of-memory管理の基盤である。
 
 ### systemd-oomd {#systemd-oomd}
 
-[systemd-oomd](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.html) uses PSI memory pressure to decide when to kill cgroups before the kernel OOM killer triggers. It monitors `memory.pressure` for each cgroup and kills the highest-memory consumer when pressure exceeds a threshold. This replaces the blunt global OOM killer with targeted, early intervention.
+[systemd-oomd](https://www.freedesktop.org/software/systemd/man/latest/systemd-oomd.html)は、PSIのメモリ圧迫を使って、カーネルのOOM killerが発動する前にcgroupをkillするタイミングを判断する。各cgroupの`memory.pressure`を監視し、圧迫が閾値を超えるとメモリ消費量が最も多いものをkillする。これにより、大雑把なグローバルOOM killerが、対象を絞った早期の介入に置き換えられる。
 
 ```ini
 # /etc/systemd/oomd.conf
@@ -151,57 +151,57 @@ DefaultMemoryPressureLimit=60%
 DefaultMemoryPressureDurationUSec=30s
 ```
 
-### Meta's oomd {#metas-oomd}
+### Metaのoomd {#metas-oomd}
 
-Meta (Facebook) originally developed [oomd](https://github.com/facebookincubator/oomd), the PSI-based OOM daemon that inspired systemd-oomd. In Meta's fleet, PSI-based killing replaced the kernel OOM killer, providing faster response times and better decisions about what to kill. This was a primary motivation for PSI's development — Johannes Weiner built PSI to solve real fleet management problems at Meta.
+Meta（Facebook）は、systemd-oomdの着想の元となったPSIベースのOOMデーモン[oomd](https://github.com/facebookincubator/oomd)を最初に開発した。Metaのフリートでは、PSIベースのkillがカーネルのOOM killerに取って代わり、より速い応答時間と、何をkillすべきかについてのより良い判断をもたらした。これはPSI開発の主な動機であった。Johannes Weinerは、Metaにおける実際のフリート管理の問題を解決するためにPSIを作った。
 
-For more context on the problem PSI was designed to solve, see the [LWN article on tracking pressure-stall information](https://lwn.net/Articles/759658/).
+PSIが解決しようとした問題についてのより詳しい背景は、[pressure-stall informationの追跡に関するLWNの記事](https://lwn.net/Articles/759658/)を参照。
 
 ### Android LMKD {#android-lmkd}
 
-Android's Low Memory Killer Daemon (LMKD) uses PSI triggers to detect memory pressure and kill background apps before the system becomes unresponsive. Android moved from the in-kernel lowmemorykiller to a PSI-based userspace approach, giving better responsiveness on memory-constrained mobile devices.
+AndroidのLow Memory Killer Daemon（LMKD）は、PSIトリガを使ってメモリ圧迫を検出し、システムが応答しなくなる前にバックグラウンドのアプリをkillする。Androidはカーネル内のlowmemorykillerからPSIベースのユーザー空間のアプローチに移行し、メモリに制約のあるモバイルデバイスでの応答性を向上させた。
 
-### Resource Management at Scale {#resource-management-at-scale}
+### 大規模なリソース管理 {#resource-management-at-scale}
 
-Beyond OOM handling, PSI enables:
+OOMの処理以外にも、PSIは次のことを可能にする。
 
-- **Autoscaling**: Scale up containers or VMs when pressure indicates the workload is suffering, rather than reacting to raw utilization.
-- **Workload placement**: Schedulers can prefer nodes with lower pressure rather than lower utilization.
-- **SLA monitoring**: Define health in terms of "how much time are tasks losing" rather than arbitrary resource thresholds.
+- **オートスケーリング**: 生の使用率に反応するのではなく、ワークロードが苦しんでいることを圧迫が示したときにコンテナやVMをスケールアップする。
+- **ワークロードの配置**: スケジューラは、使用率の低いノードではなく圧迫の低いノードを優先できる。
+- **SLA監視**: 恣意的なリソースの閾値ではなく、「タスクがどれだけの時間を失っているか」という観点で健全性を定義する。
 
-## Per-cgroup PSI {#per-cgroup-psi}
+## cgroupごとのPSI {#per-cgroup-psi}
 
-PSI is not limited to system-wide metrics. Each cgroup exposes its own pressure information via `memory.pressure`, `cpu.pressure`, and `io.pressure`:
+PSIはシステム全体の指標に限られない。各cgroupは`memory.pressure`、`cpu.pressure`、`io.pressure`を通じて自身の圧迫情報を公開する。
 
 ```bash
-# View memory pressure for a specific cgroup
+# 特定のcgroupのメモリ圧迫を表示する
 cat /sys/fs/cgroup/myservice/memory.pressure
 
-# View CPU pressure
+# CPUの圧迫を表示する
 cat /sys/fs/cgroup/myservice/cpu.pressure
 
-# View I/O pressure
+# I/Oの圧迫を表示する
 cat /sys/fs/cgroup/myservice/io.pressure
 ```
 
-Per-cgroup PSI is what makes tools like systemd-oomd and oomd practical. System-wide pressure might be fine while a single container is thrashing. Per-cgroup pressure catches this.
+cgroupごとのPSIこそが、systemd-oomdやoomdのようなツールを実用的にしている。システム全体の圧迫は問題なくても、単一のコンテナがスラッシングしていることがある。cgroupごとの圧迫はこれを捉える。
 
-PSI triggers also work on per-cgroup pressure files, so a daemon can register for threshold notifications on individual cgroups:
+PSIトリガはcgroupごとの圧迫ファイルでも機能するので、デーモンは個々のcgroupに対して閾値通知を登録できる。
 
 ```c
 int fd = open("/sys/fs/cgroup/myservice/memory.pressure",
               O_RDWR | O_NONBLOCK);
-write(fd, "some 50000 1000000", 19);  /* 50ms stall per 1s window */
+write(fd, "some 50000 1000000", 19);  /* 1秒のウィンドウあたり50msのストール */
 /* poll(fd) ... */
 ```
 
-## How the Kernel Calculates PSI {#how-the-kernel-calculates-psi}
+## カーネルがPSIを計算する方法 {#how-the-kernel-calculates-psi}
 
-### Task State Tracking {#task-state-tracking}
+### タスク状態の追跡 {#task-state-tracking}
 
-PSI works by tracking what every task is doing at any given moment. The scheduler already knows whether a task is running, sleeping, or waiting — PSI hooks into these state transitions to accumulate stall time.
+PSIは、各時点ですべてのタスクが何をしているかを追跡することで動作する。スケジューラはタスクが実行中か、スリープ中か、待機中かをすでに知っている。PSIはこれらの状態遷移にフックしてストール時間を積算する。
 
-Each task can be in one of several PSI-relevant states:
+各タスクは、PSIに関係するいくつかの状態のいずれかになり得る。
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -215,13 +215,13 @@ Each task can be in one of several PSI-relevant states:
 └────────────────────────────────────────────────────────────┘
 ```
 
-These flags are defined in [`include/linux/psi_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi_types.h). `TSK_MEMSTALL_RUNNING` was added to correctly account for tasks that are executing on CPU while in a synchronous reclaim path — these contribute to `some` pressure but not `full` pressure, since the CPU is not idle.
+これらのフラグは[`include/linux/psi_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi_types.h)で定義されている。`TSK_MEMSTALL_RUNNING`は、同期回収のパスにいる間にCPU上で実行しているタスクを正しく計上するために追加された。CPUはアイドルではないので、これらは`some`の圧迫には寄与するが`full`の圧迫には寄与しない。
 
-When a task enters a stall state (e.g., it needs to reclaim memory or wait for swap I/O), the kernel calls `psi_task_change()` to record the transition. When it leaves the stall state, the transition is recorded again.
+タスクがストール状態に入ると（例: メモリを回収する必要がある、スワップI/Oを待つ）、カーネルは`psi_task_change()`を呼び出して遷移を記録する。ストール状態を抜けるときにも、再び遷移が記録される。
 
-### Aggregation {#aggregation}
+### 集約 {#aggregation}
 
-PSI tracks time at the per-CPU level, then aggregates. For each CPU, it records how much time was spent with at least one task stalled (`some`) and with all tasks stalled (`full`). These per-CPU samples are aggregated into the exponentially weighted averages you see in the pressure files.
+PSIはCPUごとのレベルで時間を追跡し、それを集約する。各CPUについて、少なくとも1つのタスクがストールしていた時間（`some`）と、すべてのタスクがストールしていた時間（`full`）を記録する。これらのCPUごとのサンプルが集約され、圧迫ファイルで見られる指数加重平均になる。
 
 ```
 Per-CPU tracking:
@@ -234,106 +234,106 @@ Per-CPU tracking:
   Aggregation → weighted averages → /proc/pressure/*
 ```
 
-The aggregation happens in `psi_avgs_work()`, a deferred work function that runs periodically (every 2 seconds) to update the moving averages. When userspace has registered PSI triggers, a faster polling path runs at the trigger's window granularity.
+集約は`psi_avgs_work()`で行われる。これは移動平均を更新するために定期的に（2秒ごとに）実行される遅延ワーク関数である。ユーザー空間がPSIトリガを登録している場合は、トリガのウィンドウの粒度で、より高速なポーリングのパスが実行される。
 
-### Growth-based Tracking {#growth-based-tracking}
+### 増分ベースの追跡 {#growth-based-tracking}
 
-An important optimization ([commit df77430639c9](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df77430639c9)): PSI uses per-CPU "growth" counters rather than locks. Each CPU independently tracks cumulative stall time. The aggregation step reads these counters and computes the deltas, avoiding contention on hot paths.
+重要な最適化（[commit df77430639c9](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=df77430639c9)）として、PSIはロックではなくCPUごとの「増分（growth）」カウンタを使う。各CPUは独立して累積ストール時間を追跡する。集約のステップでこれらのカウンタを読み取って差分を計算することで、ホットパスでの競合を避けている。
 
-## History {#history}
+## 歴史 {#history}
 
-### Introduction (v4.20, 2018) {#introduction-v420-2018}
+### 導入（v4.20、2018年） {#introduction-v420-2018}
 
-**Commit**: [eb414681d5a0](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0) ("psi: pressure stall information for CPU, memory, and IO")
+**コミット**: [eb414681d5a0](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0)（"psi: pressure stall information for CPU, memory, and IO"）
 
-**Author**: Johannes Weiner (Facebook/Meta)
+**作者**: Johannes Weiner（Facebook/Meta）
 
-PSI was merged in Linux v4.20 (December 2018). The motivation, as described in the [commit message](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0) and [LWN coverage](https://lwn.net/Articles/759658/), was that existing metrics (load average, free memory, I/O utilization) were poor indicators of whether workloads were actually affected by resource shortages. Facebook needed a metric that quantified lost work, not just resource consumption, to drive fleet-wide resource management decisions.
+PSIはLinux v4.20（2018年12月）でマージされた。[コミットメッセージ](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=eb414681d5a0)と[LWNの記事](https://lwn.net/Articles/759658/)に記されているとおり、その動機は、既存の指標（ロードアベレージ、空きメモリ、I/O使用率）が、ワークロードが実際にリソース不足の影響を受けているかどうかを示す指標としては不十分だったことにある。Facebookは、フリート全体のリソース管理の判断を駆動するために、単なるリソース消費量ではなく、失われた仕事を定量化する指標を必要としていた。
 
-### PSI Triggers (v5.2, 2019) {#psi-triggers-v52-2019}
+### PSIトリガ（v5.2、2019年） {#psi-triggers-v52-2019}
 
-**Commit**: [0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf) ("psi: introduce psi monitor")
+**コミット**: [0e94682b73bf](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=0e94682b73bf)（"psi: introduce psi monitor"）
 
-**Author**: Suren Baghdasaryan
+**作者**: Suren Baghdasaryan
 
-Added poll/epoll support on PSI files, enabling event-driven userspace monitoring. This was essential for making PSI practical in daemons like oomd — polling files in a loop is expensive and introduces latency.
+PSIファイルに対するpoll/epollのサポートを追加し、イベント駆動のユーザー空間からの監視を可能にした。これはoomdのようなデーモンでPSIを実用的にするために不可欠だった。ループでファイルをポーリングするのは高コストで、レイテンシも生じる。
 
-### Per-cgroup PSI (v4.20) {#per-cgroup-psi-v420}
+### cgroupごとのPSI（v4.20） {#per-cgroup-psi-v420}
 
-Per-cgroup PSI was part of the original PSI patchset, since cgroup-level pressure was a core use case from the start.
+cgroupレベルの圧迫は当初から中心的なユースケースだったため、cgroupごとのPSIは最初のPSIパッチセットの一部であった。
 
-### Broader Adoption {#broader-adoption}
+### 広範な採用 {#broader-adoption}
 
-- **Android**: Adopted PSI for LMKD in Android 10 (2019)
-- **systemd**: systemd-oomd [introduced in systemd v247](https://lwn.net/Articles/837034/) (2020)
-- **Meta**: Used PSI across their entire fleet for OOM prevention and workload scheduling
+- **Android**: Android 10（2019年）でLMKDにPSIを採用
+- **systemd**: systemd-oomdが[systemd v247で導入](https://lwn.net/Articles/837034/)（2020年）
+- **Meta**: OOMの防止とワークロードのスケジューリングのため、フリート全体でPSIを使用
 
-## Key Source Files {#key-source-files}
+## 主要なソースファイル {#key-source-files}
 
-| File | Description |
+| ファイル | 説明 |
 |------|-------------|
-| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | Core PSI implementation: state tracking, aggregation, triggers |
-| [`include/linux/psi.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi.h) | PSI API and inline functions |
-| [`include/linux/psi_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi_types.h) | PSI data structure definitions |
-| [`kernel/cgroup/cgroup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/cgroup/cgroup.c) | Per-cgroup PSI file exposure |
-| [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) | Kernel documentation for PSI |
+| [`kernel/sched/psi.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) | PSIのコア実装: 状態の追跡、集約、トリガ |
+| [`include/linux/psi.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi.h) | PSIのAPIとインライン関数 |
+| [`include/linux/psi_types.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/psi_types.h) | PSIのデータ構造の定義 |
+| [`kernel/cgroup/cgroup.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/cgroup/cgroup.c) | cgroupごとのPSIファイルの公開 |
+| [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) | PSIのカーネルドキュメント |
 
-## Try It Yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
-### View System Pressure {#view-system-pressure}
+### システムの圧迫を表示する {#view-system-pressure}
 
 ```bash
-# Check if PSI is enabled (most modern kernels have it on by default)
+# PSIが有効か確認する（最近のカーネルの多くではデフォルトで有効）
 cat /proc/pressure/cpu
 cat /proc/pressure/memory
 cat /proc/pressure/io
 ```
 
-If the files don't exist, PSI may be disabled. It can be enabled with the `psi=1` kernel boot parameter. Some distributions disable it by default for performance reasons (the overhead is minimal but nonzero).
+ファイルが存在しない場合、PSIは無効化されている可能性がある。カーネルのブートパラメータ`psi=1`で有効化できる。一部のディストリビューションは、性能上の理由からデフォルトで無効にしている（オーバーヘッドは最小限だがゼロではない）。
 
-### Generate Memory Pressure and Observe {#generate-memory-pressure-and-observe}
+### メモリ圧迫を発生させて観察する {#generate-memory-pressure-and-observe}
 
 ```bash
-# Terminal 1: Watch memory pressure
+# ターミナル1: メモリ圧迫を監視する
 watch -n 1 cat /proc/pressure/memory
 
-# Terminal 2: Create memory pressure
-# Allocate more memory than available (adjust size for your system)
+# ターミナル2: メモリ圧迫を発生させる
+# 利用可能な量より多くのメモリを割り当てる（サイズはシステムに合わせて調整する）
 stress --vm 4 --vm-bytes $(awk '/MemAvailable/ {print int($2*0.3)"k"}' \
     /proc/meminfo) --timeout 30
 ```
 
-You should see `avg10` rise for both `some` and `full` lines while memory is under pressure.
+メモリが圧迫されている間、`some`と`full`の両方の行で`avg10`が上昇するのが見えるはずである。
 
-### Per-cgroup Pressure Monitoring {#per-cgroup-pressure-monitoring}
+### cgroupごとの圧迫の監視 {#per-cgroup-pressure-monitoring}
 
 ```bash
-# Create a memory-limited cgroup
+# メモリ制限付きのcgroupを作成する
 sudo mkdir /sys/fs/cgroup/psi-test
 echo "+memory" | sudo tee /sys/fs/cgroup/cgroup.subtree_control
 echo 100M | sudo tee /sys/fs/cgroup/psi-test/memory.max
 
-# Move a shell into the cgroup
+# シェルをcgroupに移す
 echo $$ | sudo tee /sys/fs/cgroup/psi-test/cgroup.procs
 
-# Watch cgroup-specific pressure
+# cgroup固有の圧迫を監視する
 watch -n 1 cat /sys/fs/cgroup/psi-test/memory.pressure
 
-# In the same shell, create pressure
-python3 -c "x = bytearray(80 * 1024 * 1024)"  # 80MB in a 100MB cgroup
+# 同じシェルで圧迫を発生させる
+python3 -c "x = bytearray(80 * 1024 * 1024)"  # 100MBのcgroupで80MB
 ```
 
-### Using the total Counter for Precise Measurements {#using-the-total-counter-for-precise-measurements}
+### totalカウンタを使った精密な測定 {#using-the-total-counter-for-precise-measurements}
 
 ```bash
-# Measure exact stall time over a custom interval
+# 任意の間隔での正確なストール時間を測定する
 read_total() {
     awk '/^some/ {for(i=1;i<=NF;i++) if($i~/^total=/) print substr($i,7)}' \
         /proc/pressure/memory
 }
 
 START=$(read_total)
-# Run your workload here
+# ここでワークロードを実行する
 sleep 10
 END=$(read_total)
 
@@ -342,47 +342,47 @@ STALL_PCT=$(echo "scale=2; $STALL_US / 10000000 * 100" | bc)
 echo "Memory stall: ${STALL_US}us (${STALL_PCT}% of 10s)"
 ```
 
-### Clean Up {#clean-up}
+### 後片付け {#clean-up}
 
 ```bash
-# Remove test cgroup (move processes out first)
+# テスト用cgroupを削除する（先にプロセスを外に移す）
 echo $$ | sudo tee /sys/fs/cgroup/cgroup.procs
 sudo rmdir /sys/fs/cgroup/psi-test
 ```
 
-## References {#references}
+## 参考資料 {#references}
 
-### Kernel Documentation {#kernel-documentation}
+### カーネルドキュメント {#kernel-documentation}
 
-- [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) — Authoritative PSI documentation
+- [`Documentation/accounting/psi.rst`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/Documentation/accounting/psi.rst) — 権威あるPSIのドキュメント
 
-### LWN Articles {#lwn-articles}
+### LWNの記事 {#lwn-articles}
 
-- [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — Original coverage of the PSI patchset (2018)
-- [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — systemd-oomd and PSI triggers
+- [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — PSIパッチセットの最初の紹介記事（2018年）
+- [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — systemd-oomdとPSIトリガ
 
-### Related {#related}
+### 関連項目 {#related}
 
-- [Memory Cgroups](memcg.md) — Per-cgroup memory limits and accounting
-- [Page Reclaim](reclaim.md) — What causes memory stalls
-- [Running out of memory](oom.md) — The OOM killer that PSI helps avoid
-- [Glossary](glossary.md) — PSI, cgroup, OOM definitions
+- [メモリcgroup](memcg.md) — cgroupごとのメモリ制限と計上
+- [ページ回収](reclaim.md) — メモリのストールを引き起こすもの
+- [メモリ不足](oom.md) — PSIが回避を助けるOOM killer
+- [用語集](glossary.md) — PSI、cgroup、OOMの定義
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel documentation {#kernel-documentation_1}
+### カーネルドキュメント {#kernel-documentation_1}
 
-- `Documentation/accounting/psi.rst` — complete specification of the pressure file format, trigger syntax, window constraints, and cgroup integration
-- [kernel/sched/psi.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) — core PSI implementation: per-CPU state tracking, `some`/`full` accounting, exponentially weighted averages, and trigger delivery
+- `Documentation/accounting/psi.rst` — 圧迫ファイルの形式、トリガの構文、ウィンドウの制約、cgroupとの統合の完全な仕様
+- [kernel/sched/psi.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/sched/psi.c) — PSIのコア実装: CPUごとの状態追跡、`some`/`full`の計上、指数加重平均、トリガの通知
 
-### LWN articles {#lwn-articles_1}
+### LWNの記事 {#lwn-articles_1}
 
-- [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — Tejun Heo's coverage of Johannes Weiner's original PSI patchset, explaining the motivation and the `some`/`full` distinction (2018)
-- [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — how systemd-oomd uses PSI triggers to replace the kernel OOM killer with targeted, early cgroup eviction
+- [Tracking pressure-stall information](https://lwn.net/Articles/759658/) — Johannes Weinerによる最初のPSIパッチセットについてのTejun Heoの記事。動機と`some`/`full`の区別を説明している（2018年）
+- [Monitoring memory pressure with PSI](https://lwn.net/Articles/837034/) — systemd-oomdがPSIトリガを使って、カーネルのOOM killerを対象を絞った早期のcgroup退避に置き換える方法
 
-### Related docs {#related-docs}
+### 関連ドキュメント {#related-docs}
 
-- [memcg.md](memcg.md) — per-cgroup memory limits; per-cgroup PSI files (`memory.pressure`, `cpu.pressure`, `io.pressure`) are what systemd-oomd and Android LMKD monitor
-- [oom.md](oom.md) — the kernel OOM killer; PSI-based daemons aim to intervene before the kernel needs to invoke it
-- [reclaim.md](reclaim.md) — page reclaim is the primary driver of memory stalls measured by PSI
-- [damon.md](damon.md) — DAMON_RECLAIM can use PSI memory pressure as auto-tuning feedback for its reclaim quota
+- [memcg.md](memcg.md) — cgroupごとのメモリ制限。systemd-oomdやAndroid LMKDが監視するのは、cgroupごとのPSIファイル（`memory.pressure`、`cpu.pressure`、`io.pressure`）である
+- [oom.md](oom.md) — カーネルのOOM killer。PSIベースのデーモンは、カーネルがそれを呼び出す必要が生じる前に介入することを目指す
+- [reclaim.md](reclaim.md) — ページ回収は、PSIが測定するメモリのストールの主な原因である
+- [damon.md](damon.md) — DAMON_RECLAIMは、回収クォータの自動チューニングのフィードバックとしてPSIのメモリ圧迫を使える
