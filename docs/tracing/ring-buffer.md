@@ -1,78 +1,78 @@
-# The ftrace Ring Buffer and tracefs {#the-ftrace-ring-buffer-and-tracefs}
+# ftraceリングバッファとtracefs {#the-ftrace-ring-buffer-and-tracefs}
 
-> How the kernel records millions of trace events per second — from any context, with almost no overhead — and the filesystem you steer it through
+> カーネルが毎秒数百万のトレースイベントを、あらゆるコンテキストから、ほぼオーバーヘッドなしで記録する仕組み — そしてそれを操作するためのファイルシステム
 
-Tracing has a brutal constraint: the instrumentation has to be *cheaper* than the thing it measures, and it has to work in **any** context — process, softirq, hard IRQ, even NMI — without ever taking a lock that could deadlock. A naive global, mutex-protected buffer fails on both counts. The data structure that solves it is the **ftrace ring buffer** ([`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c)), and **tracefs** is the interface you drive it through.
+トレーシングには過酷な制約がある。計装は計測対象そのものより*安価で*なければならず、しかも**あらゆる**コンテキスト — プロセス、softirq、ハードIRQ、さらにはNMI — で、デッドロックしうるロックを一切取らずに動作しなければならない。素朴な、mutexで保護されたグローバルバッファは、この両方の点で失格である。これを解決するデータ構造が**ftraceリングバッファ**（[`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c)）であり、それを操作するインターフェースが**tracefs**である。
 
-## Per-CPU and lockless {#per-cpu-and-lockless}
+## per-CPUかつロックレス {#per-cpu-and-lockless}
 
-Two design decisions make the buffer fast enough to leave on in production:
+2つの設計判断によって、このバッファは本番環境で有効にしたままにしておけるほど高速になっている。
 
-- **Per-CPU.** Each CPU writes into its *own* ring buffer, so two CPUs tracing at once never contend — no shared lock, no cache line bouncing between cores. The cost is that reassembling a global, time-ordered view happens later, at read time, by merging the per-CPU streams.
-- **Lockless writes.** Within a CPU, recording an event is a **reserve/commit** protocol built on local atomic operations, not a lock:
+- **per-CPU。** 各CPUは*自分専用の*リングバッファに書き込むため、2つのCPUが同時にトレースしても競合しない。共有ロックもなく、コア間でキャッシュラインが行き来することもない。その代償として、グローバルで時刻順のビューの再構成は、後で読み出し時にper-CPUのストリームをマージすることで行われる。
+- **ロックレスな書き込み。** CPU内では、イベントの記録はロックではなく、ローカルなアトミック操作の上に構築された**reserve/commit**プロトコルで行われる。
 
-  1. `ring_buffer_lock_reserve()` reserves space for an event,
-  2. the caller writes the event payload into that space,
-  3. `ring_buffer_unlock_commit()` finalizes it.
+  1. `ring_buffer_lock_reserve()`がイベント用の領域を予約し、
+  2. 呼び出し元がその領域にイベントのペイロードを書き込み、
+  3. `ring_buffer_unlock_commit()`がそれを確定する。
 
-Because the protocol is per-CPU and lockless, it is safe for a hard IRQ — or even an NMI — to record an event *while it has interrupted another write on the same CPU*. The buffer is explicitly designed to handle these nested writes, which is exactly the property a global lock could never provide.
+プロトコルがper-CPUかつロックレスであるため、ハードIRQ — あるいはNMIでさえ — が*同じCPU上の別の書き込みに割り込んでいる最中に*イベントを記録しても安全である。バッファはこうした入れ子の書き込みを扱えるよう明示的に設計されており、これはまさにグローバルロックでは決して実現できない性質である。
 
-## Sub-buffers {#sub-buffers}
+## サブバッファ {#sub-buffers}
 
-A per-CPU buffer is a ring of page-sized **sub-buffers**. Events pack tightly into the current page; when it fills, the writer advances to the next page in the ring. Because reading and writing operate on *different* pages, a consumer can lift completed pages out while the producer keeps filling new ones — no coordination on the hot path.
+per-CPUバッファは、ページサイズの**サブバッファ**のリングである。イベントは現在のページに詰めて格納され、ページが満杯になると書き込み側はリング内の次のページへ進む。読み出しと書き込みは*別々の*ページに対して行われるため、生産者が新しいページを埋め続けている間に、消費者は完成したページを取り出せる。ホットパスでの調整は不要である。
 
-## Two modes: flight recorder vs. lossless {#two-modes-flight-recorder-vs-lossless}
+## 2つのモード: フライトレコーダーとロスレス {#two-modes-flight-recorder-vs-lossless}
 
-What happens when the buffer fills depends on the mode:
+バッファが満杯になったときに何が起きるかはモードによる。
 
-- **Overwrite (the default)** — the buffer is a circular "flight recorder": once full, the oldest events are overwritten to make room. You always have the most *recent* history, which is what you want when arming a trace and waiting for a rare event to reproduce.
-- **Producer/consumer** — writing stops (events are dropped and counted) rather than overwriting, so nothing already recorded is lost. You choose this when you must not miss events and have a consumer draining the buffer fast enough.
+- **上書き（デフォルト）** — バッファは循環する「フライトレコーダー」である。満杯になると、最も古いイベントが上書きされて空きが作られる。常に最も*新しい*履歴が手元にあり、トレースを仕掛けてまれなイベントの再現を待つときに望ましい動作である。
+- **生産者/消費者** — 上書きする代わりに書き込みを停止する（イベントは破棄され、その数が記録される）ため、すでに記録されたものは失われない。イベントを取りこぼしてはならず、バッファを十分速く吸い出す消費者がいる場合にこちらを選ぶ。
 
-Buffer size is per-CPU and set through `buffer_size_kb`; the trade is memory for history.
+バッファサイズはper-CPUで、`buffer_size_kb`で設定する。メモリと履歴の長さのトレードオフである。
 
-## Reading: `trace` vs. `trace_pipe` {#reading-trace-vs-trace_pipe}
+## 読み出し: `trace`と`trace_pipe` {#reading-trace-vs-trace_pipe}
 
-tracefs exposes the buffer two ways, and the distinction matters:
+tracefsはバッファを2通りの方法で公開しており、その違いが重要である。
 
-- **`trace`** — a *non-consuming snapshot*. Reading it does not remove events, so you can `cat` it repeatedly and diff the output. Good for "arm, reproduce, then inspect."
-- **`trace_pipe`** — a *consuming, blocking stream*. Events are delivered as they arrive and are gone once read. This is the live-tail interface, the one to pipe into a tool.
-- **`per_cpu/cpuN/trace`** — the raw single-CPU streams, before any global merge.
+- **`trace`** — *消費しないスナップショット*。読み出してもイベントは削除されないため、何度でも`cat`して出力の差分を取れる。「仕掛ける、再現する、調べる」の流れに向いている。
+- **`trace_pipe`** — *消費する、ブロッキングなストリーム*。イベントは到着するたびに配信され、一度読まれると消える。これはライブでtailするためのインターフェースであり、ツールにパイプで渡すのに使う。
+- **`per_cpu/cpuN/trace`** — グローバルなマージを行う前の、単一CPUの生のストリーム。
 
-## tracefs: the control surface {#tracefs-the-control-surface}
+## tracefs: 制御インターフェース {#tracefs-the-control-surface}
 
-Everything is steered through `/sys/kernel/tracing`:
+すべては`/sys/kernel/tracing`を通じて操作する。
 
-| File | Purpose |
+| ファイル | 用途 |
 |---|---|
-| `current_tracer` | select the active tracer (`function`, `function_graph`, `nop`, …) |
-| `tracing_on` | master on/off switch (write `0`/`1`) |
-| `buffer_size_kb` | per-CPU buffer size |
-| `options/` | toggles, including overwrite mode |
-| `trace_marker` | write to it to inject *your own* event into the timeline |
-| `instances/` | create independent buffers so two tools don't fight over one |
+| `current_tracer` | 有効なトレーサーを選択する（`function`、`function_graph`、`nop`、…） |
+| `tracing_on` | マスターのオン/オフスイッチ（`0`/`1`を書き込む） |
+| `buffer_size_kb` | per-CPUバッファのサイズ |
+| `options/` | 上書きモードを含む各種トグル |
+| `trace_marker` | 書き込むと*独自の*イベントをタイムラインに挿入できる |
+| `instances/` | 独立したバッファを作成し、2つのツールが1つのバッファを奪い合わないようにする |
 
-`instances/` is the quietly important one: each instance is a fully separate ring buffer with its own tracer and events, so a background tracer and an ad-hoc investigation can run at once without corrupting each other's captures.
+`instances/`は目立たないが重要である。各インスタンスは独自のトレーサーとイベントを持つ完全に別個のリングバッファであるため、バックグラウンドのトレーサーと場当たり的な調査を同時に実行しても、互いの捕捉内容を壊さない。
 
-## Try it yourself {#try-it-yourself}
+## 試してみる {#try-it-yourself}
 
 ```bash
 cd /sys/kernel/tracing
 
-# grow the per-CPU buffer to 8 MB for a longer history
+# 履歴を長くするため per-CPU バッファを 8 MB に拡大する
 echo 8192 > buffer_size_kb
 
-# live-tail scheduler switches as they happen (consuming read)
+# スケジューラの切り替えを発生と同時にライブで tail する（消費する読み出し）
 echo 1 > events/sched/sched_switch/enable
-cat trace_pipe        # Ctrl-C to stop
+cat trace_pipe        # Ctrl-C で停止
 
-# an isolated instance that won't disturb the main buffer
+# メインバッファを乱さない、独立したインスタンス
 mkdir instances/myprobe
 echo 1 > instances/myprobe/events/block/block_rq_issue/enable
 cat instances/myprobe/trace
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: ring buffer design](https://docs.kernel.org/trace/ring-buffer-design.html) — the lockless algorithm in full
-- [`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c) — the implementation
-- [ftrace](ftrace.md) — the tracer that fills this buffer
+- [Kernel docs: ring buffer design](https://docs.kernel.org/trace/ring-buffer-design.html) — ロックレスアルゴリズムの全容
+- [`kernel/trace/ring_buffer.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/kernel/trace/ring_buffer.c) — 実装
+- [ftrace](ftrace.md) — このバッファを埋めるトレーサー

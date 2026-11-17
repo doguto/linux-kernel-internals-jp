@@ -1,49 +1,49 @@
-# Tracing War Stories {#tracing-war-stories}
+# トレーシングの事件簿 {#tracing-war-stories}
 
-> Real bugs from the observability stack — where "let users safely watch the kernel" turned out to be much harder than it sounds
+> 可観測性スタックで起きた実際のバグ — 「ユーザーに安全にカーネルを観察させる」ことが、思ったよりずっと難しいと判明した場面
 
-Tracing is a strange corner of the kernel: it exists to let code *outside* the core reach *inside* it — read arguments, run at arbitrary functions, sometimes even run user-supplied programs. That reach is exactly what makes it powerful, and exactly what makes it dangerous. Each of these stories is a place where the reach cut the wrong way.
+トレーシングはカーネルの中でも奇妙な一角である。コアの*外側*のコードがその*内側*に手を伸ばす — 引数を読み、任意の関数で実行し、ときにはユーザーが提供したプログラムさえ実行する — ために存在する。その到達範囲こそが強力さの源であり、同時に危険さの源でもある。以下の事例はいずれも、その到達範囲が裏目に出た場面である。
 
-## 1. The profiler that handed out root {#1-the-profiler-that-handed-out-root}
+## 1. rootを配ってしまったプロファイラ {#1-the-profiler-that-handed-out-root}
 
-**Symptom.** On essentially every distro kernel of its day, an unprivileged user could become root with a short, reliable exploit — through the performance-monitoring syscall.
+**症状。** 当時の事実上すべてのディストリビューションカーネルで、非特権ユーザーが短く確実なエクスプロイトによってrootになれた — 性能監視用のシステムコールを通じて。
 
-**Root cause.** `perf_event_open()` accepts an event configuration from user space. In the software-event setup path, one field was handled as a signed value where it should have been an unsigned 64-bit index, so a crafted `config` indexed *before* the start of an array — an out-of-bounds write into kernel memory, fully controlled by the caller. This became **CVE-2013-2094**, one of the most widely used local privilege escalations of its era.
+**根本原因。** `perf_event_open()`はユーザー空間からイベント設定を受け取る。ソフトウェアイベントのセットアップ経路で、ある1つのフィールドが、符号なし64ビットのインデックスとして扱われるべきところを符号付きの値として扱われていた。そのため細工された`config`が配列の先頭*より前*を指すインデックスとなり、呼び出し元が完全に制御できるカーネルメモリへの範囲外書き込みが生じた。これが**CVE-2013-2094**となり、当時最も広く使われたローカル権限昇格の1つとなった。
 
-**Fix.** Treat the field as the `u64` it is, so the index can't go negative ([`8176cced706b`](https://git.kernel.org/linus/8176cced706b), "perf: Treat attr.config as u64 in perf_swevent_init()").
+**修正。** このフィールドを本来の`u64`として扱い、インデックスが負にならないようにした（[`8176cced706b`](https://git.kernel.org/linus/8176cced706b), "perf: Treat attr.config as u64 in perf_swevent_init()"）。
 
-**Lesson.** Tracing infrastructure is *privileged kernel attack surface fed by user input*. A single sign-extension slip in code meant to *observe* the system became a total compromise of it. Every value that crosses the tracing boundary is untrusted.
+**教訓。** トレーシング基盤は*ユーザー入力を受け取る、特権を持ったカーネルの攻撃対象領域*である。システムを*観察する*ためのコードにおけるたった1つの符号拡張のミスが、システムの完全な乗っ取りにつながった。トレーシングの境界を越えるすべての値は信頼できない。
 
-## 2. When "provably safe" stopped being safe {#2-when-provably-safe-stopped-being-safe}
+## 2. 「証明可能な安全性」が安全でなくなったとき {#2-when-provably-safe-stopped-being-safe}
 
-**Symptom.** BPF programs — which the kernel's **verifier** proves cannot crash or read out of bounds before they're allowed to run — could nonetheless be made to leak arbitrary kernel memory.
+**症状。** BPFプログラム — カーネルの**検証器（verifier）**が、実行を許可する前にクラッシュや範囲外読み出しが起こり得ないことを証明するもの — が、それにもかかわらず任意のカーネルメモリを漏洩させるように仕向けられた。
 
-**Root cause.** [Spectre v1](../bpf/README.md). The verifier proved that *architecturally* a program never accessed memory outside a map's bounds. But a CPU **speculatively** executes past a bounds check before resolving it, briefly touching out-of-bounds memory and leaving a measurable cache footprint — a side channel the program's owner could read back. The program was safe as written and still leaked; the threat model itself had changed underneath the verifier.
+**根本原因。** [Spectre v1](../bpf/README.md)。検証器は、*アーキテクチャ上は*プログラムがマップの範囲外のメモリに決してアクセスしないことを証明していた。しかしCPUは境界チェックを解決する前にその先を**投機的に**実行し、範囲外のメモリに一瞬触れて、計測可能なキャッシュの痕跡を残す。これはプログラムの所有者が読み戻せるサイドチャネルである。プログラムは書かれたとおりには安全だったが、それでも漏洩した。脅威モデルそのものが検証器の足元で変わってしまったのである。
 
-**Fix.** Teach the verifier to *mask* array indices so that even speculative accesses are clamped within bounds, closing the window the CPU could run through ([`b2157399cc98`](https://git.kernel.org/linus/b2157399cc98), "bpf: prevent out-of-bounds speculation").
+**修正。** 検証器に配列インデックスを*マスク*させ、投機的アクセスであっても範囲内に制限されるようにし、CPUがすり抜けられる窓を閉じた（[`b2157399cc98`](https://git.kernel.org/linus/b2157399cc98), "bpf: prevent out-of-bounds speculation"）。
 
-**Lesson.** "Provably safe" is only as strong as the machine model you prove against. When speculative execution entered the threat model, a whole class of *formally verified* programs became unsafe overnight — and the safety proof had to grow to cover the hardware's guesses, not just its commitments.
+**教訓。** 「証明可能な安全性」は、証明の前提とするマシンモデルと同程度にしか強くない。投機的実行が脅威モデルに入ったとき、*形式的に検証された*プログラムのクラス全体が一夜にして安全でなくなった。そして安全性の証明は、ハードウェアの確定した動作だけでなく、その推測までカバーするよう拡張する必要があった。
 
-## 3. Tracing the tracer {#3-tracing-the-tracer}
+## 3. トレーサーをトレースする {#3-tracing-the-tracer}
 
-**Symptom.** Enabling a tracer could lock up the machine — the tracing code, while recording an event, called a function that was *itself* being traced, which recorded another event, which called it again.
+**症状。** トレーサーを有効にするとマシンがロックアップすることがあった。トレーシングのコードがイベントを記録している最中に、*それ自体が*トレース対象である関数を呼び出し、それが別のイベントを記録し、それがまたその関数を呼び出す、という具合である。
 
-**Root cause.** Instrumentation shares the kernel with what it instruments. If any function on the trace-recording path is also a traced function, you get unbounded recursion. The kernel guards against this pervasively — hot tracing paths are marked `notrace`, and tracers keep per-CPU recursion flags — but a gap in that armor, such as the function-graph *return* handler re-entering itself, reintroduces the loop.
+**根本原因。** 計装は、計装対象と同じカーネルを共有している。トレース記録経路上のいずれかの関数がトレース対象の関数でもあれば、無制限の再帰が生じる。カーネルはこれに対して広範に防御している — ホットなトレーシング経路には`notrace`が付けられ、トレーサーはper-CPUの再帰フラグを保持する — が、その防御に隙間があると、たとえばfunction-graphの*戻り*ハンドラが自分自身に再突入するようなケースで、ループが再び生じる。
 
-**Fix.** Add explicit recursion protection to the affected path ([`0db0934e7f9b`](https://git.kernel.org/linus/0db0934e7f9b), "tracing: fgraph: Protect return handler from recursion loop").
+**修正。** 影響を受けた経路に明示的な再帰保護を追加した（[`0db0934e7f9b`](https://git.kernel.org/linus/0db0934e7f9b), "tracing: fgraph: Protect return handler from recursion loop"）。
 
-**Lesson.** Observation is not free of the system it observes. A tracer must be scrupulous about never tracing itself — a discipline that has to be maintained at every entry point, because a single un-guarded one turns "watch this function" into a hang.
+**教訓。** 観察は、観察対象のシステムから自由ではない。トレーサーは決して自分自身をトレースしないよう細心の注意を払わなければならない。この規律はすべてのエントリポイントで維持される必要がある。保護されていないエントリポイントが1つでもあれば、「この関数を観察する」がハングに変わってしまうからである。
 
-## The recurring theme {#the-recurring-theme}
+## 繰り返し現れるテーマ {#the-recurring-theme}
 
-All three come from the same tension: tracing must reach deep into the kernel, from a less-trusted context, without becoming a weapon or a foot-gun.
+3つとも同じ緊張関係から生じている。トレーシングは、より信頼度の低いコンテキストから、カーネルの奥深くまで到達しなければならない — それでいて、武器にも自滅の原因にもなってはならない。
 
-- **Everything crossing the boundary is untrusted input** (story 1).
-- **Safety proofs must match the real machine, speculation included** (story 2).
-- **The observer is part of the system and must not perturb — or recurse into — itself** (story 3).
+- **境界を越えるものはすべて信頼できない入力である**（事例1）。
+- **安全性の証明は、投機実行を含めた実際のマシンに合致していなければならない**（事例2）。
+- **観察者はシステムの一部であり、自分自身を乱したり、自分自身に再帰したりしてはならない**（事例3）。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [`8176cced706b`](https://git.kernel.org/linus/8176cced706b) — the CVE-2013-2094 perf fix
-- [`b2157399cc98`](https://git.kernel.org/linus/b2157399cc98) — the BPF anti-speculation change
-- [BPF](../bpf/README.md) — the verifier that these speculation defenses live in
+- [`8176cced706b`](https://git.kernel.org/linus/8176cced706b) — CVE-2013-2094のperf修正
+- [`b2157399cc98`](https://git.kernel.org/linus/b2157399cc98) — BPFの投機実行対策の変更
+- [BPF](../bpf/README.md) — これらの投機実行対策が実装されている検証器

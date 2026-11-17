@@ -1,16 +1,16 @@
-# Line Disciplines, termios, and Pseudo-Terminals {#line-disciplines-termios-and-pseudo-terminals}
+# ラインディシプリン、termios、擬似端末 {#line-disciplines-termios-and-pseudo-terminals}
 
-> The interpreter that sits between a UART (or a pty) and a shell: turning raw bytes into edited lines, Ctrl-C into SIGINT, and background writes into SIGTTOU
+> UART（またはpty）とシェルの間に位置するインタプリタ。生のバイトを編集済みの行に、Ctrl-CをSIGINTに、バックグラウンドからの書き込みをSIGTTOUに変える
 
-## The problem: raw bytes are not what a shell wants to read {#the-problem-raw-bytes-are-not-what-a-shell-wants-to-read}
+## 問題: 生のバイトはシェルが読みたいものではない {#the-problem-raw-bytes-are-not-what-a-shell-wants-to-read}
 
-A serial port or a pty driver's only job is moving bytes: bytes arrive from the wire (or from the other half of a pty pair) and bytes go out. Nothing at that layer knows what a backspace means, whether Ctrl-C should kill the foreground program, or whether the process calling `read()` is even allowed to have this input right now because it's running in the background. If every terminal-using program had to reimplement line editing, signal generation, and job-control policy on top of raw device bytes, every shell and every `readline`-alike would duplicate the same few hundred lines of finicky code — and disagree on the details.
+シリアルポートやptyドライバの仕事は、バイトを動かすことだけである。バイトは回線から（あるいはptyペアのもう一方から）到着し、バイトは出ていく。その層には、バックスペースが何を意味するのか、Ctrl-Cでフォアグラウンドのプログラムを終了させるべきか、`read()`を呼んでいるプロセスがバックグラウンドで動いているせいでそもそもいまこの入力を受け取ってよいのか、といったことを知っているものは何もない。端末を使うすべてのプログラムが、生のデバイスバイトの上に行編集、シグナル生成、ジョブ制御のポリシーを再実装しなければならないとしたら、あらゆるシェル、あらゆる`readline`もどきが、同じ数百行の細かいコードを重複して持つことになり、しかも細部で食い違うことになる。
 
-Linux's tty layer solves this by inserting a **line discipline** between the low-level driver and the reading/writing process. A line discipline is a pluggable protocol handler: the driver hands it raw bytes as they arrive, and it hands processed bytes to `read()` — and, going the other way, it can transform what a process `write()`s before handing it to the driver. The most heavily used one by a wide margin is **N_TTY**, the default discipline that implements ordinary interactive terminal behavior: canonical line editing, echo, and signal generation. This page is mostly about N_TTY, plus the two mechanisms that sit right next to it — `termios`, the structure a process uses to configure N_TTY's behavior, and job control, the process-group bookkeeping that decides who's allowed to read and write a given terminal at all. It closes with pseudo-terminals (ptys), the master/slave device pairs that make N_TTY and job control apply to network logins and terminal emulators, not just physical serial ports.
+Linuxのtty層は、低レベルドライバと読み書きするプロセスの間に **ラインディシプリン** を挿入することでこれを解決する。ラインディシプリンは差し替え可能なプロトコルハンドラである。ドライバは到着した生のバイトをそれに渡し、ラインディシプリンは処理済みのバイトを`read()`に渡す。逆方向では、プロセスが`write()`したものをドライバに渡す前に変換できる。圧倒的に最もよく使われるのは **N_TTY** である。これは普通の対話端末の振る舞い、すなわちカノニカルな行編集、エコー、シグナル生成を実装するデフォルトのディシプリンである。このページは主にN_TTYと、そのすぐ隣にある2つの仕組みを扱う。プロセスがN_TTYの振る舞いを設定するのに使う構造体`termios`と、そもそも誰が特定の端末を読み書きしてよいかを決めるプロセスグループの管理であるジョブ制御である。最後に擬似端末（pty）を扱う。ptyはマスター/スレーブのデバイスのペアであり、N_TTYとジョブ制御を物理シリアルポートだけでなく、ネットワークログインやターミナルエミュレータにも適用できるようにするものである。
 
-## Line disciplines: `struct tty_ldisc_ops` {#line-disciplines-struct-ttyldiscops}
+## ラインディシプリン: `struct tty_ldisc_ops` {#line-disciplines-struct-tty_ldisc_ops}
 
-A line discipline registers a `struct tty_ldisc_ops` (`include/linux/tty_ldisc.h`) with `tty_register_ldisc()`. The struct's own kernel-doc comment draws a line through the middle of the callback list: some hooks are called "from above" (the process doing `read()`/`write()`/`ioctl()` on the tty), others "from below" (the tty driver feeding in hardware-received bytes):
+ラインディシプリンは`struct tty_ldisc_ops`（`include/linux/tty_ldisc.h`）を`tty_register_ldisc()`で登録する。この構造体自身のkernel-docコメントは、コールバックの一覧を真ん中で区切っている。一部のフックは「上から」（ttyに対して`read()`/`write()`/`ioctl()`を行うプロセスから）呼ばれ、それ以外は「下から」（ハードウェアで受信したバイトを流し込むttyドライバから）呼ばれる。
 
 ```c
 // include/linux/tty_ldisc.h
@@ -19,7 +19,7 @@ struct tty_ldisc_ops {
 	int	num;
 
 	/*
-	 * The following routines are called from above.
+	 * 以下のルーチンは上から呼ばれる。
 	 */
 	int	(*open)(struct tty_struct *tty);
 	void	(*close)(struct tty_struct *tty);
@@ -38,7 +38,7 @@ struct tty_ldisc_ops {
 	void	(*hangup)(struct tty_struct *tty);
 
 	/*
-	 * The following routines are called from below.
+	 * 以下のルーチンは下から呼ばれる。
 	 */
 	void	(*receive_buf)(struct tty_struct *tty, const u8 *cp,
 			       const u8 *fp, size_t count);
@@ -53,7 +53,7 @@ struct tty_ldisc_ops {
 };
 ```
 
-`read`/`write`/`ioctl`/`open`/`close` are the process-facing half: `read()` on a tty file descriptor ultimately calls the ldisc's `.read`, and `write()` calls `.write`. `receive_buf`/`receive_buf2` are the driver-facing half: whenever a UART's interrupt handler (or, for a pty, the other half of the pair) has new bytes, it calls into the current ldisc's `receive_buf`/`receive_buf2` rather than touching any read buffer directly. `.set_termios` is the notification hook fired after a `tcsetattr()`-driven termios change, so the ldisc can adjust internal state (N_TTY uses it to recompute derived flags like whether raw mode applies). `struct tty_ldisc` itself, the runtime object `tty->ldisc` points at, is just the ops pointer plus a back-reference to the owning tty:
+`read`/`write`/`ioctl`/`open`/`close`はプロセス向けの半分である。ttyのファイルディスクリプタに対する`read()`は最終的にldiscの`.read`を呼び、`write()`は`.write`を呼ぶ。`receive_buf`/`receive_buf2`はドライバ向けの半分である。UARTの割り込みハンドラ（ptyの場合はペアのもう一方）は、新しいバイトを得るたびに、読み取りバッファに直接触れるのではなく、現在のldiscの`receive_buf`/`receive_buf2`を呼び出す。`.set_termios`は、`tcsetattr()`によるtermiosの変更の後に発火する通知フックであり、ldiscはこれで内部状態を調整できる（N_TTYはこれを使って、rawモードが適用されるかどうかといった派生フラグを再計算する）。`tty->ldisc`が指す実行時オブジェクトである`struct tty_ldisc`自体は、opsポインタと、所有者であるttyへの逆参照にすぎない。
 
 ```c
 // include/linux/tty_ldisc.h
@@ -63,7 +63,7 @@ struct tty_ldisc {
 };
 ```
 
-N_TTY's registration shows which of these a real discipline actually fills in — no `.compat_ioctl`, no `.dcd_change` (that one's used exclusively by N_PPS), and `.lookahead_buf` pointed at a helper that scans for flow-control characters before the main receive path runs:
+N_TTYの登録を見ると、実際のディシプリンがこれらのうちどれを埋めているかがわかる。`.compat_ioctl`はなく、`.dcd_change`もない（これはN_PPS専用である）。そして`.lookahead_buf`は、メインの受信パスが走る前にフロー制御文字を探すヘルパーを指している。
 
 ```c
 // drivers/tty/n_tty.c
@@ -86,9 +86,9 @@ static struct tty_ldisc_ops n_tty_ops = {
 };
 ```
 
-### It's not the only line discipline {#its-not-the-only-line-discipline}
+### ラインディシプリンはN_TTYだけではない {#its-not-the-only-line-discipline}
 
-`include/uapi/linux/tty.h` reserves 31 `N_*` numbers, and `ioctl(fd, TIOCSETD, &ldisc_num)` is how a process swaps a tty's discipline at runtime — that's exactly how old-school PPP and SLIP worked: a userspace daemon (`pppd`, `slattach`) opened a serial port as an ordinary tty, ran `TIOCSETD` to switch it from N_TTY to **N_PPP** or **N_SLIP**, and from that point every byte on the wire was framed PPP/SLIP traffic instead of terminal input — no more line editing, no more Ctrl-C, just a byte pipe with its own framing:
+`include/uapi/linux/tty.h`は31個の`N_*`番号を予約しており、プロセスは`ioctl(fd, TIOCSETD, &ldisc_num)`で実行時にttyのディシプリンを差し替える。昔ながらのPPPやSLIPはまさにこうして動いていた。ユーザー空間のデーモン（`pppd`、`slattach`）がシリアルポートを普通のttyとして開き、`TIOCSETD`を実行してN_TTYから **N_PPP** や **N_SLIP** に切り替える。その時点から、回線上のすべてのバイトは端末入力ではなく、フレーム化されたPPP/SLIPのトラフィックになる。行編集もCtrl-Cももはやなく、独自のフレーミングを持つただのバイトのパイプである。
 
 ```c
 // include/uapi/linux/tty.h
@@ -99,25 +99,25 @@ static struct tty_ldisc_ops n_tty_ops = {
 ...
 #define N_HCI		15	/* Bluetooth HCI UART */
 ...
-#define N_GSM0710	21	/* GSM 0710 Mux */
+#define N_GSM0710	21	/* GSM 0710 多重化 */
 ...
-#define N_MCTP		28	/* MCTP-over-serial */
-#define N_CAN327	30	/* ELM327 based OBD-II interfaces */
+#define N_MCTP		28	/* シリアル上のMCTP */
+#define N_CAN327	30	/* ELM327ベースのOBD-IIインターフェース */
 ```
 
-Most of the rest of that list is the same trick applied to other framed protocols riding on a UART: N_HCI decodes a Bluetooth controller's HCI packets, N_GSM0710 multiplexes a single serial port into multiple logical channels for a GSM modem, N_CAN327 talks to a cheap ELM327 OBD-II adapter. None of them are what a human types at — they're all "steal the tty's byte stream for a non-terminal protocol," and N_TTY is what's back in place the moment nothing more specialized has claimed the line. The rest of this page is entirely about N_TTY.
+この一覧の残りの大半は、同じ手口を、UARTに載る他のフレーム化されたプロトコルに適用したものである。N_HCIはBluetoothコントローラのHCIパケットをデコードし、N_GSM0710はGSMモデムのために1つのシリアルポートを複数の論理チャネルに多重化し、N_CAN327は安価なELM327 OBD-IIアダプタと通信する。どれも人間がタイプする対象ではない。いずれも「ttyのバイトストリームを端末以外のプロトコルのために横取りする」ものであり、より特化したものが回線を確保していなければ、すぐにN_TTYが元の位置に戻る。このページの残りはすべてN_TTYについてである。
 
-## Canonical vs. raw mode {#canonical-vs-raw-mode}
+## カノニカルモードとrawモード {#canonical-vs-raw-mode}
 
-N_TTY's most visible job is deciding how much editing happens before a `read()` returns data, and that's governed by a single bit: `ICANON` in `c_lflag`.
+N_TTYの最も目に見える仕事は、`read()`がデータを返す前にどれだけの編集を行うかを決めることであり、それは`c_lflag`の`ICANON`という1ビットで制御される。
 
-- **Canonical (cooked) mode** — `ICANON` set, the default. Input is buffered a line at a time. Before the line is handed to a reader, N_TTY performs editing in place: the erase character (default `DEL`/`Ctrl-?`) deletes the last character, the kill character (default `Ctrl-U`) erases the whole line back to the start, and (with `IEXTEN`) word-erase (`Ctrl-W`) deletes the last word. A `read()` in canonical mode doesn't return anything until a full line is available — terminated by newline, `EOF`, or an `EOL` character.
-- **Raw (non-canonical) mode** — `ICANON` clear. No line buffering, no editing at all: bytes become available to `read()` essentially as they arrive (subject to the `VMIN`/`VTIME` timing controls below), untouched by any erase/kill logic. This is what full-screen programs — editors, pagers, `ssh` itself — put the terminal into, because they need to see every keystroke (including what would otherwise be an erase character) as data.
+- **カノニカル（cooked）モード** — `ICANON`がセットされている。これがデフォルトである。入力は1行ずつバッファされる。行が読み手に渡される前に、N_TTYはその場で編集を行う。消去文字（デフォルトは`DEL`/`Ctrl-?`）は最後の文字を削除し、kill文字（デフォルトは`Ctrl-U`）は行全体を先頭まで消去し、（`IEXTEN`があれば）単語消去（`Ctrl-W`）は最後の単語を削除する。カノニカルモードの`read()`は、改行、`EOF`、または`EOL`文字で終端された完全な1行が得られるまで何も返さない。
+- **raw（非カノニカル）モード** — `ICANON`がクリアされている。行バッファリングも編集も一切ない。バイトは基本的に到着したとおりに`read()`から読めるようになり（後述の`VMIN`/`VTIME`のタイミング制御に従う）、消去/killのロジックに一切手を加えられない。全画面プログラム（エディタ、ページャ、`ssh`そのもの）が端末をこのモードにするのは、（本来なら消去文字になるものも含めて）すべてのキー入力をデータとして見る必要があるからである。
 
-The editing logic for canonical mode lives in one function, `eraser()` in `drivers/tty/n_tty.c`, which switches on whether the triggering character is the erase, word-erase, or kill character:
+カノニカルモードの編集ロジックは、`drivers/tty/n_tty.c`の`eraser()`という1つの関数にあり、きっかけとなった文字が消去文字、単語消去文字、kill文字のどれかによって分岐する。
 
 ```c
-// drivers/tty/n_tty.c (eraser(), signature and dispatch)
+// drivers/tty/n_tty.c（eraser()のシグネチャと分岐）
 static void eraser(u8 c, const struct tty_struct *tty)
 {
 	...
@@ -131,64 +131,64 @@ static void eraser(u8 c, const struct tty_struct *tty)
 }
 ```
 
-`ERASE_CHAR(tty)` and friends are thin macros over `tty->termios.c_cc[]` — see below.
+`ERASE_CHAR(tty)`とその仲間は、`tty->termios.c_cc[]`を包む薄いマクロである（後述）。
 
-In non-canonical mode, two more `c_cc[]` slots change meaning entirely: `VMIN` and `VTIME` control how `read()` blocks. `VMIN` is the minimum number of bytes to satisfy a read; `VTIME` is a timeout in tenths of a second. The four combinations (both zero, only `VMIN`, only `VTIME`, both nonzero) give four distinct blocking behaviors, documented in full in `termios(3)`.
+非カノニカルモードでは、さらに2つの`c_cc[]`スロットの意味がまったく変わる。`VMIN`と`VTIME`は`read()`がどのようにブロックするかを制御する。`VMIN`はreadを満たすのに必要な最小バイト数であり、`VTIME`は10分の1秒単位のタイムアウトである。4つの組み合わせ（両方ゼロ、`VMIN`のみ、`VTIME`のみ、両方非ゼロ）が4つの異なるブロッキングの振る舞いを生み、その詳細は`termios(3)`に記されている。
 
-## `termios`: the configuration surface {#termios-the-configuration-surface}
+## `termios`: 設定のインターフェース {#termios-the-configuration-surface}
 
-Every open tty has a `struct ktermios` (`tty->termios`), and userspace reads/writes it via `tcgetattr(3)`/`tcsetattr(3)`, which are thin wrappers around the `TCGETS`/`TCSETS`-family ioctls. The kernel UAPI struct — `struct termios`, the one `tcgetattr()` actually fills — and the kernel-internal `struct ktermios` share the same field layout on modern Linux (`ktermios` additionally carries explicit `c_ispeed`/`c_ospeed` fields rather than packing speed into `c_cflag`):
+開かれたttyはそれぞれ`struct ktermios`（`tty->termios`）を持ち、ユーザー空間は`tcgetattr(3)`/`tcsetattr(3)`でそれを読み書きする。これらは`TCGETS`/`TCSETS`系のioctlを包む薄いラッパーである。カーネルのUAPI構造体である`struct termios`（`tcgetattr()`が実際に埋めるもの）と、カーネル内部の`struct ktermios`は、現代のLinuxでは同じフィールドレイアウトを共有している（`ktermios`はさらに、速度を`c_cflag`に詰め込む代わりに明示的な`c_ispeed`/`c_ospeed`フィールドを持つ）。
 
 ```c
 // include/uapi/asm-generic/termbits.h
 #define NCCS 19
 struct termios {
-	tcflag_t c_iflag;		/* input mode flags */
-	tcflag_t c_oflag;		/* output mode flags */
-	tcflag_t c_cflag;		/* control mode flags */
-	tcflag_t c_lflag;		/* local mode flags */
-	cc_t c_line;			/* line discipline */
-	cc_t c_cc[NCCS];		/* control characters */
+	tcflag_t c_iflag;		/* 入力モードフラグ */
+	tcflag_t c_oflag;		/* 出力モードフラグ */
+	tcflag_t c_cflag;		/* 制御モードフラグ */
+	tcflag_t c_lflag;		/* ローカルモードフラグ */
+	cc_t c_line;			/* ラインディシプリン */
+	cc_t c_cc[NCCS];		/* 制御文字 */
 };
 
 struct ktermios {
-	tcflag_t c_iflag;		/* input mode flags */
-	tcflag_t c_oflag;		/* output mode flags */
-	tcflag_t c_cflag;		/* control mode flags */
-	tcflag_t c_lflag;		/* local mode flags */
-	cc_t c_line;			/* line discipline */
-	cc_t c_cc[NCCS];		/* control characters */
-	speed_t c_ispeed;		/* input speed */
-	speed_t c_ospeed;		/* output speed */
+	tcflag_t c_iflag;		/* 入力モードフラグ */
+	tcflag_t c_oflag;		/* 出力モードフラグ */
+	tcflag_t c_cflag;		/* 制御モードフラグ */
+	tcflag_t c_lflag;		/* ローカルモードフラグ */
+	cc_t c_line;			/* ラインディシプリン */
+	cc_t c_cc[NCCS];		/* 制御文字 */
+	speed_t c_ispeed;		/* 入力速度 */
+	speed_t c_ospeed;		/* 出力速度 */
 };
 ```
 
-`c_line` is the ldisc number (one of the `N_*` values above) — the same field `TIOCSETD` reads and writes. The four flag words are independent bitmask namespaces, one per pipeline stage:
+`c_line`はldiscの番号（上の`N_*`値のいずれか）であり、`TIOCSETD`が読み書きするのと同じフィールドである。4つのフラグワードは互いに独立したビットマスクの名前空間で、パイプラインの段階ごとに1つずつある。
 
-| Field | Governs | A few concrete flags |
+| フィールド | 制御対象 | 具体的なフラグの例 |
 |---|---|---|
-| `c_iflag` | input processing, before the ldisc sees the byte as "line data" | `ICRNL` (map CR→NL on input), `IXON`/`IXOFF` (software flow control), `ISTRIP`, `BRKINT` |
-| `c_oflag` | output processing, applied to what a process writes before it reaches the driver | `OPOST` (enable output processing at all — everything else in this word is a no-op if `OPOST` is clear), `ONLCR` (map NL→CR-NL on output) |
-| `c_cflag` | the hardware line itself | `CS8` (8-bit character size, part of the `CSIZE` mask), `CREAD`, `PARENB`/`PARODD`, `CLOCAL`, baud-rate bits |
-| `c_lflag` | "local" behavior — the ldisc-level policy knobs this page is mostly about | `ICANON`, `ISIG`, `ECHO`, `IEXTEN`, `TOSTOP` |
+| `c_iflag` | 入力処理。ldiscがバイトを「行データ」として見る前に行われる | `ICRNL`（入力時にCR→NLに変換）、`IXON`/`IXOFF`（ソフトウェアフロー制御）、`ISTRIP`、`BRKINT` |
+| `c_oflag` | 出力処理。プロセスが書き込んだものがドライバに届く前に適用される | `OPOST`（出力処理そのものを有効化する。`OPOST`がクリアされていると、このワードの他のフラグはすべて何もしない）、`ONLCR`（出力時にNL→CR-NLに変換） |
+| `c_cflag` | ハードウェア回線そのもの | `CS8`（8ビットの文字サイズ。`CSIZE`マスクの一部）、`CREAD`、`PARENB`/`PARODD`、`CLOCAL`、ボーレートのビット |
+| `c_lflag` | 「ローカル」な振る舞い。このページが主に扱う、ldiscレベルのポリシーのつまみ | `ICANON`、`ISIG`、`ECHO`、`IEXTEN`、`TOSTOP` |
 
-Confirmed straight from `include/uapi/asm-generic/termbits.h` and `include/uapi/asm-generic/termbits-common.h`, the bit values behind the flags most commonly referenced:
+`include/uapi/asm-generic/termbits.h`と`include/uapi/asm-generic/termbits-common.h`から直接確認した、最もよく参照されるフラグのビット値は次のとおりである。
 
 ```c
 // include/uapi/asm-generic/termbits-common.h
-#define ICRNL	0x100			/* Map CR to NL on input */
-#define OPOST	0x01			/* Perform output processing */
+#define ICRNL	0x100			/* 入力時にCRをNLに変換 */
+#define OPOST	0x01			/* 出力処理を行う */
 
 // include/uapi/asm-generic/termbits.h
-#define CS8		0x00000030	/* part of the CSIZE mask */
+#define CS8		0x00000030	/* CSIZEマスクの一部 */
 
-/* c_lflag bits */
+/* c_lflagのビット */
 #define ISIG	0x00001
 #define ICANON	0x00002
 #define ECHO	0x00008
 ```
 
-The `c_cc[]` array (`NCCS` = 19 slots) is where the special characters live — the bytes a process can rebind with `stty` or a direct `tcsetattr()` call. The array is indexed by symbolic constants, not fixed byte positions:
+`c_cc[]`配列（`NCCS` = 19スロット）は特殊文字が置かれる場所であり、プロセスは`stty`や直接の`tcsetattr()`呼び出しでこれらのバイトを再割り当てできる。配列は固定のバイト位置ではなく、シンボル定数でインデックスされる。
 
 ```c
 // include/uapi/asm-generic/termbits.h
@@ -211,11 +211,11 @@ The `c_cc[]` array (`NCCS` = 19 slots) is where the special characters live — 
 #define VEOL2		16
 ```
 
-`include/linux/tty.h` defines the macros the kernel itself uses to read these — `INTR_CHAR(tty)` expands to `tty->termios.c_cc[VINTR]`, and so on for every entry above. On Linux, `VMIN`/`VTIME` and `VEOF`/`VEOL` are four distinct, non-overlapping indices (4, 5, 6, 11, per the table above) — they only take on `VMIN`/`VTIME` *meaning* in non-canonical mode, but the slots themselves are never reused. (SPARC's `termbits.h` is a historical outlier that literally `#define`s `VMIN VEOF` and `VTIME VEOL`, inherited from older Unix layouts — that's a SPARC peculiarity, not a general Linux/glibc rule.)
+`include/linux/tty.h`は、カーネル自身がこれらを読むのに使うマクロを定義している。`INTR_CHAR(tty)`は`tty->termios.c_cc[VINTR]`に展開され、上のすべての項目について同様である。Linuxでは、`VMIN`/`VTIME`と`VEOF`/`VEOL`は互いに重ならない4つの別々のインデックス（上の表のとおり4、5、6、11）である。これらが`VMIN`/`VTIME`としての *意味* を持つのは非カノニカルモードのときだけだが、スロット自体が使い回されることはない。（SPARCの`termbits.h`は歴史的な例外で、古いUnixのレイアウトを受け継いで文字どおり`VMIN VEOF`と`VTIME VEOL`を`#define`している。これはSPARC特有のものであって、Linux/glibc一般の規則ではない。）
 
-## Signal generation: how Ctrl-C becomes SIGINT {#signal-generation-how-ctrl-c-becomes-sigint}
+## シグナル生成: Ctrl-CはどのようにSIGINTになるか {#signal-generation-how-ctrl-c-becomes-sigint}
 
-When `ISIG` is set in `c_lflag` (the default), N_TTY watches every incoming byte for three special characters and turns each into a signal instead of passing it through as data. `n_tty_receive_char_special()` is where that dispatch happens, checked before any of the ordinary line-editing logic runs — though `n_tty_receive_char_special()` itself checks `I_IXON`-driven software flow control (`Ctrl-S`/`Ctrl-Q`) first, and only reaches the `ISIG` block below if that doesn't consume the byte:
+`c_lflag`に`ISIG`がセットされている場合（デフォルト）、N_TTYは到着するすべてのバイトについて3つの特殊文字を監視し、それぞれをデータとして通す代わりにシグナルに変える。この振り分けが行われるのは`n_tty_receive_char_special()`であり、通常の行編集ロジックが走る前にチェックされる。ただし`n_tty_receive_char_special()`自体は、まず`I_IXON`によるソフトウェアフロー制御（`Ctrl-S`/`Ctrl-Q`）をチェックし、それがバイトを消費しなかった場合にのみ、以下の`ISIG`ブロックに到達する。
 
 ```c
 // drivers/tty/n_tty.c
@@ -233,7 +233,7 @@ if (L_ISIG(tty)) {
 }
 ```
 
-Default bindings: `VINTR` is `Ctrl-C` → `SIGINT`, `VQUIT` is `Ctrl-\` → `SIGQUIT`, `VSUSP` is `Ctrl-Z` → `SIGTSTP`. Each of those goes through `isig()`, which resolves the process group to signal and, unless `NOFLSH` is set, flushes the ldisc's pending input/echo/output as part of delivering the signal (so a `SIGINT` doesn't leave stale typeahead sitting in the buffer for the next foreground program). The signal-delivery part — resolving `tty->ctrl.pgrp` and calling `kill_pgrp()` — is factored into an inner helper, `__isig()`, shown below; the `NOFLSH` check and the actual flush live in `isig()` itself, which calls `__isig()` first and then, unless `NOFLSH` is set, clears the echo/output/input buffers:
+デフォルトの割り当ては、`VINTR`が`Ctrl-C` → `SIGINT`、`VQUIT`が`Ctrl-\` → `SIGQUIT`、`VSUSP`が`Ctrl-Z` → `SIGTSTP`である。これらはそれぞれ`isig()`を通る。`isig()`はシグナルを送るプロセスグループを解決し、`NOFLSH`がセットされていなければ、シグナル配送の一環としてldiscの保留中の入力/エコー/出力をフラッシュする（そのため、`SIGINT`の後に古い先行入力がバッファに残って次のフォアグラウンドプログラムに渡ってしまうことがない）。シグナル配送の部分（`tty->ctrl.pgrp`を解決して`kill_pgrp()`を呼ぶ）は、以下に示す内部ヘルパー`__isig()`に切り出されている。`NOFLSH`のチェックと実際のフラッシュは`isig()`自体にあり、まず`__isig()`を呼び、それから`NOFLSH`がセットされていなければエコー/出力/入力のバッファをクリアする。
 
 ```c
 // drivers/tty/n_tty.c
@@ -247,18 +247,18 @@ static void __isig(int sig, struct tty_struct *tty)
 }
 ```
 
-`tty_get_pgrp()` returns a reference to `tty->ctrl.pgrp` — the tty's foreground process group, covered next — and `kill_pgrp()` delivers the signal to every process in that group, which is why Ctrl-C in a shell reaches the whole foreground pipeline (`sort | uniq | less`, say) and not just one process. This is entirely N_TTY's own logic — nothing about `ISIG` or signal generation lives in the generic tty core; a different line discipline is free to not do this at all (and PPP/SLIP-family disciplines don't, since `Ctrl-C` on a byte stream carrying framed network traffic would be nonsensical).
+`tty_get_pgrp()`は`tty->ctrl.pgrp`（ttyのフォアグラウンドプロセスグループ。次節で扱う）への参照を返し、`kill_pgrp()`はそのグループ内のすべてのプロセスにシグナルを配送する。シェルでのCtrl-Cが1つのプロセスだけでなく、フォアグラウンドのパイプライン全体（例えば`sort | uniq | less`）に届くのはこのためである。これは完全にN_TTY独自のロジックであり、`ISIG`やシグナル生成に関するものは汎用のttyコアには一切ない。別のラインディシプリンは、これをまったく行わなくてもかまわない（実際PPP/SLIP系のディシプリンは行わない。フレーム化されたネットワークトラフィックを運ぶバイトストリームで`Ctrl-C`を解釈するのは無意味だからである）。
 
-## Job control: who's allowed to read and write {#job-control-whos-allowed-to-read-and-write}
+## ジョブ制御: 誰が読み書きしてよいか {#job-control-whos-allowed-to-read-and-write}
 
-`ISIG` explains how a foreground process gets signaled; job control is the layer above that decides *which* process group counts as foreground in the first place, and what happens to everyone else.
+`ISIG`は、フォアグラウンドのプロセスがどのようにシグナルを受け取るかを説明する。ジョブ制御はその上の層であり、そもそも *どの* プロセスグループをフォアグラウンドとみなすか、そしてそれ以外のプロセスに何が起きるかを決める。
 
-### `tty_struct`'s control fields {#tty_structs-control-fields}
+### `tty_struct`の制御フィールド {#tty_structs-control-fields}
 
-The relevant state lives in `struct tty_struct` under a small `ctrl` sub-struct, alongside its own spinlock:
+関連する状態は、`struct tty_struct`の中の小さな`ctrl`サブ構造体に、専用のspinlockとともに置かれている。
 
 ```c
-// include/linux/tty.h (struct tty_struct, ctrl fields)
+// include/linux/tty.h（struct tty_struct、ctrlフィールド）
 struct {
 	struct pid *pgrp;
 	struct pid *session;
@@ -268,20 +268,20 @@ struct {
 } ctrl;
 ```
 
-`ctrl.pgrp` is the terminal's current foreground process group; `ctrl.session` is the session this tty is the controlling terminal *for*. Both are `struct pid *`, not raw pids, and both are protected by `ctrl.lock` for writers (readers can get away with holding just one of `ctrl.lock` or the tty's broader `legacy_mutex`, per the struct's kernel-doc). `tty_get_pgrp(tty)` is the accessor `isig()` used above; `tty_jobctrl.c` has the corresponding setter path, `tiocspgrp()`, reached through the `TIOCSPGRP` ioctl.
+`ctrl.pgrp`は端末の現在のフォアグラウンドプロセスグループであり、`ctrl.session`はこのttyが制御端末と *なっている* セッションである。どちらも生のpidではなく`struct pid *`であり、書き込み側はどちらも`ctrl.lock`で保護される（構造体のkernel-docによれば、読み取り側は`ctrl.lock`か、ttyのより広い範囲を守る`legacy_mutex`のどちらか一方を保持していれば済む）。`tty_get_pgrp(tty)`は上で`isig()`が使っていたアクセサであり、`tty_jobctrl.c`には対応する設定側のパスである`tiocspgrp()`があり、`TIOCSPGRP` ioctlを通じて到達する。
 
-### Becoming a controlling terminal {#becoming-a-controlling-terminal}
+### 制御端末になる {#becoming-a-controlling-terminal}
 
-A tty becomes a session's controlling terminal one of two ways: implicitly, when a session leader with no controlling tty opens a tty device that doesn't already have a controlling session (handled in `tty_open_proc_set_tty()`, called from `tty_open()`); or explicitly, via the `TIOCSCTTY` ioctl, `tiocsctty()`:
+ttyがセッションの制御端末になる方法は2つある。1つは暗黙的な方法で、制御ttyを持たないセッションリーダーが、まだ制御セッションを持たないttyデバイスを開いたときである（`tty_open()`から呼ばれる`tty_open_proc_set_tty()`で処理される）。もう1つは明示的な方法で、`TIOCSCTTY` ioctl、すなわち`tiocsctty()`による。
 
 ```c
-// drivers/tty/tty_jobctrl.c (tiocsctty(), core logic)
+// drivers/tty/tty_jobctrl.c（tiocsctty()、中核ロジック）
 static int tiocsctty(struct tty_struct *tty, struct file *file, int arg)
 {
 	...
 	/*
-	 * The process must be a session leader and
-	 * not have a controlling tty already.
+	 * プロセスはセッションリーダーであり、かつ
+	 * まだ制御ttyを持っていてはならない。
 	 */
 	if (!current->signal->leader || current->signal->tty) {
 		ret = -EPERM;
@@ -289,9 +289,9 @@ static int tiocsctty(struct tty_struct *tty, struct file *file, int arg)
 	}
 
 	if (tty->ctrl.session) {
-		/* already the controlling tty for another session group! */
+		/* すでに別のセッショングループの制御ttyになっている! */
 		if (arg == 1 && capable(CAP_SYS_ADMIN)) {
-			/* Steal it away */
+			/* 奪い取る */
 			session_clear_tty(tty->ctrl.session);
 		} else {
 			ret = -EPERM;
@@ -304,22 +304,22 @@ static int tiocsctty(struct tty_struct *tty, struct file *file, int arg)
 }
 ```
 
-This is exactly the sequence `setsid()` + `open()` + `TIOCSCTTY` performs — it's the standard idiom terminal emulators, `sshd`, and `screen`/`tmux` all use when handing a freshly opened pty slave to a new session: `setsid()` first, to detach from any inherited controlling terminal and become a session leader with none, then open the slave and issue `TIOCSCTTY` to claim it. `proc_set_tty()` records the tty's new pgrp/session as the caller's current process group and session (via `task_pgrp(current)`/`task_session(current)`), and separately sets `current->signal->tty` — the process's own pointer back to its controlling terminal.
+これはまさに`setsid()` + `open()` + `TIOCSCTTY`が行う手順である。ターミナルエミュレータ、`sshd`、`screen`/`tmux`はいずれも、新たに開いたptyスレーブを新しいセッションに渡すときに、この標準的なイディオムを使う。まず`setsid()`で、継承した制御端末から切り離され、制御端末を持たないセッションリーダーになる。次にスレーブを開いて`TIOCSCTTY`を発行し、それを自分のものにする。`proc_set_tty()`は、ttyの新しいpgrp/sessionとして呼び出し元の現在のプロセスグループとセッションを（`task_pgrp(current)`/`task_session(current)`経由で）記録し、それとは別に`current->signal->tty`（プロセス自身が持つ、自分の制御端末へのポインタ）を設定する。
 
-### SIGTTIN and SIGTTOU {#sigttin-and-sigttou}
+### SIGTTINとSIGTTOU {#sigttin-and-sigttou}
 
-Once a session has a controlling tty with a foreground `ctrl.pgrp`, any process in a *background* group that tries to `read()` from — or, depending on `TOSTOP`, `write()` to — that terminal gets stopped rather than allowed to proceed. The mechanism is `__tty_check_change()`, whose doc comment states the policy directly:
+セッションがフォアグラウンドの`ctrl.pgrp`を持つ制御ttyを得ると、*バックグラウンド* のグループに属するプロセスがその端末から`read()`しようとしたり、（`TOSTOP`によっては）その端末に`write()`しようとしたりすると、そのまま進むことは許されず停止させられる。この仕組みは`__tty_check_change()`であり、そのドキュメントコメントがポリシーを直接述べている。
 
 ```c
 // drivers/tty/tty_jobctrl.c
 /**
- *	__tty_check_change	-	check for POSIX terminal changes
- *	@tty: tty to check
- *	@sig: signal to send
+ *	__tty_check_change	-	POSIXの端末変更をチェックする
+ *	@tty: チェックするtty
+ *	@sig: 送るシグナル
  *
- *	If we try to write to, or set the state of, a terminal and we're
- *	not in the foreground, send a SIGTTOU.  If the signal is blocked or
- *	ignored, go ahead and perform the operation.  (POSIX 7.2)
+ *	端末に書き込もうとするか、端末の状態を設定しようとしたときに、
+ *	フォアグラウンドにいなければSIGTTOUを送る。シグナルがブロックまたは
+ *	無視されている場合は、そのまま操作を実行する。（POSIX 7.2）
  */
 int __tty_check_change(struct tty_struct *tty, int sig)
 {
@@ -340,16 +340,16 @@ int __tty_check_change(struct tty_struct *tty, int sig)
 }
 ```
 
-Two call sites wire this into the read and write paths respectively. `job_control()` in `drivers/tty/n_tty.c` runs at the top of `n_tty_read()` and requests `SIGTTIN` if the caller isn't in the foreground group:
+2つの呼び出し箇所が、これをそれぞれ読み取りパスと書き込みパスに組み込んでいる。`drivers/tty/n_tty.c`の`job_control()`は`n_tty_read()`の先頭で実行され、呼び出し元がフォアグラウンドのグループにいなければ`SIGTTIN`を要求する。
 
 ```c
 // drivers/tty/n_tty.c
 static int job_control(struct tty_struct *tty, struct file *file)
 {
-	/* Job control check -- must be done at start and after
-	   every sleep (POSIX.1 7.1.1.4). */
+	/* ジョブ制御のチェック -- 開始時と、スリープの後に
+	   毎回行わなければならない（POSIX.1 7.1.1.4）。 */
 	...
-	/* don't stop on /dev/console */
+	/* /dev/consoleでは停止しない */
 	if (file->f_op->write_iter == redirected_tty_write)
 		return 0;
 
@@ -357,18 +357,18 @@ static int job_control(struct tty_struct *tty, struct file *file)
 }
 ```
 
-and the exported `tty_check_change()` — always `SIGTTOU` — is what the write path and a handful of tty-state-changing ioctls (`TIOCSETD`, break-related ioctls, `TIOCSPGRP`) call before proceeding. The upshot: a background job's `read()` blocks its whole process group with `SIGTTIN` (which, by default, stops the group — that's what makes a backgrounded `cat` freeze instead of erroring out the moment it tries to read stdin), and — only if `TOSTOP` is set in `c_lflag` — the same happens to `write()` via `SIGTTOU`. Without `TOSTOP`, background writes are allowed through, which is the usual reason a backgrounded build's stray log lines can still interleave with your shell prompt.
+そしてエクスポートされている`tty_check_change()`（常に`SIGTTOU`）は、書き込みパスと、ttyの状態を変更する一握りのioctl（`TIOCSETD`、break関連のioctl、`TIOCSPGRP`）が、処理を進める前に呼ぶものである。結果として、バックグラウンドジョブの`read()`は`SIGTTIN`によってそのプロセスグループ全体を止める（デフォルトではグループを停止させる。バックグラウンドに回した`cat`がstdinを読もうとした瞬間にエラー終了するのではなく固まるのはこのためである）。そして、`c_lflag`に`TOSTOP`がセットされている場合に限り、`write()`にも`SIGTTOU`経由で同じことが起きる。`TOSTOP`がなければバックグラウンドからの書き込みは通される。バックグラウンドで走らせたビルドのはぐれたログ行がシェルのプロンプトに混ざってしまうのは、たいていこれが理由である。
 
-## Pseudo-terminals: ptys {#pseudo-terminals-ptys}
+## 擬似端末: pty {#pseudo-terminals-ptys}
 
-Everything above assumes a process is talking to a real terminal device. Almost nothing running today actually is — an SSH session, a terminal emulator window, `tmux`, `expect` scripts, and container runtimes' `-t` flag are all built on **pseudo-terminals**, where "the hardware" on one end is just another process.
+ここまでの内容はすべて、プロセスが実際の端末デバイスと通信していることを前提としていた。今日動いているものの中で実際にそうなっているものはほとんどない。SSHセッション、ターミナルエミュレータのウィンドウ、`tmux`、`expect`スクリプト、コンテナランタイムの`-t`フラグは、どれも **擬似端末** の上に構築されている。擬似端末では、一方の端の「ハードウェア」は単なる別のプロセスである。
 
-### Master and slave, sharing one link {#master-and-slave-sharing-one-link}
+### 1つのlinkを共有するマスターとスレーブ {#master-and-slave-sharing-one-link}
 
-A pty is a *pair* of `tty_struct`s that reference each other directly through the `link` field already visible in `struct tty_struct` above (`struct tty_struct *link;` — "link to another pty (master → slave and vice versa)"). `pty_common_install()` in `drivers/tty/pty.c` is where that pairing is actually built, on first open of the master:
+ptyは、上の`struct tty_struct`にすでに見えている`link`フィールド（`struct tty_struct *link;` — 「別のptyへのリンク（マスター → スレーブ、およびその逆）」）を通じて互いを直接参照し合う、`tty_struct`の *ペア* である。このペアが実際に構築されるのは`drivers/tty/pty.c`の`pty_common_install()`であり、マスターが最初に開かれたときに行われる。
 
 ```c
-// drivers/tty/pty.c (pty_common_install(), abridged)
+// drivers/tty/pty.c（pty_common_install()、抜粋）
 static int pty_common_install(struct tty_driver *driver, struct tty_struct *tty,
 		bool legacy)
 {
@@ -376,7 +376,7 @@ static int pty_common_install(struct tty_driver *driver, struct tty_struct *tty,
 	...
 	o_tty = alloc_tty_struct(driver->other, idx);
 	...
-	/* Establish the links in both directions */
+	/* 双方向のリンクを確立する */
 	tty->link   = o_tty;
 	o_tty->link = tty;
 	tty_port_init(ports[0]);
@@ -388,7 +388,7 @@ static int pty_common_install(struct tty_driver *driver, struct tty_struct *tty,
 }
 ```
 
-Two `tty_struct`s, two `tty_port`s, one `link` pointer each way. Data written to one side doesn't go to any driver hardware — `pty_write()` just stuffs the bytes straight into the other side's input buffer:
+2つの`tty_struct`、2つの`tty_port`、そして双方向に1本ずつの`link`ポインタである。一方の側に書き込まれたデータは、どのドライバのハードウェアにも行かない。`pty_write()`はバイトを相手側の入力バッファに直接詰め込むだけである。
 
 ```c
 // drivers/tty/pty.c
@@ -403,9 +403,9 @@ static ssize_t pty_write(struct tty_struct *tty, const u8 *buf, size_t c)
 }
 ```
 
-The slave side runs a normal line discipline (N_TTY by default) exactly as if it were a physical terminal — canonical editing, `ISIG`, job control, all of it apply unchanged. The master side is what the *other* program — the terminal emulator, `sshd`, `tmux`'s server — reads and writes; it has no line discipline processing of its own to speak of, because from the master's point of view it's just piping bytes to and from whatever the slave's ldisc produces.
+スレーブ側は、物理端末であるかのようにまったく普通のラインディシプリン（デフォルトではN_TTY）を動かす。カノニカル編集、`ISIG`、ジョブ制御のすべてがそのまま適用される。マスター側は *もう一方の* プログラム（ターミナルエミュレータ、`sshd`、`tmux`のサーバー）が読み書きする側であり、取り立てて言うほどのラインディシプリン処理は持たない。マスターから見れば、スレーブのldiscが生成するものとの間でバイトを流しているだけだからである。
 
-This is also where signal delivery for a pty gets an extra path: `TIOCSIG`, an ioctl only the master can issue, lets the controlling process on the master side inject `SIGINT`/`SIGQUIT`/`SIGTSTP` directly into the slave's foreground group without going through the ldisc's character-matching at all — useful for a terminal emulator or `sshd` that receives a signal request out-of-band (an SSH `~C`-style escape, or a GUI "send break" action) rather than as literal bytes in the stream:
+ここは、ptyのシグナル配送に追加の経路がある場所でもある。`TIOCSIG`はマスターだけが発行できるioctlであり、マスター側の制御プロセスが、ldiscの文字照合を一切経由せずに、スレーブのフォアグラウンドグループに`SIGINT`/`SIGQUIT`/`SIGTSTP`を直接注入できるようにする。これは、シグナル要求をストリーム中のリテラルなバイトとしてではなく帯域外で受け取るターミナルエミュレータや`sshd`（SSHの`~C`のようなエスケープ、あるいはGUIの「breakを送る」操作）にとって有用である。
 
 ```c
 // drivers/tty/pty.c
@@ -426,22 +426,22 @@ static int pty_signal(struct tty_struct *tty, int sig)
 }
 ```
 
-### `/dev/ptmx` and `/dev/pts/N`: the Unix98 interface {#devptmx-and-devptsn-the-unix98-interface}
+### `/dev/ptmx`と`/dev/pts/N`: Unix98インターフェース {#devptmx-and-devptsn-the-unix98-interface}
 
-The interface every modern program uses is the Unix98 pty model: a single multiplexing device, `/dev/ptmx`, plus a `devpts` virtual filesystem that exposes each allocated slave as `/dev/pts/N`. Opening `/dev/ptmx` (`ptmx_open()` in `drivers/tty/pty.c`) allocates a fresh master/slave pair, picks an unused index via `devpts_new_index()`, and creates the matching `/dev/pts/N` entry through `devpts_pty_new()` — no pre-existing device node to search for, unlike the legacy BSD-style `/dev/ptyXX`/`/dev/ttyXX` pairs this replaced.
+現代のあらゆるプログラムが使うインターフェースはUnix98のptyモデルである。単一の多重化デバイス`/dev/ptmx`と、割り当てられた各スレーブを`/dev/pts/N`として公開する仮想ファイルシステム`devpts`からなる。`/dev/ptmx`を開くと（`drivers/tty/pty.c`の`ptmx_open()`）、新しいマスター/スレーブのペアが割り当てられ、`devpts_new_index()`で未使用のインデックスが選ばれ、`devpts_pty_new()`を通じて対応する`/dev/pts/N`エントリが作成される。これが置き換えたレガシーなBSD形式の`/dev/ptyXX`/`/dev/ttyXX`のペアとは異なり、探し回るべき既存のデバイスノードはない。
 
-From userspace, the canonical sequence is four calls, and glibc's `openpty()` is a convenience wrapper that does all four for you:
+ユーザー空間からの標準的な手順は4つの呼び出しからなり、glibcの`openpty()`はその4つすべてを代わりに行ってくれる便利なラッパーである。
 
-1. **`posix_openpt(O_RDWR | O_NOCTTY)`** — opens `/dev/ptmx`, returning a master file descriptor.
-2. **`grantpt(fd)`** — fixes up ownership/permissions on the corresponding slave device (traditionally by running a setuid helper; on Linux this is largely handled by `devpts` mount options like `ptmxmode`/`gid=tty` instead).
-3. **`unlockpt(fd)`** — clears the pty's lock flag (`TIOCSPTLCK`) so the slave can actually be opened; every new pty starts locked (`ptmx_open()` sets `TTY_PTY_LOCK` unconditionally on the *master*'s flags — `tty` in `ptmx_open()` is the master, from `tty = tty_init_dev(ptm_driver, index)` — via `set_bit(TTY_PTY_LOCK, &tty->flags); /* LOCK THE SLAVE */`; the comment describes the practical effect, since `pty_open()`, the slave-open path, checks the bit through `tty->link->flags`).
-4. **`ptsname(fd)`** (or the race-free in-kernel `TIOCGPTPEER`/`ptm_open_peer()` path) — resolves the `/dev/pts/N` path, or a direct fd, for the slave.
+1. **`posix_openpt(O_RDWR | O_NOCTTY)`** — `/dev/ptmx`を開き、マスターのファイルディスクリプタを返す。
+2. **`grantpt(fd)`** — 対応するスレーブデバイスの所有者/パーミッションを整える（伝統的にはsetuidヘルパーを実行して行っていたが、Linuxでは代わりに`ptmxmode`/`gid=tty`のような`devpts`のマウントオプションでほぼ処理される）。
+3. **`unlockpt(fd)`** — ptyのロックフラグ（`TIOCSPTLCK`）をクリアし、スレーブを実際に開けるようにする。新しいptyはすべてロックされた状態で始まる（`ptmx_open()`は`set_bit(TTY_PTY_LOCK, &tty->flags); /* LOCK THE SLAVE */`によって、無条件に *マスター* のフラグに`TTY_PTY_LOCK`をセットする。`ptmx_open()`内の`tty`は`tty = tty_init_dev(ptm_driver, index)`から得たマスターである。このコメントは実際上の効果を述べている。スレーブを開くパスである`pty_open()`は、`tty->link->flags`を通じてこのビットをチェックするからである）。
+4. **`ptsname(fd)`**（または競合のないカーネル内の`TIOCGPTPEER`/`ptm_open_peer()`パス） — スレーブの`/dev/pts/N`パス、または直接のfdを解決する。
 
-Once unlocked, opening the returned slave path gives an ordinary tty file descriptor with N_TTY running on it. From there, the process that opened the slave typically `setsid()`s and issues `TIOCSCTTY` on it — which is exactly how every terminal emulator (`xterm`, a GUI terminal, `tmux`) and every `sshd` session sets up its child shell: the shell's controlling terminal is a pty *slave*, and the emulator or `sshd` process holds the *master* end, translating between "what the user's mouse/keyboard/network socket produces" and "what a real terminal would have sent."
+ロックが解除されれば、返されたスレーブのパスを開くと、N_TTYが動いている普通のttyファイルディスクリプタが得られる。そこから、スレーブを開いたプロセスは通常`setsid()`を行い、それに対して`TIOCSCTTY`を発行する。これはまさに、あらゆるターミナルエミュレータ（`xterm`、GUIのターミナル、`tmux`）とあらゆる`sshd`セッションが子シェルをセットアップする方法である。シェルの制御端末はptyの *スレーブ* であり、エミュレータや`sshd`のプロセスが *マスター* 側を保持して、「ユーザーのマウス/キーボード/ネットワークソケットが生成するもの」と「本物の端末なら送っていたもの」との間を変換する。
 
-## Diagrams {#diagrams}
+## 図 {#diagrams}
 
-Keystroke to foreground `read()`, on a real serial line:
+実際のシリアル回線での、キー入力からフォアグラウンドの`read()`まで:
 
 ```
  keyboard keystroke
@@ -474,7 +474,7 @@ Keystroke to foreground `read()`, on a real serial line:
    - caller in a background pgrp? → SIGTTIN to that pgrp, read() blocks/restarts
 ```
 
-Pty master/slave pair, terminal emulator + shell:
+ptyのマスター/スレーブのペア、ターミナルエミュレータとシェル:
 
 ```
  ┌─────────────────────────┐                    ┌─────────────────────────┐
@@ -500,30 +500,30 @@ Pty master/slave pair, terminal emulator + shell:
              └─────────────── userspace I/O ───────────────────────┘
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [`include/linux/tty.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct` (including `ctrl.pgrp`/`ctrl.session`), the `c_cc[]` accessor macros (`INTR_CHAR()`, `ERASE_CHAR()`, ...), the `L_*`/`I_*`/`O_*`/`C_*` flag-test macros
-- [`include/linux/tty_ldisc.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_ldisc.h) — `struct tty_ldisc_ops`, `struct tty_ldisc`
-- [`include/uapi/linux/tty.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/tty.h) — the full `N_*` line discipline number list
-- [`include/uapi/asm-generic/termbits.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/termbits.h), [`termbits-common.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/termbits-common.h) — `struct termios`/`struct ktermios`, `c_cc[]` `V*` indices, the `c_iflag`/`c_oflag`/`c_cflag`/`c_lflag` bit definitions
-- [`drivers/tty/n_tty.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/n_tty.c) — the N_TTY line discipline: `eraser()`, `isig()`, `n_tty_receive_char_special()`, `job_control()`
-- [`drivers/tty/pty.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — `pty_common_install()`, `pty_write()`, `pty_signal()`, `ptmx_open()`, the legacy-BSD vs. Unix98 driver setup
-- [`drivers/tty/tty_jobctrl.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_jobctrl.c) — `tiocsctty()`, `__tty_check_change()`, `tiocgpgrp()`/`tiocspgrp()`, `disassociate_ctty()`
+- [`include/linux/tty.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct`（`ctrl.pgrp`/`ctrl.session`を含む）、`c_cc[]`のアクセサマクロ（`INTR_CHAR()`、`ERASE_CHAR()`、...）、`L_*`/`I_*`/`O_*`/`C_*`のフラグ判定マクロ
+- [`include/linux/tty_ldisc.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_ldisc.h) — `struct tty_ldisc_ops`、`struct tty_ldisc`
+- [`include/uapi/linux/tty.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/tty.h) — `N_*`ラインディシプリン番号の完全な一覧
+- [`include/uapi/asm-generic/termbits.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/termbits.h)、[`termbits-common.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/asm-generic/termbits-common.h) — `struct termios`/`struct ktermios`、`c_cc[]`の`V*`インデックス、`c_iflag`/`c_oflag`/`c_cflag`/`c_lflag`のビット定義
+- [`drivers/tty/n_tty.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/n_tty.c) — N_TTYラインディシプリン: `eraser()`、`isig()`、`n_tty_receive_char_special()`、`job_control()`
+- [`drivers/tty/pty.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — `pty_common_install()`、`pty_write()`、`pty_signal()`、`ptmx_open()`、レガシーBSDとUnix98のドライバのセットアップ
+- [`drivers/tty/tty_jobctrl.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_jobctrl.c) — `tiocsctty()`、`__tty_check_change()`、`tiocgpgrp()`/`tiocspgrp()`、`disassociate_ctty()`
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — the full `struct termios` field reference, every `c_cc[]` special character, canonical/non-canonical `VMIN`/`VTIME` semantics
-- [`ioctl_tty(2)`](https://man7.org/linux/man-pages/man2/ioctl_tty.2.html) — the terminal/job-control ioctls (`TIOCSCTTY`, `TIOCGPGRP`/`TIOCSPGRP`, `TIOCGSID`, `TIOCSIG`); this page superseded the older `tty_ioctl(4)` name in the man-pages project
-- [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — the master/slave model, `/dev/ptmx` + `/dev/pts/N`, `posix_openpt()`/`grantpt()`/`unlockpt()`, and the legacy BSD-style interface
+- [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — `struct termios`のフィールドの完全なリファレンス、すべての`c_cc[]`特殊文字、カノニカル/非カノニカルでの`VMIN`/`VTIME`のセマンティクス
+- [`ioctl_tty(2)`](https://man7.org/linux/man-pages/man2/ioctl_tty.2.html) — 端末/ジョブ制御のioctl（`TIOCSCTTY`、`TIOCGPGRP`/`TIOCSPGRP`、`TIOCGSID`、`TIOCSIG`）。man-pagesプロジェクトでは、このページが古い`tty_ioctl(4)`という名前に取って代わった
+- [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — マスター/スレーブのモデル、`/dev/ptmx` + `/dev/pts/N`、`posix_openpt()`/`grantpt()`/`unlockpt()`、レガシーなBSD形式のインターフェース
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [TTY and Serial Subsystem](README.md) — the driver/`tty_struct`/`tty_port` layers this page's line discipline and job-control machinery sit on top of
-- [Serial Drivers and UARTs](serial.md) — the hardware-facing side that feeds bytes into the line discipline this page describes
-- [TTY/Serial War Stories](war-stories.md) — incidents from the line discipline, job control, and pty code covered here
+- [TTYとシリアルのサブシステム](README.md) — このページのラインディシプリンとジョブ制御の仕組みが載っている、ドライバ/`tty_struct`/`tty_port`の層
+- [シリアルドライバとUART](serial.md) — このページで説明するラインディシプリンにバイトを流し込む、ハードウェア側
+- [TTY/シリアルの事件簿](war-stories.md) — ここで扱ったラインディシプリン、ジョブ制御、ptyのコードで起きた事件
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [Containers, pseudo TTYs, and backward compatibility](https://lwn.net/Articles/688809/) — the legacy BSD `/dev/ptyXX`/`/dev/ttyXX` pty model versus the Unix98 `/dev/ptmx`+`devpts` replacement, and why the old singleton assumptions still cause trouble in containers
+- [Containers, pseudo TTYs, and backward compatibility](https://lwn.net/Articles/688809/) — レガシーなBSDの`/dev/ptyXX`/`/dev/ttyXX`のptyモデルと、それを置き換えたUnix98の`/dev/ptmx`+`devpts`との比較、そして古いシングルトンの前提がなぜいまもコンテナで問題を起こすのか

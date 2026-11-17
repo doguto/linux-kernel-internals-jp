@@ -1,100 +1,100 @@
-# perf Profiling Advanced {#perf-profiling-advanced}
+# perfプロファイリング応用 {#perf-profiling-advanced}
 
-> Flame graphs, off-CPU analysis, memory profiling, and scheduler tracing
+> フレームグラフ、オフCPU分析、メモリプロファイリング、スケジューラのトレース
 
-## perf record basics (recap) {#perf-record-basics-recap}
+## perf recordの基本（おさらい） {#perf-record-basics-recap}
 
 ```bash
-# CPU profiling: sample at 99Hz for 30 seconds
+# CPU プロファイリング: 99Hz で 30 秒間サンプリングする
 perf record -F 99 -a -g -- sleep 30
 
-# Profile a specific command
+# 特定のコマンドをプロファイルする
 perf record -F 999 -g ./my_program
 
-# Read report
+# レポートを読む
 perf report --stdio | head -50
 ```
 
-See [perf Events](perf-events.md) for fundamentals. This page covers advanced analysis.
+基礎については[perfイベント](perf-events.md)を参照。このページでは応用的な分析を扱う。
 
-## Flame graphs: visualizing CPU time {#flame-graphs-visualizing-cpu-time}
+## フレームグラフ: CPU時間の可視化 {#flame-graphs-visualizing-cpu-time}
 
-Flame graphs show the call stack hierarchy of where CPU time is spent. Invented by Brendan Gregg at Oracle around 2011 [(brendangregg.com)](http://www.brendangregg.com/flamegraphs.html), the x-axis is time (sorted alphabetically, not temporally); width represents time spent.
+フレームグラフは、CPU時間がどこで費やされているかをコールスタックの階層として示す。2011年頃にOracleでBrendan Greggが考案したもので[（brendangregg.com）](http://www.brendangregg.com/flamegraphs.html)、x軸は時間（時系列順ではなくアルファベット順にソートされる）であり、幅が費やされた時間を表す。
 
-### Generating flame graphs {#generating-flame-graphs}
+### フレームグラフの生成 {#generating-flame-graphs}
 
 ```bash
-# 1. Record with call graphs
+# 1. コールグラフ付きで記録する
 perf record -F 99 -a -g -- sleep 30
-# or for a specific process:
+# あるいは特定のプロセスについて:
 perf record -F 99 -g -p <pid> -- sleep 30
 
-# 2. Convert to flame graph format (Brendan Gregg's tools)
-# Install: git clone https://github.com/brendangregg/FlameGraph
+# 2. フレームグラフ形式に変換する（Brendan Gregg のツール）
+# インストール: git clone https://github.com/brendangregg/FlameGraph
 perf script | \
     /path/to/FlameGraph/stackcollapse-perf.pl | \
     /path/to/FlameGraph/flamegraph.pl > cpu-flamegraph.svg
 
-# Open in browser
-open cpu-flamegraph.svg  # or firefox, chromium
+# ブラウザで開く
+open cpu-flamegraph.svg  # または firefox、chromium
 ```
 
-### Differential flame graphs {#differential-flame-graphs}
+### 差分フレームグラフ {#differential-flame-graphs}
 
-Compare before/after a change:
+変更の前後を比較する。
 
 ```bash
-# Before change
+# 変更前
 perf record -F 99 -g -o before.data -- ./workload
 perf script -i before.data | stackcollapse-perf.pl > before.folded
 
-# After change
+# 変更後
 perf record -F 99 -g -o after.data -- ./workload
 perf script -i after.data | stackcollapse-perf.pl > after.folded
 
-# Generate differential flame graph
+# 差分フレームグラフを生成する
 difffolded.pl before.folded after.folded | flamegraph.pl > diff.svg
-# Red = regressions (more time), Blue = improvements (less time)
+# 赤 = リグレッション（時間が増えた）、青 = 改善（時間が減った）
 ```
 
-### Kernel symbols in flame graphs {#kernel-symbols-in-flame-graphs}
+### フレームグラフ内のカーネルシンボル {#kernel-symbols-in-flame-graphs}
 
 ```bash
-# Ensure kernel symbols are readable:
+# カーネルシンボルが読めるようにする:
 echo 0 > /proc/sys/kernel/kptr_restrict
 echo -1 > /proc/sys/kernel/perf_event_paranoid
 
-# For kernel modules: load debug symbols
+# カーネルモジュールの場合: デバッグシンボルをロードする
 modprobe --force-modversion mymodule
 ```
 
-## Off-CPU analysis: where threads are blocked {#off-cpu-analysis-where-threads-are-blocked}
+## オフCPU分析: スレッドがどこでブロックしているか {#off-cpu-analysis-where-threads-are-blocked}
 
-**On-CPU** profiling shows where CPU time is spent. **Off-CPU** analysis shows where threads are *sleeping* — waiting for I/O, locks, page faults, etc.
+**オンCPU**プロファイリングはCPU時間がどこで費やされているかを示す。**オフCPU**分析は、スレッドがどこで*スリープ*しているか — I/O、ロック、ページフォールトなどを待っているか — を示す。
 
-### Off-CPU with perf sched {#off-cpu-with-perf-sched}
+### perf schedによるオフCPU分析 {#off-cpu-with-perf-sched}
 
 ```bash
-# Record scheduler events
+# スケジューライベントを記録する
 perf sched record -- sleep 10
 
-# Show off-CPU time (time waiting to be scheduled)
+# オフ CPU 時間（スケジュールされるのを待っている時間）を表示する
 perf sched latency | head -30
 # -------------------------------------------------
 # Task                  |   Runtime ms  | Switches | Average delay ms | Maximum delay ms |
 # -------------------------------------------------
 # myapp:1234            |     1234.567  |     8901 |          0.138  |          12.345  |
 
-# Flame graph for scheduler latency
+# スケジューラレイテンシのフレームグラフ
 perf sched script | \
     stackcollapse-perf-sched.pl | \
     flamegraph.pl --color=io > offcpu-flamegraph.svg
 ```
 
-### Off-CPU with BPF (bpftrace) {#off-cpu-with-bpf-bpftrace}
+### BPF（bpftrace）によるオフCPU分析 {#off-cpu-with-bpf-bpftrace}
 
 ```bash
-# Trace time sleeping in do_nanosleep:
+# do_nanosleep でスリープしている時間をトレースする:
 bpftrace -e '
 kprobe:do_nanosleep { @start[tid] = nsecs; }
 kretprobe:do_nanosleep /@start[tid]/
@@ -103,7 +103,7 @@ kretprobe:do_nanosleep /@start[tid]/
     delete(@start[tid]);
 }'
 
-# Off-CPU profiling: sample stacks at blocking points
+# オフ CPU プロファイリング: ブロックした地点でスタックをサンプリングする
 bpftrace -e '
 tracepoint:sched:sched_switch
 /args->prev_state != 0 && args->prev_pid > 0/
@@ -112,57 +112,57 @@ tracepoint:sched:sched_switch
 }'
 ```
 
-### Off-CPU with BCC offcputime {#off-cpu-with-bcc-offcputime}
+### BCCのoffcputimeによるオフCPU分析 {#off-cpu-with-bcc-offcputime}
 
 ```bash
-# Install BCC tools
+# BCC ツールをインストールする
 apt install bpfcc-tools python3-bpfcc
 
-# Profile off-CPU time for 30 seconds
+# 30 秒間オフ CPU 時間をプロファイルする
 offcputime-bpfcc -f 30 | flamegraph.pl --color=io --title="Off-CPU Time" > offcpu.svg
 offcputime-bpfcc -f -p <pid> 30 > off-cpu.folded
 ```
 
-## Memory profiling {#memory-profiling}
+## メモリプロファイリング {#memory-profiling}
 
-### Finding memory allocations with perf mem {#finding-memory-allocations-with-perf-mem}
+### perf memでメモリ割り当てを見つける {#finding-memory-allocations-with-perf-mem}
 
 ```bash
-# Record memory access events (requires hardware PMU support)
+# メモリアクセスイベントを記録する（ハードウェア PMU のサポートが必要）
 perf mem record -a -- sleep 5
 perf mem report | head -30
 
-# Loads and stores with latency:
+# レイテンシ付きのロードとストア:
 perf c2c record -g -a -- sleep 5
-perf c2c report   # cache-to-cache transfer analysis
+perf c2c report   # キャッシュ間転送の分析
 ```
 
-### perf malloc sampling {#perf-malloc-sampling}
+### perfによるmallocのサンプリング {#perf-malloc-sampling}
 
 ```bash
-# Profile malloc calls using uprobes
+# uprobe を使って malloc 呼び出しをプロファイルする
 perf probe -x /lib/x86_64-linux-gnu/libc.so.6 malloc
 perf record -e probe_libc:malloc -a -g -- sleep 5
 perf report
 
-# Or with BCC:
+# あるいは BCC で:
 memleak-bpfcc -p <pid> 10
 # TOP 10 stacks with outstanding allocations:
 #    bytes      count     stack
 #  1048576        100     malloc -> myapp_allocate_buffer -> main
 ```
 
-### Tracking page faults {#tracking-page-faults}
+### ページフォールトの追跡 {#tracking-page-faults}
 
 ```bash
-# Count page faults per process
+# プロセスごとのページフォールトを数える
 perf stat -e page-faults,major-faults -p <pid> sleep 5
 
-# Find where page faults occur
+# ページフォールトがどこで発生しているかを見つける
 perf record -e page-faults -g -p <pid> -- sleep 5
 perf report | head -20
 
-# Minor vs major faults with bpftrace:
+# bpftrace でマイナーフォールトとメジャーフォールト:
 bpftrace -e '
 tracepoint:exceptions:page_fault_user
 {
@@ -171,40 +171,40 @@ tracepoint:exceptions:page_fault_user
 }'
 ```
 
-## Scheduler analysis {#scheduler-analysis}
+## スケジューラの分析 {#scheduler-analysis}
 
-### Visualizing context switches {#visualizing-context-switches}
+### コンテキストスイッチの可視化 {#visualizing-context-switches}
 
 ```bash
-# Record scheduler events for a process
+# あるプロセスのスケジューライベントを記録する
 perf sched record -p <pid> -- sleep 5
 
-# Show timeline: when was the task running vs sleeping?
+# タイムラインを表示: タスクはいつ実行中で、いつスリープしていたか？
 perf sched timehist | head -40
 # time   cpu   task name    wait time  sch delay  run time
 # ...    ...   myapp:1234   0.045ms    0.002ms    1.234ms
 
-# Replay in slow motion (simulation mode):
+# スローモーションで再生する（シミュレーションモード）:
 perf sched replay
 ```
 
-### Finding scheduler wakeup latency {#finding-scheduler-wakeup-latency}
+### スケジューラのwakeupレイテンシを見つける {#finding-scheduler-wakeup-latency}
 
 ```bash
-# Record wakeup events
+# wakeup イベントを記録する
 perf record -e sched:sched_wakeup,sched:sched_switch -a -g -- sleep 10
 
-# Analyze with script
+# スクリプトで分析する
 perf script | awk '
 /sched_wakeup/ { wake[$3] = $1 }
 /sched_switch/ { if ($6 in wake) { print $6, $1 - wake[$6], "ms wakeup latency"; delete wake[$6] } }
 '
 ```
 
-### runqlat: run queue latency histogram {#runqlat-run-queue-latency-histogram}
+### runqlat: ランキューレイテンシのヒストグラム {#runqlat-run-queue-latency-histogram}
 
 ```bash
-# BCC tool: histogram of time tasks wait in run queue
+# BCC ツール: タスクがランキューで待つ時間のヒストグラム
 runqlat-bpfcc 5
 # Tracing run queue latency... Hit Ctrl-C to end.
 # usecs               : count     distribution
@@ -214,9 +214,9 @@ runqlat-bpfcc 5
 #     8 -> 15         : 89       |                              |
 #    16 -> 31         : 12       |                              |
 #   64 -> 127         : 2        |                              |
-# 2048 -> 4095        : 1        |                              |  ← problem!
+# 2048 -> 4095        : 1        |                              |  ← 問題あり！
 
-# bpftrace equivalent:
+# bpftrace での同等のもの:
 bpftrace -e '
 tracepoint:sched:sched_wakeup,
 tracepoint:sched:sched_wakeup_new
@@ -231,79 +231,79 @@ tracepoint:sched:sched_switch
 }'
 ```
 
-## Profiling with hardware counters {#profiling-with-hardware-counters}
+## ハードウェアカウンタを使ったプロファイリング {#profiling-with-hardware-counters}
 
 ```bash
-# Branch mispredictions (CPU pipeline stalls)
+# 分岐予測ミス（CPU パイプラインのストール）
 perf stat -e branch-misses,branches ./my_program
 # branch-misses: 1,234,567  #  12.34% of all branches
 
-# Cache misses
+# キャッシュミス
 perf stat -e L1-dcache-load-misses,L1-dcache-loads,
               LLC-load-misses,LLC-loads ./my_program
 
-# TLB misses (expensive: triggers page table walk)
+# TLB ミス（高コスト: ページテーブルウォークを引き起こす）
 perf stat -e dTLB-load-misses,dTLB-loads ./my_program
 
-# Instruction-level profiling:
-perf record -e cycles:pp -g ./my_program   # precise sampling
+# 命令レベルのプロファイリング:
+perf record -e cycles:pp -g ./my_program   # 精密なサンプリング
 perf report --sort=sym,dso --stdio
 ```
 
-### perf annotate: hot instruction identification {#perf-annotate-hot-instruction-identification}
+### perf annotate: ホットな命令の特定 {#perf-annotate-hot-instruction-identification}
 
 ```bash
-# See which instructions are hottest
+# どの命令が最もホットかを見る
 perf record -F 999 -g ./my_program
 perf annotate --stdio | head -60
 
-# Output:
+# 出力:
 #  Percent |     Source code & Disassembly of my_program for cycles
 # -------------------------
 #          :    for (i = 0; i < N; i++) {
-#   42.34  :      400b23:  mov    (%rax,%rdx,8),%rcx   ← hot load
+#   42.34  :      400b23:  mov    (%rax,%rdx,8),%rcx   ← ホットなロード
 #    0.01  :      400b27:  add    %rcx,%rbx
 #    0.12  :      400b2a:  inc    %rdx
 ```
 
-## Linux perf for Java/JVM {#linux-perf-for-javajvm}
+## Java/JVM向けのLinux perf {#linux-perf-for-javajvm}
 
 ```bash
-# Enable JIT symbol mapping (requires perf-map-agent or async-profiler):
+# JIT シンボルのマッピングを有効にする（perf-map-agent または async-profiler が必要）:
 java -XX:+PreserveFramePointer \
      -agentpath:/path/to/libperfmap.so \
      MyApp &
 
-# Record and generate flame graph
+# 記録してフレームグラフを生成する
 perf record -F 99 -g -p $(pgrep java) -- sleep 30
 perf script | stackcollapse-perf.pl | flamegraph.pl > java-flamegraph.svg
 
-# async-profiler (better for JVM):
+# async-profiler（JVM にはこちらが適している）:
 ./profiler.sh -d 30 -f flamegraph.html $(pgrep java)
 ```
 
-## perf top: live profiling {#perf-top-live-profiling}
+## perf top: ライブプロファイリング {#perf-top-live-profiling}
 
 ```bash
-# Live CPU usage by function (like 'top' for functions)
+# 関数ごとのライブな CPU 使用状況（関数版の 'top'）
 perf top
 
-# Per-thread breakdown
+# スレッドごとの内訳
 perf top -t <tid>
 
-# Hide kernel symbols (user-space only)
+# カーネルシンボルを隠す（ユーザー空間のみ）
 perf top -K
 
-# Show assembly
+# アセンブリを表示する
 perf top --disassembler-style=att
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [perf Events](perf-events.md) — perf fundamentals, hardware counters
-- [ftrace Advanced](ftrace-advanced.md) — in-kernel histograms, function_graph
-- [Kprobes and Tracepoints](kprobes-tracepoints.md) — adding custom tracepoints
-- [MM Tracepoints](../mm/mm-tracepoints.md) — memory-specific tracing
-- [Scheduler Tracing](../sched/sched-tracing.md) — scheduler-specific perf
+- [perfイベント](perf-events.md) — perfの基礎、ハードウェアカウンタ
+- [ftrace応用](ftrace-advanced.md) — カーネル内ヒストグラム、function_graph
+- [kprobeとtracepoint](kprobes-tracepoints.md) — 独自のtracepointの追加
+- [MMのtracepoint](../mm/mm-tracepoints.md) — メモリ固有のトレーシング
+- [スケジューラのトレーシング](../sched/sched-tracing.md) — スケジューラ固有のperf
 - FlameGraph: `https://github.com/brendangregg/FlameGraph`
-- BCC tools: `https://github.com/iovisor/bcc`
+- BCCツール: `https://github.com/iovisor/bcc`

@@ -1,66 +1,66 @@
-# War Stories: TTY/Serial Bugs and Regressions {#war-stories-ttyserial-bugs-and-regressions}
+# 事件簿: TTY/シリアルのバグとリグレッション {#war-stories-ttyserial-bugs-and-regressions}
 
-> Six incidents from the TTY layer, N_TTY, and the pty subsystem — five incidents carrying six CVE identifiers between them, plus one well-documented non-CVE lifetime bug, mostly locking and lifetime races, including a pair where a writer path races an independently-triggered reader/echo path in code whose bookkeeping has to stay consistent between the two
+> TTY層、N_TTY、ptyサブシステムで起きた6件の事件。うち5件は合わせて6つのCVE識別子を持ち、残る1件はよく文書化されたCVEなしのライフタイムバグである。大半はロックとライフタイムの競合であり、その中には、書き込み側のパスが独立に起動される読み取り/エコー側のパスと競合し、しかも両者の間で管理情報の整合性を保たなければならないコードで起きた1組が含まれる
 
-[The TTY Layer](README.md), [Serial Core and UART Drivers](serial.md), and [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) document this subsystem as it works today. This page is the incident record behind that architecture — and it's a subsystem with an unusually deep bench of hard, multi-year locking bugs, some of which took more than one attempt to actually resolve.
+[TTY層](README.md)、[シリアルコアとUARTドライバ](serial.md)、[ラインディシプリン、termios、擬似端末](line-disciplines.md)は、現在動いているこのサブシステムの姿を説明している。このページは、そのアーキテクチャの背後にある事件の記録である。そしてこのサブシステムは、難解で何年も続くロックのバグを異例なほど多く抱えており、その一部は実際に解決するまでに複数回の試みを要した。
 
-## Deep dives {#deep-dives}
+## 詳細解説 {#deep-dives}
 
-### [The n_tty Echo Race: Nine Years From Fix to CISA's Exploited-in-the-Wild List](war-stories/n-tty-echo-race.md) {#the-n_tty-echo-race-nine-years-from-fix-to-cisas-exploited-in-the-wild-list}
-**May 2014 · CVE-2014-0196 · CISA Known Exploited Vulnerabilities catalog (added 2023)**
-Writing to a pty while the line discipline echoed input back out let two writers corrupt the same tty buffer with no lock between them. Fixed in 2014 — and still showing up as a live Android root exploit technique nine years later.
+### [n_ttyエコー競合: 修正からCISAの悪用確認リスト入りまで9年](war-stories/n-tty-echo-race.md) {#the-n_tty-echo-race-nine-years-from-fix-to-cisas-exploited-in-the-wild-list}
+**2014年5月 · CVE-2014-0196 · CISA Known Exploited Vulnerabilitiesカタログ（2023年追加）**
+ラインディシプリンが入力をエコーで送り返している最中にptyへ書き込むと、2つの書き込み主体が、間に何のロックもないまま同じttyバッファを破壊できた。2014年に修正されたが、9年後になってもAndroidのroot化エクスプロイト手法として現役で使われていた。
 
-### [The pty_write() Lock That Was Fixed, Un-Fixed, and Fixed Again](war-stories/pty-write-lock-saga.md) {#the-pty_write-lock-that-was-fixed-un-fixed-and-fixed-again}
-**2018 → 2020 → July 2022 · CVE-2022-1462**
-A 2018 data-race fix added a lock. A 2020 deadlock fix removed part of it, silently reintroducing the race in a new shape. A 2022 CVE report finally caught it, and the real fix needed both properties at once.
+### [修正され、修正が取り消され、再び修正されたpty_write()のロック](war-stories/pty-write-lock-saga.md) {#the-pty_write-lock-that-was-fixed-un-fixed-and-fixed-again}
+**2018年 → 2020年 → 2022年7月 · CVE-2022-1462**
+2018年のデータ競合の修正でロックが追加された。2020年のデッドロック修正がその一部を取り除き、競合を新しい形で黙って再導入した。2022年のCVE報告でようやくそれが捕捉され、本当の修正には両方の性質を同時に満たすことが必要だった。
 
-## Quick cases {#quick-cases}
+## 短い事例 {#quick-cases}
 
-### Case 1: The n_hdlc double-free — CVE-2017-2636 {#case-1-the-n_hdlc-double-free-cve-2017-2636}
+### 事例1: n_hdlcの二重解放 — CVE-2017-2636 {#case-1-the-n_hdlc-double-free-cve-2017-2636}
 
-`n_hdlc.tbuf`, a single unsynchronized pointer tracking "the buffer currently being retransmitted after a tx error," predates the bug in the HDLC line discipline (`drivers/tty/n_hdlc.c`, loadable via `N_HDLC`). A 2009 commit added the `flush_tx_queue()` path (triggered by a `TCFLSH` ioctl), which raced against that pre-existing `tbuf` pointer: concurrent `flush_tx_queue()` and `n_hdlc_send_frames()` (transmit completion) could both see the same buffer through `tbuf` and both queue it onto the free-buffer list — a double-free, reachable by a local unprivileged user, that researcher Alexander Popov turned into a working root exploit bypassing SMEP.
+`n_hdlc.tbuf`は「送信エラー後に現在再送中のバッファ」を追跡する、同期されていない単一のポインタであり、HDLCラインディシプリン（`drivers/tty/n_hdlc.c`、`N_HDLC`でロード可能）においてこのバグより前から存在していた。2009年のコミットが`flush_tx_queue()`のパス（`TCFLSH` ioctlで起動される）を追加し、これが既存の`tbuf`ポインタと競合した。並行に走る`flush_tx_queue()`と`n_hdlc_send_frames()`（送信完了）が、どちらも`tbuf`経由で同じバッファを見て、両方がそれを空きバッファリストにキューイングしうる。これは二重解放であり、ローカルの非特権ユーザーから到達可能だった。研究者のAlexander Popovはこれを、SMEPを回避する実際に動作するroot権限取得エクスプロイトに仕立てた。
 
-The fix ([`82f2341c94d2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=82f2341c94d270421f383641b7cd670e474db56b), Alexander Popov, February 2017) removes the ad hoc pointer-tracking design entirely, converting the buffer bookkeeping to the kernel's standard `list_head` and simply requeuing a tx-error buffer at the head of the buffer list instead of tracking it through a second, unsynchronized reference. [NVD: CVE-2017-2636](https://nvd.nist.gov/vuln/detail/CVE-2017-2636), CVSS 3.1 7.0 HIGH.
+修正（[`82f2341c94d2`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=82f2341c94d270421f383641b7cd670e474db56b)、Alexander Popov、2017年2月）は、場当たり的なポインタ追跡の設計を丸ごと取り除き、バッファの管理をカーネル標準の`list_head`に変換した。そして、送信エラーとなったバッファを、同期されていない2つ目の参照で追跡する代わりに、単純にバッファリストの先頭へ再キューイングする。[NVD: CVE-2017-2636](https://nvd.nist.gov/vuln/detail/CVE-2017-2636)、CVSS 3.1 7.0 HIGH。
 
-### Case 2: The wrong tty_struct locked in a pty pair — CVE-2020-29660 and CVE-2020-29661 {#case-2-the-wrong-tty_struct-locked-in-a-pty-pair-cve-2020-29660-and-cve-2020-29661}
+### 事例2: ptyペアで誤ったtty_structをロックしていた — CVE-2020-29660とCVE-2020-29661 {#case-2-the-wrong-tty_struct-locked-in-a-pty-pair-cve-2020-29660-and-cve-2020-29661}
 
-Two related bugs Jann Horn reported the same day, both rooted in `drivers/tty/tty_jobctrl.c`. `tiocspgrp()` takes two `tty_struct` pointers — `tty` (what userspace's `ioctl()` fd refers to) and `real_tty` (the actual tty being modified, which differs when the ioctl runs on a pty *master* fd) — but the code updating `real_tty->pgrp` was taking `tty->ctrl_lock`, the *wrong side's* lock. Concurrent `TIOCSPGRP` calls on both ends of the same pty pair could race and corrupt the refcount of the underlying `struct pid`, a use-after-free (CVE-2020-29661). Separately, locking of `tty->session` was inconsistent across the codebase — most call sites protected it, but `disassociate_ctty()`, `__do_SAK()` (in `drivers/tty/tty_io.c`), `tiocspgrp()`, and `tiocgsid()` didn't, making a `TIOCGSID` read racy against a concurrent session teardown (CVE-2020-29660).
+Jann Hornが同じ日に報告した関連する2つのバグで、どちらも原因は`drivers/tty/tty_jobctrl.c`にある。`tiocspgrp()`は2つの`tty_struct`ポインタを受け取る。`tty`（ユーザー空間の`ioctl()`のfdが指すもの）と`real_tty`（実際に変更されるtty。ioctlがpty *マスター* のfdに対して実行された場合に異なる）である。ところが`real_tty->pgrp`を更新するコードは、`tty->ctrl_lock`、つまり *反対側の* ロックを取っていた。同じptyペアの両端で並行に`TIOCSPGRP`を呼ぶと競合が起き、下にある`struct pid`の参照カウントを破壊しうる。これはuse-after-freeである（CVE-2020-29661）。これとは別に、`tty->session`のロックがコードベース全体で一貫していなかった。大半の呼び出し箇所は保護していたが、`disassociate_ctty()`、`__do_SAK()`（`drivers/tty/tty_io.c`内）、`tiocspgrp()`、`tiocgsid()`は保護しておらず、`TIOCGSID`の読み取りが並行するセッションの解体と競合しえた（CVE-2020-29660）。
 
-Both fixed by Jann Horn on the same day: [`54ffccbf053b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=54ffccbf053b5b6ca4f6e45094b942fab92a25fc) locks `real_tty->ctrl_lock` instead of `tty->ctrl_lock` in `tiocspgrp()`; [`c8bcd9c5be24`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c8bcd9c5be24fb9e6132e97da5a35e55a83e36b9) — spanning `drivers/tty/tty_io.c`, `drivers/tty/tty_jobctrl.c`, and `include/linux/tty.h` — makes every writer of `->session` take a consistent lock and adds the missing locking to `tiocgsid()`, `tiocspgrp()`'s session check, and `__do_SAK()`. [NVD: CVE-2020-29661](https://nvd.nist.gov/vuln/detail/CVE-2020-29661) (CVSS 3.1 7.8 HIGH, `PR:L` — an ordinary local user), [NVD: CVE-2020-29660](https://nvd.nist.gov/vuln/detail/CVE-2020-29660) (CVSS 3.1 4.4 MEDIUM — rated `PR:H`, requiring elevated local privileges to trigger, a higher bar than CVE-2020-29661's ordinary-local-user `PR:L`).
+どちらもJann Hornが同じ日に修正した。[`54ffccbf053b`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=54ffccbf053b5b6ca4f6e45094b942fab92a25fc)は`tiocspgrp()`で`tty->ctrl_lock`の代わりに`real_tty->ctrl_lock`をロックする。[`c8bcd9c5be24`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=c8bcd9c5be24fb9e6132e97da5a35e55a83e36b9)は`drivers/tty/tty_io.c`、`drivers/tty/tty_jobctrl.c`、`include/linux/tty.h`にまたがり、`->session`へのすべての書き込み側に一貫したロックを取らせ、`tiocgsid()`、`tiocspgrp()`のセッションチェック、`__do_SAK()`に欠けていたロックを追加する。[NVD: CVE-2020-29661](https://nvd.nist.gov/vuln/detail/CVE-2020-29661)（CVSS 3.1 7.8 HIGH、`PR:L` — 通常のローカルユーザー）、[NVD: CVE-2020-29660](https://nvd.nist.gov/vuln/detail/CVE-2020-29660)（CVSS 3.1 4.4 MEDIUM — `PR:H`と評価されており、起動には昇格したローカル権限が必要で、CVE-2020-29661の通常ローカルユーザーである`PR:L`より高いハードルである）。
 
-### Case 3: The ldisc semaphore hangup deadlock — CVE-2015-4170 {#case-3-the-ldisc-semaphore-hangup-deadlock-cve-2015-4170}
+### 事例3: ldiscセマフォのハングアップ時デッドロック — CVE-2015-4170 {#case-3-the-ldisc-semaphore-hangup-deadlock-cve-2015-4170}
 
-During a 2013 rework replacing the line discipline's ad hoc mutex-plus-status-bits locking with a dedicated reader/writer semaphore (`ld_semaphore`, `drivers/tty/tty_ldsem.c`), the internal `ldsem_cmpxchg()` helper checked the *old* lock-count value after a compare-exchange instead of the *new* one. When a signalled reader/writer released its ldisc reference at the same moment a hangup was waiting and a new reader/writer was also trying to acquire, the wakeup for the waiting hangup could be missed — hanging the hangup indefinitely.
+2013年、ラインディシプリンの場当たり的な「mutexとステータスビット」によるロックを専用のリーダー/ライターセマフォ（`ld_semaphore`、`drivers/tty/tty_ldsem.c`）に置き換える作り直しが行われた。その際、内部ヘルパー`ldsem_cmpxchg()`は、compare-exchangeの後に *新しい* ロックカウント値ではなく *古い* 値をチェックしていた。シグナルを受けたリーダー/ライターがldiscの参照を解放するのと同時に、ハングアップが待機中であり、さらに新しいリーダー/ライターも獲得しようとしていると、待機中のハングアップへの起床が失われることがあった。その結果、ハングアップ処理は無期限に停止した。
 
-The fix ([`cf872776fc84`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cf872776fc84128bb779ce2b83a37c884c3203ae), Peter Hurley, December 2013) reworks `ldsem_cmpxchg()` to correctly report success/failure and update the caller's count with the current value on failure, restoring the missed wakeup path. [NVD: CVE-2015-4170](https://nvd.nist.gov/vuln/detail/CVE-2015-4170), CVSS 3.0 4.7 MEDIUM.
+修正（[`cf872776fc84`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=cf872776fc84128bb779ce2b83a37c884c3203ae)、Peter Hurley、2013年12月）は`ldsem_cmpxchg()`を作り直し、成功/失敗を正しく報告し、失敗時には呼び出し元のカウントを現在値で更新するようにして、失われていた起床のパスを回復した。[NVD: CVE-2015-4170](https://nvd.nist.gov/vuln/detail/CVE-2015-4170)、CVSS 3.0 4.7 MEDIUM。
 
-### Case 4: The pty driver_data use-after-free on an unusual close order — not a CVE {#case-4-the-pty-driver_data-use-after-free-on-an-unusual-close-order-not-a-cve}
+### 事例4: 珍しいクローズ順序で起きるptyのdriver_dataのuse-after-free — CVEなし {#case-4-the-pty-driver_data-use-after-free-on-an-unusual-close-order-not-a-cve}
 
-A corner case in `drivers/tty/pty.c`: the *last* reference to a pty master/slave pair could be released via a previously-opened `/dev/tty` file descriptor rather than directly through the `/dev/ptmx`/`/dev/pts/N` file that owned the underlying devpts inode. If every `ptmx`/`pts/N` handle had already closed — and the devpts inode they held had already been released — before that final `/dev/tty` close ran, `tty->driver_data` (which pointed at that inode) was stale, and `pty_unix98_shutdown()` used it after it had already been freed.
+`drivers/tty/pty.c`のコーナーケースである。ptyのマスター/スレーブのペアに対する *最後の* 参照が、下にあるdevptsのinodeを所有する`/dev/ptmx`/`/dev/pts/N`のファイルを直接通じてではなく、以前に開かれていた`/dev/tty`のファイルディスクリプタ経由で解放されることがあった。その最後の`/dev/tty`のクローズが走る前に、`ptmx`/`pts/N`のハンドルがすべて閉じられ、それらが保持していたdevptsのinodeもすでに解放されていると、`tty->driver_data`（そのinodeを指していた）は古い値になっており、`pty_unix98_shutdown()`はすでに解放された後のそれを使用していた。
 
-The fix ([`2831c89f42dc`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2831c89f42dcde440cfdccb9fee9f42d54bbc1ef), Herton R. Krzesinski, January 2016) takes an extra reference on the ptmx inode via `ihold()` at open time, and has `pty_unix98_shutdown()` determine the correct inode from either side of the pair and release that held reference explicitly, rather than trusting a `driver_data` pointer whose validity depended on close ordering.
+修正（[`2831c89f42dc`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/commit/?id=2831c89f42dcde440cfdccb9fee9f42d54bbc1ef)、Herton R. Krzesinski、2016年1月）は、オープン時に`ihold()`でptmxのinodeに追加の参照を取り、`pty_unix98_shutdown()`がペアのどちら側からでも正しいinodeを特定して、その保持した参照を明示的に解放するようにした。有効性がクローズ順序に依存する`driver_data`ポインタを信用するのをやめたのである。
 
-## Common threads {#common-threads}
+## 共通点 {#common-threads}
 
-| Pattern | n_tty echo race | pty_write saga | n_hdlc double-free | Wrong tty locked | ldsem hangup | pty driver_data UAF |
+| パターン | n_ttyエコー競合 | pty_writeの顛末 | n_hdlc二重解放 | 誤ったttyのロック | ldsemハングアップ | pty driver_data UAF |
 |---|:---:|:---:|:---:|:---:|:---:|:---:|
-| Writer path races an independently-triggered reader/echo path | Yes | Yes | — | — | — | — |
-| A later fix removed a mitigation an earlier fix relied on | — | Yes | — | — | — | — |
-| Lock taken on the wrong side of a paired structure | — | — | — | Yes (29661 only) | — | — |
-| Reachable by any local unprivileged user, no special config | Yes | Yes | Yes* | Yes | Yes | Yes |
-| Long gap between fix and real-world consequence, or between introduction and fix | Yes (2014 fix → 2023 CISA listing) | Yes (2018 fix → 2022 real fix) | Yes (2009 introduced → 2017 fixed) | — | — | — |
+| 書き込み側のパスが、独立に起動される読み取り/エコー側のパスと競合する | あり | あり | — | — | — | — |
+| 後の修正が、以前の修正が依存していた緩和策を取り除いた | — | あり | — | — | — | — |
+| 対になった構造体の誤った側でロックを取っている | — | — | — | あり（29661のみ） | — | — |
+| 特別な設定なしに任意のローカル非特権ユーザーから到達可能 | あり | あり | あり* | あり | あり | あり |
+| 修正から現実の影響まで、または混入から修正までの期間が長い | あり（2014年修正 → 2023年CISA掲載） | あり（2018年修正 → 2022年に本当の修正） | あり（2009年混入 → 2017年修正） | — | — | — |
 
-\* Reachable by any unprivileged user once the `N_HDLC` line discipline is loaded (`CONFIG_N_HDLC`) — a module/config precondition, not an added privilege requirement.
+\* `N_HDLC`ラインディシプリンがロードされていれば（`CONFIG_N_HDLC`）、任意の非特権ユーザーから到達可能。これはモジュール/設定上の前提条件であって、追加の権限要件ではない。
 
-**Two of six incidents are exactly the same shape: a writer path and a separately-triggered reader or echo path both mutate the same tty buffer, and only one of the two paths is covered by the lock that's supposed to protect it.** The n_tty echo race and the pty_write saga's Act 3 are both this pattern, in two different parts of the tty stack (N_TTY's write path vs. the pty layer's write path) — the shared root cause across the whole subsystem seems to be that "the write path" and "everything that can mutate the buffer" are not the same set of call sites, and a lock scoped to the former misses the latter.
+**6件のうち2件はまったく同じ形をしている。書き込み側のパスと、別に起動される読み取りまたはエコー側のパスの両方が同じttyバッファを変更し、それを保護するはずのロックが2つのパスの片方しかカバーしていない**。n_ttyのエコー競合とpty_writeの顛末の第3幕はどちらもこのパターンであり、ttyスタックの異なる2箇所（N_TTYの書き込みパスと、ptyレイヤーの書き込みパス）で起きている。サブシステム全体に共通する根本原因は、「書き込みパス」と「バッファを変更しうるあらゆるもの」が同じ呼び出し箇所の集合ではなく、前者を対象としたロックでは後者を取りこぼす、ということのようである。
 
-**The pty_write saga is the sharpest illustration on this page of a fix trading one correctness property for another without anyone checking whether that trade was safe.** The 2020 fix correctly resolved a lockdep-detected deadlock — a real, verified problem — by moving a buffer-commit step outside a lock. What it didn't do was re-verify that the commit step still needed to stay atomic with the insert step for an unrelated reason (data-race safety) that the 2018 fix had established as an implicit invariant. Compare this to the [ALSA epic's mixer teardown UAF](../alsa/war-stories/mixer-teardown-use-after-free.md) or [Input/HID's type confusion bug](../input/war-stories/hid-validate-values-type-confusion.md): those are cases where a fix for one problem *introduced* a different one as a side effect. The pty_write saga is a variant — a fix *removed* a mitigation for a problem the *original* fix had solved, because the deadlock-focused fix wasn't checking for that property at all.
+**pty_writeの顛末は、このページの中で、ある修正が1つの正しさの性質を別の性質と引き換えにし、しかもその引き換えが安全かどうか誰も確認しなかったことを最も鮮明に示す例である**。2020年の修正は、lockdepが検出したデッドロック（実在し、検証済みの問題）を、バッファのコミット手順をロックの外へ移すことで正しく解決した。しかし、コミット手順が、2018年の修正が暗黙の不変条件として確立していた無関係な理由（データ競合に対する安全性）のために、依然として挿入手順とアトミックである必要があるかどうかを再検証しなかった。これを[ALSAの事件簿のミキサー解体時UAF](../alsa/war-stories/mixer-teardown-use-after-free.md)や[Input/HIDの型混同バグ](../input/war-stories/hid-validate-values-type-confusion.md)と比べてみるとよい。これらは、ある問題への修正が副作用として別の問題を *持ち込んだ* 事例である。pty_writeの顛末はその変種であり、ある修正が、 *元の* 修正が解決していた問題への緩和策を *取り除いて* しまった。デッドロックに焦点を当てた修正は、その性質をまったく確認していなかったからである。
 
-**Case 2's "wrong side of a paired structure" bug is a distinct root cause worth naming on its own.** A pty always has two `tty_struct`s — master and slave — and code that's handed one needs to know which operations apply to *that* struct and which need to go through its pair (`real_tty`). Locking the wrong one isn't a missing-lock bug; a lock was taken, just on the wrong object, which can be harder to catch in review than an outright missing lock.
+**事例2の「対になった構造体の誤った側」というバグは、それ自体として名前を付けておく価値のある、別個の根本原因である**。ptyには常に2つの`tty_struct`（マスターとスレーブ）があり、その一方を渡されたコードは、どの操作が *その* 構造体に適用され、どの操作がペアの相手（`real_tty`）を経由する必要があるかを知っていなければならない。誤った側をロックするのはロックの欠落のバグではない。ロックは取られていたが、対象のオブジェクトが間違っていたのであり、これはロックが完全に欠落している場合よりもレビューで見つけにくいことがある。
 
-## See also {#see-also}
+## 関連項目 {#see-also}
 
-- [The TTY Layer](README.md) — `tty_struct`, `tty_driver`, and the three-layer stack these incidents live inside
-- [Serial Core and UART Drivers](serial.md) / [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) — the buffer and pty mechanics Cases 1-4 and both deep dives touch
-- [ALSA War Stories](../alsa/war-stories.md) and [Input/HID War Stories](../input/war-stories.md) — sibling device-subsystem incident pages, for comparison on how often "a fix for one bug introduces a different one" recurs across this site's device-driver coverage
-- [Locking](../locking/README.md) — general background on lock-scope, lock-ordering, and critical-section bugs, the pattern behind most of this page
+- [TTY層](README.md) — `tty_struct`、`tty_driver`、そしてこれらの事件が起きている3層スタック
+- [シリアルコアとUARTドライバ](serial.md) / [ラインディシプリン、termios、擬似端末](line-disciplines.md) — 事例1〜4と両方の詳細解説が関わるバッファとptyの仕組み
+- [ALSAの事件簿](../alsa/war-stories.md)と[Input/HIDの事件簿](../input/war-stories.md) — 兄弟関係にあるデバイスサブシステムの事件ページ。「あるバグの修正が別のバグを持ち込む」ことが、このサイトのデバイスドライバの記事全体でどれほど繰り返されるかを比較するために
+- [ロック](../locking/README.md) — ロックの範囲、ロック順序、クリティカルセクションのバグに関する一般的な背景。このページの大半の背後にあるパターンである

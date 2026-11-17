@@ -1,76 +1,76 @@
-# Kprobes and Tracepoints {#kprobes-and-tracepoints}
+# kprobeとtracepoint {#kprobes-and-tracepoints}
 
-> Dynamic and static instrumentation points in the kernel
+> カーネル内の動的・静的な計装ポイント
 
-## Why three mechanisms? {#why-three-mechanisms}
+## なぜ3つの仕組みがあるのか {#why-three-mechanisms}
 
-kprobes, tracepoints, and BPF are not redundant — they solve different parts of a problem that evolved over a decade.
+kprobe、tracepoint、BPFは冗長なのではない。10年以上かけて発展してきた問題の、それぞれ異なる部分を解決している。
 
-### kprobes: dynamic but fragile (2000s) {#kprobes-dynamic-but-fragile-2000s}
+### kprobe: 動的だが壊れやすい（2000年代） {#kprobes-dynamic-but-fragile-2000s}
 
-kprobes arrived in Linux 2.6.9 as a way to instrument production kernels without recompilation. A kprobe on `tcp_sendmsg` fires every time that function is called, giving you register state and the ability to run arbitrary code.
+kprobeは、再コンパイルなしに本番カーネルを計装する手段としてLinux 2.6.9で登場した。`tcp_sendmsg`へのkprobeは、その関数が呼ばれるたびに発火し、レジスタの状態と、任意のコードを実行する能力を与えてくれる。
 
-The problem: kprobes are inherently unstable. If `tcp_sendmsg` is renamed, inlined by the compiler, or its calling convention changes, the probe silently does nothing or attaches to the wrong place. A tool written against one kernel version often breaks on the next. This made kprobes useful for ad-hoc debugging but unreliable for production monitoring.
+問題は、kprobeが本質的に不安定であることだ。`tcp_sendmsg`の名前が変わったり、コンパイラによってインライン化されたり、呼び出し規約が変わったりすると、プローブは黙って何もしなくなるか、誤った場所にアタッチされる。あるカーネルバージョン向けに書かれたツールは、次のバージョンで壊れることが多い。このためkprobeは、場当たり的なデバッグには有用だが、本番環境の監視には信頼できないものとなった。
 
-### Tracepoints: stable ABI (Linux 2.6.28, 2008) {#tracepoints-stable-abi-linux-2628-2008}
+### tracepoint: 安定したABI（Linux 2.6.28、2008年） {#tracepoints-stable-abi-linux-2628-2008}
 
-Mathieu Desnoyers introduced [(LWN)](https://lwn.net/Articles/379903/) the `TRACE_EVENT` infrastructure to give tracing tools a stable surface. A tracepoint like `sched_switch` or `block_rq_issue` is a deliberate, named annotation placed by kernel developers in semantically meaningful locations.
+Mathieu Desnoyersは、トレーシングツールに安定したインターフェースを与えるため、`TRACE_EVENT`基盤を導入した[（LWN）](https://lwn.net/Articles/379903/)。`sched_switch`や`block_rq_issue`のようなtracepointは、カーネル開発者が意味的に重要な位置に意図的に配置した、名前付きのアノテーションである。
 
-The contract: the tracepoint *name* and its *fields* are stable across kernel versions (treated like a userspace-visible ABI). Tools that attach to `sched_switch` and read `prev_pid`/`next_pid` keep working release after release, regardless of how the surrounding code changes.
+その契約は、tracepointの*名前*と*フィールド*がカーネルバージョンをまたいで安定している（ユーザー空間から見えるABIのように扱われる）ことである。`sched_switch`にアタッチして`prev_pid`/`next_pid`を読むツールは、周辺のコードがどう変わろうと、リリースを重ねても動作し続ける。
 
-The zero-overhead design (jump labels that patch out the entire check when no consumers are registered) meant subsystem maintainers were willing to add tracepoints liberally — they cost nothing when idle.
+オーバーヘッドゼロの設計（コンシューマが登録されていないときはチェック全体をパッチで取り除くjump label）のおかげで、サブシステムのメンテナはtracepointを惜しみなく追加する気になった — 使われていないときのコストはゼロだからである。
 
-The limitation: tracepoints only exist where developers placed them. There is no tracepoint for every interesting function, and adding one requires a kernel patch.
+制約は、tracepointが開発者の配置した場所にしか存在しないことである。興味のあるすべての関数にtracepointがあるわけではなく、追加するにはカーネルパッチが必要になる。
 
-### BPF: programmable logic at both layers (Linux 3.18+) {#bpf-programmable-logic-at-both-layers-linux-318}
+### BPF: 両方の層でのプログラマブルなロジック（Linux 3.18以降） {#bpf-programmable-logic-at-both-layers-linux-318}
 
-BPF programs can attach to both tracepoints *and* kprobes, but they add a critical capability: instead of just logging every event, a BPF program can aggregate, filter, and compute in-kernel — only sending a summary to userspace.
+BPFプログラムはtracepointにも*kprobeにも*アタッチできるが、決定的な能力を付け加える。すべてのイベントを単にログに記録する代わりに、BPFプログラムはカーネル内で集計、フィルタ、計算を行い、要約だけをユーザー空間に送れる。
 
-This turned tracepoints from "fire and log" into "fire and compute." A BPF program on `block_rq_complete` can maintain a per-device latency histogram entirely in kernel memory and expose it as a BPF map. Without BPF, collecting that histogram required copying every raw event to userspace and aggregating there — at high I/O rates, this was prohibitive.
+これによりtracepointは「発火して記録する」ものから「発火して計算する」ものへと変わった。`block_rq_complete`上のBPFプログラムは、デバイスごとのレイテンシヒストグラムを完全にカーネルメモリ内で維持し、BPFマップとして公開できる。BPFがなければ、そのヒストグラムを収集するには生のイベントをすべてユーザー空間にコピーしてそこで集計する必要があり、高いI/Oレートではそれは法外なコストだった。
 
-`fentry`/`fexit` (Linux 5.5, 2020) [(commit)](https://git.kernel.org/linus/fec56f5890d93fc2ed74166c397dc186b1c25951) added a fourth layer: BPF programs that attach to any kernel function entry/exit using BTF type information to access typed arguments, without the INT3-trap overhead of kprobes and without needing an explicit `TRACE_EVENT` annotation.
+`fentry`/`fexit`（Linux 5.5、2020年）[（コミット）](https://git.kernel.org/linus/fec56f5890d93fc2ed74166c397dc186b1c25951)は4つ目の層を追加した。BTFの型情報を使って型付きの引数にアクセスしつつ、任意のカーネル関数の入口／出口にアタッチするBPFプログラムである。kprobeのINT3トラップのオーバーヘッドもなく、明示的な`TRACE_EVENT`アノテーションも必要としない。
 
 ```
-kprobes      → attach anywhere, unstable ABI, INT3 overhead
-tracepoints  → stable ABI, zero overhead, limited coverage
-BPF (kprobe) → programmable kprobes, in-kernel aggregation
-BPF (tp)     → programmable tracepoints, structured arguments
-fentry/fexit → typed function tracing, minimal overhead
+kprobe       → どこにでもアタッチ可能、不安定な ABI、INT3 のオーバーヘッド
+tracepoint   → 安定した ABI、オーバーヘッドゼロ、カバー範囲は限定的
+BPF (kprobe) → プログラマブルな kprobe、カーネル内集計
+BPF (tp)     → プログラマブルな tracepoint、構造化された引数
+fentry/fexit → 型付きの関数トレース、最小限のオーバーヘッド
 ```
 
-The result is a layered system: use tracepoints for stable production instrumentation, kprobes/fentry for deep one-off investigation, and BPF programs to avoid flooding userspace with raw events.
+結果として階層化されたシステムができあがった。安定した本番環境の計装にはtracepointを、深掘りする一回限りの調査にはkprobe/fentryを使い、生のイベントでユーザー空間を溢れさせないためにBPFプログラムを使う。
 
-## Kprobes: dynamic probes on any instruction {#kprobes-dynamic-probes-on-any-instruction}
+## kprobe: 任意の命令への動的プローブ {#kprobes-dynamic-probes-on-any-instruction}
 
-A kprobe can be attached to any instruction in the kernel (not just function entries). When hit, it calls a handler in your code.
+kprobeは（関数の入口だけでなく）カーネル内の任意の命令にアタッチできる。ヒットすると、自分のコード内のハンドラが呼ばれる。
 
-### How kprobes work {#how-kprobes-work}
+### kprobeの仕組み {#how-kprobes-work}
 
 ```c
-/* kernel/kprobes.c: simplified */
+/* kernel/kprobes.c: 簡略化したもの */
 
-/* At probe registration: */
+/* プローブ登録時: */
 register_kprobe(kp)
-  → find instruction at kp->addr
-  → copy original instruction (for single-stepping)
-  → replace first byte(s) with INT3 (0xCC) breakpoint
-  → /* on x86 */
+  → kp->addr にある命令を見つける
+  → 元の命令をコピーする（シングルステップ実行のため）
+  → 先頭バイトを INT3（0xCC）ブレークポイントに置き換える
+  → /* x86 の場合 */
 
-/* At runtime, when INT3 fires: */
+/* 実行時、INT3 が発火したとき: */
 do_int3()
   → kprobe_int3_handler()
-      → call kp->pre_handler(kp, regs)
-      → set up single-step: restore original instruction, set TF flag
-      → /* return to single-step the original instruction */
-  → after single-step:
+      → kp->pre_handler(kp, regs) を呼ぶ
+      → シングルステップを準備: 元の命令を復元し、TF フラグを立てる
+      → /* 戻って元の命令をシングルステップ実行する */
+  → シングルステップ後:
       → post_kprobe_handler()
-          → call kp->post_handler(kp, regs, 0)
-          → restore INT3 breakpoint
+          → kp->post_handler(kp, regs, 0) を呼ぶ
+          → INT3 ブレークポイントを復元する
 ```
 
-On x86-64 with `CONFIG_KPROBES_ON_FTRACE`, kprobes at function entry use the existing ftrace hook instead of INT3, eliminating the breakpoint overhead.
+x86-64で`CONFIG_KPROBES_ON_FTRACE`が有効な場合、関数の入口へのkprobeはINT3の代わりに既存のftraceフックを使い、ブレークポイントのオーバーヘッドをなくす。
 
-### Registering kprobes from a kernel module {#registering-kprobes-from-a-kernel-module}
+### カーネルモジュールからkprobeを登録する {#registering-kprobes-from-a-kernel-module}
 
 ```c
 /* drivers/mymodule/mymodule.c */
@@ -78,8 +78,8 @@ On x86-64 with `CONFIG_KPROBES_ON_FTRACE`, kprobes at function entry use the exi
 
 static int pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
-    /* Called BEFORE the probed instruction executes */
-    /* regs contains register state at probe point */
+    /* プローブされた命令が実行される「前に」呼ばれる */
+    /* regs にはプローブ地点でのレジスタ状態が入っている */
     printk(KERN_INFO "kprobe: hit tcp_sendmsg, rdi=0x%lx\n", regs->di);
     return 0;
 }
@@ -87,11 +87,11 @@ static int pre_handler(struct kprobe *p, struct pt_regs *regs)
 static void post_handler(struct kprobe *p, struct pt_regs *regs,
                           unsigned long flags)
 {
-    /* Called AFTER the probed instruction executes (single-stepped) */
+    /* プローブされた命令が（シングルステップで）実行された「後に」呼ばれる */
 }
 
 static struct kprobe kp = {
-    .symbol_name = "tcp_sendmsg",  /* or .addr = (kprobe_opcode_t *)addr */
+    .symbol_name = "tcp_sendmsg",  /* または .addr = (kprobe_opcode_t *)addr */
     .pre_handler = pre_handler,
     .post_handler = post_handler,
 };
@@ -113,19 +113,19 @@ static void __exit mymodule_exit(void)
 }
 ```
 
-### kretprobe: hook on function return {#kretprobe-hook-on-function-return}
+### kretprobe: 関数の戻りをフックする {#kretprobe-hook-on-function-return}
 
 ```c
 static int entry_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-    /* Called on function entry; can store data in ri->data */
+    /* 関数の入口で呼ばれる。ri->data にデータを保存できる */
     *(ktime_t *)ri->data = ktime_get();
     return 0;
 }
 
 static int return_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 {
-    /* Called on function return */
+    /* 関数の戻り時に呼ばれる */
     ktime_t start = *(ktime_t *)ri->data;
     long retval = regs_return_value(regs);
     ktime_t elapsed = ktime_sub(ktime_get(), start);
@@ -138,36 +138,36 @@ static int return_handler(struct kretprobe_instance *ri, struct pt_regs *regs)
 static struct kretprobe my_kretprobe = {
     .handler     = return_handler,
     .entry_handler = entry_handler,
-    .data_size   = sizeof(ktime_t),  /* per-instance data */
-    .maxactive   = 20,               /* max concurrent instances */
+    .data_size   = sizeof(ktime_t),  /* インスタンスごとのデータ */
+    .maxactive   = 20,               /* 同時に存在できるインスタンスの最大数 */
     .kp.symbol_name = "tcp_sendmsg",
 };
 ```
 
-## Static tracepoints: TRACE_EVENT {#static-tracepoints-trace_event}
+## 静的tracepoint: TRACE_EVENT {#static-tracepoints-trace_event}
 
-Static tracepoints are annotation points compiled into the kernel at specific places. They have:
+静的tracepointは、カーネル内の特定の場所にコンパイルされて組み込まれるアノテーションポイントである。次の特徴を持つ。
 
-- Zero overhead when disabled (a single no-op test)
-- Rich structured data (not just register dumps)
-- Stable ABI (unlike kprobes which depend on function names)
+- 無効時のオーバーヘッドはゼロ（何もしないテストが1つだけ）
+- 豊富な構造化データ（単なるレジスタダンプではない）
+- 安定したABI（関数名に依存するkprobeとは異なる）
 
-### TRACE_EVENT macro {#trace_event-macro}
+### TRACE_EVENTマクロ {#trace_event-macro}
 
 ```c
 /* include/trace/events/sched.h */
 TRACE_EVENT(sched_switch,
 
-    /* Arguments to the tracepoint call: */
+    /* tracepoint 呼び出しの引数: */
     TP_PROTO(bool preempt,
              struct task_struct *prev,
              struct task_struct *next,
              unsigned int prev_state),
 
-    /* Actual call arguments: */
+    /* 実際の呼び出し引数: */
     TP_ARGS(preempt, prev, next, prev_state),
 
-    /* Fields stored in the ring buffer: */
+    /* リングバッファに格納されるフィールド: */
     TP_STRUCT__entry(
         __array(        char,   prev_comm,  TASK_COMM_LEN   )
         __field(        pid_t,  prev_pid                    )
@@ -178,7 +178,7 @@ TRACE_EVENT(sched_switch,
         __field(        int,    next_prio                   )
     ),
 
-    /* Code to copy data into the ring buffer entry: */
+    /* リングバッファのエントリにデータをコピーするコード: */
     TP_fast_assign(
         memcpy(__entry->next_comm, next->comm, TASK_COMM_LEN);
         __entry->prev_pid   = prev->pid;
@@ -189,7 +189,7 @@ TRACE_EVENT(sched_switch,
         __entry->next_prio  = next->prio;
     ),
 
-    /* Format string for human-readable output: */
+    /* 人間が読める出力のためのフォーマット文字列: */
     TP_printk("prev_comm=%s prev_pid=%d prev_prio=%d prev_state=%s%s ==> "
               "next_comm=%s next_pid=%d next_prio=%d",
               __entry->prev_comm, __entry->prev_pid, __entry->prev_prio,
@@ -197,10 +197,10 @@ TRACE_EVENT(sched_switch,
 );
 ```
 
-### Adding a tracepoint to your code {#adding-a-tracepoint-to-your-code}
+### 自分のコードにtracepointを追加する {#adding-a-tracepoint-to-your-code}
 
 ```c
-/* 1. Define the tracepoint (once, in a header): */
+/* 1. tracepoint を定義する（ヘッダ内で一度だけ）: */
 /* include/trace/events/mysubsystem.h */
 #undef TRACE_SYSTEM
 #define TRACE_SYSTEM mysubsystem
@@ -215,7 +215,7 @@ TRACE_EVENT(my_event,
     TP_ARGS(value, name),
     TP_STRUCT__entry(
         __field(int, value)
-        __string(name, name)  /* variable-length string */
+        __string(name, name)  /* 可変長の文字列 */
     ),
     TP_fast_assign(
         __entry->value = value;
@@ -227,73 +227,73 @@ TRACE_EVENT(my_event,
 #endif /* _TRACE_MYSUBSYSTEM_H */
 #include <trace/define_trace.h>
 
-/* 2. Use in source files: */
+/* 2. ソースファイルで使う: */
 /* kernel/mysubsystem.c */
 #define CREATE_TRACE_POINTS
 #include <trace/events/mysubsystem.h>
 
 void my_function(int val, const char *name)
 {
-    /* Tracepoint: zero-overhead when disabled */
+    /* tracepoint: 無効時はオーバーヘッドゼロ */
     trace_my_event(val, name);
     /* ... */
 }
 ```
 
-### How tracepoints achieve zero overhead {#how-tracepoints-achieve-zero-overhead}
+### tracepointがオーバーヘッドゼロを実現する仕組み {#how-tracepoints-achieve-zero-overhead}
 
 ```c
-/* Generated by TRACE_EVENT: */
+/* TRACE_EVENT によって生成されるコード: */
 static inline void trace_my_event(int value, const char *name)
 {
-    /* Single branch: check if any caller is registered */
+    /* 分岐 1 つだけ: 呼び出し先が登録されているかを確認する */
     if (static_key_false(&__tracepoint_my_event.key)) {
-        /* overhead only when enabled */
+        /* 有効なときだけオーバーヘッドが生じる */
         __tracepoint_my_event.funcs(value, name);
     }
 }
 ```
 
-`static_key_false` uses a patched nop/jmp instruction (via jump labels) — the entire `if` block is patched out at runtime when no one is listening.
+`static_key_false`は（jump labelによって）パッチされるnop/jmp命令を使う。誰も聞いていないときは、`if`ブロック全体が実行時にパッチで取り除かれる。
 
-## uprobes: userspace dynamic probes {#uprobes-userspace-dynamic-probes}
+## uprobe: ユーザー空間の動的プローブ {#uprobes-userspace-dynamic-probes}
 
-uprobes work like kprobes but for userspace binaries, introduced in Linux 3.5 [(commit)](https://git.kernel.org/linus/2b144498350860b6ee9dc57ff27a93ad488de5dc). The kernel inserts a breakpoint into the mapped pages:
+uprobeはkprobeと同様に動作するが、ユーザー空間のバイナリが対象であり、Linux 3.5で導入された[（コミット）](https://git.kernel.org/linus/2b144498350860b6ee9dc57ff27a93ad488de5dc)。カーネルはマップされたページにブレークポイントを挿入する。
 
 ```bash
-# Trace all calls to malloc in any process
+# 任意のプロセスにおける malloc へのすべての呼び出しをトレースする
 echo 'p:malloc /lib/x86_64-linux-gnu/libc.so.6:0x9d430' \
     > /sys/kernel/tracing/uprobe_events
 echo 1 > /sys/kernel/tracing/events/uprobes/malloc/enable
 
-# Trace by symbol name (requires debug symbols)
+# シンボル名でトレースする（デバッグシンボルが必要）
 echo 'p:my_func /usr/bin/myapp:my_function' \
     > /sys/kernel/tracing/uprobe_events
 ```
 
 ```c
-/* Kernel struct uprobe */
+/* カーネルの struct uprobe */
 struct uprobe {
-    struct rb_node  rb_node;   /* inode's uprobe tree */
+    struct rb_node  rb_node;   /* inode の uprobe ツリー */
     refcount_t      ref;
     struct rw_semaphore register_rwsem;
     struct rw_semaphore consumer_rwsem;
     struct list_head   pending_list;
     struct uprobe_consumer *consumers;
-    struct inode       *inode;   /* target binary's inode */
-    loff_t              offset;  /* offset within file */
+    struct inode       *inode;   /* 対象バイナリの inode */
+    loff_t              offset;  /* ファイル内のオフセット */
     loff_t              ref_ctr_offset;
     unsigned long       flags;
-    struct arch_uprobe  arch;    /* arch-specific saved instruction */
+    struct arch_uprobe  arch;    /* アーキテクチャ固有の、保存された命令 */
 };
 ```
 
-## USDT: userspace statically defined tracepoints {#usdt-userspace-statically-defined-tracepoints}
+## USDT: ユーザー空間の静的定義トレースポイント {#usdt-userspace-statically-defined-tracepoints}
 
-Similar to kernel TRACE_EVENT, USDT probes are static markers in userspace code. BPF attachment to USDT probes via the uprobe mechanism became available in Linux 4.8.
+カーネルのTRACE_EVENTと同様に、USDTプローブはユーザー空間コード内の静的マーカーである。uprobe機構を介したUSDTプローブへのBPFのアタッチは、Linux 4.8で利用可能になった。
 
 ```c
-/* In C code (requires systemtap-sdt-dev or dtrace probes): */
+/* C コード内で（systemtap-sdt-dev または dtrace のプローブが必要）: */
 #include <sys/sdt.h>
 DTRACE_PROBE2(myapp, request_start, req_id, req_type);
 /* ... */
@@ -301,43 +301,43 @@ DTRACE_PROBE1(myapp, request_end, req_id);
 ```
 
 ```bash
-# List USDT probes in a binary
+# バイナリ内の USDT プローブを一覧表示する
 readelf --notes /usr/bin/python3 | grep stapsdt
 
-# Trace with bpftrace
+# bpftrace でトレースする
 bpftrace -e 'usdt:/usr/bin/python3:function__entry { printf("%s\n", str(arg1)); }'
 
-# Trace with perf
+# perf でトレースする
 perf probe -x /usr/bin/python3 sdt_pythonX_Y:function__entry
 ```
 
-## Observing probe activity {#observing-probe-activity}
+## プローブの動作を観察する {#observing-probe-activity}
 
 ```bash
-# Count kprobe hits
+# kprobe のヒット数を数える
 cat /sys/kernel/tracing/kprobe_profile
-# tcp_sendmsg        42         0  ← hits, misses
+# tcp_sendmsg        42         0  ← ヒット数、ミス数
 
-# Event hit counts
+# イベントのヒット数
 cat /sys/kernel/tracing/events/syscalls/sys_enter_read/hist
 
-# Aggregate with bpftrace
+# bpftrace で集計する
 bpftrace -e 'kprobe:tcp_sendmsg { @[comm] = count(); }'
 # Attaching 1 probe...
 # ^C
 # @[nginx]: 1234
 # @[postgres]: 567
 
-# Dynamic function graph with kprobe
+# kprobe を使った動的な function graph
 echo function_graph > /sys/kernel/tracing/current_tracer
 echo 'tcp_sendmsg' > /sys/kernel/tracing/set_graph_function
 echo 1 > /sys/kernel/tracing/tracing_on
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [ftrace](ftrace.md) — Ring buffer and tracefs interface
-- [perf Events](perf-events.md) — Hardware counters and sampling
-- [BPF: Architecture](../bpf/bpf-overview.md) — kprobe/tracepoint BPF programs
-- `Documentation/trace/kprobes.rst` — kernel kprobe documentation
-- `Documentation/trace/tracepoints.rst` — static tracepoint documentation
+- [ftrace](ftrace.md) — リングバッファとtracefsインターフェース
+- [perfイベント](perf-events.md) — ハードウェアカウンタとサンプリング
+- [BPF: アーキテクチャ](../bpf/bpf-overview.md) — kprobe/tracepointのBPFプログラム
+- `Documentation/trace/kprobes.rst` — カーネルのkprobeドキュメント
+- `Documentation/trace/tracepoints.rst` — 静的tracepointのドキュメント

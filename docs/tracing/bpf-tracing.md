@@ -1,64 +1,64 @@
-# BPF for Tracing (bpftrace and BCC) {#bpf-for-tracing-bpftrace-and-bcc}
+# トレーシングのためのBPF（bpftraceとBCC） {#bpf-for-tracing-bpftrace-and-bcc}
 
-> The modern way to observe Linux: attach a small verified program to almost any event and aggregate the results *in the kernel*
+> Linuxを観測する現代的な方法: 検証済みの小さなプログラムをほぼあらゆるイベントにアタッチし、結果を*カーネル内で*集計する
 
-Static tracepoints, ftrace, and perf each capture events and ship them to user space to be counted. That model has a ceiling: at millions of events per second, the buffer writes, the copies, and the user-space parsing become the bottleneck — you spend more measuring than you learn. BPF removes that ceiling, which is why it has become the dominant tracing frontend.
+静的tracepoint、ftrace、perfはいずれもイベントを捕捉し、それをユーザー空間に送ってから集計する。このモデルには上限がある。毎秒数百万イベントともなると、バッファへの書き込み、コピー、ユーザー空間でのパースがボトルネックになり、得られる知見よりも計測そのものにコストを費やすことになる。BPFはこの上限を取り払う。それがBPFが主流のトレーシングフロントエンドになった理由である。
 
-## Why BPF changed tracing {#why-bpf-changed-tracing}
+## なぜBPFがトレーシングを変えたか {#why-bpf-changed-tracing}
 
-Instead of streaming raw events out, BPF lets you attach a small program that runs **at the event, in the kernel**, and does the aggregation on the spot. A per-CPU map increment replaces a buffer write plus a copy plus a user-space parse — so you read out the *histogram*, not the firehose that produced it.
+生のイベントを外へ流し出す代わりに、BPFでは小さなプログラムをアタッチし、それが**イベントの発生地点で、カーネル内で**実行されてその場で集計を行う。per-CPUマップのインクリメント1回が、バッファ書き込み＋コピー＋ユーザー空間でのパースを置き換える。つまり読み出すのは*ヒストグラム*であって、それを生み出した大量のイベントの奔流ではない。
 
-Two properties make this safe enough for production:
+本番環境で使えるほど安全にしているのは、2つの性質である。
 
-- **The verifier** statically proves the program can't crash the kernel, loop forever, or touch memory it shouldn't — before it's ever attached. (See [BPF](../bpf/README.md) for how the verifier and JIT work.)
-- **It's dynamic** — load, attach, detach, all at runtime, no reboot and no module.
+- **検証器（verifier）**が、プログラムがアタッチされる前に、カーネルをクラッシュさせたり、無限ループしたり、触れてはならないメモリに触れたりしないことを静的に証明する（検証器とJITの仕組みについては[BPF](../bpf/README.md)を参照）。
+- **動的である**。ロード、アタッチ、デタッチはすべて実行時に行え、再起動もモジュールも不要である。
 
-## Where you can attach {#where-you-can-attach}
+## どこにアタッチできるか {#where-you-can-attach}
 
-A tracing BPF program can hook almost anywhere events originate:
+トレーシング用BPFプログラムは、イベントが発生するほぼあらゆる場所にフックできる。
 
-- **kprobe / kretprobe** — the entry or return of nearly any kernel function
-- **tracepoints** and **raw tracepoints** — the kernel's static instrumentation points
-- **fentry / fexit** — a lower-overhead way to trace function entry/exit, built on the same compiler-inserted `__fentry__` hook that [ftrace](ftrace.md) uses; cheaper than kprobes and with typed access to arguments
-- **perf events** — PMU counters and timed sampling (for profiling)
-- **uprobes / USDT** — user-space functions and static markers
+- **kprobe / kretprobe** — ほぼ任意のカーネル関数の入口または戻り
+- **tracepoint**と**raw tracepoint** — カーネルの静的計装ポイント
+- **fentry / fexit** — 関数の入口／出口をよりオーバーヘッド少なくトレースする方法。[ftrace](ftrace.md)が使うのと同じ、コンパイラが挿入する`__fentry__`フックの上に構築されている。kprobeより安価で、引数に型付きでアクセスできる
+- **perfイベント** — PMUカウンタと時間ベースのサンプリング（プロファイリング用）
+- **uprobe / USDT** — ユーザー空間の関数と静的マーカー
 
-## Maps: aggregation that stays in the kernel {#maps-aggregation-that-stays-in-the-kernel}
+## マップ: カーネル内にとどまる集計 {#maps-aggregation-that-stays-in-the-kernel}
 
-**Maps** are how a program accumulates state across events without involving user space on the hot path — a hash keyed by PID, a per-CPU counter, or a log2 **histogram** of latencies. User space reads the map out once, when you want the answer, not once per event.
+**マップ**は、ホットパスでユーザー空間を介さずに、プログラムがイベントをまたいで状態を蓄積する手段である。PIDをキーとするハッシュ、per-CPUカウンタ、レイテンシのlog2**ヒストグラム**などがある。ユーザー空間はイベントごとではなく、答えが欲しいときに一度だけマップを読み出す。
 
-## The two toolkits {#the-two-toolkits}
+## 2つのツールキット {#the-two-toolkits}
 
-- **bpftrace** — a high-level, awk-like language for one-liners and short scripts. This is the fast path for interactive investigation.
-- **BCC** — a Python/C++ library for building complete, packaged tools; the `bcc-tools` suite (`execsnoop`, `biolatency`, `tcplife`, `runqlat`, …) is written with it.
+- **bpftrace** — ワンライナーや短いスクリプト向けの、awkに似た高水準言語。対話的な調査のための近道である。
+- **BCC** — 完成したパッケージ済みツールを構築するためのPython/C++ライブラリ。`bcc-tools`スイート（`execsnoop`、`biolatency`、`tcplife`、`runqlat`、…）はこれで書かれている。
 
-## In practice {#in-practice}
+## 実践 {#in-practice}
 
 ```bash
-# Count syscalls by process name
+# プロセス名ごとにシステムコールを数える
 bpftrace -e 'tracepoint:raw_syscalls:sys_enter { @[comm] = count(); }'
 
-# Latency histogram of vfs_read(), in-kernel — fentry/fexit capture entry+exit
+# vfs_read() のレイテンシヒストグラムをカーネル内で — fentry/fexit で入口と出口を捕捉
 bpftrace -e '
   fentry:vfs_read { @start[tid] = nsecs; }
   fexit:vfs_read  /@start[tid]/ {
       @ns = hist(nsecs - @start[tid]); delete(@start[tid]);
   }'
 
-# Who is opening which files
+# 誰がどのファイルを開いているか
 bpftrace -e 'tracepoint:syscalls:sys_enter_openat {
     printf("%s -> %s\n", comm, str(args->filename)); }'
 ```
 
-Each of these does its counting or bucketing inside the kernel and prints a compact summary on exit — the same questions the [ftrace histogram triggers](ftrace.md) answer, but in a general-purpose language you can extend arbitrarily.
+いずれも集計やバケット分けをカーネル内で行い、終了時にコンパクトな要約を表示する。[ftraceのヒストグラムトリガー](ftrace.md)が答えるのと同じ問いだが、任意に拡張できる汎用言語で扱える。
 
-## Where this fits {#where-this-fits}
+## 位置づけ {#where-this-fits}
 
-BPF-for-tracing is the observability-facing use of the general BPF machine. This page is about *using* it to answer questions; for how the verifier, JIT, maps, and program lifecycle actually work, see the [BPF](../bpf/README.md) section.
+トレーシングのためのBPFは、汎用BPF機構の可観測性向けの用途である。このページは問いに答えるためにBPFを*使う*ことを扱う。検証器、JIT、マップ、プログラムのライフサイクルが実際にどう動くかについては[BPF](../bpf/README.md)セクションを参照。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kernel docs: BPF](https://docs.kernel.org/bpf/index.html) — the subsystem reference
-- [bpftrace reference guide](https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc) — the language and its probe types
-- [BPF](../bpf/README.md) — the verifier, JIT, maps, and program model behind these tools
-- [Kprobes and Tracepoints](kprobes-tracepoints.md) — the probe mechanisms BPF attaches to
+- [Kernel docs: BPF](https://docs.kernel.org/bpf/index.html) — サブシステムのリファレンス
+- [bpftrace reference guide](https://github.com/bpftrace/bpftrace/blob/master/man/adoc/bpftrace.adoc) — 言語とそのプローブ種別
+- [BPF](../bpf/README.md) — これらのツールの背後にある検証器、JIT、マップ、プログラムモデル
+- [kprobeとtracepoint](kprobes-tracepoints.md) — BPFがアタッチするプローブ機構

@@ -1,32 +1,32 @@
-# The TTY Subsystem: One Model for Every Terminal, Real or Virtual {#the-tty-subsystem-one-model-for-every-terminal-real-or-virtual}
+# TTYサブシステム: 実在・仮想を問わずあらゆる端末を1つのモデルで {#the-tty-subsystem-one-model-for-every-terminal-real-or-virtual}
 
-> Linux still uses the decades-old teletypewriter model — a line discipline sitting between a low-level driver and userspace — to unify physical serial ports, pseudo-terminals, and the system console under one `tty_struct`/`tty_driver` object model
+> Linuxはいまも数十年前のテレタイプライタのモデル（低レベルドライバとユーザー空間の間にラインディシプリンが位置する）を使い、物理シリアルポート、擬似端末、システムコンソールを1つの`tty_struct`/`tty_driver`オブジェクトモデルの下に統一している
 
-## Getting Started {#getting-started}
+## はじめに {#getting-started}
 
-Every terminal session — a physical serial console on an embedded board, an `ssh` login, a GUI terminal emulator window, even the kernel's own boot messages scrolling past — is, from the kernel's point of view, a **TTY**. The name is inherited from real hardware: a *teletypewriter*, an electromechanical device that printed characters sent to it and sent back whatever a human typed. Linux (like every Unix before it) still uses that decades-old model today as the shape for all character-oriented, line-buffered terminal I/O, even though almost nobody has plugged an actual teletype into a computer in this century. The kernel's own documentation puts it plainly: "Teletypewriter (TTY) layer takes care of all those serial devices. Including the virtual ones like pseudoterminal (PTY)."
+あらゆる端末セッション（組み込みボード上の物理シリアルコンソール、`ssh`ログイン、GUIのターミナルエミュレータのウィンドウ、さらにはスクロールしていくカーネル自身のブートメッセージまで）は、カーネルから見ればすべて **TTY** である。この名前は実際のハードウェアに由来する。*テレタイプライタ* とは、送られてきた文字を印字し、人間がタイプしたものを何であれ送り返す電気機械式の装置である。Linuxは（それ以前のあらゆるUnixと同様に）、今世紀に本物のテレタイプをコンピュータにつないだ人などほとんどいないにもかかわらず、文字指向で行バッファリングされるすべての端末I/Oの形として、いまもその数十年前のモデルを使っている。カーネル自身のドキュメントは率直にこう述べている。"Teletypewriter (TTY) layer takes care of all those serial devices. Including the virtual ones like pseudoterminal (PTY)."（訳: テレタイプライタ（TTY）層は、それらすべてのシリアルデバイスを扱う。擬似端末（PTY）のような仮想的なものも含めて。）
 
-`drivers/tty/` is also one of the oldest and, by the admission of the people who maintain it, one of the trickiest corners of the kernel. An LWN retrospective on a TTY regression opened with "there are dark areas of the kernel where only the bravest hackers dare to tread... arguably, no part of the kernel is darker and scarier than the serial terminal (TTY) code." That reputation is a useful piece of context for a page like this one: the object model below is stable and well-documented, but the code that implements it has accreted for decades and rewards caution.
+`drivers/tty/`は、カーネルの中でも最も古く、そしてそれを保守している人々自身が認めるとおり、最も扱いの難しい一角の1つでもある。TTYのリグレッションに関するLWNの回顧記事は、"there are dark areas of the kernel where only the bravest hackers dare to tread... arguably, no part of the kernel is darker and scarier than the serial terminal (TTY) code."（訳: カーネルには最も勇敢なハッカーしか足を踏み入れようとしない暗い領域がある……おそらく、シリアル端末（TTY）のコードほど暗く恐ろしい部分はカーネルにない。）という一文で始まっている。この評判は、このようなページにとって有用な背景である。以下で説明するオブジェクトモデルは安定しており、よく文書化されているが、それを実装するコードは数十年にわたって積み重なってきたものであり、慎重さが報われる。
 
-### The problem the TTY subsystem solves {#the-problem-the-tty-subsystem-solves}
+### TTYサブシステムが解決する問題 {#the-problem-the-tty-subsystem-solves}
 
-Three very different things all need to look like "a terminal" to userspace:
+まったく異なる3つのものが、どれもユーザー空間からは「端末」に見える必要がある。
 
-- **Physical serial ports** — a real RS-232 line behind a UART chip, still common on servers (for out-of-band management) and embedded boards.
-- **Pseudo-terminals (ptys)** — a purely software master/slave pair with no hardware behind it at all. This is what *every* terminal emulator (xterm, GNOME Terminal, VS Code's integrated terminal), every `ssh` session, and every `screen`/`tmux` pane runs on.
-- **The system console** — the device the kernel's own text output (boot messages, `printk()`, an interactive shell if you have one) is currently pointed at, which can itself be a physical serial line, a virtual console on the screen, or a pty.
+- **物理シリアルポート** — UARTチップの背後にある実際のRS-232回線。サーバー（帯域外管理用）や組み込みボードでいまも一般的である。
+- **擬似端末（pty）** — 背後にハードウェアがまったくない、純粋にソフトウェアだけのマスター/スレーブのペア。*あらゆる* ターミナルエミュレータ（xterm、GNOME Terminal、VS Codeの統合ターミナル）、あらゆる`ssh`セッション、あらゆる`screen`/`tmux`のペインがこの上で動いている。
+- **システムコンソール** — カーネル自身のテキスト出力（ブートメッセージ、`printk()`、あれば対話シェル）が現在向けられているデバイス。これ自体が物理シリアル回線、画面上の仮想コンソール、ptyのいずれでもありうる。
 
-Without a shared model, each of these would need its own reimplementation of things every terminal has to handle: turning a stream of raw bytes into editable lines (backspace deletes the last character), deciding whether input is buffered a line at a time or delivered byte-by-byte, echoing typed characters back to the user, generating a signal when the user presses an interrupt key, and negotiating window size. Linux's TTY layer, rooted at `drivers/tty/` with its data structures in `include/linux/tty.h`, `include/linux/tty_driver.h`, and `include/linux/tty_ldisc.h`, factors this into three layers so that only the bottom one — moving bytes to and from an actual UART, pty peer, or screen — has to be written per device family. Everything above that is shared.
+共通のモデルがなければ、これらはそれぞれ、あらゆる端末が扱わなければならない事柄を独自に再実装する必要がある。生のバイトストリームを編集可能な行に変換すること（バックスペースで最後の文字を消す）、入力を1行ずつバッファするか1バイトずつ渡すかを決めること、タイプされた文字をユーザーにエコーし返すこと、ユーザーが割り込みキーを押したときにシグナルを生成すること、そしてウィンドウサイズのネゴシエーションである。LinuxのTTY層は、`drivers/tty/`を根とし、データ構造を`include/linux/tty.h`、`include/linux/tty_driver.h`、`include/linux/tty_ldisc.h`に持つ。これを3つの層に分解することで、デバイスファミリーごとに書く必要があるのは最下層（実際のUART、ptyの相手、または画面との間でバイトをやり取りする部分）だけになる。それより上はすべて共有される。
 
-### The three-layer stack {#the-three-layer-stack}
+### 3層スタック {#the-three-layer-stack}
 
-1. **The low-level driver.** This is the layer that actually moves bytes: a UART driver for real serial hardware (`drivers/tty/serial/`), the pty master/slave implementation (`drivers/tty/pty.c`), or the virtual-console/framebuffer console driver (`drivers/tty/vt/`) for the screen. Each of these registers a `struct tty_driver` and implements a `struct tty_operations` — the vtable the tty core calls into for `open()`, `write()`, `ioctl()`, and so on.
-2. **The line discipline.** Sitting between the driver and the character-device interface userspace sees, a line discipline (`struct tty_ldisc_ops`) interprets the raw byte stream. The default, and the one almost every interactive terminal uses, is **N_TTY** (`N_TTY` is `0`, defined in `include/uapi/linux/tty.h`) — it implements canonical ("cooked") vs. raw mode, character echo, and signal generation from control characters, most famously turning Ctrl-C into `SIGINT`. Every newly opened tty gets N_TTY automatically: `tty_ldisc_init()` in `drivers/tty/tty_ldisc.c` calls `tty_ldisc_get(tty, N_TTY)` unconditionally, and it's also the fallback a tty reverts to if something goes wrong switching to another one. A process can swap in a different line discipline with the `TIOCSETD` ioctl — the kernel ships around two dozen others (`N_PPP`, `N_HDLC`, `N_SLIP`, `N_HCI` for Bluetooth UART, `N_GSM0710`, and more) that repurpose a serial line as a protocol framer rather than a human-facing terminal.
-3. **`tty_struct` and `tty_driver`.** These are the core kernel objects that tie the other two together: `struct tty_driver` represents a driver family (e.g., "the serial driver" or "the pty slave driver"), and `struct tty_struct` represents one open tty instance, holding the pointer to its current line discipline (`ldisc`), its driver (`driver`, `ops`), its terminal settings (`termios`), and the rest of its live state.
+1. **低レベルドライバ。** 実際にバイトを動かす層である。実シリアルハードウェア用のUARTドライバ（`drivers/tty/serial/`）、ptyのマスター/スレーブ実装（`drivers/tty/pty.c`）、または画面用の仮想コンソール/フレームバッファコンソールドライバ（`drivers/tty/vt/`）がこれにあたる。これらはそれぞれ`struct tty_driver`を登録し、`struct tty_operations`を実装する。これはttyコアが`open()`、`write()`、`ioctl()`などのために呼び出すvtableである。
+2. **ラインディシプリン。** ドライバと、ユーザー空間から見えるキャラクタデバイスインターフェースとの間に位置し、ラインディシプリン（`struct tty_ldisc_ops`）が生のバイトストリームを解釈する。デフォルトであり、ほぼすべての対話端末が使うのが **N_TTY** である（`N_TTY`は`0`で、`include/uapi/linux/tty.h`で定義されている）。N_TTYはカノニカル（「cooked」）モードとrawモード、文字のエコー、制御文字からのシグナル生成（最も有名なのはCtrl-Cを`SIGINT`に変換すること）を実装する。新しく開かれたttyはすべて自動的にN_TTYを得る。`drivers/tty/tty_ldisc.c`の`tty_ldisc_init()`は無条件に`tty_ldisc_get(tty, N_TTY)`を呼び、また別のラインディシプリンへの切り替えで問題が起きたときにttyが戻るフォールバック先でもある。プロセスは`TIOCSETD` ioctlで別のラインディシプリンに差し替えられる。カーネルにはそのほかに20数種類（`N_PPP`、`N_HDLC`、`N_SLIP`、Bluetooth UART用の`N_HCI`、`N_GSM0710`など）が同梱されており、これらはシリアル回線を、人間向けの端末ではなくプロトコルのフレーマとして転用する。
+3. **`tty_struct`と`tty_driver`。** 他の2つを結びつけるコアのカーネルオブジェクトである。`struct tty_driver`はドライバファミリー（例えば「シリアルドライバ」や「ptyスレーブドライバ」）を表し、`struct tty_struct`は開かれた1つのttyインスタンスを表す。後者は、現在のラインディシプリンへのポインタ（`ldisc`）、ドライバ（`driver`、`ops`）、端末設定（`termios`）、その他の動作中の状態を保持する。
 
-### Core structures {#core-structures}
+### コアの構造体 {#core-structures}
 
-**`struct tty_struct`** (`include/linux/tty.h`) is allocated per open tty and lives (reference-counted via an embedded `kref`) until the last reference drops. Key fields:
+**`struct tty_struct`**（`include/linux/tty.h`）は開かれたttyごとに割り当てられ、（埋め込まれた`kref`による参照カウントで）最後の参照がなくなるまで存在する。主なフィールドは次のとおり。
 
 ```c
 struct tty_struct {
@@ -39,7 +39,7 @@ struct tty_struct {
 
 	struct tty_ldisc *ldisc;
 	struct ld_semaphore ldisc_sem;
-	/* ... locking: atomic_write_lock, legacy_mutex, throttle_mutex,
+	/* ... ロック: atomic_write_lock, legacy_mutex, throttle_mutex,
 	 *              termios_rwsem, winsize_mutex ... */
 
 	struct ktermios termios, termios_locked;
@@ -71,9 +71,9 @@ struct tty_struct {
 };
 ```
 
-A few of these are worth calling out: `name` is built by `tty_line_name()` (e.g. `ttyS3`); `flags` is a bitmask of states like `TTY_THROTTLED`, `TTY_IO_ERROR`, `TTY_OTHER_CLOSED` (set on a pty whose other end has closed), and `TTY_HUPPED`; `receive_room` is how many bytes the current line discipline is willing to accept from the driver in one `receive_buf()` call, maintained by the line discipline itself (N_TTY updates it dynamically in `n_tty_receive_buf_common()` as it drains input, and the tty core zeroes it in `tty_set_termios_ldisc()`; a couple of other line disciplines, like `n_gsm.c` and `n_hdlc.c`, just set a fixed value at `.open()`); `ctrl.pgrp`/`ctrl.session` are the process group and session that make this the *controlling* terminal for job control (`setpgrp(2)`, `setsid(2)`); and `link` connects a pty's two `tty_struct`s (master and slave) to each other.
+このうちいくつかは特筆に値する。`name`は`tty_line_name()`によって組み立てられる（例: `ttyS3`）。`flags`は`TTY_THROTTLED`、`TTY_IO_ERROR`、`TTY_OTHER_CLOSED`（相手側が閉じたptyに設定される）、`TTY_HUPPED`といった状態のビットマスクである。`receive_room`は、現在のラインディシプリンが1回の`receive_buf()`呼び出しでドライバから受け入れるつもりのバイト数であり、ラインディシプリン自身が管理する（N_TTYは入力を消費するにつれて`n_tty_receive_buf_common()`で動的に更新し、ttyコアは`tty_set_termios_ldisc()`でこれをゼロにする。`n_gsm.c`や`n_hdlc.c`のような他のいくつかのラインディシプリンは、`.open()`で固定値を設定するだけである）。`ctrl.pgrp`/`ctrl.session`は、このttyをジョブ制御（`setpgrp(2)`、`setsid(2)`）のための *制御* 端末とするプロセスグループとセッションである。そして`link`は、ptyの2つの`tty_struct`（マスターとスレーブ）を互いに結びつける。
 
-**`struct tty_driver`** (`include/linux/tty_driver.h`) represents a driver, not an individual open tty:
+**`struct tty_driver`**（`include/linux/tty_driver.h`）は、個々の開かれたttyではなくドライバを表す。
 
 ```c
 struct tty_driver {
@@ -102,30 +102,30 @@ struct tty_driver {
 };
 ```
 
-`name` is what's used to build the `/dev` node (`"ttyS"`, `"pty"`, `"pts"`); `type`/`subtype` (`enum tty_driver_type`: `TTY_DRIVER_TYPE_SYSTEM`, `_CONSOLE`, `_SERIAL`, `_PTY`, `_SCC`, `_SYSCONS`) tell the core roughly what kind of driver this is; and `ttys`/`ports`/`termios` are the per-line arrays the standard `tty_standard_install()` path uses to look up an existing tty by minor number. A driver is set up with `tty_alloc_driver()`, has `ops` attached via `tty_set_operations()`, and goes live with `tty_register_driver()`.
+`name`は`/dev`ノードを組み立てるのに使われるもの（`"ttyS"`、`"pty"`、`"pts"`）である。`type`/`subtype`（`enum tty_driver_type`: `TTY_DRIVER_TYPE_SYSTEM`、`_CONSOLE`、`_SERIAL`、`_PTY`、`_SCC`、`_SYSCONS`）は、これがおおよそどんな種類のドライバかをコアに伝える。`ttys`/`ports`/`termios`は回線ごとの配列で、標準の`tty_standard_install()`パスがマイナー番号で既存のttyを検索するのに使う。ドライバは`tty_alloc_driver()`でセットアップされ、`tty_set_operations()`で`ops`が取り付けられ、`tty_register_driver()`で稼働を始める。
 
-**`struct tty_operations`** (also `tty_driver.h`) is the vtable connecting the tty core to a specific driver. The kernel doc comment marks both `open()` and `close()` "Required method"; in practice only `open()`'s absence is enforced at runtime (the doc comment: "if this routine is not filled in, the attempted open will fail with `ENODEV`"). The rest are optional but most drivers implement the load-bearing ones: `write()`/`write_room()`/`chars_in_buffer()` for output, `set_termios()` to react to changed terminal settings, `throttle()`/`unthrottle()` and `stop()`/`start()` for flow control, `hangup()`, `ioctl()`, `break_ctl()` for sending a BREAK, and `install()`/`lookup()`/`remove()` for drivers (like the pty and console drivers) that don't use the standard `ttys[]` array lookup.
+**`struct tty_operations`**（これも`tty_driver.h`）は、ttyコアと特定のドライバをつなぐvtableである。カーネルのドキュメントコメントは`open()`と`close()`の両方に「Required method」と記しているが、実際に実行時に欠落が強制されるのは`open()`だけである（ドキュメントコメント: "if this routine is not filled in, the attempted open will fail with `ENODEV`"（訳: このルーチンが埋められていなければ、オープンの試みは`ENODEV`で失敗する））。残りは任意だが、ほとんどのドライバは要となるものを実装している。出力用の`write()`/`write_room()`/`chars_in_buffer()`、端末設定の変更に反応する`set_termios()`、フロー制御用の`throttle()`/`unthrottle()`と`stop()`/`start()`、`hangup()`、`ioctl()`、BREAKを送る`break_ctl()`、そして標準の`ttys[]`配列による検索を使わないドライバ（ptyやコンソールのドライバなど）のための`install()`/`lookup()`/`remove()`である。
 
-**`struct tty_ldisc_ops`** (`include/linux/tty_ldisc.h`) is the line discipline's vtable, and the kernel doc comment splits its hooks into two directions: hooks marked `[TTY]` are called from the tty core downward — `open()`, `close()`, `read()`, `write()`, `ioctl()`, `set_termios()`, `poll()`, `hangup()` — and hooks marked `[DRV]` are called from the low-level driver upward, feeding received data in: `receive_buf()` and its newer variant `receive_buf2()` (preferred when present, since it can report back how many bytes it consumed for automatic flow control), `write_wakeup()` (the driver has room for more output), `dcd_change()` (used by the `N_PPS` Pulse-Per-Second discipline), and `lookahead_buf()` (a fast path for characters — like software flow-control bytes — that need handling before the regular `receive_buf()` call gets to them). N_TTY's implementation of `receive_buf()`/`receive_buf2()` is where canonical-mode line editing, echo, and `ISIG` signal generation actually happen: when the local flag `ISIG` (`c_lflag`) is set and the incoming character matches `INTR_CHAR(tty)` (the terminal's configured interrupt character, normally Ctrl-C), `drivers/tty/n_tty.c` calls `n_tty_receive_signal_char(tty, SIGINT, c)` to raise `SIGINT` on the tty's foreground process group.
+**`struct tty_ldisc_ops`**（`include/linux/tty_ldisc.h`）はラインディシプリンのvtableであり、カーネルのドキュメントコメントはそのフックを2つの方向に分けている。`[TTY]`と記されたフックはttyコアから下向きに呼ばれるもので、`open()`、`close()`、`read()`、`write()`、`ioctl()`、`set_termios()`、`poll()`、`hangup()`である。`[DRV]`と記されたフックは低レベルドライバから上向きに呼ばれ、受信データを流し込む。`receive_buf()`とその新しい変種`receive_buf2()`（存在すればこちらが優先される。自動フロー制御のために、何バイト消費したかを報告し返せるからである）、`write_wakeup()`（ドライバに出力の余地ができた）、`dcd_change()`（`N_PPS` Pulse-Per-Secondディシプリンが使う）、`lookahead_buf()`（ソフトウェアフロー制御のバイトのように、通常の`receive_buf()`呼び出しが到達する前に処理する必要がある文字のための高速パス）である。N_TTYの`receive_buf()`/`receive_buf2()`の実装こそが、カノニカルモードの行編集、エコー、`ISIG`のシグナル生成が実際に行われる場所である。ローカルフラグ`ISIG`（`c_lflag`）が設定されていて、到着した文字が`INTR_CHAR(tty)`（端末に設定された割り込み文字。通常はCtrl-C）と一致すると、`drivers/tty/n_tty.c`は`n_tty_receive_signal_char(tty, SIGINT, c)`を呼び、ttyのフォアグラウンドプロセスグループに`SIGINT`を発生させる。
 
-### The console: printk, boot messages, and the tty layer {#the-console-printk-boot-messages-and-the-tty-layer}
+### コンソール: printk、ブートメッセージ、tty層 {#the-console-printk-boot-messages-and-the-tty-layer}
 
-The kernel's own text output — early boot messages, `printk()`, everything you see on a serial console or the screen before and often after a shell starts — goes through a related but distinct mechanism: `struct console` (`include/linux/console.h`), registered console drivers, flags like `CON_BOOT` (an early console, replaced once the real one registers) and `CON_PRINTBUFFER` (replay buffered messages so nothing is lost during the handoff). This isn't the tty core itself, but the two are deliberately linked: `struct console` has a `device` callback,
+カーネル自身のテキスト出力（初期のブートメッセージ、`printk()`、シェルが起動する前に、そしてしばしば起動後にも、シリアルコンソールや画面に表示されるすべて）は、関連はあるが別個の仕組みを通る。`struct console`（`include/linux/console.h`）、登録されたコンソールドライバ、そして`CON_BOOT`（初期コンソール。本物のコンソールが登録されると置き換えられる）や`CON_PRINTBUFFER`（引き継ぎの間に何も失われないよう、バッファされたメッセージを再生する）のようなフラグである。これはttyコアそのものではないが、両者は意図的に結びつけられている。`struct console`には`device`コールバックがあり、
 
 ```c
 struct tty_driver *(*device)(struct console *co, int *index);
 ```
 
-whose job is to say which `tty_driver` backs a given console. This is exactly the mechanism `/dev/console` uses when it's opened: `tty_lookup_driver()` in `drivers/tty/tty_io.c` calls `console_device()` to find the `tty_driver` currently registered as the system console, then opens a tty through it like any other. The virtual-console driver that drives the text screen (`drivers/tty/vt/`, backing `/dev/tty1`–`/dev/tty63` and the currently-active-VT alias `/dev/tty0`) is itself an ordinary `struct tty_driver` with `type == TTY_DRIVER_TYPE_CONSOLE`; a headless system with a serial console instead points the same `device` callback at whichever `tty_driver` backs that serial port. The `struct console`/printk-routing side of this (the NBCON non-blocking console rework, multiple simultaneous console drivers, etc.) is its own subsystem and out of scope for this page — the point here is just that "the console" is, underneath, one more consumer of the same `tty_driver`/`tty_struct` model everything else uses.
+その役割は、あるコンソールの背後にどの`tty_driver`があるかを伝えることである。これはまさに、`/dev/console`が開かれたときに使われる仕組みである。`drivers/tty/tty_io.c`の`tty_lookup_driver()`は`console_device()`を呼んで、システムコンソールとして現在登録されている`tty_driver`を見つけ、他のttyと同じようにそれを通じてttyを開く。テキスト画面を駆動する仮想コンソールドライバ（`drivers/tty/vt/`。`/dev/tty1`〜`/dev/tty63`と、現在アクティブなVTの別名`/dev/tty0`の背後にある）自体も、`type == TTY_DRIVER_TYPE_CONSOLE`を持つ普通の`struct tty_driver`である。シリアルコンソールを持つヘッドレスシステムでは、同じ`device`コールバックが、そのシリアルポートの背後にある`tty_driver`を指すだけである。この`struct console`/printkのルーティングの側（NBCONノンブロッキングコンソールの作り直し、複数のコンソールドライバの同時使用など）はそれ自体が1つのサブシステムであり、このページの範囲外である。ここでの要点は、「コンソール」は、その下では、他のあらゆるものが使うのと同じ`tty_driver`/`tty_struct`モデルの利用者の1つにすぎない、ということだけである。
 
-### Device node naming {#device-node-naming}
+### デバイスノードの命名 {#device-node-naming}
 
-- **`/dev/ttyS0`, `/dev/ttyS1`, ...** — real serial ports, one per UART line a driver enumerates (the 8250/16550-family driver under `drivers/tty/serial/8250/`, for the most common case). The `ttyS(4)` man page puts it simply: "ttyS[0-3] are character devices for the serial terminal lines."
-- **`/dev/pts/N`** — UNIX 98 pseudo-terminal slaves. Userspace opens `/dev/ptmx`, a clone device handled by `ptmx_open()` in `drivers/tty/pty.c`, to allocate a fresh pty master; the `devpts` filesystem then creates the matching `/dev/pts/N` slave node. Every terminal emulator, every `ssh` session, and every `tmux`/`screen` pane is one of these pairs. On the kernel side this is two separate `struct tty_driver`s — `ptm_driver` (`driver_name = "pty_master"`, `name = "ptm"`, master side) and `pts_driver` (`driver_name = "pty_slave"`, `name = "pts"`, slave side) — cross-linked through `tty_driver.other`; `ptmx_open()` allocates the master via `tty_init_dev(ptm_driver, index)`. This is distinct from the legacy BSD-style `pty_driver` (`name = "pty"`), set up separately by `legacy_pty_init()` under `CONFIG_LEGACY_PTYS`, which backs the old `/dev/ptyXX`/`/dev/ttyXX` pairs rather than `/dev/ptmx`.
-- **`/dev/tty`** — not a distinct device family but a fixed alias, device number `MKDEV(TTYAUX_MAJOR, 0)` — major `TTYAUX_MAJOR` (`5`), minor `0` — per the `tty(4)` man page: "a character file with major number 5 and minor number 0... a synonym for the controlling terminal of a process, if any." Opening it calls `tty_open_current_tty()`, which looks up the calling process's controlling tty via `get_current_tty()` and reopens that.
-- **`/dev/console`** — the system console alias, device number `MKDEV(TTYAUX_MAJOR, 1)` (major `5`, minor `1`), resolved the same way via `console_device()` as described above — it can point at a serial port, a virtual console, or (less commonly) a pty, depending on how the system was booted (`console=` kernel parameter) and what's currently registered.
+- **`/dev/ttyS0`、`/dev/ttyS1`、...** — 実際のシリアルポート。ドライバが列挙するUART回線ごとに1つ（最も一般的なケースでは`drivers/tty/serial/8250/`以下の8250/16550系ドライバ）。`ttyS(4)`のmanページは簡潔にこう述べている。"ttyS[0-3] are character devices for the serial terminal lines."（訳: ttyS[0-3]はシリアル端末回線用のキャラクタデバイスである。）
+- **`/dev/pts/N`** — UNIX 98擬似端末のスレーブ。ユーザー空間は、`drivers/tty/pty.c`の`ptmx_open()`が処理するクローンデバイス`/dev/ptmx`を開いて新しいptyマスターを割り当てる。その後`devpts`ファイルシステムが、対応する`/dev/pts/N`スレーブノードを作成する。あらゆるターミナルエミュレータ、あらゆる`ssh`セッション、あらゆる`tmux`/`screen`のペインが、こうしたペアの1つである。カーネル側では、これは2つの別々の`struct tty_driver`である。`ptm_driver`（`driver_name = "pty_master"`、`name = "ptm"`、マスター側）と`pts_driver`（`driver_name = "pty_slave"`、`name = "pts"`、スレーブ側）で、`tty_driver.other`を通じて相互にリンクされている。`ptmx_open()`は`tty_init_dev(ptm_driver, index)`でマスターを割り当てる。これは、`CONFIG_LEGACY_PTYS`の下で`legacy_pty_init()`によって別途セットアップされるレガシーなBSD形式の`pty_driver`（`name = "pty"`）とは別物である。後者は`/dev/ptmx`ではなく、古い`/dev/ptyXX`/`/dev/ttyXX`のペアの背後にある。
+- **`/dev/tty`** — 独立したデバイスファミリーではなく、固定の別名である。デバイス番号は`MKDEV(TTYAUX_MAJOR, 0)`、つまりメジャー`TTYAUX_MAJOR`（`5`）、マイナー`0`である。`tty(4)`のmanページによれば、"a character file with major number 5 and minor number 0... a synonym for the controlling terminal of a process, if any."（訳: メジャー番号5、マイナー番号0のキャラクタファイル……プロセスの制御端末があれば、その同義語。）これを開くと`tty_open_current_tty()`が呼ばれ、`get_current_tty()`で呼び出し元プロセスの制御ttyを検索して、それを開き直す。
+- **`/dev/console`** — システムコンソールの別名。デバイス番号は`MKDEV(TTYAUX_MAJOR, 1)`（メジャー`5`、マイナー`1`）で、上で説明したのと同じく`console_device()`経由で解決される。システムがどのようにブートされたか（`console=`カーネルパラメータ）と、現在何が登録されているかに応じて、シリアルポート、仮想コンソール、あるいは（あまり一般的ではないが）ptyを指しうる。
 
-### Architecture: from hardware to userspace {#architecture-from-hardware-to-userspace}
+### アーキテクチャ: ハードウェアからユーザー空間まで {#architecture-from-hardware-to-userspace}
 
 ```
   Hardware / peer object
@@ -169,49 +169,49 @@ whose job is to say which `tty_driver` backs a given console. This is exactly th
                      (console_device(), device number MKDEV(TTYAUX_MAJOR, 1))
 ```
 
-### The rest of this section {#the-rest-of-this-section}
+### このセクションの残りのページ {#the-rest-of-this-section}
 
-- **[Serial Core: One Abstraction Over Every UART](serial.md)** — how a real UART chip driver plugs into `serial_core`, `tty_driver`, and `tty_port`, worked through the 8250/16550 and `uartlite` drivers.
-- **[Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md)** — canonical vs. raw mode, `termios`, signal generation, job control, and pseudo-terminals, mostly through N_TTY (the non-N_TTY disciplines get a short overview).
-- **[War Stories](war-stories.md)** — real incidents from the TTY/serial subsystem.
+- **[シリアルコア: あらゆるUARTを覆う1つの抽象化](serial.md)** — 実際のUARTチップのドライバが`serial_core`、`tty_driver`、`tty_port`にどう組み込まれるかを、8250/16550と`uartlite`ドライバを通じて解説する。
+- **[ラインディシプリン、termios、擬似端末](line-disciplines.md)** — カノニカルモードとrawモード、`termios`、シグナル生成、ジョブ制御、擬似端末を、主にN_TTYを通じて解説する（N_TTY以外のディシプリンは簡単な概観のみ）。
+- **[事件簿](war-stories.md)** — TTY/シリアルサブシステムで実際に起きた事件。
 
-### Prerequisites and neighbors {#prerequisites-and-neighbors}
+### 前提知識と隣接分野 {#prerequisites-and-neighbors}
 
-Every `/dev/tty*`, `/dev/pts/*`, and `/dev/ttyS*` node is an ordinary [character device](../drivers/chardev.md) underneath, registered through the same `cdev`/`file_operations` machinery as any other driver — the tty layer's `struct tty_operations` sits one level above that as a terminal-specific vtable. Serial and console drivers are ordinary [Linux device-model](../drivers/device-model.md) citizens (platform devices for on-SoC UARTs, PCI devices for add-in serial cards). Reading order: this page, then [Serial Core: One Abstraction Over Every UART](serial.md) if you're working with real UART hardware, or [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) if you want the N_TTY internals.
+あらゆる`/dev/tty*`、`/dev/pts/*`、`/dev/ttyS*`ノードは、その下では普通の[キャラクタデバイス](../drivers/chardev.md)であり、他のドライバと同じ`cdev`/`file_operations`の仕組みを通じて登録される。tty層の`struct tty_operations`は、その1段上に端末固有のvtableとして位置する。シリアルドライバやコンソールドライバは、普通の[Linuxデバイスモデル](../drivers/device-model.md)の一員である（SoC上のUARTならプラットフォームデバイス、増設シリアルカードならPCIデバイス）。読む順序: まずこのページを読み、次に実際のUARTハードウェアを扱うなら[シリアルコア: あらゆるUARTを覆う1つの抽象化](serial.md)を、N_TTYの内部を知りたいなら[ラインディシプリン、termios、擬似端末](line-disciplines.md)を読む。
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [include/linux/tty.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct`, the `TTY_*` flag bits, and the termios accessor macros
-- [include/linux/tty_driver.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_driver.h) — `struct tty_driver`, `struct tty_operations`, `tty_alloc_driver()`/`tty_register_driver()`
-- [include/linux/tty_ldisc.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_ldisc.h) — `struct tty_ldisc_ops`, `struct tty_ldisc`, `tty_register_ldisc()`/`tty_set_ldisc()`
-- [include/uapi/linux/tty.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/tty.h) — the `N_*` line discipline numbers (`N_TTY`, `N_PPP`, `N_HDLC`, ...)
-- [include/linux/console.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/console.h) — `struct console`, `CON_BOOT`/`CON_PRINTBUFFER`, the `device` callback linking a console to its `tty_driver`
-- [drivers/tty/tty_io.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_io.c) — the tty core: `tty_open()`, `tty_lookup_driver()`, `/dev/tty` and `/dev/console` handling
-- [drivers/tty/tty_ldisc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_ldisc.c) — line discipline attach/detach/reinit, the N_TTY fallback logic
-- [drivers/tty/n_tty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/n_tty.c) — the default N_TTY line discipline: canonical mode, echo, signal generation
-- [drivers/tty/pty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — the pty master/slave drivers, `/dev/ptmx`, UNIX 98 pty allocation
+- [include/linux/tty.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty.h) — `struct tty_struct`、`TTY_*`フラグビット、termiosのアクセサマクロ
+- [include/linux/tty_driver.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_driver.h) — `struct tty_driver`、`struct tty_operations`、`tty_alloc_driver()`/`tty_register_driver()`
+- [include/linux/tty_ldisc.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_ldisc.h) — `struct tty_ldisc_ops`、`struct tty_ldisc`、`tty_register_ldisc()`/`tty_set_ldisc()`
+- [include/uapi/linux/tty.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/tty.h) — `N_*`ラインディシプリン番号（`N_TTY`、`N_PPP`、`N_HDLC`、...）
+- [include/linux/console.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/console.h) — `struct console`、`CON_BOOT`/`CON_PRINTBUFFER`、コンソールをその`tty_driver`に結びつける`device`コールバック
+- [drivers/tty/tty_io.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_io.c) — ttyコア: `tty_open()`、`tty_lookup_driver()`、`/dev/tty`と`/dev/console`の処理
+- [drivers/tty/tty_ldisc.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/tty_ldisc.c) — ラインディシプリンの接続/切り離し/再初期化、N_TTYへのフォールバックのロジック
+- [drivers/tty/n_tty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/n_tty.c) — デフォルトのN_TTYラインディシプリン: カノニカルモード、エコー、シグナル生成
+- [drivers/tty/pty.c](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/pty.c) — ptyのマスター/スレーブドライバ、`/dev/ptmx`、UNIX 98 ptyの割り当て
 
-### Man pages {#man-pages}
+### manページ {#man-pages}
 
-- [`tty(4)`](https://man7.org/linux/man-pages/man4/tty.4.html) — `/dev/tty`, the controlling-terminal alias
-- [`ttyS(4)`](https://man7.org/linux/man-pages/man4/ttyS.4.html) — the serial terminal line devices
-- [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — pseudoterminal master/slave pairs, UNIX 98 vs. BSD ptys, `/dev/ptmx` and `/dev/pts/*`
-- [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — canonical vs. noncanonical mode, the `c_iflag`/`c_oflag`/`c_cflag`/`c_lflag` fields, and the `ISIG` special characters
+- [`tty(4)`](https://man7.org/linux/man-pages/man4/tty.4.html) — 制御端末の別名である`/dev/tty`
+- [`ttyS(4)`](https://man7.org/linux/man-pages/man4/ttyS.4.html) — シリアル端末回線のデバイス
+- [`pty(7)`](https://man7.org/linux/man-pages/man7/pty.7.html) — 擬似端末のマスター/スレーブのペア、UNIX 98 ptyとBSD pty、`/dev/ptmx`と`/dev/pts/*`
+- [`termios(3)`](https://man7.org/linux/man-pages/man3/termios.3.html) — カノニカルモードと非カノニカルモード、`c_iflag`/`c_oflag`/`c_cflag`/`c_lflag`フィールド、`ISIG`の特殊文字
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [Serial Core: One Abstraction Over Every UART](serial.md) · [Line Disciplines, termios, and Pseudo-Terminals](line-disciplines.md) · [War Stories](war-stories.md) — the rest of this section
-- [Character and Misc Devices](../drivers/chardev.md) · [Linux Device Model](../drivers/device-model.md) — the driver-core layers the TTY subsystem sits on
+- [シリアルコア: あらゆるUARTを覆う1つの抽象化](serial.md) · [ラインディシプリン、termios、擬似端末](line-disciplines.md) · [事件簿](war-stories.md) — このセクションの残りのページ
+- [キャラクタデバイスとmiscデバイス](../drivers/chardev.md) · [Linuxデバイスモデル](../drivers/device-model.md) — TTYサブシステムが載っているドライバコアの層
 
-### LWN articles {#lwn-articles}
+### LWN記事 {#lwn-articles}
 
-- [A tempest in a tty pot](https://lwn.net/Articles/343828/) — on the TTY code's reputation for complexity, and the maintenance dispute that briefly left it without a maintainer
+- [A tempest in a tty pot](https://lwn.net/Articles/343828/) — TTYコードの複雑さに関する評判と、一時的にメンテナ不在の状態をもたらした保守をめぐる論争について
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Kernel docs: TTY driver-api index](https://docs.kernel.org/driver-api/tty/index.html) — the kernel's own overview of `tty_driver`, `tty_port`, `tty_struct`, line disciplines, and the console
-- [Kernel docs: TTY Line Discipline](https://docs.kernel.org/driver-api/tty/tty_ldisc.html) — `tty_ldisc_ops`, the N_TTY default, and the N_NULL fallback when a discipline fails
-- [Kernel docs: TTY Driver and TTY Operations](https://docs.kernel.org/driver-api/tty/tty_driver.html) — the full `tty_driver`/`tty_operations` reference
-- [Kernel docs: Console](https://docs.kernel.org/driver-api/tty/console.html) — `struct console`, boot-to-runtime console handoff, and how a console maps to a `tty_driver`
+- [カーネルドキュメント: TTY driver-apiの索引](https://docs.kernel.org/driver-api/tty/index.html) — `tty_driver`、`tty_port`、`tty_struct`、ラインディシプリン、コンソールに関するカーネル自身の概要
+- [カーネルドキュメント: TTY Line Discipline](https://docs.kernel.org/driver-api/tty/tty_ldisc.html) — `tty_ldisc_ops`、デフォルトのN_TTY、ディシプリンが失敗したときのN_NULLフォールバック
+- [カーネルドキュメント: TTY Driver and TTY Operations](https://docs.kernel.org/driver-api/tty/tty_driver.html) — `tty_driver`/`tty_operations`の完全なリファレンス
+- [カーネルドキュメント: Console](https://docs.kernel.org/driver-api/tty/console.html) — `struct console`、ブートから実行時へのコンソールの引き継ぎ、コンソールが`tty_driver`にどう対応づけられるか

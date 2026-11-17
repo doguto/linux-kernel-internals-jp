@@ -1,20 +1,20 @@
-# Serial Core: One Abstraction Over Every UART {#serial-core-one-abstraction-over-every-uart}
+# シリアルコア: あらゆるUARTを覆う1つの抽象化 {#serial-core-one-abstraction-over-every-uart}
 
-> `drivers/tty/serial/serial_core.c` is the layer that lets a 16550 register set descended from the early-1980s 8250 and a modern SoC's memory-mapped UART both show up as `/dev/ttyS0`
+> `drivers/tty/serial/serial_core.c`は、1980年代初頭の8250の流れを汲む16550のレジスタセットと、現代のSoCのメモリマップドUARTの両方を、同じく`/dev/ttyS0`として見せる層である
 
-## The problem: a UART is not a UART {#the-problem-a-uart-is-not-a-uart}
+## 問題: UARTといってもさまざまである {#the-problem-a-uart-is-not-a-uart}
 
-Every UART chip moves bytes over a wire one bit at a time, but "every UART" is not one chip — it's a sprawl of them. The venerable 8250/16550 family (and its many register-compatible descendants) is still the most common thing to find behind a PC-style serial port or a PCIe multiport card. But almost every SoC vendor also ships its own UART IP block: Broadcom's, Freescale/NXP's `lpuart`, Qualcomm's `msm_serial`/`geni`, Samsung's, ARM's PL011, Xilinx's `uartlite`, and dozens more, each with its own register layout, its own FIFO depth, its own quirks for how modem control lines are wired (or not wired at all, on something with no RS-232 signaling at all). `drivers/tty/serial/` currently holds on the order of 70 individual per-chip driver source files (not counting the shared core files or the further ~45 files under `drivers/tty/serial/8250/` for 8250-family variants and add-in cards) for exactly this reason.
+どのUARTチップも1度に1ビットずつ回線上でバイトを運ぶが、「あらゆるUART」は1つのチップではなく、無秩序に広がった多数のチップである。由緒ある8250/16550ファミリー（と、そのレジスタ互換の多くの子孫）は、PC形式のシリアルポートやPCIeのマルチポートカードの背後にあるものとして、いまも最も一般的である。しかし、ほぼすべてのSoCベンダーが独自のUART IPブロックも出荷している。Broadcomのもの、Freescale/NXPの`lpuart`、Qualcommの`msm_serial`/`geni`、Samsungのもの、ARMのPL011、Xilinxの`uartlite`、さらに数十種類があり、それぞれが独自のレジスタレイアウト、独自のFIFOの深さ、そしてモデム制御線がどう配線されているか（RS-232のシグナリングを一切持たないものではまったく配線されていないこともある）についての独自の癖を持つ。`drivers/tty/serial/`に現在、チップごとの個別ドライバのソースファイルがおよそ70個（共有のコアファイルや、8250ファミリーの変種と増設カード用に`drivers/tty/serial/8250/`以下にあるさらに約45個のファイルは数えずに）あるのは、まさにこの理由による。
 
-None of that variety should be the generic TTY layer's problem. `drivers/tty/tty_io.c` and friends know about line disciplines, `termios`, job control, `/dev/ttyS0` as a character device — concepts that apply identically whether the bytes underneath came off an 8250 or a Bluetooth RFCOMM channel or a virtual console. What the TTY layer should not have to know is how to twiddle an `IER` register or decode a chip-specific FIFO-trigger-level encoding.
+そうした多様性のどれも、汎用のTTY層が気にすべき問題ではない。`drivers/tty/tty_io.c`とその仲間が知っているのは、ラインディシプリン、`termios`、ジョブ制御、キャラクタデバイスとしての`/dev/ttyS0`である。これらの概念は、下にあるバイトが8250から来たものでも、BluetoothのRFCOMMチャネルから来たものでも、仮想コンソールから来たものでも、まったく同じように適用される。TTY層が知らずに済むべきなのは、`IER`レジスタをどういじるか、あるいはチップ固有のFIFOトリガーレベルのエンコーディングをどうデコードするか、といったことである。
 
-`serial_core.c` is the layer in between. It defines one hardware-facing contract — `struct uart_ops`, a table of callbacks every UART driver fills in — and one registration model — `struct uart_driver` for a chip family, `struct uart_port` for one physical instance of it. Every one of those 70-odd drivers implements the same handful of callbacks; `serial_core.c` is what turns those callbacks into a generic `tty_operations` table the TTY core drives, and turns TTY-core calls (open, write, set_termios, ioctl) into the right `uart_ops` callback on the right port. A driver author who implements `.startup`, `.shutdown`, `.set_termios`, `.start_tx`, and a small handful of others gets `/dev/ttyS*` for free — line discipline handling, `termios` negotiation, `poll()`, `TIOCM*` modem-control ioctls, magic SysRq, kernel console support, all of it, without writing a line of TTY-layer code.
+`serial_core.c`はその間にある層である。ハードウェア側の契約を1つ（すべてのUARTドライバが埋めるコールバックの表である`struct uart_ops`）と、登録モデルを1つ（チップファミリーのための`struct uart_driver`と、その物理インスタンス1つのための`struct uart_port`）定義する。70余りのドライバはどれも、同じ一握りのコールバックを実装する。`serial_core.c`は、それらのコールバックをTTYコアが駆動する汎用の`tty_operations`テーブルに変換し、TTYコアからの呼び出し（open、write、set_termios、ioctl）を正しいポートの正しい`uart_ops`コールバックに変換するものである。`.startup`、`.shutdown`、`.set_termios`、`.start_tx`と、他のわずかなものを実装したドライバ作者は、`/dev/ttyS*`をただで手に入れる。ラインディシプリンの処理、`termios`のネゴシエーション、`poll()`、`TIOCM*`のモデム制御ioctl、magic SysRq、カーネルコンソールのサポート、そのすべてを、TTY層のコードを1行も書かずに得られるのである。
 
-## Core structures {#core-structures}
+## コアの構造体 {#core-structures}
 
-### `struct uart_ops`: the hardware contract {#struct-uart_ops-the-hardware-contract}
+### `struct uart_ops`: ハードウェアとの契約 {#struct-uart_ops-the-hardware-contract}
 
-`struct uart_ops` (`include/linux/serial_core.h`) is the vtable every UART driver builds and hands to `serial_core` via `uart_port.ops`. It is the entire surface a driver has to implement to plug into the generic layer:
+`struct uart_ops`（`include/linux/serial_core.h`）は、すべてのUARTドライバが構築し、`uart_port.ops`経由で`serial_core`に渡すvtableである。これが、ドライバが汎用層に組み込まれるために実装しなければならないインターフェースのすべてである。
 
 ```c
 // include/linux/serial_core.h
@@ -53,24 +53,24 @@ struct uart_ops {
 };
 ```
 
-A few of these carry almost all of the day-to-day weight:
+日常的な負荷のほぼすべてを担うのは、このうちのいくつかである。
 
-- **`.startup`/`.shutdown`** — called when the port's first `open()` and last `close()` happen: request the IRQ, reset and enable the hardware FIFOs, program the interrupt-enable register; and undo all of that.
-- **`.set_termios`** — called whenever userspace changes baud rate, parity, stop bits, or flow control (`stty`, or a `termios` struct passed to `tcsetattr()`). This is where a driver computes and programs a baud-rate divisor.
-- **`.start_tx`/`.stop_tx`** — start or stop the transmit side. For an interrupt-driven driver, `.start_tx` typically just unmasks the "THR empty" interrupt and lets the interrupt handler feed the FIFO; `.stop_tx` masks it back off.
-- **`.stop_rx`** — stop delivering received data upward (used for `!CREAD` and for throttling).
-- **`.set_mctrl`/`.get_mctrl`** — program and read back the modem control lines (RTS, DTR) and status lines (CTS, DSR, DCD, RI), each as `TIOCM_*` bits.
-- **`.tx_empty`** — report whether the transmit path (FIFO plus shift register) has fully drained; backs `TIOCSER_TEMT`/`tcdrain()`.
-- **`.type`/`.request_port`/`.release_port`/`.config_port`/`.verify_port`** — the `setserial`-era port-configuration and autodetection machinery: report a human-readable chip name, claim/release the I/O or MMIO region, autoprobe the exact chip variant, and validate a user-requested `struct serial_struct` change.
+- **`.startup`/`.shutdown`** — ポートの最初の`open()`と最後の`close()`が行われるときに呼ばれる。IRQを要求し、ハードウェアFIFOをリセットして有効化し、割り込み許可レジスタを設定する。そしてそのすべてを元に戻す。
+- **`.set_termios`** — ユーザー空間がボーレート、パリティ、ストップビット、フロー制御を変更するたびに（`stty`、または`tcsetattr()`に渡された`termios`構造体によって）呼ばれる。ドライバがボーレートの分周値を計算して設定するのはここである。
+- **`.start_tx`/`.stop_tx`** — 送信側を開始または停止する。割り込み駆動のドライバでは、`.start_tx`は通常「THR空」割り込みのマスクを外し、割り込みハンドラにFIFOへの供給を任せるだけである。`.stop_tx`はそれを再びマスクする。
+- **`.stop_rx`** — 受信データを上位に渡すのを止める（`!CREAD`とスロットリングに使われる）。
+- **`.set_mctrl`/`.get_mctrl`** — モデム制御線（RTS、DTR）を設定し、ステータス線（CTS、DSR、DCD、RI）を読み戻す。それぞれ`TIOCM_*`のビットとして扱う。
+- **`.tx_empty`** — 送信パス（FIFOとシフトレジスタ）が完全に空になったかどうかを報告する。`TIOCSER_TEMT`/`tcdrain()`の裏付けとなる。
+- **`.type`/`.request_port`/`.release_port`/`.config_port`/`.verify_port`** — `setserial`時代のポート設定と自動検出の仕組み。人間が読めるチップ名を報告し、I/OまたはMMIOの領域を確保/解放し、正確なチップの変種を自動検出し、ユーザーが要求した`struct serial_struct`の変更を検証する。
 
-### `struct uart_port`: one physical port {#struct-uart_port-one-physical-port}
+### `struct uart_port`: 1つの物理ポート {#struct-uart_port-one-physical-port}
 
-`struct uart_port` is the per-instance object — one per physical UART, allocated and filled in by the driver, one for each ttyS/ttyUL/ttyAMA/... minor number. It carries the register-access strategy, the negotiated hardware state, and a back-pointer into the generic layer:
+`struct uart_port`はインスタンスごとのオブジェクトであり、物理UARTごとに1つ、ドライバによって割り当てられて埋められる。ttyS/ttyUL/ttyAMA/...のマイナー番号ごとに1つである。レジスタアクセスの方式、ネゴシエートされたハードウェアの状態、そして汎用層への逆ポインタを保持する。
 
 ```c
 // include/linux/serial_core.h
 struct uart_port {
-	spinlock_t		lock;			/* port lock */
+	spinlock_t		lock;			/* ポートのロック */
 	unsigned long		iobase;			/* in/out[bwl] */
 	unsigned char __iomem	*membase;		/* read/write[bwl] */
 	u32			(*serial_in)(struct uart_port *, unsigned int offset);
@@ -102,67 +102,67 @@ struct uart_port {
 						struct serial_rs485 *rs485);
 	int			(*iso7816_config)(struct uart_port *,
 						  struct serial_iso7816 *iso7816);
-	unsigned int		ctrl_id;		/* optional serial core controller id */
-	unsigned int		port_id;		/* optional serial core port id */
-	unsigned int		irq;			/* irq number */
-	unsigned long		irqflags;		/* irq flags  */
-	unsigned int		uartclk;		/* base uart clock */
-	unsigned int		fifosize;		/* tx fifo size */
-	unsigned char		x_char;			/* xon/xoff char */
-	unsigned char		regshift;		/* reg offset shift */
-	unsigned char		quirks;			/* internal quirks */
-	enum uart_iotype	iotype;			/* io access style */
-	unsigned int		read_status_mask;	/* driver specific */
-	unsigned int		ignore_status_mask;	/* driver specific */
-	struct uart_state	*state;			/* pointer to parent state */
-	struct uart_icount	icount;			/* statistics */
-	struct console		*cons;			/* struct console, if any */
+	unsigned int		ctrl_id;		/* 任意: シリアルコアのコントローラID */
+	unsigned int		port_id;		/* 任意: シリアルコアのポートID */
+	unsigned int		irq;			/* IRQ番号 */
+	unsigned long		irqflags;		/* IRQフラグ */
+	unsigned int		uartclk;		/* UARTのベースクロック */
+	unsigned int		fifosize;		/* 送信FIFOのサイズ */
+	unsigned char		x_char;			/* XON/XOFF文字 */
+	unsigned char		regshift;		/* レジスタオフセットのシフト量 */
+	unsigned char		quirks;			/* 内部的な癖 */
+	enum uart_iotype	iotype;			/* I/Oアクセス方式 */
+	unsigned int		read_status_mask;	/* ドライバ固有 */
+	unsigned int		ignore_status_mask;	/* ドライバ固有 */
+	struct uart_state	*state;			/* 親のstateへのポインタ */
+	struct uart_icount	icount;			/* 統計 */
+	struct console		*cons;			/* struct console（あれば） */
 	upf_t			flags;
 	upstat_t		status;
-	bool			hw_stopped;		/* sw-assisted CTS flow state */
-	bool			cons_flow;		/* user specified console flow control */
-	unsigned int		mctrl;			/* current modem ctrl settings */
-	unsigned int		frame_time;		/* frame timing in ns */
-	unsigned int		type;			/* port type */
+	bool			hw_stopped;		/* ソフトウェア支援のCTSフロー状態 */
+	bool			cons_flow;		/* ユーザー指定のコンソールフロー制御 */
+	unsigned int		mctrl;			/* 現在のモデム制御設定 */
+	unsigned int		frame_time;		/* フレーム時間（ns） */
+	unsigned int		type;			/* ポート種別 */
 	const struct uart_ops	*ops;
 	unsigned int		custom_divisor;
-	unsigned int		line;			/* port index */
+	unsigned int		line;			/* ポートのインデックス */
 	unsigned int		minor;
-	resource_size_t		mapbase;		/* for ioremap */
+	resource_size_t		mapbase;		/* ioremap用 */
 	resource_size_t		mapsize;
-	struct device		*dev;			/* serial port physical parent device */
-	struct serial_port_device *port_dev;		/* serial core port device */
-	unsigned long		sysrq;			/* sysrq timeout */
-	u8			sysrq_ch;		/* char for sysrq */
+	struct device		*dev;			/* シリアルポートの物理的な親デバイス */
+	struct serial_port_device *port_dev;		/* シリアルコアのポートデバイス */
+	unsigned long		sysrq;			/* sysrqのタイムアウト */
+	u8			sysrq_ch;		/* sysrq用の文字 */
 	unsigned char		has_sysrq;
-	unsigned char		sysrq_seq;		/* index in sysrq_toggle_seq */
-	unsigned char		hub6;			/* this should be in the 8250 driver */
+	unsigned char		sysrq_seq;		/* sysrq_toggle_seq内のインデックス */
+	unsigned char		hub6;			/* これは8250ドライバにあるべき */
 	unsigned char		suspended;
 	unsigned char		console_reinit;
-	const char		*name;			/* port name */
-	struct attribute_group	*attr_group;		/* port specific attributes */
-	const struct attribute_group **tty_groups;	/* all attributes (serial core use only) */
+	const char		*name;			/* ポート名 */
+	struct attribute_group	*attr_group;		/* ポート固有の属性 */
+	const struct attribute_group **tty_groups;	/* 全属性（シリアルコア専用） */
 	struct serial_rs485     rs485;
-	struct serial_rs485	rs485_supported;	/* Supported mask for serial_rs485 */
-	struct gpio_desc	*rs485_term_gpio;	/* enable RS485 bus termination */
-	struct gpio_desc	*rs485_rx_during_tx_gpio; /* Output GPIO that sets the state of RS485 RX during TX */
+	struct serial_rs485	rs485_supported;	/* serial_rs485のサポートマスク */
+	struct gpio_desc	*rs485_term_gpio;	/* RS485バス終端を有効にする */
+	struct gpio_desc	*rs485_rx_during_tx_gpio; /* TX中のRS485 RXの状態を設定する出力GPIO */
 	struct serial_iso7816   iso7816;
-	void			*private_data;		/* generic platform data pointer */
+	void			*private_data;		/* 汎用のプラットフォームデータポインタ */
 };
 ```
 
-A few fields worth calling out:
+特筆に値するフィールドをいくつか挙げる。
 
-- **`serial_in`/`serial_out`** — the register-access indirection that lets one driver support several bus widths/endiannesses (8/16/32-bit, big/little-endian MMIO, or legacy port I/O) by swapping these function pointers rather than `#ifdef`-ing every register access.
-- **`iotype`** (`enum uart_iotype`: `UPIO_PORT`, `UPIO_MEM`, `UPIO_MEM32`, `UPIO_MEM32BE`, `UPIO_MEM16`, plus several chip-specific variants — `UPIO_HUB6`, `UPIO_AU`, `UPIO_TSI`) — which access style `serial_in`/`serial_out` implement.
-- **`line`** — this port's index; it's what ties a `uart_port` back to a specific slot in its `uart_driver`'s state array (below).
-- **`state`** — the back-pointer to `struct uart_state`, the object that ties this hardware port to a live `tty_port`.
-- **`ops`** — the `uart_ops` vtable described above.
-- **`private_data`** — a driver-owned pointer for whatever per-instance state the callbacks need (clock handles, DMA channel, chip-specific config parsed from the device tree).
+- **`serial_in`/`serial_out`** — レジスタアクセスの間接化。すべてのレジスタアクセスを`#ifdef`で分けるのではなく、これらの関数ポインタを差し替えることで、1つのドライバが複数のバス幅/エンディアン（8/16/32ビット、ビッグ/リトルエンディアンのMMIO、あるいはレガシーなポートI/O）をサポートできるようにする。
+- **`iotype`**（`enum uart_iotype`: `UPIO_PORT`、`UPIO_MEM`、`UPIO_MEM32`、`UPIO_MEM32BE`、`UPIO_MEM16`と、いくつかのチップ固有の変種 — `UPIO_HUB6`、`UPIO_AU`、`UPIO_TSI`） — `serial_in`/`serial_out`がどのアクセス方式を実装しているか。
+- **`line`** — このポートのインデックス。`uart_port`を、その`uart_driver`のstate配列（後述）の特定のスロットに結びつけるのがこれである。
+- **`state`** — `struct uart_state`への逆ポインタ。このハードウェアポートを動作中の`tty_port`に結びつけるオブジェクトである。
+- **`ops`** — 上で説明した`uart_ops`のvtable。
+- **`private_data`** — コールバックが必要とするインスタンスごとの状態（クロックのハンドル、DMAチャネル、デバイスツリーから解析したチップ固有の設定）のための、ドライバが所有するポインタ。
 
-### `struct uart_driver`: the registration-level object {#struct-uart_driver-the-registration-level-object}
+### `struct uart_driver`: 登録レベルのオブジェクト {#struct-uart_driver-the-registration-level-object}
 
-Where `uart_port` is one physical port, `struct uart_driver` is the registration for an entire chip family — one per driver module, not one per instance:
+`uart_port`が1つの物理ポートであるのに対し、`struct uart_driver`はチップファミリー全体の登録である。インスタンスごとに1つではなく、ドライバモジュールごとに1つである。
 
 ```c
 // include/linux/serial_core.h
@@ -176,21 +176,21 @@ struct uart_driver {
 	struct console		*cons;
 
 	/*
-	 * these are private; the low level driver should not
-	 * touch these; they should be initialised to NULL
+	 * これらはプライベートである。低レベルドライバはこれらに
+	 * 触れてはならない。NULLに初期化しておくこと
 	 */
 	struct uart_state	*state;
 	struct tty_driver	*tty_driver;
 };
 ```
 
-`driver_name`/`dev_name` are the `setserial`-visible name and the `/dev` name stem (`"ttyS"`, `"ttyUL"`, ...); `nr` is the maximum number of ports this driver family will ever register — it sizes the `state` array `uart_register_driver()` allocates. `cons`, if set, wires up this driver as a kernel console (`console=ttyS0` on the kernel command line). `state` and `tty_driver` are exactly what the comment says: filled in by `serial_core`, not touched by the driver.
+`driver_name`/`dev_name`は、`setserial`から見える名前と、`/dev`の名前の語幹（`"ttyS"`、`"ttyUL"`、...）である。`nr`はこのドライバファミリーが登録しうるポートの最大数であり、`uart_register_driver()`が割り当てる`state`配列の大きさを決める。`cons`がセットされていれば、このドライバをカーネルコンソールとして接続する（カーネルコマンドラインの`console=ttyS0`）。`state`と`tty_driver`はまさにコメントのとおりで、`serial_core`が埋め、ドライバは触れない。
 
-## Bridging to the TTY layer {#bridging-to-the-tty-layer}
+## TTY層への橋渡し {#bridging-to-the-tty-layer}
 
-### `struct uart_state`: the persistent-across-opens object {#struct-uart_state-the-persistent-across-opens-object}
+### `struct uart_state`: オープンをまたいで存続するオブジェクト {#struct-uart_state-the-persistent-across-opens-object}
 
-`struct uart_state` is the small object that survives across an individual `open()`/`close()` cycle — the thing `uart_driver.state[]` is an array of, one per possible port:
+`struct uart_state`は、個々の`open()`/`close()`のサイクルをまたいで存続する小さなオブジェクトであり、`uart_driver.state[]`はこれを、ありうるポートごとに1つずつ並べた配列である。
 
 ```c
 // include/linux/serial_core.h
@@ -205,16 +205,16 @@ struct uart_state {
 };
 ```
 
-`port` is a generic `struct tty_port` — the TTY-core-side object every character device with open/close/hangup semantics embeds. `uart_port` is the live hardware port currently attached to this state slot (it can be `NULL` if the driver has registered the state array via `uart_register_driver()` but a specific instance hasn't shown up yet — common on a platform where a UART is a hot-pluggable add-in card).
+`port`は汎用の`struct tty_port`であり、open/close/hangupのセマンティクスを持つすべてのキャラクタデバイスが埋め込む、TTYコア側のオブジェクトである。`uart_port`は、現在このstateスロットに接続されている動作中のハードウェアポートである（ドライバが`uart_register_driver()`でstate配列を登録したものの、特定のインスタンスがまだ現れていない場合は`NULL`になりうる。UARTがホットプラグ可能な増設カードであるプラットフォームではよくあることである）。
 
-### Registration: `uart_register_driver()` and `uart_add_one_port()` {#registration-uartregisterdriver-and-uartaddone_port}
+### 登録: `uart_register_driver()`と`uart_add_one_port()` {#registration-uart_register_driver-and-uart_add_one_port}
 
-Two calls wire everything up, and every UART driver's module init does both:
+2つの呼び出しがすべてを接続し、すべてのUARTドライバのモジュール初期化は両方を行う。
 
-`uart_register_driver()` (`drivers/tty/serial/serial_core.c`) allocates `drv->state` (`drv->nr` entries), allocates a generic `struct tty_driver`, and — this is the key line — points that generic `tty_driver` at a single, shared `tty_operations` table:
+`uart_register_driver()`（`drivers/tty/serial/serial_core.c`）は`drv->state`（`drv->nr`個のエントリ）を割り当て、汎用の`struct tty_driver`を割り当て、そして（これが鍵となる行である）その汎用`tty_driver`を、単一の共有された`tty_operations`テーブルに向ける。
 
 ```c
-// drivers/tty/serial/serial_core.c — uart_register_driver(), abridged
+// drivers/tty/serial/serial_core.c — uart_register_driver()、抜粋
 drv->state = kzalloc_objs(struct uart_state, drv->nr);
 ...
 normal = tty_alloc_driver(drv->nr, TTY_DRIVER_REAL_RAW | TTY_DRIVER_DYNAMIC_DEV);
@@ -234,7 +234,7 @@ for (i = 0; i < drv->nr; i++) {
 }
 ```
 
-That `uart_ops` is *not* the same type as the `struct uart_ops` hardware vtable above — it's a file-local `static const struct tty_operations` in `serial_core.c` that every UART driver family shares, unmodified, regardless of chip:
+この`uart_ops`は、上のハードウェアvtableである`struct uart_ops`と同じ型では *ない*。これは`serial_core.c`内のファイルローカルな`static const struct tty_operations`であり、チップにかかわらず、すべてのUARTドライバファミリーが変更なしで共有する。
 
 ```c
 // drivers/tty/serial/serial_core.c
@@ -269,9 +269,9 @@ static const struct tty_operations uart_ops = {
 };
 ```
 
-Two structs, same identifier `uart_ops`, two different types — one is the per-driver hardware callback table (`struct uart_ops` from `serial_core.h`, chosen by each individual UART driver), the other is the single generic `struct tty_operations` table every serial-core-based `tty_driver` shares (defined once, privately, inside `serial_core.c`). It's a small but real naming collision worth being deliberate about when reading the source.
+2つの構造体、同じ識別子`uart_ops`、2つの異なる型である。一方はドライバごとのハードウェアコールバックテーブル（`serial_core.h`の`struct uart_ops`で、個々のUARTドライバが選ぶもの）であり、もう一方は、シリアルコアベースのすべての`tty_driver`が共有する単一の汎用`struct tty_operations`テーブル（`serial_core.c`の中で一度だけ、プライベートに定義される）である。小さいが実在する名前の衝突であり、ソースを読むときには意識しておく価値がある。
 
-`uart_add_one_port()` is the second call, made once per physical port a driver finds (in a DT-enumerated platform driver, from `.probe()`; for a multi-port card driver, once per port on the card):
+`uart_add_one_port()`は2つ目の呼び出しであり、ドライバが見つけた物理ポートごとに1回行われる（DTで列挙されるプラットフォームドライバなら`.probe()`から、マルチポートカードのドライバならカード上のポートごとに1回）。
 
 ```c
 // include/linux/serial_core.h
@@ -279,61 +279,61 @@ int uart_add_one_port(struct uart_driver *reg, struct uart_port *port);
 void uart_remove_one_port(struct uart_driver *reg, struct uart_port *port);
 ```
 
-It associates the `uart_port` the driver just filled in with `drv->state[port->line]` — the indexing convention used throughout `serial_core.c` is literally `state = drv->state + uport->line` — and, if a `tty_port_register_device()`-equivalent registration is needed, brings up the `/dev` node. (Recent kernels route the internal plumbing through a small serial-core "controller"/"port" sub-device model in `serial_ctrl.c`/`serial_port.c`, layered under `uart_add_one_port()` for power-management and device-model integration; the entry points and the `drv->state[port->line]` association a driver author needs to know are unchanged.)
+これは、ドライバが埋めたばかりの`uart_port`を`drv->state[port->line]`に関連づける（`serial_core.c`全体で使われるインデックスの慣例は、文字どおり`state = drv->state + uport->line`である）。そして、`tty_port_register_device()`相当の登録が必要なら、`/dev`ノードを立ち上げる。（最近のカーネルは内部の配管を、`serial_ctrl.c`/`serial_port.c`にある小さなシリアルコアの「コントローラ」/「ポート」サブデバイスモデルを通すようにしており、電源管理やデバイスモデルとの統合のために`uart_add_one_port()`の下に層を成している。ドライバ作者が知る必要のあるエントリポイントと`drv->state[port->line]`の関連づけは変わっていない。）
 
-### How a TTY-core call reaches hardware {#how-a-tty-core-call-reaches-hardware}
+### TTYコアからの呼び出しがハードウェアに届くまで {#how-a-tty-core-call-reaches-hardware}
 
-Once registration is done, every `tty_operations` callback in the shared `uart_ops` table is generic serial-core logic that, at the point it needs to actually touch hardware, calls through `uport->ops`. A few concrete chains, taken directly from `serial_core.c`:
+登録が済めば、共有された`uart_ops`テーブル内のすべての`tty_operations`コールバックは汎用のシリアルコアのロジックであり、実際にハードウェアに触れる必要がある時点で`uport->ops`を通じて呼び出しを行う。`serial_core.c`から直接取った、具体的な呼び出しの連鎖をいくつか示す。
 
-- Opening a port ultimately calls `uart_port_startup()`, which calls `uport->ops->startup(uport)` — the driver's `.startup`.
-- `tcsetattr()`/`stty` reaches the shared `.set_termios = uart_set_termios`, called while the tty core holds `tty->termios_rwsem` — `tty_set_termios()` in `tty_ioctl.c` takes it with `down_write()` before invoking any driver's `set_termios` hook, so it's the tty's lock, not something `uart_set_termios()` itself acquires (it takes its own `state->port.mutex` internally). `uart_set_termios()` then calls `uart_change_line_settings()`, which calls `uport->ops->set_termios(uport, termios, old_termios)` — the driver's `.set_termios`.
-- Writing data (`uart_write()`) calls `__uart_start()` directly, which calls `port->ops->start_tx(port)` — the driver's `.start_tx`, which is where an interrupt-driven driver typically just unmasks the transmit-empty interrupt and lets the ISR do the rest (below). (`uart_start()` is a separate entry point — the `.start` tty hook, also reached via `uart_flush_chars()` — that just calls the same `__uart_start()`.)
-- Setting RTS/DTR (`TIOCMSET`, or `CLOCAL`/`HUPCL` handling on open/close) calls `uart_update_mctrl()`, which calls `port->ops->set_mctrl(port, port->mctrl)`.
+- ポートを開くと、最終的に`uart_port_startup()`が呼ばれ、それが`uport->ops->startup(uport)`、すなわちドライバの`.startup`を呼ぶ。
+- `tcsetattr()`/`stty`は共有の`.set_termios = uart_set_termios`に到達する。これはttyコアが`tty->termios_rwsem`を保持した状態で呼ばれる。`tty_ioctl.c`の`tty_set_termios()`が、どのドライバの`set_termios`フックを呼び出すよりも前に`down_write()`でこれを取るので、これはttyのロックであって、`uart_set_termios()`自身が獲得するものではない（`uart_set_termios()`は内部で独自に`state->port.mutex`を取る）。`uart_set_termios()`は次に`uart_change_line_settings()`を呼び、それが`uport->ops->set_termios(uport, termios, old_termios)`、すなわちドライバの`.set_termios`を呼ぶ。
+- データの書き込み（`uart_write()`）は`__uart_start()`を直接呼び、それが`port->ops->start_tx(port)`、すなわちドライバの`.start_tx`を呼ぶ。割り込み駆動のドライバでは、通常ここで送信空割り込みのマスクを外し、残りをISRに任せるだけである（後述）。（`uart_start()`は別のエントリポイントで、`.start`のttyフックであり、`uart_flush_chars()`経由でも到達する。これも同じ`__uart_start()`を呼ぶだけである。）
+- RTS/DTRの設定（`TIOCMSET`、またはopen/close時の`CLOCAL`/`HUPCL`の処理）は`uart_update_mctrl()`を呼び、それが`port->ops->set_mctrl(port, port->mctrl)`を呼ぶ。
 
-None of that logic is chip-specific; it's identical for an 8250 and for `uartlite`. These four are the most common hot-path calls, but they're far from the only ones: in practice `serial_core.c` invokes roughly two dozen distinct `uart_ops` members somewhere in its logic — `release_port`, `get_mctrl`, `tx_empty`, `stop_rx`, `start_rx`, `request_port`, `verify_port`, `type`, `shutdown`, `set_ldisc`, `send_xchar`, `pm`, `ioctl`, `flush_buffer`, `enable_ms`, `config_port`, `break_ctl`, `throttle`, `unthrottle`, and the poll hooks among them — each dispatched from the specific TTY-core or `ioctl` path that needs it.
+このロジックのどれもチップ固有ではなく、8250でも`uartlite`でも同一である。この4つが最もよくあるホットパスの呼び出しだが、これらだけでは到底ない。実際には、`serial_core.c`はそのロジックのどこかで、およそ20数種類の異なる`uart_ops`メンバを呼び出している。`release_port`、`get_mctrl`、`tx_empty`、`stop_rx`、`start_rx`、`request_port`、`verify_port`、`type`、`shutdown`、`set_ldisc`、`send_xchar`、`pm`、`ioctl`、`flush_buffer`、`enable_ms`、`config_port`、`break_ctl`、`throttle`、`unthrottle`、そしてpoll系のフックなどであり、それぞれがそれを必要とする特定のTTYコアまたは`ioctl`のパスから呼び出される。
 
-## The 8250/16550 driver: the reference UART {#the-825016550-driver-the-reference-uart}
+## 8250/16550ドライバ: 基準となるUART {#the-825016550-driver-the-reference-uart}
 
-`drivers/tty/serial/8250/` is the 8250/16550-compatible family driver, and it's the one every other serial driver gets measured against, for a simple historical reason: the 16550 (and its UART-compatible successors) is a register-compatible descendant of the 8250 — the chip the original 1981 PC serial port used — so this lineage is the oldest, most heavily used, and most thoroughly hardened UART driver in the tree. New chip-specific drivers routinely reuse pieces of it — `8250_omap.c`, `8250_dw.c`, `8250_pci1xxxx.c` and similar files under `drivers/tty/serial/8250/` are all thin wrappers around the shared 8250 core (`8250_port.c`) that add chip-specific DMA, clocking, or errata handling on top, rather than reimplementing the FIFO/register logic from scratch.
+`drivers/tty/serial/8250/`は8250/16550互換ファミリーのドライバであり、他のあらゆるシリアルドライバがこれを基準に比較される。理由は歴史的で単純である。16550（とそのUART互換の後継）は、1981年のオリジナルのPCシリアルポートが使ったチップである8250のレジスタ互換の子孫であり、したがってこの系譜はツリー内で最も古く、最もよく使われ、最も徹底的に鍛えられたUARTドライバなのである。新しいチップ固有のドライバは日常的にその一部を再利用する。`drivers/tty/serial/8250/`以下の`8250_omap.c`、`8250_dw.c`、`8250_pci1xxxx.c`などのファイルはどれも、共有の8250コア（`8250_port.c`）を包む薄いラッパーであり、FIFO/レジスタのロジックを一から再実装するのではなく、その上にチップ固有のDMA、クロック、エラッタの処理を追加している。
 
-### The register model, briefly {#the-register-model-briefly}
+### レジスタモデルの概要 {#the-register-model-briefly}
 
-A 16550-compatible UART exposes a small bank of byte-wide registers, several of which are *aliased* — the same offset means something different depending on direction and on the state of a control bit — which is exactly the sort of gnarly, chip-specific detail `struct uart_ops` exists to hide from everything above it:
+16550互換のUARTは、バイト幅のレジスタの小さなバンクを公開している。そのいくつかは *エイリアス* されており、同じオフセットが方向や制御ビットの状態によって異なる意味を持つ。これこそが、`struct uart_ops`がその上のすべてから隠すために存在する、厄介でチップ固有の詳細である。
 
-| Offset | Read | Write | Purpose |
+| オフセット | 読み取り | 書き込み | 目的 |
 |---|---|---|---|
-| 0 | RBR (Receive Buffer) | THR (Transmit Holding) | one byte in/out of the FIFO |
-| 1 | IER (Interrupt Enable) | IER | which interrupt sources are unmasked |
-| 2 | IIR (Interrupt ID) | FCR (FIFO Control) | why an interrupt fired / FIFO reset & trigger level |
-| 3 | LCR (Line Control) | LCR | data bits, stop bits, parity, and the DLAB latch bit |
-| 4 | MCR (Modem Control) | MCR | drive RTS/DTR (and loopback mode) |
-| 5 | LSR (Line Status) | — | data-ready, overrun/parity/framing-error, THR-empty, break flags |
-| 6 | MSR (Modem Status) | — | CTS/DSR/DCD/RI current state and delta bits |
+| 0 | RBR（受信バッファ） | THR（送信保持） | FIFOとの間で1バイトを出し入れする |
+| 1 | IER（割り込み許可） | IER | どの割り込み要因のマスクを外すか |
+| 2 | IIR（割り込みID） | FCR（FIFO制御） | 割り込みが発生した理由 / FIFOのリセットとトリガーレベル |
+| 3 | LCR（ライン制御） | LCR | データビット、ストップビット、パリティ、DLABラッチビット |
+| 4 | MCR（モデム制御） | MCR | RTS/DTRを駆動する（およびループバックモード） |
+| 5 | LSR（ラインステータス） | — | データ準備完了、オーバーラン/パリティ/フレーミングエラー、THR空、breakのフラグ |
+| 6 | MSR（モデムステータス） | — | CTS/DSR/DCD/RIの現在の状態と変化ビット |
 
-Offsets 0 and 1 mean something else entirely — the low and high byte of the baud-rate divisor latch (DLL/DLM) — while `LCR`'s DLAB bit is set, which is why `.set_termios` has to briefly toggle DLAB, program the divisor, then restore LCR to its normal meaning. This is the kind of bit-banging `struct uart_port.serial_in`/`serial_out` and the offset constants in `include/uapi/linux/serial_reg.h` exist to keep contained to one driver; nothing above `uart_ops` ever needs to know an `IIR` read and an `FCR` write share the same address.
+`LCR`のDLABビットがセットされている間、オフセット0と1はまったく別の意味（ボーレート分周ラッチの下位バイトと上位バイト、DLL/DLM）になる。そのため`.set_termios`は、一時的にDLABを切り替え、分周値を設定し、それからLCRを通常の意味に戻さなければならない。`struct uart_port.serial_in`/`serial_out`と`include/uapi/linux/serial_reg.h`のオフセット定数は、この種のビット操作を1つのドライバの中に閉じ込めておくために存在する。`uart_ops`より上のものは、`IIR`の読み取りと`FCR`の書き込みが同じアドレスを共有していることを知る必要がまったくない。
 
-### `struct uart_8250_port`: 8250's `uart_port` subclass {#struct-uart8250port-8250s-uart_port-subclass}
+### `struct uart_8250_port`: 8250の`uart_port`サブクラス {#struct-uart_8250_port-8250s-uart_port-subclass}
 
-The 8250 driver's per-port object embeds a plain `uart_port` as its first member and adds 8250-specific state around it — the classic Linux "subclassing by embedding" pattern:
+8250ドライバのポートごとのオブジェクトは、素の`uart_port`を最初のメンバとして埋め込み、その周りに8250固有の状態を追加している。Linuxの古典的な「埋め込みによるサブクラス化」パターンである。
 
 ```c
 // include/linux/serial_8250.h
 struct uart_8250_port {
 	struct uart_port	port;
-	struct timer_list	timer;		/* "no irq" timer */
-	struct list_head	list;		/* ports on this IRQ */
-	u32			capabilities;	/* port capabilities */
-	u16			bugs;		/* port bugs */
-	unsigned int		tx_loadsz;	/* transmit fifo load size */
+	struct timer_list	timer;		/* 「IRQなし」用タイマー */
+	struct list_head	list;		/* このIRQ上のポート */
+	u32			capabilities;	/* ポートの機能 */
+	u16			bugs;		/* ポートのバグ */
+	unsigned int		tx_loadsz;	/* 送信FIFOのロードサイズ */
 	unsigned char		acr;
 	unsigned char		fcr;
 	unsigned char		ier;
 	unsigned char		lcr;
 	unsigned char		mcr;
-	unsigned char		cur_iotype;	/* Running I/O type */
+	unsigned char		cur_iotype;	/* 実行中のI/O種別 */
 	unsigned int		rpm_tx_active;
-	unsigned char		canary;		/* non-zero during system sleep
-						 *   if no_console_suspend
+	unsigned char		canary;		/* no_console_suspendの場合、
+						 *   システムスリープ中は非ゼロ
 						 */
 	unsigned char		probe;
 	struct mctrl_gpios	*gpios;
@@ -346,7 +346,7 @@ struct uart_8250_port {
 	struct uart_8250_dma	*dma;
 	const struct uart_8250_ops *ops;
 
-	/* 8250 specific callbacks */
+	/* 8250固有のコールバック */
 	u32			(*dl_read)(struct uart_8250_port *up);
 	void			(*dl_write)(struct uart_8250_port *up, u32 value);
 
@@ -354,13 +354,13 @@ struct uart_8250_port {
 	void			(*rs485_start_tx)(struct uart_8250_port *up, bool toggle_ier);
 	void			(*rs485_stop_tx)(struct uart_8250_port *up, bool toggle_ier);
 
-	/* Serial port overrun backoff */
+	/* シリアルポートのオーバーラン時のバックオフ */
 	struct delayed_work overrun_backoff;
 	u32 overrun_backoff_time_ms;
 };
 ```
 
-`ier`/`fcr`/`lcr`/`mcr` are shadow copies of the hardware registers. Of the four, only `FCR` is genuinely write-only (the same offset reads back as `IIR`); `IER`/`LCR`/`MCR` are readable. The driver shadows all four anyway to avoid read-modify-write races and to sidestep registers where a read has side effects, rather than because they can't be read back. `serial8250_init_port()` (`drivers/tty/serial/8250/8250_port.c`) is what plugs this into `serial_core`: it sets `port->ops = &serial8250_pops`, the driver's `struct uart_ops` implementation:
+`ier`/`fcr`/`lcr`/`mcr`はハードウェアレジスタのシャドーコピーである。4つのうち本当に書き込み専用なのは`FCR`だけで（同じオフセットを読むと`IIR`が返る）、`IER`/`LCR`/`MCR`は読み取り可能である。それでもドライバが4つすべてをシャドーしているのは、読み戻せないからではなく、read-modify-writeの競合を避け、読み取りに副作用のあるレジスタを回避するためである。これを`serial_core`に組み込むのは`serial8250_init_port()`（`drivers/tty/serial/8250/8250_port.c`）であり、`port->ops = &serial8250_pops`、すなわちドライバの`struct uart_ops`実装を設定する。
 
 ```c
 // drivers/tty/serial/8250/8250_port.c
@@ -393,16 +393,16 @@ static const struct uart_ops serial8250_pops = {
 };
 ```
 
-## The interrupt-driven TX/RX path {#the-interrupt-driven-txrx-path}
+## 割り込み駆動のTX/RXパス {#the-interrupt-driven-txrx-path}
 
-This is where the abstraction pays off end to end: an interrupt fires, and a fixed, generic sequence turns raw register reads into bytes the line discipline (and eventually userspace) can read, or turns buffered write() data into register writes.
+ここで抽象化が端から端まで報われる。割り込みが発生すると、固定された汎用の手順によって、生のレジスタの読み取りがラインディシプリン（そして最終的にはユーザー空間）が読めるバイトに変わり、あるいはバッファされたwrite()のデータがレジスタへの書き込みに変わる。
 
-### RX: hardware → `uart_insert_char()` → `tty_flip_buffer_push()` {#rx-hardware-uartinsertchar-ttyflipbuffer_push}
+### RX: ハードウェア → `uart_insert_char()` → `tty_flip_buffer_push()` {#rx-hardware-uart_insert_char-tty_flip_buffer_push}
 
-`serial8250_handle_irq_locked()` (`drivers/tty/serial/8250/8250_port.c`) is the heart of the 8250 ISR chain (reached from the registered IRQ handler `serial8250_interrupt()` via `port->handle_irq()`). On the receive side, it reads `LSR`, and if data is ready calls `serial8250_rx_chars()`:
+`serial8250_handle_irq_locked()`（`drivers/tty/serial/8250/8250_port.c`）は8250のISRの連鎖の心臓部である（登録されたIRQハンドラ`serial8250_interrupt()`から`port->handle_irq()`経由で到達する）。受信側では`LSR`を読み、データが準備できていれば`serial8250_rx_chars()`を呼ぶ。
 
 ```c
-// drivers/tty/serial/8250/8250_port.c — serial8250_handle_irq_locked(), abridged
+// drivers/tty/serial/8250/8250_port.c — serial8250_handle_irq_locked()、抜粋
 status = serial_lsr_in(up);
 ...
 if (status & (UART_LSR_DR | UART_LSR_BI) && !skip_rx) {
@@ -412,7 +412,7 @@ if (status & (UART_LSR_DR | UART_LSR_BI) && !skip_rx) {
 }
 ```
 
-`serial8250_rx_chars()` drains the FIFO byte-by-byte via `serial8250_read_char()`, then pushes the whole batch to the line discipline in one call:
+`serial8250_rx_chars()`は`serial8250_read_char()`でFIFOを1バイトずつ吸い出し、それからバッチ全体を1回の呼び出しでラインディシプリンに押し出す。
 
 ```c
 // drivers/tty/serial/8250/8250_port.c
@@ -433,10 +433,10 @@ u16 serial8250_rx_chars(struct uart_8250_port *up, u16 lsr)
 }
 ```
 
-And `serial8250_read_char()` is where a raw register byte becomes a properly flagged (`TTY_NORMAL`/`TTY_BREAK`/`TTY_PARITY`/`TTY_FRAME`) character handed to the generic layer:
+そして`serial8250_read_char()`は、生のレジスタのバイトが、適切にフラグ付けされた（`TTY_NORMAL`/`TTY_BREAK`/`TTY_PARITY`/`TTY_FRAME`）文字となって汎用層に渡される場所である。
 
 ```c
-// drivers/tty/serial/8250/8250_port.c — serial8250_read_char(), abridged
+// drivers/tty/serial/8250/8250_port.c — serial8250_read_char()、抜粋
 if (likely(lsr & UART_LSR_DR))
 	ch = serial_in(up, UART_RX);
 else
@@ -447,7 +447,7 @@ port->icount.rx++;
 uart_insert_char(port, lsr, UART_LSR_OE, ch, flag);
 ```
 
-`uart_insert_char()` (`drivers/tty/serial/serial_core.c`) is `serial_core`'s generic RX entry point — every driver that doesn't need something more specialized calls it once per received byte:
+`uart_insert_char()`（`drivers/tty/serial/serial_core.c`）は`serial_core`の汎用RXエントリポイントであり、より特化したものを必要としないすべてのドライバが、受信したバイトごとに1回これを呼ぶ。
 
 ```c
 // drivers/tty/serial/serial_core.c
@@ -461,8 +461,8 @@ void uart_insert_char(struct uart_port *port, unsigned int status,
 			++port->icount.buf_overrun;
 
 	/*
-	 * Overrun is special.  Since it's reported immediately,
-	 * it doesn't affect the current character.
+	 * オーバーランは特別である。即座に報告されるので、
+	 * 現在の文字には影響しない。
 	 */
 	if (status & ~port->ignore_status_mask & overrun)
 		if (tty_insert_flip_char(tport, 0, TTY_OVERRUN) == 0)
@@ -470,14 +470,14 @@ void uart_insert_char(struct uart_port *port, unsigned int status,
 }
 ```
 
-It checks the port's `ignore_status_mask` (set by `.set_termios`, from `termios` flags like `IGNPAR`/`IGNBRK`) before deciding whether the byte is worth keeping, then calls `tty_insert_flip_char()` — the generic TTY flip-buffer insert, which just queues the byte and its flag without waking anyone up yet. The driver's own loop keeps calling `uart_insert_char()` for every byte in the hardware FIFO; only once the batch is drained does it call `tty_flip_buffer_push(&port->state->port)` (`include/linux/tty_flip.h`) to hand the whole batch to the line discipline in one shot and wake any reader. Batching the wakeup this way — one `tty_flip_buffer_push()` per interrupt instead of one per byte — is a deliberate throughput choice, not an incidental one.
+これは、バイトを保持する価値があるかを判断する前にポートの`ignore_status_mask`（`.set_termios`が`IGNPAR`/`IGNBRK`のような`termios`フラグから設定する）をチェックし、それから`tty_insert_flip_char()`を呼ぶ。これは汎用TTYのフリップバッファへの挿入であり、バイトとそのフラグをキューに入れるだけで、まだ誰も起床させない。ドライバ自身のループは、ハードウェアFIFO内のバイトごとに`uart_insert_char()`を呼び続ける。バッチを吸い出し終えて初めて、`tty_flip_buffer_push(&port->state->port)`（`include/linux/tty_flip.h`）を呼んでバッチ全体を一度にラインディシプリンに渡し、読み手を起床させる。このように起床をまとめること（バイトごとに1回ではなく、割り込みごとに1回の`tty_flip_buffer_push()`）は、偶然ではなく、スループットのための意図的な選択である。
 
-### TX: buffered data → `uart_fifo_get()` → hardware {#tx-buffered-data-uartfifoget-hardware}
+### TX: バッファされたデータ → `uart_fifo_get()` → ハードウェア {#tx-buffered-data-uart_fifo_get-hardware}
 
-The transmit half of the same handler runs when `LSR`'s THR-empty bit is set and the transmit-empty interrupt is enabled:
+同じハンドラの送信側の半分は、`LSR`のTHR空ビットがセットされ、送信空割り込みが有効になっているときに実行される。
 
 ```c
-// drivers/tty/serial/8250/8250_port.c — serial8250_handle_irq_locked(), abridged
+// drivers/tty/serial/8250/8250_port.c — serial8250_handle_irq_locked()、抜粋
 if ((status & UART_LSR_THRE) && (up->ier & UART_IER_THRI)) {
 	if (!up->dma || up->dma->tx_err)
 		serial8250_tx_chars(up);
@@ -486,10 +486,10 @@ if ((status & UART_LSR_THRE) && (up->ier & UART_IER_THRI)) {
 }
 ```
 
-`serial8250_tx_chars()` pulls bytes out of the port's transmit `kfifo` (the buffer `write()`/`tty_write()` filled) one at a time via `uart_fifo_get()` and writes them straight to the `THR` register, up to the FIFO's load size, until either the buffer empties or the load size is reached:
+`serial8250_tx_chars()`は、ポートの送信用`kfifo`（`write()`/`tty_write()`が埋めたバッファ）から`uart_fifo_get()`で1バイトずつ取り出し、それを`THR`レジスタに直接書き込む。FIFOのロードサイズを上限として、バッファが空になるかロードサイズに達するまで続ける。
 
 ```c
-// drivers/tty/serial/8250/8250_port.c — serial8250_tx_chars(), abridged
+// drivers/tty/serial/8250/8250_port.c — serial8250_tx_chars()、抜粋
 if (kfifo_is_empty(&tport->xmit_fifo)) {
 	__stop_tx(up);
 	return;
@@ -510,7 +510,7 @@ if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
 	uart_write_wakeup(port);
 ```
 
-`uart_fifo_get()` (`include/linux/serial_core.h`) is the generic counterpart to `uart_insert_char()` on the TX side — pull one character out of `port->state->port.xmit_fifo` and bump `port->icount.tx`:
+`uart_fifo_get()`（`include/linux/serial_core.h`）は、TX側における`uart_insert_char()`の汎用の対応物である。`port->state->port.xmit_fifo`から1文字を取り出し、`port->icount.tx`を増やす。
 
 ```c
 // include/linux/serial_core.h
@@ -527,16 +527,16 @@ static inline unsigned int uart_fifo_get(struct uart_port *up,
 }
 ```
 
-Once the FIFO empties, `.stop_tx` masks `UART_IER_THRI` back off, and the port goes idle until the next `write()` calls `__uart_start()` → `.start_tx` to unmask it again. This start/feed/stop cycle — not a byte-at-a-time round trip through the TTY core — is what lets a 16-byte-deep 16550 FIFO sustain high baud rates without an interrupt per byte.
+FIFOが空になると、`.stop_tx`が`UART_IER_THRI`を再びマスクし、次の`write()`が`__uart_start()` → `.start_tx`を呼んでマスクを外すまでポートはアイドルになる。この開始/供給/停止のサイクル（TTYコアを1バイトずつ往復するのではなく）こそが、深さ16バイトの16550のFIFOが、バイトごとの割り込みなしに高いボーレートを維持できる理由である。
 
-## Enumeration: how a UART gets probed {#enumeration-how-a-uart-gets-probed}
+## 列挙: UARTはどのようにプローブされるか {#enumeration-how-a-uart-gets-probed}
 
-A UART is, from the device model's point of view, just another platform (or PCI, or USB, or I2C/SPI-attached) device, matched to its driver the same way any other platform driver is. For a memory-mapped SoC UART described in the device tree, that's a `struct platform_driver` with an `of_device_id` match table:
+UARTは、デバイスモデルから見れば、ただのプラットフォーム（あるいはPCI、USB、I2C/SPI接続の）デバイスの1つであり、他のプラットフォームドライバと同じ方法でドライバとマッチングされる。デバイスツリーに記述されたメモリマップドなSoCのUARTの場合、それは`of_device_id`のマッチテーブルを持つ`struct platform_driver`である。
 
 ```c
-// drivers/tty/serial/uartlite.c, abridged — ulite_of_match[] and
-// ulite_platform_driver are ~130 lines apart in the real file, and the
-// match table is wrapped in #if defined(CONFIG_OF) / #endif
+// drivers/tty/serial/uartlite.c、抜粋 — 実際のファイルではulite_of_match[]と
+// ulite_platform_driverは約130行離れており、
+// マッチテーブルは#if defined(CONFIG_OF) / #endifで囲まれている
 #if defined(CONFIG_OF)
 static const struct of_device_id ulite_of_match[] = {
 	{ .compatible = "xlnx,opb-uartlite-1.00.b", },
@@ -559,11 +559,11 @@ static struct platform_driver ulite_platform_driver = {
 };
 ```
 
-When the kernel walks the device tree and finds a node whose `compatible` property matches one of these strings, the driver core calls `.probe()` with a `struct platform_device` carrying that node's resources — MMIO range, IRQ number, clock reference, and any vendor-specific properties (baud rate, parity, data bits, in `uartlite`'s case). ACPI-described UARTs follow the same shape with an `acpi_device_id` table instead of (or alongside) `of_device_id` — the DesignWare 8250 wrapper (`drivers/tty/serial/8250/8250_dw.c`) registers both `dw8250_of_match[]` and `dw8250_acpi_match[]` against the same `platform_driver`, so the identical driver binds whether firmware describes the port via devicetree or ACPI. There's also a separate, simpler 8250 platform driver (`drivers/tty/serial/8250/8250_platform.c`) and a devicetree-only one (`8250_of.c`) — several distinct platform drivers, all funneling into the same `serial8250_pops`/`uart_add_one_port()` core underneath. `8250_platform.c` registers legacy ISA-style ports as a plain `"serial8250"` platform device matched by name, not by its `acpi_platform_serial_table[]`; that ACPI table has only one real entry, a RISC-V generic-16550A match (`"RSCV0003"`). `.probe()`'s job is always the same regardless of firmware interface or which of these front-end drivers is involved: read the resources, fill in a `uart_port`, and call `uart_add_one_port()`.
+カーネルがデバイスツリーをたどり、`compatible`プロパティがこれらの文字列のいずれかに一致するノードを見つけると、ドライバコアは、そのノードのリソース（MMIOの範囲、IRQ番号、クロックの参照、そして`uartlite`の場合はボーレート、パリティ、データビットといったベンダー固有のプロパティ）を持つ`struct platform_device`を引数に`.probe()`を呼ぶ。ACPIで記述されたUARTも同じ形に従い、`of_device_id`の代わりに（あるいはそれと並んで）`acpi_device_id`のテーブルを使う。DesignWareの8250ラッパー（`drivers/tty/serial/8250/8250_dw.c`）は、`dw8250_of_match[]`と`dw8250_acpi_match[]`の両方を同じ`platform_driver`に登録しているので、ファームウェアがポートをデバイスツリーとACPIのどちらで記述していても、同一のドライバがバインドされる。また、別のより単純な8250プラットフォームドライバ（`drivers/tty/serial/8250/8250_platform.c`）と、デバイスツリー専用のもの（`8250_of.c`）もある。複数の別個のプラットフォームドライバが、その下ではすべて同じ`serial8250_pops`/`uart_add_one_port()`のコアに流れ込んでいるのである。`8250_platform.c`はレガシーなISA形式のポートを、`acpi_platform_serial_table[]`ではなく名前でマッチする素の`"serial8250"`プラットフォームデバイスとして登録する。そのACPIテーブルには実質的なエントリが1つしかなく、RISC-Vの汎用16550Aのマッチ（`"RSCV0003"`）である。ファームウェアのインターフェースや、これらのフロントエンドドライバのどれが関わるかにかかわらず、`.probe()`の仕事は常に同じである。リソースを読み、`uart_port`を埋め、`uart_add_one_port()`を呼ぶ。
 
-## Worked example: `drivers/tty/serial/uartlite.c` {#worked-example-driversttyserialuartlitec}
+## 実例: `drivers/tty/serial/uartlite.c` {#worked-example-driversttyserialuartlitec}
 
-Xilinx's `uartlite` driver is a good worked example precisely because it *isn't* 8250-compatible — no FIFO trigger levels, no aliased registers, no divisor latch (baud rate is fixed at synthesis time for this soft IP core) — just four registers (RX, TX, a status register, a control register) and a minimal `uart_ops` implementation, which makes the `serial_core` plumbing easier to see without 8250's register quirks in the way.
+Xilinxの`uartlite`ドライバが良い実例なのは、まさにそれが8250互換 *ではない* からである。FIFOのトリガーレベルもなく、エイリアスされたレジスタもなく、分周ラッチもない（このソフトIPコアではボーレートは論理合成時に固定される）。あるのは4つのレジスタ（RX、TX、ステータスレジスタ、制御レジスタ）と最小限の`uart_ops`実装だけであり、そのおかげで8250のレジスタの癖に邪魔されずに`serial_core`の配管が見やすくなる。
 
 ### `.startup`/`.shutdown` {#startupshutdown}
 
@@ -597,18 +597,18 @@ static void ulite_shutdown(struct uart_port *port)
 	struct uartlite_data *pdata = port->private_data;
 
 	uart_out32(0, ULITE_CONTROL, port);
-	uart_in32(ULITE_CONTROL, port); /* dummy */
+	uart_in32(ULITE_CONTROL, port); /* ダミー */
 	free_irq(port->irq, port);
 	clk_disable(pdata->clk);
 }
 ```
 
-`.startup` is the entire hardware bring-up: enable the clock, request the IRQ, reset both FIFOs, then enable the "interrupt enable" bit in the control register. `.shutdown` is the exact mirror. Note what's absent compared to an 8250-style driver: no baud-rate programming here, because `uartlite`'s baud rate is fixed hardware — this device's `.set_termios` (next) only ever *reports* the fixed rate back, never programs one.
+`.startup`がハードウェアの立ち上げのすべてである。クロックを有効にし、IRQを要求し、両方のFIFOをリセットし、それから制御レジスタの「割り込み許可」ビットを立てる。`.shutdown`はその正確な鏡像である。8250形式のドライバと比べて何がないかに注意してほしい。ここにはボーレートの設定がない。`uartlite`のボーレートはハードウェアで固定されているからである。このデバイスの`.set_termios`（次節）は、固定のレートを *報告* し返すだけで、設定することは決してない。
 
 ### `.set_termios` {#set_termios}
 
 ```c
-// drivers/tty/serial/uartlite.c — ulite_set_termios(), abridged
+// drivers/tty/serial/uartlite.c — ulite_set_termios()、抜粋
 static void ulite_set_termios(struct uart_port *port,
 			      struct ktermios *termios,
 			      const struct ktermios *old)
@@ -616,7 +616,7 @@ static void ulite_set_termios(struct uart_port *port,
 	unsigned long flags;
 	struct uartlite_data *pdata = port->private_data;
 
-	/* Set termios to what the hardware supports */
+	/* termiosをハードウェアがサポートする値に設定する */
 	termios->c_iflag &= ~BRKINT;
 	termios->c_cflag &= ~(CSTOPB | PARENB | PARODD | CSIZE);
 	termios->c_cflag |= pdata->cflags & (PARENB | PARODD | CSIZE);
@@ -629,9 +629,9 @@ static void ulite_set_termios(struct uart_port *port,
 	...
 ```
 
-Rather than negotiate, `.set_termios` here *overwrites* whatever the caller asked for with what the hardware actually is (`pdata->baud`, and whatever parity/data-bits this synthesized core was built with), then calls `tty_termios_encode_baud_rate()` to report that back through the generic `ktermios`. `port->read_status_mask` is not something `uart_insert_char()` looks at — that helper only consults `ignore_status_mask`. `read_status_mask` is applied by the driver itself: `ulite_receive()` does `stat &= port->read_status_mask` before acting on the status bits (the 8250 driver does the equivalent with `lsr &= port->read_status_mask`), so it's this driver-side masking, not `uart_insert_char()`, that decides which status bits matter here.
+ここでの`.set_termios`はネゴシエートするのではなく、呼び出し元が要求したものを、ハードウェアの実際の値（`pdata->baud`と、この合成されたコアがどのパリティ/データビットで作られたか）で *上書き* し、それから`tty_termios_encode_baud_rate()`を呼んで、それを汎用の`ktermios`を通じて報告し返す。`port->read_status_mask`は`uart_insert_char()`が見るものではない。あのヘルパーが参照するのは`ignore_status_mask`だけである。`read_status_mask`はドライバ自身が適用する。`ulite_receive()`はステータスビットに基づいて動作する前に`stat &= port->read_status_mask`を行う（8250ドライバも`lsr &= port->read_status_mask`で同等のことを行う）。したがって、ここでどのステータスビットが意味を持つかを決めるのは`uart_insert_char()`ではなく、このドライバ側のマスク処理である。
 
-### Interrupt handler and the RX/TX callbacks {#interrupt-handler-and-the-rxtx-callbacks}
+### 割り込みハンドラとRX/TXのコールバック {#interrupt-handler-and-the-rxtx-callbacks}
 
 ```c
 // drivers/tty/serial/uartlite.c
@@ -650,7 +650,7 @@ static irqreturn_t ulite_isr(int irq, void *dev_id)
 		n++;
 	} while (busy);
 
-	/* work done? */
+	/* 仕事をしたか? */
 	if (n > 1) {
 		tty_flip_buffer_push(&port->state->port);
 		return IRQ_HANDLED;
@@ -660,10 +660,10 @@ static irqreturn_t ulite_isr(int irq, void *dev_id)
 }
 ```
 
-Where the 8250 ISR branches on which status bits are set, `uartlite`'s ISR just calls both `ulite_receive()` and `ulite_transmit()` every time it wakes up and loops until neither reports more work — a simpler, less register-count-sensitive shape that fits a UART with no programmable FIFO trigger levels. `uartlite` does have a genuine 16-deep hardware FIFO (`port->fifosize = 16`, with RX-full/TX-full status bits and a FIFO reset in `.startup`); what it lacks, unlike the 8250, is any batched, trigger-level-aware way to drain or load that FIFO — each interrupt moves data through the status/RX/TX registers one byte at a time rather than in an 8250-style `tx_loadsz` burst. `ulite_receive()` reaches the TTY layer directly with `tty_insert_flip_char()` rather than going through `uart_insert_char()`:
+8250のISRがどのステータスビットがセットされているかで分岐するのに対し、`uartlite`のISRは起床するたびに`ulite_receive()`と`ulite_transmit()`の両方を呼び、どちらもそれ以上の仕事を報告しなくなるまでループするだけである。これは、プログラム可能なFIFOトリガーレベルを持たないUARTに合った、より単純でレジスタ数に左右されにくい形である。`uartlite`は実際に深さ16のハードウェアFIFOを持っている（`port->fifosize = 16`で、RXフル/TXフルのステータスビットと、`.startup`でのFIFOリセットがある）。8250と違って欠けているのは、そのFIFOをバッチで、トリガーレベルを意識して吸い出したり詰め込んだりする手段である。各割り込みは、8250形式の`tx_loadsz`単位のバーストではなく、ステータス/RX/TXのレジスタを通して1バイトずつデータを動かす。`ulite_receive()`は、`uart_insert_char()`を経由せず、`tty_insert_flip_char()`で直接TTY層に到達する。
 
 ```c
-// drivers/tty/serial/uartlite.c — ulite_receive(), abridged
+// drivers/tty/serial/uartlite.c — ulite_receive()、抜粋
 if (stat & ULITE_STATUS_RXVALID) {
 	port->icount.rx++;
 	ch = uart_in32(ULITE_RX, port);
@@ -674,23 +674,23 @@ if (stat & ULITE_STATUS_RXVALID)
 	tty_insert_flip_char(tport, ch, flag);
 ```
 
-and `ulite_transmit()` mirrors 8250's `uart_fifo_get()` pattern exactly, just moving one byte per interrupt into the hardware FIFO rather than an 8250-style batched load:
+そして`ulite_transmit()`は8250の`uart_fifo_get()`のパターンを正確になぞるが、8250形式のバッチでのロードではなく、割り込みごとに1バイトだけをハードウェアFIFOに移す。
 
 ```c
-// drivers/tty/serial/uartlite.c — ulite_transmit(), abridged
+// drivers/tty/serial/uartlite.c — ulite_transmit()、抜粋
 if (!uart_fifo_get(port, &ch))
 	return 0;
 
 uart_out32(ch, ULITE_TX, port);
 
-/* wake up */
+/* 起床させる */
 if (kfifo_len(&tport->xmit_fifo) < WAKEUP_CHARS)
 	uart_write_wakeup(port);
 ```
 
-Both `uart_insert_char()` and a driver's own direct `tty_insert_flip_char()` calls are legitimate, real, in-tree patterns — `uart_insert_char()` adds the `ignore_status_mask`/overrun bookkeeping most drivers want for free; a driver with simpler status semantics, like this one, sometimes just calls the TTY-layer primitive directly.
+`uart_insert_char()`も、ドライバ自身による直接の`tty_insert_flip_char()`呼び出しも、どちらも正当で、実在する、ツリー内のパターンである。`uart_insert_char()`は、ほとんどのドライバが欲しがる`ignore_status_mask`/オーバーランの管理をただで追加してくれる。このドライバのように、より単純なステータスのセマンティクスを持つドライバは、TTY層のプリミティブを直接呼ぶだけのこともある。
 
-### Registration {#registration}
+### 登録 {#registration}
 
 ```c
 // drivers/tty/serial/uartlite.c
@@ -707,17 +707,17 @@ static struct uart_driver ulite_uart_driver = {
 };
 ```
 
-and, inside `ulite_assign()` (called from `.probe()`), the two calls that tie a specific `uart_port` to that driver:
+そして（`.probe()`から呼ばれる）`ulite_assign()`の中に、特定の`uart_port`をそのドライバに結びつける2つの呼び出しがある。
 
 ```c
-// drivers/tty/serial/uartlite.c — ulite_assign(), abridged
+// drivers/tty/serial/uartlite.c — ulite_assign()、抜粋
 port = &ulite_ports[id];
 
 spin_lock_init(&port->lock);
 port->fifosize = 16;
 port->regshift = 2;
 port->iotype = UPIO_MEM;
-port->iobase = 1; /* mark port in use */
+port->iobase = 1; /* ポートを使用中としてマークする */
 port->mapbase = base;
 port->membase = NULL;
 port->ops = &ulite_ops;
@@ -728,13 +728,13 @@ port->type = PORT_UNKNOWN;
 port->line = id;
 port->private_data = pdata;
 
-/* Register the port */
+/* ポートを登録する */
 rc = uart_add_one_port(&ulite_uart_driver, port);
 ```
 
-`uart_register_driver(&ulite_uart_driver)` runs once, from module init, before any port shows up; `uart_add_one_port()` runs once per physical port `.probe()` finds — for `uartlite`, that means once per device-tree node, since each synthesized `uartlite` core is a separate device.
+`uart_register_driver(&ulite_uart_driver)`は、どのポートも現れる前に、モジュール初期化から1回だけ実行される。`uart_add_one_port()`は、`.probe()`が見つけた物理ポートごとに1回実行される。`uartlite`の場合、合成された`uartlite`コアはそれぞれが別個のデバイスなので、これはデバイスツリーのノードごとに1回ということになる。
 
-## The full path, hardware to userspace {#the-full-path-hardware-to-userspace}
+## ハードウェアからユーザー空間までの全経路 {#the-full-path-hardware-to-userspace}
 
 ```
  UART hardware (8250, uartlite, PL011, ...)
@@ -779,25 +779,25 @@ rc = uart_add_one_port(&ulite_uart_driver, port);
                     /dev/ttyS0, /dev/ttyUL0, ...
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-### Kernel source {#kernel-source}
+### カーネルソース {#kernel-source}
 
-- [`include/linux/serial_core.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/serial_core.h) — `struct uart_ops`, `struct uart_port`, `struct uart_driver`, `struct uart_state`, `uart_insert_char()`, `uart_fifo_get()`
-- [`drivers/tty/serial/serial_core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/serial_core.c) — `uart_register_driver()`, the shared `tty_operations`, `uart_start()`/`uart_port_startup()`/`uart_change_line_settings()`, `uart_insert_char()`
+- [`include/linux/serial_core.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/serial_core.h) — `struct uart_ops`、`struct uart_port`、`struct uart_driver`、`struct uart_state`、`uart_insert_char()`、`uart_fifo_get()`
+- [`drivers/tty/serial/serial_core.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/serial_core.c) — `uart_register_driver()`、共有の`tty_operations`、`uart_start()`/`uart_port_startup()`/`uart_change_line_settings()`、`uart_insert_char()`
 - [`drivers/tty/serial/serial_port.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/serial_port.c) — `uart_add_one_port()`/`uart_remove_one_port()`
 - [`include/linux/serial_8250.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/serial_8250.h) — `struct uart_8250_port`
-- [`drivers/tty/serial/8250/8250_port.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/8250/8250_port.c) — `serial8250_pops`, `serial8250_handle_irq_locked()`, `serial8250_rx_chars()`/`serial8250_read_char()`, `serial8250_tx_chars()`
-- [`include/uapi/linux/serial_reg.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/serial_reg.h) — 8250/16550 register offsets and bit definitions (`UART_IER`, `UART_FCR`, `UART_LCR`, `UART_MCR`, `UART_LSR`, `UART_MSR`, ...)
-- [`drivers/tty/serial/uartlite.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/uartlite.c) — the worked-example driver above
-- [`include/linux/tty_flip.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_flip.h) — `tty_insert_flip_char()`, `tty_flip_buffer_push()`
+- [`drivers/tty/serial/8250/8250_port.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/8250/8250_port.c) — `serial8250_pops`、`serial8250_handle_irq_locked()`、`serial8250_rx_chars()`/`serial8250_read_char()`、`serial8250_tx_chars()`
+- [`include/uapi/linux/serial_reg.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/serial_reg.h) — 8250/16550のレジスタオフセットとビット定義（`UART_IER`、`UART_FCR`、`UART_LCR`、`UART_MCR`、`UART_LSR`、`UART_MSR`、...）
+- [`drivers/tty/serial/uartlite.c`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/drivers/tty/serial/uartlite.c) — 上の実例で扱ったドライバ
+- [`include/linux/tty_flip.h`](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/linux/tty_flip.h) — `tty_insert_flip_char()`、`tty_flip_buffer_push()`
 
-### Related pages {#related-pages}
+### 関連ページ {#related-pages}
 
-- [TTY Subsystem](README.md) — the generic TTY core, `tty_struct`, and where line disciplines and drivers each fit
-- [Line Disciplines](line-disciplines.md) — what happens to a byte after `tty_flip_buffer_push()` hands it to `n_tty` or another ldisc
-- [TTY/Serial War Stories](war-stories.md) — real incidents from the layer this page describes
+- [TTYサブシステム](README.md) — 汎用のTTYコア、`tty_struct`、そしてラインディシプリンとドライバがそれぞれどこに位置するか
+- [ラインディシプリン](line-disciplines.md) — `tty_flip_buffer_push()`がバイトを`n_tty`や他のldiscに渡した後、そのバイトに何が起きるか
+- [TTY/シリアルの事件簿](war-stories.md) — このページで説明する層で実際に起きた事件
 
-### External {#external}
+### 外部資料 {#external}
 
-- [Serial drivers](https://docs.kernel.org/driver-api/serial/driver.html) — the kernel's own driver-API reference for `uart_ops`, `uart_port`, and the helper functions serial drivers use
+- [Serial drivers](https://docs.kernel.org/driver-api/serial/driver.html) — `uart_ops`、`uart_port`、シリアルドライバが使うヘルパー関数に関する、カーネル自身のドライバAPIリファレンス

@@ -1,58 +1,58 @@
-# ftrace: Function Tracer {#ftrace-function-tracer}
+# ftrace: 関数トレーサー {#ftrace-function-tracer}
 
-> The kernel's built-in function tracing infrastructure
+> カーネル組み込みの関数トレーシング基盤
 
-## What ftrace is {#what-ftrace-is}
+## ftraceとは {#what-ftrace-is}
 
-ftrace is the kernel's main tracing framework, accessible via tracefs at `/sys/kernel/tracing/`. Created by Steven Rostedt and introduced in Linux 2.6.27 [(commit)](https://git.kernel.org/linus/16444a8a40d4c7b4f6de34af0cae1f76a4f6c901) [(LWN)](https://lwn.net/Articles/290277/), it:
+ftraceはカーネルの主要なトレーシングフレームワークであり、`/sys/kernel/tracing/`のtracefsを通じてアクセスする。Steven Rostedtが作成し、Linux 2.6.27で導入された[（コミット）](https://git.kernel.org/linus/16444a8a40d4c7b4f6de34af0cae1f76a4f6c901) [（LWN）](https://lwn.net/Articles/290277/)。ftraceは次のことを行う。
 
-- Records every kernel function call (function tracer)
-- Traces execution paths and call graphs (function_graph tracer)
-- Provides a ring buffer for low-overhead event collection
-- Is the backend for BPF `fentry`/`fexit` (Linux 5.5) [(commit)](https://git.kernel.org/linus/fec56f5890d93fc2ed74166c397dc186b1c25951), kprobes, and tracepoints
+- カーネルのすべての関数呼び出しを記録する（functionトレーサー）
+- 実行パスとコールグラフをトレースする（function_graphトレーサー）
+- 低オーバーヘッドなイベント収集のためのリングバッファを提供する
+- BPFの`fentry`/`fexit`（Linux 5.5）[（コミット）](https://git.kernel.org/linus/fec56f5890d93fc2ed74166c397dc186b1c25951)、kprobe、tracepointのバックエンドとなる
 
-## tracefs interface {#tracefs-interface}
+## tracefsインターフェース {#tracefs-interface}
 
-tracefs was introduced as a standalone filesystem in Linux 4.1 [(commit)](https://git.kernel.org/linus/4282d60689d4f21b40692029080440cc58e8a17d).
+tracefsはLinux 4.1で独立したファイルシステムとして導入された[（コミット）](https://git.kernel.org/linus/4282d60689d4f21b40692029080440cc58e8a17d)。
 
 ```bash
-# Mount tracefs (if not already mounted)
+# tracefs をマウントする（まだマウントされていない場合）
 mount -t tracefs tracefs /sys/kernel/tracing
 
-# Key files:
+# 主なファイル:
 /sys/kernel/tracing/
-├── current_tracer           # active tracer (nop/function/function_graph/etc.)
-├── tracing_on               # 1=enable, 0=disable
-├── trace                    # read the trace buffer (blocking)
-├── trace_pipe               # stream trace output (consuming read)
-├── trace_options            # comma-separated options
-├── available_tracers        # list of compiled-in tracers
-├── available_filter_funcs   # functions that can be filtered
-├── set_ftrace_filter        # limit function tracing to these functions
-├── set_ftrace_notrace       # exclude these functions
-├── set_graph_function       # function_graph: enter graph at these
+├── current_tracer           # 有効なトレーサー（nop/function/function_graph など）
+├── tracing_on               # 1=有効, 0=無効
+├── trace                    # トレースバッファを読む（ブロッキング）
+├── trace_pipe               # トレース出力をストリームする（消費する読み出し）
+├── trace_options            # カンマ区切りのオプション
+├── available_tracers        # 組み込まれているトレーサーの一覧
+├── available_filter_funcs   # フィルタ可能な関数
+├── set_ftrace_filter        # 関数トレースをこれらの関数に限定する
+├── set_ftrace_notrace       # これらの関数を除外する
+├── set_graph_function       # function_graph: これらの関数からグラフに入る
 ├── set_graph_notrace
-├── tracing_cpumask          # which CPUs to trace
-├── per_cpu/                 # per-CPU ring buffers
+├── tracing_cpumask          # トレースする CPU
+├── per_cpu/                 # per-CPU リングバッファ
 │   └── cpu0/
 │       ├── trace
 │       └── stats
-├── events/                  # tracepoint events
-│   ├── enable               # enable all events
+├── events/                  # tracepoint イベント
+│   ├── enable               # すべてのイベントを有効にする
 │   └── syscalls/
 │       ├── sys_enter_read/
 │       │   ├── enable
 │       │   ├── filter
 │       │   └── format
 │       └── ...
-├── instances/               # separate trace instances (non-interfering)
-└── snapshot                 # freeze a snapshot of the ring buffer
+├── instances/               # 独立したトレースインスタンス（互いに干渉しない）
+└── snapshot                 # リングバッファのスナップショットを凍結する
 ```
 
-## Function tracer {#function-tracer}
+## functionトレーサー {#function-tracer}
 
 ```bash
-# Trace all function calls
+# すべての関数呼び出しをトレースする
 echo function > /sys/kernel/tracing/current_tracer
 echo 1 > /sys/kernel/tracing/tracing_on
 sleep 0.001
@@ -61,30 +61,30 @@ cat /sys/kernel/tracing/trace | head -30
 # bash-1234  [000] ..... 12345.678901: do_sys_open <-do_open_execat
 # bash-1234  [000] ..... 12345.678902: _raw_spin_lock <-jiffies_to_timespec64
 
-# Limit to specific functions
+# 特定の関数に限定する
 echo "tcp_*" > /sys/kernel/tracing/set_ftrace_filter
 echo function > /sys/kernel/tracing/current_tracer
 echo 1 > /sys/kernel/tracing/tracing_on
 
-# Filter by module
+# モジュールでフィルタする
 echo ":mod:ext4" > /sys/kernel/tracing/set_ftrace_filter
 
-# Multiple patterns (append with >>)
+# 複数のパターン（>> で追記する）
 echo "schedule" >> /sys/kernel/tracing/set_ftrace_filter
 
-# Clear filter (trace all)
+# フィルタをクリアする（すべてをトレース）
 echo "" > /sys/kernel/tracing/set_ftrace_filter
 ```
 
-## Function graph tracer {#function-graph-tracer}
+## function graphトレーサー {#function-graph-tracer}
 
-Shows call hierarchy and execution time. Added by Frédéric Weisbecker in Linux 2.6.29 [(commit)](https://git.kernel.org/linus/15e6cb3673ea6277999642802406a764b49391b0).
+呼び出し階層と実行時間を表示する。Frédéric WeisbeckerによってLinux 2.6.29で追加された[（コミット）](https://git.kernel.org/linus/15e6cb3673ea6277999642802406a764b49391b0)。
 
 ```bash
 echo function_graph > /sys/kernel/tracing/current_tracer
-echo vfs_read > /sys/kernel/tracing/set_graph_function  # entry point
+echo vfs_read > /sys/kernel/tracing/set_graph_function  # エントリポイント
 echo 1 > /sys/kernel/tracing/tracing_on
-cat /some/file  # trigger the trace
+cat /some/file  # トレースを発生させる
 echo 0 > /sys/kernel/tracing/tracing_on
 cat /sys/kernel/tracing/trace
 # CPU DURATION              FUNCTION CALLS
@@ -97,99 +97,99 @@ cat /sys/kernel/tracing/trace
 #  0  |            |            filemap_read() {
 ```
 
-## How ftrace instruments functions {#how-ftrace-instruments-functions}
+## ftraceが関数を計装する仕組み {#how-ftrace-instruments-functions}
 
-When `CONFIG_DYNAMIC_FTRACE=y` and `CONFIG_HAVE_FENTRY=y`, the compiler inserts a call to `__fentry__` (or `mcount`) at the start of every traceable function:
+`CONFIG_DYNAMIC_FTRACE=y`かつ`CONFIG_HAVE_FENTRY=y`のとき、コンパイラはトレース可能なすべての関数の先頭に`__fentry__`（または`mcount`）の呼び出しを挿入する。
 
 ```asm
-/* Every kernel function begins with: */
+/* すべてのカーネル関数は次のように始まる: */
 func:
-    callq   __fentry__      ; 5 bytes (E8 + 4-byte offset)
-    ; ... actual function code ...
+    callq   __fentry__      ; 5 バイト（E8 + 4 バイトのオフセット）
+    ; ... 実際の関数コード ...
 ```
 
-When tracing is disabled, these calls are patched to `nop` instructions at boot time — **zero overhead when not tracing**.
+トレーシングが無効なとき、これらの呼び出しはブート時に`nop`命令へパッチされる — **トレースしていないときのオーバーヘッドはゼロ**である。
 
-When enabled:
+有効にすると:
 ```asm
 func:
-    callq   ftrace_caller   ; patched back in
+    callq   ftrace_caller   ; 呼び出しがパッチで戻される
 ```
 
-`ftrace_caller` looks up which tracers are registered for this function and calls them. The patching is done with `text_poke_bp()` — a breakpoint-based patching technique that avoids stopping all CPUs.
+`ftrace_caller`は、この関数にどのトレーサーが登録されているかを調べ、それらを呼び出す。パッチ適用は`text_poke_bp()`で行われる。これはブレークポイントを用いたパッチ手法で、全CPUを停止させずに済む。
 
-Since Linux 5.x with `CONFIG_HAVE_FENTRY`, the compiler uses `__fentry__` (called before the function prologue saves registers) rather than `mcount`, which makes the hook faster and allows reliable stack unwinding.
+`CONFIG_HAVE_FENTRY`のあるLinux 5.x以降、コンパイラは`mcount`ではなく`__fentry__`（関数プロローグがレジスタを退避する前に呼ばれる）を使う。これによりフックが高速になり、信頼性の高いスタック巻き戻しが可能になる。
 
-## Ring buffer {#ring-buffer}
+## リングバッファ {#ring-buffer}
 
-ftrace uses a lockless per-CPU ring buffer (`kernel/trace/ring_buffer.c`):
+ftraceはロックレスなper-CPUリングバッファ（`kernel/trace/ring_buffer.c`）を使う。
 
 ```c
-/* Architecture: */
+/* アーキテクチャ: */
 struct ring_buffer {
     struct ring_buffer_per_cpu *buffers[NR_CPUS];
 };
 
 struct ring_buffer_per_cpu {
-    /* Writer: */
-    unsigned long   tail_page;   /* current write page */
-    unsigned long   commit_page; /* last committed page */
-    /* Reader: */
+    /* 書き込み側: */
+    unsigned long   tail_page;   /* 現在の書き込みページ */
+    unsigned long   commit_page; /* 最後にコミットされたページ */
+    /* 読み出し側: */
     unsigned long   reader_page;
     unsigned long   head_page;
     /* ... */
 };
 ```
 
-- Each CPU writes to its own buffer (no lock contention)
-- Ring behavior: old events are overwritten when full (unless `trace_options` has `overwrite` disabled)
-- Events are timestamped with per-CPU clock
+- 各CPUは自分専用のバッファに書き込む（ロック競合なし）
+- リングとしての動作: 満杯になると古いイベントが上書きされる（`trace_options`で`overwrite`が無効にされていない限り）
+- イベントにはper-CPUクロックでタイムスタンプが付けられる
 
 ```bash
-# Check buffer size
+# バッファサイズを確認する
 cat /sys/kernel/tracing/buffer_size_kb
 # 1408 (per CPU)
 
-# Increase for long captures
+# 長時間の捕捉のために増やす
 echo 65536 > /sys/kernel/tracing/buffer_size_kb
 ```
 
-## Dynamic events: kprobe_events and uprobe_events {#dynamic-events-kprobeevents-and-uprobeevents}
+## 動的イベント: kprobe_eventsとuprobe_events {#dynamic-events-kprobe_events-and-uprobe_events}
 
 ```bash
-# Add a kprobe on tcp_sendmsg: print first argument (sk)
+# tcp_sendmsg に kprobe を追加: 第 1 引数（sk）を表示する
 echo 'p:my_probe tcp_sendmsg sk=%di' > /sys/kernel/tracing/kprobe_events
 echo 1 > /sys/kernel/tracing/events/kprobes/my_probe/enable
 
 cat /sys/kernel/tracing/trace_pipe
 # bash-1234 [000] ..... 12345.0: my_probe: (tcp_sendmsg+0x0) sk=0xffff888...
 
-# Remove the probe
+# プローブを削除する
 echo '-:my_probe' >> /sys/kernel/tracing/kprobe_events
 
-# Add a kretprobe: print return value
+# kretprobe を追加: 戻り値を表示する
 echo 'r:my_ret tcp_sendmsg retval=$retval' > /sys/kernel/tracing/kprobe_events
 
-# Add uprobe
+# uprobe を追加する
 echo 'p:myapp /usr/bin/myapp:0x1234 arg1=%di' > /sys/kernel/tracing/uprobe_events
 ```
 
-## Event tracing: tracepoints {#event-tracing-tracepoints}
+## イベントトレーシング: tracepoint {#event-tracing-tracepoints}
 
 ```bash
-# List available tracepoint events
+# 利用可能な tracepoint イベントを一覧表示する
 ls /sys/kernel/tracing/events/
 
-# Enable all events in a subsystem
+# あるサブシステムのすべてのイベントを有効にする
 echo 1 > /sys/kernel/tracing/events/block/enable
 
-# Enable a specific event
+# 特定のイベントを有効にする
 echo 1 > /sys/kernel/tracing/events/syscalls/sys_enter_read/enable
 
-# Filter: only events from PID 1234
+# フィルタ: PID 1234 からのイベントのみ
 echo "common_pid == 1234" > /sys/kernel/tracing/events/syscalls/sys_enter_read/filter
 
-# View event format
+# イベントのフォーマットを表示する
 cat /sys/kernel/tracing/events/syscalls/sys_enter_read/format
 # name: sys_enter_read
 # ID: 682
@@ -204,49 +204,49 @@ cat /sys/kernel/tracing/events/syscalls/sys_enter_read/format
 #     field:size_t count;                  offset:32; size:8; signed:0;
 ```
 
-## trace-cmd: the ftrace frontend {#trace-cmd-the-ftrace-frontend}
+## trace-cmd: ftraceのフロントエンド {#trace-cmd-the-ftrace-frontend}
 
 ```bash
-# Record syscalls for 5 seconds
+# システムコールを 5 秒間記録する
 trace-cmd record -e 'syscalls:sys_enter_*' sleep 5
 
-# Record function graph for ext4
+# ext4 の function graph を記録する
 trace-cmd record -p function_graph -l "ext4_*" sleep 1
 
-# Report
+# レポート
 trace-cmd report | head -50
 
-# Filter by CPU
+# CPU でフィルタする
 trace-cmd report --cpu 0 | head -20
 
-# Live tracing
+# ライブトレーシング
 trace-cmd stream -e sched:sched_switch
 
-# kernel-shark: GUI frontend for trace-cmd output
+# kernel-shark: trace-cmd の出力用 GUI フロントエンド
 kernelshark trace.dat
 ```
 
-## trace instances: non-interfering sessions {#trace-instances-non-interfering-sessions}
+## トレースインスタンス: 互いに干渉しないセッション {#trace-instances-non-interfering-sessions}
 
 ```bash
-# Create a private instance (doesn't affect the global trace)
+# プライベートなインスタンスを作成する（グローバルなトレースに影響しない）
 mkdir /sys/kernel/tracing/instances/myinstance
 
-# Each instance has its own ring buffer and tracer
+# 各インスタンスは独自のリングバッファとトレーサーを持つ
 echo function > /sys/kernel/tracing/instances/myinstance/current_tracer
 echo "net_*" > /sys/kernel/tracing/instances/myinstance/set_ftrace_filter
 echo 1 > /sys/kernel/tracing/instances/myinstance/tracing_on
 
-# Multiple tools can trace simultaneously without interfering
+# 複数のツールが互いに干渉せず同時にトレースできる
 cat /sys/kernel/tracing/instances/myinstance/trace_pipe &
-# ... while main trace continues normally ...
+# ... その間もメインのトレースは通常どおり継続する ...
 
-rmdir /sys/kernel/tracing/instances/myinstance  # cleanup
+rmdir /sys/kernel/tracing/instances/myinstance  # 後片付け
 ```
 
-## Further reading {#further-reading}
+## 参考文献 {#further-reading}
 
-- [Kprobes and Tracepoints](kprobes-tracepoints.md) — Dynamic and static event hooks
-- [perf Events](perf-events.md) — Hardware PMU and sampling
-- [BPF: Architecture](../bpf/bpf-overview.md) — BPF programs attached to fentry/fexit
-- `Documentation/trace/ftrace.rst` — kernel documentation
+- [kprobeとtracepoint](kprobes-tracepoints.md) — 動的・静的なイベントフック
+- [perfイベント](perf-events.md) — ハードウェアPMUとサンプリング
+- [BPF: アーキテクチャ](../bpf/bpf-overview.md) — fentry/fexitにアタッチされるBPFプログラム
+- `Documentation/trace/ftrace.rst` — カーネルドキュメント
